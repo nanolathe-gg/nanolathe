@@ -102,13 +102,13 @@ terrain, so readers can ignore it.
 
 | Key | Meaning |
 | --- | --- |
-| `missionname` | Display name (also the campaign key for missions) |
-| `missiondescription` | Description shown in selection screens |
+| `missionname` | Display name as authored by editors. **Inert in the OTA**: the executable's two readers of this key read the campaign file's `MISSION<n>` section; a skirmish map's display name is its file name (translated) [02 R-MAP-01 §3], [02 R-MAP-01 §9] |
+| `missiondescription` | Description shown in selection screens (default `No description available`; lower-cased and passed through the translation table, original spelling kept when no translation exists) [02 R-MAP-01 §3] |
 | `planet` | Planet type string (selects the briefing globe art). The complete retail vocabulary (census of all 272 retail OTAs): `Green planet`, `Red Planet`, `Lava`, `Metal`, `Ice`, `Lush`, `Archipelago`, `Slate`, `Lunar`, `Water World`, `Wet Desert`, `Acid`, `Crystal`, `Desert`, `Urban`, and empty. Unrecognized values fall back silently. |
-| `missionhint` | Hint text (missions) |
+| `missionhint` | Hint text (missions). Parsed into a `camps\hints\<hint>.TXT` path that **nothing reads** — inert [02 R-MAP-01 §1] |
 | `brief` | TXT basename in `camps/briefs/` with the mission briefing text |
 | `narration` | WAV basename in `camps/briefs/` narrating the briefing |
-| `glamour` | PCX basename (`bitmaps/glamour/`) shown on mission completion |
+| `glamour` | PCX basename; the loader stores `\<glamour>.PCX` and the glamour display rebuilds `bitmaps\glamour\<glamour>.PCX` from it [02 R-MAP-01 §1] |
 | `glamoursound` | WAV played over the glamour shot |
 | `lineofsight` | `1` = true line-of-sight rules, `0` = off |
 | `mapping` | `1` = normal fog-of-war mapping rules |
@@ -116,26 +116,26 @@ terrain, so readers can ignore it.
 | `solarstrength` | Nominally energy per solar collector. Authored by all 275 retail maps and **inert**: the executable has no string for it, so a solar collector's output is its own `EnergyMake` and the map cannot scale it. |
 | `lavaworld` | `1` = "water" is lava (affects effects/pathing visuals) |
 | `waterdoesdamage`, `waterdamage` | Acid water: flag and damage rate |
-| `nosealeveltrigger` | Disables sea-level adjustment triggers (exact effect unconfirmed) |
-| `killmul` | Kill score multiplier (percent) |
-| `timemul` | Time score multiplier; retail campaign maps may author the signed sentinel `-1` |
-| `minwindspeed`, `maxwindspeed` | Wind energy range (wind generators) |
-| `gravity` | Gravity for ballistic weapons. Every retail map authors it; 192 of 275 use `112`, which is also the executable's own built-in default (stored as `0x1FDB` = `112 x 65536 / 30^2`, i.e. the authored value converted to 16.16 world units per tick squared by dividing by the tick rate twice). |
-| `numplayers` | Recommended player counts, comma list (`2, 4, 6, 8, 10`) |
-| `size` | Map size in 512-pixel squares (`36 x 16`) |
-| `memory` | Recommended RAM (informational) |
+| `nosealeveltrigger` | Non-zero makes water opaque to projectiles and debris: the submerged-impact and debris-water tests return early [06 §8.2], [04 R-COB-04 §2]. Unrelated to the sea level value, which has no OTA key [02 R-MAP-01 §3] |
+| `killmul` | Nominally a kill score multiplier. Parsed to a float and **inert** (reader census: none) [02 R-MAP-01 §3] |
+| `timemul` | Nominally a time score multiplier; three retail campaign maps author `-1`. Parsed to a float and **inert** (reader census: none) [02 R-MAP-01 §3] |
+| `minwindspeed`, `maxwindspeed` | Wind energy range (wind generators). Any non-negative value is used as authored, including 0; the engine's 100/2000 fallbacks apply only to a negative value or a legacy (`0x1020`) terrain file [02 R-MAP-01 §6]. Every retail map authors both |
+| `gravity` | Gravity for ballistic weapons, converted as `trunc(g × 65536 / 900)` to 16.16 world units per tick². Every retail map authors it; 192 of 275 use `112`. The executable's built-in `0x1FDB` (= the conversion of 112) is used only for a **negative** authored value or a legacy terrain file; an *omitted* key reads as 0 and yields gravity 0 [02 R-MAP-01 §6]. |
+| `numplayers` | Recommended player counts, comma list (`2, 4, 6, 8, 10`). Stored as a string and **inert** (reader census: none); the lobby derives its count from the `[specials]` census [02 R-MAP-01 §3] |
+| `size` | Map size in 512-pixel squares (`36 x 16`). **Inert**: no string in the executable |
+| `memory` | Recommended RAM. Stored as a string and **inert** (reader census: none) |
 | `useonlyunits` | TDF filename (with extension) in `camps/useonly/` restricting buildable units |
 | `nomovie` | Skip mission movie |
-| `MaxUnits` | Per-player unit cap for this map (retail: 200–400; most common 250) |
+| `MaxUnits` | Per-player unit cap for this map (retail: 200–400; most common 250; 184 of 275 author it). Read **only on the campaign path** (default 200); skirmish and multiplayer take the limit from the setup record [02 R-MAP-01 §2], [08 R-SKIR-01 §6] |
 | `SCHEMACOUNT` | Nominally the number of `[Schema N]` sections (1–4). **Inert**: the executable formats `Schema %i` and probes upward until a section is missing, so the count is discovered, not read. |
 
 ### Schema keys (`[Schema N]`)
 
 | Key | Meaning |
 | --- | --- |
-| `Type` | `Network 1` … `Network 4` for multiplayer variants; `Easy` / `Medium` / `Hard` for mission difficulty variants |
-| `aiprofile` | AI profile TXT basename in `ai/` |
-| `SurfaceMetal` | Metal extraction concentration on ordinary ground |
+| `Type` | `Network 1` … `Network 4` for multiplayer variants; `Easy` / `Medium` / `Hard` for mission difficulty variants. Compared case-insensitively (32-byte read); selection order and the `StartPos`-count rule are [02 R-MAP-01 §4] |
+| `aiprofile` | AI profile TXT basename in `ai/`; an empty or absent value loads `ai\default.txt` [02 R-MAP-01 §5] |
+| `SurfaceMetal` | Metal extraction concentration on ordinary ground; seeded into every plot cell as a signed byte (retail authors 1–255) [03 R-TERR-01 §1] |
 | `MohoMetal` | Nominally the extraction concentration for moho mines. Authored by all 275 retail maps and **inert**: only `SurfaceMetal` scales extraction, and a moho mine's advantage is its own larger `ExtractsMetal`. |
 | `HumanMetal`, `HumanEnergy` | Player starting resources |
 | `ComputerMetal`, `ComputerEnergy` | AI starting resources |
@@ -146,44 +146,61 @@ terrain, so readers can ignore it.
 Missions declare their win/lose conditions as `[GlobalHeader]`-level keys
 (in retail data they always sit at the global level, not inside a schema).
 The full retail vocabulary, with occurrence counts from a census of all 272
-retail OTAs:
+retail OTAs, and the meaning the executable gives each key
+([08 R-TRIG-01 §4] owns the behaviour; only the grammar is restated here):
 
-| Key | Uses | Meaning |
-| --- | ---: | --- |
-| `CommanderKilled=1;` | 123 | Ends when the enemy commander dies |
-| `KillEnemyCommander=1;` | 7 | Variant spelling, same intent |
-| `AllUnitsKilled=1;` | 163 | Ends when all enemy units are dead |
-| `DestroyAllUnits=1;` | 90 | Ends when all enemy units/buildings are destroyed |
-| `KillAllMobileUnits=1;` | 9 | Ends when all enemy *mobile* units are dead |
-| `KillAllOfType=CORKROG;` | 40 | Ends when every unit of the type is dead |
-| `AllUnitsKilledOfType=ARMGATE;` | 52 | Variant of the above |
-| `KillUnitType=CORLAB, 1;` | 32 | Ends after killing N units of the type |
-| `UnitTypeKilled=ARMMOHO, 1;` | 18 | Variant of the above |
-| `BuildUnitType=ARMSY;` | 8 | Ends when the player builds a unit of the type |
-| `CaptureUnitType=CORGATE;` | 32 | Ends when the player captures a unit of the type |
-| `AnyUnitPassesX=4500;` / `AnyUnitPassesZ=60;` | 3 | Ends when any unit crosses the pixel line |
-| `UnitTypePassesX=ARMTSHIP, 6000;` / `UnitTypePassesZ=ARMCOM, 800;` | 4 | As above, restricted to a unit type |
-| `MoveUnitToRadius=ARMCOM, 1942, 1519, 100;` | 18 | Ends when a unit of the type (or `ANYTYPE`) is within `radius` pixels of X, Z |
-| `DeathTimerRunsOut=1200;` | 21 | Loss when the timer (seconds) expires |
-| `VictoryTimerRunsOut=3600;` | 4 | Win when the timer (seconds) expires |
+| Key | Uses | Side | Meaning |
+| --- | ---: | --- | --- |
+| `KillEnemyCommander=1;` | 7 | victory | a `Player=2` unit whose type is its side's commander is removed |
+| `DestroyAllUnits=1;` | 90 | victory | `Player=2` has no live units (polled, not latched) |
+| `KillAllMobileUnits=1;` | 9 | victory | the last `Player=2` unit with `BMcode=1` is removed |
+| `BuildUnitType=ARMSY;` | 8 | victory | `Player=1` owns a finished unit of the type; **name only, no count** |
+| `CaptureUnitType=CORGATE;` | 32 | victory | a `Player=2` unit of the type is captured; **name only, no count** |
+| `KillAllOfType=CORKROG;` | 40 | victory | the last `Player=2` unit of the type is removed; **name only** |
+| `KillUnitType=CORLAB, 1;` | 32 | victory | N `Player=2` units of the type removed (`%[a-zA-Z],%i`) |
+| `MoveUnitToRadius=ARMCOM, 1942, 1519, 100;` | 18 | victory | a selectable, finished `Player=1` unit of the type (or `ANYTYPE`) within `radius` pixels (planar, inclusive) of the de-projected X, Z |
+| `UnitTypePassesX=ARMTSHIP, 6000;` / `UnitTypePassesZ=ARMCOM, 800;` | 4 | victory | a `Player=1` unit of the type (or `ANYTYPE`) whose footprint cell is within two cells of `X>>4` (`Z>>4`) |
+| `VictoryTimerRunsOut=3600;` | 4 | victory | game tick `>=` seconds × 30; value must be `> 0` |
+| `CommanderKilled=1;` | 123 | defeat | a `Player=1` unit whose type is its side's commander is removed |
+| `AllUnitsKilled=1;` | 163 | defeat | `Player=1` has no selectable, finished unit (script-locked units do not count) |
+| `AllUnitsKilledOfType=ARMGATE;` | 52 | defeat | the last unit of the type in `Player=1` or `Player=2` is removed; **name only** |
+| `UnitTypeKilled=ARMMOHO, 1;` | 18 | defeat | N units of the type, any owner, removed |
+| `DeathTimerRunsOut=1200;` | 21 | defeat | game tick `>=` seconds × 30; value must be `> 0` |
+| `AnyUnitPassesX=4500;` / `AnyUnitPassesZ=60;` | 3 | defeat | a `Player=2` unit's footprint cell is within two cells of `X>>4` (`Z>>4`); value must be `>= 0` |
 
-Whether a given condition means "win" or "lose" is campaign-context
-behavior (most read as the player's victory condition; the timer pair is
-explicit). Multiple conditions may appear in one mission.
+Grammar facts the executable fixes: a flag key with value `0` is absent; each
+key builds at most one condition, in the vocabulary order above regardless
+of authored order; the argument scanset `%[a-zA-Z]` is **letters only**, so a
+type name containing a digit is truncated at the digit and never matches;
+`ANYTYPE` is recognised only by `MoveUnitToRadius`, `UnitTypePassesX` and
+`UnitTypePassesZ`; the four "name only" keys store the whole value, so
+`BuildUnitType=ARMSY, 1;` matches nothing. Win means every victory key
+holds at once (AND); lose means any defeat key holds (OR). Only campaign
+sessions read these keys; a skirmish on a map that authors them builds the
+records but never polls them [08 R-TRIG-01 §1]. (**Correction 2026-08-29:**
+the previous table's "Meaning" column, which called `CommanderKilled` "ends
+when the enemy commander dies" and `AllUnitsKilled` "ends when all enemy
+units are dead", had the sides reversed, and the earlier "win-vs-lose is
+campaign-context behavior" caveat is withdrawn.)
 
 `AllUnitsKilled=1;` occurs in **every one** of the 176 retail campaign
-missions, which is consistent with it being the universal loss condition
-("all of the player's units are dead") rather than a per-mission objective.
+missions: it is the universal loss condition.
 
-A mission with no `Player=2` unit at all ends in victory on the first tick:
-"no enemies remain" is already true. An authored scenario that needs to run
-indefinitely should keep one enemy unit alive with `Immunity=1;` and place it
-out of reach.
+A mission with no `Player=2` unit at all, whose only victory key is the
+injected or authored `DestroyAllUnits`, is won at the first 30-tick poll,
+with the end latch written five polls later. An authored scenario that needs to run indefinitely
+should keep one `Player=2` unit alive and out of reach (`Immunity=1;` is
+parsed but has no reader, so it does not protect the unit).
 
 ### `[specials]` — start positions
 
 Ten start positions exist, `StartPos1` … `StartPos10`, placed in the
-multiplayer schema:
+multiplayer schema. The engine keeps only `specialwhat` values whose first
+eight characters are `StartPos` (case-insensitive); the suffix is parsed as
+an integer when it starts with a digit, otherwise it is a running counter
+(1, 2, … in file order), and the stored index is the value minus one when
+positive — so `StartPos0` and `StartPos1` collide on index 0
+[08 R-TRIG-01 §9]:
 
 ```c
 [special0]
@@ -230,14 +247,22 @@ census; all flags are `=1;` when present):
 
 | Key | Uses | Meaning |
 | --- | ---: | --- |
-| `CreationCountdown` | 2088 | Delay before the unit appears; always `0` in retail (mission editors emitted it unconditionally) |
-| `InitialGroup` | 262 | Group label tying units together for the AI (retail values: `1`, `2`, `3`, `patrol`, `Rockos`, or empty) |
-| `BuildPriority` | 213 | Almost always empty in retail (two non-empty stragglers: `CORHRK`, `S`); semantics unconfirmed |
-| `AIIgnore` | 23 | Enemy AI never targets this unit |
-| `Immunity` | 22 | Unit cannot be damaged |
-| `AIPriorityTarget` | 9 | Enemy AI prefers this target |
-| `MissionCriticalUnit` | 6 | Mission fails if this unit dies |
-| `OffMapUnit` | 3 | Unit starts off the map edge (arriving reinforcements) |
+| `CreationCountdown` | 2088 | Parsed as an integer and **inert** (no reader; units are always created at battle entry). Always `0` in retail |
+| `InitialGroup` | 262 | Parsed as an **integer** into a 4-bit field (retail values `patrol`, `Rockos` read as 0) and **inert** — no reader found [08 R-TRIG-01 §11] |
+| `BuildPriority` | 213 | Parsed as an integer and **inert** |
+| `AIIgnore` | 23 | Parsed and **inert** |
+| `Immunity` | 22 | Parsed; copied to a unit status bit that nothing reads — **inert** |
+| `AIPriorityTarget` | 9 | Parsed and **inert** |
+| `MissionCriticalUnit` | 6 | Parsed and **inert** |
+| `OffMapUnit` | 3 | No string in the executable — **inert** |
+| `Kills` | — | Written by editors on every unit; **inert** — the placement parser has no reader, so veterancy cannot be authored |
+
+`Player=0` is read as `1`. A `Player` value with no matching active slot
+(after the one-based fixup, slot index 10 or more, an inactive slot, or a
+slot with no human/computer/remote controller) is **fatal**: the executable
+reports `Player number %d invalid for unit %s` and exits [08 R-TRIG-01 §9].
+A `[feature]` block with a missing name or a negative `XPos`/`ZPos` is
+dropped.
 
 ### `InitialMission` — the order mini-language
 
@@ -291,8 +316,12 @@ above except
 `SolarStrength`, `MohoMetal`, `SCHEMACOUNT` and `OffMapUnit`, which have no
 string in the image and therefore cannot be read.
 
-Schema sections are found by formatting `Schema %i` and probing upward. The
-difficulty and network vocabulary is the literal set `Easy`,
+Schema sections are found by formatting `Schema %i` and probing upward from
+0 until a section is missing (no retail OTA has a gap; retail schema counts
+are 1, 2, 3 or 4). Keys are read from **one section at a time** — the
+accessors never fall through to the parent section — so a global key inside
+`[Schema N]` or a schema key at global level is invisible [02 R-MAP-01 §3].
+The difficulty and network vocabulary is the literal set `Easy`,
 `Medium`, `Hard`, `Network 1`, `Network 2`, `Network 3`, `Network 4`; the
 placement blocks are labelled `MISSIONUNIT DATA`, `MISSIONFEATURE DATA` and
 `MISSIONRULE DATA`, and the raw map payload sections `Raw Plot Data` and
@@ -303,18 +332,15 @@ file!`, `Old TED format no longer supported!`, and `Hey, joker!  Mission file
 
 ## Unknowns and caveats
 
-- `killmul`, `timemul`, `missionhint`, `nosealeveltrigger`, `nomovie`, and
-  `SurfaceMetal` scaling have no precise documented semantics.
+- `nomovie`'s reader is the end-of-campaign movie gate; which cinematic it
+  suppresses is doc 07/08 territory [02 R-MAP-01 §3].
 - The exact `Angle` → facing mapping (degrees, 0 = which direction,
   rotation sense) is unconfirmed.
-- Which keys are legal at global vs. schema level is looser than shown —
-  the engine appears to read several environment keys at either level
-  (retail data itself is consistent: end conditions and `MaxUnits` global,
-  resources/meteors per schema).
+- (Withdrawn 2026-08-29.) This list previously said "the engine appears to
+  read several environment keys at either level"; it does not — each key is
+  read from exactly one section, see "Which keys the engine reads" above.
 - `Ident` scoping rules (uniqueness, forward references) are inferred from
   examples only.
-- Exact win-vs-lose semantics of each end-condition key, and
-  `BuildPriority`'s meaning, are engine behavior not recoverable from data.
 - The mission open path's six diagnostics, including the misspelled
   `Hey, joker!  There is no mission defintion for this mission: %s`, are
   recorded in the executable spec doc 02 §6 "Mission-file diagnostics".

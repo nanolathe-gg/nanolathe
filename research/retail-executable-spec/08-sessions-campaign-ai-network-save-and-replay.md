@@ -174,7 +174,7 @@ the player byte, and the flag byte — the build-priority word sits between
 the countdown and the player byte, not after the health word as earlier
 noted.
 
-The executable parses these fields into fixed records before unit creation.
+The executable parses these fields into fixed records before unit creation; the parser's key order, defaults and reader census are closed in [R-TRIG-01 §9] (`InitialGroup` is read as an integer and packed into the flag byte's low nibble; a unit-block `Kills` key has no reader).
 A complete reader census over the runtime unit record closes the parsed-only
 list above: `MissionCriticalUnit`, `AiIgnore`, `AiPriorityTarget`,
 `InitialGroup`, `BuildPriority` and the delayed-creation countdown have no
@@ -203,18 +203,40 @@ The complete verb grammar, argument formats, and malformed-input handling are sp
 ### Trigger object
 
 Mission victory and defeat conditions are allocated as polymorphic trigger
-records. A builder routine probes the eighteen condition keys in a straight chain and
-allocates a per-condition record on a hit. Record size varies with the
-condition and is one of seven established buckets — `0x0C` flag-only (12 bytes), `0x10` timer (16), `0x14` boundary (20), `0x30` string+count variant A (48), `0x32` string+count variant B (50), `0x36` canonicalizing string shape (54), and `0x40` radius (64) carrying X/Z plus radius payload [08 "Trigger object"] [GAP T10]. Every record leads with a vtable pointer whose table covers all
-eighteen condition types — eight slots per entry (shared destructor/helper slots plus the six named behavioural slots described under Evaluation: poll, unit-died notification, capture/transfer notification, created notification, and save/load) — with the trigger's completed flag adjacent [08 "Trigger object"].
+records. The builder probes the eighteen condition keys of `[GlobalHeader]`
+in one fixed chain — the eleven victory keys in the order of the victory
+table under "Victory and defeat triggers", then the seven defeat keys in the
+order of the defeat table — and appends one record per present key to the
+owning array, so a mission holds at most one trigger per key and a queue's
+order is the vocabulary order, never the authored order [R-TRIG-01 §2].
+Record sizes fall in **nine** buckets: 12 bytes (`KillEnemyCommander`,
+`DestroyAllUnits`, `CommanderKilled`), 16 (the two timers,
+`AllUnitsKilled`), 20 (`KillAllMobileUnits`, `AnyUnitPassesX/Z`), 44
+(`CaptureUnitType`), 48 (`KillUnitType`, `UnitTypeKilled`), 50
+(`BuildUnitType`), 52 (`UnitTypePassesX/Z`), 54 (`KillAllOfType`,
+`AllUnitsKilledOfType`) and 64 (`MoveUnitToRadius`). **Correction
+(2026-08-29, RWU-08-5).** The previous text listed "seven established
+buckets — `0x0C` flag-only, `0x10` timer, `0x14` boundary, `0x30`
+string+count variant A, `0x32` string+count variant B, `0x36`
+canonicalizing string shape, and `0x40` radius"; it omitted the 44-byte
+capture record and the 52-byte type-gated boundary records, and its
+"string+count" labels were wrong — only the 48-byte record carries a count
+(see [R-TRIG-01 §2] for the field layout of every bucket).
 
-The mission object owns separate growable arrays for victory and defeat
-conditions, each count kept beside its array. An empty queue receives an
-injected default destroy-all-units-class victory or all-units-killed-class
-defeat trigger, guaranteeing one win and one lose condition.
+Every record leads with a pointer to a six-slot table — poll, unit-removed
+notification, capture notification, unit-created notification, save, load —
+followed by the *Satisfied* (completed) and *Celebrated* (cue played)
+flags; the ten conditions that walk a player's unit slice carry a second
+one-slot table for their per-unit visitor [R-TRIG-01 §2].
 
-Timer triggers store time in authoritative ticks after multiplying authored
-seconds by thirty [08 "Trigger object"].
+The mission object owns two fixed sixteen-entry arrays for victory and
+defeat conditions, each with its count beside it. An empty array receives an
+injected default `DestroyAllUnits` victory or `AllUnitsKilled` defeat
+record at build time, and again at poll time if it is found empty
+[R-TRIG-01 §6].
+
+Timer triggers store `authored seconds × 30` in a 32-bit signed word
+[R-TRIG-01 §2].
 
 ### Save tree
 
@@ -460,7 +482,7 @@ Commander fallback placement for eligible slots draws from the simulation stream
 
 ### Unit creation and InitialMission timing — Established [P0-04] [P0-06]
 
-Mission-unit creation during battle entry uses a two-pass sparse array. The loader allocates a created array sized by the unit count and zeroes it. Pass one walks the unit records in placement order from zero upward: it validates the unit type name exists, adjusts the authored player number from one-based to zero-based with a zero-to-one fixup, checks the same eligibility predicate used for start positions and emits a diagnostic for invalid player numbers but still proceeds to a position fixup helper and the normal unit allocator. The allocator scans for the lowest free pool slot in the owning player's slice and can fail; on failure the entry stays null and no unit is created. Successful creation copies the immunity high bit into a runtime status bit, scales health by percentage, and copies the authored **facing angle** into the unit's heading word (the earlier "copies build priority" is retracted — build priority is parsed but never copied or read; the placement record's angle word is the copy source). Pass two walks the same order again and invokes the InitialMission interpreter only when the record carries a non-null script string and the corresponding created entry is non-null; the interpreter tokenizes the string and queues orders. A per-record creation countdown field is parsed but has no reader in the image; no delayed queue, cargo loop, or separate attachment pass exists beyond the immediate attach verb. Recursive reconstruction for linked or carried units uses the same allocator path for saves but not for fresh mission spawns. [P0-04] [P0-06] [lane 08 facing angle]
+Mission-unit creation during battle entry uses a two-pass sparse array. The loader allocates a created array sized by the unit count and zeroes it. Pass one walks the unit records in placement order from zero upward: it validates the unit type name exists, adjusts the authored player number from one-based to zero-based with a zero-to-one fixup, checks the same eligibility predicate used for start positions — a failure formats `Player number %d invalid for unit %s` into the modal fatal channel and terminates the process (**correction 2026-08-29:** the earlier "emits a diagnostic … but still proceeds" is retracted, [R-TRIG-01 §9]) — then runs a position fixup helper and the normal unit allocator. The allocator scans for the lowest free pool slot in the owning player's slice and can fail; on failure the entry stays null and no unit is created. Successful creation copies the immunity high bit into a runtime status bit, scales health by percentage, and copies the authored **facing angle** into the unit's heading word (the earlier "copies build priority" is retracted — build priority is parsed but never copied or read; the placement record's angle word is the copy source). Pass two walks the same order again and invokes the InitialMission interpreter only when the record carries a non-null script string and the corresponding created entry is non-null; the interpreter tokenizes the string and queues orders. A per-record creation countdown field is parsed but has no reader in the image; no delayed queue, cargo loop, or separate attachment pass exists beyond the immediate attach verb. Recursive reconstruction for linked or carried units uses the same allocator path for saves but not for fresh mission spawns. [P0-04] [P0-06] [lane 08 facing angle]
 
 Timing is fixed: the mission loader's common tail runs, then for multiplayer a barrier pumps network state and sleeps fifty milliseconds until peers arrive, then start-position assignment stamps slots, then commanders are created with the jitter described above and resources are granted as floating-point metal and energy, then camera focus is chosen, then the sparse two-pass spawner runs, then visibility and mapping are rebuilt, then the first authoritative tick runs. The InitialMission strings are therefore interpreted after every mission unit exists at its fixed-point position but before any creation script, movement, or visibility publication for that tick, and they never take a tick of their own. BetweenMissions handling for saves uses a bank account named Summary that carries a BetweenMissions flag; **the polarity is settled by the battle-entry save-blob gate: when the flag is absent (the in-battle marker) the loader runs the battle restoration dispatcher and skips the fresh spawner; when the flag is present the loader skips battle restoration and runs the fresh spawner — the campaign continuation rebuilds the mission from the authored mission file.** The earlier contradictory phrasing (flag-present → restore player and feature state from the bank) is retracted: a BetweenMissions save contains only the Summary account, so the flag-present route could not restore a battle; the gate's two branches verify this. [P0-04] [P0-05] [lane 08 BetweenMissions polarity]
 
@@ -475,104 +497,607 @@ Multiplayer initialization enters a barrier after content and player state are p
 
 ## Victory and defeat triggers
 
-Conditions are authored as text and matched against a fixed vocabulary of
-condition names. A condition that takes arguments parses them from the rest of
-the line with a scan format, so the authored syntax is the condition name
-followed by comma-separated arguments.
-
-Two argument formats exist. `<name>,<integer>` takes an alphabetic unit-type
-token and one integer. `<name>,<integer>,<integer>,<integer>` takes a
-unit-type token and three integers. The literal token **`ANYTYPE`** is
-accepted wherever a unit type is expected and means any type; it is recognized
-by the boundary conditions.
+Conditions are authored as `[GlobalHeader]` keys and matched against a fixed
+vocabulary of eighteen condition names. The builder that turns them into
+trigger records, the exact grammar of every key, every evaluator body, the
+tick site and the notification sites are closed under [R-TRIG-01] below; the
+two tables here are the vocabulary with the **corrected** argument grammar.
+**Correction (2026-08-29, RWU-08-5).** The earlier tables listed
+`BuildUnitType`, `CaptureUnitType` and `KillAllOfType` as "type, count" and
+`AllUnitsKilledOfType` as "type". The builder never runs a scan format on
+those four: it copies the whole key value as the type name, so a value
+`ARMSY, 1` is stored verbatim and matches no unit. Only `KillUnitType`,
+`UnitTypeKilled`, `UnitTypePassesX/Z` (name + one integer) and
+`MoveUnitToRadius` (name + three integers) parse arguments [R-TRIG-01 §4].
 
 ### Victory trigger types
 
-| Authored name | Arguments |
-|---|---|
-| `KillEnemyCommander` | none |
-| `DestroyAllUnits` | none |
-| `KillAllMobileUnits` | none |
-| `BuildUnitType` | type, count |
-| `CaptureUnitType` | type, count |
-| `KillAllOfType` | type, count |
-| `KillUnitType` | type, count |
-| `MoveUnitToRadius` | type, and three integers |
-| `UnitTypePassesX` | type or `ANYTYPE`, boundary |
-| `UnitTypePassesZ` | type or `ANYTYPE`, boundary |
-| `VictoryTimerRunsOut` | none |
+| Authored name | Value grammar | Kind |
+|---|---|---|
+| `KillEnemyCommander` | non-zero integer | notification (unit removed) |
+| `DestroyAllUnits` | non-zero integer | poll |
+| `KillAllMobileUnits` | non-zero integer | notification (unit removed) |
+| `BuildUnitType` | type name only | poll |
+| `CaptureUnitType` | type name only | notification (capture) |
+| `KillAllOfType` | type name only | notification (unit removed) |
+| `KillUnitType` | `<letters>,<int>` | notification (unit removed) |
+| `MoveUnitToRadius` | `<letters or ANYTYPE>,<X>,<Z>,<radius>` | poll |
+| `UnitTypePassesX` | `<letters or ANYTYPE>,<X>` | poll |
+| `UnitTypePassesZ` | `<letters or ANYTYPE>,<Z>` | poll |
+| `VictoryTimerRunsOut` | integer seconds, strictly positive | poll |
 
 ### Defeat trigger types
 
-| Authored name | Arguments |
-|---|---|
-| `CommanderKilled` | none |
-| `AllUnitsKilled` | none |
-| `AllUnitsKilledOfType` | type |
-| `UnitTypeKilled` | type, count |
-| `DeathTimerRunsOut` | none |
-| `AnyUnitPassesX` | boundary |
-| `AnyUnitPassesZ` | boundary |
+| Authored name | Value grammar | Kind |
+|---|---|---|
+| `CommanderKilled` | non-zero integer | notification (unit removed) |
+| `AllUnitsKilled` | non-zero integer | poll |
+| `AllUnitsKilledOfType` | type name only | notification (unit removed) |
+| `UnitTypeKilled` | `<letters>,<int>` | notification (unit removed) |
+| `DeathTimerRunsOut` | integer seconds, strictly positive | poll |
+| `AnyUnitPassesX` | integer `X`, zero or positive | poll |
+| `AnyUnitPassesZ` | integer `Z`, zero or positive | poll |
 
 ### Default triggers
 
-If the mission creates no victory condition, the engine inserts a default
-destroy-all-units condition. If it creates no defeat condition, it inserts a
-default all-units-killed condition.
+If the builder creates no victory condition it appends a `DestroyAllUnits`
+record; if it creates no defeat condition it appends an `AllUnitsKilled`
+record. The campaign victory and defeat predicates repeat the same injection
+at poll time when they find an empty queue, so a queue is never empty when it
+is polled [R-TRIG-01 §6].
 
-**Configured lobby skirmish ownership — Supported inference; exact retail
-dispatch distinction Unknown.** The previous text treated every type-2 mission
-object as owning and polling these injected queues. That conflated a direct OTA
-type-2 session with a skirmish created from populated lobby configuration.
-Retail's save graph persists trigger queues only for campaign, while a skirmish
-save carries the lobby rule words instead; stock network OTAs may omit end keys,
-and one also authors `DestroyAllUnits`, whose established immediate-satisfaction
-quirk would end an ordinary lobby match on its first countdown if the injected
-or authored queue were authoritative. Nanolathe therefore treats a populated
-lobby configuration as owning its end condition and does not poll its OTA
-trigger queues; direct OTA type-2 sessions retain the established type-2 poll
-behavior below. The exact executable branch that distinguishes those two
-construction paths has not yet been isolated.
+**Correction (2026-08-29, RWU-08-5).** The paragraph that stood here
+("Configured lobby skirmish ownership — Supported inference; exact retail
+dispatch distinction Unknown … Nanolathe therefore treats a populated lobby
+configuration as owning its end condition and does not poll its OTA trigger
+queues; direct OTA type-2 sessions retain the established type-2 poll
+behavior below") is retracted. There is no "populated lobby" versus "direct
+OTA" distinction anywhere in the executable: the authority branch is the
+session kind word alone, and **no type-2 or type-3 session ever polls a
+trigger queue** — see [R-TRIG-01 §1]. Its supporting argument that
+`DestroyAllUnits` "would end an ordinary lobby match on its first countdown"
+rested on the never-written-counter reading retracted in [R-TRIG-01 §4].
 
 ### Evaluation
 
-**Architecture — poll versus notification — Established.** Triggers are vtable objects, not type-byte structs [08 "Trigger object"]. Each of the eighteen conditions carries an eight-slot table — shared destructor/helper slots plus six named behavioural slots: a tick poll, a unit-died notification, a capture/transfer notification, a created notification (present but unused by any shipped condition), and save/load [08 "Evaluation"]. The tick site calls only the poll slot; the notification slots are driven by the corresponding gameplay events. A poll therefore never consumes a kill or capture — the countdown in `KillUnitType` advances only from the unit-died slot [08 "Evaluation"].
+This heading is retained so that existing `[08 "Evaluation"]` citations keep
+resolving; its content was rewritten from a full static trace on 2026-08-29
+and now lives in the closed sections [R-TRIG-01 §1]–[R-TRIG-01 §10] that
+follow. The corrections to the previous text are itemized in
+[R-TRIG-01 §10].
 
-**Established — poll-time scans (mutate only Completed; already-completed stays set).**
+### Closed — authority: which sessions poll the authored triggers [R-TRIG-01 §1] (2026-08-29)
 
-- `DestroyAllUnits` — **the quirk is the contract.** Its poll reads a `u16` counter whose only reference in the image is that read; nothing ever writes it, so it holds its initial zero and the condition is satisfied from the first poll [08 "Evaluation"]. Shipped missions rely on this: at least one campaign mission uses `DestroyAllUnits` as an AND-term beside a real `BuildUnitType` condition, where a live scan would never let the mission complete. The injected default victory inherits the same quirk and therefore resolves.
+**Established.** The mission loader's common tail runs the trigger builder
+for **every** session kind — campaign, skirmish and multiplayer alike — so a
+skirmish map whose `[GlobalHeader]` authors condition keys gets the same
+records a campaign mission would. What differs is who reads them:
 
-- `KillAllMobileUnits` — succeeds when no live mobile unit (`CanMove`) belonging to the enemy owner remains [08 "Evaluation"].
+- The **victory predicate** polled from the tick site branches on the session
+  kind word: kind 1 (campaign) polls the victory queue (AND); kind 2
+  (skirmish) runs the elimination sweep of §6; kind 3 (multiplayer) runs the
+  alliance-aware sweep recorded in [R-SKIR-01 §3]. Kinds 2 and 3 never touch
+  the victory queue.
+- The **defeat predicate** likewise: kind 1 polls the defeat queue (OR);
+  kinds 2 and 3 return `local live-unit count == 0` — the predicate
+  [R-SKIR-01 §3] describes — and never read the defeat queue.
+- The **notification sites** (§7) are not kind-gated: a unit removal or a
+  capture notifies every built trigger in every session kind. In a skirmish
+  the only observable effect is presentational — a victory-class condition
+  that completes from a notification plays the `Victory Condition` cue (§8)
+  — because nothing ever polls the record's Satisfied flag.
+- The trigger **save/load** slots run only for kind 1 (§8).
 
-- `BuildUnitType` — succeeds when the local player owns at least the authored count of **completed** units of the named type (`Remaining == 0`) [08 "Evaluation"]. A want below one is treated as one; the scan walks live units in pool order and counts only `Owner == LocalOwner` with matching type (`ANYTYPE` bypasses the name compare). Enemy-owned units of the same type do not count.
+So the "lobby-skirmish rule word versus authored trigger" question has a
+one-word answer: the session kind. The commander-death rule word and the
+live-unit counters own every kind-2/3 end condition; authored and injected
+triggers own kind 1 only. Both a skirmish started from the setup screen and a
+kind-2 session started on an OTA directly are the same code path.
 
-- `KillAllOfType` vs `AllUnitsKilledOfType` vs `AllUnitsKilled` — annihilation checks. `KillAllOfType` is a victory term and gates on the enemy owner; `AllUnitsKilledOfType` is its defeat counterpart and accepts any owner; `AllUnitsKilled` is any type but gates on the local owner and succeeds when the local player has no live units left [08 "Evaluation"]. `ANYTYPE` bypasses the name compare where a type slot exists.
+### Closed — record shape, vtable slots and construction [R-TRIG-01 §2] (2026-08-29)
 
-- `KillEnemyCommander` / `CommanderKilled` — absence scans. Victory gates on the enemy owner, defeat on the local owner [08 "Evaluation"]. **Established:** retail resolves commander identity through the `SIDEDATA` commander-name table, not through the definition's `Commander` flag [08 "Evaluation"]. The two sources agree for stock content; the table is the authority. An implementation that tests the flag is observably correct on stock data but diverges on synthetic sides that rename the commander.
+**Established — the primary table has six slots, and the poll is slot 0.**
+Every record's first word points at a six-slot table: (0) **poll**, called
+with no argument, returns non-zero when the condition holds; (1)
+**unit-removed notification**, called with the unit being torn down; (2)
+**capture notification**, called with the unit whose owner is about to
+change; (3) **unit-created notification**, called with every newly allocated
+unit — present in all eighteen tables and a no-op in every one; (4) **save**
+and (5) **load**, called with the save bank. Conditions that do not use a
+slot point it at a shared no-op (poll no-op returns the Satisfied flag).
+**Correction.** The previous text said "the tick site calls only the poll
+slot … the countdown in `KillUnitType` advances only from the unit-died
+slot" — true — but it also described `DestroyAllUnits`, `KillAllMobileUnits`,
+`KillAllOfType`, `KillEnemyCommander` and `CommanderKilled` as "poll-time
+scans"; four of those five are notification-driven and only
+`DestroyAllUnits` polls (§4).
 
-- Boundary conditions (`UnitTypePassesX`/`Z` and `AnyUnitPassesX`/`Z`) — each carries a single integer threshold stored after an arithmetic `>>4` of the authored value [08 "Evaluation"]. The poll compares the signed world coordinate (unit `X` for `…PassesX`, `Z` for `…PassesZ`, after the same `>>4`) against the stored threshold and is satisfied when `abs(coord - threshold) < 3`, i.e. a ±2-world-unit tolerance [08 "Evaluation"]. The type-gated variants compare `UnitName` case-insensitively against the authored type and `ANYTYPE` (empty stored name) bypasses the compare.
+**Established — the visitor table.** The ten conditions that walk a player's
+unit slice (`KillAllMobileUnits`, `BuildUnitType`, `KillAllOfType`,
+`MoveUnitToRadius`, `UnitTypePassesX/Z`, `AllUnitsKilled`,
+`AllUnitsKilledOfType`, `AnyUnitPassesX/Z`) carry a second one-slot table
+whose single entry is the per-unit visitor; the slice walk calls it for every
+occupied slot and stops when it returns zero. The radius scan of §5 ignores
+the return value.
 
-- `MoveUnitToRadius` — the largest record (64 bytes) carries the authored X, a sentinel value `0x12345678`, the authored Z, and radius as `authored <<16` (16.16 fixed) [08 "Trigger object"] [08 "Evaluation"]. Its poll optionally clamps the authored centre when the sentinel is present (map-edge and terrain-height snap, writing `X<<16` / `Z<<16` back), then scans the world partition [08 "Evaluation"]. Distance is planar **X/Z Euclidean squared** (`dx*dx + dz*dz <= r*r` with the 64-bit product reduced to its high 32 bits), Y is ignored, tile bounds are `(centre ± r) >>17` clamped to map tile counts, and iteration follows the world partition's unit-list links. Type gating is `ANYTYPE`-aware as above. **Supported inference made Established:** earlier speculation about an axis-swapped or 3-D metric is closed — subtraction uses the unit's world X and world Z fields [08 "Evaluation"].
+**Established — construction.** The builder probes the eighteen keys in one
+fixed chain, victory keys in table order then defeat keys in table order,
+and appends one record per present key to the owning array (sixteen slots
+each; never more than eleven and seven are used). The queue order is
+therefore the vocabulary order above, never the authored order, and a key
+authored twice yields one record. Presence tests:
 
-- Timer triggers (`VictoryTimerRunsOut` / `DeathTimerRunsOut`) — the builder stores `seconds × 30` ticks with no saturation (wrap preserved) [08 "Trigger object"] [08 "Evaluation"]. The poll compares the authoritative global tick against the stored deadline as **unsigned** `globalTick >= deadline` (a carry-based unsigned comparison, not a signed one) [08 "Evaluation"]. Comparison is `>=`, not `>`, and a zero-second deadline is therefore satisfied on the first poll. The `>=` and unsigned shape are Established; the wrap without clamp is Established.
+- flag keys (`KillEnemyCommander`, `DestroyAllUnits`, `KillAllMobileUnits`,
+  `CommanderKilled`, `AllUnitsKilled`): integer read with default 0,
+  present when non-zero — `KillEnemyCommander=0;` builds nothing;
+- timer keys: integer read with default 0, present when **strictly
+  positive**; the record stores `seconds × 30` in a 32-bit signed word with
+  no saturation (wrap preserved);
+- `AnyUnitPassesX/Z`: integer read with default −1, present when `>= 0`, so
+  a zero boundary is a valid trigger and a negative one is ignored; the
+  record stores `authored >> 4` (arithmetic shift), i.e. the map cell;
+- name keys: string read into a 256-byte frame, present when the key exists
+  at all (an empty value is present and stores an empty name);
+- argument keys: after the string read, the frame is parsed with the C scan
+  family — `%[a-zA-Z],%i` for `KillUnitType`, `UnitTypeKilled`,
+  `UnitTypePassesX/Z` and `%[a-zA-Z],%i,%i,%i` for `MoveUnitToRadius`. The
+  name scanset is **letters only**: it stops at the first digit, underscore
+  or space, so a type name containing a digit is truncated and never
+  matches; whitespace after each comma is skipped by `%i`. The conversion
+  count is never tested: a missing integer leaves whatever the stack frame
+  held (zero-valued or stale) and the record is still built. The three
+  integers of `MoveUnitToRadius` are, in order, X, Z, radius.
+- `ANYTYPE` (case-insensitive) is recognised only by `MoveUnitToRadius` and
+  `UnitTypePassesX/Z`, which store an empty name for it. The other name
+  keys store the literal text, and `ANYTYPE` there resolves to no
+  definition and can never match.
 
-Completion sets the trigger's `Completed` flag and, if `Celebrated` is still clear, raises the localized "Victory Condition" notification and sets `Celebrated`; the exact presentation channel (message/sound) is not decomposed beyond that invocation [08 "Evaluation"].
+Record sizes and layouts (by field, in construction order): 12-byte records
+are table + Satisfied + Celebrated only; the 16-byte timer record adds the
+tick deadline; `AllUnitsKilled` (16) and `KillAllMobileUnits`/`AnyUnitPasses`
+(20) add the visitor table and, for the boundary pair, the cell threshold;
+the 44/48/50/52/54-byte records add a 32-byte name (the visitor table sits
+before the name where present), then for `KillUnitType`/`UnitTypeKilled` a
+32-bit remaining count, for `BuildUnitType`/`KillAllOfType`/
+`AllUnitsKilledOfType` a 16-bit resolved definition index (zero until
+resolved) plus, for the last two, a 32-bit scratch count, for
+`UnitTypePassesX/Z` the cell threshold; the 64-byte `MoveUnitToRadius`
+record holds the name, X (authored pixels, unconverted), a sentinel word,
+Z (authored pixels), and `radius << 16`.
 
-**Established — notification-driven countdowns (do nothing on poll).**
+### Closed — the owner and unit predicates every condition shares [R-TRIG-01 §3] (2026-08-29)
 
-- `KillUnitType` (victory) and `UnitTypeKilled` (defeat) share a countdown stored in `Args[0]`. Each qualifying **unit-died** notification whose subject type matches the authored type decrements the count and completes when `<=0` [08 "Evaluation"]. `KillUnitType` counts only enemy-owner losses; `UnitTypeKilled` accepts any owner [08 "Evaluation"]. Poll returns false until notified; polling never advances the count.
+**Established — "local" and "enemy" are player slots 0 and 1, literally.**
+Every owner test in the trigger code is one of two things: a compare of the
+unit's owner-slot byte (the player index copied onto the unit at
+allocation) against the constant 1, or a walk of a player record's unit
+slice — always slot 0's slice or slot 1's slice, never the slot named by the
+local-player index. Authored `Player=1` is slot 0, `Player=2` is slot 1
+(the one-based-to-zero-based fixup with the zero-to-one fixup, "Mission
+placement record"). Units owned by `Player=3` and above are invisible to
+every slice walk and fail every `== 1` test; they are seen only by the
+notification-driven conditions that carry no owner test (`UnitTypeKilled`,
+`AllUnitsKilledOfType`'s own subject). No alliance row is consulted by any
+trigger. **Correction.** The earlier text's `LocalOwner`/`EnemyOwner`
+suggested the local-player index; the code compares against constants.
 
-- `CaptureUnitType` — same countdown but driven by the **capture/transfer** slot, type-gated, completing at `<=0` [08 "Evaluation"].
+**Established — "live unit" for annihilation checks.** A player's unit slice
+is the contiguous run of pool records from the player's first to last
+record; the walks skip records whose definition index is zero (a free
+slot). A record whose unit is dying but not yet torn down is still occupied
+and still counted.
 
-The created notification slot is present in every vtable but unused by any shipped condition [08 "Evaluation"].
+**Established — the "eligible unit" predicate** (used by `AllUnitsKilled` and
+`MoveUnitToRadius`) is the selection-eligibility test: status bit 5
+(`0x20`, *selectable*) set **and** construction remaining `== 0.0`
+(finished) **and** the post-capture grace counter `== 0` **and** either no
+carrier or the carrier's *cargo-selectable* status bit (bit 30) set. Bit 5
+is the bit the `InitialMission` postlude clears for a scripted unit and the
+`s`/`MakeSelectable` order sets again [04 §3.6]; a player unit still under
+script control is therefore **not** a live unit for `AllUnitsKilled` and
+cannot satisfy `MoveUnitToRadius`. The grace counter is armed to 150 ticks
+only by a capture whose new owner is a remote (multiplayer) controller and
+decrements once per tick in the per-unit sweep; in single-player it is
+always zero.
 
-**The tick site — Established for mission-owned queues; lobby distinction is a Supported inference.** The victory and defeat queues are polled from the per-player tick phase, **in the LOCAL player's slice only**, on that slot's own **once-per-30-tick cadence** (`globalTick >= dueTick` then `dueTick += 30` — the same next-due-plus-30 shape the economy settlement deadline uses) [08 "Evaluation"]. The earlier "campaign type 1 only / types 2 and 3 never poll" reading remains retracted: the poll block handles direct mission types 1, 2, and 3, with per-type precedence (below). The later wording that this necessarily included a populated lobby skirmish was too broad: lobby construction owns separate rule words and omits trigger queues from saves, as described under Default triggers. Poll order is the victory array then the defeat array, in builder order.
+**Established — "mobile"** (`KillAllMobileUnits`) means the unit carries a
+mover object, which the allocator attaches when the definition's `BMcode`
+is 1. **Correction.** The earlier "`CanMove`" reading is retracted.
 
-**Combination and precedence — Established, per type.** Victory is an **AND** across its queue — every victory trigger must report `Completed`. Defeat is an **OR** — any single defeat trigger ends the mission. For campaign (type 1), **victory is evaluated first**, so a tick on which both would fire resolves as a victory [08 "Evaluation"]. For skirmish and multiplayer (types 2/3), the **defeat branch is evaluated before the victory poll** and the defeat queue is polled only when the local side's commander marker (a runtime bit on the local player's side definition) is clear — the commander-dead test — so a simultaneous commander death and victory resolves as defeat; the victory queue is polled unconditionally. Completion arms a shared end-of-mission countdown at **four**, which then decrements roughly once per second (once per local 30-tick due: `4 → -1` over five invocations, ~150 ticks) before the end-latch word is written; the latch distinguishes "ending" (bit 2, value `0x04`), "won" (`0x10` or `0x20`) and "lost" (`0x40`, clearing `0x10`) and the lose path clears the win bit it would otherwise share [08 "Evaluation"]. The `~1/sec` rate is the poll cadence, not a separate timer. **A second, per-tick countdown site exists for multiplayer only (mission type 3, commander-death rule not value two, no active player remaining): it decrements the same shared countdown every tick (latch in about five ticks).** The earlier "no-human campaign path decrements per-tick" reading is retracted — the fast site is gated on the multiplayer type; a humanless campaign keeps the 30-tick cadence. The skirmish/multiplayer commander-death rule is a lobby value, not a mission key: value two respawns a new commander (valid-placement search with up to 9999 trials, two simulation draws per trial, plus terrain and lava gates; then resources and visibility rebuild), any other value ends the game through the watch-mode path ("You're out! Continue watching?").
+**Established — "commander"** (`KillEnemyCommander`, `CommanderKilled`)
+means the unit's definition name equals, case-insensitively, the commander
+name of the **unit's own owner's** side in the side-data table — not the
+local side's, not the definition's `Commander` flag.
 
-**Owner gating is a player-index compare, not an alliance test — Established.** Each poll-time scan that walks live units compares the unit's player index against `LocalOwner` or `EnemyOwner` as above; no ally-group merge is performed [08 "Evaluation"]. `UnitTypeKilled` and `AllUnitsKilledOfType` explicitly accept any owner [08 "Evaluation"].
+**Established — boundary coordinate.** The `…PassesX/Z` compares use the
+unit's **stamped footprint cell** (the 16-pixel cell of the footprint's
+anchor corner, refreshed by the occupancy stamp when the unit moves), as a
+signed 16-bit value, against the record's `authored >> 4` cell; the test is
+`|cell − threshold| < 3`, i.e. a tolerance of two cells (32 pixels) either
+side of the line. **Correction.** The earlier "±2-world-unit tolerance"
+mistook the cell unit for a world unit; the earlier "after the same `>>4`
+of the world coordinate" is also wrong — the compare reads the stamped
+cell, not a shifted position.
 
-**Record shapes, the eighteen-entry vtable map, these evaluator bodies, the tick site, and the combination rules are established.** The presentation sequence between latch write and session teardown is closed in the Session end section (post-battle handler: network drain, multiplayer frame copy, music stop, timed display, CD check, campaign progress and end-of-mission screen, outro movie, score/statistics screen, front-end return). Whether any non-stock `SIDEDATA` divergence would expose the commander-flag vs table distinction (stock content agrees, but a synthetic side definition could diverge — retained as bounded residual, not a poll-vs-notification gap). The timer comparison beyond `>=` unsigned and the `MoveUnitToRadius` axis pair beyond X/Z planar are now closed; do not retain them as Unknown.
+### Closed — every condition, exactly [R-TRIG-01 §4] (2026-08-29)
+
+All claims Established from the evaluator bodies. "Complete" means set
+Satisfied and, if Celebrated is clear, play the cue and set Celebrated (§8);
+"S" means the record's Satisfied flag. Notification-driven conditions do
+nothing on poll except return S.
+
+**Poll conditions (kind 1, local 30-tick due, §6).**
+
+- `DestroyAllUnits` — returns `slot-1 live-unit count == 0` (the 16-bit
+  counter both allocators increment and the teardown decrements,
+  [R-SKIR-01 §3]). Plays the cue once when true; **never sets S**, so the
+  result is recomputed every poll and a save records `Satisfied=0`.
+  **Correction.** The previous text called this counter "a `u16` counter
+  whose only reference in the image is that read; nothing ever writes it, so
+  it holds its initial zero and the condition is satisfied from the first
+  poll" and made "the quirk … the contract". That was an address-search
+  artefact: the writers use the player-record base plus the slot stride, so
+  a search for the absolute location of slot 1's field finds only this read.
+  The condition is the ordinary "the enemy has no live units". The
+  inference drawn from it — that a shipped mission "relies on" the quirk as
+  an AND-term beside `BuildUnitType` — is withdrawn with it: such a mission
+  completes when the enemy is annihilated *and* the unit is built.
+- `BuildUnitType` — if S return true. If the resolved definition index is
+  still zero, resolve the stored name through the definition-name binary
+  search (unknown name stays zero and is retried every poll). Walk slot 0's
+  slice; the first occupied record whose definition index equals the
+  resolved index and whose construction remaining is `0.0` completes and
+  stops the walk. No count, no `ANYTYPE`, no owner other than slot 0.
+  **Correction.** "at least the authored count of completed units …
+  a want below one is treated as one … `ANYTYPE` bypasses the name compare"
+  is retracted; none of that exists.
+- `UnitTypePassesX` / `UnitTypePassesZ` — if S return true. Walk **slot 0**'s
+  slice; for each unit, if the stored name is non-empty and differs
+  case-insensitively from the unit's definition name, skip; else apply the
+  boundary test of §3 on the stamped X cell (Z cell); the first hit
+  completes and stops the walk.
+- `AnyUnitPassesX` / `AnyUnitPassesZ` — if S return true. Walk **slot 1**'s
+  slice (the enemy's units, no type gate) with the same boundary test; the
+  first hit sets S (no cue: defeat conditions never celebrate).
+  **Correction.** The earlier text did not say which units; it is the
+  enemy's.
+- `AllUnitsKilled` — set S, then walk slot 0's slice and clear S on the
+  first *eligible* unit (§3); return S. S is therefore recomputed on every
+  poll and is not sticky.
+- `MoveUnitToRadius` — §5.
+- `VictoryTimerRunsOut` / `DeathTimerRunsOut` — return
+  `deadline <= globalTick` as an **unsigned** 32-bit compare, where deadline
+  is `seconds × 30` from construction. `>=`, not `>`; never sets S or
+  Celebrated; no cue.
+
+**Notification conditions (any session kind, §7).**
+
+- `KillEnemyCommander` — on unit removal: if the unit's owner slot is 1 and
+  its definition name equals its owner's side commander name, complete.
+- `KillAllMobileUnits` — on unit removal: if the unit's owner slot is 1 and
+  it has a mover, count the units with a mover in slot 1's slice (the
+  removed unit is still occupied and counts; the walk stops at the second
+  hit); complete when the count is below 2, i.e. when no *other* mobile
+  enemy unit remains.
+- `KillAllOfType` — on unit removal: if S, return; if the unit's owner slot
+  is 1 and its definition name matches the stored name, resolve the name to
+  a definition index, count units of that index in slot 1's slice (stop at
+  two), complete when below 2.
+- `KillUnitType` — on unit removal: only while the remaining count is
+  `> 0`; if the unit's owner slot is 1 and its definition name matches,
+  decrement; complete when the result is `< 1`. `KillUnitType=X, 0` and
+  negative counts can therefore never complete.
+- `CaptureUnitType` — on capture: if the unit's owner slot **before** the
+  transfer is 1 and its definition name matches the stored name, complete.
+  No count. **Correction.** "same countdown but driven by the
+  capture/transfer slot, completing at `<= 0`" is retracted.
+- `CommanderKilled` — on unit removal: if the unit's owner slot is 0 and its
+  definition name equals its owner's side commander name, set S (no cue).
+- `AllUnitsKilledOfType` — on unit removal of **any** owner whose definition
+  name matches the stored name: resolve the index, count units of that index
+  in slot 0's slice and then slot 1's slice (each walk stopping at two, the
+  count carried across both), set S when the total is below 2. A `Player=3`
+  subject is not in either slice, so its own removal counts only the
+  survivors in slots 0 and 1.
+- `UnitTypeKilled` — on unit removal of **any** owner whose definition name
+  matches: decrement the remaining count unconditionally (it goes negative
+  and keeps going) and set S when the result is `< 1`.
+
+**One-shot versus repeating.** Every notification condition and the three
+`S`-guarded polls (`BuildUnitType`, `UnitTypePasses`, `AnyUnitPasses`,
+`MoveUnitToRadius`) latch: once S is set it is never cleared except by a
+save/load. `DestroyAllUnits`, `AllUnitsKilled` and the two timers are pure
+predicates re-evaluated at every poll; if the enemy gains a unit after the
+count hit zero, `DestroyAllUnits` is false again until the next
+annihilation. Because victory is an AND across the queue and the shared
+countdown (§6) only ever counts down while the predicate stays true, a
+victory combining a latching term with `DestroyAllUnits` can stall if the
+enemy is reinforced during the five-due countdown.
+
+### Closed — `MoveUnitToRadius` geometry [R-TRIG-01 §5] (2026-08-29)
+
+**Established — de-projection on first poll.** The authored X and Z are map
+**pixels in the editor's projected view**, where the displayed Z of a point
+is its world Z minus half its terrain height. The record is built with the
+raw pixels and a sentinel in the Y word; the first poll that sees the
+sentinel converts them once:
+
+```
+x  = clamp(X, 0, mapWidthPx − 1);  z = clamp(Z, 0, mapHeightPx − 1)   (signed)
+row = (z & ~15) + 128                       start eight 16-px rows below z
+repeat up to nine times (row, row−16, …, row−128):
+    h    = max(seaLevel, height(x, row))    terrain height sampler at (x<<16, row<<16)
+    proj = row − (h >> 1)
+    if proj <= z: break
+    row −= 16
+if all nine rows had proj > z:  result = (x<<16, h<<16, row<<16) from the last row tried; done
+above = row + 16;  h2 = max(seaLevel, height(x, above));  proj2 = above − (h2 >> 1)
+if proj < proj2 or z <= proj2:
+    zFinal = (row<<16) + ((z − proj) << 20) / (proj2 − proj)   signed 32-bit, truncating
+    y      = max(seaLevel, height(x, zFinal)) << 16
+else:
+    zFinal = row<<16;  y = h<<16
+write x<<16 over X, y over the sentinel, zFinal over Z
+```
+
+The height sampler is the terrain height at a 16.16 position (the same
+helper the corpse creator uses, [R-FEAT-01 §13]); it is called twice per
+row when the result exceeds sea level, with no effect. `mapWidthPx`/
+`mapHeightPx` are the map extents in pixels. Once converted the sentinel is
+gone and later polls skip this block; a save does not persist the converted
+centre (only Satisfied/Celebrated, §8), so a loaded mission re-derives it.
+**Correction.** The previous "optionally clamps the authored centre when the
+sentinel is present (map-edge and terrain-height snap, writing `X<<16` /
+`Z<<16` back)" named the effect but not the algorithm; the row search and
+interpolation above are the contract.
+
+**Established — the radius scan.** With centre `(cx, cz)` (16.16) and
+`r = radius << 16`: partition tiles are 128 pixels (`coordinate >> 23` in
+16.16); the tile range is `(cx − r) >> 23 .. (cx + r) >> 23` and likewise
+for Z, each bound clamped to `0 .. tileCount − 1` (a negative bound clamps
+to 0). Tiles are walked Z-outer, X-inner, each tile's unit list followed
+through the partition's per-unit link. For each unit, `dx = unitX − cx`,
+`dz = unitZ − cz` (signed 16.16), and the test is
+`(dx·dx >> 32) + (dz·dz >> 32) <= (r·r >> 32)` with 64-bit products — i.e.
+`trunc(dx_px²) + trunc(dz_px²) <= radius²` in pixel units, **inclusive**,
+planar X/Z, Y ignored. The visitor runs for every unit that passes,
+regardless of owner; the visitor's own gates are: owner slot 0; stored
+name empty or equal (case-insensitive) to the unit's definition name;
+the eligible-unit predicate of §3. A hit completes the condition; the scan
+continues through the remaining tiles. **Correction.** "tile bounds are
+`(centre ± r) >>17`" is retracted — the shift is 23 (128-pixel tiles); the
+rest of the earlier description stands.
+
+### Closed — the tick site: cadence, order, countdown and latch [R-TRIG-01 §6] (2026-08-29)
+
+**Established.** In the per-player phase, when the walk reaches the **local**
+player's slot and that slot's due tick has arrived (`due <= globalTick`,
+then `due += 30`), the end-condition block runs once. For **kind 1**: the
+victory predicate is evaluated; if true the shared countdown steps on the
+*won* path; otherwise the defeat predicate is evaluated and, if true, the
+countdown steps on the *lost* path. Victory therefore wins a tie, and at
+most one predicate advances the countdown per due. For kinds 2/3: if the
+local record is inactive or its side's watch-mode bit is clear, the defeat
+predicate (live count zero, [R-SKIR-01 §3]) is evaluated first and, if true,
+steps the countdown on the lost path; otherwise the victory sweep is
+evaluated and, if true, steps the won path. **Correction.** "the defeat
+queue is polled only when the local side's commander marker (a runtime bit
+on the local player's side definition) is clear — the commander-dead test"
+is retracted on both counts: the bit is the watch-mode bit that the
+elimination handler sets, and no defeat queue is polled in kinds 2/3.
+
+**The kind-1 predicates.** Both first require the mission object's *armed*
+flag, which the mission-object constructor sets and the mission spawner
+clears when the mission has **no `[units]` records** (kind 1 only) — a
+unit-less campaign mission can never end by trigger, which also prevents
+the injected `AllUnitsKilled` from ending it on the first due. The defeat
+predicate then runs the copy-protection deadline path recorded in
+[R-SKIR-01 §3] (never armed by Nanolathe). Then: victory injects a
+`DestroyAllUnits` if the victory queue is empty and returns the **AND** of
+the polls in queue order, stopping at the first false; defeat injects an
+`AllUnitsKilled` if the defeat queue is empty and returns the **OR** of the
+polls in queue order, stopping at the first true.
+
+**The kind-2 victory sweep — Established, and a correction to
+[R-SKIR-01 §3].** For skirmish the sweep is simpler than the multiplayer
+one: walk slots 0–9; skip the local slot, skip any slot whose byte in the
+local player's first alliance row is non-zero (an ally), skip any slot with a
+zero live-unit count; if any slot survives the skips, no victory; after all
+ten, victory. No shared-victory bit, no controller or elimination test, and
+no rule-word test. [R-SKIR-01 §3]'s "Victory detection" describes the
+**kind-3** sweep (rule 2 never ends, shared-victory bits, both rows, all-k
+check) and then states "a skirmish is won only when every other player's
+live count is zero, allies included"; that last sentence is wrong for kind
+2 — allied players are excluded by the first alliance row, which battle
+entry fills from the setup screen's team groups [R-SKIR-01 §2].
+
+**Countdown and latch.** One signed 16-bit countdown is shared by every
+path: a true predicate finds it negative and sets it to 4; each later true
+due decrements it; when the decrement takes it below zero the end latch is
+written — the sixth consecutive true due, 150 ticks after the first — as
+*ending* (bit 2) plus, on the won path, bits 4 and 5, or, on the lost path,
+bit 6 with bit 4 cleared. A false due neither resets nor advances the
+countdown. The presentation after the latch is the Session end section's.
+
+### Closed — notification sites: removal, capture, creation [R-TRIG-01 §7] (2026-08-29)
+
+**Established — unit removed.** The unit teardown (the final release of a
+pool record, which runs for every death cause including the capture
+re-creation below) notifies all victory records then all defeat records in
+queue order, after it has stored the killer link and owner byte and before
+it detaches carrier links, damages cargo, or clears the record; the unit's
+owner, definition and stamped cell are therefore still valid, and the record
+is still occupied for the slice walks of §4. Cargo aboard a dying transport
+is damaged after the parent's notification and is notified on its own later
+teardown. Teardown returns early, without notifying, for a record that
+never became live.
+
+**Established — capture.** The ownership-transfer routine notifies all
+records (victory then defeat) with the unit **before** anything changes,
+when the new owner differs and the unit is live and not factory-pending.
+Its subsequent behaviour matters for the other conditions: when the old
+owner is a human or computer controller and the new owner is a remote
+controller, the old record gets the 150-tick grace counter, loses its
+selected bit, is described to the peers in a packet and is then damaged
+30000 with damage kind 4; otherwise, when the new owner is a human or
+computer controller, a **new** record is allocated for the new owner
+(copying health, construction remaining, heading and stance bits) and the
+old record is damaged 30000 with damage kind 4. Either way the old record
+dies through the ordinary damage path and its teardown fires a
+unit-removed notification — so in single-player a capture is also a slot-1
+loss for `KillUnitType`, `KillAllOfType`, `KillEnemyCommander` and the other
+removal-driven conditions — and the new record fires a unit-created
+notification.
+
+**Established — created.** Both unit allocators notify slot 3 of every
+record after allocation; every shipped condition ignores it.
+
+### Closed — the `Victory Condition` cue, and save/load [R-TRIG-01 §8] (2026-08-29)
+
+**Established — the cue.** "Complete" in a victory condition (all ten
+non-timer victory conditions) plays a sound, not text: the literal alias
+`Victory Condition` is looked up case-insensitively in the sound alias
+table built from the section names of `gamedata/ALLSOUND.TDF` (stock:
+`[Victory Condition] sound=victory2;`), and the resolved sample is started
+on the digital channel when sound is enabled; a missing alias plays nothing.
+No network packet is sent (the call passes the no-broadcast flag) and no
+status-cue or message text is raised. The record's Celebrated flag gates it
+to once per record. Defeat conditions and the timers never play it.
+**Correction.** The earlier "raises the localized 'Victory Condition'
+notification … the exact presentation channel (message/sound) is not
+decomposed" is closed as above.
+
+**Established — save and load (kind 1 only).** The mission's save writer
+and loader call slots 4 and 5 of every record; each condition uses an
+account named `VictoryCondition_<Name>` / `DefeatCondition_<Name>` with
+integer items `Satisfied` and `Celebrated`, and `KillUnitType`/
+`UnitTypeKilled` add `NumLeftToKill`. Nothing else persists: the resolved
+definition indices, scratch counts, timer deadlines (rebuilt from the OTA at
+load) and the de-projected `MoveUnitToRadius` centre are all re-derived.
+Because the account name is the condition name, two records of one
+condition would share an account; the builder's one-per-key rule makes
+that unreachable.
+
+### Closed — mission objects: `[units]`, `[features]`, `[specials]` readers [R-TRIG-01 §9] (2026-08-29)
+
+**Established — the unit record parser** reads, per `[unitN]` block, in this
+order: `Unitname`, `Ident`, `InitialMission` (strings, interned), `XPos`,
+`YPos`, `ZPos` (integers, each `<< 16`), `Angle` (degrees, the magic
+multiply of "Mission placement record"), `Player` (integer; 0 becomes 1),
+`HealthPercentage` (default 100), `BuildPriority` (integer), `CreationCountdown`
+(integer), `MissionCriticalUnit`, `AiIgnore`, `AiPriorityTarget` (each
+`& 1`, packed into flag bits 4–6), `InitialGroup` (**integer** read, low
+four bits packed into flag bits 0–3 — the stock values `patrol` and `Rockos`
+parse as 0), `Immunity` (bit 7). Every key is read with the ordinary
+section accessor, so a key absent from a block takes its default. Reader
+census over the parsed records: `Unitname`, `XPos`/`YPos`/`ZPos`, `Angle`,
+`Player`, `HealthPercentage`, `Immunity` (copied to the unit's status bit
+15, itself unread) and `Ident`/`InitialMission` (the interpreter and the
+name resolver, [04 §3.6]) have readers; `BuildPriority`,
+`CreationCountdown`, `MissionCriticalUnit`, `AiIgnore`, `AiPriorityTarget`
+and `InitialGroup` have **no reader** anywhere — the census in "Mission
+placement record" stands. `Kills` on a unit block is **inert**: no
+placement reader exists (the executable's `Kills` strings belong to the
+score screen and unit-info panels); veterancy cannot be authored.
+`OffMapUnit` has no string in the image. The unit is created immediately by
+the two-pass spawner; there is no delayed-creation queue, no cargo loop and
+no group attachment — `CreationCountdown` and transport contents cannot be
+authored. Created health is `MaxDamage × HealthPercentage / 100` with
+integer truncation.
+
+**Established — the invalid-player path is fatal.** The spawner's first pass
+checks `Player − 1 < 10`, the slot active, its controller human/computer/
+remote and its team byte not the eliminated sentinel; a failure formats
+`Player number %d invalid for unit %s`, shows it in a modal box and then
+**terminates the process** through the CRT exit — it does not proceed.
+**Correction.** "emits a diagnostic for invalid player numbers but still
+proceeds to a position fixup helper and the normal unit allocator" is
+retracted; the message sink is the fatal channel.
+
+**Established — `[features]`.** Each `[featureN]` reads `Featurename` (up to
+128 bytes), `XPos` and `ZPos` (integers, default −1); a missing name or a
+**negative** coordinate blanks the name, and the feature placer skips blank
+names — the record is dropped, not clamped. **Correction.** "coordinates
+that are cleared when negative" is retracted; the name is cleared. Names
+are matched case-insensitively against the feature catalog at placement.
+
+**Established — `[specials]`.** Each `[specialN]` reads `specialwhat`; only
+values beginning with `StartPos` (case-insensitive, eight characters) are
+kept, with `XPos` and `ZPos` as 16-bit values. The suffix after `StartPos`
+is parsed as an integer when its first character is a digit, else it is a
+running counter starting at 1 in file order; the stored index is
+`value − 1` when `value > 0`, else `value` — so `StartPos0` and `StartPos1`
+both store 0. **Established — a missing start position is fatal.** When
+the commander creator cannot find the assigned `StartPos` it formats
+`Error: Could not find start position number %i on the map!`, shows it and
+terminates the process through the same fatal channel; no commander is
+placed and no fallback is taken. (The random-interior jitter of "Randomization
+for skirmish starts" applies to slot assignment before this lookup, not to a
+lookup failure.)
+
+**Established — the start barrier text.** The multiplayer barrier screen
+draws one bar per active, non-eliminated slot and a caption formatted
+`%s.  %i %s` from the localized `Waiting for other players`, the count of
+slots that have reached the barrier, and the localized `player ready`
+(count exactly one) or `players ready` (any other count); once the barrier
+releases the caption is `Synchronization complete`. Which slot flag the
+count reads is a Supported inference (a per-slot ready byte beside the
+controller byte); the text is multiplayer-only presentation and never
+drives a tick.
+
+### Closed — corrections to earlier text [R-TRIG-01 §10] (2026-08-29)
+
+Each entry quotes the retracted sentence and names the section that now
+owns the contract.
+
+1. "seven established buckets — `0x0C` … `0x40`" — nine; §2 and "Trigger
+   object".
+2. "`BuildUnitType` type, count", "`CaptureUnitType` type, count",
+   "`KillAllOfType` type, count" — name only; tables and §2.
+3. "`DestroyAllUnits` — the quirk is the contract … nothing ever writes it"
+   — it is slot 1's live-unit count; §4.
+4. "`KillAllMobileUnits` — succeeds when no live mobile unit (`CanMove`)
+   belonging to the enemy owner remains" — notification-driven, `BMcode`,
+   "no other"; §3, §4.
+5. "`BuildUnitType` — at least the authored count … `ANYTYPE` bypasses" —
+   first finished unit of the type; §4.
+6. "`KillEnemyCommander` / `CommanderKilled` — absence scans" —
+   notification-driven equality on the owner's side commander name; §4.
+7. "satisfied when `abs(coord − threshold) < 3`, i.e. a ±2-world-unit
+   tolerance" — stamped cell, ±2 cells; §3.
+8. "tile bounds are `(centre ± r) >>17`" — `>> 23`; §5.
+9. "`CaptureUnitType` — same countdown … completing at `<= 0`" — no
+   count; §4.
+10. "the defeat queue is polled only when the local side's commander marker
+    … is clear" — watch-mode bit, and no queue in kinds 2/3; §6.
+11. "Configured lobby skirmish ownership — Supported inference" — session
+    kind is the branch; §1.
+12. "Owner gating … compares the unit's player index against `LocalOwner` or
+    `EnemyOwner`" — constants 0 and 1; §3.
+13. "raises the localized 'Victory Condition' notification" — a sound alias;
+    §8.
+14. "emits a diagnostic for invalid player numbers but still proceeds" —
+    fatal; §9.
+15. "coordinates that are cleared when negative" (features) — the name is
+    cleared and the record dropped; §9.
+16. [R-SKIR-01 §3] "a skirmish is won only when every other player's live
+    count is zero, allies included" — kind 2 skips the first alliance row;
+    §6.
+
+### Open — what this unit did not close [R-TRIG-01 §11] (2026-08-29)
+
+- **Unknown — `InitialGroup` low-nibble reader.** The parser packs the value
+  into the flag byte and no reader was found in the bounded search; the
+  `g <n>` order operand that stock scripts use resolves through `Ident`/
+  `Unitname` only [04 §3.6]. Decider: static trace from the flag byte's
+  bit 0–3 mask; until then treat the key as inert.
+- **Unknown — the meaning of a unit-created notification.** Every shipped
+  condition ignores slot 3; whether any non-shipped condition type existed
+  is unrecoverable. Decider: none needed for implementation; keep the slot.
+- **Unknown — side-table divergence.** Whether a synthetic side whose
+  `SIDEDATA` commander differs from the `Commander`-flagged unit is
+  reachable in stock content is a bounded residual (stock agrees); the
+  table is the authority. Decider: asset census over non-stock content.
 
 ## Skirmish configuration
 
@@ -913,7 +1438,8 @@ the sweep. Cross-section: the "Evaluation" paragraph stating that for kinds
 2/3 "the defeat queue is polled only when the local side's commander marker
 … is clear — the commander-dead test" describes this predicate wrongly (it
 is the live-count test above, and the campaign kind is the only one that
-polls a defeat queue); RWU-08-5 owns that paragraph and should restate it.
+polls a defeat queue); restated in [R-TRIG-01 §6], which also corrects
+the "allies included" sentence below for the skirmish kind.
 
 **Victory detection.** The elimination sweep run from the same due returns
 false immediately when the rule word is `2` (deathmatch never ends by
@@ -3719,7 +4245,7 @@ properties:
 - Mission time values used by triggers are converted at thirty ticks per
   second.
 - Missing victory and defeat lists receive executable-defined defaults.
-- Victory/defeat trigger queues are polled in the local player's once-per-30-tick block for every mission type: campaign polls victory first (AND) then defeat (OR); skirmish and multiplayer poll the defeat queue first, gated on the local commander marker, then the victory queue. No alliance merge is performed by any poll.
+- Victory/defeat trigger queues are built for every session kind but polled only in the campaign kind, in the local player's once-per-30-tick block: victory first (AND) then defeat (OR). Skirmish and multiplayer never poll a trigger queue; their end conditions are the live-unit-count predicates of [R-SKIR-01 §3] and [R-TRIG-01 §6]. Removal and capture notifications reach every built record in every kind. No trigger consults an alliance row; the skirmish victory sweep does [R-TRIG-01 §1] [R-TRIG-01 §6].
 - The simulation random stream is never synchronized across peers: each process reseeds Park–Miller from its own `QueryPerformanceCounter` sample (per doc 01 §7.1) and the CRT stream from its own clock at battle entry; no packet carries or writes a seed.
 - Scenario unit reconstruction is a load path, not the strategic AI.
 - Computer-player strategic construction selection, profile `plan`/`weight`/`limit` handling, economy-mixed weighted reservoir choice, per-type class-vector recomputation with outer gate bound 30 and x87 truncation, full manager deadline graph and dispatch gates, direct manager-group writer/classifier for six destinations, eco toggle with eighty percent gate, and placement origin step, radius, selector, and two helper contracts are established (the metal score is the footprint per-cell metal-byte sum; water legality is the yard path's waterline band); the AI score inputs (player economy aggregates and strategic class vectors), hard gates, pressure arithmetic, three-way mix, cumulative weighted reservoir selection, profile plan/weight/limit defaults, and manager-before-refresh-before-ledger update order are established (R-P0-05); the manager task-vector slot order, direct group-writer semantics, classifier branch order, and wave merge strictness are established (R-P0-04); the class routine's weapon reads are the `DAMAGE/default` word divided by 40 and the `range` word divided by 100; any additional distinct group writer or transport geometry remain bounded negative or inference. [P0-01] [P0-02] [P0-03] [R-P0-04] [R-P0-05]
@@ -3774,14 +4300,10 @@ finding. The recitals are deleted here only; the body sections and the
 - Transport-selection policy beyond generic move orders, and any distinct
   naval or air placement geometry · "Placement root and search helpers"
   [P0-04] · static trace.
-- The executable branch by which a populated lobby skirmish uses its rule
-  words without making injected or authored OTA triggers authoritative ·
-  "Victory and defeat triggers" · static trace. (The value-zero survival
-  sweep is closed: skirmish defeat is the live-unit-count-zero predicate of
-  [R-SKIR-01 §3] under every rule value.)
-- The "Evaluation" paragraph's kind-2/3 "commander marker" defeat gate,
-  contradicted by [R-SKIR-01 §3]; RWU-08-5 owns the restatement ·
-  "Evaluation" · static trace already in the R-SKIR-01 trail.
+- The reader, if any, of the placement record's `InitialGroup` nibble ·
+  [R-TRIG-01 §11] · static trace from the flag byte's low-nibble mask.
+- Which per-slot flag the start barrier's `player(s) ready` count reads ·
+  [R-TRIG-01 §9] · static trace of the barrier screen's slot walk.
 - What the 3DO texture frame lookup returns for the `-1` colour the
   controller-cycle quirk can store · [R-SKIR-01 §8] · static trace of the
   frame-array accessor's bound handling.

@@ -7395,6 +7395,437 @@ remains a bounded negative. What is now established is that the "outer caller
 in the reviewed set" the note asked for exists for **replanning**, and is the
 follower/scheduler pair above.
 
+### Closed — the commit step, in order [R-COLL-01 §1] (2026-08-29)
+
+This closure and the seven that follow are the RWU-04-9 pass over the
+position-and-occupancy commit (call 3 of the mover tick, [R-MOV-01 §1]), its
+footprint validator, the occupancy stamp and clear, the blocked flag's writer
+and reader census, and the outer yield question left open by [R-MOV-02A].
+Every claim is direct static trace unless marked otherwise. Vocabulary:
+*cell* is one 13-byte attribute cell of 16 world units ([02 "Terrain file"],
+[03 §1]); the *ground word* and *air word* are the cell's first two `uint16`
+occupancy planes; a *self identity* is the unit's pool index; *size pair* is
+the unit's copy of the definition's `FootPrintX`/`FootPrintZ` cells
+([R-P0-02]); the *cached cell pair* is the unit's committed footprint anchor.
+
+**Established — the step has one caller.** The commit is called only from the
+mover tick; no order handler, network path or interface path calls it. Its
+inputs are the mover's velocity triple and state byte, the unit's 16.16
+X/Y/Z, flags word, size pair, cached cell pair, owner pointer, carrier
+pointer and definition.
+
+**Established — the carried branch.** When the carrier pointer is non-null the
+step takes the carrier's hang position for the cargo ([R-AIR-01 §9]) and
+passes it to the *carried-position setter* of §4 with the mover's mode bits;
+it then copies the carrier's velocity triple and scalar speed into this mover
+(zeroes when the carrier has no mover), clears the transform-dirty bit and
+returns. Nothing below runs for cargo.
+
+**Established — the stationary early return.** The proposal is
+`proposed = position + velocity` per axis (16.16, 32-bit wraparound) and
+`mode = mover.state & 3`. When all three proposed coordinates equal the
+current ones **and** `mode` equals the flags-word mode mirror (bits 0–1), the
+step returns with **nothing written** — no dirty bit, no tick stamp, no
+validator, and the blocked flag untouched. A unit at rest never revalidates.
+
+**Established — the last-proposal tick is written before validation.** On any
+other proposal the mover's *last-proposal tick* is set to the current tick
+**first**, before the cell test and before the validator. It therefore
+records the last tick on which the unit *tried* to change position or mode,
+blocked ticks included. It is the age the hover bob of [R-MOV-01 §5] reads.
+(This corrects [R-MOV-01 §1]'s "tick of its last committed position" — see
+§7.)
+
+**Established — cell quantisation.** With `S = 0x80000` (8 world units, half
+a cell) and the size pair `(fx, fz)`:
+
+```text
+cellX = (proposedX + S − fx·S) >> 20        (arithmetic shift)
+cellZ = (proposedZ + S − fz·S) >> 20
+```
+
+i.e. `floor((p + 8 − 8·f) / 16)` in world units — the anchor whose rectangle
+centre `(f + 2·cell) << 19` ([R-P0-02]) is the cell-quantised unit position.
+
+**Established — the same-cell fast path.** When `(cellX, cellZ)` equals the
+cached cell pair **and** `mode` equals the mode mirror, the step writes the
+proposed X, Y and Z, sets transform-dirty (flags bit 16) and returns. No
+validator, no clear, no stamp, no change to the blocked flag.
+
+**Established — the validation gate.** Otherwise, when the owner pointer's
+player record is active and its state byte is `1` or `2`, the validator of §2
+is called with `(definition, self identity, packed cell pair, mode)` and the
+mover's blocked flag (state byte bit 2) is **rewritten** with `result == 0`.
+When the owner is not in state 1 or 2 the flag keeps its previous value and
+the branch below is taken on that stale value. (The sweep of [R-MOV-01 §1]
+only runs the mover tick for state-1/2 owners, so in practice the rewrite is
+unconditional.)
+
+**Established — the blocked branch.** With `c = (f + 2·cachedCell) << 19` per
+axis (the old rectangle's centre) and `H = 0x7ffff` (half a cell minus one
+16.16 unit):
+
+```text
+X = proposedX > c.x + H ? c.x + H : (proposedX < c.x − H ? c.x − H : proposedX)
+Z = proposedZ > c.z + H ? c.z + H : (proposedZ < c.z − H ? c.z − H : proposedZ)
+Y = proposedY                                             (never clamped)
+half = trunc(MaxVelocity / 2)                             (cdq/sub/sar: toward zero)
+if speed > half:                                          (strict)
+        speed = half
+        vx = −sinq(heading, half);  vy = 0;  vz = −cosq(heading, half)
+```
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Established — the success branch, in order.** (1) *clear* the old footprint
+(§4) at the cached cell pair; (2) write proposed X, Y, Z; (3) write the new
+cell pair into the cached pair and `mode` into the mode-mirror bits;
+(4) *stamp* the new footprint (§4) at the new pair and mode; (5) set
+transform-dirty; (6) call the LOS coverage wrapper ([03 §3.2 R-VIS-01 §2]),
+which floors the Y it publishes at `(seaLevel + 1) << 16`. Steps 1–6 finish
+before the sweep visits the next unit slot.
+
+### Closed — the mobile footprint validator, exactly [R-COLL-01 §2] (2026-08-29)
+
+The validator is the shared entry of §6.4 ([R-P0-08] "class split"); this
+closure states its mobile side at implementable precision. Arguments:
+definition, self identity (0 from every placement caller — census in §6),
+packed cell pair (X in the low half, Z in the high half), and a mode.
+
+**Established — bounds first, mode-dependent verdict.** In order:
+
+1. `cellX < 0` → return `mode == 2`.
+2. packed pair `< 0` as a signed 32-bit word (i.e. `cellZ < 0`) → return
+   `mode == 2`.
+3. `cellX + fx ≥ mapWidthCells` → return `mode == 2`.
+4. `cellZ + fz ≥ mapHeightCells` → return `mode == 2`.
+
+So an out-of-map rectangle passes only for an airborne mover and fails for
+every other mode. The map's last column and last row of cells are never
+enterable by a ground footprint (`cellX + fx − 1 ≤ width − 2`).
+
+**Established — class dispatch.** A definition whose `bmcode` is 0 (the
+building class; the same byte that selects the yard-map parse and sets flags
+bit 29 at creation) is validated by the yard-map placement validator of
+[R-P0-08] with self identity 0 and no profile, whatever the mode. Otherwise a
+mode other than `1` returns **1 (legal) without scanning a cell**: airborne
+units, and the load-only modes 0 and 3, are never blocked by occupancy,
+features or terrain once inside the map.
+
+**Established — the mode-1 scan.** Rows Z outer, columns X inner over the
+`fz × fx` rectangle; the first failing test returns 0 and every test is
+**per cell**, not aggregate:
+
+1. *Feature.* The cell's feature word: `0xFFFF` → not blocking; a value below
+   `0xFFFB` is a catalog ordinal: below the catalog count → the definition's
+   flag-word bit 6 (`blocking`, [R-FEAT-01 §6]); at or above the count →
+   blocking; `0xFFFE` (fringe) → hop to the anchor cell at
+   `cell − (dz·mapWidthCells + dx)` cells, where `dz` and `dx` are the
+   fringe cell's two offset bytes ([R-FEAT-01 §3]), and read that word: below
+   `0xFFFB` → its `blocking` bit **without** the catalog-count check (an
+   out-of-range anchored ordinal reads past the catalog — a fault contract);
+   otherwise not blocking; `0xFFFB`, `0xFFFC`, `0xFFFD` → blocking.
+2. *Occupant.* Blocking feature, **or** ground word nonzero and not equal to
+   the self identity → reject. Only the ground word is read; the air word is
+   never consulted, so a landed or hovering airborne unit never blocks a
+   ground mover through this test.
+3. *Deep.* `hmin < seaLevel − MaxWaterDepth` → reject.
+4. *Shallow.* `hmax > seaLevel − MinWaterDepth` → reject.
+5. *Slope.* `slope = hmax − hmin`; when `slope > MaxSlope`: `hmin ≥ seaLevel`
+   (a land cell) → reject; else `slope > MaxWaterSlope` → reject.
+
+`hmax` and `hmin` are the cell's derived maximum (offset 5) and minimum
+(offset 6) height bytes; `seaLevel` the map's sea-level byte; `MaxWaterDepth`
+and `MinWaterDepth` the signed 16-bit copies and `MaxSlope`/`MaxWaterSlope`
+the byte copies that the movement class writes into the definition
+([02 "Movement class record"], [R-DOC04-A]). All comparisons are signed
+32-bit and **strict** — equality passes. The validator reads the definition's
+copies, not the movement-class record, and never reads the packed class layer
+of §7.1, an owner, an allegiance, a velocity, a heading, an order, or the
+occupant's age.
+
+**Established — what a rejection means.** The returned 0 carries no reason;
+the caller cannot tell a map edge from a wall from a parked friend. The
+blocked branch of §1 is the same for all of them.
+
+### Closed — the map edge, features and buildings [R-COLL-01 §3] (2026-08-29)
+
+**Established — the map edge is a validator reject, not a clamp of its own.**
+There is no edge test in the mover tick outside the validator. A ground mover
+whose proposed rectangle leaves `[0, width−1−fx] × [0, height−1−fz]` is
+rejected at §2 step 1–4 and receives the ordinary blocked response of §1: its
+position is clamped inside the old rectangle (never more than `8 − 1/65536`
+world units from the old centre on each axis), its speed capped at half
+`MaxVelocity`, its heading untouched. It never bounces, stops its order, or
+clears its route; the follower re-arms a path request every 60 ticks for as
+long as it stays blocked ([R-MOV-01 §7]), and the order completes only through
+its own goal handshake (§8.3). Because the reachable cell range excludes the
+last row and column, the visible wall is one cell inside the map's last
+attribute cell on the east and south edges and at cell 0 on the north and
+west.
+
+**Established — airborne units cross the edge.** An airborne mover (mode 2)
+passes the validator out of map; the stamp of §4 then files the unit in the
+*off-map sector bucket* and writes no cell, and the clear of §4 skips a unit
+filed there. Nothing in the commit path bounds a flying unit's position; any
+edge behaviour for aircraft belongs to the flight controller ([R-AIR-01]).
+
+**Established — features.** A feature blocks a ground footprint exactly when
+its definition's `blocking` bit is set, resolved through the fringe hop
+above; presence alone does not block (metal patches are authored
+`blocking=0`, [R-P0-08]). A blocking feature is a permanent wall to the
+commit — the mover does not reclaim, crush, or path over it — until the
+feature phase removes or replaces it ([R-FEAT-01 §4][R-FEAT-01 §5]).
+
+**Established — buildings.** A finished building-class unit occupies the
+ground word of the cells its yard map selects (§4), so a ground mover treats
+those cells exactly like cells held by another mobile unit: rejected at §2
+step 2 unless the occupant identity is its own. Cells the yard map does not
+select in the building's current yard state are free to the commit even
+though they lie inside the building's rectangle — this is how a product
+leaves a factory whose yard is open (RWU-04-10 owns the exit contract). The
+class layer of §7.1 additionally hard-blocks a building's cells for path
+search through the occupant-age gate ([R-PATH-01 §2]); the commit does not
+use the class layer.
+
+### Closed — stamp and clear, exactly: the two planes, the overlap bits, and the sector list [R-COLL-01 §4] (2026-08-29)
+
+**Established — the two occupancy planes and the three stamp classes.** The
+ground word is written by ground movers (mode 1) and by building-class units
+(flags bit 29, set at creation from `bmcode == 0`); the air word by airborne
+movers (mode 2). Modes 0 and 3 stamp and clear nothing. The building class
+selects cells by yard byte: with the unit's *yard-open* bit (bit 2 of the
+second state byte, port 18 of §4.7) set, a cell is selected when its compiled
+yard byte has **bit 1**; with it clear, when the byte has **bit 2**. Against
+the table of [R-P0-08]: `o`, `f`, `w`, `G` are selected in both states, `c`
+and `C` only while the yard is **closed**, `O` only while it is **open**, and
+`Y`, `y`, `.` never. Additionally every selected-or-not cell whose yard byte
+has bit 0 gets bit 1 of the cell's flag byte (offset 12) set on stamp and
+cleared on clear — the "structure yard" mark the placement validator's bit-0
+test reads ([R-P0-08]).
+
+**Established — the overlap protocol.** Stamping a selected cell that already
+holds another identity does **not** fail; it records an overlap on both
+units' flags words using bits 26 (*host*: another unit overlaps my cell) and
+27 (*intruder*: I overlap a cell I do not hold):
+
+```text
+occupant := unit at the cell's word
+if occupant's owner is active and in player state 3:
+        occupant.flags |= intruder;  self.flags |= host;  cell.word := self
+else:
+        occupant.flags |= host;      self.flags |= intruder;  (cell keeps occupant)
+```
+
+A free cell simply takes the self identity. The protocol is identical for the
+ground and air planes and for the building class. Player state 3 is the
+eliminated/watch state (Supported inference for the label, [R-MOV-01 §3]);
+the arithmetic — a state-3 owner's unit yields its cell to whoever stamps
+over it — is Established. This protocol is the **only** place two units'
+ownership of one cell is arbitrated, and it never runs for a validated ground
+proposal because the validator has already rejected any foreign occupant; it
+runs for stamps that bypass validation (creation, transport drop and unload,
+`Teleport`, the network unit-state apply, load) and for building stamps.
+
+**Established — clear, in order.** If the unit is filed in the off-map bucket
+nothing was stamped and the cell loop is skipped. Otherwise, over the
+rectangle at the *cached* cell pair: building class — ground word equal to
+self → 0, yard bit 0 → clear the cell's flag-byte bit 1, then recompute the
+derived min/max heights over the rectangle grown by one cell on every side
+(the loader's derivation, [03 §1]); mode 1 — ground word equal to self → 0;
+mode 2 — air word equal to self → 0. Then flags bit 27 is cleared, and if
+bit 26 was set both 26 and 27 are cleared and the *overlap scan* runs: every
+live unit (and every unit on a live unit's cargo list) filed in a sector
+bucket touching the rectangle whose own rectangle intersects it is passed to
+the *restamp* below. Finally the class-layer maintenance: for a unit with a
+mover, each of the sixteen class-layer records whose watermark exceeds the
+mover's *last-stamp tick* reclassifies the rectangle ([R-PATH-01 §2]'s
+footprint-aware classifier over the rectangle), and the last-stamp tick is
+set to the current tick; for a unit without a mover every active layer
+reclassifies it.
+
+**Established — stamp, in order.** The mover's last-stamp tick (the
+occupant-age clock of [R-DOC04-B]) is set to the current tick. Then the
+bounds test of §2 steps 1–4 on the cached pair: out of map → the unit is
+moved to the off-map sector bucket (unlinked from its previous bucket unless
+carried) and **no cell is written**. In map → the sector bucket is
+`(Z >> 23)·sectorsWide + (X >> 23)` from the committed 16.16 position (128
+world-unit sectors), relinked when it changed and the unit is not carried;
+then the plane loop above with the overlap protocol; for the building class
+the derived-height recompute over the grown rectangle and a reclassification
+of the rectangle in every active class layer follow.
+
+**Established — restamp.** Gated on flags bit 27: it clears the bit and
+re-runs the stamp loop at the cached pair with the overlap protocol; for the
+building class a cell the yard map no longer selects that holds the self
+identity is released to 0. Its three callers: the overlap scan above (an
+intruder re-claims cells its host just released), the **yard-open port write**
+(after the admission gate of §4.7 passes: write the yard bit, set bit 27,
+restamp, reclassify the rectangle in every layer — this is the moment a
+factory's `c`/`C` cells are released and its `O` cells claimed), and the save
+loader's post-load pass.
+
+**Established — writer census of the stamp and clear.** Stamp: unit creation
+([04 §2.3]), the commit success branch, the carried-position setter (used by
+the commit's carried branch and by `Teleport`, [R-SPEC-01 §2]), the network
+unit-state apply and the ally-transfer re-creation (both out of scope, doc 08),
+and the restamp. Clear: the commit success branch, the carried-position
+setter, unit finalisation at death or free ([04 §6] / [04 §2.3]), and the
+same two doc-08 paths. The carried-position setter is the commit's fast path
+and success branch without the validator: same-cell-and-mode → write XYZ;
+otherwise clear, write XYZ and the new pair and mode, stamp, LOS wrapper;
+dirty in both cases. Every writer stamps at the unit's cached pair; there is
+no reservation stamp for a proposed position anywhere.
+
+### Closed — the blocked flag: writers, readers, persistence, and the save bit [R-COLL-01 §5] (2026-08-29)
+
+**Established — three writers.** (1) The commit's validation gate (§1) on
+every cross-cell or mode-changing proposal by a state-1/2 owner's unit —
+the only simulation writer. (2) The follower's stream reader (doc 08's
+network/save unit stream), which installs the bit from one stream bit. (3)
+The mover box `u%04xmob` loader, which merges the byte's mode and blocked
+bits into the live state byte ([08 "Save-file organization"]). Nothing
+clears the flag on route install, order completion, arrival, or the
+stationary early return.
+
+**Established — four readers.** (1) The follower's per-tick service: blocked
+→ *wants-repath* ([R-MOV-01 §7]). (2) The movement-rate classifier: blocked →
+tier 0 → `StopMoving` ([R-MOV-01 §6]). (3) The commit's own blocked branch
+(§1) when the validator did not run. (4) The follower's stream writer, which
+copies the bit into the stream and mirrors it into follower flags bit 2. The
+steering step, the hover bob, the order pumps and the path search do not read
+it — the hover bob reads the last-proposal tick, not the flag (correction to
+this section's tail, §7).
+
+**Established — the flag persists stale by construction.** After a rejection
+the clamp leaves the unit inside its old rectangle with capped speed. A later
+proposal that stays inside that rectangle (the unit turned toward a new route
+point, or slowed) takes the fast path or the stationary return, neither of
+which rewrites the bit. The unit is then *reported* blocked — it arms a path
+request every 60 ticks and its movement-rate tier reads 0, so `StopMoving`
+fires though it is moving within its cell — until its next cross-cell
+proposal, when the validator's verdict replaces the stale value. The speed
+cap is not re-applied on stale ticks (it lives only in the fresh-rejection
+branch), so a stale-blocked unit accelerates normally. No observation is
+needed to establish this; what a retail observation could add is the
+visible symptom (a unit reporting a fresh path request while circling inside
+one cell), which is *Observed*-grade only and changes no contract.
+
+**Established — the save bit.** The mover box's final byte carries mode in
+bits 0–1 and the blocked flag in bit 2; the box's second unnamed 32-bit word
+is the mover's **last-stamp tick** (the occupant-age clock), and the
+last-proposal tick is **not** saved — after load the hover bob's age term
+starts from whatever the load path stamps. (Naming for doc 08; RWU-08-4.)
+
+### Closed — the `I can't get there` bit is the empty-route publication [R-COLL-01 §6] (2026-08-29)
+
+The RWU-04-2 open item — "the move and mobile-build rejects test the same
+flag bit; who sets it?" — is closed by two closures that landed after it was
+raised: the bit is the order record's satisfied-word bit `0x40`, raised by the
+route publication when an **empty route** is published while the unit is not
+at the goal ([R-PATH-01 §7][R-PATH-01 §9]); the move handlers read it as
+"cannot get there" and the work handlers as abandon or re-arm
+([R-ORD-01 §4][R-ORD-01 §5]). It is not produced by the commit, the
+validator, or the blocked flag: a mover walled in by traffic never raises it
+unless the path search itself finds no route. `I can't get there` is caption
+slot 7; the placement rejects that print `Waiting for target area to clear`
+are the validator's 0 with self identity 0 at the mobile-build and unload
+sites, on their own retry counter ([R-ORD-01 §5], doc 08 "General parameter
+3").
+
+### Closed — yield, sidestep and retarget: the outer owner does not exist [R-COLL-01 §7] (2026-08-29)
+
+[R-MOV-02A] left "any outer yield owner, retarget, sidestep, reverse, or
+wait-queue" as a bounded negative awaiting a retail trace. It is closed here
+by **census**, which is stronger than the call-graph bound: the mover state
+byte's bit 2 has exactly the three writers of §5; the ground/air planes have
+exactly the writers of §4; the validator has exactly eleven callers (the
+commit, the carried drop check, the commander respawn placement, the AI
+extractor placement, `BuildingBuild`, the two `MobileBuild` fragments, the
+two unload executors, and two further order fragments reached through the
+handler jump tables — all placement or drop legality, none a movement
+decision); and no function in the image compares two units' size, age, order
+state, owner, or a random draw to choose which of two colliding movers moves.
+Therefore:
+
+* **Who yields: nobody.** Two ground movers contending for a cell are
+  resolved by sweep order alone — player slot, then pool slot ([R-MOV-02A]) —
+  and the loser receives the clamp and half-speed cap of §1 on that tick. The
+  winner is not slowed. There is no size, mass, priority, allegiance or age
+  term at the commit.
+* **Who waits: whoever is blocked, for exactly as long as the cell stays
+  held.** There is no wait counter; the blocked unit re-proposes every tick at
+  capped speed and passes the moment the cell's ground word is cleared, in the
+  same tick if the holder's slot is visited earlier.
+* **Sidestep and retarget: only through a new route.** The single escape is
+  the follower's repath request (at most one per 60 ticks while blocked,
+  [R-MOV-01 §7]). Whether the new route avoids the blocker is decided by the
+  request's revision pass ([R-DOC04-B][R-PATH-01 §2]): an occupant whose
+  last-stamp tick is older than the watermark (more than 30 ticks without a
+  successful commit) is re-stamped into the class layer and the search routes
+  around it; a younger occupant is transparent to the search and the new
+  route can run straight through it, to be rejected again at commit.
+* **Deadlock resolution is emergent, not owned.** Two movers blocked head-on
+  both stop stamping, so after 30 ticks each is a hard block in the other's
+  next search; each re-requests at the 60-tick cadence and receives a route
+  around the other. The 30-tick age and the 60-tick cadence are Established
+  separately; that their combination is what a player sees as the "shuffle
+  apart" is a **Supported inference** — a retail observation of two units
+  ordered through each other in a one-cell corridor, timing the first
+  divergent route against the collision tick, would confirm it (expected:
+  neither moves for at least 30 ticks; the first new route arrives between
+  tick 30 and tick 60 after the block for the unit whose request fires later).
+* **Reverse, push, rotate for clearance, swap: none.** Unchanged from
+  [R-MOV-02A]; the census above turns the bounded negative into a whole-image
+  negative for the simulation. Interface and network paths that write a
+  position (the network unit-state apply) do so by clear-and-stamp without a
+  validator and are out of scope.
+
+### Correction — four earlier statements [R-COLL-01 §8] (2026-08-29)
+
+1. **This section's fourth paragraph** said the validator's "aggregate
+   height, depth, and slope gates run after the scan". Wrong: in the mobile
+   validator every gate is per cell inside the scan, in the order feature →
+   occupant → deep → shallow → slope (§2). The aggregate form (`min of mins`,
+   `max of maxes`) belongs to the class-layer classifier ([R-DOC04-B]) and to
+   the yard-map placement validator ([R-P0-08]), which the earlier text
+   conflated with the commit path.
+2. **[R-MOV-01 §1]** listed "the tick of its last committed position" among
+   the mover's state. The word is written before validation and on blocked
+   ticks (§1); it is the last-*proposal* tick. The last-*stamp* tick is a
+   different mover word, the one the occupant-age gate and the save box
+   carry (§4, §5).
+3. **This section's tail** said the blocked flag "gates the movement-rate
+   tier, the hover bob, and the repath arm". The hover bob reads the
+   last-proposal tick, not the flag (§5); the other two readers stand.
+4. **[R-P0-08-A §1]** inferred that "finished buildings never write" the
+   mobile occupancy words. Falsified by §4: a building-class unit writes the
+   ground word of every cell its yard map selects in its current yard state,
+   and the yard-open write restamps. The consequence the inference was
+   reaching for — that stock factories can produce although their exit
+   rectangle overlaps their body — comes instead from the yard-state
+   selection (`c`/`C` released while open) and from the exit validator's
+   arguments, which RWU-04-10 owns. Its `TODO(question)` on the exit
+   caller's mode argument is narrowed here: `BuildingBuild` passes the
+   **producer's own flags-word mode-mirror bits** and self identity 0, and a
+   mirror other than 1 makes the mobile validator pass any in-map rectangle
+   without a cell scan (§2); what the mirror holds for a building-class
+   producer (the allocator's mode argument at its creation) is RWU-04-10's
+   question. Also, [R-ORD-01 §1]'s aside calling the committed cell pair
+   "the packed half-cell footprint bias of §8" mislabels it: the bias in
+   §8.2's quantisation is the size pair; the committed pair is the anchor.
+
+### R-COLL-01 §9 — what this unit leaves open
+
+* Whether a building-class unit can own a mover and so reach the commit's
+  `bmcode == 0` dispatch (§2) in play; the branch is Established, its
+  reachability is **Unknown** — decider: static census of the allocator's
+  mover-allocation condition (RWU-04-10 / lane 04).
+* The airborne edge: no commit-path bound exists (§3); whether the flight
+  controller bounds position is [R-AIR-01]'s question, not this section's.
+* The emergent deadlock timing is a Supported inference (§7); decider: the
+  retail observation specified there.
+
 ### 8.3 Final-order arrival and the satisfied-bit handshake [R-P0-01]
 
 **Established fact [R-P0-01]:** Retail keeps three notions that must not be
@@ -8167,7 +8598,10 @@ build is four passes:
    column.
 2. Initialize every record's first byte to the map's **sea-level byte**.
 3. Sweep every attribute cell and raise the owning record's first byte to the
-   cell's height byte where the cell is higher.
+   cell's **derived per-cell maximum byte** where that is higher (corrected
+   2026-08-29 against [03 R-TERR-01 §5]: the earlier text read "the cell's
+   height byte", i.e. the raw sample; the sweep reads the loader-derived
+   maximum).
 4. Two separable maximum passes. The row pass writes each cell's second byte as
    the maximum of the first byte over that cell and its two horizontal
    neighbours; the column pass then rewrites the second byte in place as the
@@ -9083,18 +9517,22 @@ orchestrator).
 
 ### Ground movement
 
-- Any outer yield owner, retarget, sidestep, reverse, or wait-queue outside
-  the bounded final-commit path · §8.2 [R-MOV-02A] · manual retail observation
-  (the focused encounter trace specified in [R-MOV-02A]). The automatic-replan
-  half of the earlier wording is closed by [R-MOV-01 §7].
-- Collision interactions with features, buildings, and the map boundary
-  outside that bounded commit path · §8.2 · static trace.
-- Whether the mover's blocked flag can persist stale: the same-cell fast path
-  commits without rewriting it, so a blocked mover whose next proposal stays
-  inside its committed cell keeps the previous verdict, which gates the
-  movement-rate tier, the hover bob, and the repath arm · §8.2
-  [R-MOV-01 §5][R-MOV-01 §7] · static census of every writer of that flag,
-  then manual retail observation to confirm.
+**Regenerated (2026-08-29, RWU-04-9).** Three bullets are deleted because
+[R-COLL-01] closes them: the outer yield/retarget/sidestep/wait-queue owner
+(none exists; resolution is sweep order plus the follower's 60-tick repath and
+the class layer's 30-tick occupant age, [R-COLL-01 §7]); feature, building
+and map-edge collision (all validator rejects with one blocked response,
+[R-COLL-01 §2][R-COLL-01 §3]); and the blocked flag's stale persistence
+(established by writer census, [R-COLL-01 §5]).
+
+- The emergent head-on deadlock timing — first divergent route between 30
+  and 60 ticks after the block — is a Supported inference from two
+  Established mechanisms · §8.2 [R-COLL-01 §7] · manual retail observation
+  of two units ordered through each other in a one-cell corridor.
+- Whether a building-class unit can own a mover and reach the commit's
+  building-class validator dispatch · §8.2 [R-COLL-01 §2][R-COLL-01 §9] ·
+  static census of the allocator's mover-allocation condition (with
+  RWU-04-10).
 *(The follower's four unread virtual slots, the route object's protocol, and
 the route-acceptance rule are closed by [R-PATH-01 §8]. The `PFSTATE` /
 `PFABLE` bullet is deleted: they are the display object's page-flip request

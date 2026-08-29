@@ -1639,30 +1639,25 @@ loader supports campaign difficulty schemas, network schemas, and map-browser
 enumeration. Network schema selection uses the number of `StartPos` records
 to match lobby player count.
 
-**Map-global keys.** All of the following come from the map's global section.
-Localized keys use the language-prefixed accessor.
+**Map-global keys.** The complete key/consumer table — every key the loader
+reads, the section it must sit in, the accessor and width, the default, where
+the value is stored and who reads it — is `[R-MAP-01 §3]` (global keys) and
+`[R-MAP-01 §5]` (schema keys) below.
 
-| Key | Accessor | Default |
-|---|---|---|
-| `missionname` | language-prefixed string | empty |
-| `missionfile` | string | empty |
-| `missiondescription` | string | `No description available` |
-| `brief`, `narration`, `missionhint` | language-prefixed string | empty |
-| `glamour`, `glamoursound` | string | empty |
-| `Planet`, `memory`, `numplayers` | string | empty |
-| `aiprofile` | string | empty |
-| `UseOnlyUnits` | string | empty |
-| `maxunits` | integer | **200** |
-| `mapping`, `lineofsight`, `nomovie` | integer | 0 |
-| `minwindspeed`, `maxwindspeed`, `gravity` | integer | 0 |
-| `tidalstrength` | floating | 0.0 |
-| `lavaworld`, `nosealeveltrigger`, `waterdoesdamage`, `waterdamage` | integer | 0 |
-| `killmul`, `timemul` | floating | 0.0 |
-| `HumanMetal`, `HumanEnergy`, `ComputerMetal`, `ComputerEnergy` | integer | 0 |
-| `SurfaceMetal` | integer | 0 |
-| `MeteorWeapon` | string | empty |
-| `MeteorRadius` | integer | 0 |
-| `MeteorDensity`, `MeteorDuration`, `MeteorInterval` | floating | 0.0 |
+**Correction (2026-08-29, `[R-MAP-01]`).** The table that stood here listed
+`missionname` as a language-prefixed string read "from the map's global
+section", `missionfile` as a map key, `maxunits` as "integer, default 200"
+without qualification, and mixed the `[Schema N]` keys (`HumanMetal` …
+`MeteorInterval`, `SurfaceMetal`, `aiprofile`) into the global list. All four
+were wrong or misleading: the OTA's own `missionname` is never read (both
+readers of that key read the campaign file's `MISSION%d` section);
+`missionfile` is a campaign-file key naming the OTA, not an OTA key;
+`maxunits` is read from the OTA only on the campaign path (skirmish and
+multiplayer take the unit limit from the setup record, `[08 R-SKIR-01 §6]`);
+and the accessors never walk from a schema to its parent, so a schema key
+authored at global level (or vice versa) is invisible. The typed defaults it
+listed (integers 0, floats 0.0, description `No description available`) were
+right and are carried into the new table.
 
 **Meteor merge and enable contract.** The map-global keys feed a storm record
 committed to the mission globals. An empty `MeteorWeapon` is the only disable
@@ -1850,13 +1845,27 @@ recomputed for the full map and after feature placement. It performs:
   exceeds `z*32`, so its half-height pokes above the north map edge. Row 0
   voids any height ≥ 1, row 1 heights > 32, row 2 > 64, row 3 > 96, row 4 >
   128, row 5 > 160, row 6 > 192, row 7 > 224, rows 8 and beyond never.
-* **South-edge void:** walking rows upward from `Height-1`, an empty-or-fringe
-  cell at row z is set to `0xFFFD` when `z*16 − (height >> 1) > PlayBottom`,
-  equivalently `(Height-1-z)*16 + (height >> 1) < 112` — low cells near the
-  south edge whose terrain surface would fall below the play area. The last
-  row voids heights < 224, `Height-2` < 192, `Height-3` < 160, `Height-4` <
-  128, `Height-5` < 96, `Height-6` < 64, `Height-7` < 32, `Height-8` never.
-  (This closes the earlier `TODO(question)` on the north/south predicates.)
+* **South-edge void:** walking rows upward from `Height-1`, the predicate
+  `z*16 − (height(x, z) >> 1) > PlayBottom` — equivalently
+  `(Height-1-z)*16 + (height >> 1) < 112` — is evaluated on row `z`, and
+  when it holds the cell voided is **`(x, z−1)`, the row above the tested
+  row**, provided that cell is empty or fringe; the walk stops at the first
+  row where the predicate fails. The bottom row `Height-1` is therefore
+  never voided by this rule; row `Height-2` is voided when the bottom row's
+  height is below 224, `Height-3` when row `Height-2`'s height is below 192,
+  … down to row `Height-8`, voided when row `Height-7`'s height is below 32.
+  The traced statement is `[03 R-TERR-01 §2]`.
+
+  **Correction (2026-08-29, `[R-MAP-01 §10]`).** This bullet previously
+  read: "an empty-or-fringe cell at row z is set to `0xFFFD` when `z*16 −
+  (height >> 1) > PlayBottom` … The last row voids heights < 224, `Height-2`
+  < 192, `Height-3` < 160, `Height-4` < 128, `Height-5` < 96, `Height-6` <
+  64, `Height-7` < 32, `Height-8` never." The predicate was right; the
+  voided cell was wrong by one row. The loader steps its cell pointer back
+  one row stride *before* it reads and writes the feature word, so the row
+  whose height is tested and the row that is voided differ, and the bottom
+  row is untouched. An implementation of the old text voids one extra row
+  on every map and voids the bottom row, which retail never does.
 * **Lava-world flood:** when the mission `lavaworld` flag is set, a bulk sweep
   sets `0xFFFD` for every cell where `hmin ≤ SeaLevel` and the feature word is
   `0xFFFF` or `0xFFFE`, turning the entire low basin into void.
@@ -1873,6 +1882,404 @@ above.
 **Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 **Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+### Closed — the map-load pipeline: entry points, order, and the resource-path slots [R-MAP-01 §1] (2026-08-29)
+
+Status: **Established** (direct static trace of the mission loader, its four
+front-end entry points, the battle-entry orchestrator and the session-start
+sequence). This unit owns the *load pipeline* and the key/consumer tables;
+what the loaded cells mean to the simulation is `[03 R-TERR-01 §1–§8]`,
+feature stamping is `[05 R-FEAT-01 §2/§3/§7]`, mission objects and triggers
+are `[08 R-TRIG-01]`, the skirmish setup record is `[08 R-SKIR-01]`.
+
+**Two files, two moments.** A map is loaded in two separate steps that can be
+minutes apart:
+
+1. **OTA parse** — runs in the front end, when a map or mission is selected
+   (skirmish map pick, campaign mission entry, load-game), again on every
+   save-summary write, and once more at battle entry immediately before
+   session start. It fills the *mission record* (the map-global block, the
+   eight resource paths, the placement arrays, the trigger set) and touches no
+   terrain memory.
+2. **TNT load** — runs inside session start, before the feature-successor
+   pass `[05 R-FEAT-01 §2]` and after the per-battle catalogs are up. It reads the terrain file named
+   by resource slot 1, builds the plot array, stamps features, and allocates
+   every map-sized presentation buffer.
+
+The OTA parse's success value is **ignored** by battle entry: a map whose OTA
+parsed without a `GlobalHeader` still starts, with the mission record's
+prologue sentinels in force (§6 below).
+
+**Session kinds.** The mission record's kind word (`1` campaign, `2`
+skirmish, `3` multiplayer — the same word `[08 R-SKIR-01 §2]` calls the
+session kind) selects the parse path. Campaign entries locate the OTA through
+the campaign file: `MISSION<n>` section → `missionfile` key → `Maps\<file>.OTA`.
+Skirmish and multiplayer entries receive the map name directly and open
+`Maps\<name>.OTA`. The "next mission" entry counts the campaign file's
+`MISSION<n>` sections from 0 upward until one is missing and loads index
+`current + 1`; the campaign-open entry blanks all eight resource slots and
+reports a missing campaign file as `The requested campaign file, %s, does
+not exist.`
+
+**Prologue — what every parse resets first.** Before any file is opened the
+loader destroys and recreates the trigger set (`[08 R-TRIG-01 §2]`), sets the
+map-global integers `SurfaceMetal`, `minwindspeed`, `maxwindspeed` and
+`gravity` to **−1**, `tidalstrength` to **−1.0**, `lavaworld` and
+`nosealeveltrigger` to 0, blanks `Planet` and the description, and frees the
+three placement arrays and the briefing text. These sentinels are what the
+terrain loader sees when the parse never reaches a `GlobalHeader` (§6).
+
+**Resource-path slots.** The mission record carries eight 256-byte path
+strings filled by one helper from `(directory, name, extension)`:
+
+| Slot | Key (level) | Directory | Extension | Reader |
+|---|---|---|---|---|
+| 1 | campaign `missionfile` / skirmish map name | `Maps` | `TNT` | the terrain loader (§6); the map-hash builder (§3 row 0); two further readers outside this unit (a front-end preflight and the AI profile loader) |
+| 2 | `brief` (global, language-prefixed) | `camps\briefs` | `TXT` | read whole into the briefing text buffer at parse time; the briefing screen |
+| 3 | `narration` (global, language-prefixed) | `camps\briefs` | `WAV` | briefing screen narration |
+| 4 | `missionhint` (global, language-prefixed) | `camps\hints` | `TXT` | **none** — the path is built and never read (reader census over the slot accessor and the record offset: no site) |
+| 5 | `glamour` (global) | *empty* | `PCX` | the glamour (mission-complete) picture loader, which skips the slot's leading `\` and rebuilds `bitmaps\glamour\<name>.PCX` through the same path helper |
+| 6 | `UseOnlyUnits` (global) | `camps\useonly` | `TDF` | the unit-restriction loader |
+| 7 | `aiprofile` (schema) | `ai` | `txt` | the AI profile loader (four sites) |
+| 8 | `glamoursound` (global) | `camps\briefs` | `WAV` | briefing screen |
+
+The helper: an empty name stores an empty slot (and, for slot 1, a TNT size
+of 0). Otherwise, when a language directory is configured (`[02 §3]`), it
+formats `<directory>-<language>\<name>`, cuts the name at its **last** `.`
+(so an authored extension is discarded), appends `.<extension>` and probes
+the VFS; when the probe fails or no language is configured it stores
+`<directory>\<name>` + `.<extension>` **without** probing. Slot 5's empty
+directory therefore yields `\<glamour>.PCX`. Slot 1 additionally records the
+TNT's file size (0 when the file is absent). The slot accessor returns "no
+path" for an empty slot.
+
+### Closed — opening the OTA: paths, the alias retry, and every diagnostic [R-MAP-01 §2] (2026-08-29)
+
+Status: **Established** (strings verbatim from the image; channels traced).
+
+**Path.** `Maps\<name>.OTA` is built by the same directory/name/extension
+helper as the slots (language-directory variant first, plain second), so a
+localized `Maps-<language>\` copy of an OTA overrides the stock one.
+
+**Campaign path**, in order: `MISSION<n>` section absent from the campaign
+file → `The requested mission file, %s, does not exist.` (`%s` =
+`MISSION<n>`); `missionname` is read from that section with the
+language-prefixed accessor into the mission's display name; `missionfile`
+absent → `Old TED format no longer supported!`; the OTA fails to open or
+parse → `Hey, joker!  There is no mission defintion for this mission: %s`
+(`%s` = the `missionfile` value; two spaces, "defintion" verbatim); parsed but
+no `GlobalHeader` → `Hey, joker!  Mission file %s is corrupt (no header
+found).`; otherwise `maxunits` is read from `GlobalHeader` (integer, default
+**200**) into the unit-limit global and slot 1 is set to `Maps\<file>.TNT`.
+All four messages go to the **status pane** (the same in-game text channel
+as the six strings listed under "Mission-file diagnostics" above); none is
+fatal, and each returns failure to the caller.
+
+**Skirmish/multiplayer path.** The name is copied into the display name;
+`Maps\<name>.OTA` is opened; on failure the name is run through the
+translation table **backwards** (find the entry whose translated value is the
+name, use the untranslated key — the "alias probe") and opened once more; a
+second failure returns silently with no message. On success slot 1 is set to
+`Maps\<name>.TNT` **before** the header check, so a header-less OTA still
+names a terrain file; on an open failure slot 1 is left untouched and keeps
+whatever the previous parse stored (only the campaign-open entry blanks the
+slots). No `GlobalHeader` → `No GlobalHeader block in mission file!` (status
+pane, failure).
+
+**Common tail** (both paths, `GlobalHeader` current): the global keys of §3
+are read in the order given there, the trigger set is built, and the schema
+is selected (§4). No acceptable schema → `No suitable schema type in mission
+file!` in a modal **Error** box (topmost, not fatal) and failure. With a
+schema, the schema keys of §5 are read, the mission objects are compiled
+(`[08 R-TRIG-01 §9]`) and the parse succeeds.
+
+**Three channels, for reference.** (a) the status pane; (b) a non-fatal
+modal box titled `Error`; (c) the fatal box — the message under the
+application title, then process exit with code 1; when the fatal channel is
+handed a null string it shows nothing and exits. The terrain loader's
+failures (§6) use (c) only.
+
+### Closed — `[GlobalHeader]` keys: level, accessor, default, store, consumer [R-MAP-01 §3] (2026-08-29)
+
+Status: **Established** (loader trace for every read; reader census over the
+decompiled corpus for every stored value; asset census over the 275 retail
+OTAs for the "authored" column).
+
+**Scoping rule (established, and the reason the level column matters).** The
+typed accessors of §4 "Typed accessors" search **only the current section's
+own key vector**; there is no walk to the parent section or into children.
+The loader reads global keys with `GlobalHeader` current and schema keys with
+the selected `[Schema N]` current, so a key authored at the other level is
+simply absent and takes its default. (`[fmt ota]` previously said the engine
+"appears to read several environment keys at either level"; it does not.)
+
+**Read order and table.** The keys are read in exactly this order; nothing
+between them depends on an earlier key except as noted.
+
+| # | Key | Accessor, width | Default | Stored / consumer | Authored (275 OTAs) |
+|---|---|---|---|---|---|
+| 0 | — | section digest | — | the `GlobalHeader` section's body checksum (the four-accumulator primitive of §6 "Content checksum" over the text between its braces, computed at parse time) is copied into the mission record and is the OTA half of the map identity hash; the TNT half is the same primitive over the 64-byte header, the raw attribute array and the raw feature-name table, XORed together and memoised per terrain path; the two halves XOR into the hash `[08 "Map/resource identity"]` consumes | — |
+| 1 | `brief` | language-prefixed string, 256 | empty | slot 2; the file is then read **whole** into a heap buffer tagged `Briefing` (size + 1, NUL-terminated); absent file → no buffer | 275 |
+| 2 | `narration` | language-prefixed string, 256 | empty | slot 3 | 275 |
+| 3 | `missionhint` | language-prefixed string, 256 | empty | slot 4 — **inert** (no reader) | 275 |
+| 4 | `glamour` | string, 256 | empty | slot 5 | 275 |
+| 5 | `glamoursound` | string, 256 | empty | slot 8 | 106 |
+| 6 | `UseOnlyUnits` | string, 256 | empty | slot 6 | 275 |
+| 7 | `mapping` | integer | 0 | mapping global `[08 R-SKIR-01 §4]` (skirmish/multiplayer overwrite it from the setup record at battle entry) | 275 |
+| 8 | `lineofsight` | integer | 0 | line-of-sight global `[08 R-SKIR-01 §4]` (same overwrite) | 275 |
+| — | (two globals) | — | — | the loader then stores constants 1 and 0 into two neighbouring session globals; their readers are outside this unit — recorded, not named | — |
+| 9 | `memory` | string, 128 | empty | mission record — **inert** (no reader) | 275 |
+| 10 | `numplayers` | string, 128 | empty | mission record — **inert** (no reader; the lobby's player count comes from the setup record and the `[specials]` census of §4) | 275 |
+| 11 | `Planet` | string, 128 | empty | mission record; read (through its pointer accessor) by the briefing-screen globe, which matches it case-insensitively against its planet vocabulary (`Green planet`, `Archipelago`, `Wet Desert`, `Desert`, `Red Planet`, `Lunar`, …) to pick the globe art; an unmatched value selects nothing (doc 07 owns the screen) | 275 |
+| 12 | `nomovie` | integer | 0 | end-of-campaign movie gate (the mission-end flow skips the cinematic when non-zero) | 12 |
+| 13 | `missiondescription` | string, 128 | `No description available` | lower-cased, then passed through the translation table (`[02 §3]`); if the lookup returns the lower-cased text unchanged the **original spelling** is kept, else the translation; read through its pointer accessor by one front-end screen (doc 07) | 275 |
+| 14 | `minwindspeed` | integer | **0** | map-global block, §6 | 275 |
+| 15 | `maxwindspeed` | integer | **0** | §6 | 275 |
+| 16 | `gravity` | integer | **0** | §6 | 275 |
+| 17 | `tidalstrength` | floating (single) | **0.0** | §6 | 275 |
+| 18 | `lavaworld` | integer | 0 | lava flood `[03 R-TERR-01 §2]`, respawn reject `[08 R-SKIR-01 §3]`, debris/water tests | 274 |
+| 19 | `nosealeveltrigger` | integer | 0 | the "opaque liquid mode" flag of `[06 §8.2]` (submerged-impact early return, and the projectile/feature-hit and cruise-waypoint water tests beside it) and the fragment/debris water tests of `[04 R-COB-04 §2]`; unrelated to the sea level itself | 118 |
+| 20 | `waterdoesdamage` | integer | 0 | water damage gate `[04 §9.2]` (both flag and amount must be non-zero) | 183 |
+| 21 | `waterdamage` | integer | 0 | water damage amount, same site | 183 |
+| — | trigger keys | see `[08 R-TRIG-01 §2]` | — | the trigger builder runs here, between `waterdamage` and `killmul` | — |
+| 22 | `killmul` | floating (single) | 0.0 | mission record — **inert** (no reader; the score screen does not read it) | 275 |
+| 23 | `timemul` | floating (single) | 0.0 | mission record — **inert** (no reader) | 275 |
+| — | `maxunits` | integer | 200 | read **before** this table on the campaign path only (§2); unit-limit global, readers in doc 05 | 184 |
+| — | `missionname`, `size`, `SCHEMACOUNT`, `solarstrength` | — | — | **inert**: `missionname` has no OTA reader (both readers read the campaign file's `MISSION<n>` section); the other three have no string in the image | 275 each |
+
+`maxunits` at global level is authored by 184 maps; the 91 that omit it get
+200 on the campaign path. Every retail OTA authors `minwindspeed`,
+`maxwindspeed`, `gravity` and `tidalstrength`; retail values include
+authored zeros for both wind keys and for tidal strength, and `timemul=-1`
+on three campaign maps (inert).
+
+### Closed — schema selection, exactly [R-MAP-01 §4] (2026-08-29)
+
+Status: **Established** (direct static trace of the selector and its two
+callers).
+
+**Vocabulary.** Seven type strings, compared case-insensitively against the
+schema's `Type` key (string accessor, 32 bytes): `Easy`, `Medium`, `Hard`,
+`Network 1`, `Network 2`, `Network 3`, `Network 4`. Schemas are found by
+formatting `Schema %i` for `i = 0, 1, 2, …` under `GlobalHeader` with the
+first-match section finder and stopping at the first miss — `SCHEMACOUNT` is
+never read, and a gap ends the probe (no retail OTA has a gap; retail counts
+are 1 (95 maps), 2 (2), 3 (176), 4 (2)).
+
+**Preference order.** Campaign (kind 1): the session difficulty word
+(`[08 R-SKIR-01 §1]`) selects the order — `0` → `Easy, Medium, Hard`; `1` →
+`Medium, Easy, Hard`; `2` → `Hard, Medium, Easy`; any other value accepts
+nothing. Skirmish and multiplayer (kinds 2/3): `Network 1, Network 2,
+Network 3, Network 4`. For each type in that order the schema probe restarts
+at `Schema 0`.
+
+**Campaign acceptance.** The first schema (in type-preference, then index
+order) whose `Type` matches is accepted immediately and becomes the current
+section; the search does not continue.
+
+**Skirmish/multiplayer acceptance.** The wanted player count `want` is,
+for skirmish, one more than the index of the highest setup-record row whose
+controller word is non-zero (`[08 R-SKIR-01 §1]`), and for multiplayer one
+more than the highest lobby slot that is neither empty nor the `-1`
+sentinel; when no row qualifies it is the lobby player-count global. For
+every matching-type schema the loader counts `n` = the number of
+`[specials]` children whose `specialwhat` begins with `StartPos`
+(case-insensitive, eight characters — the same test as the placement
+compiler, `[08 R-TRIG-01 §9]`). The schema becomes the candidate when
+
+```
+n != 0 && (n == want || want == 0 || (best < n && best != want))
+```
+
+with `best` the candidate's count so far (0 initially). The search runs
+through **all four** network types and every schema; so a later exact match
+replaces an earlier one (last exact match wins), an exact match is never
+displaced by a larger count, and without an exact match the largest count
+wins with the earliest on ties. The candidate's section becomes current
+when the search ends. A schema with a matching type but **no** `StartPos`
+specials is never chosen. When the caller passes no output name (the map
+browser, §9) the first matching-type schema is accepted without the
+`StartPos` census.
+
+**Failure.** No candidate → `No suitable schema type in mission file!` (§2).
+A `GlobalHeader` that disappears between the caller's check and the
+selector's own re-find raises the fatal `Very bad news!  No MSG!`; it is
+unreachable from the loader, which checks first.
+
+The selected schema's section name (`Schema <i>`) is handed to the mission
+object compiler, which re-finds `globalheader` and that schema by name.
+
+### Closed — `[Schema N]` keys and the schema-level reads [R-MAP-01 §5] (2026-08-29)
+
+Status: **Established**. Read with the chosen schema current, in this order:
+
+| # | Key | Accessor, width | Default | Stored / consumer | Authored (635 schemas) |
+|---|---|---|---|---|---|
+| 1 | `Type` | string, 32 | — | §4 only | 635 |
+| 2 | `HumanMetal` | integer → single float | 0 | starting resources `[08 R-SKIR-01 §5]` | 635 |
+| 3 | `HumanEnergy` | integer → single float | 0 | same | 635 |
+| 4 | `ComputerMetal` | integer → single float | 0 | same | 635 |
+| 5 | `ComputerEnergy` | integer → single float | 0 | same | 635 |
+| 6 | `SurfaceMetal` | integer | 0 | metal seed, §6 / `[03 R-TERR-01 §1]` (stored as a signed byte per cell: retail authors 244–255, which seed −12…−1 and read back as 244–255 unsigned in the extractor sum) | 635 |
+| 7 | `aiprofile` | string, 256 | empty | slot 7 as `ai\<name>.txt`; when the resulting slot is **empty** (key absent or empty) the helper is called again with the literal name `default`, so the profile is `ai\default.txt` | 635 (27 empty) |
+| 8 | `MeteorWeapon` | string, 32 | empty | "Meteor merge and enable contract" above (unchanged) | 635 |
+| 9–12 | `MeteorRadius` (integer), `MeteorDensity`, `MeteorDuration`, `MeteorInterval` (floating) | | 0 / 0.0 | same | 635 |
+| — | `MohoMetal` | — | — | **inert** (no string in the image) | 635 |
+| — | `[units]`, `[features]`, `[specials]` | | | `[08 R-TRIG-01 §9]` and "Placed-object keys" above | |
+
+The `Human*`/`Computer*` values are read as integers and widened to single
+floats at the store — the fractional part of an authored value is lost
+before it is ever a float.
+
+### Closed — terrain load: open, version gate, the map-global block with its real defaults, and the fatal set [R-MAP-01 §6] (2026-08-29)
+
+Status: **Established** (direct static trace). Cell semantics are cited, not
+restated.
+
+**Open and read.** Session start asks the mission record for slot 1. The
+file is opened through the VFS; a miss is **fatal** — the fatal box shows the
+*path string itself* as its message (there is no formatted text), then the
+process exits. An empty slot 1 (no OTA ever named a terrain file in this
+session) hands the fatal channel a null path: no box, immediate exit. The
+file is read whole into one heap block tagged with its own path, in ten
+reads of `size/10` bytes with the loading-progress byte advanced 9, 18, …,
+90 after each, then one read of the remainder. Every section pointer in the
+header is then biased by the block's address `[fmt tnt]`.
+
+**Version gate.** Header slot 0 must be `0x1020` (legacy) or `0x2000`
+(canonical); anything else is fatal with `Unknown TNT version:  0x%08x` (two
+spaces; the value in hexadecimal). The slot maps of both versions are
+`[03 R-TERR-01 §1]` and `[fmt tnt]`.
+
+**Map-global block — the defaults as they really are.** The block is written
+in this order, before any plot memory exists:
+
+| Value | Rule | What a retail OTA that *omits* the key gets |
+|---|---|---|
+| minimum wind | OTA `minwindspeed` when `≥ 0` **and** canonical; else the legacy header slot, which on a canonical map is the constant 100 | **0** — the integer accessor's default is 0, which passes `≥ 0` |
+| maximum wind | as above with `maxwindspeed` / 2000 | **0** |
+| gravity | OTA `gravity` when `≥ 0` and canonical: `ftol((double)g × 65536.0 × (1/900))` (constants and truncation as `[03 R-TERR-01 §6]`); else legacy slot 13 when non-zero, converted the same way; else the compiled `0x1FDB` | **0** (converted 0), not `0x1FDB` |
+| tidal strength | mission `tidalstrength` unless `< 0.0` (strict), else `0.5` | **0.0** |
+| sea level | header slot 9, low byte | — |
+| surface metal seed | schema `SurfaceMetal` when `≥ 0` and canonical, else 0 | 0 either way |
+
+So the "fallback" branches (100 / 2000 / `0x1FDB` / 0.5) are reached in
+exactly three cases: a legacy terrain file, an authored **negative** value,
+or a session whose OTA parse never reached a `GlobalHeader` (the prologue
+sentinels of §1 are −1 / −1.0). `[03 R-TERR-01 §6]`'s phrase "a canonical
+map whose OTA omits or negates `gravity` behaves as `gravity=112`" is right
+for "negates" and wrong for "omits"; doc 03 owns that sentence and is asked
+to correct it. Every retail OTA authors all four keys, so no shipped map
+exercises the omitted-key case.
+
+**Per-cell work, in order** (all cited): minimap picture (§7); tile map
+copy (§7); plot allocation and per-cell initialization `[03 R-TERR-01 §1]`;
+feature-name table compilation `[05 R-FEAT-01 §2]` (§8 for the miss
+policy); the attribute passes and the void/feature stamps `[03 R-TERR-01
+§1]`; the mission-file feature pass `[05 R-FEAT-01 §3]` (§8); tile-set copy
+(§7); LOS tables (§7); camera counts and sort grid (§7); the full min/max
+recompute `[03 R-TERR-01 §3]`; the air sector grid and LOS height words
+`[03 R-TERR-01 §5]`, `[03 R-P0-18-B]`; the edge/lava void sweep `[03
+R-TERR-01 §2]`; the mapping array (zeroed, `Width × Height / 2` bytes) `[03
+R-TERR-01 §7]`; the render sort lists (§7); metal-deposit seeding `[05
+R-FEAT-01 §7]`; the eyeball buffer; the feature reproduction cursor reset;
+progress byte 100.
+
+### Closed — which stages are presentation only [R-MAP-01 §7] (2026-08-29)
+
+Status: **Established**. These allocations happen inside the terrain loader
+but nothing in the simulation reads them; a headless Nanolathe may skip
+them without changing a tick:
+
+* **Minimap picture.** When the header's minimap-present bit is set, a
+  surface of the embedded width × height (plus a 24-byte surface header) is
+  allocated under the tag `TED GENERATED PIC` and the embedded pixels are
+  blitted into it at (0, 0); when the bit is clear the picture pointer is
+  null and the radar picture is generated from the tile set instead
+  `[03 §3.7]`. The surface lifetime is `[03 §3.6]`.
+* **Tile map and tile set.** The tile map (`(Width·16/32) × (Height·16/32)`
+  16-bit indices, tag `TILE MAP`) and the tile set (`Tiles × 1024` pixel
+  bytes behind an 8-byte header of count and pixel pointer, tag `TILE SET`)
+  are copied out of the file verbatim and never written again `[03 R-TERR-01
+  §3]`; their only readers are the terrain tile blitter and the generated
+  minimap `[03 §2.2]`, `[03 §3.7]`.
+* **LOS sight tables.** Between the tile-set copy and the camera setup the
+  loader (re)loads `gamedata\LOS.TDF`: `[TABLEINFO] numtables`, then
+  `[TABLE<n>] numlines` and its `line<n>` rows. This is the "numbered
+  text-table resource reader" the string triage could not place; its
+  consumer is the sight-shape builder `[03 §3.2 R-VIS-01 §3]`.
+* **Camera counts and render sort grid.** The view size in pixels is
+  divided by 16 and by 32 (toward zero) into view-cell and view-tile
+  counts; a 16-byte sort-grid header records columns = view cells X / 2 + 2
+  (+1 when the view width is not a multiple of 32) and rows = view cells
+  Z / 2 + 2 (+1 likewise); `SORT UNIT LIST` (`(viewCellsZ+32) ·
+  (viewCellsX+12) · 4` bytes), `SORT INDICES` (`(viewCellsZ+32) · 4`) and
+  `SORT LINE COUNT` (`(viewCellsZ+32) · 2`) are allocated for the frame
+  composer; the fog-cache-valid bit is cleared
+  so the fog overlay rebuilds `[03 §3.3]`. `EYEBALL MEMORY` (720 bytes) is
+  the LOS work buffer.
+* **Loading-progress byte** — written by the TNT reader (9…90) and set to
+  100 at the end; the progress bar reads it.
+
+### Closed — feature-name resolution and the miss policy [R-MAP-01 §8] (2026-08-29)
+
+Status: **Established**.
+
+* **TNT name table.** Every record of the terrain file's feature-name table
+  is compiled, in table order, by the feature parser as the catalog is built
+  `[05 R-FEAT-01 §2]`; the cell feature words index that table directly. A
+  name that no mounted feature TDF defines is **fatal**: the parser raises
+  `Record "%s" missing from feature files` through the fatal channel (box,
+  then exit). There is no skip.
+* **OTA `[features]`.** Each record with a non-blank name (blanking rules:
+  `[08 R-TRIG-01 §9]`) is resolved by a linear case-insensitive scan of the
+  catalog in ordinal order; a miss calls the parser on demand, which appends
+  the definition or dies with the same fatal string. The anchor cell is the
+  authored pixel position converted to a cell for sprite features, and for
+  3-D features the pixel position minus half the footprint (integer division
+  by 2 of `footprintx`/`footprintz`) — then stamped through the shared
+  service with placer nibble 10 `[05 R-FEAT-01 §3]`. The mission pass runs
+  only on canonical terrain and not when a save is being restored
+  `[03 R-TERR-01 §1]`.
+* Matching is case-insensitive at both sites; the name is the TDF section
+  name.
+
+### Closed — the map browser: enumeration and acceptance [R-MAP-01 §9] (2026-08-29)
+
+Status: **Established** (skirmish/multiplayer map list builder).
+
+The list is built once per front-end session and cached (tag `MULTI MAPS`).
+The VFS is enumerated for `Maps\*.ota` (union enumeration order, `[02 §2]`;
+`.` and `..` skipped). For each entry `Maps\<name>.OTA` is parsed; the map
+is **accepted** when the selector (§4) run as multiplayer with no output name
+finds any schema whose `Type` is `Network 1`…`Network 4` — a `GlobalHeader`
+is required, a `StartPos` census is not. The display name is the file name
+with its extension cut at the last `.`, lower-cased and passed through the
+translation table; if the lookup returns the lower-cased name unchanged the
+**original file name** (original case) is shown, otherwise the translation.
+Names are stored NUL-separated in enumeration order; the skirmish fallback
+(no remembered map) picks the first entry. In a multiplayer session the
+network drain runs once per enumerated file (out of scope).
+
+### Corrections and cross-document needs [R-MAP-01 §10] (2026-08-29)
+
+* Doc 02 §6 south-edge void bullet — corrected in place above (row-above
+  rule; the bottom row is never voided).
+* Doc 02 §6 "Map-global keys" table — replaced by §3/§5 above; the old
+  table's four errors are quoted in the correction paragraph that replaced
+  it.
+* `[fmt ota]` "the engine appears to read several environment keys at either
+  level" — withdrawn (§3 scoping rule); `[fmt ota]` is corrected in this
+  unit.
+* `[03 R-TERR-01 §6]` "omits or negates `gravity` behaves as `gravity=112`"
+  and its wind row "on every canonical map with a negative or unparsed
+  value" — "omits"/"unparsed" is wrong for a parsed `GlobalHeader` (§6);
+  needs a doc 03 edit (not this unit's file).
+* The RWU-02-1 question "a numbered text-table resource reader (`TABLE%d`,
+  `numlines`, `line%d`)" — answered in §7: `gamedata\LOS.TDF`, consumed by
+  the sight-shape builder; the orchestrator should close the question.
+* The tail item "Map schema fallback selection and the complete map
+  content-hash input set" is closed by §4 and §3 row 0.
 
 ### Animation archive (GAF)
 
@@ -2215,9 +2622,13 @@ finding they recited remains in the body sections that own it.
   census of runtime messages that pass through the translation lookup · §3 ·
   static trace for the interface and message census, asset census for the font
   fallback.
-* Map schema fallback selection and the complete map content-hash input set
-  (header, plot, features, and map descriptor are traced) · §6 "Map files" ·
-  static trace; doc 08 owns the lobby consumer.
+* Which front-end screen reads the translated `missiondescription`, and what
+  the briefing globe shows for a `Planet` value outside its vocabulary · §6
+  `[R-MAP-01 §3]` · static trace (doc 07 owns both screens; the loader side is
+  closed).
+* Readers of the two session globals the mission loader sets to the constants
+  1 and 0 between `lineofsight` and `memory` · §6 `[R-MAP-01 §3]` · static
+  trace (naming-only; nothing in the load pipeline depends on them).
 * Draw-time interpretation of model primitive colour, texture, and flag fields
   beyond what doc 03 narrows, and animation/model texture lifetime · doc 03,
   §6 "Model archive (3DO)" · static trace.

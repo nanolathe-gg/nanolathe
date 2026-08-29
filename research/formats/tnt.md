@@ -53,7 +53,7 @@ each section.
 | 0x20 | u32 | PtrTileAnims | → feature records |
 | 0x24 | u32 | SeaLevel | Water level in height units; cells with height below this are underwater ("waterheight") |
 | 0x28 | u32 | PtrMiniMap | → minimap |
-| 0x2C | u32 | unknown1 | `1` in observed retail maps |
+| 0x2C | u32 | MinimapPresent | bit 0 set = an embedded minimap follows at PtrMiniMap; `1` in every observed retail map. (Engine reading established 2026-08-29, `[R-TERR-01 §1]`; formerly listed as "unknown1".) |
 | 0x30–0x3C | u32×4 | unknown/pad | `0` in observed retail maps |
 
 Real example — `maps/The Pass.tnt` from `totala2.hpi`:
@@ -65,6 +65,29 @@ version 0x2000; 224×102 attribute cells (= 3584×1632 pixels, the OTA says
 `size=7 x 4` 512-pixel squares); tile map @ 0x40; attributes @ 0x2CE0;
 tile gfx @ 0x191E0; 2373 tiles; 7 features @ 0x26A5E0; sea level 0;
 minimap @ 0x26A97C; unknown1 = 1.
+
+### Legacy header (version `0x1020`)
+
+The engine also accepts a legacy version word `0x1020` with the same first
+ten slots (version, Width, Height, the three section pointers, Tiles,
+TileAnims, PtrTileAnims, SeaLevel) but a different tail — established from
+the engine's loader, not from any retail file (no shipped map is legacy):
+
+| Offset | Type | Name | Description |
+| ---: | --- | --- | --- |
+| 0x28 | u32 | MinWindSpeed | used directly as the map's minimum wind |
+| 0x2C | u32 | MaxWindSpeed | used directly as the maximum wind |
+| 0x30 | u32 | — | not read |
+| 0x34 | u32 | Gravity | authored-unit gravity (same scale as the OTA key); `0` means "use the engine default" |
+| 0x38 | u32 | PtrMiniMap | → minimap |
+| 0x3C | u32 | MinimapPresent | bit 0 |
+
+Its attribute map is **8 bytes per cell**: byte 0 height, byte 2 a one-byte
+feature index (`0x00..0xFB` live; `0xFC..0xFF` empty — there is no void
+code in this encoding), byte 6 per-cell metal; bytes 1, 3, 4, 5 and 7 are
+not read. The legacy version never overrides wind or gravity from the OTA
+and the engine does not place OTA `[Features]` on it. Behavior is in
+`[R-TERR-01 §1]`.
 
 ### Tile index map
 
@@ -145,6 +168,30 @@ campaign map) stores 252×**256**. Don't hard-code the dimensions — read
 them. The minimap is a pre-scaled snapshot of the terrain, not regenerated
 by the engine.
 
+## How the engine loads it
+
+The load pipeline is `[02 R-MAP-01 §6–§8]`; the per-cell semantics are
+`[03 R-TERR-01 §1–§8]`. Facts a reader of this format should know:
+
+- The terrain path is `Maps\<name>.TNT`, taken from the OTA/mission name
+  (a localized `Maps-<language>\` copy wins when it exists). A file that
+  cannot be opened is **fatal** (a message box showing the path, then exit);
+  so is any version word other than `0x1020` / `0x2000` (`Unknown TNT
+  version:  0x%08x`).
+- The whole file is read into memory in ten equal reads (plus a remainder),
+  advancing the loading bar to 90 %; all header pointers are then treated
+  as offsets from the start of that block.
+- The tile map, tile graphics and (when `MinimapPresent` bit 0 is set) the
+  minimap are copied out verbatim for presentation and never modified. When
+  the bit is clear the engine generates the minimap from the tiles instead.
+- Every feature record name must resolve to a section in the mounted
+  feature TDFs; a name that does not is fatal (`Record "%s" missing from
+  feature files`). Names match case-insensitively.
+- The file carries no palette; pixels index the global palette ([pal.md](pal.md)).
+- The map identity hash used by the lobby is computed over the 64-byte
+  header, the raw attribute map and the raw feature records
+  `[02 R-MAP-01 §3]`.
+
 ## SCT sections
 
 `.sct` editor sections use the same tile/height concepts at small scale
@@ -176,10 +223,12 @@ most common retail value is 75.
 
 ## Unknowns and caveats
 
-- Header word 0x2C (always `1`) and words 0x30–0x3C (always `0`) have
-  unknown meanings; attribute byte +3 likewise.
-- `0xFFFC` "void" renders as a hole (cliff faces at map edges); exact
-  engine behavior for units/projectiles over void is unverified.
+- Header words 0x30–0x3C (always `0` in canonical files) are not read by
+  the engine on the canonical path; attribute byte +3 is not read either.
+- `0xFFFC` "void" is stored by the engine as `0xFFFC` and treated exactly
+  like the engine's own edge-strip void `0xFFFD`: blocked to placement and
+  movement, invisible to rendering (the hole look is the tile art). See
+  `[R-TERR-01 §1]`, `[R-TERR-01 §2]`.
 - The exact orientation convention (which array axis is which map axis)
   matters: data is row-major with rows advancing southward; this matches
   the minimap and the OTA start positions but heights/features should be

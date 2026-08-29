@@ -422,7 +422,9 @@ camera clamp. When the mission `lavaworld` flag is set, a bulk sweep sets
 `0xFFFF` or `0xFFFE`. North and south height-dependent void strips are
 established in document 02 §6 (north `z*16 < height>>1` on raw height,
 south `(Height-1-z)*16 + (height>>1) < 112`; empty-or-fringe cells only) —
-an earlier copy of this paragraph carried the predicate as `TODO(question)`.
+an earlier copy of this paragraph carried the predicate as `TODO(question)`;
+note that the south predicate is evaluated on row `z` but the cell voided
+is row `z-1`, see `[R-TERR-01 §2]` below.
 Outside the map rectangle, height returns sentinel `-1` with unsigned
 candidate bounds before any terrain read; movement is blocked for generic modes
 and allowed only for factory-exit search mode 2; the LOS writer stores an empty
@@ -444,6 +446,191 @@ is reclaim reward only.
 Sea level is copied from the map header as a byte and is compared in world
 units by multiplying by 65,536. Water/lava map state and minimum/maximum water
 depth/slope thresholds are cached for placement and impact decisions.
+
+
+### Closed — the two attribute encodings, the header slot map, and what the loader writes per cell [R-TERR-01 §1] (2026-08-29)
+
+Status: **Established** unless marked (direct static trace of the map loader,
+the feature stamp entry, the TNT reader, and the save-blob writers). The
+byte offsets of the *file* are `[fmt tnt]`'s; this section states what the
+engine does with them.
+
+**Header slot map, both versions.** The loader reads the header as sixteen
+little-endian 32-bit slots and branches on slot 0:
+
+| Slot | canonical `0x2000` | legacy `0x1020` |
+|---:|---|---|
+| 1, 2 | cell width, cell height | same |
+| 3, 4, 5 | tile-map, attribute-map, tile-graphics offsets | same (attribute records are 8 bytes) |
+| 6, 7, 8 | tile count, feature-record count, feature-record offset | same |
+| 9 | sea level (stored as a **byte**) | same |
+| 10, 11 | minimap offset, **minimap-present flag (bit 0)** | minimum wind, maximum wind |
+| 13 | — | gravity (authored units, see §6) |
+| 14, 15 | — | minimap offset, minimap-present flag (bit 0) |
+
+`[fmt tnt]` listed slot 11 (file offset `0x2C`) as "unknown1, always 1": it is
+the minimap-present flag — when bit 0 is clear the engine keeps no embedded
+minimap image at all and the minimap presentation falls back to the generated
+picture (§3.7). Any other version word raises the diagnostic
+`Unknown TNT version:  0x%08x` (two spaces, as shipped) through the fatal
+resource-failure path. The canonical version hard-codes minimum wind 100,
+maximum wind 2000 and **legacy-gravity 0** as the values the legacy slots would
+have carried; "gravity 0" is not a runtime gravity, it is the marker that makes
+the compiled default win (§6).
+
+**The legacy attribute record** is 8 bytes per cell: byte 0 is the height,
+byte 2 is a **one-byte** feature index whose live range is `0x00..0xFB`
+(`< 0xFC` stamps a feature; `0xFC..0xFF` stamp nothing and leave the cell
+empty), and byte 6 is the per-cell metal byte copied verbatim into the plot
+cell's metal byte. Bytes 1, 3, 4, 5 and 7 are never read. The legacy path
+has **no void stamp** — there is no code that writes `0xFFFC` from an 8-byte
+record — and it does **not** run the mission-file feature placement pass at
+all: OTA `[Features]` entries are placed only on canonical maps. (Bounded
+negative within the loader; no stock map is legacy, so the decider for any
+observed difference is a static re-read of the loader.)
+
+**The canonical attribute record** is 4 bytes: height at byte 0, a
+little-endian `uint16` feature reference at bytes 1–2, byte 3 never read.
+
+**Per-cell initialization, in order.** Before either attribute pass the
+loader walks every 13-byte plot cell and writes: the two occupancy words
+(bytes 0–3) to zero; the feature word (bytes 8–9) to `0xFFFF`; the metal byte
+(byte 7) to the seed; and **clears bits 0 and 1 of the flag byte**. The seed
+is the mission's `SurfaceMetal` when it is non-negative *and* the map is
+canonical, otherwise 0. It does **not** touch the derived maximum/minimum
+bytes (5, 6) or the anchor-offset bytes (10, 11). The attribute pass then
+writes, per cell in row-major order, the height byte and
+`flags = (flags & 0xD7) | 0x50`.
+
+**Feature stamping order (canonical).** Two separate full-map passes, both
+in row-major order: the first stamps **only** the authored void cells
+(attribute word `0xFFFC`), the second stamps every live index (`< 0xFFFB`)
+through the shared stamp service `[R-FEAT-01 §3]` with placer nibble 10, and
+then the mission-file placement pass runs. The second pass and the mission
+pass are skipped entirely when the between-missions flag is set (a save is
+being restored and the feature blob will be replayed instead, `[R-FEAT-01
+§9]`); the void pass always runs. Consequences: an authored word of
+`0xFFFB`, `0xFFFD`, `0xFFFE` or `0xFFFF` stamps nothing and the cell is
+`0xFFFF` after this stage (which is why unfootprinted `0xFFFE` cells
+disappear, above); and because voids are stamped first, a footprint that
+overlaps an authored void is vetoed by the stamp service's teardown test —
+the void wins, not the feature.
+
+**Correction.** This section's sentinel list said `0xFFFD` is the void
+value "(engine map-edge strips and lava-world fill)" and that `0xFFFB`/
+`0xFFFC` merely "behave as void". At runtime there are **two** void codes with
+two writers: `0xFFFC` is written by the stamp service for every
+TNT-authored void cell, and `0xFFFD` is written only by the edge/lava sweep
+of §2. No reader anywhere compares the feature word with either value; every
+consumer classifies through the same ladder — `== 0xFFFF` empty, `< 0xFFFB`
+live, `== 0xFFFE` fringe, anything else "blocked/void" — so the two codes
+are indistinguishable to gameplay and the distinction only matters for a
+save/plot dump. The `0xFFFB` value has no writer at all.
+
+**Reader census of the 13-byte cell (which field the sim reads).**
+
+| Bytes | Readers |
+|---|---|
+| 0–1 occupant slot word | movement commit and the building stamp/unstamp (§8.2 of doc 04, `[R-PATH-01 §2]`); the class-layer classifier; the dead segment sampler |
+| 2–3 second occupancy word | the mover mode-2 (airborne) occupancy plane (`[R-MOV-01 §8]`) |
+| 4 height | the bilinear query, the four-corner conform, the void strips, the LOS height-word builder, the cell-height helper of §2.3, the min/max recompute |
+| 5 derived maximum | the coarse average query; the air sector grid sweep (§5) |
+| 6 derived minimum | the coarse average query; the lava flood of §2 |
+| 7 metal | extractor placement sum (§2.2 above), and the save `Metal` blob, which is exactly the `Width × Height` bytes in cell order and is written back verbatim on reload |
+| 8–9 feature word | every feature consumer; the void strips; the classifier ladders |
+| 10–11 anchor offsets | the fringe resolver; at anchors the live slot / damage accumulator `[R-FEAT-01 §3]` |
+| 12 flags | bit 0 instance present; bit 1 building-occupied, set by the building stamp for every yard cell whose yardmap byte has bit 0 and cleared by the unstamp; bit 2 never-seen; bits 3–6 placer nibble — the save `PlayerFeatures` blob packs two cells' nibbles per byte as `(odd.flags >> 3 & 0xF) \| ((even.flags & 0xF8) << 1)` |
+
+**Unknown — the last column and last row's derived bytes.** The min/max
+recompute (§3) never writes column `Width-1` or row `Height-1`, and the
+loader never initializes bytes 5 and 6, so those cells' derived bytes hold
+whatever the tracked-heap allocator left there. The sector-grid sweep and the
+lava flood read them. Whether the allocator zero-fills is not traced.
+Decider: static trace of the heap allocator's fill path. Nanolathe should
+treat them as zero and mark the choice `TODO(question)`.
+
+### Closed — the void strips, exactly, and the row-above rule [R-TERR-01 §2] (2026-08-29)
+
+Status: **Established** (direct static trace; the south-edge rule re-read at
+the instruction level because the decompiler's row arithmetic is easy to
+misread).
+
+The sweep runs once, after the full min/max recompute and the sector-grid
+build, and only ever converts cells whose feature word is `0xFFFF` or
+`0xFFFE`. It writes `0xFFFD`. Four rules in this order:
+
+1. **Play insets.** `PlayRight = Width·16 − 32`, `PlayBottom = Height·16 −
+   128` (map pixels), written here and read by the camera clamp and the
+   minimap lens.
+2. **Right columns.** For every row `z`, cells `(Width−2, z)` and `(Width−1,
+   z)`.
+3. **North strip.** For every column `x`, rows `z = 0, 1, 2, …` in order,
+   stopping at the first row for which `z·16 − (height(x, z) >> 1) ≥ 0`;
+   every row before it is voided. The tested and voided cell are the same.
+   Since `height >> 1 ≤ 127`, row 7 is the deepest possible (`112 < 127`);
+   row 8 never.
+4. **South strip — one row above the tested row.** For every column `x`,
+   rows `z = Height−1, Height−2, …` in order, stopping at the first row for
+   which `z·16 − (height(x, z) >> 1) ≤ PlayBottom`; for every row before it
+   the cell voided is **`(x, z−1)`**, the row *above* the one whose height
+   was tested. Equivalently the row `z` is tested with
+   `(Height−1−z)·16 + (height(x,z) >> 1) < 112` and, when true, row `z−1`
+   is voided. So the bottom row `Height−1` is **never** voided by this rule
+   (only rule 2 can void it, in its two columns); row `Height−2` is voided
+   when the bottom row's height is below 224, row `Height−3` when row
+   `Height−2`'s height is below 192, and so on down to row `Height−8`, voided
+   when row `Height−7`'s height is below 32.
+5. **Lava flood.** When the mission's `lavaworld` is non-zero, every cell
+   whose derived **minimum** byte is `≤ SeaLevel` (unsigned byte compare).
+
+**Correction to doc 02 §6 and to this section's earlier summary.** Both
+say the south rule voids "an empty-or-fringe cell at row z" and tabulate
+"the last row voids heights < 224". The predicate is right; the target cell
+is wrong by one row. The loader steps the cell pointer back one row (a
+subtraction of one row stride) *before* it reads and writes the feature
+word, so the voided cell is the row above the tested one and the bottom row
+itself is untouched. An implementation that voids the tested row will void
+one extra row at the south edge on every map and will void the bottom row,
+which retail never does. Doc 02's table belongs to its owner; the corrected
+statement is here.
+
+**Who treats void specially — nobody, by name.** Established from the
+reader census of §1: no consumer tests `0xFFFD` or `0xFFFC`. Void cells are
+"not empty, not live, not fringe" to every ladder, which yields: the fringe
+resolver returns not-found; the yard/placement validators and the
+class-layer classifier classify the cell as blocked (doc 04 §6.1 "void cells
+block"); the stamp service's teardown vetoes any footprint over it; the
+edge/lava sweep itself skips it (it only converts empty/fringe). There is no
+void raster for rendering — the tile art under a void cell is drawn
+normally; the "hole" look of retail map edges is authored tile art.
+
+### Closed — terrain deformation does not exist [R-TERR-01 §3] (2026-08-29)
+
+Status: **Established — bounded negative** over the complete decompiled
+function set.
+
+The plot height byte has exactly one writer: the loader's attribute pass.
+The tile-index map has one writer (the loader's copy) and two readers (the
+tile blitter and the minimap generator). No weapon impact, feature death,
+construction or COB path writes either. The tail's open item "per-tick
+sequencing of terrain deformation against movers" is therefore closed as
+moot: there is no deformation to sequence, and craters and scorch marks (§3.7
+tail) are not height edits.
+
+What does exist, and is easy to mistake for deformation, is the **derived
+min/max recompute**, which has three live callers: the loader (whole map,
+once), and the **building occupancy stamp and unstamp**, each of which
+recomputes the rectangle `(footprintX + 2) × (footprintZ + 2)` anchored one
+cell up-left of the footprint — the footprint plus its one-cell ring — and
+then raises the occupancy-listener notify over the footprint. Because no
+height changed, the recompute is a no-op on retail data; it is documented
+here so that an implementer does not infer a hidden height edit from the
+call, and so that the recompute's own edge rule is stated once: it clamps
+the rectangle to `x < Width−1`, `z < Height−1` **exclusive**, evaluating each
+cell as the maximum/minimum over itself, its east neighbour (when `x <
+Width−1`), its south neighbour (when `z < Height−1`) and its south-east
+neighbour (when both), writing maximum to byte 5 and minimum to byte 6. The
+last column and last row are never evaluated (§1's Unknown).
 
 ### 2.3 Height queries
 
@@ -518,6 +705,136 @@ the pair by thirds and floors both at sea level. See §3.5
 false shadows on ground retail leaves visible. A tall feature does not raise
 the LOS ray height — nothing but the map-load build does, since the word is
 never invalidated.
+
+
+### Closed — the height queries: every caller family and the sentinel each one gets [R-TERR-01 §4] (2026-08-29)
+
+Status: **Established** (direct static trace of both query bodies and of
+every call site the call graph reaches; the two dead helpers are named so
+the census is complete).
+
+**Two queries, two roundings, two bounds.** Both take a position record
+(16.16 X at the first word, Y second, Z third) and read only the high 16
+bits of X and Z as *signed* map-pixel coordinates.
+
+| | bilinear (§2.3 above) | coarse average |
+|---|---|---|
+| cell index | `px >> 4` — arithmetic shift, i.e. **floor**: pixels `−16..−1` give cell `−1` | `(px + ((px >> 31) & 0xF)) >> 4` — **toward zero**: pixels `−15..−1` give cell `0` |
+| bounds | `cx ≥ 0 && cx+1 < Width && cz ≥ 0 && cz+1 < Height` | `cx ≥ 0 && cx < Width && cz ≥ 0 && cz < Height` |
+| value | three `trunc16` lerps over the raw height byte of the 2×2 | `(hmin + hmax) >> 1` of the one cell's derived bytes (unsigned add, so no overflow) |
+| off-map | `−1` | `−1` |
+
+Two consequences worth stating: a position up to 15 pixels *west or north
+of the map* is on-map to the coarse query and returns cell (0, ·)'s
+average, while the same position is off-map (`−1`) to the bilinear query;
+and a position in the last column or row (`cx == Width−1`) is off-map to the
+bilinear query but on-map to the coarse one — where it reads the
+uninitialized derived bytes of §1's Unknown.
+
+**Cell-space helpers.** Alongside the two queries sit four small helpers that
+callers use instead of the queries: (a) *cell height by cell coordinates* —
+takes `(cellX, cellZ)` as 16-bit values, returns the raw height byte, and
+returns **0** (not −1) off-map; used by the yard validator and the route-line
+draw; (b) *cell pointer by cell coordinates* and (c) *cell pointer by 16.16
+position* (`X >> 20`), both returning null off-map; and (d) the fringe-
+following variant of (c) used once by resurrection. Two further helpers — a
+segment sampler that walks a line returning the maximum of `feature height +
+cell height` and occupant `unit Y + model height`, and a cell-corner
+position builder — have **no callers** and are dead.
+
+**Caller families and what each does with the sentinel.** The sentinel is
+never tested by name. Every consumer either shifts it, floors it, or
+compares it, and the table below is what each family *does*, so the −1
+outcome is derivable:
+
+| Family | Use | Sentinel outcome |
+|---|---|---|
+| COB `GROUND_HEIGHT`-style port `[R-COB-03 §2]` | returns `h << 16` | `−65536` (−1.0 in 16.16) |
+| post-move Y correction `[R-MOV-01 §5]` (ground, non-floater) | `Y = h << 16` unconditionally; the hover/floater branches use `max(seaLevel − authored offset, h)` | a mover that reaches an off-map cell is placed at `Y = −1.0`; the floor branches clamp it to the sea-level expression instead |
+| four-corner conform `[R-MOV-01 §5]` | inline copy of the bilinear arithmetic with the unsigned `≥ Width−1` guard | whole conform abandoned; no sentinel exists |
+| feature stamp centre, burn origin, feature phase, static reference point `[R-FEAT-01 §3]`, `[06 §9.3]` | `Y = h << 16` at the footprint centre `((fx + 2x)·8) << 16` | `−1.0`; the stamp's own bounds test makes this unreachable for a stamped cell |
+| corpse creator `[R-FEAT-01 §13]` | `seaLevel < h` → land path else water path | off-map counts as water |
+| aircraft marker altitude, `VTOL_LandIfCan`, weapon target-point resolution, cruise-missile waypoint `[R-AIR-01 §4]`, `[R-WPN-03 §3]` | `Y = max(seaLevel, h)`, then the family's own offset/cap | floors to sea level |
+| reclaim and resurrect approach point `[R-WORK-01 §5]`, `[R-WORK-01 §7]` | `Y = (h + draw(featureHeight)) << 16` — one simulation-RNG draw bounded by the feature's authored `height` | `h` is −1 before the draw is added |
+| reclaim/resurrect nano effect box (same anchors) | box from `Y0 = h << 16` to `Y1 = Y0 + featureHeight << 16` | as above |
+| ground resolver for the minimap lens and `MoveUnitToRadius` centre (§3.11, doc 08) | clamps the input to `0..Width·16−1`, `0..Height·16−1` first, then iterates `max(seaLevel, h)` down the screen column (below) | never off-map after the clamp |
+| presentation: unit draw origin `[R-REN-03A]`, weapon-range arc vertices, route polyline | `screenY = z − (h >> 1) + 32 − cameraZ` (the range arc floors `h` at the record's own Y first) | `−1 >> 1 = −1`: one pixel lower, no other effect |
+| smoke/steam strip particle test `[R-STRIP-01 §2]` | `h < seaLevel` terminates the particle once it has passed its age threshold | off-map particle terminates |
+| coarse: fragment pool, debris bounce `[R-COB-04 §2]`, feature 3D physics `[R-FEAT-01 §10]` | `Y ≤ h·65536` style floor tests | −1 floor: nothing ever lands off-map |
+| coarse: commander respawn on lava maps `[R-SKIR-01 §3]` | reject the candidate when `h ≤ seaLevel` | off-map candidate rejected |
+
+**The ground resolver, exactly** (the screen-column-to-world inversion the
+lens and the radius trigger share; owned here because it is the only caller
+that solves *for* the height). Input `(X, targetZ)` in map pixels, already
+clamped as above. Start at `z = (targetZ & ~0xF) + 128` and probe at most
+nine rows downward in steps of 16 pixels: at each row take `hz =
+max(seaLevel, bilinear(X, z))` and `screen = z − (hz >> 1)`; stop at the
+first row with `screen ≤ targetZ`. If nine rows are exhausted the last row's
+position is returned as is. Otherwise probe one more row `z + 16` to get
+`screen'`; when `screen < screen'` and `screen ≤ targetZ ≤ screen'`, or when
+`targetZ ≤ screen'` regardless, interpolate `z += ((targetZ − screen) << 20)
+/ (screen' − screen)` (a 16.16 result, truncating division) and re-sample
+the height at the interpolated point, again floored at sea level; the
+returned Y is that height `<< 16`.
+
+### Closed — the air sector grid, as doc 03's own statement [R-TERR-01 §5] (2026-08-29)
+
+Status: **Established.** `[R-AIR-01 §5]` in doc 04 states the grid, the
+sentinel and its eight consumers at implementable precision; the build is
+repeated here only where doc 03 owns the input and where the re-derivation
+found one error.
+
+* Built by the same map-load routine that then builds the LOS height-word
+  table of §3.5 `[R-P0-18-B]`; it runs after the full min/max recompute and
+  before the void sweep, so the void codes are invisible to it (it reads no
+  feature word).
+* Cell side 128 world units (8 attribute cells). Columns and rows are
+  `((extent · 65536) + 0x7FFFFF) >> 23` where `extent` is the pixel width or
+  height — a round-up to whole 128-pixel cells. Record count is that product
+  rounded up to a multiple of 8; the padding records receive the sea-level
+  byte and edge bits like any other but are never swept.
+* Edge bits `1` top row, `2` bottom row, `4` left column, `8` right column,
+  OR'd in that order; the sentinel record carries `0x1F`.
+* **Correction to `[R-AIR-01 §5]` step 3.** It says the sweep raises the
+  record's first byte to "the cell's height byte". The sweep reads the cell's
+  **derived maximum byte** (byte 5 of the plot cell — the 2×2 maximum), not
+  the raw height at byte 4. The difference is one cell of reach: a peak in the
+  first column or row of the *next* sector already raises this sector's
+  byte. The value is therefore `max(seaLevel, max over the sector's cells of
+  hmax)`, and the smoothed second byte is the 3×3 sector maximum of that.
+  (Doc 04 owns the anchor; the correction is recorded here and reported.)
+* Consumers are `[R-AIR-01 §1]` (cruise altitude reads the smoothed byte) and
+  the sentinel readers of `[R-AIR-01 §5]`; no terrain-side reader exists.
+
+### Closed — the map-global block: sources, conversions, defaults [R-TERR-01 §6] (2026-08-29)
+
+Status: **Established** (loader trace at the FPU-instruction level for the
+gravity conversion; the OTA parser for key names; consumers cited).
+
+| Runtime value | Source and rule | Default when absent |
+|---|---|---|
+| minimum wind, maximum wind (integers) | OTA `minwindspeed` / `maxwindspeed` when the authored value is `≥ 0` **and** the map is canonical; otherwise the legacy header slots 10/11; on a canonical map the "header" values are the hard-coded `100` / `2000` | `100`, `2000` on a canonical map with a **negative** authored value, or when no `[GlobalHeader]` was parsed at all (the loader prologue seeds −1). An **omitted** key is not "unparsed": the OTA parser stores its integer default `0`, which passes the `≥ 0` test, so the wind range is `0..0` (corrected 2026-08-29 against [02 R-MAP-01]; `[R-PROD-01 §3]` is the consumer) |
+| gravity (runtime word) | OTA `gravity` when `≥ 0` and canonical: `ftol((double)g × 65536.0 × (1/900))` — the integer is converted to double, multiplied by 65536.0, then by the double constant `0.001111…` (exactly the nearest double to 1/900), then truncated toward zero. Otherwise, when the legacy header slot 13 is non-zero, the same conversion of that slot | `0x1FDB` = 8155, which is exactly what authored `112` converts to (`112·65536/900 = 8155.59`). So a canonical map whose OTA omits or negates `gravity` behaves as `gravity=112` |
+| tidal strength (single float) | mission `tidalstrength` unless it is `< 0.0` (strict) | `0.5` (`[R-PROD-01 §4]`; no version test) |
+| sea level (byte) | terrain header slot 9, low byte | none — always present. There is no OTA key: the string `SeaLevel` exists in the image with no reader, and `nosealeveltrigger` is a mission flag unrelated to the value |
+| surface metal seed (signed byte) | mission `SurfaceMetal` when `≥ 0` and canonical | `0` |
+| lava world (flag) | mission `lavaworld` | `0` |
+| play insets | §2 rule 1 | — |
+
+The wind pair, gravity and tidal value are written once at map load, in that
+order, before any plot memory is allocated; nothing rewrites them during a
+battle. Units: the gravity word is 16.16 world units per tick², which is why
+the divisor is `30²`; `[fmt ota]` states the same identity from the asset
+side and the 192-of-275 census of `gravity=112`.
+
+**Correction (2026-08-29, [02 R-MAP-01]):** the "default when absent" column
+above applies to a *negative* authored value, legacy terrain, or a session with
+no parsed `[GlobalHeader]`. A canonical map whose OTA merely **omits**
+`gravity` gets the parser's integer default `0`, which passes the `≥ 0` test —
+runtime gravity is then **0**, not `0x1FDB`, and `AirStrike` cancels
+([04 R-AIR-01 §8], `docs/SPEC_CONFLICTS.md` SC23). Likewise an omitted
+`tidalstrength` is `0.0`, not `0.5`. All 275 retail OTAs author all four
+keys, so the fallbacks are reachable only through authored negatives.
 
 ### 2.4 3DO model hierarchy
 
@@ -1774,7 +2091,12 @@ simulation. Retail persists them under `Software\Cavedog Entertainment` (doc
 `SingleMapping` / `SingleLineOfSight` / `SingleLOSType`,
 `SkirmishMapping` / `SkirmishLineOfSight` / `SkirmishLOSType`, and
 `MultiMapping` / `MultiLineOfSight` / `MultiLOSType`. **Each defaults to 1**
-when the registry value is absent (and the loader then deletes the value).
+when the registry value is absent, and the loader then **stores** that default
+back into the registry, so the key exists from the first run on. *(Correction
+2026-08-29, `[R-TERR-01 §8]`: this sentence previously said the loader "deletes
+the value"; the miss-path helper it calls is the DWORD store used by every
+other key in the same loader, and doc 08's `[R-SKIR-01 §1]` traces the
+same helper as a store. Nothing in the loader deletes registry values.)*
 
 **Battle entry.** The session kind selects the source, and each assignment is
 a plain one-bit copy — no inversion anywhere:
@@ -1856,6 +2178,44 @@ enum.** Bits 0 and 1 gate the two publishers independently:
   never entered.
 * *Unmapped + Permanent* (bit 0 set, bit 1 clear) still rasterizes every tick
   — into the word grid only — so the explored region grows and never shrinks.
+
+
+#### R-TERR-01 §7 — the Mapping array and the rectangle-plus-ring stamp, stated once for doc 03 (2026-08-29)
+
+Status: **Established** (restated from the traces of `[R-LAYER §1]` above
+and `[R-PATH-01 §2]` in doc 04, which agree; no new trace).
+
+The mode-dependent word grid of §3.1 item 2 **is** the per-player mapping
+memory: allocated at map load as `Width × Height / 2` bytes and zeroed,
+serialized under the save section name `Mapping` (`[R-PATH-01 §2]`), filled
+at the bulk rebuild with all-ones when the session's *Mapping* option bit is
+clear and left at zero when it is set (`[R-VIS-01 §1]`), and OR'd with the
+viewing player's slot bit by exactly one writer as tiles become seen. Its
+only simulation readers are the per-player gates of `[R-LAYER §1]` and the
+path search's passability probe, which returns its "unexplored" value 2 —
+treated as passable by every consumer — when the requesting player's bit is
+absent (`[R-PATH-01 §2]`). No building state is written to it, and the
+name "owner/building-mask" that earlier text used for it is retired in
+both documents.
+
+The class-layer stamp that consumes the plot grid classifies a **rectangle,
+not a cell**: the class's authored `FootPrintX × FootPrintZ` rectangle
+anchored at the cell is aggregated over the gates of doc 04 §6.1, and when
+it comes back clear, four further rectangles — the one-cell ring above,
+right, below and left of it — must also be clear or the result is demoted
+to *steep*. That is doc 04's statement (`[R-PATH-01 §2]`); doc 03 restates
+it here because §2.2's plot-cell census names the classifier as a reader and
+an implementer reading only this document would otherwise classify single
+cells. Buildings block the search through the occupant-age channel of the
+same anchor, not through this grid.
+
+#### R-TERR-01 §8 — the registry miss path stores the default (2026-08-29)
+
+Status: **Established.** The registry loader that supplies the three
+visibility options of `[R-VIS-01 §1]` calls, on every missing key, the same
+DWORD store helper it uses for every other key it reads; there is no delete
+call in it. `[R-VIS-01 §1]` is corrected in place above; doc 08's
+`[R-SKIR-01 §1]` traces the identical helper as a store.
 
 ### 3.2 Sight shape and terrain occlusion
 
@@ -3406,13 +3766,37 @@ blit site has not been traced.
 
 ### 3.10 Sensor circles on the minimap
 
-The per-tick sensor phase (semantics in section 3.4) runs only when the active
-player count is at least 2. Its minimap output: the outer radar/sonar circle at
-max(radar, sonar) in the radar palette index, plus separate radar-jam and
+The minimap's radar, sonar and jammer circles are **presentation drawn by
+the contacts pass** of §3.9, layer 4, through the solid-circle rasterizer
+(2,048 angular steps over 32 segments), in the distinct radar and jammer
+palette indices held in engine root state. For each unit that passes the
+contacts pass's gates, the outer circle radius is `max(radardistance,
+sonardistance)` and the two jam circles use `radardistancejam` and
+`sonardistancejam`; each radius scales as `RadarW · distance / PlayRight`
+(truncating), the centre is the unit's projected minimap position of §3.9,
+and the circles land on the final surface, which is wiped from the mapped
+composite and rebuilt every tick. Nothing in this path writes the mapping
+word grid or any per-player byte grid.
+
+The per-tick **sensor phase** (§3.4, `[R-VIS-01 §4]`, `[R-VIS-01 §5]`) is a
+different thing: it runs only when more than one player is present, walks
+units through the 128-world-unit spatial grid, and writes unit status bits —
+the seen marker, the sonar bit, and the jam clears — that the contacts pass
+and the acquisition predicate then read. It draws nothing.
+
+**Correction (2026-08-29, `[R-TERR-01]`).** This section previously read:
+"The per-tick sensor phase … Its minimap output: the outer radar/sonar circle
+at max(radar, sonar) in the radar palette index, plus separate radar-jam and
 sonar-jam circles in the jammer palette index, all three emitted through their
-callback tables. On the minimap the radii scale as `RadarW * distance /
-PlayRight` (truncating), the circles land on the final surface and are wiped
-with it each tick, and the phase never ORs the mapping word mask.
+callback tables." That attributed the circles to the sensor phase's three
+callback tables, which `[R-VIS-01 §5]` establishes are one-line status-bit
+writers with no rasterization at all; the §3.4 correction already retracted
+the "callback tables rasterize" reading and named this section as the last
+place that repeated it. The radii, the palette split (outer circle in the
+radar index, both jam circles in the jammer index), the `RadarW / PlayRight`
+scaling and the wipe-per-tick statement survive unchanged; only the producer
+was wrong. What remains open is the numeric identity of the two palette
+indices (tail, §3.9/§3.10).
 
 ### 3.11 Lens: minimap ↔ world mapping
 
@@ -5107,19 +5491,12 @@ authored key is doc 06's tail, not this one). The fifth, *"whether any
 unresolved identity path shares visibility grids across players"*, is replaced
 by the sharper question it turned into.
 
-- Meaning of the legacy attribute-byte encodings beyond the canonical
-  four-byte stride · §2.2 · static trace. Marked `TODO(question)`.
 - Reader for plot flag bit 7, and whether any unexported code writes
   placer-nibble values into it · §2.2 · static trace over the unrecovered
   regions. Marked `TODO(T23)`.
 - Dense-pack rule: whether a footprint overlapping a live anchor cell is
   rejected or silently overwrites · §2.2 · manual retail observation
   (dense-pack fringe map probe). Marked `TODO(question)`.
-- North/south height-dependent void strips beyond the right two columns
-  · §2.2 · static trace. Marked `TODO(question)`.
-- Exact per-tick sequencing of terrain deformation against movers; the update
-  ordering itself (derived `hmax`/`hmin` recompute, then occupancy notify) is
-  established · §2.2 · static trace. Marked `TODO(question)`.
 - Whether the fog cache's `1 = NW` corner-to-bit assignment holds · §3.4
   [R-RR16-A] · manual retail observation (asymmetric fog GAF probe). Supported
   inference today.
@@ -5135,12 +5512,18 @@ by the sharper question it turned into.
   side; nothing in the recovered visibility or sensor path consumes an
   incoming share · doc 05 "Sensor sharing", doc 08 · static trace of the
   command's receive handler.
-- Which palette index each minimap sensor circle uses, and where the circles
-  are drawn from · §3.9, §3.10 · static trace. (The premise of the previous
-  bullet here — that the sensor phase's three callback tables rasterize onto a
-  presentation surface with last-writer-wins arbitration — was wrong; those
-  callbacks write unit status bits only, see the §3.4 correction. §3.10 still
-  carries the superseded reading and is owned by that section.)
+- The numeric identity of the radar and jammer palette indices the minimap
+  sensor circles use · §3.9, §3.10 · static trace of the root-state writer.
+  (Where they are drawn is closed: the contacts pass, `[R-TERR-01]`'s §3.10
+  restatement.)
+- Whether the tracked-heap allocator zero-fills plot memory, which decides
+  the derived maximum/minimum bytes of the last column and last row that the
+  recompute never writes but the sector-grid sweep and lava flood read · §2.2
+  `[R-TERR-01 §1]` · static trace of the allocator's fill path. Marked
+  `TODO(question)`.
+- Legacy terrain header slot 12 and attribute bytes 1, 3, 4, 5, 7: no reader
+  in the loader · §2.2 `[R-TERR-01 §1]` · static trace over the unrecovered
+  regions; inert until one is found.
 - Edge behavior for unexplored in-map void cells, map border clipping, and
   whether the backbuffer retains stale bytes beyond the play rect · §2.2, §4.1
   · manual retail observation (map-edge capture probe).

@@ -725,6 +725,13 @@ that the separate `OccupancyGrid.Revision` counter has an expansion consumer.
 
 ---
 
+**Refinement (2026-08-29, [04 R-COLL-01 §7]):** a whole-image census found no
+yield/sidestep owner. The commit validator never reads the class layer or the
+occupant age; the age gate is search-only. A blocked unit stops advancing its
+last-stamp tick, so after more than 30 ticks it becomes a hard search block
+for others, and its own 60-tick repath finds a route around. That mechanism —
+not a retry counter — is what the reconciliation pass should reproduce.
+
 ## SC23 — `gravity = 0` maps cancel every `AirStrike` order (retail-sanctioned bound)
 
 **Spec:** [04 §10.2 R-AIR-01 §8] (Established, static trace): the bombing
