@@ -819,13 +819,13 @@ Start-position eligibility is established as three conjuncts: the ten fixed play
 
 Two random streams are split. When a per-lobby Location flag is zero, skirmish start positions are shuffled with the CRT stream using a Fisher–Yates walk over a dense list of eligible slot numbers: a gate draw is taken when fewer than three players are eligible, then for each index from one to count minus one a draw is taken with bound index plus one. The bound expansion follows the CRT helper's rule of building a mask from 15-bit chunks until the mask covers the bound, then taking the remainder; for the small bounds that occur with ten slots this is a single draw per iteration. The resulting permutation is then assigned in slot order through a helper that stamps each logical slot with a start-position index, overwriting earlier random interior coordinates when a matching StartPos exists and otherwise retaining the random fallback. When the Location flag is non-zero the assignment is identity with no draws. [P0-04]
 
-Commander fallback placement for eligible slots draws from the simulation stream: two draws per eligible slot for X and Z interior jitter, each bounded by map dimension in cells minus 160, then offset by 80 cells and scaled to 16.16 fixed point. When the bound is zero or negative the helper returns zero without advancing the stream, so tiny maps produce no jitter draws and the position collapses to the 80-cell margin. If a matching StartPos is found by numeric suffix lookup, its stored short coordinates are shifted to fixed point and overwrite the jitter; otherwise the jitter is kept. Missing or extra StartPos entries are handled gracefully: the lookup scans for the requested suffix and, when not found, leaves the jitter untouched and can emit a diagnostic without crashing; surplus positions beyond the player count are simply unused. [P0-04]
+Commander fallback placement for eligible slots draws from the simulation stream: two draws per eligible slot for X and Z interior jitter, each bounded by map dimension in cells minus 160, then offset by 80 cells and scaled to 16.16 fixed point. (**Corrected 2026-08-29:** the bounds and offset are in world units, and the jitter exists only on the multiplayer path; the skirmish stamp has no jitter and a `StartPos` miss is fatal — [R-ENTRY-01 §5], [R-ENTRY-01 §10].) When the bound is zero or negative the helper returns zero without advancing the stream, so tiny maps produce no jitter draws and the position collapses to the 80-cell margin. If a matching StartPos is found by numeric suffix lookup, its stored short coordinates are shifted to fixed point and overwrite the jitter; otherwise the jitter is kept. Missing or extra StartPos entries are handled gracefully: the lookup scans for the requested suffix and, when not found, leaves the jitter untouched and can emit a diagnostic without crashing; surplus positions beyond the player count are simply unused. [P0-04]
 
 ### Unit creation and InitialMission timing — Established [P0-04] [P0-06]
 
 Mission-unit creation during battle entry uses a two-pass sparse array. The loader allocates a created array sized by the unit count and zeroes it. Pass one walks the unit records in placement order from zero upward: it validates the unit type name exists, adjusts the authored player number from one-based to zero-based with a zero-to-one fixup, checks the same eligibility predicate used for start positions — a failure formats `Player number %d invalid for unit %s` into the modal fatal channel and terminates the process (**correction 2026-08-29:** the earlier "emits a diagnostic … but still proceeds" is retracted, [R-TRIG-01 §9]) — then runs a position fixup helper and the normal unit allocator. The allocator scans for the lowest free pool slot in the owning player's slice and can fail; on failure the entry stays null and no unit is created. Successful creation copies the immunity high bit into a runtime status bit, scales health by percentage, and copies the authored **facing angle** into the unit's heading word (the earlier "copies build priority" is retracted — build priority is parsed but never copied or read; the placement record's angle word is the copy source). Pass two walks the same order again and invokes the InitialMission interpreter only when the record carries a non-null script string and the corresponding created entry is non-null; the interpreter tokenizes the string and queues orders. A per-record creation countdown field is parsed but has no reader in the image; no delayed queue, cargo loop, or separate attachment pass exists beyond the immediate attach verb. Recursive reconstruction for linked or carried units uses the same allocator path for saves but not for fresh mission spawns. [P0-04] [P0-06] [lane 08 facing angle]
 
-Timing is fixed: the mission loader's common tail runs, then for multiplayer a barrier pumps network state and sleeps fifty milliseconds until peers arrive, then start-position assignment stamps slots, then commanders are created with the jitter described above and resources are granted as floating-point metal and energy, then camera focus is chosen, then the sparse two-pass spawner runs, then visibility and mapping are rebuilt, then the first authoritative tick runs. The InitialMission strings are therefore interpreted after every mission unit exists at its fixed-point position but before any creation script, movement, or visibility publication for that tick, and they never take a tick of their own. BetweenMissions handling for saves uses a bank account named Summary that carries a BetweenMissions flag; **the polarity is settled by the battle-entry save-blob gate: when the flag is absent (the in-battle marker) the loader runs the battle restoration dispatcher and skips the fresh spawner; when the flag is present the loader skips battle restoration and runs the fresh spawner — the campaign continuation rebuilds the mission from the authored mission file.** The earlier contradictory phrasing (flag-present → restore player and feature state from the bank) is retracted: a BetweenMissions save contains only the Summary account, so the flag-present route could not restore a battle; the gate's two branches verify this. [P0-04] [P0-05] [lane 08 BetweenMissions polarity]
+Timing is fixed: the mission loader's common tail runs, then for multiplayer a barrier pumps network state and sleeps fifty milliseconds until peers arrive, then start-position assignment stamps slots, then commanders are created with the jitter described above and resources are granted as floating-point metal and energy, then camera focus is chosen, then the sparse two-pass spawner runs, then visibility and mapping are rebuilt, then the first authoritative tick runs. (**Superseded 2026-08-29:** the visibility rebuild precedes the spawner and the per-player phase is primed at tick 0 before the first pump — [R-ENTRY-01 §6–§9], correction [R-ENTRY-01 §10].) The InitialMission strings are therefore interpreted after every mission unit exists at its fixed-point position but before any creation script, movement, or visibility publication for that tick, and they never take a tick of their own. BetweenMissions handling for saves uses a bank account named Summary that carries a BetweenMissions flag; **the polarity is settled by the battle-entry save-blob gate: when the flag is absent (the in-battle marker) the loader runs the battle restoration dispatcher and skips the fresh spawner; when the flag is present the loader skips battle restoration and runs the fresh spawner — the campaign continuation rebuilds the mission from the authored mission file.** The earlier contradictory phrasing (flag-present → restore player and feature state from the bank) is retracted: a BetweenMissions save contains only the Summary account, so the flag-present route could not restore a battle; the gate's two branches verify this. [P0-04] [P0-05] [lane 08 BetweenMissions polarity]
 
 ### Feature and terrain convergence — Established [P0-04] [P0-05]
 
@@ -834,6 +834,422 @@ Terrain-provided and mission-provided feature records converge on the same featu
 ### Placement and start barrier — Established [P0-04]
 
 Multiplayer initialization enters a barrier after content and player state are prepared. The user interface reports that it is waiting for other players. The loop pumps network state and sleeps for fifty milliseconds between checks. When all required peers reach the barrier, the executable reports synchronization complete and allows authoritative ticks. The normal simulation tick is not driven by this sleep; it is confined to lobby, placement, and barrier behavior. The same barrier is not used for single-player campaign skirmish entry. [P0-04]
+
+### Closed — who runs battle entry: the loading screen, the worker thread, and the handoff [R-ENTRY-01 §1] (2026-08-29)
+
+Established by RWU-08-7 from a full read of the battle-entry orchestrator,
+its one caller, the loading-screen state, the world-rebuild routine and every
+routine they call before the first tick. Sections §1–§9 are the ordered
+sequence; §10 lists the corrections to earlier text; §11 what stays open.
+
+**Established — three actors.** Battle entry is not one function on the main
+thread. It is:
+
+1. **The loading-screen state** (main thread, one call per frame). On its
+   first frame it resets the scheduler block — scaled-clock anchor ← now,
+   pending ticks ← 0, global tick ← 0, slew counter ← 0 — sets the
+   commander-death countdown to −1 (the "unarmed" value of [R-SKIR-01 §3]),
+   shows `loadgame2bg`, fills the ten-slot participation table (a slot
+   participates when its record is live and its controller is 1 or 2; a
+   second table marks slots whose lobby record carries the *watching* bit),
+   then starts **a worker thread** whose body is the orchestrator below. A
+   failed thread start is fatal with the verbatim modal
+   `Unable to start the loading thread!`. Every later frame of the state
+   only pumps the network (multiplayer), redraws the six progress bars
+   (`Textures`, `Terrain`, `Units`, `Animation`, `3D Data`, `Explosions`,
+   each from a percent byte the worker writes), and sleeps 200 ms.
+2. **The loading worker thread** runs the whole orchestrator of §2–§8 —
+   seeding, world rebuild, placement, spawning, visibility — and ends by
+   setting the *battle ready* bit of the session flag word.
+3. **The handoff frame.** The loading state's next frame sees the ready bit
+   and, still inside the loading state, runs (in this order) four
+   presentation helpers this unit did not trace (doc 07; none is reachable
+   from the tick executor), then **the battle pump once** (§9 — the first
+   authoritative ticks happen here), then the interface reset (doc 07),
+   and only then
+   installs the in-battle state (state number 6 with the battle-state
+   handler), zeroes the progress bytes and starts CD audio. The first tick
+   therefore runs before the battle state exists and before any input is
+   read.
+
+**Established — the thread has its own C-runtime stream.** The worker is
+started through the C-runtime thread starter, which allocates a fresh
+116-byte per-thread block whose `rand` word is initialised to `1`. The
+CRT stream is per-thread ([01 §5.1]); consequences are in §2.
+
+**Established — multiplayer barrier plumbing (OOS, ordering only).** For
+session kind 3 the worker sets the *waiting for peers* bit after the world
+rebuild and spins (50 ms sleeps) until the main thread — which polls the
+peer-ready predicate from the loading state — sets the *peers ready* bit.
+The barrier of "Placement and start barrier" above is this pair of bits;
+nothing else waits.
+
+### Closed — seeding, the session words, the save gate and the setup record [R-ENTRY-01 §2] (2026-08-29)
+
+The worker's orchestrator runs these steps in this order, before anything
+else:
+
+1. **Simulation stream seed.** `QueryPerformanceCounter`; seed =
+   `((low32 + high32) XOR 0x66e29572) OR 1` ([R-CORE-02], [01 §7.1]).
+   The Park–Miller state is a process global, so this is the battle's stream.
+2. **CRT stream seed** from the time-of-day helper — **into the worker
+   thread's own block** (§1). The main thread's CRT state, seeded once at
+   process start and consumed by the front end, is **not** touched by battle
+   entry. Every CRT draw the *tick* makes (wind interval, meteor scheduler,
+   victory-timer arm, camera shake, strips, sound variants — [01 R-DET-01
+   §4/§5]) is made on the main thread and therefore continues the front-end
+   stream; every CRT draw the *worker* makes (the explosion-frame builder of
+   §3 and the skirmish shuffle of §5) comes from the freshly seeded thread
+   stream and is discarded with the thread. Correction in §10.
+3. **Global tick ← 0** (again; the loading state already zeroed it).
+4. **Session words by kind** (kind getter of "Game-mode selection"):
+   - *Kind 1 (campaign)*: local-authority flag ← 0; commander-death rule ←
+     the mission's rule word (0, [R-SKIR-01 §4]); visibility mode word bits
+     `2 ← losType & 1`, `0 ← mapping & 1`, `1 ← lineofsight & 1` from the
+     mission-global words ([R-SKIR-01 §4], [03 R-VIS-01 §1]); then the
+     **unit-restriction loader** runs: it opens resource-path slot 6
+     (`UseOnlyUnits`, [02 R-MAP-01 §1]); when the file exists it clears the
+     *available* bit of every catalog definition from index 2 upward, then
+     sets it again for every definition whose name matches a `[name]`
+     section of the file (case-insensitive compare). A missing file leaves
+     every definition available. The available bit is the same one the unit
+     allocator tests ([05 R-SHARE-01 §8]).
+   - *Kind 2 (skirmish)*: session unit limit ← lobby unit limit;
+     local-authority flag ← 1; commander-death rule and the three mode bits
+     from the setup record ([R-SKIR-01 §2]).
+   - *Kind 3 (multiplayer)*: session unit limit ← lobby copy; local-authority
+     ← 1; pause bit cleared; if this peer is not the host, pump until the
+     host slot, its colour and its name are known; resolve the map from the
+     host's lobby record ([02 R-MAP-01 §1]); then local-authority ← host bit
+     13, commander-death ← host bits 11–12, mode bits 0–2 ← host option
+     byte bits 0–2, session unit limit ← host limit word.
+   The "local-authority" flag of [R-SKIR-01 §2] has exactly one reader:
+   the chat commit callback ([07 §5 Chat]), which ORs a routing bit into
+   the message's target mask when the flag is set — it is a chat-routing
+   flag, not a simulation authority. Campaign leaves it clear.
+5. **The save gate, first visit.** If a save bank is open and its `Summary`
+   account lacks `BetweenMissions` (the in-battle marker, "Timing is fixed"
+   above): for each of the ten slots the `Player%i` account (`i` = slot
+   index, 0-based) is looked up; when present the setup-record row's
+   controller ← its `Controller` item (default 0) and the slot's controller
+   byte ← its low byte; when absent both ← 0. Then, **kind 2 only**, the
+   skirmish row count ← `max(current, 1 + highest row index whose
+   controller is 1 or 2)` and the row→player conversion of [R-SKIR-01 §2]
+   runs (alliances, names, local player). Kinds 1 and 3 restore their
+   slots later from the `Players` account (§8).
+
+### Closed — the world rebuild: every allocation, in order [R-ENTRY-01 §3] (2026-08-29)
+
+**Established.** One routine (the *world rebuild*) runs next, once per
+battle, for every kind and for loads alike. Its call order, each step with
+what it allocates or writes:
+
+| # | Step | What it does |
+|---|---|---|
+| 1 | message ring clear | the F12 message ring is emptied ([07 R-CAM-01 §2]) |
+| 2 | interface scratch reset | eleven interface words are zeroed or cleared (identities are doc 07's — §11); the pause/interrupt word's bits 0 and 11 are cleared; bits 7, 8 and 9 of an interface flag word are cleared |
+| 3 | HUD light-bar reset | the six HUD progress words are zeroed and the `LIGHTBAR` frame handle re-fetched |
+| 4 | sound state reset | the active-sound list is drained (each entry's handle released) and the per-category "recently played" table zeroed |
+| 5 | texture table | the `textures` directory is enumerated, `logos.GAF` skipped, every other GAF loaded into the `TEXTURE_PTRS` table; the *Textures* percent byte advances per file and ends at 100 |
+| 6 | feature TDF catalog | every file under `features` is parsed into the feature catalog container ([05 R-FEAT-01 §1/§2]) |
+| 7 | a flag word ← 1 | (a bare store; its reader was not traced — §11) |
+| 8 | strip table | ten 16-byte strip vectors allocated ([03 R-STRIP-01]) |
+| 9 | projectile pool | `WEAPON ARRAY`: 300 records × 107 bytes allocated and zeroed; live count ← 0 ([06 §5]) |
+| 10 | weapon table reset | the 256 weapon records: name byte zeroed, slot byte stamped ([06 R-DMG-01 §5]) |
+| 11 | **map load** | the terrain loader ([02 R-MAP-01 §6], [03 R-TERR-01 §1]): TNT, plot memory, surface-metal seed, feature-name table, feature stamping from the TNT and the OTA `[features]`, tile set, LOS tables, metal-byte seeding ([05 R-FEAT-01 §3/§7]) — the *Terrain* percent byte |
+| 12 | camera reset | the camera block reset that preserves the scroll byte ([07 R-CAM-01 §10]) |
+| 13 | unit catalog | the FBI/3DO catalog compile ([02 R-CONTENT-01]) — the *Units* percent byte |
+| 14 | download-menu table | the `download` directory's build-menu files are compiled ([02 §1]) |
+| 15 | **unit pool** | `UNIT MEMORY`: `limit × 10 + 1` records, per-slot slices ([05 R-SHARE-01 §7], [04 §2.3a]) |
+| 16 | feature successor pass | `featuredead` / `featurereclamate` / `featureburnt` links resolved by name, parsing a missing successor on demand ([05 R-FEAT-01 §2]) — the *Animation* percent byte |
+| 17 | feature TDF container freed | the parsed TDF trees of step 6 are released (the compiled catalog stays) |
+| 18 | path class layer | ([04 R-DOC04-B]) |
+| 19 | wind seed | wind change interval ← 5000, wind deadline ← 0, then the wind routine is called once: its gate is `deadline < globalTick`, i.e. `0 < 0`, false — **no draw**, the wind-active flag ← 0 ([05 R-PROD-01 §3], [R-CORE-02]) |
+| 20 | renderer scratch | `TEMP XFORM PTS` (2400 bytes), `TEMP PROJECTED PTS` (1600), `ASSEM PTS` (160) |
+| 21 | **scheduler block** | scaled-clock anchor ← now; global tick ← 0; kind 3 only: requested speed ← 10 and active speed ← 10; fractional carry ← 0. (Kinds 1 and 2 keep whatever the speed words already hold — §11.) |
+| 22 | meteor scheduler | active ← 0, next strike ← the authored value, weapon resolved by name ([01 R-CORE-01], [06 §6.5]) |
+| 23 | minimap surface | ([03], [fmt tnt]) |
+| 24 | **per-player reset** | for every slot whose controller byte is non-zero: the economy/statistics block is zeroed (stocks, incomes, expenditures, the sharing thresholds and flags — [05 R-P0-01]), the per-player timers ← global tick (0), the storage-bonus flag cleared, six selection/target words reset (four to 0, two to 0xffff), a per-player byte map of `(cellW/2)·(cellH/2)` entries (rounded up to 8) re-allocated and zeroed, the `SQUADS` table (ten 32-byte squad records) allocated; then **unless** the controller is 3 (remote), the **AI record** is constructed — the ten task records with their initial thresholds ([08 R-AI-01 §1]) and the strategic state, whose constructor makes the **eight simulation draws** of [R-DET-01 §4] ("AI player setup") — and the per-side classifier table entry is built. Humans get an AI record too; only remote peers do not. Then the AI profile is loaded from resource slot 7, falling back to `ai\default.txt` ([R-AI-01 §12]), and for every computer-controlled slot the difficulty tables are applied. |
+| 25 | target/threat registry | the per-battle registry object (`AISearch touched mapentries` bitmap sized to the cell grid) allocated ([06 §3.1]) |
+| 26 | **explosion-frame builder** | the `CalcedExplosion` tables: table 0 = 12 frames of radius 64 down by 4; table 1 = 15 frames from radius 128 stepping `(16−128)/15 = −7`; table 2 = 15 frames from 200 stepping `(32−200)/15 = −11` (C integer division); one CRT draw per generated pixel on the **worker thread's** stream (391,606 draws, [06 R-WFX-01 §6]); the explosion pool's 300 records and 1,800 debris records (the six debris animation names cycling) are initialised ([04 R-COB-04 §4/§5]); the *Explosions* percent byte goes 20 → 50 → 100 |
+| 27 | command tables | the three battle command tables registered ([07 R-CAM-01 §6]) |
+| 28 | counters | every slot's *units ever created* ← 0; the game-over latch bits cleared again; the ally-icon byte ← 0xff; the thirty statistic words and the two frame counters zeroed |
+
+Steps 24 and 26 are the only ones that draw: eight simulation draws per
+constructed AI record (slot order 0..9, humans included), and the CRT
+pixel draws — which, being on the worker's stream, never reach the tick.
+
+### Closed — start positions and commanders, per kind [R-ENTRY-01 §5] (2026-08-29)
+
+(§4 is folded into §1's barrier paragraph.) After the world rebuild:
+
+**Kind 3 (OOS, ordering and draws only).** Barrier (§1). Mode bits and the
+commander-death rule are re-copied from the host record. Then for each slot
+`0..9` whose record is live and whose controller is 1 or 2, **two
+simulation draws** `sim(mapWidthWorld − 160)`, `sim(mapDepthWorld − 160)`
+form `x = (draw + 80) << 16`, `z = (draw + 80) << 16`, `y = 0` — the
+extents are the TNT width/height × 16, i.e. world units, the same words the
+commander-respawn placement of [R-SKIR-01 §3] writes straight into unit
+positions (the "cells" wording of "Randomization for skirmish starts" is
+corrected in §10). The draws happen **before** the watching test, so a
+watching slot still consumes them. For a non-watching slot the `StartPos`
+lookup by the slot's assigned position byte overwrites `x,z` on a hit and
+leaves the jitter on a miss with **no diagnostic**; the side's commander is
+allocated there; the storage-bonus flag is set and the bonus words ←
+`float32(max(hostShort × 100, 200))` for energy and metal. The camera
+centres on the local human's position, or on the map centre with mode bits
+0–1 cleared when the local player is watching.
+
+**Kind 2 (skirmish), no save file.** `StartLocation = 0` → the eligible
+list, the 50/50 gate draw when fewer than three are eligible, and the
+Fisher–Yates walk exactly as [R-SKIR-01 §2] states, on the **worker's** CRT
+stream; `StartLocation ≠ 0` → identity. Either way the stamp helper runs for
+every eligible slot `i` (record live, controller 1/2/3, side ≠ 10) with
+position `p_i`, in slot order:
+
+1. side and colour copied from the setup row into the lobby record;
+2. storage-bonus flag set; energy bonus ← `float32(max(row.energy, 200))`,
+   metal bonus ← `float32(max(row.metal, 200))` ([05 R-ECO-01 §4]);
+3. the `StartPos` lookup with `p_i`: the specials array is scanned in
+   authored order for the first record of type *start position* whose
+   stored number equals `p_i`. **The stored number is the authored suffix
+   minus one** — `StartPos1` is stored as 0 (a suffix of 0 stays 0; a
+   record with no digit after `StartPos` takes a running counter instead).
+   So slot `i` under identity placement takes `StartPos<i+1>`. A hit gives
+   `x = short(X) << 16`, `y = 0`, `z = short(Z) << 16`.
+4. a miss is **fatal**: `Error: Could not find start position number %i on
+   the map!` (the `%i` is the zero-based number, one less than the label)
+   through the modal-fatal helper — message box, then process exit code 1
+   ([R-TRIG-01 §9]). No jitter fallback exists on this path; the earlier
+   "leaves the jitter untouched and can emit a diagnostic without crashing"
+   described the kind-3 path only (§10).
+5. the side's commander (the side record's commander name resolved to a
+   definition) is allocated at `(x, 0, z)` through the common allocator
+   with the same three trailing arguments as mission spawning
+   (`1, 1, 0` — [05 R-SHARE-01 §8])
+   — the allocator's two simulation draws ([04 §2.3b]) occur here, one
+   commander per eligible slot in slot order;
+6. if `i` is the local player, the camera is placed at
+   `(x_int − viewW/2, z_int − viewH/2)` ([07 R-CAM-01 §12]).
+
+Then the **resource grant** of [R-SKIR-01 §2] (stock ← `float32(row)`, no
+floor) — its first of two runs. No simulation draw is made by the stamp or
+the grant themselves.
+
+**Kind 2 with a save, kind 1, kind 3:** no stamps, no grant here.
+
+### Closed — the campaign path: spawner, InitialMission, camera, trigger reset [R-ENTRY-01 §6] (2026-08-29)
+
+After placement (all kinds) the **visibility rebuild of §7 runs first**.
+Then:
+
+- no save and kind ≠ 1 → skip to §8;
+- save present and in-battle (no `BetweenMissions`) → the **battle
+  restoration dispatcher** ([R-SAVE-02 §11]) runs instead of the spawner:
+  `Summary.maxunits` → lobby unit-limit copy (note: the pool was sized in
+  §3 from the copy as it stood *before* this restore — a loaded save's
+  pool uses the current registry `UnitLimit`, and the restored value only
+  reaches the next battle; §10); then `Players`, `Camera`, `Features`,
+  `Metal`, `PlayerFeatures`, `Mapping`, `Units`, `Meteor`, trigger records,
+  in that order; the *restored* flag is set; skip to §8;
+- kind 1 without a save, or any kind with a `BetweenMissions` save → the
+  **two-pass spawner**, then the **campaign camera**.
+
+**The spawner, exactly (Established, precision added to "Unit creation and
+InitialMission timing").**
+
+1. `created[]` ← `max(unitCount, 0)` pointers, each set to 0.
+2. Pass one over placement records `0..unitCount−1`:
+   - definition ← catalog binary search by `Unitname`; a miss stores 0 and
+     continues (no diagnostic);
+   - `p ← Player − 1` (the loader already turned 0 into 1); eligibility =
+     `p < 10` and slot `p` live and controller ∈ {1,2,3} and side ≠ 10;
+     failure → `Player number %d invalid for unit %s` (the `%d` is the
+     zero-based `p`) through the modal-fatal helper, exit code 1;
+   - **position fixup**: for a non-mobile definition the authored `x,z`
+     are snapped to the footprint grid — `cell = (coord − footprint·2^19 +
+     2^19) >> 20`, `coord' = (footprint + 2·cell) << 19` per axis (i.e. to
+     the centre of a footprint-aligned 16-unit cell), and `y` ← the terrain
+     height probe at that cell (`<< 16`); a mobile definition keeps the
+     authored `x,y,z` untouched;
+   - allocation through the common allocator with the fresh-build arguments
+     (two simulation draws on success, [04 §2.3b]; refusal — slice full or
+     per-definition limit — stores 0, no diagnostic);
+   - on success: immunity bit ← the record's flag bit 7 (into unit status
+     bit 15); health ← `maxHealth × HealthPercentage / 100` (16-bit,
+     truncating); heading ← the record's angle word; `created[i] ← unit`.
+3. Pass two over the same records: when the record's `InitialMission`
+   string is non-null and `created[i]` is non-null, the interpreter of
+   [04 §3.6] runs on that unit.
+4. When `unitCount < 1` the trigger set's *victory-condition countdown*
+   word is cleared — the only side effect of an empty `[units]` block
+   ([R-TRIG-01 §6]).
+5. `created[]` freed.
+
+**Campaign camera.** The first *start position* special with stored number
+0 (`StartPos1`) places the camera at `(X − viewW/2, Z − viewH/2)`, marks the
+camera *jumped*, copies the target into the glide words and clears mode bit
+3 ([07 R-CAM-01 §12]). No such special → the camera keeps the world-rebuild
+reset position; no diagnostic.
+
+### Closed — the visibility and mapping rebuild, exactly [R-ENTRY-01 §7] (2026-08-29)
+
+**Established.** Called with the *full* argument once, immediately after
+placement and **before** the spawner/restoration of §6 (and again at every
+commander respawn and watch-mode entry, [R-SKIR-01 §3]):
+
+1. **Mapped mask** (`cellW × cellH` bytes, the whole grid): filled with
+   `0xff` when mode bit 0 is **clear** (Mapped) and with `0x00` when it is
+   set (Unmapped) — [03 R-VIS-01 §1]'s polarity, restated at the byte.
+2. **Per-player visible mask**: for every slot that is live, controller
+   ∈ {1,2,3}, side ≠ 10 — filled with `1` when mode bit 1 (Line of Sight)
+   is **clear** and `0` when set. The fill covers the player's mask byte
+   count; slots that fail the test keep stale bytes.
+3. When mode bit 1 is set, every *active* unit in the pool is walked in
+   record order: its observer record is formed from position, the
+   definition's sight distance, height (floored at `(seaLevel + 1) << 16`)
+   and the definition's sight-type byte; bit 2 set (true LOS) → the
+   height-ray stamper; bit 2 clear → the circle stamper with radius index
+   `clamp((sightDistance >> 5) − 5, 0, tableCount − 1)` ([03 R-VIS-01
+   §2/§3]). Bit 1 clear → no unit is visited.
+4. The *minimap dirty* bit is set, mode bit 3 (the "rebuild pending" bit)
+   is cleared, and the two blip refreshers run.
+
+Because this precedes the spawner, mission units are **not** in step 3;
+they register their own sight at allocation ([03 R-VIS-01 §2]) and the
+first sensor phase completes the picture. (The earlier order "spawner, then
+visibility" is corrected in §10.)
+
+### Closed — the tail: main GUI, phase priming, second grant, teardown, ready [R-ENTRY-01 §8] (2026-08-29)
+
+**Established**, in order, all kinds:
+
+1. the palette routine of [03 §4.3] called with a null picture name;
+2. the main battle GUI (`…MAIN2.GUI` by side prefix; doc 07) is loaded and
+   its handler installed; the local player's lobby record gets the
+   *in-battle* bit (bit 4);
+3. kind 3: the lobby records are broadcast and a session-name string of the
+   form `<player name padded to 16><map name padded to 15>` is published
+   (OOS);
+4. **the per-player phase is run once, at global tick 0** — the same
+   routine the tick executor calls as phase 5 ([01 §4.4], [R-SKIR-01 §3]).
+   What it does at tick 0, per slot in order `0..9` (live, controller
+   ∈ {1,2,3}, side ≠ 10):
+   - the path-search scheduler's per-tick pass ([04 R-MOV-02A]);
+   - the **AI manager** for a controller-2 slot: the strategic-refresh
+     countdown (initial 30) decrements to 29 — no refresh; then **all ten
+     task records run**, because every task deadline was constructed as 0
+     and `0 <= 0` ([R-AI-01 §1]) — whatever simulation draws those bodies
+     make on an empty or one-commander world ([R-AI-01 §2–§8]) are made
+     here, before the first tick; a non-computer slot takes the
+     manager's "inactive" branch;
+   - the target-registry cadence gate: `lastRebuild (0) + 30 <= 0` is
+     false — **no** `sim(30)` at tick 0 ([06 §3.1]);
+   - every active unit of the slot: the LOS refresh ([03 R-VIS-01 §2]);
+   - the 30-tick block (`due (0) <= 0` holds): `due ← 30`; the
+     victory/defeat evaluation of [R-TRIG-01 §6] / [R-SKIR-01 §3] with the
+     countdown at −1 (so at most the *arm* step, never the *fire* step);
+     then the **economy settlement** of [05 R-ECO-01 §2] for a controller-1
+     or -2 slot with live units or none ever created — on stocks that are
+     the §5 grant for kind 2 and **zero** for kind 1;
+   - the local player's HUD/minimap refresh.
+5. **the resource grant again** ([R-SKIR-01 §2]) — this is the one that
+   survives: kind 1 stocks and bonus from the mission's authored words,
+   kind 2 from the rows, kind 3 from the host's shorts × 100; it overwrites
+   whatever the tick-0 settlement produced. (Skipped when a save was
+   restored.)
+6. the save bank, if open, is closed and freed;
+7. for every slot that owns an AI record (§3 step 24 — humans included), the
+   **metal-spot list** is rebuilt: every cell of the grid is visited in row
+   order and each cell whose feature definition has a non-zero metal value and bit
+   1 of its flag byte set (the census of [05 R-FEAT-01 §6]) appends `(cellX, cellY, metal)` to the record's
+   vector ([05 R-PROD-01 §6] reads it);
+8. the *battle ready* bit is set; the worker returns.
+
+**Load path summary (kinds 1/2/3 with an in-battle save).** §2 seeding and
+words (with the `Player%i` controller restore) → §3 world rebuild in full,
+including the AI constructors' draws and pool sizing from the *current*
+lobby limit → no placement, no grant → §7 visibility rebuild on an empty
+pool → the restoration dispatcher ([R-SAVE-02 §11]) → GUI → phase priming
+on the restored world at the **restored** global tick (the per-slot timers
+restored by `Players` decide whether the 30-tick block fires) → no grant →
+bank closed → metal-spot lists → ready. The scheduler block restored by
+`Players` is what §9 sees.
+
+### Closed — the pre-tick state and the first pump [R-ENTRY-01 §9] (2026-08-29)
+
+**Established — state at the handoff (fresh battle).** Global tick 0;
+pending ticks 0; fractional carry 0; scaled-clock anchor = the instant of
+§3 step 21 (world rebuild), **not** the handoff instant; slew counter 0;
+pause bit clear; commander-death countdown −1; wind deadline 0 (so the
+tick-1 wind chain of [R-CORE-02] fires); every per-slot 30-tick timer =
+30 (advanced by the priming); the sim stream has consumed: eight draws per
+AI record (slot order), then two per commander/mission unit allocated (in
+the §5/§6 order), then whatever the priming's AI tasks drew.
+
+**Established — the first pump.** The loading state's handoff frame calls
+the battle pump once. Single-player: pause bit clear → the budget routine
+of [01 §4.2] runs with `delta = now − anchor`, i.e. the wall-clock time
+between the world rebuild and the handoff (the rest of loading: spawner,
+GUI, priming, metal scan), and `ticks = trunc(delta × activeSpeed × 0.1 +
+carry)`, clamped: `< 6` keeps it (and steps the slew counter down), else
+**5** (and steps the slew up). A non-zero budget runs the tick executor
+for that many consecutive sub-ticks *in the loading state's frame*; a zero
+budget (only when the remaining load took under one scaled-clock unit at
+speed 10, [01 §4.1]) defers the first tick to the battle state's first frame. Then the
+presentation refresh, and the state switch. Multiplayer runs the budget
+and the network-gated executor instead (OOS).
+
+**Supported inference.** Because the rest of loading is far longer than
+six tenths of a second on retail hardware, the first pump runs five ticks
+back-to-back in practice. Settled by a manual retail observation of the
+game-time counter at the first rendered battle frame.
+
+### Corrections and cross-document needs [R-ENTRY-01 §10] (2026-08-29)
+
+1. **"Timing is fixed" (above) — order.** It said "then the sparse two-pass
+   spawner runs, then visibility and mapping are rebuilt, then the first
+   authoritative tick runs". Wrong on two counts: the visibility rebuild
+   runs **before** the spawner (§6/§7), and between the spawner and the
+   first tick come the GUI load, the **per-player phase priming at tick
+   0**, the second grant and the metal-spot scan (§8). Its "camera focus is
+   chosen, then the spawner" is also reversed for the campaign camera,
+   which runs after the spawner (§6).
+2. **"Randomization for skirmish starts" (above).** "bounded by map
+   dimension in cells minus 160, then offset by 80 cells" — the words are
+   the TNT extents × 16, i.e. **world units** ([R-CORE-02] had it right).
+   "the lookup … leaves the jitter untouched and can emit a diagnostic
+   without crashing" conflates two paths: kind 3 keeps the jitter with no
+   diagnostic; kind 2 has no jitter and a miss is fatal (§5).
+3. **[R-SKIR-01 §2] order line.** "session words → placement stamps →
+   grant → world rebuild → main GUI …" — the world rebuild precedes the
+   stamps (§3 before §5). The rest of that line holds.
+4. **Doc 01 [R-CORE-02] and [R-DET-01 §5], doc 06 [R-WFX-01 §6] —
+   cross-doc need.** "Both writes land in the calling (main) thread's
+   state" and "every draw made before battle entry is wiped" are inverted
+   for the CRT stream: the reseed lands in the *worker's* thread block and
+   dies with it; the main thread's CRT state carries the front-end draws
+   into the tick's CRT consumers unbroken (§2). The 391,606 explosion-frame
+   draws are made **per battle, on the worker, after the worker's reseed**
+   — not "at process startup" and not "wiped by the battle-entry reseed"
+   (§3 step 26). Doc 01 §5.1's "No gameplay worker pool" should name the
+   loading worker (it runs no tick, but it runs all of battle entry).
+   Doc 01's "Before the first tick" table should add the priming's AI-task
+   draws (§8 step 4) and move the explosion draws to a per-battle row.
+5. **[R-SAVE-02 §11] — cross-doc need.** "Summary `maxunits` → Players →
+   …" is the restore order, but the unit pool was already sized before the
+   restore (§6). A loaded skirmish uses the current registry limit.
+6. **Doc 04 §3.6** says the interpreter runs "before any creation script,
+   movement, or visibility publication for that tick" — true, and now
+   more precisely: after the §7 rebuild and before the tick-0 priming.
+
+### Open — what this unit did not close [R-ENTRY-01 §11] (2026-08-29)
+
+Listed in the tail with deciders: the identities of the eleven interface
+words the world rebuild resets; the writers of the requested/active speed
+words for kinds 1 and 2 (they are not written at entry); which chat
+targets the routing bit of the "local-authority" flag selects; the external
+post-placement hook the multiplayer path calls (OOS).
 
 
 ## Victory and defeat triggers
@@ -1697,7 +2113,7 @@ twice with identical values;
 the campaign branch of the pass uses the mission's authored values and the
 multiplayer branch `hostShort * 100`. Order within battle entry: session
 words → placement stamps → grant → world rebuild → main GUI → per-player
-phase primed → grant again → session start flag. Nothing here draws from
+phase primed → grant again → session start flag. (**Corrected 2026-08-29:** the world rebuild precedes the stamps — [R-ENTRY-01 §3], [R-ENTRY-01 §10].) Nothing here draws from
 the simulation stream.
 
 **Save persistence.** The save `Summary` account records, for session kind 2
@@ -5264,7 +5680,11 @@ owner's name and posts it as a status line of class 4 attributed to the
 owner's slot. The eight-entry table (`has been obliterated`, `has been
 liquidated`, `has been eradicated`, `has terminated`, `has bowed out`, `has
 gone to a better place`, `has been shown the door`, `has left the scene`) has
-**no reference in the image** — dead data. **Determinism:** the draw is on
+no reference on the single-player path — but it is **not** dead data: the
+multiplayer (kind 3) elimination branch of the same death handler reads it
+with a CRT draw masked to eight entries and posts the line locally (corrected
+2026-08-29 against [01 R-DET-01 §6]; the earlier text said "no reference in
+the image"). **Determinism:** the draw is on
 the **CRT** stream [01 §7.2] and happens inside the tick, so a skirmish
 elimination advances the CRT stream by one draw; the simulation stream is
 untouched. Campaign sessions post nothing.
@@ -5387,6 +5807,21 @@ finding. The recitals are deleted here only; the body sections and the
   reads their static table · [R-SKIR-01 §11] · asset census, then static
   trace.
 - Presentation of meteors outside the world renderer · doc 03 · static trace.
+- The identities of the eleven interface words and the one flag word the
+  world rebuild resets before loading content · [R-ENTRY-01 §3] · static
+  trace of their readers (doc 07).
+- The writers of the requested/active speed words in effect at a fresh
+  campaign or skirmish battle (entry writes them only for multiplayer) ·
+  [R-ENTRY-01 §3], [R-ENTRY-01 §9] · static trace of the speed words'
+  writers (options screen / registry).
+- Which chat targets the routing bit set from the "local-authority" flag
+  selects · [R-ENTRY-01 §2] · static trace of the chat target mask (doc 07).
+- Whether the first pump's budget is five ticks in practice ·
+  [R-ENTRY-01 §9] · manual retail observation of the game-time counter at
+  the first battle frame.
+- The four presentation helpers of the handoff frame, and the external
+  post-placement hook of the multiplayer path · [R-ENTRY-01 §1],
+  [R-ENTRY-01 §5] · static trace (doc 07; the hook is OOS).
 
 ### Computer player
 

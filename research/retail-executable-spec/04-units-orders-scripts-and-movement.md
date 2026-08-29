@@ -710,6 +710,17 @@ set. Because the tombstone test compares against the front anchor regardless
 of which segment the removed record lived in, `BuildWeapon`/`SelfDestruct`
 removals are effectively always tombstoned and never emit that notification.
 
+### Closed — the idle-queue refill from `defaultmissiontype` (2026-08-29)
+
+**Established ([02 R-KEYS-01 §1]).** When a unit's order queue is empty, its
+owner's controller type is 1 or 2, and the definition's compiled
+`defaultmissiontype` code is non-zero, the primary queue pump allocates a
+fresh order record carrying that mission code and pushes it as the unit's
+standing task; a zero code (empty or unrecognised name) leaves the unit idle.
+The name is resolved through the same mission-type vocabulary as
+`InitialMission` (§3.6). This is the only reader of the key; doc 02 owns the
+parse.
+
 ### Closed — handler retry and pre-reject mapping [R-ORDER-02 §1] (2026-08-27)
 
 This closure answers the open orders question that the per-handler
@@ -7718,8 +7729,11 @@ visible symptom (a unit reporting a fresh path request while circling inside
 one cell), which is *Observed*-grade only and changes no contract.
 
 **Established — the save bit.** The mover box's final byte carries mode in
-bits 0–1 and the blocked flag in bit 2; the box's second unnamed 32-bit word
-is the mover's **last-stamp tick** (the occupant-age clock), and the
+bits 0–1 and the blocked flag in bit 2; the box's one unnamed 32-bit word
+(the box is 35 bytes — velocity ×3, lean ×3, speed, 16-bit turn residual,
+this word, flag byte [08 R-SAVE-02]; the earlier "second unnamed word"
+wording assumed a seven-field layout that does not exist) is the mover's
+**last-stamp tick** (the occupant-age clock), and the
 last-proposal tick is **not** saved — after load the hover bob's age term
 starts from whatever the load path stamps. (Naming for doc 08; RWU-08-4.)
 

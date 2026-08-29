@@ -53,6 +53,9 @@ Rules established by the retail corpus and community documentation:
 
 ### `gamedata/` — global tables
 
+The movement-class, side-data and sound-category keys the executable reads
+are tabulated with their consumers in `[02 R-KEYS-01 §5]`.
+
 **SIDEDATA.TDF** — the two sides and the initial build tree. `[SIDE0]` /
 `[SIDE1]` define per-side identity and HUD layout, with nested rectangle
 sections; the `[CANBUILD]` section lists what each stock unit can build.
@@ -170,6 +173,9 @@ resources; no gameplay effect.
 
 ### `features/` — map features and corpses
 
+The executable-read feature keys, with accessor, width, default and consumer,
+are tabulated in `[02 R-KEYS-01 §5]`.
+
 Feature definitions describe reclaimable/destructible map objects: trees,
 rocks, metal deposits, geothermal vents, and unit corpses (`_dead` /
 `_heap`). Files group many `[featurename]` sections. Real example — the ARM
@@ -237,6 +243,12 @@ misspells the reclaim successor as `featurereclamamate`; the read spelling is
 `featurereclamate`.
 
 ### `weapons/` — weapon definitions
+
+Every weapon key the executable reads, with its accessor, stored width,
+default and consumer section, is tabulated in `[02 R-KEYS-01 §5]`; the
+`[DAMAGE]` block's construction (and the fact that a same-`ID` re-parse
+*appends* to the earlier record's override table rather than replacing it)
+is `[06 R-DMG-01 §1]`.
 
 Weapon sections are referenced by name from FBI `Weapon1..3=` and from OTA
 `MeteorWeapon=`. Retail data spreads them over `weapons/*.tdf` (WEAPONS,

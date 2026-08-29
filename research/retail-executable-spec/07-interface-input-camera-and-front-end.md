@@ -158,6 +158,434 @@ The observed input path has these conceptual phases:
 5. Dispatch remaining tokens to the battle or front-end state machine.
 6. Recompute dirty presentation state and redraw.
 
+### Closed — the host frame: where input becomes simulation state [R-CAM-01 §1] (2026-08-29)
+
+**Established fact — one host frame, in order.** The battle frame handler
+(the pointer/cursor update of §8, installed as the mode's frame function)
+runs the following, in this order, once per host frame:
+
+1. **Pointer classification** — the canonical pointer record (§2 "Mouse
+   records") is classified against the minimap rectangle and the view
+   rectangle, producing the pointer's world position and the region bits
+   consumed by the click paths (§10 [R-CAM-01 §11]).
+2. **Click dispatch** — the record's message number (`0x201`/`0x202` left
+   down/up, `0x204`/`0x205` right down/up) selects the world-click, drag-
+   rectangle, minimap-latch, or cancellation path (§9, and [R-CAM-01 §5] for
+   the `LEFTCLICK` polarity). World clicks that produce orders enter the order
+   dispatcher **here**, before this frame's simulation ticks.
+3. **Outer frame** (the battle host pump): the tick-budget step of
+   [01 §4.3] runs first and, as a by-product, stores the **raw wall-clock
+   delta** — the scaled `GetTickCount()` reading of §2 (`GetTickCount() ×
+   timeScale / 1000`) minus the previous frame's reading — that the scroll
+   pass below consumes. Then every runnable sub-tick of [01 §4.4] executes,
+   phase 10 (follow camera and shake, §10) included, once per sub-tick.
+4. **Hotkey dispatch** — exactly **one** keyboard token is popped from the
+   30-slot ring and dispatched (the census in [R-CAM-01 §2]). A second token
+   waits for the next host frame.
+5. **Scroll pass** — the host-frame camera writer of [R-CRD-006 §1] runs
+   once, with the delta from step 3 ([R-CAM-01 §10]).
+6. **Hover refresh, then HUD composition** — the pointer update recomputes
+   hover state, and the composer draws the frame.
+
+Keyboard auto-repeat needs no policy of its own: the window procedure
+enqueues one token per repeated `WM_KEYDOWN` (§2) and step 4 drains one per
+host frame, so a held key repeats at the OS repeat rate bounded above by the
+frame rate, with at most 29 tokens backlogged.
+
+Steps 4 and 5 are skipped entirely while the in-game options window is open
+(the battle-interface ESC bit of §11); steps 3–5 are skipped in favour of
+the GUI pump while a modal front-end window has focus. In single-player
+(non-network) mode, step 3 also skips the budget step — and therefore does
+**not** refresh the raw delta — while the pause bit is set: edge and keyboard
+scrolling while paused reuse the last delta computed before the pause, which
+is the delta of the frame in which pause was pressed.
+
+**Established fact — the presentation/simulation seam.** Everything above
+the line is presentation: the camera origin, the follow target, the shake
+state, the pointer record, the hover list, the chat overlay, the message
+ring, and the interface options are host-frame state that no simulation
+phase reads back into unit state. The inputs that *do* become simulation
+state are: orders produced by world clicks and by the command palette
+(dispatched in step 2 of the frame in which the click record is consumed —
+so they are visible to the **next** frame's sub-ticks, never to sub-ticks of
+the frame that produced them); the hotkey actions of [R-CAM-01 §2] that call
+the order dispatcher (self-destruct, group assignment writes the per-unit
+group word, selection writes the per-unit selected bit — selection and the
+selectable/alive status bits are the same words the trigger system tests
+[08 R-TRIG-01 §5]); pause and game-speed changes, which write the speed
+state of [01 §4.3] in step 4 and are therefore consumed by the following
+frame's budget step; and chat `+` commands, which run their handler in the
+chat commit callback of §5 (a GUI-pump callback, i.e. before step 3 of the
+next frame). The raw wall-clock delta feeds only the tick budget and the
+scroll pass; the only wall-clock value that leaks into authoritative state
+is the hover bob of [01 §7.4], which is a separate sampler.
+
+### Closed — the battle hotkey census [R-CAM-01 §2] (2026-08-29)
+
+**Established fact.** The battle hotkey dispatcher pops one token (§2 token
+model) and switches on it. Shift, Ctrl and Alt are **held-key queries**
+(`0xF9`, `0xFA`, `0xFB`) made at dispatch time, not part of the token, except
+that Ctrl composition is already folded into the token by the translator
+(`Ctrl+A..Z` → `0xAA..0xC3`, `Ctrl+0..9` → `0xC4..0xCD`, `Ctrl+F1..F12` →
+`0xCE..0xD9`) and Shift reaches the dispatcher as the shifted `WM_CHAR`
+character for printable keys. "Own selectable unit" below means a unit in the
+local player's slot range whose status word has the selectable bit set, whose
+build-progress fraction is `0.0`, whose transporter reference is null, and
+whose carrier reference is either null or itself marked as a visible carrier
+— the same predicate the rectangle selection of §9 uses; the selectable bit
+is the status bit the trigger system reads [08 R-TRIG-01 §5]. "Cue" means
+the named sound cue played through the interface sound path.
+
+| Token | Key | Action |
+|---|---|---|
+| `0x09` | Tab | In battle mode (mission-mode word `3`) with chat inactive: toggle `TABMENU.GUI` (§11). In any other mode Tab falls through to the F2 case below. |
+| `0xE3` | F2 | Shift not held: if the options window is not open, open `ARMOPT.GUI` and set the ESC bit (§11). Shift held: arm the **Unit Builder Probe** diagnostic overlay on the hovered unit (clears it when nothing is hovered). |
+| `0x0D` | Enter | `SmallButton` cue; open chat (§5 "Chat"). |
+| `0x1B` | Escape | Options window open: close it and clear the ESC bit. Otherwise, if the armed-order latch is idle (`1`): deselect everything (the `deselect all` path also runs the selection-changed refresh); if a latch is armed: return it to idle, clear the Shift-latch persistence bit, and reset the palette's default control. |
+| `0x21` `0x23` `0x2A` `0x60` `0x7E` | `!` `#` `*` `` ` `` `~` | Toggle the persistent "label every unit" bit (interface-flags byte bit 0) and write all settings to the registry. The composer reads it: with the bit set every on-screen own unit gets its unit marker and its group digit; with it clear only grouped units get the digit. |
+| `0x2B` `0x3D` | `+` `=` | Game speed up by one ([R-CAM-01 §3]); refused in developer film mode, for a watching player (the same player-record bit that gates `SHARE.GUI` and the Tab menu's diplomacy gadgets — *Supported inference* on the bit's name), and when the speed is already `20` (`> 19` test on the unsigned target word). |
+| `0x2D` `0x5F` | `-` `_` | Game speed down by one; refused under the same gates and when the speed is below `2`. |
+| `0x2C` | `,` | Previous build page of the current build-menu unit (`nextbuildmenu` cue) [R-P0-11]. |
+| `0x2E` | `.` | Next build page (`nextbuildmenu` cue). |
+| `0x31..0x39` | `1..9` | Build-page / group-recall mux under the `SwitchAlt` option ([R-CAM-01 §4]); group recall takes Shift as its additive argument and plays `SelectSquad`. |
+| `0x54` `0x74` | `T` `t` | Set the follow-camera tracked object to the **previous** (`T`, Shift held) or **next** (`t`) selected unit after the current tracked object in unit-slot order, wrapping within the local slot range; with nothing selected the tracked object becomes null ([R-CAM-01 §12]). |
+| `0x5C` | `\` | Developer mode only: re-run the last `+` command ([R-CAM-01 §9]). |
+| `0x68` | `h` | Battle mode, non-watcher: open `SHARE.GUI` (resource sharing, doc 05). |
+| `0x6E` | `n` | Find the next own unit not yet visited by this cycle (per-unit visited bits `0x40`/`0x80` of the status word), glide the camera to it ([R-CAM-01 §12]), record it as the current unit word (a HUD word — *Supported inference* on its reader) and mark it and every on-screen own unit visited; it does **not** change the selection. When every unit has been visited, clear the visited bits on all units and restart. |
+| `0xAA` | Ctrl+A | Select every own selectable unit (additive over the current selection), clear the current build-menu unit, `selection changed` refresh. |
+| `0xAC` | Ctrl+C | Select the own selectable units whose definition is in the authored `CTRL_C` category set (replacing the selection unless Shift is held), then set the follow-camera tracked object to the last own unit in the `Commander` category set — the camera follows the commander ([R-CAM-01 §12]). |
+| `0xAD` | Ctrl+D | Self-destruct: resolve the `SELFDESTRUCT` order descriptor; for every selected unit that carries that button, fire the button's script path; if no selected unit had the button, issue the order through the order dispatcher for the selection. |
+| `0xAB` `0xAE..0xBB` `0xBD..0xC2` | Ctrl+B, Ctrl+E..Ctrl+R, Ctrl+T..Ctrl+Y | Category select: format `CTRL_%c` with the uppercase letter and select the own selectable units whose definition is in that category set (Shift adds to the selection, otherwise units outside the set are deselected). Stock content authors `CTRL_B`, `CTRL_C`, `CTRL_F`, `CTRL_M`, `CTRL_P`, `CTRL_R`, `CTRL_V`, `CTRL_W` (asset census, 278 FBI files); every other letter selects nothing. |
+| `0xBC` | Ctrl+S | Select every own selectable unit in the on-screen list (§8) — replaces the selection; no-op refresh when the list yields none. |
+| `0xC3` | Ctrl+Z | Select every own selectable unit whose definition id matches any currently selected unit's definition (a 256-bit definition mask built from the selection). |
+| `0xC5..0xCD` | Ctrl+1..Ctrl+9 | Assign group `1..9` to the selection (§9 "Control groups"); `CreateSquad` cue. Ctrl+0 (`0xC4`) has no case. |
+| `0xD2..0xD5` | Ctrl+F5..Ctrl+F8 | Store camera bookmark `0..3` = current camera origin, mark it valid; `SelectSquad` cue. |
+| `0xE6..0xE9` | F5..F8 | Recall bookmark `0..3` ([R-CAM-01 §12]); `SelectSquad` cue. Recalling an unwritten bookmark loads whatever the (zero-initialised) slot holds. |
+| `0xD6` | Ctrl+F9 | Screenshot — consumed by the input pass before the dispatcher (§2 "Input ordering"). |
+| `0xD7` | Ctrl+F10 | Developer mode only: start/stop the movie capture series ([R-CAM-01 §8]). |
+| `0xE2` | F1 | Shift not held: open `UNITINFOx.GUI` for the hovered unit (or the build button's product when a build button is hovered) — the unit-info panel of §6. Shift held: arm the **Unit State Probe** diagnostic overlay on the hovered unit. |
+| `0xE4` | F3 | Clear the "visited" bit on all thirty message-ring records, then glide the camera to the first message whose source unit is alive and not yet visited (marking it visited); if none, clear the visited bits and retry once ([R-CAM-01 §12]). |
+| `0xE5` | F4 | Toggle interface-flags bit `0x80`. Its two readers are presentation: the HUD side-panel slide treats the bit as "Space held" (the panel stays extended while it is set), and the kill announcement path arms two 30-frame counters (killer's player index, victim's side) on each kill only while the bit is set. **Unknown:** the user-facing name and the counters' visible effect · static trace of the composer / manual retail observation. |
+| `0xEC` | F11 | Developer mode only: toggle film mode ([R-CAM-01 §9]). |
+| `0xED` | F12 | Clear the message ring (producer and display indices both reset to zero). |
+| `0xF8` | Pause | Toggle the local pause bit and emit packet `0x19` with sub-kind `0` and the new bit ([01 §4.3]). |
+
+Tokens with no case (including `0x20` Space, digits with Ctrl+0, and every
+`0xF0..0xF7` navigation token) are dropped by the dispatcher; the arrow
+tokens are never dispatched at all — scrolling uses the held-key queries
+in the scroll pass, not the ring.
+
+**Established fact — Escape versus F2.** Earlier text in §2 and §11 calls
+token `0xE3` "the ESC-menu path". `0xE3` is **F2** under the translator
+table of §2 (F1..F12 → `0xE2..0xED`); Escape reaches the dispatcher as the
+`WM_CHAR` value `0x1B`, whose case is the cancel/close chain above. The
+options window is therefore opened by F2 (or Tab outside battle mode) and
+closed by either F2 or Escape. The "ESC bit" name for the battle-interface
+state bit is kept because it is the bit Escape clears.
+
+### Closed — the game-speed hotkey and its announcement [R-CAM-01 §3] (2026-08-29)
+
+**Established fact.** Speed changes from the hotkeys, the `GAME` slider of the
+interface options ([R-CAM-01 §7]) and the `+`-command path all go through one
+setter taking the requested speed and a "send" flag:
+
+```
+s = requested; if (s > 20) s = 20; if (s < 1) s = 1      (signed compares)
+if (s != targetSpeed) {
+    text = (s == 10) ? translate("Game Speed Normal")
+                     : sprintf("%s  %c%d\n", translate("Game Speed"),
+                               (s - 10 > 0) ? '+' : ' ', s - 10)
+    post text to the message ring, kind 2, no unit, silent ('\n')
+}
+targetSpeed = currentSpeed = s          (both 16-bit words)
+if (send) emit packet 0x19 sub-kind 1 with byte s
+```
+
+The hotkey path passes `send = 1` and computes `requested` as the target
+word ±1; the announcement therefore prints the **offset from normal**
+(`Game Speed  +3`, `Game Speed   -2` — a space precedes negative values,
+whose sign comes from `%d`). The HUD's own speed line (`Game Speed: Normal`
+or `%+d`, with ` (%+d)` appended while the adapted current speed differs
+from the target) is a separate formatter in the composer. The speed state
+and its adaptation are [01 §4.3]; this closure supplies the clamp bounds and
+the announcement, which that section left unstated.
+
+### Closed — `SwitchAlt` [R-CAM-01 §4] (2026-08-29)
+
+**Established fact.** `SwitchAlt` is a persistent interface option: registry
+value `SwitchAlt` (DWORD, absent → `0`; bit 0 kept) stored as bit 8 of the
+interface-flags word — the "battle-mode flag & 1" of §9's digit-key gate is
+this bit, not a battle-mode flag. **Correction:** §9 "Digits `1..9` … under an
+exact battle-mode/Alt gate" named the bit wrongly; the gate is
+
+```
+switchAlt = SwitchAlt option bit
+alt       = Alt held (0xFB)
+if (switchAlt == alt) -> build page (digit - 1) of the current build-menu unit
+else                  -> group recall(digit, shiftHeld) + SelectSquad cue
+```
+
+i.e. by default digits pick build pages and Alt+digit recalls groups; with
+`SwitchAlt` set, digits recall groups and Alt+digit picks build pages. The
+build-page branch is a no-op (no cue) when there is no current build-menu
+unit or the digit exceeds its page count. The bit has no other reader in the
+image. It is set by the registry loader, by the interface options' write-all
+path, and by the chat command `+SwitchAlt` — with no argument it toggles the
+bit and writes the registry; with an argument it stores `arg & 1` without
+writing ([R-CAM-01 §6]).
+
+### Closed — `LEFTCLICK`: mouse-button polarity [R-CAM-01 §5] (2026-08-29)
+
+**Established fact.** The interface options' `LEFTCLICK` two-stage button
+(`Left Click|Right Click`, `SPEEDS.GUI`; the `Button Interface` label) writes
+a dword, persisted as registry `Interface Type` (absent → `0`), also set by
+`+IFace n`. Its value gates the click dispatch of the frame handler and the
+world-click cursor resolver:
+
+* **`0` (`Left Click`, default)** — the polarity §9 documents as closed:
+  left down over the world starts the drag rectangle; left down over the
+  minimap issues the armed order / world click at the minimap's world point
+  (the hover conversion of [R-CAM-01 §11]); right down with an order armed
+  returns the latch to idle wherever the pointer is; right down over the
+  world view with **Ctrl** held starts the cursor-warp drag-scroll mode
+  ([R-CAM-01 §11]), without Ctrl it deselects; right down over the minimap
+  sets the minimap-latch bit (a right-drag on the minimap pans the camera).
+  The latch is released by right up (`0x205`).
+* **`1` (`Right Click`)** — left down over the world still starts the drag
+  rectangle and left down over the minimap sets the **minimap latch** (camera
+  jump every frame while held, released by left up `0x202`); left click on
+  empty ground with the latch idle **deselects** (the world-click handler's
+  extra case); right down over the world with the pointer's region bit 2
+  set issues the armed or contextual order at the pointer's world point
+  through the order dispatcher; the cursor resolver's left-button column
+  returns the plain select cursor (`0xF`) over own selectable units and the
+  ally/enemy cursors (`0x11`/`0x12`) over others instead of the order
+  cursors, and consults the definition's order-capability bits for the
+  right-button column.
+
+**Correction.** §9 "Mouse-button assignment is closed … no right-button path
+queues an order" holds only for `Interface Type = 0`; under `1` the
+right-button path queues orders. The paragraph stays as the default-polarity
+description. **Unknown:** the complete right-button cursor column under
+`Interface Type = 1` (which latch shapes it offers) · §8 static trace of the
+cursor resolver's second case family.
+
+### Closed — the chat `+` command vocabulary [R-CAM-01 §6] (2026-08-29)
+
+**Correction.** §5 "Chat" said the `+` vocabulary was closed at three AI
+tuning commands (`plan`, `weight`, `limit`, mask 8) registered by the
+message-builder and that the default-handler slot was never installed, so
+"the dispatch never consumes a chat `+` message". That reading covered only
+the AI registrar. The **battle entry orchestrator** registers three more
+tables into the same sorted command vector and installs the default handler;
+83 commands are dispatchable from chat. The inline `+<digit>`/`+a`/`+e`
+mini-language described there is unchanged and runs **after** the command
+dispatch on the same text.
+
+**Established fact — dispatch mechanics.** A `+` line is copied (at most 79
+bytes) into a persistent last-command buffer, tokenised into up to 20
+whitespace-separated words (a `#` ends the line; words keep their case; the
+word storage is 126 bytes), and the first word is looked up in the command
+vector by **case-insensitive** binary search. The entry's route mask is ANDed
+with the caller's route word: on a nonzero result the entry's handler runs and
+the entry's mask is returned; otherwise, if a default handler is installed
+and its mask matches, the default handler runs and its mask is returned;
+otherwise `0`. The chat route word is `1 | 2` in ordinary play (the "referenced
+dword" of §5 is a constant `1` in the image, so bit 2 is always present) and
+`1 | 2 | 4` in developer mode ([R-CAM-01 §9]). After dispatch the line —
+including the `+` — is still sent as ordinary chat; when the returned mask has
+bit 2 the outgoing recipient mode is forced to `0` (everyone), so a cheat is
+broadcast to all players. `Cheat Codes` as a game option is a multiplayer
+lobby word [08 R-SKIR-01 §11]; the single-player path consults no cheat gate
+— every mask-1 and mask-2 command below is live in skirmish and campaign.
+**Unknown (out of scope):** how the multiplayer receive path applies the
+lobby bit before re-dispatching a received `+` line.
+
+Handlers read word *n* as text or as its integer value (`atoi` semantics;
+absent words read as `0`). `flags` below means the mode-flags word that also
+holds the developer bit; `interface flags` the word of [R-CAM-01 §4]; `render
+flags` the terrain-render flags word; "write settings" the registry write-all
+path. Player-slot arguments are valid when `0..9`, the slot is occupied, its
+controller kind is `1..3` and its side byte is not `10`.
+
+**Mask 1 — settings and information (43):**
+
+| Command | Effect |
+|---|---|
+| `NoShake` | toggle flags bit 4 (camera shake suppression) |
+| `Contour` | word 1, word 2 as floats × 256, truncated, into the two contour-line parameters |
+| `ScrollSpeed n` | scroll setting byte = `n` (low byte); write settings ([R-CAM-01 §10]) |
+| `IFace n` | `Interface Type` = `n`; write settings ([R-CAM-01 §5]) |
+| `Give p n metal` / `Give p n energy` | valid slot `p`: transfer `n` (as a float) of the named resource from the local player to slot `p` through the sharing transfer of doc 05 (word 3 compared case-insensitively) |
+| `CDPlay n` / `CDStop` | CD audio track play / stop (doc 03 audio) |
+| `Sound3D` | toggle the 3D-sound state of the audio device; write settings |
+| `Shading` `AntiAlias` `Shadow` | toggle interface bits `0x20`, `0x02`, `0x04`; rebuild the terrain renderer; write settings |
+| `Dither` | toggle interface bit `0x40`; write settings |
+| `SwitchAlt [n]` | [R-CAM-01 §4] |
+| `TShadow` `FShadow` | toggle interface bits `0x08`, `0x10` (no write) |
+| `LOSType` | toggle render-flags bit 2; refresh the visibility presentation |
+| `Light a b c` | three integer light parameters into the renderer; rebuild |
+| `RCache` | rebuild the terrain renderer |
+| `Selectable` | set the selectable bit on every unit whose status word has bit 28 (alive) set |
+| `MusicMode n` | music mode `n` into the audio device |
+| `Logo n p` | valid slot `p` and `0 ≤ n <` logo count: slot `p`'s side/logo byte = `n`; renderer rebuild; otherwise post `Invalid logo setting` |
+| `ScreenChat` | toggle the screen-chat dword; write settings |
+| `Gamma n` | gamma = `n × 0.1` into the display; store `n`; write settings |
+| `Clock` | toggle flags bit 6 (clock display); write settings |
+| `NetStats` | reset the network statistics block |
+| `Sing` | toggle the "sing" flag read by the unit-chat voice path ([R-CAM-01 §7]) |
+| `NoMetal [p] n` / `NoEnergy [p] n` | slot `p` (own slot when one argument): metal / energy stock = float(`n`) — 1-argument form writes the local player |
+| `BigBrother` | toggle a camera-flags bit; when set, write `1` to a companion camera word; when cleared, cancel the follow target ([R-CAM-01 §12]). **Unknown:** the companion word's reader · static trace |
+| `Now Film Chris Include Reload Assert` | exactly six words with these exact (case-sensitive) spellings: set the developer bit; any other `+Now …` clears it ([R-CAM-01 §9]) |
+| `Drop n` | flags bit 0 = (`n == 0`) |
+| `ShootAll` | toggle flags bit 10 |
+| `ShareMetal` `ShareEnergy` `ShareMapping` `ShareRadar` | network mode only: toggle the local player's share bits (`2`, `4`, `0x20`, `0x40`), post `Toggled ShareX to: ON/OFF`, resend the player record (doc 05 [R-SHARE-01]) |
+| `ShareAll` | the four toggles in sequence |
+| `ShowRanges` | toggle the range-ring overlay dword (§6 [R-P0-11 §3]) |
+| `SetShareMetal n` / `SetShareEnergy n` | network mode only: share threshold = `n` when `n` is not above the storage capacity, else the capacity; post `OK.  Will share metal if above %d` |
+| `Compression` | network mode only: toggle outgoing packet compression; post `Ok.  Outgoing packet compression turned ON/OFF` |
+| `BPS` | toggle the bytes-per-second display dword |
+| `SFX` | toggle the sound-effects debug byte |
+
+**Mask 2 — cheats (10):**
+
+| Command | Effect |
+|---|---|
+| `Radar` | toggle flags bit 9 (full radar) |
+| `ATM` | local player: metal += `1000.0`, energy += `1000.0` (float adds, no cap) |
+| `View p` | valid slot `p`: the viewing player index = `p` |
+| `LOS` | toggle render-flags bit 1; refresh visibility presentation; write settings |
+| `Mapping` | toggle render-flags bit 0 (mapped); refresh; write settings |
+| `DoubleShot` | toggle flags bit 7 |
+| `HalfShot` | toggle flags bit 8 |
+| `NowISee` | clear render-flags bits 0 and 1; refresh |
+| `Meteor [n]` | one word: meteor event; `Meteor n`: `n ≠ 0` → one meteor kind, `0` → the other (doc 03 / doc 06 effects) |
+| `MakePoster …` | write a `BIGSHOT` capture into `<install>\screenshots` and reset the wall-clock base (argument grammar not traced — **Unknown**, static trace; developer tooling) |
+
+**Mask 4 — developer (30, plus the default handler):** `AI p` (toggle slot
+`p` between AI and human control), `Control p q` (viewing/controlling
+indices), `Kill [p]`, `IWin`, `ILose` (set the outcome bits and end the
+battle), `Film name` (film recording flag and name), `FilmSpeed n`, `Assert`,
+`Assign order x y` (issue a named order at a point), `BurnAll`, `BurnOne`,
+`DebugBreak [1|2|3]` (allocation-exhaustion / divide-by-zero / break), `DPrint`,
+`Edge w h` (play-area extents), `Include name` (run `debugdat\name.txt` as a
+command script, one command per line), `Mem`, `MemDump` (creates
+`memdump.txt`), `Move x y` (camera-jump family), `PrintWeights p file`,
+`Profile`, `Reload unit` (reload one unit definition), `ReloadAIProfiles`,
+`Save name` (write `savegame\name.sav` with the description `Generic Game
+Description`), `SeaLevel n`, `Search x y r`, `SelBoxes` (flags bit 2),
+`TreeDeath` (flags bit 3), `Feature name` (spawn a feature at the pointer),
+`ZBuffer`. The **default handler** (mask 4) treats an unrecognised first word
+as a unit definition name and spawns one unit per matching definition for the
+viewing player at the pointer's world position, stepping the spawn point by
+32 world units per unit and wrapping at the play-area edge. `+syncerr` is a
+separate string with a network-only reader. None of these run outside
+developer mode. Their deeper effects are not part of the single-player
+contract and are recorded here only so the vocabulary is complete.
+
+### Closed — interface options (`SPEEDS.GUI`) and their consumers [R-CAM-01 §7] (2026-08-29)
+
+**Established fact — controls and storage.** The interface options screen
+opens `SPEEDS.GUI` (or `SPEEDSRT.GUI` from the in-battle options) with the
+`optinterface4x` art and binds:
+
+| Gadget | Kind | Runtime max | Stored value | Registry key (absent →) |
+|---|---|---|---|---|
+| `GAME` | slider | `21` | game speed (target and current words) | `gamespeed` (`10`) |
+| `SCREEN` | slider | `65` | scroll setting byte | `scrollspeed` (`32`) |
+| `TXTSCROL` | slider | `20` | text-scroll seconds dword; label `TEXTSCROLLTEXT` = `%d secs` | `textscroll` (`10`) |
+| `MAXLINES` | slider | `30` | message-line count dword; label `MAXLINESTEXT` = `%d`, or `None` when `0` | `textlines` (`10`) |
+| `LEFTCLICK` | 2-stage button `Left Click|Right Click` | — | `Interface Type` dword | `Interface Type` (`0`) |
+| `UNITCHAT` | 3-stage button `Off|Medium|Full` | — | unit-chat **text** level byte = stage × 5; displayed stage = byte ÷ 5 | `unitchattext` (`5`) |
+| `RESTORE` | button | — | speed `10`, scroll `32`, text-scroll `10`, lines `10`, `Interface Type 0`, voice level `10`, text level `5` | — |
+| `UNDO` | button | — | every value above restored from the copies taken when the screen opened | — |
+
+The registry `unitchat` value (absent → `10`) is the unit-chat **voice** level
+byte; it is edited from the sound options screen, not here. `SwitchAlt` has
+no gadget ([R-CAM-01 §4]).
+
+**Established fact — slider value mapping.** Every slider callback computes
+its value from the slider's knob position word `pos` and range word `range`
+(the widget model of §4; the range word is the authored `range` key per
+[fmt gui] — *Supported inference* on that identity, the widget unit owns it):
+
+```
+value = (range < 2) ? 0 : trunc( float(pos) / float(range - 1) * max )     x87 division then multiply, __ftol
+GAME:     value < 1  -> 1 ; then the speed setter of [R-CAM-01 §3] (which clamps 21 -> 20)
+SCREEN:   value <= 1 -> 1 ; stored as a byte (1..65)
+TXTSCROL: stored as is (0..20)
+MAXLINES: value < 0  -> 0 ; stored (0..30)
+```
+
+and the screen opener places each knob at
+`ceil( float(value) * float(range - 1) * (1/max) )` where `1/max` is a
+single-precision reciprocal constant (`1/21`, `1/65`, `1/20`, `1/30`): the
+product is truncated, and one is added when the truncated value differs from
+the product (an exact-integer test against `0.0`). The `GAME` slider is
+inert for a watching player.
+
+**Established fact — consumers.**
+
+* **`textlines` (MAXLINES).** The message poster: when the count is `0` the
+  message is **dropped** (no ring write, no `MessageArrived` cue). Otherwise,
+  when `(producer + 1) mod count == displayIndex`, the display index advances
+  first (dropping the oldest visible line); then the text is copied (64 bytes,
+  forced terminator), stamped with the current tick, kind nibble, source unit
+  and a silence byte; the producer advances mod 30; `MessageArrived` plays
+  unless the silence byte is `'\n'`. The composer draws at most `count` lines
+  walking back from the producer to the display index (fewer when the ring
+  holds fewer). This is the ring of §11 "Status scrollback".
+* **`textscroll` (TXTSCROL).** Once per host frame **after** the sub-tick
+  loop (so it runs whether or not any tick ran), if the ring is non-empty and
+  `messageTick + (seconds + 1) × 30 < currentTick` for the oldest displayed
+  line, the display index advances by one (mod 30). A line therefore stays
+  at least `(seconds + 1)` seconds of game time, measured in simulation ticks
+  — game speed changes stretch it.
+* **`unitchat` / `unitchattext` (UNITCHAT).** The unit acknowledgement path
+  (order acknowledgements, doc 04 [R-DET-01 §5]) plays the voice line only
+  when `10 - voiceLevel < ackPriority` (signed), a voice exists, the voice
+  argument is set and the sound-flags byte has bit `0x40`; it posts the text
+  line, kind 1 with the unit's id, only when `10 - textLevel < ackPriority`
+  and the unit is alive. With the `Sing` toggle set the voice path
+  substitutes one of two fixed sound names on `tick / 30 mod 8`. Levels are
+  bytes: `Off` = `0` (only priorities above 10 pass — none in stock content),
+  `Medium` = `5`, `Full` = `10`.
+* **`scrollspeed`** — [R-CAM-01 §10]. **`gamespeed`** — [01 §4.3].
+
+### Closed — movie capture series [R-CAM-01 §8] (2026-08-29)
+
+**Established fact.** Ctrl+F10 in developer mode toggles the capture series.
+Starting: scan `<screenshotDir>\MOVIE*` and take the largest numeric suffix
+found (the scan parses each name's digits), add one, format
+`<screenshotDir>\MOVIE%03i`, create that directory, capture one frame
+through the screenshot writer, and set the next-capture tick to the current
+tick. Stopping (the series counter is nonzero) clears the counter. While the
+counter is positive, the outer frame captures a frame whenever
+`nextCaptureTick <= currentTick`, then adds `30 / rate` (integer division;
+`rate` is registry `Movie Output Rate`, absent → `10`, also set by
+`+FilmSpeed`) to the next-capture tick and **resets the wall-clock base** so
+the capture time does not enter the next raw delta. `<screenshotDir>` is the
+`%s\%s` path built at startup from the install directory. The `Film`/
+`FilmSpeed` developer commands write the same rate and a recording flag.
+
+### Closed — developer mode [R-CAM-01 §9] (2026-08-29)
+
+**Established fact.** The developer bit (mode-flags bit 1) is set by the
+six-word `+Now` password of [R-CAM-01 §6] and by the registry pair
+`DisplaymodeDepth = 256` with `Games = 1` at load; it is cleared by any other
+`+Now …` line and by the loader otherwise. It gates: the mask-4 command table
+and default spawn handler; `\` (re-dispatch the last `+` line with every
+route bit); Ctrl+F10 (movie series); F11 — toggle **film mode** (mode-flags
+bit 1 of the second flags word), which on exit also clears that word's bit 0,
+zeroes the minimap mode byte and re-shows the HUD (on entry hides it). In
+film mode the dispatcher runs a second switch after the first on the same
+token: `=` copies every valid player's storage capacities into their stocks,
+`P`/`p` capture/release the pointer to the window, `]` sets the hovered
+unit's order-state byte to `10`, clears its order word and sets status bit
+`0x4000`, `i` toggles the second word's bit 0, `m` cycles the minimap mode
+byte `0..4`. Speed hotkeys are refused in film mode. `DebugBreak` additionally
+requires film mode. None of this is reachable in a stock configuration.
+
 ### Supported inference
 
 Input tokens should be generated from a compatibility key map rather than
@@ -174,13 +602,13 @@ middle-button/wheel default processing, drag/double-click capture into
 timestamped records, the `CF_TEXT`-only clipboard contract, and the mouse
 motion-record consumers are established above.
 
-- Consumer coverage: which battle and front-end input paths handle which
-  tokens beyond the hotkey dispatcher's cases · static trace.
+- Consumer coverage: the battle dispatcher's cases are the census of
+  [R-CAM-01 §2]; which front-end screen paths handle which tokens is per
+  screen (§5) · static trace.
 - The unsupported-device census · static trace.
 - Text-input code page and IME behavior · presentation-level platform detail;
   no retail contract observed beyond the ASCII token set. Marked `TODO(T23)`
   in the tail.
-- Keyboard repeat policy · static trace.
 
 
 ## 3. Modal windows, focus, and event ownership
@@ -934,7 +1362,9 @@ dword is nonzero. The `+` command vocabulary is closed: the message-builder's
 dispatch table registers exactly three commands — `plan`, `weight`, and
 `limit` — each with route mask 8 that no chat route (1/7/2) matches, and the
 default-handler slot is never installed, so the dispatch never consumes a chat
-`+` message. The chat commit callback itself handles the mini-language inline:
+`+` message. **Corrected in [R-CAM-01 §6]:** that census covered only the AI
+registrar; the battle entry orchestrator registers 83 more commands and the
+default handler, and the chat routes do match them. The chat commit callback itself handles the mini-language inline:
 `+<digit>` (occupied slot) sets the per-player custom-recipient byte for that
 digit, `+a`/`+e` (case-insensitive) set the recipient-mode byte to allies or
 enemies with the matching label, and any other `+...` sends the whole text as
@@ -2094,7 +2524,7 @@ After selection, one selected unit takes the single-unit presentation path
 and multiple units take the multiple-unit path; any change sets the dirty bit
 above and plays `SelectMultipleUnits` or the single select cue.
 
-**Mouse-button assignment is closed.** Every world action — single-unit picking, rectangle drag selection, building placement, and issuing every order including the contextual code 1 — is performed with the **left** mouse button. The **right** mouse button performs only deselection and cancellation: it cancels an armed order or build placement (returning the command latch to idle) or, when the latch is already idle, clears the current selection. The battle input pump routes left-button press and release through the single-click and drag-rectangle paths and the order dispatcher, while right-button press is routed exclusively to the cancellation path that returns the latch to idle and, when idle, clears selection; no right-button path queues an order. The cursor table shows the same polarity: every latch shape fires its order on left-click; the right-click column is empty or a transition back to the normal cursor [04 §3.4][07 §8].
+**Mouse-button assignment is closed (for `Interface Type 0`; the `1` polarity is [R-CAM-01 §5]).** Every world action — single-unit picking, rectangle drag selection, building placement, and issuing every order including the contextual code 1 — is performed with the **left** mouse button. The **right** mouse button performs only deselection and cancellation: it cancels an armed order or build placement (returning the command latch to idle) or, when the latch is already idle, clears the current selection. The battle input pump routes left-button press and release through the single-click and drag-rectangle paths and the order dispatcher, while right-button press is routed exclusively to the cancellation path that returns the latch to idle and, when idle, clears selection; no right-button path queues an order. The cursor table shows the same polarity: every latch shape fires its order on left-click; the right-click column is empty or a transition back to the normal cursor [04 §3.4][07 §8].
 
 Control groups store one group value per unit rather than membership bits in
 several groups. Ctrl+digits (tokens `0xC5..0xCD`) assign groups with the
@@ -2103,8 +2533,9 @@ catalog definition id; selected units (flag `0x10`) receive the requested
 group value, and unselected units already carrying that group have it zeroed.
 
 Digits `1..9` (tokens `0x31..0x39`) route between build-page selection and
-group recall under an exact battle-mode/Alt gate — Alt is held-key token
-`0xFB`, not Shift:
+group recall under an exact `SwitchAlt`/Alt gate — Alt is held-key token
+`0xFB`, not Shift (**correction in [R-CAM-01 §4]:** the `modeBit` below is the
+persistent `SwitchAlt` option bit, not a battle-mode flag):
 
 ```
 modeBit = battle-mode flag & 1
@@ -2355,7 +2786,8 @@ lines) and 10 (inner lines) when it is, 1 (outer) and 9 (inner) when it is not.
 
 Queued build indicators use unit/build GAF artwork and numeric queue state.
 Selection changes can update the side panel, build page, command palette,
-health bars, unit name, and queued-order cursor indicators.
+health bars (whose visibility to other players is the `hidedamage` gate of
+[04 R-SPEC-01 §6]), unit name, and queued-order cursor indicators.
 
 #### UI order producers (R-P0-11)
 
@@ -2440,7 +2872,7 @@ bits dispatch:
 | `2` | Travelling-dash chain between the order's previous position and its anchor (target tracking and the cached-position flag live in the anchor getter). The distance is a float square root truncated toward zero; segments under one world unit draw nothing. The artwork is **not procedural**: sprites come from a GAF sprite chain (a frame table with a ticks-per-frame field), blitted through the ordinary GAF byte-copy blitter, with frame index `(age/tpf) % nFrames` where age is the global tick minus the order's birth tick — the cadence is driven by the order's **creation tick**, not the global phase. The chain's phase offset starts at `((age mod 30) * 3 << 20) / 30` (integer division) and advances `3 << 20` per sprite until the segment end; the 30-tick wrap of the phase is what makes the dashes march. Each sprite's position interpolates the segment linearly with a 16.16 fraction `(phase << 16) / distance`, so sprites sit three cells apart. |
 | `4` | A sixteen-segment circle at the order point. The radius is the truncated product `src * 0.9` where `src` is the target unit definition's radius field for unit targets and a constant 32 otherwise; chords are drawn through the line primitive in color-map entry 12. |
 | `8` | Queued-order icon: an animated cursor-GAF frame at the order point, index `tick/(tpf*2) % nFrames` into the cursor handle array at the descriptor's icon byte, drawn with the half-height shear; in battle the attack icons (1/2) alternate color-map entries 12/4 on the low tick bit and additionally draw the weapon AOE/coverage/attack-length rings. |
-| `16` | Once per unit: labeled range rings — sight/radar/sonar/jammer/build-distance/maneuver/kamikaze radii read straight from the unit definition's fields, weapon ranges from the weapon definition's authored range field — in color-map entries 15/12/14 per branch; the weapon-range pulse grows from 8 to the authored range over `tick mod 60`. |
+| `16` | Once per unit: labeled range rings — sight/radar/sonar/jammer/build-distance/maneuver/kamikaze radii read straight from the unit definition's fields (the kamikaze radius is the trigger distance of [04 R-SPEC-01 §1]), weapon ranges from the weapon definition's authored range field — in color-map entries 15/12/14 per branch; the weapon-range pulse grows from 8 to the authored range over `tick mod 60`. |
 
 **Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
@@ -2763,7 +3195,9 @@ converts
 `worldX=(mouseX-padX)*PlayRight/radarWidth`,
 `worldZ=(mouseY-padY)*PlayBottom/radarHeight`,
 then uses those world coordinates directly as the camera coordinates and
-follows the standard movement/clamp path; no half-viewport recenter is applied.
+follows the standard movement/clamp path; no half-viewport recenter is applied
+(**superseded by [R-CAM-01 §11]:** the camera jump does subtract half the
+viewport; the recenter-free conversion is the pointer's world position).
 **Correction:** the earlier §10 wording used `mapWidth`/`mapHeight` as the
 scale numerators; the executable uses the play-area pixel extents
 `PlayRight`/`PlayBottom`, matching [03 §3.11].
@@ -2773,11 +3207,196 @@ vectors are not reduced to a standalone truth table. No zoom/rotation mutation
 occurs in the reviewed edge-scroll, direct-radar, clamp, or save/load paths.
 Minimap rendering and visibility masks are separate concepts.
 
-**Correction (Established; [03 §3.11]).** The previous formula in this section
+**Correction (Established; [03 §3.11]) — itself corrected by [R-CAM-01 §11].** The previous formula in this section
 used raw map dimensions and a half-viewport recenter. That was a stale reading
-of the direct branch. The clean-room reduction and implementation contract use
+of the direct branch as to the scale only; the recenter was right. The clean-room reduction and implementation contract use
 playable `PlayRight/PlayBottom` extents and direct-origin camera writes; only
 the alternate drag branch applies a stored-camera delta.
+
+### Closed — the scroll pass: inputs, units, and what it cancels [R-CAM-01 §10] (2026-08-29)
+
+**Established fact — inputs of the host-frame writer.** The scroll pass of
+[R-CRD-006 §1] runs once per host frame, after that frame's sub-ticks and
+hotkey dispatch ([R-CAM-01 §1]). Its inputs, with their sources:
+
+* **Scroll setting byte** — an unsigned byte; registry `scrollspeed` (absent
+  → `32`), the `SCREEN` slider of the interface options (`1..65`,
+  [R-CAM-01 §7]), the chat command `+ScrollSpeed n` (low byte of `n`), and
+  `RESTORE` (`32`). It is the only settings byte preserved across the camera
+  block reset at battle entry (the reset zeroes the tracked object, follow
+  target, bookmarks and hold state and restores the byte).
+* **Raw delta** — a signed 32-bit host value: this frame's scaled
+  `GetTickCount()` reading minus the previous frame's, as stored by the
+  tick-budget step ([R-CAM-01 §1]); with the default time scale of `1000`
+  it is milliseconds elapsed since the previous outer frame. It is refreshed
+  only when the budget step runs (never while paused in single-player), and
+  the movie writer resets its base after each capture ([R-CAM-01 §8]).
+* **Pointer position** — when the presentation object has not captured the
+  mouse (its capture bit clear), the pass reads the live cursor position
+  through `GetCursorPos` (not the pointer record) and applies the §10 strip
+  rule: a cursor at or beyond the right/bottom edge but less than `100`
+  pixels beyond, while the game window has keyboard focus, is treated as
+  `W-1` / `H-1`; a cursor further out, or without focus, keeps its raw
+  coordinates and matches no edge. When the mouse is captured, the pass
+  uses the pointer record's coordinates clamped to `W-1` / `H-1`.
+* **Held arrows** — the four `GetAsyncKeyState` queries of §2, suppressed
+  while `TALK.GUI` is open.
+
+The magnitude is `min(128, scrollByte × rawDelta)` in **map pixels per host
+frame** — with the default byte, `32` pixels per millisecond, so at any
+frame interval of 4 ms or more the cap makes every scrolling frame move
+exactly `128` pixels; the setting only matters below the cap (`scrollByte ×
+rawDelta < 128`, i.e. very high frame rates or very low settings). The
+product is a signed 32-bit multiply of the zero-extended byte and the raw
+delta; a negative delta (a wrapped tick count) yields a negative magnitude
+that the `> 128` test does not cap and the `!= 0` test does not skip, so it
+scrolls the opposite way for one frame. The direction tests and the
+sequential opposing-direction behaviour are as [R-CRD-006 §1] states.
+
+**Established fact — what a scroll cancels.** When the pass changes either
+origin coordinate it: writes the origin, sets the view-dirty bit, runs the
+per-axis clamp, copies the origin into the phase-10 **desired** origin (so
+the follow step has nothing to close), clears the render-flags minimap cache
+bit (*Supported inference* on that bit's role: it is the bit every camera
+writer clears and the minimap composer re-tests), and
+**zeroes the hold count, the tracked object and the followed projectile**.
+Any keyboard or edge scroll therefore ends `t`/Ctrl+C tracking and a
+`holdtime` hold ([06 §7.3]; the hold's own statement is in §10 above). The
+same triple clear is performed by the bookmark recall (F5–F8), the minimap
+camera jump and the drag-scroll entry ([R-CAM-01 §11]) and `+BigBrother`
+off; it is **not** performed
+by the glide writers (`n`, F3) or by the battle-start placements, which only
+write the desired origin ([R-CAM-01 §12]).
+
+### Closed — minimap click, latch, and drag-scroll arithmetic [R-CAM-01 §11] (2026-08-29)
+
+**Established fact — pointer classification (step 1 of the frame).** With
+`RadarW`/`RadarH` the letterboxed radar extents and `padX`/`padY` its origin
+within the minimap canvas (§10), `PlayRight = Width·16 − 32` and
+`PlayBottom = Height·16 − 128` [03 §1]:
+
+* Pointer inside the inclusive minimap rectangle and no drag rectangle
+  active → **minimap region** (region bit 0 set, bit 1 clear) and the
+  pointer's world position is the lens conversion
+  `worldX = (ptrX − padX) · PlayRight / RadarW`,
+  `worldZ = (ptrY − padY) · PlayBottom / RadarH` (signed 32-bit
+  multiply, then signed division truncating toward zero) — **no**
+  half-viewport term.
+* Otherwise → clamp the pointer into the view rectangle, region bit 0
+  clear, bit 1 = "pointer inside the view rectangle", and the world
+  position is `camera + (clampedPtr − viewOrigin)` per axis.
+* Region bit 2 = bit 0 OR bit 1. The world position then goes through the
+  ground resolver of §8, and its truncated `>> 20` (16.16 → 16-pixel cell)
+  coordinates index the occupancy map for the hovered feature.
+
+This is the "lens branch" of [03 §3.11] — it produces the **pointer's world
+position** (orders given on the minimap under `Interface Type 0`, the
+hover target), not the camera.
+
+**Established fact — the minimap latch (camera jump).** Region-bit-0 clicks
+set a latch bit in the pointer-flags byte ([R-CAM-01 §5] for which button
+under which polarity); while it is set, every host frame writes the camera origin from the pointer record (the first jump lands on the frame **after** the one that set the bit, because the frame handler tests the bit before the click paths write it):
+
+```
+cameraX = (ptrX − padX) · PlayRight  / RadarW − trunc(viewWidth  / 2)
+cameraZ = (ptrY − padY) · PlayBottom / RadarH − trunc(viewHeight / 2)
+```
+
+(signed truncating divisions, the half-viewport terms signed), then sets the
+view-dirty bit, clamps per axis, copies current to desired, clears the
+minimap cache bit, and clears the hold count, tracked object and
+followed projectile. The clicked map point becomes the **centre** of the
+view. The latch is released by the matching button-up message, and the
+pointer record's coordinates — not `GetCursorPos` — are used, so dragging
+across the minimap pans continuously.
+
+**Correction.** The §10 sentence "then uses those world coordinates directly
+as the camera coordinates … no half-viewport recenter is applied", and the
+matching "Correction (Established; [03 §3.11])" below it, are wrong for the
+**camera**: the camera jump subtracts half the viewport on both axes. The
+trace that produced those sentences read the pointer-classification
+conversion (which has no recenter, above) as the camera writer. Only the
+scale (`PlayRight`/`PlayBottom`, not the raw map size) was corrected
+rightly. Doc 03 §3.11's "lens branch writes the projected world point
+directly as the new camera origin" carries the same error and is a
+cross-doc correction for lane 03; its formula is right for the pointer's
+world position.
+
+**Established fact — the drag-scroll mode (the "alternate drag branch").**
+Under `Interface Type 0`, right-down over the **world view** (region bit 1)
+with **Ctrl** held (key-state bit `0x08` of the pointer record) enters a
+cursor-warp drag mode:
+the frame handler stores the pointer record, sets the drag-mode dword, saves
+`anchorX = trunc(cameraX / 16)`, `anchorZ = trunc(cameraZ / 16)` (signed,
+truncating toward zero), computes the screen centre `(displayW / 2,
+displayH / 2)` and warps the OS cursor there (`SetCursorPos`). While the
+mode dword is set the frame handler runs, instead of any click path:
+
+```
+dx = ptrX − centreX ; dz = ptrY − centreY               (pointer record)
+cameraX = (trunc(dx / 4) + anchorX) · 16
+cameraZ = (trunc(dz / 4) + anchorZ) · 16
+dirty; clamp; desired = current; clear the minimap cache bit; (hold/tracked/followed untouched here)
+anchorX = trunc(cameraX / 16) ; anchorZ = trunc(cameraZ / 16)
+warp the cursor back to the centre
+if the record's right-button key-state bit (0x02) is clear:
+    leave the mode, warp the cursor to the stored record's position, re-show the cursor
+```
+
+So each frame moves the camera by `16 · trunc(delta / 4)` map pixels per
+axis — four map pixels per screen pixel of mouse travel, quantised to 16 —
+relative to the previous frame, and the origin is always a multiple of 16
+while the mode is active. The doc 03 wording "new camera = stored camera +
+(clamped mouse − viewport origin)" describes neither branch and is part of
+the cross-doc correction above. The mode's entry clears the hold count,
+tracked object and followed projectile.
+
+### Closed — the camera-jump family and what breaks a follow [R-CAM-01 §12] (2026-08-29)
+
+**Established fact — the follow state.** The follow camera's state is the
+current origin, the desired origin, the 16-bit hold count with its frozen
+16.16 anchor, the tracked-object reference, the followed-projectile
+reference, four bookmark origins with valid bytes, and the camera-flags
+byte whose bit 1 is the view-dirty bit. Phase 10 ([01 §4.4]; the hold
+arithmetic in §10 above, its writers in [06 §7.3]) is the only stepper.
+"Glide" below means writing only the **desired** origin (clamped per axis,
+minimap cache bit cleared) so that phase 10 closes the gap at the 320-per-tick /
+half-remaining rate of §10; "jump" means writing the current origin and
+copying it to the desired origin. Every writer:
+
+| Writer | Kind | Clears hold / tracked / followed? |
+|---|---|---|
+| Scroll pass (keyboard, edge) | jump by delta | yes ([R-CAM-01 §10]) |
+| Minimap latch, drag-scroll entry | jump | yes; the per-frame drag step itself does not |
+| F5–F8 bookmark recall | jump to the stored origin | yes |
+| Load game (`Camera` account) | jump | no (the origin only; the follow references are not in the account, §10 "save ownership") |
+| Battle-start placement | jump: a skirmish player's commander stamp position minus half the viewport [08 R-SKIR-01]; the `Camera` account for a loaded game; otherwise the first start-position record of kind `1` minus half the viewport | no |
+| `Ctrl+C` | tracked object = last own `Commander`-category unit | sets tracked; hold and followed untouched |
+| `t` / `T` | tracked object = next / previous selected unit, or null | as `Ctrl+C` |
+| `n` (next unit) | glide to the unit's position | no |
+| F3 (message source) | glide to the source unit's position (its map-pixel X/Z words) | no |
+| Phase 10 itself | steps current toward desired; a dead tracked object (alive bit clear) clears all three | — |
+| `+BigBrother` off, `+Move x y` (developer) | cancel / jump | yes / (developer, untraced) |
+
+Unit positions enter the desired origin through one conversion:
+`desiredX = sext16(unitX >> 16) − trunc(viewWidth / 2)`,
+`desiredZ = sext16((unitZ − (unitY >> 1)) >> 16) − trunc(viewHeight / 2)` —
+the same shear-and-recenter phase 10 applies to a followed point (§10). The
+message-source glide instead reads the unit's map-pixel X/Z words directly
+and subtracts the half viewport without the height shear. `Ctrl+C` and
+`t`/`T` do **not** move the camera themselves; the first phase-10 pass
+after them begins the glide toward the tracked unit, and the glide continues
+every tick until a scroll, a minimap jump, a bookmark recall, the unit's
+death, or a `holdtime` hold started by one of that unit's projectiles when
+it is a building ([06 §7.3]) intervenes. A hold ends by count expiry back
+into ordinary following; a hold is cancelled early only by the writers
+marked "yes" above.
+
+**Established fact — bookmarks.** Ctrl+F5..F8 store the **current** origin
+(both axes) into slot `0..3` and set the slot's valid byte; F5..F8 recall
+the slot unconditionally (the valid byte has no reader in the recall path —
+its only reader is the save/restore census, doc 08), jump, clamp, and clear
+the follow triple. Bookmarks are not in the `Camera` save account.
 
 ### Supported inference
 
@@ -2805,10 +3424,6 @@ Open items only; the decider follows each.
   behavior · static trace.
 - Mapping of the three sensor callback tables to the radar versus jammer
   palette entries · doc 03 §3.3 · static trace.
-- Interleaving when a host-frame input pass and one or more phase-10 passes
-  occur in the same outer frame; each writer's individual ordering is
-  established, their caller-level scheduling is not · [R-CRD-006 §1] · static
-  trace.
 - Whether any transient follow-target or shake state is reconstructed from a
   non-`Camera` save account · doc 08 · static trace.
 - Start-position marker art and placement · doc 03 · static trace.
@@ -2844,7 +3459,7 @@ plays `SmallButton` and opens the hard-coded `guis/tabmenu.gui` window — a
 is open closes it (the Tab-menu word bit `0x20` toggles). In battle mode the
 opener hides the diplomacy gadgets for non-diplomatic contexts. This supersedes
 the earlier reading that Tab opens `guis/armopt.gui`: the ESC-menu path (token
-`0xE3` while the battle-interface ESC bit is clear) opens the hard-coded
+`0xE3` — the F2 key, see [R-CAM-01 §2] — while the battle-interface ESC bit is clear) opens the hard-coded
 `guis/armopt.gui` window with `anims/armopt.gaf`; this
 name is not side-prefixed. Opening it sets both the battle modal bit and the
 single-player pause bit, and pauses the runtime audio path. Closing the root
@@ -2937,8 +3552,6 @@ above.
 
 - Chat commit-versus-cancel semantics on every send route, including whether
   the terminator is included per route · static trace.
-- Scrollback drain ownership in the in-battle HUD; only the heartbeat drain is
-  closed · static trace.
 - Outcome transition timing, and the per-value endgame bar-fill animation
   mechanism; it may ride the type-13 timed/range gadget path · static trace.
 - Pause authorization and forwarding authority for chat, pause, and speed
@@ -3036,17 +3649,25 @@ section rather than deleted.
 
 ### Input and text
 
-- Which battle and front-end input paths handle which key tokens beyond the
-  hotkey dispatcher's cases, and the unsupported-device census · §2 · static
-  trace.
-- Keyboard repeat policy · §2 · static trace.
+- Which front-end screen paths handle which key tokens (the battle census is
+  closed in [R-CAM-01 §2]), and the unsupported-device census · §2, §5 ·
+  static trace.
+- The complete right-button cursor column under `Interface Type 1` · §8
+  [R-CAM-01 §5] · static trace of the cursor resolver's second case family.
+- The user-facing name of the F4 toggle and the visible effect of the two
+  30-frame counters it arms; the reader of the `+BigBrother` companion word;
+  the `+MakePoster` argument grammar · §2 [R-CAM-01 §2, §6] · static trace /
+  manual retail observation (developer tooling, low priority).
+- Whether the slider range word the interface options read is the authored
+  `range` key or a computed track length · §4 [R-CAM-01 §7] · RWU-07-3 /
+  static trace.
+- How the multiplayer receive path applies the lobby `Cheat Codes` bit before
+  re-dispatching a received `+` line · §5 [R-CAM-01 §6] · out of scope.
 - Text-input code page and IME behavior · §2, §7 · presentation-level platform
   detail; no retail contract observed beyond the ASCII token set. Marked
   `TODO(T23)`.
 - Chat commit-versus-cancel semantics on every send route, including whether
   the terminator is included · §11 · static trace.
-- Scrollback drain ownership in the in-battle HUD; only the heartbeat drain is
-  closed · §11 · static trace.
 - Full FNT text wrapping and line-breaking, drop-colour defaults,
   translation-table missing-key rules, and the complete translation lookup
   fallback · §7 · static trace.
@@ -3108,8 +3729,6 @@ section rather than deleted.
   trace.
 - Mapping of the three sensor callback tables to radar versus jammer palette
   entries · §10, doc 03 §3.3 · static trace.
-- Interleaving when a host-frame input pass and one or more phase-10 passes
-  occur in the same outer frame · §10 [R-CRD-006 §1] · static trace.
 - Whether any transient follow-target or shake state is reconstructed from a
   non-`Camera` save account · §10, doc 08 · static trace.
 - Start-position markers · doc 03 · static trace.

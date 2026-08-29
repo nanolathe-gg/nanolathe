@@ -430,6 +430,7 @@ populated on first run.
 | `PlayMovie` | 1 |
 | `NumSkirmishPlayers` | 4 |
 | `Nickname`, `Game Name`, `Password` (17-byte buffers), `Image Output Directory` | empty |
+| `side` | 0 — the last chosen player side; omitted from this list until 2026-08-29, see `[R-KEYS-01 §3]` |
 
 **Flag settings.** Several options are bits of packed option words rather than
 independent values. Their installed defaults are: anti-aliasing, shadows,
@@ -446,6 +447,15 @@ per-slot values `Player%dController`, `Player%dSide`, `Player%dColor`,
 filled with the slot index. Absent per-slot values install these defaults:
 controller 0, ally group 5, metal and energy 1000, color the slot index
 itself, and side the slot index masked to parity (slot & 1).
+
+**Correction (2026-08-29, RWU-02-1, `[R-KEYS-01 §3]`).** The paragraph above
+places the scalar `Skirmish…` values under the skirmish subkey; the loader
+reads all seven of them — and `SkirmishMap`, a 256-byte string — under the
+main `Total Annihilation` key. Only the per-slot `Player%d…` values live
+under `Total Annihilation\\Skirmish`. The defaults are unchanged.
+`FixedLocations` (the RWU-02-1 question) is emitted by the settings writer
+and read by nothing: the loader has no read of it, so it is write-only
+legacy — inert.
 
 The scalar skirmish preferences are also defaulted by the same loader when
 absent: `SkirmishDifficulty=1` (Medium), `SkirmishLocation=1` (pre-determined
@@ -942,7 +952,15 @@ with the same ID therefore does not sparse-merge with the earlier one: it
 **replaces** every parser-owned field of the record (authored-or-default) and
 rewrites the catalog name. The surviving catalog name is the **later**
 section's name; the record's slot-number byte is never rewritten by the
-parser. Record 0 is special: consumers treat a weapon reference as inactive
+parser. **Correction (2026-08-29, RWU-02-1, per `[06 R-DMG-01 §1]`):** the
+sentence "replaces every parser-owned field" overstated one field. The
+catalog initializer clears each record's name byte and stamps its slot
+number but does **not** clear the `[DAMAGE]` override-table pointer, so a
+later section with the same `ID` **appends** its per-name damage entries
+into the earlier record's table (same-spelling keys overwrite in place,
+case-variant keys insert) instead of starting a fresh table; `default` and
+every scalar field still follow the replace-whole rule. Stock has no same-ID
+pair, so this is a third-party-content edge only. Record 0 is special: consumers treat a weapon reference as inactive
 when it points at record 0 (recognized by its zero slot-number byte), and the
 stock corpus fills it with `[noweapon]` (`ID=0` in `weapons/weapons.tdf`).
 
@@ -1519,6 +1537,611 @@ IDs only after the stable case-insensitive unit catalog ordering. Keep `none`
 as a normal token default unless content analysis proves an authored special
 case. Set every unit's ID bit in the `ALL` entry as the mandatory membership.
 
+
+### Key consumer table [R-KEYS-01] (generated 2026-08-29)
+
+Status: **Established** for the enumeration (every row is a typed-accessor
+read found in one of the retail parsers — the unit-definition compiler and
+the unit-catalog loader, the weapon-record parser, the feature parser, the
+movement-class parser, the mission loader, the placed-object compiler, the
+trigger builder, the side loader, the sound-category loader and the
+preferences loader); the consumer column carries its own evidence level per
+row. This closes RWU-02-1 and is the vocabulary exit criterion of
+`docs/PLAN_RESEARCH_COMPLETION.md` §8.
+
+**How to read it.** One row per key the executable reads. *Accessor* is the
+typed accessor of §4 "Typed accessors" (`integer`, `floating`, `fixed`,
+`string`, `lang-string` = language-prefixed string, `raw` = bare value
+pointer); *stored width* is the field the parser writes (a `flag bit n` row
+stores `(value & 1) << n` into that record's packed word — an authored `2`
+stores as 0). *Default* is the accessor's default argument, already in
+stored units. *Consumer* is the section that states the reader's contract,
+or `inert (reader census: none)` when a whole-export reader census found no
+load of the stored field, or `unknown:` with the decider. Rows whose
+consumer is `[02 R-KEYS-01 §n]` are stated in the numbered notes below;
+every other citation points at the owning document.
+
+**Exit-criterion numbers (2026-08-29).** 398 keys enumerated; 372 with a
+consumer citation, 11 inert by reader census, 15 Unknown (one side key,
+fourteen presentation-only registry values whose readers no document has
+traced yet — all named with their decider in the table). Keys with no
+string in the image at all (`aimrate`, `movingaccuracy`, `noselfdamage`,
+`impulsefactor`, `impulseboost`, `startfire`, `MohoMetal`, `SCHEMACOUNT`,
+`size`, `solarstrength`, and the FBI editor keys listed in `[fmt fbi]`) are
+not rows: they are not read, so they have no reader to census.
+
+**Regeneration.** The table is emitted by the generator kept beside the raw
+corpus (`/tmp/ta-decompile/scripts/key_consumers.py`, with its curated
+consumer map `key_consumers_overrides.py`); run it with `--md` and replace
+everything between the generated-marker comment and the end of the last
+record's table. Do not hand-edit rows — change the generator's data and
+regenerate, so the table and the raw trail
+(`/tmp/ta-decompile/notes/content/rwu-02-1.md`) stay in step.
+
+#### §1 — Unit-record consumers not stated elsewhere [R-KEYS-01 §1]
+
+* **`defaultmissiontype` — Established.** The 100-byte string is converted
+  through the mission-type vocabulary (the same name table the `InitialMission`
+  script and the order system use, `[04 §3.6]`) into a one-byte mission code
+  stored on the definition; an empty or unrecognised name stores 0. Exactly one
+  reader: the primary order-queue pump. When a unit's order queue is empty,
+  its owner has controller type 1 or 2, and the definition's code is non-zero,
+  the pump allocates a fresh order record carrying that mission code and
+  pushes it as the unit's standing task; a zero code leaves the unit idle.
+  Cross-doc: doc 04 §3.4 should cite this as the idle-refill source.
+* **`antiweapons` — Established (reader census).** Word A bit 29 of the
+  definition. Its only reader in the exported corpus is the range-ring
+  overlay drawer: for a selected unit whose definition carries the flag, each
+  of the three weapon slots whose weapon record carries `interceptor` draws a
+  coverage circle. Nothing in the simulation reads it — interception itself
+  is gated by the weapon's own `interceptor` flag `[06 §11.2]` — so the key is
+  presentation-only.
+* **`canreclamate` and capability bit 9 — Established.** The parser stores
+  `canreclamate` in capability-word bit 10, and while storing `canresurrect`
+  (bit 11) it also writes **bit 9 as a copy of bit 10**. There is no key for
+  bit 9; it is derived. Readers of bit 9 versus bit 10 are not separated by
+  this unit (the doc 04/05 reclaim gates cite the capability, not the bit) —
+  *decider:* a bit-9 reader census, which matters only if a reader tests bit
+  9 alone.
+
+#### §2 — Weapon-record consumers not stated elsewhere [R-KEYS-01 §2]
+
+* **`toairweapon` — Supported inference for the gate, Established for the
+  readers.** Flag bit 17 of the weapon record has two readers: the
+  attack-order resolver (after the shared target search accepts a target it
+  records whether the chosen slot's weapon is *not* to-air, which selects the
+  resolver's return code) and the fire-order handler's weapon-slot pick,
+  which skips a slot flagged to-air unless the target's airborne state bits
+  read 2. The exact operand of that airborne test is the inference.
+  Cross-doc: `[04 R-ORD-01 §3]` / `[06 §3.2]` should state the gate.
+* **`shellweapon` — inert (reader census: none).** Flag bit 2 is stored and
+  never loaded, in any of the decompiler's renderings (dword mask,
+  shift-and-and, byte-narrowed mask). Bounded by the export, like every
+  census in this table.
+* **`model` — Established.** The 256-byte name resolves to a model handle at
+  parse time (empty → null handle); the handle is read by the model-family
+  projectile renderer `[06 R-WFX-01 §4]`.
+* **`shakemagnitude`, `shakeduration` — Established.** Stored as a 32-bit
+  integer and as `trunc(seconds × 30)` ticks; both feed the screen-shake
+  request `[03 §5.6]`.
+* **`paralyzer` (bit 7) and `smoketrail` (bit 18)** are consumed by
+  `[06 §10]` (plus the shared target search's paralysed-target skip,
+  `[06 §3.2]`) and `[06 §7.3]` respectively.
+
+#### §3 — Registry values §3 omitted, and a subkey correction [R-KEYS-01 §3]
+
+* **`side` — Established read, Supported inference for meaning.** The
+  preferences loader reads a DWORD value named `side` under the
+  `Total Annihilation` key, installs 0 when absent, and stores it in a
+  session global. Its readers are the campaign briefing screens and the
+  save-account restore, i.e. it is the last chosen player side (0/1) that
+  the campaign-side filter of `[08 R-CAMP-01 §2]` compares against. §3's
+  value list above did not include it.
+* **Correction — subkey placement.** §3 above says the skirmish settings
+  `SkirmishMap`, `SkirmishLocation`, `SkirmishDifficulty`, `SkirmishLOSType`,
+  `SkirmishLineOfSight`, `SkirmishMapping` and `SkirmishCommanderDeath` live
+  "under the skirmish subkey". They do not: every one of them is read under
+  the main `Total Annihilation` key (`SkirmishMap` as a 256-byte string, the
+  rest as DWORDs). Only the per-slot `Player%d…` values are read under
+  `Total Annihilation\\Skirmish`. The defaults §3 lists are right.
+* **`Games` and the session option word — Established.** The loader reads
+  `NumSkirmishPlayers`; when it is exactly 256 it also reads `Games`, and
+  when that is 1 it sets bit 1 of the 16-bit *session option word*; any other
+  outcome clears bit 1. It then unconditionally sets bits 2 and 3, clears
+  bit 4, and copies `clock` into bit 6. Three in-game toggles flip bits 7, 8
+  and 9 of the same word. This word is distinct from the two packed display
+  and sound option words §3 describes.
+
+#### §4 — The `shootme` option bit: writer census (closes the RWU-02-1 decider) [R-KEYS-01 §4]
+
+`[04 R-SPEC-01 §5]` left open which setting produces the session option bit
+that admits any target to a human player's autonomous target search. That
+bit is **bit 10 of the session option word** of §3 above. A whole-export
+census of every store to that word finds writers of bits 1, 2, 3, 4, 6
+(the preferences loader) and 7, 8, 9 (the in-game toggles) and **no writer
+of bit 10** — no preference, no toggle, no whole-word store. The
+preferences loader is therefore ruled out as the source. The residual
+stays **Unknown**, narrowed: a writer would have to reach the word through a
+pointer the decompiler lost (a block copy from a save or lobby record) —
+*decider:* a runtime watch on the word while loading a save and joining a
+lobby, or a trace of every block copy into the session globals.
+
+#### The table [R-KEYS-01 §5]
+
+<!-- GENERATED by /tmp/ta-decompile/scripts/key_consumers.py; do not hand-edit. Regenerate: python3 /tmp/ta-decompile/scripts/key_consumers.py --md /dev/stdout -->
+
+**unit (FBI `[UNITINFO]`)**
+
+| Key | Accessor · stored width | Default | Consumer | Evidence |
+|---|---|---|---|---|
+| `unitname` | string · 32 bytes | empty | catalog identity `[02 §5]`; placement by name `[08 R-TRIG-01 §9]` | Established |
+| `name` | lang-string · 32 bytes | empty | `[07 §6]` (unit-information panel) | Established |
+| `description` | lang-string · 64 bytes | empty | `[07 §6]` | Established |
+| `defaultmissiontype` | string · 100 bytes | empty | `[02 R-KEYS-01 §1]` (idle order-queue refill) | Established |
+| `wpri_badTargetCategory` | string · 100 bytes | `none` | `[06 §3.1]` | Established |
+| `wsec_badTargetCategory` | string · 100 bytes | `none` | `[06 §3.1]` | Established |
+| `wspe_badTargetCategory` | string · 100 bytes | `none` | `[06 §3.1]` | Established |
+| `noChaseCategory` | string · 100 bytes | `none` | `[06 §3.1]`, `[06 §3.2]` | Established |
+| `objectname` | string · 32 bytes | empty | `[03 §2.4]` (model cache resolution) | Established |
+| `buildcostenergy` | integer · single float | 0 | `[05 "Construction arithmetic"]`, `[05 R-WORK-01]` | Established |
+| `buildcostmetal` | integer · single float | 0 | `[05 "Construction arithmetic"]`, `[05 R-WORK-01]` | Established |
+| `maxvelocity` | fixed · 32-bit | 0 (0) | `[04 R-MOV-01 §1]`, `[04 §5.2]` | Established |
+| `brakerate` | fixed · 32-bit | 0 (0) | `[04 R-MOV-01 §1]`, `[04 R-MOV-01 §4]` | Established (cited) |
+| `acceleration` | fixed · 32-bit | 0 (0) | `[04 R-MOV-01 §1]` | Established (cited) |
+| `bankscale` | fixed · 32-bit | 65536 (1) | `[04 R-AIR-01 §2]` | Established (cited) |
+| `pitchscale` | fixed · 32-bit | 0 (0) | `[04 R-AIR-01 §2]` | Established (cited) |
+| `damagemodifier` | fixed · 32-bit | 65536 (1) | `[06 R-DMG-01 §2]` | Established |
+| `moverate1` | fixed · 32-bit | twice the `maxvelocity` just read | `[04 R-MOV-01 §6]`, `[04 §5.2]` | Established |
+| `moverate2` | fixed · 32-bit | twice the `maxvelocity` just read | `[04 R-MOV-01 §6]`, `[04 §5.2]` | Established |
+| `turnrate` | integer · 16-bit | 0 | `[04 R-MOV-01 §2]`, `[04 R-MOV-01 §4]` | Established |
+| `waterline` | integer · 8-bit | 0 | `[04 R-MOV-01 §9]`, `[04 §9.2]` | Established |
+| `transportsize` | integer · 8-bit | 0 | `[04 §10.2]`, `[04 R-AIR-01 §9]` | Established (cited) |
+| `transportcapacity` | integer · 8-bit | 0 | `[04 §10.2]` | Established (cited) |
+| `energymake` | floating · single float | 0.0 | `[05 R-ECO-01]`, `[05 R-PROD-01 §1]` | Established |
+| `energyuse` | floating · single float | 0.0 | `[05 R-ECO-01]`, `[05 R-PROD-01 §1]` | Established |
+| `metalmake` | floating · single float | 0.0 | `[05 R-ECO-01]`, `[05 R-PROD-01 §1]` | Established |
+| `extractsmetal` | floating · single float | 0.0 | `[05 R-PROD-01 §1]`, `[03 R-TERR-01 §1]` | Established |
+| `makesmetal` | integer · 8-bit | 0 | `[05 R-PROD-01 §1]` | Established |
+| `windgenerator` | floating · single float | 0.0 | `[05 R-PROD-01 §1]` | Established |
+| `tidalgenerator` | floating · single float | 0.0 | `[05 R-PROD-01 §1]` | Established |
+| `energystorage` | floating · single float | 0.0 | `[05 R-ECO-01]` | Established |
+| `metalstorage` | floating · single float | 0.0 | `[05 R-ECO-01]` | Established |
+| `buildtime` | integer · 32-bit | 0 | `[05 "Construction arithmetic"]`, `[05 R-WORK-01]` | Established |
+| `workertime` | integer · 16-bit | 0 | `[05 "Construction arithmetic"]`, `[05 R-WORK-01]` | Established |
+| `healtime` | integer · 16-bit | 0 | `[04 R-SPEC-01 §4]` | Established |
+| `maxdamage` | integer · 32-bit | 0 | `[06 §9.2]`, `[04 R-ORD-01 §7]`, `[04 R-SPEC-01 §6]` | Established |
+| `sightdistance` | integer · 16-bit | 0 | `[03 §3.2]`, `[03 §3.4]` | Established |
+| `radardistance` | integer · 16-bit | 0 | `[03 §3.4]`, `[06 R-WPN-03 §5]` | Established (cited) |
+| `sonardistance` | integer · 16-bit | 0 | `[03 §3.4]` | Established (cited) |
+| `radardistancejam` | integer · 16-bit | 0 | `[03 §3.4]`, `[03 §3.10]`, `[06 §3.1]` | Established (cited) |
+| `sonardistancejam` | integer · 16-bit | 0 | `[03 §3.4]`, `[03 §3.10]` | Established (cited) |
+| `bmcode` | integer · 8-bit | 0 | `[03 R-RND-02A]`, `[04 R-COLL-01 §2]` | Established |
+| `standingmoveorder` | integer · flag bits 0-1 | 2 | `[04 R-STANCE-01 §6]` | Established |
+| `standingfireorder` | integer · 32-bit | 2 | `[04 R-STANCE-01 §6]` | Established |
+| `init_cloaked` | integer · flag bit 4 | 0 | `[04 R-ORD-01 §2]`, `[05 R-ECO-01]`, `[03 §3.4]` | Established (cited) |
+| `downloadable` | integer · flag bit 5 | 0 | `[02 §5]` (downloadable enforcement), `[08 R-AI-01]` | Established |
+| `builder` | integer · flag bit 6 | 0 | `[04 R-ORD-01 §5]`, `[04 R-ORD-01 §2]`, `[04 R-ORD-01 §7]` | Established (cited) |
+| `stealth` | integer · flag bit 8 | 0 | `[03 §3.4]`, `[03 §3.9]` | Established (cited) |
+| `cloakcost` | integer · single float | 0 | `[04 R-SPEC-01 §10]`, `[03 §3.4]` | Established |
+| `cloakcostmoving` | integer · single float | the `cloakcost` value just read | `[04 R-SPEC-01 §10]` | Established |
+| `mincloakdistance` | integer · 16-bit | 0 | `[03 §3.4]`, `[03 §3.2]` | Established (cited) |
+| `buildangle` | integer · 16-bit | 0 | `[04 §2.3b]`, `[04 R-FAC-01]` | Established |
+| `builddistance` | integer · 16-bit | 0 | `[04 R-ORD-01 §7]`, `[04 R-ORD-01 §1]`, `[04 §10.3]` | Established (cited) |
+| `sortbias` | integer · 16-bit | 0 | inert (reader census: none) — `[04 R-SPEC-01 §7]` | Established |
+| `cruisealt` | integer · 16-bit | 0 | `[04 §10.2]`, `[04 R-ORD-01 §7]`, `[04 §10.1]` | Established (cited) |
+| `zbuffer` | integer · flag bit 7 | 0 | `[03 R-REN-03A]` | Established |
+| `isairbase` | integer · flag bit 9 | 0 | `[04 R-ORD-01 §7]`, `[04 R-UNIT-06 §3]`, `[04 R-AIR-01 §6]` | Established (cited) |
+| `istargetingupgrade` | integer · flag bit 10 | 0 | `[04 R-SPEC-01 §8]` | Established |
+| `teleporter` | integer · flag bit 13 | 0 | inert (reader census: none) — `[04 R-SPEC-01 §2]` | Established |
+| `hidedamage` | integer · flag bit 14 | 0 | `[04 R-SPEC-01 §6]` | Established |
+| `shootme` | integer · flag bit 15 | 0 | `[04 R-SPEC-01 §5]`, `[06 §3.2]` (option-bit residual: `[02 R-KEYS-01 §4]`) | Established |
+| `armoredstate` | integer · flag bit 17 | 0 | `[06 R-DMG-01 §2]` | Established |
+| `activatewhenbuilt` | integer · flag bit 18 | 0 | `[04 R-SPEC-01 §12]` | Established |
+| `canfly` | integer · flag bit 11 | 0 | `[04 R-ORD-01 §7]`, `[04 §10.2]`, `[04 R-AIR-01 §7]` | Established (cited) |
+| `canhover` | integer · flag bit 12 | 0 | `[04 R-SPEC-01 §15]`, `[04 R-MOV-01 §8a]` | Established |
+| `upright` | integer · flag bit 20 | 0 | `[04 R-MOV-01 §9]`, `[04 R-MOV-01 §5]`, `[04 R-MOV-01 §8a]` | Established (cited) |
+| `floater` | integer · flag bit 19 | 0 | `[04 R-SPEC-01 §15]`, `[04 R-MOV-01 §8a]` | Established |
+| `amphibious` | integer · flag bit 21 | 0 | `[04 R-SPEC-01 §15]` | Established |
+| `isfeature` | integer · flag bit 24 | 0 | `[04 R-SPEC-01 §12]`, `[05 R-FEAT-01]`, `[06 §12.2]` | Established (cited) |
+| `noshadow` | integer · flag bit 25 | 0 | `[03 §5.3]`, `[03 §2.4]`, `[03 §10]` | Established (cited) |
+| `immunetoparalyzer` | integer · flag bit 26 | 0 | `[04 R-SPEC-01 §9]`, `[06 §10]` | Established |
+| `hoverattack` | integer · flag bit 27 | 0 | `[04 R-AIR-01 §8]`, `[04 §9.2]`, `[04 R-MOV-01 §9]` | Established (cited) |
+| `antiweapons` | integer · flag bit 29 | 0 | `[02 R-KEYS-01 §1]` (range-ring overlay only) | Established |
+| `digger` | integer · flag bit 30 | 0 | `[03 R-REN-03A]`, `[04 R-SPEC-01 §3]` | Established |
+| `onoffable` | integer · flag bit 2 | 0 | `[04 R-SPEC-01 §11]`, `[03 §3.9]` | Established |
+| `mobilestandorders` | integer · 32-bit | 0 | `[04 R-STANCE-01 §5]`, `[04 R-STANCE-01 §6]`, `[04 R-STANCE-01 §8]` | Established (cited) |
+| `firestandorders` | integer · flag bit 1 | 0 | `[04 R-STANCE-01 §5]`, `[04 R-STANCE-01 §6]`, `[04 R-STANCE-01 §8]` | Established (cited) |
+| `canstop` | integer · flag bit 3 | 0 | `[04 R-STANCE-01 §8]`, `[04 R-STANCE-01 §6]` | Established (cited) |
+| `canattack` | integer · flag bit 4 | 0 | `[04 R-ORD-01 §3]`, `[07 §8]` | Established (cited) |
+| `canguard` | integer · flag bit 5 | 0 | `[07 §8]` | Established (cited) |
+| `canpatrol` | integer · flag bit 6 | 0 | `[07 §8]` | Established (cited) |
+| `canmove` | integer · flag bit 7 | 0 | `[03 R-RND-02A]`, `[07 §8]`, `[08 R-TRIG-01 §3]` | Established (cited) |
+| `canload` | integer · flag bit 8 | 0 | `[04 R-AIR-01 §9]`, `[04 §10.2]`, `[07 §8]` | Established (cited) |
+| `canreclamate` | integer · flag bit 10 | 0 | `[04 R-ORD-01 §5]`, `[05 R-WORK-01]` (capability bit 9 is a copy, `[02 R-KEYS-01 §1]`) | Established |
+| `canresurrect` | integer · flag bit 11 | 0 | `[04 R-ORD-01 §5]`, `[05 R-WORK-01]` | Established |
+| `cancapture` | integer · flag bit 12 | 0 | `[04 R-ORD-01 §5]`, `[04 R-STANCE-01 §6]`, `[05 R-WORK-01]` | Established (cited) |
+| `candgun` | integer · flag bit 14 | 0 | `[07 §8]` | Established (cited) |
+| `maneuverleashlength` | integer · 16-bit | 0 | `[04 R-STANCE-01 §4]`, `[04 R-STANCE-01 §1]`, `[04 R-STANCE-01 §6]` | Established (cited) |
+| `attackrunlength` | integer · 16-bit | 0 | `[04 R-STANCE-01 §4]`, `[04 R-STANCE-01 §6]`, `[04 R-AIR-01 §8]` | Established (cited) |
+| `kamikaze` | integer · flag bit 28 | 0 | `[04 R-SPEC-01 §1]` | Established |
+| `kamikazedistance` | integer · 16-bit | 0 | `[04 R-SPEC-01 §1]` | Established |
+| `norestrict` | integer · flag bit 15 | 0 | `[05 R-SHARE-01]`, `[08 R-SKIR-01 §10]` | Established |
+| `showplayername` | integer · flag bit 17 | 0 | inert (reader census: none) — `[04 R-SPEC-01 §14]` | Established |
+| `commander` | integer · flag bit 18 | 0 | `[08 R-TRIG-01 §3]`, `[05 R-SHARE-01]` | Established |
+| `cantbetransported` | integer · flag bit 19 | 0 | `[04 §10.2]` | Established (cited) |
+| `selfdestructcountdown` | raw · 32-bit | absent → null | `[04 R-SPEC-01 §13]` | Established |
+| `category` | string · 100 bytes | empty | `[02 R-P0-03]` | Established |
+| `soundcategory` | string · 100 bytes | empty | `[03 §8.3]` | Established |
+| `corpse` | string · 100 bytes | empty | `[06 R-DMG-01 §5]`, `[05 R-FEAT-01]` | Established |
+| `movementclass` | string · 100 bytes | empty | `[04 §6.1]`, `[02 §5]` (movement class record) | Established |
+| `weapon1` | string · 128 bytes | empty | `[06 R-DMG-01 §5]` (resolution), `[06 §4.2]` (slot use) | Established |
+| `weapon2` | string · 128 bytes | empty | `[06 R-DMG-01 §5]` (resolution), `[06 §4.2]` (slot use) | Established |
+| `weapon3` | string · 128 bytes | empty | `[06 R-DMG-01 §5]` (resolution), `[06 §4.2]` (slot use) | Established |
+| `explodeas` | string · 128 bytes | empty | `[06 R-DMG-01 §3]`, `[06 R-DMG-01 §5]` | Established |
+| `selfdestructas` | string · 128 bytes | empty | `[06 R-DMG-01 §3]`, `[06 R-DMG-01 §5]` | Established |
+| `YardMap` | string · 1024 bytes | empty | `[05 R-ECO-01]`, `[05 "Factory production lifecycle"]` | Established |
+| `side` | string · 30 bytes | empty | `[02 §5]` (AI build-pick roulette filter) | Established |
+| `ai_weight` | string · 64 bytes | empty | `[08 R-AI-01]` | Established |
+| `ai_limit` | string · 64 bytes | empty | inert (reader census: none) — `[02 §5]` | Established |
+| `wacky` | integer · flag bit 16 | 0 | inert (reader census: none) — `[02 §5]` | Established |
+
+**weapon (`Weapons\*.tdf` section)**
+
+| Key | Accessor · stored width | Default | Consumer | Evidence |
+|---|---|---|---|---|
+| `ID` | integer · 32-bit | -1 | record slot selection `[02 §5]` (R-CONTENT-02) | Established |
+| `name` | string · 64 bytes | empty | `[07 §6]` (display string) | Established |
+| `weaponvelocity` | floating · 32-bit | 0.0 | `[06 §3.3]`, `[06 R-WPN-03 §3]`, `[06 §4.3]` | Established (cited) |
+| `startvelocity` | floating · 32-bit | 0.0 | `[06 §3.3]`, `[06 §6.6]` | Established (cited) |
+| `weaponacceleration` | floating · 32-bit | 0.0 | `[06 §3.3]`, `[06 §6.6]` | Established (cited) |
+| `range` | integer · 32-bit | 32767 | `[06 §3.3]` | Established |
+| `coverage` | integer · 32-bit | 0 | `[06 §3.3]` (range-circle overlay only) | Established |
+| `reloadtime` | floating · 16-bit | 0.0 | `[06 §3.3]`, `[06 §4.2]`, `[06 §11.1]` | Established (cited) |
+| `energypershot` | floating · single float | 0.0 | `[06 §4.2]`, `[06 §11.1]`, `[07 §8]` | Established (cited) |
+| `metalpershot` | floating · single float | 0.0 | `[06 §4.2]`, `[06 §11.1]`, `[07 §8]` | Established (cited) |
+| `areaofeffect` | integer · 16-bit | 0 | `[06 §3.3]`, `[06 §12.2]`, `[06 R-DMG-01 §5]` | Established (cited) |
+| `edgeeffectiveness` | floating · single float | 0.0 | `[06 §9.2]` | Established |
+| `weapontimer` | floating · 16-bit | 0.0 | `[06 §4.3]`, `[06 §7.3]`, `[06 R-WFX-01 §4]` | Established (cited) |
+| `noautorange` | integer · flag bit 27 | 0 | `[06 §7.3]` | Established (cited) |
+| `turnrate` | floating · 16-bit | 0.0 | `[06 §3.3]`, `[06 §6.7]` | Established |
+| `burst` | integer · 16-bit | 0 | `[06 §3.3]`, `[06 §4.3]` | Established (cited) |
+| `burstrate` | floating · 16-bit | 0.0 | `[06 §4.3]`, `[06 §7.3]` | Established (cited) |
+| `sprayangle` | integer · 16-bit | 0 | `[06 §4.3]`, `[06 R-WPN-03 §1]`, `[06 §3.3]` | Established (cited) |
+| `duration` | floating · 16-bit | 0.0 | `[06 §6.10]`, `[06 §4.3]`, `[06 §7.3]` | Established (cited) |
+| `randomdecay` | floating · 16-bit | 0.0 | `[06 §4.3]`, `[06 §7.3]` | Established (cited) |
+| `smokedelay` | floating · 16-bit | 0.0 | `[06 §7.3]` | Established (cited) |
+| `flighttime` | floating · 16-bit | 0.0 | `[06 §6.6]`, `[06 §7.3]` | Established (cited) |
+| `holdtime` | floating · 16-bit | 0.0 | `[06 §7.3]`, `[06 §4.4]`, `[06 §8.1]` | Established (cited) |
+| `minbarrelangle` | floating · single float | -11.25 | `[06 §3.3]` | Established (cited) |
+| `firestarter` | integer · 8-bit | 0 | `[05 "Feature burning"]`, `[06 §6.10]` | Established |
+| `rendertype` | integer · 8-bit | 0 | `[06 R-WFX-01 §4]`, `[06 R-WFX-01 §1]` | Established (cited) |
+| `color` | integer · 8-bit | 0 | `[06 R-WFX-01 §1]`, `[06 R-WFX-01 §4]`, `[03 R-FX-01 §2]` | Established (cited) |
+| `color2` | integer · 8-bit | 0 | `[06 R-WFX-01 §4]`, `[06 R-WFX-01 §1]`, `[03 §5.4]` | Established (cited) |
+| `soundtrigger` | integer · flag bit 11 | 0 | `[06 §13.2]`, `[06 §4.3]`, `[06 R-WFX-01 §1]` | Established (cited) |
+| `guidance` | integer · flag bit 12 | 0 | `[06 §6.7]`, `[06 §6.9]` | Established (cited) |
+| `tracks` | integer · flag bit 13 | 0 | `[06 §6.6]` | Established (cited) |
+| `lineofsight` | integer · 32-bit | 0 | `[06 §3.3]`, `[06 §6.2]`, `[06 §6.10]` | Established (cited) |
+| `ballistic` | integer · flag bit 1 | 0 | `[06 §3.3]`, `[06 §6.2]`, `[06 R-WFX-01 §4]` | Established (cited) |
+| `unitsonly` | integer · flag bit 14 | 0 | `[06 §9.3]` | Established (cited) |
+| `groundbounce` | integer · flag bit 15 | 0 | `[06 §8.2]` | Established (cited) |
+| `waterweapon` | integer · flag bit 16 | 0 | `[06 §6.9]` | Established (cited) |
+| `toairweapon` | integer · flag bit 17 | 0 | `[02 R-KEYS-01 §2]` (attack resolver / fire-order weapon pick) | Supported inference |
+| `smoketrail` | integer · flag bit 18 | 0 | `[06 §7.3]` | Established |
+| `turret` | integer · flag bit 19 | 0 | `[06 §4.4]`, `[06 §7.3]`, `[06 §3.3]` | Established (cited) |
+| `selfprop` | integer · flag bit 20 | 0 | `[06 §6.2]`, `[06 §3.3]`, `[06 R-WFX-01 §4]` | Established (cited) |
+| `propeller` | integer · flag bit 21 | 0 | `[06 §6.1]`, `[06 §7.1]`, `[06 R-WFX-01 §4]` | Established (cited) |
+| `noexplode` | integer · flag bit 22 | 0 | `[06 §6.10]`, `[06 §9.1]`, `[06 R-DMG-01 §5]` | Established (cited) |
+| `burnblow` | integer · flag bit 23 | 0 | `[06 §6.6]`, `[06 §6.7]` | Established (cited) |
+| `twophase` | integer · flag bit 24 | 0 | `[06 §6.6]` | Established (cited) |
+| `cruise` | integer · flag bit 25 | 0 | `[06 §3.3]`, `[06 §6.7]`, `[06 §6.8]` | Established (cited) |
+| `commandfire` | integer · flag bit 26 | 0 | `[06 §3.2]`, `[06 §4.2]`, `[06 §6.8]` | Established (cited) |
+| `stockpile` | integer · flag bit 28 | 0 | `[06 §3.3]`, `[06 R-P0-07]`, `[06 R-WPN-03 §6]` | Established (cited) |
+| `targetable` | integer · flag bit 29 | 0 | `[06 §11.2]` | Established (cited) |
+| `interceptor` | integer · flag bit 30 | 0 | `[06 §3.2]`, `[06 §3.3]`, `[06 §11.2]` | Established |
+| `beamweapon` | integer · flag bit 3 | 0 | `[06 §6.3]`, `[06 R-WFX-01 §4]` | Established (cited) |
+| `shellweapon` | integer · flag bit 2 | 0 | inert (reader census: none) — `[02 R-KEYS-01 §2]` | Established |
+| `dropped` | integer · flag bit 8 | 0 | `[06 §6.2]`, `[06 §3.2]`, `[06 §3.3]` | Established (cited) |
+| `vlaunch` | integer · flag bit 4 | 0 | `[06 §3.3]`, `[06 R-P0-07]`, `[06 R-WPN-03 §6]` | Established (cited) |
+| `meteor` | integer · flag bit 5 | 0 | `[06 §6.2]`, `[06 §6.5]` | Established |
+| `noradar` | integer · flag bit 6 | 0 | `[06 §11.3]`, `[03 §3.9]` | Established (cited) |
+| `paralyzer` | integer · flag bit 7 | 0 | `[06 §10]` | Established |
+| `startsmoke` | integer · flag bit 9 | 0 | `[06 §7.3]`, `[06 R-WFX-01 §4]`, `[06 R-WFX-01 §5]` | Established (cited) |
+| `endsmoke` | integer · flag bit 10 | 0 | `[06 §7.3]`, `[06 R-WFX-01 §5]` | Established (cited) |
+| `accuracy` | integer · 16-bit | 0 | `[06 §4.4]`, `[06 §3.3]`, `[06 R-WPN-03 §1]` | Established (cited) |
+| `tolerance` | integer · 16-bit | 0 | `[06 R-WPN-03 §2]`, `[06 R-WPN-03 §1]`, `[06 §3.3]` | Established (cited) |
+| `pitchtolerance` | integer · 16-bit | 0 | `[06 R-WPN-03 §2]`, `[06 §3.3]`, `[06 R-WPN-03 §1]` | Established (cited) |
+| `shakemagnitude` | integer · 32-bit | 0 | `[03 §5.6]` | Established |
+| `shakeduration` | floating · 32-bit | 0.0 | `[03 §5.6]` | Established |
+| `model` | string · 256 bytes | empty | `[06 R-WFX-01 §4]` (model render families) | Established |
+| `explosiongaf` | string · 256 bytes | empty | `[06 R-WFX-01 §1]` | Established (cited) |
+| `explosionart` | string · 256 bytes | empty | `[06 R-WFX-01 §1]` | Established (cited) |
+| `waterexplosiongaf` | string · 256 bytes | empty | `[06 R-WFX-01 §1]` | Established (cited) |
+| `waterexplosionart` | string · 256 bytes | empty | `[06 R-WFX-01 §1]` | Established (cited) |
+| `lavaexplosiongaf` | string · 256 bytes | empty | `[06 R-WFX-01 §1]` | Established (cited) |
+| `lavaexplosionart` | string · 256 bytes | empty | `[06 R-WFX-01 §1]` | Established (cited) |
+| `soundstart` | string · 256 bytes | empty | `[06 §13.2]`, `[06 R-WFX-01 §1]`, `[06 R-WFX-01 §3]` | Established (cited) |
+| `soundhit` | string · 256 bytes | empty | `[06 §13.2]`, `[06 R-WFX-01 §1]`, `[06 R-WFX-01 §3]` | Established (cited) |
+| `soundwater` | string · 256 bytes | empty | `[06 §7.3]`, `[06 §13.2]`, `[06 R-WFX-01 §1]` | Established (cited) |
+
+**weapon `[DAMAGE]` child section**
+
+| Key | Accessor · stored width | Default | Consumer | Evidence |
+|---|---|---|---|---|
+| `default` | integer · 16-bit | 0 | `[06 R-DMG-01 §1]`, `[06 §9.2]` | Established |
+
+**feature (feature TDF section)**
+
+| Key | Accessor · stored width | Default | Consumer | Evidence |
+|---|---|---|---|---|
+| `Description` | string · 20 bytes | empty | `[07 §6]` (feature information text) | Supported inference |
+| `footprintx` | integer · 16-bit | 0 | `[05 R-WORK-01]`, `[05 R-FEAT-01]`, `[03 §5.1]` | Established (cited) |
+| `footprintz` | integer · 16-bit | 0 | `[05 R-WORK-01]`, `[05 R-FEAT-01]`, `[03 §5.1]` | Established (cited) |
+| `height` | integer · 8-bit | 0 | `[05 R-FEAT-01]`, `[03 R-TERR-01 §4]`, `[03 §3.5]` | Established (cited) |
+| `object` | string · 256 bytes | empty | `[05 R-FEAT-01]`, `[03 §5.1]` | Established (cited) |
+| `filename` | string · 256 bytes | empty | `[05 R-FEAT-01]`, `[03 §5.1]` | Established (cited) |
+| `seqname` | string · 256 bytes | empty | `[05 R-FEAT-01]`, `[03 §5.1]` | Established (cited) |
+| `seqnameshad` | string · 256 bytes | empty | `[05 R-FEAT-01]`, `[03 §5.1]`, `[03 §5.3]` | Established (cited) |
+| `seqnameburn` | string · 256 bytes | empty | `[05 R-FEAT-01]`, `[05 "Feature burning"]`, `[03 §5.1]` | Established (cited) |
+| `seqnameburnshad` | string · 256 bytes | empty | `[05 R-FEAT-01]` | Established (cited) |
+| `seqnamedie` | string · 256 bytes | empty | `[05 R-FEAT-01]`, `[03 §5.1]` | Established (cited) |
+| `seqnamedieshad` | string · 256 bytes | empty | `[05 R-FEAT-01]` | Established (cited) |
+| `seqnamereclamate` | string · 256 bytes | empty | `[05 R-FEAT-01]`, `[03 §5.1]` | Established (cited) |
+| `seqnamereclamateshad` | string · 256 bytes | empty | `[05 R-FEAT-01]` | Established (cited) |
+| `spreadchance` | integer · 8-bit | 0 | `[05 R-FEAT-01]`, `[05 "Feature burning"]`, `[03 §5.1]` | Established (cited) |
+| `reproduce` | integer · 8-bit | 0 | `[05 R-FEAT-01]`, `[05 "Feature reproduction"]`, `[05 "Required implementation invariants"]` | Established (cited) |
+| `reproducearea` | integer · 8-bit | 0 | `[05 R-FEAT-01]`, `[03 §5.1]` | Established (cited) |
+| `metal` | integer · single float | 0 | `[05 R-SHARE-01]`, `[05 R-WORK-01]`, `[05 R-FEAT-01]` | Established (cited) |
+| `energy` | integer · single float | 0 | `[05 R-SHARE-01]`, `[05 R-WORK-01]`, `[05 R-FEAT-01]` | Established (cited) |
+| `damage` | integer · 16-bit | 0 | `[05 R-FEAT-01]`, `[05 "Feature catalog and placement"]`, `[03 §5.1]` | Established (cited) |
+| `animating` | integer · flag bit 1 | 0 | `[05 R-FEAT-01]`, `[03 §5.1]` | Established (cited) |
+| `animtrans` | integer · flag bit 2 | 0 | `[05 R-FEAT-01]`, `[03 §5.1]` | Established (cited) |
+| `shadtrans` | integer · flag bit 3 | 0 | `[05 R-FEAT-01]`, `[03 §5.1]`, `[03 §5.3]` | Established (cited) |
+| `flamable` | integer · flag bit 4 | 0 | `[05 R-FEAT-01]`, `[03 §5.1]` | Established (cited) |
+| `geothermal` | integer · flag bit 5 | 0 | `[05 R-FEAT-01]`, `[05 "Feature catalog and placement"]`, `[05 "Prerequisite structures"]` | Established (cited) |
+| `blocking` | integer · flag bit 6 | 0 | `[05 R-FEAT-01]`, `[05 "Prerequisite structures"]`, `[05 "Feature catalog and placement"]` | Established (cited) |
+| `reclaimable` | integer · flag bit 7 | 0 | `[05 R-FEAT-01]`, `[05 "Prerequisite structures"]`, `[05 "Feature catalog and placement"]` | Established (cited) |
+| `autoreclaimable` | integer · 16-bit | 1 | `[05 R-FEAT-01]`, `[05 "Feature catalog and placement"]`, `[03 §5.1]` | Established (cited) |
+| `indestructible` | integer · flag bit 9 | 0 | `[05 R-FEAT-01]`, `[05 "Prerequisite structures"]`, `[05 "Feature catalog and placement"]` | Established (cited) |
+| `nodisplayinfo` | integer · flag bit 10 | 0 | `[05 R-FEAT-01]` | Established (cited) |
+| `nodrawundergray` | integer · flag bit 11 | 0 | `[05 R-FEAT-01]`, `[03 §5.1]` | Established (cited) |
+| `sparktime` | floating · 16-bit | 0.0 | `[05 R-FEAT-01]`, `[05 "Prerequisite structures"]`, `[03 §5.1]` | Established (cited) |
+| `burnweapon` | string · 256 bytes | empty | `[05 R-FEAT-01]`, `[05 "Feature burning"]`, `[03 §5.1]` | Established (cited) |
+
+**movement class (`MOVEINFO.TDF` `[CLASS<n>]`, also applied to an FBI section)**
+
+| Key | Accessor · stored width | Default | Consumer | Evidence |
+|---|---|---|---|---|
+| `FootPrintX` | integer · 16-bit | 0 | `[04 §6.1]`, `[04 R-PATH-01 §7]` | Established |
+| `FootPrintZ` | integer · 16-bit | 0 | `[04 §6.1]`, `[04 R-PATH-01 §7]` | Established |
+| `maxwaterdepth` | integer · 16-bit | the record's own prior value (template pre-fill, `[04 §6.1]`) | `[04 §6.1]`, `[04 R-COLL-01 §2]` | Established |
+| `minwaterdepth` | integer · 16-bit | the record's own prior value (template pre-fill, `[04 §6.1]`) | `[04 §6.1]`, `[04 R-COLL-01 §2]` | Established |
+| `maxslope` | integer · 8-bit | the record's own prior value (template pre-fill, `[04 §6.1]`) | `[04 §6.1]`, `[04 R-COLL-01 §2]` | Established |
+| `badslope` | integer · 8-bit | the record's own prior value (template pre-fill, `[04 §6.1]`) | `[04 §6.1]` | Established |
+| `maxwaterslope` | integer · 8-bit | the record's own prior value (template pre-fill, `[04 §6.1]`) | `[04 §6.1]` | Established |
+| `badwaterslope` | integer · 8-bit | the record's own prior value (template pre-fill, `[04 §6.1]`) | `[04 §6.1]` | Established |
+
+**campaign file `[MISSION<n>]` (read on the campaign path only; `maxunits` is then read from the OTA `[GlobalHeader]`)**
+
+| Key | Accessor · stored width | Default | Consumer | Evidence |
+|---|---|---|---|---|
+| `missionname` | lang-string · 256 bytes | empty | `[08 R-CAMP-01 §1]` | Established |
+| `missionfile` | string · 256 bytes | empty | `[02 R-MAP-01 §2]`, `[08 R-CAMP-01 §1]` | Established |
+| `maxunits` | integer · 16-bit | 200 | `[02 R-MAP-01 §3]`, `[08 R-SKIR-01 §6]`, `[05 "Unit creation and limits"]` | Established |
+
+**OTA `[GlobalHeader]` / `[Schema <n>]`**
+
+| Key | Accessor · stored width | Default | Consumer | Evidence |
+|---|---|---|---|---|
+| `brief` | lang-string · 256 bytes | empty | `[02 R-MAP-01 §3]`, `[08 R-CAMP-01 §2]` | Established |
+| `narration` | lang-string · 256 bytes | empty | `[02 R-MAP-01 §3]`, `[03 §8.4]` | Established |
+| `missionhint` | lang-string · 256 bytes | empty | inert (reader census: none) — `[02 R-MAP-01 §3]` | Established |
+| `glamour` | string · 256 bytes | empty | `[02 R-MAP-01 §3]`, `[08 R-CAMP-01 §2]` | Established |
+| `glamoursound` | string · 256 bytes | empty | `[02 R-MAP-01 §3]`, `[03 §8.4]` | Established |
+| `UseOnlyUnits` | string · 256 bytes | empty | `[02 R-MAP-01 §3]`, `[08 "Session structures"]` | Established |
+| `mapping` | integer · 32-bit | 0 | `[08 R-SKIR-01 §4]` | Established |
+| `lineofsight` | integer · 32-bit | 0 | `[08 R-SKIR-01 §4]` | Established |
+| `memory` | string · 128 bytes | empty | inert (reader census: none) — `[02 R-MAP-01 §3]` | Established |
+| `numplayers` | string · 128 bytes | empty | inert (reader census: none) — `[02 R-MAP-01 §3]` | Established |
+| `Planet` | string · 128 bytes | empty | `[02 R-MAP-01 §3]`, `[08 R-CAMP-01 §2]` | Established |
+| `nomovie` | integer · 32-bit | 0 | `[08 R-CAMP-01 §6]` | Established |
+| `missiondescription` | string · 128 bytes | `No description available` | `[02 R-MAP-01 §3]` (translated; front-end screen reader open, doc 07) | Established |
+| `minwindspeed` | integer · 32-bit | 0 | `[02 R-MAP-01 §6]`, `[03 R-TERR-01 §6]`, `[05 R-PROD-01 §1]` | Established |
+| `maxwindspeed` | integer · 32-bit | 0 | `[02 R-MAP-01 §6]`, `[03 R-TERR-01 §6]`, `[05 R-PROD-01 §1]` | Established |
+| `gravity` | integer · 32-bit | 0 | `[02 R-MAP-01 §6]`, `[06 §6.2]` | Established |
+| `tidalstrength` | floating · single float | 0.0 | `[02 R-MAP-01 §6]`, `[05 R-PROD-01 §4]` | Established |
+| `lavaworld` | integer · 32-bit | 0 | `[03 R-TERR-01 §2]`, `[08 R-SKIR-01 §3]` | Established |
+| `nosealeveltrigger` | integer · 32-bit | 0 | `[06 §8.2]`, `[04 R-COB-04 §2]` | Established |
+| `waterdoesdamage` | integer · 32-bit | 0 | `[04 §9.2]` | Established |
+| `waterdamage` | integer · 32-bit | 0 | `[04 §9.2]` | Established |
+| `killmul` | floating · single float | 0.0 | inert (reader census: none) — `[02 R-MAP-01 §3]` | Established |
+| `timemul` | floating · single float | 0.0 | inert (reader census: none) — `[02 R-MAP-01 §3]` | Established |
+| `HumanMetal` | integer · single float | 0 | `[08 R-SKIR-01 §5]` | Established |
+| `HumanEnergy` | integer · single float | 0 | `[08 R-SKIR-01 §5]` | Established |
+| `ComputerMetal` | integer · single float | 0 | `[08 R-SKIR-01 §5]` | Established |
+| `ComputerEnergy` | integer · single float | 0 | `[08 R-SKIR-01 §5]` | Established |
+| `SurfaceMetal` | integer · 32-bit | 0 | `[03 R-TERR-01 §1]`, `[02 R-MAP-01 §6]` | Established |
+| `aiprofile` | string · 256 bytes | empty | `[08 R-AI-01]`, `[02 R-MAP-01 §5]` | Established |
+| `MeteorWeapon` | string · 32 bytes | empty | `[02 §6]` (meteor merge and enable contract), `[06 §6.5]` | Established |
+| `MeteorRadius` | integer · single float | 0 | `[02 §6]` (meteor merge and enable contract), `[06 §6.5]` | Established |
+| `MeteorDensity` | floating · single float | 0.0 | `[02 §6]` (meteor merge and enable contract), `[06 §6.5]` | Established |
+| `MeteorDuration` | floating · single float | 0.0 | `[02 §6]` (meteor merge and enable contract), `[06 §6.5]` | Established |
+| `MeteorInterval` | floating · single float | 0.0 | `[02 §6]` (meteor merge and enable contract), `[06 §6.5]` | Established |
+
+**OTA placed objects (`[units]`, `[features]`, `[specials]`)**
+
+| Key | Accessor · stored width | Default | Consumer | Evidence |
+|---|---|---|---|---|
+| `Unitname` | string · 1024 bytes | empty | `[08 R-TRIG-01 §9]`, `[08 R-TRIG-01 §11]`, `[08 R-AI-01]` | Established (cited) |
+| `Ident` | string · 1024 bytes | empty | `[08 R-TRIG-01 §9]`, `[08 R-TRIG-01 §11]` | Established (cited) |
+| `InitialMission` | string · 1024 bytes | empty | `[08 R-TRIG-01 §9]`, `[08 R-TRIG-01 §3]`, `[04 §3.6]` | Established (cited) |
+| `XPos` | integer · 32-bit | 0 | `[08 R-TRIG-01 §9]` | Established (cited) |
+| `YPos` | integer · 32-bit | 0 | `[08 R-TRIG-01 §9]` | Established (cited) |
+| `ZPos` | integer · 32-bit | 0 | `[08 R-TRIG-01 §9]` | Established (cited) |
+| `Angle` | integer · 16-bit | 0 | `[08 R-TRIG-01 §9]` | Established (cited) |
+| `Player` | integer · 8-bit | 0 | `[08 R-SKIR-01 §1]`, `[08 R-TRIG-01 §9]`, `[08 "Skirmish configuration"]` | Established (cited) |
+| `HealthPercentage` | integer · 16-bit | 100 | `[08 R-TRIG-01 §9]` | Established (cited) |
+| `BuildPriority` | integer · 16-bit | 0 | `[08 R-TRIG-01 §9]`, `[08 "Session structures"]` | Established (cited) |
+| `CreationCountdown` | integer · 32-bit | 0 | `[08 R-TRIG-01 §9]` | Established (cited) |
+| `MissionCriticalUnit` | integer · 8-bit | 0 | `[08 R-TRIG-01 §9]`, `[08 "Session structures"]` | Established (cited) |
+| `AiIgnore` | integer · 8-bit | 0 | `[08 R-TRIG-01 §9]`, `[08 "Session structures"]` | Established (cited) |
+| `AiPriorityTarget` | integer · 8-bit | 0 | `[08 R-TRIG-01 §9]`, `[08 "Session structures"]` | Established (cited) |
+| `InitialGroup` | integer · 8-bit | 0 | `[08 "Session structures"]`, `[08 R-TRIG-01 §9]`, `[08 R-TRIG-01 §11]` | Established (cited) |
+| `Immunity` | integer · 8-bit | 0 | `[08 R-TRIG-01 §9]` | Established (cited) |
+| `Featurename` | string · 128 bytes | empty | `[08 R-TRIG-01 §9]` | Established (cited) |
+
+**OTA triggers (`[GlobalHeader]`)**
+
+| Key | Accessor · stored width | Default | Consumer | Evidence |
+|---|---|---|---|---|
+| `KillEnemyCommander` | integer · 32-bit | 0 | `[08 R-TRIG-01 §2]`, `[08 "Session structures"]`, `[08 "Victory and defeat triggers"]` | Established (cited) |
+| `DestroyAllUnits` | integer · 32-bit | 0 | `[08 R-TRIG-01 §4]`, `[08 "Victory and defeat triggers"]`, `[08 R-TRIG-01 §2]` | Established (cited) |
+| `KillAllMobileUnits` | integer · 32-bit | 0 | `[08 R-TRIG-01 §2]`, `[08 "Session structures"]`, `[08 "Victory and defeat triggers"]` | Established (cited) |
+| `BuildUnitType` | string · 256 bytes | empty | `[08 R-TRIG-01 §4]`, `[08 "Victory and defeat triggers"]`, `[08 R-TRIG-01 §2]` | Established (cited) |
+| `CaptureUnitType` | string · 256 bytes | empty | `[08 "Victory and defeat triggers"]`, `[08 R-TRIG-01 §10]`, `[08 "Session structures"]` | Established (cited) |
+| `KillAllOfType` | string · 256 bytes | empty | `[08 R-TRIG-01 §2]`, `[08 "Victory and defeat triggers"]`, `[08 "Session structures"]` | Established (cited) |
+| `KillUnitType` | string · 256 bytes | empty | `[08 R-TRIG-01 §2]`, `[08 "Victory and defeat triggers"]`, `[08 "Session structures"]` | Established (cited) |
+| `MoveUnitToRadius` | string · 256 bytes | empty | `[08 R-TRIG-01 §2]`, `[08 "Victory and defeat triggers"]`, `[08 R-TRIG-01 §3]` | Established (cited) |
+| `UnitTypePassesX` | string · 256 bytes | empty | `[08 "Victory and defeat triggers"]`, `[08 R-TRIG-01 §4]` | Established (cited) |
+| `UnitTypePassesZ` | string · 256 bytes | empty | `[08 "Victory and defeat triggers"]`, `[08 R-TRIG-01 §4]` | Established (cited) |
+| `VictoryTimerRunsOut` | integer · 32-bit | 0 | `[08 "Victory and defeat triggers"]`, `[08 R-TRIG-01 §4]` | Established (cited) |
+| `CommanderKilled` | integer · 32-bit | 0 | `[08 R-TRIG-01 §2]`, `[08 "Session structures"]`, `[08 "Victory and defeat triggers"]` | Established (cited) |
+| `AllUnitsKilled` | integer · 32-bit | 0 | `[08 R-TRIG-01 §2]`, `[08 "Session structures"]`, `[08 "Victory and defeat triggers"]` | Established (cited) |
+| `AllUnitsKilledOfType` | string · 256 bytes | empty | `[08 "Victory and defeat triggers"]`, `[08 R-TRIG-01 §2]`, `[08 "Session structures"]` | Established (cited) |
+| `UnitTypeKilled` | string · 256 bytes | empty | `[08 "Victory and defeat triggers"]`, `[08 R-TRIG-01 §2]`, `[08 "Session structures"]` | Established (cited) |
+| `DeathTimerRunsOut` | integer · 32-bit | 0 | `[08 "Victory and defeat triggers"]`, `[08 R-TRIG-01 §4]` | Established (cited) |
+| `AnyUnitPassesX` | integer · 32-bit | -1 | `[08 "Victory and defeat triggers"]`, `[08 R-TRIG-01 §4]` | Established (cited) |
+| `AnyUnitPassesZ` | integer · 32-bit | -1 | `[08 "Victory and defeat triggers"]`, `[08 R-TRIG-01 §4]` | Established (cited) |
+
+**side (`SIDEDATA.TDF` `[SIDE<n>]` and its anchor subsections)**
+
+| Key | Accessor · stored width | Default | Consumer | Evidence |
+|---|---|---|---|---|
+| `name` | string · 30 bytes | empty | `[07 §6]`, `[08 R-CAMP-01 §2]` (campaign-side match) | Established |
+| `nameprefix` | string · 4 bytes | empty | unknown: no reader located by the key-name grep — decider: reader census on the side record's 4-byte prefix field | Unknown |
+| `commander` | string · 32 bytes | empty | `[08 R-TRIG-01 §3]`, `[08 R-SKIR-01 §7]` | Established |
+| `font` | string · 256 bytes | empty | `[02 §6]` (side font load; missing font is fatal) | Established |
+| `energycolor` | integer · 32-bit | 0 | `[02 §6]`, `[07 §6]` (resource bar palette index) | Established |
+| `metalcolor` | integer · 32-bit | 0 | `[02 §6]`, `[07 §6]` | Established |
+| `x1` | integer · 32-bit | 0 | `[02 §6]`, `[07 §6]` (anchor rectangles) | Established |
+| `y1` | integer · 32-bit | 0 | `[02 §6]`, `[07 §6]` | Established |
+| `x2` | integer · 32-bit | 0 | `[02 §6]`, `[07 §6]` | Established |
+| `y2` | integer · 32-bit | 0 | `[02 §6]`, `[07 §6]` | Established |
+
+**weapon `[DAMAGE]` child section**
+
+| Key | Accessor · stored width | Default | Consumer | Evidence |
+|---|---|---|---|---|
+| `<any other key>` | integer · 32-bit (sorted override table entry) | 0 | `[06 R-DMG-01 §1]` (per-unit-name override; lookup `[06 §9.2]`) | Established |
+
+**sound category (`SOUND.TDF` section)**
+
+| Key | Accessor · stored width | Default | Consumer | Evidence |
+|---|---|---|---|---|
+| `select` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-ORD-01 §1]` | Established (cited) |
+| `underattack` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-ORD-01 §1]` | Established (cited) |
+| `activate` | string (variant list) · 64 bytes per variant | no variant | `[03 R-RND-02A]`, `[03 §8.3]`, `[04 R-SPEC-01 §12]` | Established (cited) |
+| `deactivate` | string (variant list) · 64 bytes per variant | no variant | `[03 R-RND-02A]`, `[03 §8.3]`, `[04 R-P0-10]` | Established (cited) |
+| `ok` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-ORD-01 §1]`, `[07 §11]` | Established (cited) |
+| `arrived` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-ORD-01 §1]`, `[04 R-ORD-01 §3]` | Established (cited) |
+| `cant` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-ORD-01 §1]` | Established (cited) |
+| `unitcomplete` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-ORD-01 §1]` | Established (cited) |
+| `build` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-ORD-01 §1]` | Established (cited) |
+| `repair` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-ORD-01 §1]` | Established (cited) |
+| `working` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-ORD-01 §5]`, `[04 R-ORD-01 §1]` | Established (cited) |
+| `load` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-ORD-01 §1]`, `[07 §5]` | Established (cited) |
+| `unload` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-ORD-01 §1]` | Established (cited) |
+| `cloak` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-STANCE-01 §2]`, `[04 R-ORD-01 §1]` | Established (cited) |
+| `uncloak` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-ORD-01 §1]` | Established (cited) |
+| `capture` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-ORD-01 §1]`, `[04 R-ORD-01 §5]` | Established (cited) |
+| `count5` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-ORD-01 §1]`, `[04 R-SPEC-01 §13]` | Established (cited) |
+| `count4` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-ORD-01 §1]` | Established (cited) |
+| `count3` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-ORD-01 §1]` | Established (cited) |
+| `count2` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-ORD-01 §1]` | Established (cited) |
+| `count1` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-ORD-01 §1]` | Established (cited) |
+| `count0` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-ORD-01 §1]`, `[04 R-SPEC-01 §13]` | Established (cited) |
+| `canceldestruct` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-ORD-01 §1]` | Established (cited) |
+| `<event><n>, <event>text, <event><n>text` | string (numbered variants and captions) · 64 bytes each | empty caption | `[03 §8.3]`, `[02 §5]` (variant gathering) | Established |
+
+**registry preference (`Total Annihilation` key)**
+
+| Key | Accessor · stored width | Default | Consumer | Evidence |
+|---|---|---|---|---|
+| `Interface Type` | DWORD · 32-bit | 0 | `[07 §8]` | Established |
+| `DisplaymodeWidth` | DWORD · 32-bit | 640 | unknown: no doc cites the display-mode reader — decider: static trace of the mode-set path (doc 07/01) | Unknown |
+| `DisplaymodeHeight` | DWORD · 32-bit | 480 | unknown: no doc cites the display-mode reader — decider: static trace of the mode-set path (doc 07/01) | Unknown |
+| `side` | DWORD · 32-bit | 0 | `[02 R-KEYS-01 §3]` (last chosen side; briefing screens and save restore) | Supported inference |
+| `Difficulty` | DWORD · 32-bit | 1 | `[07 §5]`, `[07 §11]`, `[08 R-CAMP-01 §3]` | Established (cited) |
+| `scrollspeed` | DWORD · 32-bit | 32 | `[03 R-FX-01 §7]` | Established (cited) |
+| `SingleCommanderDeath` | DWORD · 32-bit | 1 | `[08 R-SKIR-01 §4]` (single-player option word, by analogy with the skirmish loader) | Supported inference |
+| `SingleMapping` | DWORD · 32-bit | 1 | `[03 §3.1]` | Established (cited) |
+| `SingleLineOfSight` | DWORD · 32-bit | 1 | `[03 §3.1]` | Established (cited) |
+| `SingleLOSType` | DWORD · 32-bit | 1 | `[03 §3.1]` | Established (cited) |
+| `screenchat` | DWORD · 32-bit | 1 | unknown: no doc cites the reader — decider: reader census on the stored global (doc 07) | Unknown |
+| `damagebars` | DWORD · 32-bit | bit clear (0) | `[03 R-FX-01 §6]` | Established (cited) |
+| `Sound Mode` | DWORD · 32-bit | bit set (1) | `[02 §3]` (packed sound word bits 0–2); mixer reader open — decider: static trace (doc 03 §8) | Supported inference |
+| `MixingBuffers` | DWORD · 32-bit | no default installed | unknown: no doc cites the reader — decider: static trace of the mixer initialisation (doc 03 §8) | Unknown |
+| `RestoreVolume` | DWORD · 32-bit | bit clear (0) | `[02 §3]` (gates the wave-out/CD volume restore) | Established |
+| `WaveOutVolume` | DWORD · 32-bit | no default installed | `[02 §3]` (restored only when `RestoreVolume` is set) | Established |
+| `CDAudioVolume` | DWORD · 32-bit | no default installed | `[02 §3]` (restored only when `RestoreVolume` is set) | Established |
+| `Anti-Alias` | DWORD · 32-bit | bit set (1) | `[03 R-REN-03A]` (structure anti-aliasing gate) | Supported inference |
+| `Shadows` | DWORD · 32-bit | bit set (1) | `[03 §5.3]` | Supported inference |
+| `FeatureShadows` | DWORD · 32-bit | bit set (1) | `[03 §5.3]` | Supported inference |
+| `VehicleShadows` | DWORD · 32-bit | bit set (1) | `[03 §5.3]` | Supported inference |
+| `Shading` | DWORD · 32-bit | bit set (1) | `[03 R-RND-02A]` | Established |
+| `DitheredFog` | DWORD · 32-bit | bit clear (0) | unknown: no doc cites the reader — decider: static trace of the fog presenter (doc 03 §3) | Unknown |
+| `Gamma` | DWORD · 32-bit | 12 | unknown: no doc cites the reader — decider: static trace of the palette/gamma ramp (doc 03) | Unknown |
+| `SwitchAlt` | DWORD · 32-bit | no default installed | unknown: no doc cites the reader — decider: static trace of the selection-switch input path (doc 07) | Unknown |
+| `Password` | string · 11 bytes (incl. NUL) | empty | out of scope (multiplayer lobby) | Established |
+| `Nickname` | string · 17 bytes (incl. NUL) | empty | `[08 R-SKIR-01 §1]` (local player name); lobby use out of scope | Supported inference |
+| `Game Name` | string · 17 bytes (incl. NUL) | empty | out of scope (multiplayer lobby) | Established |
+| `Image Output Directory` | string · 256 bytes (incl. NUL) | empty | `[03 §9]` (screenshot/movie output path) | Supported inference |
+| `Movie Output Rate` | DWORD · 32-bit | 10 | `[03 §9]` | Established (cited) |
+| `textlines` | DWORD · 32-bit | 10 | unknown: no doc cites the reader — decider: static trace of the chat/console text presenter (doc 07) | Unknown |
+| `textscroll` | DWORD · 32-bit | 10 | unknown: no doc cites the reader — decider: static trace of the chat/console text presenter (doc 07) | Unknown |
+| `mousespeed` | DWORD · 32-bit | 10 | unknown: no doc cites the reader — decider: static trace of the pointer path (doc 07) | Unknown |
+| `gamespeed` | DWORD · 32-bit | 10 | unknown: no doc cites the reader — decider: static trace of the tick-rate setter (doc 01 §2) | Unknown |
+| `unitchat` | DWORD · 32-bit | 10 | unknown: no doc cites the reader — decider: static trace of the unit speech scheduler (doc 03 §8.3) | Unknown |
+| `unitchattext` | DWORD · 32-bit | 5 | unknown: no doc cites the reader — decider: static trace of the caption presenter (doc 03 §8.3) | Unknown |
+| `musicmode` | DWORD · 32-bit | bit set (1) | `[03 §8.4]` (music mode) | Supported inference |
+| `cdmode` | DWORD · 32-bit | 4 | `[03 §8.4]` (CD audio mode) | Supported inference |
+| `ackfx` | DWORD · 32-bit | bit set (1) | `[03 §8.3]` (acknowledgement cue gate) | Supported inference |
+| `buildfx` | DWORD · 32-bit | bit set (1) | `[03 §8.3]` (build cue gate) | Supported inference |
+| `speechfx` | DWORD · 32-bit | bit set (1) | `[03 §8.3]` (speech cue gate) | Supported inference |
+| `fxvol` | DWORD · 32-bit | 27 | `[03 §8.1]` (effects volume) | Supported inference |
+| `musicvol` | DWORD · 32-bit | 32 | `[03 §8.4]` (music volume) | Supported inference |
+| `clock` | DWORD · 32-bit | bit clear (0) | `[02 §3]` (option-word bit 6, clock display) | Established |
+| `NumSkirmishPlayers` | DWORD · 32-bit | 4 | `[07 §5]`, `[08 R-SKIR-01 §1]`, `[08 "Skirmish configuration"]` | Established (cited) |
+| `MultiCommanderDeath` | DWORD · 32-bit | 1 | `[08 R-SKIR-01 §4]` (multiplayer option word, by analogy with the skirmish loader) | Supported inference |
+| `MultiMapping` | DWORD · 32-bit | 1 | `[03 §3.1]` | Established (cited) |
+| `MultiLineOfSight` | DWORD · 32-bit | 1 | `[03 §3.1]` | Established (cited) |
+| `MultiLOSType` | DWORD · 32-bit | 1 | `[03 §3.1]` | Established (cited) |
+| `SkirmishCommanderDeath` | DWORD · 32-bit | 1 | `[08 R-SKIR-01 §1]` | Established (cited) |
+| `SkirmishMapping` | DWORD · 32-bit | 1 | `[03 §3.1]`, `[08 R-SKIR-01 §1]` | Established (cited) |
+| `SkirmishLineOfSight` | DWORD · 32-bit | 1 | `[03 §3.1]`, `[08 R-SKIR-01 §1]` | Established (cited) |
+| `SkirmishLOSType` | DWORD · 32-bit | 1 | `[03 §3.1]`, `[08 R-SKIR-01 §1]` | Established (cited) |
+| `SkirmishDifficulty` | DWORD · 32-bit | 1 | `[08 R-SKIR-01 §1]`, `[08 R-SKIR-01 §9]` | Established (cited) |
+| `SkirmishLocation` | DWORD · 32-bit | 1 | `[08 R-SKIR-01 §1]`, `[08 R-SKIR-01 §7]` | Established (cited) |
+| `SkirmishMap` | string · 256 bytes (incl. NUL) | empty | `[08 R-SKIR-01 §1]` | Established (cited) |
+
+**registry preference (`Total Annihilation\\Skirmish` key)**
+
+| Key | Accessor · stored width | Default | Consumer | Evidence |
+|---|---|---|---|---|
+| `Player%dController` | DWORD · 32-bit | 0 | `[08 R-SKIR-01 §1]` | Established (cited) |
+| `Player%dSide` | DWORD · 32-bit | no default installed | `[08 R-SKIR-01 §1]` | Established (cited) |
+| `Player%dColor` | DWORD · 32-bit | no default installed | `[08 R-SKIR-01 §1]` | Established (cited) |
+| `Player%dAllyGroup` | DWORD · 32-bit | 5 | `[08 R-SKIR-01 §1]` | Established (cited) |
+| `Player%dMetal` | DWORD · 32-bit | 1000 | `[08 R-SKIR-01 §1]` | Established (cited) |
+| `Player%dEnergy` | DWORD · 32-bit | 1000 | `[08 R-SKIR-01 §1]` | Established (cited) |
+
+**registry preference (`Total Annihilation` key)**
+
+| Key | Accessor · stored width | Default | Consumer | Evidence |
+|---|---|---|---|---|
+| `PlayMovie` | DWORD · 32-bit | 1 | `[03 §9]` | Established (cited) |
+| `DisplaymodeDepth` | DWORD · 32-bit | no default installed | unknown: no doc cites the display-mode reader — decider: static trace of the mode-set path (doc 07/01) | Unknown |
+| `Games` | DWORD · 32-bit | bit set (1) | `[02 R-KEYS-01 §3]` (sets option-word bit 1 when `NumSkirmishPlayers` is 256 and `Games` is 1) | Established |
+| `AllMissions` | DWORD · 32-bit | bit clear (0) | `[08 R-CAMP-01 §3]` | Established |
 
 ## 6. Interface, side, map, animation, model, and script files
 
@@ -2644,3 +3267,22 @@ finding they recited remains in the body sections that own it.
   corpus, so it is retained-and-inert.
 * Consumer list for document 06's category mask helper · doc 06 · static
   trace.
+* Writer of session-option-word bit 10 (the `shootme` bypass) · §5
+  `[R-KEYS-01 §4]` · runtime watch on the word during save load and lobby
+  join, or a trace of every block copy into the session globals. Bounded
+  negative in the export: no preference, toggle or whole-word store writes
+  it.
+* Reader of the side record's `nameprefix` field · §5 `[R-KEYS-01 §5]` ·
+  reader census on the 4-byte prefix field of the side record.
+* Readers of fourteen presentation-only registry values (`DisplaymodeWidth`,
+  `DisplaymodeHeight`, `DisplaymodeDepth`, `screenchat`, `MixingBuffers`,
+  `DitheredFog`, `Gamma`, `SwitchAlt`, `textlines`, `textscroll`,
+  `mousespeed`, `gamespeed`, `unitchat`, `unitchattext`) · §5
+  `[R-KEYS-01 §5]` · static trace of each stored global's readers (docs
+  01/03/07 own the consumers; the loader side is closed).
+* The airborne-state operand of the `toairweapon` slot-skip in the
+  fire-order handler · §5 `[R-KEYS-01 §2]` · static trace (doc 04
+  `[R-ORD-01 §3]` / doc 06 `[§3.2]` to state the gate).
+* Whether any reader tests unit capability bit 9 (the derived copy of
+  `canreclamate`) separately from bit 10 · §5 `[R-KEYS-01 §1]` · bit-9
+  reader census.

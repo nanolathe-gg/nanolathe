@@ -929,9 +929,12 @@ projection, then walks pieces and primitives with these established rules:
    discarded 3,312 authored flat non-quads and retained a textured-n-gon path
    that no stock asset ever reaches.
 
-   A flat quad carrying the team-color flag combination fills through the
-   unit's LOGOS frame with a per-player shade byte from the player record
-   instead.
+   **Correction (2026-08-29).** This item previously ended "a flat quad
+   carrying the team-color flag combination fills through the unit's LOGOS
+   frame with a per-player shade byte from the player record instead". The
+   team bits are consulted only on the textured branch, and the byte is the
+   owner's colour index selecting a `LOGOS` frame, not a shade — see
+   [R-RAST-01 §3].
 3. **`SHD` applies to flat fills too, in the shaded renderer.** This
    **corrects** the previous claim that the flat fill "takes the resolved
    color byte with no SHD shading — flat colors do not vary with face
@@ -1298,10 +1301,11 @@ Two consequences follow directly and both are visible in retail:
   pads and nano beams are rasterized at 1× directly into the staging image
   over an anti-aliased cached body.
 
-**Unknown.** The shipped default of the `Anti_Alias` option is not
-established; the option word is populated from settings, and no
-compiled-in default write was found. `TODO(question): shipped default of the
-Anti_Alias display option.`
+**Closed (2026-08-29).** This paragraph previously recorded the shipped
+default of the `Anti_Alias` option as Unknown ("no compiled-in default write
+was found"). The default is in the settings reader: a registry miss sets the
+bit — anti-aliasing is **on** by default — and writes it back. See
+[R-RAST-01 §4].
 
 **Bounded-negative residual.** The 2× scratch and the §4 staging image are the
 **same** buffer. Within one unit's presentation they are used in sequence, so
@@ -1389,8 +1393,10 @@ selects it. Which pass runs depends on ownership:
   the transparent index is recoloured through a 256-entry **`BLUE TABLE`**, so
   the local player sees their own submerged hull tinted rather than cut off.
 
-`TODO(question): the authored semantic of the runtime status bit that steers
-the erase-versus-tint choice.`
+**Closed (2026-08-29).** The status bit is the sonar-contact bit of
+[R-VIS-01 §4]; this paragraph previously carried an open question marker for
+its meaning. See [R-RAST-01 §4], which also corrects the ship/structure
+attribution two paragraphs below.
 
 **Digger clipping.** A definition that authors `Digger` gets `+75` added to
 every key in §2, and after the waterline pass the image is erased wherever
@@ -1488,6 +1494,12 @@ paragraph says otherwise.
 
 ##### 1. The gate
 
+**Correction (2026-08-29).** The list below is the gate for the *mobile*
+and *Digger* branches only. The structure branch tests the master bit and
+`noshadow` alone — not the vehicle-shadow bit, `canhover` or `floater` — and
+carries a sea-level test that only ever bites on 3DO wrecks; see
+[R-RAST-01 §4].
+
 A subject casts a model shadow when all of these hold:
 
 - the options word's master shadow bit is set, **and**
@@ -1582,20 +1594,11 @@ other, retail additionally:
    RLE, copies the dimensions and origin across, and caches it on the draw
    record. The cache is dropped whenever the composition image is rebuilt.
 
-**Unknown.** The punch-out is applied with a five-pixel offset of its own, and
-the blit of §3 applies a five-pixel offset as well. The static trace does not
-settle how the two compose — whether the punch is meant to cancel the blit
-offset, double it, or align against the two images' differing recorded origins
-(the punch's X and Y offsets are applied with opposite signs relative to those
-origins, which is itself unexplained). A capture of one structure's shadow
-against its body silhouette, at a known camera, would settle it in one
-screenshot. `TODO(question): how the punch-out's five-pixel offset composes
-with the shadow blit's five-pixel offset.`
-
-Implementations should draw the shadow without the punch-out until that is
-settled: the only region affected is the ground directly under the body, which
-the body then covers anyway, so the visible difference is a five-pixel sliver
-at one edge. Do not guess the composition.
+**Closed (2026-08-29).** This paragraph previously recorded as Unknown how
+the punch-out's five-pixel offset composes with the blit's, and advised
+drawing the shadow without the punch-out. The two offsets cancel: the hole
+lands exactly at the body's own screen position. Implement the punch-out.
+See [R-RAST-01 §4].
 
 ##### 6. Correction to [R-REN-03A §8]
 
@@ -1932,6 +1935,330 @@ gate, so an animated piece on a `BMcode=0` structure takes no `SHD` row even
 when the rest of that structure is shaded. Stock factory scripts clear the
 per-piece shade bit on exactly those pieces anyway (the `DONT_SHADE` census
 below), so the two mechanisms agree rather than compete.
+
+### Closed — the polygon raster, exactly: edge walk, span inclusion, the winding cull, and the fixed-point steps [R-RAST-01 §1] (2026-08-29)
+
+[R-REN-03A §5] named the four span writers and the key test; this section is
+the scan converter that feeds them, at the precision an implementer needs to
+reproduce every edge pixel. Everything here is **Established (direct-static)**
+unless a paragraph says otherwise. There are two filler families — the **flat
+polygon filler** (explicit vertex count, one colour byte) and the **textured
+quad mapper** (exactly four corners, one texture frame, an optional UV table
+that no model caller ever supplies) — and each family exists twice: a
+**composition-image** variant that writes into a unit's private image with the
+key test, and a **framebuffer** variant used by the live-piece fallback of
+[R-REN-03A §4] and by the projectile/debris model paths, which clips against
+the surface clip rectangle and has no key plane. All four share one edge walk;
+the differences are only in clipping bounds and in what the span writer
+stores.
+
+**Inputs.** Per corner: integer pixel `x`, integer pixel `y` (already
+projected and origin-biased per §2 below), an integer `key`, and — shaded
+renderer only — an integer `SHD` row `0..31`. For the textured mapper, the
+texture frame's width `w`, height `h`, and pixel plane, plus the default UV
+corners `(0,0) (w-1,0) (w-1,h-1) (0,h-1)` in vertex-index order. Every
+attribute is promoted to signed 16.16 by `<< 16` when the walk starts.
+
+**1. Extrema.** One pass over the corners records `minY` and the index `t` of
+the **first** corner attaining it (strict `<`), `maxY` and the index `m` of
+the first corner attaining it (strict `>`), `minX` and `maxX`. Sentinels are
+`±999999`, so a corner list is never empty in practice.
+
+**2. Reject and clip.** With `[L, T, R, B]` the bounds — the composition
+variants use `L = 0`, `T = 0`, `R = w-1`, `B = h-1` of the target image; the
+framebuffer variants read the surface clip rectangle, whose right and bottom
+are the inclusive last column and row ([R-FX-01 §6], [03 §4]) — the polygon
+is dropped when `maxX < L`, `minX > R`, `maxY < T` or `minY > B`. Otherwise
+`yStart = max(minY, T)` and `yEnd = min(maxY, B)`, and when `yStart == yEnd`
+nothing is drawn. Because `yEnd` is clamped to `B` and the fill loop below is
+exclusive of `yEnd`, **the row `B` itself is never written by a polygon** —
+the clip rectangle's inclusive bottom row and the image's last row are dead
+to the filler. The same holds for the last column (step 5). Inside a
+composition image this is harmless: the box of [R-REN-03A §1] carries a
+two-pixel margin. On the framebuffer it means a live piece can never touch
+the viewport's last column or row.
+
+**3. The left chain.** Starting at `t`, step to index `t-1` (wrapping to
+`n-1`) and keep stepping until the *next* index equals `m`. For each edge
+`cur → next` on this chain the edge contributes only when `y[next] > y[cur]`
+— horizontal edges and edges that go up are skipped outright. For a
+contributing edge:
+
+```
+dy     = y[next] - y[cur]                        (> 0)
+xStep  = ((x[next] - x[cur]) << 16) / dy         signed, 64-bit dividend, truncates toward zero
+x      = (x[cur] << 16) + 0xFFFF                 the only biased quantity
+aStep  = ((a[next] - a[cur]) << 16) / dy         for each attribute a in {u, v, key, row}
+a      = a[cur] << 16                            no bias
+if y[cur] < T:  x += xStep * (T - y[cur]);  a += aStep * (T - y[cur]);  y[cur] = T
+yStop  = min(y[next], B)
+for r in [y[cur], yStop):                        top inclusive, bottom exclusive
+    left[r]  = x >> 16                           arithmetic shift
+    leftA[r] = a                                 still 16.16
+    x += xStep; a += aStep
+```
+
+The framebuffer variants add a cheap pre-test `y[next] > T` before the
+`y[next] > y[cur]` test; it rejects nothing the row clip would not have
+rejected.
+
+**4. The right chain** is the same walk from `t` stepping to `t+1` (wrapping
+to `0`) until the next index equals `m`, writing `right[r]` and `rightA[r]`.
+Both chains index the edge table from row `yStart`; an edge clipped at `T`
+lands on the same table row as an unclipped one would have.
+
+**5. The fill.** For `r` in `[yStart, yEnd)`, with `xl = left[r]` and
+`xr = right[r]`:
+
+- the flat framebuffer filler clamps `xl = max(xl, L)`, `xr = min(xr, R)` and
+  writes `xr - xl` bytes of the colour starting at `xl` when that count is
+  `> 0`;
+- every other variant calls its span writer only when `xr > xl`; the writer
+  first computes each per-pixel attribute step as
+  `da = (rightA[r] - leftA[r]) / (xr - xl)` — signed 16.16 divided by the
+  **unclamped** width, truncating toward zero — then clamps
+  `xl < L → a += da * (L - xl), xl = L` and `xr > R → xr = R`, and writes the
+  pixels `[xl, xr)` (nothing when the clamped width is not `> 0`).
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**6. Per pixel.** The textured writers sample `texel = pixels[(v >> 16) * w
++ (u >> 16)]` (the widths 8, 16, 32, 64 and 128 use a shift-and-mask form of
+the same product) with **no clamp and no wrap** — the default corners keep
+`u` in `[0, w-1]` and `v` in `[0, h-1]` because the interpolation never
+reaches the right corner value (the last pixel of a span is at
+`leftA + (width-1) * da`). The four writers then store what
+[R-REN-03A §5]'s table says, under the key test `storedKey <= (key >> 16) &
+0xFF` — an unsigned byte comparison, the incoming key narrowed to a byte —
+writing colour and key together when it passes, or unconditionally when the
+target has no key plane. Colour and key are the only outputs; the row is
+consumed as `SHD[(row >> 16) * 256 + texel]`.
+
+**7. The winding cull.** There is no normal test, no signed-area test and no
+"backface" flag. What removes back faces is step 5: the chain that walks
+*decreasing* indices from the top corner is always treated as the left edge
+and the *increasing* chain as the right edge, so a convex face whose corners,
+read in index order on the screen with Y increasing downward, run
+**counter-clockwise** produces `xr <= xl` on every row and paints nothing,
+while a **clockwise** face paints. A face that folds (concave, or a quad whose
+projection is a bow-tie) paints only the rows where its right chain is still
+to the right of its left chain. Reproduce the mechanism, not a derived rule:
+apply the same two-chain walk to the same vertex order and the same faces
+vanish. A corollary that the asset census in [R-REN-03A §5] makes reachable:
+an authored flat primitive with **two** vertices (there are stock ones)
+draws nothing — both chains consist of the same single edge, so
+`xr == xl` on every row.
+
+**8. What the framebuffer variants add.** They take the current surface clip
+rectangle, or install one for the duration of the call when none is active,
+and otherwise behave identically. The projected corners are computed by
+their caller (the live-piece path, §2) rather than being origin-relative.
+
+**Bounded-negative.** No filler reads a texel's transparency, no filler reads
+`LHT` or `ALP`, and none of the eight functions in the two families draws a
+random number from either RNG stream. Presentation of a model is
+RNG-silent end to end (the composer, the per-unit present, both piece
+renderers, the staging and child composite, and every filler call no RNG
+helper).
+
+### Closed — the vertex pipeline: floor, not truncation; and the live-piece path sums before it floors [R-RAST-01 §2] (2026-08-29)
+
+**Correction to [R-REN-03A §1] and [R-REN-03A §6].** Those sections wrote
+the projected components as `trunc(x)`, `trunc(-z)`, `trunc(y)`. The
+operation is the **high 16-bit word of the 16.16 value**, i.e. `floor`, and
+for a negative fractional coordinate floor and trunc differ by one. The
+rotate helper of [03 §2.4] rounds to nearest before storing ([R-DET-01 §2]
+owns that rounding), so a rotated vertex generally carries a fractional
+part, and the distinction is live. Established (direct-static), the
+composition path per vertex, in the order the renderer evaluates it:
+
+```
+vx, vy, vz : the piece-chain output of [03 §2.4], signed 16.16, model-relative
+X  = hi16(vx)                                 floor(vx / 65536), then widened from int16
+Y  = hi16(vy)
+Zn = hi16(-vz)                                floor(-vz / 65536)  ==  -ceil(vz / 65536)
+if supersampled ([R-REN-03A §6]):  X <<= 1;  Y <<= 1;  Zn <<= 1
+sx  = X + origin.x
+sy  = (Zn - (Y >> 1)) + origin.y              Y >> 1 is an arithmetic shift (floor)
+key = 50 [+ 75 if Digger] + (supersampled ? Y / 2 : Y)    Y / 2 truncates, and Y is even, so this is the 1x Y
+```
+
+The negation happens **before** the floor, which is why the shear term is
+`-ceil(z)` and not `-floor(z)`: a vertex at `z = 0.25` lands one pixel higher
+on screen than one at `z = 0`. The unit's world position enters only at the
+final blit, as `hi16(unitX - camX·65536) + 128` and
+`hi16(unitZ - camZ·65536) - (hi16(unitY) >> 1) + 32` ([R-REN-03A §9]).
+
+**The live-piece fallback projects differently.** The path that rasterizes
+pieces straight into the framebuffer — taken when a unit has no cached image
+(the no-key-plane branch of [R-REN-03A §4], and every projectile or debris
+model) — adds the world offset **in 16.16 before flooring**:
+
+```
+sx = hi16(vx + (unitX - camX·65536)) + 128
+sy = hi16((unitZ - camZ·65536) - vz) - (hi16(vy + unitY) >> 1) + 32
+```
+
+Since `floor(a) + floor(b)` is `floor(a + b)` or one less, a live piece can
+sit one pixel left of, or one pixel below/above, where the same vertex would
+have landed in the cached body. Reproduce both expressions as written; do
+not share one projection helper between the two paths.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+### Closed — team colour: the owner's colour index selects the `LOGOS` frame, and the frame's own size feeds the default corners [R-RAST-01 §3] (2026-08-29)
+
+**Correction to [03 §2.4.1] item 2.** That item said "a flat quad carrying
+the team-color flag combination fills through the unit's LOGOS frame with a
+per-player shade byte from the player record instead". Wrong on both counts:
+the team bits are read only on the **textured** branch (authored `IsColored`
+bit 0 clear, exactly four vertices), and the byte is not a shade — it is the
+owner's **colour index**, used as a frame number. A flat primitive goes to
+the flat filler with its authored colour byte and never consults the team
+bits. The dispatch in [R-REN-03A §5] was already correct; the sentence in
+item 2 was a leftover from an earlier reading.
+
+**Established (direct-static).** For a textured quad whose loader-written
+resolve-at-draw-time bit is set: when the team bit is also set the frame is
+`frame[colour]` of the primitive's resolved entry, where `colour` is the
+owning player's colour index byte; the frame lookup returns **no frame** when
+`colour` is outside `[0, frameCount)`, and the mapper draws nothing for a null
+frame. So a unit whose owner has the unassigned colour (`0xFF`, written by the
+player-slot reset paths) shows holes where its team quads would be.
+
+**Where the colour index comes from.** It is a per-player byte `0..9`. The
+skirmish and lobby paths assign it from the `Color%d` gadget / the
+`Player%dColor` registry mirror, with the collision re-step described in
+[08 R-SKIR-01 §1] (the assignment helper walks candidates `0..9`,
+wrapping past `9` to `0`, until it finds one no other live slot holds); the
+campaign start writes colours `(0, 1)` for the local and enemy players
+[08 R-CAMP-01 §3]; a lobby packet carries a remote slot's byte. Doc 08
+owns those writers; the renderer only reads the byte.
+
+**Which primitives are team-coloured.** The loader sets the team bit on
+every primitive whose texture name resolves to an entry with **exactly ten
+frames** ([03 §2.4.1] item 4, [R-CRD-005 §1]); the artist authors nothing but
+the name. **Established (asset census, stock `textures/logos.gaf`,
+2026-08-29):** the file holds 18 entries; 17 have ten frames — `colorslt`,
+`colorsmd`, `colorsdk`, `colordk2`, `Solid1a`, `Solid2a`, `Solid3a`,
+`Solid3b`, `Solgradb`, `32xlogos`, `32XGouraud`, `Arm32Lt`, `Arm32Dk`,
+`Core32Lt`, `Core32Dk` and two more of the same shape — and `onoff01` has
+two frames and is therefore an ordinary animated texture, not a team one.
+
+**The "per-player dimension deltas" of the old tail item.** There are no
+deltas to apply. The textured mapper reads only the selected frame's width,
+height and pixel plane; it never reads the frame's `xOff`/`yOff`, and it
+builds the default corners `(0,0) (w-1,0) (w-1,h-1) (0,h-1)` from **that
+frame's** `w` and `h`. Frames of one entry are not all the same size —
+**Established (asset census):** `32XGouraud`, `Arm32Lt`, `Arm32Dk`,
+`Core32Lt` and `Core32Dk` mix `32×32` and `32×33` frames across the ten
+colours — so a team quad on a player with a `32×33` frame samples 33 texel
+rows over the same screen area that another player's `32×32` frame covers in
+32. That is the whole per-player difference: the corner rule is unchanged;
+`h-1` is one larger. The frame offsets, which vary wildly across colours in
+the stock file, are inert in the model path.
+
+### Closed — corrections gathered from the shadow, waterline and option paths [R-RAST-01 §4] (2026-08-29)
+
+**`Anti_Alias` shipped default — closes the Unknown in [R-REN-03A §6].** The
+settings reader looks the value up under the registry key `Anti-Alias` (the
+value name carries a hyphen; the option's in-engine name is the underscore
+form) alongside `Shadows`, `VehicleShadows` and `FeatureShadows`. On a miss
+it **sets** the bit — anti-aliasing is on by default — and writes the default
+back through the registry miss-path helper of [R-TERR-01 §8]. The earlier
+"no compiled-in default write was found" looked in the option handlers; the
+default is in the reader. **Established (direct-static).** The Options
+screen's `RESTORE` gadget likewise sets bits 1..5 (anti-alias, master
+shadows, vehicle shadows, feature shadows, shading) together.
+
+**The Options screen gadgets.** The visual-options screen (`VISUALS.GUI`)
+carries three named toggles whose handler writes the option word directly:
+`ANTI` → bit 1; `SHADING` → bit 5; **`BSHADOWS`** → bit 4, after which the
+handler copies bit 4 into bit 3 and then bit 3 into bit 2, so the one gadget
+sets feature, vehicle and master shadows to the same value. Every one of the
+three then rebuilds the shadow caches and repaints when a battle is live.
+`BSHADOWS` is that gadget's name, not a registry value and not an authored
+key; the registry mirrors are the four names above.
+
+**The submerged erase-versus-tint bit — closes the open question in
+[R-REN-03A §8].** The "particular runtime status bit" is the **sonar-contact
+bit** of the sensor phase ([R-VIS-01 §4], [R-VIS-01 §5]): the same bit the
+direct-visibility predicate consults to accept a fully submerged unit. The
+waterline pass therefore reads: a submerged enemy the viewer has **no sonar
+contact on** is cut off at the surface; a unit the viewer owns, or has on
+sonar, is tinted through the `BLUE TABLE` instead. The engine's feature-backed
+pseudo-unit sets the bit permanently at construction, so a 3DO feature — a
+wreck — is **always tinted, never cut** (§6 below).
+
+**The shadow gate — corrects [R-REN-03D §1].** That section required the
+vehicle-shadow bit for every model shadow. The unit present has **three**
+shadow branches, selected after the master-shadows bit and the definition's
+`noshadow` have passed:
+
+1. **Digger** (definition bit set): silhouette copy of the finished body
+   image ([R-REN-03A §8]), then the silhouette is **erased wherever
+   `key <= 50 + 75`** — the buried half casts no shadow — and blitted through
+   the tinted blitter. Requires the vehicle-shadow bit and none of
+   `canhover`/`floater`.
+2. **Mobile** (structure-class bit clear, [R-RND-02A]): silhouette copy;
+   when the unit is below the surface (`t = seaLevel - hi16(unitY) > 0`) the
+   silhouette is erased wherever `key <= t + 50` before the blit, so the
+   shadow of a partly submerged hull is the shadow of the part above water.
+   Same option and definition gate as branch 1.
+3. **Structure** (structure-class bit set, not a Digger): the re-rasterized,
+   punched, RLE-cached shadow of [R-REN-03D §2]–§5. This branch tests **only
+   the master bit and `noshadow`** — not the vehicle-shadow bit, not
+   `canhover`, not `floater` — and one more condition: it is skipped when the
+   subject's definition ordinal is `0` **and** `hi16(unitY) < seaLevel`.
+   The unit catalog's ordinal `0` is the reserved slot the loader's sort
+   walk starts past (Supported inference from the loader: the walk begins at
+   ordinal 1; nothing else was found using ordinal 0 as a live type), and
+   the feature pseudo-unit records ordinal `0`; so for every real unit the
+   test is vacuous and for a 3DO feature it means **a wreck at or below sea
+   level casts no shadow**.
+
+So toggling `VehicleShadows` off removes the shadows of mobile units and
+diggers and leaves structure shadows in place; the master `Shadows` bit
+removes all three. [R-REN-03A §8]'s "ships take a separate cached shadow
+image instead, gated on the unit being above sea level" conflated branches
+2 and 3: ships are mobile and take branch 2; the cached image belongs to
+structures, and the sea-level gate only ever bites on wrecks. Everything in
+this paragraph is **Established (direct-static)** except the ordinal-0
+inference, which the decider names.
+
+**The punch-out offset — closes the Unknown in [R-REN-03D §5].** The
+punch-out composites the body image into the shadow image with an X shift of
+`+5` applied to the *body* column and a row mapping through the two images'
+recorded origins; in model space that places the body silhouette **five
+pixels to the left** of where the shadow geometry sits. The blit of
+[R-REN-03D §3] then places the shadow image five pixels to the **right** of
+the body. The two cancel exactly: the hole lands at the body's own screen
+position, the same on X and Y, so the ground directly under the body is not
+darkened before the body covers it. The "opposite signs" that looked
+unexplained are the difference between shifting a source and shifting a
+destination. Implement the punch-out; the earlier advice to omit it is
+withdrawn. **Established (direct-static).**
+
+**The no-key-plane present is not a reduced copy of the full one.** When the
+cached image has no key plane ([R-REN-03A §2] gate false), the unit present
+draws: shadow (the three branches above, but branch 1 and 2 without their
+erasures, which need a key), then the body blit, then live pieces straight to
+the framebuffer, then every attached child's draw-bit pieces straight to the
+framebuffer; there is no staging, no waterline and no digger pass at all.
+**Established (direct-static).** A `CORFAV` or `CORTRUCK` — the two stock
+`ZBuffer=0` types — is therefore never cut at the waterline or tinted.
+
+### Closed — lighting in the model path is `SHD` only [R-RAST-01 §5] (2026-08-29)
+
+**Established (bounded-negative over the model raster path).** The only
+palette table a model span writer reads is `SHD`, and only in the shaded
+renderer ([03 §2.4.1] item 3, [R-RND-02A]); the row is chosen per vertex from
+the smoothed normal and interpolated along the edges and across the span
+exactly like the key (§1). No writer reads `LHT` — that table belongs to the
+flash blitter ([R-FX-01 §4]) — and `ALP` is read only by the anti-alias
+downscale ([R-REN-03A §6]) and by the tinted blitter that shadows and cloaked
+bodies go through ([R-REN-03D §4]). There is no per-polygon light selection
+beyond the row; the light direction is the one global vector of [03 §2.4.1].
 
 ### 2.5 Orthographic screen projection
 
@@ -4332,9 +4659,14 @@ work sits outside the strip abstraction:
 - Strips `0..2` (unconditionally) and strips `3..4` (unconditionally) flank a
   feature pass that owns the unexplored-marker state. That pass loops the plot
   row-major, clears the never-seen marker, and dispatches visible features
-  through the per-cell dispatcher. A second, interleaved pass walks screen-Y
+  through the per-cell dispatcher. A second, interleaved pass walks the
+  window's plot rows mixing grounded-mode units and deferred tall features.
+  (**Correction, 2026-08-29:** this sentence previously read "walks screen-Y
   bucket rows mixing soft units and deferred tall/shadow features so that
-  feature–unit overlap is painter-ordered by projected Y, not by map order.
+  feature–unit overlap is painter-ordered by projected Y". The rows are world
+  Z plot rows, "soft" is the grounded mover mode, and the deferred features
+  are the tall ones; structures and airborne units are drawn in a later pass
+  after projectiles — [R-RAST-01 §6], [R-RAST-01 §7].)
 - The ten-strip strip objects are confined to the strip dispatcher and capped
   per strip; the fixed 300-record effect pool sits between strips 6 and 7
   behind the same mode gate. Features are not strip objects and are not
@@ -4442,6 +4774,85 @@ trees (`Tree1Dead`, `Tree2Dead`), four metal deposits (`RockMetal`,
 (green-world). No initially-placed feature carries a 3DO `object`; all are
 sprite-class (`filename` present) except later corpses.
 
+### Closed — feature draw order and clipping, and the water line on 3DO wrecks [R-RAST-01 §6] (2026-08-29)
+
+This section states the composer's feature passes at the precision §5.1.3
+and §5.1.5 lacked, and corrects §5.1.3's "screen-Y bucket rows". Everything
+is **Established (direct-static)** unless marked.
+
+**The window.** Both feature passes and the unit buckets share one window of
+plot cells, computed once per frame from the camera:
+
+```
+rowFirst = trunc(camZ / 16) - 16          camZ, camX in map pixels; trunc toward zero
+colFirst = trunc(camX / 16) - 10
+rows     = the bucket-row count;  cols = the bucket-column count     (map-derived globals)
+rows/cols are reduced by any part of the window that falls below 0, and the
+window is clipped so that rowFirst + rows <= mapHeightCells - 1 and
+colFirst + cols <= mapWidthCells - 1 (the last row and column are excluded)
+```
+
+**Pass 1 — short features (between strips 2 and 3).** Row-major over the
+window, each cell: clear the never-seen bit; when the cell's feature word is
+live (`< 0xFFFB`), read the definition: if its `height` is **below 10** the
+feature is drawn now, subject to the gate; otherwise the never-seen bit is
+set and the feature is deferred. The gate is: definition without
+`nodrawundergray`, **or** the plot cell's placer nibble equals the local
+player's slot, **or** the two-corner LOS predicate of §5.1.5 passes.
+
+**Pass 2 — grounded units and tall features (between strips 4 and 5).** For
+each window row in order: first every unit in that row's bucket whose
+committed mover mode is **grounded** (`1`, [04 R-MOV-01 §8]) — §7 gives the
+bucket rule — then, column-major across the row, every cell whose never-seen
+bit is set (a deferred tall feature), under the same gate as pass 1.
+Consequences an implementer must keep: a tall feature paints **over** the
+grounded units of its own row and of every earlier row; a short feature
+paints **under** every unit; a grounded unit paints over the short features
+and over tall features in rows above it; and structures and airborne units
+paint over all features because they are drawn later (§7).
+
+**Per feature (the per-cell dispatcher).** The anchor is §5.1.4's formula.
+Then:
+
+- **live instance** (cell bit 0): a 3DO definition fills the engine's
+  feature pseudo-unit — model pointer, position and the slot's orientation
+  words — and hands it to the ordinary per-unit present of §7; a sprite
+  definition blits the instance's shadow cursor frame (only when the
+  instance's shadow bit and the feature-shadow option bit are set) and then
+  its normal cursor frame, both through the opaque blitter and both at the
+  anchor;
+- **static** (no instance): shadow first — `seqnameshad`'s frame 0, or the
+  animated shadow cursor's current frame when `animating` — through the
+  tinted blitter when `shadtrans` is set and the opaque blitter otherwise,
+  gated on the feature-shadow option bit and on the entry existing; then the
+  body — `seqname`'s frame 0, or the animated cursor's current frame —
+  through the tinted blitter when `animtrans` is set, opaque otherwise.
+
+The sprite path's clipping is the standard inclusive-rectangle intersection
+of the frame against the surface clip ([03 §4.1], [fmt gaf]); a frame
+entirely outside is dropped whole. The 3DO path clips at the composition
+image's single blit ([R-REN-03A §9]) and, inside the image, at the image's
+own bounds ([R-RAST-01 §1] step 2).
+
+**The water line on a 3DO wreck.** A 3DO feature is presented as a unit, so
+[R-REN-03A §8]'s waterline pass runs on it with these fixed inputs: the
+pseudo-unit's Y is the instance's current height — the sinking integration
+of [05 R-FEAT-01 §13] moves it below the surface — and its sonar-contact bit
+is set permanently at construction ([R-RAST-01 §4]), so the submerged part is
+**always recoloured through the `BLUE TABLE`** (every pixel with
+`key <= (seaLevel - hi16(Y)) + 50`) and never erased, for every viewer. It
+has no `Digger`, so no digger erase. Its structure-class bit is set and its
+definition ordinal is `0`, so it takes the structure shadow branch with the
+sea-level test: **a wreck whose `hi16(Y)` is below sea level casts no
+shadow** ([R-RAST-01 §4]). It has a key plane (the pseudo-unit's `ZBuffer`
+mirror bit is set unconditionally, [R-REN-03A §2]).
+
+**Fog and LOS are not applied at raster time.** The feature passes decide
+*whether* to draw from the gate above; nothing in the sprite or model
+rasterizers reads the visibility grids. The fog overlay of §3.3 is composed
+after strip 9 and darkens features, units, shadows and projectiles alike
+([R-SEL-02A]).
+
 ### 5.2 Units and 3DO models
 
 Units are bucketed by projected vertical/screen position so that the software
@@ -4465,7 +4876,7 @@ pitch the X slot, each with a constant negative half-circle (180-degree)
 authored model-facing offset — and a propeller-style variant feeds its spin
 angle through the same slot machinery.
 
-Texture mapping is corner-index affine 16.16 (direct-static): quads map index order `0→(0,0) 1→(1,0) 2→(1,1) 3→(0,1)`; n-gons 5–16 are `n`-edge affine polygons through the edge-table scanline mappers (ten-dword edge records) with per-edge `(dx<<16)/dy`, per-scanline `(uR-uL)/width` and `rowStep=(rowR-rowL)/width`, sampling `SHD[row*256+texel]` per pixel; the flat path is quads-only and fills the span directly. No stored UVs, no perspective divide (bounded-negative), clamp to `w-1/h-1`, nearest sample. (The earlier "transparent holes skip `SHD`" clause is withdrawn: no model span writer tests the sampled texel against a transparent or colour-key index — see [R-REN-03A §5]. Model transparency is carried by the composition image's own background index, which the final blit keys against.) Face row is `trunc(dot(N,L)*5.0)&0x1F` with `L=(-0.8,1,0.25)`; a cleared render-piece shade bit (`DONT_SHADE`) pins the identity row `15`; the gouraud row interpolates as `row delta/width` (direct-static); the flat path bypasses `SHD`. The `SHD` steps above belong to the shaded piece renderer only, which retail selects on `BMcode=0` plus the `Shading` display option ([R-RND-02A]); the unshaded renderer maps textured faces with the same affine mapper and no `SHD` lookup. Row `0x0F` is identity, rows `0..14` darken, `16..31` brighten (see §4.3.2).
+Texture mapping is corner-index affine 16.16 (direct-static): quads map index order `0→(0,0) 1→(1,0) 2→(1,1) 3→(0,1)` through the edge-table scanline mappers (ten-dword edge records) with per-edge `(dx<<16)/dy`, per-scanline `(uR-uL)/width` and `rowStep=(rowR-rowL)/width`, sampling `SHD[row*256+texel]` per pixel. (**Correction, 2026-08-29:** this sentence previously said "n-gons 5–16 are `n`-edge affine polygons through the edge-table scanline mappers … the flat path is quads-only". The arities were transposed, as [03 §2.4.1] item 2 already records: textured faces are quads only and the flat filler takes any vertex count. The exact edge, span and rounding rules of both fillers are [R-RAST-01 §1].) No stored UVs, no perspective divide (bounded-negative), the default corners are `w-1/h-1` of the selected frame, nearest sample. (The earlier "transparent holes skip `SHD`" clause is withdrawn: no model span writer tests the sampled texel against a transparent or colour-key index — see [R-REN-03A §5]. Model transparency is carried by the composition image's own background index, which the final blit keys against.) Face row is `trunc(dot(N,L)*5.0)&0x1F` with `L=(-0.8,1,0.25)`; a cleared render-piece shade bit (`DONT_SHADE`) pins the identity row `15`; the gouraud row interpolates as `row delta/width` (direct-static); the flat path bypasses `SHD`. The `SHD` steps above belong to the shaded piece renderer only, which retail selects on `BMcode=0` plus the `Shading` display option ([R-RND-02A]); the unshaded renderer maps textured faces with the same affine mapper and no `SHD` lookup. Row `0x0F` is identity, rows `0..14` darken, `16..31` brighten (see §4.3.2).
 
 #### Nanoframe reveal [R-P0-19-N]
 
@@ -4531,6 +4942,74 @@ the body is entirely erased and only the outline remains.
 **Not the reveal.** The construction fraction also forces the mobile image-cache
 path and suppresses one shadow branch. Neither changes the soft/hard draw
 classification or the bucket key.
+
+### Closed — unit draw order: the Z-row buckets, the two unit passes, and where shadows and tints happen [R-RAST-01 §7] (2026-08-29)
+
+**Corrections.** §5.2 above says units are "bucketed by projected
+vertical/screen position" and §5.1.3 says the second pass "walks screen-Y
+bucket rows mixing soft units and deferred tall/shadow features". The bucket
+key is the unit's **world Z in 16-pixel plot rows relative to the camera**,
+not a screen coordinate and not the sheared Y; "soft" is the committed mover
+mode **grounded** (`1`, [04 R-MOV-01 §8]); and the deferred features are the
+**tall** ones (`height >= 10`), shadow or not. Everything below is
+**Established (direct-static)**.
+
+**The bucket build (once per frame, before strip 0).** The composer walks the
+**on-screen unit list** — the list the health-bar pass also reads
+([R-FX-01 §6]): units inside the viewport rectangle that the visibility
+predicate admits for the viewing player — in list order (ascending unit
+slot) and appends each to bucket
+
+```
+row = trunc((hi16(unitZ) - camZ) / 16) + 16       trunc toward zero; camZ in map pixels
+```
+
+when `0 <= row < rows`; a unit outside that range is not drawn this frame.
+Appends are stable, so within a row the draw order is ascending unit slot.
+Note the asymmetry with §6's window: the feature row is the absolute cell row
+minus `trunc(camZ / 16) - 16`, the unit row is `trunc((z - camZ) / 16) + 16`,
+and the two differ by one when `camZ` is not a multiple of 16 — reproduce
+both expressions rather than one shared cell index.
+
+**Pass A — grounded units, interleaved with tall features (between strips 4
+and 5).** For each window row in order, each bucketed unit whose mover mode
+is grounded: (i) when the unit's wake status bit is set and the typed-command
+word's wake bit permits, the water-wake rectangle pass of §5.7 runs; (ii)
+when the unit has a model draw record, the per-unit present runs. Then that
+row's deferred tall features ([R-RAST-01 §6]).
+
+**Pass B — everything else (after strip 7, i.e. after projectiles and the
+fixed effect pool).** Every row in order, every bucketed unit whose mover
+mode is **not** grounded — structures (no mover, mode `0`) and airborne
+units (mode `2`) — with the same two steps. Structures therefore paint over
+every feature, every grounded unit and every projectile regardless of their
+Z row; aircraft paint over structures in earlier rows and under structures
+in later ones. This is the retail order; it is not a bug to fix.
+
+**The per-unit present.** For the unit and then each attached child that is
+not carried piece-less ([04 R-UNIT-06 §3]): if
+any of bank/heading/pitch differs from the cached triple by more than 7
+angle units, the cache is refreshed and the piece tree is marked for a
+rebuild from pristine vertices ([03 §5.2]); a pending rebuild reapplies the
+piece chain. Then the draw entry decides whether the cached image is rebuilt
+([R-REN-03A §4]) and runs the present of [R-REN-03A §9] — shadow first
+([R-RAST-01 §4] gives the three branches), body, live pieces, children,
+waterline, blit. Per unit, therefore, **the shadow is always drawn
+immediately before its own body**, never in a separate shadow pass; and a
+shadow is never drawn for a unit the list excludes.
+
+**Tinted bodies.** The body blit goes through the **tinted blitter** — the
+`ALP` blend against what is already on the ground, [R-REN-03D §4] — instead
+of the opaque one when the unit's activation byte has the **cloaked** bit
+([R-VIS-01 §6]) or when the display-mode byte that the film/HUD-hide key
+family clears ([07]) is nonzero; otherwise the opaque blitter keys out the
+image's transparent index and writes everything else. Nothing is masked by
+fog or LOS at this point: exclusion from the list is the only visibility
+effect, and the fog overlay is applied later to the whole surface
+([R-SEL-02A]).
+
+**RNG.** No draw from either stream anywhere in the bucket build, the two
+passes, the present, or the fillers ([R-RAST-01 §1]).
 
 ### 5.3 Projected shadows and feature shadows
 
@@ -5979,18 +6458,19 @@ by the sharper question it turned into.
 - ALP usage by any non-LOS UI or fade path; bounded-negative over the renderer
   cluster (ALP loads only in the minimap picture downsample) · §4 · static
   trace.
-- Exact team/logo per-player dimension deltas, and pitch/bank naming in the
-  model transform · §2.4 · static trace.
-- Shipped default of the `Anti_Alias` display option; the option word is
-  populated from settings and no compiled-in default write was found
-  · [R-REN-03A] · asset census of the shipped configuration. Marked
-  `TODO(question)`.
+- Pitch/bank naming in the model transform · §2.4 · static trace. (The
+  team/logo "per-player dimension deltas" half of this bullet is closed by
+  [R-RAST-01 §3].)
 - Whether any retail-reachable configuration attaches a `BMcode = 0` child
   unit · [R-REN-03A] · asset census. Marked `TODO(question)`.
-- Authored semantic of the runtime status bit that steers submerged erase
-  versus blue tint · [R-REN-03D] · static trace. Marked `TODO(question)`.
-- How the cached shadow sprite's punch-out five-pixel offset composes with the
-  blit offset · [R-REN-03D] · static trace. Marked `TODO(question)`.
+- Whether the unit catalog's ordinal `0` is a reserved null slot (the
+  loader's sort walk starts at ordinal 1; the feature pseudo-unit records
+  ordinal `0`) — if a stock unit type could occupy it, that type's structure
+  shadow would be suppressed below sea level · [R-RAST-01 §4] · static trace
+  of the catalog allocator and every ordinal writer.
+- The name and authored source of the display-mode byte that forces every
+  unit body through the tinted blitter (cleared by the film/HUD-hide key
+  family) · [R-RAST-01 §7] · static trace of its writers (doc 07 owns the key).
 - Provenance of the retail blue tint table — built from `PALETTE.PAL` like the
   gray table, or loaded from outside `palettes/` · §4.3.3, `[fmt pal]` ·
   static trace. Marked `TODO(question)` in `[fmt pal]`, the only marker in a

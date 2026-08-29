@@ -138,7 +138,7 @@ what it doesn't know.
 | --- | --- |
 | `BuildCostEnergy`, `BuildCostMetal` | Total resource cost |
 | `BuildTime` | Total build effort (divided by the builder's `WorkerTime` rate) |
-| `FootprintX`, `FootprintZ` | Occupied size in 16-pixel grid cells |
+| `FootprintX`, `FootprintZ` | Occupied size in 16-pixel grid cells. Read by the **movement-class record reader** applied to the unit's own `[UNITINFO]` section — the same eight-key parser that reads `gamedata/MOVEINFO.TDF` classes — which runs for every unit whose `MovementClass` does not resolve; a unit with a resolved class takes its footprint from the class, not from these keys [02 §5 "Movement class record"]. |
 | `YardMap` | Per-cell footprint map (see below) |
 | `BuildAngle` | Authored integer read as a low-16-bit unsigned bound by the unit initializer; heading arithmetic and lifecycle are defined in [04 §2.3b] |
 | `MaxDamage` | Hit points |
@@ -188,7 +188,7 @@ use a single character (`YardMap=o;`).
 | `WorkerTime` | Nanolathe rate (build effort contributed per unit time) |
 | `Builddistance` | Build/repair reach in pixels (mobile builders) |
 | `MetalMake` | Metal produced while active (also used by builders) |
-| `CanCapture`, `CanReclamate` | Capture / reclaim abilities |
+| `CanCapture`, `CanReclamate` | Capture / reclaim abilities. `CanReclamate` is stored in capability bit 10, and the parser also writes capability bit 9 as a **copy of bit 10** while storing `CanResurrect` — no FBI key maps to bit 9 [02 R-KEYS-01 §1]. |
 | `IsAirBase` | Repair-pad/carrier flag |
 | `TransMaxUnits` / `transportmaxunits` / `transportcapacity`, `transportsize`, `cantbetransported`, `canload` | Transport capacity and eligibility (`transportmaxunits` is a retail spelling variant; `canload` marks a unit able to load/carry other units, i.e. is itself a transport) |
 | `teleporter` | Galactic gate flag |
@@ -216,8 +216,8 @@ use a single character (`YardMap=o;`).
 | `TurnRate` | Turn speed in angular units (65536 = full circle) per tick. **Integer** accessor, stored into a 16-bit field that every reader zero-extends, so the effective domain is 0..65535 and an authored value is taken modulo 65,536. Default 0. The per-tick heading change is the signed heading error saturated at ±`TurnRate` [04 §8.1 R-MOV-01 §2] |
 | `SteeringMode` | Turning style (tank skid vs. wheeled arcs; small int). 152 retail units author it, but the engine has no string for it, so it selects nothing. |
 | `MovementClass` | Movement class name in `gamedata/MOVEINFO.TDF` (supplies footprint/slope/depth for pathing) |
-| `MaxSlope` | Steepest passable slope |
-| `MaxWaterDepth`, `MinWaterDepth` | Water depth limits (ships set Min, subs/amphibians set Max high) |
+| `MaxSlope` | Steepest passable slope. Like the footprint keys, `MaxSlope`, `BadSlope`, `MaxWaterSlope`, `BadWaterSlope`, `MaxWaterDepth` and `MinWaterDepth` are read from the FBI only by the movement-class record reader applied to the unit section when `MovementClass` is absent or unresolvable; the scratch record it fills starts from the 255/±10000 template and the unconditional clamps then run [02 §5 "Movement class record"][04 §6.1]. |
+| `MaxWaterDepth`, `MinWaterDepth` | Water depth limits (ships set Min, subs/amphibians set Max high); read via the movement-class record reader as above. |
 | `amphibious` | Can traverse underwater and land |
 | `Floater` | Floats on water |
 | `WaterLine` | Non-negative decimal draft describing how deep the model sits in water (ships); retail data includes values such as `0.3` |
@@ -302,7 +302,7 @@ removes its shading entirely. See
 | `Corpse` | Feature left on death ([tdf.md](tdf.md)); chained via the feature's `featuredead` |
 | `ai_limit`, `ai_weight` | AI directives stored as raw text. **Split (2026-08-26):** `ai_weight` IS consumed — the strategic-AI pass parses its text with the profile grammar; `weight` directives reach the live per-unit-type weight array (default 100, clamped to 0..100) that scales build-candidate scores, and embedded `limit` directives are registered too. `ai_limit` has NO runtime reader — the live per-type limit array is populated only by the `ai/` profile parser's `limit` token, never by this key; do not treat `ai_limit` as the source of the retail candidate limit. |
 | `Ovradjust` | Authored as `1` on 173 retail units. No runtime reader was found in the bounded census, so its semantics remain **Unknown**; the field is retained as authored data and no overlap, heading, or geometry behavior is assigned. |
-| `sortbias` | Read by the engine; effect unconfirmed. |
+| `sortbias` | Parsed into a signed 16-bit field and **never read** — reader census: none [04 R-SPEC-01 §7]. **Correction (2026-08-29, RWU-02-1):** this row previously said "Read by the engine; effect unconfirmed"; the census settles it as inert. |
 | `armoredstate` | Read by the engine and authored by no shipped unit: the starting value of the armored flag that `DamageModifier` scales. |
 | `wacky` | Read by the engine and authored by no shipped unit. Purpose unresolved. |
 
@@ -327,7 +327,9 @@ removes its shading entirely. See
   above and [04 §8.1 R-MOV-01 §1]. `BuildTime` and `WorkerTime` are not
   covered by that closure and remain open (doc 05).
 - Several flags above carry community-guessed semantics (`BMcode`,
-  `PitchScale`, `sortbias`, `Ovradjust`). `MoveRate1`/`MoveRate2` are no
+  `PitchScale`, `Ovradjust`); `sortbias` no longer does — it is inert by
+  reader census [04 R-SPEC-01 §7]. The complete key → consumer table for
+  every FBI key the executable reads is `[02 R-KEYS-01 §5]`. `MoveRate1`/`MoveRate2` are no
   longer among them: their accessor, defaults and classifier are established
   in the Movement table above. `BuildAngle`
   has an established unsigned-bound sampler, signed conversion, heading range,

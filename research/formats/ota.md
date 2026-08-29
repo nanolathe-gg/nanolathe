@@ -311,6 +311,11 @@ Example (retail ARM mission): a unit waits 900 seconds, then patrols:
 
 ## Which keys the engine reads
 
+The generated key → consumer table `[02 R-KEYS-01 §5]` lists every
+`[GlobalHeader]`, `[Schema N]`, placed-object and trigger key the loader
+reads, with accessor, stored width, default and consumer; `[02 R-MAP-01 §3]`
+and `[02 R-MAP-01 §5]` give the read order and the retail authoring census.
+
 A whole-string census of the retail executable finds every key in the tables
 above except
 `SolarStrength`, `MohoMetal`, `SCHEMACOUNT` and `OffMapUnit`, which have no

@@ -248,8 +248,13 @@ At draw time the rasterizer dispatches per primitive on its flag bits:
   vertex count is exactly 4**. The quad mapper is hard-wired to four corners
   and the dispatcher tests the count before it binds any texture, so a
   textured triangle or n-gon draws nothing.
-- A flat quad with the team-color flag combination fills through the LOGOS
-  frame with a per-player shade byte from the player record.
+- A **textured** quad (authored `IsColored` bit 0 clear, exactly four
+  vertices) whose team bit is set draws `LOGOS` frame `[colourIndex]`, where
+  the index is the owning player's colour byte `0..9`; an out-of-range index
+  (e.g. the unassigned `0xFF`) selects no frame and draws nothing. Flat
+  primitives never consult the team bits. (Corrected 2026-08-29 against
+  [03 R-RAST-01 §3]; the earlier bullet said a *flat* quad fills through the
+  LOGOS frame with a per-player *shade byte* — wrong branch and wrong byte.)
 
 **Correction (2026-08-28).** The two bullets above previously said the
 opposite — textured at any vertex count, flat quads only. The arities were
