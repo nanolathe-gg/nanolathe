@@ -587,6 +587,62 @@ stamped through the same feature placement path at the victim's anchor cell
 before the trigger poll for the same tick, so a death and its wreck are visible
 to the same tick's victory checks.
 
+### Closed — the building validator's entry bounds and its two published outputs [R-ECO-02 §1] (2026-08-29)
+
+The yard-map validator above is the single function every building placement
+— builder order, factory exit, computer-player search, build ghost — passes
+through. Three facts about its envelope were never stated; all are
+**Established** (direct static).
+
+**Entry bounds are strict on both edges.** Before any cell is visited the
+validator requires, on the packed anchor cell `(x, z)` and the definition's
+footprint `(fx, fz)` in cells:
+
+```
+x >= 1                     // signed 16-bit compare, x > 0
+packed(x, z) > 0xFFFF      // unsigned compare of the whole word: z != 0
+x + fx < mapWidthCells     // strict
+z + fz < mapHeightCells    // strict
+```
+
+so a footprint can never cover column 0 or row 0, and its last covered
+column and row are at most `mapWidth − 2` and `mapHeight − 2`; the map's
+last column and row are unreachable for buildings just as they are for the
+ground mover's rectangle ([04 R-COLL-01 §3]). The second test is an unsigned
+compare of the packed word, which is `z >= 1` for the non-negative cells
+every caller snaps to; a negative `z` (high bit set) would pass it and the
+height test alike, so nothing in the validator bounds a negative row — no
+caller produces one, since every caller snaps a world position that the
+plot lookup has already accepted. Failing any of the four returns "not
+placeable" with the two outputs below already zeroed.
+
+**Two outputs are published through globals, not returned.** At entry the
+validator zeroes a *site height* word and a *metal sum* word. During the cell
+walk it adds every covered cell's plot metal byte to the metal sum — on
+**every** cell, before and independently of that cell's yard bits, so the
+sum is complete even on a footprint that is later rejected. The site height
+is written only on the accept path, immediately before the success return,
+with the `siteHeight` of the gate above. The metal sum has exactly two
+readers, both one-line getters, and both are read by the computer player's
+extractor placement only after a successful verdict ([08 "Placement root
+and search helpers"]: "the blocker accumulates each footprint cell's metal
+byte"); the site height is the value the build ghost and `MobileBuild`
+read, as the section above already says. Neither global is reset anywhere
+else: the last validation's values persist until the next call.
+
+**The visibility gate is a map-object argument, not a mode number.** The
+"mode" of [04 §6.4] is the presence of a map-object pointer: when one is
+passed, the footprint centre `((fx + 2x)·8, (fz + 2z)·8)` in world units is
+converted to that object's cell `(cx >> 5, (cz − h/2) >> 5)` with `h` the
+terrain height at the anchor cell, the call fails when that cell is outside
+the object's extent or the local player's bit is clear in its word, and the
+per-cell occupancy rejections (bits 0–2) are then applied only while the
+*visible* flag holds — the overlay byte at that cell under the overlay
+global, else the same local-player bit (already known set). With a null
+object the flag is simply true and every occupancy rejection applies.
+[04 §4.7] owns the alias matrix; this paragraph only fixes what the argument
+is.
+
 ## Authoritative settlement order
 
 The economy phase scans the ten player slots in fixed slot-index order and,
@@ -2595,6 +2651,21 @@ limit reaches the planner only through the half-capacity scoring term of
 the allocator of [R-SHARE-01 §8], so the slice size and (in multiplayer) the
 restriction limits bind it exactly as they bind a human.
 
+### Closed — the second exhaustion-caption site is `VTOL_MobileBuild` [R-ECO-02 §4] (2026-08-29)
+
+**Established.** The tail of this document carried, since [R-SHARE-01 §8], a
+Supported inference that the jump-table fragment printing `Unable to create
+any more units` with result 8 (abandon) and **no** 300-tick wait belongs to
+`VTOL_MobileBuild`. Reading the fragment settles it: it is the in-reach phase
+body of the VTOL twin — the same site test and the same allocation call as
+`MobileBuild`, but it abandons instead of holding, and it inserts the
+upper-case `GETBUILT` node the air twin uses (the ground handler inserts
+`getbuilt`). [04 R-ORD-02 §2] states the phase with exactly that outcome
+("not created → status 7 `Unable to create any more units`, abandon"). The
+caption table of [R-WORK-01 §1] therefore reads: `MobileBuild`,
+`BuildingBuild` and `Resurrect` reschedule 300 ticks; `VTOL_MobileBuild`
+abandons. The tail bullet is removed.
+
 ## Build request and factory queue behavior
 
 ### Request creation
@@ -4310,6 +4381,41 @@ to a 3D wreck (its instance bit is always set but its definition bit is
 clear), so a sinking wreck stays reclaimable throughout, as "Feature sinking
 and water interaction" states. The item is closed.
 
+### Closed — the world-position feature resolver [R-ECO-02 §2] (2026-08-29)
+
+**Established.** The feature-reclaim executor's "the order's stored position
+resolves to a feature definition index" ([R-WORK-01 §5]) is one small
+resolver, shared with the commander-respawn scan of [08 R-SKIR-01 §3]. Given
+a 16.16 world position it computes:
+
+```
+x = X >> 20 ; z = Z >> 20                 // 16.16 world -> 16-unit cell, floor
+cell = plot(x, z) ; if none (off-map)     -> return NONE (0xFFFF)
+if cell.word == 0xFFFE (fringe):          // hop to the anchor
+    z -= cell.dzByte ; x -= cell.dxByte   // the two offset bytes of [R-FEAT-01 §3]
+    cell = plot(x, z)                     // NOT re-tested for off-map
+if cell.word > 0xFFFA                     -> return NONE
+    // 0xFFFF empty, 0xFFFB..0xFFFD void thresholds, and a dead hop
+if cellOut:  *cellOut = (x, z)            // the anchor cell after the hop
+if footOut:  *footOut = catalog[word].(footprintx, footprintz)
+return cell.word                          // the live feature index
+```
+
+The shifts are arithmetic on the signed 16.16 words, so a position west or
+north of the map floors to a negative cell and the plot lookup reports
+off-map. The fringe hop uses the stored signed offset bytes exactly as the
+validator does, but it does **not** null-test the hopped cell: a fringe whose
+offsets point off the map dereferences a null cell record — a fault the
+stamp of [R-FEAT-01 §3] never produces, since fringes are only written for
+cells inside the footprint. The two optional outputs are the anchor cell pair
+and the definition's footprint pair; feature reclaim uses the footprint to
+build the nano-box target of [R-WORK-01 §5] and prints `Reclamation failed`
+on NONE, and the respawn scan uses only the NONE test to reject a candidate
+point on a feature. **Supported inference (naming):** the resolver has two
+further table-dispatched callers with no live reference in the image; they
+are the dead reclaim variants of [R-FEAT-01 §4]'s census, and nothing in play
+reaches them.
+
 ## Capture
 
 Capture is an order-driven work state with capability and target gates. On
@@ -4856,6 +4962,37 @@ written.
 The accumulated-damage word of an instance-less anchor is not cleared here;
 the next stamp on that cell overwrites it (§3 step 5), so damage never leaks
 to a successor.
+
+### Closed — the geothermal steam producer, and a correction to the strip census [R-ECO-02 §3] (2026-08-29)
+
+**Established.** Step 8 above names "the steam-strip producer of
+[R-STRIP-01 §1]". Reading the producer fixes what step 8 left to the census,
+and finds the census wrong on one row:
+
+- The producer is called with the centre/height position of step 4 and the
+  literal strip index **4**. [03 R-STRIP-01 §1] lists strip 4 as "none — the
+  retired crater/decal literal 4 is retracted … always empty". That row is
+  wrong: the retired census's "literal 4" was this site, and every placed
+  geothermal feature appends one object to strip 4. *Correction* to be
+  applied in doc 03 (cross-document; this document only records the
+  finding).
+- The producer follows the common producer shape of [R-STRIP-01 §1]: it
+  returns without effect when the pool-disable byte is set (never, in
+  retail — that byte has no writer), allocates one 52-byte object from the
+  shared strip pool (exhaustion drops the steam silently), constructs it as
+  the flame-family class of [03 R-FX-01 §3] with its deadline seeded from
+  the current tick, calls the class's init virtual with the position and the
+  three literals `5`, `0`, `150`, evicts the oldest object of strip 4 when
+  the pre-insert count exceeds 400, and appends. **Unknown:** which of the
+  family's init parameters (segment hold, selector, lifetime) each of the
+  three literals binds to — the producer passes them positionally and this
+  unit did not read the class's init virtual; decider: static trace of that
+  virtual (lane 03, [03 R-FX-01 §3]).
+- The producer is reached only from the feature stamp (step 8); a wreck or
+  reload that re-stamps a geothermal definition produces a new steam object
+  each time, and nothing removes the old one except its own lifetime, so a
+  vent stamped repeatedly in one session accumulates strip-4 objects up to
+  the 401 cap.
 
 ### Removal and successor replacement
 
@@ -5796,6 +5933,19 @@ were corrected in place: the ignition countdown's spark time is in ticks
 features seed the plot metal byte after the uniform seed. The bullets below
 are the residue.
 
+**Correction (2026-08-29, RWU-05-6).** One bullet is removed as closed: the
+jump-table fragment that prints `Unable to create any more units` with
+result 8 and no wait is `VTOL_MobileBuild`'s in-reach phase, traced and
+named in [R-ECO-02 §4]. No bullet is added: the ledger-closure pass wrote
+its findings inline ([R-ECO-02 §1]–[R-ECO-02 §3]) and its one open question
+— which init parameter each of the steam producer's three literals binds to
+— is a doc 03 effects-class question recorded in [R-ECO-02 §3] with its
+decider, not an economy unknown. The "per-tick order of produced, consumed
+and wasted accumulation" question that older plans list against this
+document is closed by [R-ECO-01 §6] (energy before metal, the four per-pass
+fields before the pool fold, waste only at the strictly-greater clamp) and
+has no bullet here.
+
 - Whether the build-assist approach radius's summand
   `footprintX × footprintX + footprintZ + footprintZ` is a retail defect or an
   intended asymmetry; the instructions are established and reproduced, only the
@@ -5853,10 +6003,6 @@ are the residue.
   retail observation with an authored extreme-cost probe. Exceptional-value
   behavior, signed zero, the truncation sites, and the float-versus-double
   widths are closed by [R-ECO-01 §1] and [R-ECO-01 §5].
-- Name of the order handler whose jump-table fragment reports
-  `Unable to create any more units` with result 8 and no wait; inferred to be
-  `VTOL_MobileBuild` from its address span and body · [R-SHARE-01 §8] · static
-  trace of the jump table's owning function.
 - Meaning of the unit status word's low two bits, which unit sharing tests
   against `2` to skip a selected unit · [R-SHARE-01 §5] · doc 04's status-word
   census.

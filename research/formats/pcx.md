@@ -103,3 +103,5 @@ the seek fails and the palette bytes are read from the current position.
   <https://units.tauniverse.com/tutorials/tadesign/tadesign/pcxdesc.htm>
 - Verified against `unitpics/ARMFLASH.PCX` from `totala1.hpi`.
 - OpenTA parser: `formats/pcx.go`.
+
+**Writer.** Retail's screenshot writer emits PCX with 63-byte RLE runs and literal bytes below `0xC0` — see `[01 R-PLAT-02 §6]`.

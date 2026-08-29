@@ -1017,6 +1017,56 @@ transforms the returned piece through the target's model to a world offset.
 The paragraph above ("SweetSpot is a separate synchronous query…") stands; this
 names whose script answers it.
 
+### Closed — the target-point resolver: point-target height, the dead-target clear, and SweetSpot's vertex-box centre [R-WPN-04 §1] (2026-08-29)
+
+**Established — the resolver's outcomes.** The per-slot target-point resolver
+that §3.3 runs on every slot visit before the executor answers from the slot's
+encoded target (§1.2), in this order:
+
+* **Point target** (unit sentinel absent): X and Z are the two stored words
+  promoted to 16.16 (`word << 16`); Y is
+  `max(bilinearTerrainHeight(X, Z), seaLevelByte) << 16` — the bilinear
+  interpolation of §12.2 at that point, floored at the sea-level byte, so a
+  ground point below the water plane is aimed at the surface. Success, and no
+  lead is ever applied to a point target.
+* **Unit target, slot index zero:** failure (no target).
+* **Unit target whose unit's definition index is now zero** (a freed slot):
+  the slot's target words are rewritten to the empty encoding (index zero with
+  the unit sentinel) — only when they are not already that — and the deferred
+  `TargetCleared` callback is started with one argument, the slot index. The
+  resolver then returns failure. (It also performs a name lookup of
+  `StartBuilding` in the shooter's script and discards the result: a lookup
+  with no dispatch and no observable effect, recorded so that a clone does not
+  look for a missing callback.)
+* **Live unit target:** the point is the `SweetSpot` transform below, then the
+  pre-fire lead of §3.3 when its five gates pass. Success.
+
+**Established — `SweetSpot`'s piece-to-world transform is the piece's vertex
+bounding-box centre, untransformed.** `SweetSpot` is dispatched synchronously
+on the **target's** script with cell 0 seeded zero (`[R-WPN-03 §6]`); the
+returned piece index selects a piece of the target's loaded model, and the
+resolver computes, over that piece's own vertex list (`[fmt 3do]`, in the
+model's 16.16 units as loaded):
+
+```
+minX = minY = minZ = 0 ; maxX = maxY = maxZ = 0     ; seeded at the piece origin, NOT the first vertex
+for each vertex v of the piece:  min = min(min, v) ; max = max(max, v)   (per axis, signed)
+point = target.position + (max + min) / 2           ; per axis, signed truncating halving
+```
+
+Three consequences, each Established from that shape: (1) the box always
+contains the piece origin, so a piece whose geometry lies wholly on one side
+of its origin gets a centre pulled toward the origin; (2) neither the piece's
+offset from its parent nor the current COB piece state (turn, move, hide)
+enters — the offset is the piece's *own* vertex cloud about its *own* origin,
+added to the unit's world position — so a script that returns a turret piece
+aims at the unit position plus that piece's local geometry centre, not at the
+turret's animated world position, and the muzzle-side piece transform of §3.4
+(which does apply the hierarchy and piece state) is **not** reused here;
+(3) a piece with no vertices yields the unit position exactly. A piece index
+outside the model's piece table reads past it; shipped scripts return indices
+of their own model.
+
 ## 4. Firing callbacks, costs, reload, and bursts
 
 ### 4.1 Fire callback order
@@ -2576,6 +2626,90 @@ the next master tick. Kill credit is therefore unavailable to later projectiles
 in the current phase and cannot change one area traversal partway through its
 recipients.
 
+### Closed — what "reaction/wake/retarget" is: the observer notice, the retaliation site, the damage flash, the under-attack notice, and the attacker reference [R-WPN-04 §2] (2026-08-29)
+
+§9.1 step 4 names five things without stating them: "set the damage flash;
+for every kind except 11 run reaction/wake/retarget; record the kind byte on
+the victim; when the attacker is nonzero store the attacker pointer and its
+side snapshot, and raise the "under attack" interface event". This closure
+states each; the retaliation arithmetic itself is owned by `[08 R-AI-01 §11]`
+and `[04 R-STANCE-01 §3]` and is only cited.
+
+**Established — the damage flash is a 16-tick minimap blink.** The flash is
+one byte of the unit record written to 240 by every packet the dispatcher
+accepts other than a heal (paralyze included), *before* the reaction step. The
+unit sweep decrements it as a **signed** byte once per unit visit while it is
+nonzero — 240 reads as −16, so it reaches zero after sixteen visits — and its
+only reader is the minimap unit-dot pass: while the byte is nonzero the unit's
+side-coloured dot is **not** drawn (unless a minimap option bit suppresses the
+blink), so a unit under fire vanishes from the minimap for sixteen ticks after
+each hit, re-armed by every hit. It is zeroed at spawn and carried in the unit
+save record. Presentation only; doc 07 owns the dot pass.
+
+**Established — the reaction step is one routine with four parts, in this
+order,** and it runs for every accepted non-heal packet whose kind is not 11,
+*before* the kind byte and the attacker fields are rewritten (so parts 3 and 4
+still see the **previous** packet's kind and attacker-side snapshot):
+
+1. *Observer notice.* The victim's observer list — the singly linked list of
+   observer nodes that every order task links onto its **target** unit at
+   construction and unlinks when it retargets (the task record is
+   `[04 §3.2]`'s; the linking is stated here: a node whose unit has a zero
+   definition index is left unlinked) — is walked from its head and each node
+   carrying a handler receives event code **16**; nodes without a handler are
+   skipped. Order tasks install themselves as the handler; the air-movement
+   markers construct their nodes unlinked and with no handler. **Unknown:** which task
+   types act on code 16 and how; *decider:* a census of the task event
+   handlers for that code (doc 04 owns the tasks; cross-document need).
+2. *Attacker validation.* An attacker whose definition index is zero (a freed
+   slot) counts as no attacker for the rest of the routine.
+3. *Throttle and retaliation* — exactly `[08 R-AI-01 §11]`: the
+   `cancapture`/computer-player construction throttle (one simulation draw of
+   bound 300, the only simulation draw anywhere in the damage-intake path),
+   then, for a known unallied attacker of a fully built, armed-or-`kamikaze`
+   victim owned by a controller of type 1 or 2, the auto-engage order attempt,
+   else — when the victim's standing-fire field is nonzero — the per-slot
+   offer. The offer's admission for each slot whose armed and tracking bits
+   are set is: the §3.1 acquisition physical gate accepts the attacker for that
+   slot **and** the weapon is not `commandfire`; the attacker is then installed
+   through the unit-target setter (which preserves the Aim latch, §3.2) unless
+   the slot's present target exists, passes the same gate, and is clear of the
+   slot's bad-target set.
+4. *Under-attack notice.* Read the gate-mask word of the victim's front primary
+   order (zero when it has none); when its **bit 7** is clear **and** either
+   the stored attacker-side snapshot differs from the victim's owner byte or the
+   stored last damage kind is 1, request the interface message of kind 2
+   (`Under Attack`) for the victim. The message helper posts it only when the
+   victim is **not** in the current selection, is owned by the local player, is
+   alive and not death-latched; doc 07 owns the queue it enters (per-kind
+   throttle deadline, eight entries, duplicate-kind suppression). Because the
+   test precedes the field rewrite, the first hit on a fresh unit always
+   qualifies (its snapshot is seeded to the neutral value 10 at spawn), while
+   the hit that follows an own-side non-weapon packet (a reclaim pulse, a
+   cargo cascade) is silent once. Bit 7 of the gate mask is statically set on
+   the `Attack_NoMove`, `Attack_Chase` and `AttackSpecial` descriptors and is
+   also raised at runtime by the VTOL follow/guard phases (`[04 §3.1]`,
+   `[R-ORD-02 §3]`), so a unit already attacking, and an aircraft in those
+   phases, never announces `Under Attack`. This is the located consumer doc
+   04's static-mask census lists as "no located consumer" for bit 7
+   (cross-document need).
+
+**Established — the recorded-attacker reference (closing doc 04's question in
+`[R-ORD-02 §6]`).** The field the Guard handler and `VTOL_Follow` leg 1 read as
+"the ward's attacker" is the dispatcher's **damage-time attacker pointer** —
+the raw unit pointer stored by every accepted packet of kind other than 10 when
+its attacker id is nonzero, beside the attacker's owner byte as the side
+snapshot (§9.1). Its writers are exactly: unit spawn (null, snapshot 10); the
+dispatcher (every accepted non-heal packet with a nonzero attacker id, kinds 2
+and 11 included); the death handler, which overwrites it from the death
+packet's attacker id; and the developer console's kill command (null, snapshot
+10, death latch set). Nothing clears it when the attacker dies, so the guard's
+re-target and `VTOL_Follow`'s defence can read a stale pointer to a freed or
+reused slot; their own predicates (the acquisition gate on a unit whose
+definition index is zero) are what reject it, not the field. The reaction
+routine above does **not** read this field for retaliation — it uses the
+packet's attacker — and reads only the side snapshot for the notice.
+
 ### 9.2 Armor and veterancy
 
 **Established fact:** The per-recipient amount is this exact sequence. Inputs:
@@ -2886,6 +3020,29 @@ content authors no such weapon.
 friendly-damage totals with low-32-bit wrap, classifying by comparing the
 record's side byte with each recipient's owning-player byte. Its shooter
 feedback helper runs only when the record has a shooter (§9.4).
+
+### Closed — the static feature reference point and the animated-instance distance [R-WPN-04 §3] (2026-08-29)
+
+**Established.** The feature phase of §9.3 measures from the impact point to a
+per-feature reference point. For a cell whose feature has no live animation
+instance, the static helper builds it from the resolved anchor cell
+`(cx, cz)` (§8.1) and the feature definition's authored `footprintx` /
+`footprintz`:
+
+```
+X = ((2·cx + footprintx) · 8) << 16    ; = cx·16 + footprintx·8 world units: the footprint's planar centre
+Z = ((2·cz + footprintz) · 8) << 16
+Y = bilinearTerrainHeight(X, Z) << 16  ; the §12.2 interpolation at that centre; no sea-level floor
+```
+
+so an odd footprint centres on a half-cell line and a feature on the sea bed
+is measured at the bed, not the surface. For a live animated instance the
+reference is the instance's stored position, and its distance goes through a
+helper computing `trunc(sqrt((dx·dx + dy·dy) + dz·dz))` with the X and Y
+products formed as the 80-bit register value times its own double-precision
+store and the Z product plain — the identical form §9.3 gives for units — so
+the two branches share one rounding; the caller narrows both to the signed
+16-bit whole-unit value and applies the same strict `< R` test.
 
 ### 9.4 Impulse and pushing absence
 
@@ -4325,6 +4482,15 @@ bullet is narrowed to the blitter and model-orientation residue doc 03 owns.
 The §7.3 water-crossing "water sound" sentence and the §13.2 "four sound
 identities" sentence are corrected in place (`[R-WFX-01 §2]`, `§3`).
 
+**Correction (2026-08-29, RWU-06-7).** No bullet is removed. Three
+closures state what §3.4, §9.1 and §9.3 named without arithmetic:
+`SweetSpot`'s piece transform and the point-target height (`[R-WPN-04 §1]`),
+the damage-intake reaction step — observer notice, damage flash, under-attack
+notice, and the identity of the recorded-attacker field doc 04's
+`[R-ORD-02 §6]` asked for (`[R-WPN-04 §2]`) — and the static feature reference
+point (`[R-WPN-04 §3]`). One narrower residual is added under "Collision and
+damage".
+
 ### Catalog and targeting
 
 - The authored FBI key behind the definition flag that arms a side's secondary
@@ -4406,6 +4572,10 @@ identities" sentence are corrected in place (`[R-WFX-01 §2]`, `§3`).
 
 ### Collision and damage
 
+- Which order-task types act on observer event code 16 (delivered to every
+  task observing the victim by the damage-intake reaction step) and what they
+  do · `[R-WPN-04 §2]`, doc 04 · census of the task event handlers for that
+  code (doc 04 owns the tasks).
 - Malformed feature-sentinel behavior at the collision gate's fringe
   resolution, when the anchor deltas address a cell outside the map · §8.1,
   doc 03 · static trace.

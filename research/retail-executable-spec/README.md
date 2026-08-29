@@ -349,12 +349,12 @@ that are cited but never introduced.
 
 | Anchor | Introduced in |
 |---|---|
-| `R-CORE-01`, `R-CORE-02`, `R-CORE-03`, `R-DET-01`, `R-PLAT-01` | doc 01 |
+| `R-CORE-01`, `R-CORE-02`, `R-CORE-03`, `R-DET-01`, `R-PLAT-01`, `R-PLAT-02` | doc 01 |
 | `R-CAT-01`, `R-CONTENT-01`, `R-CONTENT-02`, `R-CONTENT-03`, `R-KEYS-01`, `R-MALF-01`, `R-MAP-01`, `R-P0-03`, `R-SND-01` | doc 02 |
 | `R-AUD-01`, `R-AUD-02`, `R-COMP-01`, `R-CRD-005`, `R-FONT-01`, `R-FX-01`, `R-P0-18-A`, `R-P0-18-B`, `R-P0-19`, `R-P0-19-N`, `R-P0-19-P`, `R-RAST-01`, `R-REN-02R`, `R-REN-03A`, `R-REN-03D`, `R-RR16-A`, `R-SENSOR-01`, `R-STRIP-01`, `R-TERR-01`, `R-VIS-01`, `R-WATER-01`, `R-WIND-01` | doc 03 |
 | `R-AIR-01`, `R-CB-01`, `R-COB-01`, `R-COB-02`, `R-COB-03`, `R-COB-04`, `R-COLL-01`, `R-DOC04-A`, `R-DOC04-B`, `R-DOC04-C`, `R-DOC04-D`, `R-FAC-02`, `R-MOV-01`, `R-MOV-02A`, `R-ORD-01`, `R-ORD-02`, `R-ORDER-02`, `R-P0-01`, `R-P0-02`, `R-P0-08`, `R-P0-08-A`, `R-P0-09`, `R-P0-10`, `R-P0-16-A`, `R-P28-COB-01R`, `R-PATH-01`, `R-REV-02`, `R-SPEC-01`, `R-STANCE-01`, `R-UNIT-06` | doc 04 |
-| `R-ECO-01`, `R-FAC-01C`, `R-FAC-01R`, `R-FEAT-01`, `R-P0-06`, `R-PROD-01`, `R-SHARE-01`, `R-WORK-01` | doc 05 |
-| `R-DMG-01`, `R-P0-07`, `R-WFX-01`, `R-WPN-01`, `R-WPN-02`, `R-WPN-03` | doc 06 |
+| `R-ECO-01`, `R-ECO-02`, `R-FAC-01C`, `R-FAC-01R`, `R-FEAT-01`, `R-P0-06`, `R-PROD-01`, `R-SHARE-01`, `R-WORK-01` | doc 05 |
+| `R-DMG-01`, `R-P0-07`, `R-WFX-01`, `R-WPN-01`, `R-WPN-02`, `R-WPN-03`, `R-WPN-04` | doc 06 |
 | `R-CAM-01`, `R-FE-01`, `R-FE-02`, `R-HUD-02R`, `R-HUD-03`, `R-P0-11`, `R-REV-01`, `R-SEL-02B2`, `R-WGT-01` | doc 07 |
 | `R-AI-01`, `R-CAMP-01`, `R-ENTRY-01`, `R-ENTRY-02`, `R-OOS-01`, `R-P0-04`, `R-P0-05`, `R-SAVE-02`, `R-SAVE-FEATURE-01`, `R-SAVE-ORDER-01`, `R-SAVE-UNIT-01`, `R-SAVE-WEAPON-01`, `R-SKIR-01`, `R-TRIG-01` | doc 08 |
 | `R-CRD-006` | docs 03 (§2 producer census) and 07 (§1 cadence seam) |
