@@ -1021,6 +1021,9 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 					continue
 				}
 				if u := s.Units.Unit(h); u != nil {
+					// Scenario placement overwrites the initialized heading only after
+					// both common-allocation RNG invocations [R-P28-ANG-01R §2].
+					u.Move.Heading = up.Angle
 					u.PlacementIdx = idx
 					u.PlacementIdent = up.Ident
 					u.PlacementUnitName = up.UnitName

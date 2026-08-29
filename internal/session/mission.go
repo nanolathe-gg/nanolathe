@@ -386,6 +386,10 @@ func reconstructUnits(s *Session, m *mission.Mission) error {
 		}
 		u := s.Units.Unit(h)
 		if u != nil {
+			// Mission placement invokes the common allocator draw sequence first,
+			// then overwrites its authoritative heading with the authored angle
+			// [R-P28-ANG-01R §2].
+			u.Move.Heading = up.Angle
 			u.PlacementIdx = idx
 			u.PlacementIdent = up.Ident
 			u.PlacementUnitName = up.UnitName

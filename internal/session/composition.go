@@ -535,6 +535,10 @@ func createAndBindServices(s *Session) error {
 	if s.Wind == nil {
 		return fmt.Errorf("session: missing Wind for service wiring [01 §7.3]")
 	}
+	// Bind the battle's single Park-Miller stream before any mission,
+	// commander, or factory allocation reaches the common unit initializer
+	// [01 §7.1][R-P28-ANG-01R §2].
+	s.Units.SetSimulationRNG(s.SimRNG())
 	cobFS, cobLoader := s.Units.COBSource()
 	if (cobFS == nil) != (cobLoader == nil) {
 		return fmt.Errorf("session: incomplete COB source for service wiring [04 §4.1]")

@@ -9,6 +9,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -430,6 +431,12 @@ type World struct {
 	// by session composition. It is also used for units created by construction
 	// and save reconstruction, so every production unit follows one path.
 	cobBinder COBBinder
+
+	// simulationRNG is the session-owned, battle-wide Park-Miller stream. It is
+	// bound by session composition before the first production allocation; nil
+	// is retained only for small unit-package fixtures, which receive the
+	// deterministic zero-sample heading and consume no draws [R-P28-ANG-01R §2].
+	simulationRNG *rng.Simulation
 }
 
 // NewSliced creates the unit world over a retail sliced pool for maxDefs
@@ -504,6 +511,35 @@ func (w *World) SetCOBBinder(binder COBBinder) {
 // HasCOBBinder reports whether strict composition owns future allocations.
 func (w *World) HasCOBBinder() bool { return w != nil && w.cobBinder != nil }
 
+// SetSimulationRNG binds the one authoritative simulation stream used by the
+// common unit initializer [01 §7.1][R-P28-ANG-01R §2]. A World never creates
+// a substitute or per-unit stream.
+func (w *World) SetSimulationRNG(sim *rng.Simulation) {
+	if w != nil {
+		w.simulationRNG = sim
+	}
+}
+
+// initializeAllocationHeading performs the two common-initializer RNG
+// invocations in retail order: the buildangle-bounded heading invocation,
+// followed by the separate full-domain initialization draw whose semantic
+// destination remains unresolved [R-P28-ANG-01R §2].
+func (w *World) initializeAllocationHeading(u *Unit, def *content.UnitDef) {
+	if u == nil || def == nil {
+		return
+	}
+	var draw uint32
+	if w != nil && w.simulationRNG != nil {
+		draw = w.simulationRNG.Uint32n(uint32(uint16(def.BuildAngle)))
+	}
+	u.Move.Heading = uint16(int32(int16(uint16(draw))) - int32(uint16(def.BuildAngle)>>1) + 32768)
+	if w != nil && w.simulationRNG != nil {
+		// Only this full-domain invocation and its call position are established;
+		// no semantic destination is assigned [R-P28-ANG-01R §2].
+		_ = w.simulationRNG.Uint32n(0x10000)
+	}
+}
+
 // attachCOB binds the definition's program to a per-unit VM and runs Create
 // once in mode I [04 §4.1][P1-I01].
 //
@@ -529,6 +565,12 @@ func (w *World) attachCOB(u *Unit) error {
 		return nil // already has VM [P1-I01]
 	}
 	if w.cobBinder != nil {
+		// TODO(question): two attachment failure boundaries remain open. Nanolathe's
+		// strict binder can return an error after allocation, but retail establishes
+		// RNG order only for successful initialization and pre-initializer refusal; a
+		// traced retail post-allocation failure would settle whether either draw is
+		// retained. Separately, the scriptless mover crash policy described above
+		// needs its forced-active probe. Do not roll back or reorder the successful path.
 		return w.cobBinder(u)
 	}
 	prog := u.Def.Script
@@ -708,8 +750,8 @@ func (w *World) defIDClaimed(id uint16) bool {
 // Create allocates through the canonical per-player allocator: lowest-free
 // slot in the owning player's slice with slot 0 null, no generation tags,
 // immediate reuse [01 §6.1] C1 [P0-16 §3.2]. A slice-full failure is
-// reported even when other players have free slots [P0-16 §7.3]. Zero RNG
-// draws.
+// reported even when other players have free slots [P0-16 §7.3]. Failures
+// before common initialization consume zero RNG draws [R-P28-ANG-01R §2].
 func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed) (pool.Handle, error) {
 	if w == nil || w.pool == nil {
 		return 0, fmt.Errorf("units: nil world")
@@ -760,6 +802,7 @@ func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed)
 	}
 	installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions into Slots [P0-I04]
 	u.InitEconomyState()   // [P1-I04] on/off, cloak, activation from definition
+	w.initializeAllocationHeading(u, def)
 	w.units[idx] = u
 	if err := w.attachCOB(u); err != nil {
 		w.units[idx] = nil
@@ -805,8 +848,12 @@ func installWeapons(u *Unit, def *content.UnitDef) {
 // CreateWithForcedSlot allocates a unit at the exact forcedSlot for save
 // reconstruction: the candidate is verified against the owning player's
 // slice bounds and free occupancy, and the per-def limit is re-checked
-// [P0-16 §3.3]. Zero RNG draws. Returns error on limit/slice-full/forced-OOB/
-// occupied.
+// [P0-16 §3.3]. A successful reconstruction allocation runs the normal draw
+// sequence before its caller restores the saved heading; validation failures
+// consume zero draws [R-P28-ANG-01R §2]. Returns error on
+// limit/slice-full/forced-OOB/occupied.
+// Active in-battle restore is explicitly unsupported, so this allocator does
+// not add a save codec or reconstruct a saved heading [INVARIANTS I13].
 func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed, forced pool.Handle) (pool.Handle, error) {
 	if w == nil || w.pool == nil {
 		return 0, fmt.Errorf("units: nil world")
@@ -858,6 +905,7 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 	}
 	installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions [P0-I04]
 	u.InitEconomyState()   // [P1-I04]
+	w.initializeAllocationHeading(u, def)
 	w.units[idx] = u
 	if err := w.attachCOB(u); err != nil {
 		w.units[idx] = nil

@@ -2598,6 +2598,86 @@ visit and frees at step 6; (f) draw accounting: any `random` opcode with an
 equal low/high consumes nothing, and a bitmap-only `explode` consumes nothing,
 against the census in [R-COB-01 §2].
 
+### P28 construction-KBot initial-pose boundary [R-P28-COB-01R] (2026-08-28)
+
+**Established — retail creation has no asset-specific settling pass.** The
+common allocator binds the selected model and COB, builds the strict piece
+map, starts `Create` once in immediate mode, and performs the all-eight-slot
+delta-zero drain plus one piece pass described in [R-COB-02 §2]. Scenario
+placement and factory-product allocation both use that common initializer.
+Factory allocation subsequently creates `GetBuilt` on the product and raises
+`StartBuilding` on the **factory**; it does not issue `StartBuilding` on the
+new product. The ordinary unit visit and tick-end publication are the only
+later execution/publication boundaries. No ARMCK-specific pose write or extra
+pre-publication COB drain was found or is authorized.
+
+**Established — stock ARMCK asset identity and strict piece relation.** In the
+reference install the resolved definition and model identity are `ARMCK`, and
+the selected script is `scripts/armck.cob` (the winning provider in that
+install is `rev31.gp3`). Its twelve COB pieces map by exact authored name to
+the depth-first 3DO table as follows; this is a name link, not a positional
+guess:
+
+| COB order | Piece | Model order |
+|---:|---|---:|
+| 0 | `nanospray` | 10 |
+| 1 | `turret` | 4 |
+| 2 | `rfoot` | 2 |
+| 3 | `lfoot` | 3 |
+| 4 | `pelvis` | 1 |
+| 5 | `lflap` | 5 |
+| 6 | `rflap` | 6 |
+| 7 | `guncover` | 11 |
+| 8 | `nozzle` | 9 |
+| 9 | `arms` | 7 |
+| 10 | `nanobody2` | 8 |
+| 11 | `ground` | 0 |
+
+The stock `StartBuilding` and `StopBuilding` entries are later builder-state
+callbacks. They are not part of factory-product creation. They enter through
+the established deferred callback path, and their piece targets and waits are
+authored by this COB; they must not be replaced with engine-side piece values.
+
+**Established — Nanolathe route diagnosis, not retail pose evidence.** With
+`NANOLATHE_TA_ROOT` selecting the reference assets, the production strict
+binder starts `Create` exactly once and performs exactly one delta-zero drain.
+Immediately afterward its twelve VM transforms are zero, their model-derived
+draw flags are set, and `InBuildStance` and `Busy` are clear. The callback
+lifecycle trace observes `Create` finishing at the next normal drain, followed
+by deferred `StartBuilding` and `StopBuilding` start/finish pairs when those
+edges are deliberately exercised. Mission reconstruction publishes a copied
+version of that VM state; later live-piece mutation does not change the
+committed frame. A real ARMLAB state-2 allocation resolves the same ARMCK
+model/COB/piece map and the same post-Create values in a distinct VM; it does
+not alias or copy the factory's VM, stance, busy flag, or building edge. Only
+the factory receives the production `StartBuilding` edge.
+
+**Unknown — exact retail first committed visual pose and delta-zero
+sufficiency.** The facts above close the Nanolathe route and eliminate wrong
+asset resolution, loose piece linking, repeated `Create`, product/factory VM
+aliasing, inherited product stance, and live-state publication as explanations
+for the observed initial pose. They do **not** prove that the reference
+screenshot's first visible ARMCK corresponds to the post-delta-zero values.
+There is no retail trace pairing scenario creation and factory creation with
+the exact first committed indexed frame, and the reference screenshot lacks
+the scenario, tick, and allocation provenance needed to infer that boundary.
+The allocator-provided initial content of COB statics also remains Unknown in
+the COB Missing list below. Therefore this research does not establish whether
+delta zero alone is sufficient for retail visual parity or whether authored
+waiting work must advance before the relevant publication. Do not change
+creation timing and do not force closed-looking piece values from appearance.
+
+**Settling probe.** At one scenario-created and one ARMLAB-produced ARMCK,
+record the selected definition/model/COB, strict piece map, `Create` start and
+finish, all twelve piece transforms and draw flags (a) before `Create`, (b)
+after its immediate delta-zero drain, (c) after each normal drain until the
+first publication, and (d) from that immutable committed frame. Capture the
+same frame's indexed ARMCK region and callback/order state, including product
+`GetBuilt` and factory `StartBuilding`. Repeating with a known initialized COB
+static arena would distinguish scheduling from initial-storage provenance.
+That paired retail trace, not visual plausibility, decides whether a timing
+change is implementable.
+
 ## 6. Terrain and movement prerequisites
 
 ### 6.1 Terrain classification
@@ -3899,6 +3979,11 @@ Function identities that a later re-derivation corrected — in particular the m
 
 ### COB
 
+- `TODO(question)` [R-P28-COB-01R] — the exact first committed retail ARMCK
+  pose and whether its authored waiting `Create` work advances before that
+  publication. The common immediate delta-zero drain, stock asset/piece link,
+  and Nanolathe's three creation routes are established, but only the paired
+  retail settling probe in [R-P28-COB-01R] can authorize a timing change.
 - Reserved opcode `0x10063000`: behavior when a synthetic or corrupted script
   emits it (count exceeding the window depth reads stale window words —
   undefined behavior, not a kill).

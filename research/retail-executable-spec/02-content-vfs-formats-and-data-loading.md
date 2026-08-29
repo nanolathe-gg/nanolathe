@@ -2174,9 +2174,10 @@ unit-membership bitsets (`word = unitID >> 5`, `mask = 1 << (unitID & 31)`),
 whitespace tokenization of `category`, mandatory `ALL` membership (the
 sentinel is the literal token `ALL`, not an empty entry),
 `none` as an ordinary token, and the unit-name-first mask helper (R-P0-03
-folded into §5); the movement-class pool initialization (zero-filled, no
-255 template; unconditional clamps; the fallback scratch template for
-unresolvable classes; FBI resolution against the authored `Name` value; the
+folded into §5); the movement-class pool initialization (startup template
+pre-fill of every class record — slope limits 255, water depths ±10000 — then
+unconditional clamps, per `[04 §6.1 R-DOC04-A]`; the fallback scratch template
+for unresolvable classes; FBI resolution against the authored `Name` value; the
 clear/steep/hard slope classifier with BadSlope as the clear-vs-steep
 boundary); the command-line grammar (bare-token language capture, the
 developer and lobby switch vocabulary) and the `C`/`c` config switch with
@@ -2186,9 +2187,11 @@ cross-reference failure policy for missing weapons/corpses/movement
 classes/models/sides/sound categories; and the `ai_weight` consumer / 
 `ai_limit` bounded-negative split with the AI-side identity of the build
 picker's enclosing routines. Closed in this revision (R-CONTENT-01/02/03):
-the movement-profile initialization contract (zero-filled pool, no template,
-no reset between classes, unconditional unsigned clamps, per-field conversion
-table — the 255-template hypothesis explicitly falsified); the weapon-family
+the movement-profile initialization contract (no reset between classes,
+unconditional unsigned clamps, per-field conversion table; R-CONTENT-01's
+"zero-filled pool, no template" reading was itself superseded on 2026-08-27 by
+`[04 §6.1 R-DOC04-A]`, which located the startup template writer — see the
+supersession note in §5 "Movement class record"); the weapon-family
 discovery order (`Weapons\*.tdf` union enumeration only, two independent
 passes; `gamedata\weapons.tdf` never parsed — PLAN_02's parse-order amendment
 premise falsified), the 256-record ID-indexed weapon table with
@@ -2248,13 +2251,13 @@ Still open:
   byte-exact lookup are established in §3; the message-site census remains).
 * The empty/sentinel category registry entry is closed (it is the token
   `ALL`); what remains is document 06's mask-helper consumer list.
-* The movement-class slope arithmetic paradox (R-CONTENT-01 closed the
-  initialization question — the pool is zero-filled with no template, so the
-  traced unconditional clamps compile every stock class omitting
-  `MaxWaterSlope` to `MaxSlope = 0`, which contradicts assumed stock
-  playability; all writers and comparisons are enumerated — see §5 "Movement
-  class record", R-CONTENT-01) `TODO(question)`: a runtime trace of the
-  compiled pool or of a unit definition's slope copy is the decider.
+* The movement-class slope arithmetic paradox is closed, not open: this
+  bullet formerly said the pool is zero-filled with no template so stock land
+  classes compile to `MaxSlope = 0`, with a runtime trace as decider. That
+  reading was superseded on 2026-08-27 by `[04 §6.1 R-DOC04-A]` (startup
+  template pre-fill; omitted keys carry 255/±10000; stock compiles to authored
+  limits). The bullet was stale because the tail was not regenerated when §5
+  was corrected. Nothing remains open here.
 * The unit limit's runtime consumers (which of the active-limit read sites
   gate construction, AI production, and the lobby display, and the exact
   per-player versus global counter split) — document 05 owns the enforcement
