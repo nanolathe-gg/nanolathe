@@ -310,6 +310,61 @@ A `[GAP Txx]` citation in code means the task's content now lives at the
 promoted location above. The compressed GAF decoder is **not** a gap: it is
 fully specified in `[fmt gaf]` and implemented in `formats/gaf.go`.
 
+### Tails and markers (RWU-00-5, 2026-08-28)
+
+The eight "Missing and unknown" tails, and the "### Unknown" blocks inside
+documents 02 and 07, were regenerated on 2026-08-28 so that they contain
+**only open items**. Each item is one bullet naming what is unknown, the
+section that owns it, and the decider that would settle it — *static trace*,
+*asset census*, or *manual retail observation*. Closure narratives were
+deleted from the tails; every finding they recited is in the body section that
+owns it, and each regenerated tail carries a correction note saying what the
+previous text said and why it was wrong. Where a tail held established text
+that existed nowhere else, that text was promoted into its section rather than
+deleted.
+
+Markers and tails are reconciled in both directions: every live
+`TODO(question)` / `TODO(T23)` / `TODO(T25)` / `TODO(CRD-006)` marker in
+`research/` has a bullet in the owning document's tail that names it, and no
+tail bullet describes something already closed. The category documents carry
+86 markers in their bodies and 64 tail mentions of them; markers that appear
+only inside a quotation of retracted text no longer spell the marker syntax,
+so a grep counts live questions. `research/formats/pal.md` holds the single
+marker outside the category documents (the blue tint table's provenance),
+listed in doc 03's tail.
+
+### Inline finding anchors
+
+Closures are written inline under a heading — or, in documents 05 and 08,
+under a bold paragraph lead-in — carrying an `R-<id>` anchor. This table maps
+every anchor in the corpus to the document that introduces it, so a
+`[R-…]` citation resolves without a search. The citation resolver kept in the
+raw corpus (`scripts/check_citations.py`) regenerates it and reports anchors
+that are cited but never introduced.
+
+| Anchor | Introduced in |
+|---|---|
+| `R-CORE-01`, `R-CORE-02`, `R-CORE-03` | doc 01 |
+| `R-CONTENT-01`, `R-CONTENT-02`, `R-CONTENT-03`, `R-P0-03` | doc 02 |
+| `R-CRD-005`, `R-P0-18-A`, `R-P0-18-B`, `R-P0-19`, `R-P0-19-N`, `R-P0-19-P`, `R-REN-02R`, `R-REN-03A`, `R-RR16-A`, `R-SENSOR-01`, `R-STRIP-01`, `R-WIND-01` | doc 03 |
+| `R-COB-01`, `R-COB-02`, `R-DOC04-A`, `R-DOC04-B`, `R-DOC04-C`, `R-DOC04-D`, `R-MOV-01`, `R-MOV-02A`, `R-ORDER-02`, `R-P0-01`, `R-P0-02`, `R-P0-08`, `R-P0-08-A`, `R-P0-09`, `R-P0-10`, `R-P0-16-A`, `R-P28-COB-01R`, `R-REV-02`, `R-UNIT-06` | doc 04 |
+| `R-FAC-01C`, `R-FAC-01R`, `R-P0-06` | doc 05 |
+| `R-P0-07`, `R-WPN-01` | doc 06 |
+| `R-HUD-02R`, `R-P0-11`, `R-REV-01`, `R-SEL-02B2` | doc 07 |
+| `R-P0-04`, `R-P0-05`, `R-SAVE-FEATURE-01`, `R-SAVE-ORDER-01`, `R-SAVE-UNIT-01`, `R-SAVE-WEAPON-01` | doc 08 |
+| `R-CRD-006` | docs 03 (§2 producer census) and 07 (§1 cadence seam) |
+| `R-FAC-01`, `R-FAC-01B` | docs 04 (movement boundary) and 05 (release audit) |
+| `R-LAYER` | docs 03 (§§1–4) and 06 |
+| `R-P28-ANG-01R` | docs 02 (§1), 04 (§2) and 05 (§3) |
+| `R-RND-02A`, `R-SEL-02A` | docs 03 and 04 / 03 and 07 respectively |
+
+`R-REV-01` (hover hull extrema, corner mapping, projection sign, polygon
+predicate, and the HOT UNITS producer) and `R-REV-02` (the factory exit-piece
+locator's runtime transform) landed on 2026-08-28 and are the newest entries.
+Some anchors are introduced in one document and cited from several — `R-LAYER`
+and `R-DOC04-A` are the widest — which is why the home column, not the citing
+document, is authoritative.
+
 ## How to use the specifications
 
 For implementation work:

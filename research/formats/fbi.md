@@ -211,9 +211,9 @@ use a single character (`YardMap=o;`).
 | Key | Meaning |
 | --- | --- |
 | `canmove`, `canpatrol`, `canstop`, `canguard` | Order availability flags |
-| `MaxVelocity` | Top speed (pixels per tick-ish; Commander 1.07, fast scout ~3) |
-| `Acceleration`, `BrakeRate` | Speed ramps |
-| `TurnRate` | Turn speed in angular units (65536 = full circle) per tick |
+| `MaxVelocity` | Top speed. Fixed-point accessor (`[02 "Typed accessors"]`): the authored decimal is multiplied by 65,536 and truncated toward zero, so the compiled field is **16.16 world units per tick** and needs no further scaling. Default 0. Commander 1.07, fast scout ~3 [04 §8.1 R-MOV-01 §1] |
+| `Acceleration`, `BrakeRate` | Speed ramps, both fixed-point, so **16.16 world units per tick squared**, added to and subtracted from the scalar speed once per tick. Default 0 for both. `BrakeRate` is also the divisor of the braking-distance test and `TurnRate` the divisor of the turn-distance test, and neither division is zero-guarded, so a mobile unit that omits either key faults retail [04 §8.1 R-MOV-01 §4] |
+| `TurnRate` | Turn speed in angular units (65536 = full circle) per tick. **Integer** accessor, stored into a 16-bit field that every reader zero-extends, so the effective domain is 0..65535 and an authored value is taken modulo 65,536. Default 0. The per-tick heading change is the signed heading error saturated at ±`TurnRate` [04 §8.1 R-MOV-01 §2] |
 | `SteeringMode` | Turning style (tank skid vs. wheeled arcs; small int). 152 retail units author it, but the engine has no string for it, so it selects nothing. |
 | `MovementClass` | Movement class name in `gamedata/MOVEINFO.TDF` (supplies footprint/slope/depth for pathing) |
 | `MaxSlope` | Steepest passable slope |
@@ -223,7 +223,7 @@ use a single character (`YardMap=o;`).
 | `WaterLine` | Non-negative decimal draft describing how deep the model sits in water (ships); retail data includes values such as `0.3` |
 | `Upright` | Keep model vertical on slopes (Kbots) |
 | `maneuverleashlength` | How far it strays from orders when distracted |
-| `MoveRate1`, `MoveRate2` | Plane speed classes (8 for combat planes, 1 for transports); correspond to the `MoveRate1/2/3` script callbacks |
+| `MoveRate1`, `MoveRate2` | The two thresholds of the movement-tier classifier that raises the `MoveRate1/2/3` script callbacks — **not** plane-specific. Fixed-point accessor, so 16.16 world units per tick, each **defaulting to `MaxVelocity` shifted left one** (twice top speed). Tier 1 is `speed <= MoveRate1`, tier 2 is `MoveRate1 < speed <= MoveRate2`, tier 3 is above; since committed speed never exceeds `MaxVelocity`, a unit that authors neither key is always tier 1 [04 §5.2][04 §8.1 R-MOV-01 §6] |
 | `canfly` | Aircraft flag |
 | `canhover` | Hovercraft flag |
 | `cruisealt` | Flight altitude |
@@ -310,11 +310,21 @@ removes its shading entirely. See
 
 - Default values when a key is absent are engine-internal and undocumented;
   do not assume 0 for everything (e.g. `ShootMe` behaves as 1 by default).
-- Units/scales for `MaxVelocity`, `Acceleration`, `BuildTime`,
-  `WorkerTime` are relative engine ticks; exact per-tick math is still
-  being established by observation.
+- **Closed for the movement keys (2026-08-28, RWU-04-1).** The earlier text
+  read "Units/scales for `MaxVelocity`, `Acceleration`, `BuildTime`,
+  `WorkerTime` are relative engine ticks; exact per-tick math is still being
+  established by observation". That was wrong to defer to observation for the
+  first two: the accessor settles them statically. `MaxVelocity`,
+  `Acceleration`, `BrakeRate`, `MoveRate1` and `MoveRate2` all take the
+  fixed-point accessor and are consumed verbatim as 16.16 world units per tick
+  (or per tick squared) with no runtime rescaling, and `TurnRate` takes the
+  integer accessor on the 65,536-per-circle scale — see the Movement rows
+  above and [04 §8.1 R-MOV-01 §1]. `BuildTime` and `WorkerTime` are not
+  covered by that closure and remain open (doc 05).
 - Several flags above carry community-guessed semantics (`BMcode`,
-  `MoveRate1`, `PitchScale`, `sortbias`, `Ovradjust`). `BuildAngle`
+  `PitchScale`, `sortbias`, `Ovradjust`). `MoveRate1`/`MoveRate2` are no
+  longer among them: their accessor, defaults and classifier are established
+  in the Movement table above. `BuildAngle`
   has an established unsigned-bound sampler, signed conversion, heading range,
   and lifecycle contract [04 §2.3b]. `Scale` is known to be inert: the engine
   has no string for it. `Ovradjust` has no recovered runtime reader in the

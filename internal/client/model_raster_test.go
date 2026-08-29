@@ -138,7 +138,7 @@ func TestTexturedRasterBypassesSHDOnlyForNoShadeRow(t *testing.T) {
 			} else {
 				c.blitTexturedTriTarget(target, &tri, texture)
 			}
-			target.commit(c.indexed)
+			target.commit(c.indexed, c.width, c.height)
 			want := source
 			if shaded {
 				want = remapped

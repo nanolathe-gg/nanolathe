@@ -230,6 +230,25 @@ type UnitDraw struct {
 	Pieces       []PieceDraw        // per piece draw lists in stable order (I1) primitives in load-fixed order [03 §2.4] C20
 	WorldPos     [3]numeric.Fixed   // committed world draw position [03 §2.4] C12
 	NeedsRebuild bool               // whether orientation cache triggered rebuild [03 §5.2] C13
+	// Structure is the instance class bit retail derives from BMcode=0. It
+	// gates both the shaded piece renderer and the composition supersample
+	// [R-RND-02A][R-REN-03A §6].
+	Structure bool
+	// KeyPlane requests the composition image's per-pixel height plane. Retail
+	// allocates it when the definition authors ZBuffer, when the unit is under
+	// construction, or when the caller asks for one outright [R-REN-03A §2].
+	KeyPlane bool
+	// CastsShadow is the resolved model-shadow gate: the option bits are on and
+	// the definition authors none of noshadow, canhover or floater
+	// [R-REN-03D §1].
+	CastsShadow bool
+	// GroundY is the terrain height under the unit. The shadow is sheared by
+	// it rather than by the unit's own height, which is what slides a shadow
+	// across a slope [R-REN-03D §3].
+	GroundY numeric.Fixed
+	// DiggerClip erases everything at or below the model origin, which is the
+	// buried half of a pop-up defence [R-REN-03A §8].
+	DiggerClip bool
 }
 
 // BuildPieceDraws produces per-piece draw lists with world transforms and primitive lists in load-fixed order [03 §2.4] C20 [03 §5.2] presentation only (I6).

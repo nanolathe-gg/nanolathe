@@ -31,7 +31,7 @@ func TestModelHeightPlaneHigherFaceWinsRegardlessOfOrder(t *testing.T) {
 			c.fillTriTarget(target, &low, 11)
 			c.fillTriTarget(target, &high, 22)
 		}
-		target.commit(c.indexed)
+		target.commit(c.indexed, c.width, c.height)
 		if got := c.indexed[1*c.width+1]; got != 22 {
 			t.Fatalf("reverse=%v: pixel=%d, want higher face 22", reverse, got)
 		}
@@ -47,7 +47,7 @@ func TestModelHeightPlaneCrossingFacesUsePerPixelKey(t *testing.T) {
 	target := newModelTarget(c.width, c.height)
 	c.fillTriTarget(target, &a, 11)
 	c.fillTriTarget(target, &b, 22)
-	target.commit(c.indexed)
+	target.commit(c.indexed, c.width, c.height)
 	if got := c.indexed[1*c.width+1]; got != 22 {
 		t.Fatalf("crossing faces pixel=%d, want per-pixel higher face 22", got)
 	}
@@ -59,7 +59,7 @@ func TestModelHeightPlaneEqualKeyLaterFaceWins(t *testing.T) {
 	target := newModelTarget(c.width, c.height)
 	c.fillTriTarget(target, &a, 11)
 	c.fillTriTarget(target, &b, 22)
-	target.commit(c.indexed)
+	target.commit(c.indexed, c.width, c.height)
 	if got := c.indexed[1*c.width+1]; got != 22 {
 		t.Fatalf("equal-key pixel=%d, want later face 22", got)
 	}
@@ -80,7 +80,7 @@ func TestModelHeightPlaneSharedByFlatAndTexturedFaces(t *testing.T) {
 			low.frame = texture
 			c.blitTexturedTriTarget(target, &low, texture)
 		}
-		target.commit(c.indexed)
+		target.commit(c.indexed, c.width, c.height)
 		if got := c.indexed[1*c.width+1]; got != 44 {
 			t.Fatalf("texturedFirst=%v: pixel=%d, want admitted flat face 44", texturedFirst, got)
 		}
@@ -96,8 +96,8 @@ func TestModelHeightPlaneTransparentTextureDoesNotAdmit(t *testing.T) {
 	if got := target.height[1*c.width+1]; got != 0 {
 		t.Fatalf("transparent texel changed height key to %d", got)
 	}
-	if got := target.color[1*c.width+1]; got != 0 {
-		t.Fatalf("transparent texel changed scratch color to %d", got)
+	if got := target.color[1*c.width+1]; got != transparentModelIndex {
+		t.Fatalf("transparent texel changed composition colour to %d, want the background index %d", got, transparentModelIndex)
 	}
 
 	frame.Transparent[0] = false
@@ -105,18 +105,20 @@ func TestModelHeightPlaneTransparentTextureDoesNotAdmit(t *testing.T) {
 	if got := target.height[1*c.width+1]; got != 70 {
 		t.Fatalf("opaque texel key=%d, want 70", got)
 	}
-	target.commit(c.indexed)
+	target.commit(c.indexed, c.width, c.height)
 	if got := c.indexed[1*c.width+1]; got != 9 {
 		t.Fatalf("opaque texel committed color=%d, want 9", got)
 	}
 }
 
-func TestModelHeightKeyTruncatesNegativeWholeUnitsTowardZero(t *testing.T) {
-	// -1.5 world units narrows to -1 and biases to 49; arithmetic shifting
-	// would incorrectly produce -2 and key 48. The key is the whole height,
-	// not half of it [R-REN-03A §2].
-	if got := modelHeightKey(-98304); got != 49 {
-		t.Fatalf("key for -1.5 world units=%d, want 49", got)
+func TestModelHeightKeyFloorsNegativeWholeUnits(t *testing.T) {
+	// Retail narrows the model-relative 16.16 height by extracting its high
+	// word, which is an arithmetic shift, so -1.5 world units floors to -2 and
+	// biases to 48. It is not an __ftol conversion and I3's truncate-toward-
+	// zero rule does not reach it. The key is also the whole height, not half
+	// of it [R-REN-03A §2].
+	if got := modelHeightKey(-98304); got != 48 {
+		t.Fatalf("key for -1.5 world units=%d, want 48", got)
 	}
 	if got := modelHeightKey(11 << 16); got != 61 {
 		t.Fatalf("key for +11 world units=%d, want 61 (unhalved)", got)
@@ -130,7 +132,7 @@ func TestConstructionUsesTheSameHeightPlaneAdmission(t *testing.T) {
 	target := newModelTarget(c.width, c.height)
 	c.fillTriNanoframeTarget(target, &low, 11, reveal)
 	c.fillTriNanoframeTarget(target, &high, 22, reveal)
-	target.commit(c.indexed)
+	target.commit(c.indexed, c.width, c.height)
 	if got := c.indexed[1*c.width+1]; got != 22 {
 		t.Fatalf("construction pixel=%d, want higher face 22", got)
 	}
@@ -162,32 +164,34 @@ func TestNanoframeEraseClearsPreviouslyComposedLowerFace(t *testing.T) {
 	target := newModelTarget(c.width, c.height)
 	c.fillTriNanoframeTarget(target, &low, 11, reveal)
 	c.fillTriNanoframeTarget(target, &high, 22, reveal)
-	target.commit(c.indexed)
+	target.commit(c.indexed, c.width, c.height)
 	if got := c.indexed[1*c.width+1]; got != 77 {
 		t.Fatalf("erased winning face changed destination to %d, want existing background 77", got)
 	}
 }
 
-func TestReusableModelTargetClearsPreviousBoundsAndCoverage(t *testing.T) {
+// Each subject composes into a freshly allocated image, so no state from an
+// earlier model can reach a later one [R-REN-03A §1].
+func TestEachModelComposesIntoItsOwnImage(t *testing.T) {
 	c := heightPlaneClient()
 	first := heightPlaneTri(70)
-	target := c.reusableModelTarget([]screenTri{first})
+	target := newModelTarget(c.width, c.height)
 	c.fillTriTarget(target, &first, 11)
-	target.commit(c.indexed)
+	target.commit(c.indexed, c.width, c.height)
 	if c.indexed[1*c.width+1] != 11 {
-		t.Fatal("first model did not populate scratch target")
+		t.Fatal("first model did not populate its composition image")
 	}
 
 	// The second model has the same bounds but covers the opposite half. A
-	// stale color or covered bit at (1,1) would leak into this composition.
+	// stale colour or coverage bit at (1,1) would leak into this composition.
 	c.indexed[1*c.width+1] = 77
 	second := screenTri{
 		x: [3]int32{6, 6, 0}, y: [3]int32{0, 6, 6},
 		key: [3]float64{70, 70, 70},
 	}
-	target = c.reusableModelTarget([]screenTri{second})
+	target = newModelTarget(c.width, c.height)
 	c.fillTriTarget(target, &second, 22)
-	target.commit(c.indexed)
+	target.commit(c.indexed, c.width, c.height)
 	if got := c.indexed[1*c.width+1]; got != 77 {
 		t.Fatalf("stale model pixel leaked as %d, want destination 77", got)
 	}

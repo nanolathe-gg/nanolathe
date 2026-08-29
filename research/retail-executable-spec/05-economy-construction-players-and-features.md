@@ -1785,7 +1785,7 @@ performs the idempotent second transition before its count/presentation
 bookkeeping.
 
 The exact order of every completion side effect beyond that is closed by the
-construction-completion corpus analysis [R-P0-14 §3]: the helper's product
+construction-completion corpus analysis [P0-14 §3]: the helper's product
 transition precedes the factory StopBuilding edge, while occupancy and
 line-of-sight stamping happen after settlement in the same tick; AI
 completed-counts refresh at the next 30-tick strategic refresh (up to 30 ticks
@@ -2016,7 +2016,7 @@ update draws its position jitter from the **CRT** random stream (six draws
 per iteration, five iterations — 30 draws per record per tick), never from
 the simulation stream, so nano presentation cannot perturb the sim RNG.
 
-**Closed (2026-08-27).** This addendum previously carried a `TODO(question)`
+**Closed (2026-08-27).** This addendum previously carried a standing question
 reading "the renderer-side consumers of strip 6 — the per-segment fade curve and
 the logical-to-palette color mapping — remain open (presentation lane); the
 engine-side record carries positions, interpolation deltas, and a value of
@@ -2678,152 +2678,95 @@ preserve these invariants:
 
 ## Missing and unknown
 
-The following work remains necessary before this category is a complete retail
-contract:
+Open items only. Each bullet states what is unknown, the section that owns it,
+and the decider that would close it. Findings that closed an item live in the
+body — most under `R-<id>` headings — and are not restated here.
 
-- Reconcile every unrecovered early construction and order-handler boundary
-  (IDA backfill of the early handler region; shared with the orders lane).
-  The reversed-argument repair variant's identity and its malformed-input
-  behavior remain open; the ordinary repair energy term and energy-only
-  admission are established.
-- The response when a malformed factory product node bypasses queue preflight
-  and reaches state 2 remains Unknown: cancellation, retry, and termination
-  are not established. The current admission boundary records a bounded
-  diagnostic and leaves that internal node unchanged until a retail trace
-  settles the transition.
-- Close the exact operation-byte table that dispatches build, repair, unit
-  reclaim, feature reclaim, capture, and resurrection; the handler identities
-  themselves are established.
-- The same-tick order between work handler, economy admission, settlement,
-  occupancy, and presentation is closed in [R-P0-14 §3]: phase-2 unit sweep →
-  projectiles → phase-5 settlement → occupancy/LOS stamping; the work helper's
-  product completion transition and possible Activate precede factory
-  StopBuilding, followed by state 4's idempotent second transition and
-  bookkeeping; GetBuilt same-tick iff the product slot sorts after the builder;
-  trigger polling on the local player's deadline-due settlement; AI
-  completed-counts at the next 30-tick refresh.
-- **OTA-FAC-01 / OTA-FAC-01B / OTA-FAC-01C / P28-FAC-01R
-  [R-FAC-01][R-FAC-01B][R-FAC-01C][R-FAC-01R]:** the bounded call-chain
-  continuation establishes that state-2 placement is direct allocation, not a
-  movement/release goal. The final-increment order and stock callback timeline
-  are also closed: StopBuilding is deferred before the same-pass count test;
-  an empty count then defers Deactivate, whose stock script waits 5000 ms
-  before RequestState(1) drives Stop/CloseYard and the selected COB's authored
-  close animation. The post-completion release target/order form,
-  producer/product collision exemption, indefinitely blocked release policy,
-  aircraft takeoff-before-rally handoff, and a no-stacking guarantee for
-  same-pass coalesced products remain Unknown. The exit-piece locator's
-  runtime transform is no longer among them: the unit-orientation fold at the
-  model root, the Rz/Rx/Ry order, the round-to-nearest per-axis narrowing,
-  the single output Z negation, and the componentwise origin add are
-  established in [04 R-REV-02]. The factory-side target derivation, stock
-  exit-piece indices/names/authored local translations, primary-queue gate,
-  pre-allocation 15/300-tick retries, completion link clearing, and GetBuilt
-  rally sequencing are established in the bounded audits above.
-- Name the semantic meaning of the game-ended flag bits and of the two
-  mission-end predicates behind the confirmation delay. The bit patterns are
-  established (arm at 4; latch bit 0x04 always plus 0x40 and/or 0x10/0x20 per
-  victory/defeat/watch branch; a network latch; never cleared) and the
-  freeze-on-settlement effect is established.
-- The consumers of the per-unit archived economy snapshots are a bounded
-  negative (no reader in the reviewed image outside the ledger's own
-  redistribution); the mirror bucket's writer set is closed on the same
-  bound.
-- Name the user-facing identities of the special player modes behind the
-  0.5/0.7 scaling selector: state 2 is the computer-policy state (AI-manager
-  gate inference); states 1 and 3 remain unnamed. The cloak debit's enabling
-  predicate is closed (init-cloaked bit, moving-cost bit clear, per-unit
-  deadline due; owner-state-3 condition inert under live play; toggles op-bit
-  2 firing callbacks #14/#15).
-- The metal-maker stall rule is established (own-upkeep acceptance gates
-  output at gather; positive carry stalls with request-only upkeep and no
-  callback; recovers via stage-A paydown).
-- Negative ordinary economy fields are established as signed contributions
-  (negative `energymake`/`metalmake` subtract via the floating-point add, no
-  clamp; negative `energyuse` is the refund path with the state-2 discount).
-- Specify all floating-point evaluation points needed for bit-exact economy
-  settlement, including exceptional values, overflow, signed zero, and NaN;
-  the truncation sites (cloak debit single conversion, counter stores,
-  capacity accumulation) and float-vs-double widths are pinned, exceptional
-  values are not.
-- Sharing residuals: threshold initialization, destination over-cap clamping,
-  and packet application are closed; the source share-buffer refill rules and
-  the state-2 recipient discount scalar in the transfer helpers remain open;
-  the remaining status/alliance predicate names are open (numeric predicates
-  established).
-- The numeric unit-pool capacity is established: physical cap =
-  `catalog definition count × 10 + 1` per player slice; the mission
-  `maxunits` field has no allocator reader (bounded negative).
-- Locate the writer or initializer of the per-definition limit field (absent
-  from the reviewed corpus; the -1 sentinel implies unlimited by default)
-  and any consumer of the parsed-but-unread `norestrict` capability bit —
-  both remain bounded negatives.
-- Identify the upstream UI/network producers of the factory production
-  interrupts: cancel-current (mask 2) versus "Construction stopped" (mask 8).
-  Handler-side semantics for both are established; the producers sit in the
-  UI/network command layer (shared with the orders lane).
-- Order nodes queued on a factory leak when the factory dies or is captured:
-  established (no death-time reclamation walk; capture drops the queues).
-- Settlement status-pair semantics: the predicate is preserved literally and
-  recurs read-only at three other walks with no writer found (bounded
-  negative); the three controller states' names are open (settlement excludes
-  the third; state 2 = computer per inference); the `WinLoseTime`/
-  `DisplayTimer` sibling deadlines' consumers beyond their save keys are
-  open.
-- The pre-gameplay setup pass is established as: reset → optional load →
-  one full phase pass → spawn credits outside the ledger, with deadlines
-  seeded to the current tick; the deadline catch-up burst is structurally
-  present with no natural trigger identified (documented inference).
-- Stockpile residuals: byte wrap (uint8, 255→0), the 200–255 production
-  block, cancellation-with-admitted-carry (no refund; carry wasted), and
-  repeat requeue are closed; the weapon-id-to-slot translation at node
-  creation and presentation beyond the refresh call remain open.
-- Feature save/load record layouts are reconciled: name table 0x80 per
-  entry; Normal 8 bytes {x, z, featId, cell word}; Animating 10 bytes {x, z,
-  featId, anim state, frame, state byte}; 3D 26 bytes; unknown names are
-  parsed on demand from the feature TDF and malformed/short records are
-  skipped silently. The meanings of the carried live-record animation fields
-  beyond position/velocity remain open (renderer/animation lane).
-- Feature damage and successor precedence when multiple causes occur in one
-  tick is partially closed (burning instances reject reclaim and further
-  blast; blast accumulation on instance-less cells; the dead-hop fringe
-  case); full same-tick multi-cause precedence remains open.
-- Malformed or missing burn animations and non-filename object/fire
-  combinations remain loader edges (`TODO(question)`); the shipped
-  filename-based burn contract (forced non-looping at load — executable
-  side — and the 46–282 visit lifetime census — asset side) is established.
-- Presentation clipping of sunken wrecks is open (renderer-side); the
-  slot-velocity inheritance across teardown-reuse is established (successor
-  restamp carries the sunk position and typically the stale downward
-  velocity).
-- Identify every statistic/UI field derived from the economy and distinguish
-  authoritative totals from presentation-only cached values; the live-stock
-  and pass-counter HUD readers are partially enumerated.
-- Feature allocation limits are established (catalog `0x100` bytes per entry,
-  animation pool `0x800` slots of `0x30` bytes, plot cell `0xD` bytes, map
-  bounds; exhaustion is a silent failure with no retry); the simultaneous
-  catalog/anim-pool exhaustion ordering remains a narrow `TODO(question)`.
-- Vent persistence beneath a completed geothermal plant, multi-vent
-  at-least-one satisfaction, and persistence after destruction are established
-  as read-only validator behavior with no registry and no restore step; wreck
-  transitions at vent cells remain a narrow `TODO(question)`.
-- Terrain metal is sampled once at placement as `extractsmetal × Σ(byte+1)`
-  and never resampled; there is no varying per-cell metal raster (bounded
-  negative over the loader and the 171-map corpus); the only per-cell nuance
-  is the legacy TNT format's attribute byte feeding the same seed field —
-  the earlier `TODO(question)` on a per-cell source file is closed as a
-  bounded negative.
-- The nano-segment record constructor and allocator epilogue are closed on
-  the engine side: inline construction, strip index 6 (the selector value),
-  silent pool-exhaustion no-op, the 400→401 eviction bound, and the
-  per-record CRT-stream jitter draws (30 per record per tick, never the
-  simulation stream). `TODO(question)` remains only for the renderer-side
-  fade curve and logical-to-palette mapping, tracked at the single site in
-  [R-P0-06 §5]. Emission cadences, accepted-work gating, selector 6, endpoint
-  ownership, and strip cap/order are established.
-- The special-player discount family (selector 0 → half, selector 1 → seven
-  tenths, plain otherwise) is established at every positive production
-  contribution in the ledger (passive makes, extraction, maker, wind, tidal,
-  refund), at the factory cancel-current refund, and at the shared work
-  helper's reverse arm — reduced positive credits with identical pairing
-  everywhere; the mode names remain open as above.
+**Correction (2026-08-28, RWU-00-5).** Roughly half of this tail's bullets
+described closed work: the same-tick settlement order, the metal-maker stall
+rule, negative ordinary economy fields, the unit-pool capacity, factory
+order-node leaks on death or capture, terrain-metal sampling, the nano-segment
+record constructor, and the special-player discount family were all listed as
+"missing" while being fully established in the body. One was actively stale:
+it said a `TODO(question)` remained for the nano-segment fade curve and the
+logical-to-palette mapping, but [R-P0-06 §6] recorded on 2026-08-27 that both
+were traced and that the framing was wrong — there is no fade curve, the
+record is a particle emitter, and the contract lives at
+[03 §5.5 "The nanolathe spray"] as `[R-P0-19-P]`. The closure narratives are
+deleted here only; no finding left the document.
+
+- Identity and malformed-input behavior of the reversed-argument repair
+  variant, and the unrecovered early construction/order-handler boundary that
+  hides it · "Repair", doc 04 §3.1 · static trace (secondary-disassembler
+  backfill of the early handler region). The ordinary repair energy term and
+  energy-only admission are established.
+- Response when a malformed factory product node bypasses queue preflight and
+  reaches state 2 — cancellation, retry, or termination · "Factory queue" ·
+  static trace. The current admission boundary records a bounded diagnostic
+  and leaves the node unchanged.
+- The operation-byte table that dispatches build, repair, unit reclaim,
+  feature reclaim, capture, and resurrection; the handler identities are
+  established · doc 04 §3.1 · static trace.
+- Factory release and egress: the post-completion release target and order
+  form, producer/product collision exemption, indefinitely-blocked-release
+  policy, aircraft takeoff-before-rally handoff, and a no-stacking guarantee
+  for same-pass coalesced products · [R-FAC-01][R-FAC-01B][R-FAC-01R] ·
+  manual retail observation (one run with a blocked exit, a completed ground
+  product, and a completed aircraft product, recording first movement,
+  occupancy, and rally events). Marked `TODO(question)` at three sites; the
+  authored `BUGGER_OFF` retry must not be generalized into a movement or
+  collision rule.
+- Semantic meaning of the game-ended flag bits and of the two mission-end
+  predicates behind the confirmation delay; the bit patterns and the
+  freeze-on-settlement effect are established · doc 08 · static trace.
+- User-facing identities of the special player modes behind the 0.5 / 0.7
+  scaling selector; state 2 is the computer-policy state by inference, states
+  1 and 3 are unnamed · "Cloak debit" · static trace.
+- Names of the three controller states in the settlement status pair, and the
+  consumers of the `WinLoseTime` / `DisplayTimer` sibling deadlines beyond
+  their save keys · "Authoritative settlement order" · static trace.
+- Whether any reader of the per-unit archived economy snapshots exists outside
+  the ledger's own redistribution; bounded-negative in the reviewed image
+  · "Authoritative settlement order" · static trace over the unrecovered
+  regions.
+- Bit-exact floating-point evaluation for exceptional values, overflow, signed
+  zero, and NaN in settlement; the truncation sites and float-versus-double
+  widths are pinned · "Two-stage settlement algorithm" · static trace.
+- Sharing residuals: the source share-buffer refill rules, the state-2
+  recipient discount scalar in the transfer helpers, and the names of the
+  remaining status/alliance predicates · "Automatic transfer" · static trace.
+  Threshold initialization, destination over-cap clamping, and packet
+  application are closed.
+- Writer or initializer of the per-definition limit field (absent from the
+  reviewed corpus; the `-1` sentinel implies unlimited), and any consumer of
+  the parsed-but-unread `norestrict` capability bit · "Unit creation and
+  limits" · static trace over the unrecovered regions. Both are bounded
+  negatives today.
+- Upstream UI and network producers of the factory production interrupts —
+  cancel-current (mask 2) and "Construction stopped" (mask 8) · doc 04 §3.3,
+  doc 07 · static trace. Handler-side semantics for both are established.
+- Trigger for the deadline catch-up burst, which is structurally present in
+  the pre-gameplay setup pass with no natural trigger identified
+  · "Authoritative settlement order" · static trace.
+- Stockpile weapon-id-to-slot translation at node creation, and stockpile
+  presentation beyond the refresh call · "Stockpile production" · static trace.
+- Meanings of the carried live-record animation fields beyond position and
+  velocity in the feature save records · doc 03 · static trace.
+- Full same-tick precedence when several feature damage or successor causes
+  land in one tick; the burning-rejects-reclaim, instance-less blast
+  accumulation, and dead-hop fringe cases are closed · "Removal and successor replacement" ·
+  static trace.
+- Loader behavior for malformed or missing burn animations and for
+  non-filename object/fire combinations · doc 02 §5, "Feature burning" ·
+  static trace. Marked `TODO(question)`.
+- Presentation clipping of sunken wrecks · doc 03 · static trace.
+- Which statistic and UI fields derive from the economy, and which are
+  authoritative totals versus presentation-only cached values · doc 07 ·
+  static trace. The live-stock and pass-counter HUD readers are partially
+  enumerated.
+- Ordering when the feature catalog and the animation pool exhaust in the same
+  tick · "Catalog construction" · static trace. Marked `TODO(question)`;
+  exhaustion itself is an established silent failure with no retry.
+- Wreck transitions at geothermal vent cells · "Geothermal requirement" ·
+  static trace. Marked `TODO(question)`; vent persistence, multi-vent
+  at-least-one satisfaction, and post-destruction persistence are established.

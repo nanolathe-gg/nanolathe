@@ -33,7 +33,7 @@ func renderTracedTriangles(t *testing.T, triangles ...screenTri) ([]uint8, []Ren
 	for _, tri := range triangles {
 		c.fillTriTarget(target, &tri, tri.color, 77)
 	}
-	target.commit(c.indexed)
+	target.commit(c.indexed, c.width, c.height)
 	target.trace.resolve(target, c.indexed, width, height)
 	target.trace.emit(func(v RendererCandidate) { got = append(got, v) }, nil)
 	return append([]uint8(nil), c.indexed...), got
@@ -188,7 +188,7 @@ func TestP28RendererTraceTexturePaletteAndShadeArePerPixel(t *testing.T) {
 	tri.row = [3]float64{7, 19, 31}
 	var got []RendererCandidate
 	c.blitTexturedTriTarget(target, &tri, frame, 123)
-	target.commit(c.indexed)
+	target.commit(c.indexed, c.width, c.height)
 	target.trace.resolve(target, c.indexed, 6, 6)
 	target.trace.emit(func(v RendererCandidate) { got = append(got, v) }, nil)
 	var winner *RendererCandidate
@@ -222,7 +222,7 @@ func TestP28RendererTraceNanoframeEraseIsUnknown(t *testing.T) {
 	tri := traceTriangle(4, 33)
 	reveal := presentationrender.NanoframeReveal{Below: presentationrender.NanoframeErase, Band: presentationrender.NanoframeErase, Above: presentationrender.NanoframeErase}
 	c.fillTriNanoframeTarget(target, &tri, tri.color, reveal, 55)
-	target.commit(c.indexed)
+	target.commit(c.indexed, c.width, c.height)
 	target.trace.resolve(target, c.indexed, 6, 6)
 	var erased *RendererCandidate
 	var got []RendererCandidate
@@ -254,7 +254,7 @@ func TestP28RendererTraceOutlineOnlyAndOverwrite(t *testing.T) {
 	c.fillTriTarget(target, &tri, tri.color, 91)
 	traceOutlineLine(target.trace, 1, 1, 1, 1, 200, 3, 4)
 	traceOutlineLine(target.trace, 4, 4, 4, 4, 201, 5, 6)
-	target.commit(c.indexed)
+	target.commit(c.indexed, c.width, c.height)
 	c.indexed[1*6+1] = 200
 	c.indexed[4*6+4] = 201
 	target.trace.resolve(target, c.indexed, 6, 6)
@@ -300,7 +300,7 @@ func TestP28RendererTraceNilSinkPreservesPixels(t *testing.T) {
 	for _, tri := range triangles {
 		c.fillTriTarget(target, &tri, tri.color, 77)
 	}
-	target.commit(c.indexed)
+	target.commit(c.indexed, c.width, c.height)
 	if !reflect.DeepEqual(c.indexed, want) {
 		t.Fatalf("nil-sink pixels changed: traced=%v nil=%v", want, c.indexed)
 	}
@@ -320,7 +320,7 @@ func TestP28RendererTraceCapPreservesPixels(t *testing.T) {
 	for _, tri := range triangles {
 		c.fillTriTarget(target, &tri, tri.color, 77)
 	}
-	target.commit(c.indexed)
+	target.commit(c.indexed, c.width, c.height)
 	if !reflect.DeepEqual(c.indexed, traced) {
 		t.Fatalf("capture cap changed indexed pixels: traced=%v nil=%v", traced, c.indexed)
 	}

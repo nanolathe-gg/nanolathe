@@ -145,7 +145,7 @@ limit-enable bit plus its limit field). The mission `maxunits` field is NOT
 read by the allocator — it does not bound allocation (bounded-negative,
 2641-TU census) — and save restore verifies the forced slot. The earlier
 "exact maximum unit count is not resolved" reading is superseded by this
-derivation [R-P0-16].
+derivation [P0-16].
 
 ### 2.3a Player-slice order at battle entry [R-P0-16-A]
 
@@ -164,7 +164,7 @@ player named by that element owns the range. Slot zero remains the null
 sentinel. A valid order is therefore a total permutation of `0..9`; malformed
 or duplicate values are rejected before allocation. The exact provenance and
 semantic name of `PlayerSortKey` are not needed by the comparator contract and
-remain outside this section's scope. [R-P0-16]
+remain outside this section's scope. [P0-16]
 
 ### 2.3b Unit-initialization heading [R-P28-ANG-01R §2]
 
@@ -2269,7 +2269,13 @@ thresholdUpper`; category 3 above `thresholdUpper` — all comparisons signed 32
 category-1 bound inclusive and the category-2 upper bound inclusive. Category 0 overrides
 when the mover inhibit bit (bit 2 of the mover's state byte) is set, the unit is attached to a carrier (the carrier field is nonzero), or both magnitude words (the 32-bit magnitude word and its adjacent word) are zero. The category is cached in
 two bits (bits 2–3 of the movement-mode word) and an unchanged category emits
-nothing. On change: into category 0 from nonzero issues `StopMoving` (I); into a
+nothing. **The two thresholds are the FBI keys `MoveRate1` and `MoveRate2`**
+(fixed-point accessor, 16.16 world units per tick, each defaulting to
+`MaxVelocity` shifted left one), and the classified magnitude is the mover's
+scalar speed word; the adjacent word tested with it is the signed 16-bit turn
+residual [R-MOV-01 §6]. Because committed speed can never exceed
+`MaxVelocity`, a definition authoring neither key is permanently category 1
+and only ever emits `StartMoving`, `StopMoving` and `MoveRate1`. On change: into category 0 from nonzero issues `StopMoving` (I); into a
 nonzero category from 0 issues `StartMoving` FIRST (I) and then the matching
 `MoveRateN` (I); other nonzero-to-nonzero changes issue only `MoveRateN` (I). All are
 immediate wake-flag starts via the zero-argument name-form adapter (wake 1), so the `StartMoving` drain — all eight slots at
@@ -3275,6 +3281,20 @@ queue-order completion [R-P0-01] (section 8.3).
 
 **Established fact:** Path work is budgeted. A global scheduler counter replenishes every 150 ticks. Per-player quanta use six-times, three-times, and one-times weighting based on scheduler state. Each active request is limited to 100 heap pops per scheduler call.
 
+**Established — what admits a unit to the scheduler [R-MOV-01 §7]
+(2026-08-28).** The section did not say how a unit becomes a candidate. The
+scheduler walks players round-robin and, for each unit it reaches, calls the
+unit's route follower's request poll. That poll answers "wants a path" only
+when the follower's **wants-repath** flag is set **and**
+`lastRequestTick + 60 <= currentTick`, and on a yes it stamps the current tick
+onto the follower and the scheduler charges **100** to the per-tick budget
+before starting the search. The flag itself is armed by the follower's
+per-tick service — once per mover tick, whenever a route is installed and
+either the mover's blocked flag is set or fewer than two route points remain
+([R-MOV-01 §3]) — and is cleared only when a route is installed, not by the
+poll. A blocked or route-exhausted mover therefore re-requests at most once
+every 60 ticks, with no retry ceiling.
+
 **Established fact:** Requests are full-or-empty. A route is published only after a goal is reached and reconstructed. Budget exhaustion leaves the heap and request active for later ticks; it does not publish the best partial prefix. Heap exhaustion publishes an empty route.
 
 **Established fact:** Search allocation initializes the request, clears visitation state, enumerates goals, picks the nearest goal for heuristic setup, validates the start, and can perform a direct ray shortcut. Invalid starts and unreachable goals report failure through order-layer status and receive an empty route. Request init also runs the class-layer revision pass of [R-DOC04-B] (§6.1) before any expansion.
@@ -3376,6 +3396,464 @@ applies terrain height, gravity and lean, and the fixed-point position commit.
 
 **Established fact:** Waypoint lookahead, vertical tolerance, and arrival tolerance are fixed-point thresholds. A blocked mover reduces its next-step cap. Waypoint consumption and path publication are synchronous with the mover tick.
 
+### Closed — the ground mover, exactly [R-MOV-01 §1] (2026-08-28)
+
+The four paragraphs above assert the existence of a heading clamp, an
+accelerate-versus-brake choice, and "fixed-point thresholds" without naming a
+single one. This closure supplies the arithmetic; the pitch-cap paragraph is
+unchanged and is quoted by reference below. Corrections to the other three are
+called out where they occur. Every claim here is direct static trace unless it
+says otherwise.
+
+**Units used throughout.** World coordinates and velocities are 16.16 signed
+fixed point (`wu` = one world unit = `65536`). Angles are unsigned 16-bit,
+`65536` per circle, stored and added with 16-bit wraparound. Terrain heights
+are unsigned bytes in the same world-unit scale as the coordinate high word, so
+the unit's *integer height* is the signed high word of its 16.16 Y and is
+directly comparable to the map's sea-level byte. Ticks are the 30 Hz simulation
+tick of section 1.1.
+
+**Order of operations — Established.** The per-unit sweep of section 8.3 runs,
+for a live unit whose owner's player-state byte is `1` or `2` and whose mover
+pointer is non-null, the order pumps and then **the mover tick**, and
+immediately after the mover tick the **post-move Y/orientation correction**
+(§5). Nothing else runs between them for that unit; the next unit slot is not
+visited until both have finished.
+
+The mover tick is exactly five calls in this order:
+
+1. **Route-follower service** — revalidate the installed route, consume the
+   reached waypoint, arm the repath-request flag (§3).
+2. **Steering** — the ground steering of §2/§4 when the definition's `canfly`
+   bit (bit 11) is clear, otherwise the flight integrator of section 10.1. The
+   branch is on the definition bit only, never on the mover mode.
+3. **Position and occupancy commit** — section 8.2 (and its blocked-mover
+   clamp, [R-MOV-01 §7]).
+4. **Movement-rate callbacks** — `StartMoving`/`StopMoving`/`MoveRateN`
+   (section 5.2), classified from the speed the steering step just wrote (§6).
+5. **`setSFXoccupy` band classification** — section 9.1.
+
+**State the tick touches — Established.** The mover instance holds: a velocity
+triple (16.16 per axis), a lean-residual triple used only by flight, a scalar
+speed word (16.16, never negative), a signed 16-bit turn residual, the tick of
+its last committed position, and a state byte whose low two bits are the
+movement mode and whose bit 2 is the blocked flag. The unit holds roll,
+heading and pitch as three signed 16-bit words, the 16.16 X/Y/Z triple, the
+cached committed cell pair, the packed half-cell footprint bias, the carrier
+pointer, and a flags word carrying the mover-mode mirror (bits 0–1), the
+movement-rate tier (bits 2–3), death-pending (bit 14), transform-dirty
+(bit 16), and the live bit (bit 28, set when the definition is bound at spawn).
+
+The definition contributes `MaxVelocity`, `BrakeRate`, `Acceleration`,
+`MoveRate1`, `MoveRate2` — all through document 02's **fixed-point** accessor,
+so the authored value is multiplied by 65,536 and truncated toward zero and the
+compiled field is already 16.16 — and `TurnRate` through the **integer**
+accessor, stored into a 16-bit field. `MaxVelocity` is therefore world units
+per tick and `Acceleration`/`BrakeRate` world units per tick squared, both
+already scaled at compile time; there is no further per-tick division anywhere
+in the mover. `TurnRate` is angle units per tick on the 65,536-per-circle
+circle: an authored `TurnRate` of 475 is 475/65536 of a turn per tick, about
+2.6 degrees per tick or 78 degrees per second. Defaults are `0` for
+`MaxVelocity`, `BrakeRate`, `Acceleration` and `TurnRate`; `MoveRate1` and
+`MoveRate2` default to `MaxVelocity << 1`.
+
+`TurnRate` is written as a signed 16-bit field but every reader zero-extends
+it, so the effective domain is `0..65535` and an authored value is taken
+modulo 65,536.
+
+### Closed — desired heading and the turn clamp [R-MOV-01 §2] (2026-08-28)
+
+**The heading helper — Established.** One helper converts a planar offset to an
+angle and is shared by the mover, the terrain conform (§5) and the flight
+heading of section 10.1:
+
+```text
+angleOf(a, b) = round( atan2(a, b) * 65536/(2*pi) )
+```
+
+evaluated in x87 extended precision (`fpatan` on the two integers loaded as
+integers, multiplied by the stored constant `10430.37835047` = `65536/(2*pi)`,
+then stored with `fistp`, i.e. **round to nearest**, not truncation). The
+result is used as a signed 16-bit angle.
+
+**Argument order and sign — Established, and this is the non-obvious part.**
+The mover computes
+
+```text
+desired = angleOf(unitX - targetX, unitZ - targetZ)
+```
+
+— the offset is taken **from the target to the unit**, not from the unit to the
+target — and the velocity components derived from a heading (§4) are
+**negated**. The two sign inversions cancel: a unit whose heading equals
+`desired` moves toward the target. The first argument is the X offset and the
+second the Z offset, so heading `0` points along `+Z` and increasing heading
+rotates toward `+X`.
+
+**The clamp — Established.**
+
+```text
+err = (int16)(desired - heading)          // 16-bit wrap, then sign-extended
+if err == 0:
+    turnResidual = 0                      // and NOTHING else happens
+else:
+    if      err >=  TurnRate:  turnResidual = +TurnRate
+    else if err <= -TurnRate:  turnResidual = -TurnRate
+    else:                      turnResidual =  err
+    heading += turnResidual                // 16-bit add, wraps
+    unit.flags |= transform-dirty
+```
+
+The two comparisons are signed 32-bit between the sign-extended `err` and the
+zero-extended `TurnRate`. A zero error zeroes the residual **without** setting
+the transform-dirty bit and without writing the heading — the same asymmetry
+section 10.1 records for the flight integrator, because it is the same rule.
+The clamp is a pure saturation: equality at either bound produces the same
+value either way.
+
+### Closed — the route follower, lookahead, and waypoint pruning [R-MOV-01 §3] (2026-08-28)
+
+**Correction.** The paragraph above says "Waypoint lookahead, vertical
+tolerance, and arrival tolerance are fixed-point thresholds" and "Waypoint
+consumption and path publication are synchronous with the mover tick". The
+second half is right. The first half is wrong in two ways: the arrival
+tolerance is **not** fixed point — it is an integer world-unit squared distance
+— and the ground mover has **no vertical tolerance at all**. Section 8.3's
+"local settling family" paragraph (threshold `65536` when `(speed & ~3) <
+262144`, else `speed >> 2`, compared strictly as `-t < dy < t`) describes the
+**flight integrator's** vertical velocity clamp, which section 10.1 states in
+the same arithmetic; the ground steering contains no Y term whatsoever and the
+ground speed update writes vertical velocity as a literal zero every tick. The
+section 8.3 attribution is a duplicate of the section 10.1 rule and should be
+read as belonging to flight (owner: section 8.3; recorded here because the
+claim is about ground steering).
+
+**The follower — Established.** Each mover owns one route-follower object,
+allocated by the mover's constructor and typed by whether the definition can
+fly and whether the owner's player state is `3`. Its state is: the installed
+route object (or none), the owning unit, an array of route points, a point
+count, the tick of its last repath request, and a flags byte with three used
+bits — **has-waypoint** (bit 0), **wants-repath** (bit 1), **published/dirty**
+(bit 3). The constructor leaves has-waypoint and wants-repath clear and
+published set.
+
+**Route points are integer world coordinates — Established.** Each point is a
+pair of signed 16-bit world X/Z. The array is ordered
+`points[0] = the point just left`, `points[1] = the point being steered to`,
+`points[2] = the one after that`. Steering asks the follower for **three**
+consecutive points as 16.16 triples; the fill clamps the index, so
+`emitted[i] = points[min(i, count-1)]` and each triple is
+`(x << 16, 0, z << 16)`. When two points remain, the third emitted triple
+repeats the last; when one remains, all three do.
+
+**Waypoint pruning — Established.** Once per mover tick, before steering:
+
+```text
+if route is installed and route still accepts this unit:
+      refresh the route object; if it reports exhausted, detach it
+if count >= 2:
+      dx = unitIntegerX - points[1].x
+      dz = unitIntegerZ - points[1].z
+      if dx*dx + dz*dz <= 25:            // inclusive, signed 32-bit
+            shift the array down one; count -= 1
+            if count < 2: clear has-waypoint
+            set published
+if route is installed and (blocked flag set or count < 2):
+      set wants-repath
+```
+
+`unitIntegerX/Z` are the signed high words of the unit's 16.16 X and Z — the
+same domain as the stored points, so the whole test is integer world units.
+The **arrival tolerance for consuming a waypoint is therefore a radius of five
+world units, inclusive** (`dx*dx + dz*dz <= 25`), measured to `points[1]`, and
+exactly one point is consumed per tick. Pruning never writes the order's
+satisfied word; order completion is section 8.3's separate tile-versus-goal
+test, unchanged.
+
+**The steering gate — Established.** Ground steering first asks the follower
+whether it has a waypoint (bit 0). Bit 0 is set only by route installation and
+cleared when the count falls below two, so **a follower with fewer than two
+points has no waypoint**. With no waypoint the mover zeroes its turn residual
+and calls the speed update with a delta of `-BrakeRate`; it does not turn, does
+not read the definition's turn rate, and does not touch the heading.
+
+**Waypoint lookahead — Established.** With a waypoint, let `T0`, `T1`, `T2` be
+the three emitted triples. Distances here are `hypot` evaluated in double
+precision on the raw 16.16 integers and converted back with truncation toward
+zero (`__ftol`), so they are 16.16 distances.
+
+```text
+d1 = trunc( hypot(T1.x - unitX, T1.z - unitZ) )
+if d1 > 0x500000:                          // strictly more than 80.0 wu
+    L = trunc( hypot(T1.x - T0.x, T1.z - T0.z) )
+    if L >= 0x10000:                       // segment at least 1.0 wu
+        ux = ((T1.x - T0.x) << 16) / L     // 64-bit shift, signed divide
+        uz = ((T1.z - T0.z) << 16) / L
+        t  = min(d1 - 0x500000, L)         // signed
+        T1.x -= (ux * t) >> 16             // 64-bit product, arithmetic shift
+        T1.z -= (uz * t) >> 16
+```
+
+The steering target is thereafter the **modified** `T1`. The effect is a
+pure-pursuit carrot: while the unit is more than 80 world units from its
+current waypoint, it aims at a point dragged back along the incoming segment,
+never past `points[0]`. Both guards fail closed — a shorter distance or a
+degenerate segment leaves `T1` at the waypoint itself. The lookahead constant
+is `0x500000`, exactly 80 world units, with a **strict** `>` test; the segment
+guard is `>= 0x10000`, exactly 1.0 world unit.
+
+**Repath — Established, and see [R-MOV-01 §7].** The wants-repath bit is the
+mover's only outward request. The path-request scheduler of section 7.3 polls
+each candidate follower once per visit; the poll returns "wants a path" only
+when the bit is set **and** `lastRequestTick + 60 <= currentTick`, and it
+stamps the current tick on success. A blocked or exhausted mover therefore
+re-requests a route at most once every 60 ticks (two seconds).
+
+### Closed — accelerate versus brake, and the speed update [R-MOV-01 §4] (2026-08-28)
+
+**Correction.** The paragraph above says only that "Acceleration versus braking
+is selected from the angle-to-waypoint and current speed" and that "Speed is
+clamped to the definition's maximum". The first is half right — there are two
+tests, and the second reads a *different* target from the first. The second is
+misleading: there is no separate maximum-velocity clamp. The pitch table of
+this section is the only speed ceiling, and its level-ground entry is 100, so
+`MaxVelocity` is enforced *through* the pitch cap.
+
+**The decision — Established.** All squared distances below are formed by
+squaring each axis offset into 64 bits, **arithmetic-shifting each product
+right by 32 separately**, and then adding — not by shifting the sum. Because a
+16.16 offset squared and shifted right 32 is the offset in whole world units
+squared, every comparison in this block is in world-units squared, and each
+term is independently floored.
+
+```text
+A  = ((dx1*dx1) >> 32) + ((dz1*dz1) >> 32)   // dx1,dz1 = modified T1 minus unit
+B  = ((dx2*dx2) >> 32) + ((dz2*dz2) >> 32)   // dx2,dz2 = T2 minus unit
+
+turnDist = ((|err| & 0xffff) * speed) / TurnRate           // 64-bit product, signed divide
+stopDist = (((speed * speed) >> 16) << 16) / (2 * BrakeRate)
+
+if  A > ((turnDist*turnDist) >> 32) * 4   and   B > ((stopDist*stopDist) >> 32):
+        delta = +Acceleration
+else:
+        delta = -BrakeRate
+```
+
+Both tests are **strict**: equality brakes. `|err|` is the absolute value of the
+sign-extended heading error of §2, masked to 16 bits (a no-op except for the
+`-32768` case). All divisions truncate toward zero.
+
+Read as distances rather than squares, the two conditions are: *the modified
+lookahead target is more than twice as far away as the distance I will cover
+while finishing this turn*, and *the point two waypoints ahead is farther away
+than my braking distance* `speed^2 / (2*BrakeRate)`. The second test is what
+makes a mover slow down for its destination: when fewer than three route points
+remain the emitted `T2` clamps to the last point, so near the end of a route the
+braking test is measured against the final waypoint, while in mid-route it is
+measured against the point two ahead.
+
+**Two unguarded divisions — Established (edge, retail fault).** Neither
+`TurnRate` nor `BrakeRate` is tested for zero, and both divisions execute on
+every ground steering tick that has a waypoint. A mobile unit whose definition
+authors `TurnRate = 0` or `BrakeRate = 0` (or omits either — both default to
+zero) divides by zero and terminates retail, exactly as the flight integrator's
+unguarded `MaxVelocity` division does (section 10.1). Valid mobile content must
+author both. Nanolathe may bound this as a sanctioned divergence, but the
+contract is a fault.
+
+**The speed update — Established.** The steering step's only output is one call
+with the signed `delta`:
+
+```text
+speed += delta
+if speed < 0: speed = 0
+
+i = pitch >> 11                            // pitch is the unit's signed 16-bit
+i = clamp(i, -5, +5)                       //   pitch word; arithmetic shift
+cap = table[i] * MaxVelocity / 100         // table as in this section, signed
+                                           //   byte; 64-bit product, divide
+                                           //   truncates toward zero
+if unitIntegerHeight < seaLevel and (definition flags & 0x81000) == 0:
+        cap = (cap * 0x8000) >> 16         // exactly half, arithmetic shift
+if cap < speed: speed = cap                // strict; the only ceiling
+
+vx = -( (sin[heading] * speed + 0x1000) >> 13 )
+vy = 0
+vz = -( (cos[heading] * speed + 0x1000) >> 13 )
+```
+
+`table` is the eleven-entry pitch table already established above
+(`25, 55, 70, 85, 100, 100, 75, 50, 25, 20, 15` for index `-5` through `+5`).
+The water half-speed test is strict `<` between the unit's signed integer
+height and the map's sea-level byte, and requires both `canhover` (bit 12) and
+`floater` (bit 19) to be clear. The vertical velocity component is written as a
+literal zero: **a ground mover never has vertical velocity, and there is no
+gravity term anywhere in the ground path.** Y changes only through the
+post-move correction of §5.
+
+**The trig table — Established.** One table of 512 signed 16-bit entries holds
+`round(8192 * sin(2*pi*i/512))`. A component is
+
+```text
+component(angle, magnitude) = (table[((angle + 0x20) >> 7) & 0x1ff] * magnitude + 0x1000) >> 13
+```
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+### Closed — the post-move Y, pitch, and roll correction [R-MOV-01 §5] (2026-08-28)
+
+Immediately after the mover tick the sweep runs one correction that owns
+everything the mover left alone: the unit's Y, its pitch, and its roll. This is
+the "final integrator then applies terrain height, gravity and lean" clause of
+this section — **there is no gravity and no lean here**; the ground path has
+neither.
+
+**The gate — Established.**
+
+```text
+if (unit.flags & transform-dirty) != 0 or definition has canhover:
+    clear transform-dirty
+    if mover exists and (unit mover-mode mirror) == 1:
+        ... one of the four branches below ...
+```
+
+Mode `1` is the grounded mode (see [R-MOV-01 §8]), so every ground unit passes
+the mode test for its whole life; a unit in flight (mode `2`) is skipped
+entirely and its Y is owned by the flight integrator. A `canhover` definition
+forces the branch every tick even when nothing moved, which is what animates
+the hover bob below while parked.
+
+**The four branches — Established, and this supersedes part of section 9.2.**
+
+* `upright` set (bit 20) and `canhover` clear: `Y = terrainHeight(unitXZ) << 16`.
+* `upright` set and `canhover` set: `Y = max(terrainHeight(unitXZ), seaLevel - waterline) << 16`,
+  the comparison being `seaLevel - waterline < terrain ? terrain : seaLevel - waterline`.
+* `upright` clear and `floater` set (bit 19): `Y = (seaLevel - waterline) << 16`.
+  The executable computes this as a wrapping 32-bit expression that is
+  algebraically `seaLevel - waterline` scaled by 65,536; section 9.2's
+  "`floater` selects the ship surface clamp at `waterline + sea level`" has the
+  **sign inverted** and is corrected by [R-MOV-01 §9].
+* otherwise: the four-corner terrain conform below.
+
+The first three branches write the whole 16.16 Y with a zero fraction. Only the
+fourth writes pitch and roll — **so an `upright` unit and a `floater` unit never
+receive a terrain pitch, their pitch word stays at whatever it was (zero for a
+unit that has never flown or been carried), and the pitch cap of §4 therefore
+always yields 100 percent of `MaxVelocity` for them.** Slope speed penalties
+apply to non-`upright`, non-`floater` ground movers only.
+
+**The four-corner terrain conform — Established.** The conform reads the first
+four entries of the vertex-index list of the **selection primitive** of the
+unit definition's compiled model root object — the "ground plate" of
+`[fmt 3do]` "Selection primitive", taken as a plain **index** into the root's
+primitive array as it stands after model load — and treats their model-space X
+and Z as its ground-contact quad. The stored index is tested for
+non-negativity first, so a root that stores `-1` (the two stock cases named in
+`[fmt 3do]`) gets **no terrain conform at all**: its height, pitch and roll are
+never written by this path. This is the engine-side reason the community lore
+in `[fmt 3do]` reports that a vehicle with an inverted ground-plate winding
+"flips out on slopes" — the plate's vertex order is what the pitch and roll
+expressions below difference. For each corner `i` in `0..3`, with `(mx, mz)`
+the vertex's model-space X and Z in 16.16:
+
+```text
+(rx, rz) = rotate(mx, mz) by the unit heading
+        // float sin/cos of heading * (2*pi/65536), each component rounded to nearest;
+        // the rotation is skipped entirely when heading == 0
+wx = (int16)((rx + unitX) >> 16)
+wz = (int16)((unitZ - rz) >> 16)           // note the subtraction on Z
+if (unsigned)(wx >> 4) >= mapWidthCells - 1:  ABANDON the whole correction
+if (unsigned)(wz >> 4) >= mapHeightCells - 1: ABANDON the whole correction
+
+cx = wx >> 4 ; cz = wz >> 4 ; fx = wx & 15 ; fz = wz & 15
+top    = h(cx, cz)   + trunc16( (h(cx+1, cz)   - h(cx, cz))   * fx )
+bottom = h(cx, cz+1) + trunc16( (h(cx+1, cz+1) - h(cx, cz+1)) * fx )
+height[i] = top + trunc16( (bottom - top) * fz )
+```
+
+`h` is the raw terrain height byte of the attribute cell (not the derived
+per-cell minimum/maximum of section 6.1), `trunc16(v)` is `v / 16` truncated
+toward zero, and the two divisions are applied in that order — X first on both
+rows, then Z between them. The bounds test is unsigned, so a negative world
+coordinate fails it; **when any corner is out of bounds the correction returns
+without writing height, pitch or roll, and the unit keeps its previous
+orientation.** The cell size is 16 world units.
+
+Then, once:
+
+```text
+A = (height[0] + height[1]) / 2            // signed, truncating toward zero
+B = (height[2] + height[3]) / 2
+unitIntegerHeight = (A + B) / 2            // written as the HIGH WORD of Y only;
+                                           //   the 16 fractional bits are left alone
+pitch = angleOf( B - A, (int16)(|mz0 - mz3| >> 16) )
+roll  = angleOf( height[0] - height[1], (int16)(|mx1 - mx2| >> 16) )
+```
+
+`angleOf` is the §2 helper. The rise terms are in height-byte units and the run
+terms are the **unrotated** model-space spans truncated to signed 16-bit whole
+world units, so a model whose selection primitive is degenerate along either
+axis produces a run of zero and a pitch or roll of a quarter circle, which the
+pitch index of §4 then saturates at `±5`. The pitch this writes is the pitch the
+**next** tick's speed cap reads.
+
+**The hover bob — Established, and it is the one non-tick input in the mover
+chain.** When the definition has `canhover`, the unit's live bit (bit 28) is
+set and its death-pending bit (bit 14) is clear, the per-corner height is
+computed differently:
+
+```text
+hh = top + trunc16( (bottom - top) * fz )
+if hh <= seaLevel: hh = seaLevel                   // hover floats over water
+r  = animationCounter & 0x1f
+angle = (int16)( ((r + 8*i) << 11) + unit.bobPhase )
+v   = min(speed, MaxVelocity / 2)                  // MaxVelocity/2 truncates toward zero
+amp = 2 - ( ((v << 16) / (MaxVelocity / 2)) * 2 >> 16 )      // 2, 1 or 0
+age = min((unsigned)(currentTick - mover.lastCommitTick), 60)
+amp = amp - (amp * age) / 60                       // unsigned divide
+height[i] = hh + component(angle, amp)             // the §4 trig-table form
+```
+
+`unit.bobPhase` is a per-unit signed 16-bit phase word; the `8*i` term puts the
+four corners a quarter circle apart, so the unit rocks rather than heaves. The
+amplitude is at most two height units, falls to zero at half `MaxVelocity`, and
+fades linearly to zero over the 60 ticks after the mover last committed a
+position. `MaxVelocity / 2` is an **unguarded divisor**: a `canhover`
+definition with `MaxVelocity` below `2` faults, the same class of edge as §4's.
+
+`animationCounter` is **not** a simulation random draw and not the tick
+counter: it is `GetTickCount()` scaled by a configured rate and divided by
+1000 — a wall-clock animation counter shared with the presentation layer. It
+feeds the corner heights, whose average is written to the unit's authoritative
+integer height word, which the medium-band classifier of section 9.1, the
+water half-speed test of §4 and the water damage of section 9.2 all read. **A
+hovering unit's committed height therefore depends on wall-clock time**
+(Supported inference for the consequence — the read and the write chain are
+direct; what is open is whether the ±2 perturbation can ever cross one of those
+three thresholds in practice, which a retail observation or a bounded numeric
+argument would settle). No other part of the mover chain reads a clock or a
+random stream.
+
+**Bounded negative — Established.** No simulation-RNG or CRT-RNG entry point
+appears in the call graph of the mover tick, the ground steering, the speed
+update, the position commit, the movement-rate classifier, the band
+classifier, the post-move correction, the terrain conform, or the follower
+service. The mover draws no random numbers at all.
+
+### Closed — the movement-rate tiers [R-MOV-01 §6] (2026-08-28)
+
+Section 5.2 states the tier classifier's shape correctly. Its inputs are named
+here because they are authored keys the movement docs never resolved:
+the two thresholds are the FBI keys **`MoveRate1`** and **`MoveRate2`**, read
+through the fixed-point accessor and therefore in 16.16 world units per tick,
+each **defaulting to `MaxVelocity << 1`**. Since the committed speed can never
+exceed `MaxVelocity`, a unit that authors neither key is always in tier 1 and
+only ever emits `StartMoving`, `StopMoving` and `MoveRate1`. The classifier
+runs after the position commit and before the band classifier, reads the mover's
+scalar speed and turn residual, and forces tier 0 when the blocked flag is set,
+when the unit is attached to a carrier, or when speed and turn residual are both
+zero.
+
 ### 8.2 Static and mobile collision
 
 **Established fact:** Static collision uses an axis-aligned footprint rectangle. Path search and movement commit use the same footprint/profile family but at different points: path search uses pre-stamped static cells, while movement commit checks the current rectangle.
@@ -3470,6 +3948,66 @@ network, or other movement caller cannot do so. Closing that residual requires
 a retail trace recording both units' slots/owners, proposed and committed
 cells, headings, speeds, route revisions, and order status through stationary,
 moving, head-on, crossing, and same-destination encounters.
+
+### Correction — the blocked mover does request a new path [R-MOV-01 §7] (2026-08-28)
+
+**What the earlier text said.** The "negative-bounded" paragraph of this
+section, and `[R-MOV-02A]`'s "Blocked response and retries" and
+"Yield/replan/priority — Unknown outside the bound", state that no
+"automatic repath timeout" was recovered and that "a rejected proposal does not
+… submit a new path request", with the bound named as "the recovered movement
+sweep, mover fan-in, ground commit, footprint validator, path-request
+initializer/scheduler/expansion, and ground-order completion call chains".
+
+**Why it was wrong.** The bound was drawn around the wrong object. The request
+is not made by the commit path and not by the scheduler walking units; it is
+made by the **route follower** the mover owns, through a virtual poll that the
+path-request scheduler calls once per candidate visit. Neither end of that call
+appears as a direct call from any function in the listed bound, so a call-graph
+search anchored on those functions cannot see it.
+
+**The corrected contract — Established.** The follower's per-tick service (the
+first call of the mover tick, [R-MOV-01 §3]) sets its **wants-repath** flag
+whenever a route is installed **and** either the mover's blocked flag is set or
+fewer than two route points remain:
+
+```text
+if route installed and (mover.blocked or pointCount < 2):
+        follower.flags |= wants-repath
+```
+
+The path-request scheduler of section 7.3 polls each candidate follower; the
+poll answers "yes" and stamps the current tick only when
+
+```text
+(follower.flags & wants-repath) != 0  and  lastRequestTick + 60 <= currentTick
+```
+
+— an inclusive comparison against a 60-tick (two-second) throttle, with
+`lastRequestTick` zero-initialised so the first request after the flag is armed
+is immediate. On a "yes" the scheduler charges 100 to its per-tick budget and
+starts a search for that unit. The flag is not cleared by the poll; it is
+cleared only when a route is installed (the follower's install path clears
+bit 1 before deciding whether to accept the new route).
+
+Everything else in the blocked-mover paragraph stands: the rejected proposal
+still does not push, reverse, sidestep, rotate for clearance, or enter a wait
+queue; it still caps scalar speed at half the movement definition's
+`MaxVelocity`, recomputes velocity along the current heading through the trig
+table of [R-MOV-01 §4], and clamps the committed position inside the old
+footprint. There is still no blocked-tick counter and no random draw. What
+changes is only the absence claim: **a blocked ground mover re-requests a path
+at most once every 60 ticks for as long as it stays blocked**, and a mover that
+has consumed its route down to one point does the same. The half-speed clamp
+and the "reduces its next-step cap" sentence of section 8.1 are the same
+mechanism, not two: the cap is the speed cap, applied after the position is
+already proposed, so it takes effect from the following tick onward.
+
+The dynamic-yield residual of `[R-MOV-02A]` is narrowed but not closed: no
+yield, sidestep, retarget or priority comparison was recovered, and that
+remains a bounded negative. What is now established is that the "outer caller
+in the reviewed set" the note asked for exists for **replanning**, and is the
+follower/scheduler pair above.
 
 ### 8.3 Final-order arrival and the satisfied-bit handshake [R-P0-01]
 
@@ -3612,6 +4150,17 @@ waypoint/steering logic only — it never appears in the order-completion chain
 without a replan, yield, or queue transition (section 8.2's blocked-mover
 contract).
 
+**Correction — this family is the flight vertical clamp [R-MOV-01 §3]
+(2026-08-28).** The paragraph above attributes the threshold to "the ground
+mover ... for steering and braking". It is the **flight** integrator's
+per-tick vertical velocity limit, stated in the same arithmetic by section
+10.1 (`yLimit = 65536 if (speed & ~3) < 262144 else speed >> 2`, with the
+strict middle branch `dy < yLimit`). The ground steering step contains no Y
+term at all and the ground speed update writes vertical velocity as a literal
+zero every tick, so there is nothing for a vertical threshold to compare. The
+blocked-movement half of the sentence is correct and unaffected; and the
+"without a replan" clause is superseded by [R-MOV-01 §7].
+
 **Closed — compact ground controller (2026-08-26):** the per-unit sweep
 gates the order pumps, the movement tick, and the height snap on the owner
 player's state byte being 1 or 2; state-3 owners' units receive the script
@@ -3654,6 +4203,77 @@ else:
 The three underwater tests are ordered overwrites `1→2→3` — `3` wins if both `2` and `3` hold — not exclusive branches; if none matches the cached band is retained. Band `4` is strictly above water; `1` is the shoreline skirt within five units above water; `2` is draft exactly at surface; `3` is model bottom below water. When `band != cachedBand` the engine starts one-argument asynchronous `setSFXoccupy` with `band` and updates the cache; otherwise no callback is emitted. The classifier runs once per mover tick after the occupancy commit and before the stopped-state Y correction.
 
 **Established fact:** Hover and floater units reuse the ground integrator and terrain validator — the same heading clamp, acceleration/brake choice, pitch-table cap, and footprint validator as ground — not a separate hover controller. Water depth, slope, and sea-level tests remain profile-driven via the movement class. Wake is not an engine GAF: the engine emits only the band change; shipped hover scripts gate wake effects on bands `2` or `3` and spawn them via `emit-sfx` types `2` through `5` from dedicated `wake` pieces (single-vertex pieces), with no engine wake renderer.
+
+### Correction — mover modes are grounded and airborne, not stopped and moving [R-MOV-01 §8] (2026-08-28)
+
+**What the earlier text said.** The first paragraph of this section reads
+"`1` is stopped/parked (the helper that writes `1` zeroes velocity and runs
+lean decay) and `2` is active locomotion (the flight integrator runs only for
+`2` and the pickup validator rejects candidates whose mode is `2`)". Section
+10.2's transport-admission reject 6 repeats the reading as "candidate committed
+mover mode is active locomotion (mode 2, moving) — moving cargo is rejected".
+
+**Why it was wrong.** The observations behind that reading are all correct —
+writing `1` does zero velocity and run the lean decay, the flight integrator
+does require `2`, and the pickup validator does reject `2` — but the label was
+inferred from those side effects rather than from the producers. A census of
+every runtime writer settles it:
+
+* The mover constructor writes mode `1`. Every unit, ground or air, starts at
+  `1`.
+* The only runtime mode writer is one two-valued setter, and its only callers
+  are the **air** order executors, which pass `2` on takeoff (gated on the
+  current mode being `1`) and `1` on landing. No ground order handler writes a
+  mode at all.
+* Writing `2` raises the unit's activation bit and emits `Activate`; writing
+  `1` clears it and emits `Deactivate`, after zeroing velocity and speed and
+  running one zero-delta lean-decay step.
+
+**The corrected contract — Established.** Mode `1` is **on the ground or on the
+surface** and mode `2` is **airborne**. A ground unit is in mode `1` for its
+entire life, moving or not; a `canfly` unit is in mode `1` while landed and `2`
+while flying. This is what makes the rest of the machinery coherent: the
+post-move Y/orientation correction of `[R-MOV-01 §5]` runs only for mode `1`,
+so it owns the height of everything that is not flying and never fights the
+flight integrator; the flight integrator zeroes all velocity for any mode but
+`2`, which is how a landed aircraft sits still on its pad; and the transport
+pickup rejects mode `2` because it will not pick up an **airborne** candidate,
+not because it will not pick up a moving one. Section 10.2's reject 6 should be
+read as "the candidate is airborne" (owner: section 10.2).
+
+The band classifier below is unaffected in arithmetic: its `mode not in {1,2}`
+guard means "not grounded and not airborne", which in practice means only the
+save-installed modes `0` and `3`. Those two remain producerless in ordinary
+gameplay — the constructor cannot write them and the setter is two-valued — and
+reach a unit only through a save file, exactly as this section already states.
+
+### Closed — where the band classifier sits, and hover locomotion [R-MOV-01 §8a] (2026-08-28)
+
+The "Hover and floater units reuse the ground integrator" paragraph below is
+confirmed and can be made exact. A `canhover` or `floater` unit takes the same
+mover tick, the same follower, the same heading clamp, the same
+accelerate-versus-brake decision and the same footprint validator as a tank;
+the three places its medium changes anything are:
+
+1. the water half-speed branch of the speed update, which is skipped when
+   either `canhover` (bit 12) or `floater` (bit 19) is set
+   (`definition flags & 0x81000`, `[R-MOV-01 §4]`);
+2. the post-move Y branch it selects (`[R-MOV-01 §5]`, and `[R-MOV-01 §9]`
+   below); and
+3. for `canhover` only, the per-corner bob and the sea-level floor inside the
+   four-corner terrain conform, plus the fact that `canhover` forces that
+   correction to run every tick rather than only on a dirty transform.
+
+**Sea-floor behaviour — Established, closing part of this section's Unknown.**
+There is no separate sea-floor follower. A mover that is neither `upright` nor
+`floater` gets the four-corner terrain conform unconditionally, and that conform
+never consults sea level except inside the `canhover` bob. So a submerged
+non-hover, non-floater mover simply follows the terrain — the sea floor — with
+its integer height word taken from the average of its four contact-quad corner
+heights, and it is that height word which puts it in band `2` or `3` and which
+triggers the water half-speed branch and the water damage of section 9.2.
+`canhover` raises the same conform's floor to sea level, so a hovercraft rides
+the surface over water and the terrain over land in one expression.
 
 ### 9.2 Flags and damage
 
@@ -3702,6 +4322,63 @@ section 5.2; the presentation-side wake rectangles of document 03 section 5.7
 are that document's artifact — see the reconciliation note above),
 sea-floor following, and wake rectangle interpolation beyond the band
 arithmetic; the semantic label of mover modes `0` and `3`.
+
+### Correction — the floater and upright height rules [R-MOV-01 §9] (2026-08-28)
+
+**What the earlier text said.** The first paragraph of this section reads
+"`floater` selects the ship surface clamp at `waterline + sea level`; `upright`
+keeps the model vertical and computes Y as `max(terrain, sea level minus
+waterline)`".
+
+**Why it was wrong.** The `floater` expression has its sign inverted, and the
+`upright` expression is stated without the gate that actually selects it. The
+executable computes the floater surface through a wrapping 32-bit identity
+(`waterline` multiplied by an all-ones 16-bit constant, plus sea level, then
+scaled by 65,536) which is algebraically `(seaLevel - waterline) * 65536`, not
+`(seaLevel + waterline) * 65536`. Read as authored, `waterline` is a **draft**:
+a hull with a larger waterline sits lower, which is also the reading the band
+classifier below already uses when it tests `waterline + wy == wt` for band `2`.
+The `waterline + sea level` form makes a deeper-drafted hull sit **higher**, and
+contradicts this section's own band arithmetic.
+
+**The corrected contract — Established.** In the post-move correction of
+`[R-MOV-01 §5]`, exactly one of four branches runs, tested in this order:
+
+```text
+if upright (bit 20):
+        if not canhover (bit 12):  Y = terrainHeight(unitXZ) * 65536
+        else:                      Y = max(terrainHeight(unitXZ), seaLevel - waterline) * 65536
+else if floater (bit 19):          Y = (seaLevel - waterline) * 65536
+else:                              four-corner terrain conform  [R-MOV-01 §5]
+```
+
+`seaLevel` and `waterline` are the map header byte and the definition byte, and
+the subtraction is done on their zero-extended values; the comparison inside the
+`max` is `seaLevel - waterline < terrain ? terrain : seaLevel - waterline`, so
+equality takes the sea-surface value (identical either way). The first three
+branches write the full 16.16 Y with a zero fraction; the fourth writes only the
+high word.
+
+Two consequences the earlier text did not state:
+
+* **`upright` alone is a plain terrain snap.** The `max(terrain, seaLevel -
+  waterline)` form is reached only when the definition is `upright` **and**
+  `canhover`. An `upright` unit without `canhover` — every stock KBot — is
+  snapped straight onto the terrain height with no water term, so it walks along
+  the sea floor rather than floating.
+* **`upright` and `floater` units never receive a terrain pitch or roll.** Only
+  the fourth branch writes the unit's pitch and roll words. A KBot's or a ship's
+  pitch word therefore stays at its initial zero unless flight or a carrier
+  writes it, and the pitch-table speed cap of section 8.1 consequently always
+  reads index `0` and permits 100 percent of `MaxVelocity` for them. The slope
+  speed penalty is a vehicle-only effect.
+
+The rest of this section's flag census is unchanged and confirmed: `canhover` is
+bit 12, `floater` bit 19, `upright` bit 20, `amphibious` bit 21, `hoverattack`
+bit 27; `canhover` and `floater` together form the `0x81000` mask that exempts a
+mover from the below-water half-speed branch; `amphibious` still has no reader
+in the recovered movement, medium, targeting or transport code, and the bounded
+absence now also covers the post-move correction and the whole mover tick.
 
 ## 10. VTOL and flight
 
@@ -3792,7 +4469,17 @@ pitch-scale-scaled Z residual into the two visual angle words.
 **Established fact:** Transport service lifecycle is exact for admission, carry,
 unload, pads, and death:
 
-*Admission.* `carrier, candidate` is admitted only if, in this order, none of these nine rejects fires: 1) candidate `cantbetransported` set; 2) carrier lacks `canload`; 3) carried-count (entries in the carrier cargo list whose parent equals the carrier) reaches carrier `transportcapacity` (count, not summed sizes; unauthored `0` therefore blocks loading); 4) carrier `transportsize` below candidate `FootPrintX` (signed compare, FootPrintX is the movement class footprint width); 5) candidate has no mover; 6) candidate committed mover mode is active locomotion (mode 2, moving) — moving cargo is rejected; 7) ground carrier (`canfly` clear) with candidate `MinWaterDepth >= 0`; 8) candidate `Y + modelTop` at or below `sea level × 65536` (submerged); 9) candidate landed-float field not exactly `0.0` (still under construction). Missing `transportcapacity` and `transportsize` default to `0`. The effective boarding range is the first enabled weapon slot's `range` (scanned via the weapon-slot enabled flag); shipped unarmed fallback is weapon record `0` (`NOWEAPON`, Range 16), so shipped unarmed pickup range is `16`. Ownership or alliance is not tested in this predicate, and the two command resolvers contain no alliance gate either (bounded-negative within them), so whether allied cross-owner commands are permitted remains an upstream command-layer question left open (`TODO(question)`).
+*Admission.* `carrier, candidate` is admitted only if, in this order, none of these nine rejects fires: 1) candidate `cantbetransported` set; 2) carrier lacks `canload`; 3) carried-count (entries in the carrier cargo list whose parent equals the carrier) reaches carrier `transportcapacity` (count, not summed sizes; unauthored `0` therefore blocks loading); 4) carrier `transportsize` below candidate `FootPrintX` (signed compare, FootPrintX is the movement class footprint width); 5) candidate has no mover; 6) candidate committed mover mode is `2`, which is AIRBORNE, not "moving" — an airborne candidate is rejected (corrected below); 7) ground carrier (`canfly` clear) with candidate `MinWaterDepth >= 0`; 8) candidate `Y + modelTop` at or below `sea level × 65536` (submerged); 9) candidate landed-float field not exactly `0.0` (still under construction). Missing `transportcapacity` and `transportsize` default to `0`. The effective boarding range is the first enabled weapon slot's `range` (scanned via the weapon-slot enabled flag); shipped unarmed fallback is weapon record `0` (`NOWEAPON`, Range 16), so shipped unarmed pickup range is `16`. Ownership or alliance is not tested in this predicate, and the two command resolvers contain no alliance gate either (bounded-negative within them), so whether allied cross-owner commands are permitted remains an upstream command-layer question left open (`TODO(question)`).
+
+**Correction — reject 6 is "airborne", not "moving" [R-MOV-01 §8]
+(2026-08-28).** The earlier wording read "candidate committed mover mode is
+active locomotion (mode 2, moving) — moving cargo is rejected". The mode
+label was wrong, not the predicate: [R-MOV-01 §8] establishes from a writer
+census that mover mode `1` is grounded/on the surface and mode `2` is
+airborne, with a ground unit at `1` for its whole life whether it is moving or
+standing still. The admission test therefore does not reject a moving ground
+candidate at all — it rejects a candidate that is **in the air**. A rolling
+tank is admissible on this gate; a flying gunship is not.
 
 *Load executor entry gates.* Independent of admission, every phase of the
 canonical load executor re-checks four gates in order before doing work: the
@@ -4010,212 +4697,221 @@ Function identities that a later re-derivation corrected — in particular the m
 
 ## Missing and unknown
 
+Open items only. Each bullet states what is unknown, the section that owns it,
+and the decider that would close it. Findings that closed an item live in the
+body — most under `R-<id>` headings — and are not restated here.
+
+**Correction (2026-08-28, RWU-00-5).** Most bullets in this tail opened with
+an open residual and then recited the surrounding closure — the OTA-FAC-01
+bullet spent fifteen lines on established completion order before naming the
+one Unknown, and the `StartBuilding` fourth-argument bullet was a closure
+narrative with a residual appended. That is exactly backwards for a work list.
+The recitals are deleted here only; [R-FAC-01], [R-FAC-01B], [R-FAC-01R],
+[R-REV-02], [R-UNIT-06], [R-ORDER-02], [R-COB-01], [R-COB-02], [R-MOV-02A] and
+sections 3.3, 3.8, 5.3, 7.2, 8.2 and 8.3 continue to own those findings.
+
+**Correction (2026-08-28, RWU-04-1).** [R-MOV-01] closes three items that this
+tail carried as open. The blocked/failed path-request "retry cadence and retry
+count" bullet is deleted: the blocked-mover cadence is the follower's 60-tick
+repath throttle with no retry count ([R-MOV-01 §7]) and the no-route side is
+the order re-arm of §8.3, both now established — which also supplies the
+decider `docs/SPEC_CONFLICTS.md` SC22 was waiting on (orchestrator to re-tag).
+"Sea-floor behavior" is deleted from the hover bullet: there is no sea-floor
+follower, only the ordinary four-corner terrain conform ([R-MOV-01 §8a]). The
+"automatic replan" clause is deleted from the [R-MOV-02A] yield bullet, and
+the mover-mode bullet is narrowed to modes `0` and `3` because `1` and `2` are
+now named. Section 8.1's "vertical tolerance ... fixed-point threshold" claim
+is withdrawn in the body ([R-MOV-01 §3]) and was never a tail item; no
+replacement bullet is needed because the ground path has no vertical term.
+
 ### Simulation and identity
 
-- The placement validator's caller-mode value at the factory exit-spot call
-  (whether the inline aggregate terrain gates run there at all) — see
-  [R-P0-08-A §1] in section 6.4.
-
-- Complete lockstep packet ordering, replay state, state-hash contents, and resynchronization behavior.
-- Complete serialization of transient order queues, script callbacks, and
-  medium state; pending path-request state is byte-exact via the goal
-  handle's save slot (0x36-byte marker image, two-bit route count,
-  active-bit gating) and pending order state is saved in full on BOTH queue
-  segments by the unit save writer (front and rear heads walked, each node
-  serialized with its owner and slot-derived name, 2026-08-26); the restore
-  side of pending script state remains partial [P1-13].
-- Exact same-tick visibility for every possible unit creation caller
-  (factory-product publication windows are established in section 3.8
-  [R-P0-09]); slot-relative reuse and order-created units beyond the factory
-  path remain open.
-- **OTA-FAC-01 / OTA-FAC-01B / P28-FAC-01R
-  [R-FAC-01][R-FAC-01B][R-FAC-01R]:** the engine-side completion order and
-  stock callback choreography are established: StopBuilding is deferred before
-  the same-pass count test, an empty count then defers Deactivate, and stock
-  Deactivate waits 5000 ms before RequestState(1) drives Stop/CloseYard and
-  the selected COB's authored close animation. No separate post-completion
-  factory egress order, producer/product collision exemption, blocked-release
-  policy, or aircraft takeoff-before-rally transition was recovered. Generic
-  VTOL takeoff, QueryBuildInfo target derivation, primary-queue gating, and
-  the pre-allocation retry split are established. The stock exit-piece
-  indices, names, and authored 3DO local translations are established by the
-  asset census, and the exit-piece locator's runtime transform — including
-  the unit-orientation fold at the model root, the rotation order, the
-  round-to-nearest per-axis narrowing, and the single output Z negation — is
-  established in [R-REV-02]. Multiple-product no-stacking remains Unknown.
-  These residuals block only release/egress behavior; the narrower
-  idle-closure path is implementable from the established callback sequence
-  and authored COB waits.
-- Complete player category, side, ally, autonomy, and strategic-AI semantics.
+- Caller-mode value the placement validator receives at the factory exit-spot
+  call, i.e. whether the inline aggregate terrain gates run there at all
+  · §6.4 [R-P0-08-A §1] · static trace. Marked `TODO(question)`.
+- Out-of-map and mode behavior of the placement validator outside the
+  production path · §6.4 · static trace. Marked `TODO(question)`.
+- Allocator and slot-reuse cleanup when a dead factory slot is reused · §3.8 ·
+  static trace. Marked `TODO(question)`; reclamation and inheritance must not
+  be invented.
+- Complete lockstep packet ordering, replay state, state-hash contents, and
+  resynchronization behavior · doc 08 · static trace. Out of Nanolathe's
+  implementation scope (no multiplayer).
+- Restore side of pending script state; pending path-request and pending order
+  state are established as byte-exact · doc 08 [P1-13] · static trace.
+- Same-tick visibility for unit creation callers other than the factory path —
+  slot-relative reuse and order-created units · §3.8 [R-P0-09] · static trace.
+- Factory release and egress: product release target, producer/product
+  collision exemption, blocked-release policy, aircraft takeoff-before-rally
+  transition, and multiple-product no-stacking · §3.8 [R-FAC-01][R-FAC-01B]
+  [R-FAC-01R] · manual retail observation (one run with a blocked exit, a
+  completed ground product, and a completed aircraft product, recording the
+  first movement, occupancy, and rally events). Marked `TODO(question)`.
+- Complete player category, side, ally, autonomy, and strategic-AI semantics
+  · doc 08 · static trace.
 
 ### Orders and queues
 
-- Per-phase operation-byte VALUES inside the construction/factory handler
-  family (the 68-descriptor handler set itself is closed — every handler
-  identity is recovered from the descriptor table, 2026-08-26).
-- Consumers for the descriptor class parameter and for the unnamed gate-mask
-  bits — the retained-opaque static bits are enumerated with their carrying
-  orders in the [R-DOC04-C] audit note (§3.1): bits 1-8, 11, 16, 17, 19, and
-  24; bits 14 and 21 exist only at runtime (enqueue inheritance and cached
-  target position) and appear in no static mask.
-- Where the interface and network layers replace or cancel the front order,
-  which the queue pump itself never does; the mask-2 cancel notification
-  itself is delivered by the node cleanup path (section 3.3, 2026-08-26).
-- Exact attack, reclaim, guard, and patrol goal predicates: the attack-chase
-  orbit substate arithmetic is now direct (leash test, 8-world-unit vertical
-  threshold, quarter/half/zero standoff binds, the two banded pairs, the
-  ±90° randomized orbit direction) with the standoff VALUE itself still
-  inference (produced by the weapon-slot engagement-distance helper); the
-  patrol radii are closed in section 8.3; the guard assistance branches,
-  their eligibility comparisons, and the admit-phase anchor draw are closed
-  in [R-UNIT-06 §1] — remaining there: the producers of the guard's re-arm
-  gate bits `0x08`/`0x10` and of the ward's engagement-target link (below).
-- Order behavior when a path is empty, stale, blocked, or budget-delayed:
-  closed in [R-ORDER-02 §1] (2026-08-27) — the per-family result-code
-  mapping, the masked-out path-status bits, and the bounded-retry census are
-  established there. Remaining: whether the route-release event fires for a
-  route that was never published (unreachable goal as rebind loop versus
-  silent stall), which needs the movement wrapper's per-tick release-callback
-  states.
-- Consumers of the `StartBuilding` script event's fourth argument: CLOSED by
-  [R-UNIT-06 §4] — the premise was wrong (the record-pointer value arrives in
-  the FIRST argument cell, not the fourth; no stock script touches a fourth
-  cell, and 49 stock scripts consume the first cell as a build-heading angle).
-  Residual: a friendly semantic name for that first-argument value.
-  Still open in the same cluster: the semantic name of the weapon-slot
-  control byte's bit 4 (set by the cleanup-variant clear, cleared by the
-  mid-life variant); the producer pair behind the pump's satisfied-bit-0x10000
-  weapon-slot clear; and the producers of the guard re-arm gate bits `0x08`/
-  `0x10` ([R-UNIT-06 §1]) — all one unlocated-writer family.
-- The producer that sets a unit's engagement-target link (the ward-side
-  reference both guard handlers attack toward, restored by save, cleared by
-  the per-tick refresh): consumer semantics are Supported inference
-  ([R-UNIT-06 §1]); the writer was not located in the bounded decompiled set
-  or by instruction-pattern scan.
-- Emission frequency of the nine nanolathe/assist StartBuilding sites
-  ([R-ORDER-02 §2]): the tracer pins the call sites to the handlers but not
-  their reachability per visit. Nanolathe places the emission once per record
-  activation (the MobileBuild success path; the Reclaim setup visit), reading
-  the flag's one-counterpart-per-record cleanup contract as once per
-  activation; whether retail re-arranges the emitter on later work visits is
-  untraced. Settling it requires the per-visit control flow of one handler
-  (Reclaim is the cheapest: a cadence machine with visits every two ticks).
-- Exact construction/economy carry and worktime-under-one-tick behavior
-  (document 05); completion ordering and the completion/activation/rally
-  callbacks are established in section 3.8 [R-P0-09].
+- Per-phase operation-byte values inside the construction/factory handler
+  family; the 68-descriptor handler set itself is closed · §3.1 · static
+  trace.
+- Consumers of the order descriptor's class parameter and of the unnamed
+  gate-mask bits (statically: 1–8, 11, 16, 17, 19, 24) · §3.1 [R-DOC04-C] ·
+  static trace. Marked `TODO(question)` at both sites; store the bytes opaque.
+- Reader for the acknowledgement-group byte · §3.1 · static trace. Marked
+  `TODO(question)`.
+- Upstream producers of production-node wake mask 8 (Construction stopped)
+  · §3.3, [R-FAC-01B] · static trace. Marked `TODO(T25)`; the handler
+  semantics are closed and the producer must not be invented.
+- Where the interface and network layers replace or cancel the front order
+  · §3.3, doc 07 · static trace. The queue pump itself never does it.
+- The standoff value bound by the attack-chase orbit substates; it is produced
+  by the weapon-slot engagement-distance helper and remains inference · §8.3,
+  doc 06 · static trace.
+- Producers of the guard re-arm gate bits `0x08` / `0x10`, the producer pair
+  behind the pump's satisfied-bit-`0x10000` weapon-slot clear, and the
+  semantic name of the weapon-slot control byte's bit 4 · §3.3,
+  [R-UNIT-06 §1] · static trace. One unlocated-writer family.
+- Producer that sets a unit's engagement-target link — the ward-side reference
+  both guard handlers attack toward · [R-UNIT-06 §1] · static trace. Not found
+  in the bounded decompiled set or by instruction-pattern scan.
+- Whether the route-release event fires for a route that was never published
+  (unreachable goal as rebind loop versus silent stall) · [R-ORDER-02 §1] ·
+  static trace of the movement wrapper's per-tick release-callback states.
+- Whether retail re-arms the nanolathe/assist `StartBuilding` emitter on later
+  work visits; Nanolathe emits once per record activation
+  · [R-ORDER-02 §2] · static trace of one handler's per-visit control flow
+  (Reclaim is the cheapest — a cadence machine visiting every two ticks).
+- A friendly semantic name for the `StartBuilding` first-argument value that
+  49 stock scripts consume as a build-heading angle · [R-UNIT-06 §4] · static
+  trace.
+- Construction and economy carry, and worktime-under-one-tick behavior
+  · doc 05 · static trace.
 
 ### COB
 
-- `TODO(question)` [R-P28-COB-01R] — the exact first committed retail ARMCK
-  pose and whether its authored waiting `Create` work advances before that
-  publication. The common immediate delta-zero drain, stock asset/piece link,
-  and Nanolathe's three creation routes are established, but only the paired
-  retail settling probe in [R-P28-COB-01R] can authorize a timing change.
-- Reserved opcode `0x10063000`: behavior when a synthetic or corrupted script
-  emits it (count exceeding the window depth reads stale window words —
-  undefined behavior, not a kill).
-- Allocation failure and corrupted-save fault policy — where retail would
-  abort through its allocator's abort path remains `TODO(question)`; the
-  invalid-piece-index half is closed (no bounds check in the interpreter;
-  out-of-range index is out-of-bounds access, not a kill — the kill path is
-  unknown-opcode and thread-return only, 2026-08-26) and the stack-overflow
-  half is closed (push and pop have no depth guard either — overflow writes
-  past the ten-word window, undefined behavior, not a kill; Nanolathe
-  bounds-checks as its sanctioned divergence, 2026-08-28 [R-COB-01 §1]).
-- The `Aim*` ready-writer closure: the receiver protocol and the write it
-  performs are closed in section 5.3 (return-opcode invocation of the
-  receiver with the script's returned cell); the identity of the closure
-  target (the dword at the receiver word) remains `TODO(question)` R-1,
-  coordinated with document 06 section 3.4; a receiver-clearing helper that
-  scans the eight threads has no located caller (bounded relative-call
-  census, 2026-08-28 [R-COB-02 §1]) and grants nothing.
-- Script statics are not initialized by the program bind (piece animation
-  state is zero-filled, statics are not — [R-COB-01 §1]); the initial content
-  the tagged allocator itself provides is Unknown, insensitive for stock
-  content because shipped scripts write before read.
-- The crash policy for a scriptless unit (null compiled program) whose update
-  path runs: one traced producer site lacks a null-VM guard, so retail would
-  fault there; stock content never exercises it — `TODO(question)`, settle
-  with a synthetic scriptless definition ([R-COB-01 §1], UNIT-04).
-- The script-touched marker consumer, the busy-bit semantic NAME (the
-  transport-admission half is closed: no busy-bit test in the nine gates),
-  the engine-driven cloak-family bit name, the packed position-half axis
-  naming, the yard-open admission class matrix, and bare-`get UNIT_HEIGHT`
-  dependency — TODO(question) in section 4.7 [R-P0-10].
-- Semantic unit of the footprint-path `SetSpeed` argument, and serialization
-  of the unassigned `Killed` variant cell when the script neither assigns it
-  nor the work-fraction gate forces zero.
-- Unnamed save fields and complete restore behavior for pending calls, waits, and signal masks.
+- The first committed retail ARMCK pose, and whether its authored waiting
+  `Create` work advances before that publication · [R-P28-COB-01R] · manual
+  retail observation (the paired settling probe). Marked `TODO(question)`.
+- Behavior when a synthetic or corrupted script emits reserved opcode
+  `0x10063000` with a count exceeding the window depth · §4.5 · static trace.
+  Stale window words are read; this is undefined behavior, not a kill.
+- Deterministic fault policy on allocation failure — where retail aborts
+  through its allocator's abort path · §4.6 · static trace. Marked
+  `TODO(question)`.
+- Identity of the `Aim*` closure target behind the receiver word · §5.3,
+  doc 06 §3.4 · static trace. Marked `TODO(question)` R-1 at both sites.
+- Initial content the tagged allocator provides for script statics, which the
+  program bind does not initialize · [R-COB-01 §1] · static trace.
+  Insensitive for stock content, which writes before reading.
+- Crash policy for a scriptless unit (null compiled program) whose update path
+  runs; one traced producer site lacks a null-VM guard · [R-COB-01 §1],
+  UNIT-04 · manual retail observation with a synthetic scriptless definition.
+  Marked `TODO(question)`.
+- Consumer of the script-touched marker · §4.7 [R-P0-10] · static trace.
+  Write-only in the bounded census. Marked `TODO(question)`.
+- Semantic name of the busy bit; the transport-admission half is closed (no
+  busy-bit test in the nine gates) · §4.7 [P1-05] · static trace. Marked
+  `TODO(question)`.
+- Name of the engine-driven cloak-family bit (bit 2 of the first state byte)
+  and its writers outside the edge machine · §4.7 · static trace, naming only.
+  Marked `TODO(question)`.
+- Axis naming of the packed position halves — whether the word §4.4 calls Z is
+  Z or X · §4.7 · manual retail observation (packed position-half COB probe).
+  Marked `TODO(question)`.
+- Yard-character class matrix inside the yard-open admission gate · §4.7,
+  `[fmt tnt]` · static trace. Marked `TODO(question)`.
+- Whether mission or third-party content depends on a bare `get UNIT_HEIGHT`
+  returning nonzero; retail returns 0 with a zero-filled argument slot · §4.7
+  · asset census. Marked `TODO(question)`.
+- Semantic unit of the footprint-path `SetSpeed` argument · §5.4 · static
+  trace.
+- Serialization of the unassigned `Killed` variant cell when neither the
+  script assigns it nor the work-fraction gate forces zero · §5.4, doc 08 ·
+  static trace.
+- Unnamed save fields, and complete restore behavior for pending calls, waits,
+  and signal masks · doc 08 · static trace.
 
 ### Terrain and pathfinding
 
 - Retail default content of the settings string feeding the heuristic-weight
-  parse (the ×65536 fixed-point form and {6, 3, 1} tiers are established), and
-  any runtime surface that rewrites that base besides settings application.
+  parse, and any runtime surface that rewrites that base outside settings
+  application · §7.2 · asset census of the shipped settings. The ×65536 form
+  and the {6, 3, 1} tiers are established. Marked `TODO(question)`.
 - Class-D restored-from-save goal usage frequency, and whether loaded saves
-  ever re-issue fresh point/annulus/rectangle goals replacing them.
-- Exact order-layer identity of each point-goal wrapper call site beyond the
-  classified exemplars; heuristic family, formulas, scaling, threshold, and
-  goal constructors are established in section 7.2.
-- Exact semantics of terrain state one versus clear state three beyond
-  passability: the expansion applies no per-edge terrain-state cost (the
-  neighbour cost is step cost plus turn penalty plus the fixed 30 plus the
-  short-run 75 only — bounded-negative, 2026-08-26).
-- Full static feature/yard/owner-mask interaction.
-- `TODO(question)` — the blocker channel for BUILDING footprints in the
-  per-class passability layer: building occupancy changes restamp the layers
-  ([R-DOC04-B]), but neither classifier form tests any building-state byte,
-  and the owner/building-mask miss value (2) is traversable to the search
-  expansion, so whether (and how) a building hard-blocks a path request
-  before the movement-commit validator rejects it is unresolved. The
-  expansion/commit split of §8.2 is the observed behavior; the layer's role
-  in it is the open half.
-- Exact out-of-bounds goal handling for every order type.
-- Heap OOM policy and integer overflow behavior; route caps are established
-  (20 published points, 64-point reconstruction ring, 3 saved waypoints).
+  re-issue fresh point/annulus/rectangle goals · §7.4, doc 08 · static trace.
+- Order-layer identity of each point-goal wrapper call site beyond the
+  classified exemplars · §7.2 · static trace.
+- Semantics of terrain state one versus clear state three beyond passability;
+  the expansion applies no per-edge terrain-state cost (bounded-negative)
+  · §7.1 · static trace.
+- Full static feature/yard/owner-mask interaction · §7.1 · static trace.
+- The blocker channel for BUILDING footprints in the per-class passability
+  layer: neither classifier form tests a building-state byte and the
+  owner/building-mask miss value (2) is traversable, so whether a building
+  hard-blocks a path request before the commit validator rejects it is
+  unresolved · §7.1, §8.2 [R-DOC04-B] · static trace. Marked
+  `TODO(question)`.
+- Retail perimeter-candidate ranking and expansion at a build-site anchor; the
+  half-extent expansion is Nanolathe's placeholder for the established
+  stop-outside-the-footprint outcome · §7.4 · static trace. Marked
+  `TODO(question)`.
+- Out-of-bounds goal handling for every order type · §7.4 · static trace.
+- Heap OOM policy and integer overflow behavior; the route caps (20 published
+  points, 64-point reconstruction ring, 3 saved waypoints) are established
+  · §7.3 · static trace.
 
 ### Ground movement
 
-- **OTA-MOV-02A [R-MOV-02A]:** stationary versus moving mobile blockers,
-  head-on and same-destination outcomes, sequential sweep ownership, the
-  final-commit half-speed/clamp response, absence of collision retry counters,
-  and the occupant-age/request-revision interaction are established within
-  their stated call-chain bounds. Any outer yield owner, retarget, sidestep,
-  reverse, wait-queue, or automatic replan outside that bound remains Unknown
-  and requires the focused retail encounter trace specified in [R-MOV-02A].
-- Collision behavior beyond that bounded multi-unit commit path, including
-  untraced feature/building/map-boundary interactions, remains open.
+- Any outer yield owner, retarget, sidestep, reverse, or wait-queue outside
+  the bounded final-commit path · §8.2 [R-MOV-02A] · manual retail observation
+  (the focused encounter trace specified in [R-MOV-02A]). The automatic-replan
+  half of the earlier wording is closed by [R-MOV-01 §7].
+- Collision interactions with features, buildings, and the map boundary
+  outside that bounded commit path · §8.2 · static trace.
+- Whether the mover's blocked flag can persist stale: the same-cell fast path
+  commits without rewriting it, so a blocked mover whose next proposal stays
+  inside its committed cell keeps the previous verdict, which gates the
+  movement-rate tier, the hover bob, and the repath arm · §8.2
+  [R-MOV-01 §5][R-MOV-01 §7] · static census of every writer of that flag,
+  then manual retail observation to confirm.
+- The route follower's four unread virtual slots and the route object's own
+  validity, exhaustion, and goal-query protocol, plus the route-acceptance
+  rule the follower applies before adopting a newly published route · §7.3
+  [R-MOV-01 §3] · static trace (RWU-04-2).
+- Whether the in-battle developer overlay's `PFSTATE` and `PFABLE` words are
+  the route follower's flags byte and point count · §7.1 [R-MOV-01 §3] ·
+  static trace of the overlay's format call (RWU-04-2).
 
 ### Hover and VTOL
 
 - Semantic names and ordinary gameplay producers of mover modes `0` and `3`
-  (save and load preserve them but no ordinary bounded producer was found);
-  the mover's signed integer height provenance is established as the signed
-  high word of its 16.16 Y.
+  · §9.1 · static trace. Modes `1` (grounded) and `2` (airborne) are named and
+  their writers censused by [R-MOV-01 §8]; `0` and `3` still reach a unit only
+  through a save file.
 - Semantic name and domain of the global sentinel compared against the unit's
-  sector-list head field, which bypasses the flight vertical assignment
-  entirely (bypass behavior itself is established in section 10.1).
-- Sea-floor behavior and detailed wake and SFX-piece mapping beyond the exact
-  `setSFXoccupy` five-band classifier; the presentation-side wake rectangles
-  of document 03 are that document's artifact under the reconciliation note
-  in section 9.2; the band thresholds, their height-byte domain, overwrite
-  order, mode dependency, and edge-triggered delivery are established.
-- Can-fly terrain bypass conditions for every order beyond the established
-  flight selection in the mover fan-in.
-- Cruise-altitude reference details beyond the established order-goal `Y`
-  authority (upper cap `0x1FF0000`, sources `cruisealt`, `cruisealt/2`,
-  `modelBottom`, and negated attach-piece Y; the cruise-altitude field read
-  by the VTOL handlers is pinned, 2026-08-26), landing and descent arrival
-  radii (`0x30`, `0x80`, `0x140` are horizontal arrival radii, not descent
-  rates; the patrol orbit adds a 0x150 radius), pad reservation beyond the
-  four-candidate `QueryLandingPad` selection and the `0`/`30+rand(15)`
-  retry protocol (the rand(15) arm is the code-3 wait, confirmed; the
-  code-9 arm is rand(30) — section 3.3), and carrier collision beyond the
-  ordinary shared-mover commit rules; the load/unload executor entry gates,
-  six-phase tables, statuses, and event codes 12/13 are established in
-  section 10.2.
-- Air patrol orbit admission beyond the established `150`-tick recurrence at
-  `builddistance << 16` with offset `0xDB6E` and build power `work/30` per
-  tick; exact travel time between generated construction waypoints is a
-  consequence of the integrator, not an authored constant (section 10.3), and
-  construction target-eligibility gates.
+  sector-list head field, which bypasses flight vertical assignment · §10.1 ·
+  static trace. The bypass behavior itself is established.
+- Wake and SFX-piece mapping beyond the `setSFXoccupy` five-band classifier
+  · §9.2, doc 03 · static trace.
+- Whether the hover bob's per-corner perturbation — at most two height units,
+  [R-MOV-01 §5] — can carry a hovering unit's committed integer height across
+  the sea-level, waterline, or model-bottom thresholds that the band
+  classifier, the below-water half-speed branch, and water damage compare
+  against · §9.1, §9.2 [R-MOV-01 §5] · a bounded numeric argument over the
+  stock `waterline` and `modelBottom` values, or manual retail observation of
+  a hovercraft parked on a shoreline. The wall-clock read and its write path
+  into the authoritative height word are established.
+- Writer and configured value of the rate field that scales the wall-clock
+  animation counter the hover bob samples · doc 01, §9.1 [R-MOV-01 §5] ·
+  static trace.
+- Can-fly terrain bypass conditions for orders outside the established flight
+  selection in the mover fan-in · §10.1 · static trace.
+- Landing and descent rates (`0x30`, `0x80`, `0x140` are horizontal arrival
+  radii, not descent rates), pad reservation beyond the four-candidate
+  `QueryLandingPad` selection and the `0` / `30 + rand(15)` retry protocol,
+  and carrier collision beyond the shared-mover commit rules · §10.2 ·
+  static trace.
+- Construction target-eligibility gates for air construction orders; the
+  `150`-tick recurrence at `builddistance << 16` with offset `0xDB6E` and
+  build power `work/30` per tick is established · §10.3 · static trace.

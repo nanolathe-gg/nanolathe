@@ -77,7 +77,19 @@ type UnitView struct {
 	FootX, FootZ         int8
 	Pieces               []PieceView
 	BMCode               bool // authored model-shading class gate [R-RND-02A]
-	IsBuilding           bool
+	// ZBuffer is the authored FBI key that gives the unit's composition image
+	// a per-pixel height plane. 276 of the 278 stock units author it
+	// [R-REN-03A §2].
+	ZBuffer bool
+	// NoShadow, CanHover and Floater are the three authored keys the model
+	// shadow gate reads [R-REN-03D §1].
+	NoShadow bool
+	CanHover bool
+	Floater  bool
+	// Digger raises the height key by 75 and clips the buried half of the
+	// model away [R-REN-03A §8].
+	Digger     bool
+	IsBuilding bool
 	// Activated is the committed on/off state used by UI command dispatch.
 	// Presentation must not rehydrate a selected unit from the live pool [I6].
 	Activated bool

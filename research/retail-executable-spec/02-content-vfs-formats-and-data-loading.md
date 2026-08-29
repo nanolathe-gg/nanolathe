@@ -93,11 +93,10 @@ The content context should retain the winning provider for every opened
 logical path, because save metadata and multiplayer identity use the resolved
 content set.
 
-### Unknown
+### Command line, established
 
-The command-line grammar beyond the bare language token is now established:
-the command line is whitespace-tokenized; a token not starting with `-` or
-`/` is copied into the language buffer (the last such token wins); `-`/`/`
+The command line is whitespace-tokenized. A token not starting with `-` or `/`
+is copied into the language buffer (the last such token wins). `-`/`/`
 switches comprise nineteen recognized developer switches (`-memfussy`,
 `-memnofussy`, `-memfrontalign`, `-gonzo`, `-memset`, `-memnoset`,
 `-fpufussy`, `-fpunofussy`, `-dprinton`, `-dprintoff`, `-dprintfile`,
@@ -115,19 +114,27 @@ its own directory, loads `online.dll` from it, requires the exported
 `ONLGetVersion` to return exactly **3**, and then calls
 `ONLLoadConfigFile(config, buffer, 336)` into a 336-byte config block; a
 missing DLL, missing export, or wrong version leaves the block zeroed with no
-fallback dialog. What remains unknown is the data contract of
-`ONLLoadConfigFile` — it is defined by the DLL, not by the executable — and
-the lobby-flag words' exact bit consumers (document 08).
+fallback dialog.
 
 Behavior when the executable is launched from a non-install directory is fully
 covered by the established `GetModuleFileNameA`-based content-root pinning:
 nothing in the command-line path alters the content root. Directory fallback
 on `GetModuleFileNameA`/`SetCurrentDirectoryA` failure is not a deliberate
-retail fallback. The exact fatal-versus-recoverable classification for every
-remaining resource family is incomplete beyond the classifications stated in
-this document, though `MOVEINFO.TDF`/`SIDEDATA.TDF` are fatal while the
-translation table is explicitly optional and `GAMEDATA.TDF` as a file is not
-fatal (SC2).
+retail fallback.
+
+### Unknown
+
+Open items only; the decider follows each.
+
+- Data contract of `ONLLoadConfigFile` · not decidable from the retail
+  executable: the function is defined by `online.dll`.
+- Exact bit consumers of the lobby flag words · static trace (document 08
+  owns the consumers).
+- Fatal-versus-recoverable classification for the resource families not
+  classified in this document; `MOVEINFO.TDF` and `SIDEDATA.TDF` are fatal,
+  the translation table is optional, and `GAMEDATA.TDF` as a file is not fatal
+  (SC2) · static trace.
+
 
 ## 2. Virtual file system and provider precedence
 
@@ -359,23 +366,22 @@ two installations can resolve the same path to different archive bytes.
 
 ### Unknown
 
-The container, its cipher, its directory shape, its duplicate rule, its
-separator rule, its absence of traversal handling, the mount append order and
-keep-open flag semantics (flag 1 keeps open, flag 0 closes/lazily reopens;
-precedence is unaffected), and the footer four-byte wildcard are established
-above. What remains open is narrower: enumeration order within one wildcard
-group is decided by the host directory listing, which retail does not sort, so
-it is not a property of the executable; the entry flag bits beyond the
-subdirectory bit and the mutable enumeration-visibility bit (bit 1, mask
-`0x02`, recursively cleared before union rebuild) are not enumerated for
-synthetic values — no other flag bit is tested by any mount/validate/enumerate
-path, so synthetic values are inert; the exact recovery behavior for a
-structurally malformed but header-valid archive is established at the
-validation level (below); whether any shipped
-archive variant outside the installed corpus departs from the container above
-has not been established from the executable alone (the container contract —
-magic, version, footer wildcard, cipher, directory shape, duplicate and
-separator rules — is itself established above).
+Open items only; the decider follows each. The container, its cipher, its
+directory shape, its duplicate and separator rules, its absence of traversal
+handling, the mount append order, the keep-open flag semantics, the footer
+four-byte wildcard, and the recovery behavior for a structurally malformed but
+header-valid archive are established above. Enumeration order within one
+wildcard group is not an executable property at all — it is the host directory
+listing, which retail does not sort.
+
+- Entry flag bits other than the subdirectory bit and the mutable
+  enumeration-visibility bit (bit 1, mask `0x02`, recursively cleared before
+  union rebuild), for synthetic values · static trace. Bounded-negative today:
+  no other bit is tested by any mount, validate, or enumerate path, so
+  synthetic values are inert.
+- Whether any shipped archive variant outside the installed corpus departs
+  from the container contract above · asset census.
+
 
 ## 3. Registry configuration, language, and localization
 
@@ -533,26 +539,29 @@ All user-visible runtime messages should pass through the translation map
 before rendering. The exact callers are not fully enumerated, but the
 translation loader is clearly separate from unit-catalog localization.
 
-### Unknown
-
-The registry hive, key path, value names, defaults, and write-back behavior are
-established above, as are missing-translation fallback (return the source
-string unchanged; missing `translate.tdf` leaves an empty map and is not fatal)
-and duplicate policy (last section wins). Language precedence is command-line
-bare token, then registry `language` value when the token is absent, then
-English fallback (`english`). What remains incomplete: the language-selection
-interface, the installed-corpus language vocabulary (observed: `french`,
-`german`, `italian`, `piglatin`, `spanish` in the installed translation table;
-plus four `japanesename` prefixes in FBI records with no corresponding
-translation-table key in this corpus — not a claim about every edition),
-code-page behavior for high bytes, language-specific font fallback, the
-precedence among registry/INI/command-line for non-language configuration, and
-which runtime messages pass through the translation lookup. Code-page behavior
-for high bytes is a `TODO(T23)` platform residual.
-
 **Installed-corpus observation:** 21 font filename spellings (20
 case-folded identities); both startup-required `COMIX.FNT` and `SMLFONT.FNT`
-are present in this corpus.
+are present in this corpus. The installed translation table spells `french`,
+`german`, `italian`, `piglatin`, and `spanish`; four `japanesename` prefixes
+appear in FBI records with no corresponding translation-table key in this
+corpus. Neither is a claim about every edition.
+
+### Unknown
+
+Open items only; the decider follows each. The registry hive, key path, value
+names, defaults, write-back, missing-translation fallback, duplicate policy,
+and the command-line/registry/English language precedence are established
+above.
+
+- The language-selection interface — how a language is chosen at runtime ·
+  static trace.
+- Code-page behavior for high bytes · static trace. Marked `TODO(T23)`.
+- Language-specific font fallback beyond the installed-corpus census · asset
+  census.
+- Which runtime messages pass through the translation lookup · static trace.
+- Precedence among registry, INI, and command line for non-language
+  configuration · static trace (doc 01 §3.1 owns the scalar half).
+
 
 ## 4. Generic TDF grammar and semantics
 
@@ -650,22 +659,14 @@ if a compatibility accessor follows retail first/last behavior.
 
 ### Unknown
 
-Floating `INF`/`NAN` and malformed-exponent behavior is now established: the
-floating accessor hands the stored text to the CRT `atof` conversion
-unchanged, so the behavior is exactly the C run-time's `strtod` family —
-leading whitespace and an optional sign, decimal digits, an `e`/`E` exponent,
-partial parses stopping at the first invalid character (`1e` and `1e+` both
-read as 1.0), the case-insensitive spellings `inf`/`infinity`/`nan` reading as
-±infinity/NaN, and unparsable text reading as zero. There is no custom float
-code in the accessor. Line-length limits are likewise settled: the tokenizer
-parses the whole file and has no fixed line limit — tokens are whitespace-
-trimmed and interned, and the only length caps are caller-side destination
-limits (the string accessor's caller-supplied limit and the 255-byte section
-name buffer). Caller-specific duplicate-section merging policies are not
-established; the first-match section accessor and the enumerator behavior are
-established above, as are the duplicate-key winner mechanism, the
-parse-diagnostics set with its title and empty-tree failure policy, and
-comment-blanking offset preservation.
+Open items only; the decider follows each.
+
+- Caller-specific duplicate-section merging policies · static trace. The
+  first-match section accessor, the enumerator behavior, the duplicate-key
+  winner mechanism, the parse-diagnostics set with its title and empty-tree
+  failure policy, and comment-blanking offset preservation are all established
+  above, as is the floating accessor's CRT `atof` behavior and the absence of
+  any tokenizer line limit.
 
 ## 5. Catalog construction and linking
 
@@ -749,6 +750,23 @@ the classification as AI-side is now established.
 | `transportsize`, `transportcapacity` | integer | 0 |
 | `buildangle`, `builddistance`, `sortbias` | integer | 0 |
 | `maneuverleashlength`, `attackrunlength`, `kamikazedistance` | integer | 0 |
+
+**Runtime units of the locomotion fields (Established, 2026-08-28, RWU-04-1).**
+Because `maxvelocity`, `brakerate`, `acceleration`, `moverate1` and `moverate2`
+take the **fixed-point** accessor, the compiled field is the authored decimal
+multiplied by 65,536 and truncated toward zero, and the ground mover consumes
+it verbatim: there is no further scaling, no division by the tick rate, and no
+conversion at use. `maxvelocity` is therefore 16.16 world units **per tick**
+and `acceleration`/`brakerate` 16.16 world units **per tick squared**
+[04 §8.1 R-MOV-01 §1]. `moverate1`/`moverate2` are the two movement-tier
+thresholds of [04 §5.2], in the same units, each defaulting to the
+`maxvelocity` value just read shifted left one. `turnrate` takes the
+**integer** accessor into a 16-bit field that every reader zero-extends, so
+its domain is 0..65535 on the 65,536-per-circle angle scale and an authored
+value is taken modulo 65,536; it is angle units per tick. `brakerate` and
+`turnrate` are both used as unguarded divisors in the ground steering step, so
+the compiled default of 0 is a fault for any unit that actually moves
+[04 §8.1 R-MOV-01 §4].
 
 **Combat and sensors**
 
@@ -2124,145 +2142,70 @@ save/load transition.
 
 ## Missing and unknown
 
-Closed since the previous revision, and now specified above: the archive
-container, its cipher, its directory shape, its duplicate and separator rules,
-and its absence of traversal handling; the footer four-byte wildcard and the
-mount-time read-length policy; the mount append order, per-extension keep-open
-semantics, and lazy reopen/validation lifecycle; the chunk-size table and full
-`SQSH` header/checksum/payload-transform/LZSS/zlib decoder contract; the
-typed-accessor family and its default and scaling behavior; the language
-precedence (command line > registry > English)
-and the translation fallback (empty map, source returned byte-exactly) plus
-the installed-corpus language/font census; startup executable-directory
-behavior via `GetModuleFileNameA`/`SetCurrentDirectoryA`; the complete
-authored key set, accessor, default, and unit conversion for the unit, weapon,
-feature, movement-class, and map records; the interface anchor rectangle
-convention and its mandatory anchor set; the animation-archive and model-archive
-record layouts and their load-time transforms; the compiled script header; and
-the content checksum. Closed in this revision: the full meteor merge,
-scheduler-timing, geometry, CRT-rand-stream, and save-persistence contract;
-the feature reproduction cadence including its unconditional per-visit RNG
-draw; the TDF parse-diagnostics set, empty-tree failure policy, offset-
-preserving comment blanking, duplicate-key winner mechanism, and the floating
-accessor's CRT `atof` semantics (INF/NAN/malformed exponents) with the
-absence of tokenizer line limits; the fatal
-feature cross-reference diagnostic; the mission-object record shapes and the
-mission-file diagnostic vocabulary (now six strings with their exact
-triggers); the SIDEDATA `[GENERAL]` height, per-side
-interface-GAF panel binding, bar palette indices, and fatal side-font path;
-the build-menu catalog keys and the downloadable warning (verbatim, two
-spaces) with its silent flag repair; the CD identity gate and its structural
-separation from the mount loop; mount deduplication and
-union-enumeration dedup with the entry-flag census (subdirectory bit,
-visibility bit, no other bits tested) and the mount-time validation set
-(magic/version/footer only — malformed-but-header-valid archives mount and
-fail per-read); the WAV detector order, DIGI normalization, and
-three allocation modes plus the 255-entry alias cap; the PCX validation,
-run clamping, and marker-less palette read; the FNT descender/bias split;
-the skirmish per-slot defaults with the `NumSkirmishPlayers` no-op
-validation; the TNT feature-reference sentinel refinement; the fringe-anchor
-stamp-time writer contract (positive anchor→fringe offsets written by the
-footprint placement in stamp order, later stamps overwriting earlier fringe —
-replacing the row-major heuristic; SC6 resolved); the void-edge generation
-(right `W-2,W-1`, north/south height predicates `z*16 < height>>1` /
-`(H-1-z)*16 + (height>>1) < 112`, lava-world flood on `hmin≤SeaLevel`); the
-per-cell metal question (canonical uniform `SurfaceMetal` seed with no
-raster; legacy maps seed per-cell from attribute byte 6 — no varying file
-exists); the
-category token registry — case-insensitive sorted entries, 16-word 512-bit
-unit-membership bitsets (`word = unitID >> 5`, `mask = 1 << (unitID & 31)`),
-whitespace tokenization of `category`, mandatory `ALL` membership (the
-sentinel is the literal token `ALL`, not an empty entry),
-`none` as an ordinary token, and the unit-name-first mask helper (R-P0-03
-folded into §5); the movement-class pool initialization (startup template
-pre-fill of every class record — slope limits 255, water depths ±10000 — then
-unconditional clamps, per `[04 §6.1 R-DOC04-A]`; the fallback scratch template
-for unresolvable classes; FBI resolution against the authored `Name` value; the
-clear/steep/hard slope classifier with BadSlope as the clear-vs-steep
-boundary); the command-line grammar (bare-token language capture, the
-developer and lobby switch vocabulary) and the `C`/`c` config switch with
-its `online.dll`/`ONLGetVersion()==3` gate; the OVR `Compatability` hash
-replacement sequence; the catalog rebuild at every battle entry; the
-cross-reference failure policy for missing weapons/corpses/movement
-classes/models/sides/sound categories; and the `ai_weight` consumer / 
-`ai_limit` bounded-negative split with the AI-side identity of the build
-picker's enclosing routines. Closed in this revision (R-CONTENT-01/02/03):
-the movement-profile initialization contract (no reset between classes,
-unconditional unsigned clamps, per-field conversion table; R-CONTENT-01's
-"zero-filled pool, no template" reading was itself superseded on 2026-08-27 by
-`[04 §6.1 R-DOC04-A]`, which located the startup template writer — see the
-supersession note in §5 "Movement class record"); the weapon-family
-discovery order (`Weapons\*.tdf` union enumeration only, two independent
-passes; `gamedata\weapons.tdf` never parsed — PLAN_02's parse-order amendment
-premise falsified), the 256-record ID-indexed weapon table with
-last-writer-wins whole-record replacement for same-ID sections, the
-record-table name scan with the record-0 inactive sentinel (correcting the
-all-ones reading), and the weapon-section-text-checksum XOR identity
-contribution; and the unit-limit writer contract (`totala.ini`
-`[Preferences]` `UnitLimit`, default 250, clamp 20..500, inert mode flag,
-`maxunits` save/mission item override, OTA `maxunits` default 200 into the
-active limit) with the bounded-negative absence of any per-unit-definition
-limit key.
+Open items only. Each bullet states what is unknown, the section that owns it,
+and the decider that would close it. Findings that closed an item live in the
+body — several under `R-<id>` headings — and are not restated here.
 
-Still open:
+**Correction (2026-08-28, RWU-00-5).** This tail previously opened with a
+~70-line recital of everything the document had closed, followed by a "Still
+open" list whose bullets also mixed closures into their prose (the category
+`ALL` sentinel, the movement-class slope paradox, the meteor contract). One
+bullet was worse than redundant: it still described the movement-class pool as
+zero-filled with no template, a reading superseded on 2026-08-27 by
+`[04 §6.1 R-DOC04-A]`. The closure narratives are deleted here only; every
+finding they recited remains in the body sections that own it.
 
-* The data contract of `ONLLoadConfigFile` (defined by `online.dll`, not the
-  executable) and the lobby flag-word switches' exact bit consumers (document
-  08). Everything else about the command line — grammar, unknown-switch
-  tolerance, `C`/`c` handling, non-install-directory launch — is specified in
-  §1.
-* Archive entry flag bits beyond the subdirectory bit and the mutable
-  enumeration-visibility bit (bit 1, mask `0x02`) for synthetic values — no
-  other bit is tested by any mount/validate/enumerate path, so synthetic
-  values are inert; and whether any shipped archive variant outside the
-  installed corpus departs from the container specified here.
-* Caller-specific duplicate-section merging policies (the first-match
-  section accessor and the enumerator behavior are specified in §4; the
-  malformed-float and line-limit questions are closed there).
-* Shipped burn animations are forced to non-looping at load (finite 46–282
-   visits, completion only when the animation pointer clears); malformed or
-   missing burn sequences for non-filename features remain `TODO(question)`.
-   Feature reclaim and reproduction timing are specified above and in
-   document 05, and no geothermal registry exists — enforcement is the
-   footprint validator's yardmap-bit-7 check.
-* Complete sound alias precedence, eviction, and DirectSound streaming rules.
-   VFS-tier precedence is established; alias-cache eviction is bounded-negative
-   (no eviction site found) `TODO(question)`; streaming flags are
-   `TODO(question)`.
-* The draw-time interpretation of model primitive colour, texture, and flag
-  fields is narrowed in document 03 (flat colours bypass the shade table,
-  indexed texture pixels use it, team textures select per-player frames,
-  no backface culling); the compressed-animation pixel decoder itself is now
-  specified above.
-* GUI widget callback map (the parser-side control-kind mapping is closed
-  above; the `[VERSION]` subsection is optional in the parser) and texture
-  lifetime behavior — document 07 owns the callback map.
-* Map schema fallback, map hash inputs, and initial-mission script
-  interpretation. Meteor processing is fully specified above (merge
-  contract, scheduler position and timing, geometry, CRT-rand stream, save
-  persistence). The InitialMission command vocabulary is closed in document
-  08 ([p0-06]); the schema-selector fallback string is recorded in
-  `research/formats/ota.md`; the map content-hash inputs (header, plot,
-  features, map descriptor) are partially traced and document 08 owns the
-  lobby consumer.
-* Remaining code-page behavior for high bytes (`TODO(T23)` platform
-  residual), localized font selection beyond the installed-corpus census, and
-  which runtime messages pass through the translation lookup (the loader and
-  byte-exact lookup are established in §3; the message-site census remains).
-* The empty/sentinel category registry entry is closed (it is the token
-  `ALL`); what remains is document 06's mask-helper consumer list.
-* The movement-class slope arithmetic paradox is closed, not open: this
-  bullet formerly said the pool is zero-filled with no template so stock land
-  classes compile to `MaxSlope = 0`, with a runtime trace as decider. That
-  reading was superseded on 2026-08-27 by `[04 §6.1 R-DOC04-A]` (startup
-  template pre-fill; omitted keys carry 255/±10000; stock compiles to authored
-  limits). The bullet was stale because the tail was not regenerated when §5
-  was corrected. Nothing remains open here.
-* The unit limit's runtime consumers (which of the active-limit read sites
-  gate construction, AI production, and the lobby display, and the exact
-  per-player versus global counter split) — document 05 owns the enforcement
-  contract; R-CONTENT-03 established only the writer side and the key
-  vocabulary above.
-* Whether the unit-limit mode flag (written at startup and once at battle
-  setup) is ever read by unrecovered code — bounded-negative in the recovered
-  corpus, so it is retained-and-inert here.
+* Data contract of `ONLLoadConfigFile` · §1 · not decidable from the retail
+  executable — the function is defined by `online.dll`. The executable side
+  (directory resolution, `ONLGetVersion()==3` gate, 336-byte block, zeroed
+  block on any failure) is established.
+* Exact bit consumers of the multiplayer lobby flag words · doc 08 · static
+  trace.
+* Fatal-versus-recoverable classification for the resource families not
+  classified in §8 · §8 · static trace.
+* Archive entry-flag bits other than the subdirectory bit and the mutable
+  enumeration-visibility bit (bit 1, mask `0x02`) · §2 "HPI-family container
+  format" · static trace. Bounded-negative today: no other bit is tested by any
+  mount, validate, or enumerate path, so synthetic values are inert.
+* Whether any shipped archive variant outside the installed corpus departs
+  from the container contract in §2 · §2 · asset census.
+* Caller-specific duplicate-section merging policies · §4 · static trace. The
+  first-match section accessor, the enumerator, and the duplicate-key winner
+  are established.
+* Behavior for malformed or missing burn sequences on non-filename features
+  · §5 "Feature record" · static trace. Marked `TODO(question)` at the site.
+* Sound alias-cache eviction policy and the DirectSound streaming flags · §5
+  "Sound aliases" · static trace. Eviction is bounded-negative (no eviction
+  site in the census); both are marked `TODO(question)` at the site.
+* Meteor zero-parameter substitution granularity — whole-record versus
+  per-field merge of `gamedata/METEOR.TDF [Default]` · §6 "Map files",
+  [06 §6.5] · manual retail observation (a mission authoring one nonzero and
+  one zero parameter, tracing which values reach the storm). Marked
+  `TODO(question)` at the site.
+* Reader for plot-mask bit 7 · §6 "Map files" · static trace over the
+  unrecovered regions. Marked `TODO(T23)` at the site; the mask preserves the
+  bit and no isolated reader exists in the bounded census.
+* Code-page behavior for high bytes · §3 · static trace. Marked `TODO(T23)` at
+  the site.
+* Language-selection interface, language-specific font fallback, and the
+  census of runtime messages that pass through the translation lookup · §3 ·
+  static trace for the interface and message census, asset census for the font
+  fallback.
+* Map schema fallback selection and the complete map content-hash input set
+  (header, plot, features, and map descriptor are traced) · §6 "Map files" ·
+  static trace; doc 08 owns the lobby consumer.
+* Draw-time interpretation of model primitive colour, texture, and flag fields
+  beyond what doc 03 narrows, and animation/model texture lifetime · doc 03,
+  §6 "Model archive (3DO)" · static trace.
+* GUI widget callback map · doc 07 · static trace. The parser-side
+  control-kind mapping and the optional `[VERSION]` subsection are established
+  in §6 "Interface panel files (`.gui`)".
+* Runtime consumers of the unit limit — which active-limit read sites gate
+  construction, AI production, and the lobby display, and the per-player
+  versus global counter split · doc 05 · static trace. §5 establishes only the
+  writer side and the key vocabulary.
+* Whether the unit-limit mode flag is read by unrecovered code · §5 · static
+  trace over the unrecovered regions. Bounded-negative in the recovered
+  corpus, so it is retained-and-inert.
+* Consumer list for document 06's category mask helper · doc 06 · static
+  trace.

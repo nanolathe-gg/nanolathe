@@ -167,20 +167,21 @@ serialization.
 
 ### Unknown
 
-The full Win32/internal key-to-token table beyond the proven held-key and
-special-key submaps, all OEM aliases, unsupported-device census, and every
-battle/front-end consumer are not established. The translator dispatch table,
-the OEM punctuation aliases, the Ctrl composition ranges, and the ordinary-mode
-zero gate are established above. The remaining unknown is consumer coverage:
-which of the battle/front-end input paths handle which tokens beyond the hotkey
-dispatcher's cases. Text-input code page, IME behavior, and keyboard repeat
-policy are not established; the mouse motion-record consumers are closed (the
-motion record lands in the presentation object's current-pointer slot, polled
-by the frame input pass into the canonical pointer record — §2, mouse records). The
-mouse button record model (including double-click fields and queue refusal),
+Open items only; the decider follows each. The translator dispatch table, the
+OEM punctuation aliases, the Ctrl composition ranges, the ordinary-mode zero
+gate, the mouse button record model (double-click fields and queue refusal),
 middle-button/wheel default processing, drag/double-click capture into
-timestamped records, and the `CF_TEXT`-only clipboard contract are established
-above.
+timestamped records, the `CF_TEXT`-only clipboard contract, and the mouse
+motion-record consumers are established above.
+
+- Consumer coverage: which battle and front-end input paths handle which
+  tokens beyond the hotkey dispatcher's cases · static trace.
+- The unsupported-device census · static trace.
+- Text-input code page and IME behavior · presentation-level platform detail;
+  no retail contract observed beyond the ASCII token set. Marked `TODO(T23)`
+  in the tail.
+- Keyboard repeat policy · static trace.
+
 
 ## 3. Modal windows, focus, and event ownership
 
@@ -235,19 +236,21 @@ tests and prevents a click intended for a dialog from selecting a world unit.
 
 ### Unknown
 
-The user-facing naming of every GUI mode/flag bit, the complete per-dialog
-Escape/Enter/focus-restoration matrix, default-control rules for every panel,
-event bubbling between parent and child panels, whether keyboard focus can be
-shared by a list and textbox, and complete overlap/capture/association
-redirection precedence remain unknown. Two of the flag meanings are
-mechanically named: `0x800` requests one extra redraw pass when the window
-closes, and `0x1000` centers a modal window in the playfield right of the
-128-pixel rail (§11). The per-dialog Escape/Enter/focus defaults are authored
-data — each GUI file declares its own `escdefault`, `crdefault`, and
-`defaultfocus` controls — so there is no hard-coded matrix to inventory; a
-reimplementation must honor the authored fields. Top-object close, predecessor
+Open items only; the decider follows each. Top-object close, predecessor
 reactivation, token suppression range, and hit-test bounds are established
-above.
+above. Two flag meanings are mechanically named: `0x800` requests one extra
+redraw pass when the window closes, and `0x1000` centers a modal window in the
+playfield right of the 128-pixel rail (§11). The per-dialog Escape/Enter/focus
+defaults are authored data — each GUI file declares its own `escdefault`,
+`crdefault`, and `defaultfocus` controls — so there is no hard-coded matrix to
+inventory, and a reimplementation must honor the authored fields.
+
+- User-facing naming of every GUI mode/flag bit · static trace.
+- Default-control rules for every panel · static trace.
+- Event bubbling between parent and child panels · static trace.
+- Whether keyboard focus can be shared by a list and a textbox · static trace.
+- Overlap, capture, and association redirection precedence · static trace.
+
 
 ## 4. GUI file and widget model
 
@@ -331,13 +334,15 @@ ordering.
 
 ### Unknown
 
-Field lengths and control-specific defaults are now established and are given
-in document 02, as is the mapping from the control-kind number to its
-per-type parser. What remains incomplete is some *use* of those fields at
-runtime: listbox item-height rules, picture-box binding, and the complete
-widget **callback map** (which runtime events each widget receives).
-Text-editor admission limits, clipboard paste bounds, and the control-type to
-runtime-family dispatch are established above.
+Open items only; the decider follows each. Field lengths, control-specific
+defaults, and the control-kind-to-parser mapping are established in document
+02; text-editor admission limits, clipboard paste bounds, and the
+control-type-to-runtime-family dispatch are established above.
+
+- Listbox item-height rules and picture-box binding at runtime · static trace.
+- The complete widget callback map — which runtime events each widget receives
+  · static trace.
+
 
 ## 5. Front-end screen and state families
 
@@ -951,12 +956,19 @@ validation, and endgame continuation.
 
 ### Unknown
 
-The exact numeric transition-graph edges for every screen family
-(successor/cancel/error), movie/intro state machine, credits timing, campaign
-transition rules, load-failure restoration, all error dialogs, and front-end
-persistence after aborted transitions remain incomplete. The controller
-phase/substate mechanism, post-battle phase machine, planet-driven briefing
-tables, and chat contract are established above.
+Open items only; the decider follows each. The controller phase/substate
+mechanism, the post-battle phase machine, the planet-driven briefing tables,
+and the chat contract are established above.
+
+- Numeric transition-graph edges for every screen family
+  (successor/cancel/error), the movie/intro state machine, credits timing,
+  campaign transition rules, load-failure restoration, every error dialog, and
+  front-end persistence after an aborted transition · static trace.
+- Process-level outcome of a missing or parser-rejected required `.GUI` file,
+  whose screen callers do not check the open result; likewise malformed
+  HATTFONT and malformed GAF payloads whose decoders return null · static
+  trace.
+
 
 ## 6. Battle HUD and side-data interface
 
@@ -1328,20 +1340,28 @@ Battle chrome should be data-driven from side-data, while semantic values and
 command availability remain runtime state. A generic GUI implementation may
 share drawing primitives, but must retain the side-data anchor contract.
 
-### Unknown
-
-All invoked retail anchors and their tuple order are established above; slide/modal
-combinations and per-side fallback for optional presentation remain incomplete.
-The ordinary footer's source priority, replacement/supplement rule, field
-pairing, and no-target clearing remain the explicit R-HUD-02R residual; the
-diagnostic `Unit State Probe` strings are not evidence for those behaviors.
-
 **Battle-rail minimap destination is closed (Established).** The battle composer
 copies the FINAL radar surface to the origin of its fixed 126×126 logical canvas.
 The aspect-dependent `originX/originY` values belong to the picture's internal
 letterbox and are not an additional screen placement. Consequently the canonical
 destination rectangle is inclusive `(0,0)..(125,125)`; drawing and input both
 apply the same letterbox inside that canvas [07 §6][07 §10].
+
+### Unknown
+
+Open items only; the decider follows each. All invoked retail anchors and their
+tuple order are established above.
+
+- Slide and modal anchor combinations, and per-side fallback for optional
+  presentation · static trace.
+- The ordinary footer's source priority, replacement-versus-supplement rule,
+  field pairing, and no-target clearing; also damage-bar source, rounding and
+  visibility, unit make/use source and formatting, and build
+  `NAME`/`DESCRIPTION` clipping or wrapping · [R-HUD-02R] · static trace. The
+  diagnostic `Unit State Probe` strings are not evidence for any of these.
+- Consumers of the HUD side anchors other than the resource anchors closed in
+  §6 · static trace.
+
 
 ## 7. Fonts, text, palette, and localization use
 
@@ -1384,10 +1404,18 @@ and missing-key fallback are not fully established.
 
 ### Unknown
 
-The full text wrapping/line-breaking policy, drop-color defaults, code-page
-behavior for extended bytes, font fallback order, and exact translation
-fallback are not fully established. Truncate-before-clip and the
+Open items only; the decider follows each. Truncate-before-clip and the
 presentation-context drop-shadow switch are established above.
+
+- Full text wrapping and line-breaking policy · static trace.
+- Drop-colour defaults · static trace.
+- Code-page behavior for extended bytes · static trace. Marked `TODO(T23)`.
+- Font fallback order beyond the closed missing-HATTFONT-to-active-FNT path
+  · asset census.
+- Translation-table missing-key rules · static trace.
+- Malformed HATTFONT handling, and the button text-pen arithmetic · §5 ·
+  static trace. Marked `TODO(question)`.
+
 
 ## 8. Software cursor and world picking
 
@@ -1961,31 +1989,7 @@ Picking should return a typed hit result with ownership/visibility metadata,
 then let the active command mode choose whether a unit, feature, terrain
 cell, minimap, or GUI control consumes the action.
 
-### Unknown
-
-The hull's existence, its four-point projection stage, unit-only hot-list
-scope, bounds-helper extrema, extrema-to-corner mapping, projected Z sign,
-polygon predicate, and score reduction are established in
-[R-SEL-02B2][R-REV-01]. **Correction (2026-08-28):** this paragraph
-previously listed the bounds-helper component mapping as still Unknown and
-said the earlier "picking hull closed" wording was too broad; the mapping is
-now closed by [R-REV-01], so what remains open is not the arithmetic but the
-committed publication record. A pixel-for-pixel presentation replacement is
-still blocked on that record and on the authored provenance of the three
-score terms, both listed as Unknown in [R-REV-01 §6]. Feature-vs-unit
-priority remains closed only in the narrow sense that features are absent
-from this unit hover list; reclaim families resolve features separately at
-the pointer.
-
-The visibility gate is the word-grid bit `1 << (localPlayer & 0x1F)` versus the
-per-viewer byte grid selected by a visibility-mode bit. Cursor handle slot 0
-identity (the unused/overflow slot) is the only remaining cursor-table item.
-The named-entry index table, the hotspot convention, the four-step shape
-chooser with its lowest-index-wins reduction, the per-latch shape table, the
-cursor-to-ground resolver, and the build-site validity/ghost cursor selection
-are established above. The world overlays' palette entries are no longer open:
-they are GUI semantic indices resolved through the GUIPAL-to-display map
-[03 §4.3], and §9 lists the ones each overlay uses.
+#### Idle-latch divert, eligibility compare, and the active-state bit
 
 One branch of the idle latch is resolved. The red/green divert exists and is
 gated on the interface-type option (a runtime word the options and settings
@@ -2011,6 +2015,37 @@ ratio while an order is being processed — so eligibility means the unit is not
 mid-order. An earlier reading of the constant as `1.0` (and the corpus note
 that endorsed it) misread the compared value; the machine code and the
 constant's bytes are unambiguous.
+
+The visibility gate is the word-grid bit `1 << (localPlayer & 0x1F)` versus the
+per-viewer byte grid selected by a visibility-mode bit. The named-entry index
+table, the hotspot convention, the four-step shape chooser with its
+lowest-index-wins reduction, the per-latch shape table, the cursor-to-ground
+resolver, and the build-site validity/ghost cursor selection are established
+above. The world overlays' palette entries are GUI semantic indices resolved
+through the GUIPAL-to-display map [03 §4.3]; §9 lists the ones each overlay
+uses.
+
+### Unknown
+
+Open items only; the decider follows each. The hull's existence, its four-point
+projection stage, unit-only hot-list scope, bounds-helper extrema,
+extrema-to-corner mapping, projected Z sign, polygon predicate, and score
+reduction are established in [R-SEL-02B2][R-REV-01].
+
+**Correction (2026-08-28).** This block previously listed the bounds-helper
+component mapping as still Unknown and called the earlier "picking hull closed"
+wording too broad. The mapping is closed by [R-REV-01]; what remains open is
+the committed publication record, not the arithmetic.
+
+- The committed pick record, and the authored provenance of the three score
+  terms · [R-REV-01 §6] · static trace. A pixel-for-pixel presentation
+  replacement is blocked on both.
+- Cursor handle slot 0 identity — the unused/overflow slot · static trace. The
+  only remaining cursor-table item.
+- Feature-versus-unit pointer priority; features are absent from the unit
+  hover list, and reclaim families resolve features separately at the pointer
+  · static trace.
+
 
 ## 9. Selection, control groups, orders, and build pages
 
@@ -2444,31 +2479,22 @@ orders, and multiplayer packets.
 
 ### Unknown
 
-Repeated group-recall centering (never centers: negative-bounded over the whole
-image), the writer lifetime of selection
-flag `0x80000000` (reader-only, no writer in the image — the `CTRL_F` filter
-branch is unreachable from retail's own code), hull geometry and jammer versus
-radar-contact picking (hull = the min-Y ground quad projected over the
-frame-produced hot-unit lists [R-REV-01]; the word-grid gate bit is the local
-player's index — both established in §8),
-page rebuild timing versus factory completion (completion sets the HUD dirty
-when the completing or produced unit is selected),
-and the exact arming trigger for the two off-button latch values (MOBILEBUILD
-armed by the build-button click on a `BMcode`-zero product; TELEPORT has no
-writer) are resolved above. The dash cadence, travelling-dash artwork, circle, icon, and ring radii of the
-queue overlay are established above ([R-P0-11 §3]); the per-order-kind draw-mask
-byte values in the runtime-built descriptor table and the overlay color-map
-entries are established too. Factory product clicks and the queue-count
-label are established as well ([R-P0-11 §1, §2]). The drag-rectangle toggle truth table, eligibility predicate,
-overlap pick order with strict `<` tie-break and inclusive `min <= x <= max`,
-fog word versus byte gate (word grid bit `1 << (localPlayer & 0x1F)` versus the
-per-viewer byte grid, selected by a visibility-mode bit — exact test in §8),
-toggle versus held-Shift styles,
-group assignment and recall gating, digit routing, pagination bit encoding,
-latch and dispatcher and cursor tables, mixed-selection AND gate, build
-cancellation with tombstone (always tombstoned for BuildWeapon and
-SelfDestruct), queue-modifier mapping, and attack-ground versus unit-target
-discrimination (BLAST always ground) are established above [P1-14].
+Open items only; the decider follows each. Everything this block used to
+recite — repeated group-recall never centering, the reader-only selection flag
+`0x80000000`, hull geometry and the word-grid gate bit, page rebuild timing
+versus factory completion, the two off-button latch arming triggers, the queue
+overlay's dash cadence and radii, the per-order-kind draw-mask bytes and
+colour-map entries, factory product clicks and the queue-count label, the
+drag-rectangle truth table, the eligibility predicate, overlap pick order, the
+fog word-versus-byte gate, group assignment and recall gating, digit routing,
+pagination bit encoding, the latch/dispatcher/cursor tables, the
+mixed-selection AND gate, build cancellation with tombstones, queue-modifier
+mapping, and attack-ground discrimination — is established above, in
+[R-P0-11 §1–§3], [R-REV-01], and [P1-14].
+
+- Per-window census of the authored gadget association ids that resolve each
+  widget's callback target · doc 02 §6 · static trace.
+
 
 ## 10. Camera, scrolling, projection, and radar/minimap
 
@@ -2666,28 +2692,33 @@ boundary. The retail paths do not share one conversion routine: the minimap
 lens does not reuse the main view's cursor-to-world projection [03 §3.11], and
 the ground resolver is a distinct search (§8).
 
+#### Camera and minimap closures
+
+Unit, commander, feature, and projectile art sources and their direct
+`PALETTE.PAL` indexing are closed in [03 §3.9]. The camera clamp order, the
+direct-radar conversion, the drag/current-camera branch, the click-versus-drag
+gate, the terrain-height projection, and the radar/visibility update cadence
+are established above, as is minimap generation (126-pixel canvas, 2x
+supersample, picture/temp/mapped/final surfaces; the lens indicator is two
+one-pixel lines in map entry 15, §6).
+
 ### Unknown
 
-The camera clamp order, the direct-radar conversion, the drag/current-camera
-branch, the click-vs-drag gate, the terrain-height projection, and the
-radar/visibility update cadence are established above (minimap generation:
-126-pixel canvas, 2x supersample, picture/temp/mapped/final surfaces; the lens
-indicator is two one-pixel lines in map entry 15, §6). What remains open is
-the behavior of the camera clamp in unusual domains — maps whose view size
-exceeds the map size on an axis, where the ordered clamp form is the only
-established behavior — and the unresolved mapping of the three sensor callback
-tables to the radar versus jammer palette entries. Unit, commander, feature,
-and projectile art sources and their direct `PALETTE.PAL` indexing are closed
-in [03 §3.9]; start-position markers remain doc 03's item.
+Open items only; the decider follows each.
 
-The exact interleaving when a host-frame input pass and one or more phase-10
-passes occur during the same outer frame remains **Unknown**; the two writers'
-individual ordering is established, but their caller-level scheduling is not.
-It is also **Unknown** whether any transient follow-target or shake state is
-reconstructed from a non-Camera save account. The handoff's deterministic
-held-intent seam is documented above, but whether a compatibility mode should
-expose it alongside retail's direct host-frame input cadence is an
-implementation decision, not a further retail finding.
+- Camera clamp behavior in unusual domains — a map whose view size exceeds the
+  map size on an axis, where the ordered clamp form is the only established
+  behavior · static trace.
+- Mapping of the three sensor callback tables to the radar versus jammer
+  palette entries · doc 03 §3.3 · static trace.
+- Interleaving when a host-frame input pass and one or more phase-10 passes
+  occur in the same outer frame; each writer's individual ordering is
+  established, their caller-level scheduling is not · [R-CRD-006 §1] · static
+  trace.
+- Whether any transient follow-target or shake state is reconstructed from a
+  non-`Camera` save account · doc 08 · static trace.
+- Start-position marker art and placement · doc 03 · static trace.
+
 
 ## 11. Running display, pause, chat, options, and outcomes
 
@@ -2805,14 +2836,20 @@ can remain composed under the appropriate overlay.
 
 ### Unknown
 
-Exact pause authorization in multiplayer, multiplayer forwarding authority
-for chat/pause/speed packets, chat commit-versus-cancel semantics on every
-send route (including terminator inclusion per route), scrollback drain
-ownership in the in-battle HUD (only the heartbeat drain is closed), outcome
-transition timing, and the per-value endgame bar-fill animation mechanism are
-incomplete. The chat open/send contract, the `+` command mini-language
-(`+<digit>`, `+a`/`+e`), the scrollback ring, the overlay
-gates, and the category-cadence statistics animation are established above.
+Open items only; the decider follows each. The chat open/send contract, the
+`+` command mini-language (`+<digit>`, `+a`/`+e`), the scrollback ring, the
+overlay gates, and the category-cadence statistics animation are established
+above.
+
+- Chat commit-versus-cancel semantics on every send route, including whether
+  the terminator is included per route · static trace.
+- Scrollback drain ownership in the in-battle HUD; only the heartbeat drain is
+  closed · static trace.
+- Outcome transition timing, and the per-value endgame bar-fill animation
+  mechanism; it may ride the type-13 timed/range gadget path · static trace.
+- Pause authorization and forwarding authority for chat, pause, and speed
+  packets in multiplayer · static trace. Out of implementation scope.
+
 
 ## 12. Lobby and session shell
 
@@ -2872,149 +2909,125 @@ supported inference, not established fact.
 
 ### Unknown
 
-Exact serial/modem UI validation, lobby timeout progression, map-preview
-camera behavior, the role separation of shared player-word bit `0x20`
-between READY display and map-control authority, and the complete
-ready/start protocol are not established here. Slot classes, ready
-propagation, map-control gating, UNUSED/BLOCKED substitution, and
-minimum-ping write-back are established above.
+Open items only; the decider follows each. Slot classes, ready propagation,
+map-control gating, UNUSED/BLOCKED substitution, and minimum-ping write-back
+are established above.
+
+- Serial and modem UI validation, lobby timeout progression, and the complete
+  ready/start protocol · static trace. Multiplayer-only, out of Nanolathe's
+  implementation scope.
+- Map-preview camera behavior · static trace.
+- Role separation of shared player-word bit `0x20` between READY display and
+  map-control authority; both consumers are proven and the semantics are not
+  separable statically · manual retail observation.
+
 
 ## Missing and unknown
 
-* The full Win32/internal token table and all OEM aliases are established
-  (§2); what remains is the complete battle/front-end consumer census —
-  which input paths handle which tokens beyond the hotkey dispatcher's cases —
-  and the unsupported-device census.
-* Mouse motion-record consumers and downstream button-record ownership are
-  closed: the motion record lands in the presentation object's fixed
-  current-pointer slot, the frame input pass polls it (queue record when the
-  button ring is non-empty, motion slot otherwise) into the canonical pointer
-  record, and the pointer update, GUI hit tests, and click/drag dispatch
-  consume it. Middle-button/wheel default processing and the reserved-slot
-  queue refusal are established.
-* Text-input code page and IME behavior (`TODO(T23)`: presentation-level
-  platform detail, no retail contract observed beyond the ASCII token set),
-  chat commit-versus-cancel semantics on every send route including
-  terminator inclusion, and scrollback drain ownership in the in-battle HUD
-  (CF_TEXT-only clipboard, paste/truncate bounds, the chat `+` vocabulary —
-  `+<digit>` custom recipients, `+a`/`+e` recipient modes, and the
-  mask-8-only dispatch table entries `plan`/`weight`/`limit` that no chat
-  route matches — are established).
-* GUI mode/flag-bit naming: `0x800` (extra redraw on close) and `0x1000`
-  (modal centering) are mechanically named; the complete per-dialog
-  Escape/Enter/focus-restoration matrix is authored data (per-GUI
-  `escdefault`/`crdefault`/`defaultfocus` fields), not a hard-coded matrix;
-  event bubbling and overlap/capture/association redirection precedence remain
-  unknown.
-* Listbox, scrollbar, font, and picture-box behavior beyond the observed
-  common paths, and the complete widget callback map. The `.gui` grammar,
-  field lengths, control defaults, control-kind parsing, and runtime
-  control-kind dispatch are established; the callback targets are
-  data-driven through the authored gadget association ids resolved by each
-  window's handler, and the full per-window association census is open.
-* Exact frontend transition-graph edges (successor/cancel/error per screen
-  family), movie/intro/credits handling, load-failure restoration, and abort
-  recovery (controller phase/substate mechanism, post-battle phases, planet
-  briefing tables, and chat contract are established). The final
-  process-level outcome of a missing or parser-rejected required `.GUI` file
-  remains unknown even though its screen callers do not check the open result;
-  malformed HATTFONT and malformed GAF payloads whose decoders return null
-  likewise remain open.
-* Complete HUD side-anchor to draw/hit-test consumer mapping (the resource
-  anchors' consumers are established in §6 — text, `0` literals, current
-  values, production/consumption, and bar fills in the composer's side record
-  — the remaining anchors' consumers stay open), and slide/modal combinations
-  (anchor list, tuple order, slide animation, and frame-composition passes are
-  established). R-HUD-02R narrows the remaining footer gap: state priority,
-  replacement/supplement behavior, ordinary footer anchor pairing, damage-bar
-  source/rounding/visibility, unit make/use source and formatting, and build
-  `NAME`/`DESCRIPTION` clipping or wrapping are Unknown. The malformed
-  non-null GAF payload outcome remains unknown.
-* Exact battle HUD optional-asset fallback behavior beyond the closed
-  `intgaf` panel entries, side fonts, authored GUI page, page GAF, support GAF,
-  and common-button resolution above.
-* Full FNT text wrapping, drop-color defaults, code-page behavior
-  (`TODO(T23)`), language-specific font fallback order beyond the closed
-  missing-HATTFONT-to-active-FNT path, and translation-table missing-key rules
-  (truncate-before-clip and the presentation-context drop-shadow switch are
-  established). The GAF-font loader's capital-I YOffset normalization is
-  established; malformed HATTFONT handling and the button text-pen formula
-  are `TODO(question)` (§5).
-* Complete translation lookup and missing-string fallback behavior.
-* Exact cursor hotspots (established: the GAF frame's authored offsets),
-  remaining command-specific validity rules, and cursor
-  handle slot 0 identity (latch-value table, cursor index table, build-site
-  validity cursors, and the queue-overlay color pairs 3/10 and 1/9 are
-  established; the overlay color-map entries are closed in [R-P0-11 §3]).
-* Picking is closed through the admission shape, the bounds-helper extrema
-  and their extrema-to-corner mapping, the projected Z sign, the strict
-  polygon predicate, and the score reduction: the hover path walks the
-  frame-produced `HOT UNITS` list, projects the transformed selected-root
-  bounds as a min-Y ground quad, rejects edge equality in the polygon helper,
-  and applies the strict-score reduction [R-SEL-02B2][R-REV-01]. The
-  committed pick record and the authored provenance of the three score terms
-  remain **Unknown**; the current 16-pixel presentation picker cannot replace
-  this path without that record. The visibility gate is the word-grid bit
-  `1 << (localPlayer & 0x1F)` versus the per-viewer byte grid; the byte-grid
-  writer semantics remain owned by doc 03.
-* Selection overlap pick order — drag endpoints sorted independently, inclusive
-  `min <= x <= max` tested per axis, stable pool sweep with strict `<` distance
-  tie-break favoring lower slot [P1-14] — and fog word bit versus byte
-  distinction, toggle versus commit modifier styles (`GetAsyncKeyState`-style held
-  query for world commit versus drag word bit 2), and mixed-selection gate as
-  AND across the selected set [P1-14] are established; repeated group-recall
-  never centers the camera (whole-image bounded-negative), and selection flag
-  `0x80000000` is reader-only — no writer exists in the image, so the `CTRL_F`
-  filter branch is unreachable from retail's own code.
-* Build cancellation and refund — tail-most matching walk with tombstone bit
-  that skips `TargetCleared`, with `BuildWeapon` and `SelfDestruct` always
-  tombstoned because the tombstone compares against the front anchor regardless
-  of segment [P1-14] — and queue-modifier mapping (Replace purges unprotected,
-  Append and Shift-queue both insert after the active marker without purging,
-  Internal-Auto is the pump's head-insert) plus attack-ground versus
-  unit-target discrimination (ATTACK picks unit when hit and hostile, otherwise
-  ground; BLAST always ground) [P1-14] are established; factory product clicks are a separate counted producer
-  (+1/+5/-1/-5 with the no-purge insert hard-set, tail-most cancellation, and
-  the `+%d`/`%d +%d` queue-count label) — [R-P0-11 §1, §2]. The off-button
-  latch writers are closed: MOBILEBUILD is armed by the build-button click on a
-  `BMcode`-zero product, and TELEPORT has no writer in the image (consumer-only
-  switch key).
-* Order-class semantics for immediate and special commands are established via
-  the fixed dispatcher chain STOP into ATTACK, BLAST, DEFEND, REPAIR, PATROL,
-  RECLAIM, CAPTURE, UNLOAD, LOAD or PICKUP alias, and default MOVE with gate
-  check, and latch values for TELEPORT and MOBILEBUILD as off-button consumers
-  of the same 14-entry table [P1-14]; the TELEPORT arming site does not exist
-  (bounded-negative whole image) and MOBILEBUILD's is the build-button click;
-  minor OEM aliases are closed (§2).
-* Build-page patching and rebuild timing — page-number bit encoding
-  `(page & 7) << 23` cleared by mask `0xFC7FFFFF` with bit 22 paged indicator
-  cleared by `0xFFBFFFFF`, and page-count guard are established [P1-14];
-  factory completion marks the HUD dirty when the completing or produced unit
-  is selected; the product-slot count is six (gadget slots 4..9, chosen by the
-  authored button byte).
-* Alternate minimap drag/current-camera branch boundary vectors and mode-bit
-  truth table are established (drag branch: camera plus viewport-clamped mouse
-  minus origin; lens branch: `(mouse − origin)·play/radar`; branch bits 0/1 and
-  the derived bit 2); unusual-domain camera bounds (view exceeding map on an
-  axis) remain open; terrain-height projection and dirty-field semantics are
-  established.
-* Minimap/radar colors and art sources are established (regular unit blips use
-  an owning-player frame selector into `radlogohigh`, commander markers use
-  frame 0 of `nuclogo`, and feature contacts use the same selector into
-  `h2oboom2`; selected GAF bytes are active `PALETTE.PAL` indices; circles
-  entry 10; jam 12; rings 15; dot 14; contacts per tick, MAPPED per dirty,
-  blink every 8 host frames); start-position markers remain doc 03's item.
-* Running-display refresh cadence and hover ownership are closed: the pointer
-  update (hover, cursor shape, placement validity) runs once per host frame as
-  the battle frame handler, and the 30-entry fixed-stride scrollback ring and
-  heartbeat drain are established.
-* Multiplayer pause authorization, speed UI synchronization, chat/pause
-  packet forwarding authority, and the role separation of shared player-word
-  bit `0x20` between READY display and map-control gate (both consumers
-  proven; unified semantics not separable statically).
-* TCP/modem/serial setup semantics, timeout rules, and map-preview behavior.
-* Campaign continuation timing and the endgame per-value bar-fill animation
-  mechanism (message-box surface, header strings, per-player stat rows, and
-  the seven-category +10-tick statistics cycle are established; the per-value
-  easing may ride the type-13 timed/range gadget path — not separately
-  closed).
+Open items only. Each bullet states what is unknown, the section that owns it,
+and the decider that would close it. Findings that closed an item live in the
+body — several under `R-<id>` headings — and are not restated here.
+
+**Correction (2026-08-28, RWU-00-5).** This tail interleaved open items with
+long parenthetical recitals of established behavior — picking, selection
+overlap order, build cancellation, order-class dispatch, build-page patching,
+minimap colours, and the running-display cadence each appeared as a bullet
+whose open half was one clause inside a paragraph of closures. The recitals
+are deleted here only; §§2, 6, 8–11, [R-P0-11], [R-REV-01], [R-HUD-02R] and
+[R-CRD-006] continue to own them. The document's eleven "### Unknown" blocks
+were reshaped the same way in the same pass; the established text some of them
+carried (the idle-latch red/green divert, the eligibility compare against
+`0.0`, the battle-rail minimap destination) was promoted into the surrounding
+section rather than deleted.
+
+### Input and text
+
+- Which battle and front-end input paths handle which key tokens beyond the
+  hotkey dispatcher's cases, and the unsupported-device census · §2 · static
+  trace.
+- Keyboard repeat policy · §2 · static trace.
+- Text-input code page and IME behavior · §2, §7 · presentation-level platform
+  detail; no retail contract observed beyond the ASCII token set. Marked
+  `TODO(T23)`.
+- Chat commit-versus-cancel semantics on every send route, including whether
+  the terminator is included · §11 · static trace.
+- Scrollback drain ownership in the in-battle HUD; only the heartbeat drain is
+  closed · §11 · static trace.
+- Full FNT text wrapping and line-breaking, drop-colour defaults,
+  translation-table missing-key rules, and the complete translation lookup
+  fallback · §7 · static trace.
+- Language-specific font fallback order beyond the closed
+  missing-HATTFONT-to-active-FNT path · §7 · asset census.
+- Malformed HATTFONT handling and the button text-pen arithmetic · §5 ·
+  static trace. Marked `TODO(question)`.
+
+### Widgets and screens
+
+- User-facing naming of every GUI mode/flag bit; `0x800` (extra redraw on
+  close) and `0x1000` (modal centering) are mechanically named · §3 · static
+  trace.
+- Where the window bevel uses the GUI context's semantic colour field `20`;
+  fields `17` and `0` are placed · §3 · static trace. Marked `TODO(T23)`.
+- Event bubbling between parent and child panels, default-control rules per
+  panel, shared list/textbox focus, and overlap/capture/association
+  redirection precedence · §3 · static trace.
+- Listbox item-height rules, picture-box binding, and the complete widget
+  callback map, including the per-window census of authored gadget association
+  ids · §4, doc 02 §6 · static trace.
+- Frontend transition-graph edges per screen family (successor/cancel/error),
+  the movie/intro state machine, credits timing, campaign transition rules,
+  load-failure restoration, every error dialog, and front-end persistence
+  after an aborted transition · §5 · static trace.
+- Process-level outcome of a missing or parser-rejected required `.GUI` file,
+  and of malformed HATTFONT or malformed GAF payloads whose decoders return
+  null; the screen callers do not check the open result · §5 · static trace.
+- Battle HUD optional-asset fallback beyond the closed `intgaf` panel entries,
+  side fonts, authored GUI page, page GAF, support GAF, and common-button
+  resolution · §6 · static trace.
+- Consumers of the HUD side anchors other than the resource anchors closed in
+  §6, and slide/modal anchor combinations with per-side fallback · §6 ·
+  static trace.
+- Ordinary footer source priority, replacement-versus-supplement rule, field
+  pairing and no-target clearing; damage-bar source, rounding and visibility;
+  unit make/use source and formatting; and build `NAME`/`DESCRIPTION` clipping
+  or wrapping · §6 [R-HUD-02R] · static trace. The diagnostic `Unit State
+  Probe` strings are not evidence for any of these.
+
+### Picking, selection, and orders
+
+- The committed pick record, and the authored provenance of the three score
+  terms · §8 [R-REV-01 §6] · static trace. A pixel-for-pixel presentation
+  replacement of the picker is blocked on both. Marked `TODO(question)`.
+- Cursor handle slot 0 identity — the unused/overflow slot · §8 · static
+  trace.
+- Feature-versus-unit pointer priority; features are absent from the unit
+  hover list and reclaim families resolve them separately at the pointer · §8
+  · static trace.
+- Remaining command-specific cursor validity rules · §8 · static trace.
+- Manual unit and point target encoding, command-fire replacement, and the
+  manual-versus-autonomous latch callers · §9, doc 06 §3.2 · static trace.
+
+### Camera, minimap, and session UI
+
+- Camera clamp behavior when the view size exceeds the map size on an axis;
+  the ordered clamp form is the only established behavior · §10 · static
+  trace.
+- Mapping of the three sensor callback tables to radar versus jammer palette
+  entries · §10, doc 03 §3.3 · static trace.
+- Interleaving when a host-frame input pass and one or more phase-10 passes
+  occur in the same outer frame · §10 [R-CRD-006 §1] · static trace.
+- Whether any transient follow-target or shake state is reconstructed from a
+  non-`Camera` save account · §10, doc 08 · static trace.
+- Start-position markers · doc 03 · static trace.
+- Outcome transition timing, and the per-value endgame bar-fill animation
+  mechanism, which may ride the type-13 timed/range gadget path · §11 ·
+  static trace.
+- Campaign continuation timing · §5, doc 08 · static trace.
+- Role separation of shared player-word bit `0x20` between READY display and
+  map-control authority; both consumers are proven and the semantics are not
+  separable statically · §12 · manual retail observation.
+- Multiplayer pause authorization, speed UI synchronization, chat/pause packet
+  forwarding authority, serial/modem/TCP setup semantics, lobby timeout
+  progression, and the complete ready/start protocol · §11, §12 · static
+  trace. Out of Nanolathe's implementation scope (no multiplayer).
+- Map-preview camera behavior · §12 · static trace.

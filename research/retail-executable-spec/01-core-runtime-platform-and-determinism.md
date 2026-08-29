@@ -917,6 +917,45 @@ sequence bit-identically. The meteor-scheduling state, by contrast, is saved
 and restored in its own box. Replay formats are not covered by this save-box
 contract.
 
+### 7.4 A wall-clock leak into authoritative state (2026-08-28)
+
+Established by RWU-04-1 from the ground-mover trace of `[04 §8.1 R-MOV-01 §5]`.
+Sections 7.1 and 7.2 establish the two deterministic streams and section 4.1
+the tick counter. Those are not the whole determinism boundary: one
+authoritative write is driven by a **wall-clock** counter instead.
+
+**Established.** The engine keeps an animation counter formed as
+`GetTickCount()` multiplied by a configured rate field and divided by 1000. It
+is read all over the presentation layer, which is unremarkable. It is also read
+inside the simulation's post-move terrain conform, in the hover-bob branch that
+runs for every unit whose definition sets `canhover`: the counter's low five
+bits select the phase of a per-corner cosine offset of at most two height
+units, and the four perturbed corner heights are then averaged into the unit's
+**integer height word** — authoritative state that document 04's medium-band
+classifier, below-water half-speed branch and water damage all compare against
+([04 §9.1], [04 §9.2], [04 §8.1 R-MOV-01 §5]). The counter is sampled once per
+corner, four times per hovering unit per tick.
+
+This is the only clock or non-tick input anywhere in the mover chain: a bounded
+census of the mover tick, ground steering, speed update, position and occupancy
+commit, movement-rate classifier, band classifier, post-move correction,
+terrain conform and route-follower service finds no other, and no simulation-
+or CRT-stream draw at all. It does not make retail's single-player behavior
+non-reproducible in any way the two streams already bound — it makes a hovering
+unit's committed height a function of elapsed real time.
+
+**Unknown.** The writer and configured value of the rate field that scales
+`GetTickCount()` here · §7.4, `[04 §9.1]` · static trace. Whether the two-unit
+perturbation can carry a hovering unit's height across one of the three
+thresholds that read it is document 04's open item ([04 §9.1] tail).
+
+**Consequence for Nanolathe.** `docs/INVARIANTS.md` forbids `time.Now()` in sim
+packages, so this contract cannot be reproduced literally. Reproducing the bob
+from the tick counter instead is a divergence and must be recorded as one by
+whoever implements hover presentation; leaving the bob out entirely is the
+other option. Either way the choice belongs in `docs/SPEC_CONFLICTS.md`
+(orchestrator-owned), not in an unmarked implementation decision.
+
 ## 8. x87 floating point and integer conversion
 
 The executable uses x87 arithmetic; no SSE simulation path is established.
@@ -1058,7 +1097,7 @@ subsystem-specific.
 - Phase 10 was previously labelled "ledger and death cleanup"; it is the
   camera/scroll position update with camera shake (a CRT consumer). The dying
   latch and finalization belong to phase 2's slot-end death handling.
-- Phase 11 was previously kept as a `TODO(T23)` no-op registration point, then
+- Phase 11 was previously kept as a T23 placeholder no-op registration point, then
   described as "a real per-object update sweep over ten vtable-backed object
   lists (removal and destruction on zero return)" with the object family
   unidentified. Both refinements are superseded: the sweep evaluates a
@@ -1116,148 +1155,109 @@ subsystem-specific.
 
 ## Missing and unknown
 
-The following are intentionally left as implementation TODOs rather than
-invented behavior.
+Open items only. Each bullet states what is unknown, the section that owns it,
+and the decider that would close it. Findings that closed an item live in the
+body under their `R-<id>` headings and are not restated here.
+
+**Correction (2026-08-28, RWU-00-5).** This list previously mixed open items
+with closure narratives — bullets that began "is closed", "is narrowed", or
+"is resolved" and then recited a finding already written in the body. That
+made the tail unusable as a work list: a reader could not tell which bullets
+were still open. The closures were duplicates of body text (§4.4.1
+[R-CORE-01], §7.3 [R-CORE-02], §4.4.1's meteor-spawner identity, §6.1's pool
+cap) and have been deleted from the tail only; no finding was removed from the
+document.
 
 ### Process and platform
 
-- Symbolic OS meaning of the two `SystemParametersInfoA` actions (`0x5E`/`0x5D`);
-  the numeric call sequence and restore semantics are established above.
-- Exact meanings of any remaining window style/ex-style bits outside the
-  established `0x90080000`/`0x00040000`/`CS_DBLCLKS` values and client-area
-  adjustment.
-- Per-message parameter semantics beyond the case list above are closed by the
-  dispatch-table note: activation flag byte, close-hook call, key translation
-  helpers, input-event timestamp arithmetic, device-change/custom-message
-  handler indirection, and palette-realize branches are all traced; no
-  `WM_TIMER`/`SetTimer` usage exists in the window procedure.
-- Singleton semaphore release and full shutdown ordering after exceptional
-  failures (second-instance path returns `-1` with no handoff or activation).
-- Watchdog/conditional helper thread purpose is closed: a debug-helper dialog
-  message loop with a transient priority boost, no simulation-global access;
-  normal startup creates no thread. Termination signal is the `WM_QUIT` of its
-  own message loop.
-- Every `CreateThread`, TLS destructor, thread priority, and critical-section
-  callsite not covered by the current notes — the bounded census (3 thread
-  creation sites, 1 TLS allocation, 8 critical-section initializations,
-  12 enter/leave pairs) is in the thread note; the destructor and
-  `DeleteCriticalSection` sites remain outside the recovered window.
-- Owners and lifetime of `VirtualProtect`, `VirtualQuery`, file mappings,
-  device-control, console-handler, environment, locale, and module-loader
-  calls — the bounded site census is in the platform note (each facility has
-  exactly one recovered wrapper site plus its consumers).
+- Symbolic OS meaning of the two `SystemParametersInfoA` actions `0x5E`/`0x5D`;
+  the numeric call sequence and restore semantics are established · §2.2 ·
+  static trace.
+- Meaning of the window style and ex-style bits outside the established
+  `0x90080000` / `0x00040000` / `CS_DBLCLKS` values and the client-area
+  adjustment · §2.2 · static trace.
+- Shutdown ordering after an exceptional failure, and whether the singleton
+  semaphore is released on that path; the second-instance path is established
+  (returns `-1`, no handoff, no activation) · §2.3 · static trace.
+- TLS destructor and `DeleteCriticalSection` callsites: the thread and lock
+  census is bounded by the recovered function window, and these sites fall
+  outside it · §5.1, §5.2 · static trace over the unrecovered regions.
+- Complete consumer sets for `VirtualProtect`, `VirtualQuery`, file mappings,
+  device control, the console handler, environment, locale, and the module
+  loader; each facility has exactly one recovered wrapper site, but its callers
+  are not enumerated · §3.2 · static trace.
 
 ### Clock, network, and determinism
 
-- Complete pause/speed packet framing and host-permission rules: the receive
-  side is established (sub-type byte selects pause-bit update or speed apply
-  without rebroadcast) and the speed send is the common setter's broadcast;
-  the pause send's byte layout remains a network-framing residual.
-- Network future-frame overflow policy, retransmission wrap, and all late-join/
-  resynchronization behavior.
-- RNG state persistence (established as not saved; reseeded because load
-  re-enters battle entry, §7.3 [R-CORE-02]) versus
-  scheduler block persistence (established as saved above); network state and
-  replay formats remain separate unknowns; the per-tick deadline ring of the
-  post-loop tail is not serialized (its account would appear in the save
-  writer's fixed account list, which contains none).
-- Phase 11's ten object lists are closed (§4.4.1 [R-CORE-01]): the family is
-  the ten effect strips of the rendering contract (doc 03 "Strip storage and
-  lifecycle"), the sweep evaluates a removal verdict before the update work
-  and destroys on a positive verdict, and the three post-loop barrier calls
-  decompile to empty bodies (no hidden work). The remaining strip questions —
-  producers for strips 0, 1, 3, 5, and 8, and per-object update internals —
-  live in doc 03's account.
-- The compiled weapon-record fields that carry the camera-shake magnitude and
-  duration into the impact dispatcher's shake request are established
-  behaviorally (§4.4.1 [R-CORE-01]); their positions in doc 06's compiled
-  weapon-record field map remain unmapped (`TODO(question)`). The authored
-  keys (`shakemagnitude`/`shakeduration`) and the duration × 30 compile-time
-  conversion are already established in [fmt tdf] and doc 06.
-- Whether the briefing wind display globals have any reader outside the
-  briefing/front-end region (bounded absence: none in the recovered image; a
-  dataflow census over unrecovered regions would settle it).
+- Send-side byte layout of the pause packet (the receive side and the speed
+  send are established) · §4.3 · static trace. Marked `TODO(question)` at the
+  site.
+- Record owner of the 30-entry post-loop deadline ring; the receive-frame-
+  window reading is a supported inference · §4.4 · static trace. Marked
+  `TODO(question)` at the site.
+- Network future-frame overflow policy, retransmission wrap, and late-join
+  resynchronization · §4.3 · static trace. Out of Nanolathe's implementation
+  scope (no multiplayer), recorded so the spec stays exhaustive.
+- Whether network transport state and any replay format are serialized; the
+  RNG stream is established as not saved and the scheduler block as saved
+  · §7.3 · static trace.
+- Positions of the camera-shake magnitude and duration fields in doc 06's
+  compiled weapon-record field map; the behavior, the authored keys
+  `shakemagnitude` / `shakeduration`, and the duration × 30 compile-time
+  conversion are established · §4.4.1, doc 06 · static trace.
+- Whether the briefing wind-display globals have any reader outside the
+  front-end region; bounded absence in the recovered image only · §7.3 ·
+  static trace over the unrecovered regions.
 - Whether the networked-mode commander placement loop also runs when a saved
-  networked game is loaded (the loop is not gated on the save box; only
-  affects multiplayer, which is out of scope).
-- Complete list of authoritative `__ftol` callers and any non-default x87
-  control-word mutation reachable from simulation; the scaled-clock factor
-  field is resolved as 30 (not a control word).
+  networked game is loaded; the loop is not gated on the save box · §4.4 ·
+  static trace. Multiplayer-only, out of implementation scope.
+- Complete list of authoritative `__ftol` callers, and whether any non-default
+  x87 control-word mutation is reachable from simulation · §8 · static trace.
+- Writer and configured value of the rate field scaling the `GetTickCount()`
+  animation counter that reaches the authoritative height word of `canhover`
+  units · §7.4, doc 04 §9.1 · static trace. The read itself and its write path
+  into authoritative state are established ([R-MOV-01 §5]).
 
 ### Memory and queues
 
-- The allocator’s backing implementation is narrowed: `HeapCreate`/`HeapAlloc`
-  wrappers over the process heap with tagged blocks; fixed pools are
-  zero-filled by their initializers, transient allocations are not; wrappers
-  return 0 on failure and callers either propagate the null or show a
-  message box and quit. Arena boundaries beyond the pool initializers remain
-  open.
-- The universal unit-pool maximum is closed: physical cap = catalog unit-
-  definition count × 10 + 1 with per-player slices, slot 0 null, lowest-free
-  immediate reuse, no generation counter (bounded-negative over the
-  decompiled corpus); stale handles alias later occupants.
-- Failure side effects of specialized projectile allocators beyond the meteor
-  spawner, whose placement is closed (it appends to the shared projectile pool
-  from phase 9 — the meteor-shower strike scheduler — and silently drops when
-  the pool is full, with the hit timer already advanced so the slot is not
-  retried). The earlier "wind-field projectile" name for that spawner is
-  retracted; it is the meteor spawner (§4.4.1 [R-CORE-01]).
-- Effect-strip layouts are largely typed — ten fixed strips drawn in barrier
-  order, fed by one shared segment pool capped at 400 entries with oldest-first
-  FIFO eviction and a per-tick compaction pass; what remains open is per-strip
-  ownership registration for effects outside the nanolathe/beam/smoke families,
-  plus mission-object, path-debt, and audio-node layouts (the "timer" layout of
-  earlier revisions is resolved as the network deadline ring).
-- Queue overflow, linked-list cycle defense, and whether all same-tick inserts
-  are drained immediately or deferred by queue family.
-- Save serialization is narrowed but not complete: order/task nodes serialize
-  across both queue segments including their duration credit and wake state
-  (their save/load pair is traced); feature saves are a plotmap census into
-  three typed record families with counts — no free-list serialization exists;
-  stockpile production state (slot byte, queue rounds, progress) survives;
-  meteor shower globals persist in their own save block; player economy stock,
-  counters, and capacities are raw single-precision bits live and therefore
-  serialize bit-exact. Still open: remaining box-level field maps.
+- Arena boundaries beyond the fixed-pool initializers; the allocator itself is
+  established as `HeapCreate`/`HeapAlloc` wrappers with tagged blocks · §6.1 ·
+  static trace.
+- Failure side effects of the specialized projectile allocators other than the
+  meteor spawner, whose placement and silent-drop behavior are established
+  · §6.3 · static trace.
+- Per-strip ownership registration for effect strips outside the nanolathe,
+  beam, and smoke families, and the mission-object, path-debt, and audio-node
+  layouts · §6.1, doc 03 · static trace.
+- Queue overflow and linked-list cycle defense, and whether same-tick inserts
+  are drained immediately or deferred, per queue family · §6.2, §6.3 · static
+  trace.
+- Remaining save box-level field maps; order/task nodes, feature records,
+  stockpile state, meteor globals, and player economy stock are already
+  established as serialized · §7.3 "Scheduler persistence", doc 08 · static
+  trace.
 
 ### Configuration and I/O
 
-- Registry versus INI versus command-line precedence is narrowed: INI reads
-  are confined to diagnostics helpers (none on the startup/front-end/battle
-  config path); registry values load at front-end entry with
-  default-and-write-back; command-line switches are parsed in WinMain before
-  display init. Precedence for overlapping scalars: defaults, then registry,
-  then command line; the two scalar command-line slots are not individually
-  mapped against their registry twins.
-- Archive enumeration order within one wildcard group (host `FindFirstFileA`
-  order, not sorted) and CD-drive behavior: every `DRIVE_CDROM` drive is
-  scanned in drive-letter order and contributes its archives to the mount
-  table in that order; there is no pick-one CD selection.
-  Same-archive duplicate-name resolution and backslash-only slash/traversal
-  rules are established in document 02 and §3.2.
-- Exact save header/version compatibility and all replay chunk semantics; the
-  normal-save scheduler block is established above.
-- Executable-directory fallback: `GetModuleFileNameA(NULL, 256-byte buffer)`
-  then `SetCurrentDirectoryA` on its directory component establishes the
-  content CWD independent of the launch directory; return values are not
-  checked, so truncation/failure behavior is not a deliberate fallback and a
-  safe implementation may fail with a diagnostic instead of reproducing unsafe
-  reads.
+- How the two scalar command-line slots interact with their registry twins;
+  the precedence order (defaults, then registry, then command line) is
+  established · §3.1 · static trace. Marked `TODO(question)` at the site.
+- Same-archive duplicate-name resolution beyond what document 02 establishes,
+  and archive enumeration order within one wildcard group (host
+  `FindFirstFileA` order, not sorted) · §3.2, doc 02 · asset census against the
+  reference install.
+- Save header and version compatibility rules, and all replay chunk semantics
+  · §7.3, doc 08 · static trace.
 
 ### Error and diagnostics
 
-- Which failures merely select a fallback and which terminate the process:
-  singleton failure exits `-1` silently; display init failure shows
-  "Environment Initialization Failed!" and cleans up; file-mapping failures
-  carry graded codes 1/2/3; heap failures propagate null or message-box-and-
-  quit; input-queue full is a silent drop.
-- Exception-filter reporting and minidump/debug-helper protocol: the filter is
-  installed once at startup unless masked; the debug-helper DLL and imagehlp
-  minidump machinery engage only with the enable switches.
-- How the integrity-breach UI maps to disconnect state (the breach packet is
-  type `0x27`; posts the translated chat notice repeatedly, then kick and
-  disconnect cleanup); the front-end state machine's `.zrb` list files are
-  loaded at specific states and the checksum self-check runs between every
-  state transition, but the list-file parse itself is in unrecovered code.
-  Anti-tamper coverage is otherwise closed: the code-checksum stub returns
-  zero (dead branch) and self-checks run only on front-end state switches,
-  never per tick.
+- Which remaining failures select a fallback and which terminate the process;
+  the established set is singleton failure (silent `-1`), display-init failure
+  ("Environment Initialization Failed!" then cleanup), graded file-mapping
+  codes 1/2/3, heap null-or-quit, and silent input-queue drop · §9 · static
+  trace.
+- Exception-filter reporting and the minidump/debug-helper protocol, which
+  engage only behind the enable switches · §9 · static trace.
+- How the integrity-breach UI maps to disconnect state, and the parse of the
+  front-end `.zrb` list files, which lies in unrecovered code · §9 · static
+  trace over the unrecovered regions.

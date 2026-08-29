@@ -134,7 +134,13 @@ func (s *Session) publishSnapshot(tick uint32) {
 				v.Model = u.Def.ObjectName
 				v.FootX = int8(u.Def.FootprintX)
 				v.FootZ = int8(u.Def.FootprintZ)
-				v.BMCode = u.Def.BMCode // model-shading class gate [R-RND-02A]
+				v.BMCode = u.Def.BMCode   // model-shading class gate [R-RND-02A]
+				v.ZBuffer = u.Def.ZBuffer // composition height plane [R-REN-03A §2]
+				// Model shadow gate and digger clip [R-REN-03D §1][R-REN-03A §8].
+				v.NoShadow = u.Def.NoShadow
+				v.CanHover = u.Def.CanHover
+				v.Floater = u.Def.Floater
+				v.Digger = u.Def.Digger
 				if id := s.Units.DefIDForHandle(u.Handle); id != 0 {
 					v.DefID = id
 				}

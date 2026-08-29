@@ -350,7 +350,11 @@ func (c *Client) expandModel(name string) *unitModel {
 }
 
 type screenTri struct {
-	x, y       [3]int32
+	x, y [3]int32
+	// oddHeight records the low bit of the corner's model-relative whole-unit
+	// height. The supersampled shear is (2*z) - y rather than 2*(z - (y>>1)),
+	// which is one pixel lower exactly when that bit is set [R-REN-03A §6].
+	oddHeight  [3]bool
 	u, v       [3]float64
 	row        [3]float64 // interpolated SHD row, per corner [03 §2.4.1]
 	key        [3]float64 // interpolated nanoframe height key, per corner [03 §5.2]
@@ -369,30 +373,92 @@ type screenTri struct {
 	depth      int32 // mean screen y for painter order
 }
 
-// modelTarget is the per-unit indexed composition image. Its color, height,
-// and coverage planes stay private until the complete model (including its
-// nanoframe reveal) is finished; uncovered pixels therefore leave terrain and
-// earlier world passes untouched [03 §5.2].
+// modelTarget is the retail per-unit composition image [R-REN-03A §1]. It is
+// sized to the model's own projected extent plus a two-pixel margin, not to
+// the framebuffer, and it records where the model's own (0,0) sits inside it
+// so the finished image can be blitted at the unit's screen anchor.
+//
+// The colour plane is prefilled with transparentIndex and the final blit skips
+// that index, so uncovered pixels leave terrain and earlier world passes
+// untouched. The height plane is the per-pixel depth buffer of
+// [R-REN-03A §2]; it is nil when the unit's definition authors no ZBuffer,
+// and every writer then falls through to unconditional painter-order writes,
+// exactly as retail's span writers do with a null key plane.
 type modelTarget struct {
-	color, height          []uint8
-	covered                []bool
-	width, heightPx        int
-	minX, minY, maxX, maxY int32
-	trace                  *rendererTrace
-	winner                 []int
-	tick                   uint32
+	color, height    []uint8
+	covered          []bool
+	width, heightPx  int   // image dimensions
+	originX, originY int32 // image pixel holding the model's own (0,0)
+	anchorX, anchorY int32 // framebuffer pixel holding the model's own (0,0)
+	transparent      uint8
+	// scale is 1, or 2 while the structure anti-alias supersample is active
+	// [R-REN-03A §6]. It is descriptive: the caller has already multiplied the
+	// dimensions and origin.
+	scale  int32
+	trace  *rendererTrace
+	winner []int
+	tick   uint32
 }
+
+// transparentModelIndex is the composition image's background. Retail prefills
+// the colour plane with it and records it in the image header as the index the
+// final blit skips; it is also what the anti-alias downscale blends against at
+// the silhouette, which is where the red/purple fringe comes from
+// [R-REN-03A §1][R-REN-03A §7].
+const transparentModelIndex uint8 = 1
+
+// modelTargetMargin is retail's two-pixel border on every side of the measured
+// extent [R-REN-03A §1].
+const modelTargetMargin int32 = 2
 
 func newModelTarget(width, height int) *modelTarget {
-	n := width * height
-	return &modelTarget{
-		color: make([]uint8, n), height: make([]uint8, n), covered: make([]bool, n),
-		width: width, heightPx: height, maxX: int32(width - 1), maxY: int32(height - 1),
-		winner: nil,
-	}
+	return newModelImage(width, height, 0, 0, 0, 0, true, 1)
 }
 
+// newModelImage allocates a composition image. keyPlane follows the unit's
+// ZBuffer authoring [R-REN-03A §2].
+func newModelImage(width, height int, originX, originY, anchorX, anchorY int32, keyPlane bool, scale int32) *modelTarget {
+	if width < 0 {
+		width = 0
+	}
+	if height < 0 {
+		height = 0
+	}
+	n := width * height
+	t := &modelTarget{
+		color: make([]uint8, n), covered: make([]bool, n),
+		width: width, heightPx: height,
+		originX: originX, originY: originY,
+		anchorX: anchorX, anchorY: anchorY,
+		transparent: transparentModelIndex,
+		scale:       scale,
+	}
+	if keyPlane {
+		t.height = make([]uint8, n)
+	}
+	for i := range t.color {
+		t.color[i] = t.transparent
+	}
+	return t
+}
+
+// screenX and screenY map an image pixel back to the framebuffer. The image
+// carries the model's (0,0) at (originX, originY) and that point lands on the
+// framebuffer at (anchorX, anchorY) [R-REN-03A §1].
+func (t *modelTarget) screenX(ix int32) int32 { return t.anchorX + ix - t.originX }
+func (t *modelTarget) screenY(iy int32) int32 { return t.anchorY + iy - t.originY }
+
+// imageX and imageY are the inverse, used to record framebuffer-space
+// diagnostics against the image the model was rasterized into.
+func (t *modelTarget) imageX(sx int32) int32 { return sx - t.anchorX + t.originX }
+func (t *modelTarget) imageY(sy int32) int32 { return sy - t.anchorY + t.originY }
+
+// admit applies the height-key test. With no key plane every candidate is
+// admitted and composition is pure painter order [R-REN-03A §2].
 func (t *modelTarget) admit(idx int, key uint8) bool {
+	if t.height == nil {
+		return true
+	}
 	if t.height[idx] > key {
 		return false
 	}
@@ -402,76 +468,108 @@ func (t *modelTarget) admit(idx int, key uint8) bool {
 
 func (t *modelTarget) write(idx int, color uint8, present bool) {
 	if !present {
-		// Nanoframe erase removes the composed unit pixel. It must not write
-		// an indexed zero into the destination world image [03 §5.2].
-		t.covered[idx] = false
+		// Nanoframe erase writes the image background, which the final blit
+		// skips [03 §5.2][R-REN-03A §1].
+		t.color[idx], t.covered[idx] = t.transparent, false
 		return
 	}
 	t.color[idx], t.covered[idx] = color, true
 }
 
-func (t *modelTarget) commit(dst []uint8) {
-	for py := t.minY; py <= t.maxY; py++ {
-		row := int(py) * t.width
-		for px := t.minX; px <= t.maxX; px++ {
-			i := row + int(px)
-			if t.covered[i] {
-				dst[i] = t.color[i]
+// bounds clips a triangle's bounding box to the image.
+func (t *modelTarget) bounds(tri *screenTri) (minX, minY, maxX, maxY int32) {
+	minX, minY, maxX, maxY = tri.x[0], tri.y[0], tri.x[0], tri.y[0]
+	for k := 1; k < 3; k++ {
+		if tri.x[k] < minX {
+			minX = tri.x[k]
+		}
+		if tri.x[k] > maxX {
+			maxX = tri.x[k]
+		}
+		if tri.y[k] < minY {
+			minY = tri.y[k]
+		}
+		if tri.y[k] > maxY {
+			maxY = tri.y[k]
+		}
+	}
+	if minX < 0 {
+		minX = 0
+	}
+	if minY < 0 {
+		minY = 0
+	}
+	if maxX > int32(t.width)-1 {
+		maxX = int32(t.width) - 1
+	}
+	if maxY > int32(t.heightPx)-1 {
+		maxY = int32(t.heightPx) - 1
+	}
+	return
+}
+
+// resolveSupersample is retail's 2:1 resolve of an anti-aliased structure
+// image [R-REN-03A §6]. The colour plane goes through three ALP lookups per
+// output pixel — the two horizontal pairs first, then the two results — and
+// the key plane is nearest-sampled from the top-left of each block with no
+// blending at all.
+//
+// The filter does not exclude the image background from the blend, and that is
+// deliberate: it is the retail defect that puts a one-pixel border of reds and
+// dusty purples around every anti-aliased building. ALP's diagonal is exact
+// identity, so a block wholly outside the model still resolves to the
+// background index and stays transparent [R-REN-03A §7].
+func (t *modelTarget) resolveSupersample(dst *modelTarget, alp *[65536]byte) {
+	if t == nil || dst == nil || alp == nil {
+		return
+	}
+	for y := 0; y < dst.heightPx; y++ {
+		srcTop, srcBottom := 2*y*t.width, (2*y+1)*t.width
+		if srcBottom+t.width > len(t.color) {
+			break
+		}
+		for x := 0; x < dst.width; x++ {
+			if 2*x+1 >= t.width {
+				break
+			}
+			top := alp[int(t.color[srcTop+2*x])*256+int(t.color[srcTop+2*x+1])]
+			bottom := alp[int(t.color[srcBottom+2*x])*256+int(t.color[srcBottom+2*x+1])]
+			out := alp[int(top)*256+int(bottom)]
+			i := y*dst.width + x
+			dst.color[i] = out
+			dst.covered[i] = out != dst.transparent
+			if dst.height != nil && t.height != nil {
+				dst.height[i] = t.height[srcTop+2*x]
 			}
 		}
 	}
 }
 
-func (c *Client) reusableModelTarget(tris []screenTri) *modelTarget {
-	n := len(c.indexed)
-	if len(c.modelTargetColor) != n {
-		c.modelTargetColor = make([]uint8, n)
-		c.modelTargetHeight = make([]uint8, n)
-		c.modelTargetCovered = make([]bool, n)
+// commit blits the finished image into the framebuffer, skipping the
+// background index [R-REN-03A §1].
+func (t *modelTarget) commit(dst []uint8, width, height int) {
+	if t == nil || width <= 0 || height <= 0 {
+		return
 	}
-	t := &modelTarget{
-		color: c.modelTargetColor, height: c.modelTargetHeight, covered: c.modelTargetCovered,
-		width: c.width, heightPx: c.height, minX: 1, minY: 1, maxX: 0, maxY: 0,
-		tick: c.frameTick,
-	}
-	if c.rendererTraceSink != nil {
-		t.trace = newRendererTrace(n)
-		t.winner = t.trace.winner
-		t.trace.unit = 0
-		t.trace.tick = c.frameTick
-		t.trace.width = c.width
-		t.trace.height = c.height
-	}
-	if len(tris) == 0 {
-		return t
-	}
-	t.minX, t.minY, t.maxX, t.maxY = c.triBounds(&tris[0])
-	for i := 1; i < len(tris); i++ {
-		x0, y0, x1, y1 := c.triBounds(&tris[i])
-		if x0 < t.minX {
-			t.minX = x0
+	for iy := 0; iy < t.heightPx; iy++ {
+		sy := t.screenY(int32(iy))
+		if sy < 0 || sy >= int32(height) {
+			continue
 		}
-		if y0 < t.minY {
-			t.minY = y0
-		}
-		if x1 > t.maxX {
-			t.maxX = x1
-		}
-		if y1 > t.maxY {
-			t.maxY = y1
-		}
-	}
-	for py := t.minY; py <= t.maxY; py++ {
-		row := int(py) * t.width
-		for px := t.minX; px <= t.maxX; px++ {
-			i := row + int(px)
-			t.height[i], t.color[i], t.covered[i] = 0, 0, false
-			if t.winner != nil {
-				t.winner[i] = -1
+		row := int(sy) * width
+		src := iy * t.width
+		for ix := 0; ix < t.width; ix++ {
+			i := src + ix
+			if !t.covered[i] {
+				continue
 			}
+			sx := t.screenX(int32(ix))
+			if sx < 0 || sx >= int32(width) {
+				continue
+			}
+			dst[row+int(sx)] = t.color[i]
 		}
 	}
-	return t
 }
 
 type modelPrimitiveMode uint8
@@ -679,13 +777,19 @@ func (c *Client) collectDrawTris(draw *presentationrender.UnitDraw, owner uint8,
 				}
 				for corner, vi := range indices {
 					v := piece.WorldVertices[vi]
-					sx, sy := c.cam.WorldToScreen(v[0], v[1], v[2])
-					tri.x[corner], tri.y[corner] = sx-camera.OriginX, sy-camera.OriginY
-					tri.depth += tri.y[corner]
-					// Form the key from the transformed vertex's model-relative
-					// whole-world-unit Y. A right shift would floor negative values;
-					// retail narrowing truncates toward zero [I3][03 §5.2].
-					tri.key[corner] = float64(modelHeightKey(v[1].Sub(draw.WorldPos[1])))
+					// Retail composes model-relative: the piece chain result is
+					// narrowed once, the shear applied, and the unit's position
+					// enters only at the final blit [03 §5.2][R-REN-03A §1].
+					lx, ly, ry := modelLocalVertex(v, draw.WorldPos)
+					lx, ly = c.scaleModelLocal(lx, ly)
+					tri.x[corner], tri.y[corner] = lx, ly
+					tri.oddHeight[corner] = ry&1 != 0
+					tri.depth += ly
+					key := ry + presentationrender.NanoframeHeightBias
+					if draw.DiggerClip {
+						key += diggerKeyBias
+					}
+					tri.key[corner] = float64(key)
 					if tri.useSHD {
 						primitiveCorner := [3]int{0, k, k + 1}[corner]
 						if primitiveCorner < len(pr.ShadeRows) {
@@ -708,52 +812,181 @@ func (c *Client) collectDrawTris(draw *presentationrender.UnitDraw, owner uint8,
 	return tris
 }
 
+// modelExtent measures the composition image from the collected triangles:
+// retail walks every visible piece's vertices, tracks the min and max of the
+// projected offsets with the extrema seeded at zero so the box always contains
+// the model origin, then adds a two-pixel margin on every side
+// [R-REN-03A §1].
+func modelExtent(tris []screenTri) (width, height int, originX, originY int32) {
+	var minX, minY, maxX, maxY int32 // seeded at the model origin, not at a vertex
+	for i := range tris {
+		for k := 0; k < 3; k++ {
+			if tris[i].x[k] < minX {
+				minX = tris[i].x[k]
+			}
+			if tris[i].x[k] > maxX {
+				maxX = tris[i].x[k]
+			}
+			if tris[i].y[k] < minY {
+				minY = tris[i].y[k]
+			}
+			if tris[i].y[k] > maxY {
+				maxY = tris[i].y[k]
+			}
+		}
+	}
+	originX = modelTargetMargin - minX
+	originY = modelTargetMargin - minY
+	return int(maxX - minX + 2*modelTargetMargin), int(maxY - minY + 2*modelTargetMargin), originX, originY
+}
+
+// placeTris rewrites the collected model-relative triangles into image-local
+// coordinates. At scale 2 the supersampled shear is (2*z) - y, which is one
+// pixel above twice the plain shear exactly when the corner's whole-unit
+// height is odd, so reproduce that term rather than doubling the 1x result
+// [R-REN-03A §6].
+func placeTris(tris []screenTri, originX, originY, scale int32) {
+	for i := range tris {
+		for k := 0; k < 3; k++ {
+			if scale == 2 {
+				// The doubled image's origin is 2*origin, so the placed
+				// coordinate is 2*(local + origin); the Y term then loses one
+				// pixel for an odd height because retail's supersampled shear
+				// is (2*z) - y rather than 2*(z - (y>>1)) [R-REN-03A §6].
+				tris[i].x[k] = 2 * (tris[i].x[k] + originX)
+				tris[i].y[k] = 2*(tris[i].y[k]+originY) - boolToInt32(tris[i].oddHeight[k])
+				continue
+			}
+			tris[i].x[k] += originX
+			tris[i].y[k] += originY
+		}
+	}
+}
+
+func boolToInt32(b bool) int32 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// supersampleModel reports whether this subject takes retail's structure
+// anti-aliasing: the Anti_Alias display option on, and the unit's authored
+// class bit saying structure. Mobile units are rasterized at 1x whatever the
+// option says, which is why buildings read smoother than units in retail
+// [R-REN-03A §6].
+func (c *Client) supersampleModel(structure bool) bool {
+	return c != nil && c.antiAlias && structure && c.pal != nil
+}
+
 // drawModel is the sole indexed model raster entry. Traversal is performed by
-// internal/render and this function only resolves authored textures and blits
-// the resulting triangles [03 §2.4][03 §2.4.1]. A non-nil reveal composes the
-// unit exactly as a finished one and then recolours it band by band and
-// overdraws its polygon outlines, which is the nanoframe [03 §5.2].
+// internal/render and this function only resolves authored textures, composes
+// the unit into its own image, and blits that image once [03 §2.4][03 §2.4.1]
+// [R-REN-03A §1]. A non-nil reveal composes the unit exactly as a finished one
+// and then recolours it band by band and overdraws its polygon outlines, which
+// is the nanoframe [03 §5.2].
 func (c *Client) drawModel(draw *presentationrender.UnitDraw, owner uint8, id uint64, kind uint8, reveal *presentationrender.NanoframeReveal, outline uint8) bool {
 	// TODO(question): model shadows remain suppressed because the published
 	// frame has no visual-options word, terrain ground/depth input, or model
 	// shadow flag needed by the established pre-body shadow path [03 §5.3].
 	tris := c.collectDrawTris(draw, owner, id, kind)
-	// The indexed body and byte height plane are one per-unit render target.
-	// Completed and unfinished models both use this target; nanoframe reveal
-	// only adds a recolour/read step after ordinary admission [03 §5.2].
-	target := c.reusableModelTarget(tris)
-	if target.trace != nil {
-		target.trace.unit = id
+	if len(tris) == 0 {
+		return false
 	}
+	anchorX, anchorY := c.modelAnchor(draw)
+	width, height, originX, originY := modelExtent(tris)
+
+	scale := int32(1)
+	if c.supersampleModel(draw.Structure) {
+		scale = 2
+	}
+	placeTris(tris, originX, originY, scale)
+
+	// The image the unit is blitted from is always 1x; when anti-aliasing is
+	// active the model is rasterized into a doubled scratch first and resolved
+	// into it [R-REN-03A §6].
+	keyPlane := draw.KeyPlane
+	target := newModelImage(width, height, originX, originY, anchorX, anchorY, keyPlane, 1)
+	raster := target
+	if scale == 2 {
+		raster = newModelImage(2*width, 2*height, 2*originX, 2*originY, anchorX, anchorY, keyPlane, 2)
+	}
+	c.attachModelTrace(raster, id)
+
 	for i := range tris {
 		switch {
 		case reveal != nil && tris[i].frame != nil:
-			c.blitTexturedTriNanoframeTarget(target, &tris[i], tris[i].frame, *reveal, id)
+			c.blitTexturedTriNanoframeTarget(raster, &tris[i], tris[i].frame, *reveal, id)
 		case reveal != nil:
-			c.fillTriNanoframeTarget(target, &tris[i], tris[i].color, *reveal, id)
+			c.fillTriNanoframeTarget(raster, &tris[i], tris[i].color, *reveal, id)
 		case tris[i].frame != nil:
-			c.blitTexturedTriTarget(target, &tris[i], tris[i].frame, id)
+			c.blitTexturedTriTarget(raster, &tris[i], tris[i].frame, id)
 		default:
-			c.fillTriTarget(target, &tris[i], tris[i].color, id)
+			c.fillTriTarget(raster, &tris[i], tris[i].color, id)
 		}
 	}
-	target.commit(c.indexed)
+	if scale == 2 {
+		raster.resolveSupersample(target, &c.pal.Alpha)
+	}
+	if draw.DiggerClip {
+		// A Digger definition raises every key by 75; erasing at or below 125
+		// therefore removes exactly the geometry at or below the model origin,
+		// which is the buried half of a pop-up defence [R-REN-03A §8].
+		target.eraseAtOrBelow(uint8(diggerKeyBias + presentationrender.NanoframeHeightBias))
+	}
+	// The shadow is composed and blitted before the body for the same subject
+	// [03 §5.3].
+	c.drawModelShadow(draw)
+	target.commit(c.indexed, c.width, c.height)
 	if reveal != nil {
-		c.drawModelOutline(draw, outline, target.trace)
+		c.drawModelOutline(draw, outline, raster)
 	}
-	if target.trace != nil {
-		target.trace.resolve(target, c.indexed, c.width, c.height)
-		target.trace.emit(c.rendererTraceSink, c.rendererTraceFilter)
+	if raster.trace != nil {
+		raster.trace.resolve(raster, c.indexed, c.width, c.height)
+		raster.trace.emit(c.rendererTraceSink, c.rendererTraceFilter)
 	}
-	return len(tris) != 0
+	return true
+}
+
+// modelAnchor is the framebuffer pixel the composition image's recorded origin
+// lands on. Position enters the model path here and nowhere else
+// [03 §5.2][R-REN-03A §1].
+func (c *Client) modelAnchor(draw *presentationrender.UnitDraw) (int32, int32) {
+	if c == nil || c.cam == nil || draw == nil {
+		return 0, 0
+	}
+	sx, sy := c.cam.WorldToScreen(draw.WorldPos[0], draw.WorldPos[1], draw.WorldPos[2])
+	return sx - camera.OriginX, sy - camera.OriginY
+}
+
+// attachModelTrace wires the parity trace to the image actually rasterized
+// into, which is the doubled scratch while anti-aliasing.
+func (c *Client) attachModelTrace(t *modelTarget, id uint64) {
+	if c == nil || c.rendererTraceSink == nil || t == nil {
+		return
+	}
+	t.trace = newRendererTrace(t.width * t.heightPx)
+	t.winner = t.trace.winner
+	t.trace.unit = id
+	t.trace.tick = c.frameTick
+	t.trace.width = t.width
+	t.trace.height = t.heightPx
+	t.tick = c.frameTick
 }
 
 // drawModelOutline overdraws every primitive of every visible piece as a
 // closed polyline. The selection plate is the one primitive the outline pass
 // skips, exactly as the raster pass does [03 §5.2][03 §2.4.1].
-func (c *Client) drawModelOutline(draw *presentationrender.UnitDraw, color uint8, trace *rendererTrace) {
+// The trace target, when present, is the image the model was rasterized into,
+// so outline points are converted back into its coordinate space before they
+// are recorded; the visible line itself is drawn in framebuffer space.
+func (c *Client) drawModelOutline(draw *presentationrender.UnitDraw, color uint8, target *modelTarget) {
 	if c == nil || c.cam == nil || draw == nil || draw.Model == nil {
 		return
+	}
+	var trace *rendererTrace
+	if target != nil {
+		trace = target.trace
 	}
 	for pi, piece := range draw.Pieces {
 		if pi >= len(draw.Model.Pieces) {
@@ -779,7 +1012,9 @@ func (c *Client) drawModelOutline(draw *presentationrender.UnitDraw, color uint8
 				if k > 0 && !c.segmentOffscreen(px, py, sx, sy) {
 					c.drawIndexedLine(px, py, sx, sy, color)
 					if trace != nil {
-						traceOutlineLine(trace, px, py, sx, sy, color, pi, pri)
+						ix0, iy0 := target.imageX(px), target.imageY(py)
+						ix1, iy1 := target.imageX(sx), target.imageY(sy)
+						traceOutlineLine(trace, ix0, iy0, ix1, iy1, color, pi, pri)
 					}
 				}
 				px, py = sx, sy
@@ -818,6 +1053,19 @@ func (c *Client) drawUnitModel(v frame.UnitView, sx, sy int32) bool {
 	}
 	states := c.modelStates(m, v.Pieces)
 	draw := presentationrender.BuildUnitDraw(m.compiled, states, v.Heading, v.Pitch, v.Bank, v, c.orientationCache(unitPresentationID(v)))
+	// BMcode=0 is the structure class [R-RND-02A]; a unit under construction
+	// always gets the height plane because the nanoframe reveal reads it
+	// [R-REN-03A §2].
+	draw.Structure = !v.BMCode
+	draw.KeyPlane = v.ZBuffer || v.BuildRemaining > 0
+	draw.CastsShadow = c.castsModelShadow(v.NoShadow, v.CanHover, v.Floater)
+	draw.GroundY = c.groundHeightUnder(v.X, v.Z)
+	draw.DiggerClip = v.Digger
+	if v.Digger {
+		// The Digger key bias is applied to every vertex, so the clip
+		// threshold and the composed keys stay on one scale [R-REN-03A §8].
+		draw.KeyPlane = true
+	}
 	reveal, outline := c.unitNanoframeReveal(v)
 	return c.drawModel(draw, v.Owner, unitPresentationID(v), modelCursorUnit, reveal, outline)
 }
@@ -829,6 +1077,10 @@ func (c *Client) drawFeatureModel(f frame.FeatureView) bool {
 		return false
 	}
 	draw := presentationrender.BuildUnitDrawSimple(m.compiled, nil, 0, 0, 0, [3]numeric.Fixed{f.X, f.Y, f.Z})
+	// The feature-backed pseudo-unit has no FBI to read and sets both the
+	// structure class bit and the height-plane bit unconditionally at
+	// construction, so 3DO wrecks anti-alias like buildings [R-REN-03A §2].
+	draw.Structure, draw.KeyPlane = true, true
 	// The nanoframe reveal is a construction-fraction contract; a sinking
 	// feature is not an unfinished unit and takes the ordinary model path.
 	return c.drawModel(draw, 0, featurePresentationID(f), modelCursorFeature, nil, 0)
@@ -840,7 +1092,39 @@ func (c *Client) drawProjectileModel(p frame.ProjectileView) bool {
 		return false
 	}
 	draw := presentationrender.BuildProjectileDraw(m.compiled, nil, p.Yaw, p.Pitch, [3]numeric.Fixed{p.X, p.Y, p.Z})
+	// A projectile is not a unit instance and carries no class or ZBuffer
+	// bit. It composes with the height plane so its own pieces resolve, and
+	// without the structure supersample.
+	// TODO(question): whether retail's projectile model records allocate a key
+	// plane, and whether they can reach the anti-alias gate at all.
+	draw.KeyPlane = true
 	return c.drawModel(draw, 0, projectilePresentationID(p), modelCursorProjectile, nil, 0)
+}
+
+// modelLocalVertex narrows one world-space piece vertex to the composition
+// image's model-relative pixel offsets and returns the whole-unit height that
+// feeds the key. Retail narrows the model-relative 16.16 value once, by
+// extracting its high word — an arithmetic shift, so it floors — and applies
+// the half-height shear with a second arithmetic shift [03 §2.5][R-REN-03A §1].
+func modelLocalVertex(v, origin [3]numeric.Fixed) (lx, ly, ry int32) {
+	rx := int32(v[0].Sub(origin[0]).Floor())
+	ry = int32(v[1].Sub(origin[1]).Floor())
+	rz := int32(v[2].Sub(origin[2]).Floor())
+	return rx, rz - (ry >> 1), ry
+}
+
+// scaleModelLocal applies presentation zoom to a model-relative offset. Retail
+// has no zoom; at the retail scale of 1 this is the identity and the offsets
+// stay exactly as [R-REN-03A §1] computes them.
+func (c *Client) scaleModelLocal(lx, ly int32) (int32, int32) {
+	if c == nil || c.cam == nil {
+		return lx, ly
+	}
+	s := c.cam.EffectiveScale()
+	if s == 1 {
+		return lx, ly
+	}
+	return int32(float32(lx) * s), int32(float32(ly) * s)
 }
 
 // modelHeightKey computes the per-vertex key shared by completed-model
@@ -854,14 +1138,33 @@ func (c *Client) drawProjectileModel(p frame.ProjectileView) bool {
 // the depth resolution and roughly doubled how often two faces tie
 // [R-REN-03A §2 "Correction to the key formula"].
 //
+// The narrowing floors rather than truncating toward zero: retail extracts the
+// high word of the model-relative 16.16 value with an arithmetic shift, not
+// through __ftol, so I3's truncate-toward-zero rule does not apply here
+// [R-REN-03A §2].
+//
 // TODO(R-REN-03A §8): a definition authoring the FBI Digger key adds a further
 // +75 here and then erases the image wherever the key is at or below 125. The
 // erase pass is not implemented, and adding the offset alone would only shift
 // every key uniformly, so both are deferred together. Three stock units are
 // affected: ARMAMB, CORTOAST, CORVIPE.
 func modelHeightKey(relativeY numeric.Fixed) int32 {
-	whole := int32(relativeY.Raw() / (1 << 16)) // __ftol-style truncation [I3]
-	return whole + presentationrender.NanoframeHeightBias
+	return int32(relativeY.Floor()) + presentationrender.NanoframeHeightBias
+}
+
+// diggerKeyBias is the extra height-key offset a definition authoring the FBI
+// Digger key carries. It exists so the clip threshold of [R-REN-03A §8] lands
+// exactly at the model origin. Three stock units author it: ARMAMB, CORTOAST,
+// CORVIPE.
+const diggerKeyBias int32 = 75
+
+// groundHeightUnder samples the terrain height beneath a unit, which is what
+// the shadow shear uses [R-REN-03D §3].
+func (c *Client) groundHeightUnder(x, z numeric.Fixed) numeric.Fixed {
+	if c == nil || c.terrain == nil {
+		return 0
+	}
+	return c.terrain.HeightAt(x, z)
 }
 
 // scanlineHeightKey performs the model rasterizer's fixed-point height
@@ -946,13 +1249,13 @@ func nanoframeVerdict(rev presentationrender.NanoframeReveal, key uint8, compose
 
 func (c *Client) fillTriNanoframeTarget(target *modelTarget, t *screenTri, color uint8, rev presentationrender.NanoframeReveal, ids ...uint64) {
 	id := rendererID(ids)
-	minX, minY, maxX, maxY := c.triBounds(t)
+	minX, minY, maxX, maxY := target.bounds(t)
 	d := baryDenom(t)
 	if d == 0 {
 		return
 	}
 	for py := minY; py <= maxY; py++ {
-		row := py * int32(c.width)
+		row := py * int32(target.width)
 		for px := minX; px <= maxX; px++ {
 			l0, l1, l2 := bary(t, d, px, py)
 			if l0 < 0 || l1 < 0 || l2 < 0 {
@@ -984,14 +1287,14 @@ func (c *Client) fillTriNanoframeTarget(target *modelTarget, t *screenTri, color
 
 func (c *Client) blitTexturedTriNanoframeTarget(target *modelTarget, t *screenTri, frame *formats.GAFFrame, rev presentationrender.NanoframeReveal, ids ...uint64) {
 	id := rendererID(ids)
-	minX, minY, maxX, maxY := c.triBounds(t)
+	minX, minY, maxX, maxY := target.bounds(t)
 	d := baryDenom(t)
 	if d == 0 {
 		return
 	}
 	w, h := int(frame.Width), int(frame.Height)
 	for py := minY; py <= maxY; py++ {
-		row := py * int32(c.width)
+		row := py * int32(target.width)
 		for px := minX; px <= maxX; px++ {
 			l0, l1, l2 := bary(t, d, px, py)
 			if l0 < 0 || l1 < 0 || l2 < 0 {
@@ -1071,9 +1374,9 @@ func shadeRowAt(t *screenTri, l0, l1, l2 float64) int {
 
 func (c *Client) fillTriTarget(target *modelTarget, t *screenTri, color uint8, ids ...uint64) {
 	id := rendererID(ids)
-	minX, minY, maxX, maxY := c.triBounds(t)
+	minX, minY, maxX, maxY := target.bounds(t)
 	for py := minY; py <= maxY; py++ {
-		row := py * int32(c.width)
+		row := py * int32(target.width)
 		for px := minX; px <= maxX; px++ {
 			idx := int(row + px)
 			if pointInTri(t, px, py) {
@@ -1095,14 +1398,14 @@ func (c *Client) fillTriTarget(target *modelTarget, t *screenTri, color uint8, i
 
 func (c *Client) blitTexturedTriTarget(target *modelTarget, t *screenTri, frame *formats.GAFFrame, ids ...uint64) {
 	id := rendererID(ids)
-	minX, minY, maxX, maxY := c.triBounds(t)
+	minX, minY, maxX, maxY := target.bounds(t)
 	d := baryDenom(t)
 	if d == 0 {
 		return
 	}
 	w, h := int(frame.Width), int(frame.Height)
 	for py := minY; py <= maxY; py++ {
-		row := py * int32(c.width)
+		row := py * int32(target.width)
 		for px := minX; px <= maxX; px++ {
 			l0, l1, l2 := bary(t, d, px, py)
 			if l0 < 0 || l1 < 0 || l2 < 0 {

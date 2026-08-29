@@ -260,97 +260,257 @@ Aim-request latch, so a replacement can skip a fresh Aim request.
 
 ### 3.3 Range, aim, and ballistic solving
 
-**Established fact:** Ordinary fire range uses horizontal distance against the weapon range. Coverage is a separate scalar for projectile-target/interceptor behavior and is not the ordinary ground-target fire radius.
+Units used throughout: world positions and velocities are 16.16 fixed point
+(one world unit = 65,536); one map cell is 16 world units; angles are `uint16`
+with 65,536 per circle; times are 30 Hz ticks. `range`, `coverage`,
+`areaofeffect`, `accuracy`, `tolerance`, `pitchtolerance`, `burst` and
+`sprayangle` are authored as plain integers; `weaponvelocity`, `startvelocity`
+and `weaponacceleration` reach the record already scaled to 16.16 per tick and
+per tick squared; the timing keys reach it already truncated to whole ticks;
+`turnrate` reaches it as angle units per tick; `minbarrelangle` reaches it as
+single-precision radians with a default of −11.25 degrees. All of those
+conversions are owned by `[02 "Weapon record"]` and were re-derived unchanged
+by this pass.
 
-**Established fact:** Direct and ballistic aim use different solvers. The ballistic solver uses gravity, horizontal distance, vertical displacement, velocity, and a pitch limit. It can report no valid pitch solution. Heading and pitch are stored as 16-bit circular values.
+#### Shared trigonometry — Established
 
-**Established fact:** The slot bit that suppresses repeated Aim dispatch is an
-Aim-request latch, not a universal “physically aimed” or fire-ready result. It
-is set immediately after the asynchronous Aim callback is dispatched — the
-engine ORs the latch bit right after issuing the AimPrimary, AimSecondary,
-or AimTertiary call through the COB dispatcher. Completion arrives through the
-receiver embedded on that deferred callback: an explicit script return
-delivers its value, and the dispatcher delivers zero when the script name is
-absent, the script identity is invalid, or all eight COB thread slots are
-occupied; signal termination and abnormal termination do not call the
-receiver. A zero delivery — explicit return or dispatcher — leaves the latch
-without permission and does not clear it; a nonzero delivery grants
-permission; and no timeout is present, the absence of a timeout writer being
-established by a bounded search over the weapon-slot code. A nil VM or missing
-script must therefore not set an Aim-ready state for a family that requires a
-result. (Supersedes the earlier reading that completion depends only on an
-explicit script return: a missing or blocked Aim script delivers zero through
-the same receiver.) The slot pipeline does not test the latch at the
-common fire fallthrough. A skipped Aim or failed ballistic Aim calculation can
-therefore still reach physical admission.
+Three helpers carry every angle-to-vector conversion in the weapon and
+projectile code, and an implementation must reproduce them exactly because
+their rounding is visible in world positions.
 
-**Established fact:** Family spawners impose distinct readiness rules:
+* **Scaled sine** `sin(angle, magnitude)`: index `((int16)angle + 32) >> 6`
+  masked to the even byte offsets `0..1022`, so the table is **512 signed
+  16-bit entries per circle** — one entry per 128 angle units, not per 64 (a
+  correction, see `[R-WPN-01 §4]`). Entry *k* holds `round(8192 × sin(2πk/512))`.
+  The product is 64-bit: `(entry × magnitude + 0x1000) >> 13`, an arithmetic
+  shift, i.e. round-to-nearest at 1/8192 resolution.
+* **Scaled cosine** `cos(angle, magnitude)`: the same helper with a quarter
+  turn added before the index arithmetic (`angle + 0x4020` in place of
+  `angle + 32`).
+* **Angle from a 2-vector** `atan2q(a, b)`: both operands converted to the x87
+  stack as signed 32-bit integers, `atan2(a, b)` taken in extended precision,
+  multiplied by 32,768/π, and stored with the **round-to-nearest** integer
+  store (not truncation), then kept as the low 16 bits.
 
-- the turret family requires both the Aim-request latch and a nonzero
-  asynchronous Aim result, recomputes target angles or ballistic feasibility,
-  and enforces an angular-drift gate;
-- the vertical-launch family requires the asynchronous Aim result but does not
-  separately test the latch;
-- the non-turret line-of-sight/self-propelled family does not gate on either
-  Aim field but computes angles and applies the angular-drift gate;
-- the dropped family has no Aim gate.
+Distances use the C runtime `hypot`, and every float-to-integer step named
+below is the shared truncate-toward-zero conversion of `[01 §8]`.
 
-Infeasible turret geometry or excessive drift clears the Aim-request latch.
-Turret and vertical-launch allocation failure preserve ready state, while
-successful allocation clears the result and latch. The angular-drift helper
-consumes the parsed tolerance and pitch-tolerance fields when authored
-nonzero (see the corrected census below): the yaw-error gate is the authored
-tolerance value (falling back to 2000, or 150 for the non-air class, when
-tolerance is zero) and the pitch-error gate is the authored pitch-tolerance
-value (falling back to the tolerance value and then to the same defaults).
-The ballistic no-solution sentinel (the angle-domain value 0x8000) suppresses Aim
-dispatch entirely. A missing Aim script, a zero completion delivery, or an
-exhausted projectile pool therefore means the turret and vertical-launch
-families cannot fire; the line-of-sight/self-propelled family's query fallback
-may still supply a muzzle piece, but no Aim result is invented on its behalf
-[R-P0-07].
+**Established fact:** Ordinary fire range is a two-dimensional test on X and Z
+only. With `s` the shooter's world point and `t` the resolved target point,
+both raw 16.16:
 
-**Established fact:** Shot-time physical admission tests squared planar range
-first. A water weapon succeeds after that range test. A non-water weapon also
-requires the shooter's top/reference height above sea level and, when
-ballistic, a valid ballistic solution. The direct yaw/pitch geometry and this
-gate do not perform terrain/hill or visibility/sensor tests.
+```
+dx = t.X - s.X                    (signed 32-bit, wrapping)
+dz = t.Z - s.Z
+a  = (int32)(((int64)dx * dx) >> 32)      ; squared whole-world-unit distance
+b  = (int32)(((int64)dz * dz) >> 32)
+admit when  a + b <= range * range        ; signed 32-bit compare
+```
 
-**Established fact:** Water and medium gating is asymmetric. For a non-water
-weapon, both shooter and candidate reference heights must be strictly above sea
-level, expressed as world Y greater than sea level scaled to fixed-point.
-Water weapons skip that height test and instead apply two candidate depth and
-type predicates, whose arithmetic is closed: the candidate is rejected when it
-lacks the definition's floater flag and its Y word is strictly above the
-sea-level byte; and when its definition carries the canhover flag, it is
-rejected when its Y word plus half its top-height offset is strictly above the
-sea-level byte. After both predicates, planar range applies. (The
-setSFXoccupy occupancy bands are presentation classes, not these admission
-predicates.) The to-air weapon flag, when requested by the acquisition
-context, requires the candidate to be an air target; non-water paths enforce
-it while water paths do not. The weapon-timer branch is taken when velocity
-is zero or when the no-auto-range flag is set, in which case the expiry uses
-the weapon timer rather than range divided by velocity, but the range gate is
-still applied as squared planar distance less than or equal to squared range
-with zero range only admitting the shooter's own cell.
+`range * range` is a 32-bit signed multiply of the authored integer, so an
+authored range above 46,340 wraps negative and admits nothing. The Y axis is
+not in this test. With `range` zero the test admits only `|dx| < 65,536` and
+`|dz| < 65,536` — a target within one world unit on each axis, not a whole
+cell. `coverage` is a separate scalar used only by interception and by the
+range-circle overlay; it is not this radius `[02 "Weapon record"]`.
 
-**Established fact:** The ballistic solver tests its discriminant against
-exactly zero with no positive epsilon guard; a negative discriminant returns the
-no-solution sentinel and no firing occurs, while exactly zero proceeds through
-the equal-root arithmetic subject to the ordinary angular gates. The upper
-acceptance gate is pi divided by four. An accepted angle is serialized as the
-truncation of angle multiplied by 32768 divided by pi into the 16-bit angle
-domain. When velocity is zero and the ballistic creator is reached, the pool
-reservation has already incremented the active count and is not rolled back
-when the subsequent divide raises an exception.
+**Established fact:** After the range test the shot-time gate applies two more
+predicates and nothing else. For a **water weapon** it stops there and admits.
+For a **non-water weapon** it requires
 
-**Established fact:** Parsed accuracy, tolerance, and pitch-tolerance values
-are consumed by gameplay code in this retail build; an earlier reading that
-they are dead catalog data is superseded by a fresh bounded census. Accuracy
-is the base of the slot-executor spread bound of §4.4. Tolerance and
-pitch-tolerance are the authored angular-drift gates of §3.3 (with the 2000/
-150 class defaults when tolerance is zero). Nothing else in the firing,
-readiness, or projectile-motion paths consumes them.
+```
+(int16)(s.Y >> 16) + definitionTopHeight  >  seaLevelByte
+```
+
+— the shooter's world Y whole-unit word plus the unit definition's model
+top-height word, strictly greater than the map's sea-level byte — and, when
+`ballistic` is authored, a ballistic solution that is not the no-solution
+sentinel. The gate performs no terrain, hill, visibility or sensor test. It is
+evaluated in the unit phase, before the slot executor runs, and its failure
+sets the shooter's "could not fire" status bit rather than clearing any latch.
+
+**Established fact:** The slot pipeline walks the three weapon slots in
+ascending order once per unit per tick, inside the unit phase, i.e. before the
+projectile phase `[01 §4.4]`. For each slot whose armed bit is set it performs,
+in this order: decrement the reload timer when it is nonzero; resolve the
+target point (§3.2); abandon the slot when no executor pointer was installed;
+run the family-specific Aim dispatch below; and then, **only when the reload
+timer is now zero**, run the admission gate, the cost precheck, and the
+executor. A weapon authored with `reloadtime` of one tick therefore fires on
+the tick after the decrement, never on the same tick.
+
+**Established fact:** Which executor a weapon uses is decided once, at catalog
+compile time, by the first matching flag in this order: `turret`; else
+`vlaunch`; else `lineofsight` or `selfprop`; else `dropped`; else **none**, and
+a weapon with no matching flag can never fire. This ordering is not the same as
+the family ordering of §6.2 and both must be reproduced independently.
+
+**Established fact:** Aim dispatch is family-specific.
+
+* The **turret** executor's slot dispatches `AimPrimary`, `AimSecondary` or
+  `AimTertiary` only when the Aim-request latch is clear. It first solves the
+  angles: for a `ballistic` weapon, the yaw is `atan2q` of the AimFrom piece
+  minus the target point on X and Z, **minus the unit heading** (a relative
+  angle), and the pitch is the ballistic solver's result, rejected when it
+  returns the sentinel; for a `lineofsight` weapon, the direct solver below;
+  for neither, the dispatch is skipped entirely. On success it writes the
+  solved yaw and pitch into the slot, zeroes the four-byte Aim receiver,
+  dispatches the deferred Aim callback with those two angles as arguments, and
+  then sets the latch.
+* The **vertical-launch** executor's slot dispatches the same callback with
+  both arguments **zero**, gated only on the latch being clear and — for a
+  `stockpile` weapon — on nonzero ammunition. It solves no angles at aim time.
+* The **line-of-sight/self-propelled** and **dropped** executors dispatch no
+  Aim callback at all and never set or test the latch.
+
+**Established fact:** The latch is an Aim-request latch, not a "physically
+aimed" or fire-ready result. It is set immediately after the callback is
+dispatched. Completion arrives through the receiver embedded on that deferred
+callback: an explicit script return delivers its value, and the dispatcher
+delivers zero when the script name is absent, the script identity is invalid,
+or all eight COB thread slots are occupied; signal termination and abnormal
+termination do not call the receiver. A zero delivery — explicit return or
+dispatcher — leaves the latch without permission and does not clear it; a
+nonzero delivery grants permission; and no timeout is present, the absence of a
+timeout writer being established by a bounded search over the weapon-slot code.
+A nil VM or missing script must therefore not set an Aim-ready state for a
+family that requires a result. (Supersedes the earlier reading that completion
+depends only on an explicit script return: a missing or blocked Aim script
+delivers zero through the same receiver.)
+
+**Established fact:** Executor readiness rules differ, and the differences are
+exactly these:
+
+* the **turret** executor requires both the latch and a nonzero Aim result; it
+  then re-solves yaw and pitch from the current geometry, applies the
+  angular-drift gate, queries the muzzle, converts the slot yaw from relative
+  to absolute by adding the unit heading, applies the accuracy spread of §4.4,
+  and dispatches to the ordinary creator when `lineofsight` or `selfprop` is
+  authored, otherwise to the ballistic creator when `ballistic` is authored,
+  otherwise fires nothing;
+* the **vertical-launch** executor requires the Aim result and does **not**
+  test the latch; it queries the muzzle, writes absolute yaw and pitch into the
+  slot, runs the fire-time interceptor rescan when `interceptor` is authored
+  (returning failure when the rescan finds nothing), and dispatches to the
+  vertical-launch creator;
+* the **line-of-sight/self-propelled** executor gates on neither field; it
+  queries the muzzle, writes absolute yaw and pitch, and applies the
+  angular-drift gate **against the unit's own heading and pitch** rather than
+  against a separately desired direction;
+* the **dropped** executor has no Aim gate and no drift gate; it queries the
+  muzzle and allocates inline.
+
+Turret geometry that yields no solution, and a failed drift gate, both clear
+the latch and return failure; the no-solution case additionally sets the
+shooter's "could not fire" status bit. Turret and vertical-launch allocation
+failure preserve the ready state, while a successful vertical-launch allocation
+clears both the result and the latch and a successful turret allocation clears
+both as well. The ballistic no-solution sentinel (the angle-domain value
+`0x8000`) suppresses Aim dispatch entirely. A missing Aim script, a zero
+completion delivery, or an exhausted projectile pool therefore means the turret
+and vertical-launch families cannot fire; the line-of-sight/self-propelled
+family's query fallback may still supply a muzzle piece, but no Aim result is
+invented on its behalf `[R-P0-07]`.
+
+**Established fact:** The direct (non-ballistic) aim solver takes the AimFrom
+piece world point `p` and the target point `t` and computes
+
+```
+yaw   = atan2q(p.X - t.X, p.Z - t.Z) - unitHeading        ; relative, int16
+dist  = trunc(hypot((double)(p.X - t.X), (double)(p.Z - t.Z)))   ; 16.16
+pitch = atan2q(-(int16)((p.Y - t.Y) >> 16), (int16)(dist >> 16)) ; absolute
+```
+
+and always reports success. Note that the pitch is solved at **whole
+world-unit** resolution: both operands are the high words of 16.16 quantities,
+so a target closer than one world unit horizontally quantizes to a pitch of
+±90 degrees or zero. The same two expressions appear verbatim in the
+line-of-sight executor (writing absolute yaw, without the heading subtraction),
+in the ordinary creator, and in projectile guidance.
+
+**Established fact:** The angular-drift gate compares the slot's stored angles
+against a wanted pair:
+
+```
+tolerance != 0:  yawGate = tolerance
+                 pitchGate = pitchtolerance != 0 ? pitchtolerance : tolerance
+tolerance == 0:  yawGate = pitchGate = (unit is stationary ? 150 : 2000)
+pass when |(int16)(slotYaw - wantYaw)| <= yawGate
+      and |(int16)(slotPitch - wantPitch)| <= pitchGate
+```
+
+Both comparisons are **inclusive** and both errors are the absolute value of a
+signed 16-bit difference, so an error of exactly the gate passes. "Stationary"
+is the unit's **movement tier being category 0** — the two-bit tier the movement
+integrator caches in bits 2–3 of the movement-mode word, whose category 0 covers
+a zero scalar speed *and* a mover-inhibited unit *and* a unit attached to a
+carrier, and whose transitions raise `StopMoving`/`StartMoving` and
+`MoveRate1..3` `[04 §5.2]`. A transported unit therefore aims under the tight
+gate. **Correction:** earlier text called the 150 case "the non-air class".
+There is no class or category-mask test here; the field is the movement tier, so
+the tight gate applies to a stationary (or carried, or inhibited) unit of any
+kind and the loose gate to any unit whose tier is 1, 2 or 3 `[R-WPN-01 §1]`.
+
+**Established fact:** A pre-fire lead is applied to the resolved target point,
+and only there — projectile guidance never leads (§6.7). The lead runs when all
+of: the slot's armed bit is set; the weapon is **not** `cruise`; the target unit
+has a movement record; the shooter's credited-kill count is **strictly greater
+than five**; and `weaponvelocity` is nonzero. Then
+
+```
+D  = trunc(sqrt((dX*dX + dY*dY) + dZ*dZ))    ; dX = shooter.X - point.X, etc.,
+                                             ; raw 16.16 deltas, x87 extended
+T  = ((int64)D << 16) / weaponvelocity       ; signed 64-bit divide, ticks in 16.16
+T2 = ((int64)T * 0xcccc) >> 16               ; scale by 52,428/65,536 = 0.79998779…
+point.X += (int32)(((int64)mover.velocityX * T2) >> 16)
+point.Y += ...velocityY...   point.Z += ...velocityZ...
+```
+
+The 0.8 factor and the six-kill threshold are read from the image, not chosen.
+The distance here is three-dimensional, unlike the range test.
+
+**Established fact:** The ballistic solver takes the three signed 32-bit deltas
+`(dx, dy, dz)` from the aim source to the target, the 16.16 `weaponvelocity`
+`V`, and the single-precision `minbarrelangle` `m` in radians, and reads the
+gravity global `g`. Every step below is IEEE double except where noted:
+
+```
+D    = hypot((double)dx, (double)dz)             ; the 80-bit register value
+D2   = D80 * D64                                 ; the register value times its own
+                                                 ; double-precision store
+S    = (double)dy * (double)dy
+B    = (V*V + g*dy) * D2
+disc = (S*(g*g) + (V*V + 2*g*dy) * (V*V)) * D2*D2  -  D2*D2*(g*g)*(S + D2)
+if (disc < 0 or unordered)  return 0x8000
+r1 = (sqrt(disc) + B) / (2*(S + D2))
+r2 = (B - sqrt(disc)) / (2*(S + D2))
+a1 = (r1 <= 0) ? pi/2 : acos(sqrt(r1) / V)
+a2 = (r2 <= 0) ? pi/2 : acos(sqrt(r2) / V)
+accept a1 when  m < a1  and  a1 <= pi/4
+else accept a2 when  m < a2  and  a2 <= pi/4
+else return 0x8000
+return trunc(accepted * 32768.0 * (1/pi))        ; two multiplies, in that order
+```
+
+`g*g` is formed as a 32-bit signed integer multiply before its conversion to
+double, so a large gravity wraps there. `dx`, `dy` and `dz` wrap as signed
+32-bit before conversion. The discriminant is compared against exactly zero
+with no epsilon guard, and the unordered result of a NaN compares as "less
+than", so a NaN discriminant also returns the sentinel. The lower gate is
+**strict** and the upper gate at π/4 is **inclusive**; the plus root is always
+tested first. `r1` or `r2` at or below zero substitutes π/2, which then fails
+the π/4 gate — this is how an unreachable target is rejected rather than by an
+arithmetic error. **Unknown:** whether `sqrt(r) / V` can exceed one on
+malformed input and, if so, what the runtime's `acos` returns and how the
+unordered compares then behave; the surviving evidence shows the gates would
+treat an unordered result as acceptable and serialize `trunc(NaN)`. *Decider:*
+static trace of the runtime `acos` domain path plus a reachability argument over
+the root expression.
+
+**Established fact:** When `weaponvelocity` is zero and the ballistic creator is
+reached, the pool record has already been reserved and the live count already
+incremented before the unsigned distance-over-velocity division raises the
+processor divide exception, and the count is not rolled back (§6.4).
 
 **Established fact:** The simulation keeps three distinct visibility-like
 layers. The authoritative word mask is a 16-bit word per map tile quarter, each
@@ -509,98 +669,189 @@ mode-Q/mode-D dispatcher in `internal/cob/bridge.go`.
 ### 4.1 Fire callback order
 
 **Established fact:** The presentation order on the firing side is fixed:
-**root allocation, then the weapon's start sound, then the matching
+**pool reservation, then the weapon's start sound, then the matching
 FirePrimary, FireSecondary, or FireTertiary callback, then RockUnit, then start
-smoke.** The start sound is emitted by the common initializer, so it precedes
-the Fire callback rather than following it. Successful normal, ballistic, and
-vertical-launch root spawners follow this order; the dropped-family inline
-allocator emits neither Fire nor RockUnit in its recovered path, and the direct
-meteor path runs only the common initializer and copies its packet velocity.
-Burst clones rerun none of it.
+smoke.** The start sound is emitted as the last act of the common initializer,
+so it precedes the Fire callback rather than following it. The ordinary,
+ballistic, and vertical-launch creators all follow this order; the
+dropped-family inline allocator emits neither Fire nor RockUnit, and the meteor
+creator runs only the common initializer and copies its packet velocity. Burst
+clones rerun none of it.
 
-**Established fact:** A muzzle piece is queried synchronously before initialization through the §3.4 AimFrom/Query fallback: the AimFrom sentinel −1 selects the matching Query fallback, and a negative or invalid result from either query resolves through the normal muzzle-position path — it is never a reason to authorize a shot. The root projectile records the muzzle piece identity so a later burst clone can re-query the muzzle world position [R-P0-07].
+**Established fact:** The pool reservation happens **first** in the ordinary,
+ballistic, vertical-launch and meteor creators — before the common initializer
+and before any velocity arithmetic — and consists of: test the live count
+against the hard cap of 300; take the record at that index; increment the count;
+clear the record's dead bit; clear its retained unit target. A full pool returns
+failure with nothing else done. The dropped executor is the exception: it runs
+its muzzle query before reserving.
 
-**Established fact:** FirePrimary, FireSecondary, or FireTertiary is a deferred zero-cell callback and RockUnit is a deferred two-cell callback. RockUnit's recoil arguments are `(-cos(rel)*800, -sin(rel)*800)`, where `rel` is the stored commanded barrel direction minus the unit heading, evaluated through the shared 512-entry integer sine/cosine table with round-to-nearest products [R-P0-07].
+**Established fact:** A muzzle piece is queried synchronously before
+initialization through the §3.4 AimFrom/Query fallback. The engine passes a
+piece argument of −1 to mean "ask the script": the query then calls
+`AimFromPrimary`/`AimFromSecondary`/`AimFromTertiary` with a single in/out
+argument preset to −1, and falls back to `QueryPrimary`/`QuerySecondary`/
+`QueryTertiary` with the argument preset to **0** when the script left the
+AimFrom value at −1. The resulting piece index is converted through the unit's
+current piece transform and added to the unit's world position; a negative or
+invalid result resolves through the normal muzzle-position path and is never a
+reason to authorize a shot. A non-negative piece argument (the burst
+re-query, §4.3) uses that piece directly and makes no COB call. The root
+projectile records the muzzle piece identity so a later burst clone can
+re-query the muzzle world position `[R-P0-07]`.
 
-**Established fact:** Fire callbacks are not called when the projectile pool is full. Start and trail smoke are separate engine events controlled by weapon flags and delays.
+**Established fact:** FirePrimary, FireSecondary, or FireTertiary is a deferred
+zero-cell callback and RockUnit is a deferred two-cell callback. RockUnit's
+recoil arguments are `(-cos(rel, 800), -sin(rel, 800))` in the §3.3
+scaled-trigonometry form, where `rel` is the slot's stored commanded barrel
+heading minus the unit heading as a signed 16-bit difference `[R-P0-07]`.
+
+**Established fact:** The common initializer, given the record, the weapon
+definition, the muzzle point, an optional aim point, the current tick and the
+shooter, performs exactly: store the definition; copy the muzzle point into
+**both** the current/head point and the second (tail/waypoint/start) point;
+copy the aim point into the stored target point **only when it is non-null**,
+leaving the previous occupant's stored target point in place otherwise; clear
+the beam latch; set the creation tick; clear the burst-remaining count; clear
+the projectile link; seed the smoke deadline to the current tick; clear the
+retained unit target; clear the two-phase state bits; and then either, for a
+null shooter, write the neutral side byte 10 and a null shooter reference, or,
+for a real shooter, write the shooter's side byte and reference, capture the
+record as the followed projectile when the shooter is the follow-camera unit,
+find the shooter's slot index by scanning its three slots for this definition,
+resolve and store the firing piece, and stamp the shooter's "fired recently"
+deadline at **current tick + 600**. It finally hands the weapon's start-sound
+identity and the muzzle point to the audio layer. It does **not** clear the
+whole reused record, does not initialize velocity, angles, scalar speed or
+expiry, and does not clear the stored target point.
+
+**Established fact:** Fire callbacks are not called when the projectile pool is
+full, because the reservation precedes them in every creator that emits them.
+Start and trail smoke are separate engine events controlled by weapon flags and
+delays (§7.3).
 
 ### 4.2 Costs and reload
 
-**Established fact:** Resource debit is performed only after successful spawner
-return. The normal weapon's authored energy and metal costs are used as direct
-per-shot amounts. Both are prechecked before spawning; the post-spawn debit
-helper rechecks both and debits both or neither. Stockpile launch decrements
-ammunition and performs no ordinary per-launch resource debit.
+**Established fact:** `energypershot` and `metalpershot` are single-precision
+per-shot amounts with no scaling. They are **prechecked before the executor
+runs** — that is, before the Fire callback and before the projectile record
+exists — with two inclusive single-precision comparisons against the owning
+player's live energy and metal buckets:
 
-**Established fact:** For a successful non-stockpile shot, reload is computed
-with integer truncation in this order:
+```
+fire is permitted when  energypershot <= player.energy
+                  and   metalpershot  <= player.metal
+```
 
-`veteran tier = min(floor(unsigned kills / 5), 5)`
+and are **debited after the executor returns success**, that is after the Fire
+and RockUnit callbacks have been queued. The debit helper repeats both
+comparisons; on success it subtracts the energy, adds it to the shooter's
+energy-used accumulator, then re-reads the player and re-tests the metal
+comparison before subtracting the metal and adding it to the metal-used
+accumulator. (Earlier text said the helper "debits both or neither"; the metal
+test is genuinely re-evaluated, and only the metal half is skipped if it were to
+fail. Nothing between the two tests can change the metal bucket, so the
+observable outcome is unchanged — the precise shape is recorded because a
+faithful clone must not fold the two tests into one `[R-WPN-01 §7]`.) A
+`stockpile` weapon takes neither path: it decrements ammunition and performs no
+per-launch resource debit.
 
-`veteran reload = floor((100 - 6 × veteran tier) × authored reload / 100)`
+**Established fact:** On a successful non-stockpile shot the unit's "fired this
+tick" status word receives bit `0x800` when `commandfire` is authored and bit
+`0x400` otherwise, and the slot's reload timer is written with integer
+truncation in this order (all divisions truncate toward zero; `reloadtime` is
+already `trunc(authored seconds × 30)` stored as a signed 16-bit tick count):
 
-`health factor = 120 - floor(20 × signed health / unsigned maximum health)`
+```
+veteran tier   = min(unsigned kills / 5, 5)
+veteran reload = ((100 - 6 * veteran tier) * reloadtime) / 100      ; signed
+health factor  = 120 - (unsigned)(signed health * 20) / unsigned maximum health
+stored reload  = (health factor * veteran reload) / 100             ; signed
+```
 
-`stored reload = floor(health factor × veteran reload / 100)`
-
-Stockpile launch does not write reload. The zero-maximum-health contract is
-closed in §9.1 (healing clamps to zero without dividing; the TakeDamage
-percentage and this health term perform unguarded unsigned divisions and must
-be guarded as an error path). Negative health and overflow outside ordinary
-state remain malformed-state unknowns.
+and the result is stored into the slot as a signed 16-bit tick count. The stored
+value is decremented once per tick at the top of the slot's own pass, so a
+stored reload of *n* blocks *n* subsequent ticks. Stockpile launch does not
+write reload. The zero-maximum-health contract is closed in §9.1 (healing clamps
+to zero without dividing; the TakeDamage percentage and this health term perform
+unguarded unsigned divisions and must be guarded as an error path). Negative
+health and overflow outside ordinary state remain malformed-state unknowns.
 
 ### 4.3 Burst state
 
-**Established fact:** A weapon's burst count is copied into the root projectile. The projectile stores a burst deadline and decrements its remaining count when a burst shot is emitted. The burst interval is added to the next deadline.
+**Established fact:** A weapon's authored `burst` count is copied into the root
+projectile as a signed 16-bit remaining count by the ordinary, ballistic and
+vertical-launch creators (the dropped and meteor creators leave it at the zero
+the common initializer wrote). The root's creation-tick field doubles as the
+burst deadline. A due attempt decrements the remaining count and **adds**
+`burstrate` to that deadline rather than re-anchoring it to the current tick.
 
-**Established fact:** Burst spray uses the simulation RNG and trigonometric
-helpers. Random decay adds a second RNG-derived expiry perturbation where
-configured. An earlier "spray sampling shape" reading — two draws bounded by
-the authored spray-angle field and a "wobble field adjacent to it", both
-applied to the projectile's stored yaw and pitch — is superseded by direct
-re-derivation; there is no wobble field (the weapon record's spray-angle and
-random-decay fields are separated by the duration field), and the burst
-path's two draws are:
+**Established fact:** Burst spray and random decay consume the **simulation**
+RNG, in this order and only when the clone allocation succeeded:
 
-1. **Random-decay draw (first):** when the authored random-decay value is
-   nonzero, one simulation-RNG draw with bound equal to it; the successful
-   clone's expiry is incremented by `draw - randomDecay/2` — a centered
-   expiry jitter on the clone only.
-2. **Spray draw (second):** when the authored spray-angle value is nonzero,
-   one simulation-RNG draw with bound equal to it; the PARENT's stored
-   heading is rewritten as `heading - sprayAngle/2 + draw`, and the parent's
-   velocity X and Z are recomputed from the new heading and the UNCHANGED
-   pitch through the same fixed-point angle helpers, using the weapon
-   velocity as magnitude — not incremented in Cartesian space. Pitch is never
-   jittered in the burst path.
+1. **Random-decay draw (first):** when `randomdecay` is nonzero, one simulation
+   draw with bound equal to it; the **clone's** expiry becomes
+   `expiry + draw - (randomdecay >> 1)` — a centred expiry jitter on the clone
+   only, with the halving an unsigned 16-bit shift.
+2. **Spray draw (second):** when `sprayangle` is nonzero, one simulation draw
+   with bound equal to it. The perturbed heading is
+   `a = draw + (int16)(parentYaw - (sprayangle >> 1))`, and the **parent's**
+   velocity X and Z are rebuilt from `a` and the parent's **unchanged** pitch
+   using the weapon's authored `weaponvelocity` as the magnitude:
+   `H = cos(parentPitch, weaponvelocity)`, `velocityX = -sin(a, H)`,
+   `velocityZ = -cos(a, H)`. The parent's velocity Y is left alone and pitch is
+   never jittered.
 
-Both draws are consumed only when the clone allocation succeeded; a pool-full
-burst attempt consumes neither. The bounds are authored values and the count
-is two, so both are inputs to the shared simulation sequence: a wrong bound or
-a wrong count desynchronizes every later draw in the game, not merely the
-pellet. The two-draw yaw-and-pitch site of the earlier reading is actually the
-slot executor's accuracy spread of §4.4, whose bound is computed, not
+**Correction.** Earlier text said the parent's *stored heading* is rewritten to
+`heading - sprayAngle/2 + draw`. It is not: `a` is computed into a register,
+used for the two velocity components, and discarded. The parent's stored yaw
+keeps its original value for the whole burst, so successive pellets scatter
+around the **original** aim direction instead of random-walking away from it.
+The distinction is observable after two or more pellets `[R-WPN-01 §2]`. The
+earlier "spray sampling shape" reading — two draws bounded by `sprayangle` and a
+"wobble field adjacent to it", both applied to yaw and pitch — remains
+superseded: there is no wobble field (`sprayangle` and `randomdecay` are
+separated by `duration` in the record), and the two-draw yaw-and-pitch site is
+the turret executor's accuracy spread of §4.4, whose bound is computed, not
 authored.
 
-**Established fact:** A root whose remaining burst count is nonzero is a
-scheduler/template, not an ordinary moving projectile. It is a stationary
-anchor parked at the muzzle: while its count is nonzero it takes the burst
-branch **instead of** all motion, collision, expiry, and trail smoke. On each
-due attempt the engine refreshes its position from the live muzzle **when the
-authored burst interval is greater than four or the remaining count is odd**,
-decrements the remaining count, advances the burst deadline, and tries to
-append a clone. This refresh is a burst-anchor policy, not an engine-side
-alternation between the Query and AimFrom callbacks [R-P0-07]. A successful
-clone receives a full copy of the parent, then has its creation/expiry state
-updated and its own remaining burst count cleared. It is therefore an ordinary
-moving projectile on the next projectile phase.
+Both draws use the shared simulation generator, which **returns zero without
+advancing the stream when its bound is below two**; so an authored `randomdecay`
+or `sprayangle` of 1 consumes no randomness at all. The bounds are authored
+values and the count is at most two per successful clone, so both are inputs to
+the shared simulation sequence: a wrong bound or a wrong count desynchronizes
+every later draw in the game, not merely the pellet.
 
-**Established fact:** The first attempt becomes due when the root's creation
-tick plus the burst interval is less than or equal to the current tick. An
-interval of zero can therefore emit a clone during the root's creation tick,
-but the captured phase span still prevents that clone from moving until the
-next tick. The scheduler makes at most one emission attempt per projectile
-phase; it does not loop to catch up several overdue intervals.
+**Established fact:** A root whose remaining burst count is nonzero is a
+scheduler/template, not an ordinary moving projectile. It is a stationary anchor
+parked at the muzzle: while its count is nonzero it takes the burst branch
+**instead of** all motion, collision, expiry, and trail smoke. On each due
+attempt the engine, in order:
+
+1. refreshes its position from the live muzzle **when `burstrate` is strictly
+   greater than four or the remaining count is odd** — the refresh re-runs the
+   piece-to-world conversion with the *stored* firing piece, so it makes no COB
+   call and cannot alternate between the Query and AimFrom callbacks
+   `[R-P0-07]`;
+2. decrements the remaining count and advances the deadline by `burstrate`;
+3. reserves a clone from the pool, and stops here if the pool is full;
+4. copies the parent's whole 107-byte record into the clone and sets the clone's
+   creation tick to the current tick;
+5. emits the clone-trigger sound when `soundtrigger` is authored;
+6. writes the clone's expiry: `now + weapontimer` when `weapontimer` is nonzero,
+   otherwise `now + (storedPlanarDistance + 0x100000) / scalarSpeed` — an
+   unsigned division of the root's stored muzzle-to-aim planar distance plus one
+   cell (16 world units in 16.16) by the root's scalar speed;
+7. applies the random-decay and spray draws above;
+8. clears the clone's own remaining burst count, so it is an ordinary moving
+   projectile on the next projectile phase.
+
+**Established fact:** The first attempt becomes due when
+`(uint32)(creationTick + burstrate) <= currentTick`. An interval of zero can
+therefore emit a clone during the root's creation tick, but the captured phase
+span still prevents that clone from moving until the next tick. The scheduler
+makes at most one emission attempt per projectile phase; it does not loop to
+catch up several overdue intervals.
 
 **Established fact:** The clone copy happens before spray is calculated. Spray
 changes the parent/template velocity, so it prepares the velocity inherited by
@@ -619,46 +870,82 @@ dead flag set **directly, with no removal dispatch**: no explosion, no sound, no
 shake, no end smoke, and no damage. With nonnegative authored state and no
 failed allocations, the number of moving clones equals the initial remaining
 burst count, so an authored burst of N produces N flying pellets plus one
-immobile anchor that removes itself silently at the instant pellet N launches.
-A root with an initial count of zero follows the ordinary moving-projectile path
+immobile anchor that removes itself silently at the instant pellet N launches. A
+root with an initial count of zero follows the ordinary moving-projectile path
 instead.
+
+**Established fact:** When a shooter dies, a separate sweep walks the whole pool
+and, for every record whose remaining burst count is nonzero and whose shooter
+reference is that unit, takes the follow-camera snap, sets the dead bit, and
+runs the compaction pass of §5.2 **inside the loop** — so the pool is compacted
+once per anchor found while the same ascending walk continues over the moved
+records. A unit that dies with two anchors alive therefore compacts twice.
 
 ### 4.4 Pool-full allocation retention
 
 **Established fact:** A failed projectile allocation returns failure before any
-record is created, but only after family-specific pre-allocation work has
-already run. The outer slot commit mutates reload, ammunition, firing state,
-and resources only when the selected executor returns nonzero, so retained
-work is observable through simulation-RNG consumption and mutated firing
-geometry, not through cost or reload state.
+record is initialized, but only after family-specific pre-allocation work has
+already run. The outer slot pipeline mutates reload, ammunition, firing status,
+and resources only when the selected executor returns nonzero, so retained work
+is observable through simulation-RNG consumption and mutated firing geometry,
+not through cost or reload state.
 
-**Established fact:** For the ordinary/ballistic slot executor, a failed
-allocation retains target and trajectory validation, the synchronous muzzle
-query, the weapon-slot angle mutation, and the executor's internal spread
-computation, including up to two simulation-RNG draws whenever the spread term
-is nonzero. The spread bound is computed from the parsed ACCURACY field, the
-shooter's health and maximum health, and the shooter's kill count: the health
-term is `trunc(health * 2048 / maximumHealth)`; the numerator is
-`accuracy + 2048 - healthTerm` truncated to 16 bits; the divisor is
-`trunc(kills / 12)`, and the bound is the numerator divided by the divisor,
-computed only when the divisor exceeds one (24 or more kills). When the bound
-is nonzero, two simulation-RNG draws with that same bound are applied to the
-slot's stored yaw and pitch as `draw - bound/2` each. An earlier reading that
-this spread does not consume the parsed fields is corrected: accuracy is its
-base term (tolerance and pitch-tolerance belong to the §3.3 drift gate, not
-this spread). The retained draws occur before the spawner call, so they are
-consumed even when allocation fails. Suppressed on
-failure: the record itself, Fire/RockUnit callbacks, start smoke, the shot
-packet, the pending-slot clear, reload, ammunition, firing state, and resource
-mutation.
+**Established fact:** The accuracy spread lives in the **turret** executor and
+only there. Its bound is computed from the parsed `accuracy` field, the
+shooter's health and maximum health, and the shooter's credited-kill count:
 
-**Established fact:** The vertical-launch executor retains the muzzle query,
-the weapon-slot angle rewrite, and the fire-time interceptor rescan on
-failure. The dropped family retains the muzzle query only; it has no
-Fire/RockUnit tail even on success. Meteor scheduling retains its random
-geometry and velocity preparation, so a pool-full storm tick consumes its
-draws, advances the strike timer, and silently drops the individual meteor
-with no retry.
+```
+divisor  = (uint16)kills / 12                                   ; unsigned
+health   = ((int32)currentHealth << 11) / maximumHealth         ; unsigned divide
+bound    = (uint16)(accuracy - health + 0x800)                  ; wraps to 16 bits
+if (divisor > 1)  bound = (uint16)bound / divisor               ; 64-bit unsigned
+if ((uint16)bound != 0) {
+    half = bound >> 1
+    slotYaw   += (int16)(rng(bound) - half)
+    slotPitch += (int16)(rng(bound) - half)
+}
+```
+
+The `<< 11` is the `× 2048` of the earlier text written as the shift the image
+performs. The divisor is only applied when it exceeds one, i.e. from 24 credited
+kills upward. Both draws use the same bound and the shared simulation generator,
+which does not advance the stream when the bound is below two. The spread is
+applied **after** the muzzle query and after the slot yaw has been converted
+from relative to absolute by adding the unit heading, and **before** the creator
+call, so the two draws are consumed even when allocation then fails.
+
+**Correction.** Earlier text attributed this spread to "the ordinary/ballistic
+slot executor". It belongs to the executor selected by the `turret` flag; the
+non-turret line-of-sight/self-propelled executor also reaches the ordinary
+creator and computes no spread and consumes no randomness at all. A weapon
+without `turret` therefore has perfectly accurate fire regardless of `accuracy`
+`[R-WPN-01 §3]`. The earlier reading that the spread does not consume the parsed
+fields is also corrected: `accuracy` is its base term (`tolerance` and
+`pitchtolerance` belong to the §3.3 drift gate, not this spread).
+
+**Established fact:** For the turret executor, a failed allocation retains
+target and trajectory validation, the synchronous muzzle query, the
+relative-to-absolute slot yaw rewrite, and the spread's up-to-two simulation
+draws. Suppressed on failure: the record itself, Fire/RockUnit callbacks, start
+smoke, the shot packet, the pending-slot clear, reload, ammunition, firing
+status, and resource mutation.
+
+**Established fact:** The vertical-launch executor retains the muzzle query, the
+slot angle rewrite, and the fire-time interceptor rescan on failure. The
+line-of-sight/self-propelled executor retains the muzzle query, the slot angle
+rewrite and the drift gate, and draws nothing. The dropped executor retains the
+muzzle query only; it has no Fire/RockUnit tail even on success. Meteor
+scheduling retains its random geometry and velocity preparation, so a pool-full
+storm tick consumes its C-runtime draws, advances the strike timer, and silently
+drops the individual meteor with no retry.
+
+**Established fact:** `aimrate`, `movingaccuracy`, `noselfdamage`,
+`impulsefactor` and `impulseboost` have **no parser entry**, because their
+spellings occur nowhere in the executable's string data at all — a whole-image
+search, not a bounded reader census. Nothing in the firing, readiness, spread,
+drift or projectile-motion paths can consume them. `holdtime` is parsed and is
+read by exactly five sites, all of them the follow-camera hand-off described in
+§7.3; it has no effect on firing, motion, or damage.
 
 ## 5. Projectile pool, identity, and lifetime
 
@@ -761,25 +1048,56 @@ adjacency at unit-death time remains to be proved.
 
 ### 6.1 Prerequisite projectile state
 
-**Established fact:** All delivery families use one bounded projectile pool and one packed logical record shape. The family algorithms require at least:
+**Established fact:** All delivery families share one bounded pool of **300**
+packed logical records of **107 bytes** each, and the record holds exactly these
+fields, all of which an implementation needs:
 
-- weapon definition and owner side;
-- current/head point and a second tail/waypoint/start point;
-- stored target point;
-- velocity, yaw, pitch, and scalar speed;
-- creation, expiry, and smoke deadlines;
-- retained unit target and a separate optional projectile-to-projectile link;
-- burst remaining, firing piece, and shooter;
-- visual propeller orientation;
-- beam latch, dead state, and two-phase state.
+- weapon definition reference and owner side byte;
+- current/head point and a second tail/waypoint/start point, both 16.16 X/Y/Z;
+- stored target point, 16.16 X/Y/Z;
+- velocity X/Y/Z in 16.16 world units per tick;
+- yaw and pitch as `uint16` angles, plus a scalar speed in 16.16 per tick;
+- a stored planar muzzle-to-aim distance in 16.16, written by the ordinary
+  creator only;
+- creation tick (which doubles as the burst deadline), expiry tick, and smoke
+  deadline, all 32-bit unsigned tick counts compared with unsigned tests;
+- a retained unit target and a separate optional projectile-to-projectile link;
+- remaining burst count (signed 16-bit), firing piece, and shooter reference;
+- a visual propeller angle and one further visual accumulator used by the meteor
+  family;
+- a pre-compaction index stamp (§5.2);
+- a state byte holding the beam latch in bit 0, the dead flag in bit 1, and the
+  two-phase state in bits 4–5.
 
-**Established fact:** Common initialization copies the muzzle point into both the current/head point and the second point. An optional aim point is copied into the stored target point, not into the beam tail. It clears the beam latch and two-phase state, seeds the smoke deadline, clears the two target/link references, records owner information, and hands off the start sound. It does not clear the entire reused record and does not initialize family velocity or expiry.
+**Established fact:** Common initialization is specified verbatim in §4.1. Its
+two consequences for the families below are that the second point starts equal
+to the muzzle point (so a beam has zero length on its creation tick) and that a
+creator which passes a null aim point — the ballistic, dropped and meteor
+creators do — leaves the **previous** occupant's stored target point in the
+record.
+
+**Established fact:** The propeller visual is not a family. When `propeller` is
+authored, the record's propeller angle is advanced by exactly **1,024 angle
+units per tick** (5.625 degrees, one sixty-fourth of a circle) at the top of the
+ordinary motion path, before any family dispatch, wrapping modulo 65,536. It is
+consumed only by the renderer and never by motion or collision.
 
 ### 6.2 Creation dispatch versus active motion dispatch
 
-**Established fact:** Projectile event reconstruction chooses a root creator using ordered predicates:
+**Established fact:** Two different orderings exist and both must be reproduced.
 
-1. meteor creates directly from packet velocity and does not require a live unit target;
+The **live-fire** ordering is decided once at catalog compile time and is the
+executor order of §3.3: `turret`, else `vlaunch`, else `lineofsight` or
+`selfprop`, else `dropped`, else nothing. Inside the turret executor a second
+choice picks the creator: `lineofsight` or `selfprop` selects the ordinary
+creator; otherwise `ballistic` selects the ballistic creator; otherwise nothing
+is fired.
+
+The **projectile-event reconstruction** path chooses a root creator with a
+different ordered predicate list:
+
+1. meteor creates directly from packet velocity and does not require a live unit
+   target;
 2. other event paths require a non-null live unit target;
 3. ballistic selects the ballistic creator;
 4. otherwise vertical-launch selects the vertical creator;
@@ -787,195 +1105,441 @@ adjacency at unit-death time remains to be proved.
 6. otherwise dropped selects its small inline creator;
 7. otherwise no projectile is created.
 
-Beam, guidance, cruise, propeller, burn-blow, no-explode, render type, and firestarter do not independently select a creator. Guidance alone is not a projectile creation family.
+Beam, guidance, cruise, propeller, burn-blow, no-explode, render type, and
+firestarter do not independently select a creator. Guidance alone is not a
+projectile creation family.
 
-**Established fact:** An already-created ordinary record uses a different ordered motion dispatch. Propeller presentation advances first, then the first matching family owns the tick:
+**Established fact:** An already-created record uses a third ordering, the
+motion dispatch. Only a record whose remaining burst count is zero reaches it.
+The propeller advance runs first, then the first matching flag owns the tick:
 
-1. self-propelled;
-2. otherwise line-of-sight/direct;
-3. otherwise ballistic;
-4. otherwise dropped;
-5. otherwise meteor;
-6. otherwise no ordinary motion or collision.
+1. `selfprop`;
+2. otherwise `lineofsight`;
+3. otherwise `ballistic`;
+4. otherwise `dropped`;
+5. otherwise `meteor`;
+6. otherwise no motion, no collision, and no expiry handling at all.
 
-Flags are therefore composable predicates, not a disjoint family enum. Implementations must preserve both orderings independently.
+Flags are therefore composable predicates, not a disjoint family enum.
 
 ### 6.3 Ordinary/direct creation and motion
 
-**Established fact:** The ordinary creator derives yaw and pitch from muzzle to target. Initial scalar speed is selected in this order: nonzero start velocity; otherwise zero when acceleration is nonzero; otherwise weapon velocity. It derives the velocity vector from that speed and orientation.
+**Established fact:** The ordinary creator, given the slot, the shooter, the
+muzzle point `m`, the aim point `t` and the target unit, computes
 
-**Established fact:** Ordinary expiry is the current tick plus weapon timer when weapon velocity is zero or no-auto-range is enabled. Otherwise it is the current tick plus integer `range shifted by the fixed-point fraction / weapon velocity`. The creator retains the unit target, writes burst state, starts the selected Fire callback, then RockUnit, then optional start smoke.
+```
+yaw   = atan2q(m.X - t.X, m.Z - t.Z)                              ; absolute
+dist  = trunc(hypot((double)(m.X - t.X), (double)(m.Z - t.Z)))    ; stored on the record
+pitch = atan2q(-(int16)((m.Y - t.Y) >> 16), (int16)(dist >> 16))
+speed = startvelocity != 0 ? startvelocity
+      : weaponacceleration != 0 ? 0
+      : weaponvelocity
+velocityY = sin(pitch, speed)
+H         = cos(pitch, speed)
+velocityX = -sin(yaw, H)
+velocityZ = -cos(yaw, H)
+```
 
-**Established fact:** A live direct record moves and collides only while current tick is strictly less than expiry. At equality or later it retires through the end/expiry-effect path. It does not move, collide, or deliver expiry damage on that tick.
+using the §3.3 scaled trigonometry throughout. The stored planar distance is the
+value the burst clone expiry of §4.3 later divides.
+
+**Established fact:** Ordinary expiry is
+
+```
+expiry = (weaponvelocity == 0 || noautorange)
+       ? currentTick + weapontimer
+       : currentTick + (uint32)(range << 16) / weaponvelocity
+```
+
+where `range << 16` is a 32-bit signed shift of the authored integer range,
+reinterpreted unsigned for the division, and `weaponvelocity` is the 16.16
+velocity per tick. That is the whole of the "shifted by the fixed-point
+fraction" expression the previous text left unwritten: the numerator is the
+range promoted to 16.16 world units and the quotient is a whole tick count,
+truncated. An authored range at or above 32,768 makes `range << 16` negative and
+the unsigned reinterpretation enormous, so the expiry wraps; stock content does
+not author it. The creator then retains the unit target, copies the authored
+burst count, starts the selected Fire callback, then RockUnit, then optional
+start smoke.
+
+**Established fact:** A live direct record moves and collides only while
+`currentTick < expiry`, an unsigned comparison. At equality or later it retires:
+it takes the follow-camera snap and sets its dead bit, without moving, without
+colliding, and without delivering expiry damage. When `beamweapon` is authored,
+an integrating tick additionally advances the beam: while the latch is clear the
+tail stays fixed and the latch is set on the first tick where
+`creationTick + duration < currentTick` (strict, and the tick that sets it still
+leaves the tail fixed); once latched, the second point advances by the same
+velocity vector as the head, preserving the segment length.
 
 ### 6.4 Ballistic and dropped motion
 
-**Established fact:** The ballistic solver computes candidate pitch angles from
-target delta, weapon velocity, gravity, and minimum barrel angle using double
-arithmetic and an `acos(sqrt(ratio) / velocity)` construction that accepts only
-solutions at or below 45 degrees; a negative discriminant returns a sentinel
-and no firing occurs. The creator then uses fixed-table sine and cosine helpers
-of the form `(tableValue × magnitude + 0x1000) >> 13` with angle quantization
-in 64-unit steps.
+**Established fact:** The ballistic solver is specified in full in §3.3. Its
+result reaches the ballistic creator as the slot's stored pitch; the slot's
+stored yaw is the relative aim angle already converted to absolute by the
+executor.
 
-**Established fact:** The solver's comparison constants live in read-only
-data: the discriminant is tested against exactly zero with no positive epsilon
-guard, and the upper acceptance gate is pi/4. A negative or unordered
-discriminant returns the no-solution sentinel; a discriminant of exactly zero
-proceeds through the equal-root arithmetic subject to the ordinary gates.
-Candidate roots are evaluated in strict order — the plus root first, then the
-minus root — and each is accepted only when `minimum barrel angle < pitch <=
-pi/4`; over-45-degree arcs are rejected. The accepted angle serializes as
-`trunc(angle * 32768 / pi)` into the 16-bit angle domain.
+**Established fact:** The ballistic creator initializes velocity as
+
+```
+T0        = (uint32)slotDistance / weaponvelocity        ; unsigned, whole ticks
+velocityY = sin(pitch, weaponvelocity) - T0 * gravity    ; 32-bit signed multiply
+H         = cos(pitch, weaponvelocity)
+velocityX = -sin(yaw, H)
+velocityZ = -cos(yaw, H)
+```
+
+where `slotDistance` is the distance the slot recorded when it solved, and
+`gravity` is the map's per-tick gravity global in 16.16. The pre-decrement of
+the vertical component by one flight-time's worth of gravity is part of the
+launch, not an integrator artefact, and must be reproduced. **Unknown:** the
+intended geometric meaning of that pre-decrement, and therefore whether an
+implementation may simplify it; the arithmetic itself is Established. *Decider:*
+a manual retail observation of a stock ballistic weapon's apex against the
+literal expression, run as an authored `probes/` scenario.
 
 **Established fact:** Non-burn-blow ballistic lifetime is timer based:
-`expiry = now + weaponTimer`. Burn-blow lifetime is not gravity-derived; it is
-computed from horizontal distance and the horizontal speed component:
+`expiry = currentTick + weapontimer`. Burn-blow lifetime is not gravity-derived;
+it is computed from horizontal distance and the horizontal speed component:
 
 ```
-wideDistance = trunc(hypot(targetX - muzzleX, targetZ - muzzleZ))
-H = fixedCos(pitch, weaponVelocity)
-T = signedDivide(wideDistance, H)
-expiry = now + T
+wideDistance = trunc(hypot((double)(m.X - t.X), (double)(m.Z - t.Z)))
+H            = cos(pitch, weaponvelocity)
+T            = wideDistance / H            ; signed 64-by-32 divide, truncating
+expiry       = currentTick + T
 ```
 
-Gravity shapes the solved trajectory and initial vertical velocity but is not
-an operand in this deadline division. A positive `T` permits exactly `T`
+Gravity shapes the solved trajectory and the initial vertical velocity but is
+not an operand in this deadline division. A positive `T` permits exactly `T`
 ballistic integration visits before the expiry visit; `T == 0` impacts at the
 muzzle in the creation tick's projectile phase. None of the malformed cases
 below is reachable under ordinary positive stock inputs.
 
-**Established fact:** Malformed ballistic arithmetic is closed case by case.
-The gravity-squared product wraps as a signed 32-bit integer multiply before
-its double conversion. Muzzle/target X and Z delta components wrap as signed
-32-bit values before their double conversion. A distance whose `hypot` exceeds
-the signed 32-bit domain is truncated so the creator keeps the low 32 bits
-treated as signed for the deadline division. A zero weapon velocity reaching
-the ballistic creator raises the processor divide exception on the unsigned
-distance/velocity division — and because that creator reserves its pool record
-BEFORE any common initialization and velocity arithmetic, the active count is
-not rolled back when the exception fires. In the burn-blow deadline division,
-a zero horizontal speed component raises the divide exception; a negative
-component yields a quotient truncated toward zero and added modulo 2^32,
-unreachable from a valid positive-velocity solver result; and a quotient of
-minimum negative magnitude with divisor negative one raises the signed-divide
+**Established fact:** Malformed ballistic arithmetic is closed case by case. The
+gravity-squared product wraps as a signed 32-bit integer multiply before its
+double conversion. Muzzle/target X and Z delta components wrap as signed 32-bit
+values before their double conversion. A distance whose `hypot` exceeds the
+signed 32-bit domain is truncated so the creator keeps the low 32 bits treated
+as signed for the deadline division. A zero `weaponvelocity` reaching the
+ballistic creator raises the processor divide exception on the unsigned
+distance-over-velocity division — and because that creator reserves its pool
+record **before** any common initialization and velocity arithmetic, the live
+count is not rolled back when the exception fires. In the burn-blow deadline
+division, a zero horizontal speed component raises the divide exception; a
+negative component yields a quotient truncated toward zero and added modulo
+2^32, unreachable from a valid positive-velocity solver result; and a quotient
+of minimum negative magnitude with divisor negative one raises the signed-divide
 overflow exception.
 
 **Established fact:** Burn-blow deadlines wrap modulo 2^32, and the later
 unsigned expiry test is not wrap-aware: a wrapped deadline can satisfy
-`expiry <= now` immediately and fire on its first test. With both burn-blow
-and no-explode authored, the deadline impact does not retire in the ordinary
-impact branch, so an already-expired record repeats the FULL central impact —
-presentation and damage alike — on every subsequent visit while the deadline
-stays expired. The authored corpus contains no weapon combining the two flags.
+`expiry <= currentTick` immediately and fire on its first test. With both
+burn-blow and no-explode authored, the deadline impact does not retire in the
+ordinary impact branch, so an already-expired record repeats the FULL central
+impact — presentation and damage alike — on every subsequent visit while the
+deadline stays expired. The authored corpus contains no weapon combining the two
+flags.
 
-**Established fact:** A ballistic record with a zero weapon timer integrates
-without an expiry test. With a nonzero timer, it integrates only while current
-tick is strictly less than expiry. An integrating tick adds velocity to
-position, adds all three global wind values directly to position, subtracts
-gravity from vertical velocity, and then performs current-point collision.
+**Established fact:** Ballistic motion per tick is:
 
-**Established fact:** On ballistic timer expiry, burn-blow calls central
-impact. Without burn-blow, the projectile emits its expiry puff and retires
-without impact damage.
+```
+if (weapontimer == 0)                       ; no expiry test at all
+    integrate
+else if (expiry <= currentTick)             ; unsigned
+    burnblow ? central impact and skip collision
+             : expiry puff, follow-camera snap, dead bit, no collision
+else
+    integrate
 
-**Established fact:** Dropped records add velocity, add all three wind values directly to position, subtract gravity from vertical velocity, and collide. The dropped motion branch has no expiry test.
+integrate:
+    point   += velocity                      ; all three components
+    point.X += windX ; point.Y += windY ; point.Z += windZ
+    velocityY -= gravity
+    run current-point collision
+```
+
+The three wind globals are added **to the position**, not to the velocity, and
+all three are applied including the vertical one.
+
+**Established fact:** On ballistic timer expiry without burn-blow the record
+emits its expiry puff — the same effect emitter the smoke trail uses — and
+retires without impact damage.
+
+**Established fact:** Dropped motion is the same integrate block with **no
+expiry test**: add velocity, add all three wind values to the position, subtract
+gravity from the vertical velocity, and collide, every tick, forever, until
+collision or removal ends it.
+
+**Established fact:** The dropped executor is also its own creator and its
+initial state is not derived from any aim solution. After the muzzle query and
+the pool reservation it sets scalar speed to zero, the record yaw to the
+**dropping unit's heading**, the vertical velocity to zero, and
+
+```
+velocityX = -sin(unitHeading, unitMaxVelocity)
+velocityZ = -cos(unitHeading, unitMaxVelocity)
+```
+
+where `unitMaxVelocity` is the **dropping unit definition's maximum velocity**
+in 16.16 per tick, not any weapon field. It writes no expiry, no burst count and
+no pitch, emits no Fire and no RockUnit callback, and emits no start smoke.
 
 ### 6.5 Meteor creation, scheduling, and motion
 
-**Established fact:** Meteor creation copies an explicit velocity and bypasses the ordinary aim solver. It uses the no-shooter owner path and does not initialize ordinary projectile expiry. Common initialization clears only its documented fields, so complete reused-slot initialization remains a reachability concern.
+**Established fact:** Meteor creation copies an explicit velocity vector and
+bypasses the ordinary aim solver. It reserves a pool record, runs the common
+initializer with a **null aim point and a null shooter** — so the record keeps
+the previous occupant's stored target point and takes the neutral side byte 10 —
+and writes the three velocity components verbatim. It initializes no expiry, no
+angles, and no scalar speed, so complete reused-slot initialization remains a
+reachability concern.
 
 **Established fact:** Each meteor tick adds velocity to the current point,
-advances two visual orientation accumulators by per-tick increments re-derived
-from velocity (specified below), and performs ordinary current-point collision.
-It does not apply wind, gravity, or normal expiry. Removal therefore depends on
-collision, leaving the map, or another external path.
+advances two visual orientation accumulators, and performs ordinary
+current-point collision. It does not apply wind, gravity, or any expiry test.
+Removal therefore depends on collision, leaving the map, or another external
+path.
 
-**Established fact:** Shower resolution tolerates bad data. An unresolved
-weapon name or a resolved weapon lacking the meteor flag falls back to weapon
-index zero instead of disabling. Literal-zero radius, density, duration, or
-interval OTA parameters do not disable the storm either: each zero substitutes
-the corresponding `gamedata/METEOR.TDF` default value and enables scheduling.
-Only an empty weapon name disables meteor scheduling.
+**Established fact:** Meteor render orientation has no stored angular-rate
+field. Each tick advances the first accumulator by
+`(int16)(velocityX >> 16) * 256` and the second by
+`(int16)(velocityZ >> 16) * 256`, both wrapping modulo 65,536 — effectively the
+low byte of each velocity's high half times 256. The rates are read fresh from
+the velocity components every tick and feed only presentation rotation, never
+motion, so any velocity change alters rotation immediately. An earlier reading
+that orientation advanced by dedicated stored angular-rate shorts is superseded.
 
-**Established fact:** Storm pacing and geometry are fixed formulas. Per-hit
-spacing is `trunc(30 / density)` ticks; density of 31 or greater collapses to
-zero, attempting a spawn on every storm tick. Each meteor spawns at exactly
-1350 world units of height with vertical speed fixed at −15 world units per
-tick (`velocity Y = −0xF0000`), so vertical arrival coincides with the 90-tick
-horizontal interpolation and impact lands exactly 90 ticks after spawn.
-Horizontal velocity components are `trunc(((target − origin) << 20) / 90)`.
-The origin Z offset is `(crtRandom * 10) / 0x8000 − 15` with integer division,
-giving −15 through −6: the origin is ALWAYS 6–15 cells north of the target.
-The origin X offset uses `crtRandom * 30 / 0x8000 − 15`, giving −15 through
-+14 lateral displacement. Lateral entry spread resolves through the retail
-sine/cosine tables holding `round(8192 * sin)` per 512-word turn with helpers
-returning `round(magnitude * sin)`, so lateral displacement is bounded by the
-radius value; the radius draw is `crtRandom * radius / 0x8000` and the angle
-draw is `crtRandom * 2`.
+**Established fact:** Storm parameters are installed once, from the mission's
+OTA keys or from `gamedata/meteor.tdf`:
 
-**Established fact:** Every meteor geometry draw comes from the C-runtime
-random stream — a separate thread-local generator — NOT the simulation RNG:
-six draws per meteor counting scheduling, where four scheduling-side draws are
-consumed on every evaluation even when the storm is disabled, then radius and
-angle per hit. Meteors consume ZERO simulation-stream draws. An earlier reading
-that meteor geometry drew from the shared simulation stream is superseded.
+```
+radius   = MeteorRadius                      ; integer key, verbatim
+spacing  = trunc(30.0f / MeteorDensity)      ; single-precision divide, ticks
+duration = trunc(MeteorDuration * 30.0f)     ; ticks
+interval = trunc(MeteorInterval * 30.0f)     ; ticks
+```
 
-**Established fact:** A pool-full spawn silently drops the individual meteor:
-the strike timer has already advanced and there is no retry. Spawn-side common
+**Established fact:** Shower resolution tolerates bad data, but not in the way
+earlier text described. An **empty** `MeteorWeapon` name disables scheduling —
+and still loads the `meteor.tdf` `[Default]` block over the parameters. A
+non-empty name is read together with the four numeric keys; if **any one** of
+radius, density, duration or interval is zero, the loader overwrites **all five
+fields — the weapon name and all four numbers — from the `[Default]` block**,
+and then enables scheduling. **Correction:** the previous text said "each zero
+substitutes the corresponding `gamedata/METEOR.TDF` default value"; a single
+zero replaces the whole block including the weapon name, so a mission that
+authors three good values and one zero does not keep the three
+`[R-WPN-01 §5]`. If the default block itself is missing or incomplete, the
+loader emits the diagnostic `Hey, hoser!  The default meteor shower data was
+bogus!` and leaves the parameters as they were. An unresolved weapon name, or a
+resolved weapon lacking the meteor flag, still falls back to weapon index zero
+instead of disabling.
+
+**Established fact:** The scheduler runs once per tick, **after** the projectile
+phase, so scheduler-created meteors first move on the next tick while unit-fired
+roots created in the unit phase can move in their creation tick. Its two blocks
+are:
+
+```
+if (currentTick >= nextStormStart) {
+    active         = 1
+    stormEnd       = currentTick + duration
+    nextStormStart = stormEnd + interval
+    nextHit        = currentTick
+    targetZ = (crtRand() * mapDepthCells)  / 0x8000        ; draw 1
+    targetX = (crtRand() * mapWidthCells)  / 0x8000        ; draw 2
+    originZ = targetZ + (crtRand() * 10) / 0x8000 - 15     ; draw 3
+    originX = targetX + (crtRand() * 30) / 0x8000 - 15     ; draw 4
+    if (!enabled) active = 0
+}
+if (active && currentTick >= nextHit) {
+    nextHit   = currentTick + spacing
+    velocityY = -0xF0000                                   ; -15 world units/tick
+    velocityX = ((targetX - originX) << 20) / 90           ; cells to 16.16 over 90 ticks
+    velocityZ = ((targetZ - originZ) << 20) / 90
+    r     = (crtRand() * radius)  / 0x8000                 ; draw 5
+    theta = (crtRand() * 0x10000) / 0x8000                 ; draw 6, i.e. crtRand()*2
+    start.X = (originX << 20) - sin(theta, r << 16)
+    start.Y = -velocityY * 90                              ; = 1350 world units
+    start.Z = (originZ << 20) - cos(theta, r << 16)
+    spawn the meteor with (start, velocity)
+}
+if (currentTick >= stormEnd) active = 0
+```
+
+All divisions are signed and truncate. `<< 20` is the cell-to-16.16 conversion
+(16 world units per cell). The spawn height of **1350 world units is not a
+literal**: it is `15 × 90`, the descent speed times the fixed 90-tick flight,
+which is why vertical arrival coincides exactly with the horizontal
+interpolation and impact lands exactly 90 ticks after spawn. Per-hit spacing of
+`trunc(30 / density)` collapses to zero at a density of 31 or more, attempting a
+spawn on every storm tick. The origin Z offset spans −15..−6, so the origin is
+**always 6 to 15 cells north of the target**; the origin X offset spans
+−15..+14.
+
+**Established fact:** Every meteor geometry draw comes from the C-runtime random
+stream — `state = state × 214013 + 2531011`, returning bits 16..30, held in
+thread-local storage — and **not** from the simulation stream. **Correction:**
+earlier text said "six draws per meteor counting scheduling". The correct census
+is **four draws each time the storm-start deadline is reached** — consumed even
+when meteors are disabled, because the enable flag is only tested at the end of
+that block — and **two draws per hit attempt**, including a hit attempt that
+then fails on a full pool. Meteors consume zero simulation-stream draws
+`[R-WPN-01 §6]`. The earlier reading that meteor geometry drew from the shared
+simulation stream is superseded.
+
+**Established fact:** A pool-full spawn silently drops the individual meteor: the
+strike timer has already advanced and there is no retry. Spawn-side common
 initialization takes the null-shooter path, giving meteors the neutral side
 byte, so meteor explosions credit nobody.
 
-**Established fact:** Meteor render orientation has no stored angular-rate
-field. Each tick advances the yaw accumulator by `(high 16 bits of velocity X)
-shifted left 8` and the pitch accumulator by `(high 16 bits of velocity Z)
-shifted left 8`, both wrapping modulo 2^16 — effectively the low byte of each
-velocity high half times 256. The rates are read fresh from the velocity
-components every tick and feed only presentation rotation, never motion, so
-any velocity change alters rotation immediately. An earlier reading that
-orientation advanced by dedicated stored angular-rate shorts is superseded.
-
-**Established fact:** The meteor-shower scheduler runs later than the projectile phase. Scheduler-created meteors first move on the next simulation tick. Unit-fired roots created before the projectile phase can move in their creation tick.
-
 ### 6.6 Vertical launch and two-phase behavior
 
-**Established fact:** A vertical-launch creator starts with zero yaw, a quarter-turn upward pitch, zero velocity components, and the ordinary start/acceleration/velocity scalar-speed hierarchy. It uses the same timer-versus-range expiry choice as ordinary creation. It retains the unit target and, when present, a separate matched-projectile link.
+**Established fact:** The vertical-launch creator sets yaw to zero, pitch to
+`0x4000` (a quarter turn, straight up), all three velocity components to zero,
+and the scalar speed by the same `startvelocity` / `weaponacceleration` /
+`weaponvelocity` hierarchy as the ordinary creator. It uses the same
+timer-versus-range expiry choice as §6.3, retains the unit target and, when the
+interceptor rescan supplied one, the matched-projectile link. It copies the
+authored burst count and clears the slot's Aim receiver.
 
-**Established fact:** There is no hard-coded eight-tick vertical-launch delay. A vertical two-phase projectile can remain at the launch point because its vector starts at zero and guidance is phase-gated until its first expiry transition. Authored expiry and flight-time values control this handoff.
+**Established fact:** There is no hard-coded eight-tick vertical-launch delay. A
+vertical two-phase projectile can remain at the launch point because its
+velocity vector starts at zero and guidance is phase-gated until its first
+expiry transition; with zero velocity, zero acceleration and no guidance it
+never moves at all. Authored expiry and `flighttime` values control the handoff.
 
-**Established fact:** At or after self-propelled expiry, burn-blow invokes central impact and skips gravity/phase-transition work. The visible control flow still adds the existing velocity and calls collision afterward even though ordinary impact normally set the dead bit. Without burn-blow, gravity is applied and motion/collision continues. If two-phase is enabled and phase state is still clear, that tick also sets expiry to current tick plus unsigned flight time, enters the observed first phase state, and clears both retained target references when tracks is not set. It does not toggle the entire phase mask. After this one transition, a later expiry without burn-blow continues gravity and collision rather than performing a second transition or automatically retiring.
+**Established fact:** At or after self-propelled expiry the tick behaves as
+follows. With `burnblow`, central impact is invoked and gravity and the
+phase-transition work are skipped. Without `burnblow`, gravity is subtracted
+from the vertical velocity and then, **if `twophase` is authored and the
+two-phase state bits are still zero**, that tick also sets
+`expiry = currentTick + (uint16)flighttime`, writes the two-phase state as
+`((state & 0xf0) + 0x10) & 0x30` — which from zero produces the first phase
+state and does not toggle the rest of the mask — and, **when `tracks` is not
+authored**, clears both the projectile link and the retained unit target. In
+either case the visible control flow then adds the existing velocity to the
+position and runs collision, even after a burn-blow impact normally set the dead
+bit. After this one transition, a later expiry without burn-blow continues
+gravity and collision rather than performing a second transition or
+automatically retiring.
 
 ### 6.7 Self-propelled acceleration and guidance
 
-**Established fact:** While live and eligible for propulsion, a self-propelled projectile adds acceleration to scalar speed and clamps overshoot to weapon velocity. Acceleration is independent of guidance. After optional guidance, the tick recomputes all velocity components from scalar speed, yaw, and pitch, moves, and performs current-point collision.
+**Established fact:** A self-propelled record's tick, while `currentTick <
+expiry`, is exactly:
 
-**Established fact:** A non-water weapon is always propulsion-eligible. A water weapon is eligible only when its saved pre-motion height is strictly below sea level. At or above sea level, it skips acceleration and guidance, subtracts gravity from vertical velocity, forces pitch to zero, then moves and collides.
+```
+eligible = !waterweapon || (preMotionYWord < seaLevelByte)
+if (eligible) {
+    if (scalarSpeed < weaponvelocity) {                 ; unsigned
+        scalarSpeed += weaponacceleration
+        if (scalarSpeed > weaponvelocity) scalarSpeed = weaponvelocity
+    }
+    guiding = twophase ? (twoPhaseStateBits != 0) : guidance
+    if (guiding) {
+        p = guidance target point (§6.8)
+        if (!steer(record, p)) central impact
+    }
+    velocityY = sin(pitch, scalarSpeed)
+    H         = cos(pitch, scalarSpeed)
+    velocityX = -sin(yaw, H)
+    velocityZ = -cos(yaw, H)
+} else {
+    velocityY -= gravity
+    pitch      = 0
+}
+point += velocity
+run current-point collision
+```
 
-**Established fact:** Non-two-phase guidance requires the guidance flag. Two-phase guidance becomes active after the phase state becomes nonzero. It runs every eligible projectile tick. There is no projectile-side acquisition scan or random retargeting.
+`preMotionYWord` is the record's world Y high word **sampled before this tick's
+motion**, and the medium test is strictly below the sea-level byte. Acceleration
+is independent of guidance and is skipped entirely once the scalar speed reaches
+`weaponvelocity`; the clamp is a plain unsigned overshoot clamp, not a
+saturating add. Velocity is fully rebuilt from scalar speed and angles on every
+eligible tick, so a self-propelled projectile's velocity magnitude is never
+history-dependent.
 
-**Established fact:** The target-point helper distinguishes two reference kinds. The optional projectile link supplies the linked record's current point. The retained unit target supplies the unit world point only while that unit is live. If neither is usable, non-cruise guidance uses the stored target point.
+**Established fact:** A non-water weapon is always propulsion-eligible. A water
+weapon at or above sea level skips acceleration and guidance, falls under
+gravity, and has its pitch forced to zero — so it levels out and sinks rather
+than continuing to climb.
 
-**Established fact:** Guidance is pure pursuit of the selected point. It does not add target-velocity lead during flight. A separate pre-fire aim path can lead eligible moving targets; cruise suppresses that pre-fire lead block.
+**Established fact:** Non-two-phase guidance requires the `guidance` flag.
+Two-phase guidance becomes active only after the two-phase state bits become
+nonzero, i.e. after the first expiry transition of §6.6. It then runs every
+eligible tick. There is no projectile-side acquisition scan and no random
+retargeting.
 
-**Established fact:** Steering computes desired yaw and pitch in a signed circular 16-bit domain and processes yaw before pitch. On each axis it snaps only when absolute error is strictly less than unsigned turn rate; otherwise it steps by exactly one turn rate. Equality takes the step branch. With burn-blow, an error greater than 27,000 causes failure. A pitch failure may occur after yaw was already updated. The caller invokes central impact on failure and then continues through the visible velocity/motion code; normal impact retirement controls later work.
+**Established fact:** The guidance target-point helper distinguishes three
+sources, in this order, for a non-cruise weapon: the projectile link, when set,
+supplies the linked record's current point; otherwise the retained unit target,
+when set **and while that unit's live flag is set**, supplies the unit's world
+point; otherwise the record's stored target point is used. No liveness
+generation counter exists, so a link into a compacted-away record is read
+without validation (§5.2).
+
+**Established fact:** Guidance is pure pursuit of the selected point. It does not
+add target-velocity lead during flight; the only lead in the whole weapon
+pipeline is the pre-fire lead of §3.3, which `cruise` suppresses.
+
+**Established fact:** Steering computes the wanted angles from the record's
+current point to the selected point using the same two expressions as the direct
+aim solver (§3.3), then processes **yaw first, then pitch**, each as:
+
+```
+e = (int16)(wanted - current)
+m = |e|                                   ; 16-bit absolute value
+if (m > 27000 && burnblow)  return failure
+if ((int32)m < (int32)(uint16)turnrate)  current = wanted
+else                                     current += (e < 0 ? -turnrate : +turnrate)
+```
+
+The snap test is **strict**, so an error exactly equal to `turnrate` takes the
+step branch; the step is exactly one `turnrate`, never a fraction. `turnrate` is
+zero-extended from its 16-bit store, so a negatively authored turn rate becomes
+a very large unsigned bound and every tick snaps straight to the wanted angle.
+The 27,000-unit failure test is strict and applies only with `burnblow`; because
+yaw is fully processed first, a pitch failure occurs with the yaw already
+updated. The caller invokes central impact on failure and then continues through
+the visible velocity/motion code; normal impact retirement controls later work.
 
 ### 6.8 Cruise target points and target loss
 
-**Established fact:** The cruise flag, not command-fire, selects the cruise waypoint helper. Cruise ignores the retained unit and projectile-link choices and uses the stored target point.
+**Established fact:** The `cruise` flag, not `commandfire`, selects the cruise
+waypoint helper. Cruise ignores the projectile-link and retained-unit sources
+entirely and works from the stored target point.
 
-**Established fact:** When converted three-dimensional distance to the stored
-target is greater than 1,024 in the helper's comparison domain, cruise copies
-target X/Z into the second point, forces its height word to 700, and steers
-toward that point. At or below the threshold it copies the stored point and
-replaces height with the greater of terrain height and sea level. The
-comparison domain is now closed: the helper computes the square root of the
-summed squares of the raw fixed-point deltas, truncates it, and compares the
-high word of the truncated result against 1,024 as a SIGNED short with a
-strict greater-than. A distance whose high word reaches 32,768 whole world
-units (2,048 cells) wraps negative and inverts the branch; that is unreachable
-for in-bounds map geometry.
+**Established fact:** The cruise helper computes
 
-**Established fact:** A lost non-cruise unit target falls back to the stored point. It does not autonomously reacquire another unit. The exact stale-reference behavior when slots are reused remains a separate compatibility issue.
+```
+dX = current.X - storedTarget.X                 ; raw signed 32-bit 16.16 deltas
+dY = current.Y - storedTarget.Y
+dZ = current.Z - storedTarget.Z
+d  = trunc(sqrt((dX*dX + dY*dY) + dZ*dZ))       ; x87 extended throughout, in that
+                                                ; association order, then truncated
+if ((int16)(d >> 16) > 1024) {                  ; SIGNED short, strict greater-than
+    second point = (storedTarget.X, *, storedTarget.Z) with its Y high word
+                   written as 700 (i.e. Y = 700 world units)
+    steer toward the second point
+} else {
+    second point = storedTarget, with Y replaced by
+                   max(terrainHeight(storedTarget), seaLevel) << 16
+    steer toward the second point
+}
+```
+
+The threshold is therefore 1,024 **whole world units** (64 cells) of
+three-dimensional distance, and the cruise altitude above the threshold is a
+fixed 700 world units of absolute world Y — not a height above terrain. A
+distance whose high word reaches 32,768 whole world units (2,048 cells) wraps
+negative and inverts the branch; that is unreachable for in-bounds map geometry.
+
+**Established fact:** A lost non-cruise unit target falls back to the stored
+target point. It does not autonomously reacquire another unit. The exact
+stale-reference behavior when slots are reused remains a separate compatibility
+issue (§5.2).
 
 ### 6.9 Water weapons and torpedoes
 
@@ -1001,46 +1565,226 @@ for in-bounds map geometry.
 
 ### 7.1 Per-record tick order
 
-**Established fact:** The phase walks the pool in ascending index order. A
-record whose burst-remaining count is nonzero takes the burst-expansion path
-*instead of* motion; only a record with a zero burst-remaining count is on the
-ordinary motion path.
+**Established fact:** The projectile phase runs once per simulation tick, after
+the unit phase and before the meteor scheduler `[01 §4.4]`. It walks the pool in
+ascending index order from index 0 to the live count minus one, re-reading the
+live count each iteration, and finishes by running the compaction pass of §5.2
+exactly once. A record whose remaining burst count is nonzero takes the
+burst-expansion path of §4.3 *instead of* motion; only a record with a zero
+remaining burst count is on the ordinary motion path.
 
 **Established fact:** Within one ordinary record the order is fixed, and an
 implementation must reproduce it:
 
-1. update visual propeller state;
-2. perform the family-specific velocity, heading, and lifetime work;
+1. advance the visual propeller angle by 1,024 units when `propeller` is
+   authored (§6.1);
+2. perform the family-specific velocity, heading, and lifetime work in the
+   dispatch order of §6.2;
 3. add velocity to position, for the families that reach movement at all;
 4. run the collision test;
-5. if the record is still alive, schedule smoke and water effects.
+5. if the record's dead bit is still clear, schedule trail smoke and then test
+   the downward water crossing (§7.3).
+
+Steps 3 and 4 are inside step 2 for every family — the families that retire
+instead of integrating (direct at expiry, ballistic at a non-burn-blow expiry)
+skip both — so an implementation that hoists the position update out of the
+family switch will move a retiring projectile that retail leaves in place.
 
 ### 7.2 Fixed-point integration
 
-**Established fact:** Projectile positions and velocities use integer fixed-point world units. Integration is family-specific rather than universal: direct and meteor add velocity; ballistic and dropped then add wind to position and apply gravity to vertical velocity; self-propelled normally rebuilds velocity from scalar speed and angles but can fall under gravity at medium or expiry gates.
+**Established fact:** Projectile positions and velocities are integer 16.16
+world units, and integration is family-specific rather than universal:
 
-**Established fact:** Yaw and pitch are circular 16-bit values. Turn-rate slew is bounded by the weapon turn rate. The trigonometric helpers convert angle to horizontal velocity using the retail circular domain.
+| family | per tick |
+|---|---|
+| direct (`lineofsight`) | `point += velocity`; beam second point advances too once latched |
+| meteor | `point += velocity`; two visual accumulators advance from the velocity high halves |
+| ballistic, dropped | `point += velocity`; then `point += (windX, windY, windZ)`; then `velocityY -= gravity` |
+| self-propelled, eligible | rebuild all three velocity components from scalar speed, yaw and pitch; then `point += velocity` |
+| self-propelled, at medium or expiry | `velocityY -= gravity` (and `pitch = 0` at the medium gate); then `point += velocity` |
+
+The three wind values are global per-tick world-unit offsets applied to the
+**position**, not to the velocity, and the vertical one is applied along with
+the other two. Gravity is a single global subtracted from the vertical velocity.
+
+**Established fact:** Yaw and pitch are `uint16` angles with 65,536 per circle.
+Turn-rate slew is the exact snap-or-step arithmetic given in §6.7: snap when the
+absolute signed 16-bit error is **strictly less** than the zero-extended
+`turnrate`, otherwise step by exactly `turnrate` toward the wanted angle, yaw
+resolved before pitch. The angle-to-velocity conversion is the 512-entry scaled
+sine/cosine pair of §3.3, with its 128-unit quantization and its
+`(entry × magnitude + 4096) >> 13` rounding; nothing in the projectile path uses
+floating-point trigonometry.
 
 ### 7.3 Expiry and smoke
 
-**Established fact:** Root expiry is either range-derived from range divided by velocity or a direct weapon timer when velocity/no-auto-range conditions select that branch. Expiry is not a universal death rule. Direct records retire at expiry; timed ballistic records either impact through burn-blow or retire without damage; self-propelled records can impact, transition phase, or continue under gravity; dropped and meteor motion do not consult ordinary expiry.
+**Established fact:** Root expiry is one of two expressions, chosen at creation:
+`currentTick + weapontimer` when `weaponvelocity` is zero or `noautorange` is
+authored, and `currentTick + (uint32)(range << 16) / weaponvelocity` otherwise
+(§6.3). Burn-blow ballistic roots use the horizontal-distance-over-horizontal-
+speed deadline of §6.4 instead. Expiry is not a universal death rule: direct
+records retire at expiry without moving or colliding; timed ballistic records
+either impact through burn-blow or emit a puff and retire without damage;
+self-propelled records can impact, transition phase, or continue under gravity;
+and dropped and meteor motion never consult expiry at all.
 
-**Established fact:** Smoke deadlines are independent of expiry. Start smoke, smoke trail, end smoke, sound trigger, and hit/water sound are separate flag/timer events. Smoke emission is not a collision condition. The live post-collision tail schedules smoke before testing downward water crossing.
+**Established fact:** The trail-smoke cadence is a separate additive deadline
+evaluated **after** collision, on a record whose dead bit is still clear:
 
-**Established fact:** Flight time, hold time, burst interval, duration, smoke delay, and random decay are consumed as raw logical tick counts after catalog truncation. Values are not generally multiplied by 30 at projectile tick time.
+```
+if (smoketrail && currentTick < expiry && smokeDeadline < currentTick) {
+    emit the trail puff at the current point
+    smokeDeadline += smokedelay
+}
+```
+
+All three tests are required, the deadline test is **strict**, and the deadline
+advances **additively** by `smokedelay` rather than being re-anchored to the
+current tick — so a projectile that was blocked from emitting catches up one
+puff per tick until the deadline overtakes the clock. The common initializer
+seeds the deadline to the creation tick, so the first puff is due on the first
+tick after creation. A `smokedelay` of zero makes the deadline permanently
+overdue and emits one puff on every live tick.
+
+**Established fact:** `startsmoke` emits one puff at the muzzle point at
+creation, as the last act of the ordinary, ballistic and vertical-launch
+creators, after the Fire and RockUnit callbacks (§4.1). It uses the same pooled
+effect object as the trail puff with a different init argument pair, and the
+effect list is capped: a new effect beyond 400 live entries retires the oldest
+entry rather than failing. `endsmoke` is read only by the central impact path
+and changes impact presentation without suppressing damage; §8 and §13 own it.
+The expiry puff a non-burn-blow ballistic record emits at its deadline is the
+same emitter as the trail puff.
+
+**Established fact:** The downward water-crossing test runs last, after trail
+smoke, and only while the dead bit is clear:
+
+```
+if (preMotionYWord > seaLevelByte && postMotionYWord <= seaLevelByte) { ... }
+```
+
+— the pre-motion Y high word strictly above the sea-level byte and the
+post-motion one at or below it. On a crossing it queries the map cell, and emits
+the weapon's water sound when the cell is found, its own height byte is below
+sea level, and the session's opaque-liquid mode is zero. Smoke emission is never
+a collision condition.
+
+**Established fact:** `flighttime`, `holdtime`, `burstrate`, `duration`,
+`smokedelay`, `randomdecay` and `weapontimer` are consumed as raw logical tick
+counts after catalog truncation; they are not multiplied by 30 again at
+projectile tick time. Of these, `holdtime` has **no projectile reader at all**:
+it is read at exactly five sites — the direct-expiry retirement, the two central
+impact retirement paths, the collision retirement path, and the shooter-death
+anchor sweep — each of which, when the retiring record is the followed
+projectile, freezes the camera's target at that record's last point and loads
+`holdtime` into the follow-camera hold counter. The camera update then
+decrements that counter once per update while it is nonzero and centres on the
+frozen point, resuming normal following at zero. This closes `holdtime` as a
+**camera** parameter measured in ticks; doc 07 owns the camera side.
 
 **Established fact:** Catalog float conversions truncate toward zero, so a
 negative authored value truncates toward zero rather than flooring; a 16-bit
 store then wraps the truncated value modulo 65,536. Enumerated wrap edges: the
 remaining burst count is a 16-bit word, so an authored 65,535 makes a burst
 anchor attempt one clone per tick until the pool starves; burst deadlines and
-expiry wrap modulo 2^32 with the unsigned comparisons tested after wrap; a
-zero burst interval makes the first attempt due in the creation tick; the
-clone expiry division by scalar speed (when the weapon timer is zero) raises
-the divide exception on zero speed. Stock weapons never author these edges.
+expiry wrap modulo 2^32 with the unsigned comparisons tested after wrap; a zero
+burst interval makes the first attempt due in the creation tick; the clone
+expiry division by scalar speed (when the weapon timer is zero) raises the
+divide exception on zero speed; a negatively authored `turnrate` zero-extends to
+a bound that always snaps (§6.7); and a `randomdecay` or `sprayangle` of exactly
+1 consumes no randomness because the shared generator does not advance below a
+bound of two. Stock weapons never author these edges.
 
-**Unknown:** All remaining integer overflow behavior is not fully closed.
-Retail lacks several defensive guards.
+**Unknown:** All remaining integer overflow behavior is not fully closed. Retail
+lacks several defensive guards.
+
+### R-WPN-01 — weapon arithmetic pass, corrections and closures
+
+Seven corrections and three closures from the 2026-08-28 arithmetic pass over
+§3.3, §4, §6.1–6.8 and §7. Each states what the previous text said and why it
+was wrong, so the reversal is auditable.
+
+**§1 — the drift gate's zero-tolerance fallback is a movement state, not a unit
+class.** Previous text: "falling back to 2000, or 150 for the non-air class".
+There is no class or category test in the gate. The field it reads is bits 2–3
+of the movement-mode word — the **movement tier** the integrator caches from the
+mover's scalar speed against the FBI keys `MoveRate1` and `MoveRate2`, whose
+category 0 also covers a mover-inhibited unit and a unit attached to a carrier
+`[04 §5.2]`. So the tight gate (150) applies to any unit in tier 0 and the loose
+gate (2000) to any unit in tiers 1–3, air or ground. Written as "non-air class"
+the rule inverts for a hovering aircraft and for a stopped tank, which is the
+whole population it governs. The field identity is independently corroborated:
+the movement lane established the same two bits and the same thresholds from the
+integrator side `[04 §5.2]`.
+
+**§2 — burst spray does not rewrite the parent's stored heading.** Previous
+text: "the PARENT's stored heading is rewritten as `heading - sprayAngle/2 +
+draw`". The perturbed angle is computed into a register, used as the angle
+argument for the two velocity-component rebuilds, and discarded; the record's
+yaw is not written. The observable difference appears from the second pellet
+onward: retail scatters every pellet around the original aim direction, whereas
+a rewrite would make the pellet stream random-walk. Both readings agree on the
+first pellet, which is why the error survived.
+
+**§3 — the accuracy spread is turret-only.** Previous text: "For the
+ordinary/ballistic slot executor…". The spread is in the executor selected by
+the `turret` flag. The non-turret line-of-sight/self-propelled executor also
+reaches the ordinary creator, and it computes no spread and consumes no
+simulation randomness; the vertical-launch and dropped executors likewise. A
+weapon without `turret` fires exactly on its solved angles no matter what
+`accuracy` says, and consumes zero draws — which is a determinism contract, not
+only an accuracy one.
+
+**§4 — the fixed trigonometry table is 512 entries, quantizing to 128 angle
+units.** Previous text: "angle quantization in 64-unit steps". The index
+arithmetic masks to the even byte offsets up to 1,022, so 512 signed 16-bit
+entries cover a full circle and one entry spans 128 angle units (0.703125
+degrees). The `(entry × magnitude + 4096) >> 13` product form in the previous
+text is correct.
+
+**§5 — one zero OTA meteor parameter replaces the whole default block.**
+Previous text: "each zero substitutes the corresponding `gamedata/METEOR.TDF`
+default value". The loader tests all four numeric keys together and, on any
+zero, reloads the `[Default]` section over the weapon name and all four numbers.
+A mission authoring a custom weapon, radius and duration but leaving the
+interval at zero gets the default weapon and the default radius too.
+
+**§6 — the meteor CRT draw census is four per storm, two per hit.** Previous
+text: "six draws per meteor counting scheduling". The four target/origin draws
+are consumed once per storm, when the storm-start deadline is reached, and are
+consumed even when meteors are disabled because the enable flag is tested only
+at the end of that block. The radius and angle draws are consumed once per hit
+attempt, including an attempt that then fails on a full pool. The stream is the
+C-runtime generator; the simulation stream is untouched by meteors.
+
+**§7 — the per-shot debit re-tests metal after debiting energy.** Previous text:
+"the post-spawn debit helper rechecks both and debits both or neither". The
+helper tests both, debits energy, re-reads the player and tests metal again
+before debiting metal. Nothing between the two tests can move the metal bucket,
+so no stock outcome differs; the shape is recorded because a clone that folds
+the two tests into one has silently chosen a different contract for any future
+path that could interleave.
+
+**§8 — closure: `holdtime` is the follow-camera hold, in ticks.** Previously
+listed among the weapon keys with no described consumer (`[fmt tdf]` records
+"exact effect unknown"). Its five readers are the projectile retirement paths;
+each loads it into the follow-camera hold counter along with the retiring
+record's frozen last point. §7.3 states the contract; doc 07 owns the camera
+update that decrements it.
+
+**§9 — closure: five weapon keys have no parser entry at all.** `aimrate`,
+`movingaccuracy`, `noselfdamage`, `impulsefactor` and `impulseboost` do not
+occur anywhere in the executable's string data. This is stronger than the
+bounded reader census `[02 "Weapon record"]` and `[fmt tdf]` record for
+`aimrate`: there is no key, so there is no field, so no reader can exist. It
+also closes the impulse question of §9.4 from the parser side.
+
+**§10 — closure: the expiry expression is written out.** Every citation of the
+previous phrasing "current tick plus integer `range shifted by the fixed-point
+fraction / weapon velocity`" now resolves to
+`currentTick + (uint32)(range << 16) / weaponvelocity`, an unsigned truncating
+division of the authored range promoted to 16.16 by the 16.16 per-tick velocity
+(§6.3).
 
 ## 8. Collision and impact selection
 
@@ -1709,180 +2453,139 @@ ledger and close its former contradiction.
 
 ## Missing and unknown
 
+Open items only. Each bullet states what is unknown, the section that owns it,
+and the decider that would close it. Findings that closed an item live in the
+body and are not restated here.
+
+**Correction (2026-08-28, RWU-00-5).** This tail listed many closed contracts
+as "missing" — unit-grid insertion rules, the opaque terrain/liquid mode, the
+double/half damage gates, packet-kind producers, zero-maximum-health behavior,
+`Killed` second-slot authorship, blast feedback, kill attribution,
+remaining-build-fraction writers, the slot-to-node mapping, dead-candidate
+interceptor behavior, sound-trigger burst cadence, and corpse-creation
+ordering each opened a bullet with "is closed" and then recited the finding.
+Those recitals are deleted here only; §§8–13 continue to own them.
+
 ### Catalog and targeting
 
-- Semantic identity/writers of the secondary radar-like candidate list, plus
-  complete sonar and jammer interactions outside the closed primary
-  direct-visibility list; weapon `noradar` is established as presentation-only
-  with no gameplay reader in the bounded census and single stock definition
-  `EARTHQUAKE`. The "targeting-upgrade aggregate" gate has no recovered reader
-  in the acquisition functions (bounded) and remains unproven; the per-slot
-  pipeline performs no acquisition of its own.
-- Exact manual unit/point target encoding, command-fire replacement, and all
-  manual-versus-autonomous latch callers.
-- Remaining acquisition bypasses and category behavior for non-unit target
-  types. The two water-weapon candidate predicates are closed (floater/above-
-  sea rejection and canhover half-height rejection, §3.3); the no-auto-range
-  flag bit is closed (bit 27 of the weapon flag word, §2.2's list).
-- Exact range behavior for zero-velocity weapons beyond the closed
-  weapon-timer branch.
-- The exact Aim-completion closure writer/consumer in the weapon-slot record is
-  open (see §3.4 [R-P0-07]): the zero/nonzero delivery and no-timeout contract
-  is established, but the stored-result mutation is not named (shared with
-  lane 04; the store census is lane 04's). Target
-  replacement during an outstanding Aim and malformed-state interactions around
-  the closed family readiness gates remain open.
-- The exact boundary between the general muzzle query and the per-family
-  dropped/meteor muzzle paths, and the full side effects of the shared muzzle
-  fallback on malformed piece indices, remain at medium confidence (see §3.4
-  [R-P0-07]).
-- Candidate sampling is closed: the filtered set is always swap-remove sampled
-  with RNG bounds equal to the remaining count (see §3.1); zero/overflow
-  behavior of the squared-distance score bound is closed by the RNG's bound
-  guard.
+- Semantic identity and writers of the secondary radar-like candidate list,
+  and the complete sonar and jammer interactions outside the closed primary
+  direct-visibility list · §3.1, doc 03 §3.3 · static trace.
+- Whether the "targeting-upgrade aggregate" gate has any reader; no recovered
+  acquisition function reads it · §3.1 · static trace over the unrecovered
+  regions.
+- Manual unit and point target encoding, command-fire replacement, and the
+  full set of manual-versus-autonomous latch callers · §3.2, doc 07 · static
+  trace.
+- Acquisition bypasses and category behavior for non-unit target types · §3.3
+  · static trace.
+- Whether the ballistic solver's `acos` argument can exceed one on malformed
+  authored or network input, what the runtime returns then, and whether the
+  resulting unordered angle comparisons really accept and serialize it · §3.3
+  · static trace of the runtime `acos` domain path plus a reachability argument
+  over the root expression.
+- The Aim-completion closure writer and consumer in the weapon-slot record;
+  the zero/nonzero delivery and the no-timeout contract are established
+  · §3.4 [R-P0-07], doc 04 §5.3 · static trace. Marked `TODO(question)`;
+  the store census belongs to the units/COB lane.
+- Target replacement during an outstanding Aim, and malformed-state
+  interactions around the closed family readiness gates · §3.4 · static trace.
+- Boundary between the general muzzle query and the per-family dropped/meteor
+  muzzle paths, and the side effects of the shared muzzle fallback on
+  malformed piece indices · §3.4 [R-P0-07] · static trace. Medium confidence
+  today.
 
 ### Projectile pool and phase
 
-- Complete replay and any nonstandard snapshot policy for projectiles, burst
-  state, and follow-camera references; standard battle save/load is closed.
-- Failure side effects of specialized allocation callers outside the named
-  spawner set: the pool-full retention matrix is bounded by the reviewed
-  creation dispatch, and an indirect custom creator outside it remains
-  unreviewed.
+- Any nonstandard snapshot policy for projectiles, burst state, and
+  follow-camera references; standard battle save/load is closed · §5, doc 08 ·
+  static trace.
+- Failure side effects of specialized allocation callers outside the reviewed
+  creation dispatch · §5 · static trace over the unrecovered regions.
 - Gameplay consequences of the unit-death cleanup skip when adjacent burst
-  schedulers share one shooter.
+  schedulers share one shooter · §5 · static trace.
 - Reachability and effects of a record marked dead before its captured-span
-  turn, because the updater has no dead-bit filter at loop entry.
-- All stale unit/target pointer validation and slot-reuse aliases outside the
-  closed damage-packet identity rules. The projectile-link compaction repair
-  census is closed (moved sources only, live-marker check only; sources before
-  the first dead hole keep their old raw pointer, and the later dereferences
-  perform no generation, count, dead-bit, or weapon identity check).
+  turn; the updater has no dead-bit filter at loop entry · §5 · static trace.
+- Stale unit and target pointer validation, and slot-reuse aliases outside the
+  closed damage-packet identity rules · §5, §9 · static trace.
 - Integer overflow, negative timer, and zero-speed burst combinations outside
-  the closed ballistic cases, the enumerated §7.3 wrap edges, and the
-  pool-full retention matrix.
+  the closed ballistic cases, the §7.3 wrap edges (which now include the
+  zero-extended negative `turnrate`, the sub-two RNG bound, and the range
+  promotion overflow) and the pool-full retention matrix · §7 · static trace.
 - Consumer of the projectile record's cached average-height scratch value
-  outside the projectile family; the record layout hole is preserved for it.
+  outside the projectile family; the layout hole is preserved for it · §5 ·
+  static trace.
 
 ### Projectile families
 
-- Ballistic arc selection (exact-zero discriminant test, plus-then-minus root
-  order with `minbarrelangle < pitch <= pi/4`, `trunc(angle * 32768 / pi)`
-  serialization), the burn-blow deadline division including every enumerated
-  divide/overflow/wrapping case, and family wind placement are closed.
-  Remaining: malformed NETWORK pitch/velocity inputs to the ballistic creator
-  and exceptional floating-point inputs beyond the enumerated integer cases.
-- Semantic names and every writer for the two-phase state bits, plus unusual
-  flag combinations and wrapping flight-time deadlines; fixed launch delay is
-  closed as absent.
-- Cruise versus command-fire and waypoint selection are closed; the cruise
-  threshold is closed (truncated three-dimensional distance high word compared
-  strictly greater than 1,024, signed-short wrap at 32,768 whole world units).
-- Exact stale-reference behavior for retained units and every producer/lifetime
-  invariant of the optional projectile-to-projectile link; autonomous
-  projectile-side reacquisition is closed as absent.
-- The runtime self-propelled water/torpedo integrator is closed as shared; the
-  pre-fire water eligibility predicates are closed (§3.3).
-- Meteor reachability is closed: the stock reach is shower-only (no unit
-  carries a meteor weapon; a unit-fired order for one would misread the
-  yaw/pitch order fields as velocity — a bounded absence of stock authorship),
-  and the spawn path is fully typed (pool append with null shooter and neutral
-  side byte, position and velocity triples copied verbatim). Remaining:
-  external meteor-removal paths beyond ordinary collision and map exit.
-- Malformed beam duration/deadline arithmetic; head-only point collision and
-  tail-latch ordering are closed. What each REACHED no-explode impact does is
-  closed (cached-cell suppression, bounce bypass, off-map retirement, the
-  unguarded second same-call impact); the complete later-tick contact CADENCE
-  enumeration for no-explode records across changing geometry and family
-  states remains open (predicate-driven, no latch — a state-search bound, not
-  a contract gap).
-- Exact authored relationships among beam, lightning render type, flame,
-  firestarter, burn-blow, and no-explode. No separate lightning or flame
-  collision integrator was found.
-- Full renderer algorithms for projectile render types outside the closed
-  line-versus-jagged-lightning distinction.
+- Malformed network pitch and velocity inputs to the ballistic creator, and
+  exceptional floating-point inputs beyond the enumerated integer cases · §6.1
+  · static trace.
+- Semantic names of the two-phase state bits, and any writer besides the
+  §6.6 expiry transition and the common initializer's clear; plus unusual flag
+  combinations and wrapping flight-time deadlines · §6.6 · static trace.
+- The geometric intent of the ballistic launch's vertical pre-decrement by one
+  whole flight time's worth of gravity, and therefore whether an implementation
+  may restate it · §6.4 · manual retail observation of a stock ballistic
+  weapon's apex against the literal expression, run as an authored `probes/`
+  scenario. The arithmetic itself is Established.
+- Stale-reference behavior for retained units, and every producer and lifetime
+  invariant of the optional projectile-to-projectile link · §6.3 · static
+  trace.
+- External meteor-removal paths beyond ordinary collision and map exit · §6.5
+  · static trace.
+- Malformed beam duration and deadline arithmetic · §6.4 · static trace.
+- The later-tick contact cadence for no-explode records across changing
+  geometry and family states · §6.4 · static trace. Predicate-driven with no
+  latch, so this is a state-search bound rather than a contract gap.
+- Authored relationships among beam, lightning render type, flame,
+  firestarter, burn-blow, and no-explode; no separate lightning or flame
+  collision integrator was found · §6.4 · static trace.
+- Renderer algorithms for projectile render types outside the closed
+  line-versus-jagged-lightning distinction · doc 03 §5.4 · static trace.
 
 ### Collision and damage
 
-- Complete unit-grid insertion rules are closed: the two cell slots are
-  class-assigned (ground class and the yard-map branch write slot zero,
-  flying class writes slot one, mode zero writes nothing), which is the
-  semantic reason for slot zero's absent lower-height gate (§8.1).
-- Exact footprint-anchor coordinate conventions and malformed sentinel
-  behavior.
-- Exact quantization and overflow of the repeated-feature-cell cache at
-  negative or extreme coordinates.
-- The opaque terrain/liquid mode is closed: it is the mission `nosealeveltrigger`
-  setting written by the mission parser (and the mission-globals reset); it
-  suppresses the underwater impact retirement and crossing splash.
-- Exact sign/scale conventions for vertical velocity, terrain height, and sea
-  level outside ordinary map ranges. Point collision, slot/feature/terrain
-  ordering, arithmetic-quarter bounce, and crossing splash are closed.
-- Complete malformed-name, duplicate-key, and signed-overflow behavior in
-  damage-table construction and lookup.
-- The global double/half damage gates are closed as stock-inert: the reader is
-  direct (bit 7 doubles, bit 8 halves, in that order) and the full-image
-  census found no writer of either bit; the named configuration alias stays
-  unknown (bounded negative).
-- Packet-kind producers are closed: the whole-image caller census found only
-  kinds 1, 2, 3, 4, 5, 9, 10, 11 (two producers each for 3 and 5), with 3-9
-  reaching the dispatcher only as death-cause producers.
-- Behavior when maximum health is zero is closed: healing clamps to zero
-  without dividing; the TakeDamage percentage and the reload health term
-  perform unguarded unsigned divisions (divide exception). Stock never authors
-  zero; Nanolathe guards the divisions as an error path (TODO(T25)).
-- Authorship of the Killed query's second output slot is closed: every shipped
-  Killed body (153 of 157 extracted scripts) writes the death-variant cell via
-  its second parameter; the four scripts without a Killed body leave
-  deterministic-but-opaque stack history except where the build-fraction rule
-  forces zero.
-- Practical reachability of signed 16-bit AOE distance wrap and of more than
-  20 unique unit or 64 unique feature-cell candidates in accepted retail maps.
-- Blast feedback is closed: the blast tail sets shooter-status bits (enemy
-  damage exceeding twice friendly damage, otherwise the other bit) on a byte
-  with no reader in the bounded corpus; no impulse or push consumer exists.
-- Kill attribution is cause-resolved by the producer table in section 12.1.
-  Burn-weapon attribution is closed: burn weapons fire as synthetic impact
-  records with a null shooter and zeroed side byte, so they award no
-  veterancy and no kill credit.
-- Resurrection interaction with the death pipeline; ordering detail among
-  multiple concurrent reclaimers issuing simultaneous repair/damage packets —
-  which pulse becomes fatal.
-- Writers of the remaining-build-fraction float are closed by census: two
-  float writers (parameterized spawn, capture) and five integer writers
-  (allocator grounded/airborne initialization, two construction progress
-  sites, deconstruction reset, reconstructor); the death-explosion gate itself
-  (equal to zero) is closed.
+- Footprint-anchor coordinate conventions and malformed sentinel behavior
+  · §8.1 · static trace.
+- Quantization and overflow of the repeated-feature-cell cache at negative or
+  extreme coordinates · §8.2 · static trace.
+- Sign and scale conventions for vertical velocity, terrain height, and sea
+  level outside ordinary map ranges · §8.3 · static trace.
+- Malformed-name, duplicate-key, and signed-overflow behavior in damage-table
+  construction and lookup · §9.1 · static trace.
+- The configuration alias that names the global double/half damage bits; the
+  reader is direct and the full-image census found no writer · §9.1 · static
+  trace over the unrecovered regions.
+- A guarded error path for the unguarded unsigned divisions when maximum
+  health is zero; stock never authors zero · §9.1 · static trace. Marked
+  `TODO(T25)` at two sites — Nanolathe guards the divisions as declared
+  policy.
+- Practical reachability of signed 16-bit AOE distance wrap, and of more than
+  20 unique unit or 64 unique feature-cell candidates, in accepted retail maps
+  · §9.3 · asset census over the map corpus (the AOE dedup map probe).
+- Resurrection interaction with the death pipeline, and the ordering among
+  several concurrent reclaimers issuing simultaneous repair and damage
+  packets — which pulse becomes fatal · §12, doc 05 · static trace.
 
 ### Stockpile and interceptor
 
-- The slot-to-node mapping is closed: the queue node's slot index is the
-  caller-supplied build-type stored verbatim, with no weapon-id translation
-  (the UI alias path always uses zero). Remaining: malformed slot-byte
-  overflow, cancellation interaction with admitted carry, repeat requeue, and
-  save/load beyond the established queue count, progress, and slot-byte
-  persistence; stockpile progress step, cost timing, retry deadlines,
-  completion mutations, 200-round cap, and launch-before-production ordering
-  are established.
-- Dead-candidate behavior between the two interceptor scans is closed: neither
-  scan tests liveness, so a dead-but-uncompacted candidate remains selectable,
-  reservable, tracked, and proximally impacted. Remaining: the multiplayer
-  index-versus-pointer anomaly and other failure modes beyond the closed
-  single-process coverage square, reservation at spawn, current-point
-  tracking, linked contact, explosion sweep, and pending-shot failure path.
+- Malformed slot-byte overflow, cancellation interaction with admitted carry,
+  repeat requeue, and save/load beyond the established queue count, progress,
+  and slot-byte persistence · §11 · static trace.
+- The multiplayer index-versus-pointer anomaly and other interceptor failure
+  modes beyond the closed single-process coverage square, reservation at
+  spawn, current-point tracking, linked contact, explosion sweep, and
+  pending-shot failure path · §11 · static trace. Out of Nanolathe's
+  implementation scope (no multiplayer).
 
 ### Features and effects
 
 - Remaining geothermal and malformed burn cases beyond the established shipped
   filename-based extinction, finite lifetimes, 48-candidate neighborhood,
   smoke-only gating, one-shot event, reclaim rejection, blast immunity, and
-  the reproduction walker contract in section 13.1.
-- Feature damage/armor interaction and burn damage to units beyond the closed
-  burn-weapon attribution (null shooter, no credit).
-- Sound-trigger burst cadence is closed: the pellet sound is gated on
-  successful clone allocation, so a pool-full burst attempt emits none.
-- Ordering of corpse-feature creation is closed: the death explosion runs
-  before corpse stamping, and damage is routed last in the impact sequence;
-  the smoke/sound/splash/explosion ordering itself is closed by the
-  section 13.2 matrix.
-- Renderer interpolation and visual lifetime, intentionally outside this specification.
+  the §13.1 reproduction walker contract · §13.1, doc 05 · static trace.
+- Feature damage and armor interaction, and burn damage to units, beyond the
+  closed burn-weapon attribution · §13.1 · static trace.
+- Renderer interpolation and visual lifetime for weapon-driven effects · doc
+  03 · intentionally outside this document's scope.

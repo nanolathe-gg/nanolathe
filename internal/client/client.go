@@ -100,19 +100,16 @@ type Client struct {
 	// Nanolathe isolates the copy so render cadence cannot desync the sim.
 	// Next wave: move segment resolution to sim-published values and drop this
 	// field. Shrink-only.
-	crt                *rng.CRT
-	crtBound           bool
-	frameTick          uint32                       // committed tick of the frame being composed
-	nano               presentationrender.NanoField // live nanolathe particle records [03 §5.5]
-	lastNanoTick       uint32
-	modelTargetColor   []uint8 // reusable per-unit indexed composition plane [03 §5.2]
-	modelTargetHeight  []uint8 // reusable per-unit height/key plane [03 §5.2]
-	modelTargetCovered []bool  // reusable per-unit coverage plane [03 §5.2]
-	worldBuckets       worldBuckets
-	fogCache           *visibility.FogCache
-	fogOps             []presentationrender.FogOp
-	selectionChrome    []selectionChrome
-	selectionDrag      SelectionDrag
+	crt             *rng.CRT
+	crtBound        bool
+	frameTick       uint32                       // committed tick of the frame being composed
+	nano            presentationrender.NanoField // live nanolathe particle records [03 §5.5]
+	lastNanoTick    uint32
+	worldBuckets    worldBuckets
+	fogCache        *visibility.FogCache
+	fogOps          []presentationrender.FogOp
+	selectionChrome []selectionChrome
+	selectionDrag   SelectionDrag
 	// rendererTraceSink is nil for the normal presentation path. When enabled,
 	// model composition emits value-only candidate evidence after the complete
 	// subject pixel is resolved [03 §2.4.1][03 §5.2][I6].
@@ -133,6 +130,18 @@ type Client struct {
 	fogLoaded   bool
 	fogLoadErr  error
 	ditheredFog bool // options byte bit6 0x40 DitheredFog [03 §3.3]
+	// antiAlias is options word bit1 0x02 Anti_Alias. It gates the structure
+	// composition supersample and, with it, retail's red/purple building
+	// fringe [R-REN-03A §6][R-REN-03A §7].
+	antiAlias bool
+	// shadows is options word bit2 0x04, the master shadow gate;
+	// vehicleShadows is bit3 0x08, the unit model shadows; shading is bit5
+	// 0x20, which every tinted blit including the shadow requires. The bulk
+	// INI key fans one value out across bits 4, 3 and 2, so a player who turns
+	// shadows off turns all three off together [03 §5.3][R-REN-03D §1].
+	shadows        bool
+	vehicleShadows bool
+	shading        bool
 
 	// Software cursor, drawn last over the composed surface [07 §8].
 	cursors *Cursors
@@ -165,23 +174,33 @@ func New(opts Options) (*Client, error) {
 		buf = &frame.Buffer{}
 	}
 	c := &Client{
-		opts:               opts,
-		buffer:             buf,
-		width:              w,
-		height:             h,
-		indexed:            make([]uint8, w*h),
-		rgba:               make([]byte, w*h*4),
-		modelTargetColor:   make([]uint8, w*h),
-		modelTargetHeight:  make([]uint8, w*h),
-		modelTargetCovered: make([]bool, w*h),
-		models:             map[string]*unitModel{},
-		texIndex:           map[string]texRef{},
-		modelPresentation:  map[modelTextureKey]*modelTextureCursor{},
-		modelPlayers:       nil,
-		modelOrientation:   map[uint64]*presentationrender.OrientationCache{},
-		featureGAFs:        map[string]*formats.GAF{},
-		featureFrames:      map[string]*formats.GAFFrame{},
-		featureGACErr:      map[string]error{},
+		opts:   opts,
+		buffer: buf,
+		// TODO(question): the shipped default of the Anti_Alias option is not
+		// established in the executable — the option word is populated from
+		// settings and no compiled-in default write was found. Retail's
+		// observed appearance has it on (smoothed building edges, and the
+		// red/purple silhouette fringe that follows from it), so start it on
+		// [R-REN-03A §6].
+		antiAlias: true,
+		// Restore-defaults sets the Shading bit, so shading is on unless the
+		// player turns it off [R-RND-02A]; the bulk shadow key sets its three
+		// bits together [03 §5.3].
+		shadows:           true,
+		vehicleShadows:    true,
+		shading:           true,
+		width:             w,
+		height:            h,
+		indexed:           make([]uint8, w*h),
+		rgba:              make([]byte, w*h*4),
+		models:            map[string]*unitModel{},
+		texIndex:          map[string]texRef{},
+		modelPresentation: map[modelTextureKey]*modelTextureCursor{},
+		modelPlayers:      nil,
+		modelOrientation:  map[uint64]*presentationrender.OrientationCache{},
+		featureGAFs:       map[string]*formats.GAF{},
+		featureFrames:     map[string]*formats.GAFFrame{},
+		featureGACErr:     map[string]error{},
 	}
 	c.in = *newInputState()
 	// Fallback palette: grayscale base and identity logical table. This keeps
@@ -291,6 +310,24 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 // hi==15 draws a checker and hi 1..14 uses patterned Gray GAF drawing; when
 // clear, both use their plain forms. The lo/Black family is always plain.
 func (c *Client) SetDitheredFog(v bool) { c.ditheredFog = v }
+
+// SetAntiAlias selects the Anti_Alias display option, which makes structures
+// compose through the 2x supersample and ALP downscale [R-REN-03A §6].
+func (c *Client) SetAntiAlias(v bool) { c.antiAlias = v }
+
+// AntiAlias returns the current Anti_Alias bit.
+func (c *Client) AntiAlias() bool { return c.antiAlias }
+
+// SetShadowOptions selects the master shadow, vehicle-shadow and shading bits
+// [03 §5.3][R-REN-03D §1].
+func (c *Client) SetShadowOptions(master, vehicle, shading bool) {
+	c.shadows, c.vehicleShadows, c.shading = master, vehicle, shading
+}
+
+// ShadowOptions returns the three bits the model shadow gate reads.
+func (c *Client) ShadowOptions() (master, vehicle, shading bool) {
+	return c.shadows, c.vehicleShadows, c.shading
+}
 
 // DitheredFog returns the current DitheredFog bit.
 func (c *Client) DitheredFog() bool { return c.ditheredFog }

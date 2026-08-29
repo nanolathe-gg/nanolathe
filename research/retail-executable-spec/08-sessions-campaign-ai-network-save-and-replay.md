@@ -1833,8 +1833,12 @@ the base record alone:
 - the count at `0x23` drives numbered order boxes (`u%04xm%04x`) and their
   subtype records; these rebuild order nodes, targets, links, and build queues;
 - the three weapon-slot payloads are completed by the weapon/subtype path;
-- per-unit accessory and mobile boxes restore attachment and mobile-builder
-  state;
+- per-unit accessory and mobile boxes restore attachment and mover state —
+  the "mobile" box is keyed `u%04xmob` and is the unit's **mover** record, not
+  mobile-*builder* state (correction, 2026-08-28, RWU-04-1: the earlier
+  wording read "mobile-builder state", which named the wrong subsystem; the
+  box is written and read by the mover's own serializer and its fields are
+  listed in the tail item below and in [04 §8.1 R-MOV-01 §1]);
 - sequential script boxes restore the COB snapshot, stack, pieces, waits,
   signals, and callbacks; script persistence remains only partially closed;
 - registration and derived occupancy run after raw state and references;
@@ -2533,80 +2537,135 @@ properties:
 
 ## Missing and unknown
 
-The following work remains before this category is a complete retail design:
+Open items only. Each bullet states what is unknown, the section that owns it,
+and the decider that would close it. Findings that closed an item live in the
+body and are not restated here.
 
-- Recover UI-level names for session states 0–4 (their behavior, transitions,
-  callbacks, and admission-mask classes are established above), and close any
-  provider-specific DirectPlay transitions outside the reviewed callbacks.
-- Campaign progression latch (countdown four then roughly one per second, win and lose bits, scoring), MissionList as allocation tag with first-gap termination, language-prefixed mission names, VFS first-provider-wins, wind CRT draws before simulation, and registry versus bank split are established; the all-missions bit's consumer is the single-player panel's AnyMsn toggle and its exact listbox-selection effect remains the bounded residual (the earlier "no reader at all" is superseded). [P0-05] [lane 08 AllMissions]
-- Campaign and mission catalog ordering across multiple VFS providers (mount order loose then patched then expansion then base then CD-ROM, first-provider-wins, MissionList allocation tag, contiguous Mission sections until first gap, language-prefixed names) are established. [P0-05]
-- Derive exact planet, panorama, rotation, briefing, narration, glamour, and
-  optional-media fallback rules.
-- Inventory every mission-global key, type, default, clamp, and consumer. The
-  census is completed: `maxunits` (campaign branch only, default 200, stored
-  as the 16-bit unit-limit word that also seeds the AI half-capacity
-  global), `numplayers` (stored as an 80-byte string, presentation only, no
-  numeric consumer), `mapping`/`lineofsight` (campaign-mode LOS defaults
-  merged at battle entry), and `commanderDeath` (a lobby value, not a
-  mission key; consumed by the skirmish defeat gate and respawn path) are
-  closed; `killmul`/`timemul` defaults are 0.0. The allocator enforces
-  per-definition limits from definition fields (see document 05), so the
-  mission value and the physics stores are distinct.
-- Placement order for mission units, start-position specials, and features (strict units then specials then features) and the sparse two-pass unit spawner with null gaps, plus attacker and feature stamping convergence, are established; cargo and feature successor handling beyond the shared stamping service, delayed creation countdown (parsed but no reader), and script attachment beyond the immediate attach verb remain bounded negative; the meteor scheduler's phase (after wind jitter and projectiles) is established. [P0-04] [P0-06]
-- Player-to-start-position selection for skirmish is established for the CRT Fisher–Yates shuffle versus simulation jitter split, eligibility predicate (non-zero slot, control one through three, terminator not newline), schema Network 1 through 4 trial with largest-so-far fallback and difficulty permutation, and commander interior jitter with degenerate no-advance; the transport-selection policy beyond generic move orders and any distinct naval or air geometry remain unknown. [P0-04]
-- Trigger evaluator bodies and direct-mission polling are closed: owner gating is a player-index compare (no alliance merge), the tick site is the local player's once-per-30-tick block, campaign polls victory before defeat (AND then OR), direct type-2/3 missions poll defeat before victory with the defeat queue gated on the local commander marker, and disconnect/resign precedence is closed (host-loss and resign latch ended-without-win directly and can override an armed countdown; the countdown itself keeps per-type precedence). The remaining ownership Unknown is the exact executable branch by which a populated lobby skirmish uses its rule words without making injected/authored OTA triggers authoritative. The value-zero all-units survival sweep used by Nanolathe is likewise a Supported inference pending that executable trace. Record shapes, the vtable map, and the per-condition saved fields remain established.
-- Meteor spawning, motion, damage, scoring, and persistence are closed (see
-  Meteor showers above); only presentation of meteors outside the world
-  renderer remains a rendering-lane question.
-- Restriction-flag disposition is closed: `UseOnlyUnits` resolves into the
-  campaign useonly area, `Immunity` is consumed at unit creation, and
-  mission-critical/AI-ignore/AI-priority-target/build-priority/initial-group
-  are parsed but unread (bounded negative).
-- Computer-player strategic construction selection, profile plan/weight/limit handling, economy-mixed weighted reservoir choice, per-type class-vector recomputation (single-byte init 40 plus 20 versus three-byte triple, outer gate bound 30, x87 constants and truncation), full manager deadline graph (construction plus 90, eco plus 30, waves plus 300 and plus 150, explore plus 30 plus 900, rally plus 30 plus 150, one empty slot), direct manager-group writer/classifier for six destinations, eco toggle with eighty percent gate, and placement radius and helper selection (fixed-point 16.16 origin step, radius plus 160 capped, strict less-than selector opposite inferred, exhaustive patch sorted versus scatter 30 trials with four draws per trial, product limit, no fall-through, yard validator required; the metal score is the footprint per-cell metal-byte sum, and water legality is the yard path's waterline band) are established [P0-01] [P0-02] [P0-03] [R-P0-04]; AI score fields and update order — player economy aggregates, hard gates, pressure and mix arithmetic, cumulative weighted reservoir selection, class-vector compilation, manager-before-refresh-before-ledger ordering, and profile gates — are established [R-P0-05], with the weapon-field TDF identities closed (`DAMAGE/default` and `range` feed the damage and range reads; `reloadtime` is not read by the class routine) and the strategic half-capacity state writer as the explicit residual (R-P0-05 §8); the manager task-vector slot order, direct group-writer semantics, classifier branch order, and wave merge strictness are established [R-P0-04]; the AI RNG inventory is complete (throttle draw bounded 300, eight strategic-constructor draws, explore and rally body draws; the "any other bound is a bug" sentence is retracted); any additional distinct group writer and transport geometry remain bounded negative, and inert mission fields plus definition `ai_limit` remain closed as bounded negative.
-- Remaining computer-player expansion, scouting, targeting, retreat, repair, reclaim, transport, naval, and air policies: the complete task-dispatch surface is bounded-negative over the seven vtable addresses (one contiguous family; six task classes plus the intentional null class; each class has exactly two virtual slots and only the first is ever invoked; the only vtable writers are the task and manager constructors). No distinct transport/naval/air/repair/reclaim/retreat policy table exists; such behavior can only act through the ordinary order service. The semantic names of several definition flag bits and any behavior only a dynamic trace could reveal remain the largest AI unknowns. [lane 08 task tables]
-- Reconcile every lobby slot-state value, host privilege, ready flag, blocked
-  state, edit permission, and start condition.
-- Complete DirectPlay provider/session enumeration, lobby handoff, connection
-  setup, addressing, password, and teardown.
-- Decode the payloads of the packet types the in-game receiver forwards whole
-  to a subsystem, by following each into its handler. The type byte, the
-  per-type fixed length, the admission mask, the dispatch roles, and the field
-  layouts of every inline-decoded type are established.
-- Recover the lobby receiver's switch, which owns the types whose admission
-  mask excludes the battle-loading/live-battle states.
-- Type frame numbers, sequence numbers, acknowledgement fields, checksums,
-  sender identity, and wrap behavior within those payloads.
-- Specify guaranteed versus ordinary delivery for every packet family.
-- Derive the exact local-input scheduling delay separately from future-frame
-  retention and delayed gameplay queues.
-- Close send pacing, batch flush, retransmission timeout, retry count, queue
-  overflow, and round-trip adaptation.
-- Specify duplicate, stale, future, oversized, unknown-type, and wrong-sender
-  packet handling beyond the established malformed-custom-payload hang path.
-- Resolve the semantic identity of the pacing-scan progress dword: remote-peer
-  reported progress versus earliest pending order time are competing readings
-  of the same code (soft pacing itself is established).
-- Determine command authority for host, local player, remote player, computer
-  player, observer, pause, speed, sharing, and game termination.
-- Complete map, resource, economy, and other hash contents, cadence, payloads,
-  and mismatch handling; trace the zrb orchestrator, recover packet `0x27`'s
-  trailing-integrity-data producer algorithm, and recover the exact
-  throttle-acknowledgement format in the participant-state receiver.
-- Initial simulation-random seed agreement between peers: **closed as a bounded absence.** The simulation seed setter has exactly one call site in the image (battle entry, from the low-plus-high `QueryPerformanceCounter` sum per doc 01 §7.1); the CRT seed has two (process startup and battle entry); the packet registry contains no seed-exchange packet and no handler writes either seed state. Each peer reseeds from its own clock, so peer streams are not identical — consistent with the engine's known desync behavior.
-- Recover reconnect, late join, spectator join, and temporary transport-loss
-  behavior, or establish their bounded absence. Host-authority migration is
-  closed as deterministic selection of the numerically greatest DPID among
-  eligible roles.
-- Complete the remaining semantic mappings inside the bulk binary boxes. Unit `0xB8` records, their three 24-byte embeddings, and the `0x3A` order wire record plus subtype lengths and copy positions are now closed by R-SAVE-UNIT-01, R-SAVE-WEAPON-01, and R-SAVE-ORDER-01. The remaining order gap is intentionally limited to subtype family names and the meanings of opaque subtype words/relations; `Feature Type Names` 128-byte names, normal 8/animating 10/3D 26-byte feature records, and the radar preview header remain separately bounded. Many unit/order words still lack retail source names and must stay opaque rather than being typed by width. The container, account inventory, and scalar entry names are established.
-- Close script-thread and operand-stack persistence beyond the established record: the COB persistence family is byte-exact (identity word, eight-snapshot blocks with one zeroed word per block, stack words, per-piece records whose two gap words leak stack bytes into per-piece virtual setters); the residual is the semantic naming of the individual snapshot words (local versus static versus control), which belongs to the script/COB lane.
-- Path, effect, projectile, and AI-history persistence: closed as a bounded absence for standard battle saves (no writers in the reachable save graph; the projectile pool is reset before reconstruction; path working state is recomputed; effects and AI history are omitted). Trigger, radar-preview, mapping, terrain-metal, feature, attachment, and order persistence are established.
-- Indirect serialization of the simulation/CRT random states: **closed** — the writer census over the complete reachable save graph finds zero writers for either state; the scheduler's fractional carry is the only indirect persistence (the 28-byte block). [p1-13 §5]
-- Consumers of `WinLoseTime`/`DisplayTimer` beyond their save keys: **closed** — `WinLoseTime` has no reader anywhere in the image (persisted verbatim, inert); `DisplayTimer` is the HUD resource-rate refresh deadline (advanced by thirty when trailing the global tick, refreshing the four displayed rate floats).
-- Close upstream multiplayer GUI authority/menu enablement for saving (whether
-  all peers can reach the save callback) and the upstream save-name
-  edit-character policy and code page.
-- Campaign progress saved outside battle `.sav` files is inventoried: the in-memory W/L array (one byte per mission slot, `'U'` unplayed), the Summary `Thumbs` item carrying it across BetweenMissions saves, the registry difficulty/games/all-missions mirrors, and the BetweenMissions flag itself; the residual is only the AnyMsn toggle's exact listbox-selection effect.
-- Bounded replay searches are extended to dynamically built file names, debug modes, and media/capture paths: the whole-image sweep finds only movie capture (`MOVIE%03i` pattern) and screenshot vocabulary; no replay file name, extension, or vocabulary exists. The replay absence bound now covers these paths.
-- If a replay path is found, derive its framing, initial snapshot, command
-  timing, random state, seek behavior, version checks, and UI.
-- Session-end ordering: the post-battle prefix is closed (network drain at entry, multiplayer frame copy, music stop, ten-unit timed display, campaign CD check, campaign-progress write and authored end-mission screen, outro movie, score/statistics screen with per-player stat bars, front-end return); the residual is only the precise presentation sequencing of the overlay transitions inside the front-end router.
+**Correction (2026-08-28, RWU-00-5).** This tail had become an inventory of
+finished work: entire multi-line bullets on campaign progression, mission
+placement order, trigger evaluators, meteor spawning, restriction flags, the
+computer player's construction selection and score fields, initial seed
+agreement, host-authority migration, path/effect/projectile persistence,
+indirect random-state serialization, `WinLoseTime`/`DisplayTimer` consumers,
+campaign progress outside `.sav`, the replay-absence sweep, and session-end
+ordering opened with "are established" or "closed" and then recited the
+finding. The recitals are deleted here only; the body sections and the
+[R-P0-04] / [R-P0-05] / R-SAVE-* findings continue to own them.
+
+### Sessions and campaign
+
+- UI-level names for session states 0–4; their behavior, transitions,
+  callbacks, and admission-mask classes are established · "Session states" ·
+  static trace.
+- The AnyMsn toggle's exact listbox-selection effect — the last residual of
+  the all-missions bit and of campaign progress held outside battle `.sav`
+  files · "Progression" · manual retail observation.
+- Planet, panorama, rotation, briefing, narration, glamour, and optional-media
+  fallback rules · "Planet and briefing selection" · static trace.
+- Transport-selection policy beyond generic move orders, and any distinct
+  naval or air placement geometry · "Placement root and search helpers"
+  [P0-04] · static trace.
+- The executable branch by which a populated lobby skirmish uses its rule
+  words without making injected or authored OTA triggers authoritative; the
+  value-zero all-units survival sweep Nanolathe uses is a supported inference
+  pending the same trace · "Victory and defeat triggers" · static trace.
+- Presentation of meteors outside the world renderer · doc 03 · static trace.
+
+### Computer player
+
+- Whether a writer separate from the recovered direct-writer caller set
+  mutates manager task vectors through an indirect alias · "Strategy manager
+  and its task graph" [R-P0-04] · static trace. Marked `TODO(question)`; no
+  additional writer may be claimed without new evidence.
+- Runtime meaning and writer of the strategic half-capacity state field
+  · [R-P0-05 §8] · static trace. Marked `TODO(question)`.
+- Exact geometry and water-legality contracts of the two placement helpers
+  beyond the established extractor selector draw · "Placement root and search
+  helpers" · static trace. Marked `TODO(question)`; narrowed to the metal
+  score being the footprint per-cell metal-byte sum and the waterline band
+  being enforced only by the yard path of the placement validator.
+- Semantic names of several computer-player definition flag bits · "Established
+  AI-facing data and rooted planner" · static trace.
+- Any computer-player behavior only a dynamic trace could reveal; the
+  task-dispatch surface itself is bounded-negative over the seven vtable
+  addresses · "What remains not established" · manual retail
+  observation.
+
+### Networking
+
+Nanolathe does not implement multiplayer, so every bullet in this group is
+recorded to keep the specification exhaustive rather than to gate work.
+
+- Lobby slot-state values, host privilege, ready flag, blocked state, edit
+  permission, and start condition · "Lobby behavior" · static trace.
+- DirectPlay provider and session enumeration, lobby handoff, connection
+  setup, addressing, password, and teardown, and any provider-specific
+  transitions outside the reviewed callbacks · "Peer transport state" ·
+  static trace.
+- Payloads of the packet types the in-game receiver forwards whole to a
+  subsystem; the type byte, per-type fixed length, admission mask, dispatch
+  roles, and inline-decoded field layouts are established · "Packet
+  registry" · static trace.
+- The lobby receiver's switch, which owns the types whose admission mask
+  excludes the battle-loading and live-battle states · "Declared packet types" ·
+  static trace.
+- Frame numbers, sequence numbers, acknowledgement fields, checksums, sender
+  identity, and wrap behavior inside those payloads · "Declared packet types" ·
+  static trace.
+- Guaranteed versus ordinary delivery per packet family · "Declared packet types" ·
+  static trace.
+- The local-input scheduling delay, separately from future-frame retention and
+  the delayed gameplay queues · "Lockstep advancement" · static trace.
+- Send pacing, batch flush, retransmission timeout, retry count, queue
+  overflow, and round-trip adaptation · "Lockstep advancement" · static trace.
+- Duplicate, stale, future, oversized, unknown-type, and wrong-sender packet
+  handling beyond the established malformed-custom-payload hang path
+  · "Declared packet types" · static trace.
+- Semantic identity of the pacing-scan progress dword — remote-peer reported
+  progress versus earliest pending order time, two competing readings of the
+  same code; soft pacing itself is established · "Lockstep advancement" · static
+  trace.
+- Command authority for host, local player, remote player, computer player,
+  observer, pause, speed, sharing, and game termination · "Lockstep advancement" ·
+  static trace.
+- Map, resource, economy, and other hash contents, cadence, payloads, and
+  mismatch handling; the `.zrb` orchestrator; packet `0x27`'s
+  trailing-integrity-data producer algorithm; and the throttle-acknowledgement
+  format in the participant-state receiver · "Synchronization and integrity checks" · static trace.
+- Reconnect, late join, spectator join, and temporary transport-loss behavior,
+  or a bounded absence for each · "Peer transport state" · static trace.
+
+### Save and replay
+
+- Remaining semantic mappings inside the bulk binary boxes: order subtype
+  family names, the meanings of opaque subtype words and relations, and retail
+  source names for the unit and order words that must stay opaque rather than
+  be typed by width · "Save-file organization" · static trace. Unit `0xB8`
+  records, the `0x3A` order wire record, feature records, and the radar
+  preview header are closed by R-SAVE-UNIT-01 / R-SAVE-WEAPON-01 /
+  R-SAVE-ORDER-01.
+- Semantic naming of the individual COB snapshot words — local versus static
+  versus control · "Save-file organization", doc 04 §5 · static trace. The
+  persistence layout itself is byte-exact.
+- Retail source names for the two unnamed words of the per-unit mover box
+  `u%04xmob` · "Save-file organization", doc 04 §8.1 · static trace. The box
+  is the mover record and its traversal order is **Established**
+  ([04 §8.1 R-MOV-01 §1]): the 16.16 velocity triple, the three-component lean
+  residual vector, one unnamed 32-bit word, the scalar speed word, the signed
+  16-bit turn residual, a second unnamed 32-bit word, and finally a byte whose
+  low two bits carry the movement mode and whose bit 2 carries the blocked
+  flag — the mode and blocked bits being merged into the live mover's state
+  byte rather than overwriting it. This is also how save-installed mover modes
+  `0` and `3` reach a unit that no runtime writer can produce ([04 §9.1]). The
+  companion key `u%04xacc` is the accessory/attachment box; its field list is
+  a separate open item under the bulk-binary bullet above.
+- Upstream multiplayer GUI authority and menu enablement for saving, and the
+  upstream save-name edit-character policy and code page · "Save-file
+  organization" · static trace.
+- Framing, initial snapshot, command timing, random state, seek behavior,
+  version checks, and UI of a replay path, should one ever be found; the
+  whole-image sweep covering dynamically built names, debug modes, and
+  media/capture paths found none · "Bounded absence" · static trace.
+- Precise presentation sequencing of the overlay transitions inside the
+  front-end router at session end; the post-battle prefix is closed
+  · "Session end and reporting", doc 07 · static trace.

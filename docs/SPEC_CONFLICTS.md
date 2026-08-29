@@ -12,9 +12,23 @@ implementer looks.
 Reference install: `~/TotalAnnihilation` — base + Core Contingency + Battle
 Tactics + patch 3.1. Probed through this repo's `vfs` package.
 
+Every entry carries a **Status** line directly under its heading, added
+2026-08-28 by RWU-00-5: `closed by <citation> (date)` when a later finding or
+census settled it, or `open — decider: …` when it has not been settled. A
+status line never changes an entry's Decision; where a closure implies work in
+the code, the status names that action. There are no SC11–SC13 entries; the
+numbering has always skipped them.
+
+Two open entries gate real work: **SC7** (the sound-variant gather rule is an
+install-compatible divergence, not a finding) and **SC16** (the `0x20`
+active-state bit has no implementable counterpart). **SC5** is closed but its
+divergence is still in the code.
+
 ---
 
 ## SC1 — There is no ten-archive cap we can honor
+
+**Status:** closed by `[02 §2]`'s per-pass mount budget (2026-08-26). The cap is real but per-invocation, so mounting every local HPI reproduces the converged retail state.
 
 **Spec** `[02 §2]`: "Local `*.HPI` with flag 0, up to ten successfully mounted
 archives (the eleventh successful local HPI is not mounted)."
@@ -52,6 +66,8 @@ raw corpus.
 
 ## SC2 — `GAMEDATA.TDF` does not exist
 
+**Status:** closed by asset census of the reference install (2026-08-26). `[02 §1]`'s hard requirement reads as the `gamedata/` directory, not a file of that name.
+
 **Spec** `[02 §1]`: "The known hard requirements include `MOVEINFO.TDF` and
 `GAMEDATA.TDF`."
 
@@ -72,6 +88,8 @@ making it fatal would refuse to boot on a genuine retail install.
 
 ## SC3 — Intra-tier ordering barely matters, and we can measure it
 
+**Status:** closed — the divergence is measured and accepted; `[02 §2]` says retail's intra-tier order is the host's, not the executable's, so there is nothing to reproduce.
+
 Retail resolves same-tier archives in `FindFirstFileA` order, which `[02 §2]`
 itself calls "not a portable executable-defined order". We sort lexically inside
 a tier (PLAN_01 divergence D1).
@@ -88,6 +106,8 @@ lexical rule.
 ---
 
 ## SC4 — `vfs.EntryInfo.Name` is a base name, not a path
+
+**Status:** closed — a repo API note, not a spec conflict; kept here because it is the same class of trap.
 
 Not a spec conflict but the same class of trap. `EntryInfo.Path` is the logical
 path; `EntryInfo.Name` is the base name; `FS.Entries()` returns one entry **per
@@ -123,6 +143,8 @@ is PLAN_01's `WU-01-5` coverage test.
 ---
 
 ## SC5 — The three movement clamps cannot run unconditionally
+
+**Status:** closed by `[04 §6.1 R-DOC04-A]` (2026-08-27). One action outstanding: delete the gated-clamp divergence in `internal/content` and initialize the profile from the startup template.
 
 **Spec** `[02 "Movement class record"]`: eight keys are read in order, then
 "Three clamps then run, in order: if `maxwaterslope` is below `maxslope`,
@@ -189,6 +211,8 @@ in order" until the profile's initial value is known.
 
 ## SC6 — The two documents disagree on the fringe-anchor encoding
 
+**Status:** closed by `[03 §2.2]`'s stamp-time fringe writer contract (2026-08-28) — signed offsets, last-stamp-wins on overlap. The argument below is from map dimensions; the trace is what closed it.
+
 **Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 **Spec B** `[04 §6.2]`: "the multi-cell successor sentinel follows the successor
@@ -218,6 +242,8 @@ unknowns already asked for both readings to be exposed.
 
 ## SC7 — Sound variants are gathered even when the bare event key is absent
 
+**Status:** open — decider: static trace of the sound-category variant gather loop (RWU-02-2). The spec letter is known to be unimplementable against stock `sound.tdf`, but the executable has not been re-read, so the decision below is an install-compatible divergence rather than a finding.
+
 **Spec** `[02 "Sound category record"]`: "An event key that is absent for the
 bare form contributes no variants at all, because the bare read is what gates
 the numbered loop."
@@ -238,6 +264,8 @@ not "fix" the compiler back to the letter without re-reading the executable.
 ---
 
 ## SC8 — The two documents disagree on the code-9 re-arm jitter — resolved to distinct arms
+
+**Status:** closed by `[R-P0-01]` — the two arms use distinct random bounds over the same 30-tick base.
 
 **Spec A** `[04 §3.3]`, result-code 9: if the record is last, "reset its phase
 and set **the same randomized deadline**" — i.e. the code-3 formula, global
@@ -266,6 +294,8 @@ row is correct for code 3 and [05] is correct for code 9 last.
 ---
 
 ## SC9 — `LOS.TDF` declares nine tables and supplies twelve
+
+**Status:** closed by asset census plus the declared-count reading; `[03 §3.2]` was silent and this entry records which silence was resolved and how.
 
 **Spec** `[03 §3.2]` clamps the terrain-ray group index "into the parsed
 LOS.TDF table range" without saying which count defines that range.
@@ -300,6 +330,8 @@ required to agree and must not be shared.
 
 ## SC10 — Trailing -Z is Z-Y/2 shear, not a second model-space NEG (H_A vs H_C)
 
+**Status:** closed by `[03 §2.4]` / `[03 §2.5]` (2026-08-25) — the trailing `-Z` belongs to projection, not to source conversion.
+
 **Spec** `[03 §2.4/2.5]` prior to 2026-08-25: load-time half-turn `-X,-Z` was established, but whether screen helpers' `-Z` was a second conversion (`H_C` net `-X`) vs shear (`H_A` net `-X,-Z`) was an open question or supported inference.
 
 **Observed:** the screen helpers negate only the transient projected Z value,
@@ -316,6 +348,8 @@ the trailing `-Z` belongs to projection, not source conversion.
 
 ## SC14 — Flare/muzzle per-vertex reuse vs second NEG
 
+**Status:** closed by `[03 §2.4]` (2026-08-25) — the muzzle query reuses the pristine post-load vectors.
+
 **Spec** `[03 §2.4]` / `research/formats/3do.md` "Model facing is −Z": piece translations converted at load, but muzzle query path could have re-applied `NEG`.
 
 **Observed:** the piece transform rotates and translates the already-converted
@@ -329,6 +363,8 @@ extra sign change.
 ---
 
 ## SC15 — The cursor index table was off by one from slot 10
+
+**Status:** closed by `[07 §8]`'s corrected 0..21 cursor table plus the asset census of `anims/cursors.gaf`.
 
 **Spec** `[07 §8]` (before this entry): "The cursor index table is closed …
 index 1 `cursorattack` … 9 `cursorteleport`, 10 `cursorreclamate`,
@@ -378,6 +414,8 @@ the corrected table.
 
 ## SC16 — No runtime bit corresponds to `[07 §9]`'s active-state `0x20`
 
+**Status:** open — decider: static trace reconciling the runtime flag word with `[07 §9]`'s active-state bit. `[07 §8]` records the bit and the empty-current-task field as established for retail with no counterpart in our flag word; `INBUILDSTANCE` and the active-state bit cannot both be `0x20`.
+
 **Spec** `[07 §9]`: the shared selection eligibility predicate, and the
 own-unit inspect predicate behind `cursorselect` in `[07 §8]`, test "the
 active-state bit `0x20` of unit runtime flags".
@@ -399,6 +437,8 @@ implementable counterpart yet.
 ---
 
 ## SC17 — Order queue caps 64/32 were inside stock-reachable behavior [P1-I09]
+
+**Status:** closed by corpus census (`internal/orders/corpus_caps_test.go` `TestCorpusQueueCaps_Retail`) — the 64/32 caps were inside stock-reachable behavior and are replaced by dynamic storage.
 
 **Spec** `[P2-03]` fallback caps `MaxPrimaryQueue=64` / `MaxSecondaryQueue=32`
 with diagnostic drop (I11 divergence) for queue overflow, plus pump
@@ -441,6 +481,8 @@ they are replaced by dynamic storage per `P1-I09`.
 ---
 
 ## SC18 — Allocator zero-fill byte count and COB malformed-save policy are narrow open items [P1-I09]
+
+**Status:** open — decider: static trace of the allocator's exact memset length and of the COB abort path. Marked `TODO(T23)` at the allocation sites; see doc 01's and doc 04's "Missing and unknown" items.
 
 **Correction audit (current boundary):** An earlier revision of this section
 described a Nanolathe-specific `StateV1` save codec and directed callers to
@@ -490,6 +532,8 @@ explicit `TODO(T23)`/`TODO(question)` placeholders.
 
 ## SC19 — Yard-map parsing is not one-to-one, and bits 5/6 read the wrong flags
 
+**Status:** closed by asset census plus the character-loop trace; `[05 "Geothermal requirement"]` carries the corrected parse and flag identities.
+
 **Spec said:** `[05 "Geothermal requirement"]` described yard-map characters as
 mapping "one-to-one into a row-major buffer sized by the packed footprint
 extents", and named bit 6 a test for "a specific non-reclaimable flag". Bit 5
@@ -536,6 +580,8 @@ bit roles, or the geothermal rule itself.
 
 ## SC20 — Cursor-to-ground is a search along Z, not an inverse projection
 
+**Status:** closed by `[07 §8]`'s cursor-to-ground resolver (bounded search along Z, then bracket and interpolate).
+
 **Spec said:** `[07 §8]` said only that "world space, unit, feature, and
 terrain/radar tests use the camera transform", which `internal/camera`
 implemented as the algebraic inverse of `WorldToScreen` at height zero.
@@ -565,6 +611,8 @@ pointer past the map edge resolves to the edge, so an off-map build ghost is
 legal rather than out of bounds.
 
 ## SC21 — `BMcode` marks structures, not factories, and `CanMove` does not separate factories from mobile builders
+
+**Status:** closed by asset census of the 278 stock definitions; `[fmt fbi]`'s `BMcode` row is corrected and `[07 §9]` carries the product-BMcode branch.
 
 **Spec said:** `research/formats/fbi.md` gave `BMcode` as "`0` for stationary
 factories ('build-machine'), `1` for everything else — distinguishes pad
@@ -614,6 +662,8 @@ BMcode-zero gate was right all along.
 
 ## SC22 — Static-layer path search and Nanolathe dynamic-block / retry policy [OW-3-O]
 
+**Status:** retry policy closed by `[R-MOV-01 §7]` (2026-08-28): retail re-arms a path request when a route is installed and the mover is blocked or has fewer than two points, throttled to one request per 60 ticks with no retry ceiling. Nanolathe's `landPathFailureRetryInterval = 30` / `landPathFailureMaxRetries = 1` are now measured divergences to remove in the reconciliation pass, not undetermined policy. The search-versus-commit split itself is closed by `[R-MOV-02A]`; only the retry policy below is Nanolathe's own.
+
 **Spec** `[04 §8.2]` (static and mobile collision): mobile units are not
 permanent A* walls in the map-load layer; path search uses the static terrain,
 feature, and yard/building layers, while a request-initialization revision may
@@ -622,7 +672,7 @@ described in `[04 §6.1 R-DOC04-B]`. Final mobile contention is arbitrated at
 commit `[04 §8.2]`; mobile units are hard blockers there even though their
 projected motion is not inserted into the expansion heap.
 
-**Observed:** `internal/movement/integrate.go:searchFunc` previously checked `OccupancyGrid.OccupantAt` for every neighbor and rejected occupied cells, turning transient traffic into static obstacles and feeding an invented retry/removal policy (needless rejected routes around movers, then path-failure retry count). `OccupancyGrid.Revision/Bump` (`internal/movement/collision.go:Revision/Bump/BumpRevision`) had no explicit consumer beyond diagnostics; search already rechecks `isPassable` lazily at expansion, so an explicit revision guard is unnecessary, but `Stamp`/`Clear` correctly bumped `rev` per `[04 §7.4]` C18 and tests locked the bump. `landPathFailureRetryInterval = 30` and `landPathFailureMaxRetries = 1` (`integrate.go:127-128`) and the `rec.Retries >= 1` hard-coded check in `internal/session/loop.go:1149` are Nanolathe retry policy where retail's dynamic-blocker retry cadence/count remain unresolved `[R-P1-10]`.
+**Observed:** `internal/movement/integrate.go:searchFunc` previously checked `OccupancyGrid.OccupantAt` for every neighbor and rejected occupied cells, turning transient traffic into static obstacles and feeding an invented retry/removal policy (needless rejected routes around movers, then path-failure retry count). `OccupancyGrid.Revision/Bump` (`internal/movement/collision.go:Revision/Bump/BumpRevision`) had no explicit consumer beyond diagnostics; search already rechecks `isPassable` lazily at expansion, so an explicit revision guard is unnecessary, but `Stamp`/`Clear` correctly bumped `rev` per `[04 §7.4]` C18 and tests locked the bump. `landPathFailureRetryInterval = 30` and `landPathFailureMaxRetries = 1` (`integrate.go:127-128`) and the `rec.Retries >= 1` hard-coded check in `internal/session/loop.go:1149` are Nanolathe retry policy where retail's dynamic-blocker retry cadence/count remain unresolved `[04 §7.3]`.
 
 **Correction history [R-MOV-02A]:** The previous Decision said that mobile
 occupancy was "ignored at search time" without qualification. That sentence
@@ -649,8 +699,8 @@ retained for its separate diagnostic/revision role; it must not be conflated
 with the class-layer watermark and request-init restamp. Building/yard
 occupancy remains part of the static/profile inputs.
 
-The former collision-triggered Nanolathe avoidance policy has been removed in
-`[R-MOV-02B]`: there is no lower-slot priority, `avoidNext` cadence, or
+The former collision-triggered Nanolathe avoidance policy has been removed
+under `[R-MOV-02A]`: there is no lower-slot priority, `avoidNext` cadence, or
 `ReplanMove` submission after a rejected mobile commit. The bounded final
 commit response is therefore the sole implemented collision response; outer
 yield/replan and ordinary open-group liveness remain **Unknown** as stated in
@@ -661,7 +711,7 @@ One separate policy divergence is retained with `I9`/`I11` hygiene:
 * `landPathFailureRetryInterval = 30`, `landPathFailureMaxRetries = 1`
   (`integrate.go`) plus `internal/session/loop.go:1149` `if rec.Retries >= 1` —
   explicit Nanolathe failed-path recovery where retail's retry cadence/count
-  remain unresolved `[R-P1-10]`. The hard-coded `>=1` in `loop.go` is
+  remain unresolved `[04 §7.3]`. The hard-coded `>=1` in `loop.go` is
   session-owned, so per `OW-3-O` ownership it is **not** changed here; it
   mirrors the movement-owned constant and is documented as policy, not spec.
   If the hunk were movement-owned it would reference
