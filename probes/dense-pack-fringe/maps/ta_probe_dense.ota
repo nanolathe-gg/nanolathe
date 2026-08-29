@@ -1,0 +1,102 @@
+[GlobalHeader]
+	{
+	missionname=ta_probe_dense;
+	missiondescription=RWU-00-6 probe: OTA features stamped over TNT feature anchors and fringe cells.;
+	planet=Green planet;
+	missionhint=;
+	brief=;
+	narration=;
+	glamour=;
+	lineofsight=0;
+	mapping=0;
+	tidalstrength=0;
+	solarstrength=20;
+	lavaworld=0;
+	killmul=50;
+	timemul=0;
+	minwindspeed=100;
+	maxwindspeed=3000;
+	gravity=112;
+	numplayers=2, 4;
+	size=4 x 4;
+	memory=16 mb;
+	SCHEMACOUNT=1;
+	[Schema 0]
+		{
+		Type=Network 1;
+		aiprofile=;
+		SurfaceMetal=3;
+		MohoMetal=30;
+		HumanMetal=1000;
+		ComputerMetal=1000;
+		HumanEnergy=1000;
+		ComputerEnergy=1000;
+		MeteorWeapon=;
+		MeteorRadius=0;
+		MeteorDensity=0;
+		MeteorDuration=0;
+		MeteorInterval=0;
+		[features]
+			{
+			// Pair 1: TNT ta_probe_dense_a anchored at cell (40,40); this
+			// 2x2 footprint anchored at cell (39,39) covers that anchor.
+			[feature0]
+				{
+				Featurename=ta_probe_dense_b;
+				XPos=632;
+				ZPos=632;
+				}
+			// Pair 2: TNT ta_probe_dense_c (indestructible) anchored at
+			// (60,40); this footprint anchored at (59,39) covers that anchor.
+			[feature1]
+				{
+				Featurename=ta_probe_dense_b;
+				XPos=952;
+				ZPos=632;
+				}
+			// Pair 3: control, nothing underneath; anchored at (80,39).
+			[feature2]
+				{
+				Featurename=ta_probe_dense_b;
+				XPos=1288;
+				ZPos=632;
+				}
+			// Pair 4: TNT ta_probe_dense_a anchored at (40,60); this
+			// footprint anchored at (41,59) covers only its fringe cell
+			// (41,60), not the anchor.
+			[feature3]
+				{
+				Featurename=ta_probe_dense_b;
+				XPos=664;
+				ZPos=952;
+				}
+			}
+		[specials]
+			{
+			[special0]
+				{
+				specialwhat=StartPos1;
+				XPos=1000;
+				ZPos=1300;
+				}
+			[special1]
+				{
+				specialwhat=StartPos2;
+				XPos=1700;
+				ZPos=1700;
+				}
+			[special2]
+				{
+				specialwhat=StartPos3;
+				XPos=300;
+				ZPos=1700;
+				}
+			[special3]
+				{
+				specialwhat=StartPos4;
+				XPos=1700;
+				ZPos=300;
+				}
+			}
+		}
+	}

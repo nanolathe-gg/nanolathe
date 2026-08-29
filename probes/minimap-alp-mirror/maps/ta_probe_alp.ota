@@ -1,0 +1,67 @@
+[GlobalHeader]
+	{
+	missionname=ta_probe_alp;
+	missiondescription=RWU-00-6 probe: four quadrant colours and a white block for the radar picture.;
+	planet=Green planet;
+	missionhint=;
+	brief=;
+	narration=;
+	glamour=;
+	lineofsight=0;
+	mapping=0;
+	tidalstrength=0;
+	solarstrength=20;
+	lavaworld=0;
+	killmul=50;
+	timemul=0;
+	minwindspeed=100;
+	maxwindspeed=3000;
+	gravity=112;
+	numplayers=2, 4;
+	size=4 x 4;
+	memory=16 mb;
+	SCHEMACOUNT=1;
+	[Schema 0]
+		{
+		Type=Network 1;
+		aiprofile=;
+		SurfaceMetal=3;
+		MohoMetal=30;
+		HumanMetal=1000;
+		ComputerMetal=1000;
+		HumanEnergy=1000;
+		ComputerEnergy=1000;
+		MeteorWeapon=;
+		MeteorRadius=0;
+		MeteorDensity=0;
+		MeteorDuration=0;
+		MeteorInterval=0;
+		[specials]
+			{
+			[special0]
+				{
+				specialwhat=StartPos1;
+				XPos=400;
+				ZPos=400;
+				}
+			[special1]
+				{
+				specialwhat=StartPos2;
+				XPos=1600;
+				ZPos=1500;
+				}
+			[special2]
+				{
+				specialwhat=StartPos3;
+				XPos=1600;
+				ZPos=400;
+				}
+			[special3]
+				{
+				specialwhat=StartPos4;
+				XPos=400;
+				ZPos=1500;
+				}
+			}
+		}
+	}

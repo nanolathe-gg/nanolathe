@@ -1,0 +1,11 @@
+// RWU-00-6 heading-zero-nose probe campaign. Grammar per
+// [08 "Mission list"]: a [HEADER] with campaignside, then MISSION0.
+[HEADER]
+	{
+	campaignside=ALL;
+	}
+[MISSION0]
+	{
+	missionfile=ta_probe_xz;
+	missionname=RWU-00-6 heading-zero nose probe;
+	}

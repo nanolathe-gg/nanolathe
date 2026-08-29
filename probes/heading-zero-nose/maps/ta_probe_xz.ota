@@ -1,0 +1,108 @@
+[GlobalHeader]
+	{
+	missionname=RWU-00-6 heading-zero nose probe;
+	missiondescription=Probe: four asymmetric units at Angle 0, 90, 180, 270.;
+	planet=Green planet;
+	missionhint=;
+	brief=;
+	narration=;
+	glamour=;
+	lineofsight=0;
+	mapping=0;
+	tidalstrength=0;
+	solarstrength=20;
+	lavaworld=0;
+	killmul=50;
+	timemul=0;
+	minwindspeed=100;
+	maxwindspeed=3000;
+	gravity=112;
+	numplayers=2;
+	size=4 x 4;
+	memory=16 mb;
+	SCHEMACOUNT=1;
+	[Schema 0]
+		{
+		Type=Easy;
+		aiprofile=;
+		SurfaceMetal=3;
+		MohoMetal=30;
+		HumanMetal=1000;
+		ComputerMetal=1000;
+		HumanEnergy=1000;
+		ComputerEnergy=1000;
+		MeteorWeapon=;
+		MeteorRadius=0;
+		MeteorDensity=0;
+		MeteorDuration=0;
+		MeteorInterval=0;
+		[units]
+			{
+			// North-west of the camera start: Angle 0.
+			[unit0]
+				{
+				Unitname=TA_PROBE_XZ;
+				XPos=900;
+				YPos=0;
+				ZPos=900;
+				Player=1;
+				HealthPercentage=100;
+				Angle=0;
+				}
+			// North-east: Angle 90.
+			[unit1]
+				{
+				Unitname=TA_PROBE_XZ;
+				XPos=1140;
+				YPos=0;
+				ZPos=900;
+				Player=1;
+				HealthPercentage=100;
+				Angle=90;
+				}
+			// South-west: Angle 180.
+			[unit2]
+				{
+				Unitname=TA_PROBE_XZ;
+				XPos=900;
+				YPos=0;
+				ZPos=1140;
+				Player=1;
+				HealthPercentage=100;
+				Angle=180;
+				}
+			// South-east: Angle 270.
+			[unit3]
+				{
+				Unitname=TA_PROBE_XZ;
+				XPos=1140;
+				YPos=0;
+				ZPos=1140;
+				Player=1;
+				HealthPercentage=100;
+				Angle=270;
+				}
+			// One enemy unit far away keeps the mission running: a mission
+			// with no Player=2 unit is won at the first poll ([fmt ota]).
+			[unit4]
+				{
+				Unitname=TA_PROBE_XZ;
+				XPos=1800;
+				YPos=0;
+				ZPos=1700;
+				Player=2;
+				HealthPercentage=100;
+				Angle=0;
+				}
+			}
+		[specials]
+			{
+			[special0]
+				{
+				specialwhat=StartPos1;
+				XPos=1020;
+				ZPos=1020;
+				}
+			}
+		}
+	}

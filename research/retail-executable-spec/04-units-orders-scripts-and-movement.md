@@ -3103,6 +3103,353 @@ targetModelHeight`: it will not repair a unit whose top is under water.
 five twins as "no per-visit contract yet" is removed; the `0x100E8` /
 `0x10008` gates it cited are those of `VTOL_ReclaimUnit` above.
 
+### Closed — command resolution, exactly [R-ORD-02 §1] (2026-08-29)
+
+§3.4's table names the outcomes of the command resolver; this block gives
+the tests in the order the resolver runs them, so an implementer chooses
+nothing. Everything here is **Established** by direct trace of the
+name-form resolver (RWU-04-12) unless a sentence says otherwise. The
+resolver takes a command code 1–14, the acting unit, an optional target
+unit, and an optional world position; it writes a canonical order name
+(looked up by §3.4's case-insensitive search) or the empty name, which is the
+reject identity 0.
+
+**Vocabulary.** *Word A* and *word B* are the definition's two capability
+words of [R-SPEC-01 §0]; word A carries `builder` (bit 6), `isairbase` (9),
+`canfly` (11), `canhover` (12), `hoverattack` (27) and `kamikaze` (28); word
+B carries `canattack` (4), `canguard` (5), `canpatrol` (6), `canmove` (7),
+`canload` (8), the `canreclamate` mirror bit (9, [R-ORD-01 §7]),
+`canreclamate` (10), `canresurrect` (11), `cancapture` (12) and `candgun`
+(14) ([02 R-KEYS-01]). *Air twin* means the `VTOL_` form of a name when the
+acting unit's definition has `canfly` and the ground form otherwise; every
+"or air twin" below is that one test. *Hostile* and *friendly* are set once
+at entry: with a target, the acting player's diplomacy byte toward the
+target's side (§3.4) equal to 0 is *hostile*, any other value *friendly*;
+with no target both are false. A target that exists but lacks the alive bit
+28 rejects **every** code before the switch. *Nano-reach* is the repair
+admission test of [R-ORD-01 §7] (mirror bit 9 on me; target health differs
+from `maxdamage`; target not airborne; the water clause). *Carriable* is
+the nine-reject transport admission of §10.2. *Feature at the position*
+means: the position's coarse mapping-word tile — `X >> 5` and `(Z − Y/2)
+>> 5` in whole world units, the Y halving being the screen-projected pick
+— lies inside the map and its word carries the **viewing** player's bit
+([03 R-LAYER §1]: the tile is mapped memory for the viewer); and the feature
+grid cell at the position (16-unit cells; a non-origin cell of a multi-cell
+feature resolves through its parent link, [R-ORD-01 §5]) holds a feature
+whose definition is **reclaimable**. Unmapped tiles and non-reclaimable
+features count as no feature.
+
+**Code 1 — contextual.** Two variants, selected by the `Interface Type`
+option ([07 R-CAM-01 §5]; the `LEFTCLICK` two-stage button).
+
+*`Interface Type = 1`*, in order: (1) `canattack` and hostile → resolve as
+code 3; (2) `canreclamate` and hostile → `ReclaimUnit` or air twin; (3)
+friendly and nano-reach passes: target unfinished → `HelpBuild` or air
+twin, else `RepairUnit` or air twin (**no health test** — a full-health
+friendly resolves to a repair); (4) I am `canfly`, friendly, and the target
+has `isairbase` → `VTOL_Landing`; (5) carriable → `VTOL_Pickup` or
+`Ground_Pickup`; (6) `canguard` and friendly → `VTOL_Follow` or
+`Follow_Ground`; (7) `canresurrect`, a position, and a feature at it →
+`Resurrect`; (8) `canreclamate`, a position, and a feature at it →
+`Reclaim` or air twin; (9) `canmove` and a live mover → `Move_Ground` or
+`VTOL_Move`; else reject.
+
+*`Interface Type = 0`* (default), in order: (1) `canattack` and hostile →
+code 3; (2) `canreclamate` and hostile → resolve as **code 12** (so the
+feature tests below run first and a hostile unit is reclaimed only when no
+feature is at the position); (3) with a target: nano-reach passes and the
+target is unfinished → resolve as code 8; then, when the target is **my
+own** (its owner slot byte equals the local slot), selectable (state bit
+5), complete, its post-capture byte is 0 (below), and it is either not
+carried or its carrier has state bit 30 → **reject** (a click on one's own
+idle unit is a selection, not an order); (4) `canresurrect` + position +
+feature → `Resurrect`; (5) `canreclamate` + position + feature → `Reclaim`
+or air twin; (6) `canmove` and a live mover → move or air twin; else
+reject. The default variant therefore never turns a click on a damaged
+friendly into a repair (only an unfinished one into assistance) and never
+resolves pickup, follow, or landing contextually; those need the explicit
+codes.
+
+**Code 2 — move.** `canmove` required (else reject). No live mover →
+`QMove`. With a target, in order: `cancapture` and hostile → `Capture`;
+`canreclamate` and hostile → `ReclaimUnit` or air twin; friendly and
+nano-reach passes and the target is unfinished → `HelpBuild` or air twin;
+friendly and nano-reach passes and the target's 16-bit health is below its
+`maxdamage` (unsigned) → `RepairUnit` or air twin; I am `canfly`, friendly,
+target `isairbase` → `VTOL_Landing`; carriable → pickup or air twin;
+`canguard` and friendly → follow or air twin; else move or air twin.
+Without a target: move or air twin.
+
+**Code 3 — attack a unit.** `canattack` required (else reject). The armed
+branch runs only when my state word has bit 31 (the armed bit of
+[R-ORD-01 §3]); an unarmed unit falls straight to the kamikaze test. Let
+*w0* be my weapon slot 0's weapon definition and *W1* my definition's
+first-weapon definition; weapon flag names are doc 06's.
+
+* **Not hostile** (friendly or no target): *w0* has `toairweapon` → reject;
+  I am not `canfly` → `Suppress`; else *W1* has `dropped` → `AirStrike`,
+  else `AirToGround`. A position-only attack from an aircraft is therefore
+  always a run, never a hover.
+* **Hostile.** First the target-class rejects, in order: the target is not
+  airborne (mover mode ≠ 2) and *w0* has `toairweapon` → reject. Let `top` =
+  target Y whole part + target model-height whole part ([R-COB-03 §2] port
+  11). If `top < seaLevel` (the target is submerged): unless *w0* has
+  `waterweapon`, or my slot 1 is enabled (its control byte bit 1) and its
+  weapon has `waterweapon` → reject. Otherwise (`top ≥ seaLevel`), when I am
+  `canhover`: *w0* `waterweapon` → reject; slot 1 enabled with
+  `waterweapon` → reject. (A hovercraft's water weapons cannot be ordered
+  onto a surfaced target; a submerged target needs one.) Then the variant:
+  I am `canfly` → *W1* `dropped` and target not `canfly` → `AirStrike`;
+  *W1* not `dropped` and target `canfly` → `AirToAir`; target not `canfly`
+  and I lack `hoverattack` → `AirToGround`; target not `canfly` and
+  `hoverattack` → `AirToGroundHover`; a `dropped` *W1* against a flying
+  target → reject. I am not `canfly` → a live mover → `Attack_Chase`;
+  state bit 29 (immobile) → `Attack_NoMove`; else fall through.
+* **Fall-through** (unarmed, or an armed ground unit with neither a mover
+  nor bit 29): word A `kamikaze` → `Attack_Kamikaze`; else reject.
+
+**Code 4 — special attack.** `candgun` → `AttackSpecial`; else reject.
+**Code 5 — unload.** `canload`, `canfly`, a target, and target `isairbase`
+→ `VTOL_Landing`; else `canload` → `VTOL_Unload` or `Ground_Unload`; else
+reject. **Code 6 — pick up.** A target that is carriable → pickup or air
+twin; else reject. **Code 7 — guard.** `canguard` and friendly → follow or
+air twin; else reject. **Code 8 — assist or repair.** Nano-reach must pass
+(else reject); target unfinished → `HelpBuild` or air twin, else
+`RepairUnit` or air twin — no health test here either. **Code 9 — patrol.**
+`canpatrol` required; no live mover → `QPatrol`; mirror bit 9 clear →
+`Patrol` or `VTOL_Patrol`; set → `RepairPatrol` or `VTOL_RepairPatrol`.
+**Code 10** writes the empty name (§3.4). **Code 11** → `Teleport`, no
+gate. **Code 12 — reclaim or resurrect.** `canreclamate` required. Resolve
+the feature at the position once; then, with a position: `canresurrect`
+and a feature → `Resurrect`; a feature → `Reclaim` or air twin; then a
+target → `ReclaimUnit` or air twin; else reject. **Code 13 — capture.**
+`cancapture`, a target, and the target's owner differing from mine →
+`Capture`. **Correction to §3.4's row 13:** it says "target hostile and
+differently owned"; hostility is **not** tested — an allied unit of another
+player is capturable by this code. **Code 14 — mobile build.** The
+definition's build list is non-empty and a live mover exists →
+`MobileBuild` or air twin; else reject.
+
+**The post-capture byte (Unknown).** Code 1's default variant reads a unit
+byte that the ownership transfer of doc 05 writes `150` into on a
+human-to-computer capture; its decrement site, and therefore what a nonzero
+value means for the own-unit reject above, are not traced. *Decider:*
+static trace of that byte's writers (doc 05's transfer and the per-tick unit
+pass). Until then a reimplementation treats it as always 0.
+
+### Closed — `VTOL_Move`, `VTOL_Patrol`, and `VTOL_MobileBuild` [R-ORD-02 §2] (2026-08-29)
+
+These three air executors were cited to §10.1 and §10.3, which state the
+flight integrator and the orbit recurrence but not the phase machines. All
+three use the takeoff preamble of [R-AIR-01 §6] (release the latches;
+detach from a carrier with request mode 2; raise the activation edge; when
+grounded set mode 2, build a point marker on the unit's own position with
+altitude offset `cruisealt / 2`, install it and OR `0xE0` into the gate).
+**Established** by direct trace.
+
+**`VTOL_Move`.** Phase 0: a live mover and `canfly` (else cancel-all); the
+preamble; advance. Phase 1: caption clear; inhibit all three slots; snap the
+record's goal X and Z onto **the unit's own** footprint (the snap/reverse
+pair of [R-ORD-01 §1] with this unit's footprint-size pair — the goal is
+re-centred on the cell the unit would occupy there); build a point marker at
+the snapped goal with **no altitude or radius setter** — arrival is the
+default `hypot ≤ 0.5` world units at the terrain-derived Y of
+[R-AIR-01 §4]; install; gate `= 0xE0`; advance. Phase 2 (any of the three
+arrival bits): when this record has no successor, status 6 (`Arrived`);
+complete — the goal-release and payload-replaced bits complete the order
+exactly as arrival does, and the caption is emitted only for the last
+record. Other phase: cancel-all. There is no re-arm: the air move never
+returns 9.
+
+**`VTOL_Patrol`.** Phase 0: mover and `canfly` (else cancel-all); the
+patrol-chain setup of [R-ORD-01 §4]; caption clear with `Patrolling`; the
+preamble; then inhibit all three slots; advance. Phase 1: clear the five
+movement pending bits `0x20`–`0x200` from the record's pending word;
+advance. Phase 2, in order: satisfied ∩ `0xE0` → *rotate* (the record moves
+to the tail with its phase left at 2, so the next visit re-arms the leg);
+build a point marker at `goal − offset(bearing(me → goal), 320)` world
+units — 320 units short of the waypoint along the approach — with
+horizontal arrival radius `0x150` (336; explicit-radius strict test); install;
+gate `|= 0xE0`; then, if health `< (maxdamage >> 2) · 3` (unsigned): collect
+the base candidates within `0xF00` for my side ([R-AIR-01 §7]); any → release
+the payload, draw `RNG(count)`, spawn `VTOL_Landing` at that candidate at
+the head, gate = 0, *restart*; then the opportunity scan of [R-STANCE-01 §3]
+(fire-at-will only) → a target that the auto-engage issuer accepts without
+the force flag → gate = 0, *wait*; else deadline 30, hold. Other phase:
+cancel-all. Because the marker stops 320 units short and the arrival radius
+is 336, an air patrol leg is satisfied about 320 units before the authored
+waypoint; a patrol with waypoints closer than that rotates every visit.
+
+**`VTOL_MobileBuild`.** Pre-checks as the ground twin: satisfied bit 1 →
+refresh the builder interface, complete; satisfied `0x8` → status 7
+`Construction terminated`, refresh, abandon. Phase 0: mover and `canfly`
+(else cancel-all); caption clear with `Building`; the preamble; advance.
+Phase 1: p3 = 0; snap the goal onto the **product's** footprint (definition
+p1); point marker at the snapped goal with horizontal arrival radius
+`builddistance` (strict `<`), no altitude setter; install; gate `= 0xE0`;
+advance. Phase 2: satisfied `0x40` → abandon; validate placement of the
+product footprint at the snapped cell (§6.4, medium argument 1); illegal →
+p3 = 0: status 7 `Waiting for target area to clear`; p3 > 10: status 7
+`Target area was blocked`, abandon; p3 += 1, deadline 30, hold. Legal →
+prepare the site, create the product as a nanoframe (owner mine), bind it;
+not created → status 7 `Unable to create any more units`, **abandon** (the
+ground twin waits 300 ticks and holds); created → status 9 `Starting
+construction`, insert `GetBuilt` on the product in queued mode, emit
+`StartBuilding(bearing(me → product) − heading)` (relative, as the ground
+twin; contrast `VTOL_HelpBuild` of [R-ORD-01 §7]), refresh; advance. Phase
+3: **poll** the `INBUILDSTANCE` helper with extra `0xA` and **discard its
+result** — when the stance byte is clear it writes gate `= 0xE` as a side
+effect, but the work body below runs regardless; the phase then falls into
+the shared work body. Phase 4: the work body alone. The work body: on every
+tick with `tick mod 150 = 0`, build the orbit marker of §10.3 at `product +
+offset(bearing(me → product) + 0xDB6E, builddistance)` — note the **plus**,
+the marker is on the far side of the bearing helper's axis from every
+`unitPos − offset(…)` leg of [R-AIR-01 §8] — with the marker's heading set
+to that bearing (flag `0x40`) and no radius setter; install. Then the work
+step with quantum `workertime / 30` (integer division, then float); when it
+did work draw the spray from `QueryNanoPiece` to the product's model box.
+Product finished (remaining fraction `0.0`) → advance; else deadline 1,
+gate `|= 0xA`, hold. Phase 5: status 8 `Building complete`; complete. Other
+phase: cancel-all. There is no nanolathe-active stamp and no reach test
+after arrival: an aircraft that reached its `builddistance` marker builds
+from wherever the 150-tick orbit leaves it.
+
+### Closed — `VTOL_Follow` and `VTOL_SeekGuard` [R-ORD-02 §3] (2026-08-29)
+
+[R-AIR-01 §7] left both open. **Established** by direct trace.
+
+**`VTOL_Follow`** (the air guard). Entry, in order: target null or
+satisfied ∩ `0x48` → if this record has no successor, allocate
+`VTOL_SeekGuard` with this record's target (null when the target is gone)
+and goal and **tail-append** it; complete either way. Off-map recovery of
+[R-AIR-01 §5] (marker toward the map centre at 800 world units, arrival
+radius `0x80`, gate `|= 0xE0`, hold). Every visit then copies the target's
+position into the record goal. Phase 0: mover and `canfly` (else
+cancel-all); caption clear with `Guarding`; the takeoff preamble; draw
+`RNG(0x10000)` into p1 (the orbit bearing) and its low bit into p2; advance.
+Phase 1: inhibit all three slots; advance. Phase 2, four legs in order:
+
+1. *Defend the ward.* Let `a` be the ward's recorded attacker reference (the
+   reference the damage intake stores on the victim — **Supported
+   inference** for the field's identity; decider: doc 06's damage-intake
+   trace naming it). When `a` exists, my player's diplomacy byte toward
+   `a`'s side is 0, **the satisfied set has `0x10`**, and `a`'s definition
+   index is not in my definition's no-chase category bitset: run the
+   auto-engage issuer with the force flag ([R-STANCE-01 §3]); success → gate
+   = 0, *wait*. Failure with my fire stance not *hold* (state bits
+   `0x300000` nonzero): for slots 0, 1, 2 whose control byte has bits 1 and
+   4 (enabled and latched) and whose weapon lacks `commandfire`, when the
+   slot's target is empty, or the shot gate refuses it, or its definition
+   index is in that slot's bad-target bitset → bind the slot to `a`. Because
+   [R-ORD-01 §6] found no producer of pending bit `0x10`, this leg is
+   reachable only through that open producer; a reimplementation that
+   never raises `0x10` never runs it.
+2. *Help the ward.* Nano-reach passes for the ward → resolve code 8 against
+   it; a non-empty name → release the payload, spawn it at the head, gate =
+   0, *wait*.
+3. *Copy the ward's work.* Let `h` be the ward's front-queue head. When `h`
+   exists with a nonzero identity, I have `builder`, nano-reach passes for
+   **`h`'s target**, the ward has `builder`, `h`'s static-mask copy has bit
+   20, and `h`'s target is not me: if `h` is `MobileBuild`, `BuildingBuild`
+   or `VTOL_MobileBuild` and has a target → spawn `VTOL_HelpBuild` on `h`'s
+   target; else if (`h`'s mask has `0x200` and a target) or (`h`'s mask has
+   `0x400`) → take `h`'s identity, substituting the air twin for
+   `RepairUnit`, `Reclaim`, `ReclaimUnit` and `HelpBuild`, and spawn it with
+   `h`'s target and `h`'s goal. Either spawn releases the payload, inserts
+   at the head, gate = 0, *wait*. Any other `h` falls to the orbit.
+4. *Orbit.* Satisfied ∩ `0xE0` → `p1 −= 0x4000 + RNG(0x2000)` (a quarter
+   turn plus up to 45° further, always subtractive). Radius `r` = my slot-0
+   weapon `Range + 0xA0` world units when my state word has bit 31, else
+   320. Point marker at `wardPos − offset(p1, r)` with horizontal arrival
+   radius `0x80`; install; deadline 30; gate `|= 0xF8`; hold.
+
+Other phase: cancel-all. At most two draws per visit (the orbit step only
+after an arrival; the phase-0 bearing once).
+
+**`VTOL_SeekGuard`.** Entry: satisfied `0x40` → complete; the off-map
+recovery as above. Phase 0: mover and `canfly` (else cancel-all); a goal of
+exactly `(0,0,0)` → goal = own position; draw `RNG(0x10000)` into p1 and its
+low bit into p2; advance — **no takeoff preamble**: a grounded seeker stays
+grounded until something else lifts it. Phase 1, in order: health `<
+(maxdamage >> 2) · 3` (unsigned) → collect the base candidates within
+`0xF00`; any → release the payload, `RNG(count)`, spawn `VTOL_Landing` at
+the pick at the head, gate = 0, *restart*. Then enumerate the units within
+`sightdistance` through the **guard-candidate visitor** ([R-ORD-02 §4]);
+non-empty → release the payload, resolve code 7 against the **first** listed
+unit and spawn the result at the head **whatever it is** — a reject
+resolves to identity 0 and is spawned as such — gate = 0, *wait*. Else the
+orbit step of `VTOL_Follow` leg 4 with `r = Range + 0xA0` read from slot 0
+unconditionally, about the record's **goal** (not a ward); hold. Other
+phase: cancel-all.
+
+### Closed — the scan visitors, the tail append, and the velocity marker's heading [R-ORD-02 §4] (2026-08-29)
+
+**Established.** Four helpers the handler bodies call and no section named:
+
+* **The repair-candidate filter** (the visitor behind `RepairPatrol`'s and
+  `VTOL_RepairPatrol`'s candidate gather, [R-ORD-01 §4] and [§7]) admits a
+  unit `u` when: `u` is not the scanning unit; `u`'s owner's diplomacy byte
+  toward my side is nonzero; `u`'s mover mode is grounded (`1`); `u`'s
+  16-bit health is below its `maxdamage` (unsigned) **or** `u` is
+  unfinished; and **not** (`u`'s last-damage side byte equals my side and
+  its last-damage cause byte is 5) — a unit my side is currently reclaiming
+  (cause 5 is the reclaim bite, [R-ORD-01 §5]) is never offered for repair.
+* **The guard-candidate visitor** (`VTOL_SeekGuard` phase 1) admits `u`
+  when `u`'s owner's diplomacy byte toward my side is nonzero, `u` is not
+  `canfly`, and `u` is not the seeker. The list is in enumeration order; the
+  seeker takes the first entry, so no draw is made.
+* **The tail append** used by the patrol-chain setup and by `VTOL_Follow`'s
+  hand-off to `VTOL_SeekGuard`: walk the segment the record's rear-segment
+  flag selects to its last link and append; the record's owner is set and
+  its next link cleared; no flag is inherited (contrast the head insert of
+  [R-ORD-01 §1]).
+* **The rectangle goal handle's constructor** ([R-ORD-01 §1]'s rectangle
+  installer) stores, in footprint cells, the closed rectangle
+  `[originX − myFootX, originX + sizeX] × [originZ − myFootZ, originZ +
+  sizeZ]` — the low edges are widened by the **installing unit's** own
+  footprint-size pair so that the unit's committed cell counts as inside when
+  its footprint touches the target's; `origin` and `size` are the packed cell
+  pairs the installer receives. Its arrival predicate is a goal-family
+  method owned by §8.3 (movement driver), not restated here.
+* **The velocity marker's heading supply** ([R-AIR-01 §8]) writes
+  `bearing(unitPos → markerGoal)` and returns 1 unconditionally; its arrival
+  and goal update are as stated there.
+
+### Corrections and closures recorded by this unit [R-ORD-02 §5] (2026-08-29)
+
+* **[R-AIR-01 §8], `AirToAir` phase 1.** The text says "Otherwise the leg
+  gives up and re-issues a seek order." The traced arm — reached when the
+  arrival bits are clear and the scratch counter has reached `0x5A` —
+  releases the payload, spawns **`VTOL_Evade`** with the same target at the
+  head, zeroes the counter and the gate, and returns *restart*. It is an
+  evasion, not a seek; the seek re-issue belongs to the shared entry
+  sequence (its step 1). The §10 tail bullet on "the `AirToAir` dogfight's
+  third leg" is closed by this; the owner of §10 should strike it.
+* **[R-AIR-01 §7]'s Unknown** ("`VTOL_SeekGuard`'s per-phase contract, and
+  `VTOL_Follow`'s …") is closed by [R-ORD-02 §3]; the matching §10 tail
+  bullet should be struck by that section's owner.
+* **§3.4 row 13** ("target hostile and differently owned") — corrected in
+  [R-ORD-02 §1]: only the owner test exists.
+* **§3.4 row 3** ("suppression for the non-air special case") — the
+  non-hostile arm is not a special case of the acting unit but of the
+  *target*: any position-only or friendly-target attack from a ground unit
+  is `Suppress`, from an aircraft a run; [R-ORD-02 §1] has the order.
+* **The rows the ledger carried as `PARTIAL` against `R-ORD-01 §10`** (the
+  work-amount seed) cite a section that does not exist; the seed is stated
+  in [R-ORD-01 §1] and the rows now cite it.
+
+### R-ORD-02 §6 — what this unit leaves open
+
+- The post-capture unit byte read by the contextual resolver's own-unit
+  reject · [R-ORD-02 §1] · static trace of its writers (doc 05's ownership
+  transfer writes 150; its decrement is untraced).
+- The identity of the ward's recorded-attacker reference that `VTOL_Follow`
+  leg 1 defends against · [R-ORD-02 §3] · doc 06's damage-intake trace
+  naming the field it stores the attacker into.
+- What the pump does with a spawned record of identity 0 (`VTOL_SeekGuard`
+  spawns the code-7 result unchecked) · [R-ORD-02 §3], §3.1 · static read of
+  descriptor 0's handler pointer.
+
 ### Closed — the special-behavior FBI keys: storage, reader census, contracts [R-SPEC-01 §0] (2026-08-29)
 
 This block closes RWU-04-7. For each of the keys `kamikaze`,
@@ -9406,11 +9753,9 @@ The `−0x5555` step is about `−120` degrees, so the search visits three point
 per revolution before the random jitter, and the jitter is a *subtractive* term
 below `0x2000` (about 45 degrees), never additive.
 
-**Unknown:** `VTOL_SeekGuard`'s per-phase contract, and `VTOL_Follow`'s
-per-phase contract beyond its shared entry (off-map recovery, takeoff preamble,
-and the follow-unit marker family of [R-AIR-01 §4]) · §10.2 · static trace
-(these two are the largest remaining air executors and belong with RWU-04-11's
-per-visit contracts).
+**Closed (2026-08-29):** `VTOL_SeekGuard`'s and `VTOL_Follow`'s per-phase
+contracts are in [R-ORD-02 §3] (four-leg guard, orbit radius, no takeoff
+preamble for seek-guard); this line previously listed them as Unknown.
 
 ### Closed — attack runs, hover attack, evasion, and the maneuver leash [R-AIR-01 §8] (2026-08-29)
 
@@ -9798,6 +10143,14 @@ replacement bullet is needed because the ground path has no vertical term.
   trace of the button draw routine.
 - Construction and economy carry, and worktime-under-one-tick behavior
   · doc 05 · static trace.
+- The post-capture unit byte the contextual resolver's own-unit reject reads
+  · §3.4 [R-ORD-02 §1] · static trace of its writers (doc 05's ownership
+  transfer writes 150; the decrement is untraced).
+- The ward's recorded-attacker reference that `VTOL_Follow` defends against
+  · [R-ORD-02 §3] · doc 06's damage-intake trace naming the stored field.
+- What the pump does with a spawned record of identity 0, which
+  `VTOL_SeekGuard` can produce by spawning an unchecked code-7 resolution
+  · §3.1, [R-ORD-02 §3] · static read of descriptor 0's handler pointer.
 
 ### COB
 
@@ -9968,13 +10321,10 @@ state and page-flip availability, not follower state — doc 03 owns them.)*
   one, every `0x10`/`0x30`/`0x40`/`0x80`/`0xA0`/`0x140`/`0x150`/`0x1E0`/`0x3C0`
   value is a per-leg horizontal arrival radius ([R-AIR-01 §4]), and pad
   reservation and the loiter retry are closed by [R-AIR-01 §6].
-- Per-phase contracts of `VTOL_Follow` and `VTOL_SeekGuard`, the two air
-  executors [R-AIR-01 §7] left open · §10.2 · static trace (with RWU-04-11's
-  per-visit order-handler pass).
-- The `AirToAir` dogfight's third leg — what it re-issues once its scratch
-  counter reaches `0x5A` — and the sign convention of the bearing helper on
-  screen · §10.2 [R-AIR-01 §8] · static trace, then manual retail observation
-  for the sign.
+- The sign convention of the bearing helper on screen · §10.2
+  [R-AIR-01 §8] · manual retail observation. (The `AirToAir` third leg is
+  closed: it spawns `VTOL_Evade`, [R-ORD-02 §5]; `VTOL_Follow`/`VTOL_SeekGuard`
+  are closed in [R-ORD-02 §3].)
 - Construction target-eligibility gates for air construction orders; the
   `150`-tick recurrence at `builddistance << 16` with offset `0xDB6E` and
   build power `work/30` per tick is established · §10.3 · static trace.

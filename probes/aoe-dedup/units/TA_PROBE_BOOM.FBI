@@ -1,0 +1,40 @@
+// RWU-00-6 aoe-dedup self-destructor: identical to TA_PROBE_BLK except
+// that its self-destruct resolves the stock COMMANDER_BLAST weapon
+// (areaofeffect 950, damage 9999, edgeeffectiveness 0.75 — read from the
+// shipped weapon table, not copied here) and the countdown is the default
+// five seconds ([04 R-SPEC-01 §13]).
+[UNITINFO]
+	{
+	UnitName=TA_PROBE_BOOM;
+	Version=1;
+	Side=ARM;
+	Objectname=ta_probe_boom;
+	Name=Probe boom;
+	Description=RWU-00-6 AOE dedup self-destructor (Ctrl+D);
+	Copyright=Copyright 1997 Humongous Entertainment. All rights reserved.;
+	Downloadable=1;
+	Category=ARM PROBE NOTAIR NOTSUB;
+	FootprintX=2;
+	FootprintZ=2;
+	YardMap=oooo;
+	BuildCostEnergy=1;
+	BuildCostMetal=1;
+	BuildTime=1;
+	MaxDamage=14000;
+	BMcode=0;
+	Builder=0;
+	SightDistance=300;
+	SoundCategory=ARM_TANK;
+	ShootMe=1;
+	ZBuffer=1;
+	canmove=0;
+	canattack=0;
+	canstop=0;
+	canpatrol=0;
+	canguard=0;
+	StandingFireOrder=0;
+	StandingMoveOrder=0;
+	DefaultMissionType=Standby;
+	SelfDestructAs=COMMANDER_BLAST;
+	selfdestructcountdown=5;
+	}

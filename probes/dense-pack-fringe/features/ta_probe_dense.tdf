@@ -1,0 +1,55 @@
+// RWU-00-6 dense-pack-fringe probe features. Three 2x2-cell sprite
+// features drawn from anims/ta_probe_dense.gaf: a (maroon, destructible),
+// b (green, destructible, the OTA-placed later stamp), c (white,
+// indestructible). Keys per research/formats/tdf.md "features/".
+[ta_probe_dense_a]
+	{
+	world=All Worlds;
+	description=Probe block A;
+	category=probe;
+	filename=ta_probe_dense;
+	seqname=blocka;
+	animating=0;
+	footprintx=2;
+	footprintz=2;
+	height=8;
+	blocking=1;
+	hitdensity=5;
+	damage=100;
+	reclaimable=0;
+	indestructible=0;
+	}
+[ta_probe_dense_b]
+	{
+	world=All Worlds;
+	description=Probe block B;
+	category=probe;
+	filename=ta_probe_dense;
+	seqname=blockb;
+	animating=0;
+	footprintx=2;
+	footprintz=2;
+	height=8;
+	blocking=1;
+	hitdensity=5;
+	damage=100;
+	reclaimable=0;
+	indestructible=0;
+	}
+[ta_probe_dense_c]
+	{
+	world=All Worlds;
+	description=Probe block C (indestructible);
+	category=probe;
+	filename=ta_probe_dense;
+	seqname=blockc;
+	animating=0;
+	footprintx=2;
+	footprintz=2;
+	height=8;
+	blocking=1;
+	hitdensity=5;
+	damage=100;
+	reclaimable=0;
+	indestructible=1;
+	}

@@ -1,0 +1,67 @@
+[GlobalHeader]
+	{
+	missionname=ta_probe_bars;
+	missiondescription=RWU-00-6 probe: tall map so the radar picture is letterboxed left and right.;
+	planet=Green planet;
+	missionhint=;
+	brief=;
+	narration=;
+	glamour=;
+	lineofsight=0;
+	mapping=0;
+	tidalstrength=0;
+	solarstrength=20;
+	lavaworld=0;
+	killmul=50;
+	timemul=0;
+	minwindspeed=100;
+	maxwindspeed=3000;
+	gravity=112;
+	numplayers=2, 4;
+	size=2 x 8;
+	memory=16 mb;
+	SCHEMACOUNT=1;
+	[Schema 0]
+		{
+		Type=Network 1;
+		aiprofile=;
+		SurfaceMetal=3;
+		MohoMetal=30;
+		HumanMetal=1000;
+		ComputerMetal=1000;
+		HumanEnergy=1000;
+		ComputerEnergy=1000;
+		MeteorWeapon=;
+		MeteorRadius=0;
+		MeteorDensity=0;
+		MeteorDuration=0;
+		MeteorInterval=0;
+		[specials]
+			{
+			[special0]
+				{
+				specialwhat=StartPos1;
+				XPos=500;
+				ZPos=500;
+				}
+			[special1]
+				{
+				specialwhat=StartPos2;
+				XPos=500;
+				ZPos=3400;
+				}
+			[special2]
+				{
+				specialwhat=StartPos3;
+				XPos=500;
+				ZPos=1500;
+				}
+			[special3]
+				{
+				specialwhat=StartPos4;
+				XPos=500;
+				ZPos=2500;
+				}
+			}
+		}
+	}

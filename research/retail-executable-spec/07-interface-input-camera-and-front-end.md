@@ -1209,6 +1209,70 @@ logical entry 10, always on): document 03 owns its drawing; nothing in
 the widget or footer code draws a selection count ([R-HUD-03 §12]).
 
 
+### Closed — art-less bevels: geometry, the three colour fields, and the window fill [R-FE-02 §4] (2026-08-29)
+
+**Established fact — geometry.** Every art-less control (a button whose name
+resolves to no GAF entry, the score bar, the slider track and knob without
+`SLIDERS` art) and the art-less window fill draw their edges through one
+family of bevel routines that take a surface, an inclusive rectangle
+`(x1, y1, x2, y2)` and colours. All lines are one pixel wide and go through
+the Bresenham line primitive. The *two-pixel bevel* is eight runs:
+
+| Run | From | To |
+|---|---|---|
+| 1 | `(x1, y1)` | `(x2, y1)` |
+| 2 | `(x1, y1+1)` | `(x2−1, y1+1)` |
+| 3 | `(x1, y1)` | `(x1, y2)` |
+| 4 | `(x1+1, y1)` | `(x1+1, y2−1)` |
+| 5 | `(x2, y1+1)` | `(x2, y2)` |
+| 6 | `(x2−1, y1+2)` | `(x2−1, y2)` |
+| 7 | `(x1+1, y2)` | `(x2, y2)` |
+| 8 | `(x1+2, y2−1)` | `(x2, y2−1)` |
+
+Given two colours `A`, `B`, the *raised* form draws runs 1–4 (top and left)
+in `A` and runs 5–8 (bottom and right) in `B`; the *sunken* form swaps them
+(top/left `B`, bottom/right `A`). Two wrappers fill the rectangle with a
+third colour `F` first: *fill + raised* and *fill + sunken*. The *one-pixel
+bevel*, used only by the art-less slider, fills with `F` and draws four
+runs — top `(x1,y1)–(x2,y1)`, left `(x1,y1)–(x1,y2)`, right
+`(x2,y1+1)–(x2,y2)`, bottom `(x1+1,y2)–(x2,y2)` — the track form with the
+first colour on top/left, the knob form with the second.
+
+**Established fact — who passes what.** The colours are the GUI context's
+semantic colour fields (the nearest-colour map of "Retail palette contract"),
+always in the order `A` = field `0`, `B` = field `17` (field `19` when
+greyed), `F` = field `20` (field `19` when greyed):
+
+| Caller | Routine | top/left | bottom/right | interior |
+|---|---|---|---|---|
+| art-less button, down-state word 0, not greyed | fill + sunken | 17 | 0 | 20 |
+| art-less button, down-state word ≠ 0, not greyed | fill + raised | 0 | 17 | 20 |
+| art-less button, greyed | fill + raised | 0 | 19 | 19 |
+| score bar frame ([R-HUD-03 §11]) | fill + raised | 0 | 17 | 20 |
+| window / `PANEL` fill **without** a tile entry | fill + sunken | 17 | 0 | 20 |
+| window / `PANEL` fill **with** a tile entry | tiles only, **no bevel** | — | — | the tile |
+| art-less slider track / knob ([R-WGT-01 §5]) | one-pixel | 0 / 17 | 17 / 0 | 20 |
+
+So an un-pressed art-less button reads: interior field 20, top/left field
+17, bottom/right field 0; pressing swaps the two edge colours.
+
+**Correction** to the tile-fill sentence of "Retail frontend control
+activation and raster rules" (§5), which reads "it tiles the window's art
+entry — the stock fallback entry is `BackTile` … — across the window
+rectangle, then draws a two-pixel raised bevel … The first four edge runs use
+color `17` and the next use color `0`; where color `20` is used is
+`TODO(T23)`". The two halves are exclusive, not sequential: when the window
+resolved a tile entry (`BackTile` in the window's own GAF or the common one)
+the fill tiles it across the rectangle and draws **no** bevel; only when no
+tile entry exists is the rectangle filled with field `20` and bevelled — runs
+1–4 (top/left) in field `17`, runs 5–8 (bottom/right) in field `0`. Field
+`20` is therefore the interior of every art-less button and of the score bar,
+and the art-less window/panel fill; it is never an edge colour. (A listbox
+background is the same routine with the `Listbox` entry and the rectangle
+inset by 3, [R-WGT-01 §4].) The `TODO(T23)` is closed. Whether the stock
+`commongui.gaf` authors a `BackTile` entry — which decides whether any stock
+window ever shows the bevel — is an asset question, not an engine one.
+
 ## 5. Front-end screen and state families
 
 The following state families are directly evidenced by GUI names, strings,
@@ -1589,7 +1653,8 @@ horizontal frames. The staged common entries used by this menu are
   c3)`. The three colors are the GUI context's semantic color fields `0`,
   `17` and `20`, resolved through the nearest-color map the bootstrap builds.
   The first four edge runs use color `17` and the next use color `0`; where
-  color `20` is used is `TODO(T23)`. Flag `0x80`, which `selmap.gui` passes,
+  color `20` is used was `TODO(T23)` — closed in [R-FE-02 §4]: it is the interior
+  fill of the no-tile branch only, and the bevel is drawn only in that branch. Flag `0x80`, which `selmap.gui` passes,
   suppresses that fill for the open pass, so a window that loads its bitmap
   after opening shows the saved screen until its first repaint.
   Child gadget records are shifted by the window origin at open time, unless
@@ -1974,6 +2039,8 @@ local player's side record and its inverse into the next slot. `AnyMsn` is
 authored inactive and is shown only when the `AllMissions` preference bit
 is set. On a Spanish install the `Skirmish` gadget's text-status byte is
 set to `0x73` (a layout tweak; its consumer is the button text renderer).
+**Corrected in [R-FE-02 §5]:** the byte written is the button's quickkey, so the
+Spanish label keeps `s` as its hotkey.
 
 **Established fact — `NEWGAME.GUI` has two layouts, and the shell reaches
 only one.** The opener takes a flag: 0 selects the *campaign* layout
@@ -2330,6 +2397,324 @@ test the returned window are the `MSGBOX` opener (returns 0), the four
 `YESORNO` openers, and the HUD build-page opener; every front-end screen
 opener in this document does not.
 
+### Closed — multiplayer screen edges (out of scope) [R-FE-02 §1] (2026-08-29)
+
+**Established fact — the boundary.** Multiplayer is out of Nanolathe's scope
+([08 R-OOS-01]). The screens below are reached only through the multiplayer
+phases of the shell controller ([R-FE-01 §1]) or from a network battle; their
+internals are not traced. Each row records the one edge that reaches the
+screen so the boundary is explicit; "provider" is the DirectPlay service
+provider the player picked, identified by its GUID (TCP/IP, IPX, modem,
+serial).
+
+| Screen | Reached by | Notes |
+|---|---|---|
+| `SELPROV.GUI` | phase 0xf substate 0 (`MULTI` on `MAINMENU`, [R-FE-01 §2]), unless a pending DirectPlay lobby launch diverts to phase 0x10 substate 0x12 | lists the providers as `SERVICE<n>` rows plus a `DPLAY` list; `Options` (substate 0xd) opens the options root exactly as `SINGLE` does |
+| `TCP.GUI`, `SERIAL.GUI`, `MODEM.GUI` | phase 0xf substate 2 when the chosen provider is TCP/IP, serial or modem: phase 0x14 substate 1 with the matching dialog | when the dialog reports its connection bit the session opens and the controller enters phase 0x10 substate 0; an open failure stores `An error occurred trying to use the selected service provider` as the pending error text and returns to phase 0xf substate 0 |
+| `NEWMULTI.GUI` | the `STARTNEW` branch of `SELGAME` | the new-game name/password form |
+| `SELGAME.GUI` | phase 0x10 substate 0 (every provider except a modem/serial *create*, which goes straight to substate 0x11) | the game list; `JOINGAME` → substate 0x12, `WATCH` → substate 0x13 (sets the watching bit), `STARTNEW` → substate 0x11, `PREVMENU` → substate 3 (session closed, back to phase 0xf) |
+| `LOUNGE2.GUI` | phase 0x11 substate 0 (after a create or a successful join, substate 0x15) | the lobby; its per-frame tick is substate 1; `START` raises the battle-start bit (substate 0x11 destroys the lobby record and enters the loading transition); leaving is substate 3 (session closed, network layer reset, lobby record destroyed, back to phase 0xf for TCP/IP and modem providers, phase 0x10 otherwise, or the lobby-exit path when launched from a DirectPlay lobby) |
+| `ALLIES.GUI` | the lobby callback, and in battle `TABMENU` → `ALLIES` ([R-FE-01 §7]) | alliance panel over the shared player-row builder (`PLAYER<n>`, `LOGO<n>`, `ALLY<n>`, `LIVEALLY<n>`, `LIVEPLYR<n>`, `TEAMICONS<n>`) |
+| `RESTRICT2.GUI` | the lobby callback | unit-restriction editor; `Save`/`Load` open `SAVELIST.GUI` / `LOADLIST.GUI` ([R-FE-01 §8]) |
+| `VIEWMAP.GUI` / `viewmap.gui` | the lobby callback and the lobby tick | map preview |
+| `TALK2.GUI` | the chat opener when the expansion flag and mission type 3 hold (§5 "Chat") | the recipient rows (`PLAYER<n>` / `LIVEPLYR<n>`) exist only in this form |
+| `GAMEOPTIONS.GUI` | `ARMOPT` → `MISSION` outside a campaign ([R-FE-01 §7]) | **shared** with skirmish; only its multiplayer rows (`Cheat Codes`, `Watching`) are out of scope |
+| `TIMEOUT.GUI` | the lobby time-out monitor (a peer silent for `timeout × 30` ticks, [R-FE-01 §9]) | `will be rejected in <n> seconds` countdown; `REJECT` kicks the peer |
+| `REPORT.GUI` | phase 0x10 substate 0x12 when launched from a DirectPlay lobby, and the post-battle machine for mission type 3 | score reporting through `reporter.dll` (`_RIInitializeEx`, `_RIReport`, …); a modal pump runs the GUI while the box is open |
+| `CONTROL.GUI` | `TABMENU` → `CONTROL` ([R-FE-01 §7]) | host player control |
+
+Everything those screens call — DirectPlay session create/open/enumerate/
+close, player create/destroy, the packet layer (send rate `1000 / n` ms for
+`n` clamped to `2..30`, eleven channels), the alliance/chat/ping packets, the
+peer content-sync check, the rejection-reason exits (`The game is closed`,
+`The game is full`, `You did not have the correct password`, `You have lost
+connection with the host`, `You need a unit you don't have …`, `You need a
+newer version of the game`, `No watching is allowed for this game`, `The
+creator has left the game`, else `You were rejected from the game`), the
+`online.dll` service loaded by the `-c` command-line switch, and the lobby
+game record (restriction lists and the player-shared map) — is classified
+out of scope in the ledger with this section as its edge. Two pieces of
+this code do run in single player and are stated where they belong: the
+network half of the surrender teardown is a no-op when the session's network
+bit is clear (§3), and the lobby-launch detector is what diverts phase 2 /
+phase 0xf when a lobby connection is pending ([R-FE-01 §1]).
+
+### Closed — the pump's per-frame residue: catalog reload, cursor visibility, 640×480, and the checksum stub [R-FE-02 §2] (2026-08-29)
+
+**Established fact — catalog reload step.** Before the controller runs, the
+host-mode-2 pump ([R-FE-01 §1]) tests two words: when the unit catalog is
+empty (definition count 0) or the catalog reload flag is set, the whole unit
+catalog is (re)loaded through the loader of [02 R-MALF-01] and the flag is
+cleared. The flag's only other writer is the end of the battle-entry
+definition finalisation ([08 R-ENTRY-01]), which raises it unconditionally,
+so the first front-end frame after **every** battle rebuilds the whole unit
+catalog — with or without the surrender teardown of §3 — and every front-end
+frame runs with a loaded catalog. Nothing in the front end loads definitions
+by any other path.
+
+**Established fact — software-cursor visibility.** The presentation object
+carries a cursor-visible word tested by the cursor blitter (the cursor is
+composed only when it is nonzero). The controller writes 0 in phase 0
+(startup) so the logo/intro movies play without a cursor, and 1 when phase 2
+substate 0 opens `MAINMENU`; the `ENDMSN` `MainMenu` button and the movie
+player write it the same way. No other writer exists in the front end.
+
+**Established fact — 640×480 enforcement.** The shell loader ([R-FE-01 §3]),
+the post-battle controller ([R-FE-01 §10]) and the multiplayer join path
+call one routine that sets the logical display size to `640×480` and, only
+when the presentation window's current size differs, frees the `OFFSCREEN`
+surface, drops the presentation surface, moves the window to `(0,0)` at
+`640×480` (frame-change flag set), re-creates the presentation surface in
+the current mode (windowed or full-screen, doc 03) and re-allocates
+`OFFSCREEN` at the new size, selecting and clearing it. The front end
+therefore always runs at 640×480 regardless of `DisplaymodeWidth`/`Height`;
+the loading transitions of [R-FE-01 §11] resize the other way.
+
+**Established fact — the checksum probe is a stub.** The code-segment
+checksum probe that precedes every phase/substate write ([R-FE-01 §1]) is a
+function that returns 0 (success) in this executable; the wrapper that
+formats `Code segment checksum error found when switching FE states.` and
+raises it as a `MSGBOX` of width 500 is therefore unreachable. Nanolathe
+needs no equivalent.
+
+### Closed — the surrender teardown: what returning to the shell frees [R-FE-02 §3] (2026-08-29)
+
+**Established fact.** `Yes` on the surrender question ([R-FE-01 §7]) stops
+all sounds and runs one teardown routine before the windows are closed and
+host mode 1 is selected; the exit-to-Windows variant runs the same routine
+after clearing the display and the network half, then quits. The routine
+runs, in this order: the audio stop and the sound-engine flush; a
+feature/projectile step stub (empty in this build); the *sensor teardown* —
+every live unit is de-registered from the sensor tables, then the `HOT
+UNITS` and `HOT RADAR UNITS` lists ([R-REV-01 §5]) and the unit pool are
+freed; the *effect-system teardown* (the ten effect lists run their
+elements' destructors, doc 03 [R-FX-01]); the multiplayer elimination record
+(§1); the *per-player teardown* over the ten slots (unit-slice bounds
+zeroed, the per-player ten-entry table, the AI planner record with its ten
+planner objects, and the score buffer freed); the three minimap surfaces;
+the *map teardown* (feature definitions — every non-flagged definition's GAF
+frames on both instance lists — the instance arrays, the height/type/LOS
+word grids, the visibility grids, the path caches and the occupancy
+bitmaps); three further buffers; the builder page-record
+table; the *unit-catalog teardown* (per definition the model tree, the
+build picture and the per-definition buffers, then the weapon-name list and
+the summary/model tables); the *weapon-catalog teardown* (all 256 weapon
+records: the sound-name buffer and the projectile-model vector); the
+per-side logo table and surface; one more presentation buffer; the three
+order-descriptor tables ([R-P0-11 §3]); the unit-category name vector
+([R-CAM-01 §2]); and finally the DirectPlay close when the session's network
+bit is set (a no-op in single player). The mission record itself is
+re-allocated, not freed, when the next family is entered ([R-FE-01 §1]); its
+own teardown (the AI mission record, the start-position and census lists,
+the OTA parse tree) runs then.
+
+Nanolathe impact: after a surrender every catalog is gone; the next battle
+entry reloads units (the pump step of §2), weapons, features and the map
+from scratch, so nothing survives across battles except the session globals
+and the preferences. Every free is null-checked and zeroes its pointer;
+there is no reference counting.
+
+### Closed — gadget lookup, mutation and synthesis helpers [R-FE-02 §5] (2026-08-29)
+
+**Established fact — name lookup.** Every screen in this document finds its
+gadgets by name through one family of helpers, all of which scan gadget
+records 1..count in index order and compare the authored 16-byte name field
+with `strncmp(name, wanted, 16)` — **case-sensitive, first match wins** (the
+callback-side "which gadget fired" tests of [R-FE-01 §2] are the same
+compare on the fired record). The variants differ only in what they return
+and in what a miss does:
+
+| Helper | Returns | On a miss |
+|---|---|---|
+| index by name | the index | `−1` |
+| index by substring | the first gadget whose name *contains* the text | `−1` |
+| record by name (non-fatal) | the record | null |
+| record by name (fatal) | the record | writes `Error in GUI layout` through the fatal-error path (process exit) |
+| `active` byte by name | the byte | `0xFF` |
+| stage by index | the button's current stage | `−1` for a non-button |
+
+The fatal form is used by every slider and list opener and by the options
+pages, so a `.GUI` that lacks a gadget those openers expect terminates the
+process with that text; the non-fatal forms are used where the gadget is
+optional (`AnyMsn`, `DELETE`, the `RESTART` button, …).
+
+**Established fact — mutation helpers.** *Set text* (by name, or by index)
+copies up to 128 bytes into the record's text field for kinds 1, 3 and 5 and,
+when the gadget is the focused text input, moves the caret to the end of the
+new text; the by-name form on the *parent* window is what `SELMAP` uses for
+`MapName`. *Rename* replaces the 16-byte name (17 with the terminator). *Set
+quickkey* writes the button's quickkey byte. *Grey/lock* (by name or index)
+is per kind: a button's greyed bit; a listbox's attribute `0x100` (the
+"no highlight" bit of [R-WGT-01 §4]); a slider's locked word **and** the
+same bit on its two synthesised arrow buttons (found by equal association
+id and the arrow attribute bits, [R-WGT-01 §5]); a label's lock bit; a
+picture's darken bit. *Set text by name and repaint* additionally requests
+the window redraw and repaints just that gadget (the `DebugString` version
+label of [R-FE-01 §3]). *Focus a text input* by index sets the drawing colour
+from the gadget's `colorf`, selects the window font at the gadget's
+`fontnumber` (the n-th kind-7 font record; the common font when there is
+none), captures, sets the window focus and re-lays the input with its
+`maxchars` ([R-WGT-01 §6]). *HELPTEXT refresh* copies the hovered gadget's
+localised help (or the empty string when nothing is hovered) into the gadget
+named `HELPTEXT` and requests a redraw ([R-WGT-01 §1]); the skirmish rows
+use it for their runtime help lines.
+
+**Established fact — listbox fill.** The list filler takes a gadget name
+(fatal lookup), the item block, the count and an optional per-row flag
+array. It stores count and block, sets attribute `0x10` (row-select mode),
+and computes the row metric `m` — the capital-`I` frame height `+ 2` for a
+GAF font, else the FNT height; when the authored `itemheight ≤ m + 1` it is
+replaced by `m + 1`. The flag array, when given, is stored with attribute
+`0x800`. `top` and `selected` become 0 and `maxTop` is computed by walking
+rows from the last: starting with the gadget height, subtract the row height
+(`itemheight`, or `m + 1` when it is 0) once per row; `maxTop` is the
+lowest row index reached before the height goes negative (0 when every row
+fits). When the gadget is active, the kind-4 gadget with the same association
+id on the top window is shown when the rows overflow and hidden otherwise,
+and on overflow its knob is re-synchronised ([R-WGT-01 §5]).
+
+**Established fact — synthesised gadgets.** Screens append gadgets at run
+time by two helpers. *Append label* adds a kind-5 record named as given at
+`(x, y)` with width `panelWidth − x − 5` when the caller passes `−1`, height
+15, `colorf` 15, the attribute word given, active, and the text (127 bytes);
+`GAMEOPTIONS` rows, `HELP` lines, the text pager ([R-HUD-03 §10]), `MSGBOX`
+lines and the `UNITINFOx` values are all made this way. *Append record*
+copies a caller-built record whole and forces its kind to 1 (button);
+it refuses when the window already holds 200 gadgets — the only gadget-count
+cap in the executable, and the reason the skirmish row synthesis (§8) stays
+under it. *Label fit* measures a label's localised text (GAF font: the sum of
+the glyph frame widths; FNT: the font width routine) and, while it exceeds
+`w − 6`, drops the last character.
+
+**Refinement** to [R-FE-01 §4]: the Spanish-install tweak on `SINGLE` sets
+the `Skirmish` button's **quickkey** byte to `s` (`0x73`), not a
+"text-status byte" — the previous text mis-named the field; the routine is
+*set quickkey by name*, so the Spanish label keeps the English hotkey.
+
+### Closed — the word-wrap routine [R-FE-02 §6] (2026-08-29)
+
+**Established fact.** `MSGBOX`, `RESTART`'s mission name and the briefing
+text share one wrapper `wrap(text, width, font)`. It allocates
+`len + 2 + 3 × (len / (width / spaceWidth))` bytes (`spaceWidth` measured on
+the wrapping font, or on the current font when `font` is `−1`), zeroed, and
+copies the input byte by byte, stopping at NUL or `0xFF`. After copying a
+byte whose *successor* is a space, a newline or `-`, it measures the current
+line (from the last break to the copy position) and, when the measured width
+is `≥ width`, walks back over the copied output to the nearest earlier space or `-`
+(clearing the bytes it passes; there is no line-start guard), writes `CR LF`
+there, and restarts the line after it. A
+literal newline in the input also restarts the line. Consequences an
+implementer must keep: the test is `≥`, not `>`; breaks happen only at a
+space or hyphen (a word longer than `width` is never split — the walk-back
+runs to the previous space or hyphen, even one before an earlier break); the hyphen or space that breaks the line is
+consumed; the emitted separator is `\r\n`, which the label splitter of
+[R-FE-01 §9] and the pager treat as one line end; `0xFF` ends the text.
+
+### Closed — briefing blink words [R-FE-02 §7] (2026-08-29)
+
+**Established fact.** The text pager of [R-HUD-03 §10] does more with a
+`&X…&` run than choose a colour: when it lays a page it registers every
+bracketed run as a *blink word* in a 15-entry table the briefing/help
+window allocates on open (`BRIEFING`, `MSNBRIEF`, `HELP`) and frees on
+close. An entry holds the run's text (≤ 127 bytes), its pen position — the
+label's `x + 5` plus the measured width of the line so far, and the label's
+`y` — two colours and two periods: colour A is the side's text-colour entry
+selected by the letter (`G` 1, `Y` 2, `R` 3, anything else 3), colour B is
+palette index 94, period A is 1.0 s and period B 0.25 s. The window's
+per-frame surface hook draws every live entry with the window font stored
+for the table: an entry starts in phase A with a deadline of
+`now + 30 × 1.0` (the scaled 30 Hz timer), and each frame whose timer
+exceeds the deadline flips the phase and sets the next deadline to
+`now + 30 × period` of the phase entered (the deadline arithmetic is single
+precision, the timer an integer); phase A draws in colour A, phase B in
+colour B, with no width limit. Turning a page clears the table. A run that
+spans an input line break is pre-split before paging: the pre-pass closes
+the run before the newline and reopens it after (`&` + `CR LF` + `&` +
+letter), so each line blinks on its own.
+
+**Supported inference.** Whether the label under the blink word also draws
+the run (so the blink overdraws it in place) or the run is elided from the
+label is not settled here; the pager copies the run text into the blink
+entry, and the label text it emits is built from the same walk · static
+trace of the pager's copy loop.
+
+### Closed — skirmish row synthesis geometry [R-FE-02 §8] (2026-08-29)
+
+**Established fact.** `SKIRMISH.GUI` authors no per-player rows; the opener
+synthesises them for `NumSkirmishPlayers` rows through the append helpers of
+§5. With `n` rows: `step = 200 / n` (signed truncation) and the first row's
+`y = (180 − (n − 1) × step) / 2 + 79`, the rows `step` apart. Per row `i`
+(0-based), six gadgets in this order, all active:
+
+| Gadget | Kind | `x` | `w × h` | Art / notes |
+|---|---|---|---|---|
+| `Player<i>` | button | 45 | 112 × 20, or the `skirmname` entry's frame size | own GAF entry `skirmname`, frame 0 |
+| `Side<i>` | button | 163 | 45 × 20, or the `SIDEx` frame size | `SIDEx`, stages 2 |
+| `Color<i>` | picture | 214 | 20 × 20 | the colour swatch |
+| `Allies<i>` | picture | 241 | 40 × 20 | help `Click to select an allegiance symbol …` |
+| `Metal<i>` | button | 286 | 45 × 20, or the `skirmmet` frame size | `skirmmet`; attribute bit 16 set; help `Left click to increase metal …` |
+| `Energy<i>` | button | 337 | 45 × 20, or the `skirmmet` frame size | `skirmmet`; help `Left click to increase energy …` |
+
+The button records are zero-initialised then set: attribute word `2`
+(centred text) for `Player` and `Side`, `2 | 0x10000` (centred, keep the
+authored quickkey) for `Metal` and `Energy`; colour fields 0; the frame size
+comes from the entry's frame 0 when the window's own GAF has the entry. Six gadgets per
+row keep ten rows (60) far under the 200-record cap of §5. The row
+controller, colours, alliance icons and resource steps are closed in §5
+"Retail closure for the single-player menu slice" and [08 R-SKIR-01].
+
+### Closed — the display-mode source list [R-FE-02 §9] (2026-08-29)
+
+**Established fact.** The mode table the `VIDSLDR` slider indexes
+([R-FE-01 §6]) comes from one routine: in the GDI (windowed) presentation
+it is the fixed list `640×480`, `800×600`, `1024×768`, then `1280×1024`
+only when the desktop is at least `1280×1024`, then `1600×1200` only when
+the desktop is at least `1600×1200` (`GetSystemMetrics` screen size, both
+axes inclusive); in the DirectDraw presentation it is the driver's
+enumeration of 8-bit modes, each appended as `(w, h)`. The options page then
+sorts and filters that table as [R-FE-01 §6] states.
+
+### Closed — `DRDEATH`, and the `AllMissions` toggle [R-FE-02 §10] (2026-08-29)
+
+**Established fact.** `SINGLE.GUI` installs a per-frame hook that compares
+the last seven bytes of the window's key history (the 15-byte upper-cased
+ring the service pass shifts on every unconsumed key, [R-WGT-01 §1]) with
+`DRDEATH`. On a match the `AllMissions` preference bit is toggled, `AnyMsn`
+is shown or hidden accordingly, the `AllMissions` DWORD is written to the
+registry at once (not deferred to the save points of [R-FE-01 §11]), and the
+window is redrawn. Because the comparison runs every frame while the seven
+bytes still match, typing any further key is what stops the toggle from
+re-firing: in practice one keystroke after the `H` leaves the bit in the
+state the first match set. This is the only way to set `AllMissions`; no
+options page exposes it. (`AnyMsn` opens the play-any layout of `NEWGAME`,
+[R-FE-01 §4].)
+
+### Closed — the developer contour overlay [R-FE-02 §11] (2026-08-29)
+
+**Established fact.** The `+Contour a b` command ([R-CAM-01 §6]) stores two
+16.16 words, *spacing* and *offset*; while spacing is nonzero the composer's
+minimap-lens pass draws height contours over each visible terrain quad. A
+quad is split into four triangles around its centroid (the mean of the four
+corner heights ×64 as the centroid height, corner heights ×256); for each
+triangle the vertices are sorted by height and, for every level
+`L = offset + k × spacing` between the middle and top vertex and then between
+the bottom and middle vertex (stepping down from the highest level not
+above the top), the two edge intersections are found by linear
+interpolation `(p1 × (d − t) + p2 × t) / d` per axis and joined with a
+Bresenham line whose colour is `contourColour[((L >> 8) − seaLevel + 256) >> 4]`
+from a 32-entry table. Developer tooling; Nanolathe does not need it.
+
+### Closed — the chat line composer [R-FE-02 §12] (2026-08-29)
+
+**Established fact.** Chat text leaves the `TALK` dialog through one
+composer: it formats `<name> text` — the local player's name (three name
+fields) in angle brackets, one space, the committed text — into a 200-byte
+buffer, builds
+the type-5 chat packet from it (dropped unsent outside a network session,
+[08 R-OOS-01 §1]), and posts the line to the local message ring with the
+routing class its caller passes (4 for an ordinary commit, [R-CAM-01 §6]).
+The ring's `textlines`/`textscroll` behaviour is [R-FE-01 §11].
+
 ### Supported inference
 
 Front-end state transitions should be represented as explicit named states
@@ -2350,7 +2735,11 @@ established above.
 transition-graph edges, the movie state machine, credits timing, campaign
 transition rules, load-failure restoration and the error dialogs as one open
 item; all of those are closed in [R-FE-01 §1]–[R-FE-01 §12] and the bullet
-is replaced by the residuals below.
+is replaced by the residuals below. **Correction (2026-08-29, RWU-07-5).**
+The multiplayer-screens bullet (`CONTROL`, `TIMEOUT`, `REPORT`,
+`SAVELIST`/`LOADLIST`, `VIEWMAP`, `SELGAME`, the lobby-launched variants) is
+no longer open: every such screen is out of scope with its reaching edge
+recorded once in [R-FE-02 §1].
 
 - The consumer of the restart request word raised by `RESTART.GUI`'s
   `RESTART` button (the restart control is described from the campaign side
@@ -2362,10 +2751,12 @@ is replaced by the residuals below.
 - The `DitheredFog` bit's presenter and the `Gamma` factor's exact palette
   application beyond the `0.5 + g/24` factor · [R-FE-01 §11], doc 03 ·
   static trace.
-- Multiplayer-reached screens recorded here as edges only — `CONTROL`,
-  `TIMEOUT`, `REPORT`, `SAVELIST`/`LOADLIST`, `VIEWMAP`/`DVIEWMAP`, `SELGAME`
-  — and the lobby-launched (`DirectPlay`) variants of `ENDMSN`/`EXITMENU` ·
-  RWU-07-1b / out of scope.
+- Whether the label under a briefing blink word also draws the run (so the
+  blink overdraws it) or elides it · [R-FE-02 §7] · static trace of the
+  pager's copy loop.
+- Whether the stock `commongui.gaf` authors a `BackTile` entry, which decides
+  whether any stock window ever shows the art-less bevel · [R-FE-02 §4] ·
+  asset census.
 - Process-level outcome of a missing or parser-rejected required `.GUI` file
   for the openers that do not check the open result (every front-end screen;
   the `MSGBOX`, `YESORNO` and build-page openers do check) · static trace.
@@ -5116,8 +5507,11 @@ section rather than deleted.
 - User-facing naming of every GUI mode/flag bit; `0x800` (extra redraw on
   close) and `0x1000` (modal centering) are mechanically named · §3 · static
   trace.
-- Where the window bevel uses the GUI context's semantic colour field `20`;
-  fields `17` and `0` are placed · §3 · static trace. Marked `TODO(T23)`.
+- Whether the label under a briefing blink word also draws the run, or
+  elides it · §5 [R-FE-02 §7] · static trace of the pager's copy loop.
+- Whether stock `commongui.gaf` authors a `BackTile` entry (decides whether
+  any stock window shows the art-less bevel of [R-FE-02 §4]) · §4 · asset
+  census.
 - The per-window census of authored gadget association ids · §4, doc 02 §6 ·
   asset census. (Bubbling, default controls, shared focus, capture and
   association precedence, listbox rows, picture-box binding and the widget

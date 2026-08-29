@@ -1184,6 +1184,12 @@ restored by `Players` decide whether the 30-tick block fires) → no grant →
 bank closed → metal-spot lists → ready. The scheduler block restored by
 `Players` is what §9 sees.
 
+*Addendum (2026-08-29, from [07 R-FE-02 §2]):* battle-entry definition
+finalisation raises the front end's catalog-reload flag unconditionally, so
+the shell pump rebuilds the entire unit catalog after every battle (and
+whenever the catalog count is 0); the front end also forces 640×480 on the
+post-battle path.
+
 ### Closed — the pre-tick state and the first pump [R-ENTRY-01 §9] (2026-08-29)
 
 **Established — state at the handoff (fresh battle).** Global tick 0;
@@ -1258,6 +1264,67 @@ words the world rebuild resets; the writers of the requested/active speed
 words for kinds 1 and 2 (they are not written at entry); which chat
 targets the routing bit of the "local-authority" flag selects; the external
 post-placement hook the multiplayer path calls (OOS).
+
+
+### Closed — the spawner's height probe, exactly [R-ENTRY-02 §1] (2026-08-29)
+
+**Established.** §6 said only that a non-mobile placement record's `y` is
+"the terrain height probe at that cell (`<< 16`)". The probe is one small
+routine shared with the build-placement anchor of [07 §9]; its contract:
+
+- **Inputs.** The definition's footprint width `fw` and height `fh` (cells)
+  and its yard-map bytes (row-major, `fh` rows of `fw`); the snapped cell pair
+  `(cx, cz)` packed as two 16-bit halves; the map's cell width and height; the
+  plot cells' low and high height bytes (the `hmin`/`hmax` of the 2×2 plot
+  expansion, [04 §6.1], [04 R-DOC04-B]); the sea-level byte; the definition's
+  `waterline` byte [fmt fbi].
+- **Guards.** The probe returns `0` — and the unit is spawned at `y = 0`
+  with no diagnostic — unless `cx > 0`, `cz ≥ 1`, `cx + fw < cellWidth` and
+  `cz + fh < cellHeight` (signed 16-bit arithmetic on the halves; the `cz`
+  test is the unsigned test "packed pair > 0xFFFF").
+- **Aggregates.** Walking the footprint row-major, a yard byte with **bit 3**
+  set folds that cell into `minLow = min(minLow, hmin)` (start 255) and
+  `maxHigh = max(maxHigh, hmax)` (start 0); a yard byte with **bit 4** set
+  folds `hmax` into a third maximum that this routine never reads.
+- **Result.** `maxHigh < minLow` — which can only be true when no covered
+  cell carried bit 3 — yields `SeaLevel − waterline` as an 8-bit subtraction
+  (it wraps); otherwise the result is `minLow`. The caller shifts the byte
+  left by 16, so the spawned `y` is the height byte in whole world units.
+
+These are exactly the bit-3/bit-4 aggregates of the structure validator
+[05 "Geothermal requirement"], with **none** of its gates: the spawner never
+rejects a position for slope, depth or a missing geothermal cell, and it never
+consults the bit-4 maximum. A footprint whose yard map has no bit-3 character
+therefore sits at the water surface less `waterline` regardless of the
+terrain under it — the same rule the validator's `maxHigh < minLow` branch
+applies to a build site.
+
+### Closed — ledger closure notes for the placement and spawner clusters [R-ENTRY-02 §2] (2026-08-29)
+
+**Established — what the remaining "placement builder" and "battle entry
+orchestrator" functions are.** The bottom-up ledger pass over these clusters
+found no engine behavior left unstated. Every routine not already cited by
+[R-ENTRY-01], [R-AI-01], [R-SKIR-01] or [R-TRIG-01] is one of: a compiler
+template instantiation (the reference-counted string class, growable-vector
+insert/copy/size helpers for one-, two-, three-, four- and eight-byte
+elements, nested vector copy/destroy helpers for the LOS and mapping tables,
+the sort and lower-bound helpers), the `Sleep` thunk, an unreachable debug
+tokenizer, or a routine owned by another document (the bitmap cache, the
+download-menu compile, the path class layer, the minimap surfaces, the
+narration stream, the front-end gadget helpers, the weapon fire-method
+selector). Those are re-laned in the ledger; the cross-document needs are
+listed in the merge commit. Two details this pass did settle:
+
+- The per-slot **profile passes** of [R-AI-01 §12] open the `plan` gate by
+  calling the same setter the `plan` directive itself uses, before walking
+  the catalog; there is no separate "fragment mode" flag.
+- The strategic state constructor's `+20` term ("build-option list is
+  non-empty", "Strategic state construction and refresh") tests the
+  definition's **download-menu build list pointer** — the list the world
+  rebuild's step 14 compiles from the `download` directory, capped at 31
+  entries per definition — not the `canbuild` page table. Whether the
+  pointer is allocated only for definitions with at least one entry (so that
+  "non-null" and "non-empty" coincide) is left in the tail.
 
 
 ## Victory and defeat triggers
@@ -5547,6 +5614,69 @@ per-slot item list is the full "Player records" table plus `Logo` and
 8. The brief's premise that `expected %d units, got %d` is a load
    diagnostic: it is lounge text (§2).
 
+### Closed — the bank writer's compression policy and the typed-item primitives [R-ENTRY-02 §3] (2026-08-29)
+
+"Location and representation" gives the byte layout and the reader's
+tolerance; this section adds what an implementer of the **writer** and of
+the per-subsystem readers still had to choose.
+
+**Established — the writer.** The bank is written in one pass to the
+truncated file: a zeroed 34-byte header first, then every account in
+creation order, then the string pool, then the header again with the real
+offsets. An account is emitted only when it holds at least one item or one
+box descriptor. Per account the writer emits a zeroed 32-byte header, appends
+the account name to the pool, then the integer items, the double items and
+the string items in that order (each name — and each string value — appended
+to the pool as it is met), then one 16-byte descriptor per box whose length
+is **greater than zero** (empty boxes leave nothing), then the box payloads in
+descriptor order; finally it rewrites the account header with the counts and
+the stored span. The string pool begins with the bank tag
+(`Total Annihilation 3.0`), so the header's tag offset is always 0.
+
+**Established — compression.** After an account body is written, and again
+for the string pool, the writer runs the archive compressor on it as one
+**SQSH chunk with the LZ77 method and no obfuscation** [fmt hpi] — the same
+chunk the reader's decompressor undoes — and keeps the compressed image only
+when the compressor succeeds **and** the chunk (its 19-byte chunk header
+included) is strictly shorter than the raw bytes; the body flag (account
+header `0x18`) or the pool flag (bank header `0x18`) is then `1` and the file
+is truncated to the shorter end. Otherwise the raw bytes stand with flag `0`.
+The compressor's output buffer is sized from the bound helper — `120% + 119`
+bytes for an account body, `110% + 119` for the pool. Every write, seek and
+close result is ignored ("File naming and write policy").
+
+**Established — the audit listing is unreachable.** "Location and
+representation" notes that the executable can dump a bank as a readable
+audit listing (`HapiBank Audit File`). The dump is gated by the writer's
+fourth argument, and the only caller — the battle save dispatcher — passes
+it as `0`; no retail path produces the listing.
+
+**Established — the item and box primitives every subsystem writer and
+reader uses.**
+
+- *Named items* live in the current account (selected or created by name).
+  A writer looks the name up and creates the item when absent; the integer
+  writer stores the value with type tag `1`, the string writer duplicates
+  the text and stores tag `3`; either writer first frees a string value the
+  item held before. So a subsystem rewriting an item changes its type
+  silently, and "later scalar items overwrite earlier same-name items" holds
+  for writers as well as for the reader's merge.
+- *Typed reads* are lookup-without-create: the integer accessor returns its
+  caller's default unless the item exists **and** carries tag `1`; the double
+  accessor likewise unless tag `2`; the existence test is a bare lookup. No
+  read reports a type mismatch — the default is the whole signal (this is
+  what makes "no meteor read can fail the load" true, "Subsystem writers").
+- *Boxes* are selected by name or by number, creating an empty box when
+  absent; the selector returns whether the box currently has any bytes. The
+  bounded read copies `min(requested, remaining)` bytes from the box's read
+  cursor, advances the cursor by that count and returns it — `0` once the
+  box is exhausted. Every record reader compares that count with its record
+  size and skips the record on a short read, which is the exact-size box
+  guard the load sections describe.
+- A bank object created for writing starts with no accounts and no current
+  account; the first account-select creates the account.
+
+
 ## Load process
 
 Loading proceeds as reconstruction, not pointer restoration:
@@ -6052,6 +6182,11 @@ finding. The recitals are deleted here only; the body sections and the
 - The four presentation helpers of the handoff frame, and the external
   post-placement hook of the multiplayer path · [R-ENTRY-01 §1],
   [R-ENTRY-01 §5] · static trace (doc 07; the hook is OOS).
+- Whether the strategic-state constructor's `+20` term sees a null pointer
+  or an empty list for a definition with no download-menu entries — i.e.
+  whether the download-menu list is allocated for every definition ·
+  [R-ENTRY-02 §2], "Strategic state construction and refresh" · static trace
+  of the download-menu compile's per-definition allocation.
 
 ### Computer player
 
@@ -6151,6 +6286,10 @@ a single-player implementation.
   GUI edit-control key filter.
 - The result of an out-of-range `Difficulty` in the summary panel ·
   [R-SAVE-02 §3] · static trace of the adjacent data.
+- Which descriptor-class virtual the unit loader invokes on the restored
+  head order's sub-object after both queue segments are rebuilt (it is
+  called only when the head record carries a sub-object) · [R-SAVE-02 §11],
+  [R-SAVE-02 §10] · static trace of the descriptor class vtable slot.
 - Framing, initial snapshot, command timing, random state, seek behavior,
   version checks, and UI of a replay path, should one ever be found; the
   whole-image sweep covering dynamically built names, debug modes, and

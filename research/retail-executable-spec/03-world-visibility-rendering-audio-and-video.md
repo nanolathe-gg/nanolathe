@@ -317,6 +317,73 @@ emptied records by stable left compaction within the same updater invocation —
 animation terminating during its step retires its record that same invocation,
 unlike generic strip objects.
 
+### Closed — composer-side diagnostics helpers: frame rate, profile buckets, packet-rate lines, and the developer draw hook [R-COMP-01 §5] (2026-08-29)
+
+These are the helpers the frame composer calls under its developer-mode
+predicates (the toggles and the overlay text itself are document 07's; the
+in-flight `R-FE-02` there owns the developer overlay). They read no
+simulation state, draw no RNG, and are presentation-only. **Established
+(direct-static)** unless marked.
+
+**Frame-rate counter.** One call per composed frame while the film-mode
+developer bit is set, over three words held beside the display descriptor
+(an accumulator in milliseconds, a frame count, and the published figure):
+
+```
+acc    += GetTickCount() − last ;  last = now ;  frames += 1
+if acc > 2000 : acc = 1000                      // a stall longer than two seconds collapses to one
+if acc > 1000 : published = frames ; acc −= 1000 ; frames = 0
+return published                                // the "FRATE %d" figure
+```
+
+The published figure is therefore the number of composed frames in the last
+whole second, refreshed once per second; after a stall the first reading is
+the post-stall count.
+
+**Profile buckets.** Nine wall-clock buckets accumulate `GetTickCount()`
+deltas between stamps (`bucket[i] += now − last; last = now`); the composer
+stamps bucket 3 as its last act of every frame. Under the profile-display
+flag the composer draws, before the options slide and the present, nine rows
+labelled `Network`, `Units`, `Logic`, `Render Static`, `Render Stuff`,
+`Render Fog`, (unread label), `Weapon`, (unread label): row `i` writes its
+label at `(screenW − 85, 40 + i × fontHeight)` in the default text colour and
+a bar from `screenW − 90 − 2 × (bucket[i] × 100 / total)` to `screenW − 90`
+(integer percent, two pixels per percent, growing leftward), `fontHeight`
+tall, filled with raw palette index `i + 1`; each row call also redraws the
+enclosing frame `[screenW − 290, 38] .. [639, 9 × fontHeight + 41]` in index
+255. Which pump sites stamp buckets 0–2 and 4–8 is document 01's territory
+(the frame-end stamp of bucket 3 is the only one established here). The two
+unread labels are **Unknown** (decider: read the two label pointers).
+
+**Packet-rate line.** Under film mode together with one session-flag bit,
+the developer text block gains a line formatted
+`pS %4d pR %4d S %d %4d R %d %4d …` from six network tallies (packets and
+bytes sent and received — the network layer of [08 R-OOS-01]; in a
+single-player session they never move). The rates are recomputed only when
+more than 30 units of the scaled wall clock ([R-FX-01 §5]'s
+`GetTickCount × 30 / 1000`) have elapsed since the previous recompute, as
+`rate = (current − previous) × 30 / elapsed` (unsigned division; roughly
+per-second), plus one percentage `(a + Δ − b) × 100 / Δ` term for the
+packet-loss figure. A second helper of the same shape feeds two of the
+tallies to the **Send/Receive lines**: under a separate statistics flag the
+composer writes `Send %1.1f K/s` and, one text row lower, `Receive %1.1f
+K/s` at `x = 129` starting `y = screenH − 95`, each with a 64-pixel bar
+`[129 .. 193]` framed in colour-map entry 15 and filled to
+`min(100, rate × 100 / 5600)` percent. **Supported inference:** the number
+printed is fed to the formatter as an 8-byte slot holding the integer rate in
+its low half and zero in its high half — read as a double that is a denormal,
+so the text most likely reads `0.0`; a retail multiplayer capture would settle
+it.
+
+**Developer draw hook.** With both developer bits set and a rendering pass,
+the composer, just before the fog overlay, takes the first selected unit of
+the local player's slice (the first unit whose selected bit is set, walking
+from the slice start) and invokes a draw entry on the object at the head of
+that unit's record with the framebuffer. **Unknown:** which object and entry
+that is (decider: resolve the class whose pointer sits at the head of the unit
+record and read its eleventh virtual slot); nothing in the battle path
+depends on it.
+
 ## 2. World coordinates, terrain grids, and projection
 
 ### 2.1 Coordinate units
@@ -352,8 +419,9 @@ constant `0x1FDB`; tidal strength falls back to `0.5`.
 The tile map is a row-major array of 16-bit tile indices with dimensions
 `cellWidth/2` by `cellHeight/2`. A tile index selects a 1,024-byte block (32 by
 32) in the indexed tile set. The tile blitter computes source block plus
-intra-tile pixel remainder, clips at map bounds, and handles partial edge
-rectangles. It does not use a depth buffer or a textured water mesh.
+intra-tile pixel remainder, clips the edge tiles at the viewport clip
+rectangle (not at map bounds — corrected in [R-COMP-01 §1], which has the
+exact pass), and handles partial edge rectangles. It does not use a depth buffer or a textured water mesh.
 
 The loader expands each canonical attribute entry (four bytes: height,
 feature `uint16` little-endian, and a zero unknown byte) into a 13-byte plot
@@ -2268,6 +2336,63 @@ flash blitter ([R-FX-01 §4]) — and `ALP` is read only by the anti-alias
 downscale ([R-REN-03A §6]) and by the tinted blitter that shadows and cloaked
 bodies go through ([R-REN-03D §4]). There is no per-polygon light selection
 beyond the row; the light direction is the one global vector of [03 §2.4.1].
+
+### Closed — image scratch records, the transform pass order, and what a script write dirties [R-COMP-01 §4] (2026-08-29)
+
+**Image scratch records (Established, direct-static).** The composition and
+staging images of [R-REN-03A §1] and §4 are allocated by two routines over
+one 24-byte header: width, height, a zero placement-offset pair, the
+transparent-key byte set to **1**, three zero flag bytes (not compressed, no
+sub-frames, no alternate blitter), a zero word, the pixel-plane pointer (the
+byte after the header) and the key-plane pointer. The colour plane is
+prefilled with `0x01`; the key-plane variant allocates `w × h × 2 + 24` bytes,
+places the key plane immediately after the colour plane and zero-fills it.
+Because the header is the same shape the GAF blitters read ([R-COMP-01 §2]),
+a finished composition image is blitted by the ordinary keyed frame blitter
+with key 1 — which is why palette index 1 is the fringe colour of
+[R-REN-03A §7].
+
+**Transform pass order (Established).** [03 §2.4] "Piece transform
+composition" is implemented as two recursive passes over the piece tree, run
+per rebuild: (1) a *reset* pass that, for every piece whose rebuild-gate word
+is zero (it always is — the vestigial counter of §2.4) or whose parent was
+reset, copies the pristine vertex array over the live one and zeroes the
+piece's live translation triple; (2) a *transform* pass that recurses into
+the child chain **first**, then rotates the piece's own translation triple
+and every live vertex by the piece's angle triple, then adds the accumulated
+parent translation, and finally applies the same rotation and translation to
+the whole child chain again — which is how ancestors are applied after
+descendants without a matrix stack. The per-piece translation is the sum of
+the piece's script translation lanes and the model's authored parent
+translation, as §2.4 states. The **root** piece's angle triple additionally
+receives the unit's three orientation words, added component-wise in
+**reverse storage order** (the unit's first orientation word adds to the
+piece's third angle word, the second to the second, the third to the first);
+which of the three is heading, pitch or bank is the shared rotation helper's
+naming, still the tail's "pitch/bank naming" item.
+
+**Face-normal helpers (Established).** The shaded renderer's per-vertex
+`SHD` row ([R-RAST-01 §5]) starts from a face normal built by three float
+helpers: vector difference (one integer-input and one float-input variant),
+the standard cross product `a × b = (a.y × b.z − a.z × b.y, a.z × b.x − a.x ×
+b.z, a.x × b.y − a.y × b.x)` of its two argument triples in argument order, and
+normalisation by `sqrt(x² + y² + z²)` (single-precision throughout; a
+zero-length normal divides by zero — the same edge as the beam projection's
+degenerate case, and a fault is the retail outcome).
+
+**What a script write dirties (Established for the writes; Supported
+inference for the reader).** The script host's piece setters — translation
+lane, angle lane, draw bit — write only on a change of value, and on a change
+zero the piece's per-piece stamp word, set the model's rebuild flag, and, when
+the piece's *cache-relevant* bit is set, clear a second model word. The
+inference is that this second word is the cached-image validity the
+cached-body path of [03 §2.4.1] item 4 tests, so a script move of a cached
+piece forces the composition image to rebuild while a move of a live piece
+does not — consistent with item 4's cached/live split. Decider: read the
+cache-build gate of [R-REN-03A §4] for the word it tests. The two
+cache/shadow bit setters write unconditionally and reset a third model word.
+(The setters' own contract is document 04's; only their effect on the
+presentation cache is recorded here.)
 
 ### 2.5 Orthographic screen projection
 
@@ -4526,6 +4651,103 @@ nanolathe (which has no fade at all, [R-P0-19-P]), not any palette fade. The
 lane question's three candidate uses are all bounded-negative over the whole
 export. **Established.**
 
+### Closed — the frame blitter family and the raster primitives [R-COMP-01 §2] (2026-08-29)
+
+Every GAF frame, tile, panel, fog cloud, cursor and scratch image on screen
+goes through one blitter shell and a handful of primitives. This section is
+the implementer's contract for that layer; byte offsets inside the frame
+header are `[fmt gaf]`'s. **Established (direct-static)** unless marked.
+
+**The frame record as the blitters read it.** Width, height, a signed
+placement-offset pair, the transparent-key byte, a compressed flag, a
+sub-frame count, an alternate-blitter flag (meaningful on sub-frames), and
+either a pixel pointer or a table of sub-frame pointers.
+
+**The shell.** Destination origin `(dx, dy) = (penX − xOffset, penY −
+yOffset)`; source rectangle `[0, 0, w−1, h−1]`; destination rectangle
+`[dx, dy, dx+w−1, dy+h−1]`. The target image carries its own **clip
+rectangle** (four inclusive edges; one helper resets it to the whole image,
+another sets it — the composer sets it to the viewport rectangle before the
+world passes), and the shell clips by moving *both* rectangles together:
+
+```
+d = dst.left − clip.left  ; if d < 0 : src.left −= d ; dst.left −= d
+d = dst.right − clip.right; if d > 0 : src.right −= d; dst.right −= d
+(top and bottom likewise)
+if dst.left > dst.right or dst.top > dst.bottom or src empty : draw nothing
+```
+
+A null target means *the screen*: the screen surface is locked for the call
+and unlocked afterwards. A frame with a nonzero sub-frame count draws no
+pixels of its own: each sub-frame is drawn in table order with the same pen,
+through the same blitter — except that a sub-frame whose alternate-blitter
+flag is set is composited through the **tinted** blitter ([R-REN-03D §4])
+instead. Which stock frames set that flag is **Unknown** (decider: an asset
+census over every sub-frame header).
+
+**The five span writers.** After the shell:
+
+| Family | Uncompressed frame | Compressed frame | Gate |
+|---|---|---|---|
+| opaque (keyed) | copy every source byte `≠ key` | RLE decode: rows above the clip skipped by their row-length prefix, left/right clipping applied while decoding; grammar per `[fmt gaf]` (bit 0 set → transparent run of `byte >> 1`; bit 1 set → repeat the next byte `(byte >> 2) + 1` times; else `(byte >> 2) + 1` literal bytes) | none |
+| raw | whole rectangle copied, no key test (dword-wise when the width is a multiple of four, word-wise when even, else byte-wise) | RLE decode as above | none; used only by the tile pass ([R-COMP-01 §1]) |
+| gray (fog, §3.3) | `if src ≠ key : dst = grayTable[dst]` | **nothing is drawn** | gray table present |
+| dithered gray (§3.3) | x steps by two from parity `(y + dx + parity) & 1`; `if src ≠ key : dst = 0` | nothing is drawn | none |
+| tinted | `if src ≠ key : dst = ALP[src × 256 + dst]` ([R-REN-03D §4]) | tinted RLE variant | ALP table present |
+
+The gray-family gate closes a corner of §3.3: a fog cloud frame that is
+authored compressed, or a palette whose gray table failed to build, draws
+**no** current-fog cloud (the black history family still draws), rather than
+falling back to any constant colour. The same gate guards the gray
+rectangle remap used for a fully-current-fogged cell.
+
+**Lines.** The line entry clips first, against the target's clip rectangle,
+parametrically — endpoints are moved along the line with truncating integer
+division in the fixed order *x0 < left, y0 < top, x0 > right, y0 > bottom, x1 <
+left, y1 < top, x1 > right, y1 > bottom*, rejecting when the line runs away
+from the violated edge or has no extent along that axis — then a second time
+against the surface extent `[0, w−1] × [0, h−1]` with 64-bit products. The
+drawer then takes a vertical run (`|dy| + 1` pixels) when `dx = 0`; otherwise
+orders the endpoints so `x` increases, takes a horizontal run (`dx + 1`
+pixels) when `dy = 0`, and otherwise runs Bresenham with `major = max(|dx|,
+|dy|)`, `minor = min(|dx|, |dy|)`, `e = 2 × minor − major` and `major + 1`
+pixels:
+
+```
+write pixel
+if e < 0 : e += 2 × minor              ; step along the major axis only
+else     : e += 2 × (minor − major)    ; step along both axes
+```
+
+Both endpoints are painted; the colour byte is written raw (callers pass the
+logical-to-physical map entry they want). A **rectangle outline** is four
+such lines in the order top `(x1,y1)–(x2,y1)`, right `(x2,y1)–(x2,y2)`,
+bottom `(x1,y2)–(x2,y2)`, left `(x1,y1)–(x1,y2)`.
+
+**Rectangles and copies.** The rectangle clipper rejects on any inclusive
+edge test (`right < clip.left`, `left > clip.right`, `bottom < clip.top`,
+`top > clip.bottom`), clamps, and re-checks `left ≤ right` and `top ≤
+bottom`; the solid fill, gray remap and dithered fills of [R-P0-19-P] and
+§3.3 follow it. Image-to-image rectangle copies with an offset clip against
+both images' extents and copy dword-wise when the destination pointer and
+the width are four-aligned; the 32 × 32 block copy of the tile pass is
+unclipped. Two more helpers: an **inclusive** rectangle-overlap test (`b.right
+≥ a.left ∧ a.right ≥ b.left ∧ b.bottom ≥ a.top ∧ b.top ≤ a.bottom`) used by the
+gadget repaint, and a "pen = authored offset + delta" wrapper used by the
+chrome and HUD stamps, which exists so the shell's offset subtraction cancels
+and the art lands at the delta (the contract [07 §6] states for the panels).
+
+**The RLE encoder** that [R-REN-03D §5] uses on the structure-shadow sprite
+emits the same grammar: literal runs of at most 64 bytes (`(n−1) << 2`), repeat
+runs of at most 64 (`((n−1) << 2) | 2` and the byte), transparent runs of at
+most 127 (`(n << 1) | 1`); a repeat is only recognised from three equal bytes
+onward.
+
+**Not reachable (DEAD, reference census).** An XOR line drawer with its XOR
+rectangle, two float-scaled (magnifying) keyed/tinted frame blitters, and a
+named-region registry have no callers anywhere in the image; an
+implementation does not need them.
+
 ## 5. World render passes and object presentation
 
 ### 5.1 Terrain and features
@@ -4802,6 +5024,57 @@ trees (`Tree1Dead`, `Tree2Dead`), four metal deposits (`RockMetal`,
 (green-world). No initially-placed feature carries a 3DO `object`; all are
 sprite-class (`filename` present) except later corpses.
 
+### Closed — the tile pass, exactly [R-COMP-01 §1] (2026-08-29)
+
+**Established (direct-static).** Inputs: the camera origin `(camX, camZ)` in
+world pixels; the viewport origin `(vpLeft, vpTop)` and size `(W, H)` of
+§4.1; the tile-index grid (16-bit indices, row stride `cellWidth / 2`, §2.2)
+and the tile set (`index × 1024` bytes per 32 × 32 tile). The composer has
+already set the target's clip rectangle to the viewport.
+
+```
+tx0 = floorDiv(camX, 32) ; rx = camX − 32·tx0          // residue 0..31, floor for negative cameras
+tz0 = floorDiv(camZ, 32) ; rz = camZ − 32·tz0
+nx  = floorDiv(W + rx, 32) ; remX = (W + rx) − 32·nx ; if remX ≠ 0 : nx += 1
+nz  = floorDiv(H + rz, 32) ; remZ = (H + rz) − 32·nz ; if remZ ≠ 0 : nz += 1
+```
+
+Three passes, in order:
+
+1. **Partial columns** (when `rx ≠ 0` or `remX ≠ 0`): for every row `r` in
+   `0 .. nz−1`, the tile `(tx0, tz0 + r)` is drawn at `(vpLeft − rx, vpTop − rz
+   + 32r)` when `rx ≠ 0`, and the tile `(tx0 + nx − 1, tz0 + r)` at `(vpLeft +
+   32·nx − rx − 32, vpTop − rz + 32r)` when `remX ≠ 0`, each as a 32 × 32
+   pseudo-frame (zero offsets, no key, uncompressed) through the **raw**
+   clipped blitter of [R-COMP-01 §2] — the viewport clip rectangle leaves the
+   right `32 − rx` columns of the left tile and the left `remX` columns of the
+   right tile.
+2. **Partial rows** (when `rz ≠ 0` or `remZ ≠ 0`): for every column `c` in
+   `0 .. nx−1`, the tile `(tx0 + c, tz0)` at `(vpLeft − rx + 32c, vpTop − rz)`
+   when `rz ≠ 0`, and `(tx0 + c, tz0 + nz − 1)` at `(…, vpTop + 32·nz − rz −
+   32)` when `remZ ≠ 0`, the same way. The corner tiles are therefore drawn
+   twice.
+3. **Interior**: drop the partial edge tiles (`rx ≠ 0` → first column `tx0 +
+   1`, x origin `vpLeft + 32 − rx`, `nx −= 1`; `rz ≠ 0` likewise for rows;
+   `remX ≠ 0` → `nx −= 1`; `remZ ≠ 0` → `nz −= 1`) and copy every remaining
+   tile with the unclipped 32 × 32 block copy at `(x0 + 32c, y0 + 32r)` — on
+   the screen surface this locks the surface per tile and unlocks it after
+   each copy.
+
+**Edges.** Terrain has no key colour: tile pixel 0 is opaque. The pass reads
+the tile-index grid with **no bounds test**; it relies on the camera clamp
+(document 07) keeping `tx0 .. tx0 + nx − 1` and `tz0 .. tz0 + nz − 1` inside
+the grid. A tile is never clipped against the map — only against the viewport
+— so a camera the clamp lets reach the map edge shows whatever the grid holds
+there ([R-TERR-01 §2] void strips are ordinary indices).
+
+**Correction to §2.2.** That section's tile-blitter sentence read "computes
+source block plus intra-tile pixel remainder, **clips at map bounds**, and
+handles partial edge rectangles". There is no map-bounds clip anywhere in the
+tile pass: the only clipping is the viewport clip rectangle applied to the
+edge tiles by the raw blitter's shell, and the interior copy is not clipped at
+all. The sentence in §2.2 now points here.
+
 ### Closed — feature draw order and clipping, and the water line on 3DO wrecks [R-RAST-01 §6] (2026-08-29)
 
 This section states the composer's feature passes at the precision §5.1.3
@@ -4965,11 +5238,48 @@ overdrawn as a closed polyline in `pulse B`, with the load-time selection
 primitive the one exclusion — the same primitive the raster pass skips. The
 outline is not depth-tested, so the whole wireframe shows through the body. This
 is why a nanoframe reads as a pulsing wireframe at the start of construction:
-the body is entirely erased and only the outline remains.
+the body is entirely erased and only the outline remains. (Superseded in
+detail by [R-COMP-01 §3]: the overdraw is two pixels per polygon scanline, and
+it is key-tested whenever the image has a key plane.)
 
 **Not the reveal.** The construction fraction also forces the mobile image-cache
 path and suppresses one shadow branch. Neither changes the soft/hard draw
 classification or the bucket key.
+
+### Closed — the nanoframe outline is the edge walk's row extremes, and it is key-tested [R-COMP-01 §3] (2026-08-29)
+
+**Correction to [R-P0-19-N] "The outline".** That paragraph reads: "every
+primitive of every visible piece is overdrawn as a closed polyline in `pulse
+B` … The outline is not depth-tested, so the whole wireframe shows through the
+body." Both halves are imprecise. The overdraw is not a polyline and it is
+depth-tested whenever the image has a key plane. **Established
+(direct-static):**
+
+- Pieces are walked **last to first**; only pieces with the draw bit set take
+  part. Per piece the primitives are taken in stored order from index 1 when
+  the model declares a selection primitive (the load-time swap of §2.4 put it
+  at index 0) and from index 0 otherwise — the exclusion the paragraph states.
+- Each vertex projects as `sx = trunc(x) + originX`, `sy = trunc(−z) −
+  (trunc(y) >> 1) + originY` (the composition image's origin pair), with the
+  key `trunc(y) + 50 + (Digger ? 75 : 0)` — the whole height, exactly
+  [R-P0-19-N]'s key, not halved.
+- The primitive's vertices (closed with a copy of the first) go through an
+  edge walk of the [R-RAST-01 §1] form — extrema, left chain toward the
+  previous index, right chain toward the next, `x = x0 × 65536 + 0xFFFF` and
+  `key = k0 × 65536` stepped by `(Δ × 65536) / (y1 − y0)` (truncating) — over
+  rows `[minY, maxY)`; on each row where `xr − xl > 0` **strictly**, exactly
+  **two pixels** are written: at `xl` and at `xr`. Nothing else on the row.
+  So a near-horizontal edge is traced only at its ends, a one-pixel row is
+  skipped, and a row the winding cull produces (`xr ≤ xl`) draws nothing: the
+  "wireframe" is the polygon's per-scanline extremes.
+- **Key test.** Without a key plane both writes are unconditional. With one
+  ([R-REN-03A §2]'s gate), each endpoint is written only when `storedKey ≤
+  trunc(interpolatedKey)` and the key is stored — the same admission as the
+  span writers. Since an edge's key equals its own face's key, edges on the
+  topmost face pass by equality and edges hidden behind a higher face fail:
+  the outline shows through the body only where the body was erased.
+- The colour is `pulse B`, unchanged; the recolour verdicts of [R-P0-19-N]
+  are as stated there (pixels equal to the transparent index are skipped).
 
 ### Closed — unit draw order: the Z-row buckets, the two unit passes, and where shadows and tints happen [R-RAST-01 §7] (2026-08-29)
 
@@ -7533,6 +7843,18 @@ by the sharper question it turned into.
 
 ### Renderer
 
+- Which stock GAF sub-frames set the alternate-blitter flag that routes a
+  sub-frame through the tinted blitter · [R-COMP-01 §2] · asset census over
+  every sub-frame header settles it.
+- The developer draw hook's target: the class at the head of the unit record
+  and its eleventh virtual slot · [R-COMP-01 §5] · resolve the pointer's
+  writer at unit creation.
+- The two unread profile-row labels and whether the `Send/Receive K/s` text
+  prints the rate or `0.0` · [R-COMP-01 §5] · read the two label pointers; a
+  retail multiplayer capture for the text.
+- Whether the model word the script-host piece setters clear for
+  cache-relevant pieces is the cached-image validity the cached-body path
+  tests · [R-COMP-01 §4] · read the cache-build gate of [R-REN-03A §4].
 - Windowed/fullscreen mode transitions, DirectDraw surface flags, palette-loss
   recovery, and the exact blit/flip error policy; lost-surface recovery at the
   blit wrappers is established · §4.2 · static trace.

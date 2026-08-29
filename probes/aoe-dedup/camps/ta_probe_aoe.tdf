@@ -1,0 +1,10 @@
+// RWU-00-6 aoe-dedup probe campaign. Grammar per [08 "Mission list"].
+[HEADER]
+	{
+	campaignside=ALL;
+	}
+[MISSION0]
+	{
+	missionfile=ta_probe_aoe;
+	missionname=RWU-00-6 AOE dedup probe;
+	}
