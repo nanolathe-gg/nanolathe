@@ -725,6 +725,29 @@ that the separate `OccupancyGrid.Revision` counter has an expansion consumer.
 
 ---
 
+## SC23 — `gravity = 0` maps cancel every `AirStrike` order (retail-sanctioned bound)
+
+**Spec:** [04 §10.2 R-AIR-01 §8] (Established, static trace): the bombing
+run's release-point leg computes the release lead as
+`t = sqrt((2 · cruisealt) / gravity)`; before dividing it reads the map's
+`gravity` word and, **if it is zero, returns the cancel-all code (7)**, which
+empties the bomber's whole order queue. There is no fallback gravity.
+
+**Observation:** none yet — this entry records the retail behavior as the
+bound Nanolathe must not "improve". A map whose `gravity` key is absent or
+`0` makes bombers un-orderable to attack in retail; a reimplementation that
+substitutes a default gravity here would invent behavior.
+
+**Decision:** clone retail — cancel-all on zero gravity. If any retail map
+in `~/TotalAnnihilation` carries `gravity = 0`, a probe under `probes/`
+should confirm the cancellation visibly (orders drop, bomber idles) before
+this entry is promoted from "sanctioned bound" to "observed". Manual retail
+observation is the decider; do not automate the executable.
+
+**Contract changed:** none in Nanolathe today; guards the air-order executor
+against a plausible-looking default. Status (2026-08-29): open — candidate
+awaiting a `gravity = 0` map census (RWU-02-4 owns the map-key census).
+
 ## How to add to this file
 
 One section per conflict: what the spec says, what was observed and how, the

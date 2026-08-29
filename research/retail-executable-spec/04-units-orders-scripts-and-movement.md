@@ -2955,6 +2955,12 @@ allocate without interpreting, so they consume nothing either.
 
 ## 5. Engine-to-COB callbacks
 
+**Start here: [R-CB-01 §2] is the complete table.** Sections 5.1–5.4 grew by
+subsystem and each covers part of the callback set; [R-CB-01 §1] enumerates all
+forty fixed names from the producers and states the bounded negative, and
+[R-CB-01 §2] gives one row per name. [R-CB-01 §3] lists five readings in 5.1
+and 5.3 that it withdraws — read it before implementing from those sections.
+
 ### 5.1 Lifecycle and damage callbacks
 
 **Established fact:** Engine-driven callbacks include:
@@ -2977,7 +2983,12 @@ the normal HitByWeapon/TakeDamage pair; document 06 owns those gates.
 **Established fact:** `TargetCleared` carries the zero-based weapon slot (0–2)
 and is emitted only when a stored target is actually cleared: the slot's
 commanded heading/pitch words must be non-default (`heading != 0` or
-`pitch != 0x8000`) and are reset to `0`/`0x8000` by the clearing itself. Each
+`pitch != 0x8000`) and are reset to `0`/`0x8000` by the clearing itself.
+(**Naming corrected by [R-CB-01 §3]:** those two words are the slot's *stored
+target descriptor*, not commanded angles — `(0, −0x8000)` is the canonical
+"no target" encoding, so this predicate is exactly "a target is stored". The
+gate itself is unchanged. There are four producers, not the two this section
+implies; see the [R-CB-01 §2] table.) Each
 clearing site also resolves the StartBuilding name and discards the result —
 that lookup is not a start — and no completion receiver exists for this
 callback.
@@ -3107,7 +3118,7 @@ that follows; the cache update (the two-bit category shifted left by two into it
 
 ### 5.3 Weapon and query callbacks
 
-**Established fact:** The engine invokes `QueryPrimary`/`QuerySecondary`/`QueryTertiary` (Q, cell 0 = `0`), `AimFromPrimary`/`AimFromSecondary`/`AimFromTertiary` (Q, cell 0 = `−1`; if still `−1` the engine falls back to the matching `Query*` with default `0`), `SweetSpot` (Q, cell 0 = `0` transformed through the selected piece), and `QueryNanoPiece` (Q, cell 0 = `0` → world nano origin) synchronously (mode Q, cells 1..3 null → seeded 0 and excluded from copy-back). `AimPrimary`/`AimSecondary`/`AimTertiary` are asynchronous (D) with heading/pitch arguments. Successful normal, ballistic, and vertical-launch weapon spawners invoke `FirePrimary/Secondary/Tertiary` (D, 0 cells via the zero-argument name-form adapter) and `RockUnit` (D, 2 cells via the argument-carrying name-form adapter); the dropped-family inline allocator does not. Burst clones do not rerun the root Fire/Rock callbacks. A Q script that sleeps/waits leaves the host holding the partial cell-0 value (section 4.2) — the blocked thread lingers with no receiver that can revise it. <!-- source orchestration-research-cob-callbacks.md -->
+**Established fact:** The engine invokes `QueryPrimary`/`QuerySecondary`/`QueryTertiary` (Q, cell 0 = `0`), `AimFromPrimary`/`AimFromSecondary`/`AimFromTertiary` (Q, cell 0 = `−1`; if still `−1` the engine falls back to the matching `Query*` with default `0`), `SweetSpot` (Q, cell 0 = `0` transformed through the selected piece — but **run on the *target* unit's script, not the shooter's; see [R-CB-01 §3] correction 3**), and `QueryNanoPiece` (Q, cell 0 = `0` → world nano origin) synchronously (mode Q, cells 1..3 null → seeded 0 and excluded from copy-back). `AimPrimary`/`AimSecondary`/`AimTertiary` are asynchronous (D) with heading/pitch arguments. Successful normal, ballistic, and vertical-launch weapon spawners invoke `FirePrimary/Secondary/Tertiary` (D, 0 cells via the zero-argument name-form adapter) and `RockUnit` (D, 2 cells via the argument-carrying name-form adapter); the dropped-family inline allocator does not. Burst clones do not rerun the root Fire/Rock callbacks. A Q script that sleeps/waits leaves the host holding the partial cell-0 value (section 4.2) — the blocked thread lingers with no receiver that can revise it. <!-- source orchestration-research-cob-callbacks.md -->
 
 **Established fact:** `AimPrimary`/`AimSecondary`/`AimTertiary` carry unsigned
 16-bit heading then unsigned 16-bit pitch (arity 2, issued by the weapon update). Two issue forms exist,
@@ -3116,16 +3127,18 @@ commanded angles in the weapon-slot record's commanded heading and commanded pit
 relative heading as bearing-to-target minus unit heading and pitch from the
 ballistic solver; **a solver returning the `-0x8000` pitch sentinel suppresses
 the Aim start entirely**, otherwise the start carries `heading & 0xffff` then
-`pitch & 0xffff` via the argument-carrying name-form adapter forwarding to the argument-carrying slot-form adapter (mode D, receiver the slot's completion-receiver word). The fixed-forward branch — the weapon-slot record's flag byte bit 4 set,
-the aim issue bit clear, and no live tracked target (target inactive or the
-slot's adjacent status word nonzero) — starts with `(0, 0)`, the fixed-forward
+`pitch & 0xffff` via the argument-carrying name-form adapter forwarding to the argument-carrying slot-form adapter (mode D, receiver the slot's completion-receiver word). The fixed-forward branch — **corrected by [R-CB-01 §3]: the selector is the *weapon definition's* flag word, not the slot record's flag byte, and "no live tracked target" is not part of the test** — is entered when the definition's branch bit is clear and its fixed-forward bit set, the ammunition byte is nonzero where a third definition bit demands it, and
+the slot's aim issue bit is clear; it starts with `(0, 0)`, the fixed-forward
 heading. After either start the engine emits a network event packet type `0x10`
 `{u16 unitId, u16 slot, u8 arity=2, heading, pitch}` behind the aim event's global option bit (mask `1`)
 and sets the weapon flags byte bit 0 (the issue bit). <!-- source orchestration-research-cob-callbacks.md -->
 
 **Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-**Established fact:** `StartBuilding` has an argument-less edge form, issued
+**Established fact** (*and see the two supersessions in [R-CB-01 §3]: the
+"slot-form heading variant" and the "record-form emission helper" described
+below are **one** producer, and its first argument is a bearing, not a record
+identity*)**:** `StartBuilding` has an argument-less edge form, issued
 on the cached building-bit rising edge (mode D, 0 cells), and a slot-form heading variant that
 resolves the name to a weapon slot through the shared name-lookup helper and starts THAT slot directly via the argument-carrying slot-form adapter (mode D, receiver null) with one
 argument `heading & 0xffff` (the low 16 bits of the producer heading), plus its network event.
@@ -3133,7 +3146,11 @@ Four weapon-target routines call the `StartBuilding` name lookup while clearing 
 
 **Correction — the slot-form heading variant does not write the
 StopBuilding-pending flag (2026-08-28, superseding this section's earlier
-text and [R-COB-02 §1]'s initial reading).** This section previously said the
+text and [R-COB-02 §1]'s initial reading).** *Withdrawn on 2026-08-29 by
+[R-CB-01 §3] correction 2: the producer census finds exactly one slot-form
+`StartBuilding` start in the code section, it is inside the order-record
+emission helper, and that helper does set the flag. The paragraph is kept
+because the reversal must stay auditable; do not implement it.* This section previously said the
 slot-form heading variant also sets the production record's
 StopBuilding-pending flag `0x400000`. The direct immediate-operand census of
 [R-ORDER-02 §2] finds exactly one writer of that flag on order records — the
@@ -3189,7 +3206,12 @@ functions. Scanning each body for local reads:
   second declared parameter).
 - The remaining 84 bodies read no arguments at all.
 
-**Verdict.** The record pointer's low 16 bits are consumed by stock content —
+**Verdict** (*the premise is superseded by [R-CB-01 §3] correction 1: the
+first argument is the bearing to the work target, computed with a compiled-in
+`65536/2π` scale and rounded to nearest — it is fully deterministic, and the
+"cannot reproduce from a pointer" conclusion below is withdrawn. The
+stock-script census above is unaffected and now has its explanation: the
+scripts read the argument as an angle because it is one*)**.** The record pointer's low 16 bits are consumed by stock content —
 as a build-heading ANGLE in the 65536 domain, wherever the record-form
 producer fires (the nine nanolathe/assist paths). A placeholder of `0` is
 therefore NOT observationally equivalent on stock content: commander torsos
@@ -3204,7 +3226,13 @@ Missing-list question "consumers of the fourth argument" is closed by this
 census; the residual question becomes the semantic NAME of that
 first-argument value (Established behavior, unresolved friendly name).
 
-**Established fact:** Engine-issued value callbacks convert exactly:
+**Established fact** (*producers named and one reading corrected by
+[R-CB-01 §5]: the first pair is the **wind generator**, gated on `WindGenerator
+> 0.0` and a global **wind-changed-this-tick** flag — not a "mover-active"
+flag, and not per-tick; the second is the **metal extractor**, gated on
+`ExtractsMetal > 0.0`, and its argument sums the **plot cells' metal bytes**
+plus one per covered cell, not "each occupying unit's size byte"*)**:**
+Engine-issued value callbacks convert exactly:
 `SetDirection` (issued by the general unit update, guarded on a definition float `>0.0` and a nonzero
 global mover-active flag) passes a zero-extended 16-bit direction word from the global direction word;
 `SetSpeed` from the general unit update (immediately after) passes the signed global speed word shifted left by four (arithmetic, ×16);
@@ -3252,8 +3280,11 @@ function it points to): a bounded indexed-store census of the whole
 instruction listing finds no indexed writer of the receiver word (the
 per-slot init writes only the commanded heading/pitch words), so that target
 is presumably written by the per-definition slot fill with a non-indexed
-pattern — keep `TODO(question)` R-1 for it (coordinated with document 06
-section 3.4, which carries the same residual). Behavior when all eight script
+pattern — **R-1 is now CLOSED by [R-CB-01 §6]: the guess was right about the
+shape (a non-indexed three-iteration fill at unit creation) and the target is
+a fixed two-entry dispatch table whose first entry stores the literal `1` into
+the slot's aim-ready word when the delivered value is nonzero. Document 06
+section 3.4 carries the same residual and can drop it.** Behavior when all eight script
 slots are occupied is established in section 4.3 and differs by starter
 (deferred `Aim*`/`HitByWeapon`/`TakeDamage` deliver `0` through the receiver
 path; `Create` via the zero-argument name-form adapter has no receiver).
@@ -3351,8 +3382,18 @@ traced weapon-update and starter paths. One auxiliary helper exists that scans
 the eight threads and clears a receiver word matching a supplied pointer, but
 it has **no located caller** in a bounded relative-call census of the code
 sections — recorded as an orphan; it does not grant anything. The identity of
-the closure target behind the receiver word remains `TODO(question)` R-1
-(section 5.3); the grant rule itself no longer depends on it.
+the closure target behind the receiver word is **closed by [R-CB-01 §6]**
+(2026-08-29): it is the first entry of a fixed two-entry dispatch table
+installed into all three weapon slots at unit creation, and it writes the
+literal `1`. The grant rule stated here is confirmed from that function's own
+body rather than by inference.
+
+**Cross-references added by [R-CB-01 §2] (2026-08-29).** The table above is a
+vertical-slice table and omits fourteen of the forty callback names. The
+complete per-name table, with producer roles, phases, argument vectors and
+gates, is [R-CB-01 §2]; where the two disagree, [R-CB-01 §3] states which
+reading is withdrawn and why. The rows most affected are `StartBuilding`
+(heading form), `SetDirection`/`SetSpeed`, and `SweetSpot`.
 
 ### Closed — same-tick callback integration trace spec [R-COB-02 §2] (2026-08-28)
 
@@ -3433,6 +3474,423 @@ a normal drain; (e) a latched unit that still fires in steps 2–5 of its death
 visit and frees at step 6; (f) draw accounting: any `random` opcode with an
 equal low/high consumes nothing, and a bitmap-only `explode` consumes nothing,
 against the census in [R-COB-01 §2].
+
+### Closed — the callback name census and the bounded negative [R-CB-01 §1] (2026-08-29)
+
+**Established — forty fixed names, enumerated from the producers.** A census
+of every direct call to the four adapter roots of section 4.2, taken over the
+whole code section and resolved back to the pushed name operand (including the
+four name tables the weapon paths index by slot), yields exactly **forty**
+distinct case-sensitive callback names. This is the same forty section 4.2
+counts, now enumerated:
+
+`Activate` · `AimFromPrimary` · `AimFromSecondary` · `AimFromTertiary` ·
+`AimPrimary` · `AimSecondary` · `AimTertiary` · `BeginTransport` · `Create` ·
+`Deactivate` · `EndTransport` · `FirePrimary` · `FireSecondary` ·
+`FireTertiary` · `HitByWeapon` · `Killed` · `MoveRate1` · `MoveRate2` ·
+`MoveRate3` · `QueryBuildInfo` · `QueryLandingPad` · `QueryNanoPiece` ·
+`QueryPrimary` · `QuerySecondary` · `QueryTertiary` · `QueryTransport` ·
+`RockUnit` · `SetDirection` · `SetMaxReloadTime` · `SetSpeed` · `SweetSpot` ·
+`StartBuilding` · `StartMoving` · `StopBuilding` · `StopMoving` ·
+`TakeDamage` · `TargetCleared` · `TransportDrop` · `TransportPickup` ·
+`setSFXoccupy` (spelled with a lower-case `s`).
+
+The packet path of section 5.3 additionally starts an authored function **by
+slot index**, with no name, and is the only nameless start.
+
+**Established — the bounded negative, taken over the whole image.** A raw byte
+search of the executable (not merely of the defined-string table, so a name
+concatenated into a larger literal would still be found) reports **zero**
+occurrences of `MotionControl`, `StartUnload`, `RequestState`, `Demoted`,
+`Promoted`, and `Go`. Those names, and every other callback a later engine or
+a community header lists, do not exist in retail: an authored function bearing
+one of them is simply never started, exactly as an unbound engine port reads
+zero ([R-COB-03 §1]). `Capture` and `Stop` do occur, but only in the order and
+interface vocabulary — neither appears at a callback starter.
+
+### Closed — the complete callback table [R-CB-01 §2] (2026-08-29)
+
+**Established.** One row per callback name. "Mode" is section 4.2's letter;
+"wake" is the immediate-drain flag. Cells not listed are written as `0`
+(all four physical cells are always written, whatever the arity, so a cell
+beyond the arity is still physically visible to the script). "Receiver none"
+means the starter is given a null completion receiver, so nothing consumes the
+script's return value. Failure behavior is uniform and is section 4.2's: a name
+miss or a full eight-slot pool fails the start; the zero-argument name-form
+notifies nobody, the argument-carrying forms invoke a non-null receiver with
+`0`, and a synchronous query returns failure leaving the caller's seeded cells
+untouched. Only `Aim*` supplies a receiver, so only `Aim*` can observe the
+difference.
+
+| Callback | Producer, by role | Tick phase | Mode | Argument cells | Gate |
+|---|---|---|---|---|---|
+| `Create` | unit creation, after the model/script bind and the render-piece table | creation site, inline | D + wake 1 | none | only when the definition has a compiled script; a scriptless definition takes the no-VM branch and never gets `Create` |
+| `SetMaxReloadTime` | the weapon-slot initializer, immediately after `Create` at every creation site | creation site, inline | D | 1: `trunc(maxReload · 1000 / 30)` — the maximum of the three slot definitions' reload field, times 1000 (as `((x·5)·5)·5 << 3`), then a signed divide by 30 truncating toward zero. The maximum runs over all three definition pointers with no in-use test. | none |
+| `QueryPrimary` / `QuerySecondary` / `QueryTertiary` | the muzzle-point helper (transforms the piece to a world point), plus a bare variant returning the raw piece index whose one caller is the shared projectile initializer every spawner runs | weapon-slot init at creation; weapon update; projectile spawn | Q | 1 output, cell 0 seeded `0`; cells 1–3 null (seeded 0, excluded from copy-back) | none |
+| `AimFromPrimary` / `AimFromSecondary` / `AimFromTertiary` | the aim-origin helper | weapon-slot init at creation; weapon update | Q | 1 output, cell 0 seeded `−1`; on `−1` the helper immediately re-queries the **matching** `Query*` seeded `0` | none |
+| `SweetSpot` | target resolution, run **on the target unit's script** ([R-CB-01 §3]) | weapon update, step 2 | Q | 1 output, cell 0 seeded `0` | only for a live unit target |
+| `QueryNanoPiece` | the nanolathe origin helper, fifteen order/work handler call sites | order and construction work, step 4 | Q | 1 output, cell 0 seeded `0` | none |
+| `QueryBuildInfo` | factory production placement | order and construction work, step 4 | Q | 1 output, cell 0 seeded `−1`; cells 1–3 null | none |
+| `Activate` / `Deactivate` | the activation edge machine, on the rising/falling edge of the state byte's bit 0 | wherever the machine runs; commonly the general unit update, step 1 | D | none | the edge machine's change test ([R-UNIT-06 §2]); engine notification 3 / 4 follows |
+| `StartBuilding` (edge form) / `StopBuilding` (edge form) | the same machine, bit 3 | as above | D | none | as above |
+| `StartBuilding` (slot form) | the order-record emission helper, nine construction/assist handler call sites | order and construction work, step 4 | D, started by slot index | 1: a heading in the 65536 domain — see [R-CB-01 §3] | none; the helper also emits the network mirror and sets the record's StopBuilding-pending flag |
+| `StopBuilding` (slot form) | the record teardown helper (three handler call sites) and the order-record destructor | order and construction work, step 4, and record destruction | D, started by slot index, **arity 0** | none (all four cells `0`) | only when the record's StopBuilding-pending flag is set; the emitter clears it |
+| `SetDirection` | the **wind generator** update, in the general unit update | step 1 | D | 1: the global wind heading, zero-extended from 16 bits | definition `WindGenerator > 0.0` **and** the global wind-changed flag — see [R-CB-01 §5] |
+| `SetSpeed` (wind) | the same, immediately after `SetDirection` | step 1 | D | 1: the global wind speed, arithmetic-shifted left by 4 (× 16) | same gate |
+| `SetSpeed` (extractor) | the **metal-extraction rate** pass, at unit creation only | creation site, inline, after `SetMaxReloadTime` | D | 1: the sign-extended 16-bit metal sum under the footprint — see [R-CB-01 §5] | definition `ExtractsMetal > 0.0`; additionally skipped when the unit has no VM |
+| `StartMoving` / `StopMoving` / `MoveRate1..3` | the movement-rate classifier | movement integration, step 5 | D + wake 1 | none | tier change only ([R-MOV-01 §6]) |
+| `setSFXoccupy` | the medium-band classifier, after the rate classifier | movement integration, step 5 | D + wake 1 | 1: the band `0..4` | band change only |
+| `AimPrimary` / `AimSecondary` / `AimTertiary` | the weapon update, solver branch or fixed-forward branch | weapon update, step 2 | D | 2: aim heading `& 0xffff`, aim pitch `& 0xffff`; the fixed-forward branch issues `(0, 0)`; a solver pitch of the negative sentinel suppresses the start | see [R-CB-01 §3] for the corrected branch selector. **Receiver: a pointer to the weapon slot's dispatch word** — the only callback with a receiver |
+| `FirePrimary` / `FireSecondary` / `FireTertiary` | the three weapon spawners, after a successful root allocation and the start sound | weapon update, step 2 | D | none | the dropped-family inline allocator does not issue it; burst clones do not re-issue |
+| `RockUnit` | the same three spawners, immediately after the matching `Fire*` | weapon update, step 2 | D | 2: `−cos(rel)·800`, `−sin(rel)·800`, `rel` = the slot's aim heading minus the unit heading | a fourth emitter of the same shape exists with no located caller (orphan) |
+| `HitByWeapon` | the damage packet path, after the health subtraction | damage ingress, or the post-unit projectile phase | D | 2: `cos(dir)·400`, `sin(dir)·400` | normal-kind damage on a live, not-yet-dying victim |
+| `TakeDamage` | the same path, started independently after `HitByWeapon` | as above | D | 1: the post-hit health percentage, clamped `0..100` | as above; can fail separately |
+| `TargetCleared` | four producers: weapon hold, weapon release, an unconditional clear helper, and the per-visit target resolution finding its stored unit target dead | weapon update, step 2 (and wherever hold/release is issued) | D | 1: the zero-based slot index | only when a target is actually stored; each site resolves and discards the `StartBuilding` name first |
+| `Killed` (local) | slot-end death handling, before the death packet is built | step 6 | Q | cells 0 and 1 non-null, cells 2 and 3 null: cell 0 is seeded with the engine's computed severity and copied back (the script *receives* it and may overwrite it); cell 1 is the variant and is **not** seeded — see [R-CB-01 §7] | cause bypasses of section 5.1 |
+| `Killed` (network replay) | unit finalization | step 6 | D + wake 1 | 1: the signed packet severity byte | only when that byte is positive |
+| `QueryTransport` | transport attachment | order and construction work, step 4 | Q | 1 output, cell 0 seeded `−1` | [R-UNIT-06 §3] |
+| `BeginTransport` | transport load | step 4 | D + **wake 1** | 1: the cargo definition's model total height | [R-UNIT-06 §3]; a network mirror follows |
+| `EndTransport` | five producer sites in the load/unload/landing executors | step 4 | D; **wake 1 at two of the five sites**, wake 0 at the other three | none | [R-UNIT-06 §3]; [R-AIR-01 §6] places the landing executor's pair — phase 1 immediate, phase 6 deferred |
+| `TransportPickup` | sea/hover pickup | step 4 | D + wake 1 | 1: the cargo's pool slot identity; engine notification 12 follows | [R-UNIT-06 §3] |
+| `TransportDrop` | sea/hover drop | step 4 | D + wake 1 | arity 1, but **two** cells written: cell 0 the cargo identity, cell 1 the packed drop point | [R-UNIT-06 §3] |
+| `QueryLandingPad` | five sites: one shared pad selector plus four in-line copies in the landing executors | step 4 | Q | 4 outputs, all seeded `−1` | see below |
+| (no name) | the run-script network packet | event ingress | D, started by slot index | four dwords from the packet; the byte arity sets the logical top | section 5.3 |
+
+**Established — the `EndTransport` wake flags differ by site.** Section 5.3's
+predecessor text and [R-UNIT-06 §3] describe `EndTransport` as "zero-argument,
+deferred". That is right at three of the five producer sites and wrong at two,
+which set the wake flag and therefore perform the all-eight-slot delta-zero
+drain plus one piece pass inside the caller. An implementation that defers all
+five loses a flush point: any callback queued earlier in that visit runs one
+drain later than retail. The two immediate sites are in the carrier-side
+release path and in the landing executor's carried-unit release; the three
+deferred sites are the load-interrupted edge, the unload executor, and the
+landing executor's own-cargo release.
+
+**Established — the `QueryLandingPad` acceptance rule.** Every site seeds all
+four cells to `−1`, then walks cells `0..3` in ascending order and accepts the
+first cell that is both not `−1` and passes the pad predicate; otherwise it
+keeps `−1`. The pad predicate is: the candidate carrier must not itself be
+carried, and no unit already in its cargo list may carry the same attach-piece
+index. The shared selector additionally short-circuits — if the caller passes
+in a piece that is not `−1` and that piece already passes the predicate, no
+query runs at all. One landing executor queries the executing unit first and,
+on failure, the order's target unit; on total failure it advances its orbit
+heading by a quarter turn and re-dispatches rather than aborting.
+
+### Correction — three readings in sections 5.1 and 5.3 are wrong [R-CB-01 §3] (2026-08-29)
+
+**Correction 1 — the `StartBuilding` first argument is a bearing, not an order
+record's identity.** [R-UNIT-06 §4] stated that "window word 0 = the low 16
+bits of the issuing order-record pointer (the FIRST script argument)", and
+concluded that "an implementation cannot reproduce the value deterministically
+from a pointer (retail reads the low half of a heap address)", with a warning
+that any substitution is a divergence. That is wrong, and it is wrong in the
+direction that matters: the value is fully deterministic.
+
+The emission helper takes three arguments — the unit, the order record, and a
+heading — and pushes **the heading** into cell 0. The order record is used for
+one thing only: setting the StopBuilding-pending flag on it. The earlier trail
+read the wrong parameter.
+
+All nine handler call sites compute that heading the same way, from a shared
+two-argument bearing helper: given two world positions it forms
+`dx = selfX − targetX` and `dz = selfZ − targetZ`, computes `atan2(dx, dz)` on
+the x87 stack, multiplies by the compiled-in constant `65536 / 2π`
+(`10430.37835047`, an f64 in the read-only data), and stores the result with
+an x87 integer store — so the conversion **rounds to nearest even**, it does
+not truncate. Eight of the nine sites then subtract the unit's own heading and
+pass the low 16 bits, giving a heading relative to the unit's facing; the
+ninth (an aircraft assist path) passes the absolute bearing with no
+subtraction. One site inlines the `atan2` helper on raw axis deltas instead of
+going through the two-position wrapper; the arithmetic is identical.
+
+So the contract is: **cell 0 of the record-form `StartBuilding` is the bearing
+from the builder to its work target, in the 65536-per-circle domain, relative
+to the builder's own heading at eight of the nine producers and absolute at
+the ninth.** The stock-script census of [R-UNIT-06 §4] — 49 of 133 shipped
+`StartBuilding` bodies consuming the first argument as a build/turret heading,
+zero consuming the fourth — is unaffected and now has an explanation: the
+scripts read it as an angle because it *is* an angle. The Missing-list item
+asking for "a friendly semantic name for the `StartBuilding` first-argument
+value" is closed by this: the name is *the relative bearing to the work
+target*. A Nanolathe implementation must compute it, not substitute zero, and
+this is no longer a divergence.
+
+**Correction 2 — there is one `StartBuilding` slot-form producer, and it does
+set the StopBuilding-pending flag.** Section 5.3's 2026-08-28 correction
+distinguished a "slot-form heading variant" (production start on a
+weapon-capable unit) from "the order-record emission helper", and stated that
+the former "is not among those call sites; it starts the slot and emits its
+network event without touching the flag". The producer census finds **exactly
+one** slot-form `StartBuilding` start in the whole code section, inside the
+emission helper, and that helper's last act is to OR the pending flag into the
+order record. The two "variants" are one function. The 2026-08-28 correction
+is therefore withdrawn; [R-ORDER-02 §2]'s "exactly one writer of that flag"
+finding stands and is that same function.
+
+**Correction 3 — `SweetSpot` is queried on the target unit, not the shooter.**
+Section 5.3's table groups `SweetSpot` with `Query*` and `AimFrom*` under
+"weapon aiming/fire point resolution", implying the shooter's script. Its only
+caller is the per-visit target resolution, and it is invoked with the
+**target** unit as the receiver, so the aim point comes from the *victim's*
+script. That is what makes `SweetSpot` an author-visible way for a unit to
+declare where it should be shot; a clone that queries the shooter will aim at
+the wrong point on every unit whose script defines one.
+
+**Correction 4 — the fixed-forward `Aim*` gate reads the weapon definition's
+flags, not the slot record's flag byte.** Section 5.3 describes the branch as
+"the weapon-slot record's flag byte bit 4 set, the aim issue bit clear, and no
+live tracked target". The branch selector is a **weapon-definition** flag
+word: one bit of it chooses between the fixed-forward family and the aiming
+family, and within the fixed-forward family a second bit must be set. The
+per-slot conditions are the ammunition byte (consulted only when a third
+definition bit is set) and the slot's own aim-issue bit, which must be clear.
+"No live tracked target" is not part of this test; target liveness is settled
+earlier, and a resolution failure clears the aim-issue bit instead.
+
+**Correction 5 — the weapon slot's first two words are the stored target, not
+a commanded heading/pitch pair.** Sections 5.1 and 5.3 call them "the slot's
+commanded heading/pitch words", seeded `0` / `0x8000` and reset to `0` /
+`0x8000` when a target is cleared. The seeding and the reset are right; the
+naming is not. Two independent readers — the per-visit target resolution and
+the shot-permission helper — decode the pair as a **target descriptor**:
+
+* when the second word is not the negative sentinel `−0x8000`, the pair is a
+  **ground point**: the first word is the X coordinate and the second the Z
+  coordinate, each a signed 16-bit whole-world-unit value promoted to 16.16 by
+  a left shift of 16, with Y taken as the greater of the map water level and
+  the terrain height at that point;
+* when the second word **is** `−0x8000`, the first word is a **unit pool slot
+  index**, with `0` meaning "no target"; the resolution dereferences that slot
+  and, if its identity word is zero (the slot has been freed), resets the pair
+  to the no-target encoding and raises `TargetCleared`.
+
+So `(0, −0x8000)` is not "default angles", it is the canonical *no target*
+encoding, and the `TargetCleared` gate quoted in section 5.1 — "heading != 0
+or pitch != 0x8000" — is exactly the predicate "a target is stored". The
+angles the `Aim*` start carries live in two **different** words of the same
+slot record, written at aim-issue time; those are genuinely the commanded
+heading and pitch. Because the second word's `−0x8000` is reserved, a ground
+target whose Z coordinate is exactly `−32768` world units is unrepresentable.
+
+**Established — the rest of the weapon-slot record's per-callback fields.**
+Beyond the target pair and the aim heading/pitch pair, the slot carries: the
+dispatch word the `Aim*` receiver points at ([R-CB-01 §6]); the aim-ready
+word, cleared to zero at every aim issue and set only through that receiver; a
+pointer to the slot's weapon definition, filled at creation from the unit
+definition's three-entry weapon table; a signed 16-bit reload countdown,
+decremented once per visit while nonzero; an ammunition byte; and a flag byte
+whose bit 0 is the aim-issue bit, bit 1 the slot-enabled bit, **bits 2–3 the
+slot's own index** (the spawners read those two bits to index the `Fire*` and
+`Aim*` name tables rather than carrying the index separately), and bit 4 the
+weapon-held bit. The four `TargetCleared` producers are exactly: the hold
+helper (requires enabled and not held, sets held), the release helper
+(requires enabled and held, clears held), an unconditional clear helper, and
+the per-visit resolution. The hold and release helpers accept the slot value
+`3` as "all three slots", recursing on slots 0 and 1 and falling through on
+slot 2.
+
+### Closed — the creation-time callback sequence [R-CB-01 §4] (2026-08-29)
+
+**Established.** All three unit-creation entry points (scenario placement,
+the general creator, and the factory-product creator) run the same fixed
+sequence, and it issues more callbacks than section 5.1 records. In order,
+inside the creation site, before the unit is ever visited by the sweep:
+
+1. **Install the aim receivers.** A three-iteration loop writes the fixed
+   dispatch-table address into each of the three weapon slots' receiver words.
+   This is what makes the `Aim*` receiver non-null for every unit
+   ([R-CB-01 §6]).
+2. **Unit state initialization.** Per slot, the target pair is reset to the
+   no-target encoding and the hold helper runs. Two simulation random draws
+   happen here (the spawn heading and one further word).
+3. **Bind and `Create`.** The model and compiled script are bound, the
+   render-piece table is built, and `Create` is started **immediate**, so its
+   all-eight-slot delta-zero drain plus one piece pass runs here.
+4. **Weapon-slot initialization.** Per slot the flag byte, the definition
+   pointer and the reload word are written, and then **two synchronous
+   queries run per slot**: `Query*` (through the muzzle-point helper) and
+   `AimFrom*` (which falls back to `Query*` when it returns `−1`). The
+   results are transformed to world points and stored on the slot. After the
+   loop, `SetMaxReloadTime` is started deferred.
+5. **Extraction rate.** The metal-extraction pass runs and may start
+   `SetSpeed` deferred ([R-CB-01 §5]).
+6. **Later in the same creation site**, the activation edge machine may run
+   and start `Activate` deferred.
+
+Two consequences an implementer must reproduce. First, **up to six
+synchronous queries execute during creation**, each allocating a thread slot
+and running one slot at delta zero; a script whose `Query*` sleeps therefore
+leaves a thread allocated from the moment the unit exists. Second, the
+deferred starts of steps 4–6 do **not** run at creation: `Create`'s immediate
+drain has already happened when they are queued, so they first execute in the
+new unit's first normal drain — which is why section 5.1's "issued after
+`Create` so it lands outside Create's own immediate drain" is the right
+statement for `SetMaxReloadTime` and is equally true of `SetSpeed` and
+`Activate`.
+
+### Closed — `SetDirection` and `SetSpeed` have two unrelated producers [R-CB-01 §5] (2026-08-29)
+
+Section 5.3 described these as "engine-issued value callbacks" gated on "a
+definition float `> 0.0`" and "a different definition float `> 0.0`", with the
+footprint `SetSpeed` argument's "semantic unit not established" and a
+corresponding Missing-list item. Both floats are now named from the FBI parse
+order, and both producers with them.
+
+**Established — `SetDirection` and the first `SetSpeed` are the wind
+generator.** The gate is the definition's **`WindGenerator`** value greater
+than `0.0`, together with a global *wind-changed* flag. The two starts are
+consecutive and deferred: `SetDirection` carries the global wind heading as a
+zero-extended 16-bit value in the 65536-per-circle domain, and `SetSpeed`
+carries the global wind speed shifted left by four (× 16).
+
+The wind phase that writes those globals runs once per tick from the phase
+dispatcher and is a **change-detector**: it compares a stored next-change tick
+against the current tick and, when the change is not yet due, sets the
+wind-changed flag to **zero** and returns. So `SetDirection`/`SetSpeed` are
+**not** per-tick callbacks. The wind phase runs *after* the unit sweep in the
+authoritative phase order of section 1.1, so the flag a sweep observes was
+written by the previous tick's wind phase: a re-roll on tick *N* makes every
+wind-generator unit issue the pair exactly once, during tick *N+1*'s sweep,
+carrying the values drawn on tick *N*; tick *N+2*'s wind phase clears the flag
+again. One re-roll, one callback pair per generator, one tick late.
+When the change is due, the phase: advances the next-change
+tick by `(CRT_rand · 10 / 0x8000 + 5) · 30` ticks (five to fifteen seconds,
+one CRT-stream draw); draws the speed as `minWindSpeed + random(maxWindSpeed −
+minWindSpeed)` from the simulation stream (one draw); and, only when that
+speed is nonzero, draws the heading as `random(0x10000)` from the simulation
+stream (a second draw). It then publishes the wind vector of [R-WIND-01],
+publishes a normalized float `speed / 5000` clamped at `1.0` (the divisor is a
+compiled-in constant, not authored), and sets the wind-changed flag to one.
+Doc 05 owns the generator's energy contract; this section owns only the
+callback gate and the draw order. The producer has **no null-VM guard**: a
+scriptless definition authoring `WindGenerator` reaches a null dereference —
+the same residual [R-COB-01 §1] records.
+
+**Established — the second `SetSpeed` is the metal extractor, and its
+argument is the metal sum.** The gate is the definition's **`ExtractsMetal`**
+value greater than `0.0`. The pass walks the unit's footprint rectangle —
+outer loop over the footprint's Z extent from the unit's stamped Z cell, inner
+loop over its X extent from the stamped X cell — and for every **in-bounds**
+cell adds `(unsigned metal byte of the plot cell) + 1` into a **16-bit**
+accumulator, which therefore wraps modulo 65536. Off-map cells contribute
+nothing. It then stores the unit's extraction rate as
+`(float)(sum << 16) · ExtractsMetal / 65536` — the shift and the reciprocal
+cancel arithmetically, but the intermediate is loaded as a **signed** 32-bit
+integer, so a sum of `0x8000` or more yields a negative rate. Finally, only
+when the unit has a VM, it starts `SetSpeed` deferred with the accumulator
+**sign-extended from 16 bits**.
+
+So the Missing-list item "semantic unit of the footprint-path `SetSpeed`
+argument" is closed: it is *the summed metal-map value under the extractor's
+footprint*, one metal byte plus one per covered cell, in metal-map units —
+which is why stock extractor scripts use it to size their animation rate. The
+metal byte is the plot cell's offset-7 byte of [03 §2.2].
+
+**Established — the extractor `SetSpeed` is a creation-time producer only.**
+Its three call sites are the three unit creators; a reference census finds no
+other caller. The rate and the callback are therefore computed once, when the
+extractor is created, and never recomputed — the wind pair, by contrast, is a
+per-visit producer behind a per-tick gate. An implementation that re-runs the
+extraction pass per tick issues `SetSpeed` callbacks retail never issues.
+
+### Closed — the `Aim*` completion closure target (R-1) [R-CB-01 §6] (2026-08-29)
+
+**Established — the residual is closed; the target is a two-branch setter.**
+Section 5.3 and section 5.4 both carried the open marker R-1 for "the
+identity of the closure target behind the receiver word", noting that a
+bounded indexed-store census found no writer of that word. The census missed
+it because the writer is **not indexed**: at every unit creation a
+three-iteration loop walks the three weapon slots by repeatedly adding the
+slot stride to a running pointer and stores one compiled-in address into each
+slot's receiver word. That address is a fixed two-entry dispatch table in
+read-only data; it is the same table for every unit, every slot and every
+definition, and nothing ever overwrites it.
+
+The receiver the producer passes is therefore a pointer to that word, and the
+interpreter's return path — which reads the word, then calls the function its
+target's first entry names, passing the returned cell and the receiver itself
+as the object — invokes the table's **first entry**. That function is:
+
+```
+if (deliveredValue != 0) slot.aimReady = 1;
+```
+
+Two branches, an eighteen-byte function, with a store of the literal `1` (not
+of the delivered value) into the same slot word the aim producer clears to
+zero immediately before each `Aim*` start. It has **no code reference at all**
+— its only reference in the whole image is the data reference from the
+dispatch table — so this closure is its sole reachable use, which is why the
+earlier caller-based searches could not find it.
+
+This confirms, from the target's own body rather than by inference, the grant
+rule already stated in [R-COB-02 §1]: zero has no effect, any nonzero value
+marks the weapon aim-ready, and the marked value is exactly `1`. It also
+settles the failure edges: name absence and pool exhaustion invoke this same
+function with `0`, which is a no-op, so the slot's aim-ready word simply stays
+at the zero the producer wrote — an implementation may model the failure as
+"nothing happens" rather than as a distinct state.
+
+**Established — the table's second entry, and what it is not.** The dispatch
+table's second entry is a four-argument stub that returns zero. **Unknown:**
+its caller. A bounded indirect-call census over the weapon and unit regions
+locates no call through the table's second slot; the "per-weapon permission
+function" section 5.3 mentions is a different pointer, held by the **weapon
+definition** and called with the unit, the slot record, the resolved target
+and the aim point — it is the projectile spawner, not this stub. Decider:
+static trace of every indirect call whose target expression is a load from a
+weapon-slot word.
+
+### Closed — the unassigned `Killed` variant cell [R-CB-01 §7] (2026-08-29)
+
+Section 5.4's Missing-list item asked what the variant cell serializes when
+neither the script assigns it nor the work-fraction gate forces zero.
+
+**Established — it round-trips the caller's uninitialized stack slot.** The
+death handler keeps the severity and the variant in two locals of its own
+frame. On the two bypass paths both are written before the packet is built
+(cause 7 writes severity 0 and variant 1; causes 4, 5, 9 or a still-positive
+health value write both zero). On the query path only the **severity** local
+is written — it is computed, clamped to `1..100`, and passed as cell 0, so the
+script *receives* the engine's severity and may overwrite it. The variant
+local is never written before the query. Because the synchronous query seeds
+each window word from the caller's cell and copies the window word back
+afterwards, a script that does not assign its second parameter causes the
+variant local to be read out of the frame, into the script window, and written
+straight back — unchanged. The value the packet then carries is whatever
+16-byte frame reservation that slot inherited from the previously executing
+code, masked to four bits when it is packed as `(cause << 4) | (variant & 0xf)`.
+
+This is indeterminate but **bounded and local**: it is stack residue in the
+death handler's own frame, not script state, not heap, and not a pool value.
+It is also not observable through the script — the round trip is invisible to
+a script that ignores the parameter. Retail's behavior is therefore
+"unspecified four-bit value"; a Nanolathe implementation must pick a bounded
+substitute (zero is the natural one, and matches both bypass paths) and record
+it as a sanctioned divergence rather than pretending the value is defined.
+
+The severity arithmetic on the query path, restated exactly because the
+division widths matter: the signed 16-bit health is negated and multiplied by
+100 as a signed value, that product is divided by the definition's maximum
+damage as an **unsigned** 32-bit divide, the prior-window severity sample byte
+is added, and the sum is halved by a **signed** divide truncating toward zero;
+the result is clamped to `1..100`. The packet is eleven bytes — a type byte,
+the unit identity, a derived dword, the killer's identity or zero, the
+severity byte, and the packed cause/variant byte — and it is transmitted only
+when the owning player's kind byte is one of two values; the local
+finalization consumes it either way.
+
+### R-CB-01 §8 — what this unit leaves open
+
+Three items, each carried as a bullet with its decider in this document's
+"Missing and unknown" COB list: the caller of the aim dispatch table's second
+entry ([R-CB-01 §6]); the order-form census behind the five `EndTransport`
+producer sites ([R-CB-01 §2]); and whether a reused unit pool slot's surviving
+weapon-slot flag byte can make the creation-time hold helper raise a
+`TargetCleared` for the previous tenant ([R-CB-01 §4]). Nothing else in the
+forty-name table is inferred: every mode, cell vector and gate above is
+direct-static.
 
 ### P28 construction-KBot initial-pose boundary [R-P28-COB-01R] (2026-08-28)
 
@@ -5948,6 +6406,367 @@ pitch-scale-scaled Z residual into the two visual angle words.
 
 **Supported inference:** Can-fly movers bypass some ordinary ground footprint checks during travel, but air order admission and landing-pad checks still use separate validators.
 
+### Closed — the flight command block and its per-tick producer [R-AIR-01 §1] (2026-08-29)
+
+**Established — a mover owns one polymorphic motion controller, chosen once at
+construction.** The mover object created for every unit begins by zeroing its
+three velocity components, its scalar speed word, its 16-bit turn residual, its
+tick stamp and its three-component **lean accumulator**, sets its committed mode
+to `1` (grounded), caches the definition's compiled model reference, and
+then allocates exactly one controller object from a two-by-two choice:
+
+| Owner's player-slot state byte | `canfly` | Controller |
+|---|---|---|
+| not `3` | clear | ground route follower (101 bytes) |
+| not `3` | set | **flight command block** (40 bytes) |
+| `3` | clear | reduced ground controller (28 bytes) |
+| `3` | set | reduced flight command block (39 bytes) |
+
+[R-MOV-01 §3] names the same two-way typing for the ground side; the four sizes
+and the flight variants are added here. Allocation failure leaves the controller
+pointer null and the mover inert; there is no retry. **Supported inference:**
+player state `3` is the eliminated/defeated watch state (the label's evidence is
+in [R-MOV-01 §3]'s compact-ground-controller closure; the sweep skip itself is
+direct), so its reduced controllers exist only to keep saved state loadable —
+what would settle the label is the player-phase state machine's own writer
+census (lane 08).
+
+**Established — the mover tick is five calls and the flight branch is the
+second.** Per unit per tick, in order: the controller's per-tick hook; then the
+ground steering integrator when the definition's `canfly` bit is clear, or the
+flight integrator when it is set; then the occupancy/carried-cargo commit; then
+the movement-rate cache; then the per-tick wrapper. The flight integrator never
+reads an order record: it reads only the flight command block.
+
+**Established — the flight command block.** It holds a reference to the order
+record's current **goal payload**, a reference to the unit, a **command
+position** (three 16.16 components, initialized to the unit's spawn X/Y/Z), a
+**command velocity** (three 16.16 components, initialized to zero), a **command
+heading** (16-bit, initialized to the unit's spawn heading), and a flags byte
+whose bit `0x01` is a "mover mode changed" dirty flag and whose bits `1..2`
+mirror the last observed committed mover mode. The integrator's single input
+fetch copies out the command position, the command velocity and the command
+heading; nothing else crosses that boundary. This is the "order-layer
+command-target supply for each non-construction air class" that §10.3's Unknown
+list asked for: **there is exactly one supply, shared by every air order, and
+the orders differ only in which goal payload they install.**
+
+**Established — the per-tick command producer, exactly.** The controller's
+per-tick hook first sets the dirty flag when the committed mover mode differs
+from the mirrored copy, then runs the producer. With a null goal payload the
+producer does nothing at all — the command block keeps its last values, so an
+aircraft whose payload was released continues on its last command. Otherwise,
+in this order:
+
+1. Save the old command position. Call the payload's **goal-update** method with
+   the command position as the destination; it overwrites the command position
+   (and may decline, leaving it unchanged — see [R-AIR-01 §4]).
+2. Set the command velocity to the **componentwise difference** new − old. The
+   command velocity is therefore a pure consequence of how fast the goal itself
+   moved this tick; nothing else writes it.
+3. Compute `d = trunc(hypot(unitX − commandX, unitZ − commandZ))` in 16.16 —
+   the double-precision `hypot` of the two raw fixed-point differences, then
+   `__ftol`.
+4. **If `d > 0xA00000` (160 world units)** overwrite the command **Y**:
+   `commandY = (cruisealt + sectorHeight) << 16` for an ordinary definition,
+   or `commandY = (seaLevelByte + cruisealt) << 16` when the definition's flag
+   bit `22` is set. `sectorHeight` is the byte the air sector grid holds for
+   the sector the unit is currently linked into ([R-AIR-01 §5]) — **not** the
+   four-corner terrain query. This is the rule that makes a long-haul aircraft
+   ride a constant clearance over hills — a consequence of the arithmetic, not a
+   separate contract: the height it clears is the maximum terrain height of a
+   3×3 block of 128-world-unit sectors around it, refreshed every tick, and it
+   stops being refreshed inside 160 world units of the goal so the final
+   approach can descend.
+   Definition flag bit `22` has **no writer anywhere in the recovered function
+   set**: a bounded negative over all 4,024 exported functions, where the FBI
+   parser writes bits 0–15, 17–21 and 24–30 of that word, the definition
+   post-load pass writes bit 23 (the content-version gate) and nothing else, and
+   the definition copy constructor copies bit by bit. Bounded absence is not
+   universal absence, but on this evidence the sea-level variant is unreachable
+   with any authored content and the sector-height variant is the operative
+   one.
+5. **Heading.** If `d > 0x1400000` (320 world units), or the payload's
+   heading-supply method returns zero **and** `d > 0x100000` (16 world units),
+   set `commandHeading = bearing(unitPos, commandPos)`. Otherwise the payload's
+   suggestion (which that method has already written in place) stands, and
+   inside 16 world units with no suggestion the command heading is left
+   completely unchanged. Note the ordering: at more than 320 world units the
+   payload is not consulted at all.
+6. Call the payload's **arrival** test with the unit. If it reports arrival, OR
+   the satisfied bit `0x20` into the owning order record's pending word, then
+   ask the payload whether it is persistent; if it is not, release it — which
+   also ORs the satisfied bit `0x80` into that record's pending word and leaves
+   the command block with a null payload.
+
+`bearing(a, b)` throughout section 10 is the shared helper
+`round(atan2(aX − bX, aZ − bZ) · 65536 / 2π)`, computed on the x87 stack with
+`fpatan` and stored with the retail control word's round-to-nearest. Its
+argument order is (self, other) at every air call site; this specification does
+not assert which on-screen direction that faces, only the expression, because
+the model loader's coordinate negation ([R-REV-02]) is applied to model data and
+not to these world coordinates.
+
+**Correction — cruise altitude has two producers, not one.** The §10.1
+paragraph above says "Cruise altitude for point and follow commands is
+`targetY = (max(sea level, terrain height at target XZ) + signed offset) ×
+65536` … where terrain height is the bilinear four-corner query". That
+expression is correct for **one** producer: the path marker's altitude setter,
+which runs **once, when the marker is built**, and only when the marker carries
+the terrain-derived-altitude flag. The second producer is the per-tick rule of
+step 4 above, which runs every tick while the aircraft is more than 160 world
+units from its goal, uses the **air sector grid's** neighbourhood maximum rather
+than the bilinear query, and samples at the **unit's** position rather than the
+goal's. The `0x1FF0000` ceiling (about 511 world units) is applied by the
+marker's setter and by the marker's goal update, but **not** by the per-tick
+rule of step 4, which can therefore command a higher Y than the marker ever
+would on a map whose sector height plus `cruisealt` exceeds 511.
+
+### Closed — bank and pitch: the lean accumulator, exactly [R-AIR-01 §2] (2026-08-29)
+
+**Established.** Bank and pitch are computed by one routine, called from the end
+of the flight integrator with the tick's velocity delta and from the mover-mode
+setter with a zero delta. It maintains a persistent three-component **lean
+accumulator** on the mover and writes the unit's two visual angle words:
+
+```
+lean.x = (lean.x * 0xF333) >> 16          // 64-bit signed product, arithmetic shift
+lean.y = (lean.y * 0xF333) >> 16
+lean.z = (lean.z * 0xF333) >> 16
+lean  += (dvx, dvy, dvz)                  // this tick's velocity delta, 16.16
+(px, pz) = rotate(lean.x, lean.z) by the unit's heading    // identity when heading == 0
+L = (gravity << 16) / 0xCCD               // 64-bit signed divide
+bank  = round( atan2( (bankscale  * (-px)) >> 16, L ) * 65536 / 2pi )
+pitch = round( atan2( (pitchscale * (-pz)) >> 16, L ) * 65536 / 2pi )
+```
+
+with `0xF333 = 62259`, i.e. a per-tick decay of `62259/65536` (0.9500 truncated
+from `0.95 × 65536 = 62259.2`); `0xCCD = 3277`; `gravity` the runtime word the
+map loader fills from the OTA `gravity` key (default `0x1FDB` = 8155);
+`bankscale` and `pitchscale` the 16.16 definition words, defaulting to
+**`0x10000` (1.0)** and **`0` (0.0)** respectively; and the rotation the shared
+`fsincos`-based coordinate-pair rotation, whose two results are stored with
+`fistp` under the retail control word (round-to-nearest), leaving the pair
+unchanged when the heading is exactly zero. The `>> 16` on each scaled term is
+an arithmetic shift of the 64-bit product, and `atan2` is the x87 `fpatan` with
+the scaled term as the numerator and `L` as the denominator; the result is
+rounded to nearest and stored as a signed 16-bit angle.
+
+`pitchscale`'s default of zero means a definition that authors neither key
+banks with unit gain and does not pitch at all. `bankscale` and `pitchscale`
+have no other reader.
+
+**Established — bank and pitch are authoritative, not presentation-only.** The
+two words feed the piece-angle triple that the occupancy commit builds for every
+unit each tick, combining the unit's bank, heading and pitch with the selected
+piece's own three angle words. That triple is the frame in which the piece world
+transform is evaluated, which is what the transport attach geometry, the landing
+pad follow markers and the muzzle/attach piece queries all consume. A
+reimplementation must therefore compute them in the simulation, in this order,
+with these truncations — they are not a renderer concern.
+
+**Established — the levelling call.** The mover-mode setter calls the same
+routine with a zero delta vector when a unit becomes grounded, so bank and pitch
+decay by the `0xF333` factor exactly once and are then recomputed from the
+decayed accumulator; they are not snapped to zero.
+
+### Closed — mover modes: the setter's side effects, and where 0 and 3 come from [R-AIR-01 §3] (2026-08-29)
+
+**Established — the mode setter.** One routine changes a committed mover mode,
+and it is called only from the air order executors and from the reduced flight
+controller's save-restore path. Given a requested mode it does nothing when the
+current low two bits already equal the request. Otherwise:
+
+* Requested mode `1` (grounded): zero the three velocity components, the scalar
+  speed word and the lean-decay input; run the bank/pitch routine with a zero
+  delta ([R-AIR-01 §2]); then **clear** bit `0x01` of the unit state byte, which
+  raises the `Deactivate` COB callback and notification event `4` on the falling
+  edge.
+* Any other requested mode: **set** bit `0x01` of the unit state byte, which
+  raises the `Activate` COB callback and notification event `3` on the rising
+  edge.
+* Then write the request's low two bits into the committed mode pair.
+
+The 16-bit turn residual is **not** zeroed by the setter (only by the
+integrator's own inactive-mode branch). `Activate`/`Deactivate` are therefore
+the engine's takeoff and touchdown script hooks, and they are edge-triggered
+through the shared unit-state edge machine of [R-UNIT-06 §2] — a definition that
+is already "activated" for another reason sees no callback on takeoff.
+
+**Established — the ordinary producer of mode `0`.** [R-MOV-01 §8] named modes
+`1` and `2` and this doc's tail carried "mover modes `0` and `3` still reach a
+unit only through a save file" as an open item. That is wrong for mode `0`: the
+attachment helper writes the request's low two bits directly into the child's
+committed mover-mode pair, and **every ordinary attach passes `0`** — the cargo
+in `VTOL_Pickup` phase 4, and the aircraft itself when it parks on a landing pad
+in `VTOL_Landing` phase 6. Mode `0` is therefore the **attached/parked** mode:
+the integrator's inactive branch zeroes all three velocity components, the
+scalar speed and the turn residual every tick and performs no flight update, and
+the carried-unit branch of the occupancy commit drives the child's position from
+the parent's piece transform instead. Mode `2` is passed on the takeoff
+preamble's self-detach, and mode `1` on the `VTOL_Unload` release. Because that
+write is direct, an attach or a detach never zeroes velocity through the setter,
+never levels bank and pitch, and never raises `Activate`/`Deactivate`.
+
+**Unknown:** mode `3` has no producer in the recovered function set other than
+the 2-bit field the reduced flight controller reads out of the save/network
+stream · §9.1 · static trace of that stream's writer (RWU-08-4).
+
+### Closed — the air path marker: fields, flags, and the four methods that matter [R-AIR-01 §4] (2026-08-29)
+
+**Established — the marker is the air half of the goal-payload class family.**
+Ground orders install a 20-byte goal handle whose arrival test is the tile
+threshold of section 8.3; air orders install a `0x36`-byte **path marker** whose
+arrival test is the horizontal `hypot` of section 10.1; a third, `0x2C`-byte
+**velocity marker** exists for `AirToAir` ([R-AIR-01 §8]). All three derive from
+one base whose virtual interface is the same six operations a motion controller
+calls: goal update, arrival, heading supply, persistence, release and
+serialization. The payload installer clears the record's satisfied bits
+`0x20`, `0x40`, `0x80`, `0x100` and `0x200` whenever it installs a non-null
+payload, and raises `0x80` on the record whose payload it replaces.
+
+A marker carries: a 16-bit **flags** word; a horizontal **arrival radius** word;
+a signed 16-bit **altitude offset**; a 16-bit **heading**; a 16-bit **attach
+piece index**; the owning unit; a weak **target handle**; a 16.16 **goal**
+triple; and a 16.16 **radial offset** distance. The flag bits are:
+
+| Bit | Meaning |
+|---:|---|
+| `0x01` | follow the target unit |
+| `0x02` | offset the goal radially about the target's heading |
+| `0x04` | arrival additionally requires the unit's heading to equal the target's |
+| `0x08` | an explicit altitude offset is present |
+| `0x10` | an explicit horizontal arrival radius is present |
+| `0x20` | the goal Y is terrain-derived |
+| `0x40` | an explicit heading is present |
+| `0x80` | freeze: skip the follow branch of the goal update |
+
+The five constructors used by the air executors are: **point** (flags `0x20`,
+goal = a supplied triple); **follow-unit** (flags `0x01`, or `0x07` with the
+radial offset set to the unit's first weapon slot's `Range` in 16.16 — or
+`0x640000`, 100 world units, when that `Range` is zero — whenever the **target**
+is `canfly`); **follow-unit-piece** (flags `0x05`, with the piece index);
+**frozen terrain point** (flags `0xA3`, goal = a supplied triple); and the
+save/network reconstructor.
+
+**Established — goal update.** With flag `0x01` clear **or** flag `0x80` set,
+and only when flag `0x08` (explicit altitude offset) is clear, the marker
+rewrites its goal Y by the same sector-height rule the per-tick producer uses
+([R-AIR-01 §1] step 4). Otherwise, with a live follow: if the target is dead or
+the target's sector link is the out-of-map sentinel, the update **declines** and
+the command position is left at last tick's value; else the goal triple becomes
+the target's attach-piece world position (the exit-piece locator transform of
+[R-REV-02], including the unit-origin addition), plus — when flag `0x02` is set
+— a radial offset of the marker's radial distance at the target's heading, or at
+the target's heading plus the marker's own heading when flag `0x40` is also set;
+and then the altitude offset, shifted into 16.16, is added to the goal Y. The
+result is clamped to `0x1FF0000` in both branches.
+
+**Established — arrival.** In the **explicit-radius** case (flag `0x10`) the
+test is strict and horizontal only: arrived iff
+`hypot(unitX − goalX, unitZ − goalZ) / 65536 < (int16)arrivalRadius`, evaluated
+in double precision on the raw fixed-point differences. Otherwise the default
+test is `hypot(...) / 65536 <= 0.5` (half a world unit), and then, in order:
+flag `0x01` additionally requires a live target; flag `0x04` additionally
+requires the unit's heading to equal the target's heading exactly; flag `0x08`
+additionally requires `|unitY − goalY| < 0x10001`.
+
+**Correction — the arrival radius is not a small enumerated family.** §10.1
+above says "explicit air arrivals test `hypot(dx,dz) < radius` with radii 48,
+128, or 320 world units depending on order (flagged via the arrival-radius
+field)" and then adds "The radius-flag family now includes a fourth value, 336".
+There is no family. The radius is a **plain 16-bit word each executor leg writes
+for the leg it is starting**, and the values observed across the air executors
+are `0x10`, `0x30`, `0x40`, `0x80`, `0xA0`, `0x140`, `0x150`, `0x1E0`, `0x3C0`,
+`0x80 + random below 0x80`, the unit's first weapon slot's `Range`, and the
+computed bomb-release radius `lead + 1 + attackrunlength` of [R-AIR-01 §8]. A
+reimplementation must treat it as a per-leg quantity, not as a lookup.
+
+**Established — heading supply and persistence.** The heading method writes
+into the destination and returns 1 in four cases, tested in order: with neither
+flag `0x04` nor flag `0x80` set, or with no live target, it writes the marker's
+own heading and returns 1 if flag `0x40` is set, and otherwise returns 0
+(no suggestion); with a live target, flag `0x02` writes `bearing(unitPos,
+targetPos)`; else flag `0x40` writes the marker's own heading; else it writes
+the target's heading. The persistence method returns 1 exactly when flag `0x01`
+is set **and** the target is live — so a follow marker survives arrival and a
+point marker is released on arrival.
+
+**Established — the terrain-derived altitude setter.** Setting an altitude
+offset always sets flag `0x08` and stores the signed word. If flag `0x20` is
+already set it also computes the goal Y immediately as
+`(max(seaLevelByte, terrainHeight(goalXZ)) + offset) << 16`, clamped to
+`0x1FF0000`, where `terrainHeight` is the bilinear four-corner query over the
+13-byte attribute cells (cell side 16 world units, the two fractional parts
+taken as sixteenths and each of the three interpolation steps divided by 16 with
+the sign-corrected shift `(v + (v >> 31 & 15)) >> 4`), returning `-1` when the
+sample is out of bounds. Setting a horizontal arrival radius sets flag `0x10`
+and stores the word.
+
+### Closed — the air sector grid and the vertical-bypass sentinel [R-AIR-01 §5] (2026-08-29)
+
+**Established — the grid.** At map load, after the terrain is decoded, the
+engine builds a second, coarse grid whose cell is **8 attribute cells on a side,
+that is 128 × 128 world units**. Its column and row counts are the map's world
+extents rounded **up** to whole 128-unit cells, and the record count is rounded
+up again to a multiple of 8. Each record is 10 bytes: a per-cell maximum terrain
+height byte; a second, smoothed maximum byte; a 32-bit **edge flag** word; and
+the head of a singly-linked list of the units currently inside that cell, which
+removal walks from the front to find the predecessor. The
+build is four passes:
+
+1. Zero every record, then set edge bit `1` on the whole top row, `2` on the
+   whole bottom row, `4` on the whole left column and `8` on the whole right
+   column.
+2. Initialize every record's first byte to the map's **sea-level byte**.
+3. Sweep every attribute cell and raise the owning record's first byte to the
+   cell's height byte where the cell is higher.
+4. Two separable maximum passes. The row pass writes each cell's second byte as
+   the maximum of the first byte over that cell and its two horizontal
+   neighbours; the column pass then rewrites the second byte in place as the
+   maximum of the second byte over that cell and its two vertical neighbours
+   (reading ahead before writing, so the in-place rewrite does not alias). At
+   the first and last cell of a row or column only two cells participate, not
+   three. The second byte is therefore the **maximum terrain height over the
+   3 × 3 block of 128-unit cells centred on this one**, truncated at the map
+   edges, floored at sea level.
+
+That second byte is the `sectorHeight` the cruise-altitude rule of
+[R-AIR-01 §1] reads.
+
+**Established — the sentinel is the off-map sector.** Alongside the grid the
+loader allocates **one extra 10-byte record**, stores its address in a global,
+zeroes it and sets its edge-flag word to `0x1F` (all four edge bits plus bit 4).
+It is freed and the global nulled when the map is torn down. The occupancy
+re-stamp links a unit into the ordinary record
+`grid[(Z >> 23) * columns + (X >> 23)]` — the `>> 23` being the 16.16 divide by
+128 world units — when the unit's footprint anchor lies inside the attribute
+grid, and into **this one extra record** when it does not, testing
+`anchorX < 0 || anchorZ < 0 || width <= anchorX + footprintX ||
+height <= anchorZ + footprintZ`. Its sector-height bytes stay zero forever
+because the build passes never visit it. This closes the doc 04 tail's
+"semantic name and domain of the global sentinel": it is the **out-of-bounds
+sector record**, its domain is "one per map, allocated at load, never in the
+grid array", and the comparison every reader performs is a full 32-bit pointer
+equality against that global.
+
+**Established — eight consumers, not one.** The flight integrator skips the
+vertical velocity assignment entirely while the unit's sector link equals the
+sentinel (established above). The marker goal update declines to follow a
+**target** whose sector link equals the sentinel. Six air executors —
+`VTOL_LandIfCan`, `VTOL_Follow`, `VTOL_SeekAttack`, `VTOL_SeekGuard`,
+`AirToAir` and `AirToGroundHover` — run an identical **off-map recovery leg**
+before their phase switch and return from it immediately: build a point marker
+at `unitPos + offset` where `offset` is the negated sine/cosine pair of
+`bearing(unitPos, mapCentre)` at radius `0x3200000` (800 world units) and
+`mapCentre` is `(worldWidth / 2) << 16, (worldHeight / 2) << 16`; give it
+horizontal arrival radius `0x80`; OR `0xE0` into the gate word; install it;
+return result code 2. `AirToGround` handles the same condition differently and
+does **not** build a recovery marker: it sets the record's deadline to the
+current tick plus 30, forces its phase to 2, and falls through into its ordinary
+phase switch. An aircraft that leaves the map has no vertical control at all
+until it re-enters.
+
 ### 10.2 Air orders
 
 **Established fact:** Air order dispatch classifies move, attack, DGun, load/unload/pickup, follow/help/repair, patrol, hold, teleport, reclaim/resurrect, capture, and mobile-build cases. Weapon flags and attack-run/hover-attack data choose bomber, fighter, gunship, transport, or related behavior.
@@ -6140,6 +6959,394 @@ arrival, release, rebind, or the air-marker conditions. The goal-payload
 installers clear exactly those bits when a new goal is installed, which is
 why every rebind starts with a clean satisfied word.
 
+### Closed — takeoff, pad landing, and ground landing [R-AIR-01 §6] (2026-08-29)
+
+**Established — one shared takeoff preamble.** Every air executor that must get
+the unit off the ground runs the same five steps, in this order; one executor
+holds them as a separate shared routine and the rest inline them verbatim:
+
+1. **Release the manual-target latch on all three weapon slots.** The helper
+   takes a slot index, treats `3` as "slots 0, 1 and 2 in that order", and for
+   each enabled slot whose latch bit `0x10` is set clears that bit and — unless
+   the slot's target pair is already the null pair `(0, 0x8000)` — resets the
+   pair to `(0, 0x8000)`, stops `StartBuilding`, and fires the one-argument
+   `TargetCleared` callback with the slot index in cell 0. Its mirror image sets
+   the latch instead, with the same reset and the same two callbacks.
+2. If the unit currently has a carrier, detach it (reserved no-piece index
+   `0xFF`) requesting mover mode `2`.
+3. Set the unit state byte's bit `0x01`, which raises the **`Activate`** COB
+   callback and notification event `3` on the rising edge (the edge machine of
+   [R-UNIT-06 §2]); this is the engine's takeoff script hook.
+4. **Only if** the committed mover mode is `1` (grounded): call the mover-mode
+   setter with mode `2` (see [R-AIR-01 §3]); build a fresh point path marker on
+   the unit's own current X/Y/Z; set its altitude offset to
+   `cruisealt / 2` (signed 16-bit `cruisealt`, C division, truncating toward
+   zero); install it as the order record's goal payload; OR `0xE0` into the
+   record's dynamic gate word.
+5. Return result code `1` (advance the phase).
+
+If the unit is already airborne the marker is **not** built and the phase still
+advances, so a mid-air order does not reset the aircraft's climb goal. The
+`cruisealt / 2` marker is therefore an *initial climb* goal only.
+
+**Established — `VTOL_Landing` is a seven-phase pad-landing machine.** Its
+order record carries a scratch word that the machine reuses for two different
+things: a loiter bearing in phases 0–1 and the chosen pad piece index from
+phase 3 onward. With a null target reference at entry the executor emits status
+cue slot 7 `Landing aborted` and returns 8.
+
+| Phase | Work | Result |
+|---:|---|---:|
+| 0 | Require a live mover and `canfly` (else 7). Status caption `Landing` (slot 5, announced once). Run the shared takeoff preamble. Then draw one simulation random value below `0x10000` and store it as the loiter bearing. | 1 |
+| 1 | Run `QueryLandingPad` on the **target's** script, four outputs all pre-seeded `-1`; take the first candidate `0..3` that is not `-1` and is free (below). Re-test the winner; if it is `-1` or no longer free, run `QueryLandingPad` a **second** time into a fresh four-cell buffer and scan again. If a pad is found, set phase 2 and return 2. If not: build a point marker at the target's position offset by the loiter bearing at a radius equal to the unit's **first weapon slot's `Range`**, give it horizontal arrival radius `0x80` (128), install it, set the gate word to `0xE8`, advance the loiter bearing by `0x4000` (a quarter turn), keep phase 1. | 2 |
+| 2 | Build a follow-unit marker on the target with the reserved no-piece index and horizontal arrival radius `0xA0` (160); install; gate `0xE8`. | 1 |
+| 3 | `QueryLandingPad` once, same scan. Store the winner in the record's scratch word. If none: status cue slot 7 `Landing failed`, return 0 (reset the phase to zero). Otherwise build a follow-unit-**piece** marker on the target's chosen pad piece with horizontal arrival radius `0x30` (48); install; gate `0xE8`. | 1 |
+| 4 | No work. | 1 |
+| 5 | If the satisfied set contains the movement-arrival bit `0x20` — the approach marker has been reached — return 1, which advances to phase 6 and does nothing else this visit. Otherwise revalidate the stored pad and, if it is stale, re-query and rescan; if still none, status cue slot 7 `Landing aborted: all pads are occupied`, return 0. Otherwise build the follow-piece marker again with altitude offset `0` when the lander carries nothing, or the **integer part of the cargo definition's model total-height dword** when it does; start the deferred `EndTransport` with the wake flag set; install; set the record's deadline to the current tick plus 15; gate `\|= 0xE8`. | 2 |
+| 6 | If the satisfied set contains the goal-release bit `0x40`, return 8. Revalidate the stored pad once; if it is not free, status cue slot 7 `Landing aborted: no pads available`, return 0. Otherwise: **empty lander** — attach the lander itself to the target on the pad piece with request mode `0`, and, when the lander's health is below its definition's `MaxDamage` **and** the pad owner's definition has both `isairbase` and `builder` set **and** the pad owner is not under construction, clear the goal payload and push a `SELFREPAIR` order record on the lander. **Loaded lander** — issue the deferred `EndTransport` (no wake) and attach the **cargo** to the target on the pad piece with request mode `0`. | 5 |
+| other | — | 7 |
+
+A pad piece counts as **free** exactly when the pad owner is not itself being
+carried and no unit in the pad owner's cargo list records that same attach-piece
+index. The four candidates are tried strictly in index order `0,1,2,3`; a
+`-1` cell is skipped, not treated as end-of-list.
+
+This supersedes the earlier §10.2 sentence "With no pad the loiter/spiral
+heading step is used; no free pad among those tried keeps the order alive for a
+next-tick retry or the `30+rand(15)` delayed retry". There is no `30+rand(15)`
+retry in this executor: the retry is the phase-1 loiter leg, which re-runs every
+time the loiter marker is reached and advances the bearing by exactly a quarter
+turn; the only random draw in the whole machine is the single full-circle
+bearing draw in phase 0. The two distinct failure messages are the phase-5
+`Landing aborted: all pads are occupied` (a pad was found earlier but is now
+taken) and the phase-6 `Landing aborted: no pads available` (the reserved pad
+was taken between the approach and the touchdown), both returning result code 0,
+which resets the phase to zero so the machine restarts from takeoff. The
+one-word `Landing aborted` message belongs to the null-target entry guard only.
+
+**Established — `VTOL_LandIfCan` lands on terrain, not on a pad.** Its
+three-phase machine is the one an idle aircraft with nowhere to park runs.
+
+* Entry: a satisfied goal-release bit `0x40` returns 5; the off-map recovery leg of
+  [R-AIR-01 §5] pre-empts everything else.
+* Phase 0: require a live mover and `canfly`. If the record's cached goal is
+  exactly `(0,0,0)`, copy the unit's current position into it. Draw one
+  simulation random value below `0x10000`; store it as the search bearing and
+  store its low bit in a second scratch word. Run the shared takeoff preamble.
+  Result 1.
+* Phase 1: ask the landing-legality test whether the unit's **current**
+  position is landable. If it is: start the asynchronous `EndTransport` with
+  the wake flag; build a point marker at the unit's own position whose altitude
+  offset is `0` when the terrain height there is at or below sea level and
+  `terrainHeight − seaLevel` otherwise — both branches place the marker's
+  commanded Y at exactly the terrain height, because the marker's
+  terrain-derived altitude rule adds the offset to `max(seaLevel, terrainHeight)`;
+  install; gate `0xE0`; **clear** the unit state byte's bit `0x01`, raising the
+  `Deactivate` COB callback and notification event `4` — the landing script
+  hook. Result 1.
+  Otherwise search for a landable spot: for `k = 0,1,…,11`, with
+  `span = 0x81 + 0x20·k` and `half = 0x40 + 0x10·k`, draw a random value below
+  `span` for X and another below `span` for Z (two draws per iteration, in that
+  order), offset the unit's position by `(draw − half)` world units on each
+  axis, snap the result to the unit's footprint half-cell anchor, and test it.
+  The first landable candidate becomes a plain point marker (gate `0xE0`,
+  result 2). If all twelve fail: when the arrival bits `0xE0` are set, advance
+  the search bearing by `−0x5555` (about `−120` degrees); build a point marker
+  at the record's cached goal offset by that bearing at radius `0xA0` (160
+  world units) with horizontal arrival radius `0x40` (64); gate `|= 0xE0`;
+  result 2. The search therefore costs up to **24 simulation random draws per
+  visit**, and the draw count is data-dependent.
+* Phase 2: if the satisfied set does not contain the movement-arrival bit `0x20`, return 8; otherwise
+  call the mover-mode setter with mode `1`, which zeroes the velocity and the
+  scalar speed and levels bank and pitch ([R-AIR-01 §3]), and return 5.
+
+**Established — `VTOL_GetRepaired` is a two-phase wait.** With a null target it
+emits status cue slot 7 `Repair aborted.` and returns 8. Phase 0 returns 1 as
+soon as the unit's health has reached its definition's `MaxDamage` (unsigned
+compare, `MaxDamage <= health`); otherwise it sets the record's deadline to the
+current tick plus 30, ORs `0x8` into the gate word, and returns 2. Phase 1
+emits status cue slot 10 `Unit repaired` and returns 5. This is one of the four
+`Unit repaired` producers the doc 05 caption sweep is looking for.
+
+### Closed — standby, the idle circle, and the seek states [R-AIR-01 §7] (2026-08-29)
+
+**Established — `VTOL_Standby` decides between parking and circling.** Phase 0
+requires a live mover and `canfly`, releases the manual-target latch on all
+three weapon slots, ORs `0x10000` into the gate word, sets the record's deadline to
+the current tick plus 1, and records the unit's **post**: the integer world X
+and Z of its current position, stored in the record's two post words. Result 1.
+
+Phase 1 asks the ordinary autonomous acquisition for a target and, if one is
+found **and** accepted, clears the gate word, resets the phase to zero and
+returns 3 (the pump's `30 + random below 15` wait). Otherwise result 1.
+
+Phase 2 is the idle decision:
+
+* If the unit is not `canfly`, or the low two bits of its status word are not
+  `2`, OR `0x10000` into the gate word, set the deadline to the current tick
+  plus `30 + random below 30`, set the phase to 1, return 2.
+* Else if the unit **is carrying cargo**: draw a full-circle bearing (random
+  below `0x10000`), draw a radius `8 + random below 0x20` world units, and
+  build a point marker at the recorded post offset by that bearing and radius,
+  with altitude offset the full `cruisealt`; install it; set the deadline to
+  the current tick plus `30 + random below 15`; set the phase to 1; return 2.
+  **This is the whole of retail's aircraft "circling" behavior**: a fresh
+  uniformly random bearing and an 8-to-39 world-unit radius about a fixed post,
+  redrawn every 30 to 44 ticks — not a geometric orbit and not a fixed station
+  ring. Three simulation draws per visit, in the order bearing, radius, delay.
+* Else (no cargo): allocate an order record for `VTOL_LandIfCan` carrying the
+  record's cached goal and push it on the unit; return 5. An idle unloaded
+  aircraft therefore always tries to land; only a loaded one loiters.
+
+**Established — `VTOL_SeekAttack` is a randomized search orbit.** Entry: a
+satisfied goal-release bit `0x40` returns 5, and the off-map recovery of [R-AIR-01 §5]
+pre-empts. Phase 0 requires a live mover and `canfly`; with a target already
+bound it simply tries to latch it and, on success, clears the gate word and
+returns 0; with no target it defaults the cached goal to the unit's position if
+that goal is exactly `(0,0,0)`, draws one full-circle bearing (random below
+`0x10000`), stores it and its low bit, and runs the shared takeoff preamble.
+
+Phase 1, in this order: set the manual-target latch on all three slots; if the unit's health
+is **below three quarters** of its definition's `MaxDamage` (computed as
+`(MaxDamage >> 2) * 3`, unsigned, strict `<`), collect the nearby-unit
+candidate list within `0xF00` for the unit's ally group and, if it is non-empty,
+clear the goal payload, draw one random index over the candidate count, push a
+`VTOL_LANDING` order at that candidate, clear the gate word and return 0; then
+ask the ordinary acquisition for a target and return 5 if one is latched;
+then, if the arrival bits `0xE0` are set, advance the search bearing by
+`−(0x5555 + random below 0x2000)`; finally build a point marker at the cached
+goal offset by the search bearing at radius `firstWeaponRange + 0xA0` world
+units, horizontal arrival radius `0x80`, install, set the deadline to the
+current tick plus `30 + random below 30`, OR `0xE0` into the gate word, and
+return 2.
+
+The `−0x5555` step is about `−120` degrees, so the search visits three points
+per revolution before the random jitter, and the jitter is a *subtractive* term
+below `0x2000` (about 45 degrees), never additive.
+
+**Unknown:** `VTOL_SeekGuard`'s per-phase contract, and `VTOL_Follow`'s
+per-phase contract beyond its shared entry (off-map recovery, takeoff preamble,
+and the follow-unit marker family of [R-AIR-01 §4]) · §10.2 · static trace
+(these two are the largest remaining air executors and belong with RWU-04-11's
+per-visit contracts).
+
+### Closed — attack runs, hover attack, evasion, and the maneuver leash [R-AIR-01 §8] (2026-08-29)
+
+Four separate executors implement air combat, chosen by the command resolver,
+not by unit class: `AirStrike` (the bombing run), `AirToGround`
+(the strafing run), `AirToGroundHover` (the standoff orbit selected by
+`hoverattack`), and `AirToAir`. All four share an entry sequence and then
+diverge completely.
+
+**Established — the shared entry sequence.** In this order:
+
+1. If the satisfied set intersects `0x1000A` (`AirStrike`, `AirToGround`) or
+   `0x10008` (`AirToGroundHover`, `VTOL_Evade`): when the record has no
+   successor marker **and** the unit's status word has either of bits
+   `0x300000` set, replace the current order with a fresh `VTOL_SEEKATTACK`
+   record carrying the same target and cached goal; return 5 either way.
+2. If the target reference is null but the record's `0x200` "cached goal valid"
+   bit is set, replace the current order with `VTOL_SEEKATTACK` at the unit's
+   own position and return 5.
+3. If the target reference is live, **refresh the record's cached goal from the
+   target's current position every visit** — the cached goal is a stale-target
+   fallback, not a fixed aim point.
+4. Off-map recovery ([R-AIR-01 §5]) — `AirToAir` and `AirToGroundHover` take the
+   recovery leg and return from it; `AirToGround` instead sets the record's
+   deadline to the current tick plus 30, **forces the phase to 2**, and falls
+   through; `AirStrike` tests the sentinel nowhere at all.
+5. **The maneuver leash.** If the record's leash word is nonzero, compute
+   `hypot(unitIntegerX − postX, unitIntegerZ − postZ)` in whole world units
+   against the record's two post words, truncate to an integer, and return 5
+   when `leash <= distance`. This is the only air-side consumer of the leash
+   word that [R-STANCE-01 §4] installs from `maneuverleashlength`; the compare
+   is on **integer world units**, not 16.16, and is inclusive, so a leash of `0`
+   is "no leash" rather than "never move".
+
+**Established — `AirStrike`: the bombing run, with a ballistic release lead.**
+
+| Phase | Work | Result |
+|---:|---|---:|
+| 0 | Status caption `Attacking`; shared takeoff preamble. | 1 |
+| 1 | Set the manual-target latch on all three slots, then release it on slot 0. Measure `d = hypot(goal − unit)` in 16.16. If `d < 0x1E00000` (480 world units) the bomber is too close to start a run: build a point marker at `unitPos − offset(bearing(unit, goal), 0x8C00000)` — a point 2240 world units from the aircraft along the bearing helper's axis — with horizontal arrival radius `0x3C0` (960), and gate `\|= 0xE2`. Both branches return 1, so the phase advances either way; the test only decides whether a repositioning marker is installed. | 1 |
+| 2 | The swing-wide leg. `d = hypot(goal − unit)`; `h = bearing(unit, goal)`; draw one random value below `0x4000` and form `h' = h + draw − 0x2000` (a uniform ±45-degree jitter); build a point marker at `unitPos − offset(h', d/2)` with horizontal arrival radius `0x1E0` (480); gate `= 0x100E8`. | 1 |
+| 3 | No work. | 1 |
+| 4 | The release-point leg. If the satisfied set contains any of the arrival bits `0xE0`, return 1 immediately (advancing the phase) and do nothing else. Read the map's `gravity`; **if it is zero, return 7 — a cancel-all of the whole queue.** Otherwise compute the release lead exactly as `t = sqrt((2 · cruisealt) / gravity)` in float, `lead = trunc(t · 30.0 · speedInteger)` where `speedInteger` is the signed 16-bit integer part of the mover's scalar speed word, and set the marker's horizontal arrival radius to `lead + 1 + attackrunlength`. The marker is a follow-unit marker on the target when one is bound, else a point marker on the cached goal. Install; deadline `= tick + 1`; gate `\|= 0x100E8`. | 2 |
+| 5 | The overfly leg. Release the slot-0 latch; order the weapons to fire at the cached goal position; build a point marker at `unitPos − offset(bearing(unit, goal), (attackrunlength + 0x3C0) << 16)` with horizontal arrival radius `0x3C0`; gate `= 0xE2`. | 1 |
+| 6 | The break-off leg. Stop firing; build a point marker at `unitPos − offset(unitHeading, 0x5A00000)` — 1440 world units along the unit's own heading axis — with horizontal arrival radius `0x80`; gate `= 0xE2`. Then, if health is at or above three quarters of `MaxDamage`, set the phase to 3 and return 2 (fly another run). Otherwise collect candidates within `0xF00`, and if any exist clear the payload, draw one random index, push a `VTOL_LANDING` order at that candidate, clear the gate word and return 0; with no candidates return 0. | 2 or 0 |
+
+`attackrunlength` therefore has exactly one gameplay consumer: it lengthens the
+bomb-release radius in phase 4 and the overfly distance in phase 5. It is a
+horizontal arrival radius in **world units**, added to a physically derived
+lead; it is not itself a time or a speed. The `30.0` factor converts the
+free-fall time from seconds to ticks against a per-tick speed, so the whole
+expression is `speed_per_tick · 30 · sqrt(2·cruisealt/gravity)` world units.
+`gravity` is the runtime word the map loader fills from the OTA `gravity` key,
+defaulting to `0x1FDB` when neither the OTA nor the TNT header supplies one.
+
+**Established — `AirToGround`: the strafing run.** Six phases.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Established — `AirToGroundHover`: the `hoverattack` standoff.** Phases 0 and 1
+match `AirToGround`. Phase 2 releases the slot-0 latch, aims at the target, builds a point marker on the
+**target's** current position with horizontal arrival radius equal to the first
+weapon slot's `Range`, and zeroes two record scratch words (a side flag and a
+miss counter). Phase 3 is the orbit:
+
+* Ask the weapon layer whether the unit can engage the target; if it cannot,
+  increment the miss counter.
+* If the miss counter exceeds `1`, reset it, draw a full-circle bearing
+  (random below `0x10000`), build a point marker at
+  `targetPos − offset(bearing, Range)` with horizontal arrival radius `0x80`,
+  gate `|= 0x110E8`, return 2.
+* Otherwise alternate sides: `h = headingToTarget`, and `h' = h − 0x2000` with
+  the side flag set to 1 when the flag was 0, or `h' = h + 0x2000` with the flag
+  cleared when it was 1 — a deterministic ±45-degree left/right alternation, no
+  random draw. Build a **frozen terrain-relative** marker (its goal is fixed at
+  construction and its altitude is `cruisealt` above the four-corner terrain
+  height at that point) at `targetPos + offset(h', (Range · 2) / 3)`, with
+  horizontal arrival radius `0x10` (16), and gate `= 0x100E8`.
+* Then the same health-below-three-quarters find-a-base branch.
+
+`hoverattack` selects this executor at command resolution; it changes no
+arithmetic inside the mover.
+
+**Established — `AirToAir` uses a second, velocity-carrying goal payload.**
+The dogfight legs do not command a point: they command a *position and a
+velocity*, through a second payload class whose per-tick goal update advances
+its own position by its own velocity vector each tick (X and Z only; Y is not
+advanced) and, when its "steer to a commanded heading" flag is set, rotates the
+velocity's horizontal pair toward the commanded heading by at most
+`TurnRate >> 3` per tick, zeroing the vertical component whenever it does. Its
+arrival test is a **hard-coded 48 world units** of horizontal distance, with the
+additional requirement — when that flag is set — that the velocity's bearing
+equal the commanded heading exactly. Phase 0 is the takeoff preamble plus a
+one-tick deadline. Phase 1 aims at the target and then:
+
+* When the arrival bits `0xE0` are set and the dot product of the
+  unit→target bearing vector and the unit's own facing vector (both taken at
+  20 world units) is positive, command "straight ahead": position
+  `unitPos − offset(unitHeading, MaxVelocity · 30)`, velocity
+  `−offset(unitHeading, MaxVelocity)`; deadline `tick + 60 + random below 30`;
+  reset the scratch counter; return 2.
+* When they are not set and the scratch counter is below `0x5A`, recompute the
+  same dot product, add `0x2D` to the counter if it is not positive and zero it
+  otherwise; then, if the range to the target exceeds `0xA0` world units,
+  command a lead intercept: position `targetPos + targetVelocity · 45`,
+  velocity derived from the target's heading at half the target's
+  `MaxVelocity`. Deadline `tick + 45`; gate `|= 0x100E8`; return 2.
+* Otherwise the leg gives up and re-issues a seek order.
+
+**Established — `VTOL_Evade`.** Entry returns 5 on a null target or when the satisfied set
+intersects `0x10008`. Phase 0 requires a live mover and `canfly`, draws
+`random below 2` into a record scratch word, and forms
+`h = unitHeading + (draw == 0 ? 0x4000 : 0xC000)` — a random 90-degree break
+left or right — then builds a point marker at `unitPos − offset(h, Range)`
+with horizontal arrival radius `0x80` and gate `0x100E8`. Phase 1 repeats the
+same break **on the same side** (the scratch word is re-read, not re-drawn) at
+**twice** the radius. Phase 2 returns 5. Exactly one random draw per evasion.
+
+### Closed — the two transport executor pairs, and the corrected hang and drop offsets [R-AIR-01 §9] (2026-08-29)
+
+**Correction — there are two load executors and two unload executors, split by
+carrier locomotion, not by order family name.** §10.2 above documents only the
+air pair (`VTOL_Pickup` / `VTOL_Unload`). The `Ground_Pickup` / `Ground_Unload`
+pair is a separate machine that never moves the cargo itself: it fires a COB
+callback and waits for the **script** to perform the attachment or the drop
+through the COB transport opcodes ([R-COB-03 §5]).
+
+*`Ground_Pickup`.* Entry: a null target, or a satisfied bit `0x8`, emits
+status cue slot 7 `Transport mission failed` and returns 8; a phase above 5
+returns 7.
+
+| Phase | Work | Result |
+|---:|---|---:|
+| 0 | Require a live mover (else 7) and the carrier definition's `canload` bit (else 7). Size gate: the target's cached footprint-X word, compared **signed**, must be at or below the carrier definition's `transportsize` byte zero-extended; otherwise status cue slot 7 `Unit is too large to transport` and return 8. Otherwise set the status caption `Loading unit` (slot 5). | 1 |
+| 1, 3 | The shared short-move helper: when the unit's movement-state byte has bit `0x2` set, write gate `0x8 \| 0x4` and return 2; otherwise return 1. | 1 or 2 |
+| 2 | Start the asynchronous one-argument `TransportPickup` on the **carrier's** script with cell 0 = the cargo's stable unit identity; emit notification event 12; increment the record's attempt counter; set the deadline to the current tick plus 15. | 1 |
+| 4 | If the target now has a carrier, return 5 (the script did the attach). Else if the attempt counter has reached `3`, return 9. Else install a ground goal handle at the target's current position with radius parameter `0`, gate `= 0xE8`. | 1, 5 or 9 |
+| 5 | Clear the goal payload. | 0 |
+
+This answers the open question in the RWU-04-8 triage list. The second
+executor's flags-word bit is `canload` itself — the same bit the general
+admission predicate tests — while the *air* executor gates on `canfly`; and its
+two compares read exactly the same two fields as the air executor's, namely the
+**target's runtime cached footprint-X word** against the **carrier definition's
+`transportsize` byte**. The triage note's guess that it compared "a byte of the
+target's definition against a word of the carrier's runtime state" is inverted.
+Only the message differs: `Unit is too large to transport` for the ground
+carrier, `Unit is too heavy to transport` for the air carrier. Both captions
+(`Loading unit` and `Loading`) go through the same one-shot caption setter on
+status slot 5; the difference is the text, not the slot. The two executors are
+selected by order identity (`Ground_Pickup` versus `VTOL_Pickup`) at command
+resolution and never both run for one record.
+
+*`Ground_Unload`.* Entry: a satisfied bit `0x8` emits status cue slot 7
+`Unloading process is proceeding non-optimally` and returns 8. Phase 0 requires
+a live mover and `canload`, binds the record's target handle to the carrier's
+cargo-list head, returns 5 if that head is null, sets the caption `Unloading`,
+and starts the asynchronous one-argument `TransportDrop` on the carrier's script
+with cell 0 = the cargo's identity and cell 1 = the packed drop point (the
+record's goal X truncated to whole world units in the high half, the goal Z
+integer part in the low half); it then increments the attempt counter and sets
+the deadline to the current tick plus 15. Phase 1 is the same short-move helper.
+Phase 2 emits notification event 13 and returns 5 as soon as the cargo's carrier
+reference is no longer this carrier; otherwise it returns 9 once the attempt
+counter reaches `3`, and otherwise installs a ground goal handle at the record's
+goal with radius parameter `trunc(carrierModelZExtentInteger · 1.5)` when the
+carrier definition has `canhover` set and `0` when it does not, gate `= 0xE8`.
+Phase 3 returns 0.
+
+**Correction — the phase-3 hang offset of `VTOL_Pickup` is measured in the
+carrier's model frame, and it is the carrier's goal, not the cargo's.** The
+`VTOL_Pickup` phase-3 row above says the executor constructs "the cargo follow
+order with altitude offset = NEGATED integer part of that piece's world Y — the
+cargo hangs below the piece". Two parts of that are wrong. The transform it
+evaluates is the piece-hierarchy evaluator **without** the unit-origin addition
+(the inner half of the exit-piece locator of [R-REV-02]), so the value is the
+attach piece's Y in the **carrier's own model frame**, not a world Y; and the
+marker it builds is a follow-unit marker on the **cargo**, installed as the
+**carrier's** movement goal, so the negated offset lowers the *carrier* until
+its attach piece meets the cargo. Nothing hangs before the attach. The value
+used is the signed 16-bit integer part of that model-frame Y, negated.
+
+**Correction — the `VTOL_Unload` lowering offset is the cargo's model
+TOTAL-HEIGHT integer, not its model bottom.** §10.2 above says phase 1 "queues
+the lowering command at the same X/Z with signed altitude offset = the cargo
+definition's model-bottom value". The word read is the high half of the
+definition's **model total-height dword** — the same max-Y dword that
+`BeginTransport` carries as its single argument ([R-UNIT-06 §3]) — i.e. the
+model's height in whole world units, and it is positive. The marker's
+terrain-derived altitude rule then places the carrier at
+`max(seaLevel, terrainHeightAtDropPoint) + cargoModelHeight`, which is exactly
+the height at which cargo suspended below the carrier touches the ground. The
+same word, on the same definition, supplies the altitude offset of
+`VTOL_Landing` phase 5 when the lander is carrying something. There is no
+authored `model-bottom` key and the definition's min-Y bound is a different
+word, which is why the earlier reading could not be implemented.
+
+**Correction — the detach half of the attachment helper takes the mover mode
+from the request, and the "becarried" re-arm is gated on player state, not on
+computer ownership.** [R-UNIT-06 §3] states the re-arm fires "for computer-owned
+children whose parent is not an airbase". The traced predicate is: the child's
+**player slot state byte is `1` or `2`** (the two states whose units are pumped
+at all, per the per-unit sweep) **and** the parent's definition does **not**
+carry `isairbase`. Ownership by a computer player is not tested. The rest of
+[R-UNIT-06 §3] re-verifies unchanged, with two additions: the helper also
+refuses a child that has cargo of its own (a loaded transport cannot itself be
+loaded), and the mover-mode write is a **direct** write of the request's low two
+bits into the committed mover-mode pair — it does **not** go through the
+mover-mode setter, so attaching or detaching never zeroes velocity, never levels
+bank and pitch, and never raises `Activate` or `Deactivate` ([R-AIR-01 §3]).
+
+**Established — request modes actually used.** `0` on every ordinary attach
+(`VTOL_Pickup` phase 4 for the cargo, `VTOL_Landing` phase 6 for the lander
+itself and for its cargo); `2` on the self-detach a carried carrier performs in
+the takeoff preamble; `1` on the `VTOL_Unload` phase-2 release. Mode `0` is
+therefore reached in ordinary play by every transported unit and by every
+aircraft parked on a pad — see [R-AIR-01 §3].
+
 ### 10.3 Patrol and air construction orbit
 
 **Established fact:** Air construction orbit is an exact geometric recurrence,
@@ -6162,11 +7369,20 @@ behavior. The per-waypoint travel time is a consequence of the integrator
 (computable, not an authored constant), so the §11 bullet on it is closed as a
 consequence, not a separate contract [movement/13].
 
-**Unknown:** Ground-following and sea behavior while orbiting, pad reservation
-beyond the landing-pad selection described in 10.2, carrier collision beyond
-the ordinary shared-mover rules, and the order-layer command-target supply for
-each non-construction air class beyond the established altitude authority and
-integrator arithmetic of section 10.1.
+**Unknown:** Ground-following and sea behavior while orbiting, and carrier
+collision beyond the ordinary shared-mover rules.
+
+**Correction (2026-08-29, RWU-04-8).** This paragraph previously also listed
+"pad reservation beyond the landing-pad selection described in 10.2" and "the
+order-layer command-target supply for each non-construction air class beyond
+the established altitude authority and integrator arithmetic of section 10.1".
+Both are closed. Pad reservation is the four-candidate `QueryLandingPad` scan
+plus the free-pad predicate of [R-AIR-01 §6] — a pad is reserved by nothing but
+the attach-piece index recorded on the units already in the pad owner's cargo
+list, re-tested at every phase transition; there is no separate reservation
+table. The command-target supply is the flight command block of
+[R-AIR-01 §1]: there is exactly one supply for every air order, and the orders
+differ only in which goal payload they install ([R-AIR-01 §4]).
 
 ## 11. Evidence basis and correction boundaries
 
@@ -6283,6 +7499,19 @@ replacement bullet is needed because the ground path has no vertical term.
 
 ### COB
 
+**Correction (2026-08-29, RWU-04-5).** Three bullets are deleted here because
+[R-CB-01] closes them: the `Aim*` closure-target identity (it is the first
+entry of a fixed two-entry dispatch table installed into all three weapon
+slots at unit creation, storing the literal `1` into the slot's aim-ready word
+on a nonzero delivery — [R-CB-01 §6]; document 06 section 3.4 carries the same
+residual and the orchestrator should retire it there too); the semantic unit
+of the footprint-path `SetSpeed` argument (it is the summed plot-cell metal
+byte plus one per covered footprint cell, the metal-extractor rate input —
+[R-CB-01 §5]); and the serialization of the unassigned `Killed` variant cell
+(it round-trips the death handler's own uninitialized frame slot through the
+query and is masked to four bits — [R-CB-01 §7]; a Nanolathe substitute is a
+sanctioned divergence, not an open question). Three new bullets replace them.
+
 - The first committed retail ARMCK pose, and whether its authored waiting
   `Create` work advances before that publication · [R-P28-COB-01R] · manual
   retail observation (the paired settling probe). Marked `TODO(question)`.
@@ -6292,8 +7521,19 @@ replacement bullet is needed because the ground path has no vertical term.
 - Deterministic fault policy on allocation failure — where retail aborts
   through its allocator's abort path · §4.6 · static trace. Marked
   `TODO(question)`.
-- Identity of the `Aim*` closure target behind the receiver word · §5.3,
-  doc 06 §3.4 · static trace. Marked `TODO(question)` R-1 at both sites.
+- Caller of the second entry of the weapon slot's aim dispatch table — a
+  four-argument stub returning zero, with no located call through that slot
+  · §5.3 [R-CB-01 §6] · static trace of every indirect call whose target is a
+  load from a weapon-slot word.
+- Which authored order form the three `EndTransport` producer sites outside
+  the air-landing executor serve; the wake flags (immediate at two of the five
+  sites, deferred at three) are established, and [R-AIR-01 §6] already places
+  the landing executor's pair (phase 1 immediate, phase 6 deferred) · §5.3
+  [R-CB-01 §2] · static trace of the order descriptor table's handler column.
+- Whether a reused unit pool slot's surviving weapon-slot flag byte can make
+  the creation-time hold helper raise a `TargetCleared` for the previous
+  tenant before the new unit's script is bound · [R-CB-01 §4] · static trace
+  of the unit allocator's clearing of the record before initialization.
 - Initial content the tagged allocator provides for script statics, which the
   program bind does not initialize · [R-COB-01 §1] · static trace.
   Insensitive for stock content, which writes before reading.
@@ -6318,11 +7558,6 @@ replacement bullet is needed because the ground path has no vertical term.
 - Whether mission or third-party content depends on a bare `get UNIT_HEIGHT`
   returning nonzero; retail returns 0 with a zero-filled argument slot · §4.7
   · asset census. Marked `TODO(question)`.
-- Semantic unit of the footprint-path `SetSpeed` argument · §5.4 · static
-  trace.
-- Serialization of the unassigned `Killed` variant cell when neither the
-  script assigns it nor the work-fraction gate forces zero · §5.4, doc 08 ·
-  static trace.
 - Unnamed save fields, and complete restore behavior for pending calls, waits,
   and signal masks · doc 08 · static trace.
 
@@ -6393,13 +7628,11 @@ state and page-flip availability, not follower state — doc 03 owns them.)*
 
 ### Hover and VTOL
 
-- Semantic names and ordinary gameplay producers of mover modes `0` and `3`
-  · §9.1 · static trace. Modes `1` (grounded) and `2` (airborne) are named and
-  their writers censused by [R-MOV-01 §8]; `0` and `3` still reach a unit only
-  through a save file.
-- Semantic name and domain of the global sentinel compared against the unit's
-  sector-list head field, which bypasses flight vertical assignment · §10.1 ·
-  static trace. The bypass behavior itself is established.
+- Ordinary gameplay producer of mover mode `3` · §9.1 [R-AIR-01 §3] · static
+  trace of the save/network stream writer that supplies the reduced flight
+  controller's 2-bit mode field (with RWU-08-4). Modes `0` (attached/parked),
+  `1` (grounded) and `2` (airborne) are named and their writers censused by
+  [R-MOV-01 §8] and [R-AIR-01 §3].
 - Wake and SFX-piece mapping beyond the `setSFXoccupy` five-band classifier
   · §9.2, doc 03 · static trace.
 - Whether the hover bob's per-corner perturbation — at most two height units,
@@ -6415,11 +7648,18 @@ state and page-flip availability, not follower state — doc 03 owns them.)*
   static trace.
 - Can-fly terrain bypass conditions for orders outside the established flight
   selection in the mover fan-in · §10.1 · static trace.
-- Landing and descent rates (`0x30`, `0x80`, `0x140` are horizontal arrival
-  radii, not descent rates), pad reservation beyond the four-candidate
-  `QueryLandingPad` selection and the `0` / `30 + rand(15)` retry protocol,
-  and carrier collision beyond the shared-mover commit rules · §10.2 ·
-  static trace.
+- Carrier collision beyond the shared-mover commit rules · §10.2 · static
+  trace. Landing has no descent rate: the vertical limit of §10.1 is the only
+  one, every `0x10`/`0x30`/`0x40`/`0x80`/`0xA0`/`0x140`/`0x150`/`0x1E0`/`0x3C0`
+  value is a per-leg horizontal arrival radius ([R-AIR-01 §4]), and pad
+  reservation and the loiter retry are closed by [R-AIR-01 §6].
+- Per-phase contracts of `VTOL_Follow` and `VTOL_SeekGuard`, the two air
+  executors [R-AIR-01 §7] left open · §10.2 · static trace (with RWU-04-11's
+  per-visit order-handler pass).
+- The `AirToAir` dogfight's third leg — what it re-issues once its scratch
+  counter reaches `0x5A` — and the sign convention of the bearing helper on
+  screen · §10.2 [R-AIR-01 §8] · static trace, then manual retail observation
+  for the sign.
 - Construction target-eligibility gates for air construction orders; the
   `150`-tick recurrence at `builddistance << 16` with offset `0xDB6E` and
   build power `work/30` per tick is established · §10.3 · static trace.

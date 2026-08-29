@@ -1660,7 +1660,9 @@ memory, and radar:
 A mode word governs which raster and which predicate are active. Bit 0
 selects history versus always-visible mapping, bit 1 selects the byte-grid
 predicate versus the word-mask predicate, bit 2 selects sprite-mask versus
-terrain-ray raster, and bit 3 marks the fog-cache-valid state — the
+terrain-ray raster (the exact polarity of all three, and the authored option
+each one comes from, is `[R-VIS-01 §1]` below), and bit 3 marks the
+fog-cache-valid state — the
 composer's two-byte fog/minimap overlay cache (section 3.3) is rebuilt when it
 is clear and the bit is set again after the rebuild. It is cleared at map load,
 on camera moves, and by LOS publication (any local coverage change), so a
@@ -1749,6 +1751,112 @@ targeting/visibility predicates of section 3.1. This consumer set is what
 pins the grid's gameplay role as the per-player explored/mapping gate while
 the semantic naming hedge of section 3.1 item 2 stands.
 
+#### R-VIS-01 §1 — the visibility mode word: authored option provenance and exact polarity (2026-08-29)
+
+Status: **Established** (direct static trace of the battle-entry initializer,
+the registry loader, the skirmish setup screen, the in-battle options overlay
+and the bulk rebuild's fill constants).
+
+This closes what
+`docs/PLAN_RESEARCH_COMPLETION_QUESTIONS.md` called its single most
+consequential entry — *"an entire documented user-facing option has no
+documented simulation consumer"* — and corrects the claim in that file that
+"doc 03 §3's visibility predicate does not branch on an LOS mode anywhere in
+the spec". It does: the predicate's mode-selected source (§3.2) and the raster
+selection (§3.2) are exactly the two branches the option drives, and the
+missing link was the provenance chain below, not the branch.
+
+**Three authored options, one word.** Three session options — *Mapping*,
+*Line of Sight* and *LOS Type* — are written into the low three bits of the
+visibility mode word once at battle entry and never touched again by the
+simulation. Retail persists them under `Software\Cavedog Entertainment` (doc
+02 §3) as three parallel triples keyed by session kind:
+`SingleMapping` / `SingleLineOfSight` / `SingleLOSType`,
+`SkirmishMapping` / `SkirmishLineOfSight` / `SkirmishLOSType`, and
+`MultiMapping` / `MultiLineOfSight` / `MultiLOSType`. **Each defaults to 1**
+when the registry value is absent (and the loader then deletes the value).
+
+**Battle entry.** The session kind selects the source, and each assignment is
+a plain one-bit copy — no inversion anywhere:
+
+| Session kind | mode bit 0 (Mapping) | mode bit 1 (LineOfSight) | mode bit 2 (LOSType) |
+|---|---|---|---|
+| campaign/mission | single-player Mapping global `& 1` | single-player LineOfSight global `& 1` | single-player LOSType global `& 1` |
+| skirmish | setup record's Mapping field `& 1` | its LineOfSight field `& 1` | its LOSType field `& 1` |
+| multiplayer | session rule word bit 8 | rule word bit 9 | rule word bit 10 |
+
+The multiplayer session rule word is a 16-bit field in the local player's
+option record; the same word carries the commander-death rule in bits 11–12
+(copied to the commander-death global at battle entry), the cheat flag in bit
+13, fixed start locations in bit 14 and the game-closed flag in bit 15
+`[08 "Skirmish configuration"]`. The skirmish setup record is doc 08's object;
+only its three visibility fields are named here.
+
+**Polarity, pinned by the bulk rebuild's fill constants.** The wipe-and-
+rebuild (`[R-LAYER §1]` write site 2) fills the mapping word grid with the byte
+`((-((mode & 1) != 0)) & 1) - 1` and every eligible player's current-sight byte
+grid with `(~(mode >> 1)) & 1`. Both are unconditional, so they read the
+polarity out directly:
+
+| Bit | Value | Grid fill at rebuild | Meaning |
+|---|---|---|---|
+| 0 | 1 | word grid `0x00` | **Unmapped** — nothing explored; the grid accumulates |
+| 0 | 0 | word grid `0xFF` | **Mapped** — every player bit set everywhere at once |
+| 1 | 1 | byte grids `0` | current-sight tracking **on**; the predicate samples the byte grid |
+| 1 | 0 | byte grids `1` | current-sight tracking **off**; the predicate samples the word grid |
+| 2 | 1 | — | terrain-ray raster |
+| 2 | 0 | — | sprite-mask (circular) raster |
+
+The eligibility test for a player's byte grid is: the player record is active,
+its controller type is one of human / computer / remote, and its slot index is
+not the unassigned sentinel 10.
+
+**The three user-facing states, named.** The in-battle options overlay reads
+the live mode word back and prints a label, which fixes the naming:
+
+* Mapping Mode: bit 0 clear → `Mapped`; bit 0 set → `Unmapped`.
+* Line of Sight: bit 1 clear → `Permanent` (regardless of bit 2); bit 1 set
+  and bit 2 set → `True`; bit 1 set and bit 2 clear → `Circular`.
+
+The skirmish setup screen states the same three as sentences: LineOfSight = 0
+is `All mapped terrain is visible.` (Permanent); LineOfSight ≠ 0 with LOSType
+= 1 is `Terrain elevations affect a unit's view.` (True); LineOfSight ≠ 0
+otherwise is `Terrain elevations do not affect a unit's view.` (Circular).
+Mapping = 0 is `Terrain is visible.`; Mapping ≠ 0 is `Terrain is blacked out
+until explored.` The retail default (all three = 1) is therefore **Unmapped +
+True line of sight**.
+
+**What each state changes in the simulation.** Nothing branches on a
+"LOS mode" enumeration; the three bits are consumed separately:
+
+1. **Permanent** (bit 1 clear). Every byte grid is filled with 1 at rebuild
+   and no unit ever publishes *current* coverage: the per-unit publication
+   block of the bulk rebuild and the current-coverage half of the per-unit
+   refresh are both gated on bit 1. The raster still runs, publishing into the
+   word grid whenever bit 0 is set. Every visibility test therefore falls to
+   the word grid, which is monotone (§3.2: idempotent OR, never decremented).
+   A tile once stamped stays visible forever — that is what "Permanent" means,
+   and it is also why a Permanent game still hides never-explored ground.
+2. **Circular** (bit 1 set, bit 2 clear). Current coverage is tracked, and the
+   raster is the authored `vismasks.gaf` disc — no terrain read at all.
+3. **True** (bit 1 set, bit 2 set). Current coverage is tracked and the raster
+   is the terrain-ray walk of §3.2 with the height-word horizon test.
+4. **Mapping** (bit 0) is orthogonal to all three: it decides the word grid's
+   initial fill *and* whether the word-grid publisher runs at all
+   (`[R-VIS-01 §2]`). With bit 0 clear the grid starts all-ones and no stamp
+   is ever needed.
+
+**Two combinations a clone will get wrong if it folds the bits into one
+enum.** Bits 0 and 1 gate the two publishers independently:
+
+* *Mapped + Permanent* (bits 0 and 1 both clear) publishes **nothing at all**:
+  the bulk rebuild's per-unit block is skipped, the per-tick refresh skips both
+  publishers, and both grids stay at their all-visible fill for the whole
+  battle. LOSType is still copied into bit 2 and still selects a raster that is
+  never entered.
+* *Unmapped + Permanent* (bit 0 set, bit 1 clear) still rasterizes every tick
+  — into the word grid only — so the explored region grows and never shrinks.
+
 ### 3.2 Sight shape and terrain occlusion
 
 Sight distance quantizes differently in the two raster algorithms selected by
@@ -1758,7 +1866,10 @@ range; the selected shape supplies width, height, anchor offsets, a
 transparent palette sentinel, and row-major mask bytes. In terrain-ray mode
 the radius quantizes by signed division by 32 **without** the -5 offset and
 clamps into the parsed LOS.TDF table range. Both paths write the same word
-mask; bit 2 only changes which shape is ORed in.
+mask; bit 2 only changes which shape is ORed in. Whether either publisher runs
+at all is decided separately: the word mask is written only when mode-word bit
+0 is set and the current-sight byte grid only when bit 1 is set
+(`[R-VIS-01 §2]`).
 
 **The sight-shape table is an authored GAF resource.** The sprite-mask shapes
 are not synthesized: the engine holds a handle to the visibility-mask GAF file
@@ -1816,8 +1927,11 @@ visible. The builder fills the whole word array in one pass at load; the lazy
 cache that rebuilds "when the cache-valid mode bit is clear" is the fog/minimap
 overlay cache of section 3.3, not this table.
 
-**Spoke geometry.** Each LOS.TDF line is expanded into four mirrored quadrants
-by 90-degree rotation. The authored offsets are **absolute positions from the
+**Spoke geometry.** Each LOS.TDF line is expanded at load time into four
+quadrant copies by quarter-turn rotation; the exact transform, the storage
+layout and the file grammar are `[R-VIS-01 §3]`, which also corrects this
+paragraph's earlier word "mirrored" — the copies are rotations, not
+reflections. The authored offsets are **absolute positions from the
 observer, not cumulative deltas** (established): the ray stepper applies each
 rotated pair directly to the origin cell (`x = tileX + dx`, `y = tileY + dy`)
 with no running accumulation, and the step-distance counter used by the horizon
@@ -1848,8 +1962,11 @@ changes dirty nothing locally.
 
 The observer's emitter height byte is `clamp(worldY_high + modelTop, 0, 255)`
 with the world Y first raised to at least `(SeaLevel+1) << 16`, and its coverage
-tile is `tileX = worldX_high >> 5`, `tileZ = (worldZ_high - emitter/2) >> 5`
-(arithmetic shifts). `modelTop` is the high word of the model-top dword computed
+tile **in terrain-ray mode** is `tileX = worldX_high >> 5`,
+`tileZ = (worldZ_high - emitter/2) >> 5` (arithmetic shifts). Sprite-mask mode
+computes a different tile — no model top, two independent floors, and the GAF
+frame's own offsets subtracted; both forms are in `[R-VIS-01 §2]`.
+`modelTop` is the high word of the model-top dword computed
 once at model load as the maximum of `vertexY + pieceY` over the piece
 hierarchy, floored at zero, so the eye sits at the top of the unit's 3DO model
 rather than on the ground — see §3.5 [R-P0-18-A] for the full builder contract
@@ -1966,6 +2083,178 @@ state.
 Radar, sonar, and jammers never author this mask: the sensor phase rasterizes
 range and jam circles onto separate presentation surfaces that are wiped each
 tick, while the LOS mask persists.
+
+#### R-VIS-01 §2 — LOS stamping: the observer record, the refresh throttle, and which publisher runs (2026-08-29)
+
+Status: **Established** (direct static trace of the sweep, the per-unit record
+builder, the throttled refresh and both publishers).
+
+**The sweep.** The phase-5 per-player LOS stamp sweep (`[R-LAYER §1]` write
+site 3) walks the player record's own unit block — a contiguous range of unit
+records delimited by a first and a last record pointer — stepping one unit
+record at a time, and calls the per-unit stamp for every unit whose alive
+status bit is set. The block is exclusive: at battle setup the unit pool is
+partitioned so that player *i* owns records `unitArray + (unitLimit × i + 1) ×
+recordStride` through `+ (unitLimit − 1) × recordStride`, and every record in
+the block is pre-stamped with that player's record pointer and slot byte. No
+player's sweep ever visits another player's unit. Slot 0 is the null unit and
+is not in any block.
+
+**The observer record.** The per-unit stamp fills one stack record and hands it
+to the throttled refresh. Its fields, in order, are: the owning player record;
+a pointer to the unit's stored coverage-tile pair; the definition's
+`sightdistance` as a signed 16-bit value; the low byte of the definition's
+reference-height word (the model top of `[R-P0-18-A §1]`); a pointer to the
+unit's stored coverage byte; the unit's world X; the unit's world Y **raised
+to at least `(SeaLevel + 1) << 16`**; and the unit's world Z. Two consequences
+are contracts: the model top reaches the emitter as a **byte**, so a model
+whose top exceeds 255 whole world units wraps rather than saturates before the
+clamp; and the sea-level raise happens in the record, so both rasters see the
+raised Y.
+
+**The stored coverage byte carries two different quantities.** In terrain-ray
+mode it is the emitter height byte; in sprite-mask mode it is the quantized
+shape index. The refresh throttle compares whichever one its own mode
+produces, so the byte's meaning changes with mode-word bit 2 and a mid-battle
+mode change (which retail never performs) would compare incommensurable
+values.
+
+**The refresh throttle and the publication gates**, exactly, with all shifts
+arithmetic (floor) unless stated:
+
+*Terrain-ray branch (mode bit 2 set):*
+
+```
+tileX   = worldX_high >> 5
+emitter = clamp(modelTopByte + worldY_high, 0, 255)      ; worldY_high signed
+tileZ   = (worldZ_high - (emitter >> 1)) >> 5
+refresh iff storedTileX != tileX
+         or storedTileZ != tileZ
+         or abs(storedByte - emitter) > 5                ; STRICT >, so 5 does not refresh
+on refresh:
+    if storedByte != 0 and mode bit 1:  remove the old byte-grid footprint
+    store tileX, tileZ
+    if (unsigned)tileX >= visTileW or (unsigned)tileZ >= visTileH:
+        storedByte = 0 ; return                          ; empty footprint, nothing published
+    storedByte = emitter
+    if mode bit 1:  publish current coverage  (byte grid, +1 per covered tile)
+    if mode bit 0:  publish history           (word grid, OR the owner's bit)
+```
+
+*Sprite-mask branch (mode bit 2 clear):*
+
+```
+q       = clamp(floorDiv(sightdistance, 32) - 5, 0, shapeCount - 1)
+frame   = the vismask GAF frame at index q
+tileX   = floorDiv(worldX, 2^21) - frame.XOffset
+tileZ   = floorDiv(worldZ, 2^21) - floorDiv(worldY_high, 64) - frame.YOffset
+refresh iff storedTileX != tileX or storedTileZ != tileZ or storedByte != q
+on refresh:
+    if mode bit 1:  remove the old byte-grid footprint ; store ; publish current coverage
+    else:                                                store
+    if mode bit 0:  publish history
+```
+
+`floorDiv(worldX, 2^21)` is the 16.16 coordinate shifted right 21 places with
+the negative-value correction — the map-pixel value divided by 32, i.e. the
+visibility tile. Note that the two branches do **not** compute the same shear:
+the ray branch takes one floor of `(worldZ_high − emitter/2)`, while the
+sprite branch takes two independent floors, `floorDiv(worldZ, 2^21) −
+floorDiv(worldY_high, 64)`, and the sprite branch does **not** add the model
+top. The sprite branch also subtracts the GAF frame's own signed offsets, so
+its stored tile is the footprint's top-left corner rather than the observer
+cell; the ray branch's stored tile is the observer cell itself.
+
+**Retail edge, stated as a contract.** A unit is constructed with its stored
+coverage byte and both stored tile coordinates zeroed, and the sprite branch's
+removal call carries **no** `storedByte != 0` guard (the ray branch does carry
+one). A unit's first sprite-mask refresh therefore decrements the shape-0
+footprint at tile (0, 0) in its owner's byte grid before publishing its real
+footprint — an unbalanced decrement near the map origin, once per unit per
+game, in Circular mode only. The decrement is a plain byte subtract with no
+clamp (§3.2), so the affected cells wrap to 255 and read as permanently
+visible until a bulk rebuild. Nanolathe may bound this as a sanctioned
+divergence; it must not be "fixed" silently in a way that changes the ray
+branch, which is guarded.
+
+#### R-VIS-01 §3 — the LOS.TDF spoke tables and the ray walk, exactly (2026-08-29)
+
+Status: **Established** (direct static trace of the loader, the per-table
+parse, the per-line quadrant expansion and the raster).
+
+**File grammar.** The tables live in `gamedata/los.tdf`. A `[TABLEINFO]`
+section carries `numtables`; each table is a section named `TABLE%d` for
+`%d` = 0 … `numtables − 1` carrying `numlines`; each line is a key named
+`line%d` whose value is a comma-and-space separated integer list whose **first
+token is the point count**, followed by that many `(u, v)` pairs. Tokenization
+is by the separator set `", "` and each token is converted with the ordinary
+decimal string-to-integer conversion (so trailing garbage in a token is
+ignored). A missing `TABLE%d` section leaves that table's line list empty; a
+missing `line%d` key empties that line. `research/formats` does not own this
+file: it is a TDF, and its grammar is `[fmt tdf]`; only the key meanings are
+stated here.
+
+**Quadrant expansion happens at load, not at raster time.** Each table's line
+vector is sized to **four times** `numlines`, and each authored line is
+written four times. Writing the authored pair as `(u, v)` and the stored pair
+as `(dx, dz)`, line *i* of *M* is stored at indices *i*, *i + M*, *i + 2M* and
+*i + 3M* with
+
+```
+copy 0 : (dx, dz) = ( u, -v)
+copy 1 : (dx, dz) = ( v,  u)
+copy 2 : (dx, dz) = (-u,  v)
+copy 3 : (dx, dz) = (-v, -u)
+```
+
+which is `copy k = R^k(u, −v)` for the quarter-turn `R(x, y) = (−y, x)`. It is
+a pure rotation: no copy is a reflection, and the sign flip on `v` in copy 0 is
+part of the base transform, not a mirror. The earlier text in §3.2 calling
+these "four mirrored quadrants" is corrected here — the geometry is right, the
+word "mirrored" is not, and a clone that mirrors instead of rotating produces
+the same set only for lines that are symmetric about the diagonal.
+
+**Table selection.** The group index is `min(max(floorDiv(sightdistance, 32),
+0), numtables − 1)`, using the **declared** `numtables`, which is why
+`los.tdf`'s twelve shipped `TABLE%d` sections with `numtables = 9` leave three
+unreachable.
+
+**The walk**, per observer, after the origin cell has been admitted
+unconditionally:
+
+```
+for each line of the selected table (all 4 × numlines of them):
+    retainedNum = -1 ; retainedDen = 0 ; step = 1
+    for each point (dx, dz) of the line, in authored order:
+        x = tileX + dx ; z = tileZ + dz
+        if (unsigned)x < heightTableW and (unsigned)z < heightTableH:
+            lowDiff  = heightWord(x, z).low  - emitter
+            highDiff = heightWord(x, z).high - emitter
+            if retainedNum * step < lowDiff * retainedDen:      ; STRICT
+                OR the owner's player bit into the word grid cell (x, z)
+                if retainedNum * step < highDiff * retainedDen: ; STRICT, same pair
+                    retainedDen = step ; retainedNum = highDiff
+        step = step + 1
+```
+
+Four details that a summary loses and an implementer needs:
+
+1. `step` advances on **every** point of the line, including points rejected by
+   the bounds test and points rejected by the horizon test. It is the point's
+   ordinal in the authored list, counted from one — which is why §3.2's
+   "the authored offsets are absolute positions from the observer" and this
+   counter cohere.
+2. The retained pair resets **per line**, not per table.
+3. The initial pair `(-1, 0)` makes the first point of every line admit
+   unconditionally: `-1 × 1 < lowDiff × 0 = 0` for every terrain height.
+4. The horizon advance is tested against the **same** retained pair as the
+   admission, before the pair is updated — not against the newly admitted
+   value. Both comparisons are the identical strict form, and the
+   implementation tests the difference against zero first, so an exact tie
+   never admits and never advances the horizon.
+
+All products are signed 32-bit. `emitter` is the clamped 0–255 byte; the two
+height bytes are unsigned, so both differences lie in −255 … 255.
 
 ### 3.3 Fog and unexplored edges
 
@@ -2150,46 +2439,76 @@ Each tick, radar blips are projected from unit/world coordinates into radar
 coordinates. Radar and sonar range circles, jammer circles, and weapon-range
 circles are rasterized onto the radar surface using distinct palette colors.
 The radar-mapped surface is wiped and rebuilt each tick, while the authoritative
-LOS mask persists untouched by this path. **The effect of jammers on
-authoritative contact state is closed: there is none.** No reader ORs the
-jammer (or sensor-circle) surfaces into the mapping word grid, and the gameplay
-visibility predicate never samples them — jammer influence is presentation-only
-distortion (bounded-negative over the sensor and predicate families).
+LOS mask persists untouched by this path.
+
+**Correction (2026-08-29, `[R-VIS-01 §5]`).** This paragraph previously
+continued: "**The effect of jammers on authoritative contact state is closed:
+there is none.** No reader ORs the jammer (or sensor-circle) surfaces into the
+mapping word grid, and the gameplay visibility predicate never samples them —
+jammer influence is presentation-only distortion." The statement about the
+*surfaces* stands and is restated below; the conclusion drawn from it was
+wrong, because jamming does not act through a surface at all. The jam callbacks
+write the unit status word directly: `radardistancejam` clears the runtime
+**seen** bit and `sonardistancejam` clears the runtime **sonar** bit. Both
+effects are authoritative — they change acquisition candidacy `[06 §3.1]` and,
+through the sonar bit, the direct-visibility predicate's underwater rejection
+(`[R-WPN-02 §4]`). What remains true of the surfaces is only this: no reader
+ORs the jammer or sensor-circle surfaces into the mapping word grid or the
+per-player byte grids, and the gameplay visibility predicate never samples them
+(bounded negative over the sensor and predicate families).
 
 **Sensor and proximity phase.** The per-tick sensor phase runs only when more
-than one player is present. An ownership/status first pass walks the indexed
-unit list, clears the decloak-timer status bit for every unit, then sets the
-friendly status bits (mask 0x300) on own units and alliance/sensor-qualified
-units while clearing that bit group otherwise. Active units with either a
-radar or sonar distance defined emit ONE geometric circle whose outer radius
-is the LARGER of the two distances; nonzero radar-jam and sonar-jam distances
-each emit their circles through two further, separate callback tables — three
-callback tables in all. Circles rasterize onto backing surfaces whose
-dimensions are held in engine root state; positions project at a shift of 23,
-one surface cell per 128 world units. The phase itself never writes the word
-mask.
+than one player is present. It is five unit walks and it writes nothing but
+unit status bits; `[R-VIS-01 §4]` states them in order, at implementable
+precision, and `[R-VIS-01 §5]` states the radius visitor and the three
+callbacks. In summary: a first pass clears the decloak-timer bit for every live
+unit and sets the friendly status pair `0x300` on own units (plus everything,
+when the viewing player has been defeated) while clearing `0x700` otherwise; a
+second pass, over the viewing player's units only, emits one radar/sonar
+contact query per active unit with a nonzero radar or sonar distance; a third
+pass emits radar-jam and sonar-jam queries from every active unit not owned by
+the viewing player; a fourth performs the minimum-cloak proximity scan; a fifth
+sets the seen bit for any remaining unit standing on a lit visibility tile.
+Status-field roles: `0x100` = seen marker, `0x200` = sonar (which doubles as
+the underwater-rejection exemption of section 3.2), `0x300` = the friendly pair
+the first pass writes, `0x400` = jammed (a marker with no reader anywhere),
+`0x1000` = decloak timer. The phase never writes the word mask or any
+per-player byte grid.
 
-Minimum-cloak proximity: qualifying cloaked units search the indexed unit
-list by squared planar distance up to their authored minimum-cloak distance;
-a hit writes a decloak deadline of current tick + 90 into the struck unit and
-sets its runtime status bit 0x1000. Final visibility pass: walking world
-units, those neither already carrying the seen-marker nor holding the hidden
-instance bit are projected with the standard half-height shear and tested
-through the mode-selected source — the local player’s current byte grid when
-enabled, else the word grid at the local bit; admission sets runtime status
-bit 0x100, the per-frame “seen” marker. Status-field roles: 0x100 =
-seen-marker, 0x300 = friendly contact (whose upper bit doubles as the
-underwater-rejection exemption of section 3.2), 0x1000 = decloak timer.
-**Sensor/jammer arbitration is partially closed:** the three callback tables
-rasterize onto the minimap presentation surface sequentially — radar/sonar outer
-circle first, then the two jam circles — with last-writer-wins per pixel
-(plain pixel stores, not OR), each circle family in its own palette index, and
-nothing reaching the mapping word grid or the per-player byte grids; the
-per-table palette mapping (which table draws the radar versus the jammer index)
-remains supported inference. The unresolved gameplay side is the identity of the
-secondary radar-like candidate list that targeting may consult when the primary
-in-radius set is empty — that flag's authored name is not proved, and targeting
-is owned by document 06.
+**Correction (2026-08-29, `[R-VIS-01 §4]`/`[R-VIS-01 §5]`).** Four statements
+previously made here are wrong and are replaced by the closures below.
+
+1. It said the emitters *"rasterize circles onto backing surfaces whose
+   dimensions are held in engine root state; positions project at a shift of
+   23, one surface cell per 128 world units"*, and that *"the three callback
+   tables rasterize onto the minimap presentation surface sequentially —
+   radar/sonar outer circle first, then the two jam circles — with
+   last-writer-wins per pixel (plain pixel stores, not OR), each circle family
+   in its own palette index"*. There is no rasterization in the sensor phase at
+   all. The shift of 23 and the 128-world-unit cell are the **unit spatial
+   grid** the shared radius visitor walks to find candidates, not a pixel
+   surface; the three callback tables hold three one-line functions that write
+   unit status bits. Consequently the "per-table palette mapping" that this
+   paragraph recorded as supported inference is not a question about the sensor
+   phase, and the last-writer-wins arbitration it described does not exist —
+   the real arbitration between the passes is the bit-write order of
+   `[R-VIS-01 §4]`. The minimap's sensor circles are drawn elsewhere (§3.9,
+   §3.10); §3.10 still repeats the "emitted through their callback tables"
+   reading and is owned by that section.
+2. It said the friendly pass sets the pair on *"own units and
+   alliance/sensor-qualified units"*. The allied disjunct exists but cannot
+   fire: it gates on a bit that no writer in the recovered image ever sets
+   (`[R-VIS-01 §7]`).
+3. It said the minimum-cloak scan searches *"the indexed unit list"*. It
+   searches the **primary candidate list of the cloaking unit's own side**
+   (`[06 §3.1]`), which is rebuilt at most once per thirty ticks, so the scan
+   is over stale, already-visibility-filtered hostiles.
+4. It closed with *"The unresolved gameplay side is the identity of the
+   secondary radar-like candidate list … that flag's authored name is not
+   proved"*. The list's identity is closed (`[R-WPN-02 §6]`): it is the seen
+   set this phase writes, from the viewing observer's point of view. What
+   survives is narrower and lives in doc 06's tail — the authored FBI key
+   behind the definition flag that arms the list.
 
 **Sensor callback gate correction (Established).** “Active” in the sensor
 phase means the unit instance's activation/on-state bit is set. A live unit
@@ -2216,9 +2535,407 @@ decloak status bit, and the final seen-marker pass) cover the whole unit pool
 in that one placement, once per tick — Nanolathe should schedule the
 sensor/deadline work as a single per-tick pass keyed to the local viewing
 slot, positioned after the local player's stamp sweep, not as a separate
-tick phase and not adjacent to the composer. Residual: the writer that
-clears the per-unit seen marker (status bit `0x100`) between passes was not
-located; the set site is the final pass above.
+tick phase and not adjacent to the composer. The residual recorded here — "the
+writer that clears the per-unit seen marker (status bit `0x100`) between
+passes was not located" — is closed by `[R-VIS-01 §4]` below: the clear is the
+phase's own first pass, and a second clear is the radar-jam callback.
+
+#### R-VIS-01 §4 — the sensor phase's five passes, exactly (2026-08-29)
+
+Status: **Established** (direct static trace of the phase and its three
+callbacks; complete image-wide writer census for the three status bits).
+
+This section states at implementable precision what the prose above and
+`[06 §3.1]`/`[R-WPN-02 §6]` describe as "four ordered passes". There are in
+fact **five** unit walks; the mode-selected seen probe and the minimum-cloak
+proximity scan are separate walks, and the phase's first pass is both the
+friendly-marking pass and the clear.
+
+**Which observer.** Two per-battle globals hold a player slot: the local
+player's **own** slot, and the **viewing** slot. They are written together at
+battle entry and re-pointed together when the local player becomes an observer.
+Every read in this phase, in the mode-selected visibility probes of §3.2, and
+in the minimap contacts pass of §3.9 uses the **viewing** slot. Nanolathe must
+carry both and must not collapse them: in an observer session they differ, and
+the entire secondary target list of `[06 §3.1]` follows the viewing slot.
+
+**Gate.** The whole phase runs only when the active player count is strictly
+greater than one. In a session with one active player none of the five passes
+runs, so the seen, sonar and jammed bits keep the values unit construction gave
+them: the seen bit clear, the jammed bit clear, and the sonar bit set exactly
+for units whose owning player's slot equals the viewing slot at construction
+time. A one-player session therefore has an empty secondary candidate list
+and a `sonar` bit that means "mine".
+
+**Status bits.** Three bits of the unit's 32-bit runtime status word are the
+phase's whole output: **seen** (`0x100`), **sonar** (`0x200`) and **jammed**
+(`0x400`). The friendly marking writes the pair `0x300`; the underwater
+exemption of §3.2 and the underwater rejection of `[06 §3.1]` read the sonar
+bit; `[06 §3.1]`'s secondary candidate list reads the seen bit; §3.9's
+minimap contacts pass reads the pair. **The jammed bit has no reader anywhere
+in the image** (bounded negative over all recovered functions): it is a marker
+only, and jamming's authoritative effect is entirely the *clearing* it does.
+
+**Pass 1 — clear and friendly marking.** Over every unit slot from 1 to the
+end of the pool, for units whose alive bit is set:
+
+```
+clear the decloak-timer bit (0x1000)
+own      = unit.ownerSlotByte == viewingSlot
+allied   = candidateOwner.allianceRow[viewingPlayer.slot] != 0
+           and candidateOwner.optionRecord.optionWord bit 6      ; see [R-VIS-01 §7]
+observer = viewingPlayer.record is active
+           and viewingPlayer.optionRecord.ruleWord bit 6         ; the defeated/observer flag
+status = (own or allied or observer) ? (status | 0x300) : (status & ~0x700)
+```
+
+`allianceRow` is an eleven-byte row in the player record indexed by player
+slot, loaded from the mission/save `Alliances` list, with a player's own entry
+always set. The observer disjunct is what makes a defeated player see
+everything: the defeat handler sets that rule-word bit, clears mode-word bits
+0 and 1 (`[R-VIS-01 §1]`: Mapped + Permanent — both grids fill all-visible),
+and forces one bulk rebuild.
+
+**This pass is the seen-marker clear writer.** The `& ~0x700` branch clears
+seen, sonar and jammed together, every tick, for every unit that is not own,
+allied-with-sharing, or seen by an observer. The only other clear in the image
+is the radar-jam callback (`[R-VIS-01 §5]`).
+
+**Pass 2 — radar and sonar emission.** Over the **viewing player's own unit
+block only**, for units that are alive, not death-latched, whose activation
+bit is set, and whose definition declares a nonzero `radardistance` **or** a
+nonzero `sonardistance`:
+
+```
+radarRadius = radardistance + 2 × worldY_high      ; whole world units, signed
+visit every unit within max(radardistance, sonardistance) of this unit's
+     position and apply the contact callback with (radarRadius², sonardistance²)
+```
+
+The `+ 2 × worldY_high` bonus is the emitter's **world Y high word** — its
+altitude in whole world units — not its model height and not its
+`sightdistance`. A radar tower on a hill therefore reaches further than the
+same tower in a valley, which is the elevation effect the option text
+advertises, and it applies to **radar only**: `sonardistance` gets no bonus.
+
+The bonus enters the **squared test radius only, never the search**: the
+visitor is called with `max(radardistance, sonardistance)` — the two *authored*
+values, unbonused — so no unit further than that is ever examined, however high
+the emitter sits. Whenever `radardistance + 2 × worldY_high` exceeds
+`max(radardistance, sonardistance)` the extra reach is unreachable and the
+effective radar radius saturates at the authored maximum, which for the ordinary
+radar-only unit (`sonardistance = 0`) means the elevation bonus has **no effect
+at all**. It is observable only on a unit whose `sonardistance` exceeds its
+`radardistance`, where it lets radar detection extend into the sonar circle.
+This is a retail contract, not an oversight to correct: an implementation that
+searches out to the bonused radius will detect units retail never examines.
+
+**Pass 3 — jam emission.** Over every unit slot from 1 to the end of the pool,
+for units that are alive, whose **owner slot differs from the viewing player's
+slot**, and whose activation bit is set: if `radardistancejam` is nonzero,
+visit every unit within it and apply the radar-jam callback; then if
+`sonardistancejam` is nonzero, visit every unit within it and apply the
+sonar-jam callback. Allied jammers are included — the test is "not mine", not
+"hostile" — and so are the jammer's own side's units as *targets*, because the
+callbacks apply no owner test at all.
+
+**Pass 4 — minimum-cloak proximity.** Over every unit slot from 1 to the end of
+the pool, for units that are alive, whose owning player record is active with
+controller type 1 or 2 (the locally simulated human and computer controllers —
+the same predicate as `[R-WPN-02 §2]`), and whose definition carries the
+derived can-cloak flag:
+
+```
+if any entry of the primary candidate list of registry[unit.ownerSlot]
+   is alive, not death-latched, and at planar squared distance
+   <= mincloakdistance × mincloakdistance                       ; INCLUSIVE
+then unit.cloakSuppressionDeadline = currentTick + 90
+     status |= 0x1000
+```
+
+The list searched is the **per-side primary candidate list of `[06 §3.1]`** —
+hostile units that passed the direct-visibility predicate when that side's
+registry was last rebuilt, which can be up to thirty ticks earlier. So the
+breach test is "an enemy I could see up to a second ago is within
+`mincloakdistance`", not "an enemy is within `mincloakdistance`". The
+definition flag is not an authored key: it is derived at parse time as
+`cloakcost > 0.0` (strict, on the parsed float). The distance is a plain 32-bit
+signed square of the authored integer, so an unauthored `mincloakdistance` of
+0 makes the test `d² <= 0` and effectively never fires. The pass does not test
+whether the unit is currently cloaked.
+
+**Pass 5 — the seen probe.** Over every unit slot from 1 to the end of the
+pool, for units that are alive, whose seen bit is **clear**, and whose
+instance cloak bit is clear:
+
+```
+tileX = worldX_high >> 5
+tileZ = (worldZ_high - (worldY_high >> 1)) >> 5              ; arithmetic shifts
+bounds: (unsigned)tileX < viewingPlayer.gridWidth
+    and (unsigned)tileZ < viewingPlayer.gridHeight
+if mode-word bit 1:  hit = viewingPlayer.byteGrid[gridWidth × tileZ + tileX] != 0
+else:                hit = wordGrid[gridWidth × tileZ + tileX] has the viewing slot's bit
+if hit: status |= 0x100
+```
+
+This is the single-point form of the §3.2 predicate: the same half-height
+shear, the same unsigned bounds, the same mode-selected source, and — in
+word-grid mode — the same **viewing player's** bit regardless of who owns the
+unit. Note that both index expressions use the *player record's* grid width as
+the row stride, which is the visibility-tile width.
+
+**What that means for a single-player game with computer opponents.** The
+phase evaluates exactly one observer. A computer player's own sensors never
+write the seen bit for anybody, and a computer player's fallback (secondary)
+acquisition therefore consumes the **human's** sensor picture: it can acquire a
+unit precisely when the human can see or detect it, and it loses that unit
+when the human's radar is jammed. This is not a per-side model with a shared
+implementation detail; it is a single global picture with one owner. A clone
+that gives each AI its own sensor grids will diverge from retail on every
+fallback acquisition. The primary candidate list has the same property
+whenever the word-grid predicate is selected (`[06 §3.1]`, "In word-mask mode
+every probe tests the local player's bit").
+
+**Ordering and outputs.** The five passes run in the order above, once per
+tick, inside the viewing player's iteration of the per-player pass
+(`[R-SENSOR-01]`). Pass 3 runs after pass 2, so a jam circle overwrites a radar
+contact from the same tick; pass 5 runs after pass 3, so line of sight restores
+a jammed unit's seen bit within the same tick if the unit is in the viewing
+player's visibility state. The phase writes **only** the three status bits, the
+decloak-timer bit and the cloak-suppression deadline. It writes neither
+visibility grid, does not touch the fog cache, and raises no presentation
+event.
+
+**Random draws: none.** The phase, its three callbacks, the unit-grid radius
+visitor and the minimum-cloak probe call nothing but the 64-bit multiply and
+shift helpers. Neither the simulation stream nor the CRT stream is consulted
+anywhere in the sensor or LOS-stamp families (bounded negative over the
+complete callee sets of the phase, the sweep, the throttled refresh, both
+publishers and the bulk rebuild).
+
+#### R-VIS-01 §5 — the radius visitor and the three contact callbacks (2026-08-29)
+
+Status: **Established** (direct static trace; complete writer census).
+
+**The visitor.** All three sensor callbacks are driven by one shared routine
+that walks the unit spatial grid. Its cells are **128 world units** on a side
+— positions reduce by an arithmetic shift of 23 places on the 16.16 coordinate
+— and each cell holds the head of a singly linked chain of unit records. Given
+a centre and a 16.16 radius it computes the cell rectangle
+
+```
+[floorShift(centreX - r), floorShift(centreZ - r)] ..
+[floorShift(centreX + r), floorShift(centreZ + r)]
+```
+
+clamping each coordinate into `0 … dim-1` (negative values clamp to 0, values
+at or above the dimension clamp to `dim-1`, tested unsigned). It then walks
+every chain in that rectangle and, for each unit whose **planar** squared
+distance to the centre is `<= r²`, invokes the callback. Both the distance and
+the radius square are taken as the high 32 bits of the 64-bit product, i.e.
+squared **whole world units**, and the axis terms are summed as signed 32-bit
+values — the same metric as `[06 §3.1]`. The visitor's own test is
+**inclusive**; the callbacks' tests are strict.
+
+**The contact callback (radar and sonar).** Rejects, in order: a candidate
+whose definition index is zero; a candidate whose owner slot equals the
+**viewing** slot; and a candidate whose definition carries the `stealth` flag.
+`stealth` therefore suppresses radar *and* sonar detection outright, with no
+distance or elevation term — it is not a range reduction. Then, with `d²` the
+planar squared distance to the emitter recomputed from the callback record:
+
+```
+sonar: if candidate.worldY <= SeaLevel << 16  and  d² < sonardistance²
+           status |= 0x200
+radar: if SeaLevel << 16 <= candidate.worldY + definition.boundingBoxMaxY
+           and d² < radarRadius²
+           status |= 0x100
+```
+
+Both distance comparisons are **strict**. The sonar admission test is on the
+candidate's own 16.16 world Y against the sea plane; the radar admission test
+is on the top of the candidate's bounding box, so a submarine whose hull top
+breaks the surface is radar-visible while a fully submerged one is not, and a
+unit sitting exactly at sea level satisfies **both** tests. The two writes are
+independent: a unit can gain both bits from one emitter.
+
+**The jam callbacks.** Two distinct one-line callbacks, one per jam field:
+
+```
+radar jam:  status = (status & ~0x100) | 0x400
+sonar jam:  status = (status & ~0x200) | 0x400
+```
+
+They apply to **every** unit the visitor delivers — no owner test, no alliance
+test, no stealth test, no re-test of distance beyond the visitor's inclusive
+`d² <= r²`. So `radardistancejam` clears the seen bit and `sonardistancejam`
+clears the sonar bit, for friend and foe alike, including the jammer's own
+side. This corrects the earlier reading in this section that jamming has no
+authoritative effect: it is correct for the minimap surfaces, and wrong for the
+unit status word (`[R-WPN-02 §4]`). **What a jammed contact loses**, stated
+positively:
+
+* *radar jam* — the seen bit, hence membership of every side's secondary
+  candidate list (`[06 §3.1]`) and the "detected" half of the minimap contacts
+  test (§3.9). It does **not** lose line of sight: pass 5 runs after the jam
+  pass and re-sets the seen bit for any jammed unit whose tile is lit in the
+  viewing player's visibility state, so jamming only hides what was known by
+  radar alone.
+* *sonar jam* — the sonar bit, hence the underwater exemption of §3.2 and the
+  underwater rejection of `[06 §3.1]` step 4. A jammed submerged unit becomes
+  invisible to the direct-visibility predicate outright, whatever the line of
+  sight, because that predicate rejects a below-sea-level probe point when the
+  sonar bit is clear. Sonar jamming is the stronger of the two.
+* neither loses anything on the mapping word grid, the per-player byte grids,
+  or the LOS raster. The presentation circles of the paragraphs above remain
+  presentation-only.
+
+**Complete writer census for the three bits.** Across the whole recovered
+image, the seen, sonar and jammed bits are written at exactly five sites: the
+sensor phase's first pass (`| 0x300` / `& ~0x700`), the contact callback
+(`| 0x100`, `| 0x200`), the two jam callbacks, and the unit constructor, which
+seeds the sonar bit as `(owner.slot == viewingSlot)` and clears the other two.
+Nothing else in the image touches them. The residual recorded in `[06]`'s tail
+— whether a producer of the seen bit exists outside the recovered sensor phase
+— is therefore bounded-negative over the recovered set and remains open only
+for the unrecovered regions.
+
+#### R-VIS-01 §6 — cloak, stealth, and the decloak deadline (2026-08-29)
+
+Status: **Established** for the fields, the flags and the gate; the
+per-tick cost arithmetic is doc 05's.
+
+**Authored inputs**, all read by the unit-definition parser:
+
+| Key | Storage | Default | Consumer |
+|---|---|---|---|
+| `stealth` | definition flag word bit | absent → 0 | the contact callback's third reject (`[R-VIS-01 §5]`) |
+| `init_cloaked` | definition flag word bit | absent → 0 | seeds the runtime cloak-wanted status bit at unit construction |
+| `cloakcost` | 32-bit float | absent → 0 | the per-tick cloak upkeep charge; **also** derives the can-cloak flag |
+| `cloakcostmoving` | 32-bit float | absent → the truncated `cloakcost` | the moving-unit upkeep charge |
+| `mincloakdistance` | signed 16-bit | absent → 0 | the proximity breach radius of `[R-VIS-01 §4]` pass 4 |
+
+The can-cloak flag is **derived, not authored**: the parser sets a bit of the
+second definition flag word exactly when the parsed `cloakcost` is strictly
+greater than `0.0`. That bit is the gate on pass 4, so a definition with
+`mincloakdistance` but no `cloakcost` is never scanned.
+
+**The init-cloak spawn writer is a single site, not a walk.** The bounded
+negative recorded in this document's tail ("the init-cloaked spawn writer is
+bounded-negative today, one candidate site, not closed") is closed: the unit
+constructor copies the `init_cloaked` definition bit into the runtime
+**cloak-wanted** status bit (bit 11) as part of the same masked store that
+copies the two standing-order fields, and there is no other writer of that bit
+in the image. There is no spawn-time walk of nearby units, no spawn-time
+proximity test, and no spawn-time visibility edit. A unit authored
+`init_cloaked=1` simply starts with cloak requested, and the ordinary upkeep
+below decides tick by tick whether it is actually cloaked.
+
+**The cloak gate.** The per-player economy pass evaluates, for each of that
+player's units:
+
+```
+cloakActive = status bit 11 (cloak wanted)
+          and status bit 12 (decloak forced) is clear
+          and currentTick >= unit.cloakSuppressionDeadline
+```
+
+and only when `cloakActive` does it attempt the upkeep charge; if the owner
+cannot pay, the unit is not cloaked this tick. The result is pushed to the
+instance cloak bit, which is what §3.2's predicate step 2 and the sensor
+phase's pass 5 read.
+
+**Two mechanisms, not one.** Bit 12 is cleared at the top of the sensor
+phase's first pass every tick and re-set only by that tick's proximity breach,
+so it is a same-tick latch. The suppression deadline is the durable half: the
+breach writes `currentTick + 90` (three seconds at 30 Hz), and the unit stays
+uncloaked until the tick counter reaches it even though bit 12 has long since
+been cleared. The deadline field is **shared** with other reveal producers
+outside this document — firing and several order transitions write
+`currentTick + 150`, `+ 300`, `+ 600` and `+ 900` into the same field (docs 04
+and 06 own those) — so a later write always wins outright, and a shorter
+sensor breach can *shorten* a longer reveal already in progress. Retail does
+not take a maximum.
+
+**Cloak is still a predicate early-out, not a mask edit** (§3.2): nothing in
+this path writes either visibility grid.
+
+#### R-VIS-01 §7 — allied sensor sharing: what is shared, and the bounded absence (2026-08-29)
+
+Status: **Established** that no allied sharing occurs anywhere in the
+recovered image; **Unknown** whether the gate bit the phase reads is the one
+retail's authors intended.
+
+Doc 05 records only the option and cadence: every 450 authoritative ticks a
+separate option can emit a radar/sensor share command for allied players, and
+defers the shared state to this document. The answer is that **no shared state
+exists on the receiving side in the recovered image**, on any of the three
+channels a clone might expect:
+
+1. **The mapping word grid is never OR'd across players** (§3.2, "Ally
+   semantics are closed"): the writer ORs only the source unit's own slot bit,
+   and every reader tests one slot's bit.
+2. **The per-player current-sight byte grids are never merged.** Each is
+   incremented and decremented only by its owner's footprints, filled only by
+   the bulk rebuild, and read only through its own player record.
+3. **The sensor phase's allied disjunct cannot fire.** Pass 1's second
+   disjunct requires a bit of a 16-bit option word in the candidate owner's
+   option record. A complete reference census of that word across the whole
+   recovered image finds twenty-six sites; **every one except this read tests
+   bit 0**, the "this slot is me" flag, and **no site anywhere writes bit 6**.
+   The structurally parallel bit — the same bit number in the *other* 16-bit
+   option word four bytes further into the same record — is written, by the
+   defeat handler and by two session-transition cases, and is exactly the
+   defeated/observer flag that pass 1's *third* disjunct reads.
+
+So the friendly marking in the recovered image marks own units and, when the
+viewing player has been defeated, everything; allied units get nothing. The
+consequence for a clone is concrete: an ally's radar contact never appears on
+your minimap, an ally's units are not exempted from §3.2's underwater
+rejection on your behalf, and an ally's vision never enters the secondary
+candidate list.
+
+**Unknown:** whether reading the option word rather than the rule word at that
+one site is a retail defect (the two are adjacent words of one record and the
+bit number is the same in both) or a deliberate second flag whose writer lies
+outside the recovered functions. *Deciders, in order:* a static trace over the
+unrecovered regions and the lobby/session option parser for any writer of that
+bit; failing that, a manual retail observation — an authored two-human-ally
+skirmish probe in which one ally alone has radar coverage of a third player's
+unit, checking whether the other ally's minimap shows the contact. Until one of
+those lands, Nanolathe must implement the bounded behavior — no allied sensor
+sharing — and must not "restore" sharing on the grounds that it seems intended.
+
+**What the 450-tick command does carry** is doc 05's and doc 08's question,
+not this document's: nothing in the recovered visibility or sensor path
+consumes an incoming share.
+
+#### R-VIS-01 §8 — what the sensor and LOS phases publish to presentation (2026-08-29)
+
+Status: **Established**.
+
+The simulation half writes exactly two presentation inputs, both from the LOS
+publisher and the bulk rebuild, never from the sensor phase:
+
+1. **The fog-cache-valid mode bit is cleared** when a word-grid publication
+   changed at least one cell **and** the publishing observer's owner slot
+   equals the viewing slot. Remote and computer players' stamps dirty nothing.
+   The bulk rebuild clears it unconditionally. Camera motion clears it too
+   (§3.1).
+2. **A presentation dirty byte gains its visibility bit** at the same two
+   sites; camera motion sets a different bit of the same byte.
+
+The compositor that consumes them — the two-channel fog cache, its nibble
+derivation, and the minimap surfaces — is §3.3's and §3.6–3.9's, and is a pure
+consumer. Nothing in §§3.1–3.5 writes a surface.
+
+The one presentation string this section owns an answer for is
+`Unidentified object`, the caption the HUD prints for the unit under the
+cursor. It is produced when the §3.2 direct-visibility predicate, queried with
+the **viewing** player's record, returns false for that unit. It is **not** a
+distinct sensor state: there is no "radar-only contact" or "jammed contact"
+presentation state, and the seen/sonar/jammed bits are not consulted by the
+caption at all. Doc 07 owns the caption's placement.
 
 ### 3.5 LOS observer height, coverage tile, and the terrain height word [R-P0-18-A] [R-P0-18-B]
 
@@ -4374,6 +5091,22 @@ deleted here only; the findings stand in the body sections that own them.
 
 ### World and visibility
 
+**Correction (2026-08-29, RWU-03-2).** Five bullets are removed here. Four
+were closed by `[R-VIS-01]`: *"palette mapping of each of the three
+jammer-circle callback tables"* (its premise was wrong — those callbacks are
+not rasterizers; the surviving minimap question is restated below and belongs
+to §3.9/§3.10), *"writer that clears the per-unit seen marker (status bit
+0x100) between sensor passes"* (it is the phase's own first pass, plus the
+radar-jam callback), *"the full stealth and init-cloak spawn state walk; the
+init-cloaked spawn writer is bounded-negative today"* (there is no walk: the
+unit constructor copies the definition bit into the runtime cloak-wanted bit,
+and it is the only writer), and *"gameplay radar-versus-sonar contact rules
+beyond the presentation circles, including the authored flag name on the
+secondary candidate list"* (the contact rules are `[R-VIS-01 §5]`; the flag's
+authored key is doc 06's tail, not this one). The fifth, *"whether any
+unresolved identity path shares visibility grids across players"*, is replaced
+by the sharper question it turned into.
+
 - Meaning of the legacy attribute-byte encodings beyond the canonical
   four-byte stride · §2.2 · static trace. Marked `TODO(question)`.
 - Reader for plot flag bit 7, and whether any unexported code writes
@@ -4390,20 +5123,24 @@ deleted here only; the findings stand in the body sections that own them.
 - Whether the fog cache's `1 = NW` corner-to-bit assignment holds · §3.4
   [R-RR16-A] · manual retail observation (asymmetric fog GAF probe). Supported
   inference today.
-- Palette mapping of each of the three jammer-circle callback tables; the
-  sequential last-writer-wins arbitration on the presentation surface is
-  established · §3.3 · static trace.
-- Writer that clears the per-unit seen marker (status bit `0x100`) between
-  sensor passes · §3.3 · static trace.
-- The full stealth and init-cloak spawn state walk; the init-cloaked spawn
-  writer is bounded-negative today (one candidate site, not closed) · §3.3 ·
-  static trace.
-- Gameplay radar-versus-sonar contact rules beyond the presentation circles,
-  including the authored flag name on the secondary candidate list · doc 06 ·
-  static trace.
-- Whether any unresolved identity path shares visibility grids across players;
-  the LOS mask itself is established as never OR'd across allied players
-  · §3.2 · static trace.
+- Whether the sensor phase's allied-vision gate reads the option word by
+  mistake: the bit it tests has no writer in the recovered image, while the
+  same bit number in the adjacent rule word is the written defeated/observer
+  flag · §3.4 `[R-VIS-01 §7]` · static trace over the unrecovered regions and
+  the lobby option parser first; failing that, manual retail observation
+  (two-human-ally skirmish probe in which only one ally has radar coverage of
+  a third player's unit). Until it lands, the bounded behavior — no allied
+  sensor sharing on any channel — is what Nanolathe implements.
+- What the 450-tick allied radar/sensor share command carries on the receiving
+  side; nothing in the recovered visibility or sensor path consumes an
+  incoming share · doc 05 "Sensor sharing", doc 08 · static trace of the
+  command's receive handler.
+- Which palette index each minimap sensor circle uses, and where the circles
+  are drawn from · §3.9, §3.10 · static trace. (The premise of the previous
+  bullet here — that the sensor phase's three callback tables rasterize onto a
+  presentation surface with last-writer-wins arbitration — was wrong; those
+  callbacks write unit status bits only, see the §3.4 correction. §3.10 still
+  carries the superseded reading and is owned by that section.)
 - Edge behavior for unexplored in-map void cells, map border clipping, and
   whether the backbuffer retains stale bytes beyond the play rect · §2.2, §4.1
   · manual retail observation (map-edge capture probe).

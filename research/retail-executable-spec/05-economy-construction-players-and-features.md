@@ -2391,34 +2391,49 @@ returns result 0 — the node survives and the state machine restarts.
 
 ### Worker quantum
 
-The normal construction callers derive an integer worker quantum:
+Every ordinary construction caller — the mobile builder's work state, the
+assist state, the building-factory work state, and their VTOL twins — derives
+the same integer worker quantum from the **builder's** definition:
 
-`worker = floor(builder worker time / 30)`
+`worker = (uint16)workertime / 30`
 
-The division is performed before the main remaining-fraction calculation. A
-definition whose worker time is smaller than thirty can therefore produce a
-zero quantum in this path unless a distinct caller supplies another value.
+The division is integer division on the zero-extended 16-bit authored value,
+performed **before** the value is converted to `float` and before the
+remaining-fraction calculation. A definition whose `workertime` is below thirty
+therefore produces a zero quantum in this path, and the shared step returns
+without doing anything (see [R-WORK-01 §1]). Two callers supply a different
+value: the self-repair path derives its own quantum from `healtime`
+([05 "Repair"]), and the under-construction wait path supplies a negative
+quantum ([05 "Resurrection"], reverse arm).
+
+`workertime`, `buildtime`, `maxdamage` and `builddistance` are read from the
+unit FBI as, respectively, an unsigned 16-bit integer, a signed 32-bit integer,
+a signed 32-bit integer, and an unsigned 16-bit integer;
+`buildcostenergy`/`buildcostmetal` are parsed as integers and stored as
+single-precision floats [fmt fbi].
 
 ### Remaining fraction
 
 Let:
 
-- `old` be the target's remaining construction fraction;
-- `worker` be the integer quantum supplied by the caller;
-- `buildTime` be the target definition's build time.
+- `old` be the target's remaining construction fraction (a stored `float32`);
+- `worker` be the quantum supplied by the caller (a `float32` argument);
+- `buildTime` be the **target** definition's `buildtime` (signed 32-bit).
 
 The progress helper computes:
 
-`new = clamp(old - worker / buildTime, 0, 1)`
+`new = clamp(old - worker / (float)buildTime, 0, 1)`
 
 The resource demands admitted for this step are proportional to the decrease:
 
-- `energy demand = total energy cost × (old - new)`;
-- `metal demand = total metal cost × (old - new)`.
+- `energy demand = buildcostenergy × (old - new)`;
+- `metal demand  = buildcostmetal  × (old - new)`.
 
 The helper commits the step only when the two-resource admission service
-accepts both resource buckets. If admission fails, it does not advance the
-remaining fraction.
+accepts both resource buckets [05 "Two-resource admission"]. If admission
+fails, it does not advance the remaining fraction, does not change health, and
+emits no nano segment. [R-WORK-01 §1] gives the evaluation order, the
+narrowing points, and the clamp's exact shape.
 
 ### Health gain and fractional carry
 
@@ -2446,6 +2461,13 @@ cooperation.
 
 ### Completion
 
+The completion test is on the **stored** field, immediately after the step
+writes it: if the target's remaining fraction compares equal to `0.0f`, the
+helper calls the completion transition with the builder and the target. The
+test runs on both arms of the helper and even on the path where admission was
+refused (there the field is unchanged, so it can only fire if the field was
+already zero — which the helper's entry guard has already excluded).
+
 When the remaining fraction reaches zero, the engine finalizes the unit's
 construction state, occupancy, sensors, economic eligibility, order state,
 and relevant script callbacks. Some presentation changes, such as replacing
@@ -2466,6 +2488,163 @@ of lag); and trigger polling that checks completed-unit counts runs only for
 the local player when that player's settlement deadline is due. The
 remaining-fraction transition and health arithmetic are established; the
 completion side-effect ordering beyond those steps is closed as cited.
+
+#### R-WORK-01 §1 — The shared construction step, instruction-exact [R-WORK-01] (2026-08-29)
+
+**Established.** One helper implements every build, assist, factory-product and
+deconstruction step. It takes a builder, a target, and a single-precision
+worker quantum, and returns whether work was committed. All arithmetic below is
+x87; the narrowing points are where the code stores to memory, and they matter.
+
+```
+step(builder, target, worker):                       // worker is float32
+  if (target.remaining == 0.0f) return notCommitted  // exact float compare
+  if (worker >= 0.0f) setWorkedThisTickFlag(target)  // set before the zero test
+  if (worker == 0.0f) return notCommitted
+
+  def       = target.definition
+  new80     = old - worker / (float)def.buildtime    // extended precision;
+                                                     // buildtime is int32 -> x87
+  if (new80 <= 0.0) new80 = 0.0
+  if (new80 >= 1.0) newStored = 1.0f
+  else if (new80 <= 0.0) newStored = 0.0f
+  else                   newStored = (float32)new80  // narrowed here
+
+  delta32   = (float32)(old - newStored)             // narrowed, then re-read
+  energyDemand = (float32)(def.buildcostenergy * delta32)
+  metalDemand  = (float32)(def.buildcostmetal  * delta32)   // metal multiplied
+                                                            // second, stored first
+  gain      = trunc(maxDamageF * old) - trunc(maxDamageF * newStored)
+              // maxDamageF is def.maxdamage widened through a 64-bit integer
+              // load whose high word is zero, so a negative authored maxdamage
+              // reads as a large positive value
+```
+
+Forward arm (`worker >= 0`):
+
+```
+  if (!admitTwoResource(builder.subrecord, energyDemand, metalDemand))
+      return notCommitted                            // nothing else is written
+  h = health + gain
+  if ((unsigned)h >= (unsigned)def.maxdamage) h = def.maxdamage   // UNSIGNED
+  target.health    = (int16)h
+  target.remaining = newStored
+  target.status   |= dirtyBit          // the same presentation-dirty bit both
+                                       // arms raise
+  return committed
+```
+
+The maximum-health cap is an **unsigned** comparison, so a `health + gain` that
+went negative is clamped up to `maxdamage`, not down to zero. `old` is the
+stored `float32` read into an x87 register, so the two products that feed the
+truncations are exact functions of the two stored fractions.
+
+Reverse arm (`worker < 0`) — see [05 "Resurrection"] for its caller:
+
+```
+  refund = -(def.buildcostmetal * delta32)           // positive, delta32 < 0
+  target.metalProduction += refund                   // or ×0.5 / ×0.7 under the
+                                                     // special-player selector
+  h = health + gain                                  // gain is negative here
+  target.health    = (int16)(h >= 1 ? h : 0)         // signed floor at zero,
+                                                     // no maxdamage cap
+  target.remaining = newStored
+  target.status   |= dirtyBit
+  if (newStored >= 1.0f) selfKill(target, target, 30000, kind 9)
+```
+
+Then, on **both** arms and also on the admission-refused path:
+
+```
+  if (target.remaining == 0.0f) completionTransition(builder, target)
+```
+
+**Established — the worker quantum's integer shape.** Every ordinary caller
+computes `(uint16)workertime / 30` with a 32-bit signed integer division and
+then converts the quotient to `float`. It is not a floating-point division
+followed by truncation, and the two orders are not equivalent for the callers
+that reuse the quotient (the resurrection delay divides by it, see
+[R-WORK-01 §7]).
+
+**Established — malformed inputs.** `buildtime = 0` makes the division produce
+an infinity; the retail conversion helper's out-of-range result has a zero low
+word, and the callers here consume only that low word [01 §7], so the derived
+integers become `0` rather than a large magnitude. `buildtime < 0` inverts the
+sign of the step, driving the fraction the wrong way through the same clamp.
+Neither case faults.
+
+**Established — the build-order caption census.** The order-state machinery is
+doc 04 §3's property; the captions are listed here because they are the
+user-visible edges of the arithmetic above. All are raised on the builder.
+
+| Caption | Slot | Producer and predicate |
+|---|---:|---|
+| `Starting construction` | 9 | `MobileBuild` and `BuildingBuild`, once the site test passed and the nanoframe was allocated |
+| `Building complete` | 8 | `MobileBuild`'s terminal phase |
+| `Construction stopped` | 7 | `BuildingBuild` when the order pump raises the terminate/interrupt executor-flag bit; it also decrements the factory queue count |
+| `Construction terminated` | 7 | `HelpBuild` when the order's target handle is null |
+| `Construction terminated by hostile action` | 7 | `VTOL_HelpBuild` for **either** a null target handle **or** the terminate/interrupt executor-flag bit — the air twin merges the two ground terminals under one caption |
+| `Unable to create any more units` | 7 | `MobileBuild`, `BuildingBuild` and `Resurrect` when the unit allocation fails; each then reschedules exactly 300 ticks without advancing |
+| `Waiting for target area to clear` | 7 | `MobileBuild`'s site test failing with a retry count of zero; the retry is 30 ticks |
+| `Target area was blocked` | 7 | the same site test once the retry count exceeds 10; terminal |
+| `I can't reach the construction site` | 7 | `MobileBuild`'s approach phase when the arrival-failure executor-flag bit is set and the range test of [R-WORK-01 §2] still fails |
+
+**Unknown — the executor-flag bits.** Several of the predicates above and in
+[R-WORK-01 §3..§7] test bits of the flag word the order pump passes into an
+executor: a terminate/interrupt bit, a cancel bit, an arrival-failure bit, and
+a high bit that unit reclaim and capture treat as terminal. Their producers and
+names belong to doc 04 §3.1 and are not established here. Decider: static trace
+of the pump's writer set for that word.
+
+#### R-WORK-01 §2 — Build-distance range test and approach radii [R-WORK-01] (2026-08-29)
+
+**Established.** The range test shared by mobile construction, repair and the
+VTOL twins is two-dimensional in X and Z, ignores Y entirely, and is
+footprint-aware on both ends. All three magnitudes go through a double-precision
+two-argument hypotenuse helper and then through the truncating conversion:
+
+```
+distFixed  = trunc( hypot(builder.x - target.x, builder.z - target.z) )  // 16.16
+distWorld  = (int16)(distFixed >> 16)     // the signed high word, not a shift
+                                          // of the full 32-bit value
+builderPad = trunc(  8.0 * hypot(builder.footprintX, builder.footprintZ) )
+targetPad  = trunc( -8.0 * hypot(target.footprintX,  target.footprintZ ) )
+inRange    = (distWorld - builderPad + targetPad) <= (uint16)builddistance
+```
+
+`targetPad` is computed with a **negative** eight, so both pads subtract: the
+test is centre distance minus each end's half-footprint diagonal, in world
+units, against the builder definition's `builddistance`. The factor eight is
+half of the sixteen world units per footprint cell. `builddistance` is compared
+inclusively.
+
+The footprint words are the unit instance's copies of the definition's
+`FootPrintX` / `FootPrintZ`. When the target is a construction **site** rather
+than a live unit — the mobile builder's approach state — the same expression
+substitutes the product definition's footprint words for the target instance's.
+
+Unit reclaim uses a different, squared form of the same idea and adds a
+per-target-definition reach term:
+
+```
+r  = (uint16)builderDef.builddistance + (int16)targetDef.reclaimReach
+in = ((dx*dx) >> 32) + ((dz*dz) >> 32) <= r*r      // each square truncated
+                                                    // separately, 64-bit multiply
+```
+
+**Established, recorded as instructions — the assist approach radius.** The
+assist state asks the mover to close to
+`builddistance + half` where
+
+`half = trunc(16.0 × sqrt(footprintX² + footprintZ + footprintZ)) / 2`
+
+taken from the **target's** definition. The summand really is
+`footprintX * footprintX + footprintZ + footprintZ`: the two additions are
+against the same operand and neither squares it. This is dimensionally odd and
+is reproduced here as the instructions compute it, because it is an approach
+radius rather than an authoritative gate. **Unknown:** whether this is a retail
+defect or an intended asymmetry — decider: manual retail observation of an
+assist approach with a footprint that is much longer in Z than in X.
 
 ### Stockpile production
 
@@ -2531,8 +2710,10 @@ The emission producers, their admission gates, and their cadences:
 | --- | --- | --- | --- | --- |
 | Mobile construction | shared construction work helper accepts the builder's worker quantum | once after accepted work in state 3 | one | unfinished target retries after one tick |
 | Factory product construction | same two-resource work helper accepts the factory worker quantum | once after accepted work in state 3 | one | unfinished product retries after one tick |
-| Build assist | assist state/counter admits the visit; the direct counter gate keeps the counter above 15 | once for the visit | two | assist state continues under its own counter/deadline |
-| Reclaim/capture | target is valid and in range, and the operation is admitted | once per emitted segment | one | operation schedules the next visit two ticks later |
+| Build assist | the same shared construction work helper accepts the assister's worker quantum | once after accepted work | one | unfinished target retries after one tick |
+| Unit reclaim / capture | target is valid and in range, and the operation is admitted | once for the visit | one | operation schedules the next visit two ticks later |
+| Feature reclaim | the order's work counter is still above 15 after the visit's decrement | once for the visit | **two** | operation schedules the next visit two ticks later |
+| Resurrection | the order's wait counter has not reached zero | once for the visit | one | wait state retries after **one** tick |
 | Repair | repair work helper admits the visit | once after accepted work | one | unfinished repair retries after one tick |
 
 An unfinished target retries its work state one tick later, so ordinary
@@ -2576,10 +2757,12 @@ for the product's build work [05 "Factory production lifecycle"].
 
 The direct static emission census recovers the remaining cadence boundaries:
 
-- the build-assist path makes two segment calls when its remaining work
-  counter sits above the recovered `15` gate;
-- reclaim's nano counter advances by two per visit and the operation schedules
-  the next visit on a two-tick cadence; and
+- the two-segment call and the recovered `15` gate belong to **feature
+  reclaim**, not to the build-assist path — see the correction in
+  [R-WORK-01 §8];
+- unit reclaim's order counter advances by two per visit and the operation
+  schedules the next visit on a two-tick cadence, emitting one segment each
+  visit; and
 - capture follows the same one-segment-per-visit pattern, also at two ticks
   per visit.
 
@@ -2703,6 +2886,98 @@ six CRT draws per tick, the four-world-units-per-tick travel and its
 `trunc(distance/4)` lifetime, the colour cycle, and the single-pixel LOS-gated
 draw — is written up at [03 §5.5 "The nanolathe spray"] as `[R-P0-19-P]`.
 
+### R-WORK-01 §8 — Emission producers, direction, geometry, and the corrected assist gate [R-WORK-01] (2026-08-29)
+
+**Correction — which handler owns the two-segment call and the `15` gate.**
+[R-P0-06 §1] and [R-P0-06 §3] attributed both to the build-assist path
+("the build-assist path makes two segment calls when its remaining work counter
+sits above the recovered `15` gate"). Neither belongs there. The assist
+executor's work phase is byte-for-byte the ordinary construction step: one
+worker quantum, one admission, one nano query, **one** segment, retry after one
+tick. The two-call site and the `>15` counter gate are in the **feature
+reclaim** executor's work phase, where the counter in question is the order
+node's countdown of [R-WORK-01 §5]. Feature reclaim is the only two-segment
+producer in the engine.
+
+**Established — the complete producer census.** Each row is one accepted work
+visit. "Direction" says which end of the segment is the source.
+
+| Producer | Segments per visit | Direction | Retry |
+|---|---:|---|---|
+| Mobile build, building/factory build, build assist, and the VTOL twins | 1 | builder nano piece → target box | 1 tick |
+| Repair (`RepairUnit`, `RepairUnitNoMove`, `SelfRepair`, `VTOL_RepairUnit`) | 1 | builder nano piece → target box | 1 tick |
+| Resurrection wait | 1 | builder nano piece → feature box | 1 tick |
+| Unit reclaim | 1 | target box → builder nano piece | 2 ticks |
+| Capture | 1 | target box → builder nano piece | 2 ticks |
+| Feature reclaim (only while the counter exceeds 15) | 2 | feature box → builder nano piece | 2 ticks |
+
+The two directions are two entry points into the **same** 297-byte submission
+routine. They differ only in which argument is expanded into a degenerate box
+and which is taken as the six-word box; both write the same record with the
+same selector byte, and the selector byte is the strip index
+[R-P0-06 §5 addendum]. Capture and reclaim are therefore "reversed" in exactly
+one sense: the source end is the target's footprint box and the destination end
+is the builder's nano piece.
+
+**Established — the six-word box, exactly.** For a unit target the box is the
+target's world position plus the six signed model/footprint extents of its
+definition, in the order
+
+```
+x1 = target.x + extent[0]      x2 = target.x + extent[3]
+y1 = target.y + extent[1]      y2 = target.y + extent[4]
+z1 = target.z + extent[2]      z2 = target.z + extent[5]
+```
+
+Most of the executors — `SelfRepair`, `BuildingBuild`'s work phase, both
+ground `RepairUnit` variants, `ReclaimUnit` and `Capture` — build that box but
+write `y1 = target.y` with the **first Y extent omitted**, while still using
+extent[4] for `y2`. `MobileBuild` and `HelpBuild` add extent[1] as written
+above. The two forms are not reconciled anywhere in the image; because the box
+is presentation geometry, the divergence shows only as a slightly different
+spray origin plane on the majority form. **Unknown:** which form the four VTOL
+work executors use — decider: static trace of their work phases (the two
+ground forms are established).
+
+For a feature target — feature reclaim and resurrection — the box is built from
+the cell instead:
+
+```
+x1 = cellX << 20                      x2 = x1 + featureDef.footprintX << 20
+y1 = terrainHeight(cell) << 16        y2 = y1 + featureDef.height << 16
+z1 = cellZ << 20                      z2 = z1 + featureDef.footprintZ << 20
+```
+
+The `<< 20` is the sixteen world units per cell folded into the 16.16
+representation; the height byte is already in world units.
+
+**Established — nothing in the emission path is authoritative.** The nano query
+and the segment submission happen after the authoritative transition in every
+producer, the submission is a silent no-op when the record pool is exhausted,
+and neither draws from the simulation stream. A rejected work step emits
+nothing and must not call `QueryNanoPiece` speculatively [R-P0-06 §6].
+
+**Established — the work-order randomness census.** Across every handler in
+this document:
+
+| Handler | Simulation draws | Where |
+|---|---:|---|
+| Build (all forms), assist, deconstruction | 0 | — |
+| Repair helper and all four executors | 0 | — |
+| `RepairUnit` approach | 1 | `30 + boundedDraw(30)` out-of-range retry |
+| `RepairPatrol` | 1 | choosing a candidate from the gathered list |
+| `healtime` self-repair | 0 | — |
+| Unit reclaim | 0 | — |
+| Feature reclaim | 1 | phase 1 walk-target height |
+| Capture | 0 | — |
+| Resurrection | 1 | phase 1 walk-target height |
+
+The bounded-draw helper returns zero **without advancing the seed** when its
+bound is below two, so a feature of height 0 or 1 and a single-candidate patrol
+list cost no draw at all [01 §8]. The nano record's own per-tick particle
+jitter uses the CRT stream and never the simulation stream
+[R-P0-06 §5 addendum].
+
 ## Repair
 
 **Established fact — repair helper terms.** The helper forms two truncated
@@ -2720,7 +2995,7 @@ least one, this yields one health point and one energy unit per accepted repair
 call. It is not an unconditional minimum-one rule for arbitrary inputs.
 
 **Established fact — repair admission is energy-only.** The normal handler
-passes `floor(builder worker time / 30)` as the worker and passes the energy
+passes `(uint16)workertime / 30` as the worker and passes the energy
 resource term to the one-resource helper against the builder's energy subrecord.
 That helper always adds the amount to energy requested and adds it to energy
 accepted only when energy carry is non-positive; it does not touch the metal
@@ -2732,11 +3007,122 @@ accepted repair visit, and an unfinished repair target retries the work state
 one tick later, so the presentation follows accepted repair work rather than a
 free-running timer [R-P0-06 §3].
 
-A variant reverses the context and target arguments; its existence is
-confirmed in the earlier handler corpus (that note was removed during a
-corpus reorganization and needs re-derivation via IDA backfill of the early
-handler region, shared with the orders lane); its user-interface identity and
-the behavior for zero or negative authored values remain open.
+#### R-WORK-01 §3 — Repair, exactly: the helper, the executors, and the captions [R-WORK-01] (2026-08-29)
+
+**Established — the helper, instruction-exact.** The step is one small helper
+taking a builder, a target, and a single-precision worker quantum:
+
+```
+repairStep(builder, target, worker):
+  def = target.definition
+  if ((int32)def.maxdamage <= (int32)(int16)target.health) return notCommitted
+        // signed compare; a target already at or above full health is refused
+
+  healTerm     = trunc( 1 + (def.maxdamage * worker  - 1) / def.buildtime )
+  resourceTerm = trunc( 1 + (def.buildcostenergy * worker - 1) / def.buildtime )
+        // both chains evaluate identically: widen the numerator source and
+        // the build time to the wide floating stack, multiply by worker,
+        // subtract a stored 1.0f, divide by the build time, subtract a
+        // stored -1.0f, then convert with truncation toward zero
+
+  if (healTerm     >= 1) healTerm     = 1
+  if (resourceTerm >= 1) resourceTerm = 1
+        // "clamp to exactly 1 whenever positive" - the compare is >= 1 on the
+        // already-integerised term, so 0 and negative values survive unchanged
+
+  if (!admitOneResourceEnergy(builder.subrecord, (float)resourceTerm))
+      return notCommitted
+  damagePacket(builder, target, healTerm, kind 10, flag 0)
+  return committed
+```
+
+Only `eax` of the conversion is consumed, so `buildtime = 0` yields terms of
+`0` rather than a large magnitude [01 §7]: the helper then requests zero
+energy, is admitted whenever energy carry is non-positive, and applies a
+zero-magnitude kind-10 packet. That is the whole of the malformed-input
+behavior the doc-05 tail previously listed as open for this family.
+
+**Established — the four repair executors and which arguments they pass.**
+
+| Order (operation byte) | Builder passed | Target passed | Worker |
+|---|---|---|---|
+| `RepairUnit` 35, `RepairUnitNoMove` 36, `VTOL_RepairUnit` 61 | the unit running the order | the order's target | that unit's `workertime`/30 |
+| `SelfRepair` 40 | the order's **target** | the unit running the order | the **order target's** `workertime`/30 |
+| the `healtime` tick path | the unit itself | the unit itself | `(healtime × 8) / 30` |
+
+`SelfRepair` is the **reversed-argument variant** the earlier text recorded as
+an open identity ("a variant reverses the context and target arguments; its
+user-interface identity … remain open"). It is closed: the order lives on the
+*patient*, the repairer is the handle stored in the order node, and the helper
+is therefore called with the two arguments swapped relative to `RepairUnit`.
+The repairer's energy is billed, the patient is healed, and the patient's own
+cloak-payment deadline is pushed to the current tick plus 150 [R-ECO-01 §9].
+Its phase 0 admits the order only when the **repairer's** definition carries the
+build/assist capability bit and the repairer's own remaining fraction is zero
+(a nanoframe cannot repair) and the patient carries an instance permission
+byte's low bit; otherwise it returns without work. Its phase 1 first advances
+out of the state when `(unsigned)maxdamage <= (unsigned)health`.
+
+`VTOL_GetRepaired` 50 is *not* a repair executor: it performs no work and never
+calls the helper. Its phase 0 returns "advance" when
+`(unsigned)maxdamage <= (unsigned)health` and otherwise reschedules 30 ticks;
+its phase 1 emits the caption. The healing comes from the pad's own
+`RepairUnit`-family order. (Confirmed independently by the flight lane's
+`R-AIR-01`; the only refinement is that the unsigned test lives in phase 0 and
+the caption in phase 1.)
+
+**Established — `healtime`, the only consumer.** The per-tick unit pass calls
+the same repair helper on a unit against itself when all of
+
+* the definition's `healtime` is non-zero;
+* `(unsigned)health < (unsigned)maxdamage`;
+* `currentTick mod 8 == 0` (tested as `tick & 7`);
+* the owner is an ordinary or computer player,
+
+hold. The worker it passes is `((uint16)healtime × 8) / 30` — the eight is the
+cadence, so `healtime` is expressed on the same per-30-tick scale as
+`workertime`. Because both terms are clamped to exactly one whenever positive,
+the observable effect is **one health point and one energy unit per eight
+ticks** for any `healtime` large enough to make the quotient non-zero
+(`healtime >= 4` for the eight-tick scaling); a `healtime` of 1 to 3 produces a
+zero quantum, hence zero terms, hence no healing and no charge. The unit pays
+its own energy through the ordinary one-resource admission, so a stalled player
+stops self-healing. This is the whole of `healtime`'s behavior; it appears
+nowhere else in the image.
+
+**Established — range, leash and interrupt gates in `RepairUnit`.** Before the
+phase switch the executor refuses the order outright, with
+`Repairs unsuccessful.` on cue slot 7, when the order's target handle is null,
+or when the target's low two status bits — the mover movement-mode mirror
+[04 §2] — are not exactly `1`. When the order carries a leash radius it also
+returns terminally once the truncated hypotenuse from the leash origin reaches
+that radius. Phase 1 is the range test of [R-WORK-01 §2]; out of range, it
+re-points the mover at the target and waits `30 + boundedDraw(30)` ticks — the
+one simulation draw in this executor. Phase 3 is the work visit: if the target
+is at or above full health (**unsigned** compare) it advances; if either of the
+target's movement-mode bits is set it re-approaches and waits 15 ticks;
+otherwise it pushes the builder's cloak deadline to `tick + 150`, calls the
+helper, and on acceptance queries the nano piece and submits one segment before
+rescheduling one tick later. `RepairUnitNoMove` 36 is the same work visit with
+no approach phases and with only the null-target entry guard.
+
+**Established — the caption census.** Every status cue this family raises, with
+its producing predicate:
+
+| Caption | Slot | Producer and predicate |
+|---|---:|---|
+| `Unit repaired` | 10 | Four sites, all terminal phases: `SelfRepair` phase 2, `RepairUnit` phase 4, `VTOL_RepairUnit`'s terminal phase, and `VTOL_GetRepaired` phase 1. Each is entered from a work phase that returned "advance" because the target reached `health >= maxdamage`. |
+| `Repair aborted.` | 7 | Two sites, both the **null-target guard** of a patient-side order: `SelfRepair` and `VTOL_GetRepaired`. The repairer handle stored in the order node went dead while the patient was waiting. |
+| `Repairs unsuccessful.` | 7 | The two builder-side ground executors' entry guard. `RepairUnit` raises it for a null target handle **or** a target whose low two status bits are not `1`; `RepairUnitNoMove` raises it for a null handle only. |
+| `Repair mission failed` | 7 | `VTOL_RepairUnit` phase 0 only, after the definition's air-work capability bit passes but the air repair-eligibility predicate on the target fails. It is the air twin of `Repairs unsuccessful.`, not of `Repair aborted.`. |
+
+**Established — repair's randomness.** The helper itself, every executor's
+work visit, and the `healtime` path draw nothing. Two draws exist in the
+family, both outside the work visit: `RepairUnit` phase 1's out-of-range
+`30 + boundedDraw(30)` retry, and `RepairPatrol`'s single draw to choose a
+candidate from the damaged-unit list it gathers within its sight distance. A
+bounded draw whose bound is below two returns zero **without advancing the
+seed**, so a single-candidate list costs no draw [01 §8].
 
 ## Unit reclaim
 
@@ -2803,28 +3189,195 @@ receiver rejects packets against already dead-latched targets, so the first
 lethal event is authoritative. Repair bills admitted energy even when the
 heal is discarded, and the victim's slot relation decides finalization order.
 
-Whether every target class uses the same pulse basis remains open. Feature
-reclaim, described next, must not be used as a substitute.
+#### R-WORK-01 §4 — Unit reclaim, exactly [R-WORK-01] (2026-08-29)
+
+**Established — the eligibility predicate, and a correction.** The gate the
+executor consults at start and re-checks on every work visit is:
+
+```
+eligible(builder, target) =
+      builder.definition.canreclamate                 // capability bit
+   && (target.status & 3) != 2                        // mover movement-mode
+                                                      // mirror [04 §2]
+   && !target.definition.cancapture                   // NOT a separate
+                                                      // "capture-immunity" bit
+```
+
+The earlier text said the handler requires "a target definition without the
+capture-immunity bit". That is the same bit the **builder** side reads for its
+own capture capability: the definition key is `cancapture`, and the target
+predicate simply demands it be clear. A unit authored `cancapture=1` is
+therefore un-reclaimable *and* un-capturable ([R-WORK-01 §6] shows the capture
+executor rejecting the same bit), which in stock content is exactly the
+commanders. The three keys `canreclamate`, `canresurrect` and `cancapture`
+occupy three consecutive bits of one definition capability word; nothing else
+is a "capture-immunity" flag.
+
+**Established — phase structure and the two counters.** The order node carries
+two accumulators. Phase 1 stores the damage pulse in the first and zeroes the
+second; the second is the visit counter.
+
+```
+phase 0  start   : eligible? -> caption "Reclaiming", latch, advance
+                   else the caption pair below, terminate
+phase 1  arm     : pulse := reclaimPulse(builder, target, 15)
+                   counter := 0 ; reschedule 15 ticks
+phase 2  approach: face and move to the target
+phase 3  move    : shared approach step
+phase 4  arrive  : cue slot 11 with no text, advance
+phase 5  work    : the visit below
+```
+
+**Established — the work visit, in order.**
+
+```
+dx = builder.x - target.x ; dz = builder.z - target.z          // 16.16
+r  = (uint16)builder.definition.builddistance
+   + (int16)target.definition.reclaimReach
+if ( ((dx*dx) >> 32) + ((dz*dz) >> 32) > r*r  ||  !eligible ) {
+    reschedule 15 ticks ; re-approach ; return
+}
+if (counter > 14) { damagePacket(builder, target, pulse, kind 5, 0)
+                    counter = 0 }
+builder.cloakDeadline = tick + 900                            // [R-ECO-01 §9]
+source = queryNanoPiece(the builder handle stored in the order node)
+submitSegment(targetFootprintBox, source, selector 6)         // reversed
+reschedule 2 ticks
+counter += 2
+```
+
+The pulse test precedes the increment, so from a zeroed counter the sequence of
+pre-check values is 2, 4, … 16 and the pulse fires on the visit that sees 16;
+after the reset the counter is immediately raised to 2 again, so the steady
+period is **eight qualifying visits = sixteen ticks**. The nano cadence is
+one segment every two ticks regardless.
+
+**Established — the pulse, instruction-exact.**
+
+```
+pulse(builder, target, k):                       // k is 15 at the only call
+  costM = max(target.definition.buildcostmetal, 10.0f)
+  n     = (int32)( (uint16)builder.definition.workertime
+                 * ((int32)((uint16)builder.kills + 5) / 5)
+                 * (int32)target.definition.maxdamage
+                 * k )                            // 32-bit signed product
+  v     = trunc( (double)n / (costM * 300.0f) )   // n widened through a 64-bit
+                                                  // integer load with a zero
+                                                  // high word
+  return (v <= 1) ? 1 : v
+```
+
+The kill divisor is a signed integer division by five. The 32-bit product can
+overflow silently for large `workertime × maxdamage`; because it is then
+re-read as an *unsigned* 32-bit quantity, an overflowed product becomes a very
+large positive pulse rather than a negative one.
+
+**Established — the caption census.** `That unit cannot be reclaimed` and
+`Reclamation failed` are raised together, in that order, on cue slot 7, when
+the builder has the capability but `eligible` fails on the target; the executor
+then terminates. `Reclamation failed` alone is raised when the builder's own
+`canreclamate` bit is clear. The air twin `VTOL_ReclaimUnit` has the same two
+predicates but raises only one caption each: `Reclamation failed` for the
+missing capability, `That unit cannot be reclaimed` for the failed target
+predicate. That accounts for all three `Reclamation failed` sites and both
+`That unit cannot be reclaimed` sites in the image.
+
+**Established — what a partially reclaimed unit is left as.** Nothing is
+restored and nothing is paid. The pulses are ordinary kind-5 damage packets, so
+an abandoned reclaim leaves the target simply damaged, indistinguishable from
+weapon damage and repairable by any repair order; the reclaimer receives no
+metal at all, because the whole refund is a death-side event on the lethal
+pulse and is computed from `(1 - remaining fraction) × buildcostmetal` — the
+target's full build value — rather than from the damage already dealt. The
+order node's two accumulators are freed with the node, so re-issuing the order
+re-derives the pulse and restarts the visit counter from zero.
+
+**Established — no randomness.** Neither the pulse computation, the eligibility
+predicate, nor the work visit draws from either random stream.
 
 ## Feature reclaim
 
-Feature reclaim uses a progress counter associated with the feature and the
-reclaimer's work contribution. The feature definition's damage value acts as
-the completion threshold. When progress reaches the threshold, the completion
-helper:
+Feature reclaim is an order-driven countdown on the order node, not a share of
+the reclaimer's work rate. Its payout is a one-time completion event; the
+completion helper does not divide the feature pools into a per-tick drip.
 
-1. verifies that the feature is reclaimable and not protected by its
-   indestructible state;
-2. adds the full feature energy pool to the builder's energy-production bucket;
-3. adds the full feature metal pool to the builder's metal-production bucket;
-4. applies the special-player scaling path where required;
+#### R-WORK-01 §5 — Feature reclaim, exactly, and a correction [R-WORK-01] (2026-08-29)
+
+**Correction.** The previous text read: "Feature reclaim uses a progress counter
+associated with the feature and the reclaimer's work contribution. The feature
+definition's damage value acts as the completion threshold." Both halves are
+wrong. The counter lives on the **order node**, not on the feature; it is
+seeded from the feature definition's **energy and metal pools**, not from its
+damage; and it is decremented by a fixed two per visit, so the reclaimer's
+`workertime` has **no effect at all** on how long a feature takes. The payout
+does re-check a protection bit, which is what the damage-threshold reading was
+probably reaching for.
+
+**Established — the executor.** The order's stored position resolves to a
+feature definition index; `0xffff` means "no feature here" and terminates the
+order with `Reclamation failed` on cue slot 7. The definition must carry its
+reclaimable flag bit, or the executor terminates silently.
+
+```
+phase 0  start   : builder alive and builder.definition.canreclamate
+                   -> record the target position, advance
+phase 1  arm     : work := trunc( 15.0f + (featureEnergy + featureMetal) * 0.5f )
+                   walk target = the feature cell, with
+                   y = terrainHeight(cell) + boundedDraw(featureHeight)
+                   ; one simulation draw
+phase 2  move    : shared approach step
+phase 3  arrive  : cue slot 11 with no text, FALLS THROUGH into phase 4
+phase 4  work    : reschedule 2 ticks
+                   work -= 2
+                   if (work <= 0) advance to phase 5
+                   builder.cloakDeadline = tick + 300
+                   if (work > 15) {
+                       source = queryNanoPiece(builder)
+                       submitSegment(featureBox, source, selector 6)   // twice
+                       submitSegment(featureBox, source, selector 6)
+                   }
+phase 5  payout  : the completion helper below ; terminate
+```
+
+The `15.0f + (E + M) × 0.5f` form is what the instructions compute: the sum is
+multiplied by a stored `-0.5f` and then subtracted **from** `15.0f`. So the work
+counter is `trunc(15 + (energy + metal) / 2)`, the visit cadence is two ticks,
+and the number of visits is `ceil(work / 2)`. A feature with zero pools still
+costs the fixed fifteen, i.e. eight visits and sixteen ticks.
+
+The `> 15` guard is why the last eight visits of every feature reclaim emit no
+nano at all, and it is the only two-segment producer in the engine. Phase 3
+deliberately falls through into phase 4, so the visit that raises the arrival
+cue also performs the first decrement.
+
+**Established — the payout.** The completion helper resolves the world position
+back to a terrain cell using the rounding fixup `v + ((v >> 31) & 0xfffff)`
+before the shift, follows the multi-cell anchor link when the cell stores the
+"linked" sentinel, and then:
+
+1. refuses outright — returning without paying — when the terrain cell's
+   protection bit **and** the feature definition's protection bit are both set;
+2. adds the feature definition's whole `energy` value to the builder's
+   **energy production** accumulator;
+3. adds the feature definition's whole `metal` value to the builder's
+   **metal production** accumulator;
+4. applies the special-player scaling to each addition separately — selector 0
+   halves, selector 1 takes seven tenths — with the same pairing as every other
+   member of that family [R-ECO-01 §3];
 5. replaces the feature with its reclaimed successor, or removes it when no
    successor exists;
 6. emits the deterministic multiplayer state command when required;
 7. updates the affected footprint and derived world state.
 
-The payout is a one-time completion event. The static completion helper does
-not divide the feature pools into a per-tick drip.
+Neither addition passes through an admission helper: the credit is unconditional
+and lands in the production accumulators the settlement pass reads
+[R-ECO-01 §2].
+
+**Established — randomness.** One bounded simulation draw, in phase 1 only,
+whose bound is the feature definition's height byte; it contributes only the
+vertical component of the walk target. A height byte below two returns zero
+without advancing the seed [01 §8]. The work visits and the payout draw
+nothing.
 
 ## Capture
 
@@ -2880,6 +3433,102 @@ per-definition limit or pool failure inside the transfer is silent but the
 node still frees. The multi-captor rule is first-wins as described; a later
 captor's stale target handle can alias a reused slot (documented stale-
 handle risk).
+
+#### R-WORK-01 §6 — Capture, exactly [R-WORK-01] (2026-08-29)
+
+**Established — the admission predicates, in evaluation order.** Phase 0 tests,
+and stops at the first failure:
+
+1. the order's target handle is non-null — otherwise `Capture failed` on cue
+   slot 7 (the same terminal the executor-flag interrupts use);
+2. the builder is still linked — otherwise a silent terminal;
+3. the **builder's** definition carries `cancapture` — otherwise a silent
+   terminal;
+4. the **target's** definition does **not** carry `cancapture` — otherwise
+   `That unit cannot be captured` on slot 7;
+5. the target's remaining construction fraction compares equal to `0.0f` —
+   otherwise `That unit is a cloud of vapor and cannot be captured` on slot 7.
+
+Test 5 answers what the second capture reject means: **"a cloud of vapor" is a
+target that is still under construction** — a nanoframe or a partly built unit.
+It is not a mid-death or mid-resurrection state. Test 4 uses the same
+definition bit as test 3, so any unit that can capture cannot be captured; the
+same bit also blocks reclaim [R-WORK-01 §4].
+
+**Established — the capture timer, instruction-exact, with a correction to the
+clamp.**
+
+```
+base_f = 0.015 * target.definition.buildcostenergy
+       + 0.2142857142857 * target.definition.buildcostmetal
+       + 150.0                                  // all three float32 constants
+base   = trunc(base_f)
+if (base >= 1800) base = 1800                   // UPPER clamp only, signed
+
+healthScaled = (uint32)( ((int32)(int16)target.health
+                        + (int32)target.definition.maxdamage) * base )
+             / (uint32)( 2 * target.definition.maxdamage )
+               // the product is a signed 32-bit multiply; the division is
+               // UNSIGNED
+
+killsFactor = (int32)(uint16)target.kills / 5    // signed, truncating
+timer       = ((killsFactor + 10) * healthScaled * 10) / 100   // signed
+```
+
+The previous text wrote the first step as `clamp(trunc(150 + …), 0, 1800)`.
+There is no lower clamp: the comparison is a single signed test against 1800
+and nothing bounds the value below. It cannot go negative for non-negative
+authored costs, but a negative authored `buildcostenergy`/`buildcostmetal`
+would drive `base` negative, and the unsigned division that follows would then
+produce an enormous `healthScaled` rather than a small one. There is no cap on
+the experience factor.
+
+At full health the middle step is the identity (`(maxdamage + maxdamage) ×
+base / (2 × maxdamage) = base`), so a fresh, un-veteran target's timer is
+`base × 10 / 100`, i.e. one tenth of `base`; a damaged target captures faster
+in proportion to `(health + maxdamage) / (2 × maxdamage)`.
+
+**Established — the progress phase, in order.**
+
+```
+if (target still linked && (target.status & 0xc) != 0) {
+      re-approach ; reschedule 30 ticks ; return             // the target moved
+}
+if (progress >= timer) advance to the transfer phase
+source = queryNanoPiece(the builder handle stored in the order node)
+submitSegment(targetFootprintBox, source, selector 6)         // reversed, like
+                                                              // reclaim
+builder.cloakDeadline = tick + 900                            // [R-ECO-01 §9]
+progress += 2
+reschedule 2 ticks
+```
+
+The completion test is `progress >= timer`, evaluated **before** the increment,
+so the number of qualifying visits is `ceil(timer / 2)` and the elapsed time is
+twice that in ticks. Capture makes no admission call and debits nothing; the
+progress counter never decays.
+
+**Established — the transfer phase.** It calls the central ownership-transfer
+path with the target and the **builder's player record**, then raises cue slot
+16 with no caption text on the builder, and terminates the order.
+
+**Established — no randomness.** No phase of the capture executor draws from
+either stream.
+
+**Correction — the failure-message mapping.** The "Closed residuals" paragraph
+above reads "capture immunity → `That unit cannot be captured`; a non-idle
+victim → `That unit is a cloud of vapor and cannot be captured`; a failed
+transfer → `Capture failed` with the node freed". Two thirds of that is wrong.
+The second reject is the under-construction test of predicate 5, not an
+idleness test — a moving, firing or otherwise busy finished unit is captured
+normally. And `Capture failed` is not a transfer-failure message: it is the
+executor's shared terminal, raised before the phase switch when the order's
+target handle is null or when the order pump raises the terminate/interrupt
+executor-flag bits, and again on the approach phase's arrival-failure branch.
+The transfer phase itself has no failure path: it calls the transfer and then
+unconditionally raises cue slot 16 with no text. What remains true is that
+capture immunity is the first reject and that the node is freed in every
+terminal.
 
 ## Resurrection
 
@@ -2939,6 +3588,93 @@ per-definition exhaustion prints "Unable to create any more units" with an
 exact 300-tick retry; the feature is removed before the new unit is marked
 alive (remaining zero, health one); one simulation draw is consumed for
 placement jitter.
+
+#### R-WORK-01 §7 — Resurrection, exactly [R-WORK-01] (2026-08-29)
+
+**Established — the phases.** The order's stored position resolves to a feature
+definition index before the phase switch (for phases 0 through 5); `0xffff`
+terminates with `Resurrection failed` on cue slot 7, and a definition without
+its reclaimable flag bit terminates silently.
+
+```
+phase 0  start   : builder linked and builder.definition.canresurrect
+                   -> record the target position, advance ; else terminate
+phase 1  approach: walk target = the feature cell, with
+                   y = terrainHeight(cell) + boundedDraw(featureHeight)
+                   ; one simulation draw, the executor's only one
+phase 2  move    : shared approach step
+phase 3  resolve : copy the feature record's 64-byte name, truncate it at the
+                   first '_' (0x5f), look the result up in the unit catalogue.
+                   Index 0 -> `Ressurection failed` on slot 7, terminate.
+                   Otherwise store the index and compute the delay below;
+                   raise cue slot 11 with no text.
+phase 4  wait    : v = delay ; delay = v - 1
+                   if (v == 0) advance to phase 5
+                   source = queryNanoPiece(builder)
+                   submitSegment(source, featureBox, selector 6)   // FORWARD
+                   builder.cloakDeadline = tick + 300
+                   reschedule 1 tick
+phase 5  create  : allocate, transplant, remove the feature, advance
+phase 6  finish  : `Resurrection complete` on cue slot 8, then classify and
+                   build the successor order node
+```
+
+Note the cadence: unlike every other work order in this document, resurrection
+reschedules **one** tick, not two, and its nano segment runs in the ordinary
+construction direction (builder → feature), not the reversed reclaim direction.
+It emits one segment per waiting tick.
+
+**Established — the delay.**
+
+```
+q     = (uint16)builder.definition.workertime / 30       // integer division
+delay = trunc( (double)resurrected.definition.buildtime * 0.3 / (float)q )
+```
+
+The `0.3` is a stored double and belongs to this state alone; it is not a
+general construction-speed, repair, reclaim or capture multiplier. The delay is
+decremented once per subsequent visit, i.e. once per tick.
+
+**Established — the sub-thirty `workertime` edge.** A builder whose
+`workertime` is below thirty makes `q` zero, the division produces an infinity,
+and the retail conversion helper's out-of-range result has a zero low word,
+which is the only word the caller consumes [01 §7]. The delay is therefore
+**zero**, phase 4's `v == 0` test fires on the first visit, and the
+resurrection completes immediately with no nano emitted at all. A negative
+authored `buildtime` gives a negative delay, which never equals zero, so the
+wait state repeats forever, emitting one segment per tick.
+
+**Established — the transplant.** Phase 5 allocates a unit of the resolved
+definition at the feature's recorded position and owner byte. If allocation
+fails — slot pool or per-definition limit — it prints
+`Unable to create any more units` on slot 7 and reschedules exactly 300 ticks
+without advancing. On success it re-reads the terrain cell, refuses when the
+cell's feature id is at or above the reserved-sentinel range, copies two fields
+of the live feature record (a position word and a facing word) into the new
+unit, removes the feature, emits the deterministic multiplayer state command
+when the session requires one, and then sets the new unit's remaining fraction
+to `0` and its health to `1`. The unit is therefore *finished* but at one hit
+point; nothing repairs it as part of the order.
+
+**Established — the caption ordering.** `Resurrection complete` is raised in
+phase 6, i.e. **after** phase 5 has already allocated the replacement unit and
+removed the feature, and **before** phase 6 allocates the successor order node.
+The string-triage note that it is "emitted before the replacement object is
+allocated" refers to that successor order node, not to the unit.
+
+**Established — the two spellings.** The image contains two distinct failure
+strings for this order: `Resurrection failed` for "there is no feature at the
+recorded position", and `Ressurection failed` — with retail's doubled `s` — for
+"the corpse name did not resolve to a unit definition". Both must be reproduced
+verbatim, including the misspelling.
+
+**Established — cost and randomness.** Resurrection carries no energy or metal
+debit or refund; there is no admission call anywhere in the executor. Exactly
+one bounded simulation draw is consumed, in phase 1, for the vertical component
+of the walk target; it is an approach-point draw, not a placement draw, and it
+is skipped without advancing the seed when the feature's height byte is below
+two [01 §8]. Earlier text describing it as "placement jitter" placed it in the
+wrong phase.
 
 ## Feature catalog and placement
 
@@ -3382,11 +4118,29 @@ signed zero and NaN; all four are stated in [R-ECO-01 §1] and [R-ECO-01 §5],
 and only the untested exponent-range edge survives. One bullet is added: the
 cloak gate's second status bit has no writer anywhere in the recovered image.
 
-- Identity and malformed-input behavior of the reversed-argument repair
-  variant, and the unrecovered early construction/order-handler boundary that
-  hides it · "Repair", doc 04 §3.1 · static trace (secondary-disassembler
-  backfill of the early handler region). The ordinary repair energy term and
-  energy-only admission are established.
+**Correction (2026-08-29, RWU-05-3).** The reversed-argument repair bullet is
+removed: the variant is the `SelfRepair` order and its malformed-input behavior
+is stated in [R-WORK-01 §3], so nothing about it is open. Four bullets replace
+it, all raised by the work-handler pass and none of them a restatement of a
+closed finding.
+
+- Whether the build-assist approach radius's summand
+  `footprintX × footprintX + footprintZ + footprintZ` is a retail defect or an
+  intended asymmetry; the instructions are established and reproduced, only the
+  intent is open · [R-WORK-01 §2] · manual retail observation of an assist
+  approach against a footprint much longer in Z than in X.
+- Which of the two nano-box Y forms the four VTOL work executors use — the
+  majority form omits the first Y extent, `MobileBuild` and `HelpBuild` add it
+  · [R-WORK-01 §8] · static trace of the VTOL work phases.
+- Producers and names of the order-pump executor-flag bits that the work
+  handlers test as terminate/interrupt, cancel, arrival-failure and the high
+  bit unit reclaim and capture treat as terminal · doc 04 §3.1 · static trace
+  of that word's writer set. Every handler-side consequence is established in
+  [R-WORK-01 §1..§7].
+- Meaning of the terrain-cell protection bit that feature reclaim's payout
+  tests together with the feature definition's own protection bit; only the
+  conjunction's effect (refuse and pay nothing) is established
+  · [R-WORK-01 §5] · static trace of that cell bit's writer set.
 - Response when a malformed factory product node bypasses queue preflight and
   reaches state 2 — cancellation, retry, or termination · "Factory queue" ·
   static trace. The current admission boundary records a bounded diagnostic

@@ -696,7 +696,7 @@ The executable reads these AI-related definition and mission values:
 - per-unit `ai_limit` text in a separate definition field — no reader exists, and [R-AI-01 §12] now names the mechanism: both per-definition profile passes, the weight pass and the limit pass, read the `ai_weight` field, so `ai_limit` is parsed and abandoned. It must not be wired to limits; the functioning `limit` token comes from the profile file, not this field;
 - mission `aiprofile` string via a mission resource slot that loads `ai\<profile>.txt` with fallback to `ai\default.txt`;
 - mission placement fields for AI ignore, AI priority-target, build priority, and initial group — parsed at mission load but no transfer or reader is found in the creation path, so they are inert for planning;
-- computer difficulty (`0` easy, `1` medium, `2` hard) from the registry and setup state; it gates profile `plan` directives and scales every resource transfer whose **destination** player is computer-controlled by 0.5, 0.7 or 1.0 ([R-AI-01 §12]);
+- computer difficulty (`0` easy, `1` medium, `2` hard) from the registry and setup state; it gates profile `plan` directives and scales every positive production contribution whose **destination** player is computer-controlled by 0.5, 0.7 or 1.0 — the exact evaluation points and float widths are doc 05's ([R-ECO-01 §3]; the earlier [R-AI-01 §12] wording is superseded by that closure);
 - player control byte that gates manager execution.
 
 The strategic planner is positively rooted and distinct from the scenario unit loader. The earlier analysis that mistook the unit reconstructor for AI is retracted.
