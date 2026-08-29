@@ -399,6 +399,11 @@ Authoritative values from the retail `scripts/EXPTYPE.H`:
 | 8192 | `BITMAPNUKE` | |
 | 16128 | `BITMAPMASK` | "Mask of the possible bitmap bits" |
 
+The engine tests only bits 0–5 and 8–13 of the flags word; bits 6, 7 and
+14 and above are never examined, and the bits map to engine behavior as
+[04 §4.5] `[R-COB-04 §1]` describes (no weapon definition or TDF key is
+involved).
+
 Flags are OR-ed. Retail `Killed()` bodies overwhelmingly use
 `BITMAPONLY | BITMAPn` for light damage and
 `EXPLODE_ON_HIT | FALL | SMOKE | FIRE | BITMAPn` (mask `0x?1E`) for heavy

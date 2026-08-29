@@ -309,7 +309,12 @@ removes its shading entirely. See
 ## Unknowns and caveats
 
 - Default values when a key is absent are engine-internal and undocumented;
-  do not assume 0 for everything (e.g. `ShootMe` behaves as 1 by default).
+  do not assume 0 for everything. **Correction (2026-08-29, RWU-04-7):** the
+  example this bullet used to carry, "`ShootMe` behaves as 1 by default", was
+  wrong — the unit-definition parser reads `ShootMe` with a default of **0**,
+  and a definition that omits it is never picked by a human player's
+  autonomous target search ([04 R-SPEC-01 §5]). Stock definitions author
+  `ShootMe=1` explicitly, which is why the absence was never observed.
 - **Closed for the movement keys (2026-08-28, RWU-04-1).** The earlier text
   read "Units/scales for `MaxVelocity`, `Acceleration`, `BuildTime`,
   `WorkerTime` are relative engine ticks; exact per-tick math is still being

@@ -62,7 +62,7 @@ version `0x00010100`, 6 entries, unknown 0, first entry @ 0x5D0.
 | Offset | Size | Type | Name | Description |
 | ---: | ---: | --- | --- | --- |
 | +0 | 2 | u16 | frame_count | May be `0` (placeholder entries exist in retail data) |
-| +2 | 2 | u16 | unknown1 | `1` in every entry of every retail GAF (11,881 entries surveyed) |
+| +2 | 2 | u16 | unknown1 | `1` in every entry of every retail GAF (11,881 entries surveyed). **The executable reads the low byte of this word as the entry's loop flag (established 2026-08-29, `[06 R-WFX-01 §1]`):** a playback cursor copies it at initialization and, on passing the last frame, wraps to frame 0 when it is nonzero or marks the sequence finished when it is zero. Retail data therefore makes every sequence loop by default; the engine clears the byte in memory for one-shot sequences (weapon explosion art, the bound `explosion`/`explode2..5`/`nuke1`/`alfboom1`/`h2oboom2`/`lavasplash` effects, feature burn sequences) after loading. |
 | +4 | 4 | u32 | unknown2 | `0` in every retail entry |
 | +8 | 32 | char[32] | name | NUL-terminated, NUL-padded. Lookup is case-insensitive. |
 
@@ -77,7 +77,7 @@ The second frame-reference value correlates with animation speed in retail
 data — fast-spinning cursors in `anims/CURSORS.GAF` store small values
 (`cursorairstrike`, 16 frames, value 1; `cursorpickup`, 24 frames, value
 2), slow or static art stores 10 (`cursornormal`, build-menu gadget pics).
-These are whole simulation ticks per frame.
+These are whole simulation ticks per frame. The cursor's test is "countdown below 2 advances", so a stored value of 0 or 1 shows the frame for one advance and a value `h ≥ 2` for exactly `h` advances (`[06 R-WFX-01 §1]`).
 
 Real example — entry 0 of `ARMALAB.GAF`:
 

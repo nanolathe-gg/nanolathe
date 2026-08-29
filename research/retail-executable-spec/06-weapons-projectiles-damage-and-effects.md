@@ -245,11 +245,10 @@ contracts:
 
 **Established fact:** The registry's secondary-list gate is set by owning at
 least one **active** friendly unit whose definition carries one specific flag
-bit of the definition flag word. **Unknown:** which authored FBI key that bit
-is; the parser assigns it in the same shift sequence as the named flags but the
-key at that position has not been read out. *Decider:* one more static window
-over the unit-definition parser's flag sequence (RWU-02-1 owns the key
-table). The doc's earlier description of this gate as "a targeting-upgrade
+bit of the definition flag word — the key is **`istargetingupgrade`**
+(closed 2026-08-29 by [04 R-SPEC-01 §8]: the 30-tick registry rebuild sets the
+per-player flag when an own unit is complete, activated and carries the key;
+the earlier text left the key Unknown pending the parser's flag sequence). The doc's earlier description of this gate as "a targeting-upgrade
 aggregate supplied by an active allied or same-player unit with a corresponding
 definition flag" is confirmed as to shape — one flag, one active friendly unit,
 one gate — and its earlier flagging as *unproven* is closed: the reader is the
@@ -439,12 +438,13 @@ stable order is corrected: the sampled order is always RNG-driven.
 1. alive bit set and death latch clear;
 2. one definition flag of the candidate, **or** the shooter's owning player is
    a computer controller, **or** one global option bit — any of the three
-   admits the candidate. **Unknown:** the authored keys behind that definition
-   flag and that option bit; *decider:* the unit-definition parser's flag
-   sequence and the options loader (RWU-02-1);
+   admits the candidate. The definition flag is **`shootme`** (default 0 —
+   [04 R-SPEC-01 §5], closed 2026-08-29; the earlier text left it Unknown).
+   **Unknown:** the authored key or writer behind the option bit; *decider:*
+   the options loader (RWU-02-1);
 3. one definition flag of the **shooter** bypasses the §3.1 physical gate
-   entirely; otherwise that gate must accept. **Unknown:** the authored key
-   behind that bypass flag; same decider;
+   entirely; otherwise that gate must accept. The bypass flag is
+   **`kamikaze`** ([04 R-SPEC-01 §1], closed 2026-08-29; earlier Unknown);
 4. for the sight-distance caller only, the candidate's definition index must be
    clear of the `nochasecategory` mask;
 5. a paralyzer weapon rejects a candidate already carrying the stunned bit.
@@ -2129,10 +2129,19 @@ if (preMotionYWord > seaLevelByte && postMotionYWord <= seaLevelByte) { ... }
 ```
 
 — the pre-motion Y high word strictly above the sea-level byte and the
-post-motion one at or below it. On a crossing it queries the map cell, and emits
-the weapon's water sound when the cell is found, its own height byte is below
-sea level, and the session's opaque-liquid mode is zero. Smoke emission is never
-a collision condition.
+post-motion one at or below it. On a crossing it queries the map cell, and
+**spawns the weapon's water-explosion art** (the water/lava holder of
+`[R-WFX-01 §1]`, with calculated flash table 0 and the water flag set, so no
+land dust puff) when the cell is found, its own height byte is below sea
+level, and the session's opaque-liquid mode is zero. No sound is played on a
+crossing. Smoke emission is never a collision condition.
+
+**Correction (2026-08-29, `[R-WFX-01 §2]`).** This paragraph previously said
+the crossing "emits the weapon's water sound". It was wrong: the crossing site
+calls the explosion-art allocator with the weapon's water/lava art holder, not
+the sound emitter; `soundwater` is played only by the central impact's water
+arm (§13.2). A clone that played the sound here would sound a splash for every
+torpedo entering the water, which retail does not do.
 
 **Established fact:** `flighttime`, `holdtime`, `burstrate`, `duration`,
 `smokedelay`, `randomdecay` and `weapontimer` are consumed as raw logical tick
@@ -3702,16 +3711,25 @@ routed burn weapons, and malformed burn cases.
 
 ### 13.2 Sound and smoke events
 
-**Established fact:** Four sound identities are read from the weapon record and
-each has exactly one producer: the **start** sound is played by the common
-projectile initializer, before the Fire callback (§4.1); the **hit** sound and
-the **water** sound are the two arms of the central impact's sound selection
-below; and the **trigger** sound is played by a burst clone's creation when the
-weapon carries `soundtrigger` (§4.3). All four are played through the same
-emitter with the impact or muzzle point and a zero third argument. Start smoke
-and smoke trail are emitted at spawner/tick boundaries; end smoke is selected
-by the impact path. Sound-trigger burst emissions are separate from
-Fire/RockUnit callback cadence.
+**Established fact:** **Three** sound identities are read from the weapon
+record (`soundstart`, `soundhit`, `soundwater`, each resolved to a registry
+index or the all-ones sentinel `[R-WFX-01 §3]`) and each has exactly one
+consumer family: the **start** sound is played by the common projectile
+initializer at the muzzle point, before the Fire callback (§4.1), and **again
+by every burst clone's creation at the parent's position when the weapon
+carries the `soundtrigger` flag** (§4.3); the **hit** sound and the **water**
+sound are the two arms of the central impact's sound selection below. All are
+played through the same emitter with the impact or muzzle point and a zero
+third argument (no network broadcast). Start smoke and smoke trail are emitted
+at spawner/tick boundaries; end smoke is selected by the impact path.
+Sound-trigger burst emissions are separate from Fire/RockUnit callback cadence.
+
+**Correction (2026-08-29, `[R-WFX-01 §3]`).** The previous text said "Four
+sound identities are read from the weapon record … the **trigger** sound is
+played by a burst clone's creation". There is no fourth identity:
+`soundtrigger` is flag bit 11 of the behavior word (§2.2), not a name, and the
+burst-clone site plays the weapon's **start** sound. A clone that reserved a
+fourth sound slot would look for a `soundtrigger` name that no parser reads.
 
 **Established fact:** Start puff (start-smoke flag) emits ONLY from successful
 root creation inside the three ordinary spawners — ordinary/direct,
@@ -3755,11 +3773,339 @@ lava-map underwater self-expire, and the off-map exit. A separate water/hazard
 override (opaque liquid mode, water-classified cell, no direct unit argument)
 retires the record regardless of no-explode.
 
+### Closed — the presentation keys: parse, storage, art binding, and the loop byte [R-WFX-01 §1] (2026-08-29)
+
+**Established — the keys and their storage.** The weapon record parser reads
+the presentation keys in this order and stores them as follows (the plan's
+"§5.4" of this document does not exist; every closure of the RWU-06-5 unit
+lives here in §13):
+
+| Key | Accessor, default | Stored as | Consumer |
+|---|---|---|---|
+| `firestarter` | integer, 0 | byte | §13.1 (nonzero test only) |
+| `rendertype` | integer, 0 | **byte** | projectile draw dispatch, §4 below |
+| `color` | integer, 0 | **byte** | beam/lightning colour **and** the render-type-4 sequence selector, §4 |
+| `color2` | integer, 0 | byte | beam second stroke, §4; read by no other case |
+| `soundtrigger` | integer, 0 | flag bit 11 | burst clone start-sound replay (§4.3) |
+| `explosiongaf` + `explosionart` | string 256, both required | land art holder (sequence pointer) | central impact land arm |
+| `waterexplosiongaf` + `waterexplosionart` **or** `lavaexplosiongaf` + `lavaexplosionart` | string 256, both of a pair required | **one** water/lava art holder | central impact water arm; water-crossing splash (§7.3) |
+| `soundstart`, `soundhit`, `soundwater` | string 256 | 16-bit registry index, `0xFFFF` when absent | §3 below |
+
+The byte stores matter: an authored `rendertype` outside 0..7 (after
+truncation to a byte) matches no draw case and the projectile is **invisible**
+but still gated, simulated, and audible; an authored `color` of 255 becomes
+the selector value −1 that suppresses render type 4 entirely (the stock
+`earthquake` meteor weapon authors `color=255` under render type 4 and is
+therefore never drawn in flight; it also authors no art, so its impacts show
+only the calculated flash of §2).
+
+**Established — the lava/water pair is chosen at catalog parse, not at
+impact.** The parser tests the session's `lavaworld` OTA value
+(`[02 "Weapon record"]`; the key is in `[02 §6 "Map files"]`): when it is zero the
+`waterexplosiongaf`/`waterexplosionart` pair fills the single water-or-lava
+holder, otherwise the `lavaexplosiongaf`/`lavaexplosionart` pair does; the
+other pair is never read. There is no per-impact lava test — the central
+impact's water arm (§13.2) is the same "cell height byte below sea level"
+predicate on every map, and on a lava world it shows lava art because the
+holder was filled from the lava keys when the catalog compiled. This binds
+the weapon catalog's compile to the session (doc 02 owns the load order); a
+clone that compiles weapons once per process must recompile or re-bind the
+holder per mission. Stock content authors a lava pair on 157 of 198 weapons
+(`fx/lavasplash`, `lavasplashsm`, `lavasplashlg`), so a map with `lavaworld=1`
+shows lava splashes for those and **nothing** for the other 41 (their holder
+stays null — the lava pair is absent and the water pair is not consulted).
+
+**Established — art binding and the two fault contracts.** For each present
+pair the parser (1) resolves the GAF bank by name through the shared
+animation-bank cache — a case-insensitive linear scan of the loaded banks by
+name (44-byte entries, name then bank pointer), and on a miss loads
+`anims\<name>.GAF` from the VFS and appends it; (2) finds the entry in that
+bank by a case-insensitive linear scan of the bank's entry table (the file's
+entry order, `[fmt gaf]`); (3) **clears the entry's loop byte** (the low byte
+of the entry header's +2 word, `[fmt gaf]`); and (4) stores the entry pointer
+in the holder. Two failures are faults, not fallbacks: a bank file that does
+not exist makes the bank loader return null and the cache path then shows a
+modal message box whose text is the constructed path (`anims\<name>.GAF`) and
+exits the process with code 1; an entry name that matches nothing makes the
+entry lookup return null and step (3) writes through address 2 — an access
+violation. An **empty** `explosiongaf=` value is the first fault (the path is
+`anims\.GAF`); an empty `explosionart=` is the second. A pair with only one
+key present is not an error: the holder stays null and the impact draws no art
+(`§2`). Because banks and entries are shared objects, the loop-byte clear is
+permanent for that entry for the rest of the process, whichever weapon
+cleared it.
+
+**Established — the loop byte and the cursor.** Every GAF entry header carries
+`1` in its +2 word in every retail file (`[fmt gaf]`); the executable loads
+that word's low byte as the entry's **loop** flag, so every sequence loops by
+default and only entries whose byte was cleared — by this parser, by the
+startup effect-slot binder (§2), and by the feature loader for burn sequences
+(§13.1) — play once. A playback cursor is `{frame index u16, countdown u16,
+loop byte, entry pointer}`; its initializer sets the frame to the requested
+start (or 0 when the start is not below the frame count), the countdown to
+that frame's reference second word (the per-frame hold, `[fmt gaf]`), and the
+loop byte from the entry. Each advance: if the countdown is below 2, the frame
+index increments; when it reaches the frame count the cursor either wraps to 0
+(loop byte nonzero) or **clears its entry pointer** (loop byte zero — the
+sequence is finished); otherwise the countdown is reloaded from the new
+frame's hold. If the countdown is 2 or more it is decremented. A frame with
+hold `h` is therefore shown for `max(h, 1)` advances. Stock effect holds:
+`Explosion`/`Explode2`/`Explode3`/`Nuke1` 2, `Explode4`/`Explode5`/`H2oBoom2`
+/`H2o`/`lavasplash`/`lavasplashlg` 3, `h2oboom1`/`lavasplashsm` 2,
+`CommBoom` 3, `EMPboom`/`Tronboom` 2 (asset census 2026-08-29).
+
+**Established — the fixed engine effect-slot table (the "named entries bound to
+numbered slots" of the plan).** At startup, after the calculated-frame tables
+(§2), the engine opens the `fx` bank once and binds these entries, in this
+order, clearing the loop byte where marked (×):
+
+| Entry | Loop cleared | Reader |
+|---|---|---|
+| `smoke 1` | | smoke-puff particles, selector 0 (§5) |
+| `smoke 2` | | smoke-puff particles, selector 1 (§5) |
+| `fire1` | | **none** — bound and never read |
+| `alfboom1` | × | **none** — bound, cleared, never read |
+| `radlogo`, `radlogohigh`, `nuclogo` | | HUD stockpile/radar logos (doc 07) |
+| `h2oboom2` | × | debris water landing (`[04 R-COB-04 §2]`) |
+| `lavasplash` | × | debris lava landing (`lavaworld` twin of the above) |
+| `cannonshell`, `plasmasm`, `plasmamd`, `ultrashell`, `plasmasm` | | render type 4 selectors 0..4 (`color` byte), §4 |
+| `flamestream` | | render type 5 (§4); the strip-5/7 flame families (`[03 R-STRIP-01]`) |
+| `explosion` | × | `explode` opcode bit 8 and debris ground landing (`[04 R-COB-04 §4]`) |
+| `explode2`, `explode3`, `explode4`, `explode5`, `nuke1` | × | `explode` opcode bits 9..13 (`[04 R-COB-04 §1]`) |
+| `shadow` | | the projectile ground sprite of render types 1, 3, 4, 6 (§4) |
+
+Selector 4 of render type 4 is `plasmasm` again — a second binding of the
+same entry, so `color=1` and `color=4` draw the same sequence. Weapon
+explosion art never goes through this table: each weapon holds its own entry
+pointer.
+
+### Closed — explosion selection at impact, the explosion pool, and the record-0 answer [R-WFX-01 §2] (2026-08-29)
+
+**Established — the explosion pool is separate from the effect strips.** Every
+impact explosion, water splash, debris landing flash, and `explode`-opcode
+bitmap explosion is one record of a fixed **300-record explosion pool** (84
+bytes per record, live count, first-free append; `[04 R-COB-04 §4]` from the
+opcode side). The allocator refuses **silently** when the count is 300: no
+art, no calculated flash, and — because the puff below is inside the same
+gate — no dust puff either. This pool is distinct from the 400-capped effect
+strips (`[03 R-STRIP-01 §1]`, §5 below); it is not evicting, it is dropping.
+
+**Established — what one allocation does,** in order, given
+`(point, artHolder, tableSelector, waterFlag)`:
+
+1. count++; record position = the point (three 16.16 words);
+2. primary cursor: initialized from `artHolder` at frame 0 when the holder is
+   non-null; otherwise the primary entry pointer is null (no art);
+3. secondary cursor: when `tableSelector >= 0`, initialized at frame 0 from
+   calculated-frame table `tableSelector` (0..2, `[04 R-COB-04 §4]`; the
+   procedural strips are described below); a negative selector leaves it
+   null;
+4. **land dust:** when `waterFlag == 0` **and** the point's whole Y word is
+   **strictly greater** than the sea-level byte, one smoke-puff emitter is
+   spawned at the point on strip 9 with spawn interval 7 and lifetime 15
+   ticks (§5) — this is the "above-sea flash" of `[04 R-COB-04 §4]` and the
+   "fixed-effect-pool append side effect" of `[03 R-STRIP-01 §1]`; it is a
+   smoke emitter, not a flash;
+5. the record's debris-piece pointer is set to null.
+
+The callers and their arguments: the central impact passes `(point, land or
+water holder, 0, waterCell)` — so **every** projectile impact, land or water,
+draws calculated table 0 under its art; the water-crossing splash (§7.3)
+passes `(point, water/lava holder, 0, 1)`; debris landings pass table 0 on
+ground and `(h2oboom2 or lavasplash, −1, 1)` on water (`[04 R-COB-04 §2]`);
+the `explode` opcode's bitmap bits pass table 2 with `waterFlag = 0`. Nothing
+passes table 1: the second calculated strip (15 frames, 128 down to 30) is
+built, costs CRT draws at startup (§6), and is **never drawn**.
+
+**Established — the record-0 answer (closes the `[R-DMG-01 §5]` residual).** A
+death whose `explodeas`/`selfdestructas` resolved to weapon record 0
+(`[noweapon]`: no art keys, no sound keys) reaches the central impact and:
+the three sound ids are `0xFFFF`, which the emitter rejects before touching
+the device — **no sound event**; the art holder is null, so the allocator
+still **consumes one explosion-pool record** (with a null primary cursor,
+calculated table 0 as its secondary, and the land dust puff when the unit
+died above sea level on land), and the record is reclaimed by the next
+explosion sweep once its calculated strip finishes (24 ticks). The observable
+retail result of a misspelled `explodeas` on land is therefore a 24-tick
+calculated flash disc plus a smoke puff, no named art, no sound. It is a
+presentation event, not nothing.
+
+**Established — the calculated (procedural) explosion frames, exactly.**
+Three tables are built at startup, before any session, with the CRT stream
+(`[04 R-COB-04 §4]` gives the shape; this is the pixel expression). For a
+frame of side `n`: `H = n / 2` (truncating integer, then converted to
+double); the frame's x and y offsets are both `H`; the transparent index is
+`0xFF`. For row `y` and column `x` (both `0..n−1`):
+
+```
+dy = H − y ;  A = dy·dy·1.33            (double)
+dx = H − x
+r  = (crtRand() · 10) / 0x8000          (integer 0..9, one CRT draw per pixel)
+v  = trunc(((r + sqrt(dx·dx + A)) / H) · 32)
+c  = (0x20 − v) as an unsigned byte
+pixel = c ≥ 0x22 ? 0xFF (transparent)
+      : c ≥ 0x20 ? 0x6E                  (v == 0)
+      : 0x6F − v                         (1 ≤ v ≤ 32 → 0x6E .. 0x4F)
+```
+
+so each frame is an elliptical disc (the vertical axis compressed by
+`sqrt(1.33)`) whose palette index runs from `0x6E` at the centre down the
+`0x4F..0x6E` ramp to transparency where `r + distance ≥ 33·H/32`, with the
+per-pixel draw `r` giving the fuzzy edge. Table 0: 12 frames, sides 64, 60,
+…, 20; table 1: 15 frames, sides 128 down in steps of 7 (128 … 30); table 2:
+15 frames, sides 200 down in steps of 11 (200 … 46). Every frame's hold word
+is 2, so table 0 plays for 24 ticks and tables 1/2 for 30; every table's loop
+byte is 0. The draw counts are 23,456, 107,335 and 260,815 CRT draws
+respectively — 391,606 at startup (doc 01's stream census; §6). A 22×22
+displacement ("lens") frame is built beside them for render type 2 (§4); it
+consumes no draws.
+
+**Established — update cadence and drawing.** The explosion pool advances in
+phase 4 of the tick (`[01 §4.4]`: the "general effects" sweep, immediately
+after the projectile phase): per record, the debris physics when the record
+carries a piece (`[04 R-COB-04 §2]`), then the primary cursor advance, then
+the secondary cursor advance; afterwards one stable compaction pass removes
+every record whose piece pointer **and** both cursor entry pointers are null.
+A record therefore lives for the longer of its two sequences. The draw pass
+(frame composer, after the strip-5 and strip-6 draws and the projectile
+renderer, `[03 §1]`) makes two walks over the pool: first every record's
+**secondary** (calculated) frame through the flash blitter, then every
+record's debris model and **primary** (named art) frame through the ordinary
+frame blitter — so the named art always composes over the calculated disc.
+The only admission test is the screen rectangle (inclusive on all four
+edges) at the projected point `(Xword − viewX + 128, (Zword − Yword/2) −
+viewZ + 32)`: **explosion art is drawn with no line-of-sight or coverage
+gate**, unlike projectiles, puffs, and sounds. The blitters themselves are doc
+03's (`[03 §5.5]`).
+
+### Closed — impact and fire sounds: registry, selection, and the emitter gates [R-WFX-01 §3] (2026-08-29)
+
+**Established — the sound registry.** A sound name resolves through a
+process-wide registry of up to **255** entries: a 32-byte name per entry
+compared with a 32-character bounded compare (names longer than 31 characters
+alias), a device handle per entry loaded from `sounds\<name>` on first use,
+and a parallel 32-byte alias column used by the sound-alias loader (`[03
+§8.3]`; the weapon parser passes no alias). A name not yet registered is appended
+and its index returned; when the registry already holds 255 entries the
+lookup returns **0** — the 256th distinct sound name in a session plays
+whatever sound registered first. An absent key stores `0xFFFF`. An authored
+but empty name registers the empty string (the file `sounds\` fails to load
+and the handle is null); what the device layer does with a null handle is
+**Unknown** (decider: static trace of the device play routine with a null
+handle) — no stock weapon authors it.
+
+**Established — the emitter, in order.** `play(id, point, broadcast)`:
+
+1. `id == 0xFFFF` → return, nothing else happens (this is the record-0 path).
+2. Under the Windows-sound option the emitter takes an alternate path that
+   plays the handle with **no position gate**; the DirectSound path continues.
+3. Requires the sound system initialized, the effects-volume field nonzero
+   (its low three bits), and DirectSound available; otherwise return.
+4. `broadcast != 0` would send an 18-byte network sound packet; every weapon
+   caller passes 0, so weapon sounds are never broadcast.
+5. The point must resolve to an on-map plot cell (`cellX = X >> 20`,
+   `cellZ = Z >> 20`, truncating toward zero for negatives); off-map → no
+   sound.
+6. **Line-of-sight gate for the local viewing player:** tile
+   `(Xword >> 5, (Zword − Yword/2) >> 5)` must be inside the viewer's grid
+   and, in byte-grid mode, hold a nonzero current-coverage byte, or in
+   word-mask mode hold the viewer's bit — the same one-point gate the
+   projectile renderer applies (`[03 §5.4]`). A hit you cannot see is silent.
+7. The handle is then played, positionally when the 3-D listener is
+   available (listener at the screen centre, world scaled by 16 per cell),
+   otherwise flat. `[03 §8.3]` owns mixing and slot arbitration.
+
+**Established — the three weapon sounds' call sites and points.** `soundstart`
+at the muzzle point by the common initializer, and at the **parent's current
+position** by each burst clone when `soundtrigger` is set (§4.3); `soundhit`
+at the impact point in the land/direct arm; `soundwater` at the impact point
+in the terrain-only water arm. No other site reads any of the three. A
+non-explode impact still sounds; expiry retirements never sound (§7.3). The
+in-game sound-alias table and the network receive path (which plays a
+received id at a received point) are outside the weapon contract.
+
+### Closed — projectile render types, exactly, and which weapons author them [R-WFX-01 §4] (2026-08-29)
+
+**Established — dispatch.** The projectile renderer walks the pool in index
+order and, for every record with a zero burst-remaining word, applies the
+one-point coverage gate at the record's current point (`[03 §5.4]` states it)
+and then dispatches on the definition's `rendertype` **byte** by equality
+against 0..7; any other value draws nothing. Screen projection everywhere
+below is `sx = Xword − viewX + 128`, `sy = (Zword − Yword/2) − viewZ + 32`
+(the composer's half-height shear, `[03 §1]`); "palette(c)" is the
+256-entry logical-to-physical remap table of the current palette (`[03 §4.3]`)
+indexed by the authored byte.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Established — the families are not the types.** `rendertype` is an authored
+byte with no default other than 0 and no relationship enforced against the
+behavior flags; the table's right column is what stock content does, not a
+rule. A `beamweapon` authored with `rendertype=1` would draw a shadow and a
+model (a null model pointer would then fault in the model drawer). The
+simulation reads none of `rendertype`, `color`, `color2` (§6.10).
+
+**Established — muzzle flash.** There is no `flash`, `muzzleflash` or similar
+key in the image and no muzzle-time sprite producer in any weapon path: the
+only muzzle-time presentation events are the `startsmoke` puff (§5), the
+`soundstart` sound (§3), and whatever the unit's `Fire*` script emits through
+`emit-sfx` (`[04 §4.4]`, `[03 R-STRIP-01 §1]`).
+
+### Closed — smoke puff parameters per producer [R-WFX-01 §5] (2026-08-29)
+
+The puff family's mechanics — pool, 400-cap eviction, per-tick spawn gate,
+wind drift, CRT draws — are `[03 R-STRIP-01 §1–§3]`; §7.3 and `[R-WPN-01]`
+own the trail cadence. This section pins the **parameters** each weapon-side
+producer passes, which doc 03's census does not itemize. Every weapon puff
+goes to **strip 9**. The emitter's init takes `(point, frameCap, spawnInterval,
+frameHold, lifetime, smokeSelector)`; particles use `smoke 1` (selector 0, 12
+frames, hold 5 in the file — **unused**: the particle's hold comes from the
+producer) or `smoke 2` (selector 1); the particle's last frame is
+`min(frameCount − 1, frameCap)` when `frameCap` is nonzero; `frameHold` 0
+means 7.
+
+| Producer | Args after the point | Effect |
+|---|---|---|
+| trail puff (§7.3), timer-expiry puff (§7.3), `endsmoke` at impact (§13.2), COB `emit-sfx` 0x102 (`[04 §4.4]`) | `(0, 1, 0, 0, 0)` | one particle at spawn, all 12 frames of `smoke 1`, hold 7; the emitter's lifetime is 0 so its spawn window closes immediately and it dies when the particle expires |
+| `startsmoke` (§4.1, muzzle point) | `(3, 1, 30, 0, 0)` | one particle, frames 0..3 of `smoke 1`, hold 30 — a slow four-frame puff |
+| land dust of every above-sea explosion (§2) | `(0, 7, 0, 15, 0)` | one particle at spawn and one every 7 ticks while `nextSpawn ≤ now + 15`: three particles, all frames, hold 7 |
+
+Per particle: spawn draws one CRT value for its first countdown
+`crtRand() · (hold − 2) / 0x8000 + 2`; every tick it moves by `windX · 8`,
+`+gravity · 4` in Y (upward), `windZ · 8`, decrements the countdown, and at
+zero advances one frame and redraws `crtRand() · (hold/2) / 0x8000 + hold/2`;
+it is removed when its frame index reaches its last frame. Each particle is
+drawn (after its own one-point coverage gate) as the selected frame at its
+projected point. Exhaustion of the shared strip pool drops the puff silently;
+a root flag byte disables every strip allocation (`[03 R-STRIP-01 §1]`).
+
+### Closed — the presentation RNG census [R-WFX-01 §6] (2026-08-29)
+
+**Established.** Every random draw made by weapon presentation is from the
+**CRT** stream (`x' = x·214013 + 2531011`, bits 16..30 — `[01 §7]`); no
+presentation path touches the simulation Park–Miller stream:
+
+| Site | Draws |
+|---|---|
+| calculated explosion frames, once at startup | 391,606 (tables 0/1/2: 23,456 / 107,335 / 260,815) |
+| lightning (render type 7), per record per **frame** | `6 · trunc(dist/5)` |
+| smoke puff, per particle | 1 at spawn, 1 per frame advance |
+| camera shake, per sub-tick while active | 2 (`[01 R-CORE-01]`) |
+| explosion pool update and draw, sound emitter, render types 0–6 | 0 |
+
+The simulation-stream draws that *look* presentational are not: the `explode`
+opcode's debris velocities (`[04 §4.5]`, `[04 R-COB-04 §1–§3]`) and the
+feature-fire spread (§13.1) are simulation-side and lockstep-visible. Because
+the lightning jitter is drawn per **rendered frame** and the smoke puffs per
+**tick**, a clone that renders at a different frame rate diverges in CRT
+stream position from retail — which is harmless, since the CRT stream carries
+no authoritative state (`[01 §7]`).
+
 ### 13.3 Presentation boundary
 
-**Established fact:** The simulation publishes model/effect/sound identifiers, impact positions, feature/fire state, and camera-follow state. The renderer consumes those events later.
+**Established fact:** The simulation publishes model/effect/sound identifiers, impact positions, feature/fire state, and camera-follow state. The renderer consumes those events later. The explosion pool (300, dropping) and the effect strips (401, evicting) are the two presentation containers those events land in; `[R-WFX-01 §2]` and `§5` name what each weapon event puts where.
 
-**Unknown:** Exact renderer interpolation, frame lifetime, particle pooling, and visual ordering are intentionally outside this document.
+**Unknown (2026-08-29, narrowed by `[R-WFX-01]`):** the lens blitter's pixel mechanics for render type 2, the flash and frame blitters' pixel rules, and 3DO model orientation from the angle blocks are doc 03's (`[03 §5.2]`, `[03 §5.5]`, `[03 §4.4]`); the render-type-3 angle block and the null-handle sound case are the two residuals listed in the tail.
 
 ### R-WPN-02 — acquisition, collision, damage and death arithmetic pass, corrections and closures
 
@@ -3933,6 +4279,17 @@ that closure leaves one narrower presentation residual, added below. No
 `armor.tdf`, `hitdensity` or `Unit destroyed` item is added: each is shown not
 to exist in the image (`[R-DMG-01 §1]`, `§6`, `§3`).
 
+**Correction (2026-08-29, RWU-06-5).** Three bullets are replaced. The
+"renderer algorithms for projectile render types" bullet is closed by
+`[R-WFX-01 §4]` (all eight cases with their arithmetic, the `color` selector,
+and the stock census); the "empty-name sound and art selectors handed the
+record-0 sentinel" bullet is closed by `[R-WFX-01 §2]`/`§3` (no sound; one
+explosion-pool record with the calculated flash and, on land above sea
+level, a dust puff); and the "renderer interpolation and visual lifetime"
+bullet is narrowed to the blitter and model-orientation residue doc 03 owns.
+The §7.3 water-crossing "water sound" sentence and the §13.2 "four sound
+identities" sentence are corrected in place (`[R-WFX-01 §2]`, `§3`).
+
 ### Catalog and targeting
 
 - The authored FBI key behind the definition flag that arms a side's secondary
@@ -4004,8 +4361,13 @@ to exist in the image (`[R-DMG-01 §1]`, `§6`, `§3`).
 - Authored relationships among beam, lightning render type, flame,
   firestarter, burn-blow, and no-explode; no separate lightning or flame
   collision integrator was found · §6.4 · static trace.
-- Renderer algorithms for projectile render types outside the closed
-  line-versus-jagged-lightning distinction · doc 03 §5.4 · static trace.
+- The render-type-3 (disintegrator) model angle block: the recovered draw
+  case passes a block no instruction writes · `[R-WFX-01 §4]` · disassembly
+  of that case for a store into the block (Supported inference today:
+  uninitialised stack).
+- The roll word of non-meteor projectile records, read by the model render
+  types and written by no creator · `[R-WFX-01 §4]` · writer census of the
+  record's first orientation word.
 
 ### Collision and damage
 
@@ -4031,10 +4393,11 @@ to exist in the image (`[R-DMG-01 §1]`, `§6`, `§3`).
 - Practical reachability of signed 16-bit AOE distance wrap, and of more than
   20 unique unit or 64 unique feature-cell candidates, in accepted retail maps
   · §9.3 · asset census over the map corpus (the AOE dedup map probe).
-- Whether the empty-name sound and art selectors, handed the record-0
-  sentinel by a death whose `explodeas` did not resolve, emit a null
-  presentation event or nothing · §12.2, §13.2, doc 03 · static trace of the
-  two selectors on an empty name.
+- What the sound device layer does with the null handle that an authored
+  **empty** sound name registers (the record-0 sentinel is not this case: its
+  ids are `0xFFFF` and are rejected before the device) · `[R-WFX-01 §3]` ·
+  static trace of the device play routine with a null handle; no stock weapon
+  authors an empty name.
 - The feature-name lookup's return for an authored `corpse` name that
   resolves to no feature (stored once at catalog load, read only by the
   chain walk) · §12.2, doc 05 · static trace of the feature-name lookup's
@@ -4059,5 +4422,6 @@ to exist in the image (`[R-DMG-01 §1]`, `§6`, `§3`).
   the §13.1 reproduction walker contract · §13.1, doc 05 · static trace.
 - Feature damage and armor interaction, and burn damage to units, beyond the
   closed burn-weapon attribution · §13.1 · static trace.
-- Renderer interpolation and visual lifetime for weapon-driven effects · doc
-  03 · intentionally outside this document's scope.
+- Pixel rules of the lens (render type 2), flash, and frame blitters, and 3DO
+  orientation from the angle blocks · doc 03 §4.4, §5.2, §5.5 · doc 03's
+  scope; `[R-WFX-01]` closes what each weapon event passes to them.

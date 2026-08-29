@@ -667,6 +667,391 @@ search scans every configured row, including open rows, from logo 0 upward and
 stores -1 when all ten stock logos are present. [07 "Retail closure for the
 single-player menu slice"]
 
+### Closed — the skirmish setup record and every option's consumer chain [R-SKIR-01 §1] (2026-08-29)
+
+Status: **Established** unless a claim says otherwise (direct static trace of
+the `SKIRMISH.GUI` handler and its row builder, the registry preference
+loader/writer, the battle-entry orchestrator, the start-slot stamp, the
+resource grant, the kill-record handler, the per-player phase, the two
+elimination predicates, the `GAMEOPTIONS.GUI` overlay and the `RESTRICT2.GUI`
+screen). This unit is RWU-08-2; the raw trail is kept out of the repo.
+
+**The setup record.** One heap object, allocated at start-up and freed at
+shutdown, holds the whole skirmish configuration. It carries ten row
+records of six 32-bit words — *controller* (`0` open, `1` player, `2`
+computer), *side* (index into the side table), *ally group* (`0..4`, or the
+unassigned sentinel `5`), *metal*, *energy*, *colour* — followed by five
+32-bit rule words — *CommanderDeath*, *Mapping*, *LineOfSight*,
+*LineOfSightType*, *StartLocation* — a 256-byte map name, the authored
+gadget count of the screen (saved so the dynamic rows can be rebuilt), the
+row index the last click landed on, and the *difficulty* word. The number of
+rows actually shown is the separate `NumSkirmishPlayers` global (missing
+value 4; an explicit value is stored unclamped — the loader's "in 2..10" and
+"outside 2..10" branches store the same thing).
+
+**Registry mirror — every key, its default, and the store-on-miss rule.**
+The loader reads each value under the `Total Annihilation` key; when a value
+is absent it assigns the default **and writes that default back** (the helper
+called on the miss path is the DWORD *store*, three stack arguments, the
+third being the value; it is not a delete). The rule words and their
+defaults are `SkirmishCommanderDeath` 1, `SkirmishMapping` 1,
+`SkirmishLineOfSight` 1, `SkirmishLOSType` 1, `SkirmishDifficulty` 1 (stored
+`& 0xffff`), `SkirmishLocation` 1, and the string `SkirmishMap` (on a miss
+the loader selects the skirmish mission catalog, takes its first entry's
+name, copies up to 256 bytes and stores it). The per-row values live under
+the `Total Annihilation\Skirmish` subkey as `Player%dController` (miss 0),
+`Player%dSide` (miss `slot & 1`, i.e. slot index modulo two),
+`Player%dColor` (miss = slot index), `Player%dAllyGroup` (miss 5),
+`Player%dMetal` (miss 1000), `Player%dEnergy` (miss 1000), for
+`0 <= slot < NumSkirmishPlayers`. The writer stores every one of these plus
+`NumSkirmishPlayers` when the Start button passes validation and whenever
+the row count changes. The parallel `Single*` and `Multi*` triples
+(`…CommanderDeath`, `…Mapping`, `…LineOfSight`, `…LOSType`, all default 1)
+are read into separate globals; see §4 for why the `Single*` mirror is dead
+in practice.
+
+**Screen build.** The `SKIRMISH.GUI` loader copies the record's difficulty
+into the session difficulty global, sets the `Difficulty` gadget's state to
+it and lights the matching label (`Easy`, `Medium`, `Hard`), resolves the
+record's map name against the map catalog (falling back to the first entry
+when it no longer exists), then the row builder runs: if every row's
+controller is `0` it forces row 0 to `Player` and row 1 to `Computer`; it
+zeroes every `TEAMICONSx` frame; for each row it writes the `Player%d`
+caption (`Open`/`Player`/`Computer`), the `Side%d` state, the decimal
+`Metal%d`/`Energy%d` text, the `Color%d` gadget's image set (`logos.gaf`)
+and frame (the colour word), and the `Allies%d` gadget's image set
+(`TEAMICONSx`) with frame 10; open rows have their side/allies/metal/energy/
+colour gadgets disabled. Then it stamps the four rule gadgets' state byte and
+description text: StartLocation `0` → state 1, `Commanders are randomly
+placed on the battle field.`, else state 0, `Commanders are placed at
+pre-determined locations.`; CommanderDeath `0` → state 1, `Game continues
+after Commander is destroyed.`, else state 0, `Game ends when commander is
+destroyed.`; Mapping `0` → state 1, `Terrain is visible.`, else state 0,
+`Terrain is blacked out until explored.`; LineOfSight `0` → state 0, `All
+mapped terrain is visible.`; else LineOfSightType `1` → state 1, `Terrain
+elevations affect a unit's view.`; else state 2, `Terrain elevations do not
+affect a unit's view.` Finally the `MapName` text is set. Row geometry is in
+[07 "Retail closure for the single-player menu slice"].
+
+**Callbacks — control to field, exactly.** The clicked gadget's trailing
+digits select the row. `Player%d` cycles controller `0 → 2`, `1 → 0`, and
+`2 → 1` only when no other row is `Player`, else `2 → 0`; on becoming live
+the row's colour is checked against every live row and, on a conflict, the
+callback rescans logo indices `0..9` for one no configured row holds
+(**this scan ignores the controller word, so an open row's colour also
+blocks**) and stores `-1` when all ten are taken. `Side%d` sets
+`side = (side + 1) mod sideCount`. `Allies%d` sets `group = (group + 1) mod
+6` and refreshes every `Allies%d` frame: with `n` live rows sharing the
+group, frame `10` when `n = 0`, `2*group + 1` when `n = 1`, `2*group` when
+`n >= 2`. `Color%d` steps `colour ± 1` (left click `+1`, right click `-1`)
+modulo the `logos.gaf` frame count, mapping `-1` to `count - 1`, and
+**re-steps while the candidate equals a live row's colour** (a live row is
+one whose controller is non-zero; the row itself is excluded) — it never
+stores `-1`. **Correction.** The previous text said the colour callback
+"after a conflict … scans every configured row, including open rows, from
+logo 0 upward and stores -1 when all ten stock logos are present"; that
+scan belongs to the controller-cycle callback described above, not to
+`Color%d`. `Metal%d`/`Energy%d`: left click `v = min(v + 500, 10000)` then
+`if v == 700 then v = 500`; right click `v = v - 500; if v < 201 then v =
+200` (the compare is `< 0xc9`, so 200 is the floor and the quirk rewrites
+the one increment from 200). `CommanderDeath`, `StartLocation`, `Mapping`
+toggle their word with `xor 1` and rewrite the description as above.
+`LineOfSight` cycles `(LOS=0) → (1,1)`, `(1,1) → (1,0)`, `(1,0) → (0,1)`.
+`Difficulty` cycles the session global and the record `0 → 1 → 2 → 0`,
+writing both. `SelectMap` opens `SELMAP.GUI` (empty skirmish catalog →
+`There are no skirmish maps to choose from`). Every callback plays the
+`Skirmish` UI cue except `Difficulty`, which plays `SKirmish` (sic).
+
+**The hidden player-count selector (`SkirmishCheat`).** The screen keeps a
+15-byte typed-key buffer. A key handler compares its tail against `*III`,
+`*IV`, `*V`, `*VI`, `*VII`, `*VIII`, `*IX`, `*X` and, on a match, sets
+`NumSkirmishPlayers` to 3..10, writes all preferences, stores the count,
+reloads the preferences (so rows beyond the old count get the miss
+defaults), rebuilds the rows from the saved authored gadget count, plays the
+`SkirmishCheat` cue and marks the screen dirty. The buffer is cleared after
+`*III`, `*IV`, `*VIII`, `*IX`, `*X` (not after `*V`, `*VI`, `*VII`, whose
+prefix keeps matching the longer sequences). "Cheat Codes" as an option
+is multiplayer-only (§9); this is the only skirmish meaning of the token.
+
+**Start preflight.** Unchanged from the paragraphs above: terrain lookup,
+at least one `Computer` and one `Player`, `players <= schema players`, the
+ally-group test (first live row whose group is not 5; then fail if any live
+row has a different group — open rows and group-5 rows are skipped). The
+diagnostics are quoted above. On success the player count global becomes
+`players + computers`, the row-to-player conversion runs (§2), the
+preferences are written, and the front end switches to the battle state.
+
+### Closed — battle entry: what the record becomes [R-SKIR-01 §2] (2026-08-29)
+
+**Row-to-player conversion (skirmish only, before the loading screen).**
+For each row `i < NumSkirmishPlayers`: controller `1` copies colour and side
+into the player's lobby record, registers the slot as human, and makes it the
+local player (both local-player indices = `i`; the last `Player` row wins);
+controller `2` copies colour and side and registers the slot as computer;
+controller `0` registers it as inactive. Registration resets the slot's
+two alliance rows to zero, sets `allied[i][i] = 1` in both, stores the
+controller byte, and (skirmish only) names the slot `Player` for a human or
+`Arm`/`Core` for a computer by side (`side == 0` → `Arm`). Then, for a live
+row `i`, every row `j` (`j < NumSkirmishPlayers`) with the **same ally
+group, a non-zero controller, and group ≠ 5** — or `j == i` — sets
+`allied[i][j] = 1`. **This is the alliance predicate:** `allied(i, j)` is
+the byte at column `j` of player `i`'s first alliance row; it is symmetric in
+skirmish because it is derived from equal group numbers, and group 5 rows
+are allied with nobody but themselves. The second alliance row (used by the
+multiplayer alliance screen) keeps only the diagonal in skirmish. Doc 05
+should cite this predicate for sharing and the AI's side filter.
+
+**Session words.** The battle-entry orchestrator, for session kind 2
+(skirmish): copies the configured unit limit into the session unit-limit
+word (§6); sets the local-authority flag; copies *CommanderDeath* into the
+commander-death rule word; and writes the visibility mode word's bits
+`0 = Mapping & 1`, `1 = LineOfSight & 1`, `2 = LineOfSightType & 1`
+([03 §3.1 R-VIS-01 §1] has the polarity and consumers). It then (no save
+file) stamps start positions — identity when *StartLocation* ≠ 0; when it is
+0 the CRT-stream shuffle of "Randomization for skirmish starts" — with one
+precision added: the gate draw taken when fewer than three slots are
+eligible is `((draw * 2) / 32768)` in 64-bit arithmetic, i.e. shuffle only
+when `draw >= 16384`; a gate result of zero leaves the identity order and
+takes no further draws. Eligible slots are those whose record is active,
+whose controller is human, computer or remote, and whose side is not the
+sentinel 10. The stamp helper per slot copies side and colour again, calls
+the storage-bonus setter with the row's energy and metal (each floored at
+200 and converted to single precision, bonus flag set — [R-ECO-01 §4]),
+resolves `StartPos<n>` for the assigned position (diagnostic `Error: Could
+not find start position number %i on the map!` on a miss), creates the
+side's commander there, and centres the camera on the local player's.
+
+**Resource grant.** After every slot is stamped, the grant pass sets, for
+every player index whose row is skirmish-derived, `energy stock =
+float32(row.energy)` and `metal stock = float32(row.metal)` — the plain
+integer-to-single conversion, **no 200 floor** on the stock (the floor is
+only on the bonus operands). The same pass runs again at the end of battle
+entry (still gated on the absence of a save file), so the grant is written
+twice with identical values;
+the campaign branch of the pass uses the mission's authored values and the
+multiplayer branch `hostShort * 100`. Order within battle entry: session
+words → placement stamps → grant → world rebuild → main GUI → per-player
+phase primed → grant again → session start flag. Nothing here draws from
+the simulation stream.
+
+**Save persistence.** The save `Summary` account records, for session kind 2
+only, `CommanderDeath`, `Location`, `Mapping`, `LineOfSight`,
+`LineOfSightType` (the record's five rule words), plus `Difficulty`,
+`Players`, `maxunits` and `Side`. Load restores the five into the setup
+record and the map name, then a small helper rewrites the commander-death
+word and the three mode-word bits from them — the same bit assignments as
+battle entry.
+
+### Closed — commander death: the whole chain [R-SKIR-01 §3] (2026-08-29)
+
+**Vocabulary.** The rule word is `0`, `1`, or `2`. The in-battle
+`GAMEOPTIONS.GUI` overlay names them `Game Continues`, `Game Ends`,
+`Deathmatch` in that order; the skirmish screen offers only `0`/`1`.
+
+**Trigger site.** The kill-record handler (the function that files a unit's
+death for statistics) compares the dead unit's type name with its owner's
+side commander name. When they match it first **clears the owner's
+storage-bonus flag** (so the starting-resource capacity of §5 is lost with
+the commander under every rule value); then, when the rule word is non-zero
+and the owner's controller is human or computer, it pumps the front end until
+no panel is open, then runs the **owner sweep**: for every unit in the
+owner's pool slice that is alive and not already dying, if the unit's owner
+record is inactive or not human/computer it is destroyed silently (death
+kind 3, dying bit set, kill record filed), otherwise it receives
+`30000` damage from itself with damage kind 3 — the ordinary damage path,
+so armour and death animations apply and the units die over the following
+ticks, not in the same tick. The sweep is gated on the owner's live-unit
+count being non-zero at the time. Rule `0` skips the sweep entirely: the
+player keeps every unit and nothing else happens on commander death. Rule
+`2` runs the sweep too (the commander's other units are lost), then respawns
+(below).
+
+**Counters.** Each player carries a 16-bit *live unit count* and a 32-bit
+*units ever created*. Both unit allocators increment both; the
+kill-record handler decrements the live count when the unit is finally
+removed (the same function that clears the unit's "alive" bit), and in
+multiplayer notifies peers when it reaches zero.
+
+**Defeat detection.** In the per-player phase, on the **local** player's
+30-tick due (`globalTick >= due` then `due += 30`), for session kinds 2 and
+3, when the local record is inactive or its watch-mode bit is clear, the
+defeat predicate is evaluated: for kinds 2/3 it is simply **`local live unit
+count == 0`** (the campaign kind polls its defeat queue instead). A second,
+preceding branch of the same predicate arms a random deadline of `9000 +
+(draw * 9000) / 32768` ticks (CRT stream, one draw) and returns true when it
+passes; it is gated on a flag set only by the CD-presence helper when its
+drive-letter probe disagrees with itself — a copy-protection path Nanolathe
+never arms. A true predicate runs the shared countdown: `-1 → 4` on first
+detection, then `-1` per due; when it goes negative (five dues, ~150 ticks
+after the first true poll) the rule word selects: `2` → **respawn** (search
+up to 9999 candidate points, each two simulation draws for X/Z inside the
+map minus a tenth on each side, accepted when all nine cells of a 3×3
+footprint probe pass the side commander's placement test, no unit is in the
+way, and — when the map has a lava/water sentinel — the terrain height
+exceeds the sea level; then create the commander at the local player, apply
+the storage-bonus setter with the local lobby record's metal and energy
+shorts `× 100`, and add the same energy and metal products to the new
+unit's stored energy/metal — scaled `× 0.5` for difficulty 0 and `× 0.7`
+for difficulty 1 when the owner is a computer — then rebuild visibility and
+the build menu; those shorts are written only by the multiplayer lobby, so
+in a skirmish reached with rule `2` through the registry the additions are
+zero and the bonus floors at 200); any other value → in multiplayer with watching allowed, set the
+local watch-mode bit, clear mode-word bits 0–1, rebuild visibility, and
+either post `You're out!  Continue Watching?` (`YESORNO.GUI`) or, when the
+local host still hosts live AI players, `You are placed in watch mode
+because you are hosting AI players which are still alive.  If you exit, they
+will be terminated.`; in skirmish (kind 2) it writes the end latch directly:
+`ending` bit set, `won` cleared, and `lost` set when the local record's
+end-flag byte is clear. **Correction.** The previous text said value one
+"ends the game through the watch-mode path when the local commander dies";
+the watch-mode path is multiplayer-only and the end is not keyed on the
+commander at all — it is keyed on the live-unit count that the owner sweep
+drives to zero. Consequently the "value-zero all-live-unit sweep" that the
+tail listed as Unknown is the same predicate: under rule 0 the player is
+defeated when the last of their units dies, exactly as under rule 1 after
+the sweep. Cross-section: the "Evaluation" paragraph stating that for kinds
+2/3 "the defeat queue is polled only when the local side's commander marker
+… is clear — the commander-dead test" describes this predicate wrongly (it
+is the live-count test above, and the campaign kind is the only one that
+polls a defeat queue); RWU-08-5 owns that paragraph and should restate it.
+
+**Victory detection.** The elimination sweep run from the same due returns
+false immediately when the rule word is `2` (deathmatch never ends by
+elimination). Otherwise, for every other active player `j` with a
+human/computer/remote controller, side ≠ 10 and watch-mode bit clear: if
+`j` has created no unit yet, no victory; if `j` still has live units, then
+victory continues only when both `j` and the local player have the lobby
+*shared-victory* bit set and `allied(local, j)` and `allied'(local, j)`
+(both rows) hold, and every other active, non-eliminated player `k` is in
+`j`'s alliance row; any failure is no victory. The shared-victory bit is
+written only by the `ALLIES.GUI` screen's `VICTORY` control (opened from the
+in-battle `TABMENU.GUI`'s `ALLIES` button); the skirmish setup never sets it, so a skirmish is won
+only when every other player's live count is zero, allies included.
+
+### Closed — line of sight and mapping [R-SKIR-01 §4] (2026-08-29)
+
+The three bits' consumers, polarity and the `Permanent`/`Circular`/`True`
+and `Mapped`/`Unmapped` names are established in [03 §3.1 R-VIS-01 §1];
+this document owns only the provenance. One addition: the OTA loader, when
+it parses a map's `GlobalHeader`, also writes the **single-player** option
+globals — `mapping` (key default 0), `lineofsight` (key default 0),
+LOSType `= 1`, commander death `= 0` — every time an OTA is loaded, which
+happens for every campaign mission and also when the skirmish screen
+resolves its map. So for a campaign battle the mode word comes from the
+mission's OTA keys, not from the registry `Single*` triple that is read at
+start-up and immediately shadowed; the `Single*` values reach nothing.
+Skirmish is unaffected because the kind-2 branch reads the setup record.
+Cross-doc: [03 §3.1 R-VIS-01 §1] says the loader "then deletes the value"
+on a registry miss; the helper stores the default (§1 above).
+
+### Closed — starting metal and energy [R-SKIR-01 §5] (2026-08-29)
+
+Ladder: the row value starts at the registry value (miss 1000) and moves by
+500 per click within `[200, 10000]` with the 200→500 rewrite (§1). At battle
+entry the integer becomes two single-precision values: the stock (`float32(v)`,
+unfloored) and the storage bonus (`float32(max(v, 200))`, bonus flag set),
+so a row set to 200 starts with 200 stock and +200 capacity, and the default
+1000 starts with 1000 stock and +1000 capacity — the bonus is what lets the
+commander alone hold the starting stock. The `GAMEOPTIONS.GUI` overlay
+prints the row's integer values under `Starting Metal:` / `Starting
+Energy:` (presentation only; multiplayer prints `hostShort * 100`).
+
+### Closed — unit limit: setup field and lobby side [R-SKIR-01 §6] (2026-08-29)
+
+The configured limit is read once at start-up from `totala.ini`,
+`[Preferences]` `UnitLimit`, default 250, then clamped: `> 500 → 500`, `< 20
+→ 20`. The OTA loader writes the **session** limit word from the map's
+`maxunits` key (default 200) whenever an OTA is parsed; skirmish and
+multiplayer battle entry then overwrite the session word with the configured
+limit (multiplayer: the host's lobby word), so the OTA value survives only
+for campaign missions. No skirmish gadget edits the limit; the multiplayer
+battleroom's `MAXUNITS` control does. The `GAMEOPTIONS.GUI` overlay prints
+the session word under `Max Units:`; the in-battle options snapshot copies
+it as the first word of its block. Simulation consumers (construction gate,
+AI gate) are doc 05's [RWU-05-4].
+
+### Closed — start placement, Fixed and Random [R-SKIR-01 §7] (2026-08-29)
+
+`StartLocation` is stored in the record and mirrored as `SkirmishLocation`;
+`1` (`Fixed`) assigns slot `i` start position `i`; `0` (`Random`) shuffles as
+in §2 and "Randomization for skirmish starts". The overlay names them
+`Random`/`Fixed` from the record for kind 2 and from bit 14 of the host's
+lobby word for kind 3. The command-line switches `fixedloc`, `deathends`,
+`deathplays`, `deathmatch`, `mapping`, `circlos`, `truelos`, `permlos`,
+`cheating`, `watching` set the multiplayer host's lobby word only (they
+never touch the skirmish record).
+
+### Closed — player colours [R-SKIR-01 §8] (2026-08-29)
+
+The colour word is an index `0 .. frameCount(logos.gaf) - 1` (stock: ten
+frames; the row-default is the slot index). It is copied to the player's
+lobby colour byte at battle entry and consumed by (a) the 3DO renderer,
+which selects frame `colour` of any multi-frame team texture, (b) the unit
+and radar blip presenters, which select frame `colour` of the blip image
+sets, and (c) the score screen's `PlayerColor%d` gadgets, which show
+`logos.gaf` frame `colour`. It never touches the palette or the side; side
+is the separate `Side%d` word. Two rows may share a colour only through the
+`-1` quirk of §1 or by editing the registry; the renderer then reads frame
+`-1` as an unsigned byte — out of range for a ten-frame set — **Unknown**
+what the texture lookup returns for it (decider: static trace of the
+frame-array accessor's bound handling).
+
+### Closed — AI difficulty [R-SKIR-01 §9] (2026-08-29)
+
+`Difficulty` on the skirmish screen writes both the record word and the
+session global (`0 → 1 → 2 → 0`, labels `Easy`/`Medium`/`Hard`); the
+`SKIRMISH.GUI` loader copies record → global on entry and the Start path
+persists it as `SkirmishDifficulty`. The plain `Difficulty` registry value
+(miss 1, `& 0xffff`) feeds the campaign. Consumers: the computer player's
+economy discount and transfer scaling [R-AI-01 §12] and the settlement
+discount [R-ECO-01 §3]; the commander-respawn grant scaling in §3; the
+`GAMEOPTIONS.GUI` overlay's `Difficulty:` label (kinds 1/2 only — kind 3
+shows `Cheat Codes:` and `Watching:` from bits 13 and 15 of the host word,
+`Allowed`/`Disallowed`). The AI profile grammar is [R-AI-01 §12].
+
+### Closed — map restrictions [R-SKIR-01 §10] (2026-08-29)
+
+`RESTRICT2.GUI` is opened only by the multiplayer battleroom handler; no
+skirmish path reaches it. The screen builds, for every definition except
+index 0 whose `norestrict` capability bit is clear — **this is the reader
+of `norestrict` that doc 05 recorded as absent**: a `norestrict` definition
+is simply not offered for restriction — a 98-byte row (caption
+`"%s\r%s %dM  %dE"`, definition index, current limit, and the restriction
+lookup's status) sorted by a comparator over the row, plus `OLDCOUNTS`, an integer
+per row snapshotting each limit before editing. Each `SLIDER%d` runs
+`0..101`; a value `< 101` is stored as the limit and printed, `101` prints
+`No Limit` and stores `-1`; every change is written straight into the
+restriction container (a tree keyed by definition, one record per
+definition holding a *restricted* short and a *limit* word). `Reset`
+sets every row to `100`, or to `0` when the definition's `wacky` capability
+bit is set, writing only rows whose value changed; `Cancel` (`Previous` cue)
+writes every `OLDCOUNTS` value back. The close path, when the host slot (the
+lobby record whose local flag is set) is human- or computer-controlled,
+walks the rows and marks each definition restricted (limit
+`0`) or unrestricted through the container's two setters. The container is
+process-lifetime memory: no registry, save or file writer touches it, and the
+per-definition limit field doc 05 could not find a writer for is this
+container's *limit* word. Simulation consumers (the build-menu and order
+gates) are [RWU-05-4]; the AI's construction task consults the same
+container.
+
+### Closed — `GAMEOPTIONS.GUI` and the remaining tokens [R-SKIR-01 §11] (2026-08-29)
+
+`GAMEOPTIONS.GUI` is the read-only in-battle "GameSettings" overlay. It
+prints `Commander Death:` (rule word → `Game Continues`/`Game Ends`/
+`Deathmatch`), `Starting Locations:`, `Mapping Mode:` (`Mapped`/`Unmapped`
+from mode bit 0), `Line of Sight:` (`Permanent` when bit 1 clear, else
+`True` when bit 2 set, else `Circular`), then for kind 3 `Cheat Codes:` and
+`Watching:`, otherwise `Difficulty:`, then `Map:`, `Starting Metal:`,
+`Starting Energy:`, `Max Units:`. Presentation only: it reads the live words
+and writes none (reader census: this overlay and the in-battle options
+snapshot are the only readers of the rule words outside the simulation
+sites named above). `TECHLEVL` and `COMMNDER` remain gadget-name tokens in a
+static table with no code reader found — **Unknown** whether any stock
+`.GUI` names them (decider: asset census of the stock GUI files, then a
+trace of the table's reader).
+
+
 ## Lobby behavior
 
 The battleroom heartbeat is a front-end state synchronizer, not the strategic
@@ -3390,9 +3775,19 @@ finding. The recitals are deleted here only; the body sections and the
   naval or air placement geometry · "Placement root and search helpers"
   [P0-04] · static trace.
 - The executable branch by which a populated lobby skirmish uses its rule
-  words without making injected or authored OTA triggers authoritative; the
-  value-zero all-units survival sweep Nanolathe uses is a supported inference
-  pending the same trace · "Victory and defeat triggers" · static trace.
+  words without making injected or authored OTA triggers authoritative ·
+  "Victory and defeat triggers" · static trace. (The value-zero survival
+  sweep is closed: skirmish defeat is the live-unit-count-zero predicate of
+  [R-SKIR-01 §3] under every rule value.)
+- The "Evaluation" paragraph's kind-2/3 "commander marker" defeat gate,
+  contradicted by [R-SKIR-01 §3]; RWU-08-5 owns the restatement ·
+  "Evaluation" · static trace already in the R-SKIR-01 trail.
+- What the 3DO texture frame lookup returns for the `-1` colour the
+  controller-cycle quirk can store · [R-SKIR-01 §8] · static trace of the
+  frame-array accessor's bound handling.
+- Whether any stock `.GUI` names the `TECHLEVL` / `COMMNDER` tokens and what
+  reads their static table · [R-SKIR-01 §11] · asset census, then static
+  trace.
 - Presentation of meteors outside the world renderer · doc 03 · static trace.
 
 ### Computer player

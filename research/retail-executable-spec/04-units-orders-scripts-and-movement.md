@@ -2020,8 +2020,8 @@ retail diagnostic string it emits. The pump's mapping of return codes is in
 *advance* 1, *restart* 0. Handlers already closed elsewhere are cited, not
 re-derived; where a trace contradicts existing text the contradiction is
 written as a Correction quoting the old text. The air-only handlers of batch 3
-are covered by [R-AIR-01 §6–§9] and §10.2–10.3 except the five VTOL work
-twins, which are deferred (see the "Missing and unknown" tail). Everything in
+are covered by [R-AIR-01 §6–§9] and §10.2–10.3; the five VTOL work twins are
+[R-ORD-01 §7] below (2026-08-29, RWU-04-4). Everything in
 this section is **Established** by direct trace of the handler bodies unless a
 sentence says otherwise. (2026-08-29, RWU-04-11.)
 
@@ -2563,6 +2563,496 @@ and copies the experience word only for a computer-owned builder.
   raises it; *decider:* enumerate every call through the reference header's
   first method (an indirect-call census, not a constant grep).
 
+### Closed — the five VTOL work twins [R-ORD-01 §7] (2026-08-29)
+
+The air forms of the work orders are separate handler bodies, not the ground
+bodies behind a flight flag. They share the ground vocabulary of [R-ORD-01 §1]
+and the air marker family of [R-AIR-01 §4], and they differ from their ground
+twins in ways an implementation cannot derive: no `INBUILDSTANCE` wait, no
+`StopBuilding` on the out-of-reach arm, different reach tests, different
+work constants, and fewer captions. Everything below is **Established** by
+direct trace of the five bodies (RWU-04-4).
+
+**The air work preamble.** Phase 0 of all five requires a live mover and
+`canfly` (else cancel-all), then: caption clear with the handler's state
+text; release all three weapon slots; when the unit is carried, drop it from
+its carrier through the attach commit of [R-COB-03 §5] with the third value
+**2** (the only engine sites that pass a nonzero third value); raise the
+activation edge (edge bit 0, [R-UNIT-06 §2]); and, **only when the mover is
+grounded** (mode 1, [R-MOV-01 §8]), set it airborne (mode 2), build an air
+marker on the unit's own position with altitude offset `cruisealt / 2`
+(signed halving of the 16-bit definition word), install it as the goal
+payload, and OR `0xE0` into the gate. The return is *advance* whether or not
+the marker was built — an already-airborne unit skips straight to phase 1
+with no goal armed and is re-dispatched on its next pump visit. Where a
+ground twin emits `StartBuilding`, the air twin's site is named below; none
+of the five reads `INBUILDSTANCE`, so an aircraft's script gets no build-stance
+wait between arrival and work.
+
+**`VTOL_HelpBuild`.** Pre-check: target null or satisfied `0x8` → status 7
+`Construction terminated by hostile action`, refresh the builder interface,
+abandon; satisfied `0x2` → refresh, complete. Phase 0: preamble with
+`Building`, plus the definition's builder-specific script slot must be
+present (else cancel-all). Phase 1: p3 = 0; air marker at the **target's**
+position with horizontal arrival radius `builddistance` (the radius-flag
+setter, so arrival is `dist < builddistance` in whole units); install; gate
+= `0xE0`; advance. Phase 2: satisfied `0x40` → abandon (no caption); target
+complete → complete; else emit `StartBuilding` with the **absolute bearing**
+from the builder to the target — this is the one site in the image that
+passes the raw bearing without subtracting the unit's heading
+([R-CB-01 §3]), so an air builder's script receives a world heading, not a
+relative one; refresh; advance. Phase 3: on every tick with `tick mod 150 =
+0`, rebuild the orbit marker of §10.3 (bearing from the builder to the target
+plus `0xDB6E`, radius `builddistance`, heading stored on the marker); then
+the work step with quantum `workertime / 30` (integer division, then float);
+when it did work, draw the spray from `QueryNanoPiece` to the target's
+model box; target unfinished → deadline 1, gate |= `0xA`, hold; finished →
+complete. There is no `Building complete` status, no nanolathe-active stamp,
+and no phase 4. Other: cancel-all.
+
+**`VTOL_RepairUnit`.** Target null → status 7 `Repairs unsuccessful.`,
+abandon (the ground twin *completes*). Leash pre-check as `Attack_Chase`
+(over the leash → complete). Target mover mode not grounded (`≠ 1`) → same
+caption, complete. Every visit then copies the target's position into the
+record goal. Phase 0: mover and `canfly`; the **repair admission** test
+(below) fails → status 7 `Repair mission failed`, abandon; preamble with
+`Repairing`. Phase 1: air marker at the goal with altitude offset the
+**full** `cruisealt`; install; gate = `0xE8`; advance. Phase 2: satisfied
+`0x40` → abandon; target mode `≠ 1` → abandon; target state bits 2–3 set →
+deadline 15, *restart* (no `StopBuilding` — none was ever emitted); target
+health below `maxdamage` (unsigned compare of the 16-bit health against the
+definition word) → repair step (doc 05), spray to the target box, deadline 1,
+gate |= `0x8`, hold; else advance. Phase 3: status 10 `Unit repaired`;
+complete. Other: cancel-all. There is no reach test, no `StartBuilding`, and
+no nanolathe stamp: an aircraft repairs from wherever its marker leaves it.
+
+**`VTOL_Reclaim`** (feature). Every visit resolves the feature at the goal
+as the ground twin does (none → status 7 `Reclamation failed`, abandon; not
+reclaimable → abandon). Phase 0: preamble with `Reclaiming`, plus
+`canreclamate`. Phase 1: air marker **on the feature's goal position with no
+altitude or radius setter** — arrival is the default `dist ≤ 0.5` world
+units of [R-AIR-01 §4] at the goal's own Y; install; gate = `0xE0`; advance.
+Phase 2: satisfied `0x40` → abandon; `p1 = trunc(30 + (metal + energy) /
+2)` from the feature definition — the constant is **30** where the ground
+twin uses 15, so an aircraft takes fifteen more ticks per feature; status 11;
+advance. No `StartBuilding`. Phase 3: deadline 2; `p1 −= 2`; p1 > 0 → stamp
+`tick + 300`; p1 > 30 → spray twice to the feature box (whose Y is the
+terrain height plus the feature's height byte, **no random draw** — the
+ground twin's `RNG(featureHeightByte)` is absent here); hold. p1 ≤ 0 →
+advance. Phase 4: finish the reclaim (doc 05); complete. Other: cancel-all.
+
+**`VTOL_ReclaimUnit`.** Pre-check: target null or satisfied ∩ `0x10008` →
+complete. Phase 0: mover and `canfly` (else cancel-all); no `canreclamate` →
+status 7 `Reclamation failed`, cancel-all; the reclaim-admission test fails →
+status 7 `That unit cannot be reclaimed`, abandon; preamble with
+`Reclaiming`. Phase 1: p1 = work-amount seed with k = 15; p2 = 0; the record
+goal is re-centred on the target's footprint (the snap/reverse pair of
+[R-ORD-01 §1] using this unit's footprint pair); air marker at the target's
+position with no setter; install; gate |= `0x100E8`; status 11; advance.
+Phase 2: satisfied `0x40` → *re-arm*; gate |= `0x10008`; reach test `dx² +
+dz² ≤ builddistance²` in whole world units (the squares are formed in 64
+bits from the 16.16 deltas and shifted down by 32; there is **no model-radius
+term**, unlike the ground twin's `builddistance + targetModelRadius`) and the
+admission test: both pass → if p2 > 14 apply p1 damage with cause 5 and
+p2 = 0; spray; deadline 2; p2 += 2; hold. Either fails → deadline 30,
+*restart* (the ground twin waits 15 and emits `StopBuilding`). Other:
+cancel-all. No `StartBuilding`, no stamp.
+
+**`VTOL_RepairPatrol`.** Pre-check: satisfied ∩ `0x48` → deadline 30,
+*restart*. Phase 0: mover, `canfly`, and the definition's `canreclamate`
+mirror bit (the parser copies `canreclamate` into a second bit that this
+handler and the repair admission test read); with a target, goal = its
+position; the patrol-chain setup of [R-ORD-01 §4]; preamble with
+`Patrolling`; advance. Phase 1, in order:
+
+1. Satisfied ∩ `0xE0` → *rotate*.
+2. Air marker at the goal with altitude offset the full `cruisealt`; install;
+   deadline **45**; gate |= `0xE0`.
+3. If health `< (maxdamage >> 2) · 3` (unsigned, strict): list this player's
+   units that are `builder` **and** `isairbase` and activated, within 3840
+   whole world units (`0xF00`, compared as whole-unit squares — effectively
+   any pad on the map); if any: release the payload, draw `RNG(count)`,
+   spawn `VTOL_Landing` at that pad at the head, gate = 0, *restart*. This
+   is the same seek-a-pad rule [R-AIR-01 §7] gives `VTOL_SeekAttack`.
+4. If energy ≥ 20 % of energy storage: enumerate units within
+   `sightdistance` through the repair-candidate filter; when the list is
+   non-empty draw `RNG(count)` and take that unit `u`: admission passes and
+   `u` is complete → the issue helper for command code 8 accepts → *rotate*,
+   refuses → *wait*; admission passes and `u` is unfinished → release the
+   payload, spawn `VTOL_HelpBuild` on `u` at the head, gate = 0, *wait*.
+   (There is no diplomacy test here — the ground twin's "owner not hostile"
+   gate is absent; the admission test is the only filter.)
+5. Feature pairing over a square of ±120 world units around the unit sampled
+   every 48 world units (a **fixed** radius, where the ground twin passes
+   `sightdistance`), keeping reclaimable features with nonzero energy and,
+   separately, nonzero metal; none → hold. Then the ground twin's decision
+   tree verbatim ([R-ORD-01 §4]) with one substitution: every spawn is
+   `VTOL_Reclaim` on the feature, inserted at the head with gate = 0, *wait*.
+
+Other phase: cancel-all. Two simulation draws at most per visit (the pad
+pick, then the candidate pick), each only when its list is non-empty.
+
+**The repair admission test** (shared by `VTOL_RepairUnit` phase 0 and the
+patrol scan): the target exists; my definition carries the `canreclamate`
+mirror bit; the target's 16-bit health differs from its `maxdamage`; the
+target's mover mode is not airborne (`≠ 2`); and a water clause: `(I am not
+canfly, or I am amphibious, or seaLevel ≤ targetY + targetModelHeight)` and
+`(I am canfly, or seaLevel − myMaxWaterDepth ≤ targetY + targetModelHeight)`,
+with `targetY` the whole part of the target's Y, `targetModelHeight` the
+whole part of its definition's model height word ([R-COB-03 §2] port 11),
+and `MaxWaterDepth` the movement-class value copied into the definition
+(§6.1). For an aircraft the clause reduces to `seaLevel ≤ targetY +
+targetModelHeight`: it will not repair a unit whose top is under water.
+
+**Correction to the "Missing and unknown" tail.** The bullet that carried the
+five twins as "no per-visit contract yet" is removed; the `0x100E8` /
+`0x10008` gates it cited are those of `VTOL_ReclaimUnit` above.
+
+### Closed — the special-behavior FBI keys: storage, reader census, contracts [R-SPEC-01 §0] (2026-08-29)
+
+This block closes RWU-04-7. For each of the keys `kamikaze`,
+`kamikazedistance`, `teleporter`, `digger`, `healtime`, `shootme`,
+`hidedamage`, `sortbias`, `istargetingupgrade`, `immunetoparalyzer`,
+`cloakcostmoving`, `onoffable`, `activatewhenbuilt`, `selfdestructcountdown`,
+`showplayername`, `canhover`, `amphibious` and `floater` it states where the
+unit-definition parser stores the value, every reader of that storage found by
+a whole-image census, and either the reader's contract at [§2.2] precision or a
+bounded negative. Contracts that other anchors already state are cited, not
+restated.
+
+**Method and bound (Established).** The parser stores these keys in two
+32-bit *capability words* of the definition record (called **word A** and
+**word B** below) and in three 16-bit fields. The census scanned the exported
+decompilation of every function for any load of either word or of the three
+fields, in all three renderings the decompiler uses (dword mask, shift-and-and,
+byte-narrowed mask), and then read every hit. The bound is the export itself:
+a reader that reached the word through a copied pointer whose provenance the
+decompiler lost would be missed. Two such pointer-copy readers were found for
+`cloakcost`/`cloakcostmoving` by doc 05's own trace (§10 below), which is why
+that key is cited to doc 05 rather than censused here.
+
+| Key | Parser storage | Default | Readers (beyond the parser and the definition copy) |
+|---|---|---|---|
+| `kamikaze` | word A bit 28 | 0 | command resolver code 3; `Attack_Kamikaze` handler; shared target search; damage reaction site; HUD range rings — §1 |
+| `kamikazedistance` | signed 16-bit | 0 | `Attack_Kamikaze` handler; HUD range rings — §1 |
+| `teleporter` | word A bit 13 | 0 | **none** — §2 |
+| `digger` | word A bit 30 | 0 | renderer only — §3 |
+| `healtime` | signed 16-bit | 0 | per-tick unit pass only — §4 |
+| `shootme` | word A bit 15 | **0** | shared target search only — §5 |
+| `hidedamage` | word A bit 14 | 0 | unit-information panel (two sites) — §6 |
+| `sortbias` | signed 16-bit | 0 | **none** — §7 |
+| `istargetingupgrade` | word A bit 10 | 0 | target-registry rebuild; registry area enumeration — §8 |
+| `immunetoparalyzer` | word A bit 26 | 0 | damage packet dispatcher (+ one dead twin) — §9 |
+| `cloakcostmoving` | single-precision | parsed `cloakcost` | cloak settlement — §10 |
+| `onoffable` | word B bit 2 | 0 | `Activate`/`Deactivate` handlers; minimap contact pass — §11 |
+| `activatewhenbuilt` | word A bit 18 | 0 | pre-built creation; build completion — §12 |
+| `selfdestructcountdown` | word B bits 20–22 | 5 | `SelfDestruct`/`SelfDestructFG` handler only — §13 |
+| `showplayername` | word B bit 17 | 0 | **none** — §14 |
+| `canhover` | word A bit 12 | 0 | [R-MOV-01 §8a], §8.1, §9.2, resolver hover attack, two dead helpers — §15 |
+| `amphibious` | word A bit 21 | 0 | repair admission; a dead placement validator — §15 |
+| `floater` | word A bit 19 | 0 | [R-MOV-01 §8a], cargo deck clamp, pitch cap — §15 |
+
+Every flag is stored as `(parsedInteger & 1) << bit`, so an authored value of
+`2` stores as 0 — only the low bit of the integer reader's result counts. The
+16-bit fields take the integer reader's low 16 bits. The
+`selfdestructcountdown` field is the exception: it is read through the bare
+string-to-integer conversion and stored as `value & 7`, with the 5 written
+only when the key is **absent** (§13).
+
+### Closed — `kamikaze` and `kamikazedistance`: the trigger predicate, who dies, and the damage kind [R-SPEC-01 §1] (2026-08-29)
+
+**Established — how the order is chosen (§3.4 code 3, the attack resolver).**
+After the can-attack gate, the resolver's code-3 arm tries the *armed*
+variants first, and only when the acting unit's state-word bit 31 (the
+"has an aimable weapon" bit that `Attack_Chase` phase 0 also requires,
+[R-ORD-01 §3]) is set: the suppression/air variants, then `Attack_Chase` when
+the unit has a mover, then `Attack_NoMove` when state bit 29 is set. Only when
+none of those returned does the arm test `kamikaze` and resolve
+`Attack_Kamikaze`; without `kamikaze` the code-3 request is rejected. So a
+definition that authors both a working weapon and `kamikaze` chases and
+shoots; the kamikaze variant is reached by definitions whose state bit 31 is
+clear — in stock content, the ones with no weapon of their own.
+
+**Established — the trigger predicate is the point-goal arrival test, not a
+separate distance compare.** The handler [R-ORD-01 §3] installs a point goal at
+the target's *current* position with radius `max(16, kamikazedistance)` (the
+16-bit field read signed; a zero or negative value therefore yields 16 world
+units), re-issuing it on every visit that finds the target still alive, and
+fires only on the goal's *satisfied* bit — the mover's own arrival test
+against that radius ([R-ORD-01 §1] point goal). Nothing in the handler measures distance
+itself; a kamikaze unit that cannot path to within the radius never fires.
+
+**Established — who dies, and with what damage kind.** On arrival the handler
+spawns `SelfDestruct` with p1 = 1 at the head. That record's first visit
+applies **30000** damage to the unit itself with damage cause **3**
+([R-ORD-01 §2]) through the standard damage funnel: the armored-state
+reduction is skipped because it applies only to amounts strictly below 30000
+([06 §9.2]); the veterancy scale applies as for any packet, so the self-inflicted
+amount is 30000 at zero kills and `30000 × (25 − v) × 4 / 100` with `v` the
+unit's kill tier ([06 §9.2]) — never less than 24000, always lethal for a stock
+kamikaze definition. Health falls below 1 and the death latch sets; the death
+path then resolves the definition's `selfdestructas` weapon **because the
+cause is 3** ([R-DMG-01 §5]) and it is that weapon's blast that damages the
+target. The target receives nothing from the order itself: no direct damage,
+no packet, no callback. A `kamikaze` definition whose `selfdestructas` resolves
+to a weapon with no area of effect therefore kills only itself.
+
+**Established — `kamikaze` widens autonomous targeting.** In the shared
+unit-level target search ([06 §3.2] "Each picked candidate must then pass"),
+test 3's *shooter* flag is `kamikaze`: a kamikaze definition bypasses the
+§3.1 physical gate (range, arc, minimum range) for every candidate, so any
+registered enemy within `sightdistance` of an idle fire-at-will kamikaze unit
+is a candidate. That closes the "authored key behind that bypass flag"
+Unknown in [06 §3.2] (cross-doc: doc 06 to cite). The damage-reaction site
+also admits a kamikaze victim as if armed ([R-STANCE-01 §3]).
+
+**Established — the HUD range rings.** The per-unit range-ring pass
+([R-P0-11 §3]) draws two kamikaze rings. In the labelled mode, when
+`kamikazedistance` is non-zero, a ring of that radius labelled with the key
+name. In the unlabelled mode, only when `kamikaze` is set **and** the
+definition's `explodeas` resolved: a pulsing ring of radius
+`clamp(((tick mod 60) × h × 2) / 60, 8, h)` where `h` is half of a 16-bit field
+of the `explodeas` weapon record, plus — when the unit has a mover — a
+second ring at `kamikazedistance`. **Supported inference:** the weapon field is
+`areaofeffect` (the only 16-bit radius-shaped field a self-destruct ring would
+want); *decider:* match the weapon parser's store against the ring drawer's
+load. Presentation only; no simulation effect.
+
+### Closed — `teleporter` is inert; the `Teleport` order is ungated and free [R-SPEC-01 §2] (2026-08-29)
+
+**Established — reader census: none.** Word A bit 13 is written by the parser
+and copied by the definition copy; no function in the image loads it. The
+`Teleport` order is produced by command code 11 with **no capability gate**
+(§3.4) and its handler [R-ORD-01 §2] reads no definition flag: any unit given
+code 11 with a position runs it. There is no pairing — the goal is the
+order's position, not another gate — no cost (the handler makes no economy
+call and writes no player stock), and the teleporter itself never moves. In
+stock content the key marks the Galactic Gate for the front end and mission
+scripts only; the engine's teleport behavior does not depend on it.
+
+### Closed — `digger` is presentation only [R-SPEC-01 §3] (2026-08-29)
+
+**Established — reader census: renderer only.** Word A bit 30 is read by the
+model composition pass and nowhere else: it adds 75 to every vertex height
+key and applies the fixed clip at 125 ([03 §2.4], the R-REN-03A waterline and
+digger clipping paragraph). No simulation, movement, targeting or LOS reader
+exists; a `digger` definition is hit, seen and pathed exactly as a non-digger.
+
+### Closed — `healtime` [R-SPEC-01 §4] (2026-08-29)
+
+**Established.** The signed 16-bit field has exactly one reader, the per-tick
+unit pass's self-heal branch, whose cadence (`tick & 7 == 0`), amount (the
+clamped worker quantum from `(healtime × 8) / 30`), energy charge and player
+gate are stated in [R-WORK-01 §3] ("`healtime`, the only consumer"). The
+branch runs in the general unit update after the water-damage test and before
+the cloak settlement of the same pass; it draws no random number.
+
+### Closed — `shootme` gates autonomous targeting by human players; its default is 0 [R-SPEC-01 §5] (2026-08-29)
+
+**Established — the one reader.** Word A bit 15 is read only by the shared
+unit-level target search ([06 §3.2]), as test 2 of the per-candidate gate: a
+picked candidate is admitted when **its** definition has `shootme`, **or** the
+searching unit's owning player has controller type 2 (a computer player),
+**or** a session option bit is set. That closes the "authored key behind that
+definition flag" Unknown in [06 §3.2] (cross-doc: doc 06 to cite). The
+consequence for content: a definition that omits `shootme` is never picked
+up by a human player's fire-at-will scan, guard scan, `Wait` scan or
+retaliation, but a computer player's units target it freely, and any player
+may attack it by explicit order (the resolver does not read the flag).
+
+**Established — the default is 0, not 1.** The parser reads `shootme` with the
+integer reader and a default argument of zero. `research/formats/fbi.md`'s
+caveat "`ShootMe` behaves as 1 by default" is corrected there; stock
+definitions author `ShootMe=1` explicitly, which is why the absence was never
+observed.
+
+**Unknown — the option bit.** The third admission is a bit of a session option
+byte that no located writer sets; whether a front-end setting or a mission
+key produces it is *Unknown* — *decider:* xrefs on the option byte's writers
+(the options loader, RWU-02-1).
+
+### Closed — `hidedamage` hides the health bar from other players [R-SPEC-01 §6] (2026-08-29)
+
+**Established — two readers, both in the unit-information panel.** The panel
+drawer draws a unit's health bar only when `unit.ownerSlot == localPlayerSlot`
+**or** the definition lacks `hidedamage`; the test appears twice, once for the
+selected unit and once for the unit under the cursor (the latter also gated on
+the local visibility predicate). The bar itself is
+`clamp(health, 0, maxdamage) × barWidth / maxdamage` in whole pixels. No other
+reader: allies see no bar either (the test is on the local slot, not on
+alliance), and nothing in the simulation, targeting or AI reads the flag.
+Cross-doc: doc 07 owns the panel layout and should cite this.
+
+### Closed — `sortbias` is inert [R-SPEC-01 §7] (2026-08-29)
+
+**Established — reader census: none.** The signed 16-bit field is parsed and
+copied by the definition copy; no function loads it. It does not affect build
+menu order, selection order or draw order. (`research/formats/fbi.md`'s row
+"Read by the engine; effect unconfirmed" is superseded by this census;
+orchestrator to reword.)
+
+### Closed — `istargetingupgrade` lets a player's units acquire radar-only contacts [R-SPEC-01 §8] (2026-08-29)
+
+**Established — the producer.** The per-player target-registry rebuild
+([06 §3.1], [08 R-AI-01 §16]; 30-tick cadence, one simulation draw per
+rebuild) clears the registry's *targeting-upgrade* flag and then, walking the
+whole unit array, sets it when it meets a unit that is alive and not dying,
+**owned by that player** (the unit's side relation byte equals the player's
+own), **complete** (remaining build fraction exactly 0.0) and **activated**
+(state byte bit 0), and whose definition has `istargetingupgrade`. Being
+built, being deactivated, or being paralysed (which does not clear bit 0)
+therefore matters only through bit 0.
+
+**Established — the consumer.** The registry area enumeration — the routine
+that `Wait`, `Guard_NoMove` and the shared target search use to list enemies
+within a radius ([R-ORD-01 §1], inclusive `d² ≤ r²` in whole world units) —
+scans the registry's *visible* list first. Then, **only if the targeting-upgrade
+flag is set and that scan produced no candidate**, it scans the registry's
+second list with the same radius test and the same alive/not-dying filter. The
+second list is filled by the rebuild with every non-allied unit carrying
+state-word bit 8 — the radar-detected bit that the radar emitters set and the
+jam callback clears ([R-VIS-01 §5]) — regardless of the visibility predicate.
+So with a targeting upgrade active, every autonomous scan of that player falls
+back to radar contacts when nothing visible is in range; explicit orders never
+consulted the registry and are unchanged. This closes the "its reader is
+Unknown" item of [08 R-AI-01 §16] (cross-doc: doc 08 to cite). A second
+accessor that returns the flag for a player slot exists but has no caller.
+
+### Closed — `immunetoparalyzer` [R-SPEC-01 §9] (2026-08-29)
+
+**Established.** Word A bit 26 has one live reader, the damage packet
+dispatcher's stun-eligibility test 3 ([06 §10]); an uncalled twin of the
+paralyze-task installer performs the same test on a second entry point that
+nothing reaches. No other reader: the flag does not affect the weapon's
+shot admission (a paralyzer still fires at an immune target and still runs
+the preliminary side effects), and it is not read by the AI.
+
+### Closed — `cloakcostmoving` [R-SPEC-01 §10] (2026-08-29)
+
+**Established.** Default, selection and conversion are [R-PROD-01 §7]; the
+parser detail this unit adds is only that the default is the *integer* just
+parsed for `cloakcost` (before that value's own conversion to single
+precision), so the two keys can never differ by a fraction. The whole-image
+census of this unit found no direct load of the field; the settlement reads it
+through a pointer to the definition that the decompiler does not attribute,
+and doc 05's trace is the authority.
+
+### Closed — `onoffable` [R-SPEC-01 §11] (2026-08-29)
+
+**Established — three readers.** The `Activate` and `Deactivate` handlers
+([R-ORD-01 §2], [R-PROD-01 §2]) and the minimap contact pass's selected-unit
+circle gate ([03 §3.9]: circles when active **or** not `onoffable`). Nothing
+else: the COB `ACTIVATION` port, the pre-built creation path and the
+completion path write the activated bit without consulting `onoffable`.
+
+### Closed — `activatewhenbuilt`: the two completion-time activation sites and their ordering [R-SPEC-01 §12] (2026-08-29)
+
+**Established — two readers, one effect.** Both raise state-byte bit 0
+through the shared edge setter, which on the rising edge runs the COB
+`Activate` callback (asynchronous, no arguments) and emits status kind 3, then
+refreshes the unit's derived state and — for a controlled owner — forwards the
+new state byte as a 4-byte network event ([R-UNIT-06 §2]). The sites:
+
+1. **Pre-built creation.** The unit creation service, when called with its
+   *already built* argument, runs in this order after the record is placed:
+   the mover/attach setup, the Y placement and the occupancy stamp; a
+   creation notification gated on one definition byte this unit did not
+   identify; **`activatewhenbuilt`
+   → raise bit 0**; then `isfeature` → mark the unit as a feature stand-in
+   (death cause byte 7, dying bit set); then the per-player unit counters. So a
+   pre-built `activatewhenbuilt` unit receives `Activate` before it is counted
+   and before any order runs.
+2. **Build completion.** The completion service (called from the
+   `BuildingBuild` handler [R-P0-09], the build-progress helper and the
+   network completion event) requires builder and product alive and the
+   builder's definition to have a build list; it then clears the product's
+   remaining fraction, sets state-word bit 13, and for a controlled owner:
+   if state bit 29 is clear and the product has a carrier link, detaches it;
+   if bit 29 is set, refreshes the builder GUI. **Then `activatewhenbuilt` →
+   raise bit 0**; then, when the product is the locally selected unit, the
+   order panel is refreshed; then `isfeature` as above; then the ownership
+   notification for a controlled owner; finally a shared interface flag is
+   set when either unit carries state bit 4. `Activate` therefore precedes
+   the product's first order pump, and a factory product with
+   `activatewhenbuilt` is active before `Ground_Unload`/rally handling begins.
+
+Without the flag neither site touches bit 0 and the unit stays inactive until
+an `Activate` order (needs `onoffable`, §11) or the COB `ACTIVATION` port sets
+it. `activatewhenbuilt` is not re-read later: a unit deactivated afterwards is
+not re-activated.
+
+### Closed — `selfdestructcountdown` and the full self-destruct timeline [R-SPEC-01 §13] (2026-08-29)
+
+**Correction (parser).** [R-ORD-01 §2] left values 6 and 7 *Unknown* with
+"decider: the FBI parser's clamp". There is no clamp: when the key is present
+the parser stores `value & 7` in word B bits 20–22, and writes 5 only when the
+key is **absent**. So `selfdestructcountdown=0` is stored as 0 (immediate),
+`8` stores as 0, `9` as 1, and 6 and 7 are stored as authored.
+
+**Established — what 6 and 7 do.** The handler emits status kind `22 − n` for
+the remaining count `n`. Kinds 17…22 carry the captions `five`…`zero` with
+their `count5`…`count0` sounds. Kind 16 is the *capture* status: no caption
+text in the table, the capture sound (what the emitter shows for a textless
+kind is not traced here). Kind 15 is the *Visible* status: the caption
+`Visible` with the uncloak sound. A countdown of 7 therefore announces
+`Visible` (uncloak sound), then plays the capture sound with no caption, then
+`five`…`zero`; a countdown of 6 starts at the capture sound. Each step is 30
+ticks; nothing else differs.
+
+**Established — the timeline, end to end.** Issue (`d` button → `SelfDestructFG`
+on the front segment; script/AI → `SelfDestruct` on the rear segment;
+[R-ORD-01 §0], [R-ORDER-02 §1]). Visit 1: p2 initialised from the field; with
+p1 = 0 and a non-zero field, the caption for `n` = the field, deadline 30.
+Every 30 ticks the count falls by one and the next caption is emitted; at
+`n = 0` the caption is `zero`, the deadline is `RNG(15)` (0–14 ticks, one
+simulation draw) and p1 becomes 1. The next visit — p1 = 1, or the field was
+0 from the start, or the record was spawned with p1 = 1 by `Attack_Kamikaze`
+or `Standby_Mine` — applies 30000 self-damage with cause 3 (§1 above for the
+funnel arithmetic) and completes. The death path resolves `selfdestructas`
+for cause 3 and `explodeas` for every other cause ([R-DMG-01 §5]); the corpse
+and score consequences are doc 06's. Re-issuing the order while it counts
+sets the cancel-current bit; the next visit emits `Self destruct terminated`
+(status 23) unless the record carries auto flag 14, and completes without
+damage. A cancelled countdown cannot be resumed; a new order starts from the
+field's value. The unit keeps moving, firing and building throughout — the
+record blocks nothing on the front segment (rear-segment `SelfDestruct`) or
+only its own segment (`SelfDestructFG`).
+
+### Closed — `showplayername` is inert [R-SPEC-01 §14] (2026-08-29)
+
+**Established — reader census: none.** Word B bit 17 has no reader in the
+image: the unit-information panel prints the definition's description line
+regardless, and no name substitution exists. The key is a content annotation
+only.
+
+### Closed — `canhover`, `amphibious`, `floater`: readers not previously censused [R-SPEC-01 §15] (2026-08-29)
+
+**`canhover` (Established).** Readers: the Y-placement gate and the four
+branches, the hover bob and the pitch-cap halving ([R-MOV-01 §8a],
+§8.1's pitch cap); the water-damage exemption (§9.2); the attack resolver's
+hover variant (`AirToGroundHover`, §3.4 code 3); plus two helpers with no caller (a Y-placement twin and a
+hover-attack twin) that are dead code. No further reader.
+
+**`amphibious` — correction to §9.2.** §9.2 says "the `amphibious` bit is
+parsed and stored but has no reader in the bounded recovered movement,
+medium, targeting, or transport code". That bound was too narrow: the bit has
+two readers. (1) The **repair admission** water clause, already stated in
+[R-ORD-01 §7]: an aircraft (`canfly`) that is not `amphibious` will not repair
+a target whose top is under water. (2) A **placement validator** variant that
+computes the minimum acceptable cell height as `seaLevel − maxWaterDepth` and
+raises it to `seaLevel` when the definition is `canfly` and not `amphibious`;
+that variant's only caller is itself uncalled, so it is dead in the shipped
+image. The movement side of §9.2 stands: no mover, medium or transport code
+reads the bit.
+
+**`floater` (Established).** Readers: the Y branch and the pitch-cap halving
+([R-MOV-01 §8a], §8.1's pitch cap); the carried-cargo deck clamp — a carried
+`floater` never sits below `(seaLevel − waterline) << 16` even when the
+carrier's attach piece would put it there (the cargo slaving branch of
+§10.2). No further reader; in particular the pathfinder and the target search do not
+read it.
+
+
 ## 4. COB loader, VM, threads, and script timing
 
 ### 4.1 Loading and binding
@@ -2728,6 +3218,39 @@ it, skipping any piece whose bit 0 is clear.
 Consequently the defaults are: drawn for a piece with geometry, cached, and
 shaded — and the three "don't" opcodes are the ones that clear a default-set
 bit. All three bit assignments and both directions are established.
+
+### Closed — the reserved opcode, exactly [R-COB-04 §6] (2026-08-29)
+
+**Established.** Opcode `0x10063000` reads its count from the second operand
+word, then pops that many values from the thread's window into a **four-word
+temporary in the interpreter's own stack frame**, filling it from the highest
+index downward, and advances the program counter by three. A count of zero or
+less pops nothing. The pops do not test the logical top, so a count above the
+thread's current depth reads window words below the base (stale slot memory,
+[R-COB-01 §1]) and lowers the top below −1; a count above **four** writes
+past the temporary into the interpreter's other locals — undefined behavior
+in retail, not a thread kill and not a fault the engine detects. The
+"Missing and unknown" bullet that asked for this is closed: the bound is
+four, and beyond it retail's behavior is unspecified. Nanolathe should treat
+a count above four (or above the depth) as a script fault and stop the
+thread, recorded as a sanctioned divergence. No shipped script emits the
+opcode (`[fmt cob]`, "Reserved / unassigned slots").
+
+### Closed — statics start as raw heap memory [R-COB-04 §7] (2026-08-29)
+
+**Established.** The tagged allocator the program bind uses for the statics
+array is a thin wrapper over the C runtime's `malloc`: it takes the runtime's
+heap lock, allocates from the small-block heap or the main heap, and loops
+through the new-handler on failure. **No path clears the block.** The only
+fill it can perform is the runtime's debug-fill hook, which is gated on a
+runtime flag that the release runtime leaves at zero. So the initial content
+of a unit's script statics is whatever the heap block last held — for a
+fresh block, the operating system's page contents; for a recycled block, the
+previous tenant's bytes. This closes the [R-COB-01 §1] Unknown: retail
+provides **no** defined initial value. Shipped scripts write every static
+before reading it, so stock behavior is unaffected; Nanolathe zeroes statics
+at bind and records that as a determinism divergence, exactly as
+[R-COB-01 §1] already prescribes.
 
 ### OTA-RND-02A script-side shading census [R-RND-02A]
 
@@ -2940,6 +3463,190 @@ gated here: authored death scripts branch on their severity argument
 themselves, and the engine has no generic central explosion that consumes
 severity.
 
+### Closed — the explode opcode's flag bits and debris record, exactly [R-COB-04 §1] (2026-08-29)
+
+**Correction to the paragraph above.** It said the three draws bounded at
+3,000 are "the horizontal velocity words" and that the draw bounded at 10 is
+"immediately overwritten and therefore dead". Both readings were wrong: the
+earlier trail misread two stores to neighbouring stack slots as one. The three
+3,000-bounded draws are the debris piece's **per-tick angular rates**, and the
+10-bounded draw is its **upward velocity**, stored in its own word and used
+every tick. The draw count (six) and order stand.
+
+**Established — which script flag bits the engine reads.** Of the
+`[fmt cob]` `EXPTYPE.H` values the adapter tests exactly bits 0 (`SHATTER`),
+1 (`EXPLODE_ON_HIT`), 2 (`FALL`), 3 (`SMOKE`), 4 (`FIRE`), 5 (`BITMAPONLY`)
+and the six bitmap bits 8–13 (`BITMAP1`–`BITMAP5`, `BITMAPNUKE`). Bits 6, 7
+and 14 and above are never examined. There is no "no heat cloud" flag in
+retail; that is a later engine's invention.
+
+**Established — the physical branch (bit 5 clear).** The adapter builds a
+twelve-word debris record on its stack and, in this order, draws from the
+simulation stream: `rate1 = random(3000)`, `rate2 = random(3000)`,
+`rate3 = random(3000)`; `vx = (20 − random(40)) · 2^14`; `vy = random(10)
+· 2^16`; `vz = (20 − random(40)) · 2^14`; then writes a lifetime of **900**
+ticks. In 16.16 world units per tick that is a horizontal velocity in
+`−4.75 … +5.00` per axis, an upward velocity in `0 … 9`, and angular rates in
+`0 … 2999` of the 65536-per-circle domain. The record also carries the unit
+and the piece index, a *shatter* word (1 when bit 0 is set, else 0), and an
+**engine flag word** rebuilt from the script bits: engine bit 0 = `FIRE`,
+bit 1 = `SMOKE`, bit 2 = `SHATTER`, bit 3 = `FALL`, bit 4 = `EXPLODE_ON_HIT`
+when not shattering, bit 5 = `EXPLODE_ON_HIT` when shattering. Engine bits
+6–31 are stack residue — the adapter masks the low six bits of an
+uninitialized slot and ORs the rest through — but no consumer tests any bit
+above 5 (established by reading every consumer below), so the residue is
+inert. The record is then handed to the debris spawner ([R-COB-04 §2]),
+which takes the shatter path ([R-COB-04 §3]) when engine bit 2 is set.
+
+**Established — the piece afterward.** The spawner's first act, on both the
+whole-piece and the shatter paths, is to **clear the piece's draw flag** in
+the unit's render-piece record (bit 0 of the flags byte of §4.3) — the
+piece is hidden, and only a later `show` restores it. The script's own
+piece-animation state is untouched. `BITMAPONLY` explosions do not hide the
+piece.
+
+**Established — the bitmap branch (any of bits 8–13).** Independently of the
+physical branch, the adapter resolves the piece's world position through the
+same piece-transform helper the `PIECE_XZ`/`PIECE_Y` ports use
+([R-COB-03 §2]) and, for each set bit in ascending order, spawns one bitmap
+explosion ([R-COB-04 §4]) with the animation named by the bit: bit 8
+`explosion`, bit 9 `explode2`, bit 10 `explode3`, bit 11 `explode4`, bit 12
+`explode5`, bit 13 `nuke1`. These are entries of the common animation set
+loaded at startup (doc 03 owns the file), not weapon definitions; **no weapon
+definition and no TDF key is involved anywhere in `explode`** — the
+`explodepiece` and `CalcedExplosion` strings are allocator tags
+([R-COB-04 §5]).
+
+### Closed — whole-piece debris: lifecycle, bounce, and explode-on-hit [R-COB-04 §2] (2026-08-29)
+
+**Established — spawn.** Debris lives in a fixed table of **100** slots
+backed by a **100,000-byte** ring arena. The spawner takes the first empty
+slot (none → the piece is hidden but no debris exists) and asks the arena for
+`vertexCount · 12 + 0x66` bytes. The arena allocator is *evicting*: when the
+request does not fit before the wrap point it frees whole older blocks from
+its cursor forward — clearing each victim's owning slot, so that debris
+vanishes — until the request fits, then wraps to the start when the tail is
+too small. It then copies the twelve-word record and the piece's render entry
+(the §4.3 record: transformed point list, world offset, angles, flags), points
+the copy's point list at its own tail, and adds the unit's X, Y, Z to the
+copied world offset so the copy is absolute.
+
+**Established — per-tick step.** The effect phase of the tick (the same phase
+as the fixed effect pool, doc 03 §1.3; doc 01 owns the phase order) visits
+every occupied slot:
+
+1. Read the lifetime, store `lifetime − 1`, and free the slot when the value
+   read was already 0 — a debris piece therefore survives its 900 steps and
+   dies on the 901st visit.
+2. If the piece's Y is **strictly above** `seaLevel << 16` (the map's sea
+   level byte, doc 03): let `h` be the terrain height (whole units) at the
+   piece's X/Z. If `vy + Y ≤ h << 16` (it would touch the ground this tick):
+   `vy = −(vy >> 1)`, `vx >>= 1`, `vz >>= 1` (arithmetic shifts — a bounce
+   with half the energy); then if the new `vy < 0x20000` (under 2 units per
+   tick): engine bit 4 clear → free; set → spawn the `explosion` bitmap at
+   the piece with the first calculated-frame table and the "above-sea
+   flash" ([R-COB-04 §4]), then free. Otherwise (still moving, or not yet
+   touching): `X += vx`, `Y += vy`, `Z += vz`; the piece's three angle words
+   advance by `rate2`, `rate3`, `rate1` respectively, each **truncated to 16
+   bits**; and when engine bit 3 (`FALL`) is set `vy −= gravity`, the map's
+   gravity constant in 16.16 units per tick² (doc 03). Survive.
+3. Otherwise (at or below sea level): when engine bit 4 is set and the
+   session's water-effects word is zero, spawn the `h2oboom2` bitmap, or
+   `lavasplash` when the session's lava flag is set (doc 02 owns the flag),
+   with no calculated frames and the flash suppressed; in every case free —
+   **debris never survives entering water** and never bounces off it.
+
+A piece with `FALL` clear flies in a straight line at its spawn velocity
+until it hits terrain or its lifetime ends. Without `EXPLODE_ON_HIT` the
+ground bounce is silent and the second, slower touch removes it.
+
+**Established — smoke and fire trails are presentation.** The `SMOKE` and
+`FIRE` engine bits are read only by the **draw** pass: every rendered frame
+that draws a debris piece emits one smoke puff (bit 1) and/or one fire
+particle (bit 0) at the piece's position through the pooled-effect
+allocator of [R-COB-03 §6]. The fire particle's spawner draws the **CRT**
+stream. Neither touches simulation state or the simulation RNG, and their
+cadence is the frame rate, not the tick — a headless simulation emits none.
+
+### Closed — the shatter path [R-COB-04 §3] (2026-08-29)
+
+**Established.** When engine bit 2 is set the spawner hides the piece and,
+instead of one debris block, creates one **fragment** per eligible primitive
+of the piece's model: a primitive with exactly four vertices, its own flag
+bit 0 clear, and not the model's ground-plate primitive. Fragments are
+records of the fixed effect pool (cap **300**, shared with bitmap
+explosions and weapon impact art) paired with a slot of a fixed table of
+**300** fragment geometries. Per eligible primitive, in model order:
+
+1. If the effect pool is full, stop — the remaining primitives are dropped.
+2. Claim an effect record at the piece's world position; take the first free
+   geometry slot. If none is free the effect record stays claimed **with
+   stale contents** and the loop stops (retail relies on the table never
+   filling).
+3. Set the record's explode-on-hit bit from engine bit 5.
+4. Seed the fragment's velocity with **half the unit's mover velocity** on
+   each axis (zero for an immobile unit), then draw, in order: `vx += (80 −
+   random(160)) · 2^9`, `vz += (80 − random(160)) · 2^9`, `vy += (80 −
+   random(160)) · 2^9 + 30 · gravity` (a thirty-tick upward kick against the
+   fall), and angular rates `800 − random(1600)` for each of three axes.
+5. Copy the quad's four vertices as the front face and the same four in
+   reverse as the back face; compute the quad's unit normal in float from
+   the first three vertices; then `vx += random(200) · int16(trunc(nx ·
+   512))` and `vz −= random(200) · int16(trunc(nz · 512))`; extrude the back
+   face by `trunc(n · 65535)` per axis; and centre all eight vertices on
+   their mean.
+6. Copy the primitive record and, for textured primitives, resolve the
+   texture name against the owning side's palette index.
+
+So a shatter makes **eight** simulation draws per fragment actually created,
+after the six draws of [R-COB-04 §1], and the count of fragments depends on
+the model and on pool occupancy at that moment. Fragment physics, in the same
+effect phase: position advances by velocity plus the inherited half
+velocity, `vy −= gravity`, angles advance by the rates; on reaching terrain
+the position is restored and `vy = −(vy / 2)` (division, truncating); when
+the whole part of `vy` is then below 1 the fragment is freed, spawning the
+`explosion` bitmap first when its explode-on-hit bit is set; below sea level
+it is freed at once, with the `h2oboom2`/`lavasplash` art under the same
+session gates as [R-COB-04 §2].
+
+### Closed — bitmap explosions, the calculated frames, and the above-sea flash [R-COB-04 §4] (2026-08-29)
+
+**Established.** A bitmap explosion is a record of the same 300-entry effect
+pool: position, an optional named animation, and an optional
+*calculated-frame* table index. The allocator refuses silently when the pool
+is full. When the caller does not suppress it and the position's whole Y is
+**strictly above** the sea level byte, the allocator also spawns one pooled
+effect of class 7 with parameter 15 at the position — the flash retail draws
+with every above-water explosion (its class identity is doc 03's; the gate
+and parameters are established here). The `explode` bitmap branch passes
+calculated table 2 and does not suppress the flash; the debris and fragment
+ground hits pass table 0; the water splashes pass no table and suppress it.
+
+The three calculated-frame tables are built once at startup with the **CRT**
+stream: table 0 has 12 frames of side 64 shrinking by 4; tables 1 and 2 have
+15 frames each, from 128 down toward 16 and from 200 down toward 32 in equal
+integer steps. Each frame is a square byte image whose pixels are drawn per
+cell from `CRT_rand · 10 / 0x8000`: a narrow window of that value maps to a
+palette index near `0x6f`, the rest is transparent. They are procedural art,
+generated before any session RNG seed and never redrawn, so they cost the
+simulation nothing; doc 03 owns their rendering.
+
+### Closed — the `explodepiece` and `CalcedExplosion` strings [R-COB-04 §5] (2026-08-29)
+
+**Established — reader census.** Both strings have exactly three references
+in the image, all in the startup initializer of the effect tables: neither is
+compared, parsed, or looked up anywhere. `CalcedExplosion` is the allocation
+tag of the three calculated-frame tables. `explodepiece` is written into the
+name word of each of the 300 fragment-geometry records (with defaults: free
+marker `0xFF`, the values 8 and 6, an all-ones word, and pointers into two
+fixed regions holding eight vertex triples and six primitive records per
+slot — the storage [R-COB-04 §3] fills). The plan's question "how the
+`explode` flags select among these templates" has the answer *they do not*:
+the records are identical scratch geometry, selected first-free. There is
+**no `explodepiece` TDF key, no per-unit explosion weapon, and no reader**
+outside the effect code. Any implementation reading such a key from unit
+definitions would be inventing content.
+
 ### 4.6 Piece arithmetic and interpolation
 
 **Established fact — angle domain and spin marker:** Each piece has independent per-axis move, turn, spin and acceleration state addressed as `axis + piece*19` words (see §4.3), plus per-piece busy and global dirty flags. Valid angles are 16-bit, `0x10000` per circle (`0x8000` is 180°); every angular store masks `&0xffff` and every lerp commit masks and wraps `&0xffff` with `+0x10000` wrap. The value `0xffffffff` is an out-of-band sentinel meaning continuous spin, never a valid angle, written only by `spin` (`0x10003000`) and tested by the interpolator's rotation block.
@@ -2996,6 +3703,91 @@ denominator raises the processor divide fault and terminates retail. The
 "must be a guarded thread-kill, not a trap" sentence above is the Nanolathe
 divergence note and stays as written; the retail contract is "the process
 dies".
+
+### Correction — a scriptless unit crashes retail at creation, not at a later tick [R-COB-04 §8] (2026-08-29)
+
+[R-COB-01 §1] ("Closed — UNIT-04") said that for a definition whose script
+file is missing "retail therefore neither rejects the unit nor crashes at
+creation nor substitutes a program — it creates a scriptless unit whose
+pieces render and animate never", and left the crash as an Unknown at the
+wind-generator producer. The scriptless branch of the model bind is as
+described — null program, no VM, no `Create` — but the sentence about
+creation was wrong, because it stopped at the bind.
+
+**Established — the fault site.** All three unit creators run, immediately
+after the model bind, the weapon-slot initializer of [R-CB-01 §4] step 4, and
+that initializer runs the synchronous `QueryPrimary` query for slot 0 (with
+the "ask the script" piece argument of −1) **unconditionally**, for every
+definition, with or without weapons. Every callback starter — the two
+name-form starts, the name lookup, and the synchronous query — reads the
+program pointer through the VM reference as its **first instruction**, with
+no null test. With a null VM reference that read is a null-pointer
+dereference, so **retail faults with an access violation while creating the
+unit**, before `SetMaxReloadTime`, before the unit is ever ticked, and before
+any diagnostic could be printed. There is no retail diagnostic for this
+case: the script loader returns null silently when the file is absent
+([R-COB-01 §1]), and the crash is the only symptom.
+
+**Established — the guard census.** Exactly three producer sites test the VM
+reference for null: the per-unit sweep's script drain, the metal extractor's
+creation-time `SetSpeed`, and the unit destructor's VM release. Every other
+producer (the wind pair, every query, `Aim*`, `Fire*`, `RockUnit`,
+`HitByWeapon`/`TakeDamage`, the movement-rate and medium callbacks, the
+transport family, `TargetCleared`, the `StartBuilding`/`StopBuilding` forms,
+and the network-mirror lookups) dereferences it directly. So even if the
+creation-time query were skipped, the first of those to run would fault.
+
+**Consequence for Nanolathe.** The contract is "a unit definition without a
+loadable COB program cannot exist in retail". The right divergence is to
+reject the definition at catalog compile time with the standard diagnostic
+shape (`nanolathe: unit script missing: logical path scripts/<name>.cob,
+providers searched [...], expected COB program`), never to create a
+scriptless unit. The `TODO(question)` marker at the creation path should be
+retired in favour of that rejection; the "crash policy" bullet leaves the
+tail.
+
+### Closed — `SetSpeed`, `SetDirection`, and `MotionControl` units and signs [R-COB-04 §9] (2026-08-29)
+
+**Established (restated from [R-CB-01 §5]; nothing new was traced).** Both
+callbacks are engine-to-script starts with one argument, delivered in window
+word 0 as a plain integer:
+
+* `SetDirection` — the global wind heading, a 16-bit angle in the
+  65536-per-circle domain, **zero-extended** (never negative). The heading is
+  drawn as `random(0x10000)` on a re-roll and is not relative to the unit;
+  scripts subtract their own heading if they want a relative turn.
+* `SetSpeed` (wind form) — the global wind speed shifted **left by four**
+  (`speed · 16`), where the speed is `minWindSpeed + random(maxWindSpeed −
+  minWindSpeed)` in the map's wind units (doc 03 owns the map keys); always
+  non-negative.
+* `SetSpeed` (extractor form) — the footprint metal sum of [R-CB-01 §5],
+  **sign-extended from 16 bits**, so a sum of `0x8000` or more arrives
+  negative.
+
+`MotionControl` **does not exist** in retail: a byte search of the whole
+image finds no such string ([R-CB-01 §1]), so no engine site starts it and
+a script defining it is never entered by the engine. The same bounded
+negative covers `StartUnload`, `RequestState`, `Demoted`, `Promoted`, and
+`Go`.
+
+### Closed — the `Aim*` handshake, script side [R-COB-04 §10] (2026-08-29)
+
+**Established (closing the R-1 marker's COB half).** The engine starts
+`AimPrimary`/`AimSecondary`/`AimTertiary` deferred with two 16-bit cells —
+heading, pitch — and passes the weapon slot's receiver word as the thread's
+completion receiver, having first written zero into the slot's aim-ready
+word ([R-CB-01 §3]). The script's `return` opcode (§4.3, `0x10065000`) pops
+one value and, because the receiver is set, delivers it: the interpreter
+calls the receiver's first method with the popped cell, then frees the
+thread and wakes any thread blocked on it. The receiver's first method is the
+two-branch setter of [R-CB-01 §6]: a **nonzero** cell stores the literal `1`
+into the aim-ready word; a zero cell stores nothing. A script that returns
+`FALSE` (0), or that is killed by a `signal` before it returns, or whose
+`Aim*` name does not resolve, therefore leaves the word at zero and the
+weapon never fires from that aim; there is no timeout, and the engine's next
+aim start clears the word again and restarts the handshake. The weapons side
+— which executor reads the word, together with the issue latch, before it
+spawns a projectile — is [R-WPN-03 §6] and is not restated here.
 
 ### 4.7 Engine port write semantics, the factory stance handshake, and thread-start masks [R-P0-10]
 
@@ -6873,6 +7665,11 @@ the surface over water and the terrain over land in one expression.
 
 **Established fact:** Definition bits and fields participate as: `canhover` is bit 12, `floater` is bit 19, `upright` is bit 20, `amphibious` is bit 21, `hoverattack` is bit 27. `canhover` excludes the unit from water-damage and participates in the stopped-state Y pre-gate; `floater` selects the ship surface clamp at `waterline + sea level`; `upright` keeps the model vertical and computes Y as `max(terrain, sea level minus waterline)`; `hoverattack` selects the gunship attack variant, not hover locomotion. The `amphibious` bit is parsed and stored but has no reader in the bounded recovered movement, medium, targeting, or transport code — parser-only in that bound (bounded absence, not whole-executable impossibility). Shipped amphibious-looking behavior compensates via movement class `TANKHOVER3` values (movement class MaxSlope 12, MaxWaterSlope 255, no depth limits) and the `canhover`/`upright`/`waterline`/`modelBottom`/`movementclass` fields, not via the amphibious bit. Other medium fields are `waterline` byte (draft for band `2`), `movementclass` name resolved to profile, and `modelBottom` signed word (threshold for band `3`).
 
+**Correction (2026-08-29, [R-SPEC-01 §15]).** The "no reader" sentence above is
+too broad: `amphibious` is read by the repair-admission water clause
+([R-ORD-01 §7]) and by a dead placement-validator variant; the movement,
+medium and transport bound stands.
+
 **Established fact:** Water damage is evaluated per unit before movement, once
 per tick when `globalTick % 30 == 0`, only when the owning player's class is `1`
 or `2` and both mission fields `waterdoesdamage` and `waterdamage` are nonzero,
@@ -8104,6 +8901,17 @@ replacement bullet is needed because the ground path has no vertical term.
 
 ### Orders and queues
 
+- Which front-end setting or mission key writes the session option bit that
+  admits every candidate in the shared target search regardless of `shootme`
+  · §3.9 [R-SPEC-01 §5], [06 §3.2] · static trace over the option byte's
+  writers (RWU-02-1). Until then Nanolathe treats the bit as clear.
+- Identity of the 16-bit `explodeas` weapon field the HUD kamikaze ring
+  halves (inferred `areaofeffect`) · §3.9 [R-SPEC-01 §1], [R-P0-11 §3] ·
+  static trace matching the weapon parser's store to the ring drawer's load.
+- Meaning of the one definition byte that gates the creation notification in
+  the pre-built creation path, and what the emitter shows for a status kind
+  whose caption text is empty (`selfdestructcountdown` 6 and 7) · §3.9
+  [R-SPEC-01 §12], [R-SPEC-01 §13] · static trace.
 - Per-phase operation-byte values inside the construction/factory handler
   family; the 68-descriptor handler set itself is closed · §3.1 · static
   trace.
@@ -8129,11 +8937,6 @@ replacement bullet is needed because the ground path has no vertical term.
   11-tick nanoframe decay of [R-ORD-01 §5] runs while a builder is working
   · [R-ORD-01 §5], doc 05 · static trace of the work helper's callers, or a
   timed build measured against the formula.
-- The five VTOL work twins — `VTOL_HelpBuild`, `VTOL_RepairPatrol`,
-  `VTOL_RepairUnit`, `VTOL_Reclaim`, `VTOL_ReclaimUnit` — have no per-visit
-  contract yet; [R-ORD-01 §0] records only the gates they arm
-  (`0x100E8` / `0x10008`) · §3.9, §10.3 · direct trace of the five bodies
-  against their ground twins in [R-ORD-01 §5].
 - `SelfDestruct` with a `selfdestructcountdown` of 6 or 7 indexes past the
   six-entry countdown caption table · [R-ORD-01 §2] · the FBI parser's clamp
   on the 3-bit field.
@@ -8170,15 +8973,35 @@ byte plus one per covered footprint cell, the metal-extractor rate input —
 query and is masked to four bits — [R-CB-01 §7]; a Nanolathe substitute is a
 sanctioned divergence, not an open question). Three new bullets replace them.
 
+**Correction (2026-08-29, RWU-04-4).** Four bullets are deleted because
+[R-COB-04] closes them: the reserved opcode's over-depth behavior (a
+four-word frame temporary; beyond it, undefined — [R-COB-04 §6]); the
+initial content of script statics (raw `malloc` memory, no fill —
+[R-COB-04 §7]); the scriptless-unit crash policy (retail faults at unit
+creation in the weapon-slot initializer's first synchronous query —
+[R-COB-04 §8], which corrects [R-COB-01 §1]'s "nor crashes at creation");
+and the five VTOL work twins ([R-ORD-01 §7]). The allocation-failure bullet
+is narrowed: the statics allocator is the C runtime's `malloc`, whose
+failure path is the runtime's new-handler loop, so the only remaining
+question is the engine's own pool allocator. Two new bullets are added.
+
 - The first committed retail ARMCK pose, and whether its authored waiting
   `Create` work advances before that publication · [R-P28-COB-01R] · manual
   retail observation (the paired settling probe). Marked `TODO(question)`.
-- Behavior when a synthetic or corrupted script emits reserved opcode
-  `0x10063000` with a count exceeding the window depth · §4.5 · static trace.
-  Stale window words are read; this is undefined behavior, not a kill.
-- Deterministic fault policy on allocation failure — where retail aborts
-  through its allocator's abort path · §4.6 · static trace. Marked
-  `TODO(question)`.
+- Deterministic fault policy when the engine's fixed-size pool allocator
+  (thread pool, order records, path markers) refuses — the head-insert sites
+  dereference a null record ([R-ORD-01 §1]) and the VM's thread pool wedges
+  ([R-COB-01 §1]); which of these retail reaches first under exhaustion
+  · §4.6, §3.9 · static trace of the pool allocator's failure return at each
+  caller. Marked `TODO(question)`.
+- Identity of the pooled effect class 7 (parameter 15) that every above-sea
+  bitmap explosion spawns, and of the smoke and fire trail classes the debris
+  draw pass emits · [R-COB-04 §2], [R-COB-04 §4], doc 03 · doc 03's effect
+  class census (RWU-03-4). The gates and parameters are established here.
+- Whether the effect-pool records a shatter claims but cannot pair with a
+  fragment (fragment table full) advance stale animation words · [R-COB-04 §3]
+  · static trace of the effect sim pass against a record with stale name
+  words, or manual retail observation of a mass death with shatter flags.
 - Caller of the second entry of the weapon slot's aim dispatch table — a
   four-argument stub returning zero, with no located call through that slot
   · §5.3 [R-CB-01 §6] · static trace of every indirect call whose target is a
@@ -8192,13 +9015,6 @@ sanctioned divergence, not an open question). Three new bullets replace them.
   the creation-time hold helper raise a `TargetCleared` for the previous
   tenant before the new unit's script is bound · [R-CB-01 §4] · static trace
   of the unit allocator's clearing of the record before initialization.
-- Initial content the tagged allocator provides for script statics, which the
-  program bind does not initialize · [R-COB-01 §1] · static trace.
-  Insensitive for stock content, which writes before reading.
-- Crash policy for a scriptless unit (null compiled program) whose update path
-  runs; one traced producer site lacks a null-VM guard · [R-COB-01 §1],
-  UNIT-04 · manual retail observation with a synthetic scriptless definition.
-  Marked `TODO(question)`.
 - Consumer of the script-touched marker · §4.7 [R-P0-10] · static trace.
   Write-only in the bounded census. Marked `TODO(question)`.
 - Semantic name of the busy bit; the transport-admission half is closed (no

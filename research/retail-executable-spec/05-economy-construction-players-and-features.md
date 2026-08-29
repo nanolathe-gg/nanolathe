@@ -59,9 +59,11 @@ A battle has ten fixed player slots. A player slot contains at least:
 - current energy and current metal as single-precision floating-point values;
 - current energy and metal storage capacities;
 - resource-production, resource-consumption, and waste statistics;
-- alliance relations to every player slot;
-- automatic energy, metal, and sensor-sharing options;
-- user-selected reserve thresholds;
+- two alliance rows (own declarations, and others' declarations toward
+  this slot) indexed by player slot [R-SHARE-01 §1];
+- automatic energy, metal, and mapping-sharing option bits;
+- two per-resource sharing thresholds, zeroed at battle setup and never
+  written again in the reachable image [R-SHARE-01 §3];
 - a contiguous range of unit slots owned by the player;
 - an auxiliary player-level economy bucket;
 - unit-limit accounting enforced only at nanoframe creation; queued products
@@ -2063,45 +2065,176 @@ admission reaches it with bit 0.
 Energy and metal transfer helpers:
 
 - reject observer/invalid player slots;
-- optionally clamp the amount to the source's available share buffer;
+- optionally clamp the amount to the source's live stock;
 - do nothing for a zero amount;
 - debit the source through the corresponding storage object;
-- credit the destination, with special-player adjustments where enabled;
+- credit the destination's mirror-bucket production slot, with the computer
+  player's difficulty discount applied once at credit;
 - when requested, emit a deterministic multiplayer command describing source,
   destination, resource kind, and amount.
 
-Energy and metal use parallel but separate paths.
+Energy and metal use parallel but separate paths. The exact arithmetic,
+widths, and the producer that drives them are in [R-SHARE-01 §2] and
+[R-SHARE-01 §5] below.
+
+**Correction (2026-08-29, RWU-05-4).** The first bullet used to read "clamp
+the amount to the source's available share buffer". There is no share buffer:
+the clamp compares the requested amount against the source's live stock
+(single precision) and takes the smaller. The "share-buffer refill rules" the
+tail listed as open therefore do not exist — nothing refills, because nothing
+is drawn down except the stock itself.
+
+#### R-SHARE-01 §1 — Control bytes, the two alliance rows, and the alliance predicate [R-SHARE-01] (2026-08-29)
+
+**Established — the three control-byte identities.** The player slot's
+control byte is `1` for a locally controlled human, `2` for a computer player,
+and `3` for a remote peer. The skirmish setup path writes `1` for the local
+human seat and `2` for each computer seat; the network join path writes `3`
+for every peer it admits; and the packet sender refuses to emit unless the
+source's control byte is `1` or `2` and the destination's is `3`. This closes
+the tail's open item on the identities of values `1` and `3` ([R-ECO-01 §3]
+had already pinned `2`). Slot initialization also copies the control byte
+into the slot's option record as a "kind" byte whenever it is not `3`, so a
+remote peer's kind byte is whatever the lobby synchronized (`1` human, `2`
+computer) rather than the control byte.
+
+**Established — two alliance rows per slot.** Each player slot carries two
+eleven-byte rows indexed by player slot number:
+
+- **row A** — this player's declaration toward each other slot (non-zero =
+  allied);
+- **row B** — each other slot's declaration toward this player, mirrored.
+
+Slot initialization zeroes both rows and sets the self entry of each to one.
+The alliance writer takes `(from, to, value, force)`: when `from` is local
+(control `1` or `2`) it writes `from.A[to] = value`, and additionally
+`from.B[to] = value` when `to` is a computer player, or a remote peer whose
+kind byte says computer, or when `force` is set; when `to` is local it writes
+`to.B[from] = value`, and additionally `to.A[from] = value` when `to` is a
+computer player or `force` is set. A computer player therefore reciprocates an
+alliance instantly; a remote human's reciprocal declaration arrives by packet.
+The skirmish setup writes row A for every pair of seats sharing an ally
+symbol ([08 "Skirmish configuration"] owns `ALLY%d` and the lobby side); the
+mission setup writes only the self entries.
+
+**Established — the predicate each simulation consumer uses.** There is no
+shared "is allied" function; each consumer indexes a row directly:
+
+| Consumer | Test | Notes |
+|---|---|---|
+| Automatic resource sharing ([R-SHARE-01 §3]) | `source.A[candidate] != 0` | one-directional: the giver's own declaration |
+| Sensor phase allied disjunct ([03 §3.2 R-VIS-01 §4]) | `owner.A[viewer] != 0` and an option-word bit with no writer | the owner's declaration toward the viewer |
+| Victory test (doc 08) | requires both `local.A[i]` and `local.B[i]` | mutual alliance |
+| All-enemies-eliminated test (doc 08) | `local.A[i] != 0` skips the slot | one-directional |
+| ALLIES screen (doc 07) | displays `B << 1 \| A` per row | presentation only |
+
+Nothing in the simulation reads row B for sharing; the giver shares with
+anyone it has declared alliance to, whether or not the declaration is
+returned.
+
+#### R-SHARE-01 §2 — The two transfer helpers, exactly [R-SHARE-01] (2026-08-29)
+
+**Established — signature and gates.** Each helper takes `(source slot,
+destination slot, amount as single precision, debit flag)`. Either slot equal
+to `10` (the "no slot" sentinel) returns without effect. When the debit flag
+is set and the source's live stock of that resource is strictly less than the
+amount, the amount becomes the live stock. An amount exactly equal to `0.0`
+(after the clamp) returns without effect; a negative amount is not rejected
+(see the edge below).
+
+**Established — debit.** When the debit flag is set the source's storage
+object is asked to pay: if `amount <= live stock` (inclusive, single
+precision) the live stock is reduced by the amount and the source's
+mirror-bucket "requested this pass" slot for that resource is increased by
+it, and the helper returns success; otherwise nothing is paid and it returns
+failure. **The transfer helper ignores that result** and credits regardless.
+With the clamp above, a debit-flag caller can never reach the failure branch
+(after the clamp `amount <= stock` holds), and callers without the flag never
+debit; the doc's earlier "whether normal callers can reach a failed deduction"
+question is closed — they cannot.
+
+**Established — credit and the recipient discount.** The credit is written to
+the destination's **mirror-bucket production slot** for that resource
+([R-ECO-01 §2] describes the bucket; [R-ECO-01 §5] folds it at the
+destination's next settlement pass), never to the live stock. When the
+bucket's owner record exists and its control byte is `2` (computer player),
+the credit is scaled by the difficulty selector of [R-ECO-01 §3]:
+
+```
+selector 0:  slot = (float)( (double)slot - (double)amount * (-0.5) )
+selector 1:  slot = (float)( (double)slot - (double)amount * (-0.7) )
+otherwise:   slot = slot + amount                       (single precision add)
+```
+
+The two scaled forms multiply the single-precision amount by a
+**double-precision** constant (`-0.5`, `-0.7`), subtract that product from the
+slot value in double, and store single. The unscaled form is a plain
+single-precision add. The mirror-bucket fold during settlement is an unscaled
+sum, so a computer recipient is discounted exactly once, at credit, not again
+when the bucket is folded. Because the credit lands in the production slot,
+the shared amount is subject to the destination's capacity clamp and waste
+accounting at its next settlement ([R-ECO-01 §6]), not at the moment of
+transfer.
+
+**Established — packet.** With the debit flag set, the helper then emits the
+sharing packet (type `0x16`, subtype `1` energy / `2` metal, source and
+destination network identities, the clamped amount). The packet emitter itself
+refuses unless the session is networked, the source is local, and the
+destination is a remote peer, so in a single-player battle the emission is a
+no-op ([R-SHARE-01 §4]).
+
+**Established — the negative-amount edge.** A negative amount passes every
+gate: the clamp only lowers a too-large positive amount, the zero test is an
+exact compare, the debit test `amount <= stock` is true, so the source's stock
+*increases* by the magnitude and the destination's production slot *decreases*
+by it. Whether the SHARE screen's integer parser can produce a negative value
+is **Unknown** (decider: static trace of the shared string-to-integer helper's
+sign handling); the helpers themselves do not guard.
 
 ### Automatic transfer
 
 Every sixty authoritative ticks, the automatic-sharing dispatcher considers
-metal and energy independently for its source player. The corresponding source
-option must be enabled, and source current stock must exceed its separate
-sharing threshold. These thresholds are written once at battle setup from
-capacity but live at distinct fields from capacity; they are not aliases of it.
+metal and energy independently for the local player. The corresponding
+option-word bit must be set and the local player's current stock must strictly
+exceed its per-resource sharing threshold. The thresholds are separate fields
+from capacity; they are zeroed at battle setup and nothing in the reachable
+image writes them afterwards, so in play the condition is simply "stock
+strictly greater than zero".
+
+**Correction (2026-08-29, RWU-05-4).** This section previously said the
+thresholds "are written once at battle setup from capacity". That was wrong:
+the per-player battle initializer stores zero in both threshold fields, and
+the only stores that ever derive a threshold from capacity sit in a console
+command handler region that no reachable code references (the `SetShareMetal`
+/ `SetShareEnergy` family, whose strings are also unreferenced). The exact
+consequence is in [R-SHARE-01 §3].
 
 The dispatcher scans player slots from zero through nine. Every eligible
 allied candidate with lower current stock replaces the previous candidate, so
-the last qualifying slot wins. Alliance is checked through a per-player
-alliance byte, not through a sharing flag. The exact semantic names of all
-status and alliance predicates remain partly unresolved.
+the last qualifying slot wins. Alliance is checked through the giver's row A
+([R-SHARE-01 §1]).
+
+**Correction (2026-08-29, RWU-05-4).** The earlier text said "the exact
+semantic names of all status and alliance predicates remain partly
+unresolved" and omitted a gate that changes the feature's reach entirely: a
+candidate must have control byte `3` — a **remote peer** — and its option
+record's kind byte must be `1` (human). Computer players and the local human
+are never candidates. In a single-player skirmish or mission the automatic
+share options are therefore inert; only a networked session with an allied
+remote human can receive an automatic transfer.
 
 For metal, the transfer is:
 
-`min(destination capacity - destination current, (source current - source threshold) × 0.333333343)`
+`min(destination capacity - destination current, (source current - source threshold) × 0.33333334)`
 
 For energy, it is:
 
 `min(destination capacity - destination current, (source current - source threshold) × 0.5)`
 
 The amounts are clamped by the destination capacity gap so a transfer never
-overfills beyond capacity. The helpers then debit the source storage object
-and credit the destination; when requested they also emit a deterministic
-multiplayer sharing packet, and receivers copy the fields overwrite-sync with
-no comparison, no threshold, and no abort. A special recipient state can
-discount the credited amount. The helpers do not branch on the source-deduction
-helper's Boolean result before crediting; whether normal callers can reach a
-failed deduction after the outer clamp remains unknown.
+overfills beyond capacity. The helpers of [R-SHARE-01 §2] then debit the
+source and credit the destination and emit the packet; receivers apply the
+packet through the same helpers without the debit flag ([R-SHARE-01 §4]).
 
 **Established fact — maker stall and negative fields.** A metal maker or an
 extractor contributes nothing for that settlement pass when the owning unit's
@@ -2116,12 +2249,134 @@ selector 1 → seven tenths). An earlier revision that called this pairing
 the referenced site is a misnomer: there is no capture refund — the site is
 the factory cancel-current refund, which shares the same pairing.
 
+#### R-SHARE-01 §3 — The automatic dispatcher, exactly [R-SHARE-01] (2026-08-29)
+
+**Established — where it runs.** The tick executor calls the dispatcher once
+per sub-tick for the **local player's slot only**, after the twelve phases of
+[01 §4] and before the presentation flush, and only when the sub-tick is an
+advancing one. Inside, the dispatcher returns immediately unless the session
+flag word's "networked session" bit is set; that bit is raised when the
+front end finds a live network session. Everything below is therefore
+multiplayer-only behavior; Nanolathe's single-player build reproduces it as a
+no-op.
+
+**Established — the 60-tick resource pass.** When `tick mod 60 == 0`, for
+metal then energy:
+
+1. Source gate: option-word bit `1` (metal) / bit `2` (energy) set, and
+   `source.threshold < source.stock` (single precision, strict).
+2. Candidate scan, slots `0..9` ascending, candidate `c` qualifies when all of:
+   the slot exists; control byte in `{1, 2, 3}`; the slot's own index is not
+   `10`; the slot is not eliminated (`live unit count != 0` or `total units
+   ever created == 0`); **control byte equals `3`**; the candidate's option
+   record kind byte equals `1`; `source.A[c] != 0`; and
+   `candidate.stock < source.stock` (single precision, strict). The last
+   qualifying slot wins.
+3. If a candidate was chosen:
+   `amount = min(candidate.capacity − candidate.stock,
+   (source.stock − source.threshold) × k)` with `k = 0.33333334` (metal) or
+   `0.5` (energy), the multiply in single precision; then the resource's
+   transfer helper is called with the debit flag set.
+
+The threshold fields are both zero throughout play (see the correction
+above), so step 1's compare is `0 < stock` and step 3's product is `stock × k`.
+No random draw is consumed.
+
+**Established — the 450-tick mapping pass.** When `tick mod 450 == 0` and
+option-word bit `5` is set, every slot passing the same candidate predicate
+(plus `source slot != 10`) is sent a type `0x16` subtype `3` packet carrying
+the source and destination network identities. The consumer is
+[R-SHARE-01 §6].
+
+**Established — what the option bits are.** The simulation reads exactly
+three bits of the slot's option word for sharing: bit `1` share metal, bit `2`
+share energy, bit `5` share mapping. Their only live writers are whole-word
+copies on the lobby/network synchronization paths (doc 08 owns them); the
+bit-level toggles (`Toggled ShareMetal to: %s` and siblings) live in the
+unreferenced console region noted above.
+
+#### R-SHARE-01 §4 — The receive side and its phase [R-SHARE-01] (2026-08-29)
+
+**Established.** Sharing packets are consumed by the network drain — phase 1 of
+the sub-tick ([01 §4]), before any unit work. For packet type `0x16` the
+drain resolves both carried network identities to slots (a miss yields the
+sentinel `10`, and either sentinel drops the packet), then dispatches on the
+subtype dword: `1` → the energy helper, `2` → the metal helper, both with the
+carried single-precision amount and the **debit flag clear** — the receiver
+credits the destination's bucket but never debits (the sender debited
+locally); `3` → the mapping-grid merge of [R-SHARE-01 §6]. No comparison,
+threshold, or alliance test is applied on receipt; the doc's earlier
+"overwrite-sync with no comparison" wording described this.
+
+**Established — the sender's packet gate.** The packet emitter is a no-op
+unless the session flag word's networked bit is set, the source slot's control
+byte is `1` or `2`, and the destination's is `3`. Consequently in a
+single-player battle every share, manual or automatic, is applied exactly once
+by the local helper call and never re-applied by the drain.
+
+#### R-SHARE-01 §5 — The SHARE screen producer and unit sharing [R-SHARE-01] (2026-08-29)
+
+**Established — controls.** `SHARE.GUI` binds a player list (`PLYRLIST`), two
+text fields (`METAL`, `ENERGY`), two check controls (`SHARUNIT`, `MAPINFO`), a
+confirm button, and `CANCEL` (back to the previous screen). Confirming
+resolves the selected list row to a network identity and then to a slot; the
+target must exist, have control byte `1`, `2` or `3`, have an assigned slot
+index, not carry the rule word's defeated bit, and not be eliminated. **There
+is no alliance test** — a player may share with an enemy.
+
+**Established — amounts.** Each text field is parsed by the shared
+string-to-integer helper (64-bit integer result), truncated to a 32-bit
+integer and converted to single precision; fractions cannot be entered. The
+metal helper is called first, then the energy helper, both with the local
+slot as source, the resolved target, and the debit flag set — so each amount
+is clamped to the local live stock ([R-SHARE-01 §2]). Zero fields are no-ops.
+
+**Established — unit sharing.** With `SHARUNIT` checked, the current
+selection of the local player is gathered and each selected unit is handed to
+the ownership-transfer routine (the same one capture uses, [R-WORK-01 §6])
+with the target's player record, **except** units whose status word's low two
+bits equal `2`, units with a non-zero transport-attachment reference in either
+of the two attachment slots, and units whose definition index is in the
+`Commander` category bitset. The transfer re-allocates the unit in the
+target's pool slice through the allocator of [R-SHARE-01 §8], so it fails
+silently when the target's slice is full or the definition's limit is
+reached. What the status word's low two bits denote is doc 04's field
+(**Unknown** here; decider: doc 04's status-word census).
+
+**Established — map information.** With `MAPINFO` checked, the mapping-grid
+merge of [R-SHARE-01 §6] is applied locally from the local slot to the target
+and a subtype `3` packet is emitted.
+
+**Supported inference — timing.** The screen handler runs from the window
+message pump, which the main loop services between executor calls
+([01 §2.3]); the transfer therefore lands between sub-ticks, never inside a
+phase. A static trace of the pump/executor interleaving would settle it.
+
 ### Sensor sharing
 
-Every 450 authoritative ticks, a separate option can emit a radar/sensor share
-command for allied players. The visibility document defines what state is
-shared; this document defines only the player option, cadence, and networked
-transfer trigger.
+Every 450 authoritative ticks, the share-mapping option emits a packet for
+every allied remote human ([R-SHARE-01 §3]); the receiver merges the sender's
+**mapped-memory word grid** bits into its own. Nothing about line of sight,
+radar, or the visibility mode word is transferred.
+
+**Correction (2026-08-29, RWU-05-4).** The earlier text said "the visibility
+document defines what state is shared". The consumer is now traced
+([R-SHARE-01 §6]) and it touches only the mapping (explored-memory) word grid
+of [03 §3.1]; doc 03's sensor phase does not read any shared state
+([03 §3.2 R-VIS-01 §7]). The old `ShareRadar`/`ShareLOS` console strings are
+unreferenced.
+
+#### R-SHARE-01 §6 — The mapping-grid merge [R-SHARE-01] (2026-08-29)
+
+**Established.** Given `(source slot, destination slot)`, the merge walks the
+mapping word grid of [03 §3.1] — `(map cell width × map cell height) / 4`
+sixteen-bit words, the signed division truncating toward zero — and for every
+word whose source bit is set, ORs in the destination bit. Bits are
+`1 << (slot & 31)` within a sixteen-bit word, so slots `0..9` map to bits
+`0..9`. It is idempotent, copies only in one direction, and consumes no random
+draw. It is reached from the 450-tick emitter's packet (phase 1 of the
+receiver's sub-tick), from the SHARE screen's `MAPINFO` control (locally and
+by packet), and from nowhere else.
 
 ## Unit creation and limits
 
@@ -2154,32 +2409,187 @@ which capabilities are active.
 ### Limit accounting
 
 Limits are enforced at exactly one place: **inside the unit allocator, at the
-instant of nanoframe creation**, and only when the definition is flagged
-buildable. Each definition carries a per-definition limit field whose sentinel
-of -1 means unlimited; when a finite limit is set, the allocator counts live
-instances with a matching definition index **within the owning player's
-contiguous instance slice only** — there is no cross-player accounting site —
-and refuses creation when the count has reached the limit. Queued factory
-products hold no reservation: a full queue simply fails each allocation attempt
-and retries. Capture transfer validates the same limits before replacing
-ownership. Failure surfaces as the production handler's "unable to create any
-more units" message plus an exact 300-tick retry. Exhausting the player's
-instance pool produces the same failure path.
+instant of nanoframe creation**, and only when the definition carries its
+creatable bit. Each definition carries a per-definition limit field whose
+sentinel of -1 means unlimited; when a finite limit is set, the allocator
+counts instances with a matching definition index **within the owning
+player's contiguous instance slice only** — there is no cross-player
+accounting site — and refuses creation when the count has reached the limit.
+Queued factory products hold no reservation: a full queue simply fails each
+allocation attempt and retries. Capture and unit sharing transfer ownership
+through the same allocator and are refused by the same gate. Failure surfaces
+as the production handler's `Unable to create any more units` message plus an
+exact 300-tick retry. Exhausting the player's instance slice produces the
+same failure path. The exact gate is [R-SHARE-01 §8].
 
-The `norestrict` capability parses into the definition's capability word but no
-reviewed consumer reads it — bounded absence over the reviewed corpus; the
-limit check does not consult it. No parser key or reviewed initializer writes
-the per-definition limit field, so stock defaults come from outside the
-reviewed corpus (the -1 sentinel implies unlimited by default); both absences
-are recorded as bounded negatives in the factory-contract analysis.
+**Correction (2026-08-29, RWU-05-4).** Three claims of the earlier text are
+withdrawn. (1) "No parser key or reviewed initializer writes the per-definition
+limit field, so stock defaults come from outside the reviewed corpus" — the
+definition parser initializes the field to -1 for every definition, and the
+multiplayer lobby's restriction dialog is its only other writer
+([R-SHARE-01 §9]). (2) "`norestrict` … no reviewed consumer reads it" — two
+functions of the restriction dialog read it, to exclude the definition from
+the restrictable list; the simulation never reads it ([R-SHARE-01 §9]).
+(3) The "numeric pool capacity" paragraph below said the pool is sized from
+the catalog definition count and that the mission `maxunits` field has no
+allocator reader; both are wrong ([R-SHARE-01 §7]).
 
 **Established fact — numeric pool capacity.** The physical unit pool is
-sized once at battle setup as `(catalog definition count) × 10 + 1` records
-per player slice (slot zero of each slice reserved as the null identity);
-there is no other numeric cap on live units. The mission logical `maxunits`
-field has no allocator reader (bounded negative over the reviewed corpus) —
-it is not an allocator gate, so pool exhaustion follows the physical size
-alone.
+sized once at battle setup as `(per-player unit limit) × 10 + 1` records —
+one contiguous slice of exactly `limit` records per player slot, plus slot
+zero as the null identity. The per-player unit limit comes from the mission's
+`maxunits` in campaign mode and from the lobby in skirmish and multiplayer
+mode; it is the only numeric cap on live units, and the allocator's
+first-free scan over the slice is what enforces it.
+
+#### R-SHARE-01 §7 — The unit pool is sized by the per-player unit limit [R-SHARE-01] (2026-08-29)
+
+**Established — sizing.** At battle entry the engine copies the session's
+per-player unit limit (an unsigned sixteen-bit value) into its runtime copy
+and computes `record count = limit × 10 + 1`. It allocates that many unit
+records (labelled `UNIT MEMORY`), zero-fills them, stamps each record's own
+index and a definition pointer to the catalog base, and assigns slot `i`
+(`0..9`) the records `[limit × i + 1, limit × (i + 1)]` inclusive — exactly
+`limit` records per slot regardless of how many slots participate. Record `0`
+is the null identity. Two side tables — the hot-unit list (`20` bytes per
+entry) and the hot-radar-unit list (`100` bytes per entry) — are sized
+`limit` entries each. In multiplayer mode the ten slots are first sorted by
+network identity before slices are assigned; otherwise they keep slot order.
+
+**Established — the limit's sources.** The session limit is a single global
+written by three producers:
+
+| Session mode | Writer | Value |
+|---|---|---|
+| Campaign / mission | OTA loader, `GlobalHeader` | `maxunits`, default `200` when absent |
+| Skirmish | lobby entry copies the lobby value | registry `UnitLimit`, default `250`, clamped to `[20, 500]` (values above 500 become 500, below 20 become 20) |
+| Multiplayer | lobby entry copies the lobby value, then overrides it from the host's option record | the host's synchronized unit-limit word |
+
+The registry read and the clamp happen once at lobby entry; [08 "Skirmish
+configuration"] owns the ladder of selectable values and the option-record
+synchronization (RWU-08-2; this unit records only the simulation-side
+consumers).
+
+**Established — reader census of the runtime limit.** Besides the pool sizing
+above: the lobby panel prints the number (doc 07 owns the panel); two unit-slot arithmetic
+helpers convert a global record index to a slice-relative one by `index mod
+limit`; the computer player's construction scorer compares
+`(limit >> 1) < live unit count` ([08 R-AI-01 §13]) and one of its cadence
+helpers divides by the limit (doc 08); and two option-block bulk copies carry it
+with its neighbours. No consumer compares the limit against anything the
+allocator does not already enforce through the slice size.
+
+#### R-SHARE-01 §8 — The allocator gate, exactly [R-SHARE-01] (2026-08-29)
+
+**Established — inputs.** The allocator takes the owning player slot, the
+definition index (sixteen-bit), the world position triple, a "finished"
+flag, the two orientation bits to seed the status word, and an optional
+preferred record index (`0` = none). It reads the definition's creatable bit
+and its per-definition limit field, the player's slice bounds, and every
+record's definition index within the slice.
+
+**Established — order of tests.**
+
+1. `definition index == 0` → refuse (returns the null unit).
+2. Definition's creatable bit clear → refuse.
+3. If the definition's limit is not `-1`: count the records in the slice
+   (inclusive of both ends) whose definition index equals the requested one;
+   refuse when `count >= limit` (signed compare; a limit of `0` refuses
+   always).
+4. With no preferred index: scan the slice from its first record and take
+   the first whose definition index is `0`; none free → refuse.
+   With a preferred index: take exactly that record if it lies inside the
+   slice (unsigned compare against both bounds) and its definition index is
+   `0`; otherwise refuse. The preferred path is used by the save-game restore.
+5. On success: write the definition index, run the instance initializers
+   (base state, script instance, order state, movement state), attach the
+   3D model when the definition's `bmcode` byte is `1`, seed the status word's
+   low two bits from the orientation argument, register the record with the
+   unit grid and the hot lists, and when "finished" is set apply the
+   completion-time effects (activation of always-active definitions and the
+   flags doc 04 §3 owns); then increment the player's sixteen-bit **live unit
+   count** and its 32-bit **units-ever-created** counter, and register the
+   record with the session object.
+
+The count in step 3 is a census of **records whose definition index is set**:
+it includes nanoframes, completed units, and dead units whose teardown has
+not yet cleared the index — teardown zeroes the index and decrements the live
+count ([04 §3] owns when teardown runs; the elimination test that fires when
+the live count reaches zero is [08 R-AI-01 §13]). Nothing else consults the
+limit field.
+
+**Established — the failure sites and their retry.** The allocator's null
+return is handled by:
+
+| Caller | On failure |
+|---|---|
+| `BuildingBuild` production state 2 ([05 "Factory production lifecycle"]) | caption `Unable to create any more units` (category 7), node wait of exactly 300 ticks, node flag bit 1 set, result 2 |
+| `MobileBuild` (site placement) | same caption, 300-tick wait, result 2 |
+| `Resurrect` completion ([R-WORK-01 §7]) | same caption, 300-tick wait, result 2 |
+| the VTOL mobile-build variant | same caption, result 8, **no wait** |
+| ownership transfer (capture [R-WORK-01 §6], unit sharing [R-SHARE-01 §5]) | no transfer; the unit stays with its owner |
+| start-unit and mission spawns | no unit; the spawner continues |
+
+The VTOL row is a **Supported inference**: the handler fragment is reached
+through a jump table that lies inside the `VTOL_MobileBuild` handler's address
+span and its body mirrors `MobileBuild`'s; a static trace of that jump table's
+owner would settle the name. The caption string is exactly
+`Unable to create any more units`; the success caption is
+`Starting construction`.
+
+#### R-SHARE-01 §9 — The per-definition limit field, its writers, and `norestrict` [R-SHARE-01] (2026-08-29)
+
+**Established — default.** The unit definition parser stores `-1` (unlimited)
+into the per-definition limit field of every definition it parses, and sets
+the definition's creatable bit for every definition it keeps (definitions
+failing the parser's validation lose the bit and are compacted out of the
+catalog before any battle; doc 02 owns that validation). In every single-player
+session these are the final values.
+
+**Established — the only other writer is the multiplayer restriction
+dialog.** The multiplayer lobby's `RESTRICTIONS` button constructs a
+restriction tree seeded with one node per catalog definition (keyed by the
+definition's identity word) whose limit value is `-1`, or `0` when the
+definition's `wacky` flag is set. The `RESTRICT2.GUI` screen edits nodes: its
+`COUNT` field accepts a value below `101` as the count and anything else as
+`No Limit` (`-1`); closing the screen marks each node "restricted"
+(`enable = 1`) when its row value is non-zero and "unrestricted" (`enable =
+0`) when the row value is zero, skipping definitions that carry
+`norestrict`. When the front end leaves the multiplayer lobby for the battle
+it applies the tree to the catalog: for a definition with a node,
+`creatable bit = (enable != 0 && synced != 0)` and `limit field = node
+limit`; for a definition without a node, `limit field = 0` and the creatable
+bit is cleared. The `synced` word is written by the lobby's restriction
+synchronization acknowledgement (multiplayer transport, out of scope). The
+apply step runs only under the front end's multiplayer-lobby flag, so a
+skirmish or campaign battle never executes it.
+
+**Established — `norestrict` reader census.** The capability parses into bit
+15 of the definition's second flag word (both parser entry points write it).
+Exactly two readers exist, both in the `RESTRICT2.GUI` screen: the picture-list
+builder skips such definitions, and the close handler skips them when marking
+nodes. The allocator, the settlement, the AI, and every other simulation
+consumer never read the bit. A `norestrict` definition therefore keeps its
+seeded node (limit `-1`, or `0` for `wacky`) and its `enable` word at the
+seed value — an effect the lobby side owns and this document does not state.
+
+**Established — consequence for the single-player build.** With no
+restriction tree, the allocator's step 2 always passes and step 3 is skipped
+for every definition; the only limit is the slice size of [R-SHARE-01 §7].
+An implementation that exposes per-definition limits must treat them as
+multiplayer-lobby data with the semantics above, not as an FBI key.
+
+#### R-SHARE-01 §10 — The computer player's gate is not the definition limit [R-SHARE-01] (2026-08-29)
+
+**Established.** The computer player's per-type limit test
+([08 R-AI-01 §12]) reads its strategic state's per-type limit table — filled
+by the AI profile's `limit` directive — and passes when the entry is `-1` or
+when the type's current count is strictly below it. It never reads the
+definition's limit field or the session's per-player limit; the per-player
+limit reaches the planner only through the half-capacity scoring term of
+[08 R-AI-01 §13]. Every unit the computer player builds still passes through
+the allocator of [R-SHARE-01 §8], so the slice size and (in multiplayer) the
+restriction limits bind it exactly as they bind a human.
 
 ## Build request and factory queue behavior
 
@@ -5344,6 +5754,21 @@ is stated in [R-WORK-01 §3], so nothing about it is open. Four bullets replace
 it, all raised by the work-handler pass and none of them a restatement of a
 closed finding.
 
+**Correction (2026-08-29, RWU-05-4).** Three bullets are removed as closed
+under [R-SHARE-01]. The sharing-residuals bullet asked for share-buffer refill
+rules that do not exist (the clamp is against live stock), for the state-2
+discount scalar (0.5 / 0.7 in double, applied once at credit), and for the
+predicate names (row A of the giver, remote-human candidates only) —
+[R-SHARE-01 §1]–[R-SHARE-01 §4]. The limit-field bullet's two "bounded
+negatives" were both wrong: the parser writes the -1 default and the
+multiplayer restriction dialog is the writer; `norestrict` has two lobby
+readers — [R-SHARE-01 §9]. The control-byte bullet is closed: 1 is the local
+human and 3 the remote peer — [R-SHARE-01 §1]. Two claims in the body were
+corrected in place: the unit pool is sized by the per-player unit limit, not
+the catalog count, and `maxunits` is that limit's campaign source
+[R-SHARE-01 §7]; and the automatic-share thresholds are zero, not derived
+from capacity [R-SHARE-01 §3]. Four bullets are added below.
+
 **Correction (2026-08-29, RWU-05-5).** Five feature bullets are removed as
 closed under [R-FEAT-01]: the reclaim payout's two "protection" bits are the
 anchor's instance-attached bit and the definition's sprite bit
@@ -5396,9 +5821,6 @@ are the residue.
 - Semantic meaning of the game-ended flag bits and of the two mission-end
   predicates behind the confirmation delay; the bit patterns and the
   freeze-on-settlement effect are established · doc 08 · static trace.
-- User-facing identities of player control-byte values **1** and **3**; value
-  2 is the computer player and the 0.5 / 0.7 selector is the difficulty word,
-  both closed by [R-ECO-01 §3] · "Unit instance economy state" · static trace.
 - Names of the two fields in the settlement status pair, and the consumer of
   the `WinLoseTime` sibling deadline beyond its save key; `DisplayTimer`'s
   sole consumer is closed by [R-ECO-01 §6] · "Authoritative settlement order"
@@ -5423,16 +5845,22 @@ are the residue.
   retail observation with an authored extreme-cost probe. Exceptional-value
   behavior, signed zero, the truncation sites, and the float-versus-double
   widths are closed by [R-ECO-01 §1] and [R-ECO-01 §5].
-- Sharing residuals: the source share-buffer refill rules, the state-2
-  recipient discount scalar in the transfer helpers, and the names of the
-  remaining status/alliance predicates · "Automatic transfer" · static trace.
-  Threshold initialization, destination over-cap clamping, and packet
-  application are closed.
-- Writer or initializer of the per-definition limit field (absent from the
-  reviewed corpus; the `-1` sentinel implies unlimited), and any consumer of
-  the parsed-but-unread `norestrict` capability bit · "Unit creation and
-  limits" · static trace over the unrecovered regions. Both are bounded
-  negatives today.
+- Whether the SHARE screen's string-to-integer parser accepts a leading sign:
+  the transfer helpers do not guard a negative amount (the source gains, the
+  destination loses) · [R-SHARE-01 §2] · static trace of the shared parser's
+  sign handling, or manual retail observation with `-100` typed into the field.
+- Name of the order handler whose jump-table fragment reports
+  `Unable to create any more units` with result 8 and no wait; inferred to be
+  `VTOL_MobileBuild` from its address span and body · [R-SHARE-01 §8] · static
+  trace of the jump table's owning function.
+- Meaning of the unit status word's low two bits, which unit sharing tests
+  against `2` to skip a selected unit · [R-SHARE-01 §5] · doc 04's status-word
+  census.
+- Effect of a `norestrict` definition's untouched restriction node on the
+  lobby side (seeded limit `-1`, or `0` when `wacky`; `enable` word at its
+  seed value) · [R-SHARE-01 §9] · static trace of the node seed's `enable`
+  word and of the synchronization acknowledgement; multiplayer lobby, out of
+  scope for the simulation.
 - Upstream UI and network producers of the factory production interrupts —
   cancel-current (mask 2) and "Construction stopped" (mask 8) · doc 04 §3.3,
   doc 07 · static trace. Handler-side semantics for both are established.
