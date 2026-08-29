@@ -273,12 +273,11 @@ func TestForeignOccupantStillBlocksExitSilently(t *testing.T) {
 	}
 }
 
-// TestExitQuerySkipsAggregatesSiteKeepsThem pins the Supported inference that
-// factory exit-spot validation runs outside the inline terrain-check mode
-// [04 §6.4]: aggregate slope gates stay armed for chosen sites but not for
-// exits. Inference because the exit caller's mode value remains unresolved;
-// TODO(question) records what would settle it.
-func TestExitQuerySkipsAggregatesSiteKeepsThem(t *testing.T) {
+// TestExitQueryKeepsAggregates locks [04 R-FAC-02 §4]: the factory exit-spot
+// query runs in the inline terrain-check mode (mode 1, like a chosen site),
+// so the aggregate slope gate rejects a steep exit cell. The skip flag only
+// exists for domain-level callers and must not be what the exit path uses.
+func TestExitQueryKeepsAggregates(t *testing.T) {
 	lab := newFactoryDef("exitlab", 4, 4, 300)
 	mob := exitMobileDef("exitmob", 2, 2)
 	cat := exitCatalog(lab, mob)
@@ -293,10 +292,10 @@ func TestExitQuerySkipsAggregatesSiteKeepsThem(t *testing.T) {
 	for i := range yard {
 		yard[i] = 0x06
 	}
-	if _, err := svc.validatePlacement(999, rect, mob, yard, true); err != nil {
-		t.Fatalf("exit query rejected on sloped yard: %v", err)
-	}
 	if _, err := svc.validatePlacement(999, rect, mob, yard, false); err == nil || !strings.Contains(err.Error(), "slope") {
-		t.Fatalf("site query accepted steep slope, want aggregate rejection; got %v", err)
+		t.Fatalf("exit query accepted steep slope, want aggregate rejection [04 R-FAC-02 §4]; got %v", err)
+	}
+	if _, err := svc.validatePlacement(999, rect, mob, yard, true); err != nil {
+		t.Fatalf("domain-skip query rejected on sloped yard: %v", err)
 	}
 }

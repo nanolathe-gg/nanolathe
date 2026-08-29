@@ -230,10 +230,11 @@ that Ctrl composition is already folded into the token by the translator
 `0xCE..0xD9`) and Shift reaches the dispatcher as the shifted `WM_CHAR`
 character for printable keys. "Own selectable unit" below means a unit in the
 local player's slot range whose status word has the selectable bit set, whose
-build-progress fraction is `0.0`, whose transporter reference is null, and
-whose carrier reference is either null or itself marked as a visible carrier
-— the same predicate the rectangle selection of §9 uses; the selectable bit
-is the status bit the trigger system reads [08 R-TRIG-01 §5]. "Cue" means
+build-progress fraction is `0.0`, whose post-capture grace counter is zero
+(corrected 2026-08-29 per [R-WGT-01]: this previously read "whose transporter
+reference is null"), and whose carrier reference is either null or itself
+marked as a visible carrier — the same predicate the rectangle selection of
+§9 uses and the trigger system's eligible-unit predicate [08 R-TRIG-01 §3]. "Cue" means
 the named sound cue played through the interface sound path.
 
 | Token | Key | Action |
@@ -677,14 +678,119 @@ above. Two flag meanings are mechanically named: `0x800` requests one extra
 redraw pass when the window closes, and `0x1000` centers a modal window in the
 playfield right of the 128-pixel rail (§11). The per-dialog Escape/Enter/focus
 defaults are authored data — each GUI file declares its own `escdefault`,
-`crdefault`, and `defaultfocus` controls — so there is no hard-coded matrix to
-inventory, and a reimplementation must honor the authored fields.
+`crdefault`, and `defaultfocus` controls — and the fixed matrix that consumes
+them is [R-WGT-01 §2]. **Correction (2026-08-29, RWU-07-3).** This list
+carried "event bubbling between parent and child panels", "default-control
+rules for every panel", "whether keyboard focus can be shared by a list and a
+textbox" and "overlap, capture, and association redirection precedence" as
+open; all four are closed in [R-WGT-01 §§1–2, §5–§7]: there is no
+parent/child bubbling (one flat gadget array, first firing gadget in index
+order wins), the default-control rules are the Enter/Escape/Space rows of
+the matrix, focus is single (one focused gadget, one capture), and
+association is a post-change synchronisation, not a redirection.
 
 - User-facing naming of every GUI mode/flag bit · static trace.
-- Default-control rules for every panel · static trace.
-- Event bubbling between parent and child panels · static trace.
-- Whether keyboard focus can be shared by a list and a textbox · static trace.
-- Overlap, capture, and association redirection precedence · static trace.
+- The meaning of the window key-navigation flag's *clear* state in the
+  front end — which screens deliberately leave Tab/Enter/Escape to their
+  own key callback rather than the matrix · per-screen static trace.
+
+
+### Closed — the gadget service pass: order, capture, hover help, and who closes the window [R-WGT-01 §1] (2026-08-29)
+
+**Established.** One routine services the top window once per host frame
+(the "GUI pass" of §2). Its order is fixed:
+
+1. The scaled timer ([R-CAM-01 §10], 30 units per second) is sampled; the
+   delta since the previous pass is stored. A separate once-per-tick latch
+   (`0 < now − lastStamp`) gates every piece of timed widget work below
+   (flash decay, auto-repeat, list auto-scroll); a pass that lands inside
+   the same timer unit does none of it.
+2. The mouse sample is fetched. A sample taken while a button is held **and**
+   the pointer is outside the window rectangle is discarded — the pass keeps
+   the previous position. So a drag that leaves the window freezes at its
+   last inside position, and the release (buttons zero) is the first sample
+   accepted again. The "last mouse message" word (button-down /
+   double-click identity) and the held-button bits (1 left, 2 right) come
+   from the same fetch.
+3. The keyboard token is taken as §3 states (pop when the window's token
+   mode is non-zero, else peek with `0xE2..0xEB` zeroed). When the token
+   mode is non-zero, the token is non-zero and the window's key-navigation
+   flag is set, the **window key matrix** (§2) runs first; a token it does
+   not consume is uppercased, pushed onto the window's 15-entry key history,
+   handed to the window's key callback, and the fired-gadget result is reset.
+4. The window-rectangle hover test of §3 runs (cursor swap).
+5. Gadgets `1..N` are visited **in index order**. Each visit performs the
+   inclusive hit test of §3 (hidden gadgets are skipped before it, so the
+   hovered gadget is the **last** hit in index order) and dispatches on the
+   stored kind (the table of §4). The loop stops at the first gadget that
+   reports a *fired* result; later gadgets are not visited that pass.
+6. If the hovered gadget changed, the gadget named `HELPTEXT` (16-byte name
+   compare) receives the hovered gadget's localized `help` text — the empty
+   string when nothing is hovered — and a redraw is requested. This is the
+   whole "hover help" mechanism; it is not per-kind.
+7. The window's per-pass callback runs.
+8. If a gadget fired: it becomes the focused gadget (a text input additionally
+   gets its colour, font and caret set up), then the window's *fired*
+   callback runs with the result still visible. If the callback leaves the
+   result set, the window is **closed** by the top-object close of §3. Every
+   screen handler that wants to stay open therefore clears the result; the
+   "callback result" of §4's kind table is this word.
+
+**Capture.** Exactly one gadget can hold the pointer capture (a context
+word, `−1` when free). A press inside a gadget takes it; the take is refused
+while another *non-text* gadget holds it (a text input's capture is
+released implicitly by any other take). The captured gadget keeps receiving
+the pass while a button is held, whatever the pointer does; release inside
+fires, release outside restores (per kind, §3–§8). There is no parent/child
+bubbling: a window has one flat gadget array, and a gadget that fires does
+not forward anything to another gadget except through the **link**
+redirection of §7 and the **assoc** synchronisation of §5.
+
+**Flash decay.** A button's `colorf` word is not a colour: the button
+painter passes it as the light-table row of the keyed blitter
+([03 R-FONT-01 §6]), and the pass decrements it by 2 per timer tick
+(clamped at 0) for buttons and by 1 for picture boxes (kind 12, repainting
+each step). Screens set it through the gadget-colour setter to make a
+button flash and fade; the window builder zeroes it for every button and
+label at open.
+
+### Closed — the key matrix: Tab, Enter, Escape, Space, arrows, and focus order [R-WGT-01 §2] (2026-08-29)
+
+**Established.** The window key matrix runs before any gadget sees the
+token, and only when the window's token mode is non-zero and its
+key-navigation flag is set (screens that want keyboard navigation set the
+flag; battle windows leave it clear, so in battle none of this applies and
+tokens reach the hotkey dispatcher after the gadget loop). A consumed token
+is replaced by zero for the gadget loop.
+
+| Token | Rule |
+|---|---|
+| Tab | Focus moves to the next gadget in reading order (below); Shift+Tab to the previous. |
+| Enter | If the captured gadget is a text input the token is **not** consumed (the editor fires on it, §6). Otherwise the `crdefault` gadget (name lookup, [R-FE-01 §12] for the empty-name fallback) fires when it is active and not a greyed button; when it is absent or unusable the Space rule is applied to the focused gadget instead. |
+| Escape | The `escdefault` gadget fires when it exists and is active; otherwise the token is not consumed (the text editor then sees it, §6). |
+| Space | Fires the focused gadget when it is a button, listbox or surface, active, and (for a button) not greyed. A button with the radio attribute (`0x10`) is set down and its group cleared; a staged button advances its stage. A focused text input does not consume Space. |
+| Left / Right | Focused text input: not consumed. Focused **horizontal** slider (width > height): knob −1 / +1 with the slider's own clamp, repaint, assoc sync and change callback. Otherwise focus moves left / right. |
+| Up / Down | Focused listbox: selection −1 / +1 (§4) and the list's change callback. Otherwise focus moves up / down. |
+
+Firing through the matrix sets the same fired-gadget result the mouse path
+sets, so the window callback and close rule of §1 apply unchanged. There
+is no per-kind key table beyond this: buttons additionally answer their
+quickkey (§3), labels theirs (§7), and text inputs drain the token stream
+themselves (§6). Every other token passes through.
+
+**Focus order (Established).** Candidates are active gadgets of kinds
+button, listbox, text input, slider and surface whose attribute bit `0x400`
+is clear, excluding greyed buttons, locked sliders, **vertical** sliders
+(height > width) and listboxes with attribute `0x100`. Each gadget's Y is
+snapped to a row: the first gadget in index order whose Y is within 9
+pixels (`|dy| < 10`) donates its Y. For Left/Right the ordering key is
+`x + y·5000` with the raw Y; for Up/Down it is `y + row·5000`. The move
+picks the candidate with the largest key below the focused gadget's key
+(Left/Up) or the smallest key above it (Right/Down), wrapping around by
+adding or subtracting `10⁸` when no candidate lies on that side; ties are
+resolved by index order (strict comparisons). The move releases the
+capture and, when the new focus is a text input, sets its colour, font and
+caret.
 
 
 ## 4. GUI file and widget model
@@ -772,11 +878,335 @@ ordering.
 Open items only; the decider follows each. Field lengths, control-specific
 defaults, and the control-kind-to-parser mapping are established in document
 02; text-editor admission limits, clipboard paste bounds, and the
-control-type-to-runtime-family dispatch are established above.
+control-type-to-runtime-family dispatch are established above; the per-kind
+callback map, listbox row rules and picture-box binding are [R-WGT-01 §§3–8].
+**Correction (2026-08-29, RWU-07-3).** The runtime-family table above calls
+kind 4 a "dedicated control update path", kind 5 an "association-capable path
+that can redirect activation" and kind 6 a "distinct callback-producing path";
+the traced roles are: 4 = scrollbar/slider ([R-WGT-01 §5]), 5 = label whose
+**`link`** (not `assoc`) names the gadget the pass redirects to ([R-WGT-01
+§7]), 6 = surface with a per-pass callback and the `hotornot` click
+([R-WGT-01 §8]). "Scrollbars can be associated with lists; the engine updates
+their range, knob size, and position from the associated list rather than
+trusting every authored value" stands, with the arithmetic in [R-WGT-01 §5].
 
-- Listbox item-height rules and picture-box binding at runtime · static trace.
-- The complete widget callback map — which runtime events each widget receives
-  · static trace.
+- The kind-10 line gadget's attribute-4 (outline) second X coordinate — the
+  decompiler drops it · instruction-level read of the line painter.
+- Who fills a listbox's `maxTop` word for each screen (the widget code only
+  reads it) · per-screen static trace, RWU-07-1.
+- The record-list (`0x20`/`0x80`) item structures beyond the height word the
+  hit test and knob arithmetic read · static trace of the save/load screens.
+
+
+### Closed — buttons: art resolution, press semantics per attribute, quickkeys, cue sounds [R-WGT-01 §3] (2026-08-29)
+
+**Established — the record.** The authored `status` is stored as the
+button's **down-state word** (0 up, non-zero down); `stages` is a byte and
+the *current stage* is a second byte cycling `0..stages−1`; `grayedout`
+sets bit 0 of the grey flag; `quickkey` is stored as one byte — an
+alphabetic first character verbatim, otherwise the decimal value of the
+string. The window builder then resolves art and **overwrites the
+quickkey** (below).
+
+**Established — art and frame base.** The builder looks the gadget name up
+in the window's own GAF, then in the common interface GAF; only when both
+miss does it fall back: attribute `0x80` → `CHECKBOX`; `stages ≠ 0` →
+`stagebuttn%d` with the stage count, except that a label exactly `Off|On`,
+`stages == 1`, or attribute `0x4000` forces `stages := 2`, entry
+`stagebuttn1` and sets `0x4000`; no stages → `BUTTONS0`. On the fallback
+path the *frame base* is the best-fit frame: over frames `0, 4, 8, …` of
+the entry, the one minimising `|h − frameH| + |w − frameW|` (first wins on
+ties, initial best 1000); on the named path the base is frame 0. The
+gadget's width and height are then **replaced** by the base frame's size
+(this is [fmt gui]'s "size dictated by art"). A staged label is split at
+`|` into per-stage strings, each localized, stored NUL-separated, and the
+attribute word becomes `(attr & 0x4000) | 1` — staged buttons are always
+left-aligned. So the retail frame layout is: *base* (rest), *base+1*
+(pressed), *base+2* (greyed) for plain buttons, and for staged art frame
+`k` is stage `k` directly with `frames−2` the pressed look and `frames−1`
+the greyed look.
+
+**Established — the painter's frame choice** (completes [R-HUD-03 §6],
+which named the down-state word "stage"): not greyed and down-state set
+with `stages < frameCount` → `base + downState` when `stages == 0`, else
+`frames − 2`; not greyed otherwise → `base` (`stages == 0`) or the
+current-stage byte (`stages ≠ 0`, base ignored); greyed → `frames − 1`
+when attribute `0x100`; else `stages == 0` and not an arrow (`0x1800`
+clear) → `base + min(downState + 2, frames − 1)` darkened by 20 palette
+steps unless attribute `0x80`; arrow → `base`, darkened; staged → the
+current stage, darkened. With no art at all the button is a bevel in
+window colours 0/17/20 (raised when up, sunken when down; greyed 0/19/19).
+The label pen is [03 R-FONT-01 §6]; the "second string" that section
+leaves to this document is the **quickkey character**: for a centred
+(attribute 2) or build-attribute (`0x20`) label containing the key
+(case-insensitive search), the text is drawn in three runs — the part
+before the key in the gadget colour, the key character in window colour
+entry 10, the remainder in the gadget colour — so the accelerator letter is
+highlighted. A greyed button draws no highlight.
+
+**Established — quickkey assignment.** The builder clears the authored key
+and assigns the **first non-space character of the label whose lowercase
+form is not already the quickkey of any button or linked label in the
+window**; a staged button gets no key; a button with attribute `0x10000`
+keeps its authored key. The authored `quickkey` field is therefore inert
+for every stock button that lacks `0x10000` — the accelerator is always
+the first free letter of the caption. Correction to [fmt gui]: "Keyboard
+accelerator as an ASCII code" describes the field, not its effect.
+
+**Established — press semantics.** Greyed buttons ignore everything. A
+press (left or right button-down message) inside takes the capture and
+saves the down-state. While captured, by attribute:
+
+| Attribute | Behaviour |
+|---|---|
+| `0x10` radio | Fires **on press** while the button is held and the pointer is inside: down-state := 1, every other button with the same `assoc` byte and a non-zero down-state is cleared and repainted. Pointer outside → the saved down-state is restored, nothing fires. |
+| `0x40` toggle | Held: inside shows down (1), outside shows up. Release inside → down-state := `(saved == 0)` (flip), group clear, fires. Release outside → restore. |
+| `8` | Release inside → down-state flips between 0 and 1 (other values unchanged), fires. Nothing while held. |
+| `0x100` cycle | Each **left press** inside advances the down-state through `0..frames−1` (wrapping), fires immediately. |
+| plain | Held: down-state := 1 on the first press inside and the auto-repeat delay is set to 15; pointer leaving clears it. Release: capture freed, down-state := 0, group clear; release inside a non-arrow fires and, if staged, advances the stage `(stage+1) mod stages`; release outside repaints only. |
+| `0x2000` auto-repeat (with plain) | While held inside, after the 15-tick delay the button re-triggers **every timer tick**; the arrows of a synthesised slider carry it (§5). |
+| `0x1800` slider arrow | On each trigger (first press and every repeat) the kind-4 gadget with the same `assoc` byte moves its knob by −1 (`0x1000`) or +1 (`0x800`), clamped to `0..travel−1`, is repainted, synchronised (§5) and its change callback runs. The arrow itself never fires. |
+
+**Quickkey.** When the window's quickkey flag is set and no other gadget
+holds the capture (a captured text input blocks quickkeys unless Alt is
+held), a token equal to the key in either case triggers the button without
+the pointer: toggle buttons flip, radio buttons go down and clear their
+group, the token is popped, and the button fires. The screen's fired
+callback cannot tell a quickkey from a click.
+
+**Cue sounds (Established, bounded negative).** No widget handler or
+painter plays a sound. `BigButton`, `SMLBUTTON` and their case variants
+(`bigButton`, `smlButton`, `Smlbutton`, `SmlButton`, `smlbutton`) are
+alias names that the per-screen fired callbacks pass to the interface cue
+player when they act on a result, so which cue a button plays is authored
+per screen in code, not per gadget kind or size. A reimplementation should
+play the cue in the screen handler that consumes the result.
+
+### Closed — listbox: rows, hit rows, selection, scrolling, double-click, headings [R-WGT-01 §4] (2026-08-29)
+
+**Established — geometry.** `metric` is the current font's line metric
+([03 R-FONT-01 §6]: GAF font `height(I) + 2`, FNT font header height).
+`rowH = itemheight` when authored non-zero, else `metric + 1`. The
+click handler's visible-row count is `rows = trunc((h − 2) / rowH)`; its
+interior is `x ∈ [gx, gx+w−1]`, `y ∈ [gy+2, gy+h−4]`, all inclusive. The
+list state is: `selected`, `top` (first visible item), `maxTop` (the
+largest allowed `top`, maintained by whoever fills the list), `count`, and
+the item text block (items separated by newline or NUL; item `n` is the
+text after the `n`-th separator).
+
+**Established — the click.** A press inside takes the capture (left or
+right). While captured and the pointer is inside, the list becomes the
+focused gadget and, for a text list (attribute `0x10`):
+
+```
+sel = top + trunc((y − (gy+2)) / rowH)
+if sel < 0: keep the old selection
+else: sel = min(sel, top + rows − 1); sel = min(sel, count − 1); sel = max(sel, 0)
+```
+
+then, when attribute `0x200` is set, an item whose text begins with the two
+bytes `&G` (a heading row) **rejects** the selection and the old value is
+kept. Every other listbox with the same `assoc` byte receives
+`min(sel, itsCount − 1)`. A changed selection repaints the list and calls
+its change callback; attribute `0x40` makes a single click **fire**;
+otherwise a click only requests a redraw. For record lists (attribute
+`0x20` / `0x80`, the picture rows the save-game list uses) the hit row is
+found by walking item heights (`itemheight` if authored, else each item's
+own height `+ 2`) from `top` until the pointer Y is exhausted.
+
+**Established — drag auto-scroll.** While captured with the pointer below
+the interior, every 2 timer ticks `top += 1` (while `top < maxTop`) and
+`selected := top + rows − 1`; above the interior, every 2 ticks
+`selected := min(selected, top) − 1` and `top −= 1` (while `top ≥ 1`),
+or, at `top == 0`, `selected := 0`. Heading rows are rejected here too.
+
+**Established — double-click.** A left double-click message inside a
+non-empty list fires the gadget (the preceding click already selected the
+row); with attribute `0x200` the row under the pointer is recomputed and
+a heading row fires nothing. Fired means the screen's callback sees the
+list as its result — the "open" action of the load/save/map lists.
+
+**Established — keyboard.** Up/Down (§2) move `selected` by one and drag
+`top` along (`top := top − 1` when the selection rises above it,
+`top += 1` when it passes `top + rows − 1`), clamp to `count − 1`, reject
+heading rows, repaint and synchronise. The keyboard handlers compute
+`rows = trunc((h − 2) / (metric + 1))` — **`itemheight` is ignored** on
+this path, a retail inconsistency with the click path. A selection outside
+the window (set by a screen) goes through *scroll-to*: `top := selected`
+when `maxTop ≠ 0`, `top := min(top, maxTop)`, and the assoc'd slider knob
+becomes `trunc(travel × top / maxTop)`.
+
+**Established — the painter.** Background is the `Listbox` tile of the
+common GAF (or the saved-under image), then rows `i = 0, 1, …` while
+`h − (i+1)·rowH ≥ metric` and `top + i < count`: row rectangle
+`(gx+2, gy+2+i·rowH) – (gx+w, gy+2+(i+1)·rowH)`; text pen X by attribute
+1 / 2 / 4 = `gx+2` / centred / `gx+w−textW`, Y the row top; a row taller
+than `metric + 6` uses the word-wrapping drawer, else the single-line
+drawer; text colour = the window colour-table entry the gadget's `colorf`
+selects. A heading row (`&G` prefix, or a per-row flag byte of 1) is drawn
+without its prefix and darkened four times (19, 20, 21, 22 palette steps);
+the selected row (attribute `0x100` clear) is lightened by 30 steps whether
+or not the list has focus. Record lists draw each item's frame and lighten
+the selected one by 20.
+
+### Closed — the kind-4 gadget: scrollbar, slider, knob and travel arithmetic, synthesised arrows, value read-out [R-WGT-01 §5] (2026-08-29)
+
+**Established — one kind.** `SCROLLSLIDER`, `VIDSLDR`, `SLIDER%d` and the
+`SHARE` sliders are all kind 4. The record holds: `travel` (authored
+`range`), `knobpos` (`0..travel−1`), `knobsize`, a **read-out range**
+(authored `thick`), a change callback with one argument, the `SLIDERS` GAF
+and its frame base, and a *locked* word. Attribute 1 = horizontal. A
+locked gadget, or one with attribute `0x10`, is inert and drawn darkened
+by 20 steps.
+
+**Established — synthesis at open.** The builder resolves `SLIDERS` from
+the window's own GAF, then the common GAF. Frame base = 10 when
+`w > h` (horizontal), else 0; the short axis is replaced by the base
+frame's size. With no art, `travel := max(w, h) − 6`. With art, two
+**button gadgets are appended** to the window (count grows by 2): frames
+`base+6` and `base+8`, attributes `0x3400` (decrement arrow: auto-repeat,
+not focusable, arrow-minus) and `0x2c00` (increment arrow), same `assoc`,
+same `active`. Horizontal: the second arrow sits at `x + w − arrowW`, the
+bar shrinks by `2·arrowW` and shifts right by `arrowW`, `knobsize :=
+width(frame base+5)` and `travel := w' − knobsize − 4` (with the shrunken
+`w'`). Vertical: the second arrow sits at `y + h − arrowH`, the bar shrinks
+and shifts likewise, and **`travel` is left as authored** — a vertical bar
+gets its travel from its list (below) or from the screen. **Cross-section
+note:** [R-FE-01 §6]'s "arrow length − 6 vertical, width − arrow length −
+4 horizontal" is the no-art and horizontal formula stated loosely; the
+exact forms are the two above. `SHARE` overrides both (`travel := w − h`,
+[R-HUD-03 §9]).
+
+**Established — the knob rectangle.** Horizontal: `(gx+1+knob, gy+1) –
+(gx+1+knob+knobsize, gy+h−1)`; vertical: `(gx+1, gy+2+knob) – (gx+w−1,
+gy+2+knob+knobsize)`; the track is the whole gadget rectangle.
+
+**Established — pointer.** A press inside the track takes the capture; a
+press inside the knob also starts a **drag**, remembering the pointer and
+the knob. While captured: dragging → `knob := savedKnob + (pointer −
+savedPointer)` on the bar's axis; not dragging → the knob steps by −1
+when the pointer is before the knob rectangle and +1 when after, **every
+pass** (unthrottled) while the button is held. Then `knob` is clamped to
+`0..travel−1`; any change marks the window dirty, repaints the bar,
+synchronises the assoc group and calls the change callback. Release frees
+the capture and ends the drag. Keyboard: §2.
+
+**Established — knob size and travel from an assoc'd listbox** (the bar's
+painter recomputes them before every paint, so authored `knobsize` is
+only honoured on a bar without a list): text list (`0x10`): `rowH =
+max(metric + 1, itemheight)`, `rows = trunc((listH − 2) / rowH)`,
+`knobsize = max(10, trunc(rows / count × (barH − 3)))` (single-precision
+division then multiply), `travel = 0` when `count ≤ rows`, else
+`barH − knobsize − 3`. Record list `0x20`: `knobsize = trunc(listH × barH
+/ (firstItemH × count))`; `0x80`: `knobsize = trunc(trunc(listH /
+itemheight) × barH / count)`; for these two `travel = w − knobsize`
+(horizontal) or `h − knobsize` (vertical).
+
+**Established — assoc synchronisation** (runs after any change of gadget
+`g`, over every other gadget with the same `assoc` byte):
+
+* list → list: copy `top` and `selected`.
+* list → bar (`count > 1`): `knob := maxTop == 0 ? 0 : trunc(top × travel /
+  maxTop)`; repaint when it changed.
+* bar → list (`itemheight ≠ 0`): `top := trunc((count − trunc(listH /
+  itemheight)) × (knob + e) / (travel − 1))` where `e = trunc(travel /
+  (maxTop + 1))` for a `0x20` record list and 0 otherwise.
+* list (attribute 8) → text input: the selected item's text replaces the
+  input's text (the "type or pick" pattern of the save-name box).
+
+**Established — painting.** With art, vertical: frame `base` (top cap) at
+`(gx, gy)`, frame `base+1` tiled down while it fits, frame `base+2` (end
+cap) at the bottom; knob = frames `base+3/4/5` (cap, body tiles, cap),
+X centred on the track (`gx + capW/2 − knobW/2`), Y `gy + 3 + knob`,
+length `min(knobsize, h − 6)` clipped to `gy + h − 4`; horizontal is the
+transpose with the knob at `gx + 3 + knob`, capped at `right − knobW − 2`.
+Without art the track and knob are two bevels. Attribute 4 adds a **value
+label** at `(gx + w + 2, gy + 4)` in window colour entry 15: the gadget's
+`text` if non-empty, else the number `trunc(knob × readoutRange / (w −
+knobsize))` when the read-out range (authored `thick`) is non-zero, else
+`knob` (`knob + 1` with attribute 8). This painter's divisor is `w −
+knobsize`, **not** the `travel − 1` of the `SHARE` read-back helper
+[R-HUD-03 §9] and of [R-FE-01 §6]'s option sliders — those screens
+compute their own values and only *display* them through labels.
+
+### Closed — text input: focus, Enter, Escape, caret [R-WGT-01 §6] (2026-08-29)
+
+**Established.** A press inside (left or right) sets the input's colour
+from the window table, selects its font (the `fontnumber`-th font gadget,
+or the window default), takes the capture **and** the focus, and re-lays
+the text: kept when its length is `≤ maxchars`, else emptied. While
+captured the token editor of §4 drains the queue (admission rules there).
+The editor's return value drives two exits: **Enter** frees the capture and
+**fires** the input (the screen sees it as the result); **Escape** empties
+the text, frees the capture and fires as well — a screen cannot distinguish
+"entered" from "cancelled" except by the now-empty text. Any other token
+marks the window dirty. The painter fills the rectangle with colour 0 when
+attribute 1 is set (else restores the background), draws the text at `(gx,
+gy + 3)` limited to the gadget width, and, while captured, a one-pixel
+caret at `gx + width(text[0..caret))` from `gy + 3` to `gy + 3 + metric`
+in window colour entry 9. Focus arriving by Tab or by a label link (§7)
+performs the same setup without a press. Quickkeys are suppressed while an
+input holds the capture unless Alt is held (§3, §7). **Whether a list and a
+text box can share focus** (the old Unknown of §3): they cannot — the
+window has one focused gadget and one capture; the list→text `assoc`
+copy of §5 is what the save-name screen uses instead.
+
+### Closed — labels, links, and label quickkeys [R-WGT-01 §7] (2026-08-29)
+
+**Established.** A label with attribute `0x10` and no quickkey is inert.
+Otherwise a press inside takes the capture and a release inside fires; a
+linked label also answers its quickkey (assigned by the builder from its
+own text as in §3, only when `link` is non-empty; the label's authored
+`quickkey` is never read). The pass then resolves `link`: the named gadget
+is found by a 16-byte name compare; a **button** target that is active and
+not greyed advances its stage `(stage+1) mod stages` (a plain button's
+stage stays 0), is repainted, and becomes the fired result **in place of
+the label** — a linked label click is indistinguishable to the screen from
+a click on the button; an inactive or greyed target swallows the click.
+A non-button target that is active (and, for a slider, not locked)
+receives the **focus** instead (text-input setup as §6) and nothing fires.
+`HELPTEXT` labels are written by the pass (§1), not by their own handler.
+The label painter is [03 R-FONT-01 §6]; the builder sets attribute
+`0x10` on every label whose `link` is empty, which is why plain caption
+labels never react.
+
+### Closed — surfaces (`hotornot`), picture boxes, lines, and the focus halo [R-WGT-01 §8] (2026-08-29)
+
+**Established.** A surface (kind 6) calls its per-pass callback every pass
+with the context and the gadget (this is how map previews and save
+screenshots repaint), then, only when `hotornot` is 1, behaves as a plain
+button without art: press inside captures, release inside fires. Its hit
+test compares the **raw screen pointer** against the gadget rectangle
+without subtracting the window origin — the only handler that does — so a
+hot surface in a window placed away from the origin hit-tests at the
+wrong place (retail quirk; stock hot surfaces sit in full-screen windows
+whose origin is 0,0). Painting: the bound GAF frame, else the bound
+surface copied, else a fill with window colour entry 7. A picture box
+(kind 12) blits its frame (keyed by `colorf` while it decays, §1) and
+darkens by 28 steps when its own flag bit is set; a "line" gadget draws a
+horizontal (attribute 1), vertical (2) or outlined (4) line in the
+gadget's colour. After every full repaint, when the window's key-navigation flag is set,
+the builder paints a **focus halo** around the focused gadget: for a
+button or surface six one-pixel frames growing outward with palette
+lightening 31, 28, 24, 19, 13, 6; for a text input it sets `colorf` to 30
+instead (lists and labels get none). The kind-8 "ordinal lookup" of the ledger always returns null —
+kind 8 has no runtime behaviour.
+
+### Closed — selection presentation: the shared eligibility predicate and the footprint quad [R-WGT-01 §9] (2026-08-29)
+
+**Established.** The rectangle selection and the category/select-all
+paths of [R-CAM-01 §2] test, per unit: status bit 5 (*selectable*) set,
+construction remaining `== 0.0`, the post-capture grace counter `== 0`, and
+carrier null or the carrier's status bit 30 (*cargo-selectable*) set —
+byte-for-byte the predicate the trigger system shares ([08 R-TRIG-01 §3];
+that section's account of the grace counter and of bit 5 applies here).
+*Cross-doc:* [R-CAM-01 §2]'s "whose transporter reference is null" names
+the grace-counter test wrongly — the word tested is the counter, not a
+reference — and cites `§5` where `§3` holds the predicate. The selected
+unit's on-screen mark is the **footprint quad** of [03 R-WATER-01 §1]
+(root-piece bounds on the `y = min` plane, projected, four lines in
+logical entry 10, always on): document 03 owns its drawing; nothing in
+the widget or footer code draws a selection count ([R-HUD-03 §12]).
 
 
 ## 5. Front-end screen and state families
@@ -1665,9 +2095,11 @@ value < 0 → 0; the others none.
 
 * Read-out, on every knob move: `value = trunc(pos / (travel − 1) × max)`
   where `pos` is the knob position, `travel` the knob travel length the
-  scrollbar synthesiser computes (arrow length − 6 vertical, width − arrow
-  length − 4 horizontal — a computed track length, not the authored
-  `range`), and `max` the per-slider maximum above; `travel < 2` reads 0.
+  scrollbar synthesiser computes — exact forms per [R-WGT-01 §5]:
+  `max(w, h) − 6` with no art, `w' − knobsize − 4` with `w' = w − 2·arrowW`
+  for horizontal `SLIDERS` art, and the authored `range` left as is for
+  vertical art — and `max` the per-slider maximum above; `travel < 2` reads
+  0.
 * Position, on page open: `x = min(value, max) × (travel − 1) × (1/max)`
   with the reciprocal stored as a single-precision constant (1/20, 1/21,
   1/65, 1/30; `VIDSLDR` divides instead); then `pos = trunc(x)`, and if
@@ -4686,12 +5118,13 @@ section rather than deleted.
   trace.
 - Where the window bevel uses the GUI context's semantic colour field `20`;
   fields `17` and `0` are placed · §3 · static trace. Marked `TODO(T23)`.
-- Event bubbling between parent and child panels, default-control rules per
-  panel, shared list/textbox focus, and overlap/capture/association
-  redirection precedence · §3 · static trace.
-- Listbox item-height rules, picture-box binding, and the complete widget
-  callback map, including the per-window census of authored gadget association
-  ids · §4, doc 02 §6 · static trace.
+- The per-window census of authored gadget association ids · §4, doc 02 §6 ·
+  asset census. (Bubbling, default controls, shared focus, capture and
+  association precedence, listbox rows, picture-box binding and the widget
+  callback map are closed in [R-WGT-01 §§1–8].)
+- The key-navigation flag's clear state per front-end screen; the kind-10
+  outline X coordinate; who fills each listbox's `maxTop`; the record-list
+  item structures · §3, §4 [R-WGT-01] · static trace.
 - The restart request word's consumer; the `screenchat` filter polarity; the
   `DitheredFog` presenter · §5 [R-FE-01 §7, §11] · static trace. (The single-player transition graph,
   movie machine, campaign continuation, error dialogs and registry write

@@ -56,11 +56,11 @@ gadget is one element of it.
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `id` | int | Gadget type — dispatches everything else. Known: 0 header, 1 button, 2 listbox, 3 textbox, 4 scrollbar, 5 label, 6 blank surface, 7 font, 12 picture box. |
-| `assoc` | int | Association key linking gadgets. Confirmed effect: a listbox and scrollbar sharing `assoc` are wired together (listbox drives knob size, scrollbar scrolls list). Most gadgets ignore it. |
+| `assoc` | int | Association key linking gadgets. Confirmed effect: a listbox and scrollbar sharing `assoc` are wired together (listbox drives knob size, scrollbar scrolls list). **Correction (2026-08-29):** "Most gadgets ignore it" was too strong — buttons with the radio attribute use it as their group, a slider's synthesised arrow buttons carry it, a listbox copies its selection to same-`assoc` listboxes and (attribute 8) to a same-`assoc` textbox; see the executable spec [07 R-WGT-01 §3, §5]. |
 | `name` | string | Dual purpose: (a) graphic lookup — the name of a GAF entry in `<menu>.GAF` or `commongui.gaf`, falling back to default art for the type/size; (b) event binding — hard-coded per-menu event names attach behavior. `HELPTEXT` is a universal name: a label so named shows hover help text. |
 | `xpos`, `ypos` | int | Position in pixels (640×480 space). The first gadget is clamped so the interface stays on-screen. |
 | `width`, `height` | int | Size in pixels. Ignored by types whose art dictates size (buttons, labels, picture boxes). Scrollbar orientation follows the long axis. |
-| `attribs` | int | Type-dependent. Confirmed: scrollbars need `1` = horizontal, `2` = vertical. Other observed values (2, 32, 52685…) have no confirmed meaning. |
+| `attribs` | int | Type-dependent. Confirmed: scrollbars need `1` = horizontal, `2` = vertical. **Correction (2026-08-29):** "Other observed values … have no confirmed meaning" — the executable's bit meanings for buttons (radio `0x10`, toggle `0x40`, cycle `0x100`, auto-repeat `0x2000`, keep-authored-quickkey `0x10000`), listboxes (text list `0x10`, fire-on-click `0x40`, heading-reject `0x200`) and the alignment bits are in the executable spec [07 R-WGT-01 §§3–5]. |
 | `colorf`, `colorb` | int | GUI semantic foreground/background palette fields; retail resolves them through the GUIPAL→PALETTE nearest-RGB map before primitive/FNT writes |
 | `texturenumber` | int | No observed effect |
 | `fontnumber` | int | Partially understood: nonzero reverts labels to the default font when a custom font gadget is present |
@@ -89,9 +89,9 @@ out-of-range value as "unset".
 | --- | --- |
 | `status` | Starting frame within the button's GAF entry (multi-stage buttons must use 0) |
 | `text` | Label text. Multi-stage buttons separate per-stage text with a vertical bar (e.g. `text=On\|Off;`) |
-| `quickkey` | Keyboard accelerator as an ASCII code (`83` = `S`); a bare symbol also occurs in data |
+| `quickkey` | Keyboard accelerator as an ASCII code (`83` = `S`); a bare symbol also occurs in data. **Correction (2026-08-29):** this row implied the field is honoured; the executable overwrites it at window open with the first free letter of the label unless `attribs` bit `0x10000` is set — see [07 R-WGT-01 §3] |
 | `grayedout` | `1` = visible but disabled |
-| `stages` | Number of stages for cycle buttons (0 = plain) |
+| `stages` | Number of stages for cycle buttons (0 = plain). `stages=1`, or a label of exactly `Off\|On`, is promoted to 2 stages with the `stagebuttn1` art [07 R-WGT-01 §3] |
 
 Stock button GAF entries have frame 0 = rest, frame 1 = pressed, frame 2 =
 disabled. Example from `MAINMENU.GUI` above: the `SINGLE` button.
@@ -103,7 +103,7 @@ scrollbar via `assoc`.
 
 | Field | Meaning |
 | --- | --- |
-| `itemheight` | Row height in pixels (rare — 7 occurrences in retail data, undocumented historically) |
+| `itemheight` | Row height in pixels (rare — 7 occurrences in retail data, undocumented historically); when 0 the row height is the font line metric + 1 [07 R-WGT-01 §4] |
 
 ### Textbox (`id=3`)
 
@@ -117,8 +117,8 @@ No border art — backgrounds provide the visual frame.
 
 | Field | Meaning |
 | --- | --- |
-| `range` | Item count (engine overwrites for assoc-driven bars) |
-| `thick` | No confirmed effect |
+| `range` | Knob travel in pixels (`knobpos` runs `0..range−1`), not an item count; the engine overwrites it for assoc-driven bars and for horizontal bars with `SLIDERS` art [07 R-WGT-01 §5]. **Correction (2026-08-29):** the previous "Item count" was a guess. |
+| `thick` | **Correction (2026-08-29):** this row said "No confirmed effect"; the executable reads it as the numeric range of the value label a scrollbar with `attribs` bit 4 draws beside itself (`trunc(knobpos × thick / (width − knobsize))`) — see [07 R-WGT-01 §5] |
 | `knobpos` | Knob position within range (engine-driven) |
 | `knobsize` | Knob size (engine-driven when assoc'd) |
 
@@ -191,13 +191,14 @@ dominate (4,421 of 5,840 gadgets).
 
 - The complete per-menu hard-coded event-name tables are engine-internal;
   the only way to enumerate them is inspection of the stock GUI files.
-- `texturenumber`, `commonattribs`, `thick`, `help` have no confirmed
-  behavior (`crdefault` was on this list until 2026-08-29; closed above). `colorf`/`colorb` are confirmed semantic GUI palette
+- `texturenumber`, `commonattribs` have no confirmed
+  behavior (`crdefault`, `thick` and `help` were on this list until 2026-08-29; `thick` is closed above, `help` is the hover text the pass copies into `HELPTEXT` [07 R-WGT-01 §1]). `colorf`/`colorb` are confirmed semantic GUI palette
   fields, but their per-gadget defaults and every primitive consumer remain
   context-dependent.
-- Exact numeric semantics of `attribs` beyond the scrollbar values are
+- Exact numeric semantics of `attribs` beyond the values cited above are
   unknown.
-- Listbox behavior beyond the assoc pairing is undocumented.
+- Listbox behavior: rows, selection, scrolling and headings are in the
+  executable spec [07 R-WGT-01 §4].
 
 ## Sources
 

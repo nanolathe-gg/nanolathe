@@ -65,7 +65,7 @@ raw corpus.
 
 ## SC2 — `GAMEDATA.TDF` does not exist
 
-**Status:** closed by asset census of the reference install (2026-08-26). `[02 §1]`'s hard requirement reads as the `gamedata/` directory, not a file of that name.
+**Status:** closed by asset census of the reference install (2026-08-26). `[02 §1]`'s hard requirement reads as the `gamedata/` directory, not a file of that name. Mechanism settled by `[02 R-MALF-01 §5]` (2026-08-29): no `gamedata.tdf` is ever opened; the `Can't load GAMEDATA.TDF` box is raised by a missing `SIDEDATA.TDF` — the message text is simply misnamed.
 
 **Spec** `[02 §1]`: "The known hard requirements include `MOVEINFO.TDF` and
 `GAMEDATA.TDF`."

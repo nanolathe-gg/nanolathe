@@ -505,13 +505,12 @@ type PlacementQuery struct {
 	Rules  PlacementRules
 	Self   uint16
 	Mobile bool
-	// SkipTerrainAggregates marks a query from a caller outside the recovered
-	// inline terrain-check mode (mode value 1) [04 §6.4]: the bounds, unit-
-	// occupancy and blocking-feature gates still apply, but the slope/height/
-	// water aggregates do not. Factory exit-spot validation uses it while that
-	// caller's mode value remains unresolved — TODO(question): recovering the
-	// mode argument at the production state machine's validation call settles
-	// whether any aggregate gate belongs at factory exits.
+	// SkipTerrainAggregates marks a query from a caller outside the inline
+	// terrain-check mode (mode value 1) [04 §6.4]: the bounds, unit-occupancy
+	// and blocking-feature gates still apply, but the slope/height/water
+	// aggregates do not. No retail caller in the single-player path passes a
+	// mode other than 1 — the factory exit included [04 R-FAC-02 §4] — so
+	// this is only for callers that already skip aggregates by domain.
 	SkipTerrainAggregates bool
 }
 

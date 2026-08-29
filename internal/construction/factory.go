@@ -1084,9 +1084,9 @@ func placementRules(s *Service, def *content.UnitDef) (world.PlacementRules, err
 // self is the identity exempted from occupancy rejection — the producing
 // factory at a factory exit or the walking builder at its own site ([05
 // "Factory production lifecycle"], [04 §6.4] "a nonzero occupant other than
-// the passed self identity rejects"). skipAggregates marks the factory
-// exit-spot query, whose caller mode is outside the recovered inline
-// terrain-check mode (see PlacementQuery.SkipTerrainAggregates). Completed
+// the passed self identity rejects"). skipAggregates is false for both the
+// factory exit and the chosen site — retail passes mode 1 at every allocator
+// call site [04 R-FAC-02 §4] (see PlacementQuery.SkipTerrainAggregates). Completed
 // buildings register in s.structures and reject overlap here so releasing
 // frame stamps cannot let structures stack.
 func (s *Service) validatePlacement(self pool.Handle, rect world.FootprintRect, def *content.UnitDef, yard []world.YardCell, skipAggregates bool) (world.PlacementResult, error) {
@@ -1804,7 +1804,10 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 			yard[i] = 0x06 // bits 1-2 set [04 §6.2]
 		}
 	}
-	if _, err := s.validatePlacement(factory.Handle, factoryPlacement.Rect(), def, yard, true); err != nil {
+	// The exit-spot query runs in the inline terrain-check mode (mode value 1 at
+	// every allocator call site), so the per-cell depth/slope gates apply at the
+	// exit exactly as at a chosen site [04 R-FAC-02 §4][04 §6.4].
+	if _, err := s.validatePlacement(factory.Handle, factoryPlacement.Rect(), def, yard, false); err != nil {
 		s.recordAdmission(tick, factory.Handle, def.UnitName, AdmissionBlockedTransiently, err)
 		// Silent blocked revalidation: retry in exactly 15 ticks, stays — no
 		// message/sound/allocation; repeats every 15 while obstructed; NO

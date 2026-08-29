@@ -2215,8 +2215,8 @@ lobby, or a trace of every block copy into the session globals.
 | Key | Accessor · stored width | Default | Consumer | Evidence |
 |---|---|---|---|---|
 | `Interface Type` | DWORD · 32-bit | 0 | `[07 §8]` | Established |
-| `DisplaymodeWidth` | DWORD · 32-bit | 640 | unknown: no doc cites the display-mode reader — decider: static trace of the mode-set path (doc 07/01) | Unknown |
-| `DisplaymodeHeight` | DWORD · 32-bit | 480 | unknown: no doc cites the display-mode reader — decider: static trace of the mode-set path (doc 07/01) | Unknown |
+| `DisplaymodeWidth` | DWORD · 32-bit | 640 | `[07 R-FE-01 §11]` (the campaign/skirmish load transitions resize the window and offscreen surface) | Established (cited) |
+| `DisplaymodeHeight` | DWORD · 32-bit | 480 | `[07 R-FE-01 §11]` (as `DisplaymodeWidth`) | Established (cited) |
 | `side` | DWORD · 32-bit | 0 | `[02 R-KEYS-01 §3]` (last chosen side; briefing screens and save restore) | Supported inference |
 | `Difficulty` | DWORD · 32-bit | 1 | `[07 §5]`, `[07 §11]`, `[08 R-CAMP-01 §3]` | Established (cited) |
 | `scrollspeed` | DWORD · 32-bit | 32 | `[03 R-FX-01 §7]` | Established (cited) |
@@ -2224,7 +2224,7 @@ lobby, or a trace of every block copy into the session globals.
 | `SingleMapping` | DWORD · 32-bit | 1 | `[03 §3.1]` | Established (cited) |
 | `SingleLineOfSight` | DWORD · 32-bit | 1 | `[03 §3.1]` | Established (cited) |
 | `SingleLOSType` | DWORD · 32-bit | 1 | `[03 §3.1]` | Established (cited) |
-| `screenchat` | DWORD · 32-bit | 1 | unknown: no doc cites the reader — decider: reader census on the stored global (doc 07) | Unknown |
+| `screenchat` | DWORD · 32-bit | 1 | `[07 R-FE-01 §11]` (footer line filter branch; polarity still open there) | Established (cited) |
 | `damagebars` | DWORD · 32-bit | bit clear (0) | `[03 R-FX-01 §6]` | Established (cited) |
 | `Sound Mode` | DWORD · 32-bit, low 3 bits kept | 1 (`Mono`) | `[02 R-SND-01 §2]`, `[03 R-AUD-01 §1]`, `[03 R-AUD-01 §2]` (play gate; `2` = 3-D) | Established (cited) |
 | `MixingBuffers` | DWORD · 32-bit | 8 | `[02 R-SND-01 §2]`, `[03 R-AUD-01 §1]` (mixer voice limit) | Established (cited) |
@@ -2238,19 +2238,19 @@ lobby, or a trace of every block copy into the session globals.
 | `VehicleShadows` | DWORD · 32-bit | bit set (1) | `[03 §5.3]` | Supported inference |
 | `Shading` | DWORD · 32-bit | bit set (1) | `[03 R-RND-02A]` | Established |
 | `DitheredFog` | DWORD · 32-bit | bit clear (0) | unknown: no doc cites the reader — decider: static trace of the fog presenter (doc 03 §3) | Unknown |
-| `Gamma` | DWORD · 32-bit | 12 | unknown: no doc cites the reader — decider: static trace of the palette/gamma ramp (doc 03) | Unknown |
-| `SwitchAlt` | DWORD · 32-bit | no default installed | unknown: no doc cites the reader — decider: static trace of the selection-switch input path (doc 07) | Unknown |
+| `Gamma` | DWORD · 32-bit | 12 | `[07 R-FE-01 §5]` (palette factor `0.5 + g/24`) | Established (cited) |
+| `SwitchAlt` | DWORD · 32-bit | no default installed | `[07 R-CAM-01 §4]` | Established (cited) |
 | `Password` | string · 11 bytes (incl. NUL) | empty | out of scope (multiplayer lobby) | Established |
 | `Nickname` | string · 17 bytes (incl. NUL) | empty | `[08 R-SKIR-01 §1]` (local player name); lobby use out of scope | Supported inference |
 | `Game Name` | string · 17 bytes (incl. NUL) | empty | out of scope (multiplayer lobby) | Established |
 | `Image Output Directory` | string · 256 bytes (incl. NUL) | empty | `[03 §9]` (screenshot/movie output path) | Supported inference |
 | `Movie Output Rate` | DWORD · 32-bit | 10 | `[03 §9]` | Established (cited) |
-| `textlines` | DWORD · 32-bit | 10 | unknown: no doc cites the reader — decider: static trace of the chat/console text presenter (doc 07) | Unknown |
-| `textscroll` | DWORD · 32-bit | 10 | unknown: no doc cites the reader — decider: static trace of the chat/console text presenter (doc 07) | Unknown |
-| `mousespeed` | DWORD · 32-bit | 10 | unknown: no doc cites the reader — decider: static trace of the pointer path (doc 07) | Unknown |
-| `gamespeed` | DWORD · 32-bit | 10 | unknown: no doc cites the reader — decider: static trace of the tick-rate setter (doc 01 §2) | Unknown |
-| `unitchat` | DWORD · 32-bit | 10 | unknown: no doc cites the reader — decider: static trace of the unit speech scheduler (doc 03 §8.3) | Unknown |
-| `unitchattext` | DWORD · 32-bit | 5 | unknown: no doc cites the reader — decider: static trace of the caption presenter (doc 03 §8.3) | Unknown |
+| `textlines` | DWORD · 32-bit | 10 | `[07 R-FE-01 §11]` (chat ring line budget; 0 disables storage) | Established (cited) |
+| `textscroll` | DWORD · 32-bit | 10 | `[07 R-FE-01 §11]` (line expiry `(textscroll + 1) × 30` ticks) | Established (cited) |
+| `mousespeed` | DWORD · 32-bit | 10 | **no reader** — persisted only (`[07 R-FE-01 §11]`, bounded negative) | Established (cited) |
+| `gamespeed` | DWORD · 32-bit | 10 | `[07 R-CAM-01 §3]` (speed setter, clamp 1..20) | Established (cited) |
+| `unitchat` | DWORD · 32-bit | 10 | `[03 R-AUD-01 §3]` | Established (cited) |
+| `unitchattext` | DWORD · 32-bit | 5 | `[07 R-FE-01 §11]` (caption gate `10 − v < priority`) | Established (cited) |
 | `musicmode` | DWORD · 32-bit, bit 0 kept | bit set (1) | `[02 R-SND-01 §2]`, `[03 R-AUD-01 §4]` (CD enable) | Established (cited) |
 | `cdmode` | DWORD · low byte stored | 4 (`Custom`) | `[02 R-SND-01 §2]`, `[03 R-AUD-01 §4]` (CD play mode 1..4) | Established (cited) |
 | `ackfx` | DWORD · 32-bit, bit 0 kept | bit set (1) | `[02 R-SND-01 §2]`, `[03 R-AUD-01 §2]` — persisted, gates nothing (bounded negative) | Established (cited) |
@@ -2376,7 +2376,10 @@ zero — even though every one of the 368 retail GUIs authors it.
 byte).
 
 **Scrollbar keys:** `range`, `knobpos`, `knobsize` (integers, 16-bit),
-`thick` (integer, 32-bit), `text` (string).
+`thick` (integer, 32-bit), `text` (string). Semantics ([07 R-WGT-01 §5]):
+`range` is the knob travel in pixels (`knobpos` runs `0..range−1`), which the
+engine overwrites for assoc-driven bars and horizontal `SLIDERS`-art bars;
+`thick` is the read-out range of the attribute-4 value label.
 
 **List, text-entry, and compound control keys:** `itemheight`, `maxchars`,
 `range`, `knobpos`, `knobsize` (integers, 16-bit), `thick` (integer, 32-bit),
