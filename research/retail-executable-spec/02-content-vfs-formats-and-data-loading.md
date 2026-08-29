@@ -1036,7 +1036,31 @@ are interned into a per-weapon sorted map, so damage lookup is by armor-class
 name, not by a fixed index. A weapon with no `DAMAGE` section has a fallback
 damage of zero.
 
-`aimrate` and `startfire` have no reader in this executable.
+**Keys with no field at all — Established, and stronger than a reader census.**
+`aimrate`, `movingaccuracy`, `noselfdamage`, `impulsefactor`, `impulseboost`
+and `startfire` do not occur **anywhere in the image's string data** — not as a
+parser key, not in a diagnostic, not in any other literal. A whole-image
+case-insensitive scan of every string in the executable returns nothing for any
+of the six, while every key listed above in this section is found (`holdtime`,
+`toairweapon`, `minbarrelangle`, `propeller` and the rest each appear exactly
+once, as the parser literal). Since the TDF accessors take the key as a string
+literal, no key means no field: these six are never read, never stored on the
+weapon record, and cannot have a reader anywhere in the image. That is stronger
+than the bounded "no reader was found in the recovered function set", which is
+all a caller census can establish and all the previous text claimed. Authoring
+any of the six in a weapon section has no effect of any kind, and they occupy
+no record byte, so they cannot even be preserved as inert data — unlike, for
+example, `accuracy` and `tolerance`, which are parsed into the record and do
+have consumers `[06 §3.3]`.
+
+**Correction.** This paragraph previously read, in full, "`aimrate` and
+`startfire` have no reader in this executable." It was right about those two
+but understated the evidence — a missing reader, where the truth is a missing
+key — and omitted four further keys in exactly the same position.
+`movingaccuracy`, `noselfdamage`, `impulsefactor` and `impulseboost` circulate
+in third-party weapon-key documentation; they are not retail keys, and neither
+this document nor `[fmt tdf]` should be read as implying that the engine merely
+ignores them.
 
 ### Feature record
 

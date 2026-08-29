@@ -76,6 +76,20 @@ accumulates raw 32-bit floating-point values. Production, consumption,
 capacity, and waste therefore do not discard their fractional part merely
 because they are stored in the player record.
 
+**Established fact — the width of every economy field in the player slot.**
+Per resource the slot holds, all as **single precision**: live stock;
+"produced this pass"; "requested this pass"; storage capacity; and a storage
+bonus. Per resource it also holds three **double-precision** running totals:
+cumulative produced, cumulative requested, and cumulative waste. One byte
+carries the storage-bonus enable flag. Three absolute tick deadlines sit side
+by side — the settlement deadline (`UpdateTime`), the win/lose deadline
+(`WinLoseTime`), and the HUD refresh deadline (`DisplayTimer`). The only
+single-to-double conversions in the whole ledger are the six accumulations
+into those running totals ([R-ECO-01 §6]). There is no integer stock, no
+integer capacity, and no integer per-pass counter anywhere in the settlement
+path; an implementation that stores stock or capacity as an integer diverges
+on the first pass.
+
 ### Unit definition
 
 The economy and construction paths consume these logical unit-definition
@@ -121,12 +135,23 @@ The instance also retains archived values from the most recent settlement pass
 for reporting and later state decisions. The same shape exists in a
 player-level mirror bucket used for non-unit contributions.
 
+**Established fact — one class, six slots per resource, twice.** The
+subrecord is a single class with a constructor that zeroes thirteen words and
+stores the owning player record. Its layout is, in order: energy production,
+energy requested, energy accepted, energy carry, archived energy production,
+archived energy requested; then the same six for metal; then the owner
+pointer. All twelve accumulators are **single precision**. A unit embeds one
+instance; the player-level mirror bucket is a separately allocated instance of
+the same class, and every rule below applies to both. There are exactly two
+archived slots per resource — production and requested — and the settlement is
+their only writer ([R-ECO-01 §5]).
+
 **Established fact — what feeds each accumulator.**
 
 | Accumulator | Contributors | Gates |
 |---|---|---|
-| energy production | authored passive `energymake`; the current wind scalar times `windgenerator`; the map tidal strength times `tidalgenerator`; the refund branch for a negative authored `energyuse` | passive make and storage require a zero remaining-construction fraction; wind and tidal require the unit's operational bit and a secondary state bit; every positive contribution is scaled by the state-2 selector discount when the owner is in the special second state |
-| metal production | the metal value sampled at placement when `extractsmetal` is positive; a literal one when `makesmetal` is set; authored passive `metalmake` | extraction and maker output require the unit's energy carry to be non-positive at dispatch; passive make requires a zero remaining fraction; every positive contribution is scaled by the state-2 selector discount when the owner is in the special second state |
+| energy production | authored passive `energymake`; the current wind scalar times `windgenerator`; the map tidal strength times `tidalgenerator`; the refund branch for a negative authored `energyuse` | passive make and storage require a zero remaining-construction fraction; wind and tidal require the definition's `bmcode` to be zero **and** the unit's activated bit, and are reached only when `extractsmetal` and `makesmetal` are both absent ([R-ECO-01 §2]); every positive contribution is scaled by the difficulty discount when the owner is a computer player ([R-ECO-01 §3]) |
+| metal production | the metal value sampled at placement when `extractsmetal` is positive; the **numeric value** of the authored `makesmetal` byte when it is non-zero; authored passive `metalmake` | extraction and maker output require `bmcode` zero, the activated bit, and the unit's energy carry to be non-positive at dispatch; passive make requires a zero remaining fraction; every positive contribution is scaled by the difficulty discount when the owner is a computer player |
 | energy requested | positive authored `energyuse`; the cloak debit; every build admission; repair-family one-resource admission | none — always recorded |
 | energy accepted | the same positive `energyuse` when energy carry is non-positive; admitted build demands when both carries are non-positive; repair-family admission when energy carry is non-positive | energy carry non-positive (both carries for the two-resource build path) |
 | metal requested | every build admission | none — always recorded |
@@ -134,25 +159,13 @@ player-level mirror bucket used for non-unit contributions.
 | energy and metal carry | written only by settlement's apply-back step | — |
 
 The negative-`energyuse` refund adds the negated authored value to production
-in the ordinary case; under the special player modes it instead credits only
+in the ordinary case; for a computer-owned unit it instead credits only
 one half or seven tenths of it. The engine reaches the scaled credit by
 multiplying the negated amount by a negative half or seven-tenths constant
 and subtracting the product, so production still grows — by half or seven
 tenths of the negated value. An earlier revision of this document read the
 special modes as *turning the refund into a subtraction*; the byte-level
 arithmetic is a reduced positive credit.
-
-**Established fact — the state-2 discount applies to every positive
-production contribution.** The same selector discount (state 2 owner,
-global selector: 0 → half, 1 → seven tenths, else full) wraps **every**
-positive contribution to the energy and metal production buckets in the
-settlement visit — passive `energymake`, passive `metalmake`, extraction
-output, maker output, wind output, tidal output, and the negative-`energyuse`
-refund alike. Storage contributions and the cloak debit are not discounted.
-The discount family is therefore a general production handicap for the
-special second state, not a refund-only rule; an implementation must apply it
-at every contribution site with the same pairing and the same negative-
-constant-subtraction arithmetic.
 
 **Established fact — gather order.** All accumulator feeds are
 per-settlement-pass amounts, consumed once per ~30 ticks per player under
@@ -164,6 +177,123 @@ debit, then aggregates in the fixed order energy production, energy requested,
 energy accepted, energy carry, metal production, metal requested, metal
 accepted, metal carry. Only after the whole slice does it fold in the
 player-level mirror bucket and commit the counters.
+
+#### R-ECO-01 §2 — The per-unit gather, exactly [R-ECO-01] (2026-08-29)
+
+**Established.** A unit is visited only when its status word carries the alive
+bit. The visit then takes **one of two mutually exclusive branches**, chosen by
+a status bit that is written once at spawn as *"the definition's `bmcode` byte
+is zero"* — that is, buildings take the first branch and mobile units the
+second. This replaces the previous text's vague "wind and tidal require the
+unit's operational bit and a secondary state bit": the secondary bit is the
+spawned-in `bmcode`-is-zero bit, and it is never rewritten during play.
+
+*Branch A — `bmcode` zero (buildings).* Runs only when the unit's **activated**
+bit is set; otherwise the visit falls straight through to the idle block below.
+It performs, in this order:
+
+1. **Upkeep or refund.** Read authored `energyuse`.
+   - `energyuse >= 0` (the comparison is "less than zero", so `+0.0` and
+     `-0.0` both take this arm): `energy requested += energyuse`; then, **only
+     if `energy carry <= 0`**, `energy accepted += energyuse`. Remember that
+     carry test as `admitted` for step 2.
+   - `energyuse < 0`: negate it and add the negated value to **energy
+     production**, through the difficulty discount of [R-ECO-01 §3].
+     `admitted` is false on this arm.
+2. **Exactly one generator**, selected by a strict if/else-if chain — a unit
+   that authors several only ever contributes the first that matches:
+   - `extractsmetal > 0` → and `admitted` → add the unit's placement-sampled
+     extraction amount to **metal production**;
+   - else `makesmetal` byte non-zero → and `admitted` → convert that **byte's
+     numeric value** to floating point and add it to **metal production** (the
+     previous "a literal one" reading was wrong: the value is whatever the FBI
+     authored, converted from the stored byte);
+   - else `windgenerator > 0` → add `currentWindScalar × windgenerator` to
+     **energy production**;
+   - else `tidalgenerator > 0` → add `mapTidalStrength × tidalgenerator` to
+     **energy production**.
+   Wind and tidal are **not** gated on `admitted`; extraction and the metal
+   maker are. All four products are formed as one multiply and one add with no
+   intermediate narrowing ([R-ECO-01 §1]).
+
+*Branch B — `bmcode` non-zero (mobile units).* Runs when the activated bit is
+set **or** the unit's movement-mode bits are non-zero, and performs step 1
+only. A mobile unit therefore never contributes extraction, maker, wind or
+tidal output from the settlement, whatever it authors.
+
+*Then, for every alive unit regardless of branch:* the idle block runs when the
+remaining construction fraction **compares equal to zero** (a floating-point
+equality, so `-0.0` also passes and a NaN fraction does not). It adds
+`energymake` to energy production and `metalmake` to metal production, each
+through the difficulty discount, and then accumulates this unit's
+`metalstorage` into the player's metal capacity and its `energystorage` into
+the player's energy capacity — **metal first**, both as ordinary
+single-precision adds ([R-ECO-01 §4]).
+
+*Then* the cloak debit ([R-ECO-01 §9]), and finally the eight accumulations
+into the pass totals. Each accumulation is `total = float32(unitField + total)`,
+so **every running total is re-rounded to single precision after every unit**;
+the totals are not kept at register precision across the slice.
+
+#### R-ECO-01 §3 — The discount is difficulty, and the special state is the computer player [R-ECO-01] (2026-08-29)
+
+**Established, and a correction.** The "state-2 selector discount" this
+document has carried since the corrected-economy pass is now named on both
+halves:
+
+* the player **control byte value 2** is the computer-controlled player
+  ([R-AI-01 §12] establishes the same byte from the AI profile loader, which
+  runs its per-definition passes for exactly the slots whose control byte
+  is 2). The previous text called this "the special second state … the
+  computer-policy state per the AI-manager gate inference"; it is no longer an
+  inference.
+* the **global mode selector** is the **difficulty word**: it is loaded from
+  the `Difficulty` registry value, masked to sixteen bits, and also written
+  directly with the literals 0, 1 and 2 by three developer entry points.
+  [R-AI-01 §12] establishes the same word's vocabulary as `0` easy, `1`
+  medium, `2` hard.
+
+So the rule reads: **for every unit owned by a computer player, every positive
+production contribution is scaled by 0.5 on easy, 0.7 on medium, and not at
+all on hard.** The gate is evaluated per contribution as "the owner's player
+record exists **and** its control byte equals 2"; a slot whose record word is
+zero takes the undiscounted path.
+
+The arithmetic must be reproduced literally, because the factored form rounds
+differently:
+
+```
+contribution      : float32 (the authored value, or the product just formed)
+K                 : the double constant -0.5 (easy) or -0.7 (medium)
+production        : float32
+production := float32( production - (contribution * K) )
+```
+
+`contribution * K` is a **float × double** multiply evaluated at the x87
+working precision of [R-ECO-01 §1]; the subtraction is done at that same
+precision and only the store narrows to single. Writing this as
+`production + 0.5*contribution`, or rounding the product to single first, is
+not bit-identical. The two constants are the only floating-point literals the
+whole ledger contains, and their exact bit patterns are the IEEE doubles for
+−0.5 (`BFE0000000000000`) and −0.7 (`BFE6666666666666`) — note that −0.7 is
+not exactly representable, so the medium-difficulty factor is the nearest
+double, not seven tenths.
+
+Sites, exhaustively: passive `energymake`; passive `metalmake`; the extraction
+output; the maker output; the wind output; the tidal output; the
+negative-`energyuse` refund; the reverse-construction metal refund; and the
+direct production credit written at spawn for a unit created outside the
+ledger. Storage contributions, the cloak debit, and the two-stage settlement
+itself are **not** discounted.
+
+**Correction against document 08.** [R-AI-01 §12] closes with "there is no
+production, build-rate, cost, or damage multiplier anywhere in the computer
+player's path". The settlement disproves the production half: the eight sites
+above are a production multiplier on the computer player's whole economy, not
+only on transfers into it. The transfer finding itself stands unchanged — the
+same difficulty ladder, the source debited in full — and doc 05's sharing
+sections keep it; what must be retracted is the "no production multiplier"
+sentence. Doc 08 owns that retraction.
 
 **Established fact — player-side storage is floating point.** Live stock,
 the per-pass produced and requested snapshots, and the capacities are stored
@@ -468,7 +598,9 @@ before later units are tested.
 economy fields are added to the per-unit accumulators exactly as parsed. There
 is no division or multiplication by the tick rate at any point in the
 settlement, in either direction. The only floating-point constants the whole
-ledger contains are the two special-player scale factors of −0.7 and −0.5. An
+ledger contains are the two difficulty scale factors of −0.7 and −0.5
+([R-ECO-01 §3]), the literal `0.0` every sign test compares against, and the
+literal `1.0` both stage ratios are set to when a stage is fully funded. An
 implementation must not "convert per-second authored rates to per-tick"; the
 authored value *is* the per-pass value.
 
@@ -580,6 +712,79 @@ of the session. The freeze pair's pacing still yields the observed ≈5-step
 confirmation delay before the latch. The semantic names of the individual
 bits and of the two mission-end predicates remain open; the bit patterns and
 the never-cleared property are established.
+
+### R-ECO-01 §1 — Deadline strictness and the floating-point environment [R-ECO-01] (2026-08-29)
+
+**Established — the settlement deadline compare.** Per slot, ascending, the
+compare is *unsigned* and reads:
+
+```
+if (playerUpdateTime <= globalTick) { playerUpdateTime += 30;  ... }
+else                                { skip the rest of this slot }
+```
+
+The advance is `+30` — a single conditional add, never a loop, never a
+re-seed from the tick — and it happens before the settlement gate chain. Due
+is **inclusive**: a deadline equal to the current tick settles this tick. The
+gate chain that follows is, in evaluation order and all required:
+
+1. the player record's existence word is non-zero;
+2. the control byte is 1, 2 or 3;
+3. the observer byte is not the observer value;
+4. the status pair holds — *the halfword at the first field is non-zero* **or**
+   *the word at the second field is zero* (still carried literally; no writer
+   of either field was found);
+5. the control byte is **narrowed to 1 or 2** — control byte 3 traverses the
+   deadline block, advances its deadline, and never settles;
+6. the game-ended flag word's `0x04` bit is clear;
+7. the end-of-game countdown halfword is **signed less than zero**.
+
+**Established — the HUD deadline is one tick stricter.** The sibling
+`DisplayTimer` field is advanced by the same `+30` but by a **strict**
+compare, `if (playerDisplayTimer < globalTick)`. Its consumer is the resource
+bar ([R-ECO-01 §6]). `UpdateTime` uses `<=`, `DisplayTimer` uses `<`; the
+difference is real and is not a transcription slip. This closes half of the
+tail's "consumers of the `WinLoseTime` / `DisplayTimer` sibling deadlines
+beyond their save keys": `DisplayTimer` has exactly one consumer, the resource
+bar's rate latch. `WinLoseTime` remains open.
+
+**Established — the x87 environment, and what "bit-exact" therefore means.**
+The runtime calls `fninit` at startup and immediately sets the precision
+control to **53 bits** (the CRT's default-precision helper, `_PC_53`).
+Nothing in the economy path changes it back; the only other control-word
+write in the whole ledger is the integer-conversion helper, which flips the
+*rounding* control to truncate-toward-zero for one instruction and restores
+the saved word ([R-ECO-01 §9]). Consequently:
+
+* every intermediate x87 result in the settlement — products, sums,
+  quotients, differences — is rounded to a **53-bit significand** with the
+  80-bit exponent range, not to 24 bits and not to 64 bits;
+* narrowing to single precision happens **only where a value is stored to a
+  single-precision field**, and every such store site is named in
+  [R-ECO-01 §2], [R-ECO-01 §5] and [R-ECO-01 §6];
+* all floating-point exceptions stay masked for the whole run, so a division
+  by zero yields a signed infinity rather than trapping, and `0/0` yields a
+  quiet NaN.
+
+An implementation reproduces this by computing every intermediate in
+double precision and applying an explicit single-precision conversion at each
+named store. The exponent-range difference (an intermediate that would
+overflow a double does not overflow here) is stated for completeness; no
+economy magnitude reaches it, and it is not a traced behavior.
+
+**Established — comparison semantics under exceptional values.** Every sign
+test in the settlement is an x87 compare followed by a status-word bit test,
+so the NaN outcome is decided by which bits are tested:
+
+| Test as written | Bits tested | NaN outcome |
+|---|---|---|
+| `value < 0` (the `energyuse` sign test) | "below" only | taken — a NaN `energyuse` takes the refund arm |
+| `value <= 0` (the carry gates, the `extractsmetal`/`windgenerator`/`tidalgenerator` sign tests) | "below" or "equal" | taken — a NaN carry admits work |
+| `value == 0` (the remaining-fraction completion gate) | "equal" only | not taken — a NaN fraction is never complete |
+| `pool > total` (both stage-ratio tests, the storage clamp) | "below" or "equal", branch inverted | the "no clamp / full funding" arm |
+
+Signed zero compares equal to zero everywhere, so `-0.0` passes the
+completion gate and the non-positive carry gates exactly as `+0.0` does.
 
 ## Resource contributions
 
@@ -729,13 +934,72 @@ order, §4.1 and §5).
 
 Capacity is single-precision state. It is not an integer total. Destroyed,
 unfinished, or ineligible storage units cease contributing when the next
-player pass recomputes capacity. Bonus addition converts the stored integer
-bonus to single precision — exact over the 200 floor range — and any
-float-to-integer conversion at the capacity add truncates toward zero
-(INVARIANTS I3). The battle-init capacity writer runs the capacity helper per
-active player before the spawn-credit grant to preserve the opening 1000/1000
-stocks past the 30-tick settlement clamp; without the bonus the clamp to zero
-would zero both players at the first settlement [OX P1].
+player pass recomputes capacity.
+
+#### R-ECO-01 §4 — Capacity accumulation and the bonus, exactly [R-ECO-01] (2026-08-29)
+
+**Established — the per-unit accumulation.** Both capacities are zeroed at the
+very top of the pass, before the first unit is visited. Inside the idle block
+of [R-ECO-01 §2] — that is, for every alive unit whose remaining construction
+fraction compares equal to zero, on either `bmcode` branch and regardless of
+its activated bit — the engine performs two ordinary single-precision adds:
+
+```
+playerMetalCapacity  = float32( definition.metalstorage  + playerMetalCapacity )
+playerEnergyCapacity = float32( definition.energystorage + playerEnergyCapacity )
+```
+
+**Metal is accumulated first**, and each add is stored back as a single before
+the next unit is visited, so the sum is re-rounded per unit exactly as the
+production totals are. There is no integer intermediate and no
+float-to-integer conversion anywhere in this accumulation. *Correction:* a
+previous revision said "any float-to-integer conversion at the capacity add
+truncates toward zero (INVARIANTS I3)". There is no such conversion; the
+sentence described a decompiler artifact — the player record had been typed
+through an integer pointer, so a plain single-precision add read as an
+integer store.
+
+**Established — where the 200 floor really lives.** The floor is **not**
+applied to capacity. It is applied by the storage-bonus setter, a small helper
+that takes a player and two integer amounts and does exactly three things:
+set the player's bonus-enable flag bit; store `max(200, energyAmount)`
+converted to single precision into the player's energy bonus field; store
+`max(200, metalAmount)` converted to single precision into the metal bonus
+field. Both comparisons are signed integer `< 200`. *Correction:* the previous
+text said "when the bonus enable bit is set, each resource's capacity is
+floored at 200". The floor clamps the **bonus operands** at the moment they
+are written, once, outside the settlement; capacity itself is never floored.
+
+**Established — the bonus add inside the pass.** After the unit slice and the
+mirror-bucket fold, and before any counter is committed, the settlement tests
+the bonus-enable flag bit. When it is set:
+
+```
+playerEnergyCapacity = float32( energyBonus + playerEnergyCapacity )
+playerMetalCapacity  = float32( metalBonus  + playerMetalCapacity )
+```
+
+Both bonus fields are already single precision, so the add is a plain
+single-plus-single. When the flag is clear neither add happens and capacity is
+the unit sum alone.
+
+**Established — who calls the bonus setter, and when.** Exactly two sites.
+(a) The battle-initialisation starting-resource writer, which walks the ten
+slots and branches on the session kind: on the **mission** kind it calls the
+bonus setter with two integerized floats and then writes both live stocks
+directly from the mission's own table; on the two other kinds it writes the
+live stocks only — from a per-side authored word times 100 on the skirmish
+kind — and **never sets the bonus flag**. (b) The commander-replacement branch
+inside the per-player phase, which calls it with the same per-side words times
+100 (metal word first, energy word second) alongside the replacement spawn.
+*Correction:* the previous text said "the battle-init capacity writer runs the
+capacity helper per active player before the spawn-credit grant to preserve
+the opening 1000/1000 stocks past the 30-tick settlement clamp". It runs the
+bonus setter only on the mission session kind. On a skirmish start the opening
+stocks survive the first settlement because the commander's own authored
+`energystorage`/`metalstorage` enter the capacity sum in the same pass, not
+because of a bonus. The `[OX P1]` observation is consistent with the mission
+kind; it does not establish the skirmish path.
 
 ### Cloak debit
 
@@ -747,10 +1011,12 @@ the cloak gate is due, the engine:
    environment and truncation toward zero;
 3. compares that integerized cost with the owner's live energy stock;
 4. if affordable, subtracts it immediately and records an energy request;
-5. toggles the unit's op-bit 2 (mask value 4) through the normal transition
-   helper — this fires the COB callback pair #14/#15 plus a network packet,
-   not StartBuilding/StopBuilding and not Activate/Deactivate (an earlier
-   revision that named the operational/building bit was imprecise);
+5. toggles the unit's operational-byte bit 2 (mask value 4) through the normal
+   transition helper — this raises status-cue slots 14 and 15 plus a network
+   packet, not StartBuilding/StopBuilding and not Activate/Deactivate (an
+   earlier revision that named the operational/building bit was imprecise;
+   slots 14 and 15 are cue slots raised with no caption text, not COB
+   callbacks — see [R-ECO-01 §8]);
 6. if unaffordable, takes the failure transition without a partial payment.
 
 Because units are visited in stable order, simultaneous cloak costs are
@@ -761,19 +1027,65 @@ costs are per-settlement-pass amounts like every other authored economy
 field.
 
 **Established — the full debit predicate.** The debit block runs when the
-unit carries the init-cloaked instance bit (seeded once at spawn from the
-definition's `init_cloaked`; no runtime toggler exists in the reviewed
-image), the moving-cost bit is clear, and the unit's per-unit cloak payment
-deadline is due — the gate is bit clear **and** deadline due. An earlier
-reading that OR-ed a cooldown bit into the gate was falsified at byte level,
-and the owner-state-3 condition that would suppress the whole block is
-inert during live play because the settlement caller excludes state 3.
-Authored reach is exactly the mine family (`init_cloaked=1`); commanders,
-spies, and snipers carry cloak costs but never enter this block. The per-unit
-deadline itself is written by nine handler sites as the global tick plus
-150, 300, or 900 (repair, build/get-built/resurrection, and
+unit carries the **cloak-requested** status bit, a second status bit is clear,
+and the unit's per-unit cloak payment deadline is due — the gate is bit set
+**and** bit clear **and** deadline due. An earlier reading that OR-ed a
+cooldown bit into the gate was falsified at byte level, and the
+owner-control-byte-3 condition that would suppress the whole block is inert
+during live play because the settlement caller excludes control byte 3. The
+per-unit deadline itself is written by nine handler sites as the global tick
+plus 150, 300, or 900 (repair, build/get-built/resurrection, and
 capture/reclaim respectively); idle cloaked units therefore pay every pass
 from the first.
+
+#### R-ECO-01 §9 — Cloak gate, conversion, and the second bit [R-ECO-01] (2026-08-29)
+
+**Established, and a correction to the reach claim.** The first gate bit is
+not seeded from `init_cloaked` and it *does* have runtime togglers. It is
+cleared at spawn along with its neighbours, and it is set by the **`Cloak_On`**
+order handler and cleared by the **`Cloak_Off`** order handler, each of which
+first requires a capability bit on the definition and is otherwise a
+one-instruction set/clear of that status bit. The previous text — "the
+init-cloaked instance bit (seeded once at spawn from the definition's
+`init_cloaked`; no runtime toggler exists in the reviewed image) … authored
+reach is exactly the mine family; commanders, spies and snipers carry cloak
+costs but never enter this block" — was wrong on both halves: the two cloak
+orders are the togglers ([R-ECO-01 §10] gives their operation bytes), so any
+unit whose definition carries the cloak capability pays cloak upkeep for as
+long as the player leaves cloak on. `init_cloaked` is a separate definition
+flag bit; its consumer is the initial-posture path, not this gate.
+
+**Established (bounded negative) — the second bit is inert.** The status bit
+whose clearness the gate also requires is *read* only here. A search of the
+complete decompiled function set found no writer that sets it, and the spawn
+initialiser preserves rather than sets it, so the term is always satisfied in
+practice. It is recorded because it is part of the literal predicate; it is
+not a behavior an implementation can observe. Its intended meaning is
+**Unknown** — decider: static trace over the regions the export still misses.
+
+**Established — cost selection and conversion.** The cost is `cloakcostmoving`
+when the unit's movement-mode bits are non-zero and `cloakcost` otherwise.
+That single-precision cost is passed through the CRT integer-conversion helper
+— save control word, set rounding to truncate toward zero, 64-bit integer
+store, restore control word — and then converted **back** to floating point
+from the resulting 32-bit integer. Both the affordability compare and the two
+writes use that integerized value, not the authored float:
+
+```
+cost  := float( truncTowardZero( chosen cloak cost ) )
+if (cost <= playerEnergyStock) {           // inclusive; equal is affordable
+    playerEnergyStock  = float32( playerEnergyStock - cost )
+    unit.energyRequested = float32( cost + unit.energyRequested )
+    transition(unit, operationalBit2, set)
+} else {
+    transition(unit, operationalBit2, clear)
+}
+```
+
+A fractional authored cloak cost below 1 therefore truncates to zero, is
+always affordable, and debits nothing. The debit reads and writes the player's
+**live stock** directly, mid-pass, so it is visible to every later unit in the
+same slice and to the pool that stage one of [R-ECO-01 §5] later builds.
 
 ## Resource admission and carry
 
@@ -805,8 +1117,171 @@ admission are established.
 
 Weapon fire and some immediate operations use a different helper that compares
 live player stock with an energy amount and a metal amount. It either debits
-both in full or debits neither. It also updates the associated storage-object
-transaction logs. This path does not create proportional carry.
+both in full or debits neither. It also records both amounts in the
+subrecord's requested accumulators. This path does not create proportional
+carry.
+
+### R-ECO-01 §7 — The five admission helpers, as expressions [R-ECO-01] (2026-08-29)
+
+**Established.** All five are small methods on the economy subrecord of
+[R-ECO-01 §2] — which means they work identically on a unit's embedded
+subrecord and on the player-level mirror bucket, and that the "builder's
+subrecord" a caller passes is always a subrecord, never a player record. All
+arithmetic is single-precision add and subtract with the store narrowing;
+none of them touches carry, and none of them is discounted by difficulty.
+
+*Two-resource admission* (construction). Returns whether the work was
+admitted:
+
+```
+energyRequested = float32( e + energyRequested )
+metalRequested  = float32( m + metalRequested )
+if (energyCarry <= 0 && metalCarry <= 0) {
+    energyAccepted = float32( e + energyAccepted )
+    metalAccepted  = float32( m + metalAccepted )
+    return admitted
+}
+return denied
+```
+
+Both requests are recorded **before** the gate and unconditionally, so a
+denied transaction still shows up in the pass's requested counter and hence on
+the HUD. The gate is `<= 0` on both carries, evaluated as two separate
+compares with energy first.
+
+*One-resource admission* (the repair family). Returns whether the work was
+admitted:
+
+```
+energyRequested = float32( e + energyRequested )
+if (energyCarry > 0) return denied
+energyAccepted = float32( e + energyAccepted )
+return admitted
+```
+
+Note the shape: the deny test is written as `energyCarry > 0`, so a NaN carry
+falls through and admits. Nothing in the metal half of the subrecord is
+touched. The caller's own arithmetic — how the repair energy term is formed
+from the target's maximum damage and energy build cost, and the fact that each
+integerized term is clamped to exactly 1 whenever it is positive before this
+helper is called — belongs to "Repair"; only the helper contract is stated
+here.
+
+*Direct energy payment* and *direct metal payment* (two separate helpers of
+the same shape). These reach through the subrecord's owner pointer to the
+**player's live stock**:
+
+```
+if (amount <= playerStockForThisResource) {
+    playerStockForThisResource = float32( playerStockForThisResource - amount )
+    requestedForThisResource   = float32( amount + requestedForThisResource )
+    return paid
+}
+return refused
+```
+
+The compare is inclusive: paying exactly the remaining stock succeeds and
+leaves zero. The requested accumulator is credited, the accepted accumulator
+is not, so an immediate payment appears in the pass's requested counter but
+never becomes carry.
+
+*Direct two-resource payment* (weapon fire and other immediate operations):
+
+```
+if (e <= playerEnergyStock && m <= playerMetalStock) {
+    playerEnergyStock = float32( playerEnergyStock - e )
+    energyRequested   = float32( e + energyRequested )
+    // the metal stock is re-read through the owner pointer and re-tested
+    // here; it cannot have changed, so the metal half always follows
+    playerMetalStock  = float32( playerMetalStock - m )
+    metalRequested    = float32( m + metalRequested )
+    return paid
+}
+return refused
+```
+
+Both compares are inclusive and both must hold before anything is debited, so
+this is genuinely all-or-nothing. The redundant inner re-test is preserved
+above because it is what the instructions do; it can never fail.
+
+### R-ECO-01 §10 — The operation-byte table, closed [R-ECO-01] (2026-08-29)
+
+The doc-05 tail has carried "the operation-byte table that dispatches build,
+repair, unit reclaim, feature reclaim, capture, and resurrection; the handler
+identities are established" as an open item, and doc 04 §3.1 carries the same
+residual as "the per-phase operation-byte values inside the construction
+handler family". The values are now established. Behavior remains doc 04
+§3.1's property; this entry exists because doc 05's admission callers are
+selected by these bytes.
+
+**Established — how the byte becomes a handler.** An order node's operation
+byte indexes one flat runtime array of fixed-size descriptors; the lookup is a
+plain scaled index with the byte zero-extended, so the byte *is* the array
+position. Each descriptor carries a status caption, a primary handler, a
+secondary handler, two flag words, a small byte, and the authored order name.
+
+**Established — how the array is built, and why the values are what they
+are.** One startup routine appends a single descriptor, then appends three
+static blocks of 22, 22 and 23 descriptors in that order, and **re-sorts the
+whole array after every append**, ascending by the descriptor's authored order
+name under a case-insensitive comparison (upper-case letters folded to lower;
+`_` therefore sorts before every letter). Total 68, matching doc 04's count.
+The indices are consequently the alphabetical positions, not the registration
+positions:
+
+| Byte | Order name | Caption |
+|---:|---|---|
+| 0 | *(empty name)* | `Ready` |
+| 12 | `BuildingBuild` | `Nanolathing` |
+| 13 | `BuildWeapon` | `Nanolathing` |
+| 14 | `Capture` | `Capturing` |
+| 15 | `Cloak_Off` | `Decloaking` |
+| 16 | `Cloak_On` | `Cloaking` |
+| 19 | `GetBuilt` | `Under construction` |
+| 23 | `HelpBuild` | `Nanolathing` |
+| 25 | `MobileBuild` | `Nanolathing` |
+| 32 | `Reclaim` *(feature reclaim)* | `Reclaiming` |
+| 33 | `ReclaimUnit` *(unit reclaim)* | `Reclaiming` |
+| 34 | `RepairPatrol` | `Repair patrol` |
+| 35 | `RepairUnit` | `Repairing` |
+| 36 | `RepairUnitNoMove` | `Repairing` |
+| 37 | `Resurrect` | `Resurrecting` |
+| 40 | `SelfRepair` | `Repairing` |
+| 51 | `VTOL_HelpBuild` | `Nanolathing` |
+| 54 | `VTOL_MobileBuild` | `Nanolathing` |
+| 58 | `VTOL_Reclaim` | `Reclaiming` |
+| 59 | `VTOL_ReclaimUnit` | `Reclaiming` |
+| 60 | `VTOL_RepairPatrol` | `Repair patrol` |
+| 61 | `VTOL_RepairUnit` | `Repairing` |
+
+The full alphabetical list, including the orders outside doc 05's scope, is
+`Activate` 1, `AirStrike` 2, `AirToAir` 3, `AirToGround` 4,
+`AirToGroundHover` 5, `Attack_Chase` 6, `Attack_Kamikaze` 7, `Attack_NoMove`
+8, `AttackSpecial` 9, `AttackUType` 10, `BeCarried` 11, `Deactivate` 17,
+`Follow_Ground` 18, `Ground_Pickup` 20, `Ground_Unload` 21, `Guard_NoMove` 22,
+`MakeSelectable` 24, `Move_Ground` 26, `Paralyze` 27, `Park` 28, `Patrol` 29,
+`QMove` 30, `QPatrol` 31, `SelfDestruct` 38, `SelfDestructFG` 39, `Standby`
+41, `Standby_Mine` 42, `Standing_FireOrder` 43, `Standing_MoveOrder` 44,
+`Stop` 45, `Suppress` 46, `Teleport` 47, `VTOL_Evade` 48, `VTOL_Follow` 49,
+`VTOL_GetRepaired` 50, `VTOL_LandIfCan` 52, `VTOL_Landing` 53, `VTOL_Move` 55,
+`VTOL_Patrol` 56, `VTOL_Pickup` 57, `VTOL_SeekAttack` 62, `VTOL_SeekGuard` 63,
+`VTOL_Standby` 64, `VTOL_Unload` 65, `Wait` 66, `WaitForAttack` 67.
+
+**Supported inference — index 0.** The one descriptor appended before the
+three blocks carries the `Ready` caption and a name pointer into a
+statically-zero data slot, i.e. the empty string, which sorts first under the
+comparator. Nothing was found that writes a name there before the sort, so
+index 0 is the default/idle descriptor. Open branch: a runtime writer of that
+name slot ahead of the sort would shift every other index by one. Decider:
+static trace of that slot's writer set.
+
+**Established — a distinct byte, not to be confused with this one.** The
+unit-reclaim handler contains its own six-way switch on a **phase** byte
+stored in the order node beside the operation byte (values 0 through 5,
+dispatched through a dense jump table). That is the handler's internal state
+machine — reclaim start, work pulse, and four terminals — not the operation
+table. Doc 04 §3.1's "per-phase operation-byte values" residual is about these
+phase bytes; the table above is the outer dispatch.
 
 ## Two-stage settlement algorithm
 
@@ -833,18 +1308,93 @@ remaining after funded debt and services newly accepted work:
 Each unit is scaled uniformly within each stage. There is no largest-remainder
 distribution and no forced minimum work quantum in the settlement loop.
 
-The new carry for a unit is:
-
-`new carry = old carry × (1 - debt ratio) + accepted × (1 - accept ratio)`
+The new carry for a unit is a re-scaled remainder of both stages. The exact
+expression, which is **not** the factored form, is in [R-ECO-01 §5].
 
 The same calculation is applied to the player-level mirror bucket. Energy and
 metal use their own pool, totals, and ratios, so one resource can be completely
 funded while the other remains short.
 
-The engine performs this work with single-precision values and the retail x87
-environment. Exact compatibility requires preserving evaluation order and
-conversion points rather than recomputing the equations with arbitrary higher
-precision.
+The engine performs this work with single-precision state and the retail x87
+environment of [R-ECO-01 §1]. Exact compatibility requires preserving
+evaluation order and conversion points rather than recomputing the equations
+with arbitrary higher precision.
+
+### R-ECO-01 §5 — The two stages and the apply-back, instruction-exact [R-ECO-01] (2026-08-29)
+
+**Established — the stage loop.** Energy runs first, then metal; the two are
+one loop body executed twice over adjacent slot pairs, so no metal value can
+influence an energy value or the reverse. Per resource, with `P` the pass
+production total, `S` the player's live stock at this moment, `D` the summed
+carry, `A` the summed accepted work, and `f32(...)` a store that narrows:
+
+```
+pool := f32(P + S)                                  // stored; a single
+
+// stage 1 — debt
+if (D > pool) { debtRatio := f32(pool / D); take := pool }
+else          { debtRatio := 1.0f;          take := D    }
+rem := pool - take                                  // register, 53-bit
+                                                    // rem is also stored to
+                                                    // the pool slot here and
+                                                    // that store is dead
+
+// stage 2 — newly accepted work
+if (A > rem)  { acceptRatio := f32(rem / A); take2 := rem }
+else          { acceptRatio := 1.0f;         take2 := A   }
+newStock := f32(rem - take2)                        // this is the closing stock
+```
+
+Four things in that are load-bearing:
+
+1. **The min is a strict `>` on the total, not on the ratio.** Equality gives
+   `1.0f` exactly and performs **no division**, so a fully-funded stage can
+   never introduce a rounding error, and a resource with zero debt and
+   non-negative pool takes the `1.0f` arm.
+2. **`rem` is consumed from the register, not re-read from memory.** The
+   engine does store the post-stage-one remainder into the pool slot as a
+   single, but that store is immediately overwritten by the stage-two result
+   and is never read. Stage two divides and subtracts using the 53-bit
+   register value. Narrowing `rem` to single before stage two is a divergence.
+3. **A negative pool with zero debt divides by zero.** `D = 0 > pool` when the
+   pool is negative — reachable when a slice's authored `energymake` values
+   sum negative — so `debtRatio` becomes negative infinity with the exception
+   masked, `take` is the pool itself, and `rem` is exactly zero. The stage-two
+   ratio then behaves normally and the closing stock is zero or negative. This
+   is retail's outcome, not a fault.
+4. **When a stage under-funds, the remainder is exactly zero.** `rem - rem`
+   and `pool - pool` are exact, so a shortfall always leaves `+0.0`, never a
+   residue.
+
+**Established — the apply-back expression and its operand order.** For every
+alive unit in the slice, and then once for the mirror bucket, per resource, in
+this instruction order:
+
+```
+acceptedTerm := accepted - acceptRatio * accepted     // 53-bit
+archivedRequested := requested ;  requested := 0
+archivedProduction := production ; production := 0 ;  accepted := 0
+carryTerm := carry - debtRatio * carry                // 53-bit
+carry := f32( acceptedTerm + carryTerm )
+```
+
+*Correction:* the previous text gave this as
+`new carry = old carry × (1 - debt ratio) + accepted × (1 - accept ratio)`.
+That is the same value in exact arithmetic but not in floating point: retail
+computes `x - ratio*x`, never `x * (1 - ratio)`, and the two round
+differently. The accepted term is also formed first and is the left operand of
+the final add. Only the final store narrows to single; both terms are computed
+at the working precision of [R-ECO-01 §1]. An unreferenced out-of-line copy of
+exactly this expression exists in the image and corroborates the reading.
+
+**Established — what the apply-back archives and clears.** Production is
+copied into the archived-production slot and zeroed; requested is copied into
+the archived-requested slot and zeroed; accepted is zeroed; carry receives the
+expression above. The two archived slots are written here and nowhere else.
+The unit loop skips units without the alive bit, so a unit that died during
+the pass keeps its stale accumulators — they were already folded into the
+totals during the gather, and the next pass will re-zero them only if the slot
+is reused.
 
 ## Stocks, counters, and waste
 
@@ -875,6 +1425,88 @@ the archived slots outside the ledger's own redistribution — treat as no
 consumer within the reviewed boundary. The writer-set closure above likewise
 rests on that bounded census.
 
+### R-ECO-01 §6 — Commit order, the waste clamp, and the four HUD rates [R-ECO-01] (2026-08-29)
+
+**Established — the commit order, exactly.** After the unit slice, the
+mirror-bucket fold and the capacity bonus of [R-ECO-01 §4], and **before** the
+live stock is folded into the pool, the pass writes four fields per resource,
+energy's before metal's:
+
+```
+playerProducedThisPass  := P                            // already a single;
+playerRequestedThisPass := R                            // copied, not recomputed
+cumulativeProduced  := f64( cumulativeProduced  + P )   // double accumulate
+cumulativeRequested := f64( cumulativeRequested + R )
+```
+
+`P` and `R` are the pass totals, already single-precision from the per-unit
+accumulation of [R-ECO-01 §2], and the per-pass fields receive them unchanged
+— one of the four is even a plain word copy rather than a floating-point
+store, which is value-identical. The cumulative fields are doubles; the
+single is added to the double exactly and only the double store rounds. Then,
+and only then:
+
+```
+pool := f32(P + playerLiveStock)
+```
+
+so the two per-pass counters really do report the pass's activity and never
+the funds available to pay it, as this section already said. The requested
+counter is copied bit-for-bit — no conversion, no clamp.
+
+**Established — the closing stock and the waste clamp.** After the two stages
+of [R-ECO-01 §5] produce a closing value per resource:
+
+```
+playerLiveStock := newStock                         // raw bit copy, always
+if (newStock > playerCapacity) {
+    excess := newStock - playerCapacity             // 53-bit
+    playerLiveStock := playerCapacity               // raw bit copy
+    cumulativeWaste := f64( cumulativeWaste + excess )
+}
+```
+
+The stock is written **twice** on the overflow path — first with the
+unclamped value, then with the capacity — which is invisible to any observer
+inside the pass but is the literal sequence. The clamp is **strictly greater**:
+a stock exactly equal to capacity is not clamped and wastes nothing. The
+excess is computed from the unclamped value and the capacity at the working
+precision, and only the double accumulation rounds, so the fractional part of
+the overflow is preserved as this section already claimed. A NaN closing value
+takes the "no waste" arm and is written to the stock unchanged. Waste is
+accumulated **only** here; there is no other writer of the two waste totals in
+the ledger.
+
+**Established — the four floats the HUD reads, and the absence of averaging.**
+The resource bar samples four player fields — energy produced this pass,
+energy requested this pass, metal produced this pass, metal requested this
+pass — through four one-line getters and stores them, unchanged and
+unscaled, into its own display record. There is **no averaging, no smoothing
+and no rate conversion** on those four values: what the bar shows is the last
+settlement pass's totals verbatim. They are re-sampled only when the player's
+`DisplayTimer` deadline is due, on the strict compare of [R-ECO-01 §1], and
+the deadline is then advanced by 30 — so the numbers change at most once per
+30 ticks even though the bar redraws every frame. *This is the whole of the
+`DisplayTimer` mechanism.*
+
+What **is** smoothed, every frame rather than every 30 ticks, is the pair of
+displayed **stock** values beside them. For each resource the bar holds its
+own displayed value and steps it toward the live stock in integer space:
+
+```
+i := truncTowardZero(displayedValue)
+j := truncTowardZero(playerLiveStock)
+d := (j - i) / 8                      // integer divide, truncating toward zero
+if (d == 0) d := sign(j - i)          // never stall while a gap remains
+displayedValue := float(i + d)
+if (displayedValue > matchingCapacity) displayedValue := matchingCapacity
+```
+
+so the bar closes an eighth of the remaining integer gap per frame with a
+minimum step of one, and is clamped to the same capacity the settlement
+clamps the stock to (strictly-greater test again). The displayed value is
+presentation state only: nothing in the settlement reads it.
+
 ## Activation and stall transitions
 
 The economy and work paths use a common transition service to change operational
@@ -886,6 +1518,47 @@ A shortage can therefore affect more than numerical work. It can change the
 unit's operational state and cause script-visible transitions. The exact
 mapping of every bit and callback is specified in the unit-script document;
 this document requires only that economic admission use that shared service.
+
+### R-ECO-01 §8 — The transition service, exactly [R-ECO-01] (2026-08-29)
+
+**Established.** The service takes a unit, a bit mask, and a set/clear
+selector, and operates on the unit's one-byte operational word:
+
+```
+before := unit.operationalByte
+after  := (selector != 0) ? (before | mask) : (before & ~mask)
+unit.operationalByte := after
+if (after == before) return               // no callbacks, no packet, no refresh
+newlySet     := ~before & after
+newlyCleared := before & ~after
+```
+
+The write happens unconditionally; only the notifications are suppressed when
+nothing changed. Then, in this fixed order, each guarded by its own bit:
+
+| Edge | Effect |
+|---|---|
+| bit 0 newly set | raise COB `Activate`, then status cue slot 3 |
+| bit 0 newly cleared | raise COB `Deactivate`, then status cue slot 4 |
+| bit 3 newly set | raise COB `StartBuilding` (no cue) |
+| bit 3 newly cleared | raise COB `StopBuilding` (no cue) |
+| bit 2 newly set | raise status cue slot 14 (no caption text), then walk the unit's attachment list and notify each attached presentation object |
+| bit 2 newly cleared | raise status cue slot 15 (no caption text) |
+
+An `Activate`/`Deactivate` pair therefore always raises both a script callback
+**and** a cue, while the bit-2 (cloak) pair raises **only** cues — the pair
+this document previously called "the COB callback pair #14/#15" is a pair of
+status-cue slots, not COB callbacks. Bit 3 raises only script callbacks.
+
+After the bit dispatch the service refreshes the unit's interface panel, and
+then, if the owning player record exists and its control byte is 1 or 2, sends
+a four-byte network event carrying a fixed type tag, the unit's slot number,
+and the **new** operational byte. Observer-controlled owners (control byte 3)
+change state silently.
+
+The service is the only writer of the operational byte in the economy path;
+the cloak debit of [R-ECO-01 §9] reaches it with bit 2, and construction
+admission reaches it with bit 0.
 
 ## Allied resource and sensor sharing
 
@@ -2695,6 +3368,20 @@ record is a particle emitter, and the contract lives at
 [03 §5.5 "The nanolathe spray"] as `[R-P0-19-P]`. The closure narratives are
 deleted here only; no finding left the document.
 
+**Correction (2026-08-29, RWU-05-1).** Four bullets are re-cut against
+[R-ECO-01]. The operation-byte bullet said the table's values were unknown
+while the handler identities were established; the values are listed in
+[R-ECO-01 §10], and what remains open is only whether the empty-named
+descriptor holds index 0. The special-player bullet said state 2 was the
+computer-policy state "by inference" and left the selector unnamed; both are
+named in [R-ECO-01 §3], so the bullet narrows to control bytes 1 and 3. The
+sibling-deadline bullet asked for consumers of both `WinLoseTime` and
+`DisplayTimer`; `DisplayTimer`'s sole consumer is closed in [R-ECO-01 §6].
+The bit-exact floating-point bullet asked for exceptional values, overflow,
+signed zero and NaN; all four are stated in [R-ECO-01 §1] and [R-ECO-01 §5],
+and only the untested exponent-range edge survives. One bullet is added: the
+cloak gate's second status bit has no writer anywhere in the recovered image.
+
 - Identity and malformed-input behavior of the reversed-argument repair
   variant, and the unrecovered early construction/order-handler boundary that
   hides it · "Repair", doc 04 §3.1 · static trace (secondary-disassembler
@@ -2704,9 +3391,10 @@ deleted here only; no finding left the document.
   reaches state 2 — cancellation, retry, or termination · "Factory queue" ·
   static trace. The current admission boundary records a bounded diagnostic
   and leaves the node unchanged.
-- The operation-byte table that dispatches build, repair, unit reclaim,
-  feature reclaim, capture, and resurrection; the handler identities are
-  established · doc 04 §3.1 · static trace.
+- Whether the empty-named descriptor really holds operation byte 0: nothing
+  was found that writes its name slot before the startup sort, but a writer
+  there would shift every operation byte in [R-ECO-01 §10] by one
+  · "Resource admission and carry" · static trace of that slot's writer set.
 - Factory release and egress: the post-completion release target and order
   form, producer/product collision exemption, indefinitely-blocked-release
   policy, aircraft takeoff-before-rally handoff, and a no-stacking guarantee
@@ -2719,19 +3407,29 @@ deleted here only; no finding left the document.
 - Semantic meaning of the game-ended flag bits and of the two mission-end
   predicates behind the confirmation delay; the bit patterns and the
   freeze-on-settlement effect are established · doc 08 · static trace.
-- User-facing identities of the special player modes behind the 0.5 / 0.7
-  scaling selector; state 2 is the computer-policy state by inference, states
-  1 and 3 are unnamed · "Cloak debit" · static trace.
-- Names of the three controller states in the settlement status pair, and the
-  consumers of the `WinLoseTime` / `DisplayTimer` sibling deadlines beyond
-  their save keys · "Authoritative settlement order" · static trace.
+- User-facing identities of player control-byte values **1** and **3**; value
+  2 is the computer player and the 0.5 / 0.7 selector is the difficulty word,
+  both closed by [R-ECO-01 §3] · "Unit instance economy state" · static trace.
+- Names of the two fields in the settlement status pair, and the consumer of
+  the `WinLoseTime` sibling deadline beyond its save key; `DisplayTimer`'s
+  sole consumer is closed by [R-ECO-01 §6] · "Authoritative settlement order"
+  · static trace.
 - Whether any reader of the per-unit archived economy snapshots exists outside
   the ledger's own redistribution; bounded-negative in the reviewed image
   · "Authoritative settlement order" · static trace over the unrecovered
   regions.
-- Bit-exact floating-point evaluation for exceptional values, overflow, signed
-  zero, and NaN in settlement; the truncation sites and float-versus-double
-  widths are pinned · "Two-stage settlement algorithm" · static trace.
+- Meaning of the second status bit the cloak gate requires to be clear: it has
+  no writer in the complete decompiled function set, so the term is inert and
+  the behavior is unobservable · "Cloak debit" · static trace over the regions
+  the export still misses. The rest of the gate, the truncation, and the
+  inclusive affordability compare are closed by [R-ECO-01 §9].
+- Whether any settlement intermediate can reach the range where the 53-bit
+  precision control's wider exponent differs from a double's: no economy
+  magnitude was found that does, and the claim is a stated edge rather than a
+  traced one · "Two-stage settlement algorithm" · static trace, or manual
+  retail observation with an authored extreme-cost probe. Exceptional-value
+  behavior, signed zero, the truncation sites, and the float-versus-double
+  widths are closed by [R-ECO-01 §1] and [R-ECO-01 §5].
 - Sharing residuals: the source share-buffer refill rules, the state-2
   recipient discount scalar in the transfer helpers, and the names of the
   remaining status/alliance predicates · "Automatic transfer" · static trace.

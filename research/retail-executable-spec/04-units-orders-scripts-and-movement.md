@@ -266,10 +266,28 @@ document 06.
 **Established fact:** The engine registers a fixed table of **68 order
 descriptors** during initialization, from four static template batches of 23,
 22, 22, and 1 records. After every batch is appended the whole table is
-re-sorted ascending by canonical command name using a case-sensitive byte
-comparison, and **an order's numeric identity is its index in that sorted
-table**. Because all four batches register before play begins, the identities
-are stable for the whole session.
+re-sorted ascending by canonical command name using the **case-insensitive**
+string comparison — the same comparator the name lookup binary-searches with
+`[R-STANCE-01 §9]` (§3.4) — and **an order's numeric identity is its index in
+that sorted table**. Because all four batches register before play begins, the
+identities are stable for the whole session.
+
+**Correction (2026-08-29, RWU-04-2).** The sentence above previously said the
+sort used a **case-sensitive byte comparison**, and the table below listed
+`AttackSpecial`, `AttackUType`, `Attack_Chase`, `Attack_Kamikaze`,
+`Attack_NoMove` as identities 6–10 and `BuildWeapon`, `BuildingBuild` as 12–13.
+That ordering came from `[R-DOC04-C]`'s recomputation rather than from the
+runtime table, and it is wrong: `[R-STANCE-01 §9]` traced the registration
+routine's comparator and it is the case-insensitive compare, under which the
+underscore sorts below every letter instead of between the upper- and
+lower-case ranges. The permutation below is copied from that finding, not
+re-derived — identities 6–10 become `Attack_Chase`, `Attack_Kamikaze`,
+`Attack_NoMove`, `AttackSpecial`, `AttackUType`, and 12–13 become
+`BuildingBuild`, `BuildWeapon`. Nothing else moves: the empty name still sorts
+to index 0 and remains the reject sentinel, `GetBuilt` is `0x13` under either
+order, and every per-descriptor payload column is unchanged. `[R-DOC04-C]`'s
+audit note below retains its own wording; its "recomputed from a case-sensitive
+byte sort" clause is superseded by this correction.
 
 A descriptor is 25 bytes and carries:
 
@@ -303,14 +321,14 @@ The remaining 67 records, in sorted order, are:
 | `AirToAir` | Engaging target | 0x08 | 1 | 0x200 |
 | `AirToGround` | Engaging target | 0x08 | 1 | 0x200 |
 | `AirToGroundHover` | Engaging target | 0x08 | 1 | 0x200 |
-| `AttackSpecial` | Annihilating | 0x08 | 1 | 0x680 |
-| `AttackUType` | Attacking | 0x00 | 19 | 0x4 |
 | `Attack_Chase` | Attacking | 0x08 | 1 | 0x280 |
 | `Attack_Kamikaze` | Attacking | 0x08 | 1 | 0x600 |
 | `Attack_NoMove` | Attacking | 0x08 | 1 | 0x280 |
+| `AttackSpecial` | Annihilating | 0x08 | 1 | 0x680 |
+| `AttackUType` | Attacking | 0x00 | 19 | 0x4 |
 | `BeCarried` | Being transported | 0x00 | 19 | 0x24 |
-| `BuildWeapon` | Nanolathing | 0x00 | 19 | 0xc0140 |
 | `BuildingBuild` | Nanolathing | 0x00 | 19 | 0x10010c |
+| `BuildWeapon` | Nanolathing | 0x00 | 19 | 0xc0140 |
 | `Capture` | Capturing | 0x08 | 4 | 0x200 |
 | `Cloak_Off` | Decloaking | 0x00 | 19 | 0x10060 |
 | `Cloak_On` | Cloaking | 0x00 | 19 | 0x10060 |
@@ -794,6 +812,298 @@ gates [P0-07].
 
 **Mouse-button assignment is closed.** Every world command — selection, move, attack, and the contextual delegation above (code 1) — is issued with the **left** mouse button; the **right** button never issues an order. A right click cancels the armed command latch (returning it to idle) or, when the latch is already idle, clears the current selection. The battle input pump routes left-button press and release through the single-click and drag-rectangle selection paths and the order dispatcher, while right-button press is routed exclusively to the cancellation path that returns the latch to idle and, when idle, performs the deselection branch. The cursor contract shows the same polarity: every latched shape's advertised action fires on left-click; the right-click column is empty or a transition back to the normal cursor [07 §8][07 §9].
 
+### Correction — the descriptor table is sorted case-insensitively [R-STANCE-01 §9] (2026-08-29)
+
+**What was said.** §3.1 states that after every template batch is appended
+"the whole table is re-sorted ascending by canonical command name using a
+**case-sensitive** byte comparison", and its audit note [R-DOC04-C] says the
+sorted identity was **recomputed** from a case-sensitive byte sort of the 68
+names rather than dumped from the runtime table.
+
+**Why it was wrong.** Both halves of the pair were traced while following this
+section's name lookup. The registration routine appends the batch and then
+sorts the whole array with a comparator that is the C runtime's
+**case-insensitive** string compare — the same function the binary search below
+uses. A case-sensitive sort paired with a case-insensitive `lower_bound` would
+be internally inconsistent, and the inconsistency is not hypothetical: over a
+case-sensitively sorted table the traced search cannot find `Attack_Chase`,
+`Attack_Kamikaze`, `Attack_NoMove`, `AttackSpecial` or `BuildWeapon` at all,
+which would disable the chase attack the whole of §3.5 describes.
+
+**What changes.** Everything except the order of seven adjacent entries. Under
+a case-insensitive comparison the underscore (byte `0x5f`) sorts **below** every
+letter instead of between the upper- and lower-case ranges, so the `Attack*`
+and `Build*` clusters invert:
+
+| Identity | §3.1's recomputed name | Traced (case-insensitive) name |
+|---:|---|---|
+| 6 | `AttackSpecial` | `Attack_Chase` |
+| 7 | `AttackUType` | `Attack_Kamikaze` |
+| 8 | `Attack_Chase` | `Attack_NoMove` |
+| 9 | `Attack_Kamikaze` | `AttackSpecial` |
+| 10 | `Attack_NoMove` | `AttackUType` |
+| 12 | `BuildWeapon` | `BuildingBuild` |
+| 13 | `BuildingBuild` | `BuildWeapon` |
+
+No other identity moves; the empty name still sorts to index 0 and stays the
+reject sentinel, and `GetBuilt` is index `0x13` under either order, so the
+`GetBuilt`-shaped default identity of code 10 above is unaffected. §3.1's field
+census, batch sizes, and per-descriptor payloads are all unaffected — only its
+"case-sensitive" sentence and the ordering of those seven rows. **The owner of
+§3.1 should carry the correction into its table**; it is recorded here because
+the lookup this section describes is where it was traced.
+
+**Established — the lookup itself.** Given a canonical name the engine runs an
+ordinary `lower_bound` binary search over the sorted table with that same
+case-insensitive comparator and returns the index, or the reject sentinel 0
+when the search lands on a non-match. Callers therefore need not match the
+table's spelling: the interface transmits `STANDING_FIREORDER` and
+`STANDING_MOVEORDER` in upper case and they resolve to the descriptors named
+`Standing_FireOrder` and `Standing_MoveOrder` [R-STANCE-01 §2].
+
+### 3.4a Standing orders
+
+Two per-unit fields decide what a unit does *on its own initiative*: the
+**standing fire order** (bits 20–21 of the unit state word) and the **standing
+move order** (bits 18–19). They are read by the COB ports 2 and 3
+[04 §4.4][R-COB-03 §3], written by two order handlers, seeded from the
+definition, inherited by factory products [04 §3.8], carried through save, and
+overwritten wholesale for computer players by the AI classifier
+[08 R-AI-01 §10]. The consumers are enumerated under [R-STANCE-01 §3] and
+[R-STANCE-01 §4] in section 3.5.
+
+### Closed — stance values, labels, and the two interface words [R-STANCE-01 §1] (2026-08-29)
+
+**Established — the three values of each field, named from the stock button
+artwork.** Both fields hold `0`, `1` or `2` in play. The battle side panel's
+two stance buttons are ordinary GUI buttons (`[fmt gui]` id 1) whose *status*
+word selects a frame of a GAF entry of the same name, and the engine writes the
+stance value straight into that status word, so the frame index **is** the
+value. An asset census of the stock `anims/commongui.gaf` entries `ARMFIREORD`
+and `ARMMOVEORD` (six frames each, decoded through the retail palette) reads:
+
+| Value | Fire-order button | Move-order button |
+|---:|---|---|
+| 0 | `HOLD FIRE` | `HOLD POSITION` |
+| 1 | `RETURN FIRE` | `MANEUVER` |
+| 2 | `FIRE AT WILL` | `ROAM` |
+| 3 | `FIRE ORDERS` (mixed selection) | `MOVE ORDERS` (mixed selection) |
+| 4, 5 | unlabelled plate | unlabelled plate |
+
+The naming is independently confirmed by behavior: value 0 is the only value
+that suppresses every autonomous engagement, value 1 retaliates but never
+hunts, value 2 hunts; and on the move side value 1 is the only value that reads
+`maneuverleashlength` [R-STANCE-01 §3][R-STANCE-01 §4]. The Cavedog gadgets
+are `ARMFIREORD`/`CORFIREORD` (quick key `f`, ASCII 102) and
+`ARMMOVEORD`/`CORMOVEORD` (quick key `v`, ASCII 118) in
+`guis/<side>gen.gui`; neither carries a `text=` or `stages=` field, so the
+labels live only in the artwork.
+
+**Established — the interface keeps its own state, in two different words.**
+The panel does not read the unit fields at click time. It keeps a **three-bit**
+copy of each stance in engine-root interface state: the fire stance in bits
+12–14 of one sixteen-bit word and the move stance in bits 0–2 of the **next**
+word — two different words, not two fields of one. *Correction:* the RWU-00-4
+string triage recorded both as fields of a single word; the traced handler
+reads them from two adjacent words. The same second word also carries the cloak
+pair (bits 3–4), the on/off pair (bits 5–6), and the enable bits for the
+`MOVE`, `STOP`, `ATTACK` and `DEFEND` buttons (bits 7, 8, 9, 10).
+
+Three bits are needed because the field carries two sentinels the unit field
+cannot hold:
+
+* **3 — mixed.** At least two selected units that accept this stance disagree.
+* **4 — not applicable.** No selected unit accepts this stance.
+
+**Established — how the panel word is recomputed.** The aggregate
+command-state refresh walks the selected units in unit-pool order (selection
+bit of the unit state word, non-zero definition index) and, for each unit whose
+definition carries the matching accept flag [R-STANCE-01 §5], folds its field
+into an accumulator that starts at `4`: the first eligible unit replaces the
+`4`; any later unit whose value differs sets the accumulator to `3`; equal
+values leave it alone. The accumulator is then deposited into the panel word.
+
+**Established — repaint.** On repaint, a panel value of `4` grays the gadget
+(setting only its grayed flag; the status word keeps whatever frame it last
+showed), and any other value is written into the gadget's status word and the
+gadget is redrawn. Value `3` therefore renders as the generic
+`FIRE ORDERS` / `MOVE ORDERS` plate, and pressing a button showing `3` sends
+`0` [R-STANCE-01 §2].
+
+**Established — the in-battle developer overlay.** The overlay line
+`MOVEORD: %d FIREORD: %d` is printed only while exactly one unit is
+single-selected, and it prints **that unit's** two-bit fields — `(state >> 18)
+& 3` and `(state >> 20) & 3` — not the panel's three-bit words. *Correction:*
+the RWU-00-4 triage read the overlay as naming the panel words.
+
+### Closed — the writer chain from button to unit field [R-STANCE-01 §2] (2026-08-29)
+
+**Established — one click, in order.** The battle panel's stance handler
+resolves the pressed gadget by substring match against a fixed chain —
+`MOVEORD`, `FIREORD`, `STATUS`, `ONOFF`, `CLOAK` — so the stock names
+`ARMMOVEORD`/`ARMFIREORD` match on their suffix. For a stance gadget it then,
+in this order:
+
+1. reads the current three-bit panel field and computes the next value:
+   `0 → 1`, `1 → 2`, `2 → 0`, **`3 → 0`** (the mixed sentinel cycles to hold),
+   and value `4` matches no arm, so a not-applicable field is left untouched —
+   the gadget is grayed anyway;
+2. **transmits** the command — canonical name `STANDING_MOVEORDER` or
+   `STANDING_FIREORDER` — through the ordinary selection broadcast
+   [R-STANCE-01 §5] with the new value as the command's parameter;
+3. writes the new value back into the panel field;
+4. plays the cue `setmoveorders` or `setfireorders` (the on/off and cloak arms
+   of the same handler play `specialorders`) and marks the panel dirty.
+
+**Established — the command is authoritative for state; the local write is
+display only.** Step 3 touches nothing but the interface word, and the next
+aggregate refresh recomputes that word from the selection
+[R-STANCE-01 §1]. Every change to a unit's field goes through the order
+handler in step 2.
+
+**Established — the two order handlers.** `Standing_MoveOrder` and
+`Standing_FireOrder` are ordinary descriptors (state label `Acknowledged`,
+class `0x00`, acknowledgement group 19, static gate mask `0x10060` — see
+§3.1). Each takes the order's first general parameter, masks it to **two
+bits**, and deposits it:
+
+```
+move:  state = (state & ~(3 << 18)) | ((param & 3) << 18)
+fire:  state = (state & ~(3 << 20)) | ((param & 3) << 20)
+```
+
+Both return the completion code 5, so the record is consumed the tick it runs.
+Because the panel only ever sends `0`, `1` or `2`, the value `3` is
+representable in the unit field but unreachable from the interface.
+
+**Established — the fire handler's extra effect.** When the **unmasked**
+parameter is exactly `0` or exactly `1` — that is, on a transition to hold fire
+or return fire — the fire handler additionally walks the three weapon slots and,
+for every slot whose autonomous-targeting bit (bit 4 of the slot control byte)
+is set, clears that slot's stored target: the target id is zeroed, the second
+target word is set to `0x8000`, the slot's `StartBuilding` emission is killed,
+and `TargetCleared` is raised with the slot index [04 §5.4]. The autonomous
+bit itself is **not** cleared. The move handler has no such effect.
+
+**Unknown — the fire handler's parameter test is on the unmasked value.** The
+test compares the whole 32-bit parameter against `0` and `1`, while the
+deposit masks to two bits, so a parameter of `4` would set the field to `0`
+*without* clearing the slots. No producer sends such a value; whether that is
+deliberate is undecidable from the trace. *Decider:* none needed for a faithful
+clone — reproduce the unmasked test.
+
+### Closed — which units in a selection accept a standing order [R-STANCE-01 §5] (2026-08-29)
+
+**Established — two definition flags gate both the button and the command.**
+The FBI keys `mobilestandorders` and `firestandorders` (`[fmt fbi]`) parse into
+two bits of one definition flags word: `mobilestandorders` admits the standing
+**move** order, `firestandorders` admits the standing **fire** order. They are
+read in exactly two places, and both are interface/command sites, never
+simulation:
+
+* the aggregate refresh, which skips a selected unit when computing the panel
+  field for a stance its definition does not accept [R-STANCE-01 §1];
+* the selection broadcast, which — after resolving the command name — skips a
+  selected unit when the name is `Standing_FireOrder` and the unit's definition
+  lacks `firestandorders`, or the name is `Standing_MoveOrder` and it lacks
+  `mobilestandorders`.
+
+**Established — every other selected unit receives it.** The broadcast walks
+the *local player's whole unit slice in ascending pool order* at the fixed
+unit-record stride and submits to every unit carrying the selection bit. The
+broadcast's "leader" exclusion — the single-selected unit, skipped for commands
+that need a target — is inactive here, because it is armed only for descriptors
+whose static gate mask carries the target-required bit `0x200`, and both
+standing descriptors' masks are `0x10060`. The centroid and formation-offset
+arm of the broadcast is likewise inactive, because a standing order carries no
+ground position. A unit whose definition lacks the matching flag is skipped
+even when it is selected, so one click can leave a mixed selection **still**
+mixed at the unit level.
+
+### Closed — defaults, factory inheritance, and save [R-STANCE-01 §6] (2026-08-29)
+
+**Established — creation.** Both fields are seeded at unit creation from one
+packed definition byte — bits 0–1 for move, bits 2–3 for fire — which the FBI
+reader fills from `standingmoveorder` and `standingfireorder`, **each with a
+parsed default of 2** [R-COB-03 §3][fmt fbi]. A definition that authors neither
+key therefore starts its units at **fire at will** and **roam**.
+
+**Established — factory products.** The product's initial state merge and the
+later guarded `GetBuilt` copy are two distinct stages, both owned by §3.8: the
+copy from builder to product is allowed only when both units carry the
+building-class/alive state bit and neither carries the auto flag, and it copies
+bits 18–19 and 20–21 together [R-P0-09][05 "Rally inheritance"]. Nothing in
+the standing-order path adds a gate of its own.
+
+**Established — save and restore.** Both fields survive save/load. The unit
+save block packs the state word's flag groups into one word in which the
+standing-move field sits six bits above bit 18 and the standing-fire field six
+bits above bit 20; the restore path rebuilds each group with its own mask from
+that word shifted right by six. Save-record layout belongs to doc 08.
+
+**Asset census (stock install, all 284 files the mounted `units/` directory
+resolves to, 2026-08-29).** What retail content actually authors, so
+the parsed defaults are rarely what a stock unit starts with:
+
+| Key | Authored values |
+|---|---|
+| `standingmoveorder` | `1` ×168, `0` ×6, `2` ×1; never `3` |
+| `standingfireorder` | `2` ×152, `0` ×17; never `1`, never `3` |
+| `mobilestandorders` | `1` ×168, `0` ×6 |
+| `firestandorders` | `1` ×161, `0` ×14 |
+| `canstop` | `1` ×205, `0` ×12 |
+| `maneuverleashlength` | `640` ×119, `1280` ×31, `30` ×1, `10` ×1 |
+| `attackrunlength` | `100` ×2, `120`, `180`, `220`, `290` (six definitions) |
+
+So a stock mobile unit is authored **maneuver + fire at will**, not the parsed
+default **roam + fire at will**; the value `3` is not only unreachable from the
+interface, it is unauthored. A census settles what content authors, never what
+the engine computes.
+
+**Established — the AI overwrite.** For a computer player the classifier
+rewrites both fields of every eligible unit every 30 manager entries: standing
+move to `1` (maneuver) when the definition's `cancapture` flag is set and to
+`2` (roam) otherwise, and standing fire to `2` (fire at will) unconditionally
+[08 R-AI-01 §10]. Any stance a script, a capture, or a save left behind is
+overwritten on the next sweep.
+
+### Closed — standing orders and the simulation RNG [R-STANCE-01 §7] (2026-08-29)
+
+**Established — the fields themselves draw nothing.** Neither order handler,
+neither definition gate, neither interface path, and no consumer enumerated in
+[R-STANCE-01 §3] or [R-STANCE-01 §4] draws from either random stream while
+reading or writing a standing-order field.
+
+**Established — but the stance changes the draw *order*.** Five idle handlers
+run the opportunity scan of [R-STANCE-01 §3] and take a different exit
+depending on whether it issued an order; three of the no-issue exits draw:
+
+| Handler | Scan issued an order | Scan issued nothing |
+|---|---|---|
+| `Patrol` | clear the gate, set phase 1, return the retry code; no draw | one draw of bound 30, deadline `tick + draw + 30` |
+| `Standby` | complete the record (code 5); no draw | one draw of bound 30, deadline `tick + draw + 30` |
+| `VTOL_Patrol` | clear the gate, return the retry code; no draw | deadline `tick + 30` **fixed**, no draw |
+| `VTOL_Standby` | clear the gate, set phase 0, return the retry code; no draw | return the wait code with no deadline write and no draw |
+| `VTOL_SeekAttack` | complete the record; no draw | builds its orbit waypoint (one conditional draw of bound `0x2000` for the orbit angle when the interrupt bits are set), then one draw of bound 30, deadline `tick + draw + 30` |
+
+A stance that admits the scan therefore both consumes the acquisition draws of
+[06 §3.2] and, on the ticks the scan succeeds, *skips* the re-poll draw.
+Standing orders are consequently RNG-order-relevant even though they draw
+nothing themselves, and a clone must evaluate the gates in the traced order.
+
+### Closed — `canstop` has no simulation reader [R-STANCE-01 §8] (2026-08-29)
+
+**Established.** The FBI key `canstop` (`[fmt fbi]`) parses into a third bit of
+the same definition flags word as `mobilestandorders` and `firestandorders`.
+A census over the whole decompiled function set finds exactly **one** reader:
+the aggregate command-state refresh, which sets the `STOP` button's enable bit
+in the interface word when any selected unit's definition carries it; the
+repaint then grays the `STOP` gadget when that bit is clear. The `Stop` order
+handler does not read it, and no simulation path does. `canstop` is a
+**button-availability flag only**: an order that reaches the `Stop` handler by
+any other route (a script, a hotkey, the AI, a mission trigger) executes
+regardless of the key.
+
 ### 3.5 Attack-chase states and guard assistance
 
 **Attack-chase state machine [P0-07][P0-08].** Before its phase switch, the
@@ -863,7 +1173,9 @@ which the same pump cascade re-enters immediately.
    the standing-order gates the non-queued attack issue applies.
 2. **Slot re-target (auto-fire support).** Skipped entirely when the guard's
    standing-move bits (18–19) and standing-fire bits (20–21) of the status
-   word are all clear. Per slot 0..2, requiring the slot assigned bit, the
+   word are all clear. *(Corrected by [R-STANCE-01 §3]: the traced gate reads
+   the standing-fire field only; the standing-move field is not read in either
+   guard handler.)* Per slot 0..2, requiring the slot assigned bit, the
    slot tracking bit, and a weapon whose command-fire-only definition bit is
    clear: resolve the slot's stored target; when the slot has **no target**,
    that target is **out of range**, or the target's definition **is** in the
@@ -955,6 +1267,197 @@ Shift-queue (including `QMove`/`QPatrol`) both insert after the active marker
 without purging, differing only in descriptor class; Internal-Auto is the pump's
 own empty-list head-insert that inherits the old head's auto flag. The rear flag
 selects the segment for every modifier.
+
+### Closed — the standing-fire gates, site by site [R-STANCE-01 §3] (2026-08-29)
+
+**Established — the reader census, and its bound.** A whole-image scan of the
+disassembled code for the only two masks that isolate the standing-order fields
+(bits 18–19 and bits 20–21), together with every shift-and idiom that could
+extract them, finds the readers listed here and in [R-STANCE-01 §4] and no
+others. The bound is: a reader that tested one bit of a pair in isolation with a
+bare single-bit constant would not be caught, because those constants are also
+common 16.16 distances; every site actually found masks the pair.
+
+**Established — the shared auto-engage issuer, and its two gates.** All
+autonomous engagement funnels through one issuer, taking `(unit, target,
+force)`. Its admission, in order:
+
+1. `unit == target` → refuse;
+2. standing **move** field is `0` and `force` is `0` → refuse;
+3. standing **fire** field is `0` and `force` is `0` → refuse;
+4. resolve command code 3 (attack a unit) through the resolver of §3.4; an
+   empty name → refuse.
+
+So **hold position refuses autonomous engagement exactly as hold fire does**:
+either zero is enough to stop the unit acting on its own. The `force` argument
+bypasses both gates and is passed by exactly one caller family — the two guard
+handlers' combat join ([R-UNIT-06 §1] branch 1) — which is what "the queued-mode
+attack bypasses the standing-order gates" in that section means at the
+instruction level.
+
+On success the issuer builds one or two order records and inserts them with the
+**Internal-Auto head insert** of the "goal vtables and queue modifiers"
+paragraph below (front or rear segment per the new record's rear flag,
+inheriting the displaced head's auto flag). The two-record maneuver form is in
+[R-STANCE-01 §4].
+
+**Established — the opportunity scan is the fire-at-will-only path.** A
+two-line helper returns a target only when the standing fire field reads
+**exactly 2**, in which case it runs the shared unit-level target
+search — the order-work acquisition path of [06 §3.2], which builds its
+candidate list per call — with its range argument taken from the definition's
+`sightdistance` read as a signed 16-bit value; otherwise it returns nothing
+without searching. Its callers are the idle/loiter arms of `Patrol`,
+`Standby`, `Standby_Mine`, `VTOL_Standby`, `VTOL_Patrol` and `VTOL_SeekAttack`,
+each of which feeds the returned target straight into the auto-engage issuer
+above with `force = 0`.
+
+**This is the only behavioral difference between return fire and fire at
+will.** Both values pass every `!= 0` gate listed here; only `2` opens the scan, and
+`0` closes every one of them.
+
+**Established — retaliation ("return fire") is one site in the damage path.**
+For every damaged unit the damage-intake path runs one reaction site
+[08 R-AI-01 §11]. Read in stance terms, and with the parts that are not
+computer-player-specific:
+
+* the victim must be fully built, its definition **armed** or `kamikaze`, its
+  owner a controlled player, and the attacker known and not allied;
+* it first tries the auto-engage issuer with `force = 0` — so a hold-fire or
+  hold-position victim gets no counter-order — and only when the victim has no
+  front order (or the front order's gate mask carries the interruptible bit)
+  and the attacker's type is in neither the no-chase nor the bad-target
+  category set [06 §3.2];
+* if no order was issued **and** the standing fire field is non-zero, each of
+  the three weapon slots that is present and enabled is offered the attacker,
+  subject to the slot's admission predicate.
+
+"Being attacked" is therefore a **per-damage-event edge, not a state**: the
+record consulted is the attacker reference the damage packet carries, the
+reaction is evaluated once per damage application, and there is no retaliation
+timer, latch, or expiry anywhere in the path. A return-fire unit that is hit
+once and whose attacker then dies simply stops having a target when the ordinary
+retention scan drops it [06 §3.2].
+
+**Established — the guard's slot re-target gates on the fire field alone.**
+*Correction:* [R-UNIT-06 §1] step 2 says the slot re-target step is "skipped
+entirely when the guard's standing-move bits (18–19) and standing-fire bits
+(20–21) of the status word are all clear". The instruction is a test of the
+standing-**fire** mask only; the standing-move field is not read anywhere in
+either guard handler. The corrected gate is: **skipped when the guard's
+standing fire field is zero**. Everything else in that step — the per-slot
+assigned/tracking bits, the command-fire-only exclusion, the rebind conditions
+— is unchanged, and the air guard is identical.
+
+**Established — the four air-attack handlers.** `AirStrike`, `AirToAir`,
+`AirToGround` and `AirToGroundHover` share one epilogue: when the order is
+taken down by the abandon/interrupt satisfied-bit combination, the handler
+removes it — but first, **if this record is the last one in its queue segment
+and the unit's standing fire field is non-zero**, it enqueues a
+`VTOL_SeekAttack` record carrying the dead order's target and cached goal. A
+hold-fire aircraft whose attack run is interrupted therefore falls idle, while a
+return-fire or fire-at-will aircraft enters the seek-attack loiter.
+
+**Established — `Standby_Mine`.** The mine's idle phase calls the opportunity
+scan (so it acts only at fire at will), and when the scan returns a target
+whose state-word low two bits equal `1` — and, redundantly, the mine's own
+standing fire field is non-zero — the mine resolves the canonical name
+`SELFDESTRUCT`, allocates an order record with the first general parameter set
+to 1, inserts it on itself, and completes the standby record. **Unknown:** what
+the target state word's low two bits mean; §2.4 does not enumerate them.
+*Decider:* static trace of the writers of those two bits.
+
+**Established — the AI paths.** The computer player's order dispatcher and its
+weapon-maintenance sweep both require the standing fire field to read exactly
+`2`, which the classifier guarantees for the computer player's own units
+[08 R-AI-01 §10][08 R-AI-01 §15]. A structurally identical sibling of the
+dispatcher exists with no caller and no code-pointer reference and is dead.
+
+**Established — the bounded negative that matters.** No weapon-slot processing,
+aim, reload, shot-admission, or projectile path reads either standing-order
+field. Hold fire does **not** disarm a slot: it clears the autonomous slots'
+current targets once, at the moment the order runs [R-STANCE-01 §2], and then
+suppresses every path that would give the slot a new one. A slot target
+installed by a manual order, by a script, or by the guard's forced join is
+still aimed and still fired regardless of the stance.
+
+### Closed — the standing-move gates, the chase leash, and the return to post [R-STANCE-01 §4] (2026-08-29)
+
+**Established — maneuver is the two-record form of the auto-engage issuer.**
+When the standing **move** field reads exactly `1` and `force` is `0`, the
+issuer builds *two* records instead of one, and because both go in through the
+head insert the resulting queue order is **attack first, then the return move**:
+
+1. resolve command code 2 (move) with the goal set to the unit's **own current
+   position**, and head-insert that record with no leash and no anchor;
+2. resolve command code 3 (attack) and head-insert that record with
+   * the third general parameter — the pursuit leash — set to the definition's
+     `maneuverleashlength` read as an unsigned 16-bit value, and
+   * the order's guard/fight anchor pair set to the unit's own position in
+     **whole world units**: the high halves of the 16.16 X and Z, stored as
+     two signed 16-bit values.
+
+For any other move value — and for every forced call, including a maneuver
+unit's forced guard join — the issuer builds the single attack record with
+**leash 0 and no anchor**. Leash `0` means unlimited (§3.2). So:
+
+| Standing move | Autonomous engagement |
+|---|---|
+| 0 hold position | refused outright |
+| 1 maneuver | chase, leashed to `maneuverleashlength` from where the unit stood, then a queued move back to that spot |
+| 2 roam | chase, unlimited, no return move |
+| 3 | behaves as roam (unreachable from the interface) |
+
+**Established — how the leash is enforced.** The `Attack_Chase` handler tests
+it before its phase switch, on every dispatch, and only when the leash is
+non-zero:
+
+```
+dx = (int16)unitX_wholeUnits - (int16)order.anchorX
+dz = (int16)unitZ_wholeUnits - (int16)order.anchorZ
+d  = trunc(hypot((double)dx, (double)dz))       // C hypot, __ftol truncation
+if (leash <= d) -> abandon the order (completion code 5)
+```
+
+Both terms are whole world units, the subtraction is on sign-extended 16-bit
+values, the distance is a double `hypot` truncated toward zero by the standard
+float-to-long conversion, and the comparison is **inclusive** (`leash <= d`
+abandons; `d == leash - 1` continues). This refines the "strict `leash <=
+distance from the guard/fight anchor` removal" sentence of §3.5 with the exact
+widths and the truncation. Nothing rounds. When the record is abandoned, the
+return move queued behind it becomes the front order — that is the whole of the
+"return to post" behavior; there is no separate homing state.
+
+**Established — the repair patrol has its own three-armed issuer.** A second
+issuer, used only by `RepairPatrol` and `VTOL_RepairPatrol`, resolves command
+code 8 (assist or repair) and branches on the standing **move** field with
+three arms instead of two — and its arms are *not* the same as the attack
+issuer's:
+
+| Standing move | Records queued (head insert, so this is the execution order) | Leash source |
+|---|---|---|
+| 0 hold position | assist, then a move back to the unit's own position; anchor written | definition `sightdistance`, read as a **signed** 16-bit value |
+| 1 maneuver | assist, then a move back to the unit's own position; anchor written | definition `maneuverleashlength`, unsigned 16-bit |
+| 2 roam | assist only | 0 (unlimited) |
+| 3 | nothing is queued; the issuer refuses | — |
+
+A non-zero `force` argument makes this issuer refuse in every arm. Note that,
+unlike the attack issuer, **hold position does not refuse here**: a
+hold-position repair patrol still leaves its post to assist, bounded by its own
+sight distance.
+
+**Established — `attackrunlength` is not part of this machinery.** A whole-image
+reader census of the definition field the FBI key `attackrunlength` fills finds
+exactly four readers: two inside the `AirStrike` handler (where it extends a
+computed approach distance by a whole-unit addend), the definition-clone
+routine, and the HUD's `attack length` range ring [07 §6]. No standing-order,
+chase, or leash path reads it. The leash of the chase attack is
+`maneuverleashlength` only.
+
+**Established — the two ring overlays name the same fields.** The HUD's
+labelled range rings read `maneuverleashlength` for the ring labelled
+`maneuver` and `attackrunlength` for the ring labelled `attack length`, from
+the unit definition, with no stance test [07 R-P0-11 §3].
 
 ### 3.5 Construction and economy interaction boundary
 
@@ -3116,8 +3619,17 @@ absent in the coarse owner/building-mask word (one 16-bit word per 2×2-cell blo
 player slot) → 2; otherwise the packed terrain value. EVERY consumer of the test — the A\*
 expansion and all greedy-ray probes — treats the result as passable iff it is nonzero:
 **only the terrain value 0 hard-blocks**; steep (1), owner-mask miss (2), and clear (3) all
-expand. The owner/building-mask word therefore does not hard-block the A\*; hard building
-blocking for movement happens at the movement commit validator (§8.2).
+expand. The word therefore does not hard-block the A\*.
+
+**Corrected by [R-PATH-01 §2] (§7.1, 2026-08-29):** the "coarse owner/building-mask word"
+named in the paragraph above is the **per-player mapping memory** — the explored-terrain
+record whose save section is named `Mapping` and whose fill is chosen by the session's
+mapping option. Value 2 means "the requesting player has not explored this 2×2 block", and
+its index carries a quarter-footprint offset. Buildings are not in that word at all; a
+building hard-blocks the A\* through the class layer's **occupant-age gate** (step 2 of the
+classifier above) once the class record's revision watermark passes the building's frozen
+occupancy-commit tick. The movement commit validator (§8.2) remains a second, independent
+gate. See [R-PATH-01 §2] for the full probe and the closure of the tail's building question.
 
 **Established — the request revision pass [R-DOC04-B] (2026-08-27).** Before expanding, the
 request init revises the bound class record and its shared layer: the class record's revision
@@ -3491,7 +4003,7 @@ suggested. Heap tie-breaks therefore depend on: the reverse direction being
 expanded twice (first and last) in the first fan, the strict-less heap
 comparison, and the equal-g no-reparent rule of section 7.2.
 
-**Established fact:** Diagonal movement is endpoint-only: only the destination cell's stamped terrain and building mask are tested, not both cardinal corner cells. A footprint is not swept during expansion because the profile stamp already marked cells that would intersect static blockers. The test's exact encoding and its only-blocking value are in [R-DOC04-B]: only the stamped terrain value 0 blocks; the owner/building-mask miss value is traversable to the expansion.
+**Established fact:** Diagonal movement is endpoint-only: only the destination cell's stamped terrain and building mask are tested, not both cardinal corner cells. A footprint is not swept during expansion because the profile stamp already marked cells that would intersect static blockers. The test's exact encoding and its only-blocking value are in [R-DOC04-B]; the coarse word it consults is corrected in [R-PATH-01 §2] below.
 
 **Closed — duplicate suppression ordering (2026-08-26):** a neighbour that is
 already open is re-visited, the new cost is computed FIRST, and the parent/
@@ -3499,29 +4011,184 @@ direction are updated only when the new cost is STRICTLY lower; equal-cost
 re-visits never re-parent (matching the heap's strict-less ordering). There
 is no suppression before cost computation.
 
-**Closed — greedy-ray meet rule (2026-08-26):** the ray is FORWARD-ONLY from
-the start toward the goal — there is no reverse search and no bidirectional
-meet. It terminates when it reaches a goal-flagged cell (return 0), when its
-scaled-heuristic budget reaches 0 (return 0), or when a full wall-follow
-sweep returns to the starting cell with the same direction (return the best
-scaled h seen, which seeds the A* threshold); the returned value is the
-minimum scaled h along the ray. Section 7.2's "bidirectional" wording is
-superseded.
+**Closed — greedy-ray meet rule (2026-08-26, extended by [R-PATH-01 §5]):**
+the ray is FORWARD-ONLY from the start toward the goal — there is no reverse
+search from the goal and no bidirectional meet. It terminates when it reaches a
+goal-flagged cell (return 0), when its scaled-heuristic budget reaches 0
+(return 0), or when a full wall-follow sweep returns to the starting cell with
+the same direction (return the best scaled h seen, which seeds the A* threshold);
+the returned value is the minimum scaled h along the ray. Section 7.2's
+"bidirectional" wording is superseded. [R-PATH-01 §5] adds the wall-follow's
+own arithmetic, which is two-sided.
 
-**Closed — debt-array layout (2026-08-26):** the per-player budget state is
+**Closed — debt-array layout (2026-08-26, superseded in part by [R-PATH-01 §6]):**
+the per-player budget state is
 two 10-entry globals indexed by player slot — cumulative step counters and
 per-player budgets, the latter recomputed every 150 ticks from the counters
 as `counter / divisor` tiered to `requestBase × {6, 3, 1}` — plus a
 per-request 10-word accumulator array that receives `totalSteps /
 playerCount` per tick and whose SUM is the scheduler's per-call step budget.
-There is no per-player-direction debt. The heuristic-scale settings string
-value remains a data question (section 7.2, `TODO(question)`).
+There is no per-player-direction debt. The claim that the per-player budget
+*is* a work slice is corrected by [R-PATH-01 §6]: it is only the heuristic
+weight. The heuristic-scale settings string is closed by [R-PATH-01 §10].
+
+### Closed — the search working set, entry array, and touched bitmap [R-PATH-01 §1] (2026-08-29)
+
+There is exactly **one** path-search working set for the whole session,
+allocated once at battle setup as a single 201-byte record and torn down at
+battle end. It holds **one search at a time**: a single active-request unit
+reference, a single publication target, a single bound movement-class record.
+When that reference is null the scheduler may admit a new request; while it is
+non-null every scheduler slice advances that one search. There is no per-unit
+and no per-player search state.
+
+**Established — the per-cell entry array.** At construction the working set
+allocates `((mapWidth · mapHeight) + 7) & ~7` **32-bit entries**, one per
+attribute cell, indexed `mapWidth · z + x`. The four bytes are:
+
+| byte | contents |
+|---|---|
+| 0 | status (below) |
+| 1 | the direction index 0–7 by which this cell was reached |
+| 2–3 | the 16-bit index of this cell's node record, valid only while the status is *open* |
+
+Status byte bits:
+
+* bits 0–1 are a state: **0 untouched**, **1 open**, **2 closed** (written as
+  the whole byte `2` when the cell is popped, which also clears bits 2 and 3),
+  **3 rejected** (the cell was probed and read impassable). Expansion accepts
+  only states 0 and 1; 2 and 3 are dead ends.
+* bit 2 (`4`) — **acceptable terminal**. Set by goal enumeration (which writes
+  the whole byte as `4`, leaving the state *untouched* so the cell can still be
+  opened) and by an expansion whose scaled heuristic is at or below the
+  acceptance threshold. Popping a cell with this bit reconstructs and publishes.
+* bit 3 (`8`) — **ray-visited**. Set only by the pre-search ray of
+  [R-PATH-01 §5]. Its one consumer is the expansion's blocked-cell arm: a cell
+  that reads impassable is marked *rejected* and abandoned **unless** this bit
+  is set, in which case it is opened anyway. Because the ray only walks cells
+  that were passable when it ran, this exemption fires only when the shared
+  class layer is restamped between the ray and the expansion — which happens
+  whenever a search spans ticks, since the layer is shared with every other
+  request of the same movement class ([R-DOC04-B]).
+
+**Established — the two-level touched bitmap.** Alongside the entry array the
+constructor allocates one 32-bit word per **256 cells** (`ceil(cells/256)`
+words). Cell `i` is covered by **bit `(i >> 3) & 31` of word `i >> 8`** — one
+bit per **eight consecutive cells**, one word per 256. Every write to an entry
+also sets that bit. This is the structure the engine names in its allocation
+label as the search's *touched map entries*.
+
+The clear pass that runs at the head of every request walks the words: for each
+set bit it zeroes **byte 0 only** of the corresponding eight entries and then
+zeroes the word, so clearing costs one pass over the bitmap plus eight byte
+writes per touched group rather than a pass over the whole map. Bytes 1–3 of an
+entry are therefore stale garbage until the status byte is written again;
+nothing reads them while the state is *untouched*.
+
+The constructor primes the bitmap so the very first clear is correct and
+bounded: every word is filled with all-ones, the last word is then zeroed, and
+the bits covering the final 256-cell block are re-set only for cells below the
+padded cell count. The clear pass additionally bounds-checks each cell of the
+last word against the cell count.
+
+**Established — the open list.** The open list is a **binary min-heap of
+pointers to node records**, keyed on `f`. A node record is 20 bytes and holds,
+in order: its own index in the heap array, the packed cell coordinate as two
+signed 16-bit halves, `g`, `f`, a 16-bit stored per-node terrain term
+([R-PATH-01 §3]), and a 16-bit straight-run counter. Nodes come from a pool
+with a free list (`-1` sentinel) and a high-water mark; when the pool is full
+it grows to `capacity + capacity/2 + 16` and both the pool and the heap array
+are reallocated and re-pointed.
+
+**Established — tie order.** Sift-up moves a child above its parent only on
+strict `<`, and stops as soon as the parent's key is `<=` the moved node's.
+Sift-down picks the **left** child when the two children's keys are equal
+(the right child is chosen only on strict `<`) and stops when the moved node's
+key is `<=` the chosen child's. Equal `f` therefore never reorders an existing
+heap, so ties resolve to insertion order, which is the fan order of §7.1.
+
+**Established — the popped-node recycle.** A pop does not immediately free its
+node. The scheduler copies the root's fields into locals, sets a *root is
+spent* flag, and expands. The first neighbour that is newly opened during that
+expansion **overwrites the spent root's record in place** and sifts it down
+from index 0, clearing the flag; a relaxation that displaces the spent root
+from index 0 instead frees it and compacts the heap. If neither happens, the
+next pop frees it first and then reads the new root. One consequence matters
+for the exhaustion test: the scheduler treats **heap size equal to the
+spent-root flag** (0/0 or 1/1) as "no route", not heap size zero.
+
+### Correction — the coarse word the search tests is mapping memory, not a building mask [R-PATH-01 §2] (2026-08-29)
+
+**What the earlier text said.** [R-DOC04-B]'s "path-search consumption"
+paragraph and §7.1's diagonal paragraph describe the search's passability test
+as returning `2` when "the requester's bit [is] absent in the coarse
+owner/building-mask word (one 16-bit word per 2×2-cell block, bit per player
+slot)", and doc 04's tail asks whether a building hard-blocks through that
+channel.
+
+**Why it was wrong.** The array is the **per-player mapping memory** — the
+explored-terrain record. Three independent sites settle it: the save writer
+emits it under the section name `Mapping` with a length of half a byte per
+attribute cell (one 16-bit word per 2×2 block); the map-load initializer fills
+it with all-ones when the session's *mapping* game-option bit is clear and with
+zeroes when it is set (fog on ⇒ nothing explored yet); and the visibility
+writer ORs the viewing player's slot bit into the word as blocks become seen.
+No building writes it.
+
+**The corrected contract — Established.** The search's passability probe, given
+the bound movement-class record and a cell, in order:
+
+1. If the cell is outside the class record's own stamped extent (`x >= width`
+   or `z >= height`, unsigned, so negatives fail too) → **0**.
+2. Form the mapping-block index `bx = (x >> 1) + (FootPrintX >> 2)`,
+   `bz = (z >> 1) + (FootPrintZ >> 2)` — half-resolution coordinates offset by
+   a quarter of the class's authored footprint. If `bx >= mapWidth >> 1` or
+   `bz >= mapHeight >> 1` → **0**.
+3. If the requesting player's slot bit is **absent** from the mapping word for
+   that block → **2**, without reading the terrain layer at all.
+4. Otherwise return the stamped two-bit terrain value 0/1/3 ([R-DOC04-B]).
+
+So value **2 means "this block is unexplored by the requesting player"**, and
+every consumer treats it as passable. Retail units path optimistically straight
+through fog; the terrain layer is consulted only where the player has already
+mapped the ground. Map-edge handling is the pair of unsigned bound tests above
+plus the expansion's own unsigned bound test against the working set's map
+width and height — an out-of-range neighbour is skipped without being touched,
+marked, or costed.
+
+**Established — where a BUILDING blocks, closing the tail's open item.** The
+class layer's classifier reads the attribute cell's occupant slot index — the
+same field the movement commit stamps (§8.2) — and blocks the cell when an
+occupant is present and that occupant's last occupancy-commit tick is **before**
+the class record's revision watermark. The request-init revision pass advances
+that watermark to `max(tick, 31) − 30` and restamps the footprint of every live
+unit whose commit tick falls in the window just crossed, plus the requester's
+own footprint. A building never commits a move, so its commit tick stops
+advancing when it is placed; once the watermark passes it, its footprint cells
+classify to **0 and hard-block the A\***, through exactly the same occupant-age
+channel as a parked mobile unit and with a lag of at most 30 ticks plus one
+request. No building-state byte exists and none is needed; the coarse word was
+never the channel. The commit validator of §8.2 remains a second, independent
+gate for the same footprints.
+
+**Established — the stamp classifies a rectangle, not a cell.** The classifier
+form that writes the layer takes the class's authored `FootPrintX × FootPrintZ`
+rectangle anchored at the cell and aggregates the gates of [R-DOC04-B] over
+every cell of it. When that rectangle comes back *clear*, four further
+rectangle classifications run over the one-cell ring around it — the row above
+(`x−1 .. x+FootPrintX−1`), the column right (`x+FootPrintX`, `z−1 ..
+z+FootPrintZ−1`), the row below, and the column left — and the result is
+demoted to *steep* unless every one of them is also clear. [R-DOC04-B]'s
+"two-direction contagion pass" is this ring test; its "per attribute cell"
+framing understates the rectangle sweep, and an implementation that classifies
+single cells will not reproduce the layer for any class with a footprint larger
+than 1×1.
 
 ### 7.2 A* state and costs
 
 **Established fact:** The search maintains open/closed status, parent direction, a heap, and a packed coordinate per node. The heap key is `f = g + h`. Equal keys preserve insertion order because the heap compares strictly less, not less-or-equal. Equal `g` values do not replace an existing parent.
 
-**Established fact:** Cardinal steps cost 16 and diagonal steps cost 22. A direction-change table adds turn penalties of 0, 40, 60, 80, 100, 80, 60, and 40 indexed by the raw fan offset — equivalently `(candidate − current) & 7` — so the table IS a turn-difference table (label now Established, not inference). A fixed penalty of 30 is added to EVERY neighbour in the live main-loop expansion path (the only code shape where the term is absent has no callers in the bounded census), and the short-run penalty of 75 applies when the candidate direction is not straight and the parent chain's straight-run length is below five; the run counter resets to 1 on any turn and increments on straight steps. The earlier reading "the fixed initial penalty of 30 applies while the heap holds at most one entry (the start expansion)" is superseded: the watched register is a zero constant at the call site, so the term is unconditional on the live path.
+**Established fact:** Cardinal steps cost 16 and diagonal steps cost 22. A direction-change table adds turn penalties of 0, 40, 60, 80, 100, 80, 60, and 40 indexed by the raw fan offset — equivalently `(candidate − current) & 7` — so the table IS a turn-difference table (label now Established, not inference). A per-neighbour terrain term of 30 and a short-run penalty of 75 also apply; their exact conditions are in [R-PATH-01 §3], which supersedes both the 2026-08-26 "while the heap holds at most one entry" reading and the 2026-08-28 "unconditional on the live path" reading.
 
 **Supported inference:** The eight-entry table is a turn-difference table, not a terrain-state table. The symmetric values and the absence of a terrain branch in the expansion support that interpretation. *(This label is now Established — the table is indexed by the raw fan offset, i.e. the direction difference; the sentence is kept for continuity.)*
 
@@ -3529,26 +4196,26 @@ value remains a data question (section 7.2, `TODO(question)`).
 passes through one scaling pipeline: `hScaled = (h · scale) >> 16`, with the
 product formed as a full signed 64-bit multiplication and arithmetically
 shifted; there is no floating point anywhere in the search. The scale is the
-SAME per-player quantum that sizes scheduler slices, recomputed every
-150-tick replenish from request pressure as `base × {6, 3, 1}` for pressure
-tiers below 1, below 2, and at or above 2 respectively (tier = pending
-per-player pressure divided by a unit-cap divisor). The base is
-`(int)(atof(settingsString) · 65536.0)`, taken once from one settings string
-at settings-application time, so the effective h weight relative to g is the
-parsed value times {6, 3, 1}. Scaling never changes which cells read as
+per-player quantum recomputed every 150-tick replenish from request pressure
+as `base × {6, 3, 1}` for pressure tiers below 1, below 2, and at or above 2
+respectively (tier = pending per-player pressure divided by a unit-cap
+divisor); [R-PATH-01 §6] gives the exact counters and corrects the claim that
+this quantum also sizes scheduler work slices — it does not. The base is
+compiled in and is `0x18000` (1.5 in 16.16); the only writer is the developer
+console ([R-PATH-01 §10]). Scaling never changes which cells read as
 "close" (an h of 0 stays 0); it only re-ranks. h is evaluated exactly once
 per allocated node and is NOT recomputed on relaxation — relaxation adjusts
-`f` by the g delta alone. Because the same quantum sizes work slices and
-weights the heuristic, a busier player both gets fewer pops and searches more
-greedily.
+`f` by the g delta alone.
 
-**Established fact:** Goal objects form a four-family virtual family, each
-supplying a start predicate, a cell enumerator, and the heuristic:
+**Established fact:** Goal objects form a virtual family, each supplying a
+start predicate, a cell enumerator, and the heuristic. Three concrete classes
+implement all three and drive ground searches; two more inherit the abstract
+base's null implementations and never reach the search ([R-PATH-01 §9]):
 
 - **Point/radius goals** use an inflated octile to the center cell,
   `h = 18·max(|dx|,|dz|) + 7·min(|dx|,|dz|)`, clamped to zero within an
   authored radius R (`h = max(oct − R, 0)`); arrival is a squared-distance
-  test against a `>>4`-quantized radius.
+  test against a separately stored quantized radius.
 - **Annulus (stand-off) goals** use the same inflated octile with a V-shaped
   zero band: h is zero inside `[inner, outer]`, rises as `oct − outer`
   outward, and as `inner − oct` toward the center — cells closer than `inner`
@@ -3558,9 +4225,6 @@ supplying a start predicate, a cell enumerator, and the heuristic:
   inside measure `16 · min(distance to each edge)` back out; enumerated goal
   cells are exactly the rectangle border, where h is 0, and arrival requires
   lying on that border.
-- **Base/restored-from-save goals** have an identically-zero heuristic and a
-  null start predicate, giving pure-g (Dijkstra) behavior whose acceptance is
-  decided solely by the enumerated cells.
 
 **Supported inference:** The {18, 7} form exceeds the true minimal geometric
 cost `16·max + 6·min` by roughly 12.5–13.6 percent depending on run shape —
@@ -3571,8 +4235,8 @@ inferred from geometry and constructor argument shapes; every formula and
 constant is direct.
 
 **Established fact:** Arrival tolerance uses a write-once threshold. Before
-seeding, a greedy FORWARD-ONLY ray walk stores the minimum scaled h seen
-along its frontier into a single slot that is never updated again. During
+seeding, a wall-following ray walk stores the minimum scaled h seen along its
+frontier into a single slot that is never updated again. During
 expansion, an opened neighbor whose scaled h is at or below that threshold
 receives open-plus-goal status, and popping such a node terminates the search
 and reconstructs — so EVERY opened cell within the tolerance region is an
@@ -3580,7 +4244,8 @@ acceptable route endpoint, not just enumerated goal cells. Enumerated goal
 cells are additionally marked directly; enumeration is bounds-checked and
 tracks the cell nearest the start by squared distance for the ray-check
 direction choice. (The ray is forward-only; section 7.1's closure note
-supersedes the earlier "bidirectional" wording.)
+supersedes the earlier "bidirectional" wording, and [R-PATH-01 §5] gives its
+wall-follow.)
 
 **Established fact:** Early exits, in order after goal enumeration: a nonzero
 start-satisfies-goal predicate publishes an empty route with completion
@@ -3589,13 +4254,246 @@ notifies status `0x200` and publishes empty; a ray that CONNECTS start to a
 goal notifies `0x100` but the search is still seeded and runs; and when the
 ray's best scaled h is at or above the start cell's own scaled h, the engine
 notifies `0x200` and publishes empty WITHOUT seeding — the A\* starts only
-when the ray proved a strictly closer frontier exists. These statuses are
+when the ray proved a strictly closer frontier exists. Note that the `0x200`
+notify is raised whenever the ray does **not** connect, including the case
+where the search then proceeds normally; the bit reports the ray's verdict, not
+the request's. These statuses are
 path-request results reported to the requester — they are never interpreted as
 queue-order completion [R-P0-01] (section 8.3).
 
+### Correction — the per-neighbour 30 is the steep-tier terrain cost [R-PATH-01 §3] (2026-08-29)
+
+**What the earlier text said.** Two readings have stood here. The 2026-08-26
+text said "the fixed initial penalty of 30 applies while the heap holds at most
+one entry (the start expansion)". The 2026-08-28 revision said "A fixed penalty
+of 30 is added to EVERY neighbour in the live main-loop expansion path (the
+only code shape where the term is absent has no callers in the bounded
+census)", and doc 04's tail carried "the expansion applies no per-edge
+terrain-state cost (bounded-negative)".
+
+**Why they were wrong.** Both readings were looking at the wrong value. The
+term is produced by a compare-and-borrow idiom over the **saved return value of
+the passability probe for the candidate cell**, not over a heap length and not
+over a caller-supplied register. The probe result is stashed on the stack
+immediately after the call and re-read when the cost is assembled; the borrow
+yields `0` when the value is **greater than 1** and `30` when it is `0` or `1`.
+
+**The corrected contract — Established.** A neighbour's cost is
+
+```text
+terrainTerm = (passability > 1) ? 0 : 30
+g(neighbour) = g(parent)
+             + turnPenalty[(candidateDir − currentDir) & 7]      // 0,40,60,80,100,80,60,40
+             + stepCost[candidateDir]                            // 16 cardinal, 22 diagonal
+             + terrainTerm
+             + (candidateDir != currentDir && parent.run < 5 ? 75 : 0)
+f(neighbour) = g(neighbour) + hScaled
+```
+
+with `passability` the value defined in [R-PATH-01 §2]: `0` blocked, `1` steep,
+`2` unexplored, `3` clear. Since a blocked cell is only ever costed when it
+carries the ray-visited bit, the term's practical meaning is: **a step onto a
+steep-tier cell costs 30 more than a step onto a clear or unexplored cell.**
+The tail's bounded-negative "no per-edge terrain-state cost" is withdrawn — this
+*is* the per-edge terrain-state cost, and it is the entire behavioural
+difference between stamped values 1 and 3 for the search.
+
+**Established — the term is stored, not recomputed.** The value is written into
+the node record (the 16-bit field after `f`) when the node is first opened, and
+a later relaxation of that node reuses the stored value rather than probing
+again. The straight-run counter in the adjacent 16-bit field is set to `1` on
+any turn and to `parent.run + 1` on a straight step, and is what the 75 tests.
+
+**Established — evaluation order.** Turn penalty, step cost, parent `g`, and
+the terrain term are summed in that order in 32-bit signed arithmetic; the 75
+is added afterwards; `hScaled` is added last to form `f`. A relaxation accepts
+the new parent only on **strictly lower** `g`, writes the new direction byte,
+replaces `g`, adjusts `f` by the `g` delta alone, and rewrites the run counter;
+it never re-evaluates `h`.
+
+### Closed — request setup, the seeded start node, and the early-exit ladder [R-PATH-01 §4] (2026-08-29)
+
+The order of operations when the scheduler admits a request is fixed and every
+step is observable:
+
+1. Bind the requesting unit's movement-class record (reached through the unit's
+   mover) into the working set, store the goal object, and copy the unit's
+   **cached committed cell** — not a recomputed quantization of its position —
+   as the start cell.
+2. Run the class-layer revision pass of [R-DOC04-B].
+3. Write the turn-penalty table and the step-cost table into the working set.
+   Both are constants of the code, not of the map or the unit: the turn table
+   is `0, 40, 60, 80, 100, 80, 60, 40` and the step table is `16` at every even
+   direction index and `22` at every odd one.
+4. Run the touched-bitmap clear of [R-PATH-01 §1].
+5. Ask the goal object to enumerate its cells. For each: if the cell is inside
+   the map, write its entry status byte to `4` and set its touched bit; then —
+   **whether or not it was inside the map** — compare its squared distance from
+   the start cell against the running minimum, keeping the first on a tie. The
+   winner is the ray's target. An out-of-bounds enumerated cell therefore
+   cannot be reached but can still steer the ray.
+6. Ask the goal object's start predicate about the start cell. Nonzero →
+   notify `0x100`, publish empty, release the request, return.
+7. Compute the start cell's scaled heuristic.
+8. If the start cell is outside the map (unsigned compare against map width and
+   height) → notify `0x200`, publish empty, release, return.
+9. Run the ray ([R-PATH-01 §5]) and store its return as the write-once
+   acceptance threshold. Zero → notify `0x100`. Nonzero → notify `0x200`, and
+   if the start's own scaled heuristic is **at or below** the threshold,
+   publish empty, release, and return without seeding.
+10. Reset the heap (size 0, free list empty, spent-root flag clear), set the
+    start cell's touched bit, OR `1` (open) into its status byte, and write its
+    direction byte as `(heading + 0x1000) >> 13 & 7`.
+11. Allocate the start node with `g = 0`, `f = the start's scaled heuristic`,
+    and **run = 100**. The stored terrain term of the start node is never
+    written; the value is unreadable in practice because the start cell is
+    marked *closed* at its own pop before any relaxation can reach it. The run
+    of 100 is what keeps the short-run 75 off the first step.
+12. Set the fan half-width to 4.
+
+Order matters at two places an implementation can get wrong: the
+start-satisfied predicate is tested **before** the start's own bounds check, so
+a unit standing off-map inside its goal's radius reports `0x100`, not `0x200`;
+and the goal enumeration runs **before** either, so its marks and its nearest
+cell survive both early exits.
+
+### Closed — the pre-search wall-following ray [R-PATH-01 §5] (2026-08-29)
+
+The ray is not a plain greedy walk. It is a cardinal-stepping probe with a
+two-sided wall follow, and its only product is the acceptance threshold.
+
+```text
+best = scaled h of the start cell
+if the start cell is impassable: return best
+cur  = start cell
+loop:
+    charge one step to the scheduler slice
+    if best == 0: return 0
+    d = (goalX < curX) ? west
+      : (goalX > curX) ? east
+      : (goalZ <= curZ) ? north : south          // cardinal only, x tested first
+    next = cur + d
+    if next is impassable: go to WALL FOLLOW
+    set next's touched bit; next.direction = d; next.status |= ray-visited
+    if next.status already had the acceptable-terminal bit: return 0
+    best = min(best, scaled h of next)
+    cur = next
+```
+
+**WALL FOLLOW — Established.** Two cursors start at the last passable cell,
+`hit`. One rotates its probe direction **upward** (`+1 mod 8`) starting from
+the blocked direction, the other rotates **downward** (`−1 mod 8`) and steps in
+the negated direction; they alternate, one probe each, each charging a step.
+Each side, on finding a passable cell, marks it exactly as the greedy walk does
+(touched bit, direction byte, ray-visited bit) and returns 0 immediately if that
+cell already carried the acceptable-terminal bit.
+
+A side ends the whole ray, returning `best`, when it comes back to the cell it
+started from with the same probe direction on a second visit, or when its probe
+sweeps all eight directions without finding a passable cell.
+
+A side **rejoins the greedy walk** when its candidate lies on the axis-aligned
+leg from `hit` to the ray's target. With `DX = goalX − hitX`,
+`DZ = goalZ − hitZ`, `dx = candX − hitX`, `dz = candZ − hitZ`, and the sign of
+each axis folded so `DX, DZ >= 0` (negating the matching candidate term), the
+test is
+
+```text
+(dz == 0 && 0 < dx && dx <= DX)  ||  (dx == DX && 0 < dz && dz <= DZ)
+```
+
+— that is, the candidate is on the horizontal leg between `hit` and the goal's
+column, or on the vertical leg from that column to the goal. On a rejoin the
+greedy loop resumes from that cell, and `hit` is re-established at the next
+block.
+
+**Established:** the returned value is the minimum scaled heuristic over every
+cell the ray touched, including the start's own. Every step of both phases is
+charged to the scheduler's step counter for the admitting slice, so a long
+wall-follow eats directly into the same budget the pops draw on. The ray draws
+no random numbers and never writes a node or the heap.
+
+### Closed — the goal classes, exactly [R-PATH-01 §9] (2026-08-29)
+
+There is one abstract base and **five** concrete classes, not four. The base
+supplies a never-satisfied start predicate, an **empty** enumerator, and an
+identically-zero heuristic.
+
+| Class | Stored geometry | Start predicate | Enumerated cells | Heuristic |
+|---|---|---|---|---|
+| Point / radius | centre cell; an octile radius `R`; a squared cell radius `R2` | `dx² + dz² <= R2` | the single centre cell | `oct = 18·max + 7·min`; `oct < R ? 0 : oct − R` |
+| Annulus | centre cell; octile `inner`, `outer`; squared `min2`, `max2` | `min2 <= dx² + dz² <= max2` | one cell: `(centreX, centreZ + (inner + outer)/32)`, the divide rounded toward zero | `oct <= outer ? (inner <= oct ? 0 : inner − oct) : oct − outer` |
+| Rectangle | `x1, x2, z1, z2` | on the border | exactly the border | outside: `16·max(dxOut,dzOut) + 6·min(...)`; on the x-band: `16·dzOut`; on the z-band: `16·dxOut`; inside: `16 · min(x−x1, x2−x, z−z1, z2−z)` |
+| Air work point | a target unit, a piece index, a mode word, a 3-D point; constructed from a 54-byte save record | base (never) | base (none) | base (0) |
+| Air moving point | a 3-D point and a per-tick delta | base (never) | base (none) | base (0) |
+
+**Established — the dual-radius contract is two stored fields, not a
+conversion.** The point and annulus classes each store the octile radii the
+heuristic clamps against **and**, separately, the squared cell radii the arrival
+predicate compares against. Neither is derived from the other at query time.
+An implementation must carry both; "fixing" the mismatch by deriving one from
+the other changes both the heuristic shape and the arrival band [P0-13 A19].
+
+**Established — the two air classes never reach the search.** Their goal
+interface is the base's, so a search seeded on one would enumerate nothing and
+weight everything zero. They cannot be reached: the **air** route follower's
+repath poll returns zero unconditionally, so an aircraft is never admitted to
+the ground path scheduler. The doc's earlier "Base/restored-from-save goals
+have an identically-zero heuristic and a null start predicate, giving pure-g
+(Dijkstra) behavior whose acceptance is decided solely by the enumerated cells"
+is **withdrawn**: they enumerate nothing, so no such acceptance exists, and the
+Dijkstra branch it described is unreachable. What is true is that these two
+classes are serialized and restored — the air work point's constructor reads a
+54-byte record — which is where the "restored-from-save goal" label came from.
+
+**Established — the goal object also carries the request's status sink.** Every
+class holds a reference to the order record that created it, and the search's
+notifications OR bits into that record's pending word: `0x20` when the follower
+observes the unit has reached the goal, `0x40` when an empty route is published
+while the unit is **not** at the goal, `0x80` when a previous goal object is
+released, `0x100` start-already-satisfied or ray-connected, `0x200` start
+out-of-bounds or ray-did-not-connect. `0x40` is the "cannot get there" signal;
+it is produced by the publisher, not by the search.
+
+**Established — the goal-point query.** Beside the three A\*-facing methods
+every class supplies a *goal point* query returning a 16.16 world position. For
+a point goal it is `worldX = (2·cellX + FootPrintX) · 8` in 16.16 — the same
+cell-to-world conversion route reconstruction uses — with the footprint bias
+taken from the unit named by the owning order record. This query is what the
+route-acceptance rule of [R-PATH-01 §8] measures against.
+
+### Closed — the heuristic base is compiled in; the `Search` console command is its only writer [R-PATH-01 §10] (2026-08-29)
+
+Doc 04's tail carried "Retail default content of the settings string feeding
+the heuristic-weight parse, and any runtime surface that rewrites that base
+outside settings application · asset census of the shipped settings". The
+premise was wrong: there is no settings string and no shipped asset involved.
+
+**Established.** The working set's constructor writes both tunables:
+
+* the **per-scheduler-call total step allowance** = `1333`;
+* the **heuristic base** = `0x18000`, i.e. **1.5** in 16.16.
+
+The only code that overwrites either is the in-game developer console command
+named `Search`, one entry in a table of sixteen console commands (`DPrint`,
+`Edge`, `Include`, `Mem`, `MemDump`, `Move`, `PrintWeights`, `Profile`,
+`Reload`, `ReloadAIProfiles`, `Save`, `SeaLevel`, `Search`, `SelBoxes`,
+`Senderror`, `TreeDeath`). Its first argument is read as an integer and, when
+nonzero, replaces the step allowance. When the command has exactly three tokens
+its second argument is read with the C runtime's `atof`, multiplied by
+`65536.0` as a double, and truncated toward zero into the heuristic base. No
+registry key, INI file, TDF key or command-line switch reaches either field —
+a full reference census of both fields finds the constructor, this handler, and
+the readers only.
+
+Consequently the effective heuristic weight in a shipped session is
+`1.5 × {6, 3, 1}` in 16.16 — `0x90000`, `0x48000`, or `0x18000` — selected per
+player by the tier rule of [R-PATH-01 §6]. The tail item and its open-question
+marker are removed.
+
 ### 7.3 Scheduler budget, publication, and route storage
 
-**Established fact:** Path work is budgeted. A global scheduler counter replenishes every 150 ticks. Per-player quanta use six-times, three-times, and one-times weighting based on scheduler state. Each active request is limited to 100 heap pops per scheduler call.
+**Established fact:** Path work is budgeted. A global scheduler counter replenishes every 150 ticks. Per-player quanta use six-times, three-times, and one-times weighting based on scheduler state. Each active request is limited to 100 heap pops per scheduler call. [R-PATH-01 §6] states the exact counters, the admission walk, and what each charge buys.
 
 **Established — what admits a unit to the scheduler [R-MOV-01 §7]
 (2026-08-28).** The section did not say how a unit becomes a candidate. The
@@ -3607,22 +4505,23 @@ onto the follower and the scheduler charges **100** to the per-tick budget
 before starting the search. The flag itself is armed by the follower's
 per-tick service — once per mover tick, whenever a route is installed and
 either the mover's blocked flag is set or fewer than two route points remain
-([R-MOV-01 §3]) — and is cleared only when a route is installed, not by the
-poll. A blocked or route-exhausted mover therefore re-requests at most once
-every 60 ticks, with no retry ceiling.
+([R-MOV-01 §3]) — and is cleared when a route is installed, and also by any
+publication including an empty one ([R-PATH-01 §7]). A blocked or
+route-exhausted mover therefore re-requests at most once every 60 ticks, with
+no retry ceiling.
 
 **Established fact:** Requests are full-or-empty. A route is published only after a goal is reached and reconstructed. Budget exhaustion leaves the heap and request active for later ticks; it does not publish the best partial prefix. Heap exhaustion publishes an empty route.
 
-**Established fact:** Search allocation initializes the request, clears visitation state, enumerates goals, picks the nearest goal for heuristic setup, validates the start, and can perform a direct ray shortcut. Invalid starts and unreachable goals report failure through order-layer status and receive an empty route. Request init also runs the class-layer revision pass of [R-DOC04-B] (§6.1) before any expansion.
+**Established fact:** Search allocation initializes the request, clears visitation state, enumerates goals, picks the nearest goal for heuristic setup, validates the start, and can perform a direct ray shortcut. Invalid starts and unreachable goals report failure through order-layer status and receive an empty route. Request init also runs the class-layer revision pass of [R-DOC04-B] (§6.1). The exact order is [R-PATH-01 §4].
 
 **Established fact:** Route reconstruction walks predecessor directions
 backward from the goal cell, storing the packed cell into a 64-entry ring at
 `index & 63` each time the direction CHANGES (wraparound overwrites the
 oldest), then appends the start cell. Emission walks masked indices downward —
-newest first — converts each cell to signed world coordinates using the
-request's half-footprint bias, and publishes `min(directionChanges + 1, 64)`
-points; more than 63 direction changes therefore survive as the most recent
-63 change-points plus the start cell.
+so the START cell is emitted first and the goal last — converts each cell to
+signed world coordinates using the request's half-footprint bias, and publishes
+`min(directionChanges + 2, 64)` points. The exact expressions are in
+[R-PATH-01 §7], which also corrects an earlier off-by-one in this count.
 
 **Established fact:** The common publisher clamps any count above 20 to 20
 before anything else. A nonempty publication writes the count, copies the
@@ -3649,7 +4548,7 @@ completes [R-P0-01] (section 8.3).
 **Established fact:** Save representation: an inactive route serializes a
 2-bit count of zero; an active route serializes `min(count, 3)` in two bits
 followed by exactly that many signed 16-bit X/Z pairs read from the point
-array upward.
+array upward. One further bit precedes the count — see [R-PATH-01 §8].
 
 **Established fact:** The route export helper is NOT an active-route
 predicate: for each requested index below the stored count it reads that
@@ -3658,14 +4557,228 @@ no active-bit check, and a zero count selects index −1, reading adjacent
 non-point fields rather than yielding an empty result. Callers must gate on
 the active bit themselves.
 
+### Correction — the per-player quantum is the heuristic weight, not a work slice [R-PATH-01 §6] (2026-08-29)
+
+**What the earlier text said.** §7.2 said "The scale is the SAME per-player
+quantum that sizes scheduler slices … Because the same quantum sizes work
+slices and weights the heuristic, a busier player both gets fewer pops and
+searches more greedily." §7.1's debt-array note said the same. §7.3 said
+"Per-player quanta use six-times, three-times, and one-times weighting based on
+scheduler state" without saying what they weight.
+
+**Why it was wrong.** A reference census of the ten-entry quantum array finds
+exactly three sites: the constructor seeds it, the 150-tick replenish rewrites
+it, and the scheduler copies `quantum[player]` into the request's heuristic
+scale when it admits a request. Nothing else reads it. Work slices come from a
+different array entirely, and that array is topped up with an **equal share**
+per eligible player.
+
+**The corrected contract — Established.** Per scheduler call — and the
+scheduler is called once per tick, first, before the per-player unit sweeps:
+
+1. If the session's player count is zero, do nothing.
+2. Increment a call counter. When it exceeds 150, zero it and, for each of the
+   ten player slots, compute `tier = serviceCount[p] / divisor` and set
+   `quantum[p] = base × (tier < 1 ? 6 : tier < 2 ? 3 : 1)`, then zero
+   `serviceCount[p]`. The **divisor is the session's per-player unit limit**,
+   copied from the lobby unit-limit setting at battle setup. `base` is the
+   compiled-in `0x18000` of [R-PATH-01 §10].
+3. For each of the ten slots whose player record exists, whose state byte is
+   1, 2 or 3, and whose observer byte is not `'\n'`: add
+   `stepAllowance / playerCount` (integer division; `stepAllowance` is 1333 by
+   default) to that player's **step accumulator**, and add the accumulator's
+   new value to a call-local total.
+4. While that total is positive, run one *iteration*, then subtract the
+   iteration's step charge from both the total and the current player's
+   accumulator.
+
+An iteration is one of three things:
+
+* **No request active** — charge 1; advance the round-robin player cursor past
+  any player whose accumulator is below 1; increment that player's service
+  count; advance that player's unit cursor by one unit, wrapping from the
+  player's last unit to the first; and if that unit has a definition, a mover
+  and a movement class, ask its route follower's repath poll. On a yes, latch
+  the unit and the follower as the active request, charge a further **100**,
+  copy `quantum[player]` into the request's heuristic scale, and run the
+  request setup of [R-PATH-01 §4] — whose ray charges further steps to the same
+  iteration.
+* **Request active and the heap is exhausted** (heap size equal to the
+  spent-root flag) — publish an empty route, release the class record, clear
+  the active request. The charge is zero.
+* **Request active with a live heap** — pop, mark the popped cell *closed*,
+  expand its fan, set the fan half-width to 2, and repeat **until the
+  iteration's step charge reaches 100**. Each pop charges 1.
+
+**Consequences an implementation must reproduce.**
+
+* **One search at a time, globally.** A second unit's request cannot start
+  until the first publishes, exhausts, or is cancelled.
+* **Fairness is by unit visits, not by search work.** The equal-share
+  accumulator buys roughly `1333` unit polls per tick spread across players;
+  a player whose accumulator runs out is skipped until the next call. There is
+  no starvation guard beyond the round-robin and no priority: a single
+  long search consumes 100-step slices from *its own* player's accumulator
+  until that accumulator goes non-positive, at which point the loop ends for
+  the tick with the request still latched, and resumes next tick.
+* **Budget exhaustion returns nothing.** The loop simply ends; the heap, the
+  node pool, the acceptance threshold and the fan width are untouched, and the
+  follower is not notified. Only heap exhaustion and the early exits publish.
+* **A busier player searches *less* greedily, not more.** The tier is
+  `serviceCount / unitLimit`, and the service count rises with every scheduler
+  visit to that player, so a heavily-visited player drops from `×6` to `×3` to
+  `×1` — a *smaller* heuristic weight, i.e. closer to plain Dijkstra and
+  therefore a wider, more thorough search. The earlier text asserted the
+  opposite ("searches more greedily"); it is withdrawn.
+* **Which tier is actually in force is a Supported inference.** The service
+  count is incremented once per candidate poll, and the poll rate is on the
+  order of 1333 per tick shared across players, so over a 150-tick window the
+  count plausibly exceeds any unit limit in the 20–500 range and the steady
+  state is `×1` with `×6` only in the first window. That reasoning is
+  arithmetic, not traced: it depends on how many iterations actually run, which
+  depends on how many units exist and how often searches latch. The tier rule
+  itself and the divisor's identity are Established. *Would settle it: a
+  manual retail observation of the developer overlay, or a static trace of the
+  iteration count under a known unit population.*
+
+### Closed — route reconstruction, world conversion, and the publication contract [R-PATH-01 §7] (2026-08-29)
+
+**Reconstruction — Established.**
+
+```text
+ring[0] = terminal cell            // the cell whose pop ended the search
+d       = entry[terminal].direction
+n       = 1
+cur     = terminal
+while cur != start:
+    d2 = entry[cur].direction
+    if d2 != d:  ring[n & 63] = cur;  n = n + 1;  d = d2
+    cur.x = cur.x − dx[d]
+    cur.z = cur.z − dz[d]
+ring[n & 63] = start
+total = n + 1
+count = min(total, 64)
+for i in 0 .. count−1:
+    c = ring[(total − 1 − i) & 63]
+    out[i].x = ((int16)(c.x · 2) + FootPrintX) · 8
+    out[i].z = ((int16)(c.z · 2) + FootPrintZ) · 8
+publish(follower, out, count)
+```
+
+Three things this fixes in the previous text. **First**, the emitted order is
+`(total−1−i) & 63` starting at `i = 0`, which reads the *last* ring slot
+written — the start cell — first, so the published route runs **start to goal**,
+in travel order; "newest first" was correct but read as if it meant goal-first.
+**Second**, the count is `directionChanges + 2`, not `directionChanges + 1`:
+the ring holds the terminal cell, one entry per direction change, and the start
+cell. A straight route publishes exactly two points. **Third**, the terminal
+cell's own direction byte seeds the comparison, so the terminal is never itself
+counted as a change, and the start cell's direction byte — which request setup
+wrote from the unit's heading — is never read, because the loop tests
+`cur != start` before reading it.
+
+**Cell-to-world conversion — Established.** `world = 16·cell + 8·FootPrint`,
+evaluated as `((int16)(cell · 2) + FootPrint) · 8` in 16-bit arithmetic, where
+`FootPrint` is the bound movement-class record's authored `FootPrintX` /
+`FootPrintZ`. Points are stored as signed 16-bit whole world units. The same
+conversion appears in the goal-point query ([R-PATH-01 §9]) scaled to 16.16.
+
+**Publication — Established.** The publisher takes the follower, a point array,
+and a count.
+
+* **count > 0:** clamp to 20 if it exceeds 19, store the count, copy that many
+  4-byte X/Z pairs into the follower's point array, then set the
+  **has-waypoint** and **dirty** flags and **clear wants-repath**.
+* **count == 0:** if a goal object is installed, ask its "is the unit already at
+  the goal" query; if that says no, OR `0x40` into the owning order record's
+  pending word. Then clear **has-waypoint** *and* **wants-repath** and set
+  **dirty**. Neither the count nor the point array is written.
+
+The previous text said the wants-repath flag "is cleared only when a route is
+installed". It is cleared by **every** publication, empty ones included; what an
+empty publication does not do is clear the 60-tick throttle, so the follower's
+next per-tick service re-arms the flag and the next request is at least 60 ticks
+away.
+
+### Closed — the route follower's protocol and the route-acceptance rule [R-PATH-01 §8] (2026-08-29)
+
+The follower's four vtable slots that [R-MOV-01 §3] left unread are now named,
+and the route object's own protocol with them is established.
+
+**The route/goal object's side.** The follower calls four of its methods:
+*is the unit at the goal* (per-tick service and empty publication), *does this
+cell satisfy the goal* (route acceptance, and the search's start test), *give me
+the goal point* (route acceptance and the synthetic fallback), and *does the
+route persist after arrival* — the last returns 0 for all three A\*-facing
+classes, so arrival always detaches the route. Arrival ORs `0x20` into the order
+record's pending word before detaching.
+
+**The four previously-unread follower slots — Established.**
+
+| Slot | Contract |
+|---|---|
+| *needs republication* | Returns true when the dirty flag is set, or when the mover's blocked flag differs from the copy the follower cached at its last serialization. |
+| *serialize* | Writes, into a bit stream: **one bit** = the mover's blocked flag; then a **2-bit count** = `has-waypoint ? min(pointCount, 3) : 0`; then, for each of those points, a 16-bit X and a 16-bit Z. It then clears the dirty flag and refreshes the cached blocked bit. The leading blocked bit is only *set* when blocked — the stream word is zeroed on allocation, so an unset bit relies on that pre-zeroing. This is the writer behind §7.3's save representation. |
+| *(unnamed fourth)* | An empty method. It exists to fill the slot; no behavior. |
+| *debug draw* | Draws the route as `pointCount − 1` line segments between consecutive points, in one of two palette entries chosen by the has-waypoint flag, under the developer overlay only. |
+
+**Established — the route-acceptance rule.** When a newly published route (or a
+new goal object) is installed, the follower does, in order:
+
+1. Cancel any in-flight search that belongs to this follower.
+2. If a goal object was already installed, OR `0x80` into its order record's
+   pending word (release).
+3. Clear **has-waypoint**; adopt the new goal object.
+4. If the new object is null, also clear **wants-repath** and stop.
+5. Otherwise **set wants-repath**, then try three acceptance gates in order:
+   1. **Terminal-cell test.** If the follower holds **three or more** points,
+      quantize the last stored point to a cell (arithmetic shift right by 4 on
+      each signed 16-bit coordinate) and ask the goal's *does this cell satisfy
+      the goal* predicate. If yes: clear wants-repath, set has-waypoint, done.
+   2. **Half-distance test.** Ask the goal for its goal point; if it declines,
+      stop. If the follower holds three or more points, compute
+      `dU = trunc(hypot(unitX − goalX, unitZ − goalZ))` on the unit's 16.16
+      position and `dP = trunc(hypot((lastPoint.x << 16) − goalX,
+      (lastPoint.z << 16) − goalZ))`, both as `hypot` in double precision on
+      the raw 16.16 integers, truncated toward zero. If `2·dP < dU`, set
+      has-waypoint: the route is **accepted**. The route is therefore rejected
+      whenever its terminal point does not get the unit **strictly inside half**
+      its current distance to the goal.
+   3. **Synthetic fallback.** If still not accepted: if the unit has a current
+      order record and that record's retiring flag is clear, overwrite the
+      follower's route with exactly **two** points — the unit's own integer
+      position and the goal point truncated to whole world units
+      (`>> 16`) — set the count to 2, and set has-waypoint. So a rejected route
+      does not leave the unit idle; it leaves it walking a straight line at the
+      goal.
+6. Finally, if the follower's last-request tick is more than 10 ticks old, zero
+   it (so the 60-tick repath throttle does not delay the next request), and set
+   the dirty flag.
+
+Both point-count gates require **three or more** stored points; a one- or
+two-point route skips straight to the synthetic fallback, which would rewrite
+it with the straight line.
+
+**Unknown:** the semantic name of the order-record flag that suppresses the
+synthetic fallback. It is set by one disposition branch of the queue pump
+(§3.3) on an order it is taking down. *Decider: static trace of that
+disposition branch.* `TODO(question)`
+
+**Established — aircraft never enter this scheduler.** The air route follower
+is a separate class whose repath poll returns zero unconditionally and whose
+has-waypoint answer is simply "a target object is installed". Its remaining
+slots mirror the ground follower's. Flight steering consumes the goal point
+directly (§10) and no A\* runs for it.
+
 ### 7.4 Goals, build sites, and revalidation
 
 **Established fact:** Goal objects enumerate one or more goal cells and supply
-start/neighbor heuristic functions. The four families of section 7.2
+start/neighbor heuristic functions. The three A\*-facing families of section 7.2
 enumerate, respectively: the single packed center cell; a single cell biased
 along z by `(inner + outer) / 32` toward the far side of the stand-off ring
-(bias intent inferred, arithmetic direct); exactly the rectangle border; and,
-for restored-from-save goals, an internally stored list. A radius-unit
+(bias intent inferred, arithmetic direct); and exactly the rectangle border.
+The two air families enumerate nothing and never reach the search
+([R-PATH-01 §9]). A radius-unit
 mismatch is real and established as a dual-unit contract: the annulus h
 clamps compare RAW authored radii while its arrival predicate uses
 `>>4`-quantized squared radii — two unit systems coexist in one family and
@@ -3684,11 +4797,68 @@ ranking and expansion remain `TODO(question)`; the half-extent expansion is the
 placeholder that reproduces the established stop-outside-the-footprint
 outcome.
 
-**Established fact:** Dynamic blockers update a profile revision. Existing heap entries are not eagerly purged; passability is rechecked lazily when a node is expanded. This can turn a previously open node into a blocked one without rebuilding the whole heap.
+**Established fact:** Dynamic blockers update a profile revision. Existing heap entries are not eagerly purged; passability is rechecked lazily when a node is expanded. This can turn a previously open node into a blocked one without rebuilding the whole heap. Because the class record and its layer are shared by every request of that movement class and a search spans ticks, this also means a cell the pre-search ray marked can become impassable before the expansion reaches it — the ray-visited bit of [R-PATH-01 §1] is what lets the expansion open it anyway.
+
+**Established — out-of-bounds goal cells.** Enumerated cells outside the map are
+not marked and cannot be reached, but they still take part in the
+nearest-enumerated-cell comparison that aims the ray ([R-PATH-01 §4]). An
+out-of-bounds *start* cell is a hard `0x200` reject before the ray runs. The
+per-order-type census of which goal family and which radius each order
+constructs is still open (below).
 
 ### 7.5 Smoothing
 
-**Established fact:** Route reconstruction removes collinear points and then performs bidirectional ray checks. Each intermediate cell must pass the same passability test. A shortcut is accepted for legality; the smoother does not compare the shortcut's integrated cost against the original route.
+**Correction (2026-08-29, RWU-04-2) — there is no smoothing pass.** This
+section said: "Route reconstruction removes collinear points and then performs
+bidirectional ray checks. Each intermediate cell must pass the same passability
+test. A shortcut is accepted for legality; the smoother does not compare the
+shortcut's integrated cost against the original route."
+
+That sentence fuses two real but unrelated mechanisms and invents a third. A
+reference census of the route publisher finds exactly three callers — the
+reconstruction, the request-setup early exits, and the scheduler's heap-
+exhaustion arm — and the reconstruction is the only producer of points. Nothing
+reads or rewrites the published array between reconstruction and the follower.
+
+What actually exists:
+
+* **Collinear removal — Established, and it is inside reconstruction.** The
+  backward walk emits a cell only when its stored direction differs from its
+  successor's, so a run of same-direction cells collapses to its endpoints
+  ([R-PATH-01 §7]). This is the whole of the "collinear removal". It is exact,
+  costs nothing, and cannot fail: every emitted point is a cell the search
+  already expanded, so no passability re-test is needed or performed.
+* **The ray — Established, and it runs BEFORE the search, not after.** The
+  wall-following probe of [R-PATH-01 §5] runs during request setup, walks
+  cardinally with a two-sided wall follow, and produces exactly one number: the
+  acceptance threshold. It never shortcuts a route, never edits a point array,
+  and cannot: at the time it runs no route exists. "Bidirectional" described
+  its two-sided wall follow, not a start-and-goal meet.
+* **A cost comparison — absent, correctly.** The old sentence's last clause is
+  the only part that survives, and only vacuously: there is no shortcut
+  acceptance step at all, so there is nothing to compare a cost against.
+
+**Established — what an implementation must therefore not do.** Do not
+post-process the published route: no line-of-sight shortcutting, no corner
+cutting, no re-validation of intermediate cells. The follower receives the
+reconstruction's output verbatim (clamped to 20 points), and the only later
+edits to it are the waypoint pruning of §7.3 and the route-acceptance rewrite
+of [R-PATH-01 §8].
+
+### Closed — the path search draws no random numbers [R-PATH-01 §11] (2026-08-29)
+
+**Established (bounded negative).** Neither the simulation stream nor the CRT
+stream is touched anywhere in the path-search call graph: the scheduler, the
+request setup, the ray, the expansion, the passability probe, the visitation
+clear, all four heap operations, the reconstruction, the publisher, the status
+notifier, the working-set constructor, the request canceller, every method of
+all five goal classes, and every method of both follower classes. The bound is
+the complete callee closure of those functions in the reconciled function set.
+The search's outcome is a pure function of the map, the class layer, the
+mapping mask, the unit's cell and heading, the goal object, the heuristic
+scale, and the step budget — and the step budget affects only *when* a route
+appears, never *which* route, because budget exhaustion leaves every piece of
+search state untouched.
 
 ## 8. Ground steering and occupancy
 
@@ -5101,6 +6271,13 @@ replacement bullet is needed because the ground path has no vertical term.
 - A friendly semantic name for the `StartBuilding` first-argument value that
   49 stock scripts consume as a build-heading angle · [R-UNIT-06 §4] · static
   trace.
+- Meaning of the unit state word's low two bits, which `Standby_Mine` compares
+  against `1` on the scanned target before it self-destructs · §2.4,
+  [R-STANCE-01 §3] · static trace of the writers of those two bits.
+- Which renderer path selects frames 4 and 5 of the stance buttons' GAF
+  entries; the panel writes only values 0–3 into the gadget status word and
+  takes a separate gray path for 4 · [R-STANCE-01 §1], doc 07 §4 · static
+  trace of the button draw routine.
 - Construction and economy carry, and worktime-under-one-tick behavior
   · doc 05 · static trace.
 
@@ -5151,32 +6328,49 @@ replacement bullet is needed because the ground path has no vertical term.
 
 ### Terrain and pathfinding
 
-- Retail default content of the settings string feeding the heuristic-weight
-  parse, and any runtime surface that rewrites that base outside settings
-  application · §7.2 · asset census of the shipped settings. The ×65536 form
-  and the {6, 3, 1} tiers are established. Marked `TODO(question)`.
-- Class-D restored-from-save goal usage frequency, and whether loaded saves
-  re-issue fresh point/annulus/rectangle goals · §7.4, doc 08 · static trace.
-- Order-layer identity of each point-goal wrapper call site beyond the
-  classified exemplars · §7.2 · static trace.
-- Semantics of terrain state one versus clear state three beyond passability;
-  the expansion applies no per-edge terrain-state cost (bounded-negative)
-  · §7.1 · static trace.
-- Full static feature/yard/owner-mask interaction · §7.1 · static trace.
-- The blocker channel for BUILDING footprints in the per-class passability
-  layer: neither classifier form tests a building-state byte and the
-  owner/building-mask miss value (2) is traversable, so whether a building
-  hard-blocks a path request before the commit validator rejects it is
-  unresolved · §7.1, §8.2 [R-DOC04-B] · static trace. Marked
-  `TODO(question)`.
+**Correction (2026-08-29, RWU-04-2).** Six bullets are deleted here because
+[R-PATH-01] closes them, and one is deleted because its premise was false.
+Closed: the heuristic-weight "settings string" (there is none — the base is the
+compiled-in `0x18000` and the developer console command `Search` is its only
+writer, [R-PATH-01 §10]); "semantics of terrain state one versus clear state
+three" and the "no per-edge terrain-state cost" bounded negative (state 1 costs
+30 more per step, [R-PATH-01 §3]); the BUILDING blocker channel (the
+occupant-age gate, [R-PATH-01 §2]); Class-D goal usage (the class is an air
+work point with the base's null goal interface and never reaches the search,
+[R-PATH-01 §9]); the four unread follower slots and the route-acceptance rule
+([R-PATH-01 §8], moved here from "Ground movement"); and the `PFSTATE`/`PFABLE`
+question, whose premise was wrong — they are the display object's page-flip
+state and page-flip availability, printed by the developer overlay, and have no
+relation to the route follower (doc 03 owns them; noted below for the
+orchestrator).
+
+- Order-layer identity of each goal-family call site: which order types
+  construct a point, annulus or rectangle goal, and with which radii · §7.2,
+  §7.4 · static trace. The three families' arithmetic is fully established
+  ([R-PATH-01 §9]); only the per-order census is open.
+- Full static feature and yard-map interaction with the class layer's feature
+  gate · §7.1 [R-DOC04-B] · static trace. (The "owner-mask" half of this bullet
+  is deleted: that word is mapping memory, [R-PATH-01 §2].)
 - Retail perimeter-candidate ranking and expansion at a build-site anchor; the
   half-extent expansion is Nanolathe's placeholder for the established
   stop-outside-the-footprint outcome · §7.4 · static trace. Marked
   `TODO(question)`.
-- Out-of-bounds goal handling for every order type · §7.4 · static trace.
+- Out-of-bounds goal handling for every order type; the search's own behaviour
+  is established (an out-of-bounds enumerated cell is unmarked but still aims
+  the ray; an out-of-bounds start is a `0x200` reject) but which order types can
+  produce one is not · §7.4 [R-PATH-01 §4] · static trace.
 - Heap OOM policy and integer overflow behavior; the route caps (20 published
-  points, 64-point reconstruction ring, 3 saved waypoints) are established
-  · §7.3 · static trace.
+  points, 64-point reconstruction ring, 3 saved waypoints) and the node-pool
+  growth rule are established · §7.3 [R-PATH-01 §1] · static trace.
+- Semantic name of the order-record flag that suppresses the follower's
+  synthetic straight-line route; it is set by one disposition branch of the
+  queue pump on an order being taken down · §7.3, §3.3 [R-PATH-01 §8] · static
+  trace of that branch. Marked `TODO(question)`.
+- Which heuristic-weight tier a shipped session actually settles on. The tier
+  rule, the divisor's identity (the session per-player unit limit) and the base
+  are Established; the steady-state tier is a Supported inference from the
+  iteration rate · §7.3 [R-PATH-01 §6] · manual retail observation, or a static
+  trace of the iteration count under a known unit population.
 
 ### Ground movement
 
@@ -5192,13 +6386,10 @@ replacement bullet is needed because the ground path has no vertical term.
   movement-rate tier, the hover bob, and the repath arm · §8.2
   [R-MOV-01 §5][R-MOV-01 §7] · static census of every writer of that flag,
   then manual retail observation to confirm.
-- The route follower's four unread virtual slots and the route object's own
-  validity, exhaustion, and goal-query protocol, plus the route-acceptance
-  rule the follower applies before adopting a newly published route · §7.3
-  [R-MOV-01 §3] · static trace (RWU-04-2).
-- Whether the in-battle developer overlay's `PFSTATE` and `PFABLE` words are
-  the route follower's flags byte and point count · §7.1 [R-MOV-01 §3] ·
-  static trace of the overlay's format call (RWU-04-2).
+*(The follower's four unread virtual slots, the route object's protocol, and
+the route-acceptance rule are closed by [R-PATH-01 §8]. The `PFSTATE` /
+`PFABLE` bullet is deleted: they are the display object's page-flip request
+state and page-flip availability, not follower state — doc 03 owns them.)*
 
 ### Hover and VTOL
 

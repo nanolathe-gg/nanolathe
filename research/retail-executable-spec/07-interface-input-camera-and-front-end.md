@@ -2173,6 +2173,27 @@ has no writer anywhere in the image** — it is a consumer-only switch key
 off-button values" question closes as: MOBILEBUILD armed by the build-button
 click, TELEPORT never armed by retail's own code.
 
+**The stance buttons are a separate producer from the order latch.** The
+`MOVEORD` and `FIREORD` gadgets do **not** arm the command latch above: they
+are handled by a different battle-panel handler, which resolves the pressed
+gadget by substring match against the chain `MOVEORD`, `FIREORD`, `STATUS`,
+`ONOFF`, `CLOAK` and, for a stance gadget, cycles a **three-bit** field of
+interface state and immediately transmits `STANDING_MOVEORDER` or
+`STANDING_FIREORDER` to every eligible selected unit, then plays
+`setmoveorders` or `setfireorders` (the on/off and cloak arms of the same
+handler play the already-documented `specialorders`) and marks the panel dirty.
+The two three-bit fields live on **two different** sixteen-bit engine-root
+words — the fire stance in bits 12–14 of one, the move stance in bits 0–2 of
+the next, the latter also carrying the cloak pair (3–4), the on/off pair (5–6)
+and the `MOVE`/`STOP`/`ATTACK`/`DEFEND` enable bits (7–10). Values `0`, `1`
+and `2` are the three stances, `3` means the selection disagrees, and `4` means
+no selected unit accepts that stance, in which case the repaint grays the
+gadget instead of writing its status word. Stock gadget names are
+`ARM`/`COR` prefixed with quick keys `f` (fire) and `v` (move); the labels are
+button artwork, not `text=` fields. The unit-side fields, their two-bit masks,
+the acceptance flags, and the simulation consumers are
+[04 §3.4a][R-STANCE-01 §1][R-STANCE-01 §2].
+
 Build pages are driven by `CANBUILD`, `BUILDER.GUI`, per-builder GUI files,
 and side/build GAF assets. A builder’s available products are patched into
 named build buttons. Pages support previous/next navigation, product slots,
@@ -2573,6 +2594,79 @@ nullable object references; map dimensions and viewport spans are signed
 integer extents. These are semantic types: an implementation may represent
 the references as stable handles, but must preserve null and validity
 behavior. [01 §4.4]
+
+**Established fact — the "in-flight camera move" is the weapon `holdtime`
+hold, and the only thing that starts one is a projectile retirement.** No
+camera, input, or minimap path ever stores a nonzero remaining count or writes
+the 16.16 anchor; the camera-jump family (bookmark recall and the other
+absolute repositions) only ever *clears* the count, and clears the
+followed-projectile and tracked-object references with it, so a camera jump
+cancels a hold in progress. The five writers that start one are the
+projectile-retirement paths of `[06 §7.3]`: the direct-expiry retirement, the
+two central impact retirements, the collision retirement, and the
+shooter-death anchor sweep. Each of them first compares the record being
+retired against the followed-projectile reference; only when they are the same
+record does it copy that record's current position triple (X, Y, Z, each
+16.16) into the anchor, store the retiring weapon definition's `holdtime` —
+already converted to whole ticks by the catalog's seconds-times-30 truncation
+`[02 "Weapon record"]` — into the remaining count as a 16-bit word, and clear
+the followed-projectile reference. Retiring any other projectile leaves all of
+this untouched. `holdtime` has no other reader anywhere in the image
+`[fmt tdf]`.
+
+**Established fact — how the camera comes to follow a projectile.** The
+followed-projectile reference is set in exactly one place: the projectile
+initializer, which sets it to the record it is initializing when the firing
+unit is the camera's current tracked object **and** that unit's status word
+carries the building-class bit `[04 §2]`. Tracking a mobile unit therefore
+never hands the camera off to its shots; tracking a structure — a silo, a
+long-range battery — does, for every projectile that structure spawns, and the
+hold above is what the camera does when that projectile dies. The projectile
+pool's compaction pass rewrites the reference when the followed record is
+relocated, so the handoff survives compaction `[06 §5]`.
+
+**Established fact — the hold branch's selection and decrement.** Phase 10
+opens by testing the remaining count against zero, and the two arms are
+exclusive:
+
+* **Nonzero** — the count is decremented by one as a 16-bit store, and the
+  target point for this pass is the frozen anchor. The followed-projectile and
+  tracked-object references are not consulted at all while a hold is running.
+* **Zero** — the followed projectile is used when its reference is non-null
+  (the point is that record's own position triple); otherwise the tracked
+  object is used when its reference is non-null **and** its alive bit is set
+  (the point is that unit's position triple); a tracked object whose alive bit
+  is clear instead clears the remaining count, the tracked reference and the
+  followed-projectile reference, and no point is selected this pass.
+
+Because the decrement happens on the same pass that uses the anchor, an
+authored `holdtime` of `N` freezes the camera on the retiring projectile's last
+point for exactly `N` phase-10 passes — `N` simulation ticks, since phase 10
+runs once per runnable sub-tick — and the pass after that resumes ordinary
+following. The count is signed and only ever compared for equality with zero,
+so a negatively authored `holdtime`, which the catalog's truncate-then-store
+path turns into a negative 16-bit word `[06 §7.3]`, counts *away* from zero and
+wraps, holding for 65,536 passes less its distance to zero rather than
+releasing immediately. No stock weapon authors a negative `holdtime`.
+
+**Established fact — the desired origin from the selected point.** Whatever the
+source of the point, the desired origin is formed identically:
+
+```
+desiredX = sext16( pointX             >> 16 ) - viewportWidth  / 2
+desiredZ = sext16( (pointZ - (pointY >> 1)) >> 16 ) - viewportHeight / 2
+```
+
+`pointY >> 1` is an arithmetic shift (a floor halving, not a truncation toward
+zero); `sext16` takes the low sixteen bits of the shifted value and
+sign-extends them, so a world coordinate beyond a signed 16-bit map-pixel range
+wraps rather than saturating. The half-viewport terms are signed divisions of
+the presentation extents. The desired origin is then clamped per axis in this
+order: a value below zero becomes zero, otherwise a value above
+`mapPixelExtent - viewportExtent` becomes that limit. Because the low clamp is
+tested first, a viewport wider than the map clamps to zero rather than to the
+negative limit. Selecting a point also clears the view-dirty bit that the step
+below re-tests.
 
 The phase-10 current-to-desired step is exact. For each axis let
 `d = desired - current`: if `|d| > 320`, add `sign(d) * 320`; otherwise add

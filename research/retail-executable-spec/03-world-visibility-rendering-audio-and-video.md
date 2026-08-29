@@ -449,15 +449,58 @@ depth/slope thresholds are cached for placement and impact decisions.
 
 The world-owned height query samples four neighboring plot-cell heights and
 performs bilinear interpolation using the low four bits of each cell-space
-coordinate. Signed interpolation uses a right-shift bias (`(val>>31 & 0xF) >>4`)
-so negative differences round consistently, and the four corner reads are
-guarded by `cx+1 < Width` and `cz+1 < Height` checks that return the sentinel
-`-1` when out of range. A separate coarse average `(hmax + hmin) >> 1` over the
-two derived bytes is used by some placement/airborne tests; it must not be
-substituted for the bilinear query everywhere. Height at offset 4 is the raw
-corner sample; `hmax` at offset 5 and `hmin` at offset 6 are the derived 2×2
-neighbourhood maximum and minimum that feed the coarse query and the LOS
-aggregation.
+coordinate. A separate coarse average `(hmax + hmin) >> 1` over the two derived
+bytes is used by some placement/airborne tests; it must not be substituted for
+the bilinear query everywhere. Height at offset 4 is the raw corner sample;
+`hmax` at offset 5 and `hmin` at offset 6 are the derived 2×2 neighbourhood
+maximum and minimum that feed the coarse query and the LOS aggregation.
+
+**Established — the exact query.** The input is a position record holding
+16.16 X, Y and Z; the query reads only the **high sixteen bits** of X and of Z,
+each taken as a *signed* 16-bit map-pixel coordinate. From those:
+
+```
+cx = X >> 4        fx = X & 0xF          (a cell is 16 map pixels, §2.1)
+cz = Z >> 4        fz = Z & 0xF
+if !(cx >= 0 && cx+1 < Width && cz >= 0 && cz+1 < Height) return -1
+cell(i,j) = plotBase + (Width*j + i) * 13     ; height byte at cell offset 4
+h00 = height(cx,   cz  )   h10 = height(cx+1, cz  )
+h01 = height(cx,   cz+1)   h11 = height(cx+1, cz+1)
+top    = h00 + trunc16((h10 - h00) * fx)
+bottom = h01 + trunc16((h11 - h01) * fx)
+return   top + trunc16((bottom - top) * fz)
+where trunc16(v) = (v + ((v >> 31) & 0xF)) >> 4
+```
+
+The interpolation order is **X first, on both Z rows, then Z between the two
+results** — not a single fused expression, and not Z first. Each of the three
+interpolations rounds independently through `trunc16`, so the result is not the
+same as one exact bilinear evaluation rounded once. `trunc16` divides by 16
+truncating **toward zero**: the `>> 31` term adds 15 before the arithmetic
+shift when and only when the value is negative, which cancels the shift's
+floor. The height bytes are unsigned `0..255`; their differences are signed, so
+a downhill corner pair is exactly the case the bias exists for. A valid result
+is in `0..255`, which is what makes `-1` usable as an off-map sentinel. The row
+stride multiplies the **second** coordinate, which is the decisive evidence
+that the record's first component is X and its third is Z `[04 §4.4]`.
+
+**Correction to the preceding paragraph.** It stated the bias as
+`(val>>31 & 0xF) >>4`, which is not an expression: the sign term is *added to
+the value* before the shift, as written above, and dropping the addend turns a
+toward-zero division into a floor. It also named only the `cx+1 < Width` and
+`cz+1 < Height` guards; the real predicate additionally requires `cx >= 0` and
+`cz >= 0`, so **both** the cell index and its successor must be on the map on
+both axes. And it did not state the interpolation order, without which the
+rounding cannot be reproduced.
+
+**Established — one arithmetic, two call shapes.** The movement layer's
+four-corner terrain conform `[04 §8.1]` does not call this query; it inlines
+the same cell indexing, the same `trunc16`, and the same X-then-Z order, and
+differs only in its bounds handling: it tests `(unsigned)cx >= Width-1` and
+`(unsigned)cz >= Height-1` — one unsigned compare per axis, which rejects
+negatives as very large values — and on failure **abandons the whole conform**
+for that unit rather than returning a sentinel. An implementation may share one
+sampler between the two, but must keep the two failure behaviors distinct.
 
 The LOS writer uses a different, coarser height representation. It quantizes
 to 32-pixel visibility tiles and reads a `uint16` word per visibility tile (see

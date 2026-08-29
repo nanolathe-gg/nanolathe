@@ -181,6 +181,30 @@ must land on an instruction boundary.
 | `0x10082000` | set-unit-value | — | `( sysvar_id value -- )` write engine port; retail compiles `set X to V` as `push X, push V, set` |
 | `0x10083000` | attach-unit | — | `( unit piece extra -- )` attach transported unit to piece; `extra` is a compiler-supplied 0 (reserved slot, like `get`'s zero-fill). `piece = -1` re-attaches as plain cargo, no longer following a piece. Established from retail bytecode — all 48 call sites compile `attach-unit unitid to link;` as `push unit, push piece, push 0, attach-unit`. |
 | `0x10084000` | drop-unit | — | `( unit -- )` release transported unit |
+| `0x10044000` | is-carrying (conventional name) | — | `( unitid -- 0/1 )` pops one unit identifier and pushes `1` when a unit with that identifier is somewhere on **this** unit's cargo list, `0` when the list is empty or holds no match. No BOS keyword; see the note below. |
+| `0x10045000` | carried-by (conventional name) | — | `( -- unitid )` pops nothing and pushes the identifier of the unit **carrying** this unit, or `0` when this unit is not being carried. No BOS keyword; see the note below. |
+
+**`0x10044000` and `0x10045000` — bound by the interpreter, absent from
+Cavedog's toolchain and from the retail corpus.** These two opcode words sit in
+the
+interpreter's dispatch beside `get-unit-value` (`0x10042000`) and `get`
+(`0x10043000`), and route to two further slots of the same engine adapter that
+serves the ports: a one-argument cargo-membership query and a zero-argument
+carrier-identity query. Their stack arity is exactly as tabled — one pop and
+one push, and zero pops and one push — and both push through the same result
+path as the port reads, so a script could use them wherever a `get` expression
+is legal. Doc 04's `[R-COB-03 §5]` owns the engine side: the cargo list is a
+singly linked list hanging off the carrier with new cargo pushed at the head,
+`0x10044000` walks it comparing sixteen-bit identifiers and stops at the first
+match, and `0x10045000` follows the carrier back-pointer rather than the cargo
+head. The names above are this document's labels, not Cavedog's: neither
+opcode appears in Scriptor's `Compiler.cfg`, `Decompiler.cfg` or `Defs.h`, so
+no BOS syntax compiles to either, and a census of all 841 COB copies in the
+retail archives (`totala1.hpi`, `rev31.gp3`, `ccdata.ccx`, `btdata.ccx` and the
+shipped `.ufo` units) finds **zero** instruction words of either value. They
+are engine capability with no authored caller — a decoder must still handle
+them, because the bytecode encoding permits them, but no shipped script
+exercises the path.
 
 ### Arithmetic, comparison, logic
 
@@ -435,13 +459,16 @@ A full decode of every COB in the retail archives (835 scripts across
   the instruction table above decodes **every** retail script with no
   unknown opcodes and no misaligned instruction stream.
 - Static-variable counts are small (0–7 covers nearly everything).
-- Seven opcodes are *never executed by retail data*: `dont-shadow`
+- Nine opcodes are *never executed by retail data*: `dont-shadow`
   (`0x1000A000`), bitwise AND/XOR/NOT (`0x10035000/7000/8000`), logical
-  XOR (`0x10059000`), and `greater`/`greater-or-equal` (`0x10053000`,
-  `0x10054000`). Notably these include every historically contested slot —
-  retail data cannot arbitrate them. (`greater`=`0x10053000`,
-  `greater-or-equal`=`0x10054000` per Scriptor's own `Compiler.cfg` operator
-  table — an earlier version of this doc had the two swapped.)
+  XOR (`0x10059000`), `greater`/`greater-or-equal` (`0x10053000`,
+  `0x10054000`), and the two transport reads `0x10044000` / `0x10045000`
+  documented under "Values and variables". Notably these include every
+  historically contested slot — retail data cannot arbitrate them.
+  (`greater`=`0x10053000`, `greater-or-equal`=`0x10054000` per Scriptor's own
+  `Compiler.cfg` operator table — an earlier version of this doc had the two
+  swapped.) The count was seven before the two transport reads were traced to
+  the interpreter and censused.
 - Common helper-script conventions (script names that are not engine
   callbacks but appear across many units): `Go`/`Stop` (activation
   bodies), `activatescr`/`deactivatescr` (authored animation includes),

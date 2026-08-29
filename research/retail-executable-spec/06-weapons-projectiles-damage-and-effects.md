@@ -128,46 +128,185 @@ The following logical flags are established from parser writes and consumers:
 
 ## 3. Target acquisition, retention, and fire eligibility
 
-### 3.1 Target categories
+### 3.1 Target categories and the per-side candidate lists
 
-**Established fact:** Unit definitions carry category bitsets for the three
-weapon slots and for no-chase behavior. During ordinary acquisition, a
-candidate clear of the slot's bad-target-category mask enters a preferred
-bucket; a matching candidate can enter a fallback bucket. Any preferred result
-wins over fallback. Retention is stricter and rejects a retained unit whose
-category is in that bad-target mask. Unit traversal naturally excludes map
-features because features are stored in a separate feature system.
+**Established fact:** Authored category expressions are compiled to **bitsets
+indexed by unit-definition index**, not evaluated as strings at runtime. Each
+**unit** definition carries four such bitsets — three indexed by weapon slot
+and one for no-chase behavior — and each is an array of 32-bit words tested as
 
-**Established fact:** Acquisition-time physical admission is separate from
-retention and firing. Non-water weapons require shooter and candidate reference
-heights above sea level, enforce the to-air target-status class when requested,
-optionally require a ballistic solution, and then test planar range. Water
-weapons apply two candidate depth/type predicates and planar range. Some
-definition/controller branches can bypass parts of this gate.
+```
+inMask = mask[defIndex >> 5] & (1 << (defIndex & 31))
+```
 
-**Established fact:** Automatic candidates are drawn from the live per-player
-unit lists, which are maintained continuously by allocation and release rather
-than rebuilt on any timer. The candidate array itself is built fresh on every
-acquisition attempt from those lists, with planar distance and a
-direct-visibility predicate as admission. That predicate accepts own-side
-units, rejects cloaked units, rejects underwater units without their dedicated
-status bit, and samples multiple target-bounds points against the player's
-visibility state. The autonomous scan is a round-robin walk over the owning
-player's pool that visits about one thirtieth of the pool per tick, so a given
-slot is rescanned roughly every 30 ticks; the order-work acquisition path
-builds its sight-distance candidate list per call. An earlier reading that the
-candidate lists themselves are "rebuilt on a cadence of at least 30 ticks" is
-corrected: the 30-tick cadence is the scan throttle and the unrelated
-per-unit state refresh, not a candidate-list rebuild.
+where `defIndex` is the **candidate's** definition index, a per-unit word that
+is cleared to zero when the unit dies. **Supported inference:** the three
+per-slot masks are the compiled form of the authored `wpri_`/`wsec_`/`wspe_`
+category expressions and the fourth of `nochasecategory`; the compile step
+belongs to `[02 "Unit record"]` and this document has traced only the four
+runtime consumers (acquisition bucketing, autonomous retention, the Guard
+handler's replacement test, and the sight-distance caller's no-chase filter),
+not the parser that fills them. *Decider:* static trace of the unit-record
+parser's category compilation (RWU-02-1). A candidate clear of the slot's mask
+enters the preferred bucket; a matching candidate enters the fallback bucket.
+Any preferred result wins over fallback. Retention is stricter and rejects a
+retained unit whose definition index is in that bad-target mask. Unit traversal
+naturally excludes map features because features are stored in a separate
+feature system.
 
-**Supported inference (unproven sensor gate):** An earlier reading that a
-secondary status list is consulted only when the primary in-radius set is
-empty and the owning player has an active targeting-upgrade aggregate supplied
-by an active allied or same-player unit with a corresponding definition flag
-remains unproven: no test of such an aggregate exists in the recovered
-acquisition functions (bounded search over the scan, the acquisition, the list
-builder, the range helper, and the per-slot pipeline, which performs no
-acquisition of its own). Its exact sensor name is not proved.
+**Established fact:** Automatic acquisition never scans the unit array. It
+draws from a **per-side target registry** — one object per player slot, holding
+two candidate lists plus a per-definition census, a weighted centroid and a
+gate flag — which is rebuilt from the whole unit array on a cadence, and from
+which each acquisition attempt filters a fresh array. The rebuild is gated by
+
+```
+if (registry.lastRebuildTick + 30 <= currentTick) { rebuild; registry.lastRebuildTick = currentTick;
+                                                    if (simulationRandom(30) == 0) refreshStrategy() }
+```
+
+so the lists are rebuilt **at most once per 30 ticks per side**, from the
+per-player phase, and each rebuild consumes exactly **one simulation draw**
+(bound 30) whose zero outcome additionally runs the strategic refresh
+`[08 "Strategy manager and its task graph"]`. A correction: `[06 §3.1]`
+previously stated that "an earlier reading that the candidate lists themselves
+are rebuilt on a cadence of at least 30 ticks is corrected: the 30-tick cadence
+is the scan throttle and the unrelated per-unit state refresh, not a
+candidate-list rebuild". That correction was itself wrong, and both halves are
+now separated: there is a 30-tick registry **rebuild** cadence *and* an
+independent per-tick round-robin **scan** throttle (§3.2). An acquisition can
+therefore see a list up to thirty ticks stale, including entries for units that
+died in between — which is why the per-attempt filter re-tests liveness.
+
+**Established fact:** One rebuild walks the entire unit array once, in slot
+order, and classifies each unit whose alive bit is set and death latch is
+clear:
+
+* **hostile** — the candidate's owning player's alliance row, indexed by *this*
+  registry's ally group, reads zero:
+  * it joins the **primary list** when the direct-visibility predicate below
+    accepts it **and** a runtime exclusion status bit is clear;
+  * it joins the **secondary list** when its runtime *seen* status bit is set.
+    The two tests are independent, so a unit can be on both lists, either, or
+    neither.
+* **friendly** (same ally group) and fully built: it is counted into the
+  per-definition census, into an economy counter when its definition carries
+  the corresponding scalar, and into the weighted centroid; and it sets the
+  registry's **secondary-list gate** when its definition carries one particular
+  flag bit and the unit is active.
+
+**Established fact:** The per-attempt filter is much thinner than the rebuild.
+Given a centre point and a radius it walks the primary list, keeps every entry
+whose **planar** squared distance is at or below the squared radius and whose
+alive bit is set and death latch is clear, and appends it. Only when the
+registry's secondary-list gate is nonzero **and the resulting array is still
+empty** does it repeat the walk over the secondary list. No visibility,
+category, sensor, medium, alliance or range test happens at this point — the
+visibility predicate ran at rebuild time, and category is applied later, at
+bucketing (§3.2). If primary candidates existed but all failed the later
+category or scoring steps, the secondary list is **not** retried.
+
+**Established fact:** The squared-distance metric used by the filter, by the
+acquisition gate below and by the scoring draw is the same throughout combat:
+for each axis the signed 32-bit 16.16 delta is squared into 64 bits and the
+**high 32 bits** are taken — the squared whole-world-unit distance, truncated
+per axis — and the axis terms are summed as signed 32-bit values. The radius is
+squared as a plain 32-bit signed multiply of the authored integer.
+
+**Established fact (secondary-list identity, closing doc 06's largest open
+item):** The runtime bit that puts a hostile unit on the secondary list is the
+**seen** bit of the unit status word, and it is recomputed every tick by the
+sensor bookkeeping phase from the **local player's** point of view only
+`[03 §3.2]`. That phase, in order: clears the bit for every unit that is not
+own/allied-with-shared-vision and sets it (together with the sonar bit) for
+those that are; sets it for units inside a **local** radar circle, whose radius
+is `radardistance + 2 × (unit height in whole world units)`, and sets the sonar
+bit for units at or below the water plane inside a local sonar circle; clears
+it and sets a jam bit for units inside a hostile radar-jam circle; and finally
+sets it for any remaining unit whose projected tile is lit in the local
+player's line-of-sight state. So the secondary list is exactly *"hostile units
+the local observer can currently see or detect"*. Three consequences are
+contracts:
+
+1. it is **radar-like** because radar coverage is one of its four producers,
+   but it is not a radar list — allied units, sonar contacts and plain
+   line-of-sight all set the same bit;
+2. `radardistancejam` **does** have an authoritative effect: it clears the same
+   bit and therefore removes the candidate from every side's secondary list.
+   The earlier statement in this document that "jamming has no authoritative
+   effect beyond presentation" is wrong for this bit and is retracted
+   (`[R-WPN-02 §4]`); it remains correct for the minimap surfaces;
+3. because the phase evaluates one observer, every side's secondary list is
+   computed from the **local** player's sensors. In single player that is the
+   human's view, and a computer opponent's fallback acquisition therefore
+   inherits it. **Unknown:** whether any second producer of that bit exists
+   outside the recovered sensor phase; *decider:* static trace over the
+   unrecovered regions.
+
+**Established fact:** The registry's secondary-list gate is set by owning at
+least one **active** friendly unit whose definition carries one specific flag
+bit of the definition flag word. **Unknown:** which authored FBI key that bit
+is; the parser assigns it in the same shift sequence as the named flags but the
+key at that position has not been read out. *Decider:* one more static window
+over the unit-definition parser's flag sequence (RWU-02-1 owns the key
+table). The doc's earlier description of this gate as "a targeting-upgrade
+aggregate supplied by an active allied or same-player unit with a corresponding
+definition flag" is confirmed as to shape — one flag, one active friendly unit,
+one gate — and its earlier flagging as *unproven* is closed: the reader is the
+list builder, and the earlier bounded search missed it because the gate is read
+in the list builder rather than in the acquisition or the scan.
+
+**Established fact:** The direct-visibility predicate applied at rebuild time
+takes the observing player record and the candidate and answers in this order:
+
+1. the candidate's owning player **is** the observer — accept (own units are
+   never hidden from their owner);
+2. the candidate's cloak bit is set — reject;
+3. form the probe point
+   `(unit.X + boundsMinX, unit.Y + boundsMaxY, unit.Z + boundsMinZ)` from the
+   definition's model bounding box;
+4. if the candidate's **sonar** status bit is clear and the probe's Y is below
+   `seaLevelByte << 16` — reject. This is the underwater exemption: an
+   undetected submerged unit is invisible regardless of line of sight;
+5. probe up to four points, returning true on the first hit:
+   `p`, then `p.X += hullSpanX`, then `p.Z += hullSpanZ` with
+   `p.Y -= hullSpanY`, then `p.X -= hullSpanX` — the four corners of the
+   definition's footprint rectangle, with the far edge lowered. Each probe maps
+   to `tileX = Xword >> 5`, `tileZ = (Zword − (Yword >> 1)) >> 5` (arithmetic
+   shifts of the signed high words, and the same half-height projection the
+   renderer uses), is bounds-checked **unsigned** against the observer's grid
+   dimensions, and then tests either the observer's per-player byte grid or the
+   global word mask according to the global mapping-mode bit `[03 §3.2]`.
+
+In word-mask mode every probe tests the **local player's** bit, not the
+observer's, so in that mode a non-local side's primary list is also built from
+the local player's vision. In byte-grid mode the observer's own grid is used
+and the predicate is properly per-side.
+
+**Established fact:** Acquisition-time physical admission is a separate gate,
+run per candidate at acquisition, and is exactly:
+
+```
+non-water weapon:
+    reject if (int16)shooter.Yword + shooterDefinition.referenceHeight <= seaLevelByte
+    reject if (int16)cand.Yword    + candDefinition.referenceHeight    <= seaLevelByte
+    reject if toairweapon and (cand.status & 3) != 2         ; the flying movement class
+    reject if ballistic and the §3.3 solver returns its 0x8000 sentinel, called with
+           the deltas (shooter − candidate) on all three axes, the weapon velocity
+           and minbarrelangle
+    accept iff squaredPlanarDistance(shooter, cand) <= range × range   ; INCLUSIVE
+water weapon:
+    reject if the candidate lacks `floater` and (int16)cand.Yword > seaLevelByte
+    reject if the candidate has `canhover` and
+           (int16)cand.Yword + (candDefinition.referenceHeight >> 1) > seaLevelByte
+    accept iff squaredPlanarDistance(shooter, cand) <= range × range   ; INCLUSIVE
+```
+
+The water branch tests neither shooter height, nor to-air status, nor
+ballistic feasibility; the non-water branch tests no candidate medium beyond
+the sea-level floor. Both height tests are whole-world-unit tests on the high
+word plus the definition's reference height word. Some definition and
+controller branches can bypass this gate entirely (§3.2).
 
 **Established fact:** Retained-target checks do not rerun visibility, sensor,
 range, medium, aircraft, or ballistic acquisition tests. Shot-time admission
@@ -198,49 +337,98 @@ admission policies:
   or target-physical gate; and
 - contextual replacement paths can retain an existing target only when it is
   physically eligible and preferred, yet install their replacement candidate
-  without locally applying those same tests.
+  without locally applying those same tests. The Guard handler is the worked
+  example: for each slot whose armed/has-target flag and tracking flag are both
+  set and whose weapon is not command-fire, it installs the guarded unit's attacker whenever the
+  slot has no target, or its target fails the §3.1 physical gate, or its
+  target's definition index is in the slot's bad-target mask — and it installs
+  the attacker without applying either test to the attacker.
 
 All paths still reach the common shot-time physical gate and the selected
 projectile family's readiness gate. Forced/manual installation can therefore
 bypass autonomous visibility lists and bad-category preference, but it does
 not bypass every firing check.
 
-**Established fact:** Ordinary acquisition builds a filtered candidate set in
-stable order: it iterates candidates in ascending player and then pool-slot
-order, requires hostility, applies a direct-visibility predicate (own-side
-units bypass the check, cloaked units are rejected, underwater units without
-the dedicated alias flag are rejected, otherwise a four-point hull sampling
-of the target bounds is tested against the player's visibility state), and
-then applies physical admission (height above sea level, to-air and
-ballistic feasibility, and planar range). Only candidates passing all three
-groups enter the filtered set, which retains that stable order.
+**Established fact:** The autonomous scan is one pass per player per tick, run
+from that player's manager object immediately after its AI task dispatch. It
+visits
 
-**Established fact:** The filtered set is then sampled by swap-remove random
+```
+(uint16)globalLiveUnitCount / 30 + 1
+```
+
+units per call — an integer divide of a **global** unit count, so the per-unit
+revisit period is roughly 30 ticks only while the player owns a typical share
+of the world's units — advancing a persistent cursor through the owning
+player's unit vector and wrapping to its beginning at the end. The visited unit
+must have a nonzero definition index, a remaining-build-fraction of exactly
+zero, one high status bit set, and its two-bit stance field equal to the
+fire-at-will value.
+
+**Established fact:** Within a visited unit the three slots are processed in
+numeric order, and a slot is skipped unless its armed/has-target flag and its
+tracking flag are both set (the two persisted slot flags of
+`[R-SAVE-WEAPON-01]`), its weapon is not `dropped`, and either the owning
+player's
+controller type is 2 (computer) or the weapon is **not** `commandfire`. The
+consequence is a contract, not a nicety: a human player's units never acquire
+autonomously with a command-fire weapon and a computer player's do.
+
+**Established fact:** The scan first tries to **retain**. The current slot
+target is dropped when its owning player is allied to the scanning player, when
+its definition index is in the slot's bad-target mask, or when the slot's
+weapon is a paralyzer and the target already carries the stunned bit. A
+surviving target ends the slot's work with no re-acquisition and no draws.
+
+**Established fact:** When retention fails, the slot re-acquires by weapon
+class: an `interceptor` weapon runs the projectile scan of §11.2 and installs a
+**point** target from the winning projectile's current position, and an
+ordinary weapon runs the acquisition below — but only while the unit's stance
+field still reads fire-at-will — and installs a **unit** target. Either way a
+null result clears the slot target through the ordinary TargetCleared path.
+
+**Established fact:** Ordinary acquisition builds its candidate array through
+the §3.1 filter, with a radius that depends on the caller: the autonomous scan
+passes the slot weapon's authored `range`, while the sight-distance caller
+passes the unit definition's sight distance and additionally applies the
+`nochasecategory` mask. It then samples that array with swap-remove random
 selection: the engine repeatedly draws from the simulation stream with a bound
 equal to the remaining candidate count, removes the picked entry by swapping
 the last element into its place, and repeats until the array is exhausted or
-50 picks have been made. A draw with bound one returns zero without advancing
-the stream, so a set of N at most 50 candidates consumes N draws of bounds
-N down to 1, of which N minus one advance the stream; a larger set consumes 50
-draws of bounds N down to N minus 49. An earlier reading that a set of 50 or
-fewer candidates consumes no sampling draw and preserves the filtered stable
-order is corrected: the sampled order is always RNG-driven. The candidates are
-then split into two buckets: preferred (category not intersecting the weapon's
-bad-target mask) and fallback (matching the mask). No winner in the preferred
-bucket is retried as a failure of the whole acquisition; fallback is only
-consulted when preferred yields nothing, and when both exist preferred always
-wins over fallback.
+**50** picks have been made. A draw with bound one returns zero without
+advancing the stream, so a set of N at most 50 candidates consumes N draws of
+bounds N down to 1, of which N minus one advance the stream; a larger set
+consumes 50 draws of bounds N down to N minus 49. An earlier reading that a set
+of 50 or fewer candidates consumes no sampling draw and preserves the filtered
+stable order is corrected: the sampled order is always RNG-driven.
 
-**Established fact:** Within each bucket every sampled candidate receives one
-score. The bound for the draw is the sum of the high 32-bit halves of the
-squared fixed-point X and Z deltas from shooter to candidate; formally it is
-the high half of the 64-bit product of each delta with itself, shifted right
-by 32, summed across the two axes. If the bound is below two, the RNG helper
-returns zero without advancing the stream. Otherwise the engine draws from the
-simulation stream with that bound. Strictly lower score wins, so an equal
-score preserves the first sampled candidate in that bucket. This is not
-nearest-target selection; candidate-list order, sampling, and RNG draw order
-are authoritative.
+**Established fact:** Each picked candidate must then pass, in this order:
+
+1. alive bit set and death latch clear;
+2. one definition flag of the candidate, **or** the shooter's owning player is
+   a computer controller, **or** one global option bit — any of the three
+   admits the candidate. **Unknown:** the authored keys behind that definition
+   flag and that option bit; *decider:* the unit-definition parser's flag
+   sequence and the options loader (RWU-02-1);
+3. one definition flag of the **shooter** bypasses the §3.1 physical gate
+   entirely; otherwise that gate must accept. **Unknown:** the authored key
+   behind that bypass flag; same decider;
+4. for the sight-distance caller only, the candidate's definition index must be
+   clear of the `nochasecategory` mask;
+5. a paralyzer weapon rejects a candidate already carrying the stunned bit.
+
+**Established fact:** Every surviving candidate then receives one score. The
+bound for the draw is the sum of the high 32-bit halves of the squared
+fixed-point X and Z deltas from shooter to candidate (§3.1's shared metric). If
+the bound is below two, the RNG helper returns zero without advancing the
+stream. Otherwise the engine draws from the simulation stream with that bound.
+Strictly lower score wins, so an equal score preserves the first sampled
+candidate in that bucket; both buckets start from the maximum signed 32-bit
+value. Candidates are split into preferred (definition index not in the slot's
+bad-target mask) and fallback (in the mask); the preferred winner is returned
+whenever one exists, otherwise the fallback winner, otherwise nothing. This is
+not nearest-target selection; candidate-list order, sampling, and RNG draw
+order are authoritative.
 
 **Established fact:** Shot-time admission, which is checked immediately before
 the spawner, never tests category, alliance, radar, sonar, cloak, or jammer.
@@ -248,10 +436,7 @@ Those gates belong only to candidate-list building, not to the final firing
 check, and this absence is established by a bounded search over the
 shot-time admission code.
 
-**Established fact:** The automatic retention scan rechecks hostility,
-bad-target-category rejection, and the paralyzer already-stunned exclusion.
-It otherwise keeps the current live target without re-running acquisition-time
-physical or sensor gates. TargetCleared is emitted for stale/dead resolution,
+**Established fact:** TargetCleared is emitted for stale/dead resolution,
 scanner failure, automatic-targeting enable/disable transitions, STOP, and the
 identified order-cancellation path. Replacing a target does not clear the
 Aim-request latch, so a replacement can skip a fresh Aim request.
@@ -512,43 +697,17 @@ reached, the pool record has already been reserved and the live count already
 incremented before the unsigned distance-over-velocity division raises the
 processor divide exception, and the count is not rolled back (§6.4).
 
-**Established fact:** The simulation keeps three distinct visibility-like
-layers. The authoritative word mask is a 16-bit word per map tile quarter, each
-bit representing one player. The per-player byte grid is a wrapping refcount
-per tile quarter. Both are authored only by the line-of-sight publisher. The
-minimap radar surfaces (a final image and its temporary and mapped companions)
-are wiped every tick and receive radar, sonar, and jammer circles; they are
-presentation only. The publisher chooses between a GAF shape indexed by the
-floor of radius divided by 32 minus five and a ray shape indexed by radius
-divided by 32, selected by a global mode bit. Outer radius for normal circles
-is the maximum of radar distance and sonar distance as a single geometric
-circle. Jammer circles for radar-jam and sonar-jam distances use separate tables
-and are drawn onto the same final surface; overlap is last-writer-wins and
-never ORs into the word mask, so jamming has no authoritative effect beyond
-presentation.
-
-**Established fact:** The sensor bookkeeping phase runs only when more than one
-player is active. When it runs it performs four passes in order: it clears the
-decloak bit and sets friendly bits including the dedicated alias that doubles as
-the underwater visibility exemption, it publishes normal and jammer circles to
-the minimap surfaces only, it scans for cloaked candidates whose distance to any
-enemy is less than or equal to minimum cloak distance and on a hit writes a
-deadline of global tick plus 90 and sets the decloak runtime bit, and it sets
-the seen marker through a four-point line test. The four-point test projects
-world X and Z and a half-height adjusted Y into tile coordinates, checks unsigned
-bounds, and then tests either the byte grid or the word mask according to the
-global mode. Cloaked units are rejected by an early predicate unless the
-decloak bit is set, and no firing path clears cloak — the bounded search found
-no firing decloak. Allied vision is never ORed: the writer ORs only the source
-player's own bit and the reader tests only the local player's bit. Overflow
-projectiles from occupancy are capped as described under damage; the same
-overflow handling applies here.
-
-**Established fact:** The secondary radar-like list is consulted only when the
-primary filtered set is empty and a targeting-upgrade aggregate is present from
-an active allied or same-player unit. If primary candidates existed but all
-failed category or scoring, the secondary list is not retried, and its sensor
-flag name remains a supported inference rather than an established literal.
+**Cross-reference (relocated 2026-08-29, RWU-06-1b).** Three paragraphs
+describing the visibility layers, the sensor bookkeeping phase and the
+secondary candidate list stood here, in the middle of the range/aim/ballistic
+arithmetic. They belong to two other owners and have been moved: the three
+visibility-like layers, the minimap radar surfaces, the jammer circles and the
+four-pass sensor phase are `[03 §3.2]`'s and `[03 §3.4]`'s contract, and the
+identity, gate and writers of the primary and secondary candidate lists are now
+stated with their arithmetic in §3.1 above. Nothing was deleted: §3.1 carries
+the acquisition-facing half (including the correction that radar jamming does
+clear the bit the secondary list is built from), and doc 03 owns the sensor
+phase itself.
 
 ### 3.4 The weapon-query path [R-P0-07]
 
@@ -987,6 +1146,22 @@ the next record, but the dead bit by itself is not an iteration filter.
 - dead state.
 
 The exact packed record layout is intentionally not part of this specification.
+
+**Established fact:** Two of those cached values are collision scratch, both
+written by the collision gate (§8.1) on every in-map tick and neither read by
+the simulation:
+
+* the **quantized cell pair** — the impact cell's X and Z as
+  `(v + (v >> 31 & 0xF)) >> 4` of the current point's high words — is written
+  only when a feature contact is *selected*, and is read only by the same test
+  on a later tick to suppress a repeated contact with the same feature cell;
+* the **floor scratch** is overwritten unconditionally with the plot cell's
+  `(neighbourhoodMax + neighbourhoodMin) / 2`, an unsigned byte average, and
+  its only reader anywhere in the corpus is the projectile draw pass, which
+  subtracts half of it from the projectile's screen position. This closes the
+  former open question about that field's consumer: it is **presentation
+  only**, and a simulation-side implementation may keep it purely for the
+  presentation layer.
 
 **Established fact:** The common initializer clears beam/dead/phase flags, copies current and start positions, sets the creation tick and smoke deadline, clears the target-unit link before family-specific assignment, records shooter side and muzzle piece, and extends the shooter's keepalive deadline. A no-shooter projectile receives the neutral side value used by the executable.
 
@@ -1543,23 +1718,93 @@ issue (§5.2).
 
 ### 6.9 Water weapons and torpedoes
 
-**Established fact:** No separate torpedo creator, record type, or motion loop was found. Torpedo-like behavior is the shared self-propelled family combined with water-weapon, guidance, and collision flags.
+**Established fact:** No separate torpedo creator, record type, or motion loop
+was found. Torpedo-like behavior is the shared self-propelled family combined
+with the `waterweapon`, `guidance` and collision flags. `waterweapon` is a
+single flag read at exactly four decision points, and each one is a different
+predicate:
 
-**Established fact:** Runtime medium behavior is asymmetric. A water self-propelled projectile accelerates and steers below the water plane; at or above it, propulsion/guidance are disabled and gravity is applied. Collision permits a water weapon to continue when it is not below terrain. Separate pre-fire water eligibility predicates still restrict target choice, so water-weapon is not a universal medium permission.
+1. **Acquisition admission** (§3.1) swaps the whole non-water branch for two
+   candidate-medium predicates: reject a candidate that lacks `floater` and
+   whose height word is strictly above the sea-level byte, and reject a
+   candidate that has `canhover` and whose height word plus **half** its
+   definition's reference height is strictly above the sea-level byte. The
+   shooter's own height, the to-air class test and the ballistic feasibility
+   test are all skipped, and the planar range test is unchanged. Neither
+   predicate is a depth band; both are one-sided.
+2. **Shot-time admission** (§3.3) is the mirror image: the planar range test
+   runs first for every weapon, and a water weapon then passes immediately,
+   while a non-water weapon must have its own reference height strictly above
+   sea level (and, when ballistic, a valid solution).
+3. **Self-propelled motion** (§6.7) gates propulsion and guidance on
+   `!waterweapon || preMotionYword < seaLevelByte` — a strict compare of the
+   height word saved **before** this tick's displacement. A water projectile at
+   or above the plane is treated exactly like an expired one: its vertical
+   velocity takes gravity and its pitch is forced to zero, so a torpedo that
+   breaches decelerates and falls rather than steering.
+4. **Collision** (§8.2) lets a water weapon **return and continue** at or above
+   terrain instead of testing the sea plane, so it never self-destructs on
+   entering water; it still impacts on terrain penetration, unit slots,
+   features and proximity like any other family.
+
+The asymmetry is deliberate and must be reproduced: `waterweapon` is not a
+universal medium permission — it restricts target choice at acquisition while
+relaxing the shot-time and water-plane gates — and nothing in the four sites
+tests the *projectile's* own medium against the target's.
 
 ### 6.10 Beams, lightning, flame, and feature fire
 
-**Established fact:** Beam behavior exists only inside the line-of-sight motion branch. The head moves on every live tick. Before the latch, the tail stays fixed. The latch is set only when `creation tick + duration < current tick`; the tick that sets it still leaves the tail fixed. Starting on the next live tick, an already-latched beam moves head and tail by the same velocity and preserves the resulting length.
+**Established fact:** Beam behavior exists only inside the direct
+(`lineofsight`) motion branch, and it is two lines of arithmetic on a record
+that is otherwise an ordinary direct projectile. While the record is live
+(`currentTick < expiry`) the head point advances by the velocity every tick as
+usual, and then:
 
-**Established fact:** Collision samples only the moving head. It does not receive the tail or previous point, so the visible beam segment is not a line-area collision volume. Damage uses ordinary impact amount with no duration divisor. Expiry only retires; it does not deliver beam damage. Normal impact usually ends future contacts, while no-explode can leave the beam live for later repeated contacts.
+```
+if (beamweapon) {
+    if (latched)                          secondPoint += velocity
+    else if (creationTick + duration < currentTick)  latched = true
+}
+```
 
-**Established fact:** The jagged lightning render type constructs randomized line segments between head and tail only during rendering. Render type is not consumed by simulation or collision. No lightning chaining or widened lightning collision was found.
+The latch lives in bit 0 of the record's state byte and is cleared by the
+common initializer. `duration` is the authored `duration` key already truncated
+to whole ticks by the catalog (§2.1), the comparison is **strict**, and the
+tick that sets the latch does **not** move the tail — so the tail starts moving
+on the tick after the latch. The visible beam therefore grows from zero length
+for `duration + 1` ticks and then translates rigidly at constant length: with
+`duration = 0` the latch is set on the first tick after creation, and a
+`duration` authored below one thirtieth of a second compiles to zero and
+behaves the same way. Nothing shortens the beam and nothing re-clears the
+latch.
 
-**Established fact:** No flame-specific projectile integrator was found. Burn-blow controls selected steering-failure and expiry outcomes. End-smoke changes impact presentation without suppressing damage.
+**Established fact:** Collision samples only the moving head (§8.1). It does
+not receive the tail or previous point, so the visible beam segment is not a
+line-area collision volume. Damage uses the ordinary impact amount with no
+duration divisor — a beam deals its full authored damage on every contact tick,
+not damage-per-second. Expiry only retires; it does not deliver beam damage.
+Normal impact usually ends future contacts, while `noexplode` can leave the
+beam live for later repeated contacts.
+
+**Established fact:** The jagged lightning render type constructs randomized
+line segments between head and tail only during rendering. Render type is not
+consumed by simulation or collision. No lightning chaining or widened lightning
+collision was found, and the two points the renderer joins are exactly the head
+and the tail this section maintains.
+
+**Established fact:** No flame-specific projectile integrator was found.
+Burn-blow controls selected steering-failure and expiry outcomes. End-smoke
+changes impact presentation without suppressing damage.
 
 **Cross-reference — no combat producer on the presentation flame strip (2026-08-28, established in [03 "R-LAYER §4"]):** the renderer's strip-5 "flame" objects are spawned solely by the Teleport order-state handler as the teleport visual, and the strip-5 burning-feature smoke by the feature-fire walker. No projectile impact class, fire-damage application, or building burning state produces a strip-5 flame event, so flame render types, `firestarter`, and feature fire have no producer on that strip. The authored-relationship unknowns below are unaffected.
 
-**Established fact:** Persistent feature fire is a separate post-damage record system, not a projectile family. Radial feature damage can ignite only when feature fire is globally enabled, the feature type is flammable, and the weapon firestarter value is nonzero. Active fire records animate, emit smoke, expire, and can spread to eligible nearby or wind-selected feature cells using simulation RNG. This is feature-fire spread, not beam or lightning chaining.
+**Established fact:** Persistent feature fire is a separate post-damage record
+system, not a projectile family, and a weapon reaches it only through the
+feature-damage accumulator of §13.1: ignition requires the global feature
+option bit, a flammable feature definition, a nonzero weapon `firestarter`, and
+a cell with no live instance attached. Active fire records animate, emit smoke,
+expire, and can spread to eligible nearby or wind-selected feature cells using
+simulation RNG. This is feature-fire spread, not beam or lightning chaining.
 
 ## 7. Projectile timers and motion details
 
@@ -1790,26 +2035,77 @@ division of the authored range promoted to 16.16 by the 16.16 per-tick velocity
 
 ### 8.1 Collision gate
 
-**Established fact:** Collision maps only the post-motion current X/Z point to one map cell. It uses arithmetic division by the cell scale and rejects coordinates outside map width/height. No previous point, beam tail, velocity interval, or segment fraction is supplied or reconstructed. There is no swept segment, ray, broad candidate collection, or nearest-contact sort in this resolver.
+Units and terms used throughout §§8–9: positions are 16.16 (one world unit =
+65,536); one plot cell is 16 world units; the terrain, sea-level and feature
+height values named here are **unsigned bytes in whole world units**, and the
+gate compares them against the **high word** of the projectile's 16.16 vertical
+position, so all height tests below are whole-world-unit tests. The plot cell's
+byte layout — corner height, neighbourhood maximum, neighbourhood minimum,
+metal, feature word, fringe-anchor deltas, flag byte — is owned by
+`[03 §2.2]`; this section names those fields but does not
+redefine them.
 
-**Established fact:** Sufficiently fast projectiles can therefore pass over intervening cells or thin contact geometry between sampled points. The separate water-crossing presentation predicate can notice an above-to-at-or-below plane crossing, but it does not deliver collision or damage.
+**Established fact:** The resolver takes the projectile's **post-motion**
+current point and maps it to exactly one plot cell:
 
-**Established fact:** An off-map point clears followed-projectile state when applicable, marks the projectile dead, and returns. It does not call impact, damage, terrain effects, or splash. This retirement ignores the no-explode flag; the flag cannot preserve the record.
+```
+cellX = point.X >> 20            ; arithmetic shift of the 16.16 X: /65,536 then /16
+cellZ = point.Z >> 20
+in-map iff 0 <= cellX < mapWidth and 0 <= cellZ < mapHeight
+```
 
-**Established fact:** For an in-map point, contact order is fixed:
+No previous point, beam tail, velocity interval, or segment fraction is
+supplied or reconstructed. There is no swept segment, ray, broad candidate
+collection, or nearest-contact sort. The shift is arithmetic, so a negative
+coordinate floors rather than truncating, but the signed lower-bound test then
+rejects it, so the floor/truncate difference is unobservable here (it is *not*
+unobservable in area damage, §9.3, which quantizes differently).
 
-1. optional projectile-link proximity;
-2. cell-height cache update;
-3. unit slot zero;
-4. unit slot one;
-5. units-only early return;
-6. feature or footprint-anchor resolution with repeated-cell suppression;
-7. terrain penetration and bounce;
-8. water/sea continuation or impact.
+**Established fact:** Sufficiently fast projectiles can therefore pass over
+intervening cells or thin contact geometry between sampled points. The separate
+water-crossing presentation predicate can notice an above-to-at-or-below plane
+crossing, but it does not deliver collision or damage.
 
-**Established fact:** Projectile-link proximity uses squared three-dimensional current-point distance and a strict `< radius²` test. It calls impact without a direct unit but does not return afterward, and the resolver NEVER rechecks the dead bit. A second same-call impact — unit slot, feature, terrain, or water — is therefore reachable WITHOUT no-explode; the flag additionally keeps the record available on future ticks.
+**Established fact:** An off-map point freezes the follow camera on the
+record's last point, loads `holdtime` into the camera hold counter (§7.3),
+marks the projectile dead, and returns. It does not call impact, damage,
+terrain effects, or splash. This retirement ignores the no-explode flag; the
+flag cannot preserve the record.
 
-**Established fact:** Unit slot zero requires a nonzero unit, a side byte different from the projectile side, and projectile height strictly below the unit upper/reference bound. It has no lower-bound test. Unit slot one uses the same nonzero/different-side gates and requires height inclusively between lower and upper bounds. The first successful slot impacts that unit and returns. This fixed slot order is the visible unit tie policy; this function does not consult the alliance matrix.
+**Established fact:** For an in-map point the resolver runs this fixed ladder,
+and an implementation must reproduce both the order and the early returns:
+
+1. **Projectile-link proximity.** When the record carries a
+   projectile-to-projectile link, the metric is the sum over X, Y and Z of the
+   **high 32 bits of the 64-bit square** of each signed 32-bit 16.16 delta
+   between the two current points — that is, each term is the squared distance
+   in whole world units, truncated per axis. Contact is
+   `metric < areaofeffect × areaofeffect` (signed 32-bit compare, **strict**,
+   the authored area value unhalved). It calls the central impact path with no
+   direct unit and **does not return afterwards**, and the resolver NEVER
+   rechecks the dead bit, so a second same-call impact — unit slot, feature,
+   terrain, or water — is reachable WITHOUT no-explode; the flag additionally
+   keeps the record available on future ticks.
+2. **Cached floor value.** The record's cached floor scratch is overwritten
+   with `(cell.maxHeight + cell.minHeight) / 2` (unsigned division of two
+   bytes). It is **not** used by any later test in this ladder: the projectile
+   draw pass is its only reader, which subtracts half of it from the screen
+   position. This closes the former "cached average-height scratch consumer"
+   unknown as presentation-only.
+3. **Unit slot zero.** Requires a nonzero cell occupant, an owning-player byte
+   different from the projectile's side byte, and
+   `point.Y < unit.Y + definition.boundsMaxY` — a strict compare of full 16.16
+   values, with **no lower bound**.
+4. **Unit slot one.** Same nonzero/different-side gates, and
+   `unit.Y + definition.boundsMinY <= point.Y <= unit.Y + definition.boundsMaxY`
+   — **both ends inclusive**.
+   The first successful slot impacts that unit and returns. This fixed slot
+   order is the visible unit tie policy; this function does not consult the
+   alliance matrix.
+5. **Units-only early return.**
+6. **Feature or footprint-anchor resolution** with repeated-cell suppression.
+7. **Terrain penetration and bounce** (§8.2).
+8. **Water/sea continuation or impact** (§8.2).
 
 **Established fact:** The two cell slots are class-assigned by the occupancy
 stamper, not by insertion order: ground-class units (movement mode 1) write
@@ -1822,43 +2118,145 @@ holds ground occupants whose vertical extent runs base-to-top (no lower gate),
 slot one holds the flying class in an altitude band (inclusive lower and upper
 gates).
 
-**Established fact:** Units-only returns after both unit slots miss. It suppresses feature, terrain, bounce, and water-plane impact handling, not only feature damage.
+**Established fact:** Units-only returns after both unit slots miss. It
+suppresses feature, terrain, bounce, and water-plane impact handling, not only
+feature damage.
 
-**Established fact:** Feature values below the reserved range resolve directly; the footprint sentinel resolves through its anchor cell. A feature hit requires projectile height strictly below feature top. A cached quantized cell pair suppresses repeated feature contact in the same cached cell; a new cell updates the cache and selects impact without a direct unit. The cached-cell suppression cancels only that feature's impact: the terrain/water ladder later in the SAME resolver call still runs and can select another impact.
+**Established fact:** Feature resolution reads the cell's feature word `f`:
+
+* `f < 0xFFFB` resolves directly, and only when `f` is also below the live
+  feature count; otherwise no feature.
+* `f == 0xFFFE` (fringe) resolves through the anchor cell reached by stepping
+  back `cell.anchorDeltaZ` rows and `cell.anchorDeltaX` columns — the same
+  signed deltas `[03 §2.2]` defines — and takes that cell's
+  feature word under the same `< 0xFFFB` test.
+* every other value resolves to no feature.
+
+A feature hit requires
+`(int16)point.Yword < featureDefinition.heightByte + cell.minHeightByte`
+(strict, unsigned bytes summed as ints). The repeated-cell suppression compares
+the record's cached cell pair against
+`(trunc(point.Xword / 16), trunc(point.Zword / 16))`, each computed as
+`(v + (v >> 31 & 0xF)) >> 4` — a **truncate-toward-zero** divide by 16 of the
+signed high word, not the arithmetic shift used for the cell lookup above. When
+both match, this feature's impact is cancelled and the cache is left alone;
+otherwise the cache is overwritten and impact is selected with no direct unit.
+The cached-cell suppression cancels only that feature's impact: the
+terrain/water ladder later in the SAME resolver call still runs and can select
+another impact.
 
 ### 8.2 Ground bounce and water
 
-**Established fact:** Terrain contact requires projectile height strictly below the cell terrain height. Ground-bounce then replaces only vertical velocity with the negation of its signed arithmetic right shift by two and returns; the branch never reaches the central impact path at all, so no-explode is irrelevant here. There is no position correction, horizontal damping, authored restitution, bounce counter, retirement, or impact effect in this branch.
+**Established fact:** Terrain contact is
+`(int16)point.Yword < cell.minHeightByte` — the projectile's whole-world-unit
+height strictly below the cell's **neighbourhood-minimum** height byte (not the
+corner height and not the maximum). On contact, `groundbounce` replaces only
+the vertical velocity with
+`velocityY = -(velocityY >> 2)` (arithmetic shift of the signed 16.16 value,
+then negation) and returns; the branch never reaches the central impact path at
+all, so no-explode is irrelevant here. There is no position correction,
+horizontal damping, authored restitution, bounce counter, retirement, or impact
+effect in this branch. Without `groundbounce` the same contact selects impact
+with no direct unit.
 
-**Established fact:** Because position is not corrected, the projectile remains at its already-integrated point and can collide or bounce again on a later family tick. Units-only prevents the terrain/bounce branch from being reached.
+**Established fact:** Because position is not corrected, the projectile remains
+at its already-integrated point and can collide or bounce again on a later
+family tick. Units-only prevents the terrain/bounce branch from being reached.
 
-**Established fact:** At or above terrain, a water weapon returns and continues. A non-water weapon at or above sea level also continues. A non-water weapon below sea level impacts unless an opaque terrain/liquid mode suppresses that branch.
+**Established fact:** At or above terrain the ladder ends in three ordered
+early returns and one impact:
 
-**Established fact:** Downward water crossing is a live post-collision presentation event. It requires saved pre-motion height strictly above sea level, current height at or below sea level, a valid cell with its relevant depth/height byte below sea level, and the opaque terrain/liquid mode clear. It emits the weapon water art but does not damage, change velocity, or retire the projectile.
+```
+if (waterweapon)                       return          ; continue flying
+if (seaLevelByte <= (int16)point.Yword) return          ; at or above the plane
+if (opaqueLiquidMode != 0)             return          ; OTA nosealeveltrigger
+impact(no direct unit)                                 ; submerged impact
+```
 
-**Established fact:** A collision that marks the projectile dead suppresses crossing splash because the post-collision tail is dead-gated. Bounce and no-explode contacts can leave it live and therefore can still emit a crossing splash. Smoke-trail scheduling precedes splash selection.
+The sea-level compare is a signed comparison of the zero-extended sea-level
+byte against the signed high word, so submerged impact needs the height
+**strictly** below the plane.
+
+**Established fact:** Downward water crossing is a live post-collision
+presentation event, not part of this ladder. It requires saved pre-motion
+height strictly above sea level, current height at or below sea level, a valid
+cell whose neighbourhood-maximum height byte is below sea level, and the
+opaque-liquid mode clear. It emits the weapon water art but does not damage,
+change velocity, or retire the projectile (§7.3).
+
+**Established fact:** A collision that marks the projectile dead suppresses
+crossing splash because the post-collision tail is dead-gated. Bounce and
+no-explode contacts can leave it live and therefore can still emit a crossing
+splash. Smoke-trail scheduling precedes splash selection.
 
 ## 9. Impact, armor, damage, and area effects
 
 ### 9.1 Central damage pipeline
 
-**Established fact:** Projectile impact reaches a central damage path. It
-applies weapon-specific armor lookup and veterancy scaling, then defender
-modifiers and health/death handling. Normal nonlethal damage and eligible
-stationary lethal damage invoke HitByWeapon followed by TakeDamage. Mobile or
-hover lethal damage, healing, and paralyzer paths can skip that normal callback
-pair. Killed dispatch is cause-specific rather than one universal deferred
-callback rule.
+**Established fact:** Every impact — proximity, unit slot, feature, terrain,
+water, burst-clone, death explosion, burn weapon and interceptor sweep — enters
+one central impact routine, which runs this fixed order:
 
-**Established fact:** The nine-byte damage packet carries a builder tag,
-unsigned 16-bit victim and shooter ids where zero means null, a signed 16-bit
-amount, a one-byte armor/direction value, and a kind byte. There is NO
-generation token: a nonzero id converts directly to the unit base by slot
-arithmetic with no liveness probe. Victim acceptance additionally requires the
-alive status bit AND a clear death latch for every packet kind, so a reused
-active slot accepts a delayed packet intended for an earlier occupant of that
-slot. The ATTACKER receives no alive, type, or death-latch validation of any
-kind.
+1. classify the impact cell: **water** iff the cell resolves and its
+   neighbourhood-maximum height byte is below the sea-level byte;
+2. unless `noexplode`, freeze the follow camera on the record's point, load
+   `holdtime` into the camera hold counter, and set the record's dead bit;
+3. if the opaque-liquid mode is nonzero **and** the cell is water **and** there
+   is no direct unit, repeat the retirement and **return** — no shake, no
+   sound, no art, no damage;
+4. camera shake with the weapon's shake magnitude (passed twice) and shake
+   duration;
+5. sound, smoke and art selection (§13.2);
+6. the damage gate and routing below.
+
+**Established fact:** The damage gate is a property of the **projectile's own
+side**, not of the victim: damage is skipped entirely unless the player record
+named by the record's side byte exists and its controller type is not 3. Type 3
+is the remotely simulated controller (`[08 "Lobby behavior"]` maps the lobby's
+Open/Player/Computer rows onto the runtime controller types); the peer that
+owns the shot resolves its damage and sends the packet. In single player only
+types 1 and 2 occur, so the gate always passes. An earlier reading of this
+value as an unnamed "controller type value three" is now named.
+
+**Established fact:** Routing is a two-way choice, tested in this order:
+
+```
+if (areaofeffect <= 16 && directUnit != null) {
+    amount = damageOne(record, directUnit, falloff = 1.0f)   ; §9.2
+    if (record.shooter != null) { shooterFeedback(...); }    ; §9.4
+    return                                                   ; even when shooter is null
+}
+areaDamage(record, point)                                    ; §9.3
+```
+
+The area value is compared **unsigned** and the shortcut needs a direct unit,
+so an interceptor proximity hit, a terrain hit and a death explosion always
+take the area path regardless of how small the authored area is. A null shooter
+in the shortcut returns without falling through to area enumeration.
+
+**Established fact:** The per-recipient amount is computed by one shared
+routine (§9.2) and handed to the **packet builder**, which applies the
+defender-side scales and emits a nine-byte packet:
+
+```
+byte 0      constant builder tag 0x0B
+bytes 1-2   victim id, uint16, 0 when the victim pointer is null
+bytes 3-4   attacker id, uint16, 0 when the attacker pointer is null
+bytes 5-6   amount, int16 — the scaled amount truncated to 16 bits
+byte 7      direction: the HIGH byte of the 16-bit angle
+            (atan2q(record.X - victim.X, record.Z - victim.Z) - victim.heading)
+byte 8      kind
+```
+
+There is NO generation token: a nonzero id converts directly to the unit base
+by slot arithmetic with no liveness probe. Victim acceptance additionally
+requires the alive status bit AND a clear death latch for every packet kind, so
+a reused active slot accepts a delayed packet intended for an earlier occupant
+of that slot. The ATTACKER receives no alive, type, or death-latch validation
+of any kind. The builder is also the multiplayer publication point: after the
+local dispatch, a victim whose controller type is 3 causes the same nine bytes
+to be sent to the attacker's player (or to a default destination when the
+attacker is null) for every kind except 11.
 
 **Established fact:** On accepted non-heal damage the victim stores the raw
 attacker pointer plus a snapshot of the attacker's side taken at damage time;
@@ -1870,145 +2268,237 @@ EMPTY slot's stale field or on a replacement unit; the CREDITED side is always
 the earlier damage-time snapshot. A zero attacker id suppresses veterancy and
 payment entirely; a nonzero id naming an empty slot is not rejected.
 
-**Established fact:** Damage is integer/truncated at several boundaries. Lethal
-damage marks the unit for death immediately, so a later projectile in the same
-phase observes the death mark and applies no further damage. Because the unit/
-death sweep precedes projectile advancement in a master tick, a projectile
-lethal is normally consumed by the death handler on the next master tick.
-Kill credit is therefore unavailable to later projectiles in the current
-phase and cannot change one AOE traversal partway through its recipients.
+**Established fact:** The dispatcher's order is exact:
 
-**Established fact:** The packet dispatcher first rejects a missing, non-live,
-or already death-marked target. The stun flag is not a damage guard. Healing
-takes an early path that adds the packet's unsigned 16-bit amount to signed
-current health in 32-bit arithmetic, compares against maximum health as
-unsigned, and clamps when required. Healing produces no damage flash,
-reaction, attacker assignment, or damage callbacks. Every non-healing packet
-sets damage flash and enters reaction/wake/retarget handling except for packet
-kind 11. Paralyzer packets therefore produce the preliminary non-heal side
-effects even when the target later fails stun eligibility.
+1. resolve victim and attacker from their ids by slot arithmetic; the victim
+   pointer is dereferenced with no null test, so a packet carrying victim id 0
+   faults;
+2. reject unless the victim's alive bit is set and its death latch is clear;
+3. **kind 10 (heal)** takes an early exit:
+   `h = (int32)(int16)health + (uint16)amount; if ((uint32)maxHealth <= (uint32)h) h = maxHealth;`
+   stored back as int16. The comparison is unsigned, healing never divides, and
+   a zero maximum therefore clamps healed health to zero. No damage flash, no
+   reaction, no attacker assignment, no callbacks;
+4. otherwise set the damage flash; for every kind except 11 run
+   reaction/wake/retarget; record the kind byte on the victim; when the
+   attacker is nonzero store the attacker pointer and its side snapshot, and
+   raise the "under attack" interface event when either side is the local side;
+5. **kind 2 (paralyzer)** branches to §10 and never subtracts health;
+6. otherwise `health = (int16)(health - (int16)amount)` — exact 16-bit modular
+   subtraction. On a non-positive signed result: if the victim's player record
+   exists and its controller type is 1 or 2, set the death latch, **preserve
+   the modular health value** and return immediately; otherwise clamp health to
+   zero and continue to the callbacks. (An earlier reading that "the two mobile
+   controller classes" set the latch is corrected: the test is the victim's
+   player controller type, so the mobility, class and definition of the unit
+   are irrelevant, and a unit owned by an absent or remote controller never
+   dies through this path — see `[R-WPN-02 §2]`.);
+7. **kind 1 only** emits, in order,
+   `HitByWeapon(cos(a, 400), sin(a, 400))` with `a = packet.direction << 8` —
+   the two scaled-trigonometry helpers of §3.3 at magnitude 400, cosine first —
+   and then `TakeDamage(percent)` with
+   `percent = clamp((uint32)((int16)health × 100) / (uint32)maxHealth, 0, 100)`,
+   a signed 16-to-32 multiply followed by an **unsigned** divide and signed
+   clamps. Kind 11 subtracts health but emits neither callback. The division is
+   unguarded: a maximum health of zero raises the divide exception. Stock
+   definitions never author zero; the unguarded division belongs to the
+   malformed-state error policy (TODO(T25)).
 
-**Established fact:** Normal damage performs exact 16-bit modular subtraction
-from health. On a non-positive signed result, the two mobile controller classes
-set the death latch, preserve that modular health value, and return immediately;
-stationary units clamp health to zero and can continue to normal callbacks.
-Packet kind 11 subtracts health but skips reaction and callbacks. For ordinary
-kind-1 damage, callbacks are emitted in the order HitByWeapon and then
-TakeDamage. HitByWeapon receives two 400-radius trigonometric components
-derived from the packet direction byte, not a weapon ID or raw heading.
-TakeDamage receives remaining-health percentage, computed with low-32-bit
-multiply, unsigned division by maximum health, and a clamp to 0 through 100.
-The division is unguarded: a maximum health of zero raises the divide
-exception. Healing never divides: it clamps the sum to the unsigned maximum,
-so a zero maximum clamps healed health to zero. Stock definitions never author
-zero; the unguarded divisions belong to the malformed-state error policy
-(TODO(T25)).
-Healing and paralyzer packets do not emit this pair.
+**Established fact:** Lethal damage marks the unit for death immediately, so a
+later projectile in the same phase observes the death mark and applies no
+further damage. Because the unit/death sweep precedes projectile advancement in
+a master tick, a projectile lethal is normally consumed by the death handler on
+the next master tick. Kill credit is therefore unavailable to later projectiles
+in the current phase and cannot change one area traversal partway through its
+recipients.
 
 ### 9.2 Armor and veterancy
 
-**Established fact:** Weapons can carry a sorted damage override table keyed by
-the target definition's exact UnitName string. The default damage is read as
-unsigned 16-bit; a matched override is signed 32-bit. The lookup is a
-case-insensitive binary search over the sorted table. It is not a category
-lookup.
+**Established fact:** The per-recipient amount is this exact sequence. Inputs:
+the weapon's authored default damage (`DAMAGE/default`, read as **uint16**),
+the optional per-target override table, the single-precision area falloff from
+§9.3 (exactly `1.0f` on the direct-target shortcut), the shooter's kill count,
+the target's armored state and definition damage modifier, the target's kill
+count, and two global option bits.
 
-**Established fact:** Shooter veterancy scales outgoing damage by 6 percent per tier, with tier equal to kills divided by five and capped at tier five. Defender veterancy reduces incoming damage using the observed `(25 - tier) * 4 / 100` factor. Kill credit is delivered through the Killed path, and the kill counter is a wrapping word in the recovered state.
+```
+base = (uint16) weapon.defaultDamage
+if (weapon has a damage table) base = overrideLookup(base, target.UnitName)
+amount = trunc((double)base * falloff)                 ; __ftol, toward zero
+if (record.shooter != null) {
+    tier   = min((uint16)shooter.kills / 5, 5)
+    amount = (int)((tier * 6 + 100) * amount) / 100     ; signed, truncating
+}
+if (globalOptions bit 7) amount = amount * 2
+if (globalOptions bit 8) amount = amount / 2           ; signed, truncating
+                                                       ; doubling precedes halving
+-- packet builder, defender side --
+if (kind != 10) {
+    if (target.armoredState && amount < 30000)         ; strict
+        amount = (int32)(((int64)target.definition.damageModifier * amount) >> 16)
+    tier   = min((uint16)target.kills / 5, 5)
+    amount = (int)((25 - tier) * amount * 4) / 100      ; signed, truncating
+}
+packet.amount = (int16)amount                          ; modulo 65,536
+```
 
-**Supported inference:** A unit's visible “Veteran” label threshold is presentation/data behavior; the numeric damage tier is the bounded arithmetic contract. Do not conflate the two.
+Attacker veterancy therefore scales by `(100 + 6·tier)/100` and defender
+veterancy by `(25 − tier)·4/100`, both with the same five-kills-per-tier,
+five-tier cap; the defender factor is exactly 1 at tier zero. The armored-state
+scale is the definition's **16.16** damage modifier applied as a 64-bit product
+shifted right sixteen, gated on the instance's armored-state bit and on the
+incoming amount being strictly below 30,000 — which is why the fixed 30,000
+self-damage, cargo-cascade and refund packets bypass the armor scale but not
+defender veterancy. Healing bypasses both defender scales. Paralyzer packets
+use exactly this scaling before their duration credit is queued (§10).
 
-**Established fact:** A global difficulty modifier and an armor damage modifier are read by the damage path. Their exact named configuration aliases are not completely recovered, but they multiply/adjust damage before health application.
+**Established fact:** The override table is a sorted array of
+(UnitName, int32 damage) pairs, looked up by a **lower-bound binary search**
+using a case-insensitive string compare of the entry key against the target
+**definition's UnitName**:
 
-**Established fact:** The arithmetic order for a projectile recipient is:
+```
+lo = table.begin; hi = table.end
+while (lo != hi) { mid = lo + (hi - lo)/2                ; halving truncates
+                   if (stricmp(mid.key, name) < 0) lo = mid + 1 else hi = mid }
+if (lo == table.end)                       -> no override
+else if (stricmp(name, lo.key) < 0)        -> no override
+else                                        -> base = (int32)lo.value
+```
 
-1. select the UnitName override or default damage;
-2. multiply by area falloff and truncate toward zero;
-3. apply attacker veterancy and truncate the integer percentage;
-4. apply the recovered global double/half gates;
-5. if the target is in its armored state and the incoming amount is below
-   30,000, apply its fixed-point damage modifier;
-6. apply defender veterancy and truncate the integer percentage;
-7. pack the low 16 bits into the damage packet, modulo 65,536.
+The default is read unsigned 16-bit and an override is signed 32-bit, so an
+authored override may exceed 65,535 or be negative where the default cannot.
+This is a name lookup, not a category lookup. **Unknown:** the behavior of the
+search when the table is not sorted under the same case-insensitive collation
+the parser used, and the parser's handling of duplicate and malformed keys.
+*Decider:* static trace of the weapon-record parser's table construction
+(RWU-06-2 owns the parser side).
 
-The packet stores target ID, attacker ID, the modulo amount, a one-byte
-relative direction, and a kind byte. Healing bypasses the armor and
-defender-veterancy branch. Paralyzer packets use the ordinary incoming scaling
-before their unsigned 16-bit duration credit is queued.
+**Supported inference:** A unit's visible "Veteran" label threshold is
+presentation/data behavior; the numeric damage tier is the bounded arithmetic
+contract. Do not conflate the two.
 
-Funnel ownership: the armored-state scale (step 5 — the target definition's
-fixed-point damage modifier, applied as the definition scale shifted right 16
-when the instance's armored-state bit is set and the incoming amount is below
-30,000) and the defender veterancy reduction belong to this general damage
-pipeline in this document. Document 04 section 9.2 references that funnel for
-mission water damage specifically; water damage is a producer of packets into
-this pipeline, not a separate scaling path.
+**Established fact:** The global double and half gates are bits 7 and 8 of one
+16-bit options word, applied in that order (doubling first). A whole-image
+reference census of that word found writers only for bits 0–6 and 10, so both
+gates are **stock-inert**; the same word's bit 3 enables feature damage (§13.1)
+and bit 4 suppresses camera shake. **Unknown:** the configuration alias that
+would set bits 7 or 8. *Decider:* static trace over the unrecovered regions.
+
+**Established fact:** Funnel ownership: the armored-state scale and the
+defender veterancy reduction belong to this general pipeline. Document 04
+section 9.2 references that funnel for mission water damage specifically; water
+damage is a producer of packets into this pipeline, not a separate scaling
+path.
 
 ### 9.3 Area damage
 
-**Established fact:** Impact uses the direct-target shortcut only when a direct
-unit is supplied and the unsigned authored area value is at most 16. That
-shortcut applies full falloff, one, to the direct target. If the recorded
-shooter is null, the resolver returns after this direct damage rather than
-falling through to AOE. Every other case enters area enumeration. Damage is
-suppressed when the projectile's owner/controller record has controller type
-value three; the semantic name of that type remains unresolved.
+**Established fact:** The authoritative blast radius `R` in whole world units
+is `(uint16)areaofeffect >> 1`. The broad phase covers
+`cells = (R >> 4) + 1` plot cells in each direction around the impact cell,
+where the impact cell is
+`(trunc(point.Xword / 16), trunc(point.Zword / 16))` computed as
+`(v + (v >> 31 & 0xF)) >> 4` — truncation toward zero of the signed high word,
+not the arithmetic shift the collision gate uses. Each range is clamped
+independently: the low bound to zero, the high bound to the map width or
+height. It traverses rows by increasing Z, then cells by increasing X, and both
+upper bounds are **exclusive**.
 
-**Established fact:** The authoritative blast radius in world units is the
-unsigned authored area value shifted right once. The rectangular broad phase
-extends `(radius divided by 16) + 1` terrain cells around the impact cell and
-is clamped to the map. It traverses rows by increasing Z, then cells by
-increasing X. Within each cell it visits unit slot zero, unit slot one, then
-the feature/terrain candidate. Both upper map bounds are exclusive.
+**Established fact:** Within each cell the order is unit slot zero, unit slot
+one, then the feature/terrain candidate.
 
-**Established fact:** Unit distance is three-dimensional distance from the
-impact point to the nearest point of the target's inclusive model/footprint
-bounding box. The square root is truncated toward zero and reduced to the
-retail signed 16-bit world-distance value. A recipient is accepted only when
-that value is strictly less than the radius. An impact on or inside the box
-has distance zero.
+**Established fact:** A unit candidate must be nonzero **and must not be the
+record's shooter** — the shooter is unconditionally excluded from every blast,
+which is the whole of retail's self-damage policy. There is no `noselfdamage`
+key in the image at all (`[R-WPN-01 §9]`), no owner or alliance test here, and
+no other self-damage exemption: a shooter's own other units, and a shooter
+standing inside its own blast in a *different* projectile's enumeration, take
+full damage.
 
-**Established fact:** For accepted nonzero distance `d` and radius `R`, the
-falloff is exactly:
+**Established fact:** Unit deduplication happens **before** the radius test,
+against a memory of at most 20 unit pointers; a candidate already remembered is
+skipped entirely, and a candidate encountered when the memory is full is still
+processed but not remembered, so a later occurrence is processed again. An
+out-of-radius first sighting therefore consumes a memory entry.
 
-`(1 - edgeEffectiveness) * (d / R - 1)^2 + edgeEffectiveness`
+**Established fact:** Unit distance is the three-dimensional distance from the
+impact point to the nearest point of the target's **inclusive** model bounding
+box, per axis:
 
-The zero-distance value is exactly one. The executable does not clamp the
-authored edge effectiveness in this path. Base damage is multiplied by this
-single-precision falloff and truncated before attacker veterancy.
+```
+lo = unit.pos.axis + definition.boundsMin.axis
+hi = unit.pos.axis + definition.boundsMax.axis
+d.axis = (p.axis <  lo) ? lo - p.axis
+       : (p.axis >  hi) ? p.axis - hi
+       : 0
+d = (int16)( trunc(sqrt((double)dx*dx + (double)dy*dy + (double)dz*dz)) >> 16 )
+```
 
-**Established fact:** The local memories hold at most 20 unit pointers and 64
-feature-cell pointers, but they are deduplication memories rather than
-processing caps. A new candidate encountered after its memory is full is still
-processed; because it is not remembered, a later occurrence can be processed
-again. Unit deduplication happens before its radius test, so an out-of-radius
-first sighting can consume a unit-memory entry. Feature distance is checked
-before feature deduplication.
+The three deltas are raw 16.16 differences converted to the x87 stack as signed
+32-bit integers; the X and Y products are each formed as the 80-bit register
+value times its own double-precision store, the Z product is not; the square
+root is truncated toward zero by the shared conversion of `[01 §8]` and then
+reduced to a **signed 16-bit** whole-world-unit value, so a distance at or
+above 32,768 world units wraps negative and passes the acceptance test. A
+recipient is accepted only when that value is **strictly less** than `R`. An
+impact on or inside the box has distance zero.
 
-**Established fact:** Units-only suppresses the feature/terrain phase, not unit
-damage. Feature damage uses feature definition damage, flammability, and
-reclaim state and can enter ignition or burn behavior.
+**Established fact:** For accepted distance `d` and radius `R` the falloff is
+exactly
 
-**Established fact:** After unit and feature enumeration, a weapon with the
-interceptor-chain flag scans the current projectile prefix in slot order,
-skips itself and retired records, and uses a strict three-axis distance test
-against the unhalved authored area value. Each accepted projectile is sent
-through the ordinary impact selector with no direct unit target. The loop
-reloads the live pool count, so records appended while it scans can be reached.
+```
+falloff = (d == 0) ? 1.0f
+                   : (1.0f - edgeeffectiveness) * f * f + edgeeffectiveness,
+          f = (float)d / (float)R - 1.0f
+```
+
+with `d` and `R` converted from integers, the intermediate products evaluated
+on the x87 stack and the result stored back as single precision. The
+zero-distance value is exactly one. The executable does not clamp the authored
+edge effectiveness in this path. Base damage is multiplied by this
+single-precision falloff and truncated before attacker veterancy (§9.2).
+
+**Established fact:** The feature phase is skipped entirely by `unitsonly`.
+Otherwise the cell's fringe deltas resolve the anchor cell exactly as in §8.1,
+the anchor's feature word must be below `0xFFFB`, and the reference point is
+either the static feature point helper's result (when the cell's flag byte
+shows no live instance, or the instance index is zero) or the live animated
+instance's position. The distance uses the same truncate-and-narrow form and
+the same strict `< R` test, and — unlike units — the **distance is tested
+before deduplication** against a memory of at most 64 anchor-cell pointers with
+the same never-remembered-when-full behavior. Accepted features enter feature
+damage (§13.1).
+
+**Established fact:** After unit and feature enumeration, a weapon carrying the
+interceptor flag scans the current projectile prefix in slot order, skips
+itself and records whose dead bit is set, and uses the same
+sum-of-truncated-squares three-axis metric against the **unhalved** authored
+area value with a strict `<`. Each accepted projectile is sent through the
+ordinary impact selector with no direct unit target. The loop reloads the live
+pool count, so records appended while it scans can be reached. This branch
+dereferences the record's shooter without a null test when it accepts a victim,
+so an interceptor-flagged weapon fired with no shooter — a death explosion
+(§12.2) or a routed burn weapon (§13.1) — faults on its first victim. Stock
+content authors no such weapon.
 
 **Established fact:** Area processing accumulates signed enemy-damage and
-friendly-damage totals with low-32-bit wrap. Its shooter feedback helper sets
-one result flag when enemy damage is greater than twice friendly damage and a
-different result flag otherwise. This helper does not apply impulse.
+friendly-damage totals with low-32-bit wrap, classifying by comparing the
+record's side byte with each recipient's owning-player byte. Its shooter
+feedback helper runs only when the record has a shooter (§9.4).
 
 ### 9.4 Impulse and pushing absence
 
 **Established fact:** An earlier reading that blast paths write a unit
 impulse/shove field is corrected: the blast tail calls a shooter-feedback
-helper that sets one of two status bits on the SHOOTER unit — bit 6 when enemy
-damage exceeds twice friendly damage, bit 5 otherwise — and that status byte
-has no reader anywhere in the bounded corpus. There is no impulse or shove
-field, and no bounded reads turn any blast output into movement,
-mass-weighted pushing, or a separate collision resolver.
+helper that sets one of two status bits on the SHOOTER unit —
+`friendlyTotal × 2 < enemyTotal` sets bit 6, otherwise bit 5 — and that status
+byte has no reader anywhere in the bounded corpus. The direct-target shortcut
+calls the same helper with the single amount masked to 16 bits placed in the
+enemy or friendly slot according to the same side comparison. There is no
+impulse or shove field, and no bounded reads turn any blast output into
+movement, mass-weighted pushing, or a separate collision resolver. The
+`impulsefactor` and `impulseboost` keys do not exist in the image at all
+(`[R-WPN-01 §9]`).
 
 **Supported inference:** A clean-room implementation should not add blast
 displacement or mass-weighted push behavior. The shooter-status byte is
@@ -2017,43 +2507,82 @@ consumer.
 
 ## 10. Paralyzer behavior
 
-**Established fact:** Paralyzer weapons use a distinct damage packet kind. The
-incoming amount first passes the target's armored modifier when applicable and
-then defender veterancy. Healing is the exception and bypasses those scales.
+**Established fact:** A paralyzer weapon is one whose behavior flag word
+carries the paralyzer bit; the only effect of that bit inside the damage
+routine is to select packet kind 2 instead of kind 1. The incoming amount is
+scaled exactly as ordinary damage (§9.2), including the armored-state modifier
+and defender veterancy, before it becomes the stun credit; only healing bypasses
+those scales. The credit is therefore the **damage number the weapon would have
+dealt**, reinterpreted as ticks.
 
-**Established fact:** A paralyzer packet performs ordinary damage-flash,
-under-attack, packet-kind, and attacker-memory side effects before checking
-stun eligibility. Only units in the two supported mobile movement classes that
-do not have the immunity flag receive a paralyzer task. Structures, aircraft,
-and immune units receive those preliminary side effects but no stun task and
-no health damage.
+**Established fact:** A kind-2 packet performs the ordinary preliminary side
+effects in the dispatcher's fixed order — damage flash, reaction/wake/retarget,
+the recorded kind byte, the attacker pointer and side snapshot, the local-side
+"under attack" interface event — **before** any stun eligibility is tested, and
+it never subtracts health on any path.
 
-**Established fact:** The task is prepended to the unit's primary command list.
-If the current head is already the same paralyzer task, another hit adds its
-unsigned 16-bit duration credit to the head's 32-bit credit with wrap instead
-of allocating another task. The linker prepends a newly allocated task; it
-does not append or search the whole list. A paralyzer hit never subtracts
-health. If allocation fails, the visible linker path dereferences the null
-entry rather than gracefully dropping the stun.
+**Established fact:** Stun eligibility is three tests in this order:
 
-**Established fact:** The new or extended task is first handled by the next
-unit phase. On activation it caps positive signed accumulated credit above
-1,800 ticks; wrapped-negative credit is not capped. It clears
-all weapon-slot targets through the normal TargetCleared path, sets the unit's
-stunned activation flag, and turns the credit into an absolute resume tick.
-This is a scheduled wait, not a pool decremented once per tick. While the wait
-is active, the primary command-list runner is blocked. At expiry it clears the
-activation flag and removes the task.
+1. the victim's alive bit is set and its death latch is clear (re-tested here);
+2. the victim's player record exists and its controller type is 1 or 2 — the
+   locally simulated controllers, the same predicate that gates the death latch
+   in §9.1. This is **not** a movement class, an air/ground distinction, or a
+   structure test; an earlier reading naming "the two supported mobile movement
+   classes" is corrected (`[R-WPN-02 §2]`), and the practical effect in single
+   player is that every unit of a live player is eligible;
+3. the victim's definition does not carry `immunetoparalyzer`.
+
+A victim failing any of the three keeps the preliminary side effects and
+receives no stun task and no health damage.
+
+**Established fact:** The engine then resolves the task type by the authored
+alias `paralyze` and inspects only the **head** of the victim's primary command
+list. If the head already carries that task type, the packet's unsigned 16-bit
+amount is added to the head's **32-bit** accumulated credit — a plain add, so
+repeated hits accumulate with 32-bit wrap and never allocate. Otherwise a task
+object is allocated, constructed with the credit as its parameter, and
+**prepended**; the linker does not append and does not search the list. If the
+allocation fails, the visible linker path is entered with a null task and
+dereferences it rather than gracefully dropping the stun.
+
+**Established fact:** The task's first visit — the next unit-phase run of the
+victim's primary command list — is exactly:
+
+```
+if (credit == 0) { clear the stunned activation bit; complete the task }
+if (credit > 1800) credit = 1800          ; SIGNED compare: a 32-bit wrap to a
+                                          ; negative credit is NOT capped
+stop the unit's current motion
+clear all three weapon-slot targets       ; the ordinary TargetCleared path
+set the task's wait flag and its absolute resume tick = currentTick + credit
+credit = 0
+set the stunned activation bit
+```
+
+1,800 ticks is 60 seconds. This is a scheduled wait, not a pool decremented
+once per tick: nothing counts the stun down, and the task simply becomes
+runnable again at the stored tick, at which point the credit is zero and the
+first branch clears the flag and removes the task. While the wait is active the
+primary command-list runner is blocked, so a hit arriving during the wait
+lands on the same head task and extends the **credit**, not the deadline — the
+extension takes effect only when the wait expires and the task re-activates,
+which is the retail behavior a clone must reproduce rather than adding the
+remainder to the deadline.
+
+**Established fact:** The stunned flag is a bit of the unit's activation-state
+byte, distinct from the `ACTIVATION` bit in the same byte. The shared setter
+raises `Activate`/`Deactivate` for the activation bit, `StartBuilding`/
+`StopBuilding` for the build bit and the cloak presentation events for the
+cloak bit; it has no case for the stunned bit, so setting or clearing the stun
+raises **no COB callback**. The ordinary death latch is a different unit status
+flag and must not be used as the stunned state.
 
 **Established fact:** Damage, healing, death, economy settlement, cloak/upkeep,
-and the eight-tick automatic-heal path are outside that blocked task runner and
-can continue while the unit is stunned. Paralyzer weapon targeting explicitly
-rejects a target already carrying the stunned activation flag. Standard
-save/load serializes the task and its duration state.
-
-**Established fact:** No dedicated stun or wake COB callback and no per-tick
-duration decrementer exist in the bounded image. The ordinary death latch is a
-different unit status flag and must not be used as the stunned state.
+and the eight-tick automatic-heal path are outside the blocked task runner and
+can continue while the unit is stunned. Automatic acquisition and retention
+(§3.2) reject a target already carrying the stunned bit **only for a paralyzer
+weapon**; ordinary weapons ignore it. Standard save/load serializes the task
+and its duration state.
 
 ## 11. Stockpile and interceptor behavior
 
@@ -2067,6 +2596,20 @@ completed-round remainder. In the recovered stockpile-production branch, one
 completed round increments the slot byte, decrements the queue-node count, and
 then requests a selected-unit interface refresh. The refresh helper itself does
 not mutate either value and does not clamp an integer queue count into the byte.
+
+**Established fact:** The queue node and the slot are wired as follows, and an
+implementation needs the wiring before the arithmetic below means anything. A
+stockpile node lives in the unit's **secondary** production queue — a singly
+linked list walked from its head through a next link — and is distinguished
+from other nodes in that list by one node flag bit. The node carries a signed
+requested count, an integer **progress** value, and a **slot index** that is
+the caller-supplied build-type argument stored verbatim. That slot index
+selects the unit's weapon slot directly, and the weapon record found there
+supplies the `reloadtime`, `energypershot` and `metalpershot` the visit uses.
+The interface reads the same three fields: the build-page percentage for a
+stockpile item is exactly `progress * 100 / reloadtime`, an integer divide, so
+progress is denominated in the same units as the compiled reload time and the
+cap below is a full round.
 
 **Established fact:** Each stockpile work visit advances a per-node progress
 value by five, capped at the selected weapon's compiled reload-time value. The
@@ -2112,22 +2655,37 @@ slot-byte persistence remain open.
 ### 11.2 Interceptors
 
 **Established fact:** Targetable and interceptor flags are parsed. Interceptor
-coverage is a separate scalar from ordinary fire range. Automatic interceptor
-acquisition requires nonzero slot ammunition and scans the current packed
-projectile prefix in increasing order. It selects the first candidate whose
-owner byte differs (alliance is not consulted), whose weapon is targetable,
-whose stored X and Z
-coordinates are each inside inclusive coverage bounds, and which is not
-already referenced by any projectile's reservation link.
+coverage is a separate authored scalar from ordinary fire range. The automatic
+interceptor scan runs from the same per-slot position in the autonomous scan
+that ordinary acquisition runs from (§3.2) and is chosen by the slot weapon's
+interceptor flag; it requires a nonzero slot ammunition byte and then walks the
+packed projectile prefix from index zero to the live count captured at entry,
+accepting the first candidate that satisfies, in this order: an owner side byte
+different from the interceptor unit's owning-player byte (the alliance matrix
+is not consulted); the candidate weapon's `targetable` flag; the inclusive
+coverage square below on the candidate's **stored aim point**; and a full
+second pass over the same prefix finding no record whose projectile-link field
+already names this candidate. A hit installs a **point** target on the slot
+from the candidate's current position; a miss clears the slot target through
+the ordinary path. Neither pass filters on the dead bit.
 
 **Established fact:** The acquisition coverage is an axis-aligned square, not
 a radius circle, and tie order is first unclaimed in projectile-pool order,
-not nearest. Each axis is implemented as a wrapped unsigned comparison around
-coverage in fixed-point units; the square/absolute-distance description
-applies to ordinary nonnegative coverage without overflow. Two different
-positions play two different roles and must not be conflated: **the scan
-metric** is measured on the candidate's *stored aim point* — where the
-threat was aimed when created, so interceptors defend the aimed-at ground
+not nearest. Each axis is a wrapped unsigned comparison, written out:
+
+```
+C = weapon.coverage                                   ; authored world units
+accept axis iff (uint32)((interceptor.axis - candidate.storedTarget.axis)
+                         + (C << 16)) <= (uint32)(C << 17)
+```
+
+evaluated for X and then Z on the 16.16 values, which is `|delta| <= C` in
+world units for ordinary nonnegative coverage and is **inclusive** at the
+boundary; the unsigned form means an authored coverage at or above 32,768
+world units, or a delta that overflows the addition, accepts a different set.
+Two different positions play two different roles and must not be conflated:
+**the scan metric** is measured on the candidate's *stored aim point* — where
+the threat was aimed when created, so interceptors defend the aimed-at ground
 point — while **the slot store** written at acquisition packs the candidate's
 *current position* into the interceptor unit's fixed target words. The
 interceptor spawner rescans immediately before firing; the final candidate's
@@ -2188,77 +2746,186 @@ definition, `EARTHQUAKE`.
 
 ### 12.1 Unit death
 
-**Established fact:** Unit health is updated by the central damage path. Mobile
-lethal damage sets the death latch and records the damage-packet kind as the
-death cause. The next unit phase enters the death preamble. Other scenario,
-teardown, and game-over paths can enter the same handler with explicit causes.
+**Established fact:** Unit health is updated by the central damage path. Lethal
+damage on a unit whose player controller type is 1 or 2 sets the death latch
+and records the damage-packet kind as the death cause (§9.1). The next unit
+phase enters the death preamble. Other scenario, teardown, and game-over paths
+can enter the same handler with explicit causes.
 
-**Established fact:** For the full lethal pipeline, severity is integer
-arithmetic:
+**Established fact:** The preamble runs on a unit whose alive bit is set and
+does, in order:
 
-`clamp((floor((-health) * 100 / maxDamage) + previousSamplePercent) / 2, 1, 100)`
+1. compare the unit's definition `UnitName` case-insensitively with the
+   commander name of the side definition named by the unit's owning player; on
+   a match, clear the commander-alive bit on that player record. This is the
+   marker the campaign and skirmish end conditions poll `[08 "Evaluation"]`;
+2. select severity and the corpse-chain variant by cause;
+3. build the eleven-byte death packet;
+4. when the unit's controller type is 1 or 2, publish that packet to the
+   owning player's network destination (multiplayer only);
+5. call the central death handler in **local** mode;
+6. for a commander death with the commander-death rule word nonzero and a
+   locally simulated owner, enter the game-over path `[08 "Evaluation"]`.
 
-The division by two truncates. `previousSamplePercent` is the health percentage
-retained from the previous 30-tick sampling boundary, not necessarily the
-health immediately before the lethal packet.
+**Established fact:** Severity is integer arithmetic on the already-negative
+health:
 
-**Established fact:** The synchronous Killed query receives severity and a
-mutable corpse-chain value and drains the unit's script threads inline. The
-death packet packs `(cause << 4) | (variant & 0x0F)`; an earlier reading that
-"the death packet stores the low four bits of the returned value as a
-corpse-chain depth and the high four bits as the death cause" is corrected:
-the HIGH nibble is the death cause, taken from the packet's cause argument —
-the last damage-kind byte recorded at damage time — and is not part of the
-script return at all. The LOW nibble is the query's second output cell, which
-shipped Killed bodies write through their second parameter (see §12.1's
-authorship note below); an explicit script `return` is delivered to a
-completion receiver (none is installed for this query) or dropped, and never
-rewrites either nibble. This value is not a wreck
-probability. If the returned depth is zero, no corpse is placed; depth one
-selects the authored Corpse feature; larger depths follow that feature's
-featuredead link exactly `depth - 1` times, stopping on the no-feature
-sentinel.
+```
+severity = clamp( ( (uint32)((int16)health * -100) / (uint32)maxHealth
+                    + (uint8)previousSamplePercent ) / 2, 1, 100 )
+```
 
-**Established fact:** Local authoritative death does not issue a second Killed
-callback after the synchronous query. It passes the completed death packet to
-the central handler in local mode. The received-network path calls that same
-handler in replay mode; only replay mode dispatches Killed asynchronously, and
-only when signed packet severity is positive. Its return value is ignored.
-Cause-specific branches can bypass script work, explosion, or corpse
-production; not every removal follows the full lethal pipeline.
+The multiply is a signed 16-to-32 multiply by -100; the divide by maximum
+health and the halving are **unsigned**; the clamp bounds are applied with
+signed compares. `previousSamplePercent` is the health percentage retained from
+the previous 30-tick sampling boundary, not necessarily the health immediately
+before the lethal packet.
 
-**Established fact:** The severity bypass map is exact. Causes 4, 5, and 9 skip
-the synchronous Killed query entirely: severity forced zero,
-variant/corpse-depth nibble forced zero, no script callbacks, no explosion,
-and no corpse. Cause 7 skips the query with severity forced zero and variant
-forced one; the authored Corpse feature stamps immediately. A request arriving
-while health is still positive skips the query and uses severity and variant
-zero. A nonzero remaining-build-fraction float forces the selected variant to
-zero AFTER any query ran; the same float gates the death explosion and
-veterancy and scales the cause-5 bounty. The full pipeline — any cause outside
-{4, 5, 7, 9} with health at or below zero — pushes the computed severity into
-the query, drains all of the unit's script threads inline, and copies back
-severity plus the script-selected variant; absent a Killed body, the variant
-cell keeps its caller-indeterminate value except where the build-fraction rule
-forces zero.
+**Established fact:** The severity/variant bypass map is exact, tested in this
+order:
+
+| cause | severity | variant | `Killed` query |
+|---|---|---|---|
+| 7 (immediate feature conversion) | 0 | 1 | skipped |
+| 4, 5, 9, or **any** cause while health is still positive | 0 | 0 | skipped |
+| everything else | the expression above | script-selected | **runs** |
+
+Causes 4, 5 and 9 therefore produce no script callbacks, no explosion (severity
+is not positive) and no corpse (the variant nibble is zero); cause 7 stamps the
+authored `Corpse` feature immediately with no script work. After the query
+returns, a nonzero remaining-build-fraction float forces the variant to zero —
+the same float gates the death explosion and veterancy and scales the cause-5
+bounty.
+
+**Established fact:** The `Killed` query is **synchronous**: it passes severity
+and the variant cell as two in/out cells and drains the unit's script threads
+inline. Its two cells are the script's two parameters. The variant cell is
+**uninitialized** on the full-pipeline path — it holds caller-indeterminate
+stack history when no `Killed` body writes it — except where the
+build-fraction rule forces zero.
 
 **Established fact (Killed authorship):** A bytecode census of the shipped COB
 corpus settles the variant-cell authorship question: every shipped unit with a
-Killed body (153 of 157 extracted scripts) declares the two-parameter form and
-writes its second parameter — the corpse-depth cell — and none reassigns the
-severity cell, so the packet severity is always the computed severity and the
-depth nibble is always authored. The four remaining shipped scripts (the two
-commanders and the two dragon bosses) have no Killed body; their variant cell
-is deterministic-but-opaque stack history unless the build-fraction rule
+`Killed` body (153 of 157 extracted scripts) declares the two-parameter form
+and writes its second parameter — the corpse-depth cell — and none reassigns
+the severity cell, so the packet severity is always the computed severity and
+the depth nibble is always authored. The four remaining shipped scripts (the
+two commanders and the two dragon bosses) have no `Killed` body; their variant
+cell is deterministic-but-opaque stack history unless the build-fraction rule
 forces zero.
 
-**Established fact:** Death credit is a cause-gated switch, not merely the
-presence of an attacker. The ordinary and cargo causes share the full-credit
-path; one special cause joins conditionally, one has a partial path, and all
-other observed causes credit nobody. The full path updates controller/player
-statistics and increments the attacker's wrapping kill word only when the
-attacker and side gates pass. That death statistic is not a field of the unit
-definition.
+**Established fact:** The death packet is eleven bytes:
+
+```
+byte 0       constant builder tag 0x0C
+bytes 1-2    victim id, uint16
+bytes 3-6    the attacker's side, encoded by the shared side-to-word helper
+bytes 7-8    attacker id, uint16, 0 when the stored attacker pointer is null
+byte 9       severity, signed
+byte 10      (cause << 4) | (variant & 0x0F)
+```
+
+The HIGH nibble is the death cause, taken from the last damage-kind byte
+recorded at damage time, and is not part of the script return at all; the LOW
+nibble is the query's second output cell. An explicit script `return` is
+delivered to a completion receiver (none is installed for this query) or
+dropped, and never rewrites either nibble. This value is not a wreck
+probability.
+
+**Established fact:** Local authoritative death does not issue a second
+`Killed` callback after the synchronous query. The received-network path calls
+the same handler in **replay** mode; only replay mode dispatches `Killed`
+asynchronously, with one argument (the packet's severity byte) and only when
+that signed byte is positive. Its return value is ignored.
+
+**Established fact:** The central handler resolves the victim from the packet
+id by slot arithmetic **with no null test** — a packet naming id zero faults —
+and returns immediately unless the victim's alive bit is set. It then, in this
+order: raises a 60-tick locator presentation event when the victim's ally group
+matches the local viewer's; reconstructs the attacker pointer from the packet
+id and the attacker side from the packet's encoded side; runs the fixed
+teardown helpers (statistics hook, order/queue release, audio release,
+occupancy unstamp with the removal sentinel, and the burst-anchor sweep of
+§5.2); detaches the victim from its carrier when it has one; runs the cargo
+cascade; dispatches replay-mode `Killed`; runs the credit switch; runs the
+leader announcement; applies the cause-5 bounty; fires the death explosion;
+places the corpse; and finally tears down the script, mover and definition
+references, clears the alive bit and the two low status bits, points the unit
+at the shared dead definition, and decrements the owning player's live-unit
+count — at zero, multiplayer sessions notify the peer and skirmish sessions run
+player elimination.
+
+**Established fact:** The cargo cascade is a `while` loop over the victim's
+cargo list head. Each cargo unit receives a **30,000** damage packet through
+the ordinary builder — so it is scaled by defender veterancy but not by the
+armored-state modifier, whose gate is a strict `< 30,000` — with the attacker
+argument set to the **victim's own killer**, and is then detached. The cause
+passed is 3 when the carrier's own cause nibble is 3 and 6 otherwise.
+
+**Established fact:** Death credit is a cause-gated switch on the packet's
+cause nibble, not merely the presence of an attacker:
+
+* **causes 1 and 6** take the full path;
+* **cause 3** takes a partial path: the victim's player unit-loss counter and,
+  for a commander, its commander-loss counter are incremented, and only when
+  the local player's alliance byte for the victim's ally group is zero. No kill
+  credit, no veterancy;
+* **cause 5** joins the full path only when the stored attacker side is neither
+  the neutral side value 10 nor the victim's own owner byte;
+* every other cause credits nobody.
+
+The full path does, in order: increment the victim player's unit-loss counter;
+increment the **attacker player's** kill counter when the attacker side is not
+10, the victim's remaining-build-fraction float is exactly zero, and the
+victim's owner differs from the attacker side; for a commander victim,
+increment the attacker player's commander-kill counter (attacker side not 10)
+and the victim player's commander-loss counter; increment the **attacker
+unit's** wrapping kill word under the same three conditions — through the
+reconstructed, unvalidated pointer, which is where a stale slot can be
+credited; and raise an interface event when the attacker side is the local
+side. None of these counters is a field of the unit definition.
+
+**Established fact:** After a crediting death the engine maintains a
+per-player leaderboard rank byte and can broadcast a lead message. The rank
+update runs only when the attacker's player record is active, its controller
+type is 1, 2 or 3, its ally byte is not 10, the session mode is skirmish or
+multiplayer, and its current rank is not already zero. The compared score is
+the player's **commander**-kill counter when the commander-death rule word is
+2 and the ordinary kill counter otherwise. It computes `best` as the minimum
+rank over the other player records that are present and not excluded by a
+runtime bit and whose score is **strictly less** than the attacker's; when
+`best` is strictly better than the attacker's current rank, every player whose
+rank lies in `[best, myRank)` is pushed down by one and the attacker takes
+`best`. Only when `best` is exactly zero — the attacker newly becomes sole
+leader — is the localized message `%s has taken the lead with %d kills`
+formatted and broadcast on the in-game message channel. Its two arguments are
+the player's name and the **unit** kill counter, even in the rule-2 session
+where the ranking used commander kills. It is per player, never per team, and
+it is re-announced only on a later transition back to rank zero.
+
+**Established fact (`selfdestructcountdown`, closing a never-mentioned key):**
+The authored `selfdestructcountdown` is read from the FBI as a decimal string,
+masked to **three bits** (`value & 7`) and packed into a three-bit field of the
+definition's second flag word; an absent key stores **5**. The self-destruct
+task reads it once, on its first visit, into its own counter (tagged so a
+restarted task does not re-seed), and then runs one visit per wait:
+
+```
+if (counter == 0) { mark fired; announce message[0]; wait simulationRandom(15) ticks }
+else               { announce message[counter]; counter -= 1; wait 30 ticks }
+```
+
+and on the visit **after** the fired mark it emits a 30,000-damage packet with
+the unit as both attacker and victim and cause 3. So the countdown is `N`
+whole seconds of announcements followed by a uniform **0–14 tick** jitter drawn
+once from the simulation stream, and the damage lands on the next visit after
+that wait. A cancel request during the countdown emits the abort message and
+completes the task without damage, provided the death latch is still clear. A
+definition whose three-bit field holds 0 skips the announcements entirely and
+detonates on the first visit. The announcement table has exactly **six**
+entries (counts 5 down to 0), so a field value of 6 or 7 indexes past it on the
+first visit; stock content authors no such value. `[04 §3]` owns the order that
+installs this task.
 
 **Established fact:** The complete located producer set for death causes is:
 
@@ -2313,6 +2980,18 @@ statistics result even though the explosion damages every side alike. **Cargo
 killed by carrier death credits the carrier's killer**: the cascade applies its
 30000 damage per cargo with the attacker argument set to the carrier's killer.
 
+**Established fact:** The cause-5 bounty is
+`(1.0f - victim.remainingBuildFraction) * victimDefinition.metalCost`,
+accumulated into the attacker unit's resource-credit float. When the attacker's
+owning player is a computer controller, that increment is scaled by 0.5 on
+difficulty 0 and 0.7 on difficulty 1 and is unscaled on any other difficulty;
+a human-owned attacker is never scaled. Document 05 owns where the accumulator
+is settled. **Supported inference:** the player reference the difficulty gate
+reads is the attacker's owning player; the unit record carries a second player
+reference at that site and the two have not been proved identical. *Decider:*
+static trace of the unit record's second player reference (RWU-05-3 owns the
+reclaim credit).
+
 **Established fact:** The unit float that gates the death explosion is the
 remaining-build-fraction/landed indicator shared with construction and flight
 state — one with health zero under construction, zero when grounded or normal,
@@ -2321,37 +3000,114 @@ under construction do not detonate through this path.
 
 ### 12.2 Wreckage and feature placement
 
-**Established fact:** Corpse creation enters the common feature stamper at the
-victim's anchor cell. It validates the entire footprint, allocates feature
+**Established fact:** The corpse step runs when the packet's variant nibble is
+nonzero, and takes the nibble as a **depth**:
+
+```
+f = definition.corpseFeature                 ; resolved from the authored Corpse name
+while (depth >= 2) {
+    if (f > 0xFFFA) return                   ; chain ran into a sentinel: no corpse
+    depth = depth - 1
+    f = featureDefinition[f].featuredead     ; follow the successor link
+}
+if (f >= 0xFFFB) return
+```
+
+so depth one places the authored `Corpse` feature and depth *n* follows
+`featuredead` exactly `n − 1` times, stopping on the no-feature sentinel with
+nothing placed. A depth of zero never reaches this step.
+
+**Established fact:** Placement uses the victim's stamped anchor cell and the
+common feature stamper, which validates the entire footprint, allocates feature
 animation state, stamps blocking/filler cells, and notifies path revision.
 Blocked or clipped placement fails silently: the engine does not choose a
 fallback heap, shift to a nearby cell, retry, or preserve the dying unit.
 
-**Established fact:** Land and water use the same selected corpse definition.
-Successful land placement can emit the ordinary ground notification. Water
-placement instead patches the placed animation state for sinking and suppresses
-that notification.
+**Established fact:** Land and water use the same selected corpse definition;
+the branch is decided by the **bilinear terrain height** at the victim's exact
+16.16 position — the four surrounding plot cells' corner-height bytes
+interpolated with truncating divides by 16 — compared against the sea-level
+byte:
 
-**Established fact:** When the cause and severity gates request a death
-explosion — packet severity positive and the remaining-build-fraction float
-exactly zero — the handler selects between the unit's TWO resolved
-death-weapon fields: the self-destruct field when the cause nibble is 3, the
-explode field otherwise. Both resolve from the authored `selfdestructas` and
-`explodeas` names at catalog load; an unresolved or absent name produces no
-explosion at all (there is no third default candidate in the executable). It
-constructs an ordinary projectile-shaped impact record at the
-victim's position with its current velocity, and calls the central impact
-path. The explosion is authoritative: it can deal armor-scaled direct/area
-damage and trigger the normal feature and sound effects. It is not merely a
-presentation event.
+* `interpolatedHeight > seaLevelByte` — land: place, and keep the caller's
+  ground-notification request;
+* otherwise — water: place, and when the placement succeeded and the **dying
+  unit's** definition does not carry `isfeature`, patch the placed animation
+  state's first two motion words to `-11468` and `0`, which is the fixed
+  sinking rate; then force the ground notification off.
 
-**Established fact:** Feature definitions can carry energy, metal, damage, burn weapon, spark time, flammability, geothermal, blocking, reclaimable, autoreclaimable, and indestructible behavior.
+The ground notification, when it survives, is the ordinary ground effect event
+with the wreck effect id and parameter 900. The caller passes it as false for
+cause 7, so an immediate feature conversion never raises it either.
+
+**Established fact:** The death explosion runs when the packet's signed
+severity byte is **strictly positive** and the remaining-build-fraction float
+is exactly zero. It selects between the unit's TWO resolved death-weapon
+fields: the self-destruct field when the cause nibble is 3, the explode field
+otherwise. Both resolve from the authored `selfdestructas` and `explodeas`
+names at catalog load; an unresolved or absent name produces no explosion at
+all (there is no third default candidate in the executable).
+
+**Established fact:** The explosion is delivered by building a
+projectile-shaped record on the stack and calling the central impact path with
+no direct unit. That record carries only: the selected weapon definition; the
+current point and the second point, both set to the dying unit's position; a
+null target unit; a **null shooter**; and the dying unit's owning-player byte
+as the side. Its velocity words and state byte are left uninitialized and are
+never read on this path — an earlier reading that the record carries "its
+current velocity" is corrected (`[R-WPN-02 §5]`). Three consequences follow
+from the null shooter and null direct unit, and a clone must reproduce all
+three: the impact always takes the **area** path however small `areaofeffect`
+is; attacker veterancy is not applied and no kill credit or veterancy accrues
+from the blast; and the shooter-feedback helper is skipped. The blast is
+otherwise authoritative — armor-scaled area damage, feature damage, sounds and
+effects — and is not merely a presentation event. Because the area path
+dereferences the shooter without a null test in its interceptor sweep (§9.3),
+an `explodeas` weapon carrying the interceptor flag would fault; no stock
+weapon does.
+
+**Established fact:** Feature definitions can carry energy, metal, damage, burn
+weapon, spark time, flammability, geothermal, blocking, reclaimable,
+autoreclaimable, and indestructible behavior. Of those, this document owns only the
+two the weapon path reads — the damage capacity the accumulator of §13.1
+compares against, and the flammability and indestructible flags that route it;
+`[05 "Feature catalog and placement"]` and `[fmt tdf]` own the rest.
 
 ## 13. Weapon-driven feature, fire, audio, and effect events
 
 ### 13.1 Feature damage and fire
 
-**Established fact:** Feature damage reads feature damage and weapon firestarter/burn weapon data. Flammable features can allocate burn state, select a random spark deadline through one draw of `simulationRandom(sparktime / 2) + (sparktime / 2)`, and emit a treeburn/fire event. The feature phase runs every simulation tick; animation advance and burn countdown decrement run every tick; only smoke emission is gated on `globalTick % 3 == 0`.
+**Established fact:** Feature damage is a separate, much simpler accumulation
+than unit damage, and reuses none of §9.2. It is gated first on bit 3 of the
+global options word — the same word that carries the double/half damage gates
+(§9.2) — and then on the cell resolving to a live feature whose definition does
+not carry the indestructible flag. The amount applied is the weapon's authored
+**default damage word** exactly: no area falloff, no armor table, no attacker
+or defender veterancy, no global double/half gate. The accumulator is the
+feature's own, not the weapon's:
+
+```
+if (featureDefinition.flammable && weapon.firestarter != 0 && cell has no live instance)
+    ignite this cell                                    ; §13.1 fire records
+else if (cell has no live instance)
+    acc = (uint16)weapon.defaultDamage + (uint16)cell.accumulatedDamage
+    if (acc < featureDefinition.damageCapacity) cell.accumulatedDamage = acc
+    else                                        destroy the feature at this cell
+else if (!featureDefinition.animatedFlag)
+    instance = the cell's live animation instance      ; must still anchor here
+    instance.damage += (int16)weapon.defaultDamage
+    if (instance.damage >= featureDefinition.damageCapacity) destroy at its anchor
+```
+
+The static accumulator is the plot cell's anchor-delta byte pair reused as
+accumulated blast damage while no live instance is attached
+(`[03 §2.2]`), so a feature that is ignited or animated stops
+accumulating there. The comparison against the definition's damage capacity is
+`<` for "survives" and therefore `>=` for destruction. Ignition takes
+precedence over damage: a flammable feature hit by a weapon with a nonzero
+firestarter never accumulates damage on that hit.
+
+**Established fact:** Ignition allocates burn state, selects a random spark deadline through one draw of `simulationRandom(sparktime / 2) + (sparktime / 2)`, and emits a treeburn/fire event. The feature phase runs every simulation tick; animation advance and burn countdown decrement run every tick; only smoke emission is gated on `globalTick % 3 == 0`.
 
 **Established fact:** Fire spread uses the candidate's spread chance and simulation RNG, scans at most 48 candidates in a 7 by 7 window excluding the origin in row-major order, and makes five cumulative wind-direction attempts that collapse to no draws at zero wind. Drawing occurs only after every cheap legality check (off-map, empty, already attached, not flammable). Spread consults the candidate's own `spreadchance`, never the burning feature's. Burn weapons route back through the ordinary projectile and area-damage subsystem after both spread passes: the burn weapon's impact is built as a synthetic projectile-shaped record with a NULL shooter and a zeroed side byte and pushed through the ordinary area enumeration, so burn-weapon damage awards no veterancy and no kill credit; the friendly/enemy damage-sum classification compares side zero against each recipient. An earlier inference that attribution equals the igniting projectile's side is corrected.
 
@@ -2381,7 +3137,16 @@ routed burn weapons, and malformed burn cases.
 
 ### 13.2 Sound and smoke events
 
-**Established fact:** Start, hit, water, and trigger sounds are selected from weapon definition fields. Start smoke and smoke trail are emitted at spawner/tick boundaries; end smoke is selected by the expiry/impact path. Sound-trigger burst emissions are separate from Fire/RockUnit callback cadence.
+**Established fact:** Four sound identities are read from the weapon record and
+each has exactly one producer: the **start** sound is played by the common
+projectile initializer, before the Fire callback (§4.1); the **hit** sound and
+the **water** sound are the two arms of the central impact's sound selection
+below; and the **trigger** sound is played by a burst clone's creation when the
+weapon carries `soundtrigger` (§4.3). All four are played through the same
+emitter with the impact or muzzle point and a zero third argument. Start smoke
+and smoke trail are emitted at spawner/tick boundaries; end smoke is selected
+by the impact path. Sound-trigger burst emissions are separate from
+Fire/RockUnit callback cadence.
 
 **Established fact:** Start puff (start-smoke flag) emits ONLY from successful
 root creation inside the three ordinary spawners — ordinary/direct,
@@ -2431,6 +3196,113 @@ retires the record regardless of no-explode.
 
 **Unknown:** Exact renderer interpolation, frame lifetime, particle pooling, and visual ordering are intentionally outside this document.
 
+### R-WPN-02 — acquisition, collision, damage and death arithmetic pass, corrections and closures
+
+Five corrections and five closures from the 2026-08-29 arithmetic pass over
+§§3.1–3.2, §5, §6.9–6.10, §8, §9, §10, §11, §12 and §13.1. Each states what the
+previous text said and why it was wrong, so the reversal is auditable.
+
+**§1 — the candidate lists ARE rebuilt on a cadence.** Previous text: "An
+earlier reading that the candidate lists themselves are 'rebuilt on a cadence
+of at least 30 ticks' is corrected: the 30-tick cadence is the scan throttle
+and the unrelated per-unit state refresh, not a candidate-list rebuild." Both
+mechanisms exist and are separate. The per-side target registry that owns both
+candidate lists is rebuilt from the whole unit array only when
+`lastRebuild + 30 <= currentTick`, once per side, from the per-player phase,
+consuming one simulation draw of bound 30; and *independently* the autonomous
+target scan walks a fraction of each player's own units every tick. A clone
+that keeps only the throttle re-derives the candidate list too often — the
+observable difference is that retail can acquire a unit that has been dead, or
+newly visible, for up to thirty ticks.
+
+**§2 — the death latch and the paralyzer gate read the victim's PLAYER
+controller type.** Previous text: "the two mobile controller classes set the
+death latch" (§9.1) and "Only units in the two supported mobile movement
+classes that do not have the immunity flag receive a paralyzer task.
+Structures, aircraft, and immune units receive those preliminary side effects
+but no stun task" (§10). There is no movement, class or structure test at
+either site: both read the victim's owning **player record** and require its
+controller type to be 1 or 2 — the locally simulated human and computer
+controllers, as against 3 (remote) and 0 (empty). Written as a movement class
+the rule inverts for every structure in the game: retail stuns and kills
+buildings exactly as it does tanks. The same predicate appears a third time as
+the damage gate on the *projectile's* side (§9.1), where type 3 routes the
+shot's damage to the owning peer instead.
+
+**§3 — the direct-visibility predicate runs at list-rebuild time, not per
+acquisition.** Previous text: "The candidate array itself is built fresh on
+every acquisition attempt from those lists, with planar distance and a
+direct-visibility predicate as admission." The per-attempt filter tests only
+planar distance, the alive bit and the death latch; visibility ran when the
+registry was rebuilt, up to thirty ticks earlier. This is why an implementation
+that re-tests visibility per attempt will differ from retail on exactly the
+units whose visibility changed inside a cadence window.
+
+**§4 — radar jamming has an authoritative effect.** Previous text: "overlap is
+last-writer-wins and never ORs into the word mask, so jamming has no
+authoritative effect beyond presentation." True of the minimap surfaces, false
+of the unit status word: the radar-jam pass **clears** the same runtime *seen*
+bit that the secondary candidate list is built from, so a jammed hostile unit
+drops out of every side's fallback acquisition list until the line-of-sight
+pass or an allied-vision pass sets the bit again later in the same tick.
+
+**§5 — the death explosion record carries no velocity and no shooter.**
+Previous text: "It constructs an ordinary projectile-shaped impact record at
+the victim's position with its current velocity." The record is a stack
+structure carrying the selected weapon, the victim's position as both the
+current and second point, a null target, a **null shooter** and the victim's
+owning-player byte; its velocity words are never written and never read. The
+null shooter is the load-bearing part: it forces the area path regardless of
+`areaofeffect`, suppresses attacker veterancy and the shooter-feedback bits,
+and would fault in the interceptor sweep if such a weapon were authored.
+
+**§6 — closure: the secondary "radar-like" candidate list is the local
+observer's seen set.** Listed since the first lane-06 pass as the document's
+largest open item ("semantic identity and writers of the secondary radar-like
+candidate list"). The list holds hostile units carrying one runtime status bit,
+and that bit is rewritten every tick by the sensor phase from the **local
+player's** perspective through four ordered passes — own/allied-with-shared-
+vision, radar and sonar circles, jam circles, then line of sight. §3.1 states
+the arithmetic, including the radar circle's `radardistance + 2 × height`
+elevation bonus. What remains open is narrower and is now the tail's bullet:
+the authored key behind the definition flag that arms the list, and whether any
+producer of the bit exists outside the recovered sensor phase.
+
+**§7 — closure: the projectile record's cached floor value is presentation.**
+Listed as "consumer of the projectile record's cached average-height scratch
+value outside the projectile family; the layout hole is preserved for it". The
+collision gate writes it on every in-map tick as the plot cell's
+`(neighbourhoodMax + neighbourhoodMin) / 2`, and its only reader anywhere in
+the corpus is the projectile draw pass, which subtracts half of it from the
+screen position. No simulation reader exists.
+
+**§8 — closure: `selfdestructcountdown`.** One of the never-mentioned FBI keys
+of the plan's vocabulary audit. It is parsed as a decimal string, masked to
+three bits and packed into a definition flag field that defaults to **5**. The
+self-destruct task seeds its own counter from it once, announces one message
+per 30-tick visit while counting down, and on reaching zero waits a single
+`simulationRandom(15)` draw before emitting the 30,000-damage self packet with
+cause 3 (§12.1).
+
+**§9 — closure: the kill-leader announcement.** Raised by the string triage as
+"`%s has taken the lead with %d kills` … the comparison, whether it is per
+player or per team, and its broadcast scope" (RWU-06-4 in
+PLAN_RESEARCH_COMPLETION_QUESTIONS.md). It is per **player**, driven by a
+per-player rank byte maintained inside the crediting branch of the death
+handler, uses a **strictly less** score comparison, ranks on commander kills
+when the commander-death rule word is 2 and on unit kills otherwise, and
+announces only on a transition to rank zero — while always printing the unit
+kill counter. It is broadcast on the in-game message channel in skirmish and
+multiplayer sessions only (§12.1).
+
+**§10 — closure: retail's self-damage policy is the shooter exclusion.** The
+`noselfdamage` key does not exist in the image (`[R-WPN-01 §9]`), which left
+open what retail does instead. Area enumeration excludes exactly one unit —
+the record's stored shooter — before any radius test, with no owner or
+alliance test anywhere in the loop. Every other unit of the shooter's own side
+takes full damage, and the shooter itself takes full damage from any *other*
+projectile's blast.
+
 ## 14. Evidence basis and correction boundaries
 
 The combat sections above were derived only from these areas of the retail executable:
@@ -2466,14 +3338,26 @@ interceptor behavior, sound-trigger burst cadence, and corpse-creation
 ordering each opened a bullet with "is closed" and then recited the finding.
 Those recitals are deleted here only; §§8–13 continue to own them.
 
+**Correction (2026-08-29, RWU-06-1b).** Two bullets of the "Catalog and
+targeting" group asked for the identity and writers of the secondary
+"radar-like" candidate list and whether its "targeting-upgrade aggregate" gate
+has any reader. Both are answered in §3.1 and `[R-WPN-02 §6]` — the list is the
+local observer's seen set and the gate is read by the list builder, which the
+earlier bounded search did not cover — so they are replaced here by the two
+residuals that survive. The "cached average-height scratch value" bullet is
+removed: `[R-WPN-02 §7]` names its only reader.
+
 ### Catalog and targeting
 
-- Semantic identity and writers of the secondary radar-like candidate list,
-  and the complete sonar and jammer interactions outside the closed primary
-  direct-visibility list · §3.1, doc 03 §3.3 · static trace.
-- Whether the "targeting-upgrade aggregate" gate has any reader; no recovered
-  acquisition function reads it · §3.1 · static trace over the unrecovered
-  regions.
+- The authored FBI key behind the definition flag that arms a side's secondary
+  candidate list, and the authored keys behind the two candidate-admission
+  flags and the one global option bit in the acquisition filter · §3.1, §3.2 ·
+  static trace of the unit-definition parser's flag sequence and the options
+  loader (RWU-02-1 owns the key table).
+- Whether any writer of the runtime *seen* status bit exists outside the
+  recovered four-pass sensor phase, and the complete sonar and jammer
+  interactions on the presentation surfaces · §3.1, doc 03 §3.2/§3.4 · static
+  trace over the unrecovered regions.
 - Manual unit and point target encoding, command-fire replacement, and the
   full set of manual-versus-autonomous latch callers · §3.2, doc 07 · static
   trace.
@@ -2512,9 +3396,6 @@ Those recitals are deleted here only; §§8–13 continue to own them.
   the closed ballistic cases, the §7.3 wrap edges (which now include the
   zero-extended negative `turnrate`, the sub-two RNG bound, and the range
   promotion overflow) and the pool-full retention matrix · §7 · static trace.
-- Consumer of the projectile record's cached average-height scratch value
-  outside the projectile family; the layout hole is preserved for it · §5 ·
-  static trace.
 
 ### Projectile families
 
@@ -2546,14 +3427,23 @@ Those recitals are deleted here only; §§8–13 continue to own them.
 
 ### Collision and damage
 
-- Footprint-anchor coordinate conventions and malformed sentinel behavior
-  · §8.1 · static trace.
+- Malformed feature-sentinel behavior at the collision gate's fringe
+  resolution, when the anchor deltas address a cell outside the map · §8.1,
+  doc 03 · static trace.
+- Reachability of the interceptor sweep's unguarded shooter dereference: it
+  faults for any impact record with no shooter whose weapon carries the
+  interceptor flag (a death explosion or a routed burn weapon), and no stock
+  weapon authors that combination · §9.3, §12.2 · asset census over the weapon
+  corpus, then static trace if one exists.
 - Quantization and overflow of the repeated-feature-cell cache at negative or
   extreme coordinates · §8.2 · static trace.
 - Sign and scale conventions for vertical velocity, terrain height, and sea
   level outside ordinary map ranges · §8.3 · static trace.
-- Malformed-name, duplicate-key, and signed-overflow behavior in damage-table
-  construction and lookup · §9.1 · static trace.
+- Whether the weapon damage-override table is always sorted under the same
+  case-insensitive collation its lower-bound search assumes, and the parser's
+  handling of duplicate and malformed keys and of signed overflow in an
+  override value · §9.2 · static trace of the weapon-record parser's table
+  construction (RWU-06-2 owns the parser side).
 - The configuration alias that names the global double/half damage bits; the
   reader is direct and the full-image census found no writer · §9.1 · static
   trace over the unrecovered regions.

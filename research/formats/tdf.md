@@ -362,7 +362,7 @@ and velocity.
 | `energypershot`, `metalpershot` | Firing cost. The bare `energy`/`metal` keys are the same thing in an older spelling — the shipped file documents them as "amount of energy needed" / "amount of metal needed" — and OpenTA accepts either. |
 | `commandfire` | Requires explicit user fire order (D-gun, nukes) |
 | `toairweapon` | Weapon only engages air targets (anti-air missiles; retail key, undocumented historically) |
-| `holdtime` | Seen on retail stockpile/anti-air weapons; exact effect unknown |
+| `holdtime` | Follow-camera hold, in whole simulation ticks (authored in seconds, multiplied by 30 and truncated with the other time-valued weapon keys). When the projectile the camera is following retires, the camera freezes on that projectile's last point and stays there for `holdtime` ticks before resuming ordinary following. It has no projectile-motion effect at all. **Correction:** this row previously read "Seen on retail stockpile/anti-air weapons; exact effect unknown", which was written before the key's readers were traced — all of them are projectile-retirement paths that load the camera hold counter, not motion code. Established; the engine side is `[06 §7.3]`, the camera side `[07 §10]`. |
 | `turret` | Weapon must be deployed from a mount with 360° rotation and pitch (143 retail weapons) |
 | `coverage` | "What the protection umbrella is for weapons that shoot other weapons" — the interceptor's protected radius |
 | `minbarrelangle` | Lowest angle in degrees the barrels can point, used in the ballistic solution |
