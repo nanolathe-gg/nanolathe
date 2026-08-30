@@ -31,6 +31,43 @@ func TestTransportHandlersWired(t *testing.T) {
 	}
 }
 
+func TestBeCarriedUsesExactTenTickWaitWithoutRNG(t *testing.T) {
+	sim := rng.NewSimulation(12345)
+	w := newOrdersFixtureWorld(8, &content.Catalog{})
+	carrierDef := &content.UnitDef{UnitName: "armlab", MaxDamage: 100}
+	cargoDef := &content.UnitDef{UnitName: "armflash", MaxDamage: 100, BMCode: true}
+	carrierH, _ := w.Create(carrierDef, 0, 0, 0, 0)
+	cargoH, _ := w.Create(cargoDef, 0, 0, 0, 0)
+	carrier, cargo := w.Unit(carrierH), w.Unit(cargoH)
+	cargo.Attachment.Carrier = carrierH
+	cargo.Attachment.AttachPiece = 0
+	carrier.Attachment.Cargo = []pool.Handle{cargoH}
+	q := QueueForUnit(cargo)
+	q.SetBinding(&QueueBinding{SimRNG: &sim})
+	q.Push(Lookup("BeCarried"), Node{Target: carrierH})
+	q.Pump(cargo, 0)
+	head := q.Head()
+	if head == nil || head.Phase != 1 || head.Deadline != 10 || head.DynamicGate != 1 {
+		t.Fatalf("phase-1 carried wait=%+v, want deadline 10 gate 1", head)
+	}
+	if sim.Draws() != 0 {
+		t.Fatalf("BeCarried consumed %d RNG draws, want 0", sim.Draws())
+	}
+	q.Pump(cargo, 9)
+	if q.Head() != head || head.Deadline != 10 {
+		t.Fatal("BeCarried woke before its exact ten-tick deadline")
+	}
+	cargo.Attachment.Carrier = 0
+	carrier.Attachment.Cargo = nil
+	q.Pump(cargo, 10)
+	if q.LenPrimary() != 0 {
+		t.Fatal("detached BeCarried record did not complete at its next wake")
+	}
+	if sim.Draws() != 0 {
+		t.Fatalf("BeCarried detach consumed %d RNG draws, want 0", sim.Draws())
+	}
+}
+
 func mkTransportCarrier(handle pool.Handle, owner uint8, canFly bool) *units.Unit {
 	def := &content.UnitDef{
 		CanLoad:           true,

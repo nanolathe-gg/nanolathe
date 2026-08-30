@@ -13,8 +13,9 @@ const bothSchemaOTA = `[GlobalHeader]
 	{
 	missionname=Both;
 	CommanderKilled=1;
-	KillUnitType=CORLAB, 3;
 	VictoryTimerRunsOut=120;
+	KillUnitType=CORLAB, 3;
+	KillUnitType=CORLAB, 4;
 	[Schema 0]
 		{
 		Type=Easy;
@@ -80,8 +81,8 @@ func TestAuthoredTriggersReachTheMission(t *testing.T) {
 	if len(m.Victory) != 2 {
 		t.Fatalf("victory queue %d, want 2: %+v", len(m.Victory), m.Victory)
 	}
-	if m.Victory[0].Kind != triggers.KindKillUnitType || m.Victory[0].Type != "CORLAB" || m.Victory[0].Args[0] != 3 {
-		t.Fatalf("victory[0] = %+v, want KillUnitType CORLAB x3", m.Victory[0])
+	if m.Victory[0].Kind != triggers.KindKillUnitType || m.Victory[0].Type != "CORLAB" || m.Victory[0].Args[0] != 4 {
+		t.Fatalf("victory[0] = %+v, want one last-value KillUnitType CORLAB x4", m.Victory[0])
 	}
 	if m.Victory[1].Kind != triggers.KindVictoryTimerRunsOut || m.Victory[1].Args[0] != 120*30 {
 		t.Fatalf("victory[1] = %+v, want the timer stored as seconds*30", m.Victory[1])

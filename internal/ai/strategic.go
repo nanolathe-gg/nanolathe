@@ -21,18 +21,39 @@ type ClassVector struct {
 	C2 int8 // energyMix coefficient
 }
 
+// PlacementRegion is one immutable lattice region drawn when the strategic
+// state is constructed. The scatter helper selects Land when MinWaterDepth is
+// negative and Water otherwise [08 R-AI-03 §4].
+type PlacementRegion struct {
+	CellW   int16
+	CellH   int16
+	OffsetX int16
+	OffsetZ int16
+}
+
 // Strategic is the fixed-size retail strategic state [08
 // "Established AI-facing data and rooted planner"] per I13.
 // Go uses named fields and embeds this state in Manager [PLAN_11 Public API].
 type Strategic struct {
-	// Strategic center, recomputed every refresh. Nanolathe stores X and Z in
-	// the authoritative 16.16 fixed-point representation [08; I2].
+	// Strategic center, recomputed every refresh on all three axes in the
+	// authoritative 16.16 fixed-point representation [08 R-AI-03 §2; I2].
 	CenterX numeric.Fixed
+	CenterY numeric.Fixed
 	CenterZ numeric.Fixed
 
-	// Placement search radius used to move the origin toward the strategic
-	// center [08 "Established AI-facing data and rooted planner"].
-	Radius numeric.Fixed
+	// Radius is a plain count of world units, grown by 160 before each
+	// placement attempt [08 R-AI-03 §2].
+	Radius int32
+
+	// MetalSpots is the battle-entry snapshot consumed only by the exhaustive
+	// extractor helper. Reclaim and strategic refresh never rebuild it
+	// [08 R-AI-03 §1].
+	MetalSpots []MetalSpot
+
+	// LandRegion and WaterRegion are the eight constructor-draw products used
+	// by the scatter lattice [08 R-AI-03 §4].
+	LandRegion  PlacementRegion
+	WaterRegion PlacementRegion
 
 	// Refresh gate state: a refresh is due when at least 30 ticks elapsed [08].
 	LastRefreshTick uint32
@@ -53,10 +74,9 @@ type Strategic struct {
 	// Catalog is the content catalog for definition lookups [P0-I16].
 	Catalog *content.Catalog
 
-	// setupDraws stores the eight construction-time random words consumed by
-	// the strategic state. Their semantic use is not fully recovered; keeping
-	// the words in named state preserves the stream position without inventing
-	// a geometry formula [08 "RNG sites for AI planning"].
+	// setupDraws retains the eight construction-time values for draw-ledger
+	// verification; LandRegion and WaterRegion are their semantic products
+	// [08 R-AI-03 §4].
 	setupDraws      [8]uint32
 	setupDrawsReady bool
 	negRegionW      uint32
@@ -88,6 +108,18 @@ func (s *Strategic) InitializeRandomState(r *rng.Simulation) bool {
 	s.posRegionH = 14 + s.setupDraws[5]
 	s.setupDraws[6] = r.Uint32n(s.posRegionW)
 	s.setupDraws[7] = r.Uint32n(s.posRegionH)
+	s.LandRegion = PlacementRegion{
+		CellW:   int16(s.negRegionW),
+		CellH:   int16(s.negRegionH),
+		OffsetX: int16(s.setupDraws[2]) - int16(s.negRegionW)/2,
+		OffsetZ: int16(s.setupDraws[3]) - int16(s.negRegionH)/2,
+	}
+	s.WaterRegion = PlacementRegion{
+		CellW:   int16(s.posRegionW),
+		CellH:   int16(s.posRegionH),
+		OffsetX: int16(s.setupDraws[6]) - int16(s.posRegionW)/2,
+		OffsetZ: int16(s.setupDraws[7]) - int16(s.posRegionH)/2,
+	}
 	s.setupDrawsReady = true
 	return true
 }
@@ -243,7 +275,7 @@ func (s *Strategic) refreshCountsAndCenter(player uint8, w *units.World) {
 			s.Counts[k] = 0
 		}
 	}
-	var sumX, sumZ int64
+	var sumX, sumY, sumZ int64
 	var n int64
 	if w != nil {
 		// Stable iteration: units.World.Iter is pool asc; we additionally filter by player asc already handled by Iter order (I1).
@@ -296,6 +328,7 @@ func (s *Strategic) refreshCountsAndCenter(player uint8, w *units.World) {
 			}
 			s.Counts[ck]++
 			sumX += int64(u.X)
+			sumY += int64(u.Y)
 			sumZ += int64(u.Z)
 			n++
 		}
@@ -303,9 +336,11 @@ func (s *Strategic) refreshCountsAndCenter(player uint8, w *units.World) {
 	if n > 0 {
 		// Average with truncation toward zero for Fixed average [I3]; world coordinates are Fixed 16.16 [I2].
 		s.CenterX = numeric.Fixed(sumX / n)
+		s.CenterY = numeric.Fixed(sumY / n)
 		s.CenterZ = numeric.Fixed(sumZ / n)
 	} else {
 		s.CenterX = 0
+		s.CenterY = 0
 		s.CenterZ = 0
 	}
 }
@@ -511,7 +546,9 @@ func (s *Strategic) recomputeClassVectors() {
 		} else if count == 1 {
 			val = val * 2
 		}
-		if def != nil && def.MaxSlope >= 0 { // [P0-01 §2.2; R-P0-05]
+		// R-AI-03 corrected the earlier MaxSlope label: this reader is the
+		// movement profile's MinWaterDepth word [08 R-P0-05 §5][08 R-AI-03 §6].
+		if def != nil && def.MinWaterDepth >= 0 {
 			val = val * 3
 		}
 		// TODO(question): the unresolved half-capacity comparison may add half of

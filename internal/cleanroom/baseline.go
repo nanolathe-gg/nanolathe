@@ -66,8 +66,6 @@ var Baseline = map[string]int{
 	"internal/session/skirmish.go":                  2,
 	"internal/settings/settings.go":                 10,
 	"internal/settings/settings_test.go":            1,
-	"internal/triggers/eval.go":                     10,
-	"internal/triggers/triggers.go":                 2,
 	"internal/units/sweep.go":                       4,
 	"internal/visibility/fog.go":                    1,
 	"internal/visibility/grids.go":                  1,

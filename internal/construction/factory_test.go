@@ -3,6 +3,7 @@ package construction
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/cob"
@@ -176,6 +177,7 @@ func TestFactoryAllocationPreservesAuthoredExitTransform(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	facDef := newFactoryDef("armfac", 4, 4, 300)
 	prodDef := newProductDef("armflash", 2, 2, 100, 100)
+	prodDef.MinWaterDepth = -10000 // established land-profile template [04 §6.1]
 	cat.Units[content.CanonicalKey("armfac")] = facDef
 	cat.Units[content.CanonicalKey("armflash")] = prodDef
 	w := newTestWorld(8)
@@ -450,6 +452,7 @@ func TestNanoframeCreationValues(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	facDef := newFactoryDef("armfac", 2, 2, 300)
 	prodDef := newProductDef("armflash", 2, 2, 100, 50)
+	prodDef.MinWaterDepth = -10000 // established land-profile template [04 §6.1]
 	cat.Units[content.CanonicalKey("armfac")] = facDef
 	cat.Units[content.CanonicalKey("armflash")] = prodDef
 	h, _ := w.Create(facDef, 0, world.CellToWorld(5), 0, world.CellToWorld(5))
@@ -558,6 +561,58 @@ func TestNanoframeCreationValues(t *testing.T) {
 	}
 	if head3.Phase != uint8(State2) {
 		t.Fatalf("should stay state2 on allocator failure")
+	}
+}
+
+func TestFactoryProductUsesCarriedQueueAndDetachHandoff(t *testing.T) {
+	for _, canFly := range []bool{false, true} {
+		t.Run(fmt.Sprintf("canfly=%t", canFly), func(t *testing.T) {
+			w := newTestWorld(10)
+			cat := &content.Catalog{Units: map[string]*content.UnitDef{}, Movement: map[string]*content.MovementClass{}}
+			factoryDef := newFactoryDef("armlab", 4, 4, 300)
+			productDef := newProductDef("armprod", 2, 2, 100, 100)
+			productDef.BMCode = true
+			productDef.YardMap = ""
+			productDef.CanFly = canFly
+			if !canFly {
+				productDef.MovementClass = "testground"
+				cat.Movement["testground"] = &content.MovementClass{FootprintX: 2, FootprintZ: 2, MaxSlope: 255, MaxWaterSlope: 255, MaxWaterDepth: 10000, MinWaterDepth: -10000}
+			}
+			cat.Units[factoryDef.CanonicalKey] = factoryDef
+			cat.Units[productDef.CanonicalKey] = productDef
+			fh, _ := w.Create(factoryDef, 0, world.CellToWorld(5), 0, world.CellToWorld(5))
+			factory := w.Unit(fh)
+			bindConstructionFixture(factory, trivialModel(1, [][3]int64{{1 << 20, 0, 0}}), true)
+			q := orders.QueueForUnit(factory)
+			q.Push(orders.Lookup("BuildingBuild"), orders.Node{BuildDefKey: productDef.CanonicalKey, Param2: 1, Phase: uint8(State2)})
+			node := q.Primary()[0]
+			node.Phase = uint8(State2)
+			svc := NewService(exitTerrain(20, 20), cat, w, &economy.Service{})
+			svc.Pump(factory, 20)
+			product := w.Unit(node.Target)
+			if product == nil {
+				t.Fatalf("factory product was not allocated: admissions=%+v messages=%v node=%+v", svc.AdmissionDiagnostics(), svc.Messages(), node)
+			}
+			if product.Attachment.Carrier != factory.Handle || product.Attachment.AttachPiece != 0 || product.Move.Mode != 1 {
+				t.Fatalf("attachment=%+v mode=%d, want factory/piece0/grounded", product.Attachment, product.Move.Mode)
+			}
+			prim := orders.QueueForUnit(product).Primary()
+			if len(prim) != 2 || prim[0].ID != orders.Lookup("BeCarried") || prim[1].ID != orders.Lookup("GetBuilt") {
+				t.Fatalf("product queue=%v, want [BeCarried GetBuilt]", prim)
+			}
+			x, y, z := product.X, product.Y, product.Z
+			svc.applyCompletionPosture(product)
+			if product.Attachment.Carrier != 0 || len(factory.Attachment.Cargo) != 0 {
+				t.Fatalf("completion did not detach once: product=%+v factory cargo=%v", product.Attachment, factory.Attachment.Cargo)
+			}
+			if product.X != x || product.Y != y || product.Z != z {
+				t.Fatalf("detach moved product from (%d,%d,%d) to (%d,%d,%d)", x.Raw(), y.Raw(), z.Raw(), product.X.Raw(), product.Y.Raw(), product.Z.Raw())
+			}
+			svc.applyCompletionPosture(product)
+			if product.Attachment.Carrier != 0 || product.X != x || product.Y != y || product.Z != z {
+				t.Fatal("second completion transition was not an idempotent detach")
+			}
+		})
 	}
 }
 

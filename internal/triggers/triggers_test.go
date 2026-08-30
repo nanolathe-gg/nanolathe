@@ -29,17 +29,17 @@ func TestVTableCompleteness(t *testing.T) {
 			t.Fatalf("duplicate Name %q", vt.Name)
 		}
 		seenName[vt.Name] = true
-		if vt.Slots != 8 {
-			t.Fatalf("VTable %q Slots %d want 8 [08 Trigger object]", vt.Name, vt.Slots)
+		if vt.Slots != 6 {
+			t.Fatalf("VTable %q Slots %d want 6 [08 R-TRIG-01 §2]", vt.Name, vt.Slots)
 		}
 		if vt.RecordSize != vt.Kind.RecordSize() {
 			t.Fatalf("VTable %q RecordSize %d want %d", vt.Name, vt.RecordSize, vt.Kind.RecordSize())
 		}
 		// Documented buckets [08 "Trigger object"] [GAP T10].
 		switch vt.RecordSize {
-		case 0x0C, 0x10, 0x14, 0x30, 0x32, 0x36, 0x40:
+		case 12, 16, 20, 44, 48, 50, 52, 54, 64:
 		default:
-			t.Fatalf("VTable %q RecordSize %d not in documented buckets {0xC,0x10,0x14,0x30,0x32,0x36,0x40}", vt.Name, vt.RecordSize)
+			t.Fatalf("VTable %q RecordSize %d not in the established allocation set", vt.Name, vt.RecordSize)
 		}
 	}
 	// Ensure every Kind is covered.
@@ -56,16 +56,17 @@ func TestVTableCompleteness(t *testing.T) {
 		kind Kind
 		size int
 	}{
-		{KindKillEnemyCommander, 0x0C},
-		{KindDestroyAllUnits, 0x0C},
-		{KindMoveUnitToRadius, 0x40},
-		{KindVictoryTimerRunsOut, 0x10},
-		{KindDeathTimerRunsOut, 0x10},
-		{KindUnitTypePassesX, 0x14},
-		{KindAnyUnitPassesZ, 0x14},
-		{KindBuildUnitType, 0x30},
-		{KindKillUnitType, 0x32},
-		{KindAllUnitsKilledOfType, 0x36},
+		{KindKillEnemyCommander, 12},
+		{KindDestroyAllUnits, 12},
+		{KindMoveUnitToRadius, 64},
+		{KindVictoryTimerRunsOut, 16},
+		{KindDeathTimerRunsOut, 16},
+		{KindUnitTypePassesX, 52},
+		{KindAnyUnitPassesZ, 20},
+		{KindBuildUnitType, 50},
+		{KindCaptureUnitType, 44},
+		{KindKillUnitType, 48},
+		{KindAllUnitsKilledOfType, 54},
 	}
 	for _, c := range checks {
 		if got := c.kind.RecordSize(); got != c.size {
@@ -175,6 +176,9 @@ func TestParseLine(t *testing.T) {
 	if err != nil || tr.Kind != KindKillEnemyCommander {
 		t.Fatalf("ParseLine KillEnemyCommander %v %v", err, tr)
 	}
+	if tr, err = ParseLine("KillEnemyCommander=0;"); err == nil || tr != nil {
+		t.Fatalf("zero flag must not build a record: %v %+v", err, tr)
+	}
 	// Type+count
 	tr, err = ParseLine("KillUnitType=CORLAB, 1")
 	if err != nil || tr.Kind != KindKillUnitType || tr.Type != "CORLAB" || tr.Args[0] != 1 {
@@ -185,20 +189,43 @@ func TestParseLine(t *testing.T) {
 	if err != nil || tr.Args[0] != 3600*30 {
 		t.Fatalf("timer %v %v", err, tr)
 	}
+	if tr, err = ParseLine("VictoryTimerRunsOut=0"); err == nil || tr != nil {
+		t.Fatalf("zero timer must not build a record: %v %+v", err, tr)
+	}
 	// Boundary single int — stored after arithmetic >>4 [08 "Evaluation"].
 	tr, err = ParseLine("AnyUnitPassesX=4500;")
 	if err != nil || tr.Kind != KindAnyUnitPassesX || tr.Args[0] != int32(4500)>>4 {
 		t.Fatalf("AnyUnitPassesX %v %v want %d", err, tr, int32(4500)>>4)
+	}
+	if tr, err = ParseLine("AnyUnitPassesX=-1;"); err == nil || tr != nil {
+		t.Fatalf("negative boundary must not build a record: %v %+v", err, tr)
+	}
+	for _, value := range []string{"", "nonnumeric"} {
+		if tr, present := ParseCondition("AnyUnitPassesX", value); present || tr != nil {
+			t.Fatalf("malformed boundary %q built a record: %+v", value, tr)
+		}
+	}
+	if tr, present := ParseCondition("AnyUnitPassesX", "0"); !present || tr == nil || tr.Args[0] != 0 {
+		t.Fatalf("authored zero boundary must be present: %+v present=%v", tr, present)
 	}
 	// Radius three ints
 	tr, err = ParseLine("MoveUnitToRadius=ARMCOM, 1942, 1519, 100")
 	if err != nil || tr.Kind != KindMoveUnitToRadius || tr.Type != "ARMCOM" || tr.Args[0] != 1942 || tr.Args[1] != 1519 || tr.Args[2] != 100 {
 		t.Fatalf("MoveUnitToRadius %v %v", err, tr)
 	}
+	tr, err = ParseLine("MoveUnitToRadius=ARMCOM2, 1, 2, 3")
+	if err != nil || tr.Type != "ARMCOM" {
+		t.Fatalf("letters-only scanset did not stop before digit: %v %+v", err, tr)
+	}
 	// ANYTYPE in boundary — stored after >>4.
 	tr, err = ParseLine("UnitTypePassesX=ANYTYPE, 6000")
-	if err != nil || !IsANYTYPE(tr.Type) || tr.Args[0] != int32(6000)>>4 {
+	if err != nil || tr.Type != "" || tr.Args[0] != int32(6000)>>4 {
 		t.Fatalf("ANYTYPE boundary %v %v want %d", err, tr, int32(6000)>>4)
+	}
+	// Name-only records copy the entire authored value, including commas.
+	tr, err = ParseLine("BuildUnitType=ARMSY, 1")
+	if err != nil || tr.Type != "ARMSY, 1" || tr.Args[0] != 0 {
+		t.Fatalf("name-only value %v %+v", err, tr)
 	}
 	// AllUnitsKilledOfType type only
 	tr, err = ParseLine("AllUnitsKilledOfType=ARMGATE")
@@ -208,5 +235,45 @@ func TestParseLine(t *testing.T) {
 	// Unknown condition
 	if _, err = ParseLine("UnknownTrigger=1"); err == nil {
 		t.Fatalf("unknown should error")
+	}
+}
+
+func TestParseConditionScanIntegerFamilies(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  [3]int32
+	}{
+		{name: "hexadecimal", value: "ARMCOM, 0x10tail, 0, 0", want: [3]int32{16, 0, 0}},
+		{name: "octal", value: "ARMCOM, 077tail, 0, 0", want: [3]int32{63, 0, 0}},
+		{name: "signed", value: "ARMCOM, -25tail, +17suffix, -010rest", want: [3]int32{-25, 17, -8}},
+		{name: "missing", value: "ARMCOM", want: [3]int32{}},
+		{name: "failed", value: "ARMCOM, nope, +, 0x", want: [3]int32{}},
+		{name: "binary prefix is not an extension", value: "ARMCOM, 0b10, 0B11, 0", want: [3]int32{}},
+		{name: "underscore stops numeric prefix", value: "ARMCOM, 1_2, 0x1_0, 07_7", want: [3]int32{1, 1, 7}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tr, present := ParseCondition("MoveUnitToRadius", tt.value)
+			if !present || tr == nil {
+				t.Fatalf("ParseCondition(%q) did not build the authored record", tt.value)
+			}
+			if tr.Args != tt.want {
+				t.Fatalf("ParseCondition(%q) args = %v, want %v", tt.value, tr.Args, tt.want)
+			}
+		})
+	}
+
+	tr, present := ParseCondition("UnitTypePassesX", "ARMCOM, 0x100tail")
+	if !present || tr == nil || tr.Args[0] != 16 {
+		t.Fatalf("type boundary applies scan conversion before >>4: %+v present=%v", tr, present)
+	}
+
+	// The ordinary integer-accessor families do not use the %i prefix scan.
+	if tr, present = ParseCondition("AnyUnitPassesX", "0x100tail"); present || tr != nil {
+		t.Fatalf("AnyUnit boundary unexpectedly used scan conversion: %+v present=%v", tr, present)
+	}
+	if tr, present = ParseCondition("VictoryTimerRunsOut", "077tail"); present || tr != nil {
+		t.Fatalf("timer unexpectedly used scan conversion: %+v present=%v", tr, present)
 	}
 }

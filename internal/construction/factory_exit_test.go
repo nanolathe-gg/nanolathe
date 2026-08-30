@@ -130,12 +130,14 @@ func headNodeForTest(u *units.Unit) *orders.Node {
 // blocked revalidation every 15 ticks forever.
 func TestFactoryExitValidatesInsideOwnCompletedYard(t *testing.T) {
 	lab := newFactoryDef("exitlab", 4, 4, 300)
+	lab.MinWaterDepth = -10000 // established land-profile template [04 §6.1]
 	comDef := newProductDef("exitcom", 1, 1, 10, 10)
 	comDef.WorkerTime = 300
 	comDef.BMCode = true // mobile commander-class fixture
 	gate := newProductDef("exitgate", 3, 3, 50, 100)
 	mob := exitMobileDef("exitmob", 2, 2)
 	cat := exitCatalog(lab, comDef, gate, mob)
+	cat.Movement["exitmove"].MinWaterDepth = -10000
 
 	terrain := exitTerrain(24, 24)
 	svc, w := exitService(t, terrain, cat)
@@ -210,6 +212,7 @@ func TestForeignOccupantStillBlocksExitSilently(t *testing.T) {
 	lab := newFactoryDef("exitlab", 4, 4, 300)
 	mob := exitMobileDef("exitmob", 2, 2)
 	cat := exitCatalog(lab, mob)
+	cat.Movement["exitmove"].MinWaterDepth = -10000 // established land-profile template [04 §6.1]
 	terrain := exitTerrain(24, 24)
 	svc, w := exitService(t, terrain, cat)
 	// Deep stocks so the two-resource admission never starves the fixture.

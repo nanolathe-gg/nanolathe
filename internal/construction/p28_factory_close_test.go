@@ -105,6 +105,7 @@ func TestP28FactoryFinalIncrementCompletesBeforeStopThenDeactivates(t *testing.T
 
 func TestP28FactoryCountedSuccessorStaysActiveAndRestartsSamePass(t *testing.T) {
 	svc, factory, product, node := p28CompletionFixture(t, 2)
+	product.Def.MinWaterDepth = -10000 // established land-profile template [04 §6.1]
 	var got []string
 	factory.COBBinding().Callbacks.SetLifecycleSink(func(e cob.LifecycleEvent) {
 		if e.Phase == "start" {

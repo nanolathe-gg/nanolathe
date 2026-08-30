@@ -104,9 +104,9 @@ func (l *EndLatch) TickNoHuman() bool {
 }
 
 // AdvanceWin advances the countdown for a victory predicate. If countdown
-// is negative (unarmed) it arms to 4 with pending win; otherwise it
-// decrements once per eligible invocation. When the decrement crosses below
-// zero it latches ending plus pending win bits [P1-01 §3][08 "Evaluation"].
+// is negative (unarmed) it arms to 4; otherwise it records win as the current
+// true path and decrements once. When the decrement crosses below zero it
+// latches ending plus win bits [08 R-TRIG-01 §6].
 // The win bits are not written until the crossing [P1-01 §2.2]; SettlementFrozen
 // already holds via Countdown>=0 even before Bits are written.
 // Returns true when the latch transition (ending) occurs on this call.
@@ -119,25 +119,20 @@ func (l *EndLatch) AdvanceWin(isDeadlineDue bool) bool {
 		l.Pending = 1
 		return false
 	}
+	l.Pending = 1
 	l.Countdown--
 	if l.Countdown < 0 {
 		l.Bits |= LatchBitEnding
-		if l.Pending == 1 {
-			l.Win()
-		} else if l.Pending == 2 {
-			l.Lose()
-		} else {
-			l.Win()
-		}
+		l.Win()
 		l.Pending = 0
 		return true
 	}
 	return false
 }
 
-// AdvanceLose advances for defeat (only when victory not candidate).
-// Lose sets 0x40 and clears win bit 0x10 via AND ~0x10
-// [P1-01 §2.2][08 "Evaluation"]. Pending lose is armed at 4 and not written until crossing.
+// AdvanceLose advances for defeat (only when victory is false). Each true due
+// records lose as the current path before decrementing, so the sixth true
+// due's path selects the terminal bits [08 R-TRIG-01 §6].
 func (l *EndLatch) AdvanceLose(isDeadlineDue bool) bool {
 	if !isDeadlineDue {
 		return false
@@ -147,16 +142,11 @@ func (l *EndLatch) AdvanceLose(isDeadlineDue bool) bool {
 		l.Pending = 2
 		return false
 	}
+	l.Pending = 2
 	l.Countdown--
 	if l.Countdown < 0 {
 		l.Bits |= LatchBitEnding
-		if l.Pending == 2 {
-			l.Lose()
-		} else if l.Pending == 1 {
-			l.Win()
-		} else {
-			l.Lose()
-		}
+		l.Lose()
 		l.Pending = 0
 		return true
 	}

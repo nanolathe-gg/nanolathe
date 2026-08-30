@@ -5,6 +5,8 @@ import (
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/triggers"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -31,7 +33,7 @@ func TestKillUnitTypeOnlyOnDeath(t *testing.T) {
 	h, _ := w.Create(def, 1, numeric.FixedFromInt(0), 0, numeric.FixedFromInt(0))
 	u := w.Unit(h)
 	tr := triggers.New(triggers.KindKillUnitType, "CORLAB", 2)
-	ctx := triggers.PollContext{Tick: 0, World: w, LocalOwner: 0, EnemyOwner: 1}
+	ctx := triggers.PollContext{Tick: 0, World: w, MissionArmed: true}
 	// Poll 100 times should not advance
 	for i := 0; i < 100; i++ {
 		tr.Poll(ctx)
@@ -61,7 +63,7 @@ func TestCaptureUnitTypeOnlyOnTransfer(t *testing.T) {
 	h, _ := w.Create(def, 1, 0, 0, 0)
 	u := w.Unit(h)
 	tr := triggers.New(triggers.KindCaptureUnitType, "CORLAB", 1)
-	ctx := triggers.PollContext{Tick: 0, World: w, LocalOwner: 0, EnemyOwner: 1}
+	ctx := triggers.PollContext{Tick: 0, World: w, MissionArmed: true}
 	if tr.Notify(ctx, triggers.NotifyUnitDied, u) {
 		t.Fatal("capture should not advance on death")
 	}
@@ -76,13 +78,36 @@ func TestCaptureUnitTypeOnlyOnTransfer(t *testing.T) {
 	}
 }
 
+func TestSessionCaptureTriggerUsesPreTransferOwner(t *testing.T) {
+	s := newLoopTestSession(t, 2)
+	tr := triggers.New(triggers.KindCaptureUnitType, "CORCOM")
+	s.Mission.Victory = []*triggers.Trigger{tr}
+	var captured *units.Unit
+	for _, u := range s.Units.IterSliced() {
+		if u != nil && u.Owner == 1 {
+			captured = u
+			break
+		}
+	}
+	if captured == nil || captured.Def == nil {
+		t.Fatal("enemy capture subject missing")
+	}
+	tr.Type = captured.Def.UnitName
+	oldOwner := captured.Owner
+	captured.Owner = 0 // World.NotifyCapture exposes the post-transfer record.
+	s.Units.NotifyCapture(captured.Handle, oldOwner, captured.Owner)
+	if !tr.Completed {
+		t.Fatal("CaptureUnitType ignored the pre-transfer slot-1 owner")
+	}
+}
+
 func TestBuildUnitTypePoll(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	w := newSessionFixtureWorld(16, cat)
 	def := &content.UnitDef{UnitName: "ARMSY", MaxDamage: 100}
 	def.CanonicalKey = content.CanonicalKey(def.UnitName)
 	tr := triggers.New(triggers.KindBuildUnitType, "ARMSY", 1)
-	ctx := triggers.PollContext{Tick: 0, World: w, LocalOwner: 0, EnemyOwner: 1}
+	ctx := triggers.PollContext{Tick: 0, World: w, MissionArmed: true}
 	if tr.Poll(ctx) {
 		t.Fatal("should not complete with nothing built")
 	}
@@ -100,7 +125,7 @@ func TestBuildUnitTypePoll(t *testing.T) {
 
 func TestSimultaneousVictoryDefeatResolvesVictory(t *testing.T) {
 	w := units.NewSliced(16, nil)
-	ctx := triggers.PollContext{Tick: 0, World: w, LocalOwner: 0, EnemyOwner: 1}
+	ctx := triggers.PollContext{Tick: 0, World: w, MissionArmed: true}
 	vic := []*triggers.Trigger{triggers.New(triggers.KindDestroyAllUnits, "")} // always true on poll
 	// defeat AllUnitsKilled: need no local units, so make enemy still have units but local empty.
 	// With no local units, AllUnitsKilled true.
@@ -109,6 +134,47 @@ func TestSimultaneousVictoryDefeatResolvesVictory(t *testing.T) {
 	vDone, dDone := triggers.Evaluate(vic, def, ctx)
 	if !vDone || dDone {
 		t.Fatalf("simultaneous should be victory: v=%v d=%v", vDone, dDone)
+	}
+}
+
+func TestMissionTriggerDeadlineLatchAndCue(t *testing.T) {
+	s := newLoopTestSession(t, 2)
+	s.Mission.Type = mission.TypeCampaign
+	s.Mission.Units = []mission.UnitPlacement{{}}
+	s.Mission.Victory = []*triggers.Trigger{triggers.New(triggers.KindDestroyAllUnits, "")}
+	s.Mission.Defeat = []*triggers.Trigger{triggers.NewTimer(triggers.KindDeathTimerRunsOut, 1000)}
+	s.publication = newPublicationState(frame.NewEventBuffer(frame.Limits{}))
+	s.Latch = NewEndLatch()
+	s.LocalOwner = 9 // prove the session table, not this adapter field, owns local identity.
+	s.Econ.Players[0].WinLoseTime = 0
+	for _, u := range s.Units.IterSliced() {
+		if u != nil && u.Owner == 1 {
+			s.Units.Destroy(u.Handle, units.DeathKilled)
+			s.Units.FinalizeDeath(u.Handle, 0)
+		}
+	}
+
+	s.pollMissionTriggers(0)
+	if s.Latch.Countdown != 4 || s.Econ.Players[0].WinLoseTime != 30 {
+		t.Fatalf("first true due did not arm to four and advance by 30: latch=%+v due=%d", s.Latch, s.Econ.Players[0].WinLoseTime)
+	}
+	s.pollMissionTriggers(29)
+	if s.Latch.Countdown != 4 || s.Econ.Players[0].WinLoseTime != 30 {
+		t.Fatalf("non-due poll changed state: latch=%+v due=%d", s.Latch, s.Econ.Players[0].WinLoseTime)
+	}
+	for _, tick := range []uint32{30, 60, 90, 120} {
+		s.pollMissionTriggers(tick)
+		if s.Latch.IsEnding() {
+			t.Fatalf("latched before sixth true due at tick %d", tick)
+		}
+	}
+	s.pollMissionTriggers(150)
+	if !s.Latch.IsEnding() || !s.Latch.IsWin() || s.Latch.Countdown != -1 {
+		t.Fatalf("sixth true due did not latch exact win: %+v", s.Latch)
+	}
+	events := s.publication.events.Events()
+	if len(events) != 1 || events[0].Kind != frame.KindAudio || events[0].Sound != "Victory Condition" || events[0].AudioPositional {
+		t.Fatalf("victory cue must publish once as unpositioned exact alias: %+v", events)
 	}
 }
 

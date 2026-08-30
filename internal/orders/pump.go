@@ -100,6 +100,21 @@ type Queue struct {
 	SecondaryTick uint32 `json:"-"`
 
 	binding *QueueBinding
+
+	// getBuiltHandler is supplied by the construction service that owns the
+	// product lifecycle. Keeping it on the queue preserves the ordinary ordered
+	// primary walk without introducing package-global session state
+	// [04 R-FAC-02 §4][I16].
+	getBuiltHandler func(*units.Unit, *Node, uint32) Code
+}
+
+// SetGetBuiltHandler binds the construction-owned GetBuilt lifecycle to this
+// queue. The queue pump remains the sole dispatcher and therefore preserves
+// BeCarried/GetBuilt composition timing [04 R-FAC-02 §4].
+func (q *Queue) SetGetBuiltHandler(handler func(*units.Unit, *Node, uint32) Code) {
+	if q != nil {
+		q.getBuiltHandler = handler
+	}
 }
 
 // QueueBinding is the concrete session-owned context every authoritative
@@ -730,21 +745,23 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 	// No iteration cap here (ORD-02): a handler looping through the continue
 	// codes wedges exactly as retail's does [04 §3.3][I11].
 	// TODO(question) idle default-op creation when primary empty [05 "Queue pumping and result codes"] step 1: owner player-state settling byte, definition default-idle-op field
-	for len(q.primary) > 0 {
-		n := q.primary[0] // head-driven; the walk restarts here after every dispatch [04 §3.3]
+	for cursor := 0; cursor < len(q.primary); {
+		n := q.primary[cursor]
+		desc := DescriptorFor(n.ID)
 		if n.Deadline != -1 && tick >= uint32(n.Deadline) {
 			n.Deadline = -1
-			n.Satisfied |= 1 // [04 §3.3]
+			n.Satisfied |= 1 // ordinary deadline expiry raises only bit 0 [04 R-ORD-01 §0]
 		}
 		ensureMoveHandlers()
 		ensureTransportHandlers()
 		// For transport and other wired handlers, the initial static gate (0x200/0x400 etc) is satisfied by construction (target/goal present) [04 §3.1] TODO(question) exact gate semantics.
 		// Clear it for phase 0 so the first dispatch is not blocked, mirroring the move arrival handle's clearing [R-P0-01].
-		// BeCarried is intentionally left blocked (gate 0x24) to keep cargo stalled while carried without RNG [04 §3.1] TODO(question).
+		// The descriptor gate is insertion metadata, not a pre-satisfied wait;
+		// BeCarried phase 0 must dispatch so phase 1 can arm its exact ten-tick
+		// deadline [04 R-ORD-01 §2][04 R-FAC-02 §4].
 		if n.Phase == 0 && n.DynamicGate != 0 {
-			if h := DescriptorFor(n.ID).Handler; h != nil {
-				name := DescriptorFor(n.ID).Name
-				if name != "BeCarried" && n.DynamicGate == DescriptorFor(n.ID).StaticGate {
+			if h := DescriptorFor(n.ID).Handler; h != nil || (desc.Name == "GetBuilt" && q.getBuiltHandler != nil) {
+				if n.DynamicGate == DescriptorFor(n.ID).StaticGate {
 					n.DynamicGate = 0
 					n.Satisfied = 0
 					n.Deadline = -1
@@ -758,8 +775,8 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 		n.Satisfied &^= satisfied
 		u.Pending &^= satisfied
 		n.DynamicGate = 0
-		handler := DescriptorFor(n.ID).Handler
-		if handler == nil {
+		handler := desc.Handler
+		if (desc.Name != "GetBuilt" && handler == nil) || (desc.Name == "GetBuilt" && q.getBuiltHandler == nil) {
 			// [P0-I03] path-backed move orders have no dedicated handler yet; the
 			// movement scheduler owns the route lifecycle [04 §7]. Synthesize a
 			// wait so the pump does not spin and the handler is re-dispatched
@@ -775,10 +792,36 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 			q.recordDiagnostic(fmt.Sprintf("orders: nil handler for %s", DescriptorFor(n.ID).Name)) // [AGENTS.md §Diagnostics] never spin
 			return
 		}
-		code := handler(u, n, satisfied)
+		var code Code
+		if desc.Name == "BeCarried" {
+			code = beCarriedHandlerAtTick(u, n, satisfied, tick)
+		} else if desc.Name == "GetBuilt" && q.getBuiltHandler != nil {
+			code = q.getBuiltHandler(u, n, tick)
+		} else {
+			code = handler(u, n, satisfied)
+		}
+		// A primary code-2 hold continues to the following record in the same
+		// ordered pass. This is observable for the factory composition: the
+		// carried record's ten-tick expiry is the only opportunity to visit the
+		// following GetBuilt record [04 R-FAC-02 §4]. GetBuilt itself stops this
+		// pass after arming its next deadline.
+		if (code == 2 || code == 4) && desc.Name == "BeCarried" {
+			cursor++
+			continue
+		}
+		if desc.Name == "GetBuilt" {
+			if code == 5 || code == 8 {
+				q.RemovePrimaryNode(n, cursor != 0)
+				if cursor == 0 {
+					continue
+				}
+			}
+			return
+		}
 		if !q.applyPrimaryResultCode(n, code, tick) {
 			return
 		}
+		cursor = 0
 	}
 }
 

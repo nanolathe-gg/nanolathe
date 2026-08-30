@@ -198,6 +198,9 @@ func (s *Service) queueForUnit(u *units.Unit) *orders.Queue {
 	if q != nil && s != nil && s.OrderBinding != nil {
 		q.SetBinding(s.OrderBinding)
 	}
+	if q != nil && s != nil {
+		q.SetGetBuiltHandler(s.handleGetBuiltOrder)
+	}
 	return q
 }
 
@@ -851,8 +854,16 @@ func snapBias(footX, footZ int) (int32, int32) { return int32(footX / 2), int32(
 // resolve piece transform + factory origin to world position; store position on order node is done by caller;
 // load product definition and snap to map cells using packed footprint extents each biased by half extent.
 func (s *Service) QueryBuildWorldPosition(factory *units.Unit, m *model.Model) (world.ModelWorldPosition, bool) {
+	_, position, ok := s.queryBuildPiecePosition(factory, m)
+	return position, ok
+}
+
+// queryBuildPiecePosition performs the synchronous QueryBuildInfo once and
+// retains both values state 2 consumes: the signed-byte cargo piece and its
+// composed position [04 R-FAC-02 §1][04 R-REV-02].
+func (s *Service) queryBuildPiecePosition(factory *units.Unit, m *model.Model) (int, world.ModelWorldPosition, bool) {
 	if factory == nil || m == nil {
-		return world.ModelWorldPosition{}, false
+		return -1, world.ModelWorldPosition{}, false
 	}
 	// QueryBuildInfo is a synchronous mode-Q callback. Production uses the
 	// strict binding bridge [R-P0-09][04 §5.3].
@@ -860,17 +871,17 @@ func (s *Service) QueryBuildWorldPosition(factory *units.Unit, m *model.Model) (
 	if binding := factory.COBBinding(); binding != nil && binding.Callbacks != nil {
 		pieceIdx = binding.Callbacks.QueryBuildInfo().QueryValue()
 	} else {
-		return world.ModelWorldPosition{}, false
+		return -1, world.ModelWorldPosition{}, false
 	}
 	if pieceIdx < 0 {
-		return world.ModelWorldPosition{}, false
+		return -1, world.ModelWorldPosition{}, false
 	}
 	modelPiece := pieceIdx
 	if binding := factory.COBBinding(); binding != nil && int(pieceIdx) < len(binding.PieceMap) {
 		modelPiece = int32(binding.PieceMap[pieceIdx])
 	}
 	if modelPiece < 0 || int(modelPiece) >= len(m.Pieces) {
-		return world.ModelWorldPosition{}, false
+		return -1, world.ModelWorldPosition{}, false
 	}
 	// 2. resolve piece transform plus factory origin to world position. Strict
 	// bindings own PieceMap, hierarchy state, and unit orientation; construction
@@ -880,15 +891,15 @@ func (s *Service) QueryBuildWorldPosition(factory *units.Unit, m *model.Model) (
 		var composed bool
 		pos, composed = binding.ComposePiece(int(pieceIdx), factory.Move.Heading, factory.Move.Pitch, factory.Move.Bank)
 		if !composed {
-			return world.ModelWorldPosition{}, false
+			return -1, world.ModelWorldPosition{}, false
 		}
 	} else {
-		return world.ModelWorldPosition{}, false
+		return -1, world.ModelWorldPosition{}, false
 	}
 	worldX := factory.X.Add(pos[0])
 	worldY := factory.Y.Add(pos[1])
 	worldZ := factory.Z.Add(pos[2])
-	return world.NewModelWorldPosition(worldX, worldY, worldZ), true
+	return int(pieceIdx), world.NewModelWorldPosition(worldX, worldY, worldZ), true
 }
 
 // QueryBuildInfo preserves the established cell-returning API. Its cell is
@@ -1096,15 +1107,35 @@ func (s *Service) validatePlacement(self pool.Handle, rect world.FootprintRect, 
 	if _, blocked := s.StructureBlocks(self, rect); blocked {
 		return world.PlacementResult{}, fmt.Errorf("construction: footprint overlaps a completed structure")
 	}
+	// The carried-position setter stamps the ordinary movement grid. State 2
+	// uses null self identity, so the first product's retained pad stamp blocks
+	// the next product until it crosses a cell boundary [04 R-FAC-02 §5-§6].
+	if def != nil && def.BMCode && s.Movement != nil && s.Movement.Grid != nil {
+		anchor := movement.Cell{X: rect.MinX(), Z: rect.MinZ()}
+		if !s.Movement.Grid.CanOccupy(anchor, int16(rect.Width()), int16(rect.Depth()), 0) {
+			return world.PlacementResult{}, fmt.Errorf("construction: footprint occupied in movement grid")
+		}
+	}
 	rules, err := placementRules(s, def)
 	if err != nil {
 		return world.PlacementResult{}, err
+	}
+	plotSelf := self
+	if s.World != nil {
+		if producer := s.World.Unit(self); producer != nil && producer.Flags&units.BuildingClassStatus != 0 {
+			// Factory state 2 passes a null self identity. The producer's yard,
+			// not an identity exemption, makes its open pad legal
+			// [04 R-FAC-02 §5]. The separate structures registry still exempts
+			// this producer above because it is Nanolathe bookkeeping, not the
+			// plot-word validator.
+			plotSelf = 0
+		}
 	}
 	return s.Terrain.CheckPlacement(world.PlacementQuery{
 		Rect:                  rect,
 		Yard:                  yard,
 		Rules:                 rules,
-		Self:                  uint16(self),
+		Self:                  uint16(plotSelf),
 		Mobile:                def != nil && def.BMCode,
 		SkipTerrainAggregates: skipAggregates,
 	})
@@ -1213,7 +1244,17 @@ func initializeNanoframe(prod *units.Unit, def *content.UnitDef) {
 }
 
 // successEpilogue performs the success sequence after allocation [05 C18].
-func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, product *units.Unit, cell world.Cell) {
+func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, product *units.Unit, cell world.Cell, buildPiece int) error {
+	// A mobile product enters the shared carried representation before any
+	// factory/product publication. Failure is therefore an explicit rejected
+	// allocation, never a live partially accepted factory state
+	// [04 R-FAC-02 §1].
+	if product.Def != nil && product.Def.BMCode {
+		if !movement.AttachFactoryProduct(s.World, factory.Handle, product.Handle, buildPiece) {
+			return fmt.Errorf("construction: factory product attachment gates rejected allocation")
+		}
+		product.Move.Mode = 1 // grounded for ground and aircraft products [04 R-FAC-02 §1]
+	}
 	// Store position on order node already done via cell; also store world triple for presentation?
 	node.GoalX = world.CellToWorld(cell.X)
 	node.GoalZ = world.CellToWorld(cell.Z)
@@ -1238,10 +1279,24 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 	// standing-order capability [R-P0-09].
 	s.copyStandingFlags(factory, product)
 
-	// Resolve get-built op + insert GetBuilt node onto product's primary queue (queued mode, zero count) [05 C18].
+	// A mobile factory product is attached in the allocation visit. The shared
+	// cargo representation is the only carried-state authority; structure-class
+	// products remain standing at the allocated position [04 R-FAC-02 §1].
+	if product.Def != nil && product.Def.BMCode {
+		beCarriedID := orders.Lookup("BeCarried")
+		if beCarriedID != 0 {
+			pq := orders.BindQueueBinding(product, s.OrderBinding)
+			pq.SetGetBuiltHandler(s.handleGetBuiltOrder)
+			pq.Push(beCarriedID, orders.Node{Target: factory.Handle})
+		}
+	}
+
+	// Attach inserts BeCarried first; GetBuilt is queued behind it
+	// [04 R-FAC-02 §1][04 R-FAC-02 §4].
 	getBuiltID := orders.Lookup("GetBuilt")
 	if getBuiltID != 0 {
 		pq := orders.BindQueueBinding(product, s.OrderBinding)
+		pq.SetGetBuiltHandler(s.handleGetBuiltOrder)
 		// Queued mode, zero count per [05 C18]: Param2 zero count special? Queue treats 0 as 1? But we pass 0 and CoalesceTail will treat 0 as 1? However plan says zero count. We pass Node with Param2 0.
 		pq.Push(getBuiltID, orders.Node{Param2: 0})
 		// Ensure product's queue head is GetBuilt with active marker.
@@ -1259,6 +1314,7 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 	}
 	// Advance to state 3 [05 C18].
 	node.Phase = uint8(State3)
+	return nil
 }
 
 // startBuilding/stopBuilding are edge helpers. The bridge owns callback mode
@@ -1409,15 +1465,7 @@ func (s *Service) rallyInheritance(factory *units.Unit, product *units.Unit) {
 			}
 			newPrim[0].Flags |= orders.FlagActive
 		}
-		sec := pq.Secondary()
-		// Preserve queue-owned dispatch/economy hooks when replacing the primary
-		// segment; rebuilding a queue must not silently detach its services.
-		newQ := orders.NewQueueWith(nil, nil)
-		newQ.SetBinding(pq.Binding())
-		newQ.SecondaryTick = pq.SecondaryTick
-		setQueuePrimary(newQ, newPrim)
-		setQueueSecondary(newQ, sec)
-		orders.BindQueue(product, newQ)
+		pq.SetPrimary(newPrim)
 	}
 }
 
@@ -1537,6 +1585,11 @@ func (s *Service) applyCompletionPosture(product *units.Unit) {
 	// Completed units become eligible for AI classification (group 4 construction) [R-P0-04][08].
 	// Nanoframes are created with Flags without 0x20 (initializeNanoframe clears it); completion must restore it.
 	product.Flags |= units.ClassifierEligibleStatus
+	// Completion detaches through the shared cargo commit. Detach is idempotent
+	// and performs no position write or re-stamp [04 R-FAC-02 §3].
+	if product.Def != nil && product.Def.BMCode && product.Attachment.Carrier != 0 {
+		movement.DetachCargo(s.World, product.Handle)
+	}
 	if product.Def != nil && product.Def.ActivateWhenBuilt {
 		s.activate(product)
 	}
@@ -1758,10 +1811,11 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 		s.rejectPermanent(factory, node, tick, err)
 		return
 	}
+	buildPiece := -1
 	var modelPosition world.ModelWorldPosition
 	var ok bool
 	if m != nil {
-		modelPosition, ok = s.QueryBuildWorldPosition(factory, m)
+		buildPiece, modelPosition, ok = s.queryBuildPiecePosition(factory, m)
 	} else {
 		ok = false
 	}
@@ -1833,7 +1887,15 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 		return
 	}
 	// Success epilogue [05 C18].
-	s.successEpilogue(factory, node, product, cell)
+	if err := s.successEpilogue(factory, node, product, cell, buildPiece); err != nil {
+		s.ReleasePlacement(product.Handle)
+		if s.World != nil && s.World.Unit(product.Handle) != nil {
+			s.World.Destroy(product.Handle, units.DeathKilled)
+		} else {
+			product.Alive = false
+		}
+		s.rejectPermanent(factory, node, tick, err)
+	}
 }
 
 // handleMobileState2 implements mobile build placement at the authoritative site anchor [P0-I05][05 "Factory production lifecycle"].
@@ -2121,11 +2183,9 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 	// State 3's zero-remaining helper has already completed the product (and may
 	// have raised its Activate edge). State 4 now lowers the factory building
 	// edge before repeating the product transition idempotently [R-FAC-01R].
-	// TODO(question): [R-FAC-01C] completion is not established as a separate
-	// factory-release state. Do not add an egress target, producer/product
-	// collision exemption, no-stacking gate, or aircraft takeoff ordering here;
-	// the retail boundary requires a first-movement/occupancy trace.
-	// Note: product LOS after settlement phase5, targetable already phase3, GetBuilt same/next tick by slot [P0-14].
+	// The repeated transition observes that the first transition already
+	// detached the mobile product and performs no position write
+	// [04 R-FAC-02 §3].
 	// Trigger BuildUnitType only on local 30-tick deadline [P0-14].
 	// Interrupt masks 2/8 bodies known, producers TODO(T25) [P0-14].
 	// Engine prints no text, lowers start-building edge, runs completion transition [05].
@@ -2267,6 +2327,9 @@ func (s *Service) Pump(factory *units.Unit, tick uint32) {
 // nodes are rally points for produced units, not movement orders for the
 // (immobile) factory itself.
 func isStandingOpID(id orders.ID) bool {
+	if bc := orders.Lookup("BeCarried"); bc != 0 && id == bc {
+		return true
+	}
 	if gb := orders.Lookup("GetBuilt"); gb != 0 && id == gb {
 		return true
 	}
@@ -2296,73 +2359,81 @@ func firstWorkNode(prim []*orders.Node) *orders.Node {
 	return nil
 }
 
-// resolveGetBuilt enforces the get-built node's self-drop on a completed
-// product [05 C18][05 "Rally inheritance"]: after the product reaches zero
-// remaining, rally inheritance or the no-rally Park fallback runs here; while
-// the product is still under construction the node waits per the researched
-// retry gates.
-func (s *Service) resolveGetBuilt(product *units.Unit, tick uint32) {
-	if s == nil || product == nil {
-		return
+// handleGetBuiltOrder is the construction-owned handler invoked only by the
+// ordered primary queue walk [04 R-FAC-02 §4].
+func (s *Service) handleGetBuiltOrder(product *units.Unit, node *orders.Node, tick uint32) orders.Code {
+	if s == nil || product == nil || node == nil {
+		return 5
 	}
-	q := s.queueForUnit(product)
-	if q == nil || q.LenPrimary() == 0 {
-		return
-	}
-	gb := orders.Lookup("GetBuilt")
-	if gb == 0 {
-		return
-	}
-	head := q.Primary()[0]
-	if head.ID != gb {
-		return
-	}
-	// Under construction uses three established retry states: state 0 schedules
-	// 300 ticks, state 1 schedules 30 ticks, and state 2 waits on its wake bit
-	// [R-P0-09][05 "Rally inheritance"].
 	if product.Remaining > 0 {
-		if head.Deadline >= 0 && tick < uint32(head.Deadline) {
-			return
-		}
-		switch State(head.Phase) {
+		switch State(node.Phase) {
 		case State0:
-			head.Phase = uint8(State1)
-			head.DynamicGate = WakeBit1
-			head.Deadline = int32(tick + 300)
+			node.Phase = uint8(State1)
+			node.DynamicGate = 0x8001
+			node.Deadline = int32(tick + 300)
 		case State1:
-			head.Phase = uint8(State2)
-			head.DynamicGate = WakeBit2
-			head.Deadline = int32(tick + 30)
+			node.Phase = uint8(State2)
+			// TODO(question): Param3 is the local first-decay latch because the
+			// curated three-state trace establishes the extra phase-2 setup visit
+			// but does not name its storage. Decider: trace the GetBuilt record
+			// writes surrounding the phase-1 to phase-2 transition and identify
+			// the byte/word tested on the first phase-2 ordinary-deadline visit.
+			node.Param3 = 1
+			node.DynamicGate = 0x8001
+			node.Deadline = int32(tick + 30)
+		case State2:
+			if node.Param3 != 0 {
+				node.Param3 = 0
+				node.DynamicGate = 0x8001
+				node.Deadline = int32(tick + 11)
+				return 2
+			}
+			// Phase 2 applies the shared negative work arm before rearming
+			// eleven ticks [04 R-FAC-02 §4][04 R-ORD-01 §5].
+			if product.Def != nil && product.Def.BuildCostEnergy > 0 {
+				worker := -(11 * product.Def.BuildTime / product.Def.BuildCostEnergy)
+				var bucket *float32
+				if s.Economy != nil {
+					if buckets := s.Economy.UnitBuckets(product.Handle); buckets != nil {
+						bucket = &buckets[economy.Metal].Production
+					}
+				}
+				special := s.IsSpecialSecondState != nil && s.IsSpecialSecondState(product.Owner)
+				ApplyReverse(product, product, worker, special, s.ModeSelector, bucket)
+			} else {
+				// TODO(question): retail behavior for malformed products with zero
+				// BuildCostEnergy; stock factory products provide a positive divisor.
+			}
+			node.Phase = uint8(State2)
+			node.DynamicGate = 0x8001
+			node.Deadline = int32(tick + 11)
 		default:
-			head.Phase = uint8(State2)
-			head.DynamicGate = WakeBit2
-			head.Deadline = -1
+			// Only states 0, 1, and 2 are established for GetBuilt
+			// [04 R-P0-09]. Normalize malformed fixture/save state without
+			// introducing another retail phase.
+			node.Phase = uint8(State2)
+			node.DynamicGate = 0x8001
+			node.Deadline = int32(tick + 11)
 		}
-		return
+		return 2
 	}
-	// TODO(question): [R-FAC-01C] this is the unresolved completion/rally-or-Park
-	// boundary. The bounded chain establishes direct allocation plus GetBuilt,
-	// but not a later release target/state, producer-product exemption,
-	// no-stacking rule, or aircraft takeoff-before-rally ordering. Preserve the
-	// current ordinary rally/Park handoff until retail evidence closes it.
+
+	// Completion is observed only on GetBuilt's own due visit. Rally/park is
+	// appended behind this record; code 5 lets the pump unlink it and continue
+	// in the same pass [04 R-FAC-02 §4].
 	builderHandle, ok := s.getBuiltLinks[product.Handle]
-	if !ok || builderHandle == 0 || s.World == nil {
-		// A restored product may not have an in-memory builder link. The retail
-		// cleanup/recovery path is unresolved; remove the watcher without
-		// inventing a replacement builder [R-P0-09].
-		q.RemoveHead()
-		return
-	}
-	builder := s.World.Unit(builderHandle)
-	if builder != nil {
-		s.rallyInheritance(builder, product)
+	if ok && builderHandle != 0 && s.World != nil {
+		if builder := s.World.Unit(builderHandle); builder != nil {
+			if s.OnRefresh != nil {
+				s.OnRefresh(builder)
+			}
+			if product.Def != nil && product.Def.BMCode {
+				s.rallyInheritance(builder, product)
+			}
+		}
 	}
 	delete(s.getBuiltLinks, product.Handle)
-	// rallyInheritance may have rebound the product queue. Reacquire it before
-	// dropping GetBuilt so the watcher cannot survive on the new primary list.
-	if current := s.queueForUnit(product); current != nil {
-		current.RemoveHead() // GetBuilt drops itself [05 "Rally inheritance"]
-	}
+	return 5
 }
 
 func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {
@@ -2395,17 +2466,18 @@ func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {
 		return WorkResult{Builder: handle, Owner: builder.Owner, State: State0, Diagnostics: append([]string(nil), s.messages...)}
 	}
 	prim := q.Primary()
+	// A standalone GetBuilt head is advanced through the real queue pump. This
+	// keeps unit-local construction stepping composable without the old
+	// direct per-tick resolver; a preceding BeCarried record still exclusively
+	// controls when the walk can reach GetBuilt [04 R-FAC-02 §4].
+	if len(prim) > 0 && prim[0] != nil && prim[0].ID == orders.Lookup("GetBuilt") {
+		q.Pump(builder, tick)
+		prim = q.Primary()
+	}
 	if len(prim) == 0 {
 		return WorkResult{Builder: handle, Owner: builder.Owner, State: State0, Diagnostics: append([]string(nil), s.messages...)}
 	}
 	head := prim[0]
-	// GetBuilt resolution [05 C18][05 "Rally inheritance"] — must not block
-	// factory production behind a stale get-built node (RX-05).
-	if gbID := orders.Lookup("GetBuilt"); gbID != 0 && head.ID == gbID {
-		if u := w.Unit(handle); u != nil {
-			s.resolveGetBuilt(u, tick)
-		}
-	}
 	// Work discovery skips standing ops (GetBuilt pending resolution, Park)
 	// so a completed factory keeps producing [RX-05][05 "Queue insertion"].
 	head = firstWorkNode(prim)

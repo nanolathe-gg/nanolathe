@@ -45,9 +45,16 @@ func makePlacementManager(cat *content.Catalog, terrain *world.Terrain, metal in
 	if terrain != nil {
 		m.Strategic.CenterX = world.CellToWorld(terrain.CellW / 2)
 		m.Strategic.CenterZ = world.CellToWorld(terrain.CellH / 2)
+		m.Factory.X = m.Strategic.CenterX
+		m.Factory.Z = m.Strategic.CenterZ
 		m.OriginX = m.Strategic.CenterX
 		m.OriginZ = m.Strategic.CenterZ
 	}
+	// Deterministic constructor products; InitializeRandomState itself is
+	// covered in strategic/runtime RNG tests.
+	m.Strategic.setupDrawsReady = true
+	m.Strategic.LandRegion = PlacementRegion{CellW: 20, CellH: 20}
+	m.Strategic.WaterRegion = PlacementRegion{CellW: 20, CellH: 20}
 	m.QueueBuildTyped = func(BuildRequest) error { return nil }
 	return m
 }
@@ -56,7 +63,7 @@ func TestPlacementSelectorStrictBoundaryAndNoFallthrough(t *testing.T) {
 	cat := placementCatalog("armmex", "oooo", 0.001)
 	ter := placementTerrain(16, 16, 0)
 	// A positive selector draw with surfaceMetal zero chooses the exhaustive
-	// helper. Its unavailable patch vector is an explicit failure, not B.
+	// helper. Its empty battle-entry vector fails without falling through to B.
 	m := makePlacementManager(cat, ter, 0)
 	res := PlaceWithResult(m, "armmex", ter)
 	if res.Valid || res.Helper != HelperA || res.Reason != ReasonNoPatchData {
@@ -80,26 +87,44 @@ func TestPlacementSelectorStrictBoundaryAndNoFallthrough(t *testing.T) {
 	m = makePlacementManager(cat, ter, 50)
 	m.RNG = &r
 	res = PlaceWithResult(m, "armmex", ter)
-	if res.Valid || res.Helper != HelperB || res.Reason != ReasonUnknownGeometry {
-		t.Fatalf("surfaceMetal == draw must select B and stop at unknown geometry: %+v", res)
+	if res.Helper != HelperB {
+		t.Fatalf("surfaceMetal == draw must select B: %+v", res)
 	}
-	if m.RNG.Draws() != 1 {
-		t.Fatalf("unknown B geometry consumes selector but no trial draws, got %d", m.RNG.Draws())
+	if m.RNG.Draws() < 5 {
+		t.Fatalf("selector plus first scatter trial must consume at least five draws, got %d", m.RNG.Draws())
 	}
 }
 
-func TestPlacementUnknownScatterDoesNotConsumeTrialRNG(t *testing.T) {
-	cat := placementCatalog("armsolar", "oooo", 0)
-	m := makePlacementManager(cat, placementTerrain(8, 8, 1), 0)
-	res := PlaceWithResult(m, "armsolar", m.Terrain)
-	if res.Valid || res.Helper != HelperB || res.Reason != ReasonUnknownGeometry {
-		t.Fatalf("expected explicit unknown scatter failure: %+v", res)
+func TestScatterHelperDrawCensus(t *testing.T) {
+	tests := []struct {
+		name       string
+		footX      int32
+		footZ      int32
+		wantPerTry uint64
+	}{
+		{"four", 2, 2, 4},
+		{"three", 13, 2, 3},
+		{"two", 13, 13, 2},
 	}
-	if res.Attempts != 0 || len(res.TrialReasons) != 0 {
-		t.Fatalf("unknown geometry must perform no trials, got %d/%d", res.Attempts, len(res.TrialReasons))
-	}
-	if m.RNG.Draws() != 0 {
-		t.Fatalf("non-extractor unknown geometry consumes zero trial draws, got %d", m.RNG.Draws())
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cat := placementCatalog("armsolar", "o", 0)
+			def := cat.Units["armsolar"]
+			def.FootprintX, def.FootprintZ = tc.footX, tc.footZ
+			terrain := placementTerrain(8, 8, 0)
+			for i := range terrain.Plot {
+				terrain.Plot[i].SetOccupantA(1) // force all in-bounds trials to fail
+			}
+			m := makePlacementManager(cat, terrain, 0)
+			before := m.RNG.Draws()
+			res := PlaceWithResult(m, "armsolar", terrain)
+			if res.Valid || res.Helper != HelperB || res.Reason != ReasonTooManyTrials || res.Attempts != 30 {
+				t.Fatalf("scatter result: %+v", res)
+			}
+			if got := m.RNG.Draws() - before; got != tc.wantPerTry*30 {
+				t.Fatalf("draws=%d, want %d per trial x30", got, tc.wantPerTry)
+			}
+		})
 	}
 }
 
@@ -231,8 +256,11 @@ func TestPlacementPropagatesTypedQueueError(t *testing.T) {
 
 func TestStepTowardCenterUsesFixedPointTruncation(t *testing.T) {
 	x, z := stepTowardCenter(numeric.FixedFromInt(0), 0, numeric.FixedFromInt(100), 0, numeric.FixedFromInt(10))
-	if x != numeric.FixedFromInt(10) || z != 0 {
-		t.Fatalf("origin step got %d,%d", x, z)
+	dist := int64(numeric.FixedFromInt(100))
+	scale := (int64(10) << 32) / dist
+	wantX := numeric.Fixed((int64(numeric.FixedFromInt(100)) * scale) >> 16)
+	if x != wantX || z != 0 {
+		t.Fatalf("fixture adapter got %d,%d, want %d,0", x, z, wantX)
 	}
 }
 

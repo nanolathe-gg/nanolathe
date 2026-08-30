@@ -30,7 +30,14 @@ func spawn(t *testing.T, w *units.World, name string, owner uint8, x, z int32) *
 }
 
 func pollCtx(w *units.World, tick uint32) PollContext {
-	return PollContext{Tick: tick, World: w, LocalOwner: 0, EnemyOwner: 1}
+	return PollContext{
+		Tick: tick, World: w, MissionArmed: true,
+		StampedCell: func(u *units.Unit) (int16, int16, bool) {
+			return int16(u.X.Int() >> 4), int16(u.Z.Int() >> 4), true
+		},
+		Deproject:   func(x, z int32) (int32, int32, int32) { return x << 16, 0, z << 16 },
+		IsCommander: func(u *units.Unit) bool { return u != nil && u.Def != nil && u.Def.Commander },
+	}
 }
 
 // TestPollDoesNotAdvanceCountdowns is the F-8.1 regression guard. The countdown
@@ -117,8 +124,7 @@ func TestDefaultTriggersResolve(t *testing.T) {
 	w := triggerWorld(t)
 	vic, def := EnsureDefaults(nil, nil)
 
-	// DestroyAllUnits is self-satisfied from the first poll: its counter has no
-	// writer anywhere in the image [08 "Evaluation"].
+	// DestroyAllUnits reads slot 1's live-unit counter [08 R-TRIG-01 §4].
 	vDone, dDone := Evaluate(vic, def, pollCtx(w, 0))
 	if !vDone {
 		t.Fatal("the default victory condition never resolves")
@@ -128,7 +134,8 @@ func TestDefaultTriggersResolve(t *testing.T) {
 	// The default defeat condition resolves when the local player is wiped out.
 	_, def2 := EnsureDefaults(nil, nil)
 	spawn(t, w, "ARMCOM", 0, 0, 0)
-	if _, d := Evaluate(nil, def2, pollCtx(w, 0)); d {
+	blockingVictory := []*Trigger{NewTimer(KindVictoryTimerRunsOut, 100)}
+	if _, d := Evaluate(blockingVictory, def2, pollCtx(w, 0)); d {
 		t.Fatal("all-units-killed fired while the local player still has units")
 	}
 	for _, u := range w.Iter() {
@@ -136,7 +143,7 @@ func TestDefaultTriggersResolve(t *testing.T) {
 			u.Alive = false
 		}
 	}
-	if _, d := Evaluate(nil, def2, pollCtx(w, 0)); !d {
+	if _, d := Evaluate(blockingVictory, def2, pollCtx(w, 0)); !d {
 		t.Fatal("all-units-killed did not fire with no local units left")
 	}
 }
@@ -144,35 +151,36 @@ func TestDefaultTriggersResolve(t *testing.T) {
 // TestBuildUnitTypeScansTheWorld locks the poll-time scan [08 "Evaluation"].
 func TestBuildUnitTypeScansTheWorld(t *testing.T) {
 	w := triggerWorld(t)
-	tr := New(KindBuildUnitType, "ARMSY", 2)
+	tr := New(KindBuildUnitType, "ARMSY")
 	c := pollCtx(w, 0)
 
 	if tr.Poll(c) {
 		t.Fatal("completed with nothing built")
 	}
 	spawn(t, w, "ARMSY", 0, 0, 0)
-	if tr.Poll(c) {
-		t.Fatal("completed with one of two built")
+	if !tr.Poll(c) {
+		t.Fatal("the first finished local unit did not satisfy the name-only condition")
 	}
-	// An enemy unit of the same type does not count toward the local build.
+	// An enemy unit of the same type does not count toward a fresh local condition.
 	spawn(t, w, "ARMSY", 1, 0, 0)
+	tr = New(KindBuildUnitType, "OTHER")
 	if tr.Poll(c) {
 		t.Fatal("an enemy unit satisfied a local build condition")
 	}
 	// A nanoframe is not a completed unit.
-	frame := spawn(t, w, "ARMSY", 0, 0, 0)
+	frame := spawn(t, w, "OTHER", 0, 0, 0)
 	frame.Remaining = 1
 	if tr.Poll(c) {
 		t.Fatal("an unfinished nanoframe counted as built")
 	}
 	frame.Remaining = 0
 	if !tr.Poll(c) {
-		t.Fatal("two completed units should satisfy the condition")
+		t.Fatal("a finished local unit should satisfy the condition")
 	}
 }
 
-// TestCommanderConditionsGateOnOwner locks the split between the victory and
-// defeat commander conditions [08 "Evaluation"].
+// TestCommanderConditionsGateOnOwner locks the notification and literal owner
+// predicates [08 R-TRIG-01 §3, §4].
 func TestCommanderConditionsGateOnOwner(t *testing.T) {
 	w := triggerWorld(t)
 	mine := spawn(t, w, "ARMCOM", 0, 0, 0)
@@ -183,29 +191,26 @@ func TestCommanderConditionsGateOnOwner(t *testing.T) {
 
 	kill := New(KindKillEnemyCommander, "")
 	lose := New(KindCommanderKilled, "")
-	if kill.Poll(c) || lose.Poll(c) {
-		t.Fatal("commander conditions fired with both commanders alive")
+	if kill.Notify(c, NotifyUnitDied, mine) {
+		t.Fatal("enemy-commander victory counted the local commander")
 	}
-	theirs.Alive = false
-	if !kill.Poll(c) {
-		t.Fatal("KillEnemyCommander did not fire with the enemy commander dead")
+	if !kill.Notify(c, NotifyUnitDied, theirs) {
+		t.Fatal("KillEnemyCommander ignored the enemy commander removal")
 	}
-	if lose.Poll(c) {
+	if lose.Notify(c, NotifyUnitDied, theirs) {
 		t.Fatal("CommanderKilled fired for the enemy's commander")
 	}
-	mine.Alive = false
-	if !lose.Poll(c) {
-		t.Fatal("CommanderKilled did not fire with the local commander dead")
+	if !lose.Notify(c, NotifyUnitDied, mine) {
+		t.Fatal("CommanderKilled ignored the local commander removal")
 	}
 }
 
-// TestBoundaryTolerance locks C17's ±2 window over the poll-time scan
-// with the promoted retail contract: threshold stored after arithmetic >>4 and
-// poll compares (worldPixel>>4) vs threshold with abs <3 [08 "Evaluation"].
+// TestBoundaryTolerance locks the strict ±2-cell window over the committed
+// footprint anchor [08 R-TRIG-01 §3].
 func TestBoundaryTolerance(t *testing.T) {
 	// Threshold 100 is already authored>>4 (authored 1600). Positions are
 	// worldPixel values; 1600>>4=100, 1632>>4=102 etc. Tolerance is <3 on the
-	// shifted values, i.e. ±2 world units after >>4 (32 worldPixel).
+	// stamped-cell values, i.e. ±2 cells after >>4 (32 world pixels).
 	cases := []struct {
 		pos      int32 // worldPixel X
 		thresh   int32 // already shifted (authored>>4)
@@ -219,7 +224,7 @@ func TestBoundaryTolerance(t *testing.T) {
 	}
 	for _, tc := range cases {
 		w := triggerWorld(t)
-		spawn(t, w, "ARMFAV", 0, tc.pos, 0)
+		spawn(t, w, "ARMFAV", 1, tc.pos, 0)
 		tr := New(KindAnyUnitPassesX, "", tc.thresh)
 		if got := tr.Poll(pollCtx(w, 0)); got != tc.wantPass {
 			t.Fatalf("AnyUnitPassesX pos %d (>>4=%d) thresh %d: got %v want %v",
@@ -229,7 +234,7 @@ func TestBoundaryTolerance(t *testing.T) {
 	// Also verify negative thresholds with arithmetic shift: -1600>>4 = -100.
 	{
 		w := triggerWorld(t)
-		spawn(t, w, "ARMFAV", 0, -1600, 0) // -100
+		spawn(t, w, "ARMFAV", 1, -1600, 0) // -100
 		tr := New(KindAnyUnitPassesX, "", -100)
 		if !tr.Poll(pollCtx(w, 0)) {
 			t.Fatal("negative boundary should pass at diff 0")
@@ -237,7 +242,7 @@ func TestBoundaryTolerance(t *testing.T) {
 	}
 	{
 		w := triggerWorld(t)
-		spawn(t, w, "ARMFAV", 0, -1552, 0) // -97 diff 3 should fail
+		spawn(t, w, "ARMFAV", 1, -1552, 0) // -97 diff 3 should fail
 		tr2 := New(KindAnyUnitPassesX, "", -100)
 		if tr2.Poll(pollCtx(w, 0)) {
 			t.Fatal("negative boundary diff 3 should fail")
@@ -258,6 +263,31 @@ func TestBoundaryTolerance(t *testing.T) {
 	}
 }
 
+func TestMoveRadiusSignedCoordinateSubtraction(t *testing.T) {
+	const maxInt32 = int32(1<<31 - 1)
+	const minInt32 = int32(-1 << 31)
+	if got := wrappedDelta(int64(maxInt32), minInt32); got != -1 {
+		t.Fatalf("max-min wrapped delta = %d want -1", got)
+	}
+	if got := wrappedDelta(int64(minInt32), maxInt32); got != 1 {
+		t.Fatalf("min-max wrapped delta = %d want 1", got)
+	}
+	if got := wrappedDelta(int64(minInt32), 0); got*got != int64(1)<<62 {
+		t.Fatalf("widest signed delta square = %d want %d", got*got, int64(1)<<62)
+	}
+
+	w := triggerWorld(t)
+	u := spawn(t, w, "ARMCOM", 0, 0, 0)
+	u.X = numeric.Fixed(maxInt32)
+	c := pollCtx(w, 0)
+	c.Deproject = func(_, _ int32) (int32, int32, int32) {
+		return minInt32 + 65535, 0, 0
+	}
+	if New(KindMoveUnitToRadius, "ARMCOM", 0, 0, 0).Poll(c) {
+		t.Fatal("wrapped one-pixel delta satisfied a zero-radius condition")
+	}
+}
+
 // TestTimerSecondsToTicks locks the seconds×30 deadline [08 "Evaluation"] C17.
 func TestTimerSecondsToTicks(t *testing.T) {
 	w := triggerWorld(t)
@@ -271,9 +301,9 @@ func TestTimerSecondsToTicks(t *testing.T) {
 	if !tr.Poll(pollCtx(w, 300)) {
 		t.Fatal("tick 300 should fire")
 	}
-	// A completed trigger stays completed regardless of tick.
-	if !tr.Poll(pollCtx(w, 0)) {
-		t.Fatal("completed trigger should stay completed")
+	// Timer predicates never store Satisfied; an earlier tick is false again.
+	if tr.Poll(pollCtx(w, 0)) {
+		t.Fatal("timer predicate latched instead of being recomputed")
 	}
 	if got := NewTimer(KindDeathTimerRunsOut, 1200).Args[0]; got != 36000 {
 		t.Fatalf("1200 sec -> %d want 36000", got)
@@ -324,17 +354,141 @@ func TestEvaluateCombination(t *testing.T) {
 	if _, d := Evaluate(vic, def, c); !d {
 		t.Fatal("defeat OR did not fire with one member complete")
 	}
-	// An empty victory queue never wins — the default is injected instead.
-	if v, _ := Evaluate(nil, def, c); v {
-		t.Fatal("an empty victory queue reported a win")
+	// An empty victory queue injects DestroyAllUnits at poll time.
+	if v, _ := Evaluate(nil, def, c); !v {
+		t.Fatal("the poll-time default victory was not injected")
 	}
+}
+
+func TestEvaluateShortCircuitAndMissionArmed(t *testing.T) {
+	w := triggerWorld(t)
+	c := pollCtx(w, 0)
+	late := NewTimer(KindVictoryTimerRunsOut, 10)
+	notPolledVictory := New(KindAllUnitsKilled, "")
+	firstDefeat := New(KindAllUnitsKilled, "")
+	notPolledDefeat := New(KindAllUnitsKilled, "")
+
+	if v, d := Evaluate([]*Trigger{late, notPolledVictory}, []*Trigger{firstDefeat, notPolledDefeat}, c); v || !d {
+		t.Fatalf("want false victory and first-true defeat, got v=%v d=%v", v, d)
+	}
+	if notPolledVictory.Completed || notPolledDefeat.Completed {
+		t.Fatalf("queue short-circuit polled later records: victory=%v defeat=%v", notPolledVictory.Completed, notPolledDefeat.Completed)
+	}
+
+	celebrations := 0
+	c.Celebrate = func() { celebrations++ }
+	c.MissionArmed = false
+	pure := New(KindDestroyAllUnits, "")
+	if v, d := Evaluate([]*Trigger{pure}, nil, c); v || d || celebrations != 0 || pure.Celebrated {
+		t.Fatalf("unarmed mission evaluated queues: v=%v d=%v cues=%d trigger=%+v", v, d, celebrations, pure)
+	}
+}
+
+func TestVictoryCelebrationIsOncePerRecord(t *testing.T) {
+	c := pollCtx(triggerWorld(t), 0)
+	celebrations := 0
+	c.Celebrate = func() { celebrations++ }
+	pure := New(KindDestroyAllUnits, "")
+	if !pure.Poll(c) || !pure.Poll(c) || pure.Completed || !pure.Celebrated || celebrations != 1 {
+		t.Fatalf("pure victory predicate cue state got trigger=%+v cues=%d", pure, celebrations)
+	}
+}
+
+func TestPureAnnihilationPredicatesCanBecomeFalseAgain(t *testing.T) {
+	w := triggerWorld(t)
+	c := pollCtx(w, 0)
+	celebrations := 0
+	c.Celebrate = func() { celebrations++ }
+	destroy := New(KindDestroyAllUnits, "")
+	if !destroy.Poll(c) || celebrations != 1 || destroy.Completed {
+		t.Fatalf("initial destroy predicate = %+v cues=%d", destroy, celebrations)
+	}
+	spawn(t, w, "CORCOM", 1, 0, 0)
+	if destroy.Poll(c) || celebrations != 1 || destroy.Completed || !destroy.Celebrated {
+		t.Fatalf("reinforcement did not clear pure destroy predicate: %+v cues=%d", destroy, celebrations)
+	}
+
+	w2 := triggerWorld(t)
+	allKilled := New(KindAllUnitsKilled, "")
+	if !allKilled.Poll(pollCtx(w2, 0)) || allKilled.Celebrated {
+		t.Fatal("empty slot-0 slice should satisfy AllUnitsKilled")
+	}
+	spawn(t, w2, "ARMCOM", 0, 0, 0)
+	if allKilled.Poll(pollCtx(w2, 0)) || allKilled.Completed || allKilled.Celebrated {
+		t.Fatalf("new eligible local unit did not clear AllUnitsKilled: %+v", allKilled)
+	}
+}
+
+func TestNotificationSubjectIncludedCounts(t *testing.T) {
+	t.Run("mobile", func(t *testing.T) {
+		w := triggerWorld(t)
+		subject := spawn(t, w, "CORAK", 1, 0, 0)
+		subject.Def.BMCode = true
+		tr := New(KindKillAllMobileUnits, "")
+		if !tr.Notify(pollCtx(w, 0), NotifyUnitDied, subject) {
+			t.Fatal("sole occupied mobile subject should complete")
+		}
+
+		w = triggerWorld(t)
+		subject = spawn(t, w, "CORAK", 1, 0, 0)
+		subject.Def.BMCode = true
+		other := spawn(t, w, "CORFAV", 1, 0, 0)
+		other.Def.BMCode = true
+		tr = New(KindKillAllMobileUnits, "")
+		if tr.Notify(pollCtx(w, 0), NotifyUnitDied, subject) {
+			t.Fatal("second occupied mobile enemy was not counted")
+		}
+	})
+
+	t.Run("all-of-type", func(t *testing.T) {
+		w := triggerWorld(t)
+		subject := spawn(t, w, "CORAK", 1, 0, 0)
+		tr := New(KindKillAllOfType, "CORAK")
+		if !tr.Notify(pollCtx(w, 0), NotifyUnitDied, subject) {
+			t.Fatal("sole occupied typed subject should complete")
+		}
+
+		w = triggerWorld(t)
+		subject = spawn(t, w, "CORAK", 1, 0, 0)
+		spawn(t, w, "CORAK", 1, 0, 0)
+		tr = New(KindKillAllOfType, "CORAK")
+		if tr.Notify(pollCtx(w, 0), NotifyUnitDied, subject) {
+			t.Fatal("second occupied typed enemy was not counted")
+		}
+	})
+
+	t.Run("both-primary-slots", func(t *testing.T) {
+		w := triggerWorld(t)
+		subject := spawn(t, w, "ARMFAV", 0, 0, 0)
+		other := spawn(t, w, "ARMFAV", 1, 0, 0)
+		tr := New(KindAllUnitsKilledOfType, "ARMFAV")
+		if tr.Notify(pollCtx(w, 0), NotifyUnitDied, subject) {
+			t.Fatal("matching records across slots 0 and 1 did not carry the count")
+		}
+		other.Alive = false
+		if !tr.Notify(pollCtx(w, 0), NotifyUnitDied, subject) {
+			t.Fatal("sole occupied subject across primary slots should complete")
+		}
+	})
+
+	t.Run("defeat-count-continues", func(t *testing.T) {
+		w := triggerWorld(t)
+		subject := spawn(t, w, "ARMFAV", 0, 0, 0)
+		tr := New(KindUnitTypeKilled, "ARMFAV", 1)
+		if !tr.Notify(pollCtx(w, 0), NotifyUnitDied, subject) || tr.Args[0] != 0 {
+			t.Fatalf("first notification = %+v", tr)
+		}
+		if !tr.Notify(pollCtx(w, 0), NotifyUnitDied, subject) || tr.Args[0] != -1 {
+			t.Fatalf("completed defeat countdown did not continue below zero: %+v", tr)
+		}
+	})
 }
 
 // TestPollMutatesOnlyCompleted locks C17's purity for the scanning kinds.
 func TestPollMutatesOnlyCompleted(t *testing.T) {
 	w := triggerWorld(t)
 	// 8032>>4=502, 8000>>4=500 diff 2 after >>4 — should cross.
-	spawn(t, w, "ARMFAV", 0, 8032, 0)
+	spawn(t, w, "ARMFAV", 1, 8032, 0)
 	tr := New(KindAnyUnitPassesX, "", 500)
 	args, typ := tr.Args, tr.Type
 	if !tr.Poll(pollCtx(w, 0)) {

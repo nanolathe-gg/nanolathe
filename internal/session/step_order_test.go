@@ -7,6 +7,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/triggers"
+	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 // TestStepOrderPathPublicationAfterMovement locks the corrected observable
@@ -48,51 +49,39 @@ func TestStepOrderPathPublicationAfterMovement(t *testing.T) {
 	}
 }
 
-// TestMissionTriggerPrecedence locks the type-specific poll order at the
-// local-player phase-5 boundary. Campaign evaluates victory first; direct OTA
-// evaluates defeat first only after the local commander marker clears, while a
-// live commander suppresses defeat polling but not victory polling [08
-// "Evaluation"].
+// TestMissionTriggerPrecedence locks the kind-specific queue boundary.
+// Kind 1 evaluates victory first and does not poll defeat after a true victory;
+// kind 2 never polls either queue [08 R-TRIG-01 §1, §6].
 func TestMissionTriggerPrecedence(t *testing.T) {
-	newTriggerSession := func(typ mission.Type, localCommanderAlive bool) *Session {
+	newTriggerSession := func(typ mission.Type) *Session {
 		s := newLoopTestSession(t, 2)
 		s.Mission.Type = typ
-		// The fixture's authored side records name ARMCOM/CORCOM; make the
-		// local side selection explicit so the gate resolves Catalog.Sides[0].
-		s.Skirmish.Players[0].Side = 0
-		s.Skirmish.Players[1].Side = 1
+		s.Mission.Units = []mission.UnitPlacement{{}}
 		s.Mission.Victory = []*triggers.Trigger{triggers.New(triggers.KindDestroyAllUnits, "")}
-		s.Mission.Defeat = []*triggers.Trigger{triggers.New(triggers.KindCommanderKilled, "")}
-		if !localCommanderAlive {
-			for _, u := range s.Units.IterSliced() {
-				if u != nil && u.Owner == s.LocalOwner {
-					u.Alive = false
-				}
+		s.Mission.Defeat = []*triggers.Trigger{triggers.NewTimer(triggers.KindDeathTimerRunsOut, 0)}
+		for _, u := range s.Units.IterSliced() {
+			if u != nil && u.Owner == 1 {
+				s.Units.Destroy(u.Handle, units.DeathKilled)
+				s.Units.FinalizeDeath(u.Handle, 0)
 			}
 		}
-		s.triggerDue = 0
-		s.triggerDueValid = true
+		s.LocalOwner = 9 // stale adapter state must not select the trigger deadline.
+		s.Econ.Players[0].WinLoseTime = 0
 		return s
 	}
 
-	campaign := newTriggerSession(mission.TypeCampaign, false)
+	campaign := newTriggerSession(mission.TypeCampaign)
 	campaign.pollMissionTriggers(0)
 	if !campaign.VictoryDone || campaign.DefeatDone {
 		t.Fatalf("campaign simultaneous completion must resolve as victory: victory=%v defeat=%v", campaign.VictoryDone, campaign.DefeatDone)
 	}
-
-	directDead := newTriggerSession(mission.TypeSkirmish, false)
-	directDead.pollMissionTriggers(0)
-	if directDead.VictoryDone || !directDead.DefeatDone {
-		t.Fatalf("direct OTA with dead local commander must resolve as defeat: victory=%v defeat=%v", directDead.VictoryDone, directDead.DefeatDone)
+	if campaign.LocalOwner != 0 || campaign.Econ.Players[0].WinLoseTime != 30 {
+		t.Fatalf("campaign did not use authoritative local player deadline: owner=%d due=%d", campaign.LocalOwner, campaign.Econ.Players[0].WinLoseTime)
 	}
 
-	directAlive := newTriggerSession(mission.TypeSkirmish, true)
-	directAlive.pollMissionTriggers(0)
-	if !directAlive.VictoryDone || directAlive.DefeatDone {
-		t.Fatalf("direct OTA with live local commander must poll victory only: victory=%v defeat=%v", directAlive.VictoryDone, directAlive.DefeatDone)
-	}
-	if directAlive.Mission.Defeat[0].Completed {
-		t.Fatal("direct OTA defeat trigger completed while local commander marker was set")
+	direct := newTriggerSession(mission.TypeSkirmish)
+	direct.pollMissionTriggers(0)
+	if direct.VictoryDone || direct.DefeatDone || direct.Econ.Players[0].WinLoseTime != 0 {
+		t.Fatalf("kind 2 polled mission queues: victory=%v defeat=%v due=%d", direct.VictoryDone, direct.DefeatDone, direct.Econ.Players[0].WinLoseTime)
 	}
 }

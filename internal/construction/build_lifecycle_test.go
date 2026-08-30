@@ -8,9 +8,11 @@ import (
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/model"
+	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
@@ -70,22 +72,136 @@ func TestGetBuiltRetryStates(t *testing.T) {
 	q.Push(orders.Lookup("GetBuilt"), orders.Node{Phase: uint8(State0), Deadline: -1})
 	svc := NewService(nil, cat, w, nil)
 	product.Remaining = 1
-	svc.resolveGetBuilt(product, 10)
+	svc.handleGetBuiltOrder(product, q.Primary()[0], 10)
 	gb := orders.QueueForUnit(product).Primary()[0]
-	if State(gb.Phase) != State1 || gb.Deadline != 310 || gb.DynamicGate != WakeBit1 {
+	if State(gb.Phase) != State1 || gb.Deadline != 310 || gb.DynamicGate != 0x8001 {
 		t.Fatalf("state0 retry=%+v", gb)
 	}
-	svc.resolveGetBuilt(product, 100)
+	// Direct handler invocation locks its phase arithmetic; the composed queue
+	// cadence is covered by TestFactoryCarriedGetBuiltQueueCadence below.
+	if gb.Deadline <= 100 {
+		t.Fatal("fixture deadline unexpectedly due")
+	}
 	if State(gb.Phase) != State1 {
 		t.Fatal("state1 advanced before 300-tick deadline")
 	}
-	svc.resolveGetBuilt(product, 310)
-	if State(gb.Phase) != State2 || gb.Deadline != 340 || gb.DynamicGate != WakeBit2 {
+	svc.handleGetBuiltOrder(product, gb, 310)
+	if State(gb.Phase) != State2 || gb.Deadline != 340 || gb.DynamicGate != 0x8001 {
 		t.Fatalf("state1 retry=%+v", gb)
 	}
-	svc.resolveGetBuilt(product, 340)
-	if State(gb.Phase) != State2 || gb.Deadline != -1 || gb.DynamicGate != WakeBit2 {
-		t.Fatalf("state2 wake=%+v", gb)
+	svc.handleGetBuiltOrder(product, gb, 340)
+	if State(gb.Phase) != State2 || gb.Deadline != 351 || gb.DynamicGate != 0x8001 {
+		t.Fatalf("state2 entry=%+v", gb)
+	}
+}
+
+func TestGetBuiltPhase2NegativeWorkTruncatesQuantum(t *testing.T) {
+	def := newProductDef("armflash", 1, 1, 100, 100)
+	def.BuildCostEnergy = 60
+	product := &units.Unit{Handle: 1, Owner: 0, Alive: true, Def: def, Remaining: 0.5, MaxHealth: 100}
+	node := &orders.Node{Phase: uint8(State2)}
+	svc := NewService(nil, nil, nil, &economy.Service{})
+	if code := svc.handleGetBuiltOrder(product, node, 40); code != 2 {
+		t.Fatalf("GetBuilt code=%d, want hold", code)
+	}
+	// -(11*100/60) truncates to -18 before the shared reverse helper,
+	// producing exactly +18/100 remaining rather than +11/60.
+	want := float32(0.5) + float32(18)/float32(100)
+	if product.Remaining != want || node.Deadline != 51 || node.DynamicGate != 0x8001 {
+		t.Fatalf("phase-2 result remaining=%v deadline=%d gate=%#x, want %v/51/0x8001", product.Remaining, node.Deadline, node.DynamicGate, want)
+	}
+}
+
+func TestGetBuiltDeadlineRaisesOnlyOrdinaryBit(t *testing.T) {
+	def := newProductDef("armflash", 1, 1, 100, 100)
+	w := newConstructionFixtureWorld(4, &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}})
+	h, _ := w.Create(def, 0, 0, 0, 0)
+	product := w.Unit(h)
+	product.Remaining = 1
+	q := orders.QueueForUnit(product)
+	q.Push(orders.Lookup("GetBuilt"), orders.Node{})
+	gb := q.Primary()[0]
+	gb.DynamicGate = 0x8000
+	gb.Deadline = 1
+	sim := rng.NewSimulation(99)
+	svc := NewService(nil, nil, w, nil)
+	svc.OrderBinding = &orders.QueueBinding{SimRNG: &sim}
+	svc.queueForUnit(product)
+	q.Pump(product, 1)
+	if gb.Phase != uint8(State0) || gb.DynamicGate != 0x8000 || gb.Deadline != -1 || gb.Satisfied != 1 {
+		t.Fatalf("0x8000-only deadline state phase=%d gate=%#x deadline=%d satisfied=%#x, want 0/0x8000/-1/1", gb.Phase, gb.DynamicGate, gb.Deadline, gb.Satisfied)
+	}
+	if sim.Draws() != 0 {
+		t.Fatalf("blocked GetBuilt deadline consumed %d RNG draws", sim.Draws())
+	}
+}
+
+func TestFactoryCarriedGetBuiltQueueCadence(t *testing.T) {
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
+	def := newProductDef("armflash", 1, 1, 100, 100)
+	def.BMCode = true
+	def.BuildCostEnergy = 55
+	cat.Units[def.CanonicalKey] = def
+	w := newConstructionFixtureWorld(8, cat)
+	fh, _ := w.Create(newFactoryDef("armlab", 2, 2, 30), 0, 0, 0, 0)
+	ph, _ := w.Create(def, 0, 0, 0, 0)
+	factory, product := w.Unit(fh), w.Unit(ph)
+	if !movement.AttachCargo(w, factory.Handle, product.Handle, 0) {
+		t.Fatal("attach failed")
+	}
+	q := orders.QueueForUnit(product)
+	q.Push(orders.Lookup("BeCarried"), orders.Node{Target: factory.Handle})
+	q.Push(orders.Lookup("GetBuilt"), orders.Node{Phase: uint8(State0), Deadline: -1})
+	svc := NewService(nil, cat, w, nil)
+	sim := rng.NewSimulation(12345)
+	svc.OrderBinding = &orders.QueueBinding{SimRNG: &sim}
+	svc.getBuiltLinks[product.Handle] = factory.Handle
+	svc.queueForUnit(product)
+	drawsBefore, stateBefore := sim.Draws(), sim.State
+	product.Remaining = 0.5
+	for tick := uint32(1); tick <= 301; tick++ {
+		q.Pump(product, tick)
+	}
+	gb := q.Primary()[1]
+	if gb.Deadline != 331 || State(gb.Phase) != State2 || gb.DynamicGate != 0x8001 || gb.Satisfied != 0 {
+		t.Fatalf("GetBuilt at tick 301 deadline=%d phase=%d gate=%#x satisfied=%#x, want 331/2/0x8001/0", gb.Deadline, gb.Phase, gb.DynamicGate, gb.Satisfied)
+	}
+	if be := q.Primary()[0]; be.Deadline != 311 {
+		t.Fatalf("BeCarried deadline=%d at tick 301, want 311", be.Deadline)
+	}
+	for tick := uint32(302); tick <= 331; tick++ {
+		q.Pump(product, tick)
+	}
+	// Param3 is the explicitly unresolved local storage choice for the
+	// established first phase-2 setup visit; see the TODO(question) at the
+	// handler. The externally established phase remains 2 throughout.
+	if gb.Deadline != 342 || State(gb.Phase) != State2 || gb.Param3 != 0 || gb.DynamicGate != 0x8001 || gb.Satisfied != 0 || product.Remaining != 0.5 {
+		t.Fatalf("GetBuilt at tick 331 deadline=%d phase=%d marker=%d gate=%#x satisfied=%#x remaining=%v, want 342/2/0/0x8001/0/0.5", gb.Deadline, gb.Phase, gb.Param3, gb.DynamicGate, gb.Satisfied, product.Remaining)
+	}
+	for tick := uint32(332); tick <= 351; tick++ {
+		q.Pump(product, tick)
+	}
+	if gb.Deadline != 362 || gb.DynamicGate != 0x8001 || gb.Satisfied != 0 || product.Remaining != float32(0.7) {
+		t.Fatalf("phase-2 visit at tick 351 deadline=%d gate=%#x satisfied=%#x remaining=%v, want 362/0x8001/0/0.7", gb.Deadline, gb.DynamicGate, gb.Satisfied, product.Remaining)
+	}
+	if sim.Draws() != drawsBefore || sim.State != stateBefore {
+		t.Fatalf("carried/GetBuilt cadence consumed RNG: state %d->%d draws %d->%d", stateBefore, sim.State, drawsBefore, sim.Draws())
+	}
+	product.Remaining = 0
+	if _, ok := movement.DetachCargo(w, product.Handle); !ok {
+		t.Fatal("completion detach failed")
+	}
+	for tick := uint32(352); tick <= 361; tick++ {
+		q.Pump(product, tick)
+	}
+	if len(q.Primary()) != 1 || q.Primary()[0].ID != orders.Lookup("GetBuilt") {
+		t.Fatalf("queue at detach expiry=%v, want GetBuilt waiting for own deadline", q.Primary())
+	}
+	q.Pump(product, 362)
+	for _, n := range q.Primary() {
+		if n.ID == orders.Lookup("GetBuilt") {
+			t.Fatal("GetBuilt survived its own completion deadline")
+		}
 	}
 }
 
@@ -105,23 +221,63 @@ func TestGetBuiltCompletionRebindsAndConsumesWatcher(t *testing.T) {
 	fq.Push(moveID, orders.Node{GoalX: world.CellToWorld(2), GoalZ: world.CellToWorld(3)})
 	fq.Push(patrolID, orders.Node{GoalX: world.CellToWorld(4), GoalZ: world.CellToWorld(5)})
 	pq := orders.QueueForUnit(product)
-	pq.Push(orders.Lookup("GetBuilt"), orders.Node{Phase: uint8(State2), Deadline: -1})
+	pq.Push(orders.Lookup("GetBuilt"), orders.Node{Phase: uint8(State2), DynamicGate: 0, Deadline: -1})
+	pq.Primary()[0].DynamicGate = 0
 	hostility := func(*units.Unit, *units.Unit) bool { return true }
 	lookup := func(pool.Handle) *units.Unit { return factory }
 	pq.Hostility, pq.Lookup, pq.StockpileEconomy, pq.SecondaryTick = hostility, lookup, &economy.Service{}, 77
 	svc := NewService(nil, cat, w, nil)
 	svc.getBuiltLinks[product.Handle] = factory.Handle
-	svc.resolveGetBuilt(product, 10)
+	svc.queueForUnit(product)
+	product.Remaining = 0
+	pq.Pump(product, 10)
 	newQ := orders.QueueForUnit(product)
 	prim := newQ.Primary()
-	if len(prim) != 2 || prim[0].ID != orders.Lookup("Move_Ground") || prim[1].ID != orders.Lookup("Patrol") {
-		t.Fatalf("rebound primary=%v, want inherited Move/Patrol", prim)
+	for _, n := range prim {
+		if n.ID == orders.Lookup("GetBuilt") {
+			t.Fatalf("completed queue retained GetBuilt: %v", prim)
+		}
 	}
 	if _, ok := svc.getBuiltLinks[product.Handle]; ok {
 		t.Fatal("GetBuilt side-map link survived watcher consumption")
 	}
 	if newQ.Hostility == nil || newQ.Lookup == nil || newQ.StockpileEconomy == nil || newQ.SecondaryTick != 77 {
 		t.Fatal("rally queue hooks were not preserved")
+	}
+}
+
+func TestBuildingClassGetBuiltCompletesWithoutRallyOrPark(t *testing.T) {
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
+	factoryDef := newFactoryDef("armfac", 1, 1, 30)
+	buildingDef := newProductDef("armsolar", 2, 2, 100, 100)
+	buildingDef.BMCode = false
+	cat.Units[factoryDef.CanonicalKey] = factoryDef
+	cat.Units[buildingDef.CanonicalKey] = buildingDef
+	w := newConstructionFixtureWorld(8, cat)
+	fh, _ := w.Create(factoryDef, 0, 0, 0, 0)
+	ph, _ := w.Create(buildingDef, 0, 0, 0, 0)
+	factory, product := w.Unit(fh), w.Unit(ph)
+	orders.QueueForUnit(factory).Push(orders.Lookup("QMove"), orders.Node{GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(4)})
+	pq := orders.QueueForUnit(product)
+	pq.Push(orders.Lookup("GetBuilt"), orders.Node{Phase: uint8(State2), Deadline: -1})
+	pq.Primary()[0].DynamicGate = 0
+	product.Remaining = 0
+	svc := NewService(nil, cat, w, nil)
+	svc.getBuiltLinks[product.Handle] = factory.Handle
+	refreshes := 0
+	svc.OnRefresh = func(got *units.Unit) {
+		if got != factory {
+			t.Fatalf("refresh unit=%v, want factory", got)
+		}
+		refreshes++
+	}
+	svc.queueForUnit(product)
+	pq.Pump(product, 10)
+	if pq.LenPrimary() != 0 {
+		t.Fatalf("building-class completion appended release order: %v", pq.Primary())
+	}
+	if refreshes != 1 {
+		t.Fatalf("builder refresh calls=%d, want 1", refreshes)
 	}
 }
 
@@ -340,6 +496,44 @@ func TestAllocatorNanoframeInitializationAndInvalidRollback(t *testing.T) {
 	}
 	if _, ok := svc.PlacementForProduct(10); ok {
 		t.Fatal("reservation failure leaked placement record")
+	}
+}
+
+func TestFactoryAttachGateFailureRollsBackAllocation(t *testing.T) {
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{}, Movement: map[string]*content.MovementClass{
+		"testground": {FootprintX: 1, FootprintZ: 1, MaxSlope: 255, MaxWaterSlope: 255, MaxWaterDepth: 10000, MinWaterDepth: -10000},
+	}}
+	facDef := newFactoryDef("armfac", 1, 1, 30)
+	prodDef := newProductDef("armflash", 1, 1, 100, 100)
+	prodDef.BMCode = true
+	prodDef.MovementClass = "testground"
+	cat.Units[facDef.CanonicalKey] = facDef
+	cat.Units[prodDef.CanonicalKey] = prodDef
+	w := newConstructionFixtureWorld(12, cat)
+	fh, _ := w.Create(facDef, 0, 0, 0, 0)
+	ph, _ := w.Create(prodDef, 0, 0, 0, 0)
+	other, _ := w.Create(prodDef, 0, 0, 0, 0)
+	factory, product := w.Unit(fh), w.Unit(ph)
+	product.Attachment.Cargo = []pool.Handle{other}
+	bindConstructionFixture(factory, trivialModel(1, nil), true)
+	q := orders.QueueForUnit(factory)
+	q.Push(orders.Lookup("BuildingBuild"), orders.Node{BuildDefKey: prodDef.CanonicalKey, Param2: 1, Phase: uint8(State2)})
+	svc := NewService(exitTerrain(12, 12), cat, w, nil)
+	svc.Allocator = func(uint8, *content.UnitDef, numeric.Fixed, numeric.Fixed, numeric.Fixed) (*units.Unit, error) {
+		return product, nil
+	}
+	svc.Pump(factory, 7)
+	if rejected := w.Unit(ph); rejected == nil || !rejected.Dying {
+		t.Fatalf("attach rejection left allocated product live: phase=%d target=%d admissions=%+v messages=%v", q.Primary()[0].Phase, q.Primary()[0].Target, svc.admissions, svc.messages)
+	}
+	if q.Primary()[0].Target != 0 || State(q.Primary()[0].Phase) == State3 {
+		t.Fatalf("attach rejection published accepted factory state: %+v", q.Primary()[0])
+	}
+	if _, ok := svc.PlacementForProduct(ph); ok {
+		t.Fatal("attach rejection leaked product placement")
+	}
+	if _, ok := svc.BuilderLink(ph); ok {
+		t.Fatal("attach rejection leaked builder link")
 	}
 }
 

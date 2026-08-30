@@ -623,6 +623,10 @@ func (s *Session) tickPlayers(tick uint32) {
 	if s == nil || s.Econ == nil {
 		return
 	}
+	localPlayer, hasLocalPlayer := s.triggerLocalPlayer()
+	if hasLocalPlayer {
+		s.LocalOwner = uint8(localPlayer)
+	}
 	for player := 0; player < 10; player++ {
 		mgr := s.AI[player] // direct player-indexed access per RS-02 [08] I1
 		// Bind per-session RNG for isolation [RS-06][I4] — ensure manager uses session's stream, not shared global.
@@ -633,7 +637,7 @@ func (s *Session) tickPlayers(tick uint32) {
 			if mgr != nil {
 				mgr.Tick(tick, s.Units, s.Econ)
 			}
-			if player == int(s.LocalOwner) {
+			if hasLocalPlayer && player == localPlayer {
 				s.pollMissionTriggers(tick)
 			}
 		}
@@ -645,190 +649,71 @@ func (s *Session) tickPlayers(tick uint32) {
 		// [R-SENSOR-01]: sensor/deadline work in the LOCAL viewing player's
 		// iteration only, immediately after that player's stamp sweep (called
 		// unconditionally; SensorTick owns the player-count gate).
-		if player == int(s.LocalOwner) {
+		if hasLocalPlayer && player == localPlayer {
 			s.stepSensorPhase(tick)
 		}
 	}
 }
 
 // pollMissionTriggers is the local player's phase-5 trigger site [08
-// "Evaluation"]. Its deadline advances once by 30 when due, so a late record
-// catches up one invocation per tick rather than looping. Direct-OTA defeat
-// polling is gated by the authored local-side commander identity; an
-// unavailable side mapping leaves defeat polling disabled [08 "Evaluation"].
+// R-TRIG-01 §6]. The authoritative player's WinLoseTime deadline advances
+// once by 30 when due, so a late record catches up one invocation per tick
+// rather than looping. Only kind 1 polls the authored or injected queues.
 func (s *Session) pollMissionTriggers(tick uint32) {
-	// A configured lobby skirmish owns its end rule through SkirmishConfig,
-	// not through the OTA mission-trigger queues. Direct OTA type-2 sessions
-	// have no lobby players and retain the per-player trigger path below [08
-	// "Evaluation"][08 "Skirmish configuration"].
-	if s != nil && s.Mission != nil && s.Mission.Type == mission.TypeSkirmish && s.Skirmish.NumPlayers > 0 {
+	if s == nil || s.Mission == nil || s.Mission.Type != mission.TypeCampaign || s.Econ == nil {
 		return
 	}
-	if s == nil || s.Mission == nil || (len(s.Mission.Victory) == 0 && len(s.Mission.Defeat) == 0) {
+	localPlayer, ok := s.triggerLocalPlayer()
+	if !ok {
 		return
 	}
-	isDue := false
-	if !s.triggerDueValid {
-		s.triggerDue = tick
-		s.triggerDueValid = true
+	s.LocalOwner = uint8(localPlayer)
+	p := &s.Econ.Players[localPlayer]
+	if p.WinLoseTime > tick {
+		return
 	}
-	if s.triggerDue <= tick {
-		s.triggerDue += 30
-		isDue = true
+	p.WinLoseTime += 30
+
+	v, d := triggers.Evaluate(s.Mission.Victory, s.Mission.Defeat, s.missionTriggerContext(tick))
+	s.VictoryDone = s.VictoryDone || v
+	s.DefeatDone = s.DefeatDone || d
+	var latched bool
+	if v {
+		latched = s.Latch.AdvanceWin(true)
+	} else if d {
+		latched = s.Latch.AdvanceLose(true)
 	}
-	if isDue {
-		ctx := triggers.PollContext{Tick: tick, World: s.Units, LocalOwner: s.LocalOwner, EnemyOwner: s.EnemyOwner}
-		allowDefeat := s.Mission.Type == mission.TypeCampaign
-		defeatFirst := false
-		if !allowDefeat {
-			// Direct OTA polls the defeat queue only after the local commander
-			// marker has cleared. The live-unit predicate is the existing
-			// CommanderKilled/EvaluateResult authority [08 "Evaluation"].
-			markerClear, known := s.localCommanderMarkerClear()
-			if known {
-				allowDefeat = markerClear
-				defeatFirst = markerClear
+	for i := 0; i < 10; i++ {
+		s.Econ.Players[i].GameEnded = s.Latch.IsEnding()
+		s.Econ.Players[i].EndGameCountdown = int32(s.Latch.Countdown)
+	}
+	if latched && s.Latch.IsEnding() && s.State == StateBattle {
+		win := s.Latch.IsWin()
+		s.Progress.ApplyCampaignResult(s.CampaignSlot, win)
+		if !s.result.Ended {
+			kind := "defeat"
+			if win {
+				kind = "victory"
+			}
+			var winners, losers []int
+			if win {
+				winners = []int{localPlayer}
+				losers = []int{1}
 			} else {
-				// TODO(question): establish the local side's commander identity
-				// before enabling direct-OTA defeat polling; without the authored
-				// side mapping, the marker state is unknown [08 "Evaluation"].
-				allowDefeat = false
-				defeatFirst = false
+				winners = []int{1}
+				losers = []int{localPlayer}
 			}
-		}
-		v, d := evaluateMissionQueues(s.Mission, ctx, allowDefeat, defeatFirst)
-		s.VictoryDone = s.VictoryDone || v
-		s.DefeatDone = s.DefeatDone || d
-		var latched bool
-		if v {
-			latched = s.Latch.AdvanceWin(true)
-		} else if d {
-			latched = s.Latch.AdvanceLose(true)
-		}
-		if s.Econ != nil {
-			for i := 0; i < 10; i++ {
-				s.Econ.Players[i].GameEnded = s.Latch.IsEnding()
-				s.Econ.Players[i].EndGameCountdown = int32(s.Latch.Countdown)
+			scores := s.collectScores(winners[0], false)
+			reason := "campaign"
+			if win && len(s.Mission.Victory) > 0 {
+				reason = "victory_trigger"
+			} else if !win && len(s.Mission.Defeat) > 0 {
+				reason = "defeat_trigger"
 			}
+			s.result = Result{Ended: true, Draw: false, Kind: kind, WinnerTeam: winners[0], Winners: winners, Losers: losers, Reason: reason, Tick: tick, ArmedTick: tick, Countdown: s.Latch.Countdown, Scores: scores}
 		}
-		if latched && s.Latch.IsEnding() && s.State == StateBattle {
-			win := s.Latch.IsWin()
-			if s.Mission.Type == mission.TypeCampaign {
-				s.Progress.ApplyCampaignResult(s.CampaignSlot, win)
-			}
-			if !s.result.Ended {
-				kind := "defeat"
-				if win {
-					kind = "victory"
-				}
-				var winners, losers []int
-				if win {
-					winners = []int{int(s.LocalOwner)}
-					losers = []int{int(s.EnemyOwner)}
-				} else {
-					winners = []int{int(s.EnemyOwner)}
-					losers = []int{int(s.LocalOwner)}
-				}
-				scores := s.collectScores(winners[0], false)
-				reason := "campaign"
-				if win && len(s.Mission.Victory) > 0 {
-					reason = "victory_trigger"
-				} else if !win && len(s.Mission.Defeat) > 0 {
-					reason = "defeat_trigger"
-				}
-				s.result = Result{Ended: true, Draw: false, Kind: kind, WinnerTeam: winners[0], Winners: winners, Losers: losers, Reason: reason, Tick: tick, ArmedTick: tick, Countdown: s.Latch.Countdown, Scores: scores}
-			}
-			_ = s.TransitionTo(StatePostBattle)
-		}
+		_ = s.TransitionTo(StatePostBattle)
 	}
-}
-
-// localCommanderMarkerClear reports the direct-OTA gate and whether the
-// authored side mapping was available. A live, non-dying local commander keeps
-// the marker set; once none remains, the defeat queue may be polled. The
-// matching identity comes from Catalog.Sides, while the live predicate follows
-// trigger and result evaluation [08 "Evaluation"].
-func (s *Session) localCommanderMarkerClear() (clear, known bool) {
-	if s == nil || s.Catalog == nil || int(s.LocalOwner) >= len(s.Skirmish.Players) {
-		return false, false
-	}
-	sideIndex := s.Skirmish.Players[int(s.LocalOwner)].Side
-	if sideIndex < 0 || sideIndex >= len(s.Catalog.Sides) || s.Catalog.Sides[sideIndex] == nil {
-		return false, false
-	}
-	commanderKey := content.CanonicalKey(s.Catalog.Sides[sideIndex].Commander)
-	if commanderKey == "" {
-		return false, false
-	}
-	if s.Units == nil {
-		return true, true
-	}
-	for _, u := range s.Units.IterSliced() {
-		if u == nil || !u.Alive || u.Dying || u.Owner != s.LocalOwner {
-			continue
-		}
-		if u.Def == nil {
-			continue
-		}
-		definitionKey := u.Def.CanonicalKey
-		if definitionKey == "" {
-			definitionKey = content.CanonicalKey(u.Def.UnitName)
-		}
-		if definitionKey == commanderKey {
-			return false, true
-		}
-	}
-	return true, true
-}
-
-// evaluateMissionQueues polls both trigger arrays in builder order and
-// combines their completion flags. Campaign polls victory then defeat and
-// gives victory precedence. Direct OTA polls defeat first only after the local
-// commander marker clears; otherwise it polls victory alone [08 "Evaluation"].
-func evaluateMissionQueues(m *mission.Mission, c triggers.PollContext, allowDefeat, defeatFirst bool) (victoryDone, defeatDone bool) {
-	if m == nil {
-		return false, false
-	}
-	if allowDefeat && defeatFirst {
-		for _, t := range m.Defeat {
-			if t != nil {
-				t.Poll(c)
-			}
-		}
-	}
-	for _, t := range m.Victory {
-		if t != nil {
-			t.Poll(c)
-		}
-	}
-	if allowDefeat && !defeatFirst {
-		for _, t := range m.Defeat {
-			if t != nil {
-				t.Poll(c)
-			}
-		}
-	}
-	victoryDone = len(m.Victory) > 0
-	for _, t := range m.Victory {
-		if t == nil || !t.Completed {
-			victoryDone = false
-			break
-		}
-	}
-	if allowDefeat {
-		for _, t := range m.Defeat {
-			if t != nil && t.Completed {
-				defeatDone = true
-				break
-			}
-		}
-	}
-	if defeatFirst && defeatDone {
-		victoryDone = false
-	} else if victoryDone {
-		defeatDone = false
-	}
-	return victoryDone, defeatDone
 }
 
 // Step is the single-player tick loop per PLAN_14 C6-C7 [01 §4.2][01 §4.3][01 §4.4].

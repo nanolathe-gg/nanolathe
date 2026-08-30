@@ -445,6 +445,14 @@ func landingHandler(carrier *units.Unit, n *Node, satisfied uint32) Code {
 // beCarriedHandler implements BeCarried (Being transported) per [04 §3.1] 0x24.
 // It keeps the cargo's order alive while attached, and completes when detached.
 func beCarriedHandler(u *units.Unit, n *Node, satisfied uint32) Code {
+	return beCarriedHandlerAtTick(u, n, satisfied, 0)
+}
+
+// beCarriedHandlerAtTick is the exact two-phase carried wait. It draws no RNG:
+// phase 0 releases weapon slots and advances; phase 1 holds on an exact
+// ten-tick deadline until detach makes the pre-check complete
+// [04 R-ORD-01 §2][04 R-FAC-02 §4].
+func beCarriedHandlerAtTick(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	_ = satisfied
 	if u == nil || n == nil {
 		return 5
@@ -452,9 +460,17 @@ func beCarriedHandler(u *units.Unit, n *Node, satisfied uint32) Code {
 	if u.Attachment.Carrier == 0 {
 		return 5 // no longer carried, done [04 §10.2] cargo first detaches
 	}
-	// While carried, remain in "Being transported" state.
-	// Return 3 to set wait 30+rand15 and keep pump from spinning [04 §3.3] TODO(question) exact cadence not established.
-	return 3
+	if n.Phase == 0 {
+		for i := 0; i < units.NumSlots; i++ {
+			if slot := u.SlotAt(i); slot != nil {
+				slot.Target = units.Target{Kind: units.TargetNone}
+			}
+		}
+		return 1
+	}
+	n.DynamicGate = 1
+	n.Deadline = int32(tick + 10)
+	return 2
 }
 
 // setQueuePrimary and setQueueSecondary are helpers to rebuild queues without import cycle.

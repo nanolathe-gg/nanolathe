@@ -9,7 +9,8 @@
 // named attach piece's world transform, copies piece heading/pitch and carrier
 // velocity/speed (zeroed if carrier has no mover), applies floater deck-height
 // clamp from cargo's waterline and sea level, and returns before ordinary
-// footprint validation, occupancy stamping, or coverage update [04 §10.2].
+// footprint validation. On a cell/mode change it still clears and stamps the
+// footprint through the carried-position setter [04 R-FAC-02 §2].
 package movement
 
 import (
@@ -48,9 +49,32 @@ func AttachCargo(w *units.World, carrierHandle, cargoHandle pool.Handle, piece i
 		DetachCargo(w, carrierHandle)
 	}
 	cargo.Attachment.Carrier = carrierHandle
-	cargo.Attachment.AttachPiece = piece
-	carrier.Attachment.Cargo = append(carrier.Attachment.Cargo, cargoHandle)
+	// The event stores one byte and the carried-side locator sign-extends it
+	// [04 R-FAC-02 §1].
+	cargo.Attachment.AttachPiece = int(int8(uint8(piece)))
+	// Cargo is linked at the head, not appended [04 R-COB-03 §5].
+	carrier.Attachment.Cargo = append([]pool.Handle{cargoHandle}, carrier.Attachment.Cargo...)
 	return true
+}
+
+// AttachFactoryProduct applies the factory allocation gates before entering
+// the shared cargo representation: live non-building product carrying
+// nothing, and a live distinct carrier that is not itself carried
+// [04 R-FAC-02 §1].
+func AttachFactoryProduct(w *units.World, carrierHandle, productHandle pool.Handle, piece int) bool {
+	if w == nil || carrierHandle == 0 || productHandle == 0 || carrierHandle == productHandle {
+		return false
+	}
+	carrier := w.Unit(carrierHandle)
+	product := w.Unit(productHandle)
+	if carrier == nil || product == nil || !carrier.Alive || !product.Alive || carrier.Dying || product.Dying ||
+		product.Def == nil || !product.Def.BMCode || product.Flags&units.BuildingClassStatus != 0 {
+		return false
+	}
+	if carrier.Attachment.Carrier != 0 || product.Attachment.Carrier != 0 || len(product.Attachment.Cargo) != 0 {
+		return false
+	}
+	return AttachCargo(w, carrierHandle, productHandle, piece)
 }
 
 // DetachCargo detaches cargo from its carrier [04 §10.2] unload phase 2.
@@ -123,10 +147,10 @@ func CargoCount(w *units.World, carrierHandle pool.Handle) int {
 // SyncCarriedMotion slaves each cargo to its carrier's world transform [04 §10.2].
 //
 // Branch at top of occupancy commit:
-//   - copy piece world transform (here carrier position directly)
-//   - copy piece heading/pitch and carrier velocity/speed (zeroed if carrier has no mover)
+//   - copy the named piece world transform
+//   - copy piece orientation and carrier velocity/speed (zeroed if carrier has no mover)
 //   - apply floater deck-height clamp from cargo's waterline and sea level
-//   - return before ordinary footprint validation, occupancy stamping, or coverage update
+//   - bypass ordinary validation, but clear/stamp on a cell or mode change
 //
 // Called after carrier movement so same-tick following is observed without order dependence.
 // Iteration is player 0..9 asc then slot asc [I1].
@@ -147,93 +171,60 @@ func (s *System) SyncCarriedMotion(w *units.World) {
 			cargo.Attachment.AttachPiece = -1
 			continue
 		}
-		// Slave position to carrier's world transform.
-		// Retail uses named attach piece's world transform; we use carrier position.
-		// TODO(question): exact attach piece offset not modeled; cargo hangs below piece via negated piece Y in load phase 3 [04 §10.2].
-		cargo.X = carrier.X
-		cargo.Z = carrier.Z
-		// Y: carrier Y, but apply floater deck-height clamp from cargo's waterline and sea level [04 §10.2].
-		cargo.Y = carrier.Y
-		if cargo.Def != nil && cargo.Def.Floater {
-			// Floater deck clamp: Y = max(terrainHeight at cargo, seaLevelWorld + waterline?) [04 §9.2][04 §10.2]
-			// Simplified: if cargo is floater, clamp to seaLevel + waterline.
-			// Waterline is draft for band 2 [02 "Unit record"].
-			// Use terrain SeaLevelWorld + waterline*65536 when carrier over water, else keep carrier Y.
-			// For determinism, if terrain exists, compute.
-			if s.Terrain != nil {
-				sea := s.Terrain.SeaLevelWorld() // byte*65536 [03 §2.2] C9
-				// waterline defaults 0 => deck at sea level
-				deck := numeric.Fixed(int64(cargo.Def.Waterline) * 65536)
-				// Retail "floater selects the ship surface clamp at waterline + sea level" [04 §9.2]
-				// Keep Y at least sea+waterline? Actually ship surface is sea - waterline? But use max.
-				// TODO(question): exact floater clamp formula for carried units [04 §10.2][04 §9.2].
-				floatY := sea + deck
-				// If cargo has upright, Y is max(terrain, sea - waterline) [04 §9.2]; not used for floater.
-				// Clamp cargo.Y to not go below floatY over water?
-				// Simplistic: over water (carrier Y near sea), cargo.Y = floatY
-				// Over land, keep carrier Y (which is terrain height + cruise etc for air)
-				// For air carrier over land, cargo should be at altitude, not sea level.
-				// So only apply over water when carrier's terrain is water.
-				// Approximate by checking carrier's terrain height vs sea.
-				terrH := s.Terrain.HeightAt(carrier.X, carrier.Z)
-				// HeightAt returns -1 sentinel for OOB last row; treat as not water.
-				isWater := false
-				if terrH != numeric.Fixed(-1) {
-					if int32(terrH.Raw()>>16) < int32(s.Terrain.SeaLevel) {
-						isWater = true
-					}
+		// Factory products and ordinary cargo share this carried-position path.
+		// A negative signed piece byte resolves to the carrier origin
+		// [04 R-FAC-02 §1][04 R-REV-02].
+		hangX, hangY, hangZ := carrier.X, carrier.Y, carrier.Z
+		pieceRoll, pieceHeading, piecePitch := uint16(0), uint16(0), uint16(0)
+		if piece := cargo.Attachment.AttachPiece; piece >= 0 {
+			if binding := carrier.COBBinding(); binding != nil {
+				if origin, ok := binding.ComposePiece(piece, carrier.Move.Heading, carrier.Move.Pitch, carrier.Move.Bank); ok {
+					hangX = hangX.Add(origin[0])
+					hangY = hangY.Add(origin[1])
+					hangZ = hangZ.Add(origin[2])
 				}
-				if isWater {
-					// Slaved cargo over water should float at deck, not follow air altitude?
-					// But transport is air, so carrier is air altitude; cargo should be at carrier altitude hanging, not sea level.
-					// Clamp only for non-air cargo that is ship? For air transport, floater clamp maybe still applies but cargo is kbot (not floater) so not.
-					// Keep branch but only clamp if cargo is floater and carrier is not air? Yet air transport is air, so not.
-					// Preserve instruction but don't lower air cargo to sea.
-					// If carrier is air (canfly), keep carrier Y.
-					if carrier.Def != nil && carrier.Def.CanFly {
-						// Air carrier's cargo hangs below piece: keep air altitude.
-					} else {
-						cargo.Y = floatY
-					}
+				if binding.VM != nil && piece < len(binding.VM.Pieces) {
+					state := binding.VM.Pieces[piece]
+					pieceRoll, pieceHeading, piecePitch = state.RotZ, state.RotY, state.RotX
+				}
+			}
+		}
+		cargo.X, cargo.Y, cargo.Z = hangX, hangY, hangZ
+		if cargo.Def != nil && cargo.Def.Floater {
+			if s.Terrain != nil {
+				// max(hang.y, (waterline*65535 + seaLevel)<<16)
+				// [04 R-FAC-02 §2][04 R-AIR-01 §9].
+				floatY := numeric.Fixed((int64(cargo.Def.Waterline)*65535 + int64(s.Terrain.SeaLevel)) << 16)
+				if cargo.Y < floatY {
+					cargo.Y = floatY
 				}
 			}
 		}
 		// Copy heading/pitch and carrier velocity/speed (zeroed if carrier has no mover) [04 §10.2]
 		// Heading/pitch from carrier's piece; velocity/speed from carrier mover.
-		cargo.Move.Heading = carrier.Move.Heading
-		cargo.Move.Pitch = carrier.Move.Pitch
-		cargo.Move.Bank = carrier.Move.Bank
-		// Velocity/speed from carrier's system state if exists
-		if s.Flights[carrier.Handle] != nil {
-			fl := s.Flights[carrier.Handle]
-			cargo.Move.Speed = numeric.Fixed(fl.Speed)
-			// Also sync collision/flight velocities? Keep cargo's system velocities zeroed? Carrier's VX/VZ not needed for cargo's own integration (cargo does not integrate).
-			// Cargo's own FlightState VX/VZ will be overwritten to 0 or carrier values on next slave? Keep as zero for determinism? But spec says copy carrier velocity/speed (zeroed if carrier has no mover) [04 §10.2].
-			// So cargo.Move.Speed gets carrier speed; if carrier has no mover, zero.
-		} else if s.Collisions[carrier.Handle] != nil {
-			coll := s.Collisions[carrier.Handle]
-			cargo.Move.Speed = numeric.Fixed(coll.Speed)
-		} else {
-			cargo.Move.Speed = 0
+		cargo.Move.Heading = carrier.Move.Heading + pieceHeading
+		cargo.Move.Pitch = carrier.Move.Pitch + piecePitch
+		cargo.Move.Bank = carrier.Move.Bank + pieceRoll
+		// The carrier mover's authoritative vector is copied regardless of the
+		// cargo mover representation; no mover means an exact zero vector
+		// [04 R-FAC-02 §2].
+		carrierVX, carrierVY, carrierVZ, carrierSpeed := int32(0), int32(0), int32(0), int32(0)
+		if fl := s.Flights[carrier.Handle]; fl != nil {
+			carrierVX, carrierVY, carrierVZ, carrierSpeed = fl.VX, fl.VY, fl.VZ, fl.Speed
+		} else if coll := s.Collisions[carrier.Handle]; coll != nil {
+			carrierVX, carrierVZ, carrierSpeed = coll.VX, coll.VZ, coll.Speed
 		}
+		cargo.Move.Speed = numeric.Fixed(carrierSpeed)
 		// Also sync FlightState for cargo if it has one? Cargo's own flight velocities should be slaved, not integrated.
 		if flCargo, ok := s.Flights[cargo.Handle]; ok {
 			flCargo.X = int32(cargo.X.Raw())
 			flCargo.Y = int32(cargo.Y.Raw())
 			flCargo.Z = int32(cargo.Z.Raw())
-			// Copy carrier velocity/speed
-			if flCarrier, ok2 := s.Flights[carrier.Handle]; ok2 {
-				flCargo.VX = flCarrier.VX
-				flCargo.VY = flCarrier.VY
-				flCargo.VZ = flCarrier.VZ
-				flCargo.Speed = flCarrier.Speed
-				flCargo.Heading = flCarrier.Heading
-			} else {
-				flCargo.VX = 0
-				flCargo.VY = 0
-				flCargo.VZ = 0
-				flCargo.Speed = 0
-			}
+			flCargo.VX = carrierVX
+			flCargo.VY = carrierVY
+			flCargo.VZ = carrierVZ
+			flCargo.Speed = carrierSpeed
+			flCargo.Heading = cargo.Move.Heading
 		}
 		if stCargo, ok := s.Steers[cargo.Handle]; ok {
 			stCargo.X = int32(cargo.X.Raw())
@@ -246,17 +237,23 @@ func (s *System) SyncCarriedMotion(w *units.World) {
 			collCargo.Z = int32(cargo.Z.Raw())
 			collCargo.Y = int32(cargo.Y.Raw())
 			collCargo.Heading = cargo.Move.Heading
-			// Do not stamp occupancy for cargo; spec says returns before ordinary footprint validation, occupancy stamping, or coverage update [04 §10.2]
-			// Mark dirty but do not update grid.
+			collCargo.VX = carrierVX
+			collCargo.VZ = carrierVZ
+			collCargo.Speed = carrierSpeed
 			collCargo.Dirty = true
-		}
-		// Update world occupancy? Spec says cargo still participates in sweep but does not integrate its own movement ولا stamp? Actually "cargo still participates in the sweep but does not integrate its own movement." And "returns before ordinary footprint validation, occupancy stamping, or coverage update" [04 §10.2]. So we skip Grid.Stamp for cargo.
-		// Clear previous occupancy for cargo? It should be cleared when attached? Phase 0 attaches; but we keep cargo's previous footprint cleared? For simplicity, ensure grid does not hold cargo footprint while carried.
-		if s.Grid != nil {
-			if collCargo, ok := s.Collisions[cargo.Handle]; ok {
-				s.Grid.Clear(collCargo.OldAnchor, collCargo.FootPrintX, collCargo.FootPrintZ, collCargo.ID)
-				// Update OldAnchor to track? Not needed while carried
+			newAnchor := collCargo.ProposedAnchor(cargo.Move.Mode)
+			if newAnchor != collCargo.OldAnchor || collCargo.Mode != cargo.Move.Mode {
+				// Carried motion bypasses validation, but the carried-position setter
+				// still clears and stamps on a cell/mode change
+				// [04 R-FAC-02 §2][04 R-COLL-01 §4].
+				if s.Grid != nil {
+					s.Grid.Clear(collCargo.OldAnchor, collCargo.FootPrintX, collCargo.FootPrintZ, collCargo.ID)
+					s.Grid.Stamp(newAnchor, collCargo.FootPrintX, collCargo.FootPrintZ, collCargo.ID)
+				}
+				collCargo.OldAnchor = newAnchor
+				collCargo.CachedAnchor = newAnchor
 			}
+			collCargo.Mode = cargo.Move.Mode
 		}
 	}
 }

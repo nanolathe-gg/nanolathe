@@ -11,9 +11,9 @@ import (
 //
 // In retail data these keys always sit at the global level, never inside a
 // schema, so this reads the global section and not the selected schema.
-// Assignments are visited in authored order, which is what fixes queue order:
-// defeat is an OR and does not care, but victory is an AND whose per-tick poll
-// order is part of the shared RNG-free evaluation sequence.
+// Keys are probed in the fixed eighteen-entry vocabulary order. The resolved
+// section lookup collapses an identical duplicate spelling to its last value,
+// and this loop builds at most one record for each key [08 R-TRIG-01 §2].
 //
 // A key that is not one of the eighteen condition names is skipped —
 // `[GlobalHeader]` carries the whole mission-global block, and only a handful
@@ -22,9 +22,14 @@ func DecodeTriggers(global *formats.Section) (victory, defeat []*triggers.Trigge
 	if global == nil {
 		return nil, nil
 	}
-	for _, item := range global.Assignments() {
-		t, ok := triggers.ParseCondition(item.OriginalKey, item.Value)
-		if !ok {
+	for i := 0; i < triggers.KindCount; i++ {
+		kind := triggers.Kind(i)
+		value, authored := global.FirstValue(kind.String())
+		if !authored {
+			continue
+		}
+		t, present := triggers.ParseCondition(kind.String(), value)
+		if !present {
 			continue
 		}
 		if t.Kind.IsVictory() {

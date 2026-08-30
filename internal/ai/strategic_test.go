@@ -8,6 +8,26 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 )
 
+func TestPlacementRegionsUseConstructorDraws(t *testing.T) {
+	r := rng.NewSimulation(123)
+	s := &Strategic{}
+	if !s.InitializeRandomState(&r) {
+		t.Fatal("constructor state did not initialize")
+	}
+	if s.LandRegion.CellW != int16(s.negRegionW) || s.LandRegion.CellH != int16(s.negRegionH) {
+		t.Fatalf("land region=%+v, derived=%d,%d", s.LandRegion, s.negRegionW, s.negRegionH)
+	}
+	if s.LandRegion.OffsetX != int16(s.setupDraws[2])-int16(s.negRegionW)/2 || s.LandRegion.OffsetZ != int16(s.setupDraws[3])-int16(s.negRegionH)/2 {
+		t.Fatalf("land offsets=%+v from draws=%v", s.LandRegion, s.setupDraws)
+	}
+	if s.WaterRegion.CellW != int16(s.posRegionW) || s.WaterRegion.CellH != int16(s.posRegionH) {
+		t.Fatalf("water region=%+v, derived=%d,%d", s.WaterRegion, s.posRegionW, s.posRegionH)
+	}
+	if s.WaterRegion.OffsetX != int16(s.setupDraws[6])-int16(s.posRegionW)/2 || s.WaterRegion.OffsetZ != int16(s.setupDraws[7])-int16(s.posRegionH)/2 {
+		t.Fatalf("water offsets=%+v from draws=%v", s.WaterRegion, s.setupDraws)
+	}
+}
+
 func TestRefreshCadence(t *testing.T) {
 	s := &Strategic{}
 	s.Init([]string{"armfav", "corfav"})
@@ -320,5 +340,25 @@ func TestCenterComputation(t *testing.T) {
 	}
 	if s3.CenterX != 0 || s3.CenterZ != 0 {
 		t.Fatalf("neg/pos center %v %v want 0 0", s3.CenterX, s3.CenterZ)
+	}
+}
+
+func TestCenterComputationIncludesY(t *testing.T) {
+	s := &Strategic{}
+	s.Init([]string{"armfav"})
+	w := newAIFixtureWorld(10, nil)
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armfav"}, UnitName: "armfav", MaxDamage: 100}
+	if _, err := w.Create(def, 1, 0, numeric.FixedFromInt(100), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Create(def, 1, 0, numeric.FixedFromInt(300), 0); err != nil {
+		t.Fatal(err)
+	}
+	r := rng.NewSimulation(1)
+	if !s.MaybeRefresh(30, &r, 1, w) {
+		t.Fatal("refresh was not due")
+	}
+	if s.CenterY != numeric.FixedFromInt(200) {
+		t.Fatalf("center Y=%d, want %d", s.CenterY, numeric.FixedFromInt(200))
 	}
 }

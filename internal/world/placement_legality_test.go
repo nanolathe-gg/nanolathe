@@ -111,6 +111,24 @@ func TestCheckPlacementDepthAndHeightPeakStrictness(t *testing.T) {
 	}
 }
 
+func TestCheckPlacementMinWaterDepthZeroAndLandDefault(t *testing.T) {
+	ter := legalityTerrain(t, 3, 3, 0)
+	ter.PlotAt(1, 1).SetMinHeight(1)
+	ter.PlotAt(1, 1).SetMaxHeight(1)
+	extent, _ := NewFootprintExtent(1, 1)
+	rect, _ := NewFootprintRect(NewFootprintAnchor(1, 1), extent)
+	rules := PlacementRules{ProfileResolved: true, MaxSlope: 255, MaxWaterSlope: 255, MaxWaterDepth: 10000, MinWaterDepth: 0}
+	query := PlacementQuery{Rect: rect, Mobile: true, Rules: rules}
+	if _, err := ter.CheckPlacement(query); err == nil || !strings.Contains(err.Error(), "minimum water depth") {
+		t.Fatalf("height one above zero upper band accepted: %v", err)
+	}
+
+	query.Rules.MinWaterDepth = -10000
+	if _, err := ter.CheckPlacement(query); err != nil {
+		t.Fatalf("land template no-minimum value rejected: %v", err)
+	}
+}
+
 func TestCheckPlacementFeatureYardAndMobileModes(t *testing.T) {
 	ter := legalityTerrain(t, 3, 3, 100)
 	extent, _ := NewFootprintExtent(1, 1)

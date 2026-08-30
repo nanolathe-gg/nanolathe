@@ -97,6 +97,52 @@ func TestVictoryReachesPostBattleExactlyOnce(t *testing.T) {
 	}
 }
 
+func TestEndLatchUsesFinalTruePath(t *testing.T) {
+	tests := []struct {
+		name     string
+		firstWin bool
+		lastWin  bool
+	}{
+		{name: "win-armed-lose-final", firstWin: true, lastWin: false},
+		{name: "lose-armed-win-final", firstWin: false, lastWin: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			latch := NewEndLatch()
+			if tc.firstWin {
+				latch.AdvanceWin(true)
+			} else {
+				latch.AdvanceLose(true)
+			}
+			before := latch
+			if tc.firstWin {
+				latch.AdvanceLose(false)
+			} else {
+				latch.AdvanceWin(false)
+			}
+			if latch != before {
+				t.Fatalf("false due changed latch: before=%+v after=%+v", before, latch)
+			}
+			for i := 0; i < 4; i++ {
+				if i&1 == 0 {
+					latch.AdvanceLose(true)
+				} else {
+					latch.AdvanceWin(true)
+				}
+			}
+			var latched bool
+			if tc.lastWin {
+				latched = latch.AdvanceWin(true)
+			} else {
+				latched = latch.AdvanceLose(true)
+			}
+			if !latched || !latch.IsEnding() || latch.IsWin() != tc.lastWin || latch.IsLose() == tc.lastWin {
+				t.Fatalf("sixth due did not select final path: %+v", latch)
+			}
+		})
+	}
+}
+
 // TestRetryReloadsSameMission ensures retry keeps the mission and returns to
 // loading [P1-01 §7.5].
 func TestRetryReloadsSameMission(t *testing.T) {

@@ -6,387 +6,367 @@ import (
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
-// Trigger evaluation [08 "Evaluation"] [PLAN_10 C16, C17].
-//
-// Triggers are vtable objects, not type-byte structs: each carries a poll slot
-// and three separate notification slots (unit died, unit captured/transferred,
-// unit created — the last present but unused by any shipped condition). The
-// tick site calls only the poll; the notification slots are driven by the
-// corresponding gameplay events.
-//
-// That separation is the contract, and collapsing it is what made a
-// "kill 5 of type X" condition complete in five ticks with nothing killed: a
-// countdown that advances from the poll advances from the passage of time.
-// Poll never consumes an event, and a notification never runs the scans.
-
-// PollContext is the input to the tick-driven poll slot [08 "Evaluation"].
-//
-// The poll-time scans walk the live unit world, so the world is the context —
-// unlike the notification slots, which carry a single subject unit.
+// PollContext supplies session-owned state to the trigger dispatch slots.
+// Mission trigger owner predicates are the literal slots 0 and 1; the two
+// owner fields remain for source compatibility and are not consulted by the
+// canonical kind-1 evaluator [08 R-TRIG-01 §3].
 type PollContext struct {
 	Tick  uint32
 	World *units.World
 
-	// LocalOwner and EnemyOwner are the player indices the owner gates compare
-	// against [08 "Evaluation"]. Victory conditions gate on the enemy index and
-	// CommanderKilled on the local one; UnitTypeKilled and AllUnitsKilledOfType
-	// accept any owner. Single-player missions use 0 and 1.
 	LocalOwner uint8
 	EnemyOwner uint8
+	// NotificationOwner carries the pre-transfer owner at the capture slot.
+	// Removal and creation notifications leave the valid flag clear and read
+	// the subject record directly [08 R-TRIG-01 §7].
+	NotificationOwner      uint8
+	NotificationOwnerValid bool
+
+	// MissionArmed is the kind-1 mission object's armed flag. The spawner
+	// clears it when the mission has no authored unit records [08 R-TRIG-01 §6].
+	MissionArmed bool
+	// StampedCell returns the committed footprint anchor cell. Boundary
+	// triggers read this stamp rather than deriving a cell from the unit centre
+	// [08 R-TRIG-01 §3].
+	StampedCell func(*units.Unit) (x, z int16, ok bool)
+	// Deproject converts authored projected map pixels to 16.16 world
+	// coordinates on the first MoveUnitToRadius poll [08 R-TRIG-01 §5].
+	Deproject func(x, z int32) (worldX, worldY, worldZ int32)
+	// IsCommander resolves the unit owner's side commander name through the
+	// authoritative side table [08 R-TRIG-01 §3].
+	IsCommander func(*units.Unit) bool
+	// Celebrate publishes the authored "Victory Condition" sound cue. A nil
+	// callback is the established missing-alias silence [08 R-TRIG-01 §8].
+	Celebrate func()
 }
 
-// NotifyEvent identifies which notification slot is being driven
-// [08 "Evaluation"].
+// NotifyEvent identifies the notification slot being driven [08 R-TRIG-01 §2].
 type NotifyEvent uint8
 
 const (
-	NotifyUnitDied     NotifyEvent = iota // slot 1
-	NotifyUnitCaptured                    // slot 2 (capture/transfer)
-	NotifyUnitCreated                     // slot 3 — present, unused by shipped conditions
+	NotifyUnitDied NotifyEvent = iota
+	NotifyUnitCaptured
+	NotifyUnitCreated
 )
 
-// matchesType reports whether u satisfies the trigger's authored type token.
-// An empty token and the literal ANYTYPE both match any type
-// [08 "Victory and defeat triggers"] C14.
-func (t *Trigger) matchesType(u *units.Unit) bool {
-	if u == nil || u.Def == nil {
+const cargoSelectableStatus uint32 = 0x40000000
+
+func forEachOccupied(w *units.World, fn func(*units.Unit) bool) {
+	if w == nil || fn == nil {
+		return
+	}
+	for _, u := range w.IterSliced() {
+		if u == nil || !u.Alive {
+			continue
+		}
+		if !fn(u) {
+			return
+		}
+	}
+}
+
+func (t *Trigger) matchesType(u *units.Unit, wildcard bool) bool {
+	if t == nil || u == nil || u.Def == nil {
 		return false
 	}
-	if t.Type == "" || IsANYTYPE(t.Type) {
+	if wildcard && t.Type == "" {
 		return true
 	}
 	return strings.EqualFold(u.Def.UnitName, t.Type)
 }
 
-// forEachLive visits live units in stable pool-slot order (I1). A nil world
-// visits nothing, which leaves every scanning condition unsatisfied — the
-// correct answer for a session that has not started.
-func forEachLive(w *units.World, fn func(*units.Unit)) {
-	if w == nil {
+func notificationOwner(c PollContext, u *units.Unit) uint8 {
+	if c.NotificationOwnerValid {
+		return c.NotificationOwner
+	}
+	return u.Owner
+}
+
+func (t *Trigger) complete(c PollContext, celebrate bool) {
+	t.Completed = true
+	if !celebrate || t.Celebrated {
 		return
 	}
-	for _, u := range w.Iter() {
-		if u == nil || !u.Alive {
-			continue
-		}
-		fn(u)
+	if c.Celebrate != nil {
+		c.Celebrate()
 	}
+	t.Celebrated = true
 }
 
-// Poll is the tick-driven slot. It mutates only the trigger's completed flag
-// [08 "Evaluation"] C17 and returns the flag's new value. An already-completed
-// trigger stays completed.
-func (t *Trigger) Poll(c PollContext) bool {
-	if t == nil {
+func (t *Trigger) celebratePredicate(c PollContext, satisfied bool) {
+	if !satisfied || t.Celebrated {
+		return
+	}
+	if c.Celebrate != nil {
+		c.Celebrate()
+	}
+	t.Celebrated = true
+}
+
+func eligibleMissionUnit(c PollContext, u *units.Unit) bool {
+	if u == nil || !u.Alive || u.Flags&units.ClassifierEligibleStatus == 0 || u.Remaining != 0 {
 		return false
 	}
-	if t.Completed {
+	if u.Attachment.Carrier == 0 {
 		return true
 	}
-	switch t.Kind {
-
-	// --- Flag-only conditions ------------------------------------------------
-
-	case KindDestroyAllUnits:
-		// The engine's body reads a counter whose only reference in the image
-		// is that read — nothing writes it, so it holds its initial zero and
-		// the condition is satisfied from the FIRST poll [08 "Evaluation"].
-		//
-		// This is not a bug to route around. Shipped campaign missions use
-		// DestroyAllUnits as an AND-term beside a real BuildUnitType condition,
-		// where a genuinely evaluated destroy-all would never let the mission
-		// complete. It is also why the injected default victory condition
-		// (C16) resolves rather than hanging.
-		t.Completed = true
-		return true
-
-	case KindKillAllMobileUnits:
-		// No live mobile unit belonging to the enemy remains.
-		remaining := false
-		forEachLive(c.World, func(u *units.Unit) {
-			if u.Owner != c.EnemyOwner || u.Def == nil {
-				return
-			}
-			if u.Def.CanMove {
-				remaining = true
-			}
-		})
-		if !remaining {
-			t.Completed = true
-		}
-		return t.Completed
-
-	case KindAllUnitsKilled:
-		// Defeat: the local player has nothing left.
-		remaining := false
-		forEachLive(c.World, func(u *units.Unit) {
-			if u.Owner == c.LocalOwner {
-				remaining = true
-			}
-		})
-		if !remaining {
-			t.Completed = true
-		}
-		return t.Completed
-
-	case KindKillEnemyCommander, KindCommanderKilled:
-		// Absence scans over the owner this kind gates on: victory conditions
-		// gate on the enemy index, CommanderKilled on the local one
-		// [08 "Evaluation"].
-		//
-		// TODO(question): retail resolves commander identity through the
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// through the definition's Commander flag [08 "Evaluation"]. The two
-		// sources agree for stock content; the table is the authority and a
-		// synthetic side that renames the commander would diverge if the flag is
-		// used. Keep flag predicate for now (stock-correct) and thread side
-		// table through PollContext when available.
-		owner := c.EnemyOwner
-		if t.Kind == KindCommanderKilled {
-			owner = c.LocalOwner
-		}
-		alive := false
-		forEachLive(c.World, func(u *units.Unit) {
-			if u.Owner == owner && u.Def != nil && u.Def.Commander {
-				alive = true
-			}
-		})
-		if !alive {
-			t.Completed = true
-		}
-		return t.Completed
-
-	// --- Poll-time scans over live units -------------------------------------
-
-	case KindBuildUnitType:
-		// Satisfied when the local player holds at least the authored count of
-		// completed units of the type [08 "Evaluation"].
-		want := t.Args[0]
-		if want < 1 {
-			want = 1
-		}
-		var have int32
-		forEachLive(c.World, func(u *units.Unit) {
-			if u.Owner == c.LocalOwner && u.Remaining == 0 && t.matchesType(u) {
-				have++
-			}
-		})
-		if have >= want {
-			t.Completed = true
-		}
-		return t.Completed
-
-	case KindKillAllOfType, KindAllUnitsKilledOfType:
-		// No live unit of the authored type remains. KillAllOfType is a victory
-		// condition and gates on the enemy owner; AllUnitsKilledOfType is a
-		// defeat condition and takes any owner [08 "Evaluation"].
-		anyOwner := t.Kind == KindAllUnitsKilledOfType
-		remaining := false
-		forEachLive(c.World, func(u *units.Unit) {
-			if !anyOwner && u.Owner != c.EnemyOwner {
-				return
-			}
-			if t.matchesType(u) {
-				remaining = true
-			}
-		})
-		if !remaining {
-			t.Completed = true
-		}
-		return t.Completed
-
-	case KindUnitTypePassesX, KindUnitTypePassesZ, KindAnyUnitPassesX, KindAnyUnitPassesZ:
-		// Boundary conditions scan live units and compare the signed world
-		// coordinate after arithmetic >>4 against the stored threshold
-		// (authored>>4), satisfied when abs((coord>>4)-threshold) <3 — a ±2
-		// tolerance [08 "Evaluation"]. The ANY variants take any type. Builder
-		// stores threshold after arithmetic >>4 [08 "Evaluation"]; ParseLine and
-		// ParseCondition perform that shift (int32(b)>>4).
-		isX := t.Kind == KindUnitTypePassesX || t.Kind == KindAnyUnitPassesX
-		anyType := t.Kind == KindAnyUnitPassesX || t.Kind == KindAnyUnitPassesZ
-		threshold := t.Args[0] // already authored>>4 [08 "Evaluation"]
-		forEachLive(c.World, func(u *units.Unit) {
-			if t.Completed {
-				return
-			}
-			if !anyType && !t.matchesType(u) {
-				return
-			}
-			pos := worldPixel(u.Z)
-			if isX {
-				pos = worldPixel(u.X)
-			}
-			posShifted := pos >> 4 // arithmetic >>4 on signed world coordinate [08 "Evaluation"]
-			if withinBoundary(posShifted, threshold) {
-				t.Completed = true
-			}
-		})
-		return t.Completed
-
-	case KindMoveUnitToRadius:
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// (16.16 fixed) [08 "Trigger object"] [08 "Evaluation"]. Retail optionally
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// terrain-height snap, writing X<<16/Z<<16 back) and scans partition via
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// Distance is planar X/Z Euclidean squared (dx*dx+dz*dz <= r*r with
-		// 64-bit __allmul then >>32), Y ignored, ANYTYPE-aware type gating
-		// [08 "Evaluation"]. Headless iteration over all live units is equivalent
-		// to the partition scan for correctness; tile bounds and sentinel clamping
-		// are presentation/partition optimizations.
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// headless; retain as bounded residual — no stock mission observed to rely
-		// on it, and planar X/Z vs 3-D is now closed as X/Z planar [08 "Evaluation"].
-		cx, cz, rad := t.Args[0], t.Args[1], t.Args[2]
-		forEachLive(c.World, func(u *units.Unit) {
-			if t.Completed || !t.matchesType(u) {
-				return
-			}
-			dx := int64(worldPixel(u.X) - cx)
-			dz := int64(worldPixel(u.Z) - cz)
-			if dx*dx+dz*dz <= int64(rad)*int64(rad) {
-				t.Completed = true
-			}
-		})
-		return t.Completed
-
-	// --- Timers --------------------------------------------------------------
-
-	case KindVictoryTimerRunsOut, KindDeathTimerRunsOut:
-		// Timers store seconds×30 as an absolute tick deadline via IMUL 0x1E
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// globalTick >= deadline (CMP/SBB carry path, not signed JL) [08
-		// "Evaluation"]. Comparison is >= (not >) and zero-second deadline is
-		// satisfied on first poll [08 "Evaluation"].
-		if uint32(c.Tick) >= uint32(t.Args[0]) {
-			t.Completed = true
-		}
-		return t.Completed
-
-	// --- Notification-driven conditions do nothing on a poll -----------------
-
-	case KindKillUnitType, KindUnitTypeKilled, KindCaptureUnitType:
-		return false
-
-	default:
+	if c.World == nil {
 		return false
 	}
+	carrier := c.World.Unit(u.Attachment.Carrier)
+	return carrier != nil && carrier.Flags&cargoSelectableStatus != 0
 }
 
-// Notify drives one of the notification slots [08 "Evaluation"]. It mutates
-// only the trigger's completed flag and its own countdown, and returns the
-// completed flag's new value.
-//
-// The countdown conditions live here rather than in Poll: retail advances them
-// from the unit-died and capture notifications, so they measure kills and
-// captures, not elapsed time.
-func (t *Trigger) Notify(c PollContext, ev NotifyEvent, u *units.Unit) bool {
-	if t == nil {
-		return false
+func stampedBoundary(c PollContext, u *units.Unit, xAxis bool) (int32, bool) {
+	if c.StampedCell == nil {
+		return 0, false
 	}
-	if t.Completed {
-		return true
+	x, z, ok := c.StampedCell(u)
+	if !ok {
+		return 0, false
 	}
-	if u == nil || u.Def == nil {
-		return false
+	if xAxis {
+		return int32(x), true
 	}
-	switch t.Kind {
-	case KindKillUnitType, KindUnitTypeKilled:
-		if ev != NotifyUnitDied || !t.matchesType(u) {
-			return false
-		}
-		// KillUnitType is a victory condition and gates on the enemy owner;
-		// UnitTypeKilled is a defeat condition and takes any owner
-		// [08 "Evaluation"].
-		if t.Kind == KindKillUnitType && u.Owner != c.EnemyOwner {
-			return false
-		}
-		// While the subject's type matches, decrement the authored count and
-		// complete once it reaches zero or below [08 "Evaluation"] C17.
-		t.Args[0]--
-		if t.Args[0] <= 0 {
-			t.Completed = true
-		}
-		return t.Completed
-
-	case KindCaptureUnitType:
-		if ev != NotifyUnitCaptured || !t.matchesType(u) {
-			return false
-		}
-		t.Args[0]--
-		if t.Args[0] <= 0 {
-			t.Completed = true
-		}
-		return t.Completed
-	}
-	return false
+	return int32(z), true
 }
 
-// worldPixel narrows a 16.16 world coordinate to the signed integer world
-// units the authored thresholds are expressed in [08 "Evaluation"] C17.
-func worldPixel(v interface{ Int() int64 }) int32 {
-	return int32(v.Int())
-}
-
-// withinBoundary reports the ±2 tolerance of C17: satisfied when the absolute
-// difference is strictly below three after the >>4 on both sides
-// [08 "Evaluation"]. Caller has already applied arithmetic >>4 to pos; threshold
-// is stored as authored>>4.
-func withinBoundary(posShifted, threshold int32) bool {
-	d := posShifted - threshold
+func withinBoundary(cell, threshold int32) bool {
+	d := cell - threshold
 	if d < 0 {
 		d = -d
 	}
 	return d < 3
 }
 
-// Evaluate runs one tick of the victory and defeat queues [08 "Evaluation"].
-//
-// Victory is an AND across its queue, defeat is an OR, and victory is
-// evaluated first so a tick on which both would fire resolves as a victory.
-// The tick site calls this in the LOCAL player's once-per-30-tick slice and
-// only for mission type 1 [08 "Evaluation"] — the caller owns that cadence,
-// this function owns the combination.
-//
-// An empty victory queue does not win: the mission builder injects the default
-// destroy-all-units condition when the mission authors none, and the default
-// all-units-killed condition when it authors no defeat condition (C16).
+// wrappedDelta performs the authoritative signed 32-bit coordinate
+// subtraction before widening for the 64-bit square [08 R-TRIG-01 §5].
+func wrappedDelta(position int64, center int32) int64 {
+	return int64(int32(position) - center)
+}
+
+// Poll dispatches the tick slot. The caller owns the local-player 30-tick
+// cadence; Poll owns only the condition body [08 R-TRIG-01 §2, §4].
+func (t *Trigger) Poll(c PollContext) bool {
+	if t == nil {
+		return false
+	}
+	switch t.Kind {
+	case KindDestroyAllUnits:
+		done := c.World == nil || c.World.LiveCountForPlayer(1) == 0
+		t.celebratePredicate(c, done)
+		return done // this predicate never stores Satisfied [08 R-TRIG-01 §4].
+
+	case KindBuildUnitType:
+		if t.Completed {
+			return true
+		}
+		forEachOccupied(c.World, func(u *units.Unit) bool {
+			if u.Owner == 0 && u.Remaining == 0 && t.matchesType(u, false) {
+				t.complete(c, true)
+				return false
+			}
+			return true
+		})
+		return t.Completed
+
+	case KindUnitTypePassesX, KindUnitTypePassesZ:
+		if t.Completed {
+			return true
+		}
+		xAxis := t.Kind == KindUnitTypePassesX
+		forEachOccupied(c.World, func(u *units.Unit) bool {
+			if u.Owner != 0 || !t.matchesType(u, true) {
+				return true
+			}
+			cell, ok := stampedBoundary(c, u, xAxis)
+			if ok && withinBoundary(cell, t.Args[0]) {
+				t.complete(c, true)
+				return false
+			}
+			return true
+		})
+		return t.Completed
+
+	case KindAnyUnitPassesX, KindAnyUnitPassesZ:
+		if t.Completed {
+			return true
+		}
+		xAxis := t.Kind == KindAnyUnitPassesX
+		forEachOccupied(c.World, func(u *units.Unit) bool {
+			if u.Owner != 1 {
+				return true
+			}
+			cell, ok := stampedBoundary(c, u, xAxis)
+			if ok && withinBoundary(cell, t.Args[0]) {
+				t.complete(c, false)
+				return false
+			}
+			return true
+		})
+		return t.Completed
+
+	case KindAllUnitsKilled:
+		t.Completed = true
+		forEachOccupied(c.World, func(u *units.Unit) bool {
+			if u.Owner == 0 && eligibleMissionUnit(c, u) {
+				t.Completed = false
+				return false
+			}
+			return true
+		})
+		return t.Completed // recomputed every poll [08 R-TRIG-01 §4].
+
+	case KindMoveUnitToRadius:
+		if t.Completed {
+			return true
+		}
+		if !t.CenterReady {
+			if c.Deproject == nil {
+				return false
+			}
+			t.CenterX, t.CenterY, t.CenterZ = c.Deproject(t.Args[0], t.Args[1])
+			t.CenterReady = true
+		}
+		// The constructed record stores radius<<16 in a signed 32-bit word.
+		// A wrapped-negative radius produces an empty partition range.
+		radius := int64(int32(uint32(t.Args[2]) << 16))
+		if radius < 0 {
+			return false
+		}
+		radiusSquared := (radius * radius) >> 32
+		forEachOccupied(c.World, func(u *units.Unit) bool {
+			if u.Owner != 0 || !t.matchesType(u, true) || !eligibleMissionUnit(c, u) {
+				return true
+			}
+			dx := wrappedDelta(u.X.Raw(), t.CenterX)
+			dz := wrappedDelta(u.Z.Raw(), t.CenterZ)
+			if ((dx*dx)>>32)+((dz*dz)>>32) <= radiusSquared {
+				t.complete(c, true)
+			}
+			return true // retail continues through the remaining partition tiles.
+		})
+		return t.Completed
+
+	case KindVictoryTimerRunsOut, KindDeathTimerRunsOut:
+		return uint32(t.Args[0]) <= c.Tick // timers never store Satisfied or celebrate.
+
+	case KindKillEnemyCommander, KindKillAllMobileUnits, KindCaptureUnitType,
+		KindKillAllOfType, KindKillUnitType, KindCommanderKilled,
+		KindAllUnitsKilledOfType, KindUnitTypeKilled:
+		return t.Completed // notification-driven conditions are no-op polls.
+	default:
+		return false
+	}
+}
+
+func countMatching(c PollContext, owner int, mobile bool, t *Trigger, bothPrimaryOwners bool) int {
+	count := 0
+	forEachOccupied(c.World, func(u *units.Unit) bool {
+		if bothPrimaryOwners {
+			if u.Owner != 0 && u.Owner != 1 {
+				return true
+			}
+		} else if int(u.Owner) != owner {
+			return true
+		}
+		if mobile && (u.Def == nil || !u.Def.BMCode) {
+			return true
+		}
+		if t != nil && !t.matchesType(u, false) {
+			return true
+		}
+		count++
+		return count < 2
+	})
+	return count
+}
+
+// Notify dispatches a unit notification while the subject is still occupied.
+// Capture supplies the pre-transfer owner explicitly; removal reads it from
+// the still-owned record [08 R-TRIG-01 §7].
+func (t *Trigger) Notify(c PollContext, ev NotifyEvent, u *units.Unit) bool {
+	if t == nil || u == nil || u.Def == nil || ev == NotifyUnitCreated {
+		return t != nil && t.Completed
+	}
+	owner := notificationOwner(c, u)
+	switch t.Kind {
+	case KindKillEnemyCommander:
+		if !t.Completed && ev == NotifyUnitDied && owner == 1 && c.IsCommander != nil && c.IsCommander(u) {
+			t.complete(c, true)
+		}
+	case KindKillAllMobileUnits:
+		if !t.Completed && ev == NotifyUnitDied && owner == 1 && u.Def.BMCode && countMatching(c, 1, true, nil, false) < 2 {
+			t.complete(c, true)
+		}
+	case KindCaptureUnitType:
+		if !t.Completed && ev == NotifyUnitCaptured && owner == 1 && t.matchesType(u, false) {
+			t.complete(c, true)
+		}
+	case KindKillAllOfType:
+		if !t.Completed && ev == NotifyUnitDied && owner == 1 && t.matchesType(u, false) && countMatching(c, 1, false, t, false) < 2 {
+			t.complete(c, true)
+		}
+	case KindKillUnitType:
+		if !t.Completed && ev == NotifyUnitDied && owner == 1 && t.matchesType(u, false) && t.Args[0] > 0 {
+			t.Args[0]--
+			if t.Args[0] < 1 {
+				t.complete(c, true)
+			}
+		}
+	case KindCommanderKilled:
+		if !t.Completed && ev == NotifyUnitDied && owner == 0 && c.IsCommander != nil && c.IsCommander(u) {
+			t.complete(c, false)
+		}
+	case KindAllUnitsKilledOfType:
+		if !t.Completed && ev == NotifyUnitDied && t.matchesType(u, false) && countMatching(c, 0, false, t, true) < 2 {
+			t.complete(c, false)
+		}
+	case KindUnitTypeKilled:
+		if ev == NotifyUnitDied && t.matchesType(u, false) {
+			t.Args[0]--
+			if t.Args[0] < 1 {
+				t.complete(c, false)
+			}
+		}
+	}
+	return t.Completed
+}
+
+// Evaluate owns the canonical kind-1 queue combination. It injects defaults
+// again at poll time, evaluates victory as AND with first-false stop, and only
+// when victory is false evaluates defeat as OR with first-true stop [08
+// R-TRIG-01 §6]. The caller owns the kind gate, cadence and end latch.
 func Evaluate(victory, defeat []*Trigger, c PollContext) (victoryDone, defeatDone bool) {
-	for _, t := range victory {
-		if t != nil {
-			t.Poll(c)
-		}
+	if !c.MissionArmed {
+		return false, false
 	}
-	for _, t := range defeat {
-		if t != nil {
-			t.Poll(c)
-		}
+	if len(victory) == 0 {
+		victory = []*Trigger{DefaultVictory()}
 	}
-	victoryDone = len(victory) > 0
+	if len(defeat) == 0 {
+		defeat = []*Trigger{DefaultDefeat()}
+	}
+	victoryDone = true
 	for _, t := range victory {
-		if t == nil || !t.Completed {
+		if t == nil || !t.Poll(c) {
 			victoryDone = false
 			break
 		}
 	}
+	if victoryDone {
+		return true, false
+	}
 	for _, t := range defeat {
-		if t != nil && t.Completed {
-			defeatDone = true
-			break
+		if t != nil && t.Poll(c) {
+			return false, true
 		}
 	}
-	// Victory is evaluated first, so simultaneous resolves as a victory.
-	if victoryDone {
-		defeatDone = false
-	}
-	return victoryDone, defeatDone
+	return false, false
 }
 
-// NotifyAll drives a gameplay event into both queues [08 "Evaluation"].
+// NotifyAll drives a gameplay event through victory then defeat records in
+// builder order. Notifications run for every session kind [08 R-TRIG-01 §1, §7].
 func NotifyAll(victory, defeat []*Trigger, c PollContext, ev NotifyEvent, u *units.Unit) {
 	for _, t := range victory {
 		if t != nil {

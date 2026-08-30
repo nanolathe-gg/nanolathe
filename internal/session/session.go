@@ -165,12 +165,6 @@ type Session struct {
 	LocalOwner uint8
 	EnemyOwner uint8
 
-	// triggerDue is the local-player mission-trigger deadline. It is separate
-	// from economy save fields: the saved WinLoseTime value has no runtime
-	// trigger reader [08 "Evaluation"].
-	triggerDue      uint32
-	triggerDueValid bool
-
 	// Latch is the global end-of-mission countdown and win/lose bits
 	// [P1-01 §2.2]. It starts unarmed, arms at four, and publishes ending plus
 	// the outcome bits when the countdown crosses below zero.
@@ -752,8 +746,7 @@ func handleLocalPreload(s *Session) {
 			p.GameEnded = false
 			p.EndGameCountdown = -1
 		}
-		// Seed the local trigger deadline from the battle tick [08
-		// "Evaluation"]. This is independent of the economy save deadlines.
+		// WinLoseTime is the local mission-trigger deadline [08 R-TRIG-01 §6].
 		var tick uint32
 		if s.Clock != nil {
 			tick = s.Clock.GlobalTick
@@ -761,8 +754,6 @@ func handleLocalPreload(s *Session) {
 		s.Econ.SeedDeadlines(tick)
 		s.LocalOwner = 0
 		s.EnemyOwner = 1
-		s.triggerDue = tick
-		s.triggerDueValid = true
 	}
 	_ = s.TransitionTo(StateLoading)
 }
@@ -878,8 +869,6 @@ func (s *Session) RegisterAll() {
 				}
 			}
 		}
-		localOwner := s.LocalOwner
-		enemyOwner := s.EnemyOwner
 		s.Units.OnDeath = func(h pool.Handle, cause units.DeathCause, u *units.Unit) {
 			// A computer player's unit loss arms that manager's retry throttle at
 			// the authoritative death boundary. The manager owns the draw and
@@ -900,7 +889,7 @@ func (s *Session) RegisterAll() {
 			// Polled queues use LocalOwner/EnemyOwner gating, not alliance; type-gated countdown
 			// decrements only here, never from poll [08 "Evaluation"].
 			if s.Mission != nil && u != nil {
-				ctx := triggers.PollContext{Tick: s.Clock.GlobalTick, World: s.Units, LocalOwner: localOwner, EnemyOwner: enemyOwner}
+				ctx := s.missionTriggerContext(s.Clock.GlobalTick)
 				triggers.NotifyAll(s.Mission.Victory, s.Mission.Defeat, ctx, triggers.NotifyUnitDied, u)
 			}
 			// Audio: death does not map to a queued voice directly, but an
@@ -1009,7 +998,7 @@ func (s *Session) RegisterAll() {
 			// Created notification is present but unused by shipped conditions [08
 			// "Evaluation"]; it is still driven.
 			if s.Mission != nil && u != nil {
-				ctx := triggers.PollContext{Tick: s.Clock.GlobalTick, World: s.Units, LocalOwner: localOwner, EnemyOwner: enemyOwner}
+				ctx := s.missionTriggerContext(s.Clock.GlobalTick)
 				triggers.NotifyAll(s.Mission.Victory, s.Mission.Defeat, ctx, triggers.NotifyUnitCreated, u)
 			}
 			// Audio: completed build emits unitcomplete [03 §8.3] slot 8.
@@ -1021,7 +1010,9 @@ func (s *Session) RegisterAll() {
 			// Capture/transfer notification is driven here [08 "Evaluation"];
 			// type-gated CaptureUnitType decrements only here.
 			if s.Mission != nil && u != nil {
-				ctx := triggers.PollContext{Tick: s.Clock.GlobalTick, World: s.Units, LocalOwner: localOwner, EnemyOwner: enemyOwner}
+				ctx := s.missionTriggerContext(s.Clock.GlobalTick)
+				ctx.NotificationOwner = oldOwner
+				ctx.NotificationOwnerValid = true
 				triggers.NotifyAll(s.Mission.Victory, s.Mission.Defeat, ctx, triggers.NotifyUnitCaptured, u)
 			}
 			if s.Audio != nil && u != nil && s.Clock != nil {
@@ -1063,7 +1054,6 @@ func (s *Session) Retry() bool {
 	}
 	// Reset result and latch to clean state for new match [RS-05] RS-P0-012.
 	s.ResetResultForRetry()
-	s.triggerDueValid = false
 	// Direct to loading for same mission; transition must respect graph: 6/7->2->5.
 	// If we are in PostBattle (7) we can go 7->2, then 2->5. If in Battle (6) go 6->2->5.
 	if s.State == StatePostBattle || s.State == StateBattle {

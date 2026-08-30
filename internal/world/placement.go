@@ -659,10 +659,10 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 	if bit4Max > maxSample {
 		maxSample = bit4Max
 	}
-	// MinWaterDepth ==0 means no minimum-depth requirement (land buildings) [R-P0-08][05 "Geothermal requirement"].
-	// Retail land definitions author MinWaterDepth 0 and must be placeable above sea level; the strict > check
-	// would otherwise reject any positive height when sea==0. Gate on non-zero to preserve land placement.
-	if !skipAggregates && q.Rules.MinWaterDepth != 0 && maxSample > sea-q.Rules.MinWaterDepth {
+	// The upper waterline band is unconditional, including when the authored
+	// value is zero. Land profiles use the established -10000 template value
+	// to disable this gate [04 §6.1, §6.4][05 "Geothermal requirement"].
+	if !skipAggregates && maxSample > sea-q.Rules.MinWaterDepth {
 		return PlacementResult{}, fmt.Errorf("world: placement is deeper than minimum water depth %d [05 %q]", q.Rules.MinWaterDepth, "Geothermal requirement")
 	}
 	return PlacementResult{Rect: q.Rect, SiteHeight: siteHeight}, nil

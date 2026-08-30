@@ -353,7 +353,7 @@ func TestStepUnit_SettlementDeniesPausesAndResumes(t *testing.T) {
 func TestStepUnit_CancelBeforeAndAfterNanoframe(t *testing.T) {
 	cat := catWithDefs(
 		&content.UnitDef{UnitName: "armfac", FootprintX: 2, FootprintZ: 2, YardMap: "o", Builder: true, MaxDamage: 100, WorkerTime: 30, BuildTime: 100},
-		&content.UnitDef{UnitName: "armflash", FootprintX: 2, FootprintZ: 2, YardMap: "o", MaxDamage: 100, BuildTime: 100, BuildCostMetal: 100},
+		&content.UnitDef{UnitName: "armflash", FootprintX: 2, FootprintZ: 2, YardMap: "o", MaxDamage: 100, BuildTime: 100, BuildCostMetal: 100, MinWaterDepth: -10000},
 	)
 	facDef := cat.Units[content.CanonicalKey("armfac")]
 	w := newConstructionFixtureWorld(20, cat)

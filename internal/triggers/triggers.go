@@ -12,17 +12,17 @@ type Kind uint8
 
 const (
 	// Victory triggers [08 "Victory trigger types"] in builder probe order [GAP T10].
-	KindKillEnemyCommander  Kind = iota // 0 flag-only 0xC
-	KindDestroyAllUnits                 // 1 flag-only 0xC
-	KindKillAllMobileUnits              // 2 flag-only 0xC
-	KindBuildUnitType                   // 3 type+count 0x30
-	KindCaptureUnitType                 // 4 type+count 0x30
-	KindKillAllOfType                   // 5 type+count 0x32
-	KindKillUnitType                    // 6 type+count 0x32
-	KindMoveUnitToRadius                // 7 type+X/Z/radius 0x40
-	KindUnitTypePassesX                 // 8 type/boundary 0x14
-	KindUnitTypePassesZ                 // 9 type/boundary 0x14
-	KindVictoryTimerRunsOut             // 10 timer 0x10
+	KindKillEnemyCommander  Kind = iota
+	KindDestroyAllUnits          // 1 flag-only 0xC
+	KindKillAllMobileUnits       // 2 flag-only 0xC
+	KindBuildUnitType            // 3 name-only
+	KindCaptureUnitType          // 4 name-only
+	KindKillAllOfType            // 5 name-only
+	KindKillUnitType             // 6 type+count 0x32
+	KindMoveUnitToRadius         // 7 type+X/Z/radius 0x40
+	KindUnitTypePassesX          // 8 type/boundary 0x14
+	KindUnitTypePassesZ          // 9 type/boundary 0x14
+	KindVictoryTimerRunsOut      // 10 timer 0x10
 	// Defeat triggers [08 "Defeat trigger types"].
 	KindCommanderKilled      // 11 flag-only 0xC
 	KindAllUnitsKilled       // 12 flag-only 0xC
@@ -85,75 +85,66 @@ func (k Kind) IsVictory() bool { return k <= KindVictoryTimerRunsOut }
 // IsDefeat reports whether the kind belongs to the defeat queue.
 func (k Kind) IsDefeat() bool { return k >= KindCommanderKilled }
 
-// RecordSize returns the retail record size in bytes for the kind's polymorphic
-// allocation, including the leading vtable pointer and adjacent completed flag.
-// The eighteen-entry vtable map and per-condition sizes are established
-// [08 "Trigger object"] [GAP T10] [08 "Trigger object"].
-// Observed buckets: 0xC flag-only (12), 0x10 timer (16), 0x14 boundary (20),
-// 0x30/0x32 string+count (48/50), 0x36 canonicalizing string (54), 0x40 radius (64)
-// [GAP T10].
-// TODO(question): exact assignment of which string+count variant is 0x30 vs 0x32
-// is not closed beyond the bucket ranges; this mapping uses representative
-// values within the observed buckets and is one line to correct if a probe
-// distinguishes them.
+// RecordSize reports the established allocation identity for each trigger
+// record. Go keeps named fields rather than reproducing this packed layout
+// [08 R-TRIG-01 §2][I13].
 func (k Kind) RecordSize() int {
 	switch k {
-	case KindKillEnemyCommander, KindDestroyAllUnits, KindKillAllMobileUnits, KindCommanderKilled, KindAllUnitsKilled:
-		return 0x0C // 12 flag-only [GAP T10]
+	case KindKillEnemyCommander, KindDestroyAllUnits, KindCommanderKilled:
+		return 12
 	case KindVictoryTimerRunsOut, KindDeathTimerRunsOut:
-		return 0x10 // 16 timer [GAP T10]
-	case KindUnitTypePassesX, KindUnitTypePassesZ, KindAnyUnitPassesX, KindAnyUnitPassesZ:
-		return 0x14 // 20 boundary [GAP T10]
-	case KindBuildUnitType, KindCaptureUnitType:
-		return 0x30 // 48 string+count variant A
-	case KindKillAllOfType, KindKillUnitType, KindUnitTypeKilled:
-		return 0x32 // 50 string+count variant B
+		return 16
+	case KindAllUnitsKilled:
+		return 16
+	case KindKillAllMobileUnits, KindAnyUnitPassesX, KindAnyUnitPassesZ:
+		return 20
+	case KindCaptureUnitType:
+		return 44
+	case KindKillUnitType, KindUnitTypeKilled:
+		return 48
+	case KindBuildUnitType, KindKillAllOfType:
+		return 50
+	case KindUnitTypePassesX, KindUnitTypePassesZ:
+		return 52
 	case KindAllUnitsKilledOfType:
-		return 0x36 // 54 canonicalizing string shape [GAP T10]
+		return 54
 	case KindMoveUnitToRadius:
-		return 0x40 // 64 radius largest [GAP T10] [08 "Trigger object"]
+		return 64
 	default:
-		return 0x0C
+		return 12
 	}
 }
 
-// VTable is the per-condition virtual table entry. Retail stores an 8-dword
-// table per trigger with the completed flag adjacent to the vtable pointer
-// [08 "Trigger object"]. Six of the slots are named: a poll, three event
-// notifications (unit died, capture/transfer, created), and save/load
-// [08 "Evaluation"]. Go models the identity, not the layout [I13] — the poll
-// and the notifications are methods on Trigger, in eval.go.
+// VTable records the six established dispatch slots: poll, unit removal,
+// capture, creation, save and load [08 R-TRIG-01 §2].
 type VTable struct {
 	Kind       Kind
 	Name       string
 	RecordSize int // bytes, see Kind.RecordSize
-	// TODO(question): the two slots beyond the six named ones are presumed to
-	// be the shared destructor/helper pair; their identities are not needed
-	// for the poll contract and are not established.
-	Slots int // always 8 [08 "Trigger object"]
+	Slots      int
 }
 
 // VTables is the eighteen-entry vtable map covering all condition types
 // [08 "Trigger object"] [GAP T10].
 var VTables = [KindCount]VTable{
-	{Kind: KindKillEnemyCommander, Name: "KillEnemyCommander", RecordSize: 0x0C, Slots: 8},
-	{Kind: KindDestroyAllUnits, Name: "DestroyAllUnits", RecordSize: 0x0C, Slots: 8},
-	{Kind: KindKillAllMobileUnits, Name: "KillAllMobileUnits", RecordSize: 0x0C, Slots: 8},
-	{Kind: KindBuildUnitType, Name: "BuildUnitType", RecordSize: 0x30, Slots: 8},
-	{Kind: KindCaptureUnitType, Name: "CaptureUnitType", RecordSize: 0x30, Slots: 8},
-	{Kind: KindKillAllOfType, Name: "KillAllOfType", RecordSize: 0x32, Slots: 8},
-	{Kind: KindKillUnitType, Name: "KillUnitType", RecordSize: 0x32, Slots: 8},
-	{Kind: KindMoveUnitToRadius, Name: "MoveUnitToRadius", RecordSize: 0x40, Slots: 8},
-	{Kind: KindUnitTypePassesX, Name: "UnitTypePassesX", RecordSize: 0x14, Slots: 8},
-	{Kind: KindUnitTypePassesZ, Name: "UnitTypePassesZ", RecordSize: 0x14, Slots: 8},
-	{Kind: KindVictoryTimerRunsOut, Name: "VictoryTimerRunsOut", RecordSize: 0x10, Slots: 8},
-	{Kind: KindCommanderKilled, Name: "CommanderKilled", RecordSize: 0x0C, Slots: 8},
-	{Kind: KindAllUnitsKilled, Name: "AllUnitsKilled", RecordSize: 0x0C, Slots: 8},
-	{Kind: KindAllUnitsKilledOfType, Name: "AllUnitsKilledOfType", RecordSize: 0x36, Slots: 8},
-	{Kind: KindUnitTypeKilled, Name: "UnitTypeKilled", RecordSize: 0x32, Slots: 8},
-	{Kind: KindDeathTimerRunsOut, Name: "DeathTimerRunsOut", RecordSize: 0x10, Slots: 8},
-	{Kind: KindAnyUnitPassesX, Name: "AnyUnitPassesX", RecordSize: 0x14, Slots: 8},
-	{Kind: KindAnyUnitPassesZ, Name: "AnyUnitPassesZ", RecordSize: 0x14, Slots: 8},
+	{Kind: KindKillEnemyCommander, Name: "KillEnemyCommander", RecordSize: 12, Slots: 6},
+	{Kind: KindDestroyAllUnits, Name: "DestroyAllUnits", RecordSize: 12, Slots: 6},
+	{Kind: KindKillAllMobileUnits, Name: "KillAllMobileUnits", RecordSize: 20, Slots: 6},
+	{Kind: KindBuildUnitType, Name: "BuildUnitType", RecordSize: 50, Slots: 6},
+	{Kind: KindCaptureUnitType, Name: "CaptureUnitType", RecordSize: 44, Slots: 6},
+	{Kind: KindKillAllOfType, Name: "KillAllOfType", RecordSize: 50, Slots: 6},
+	{Kind: KindKillUnitType, Name: "KillUnitType", RecordSize: 48, Slots: 6},
+	{Kind: KindMoveUnitToRadius, Name: "MoveUnitToRadius", RecordSize: 64, Slots: 6},
+	{Kind: KindUnitTypePassesX, Name: "UnitTypePassesX", RecordSize: 52, Slots: 6},
+	{Kind: KindUnitTypePassesZ, Name: "UnitTypePassesZ", RecordSize: 52, Slots: 6},
+	{Kind: KindVictoryTimerRunsOut, Name: "VictoryTimerRunsOut", RecordSize: 16, Slots: 6},
+	{Kind: KindCommanderKilled, Name: "CommanderKilled", RecordSize: 12, Slots: 6},
+	{Kind: KindAllUnitsKilled, Name: "AllUnitsKilled", RecordSize: 16, Slots: 6},
+	{Kind: KindAllUnitsKilledOfType, Name: "AllUnitsKilledOfType", RecordSize: 54, Slots: 6},
+	{Kind: KindUnitTypeKilled, Name: "UnitTypeKilled", RecordSize: 48, Slots: 6},
+	{Kind: KindDeathTimerRunsOut, Name: "DeathTimerRunsOut", RecordSize: 16, Slots: 6},
+	{Kind: KindAnyUnitPassesX, Name: "AnyUnitPassesX", RecordSize: 20, Slots: 6},
+	{Kind: KindAnyUnitPassesZ, Name: "AnyUnitPassesZ", RecordSize: 20, Slots: 6},
 }
 
 // KindByName maps the authored condition name (case-insensitive) to its Kind
@@ -168,9 +159,9 @@ var KindByName = func() map[string]Kind {
 	return m
 }()
 
-// IsANYTYPE reports whether the unit-type token is the wildcard literal
-// ANYTYPE, accepted wherever a unit type is expected [08 "Victory and defeat triggers"] [C14].
-// Recognition is case-insensitive; retail compares via boundary conditions.
+// IsANYTYPE reports whether the unit-type token is the wildcard literal.
+// Only MoveUnitToRadius and UnitTypePassesX/Z interpret it as a wildcard;
+// name-only families retain it as an ordinary name [08 R-TRIG-01 §2].
 func IsANYTYPE(s string) bool { return strings.EqualFold(strings.TrimSpace(s), "ANYTYPE") }
 
 // Trigger is a polymorphic mission condition record.
@@ -178,22 +169,21 @@ func IsANYTYPE(s string) bool { return strings.EqualFold(strings.TrimSpace(s), "
 // types, with the completed flag adjacent [08 "Trigger object"].
 // Go uses named fields per [I13]; byte sizes are identity via Kind.RecordSize().
 type Trigger struct {
-	Kind      Kind     // 18 kinds [08 "Victory and defeat triggers"] [C15]
-	Type      string   // unit type name or "" or "ANYTYPE" [C14]
-	Args      [3]int32 // authored ints: count/threshold/ticks/X/Z/radius [C14]
-	Completed bool     // adjacent to vtable pointer [08 "Trigger object"]
+	Kind                      Kind     // 18 kinds [08 "Victory and defeat triggers"] [C15]
+	Type                      string   // copied name, or empty wildcard for the three supported families
+	Args                      [3]int32 // authored ints: count/threshold/ticks/X/Z/radius [C14]
+	Completed                 bool
+	Celebrated                bool
+	CenterReady               bool
+	CenterX, CenterY, CenterZ int32
 }
 
 // Evaluation lives in eval.go: the tick-driven poll slot, the three
 // notification slots, and the AND/OR combination of the two queues
 // [08 "Evaluation"].
 
-// SecondsToTicks converts authored seconds to authoritative ticks at 30 Hz
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// [08 "Trigger object"] [08 "Evaluation"] [C17] [P1-01 §2.1][P1-01 §4].
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// carry path) [08 "Evaluation"]. Wrap is preserved via int32 truncation of
-// the 64-bit product.
+// SecondsToTicks converts authored seconds to the absolute 30 Hz deadline,
+// preserving signed 32-bit wrap [08 R-TRIG-01 §2, §4].
 func SecondsToTicks(seconds int32) int32 { return int32(int64(seconds) * 30) }
 
 // New constructs a trigger of the given kind with type and up to three args.
@@ -204,9 +194,10 @@ func New(kind Kind, typ string, args ...int32) *Trigger {
 	for i := 0; i < len(args) && i < 3; i++ {
 		t.Args[i] = args[i]
 	}
-	// Normalize ANYTYPE to canonical spelling for comparisons [C14].
-	if IsANYTYPE(typ) {
-		t.Type = "ANYTYPE"
+	// Only the radius and typed-boundary families recognize ANYTYPE, and they
+	// store it as an empty name [08 R-TRIG-01 §2].
+	if IsANYTYPE(typ) && (kind == KindMoveUnitToRadius || kind == KindUnitTypePassesX || kind == KindUnitTypePassesZ) {
+		t.Type = ""
 	}
 	return t
 }
@@ -301,7 +292,6 @@ func ParseArgs(s string) (typ string, args [3]int32, isFour bool, err error) {
 // ParseLine parses a full authored line like "KillUnitType=CORLAB, 1" or
 // "AnyUnitPassesX=4500" into a Trigger, handling the condition name,
 // ANYTYPE wildcard, and seconds×30 for timer kinds [C14][C15][C17].
-// Missing value for flag-only kinds yields a trigger with no args.
 func ParseLine(line string) (*Trigger, error) {
 	line = strings.TrimSpace(line)
 	if line == "" {
@@ -320,76 +310,12 @@ func ParseLine(line string) (*Trigger, error) {
 		// No '=', treat whole line as key with no args (flag-only)
 		key = strings.TrimSpace(line)
 	}
-	kind, ok := KindByName[strings.ToLower(key)]
-	if !ok {
+	if _, ok := KindByName[strings.ToLower(key)]; !ok {
 		return nil, fmt.Errorf("triggers: unknown condition %q", key)
 	}
-	t := &Trigger{Kind: kind}
-	// Flag-only kinds have no args [08 "Trigger object"] [GAP T10].
-	switch kind {
-	case KindKillEnemyCommander, KindDestroyAllUnits, KindKillAllMobileUnits, KindCommanderKilled, KindAllUnitsKilled:
-		// none [08 "Victory trigger types"] [08 "Defeat trigger types"]
-		if rest != "" && rest != "1" && rest != "0" {
-			// Tolerate stray value but ignore per silent-malformed principle [C13] analog.
-		}
-		return t, nil
-	case KindVictoryTimerRunsOut, KindDeathTimerRunsOut:
-		if rest == "" {
-			return nil, fmt.Errorf("triggers: timer %q requires seconds", key)
-		}
-		sec, err := strconv.ParseInt(strings.TrimSpace(strings.TrimSuffix(rest, ";")), 10, 32)
-		if err != nil {
-			return nil, fmt.Errorf("triggers: parse timer %q: %w", rest, err)
-		}
-		t.Args[0] = SecondsToTicks(int32(sec)) // [08 "Trigger object"] seconds×30
-		return t, nil
-	case KindAnyUnitPassesX, KindAnyUnitPassesZ:
-		if rest == "" {
-			return nil, fmt.Errorf("triggers: %q requires boundary", key)
-		}
-		// Single int boundary [08 "Defeat trigger types"]. Builder stores
-		// threshold after arithmetic >>4 [08 "Evaluation"].
-		b, err := strconv.ParseInt(strings.TrimSpace(strings.TrimSuffix(rest, ";")), 10, 32)
-		if err != nil {
-			// Try as maybe with type? but Any* is boundary only.
-			return nil, fmt.Errorf("triggers: parse boundary %q: %w", rest, err)
-		}
-		t.Args[0] = int32(b) >> 4 // arithmetic >>4 [08 "Evaluation"]
-		return t, nil
-	case KindAllUnitsKilledOfType:
-		if rest == "" {
-			return nil, fmt.Errorf("triggers: %q requires type", key)
-		}
-		// Type only, no count [08 "Defeat trigger types"].
-		typ := strings.TrimSpace(strings.TrimSuffix(rest, ";"))
-		// May be comma-separated with trailing int? but spec says type only.
-		if idx := strings.IndexByte(typ, ','); idx >= 0 {
-			typ = strings.TrimSpace(typ[:idx])
-		}
-		t.Type = typ
-		if IsANYTYPE(typ) {
-			t.Type = "ANYTYPE"
-		}
-		return t, nil
-	default:
-		// Remaining kinds: type+count or type+boundary or type+radius
-		if rest == "" {
-			return nil, fmt.Errorf("triggers: %q requires args", key)
-		}
-		typ, args, _, err := ParseArgs(rest)
-		if err != nil {
-			return nil, err
-		}
-		t.Type = typ
-		if IsANYTYPE(typ) {
-			t.Type = "ANYTYPE"
-		}
-		t.Args = args
-		// Boundary kinds store threshold after arithmetic >>4 [08 "Evaluation"].
-		if kind == KindUnitTypePassesX || kind == KindUnitTypePassesZ {
-			t.Args[0] = t.Args[0] >> 4 // arithmetic >>4
-		}
-		// Normalize timer-like count storage for MoveRadius: args are X,Z,Radius.
-		return t, nil
+	t, present := ParseCondition(key, rest)
+	if !present {
+		return nil, fmt.Errorf("triggers: condition %q is not present for value %q", key, rest)
 	}
+	return t, nil
 }
