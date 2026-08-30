@@ -356,7 +356,7 @@ that are cited but never introduced.
 | `R-ECO-01`, `R-ECO-02`, `R-FAC-01C`, `R-FAC-01R`, `R-FEAT-01`, `R-P0-06`, `R-PROD-01`, `R-SHARE-01`, `R-WORK-01` | doc 05 |
 | `R-DMG-01`, `R-P0-07`, `R-WFX-01`, `R-WPN-01`, `R-WPN-02`, `R-WPN-03`, `R-WPN-04` | doc 06 |
 | `R-CAM-01`, `R-FE-01`, `R-FE-02`, `R-HUD-02R`, `R-HUD-03`, `R-HUD-04`, `R-P0-11`, `R-REV-01`, `R-SEL-02B2`, `R-WGT-01`, `R-WGT-02` | doc 07 |
-| `R-AI-01`, `R-AI-02`, `R-CAMP-01`, `R-ENTRY-01`, `R-ENTRY-02`, `R-OOS-01`, `R-P0-04`, `R-P0-05`, `R-SAVE-02`, `R-SAVE-FEATURE-01`, `R-SAVE-ORDER-01`, `R-SAVE-UNIT-01`, `R-SAVE-WEAPON-01`, `R-SESS-01`, `R-SKIR-01`, `R-TRIG-01` | doc 08 |
+| `R-AI-01`, `R-AI-02`, `R-AI-03`, `R-CAMP-01`, `R-ENTRY-01`, `R-ENTRY-02`, `R-OOS-01`, `R-P0-04`, `R-P0-05`, `R-SAVE-02`, `R-SAVE-FEATURE-01`, `R-SAVE-ORDER-01`, `R-SAVE-UNIT-01`, `R-SAVE-WEAPON-01`, `R-SESS-01`, `R-SKIR-01`, `R-TRIG-01` | doc 08 |
 | `R-CRD-006` | docs 03 (§2 producer census) and 07 (§1 cadence seam) |
 | `R-FAC-01`, `R-FAC-01B` | docs 04 (movement boundary) and 05 (release audit) |
 | `R-LAYER` | docs 03 (§§1–4) and 06 |

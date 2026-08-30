@@ -2629,6 +2629,14 @@ The classifier runs on the manager's 30-countdown cadence and scans the current 
 | otherwise, second high status bit set | regroup A |
 | otherwise | stays ungrouped |
 
+**Correction (2026-08-29, RWU-AI-03).** The "definition max-slope field" row
+above names the wrong key. The word the classifier tests is the definition's
+**`MinWaterDepth`** (copied from its movement class at FBI compile), and the
+test is `MinWaterDepth >= 1` — a definition that may stand in water goes to
+regroup B. The comparison and destination are unchanged; only the field label
+was wrong ([R-AI-03 §6]; the same word selects the scatter helper's region set
+in [R-AI-03 §4]).
+
 The classifier never assigns wave A, wave B, or rally; it draws no random numbers; its insertion order is the ascending unit-pool traversal, and the ungrouped gate prevents duplicate append on later passes.
 
 **Correction (2026-08-26): the two high status bits are no longer opaque.** They are set once by the common allocator initializer, from the definition, and by nothing else — a whole-image scan of the runtime status word finds exactly one write site for each, so both are stable for the unit's lifetime.
@@ -2803,6 +2811,14 @@ if RadarDistance != 0:       acc += 5
 ```
 
 Then `count == 0` multiplies the accumulator by four, `count == 1` by two, and `MaxSlope >= 0` by three. When `(unitLimit >> 1) < player.liveUnitCount` — an unsigned compare of the session's per-player unit limit against the owning player's live unit count — half of the single coefficient is added; this is the branch that used to be described as an unlocated "strategic half-capacity state field", and it is reachable in ordinary late-game state ([R-AI-01 §13]). The coefficient is then zeroed when `CanLoad` is set, when `IsFeature` is set, or when the wind-generator/global-wind comparison is true, and is clamped to the signed-byte range.
+
+**Correction (2026-08-29, RWU-AI-03).** The `MaxSlope >= 0` term above, and
+"max-slope" in the input lists of this section and of [R-AI-01 §16], name the
+wrong key: the definition word the class routine reads is **`MinWaterDepth`**
+(the movement-class value the FBI compile copies into the definition,
+[04 R-DOC04-A]); the multiply-by-three applies when `MinWaterDepth >= 0`, i.e.
+to definitions that may stand in water. The comparison and factor are
+unchanged ([R-AI-03 §6]).
 
 The energy coefficient: `clamp(trunc(BuildCostEnergy * -0.0025 - Classify(def) * 5.0), -100, 100)`.
 
@@ -6320,6 +6336,333 @@ time-out clamp, and the `(ms × 30 + 999) / 1000` tick conversion of
 transport code and stay outside the single-player boundary of
 [R-OOS-01 §3].
 
+## R-AI-03 — Placement root: the patch vector and the scatter helper, exactly
+
+This unit closes the last implementation-blocking gap of the computer player:
+the exact arithmetic of the placement root ([R-AI-01 §3]'s `placeCandidate`),
+its two search helpers, and the metal-spot vector the exhaustive helper reads.
+It sharpens the prose of "Placement root and search helpers" in six places,
+each stated where it applies: the radius growth and its cap are **world
+units**, not cells (§2); the origin is the strategic centre when the builder is
+*within* the radius, and is interpolated only when it is *outside* it — the
+earlier "zero or at least the scaled radius" wording was inverted (§2); the
+"sort by distance" is a binary heap, and the early-stop slack of 160 is in
+**squared cell distance** (§3); the region set is selected by the sign of the
+definition's **MinWaterDepth**, not of a slope field (§4); the footprint
+blocker *does* apply the waterline band, so the exhaustive path is not
+water-blind (§3); and the scatter path's score comparison reads a **stale**
+accumulator for every `bmcode` definition, because the validator mode it uses
+never writes the accumulator (§4). Numbers below come from the executable, not
+from Nanolathe's stub or prior inference. Vocabulary: "cell" is a 16-world-unit
+plot cell [05 R-PROD-01 §6]; `footX`/`footZ` are the definition's footprint
+extents copied from its movement class [04 R-DOC04-A]; `RNG(b)` is the bounded
+simulation draw, which returns 0 **without advancing** when `b < 2` (signed)
+[01 §7.1].
+
+### R-AI-03 §1 — The metal-spot vector: builder, record, scan, consumer — Established [R-AI-03]
+
+**Owner and lifetime.** Each strategic state owns one vector of metal-spot
+records. It is built by the battle-entry tail, step 7 of [R-ENTRY-01 §8] — once
+per slot that owns an AI record, after the second resource grant, on every
+session kind including a restored save. Nothing rebuilds it afterwards: the
+30-tick strategic refresh does not touch it, and reclaiming or destroying a
+feature does not remove its record. The vector therefore describes the map as
+it stood at battle start.
+
+**Record.** `{ cellX int16, cellZ int16, metal float32 }`, eight bytes, packed
+as x in the low half-word and z in the high half-word followed by the float.
+The `metal` field is the feature definition's authored `metal` value narrowed
+through the 16-bit mask the feature parser applies (`float32(value & 0xffff)`)
+[05 R-FEAT-01 §6]. **It is never read as metal**: the only consumer overwrites
+it with a sort key (§3).
+
+**Scan.** The builder first empties the vector (end := begin, capacity kept),
+then visits every plot cell in row-major order — rows `z = 0 … mapCellHeight−1`
+outer, cells `x = 0 … mapCellWidth−1` inner — and appends `(x, z, metal)` when
+all three hold, tested in this order:
+
+1. the cell's feature reference is a real feature index — strictly less than
+   the `0xfffb` reserved band. The `0xfffe` "part of a larger feature" marker
+   and the `0xffff` "no feature" value both fail this test, so a multi-cell
+   feature yields exactly one record, at its anchor cell;
+2. the referenced feature definition's `metal` compares **not equal** to
+   floating zero;
+3. the definition's `indestructible` flag is set.
+
+There is no threshold on the metal value beyond non-zero, no check of the
+reference against the feature count (the loader guarantees it), and no
+ordering step: the vector is in row-major cell order. On a stock map every
+metal deposit is an indestructible feature with a non-zero `metal`, so the
+vector is the deposit list; a map that authors a destructible metal feature
+leaves it out, and one that authors an indestructible feature with `metal`
+but no per-cell metal seeding yields records the exhaustive helper will visit
+and score at the uniform surface value.
+
+**Consumer.** The exhaustive helper (§3) is the only reader. The scatter helper
+(§4) never consults it.
+
+### R-AI-03 §2 — The root's origin step, exactly — Established [R-AI-03]
+
+Inputs: the builder position `b` (16.16 world, three axes), the strategic
+centre `c` ([R-P0-05 §5]), the per-player **placement search radius** (a plain
+integer of world units, zero at construction), and the map's world-unit
+extents `W`, `H` (cell counts × 16, [R-AI-01 §3]).
+
+```text
+if radius < max(W, H): radius += 160            # signed; world units; the grown
+                                                #   value persists across attempts
+dx = c.x − b.x ; dy = c.y − b.y ; dz = c.z − b.z # 32-bit 16.16 differences
+dist = trunc( sqrt( dx·dx + dy·dy + dz·dz ) )   # x87: three integer loads, the
+                                                #   squares summed in that order,
+                                                #   one square root, one __ftol
+R = radius << 16
+if R < dist:                                    # signed: builder OUTSIDE the radius
+    scale    = (int64(R) << 16) / int64(dist)   # 64-bit signed divide
+    origin.a = b.a + int32( (int64(d_a) · scale) >> 16 )   # a = x, then y, then z
+else:                                           # within (or exactly at) the radius
+    origin = c
+```
+
+Because the deltas are 16.16 integers, `sqrt` of their squared sum is itself a
+16.16 distance, so `dist` compares directly with `R`. The interpolation moves
+the origin from the builder **toward** the centre by exactly `radius` world
+units; when the centre is already within reach the origin *is* the centre. All
+three axes are interpolated, but the helpers read only `x` and `z` of the
+origin: `origin.y` is dead. The earlier prose had the branch inverted. The
+first attempt of a fresh player therefore searches from a point 160 world
+units toward the centre (or the centre itself), and each failed attempt widens
+the ring by 160 until the radius reaches the larger map extent.
+
+**Helper selection** is unchanged from "Placement root and search helpers":
+`extractsmetal == 0.0` → scatter with no draw; otherwise `d = RNG(255)` and
+`surfaceMetal < d` (signed) → exhaustive, else scatter. The selector draw is
+taken **after** the origin step and before any helper draw. The exhaustive
+helper receives `radius × 4`; the scatter helper receives `radius` unscaled.
+
+### R-AI-03 §3 — The exhaustive metal-spot helper — Established [R-AI-03]
+
+Inputs: the definition, the origin (`x`, `z` used), the metal-spot vector of
+§1, `D = radius × 4`, and the output cell. It draws **no** random numbers.
+
+**Empty vector → failure** (return false before anything else).
+
+**Origin cell.** Both coordinates are the plot cell whose *top-left* would put
+the footprint's centre nearest the origin:
+
+```text
+cx = int16( (origin.x − (footX << 19) + (1 << 19)) >> 20 )    # arithmetic shift
+cz = int16( (origin.z − (footZ << 19) + (1 << 19)) >> 20 )
+```
+
+(`1 << 19` is 8 world units in 16.16; `>> 20` divides by 16 world units and
+floors — the same rounding the build cursor uses [07 §9].)
+
+**Filter.** For each record in vector order, `d2 = (px − cx)² + (pz − cz)²`
+in 32-bit cell units; keep the record when `d2 <= D · D` (inclusive). `D` is
+a count of world units used as a count of cells, so the search disc is
+`4 × radius` **cells** — 64× the radius in world units; this is what retail
+does. A kept record is copied to a working vector and its `metal` float is
+**overwritten** with `float32(−d2)`.
+
+**Ordering.** When the working vector holds at least two records it is made
+into a binary max-heap on the float key with the standard library's
+make-heap (sift each index from `n/2 − 1` down to 0: move the hole down to a
+leaf choosing the right child unless `right.key < left.key`, then push the
+saved record back up while `parent.key < key`), and the loop below takes the
+front record and re-heaps with the pop-heap that moves the front to the last
+slot and re-sifts the former last record. The greatest key is the least
+`d2`, so candidates come **nearest first**. Ties in `d2` are ordered by the
+heap mechanics — deterministic from the vector order, but **not** the vector
+order itself; an implementation must reproduce the heap to reproduce retail's
+choice among equidistant deposits.
+
+**Candidate loop.** With `best := 0`, `bestCell := none`, `firstD2 := −1`:
+
+```text
+while working vector not empty:
+    (px, pz) = front record
+    candX = int16( px − trunc((footX − 3) / 2) )      # signed division toward zero
+    candZ = int16( pz − trunc((footZ − 3) / 2) )      #   (footX = 1 → +1; 2 → 0; 5 → −1)
+    c2 = (candX − cx)² + (candZ − cz)²                # recomputed from the CANDIDATE cell
+    if firstD2 >= 0 and c2 > firstD2 + 160: break     # early stop, squared-cell units
+    if blocker(def, candX, candZ, self = 0, ghost = 0):
+        score = accumulator
+        if score > best:                              # strict; a zero-metal footprint never wins
+            best = score ; bestCell = (candX, candZ)
+            if firstD2 == −1: firstD2 = c2            # set once, at the first accepted candidate
+    pop front
+return best != 0 ? (bestCell, true) : failure
+```
+
+The candidate offset centres the footprint on the deposit for a 3-cell
+footprint and biases larger ones toward the top-left. The early stop is
+measured against the squared distance of the **first** accepted candidate,
+never updated by later better-scoring ones, and the slack `160` is compared as
+squared cells (a candidate more than ~12.6 cells beyond the first hit stops
+the scan). Failure of this helper is failure of the whole placement attempt —
+no fall-through to §4, and the radius keeps its grown value.
+
+**The blocker call.** The validator is the yard-map footprint blocker of
+[07 §9] (the "footprint validator"; doc 05 "Geothermal requirement" for the
+yard bytes), called with self identity `0` — so any occupant rejects — and the
+ghost flag `0`, which **skips** the known-map/visibility gate: an unrevealed
+cell is as placeable as a revealed one. Its bounds test is `candX > 0`
+(strict — a candidate at cell column 0 is rejected), `candX + footX <
+mapCellWidth`, `candZ + footZ < mapCellHeight`; it does **not** test `candZ`
+for sign (see §6). On entry it clears the process-wide score accumulator and
+then, for every footprint cell in row-major order, adds the cell's **metal
+byte** ([05 R-PROD-01 §6]: the uniform `SurfaceMetal` seed on canonical
+maps, or the legacy per-cell byte) before applying that cell's yard-byte
+rules. The accumulator is therefore the footprint's metal-byte sum, and a
+rejected footprint leaves a partial sum behind (unread here, but see §4). The
+blocker's tail applies the definition's `MaxSlope` and the waterline band
+`waterline − MaxWaterDepth <= lowest yard-bit-3 height` and
+`highest <= waterline − MinWaterDepth` — so the exhaustive path **is**
+waterline-checked through the blocker; the earlier statement that it "has no
+waterline test at all" is retracted.
+
+### R-AI-03 §4 — The statistical scatter helper — Established [R-AI-03]
+
+Inputs: the strategic state, the definition, the origin (`x`, `z`), the
+unscaled `radius`, and the output cell.
+
+**Limit.** `limit = ((surfaceMetal × footZ) × footX) × 2`, 32-bit integer
+arithmetic in that order, where `surfaceMetal` is the mission's `SurfaceMetal`
+word on the session record.
+
+**Region words.** The strategic-state constructor ([R-ENTRY-01 §3]) draws the
+eight values of [R-P0-05 §5]'s inventory into two region sets, in this order:
+
+```text
+land set  (margin = 3):  cellW = RNG(10) + 11 ; cellH = RNG(3) + 11
+                         offX  = RNG(cellW) − cellW/2 ; offZ = RNG(cellH) − cellH/2
+water set (margin = 6):  cellW = RNG(20) + 14 ; cellH = RNG(3) + 14
+                         offX  = RNG(cellW) − cellW/2 ; offZ = RNG(cellH) − cellH/2
+```
+
+(the `+ 11` / `+ 14` is `margin + 8`; the halving truncates). They are int16
+words, never rewritten. The helper picks the **land** set when the
+definition's `MinWaterDepth` is negative and the **water** set when it is
+`>= 0` — that word, copied from the movement class [04 R-DOC04-A], is the
+selector, not a slope field.
+
+**Trial loop**, `t = 0 … 29` (thirty trials, counter compared `< 30`):
+
+```text
+r  = RNG(radius)                        # draw 1; radius >= 160 here, so always taken
+a  = RNG(65536)                         # draw 2
+wx = origin.x − sin(a, r << 16)         # the shared trig helpers of [R-AI-01 §3],
+wz = origin.z − cos(a, r << 16)         #   negated at use as everywhere in this planner
+qx = int16( (wx − (footX << 19) + (1 << 19)) >> 20 )     # same cell rounding as §3
+qz = int16( (wz − (footZ << 19) + (1 << 19)) >> 20 )
+ox = RNG(cellW − margin − footX)        # draw 3 — skipped (0, no advance) when bound < 2
+gx = int16( (int32(qx) / cellW) × cellW + offX + ox )    # idiv: toward zero
+oz = RNG(cellH − margin − footZ)        # draw 4 — likewise
+gz = int16( (int32(qz) / cellH) × cellH + offZ + oz )
+if validator(def, self = 0, (gx, gz), mode = 1) and accumulator <= limit:   # inclusive
+    out = (gx, gz) ; return true
+return false after the thirtieth trial
+```
+
+The quantisation snaps the trial cell to a lattice of `cellW × cellH` blocks
+(toward zero, so blocks straddle the origin asymmetrically for negative
+cells), shifts the lattice by the per-player `(offX, offZ)`, and scatters
+within the block by `ox`, `oz` — leaving `margin + footprint` cells of the
+block untouched. When the footprint is at least `cellW − margin − 1` wide the
+`ox` bound drops below 2 and **no draw is taken**; the per-trial draw count is
+therefore two, three or four depending on the footprint against the drawn
+region widths, and the order is always radius, angle, x-offset, z-offset.
+The z lattice is 11–13 cells on land and 14–16 on water, so buildings line up
+in rows; that is retail's base layout.
+
+**The validator call** is the placement validator with a mode argument
+(the routine [R-AI-01 §7]'s rally probe also uses), mode `1`, self identity
+`0`. Its contract in this mode:
+
+1. bounds: `gx >= 0`, `gz >= 0`, `gx + footX < mapCellWidth`,
+   `gz + footZ < mapCellHeight`; off-map returns **false** (only mode `2`
+   treats off-map as placeable);
+2. `bmcode == 0` (a mobile definition): delegate to the footprint blocker of
+   §3 with self `0` and ghost `0` — which **writes** the accumulator;
+3. `bmcode != 0` (every building): walk the footprint cells row-major with the
+   plain rule set, no yard bytes and no accumulator write. A cell rejects when
+   its feature reference resolves to a feature whose `blocking` flag is set
+   (a reference at or beyond the feature count, or in the `0xfffb`–`0xfffd`
+   band, blocks; a `0xfffe` part-cell is resolved through its anchor offsets to
+   the anchor's feature; `0xffff` is empty); when its occupant id is non-zero
+   (self is `0`); when its low height byte is below `waterline −
+   MaxWaterDepth`; when its high height byte is above `waterline −
+   MinWaterDepth`; or when `high − low` exceeds `MaxSlope` and either the cell
+   is above water (`low >= waterline`) or `high − low` also exceeds
+   `MaxWaterSlope`. Otherwise placeable.
+
+This is the water legality "Placement root and search helpers" located: the
+band is enforced per cell, on every cell, with the definition's own depth
+fields.
+
+**The stale score.** Because branch 3 never writes the accumulator, the
+`accumulator <= limit` test for a building reads whatever the **last footprint
+blocker call in the process** left there: this player's most recent exhaustive
+attempt, a mobile-definition validation by any player (branch 2), or the
+human player's build cursor and order placement [07 §9] — including a partial
+sum from a rejected footprint. The process global starts at zero, so a fresh
+session accepts the first valid trial. This is retail's contract, not a
+Nanolathe choice; an implementation that wants retail's placement sequence
+keeps one process-wide accumulator written only by the blocker, and one that
+prefers a sane test (the trial footprint's own metal-byte sum) takes a
+sanctioned divergence, since the two differ only in *which* valid trial is
+accepted, never in whether a placement is legal.
+
+### R-AI-03 §5 — What the root returns, and the radius — Established [R-AI-03]
+
+On helper success the root converts the cell to a world position and writes
+**two** of the caller's three words:
+
+```text
+out.x = int32( footX + 2 · gx ) << 19        # = (16·gx + 8·footX) in 16.16: the footprint centre
+out.z = int32( footZ + 2 · gz ) << 19
+radius = 0
+return true
+```
+
+`out.y` is not written. The construction task's out buffer is a stack local
+that nothing initialises before the call, so the `y` of the submitted
+MobileBuild position is stack residue; what the order service does with it is
+doc 04's ([R-ORD-01]) — the position's `x`/`z` alone determine the site. On
+helper failure the root writes nothing, leaves the grown radius in place, and
+returns false; the task then skips the submit and the next invocation (90
+ticks later, [R-AI-01 §3]) grows the radius again. The `cancapture` distance
+cap of [R-AI-01 §3] is applied by the task to `out.x`/`out.z` after a
+successful return and can veto the placement without resetting anything — the
+radius is already zero by then.
+
+### R-AI-03 §6 — Unknowns left, with deciders — Unknown [R-AI-03]
+
+- **Negative candidate row in the exhaustive path.** The blocker rejects a
+  candidate whose column is `<= 0` but does not test the row's sign; a deposit
+  in row 0 or 1 with a footprint of five or more rows yields `candZ < 0` and a
+  row pointer before the plot grid. Whether that reads harmlessly (returns
+  false on a garbage cell) or faults is not established · static trace of the
+  blocker's cell addressing for a negative row, or a retail probe on a map
+  with a metal deposit in its top row.
+- **The mode-2 off-map acceptance** of the placement validator is outside
+  this unit (no computer-player caller passes 2) · static trace of the
+  mode-2 callers (doc 04 order handlers).
+- **The `y` of the submitted position** is stack residue (§5); whether the
+  MobileBuild handler reads it at all · static trace of the order handler
+  [R-ORD-01].
+- **Field label in the class routine.** [R-P0-05 §5] and [R-P0-04 §3]
+  describe a "max-slope" term (`× 3` when non-negative; classifier row
+  "definition max-slope field signed greater than zero"). The definition word
+  both routines read is the one the scatter helper reads, and that word is
+  established here as **MinWaterDepth** (the FBI compile copies the movement
+  class's `MinWaterDepth` into it). Corrections are recorded at those
+  sections; the residual is only whether any *other* reader of the word
+  exists that a label change would affect · static trace of the word's
+  readers.
+- Nothing else in the placement path is open: every constant, comparison,
+  truncation, draw bound and draw order above is read from the executable.
+
 ## Required implementation invariants
 
 A conforming clean-room implementation must preserve these established
@@ -6437,11 +6780,18 @@ finding. The recitals are deleted here only; the body sections and the
   mutates manager task vectors through an indirect alias · "Strategy manager
   and its task graph" [R-P0-04] · static trace. Marked `TODO(question)`; no
   additional writer may be claimed without new evidence.
-- Exact geometry and water-legality contracts of the two placement helpers
-  beyond the established extractor selector draw · "Placement root and search
-  helpers" · static trace. Marked `TODO(question)`; narrowed to the metal
-  score being the footprint per-cell metal-byte sum and the waterline band
-  being enforced only by the yard path of the placement validator.
+- Whether the footprint blocker reads harmlessly or faults on the negative
+  candidate row the exhaustive metal-spot helper can produce (a deposit in the
+  top two rows with a footprint of five or more rows) · [R-AI-03 §6] · static
+  trace of the blocker's cell addressing for a negative row, or a retail probe.
+- Whether the MobileBuild order handler reads the `y` of the position the
+  construction task submits — the placement root writes only `x` and `z`, and
+  `y` is stack residue · [R-AI-03 §5], [R-AI-03 §6] · static trace of the
+  handler (doc 04 [R-ORD-01]).
+- Whether any reader other than the class routine, the classifier and the
+  scatter helper consumes the definition word now established as
+  `MinWaterDepth` (previously labelled "max-slope" in this doc) · [R-AI-03 §6]
+  · static trace of the word's readers.
 - Semantic name of the class routine's signed classification helper · "Class-vector
   recomputation loop and inputs" · static trace.
 - Semantic names of the order gate-mask bits the construction task tests

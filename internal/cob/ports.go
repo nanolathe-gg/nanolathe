@@ -347,103 +347,6 @@ const (
 	CallbackKilled      CallbackKind = 19 // slot-end sync [GAP T15] C17
 )
 
-// QueuedCallback is an engine→COB callback pending drain. All researched
-// callback starters are mode D; Wake marks the D+wake=1 callbacks whose
-// producer performs an all-slot delta-zero barrier [R-CB-01 §2].
-type QueuedCallback struct {
-	Kind     CallbackKind
-	Script   string // script name (e.g., "RockUnit") for VM.Start lookup
-	Args     []int32
-	Deferred bool // true if queued for the next normal drain
-	Wake     bool // true for D+wake=1; the producer must perform the barrier
-}
-
-// DeferredQueue holds callbacks between windows for one unit tick. It is the
-// minimal scaffolding this contract needs; the driving subsystems (weapons
-// phase 9, movement phase 7/9) call EnqueueDeferred/EnqueueWake with explicit
-// TODO markers where they arrive.
-type DeferredQueue struct {
-	Pending       []QueuedCallback
-	lifecycle     LifecycleSink
-	lifecycleTick uint32
-	lifecycleSrc  uint16
-}
-
-// SetLifecycleSink enables opt-in queue-boundary observations. A nil sink is
-// the production default and keeps queue operations allocation-free.
-func (q *DeferredQueue) SetLifecycleSink(sink LifecycleSink) {
-	if q != nil {
-		q.lifecycle = sink
-	}
-}
-
-// SetLifecycleContext supplies the authoritative source/tick labels for later
-// queue events without changing callback dispatch.
-func (q *DeferredQueue) SetLifecycleContext(tick uint32, source uint16) {
-	if q != nil {
-		q.lifecycleTick, q.lifecycleSrc = tick, source
-	}
-}
-
-func (q *DeferredQueue) lifecycleEvent(cb QueuedCallback, phase string) {
-	if q != nil && q.lifecycle != nil {
-		q.lifecycle(LifecycleEvent{Tick: q.lifecycleTick, Source: q.lifecycleSrc, Name: cb.Script, Mode: ModeDeferred, Thread: -1, Phase: phase})
-	}
-}
-
-// EnqueueDeferred queues a callback that will run during the next normal drain
-// if queued before that drain, else will wait until the following tick unless a
-// later D+wake barrier runs [GAP T15] C17.
-//
-// TODO(question): weapons package (phase 9) will call this for TargetCleared /
-// Aim* / Fire* / RockUnit during weapon update (PhaseWeaponUpdate) before the
-// normal drain so they run same visit. Movement callers must NOT use this.
-func (q *DeferredQueue) EnqueueDeferred(cb QueuedCallback) {
-	cb.Deferred = true
-	q.Pending = append(q.Pending, cb)
-	q.lifecycleEvent(cb, "enqueue")
-}
-
-// EnqueueWake records a D+wake=1 callback such as MoveRateN or setSFXoccupy
-// issued from movement integration [GAP T15] C17/C18. The callback remains
-// pending in this queue; the producer performs the VM-wide barrier through
-// StartDeferredWake after allocation.
-func (q *DeferredQueue) EnqueueWake(cb QueuedCallback) {
-	cb.Deferred = false
-	cb.Wake = true
-	q.Pending = append(q.Pending, cb)
-	q.lifecycleEvent(cb, "enqueue")
-}
-
-// DrainNormal simulates the normal COB drain window [04 §4.6] [GAP T15] C17: it
-// drains all deferred callbacks that were queued before this call in their
-// enqueue order, then clears them, then runs the VM piece pass. In a real VM
-// this is vm.Drain(1) after enqueuing; this queue version models the ordering
-// guarantee without needing a live VM so tests stay asset-free.
-//
-// The VM-driving version is vm.Drain(1) which runs eight slots in fixed order
-// 0..7 then one piece interpolation pass [04 §4.2] [04 §4.6] C13. Deferred
-// callbacks produced before that drain run in that same visit [GAP T15] C17.
-func (q *DeferredQueue) DrainNormal(startVM func(cb QueuedCallback) bool) {
-	remaining := q.Pending[:0]
-	for _, cb := range q.Pending {
-		if !cb.Deferred {
-			remaining = append(remaining, cb)
-			continue
-		}
-		// Attempt to start; if VM pool exhausted, the starter can fail separately
-		// per [04 §4.3] C14 — deferred HitByWeapon/TakeDamage starters fail
-		// independently [04 §5.1] C26. We keep the VM result but do not requeue.
-		q.lifecycleEvent(cb, "dequeue")
-		if startVM != nil {
-			startVM(cb)
-		}
-	}
-	q.Pending = remaining
-	// TODO(question): after the eight thread slots, one piece pass runs [04 §4.6]
-	// C13. The VM implements it; this queue stub does not interpolate pieces.
-}
-
 // StartDeferredWake starts a mode-D script on vm and performs its wake=1
 // all-slot delta-0 barrier. The barrier runs every slot at delta 0 plus one
 // piece pass, so a deferred callback queued earlier but not yet drained can
@@ -469,13 +372,6 @@ func StartDeferredWake(vm *VM, scriptName string, args []int32) bool {
 	// D+wake barrier [R-CB-01 §2]: all slots at delta 0 plus one piece pass.
 	vm.Drain(0)
 	return true
-}
-
-// StartWithImmediateBarrier is kept temporarily for the movement consumer
-// until that package switches to StartDeferredWake. It has D+wake semantics;
-// it does not represent a separate mode [R-CB-01 §2].
-func StartWithImmediateBarrier(vm *VM, scriptName string, args []int32) bool {
-	return StartDeferredWake(vm, scriptName, args)
 }
 
 // ---------------------------------------------------------------------------

@@ -2,40 +2,6 @@ package cob
 
 import "testing"
 
-func TestP28QueueLifecycleHasRealBoundaries(t *testing.T) {
-	var got []string
-	q := &DeferredQueue{}
-	q.SetLifecycleContext(41, 7)
-	q.SetLifecycleSink(func(e LifecycleEvent) {
-		if e.Tick != 41 || e.Source != 7 {
-			t.Fatalf("bad lifecycle context: %+v", e)
-		}
-		got = append(got, e.Name+":"+e.Phase)
-	})
-	q.EnqueueDeferred(QueuedCallback{Script: "AimPrimary"})
-	q.DrainNormal(func(QueuedCallback) bool { return true })
-	want := []string{"AimPrimary:enqueue", "AimPrimary:dequeue"}
-	if len(got) != len(want) {
-		t.Fatalf("got %v want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("got %v want %v", got, want)
-		}
-	}
-}
-
-func TestP28QueueNilDispatcherStillRecordsDequeue(t *testing.T) {
-	var got []string
-	q := &DeferredQueue{}
-	q.SetLifecycleSink(func(e LifecycleEvent) { got = append(got, e.Phase) })
-	q.EnqueueDeferred(QueuedCallback{Script: "FirePrimary"})
-	q.DrainNormal(nil)
-	if len(got) != 2 || got[0] != "enqueue" || got[1] != "dequeue" {
-		t.Fatalf("nil-dispatch lifecycle %v, want enqueue/dequeue", got)
-	}
-}
-
 func TestP28BridgeLifecycleStartThenFinish(t *testing.T) {
 	var got []string
 	vm := NewVM(buildTraceProg(t))
@@ -57,23 +23,6 @@ func TestP28BridgeLifecycleStartThenFinish(t *testing.T) {
 	}
 	if start < 0 || finish < 0 || start >= finish {
 		t.Fatalf("lifecycle %v lacks ordered start/finish", got)
-	}
-}
-
-func TestP28QueueSinkDoesNotChangeDispatchOrder(t *testing.T) {
-	run := func(sink LifecycleSink) []string {
-		q := &DeferredQueue{}
-		q.SetLifecycleSink(sink)
-		q.EnqueueDeferred(QueuedCallback{Script: "SetDirection"})
-		q.EnqueueDeferred(QueuedCallback{Script: "SetSpeed"})
-		var got []string
-		q.DrainNormal(func(cb QueuedCallback) bool { got = append(got, cb.Script); return true })
-		return got
-	}
-	a := run(nil)
-	b := run(func(LifecycleEvent) {})
-	if len(a) != len(b) || a[0] != b[0] || a[1] != b[1] {
-		t.Fatalf("sink changed dispatch order: %v vs %v", a, b)
 	}
 }
 

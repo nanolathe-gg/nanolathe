@@ -69,7 +69,7 @@ func TestRX01_ProductionSessionsBindAIQueue(t *testing.T) {
 
 // The bound callback routes typed requests into the ordinary construction
 // queues with site coordinates intact [ON-06][05].
-func TestRX01_BoundCallbackQueuesMobileBuildAtCoordinates(t *testing.T) {
+func TestRX01_BoundBuildRequestPreservesMobileBuildCoordinates(t *testing.T) {
 	rng.SeedGlobal(13, 14)
 	cat := minimalCatalogForStrict()
 	fs := fsFromMapSkirmish(t, map[string]string{

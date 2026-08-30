@@ -235,11 +235,10 @@ type Unit struct {
 	// Typed per-unit state introduced for P0-I02 real pipeline [04 §1.1][04 §4][06][GAP T15].
 	// These fields own the authoritative per-unit data that the phase-2 sweep
 	// visits in players-asc then slots-asc order [01 §6.2] C2 [P0-16].
-	ScriptState   *ScriptState    // per-unit COB VM/thread/piece state [04 §4.1][04 §4.2][GAP T15]; nil if not yet wired
-	Slots         [NumSlots]Slot  // three weapon slots [06 §1.2] C1 P0-10; local Slot avoids units→combat→economy→units cycle
-	Move          MoveState       // movement status shared with movement.System [04 §8.1][04 §9.1] (movement imports units)
-	Attachment    AttachmentState // carrier/cargo linkage [04 §4.4] attach-unit
-	CallbackQueue CallbackQueue   // engine→COB callback queues/readiness [GAP T15]
+	ScriptState *ScriptState    // per-unit COB VM/thread/piece state [04 §4.1][04 §4.2][GAP T15]; nil if not yet wired
+	Slots       [NumSlots]Slot  // three weapon slots [06 §1.2] C1 P0-10; local Slot avoids units→combat→economy→units cycle
+	Move        MoveState       // movement status shared with movement.System [04 §8.1][04 §9.1] (movement imports units)
+	Attachment  AttachmentState // carrier/cargo linkage [04 §4.4] attach-unit
 	// SpotMetal is the extractor yield sampled once at placement: Σ(cellMetal+1)*extractsMetal [05 "Terrain metal extraction"] C14 [P1-10][P1-15].
 	// Stored on the instance once at creation via SampleMetal, never resampled even if terrain metal changes.
 	SpotMetal float32 // [P1-10] once Σ(byte+1)*extractsMetal, [P1-15] uniform char write

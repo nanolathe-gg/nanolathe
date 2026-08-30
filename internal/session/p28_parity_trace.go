@@ -43,7 +43,6 @@ type ParityUnit struct {
 	Guards                                            GuardTrace
 	Slots                                             [3]SlotTrace
 	Orders                                            []OrderTrace
-	Queued                                            []QueuedTrace
 	Threads                                           [8]ThreadTrace
 	Callbacks                                         []cob.LifecycleEvent
 	Pieces                                            []PieceTrace
@@ -100,13 +99,6 @@ type PieceTrace struct {
 	RotX, RotY, RotZ              uint16
 	TransX, TransY, TransZ        int64
 	DontShade, Hidden, DontShadow bool
-}
-
-type QueuedTrace struct {
-	Kind     cob.CallbackKind
-	Script   string
-	Args     []int32
-	Deferred bool
 }
 
 type ThreadTrace struct {
@@ -257,7 +249,6 @@ func (s *Session) wireParityTrace() {
 		if u == nil {
 			continue
 		}
-		u.CallbackQueue.Deferred.SetLifecycleSink(nil)
 		if binding := u.COBBinding(); binding != nil && binding.Callbacks != nil {
 			binding.Callbacks.SetLifecycleSink(nil)
 		}
@@ -267,10 +258,6 @@ func (s *Session) wireParityTrace() {
 			continue
 		}
 		source := uint16(u.Handle)
-		u.CallbackQueue.Deferred.SetLifecycleContext(s.parityTraceTick, source)
-		u.CallbackQueue.Deferred.SetLifecycleSink(func(event cob.LifecycleEvent) {
-			s.appendParityCallback(event)
-		})
 		if binding := u.COBBinding(); binding != nil && binding.Callbacks != nil {
 			binding.Callbacks.SetLifecycleContext(s.parityTraceTick, source)
 			binding.Callbacks.SetLifecycleSink(func(event cob.LifecycleEvent) {
@@ -328,9 +315,6 @@ func (s *Session) parityUnit(u *units.Unit) ParityUnit {
 				GuardX: node.GuardX, GuardY: node.GuardY, CachedX: node.CachedX, CachedY: node.CachedY, Param1: node.Param1, Param2: node.Param2, Param3: node.Param3,
 				StaticGate: node.StaticGate, CreationTick: node.CreationTick, Satisfied: node.Satisfied, Flags: node.Flags, MoveState: node.MoveState, PathStatus: node.PathStatus, BuildDefKey: node.BuildDefKey})
 		}
-	}
-	for _, callback := range u.CallbackQueue.Deferred.Pending {
-		pu.Queued = append(pu.Queued, QueuedTrace{Kind: callback.Kind, Script: callback.Script, Args: append([]int32(nil), callback.Args...), Deferred: callback.Deferred})
 	}
 	if u.GetScript() != nil {
 		vm := u.GetScript()
@@ -530,12 +514,6 @@ func writeParityUnit(w func(string, ...interface{}), u ParityUnit) {
 	for weapon := range u.Guards.AutoFire {
 		for i, guard := range u.Guards.AutoFire[weapon] {
 			w("guard-fire:%d:%d:%d:%d|", u.Slot, weapon, i, guard)
-		}
-	}
-	for _, q := range u.Queued {
-		w("queued:%d:%d:%s:%t|", u.Slot, q.Kind, q.Script, q.Deferred)
-		for _, arg := range q.Args {
-			w("queued-arg:%d:%d|", u.Slot, arg)
 		}
 	}
 	for i, thread := range u.Threads {

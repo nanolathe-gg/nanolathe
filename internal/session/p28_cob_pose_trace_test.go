@@ -67,8 +67,8 @@ func TestP28COB01RScenarioARMCKPublishesStrictCreateState(t *testing.T) {
 	if !binding.CreateInvoked || !binding.Callbacks.CreateInvoked() || binding.VM.DrainCalls != 1 {
 		t.Fatalf("scenario Create invoked=%t bridge=%t drains=%d", binding.CreateInvoked, binding.Callbacks.CreateInvoked(), binding.VM.DrainCalls)
 	}
-	if u.InBuildStance || u.Busy || u.Flags&construction.FlagStartBuilding != 0 || len(u.CallbackQueue.Deferred.Pending) != 0 {
-		t.Fatalf("scenario ARMCK has construction callback state before publication: stance=%t busy=%t start=%t queued=%d", u.InBuildStance, u.Busy, u.Flags&construction.FlagStartBuilding != 0, len(u.CallbackQueue.Deferred.Pending))
+	if u.InBuildStance || u.Busy || u.Flags&construction.FlagStartBuilding != 0 {
+		t.Fatalf("scenario ARMCK has construction callback state before publication: stance=%t busy=%t start=%t", u.InBuildStance, u.Busy, u.Flags&construction.FlagStartBuilding != 0)
 	}
 	s.publishSnapshot(1)
 	committed := s.Snapshot.Current()

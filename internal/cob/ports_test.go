@@ -547,50 +547,6 @@ func TestTickWindowOrder(t *testing.T) {
 	}
 }
 
-func TestDeferredQueueOrdering(t *testing.T) {
-	// Deferred callbacks produced before normal pass run same visit [GAP T15] C17.
-	// D+wake callbacks after normal pass wait in this queue model; the producer's
-	// barrier can execute them earlier through the VM helper.
-	q := &DeferredQueue{}
-	q.EnqueueDeferred(QueuedCallback{Kind: CallbackSetDirection, Script: "SetDirection"})
-	q.EnqueueDeferred(QueuedCallback{Kind: CallbackSetSpeed, Script: "SetSpeed"})
-	q.EnqueueDeferred(QueuedCallback{Kind: CallbackAimPrimary, Script: "AimPrimary"})
-	// Simulate normal drain: only deferred should be attempted
-	started := []string{}
-	q.DrainNormal(func(cb QueuedCallback) bool {
-		started = append(started, cb.Script)
-		return true
-	})
-	if len(started) != 3 {
-		t.Fatalf("DrainNormal should have started 3 deferred got %d %v", len(started), started)
-	}
-	if len(q.Pending) != 0 {
-		t.Fatalf("deferred cleared, pending %v", q.Pending)
-	}
-	// Enqueue D+wake after drain should remain pending until its producer's barrier.
-	q.EnqueueWake(QueuedCallback{Kind: CallbackMoveRate1, Script: "MoveRate1"})
-	if len(q.Pending) != 1 || !q.Pending[0].Wake {
-		t.Fatalf("D+wake should be pending %v", q.Pending)
-	}
-	// Second deferred after drain should be deferred but not drained until next DrainNormal
-	q.EnqueueDeferred(QueuedCallback{Kind: CallbackRockUnit, Script: "RockUnit"})
-	if len(q.Pending) != 2 {
-		t.Fatalf("pending after mixed enqueue %d want 2", len(q.Pending))
-	}
-	started = nil
-	q.DrainNormal(func(cb QueuedCallback) bool {
-		// Only the deferred RockUnit should be attempted; D+wake MoveRate1 stays
-		started = append(started, cb.Script)
-		return true
-	})
-	if len(started) != 1 || started[0] != "RockUnit" {
-		t.Fatalf("second DrainNormal started %v want [RockUnit]", started)
-	}
-	if len(q.Pending) != 1 || q.Pending[0].Script != "MoveRate1" {
-		t.Fatalf("D+wake should remain pending after deferred drain %v", q.Pending)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Fixed-point vs model trig separation [04 §5.1] C25 [03 §2.4]
 // ---------------------------------------------------------------------------

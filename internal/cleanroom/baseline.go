@@ -6,7 +6,7 @@ package cleanroom
 // line that still has to be rewritten as clean-room prose, with its
 // address-level trail moved to /tmp/ta-decompile/notes/.
 //
-// Total at baseline: 613 occurrences across 73 files.
+// Total at baseline: 561 occurrences across 67 files.
 //
 // A file absent from this map must have zero occurrences. Counts may only
 // go down, and going down requires updating this file in the same change.
@@ -17,7 +17,7 @@ var Baseline = map[string]int{
 	"internal/ai/o6_score_test.go":                  5,
 	"internal/audio/player.go":                      1,
 	"internal/audio/positional.go":                  1,
-	"internal/cob/ports.go":                         8,
+	"internal/cob/ports.go":                         7,
 	"internal/cob/ports_test.go":                    3,
 	"internal/cob/vm.go":                            98,
 	"internal/combat/aim.go":                        1,
@@ -39,11 +39,6 @@ var Baseline = map[string]int{
 	"internal/construction/rs10_test.go":            1,
 	"internal/content/ai_profile.go":                1,
 	"internal/content/sound_sc7_test.go":            1,
-	"internal/economy/admission.go":                 1,
-	"internal/economy/gap_p106_test.go":             7,
-	"internal/economy/ledger.go":                    16,
-	"internal/economy/maker.go":                     13,
-	"internal/economy/tick.go":                      12,
 	"internal/features/reproduce.go":                1,
 	"internal/features/sink.go":                     2,
 	"internal/hud/cursor.go":                        1,
@@ -55,7 +50,7 @@ var Baseline = map[string]int{
 	"internal/mission/sparse_test.go":               1,
 	"internal/movement/collision.go":                13,
 	"internal/movement/flight.go":                   5,
-	"internal/movement/integrate.go":                21,
+	"internal/movement/integrate.go":                20,
 	"internal/movement/locomotion_fidelity_test.go": 4,
 	"internal/movement/profile.go":                  9,
 	"internal/movement/steer.go":                    71,
@@ -64,7 +59,6 @@ var Baseline = map[string]int{
 	"internal/orders/resolve.go":                    1,
 	"internal/orders/selectable.go":                 1,
 	"internal/orders/zbuildweapon.go":               6,
-	"internal/path/queue.go":                        1,
 	"internal/render/minimap_test.go":               2,
 	"internal/render/model_test.go":                 1,
 	"internal/save/bank_test.go":                    1,

@@ -150,14 +150,6 @@ type AttachmentState struct {
 	Cargo       []pool.Handle // units carried as cargo; ordered by attach time
 }
 
-// CallbackQueue holds engine→COB callback state between windows [GAP T15].
-// Deferred callbacks queued before the normal drain run same visit; D+wake
-// starts do an all-slot delta-0 drain [R-CB-01 §2].
-// Backed by cob.DeferredQueue for engine→COB handshaking [04 §5].
-type CallbackQueue struct {
-	Deferred cob.DeferredQueue
-}
-
 // SetScript binds a COB VM to the unit's script state [04 §4.1][P1-I01].
 // Script is typed *cob.VM (not any) per P1-I01 acceptance; ScriptState wrapper is retained for snapshot convenience.
 func (u *Unit) SetScript(vm *cob.VM) {
