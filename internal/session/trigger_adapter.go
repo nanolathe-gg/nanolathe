@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/triggers"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
@@ -63,13 +64,21 @@ func (s *Session) missionTriggerContext(tick uint32) triggers.PollContext {
 		})
 	}
 	c.IsCommander = func(u *units.Unit) bool {
-		if u == nil || u.Def == nil || s.Catalog == nil || int(u.Owner) >= s.Skirmish.NumPlayers {
-			// TODO(question): expose the campaign player record's side ordinal so
-			// commander notifications can compare the owner's SIDEDATA commander
-			// name without depending on SkirmishConfig [08 R-TRIG-01 §3].
+		if u == nil || u.Def == nil || s.Catalog == nil || s.Econ == nil || int(u.Owner) >= len(s.Econ.Players) {
 			return false
 		}
-		side := s.Skirmish.Players[u.Owner].Side
+		side := -1
+		if int(u.Owner) < s.Skirmish.NumPlayers {
+			side = s.Skirmish.Players[u.Owner].Side
+		} else if s.Mission != nil && s.Mission.Type == mission.TypeCampaign && s.campaignPlayerSideKnown[u.Owner] {
+			side = int(s.campaignPlayerSide[u.Owner])
+		} else {
+			// TODO(question): expose the campaign player table's side ordinal at
+			// first construction and restore; a trace of the campaign player-table
+			// writer is the decider. Do not infer it from owner parity, commander
+			// type, or side name [08 R-TRIG-01 §3].
+			return false
+		}
 		if side < 0 || side >= len(s.Catalog.Sides) || s.Catalog.Sides[side] == nil {
 			return false
 		}

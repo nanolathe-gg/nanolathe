@@ -42,11 +42,13 @@ type Mission struct {
 	// Campaign provenance for progression [08 "Campaign discovery"] [08 "Progression"].
 	// For TypeCampaign loaded via camps/*.tdf:MISSION%d, CampaignPath is the
 	// logical VFS path (e.g. "camps/arm campaign.tdf") with provenance from
-	// Discover / ReadFileLimit, and CampaignIndex is the MISSION%d suffix.
+	// Discover / ReadFileLimit, CampaignIndex is the MISSION%d suffix, and
+	// CampaignMissionName is that section's language-resolved missionname.
 	// For non-campaign missions these are empty / -1.
-	CampaignPath  string // logical path of the camps/*.tdf file, "" if not campaign [08 "Campaign discovery"]
-	CampaignIndex int    // MISSION%d index, -1 if not campaign
-	Difficulty    int    // difficulty value used for schema selection, -1 if not campaign
+	CampaignPath        string // logical path of the camps/*.tdf file, "" if not campaign [08 "Campaign discovery"]
+	CampaignIndex       int    // MISSION%d index, -1 if not campaign
+	CampaignMissionName string // language-resolved MISSION%d missionname, with catalog default [08 "Campaign discovery"]
+	Difficulty          int    // difficulty value used for schema selection, -1 if not campaign
 	// order witness for ordering assertion [C4][C5]: schema -> placement -> wind
 	order []string
 }
@@ -233,6 +235,11 @@ func LoadCampaignWithSink(fs vfs.FSOps, campaignPath string, missionIndex int, d
 		}
 		return nil, e
 	}
+	missionName, _ := sec.LanguageString("", "missionname", "Error -- Unnamed Mission")
+	missionName = strings.TrimSpace(missionName)
+	if missionName == "" {
+		missionName = "Error -- Unnamed Mission"
+	}
 	missionFile, _ := sec.StringValue("missionfile", "")
 	missionFile = strings.TrimSpace(missionFile)
 	if missionFile == "" {
@@ -259,6 +266,7 @@ func LoadCampaignWithSink(fs vfs.FSOps, campaignPath string, missionIndex int, d
 	// Provenance for progression: retain campaign file and index [08 "Campaign discovery"].
 	m.CampaignPath = campaignPath
 	m.CampaignIndex = missionIndex
+	m.CampaignMissionName = missionName
 	m.Difficulty = difficulty
 	return m, nil
 }

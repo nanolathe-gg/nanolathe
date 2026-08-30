@@ -188,7 +188,7 @@ func resolveName(code int, actor *units.Unit, target *units.Unit, pos *ResolvePo
 	case 2:
 		return resolveMove(actor, target)
 	case 3:
-		return resolveAttack(actor, target)
+		return resolveAttackAt(actor, target, pos)
 	case 4:
 		if !canDGun(actor) {
 			return ""
@@ -307,7 +307,7 @@ func resolveName(code int, actor *units.Unit, target *units.Unit, pos *ResolvePo
 func resolveContextual(actor *units.Unit, target *units.Unit, pos *ResolvePos) string {
 	// Hostile and able to attack becomes an attack order [04 §3.4] code 1
 	if target != nil && isHostile(actor, target) && canAttack(actor) {
-		name := resolveAttack(actor, target)
+		name := resolveAttackAt(actor, target, pos)
 		if name != "" {
 			return name
 		}
@@ -401,7 +401,31 @@ func resolveMove(actor *units.Unit, target *units.Unit) string {
 }
 
 func resolveAttack(actor *units.Unit, target *units.Unit) string {
-	if !canAttack(actor) || target == nil {
+	return resolveAttackAt(actor, target, nil)
+}
+
+// resolveAttackAt includes the established position-only code-3 arm. A ground
+// unit with an armed runtime record resolves to Suppress; an aircraft resolves
+// to the dropped-weapon run or the ordinary air-to-ground run. This belongs in
+// the canonical resolver shared by UI, AI, mission, and network producers
+// [04 R-ORD-02 §1].
+func resolveAttackAt(actor *units.Unit, target *units.Unit, pos *ResolvePos) string {
+	if !canAttack(actor) {
+		return ""
+	}
+	if target == nil {
+		if pos != nil && actor.Flags&units.ArmedStatus != 0 {
+			if actor.Def != nil && !actor.Def.CanFly {
+				return "Suppress"
+			}
+			if actor.Def != nil && actor.Def.Weapon1Def != nil && actor.Def.Weapon1Def.Dropped {
+				return "AirStrike"
+			}
+			return "AirToGround"
+		}
+		if actor.Def != nil && actor.Def.Kamikaze {
+			return "Attack_Kamikaze"
+		}
 		return ""
 	}
 	// suppression for the non-air special case [04 §3.4] code 3

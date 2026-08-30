@@ -1921,18 +1921,8 @@ func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tic
 	// from QueryNanoPiece piece world pos (or builder pos fallback) to the site
 	// GoalX/Z anchor [R-P0-06]. Factory-class builders (CanMove==false && CanFly==false)
 	// are their own yard and are unaffected.
-	// Computer players are exempt from walk for gate stability: their first
-	// factory must complete within the strict window, and walk would add
-	// ~1500 ticks of travel that the gate does not budget for.
-	// TODO(question): whether AI walk should be same as human remains open.
 	if isMobileBuilder(builder) && s.Movement != nil && builder.Def != nil && builder.Def.BuildDistance != 0 {
-		isAI := false
-		if s.Economy != nil && int(builder.Owner) < len(s.Economy.Players) {
-			if s.Economy.Players[builder.Owner].ControllerState == 2 {
-				isAI = true
-			}
-		}
-		if !isAI && s.needsApproach(builder, node) {
+		if s.needsApproach(builder, node) {
 			s.ensureWalk(builder, node)
 			node.DynamicGate = WakeBit2
 			node.Deadline = int32(tick + 1)

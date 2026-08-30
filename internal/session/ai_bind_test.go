@@ -11,7 +11,8 @@ import (
 )
 
 // RX-01: production sessions bind the AI typed build queue [F-P0-004].
-// A computer slot without the binder is a passive "computer", never an AI.
+// Human and computer records are both constructed and bound; only the
+// controller-2 record dispatches task bodies [08 R-ENTRY-01 §3 step 24, §8].
 
 func TestRX01_ProductionSessionsBindAIQueue(t *testing.T) {
 	rng.SeedGlobal(11, 12)
@@ -49,17 +50,31 @@ func TestRX01_ProductionSessionsBindAIQueue(t *testing.T) {
 			count++
 		}
 	}
-	if count != 1 {
-		t.Fatalf("want exactly one AI manager for one computer slot, got %d", count)
+	if count != 2 {
+		t.Fatalf("want exactly two manager records for live human+computer slots, got %d", count)
 	}
-	mgr := s.AI[1] // RS-02: player-indexed, player 1 at index 1
-	if mgr.QueueBuildTyped == nil {
-		t.Fatalf("production session left QueueBuildTyped unbound — AI could never build [F-P0-004]")
+	for i := 0; i < 2; i++ {
+		if s.AI[i] == nil || s.AI[i].QueueBuildTyped == nil {
+			t.Fatalf("production session left player %d manager record unbound [F-P0-004]", i)
+		}
+	}
+	for task, deadline := range s.AI[0].Deadlines {
+		if deadline != 0 {
+			t.Fatalf("human manager dispatched task %d at tick 0: deadline=%d", task, deadline)
+		}
+	}
+	computerDispatched := false
+	for _, deadline := range s.AI[1].Deadlines {
+		computerDispatched = computerDispatched || deadline != 0
+	}
+	if !computerDispatched {
+		t.Fatal("controller-2 manager did not execute due tick-0 task bodies")
 	}
 	if err := s.ValidateComposition(); err != nil {
 		t.Fatalf("composition with bound AI must validate: %v", err)
 	}
 	// An unbound manager is a composition failure, not a silent passive slot.
+	mgr := s.AI[1] // RS-02: player-indexed, player 1 at index 1
 	mgr.QueueBuildTyped = nil
 	err = s.ValidateComposition()
 	if err == nil || !strings.Contains(err.Error(), "QueueBuildTyped") {

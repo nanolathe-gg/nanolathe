@@ -3,7 +3,9 @@ package ai
 import (
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -76,13 +78,15 @@ func TestExploreAndRallyBodyDraws(t *testing.T) {
 	terrain := &world.Terrain{CellW: 32, CellH: 24}
 	w := units.NewSliced(1, nil)
 
-	// The small-group branch runs one baseline attempt plus its binary choice,
-	// sampling width/8 and height/8 for each attempt.
+	// The small-group branch runs two or three legs around the strategic
+	// centre. Width and height are full world extents divided by eight
+	// [08 R-AI-01 §6].
 	probe := rng.NewSimulation(1)
 	trials := probe.Uint32n(2)
 	wantSmall := uint64(1 + (trials+2)*2)
 	sim := rng.NewSimulation(1)
 	m := &Manager{RNG: &sim, Terrain: terrain, GroupExplore: []pool.Handle{1}}
+	m.Strategic.CenterX, m.Strategic.CenterZ = numeric.FixedFromInt(100), numeric.FixedFromInt(100)
 	m.doExplore(0, w, nil)
 	if got := sim.Draws(); got != wantSmall {
 		t.Fatalf("small explore body draws=%d, want %d", got, wantSmall)
@@ -91,12 +95,13 @@ func TestExploreAndRallyBodyDraws(t *testing.T) {
 	sim = rng.NewSimulation(1)
 	m = &Manager{RNG: &sim, Terrain: terrain, GroupExplore: []pool.Handle{1, 2, 3, 4, 5}}
 	m.doExplore(0, w, nil)
-	if got := sim.Draws(); got != 5 {
-		t.Fatalf("large explore body draws=%d, want 5", got)
+	if got := sim.Draws(); got != 3 {
+		t.Fatalf("large explore body draws=%d, want 3", got)
 	}
 
-	// Find a seed whose first bounded draw enters rally's drift seed branch:
-	// gate 10 followed by two independent 16-bit draws.
+	// Find a seed whose first body draw enters rally's drift branch. That arm
+	// draws one 16-bit angle, then a validating probe draws incumbent and
+	// challenger scores in that order [08 R-AI-01 §7].
 	seed := uint32(1)
 	for {
 		probe = rng.NewSimulation(seed)
@@ -105,16 +110,50 @@ func TestExploreAndRallyBodyDraws(t *testing.T) {
 		}
 		seed++
 	}
+	probe = rng.NewSimulation(seed)
+	probe.Uint32n(10)
+	angle := numeric.Angle(probe.Uint32n(65536))
+	centreX := numeric.FixedFromInt(int64(terrain.CellW * 8))
+	centreZ := numeric.FixedFromInt(int64(terrain.CellH * 8))
+	probeX := centreX - numeric.Fixed(numeric.MulRound(numeric.Sin(angle), int32(numeric.FixedFromInt(320))))
+	probeZ := centreZ - numeric.Fixed(numeric.MulRound(numeric.Cos(angle), int32(numeric.FixedFromInt(320))))
+	attackerDef := &content.UnitDef{UnitName: "attacker", CanAttack: true, CanMove: true, MaxDamage: 100}
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{"attacker": attackerDef}}
+	w = newAIFixtureWorld(4, cat)
+	attacker, err := w.Create(attackerDef, 0, probeX, 0, probeZ)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Unit(attacker).Group = 9
+	w.Unit(attacker).Flags |= units.ArmedStatus
 	sim = rng.NewSimulation(seed)
-	m = &Manager{RNG: &sim, GroupRally: []pool.Handle{1}, rallyScore: 17, rallyNextScore: 23}
+	m = &Manager{
+		RNG: &sim, GroupRally: []pool.Handle{attacker},
+	}
+	if !m.InitializeBattleState(terrain, RallyBattleBindings{
+		ProbeKnown:    func(uint8, numeric.Fixed, numeric.Fixed, numeric.Fixed) bool { return true },
+		OrderAdmitted: func(*units.Unit, numeric.Fixed, numeric.Fixed, numeric.Fixed) bool { return true },
+	}) {
+		t.Fatal("explicit rally battle initialization failed")
+	}
+	m.rallyBestX = centreX
+	m.rallyBestZ = centreZ
+	m.rallyProbeX = centreX
+	m.rallyProbeZ = centreZ
+	m.rallyBestScore = 17
+	m.rallyTargets = []pool.Handle{attacker}
+	m.Strategic.SingleVectors = map[string]int8{"attacker": 23}
 	m.doRally(0, w, nil)
 	probe = rng.NewSimulation(seed)
 	probe.Uint32n(10)
 	probe.Uint32n(65536)
-	probe.Uint32n(65536)
-	probe.Uint32n(17)
-	probe.Uint32n(23)
-	if got := sim.Draws(); got != 5 || sim.State != probe.State {
-		t.Fatalf("rally body ledger draws=%d state=%d, want 5 state=%d", got, sim.State, probe.State)
+	incumbentDraw := probe.Uint32n(17)
+	challengerDraw := probe.Uint32n(23)
+	if got := sim.Draws(); got != 4 || sim.State != probe.State {
+		t.Fatalf("rally body ledger draws=%d state=%d, want 4 state=%d", got, sim.State, probe.State)
+	}
+	adopted := incumbentDraw < challengerDraw
+	if got := m.rallyBestScore == 23 && m.rallyBestX == probeX && m.rallyBestZ == probeZ; got != adopted {
+		t.Fatalf("rally strict adoption=%v, want %v for incumbent draw %d challenger draw %d", got, adopted, incumbentDraw, challengerDraw)
 	}
 }

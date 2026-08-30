@@ -201,6 +201,45 @@ func TestReservoirSingleDraw(t *testing.T) {
 	_ = econ // keep
 }
 
+func TestSelectedSideMismatchConsumesOneDrawWithoutRedraw(t *testing.T) {
+	cross := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "cross"}, UnitName: "cross", Side: "CORE"}
+	runnerUp := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "runner"}, UnitName: "runner", Side: "ARM"}
+	cat := &content.Catalog{
+		Units: map[string]*content.UnitDef{"cross": cross, "runner": runnerUp},
+		BuildMenus: map[string]*content.BuildMenuPage{
+			"armcom": {Buttons: []string{"cross", "runner"}},
+		},
+	}
+	strat := &Strategic{
+		Catalog:      cat,
+		Counts:       map[string]int32{"cross": 0, "runner": 0},
+		ClassVectors: map[string]ClassVector{"cross": {C0: 100}, "runner": {C0: 100}},
+	}
+	profile := &Profile{Weight: map[string]int32{"cross": 100, "runner": 100}, Limit: map[string]int32{}}
+	builder := testBuilder("armcom")
+	builder.Def.Side = "ARM"
+	econ := testEcon(1, 1000, 1000, 500, 500, 300, 10, 0, 0)
+
+	// Both candidates score 100. Choose a seed whose single final reservoir
+	// draw lands in the first interval, the cross-side candidate.
+	seed := uint32(1)
+	for {
+		probe := rng.NewSimulation(seed)
+		if probe.Uint32n(200) < 100 {
+			break
+		}
+		seed++
+	}
+	sim := rng.NewSimulation(seed)
+	sel := &testSelector{player: 1, profile: profile, strategic: strat, catalog: cat, rng: &sim}
+	if got, ok := Select(sel, builder, econ); ok || got != (Candidate{}) {
+		t.Fatalf("cross-side reservoir winner was not discarded: got=%+v ok=%v", got, ok)
+	}
+	if got := sim.Draws(); got != 1 {
+		t.Fatalf("side mismatch draw count=%d, want exactly one with no redraw", got)
+	}
+}
+
 // TestGates checks each C5 gate in isolation [PLAN 11 C5] [08].
 func TestGates(t *testing.T) {
 	builder := testBuilder("armcom")
@@ -264,17 +303,20 @@ func TestGates(t *testing.T) {
 		t.Fatalf("limit gate: -1 unlimited should pass regardless of count")
 	}
 
-	// Builder self gate: candidate == builder definition rejected [08]
+	// The earlier builder-self rejection was disproved: reservoir admission is
+	// unchanged when the selected definition is the builder's own definition.
+	// The established consumer-side gate is the authored side comparison
+	// [08 R-AI-01 §8].
 	builderSelf := testBuilder("armfav")
 	candsSelf := []string{"armfav", "corfav"}
 	selSelf := &testSelector{player: 1, profile: baseProfile, strategic: baseStrat}
 	rng.SeedGlobal(1, 0)
 	got, ok := SelectWithCandidates(selSelf, builderSelf, econOK, candsSelf)
 	if !ok {
-		t.Fatalf("self gate: should have corfav left")
+		t.Fatalf("builder-own definition should remain reservoir-eligible")
 	}
-	if content.CanonicalKey(got.DefKey) == content.CanonicalKey("armfav") {
-		t.Fatalf("self gate: should reject own definition")
+	if content.CanonicalKey(got.DefKey) == "" {
+		t.Fatalf("builder-own selection returned an empty candidate")
 	}
 
 	// Mission mode 1 rejects a candidate carrying the authored downloadable

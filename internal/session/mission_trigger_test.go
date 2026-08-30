@@ -5,6 +5,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -259,5 +260,25 @@ func TestSaveLoadPreservesCountdown(t *testing.T) {
 	}
 	if !restored.IsEnding() || !restored.IsWin() {
 		t.Fatal("restored latch should be win ending")
+	}
+}
+
+func TestCampaignCommanderIdentityRequiresPlayerTableSide(t *testing.T) {
+	commander := &content.UnitDef{UnitName: "ARMCOM"}
+	s := &Session{
+		Catalog: &content.Catalog{Sides: []*content.SideDef{{Commander: "ARMCOM"}}},
+		Mission: &mission.Mission{Type: mission.TypeCampaign},
+		Econ:    &economy.Service{},
+	}
+	u := &units.Unit{Owner: 0, Def: commander}
+	ctx := s.missionTriggerContext(0)
+	if ctx.IsCommander(u) {
+		t.Fatal("campaign commander identity inferred without an authoritative player-table side")
+	}
+	s.campaignPlayerSide[0] = 0
+	s.campaignPlayerSideKnown[0] = true
+	ctx = s.missionTriggerContext(0)
+	if !ctx.IsCommander(u) {
+		t.Fatal("campaign commander identity did not use the supplied player-table side")
 	}
 }

@@ -438,7 +438,8 @@ func isNotFound(err error) bool {
 // never silently producing a passive manager with nil Profile. The returned manager
 // is ready for session binding of its build queue and simulation stream.
 // Caller must bind QueueBuildTyped and a simulation RNG before ticks.
-// isAlliance is the alliance test injected at construction; nil means same-owner-only [P0-07].
+// isAlliance is the alliance test injected at construction; nil fails closed
+// and grants no inferred relationship [08 R-AI-01 §9].
 func NewManager(player uint8, fs vfs.FSOps, profileName string, r *rng.Simulation, catalog *content.Catalog, surfaceMetal int32, isAlliance func(a, b uint8) bool) (*Manager, error) {
 	if fs == nil {
 		return nil, fmt.Errorf("ai: NewManager: nil VFS")

@@ -256,11 +256,6 @@ func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service
 	// Caller must provide deterministically ordered slice; BuildMenus already does. This avoids map randomization.
 	curEnergy := econ.Players[player].Stock[economy.Energy]
 	curMetal := econ.Players[player].Stock[economy.Metal]
-	builderKey := canonicalKey(builder.Def.UnitName)
-	if builderKey == "" {
-		builderKey = canonicalKey(builder.Def.CanonicalKey)
-	}
-
 	type scored struct {
 		key   string
 		score int32
@@ -275,10 +270,6 @@ func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service
 		candKey := candKeyRaw
 		ck := canonicalKey(candKey)
 		if ck == "" {
-			continue
-		}
-		// C5: candidate == builder's own definition rejected [08] [PLAN 11 C5]
-		if ck == builderKey {
 			continue
 		}
 		// C5: currentEnergy <50 gate [08] [PLAN 11 C5]
@@ -359,10 +350,30 @@ func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service
 	return Candidate{}, false
 }
 
+// selectedCandidateForBuilder applies the post-reservoir side filter. The
+// selected definition is not filtered before the draw: a side mismatch wastes
+// that one selection and returns no candidate, with no re-draw or runner-up
+// [08 R-AI-01 §8]. Authored side strings compare byte-for-byte and
+// case-sensitively.
+func selectedCandidateForBuilder(strat *Strategic, builder *units.Unit, key string, score int32) (Candidate, bool) {
+	if strat == nil || builder == nil || builder.Def == nil {
+		return Candidate{}, false
+	}
+	selected := strat.lookupDef(canonicalKey(key))
+	if selected == nil || selected.Side != builder.Def.Side {
+		return Candidate{}, false
+	}
+	return Candidate{DefKey: key, Score: score}, true
+}
+
 // Select is the public entry point per [PLAN 11 Public API]. It resolves the
 // builder's authored build menu and preserves its button order [02 §5; 08
 // "Established AI-facing data and rooted planner"].
 func Select(m Selector, builder *units.Unit, econ *economy.Service) (Candidate, bool) {
 	cands := buildOptionsForBuilder(m, builder)
-	return SelectWithCandidates(m, builder, econ, cands)
+	selected, ok := SelectWithCandidates(m, builder, econ, cands)
+	if !ok {
+		return Candidate{}, false
+	}
+	return selectedCandidateForBuilder(m.GetStrategic(), builder, selected.DefKey, selected.Score)
 }

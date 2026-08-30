@@ -232,24 +232,29 @@ func (m *Manager) insertGroupMember(h pool.Handle, group uint8) {
 }
 
 func retailGroupCentroid(handles []pool.Handle, w *units.World) (int32, int32, bool) {
+	x, _, z, ok := retailGroupCentroid3(handles, w)
+	return x, z, ok
+}
+
+func retailGroupCentroid3(handles []pool.Handle, w *units.World) (int32, int32, int32, bool) {
 	if len(handles) == 0 || w == nil {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
-	var sumX, sumZ int64
-	var count int64
+	var sumX, sumY, sumZ, count int32
 	for _, h := range handles {
 		u := w.Unit(h)
 		if u == nil || !u.Alive {
 			continue
 		}
-		sumX += int64(retailCoord(u.X))
-		sumZ += int64(retailCoord(u.Z))
+		sumX += retailCoord(u.X)
+		sumY += retailCoord(u.Y)
+		sumZ += retailCoord(u.Z)
 		count++
 	}
 	if count == 0 {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
-	return int32(sumX / count), int32(sumZ / count), true
+	return sumX / count, sumY / count, sumZ / count, true
 }
 
 func retailDistanceSquared(u *units.Unit, x, z int32) int64 {
@@ -266,7 +271,7 @@ func retailDistanceSquared(u *units.Unit, x, z int32) int64 {
 // position, so this is an arithmetic shift (floor for negative fractional
 // values), not Fixed.Int's truncation-toward-zero path [03 §2.1; I3].
 func retailCoord(v numeric.Fixed) int32 {
-	return int32(v >> 16)
+	return int32(int16(v >> 16))
 }
 
 // isInAnyGroup reports whether h is in any AI group.
@@ -277,16 +282,13 @@ func (m *Manager) isInAnyGroup(h pool.Handle) bool {
 	return containsHandle(m.GroupResource, h) || containsHandle(m.GroupWaveA, h) || containsHandle(m.GroupRegroupA, h) || containsHandle(m.GroupConstruction, h) || containsHandle(m.GroupNull, h) || containsHandle(m.GroupWaveB, h) || containsHandle(m.GroupRegroupB, h) || containsHandle(m.GroupExplore, h) || containsHandle(m.GroupRally, h)
 }
 
-// groupCentroid computes centroid of group handles; returns false if empty.
-func groupCentroid(handles []pool.Handle, w *units.World) (numeric.Fixed, numeric.Fixed, bool) {
-	// The centroid reads stored signed pixel coordinates, averages with integer
-	// division, and shifts the result back to 16.16; it does not average the low 16
-	// fractional bits of the authoritative position [R-P0-04 "Located
-	// producers and transfer order"; 08 "Strategy manager and its task graph"].
-	// Keep regroup's centroid in the same domain as wave merge.
-	x, z, ok := retailGroupCentroid(handles, w)
+// groupCentroid computes the three-axis task centroid [08 R-AI-01 §9]. Each
+// coordinate is its signed 16-bit high word; sums wrap at int32 width, division
+// truncates toward zero, and the final 16.16 shift wraps to one 32-bit word.
+func groupCentroid(handles []pool.Handle, w *units.World) (numeric.Fixed, numeric.Fixed, numeric.Fixed, bool) {
+	x, y, z, ok := retailGroupCentroid3(handles, w)
 	if !ok {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
-	return numeric.Fixed(int64(x) << 16), numeric.Fixed(int64(z) << 16), true
+	return numeric.Fixed(int32(x << 16)), numeric.Fixed(int32(y << 16)), numeric.Fixed(int32(z << 16)), true
 }

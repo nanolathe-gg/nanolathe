@@ -2,7 +2,7 @@ package session
 
 import (
 	"fmt"
-	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/ai"
@@ -59,15 +59,9 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 	}
 	var m *mission.Mission
 	if strings.Contains(path, ":") {
-		parts := strings.SplitN(path, ":", 2)
-		campaignPath := strings.TrimSpace(parts[0])
-		missionPart := strings.TrimSpace(parts[1])
-		var idx int
-		if strings.HasPrefix(strings.ToLower(missionPart), "mission") {
-			num := strings.TrimSpace(missionPart[len("mission"):])
-			fmt.Sscanf(num, "%d", &idx)
-		} else {
-			fmt.Sscanf(missionPart, "%d", &idx)
+		campaignPath, idx, parseErr := parseCampaignMissionSelector(path)
+		if parseErr != nil {
+			return nil, parseErr
 		}
 		m, err = mission.LoadCampaignWithSink(fs, campaignPath, idx, difficulty, 0, nil)
 		if err != nil {
@@ -101,15 +95,22 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 	}
 	report.Report(FamilyUnitWorld, 100)
 	s := &Session{
-		Catalog:  cat,
-		World:    terrain,
-		Mission:  m,
-		Clock:    &clock.State{Requested: 10, Active: 10},
-		Snapshot: frame.NewBuffer(),
-		Units:    unitsWorld,
-		Econ:     &economy.Service{},
-		Latch:    NewEndLatch(),
+		Catalog:      cat,
+		World:        terrain,
+		Mission:      m,
+		Clock:        &clock.State{Requested: 10, Active: 10},
+		Snapshot:     frame.NewBuffer(),
+		Units:        unitsWorld,
+		Econ:         &economy.Service{},
+		Latch:        NewEndLatch(),
+		CampaignSlot: m.CampaignIndex,
 	}
+	// Mission retains the exact authored restriction identity for the future
+	// availability-table consumer. Do not approximate the player-visible unit
+	// set from catalog membership here.
+	// TODO(question): the battle-local UseOnly availability-table consumer is not yet
+	// exposed; the retail table writer/reader pair is the decider [02
+	// "UseOnlyUnits routing"][08 R-ENTRY-01 §3].
 	// Correct controller states: human local 1, computer enemy 2 [08 "Established AI-facing data"]
 	for i := 0; i < 2 && i < 10; i++ {
 		p := &s.Econ.Players[i]
@@ -123,6 +124,7 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 		p.SetSettlementStatusPair(1, 0)
 		p.GameEnded = false
 		p.EndGameCountdown = -1
+		p.Allies[i] = true
 	}
 	s.Econ.SeedDeadlines(0) // UpdateTime/WinLoseTime/DisplayTimer seeded to GlobalTick per [05] C5; WinLoseTime is trigger poll deadline [08 "Evaluation"]
 	// DET-01 [R-CORE-02]: battle bootstrap seeds both streams fresh before any
@@ -137,7 +139,30 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 	if err := createAndBindServices(s); err != nil {
 		return nil, err
 	}
-	if err := BattleEntry(s, m); err != nil {
+	// Manager records and their eight-draw strategic constructors precede every
+	// commander/mission unit allocation [08 R-ENTRY-01 §3 step 24].
+	for i := range s.AI {
+		s.AI[i] = nil
+	}
+	mgAI := mission.DecodeMissionGlobals(m.OTA.Global)
+	aiProfileName := mgAI.AIProfile
+	if strings.TrimSpace(aiProfileName) == "" {
+		aiProfileName = "default"
+	}
+	sharedProf, perr := loadCampaignAIProfile(fs, aiProfileName)
+	if perr != nil {
+		return nil, perr
+	}
+	for i := 0; i < 2; i++ {
+		p := &s.Econ.Players[i]
+		if !p.Exists || p.IsObserver || (p.ControllerState != 1 && p.ControllerState != 2) {
+			continue
+		}
+		if err := initializeBattleAI(s, uint8(i), sharedProf); err != nil {
+			return nil, err
+		}
+	}
+	if err := battleEntryPlacement(s, m); err != nil {
 		return nil, err
 	}
 	report.Report(FamilyPlacement, 100)
@@ -147,72 +172,16 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 	report.Report(FamilyScripts, 100)
 	ensureMovementForAll(s)
 	publishVisibilityForAll(s)
-	// AI managers for computer players [P0-I12] RS-02: player-indexed [10]*Manager
-	for i := range s.AI {
-		s.AI[i] = nil
-	}
-	mgAI := mission.DecodeMissionGlobals(m.OTA.Global)
-	aiProfileName := mgAI.AIProfile
-	if strings.TrimSpace(aiProfileName) == "" {
-		aiProfileName = "default"
-	}
-	for i := 0; i < 2; i++ {
-		if s.Econ.Players[i].ControllerState == 2 {
-			prof, perr := loadCampaignAIProfile(fs, aiProfileName)
-			if perr != nil {
-				return nil, perr
-			}
-			// Bind the session stream at construction. Phase 2 can finalize a
-			// computer unit before phase 5 dispatches its manager, and unit-loss
-			// throttling must therefore use this stream from the first tick [08
-			// "Strategy manager and its task graph"].
-			mgr := &ai.Manager{Player: uint8(i), Profile: prof, Terrain: s.World, Catalog: s.Catalog, RNG: s.SimRNG()}
-			if !mgr.Strategic.InitializeRandomState(s.SimRNG()) {
-				return nil, fmt.Errorf("session: AI strategic state initialization failed for player %d", i)
-			}
-			bindAIQueue(mgr, s)
-			s.AI[i] = mgr
-		}
-	}
-	// P0-I12: initialize class maps from catalog for each manager, ensure vectors not zero [08][P0-01]
-	hasAI3 := false
-	for _, mgr := range s.AI {
-		if mgr != nil {
-			hasAI3 = true
-			break
-		}
-	}
-	if hasAI3 && s.Catalog != nil && len(s.Catalog.Units) > 0 {
-		allTypes := make([]string, 0, len(s.Catalog.Units))
-		for k := range s.Catalog.Units {
-			allTypes = append(allTypes, k)
-		}
-		sort.Strings(allTypes)
-		for _, mgr := range s.AI {
-			if mgr == nil {
-				continue
-			}
-			mgr.SetCatalog(s.Catalog)
-			mgr.Strategic.Init(allTypes)
-			if s.World != nil {
-				mgr.Strategic.CenterX = world.CellToWorld(s.World.CellW / 2)
-				mgr.Strategic.CenterZ = world.CellToWorld(s.World.CellH / 2)
-				mgr.Strategic.Radius = 0
-				mgr.OriginX = world.CellToWorld(s.World.CellW / 2)
-				mgr.OriginZ = world.CellToWorld(s.World.CellH / 2)
-				for _, u := range s.Units.IterSliced() {
-					if u != nil && u.Alive && int(u.Owner) == int(mgr.Player) && u.Def != nil && u.Def.Commander {
-						mgr.OriginX = u.X
-						mgr.OriginZ = u.Z
-						mgr.Strategic.CenterX = u.X
-						mgr.Strategic.CenterZ = u.Z
-						break
-					}
-				}
-			}
-		}
-	}
 	s.RegisterAll()
+	if err := finishBattleEntry(s, func() error {
+		if err := overwriteCampaignResources(s, m); err != nil {
+			return err
+		}
+		s.InitShareThresholds()
+		return nil
+	}); err != nil {
+		return nil, err
+	}
 	if err := s.SelectForGametype(GametypeCampaign); err != nil {
 		return nil, err
 	}
@@ -220,6 +189,33 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 		return nil, fmt.Errorf("session: composition invalid: %w", err)
 	}
 	return s, nil
+}
+
+// parseCampaignMissionSelector accepts only the explicit composition identity
+// "campaign-path:MISSION<decimal-index>". A malformed explicit selector must
+// never fall through to campaign slot zero [08 R-ENTRY-01 §3].
+func parseCampaignMissionSelector(selector string) (string, int, error) {
+	selector = strings.TrimSpace(selector)
+	if strings.Count(selector, ":") != 1 {
+		return "", 0, fmt.Errorf("session: malformed campaign mission selector %q: expected <campaign>:MISSION<index>", selector)
+	}
+	parts := strings.SplitN(selector, ":", 2)
+	campaignPath := strings.TrimSpace(parts[0])
+	missionPart := strings.TrimSpace(parts[1])
+	if campaignPath == "" || len(missionPart) <= len("mission") || !strings.EqualFold(missionPart[:len("mission")], "mission") {
+		return "", 0, fmt.Errorf("session: malformed campaign mission selector %q: expected <campaign>:MISSION<index>", selector)
+	}
+	digits := missionPart[len("mission"):]
+	for i := 0; i < len(digits); i++ {
+		if digits[i] < '0' || digits[i] > '9' {
+			return "", 0, fmt.Errorf("session: malformed campaign mission selector %q: mission index must be unsigned decimal", selector)
+		}
+	}
+	idx, err := strconv.Atoi(digits)
+	if err != nil {
+		return "", 0, fmt.Errorf("session: malformed campaign mission selector %q: mission index: %w", selector, err)
+	}
+	return campaignPath, idx, nil
 }
 
 // loadCampaignAIProfile requires the authored mission profile (with the
@@ -254,6 +250,22 @@ func RouteForGametype(s *Session, gametype int) error {
 // grant starting resources DIRECTLY to live stock outside the ledger
 // (economy.CreditSpawn, [05 "Authoritative settlement order"]).
 func BattleEntry(s *Session, m *mission.Mission) error {
+	if err := battleEntryPlacement(s, m); err != nil {
+		return err
+	}
+	if err := grantResourcesStrict(s, m); err != nil {
+		return err
+	}
+	// Initialize sharing thresholds once from rebuilt capacity after units exist [P1-06] [P1-I04].
+	s.InitShareThresholds()
+	return nil
+}
+
+// battleEntryPlacement is the campaign placement half used by the production
+// constructor before the tick-zero prime and second resource grant. BattleEntry
+// retains its existing direct-call resource behavior for fixtures [08
+// R-ENTRY-01 §6, §8].
+func battleEntryPlacement(s *Session, m *mission.Mission) error {
 	if s == nil {
 		return fmt.Errorf("session: nil session")
 	}
@@ -286,11 +298,9 @@ func BattleEntry(s *Session, m *mission.Mission) error {
 		return err
 	}
 	// InitialMission runs ONCE on the loading worker after ALL mission units
-	// exist [04 §3.6] C9 — here, immediately after unit placement and before
-	// resources are granted.
+	// exist [04 §3.6][08 R-ENTRY-01 §6] — here, immediately after unit
+	// placement and before resources are granted.
 	// It queues orders; from the next tick the ordinary pump consumes them.
-	// TODO(question): this interpreter's exact position in the retail loading
-	// pass is inferred from vtable layout ([GAP T10] residual).
 	mission.RunInitialMissionsWithCatalog(m, s.Units, s.Catalog)
 	// InitialMission lazily creates order queues after service composition. Bind
 	// every queue that it actually created before any later load step can pump
@@ -299,11 +309,6 @@ func BattleEntry(s *Session, m *mission.Mission) error {
 	s.bindExistingOrderQueues()
 	// Wire cargo/transport from i-verb immediate attach [04 §3.6] P0-04.
 	wireMissionCargo(s, m)
-	if err := grantResourcesStrict(s, m); err != nil {
-		return err
-	}
-	// Initialize sharing thresholds once from rebuilt capacity after units exist [P1-06] [P1-I04].
-	s.InitShareThresholds()
 	return nil
 }
 

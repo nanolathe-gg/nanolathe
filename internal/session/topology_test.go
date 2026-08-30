@@ -57,22 +57,37 @@ func TestTopologyOneVsOneExactCounts(t *testing.T) {
 	if cmdrs != 2 {
 		t.Fatalf("commanders want 2 got %d (units %d)", cmdrs, s.Units.Used())
 	}
-	// One manager (computer at 1) — AI is [10]*Manager with nil holes after RS-02.
+	// The world rebuild constructs one manager record for each live non-remote
+	// player, including the human. Tick-0 dispatch leaves the human task records
+	// inactive while the computer runs all ten due tasks [08 R-ENTRY-01 §3 step
+	// 24, §8 step 7].
 	count := 0
 	for _, m := range s.AI {
 		if m != nil {
 			count++
 		}
 	}
-	if count != 1 {
-		t.Fatalf("managers want 1 got %d (len %d)", count, len(s.AI))
+	if count != 2 {
+		t.Fatalf("manager records want 2 got %d (len %d)", count, len(s.AI))
 	}
-	if s.AI[1] == nil || s.AI[1].Player != 1 {
+	if s.AI[0] == nil || s.AI[0].Player != 0 || s.AI[1] == nil || s.AI[1].Player != 1 {
 		var got uint8 = 99
 		if s.AI[1] != nil {
 			got = s.AI[1].Player
 		}
-		t.Fatalf("manager player want 1 got %d", got)
+		t.Fatalf("manager owners want [0,1], computer got %d", got)
+	}
+	for task, deadline := range s.AI[0].Deadlines {
+		if deadline != 0 {
+			t.Fatalf("human manager task %d dispatched at tick 0: deadline=%d", task, deadline)
+		}
+	}
+	computerDispatched := false
+	for _, deadline := range s.AI[1].Deadlines {
+		computerDispatched = computerDispatched || deadline != 0
+	}
+	if !computerDispatched {
+		t.Fatal("computer manager did not dispatch its due tick-0 tasks")
 	}
 	// Inactive rows cannot affect result: ensure Allies for inactive not considered.
 	// Alliance hostile check already passed via Normalize; verify hostile exists.

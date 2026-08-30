@@ -144,6 +144,15 @@ type Session struct {
 	strips *stripTable
 	// CampaignSlot is the mission list slot for progress W/L [P1-01 §2.3] [P0-05].
 	CampaignSlot int
+	// campaignPlayerSide is the campaign player-table side ordinal consumed by
+	// canonical commander-trigger identity. The current constructor has no
+	// authoritative player-table source, so every row remains unknown unless a
+	// continuation/restore seam supplies it explicitly [08 R-TRIG-01 §3].
+	campaignPlayerSide      [10]int8
+	campaignPlayerSideKnown [10]bool
+	// battleEntryTailDone prevents composition and fixture seams from invoking
+	// the tick-zero prime or metal-vector snapshot twice [08 R-ENTRY-01 §8].
+	battleEntryTailDone bool
 
 	// Skirmish retains the lobby/setup values that selected this battle. The
 	// placement and spawn paths consume Location and per-slot resources now;
@@ -872,10 +881,19 @@ func (s *Session) RegisterAll() {
 		s.Units.OnDeath = func(h pool.Handle, cause units.DeathCause, u *units.Unit) {
 			// A computer player's unit loss arms that manager's retry throttle at
 			// the authoritative death boundary. The manager owns the draw and
-			// fails closed if setup did not bind a session stream [08].
-			if s.Clock != nil && u != nil && int(u.Owner) < len(s.AI) {
-				if mgr := s.AI[u.Owner]; mgr != nil {
-					mgr.RecordUnitLoss(s.Clock.GlobalTick)
+			// fails closed if setup did not bind a session stream. Human-owned
+			// manager records never execute this controller-2-only hook
+			// [08 R-AI-01 §11].
+			// Residual: retail arms this throttle from damage to a CanCapture unit,
+			// not death finalization; moving the hook awaits the later combat-
+			// reaction unit that owns that damage boundary [08 R-AI-01 §11].
+			if s.Clock != nil && s.Econ != nil && u != nil &&
+				int(u.Owner) < len(s.AI) && int(u.Owner) < len(s.Econ.Players) {
+				p := &s.Econ.Players[u.Owner]
+				if p.Exists && !p.IsObserver && p.ControllerState == 2 {
+					if mgr := s.AI[u.Owner]; mgr != nil {
+						mgr.RecordUnitLoss(s.Clock.GlobalTick)
+					}
 				}
 			}
 			if s.Vis != nil && u != nil {
@@ -995,6 +1013,12 @@ func (s *Session) RegisterAll() {
 			}
 		}
 		s.Units.OnCreate = func(h pool.Handle, u *units.Unit) {
+			// Do not publish visibility at allocator return. A phase-2 factory
+			// product is attached to its authored build piece later in the same
+			// construction visit; phase 5 then stamps the owning slice from that
+			// carried position in the same authoritative tick [04 R-FAC-02 §2]
+			// [03 R-VIS-01 §2]. Publishing here would expose the pre-attachment
+			// allocation position and add a second visibility owner.
 			// Created notification is present but unused by shipped conditions [08
 			// "Evaluation"]; it is still driven.
 			if s.Mission != nil && u != nil {

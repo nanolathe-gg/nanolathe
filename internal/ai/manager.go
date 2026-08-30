@@ -14,13 +14,13 @@ import (
 )
 
 // TaskKind identifies one of the manager's ten fixed task slots. The order is
-// load-bearing: resource/activity, wave A, regroup A, construction/positioning,
-// the inert null task, wave B, regroup B, explore/gather, rally, and the final
-// intentionally empty slot [08 "Strategy manager and its task graph"] [R-P0-04 §2].
+// load-bearing: slot 0 is the empty pointer, while slot 5 is a real null-task
+// object whose group record holds armed buildings [08 R-P0-04 §2].
 type TaskKind int
 
 const (
-	TaskResource TaskKind = iota
+	TaskEmptySlot TaskKind = iota
+	TaskResource
 	TaskWaveA
 	TaskRegroupA
 	TaskConstruction
@@ -29,7 +29,6 @@ const (
 	TaskRegroupB
 	TaskExplore
 	TaskRally
-	TaskEmptySlot
 	TaskKindCount
 )
 
@@ -57,7 +56,7 @@ type Manager struct {
 	// wiring state so ai.Place can stay func(m *Manager, ...) per PLAN_11 API).
 	OriginX      numeric.Fixed // placement search origin, steps toward strategic center [PLAN_11 C8]
 	OriginZ      numeric.Fixed
-	SurfaceMetal int32            // mission SurfaceMetal, clamped 0..255 [08]
+	SurfaceMetal int32            // raw mission/session SurfaceMetal word; per-cell seed alone narrows to byte [08 R-AI-03 §4][05 R-PROD-01 §6]
 	Catalog      *content.Catalog // defKey resolution for the extractor gate [PLAN_11 C8]
 	Factory      *units.Unit      // builder receiving construction requests [PLAN_11 C12] [P0-07]
 	Terrain      *world.Terrain   // placement validation terrain; nil skips yard validation, success resets radius [PLAN_11 C8]
@@ -73,8 +72,9 @@ type Manager struct {
 	// those producers retain their existing queue behavior [04 §3.3][06 §11.1].
 	OrderBinding *orders.QueueBinding
 
-	// P0-07: alliance awareness [P0-07] ON-06. Nil means same-owner-only (default) [08].
-	IsAlliance func(a, b uint8) bool // alliance test injected at construction; default same-owner-only [P0-07]
+	// P0-07: alliance awareness [P0-07] ON-06. A nil binding fails closed: the
+	// manager may not infer hostility from ownership or side identity [08 R-AI-01 §9].
+	IsAlliance func(a, b uint8) bool
 
 	// Manager task vectors for tactical coordination. The retail manager owns
 	// nine vector records; the classifier and direct group writer fill some of
@@ -99,17 +99,45 @@ type Manager struct {
 	// construction retry path when that definition-level gate is present [08].
 	unitLossDeadline uint32
 
-	// Rally task state is part of the task's mutable random walk. The score
-	// source and formation effects remain unresolved and are intentionally not
-	// synthesized here [08 "RNG sites for AI planning"].
-	rallyTargetX   numeric.Fixed
-	rallyTargetY   numeric.Fixed
-	rallyTargetZ   numeric.Fixed
-	rallyDriftX    numeric.Fixed
-	rallyDriftY    numeric.Fixed
-	rallyDriftZ    numeric.Fixed
-	rallyScore     uint32 // last accepted score; produced by unresolved score helper
-	rallyNextScore uint32 // candidate score; produced by unresolved score helper
+	// Each attack-wave task owns its own engagement hysteresis latch. It starts
+	// clear, survives ordinary group churn, and is cleared only by the gather
+	// arm at three or fewer members [08 R-AI-01 §4].
+	waveAEngaged bool
+	waveBEngaged bool
+
+	// Rally task state is initialized from the map centre in the exact
+	// best/probe/drift order. In particular drift begins equal to best, placing
+	// the first probe just outside the far corner [08 R-AI-02 §1].
+	rallyInitialized bool
+	rallyBestX       numeric.Fixed
+	rallyBestY       numeric.Fixed
+	rallyBestZ       numeric.Fixed
+	rallyProbeX      numeric.Fixed
+	rallyProbeY      numeric.Fixed
+	rallyProbeZ      numeric.Fixed
+	rallyDriftX      numeric.Fixed
+	rallyDriftY      numeric.Fixed
+	rallyDriftZ      numeric.Fixed
+	rallyBestScore   int32
+	rallyTargets     []pool.Handle
+
+	// RallyVisible supplies the ordinary visibility predicate used only when a
+	// 30-tick strategic refresh rebuilds the rally score vector. A nil binding
+	// keeps that vector empty rather than granting omniscient target knowledge
+	// [08 R-AI-01 §7, §16].
+	RallyVisible func(viewer uint8, target *units.Unit) bool `json:"-"`
+	// RallyProbeKnown selects whichever of the two established explored/current
+	// grid predicates the session option word enables. The bit identity remains
+	// Unknown, so manager code consumes the selected predicate and does not
+	// invent an option mapping [08 R-AI-01 §7, §17].
+	RallyProbeKnown func(owner uint8, x, y, z numeric.Fixed) bool `json:"-"`
+	// RallyOrderAdmitted supplies the shared rally-member admission result. It
+	// owns the retail split between units with a locomotion object and immobile
+	// units that need the ordinary order-admission predicate. Nanolathe does not
+	// yet expose that object identity directly, so a nil binding fails closed.
+	// TODO(question): map the retail locomotion-object presence and shared
+	// order-admission predicate onto session-owned runtime state [08 R-AI-01 §7].
+	RallyOrderAdmitted func(unit *units.Unit, x, y, z numeric.Fixed) bool `json:"-"`
 
 	// RS-06: per-session isolated RNG [I4][RS-P0-018]. A nil stream is an
 	// unbound setup and must not fall back to process-global randomness.
@@ -363,7 +391,9 @@ func (m *Manager) Tick(tick uint32, w *units.World, econ *economy.Service) {
 	// [R-P0-05 §6]. Controller values 1 and 3 still participate in the outer
 	// eligible cadence, but do not execute virtual tasks.
 	if m.Catalog != nil || m.Strategic.Catalog != nil {
-		m.Strategic.MaybeRefresh(tick, m.simRNG(), m.Player, w)
+		if m.Strategic.MaybeRefresh(tick, m.simRNG(), m.Player, w) {
+			m.refreshRallyTargets(w, econ)
+		}
 	}
 	// No diagnostic scan is part of the authoritative manager tick. Semantic
 	// state is observed by the owning world/economy services.
@@ -383,7 +413,7 @@ func (m *Manager) runClassifications(tick uint32, w *units.World, econ *economy.
 // Tasks are swept in ascending manager offset order (I1) via TaskKind order which mirrors slot order [P0-02 §1.3].
 func (m *Manager) runDueTasks(tick uint32, w *units.World, econ *economy.Service) {
 	for k := TaskKind(0); k < TaskKindCount; k++ {
-		// The tenth slot is an empty task pointer. It is never invoked and its
+		// Slot 0 is an empty task pointer. It is never invoked and its
 		// deadline remains zero [R-P0-04 §2].
 		if k == TaskEmptySlot {
 			continue
@@ -400,6 +430,14 @@ func (m *Manager) runDueTasks(tick uint32, w *units.World, econ *economy.Service
 		if deadline > tick { // [08] separate deadlines [PLAN_11 C3]; 0 <= any tick so initial zero is due
 			continue
 		}
+		// Every task writes its next deadline before executing its body. For
+		// explore and rally this also makes RNG(900)/RNG(150) the first branch
+		// draw, including empty-group invocations [08 R-AI-01 §4, §6, §7].
+		next := m.nextDeadline(k, tick)
+		if (k == TaskExplore || k == TaskRally) && next == m.Deadlines[k] && m.simRNG() == nil {
+			continue
+		}
+		m.Deadlines[k] = next
 		switch k {
 		case TaskConstruction:
 			m.doConstruction(tick, w, econ)
@@ -419,12 +457,8 @@ func (m *Manager) runDueTasks(tick uint32, w *units.World, econ *economy.Service
 			}
 			m.doExplore(tick, w, econ)
 		case TaskRally:
-			if m.simRNG() == nil {
-				continue
-			}
 			m.doRally(tick, w, econ)
 		}
-		m.Deadlines[k] = m.nextDeadline(k, tick)
 	}
 }
 
@@ -667,18 +701,20 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 //
 // Tasks then issue ordinary move/attack orders [P0-02][08].
 func (m *Manager) doWave(tick uint32, w *units.World, econ *economy.Service, threshold int32, min, max int) {
-	_, _ = econ, threshold
 	if w == nil {
 		return
 	}
 	var group []pool.Handle
 	var groupID, peerID uint8
+	var engaged *bool
 	if threshold == waveAThreshold {
 		group, groupID = m.GroupWaveA, 2
 		peerID = 3
+		engaged = &m.waveAEngaged
 	} else {
 		group, groupID = m.GroupWaveB, 6
 		peerID = 7
+		engaged = &m.waveBEngaged
 	}
 	m.mergeWaveGroupRecords(groupID, peerID, w, threshold)
 	if threshold == waveAThreshold {
@@ -686,18 +722,49 @@ func (m *Manager) doWave(tick uint32, w *units.World, econ *economy.Service, thr
 	} else {
 		group = m.GroupWaveB
 	}
-	if len(group) < min {
+	n := len(group)
+	if n == 0 {
 		return
 	}
-	if len(group) > max {
-		group = group[:max]
+	attack := false
+	if min < n {
+		attack = *engaged || max <= n
 	}
-	// The target-selection and formation sink for a populated wave are not
-	// established by the recovered manager contract. Keep the merge lifecycle
-	// authoritative and leave the unresolved sink explicit rather than choosing
-	// no enemy or map-derived target is selected [R-P0-04 §5].
-	// TODO(question): recover the target-selection/formation call and its order
-	// descriptor before issuing attack orders from a wave.
+	if !attack {
+		// Gather at the first non-empty base record: armed buildings, then
+		// resource buildings, then builders. A successful gather clears the
+		// engagement latch and broadcasts a fresh move in unit-pool order
+		// [08 R-AI-01 §4, §9].
+		for _, base := range []struct {
+			groupID uint8
+			handles []pool.Handle
+		}{
+			{groupID: 5, handles: m.GroupNull},
+			{groupID: 1, handles: m.GroupResource},
+			{groupID: 4, handles: m.GroupConstruction},
+		} {
+			cx, cy, cz, ok := groupCentroid(base.handles, w)
+			if !ok {
+				continue
+			}
+			*engaged = false
+			m.broadcastGroupOrder(w, groupID, 2, 0, nil, cx, cy, cz, tick, 0xa0)
+			return
+		}
+	}
+
+	// No base centroid is a deliberate fall-through to attack, even for a
+	// group below the normal engage threshold [08 R-AI-01 §4].
+	*engaged = true
+	cx, cy, cz, ok := groupCentroid(group, w)
+	if !ok {
+		return
+	}
+	target := m.nearestHostileUnit(w, econ, cx, cy, cz)
+	if target == nil {
+		return
+	}
+	m.broadcastGroupOrder(w, groupID, 3, 0, target, target.X, target.Y, target.Z, tick, 0)
 }
 
 // mergeWaveGroupRecords applies the recovered wave merge through the direct
@@ -806,7 +873,7 @@ func (m *Manager) doRegroup(tick uint32, w *units.World, econ *economy.Service, 
 		return
 	}
 	// Peer centroid
-	cx, cz, ok := groupCentroid(peerGroup, w)
+	cx, cy, cz, ok := groupCentroid(peerGroup, w)
 	if !ok {
 		return
 	}
@@ -825,7 +892,7 @@ func (m *Manager) doRegroup(tick uint32, w *units.World, econ *economy.Service, 
 		if id == 0 {
 			continue
 		}
-		node := orders.NewNodeForOrder(id, 0, cx, 0, cz, tick, u.Handle, false)
+		node := orders.NewNodeForOrder(id, 0, cx, cy, cz, tick, u.Handle, false)
 		q := orders.QueueForUnit(u)
 		if q == nil {
 			continue
@@ -841,13 +908,213 @@ func (m *Manager) doRegroup(tick uint32, w *units.World, econ *economy.Service, 
 	_ = issued
 }
 
+// broadcastGroupOrder is the shared manager-task broadcast. It scans the
+// owner's whole unit slice in pool order and keys membership from Unit.Group,
+// not from the task vector's current order [08 R-AI-01 §9].
+func (m *Manager) broadcastGroupOrder(w *units.World, group uint8, intent int, modifier uint8, target *units.Unit, x, y, z numeric.Fixed, tick uint32, spacing int32) {
+	if m == nil || w == nil {
+		return
+	}
+	// The spacing argument belongs to the retail formation helper. The
+	// recovered contract establishes the values passed (160 for wave gather,
+	// zero elsewhere), but no per-member coordinate transform; canonical order
+	// nodes therefore retain the supplied centroid/target unchanged.
+	// TODO(question): recover the spacing-to-member position transform by
+	// tracing the shared group-broadcast formation helper [08 R-AI-01 §4, §9].
+	_ = spacing
+	for _, u := range w.IterSliced() {
+		if u == nil || !u.Alive || u.Owner != m.Player || u.Def == nil || u.Group != group {
+			continue
+		}
+		id := resolveAIIntent(intent, u, target, x, y, z)
+		m.submitResolvedOrder(u, id, target, x, y, z, tick, modifier)
+	}
+}
+
+// resolveAIIntent uses the ordinary canonical resolver for every task shape.
+// Position-only attack is resolved there too; the AI owns no descriptor
+// substitute or alternate command policy [04 R-ORD-02 §1][08 R-AI-01 §7].
+func resolveAIIntent(intent int, actor, target *units.Unit, x, y, z numeric.Fixed) orders.ID {
+	pos := &orders.ResolvePos{X: x, Y: y, Z: z}
+	return orders.Resolve(intent, actor, target, pos)
+}
+
+func (m *Manager) submitResolvedOrder(u *units.Unit, id orders.ID, target *units.Unit, x, y, z numeric.Fixed, tick uint32, modifier uint8) {
+	if m == nil || u == nil || id == 0 {
+		return
+	}
+	var targetHandle pool.Handle
+	if target != nil {
+		targetHandle = target.Handle
+	}
+	queued := modifier != 0
+	node := orders.NewNodeForOrder(id, targetHandle, x, y, z, tick, u.Handle, queued)
+	q := orders.BindQueueBinding(u, m.OrderBinding)
+	if q == nil {
+		return
+	}
+	if !queued {
+		q.PurgeUnprotected()
+		q.DropLeadingAutoOps()
+	}
+	q.Push(id, node)
+}
+
+func (m *Manager) hostileOwner(owner uint8, econ *economy.Service) bool {
+	if m == nil || econ == nil || m.IsAlliance == nil || int(owner) >= len(econ.Players) || int(m.Player) >= len(econ.Players) {
+		return false
+	}
+	if owner == m.Player {
+		return false
+	}
+	p := &econ.Players[owner]
+	if !p.Exists || (p.ControllerState != 1 && p.ControllerState != 2 && p.ControllerState != 3) {
+		return false
+	}
+	return !m.IsAlliance(m.Player, owner)
+}
+
+// The task records store authoritative positions as signed 32-bit 16.16
+// words. Keep the arithmetic operations at that width even though
+// numeric.Fixed is wider elsewhere in Nanolathe [08 R-AI-01 §§6,7,9].
+func fixedWordFromUnits(v int32) numeric.Fixed {
+	return numeric.Fixed(v << 16)
+}
+
+func fixedWordAdd(a, b numeric.Fixed) numeric.Fixed {
+	return numeric.Fixed(int32(a) + int32(b))
+}
+
+func fixedWordDelta(a, b numeric.Fixed) int32 {
+	return int32(a) - int32(b)
+}
+
+func fixedWordNeg(v int32) numeric.Fixed {
+	return numeric.Fixed(-v)
+}
+
+// nearestHostileUnit keeps the first minimum in player-slot then pool order.
+// Distances are fixed-point products shifted to squared world units before a
+// strict comparison against the signed-32 initial maximum [08 R-AI-01 §9].
+func (m *Manager) nearestHostileUnit(w *units.World, econ *economy.Service, x, y, z numeric.Fixed) *units.Unit {
+	if m == nil || w == nil || econ == nil {
+		return nil
+	}
+	_ = y // [08 R-AI-01 §9] the vertical coordinate is passed but never read.
+	bestDistance := int64(1<<31 - 1)
+	var best *units.Unit
+	for _, u := range w.IterSliced() {
+		if u == nil || !u.Alive || u.Dying || u.Def == nil || !m.hostileOwner(u.Owner, econ) {
+			continue
+		}
+		if u.Flags&0x3 == 2 || u.Flags&0x4 != 0 {
+			continue
+		}
+		dx := int64(fixedWordDelta(u.X, x))
+		dz := int64(fixedWordDelta(u.Z, z))
+		distance := ((dx * dx) >> 32) + ((dz * dz) >> 32)
+		if distance < bestDistance {
+			bestDistance = distance
+			best = u
+		}
+	}
+	return best
+}
+
+// RallyBattleBindings are the session-owned predicates needed by the rally
+// task. Keeping them explicit prevents an unbound manager from gaining
+// omniscient visibility or inventing a locomotion/admission approximation.
+type RallyBattleBindings struct {
+	Visible       func(viewer uint8, target *units.Unit) bool
+	ProbeKnown    func(owner uint8, x, y, z numeric.Fixed) bool
+	OrderAdmitted func(unit *units.Unit, x, y, z numeric.Fixed) bool
+}
+
+// InitializeBattleState binds the terrain-dependent manager state at battle
+// entry and initializes rally best, probe, drift, and score in retail order.
+// It is intentionally explicit and one-shot: rally execution never lazily
+// derives constructor state from whichever terrain happens to be present
+// [08 R-AI-02 §1]. SP-REV-03 owns the production call site.
+func (m *Manager) InitializeBattleState(terrain *world.Terrain, bindings RallyBattleBindings) bool {
+	if m == nil || terrain == nil || m.rallyInitialized {
+		return false
+	}
+	m.Terrain = terrain
+	m.RallyVisible = bindings.Visible
+	m.RallyProbeKnown = bindings.ProbeKnown
+	m.RallyOrderAdmitted = bindings.OrderAdmitted
+	halfX := (terrain.CellW * 16) / 2
+	halfZ := (terrain.CellH * 16) / 2
+	x := fixedWordFromUnits(halfX)
+	z := fixedWordFromUnits(halfZ)
+	m.rallyBestX, m.rallyBestY, m.rallyBestZ = x, 0, z
+	m.rallyProbeX, m.rallyProbeY, m.rallyProbeZ = x, 0, z
+	m.rallyDriftX, m.rallyDriftY, m.rallyDriftZ = x, 0, z
+	m.rallyBestScore = 0
+	m.rallyInitialized = true
+	return true
+}
+
+// refreshRallyTargets rebuilds the strategic state's first vector only on its
+// 30-tick refresh. The visibility predicate is supplied by session composition;
+// nil remains empty instead of becoming omniscient [08 R-AI-01 §16].
+func (m *Manager) refreshRallyTargets(w *units.World, econ *economy.Service) {
+	if m == nil {
+		return
+	}
+	m.rallyTargets = m.rallyTargets[:0]
+	if w == nil || econ == nil || m.RallyVisible == nil {
+		return
+	}
+	for _, u := range w.IterSliced() {
+		if u == nil || !u.Alive || u.Dying || !m.hostileOwner(u.Owner, econ) || !m.RallyVisible(m.Player, u) {
+			continue
+		}
+		m.rallyTargets = append(m.rallyTargets, u.Handle)
+	}
+}
+
+func (m *Manager) rallyProbeScore(w *units.World, x, z numeric.Fixed) int32 {
+	if m == nil || w == nil {
+		return 0
+	}
+	var score int32
+	for _, h := range m.rallyTargets {
+		u := w.Unit(h)
+		if u == nil || u.Def == nil {
+			continue
+		}
+		dx := int64(fixedWordDelta(u.X, x))
+		dz := int64(fixedWordDelta(u.Z, z))
+		if ((dx*dx)>>32)+((dz*dz)>>32) > 160*160 {
+			continue
+		}
+		key := canonicalKey(u.Def.CanonicalKey)
+		if key == "" {
+			key = canonicalKey(u.Def.UnitName)
+		}
+		score += int32(m.Strategic.SingleVectors[key])
+	}
+	return score
+}
+
+// drawBelowSigned preserves the simulation helper's signed bound gate: values
+// below two, including negative scores, return zero without advancing
+// [01 §7.1][08 R-AI-01 §7].
+func drawBelowSigned(r *rng.Simulation, bound int32) uint32 {
+	if r == nil || bound < 2 {
+		return 0
+	}
+	return r.Uint32n(uint32(bound))
+}
+
 // doExplore implements the explore/gather task at tick plus 30 plus RNG(900)
 // [08 "Strategy manager and its task graph"].
 // The explore vector is populated by the recovered classifier (category 8),
 // load, control-group, or wave-transfer writers. An empty vector remains a
 // normal no-op; no world scan is permitted here [P0-02][R-P0-04].
 func (m *Manager) doExplore(tick uint32, w *units.World, econ *economy.Service) {
-	_, _, _ = tick, w, econ
+	_ = econ
 	if w == nil {
 		return
 	}
@@ -859,40 +1126,60 @@ func (m *Manager) doExplore(tick uint32, w *units.World, econ *economy.Service) 
 	if len(group) == 0 {
 		return
 	}
-	// The body consumes its branch draws even though the target/formation sink
-	// is not yet recovered. Keeping this ledger here prevents an unresolved
-	// order effect from shifting later authoritative consumers [08 RNG inventory].
-	if len(group) < 5 {
-		trials := r.Uint32n(2)
-		// The branch always submits one baseline attempt and adds the bounded
-		// binary choice, for two or three iterations total [08 RNG inventory].
-		for i := uint32(0); i <= trials+1; i++ {
-			if m.Terrain != nil {
-				if width := uint32(m.Terrain.CellW / 8); width >= 2 {
-					r.Uint32n(width)
-				}
-				if height := uint32(m.Terrain.CellH / 8); height >= 2 {
-					r.Uint32n(height)
-				}
-			}
-		}
+	if m.Terrain == nil {
 		return
 	}
-	// Large groups use the edge-target branch: two binary choices, map-width
-	// and map-height samples, then the final binary choice [08 RNG inventory].
-	r.Uint32n(2)
-	r.Uint32n(2)
-	if m.Terrain != nil {
-		if width := uint32(m.Terrain.CellW); width >= 2 {
-			r.Uint32n(width)
+	mapWidth := m.Terrain.CellW * 16
+	mapHeight := m.Terrain.CellH * 16
+	if len(group) < 5 {
+		centreX, centreY, centreZ := m.Strategic.CenterX, m.Strategic.CenterY, m.Strategic.CenterZ
+		centreY = numeric.Fixed(int32(centreY))
+		if int16(int32(centreX)>>16) != 0 || int16(int32(centreZ)>>16) != 0 {
+			legs := r.Uint32n(2) + 2
+			gw, gh := mapWidth>>3, mapHeight>>3
+			for i := uint32(0); i < legs; i++ {
+				tx := fixedWordAdd(centreX, fixedWordFromUnits(int32(r.Uint32n(uint32(gw)))-gw/2))
+				tz := fixedWordAdd(centreZ, fixedWordFromUnits(int32(r.Uint32n(uint32(gh)))-gh/2))
+				intent, modifier := 9, uint8(1)
+				if i == 0 {
+					intent, modifier = 2, 0
+				}
+				m.broadcastGroupOrder(w, 8, intent, modifier, nil, tx, centreY, tz, tick, 0)
+			}
+			return
 		}
-		if height := uint32(m.Terrain.CellH); height >= 2 {
-			r.Uint32n(height)
+
+		cx, cy, cz, ok := groupCentroid(group, w)
+		if !ok {
+			return
 		}
+		target := m.nearestHostileUnit(w, econ, cx, cy, cz)
+		if target == nil {
+			// Retail dereferences the missing target here. Bounding it to a
+			// deterministic no-op is the research-sanctioned divergence
+			// [08 R-AI-01 §6].
+			return
+		}
+		m.broadcastGroupOrder(w, 8, 9, 1, nil, target.X, target.Y, target.Z, tick, 0)
+		return
 	}
-	r.Uint32n(2)
-	// TODO(question): recover the target coordinate conversion and ordinary
-	// formation order before mutating a unit queue for this task.
+
+	// Five or more members patrol one random map edge. Exactly three body
+	// draws occur: orientation, one coordinate, and near/far edge selection
+	// [08 R-AI-01 §6].
+	var x, z int32
+	if r.Uint32n(2) != 0 {
+		x = int32(r.Uint32n(uint32(mapWidth)))
+		if r.Uint32n(2) == 0 {
+			z = mapHeight - 1
+		}
+	} else {
+		if r.Uint32n(2) == 0 {
+			x = mapWidth - 1
+		}
+		z = int32(r.Uint32n(uint32(mapHeight)))
+	}
+	m.broadcastGroupOrder(w, 8, 9, 0, nil, fixedWordFromUnits(x), 0, fixedWordFromUnits(z), tick, 0)
 }
 
 // doRally implements the random-walk rally task at tick plus 30 plus RNG(150)
@@ -901,7 +1188,7 @@ func (m *Manager) doExplore(tick uint32, w *units.World, econ *economy.Service) 
 // the classifier and must arrive through a separate established writer
 // [R-P0-04].
 func (m *Manager) doRally(tick uint32, w *units.World, econ *economy.Service) {
-	_, _, _ = tick, w, econ
+	_ = econ
 	if w == nil {
 		return
 	}
@@ -913,23 +1200,40 @@ func (m *Manager) doRally(tick uint32, w *units.World, econ *economy.Service) {
 	if len(group) == 0 {
 		return
 	}
-	if r.Uint32n(10) == 0 {
-		// The drift seed has two independent 16-bit random components. Their
-		// conversion into the task's fixed-point target remains unresolved, but
-		// both draws are authoritative even while that effect is deferred.
-		r.Uint32n(65536)
-		r.Uint32n(65536)
+	if !m.rallyInitialized {
+		// TODO(question): SP-REV-03 must call InitializeBattleState at the
+		// established battle-entry point before rally can execute [08 R-AI-02 §1].
+		return
 	}
-	// The score helper's visibility inputs and target sink are unresolved, but
-	// its two score-valued random comparisons are established. Keep their
-	// order and bounds in the task state; zero bounds consume no draw under the
-	// simulation helper's contract [08 RNG inventory].
-	current := r.Uint32n(m.rallyScore)
-	next := r.Uint32n(m.rallyNextScore)
-	_ = current
-	_ = next
-	// TODO(question): recover the visibility guard, score helper, and ordinary
-	// formation/order sink that populate the candidate score and target.
+	if r.Uint32n(10) == 0 {
+		m.rallyProbeX, m.rallyProbeY, m.rallyProbeZ = m.rallyBestX, m.rallyBestY, m.rallyBestZ
+		a := numeric.Angle(r.Uint32n(65536))
+		m.rallyDriftX = fixedWordNeg(numeric.MulRound(numeric.Sin(a), int32(numeric.FixedFromInt(320))))
+		m.rallyDriftY = 0
+		m.rallyDriftZ = fixedWordNeg(numeric.MulRound(numeric.Cos(a), int32(numeric.FixedFromInt(320))))
+	}
+	m.rallyProbeX = fixedWordAdd(m.rallyProbeX, m.rallyDriftX)
+	m.rallyProbeY = fixedWordAdd(m.rallyProbeY, m.rallyDriftY)
+	m.rallyProbeZ = fixedWordAdd(m.rallyProbeZ, m.rallyDriftZ)
+	if m.RallyProbeKnown != nil && m.RallyProbeKnown(m.Player, m.rallyProbeX, m.rallyProbeY, m.rallyProbeZ) {
+		score := m.rallyProbeScore(w, m.rallyProbeX, m.rallyProbeZ)
+		if drawBelowSigned(r, m.rallyBestScore) < drawBelowSigned(r, score) {
+			m.rallyBestScore = score
+			m.rallyBestX, m.rallyBestY, m.rallyBestZ = m.rallyProbeX, m.rallyProbeY, m.rallyProbeZ
+		}
+	}
+	// Rally is the only task whose submissions follow group-vector order.
+	for _, h := range group {
+		u := w.Unit(h)
+		if u == nil || !u.Alive || u.Def == nil || !u.Def.CanAttack {
+			continue
+		}
+		if m.RallyOrderAdmitted == nil || !m.RallyOrderAdmitted(u, m.rallyBestX, m.rallyBestY, m.rallyBestZ) {
+			continue
+		}
+		id := resolveAIIntent(3, u, nil, m.rallyBestX, m.rallyBestY, m.rallyBestZ)
+		m.submitResolvedOrder(u, id, nil, m.rallyBestX, m.rallyBestY, m.rallyBestZ, tick, 0)
+	}
 }
 
 // Dispatch iterates the ten players per-tick entry [08 "Established AI-facing data and rooted planner"] [PLAN_11 C1][P0-02].

@@ -529,6 +529,41 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 	if err := createAndBindServices(s); err != nil {
 		return nil, err
 	}
+	// Construct every manager in ascending slot order before commander and map
+	// unit allocation. Each constructor consumes its exact eight strategic
+	// draws from the shared stream [08 R-ENTRY-01 §3 step 24][08 R-AI-01 §9].
+	hasManagerOwner := false
+	for i := 0; i < nPlayers && i < 10; i++ {
+		if !cfg.Players[i].IsObserver() {
+			hasManagerOwner = true
+			break
+		}
+	}
+	var sharedProf *ai.Profile
+	if hasManagerOwner {
+		profileName := "default"
+		if m != nil && m.OTA != nil && m.OTA.Global != nil {
+			if mg := mission.DecodeMissionGlobals(m.OTA.Global); mg != nil && strings.TrimSpace(mg.AIProfile) != "" {
+				profileName = mg.AIProfile
+			}
+		}
+		prof, perr := loadSkirmishAIProfile(fs, profileName)
+		if perr != nil {
+			return nil, perr
+		}
+		sharedProf = prof
+	}
+	for i := range s.AI {
+		s.AI[i] = nil
+	}
+	for i := 0; i < nPlayers && i < 10; i++ {
+		if cfg.Players[i].IsObserver() {
+			continue
+		}
+		if err := initializeBattleAI(s, uint8(i), sharedProf); err != nil {
+			return nil, err
+		}
+	}
 	// 7-9. battle entry: place features → units → resources (InitialMission inside) [08 "Placement and battle entry"] C9
 	if err := skirmishBattleEntry(s, cfg, m); err != nil {
 		return nil, err
@@ -542,111 +577,16 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 	// 8. movement state and visibility state for new units
 	ensureMovementForAll(s)
 	publishVisibilityForAll(s)
-	// AI managers for computer players [08 "Established AI-facing data"] [P0-I12]
-	// AI profile load failure is explicit startup error [08].
-	hasComputer := false
-	for i := 0; i < nPlayers && i < 10; i++ {
-		if cfg.Players[i].IsComputer() {
-			hasComputer = true
-			break
-		}
-	}
-	var sharedProf *ai.Profile
-	if hasComputer {
-		profileName := "default"
-		if m != nil && m.OTA != nil && m.OTA.Global != nil {
-			if mg := mission.DecodeMissionGlobals(m.OTA.Global); mg != nil && strings.TrimSpace(mg.AIProfile) != "" {
-				profileName = mg.AIProfile
-			}
-		}
-		prof, perr := loadSkirmishAIProfile(fs, profileName)
-		if perr != nil {
-			return nil, perr
-		}
-		sharedProf = prof
-	}
-	// RS-02: player-indexed AI managers — s.AI is [10]*Manager with nil holes.
-	for i := range s.AI {
-		s.AI[i] = nil
-	}
-	for i, p := range cfg.Players[:nPlayers] {
-		if i >= 10 {
-			break
-		}
-		if !p.IsComputer() {
-			continue
-		}
-		// Bind before battle ticks can reach the phase-2 death hook; the
-		// construction itself consumes no random values [08 "Strategy manager
-		// and its task graph"].
-		mgr := &ai.Manager{Player: uint8(i), Profile: sharedProf, RNG: s.SimRNG()}
-		mgr.Terrain = s.World
-		mgr.Catalog = s.Catalog
-		if !mgr.Strategic.InitializeRandomState(s.SimRNG()) {
-			return nil, fmt.Errorf("session: AI strategic state initialization failed for player %d", i)
-		}
-		bindAIQueue(mgr, s)
-		s.AI[i] = mgr
-	}
-	// P0-I12: initialize class maps from catalog for each manager, ensure vectors not zero [08][P0-01]
-	hasAI := false
-	for _, mgr := range s.AI {
-		if mgr != nil {
-			hasAI = true
-			break
-		}
-	}
-	if hasAI && s.Catalog != nil && len(s.Catalog.Units) > 0 {
-		allTypes := make([]string, 0, len(s.Catalog.Units))
-		for k := range s.Catalog.Units {
-			allTypes = append(allTypes, k)
-		}
-		sort.Strings(allTypes)
-		for _, mgr := range s.AI {
-			if mgr == nil {
-				continue
-			}
-			mgr.SetCatalog(s.Catalog)
-			mgr.Strategic.Init(allTypes)
-			if s.World != nil {
-				mgr.Strategic.CenterX = world.CellToWorld(s.World.CellW / 2)
-				mgr.Strategic.CenterZ = world.CellToWorld(s.World.CellH / 2)
-				mgr.Strategic.Radius = 0
-				mgr.OriginX = world.CellToWorld(s.World.CellW / 2)
-				mgr.OriginZ = world.CellToWorld(s.World.CellH / 2)
-				for _, u := range s.Units.IterSliced() {
-					if u != nil && u.Alive && int(u.Owner) == int(mgr.Player) && u.Def != nil && u.Def.Commander {
-						mgr.OriginX = u.X
-						mgr.OriginZ = u.Z
-						mgr.Strategic.CenterX = u.X
-						mgr.Strategic.CenterZ = u.Z
-						break
-					}
-				}
-				if mgr.OriginX == 0 && mgr.OriginZ == 0 {
-					for _, u := range s.Units.IterSliced() {
-						if u != nil && u.Alive && int(u.Owner) == int(mgr.Player) {
-							mgr.OriginX = u.X
-							mgr.OriginZ = u.Z
-							break
-						}
-					}
-				}
-				// Bind actual schema SurfaceMetal from uniform terrain metal byte [05 "Terrain metal extraction"][P0-03][RS-11].
-				// No 255 forcing; helper A uses established patch data or explicit unavailable, helper B validates with real yard/occupancy.
-				if s.World != nil && len(s.World.Plot) > 0 {
-					mgr.SurfaceMetal = int32(s.World.Plot[0].Metal())
-				} else {
-					mgr.SurfaceMetal = 0
-				}
-			} else {
-				// No world: zero surface metal, no 255 bias [RS-11].
-				mgr.SurfaceMetal = 0
-			}
-		}
-	}
 	// 11. register every authoritative phase once [01 §4.4] I7
 	s.RegisterAll()
+	if err := finishBattleEntry(s, func() error {
+		clearLiveResourceStocks(s)
+		skirmishGrantResourcesDirect(s, cfg)
+		s.InitShareThresholds()
+		return nil
+	}); err != nil {
+		return nil, err
+	}
 	// Alliance-aware skirmish victory: team eliminated when all its commanders
 	// are dead; when <=1 hostile team remains, latch result (draw on mutual
 	// destruction) [08 "Victory and defeat triggers"][08 "Skirmish configuration"]

@@ -162,15 +162,9 @@ func NewSyntheticMissionForTest(fs vfs.FSOps, cat *content.Catalog, path string,
 	var m *mission.Mission
 	var err error
 	if strings.Contains(path, ":") {
-		parts := strings.SplitN(path, ":", 2)
-		campaignPath := strings.TrimSpace(parts[0])
-		missionPart := strings.TrimSpace(parts[1])
-		var idx int
-		if strings.HasPrefix(strings.ToLower(missionPart), "mission") {
-			num := strings.TrimSpace(missionPart[len("mission"):])
-			fmt.Sscanf(num, "%d", &idx)
-		} else {
-			fmt.Sscanf(missionPart, "%d", &idx)
+		campaignPath, idx, parseErr := parseCampaignMissionSelector(path)
+		if parseErr != nil {
+			return nil, parseErr
 		}
 		m, err = mission.LoadCampaignWithSink(fs, campaignPath, idx, difficulty, 0, nil)
 	} else {
@@ -188,9 +182,10 @@ func NewSyntheticMissionForTest(fs vfs.FSOps, cat *content.Catalog, path string,
 		return nil, err
 	}
 	s := &Session{
-		Catalog: cat,
-		Mission: m,
-		Latch:   NewEndLatch(),
+		Catalog:      cat,
+		Mission:      m,
+		Latch:        NewEndLatch(),
+		CampaignSlot: m.CampaignIndex,
 	}
 	if err := s.SelectForGametype(GametypeCampaign); err != nil {
 		return nil, err
@@ -465,6 +460,33 @@ func NewSyntheticSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 		}
 	}
 	prepareFixtureSkirmishCatalog(cat, &cfg)
+	// Keep the direct fixture on the production entry topology: every live
+	// non-observer owns a manager record and consumes its constructor draws
+	// before any unit allocation [08 R-ENTRY-01 §3 step 24].
+	for i := 0; i < nPlayers && i < 10; i++ {
+		if cfg.Players[i].IsObserver() {
+			continue
+		}
+		prof, perr := ai.LoadProfile(fs, "default")
+		if perr != nil || prof == nil {
+			continue
+		}
+		if s.World != nil {
+			if err := initializeBattleAI(s, uint8(i), prof); err != nil {
+				return nil, err
+			}
+		} else {
+			// Deliberately terrain-less fixtures can lock player-record topology,
+			// but cannot claim rally or metal-vector initialization. Preserve the
+			// exact eight-draw constructor and leave terrain-owned state unbound.
+			mgr := &ai.Manager{Player: uint8(i), Profile: prof, Catalog: s.Catalog, RNG: s.SimRNG()}
+			if !mgr.Strategic.InitializeRandomState(s.SimRNG()) {
+				return nil, fmt.Errorf("session fixture: AI strategic state initialization failed for player %d", i)
+			}
+			bindAIQueue(mgr, s)
+			s.AI[i] = mgr
+		}
+	}
 	installFixtureCOB(cat)
 	if err := skirmishPlaceFeatures(s, m); err != nil {
 		return nil, err
@@ -498,82 +520,6 @@ func NewSyntheticSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 	if s.Vis != nil && s.World != nil {
 		publishVisibilityForAll(s)
 	}
-	// RS-02: player-indexed — AI is [10]*Manager, no make needed (zero value is nil holes)
-	limitAI := nPlayers
-	for i, p := range cfg.Players[:limitAI] {
-		if i >= 10 {
-			break
-		}
-		if p.Controller == 0 {
-			continue
-		}
-		prof, perr := ai.LoadProfile(fs, "default")
-		if perr != nil || prof == nil {
-			continue
-		}
-		mgr := &ai.Manager{Player: uint8(i), Profile: prof}
-		mgr.Terrain = s.World
-		if s.Catalog != nil {
-			mgr.Catalog = s.Catalog
-		}
-		bindAIQueue(mgr, s)
-		s.AI[i] = mgr
-	}
-	// P0-I12: initialize AI class vectors for fixture managers as well, if catalog present
-	hasAI2 := false
-	for _, mgr := range s.AI {
-		if mgr != nil {
-			hasAI2 = true
-			break
-		}
-	}
-	if hasAI2 && s.Catalog != nil && len(s.Catalog.Units) > 0 {
-		allTypes := make([]string, 0, len(s.Catalog.Units))
-		for k := range s.Catalog.Units {
-			allTypes = append(allTypes, k)
-		}
-		sort.Strings(allTypes)
-		for _, mgr := range s.AI {
-			if mgr == nil {
-				continue
-			}
-			mgr.SetCatalog(s.Catalog)
-			mgr.Strategic.Init(allTypes)
-			if s.World != nil {
-				mgr.Strategic.CenterX = world.CellToWorld(s.World.CellW / 2)
-				mgr.Strategic.CenterZ = world.CellToWorld(s.World.CellH / 2)
-				mgr.Strategic.Radius = 0
-				mgr.OriginX = world.CellToWorld(s.World.CellW / 2)
-				mgr.OriginZ = world.CellToWorld(s.World.CellH / 2)
-				for _, u := range s.Units.IterSliced() {
-					if u != nil && u.Alive && int(u.Owner) == int(mgr.Player) && u.Def != nil && u.Def.Commander {
-						mgr.OriginX = u.X
-						mgr.OriginZ = u.Z
-						mgr.Strategic.CenterX = u.X
-						mgr.Strategic.CenterZ = u.Z
-						break
-					}
-				}
-				if mgr.OriginX == 0 && mgr.OriginZ == 0 {
-					for _, u := range s.Units.IterSliced() {
-						if u != nil && u.Alive && int(u.Owner) == int(mgr.Player) {
-							mgr.OriginX = u.X
-							mgr.OriginZ = u.Z
-							break
-						}
-					}
-				}
-				// Bind actual SurfaceMetal from uniform terrain metal byte [05][P0-03][RS-11]; no 255 forcing.
-				if s.World != nil && len(s.World.Plot) > 0 {
-					mgr.SurfaceMetal = int32(s.World.Plot[0].Metal())
-				} else {
-					mgr.SurfaceMetal = 0
-				}
-			} else {
-				mgr.SurfaceMetal = 0
-			}
-		}
-	}
 	if s.World != nil && s.Movement == nil {
 		s.Movement = movement.NewSystem(s.World, movement.Template(), movement.NewOccupancyGrid())
 		s.Movement.SetClasses(cat.Movement)
@@ -582,6 +528,14 @@ func NewSyntheticSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 		}
 	}
 	s.RegisterAll()
+	if err := finishBattleEntry(s, func() error {
+		clearLiveResourceStocks(s)
+		skirmishGrantResourcesDirect(s, cfg)
+		s.InitShareThresholds()
+		return nil
+	}); err != nil {
+		return nil, err
+	}
 	// Victory evaluation runs inside authoritativeTick [RX-08].
 	_ = s.SelectForGametype(GametypeMultiplayer)
 	return s, nil

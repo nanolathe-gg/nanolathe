@@ -170,6 +170,54 @@ func TestNewMissionWithFSKeepsCampaignLoadStrict(t *testing.T) {
 	}
 }
 
+func TestSyntheticCampaignRetainsCompositionIdentity(t *testing.T) {
+	fs := fsFromMap(t, map[string]string{
+		"camps/TestCampaign.tdf": `
+[HEADER]
+{
+}
+[MISSION0]
+{
+    missionname=First;
+    missionfile=Valid.ota;
+}
+`,
+		"maps/Valid.ota": `
+[GlobalHeader]
+{
+    UseOnlyUnits=Foo.tdf;
+    [Schema 0]
+    {
+        Type=Easy;
+        [units] { }
+        [specials] { }
+        [features] { }
+    }
+}
+`,
+	})
+	s, err := NewSyntheticMissionForTest(fs, minimalCatalogForStrict(), "camps/TestCampaign.tdf:MISSION0", 0)
+	if err != nil {
+		t.Fatalf("NewSyntheticMissionForTest campaign: %v", err)
+	}
+	if s.Mission == nil {
+		t.Fatal("campaign mission identity missing")
+	}
+	if s.CampaignSlot != s.Mission.CampaignIndex || s.CampaignSlot != 0 {
+		t.Fatalf("CampaignSlot=%d Mission.CampaignIndex=%d, want retained slot 0", s.CampaignSlot, s.Mission.CampaignIndex)
+	}
+	if s.Mission.CampaignPath != "camps/TestCampaign.tdf" ||
+		s.Mission.CampaignMissionName != "First" ||
+		s.Mission.UseOnlyPath != "camps/useonly/Foo.tdf" ||
+		s.Mission.Difficulty != 0 {
+		t.Fatalf("campaign identity = path %q name %q useonly %q difficulty %d", s.Mission.CampaignPath, s.Mission.CampaignMissionName, s.Mission.UseOnlyPath, s.Mission.Difficulty)
+	}
+	// TODO(question): assert this same campaign mission-name provenance through
+	// restore/continuation once a session constructor for that seam exists in
+	// the repository; the save player-table/mission-identity decoder and its
+	// constructor are the deciders. Do not reconstruct it from the OTA title.
+}
+
 func TestLoadCampaignAIProfileRequiresAuthoredProfile(t *testing.T) {
 	fs := fsFromMap(t, map[string]string{})
 	_, err := loadCampaignAIProfile(fs, "mission-ai")

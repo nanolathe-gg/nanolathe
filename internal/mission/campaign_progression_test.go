@@ -64,15 +64,15 @@ func TestNextCampaignMissionLinearAdvance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCampaign 0: %v", err)
 	}
-	if m0.CampaignPath != "camps/prog.tdf" || m0.CampaignIndex != 0 {
-		t.Fatalf("provenance m0: path=%q idx=%d", m0.CampaignPath, m0.CampaignIndex)
+	if m0.CampaignPath != "camps/prog.tdf" || m0.CampaignIndex != 0 || m0.CampaignMissionName != "First" {
+		t.Fatalf("provenance m0: path=%q idx=%d name=%q", m0.CampaignPath, m0.CampaignIndex, m0.CampaignMissionName)
 	}
 	m2, err := LoadCampaignWithSink(fs, "camps/prog.tdf", 2, 0, 0, nil)
 	if err != nil {
 		t.Fatalf("LoadCampaign 2: %v", err)
 	}
-	if m2.CampaignIndex != 2 {
-		t.Fatalf("m2 idx %d", m2.CampaignIndex)
+	if m2.CampaignIndex != 2 || m2.CampaignMissionName != "Third" {
+		t.Fatalf("m2 identity: idx=%d name=%q", m2.CampaignIndex, m2.CampaignMissionName)
 	}
 	// Next after 0 exists, is 1 [08 "Campaign discovery"] linear.
 	next, ok, err := NextCampaignMission(fs, "camps/prog.tdf", 0)
@@ -145,5 +145,8 @@ func TestCampaignMissionCountDeterministic(t *testing.T) {
 	}
 	if m.Difficulty != 1 {
 		t.Fatalf("difficulty provenance %d", m.Difficulty)
+	}
+	if m.CampaignMissionName != "Error -- Unnamed Mission" {
+		t.Fatalf("mission-name fallback provenance %q", m.CampaignMissionName)
 	}
 }

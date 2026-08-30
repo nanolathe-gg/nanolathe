@@ -769,3 +769,39 @@ func TestResolveAttackSkipsInactiveSentinelWeapon(t *testing.T) {
 		t.Fatalf("active ToAirWeapon changed behavior: got %q, want AirToAir", got)
 	}
 }
+
+func TestResolvePositionOnlyAttackUsesCanonicalCodeThreeArm(t *testing.T) {
+	pos := &ResolvePos{X: numeric.FixedFromInt(30), Y: numeric.FixedFromInt(7), Z: numeric.FixedFromInt(40)}
+
+	ground := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
+		d.CanAttack = true
+		d.CanFly = false
+	}))
+	ground.Flags |= units.ArmedStatus
+	if got := DescriptorFor(Resolve(3, ground, nil, pos)).Name; got != "Suppress" {
+		t.Fatalf("ground position attack resolved %q, want Suppress", got)
+	}
+
+	dropped := &content.WeaponDef{Dropped: true}
+	flyer := mkUnit(2, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
+		d.CanAttack = true
+		d.CanFly = true
+		d.Weapon1Def = dropped
+	}))
+	flyer.Flags |= units.ArmedStatus
+	if got := DescriptorFor(Resolve(3, flyer, nil, pos)).Name; got != "AirStrike" {
+		t.Fatalf("dropped-weapon position attack resolved %q, want AirStrike", got)
+	}
+	flyer.Def.Weapon1Def = nil
+	if got := DescriptorFor(Resolve(3, flyer, nil, pos)).Name; got != "AirToGround" {
+		t.Fatalf("ordinary air position attack resolved %q, want AirToGround", got)
+	}
+
+	unarmed := mkUnit(3, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
+		d.CanAttack = true
+		d.CanFly = false
+	}))
+	if got := Resolve(3, unarmed, nil, pos); got != 0 {
+		t.Fatalf("unarmed position attack id=%d, want reject sentinel", got)
+	}
+}

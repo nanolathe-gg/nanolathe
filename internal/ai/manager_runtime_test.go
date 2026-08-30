@@ -7,7 +7,9 @@ import (
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -19,7 +21,7 @@ func runtimeEconomy(player uint8, controller uint8) *economy.Service {
 }
 
 func TestTaskSlotsPhysicalOrder(t *testing.T) {
-	got := []TaskKind{TaskResource, TaskWaveA, TaskRegroupA, TaskConstruction, TaskNull, TaskWaveB, TaskRegroupB, TaskExplore, TaskRally, TaskEmptySlot}
+	got := []TaskKind{TaskEmptySlot, TaskResource, TaskWaveA, TaskRegroupA, TaskConstruction, TaskNull, TaskWaveB, TaskRegroupB, TaskExplore, TaskRally}
 	if int(TaskKindCount) != len(got) {
 		t.Fatalf("task slot count=%d, want %d", TaskKindCount, len(got))
 	}
@@ -209,12 +211,19 @@ func TestClassificationCadencePublishesGroups(t *testing.T) {
 }
 
 func TestDispatchPrecedesStrategicRefresh(t *testing.T) {
-	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "scout"}, UnitName: "scout"}
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "scout"}, UnitName: "scout", CanMove: true, CanPatrol: true}
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{"scout": def}}
 	w := newAIFixtureWorld(1, cat)
+	h, err := w.Create(def, 0, numeric.FixedFromInt(100), 0, numeric.FixedFromInt(100))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Unit(h).Group = 8
 	terrain := &world.Terrain{CellW: 32, CellH: 24}
 	r := rng.NewSimulation(41)
-	m := &Manager{Player: 0, Catalog: cat, RNG: &r, Terrain: terrain, GroupExplore: []pool.Handle{1}}
+	m := &Manager{Player: 0, Catalog: cat, RNG: &r, Terrain: terrain, GroupExplore: []pool.Handle{h}}
+	m.Strategic.CenterX = numeric.FixedFromInt(100)
+	m.Strategic.CenterZ = numeric.FixedFromInt(100)
 	for k := TaskKind(0); k < TaskKindCount; k++ {
 		m.Deadlines[k] = 1000
 	}
@@ -223,17 +232,463 @@ func TestDispatchPrecedesStrategicRefresh(t *testing.T) {
 	e := runtimeEconomy(0, 2)
 	m.Tick(30, w, e)
 	probe := rng.NewSimulation(41)
+	probe.Uint32n(900)
 	trials := probe.Uint32n(2)
 	for i := uint32(0); i <= trials+1; i++ {
-		probe.Uint32n(uint32(terrain.CellW / 8))
-		probe.Uint32n(uint32(terrain.CellH / 8))
+		probe.Uint32n(uint32((terrain.CellW * 16) / 8))
+		probe.Uint32n(uint32((terrain.CellH * 16) / 8))
 	}
-	probe.Uint32n(900)
 	probe.Uint32n(30)
 	if r.State != probe.State || r.Draws() != probe.Draws() {
 		t.Fatalf("dispatch/refresh RNG order changed: got draws=%d state=%d, want draws=%d state=%d", r.Draws(), r.State, probe.Draws(), probe.State)
 	}
 	if m.Strategic.LastRefreshTick != 30 {
 		t.Fatalf("strategic refresh did not run after dispatch")
+	}
+}
+
+func TestWaveGatherEngageHysteresisAndNearestStableTie(t *testing.T) {
+	attackerDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "attacker"}, UnitName: "attacker", CanMove: true, CanAttack: true, MaxDamage: 100}
+	baseDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "base"}, UnitName: "base", MaxDamage: 100}
+	enemyDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "enemy"}, UnitName: "enemy", BMCode: true, CanMove: true, MaxDamage: 100}
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{"attacker": attackerDef, "base": baseDef, "enemy": enemyDef}}
+	w := newAIFixtureWorld(12, cat)
+	var wave []pool.Handle
+	for i := 0; i < 6; i++ {
+		h, err := w.Create(attackerDef, 0, numeric.FixedFromInt(64), 0, numeric.FixedFromInt(64))
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.Unit(h).Group = 2
+		wave = append(wave, h)
+	}
+	base, err := w.Create(baseDef, 0, numeric.FixedFromInt(96), 0, numeric.FixedFromInt(80))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Unit(base).Group = 5
+	// Equal-distance targets prove the strict first-minimum rule. IterSliced
+	// visits player one before player two regardless of allocation history.
+	first, err := w.Create(enemyDef, 1, numeric.FixedFromInt(32), 0, numeric.FixedFromInt(64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := w.Create(enemyDef, 2, numeric.FixedFromInt(96), 0, numeric.FixedFromInt(64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := runtimeEconomy(0, 2)
+	e.Players[1].Exists, e.Players[1].ControllerState = true, 1
+	e.Players[2].Exists, e.Players[2].ControllerState = true, 1
+	m := &Manager{
+		Player: 0, GroupWaveA: append([]pool.Handle(nil), wave...), GroupNull: []pool.Handle{base},
+		IsAlliance: func(uint8, uint8) bool { return false },
+	}
+
+	if got := m.nearestHostileUnit(w, e, numeric.FixedFromInt(64), 0, numeric.FixedFromInt(64)); got == nil || got.Handle != first {
+		t.Fatalf("nearest hostile tie chose %v, want first player/pool target %d (other %d)", got, first, second)
+	}
+	m.IsAlliance = nil
+	if got := m.nearestHostileUnit(w, e, numeric.FixedFromInt(64), 0, numeric.FixedFromInt(64)); got != nil {
+		t.Fatalf("nil alliance binding exposed hostile target %v", got)
+	}
+	m.IsAlliance = func(uint8, uint8) bool { return false }
+	m.doWave(10, w, e, waveAThreshold, waveMin, waveMax)
+	if !m.waveAEngaged {
+		t.Fatal("six-member wave did not enter engaged state")
+	}
+	for _, h := range wave {
+		nodes := orders.QueueOfUnit(w.Unit(h)).Primary()
+		if len(nodes) != 1 || nodes[0].ID != orders.Lookup("Attack_Chase") || nodes[0].Target != first {
+			if len(nodes) == 1 {
+				t.Fatalf("wave member %d attack id=%d target=%d, want Attack_Chase id=%d target=%d", h, nodes[0].ID, nodes[0].Target, orders.Lookup("Attack_Chase"), first)
+			}
+			t.Fatalf("wave member %d attack=%v, want one Attack_Chase target %d", h, nodes, first)
+		}
+	}
+
+	// Four and five members keep attacking only while the latch is set.
+	m.GroupWaveA = append([]pool.Handle(nil), wave[:4]...)
+	m.doWave(11, w, e, waveAThreshold, waveMin, waveMax)
+	if !m.waveAEngaged {
+		t.Fatal("four-member engaged wave lost its latch")
+	}
+	for _, h := range wave[:4] {
+		nodes := orders.QueueOfUnit(w.Unit(h)).Primary()
+		if len(nodes) != 1 || nodes[0].ID != orders.Lookup("Attack_Chase") {
+			t.Fatalf("engaged four-member wave member %d did not keep attacking: %v", h, nodes)
+		}
+	}
+
+	// Three members retreat to the first non-empty base record and clear the
+	// latch. The stored group field, rather than vector order, selects all
+	// broadcast recipients; remove the other members from group two explicitly.
+	for _, h := range wave[3:] {
+		w.Unit(h).Group = 3
+	}
+	m.GroupWaveA = append([]pool.Handle(nil), wave[:3]...)
+	m.doWave(12, w, e, waveAThreshold, waveMin, waveMax)
+	if m.waveAEngaged {
+		t.Fatal("three-member retreat did not clear engaged latch")
+	}
+	for _, h := range wave[:3] {
+		nodes := orders.QueueOfUnit(w.Unit(h)).Primary()
+		if len(nodes) != 1 || nodes[0].ID != orders.Lookup("Move_Ground") || nodes[0].GoalX != numeric.FixedFromInt(96) || nodes[0].GoalZ != numeric.FixedFromInt(80) {
+			t.Fatalf("retreat order for %d=%v, want base centroid", h, nodes)
+		}
+	}
+}
+
+func TestNearestHostileAndRallyScoreUseSignedPositionWordDeltas(t *testing.T) {
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "enemy"}, UnitName: "enemy", MaxDamage: 100}
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{"enemy": def}}
+	w := newAIFixtureWorld(4, cat)
+	// The first target is distant only after subtraction wraps as an int32.
+	// Widening before subtraction instead overflows its later int64 square and
+	// can make it appear spuriously near [08 R-AI-01 §§7,9].
+	first, err := w.Create(def, 1, numeric.Fixed(-1879048192), 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryX := numeric.Fixed(1879048192)
+	second, err := w.Create(def, 1, queryX-numeric.FixedOne, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := runtimeEconomy(0, 2)
+	e.Players[1].Exists, e.Players[1].ControllerState = true, 1
+	m := &Manager{
+		Player:       0,
+		IsAlliance:   func(uint8, uint8) bool { return false },
+		rallyTargets: []pool.Handle{first},
+	}
+	m.Strategic.SingleVectors = map[string]int8{"enemy": 7}
+
+	if got := m.nearestHostileUnit(w, e, queryX, 0, 0); got == nil || got.Handle != second {
+		t.Fatalf("wrapped-distance nearest=%v, want second target %d", got, second)
+	}
+	if got := m.rallyProbeScore(w, queryX, 0); got != 0 {
+		t.Fatalf("wrapped-distance rally score=%d, want distant target excluded", got)
+	}
+	if got := fixedWordDelta(numeric.Fixed(-1<<31), numeric.Fixed(1<<31-1)); got != 1 {
+		t.Fatalf("boundary delta=%d, want signed-word wrap to 1", got)
+	}
+}
+
+func TestExploreMovePatrolSequenceAndEdgeDraws(t *testing.T) {
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "scout"}, UnitName: "scout", CanMove: true, CanPatrol: true, MaxDamage: 100}
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{"scout": def}}
+	terrain := &world.Terrain{CellW: 31, CellH: 25}
+	w := newAIFixtureWorld(8, cat)
+	var group []pool.Handle
+	for i := 0; i < 5; i++ {
+		h, err := w.Create(def, 0, numeric.FixedFromInt(int64(40+i)), 0, numeric.FixedFromInt(40))
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.Unit(h).Group = 8
+		group = append(group, h)
+	}
+
+	seed := uint32(73)
+	probe := rng.NewSimulation(seed)
+	deadlineDraw := probe.Uint32n(900)
+	legs := probe.Uint32n(2) + 2
+	wg, hg := uint32((terrain.CellW*16)>>3), uint32((terrain.CellH*16)>>3)
+	wantX := make([]numeric.Fixed, legs)
+	wantZ := make([]numeric.Fixed, legs)
+	for i := range wantX {
+		wantX[i] = numeric.FixedFromInt(120 + int64(int32(probe.Uint32n(wg))-int32(wg)/2))
+		wantZ[i] = numeric.FixedFromInt(90 + int64(int32(probe.Uint32n(hg))-int32(hg)/2))
+	}
+	r := rng.NewSimulation(seed)
+	m := &Manager{Player: 0, RNG: &r, Terrain: terrain, GroupExplore: []pool.Handle{group[1], group[0]}}
+	m.Strategic.CenterX, m.Strategic.CenterY, m.Strategic.CenterZ = numeric.FixedFromInt(120), numeric.FixedFromInt(17), numeric.FixedFromInt(90)
+	for k := TaskKind(0); k < TaskKindCount; k++ {
+		m.Deadlines[k] = 1000
+	}
+	m.Deadlines[TaskExplore] = 20
+	m.runDueTasks(20, w, nil)
+	if m.Deadlines[TaskExplore] != 50+deadlineDraw || r.State != probe.State || r.Draws() != probe.Draws() {
+		t.Fatalf("explore RNG ledger deadline=%d draws=%d state=%d, want deadline=%d draws=%d state=%d", m.Deadlines[TaskExplore], r.Draws(), r.State, 50+deadlineDraw, probe.Draws(), probe.State)
+	}
+	for _, h := range group { // broadcast follows stored group membership, not vector membership/order
+		nodes := orders.QueueOfUnit(w.Unit(h)).Primary()
+		if len(nodes) != int(legs) {
+			t.Fatalf("scout %d route length=%d, want %d", h, len(nodes), legs)
+		}
+		for i, node := range nodes {
+			wantID := orders.Lookup("QPatrol")
+			if i == 0 {
+				wantID = orders.Lookup("Move_Ground")
+			}
+			if node.ID != wantID || node.GoalX != wantX[i] || node.GoalY != numeric.FixedFromInt(17) || node.GoalZ != wantZ[i] {
+				t.Fatalf("scout %d leg %d=%+v, want id=%d goal=(%d,%d)", h, i, node, wantID, wantX[i], wantZ[i])
+			}
+		}
+	}
+
+	// Five members take the exact three-draw edge arm and replace the route.
+	for _, h := range group {
+		orders.QueueOfUnit(w.Unit(h)).SetPrimary(nil)
+	}
+	r = rng.NewSimulation(seed)
+	probe = rng.NewSimulation(seed)
+	orientation := probe.Uint32n(2)
+	var edgeX, edgeZ int32
+	if orientation != 0 {
+		edgeX = int32(probe.Uint32n(uint32(terrain.CellW * 16)))
+		if probe.Uint32n(2) == 0 {
+			edgeZ = terrain.CellH*16 - 1
+		}
+	} else {
+		if probe.Uint32n(2) == 0 {
+			edgeX = terrain.CellW*16 - 1
+		}
+		edgeZ = int32(probe.Uint32n(uint32(terrain.CellH * 16)))
+	}
+	m.RNG, m.GroupExplore = &r, group
+	m.doExplore(21, w, nil)
+	if r.Draws() != 3 || r.State != probe.State {
+		t.Fatalf("edge explore draws/state=%d/%d, want 3/%d", r.Draws(), r.State, probe.State)
+	}
+	nodes := orders.QueueOfUnit(w.Unit(group[0])).Primary()
+	if len(nodes) != 1 || nodes[0].ID != orders.Lookup("QPatrol") || nodes[0].GoalX != numeric.FixedFromInt(int64(edgeX)) || nodes[0].GoalZ != numeric.FixedFromInt(int64(edgeZ)) {
+		t.Fatalf("edge patrol=%v, want (%d,%d)", nodes, edgeX, edgeZ)
+	}
+}
+
+func TestExploreTargetsRemainSignedPositionWords(t *testing.T) {
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "scout"}, UnitName: "scout", CanMove: true, CanPatrol: true, MaxDamage: 100}
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{"scout": def}}
+	w := newAIFixtureWorld(8, cat)
+	h, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Unit(h).Group = 8
+
+	// Choose a near-centre scatter whose positive X offset crosses MaxInt32.
+	terrain := &world.Terrain{CellW: 8, CellH: 8}
+	seed := uint32(1)
+	var dx int32
+	for {
+		probe := rng.NewSimulation(seed)
+		probe.Uint32n(2)
+		dx = int32(probe.Uint32n(uint32((terrain.CellW*16)>>3))) - (terrain.CellW*16>>3)/2
+		if dx > 0 {
+			break
+		}
+		seed++
+	}
+	centreX := numeric.Fixed(1<<31 - 33)
+	r := rng.NewSimulation(seed)
+	m := &Manager{Player: 0, RNG: &r, Terrain: terrain, GroupExplore: []pool.Handle{h}}
+	m.Strategic.CenterX, m.Strategic.CenterY, m.Strategic.CenterZ = centreX, 17, numeric.FixedOne
+	m.doExplore(1, w, nil)
+	nodes := orders.QueueOfUnit(w.Unit(h)).Primary()
+	wantX := numeric.Fixed(int32(centreX) + (dx << 16))
+	if len(nodes) == 0 || nodes[0].GoalX != wantX {
+		t.Fatalf("near explore X=%v, want signed-word wrapped %d", nodes, wantX)
+	}
+
+	// At the largest researched extent, the far edge is 0xffff0000 as a
+	// signed position word, not a widened positive integer [08 R-AI-01 §6].
+	for len(m.GroupExplore) < 5 {
+		next, createErr := w.Create(def, 0, 0, 0, 0)
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		w.Unit(next).Group = 8
+		m.GroupExplore = append(m.GroupExplore, next)
+	}
+	orders.QueueOfUnit(w.Unit(h)).SetPrimary(nil)
+	terrain = &world.Terrain{CellW: 4096, CellH: 4096}
+	seed = 1
+	for {
+		probe := rng.NewSimulation(seed)
+		if probe.Uint32n(2) != 0 {
+			probe.Uint32n(65536)
+			if probe.Uint32n(2) == 0 {
+				break
+			}
+		}
+		seed++
+	}
+	r = rng.NewSimulation(seed)
+	m.RNG, m.Terrain = &r, terrain
+	m.doExplore(2, w, nil)
+	nodes = orders.QueueOfUnit(w.Unit(h)).Primary()
+	if len(nodes) != 1 || nodes[0].GoalZ != numeric.Fixed(-65536) {
+		t.Fatalf("far-edge explore=%v, want signed word Z=-65536", nodes)
+	}
+}
+
+func TestRallyConstructorOffMapProbeAndPerMemberAdmission(t *testing.T) {
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "attacker"}, UnitName: "attacker", CanAttack: true, CanMove: true, MaxDamage: 100}
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{"attacker": def}}
+	w := newAIFixtureWorld(4, cat)
+	mobile, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	immobile, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Unit(mobile).Group = 9
+	w.Unit(immobile).Group = 9
+	w.Unit(mobile).Flags |= units.ArmedStatus
+	w.Unit(immobile).Flags |= units.ArmedStatus
+	terrain := &world.Terrain{CellW: 32, CellH: 24}
+	seed := uint32(1)
+	for {
+		probe := rng.NewSimulation(seed)
+		if probe.Uint32n(10) != 0 {
+			break
+		}
+		seed++
+	}
+	r := rng.NewSimulation(seed)
+	var seenX, seenZ numeric.Fixed
+	m := &Manager{Player: 0, RNG: &r, GroupRally: []pool.Handle{immobile, mobile}}
+	if !m.InitializeBattleState(terrain, RallyBattleBindings{
+		ProbeKnown: func(_ uint8, x, _ numeric.Fixed, z numeric.Fixed) bool {
+			seenX, seenZ = x, z
+			return false
+		},
+		OrderAdmitted: func(u *units.Unit, _, _, _ numeric.Fixed) bool { return u.Handle == mobile },
+	}) {
+		t.Fatal("explicit rally battle initialization failed")
+	}
+	if m.InitializeBattleState(terrain, RallyBattleBindings{}) {
+		t.Fatal("rally battle constructor state initialized twice")
+	}
+	m.doRally(90, w, nil)
+	centreX := numeric.FixedFromInt(int64(terrain.CellW * 8))
+	centreZ := numeric.FixedFromInt(int64(terrain.CellH * 8))
+	if m.rallyBestX != centreX || m.rallyBestZ != centreZ || seenX != centreX*2 || seenZ != centreZ*2 {
+		t.Fatalf("rally constructor best=(%d,%d) probe=(%d,%d), want centre=(%d,%d) initial probe=(%d,%d)", m.rallyBestX, m.rallyBestZ, seenX, seenZ, centreX, centreZ, centreX*2, centreZ*2)
+	}
+	if r.Draws() != 1 {
+		t.Fatalf("unknown-ground rally drew %d body values, want only RNG(10)", r.Draws())
+	}
+	if q := orders.QueueOfUnit(w.Unit(immobile)); q != nil && len(q.Primary()) != 0 {
+		t.Fatalf("no-locomotion member bypassed ordinary admission: %v", q.Primary())
+	}
+	nodes := orders.QueueOfUnit(w.Unit(mobile)).Primary()
+	if len(nodes) != 1 || nodes[0].ID != orders.Lookup("Suppress") || nodes[0].GoalX != centreX || nodes[0].GoalZ != centreZ {
+		t.Fatalf("mobile rally order=%v, want Suppress at incumbent centre", nodes)
+	}
+}
+
+func TestRallyConstructorAndProbeAdditionWrapPositionWords(t *testing.T) {
+	def := &content.UnitDef{UnitName: "attacker", CanAttack: true, MaxDamage: 100}
+	w := newAIFixtureWorld(2, nil)
+	h, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Unit(h).Group = 9
+	terrain := &world.Terrain{CellW: 4096, CellH: 4096}
+	seed := uint32(1)
+	for {
+		probe := rng.NewSimulation(seed)
+		if probe.Uint32n(10) != 0 && probe.Uint32n(10) != 0 {
+			break
+		}
+		seed++
+	}
+	r := rng.NewSimulation(seed)
+	seen := make([]numeric.Fixed, 0, 2)
+	m := &Manager{Player: 0, RNG: &r, GroupRally: []pool.Handle{h}}
+	if !m.InitializeBattleState(terrain, RallyBattleBindings{
+		ProbeKnown: func(_ uint8, x, _, _ numeric.Fixed) bool {
+			seen = append(seen, x)
+			return false
+		},
+		OrderAdmitted: func(*units.Unit, numeric.Fixed, numeric.Fixed, numeric.Fixed) bool { return false },
+	}) {
+		t.Fatal("explicit rally battle initialization failed")
+	}
+	minWord := numeric.Fixed(-1 << 31)
+	if m.rallyBestX != minWord || m.rallyDriftX != minWord {
+		t.Fatalf("constructor best/drift=%d/%d, want MinInt32 position words", m.rallyBestX, m.rallyDriftX)
+	}
+	m.doRally(1, w, nil)
+	m.doRally(2, w, nil)
+	if len(seen) != 2 || seen[0] != 0 || seen[1] != minWord {
+		t.Fatalf("successive off-map probes=%v, want [0 %d] after word additions", seen, minWord)
+	}
+	if got := fixedWordNeg(-1 << 31); got != minWord {
+		t.Fatalf("MinInt32 drift negation=%d, want wrapped %d", got, minWord)
+	}
+}
+
+func TestRallyRequiresExplicitBattleBindings(t *testing.T) {
+	def := &content.UnitDef{UnitName: "attacker", CanAttack: true, MaxDamage: 100}
+	w := newAIFixtureWorld(2, nil)
+	h, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Unit(h).Group = 9
+	w.Unit(h).Flags |= units.ArmedStatus
+	terrain := &world.Terrain{CellW: 16, CellH: 12}
+	r := rng.NewSimulation(27)
+	m := &Manager{Player: 0, RNG: &r, Terrain: terrain, GroupRally: []pool.Handle{h}}
+	m.doRally(1, w, nil)
+	if m.rallyInitialized || r.Draws() != 0 {
+		t.Fatalf("rally lazily initialized=%v or drew %d values before battle binding", m.rallyInitialized, r.Draws())
+	}
+	if !m.InitializeBattleState(terrain, RallyBattleBindings{}) {
+		t.Fatal("explicit rally initialization failed")
+	}
+	m.doRally(2, w, nil)
+	if r.Draws() != 1 {
+		t.Fatalf("initialized rally drew %d values, want RNG(10) only", r.Draws())
+	}
+	if q := orders.QueueOfUnit(w.Unit(h)); q != nil && len(q.Primary()) != 0 {
+		t.Fatalf("nil rally admission binding submitted %v", q.Primary())
+	}
+}
+
+func TestWaveAndExploreNoTargetPathsAreDeterministicNoOps(t *testing.T) {
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "scout"}, UnitName: "scout", CanMove: true, CanPatrol: true, CanAttack: true, MaxDamage: 100}
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{"scout": def}}
+	w := newAIFixtureWorld(8, cat)
+	var group []pool.Handle
+	for i := 0; i < 6; i++ {
+		h, err := w.Create(def, 0, numeric.FixedFromInt(40), 0, numeric.FixedFromInt(40))
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.Unit(h).Group = 2
+		group = append(group, h)
+	}
+	r := rng.NewSimulation(19)
+	m := &Manager{
+		Player: 0, RNG: &r, Terrain: &world.Terrain{CellW: 16, CellH: 16}, GroupWaveA: group,
+		IsAlliance: func(uint8, uint8) bool { return false },
+	}
+	e := runtimeEconomy(0, 2)
+	m.doWave(1, w, e, waveAThreshold, waveMin, waveMax)
+	if !m.waveAEngaged {
+		t.Fatal("no-target attack arm did not preserve its engaged latch write")
+	}
+	for _, h := range group {
+		if q := orders.QueueOfUnit(w.Unit(h)); q != nil && len(q.Primary()) != 0 {
+			t.Fatalf("no-target wave submitted an order for %d: %v", h, q.Primary())
+		}
+		w.Unit(h).Group = 8
+	}
+	m.GroupExplore = group[:1]
+	m.Strategic.CenterX, m.Strategic.CenterZ = 0, 0
+	m.doExplore(2, w, e)
+	if r.Draws() != 0 {
+		t.Fatalf("no-target wave/explore body drew %d values, want zero", r.Draws())
+	}
+	if q := orders.QueueOfUnit(w.Unit(group[0])); q != nil && len(q.Primary()) != 0 {
+		t.Fatalf("no-target explore submitted an order: %v", q.Primary())
 	}
 }

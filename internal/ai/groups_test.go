@@ -238,14 +238,47 @@ func TestGroupCentroidUsesStoredPixelDomain(t *testing.T) {
 	// regroup target [R-P0-04; 03 §2.1; I3].
 	w.Unit(first).X = numeric.Fixed(-98304) // -1.5 pixels → high word -2
 	w.Unit(second).X = numeric.Fixed(32768) // +0.5 pixels → stored word 0
+	w.Unit(first).Y = numeric.FixedFromInt(7)
+	w.Unit(second).Y = numeric.FixedFromInt(3)
 	w.Unit(first).Z = numeric.Fixed(-98304)
 	w.Unit(second).Z = numeric.Fixed(-32768)
-	x, z, ok := groupCentroid([]pool.Handle{first, second}, w)
+	x, y, z, ok := groupCentroid([]pool.Handle{first, second}, w)
 	if !ok {
 		t.Fatal("groupCentroid reported empty group")
 	}
-	if x != -numeric.Fixed(65536) || z != -numeric.Fixed(65536) {
-		t.Fatalf("groupCentroid = (%d,%d), want high-word centroid (-65536,-65536)", x, z)
+	if x != -numeric.Fixed(65536) || y != numeric.FixedFromInt(5) || z != -numeric.Fixed(65536) {
+		t.Fatalf("groupCentroid = (%d,%d,%d), want high-word centroid (-65536,327680,-65536)", x, y, z)
+	}
+}
+
+func TestGroupCentroidNarrowsSignedWordAndWrapsInt32Sum(t *testing.T) {
+	def := &content.UnitDef{UnitName: "centroid", MaxDamage: 100}
+	w := newAIFixtureWorld(2, nil)
+	h, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := w.Unit(h)
+	// Raw high word 0x8000 is a signed -32768 [08 R-AI-01 §9].
+	u.X = numeric.Fixed(0x80000000)
+	x, _, _, ok := groupCentroid([]pool.Handle{h}, w)
+	if !ok || x != numeric.Fixed(-0x80000000) {
+		t.Fatalf("signed-high-word centroid x=%d ok=%v, want -2147483648", x, ok)
+	}
+
+	// Repeating one live handle exercises the specified 32-bit accumulator
+	// overflow without constructing a huge non-stock fixture world.
+	u.X = numeric.FixedFromInt(32767)
+	handles := make([]pool.Handle, 65538)
+	var sum int32
+	for i := range handles {
+		handles[i] = h
+		sum += 32767
+	}
+	x, _, _, ok = groupCentroid(handles, w)
+	want := numeric.Fixed(int32((sum / int32(len(handles))) << 16))
+	if !ok || x != want {
+		t.Fatalf("wrapped centroid x=%d, want %d", x, want)
 	}
 }
 

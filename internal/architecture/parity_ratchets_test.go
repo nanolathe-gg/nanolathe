@@ -359,7 +359,7 @@ var debtMarkerTotals = map[string]int{
 	"fallback":       185,
 	"guess":          10,
 	"plausible":      1,
-	"todo(question)": 319,
+	"todo(question)": 318,
 }
 
 var debtMarkerFileCounts = map[string]map[string]int{
@@ -525,7 +525,6 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/session/step.go":                 2,
 		"internal/session/strips.go":               15,
 		"internal/session/trigger_adapter.go":      1,
-		"internal/triggers/parse.go":               1,
 		"internal/sim/numeric/numeric.go":          1,
 		"internal/sim/numeric/trig.go":             1,
 		"internal/sim/rng/rng.go":                  1,
