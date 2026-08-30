@@ -13,8 +13,8 @@ import (
 // owner (construction.Service) and no other package mutates Remaining
 // [05 "Construction target state"] [05 "Construction arithmetic"].
 func TestP0I02_UnfinishedNeverProgresses(t *testing.T) {
-	world := NewSliced(10, nil)
-	def := &content.UnitDef{MaxDamage: 100, Limit: -1}
+	world := newFixtureWorld(10, nil)
+	def := &content.UnitDef{UnitName: "tick-unfinished", MaxDamage: 100, Limit: -1}
 	// Create as nanoframe with Remaining 1 [04 §2.3] C3 remaining 1→0.
 	h, err := world.Create(def, 3, 0, 0, 0)
 	if err != nil {
@@ -46,12 +46,32 @@ func TestP0I02_UnfinishedNeverProgresses(t *testing.T) {
 	}
 }
 
+func TestHealthSampleKeepsCurrentAndPriorWindows(t *testing.T) {
+	world := newFixtureWorld(2, nil)
+	def := &content.UnitDef{UnitName: "tick-health", MaxDamage: 100, Limit: -1}
+	h, err := world.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := world.Unit(h)
+	u.Health = 100
+	world.StepPreUpdate(h, 30)
+	if u.CurrentSample != 100 || u.PriorSample != 0 {
+		t.Fatalf("first health window current=%d prior=%d, want 100/0", u.CurrentSample, u.PriorSample)
+	}
+	u.Health = 50
+	world.StepPreUpdate(h, 60)
+	if u.CurrentSample != 50 || u.PriorSample != 100 {
+		t.Fatalf("second health window current=%d prior=%d, want 50/100", u.CurrentSample, u.PriorSample)
+	}
+}
+
 // TestP0I02_CompletedNoInventedProgress ensures a completed unit does not
 // get invented progress or spurious callbacks. The old Remaining -=0.01 path
 // is deleted; Tick must not synthesize completion ticks [05].
 func TestP0I02_CompletedNoInventedProgress(t *testing.T) {
-	world := NewSliced(10, nil)
-	def := &content.UnitDef{MaxDamage: 100}
+	world := newFixtureWorld(10, nil)
+	def := &content.UnitDef{UnitName: "tick-completed", MaxDamage: 100}
 	h, _ := world.Create(def, 0, 0, 0, 0)
 	u := world.Unit(h)
 	u.Remaining = 0 // completed [04 §2.3] C3 1→0 done
@@ -81,8 +101,8 @@ func TestP0I02_CompletedNoInventedProgress(t *testing.T) {
 // CanFire. This stub uses the units-local Slot which carries cob.AimSlot
 // without importing combat (cycle via combat→economy→units) [06 §1.2] P0-10.
 func TestP0I02_AimBlocksFiring(t *testing.T) {
-	world := NewSliced(4, nil)
-	def := &content.UnitDef{MaxDamage: 100, Limit: -1}
+	world := newFixtureWorld(4, nil)
+	def := &content.UnitDef{UnitName: "tick-complete", MaxDamage: 100, Limit: -1}
 	// Weapon def minimal for IsPopulated true.
 	wdef := &content.WeaponDef{}
 	// Need to set ID etc? WeaponDef fields minimal; non-nil suffices for slot.
@@ -144,8 +164,8 @@ func TestP0I02_AimBlocksFiring(t *testing.T) {
 // ScriptState and that Tick drains the VM without crashing when no VM is bound.
 // When a VM exists, Drain(1) advances piece animation [04 §4.6][GAP T15].
 func TestP0I02_COBPieceTransforms(t *testing.T) {
-	world := NewSliced(4, nil)
-	def := &content.UnitDef{MaxDamage: 100}
+	world := newFixtureWorld(4, nil)
+	def := &content.UnitDef{UnitName: "tick-sample", MaxDamage: 100}
 	h, _ := world.Create(def, 0, 0, 0, 0)
 	u := world.Unit(h)
 
@@ -196,8 +216,8 @@ func TestP0I02_COBPieceTransforms(t *testing.T) {
 
 // TestP0I02_IterationOrder proves unit iteration remains player 0..9 then slot asc [01 §6.2] C2 [P0-16].
 func TestP0I02_IterationOrder(t *testing.T) {
-	world := NewSliced(5, nil) // 5 per player, slots 1..5 p0, 6..10 p1, etc.
-	def := &content.UnitDef{MaxDamage: 100, Limit: -1}
+	world := newFixtureWorld(5, nil) // 5 per player, slots 1..5 p0, 6..10 p1, etc.
+	def := &content.UnitDef{UnitName: "tick-order", MaxDamage: 100, Limit: -1}
 	// Create out-of-order players to verify Tick visits 0..9 asc then slots asc.
 	// Fill some slots intentionally sparse.
 	h4, _ := world.Create(def, 4, 0, 0, 0) // player 4 slot 21?
@@ -245,8 +265,8 @@ func TestP0I02_IterationOrder(t *testing.T) {
 // projectile-phase damage shape (RS-08) — stays resolvable until the
 // explicit teardown cleanup.
 func TestP0I02_SlotEndDeathFinalization(t *testing.T) {
-	world := NewSliced(4, nil)
-	def := &content.UnitDef{MaxDamage: 100}
+	world := newFixtureWorld(4, nil)
+	def := &content.UnitDef{UnitName: "tick-death", MaxDamage: 100}
 	h, _ := world.Create(def, 0, 0, 0, 0)
 	u := world.Unit(h)
 	u.Health = 0 // lethal but not yet Dying
@@ -284,8 +304,8 @@ func TestP0I02_SlotEndDeathFinalization(t *testing.T) {
 // TestP0I02_ReloadDecrement proves weapon reload countdown decrements each tick
 // before target resolve [06 §1.2][06 §4.1] P0-10 without firing.
 func TestP0I02_ReloadDecrement(t *testing.T) {
-	world := NewSliced(4, nil)
-	def := &content.UnitDef{MaxDamage: 100}
+	world := newFixtureWorld(4, nil)
+	def := &content.UnitDef{UnitName: "tick-live", MaxDamage: 100}
 	wdef := &content.WeaponDef{}
 	h, _ := world.Create(def, 0, 0, 0, 0)
 	u := world.Unit(h)

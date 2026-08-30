@@ -11,8 +11,7 @@ func activePlayer(p *Player) {
 	p.Exists = true
 	p.ControllerState = 1 // settling state 1 ∈ both active and settling sets
 	p.IsObserver = false
-	p.StatusHalfwordAt144 = 1 // nonzero so predicate true regardless of StatusWord
-	p.StatusWordAt140 = 0
+	p.SetSettlementStatusPair(1, 0) // nonzero first value passes the literal gate
 	p.GameEnded = false
 	p.EndGameCountdown = -1
 	p.Helper1Deadline = 0
@@ -259,8 +258,7 @@ func TestGateChainIndependentlyBlocks(t *testing.T) {
 			name: "statusPair false",
 			mutate: func(p *Player) {
 				activePlayer(p)
-				p.StatusHalfwordAt144 = 0 // halfword zero
-				p.StatusWordAt140 = 1     // neighbour non-zero => predicate false (0==0? 0!=0 false, 1==0 false => false)
+				p.SetSettlementStatusPair(0, 1) // both literal terms fail
 			},
 		},
 		{
@@ -423,7 +421,7 @@ func TestPerTickHelpersNeverTouchStock(t *testing.T) {
 	svc.Players[0].Helper1Deadline = 0
 	svc.Players[0].Helper2Deadline = 0
 	w := units.NewSliced(10, nil)
-	def := &content.UnitDef{}
+	def := economyFixtureDef(&content.UnitDef{})
 	def.MaxDamage = 100
 	_, _ = w.Create(def, 0, 0, 0, 0)
 	svc.TickPlayer(0, 0, w, nil)
@@ -524,8 +522,11 @@ func TestSeedingSemantics(t *testing.T) {
 // TestShareCadences verifies C12 cadences 60 and 450.
 func TestShareCadences(t *testing.T) {
 	var svc Service
+	svc.Networked = true
 	activePlayer(&svc.Players[0])
 	activePlayer(&svc.Players[1])
+	svc.Players[1].ControllerState = 3
+	svc.Players[1].OptionKind = 1
 	svc.ReferencePlayer = 0
 	svc.Players[0].AutoShareMetal = true
 	svc.Players[0].AutoShareEnergy = true
@@ -547,8 +548,8 @@ func TestShareCadences(t *testing.T) {
 	if svc.Players[0].Stock[Metal] >= 200 {
 		t.Fatalf("metal share at tick 60 should have transferred, stock %v", svc.Players[0].Stock[Metal])
 	}
-	if svc.Players[1].Stock[Metal] <= 10 {
-		t.Fatalf("metal share dst should have increased")
+	if svc.Players[1].Mirror[Metal].Production <= 0 {
+		t.Fatalf("metal share dst production should have increased")
 	}
 	// Reset stocks
 	svc.Players[0].Stock[Metal] = 200
@@ -616,11 +617,15 @@ func TestShareCadences(t *testing.T) {
 	}
 }
 
-// TestShareTransferUsesLedger verifies ShareTick uses ShareTransfer (live stock between passes)
+// TestShareTransferUsesLedger verifies local sharing debits stock and stages
+// the recipient credit in the ledger.
 func TestShareTransferUsesLedger(t *testing.T) {
 	var svc Service
+	svc.Networked = true
 	activePlayer(&svc.Players[0])
 	activePlayer(&svc.Players[1])
+	svc.Players[1].ControllerState = 3
+	svc.Players[1].OptionKind = 1
 	svc.ReferencePlayer = 0
 	svc.Players[0].AutoShareMetal = true
 	svc.Players[0].MetalShareThreshold = 0
@@ -634,8 +639,8 @@ func TestShareTransferUsesLedger(t *testing.T) {
 	if svc.Players[0].Stock[Metal] != 90 {
 		t.Fatalf("transfer should be min(gap, excess*ratio)=10, src stock 90 got %v", svc.Players[0].Stock[Metal])
 	}
-	if svc.Players[1].Stock[Metal] != 10 {
-		t.Fatalf("dst stock 10 got %v", svc.Players[1].Stock[Metal])
+	if svc.Players[1].Mirror[Metal].Production != 10 {
+		t.Fatalf("dst production 10 got %v", svc.Players[1].Mirror[Metal].Production)
 	}
 }
 

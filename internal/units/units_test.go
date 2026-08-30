@@ -11,7 +11,7 @@ import (
 
 func TestNonIdentityPlayerOrderAssignsWorldSlices(t *testing.T) {
 	order := pool.PlayerPermutation{2, 0, 1, 3, 4, 5, 6, 7, 8, 9}
-	world, err := NewSlicedWithOrder(2, nil, order)
+	world, err := newFixtureWorldWithOrder(2, nil, order)
 	if err != nil {
 		t.Fatalf("NewSlicedWithOrder: %v", err)
 	}
@@ -33,8 +33,8 @@ func TestNonIdentityPlayerOrderAssignsWorldSlices(t *testing.T) {
 }
 
 func TestUnitPoolLowestFreeAndImmediateReuse(t *testing.T) {
-	world := NewSliced(4, nil)
-	def := &content.UnitDef{}
+	world := newFixtureWorld(4, nil)
+	def := &content.UnitDef{UnitName: "pool-reuse"}
 	def.MaxDamage = 100
 	h1, _ := world.Create(def, 0, 0, 0, 0)
 	h2, _ := world.Create(def, 0, 0, 0, 0)
@@ -67,8 +67,8 @@ func TestUnitPoolLowestFreeAndImmediateReuse(t *testing.T) {
 }
 
 func TestTickOrderPlayersThenSlots(t *testing.T) {
-	world := NewSliced(10, nil)
-	def := &content.UnitDef{}
+	world := newFixtureWorld(10, nil)
+	def := &content.UnitDef{UnitName: "pool-order"}
 	def.MaxDamage = 100
 	// Create units for players out of order to test the sweep visits players 0..9 asc then slots asc.
 	hA, _ := world.Create(def, 1, numeric.Fixed(100*65536), 0, 0)
@@ -85,7 +85,7 @@ func TestTickOrderPlayersThenSlots(t *testing.T) {
 	// never be mutated by the unit sweep [05 "Construction target state"]. The old
 	// 0.01 stub is deleted. Verify unfinished unit never progresses in the sweep
 	// even across 100 sweeps when no builder exists.
-	def2 := &content.UnitDef{}
+	def2 := &content.UnitDef{UnitName: "pool-order-second"}
 	def2.MaxDamage = 100
 	hC, _ := world.Create(def2, 0, 0, 0, 0)
 	world.units[int(hC)].Remaining = 1.0 // nanoframe state 1→0 [04 §2.3] C3
@@ -100,7 +100,7 @@ func TestTickOrderPlayersThenSlots(t *testing.T) {
 // P0-16 sliced pool tests
 
 func TestP016_PerDefLimit_SlicedWorld(t *testing.T) {
-	world := NewSliced(5, nil) // 5 per player
+	world := newFixtureWorld(5, nil) // 5 per player
 	def := &content.UnitDef{UnitName: "ARMLAB", MaxDamage: 100}
 	def.LimitEnabled = true
 	def.Limit = 2
@@ -127,7 +127,7 @@ func TestP016_PerDefLimit_SlicedWorld(t *testing.T) {
 }
 
 func TestP016_SliceFullVsGlobalSpare_SlicedWorld(t *testing.T) {
-	world := NewSliced(3, nil) // 3 per player
+	world := newFixtureWorld(3, nil) // 3 per player
 	def := &content.UnitDef{MaxDamage: 100, UnitName: "A", Limit: -1}
 	// Fill player 0 slice 1..3
 	for i := 0; i < 3; i++ {
@@ -153,9 +153,9 @@ func TestP016_MaxUnitsLogicalIgnored(t *testing.T) {
 	// P0-16 §7.4: the mission logical maxunits value does NOT gate the allocator.
 	// We prove by allocating 2 units even though a logical limit of 1 would
 	// forbid it. The allocator only cares about physical cap and per-def slice.
-	world := NewSliced(5, nil)
+	world := newFixtureWorld(5, nil)
 	// Pretend logical maxunits=1 (we just don't check it)
-	def := &content.UnitDef{MaxDamage: 100, Limit: -1}
+	def := &content.UnitDef{UnitName: "pool-limits", MaxDamage: 100, Limit: -1}
 	// Both should succeed regardless of hypothetical logical 1
 	h1, err := world.Create(def, 0, 0, 0, 0)
 	if err != nil {
@@ -171,8 +171,8 @@ func TestP016_MaxUnitsLogicalIgnored(t *testing.T) {
 }
 
 func TestP016_ForcedSlotOOB_World(t *testing.T) {
-	world := NewSliced(5, nil) // p0 1..5 p1 6..10
-	def := &content.UnitDef{MaxDamage: 100, Limit: -1}
+	world := newFixtureWorld(5, nil) // p0 1..5 p1 6..10
+	def := &content.UnitDef{UnitName: "pool-forced", MaxDamage: 100, Limit: -1}
 	// Valid forced within slice
 	if _, err := world.CreateWithForcedSlot(def, 0, 0, 0, 0, 2); err != nil {
 		t.Fatalf("valid forced 2: %v", err)
@@ -196,7 +196,7 @@ func TestP016_ForcedSlotOOB_World(t *testing.T) {
 }
 
 func TestP016_StaleDamageAliasSlot5(t *testing.T) {
-	world := NewSliced(10, nil) // p0 1..10 includes slot 5
+	world := newFixtureWorld(10, nil) // p0 1..10 includes slot 5
 	defA := &content.UnitDef{UnitName: "ARMSTUMP", MaxDamage: 100, Limit: -1}
 	defB := &content.UnitDef{UnitName: "ARMSOLAR", MaxDamage: 100, Limit: -1}
 	// Allocate 5 units for player0 to place victim at slot5
@@ -250,8 +250,8 @@ func TestP016_StaleDamageAliasSlot5(t *testing.T) {
 }
 
 func TestP016_FreeAndReallocateLowestFreeSameTick(t *testing.T) {
-	world := NewSliced(5, nil)
-	def := &content.UnitDef{MaxDamage: 100, Limit: -1}
+	world := newFixtureWorld(5, nil)
+	def := &content.UnitDef{UnitName: "pool-per-player", MaxDamage: 100, Limit: -1}
 	// Allocate 1,2,3
 	h1, _ := world.Create(def, 0, 0, 0, 0) //1
 	h2, _ := world.Create(def, 0, 0, 0, 0) //2
@@ -280,12 +280,12 @@ func TestP016_ZeroRNGAllocation(t *testing.T) {
 		t.Skip("rng not seeded")
 	}
 	before := rng.Global.Sim.Draws()
-	world := NewSliced(10, nil)
-	def := &content.UnitDef{MaxDamage: 100, LimitEnabled: true, Limit: 2}
+	world := newFixtureWorld(10, nil)
+	def := &content.UnitDef{UnitName: "pool-limit", MaxDamage: 100, LimitEnabled: true, Limit: 2}
 	world.Create(def, 0, 0, 0, 0)
 	world.Create(def, 0, 0, 0, 0)
 	world.Create(def, 0, 0, 0, 0) // fail per-def limit
-	world.CreateWithForcedSlot(&content.UnitDef{MaxDamage: 100, Limit: -1}, 1, 0, 0, 0, 15)
+	world.CreateWithForcedSlot(&content.UnitDef{UnitName: "pool-forced-oob", MaxDamage: 100, Limit: -1}, 1, 0, 0, 0, 15)
 	world.FreeImmediate(pool.Handle(1))
 	if after := rng.Global.Sim.Draws(); after != before {
 		t.Fatalf("allocation drew RNG %d -> %d", before, after)
@@ -293,7 +293,7 @@ func TestP016_ZeroRNGAllocation(t *testing.T) {
 }
 
 func TestOnDeathExtraFiresExactlyOnceAlongsidePrimary(t *testing.T) {
-	world := NewSliced(2, nil)
+	world := newFixtureWorld(2, nil)
 	def := &content.UnitDef{UnitName: "death-extra", MaxDamage: 100, Limit: -1}
 	h, err := world.Create(def, 0, 0, 0, 0)
 	if err != nil {

@@ -49,8 +49,7 @@ func newLoopTestSession(t *testing.T, nUnits int) *Session {
 		p.Exists = true
 		p.ControllerState = uint8(i + 1) // 1 human, 2 computer
 		p.IsObserver = false
-		p.StatusHalfwordAt144 = 1
-		p.StatusWordAt140 = 0
+		p.SetSettlementStatusPair(1, 0)
 		p.GameEnded = false
 		p.EndGameCountdown = -1
 	}
@@ -110,7 +109,7 @@ func TestLoop_SlotCreationSameTickVisibility(t *testing.T) {
 		p := &s.Econ.Players[i]
 		p.Exists = true
 		p.ControllerState = uint8(i + 1)
-		p.StatusHalfwordAt144 = 1
+		p.SetSettlementStatusPair(1, 0)
 		p.GameEnded = false
 		p.EndGameCountdown = -1
 	}
@@ -247,7 +246,7 @@ func TestLoop_DeathFinalizeBeforeLaterSlot(t *testing.T) {
 		p := &s.Econ.Players[i]
 		p.Exists = true
 		p.ControllerState = uint8(i + 1)
-		p.StatusHalfwordAt144 = 1
+		p.SetSettlementStatusPair(1, 0)
 		p.GameEnded = false
 		p.EndGameCountdown = -1
 	}
@@ -338,7 +337,7 @@ func TestLoop_MoveArrival(t *testing.T) {
 		p := &s.Econ.Players[i]
 		p.Exists = true
 		p.ControllerState = uint8(i + 1)
-		p.StatusHalfwordAt144 = 1
+		p.SetSettlementStatusPair(1, 0)
 		p.GameEnded = false
 		p.EndGameCountdown = -1
 	}
@@ -418,7 +417,7 @@ func TestLoop_BuildProgress(t *testing.T) {
 		p := &s.Econ.Players[i]
 		p.Exists = true
 		p.ControllerState = uint8(i + 1)
-		p.StatusHalfwordAt144 = 1
+		p.SetSettlementStatusPair(1, 0)
 		p.GameEnded = false
 		p.EndGameCountdown = -1
 		// Give resources
@@ -511,7 +510,7 @@ func TestLoop_AimReturnControlsProjectile(t *testing.T) {
 		p := &s.Econ.Players[i]
 		p.Exists = true
 		p.ControllerState = uint8(i + 1)
-		p.StatusHalfwordAt144 = 1
+		p.SetSettlementStatusPair(1, 0)
 		p.GameEnded = false
 		p.EndGameCountdown = -1
 	}

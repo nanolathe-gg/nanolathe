@@ -21,12 +21,11 @@ func isSettlingState(s uint8) bool {
 	return s == 1 || s == 2
 }
 
-// statusPairPredicate is the literal status-pair predicate per [05 "Authoritative settlement order"] C4.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// statusPairPredicate preserves the unresolved literal status-pair gate
+// [05 "Authoritative settlement order"] C4.
 func statusPairPredicate(half int16, word int32) bool {
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): no located writer for either status member; keep the
+	// predicate literal until the producer boundary is resolved.
 	return half != 0 || word == 0
 }
 
@@ -131,7 +130,8 @@ func (s *Service) TickPlayer(player int, tick uint32, w *units.World, beforeDead
 	if p.IsObserver {
 		return
 	}
-	if !statusPairPredicate(p.StatusHalfwordAt144, p.StatusWordAt140) {
+	statusFirst, statusSecond := p.SettlementStatusPair()
+	if !statusPairPredicate(statusFirst, statusSecond) {
 		return
 	}
 	if !isSettlingState(p.ControllerState) {
@@ -218,7 +218,8 @@ func (s *Service) SeedDeadlines(tick uint32) {
 // ShareTick is the automatic sharing dispatcher per [05 "Allied resource and sensor sharing"] C12.
 // It runs once per tick after the player phase, for the reference player only, and self-gates:
 // metal/energy transfers when globalTick %60==0, sensor sharing at %450==0.
-// Transfers mutate live stock between passes via ShareTransfer.
+// Local transfers debit live stock and stage a request; received packets stage
+// production without repeating the source debit [R-SHARE-01 §2, §4].
 func (s *Service) ShareTick(tick uint32) {
 	if s == nil {
 		return
@@ -243,6 +244,9 @@ func (s *Service) shareResource(ref int, res Res) {
 	if ref < 0 || ref >= 10 {
 		return
 	}
+	if !s.Networked {
+		return
+	}
 	src := &s.Players[ref]
 	if !src.Exists || src.IsObserver || !isActiveState(src.ControllerState) {
 		return
@@ -253,12 +257,12 @@ func (s *Service) shareResource(ref int, res Res) {
 	switch res {
 	case Metal:
 		enabled = src.AutoShareMetal
-		threshold = src.MetalShareThreshold // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		ratio = 0.33333334                  // constant _004FD4B8 [P1-06] metal ratio via FLD 0.33333334
+		threshold = src.MetalShareThreshold // distinct sharing threshold [R-SHARE-01 §3]
+		ratio = 0.33333334                  // [R-SHARE-01 §3]
 	case Energy:
 		enabled = src.AutoShareEnergy
-		threshold = src.EnergyShareThreshold // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		ratio = 0.5                          // constant _004FD4BC [P1-06] energy ratio
+		threshold = src.EnergyShareThreshold // distinct sharing threshold [R-SHARE-01 §3]
+		ratio = 0.5                          // [R-SHARE-01 §3]
 	default:
 		return
 	}
@@ -276,7 +280,7 @@ func (s *Service) shareResource(ref int, res Res) {
 			continue
 		}
 		dst := &s.Players[i]
-		if !dst.Exists || dst.IsObserver || !isActiveState(dst.ControllerState) {
+		if !dst.Exists || dst.IsObserver || !isActiveState(dst.ControllerState) || dst.ControllerState != 3 || dst.OptionKind != 1 || dst.Eliminated {
 			continue
 		}
 		if !src.Allies[i] {
@@ -307,11 +311,14 @@ func (s *Service) shareResource(ref int, res Res) {
 	if transfer <= 0 {
 		return
 	}
-	ShareTransfer(src, dst, res, transfer)
+	s.transfer(src, dst, res, transfer, true)
 }
 
 func (s *Service) shareSensors(ref int) {
 	if s == nil {
+		return
+	}
+	if !s.Networked {
 		return
 	}
 	if ref < 0 || ref >= 10 {
@@ -324,45 +331,37 @@ func (s *Service) shareSensors(ref int) {
 	if !src.AutoShareSensor {
 		return
 	}
-	s.SensorShareCalls++
+	for i := 0; i < 10; i++ {
+		if i == ref {
+			continue
+		}
+		dst := &s.Players[i]
+		if dst.Exists && !dst.IsObserver && !dst.Eliminated && dst.ControllerState == 3 && dst.OptionKind == 1 && src.Allies[i] {
+			s.SensorShareCalls++
+		}
+	}
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Network receiver copies every field into participant state unconditionally, no comparison/threshold/abort — overwrite-sync.
-// Subtype 1 metal, 2 energy, 3 sensor; amount at +13 f32, src/dst DPID at +5/+9.
-// Over-cap gap clamp still applies via gap = capacity - current on receiver side? For overwrite-sync, receiver just applies amount via ShareTransfer without rechecking threshold, gap clamp still enforced via min(gap, amount) where amount from packet.
-// For P1-06, local deduction then remote copy latency via DirectPlay queue; we model immediate local effect.
+// ApplySharePacket applies a received sharing transfer. Receipt does not redo
+// source thresholds or capacity checks; it credits the destination production
+// bucket exactly once [R-SHARE-01 §4].
 func ApplySharePacket(s *Service, subtype int, amount float32, srcIdx, dstIdx int) {
 	if s == nil || srcIdx < 0 || srcIdx >= 10 || dstIdx < 0 || dstIdx >= 10 {
 		return
 	}
-	// Overwrite-sync: no threshold/threshold gate, just transfer amount clamped by gap [P1-06].
-	// Note: archived snapshots bounded negative — no consumer [P1-06].
 	var res Res
 	switch subtype {
 	case 1:
-		res = Metal
-	case 2:
 		res = Energy
+	case 2:
+		res = Metal
 	case 3:
-		// sensor sharing subtype 3 copies visibility bits, not stock — no economy stock change.
-		s.SensorShareCalls++
+		// Mapping-grid merge is owned by visibility; economy records no stock.
 		return
 	default:
 		return
 	}
 	src := &s.Players[srcIdx]
 	dst := &s.Players[dstIdx]
-	// Over-cap gap clamp: min(gap, amount) [P1-06].
-	gap := dst.Capacity[res] - dst.Stock[res]
-	if gap <= 0 {
-		return
-	}
-	if amount > gap {
-		amount = gap
-	}
-	if amount <= 0 {
-		return
-	}
-	ShareTransfer(src, dst, res, amount)
+	s.transfer(src, dst, res, amount, false)
 }

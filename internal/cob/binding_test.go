@@ -47,7 +47,7 @@ func TestBindStrictLinksPiecesAndRunsCreateOnce(t *testing.T) {
 		t.Fatal("Create was not marked invoked")
 	}
 	if got := binding.VM.DrainCalls; got != 1 {
-		t.Fatalf("Create mode-I barrier made %d drains, want exactly one", got)
+		t.Fatalf("Create D+wake barrier made %d drains, want exactly one", got)
 	}
 }
 

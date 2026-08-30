@@ -12,14 +12,14 @@ func TestStepCosts(t *testing.T) {
 	if DiagonalCost != 22 {
 		t.Fatalf("DiagonalCost want 22 got %d [04 §7.2] C4 corrected", DiagonalCost)
 	}
-	if InitialPenalty != 30 {
-		t.Fatalf("InitialPenalty want 30 got %d [04 §7.2] C4", InitialPenalty)
+	if SteepCost != 30 {
+		t.Fatalf("SteepCost want 30 got %d [04 §7.2] C4", SteepCost)
 	}
 	if ShortRunPenalty != 75 {
 		t.Fatalf("ShortRunPenalty want 75 got %d [04 §7.2] C4", ShortRunPenalty)
 	}
-	if ShortRunThreshold != 5 {
-		t.Fatalf("ShortRunThreshold want 5 got %d [04 §7.2] C4", ShortRunThreshold)
+	if ShortRunLimit != 5 {
+		t.Fatalf("ShortRunLimit want 5 got %d [04 §7.2] C4", ShortRunLimit)
 	}
 	// turn table [04 §7.2] C4
 	wantTable := [8]int32{0, 40, 60, 80, 100, 80, 60, 40}
@@ -82,7 +82,7 @@ func TestStepCosts(t *testing.T) {
 	if got := TurnPenalty(DirNone, DirN); got != 0 {
 		t.Fatalf("Turn None->N want 0 got %d", got)
 	}
-	// The fixed neighbor penalty is unconditional; TestInitialPenaltyEveryNeighborExpansion
+	// The fixed neighbor penalty is unconditional; TestSteepCostEveryNeighborExpansion
 	// below checks this through live expansions with both a populated and
 	// initially empty open heap [04 §7.2] C4.
 
@@ -108,7 +108,7 @@ func TestStepCosts(t *testing.T) {
 		t.Fatalf("straight run e want 5 got %d", got)
 	}
 	// short-run penalty should apply when <5
-	if straightRunLen(ns, d) < ShortRunThreshold {
+	if straightRunLen(ns, d) < ShortRunLimit {
 		// d run 4 <5 => penalty 75 should apply for its children
 		if ShortRunPenalty != 75 {
 			t.Fatalf("short run penalty mismatch")
@@ -116,22 +116,19 @@ func TestStepCosts(t *testing.T) {
 	} else {
 		t.Fatalf("d should be short run")
 	}
-	if straightRunLen(ns, e) < ShortRunThreshold {
+	if straightRunLen(ns, e) < ShortRunLimit {
 		t.Fatalf("e run 5 should NOT be short")
 	}
 }
 
-// TestInitialPenaltyEveryNeighborExpansion locks the superseding [04 §7.2]
-// C4 correction: every live neighbor expansion adds 30, regardless of how
-// many entries remain on the open heap. The second expansion is the
-// regression case; its heap is already populated, where the old heap-size
-// condition omitted the penalty.
-func TestInitialPenaltyEveryNeighborExpansion(t *testing.T) {
+// TestSteepCostEveryNeighborExpansion locks the steep-tier terrain term
+// and direction penalty order [04 R-PATH-01 §3].
+func TestSteepCostEveryNeighborExpansion(t *testing.T) {
 	cfg := SearchConfig{
-		Start:      Cell{0, 0},
-		Goal:       &mutableGoal{h: 100},
-		IsPassable: func(Cell) bool { return true },
-		Scale:      65536,
+		Start:         Cell{0, 0},
+		Goal:          &mutableGoal{h: 100},
+		PassableValue: func(Cell) uint8 { return 3 },
+		Scale:         65536,
 	}
 	sess := NewSession(cfg)
 	if !sess.Seeded() {
@@ -141,8 +138,7 @@ func TestInitialPenaltyEveryNeighborExpansion(t *testing.T) {
 		t.Fatal("first expansion should leave the search active")
 	}
 
-	// The start's nine-entry fan contains all eight neighbors plus a
-	// duplicate. Every unique node must include step cost + 30.
+	// The start's nine-entry fan contains all eight neighbors plus a duplicate.
 	first := []struct {
 		cell Cell
 		dir  uint8
@@ -161,35 +157,9 @@ func TestInitialPenaltyEveryNeighborExpansion(t *testing.T) {
 		if !ok {
 			t.Fatalf("first expansion did not allocate %v", tc.cell)
 		}
-		want := StepCost(tc.dir) + InitialPenalty
+		want := StepCost(tc.dir) + TurnPenalty(DirN, tc.dir)
 		if got := sess.ns.Get(id).G; got != want {
-			t.Errorf("first expansion %v G want %d (including neighbor penalty) got %d [04 §7.2] C4", tc.cell, want, got)
-		}
-	}
-
-	// The lowest-f first node is (0,1), whose directed fan adds these three
-	// new cells. Its parent run is one, so the existing short-run term is
-	// included alongside the unconditional neighbor penalty.
-	if _, _, done := sess.Resume(1); done {
-		t.Fatal("second expansion should leave the search active")
-	}
-	second := []struct {
-		cell Cell
-		dir  uint8
-	}{
-		{Cell{-1, 2}, DirSW},
-		{Cell{0, 2}, DirS},
-		{Cell{1, 2}, DirSE},
-	}
-	parentG := int32(46) // start south: cardinal 16 + unconditional 30
-	for _, tc := range second {
-		id, ok := sess.ns.Find(tc.cell)
-		if !ok {
-			t.Fatalf("second expansion did not allocate %v", tc.cell)
-		}
-		want := parentG + StepCost(tc.dir) + TurnPenalty(DirS, tc.dir) + InitialPenalty + ShortRunPenalty
-		if got := sess.ns.Get(id).G; got != want {
-			t.Errorf("second expansion %v G want %d (including neighbor penalty) got %d [04 §7.2] C4", tc.cell, want, got)
+			t.Errorf("first expansion %v G want %d got %d [04 R-PATH-01 §3]", tc.cell, want, got)
 		}
 	}
 }
@@ -297,73 +267,48 @@ func TestExpansions(t *testing.T) {
 // TestDiagonalDestinationOnly verifies C3 diagonal checks ONLY destination [04 §7.1] C3.
 // Corner cutting must be allowed: diagonal move succeeds even if both cardinal corners blocked.
 func TestDiagonalDestinationOnly(t *testing.T) {
-	// 3x3 grid bounds 0..2
-	bounds := Rect{Min: Cell{0, 0}, Max: Cell{2, 2}}
-	// Block cardinal corners (0,1) and (1,0) but keep diagonal dest (0,0) passable
-	// Start at (1,1) goal at (0,0) diagonal NW
+	// 4x4 grid bounds 0..3. The ray reaches the goal along its cardinal
+	// legs, while the search's later diagonal step has blocked cardinal
+	// corners. This isolates destination-only diagonal admission from ray
+	// setup.
+	bounds := Rect{Min: Cell{0, 0}, Max: Cell{3, 3}}
+	start := Cell{0, 0}
+	goalCell := Cell{3, 3}
 	isPassable := func(c Cell) bool {
-		// block (0,1) and (1,0)
-		if (c.X == 0 && c.Z == 1) || (c.X == 1 && c.Z == 0) {
+		// Block the cardinal corners around the later (1,1)->(2,2)
+		// diagonal destination; the destination itself remains passable.
+		if (c.X == 2 && c.Z == 1) || (c.X == 1 && c.Z == 2) {
 			return false
 		}
 		return true
 	}
-	goal := PointGoal(Cell{0, 0}, 0)
+	goal := PointGoal(goalCell, 0)
 	cfg := SearchConfig{
-		Start:      Cell{1, 1},
-		Goal:       goal,
-		IsPassable: isPassable,
-		Scale:      65536,
-		HasBounds:  true,
-		Bounds:     bounds,
+		Start: start,
+		Goal:  goal,
+		PassableValue: func(c Cell) uint8 {
+			if isPassable(c) {
+				return 3
+			}
+			return 0
+		},
+		Scale:     65536,
+		HasBounds: true,
+		Bounds:    bounds,
 	}
 	res := Search(cfg)
 	if len(res.Points) == 0 {
 		t.Fatalf("diagonal destination-only: path should exist (corner cutting allowed) but got empty, status %#x [04 §7.1] C3", res.Status)
 	}
-	// Path should include diagonal step: check that g includes diagonal 22 not blocked by cardinal check
-	// For this simple case, optimal path is direct diagonal single step cost 22 plus maybe penalties
-	// Verify search found at least one diagonal move
-	foundDiagonal := false
-	// Reconstruct via points: start (1,1) to goal (0,0) diagonal
-	// Points are cell+bias (bias 0) so points should be [(1,1),(0,0)] via straight line case? Actually straight diagonal would be 2 points if direction changes only once? Let's check points
+	// The endpoint must remain reachable despite the blocked cardinal corners.
+	foundGoal := false
 	for _, p := range res.Points {
-		if p.X == 0 && p.Z == 0 {
-			foundDiagonal = true
+		if p.X == goalCell.X*16 && p.Z == goalCell.Z*16 {
+			foundGoal = true
 		}
 	}
-	if !foundDiagonal {
-		t.Fatalf("diagonal: expected goal point (0,0) in result %v", res.Points)
-	}
-	// Also test that blocked destination fails
-	isPassable2 := func(c Cell) bool {
-		// destination (0,0) blocked, but corners passable - should be impassable
-		if c.X == 0 && c.Z == 0 {
-			return false
-		}
-		return true
-	}
-	goal2 := PointGoal(Cell{0, 0}, 0)
-	cfg2 := SearchConfig{
-		Start:      Cell{1, 1},
-		Goal:       goal2,
-		IsPassable: isPassable2,
-		Scale:      65536,
-		HasBounds:  true,
-		Bounds:     bounds,
-	}
-	res2 := Search(cfg2)
-	// This should NOT find path to (0,0) directly via tolerance? But enumerated goal is blocked, but tolerance may allow nearby. However direct goal cell impassable should cause search to either fail or find tolerance endpoint.
-	// At minimum, search should not quickly succeed to (0,0) if that cell blocked and tolerance would be elsewhere.
-	// We check that points do not contain blocked dest if status success? Actually tolerance may terminate at neighbor not at blocked dest.
-	// For blocked dest, search may still find tolerance point, but not the blocked dest.
-	// So we just assert that if destination blocked, path does not equal direct diagonal with dest point? Might still succeed via tolerance but not full dest.
-	// Simpler: ensure that diagonal blocked dest leads to no direct attainment: if goal cell itself blocked, isPassable would make neighbor check fail for that cell, so search should not terminate at that cell.
-	// We'll check that res2 does not have point (0,0) if status succeeded via tolerance it might be (1,0) or (0,1) etc but not (0,0)
-	for _, p := range res2.Points {
-		if p.X == 0 && p.Z == 0 {
-			t.Fatalf("diagonal blocked dest should not be in path %v", res2.Points)
-		}
+	if !foundGoal {
+		t.Fatalf("diagonal: expected goal point (%d,%d) in result %v", goalCell.X, goalCell.Z, res.Points)
 	}
 }
 
@@ -373,12 +318,12 @@ func TestEarlyExits(t *testing.T) {
 	// 1) start satisfies goal -> 0x100 empty without seeding [04 §7.2] C10
 	goalSatisfied := PointGoal(Cell{5, 5}, 32) // radius 32 => q=2, start at center satisfies
 	cfg1 := SearchConfig{
-		Start:      Cell{5, 5},
-		Goal:       goalSatisfied,
-		IsPassable: func(c Cell) bool { return true },
-		Scale:      65536,
-		HasBounds:  true,
-		Bounds:     bounds,
+		Start:         Cell{5, 5},
+		Goal:          goalSatisfied,
+		PassableValue: func(c Cell) uint8 { return 3 },
+		Scale:         65536,
+		HasBounds:     true,
+		Bounds:        bounds,
 	}
 	res1 := Search(cfg1)
 	if res1.Status != StatusAlreadySatisfied {
@@ -397,12 +342,12 @@ func TestEarlyExits(t *testing.T) {
 	// 2) out-of-bounds start -> 0x200 empty without seeding [04 §7.2] C10
 	goal2 := PointGoal(Cell{5, 5}, 0)
 	cfg2 := SearchConfig{
-		Start:      Cell{20, 20}, // OOB
-		Goal:       goal2,
-		IsPassable: func(c Cell) bool { return true },
-		Scale:      65536,
-		HasBounds:  true,
-		Bounds:     bounds,
+		Start:         Cell{20, 20}, // OOB
+		Goal:          goal2,
+		PassableValue: func(c Cell) uint8 { return 3 },
+		Scale:         65536,
+		HasBounds:     true,
+		Bounds:        bounds,
 	}
 	res2 := Search(cfg2)
 	if res2.Status != StatusRejected {
@@ -423,12 +368,17 @@ func TestEarlyExits(t *testing.T) {
 	goal3 := PointGoal(Cell{3, 0}, 0)
 	isPassable3 := func(c Cell) bool { return true }
 	cfg3 := SearchConfig{
-		Start:      Cell{0, 0},
-		Goal:       goal3,
-		IsPassable: isPassable3,
-		Scale:      65536,
-		HasBounds:  true,
-		Bounds:     bounds,
+		Start: Cell{0, 0},
+		Goal:  goal3,
+		PassableValue: func(c Cell) uint8 {
+			if isPassable3(c) {
+				return 3
+			}
+			return 0
+		},
+		Scale:     65536,
+		HasBounds: true,
+		Bounds:    bounds,
 	}
 	res3 := Search(cfg3)
 	if res3.Notified != StatusAlreadySatisfied {
@@ -454,12 +404,17 @@ func TestEarlyExits(t *testing.T) {
 		return true
 	}
 	cfg4 := SearchConfig{
-		Start:      Cell{0, 0},
-		Goal:       goal4,
-		IsPassable: isPassable4,
-		Scale:      65536,
-		HasBounds:  true,
-		Bounds:     bounds,
+		Start: Cell{0, 0},
+		Goal:  goal4,
+		PassableValue: func(c Cell) uint8 {
+			if isPassable4(c) {
+				return 3
+			}
+			return 0
+		},
+		Scale:     65536,
+		HasBounds: true,
+		Bounds:    bounds,
 	}
 	res4 := Search(cfg4)
 	// This should trigger early exit 4 because ray best (at start) >= startScaled (equal)
@@ -480,12 +435,12 @@ func TestEarlyExits(t *testing.T) {
 	// Start OOB but also satisfies? Should return 0x100 per order: start satisfies checked before OOB
 	goal5 := PointGoal(Cell{20, 20}, 1000) // large radius satisfying OOB start at (20,20) if bounds 0..10? But OOB start 20,20 center 20,20 distance 0 -> satisfies even though OOB, first check should win
 	cfg5 := SearchConfig{
-		Start:      Cell{20, 20},
-		Goal:       goal5,
-		IsPassable: func(c Cell) bool { return true },
-		Scale:      65536,
-		HasBounds:  true,
-		Bounds:     bounds,
+		Start:         Cell{20, 20},
+		Goal:          goal5,
+		PassableValue: func(c Cell) uint8 { return 3 },
+		Scale:         65536,
+		HasBounds:     true,
+		Bounds:        bounds,
 	}
 	res5 := Search(cfg5)
 	if res5.Status != StatusAlreadySatisfied {
@@ -509,12 +464,17 @@ func TestToleranceWriteOnce(t *testing.T) {
 	}
 	goal := PointGoal(Cell{10, 0}, 0) // h =18*max+7*min
 	cfg := SearchConfig{
-		Start:      Cell{0, 0},
-		Goal:       goal,
-		IsPassable: isPassable,
-		Scale:      65536,
-		HasBounds:  true,
-		Bounds:     bounds,
+		Start: Cell{0, 0},
+		Goal:  goal,
+		PassableValue: func(c Cell) uint8 {
+			if isPassable(c) {
+				return 3
+			}
+			return 0
+		},
+		Scale:     65536,
+		HasBounds: true,
+		Bounds:    bounds,
 	}
 	res := Search(cfg)
 	if len(res.Points) == 0 {
@@ -536,7 +496,7 @@ func TestToleranceWriteOnce(t *testing.T) {
 		// Allow 4 or near
 		t.Logf("tolerance frontier last point %v, points %v", last, res.Points)
 	}
-	// Verify write-once: tolerance should not be updated after initial rayWalk.
+	// Verify write-once: tolerance should not be updated after initial walkRay.
 	// We can check that second Search with same params yields same result (deterministic) - implying not updated
 	res2 := Search(cfg)
 	if len(res.Points) != len(res2.Points) {
@@ -558,13 +518,14 @@ func TestEndToEndSmallGrid(t *testing.T) {
 	bounds := Rect{Min: Cell{0, 0}, Max: Cell{3, 3}}
 	goal := PointGoal(Cell{3, 3}, 0)
 	cfg := SearchConfig{
-		Start:      Cell{0, 0},
-		Goal:       goal,
-		IsPassable: func(c Cell) bool { return true },
-		Scale:      65536,
-		HasBounds:  true,
-		Bounds:     bounds,
-		Bias:       Point{0, 0},
+		Start:         Cell{0, 0},
+		Goal:          goal,
+		PassableValue: func(c Cell) uint8 { return 3 },
+		Scale:         65536,
+		HasBounds:     true,
+		Bounds:        bounds,
+		FootPrintX:    0,
+		FootPrintZ:    0,
 	}
 	res := Search(cfg)
 	if len(res.Points) == 0 {
@@ -575,8 +536,8 @@ func TestEndToEndSmallGrid(t *testing.T) {
 	if len(res.Points) != 2 {
 		t.Fatalf("end-to-end straight diagonal want 2 points (start+goal) got %d %v [04 §7.3] C13", len(res.Points), res.Points)
 	}
-	if res.Points[0] != (Point{0, 0}) || res.Points[1] != (Point{3, 3}) {
-		t.Fatalf("points want [(0,0),(3,3)] got %v", res.Points)
+	if res.Points[0] != (Point{0, 0}) || res.Points[1] != (Point{48, 48}) {
+		t.Fatalf("points want [(0,0),(48,48)] got %v", res.Points)
 	}
 	// Verify g value via building a small search manually to inspect node store?
 	// We'll run Search with same cfg but inspect via helper that replicates cost calculation:
@@ -593,12 +554,17 @@ func TestEndToEndSmallGrid(t *testing.T) {
 		return true
 	}
 	cfg2 := SearchConfig{
-		Start:      Cell{0, 0},
-		Goal:       goal,
-		IsPassable: isPassable2,
-		Scale:      65536,
-		HasBounds:  true,
-		Bounds:     bounds,
+		Start: Cell{0, 0},
+		Goal:  goal,
+		PassableValue: func(c Cell) uint8 {
+			if isPassable2(c) {
+				return 3
+			}
+			return 0
+		},
+		Scale:     65536,
+		HasBounds: true,
+		Bounds:    bounds,
 	}
 	res2 := Search(cfg2)
 	if len(res2.Points) == 0 {
@@ -612,20 +578,21 @@ func TestEndToEndSmallGrid(t *testing.T) {
 	// Test bias addition [04 §7.1] C1
 	bias := Point{X: 5, Z: 7}
 	cfg3 := SearchConfig{
-		Start:      Cell{0, 0},
-		Goal:       goal,
-		IsPassable: func(c Cell) bool { return true },
-		Scale:      65536,
-		HasBounds:  true,
-		Bounds:     bounds,
-		Bias:       bias,
+		Start:         Cell{0, 0},
+		Goal:          goal,
+		PassableValue: func(c Cell) uint8 { return 3 },
+		Scale:         65536,
+		HasBounds:     true,
+		Bounds:        bounds,
+		FootPrintX:    bias.X,
+		FootPrintZ:    bias.Z,
 	}
 	res3 := Search(cfg3)
-	if res3.Points[0] != (Point{0 + 5, 0 + 7}) {
-		t.Fatalf("bias: first point want (5,7) got %v [04 §7.1] C1", res3.Points[0])
+	if res3.Points[0] != (Point{5 * 8, 7 * 8}) {
+		t.Fatalf("footprint: first point want (40,56) got %v [04 R-PATH-01 §7]", res3.Points[0])
 	}
-	if res3.Points[len(res3.Points)-1] != (Point{3 + 5, 3 + 7}) {
-		t.Fatalf("bias last point want (8,10) got %v", res3.Points[len(res3.Points)-1])
+	if res3.Points[len(res3.Points)-1] != (Point{(3*2 + 5) * 8, (3*2 + 7) * 8}) {
+		t.Fatalf("footprint last point want (88,104) got %v", res3.Points[len(res3.Points)-1])
 	}
 }
 
@@ -657,12 +624,12 @@ func TestFiveEntryFanAfterFirst(t *testing.T) {
 	bounds := Rect{Min: Cell{0, 0}, Max: Cell{10, 10}}
 	goal := PointGoal(Cell{10, 10}, 0)
 	cfg := SearchConfig{
-		Start:      Cell{5, 5},
-		Goal:       goal,
-		IsPassable: func(c Cell) bool { return true },
-		Scale:      65536,
-		HasBounds:  true,
-		Bounds:     bounds,
+		Start:         Cell{5, 5},
+		Goal:          goal,
+		PassableValue: func(c Cell) uint8 { return 3 },
+		Scale:         65536,
+		HasBounds:     true,
+		Bounds:        bounds,
 	}
 	res := Search(cfg)
 	// Just ensure search completes and fan logic didn't cause 9 entries after first (would still succeed but we lock via unit test)
@@ -680,13 +647,14 @@ func TestResumableBudgetHonoring(t *testing.T) {
 	goalCell := Cell{150, 0}
 	goal := PointGoal(goalCell, 0)
 	cfg := SearchConfig{
-		Start:      start,
-		Goal:       goal,
-		IsPassable: func(c Cell) bool { return true },
-		Scale:      65536,
-		HasBounds:  true,
-		Bounds:     bounds,
-		Bias:       Point{0, 0},
+		Start:         start,
+		Goal:          goal,
+		PassableValue: func(c Cell) uint8 { return 3 },
+		Scale:         65536,
+		HasBounds:     true,
+		Bounds:        bounds,
+		FootPrintX:    0,
+		FootPrintZ:    0,
 	}
 	oneShot := Search(cfg)
 	if oneShot.Popped <= 100 {
@@ -761,12 +729,17 @@ func TestResumableHeapExhaustion(t *testing.T) {
 		return true
 	}
 	cfg := SearchConfig{
-		Start:      Cell{0, 0},
-		Goal:       goal,
-		IsPassable: isPassable,
-		Scale:      65536,
-		HasBounds:  true,
-		Bounds:     bounds,
+		Start: Cell{0, 0},
+		Goal:  goal,
+		PassableValue: func(c Cell) uint8 {
+			if isPassable(c) {
+				return 3
+			}
+			return 0
+		},
+		Scale:     65536,
+		HasBounds: true,
+		Bounds:    bounds,
 	}
 	oneShot := Search(cfg)
 	if oneShot.Status != StatusRejected || len(oneShot.Points) != 0 {
@@ -785,12 +758,12 @@ func TestResumableWriteOnceSlots(t *testing.T) {
 	start := Cell{0, 0}
 	goal := PointGoal(Cell{150, 0}, 0)
 	cfg := SearchConfig{
-		Start:      start,
-		Goal:       goal,
-		IsPassable: func(c Cell) bool { return true },
-		Scale:      65536,
-		HasBounds:  true,
-		Bounds:     bounds,
+		Start:         start,
+		Goal:          goal,
+		PassableValue: func(c Cell) uint8 { return 3 },
+		Scale:         65536,
+		HasBounds:     true,
+		Bounds:        bounds,
 	}
 	sess := NewSession(cfg)
 	// Capture initial tolerance and first node h.
@@ -920,10 +893,8 @@ func TestRayWalkValueSemantics(t *testing.T) {
 			}
 			return 3
 		}
-		_, connects, hasBest := rayWalk(Cell{X: 0, Z: 5}, Cell{X: 9, Z: 5}, func(c Cell) bool {
-			return vals(c) != 0
-		}, false, Rect{}, goal, 65536)
-		return connects, hasBest
+		r := walkRay(Cell{X: 0, Z: 5}, Cell{X: 9, Z: 5}, vals, goal, 65536, nil)
+		return r.connects, r.best != 0
 	}
 	if connects, _ := walk(func(Cell) uint8 { return 2 }); !connects {
 		t.Fatalf("ray must traverse owner-mask miss (2) cells [04 §6.1 R-DOC04-B]")

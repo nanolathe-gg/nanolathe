@@ -8,10 +8,11 @@ import (
 )
 
 func TestP28TraceIsOptInAndRepeatReadPure(t *testing.T) {
-	search := func(r Request, _ int32, _ int) ([]Point, Status, bool) {
-		return []Point{{X: 3, Z: 4}}, 0, true
+	search := func(r Request, _ int32, _ int) WorkResult {
+		return WorkResult{Points: []Point{{X: 3, Z: 4}}, Done: true}
 	}
-	s := NewScheduler(search, nil)
+	s := newTestScheduler(search, nil)
+	s.SetUnitLimit(1)
 	if s.TraceEnabled() {
 		t.Fatal("scheduler tracing enabled by default")
 	}
@@ -42,9 +43,10 @@ func TestP28TraceIsOptInAndRepeatReadPure(t *testing.T) {
 }
 
 func TestP28TraceLimitAndReset(t *testing.T) {
-	s := NewScheduler(func(r Request, _ int32, _ int) ([]Point, Status, bool) {
-		return []Point{{X: int32(r.Unit)}}, 0, true
+	s := newTestScheduler(func(r Request, _ int32, _ int) WorkResult {
+		return WorkResult{Points: []Point{{X: int32(r.Unit)}}, Done: true}
 	}, nil)
+	s.SetUnitLimit(1)
 	s.EnableTrace()
 	s.SetTraceLimit(1)
 	s.Submit(Request{Unit: 1, Player: 0, Goal: PointGoal(Cell{}, 0)})
@@ -65,11 +67,12 @@ func TestP28TraceLimitAndReset(t *testing.T) {
 func TestP28TraceCaptureDoesNotChangeDispatchOrder(t *testing.T) {
 	run := func(enabled bool) []pool.Handle {
 		var order []pool.Handle
-		s := NewScheduler(func(r Request, _ int32, _ int) ([]Point, Status, bool) {
-			return []Point{{X: int32(r.Unit)}}, 0, true
+		s := newTestScheduler(func(r Request, _ int32, _ int) WorkResult {
+			return WorkResult{Points: []Point{{X: int32(r.Unit)}}, Done: true}
 		}, func(r Request, _ []Point, _ Status) {
 			order = append(order, r.Unit)
 		})
+		s.SetUnitLimit(1)
 		if enabled {
 			s.EnableTrace()
 		}

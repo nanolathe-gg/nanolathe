@@ -13,7 +13,7 @@ import (
 )
 
 // TestP28COB01RARMCKStrictBindingTrace records the stock ARMCK asset identity
-// and the state produced by the production strict binder's immediate Create
+// and the state produced by the production strict binder's D+wake Create
 // barrier. It deliberately asserts relationships owned by the binding route,
 // not an untraced retail first-frame pose [R-P28-COB-01R].
 func TestP28COB01RARMCKStrictBindingTrace(t *testing.T) {
@@ -51,7 +51,7 @@ func TestP28COB01RARMCKStrictBindingTrace(t *testing.T) {
 		t.Fatalf("incomplete ARMCK binding: %#v", binding)
 	}
 	if !binding.CreateInvoked || !binding.Callbacks.CreateInvoked() || binding.VM.DrainCalls != 1 {
-		t.Fatalf("Create route: invoked=%t bridge=%t drains=%d, want once through one immediate barrier", binding.CreateInvoked, binding.Callbacks.CreateInvoked(), binding.VM.DrainCalls)
+		t.Fatalf("Create route: invoked=%t bridge=%t drains=%d, want once through one D+wake barrier", binding.CreateInvoked, binding.Callbacks.CreateInvoked(), binding.VM.DrainCalls)
 	}
 	if len(binding.Program.Pieces) != len(binding.PieceMap) || len(binding.VM.Pieces) != len(binding.Program.Pieces) {
 		t.Fatalf("piece tables disagree: COB=%d map=%d VM=%d", len(binding.Program.Pieces), len(binding.PieceMap), len(binding.VM.Pieces))

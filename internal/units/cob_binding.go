@@ -13,7 +13,7 @@ import (
 
 // RequiredCOBEntryPoints returns only callback roots that are mandatory for
 // every strict production unit. Create is always required because unit
-// initialization invokes it in mode I [04 §5.1]. Weapon and builder
+// initialization invokes it as a deferred start with wake=1 [R-CB-01 §2]. Weapon and builder
 // capabilities are deliberately not inferred from UnitDef fields: SC21 leaves
 // those producer/capability gates unresolved, and retail-valid scripts may
 // omit optional callbacks. Callers with an observed consumer should supply
@@ -23,7 +23,7 @@ func RequiredCOBEntryPoints(_ *content.UnitDef) []string { return []string{"Crea
 // BindCOBWithPorts is retained for the session composition test seam, whose
 // caller has no owning Unit instance. New production bindings use
 // BindCOBWithPortsAndVisibilityForUnit so instance-owned ports are installed
-// before the mode-I Create callback. This seam retains the same strict
+// before the D+wake Create callback. This seam retains the same strict
 // model/piece checks; the extra ports are supplied before Create starts.
 func BindCOBWithPorts(fs vfs.FSOps, def *content.UnitDef, mdl *model.Model, sim *rng.Simulation, sink cob.PresentationSink) (*cob.Binding, error) {
 	return bindCOBWithPortsAndVisibility(fs, def, mdl, sim, sink, nil, nil)
@@ -99,7 +99,7 @@ func bindUnitPortHandlers(vm *cob.VM, u *Unit) {
 
 // bindCOBWithPortsAndVisibility is the unit-aware strict binding path. The
 // instance port handlers are installed before Create runs, matching retail's
-// mode-I initialization order. The exported helper above remains a generic
+// D+wake initialization order. The exported helper above remains a generic
 // asset-binding seam for callers without an owning Unit instance.
 func bindCOBWithPortsAndVisibility(fs vfs.FSOps, def *content.UnitDef, mdl *model.Model, sim *rng.Simulation, sink cob.PresentationSink, visible func(piece int, sfxType int32) bool, u *Unit) (*cob.Binding, error) {
 	if def == nil {
@@ -110,31 +110,10 @@ func bindCOBWithPortsAndVisibility(fs vfs.FSOps, def *content.UnitDef, mdl *mode
 			Code: cob.BindingMissingModel, Expected: "loaded 3DO model", Detail: fmt.Sprintf("unit %q has no model", def.UnitName),
 		}}}
 	}
-	// Scriptless check [R-COB-01 §1] UNIT-04: a missing or empty COB stores the null program.
-	// The render-piece table is still built from the model, but no VM is allocated.
-	// This path is exercised by fixture definitions that have no script file and by synthetic
-	// missing-script cases. Production shipped content never hits it.
-	if def.Script == nil {
-		logical := "scripts/" + def.UnitName + ".cob"
-		// Normalize to lower as VFS is case-insensitive; check both UnitName and CanonicalKey.
-		found := false
-		if fs != nil {
-			if info, err := fs.Stat(logical); err == nil && !info.IsDir {
-				found = true
-			} else if info2, err2 := fs.Stat("scripts/" + def.CanonicalKey + ".cob"); err2 == nil && !info2.IsDir {
-				found = true
-			}
-		}
-		if !found {
-			if u != nil {
-				// Zero-filled allocation then fill walk [04 §"Piece flag polarity"].
-				u.InitRenderPieceFlags(mdl)
-			}
-			// No VM, no Create, no diagnostic [R-COB-01 §1].
-			return nil, nil
-		}
-		// File exists but def.Script nil (compile didn't store it) — fall through to strict bind which will load it.
-	}
+	// The catalog compiler is the primary missing-script rejection boundary.
+	// BindStrict remains the asset-level defense: retail faults during creation
+	// when unconditional queries reach a null VM, so configured production
+	// allocation must never proceed without a loadable COB [R-COB-04 §8].
 	modelPieces := make([]string, len(mdl.Pieces))
 	for i := range mdl.Pieces {
 		modelPieces[i] = mdl.Pieces[i].Name
@@ -229,6 +208,12 @@ func bindCOBWithPortsAndVisibility(fs vfs.FSOps, def *content.UnitDef, mdl *mode
 		cob.SetPendingRenderHandlers(nil, nil)
 		return nil, err
 	}
+	// SetMaxReloadTime is issued after Create as a distinct deferred callback;
+	// its argument is the maximum of all three linked weapon reload fields
+	// [R-CB-01 §4].
+	if binding.Callbacks != nil {
+		initializeCreationCallbacks(u, binding.Callbacks, maxReloadTicks(def))
+	}
 	// On success, the pending handler has been consumed by the VM's SetProgram
 	// inside BindStrict, and Create has already run against the unit's model-ordered
 	// table via that handler. Capture it for the unit.
@@ -281,22 +266,52 @@ func bindCOBWithPortsAndVisibility(fs vfs.FSOps, def *content.UnitDef, mdl *mode
 	return binding, nil
 }
 
+type creationCallbacks interface {
+	QueryWeapon(cob.WeaponSlot) cob.CallbackResult
+	AimFromWeapon(cob.WeaponSlot) cob.CallbackResult
+	SetMaxReloadTime(int32) cob.CallbackResult
+}
+
+// initializeCreationCallbacks performs the creation-time weapon-slot
+// callbacks in their established order: Query* first, then AimFrom* with a
+// second Query* when AimFrom returns -1, then SetMaxReloadTime
+// [R-CB-01 §4]. Query* supplies the muzzle identity; the separate AimFrom
+// result is retained until the aim-origin consumer wires it. The extractor
+// SetSpeed follows this sequence at a terrain-aware producer outside units.
+func initializeCreationCallbacks(u *Unit, bridge creationCallbacks, maxReload int32) {
+	if bridge == nil {
+		return
+	}
+	for i := 0; i < NumSlots; i++ {
+		slot := cob.WeaponSlot(i)
+		query := bridge.QueryWeapon(slot)
+		aim := bridge.AimFromWeapon(slot)
+		if aim.QueryValue() == -1 {
+			aim = bridge.QueryWeapon(slot)
+		}
+		if u != nil {
+			u.Slots[i].MuzzlePiece = query.QueryValue()
+			u.Slots[i].AimOriginPiece = aim.QueryValue()
+		}
+	}
+	bridge.SetMaxReloadTime(maxReload)
+}
+
 // AttachCOBBinding attaches only a fully initialized strict production
-// binding. Create must already have run exactly once in mode I before the unit
-// receives a playable script [04 §4.1][04 §5.1].
-// A nil binding is the scriptless case [R-COB-01 §1] UNIT-04: no VM is attached, but the
-// render-piece table has already been built on the unit by the binder [04 §"Piece flag polarity"].
+// binding. Create must already have run exactly once as a D+wake callback
+// before the unit receives a playable script [04 §4.1][R-CB-01 §2].
 func (u *Unit) AttachCOBBinding(binding *cob.Binding) error {
 	if u == nil {
 		return fmt.Errorf("nanolathe: COB attachment: nil unit")
 	}
 	if binding == nil {
-		// Scriptless unit — no VM, flags already on unit [R-COB-01 §1] [04 §"Piece flag polarity"].
-		return nil
+		return fmt.Errorf("nanolathe: COB attachment: nil binding")
+	}
+	if binding.Program == nil || len(binding.Program.Code) == 0 {
+		return fmt.Errorf("nanolathe: COB attachment: binding has no COB program")
 	}
 	if binding.VM == nil {
-		// Scriptless via binding with nil VM — also accepted.
-		return nil
+		return fmt.Errorf("nanolathe: COB attachment: binding has no VM")
 	}
 	if !binding.CreateInvoked || binding.Callbacks == nil || !binding.Callbacks.CreateInvoked() {
 		return fmt.Errorf("nanolathe: COB attachment: Create was not invoked exactly once")

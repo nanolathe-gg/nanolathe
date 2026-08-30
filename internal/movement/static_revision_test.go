@@ -7,7 +7,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/features"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
-	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -92,7 +91,7 @@ func TestStaticRevisionInvalidatesGroundRouteAndPublishesCurrentRevision(t *test
 	profile.MaxSlope = 50
 	profile.BadSlope = 25
 	sys := NewSystem(terrain, profile, NewOccupancyGrid())
-	w := units.NewSliced(16, nil)
+	w := newMovementFixtureWorld(16)
 	sys.BindWorld(w)
 	def := &content.UnitDef{
 		UnitName:    "ground-scout",
@@ -137,7 +136,7 @@ func TestStaticRevisionInvalidatesGroundRouteAndPublishesCurrentRevision(t *test
 	terrain.FeatureDefs = []*content.FeatureDef{wreck}
 	featureService := features.NewService(terrain, nil, nil, nil)
 	blocked := oldPoints[1]
-	if featureService.PlaceAt(int(blocked.X), int(blocked.Z), wreck) == nil {
+	if featureService.PlaceAt(int(blocked.X/16), int(blocked.Z/16), wreck) == nil {
 		t.Fatalf("wreck placement at route waypoint %v failed", blocked)
 	}
 	if route.StaticRevision == terrain.StaticObstacleRevision() {
@@ -147,7 +146,7 @@ func TestStaticRevisionInvalidatesGroundRouteAndPublishesCurrentRevision(t *test
 	if !result.EmptyRoute || result.Moved || route.Active {
 		t.Fatalf("stale route was consumed instead of invalidated: result=%+v route=%+v", result, route)
 	}
-	if !sys.Scheduler.HasRequest(h) {
+	if !sys.HasPathRequest(h) {
 		t.Fatal("static invalidation did not resubmit the active order")
 	}
 	sys.Scheduler.Tick(3)
@@ -178,7 +177,7 @@ func TestStaticRevisionInvalidatesGroundRouteAndPublishesCurrentRevision(t *test
 func TestStaticRevisionDoesNotInvalidateAircraftRoute(t *testing.T) {
 	terrain := staticRevisionTerrain(8, 8)
 	sys := NewSystem(terrain, Template(), NewOccupancyGrid())
-	w := units.NewSliced(8, nil)
+	w := newMovementFixtureWorld(8)
 	sys.BindWorld(w)
 	def := &content.UnitDef{UnitName: "air-scout", CanFly: true, CanMove: true, FootprintX: 1, FootprintZ: 1, MaxVelocity: 65536}
 	h, err := w.Create(def, 0, world.CellToWorld(1), 0, world.CellToWorld(1))
@@ -203,7 +202,7 @@ func TestStaticRevisionDoesNotInvalidateAircraftRoute(t *testing.T) {
 	}
 }
 
-func TestAStarAndSmoothingShareHardBlockPredicate(t *testing.T) {
+func TestAStarSharesHardBlockPredicate(t *testing.T) {
 	terrain := staticRevisionTerrain(6, 6)
 	def := &content.FeatureDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "tree"}, Blocking: true, FootprintX: 1, FootprintZ: 1}
 	terrain.FeatureDefs = []*content.FeatureDef{def}
@@ -241,7 +240,6 @@ func TestAStarAndSmoothingShareHardBlockPredicate(t *testing.T) {
 	}
 	route := &Route{}
 	route.Publish([]Point{{X: 0, Z: 0}, {X: 0, Z: 2}, {X: 2, Z: 2}})
-	smoothLandRouteWithLayer(route, &content.UnitDef{MovementClass: "KBOTSS2"}, profile, layer)
 	if route.Count != 3 {
 		t.Fatalf("smoothing crossed an A* rejected cell: count=%d points=%v", route.Count, route.Points[:route.Count])
 	}

@@ -18,7 +18,7 @@
 //  2. weapon update (reload, target acquisition, Aim latch) — between boundaries
 //  3. COB drain (delta 1, eight threads then one piece pass) — between
 //  4. orders / construction pump — between
-//  5. movement integration (immediate wake-flag starts) — between
+//  5. movement integration (D+wake starts) — between
 //  6. slot-end death handling (FinalizeDeath) — exposed as boundary
 //
 // The central caller (built by another agent) should do:

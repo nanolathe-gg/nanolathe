@@ -18,6 +18,7 @@ type ebitenApp struct {
 // its own accumulator (wall-clock time never enters the sim, I6).
 func (a *ebitenApp) Update() error {
 	pollInput(&a.c.in)
+	a.c.SetFocused(ebiten.IsFocused())
 	dt := 1.0 / float64(ebiten.TPS())
 	a.c.runtime += dt
 	if a.c.opts.Step != nil {

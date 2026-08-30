@@ -26,6 +26,11 @@ type Node struct {
 	G    int32 // cost from start
 	H    int32 // write-once raw heuristic [04 §7.2] C7
 	F    int32 // G + HScaled (HScaled = (H*scale)>>16)
+	// TerrainTerm is the passability tier captured when the node was opened.
+	// Run is the number of consecutive steps in Dir ending at this node
+	// [R-PATH-01 §3]. Both are retained across relaxations.
+	TerrainTerm uint16
+	Run         uint16
 	// Parent is the predecessor node ID (0 for start/root).
 	Parent NodeID
 	// Dir is the travel direction from parent (0..7) or 0xFF for root.
@@ -66,9 +71,9 @@ func (ns *NodeStore) SetScale(scale int32) { ns.scale = scale }
 // Reset clears all nodes but retains the scale.
 func (ns *NodeStore) Reset() {
 	ns.nodes = ns.nodes[:1]
-	for k := range ns.index {
-		delete(ns.index, k)
-	}
+	// Replacing the index avoids map iteration in a simulation-visible reset
+	// while retaining the stable node identity contract [04 §7.2].
+	ns.index = make(map[Cell]NodeID)
 }
 
 // Len returns the number of allocated nodes (excluding invalid 0).

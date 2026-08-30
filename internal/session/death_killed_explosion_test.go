@@ -57,7 +57,7 @@ func TestDeathKilledCorpseDepth(t *testing.T) {
 		p.Exists = true
 		p.ControllerState = uint8(i + 1)
 		p.IsObserver = false
-		p.StatusHalfwordAt144 = 1
+		p.SetSettlementStatusPair(1, 0)
 	}
 	s.Econ.SeedDeadlines(0)
 	s.InitBattleWindForSession()
@@ -149,7 +149,7 @@ func TestDeathExplosionDamagesNeighbor(t *testing.T) {
 		p.Exists = true
 		p.ControllerState = uint8(i + 1)
 		p.IsObserver = false
-		p.StatusHalfwordAt144 = 1
+		p.SetSettlementStatusPair(1, 0)
 	}
 	s.Econ.SeedDeadlines(0)
 	s.InitBattleWindForSession()
@@ -232,7 +232,7 @@ func TestKilledDedupAcrossHandleReuse(t *testing.T) {
 		p.Exists = true
 		p.ControllerState = uint8(i + 1)
 		p.IsObserver = false
-		p.StatusHalfwordAt144 = 1
+		p.SetSettlementStatusPair(1, 0)
 	}
 	s.Econ.SeedDeadlines(0)
 	s.InitBattleWindForSession()

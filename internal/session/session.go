@@ -748,8 +748,7 @@ func handleLocalPreload(s *Session) {
 				p.ControllerState = 2
 			}
 			p.IsObserver = false
-			p.StatusHalfwordAt144 = 1
-			p.StatusWordAt140 = 0
+			p.SetSettlementStatusPair(1, 0)
 			p.GameEnded = false
 			p.EndGameCountdown = -1
 		}
@@ -892,6 +891,10 @@ func (s *Session) RegisterAll() {
 			}
 			if s.Vis != nil && u != nil {
 				unpublishOne(s, u)
+				// The central death handler appends a 60-tick temporary sight
+				// source for a locally owned victim under Circular/True LOS in
+				// every session kind [08 R-SESS-01 §3].
+				s.appendDeathEyeball(u)
 			}
 			// Notification slot driven at death finalization [08 "Evaluation"].
 			// Polled queues use LocalOwner/EnemyOwner gating, not alliance; type-gated countdown

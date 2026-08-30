@@ -356,7 +356,7 @@ func TestVerticalSlice_TransportLoadMoveUnload(t *testing.T) {
 	sys := NewSystem(ter, fallback, grid)
 	mc := &content.MovementClass{FootprintX: 2, FootprintZ: 2, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 255, BadWaterSlope: 127}
 	sys.SetClasses(map[string]*content.MovementClass{content.CanonicalKey("kbot2x2"): mc})
-	w := units.NewSliced(100, nil)
+	w := newMovementFixtureWorld(100)
 	transDef := defForTransport("arm_atlas")
 	cargoDef := defForCargo("armflea", 1)
 	cargoDef.MovementClass = "kbot2x2"
@@ -513,7 +513,7 @@ func TestVerticalSlice_GunshipTakeoffMoveLand(t *testing.T) {
 	grid := NewOccupancyGrid()
 	fallback := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 10000, MinWaterDepth: -10000, MaxSlope: 255, BadSlope: 127, MaxWaterSlope: 255, BadWaterSlope: 127}
 	sys := NewSystem(ter, fallback, grid)
-	w := units.NewSliced(100, nil)
+	w := newMovementFixtureWorld(100)
 	gunDef := defForGunship("arm_brawler")
 	padDef := defForPad("arm_pad")
 	gunPosX := world.CellToWorld(4)
@@ -694,7 +694,7 @@ func TestSchedulerForNaval(t *testing.T) {
 	sys := NewSystem(ter, shipProf, grid)
 	mc := &content.MovementClass{FootprintX: 2, FootprintZ: 2, MinWaterDepth: 3, MaxWaterDepth: 10000, MaxSlope: 12, BadSlope: 6, MaxWaterSlope: 255, BadWaterSlope: 127}
 	sys.SetClasses(map[string]*content.MovementClass{content.CanonicalKey("BOAT4x4"): mc})
-	w := units.NewSliced(20, nil)
+	w := newMovementFixtureWorld(20)
 	shipDef := defForShip("arm_ship")
 	shipDef.MovementClass = "BOAT4x4"
 	// Place on water half
@@ -718,7 +718,7 @@ func TestSchedulerForNaval(t *testing.T) {
 	// Should stay on water: validate all points are water passable for ship
 	for i := 0; i < int(route.Count); i++ {
 		c := route.Points[i]
-		if !shipProf.IsPassable(ter, c.X, c.Z) {
+		if !shipProf.IsPassable(ter, c.X/16, c.Z/16) {
 			t.Fatalf("ship route point %v not passable for ship [04 §6.1]", c)
 		}
 	}
@@ -731,7 +731,7 @@ func TestDeterminism_TransportSlice(t *testing.T) {
 		grid := NewOccupancyGrid()
 		fallback := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 10000, MinWaterDepth: -10000, MaxSlope: 255, BadSlope: 127, MaxWaterSlope: 255, BadWaterSlope: 127}
 		sys := NewSystem(ter, fallback, grid)
-		w := units.NewSliced(20, nil)
+		w := newMovementFixtureWorld(20)
 		// Create two transports with cargos interleaved player/slot order
 		defT := defForTransport("t")
 		defC := defForCargo("c", 1)

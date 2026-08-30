@@ -157,7 +157,7 @@ func TestEnsureWalkSubmitsApproachNotCentre(t *testing.T) {
 
 	var req path.Request
 	found := false
-	for _, r := range svc.Movement.Scheduler.AllRequests() {
+	for _, r := range svc.Movement.PathRequestsSnapshot() {
 		if r.Unit == builder.Handle {
 			req, found = r, true
 			break
@@ -222,7 +222,7 @@ func TestApproachGoalRebindsOverARestoredRoute(t *testing.T) {
 		t.Fatalf("movement goal fell back to the order's stored position after restore")
 	}
 	// The active route must still suppress a duplicate submission.
-	for _, r := range svc.Movement.Scheduler.AllRequests() {
+	for _, r := range svc.Movement.PathRequestsSnapshot() {
 		if r.Unit == builder.Handle {
 			t.Fatalf("ensureWalk resubmitted a path request while a route was active")
 		}

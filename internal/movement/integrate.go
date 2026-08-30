@@ -107,6 +107,114 @@ type System struct {
 	nextActivation uint64
 	arrivalHandles map[pool.Handle]*arrivalHandle // per-unit Move_Ground arrival handle [R-P0-01]
 	moveGoals      map[pool.Handle]*moveGoal      // per-unit movement-goal handle [04 §8.3][04 §7.4]
+	pathProvider   *pathProvider
+	// These are session-owned lobby values. Zero keeps path scheduling inert
+	// until the session supplies explicit limits [04 R-PATH-01 §6].
+	PathPlayers   int
+	PathUnitLimit int32
+}
+
+// pathProvider is the movement-owned candidate surface. Submit/Cancel only
+// mutate this stable-slot source; path itself owns no compatibility queue.
+// TODO(question): the current movement unit model does not expose the retail
+// wants-repath flag and 60-tick follower poll. Until that upstream field is
+// available, this provider remains inert for units without an explicit path
+// request rather than guessing eligibility.
+type pathProvider struct {
+	requests [10][]path.Request
+	cursor   [10]int
+	players  int
+	limit    int32
+}
+
+func (s *System) CancelPathRequest(h pool.Handle) bool {
+	if s == nil || s.pathProvider == nil {
+		return false
+	}
+	return s.pathProvider.Cancel(h)
+}
+func (s *System) HasPathRequest(h pool.Handle) bool {
+	if s == nil || s.pathProvider == nil {
+		return false
+	}
+	return s.pathProvider.HasRequest(h)
+}
+
+// PathRequestsSnapshot returns the provider's deterministic request order for
+// construction diagnostics. The scheduler itself exposes no queue mutation or
+// queue inspection facade.
+func (s *System) PathRequestsSnapshot() []path.Request {
+	if s == nil || s.pathProvider == nil {
+		return nil
+	}
+	return s.pathProvider.allRequests()
+}
+func (p *pathProvider) PlayerCount() int { return p.players }
+func (p *pathProvider) UnitLimit() int32 { return p.limit }
+func (p *pathProvider) Eligible(player int) bool {
+	return player >= 0 && player < p.players && len(p.requests[player]) > 0
+}
+func (p *pathProvider) Poll(player int) (path.Request, path.PollResult) {
+	if !p.Eligible(player) {
+		return path.Request{}, path.PollNoUnit
+	}
+	q := p.requests[player]
+	i := p.cursor[player] % len(q)
+	r := q[i]
+	// A request is removed only when admitted; the cursor advances and wraps
+	// on every visit, preserving stable follower polling [04 R-PATH-01 §6].
+	p.cursor[player] = (i + 1) % len(q)
+	p.requests[player] = append(q[:i], q[i+1:]...)
+	if p.cursor[player] >= len(p.requests[player]) && len(p.requests[player]) > 0 {
+		p.cursor[player] = 0
+	}
+	return r, path.PollRequest
+}
+func (p *pathProvider) Submit(r path.Request) {
+	if int(r.Player) >= len(p.requests) {
+		return
+	}
+	q := p.requests[r.Player]
+	for player := range p.requests {
+		for i := range p.requests[player] {
+			if p.requests[player][i].Unit == r.Unit {
+				p.requests[player] = append(p.requests[player][:i], p.requests[player][i+1:]...)
+				break
+			}
+		}
+	}
+	q = p.requests[r.Player]
+	q = append(q, r)
+	p.requests[r.Player] = q
+}
+func (p *pathProvider) Cancel(unit pool.Handle) bool {
+	for player := range p.requests {
+		for i := range p.requests[player] {
+			if p.requests[player][i].Unit == unit {
+				p.requests[player] = append(p.requests[player][:i], p.requests[player][i+1:]...)
+				return true
+			}
+		}
+	}
+	return false
+}
+func (p *pathProvider) HasRequest(unit pool.Handle) bool {
+	for player := range p.requests {
+		for _, r := range p.requests[player] {
+			if r.Unit == unit {
+				return true
+			}
+		}
+	}
+	return false
+}
+func (p *pathProvider) pending(player uint8) int { return len(p.requests[player]) }
+func (p *pathProvider) allRequests() []path.Request {
+	var out []path.Request
+	for player := range p.requests {
+		out = append(out, p.requests[player]...)
+	}
+	return out
 }
 
 type activeMove struct {
@@ -245,8 +353,14 @@ func NewSystem(terrain *world.Terrain, fallback Profile, grid *OccupancyGrid) *S
 		activeOrders:   make(map[pool.Handle]*activeMove),
 		arrivalHandles: make(map[pool.Handle]*arrivalHandle),
 		moveGoals:      make(map[pool.Handle]*moveGoal),
+		// This composition root is a single-player system. A session with a
+		// lobby must overwrite these with its explicit values before ticking.
+		PathPlayers:   1,
+		PathUnitLimit: 1,
 	}
 	sched := path.NewScheduler(s.searchFunc, s.publishFunc)
+	s.pathProvider = &pathProvider{players: s.PathPlayers, limit: s.PathUnitLimit}
+	sched.SetCandidateProvider(s.pathProvider)
 	// Use DefaultBase unless overridden [P0-I16]; no longer reads mutable global.
 	sched.SetBase(path.DefaultBase)
 	s.Scheduler = sched
@@ -390,8 +504,8 @@ func (s *System) distSqToGoal(u *units.Unit) (uint64, bool) {
 	route := s.Routes[u.Handle]
 	if route != nil && route.Active && route.Count > 0 {
 		last := route.Points[route.Count-1]
-		wpX := addSignedSaturating(int64(world.CellToWorld(last.X)), 524288)
-		wpZ := addSignedSaturating(int64(world.CellToWorld(last.Z)), 524288)
+		wpX := int64(last.X) * 65536
+		wpZ := int64(last.Z) * 65536
 		return squaredDistanceFixed(wpX, wpZ, int64(u.X), int64(u.Z)), true
 	}
 	return 0, false
@@ -823,12 +937,14 @@ func (s *System) submitMove(handle pool.Handle, player uint8, start, goal path.C
 		Goal:       goalObj,
 		Activation: activation,
 	}
-	s.Scheduler.Submit(req)
+	if s.pathProvider != nil {
+		s.pathProvider.Submit(req)
+	}
 }
 
 func (s *System) submitMoveForOrder(u *units.Unit, head *orders.Node, start, goal path.Cell, activation uint64) {
 	// OW-3-P: select Goal family per order [04 §7.2][04 §7.4][04 §3.5] — Annulus for attack/guard stand-off where retail establishes it, Point otherwise.
-	// RectPerimeterGoal and SavedGoal remain unwired (no established producer) per goals.go header [04 §7.2][04 §7.4][M-4].
+	// RectPerimeterGoal remains unwired because no established order producer exists [04 §7.2][04 §7.4][M-4].
 	goalObj := s.goalForOrder(goal, head)
 	req := path.Request{
 		Unit:       u.Handle,
@@ -837,7 +953,9 @@ func (s *System) submitMoveForOrder(u *units.Unit, head *orders.Node, start, goa
 		Goal:       goalObj,
 		Activation: activation,
 	}
-	s.Scheduler.Submit(req)
+	if s.pathProvider != nil {
+		s.pathProvider.Submit(req)
+	}
 }
 
 func (s *System) staticObstacleRevision() uint64 {
@@ -868,7 +986,7 @@ func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 		return false // exactly one submission per active order
 	}
 	if _, wasBound := s.activeOrders[u.Handle]; wasBound {
-		s.Scheduler.Cancel(u.Handle)
+		s.CancelPathRequest(u.Handle)
 		if route := s.Routes[u.Handle]; route != nil {
 			route.Active = false
 			route.Dirty = true
@@ -903,7 +1021,7 @@ func (s *System) ReplanMove(u *units.Unit, head *orders.Node) bool {
 	if s.activeOrders == nil || s.activeOrders[u.Handle] == nil || s.activeOrders[u.Handle].order != head {
 		return s.ActivateMove(u, head)
 	}
-	s.Scheduler.Cancel(u.Handle)
+	s.CancelPathRequest(u.Handle)
 	if route := s.Routes[u.Handle]; route != nil {
 		route.Active = false
 		route.Dirty = true
@@ -933,7 +1051,7 @@ func (s *System) DeactivateMove(handle pool.Handle) {
 		return
 	}
 	if s.Scheduler != nil {
-		s.Scheduler.Cancel(handle)
+		s.CancelPathRequest(handle)
 	}
 	if s.activeOrders != nil {
 		delete(s.activeOrders, handle)
@@ -1002,13 +1120,25 @@ func (s *System) bindArrivalHandle(u *units.Unit, head *orders.Node) {
 	}
 }
 
+func (s *System) headingFor(h pool.Handle) uint16 {
+	if steer := s.Steers[h]; steer != nil {
+		return steer.Heading
+	}
+	if s.world != nil {
+		if u := s.world.Unit(h); u != nil {
+			return u.Move.Heading
+		}
+	}
+	return 0
+}
+
 // searchFunc is the injected SearchFunc bound to path.Search with profile passability
 // over System.Terrain and occupancy. It honors the 100-pops-per-request-per-call
 // budget and full-or-empty publication [04 §7.3] C11 C12 via a resumable Session
 // per unit held in deterministic slice storage indexed by handle [I1].
-func (s *System) searchFunc(r path.Request, scale int32, budget int) ([]path.Point, path.Status, bool) {
+func (s *System) searchFunc(r path.Request, scale int32, budget int) path.WorkResult {
 	if s == nil {
-		return nil, path.StatusRejected, true
+		return path.WorkResult{Status: path.StatusRejected, Done: true}
 	}
 	idx := int(r.Unit)
 	// Grow sessions slice to cover handle deterministically [I1].
@@ -1029,7 +1159,6 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) ([]path.Poi
 		// one profile across the world paths a ship, a hover and a Krogoth as
 		// the same 1x1 ground scout [04 §6.1] [04 §7.1].
 		profile := s.ProfileFor(r.Unit)
-		bias := path.Point{X: int32(profile.FootPrintX / 2), Z: int32(profile.FootPrintZ / 2)}
 		var hasBounds bool
 		var bounds path.Rect
 		if s.Terrain != nil && s.Terrain.CellW > 0 && s.Terrain.CellH > 0 {
@@ -1067,12 +1196,14 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) ([]path.Poi
 			requester := r.Unit
 			revTick := s.tick
 			cfg = path.SearchConfig{
-				Start:     r.Start,
-				Goal:      r.Goal,
-				Scale:     scale,
-				Bias:      bias,
-				HasBounds: hasBounds,
-				Bounds:    bounds,
+				Start:      r.Start,
+				Goal:       r.Goal,
+				Scale:      scale,
+				FootPrintX: int32(profile.FootPrintX),
+				FootPrintZ: int32(profile.FootPrintZ),
+				StartDir:   uint8((s.headingFor(r.Unit) + 0x1000) >> 13 & 7),
+				HasBounds:  hasBounds,
+				Bounds:     bounds,
 				PassableValue: func(c path.Cell) uint8 {
 					return layer.Value(c.X, c.Z)
 				},
@@ -1081,26 +1212,34 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) ([]path.Poi
 				},
 			}
 		} else {
-			// No terrain: nothing to classify; every cell passes except the
-			// bounds check (HasBounds is false above) [04 §7.1] C10.
+			// No authored terrain layer is available; keep this request inert
+			// rather than inventing permissive passability.
 			cfg = path.SearchConfig{
-				Start:      r.Start,
-				Goal:       r.Goal,
-				Scale:      scale,
-				Bias:       bias,
-				HasBounds:  hasBounds,
-				Bounds:     bounds,
-				IsPassable: func(path.Cell) bool { return true },
+				Start:         r.Start,
+				Goal:          r.Goal,
+				Scale:         scale,
+				FootPrintX:    int32(profile.FootPrintX),
+				FootPrintZ:    int32(profile.FootPrintZ),
+				StartDir:      uint8((s.headingFor(r.Unit) + 0x1000) >> 13 & 7),
+				HasBounds:     hasBounds,
+				Bounds:        bounds,
+				PassableValue: func(path.Cell) uint8 { return 0 },
 			}
 		}
 		sess = path.NewSession(cfg)
 		s.sessions[idx] = sess
 	}
+	before := sess.Popped()
 	points, status, done := sess.Resume(budget) // [04 §7.3] C11 budget, C12 full-or-empty
+	setup := 0
+	if needsNew {
+		setup = sess.SetupSteps()
+	}
+	pops := sess.Popped() - before
 	if done {
 		s.sessions[idx] = nil
 	}
-	return points, status, done
+	return path.WorkResult{Points: points, Status: status, Done: done, SetupSteps: setup, Pops: pops}
 }
 
 // publishFunc stores the published points into the per-unit Route via Route.Publish
@@ -1143,54 +1282,12 @@ func (s *System) publishFunc(r path.Request, points []path.Point, status path.St
 		}
 	}
 	route.PublishAtRevision(mPoints, revision)
-	// Overnight land policy: Kbots may use aggressive legality-only line of
-	// sight smoothing; vehicles retain conservative forward-only waypoints until
-	// authored turning/braking feasibility is fully recovered [plan §3.1].
-	// The complete footprint predicate is used for every ray cell, so a shortcut
-	// cannot cut a diagonal corner. Exact bad-slope speed/cost remains TODO.
-	if s.world != nil {
-		if u := s.world.Unit(r.Unit); u != nil && u.Def != nil && !u.Def.CanFly {
-			reg := s.ensureLayerRegistry()
-			layer := reg.For(s.classKeyFor(r.Unit), s.ProfileFor(r.Unit))
-			smoothLandRouteWithLayer(route, u.Def, s.ProfileFor(r.Unit), layer)
-		}
-	}
 	route.Status = status
 	if status == path.StatusRejected {
 		s.recordPathFailure(r.Unit, status, s.tick)
 	} else {
 		s.ClearPathFailure(r.Unit)
 	}
-}
-
-func aggressiveLandSmoothing(def *content.UnitDef) bool {
-	return def != nil && strings.HasPrefix(strings.ToLower(strings.TrimSpace(def.MovementClass)), "kbot")
-}
-
-// smoothLandRoute encodes the explicit overnight policy: only Kbots take the
-// aggressive legality-only shortcut; vehicles retain their conservative route
-// until authored forward turning/braking feasibility is established.
-func smoothLandRoute(route *Route, def *content.UnitDef, profile Profile, terrain *world.Terrain) {
-	if route == nil || !aggressiveLandSmoothing(def) {
-		return
-	}
-	route.Smooth(func(p Point) bool {
-		if terrain == nil {
-			return true
-		}
-		return profile.IsPassableFootprint(terrain, p.X-int32(profile.FootPrintX)/2, p.Z-int32(profile.FootPrintZ)/2)
-	})
-}
-
-// smoothLandRouteWithLayer uses the same stamped static source as A* so a
-// legality shortcut cannot cross a cell rejected by search [04 §7.2][04 §7.5].
-func smoothLandRouteWithLayer(route *Route, def *content.UnitDef, profile Profile, layer *ClassLayer) {
-	if route == nil || !aggressiveLandSmoothing(def) || layer == nil {
-		return
-	}
-	route.Smooth(func(p Point) bool {
-		return layer.Value(p.X-int32(profile.FootPrintX)/2, p.Z-int32(profile.FootPrintZ)/2) != LayerBlocked
-	})
 }
 
 // headingFromDelta computes a uint16 heading for a ground delta dx (east), dz (north)
@@ -1283,7 +1380,7 @@ func (s *System) emitMovementCallbacks(u *units.Unit, speed int32) {
 			default:
 				continue
 			}
-			cob.StartWithImmediateBarrier(vm, name, nil) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			cob.StartDeferredWake(vm, name, nil) // [04 §5.2][GAP T15] deferred callback wake
 		}
 		s.prevMoveTier[u.Handle] = cat
 	}
@@ -1291,7 +1388,7 @@ func (s *System) emitMovementCallbacks(u *units.Unit, speed int32) {
 	band := MediumBand(s.Terrain, u) // simplified mapping [04 §9.1]; exact overwrite 1→2→3 via wy/wt/wl/mb is TODO(question) for hover
 	prevBand := s.prevSFXBand[u.Handle]
 	if band != prevBand {
-		cob.StartWithImmediateBarrier(vm, "setSFXoccupy", []int32{int32(band)}) // I [GAP T15] C17 exact spelling lower-case s
+		cob.StartDeferredWake(vm, "setSFXoccupy", []int32{int32(band)}) // [04 §9.1][GAP T15] deferred callback wake
 		s.prevSFXBand[u.Handle] = band
 	}
 }
@@ -1484,10 +1581,9 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	} else {
 		// Prune(mover pos) [04 §7.3] C15. The stored points carry the half-footprint bias,
 		// so the mover's position is compared in the same biased domain [04 §7.1] C1.
-		profile := s.resolveProfile(u)
 		moverPt := Point{
-			X: world.WorldToCell(u.X) + int32(profile.FootPrintX/2),
-			Z: world.WorldToCell(u.Z) + int32(profile.FootPrintZ/2),
+			X: int32(int64(u.X) / 65536),
+			Z: int32(int64(u.Z) / 65536),
 		}
 		route.Prune(moverPt)
 		if !route.Active || route.Count == 0 {
@@ -1538,10 +1634,8 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		} else {
 			wp = route.Points[0]
 		}
-		wpWorldX = world.CellToWorld(wp.X)
-		wpWorldZ = world.CellToWorld(wp.Z)
-		wpWorldX = numeric.Fixed(int64(wpWorldX) + 524288) // 0.5 cell = 524288 = 1<<19 [03 §2.1]
-		wpWorldZ = numeric.Fixed(int64(wpWorldZ) + 524288)
+		wpWorldX = numeric.Fixed(int64(wp.X) * 65536)
+		wpWorldZ = numeric.Fixed(int64(wp.Z) * 65536)
 		dx = int64(wpWorldX) - int64(u.X)
 		dz = int64(wpWorldZ) - int64(u.Z)
 	}

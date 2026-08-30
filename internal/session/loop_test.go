@@ -112,8 +112,7 @@ func TestAICallbackInsideTickPlayer(t *testing.T) {
 	p.Exists = true
 	p.ControllerState = 2 // computer (one of {1,2,3} outer gate, and ==2 inner gate)
 	p.IsObserver = false
-	p.StatusHalfwordAt144 = 1 // passes predicate half!=0 [05]
-	p.StatusWordAt140 = 0
+	p.SetSettlementStatusPair(1, 0) // first value passes the literal gate [05]
 	p.GameEnded = false
 	p.EndGameCountdown = -1
 	p.UpdateTime = 10 // due at tick 10
@@ -228,8 +227,7 @@ func TestAICallbackInsideTickPlayer(t *testing.T) {
 	p2.Exists = true
 	p2.ControllerState = 2
 	p2.IsObserver = false
-	p2.StatusHalfwordAt144 = 1
-	p2.StatusWordAt140 = 0
+	p2.SetSettlementStatusPair(1, 0)
 	p2.GameEnded = false
 	p2.EndGameCountdown = -1
 	p2.UpdateTime = 20
@@ -261,8 +259,7 @@ func TestCoordinatorIteratesPlayersAscending(t *testing.T) {
 		p.Exists = true
 		p.ControllerState = 2
 		p.IsObserver = false
-		p.StatusHalfwordAt144 = 1
-		p.StatusWordAt140 = 0
+		p.SetSettlementStatusPair(1, 0)
 		p.GameEnded = false
 		p.EndGameCountdown = -1
 		p.UpdateTime = 100

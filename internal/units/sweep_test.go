@@ -11,8 +11,8 @@ import (
 // TestVisitActiveSlotsAscending verifies ascending retail slot order, one visit
 // per slot per traversal, no map iteration defines order [01 §4.4][01 §6.2].
 func TestVisitActiveSlotsAscending(t *testing.T) {
-	world := NewSliced(5, nil) // 5 per player, sliced
-	def := &content.UnitDef{MaxDamage: 100, Limit: -1}
+	world := newFixtureWorld(5, nil) // 5 per player, sliced
+	def := &content.UnitDef{UnitName: "sweep", MaxDamage: 100, Limit: -1}
 	// Create out-of-order players
 	h0a, _ := world.Create(def, 0, 0, 0, 0) // slot 1
 	h0b, _ := world.Create(def, 0, 0, 0, 0) // slot 2
@@ -62,8 +62,8 @@ func TestVisitActiveSlotsAscending(t *testing.T) {
 // does not use map iteration for ordering. It verifies determinism across two
 // worlds built with same creation order; map iteration would randomize.
 func TestVisitActiveSlotsNoMapIteration(t *testing.T) {
-	world := NewSliced(20, nil)
-	def := &content.UnitDef{MaxDamage: 100}
+	world := newFixtureWorld(20, nil)
+	def := &content.UnitDef{UnitName: "sweep-determinism", MaxDamage: 100}
 	var handles []pool.Handle
 	for i := 0; i < 10; i++ {
 		h, _ := world.Create(def, uint8(i%10), 0, 0, 0)
@@ -85,8 +85,8 @@ func TestVisitActiveSlotsNoMapIteration(t *testing.T) {
 // TestFreeCurrentDoesNotSkip verifies freeing current unit does not skip or
 // double-visit another [01 §4.4].
 func TestFreeCurrentDoesNotSkip(t *testing.T) {
-	world := NewSliced(5, nil)
-	def := &content.UnitDef{MaxDamage: 100, Limit: -1}
+	world := newFixtureWorld(5, nil)
+	def := &content.UnitDef{UnitName: "sweep-free", MaxDamage: 100, Limit: -1}
 	h1, _ := world.Create(def, 0, 0, 0, 0) //1
 	h2, _ := world.Create(def, 0, 0, 0, 0) //2
 	h3, _ := world.Create(def, 0, 0, 0, 0) //3
@@ -137,8 +137,8 @@ func TestFreeCurrentDoesNotSkip(t *testing.T) {
 // during the unit's own phase-2 visit: the mark remains live for the rest of
 // that visit, then the slot-end finalizer fires exactly once [01 §4.4].
 func TestDeathDuringOwnVisitFinalizesAtVisitEnd(t *testing.T) {
-	world := NewSliced(4, nil)
-	def := &content.UnitDef{MaxDamage: 100, Limit: -1}
+	world := newFixtureWorld(4, nil)
+	def := &content.UnitDef{UnitName: "sweep-own-visit", MaxDamage: 100, Limit: -1}
 	h, err := world.Create(def, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -168,8 +168,8 @@ func TestDeathDuringOwnVisitFinalizesAtVisitEnd(t *testing.T) {
 // TestAllocationDuringTraversal follows same-tick rule: new unit ahead visited
 // same tick, behind waits [01 §4.4].
 func TestAllocationDuringTraversal(t *testing.T) {
-	world := NewSliced(5, nil)
-	def := &content.UnitDef{MaxDamage: 100, Limit: -1}
+	world := newFixtureWorld(5, nil)
+	def := &content.UnitDef{UnitName: "sweep-allocation", MaxDamage: 100, Limit: -1}
 	h1, _ := world.Create(def, 0, 0, 0, 0) // slot1
 	h2, _ := world.Create(def, 0, 0, 0, 0) // slot2
 	h3, _ := world.Create(def, 0, 0, 0, 0) // slot3
@@ -248,8 +248,8 @@ func TestAllocationDuringTraversal(t *testing.T) {
 // TestFinalizeDeathExactlyOnce verifies death hooks and pool free happen exactly
 // once via FinalizeDeath; second call no-op [01 §4.4].
 func TestFinalizeDeathExactlyOnce(t *testing.T) {
-	world := NewSliced(10, nil)
-	def := &content.UnitDef{MaxDamage: 100}
+	world := newFixtureWorld(10, nil)
+	def := &content.UnitDef{UnitName: "sweep-finalize", MaxDamage: 100}
 	h, _ := world.Create(def, 0, 0, 0, 0)
 	hookCount := 0
 	world.OnDeath = func(_ pool.Handle, _ DeathCause, _ *Unit) { hookCount++ }
@@ -316,8 +316,8 @@ func TestFinalizeDeathExactlyOnce(t *testing.T) {
 // TestDeadUnitNotStepped verifies dead unit cannot be stepped by later stages
 // after finalization [04 "unit sweep"].
 func TestDeadUnitNotStepped(t *testing.T) {
-	world := NewSliced(10, nil)
-	def := &content.UnitDef{MaxDamage: 100}
+	world := newFixtureWorld(10, nil)
+	def := &content.UnitDef{UnitName: "sweep-dead", MaxDamage: 100}
 	h, _ := world.Create(def, 0, 0, 0, 0)
 	// Mark dying and finalize
 	world.Destroy(h, DeathKilled)
@@ -347,8 +347,8 @@ func TestDeadUnitNotStepped(t *testing.T) {
 // TestVisitActiveSlotsFreedSlotReusable verifies freed slot immediately reusable
 // and no double-visit [01 §4.4][P0-16].
 func TestVisitActiveSlotsFreedSlotReusable(t *testing.T) {
-	world := NewSliced(5, nil)
-	def := &content.UnitDef{MaxDamage: 100, Limit: -1}
+	world := newFixtureWorld(5, nil)
+	def := &content.UnitDef{UnitName: "sweep-reuse", MaxDamage: 100, Limit: -1}
 	h1, _ := world.Create(def, 0, 0, 0, 0) //1
 	h2, _ := world.Create(def, 0, 0, 0, 0) //2
 	h3, _ := world.Create(def, 0, 0, 0, 0) //3

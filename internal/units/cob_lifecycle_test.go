@@ -13,7 +13,7 @@ import (
 )
 
 // TestBindCOBForUnitRunsCreateOnceBeforeAttach checks the production unit
-// binding path: instance ports are installed, mode-I Create runs once, and
+// binding path: instance ports are installed, D+wake Create runs once, and
 // only then can the binding be attached to a playable unit [04 §5.1].
 func TestBindCOBForUnitRunsCreateOnceBeforeAttach(t *testing.T) {
 	root := t.TempDir()
@@ -40,7 +40,7 @@ func TestBindCOBForUnitRunsCreateOnceBeforeAttach(t *testing.T) {
 		t.Fatalf("binding did not record one completed Create: %+v", binding)
 	}
 	if binding.VM.DrainCalls != 1 {
-		t.Fatalf("mode-I Create used %d VM drains, want one delta-zero barrier", binding.VM.DrainCalls)
+		t.Fatalf("D+wake Create used %d VM drains, want one delta-zero barrier", binding.VM.DrainCalls)
 	}
 	if err := u.AttachCOBBinding(binding); err != nil {
 		t.Fatalf("AttachCOBBinding: %v", err)

@@ -199,10 +199,8 @@ func (s *Session) finalizePhase2Death(h pool.Handle, tick uint32) {
 	if s.Movement != nil {
 		s.Movement.ForgetUnit(h)
 		if s.Movement.Scheduler != nil {
-			s.Movement.Scheduler.Cancel(h)
+			s.Movement.CancelPathRequest(h)
 		}
-	} else if s.Path != nil {
-		s.Path.Cancel(h)
 	}
 }
 
@@ -353,11 +351,7 @@ func (s *Session) stepUnitPhase(tick uint32) {
 											routeFail.Active = false
 											routeFail.Dirty = true
 										}
-										if schedFail := s.Movement.Scheduler; schedFail != nil {
-											schedFail.Cancel(h)
-										} else if s.Path != nil {
-											s.Path.Cancel(h)
-										}
+										s.Movement.CancelPathRequest(h)
 										s.Movement.ClearPathFailure(h)
 									}
 								} else {

@@ -8,6 +8,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/session"
@@ -55,9 +56,15 @@ func placeClickFixture(t *testing.T, cellW, cellH int32) (*battleSession, *sessi
 func heldClick(c *BattleController, x, y int32, held int) {
 	c.Step(BattleInputFrame{MouseX: x, MouseY: y, Elapsed: 1.0 / 30.0}, nil)
 	for i := 0; i < held; i++ {
-		c.Step(BattleInputFrame{MouseX: x, MouseY: y, Buttons: BattleMouseButtons{Left: true}, Elapsed: 1.0 / 30.0}, nil)
+		f := BattleInputFrame{MouseX: x, MouseY: y, Buttons: BattleMouseButtons{Left: true}, Elapsed: 1.0 / 30.0}
+		// The device sampler reports the press edge on the first held frame
+		// only; a hand-authored frame states its edges explicitly [07 §2].
+		f.PressedButtons[input.MouseButtonLeft] = i == 0
+		c.Step(f, nil)
 	}
-	c.Step(BattleInputFrame{MouseX: x, MouseY: y, Elapsed: 1.0 / 30.0}, nil)
+	f := BattleInputFrame{MouseX: x, MouseY: y, Elapsed: 1.0 / 30.0}
+	f.ReleasedButtons[input.MouseButtonLeft] = true
+	c.Step(f, nil)
 }
 
 // TestHeldPlacementClickQueuesOnlyTheBuildOrder locks the mouse-button

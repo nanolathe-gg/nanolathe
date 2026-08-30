@@ -549,8 +549,8 @@ func TestTickWindowOrder(t *testing.T) {
 
 func TestDeferredQueueOrdering(t *testing.T) {
 	// Deferred callbacks produced before normal pass run same visit [GAP T15] C17.
-	// Immediate callbacks after normal pass wait, except an immediate drain barrier
-	// can execute them earlier.
+	// D+wake callbacks after normal pass wait in this queue model; the producer's
+	// barrier can execute them earlier through the VM helper.
 	q := &DeferredQueue{}
 	q.EnqueueDeferred(QueuedCallback{Kind: CallbackSetDirection, Script: "SetDirection"})
 	q.EnqueueDeferred(QueuedCallback{Kind: CallbackSetSpeed, Script: "SetSpeed"})
@@ -567,10 +567,10 @@ func TestDeferredQueueOrdering(t *testing.T) {
 	if len(q.Pending) != 0 {
 		t.Fatalf("deferred cleared, pending %v", q.Pending)
 	}
-	// Enqueue immediate after drain should remain pending until explicit immediate barrier
-	q.EnqueueImmediate(QueuedCallback{Kind: CallbackMoveRate1, Script: "MoveRate1"})
-	if len(q.Pending) != 1 {
-		t.Fatalf("immediate should be pending %v", q.Pending)
+	// Enqueue D+wake after drain should remain pending until its producer's barrier.
+	q.EnqueueWake(QueuedCallback{Kind: CallbackMoveRate1, Script: "MoveRate1"})
+	if len(q.Pending) != 1 || !q.Pending[0].Wake {
+		t.Fatalf("D+wake should be pending %v", q.Pending)
 	}
 	// Second deferred after drain should be deferred but not drained until next DrainNormal
 	q.EnqueueDeferred(QueuedCallback{Kind: CallbackRockUnit, Script: "RockUnit"})
@@ -579,7 +579,7 @@ func TestDeferredQueueOrdering(t *testing.T) {
 	}
 	started = nil
 	q.DrainNormal(func(cb QueuedCallback) bool {
-		// Only the deferred RockUnit should be attempted; immediate MoveRate1 stays
+		// Only the deferred RockUnit should be attempted; D+wake MoveRate1 stays
 		started = append(started, cb.Script)
 		return true
 	})
@@ -587,7 +587,7 @@ func TestDeferredQueueOrdering(t *testing.T) {
 		t.Fatalf("second DrainNormal started %v want [RockUnit]", started)
 	}
 	if len(q.Pending) != 1 || q.Pending[0].Script != "MoveRate1" {
-		t.Fatalf("immediate should remain pending after deferred drain %v", q.Pending)
+		t.Fatalf("D+wake should remain pending after deferred drain %v", q.Pending)
 	}
 }
 
@@ -653,12 +653,30 @@ func TestPackHelpers(t *testing.T) {
 	x := numeric.FixedFromInt(10)
 	z := numeric.FixedFromInt(-20)
 	packed := PackXZ(x, z)
-	dx := int32(int16(packed & 0xFFFF))
-	dz := int32(int16((packed >> 16) & 0xFFFF))
-	if dx != 10 || dz != -20 {
+	dx, dz := unpackXZ(packed)
+	if dx != int32(x) || dz != int32(z) {
 		t.Fatalf("PackXZ round-trip %d/%d want 10/-20 packed %#x", dx, dz, uint32(packed))
 	}
-	if got := Distance(packed); got != int32(math.Hypot(10, -20)) {
-		t.Fatalf("Distance %d want %d", got, int32(math.Hypot(10, -20)))
+	if got := Distance(packed); got != int32(math.Hypot(10, -20)*65536) {
+		t.Fatalf("Distance %d want %d", got, int32(math.Hypot(10, -20)*65536))
+	}
+}
+
+func TestRoundNearestEven(t *testing.T) {
+	cases := []struct {
+		in   float64
+		want int32
+	}{
+		{0.5, 0},
+		{1.5, 2},
+		{2.5, 2},
+		{-0.5, 0},
+		{-1.5, -2},
+		{-2.5, -2},
+	}
+	for _, tc := range cases {
+		if got := roundNearestEven(math.Float64bits(tc.in)); got != tc.want {
+			t.Errorf("roundNearestEven(%v)=%d want %d", tc.in, got, tc.want)
+		}
 	}
 }

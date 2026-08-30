@@ -1,14 +1,12 @@
-// Package cob implements the COB VM [04 §4.2] [04 §4.3] [04 §4.6] [fmt cob] [P1-11].
+// Package cob implements the COB VM [04 §4.2] [04 §4.3] [04 §4.6] [fmt cob].
 //
 // Contracts C10–C14 plus the drain/signal piece surface are owned here.
 // Engine ports and callbacks (C15–C19) live in ports.go (WU-06-7); this file
 // defines only the minimal unexported hook Drain needs to call out.
-// P1-11 residuals implemented: legacy 0x10009000 two-pop no-op (empty unit
-// adapter stub), reserved 0x10063000 pop-count-and-continue (0 producer in
-// 835 scripts), bitwise word XOR raw a^b [P1-11], stack overflow kills thread
-// (status cleared), bad piece kills, alloc failure start-script retains args
-// / call-script wedges waitSlot=-1 [P1-11]; aim-ready closure, SetSpeed domain,
-// and Killed variant remain TODO(question) [P1-11].
+// Established seams include the empty unit adapters for the legacy effect and
+// shadow writes, the four-word bounds check around the reserved pop form, and
+// deterministic Go termination for malformed stack/piece access. The unassigned
+// Killed query variant remains an explicit zero-valued divergence in bridge.go.
 package cob
 
 import (
@@ -54,9 +52,6 @@ const (
 // [P2-03]. Cycle detection via visited set, queue overflow via diagnostic drop
 // and iteration limit 200, divide-by-zero via thread kill (not process #DE)
 // [P2-03][04 §4.3] C14 I11.
-// TODO(question): Killed variant cell
-// unassigned and persistence [P1-11]; TODO(question): SetSpeed domain
-// (likely 16.16 vs 0x1AE/1B2 thresholds) [P1-11].
 type Thread struct {
 	Status     int // one of Thread* constants [04 §4.2]
 	PC         int // word index into Program.Code [04 §4.3] C12
@@ -223,8 +218,9 @@ func init() {
 }
 
 // NewVM creates a VM bound to prog. Pieces length matches prog.Pieces and
-// statics are zero-initialized per [fmt cob] "Statics are zero-initialized".
-// prog may be nil for fixture VMs that set program later via SetProgram.
+// Nanolathe zero-initializes statics for deterministic ownership; retail's
+// allocator leaves their initial bytes unspecified [R-COB-04 §7]. prog may be
+// nil for fixture VMs that set program later via SetProgram.
 func NewVM(prog *Program) *VM {
 	v := &VM{}
 	v.SetProgram(prog)
@@ -256,13 +252,10 @@ func (v *VM) SetProgram(prog *Program) {
 		v.renderFlagSet = nil
 		return
 	}
-	// Script statics: retail's bind performs NO zeroing pass over the statics
-	// array — the initial content is whatever the tagged allocator handed out
-	// [R-COB-01 §1]. TODO(question): that allocator-provided initial content
-	// is untraced (a recycled block can carry a previous tenant's values);
-	// shipped scripts write statics before reading them, so stock content is
-	// insensitive. Zeroing here is Nanolathe's I11 determinism divergence, not
-	// retail behavior — do not cite it as retail.
+	// Script statics: retail's bind performs no zeroing pass; the initial bytes
+	// come from its allocator and are unspecified [R-COB-04 §7]. Nanolathe
+	// zeroes them for deterministic state, an explicit implementation
+	// divergence rather than a retail default.
 	v.statics = make([]int32, prog.Statics)
 	v.Pieces = make([]model.PieceState, len(prog.Pieces)) // zero-filled by the bind [R-COB-01 §1]
 	v.anims = make([]pieceAnim, len(prog.Pieces))         // piece animation words all zero [R-COB-01 §1]
@@ -428,7 +421,7 @@ func (v *VM) SetSFXVisible(fn func(piece int, sfxType int32) bool) { v.sfxVisibl
 
 // SetSimulationRNG binds the session-owned simulation stream to this VM. COB
 // random opcodes then consume this stream instead of the process-global
-// fallback [01 §7.1] I4. A nil value preserves the legacy fixture fallback.
+// fallback [01 §7.1] I4. A nil value preserves the unconfigured fixture fallback.
 func (v *VM) SetSimulationRNG(sim *rng.Simulation) {
 	if v != nil {
 		v.simRng = sim
@@ -597,15 +590,10 @@ func (v *VM) Start(script int, args []int32) bool {
 // four inputs, forces the depth to three, runs the interpreter inline, and
 // copies the first four window words back out."
 func (v *VM) Call(script int, args []int32) bool {
+	// A blocked query remains allocated after copy-back. Do not clean it up
+	// here: Q lifetime is part of the engine contract and a later normal drain
+	// may resume the thread [04 §4.2].
 	started, _ := v.CallQuery(script, args)
-	if started {
-		// Call historically consumes a blocked query thread. Keep that
-		// compatibility behavior; CallbackBridge uses CallQuery directly so
-		// mode-Q partial results preserve the blocked thread [04 §4.2].
-		if v.lastQueryThread >= 0 && v.lastQueryThread < len(v.Threads) && v.Threads[v.lastQueryThread].Status != ThreadIdle {
-			v.killThread(v.lastQueryThread)
-		}
-	}
 	return started
 }
 
@@ -699,11 +687,11 @@ func (v *VM) Drain(delta int) {
 		}
 		return
 	}
-	// Clamp delta to tick budget 0..5 per [01 §4.2] but allow any int for test hooks.
-	// Retail dispatcher caps at 5; we honor the value as given for determinism
-	// and let the caller clamp.
+	// The scheduler budget is clamped to 0..5 before a VM visit [01 §4.2].
 	if delta < 0 {
 		delta = 0
+	} else if delta > 5 {
+		delta = 5
 	}
 	// Eight thread slots, fixed scan order [04 §4.2] C13 (I1).
 	for idx := 0; idx < 8; idx++ {
@@ -1822,8 +1810,16 @@ func (v *VM) runThread(idx int) {
 				return
 			}
 			argc := int(v.prog.Code[t.PC+2])
-			// Pop count values into discarded temporary [04 §4.3][P1-11].
-			// TODO(question): behavior when count > stackDepth (underflow) remains open [P1-11] §2.4 — pops min(count, depth) or reads garbage? Marked TODO.
+			// Retail uses a four-word temporary for this reserved form. Counts
+			// above four or above the current logical window are malformed; stop
+			// the thread at Nanolathe's bounds-check boundary rather than writing
+			// outside Go state [R-COB-04 §6].
+			if argc < 0 || argc > 4 || argc > t.SP {
+				v.diagnostics = append(v.diagnostics, "cob: reserved pop count outside four-word window")
+				v.killThread(idx)
+				return
+			}
+			// Pop count values into discarded temporary [R-COB-04 §6].
 			for i := 0; i < argc; i++ {
 				t.stackPop()
 			}

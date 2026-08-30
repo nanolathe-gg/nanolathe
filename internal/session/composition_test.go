@@ -219,10 +219,10 @@ func TestValidateCompositionSuccess(t *testing.T) {
 	s.Econ = economyForTest()
 	s.Econ.Players[0].Exists = true
 	s.Econ.Players[0].ControllerState = 1
-	s.Econ.Players[0].StatusHalfwordAt144 = 1
+	s.Econ.Players[0].SetSettlementStatusPair(1, 0)
 	s.Econ.Players[1].Exists = true
 	s.Econ.Players[1].ControllerState = 2
-	s.Econ.Players[1].StatusHalfwordAt144 = 1
+	s.Econ.Players[1].SetSettlementStatusPair(1, 0)
 	s.Econ.SeedDeadlines(0)
 	s.InitBattleWindForSession()
 	if err := createAndBindServicesForTest(t, s); err != nil {
@@ -282,7 +282,7 @@ func TestValidateCompositionMissing(t *testing.T) {
 		s.Econ = economyForTest()
 		s.Econ.Players[0].Exists = true
 		s.Econ.Players[0].ControllerState = 1
-		s.Econ.Players[0].StatusHalfwordAt144 = 1
+		s.Econ.Players[0].SetSettlementStatusPair(1, 0)
 		s.Econ.SeedDeadlines(0)
 		s.InitBattleWindForSession()
 		_ = createAndBindServicesForTest(t, s)
@@ -458,10 +458,10 @@ func TestCompositionGate(t *testing.T) {
 	s.Econ = economyForTest()
 	s.Econ.Players[0].Exists = true
 	s.Econ.Players[0].ControllerState = 1
-	s.Econ.Players[0].StatusHalfwordAt144 = 1
+	s.Econ.Players[0].SetSettlementStatusPair(1, 0)
 	s.Econ.Players[1].Exists = true
 	s.Econ.Players[1].ControllerState = 2
-	s.Econ.Players[1].StatusHalfwordAt144 = 1
+	s.Econ.Players[1].SetSettlementStatusPair(1, 0)
 	s.Econ.SeedDeadlines(0)
 	s.InitBattleWindForSession()
 	if err := createAndBindServicesForTest(t, s); err != nil {

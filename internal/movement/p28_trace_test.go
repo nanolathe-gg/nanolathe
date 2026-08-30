@@ -20,9 +20,9 @@ func TestP28CollisionHistoryOnlyCommitsWhenEnabled(t *testing.T) {
 	}
 	// The scheduler trace surface is enabled by the same opt-in boundary; no
 	// read is allowed to synthesize a request or collision record.
-	s.Scheduler.Submit(path.Request{Unit: 1, Player: 0, Start: path.Cell{}, Goal: path.PointGoal(path.Cell{X: 1}, 0)})
-	if pending, result := s.Scheduler.TraceFor(1); pending == nil || result != nil {
-		t.Fatalf("pending trace mismatch: %v %v", pending, result)
+	s.pathProvider.Submit(path.Request{Unit: 1, Player: 0, Start: path.Cell{}, Goal: path.PointGoal(path.Cell{X: 1}, 0)})
+	if pending, result := s.Scheduler.TraceFor(1); pending != nil || result != nil || !s.pathProvider.HasRequest(1) {
+		t.Fatalf("provider request must remain outside scheduler trace: pending=%v result=%v provider=%v", pending, result, s.pathProvider.HasRequest(1))
 	}
 }
 

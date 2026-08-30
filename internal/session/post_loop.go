@@ -21,6 +21,7 @@ type postLoopState struct {
 	publicationCount uint32
 	ring             deadlineRing
 	pending          pendingList
+	eyeballs         eyeballList // temporary-sight records [01 R-PLAT-02 §5]
 }
 
 func postLoopStateFor(s *Session) *postLoopState {
@@ -94,6 +95,10 @@ func (s *Session) runRetailPostLoopTail(lastTick uint32) {
 	if state.hooks.CompactPending != nil {
 		state.hooks.CompactPending(lastTick)
 	}
+	// The temporary-sight expiry pass is the tail's last step, after the
+	// deadline-ring slide [03 R-COMP-02 §2][01 R-PLAT-02 §5].
+	state.trace = append(state.trace, "eyeball-expire")
+	state.eyeballs.expire(s.Vis, lastTick)
 }
 
 func (s *postLoopState) barrierOne(lastTick uint32) {

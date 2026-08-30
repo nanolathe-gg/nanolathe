@@ -1,77 +1,35 @@
 package path
 
-// Search core for weighted A* on the TNT attribute-cell lattice [04 §7.1][04 §7.2][P0-13].
-//
-// Lattice: one cell = 16 map pixels per cell [04 §7.1] C1. Waypoints come from
-// cell coordinates plus the profile's half-footprint bias [04 §7.1] C1.
-// Neighbor visit order north, northwest, west, southwest, south, southeast,
-// east, northeast [04 §7.1] C2. First expansion attempts nine entries (all eight
-// plus one harmless duplicate); later expansions use a directed five-entry
-// fan centered on the parent travel direction [04 §7.1] C2.
-// Diagonal steps check ONLY the destination cell [04 §7.1] C3.
-// Costs: cardinal 16, diagonal 22 [04 §7.2] C4; turn penalties
-// 0,40,60,80,100,80,60,40 by directional difference [04 §7.2] C4; an
-// unconditional neighbor penalty of 30 [04 §7.2] C4; short-run penalty 75
-// when parent chain straight run <5 and parent exists [04 §7.2] C4.
-// Heuristic scaling hScaled = (h*scale)>>16 with signed 64-bit product and
-// arithmetic shift, no float [04 §7.2] C6. h evaluated once per allocated node
-// [04 §7.2] C7, relaxation adjusts f by g delta alone [04 §7.2] C7.
-// Arrival tolerance is write-once threshold via greedy bidirectional ray walk
-// storing minimum scaled h on frontier into slot never updated [04 §7.2] C9;
-// opened neighbor at or below it gets open-plus-goal status, popping such node
-// terminates and reconstructs [04 §7.2] C9. Early exits in order
-// start-satisfies (0x100), OOB start (0x200), ray connects (0x100 notify but run),
-// ray best >= start (0x200 without seeding) [04 §7.2] C10.
-// Passability injected func(cell) bool, OOB = impassable [04 §7.1] C10.
-// Reconstruction uses predecessor chain via 64-entry ring at index&63 each time
-// direction changes, then start, emission walks masked indices downward
-// [04 §7.3] C13. Path must not import movement to avoid cycle; reconstruction
-// is implemented locally with same semantics as movement.ReconstructRoute [04 §7.3] C13.
+// Search is the deterministic ground path search on the TNT attribute-cell
+// lattice [04 §7.1][04 R-PATH-01 §1–§11]. A Session retains the request
+// between budget slices; a budget boundary never publishes a partial route.
 
-// [04 §7.2] C4 cardinal/diagonal costs — the two corrected constants of PLAN_07.
 const (
-	CardinalCost      int32 = 16 // [04 §7.2] cardinal 16 (corrected)
-	DiagonalCost      int32 = 22 // [04 §7.2] diagonal 22 (corrected)
-	InitialPenalty    int32 = 30 // [04 §7.2] unconditional neighbor penalty
-	ShortRunPenalty   int32 = 75 // [04 §7.2] short-run penalty when straight run <5
-	ShortRunThreshold       = 5  // [04 §7.2] threshold for short-run check
+	CardinalCost    int32 = 16 // [04 §7.2]
+	DiagonalCost    int32 = 22 // [04 §7.2]
+	SteepCost       int32 = 30 // [04 R-PATH-01 §3]
+	ShortRunPenalty int32 = 75 // [04 R-PATH-01 §3]
+	ShortRunLimit         = 5  // [04 R-PATH-01 §3]
 )
 
-// [04 §7.2] C4 direction-change table by absolute directional difference.
-// Index is raw directional difference 0..7 (mod 8), values symmetric.
 var TurnPenaltyTable = [8]int32{0, 40, 60, 80, 100, 80, 60, 40} // [04 §7.2]
 
-// Dir constants in retail neighbor visit order [04 §7.1] C2.
 const (
-	DirN    uint8 = 0 // north (0,-1) [04 §7.1]
-	DirNW   uint8 = 1 // northwest (-1,-1) [04 §7.1]
-	DirW    uint8 = 2 // west (-1,0) [04 §7.1]
-	DirSW   uint8 = 3 // southwest (-1,1) [04 §7.1]
-	DirS    uint8 = 4 // south (0,1) [04 §7.1]
-	DirSE   uint8 = 5 // southeast (1,1) [04 §7.1]
-	DirE    uint8 = 6 // east (1,0) [04 §7.1]
-	DirNE   uint8 = 7 // northeast (1,-1) [04 §7.1]
-	DirNone uint8 = 0xFF
+	DirN    uint8 = 0
+	DirNW   uint8 = 1
+	DirW    uint8 = 2
+	DirSW   uint8 = 3
+	DirS    uint8 = 4
+	DirSE   uint8 = 5
+	DirE    uint8 = 6
+	DirNE   uint8 = 7
+	DirNone uint8 = 0xff
 )
 
-// dirDelta maps Dir 0..7 to cell offset in visit order [04 §7.1] C2.
-var dirDelta = [8]Cell{
-	{0, -1},  // DirN
-	{-1, -1}, // DirNW
-	{-1, 0},  // DirW
-	{-1, 1},  // DirSW
-	{0, 1},   // DirS
-	{1, 1},   // DirSE
-	{1, 0},   // DirE
-	{1, -1},  // DirNE
-}
+var dirDelta = [8]Cell{{0, -1}, {-1, -1}, {-1, 0}, {-1, 1}, {0, 1}, {1, 1}, {1, 0}, {1, -1}}
 
-// IsDiagonal reports whether dir is a diagonal step [04 §7.2] C4.
-func IsDiagonal(dir uint8) bool {
-	return dir != DirNone && dir%2 == 1
-}
+func IsDiagonal(dir uint8) bool { return dir != DirNone && dir&1 != 0 }
 
-// StepCost returns the base step cost for dir [04 §7.2] C4.
 func StepCost(dir uint8) int32 {
 	if IsDiagonal(dir) {
 		return DiagonalCost
@@ -79,222 +37,213 @@ func StepCost(dir uint8) int32 {
 	return CardinalCost
 }
 
-// TurnPenalty returns the direction-change penalty for moving from prev to cur [04 §7.2] C4.
-// If prev is DirNone (start), penalty is 0.
 func TurnPenalty(prev, cur uint8) int32 {
 	if prev == DirNone || cur == DirNone {
 		return 0
 	}
-	diff := int(cur) - int(prev)
-	if diff < 0 {
-		diff += 8
-	}
-	// diff now 0..7 raw difference [04 §7.2]
-	return TurnPenaltyTable[diff]
+	return TurnPenaltyTable[(int(cur)-int(prev)+8)&7]
 }
 
-// ScaledHeuristic computes hScaled = (h*scale)>>16 with signed 64-bit product and arithmetic shift [04 §7.2] C6.
-// No floating point anywhere in the search [04 §7.2] C6.
-func ScaledHeuristic(h, scale int32) int32 {
-	return int32((int64(h) * int64(scale)) >> 16)
-}
+func ScaledHeuristic(h, scale int32) int32 { return int32((int64(h) * int64(scale)) >> 16) }
 
-// straightRunLen returns the length of the straight run ending at id [04 §7.2] C4.
-// It counts consecutive nodes with same Dir as id's Dir, walking parents.
-func straightRunLen(ns *NodeStore, id NodeID) int {
-	if id == invalidNodeID {
-		return 0
-	}
-	n := ns.Get(id)
-	if n.Dir == DirNone {
-		return 0
-	}
-	dir := n.Dir
-	count := 1
-	pid := n.Parent
-	for pid != invalidNodeID {
-		pn := ns.Get(pid)
-		if pn.Dir != dir {
-			break
-		}
-		count++
-		if count >= 64 {
-			break
-		}
-		pid = pn.Parent
-	}
-	return count
-}
-
-// InBounds reports whether cell lies within bounds inclusive [04 §7.1] C10.
-// Bounds is the TNT attribute-cell lattice extent.
 func InBounds(c Cell, bounds Rect) bool {
 	return c.X >= bounds.Min.X && c.X <= bounds.Max.X && c.Z >= bounds.Min.Z && c.Z <= bounds.Max.Z
 }
 
-// isPassableWithBounds wraps injected passability with OOB = impassable [04 §7.1] C10.
-func isPassableWithBounds(c Cell, isPassable func(Cell) bool, hasBounds bool, bounds Rect) bool {
-	if hasBounds && !InBounds(c, bounds) {
-		return false
-	}
-	if isPassable == nil {
-		return true
-	}
-	return isPassable(c)
-}
-
-// passable is the session's unified passability test. With the class-layer
-// value form set, only the value 0 blocks — steep (1), owner-mask miss (2)
-// and clear (3) all expand [04 §6.1 R-DOC04-B]; OOB remains impassable
-// [04 §7.1] C10. Otherwise the boolean injected form applies.
-func (s *Session) passable(c Cell) bool {
-	if s.cfg.PassableValue != nil {
-		if s.cfg.HasBounds && !InBounds(c, s.cfg.Bounds) {
-			return false
-		}
-		return s.cfg.PassableValue(c) != 0
-	}
-	return isPassableWithBounds(c, s.cfg.IsPassable, s.cfg.HasBounds, s.cfg.Bounds)
-}
-
-// startFanDir is the parent travel direction assumed for the search start,
-// which has no parent. TODO(question): [04 §7.1] and the decompile
-// (notes/movement/06_path_search.md §5, fanWidth init 4 → 9 attempts) give
-// the centered-loop mechanism but not where the START's center direction
-// comes from — plausibly the requesting unit's heading. North is the
-// hypothesis implemented here.
-const startFanDir = DirN
-
-// NeighborsForDir returns the expansion fan for a given parent travel direction [04 §7.1] C2.
-// The expansion is one centered loop `for off in [-fan..+fan]: dir =
-// (parentDir+off) & 7` — width 4 for the first expansion (nine attempts) and
-// width 2 afterwards (five-entry fan), per the decompile's single mechanism.
-func NeighborsForDir(cur Cell, dir uint8, isFirst bool) ([]Cell, []uint8) {
-	width := int(2)
-	if isFirst {
+// NeighborsForDir emits the centered fan. The first fan has nine entries,
+// with the reverse direction repeated at both ends [04 §7.1].
+func NeighborsForDir(cur Cell, dir uint8, first bool) ([]Cell, []uint8) {
+	width := 2
+	if first {
 		width = 4
-		if dir == DirNone || dir > 7 {
-			dir = startFanDir
+		if dir > 7 {
+			dir = DirN
 		}
 	}
-	cells := make([]Cell, 0, 2*width+1)
-	dirs := make([]uint8, 0, 2*width+1)
-	for offset := -width; offset <= width; offset++ {
-		d := uint8((int(dir) + offset + 8) % 8)
-		delta := dirDelta[d]
-		cells = append(cells, Cell{X: cur.X + delta.X, Z: cur.Z + delta.Z})
+	cells := make([]Cell, 0, width*2+1)
+	dirs := make([]uint8, 0, width*2+1)
+	for off := -width; off <= width; off++ {
+		d := uint8((int(dir) + off + 8) & 7)
+		cells = append(cells, Cell{cur.X + dirDelta[d].X, cur.Z + dirDelta[d].Z})
 		dirs = append(dirs, d)
 	}
 	return cells, dirs
 }
 
-// rayWalk performs the greedy bidirectional ray walk storing minimum scaled h on frontier [04 §7.2] C9.
-// rayWalk performs the greedy ray walk storing minimum scaled h on frontier [04 §7.2] C9.
-// It walks greedily from start toward target, always stepping to the passable 8-neighbor minimizing scaled h.
-// Returns bestScaled (minimum scaled h among visited passable cells), connects (true if target reached), and hasBest.
-//
-// TODO(question): research describes a BIDIRECTIONAL walk following the
-// DX/DZ direction tables toward the other end, with a dir±2 side fan on
-// blockage, a meet test, and the minimum over both frontiers
-// (/tmp/ta-decompile/notes/movement/06_path_search.md §12). Only the forward
-// greedy half is implemented: a backward walk minimizing H-to-target hugs the
-// goal and would drag the write-once threshold down without attesting
-// anything. Every step strictly decreases scaled h, so the walk terminates
-// without an iteration cap.
-func rayWalk(start, target Cell, isPassable func(Cell) bool, hasBounds bool, bounds Rect, goal Goal, scale int32) (best int32, connects bool, hasBest bool) {
+type rayResult struct {
+	best     int32
+	connects bool
+	steps    int
+}
+
+func opposite(dir uint8) uint8 { return (dir + 4) & 7 }
+
+// walkRay is the forward cardinal walk and alternating two-sided wall follow
+// [04 R-PATH-01 §5]. Each side records its (cell,direction) states, giving the
+// exact cycle termination without an iteration guess.
+func walkRay(start, target Cell, passable func(Cell) uint8, goal Goal, scale int32, visit func(Cell, uint8, bool) bool) rayResult {
+	r := rayResult{best: ScaledHeuristic(goal.H(start), scale)}
 	cur := start
-	h0 := goal.H(cur)
-	best = ScaledHeuristic(h0, scale) // [04 §7.2] C6
-	hasBest = true
-	visited := make(map[Cell]struct{}, 64)
-	visited[cur] = struct{}{}
+	if passable(start) == 0 {
+		return r
+	}
+	mark := func(c Cell, d uint8) bool {
+		if visit != nil && visit(c, d, false) {
+			r.connects = true
+			r.best = 0
+			return true
+		}
+		h := ScaledHeuristic(goal.H(c), scale)
+		if h < r.best {
+			r.best = h
+		}
+		return false
+	}
 	for {
-		if cur == target {
-			connects = true
-			break
-		}
-		curHs := ScaledHeuristic(goal.H(cur), scale)
-		var bestNb Cell
-		bestHs := int32(1 << 30)
-		found := false
-		for _, d := range dirDelta {
-			nb := Cell{X: cur.X + d.X, Z: cur.Z + d.Z}
-			if _, ok := visited[nb]; ok {
-				continue
+		r.steps++ // the scheduler charge precedes the best-cost check [04 R-PATH-01 §5]
+		if r.best == 0 || cur == target {
+			if cur == target {
+				r.best = 0
 			}
-			if !isPassableWithBounds(nb, isPassable, hasBounds, bounds) {
-				continue
+			r.connects = cur == target || r.connects
+			return r
+		}
+		var d uint8
+		switch {
+		case target.X < cur.X:
+			d = DirW
+		case target.X > cur.X:
+			d = DirE
+		case target.Z <= cur.Z:
+			d = DirN
+		default:
+			d = DirS
+		}
+		next := Cell{cur.X + dirDelta[d].X, cur.Z + dirDelta[d].Z}
+		if passable(next) != 0 {
+			if mark(next, d) {
+				return r
 			}
-			hs := ScaledHeuristic(goal.H(nb), scale)
-			if !found || hs < bestHs {
-				bestHs = hs
-				bestNb = nb
-				found = true
+			cur = next
+			continue
+		}
+		upPos, downPos := cur, cur
+		upDir, downDir := (d+1)&7, (d+7)&7
+		upOrigin, downOrigin := upPos, downPos
+		upOriginDir, downOriginDir := upDir, downDir
+		upState := raySideState{}
+		downState := raySideState{}
+		for {
+			if r.best == 0 {
+				return r
 			}
-		}
-		if !found {
-			connects = false
-			break
-		}
-		// Greedy requires strictly closer to make progress; otherwise frontier exhausted [04 §7.2] C9
-		if bestHs >= curHs {
-			connects = false
-			break
-		}
-		cur = bestNb
-		visited[cur] = struct{}{}
-		if bestHs < best {
-			best = bestHs
+			if !raySideStep(&upPos, &upDir, false, upOrigin, upOriginDir, &upState, passable, &r, mark) {
+				return r
+			}
+			if upPos != cur && onRayLeg(cur, upPos, target) {
+				cur = upPos
+				break
+			}
+			if !raySideStep(&downPos, &downDir, true, downOrigin, downOriginDir, &downState, passable, &r, mark) {
+				return r
+			}
+			if downPos != cur && onRayLeg(cur, downPos, target) {
+				cur = downPos
+				break
+			}
 		}
 	}
-	return best, connects, hasBest
 }
 
-// SearchConfig holds inputs for weighted A* search [04 §7.1][04 §7.2].
+func onRayLeg(hit, candidate, target Cell) bool {
+	dx, dz := target.X-hit.X, target.Z-hit.Z
+	cx, cz := candidate.X-hit.X, candidate.Z-hit.Z
+	if dx < 0 {
+		dx, cx = -dx, -cx
+	}
+	if dz < 0 {
+		dz, cz = -dz, -cz
+	}
+	return (cz == 0 && 0 < cx && cx <= dx) || (cx == dx && 0 < cz && cz <= dz)
+}
+
+type raySideState struct {
+	departed     bool
+	blockedSweep uint8
+}
+
+func raySideStep(pos *Cell, probe *uint8, lower bool, origin Cell, originDir uint8, state *raySideState, passable func(Cell) uint8, result *rayResult, mark func(Cell, uint8) bool) bool {
+	if state.departed && *pos == origin && *probe == originDir {
+		return false
+	}
+	d := *probe
+	if lower {
+		d = opposite(d)
+	}
+	next := Cell{pos.X + dirDelta[d].X, pos.Z + dirDelta[d].Z}
+	result.steps++
+	if passable(next) == 0 {
+		state.blockedSweep++
+		if state.blockedSweep == 8 {
+			return false
+		}
+		if lower {
+			*probe = (*probe + 7) & 7
+		} else {
+			*probe = (*probe + 1) & 7
+		}
+		return true
+	}
+	state.departed = state.departed || *pos != origin || *probe != originDir
+	state.blockedSweep = 0
+	*pos = next
+	if mark(next, d) {
+		return false
+	}
+	*probe = (*probe + 7) & 7
+	return true
+}
+
 type SearchConfig struct {
-	Start      Cell
-	Goal       Goal
-	IsPassable func(Cell) bool // injected, nil means all passable except OOB [04 §7.1]
-	Scale      int32           // per-player quantum for hScaled [04 §7.2] C6; 0 defaults to 65536 (1.0)
-	Bias       Point           // half-footprint bias added to cell coords for published waypoints [04 §7.1] C1
-	HasBounds  bool            // whether Bounds is valid for OOB checks
-	Bounds     Rect            // inclusive lattice bounds; OOB = impassable [04 §7.1] C10
-
-	// PassableValue is the stamped class-layer value form of the passability
-	// test [04 §6.1 R-DOC04-B]: 0 blocked, 1 steep, 2 owner/building-mask
-	// miss, 3 clear. EVERY consumer — the A* expansion and all greedy-ray
-	// probes — treats the result as passable iff it is nonzero: only 0
-	// hard-blocks [04 §6.1 R-DOC04-B]. When set it takes precedence over
-	// IsPassable; OOB remains impassable [04 §7.1] C10.
+	Start Cell
+	Goal  Goal
+	Scale int32
+	// FootPrintX and FootPrintZ are the authored footprint dimensions used by
+	// the established cell-to-world route conversion [04 R-PATH-01 §7].
+	FootPrintX    int32
+	FootPrintZ    int32
+	HasBounds     bool
+	Bounds        Rect
 	PassableValue func(Cell) uint8
-
-	// Revise runs the bound class record's request revision pass before any
-	// expansion [04 §6.1 R-DOC04-B][04 §7.3]: the request init revises the
-	// record and its shared layer before enumerating or expanding. Nil is a
-	// no-op.
-	Revise func()
+	Revise        func()
+	// StartDir supplies the unit heading's quantized sector. Zero is north,
+	// retaining the pre-existing API's zero-value behavior [04 R-PATH-01 §4].
+	StartDir uint8
 }
 
-// SearchResult is the outcome of Search [04 §7.2] C10, [04 §7.3] C13.
 type SearchResult struct {
-	Points   []Point // published waypoints (cell + bias) [04 §7.1] C1, [04 §7.3] C13
-	Status   Status  // final publish status: 0 success, 0x100 already satisfied, 0x200 rejected [04 §7.2] C10
-	Notified Status  // early ray notification if any (0x100 connects, 0x200 no closer) [04 §7.2] C10
-	Popped   int     // number of heap pops performed
-	Seeded   bool    // whether A* was seeded (false for early exits without seeding) [04 §7.2] C10
+	Points     []Point
+	Status     Status
+	Notified   Status
+	Popped     int
+	SetupSteps int
+	Seeded     bool
 }
 
-// Session is the resumable search continuation [04 §7.3] C11 C12.
-// It retains the heap, node store, write-once tolerance slot, and goal flags across calls
-// so a search can stop after exactly N pops with heap+request state retained and resume later
-// [04 §7.3] "Budget exhaustion leaves the heap and request active — it does not publish the best partial prefix".
-// The one-shot Search wrapper delegates to a Session with an effectively infinite budget so
-// existing callers and tests keep working with identical results.
+type entry struct {
+	status uint8
+	dir    uint8
+	node   NodeID
+}
+
 type Session struct {
-	cfg SearchConfig
-	// TODO(question): does retail re-weight hScaled with the refreshed 150-tick quantum on resumption, or keep the request's original scale? Keeping initial preserves determinism across budget interruptions. [04 §7.2]
+	cfg          SearchConfig
 	scale        int32
+	entries      map[Cell]entry
 	goalSet      map[Cell]struct{}
+	nearest      Cell
+	nearestDist  int64
+	haveNearest  bool
 	tolerance    int32
 	hasTolerance bool
 	notified     Status
@@ -303,370 +252,303 @@ type Session struct {
 	resultPoints []Point
 	resultStatus Status
 	popped       int
+	setupSteps   int
 	ns           *NodeStore
 	heap         Heap
 	goalFlag     map[NodeID]bool
+	expanded     bool
 }
 
-// NewSession creates a resumable search session [04 §7.1][04 §7.2][04 §7.3] C11 C12.
-// Initialization runs the same early-exit and ray-walk logic as the one-shot Search,
-// including the write-once tolerance slot that is never updated [04 §7.2] C9.
 func NewSession(cfg SearchConfig) *Session {
-	s := &Session{cfg: cfg}
-	scale := cfg.Scale
-	if scale == 0 {
-		scale = 65536
+	s := &Session{cfg: cfg, entries: make(map[Cell]entry), goalSet: make(map[Cell]struct{})}
+	s.scale = cfg.Scale
+	if s.scale == 0 {
+		s.scale = 65536
 	}
-	s.scale = scale
-	s.cfg.Scale = scale
+	s.cfg.Scale = s.scale
 	s.init()
 	return s
 }
 
-// init performs the pre-seed phases: request revision, enumeration, early
-// exits, ray walk, and heap seeding [04 §7.2] C9 C10.
-func (s *Session) init() {
-	cfg := s.cfg
-	scale := s.scale
-	// Request init revises the bound class record and its shared layer
-	// BEFORE any expansion [04 §6.1 R-DOC04-B][04 §7.3].
-	// TODO(question): the trail places the revise call inside request init
-	// ahead of expansion, but not its order relative to the early exits;
-	// it runs first here.
-	if cfg.Revise != nil {
-		cfg.Revise()
+func (s *Session) passValue(c Cell) uint8 {
+	if s.cfg.HasBounds && !InBounds(c, s.cfg.Bounds) {
+		return 0
 	}
-	if cfg.Goal == nil {
-		s.done = true
-		s.resultStatus = StatusRejected
-		s.notified = StatusRejected
-		s.seeded = false
-		return
+	if s.cfg.PassableValue != nil {
+		return s.cfg.PassableValue(c)
 	}
-	enumCells := cfg.Goal.Enumerate(nil)
-	filtered := make([]Cell, 0, len(enumCells))
-	var nearestGoal Cell
-	hasNearest := false
-	var nearestDist int64
-	for _, c := range enumCells {
-		if cfg.HasBounds && !InBounds(c, cfg.Bounds) {
-			continue
-		}
-		filtered = append(filtered, c)
-		dx := int64(c.X) - int64(cfg.Start.X)
-		dz := int64(c.Z) - int64(cfg.Start.Z)
-		dist := dx*dx + dz*dz
-		if !hasNearest || dist < nearestDist {
-			nearestGoal = c
-			nearestDist = dist
-			hasNearest = true
-		}
-	}
-	goalSet := make(map[Cell]struct{}, len(filtered))
-	for _, c := range filtered {
-		goalSet[c] = struct{}{}
-	}
-	s.goalSet = goalSet
-
-	if cfg.Goal.StartSatisfied(cfg.Start) {
-		s.done = true
-		s.resultStatus = StatusAlreadySatisfied
-		s.notified = StatusAlreadySatisfied
-		s.seeded = false
-		s.resultPoints = nil
-		return
-	}
-	if cfg.HasBounds && !InBounds(cfg.Start, cfg.Bounds) {
-		s.done = true
-		s.resultStatus = StatusRejected
-		s.notified = StatusRejected
-		s.seeded = false
-		return
-	}
-	var tolerance int32
-	hasTolerance := false
-	var notified Status
-	if hasNearest {
-		best, connects, hasBest := rayWalk(cfg.Start, nearestGoal, s.passable, cfg.HasBounds, cfg.Bounds, cfg.Goal, scale)
-		if hasBest {
-			tolerance = best
-			hasTolerance = true
-		}
-		if connects {
-			notified = StatusAlreadySatisfied
-		}
-		startH := cfg.Goal.H(cfg.Start)
-		startScaled := ScaledHeuristic(startH, scale)
-		if hasBest && best >= startScaled {
-			s.done = true
-			s.resultStatus = StatusRejected
-			s.notified = StatusRejected
-			s.seeded = false
-			return
-		}
-		s.tolerance = tolerance
-		s.hasTolerance = hasTolerance
-		s.notified = notified
-	}
-	ns := NewNodeStore(scale)
-	var heap Heap
-	goalFlag := make(map[NodeID]bool)
-	startID := ns.Ensure(cfg.Start, 0, invalidNodeID, DirNone, cfg.Goal)
-	ns.SetOpen(startID, true)
-	heap.Push(startID, ns.Get(startID).F)
-	s.ns = ns
-	s.heap = heap
-	s.goalFlag = goalFlag
-	s.seeded = true
-	s.done = false
-	s.popped = 0
+	return 0
 }
 
-// Resume advances the search by up to budget heap pops [04 §7.3] C11 C12.
-// If budget exhaustion stops the search mid-way, it returns done=false with heap+request state retained
-// and no publication [04 §7.3] C12. When the search completes (goal reached + reconstructed or heap exhausted /
-// rejected) it returns done=true with either points (goal reached) or empty (heap exhausted) [04 §7.3] C12.
-// The write-once tolerance slot, node store, and goal flags persist across resumes [04 §7.2] C9 C7.
+func (s *Session) passable(c Cell) bool  { return s.passValue(c) != 0 }
+func (s *Session) touch(c Cell, e entry) { s.entries[c] = e }
+
+func (s *Session) init() {
+	if s.cfg.Revise != nil {
+		s.cfg.Revise()
+	}
+	if s.cfg.Goal == nil {
+		s.done, s.resultStatus, s.notified = true, StatusRejected, StatusRejected
+		return
+	}
+	for _, c := range s.cfg.Goal.Enumerate(nil) {
+		dx, dz := int64(c.X)-int64(s.cfg.Start.X), int64(c.Z)-int64(s.cfg.Start.Z)
+		dist := dx*dx + dz*dz
+		if !s.haveNearest || dist < s.nearestDist {
+			s.nearest, s.nearestDist, s.haveNearest = c, dist, true
+		}
+		if !s.cfg.HasBounds || InBounds(c, s.cfg.Bounds) {
+			s.touch(c, entry{status: 4, dir: DirNone})
+			s.goalSet[c] = struct{}{}
+		}
+	}
+	if s.cfg.Goal.StartSatisfied(s.cfg.Start) {
+		s.done, s.resultStatus, s.notified = true, StatusAlreadySatisfied, StatusAlreadySatisfied
+		return
+	}
+	if s.cfg.HasBounds && !InBounds(s.cfg.Start, s.cfg.Bounds) {
+		s.done, s.resultStatus, s.notified = true, StatusRejected, StatusRejected
+		return
+	}
+	startH := s.cfg.Goal.H(s.cfg.Start)
+	startScaled := ScaledHeuristic(startH, s.scale)
+	if s.haveNearest {
+		r := walkRay(s.cfg.Start, s.nearest, s.passValue, s.cfg.Goal, s.scale, func(c Cell, d uint8, _ bool) bool {
+			e := s.entries[c]
+			goal := e.status&4 != 0
+			e.status |= 8
+			e.dir = d
+			s.touch(c, e)
+			return goal
+		})
+		s.setupSteps = r.steps
+		s.tolerance, s.hasTolerance = r.best, true
+		// The returned ray threshold, rather than the terminal connection bit,
+		// drives the early notification. A zero threshold is the established
+		// already-satisfied notification even when the ray did not touch a goal
+		// cell [04 R-PATH-01 §4 step 9].
+		if r.best == 0 {
+			s.notified = StatusAlreadySatisfied
+		} else {
+			s.notified = StatusRejected
+			if r.best >= startScaled {
+				s.done, s.resultStatus = true, StatusRejected
+				return
+			}
+		}
+	}
+	s.ns = NewNodeStore(s.scale)
+	s.heap.Clear()
+	s.goalFlag = make(map[NodeID]bool)
+	startDir := s.cfg.StartDir
+	if startDir > 7 {
+		startDir = DirN
+	}
+	startID := s.ns.Alloc(s.cfg.Start, 0, startH, invalidNodeID, startDir)
+	s.ns.Get(startID).Run = 100
+	s.ns.SetOpen(startID, true)
+	s.touch(s.cfg.Start, entry{status: 1, dir: startDir, node: startID})
+	s.heap.Push(startID, s.ns.Get(startID).F)
+	s.seeded = true
+}
+
+func (s *Session) Config() SearchConfig { return s.cfg }
+func (s *Session) Start() Cell          { return s.cfg.Start }
+func (s *Session) Goal() Goal           { return s.cfg.Goal }
+func (s *Session) Popped() int          { return s.popped }
+func (s *Session) SetupSteps() int      { return s.setupSteps }
+func (s *Session) Notified() Status     { return s.notified }
+func (s *Session) Seeded() bool         { return s.seeded }
+func (s *Session) IsDone() bool         { return s.done }
+
 func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 	if s.done {
 		return s.resultPoints, s.resultStatus, true
 	}
 	if !s.seeded {
-		s.done = true
-		s.resultStatus = StatusRejected
-		s.resultPoints = nil
-		return s.resultPoints, s.resultStatus, true
+		s.done, s.resultStatus = true, StatusRejected
+		return nil, s.resultStatus, true
 	}
 	if budget <= 0 {
 		return nil, 0, false
 	}
-	cfg := s.cfg
-	scale := s.scale
-	ns := s.ns
-	heap := &s.heap
-	goalSet := s.goalSet
-	goalFlag := s.goalFlag
-	tolerance := s.tolerance
-	hasTolerance := s.hasTolerance
-	notified := s.notified
-
-	isEnumeratedGoal := func(c Cell) bool {
-		_, ok := goalSet[c]
-		return ok
-	}
-
 	startPopped := s.popped
-	for heap.Len() > 0 && s.popped-startPopped < budget {
-		id, f, ok := heap.Pop()
+	for s.heap.Len() > 0 && s.popped-startPopped < budget {
+		id, f, ok := s.heap.Pop()
 		if !ok {
 			break
 		}
-		// Every raw pop counts toward the scheduler budget, including stale
-		// and closed entries [04 §7.3] C11 (decompile: each pop increments
-		// the scheduler counter, notes/movement/06_path_search.md §9).
 		s.popped++
-		node := ns.Get(id)
-		if node.Closed {
+		n := s.ns.Get(id)
+		if n.Closed || !n.Open || f != n.F {
 			continue
 		}
-		if f != node.F {
-			continue
-		}
-		if !node.Open {
-			continue
-		}
-		ns.SetOpen(id, false)
-		// TODO(question): whether retail ever reopens a closed node on a
-		// better path (equal-g never reparents per C5, so reopening can only
-		// trigger on a strictly smaller g, which the write-once h makes
-		// unlikely). Closed is final here.
-		ns.SetClosed(id, true)
-
-		if goalFlag[id] {
-			pts := reconstructRoute(cfg.Start, node.Cell, ns, cfg.Bias)
-			s.done = true
-			s.resultPoints = pts
-			s.resultStatus = 0
+		n.Open, n.Closed = false, true
+		e := s.entries[n.Cell]
+		e.status = (e.status &^ 3) | 2
+		s.touch(n.Cell, e)
+		if e.status&4 != 0 || s.isGoal(n.Cell) {
+			s.finish(reconstructRoute(s.cfg.Start, n.Cell, s.ns, routeFootPrint(s.cfg)))
 			return s.resultPoints, s.resultStatus, true
 		}
-		if isEnumeratedGoal(node.Cell) {
-			pts := reconstructRoute(cfg.Start, node.Cell, ns, cfg.Bias)
-			s.done = true
-			s.resultPoints = pts
-			s.resultStatus = 0
-			return s.resultPoints, s.resultStatus, true
-		}
-
-		isFirst := s.popped == 1
-		neighCells, neighDirs := NeighborsForDir(node.Cell, node.Dir, isFirst)
-		for idx, nCell := range neighCells {
-			dir := neighDirs[idx]
-			if !s.passable(nCell) {
+		cells, dirs := NeighborsForDir(n.Cell, n.Dir, !s.expanded)
+		s.expanded = true
+		for i, c := range cells {
+			d := dirs[i]
+			e := s.entries[c]
+			value := s.passValue(c)
+			state := e.status & 3
+			if value == 0 {
+				if e.status&8 == 0 {
+					e.status = (e.status &^ 3) | 3
+					s.touch(c, e)
+					continue
+				}
+				value = 3
+			}
+			if state != 0 && state != 1 {
 				continue
 			}
-			step := StepCost(dir)
-			turn := TurnPenalty(node.Dir, dir)
-			// [04 §7.2] C4: every live neighbor expansion adds the fixed
-			// penalty. It does not depend on the current heap population.
-			initial := InitialPenalty
+			turn, step := TurnPenalty(n.Dir, d), StepCost(d)
+			terrain := int32(0)
+			if value <= 1 {
+				terrain = SteepCost
+			}
+			run := uint16(1)
+			if d == n.Dir {
+				run = n.Run + 1
+			}
 			short := int32(0)
-			if node.Parent != invalidNodeID {
-				if straightRunLen(ns, id) < ShortRunThreshold {
-					short = ShortRunPenalty
-				}
+			if d != n.Dir && n.Parent != invalidNodeID && n.Run < ShortRunLimit {
+				short = ShortRunPenalty
 			}
-			gNew := node.G + step + turn + initial + short
-
-			if nid, exists := ns.Find(nCell); exists {
-				if gNew < ns.Get(nid).G {
-					if ns.TryRelax(nid, gNew, id, dir) {
-						if ns.IsOpen(nid) {
-							heap.Fix(nid, ns.Get(nid).F)
-						} else if ns.IsClosed(nid) {
-							ns.SetClosed(nid, false)
-							ns.SetOpen(nid, true)
-							heap.Push(nid, ns.Get(nid).F)
-						} else {
-							heap.Push(nid, ns.Get(nid).F)
-							ns.SetOpen(nid, true)
-						}
-					}
+			gNew := n.G + turn + step + terrain + short
+			if e.node != invalidNodeID {
+				// The first allocation owns the terrain term. A later
+				// relaxation reuses it rather than probing/recomputing the
+				// node's heuristic-side terrain field [04 R-PATH-01 §3].
+				terrain = int32(s.ns.Get(e.node).TerrainTerm)
+				gNew = n.G + turn + step + terrain + short
+				if state == 1 && s.ns.TryRelax(e.node, gNew, id, d) {
+					node := s.ns.Get(e.node)
+					node.Run = run
+					s.heap.Fix(e.node, node.F)
 				}
 				continue
 			}
-			newID := ns.Ensure(nCell, gNew, id, dir, cfg.Goal)
-			ns.SetOpen(newID, true)
-			heap.Push(newID, ns.Get(newID).F)
-
-			h := ns.Get(newID).H
-			hs := ScaledHeuristic(h, scale)
-			if hasTolerance && hs <= tolerance {
-				goalFlag[newID] = true
+			nid := s.ns.Alloc(c, gNew, s.cfg.Goal.H(c), id, d)
+			node := s.ns.Get(nid)
+			node.Run, node.TerrainTerm, node.Open = run, uint16(terrain), true
+			s.heap.Push(nid, node.F)
+			e = entry{status: 1, dir: d, node: nid}
+			hs := ScaledHeuristic(node.H, s.scale)
+			if s.hasTolerance && hs <= s.tolerance {
+				e.status |= 4
+				s.goalFlag[nid] = true
 			}
-			if isEnumeratedGoal(nCell) {
-				goalFlag[newID] = true
+			if s.isGoal(c) {
+				e.status |= 4
+				s.goalFlag[nid] = true
 			}
+			s.touch(c, e)
 		}
 	}
-
-	if s.done {
-		return s.resultPoints, s.resultStatus, true
-	}
-	if heap.Len() == 0 {
-		s.done = true
-		s.resultPoints = nil
-		s.resultStatus = StatusRejected
-		if notified != 0 {
-			return s.resultPoints, notified, true
-		}
-		return s.resultPoints, s.resultStatus, true
+	if s.heap.Len() == 0 {
+		s.done, s.resultStatus = true, StatusRejected
+		return nil, s.resultStatus, true
 	}
 	return nil, 0, false
 }
 
-// Config returns the search configuration (copy) for request-matching.
-func (s *Session) Config() SearchConfig { return s.cfg }
-
-// Start returns the session start cell.
-func (s *Session) Start() Cell { return s.cfg.Start }
-
-// Goal returns the session goal.
-func (s *Session) Goal() Goal { return s.cfg.Goal }
-
-// Popped returns total heap pops performed so far.
-func (s *Session) Popped() int { return s.popped }
-
-// Notified returns the early ray notification status if any.
-func (s *Session) Notified() Status { return s.notified }
-
-// Seeded reports whether the A* was seeded.
-func (s *Session) Seeded() bool { return s.seeded }
-
-// IsDone reports whether the session has completed.
-func (s *Session) IsDone() bool { return s.done }
-
-// Search runs weighted A* per [04 §7.1][04 §7.2][04 §7.3] C1-C4,C6,C7,C9,C10.
-// Passability comes in as injected func [04 §7.1]; OOB is impassable [04 §7.1] C10.
-// hScaled uses full signed 64-bit product + arithmetic shift, no float [04 §7.2] C6.
-// Early exits are checked IN ORDER [04 §7.2] C10.
-// Arrival tolerance threshold is write-once via rayWalk never updated [04 §7.2] C9.
-// Reconstruction uses 64-entry ring at index&63 each time direction changes [04 §7.3] C13.
-// This one-shot entry point is a wrapper over the resumable Session so all current
-// callers/tests keep working with identical results [04 §7.3] C11 C12.
-func Search(cfg SearchConfig) SearchResult {
-	sess := NewSession(cfg)
-	if sess.done {
-		return SearchResult{Points: sess.resultPoints, Status: sess.resultStatus, Notified: sess.notified, Popped: sess.popped, Seeded: sess.seeded}
-	}
-	points, status, _ := sess.Resume(1 << 30)
-	return SearchResult{Points: points, Status: status, Notified: sess.notified, Popped: sess.popped, Seeded: sess.seeded}
+func (s *Session) isGoal(c Cell) bool {
+	_, ok := s.goalSet[c]
+	return ok
 }
 
-// reconstructRoute walks predecessor chain producing []Point per [04 §7.3] C13 ring semantics locally.
-// This avoids importing movement to prevent cycle; semantics match movement.ReconstructRoute [04 §7.3] C13.
-// The caller supplies start cell, goal cell, NodeStore chain, and half-footprint bias [04 §7.1] C1.
-func reconstructRoute(start, goal Cell, ns *NodeStore, bias Point) []Point {
-	var ring [64]Cell
-	next := 0
-	changes := 0
-	prevDx, prevDz := int32(1<<30), int32(1<<30)
-	// Find goal node ID
+func (s *Session) finish(points []Point) {
+	s.done, s.resultPoints, s.resultStatus = true, points, 0
+}
+
+func routeFootPrint(cfg SearchConfig) Point {
+	return Point{X: cfg.FootPrintX, Z: cfg.FootPrintZ}
+}
+
+func Search(cfg SearchConfig) SearchResult {
+	s := NewSession(cfg)
+	if !s.done {
+		s.Resume(1 << 30)
+	}
+	return SearchResult{Points: s.resultPoints, Status: s.resultStatus, Notified: s.notified, Popped: s.popped, SetupSteps: s.setupSteps, Seeded: s.seeded}
+}
+
+func straightRunLen(ns *NodeStore, id NodeID) int {
+	if id == invalidNodeID {
+		return 0
+	}
+	if run := ns.Get(id).Run; run != 0 {
+		return int(run)
+	}
+	n := ns.Get(id)
+	if n.Dir == DirNone {
+		return 0
+	}
+	count := 1
+	for parent := n.Parent; parent != invalidNodeID; parent = ns.Get(parent).Parent {
+		if ns.Get(parent).Dir != n.Dir {
+			break
+		}
+		count++
+	}
+	return count
+}
+
+func reconstructRoute(start, goal Cell, ns *NodeStore, footprint Point) []Point {
 	goalID, ok := ns.Find(goal)
 	if !ok {
-		// goal not in store; unreachable in retail, which reconstructs only
-		// off a popped goal node. Kept as a defensive [start,goal] fallback.
-		// TODO(question): confirm retail has no equivalent path.
-		ring[0] = goal
-		ring[1] = start
-		pts := make([]Point, 2)
-		pts[0] = Point{X: start.X + bias.X, Z: start.Z + bias.Z}
-		pts[1] = Point{X: goal.X + bias.X, Z: goal.Z + bias.Z}
-		return pts
+		return nil
 	}
-	curID := goalID
-	curCell := ns.Get(curID).Cell
-	if curCell != start {
-		for curCell != start {
-			n := ns.Get(curID)
-			parentID := n.Parent
-			if parentID == invalidNodeID {
-				break
-			}
-			parentCell := ns.Get(parentID).Cell
-			dx := curCell.X - parentCell.X
-			dz := curCell.Z - parentCell.Z
-			if dx != prevDx || dz != prevDz {
-				ring[next&63] = curCell // [04 §7.3] C13 index &63
-				next++
-				changes++
-				prevDx, prevDz = dx, dz
-			}
-			curID = parentID
-			curCell = parentCell
-			if curID == invalidNodeID {
-				break
-			}
-			// safety break if chain loops
-			if changes > 1000 {
-				break
-			}
+	var ring [64]Cell
+	ring[0] = goal
+	d := ns.Get(goalID).Dir
+	n := 1
+	curID, cur := goalID, goal
+	for cur != start {
+		node := ns.Get(curID)
+		d2 := node.Dir
+		if d2 != d {
+			ring[n&63] = cur
+			n++
+			d = d2
 		}
+		if d > 7 {
+			return nil
+		}
+		cur.X -= dirDelta[d].X
+		cur.Z -= dirDelta[d].Z
+		parent, exists := ns.Find(cur)
+		if !exists {
+			return nil
+		}
+		curID = parent
 	}
-	// append start cell [04 §7.3] C13
-	ring[next&63] = start
-	next++
-	total := changes + 1
-	if total > 64 {
-		total = 64 // [04 §7.3] C13 min(directionChanges+1,64)
+	ring[n&63] = start
+	n++
+	count := n
+	if count > 64 {
+		count = 64
 	}
-	if total <= 0 {
-		total = 1
-	}
-	points := make([]Point, total)
-	for i := 0; i < total; i++ {
-		idx := (next - 1 - i) & 63 // masked downward, newest first [04 §7.3] C13
-		cell := ring[idx]
-		points[i] = Point{X: cell.X + bias.X, Z: cell.Z + bias.Z} // [04 §7.1] C1 plus bias [04 §7.3] C13
+	points := make([]Point, count)
+	for i := range points {
+		c := ring[(n-1-i)&63]
+		points[i] = worldPoint(c, footprint)
 	}
 	return points
+}
+
+func worldPoint(c Cell, footprint Point) Point {
+	// The int16 conversion is part of the route representation, before the
+	// footprint offset and final factor of eight [04 R-PATH-01 §7].
+	x := int32(int16(c.X*2)) + footprint.X
+	z := int32(int16(c.Z*2)) + footprint.Z
+	return Point{X: x * 8, Z: z * 8}
 }

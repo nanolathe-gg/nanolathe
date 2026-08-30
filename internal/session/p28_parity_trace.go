@@ -39,7 +39,7 @@ type ParityUnit struct {
 	Kills                                             int32
 	ParalyzeExpire                                    uint32
 	Stunned                                           bool
-	PriorSample                                       uint8
+	CurrentSample, PriorSample                        uint8
 	Guards                                            GuardTrace
 	Slots                                             [3]SlotTrace
 	Orders                                            []OrderTrace
@@ -295,7 +295,7 @@ func (s *Session) parityUnit(u *units.Unit) ParityUnit {
 		Busy: u.Busy, YardOpen: u.YardOpen, BuggerOff: u.BuggerOff, Armored: u.Armored,
 		Group: u.Group, SpotMetal: u.SpotMetal, OrderGuard: u.OrderGuard, Activated: u.Activated,
 		IsCloaked: u.IsCloaked, Kills: u.Kills, ParalyzeExpire: u.ParalyzeExpire, Stunned: u.Stunned,
-		PriorSample: u.PriorSample}
+		CurrentSample: u.CurrentSample, PriorSample: u.PriorSample}
 	pu.Guards = GuardTrace{BuildAssist: u.GuardLatches.BuildAssist, AutoFire: u.GuardLatches.AutoFire, Repair: u.GuardLatches.Repair, HelpBuild: u.GuardLatches.HelpBuild}
 	if u.Def != nil {
 		pu.DefinitionKey = u.Def.CanonicalKey
@@ -419,16 +419,16 @@ func (s *Session) ParityAuthoritativeHash() (string, error) {
 			w("economy-unit:%d:%d:%s:%08x:%08x|", u.Slot, u.Owner, u.DefinitionKey, math.Float32bits(u.SpotMetal), math.Float32bits(u.Remaining))
 			for resource := 0; resource < 2; resource++ {
 				writeBucket(w, "unit-live", int(u.Slot), resource, u.Buckets[resource])
-				writeBucket(w, "unit-archive", int(u.Slot), resource, u.Archived[resource])
+				writeArchivedBucket(w, "unit-archive", int(u.Slot), resource, u.Archived[resource])
 			}
 		}
 		for i := range e.Players {
 			p := e.Players[i]
-			w("player:%d:%t:%d:%d:%d:%d:%08x:%08x|", i, p.Exists, p.ControllerState, p.StatusHalfwordAt144, p.StatusWordAt140, p.EndGameCountdown, math.Float32bits(p.Stock[0]), math.Float32bits(p.Stock[1]))
+			w("player:%d:%t:%d:%d:%d:%d:%08x:%08x|", i, p.Exists, p.ControllerState, p.SettlementStatusFirst, p.SettlementStatusSecond, p.EndGameCountdown, math.Float32bits(p.Stock[0]), math.Float32bits(p.Stock[1]))
 			w("cap:%08x:%08x:pass:%08x:%08x:%08x:%08x:ai:%08x:%08x:%08x:%08x|", math.Float32bits(p.Capacity[0]), math.Float32bits(p.Capacity[1]), math.Float32bits(p.PassProduced[0]), math.Float32bits(p.PassProduced[1]), math.Float32bits(p.PassConsumed[0]), math.Float32bits(p.PassConsumed[1]), math.Float32bits(p.AIProduction[0]), math.Float32bits(p.AIProduction[1]), math.Float32bits(p.AIConsumption[0]), math.Float32bits(p.AIConsumption[1]))
 			for r := 0; r < 2; r++ {
 				writeBucket(w, "mirror", i, r, p.Mirror[r])
-				writeBucket(w, "archive", i, r, p.ArchivedMirror[r])
+				writeArchivedBucket(w, "archive", i, r, p.ArchivedMirror[r])
 				w("totals:%d:%d:%016x:%016x:%016x|", i, r, math.Float64bits(p.Waste[r]), math.Float64bits(p.TotalProduced[r]), math.Float64bits(p.TotalConsumed[r]))
 			}
 			w("deadlines:%d:%d:%d:%d:%d:%d:%t:%t:%t:%t:%t:%08x:%08x|", i, p.UpdateTime, p.WinLoseTime, p.DisplayTimer, p.Helper1Deadline, p.Helper2Deadline, p.IsObserver, p.GameEnded, p.AutoShareMetal, p.AutoShareEnergy, p.AutoShareSensor, math.Float32bits(p.MetalShareThreshold), math.Float32bits(p.EnergyShareThreshold))
@@ -501,6 +501,10 @@ func writeBucket(w func(string, ...interface{}), kind string, player, resource i
 	w("bucket:%s:%d:%d:%08x:%08x:%08x:%08x|", kind, player, resource, math.Float32bits(b.Production), math.Float32bits(b.Requested), math.Float32bits(b.Accepted), math.Float32bits(b.Carry))
 }
 
+func writeArchivedBucket(w func(string, ...interface{}), kind string, player, resource int, b economy.ArchivedBucket) {
+	w("bucket:%s:%d:%d:%08x:%08x|", kind, player, resource, math.Float32bits(b.Production), math.Float32bits(b.Requested))
+}
+
 func writeGoal(w func(string, ...interface{}), g path.GoalTrace) {
 	w("goal:%d:%t:%d:%d:%d:%d:%d:%d:%d:%d:%d|", g.Kind, g.Unknown, g.Center.X, g.Center.Z, g.A, g.B, g.Rect.Min.X, g.Rect.Min.Z, g.Rect.Max.X, g.Rect.Max.Z, len(g.Cells))
 	for _, c := range g.Cells {
@@ -509,7 +513,7 @@ func writeGoal(w func(string, ...interface{}), g path.GoalTrace) {
 }
 
 func writeParityUnit(w func(string, ...interface{}), u ParityUnit) {
-	w("unit:%d:%s:%d:%t:%t:%d:%d:%d:%d:%d:%d:%08x:%08x:%08x:%t:%t:%t:%t:%t:%d:%08x:%08x:%t:%t:%d:%d:%t:%d|", u.Slot, u.DefinitionKey, u.Owner, u.Alive, u.Dying, u.DeathCause, u.X, u.Y, u.Z, u.Health, u.MaxHealth, math.Float32bits(u.Remaining), u.Flags, u.Pending, u.InBuildStance, u.Busy, u.YardOpen, u.BuggerOff, u.Armored, u.Group, math.Float32bits(u.SpotMetal), math.Float32bits(u.OrderGuard), u.Activated, u.IsCloaked, u.Kills, u.ParalyzeExpire, u.Stunned, u.PriorSample)
+	w("unit:%d:%s:%d:%t:%t:%d:%d:%d:%d:%d:%d:%08x:%08x:%08x:%t:%t:%t:%t:%t:%d:%08x:%08x:%t:%t:%d:%d:%t:%d:%d|", u.Slot, u.DefinitionKey, u.Owner, u.Alive, u.Dying, u.DeathCause, u.X, u.Y, u.Z, u.Health, u.MaxHealth, math.Float32bits(u.Remaining), u.Flags, u.Pending, u.InBuildStance, u.Busy, u.YardOpen, u.BuggerOff, u.Armored, u.Group, math.Float32bits(u.SpotMetal), math.Float32bits(u.OrderGuard), u.Activated, u.IsCloaked, u.Kills, u.ParalyzeExpire, u.Stunned, u.CurrentSample, u.PriorSample)
 	w("move:%d:%d:%d:%d:%d:%d:%d:%d:%d|", u.Move.Mode, u.Move.Heading, u.Move.Pitch, u.Move.Bank, u.Move.Speed, u.Move.PendingHeading, u.Move.PendingSpeed, u.Attachment.Carrier, u.Attachment.AttachPiece)
 	for _, c := range u.Attachment.Cargo {
 		w("cargo:%d:%d|", u.Slot, c)

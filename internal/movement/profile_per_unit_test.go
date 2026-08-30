@@ -30,7 +30,7 @@ var profileTestWorld *units.World
 func newTestUnit(t *testing.T, name, class string, fx, fz int32) *units.Unit {
 	t.Helper()
 	if profileTestWorld == nil {
-		profileTestWorld = units.NewSliced(32, nil)
+		profileTestWorld = newMovementFixtureWorld(32)
 	}
 	def := &content.UnitDef{
 		UnitName:      name,

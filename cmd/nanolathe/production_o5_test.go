@@ -62,8 +62,10 @@ func TestBattleCommandsPublishQueueAndShiftOverlay(t *testing.T) {
 	advanceQueueFixture(t, s)
 	controller := NewBattleController(b)
 	sx, sy := queueScreenPos(b.cam, builderHandle, unitsWorld)
-	controller.Step(BattleInputFrame{MouseX: sx, MouseY: sy, Buttons: BattleMouseButtons{Left: true}, Elapsed: 1.0 / 30.0}, nil)
-	controller.Step(BattleInputFrame{MouseX: sx, MouseY: sy, Elapsed: 1.0 / 30.0}, nil)
+	queueClick(t, controller, sx, sy, BattleModifiers{})
+	// The click is admitted through the human-command queue and reaches the
+	// published frame only at the end of the next tick [07 §9][I6].
+	advanceQueueFixture(t, s)
 	f, ok := b.currentSnapshot()
 	if !ok || f.Selection.Primary != builderHandle || f.CommandPage.Builder != builderHandle {
 		t.Fatalf("selection/page not published through authoritative boundary: ok=%v selection=%+v page=%+v", ok, f.Selection, f.CommandPage)
@@ -220,8 +222,14 @@ func queueClick(t *testing.T, controller *BattleController, x, y int32, modifier
 	if controller == nil {
 		t.Fatal("nil battle controller")
 	}
-	controller.Step(BattleInputFrame{MouseX: x, MouseY: y, Buttons: BattleMouseButtons{Left: true}, Modifiers: modifiers, Elapsed: 1.0 / 30.0}, nil)
-	controller.Step(BattleInputFrame{MouseX: x, MouseY: y, Modifiers: modifiers, Elapsed: 1.0 / 30.0}, nil)
+	// A hand-authored frame states its press and release edges explicitly;
+	// only the device sampler derives them from consecutive frames [07 §2].
+	press := BattleInputFrame{MouseX: x, MouseY: y, Buttons: BattleMouseButtons{Left: true}, Modifiers: modifiers, Elapsed: 1.0 / 30.0}
+	press.PressedButtons[input.MouseButtonLeft] = true
+	controller.Step(press, nil)
+	release := BattleInputFrame{MouseX: x, MouseY: y, Modifiers: modifiers, Elapsed: 1.0 / 30.0}
+	release.ReleasedButtons[input.MouseButtonLeft] = true
+	controller.Step(release, nil)
 }
 
 func queueForUnit(f *frame.Frame, unit pool.Handle) (frame.OrderQueueView, bool) {

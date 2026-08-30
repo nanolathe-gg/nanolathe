@@ -53,7 +53,7 @@ func TestSchedulerRouteSteerArrival(t *testing.T) {
 	system := NewSystem(terrain, profile, grid)
 
 	// Create world and unit at start cell (1,1)
-	w := units.NewSliced(10, nil)
+	w := newMovementFixtureWorld(10)
 	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 3 * 65536, TurnRate: 500}
 	def.MaxDamage = 100
 	def.FootprintX = 1
@@ -153,7 +153,7 @@ func TestIntegrateDeterminism(t *testing.T) {
 		profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25}
 		grid := NewOccupancyGrid()
 		system := NewSystem(terrain, profile, grid)
-		w := units.NewSliced(10, nil)
+		w := newMovementFixtureWorld(10)
 		def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500}
 		def.MaxDamage = 100
 		h, _ := w.Create(def, 0, world.CellToWorld(0), numeric.Fixed(0), world.CellToWorld(0))
@@ -234,7 +234,7 @@ func TestBigRequestStaysActiveAcrossTicks(t *testing.T) {
 	grid := NewOccupancyGrid()
 	system := NewSystem(terrain, profile, grid)
 
-	w := units.NewSliced(10, nil)
+	w := newMovementFixtureWorld(10)
 	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 3 * 65536, TurnRate: 500}
 	def.MaxDamage = 100
 	def.FootprintX = 1
@@ -269,14 +269,19 @@ func TestBigRequestStaysActiveAcrossTicks(t *testing.T) {
 		}
 		return true
 	}
-	bias := path.Point{X: int32(profile.FootPrintX / 2), Z: int32(profile.FootPrintZ / 2)}
 	bounds := path.Rect{Min: path.Cell{X: 0, Z: 0}, Max: path.Cell{X: terrain.CellW - 1, Z: terrain.CellH - 1}}
 	cfg := path.SearchConfig{
-		Start:      startCell,
-		Goal:       path.PointGoal(goalCell, 0),
-		IsPassable: isPassable,
+		Start: startCell,
+		Goal:  path.PointGoal(goalCell, 0),
+		PassableValue: func(c path.Cell) uint8 {
+			if isPassable(c) {
+				return 3
+			}
+			return 0
+		},
 		Scale:      65536,
-		Bias:       bias,
+		FootPrintX: int32(profile.FootPrintX),
+		FootPrintZ: int32(profile.FootPrintZ),
 		HasBounds:  true,
 		Bounds:     bounds,
 	}
@@ -294,8 +299,8 @@ func TestBigRequestStaysActiveAcrossTicks(t *testing.T) {
 	if route != nil && route.Active {
 		t.Fatalf("big request first tick must stay inactive (full-or-empty), got active count %d [04 §7.3] C12", route.Count)
 	}
-	if system.Scheduler.Pending(0) != 1 {
-		t.Fatalf("request should remain ACTIVE after budget exhaustion, pending %d [04 §7.3] C11", system.Scheduler.Pending(0))
+	if system.Scheduler.TraceState().Pending[0] != 1 {
+		t.Fatalf("request should remain ACTIVE after budget exhaustion, active %d [04 §7.3] C11", system.Scheduler.TraceState().Pending[0])
 	}
 
 	// Capture route bytes before second tick to ensure no partial publication overwrote stale bytes incorrectly.
@@ -328,7 +333,7 @@ func TestBigRequestStaysActiveAcrossTicks(t *testing.T) {
 		_ = beforeActive
 	}
 	if !done {
-		t.Fatalf("big request should have completed within 10 ticks, pending %d", system.Scheduler.Pending(0))
+		t.Fatalf("big request should have completed within 10 ticks, active %d", system.Scheduler.TraceState().Pending[0])
 	}
 	// Determinism: resumed route must equal one-shot route (converted to movement.Point) [04 §7.3] C11.
 	final := system.Routes[h]
@@ -344,7 +349,7 @@ func TestBigRequestStaysActiveAcrossTicks(t *testing.T) {
 			t.Fatalf("final point %d want %v got %v (determinism identical whether budget interrupts occur) [04 §7.3] C11", i, want, final.Points[i])
 		}
 	}
-	if system.Scheduler.Pending(0) != 0 {
+	if system.pathProvider.pending(0) != 0 {
 		t.Fatalf("after completion pending should be 0")
 	}
 }
@@ -352,7 +357,7 @@ func TestBigRequestStaysActiveAcrossTicks(t *testing.T) {
 func TestActivateMoveExactlyOnceAndRejectsStalePublication(t *testing.T) {
 	terrain := syntheticTerrainForIntegrate()
 	system := NewSystem(terrain, Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}, NewOccupancyGrid())
-	w := units.NewSliced(10, nil)
+	w := newMovementFixtureWorld(10)
 	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500, MaxDamage: 100}
 	h, _ := w.Create(def, 0, world.CellToWorld(0), 0, world.CellToWorld(0))
 	u := w.Unit(h)
@@ -365,14 +370,14 @@ func TestActivateMoveExactlyOnceAndRejectsStalePublication(t *testing.T) {
 	if first == nil || !system.ActivateMove(u, first) {
 		t.Fatal("first active order was not submitted")
 	}
-	if system.Scheduler.Pending(0) != 1 {
-		t.Fatalf("first activation pending=%d, want 1", system.Scheduler.Pending(0))
+	if system.pathProvider.pending(0) != 1 {
+		t.Fatalf("first activation pending=%d, want 1", system.pathProvider.pending(0))
 	}
 	if system.ActivateMove(u, first) {
 		t.Fatal("same active order submitted twice")
 	}
-	if system.Scheduler.Pending(0) != 1 {
-		t.Fatalf("duplicate activation changed pending=%d", system.Scheduler.Pending(0))
+	if system.pathProvider.pending(0) != 1 {
+		t.Fatalf("duplicate activation changed pending=%d", system.pathProvider.pending(0))
 	}
 	firstRequest := path.Request{Unit: h, Activation: system.activeOrders[h].token}
 
@@ -382,8 +387,8 @@ func TestActivateMoveExactlyOnceAndRejectsStalePublication(t *testing.T) {
 	if second == nil || !system.ActivateMove(u, second) {
 		t.Fatal("replacement active order was not submitted")
 	}
-	if system.Scheduler.Pending(0) != 1 {
-		t.Fatalf("replacement pending=%d, want 1", system.Scheduler.Pending(0))
+	if system.pathProvider.pending(0) != 1 {
+		t.Fatalf("replacement pending=%d, want 1", system.pathProvider.pending(0))
 	}
 	// Simulate a late callback for the canceled first request.  It must not
 	// overwrite the route belonging to the current head.

@@ -20,7 +20,7 @@ func settleTestWorld(t *testing.T, n int) (*units.World, []pool.Handle) {
 	w := units.NewSliced(10, nil)
 	hs := make([]pool.Handle, 0, n)
 	for i := 0; i < n; i++ {
-		def := &content.UnitDef{}
+		def := economyFixtureDef(&content.UnitDef{})
 		def.MaxDamage = 100
 		h, err := w.Create(def, 0, 0, 0, 0)
 		if err != nil {
@@ -135,11 +135,12 @@ func TestCloakDebitRunsInSlotOrderDuringPass(t *testing.T) {
 	pl.Stock[Energy] = 10
 	w, _ := settleTestWorld(t, 2)
 	svc.CloakCost = func(u *units.Unit) float32 { return 6 }
+	svc.CloakDue = func(*units.Unit) bool { return true }
 
 	svc.Settle(0, 0, w)
 
 	// Slot 1 debits 6 of 10; slot 2 then finds 4 and cannot pay.
-	if got := pl.ArchivedMirror[Energy].Requested; got != 6 {
+	if got := svc.unitBuckets[1].Archived[Energy].Requested; got != 6 {
 		t.Fatalf("cloak requested = %v want 6 (only the earlier slot pays)", got)
 	}
 }

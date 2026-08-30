@@ -7,7 +7,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -28,7 +27,7 @@ func TestGoalFamiliesWiring(t *testing.T) {
 	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
 	grid := NewOccupancyGrid()
 	sys := NewSystem(terrain, profile, grid)
-	w := units.NewSliced(10, nil)
+	w := newMovementFixtureWorld(10)
 	sys.BindWorld(w)
 
 	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500, SightDistance: 128}
@@ -98,7 +97,7 @@ func TestGoalFamiliesWiring(t *testing.T) {
 		t.Fatalf("Move_Ground should not be Annulus")
 	}
 
-	// Patrol should remain PointGoal — research does NOT establish SavedGoal chaining or RectPerimeter for patrol [04 §7.2][04 §10.3][OW-3-P]
+	// Patrol remains PointGoal; no rectangle or air-goal producer is established [04 §7.2][04 §10.3][OW-3-P]
 	for _, name := range []string{"Patrol", "QPatrol", "VTOL_Patrol"} {
 		nPat := &orders.Node{ID: orders.Lookup(name)}
 		gPat := sys.goalForOrder(goalCell, nPat)
@@ -111,13 +110,9 @@ func TestGoalFamiliesWiring(t *testing.T) {
 		if _, ok := path.IsRectGoal(gPat); ok {
 			t.Fatalf("%s rect unwired should not be RectGoal", name)
 		}
-		if _, ok := path.IsSavedGoal(gPat); ok {
-			t.Fatalf("%s saved unwired should not be SavedGoal", name)
-		}
 	}
 
-	// Explicitly verify RectPerimeterGoal and SavedGoal are NOT produced by any order helper here [OW-3-P]
-	// They have zero production callers in movement/goals.go by design; only save restore would use SavedGoal via GoalKind 3.
+	// Explicitly verify RectPerimeterGoal and air-goal surfaces are NOT produced by any ground-order helper here [OW-3-P]
 }
 
 func TestActivateMoveWiresAnnulus(t *testing.T) {
@@ -125,7 +120,7 @@ func TestActivateMoveWiresAnnulus(t *testing.T) {
 	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MinWaterDepth: -10000, MaxSlope: 50}
 	grid := NewOccupancyGrid()
 	sys := NewSystem(terrain, profile, grid)
-	w := units.NewSliced(10, nil)
+	w := newMovementFixtureWorld(10)
 	sys.BindWorld(w)
 	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500}
 	def.MaxDamage = 100
@@ -145,7 +140,7 @@ func TestActivateMoveWiresAnnulus(t *testing.T) {
 	if !sys.ActivateMove(u, head) {
 		t.Fatal("ActivateMove failed")
 	}
-	pending := sys.Scheduler.AllRequests()
+	pending := sys.pathProvider.allRequests()
 	if len(pending) == 0 {
 		t.Fatalf("no scheduler request after ActivateMove attack")
 	}
@@ -172,7 +167,7 @@ func TestActivateMoveWiresAnnulus(t *testing.T) {
 	if !sys.ActivateMove(u2, head2) {
 		t.Fatal("ActivateMove move failed")
 	}
-	pending2 := sys.Scheduler.AllRequests()
+	pending2 := sys.pathProvider.allRequests()
 	foundMove := false
 	for _, r := range pending2 {
 		if r.Unit == h2 {

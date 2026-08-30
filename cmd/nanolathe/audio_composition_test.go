@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -63,6 +64,13 @@ func TestAttachBattleAudio_CueReachesBackend(t *testing.T) {
 	}
 	if audio.GlobalOutput() != rec {
 		t.Fatalf("composition replaced the presentation output")
+	}
+	// The play sink resolves the drawn alias through the registry's sample
+	// cache and is silent when no sample exists [03 §8.2]. The fixture has no
+	// VFS, so author the sample directly: a byte string with no container
+	// marker is a raw 8-bit mono sample [fmt wav].
+	if _, err := b.sess.Audio.Cache.Put("ok1", bytes.Repeat([]byte{0x80}, 64)); err != nil {
+		t.Fatalf("authoring the ok1 sample: %v", err)
 	}
 
 	// At most one voice is audible per 30 rendered frames [03 §8.3] C18, so

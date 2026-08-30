@@ -7,7 +7,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
-	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -15,7 +14,7 @@ func TestStepUnitBlockedCommitKeepsOrderAndRequest(t *testing.T) {
 	system := NewSystem(syntheticTerrainForIntegrate(), Profile{
 		FootPrintX: 1, FootPrintZ: 1, MinWaterDepth: -10000, MaxSlope: 255,
 	}, NewOccupancyGrid())
-	w := units.NewSliced(4, nil)
+	w := newMovementFixtureWorld(4)
 	def := &content.UnitDef{
 		UnitName: "dynamic-block-test", FootprintX: 1, FootprintZ: 1,
 		MaxVelocity: int32(worldUnitsPerCell), TurnRate: 65535,
@@ -47,19 +46,19 @@ func TestStepUnitBlockedCommitKeepsOrderAndRequest(t *testing.T) {
 	// Keep one pre-existing request so a collision-triggered Cancel/Submit pair
 	// would be observable in its activation and start fields. StepUnit must
 	// leave this scheduler state and the active-order token untouched.
-	system.Scheduler.Submit(path.Request{
+	system.pathProvider.Submit(path.Request{
 		Unit: moverHandle, Player: 0, Start: path.Cell{X: 0, Z: 0},
 		Goal: path.PointGoal(path.Cell{X: 3, Z: 0}, 0), Activation: 41,
 	})
-	requestsBefore := system.Scheduler.AllRequests()
+	requestsBefore := system.pathProvider.allRequests()
 	activeBefore := *system.activeOrders[moverHandle]
 	nextBefore := system.nextActivation
 	result := system.StepUnit(moverHandle, 1)
 	if !result.Blocked {
 		t.Fatal("active route proposal into blocker was not rejected")
 	}
-	if requestsAfter := system.Scheduler.AllRequests(); !reflect.DeepEqual(requestsAfter, requestsBefore) || !system.Scheduler.HasRequest(moverHandle) {
-		t.Fatalf("blocked commit changed scheduler requests: before=%#v after=%#v has=%v", requestsBefore, requestsAfter, system.Scheduler.HasRequest(moverHandle))
+	if requestsAfter := system.pathProvider.allRequests(); !reflect.DeepEqual(requestsAfter, requestsBefore) || !system.HasPathRequest(moverHandle) {
+		t.Fatalf("blocked commit changed scheduler requests: before=%#v after=%#v has=%v", requestsBefore, requestsAfter, system.HasPathRequest(moverHandle))
 	}
 	if got := *system.activeOrders[moverHandle]; !reflect.DeepEqual(got, activeBefore) || system.nextActivation != nextBefore {
 		t.Fatalf("blocked commit changed active-order token: before=%#v/%d after=%#v/%d", activeBefore, nextBefore, got, system.nextActivation)

@@ -3,6 +3,7 @@ package units
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -107,7 +108,8 @@ func BuildRenderPieceFlags(mdl *model.Model) []uint8 {
 // For scripted units the COB piece index is the authoring index; the fill is still defined
 // per model object, so we map each prog piece name to its model piece and set bit0 based on
 // that model object's vertex count. Bits 1 and 2 stay unconditional [04 §"Piece flag polarity"].
-// When prog is nil the model-ordered flags are returned directly (scriptless case).
+// When prog is nil the model-ordered flags are returned directly, for the
+// pre-attachment fixture stage.
 func BuildRenderPieceFlagsForProgram(mdl *model.Model, prog *cob.Program, pieceMap []int) []uint8 {
 	if mdl == nil {
 		return nil
@@ -163,8 +165,9 @@ func (u *Unit) SetRenderPieceFlag(piece int, mask uint8, set bool) bool {
 }
 
 // InitRenderPieceFlags installs the render-piece table from the model [04 §"Piece flag polarity"] [R-COB-01 §1].
-// It is the explicit scriptless branch's table builder and the scripted branch's model-driven
-// fill before the VM is bound; the VM must not own this storage.
+// It is the model-driven fill before the VM is bound; the VM must not own this
+// storage. Production allocation still requires a loadable COB before a unit
+// can be published [R-COB-04 §8].
 func (u *Unit) InitRenderPieceFlags(mdl *model.Model) {
 	if u == nil {
 		return
@@ -225,8 +228,8 @@ type Unit struct {
 	// One flags byte per piece in a separate array from the script's piece-animation state.
 	// Allocation is zero-filled then the fill pass sets bit 1 (0x02 cache) and bit 2 (0x04 shade)
 	// unconditionally and bit 0 (0x01 draw) only when the piece's model object has at least three
-	// vertices. A null-program (scriptless) unit still builds this table; it must NOT live inside
-	// the VM, which is only allocated for scripted units.
+	// vertices. A fixture may build this table before script attachment; it must
+	// NOT live inside the VM, which is only allocated for scripted units.
 	RenderPieceFlags []uint8
 
 	// Typed per-unit state introduced for P0-I02 real pipeline [04 §1.1][04 §4][06][GAP T15].
@@ -259,6 +262,7 @@ type Unit struct {
 	// Paralyze state per [06 §10] paralyzer status effects [P0-I04].
 	ParalyzeExpire uint32 // absolute tick when stun ends; 0 means not paralyzed [06 §10]
 	Stunned        bool   // TODO(question): GAI slow vs binary stun remains open [06 §10]
+	CurrentSample  uint8  // current 30-tick-window health sample [04 §5.1]
 	PriorSample    uint8  // previous 30-tick-window health sample for death severity [04 §5.1]
 	// Placement linkage for P0-04/P0-06 sparse created[] semantics [P0-04][P0-06].
 	// Retail maintains created[placementIdx] sparse array and scans it in
@@ -479,7 +483,9 @@ func newSlicedWorld(p *pool.Units, cat *content.Catalog) *World {
 // SetCOBSource installs the VFS-backed COB loader for per-unit VM creation [04 §4.1][P1-I01].
 // When set, every successful Create/CreateWithForcedSlot will load the unit's Program via cob.Load
 // (or cached lookup) and create a VM with statics zero-init, piece count from program, 8 threads [04 §4.2] C13,
-// and immediately start the Create script if present (hide muzzle etc.) [04 §4.1][GAP T15].
+// and immediately start the Create script if present (hide muzzle etc.) [04 §4.1][R-CB-01 §2].
+// A configured source is a production boundary: a definition with no loadable script is rejected
+// before pool allocation, rather than entering the retail-null-VM crash path [R-COB-04 §8].
 // The loader is used for all future units, including those created by construction.
 func (w *World) SetCOBSource(fs vfs.FSOps, loader *cob.CachedLoader) {
 	if w == nil {
@@ -500,7 +506,7 @@ func (w *World) COBSource() (vfs.FSOps, *cob.CachedLoader) {
 }
 
 // SetCOBBinder installs a strict composition-owned binder for future unit
-// allocations. A nil binder restores the legacy fixture/source path.
+// allocations.
 func (w *World) SetCOBBinder(binder COBBinder) {
 	if w == nil {
 		return
@@ -510,6 +516,63 @@ func (w *World) SetCOBBinder(binder COBBinder) {
 
 // HasCOBBinder reports whether strict composition owns future allocations.
 func (w *World) HasCOBBinder() bool { return w != nil && w.cobBinder != nil }
+
+// hasLoadableCOB verifies the program that the production path will bind
+// before the allocator consumes a slot. Definitions from a catalog normally
+// carry the parsed program; the configured source-loader path is also checked
+// here so a valid VFS-backed program is not mistaken for a missing catalog
+// field [R-COB-04 §8].
+func (w *World) hasLoadableCOB(def *content.UnitDef) bool {
+	if def == nil {
+		return false
+	}
+	if def.Script != nil && len(def.Script.Code) != 0 {
+		return true
+	}
+	if w == nil || w.cobFS == nil || w.cobLoader == nil {
+		return false
+	}
+	for _, name := range []string{def.UnitName, def.CanonicalKey} {
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		prog, found, err := w.cobLoader.Load(w.cobFS, name)
+		if err == nil && found && prog != nil && len(prog.Code) != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (w *World) missingCOBError(def *content.UnitDef) error {
+	name := "<unnamed>"
+	if def != nil {
+		name = def.UnitName
+		if name == "" {
+			name = def.CanonicalKey
+		}
+	}
+	logical := "scripts/" + strings.ToLower(strings.TrimSpace(name)) + ".cob"
+	providers := "<none>"
+	if w != nil && w.cobFS != nil {
+		if sources, ok := w.cobFS.(interface{ Sources(string) []vfs.EntryInfo }); ok {
+			ids := make([]string, 0)
+			for _, entry := range sources.Sources(logical) {
+				id := entry.Source.ProviderID()
+				if id == "" {
+					id = entry.Source.ProviderType
+				}
+				if id != "" {
+					ids = append(ids, id)
+				}
+			}
+			if len(ids) != 0 {
+				providers = strings.Join(ids, ", ")
+			}
+		}
+	}
+	return fmt.Errorf("nanolathe: unit script missing: logical path %s, providers searched [%s], expected COB program", logical, providers)
+}
 
 // SetSimulationRNG binds the one authoritative simulation stream used by the
 // common unit initializer [01 §7.1][R-P28-ANG-01R §2]. A World never creates
@@ -540,21 +603,35 @@ func (w *World) initializeAllocationHeading(u *Unit, def *content.UnitDef) {
 	}
 }
 
+// maxReloadTicks returns the maximum reload field across all three authored
+// weapon-definition links. The creation initializer scans all three pointers
+// without an in-use test [R-CB-01 §4].
+func maxReloadTicks(def *content.UnitDef) int32 {
+	if def == nil {
+		return 0
+	}
+	max := int32(0)
+	for _, weapon := range []*content.WeaponDef{def.Weapon1Def, def.Weapon2Def, def.Weapon3Def} {
+		if weapon != nil && weapon.ReloadTime > max {
+			max = weapon.ReloadTime
+		}
+	}
+	return max
+}
+
 // attachCOB binds the definition's program to a per-unit VM and runs Create
-// once in mode I [04 §4.1][P1-I01].
-//
-// Missing/empty COB policy [04 R-COB-04 §8] (supersedes the UNIT-04 reading
-// of [R-COB-01 §1]): retail faults while creating a unit whose program is
-// null — the creation-time QueryPrimary query dereferences the VM reference
-// with no null test — so such a definition cannot exist in retail. Nanolathe
-// rejects it at catalog compile with the standard diagnostic (content's
-// definition load). The program-less branch below therefore serves only
-// fixture definitions that content never compiled: no VM, no Create, the
-// unit stays live for the test. The definition-stored program is preferred;
-// the loader lookup remains for those fixtures.
+// once as a deferred start with wake=1 [04 §4.1][R-CB-01 §2]. Missing or
+// empty programs are rejected before allocation by Create and
+// CreateWithForcedSlot [R-COB-04 §8].
 func (w *World) attachCOB(u *Unit) error {
-	if w == nil || u == nil || u.Def == nil {
-		return nil
+	if w == nil {
+		return fmt.Errorf("nanolathe: COB attachment: nil world")
+	}
+	if u == nil {
+		return fmt.Errorf("nanolathe: COB attachment: nil unit")
+	}
+	if u.Def == nil {
+		return fmt.Errorf("nanolathe: COB attachment: nil unit definition")
 	}
 	if u.GetScript() != nil {
 		return nil // already has VM [P1-I01]
@@ -568,8 +645,8 @@ func (w *World) attachCOB(u *Unit) error {
 		return w.cobBinder(u)
 	}
 	prog := u.Def.Script
-	if prog == nil && w.cobLoader != nil && w.cobFS != nil {
-		// Fixture path: resolve via the loader (cached, case-insensitive) [04 §4.1].
+	if (prog == nil || len(prog.Code) == 0) && w.cobLoader != nil && w.cobFS != nil {
+		// Resolve via the configured loader (cached, case-insensitive) [04 §4.1].
 		if p, ok, _ := w.cobLoader.Load(w.cobFS, u.Def.UnitName); ok && p != nil {
 			prog = p
 		} else if p, ok, _ := w.cobLoader.Load(w.cobFS, u.Def.CanonicalKey); ok && p != nil {
@@ -577,21 +654,15 @@ func (w *World) attachCOB(u *Unit) error {
 		}
 	}
 	if prog == nil || len(prog.Code) == 0 {
-		// Null program: fixture-only scriptless creation — no VM, no Create
-		// (a compiled catalog never carries one, [04 R-COB-04 §8]). The unit
-		// stays live; its pieces never animate. The render-piece table is still
-		// built when a model is available via the strict binder; for this
-		// fixture path without a model we leave the table nil — the production
-		// strict binder (session) builds it from the authored 3DO [04 §"Piece flag polarity"].
-		return nil
+		return fmt.Errorf("nanolathe: COB attachment: unit %q has no COB program", u.Def.UnitName)
 	}
 	vm := cob.NewVM(prog)
 	bindUnitPortHandlers(vm, u)
-	// Build the render-piece record for the fixture path [04 §"Piece flag polarity"].
+	// Build the render-piece record for the direct loader path [04 §"Piece flag polarity"].
 	// Without an authored model the geometry test cannot be applied, so we share
 	// the VM's default 0x07 table as the unit's table and delegate writes there
 	// via the bridge. Production scripted units with a model get their geometry-
-	// driven table from the strict binder; this fallback keeps fixture tests green.
+	// driven table from the strict binder; this path has no model to apply.
 	if u.RenderPieceFlags == nil {
 		// SnapshotFlags returns the VM-local 0x07 defaults [04 §4.3].
 		if flags := vm.SnapshotFlags(); flags != nil {
@@ -603,11 +674,12 @@ func (w *World) attachCOB(u *Unit) error {
 		}
 	}
 	u.SetScript(vm)
-	// Run Create immediately with wake flag (delta 0 barrier) so hide/show etc. are visible before first snapshot [04 §4.1][GAP T15].
-	if _, ok := prog.Scripts["Create"]; ok {
-		_ = vm.StartByName("Create", nil)
-		vm.Drain(0) // immediate wake-flag drain [GAP T15] C17
-	}
+	// Run the shared D+wake Create adapter so hide/show and other writes are
+	// visible before the first snapshot [04 §4.1][R-CB-01 §2]. The reload
+	// callback is a separate deferred start after Create [R-CB-01 §4].
+	bridge := cob.NewCallbackBridge(vm)
+	bridge.Create()
+	initializeCreationCallbacks(u, bridge, maxReloadTicks(u.Def))
 	return nil
 }
 
@@ -763,6 +835,9 @@ func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed)
 		// is rejected with no allocation [P0-16 §3.2].
 		return 0, err
 	}
+	if !w.hasLoadableCOB(def) {
+		return 0, w.missingCOBError(def)
+	}
 	limitEnabled := def.LimitEnabled
 	limit := def.Limit
 	// Normalize: if limit == -1, treat as unlimited regardless of enabled bit
@@ -821,6 +896,7 @@ func installWeapons(u *Unit, def *content.UnitDef) {
 	// rather than piece 0. Seed default before wiring weapons [06 §4.1] C3.
 	for i := 0; i < NumSlots; i++ {
 		u.Slots[i].MuzzlePiece = -1 // [04 §5.3] [06 §4.1] C3
+		u.Slots[i].AimOriginPiece = -1
 	}
 	// Only active links populate a slot [06 §1.2] P0-10: the record-0
 	// inactive sentinel a missed link resolves to is not a weapon [02 §5
@@ -867,6 +943,9 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 		// CNT-05: same finalized-catalog gate as the canonical allocator
 		// [P0-16 §3.2]; save reconstruction must not seat a foreign definition.
 		return 0, err
+	}
+	if !w.hasLoadableCOB(def) {
+		return 0, w.missingCOBError(def)
 	}
 	limitEnabled := def.LimitEnabled
 	limit := def.Limit

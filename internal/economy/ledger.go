@@ -26,6 +26,13 @@ type Bucket struct {
 	Carry      float32
 }
 
+// ArchivedBucket is the two-slot report retained from the previous settlement
+// pass. Accepted and Carry are live-only state [R-ECO-01 §5].
+type ArchivedBucket struct {
+	Production float32
+	Requested  float32
+}
+
 // Player is the per-player ledger state per [05 "Player slot"].
 // Stocks and capacities are single precision per [05 "Player slot"] and I2.
 // Cumulative totals and waste are double precision per [05 "Stocks, counters, and waste"] and I2.
@@ -33,36 +40,28 @@ type Player struct {
 	Stock    [2]float32
 	Capacity [2]float32
 	Mirror   [2]Bucket
-	// AIProduction and AIConsumption are the four settled player aggregates
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// distinct from PassProduced/PassConsumed: the latter are reporting
-	// counters for the most recent pass, while these values are the runtime
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// slot"] [08 "Established AI-facing data and rooted planner"]
-	// [R-P0-05].
+	// AIProduction and AIConsumption are settled aggregates consumed by the
+	// strategic planner. They are distinct from the reporting counters for the
+	// most recent pass [05 "Player slot"] [08 "Established AI-facing data and
+	// rooted planner"].
 	AIProduction   [2]float32
 	AIConsumption  [2]float32
-	UpdateTime     uint32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	WinLoseTime    uint32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	DisplayTimer   uint32 // sibling deadline #2 [05 "Saving economy, construction, and features"] TODO(question): consumer beyond save key unknown
+	UpdateTime     uint32 // settlement deadline [05 "Authoritative settlement order"] [GAP T1]
+	WinLoseTime    uint32 // sibling deadline used by mission evaluation [08 "Evaluation"]
+	DisplayTimer   uint32 // HUD refresh deadline [05 "Saving economy, construction, and features"]
 	Waste          [2]float64
 	TotalProduced  [2]float64
 	TotalConsumed  [2]float64
 	PassProduced   [2]float32
 	PassConsumed   [2]float32
-	ArchivedMirror [2]Bucket
+	ArchivedMirror [2]ArchivedBucket
 	// Control fields for deadline block and gate chain per [05 "Authoritative settlement order"].
-	// Retail offsets are identity per I13, not layout.
 	Exists          bool  // whether slot exists and participates [05 "Player slot"]
 	ControllerState uint8 // controller/state byte; three values allow traversal, two allow settlement [05 "Authoritative settlement order"] TODO(question): semantic names unknown
 	IsObserver      bool  // observer byte excludes observers [05 "Authoritative settlement order"]
-	// Status-pair identity per the decompile (notes/economy/07_settlement_cadence_deadline.md
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	StatusHalfwordAt144 int16 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	StatusWordAt140     int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	GameEnded           bool  // game-ended flag bit clear required [05 "Authoritative settlement order"]
+	OptionKind      uint8 // lobby option kind used by network sharing [R-SHARE-01 §3]
+	Eliminated      bool  // explicit elimination state for sharing candidate gates
+	GameEnded       bool  // game-ended flag bit clear required [05 "Authoritative settlement order"]
 	// EndGameCountdown must be negative for settlement; initialized -1
 	// [05 "Authoritative settlement order"].
 	// TODO(question): the two arm/decrement sites that latch GameEnded and
@@ -86,9 +85,11 @@ type Player struct {
 	// is added to the player's storage capacity during the ledger's capacity
 	// sum. The fields keep float32 with integer values truncated toward zero
 	// per I3, matching the retail int->float stores.
-	StorageBonusEnabled  bool       // bonus applied to capacity when set [05 "Storage capacity"] [OX P1]
-	StorageBonus         [2]float32 // [Metal]=max(startMetal,200), [Energy]=max(startEnergy,200) [05 "Storage capacity"] [OX P1]
-	aiAggregatesPrepared bool       // composed settlement populated AI fields before post-commit [R-P0-05]
+	StorageBonusEnabled    bool       // bonus applied to capacity when set [05 "Storage capacity"] [OX P1]
+	StorageBonus           [2]float32 // [Metal]=max(startMetal,200), [Energy]=max(startEnergy,200) [05 "Storage capacity"] [OX P1]
+	aiAggregatesPrepared   bool       // composed settlement populated AI fields before post-commit [R-P0-05]
+	settlementStatusFirst  int16
+	settlementStatusSecond int32
 }
 
 // Service is the economy service skeleton per plan public API.
@@ -98,7 +99,8 @@ type Service struct {
 	unitBuckets      []UnitEconomy
 	ReferencePlayer  int  // reference/local player for ShareTick dispatcher [05 "Allied resource and sensor sharing"] C12
 	SensorShareCalls int  // diagnostic: sensor sharing invocations at tick%450==0 [05]
-	EconomySelector  *int // global selector at 0x37EEE for negative energyUse refund discount [P1-06] 0=>-0.5 1=>-0.7
+	EconomySelector  *int // difficulty selector: 0 easy, 1 medium, 2 hard [R-ECO-01 §3]
+	Networked        bool // networked-session gate for automatic sharing [R-SHARE-01 §3]
 
 	// CloakCost reports a unit's per-pass cloak upkeep, or zero when the unit
 	// is not cloaked [05 "Cloak debit"] C13. It is a seam rather than a field
@@ -107,11 +109,17 @@ type Service struct {
 	// skips the debit entirely, which is what a session with no cloaking units
 	// would observe anyway.
 	CloakCost func(*units.Unit) float32
+	// CloakDue is the narrow seam for the runtime cloak-requested/status/deadline
+	// predicate. Until units expose those producer-owned bits, nil is inert;
+	// economy must not infer a cloak request from authored cost alone.
+	// TODO(question): provider must expose the established bit-set/bit-clear and
+	// per-unit deadline gate [R-ECO-01 §9].
+	CloakDue func(*units.Unit) bool
 
 	// Wind holds the authoritative wind holder for wind generation scalar [01 §7.3]
-	// [05 "Wind generation"] [P1-I04]. Scalar is float32 published per I2.
+	// [05 "Wind generation"]. Scalar is float32 published per I2.
 	Wind *world.Wind
-	// Terrain provides the map tidal strength [03 §2.2] [05 "Tidal generation"] [P1-I04].
+	// Terrain provides the map tidal strength [03 §2.2] [05 "Tidal generation"].
 	Terrain *world.Terrain
 }
 
@@ -119,7 +127,25 @@ type Service struct {
 // Live buckets are the four accumulators; archived values are from the most recent settlement pass.
 type UnitEconomy struct {
 	Buckets  [2]Bucket
-	Archived [2]Bucket
+	Archived [2]ArchivedBucket
+}
+
+// SetSettlementStatusPair stores the unresolved literal gate inputs without
+// assigning semantic names to either producer-owned value.
+func (p *Player) SetSettlementStatusPair(first int16, second int32) {
+	if p == nil {
+		return
+	}
+	p.settlementStatusFirst = first
+	p.settlementStatusSecond = second
+}
+
+// SettlementStatusPair returns the unresolved literal gate inputs.
+func (p *Player) SettlementStatusPair() (first int16, second int32) {
+	if p == nil {
+		return 0, 0
+	}
+	return p.settlementStatusFirst, p.settlementStatusSecond
 }
 
 // ensureUnitBuckets grows the per-unit bucket slice to cover handle.
@@ -157,8 +183,8 @@ func ForEachUnitOrdered(w *units.World, player int, fn func(*units.Unit)) {
 	if player < 0 || player >= 10 {
 		return
 	}
-	// w.Iter returns units in pool slot ascending order per [01 §6.1] [I1].
-	for _, u := range w.Iter() {
+	// IterSliced expresses the player slices and slot order explicitly [I1].
+	for _, u := range w.IterSliced() {
 		if u == nil || !u.Alive {
 			continue
 		}
@@ -211,15 +237,32 @@ func (p *Player) InstallStorageBonus(startMetal, startEnergy int) {
 // by summing eligible completed units' authored storage per [05 "Storage capacity"] C14.
 // Eligible means alive and remaining construction fraction zero per [05 "Completed-unit eligibility"].
 func RebuildCapacity(s *Service, w *units.World) {
-	if s == nil || w == nil {
+	if s == nil {
 		return
 	}
 	for i := range s.Players {
-		s.Players[i].Capacity[Metal] = 0
-		s.Players[i].Capacity[Energy] = 0
+		rebuildCapacityPlayer(s, i, w)
 	}
-	// Stable slot-order visitation per C6 [I1]; capacity sum is order independent but determinism requires stable iteration.
-	for _, u := range w.Iter() {
+}
+
+// rebuildCapacityPlayer recomputes only one player's capacities. Settlement
+// uses this scoped form so a player deadline cannot publish another player's
+// derived state [R-ECO-01 §4].
+func rebuildCapacityPlayer(s *Service, player int, w *units.World) {
+	if s == nil || player < 0 || player >= len(s.Players) {
+		return
+	}
+	s.Players[player].Capacity[Metal] = 0
+	s.Players[player].Capacity[Energy] = 0
+	// Stable player-slice and slot visitation per C6 [I1].
+	if w == nil {
+		if s.Players[player].StorageBonusEnabled {
+			s.Players[player].Capacity[Metal] += s.Players[player].StorageBonus[Metal]
+			s.Players[player].Capacity[Energy] += s.Players[player].StorageBonus[Energy]
+		}
+		return
+	}
+	for _, u := range w.IterSliced() {
 		if u == nil || !u.Alive || u.Def == nil {
 			continue
 		}
@@ -227,21 +270,20 @@ func RebuildCapacity(s *Service, w *units.World) {
 			continue
 		}
 		owner := int(u.Owner)
-		if owner < 0 || owner >= len(s.Players) {
+		if owner != player {
 			continue
 		}
-		// Storage fields are authored float64; narrow to float32 at the documented boundary per I2.
-		s.Players[owner].Capacity[Energy] += float32(u.Def.EnergyStorage)
-		s.Players[owner].Capacity[Metal] += float32(u.Def.MetalStorage)
+		// Metal is accumulated before energy, each add re-rounded to the live
+		// single-precision capacity field [R-ECO-01 §4].
+		s.Players[player].Capacity[Metal] = float32(float64(s.Players[player].Capacity[Metal]) + float64(float32(u.Def.MetalStorage)))
+		s.Players[player].Capacity[Energy] = float32(float64(s.Players[player].Capacity[Energy]) + float64(float32(u.Def.EnergyStorage)))
 	}
-	// Optional player bonuses per [05 "Storage capacity"] [OX P1]: when the
+	// Optional player bonuses per [05 "Storage capacity"]: when the
 	// bonus flag is set, the stored bonus is added to the capacity sum after
 	// the unit-storage total, with integer semantics via truncation per I3.
-	for i := range s.Players {
-		if s.Players[i].StorageBonusEnabled {
-			s.Players[i].Capacity[Metal] += s.Players[i].StorageBonus[Metal]
-			s.Players[i].Capacity[Energy] += s.Players[i].StorageBonus[Energy]
-		}
+	if s.Players[player].StorageBonusEnabled {
+		s.Players[player].Capacity[Metal] += s.Players[player].StorageBonus[Metal]
+		s.Players[player].Capacity[Energy] += s.Players[player].StorageBonus[Energy]
 	}
 }
 
@@ -276,21 +318,19 @@ func DebitCloak(p *Player, cost float32) bool {
 	if p == nil {
 		return false
 	}
-	trunc := int32(cost) // truncation toward zero per [01 §8] and I3
-	if trunc <= 0 {
+	need := float32(int32(cost)) // truncation toward zero per [01 §8] and I3
+	if need > p.Stock[Energy] {
 		return false
 	}
-	need := float32(trunc)
-	if p.Stock[Energy] < need {
-		return false
-	}
-	p.Stock[Energy] -= need
-	p.Mirror[Energy].Requested += need
+	p.Stock[Energy] = float32(float64(p.Stock[Energy]) - float64(need))
+	p.Mirror[Energy].Requested = float32(float64(p.Mirror[Energy].Requested) + float64(need))
 	return true
 }
 
-// ApplyCloakDebits sequentially debits cloak costs for all units of player in slot order
-// per [05 "Cloak debit"] C13. Earlier slots consume live stock before later slots are tested.
+// ApplyCloakDebits sequentially debits eligible cloak costs for all units of
+// player in slot order per [05 "Cloak debit"] C13. Earlier slots consume live
+// stock before later slots are tested. CloakDue is required because economy
+// does not own the runtime status/deadline producers.
 //
 // The outcome drives transitions through the shared transition helper
 // [05 "Cloak debit"][05 "Activation and stall transitions"]: onSuccess /
@@ -306,8 +346,12 @@ func ApplyCloakDebits(s *Service, w *units.World, player int, getCost func(*unit
 	}
 	p := &s.Players[player]
 	ForEachUnitOrdered(w, player, func(u *units.Unit) {
+		if s.CloakDue == nil || !s.CloakDue(u) {
+			return
+		}
 		cost := getCost(u)
-		if DebitCloak(p, cost) {
+		s.ensureUnitBuckets(u.Handle)
+		if debitCloakToBucket(p, &s.unitBuckets[u.Handle].Buckets[Energy], cost) {
 			if onSuccess != nil {
 				onSuccess(u)
 			}
@@ -319,55 +363,17 @@ func ApplyCloakDebits(s *Service, w *units.World, player int, getCost func(*unit
 	})
 }
 
-// CommitPostSettlement implements the post-settlement commit order per [05 "Stocks, counters, and waste"] C10.
-// Order: clamp stock to rebuilt capacity; overflow to cumulative waste with fractional preserved;
-// stock stays single precision; archive and zero live buckets; per-pass counters and cumulative
-// double totals are committed BEFORE opening stock folds into the pool so they report the pass
-// not available funds. Capacity is assumed already rebuilt via RebuildCapacity.
-func (p *Player) CommitPostSettlement() {
-	if p == nil {
-		return
+func debitCloakToBucket(p *Player, b *Bucket, cost float32) bool {
+	if p == nil || b == nil {
+		return false
 	}
-	prepared := p.aiAggregatesPrepared
-	// Per-pass counters and cumulative totals committed before stock fold per C10.
-	// They report activity for the pass, including every live unit bucket plus
-	// the player mirror, not mirror alone [05 "Authoritative settlement order"]
-	// [05 "Stocks, counters, and waste"] C10. AIProduction/Consumption already
-	// hold that total when settleOneResource prepared them [R-P0-05]; fall back
-	// to mirror for direct unit-less fixtures.
-	for r := Metal; r <= Energy; r++ {
-		// Strategic AI observes the settled player record on the next manager
-		// dispatch. A composed Settle call has already populated these fields
-		// from all unit buckets plus the player mirror. Keep the mirror fallback
-		// for direct unit-less CommitPostSettlement fixtures [R-P0-05].
-		if !prepared {
-			p.AIProduction[r] = p.Mirror[r].Production
-			p.AIConsumption[r] = p.Mirror[r].Requested
-		}
-		p.PassProduced[r] = p.AIProduction[r]
-		p.PassConsumed[r] = p.AIConsumption[r]
-		p.TotalProduced[r] += float64(p.PassProduced[r])
-		p.TotalConsumed[r] += float64(p.PassConsumed[r])
+	need := float32(int32(cost))
+	if need > p.Stock[Energy] {
+		return false
 	}
-	// Clamp stock to rebuilt capacity; overflow to waste with fractional preserved per C10.
-	// Waste is float64 per I2; stock stays float32 per [05 "Player slot"].
-	for r := Metal; r <= Energy; r++ {
-		if p.Stock[r] > p.Capacity[r] {
-			overflow := float64(p.Stock[r] - p.Capacity[r])
-			p.Waste[r] += overflow
-			p.Stock[r] = p.Capacity[r]
-		}
-		if p.Stock[r] < 0 {
-			p.Stock[r] = 0
-		}
-	}
-	// Archive and clear live bucket INPUTS per C10 and step 8 of
-	// [05 "Authoritative settlement order"].
-	p.ArchivedMirror = p.Mirror
-	for r := Metal; r <= Energy; r++ {
-		clearPassInputs(&p.Mirror[r])
-	}
-	p.aiAggregatesPrepared = false
+	p.Stock[Energy] = float32(float64(p.Stock[Energy]) - float64(need))
+	b.Requested = float32(float64(b.Requested) + float64(need))
+	return true
 }
 
 // clearPassInputs zeroes the three pass-local accumulators and preserves the
@@ -386,22 +392,34 @@ func clearPassInputs(b *Bucket) {
 	// b.Carry survives.
 }
 
-// CommitUnitBuckets archives and zeroes per-unit live buckets for player per C10.
-func (s *Service) CommitUnitBuckets(w *units.World, player int) {
-	if s == nil || w == nil {
+func (p *Player) commitPassCounters() {
+	if p == nil {
 		return
 	}
-	ForEachUnitOrdered(w, player, func(u *units.Unit) {
-		h := u.Handle
-		if h == 0 {
-			return
+	prepared := p.aiAggregatesPrepared
+	for _, r := range [...]Res{Energy, Metal} {
+		if !prepared {
+			p.AIProduction[r] = p.Mirror[r].Production
+			p.AIConsumption[r] = p.Mirror[r].Requested
 		}
-		s.ensureUnitBuckets(h)
-		ue := &s.unitBuckets[h]
-		ue.Archived = ue.Buckets
-		clearPassInputs(&ue.Buckets[Metal])
-		clearPassInputs(&ue.Buckets[Energy])
-	})
+		p.PassProduced[r] = p.AIProduction[r]
+		p.PassConsumed[r] = p.AIConsumption[r]
+		p.TotalProduced[r] += float64(p.PassProduced[r])
+		p.TotalConsumed[r] += float64(p.PassConsumed[r])
+	}
+}
+
+func (p *Player) commitCapacityWaste() {
+	if p == nil {
+		return
+	}
+	for _, r := range [...]Res{Energy, Metal} {
+		if p.Stock[r] > p.Capacity[r] {
+			overflow := float64(p.Stock[r]) - float64(p.Capacity[r])
+			p.Waste[r] += overflow
+			p.Stock[r] = p.Capacity[r]
+		}
+	}
 }
 
 // Mirror bucket closed writer set per [05 "Stocks, counters, and waste"] C11.
@@ -413,31 +431,21 @@ func InitPlayer(p *Player) {
 	if p == nil {
 		return
 	}
-	for r := Metal; r <= Energy; r++ {
+	for _, r := range [...]Res{Energy, Metal} {
 		p.Mirror[r] = Bucket{}
-		p.ArchivedMirror[r] = Bucket{}
+		p.ArchivedMirror[r] = ArchivedBucket{}
 		p.AIProduction[r] = 0
 		p.AIConsumption[r] = 0
 		p.PassProduced[r] = 0
 		p.PassConsumed[r] = 0
 	}
 	p.aiAggregatesPrepared = false
+	p.settlementStatusFirst = 0
+	p.settlementStatusSecond = 0
 	// Stock, Capacity, Waste, totals are zeroed by caller as needed; no float constants here.
 	// Initialize control countdown to -1 so gate starts satisfied per [05 "Authoritative settlement order"].
 	p.EndGameCountdown = -1
 	p.GameEnded = false
-}
-
-// ClearMirrorPerPass clears the live mirror bucket's pass inputs for reuse per
-// C11 and step 1 of [05 "Authoritative settlement order"]. Carry survives — see
-// clearPassInputs.
-func ClearMirrorPerPass(p *Player) {
-	if p == nil {
-		return
-	}
-	for r := Metal; r <= Energy; r++ {
-		clearPassInputs(&p.Mirror[r])
-	}
 }
 
 // AdmitTwoResource admits energy and metal demands as one transaction per [05 "Two-resource admission"].
@@ -489,26 +497,36 @@ func ImmediateDebit(p *Player, energy, metal float32) bool {
 	if p == nil {
 		return false
 	}
-	if p.Stock[Energy] < energy || p.Stock[Metal] < metal {
+	if energy > p.Stock[Energy] || metal > p.Stock[Metal] {
 		return false
 	}
-	p.Stock[Energy] -= energy
-	p.Stock[Metal] -= metal
+	p.Stock[Energy] = float32(float64(p.Stock[Energy]) - float64(energy))
+	p.Mirror[Energy].Requested = float32(float64(p.Mirror[Energy].Requested) + float64(energy))
+	p.Stock[Metal] = float32(float64(p.Stock[Metal]) - float64(metal))
+	p.Mirror[Metal].Requested = float32(float64(p.Mirror[Metal].Requested) + float64(metal))
 	return true
 }
 
-// ShareTransfer mutates live stock between passes for allied sharing per [05 "Allied resource and sensor sharing"] C11.
-// Transfers run outside settlement when global tick is multiple of 60/450 per C12; this helper just moves amount.
-func ShareTransfer(src, dst *Player, res Res, amount float32) {
-	if src == nil || dst == nil {
+// transfer is the sharing helper used by the dispatcher and packet drain.
+// Debit is local-only; received packets credit the destination without
+// debiting again. Credits land in mirror production and are settled later
+// [R-SHARE-01 §2, §4]. A network emitter, when wired by the session layer,
+// encodes Energy as subtype 1 and Metal as subtype 2 [R-SHARE-01 §2].
+func (s *Service) transfer(src, dst *Player, res Res, amount float32, debit bool) {
+	if s == nil || src == nil || dst == nil || amount == 0 {
 		return
 	}
-	if amount <= 0 {
-		return
+	if debit {
+		if amount > src.Stock[res] {
+			amount = src.Stock[res]
+		}
+		if amount > src.Stock[res] {
+			return
+		}
+		src.Stock[res] = float32(float64(src.Stock[res]) - float64(amount))
+		src.Mirror[res].Requested = float32(float64(src.Mirror[res].Requested) + float64(amount))
 	}
-	// No clamp to share buffer here; outer dispatcher gates it per [05 "Allied resource and sensor sharing"].
-	src.Stock[res] -= amount
-	dst.Stock[res] += amount
+	addContribution(s, dst, &dst.Mirror[res], float64(amount))
 }
 
 // CreditSpawn writes spawn credit directly to live stock outside the ledger
@@ -522,7 +540,8 @@ func CreditSpawn(p *Player, res Res, amount float32) {
 
 // CreditConstructionTermination credits metal spent on an unfinished build per C11.
 // Refund is trunc((1 - remaining) × metalBuildCost) per [05 "Cancel-current and stop interrupts"] C21.
-// Normally adds to builder's metal bucket; special player modes subtract scaled amount.
+// Normally adds to builder's metal bucket; special player modes add the
+// difficulty-scaled credit [R-ECO-01 §3].
 // The only floating constants in the whole ledger are -0.7 and -0.5 per C1.
 func CreditConstructionTermination(p *Player, remaining float32, metalBuildCost int32, specialMode int) {
 	if p == nil {
@@ -532,12 +551,12 @@ func CreditConstructionTermination(p *Player, remaining float32, metalBuildCost 
 	refund := float32(int32((1 - remaining) * float32(metalBuildCost)))
 	switch specialMode {
 	case 0:
-		// selector value 0 subtracts seven tenths per C21 and [05 "Cancel-current and stop interrupts"]
-		p.Mirror[Metal].Production += refund * -0.7
+		// selector value 0 credits one half through the negative-factor form.
+		p.Mirror[Metal].Production = float32(float64(p.Mirror[Metal].Production) - float64(refund)*-0.5)
 	case 1:
-		// selector value 1 subtracts one half
-		p.Mirror[Metal].Production += refund * -0.5
+		// selector value 1 credits seven tenths through the negative-factor form.
+		p.Mirror[Metal].Production = float32(float64(p.Mirror[Metal].Production) - float64(refund)*-0.7)
 	default:
-		p.Mirror[Metal].Production += refund
+		p.Mirror[Metal].Production = float32(float64(p.Mirror[Metal].Production) + float64(refund))
 	}
 }

@@ -43,7 +43,7 @@ func stampedCatalog(t *testing.T) *content.Catalog {
 // position.
 func TestDefIDComesFromCatalogStampNotFirstUse(t *testing.T) {
 	cat := stampedCatalog(t)
-	world := NewSliced(len(cat.Units), cat)
+	world := newFixtureWorld(len(cat.Units), cat)
 	armDef := cat.Units["armdef"]
 	corDef := cat.Units["cordef"]
 	if armDef.UnitDefID == corDef.UnitDefID {
@@ -80,7 +80,7 @@ func TestDefIDComesFromCatalogStampNotFirstUse(t *testing.T) {
 // with an error and no allocation [P0-16 §3.2].
 func TestCreateRejectsDefinitionOutsideFinalizedCatalog(t *testing.T) {
 	cat := stampedCatalog(t)
-	world := NewSliced(len(cat.Units), cat)
+	world := newFixtureWorld(len(cat.Units), cat)
 	foreign := &content.UnitDef{UnitName: "foreign", MaxDamage: 100}
 	foreign.CanonicalKey = content.CanonicalKey(foreign.UnitName)
 	if _, err := world.Create(foreign, 0, 0, 0, 0); err == nil {
@@ -138,7 +138,7 @@ func TestUnitIndexOfLocksCatalogOwnedRecord(t *testing.T) {
 // definition carrying a stamp stores it, and a synthetic definition falls
 // back to a fixture-scoped identity. Not retail behavior.
 func TestFixtureWorldAcceptsUnstampedDefinitions(t *testing.T) {
-	world := NewSliced(4, nil)
+	world := newFixtureWorld(4, nil)
 	stamped := &content.UnitDef{UnitName: "stamped", MaxDamage: 100, UnitDefID: 7}
 	h1, err := world.Create(stamped, 0, 0, 0, 0)
 	if err != nil {

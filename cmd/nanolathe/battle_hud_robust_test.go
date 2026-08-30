@@ -77,9 +77,13 @@ func TestBattleHUDLoadsARMAndCORE(t *testing.T) {
 	}
 	defer cs.Close()
 	for sideIdx, wantPrefix := range []string{"ARM", "COR"} {
+		// The lobby refuses a roster without both a human and a computer
+		// opponent [08 "Skirmish configuration"]; slot 1 is the AI so the local
+		// human in slot 0 sees the side under test.
 		cfg := session.SkirmishConfig{MapName: "ashap plateau", NumPlayers: 2}
 		cfg.Players[0].Side = sideIdx
 		cfg.Players[1].Side = 1 - sideIdx
+		cfg.Players[1].Controller = session.SkirmishControllerComputer
 		cfg.ApplyDefaults()
 		sess, _, err := newBattleSessionWithConfig(opts, cs, cfg)
 		if err != nil {
@@ -106,8 +110,9 @@ func TestBattleHUDLoadsARMAndCORE(t *testing.T) {
 			t.Fatalf("side %s missing mandatory panel frames [07 §6]", wantPrefix)
 		}
 		// ESC opens the hard-coded ARMOPT modal for either side. CORE must use
-		// that same authored path; there is no COROPT branch [07 §11].
-		if hud.optionsWin == nil || !strings.EqualFold(hud.optionsWin.Name, "armopt.gui") {
+		// that same authored path; there is no COROPT branch [07 §11]. A loaded
+		// window is named by the logical path it was read from.
+		if hud.optionsWin == nil || !strings.EqualFold(hud.optionsWin.Name, "guis/armopt.gui") {
 			t.Fatalf("%s options window = %#v; want ARMOPT.GUI", wantPrefix, hud.optionsWin)
 		}
 	}

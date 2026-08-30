@@ -31,7 +31,7 @@ func (s *System) ForgetUnit(h pool.Handle) {
 	// Cancels the scheduler request and drops the active order binding.
 	s.DeactivateMove(h)
 	if s.Scheduler != nil {
-		s.Scheduler.Cancel(h)
+		s.CancelPathRequest(h)
 	}
 
 	delete(s.Collisions, h)

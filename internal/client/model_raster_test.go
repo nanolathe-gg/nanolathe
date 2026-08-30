@@ -201,7 +201,11 @@ func TestFeatureStaticModelAllowsMissingIdentity(t *testing.T) {
 	c := testModelTextureClient()
 	c.models = map[string]*unitModel{
 		"feature": {
+			// A root piece has no parent; the compiler stores -1 [03 §2.4]. A
+			// zero Parent names piece 0 itself, which the hidden-piece walk
+			// treats as a malformed cycle.
 			compiled: &compiledmodel.Model{Pieces: []compiledmodel.Piece{{
+				Parent:     -1,
 				Primitives: []compiledmodel.Primitive{{ColorIndex: 56, IsColored: 1, VertexIndices: []uint16{0, 1, 2, 3}}},
 				Vertices:   [][3]numeric.Fixed{{0, 0, 0}, {1 << 16, 0, 0}, {1 << 16, 0, 1 << 16}, {0, 0, 1 << 16}},
 			}}},

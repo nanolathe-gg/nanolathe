@@ -26,7 +26,7 @@ func p28CreateHeading(t *testing.T, w *World, def *content.UnitDef) uint16 {
 
 func TestP28BuildAngleKnownSequenceAndSingleStream(t *testing.T) {
 	sim := rng.NewSimulation(7)
-	w := NewSliced(4, nil)
+	w := newFixtureWorld(4, nil)
 	w.SetSimulationRNG(&sim)
 	def := p28AngleDef("angle", 4096)
 
@@ -45,7 +45,7 @@ func TestP28BuildAngleKnownSequenceAndSingleStream(t *testing.T) {
 
 func TestP28BuildAngleSignedSixteenBitConversion(t *testing.T) {
 	sim := rng.NewSimulation(7)
-	w := NewSliced(1, nil)
+	w := newFixtureWorld(1, nil)
 	w.SetSimulationRNG(&sim)
 	// The first sample is 36570. Interpreting it as unsigned would produce a
 	// different intermediate; the established signed-16 conversion wraps the
@@ -59,7 +59,7 @@ func TestP28BuildAngleSignedSixteenBitConversion(t *testing.T) {
 }
 
 func TestP28FixtureWorldWithoutBoundStreamUsesZeroSpanHeading(t *testing.T) {
-	w := NewSliced(1, nil)
+	w := newFixtureWorld(1, nil)
 	if got := p28CreateHeading(t, w, p28AngleDef("fixture", 4096)); got != 30720 {
 		t.Fatalf("nil-stream fixture heading = %d, want deterministic zero sample 30720", got)
 	}
@@ -68,7 +68,7 @@ func TestP28FixtureWorldWithoutBoundStreamUsesZeroSpanHeading(t *testing.T) {
 func TestP28BuildAngleSameSeedSameHeadingsAndState(t *testing.T) {
 	makeRun := func(seed uint32) ([]uint16, uint32, uint64) {
 		sim := rng.NewSimulation(seed)
-		w := NewSliced(4, nil)
+		w := newFixtureWorld(4, nil)
 		w.SetSimulationRNG(&sim)
 		def := p28AngleDef("same", 4096)
 		got := make([]uint16, 3)
@@ -98,7 +98,7 @@ func TestP28BuildAngleZeroAndOneSkipOnlyBoundedDraw(t *testing.T) {
 		t.Run(string(rune('0'+bound)), func(t *testing.T) {
 			sim := rng.NewSimulation(31)
 			expected := rng.NewSimulation(31)
-			w := NewSliced(3, nil)
+			w := newFixtureWorld(3, nil)
 			w.SetSimulationRNG(&sim)
 			def := p28AngleDef("small", bound)
 			for i := 0; i < 2; i++ {
@@ -117,7 +117,7 @@ func TestP28BuildAngleZeroAndOneSkipOnlyBoundedDraw(t *testing.T) {
 func TestP28BuildAngleUsesLowSixteenBitBound(t *testing.T) {
 	sim := rng.NewSimulation(39)
 	expected := rng.NewSimulation(39)
-	w := NewSliced(1, nil)
+	w := newFixtureWorld(1, nil)
 	w.SetSimulationRNG(&sim)
 	// 65537 narrows to bound one, so heading selection returns zero without
 	// advancing and only the following full-domain invocation consumes a draw.
@@ -133,7 +133,7 @@ func TestP28BuildAngleUsesLowSixteenBitBound(t *testing.T) {
 func TestP28ForcedSlotSuccessRunsCommonInitializer(t *testing.T) {
 	sim := rng.NewSimulation(41)
 	expected := rng.NewSimulation(41)
-	w := NewSliced(2, nil)
+	w := newFixtureWorld(2, nil)
 	w.SetSimulationRNG(&sim)
 	def := p28AngleDef("forced-success", 4096)
 	draw := expected.Uint32n(4096)
@@ -154,7 +154,7 @@ func TestP28ForcedSlotSuccessRunsCommonInitializer(t *testing.T) {
 func TestP28BuildAngleFailuresBeforeInitializerConsumeNoDraws(t *testing.T) {
 	t.Run("definition limit", func(t *testing.T) {
 		sim := rng.NewSimulation(41)
-		w := NewSliced(2, nil)
+		w := newFixtureWorld(2, nil)
 		w.SetSimulationRNG(&sim)
 		def := p28AngleDef("limited", 4096)
 		def.LimitEnabled = true
@@ -170,7 +170,7 @@ func TestP28BuildAngleFailuresBeforeInitializerConsumeNoDraws(t *testing.T) {
 	})
 	t.Run("slice full", func(t *testing.T) {
 		sim := rng.NewSimulation(43)
-		w := NewSliced(1, nil)
+		w := newFixtureWorld(1, nil)
 		w.SetSimulationRNG(&sim)
 		def := p28AngleDef("full", 4096)
 		_ = p28CreateHeading(t, w, def)
@@ -198,7 +198,7 @@ func TestP28BuildAngleFailuresBeforeInitializerConsumeNoDraws(t *testing.T) {
 
 func TestP28StrictBindingFailureRollsBackAllocation(t *testing.T) {
 	sim := rng.NewSimulation(53)
-	w := NewSliced(1, nil)
+	w := newFixtureWorld(1, nil)
 	w.SetSimulationRNG(&sim)
 	w.SetCOBBinder(func(*Unit) error { return errors.New("fixture binding failure") })
 	if _, err := w.Create(p28AngleDef("binding", 4096), 0, 0, 0, 0); err == nil {

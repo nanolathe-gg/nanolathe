@@ -178,8 +178,7 @@ func strictNewSessionWithUnits(t *testing.T, nUnits int, simSeed, crtSeed uint32
 		p.Exists = true
 		p.ControllerState = uint8(i + 1)
 		p.IsObserver = false
-		p.StatusHalfwordAt144 = 1
-		p.StatusWordAt140 = 0
+		p.SetSettlementStatusPair(1, 0)
 		p.GameEnded = false
 		p.EndGameCountdown = -1
 	}

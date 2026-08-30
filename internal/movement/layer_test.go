@@ -6,7 +6,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -318,7 +317,7 @@ func (a testAnchors) CommittedAnchor(h pool.Handle, footX, footZ int16) (Cell, b
 func TestLayerRevisionPass(t *testing.T) {
 	tr := layerTerrain(32, 32, 20)
 	grid := NewOccupancyGrid()
-	w := units.NewSliced(16, nil)
+	w := newMovementFixtureWorld(16)
 	def := &content.UnitDef{UnitName: "armflea", MaxDamage: 100, CanMove: true, BMCode: true}
 	hReq, err := w.Create(def, 0, world.CellToWorld(2), 30*65536, world.CellToWorld(2))
 	if err != nil {

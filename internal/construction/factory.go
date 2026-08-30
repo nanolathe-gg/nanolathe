@@ -314,7 +314,7 @@ func (s *Service) ensureWalk(builder *units.Unit, node *orders.Node) {
 		goal = path.Cell{X: world.WorldToCell(standX), Z: world.WorldToCell(standZ)}
 		s.Movement.BindMoveGoal(builder.Handle, node, standX, standZ)
 	}
-	if s.Movement.Scheduler.HasRequest(builder.Handle) {
+	if s.Movement.HasPathRequest(builder.Handle) {
 		return
 	}
 	if r := s.Movement.Routes[builder.Handle]; r != nil && r.Active {

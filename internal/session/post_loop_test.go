@@ -45,7 +45,7 @@ func TestStepSeparatesPhasesPublicationAndPostLoopTail(t *testing.T) {
 	if got := s.PublicationCount(); got != 5 {
 		t.Fatalf("publication count=%d, want 5 completed-subtick boundaries", got)
 	}
-	if got, want := s.PostLoopTrace(), []string{"barrier-1", "barrier-2", "barrier-3", "deadline-ring-slide", "pending-compact"}; !reflect.DeepEqual(got, want) {
+	if got, want := s.PostLoopTrace(), []string{"barrier-1", "barrier-2", "barrier-3", "deadline-ring-slide", "pending-compact", "eyeball-expire"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("post-loop trace=%v, want %v", got, want)
 	}
 	if got, want := events, []string{"barrier", "barrier", "barrier", "ring", "pending"}; !reflect.DeepEqual(got, want) {
@@ -88,7 +88,7 @@ func TestStepPublishesCompletedSubTickBeforeCatchUpExit(t *testing.T) {
 	if got := len(s.PhaseTrace()); got != 12 {
 		t.Fatalf("phase trace length=%d, want one completed sub-tick", got)
 	}
-	if got := len(s.PostLoopTrace()); got != 5 {
+	if got := len(s.PostLoopTrace()); got != 6 {
 		t.Fatalf("post-loop trace length=%d, want one tail after early exit", got)
 	}
 }
@@ -133,8 +133,8 @@ func TestFiveSubTicksMatchOneCatchUpPumpExceptTailCadence(t *testing.T) {
 	if *oneTailCalls != 1 || *fiveTailCalls != 5 {
 		t.Fatalf("post-loop tail calls=%d/%d, want 1/5", *oneTailCalls, *fiveTailCalls)
 	}
-	if len(one.PostLoopTrace()) != 5 || len(five.PostLoopTrace()) != 25 {
-		t.Fatalf("post-loop event counts=%d/%d, want 5/25", len(one.PostLoopTrace()), len(five.PostLoopTrace()))
+	if len(one.PostLoopTrace()) != 6 || len(five.PostLoopTrace()) != 30 {
+		t.Fatalf("post-loop event counts=%d/%d, want 6/30", len(one.PostLoopTrace()), len(five.PostLoopTrace()))
 	}
 }
 

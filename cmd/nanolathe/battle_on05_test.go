@@ -250,6 +250,7 @@ func TestBattleCameraIgnoresWASD(t *testing.T) {
 	cl3, _ := client.New(client.Options{Buffer: buf, Width: 640, Height: 480, Step: func(delta float64) {}})
 	cl3.SetCamera(b.cam)
 	cl3.Input().Mouse.SetPosition(0, 240) // left edge exact [07 §10] x==0
+	cl3.SetFocused(true)                  // edge scroll is suppressed without window focus [07 §10]
 	b.viewerStep(0.016, cl3)
 	if b.cam.X == 500 {
 		t.Fatalf("edge scroll should move left")

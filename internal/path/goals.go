@@ -2,8 +2,8 @@ package path
 
 // Goal families [04 §7.2] C8 and enumeration [04 §7.4].
 //
-// Four families share the Goal interface (types.go): point/radius,
-// annulus (stand-off), rectangle perimeter, and saved/restored.
+// The path-facing families share the Goal interface (types.go): point/radius,
+// annulus (stand-off), rectangle perimeter, and the serialized saved form.
 //
 // - Point/radius: h = max(18*max(|dx|,|dz|)+7*min(|dx|,|dz|)-R, 0)
 //   where R is the raw authored radius; arrival is a squared-distance
@@ -13,7 +13,9 @@ package path
 //   inward; arrival uses >>4-quantized squared radii [04 §7.2], [04 §7.4].
 // - Rectangle perimeter: admissible 16*max+6*min outside, and inside
 //   16*min(distance to each edge); goal cells exactly the border [04 §7.2].
-// - Saved: h identically zero (Dijkstra), null start predicate [04 §7.2].
+// - Air work and air moving: h identically zero, empty enumeration, and a
+//   false start predicate. These serialized air surfaces are not admitted to
+//   the ground search [04 R-PATH-01 §9].
 //
 // The annulus radius-unit mismatch (raw authored radii in the heuristic
 // clamp vs >>4-quantized squared radii in arrival) is REAL and reproduced,
@@ -299,43 +301,31 @@ func (g *rectGoal) StartSatisfied(start Cell) bool {
 	return start.X == r.Min.X || start.X == r.Max.X || start.Z == r.Min.Z || start.Z == r.Max.Z
 }
 
-// savedGoal implements restored-from-save goals [04 §7.2].
-type savedGoal struct {
-	cells []Cell
-}
+type airWorkGoal struct{}
+type airMovingGoal struct{}
 
-// SavedGoal creates a saved/restored-from-save goal [04 §7.2] C8.
-// h identically zero, giving pure Dijkstra behavior [04 §7.2].
-// Start predicate is null (always false) per [04 §7.2]; acceptance is
-// decided solely by enumerated cells. The stored list is copied.
-func SavedGoal(cells []Cell) Goal {
-	cp := make([]Cell, len(cells))
-	copy(cp, cells)
-	return &savedGoal{cells: cp}
-}
+// AirWorkGoal and AirMovingGoal are the exact serialized air goal surfaces.
+// They intentionally cannot satisfy a ground search: both have H=0, enumerate
+// no cells, and never report the start as satisfied [04 R-PATH-01 §9].
+func AirWorkGoal() Goal   { return &airWorkGoal{} }
+func AirMovingGoal() Goal { return &airMovingGoal{} }
 
-func (g *savedGoal) H(c Cell) int32 {
-	// Identically zero [04 §7.2].
-	return 0
-}
-
-func (g *savedGoal) Enumerate(out []Cell) []Cell {
+func (airWorkGoal) H(Cell) int32   { return 0 }
+func (airMovingGoal) H(Cell) int32 { return 0 }
+func (airWorkGoal) Enumerate(out []Cell) []Cell {
 	if out == nil {
-		// Return a copy to preserve immutability.
-		cp := make([]Cell, len(g.cells))
-		copy(cp, g.cells)
-		return cp
+		return nil
 	}
-	out = out[:0]
-	out = append(out, g.cells...)
-	return out
+	return out[:0]
 }
-
-func (g *savedGoal) StartSatisfied(start Cell) bool {
-	// Null start predicate [04 §7.2] — always false, even if start is listed.
-	// Acceptance is via enumerated cells, not this early-exit [04 §7.2].
-	return false
+func (airMovingGoal) Enumerate(out []Cell) []Cell {
+	if out == nil {
+		return nil
+	}
+	return out[:0]
 }
+func (airWorkGoal) StartSatisfied(Cell) bool   { return false }
+func (airMovingGoal) StartSatisfied(Cell) bool { return false }
 
 // Inspection helpers for wiring verification [OW-3-P] [04 §7.2][04 §7.4].
 // They expose the private family fields so movement/order wiring can be
@@ -363,11 +353,5 @@ func IsRectGoal(g Goal) (r Rect, ok bool) {
 	return Rect{}, false
 }
 
-func IsSavedGoal(g Goal) (cells []Cell, ok bool) {
-	if sg, ok2 := g.(*savedGoal); ok2 {
-		cp := make([]Cell, len(sg.cells))
-		copy(cp, sg.cells)
-		return cp, true
-	}
-	return nil, false
-}
+func IsAirWorkGoal(g Goal) bool   { _, ok := g.(*airWorkGoal); return ok }
+func IsAirMovingGoal(g Goal) bool { _, ok := g.(*airMovingGoal); return ok }

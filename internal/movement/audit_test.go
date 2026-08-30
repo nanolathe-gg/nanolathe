@@ -192,23 +192,20 @@ func TestAuditRouteEvidenceAndBoundedSink(t *testing.T) {
 	collector := &AuditCollector{Limit: 1}
 	cells := []Cell{{X: 0, Z: 0}, {X: 1, Z: 0}}
 	AuditRouteFailure(collector, terrain, Template(), cells, AuditContext{
-		RouteRevision:       3,
-		HasRouteRevision:    true,
-		StaticRevision:      4,
-		HasStaticRevision:   true,
-		RayPassable:         false,
-		RayAccepted:         true,
-		HasRayVerdict:       true,
-		SmoothingPassable:   false,
-		SmoothingAccepted:   true,
-		HasSmoothingVerdict: true,
-		Finding:             FindingSmoothing,
+		RouteRevision:     3,
+		HasRouteRevision:  true,
+		StaticRevision:    4,
+		HasStaticRevision: true,
+		RayPassable:       false,
+		RayAccepted:       true,
+		HasRayVerdict:     true,
+		Finding:           FindingPlanner,
 	})
 	if len(collector.Records) != 1 || collector.Records[0].Cell != cells[0] {
 		t.Fatalf("bounded records = %#v", collector.Records)
 	}
 	a := collector.Records[0]
-	if !a.HasRayVerdict || a.RayPassable || !a.RayAccepted || !a.HasSmoothingVerdict || a.Finding != FindingSmoothing {
+	if !a.HasRayVerdict || a.RayPassable || !a.RayAccepted || a.Finding != FindingPlanner {
 		t.Fatalf("route evidence = %#v", a)
 	}
 }

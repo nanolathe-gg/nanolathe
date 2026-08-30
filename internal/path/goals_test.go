@@ -173,20 +173,25 @@ func TestRectGoalHeuristic(t *testing.T) {
 	}
 }
 
-func TestSavedGoalHeuristicZero(t *testing.T) {
-	cells := []Cell{{1, 1}, {2, 2}, {5, 5}}
-	g := SavedGoal(cells)
-	// h identically zero [04 §7.2].
+func TestAirGoalHeuristicZero(t *testing.T) {
+	g := AirWorkGoal()
+	// Air work and moving surfaces have h identically zero [04 R-PATH-01 §9].
 	pts := []Cell{{0, 0}, {1, 1}, {10, 5}, {100, -50}, {2, 2}, {5, 5}, {6, 6}}
 	for _, p := range pts {
 		if got := g.H(p); got != 0 {
 			t.Fatalf("saved H%v want 0 got %d", p, got)
 		}
 	}
-	// Also with empty saved.
-	empty := SavedGoal(nil)
-	if got := empty.H(Cell{999, 999}); got != 0 {
-		t.Fatalf("empty saved H want 0 got %d", got)
+	for _, air := range []Goal{AirWorkGoal(), AirMovingGoal()} {
+		if got := air.H(Cell{999, 999}); got != 0 {
+			t.Fatalf("air goal H want 0 got %d", got)
+		}
+		if air.StartSatisfied(Cell{}) {
+			t.Fatal("air goal must never be start-satisfied")
+		}
+		if got := air.Enumerate(nil); len(got) != 0 {
+			t.Fatalf("air goal enumeration want empty got %v", got)
+		}
 	}
 }
 
@@ -272,38 +277,12 @@ func TestGoalEnumerate(t *testing.T) {
 		}
 	}
 
-	// Saved: stored list.
-	savedCells := []Cell{{1, 1}, {2, 2}, {3, 3}}
-	sg := SavedGoal(savedCells)
-	got := sg.Enumerate(nil)
-	if len(got) != 3 {
-		t.Fatalf("saved enumerate want 3 got %d", len(got))
-	}
-	for i, c := range savedCells {
-		if got[i] != c {
-			t.Fatalf("saved enumerate [%d] want %v got %v", i, c, got[i])
+	for _, air := range []Goal{AirWorkGoal(), AirMovingGoal()} {
+		buf = make([]Cell, 1, 10)
+		buf[0] = Cell{9, 9}
+		if got := air.Enumerate(buf); len(got) != 0 {
+			t.Fatalf("air reuse enumerate want empty got %v", got)
 		}
-	}
-	// Ensure saved copy is immutable.
-	savedCells[0] = Cell{99, 99}
-	got2 := sg.Enumerate(nil)
-	if got2[0] == (Cell{99, 99}) {
-		t.Fatalf("saved should copy input")
-	}
-	// Enumerate with reuse buffer.
-	buf = make([]Cell, 1, 10)
-	buf[0] = Cell{9, 9}
-	got3 := sg.Enumerate(buf)
-	if len(got3) != 3 {
-		t.Fatalf("saved reuse enumerate want 3 got %d", len(got3))
-	}
-	if got3[0] != (Cell{1, 1}) || got3[1] != (Cell{2, 2}) || got3[2] != (Cell{3, 3}) {
-		t.Fatalf("saved reuse got %v", got3)
-	}
-	// Empty saved.
-	empty := SavedGoal(nil)
-	if got := empty.Enumerate(nil); len(got) != 0 {
-		t.Fatalf("empty saved enumerate want 0 got %d", len(got))
 	}
 }
 
@@ -415,20 +394,10 @@ func TestGoalStartSatisfied(t *testing.T) {
 	if rg1.StartSatisfied(Cell{6, 5}) {
 		t.Fatalf("1x1 rect neighbor should not satisfy")
 	}
-	// Saved: null predicate always false [04 §7.2].
-	sg := SavedGoal([]Cell{{1, 1}, {2, 2}})
-	if sg.StartSatisfied(Cell{1, 1}) {
-		t.Fatalf("saved StartSatisfied should be false even for listed cell (null predicate)")
-	}
-	if sg.StartSatisfied(Cell{2, 2}) {
-		t.Fatalf("saved StartSatisfied should be false")
-	}
-	if sg.StartSatisfied(Cell{0, 0}) {
-		t.Fatalf("saved StartSatisfied should be false for non-listed")
-	}
-	emptySG := SavedGoal(nil)
-	if emptySG.StartSatisfied(Cell{0, 0}) {
-		t.Fatalf("empty saved should be false")
+	for _, air := range []Goal{AirWorkGoal(), AirMovingGoal()} {
+		if air.StartSatisfied(Cell{1, 1}) {
+			t.Fatalf("air goal StartSatisfied should be false")
+		}
 	}
 }
 

@@ -55,6 +55,7 @@ type Client struct {
 	// exitRequested lets authored in-game GUI actions terminate the same
 	// Ebitengine loop as closing the window. It is presentation state only.
 	exitRequested bool
+	focused       bool
 
 	buffer *frame.Buffer
 
@@ -246,10 +247,21 @@ func (c *Client) SetSnapshot(b *frame.Buffer) {
 // Size returns the negotiated logical framebuffer size.
 func (c *Client) Size() (int, int) { return c.width, c.height }
 
-// IsFocused reports the platform window focus at the client edge. Battle
-// camera predicates consume this value without importing Ebitengine [07 §10].
+// IsFocused reports the platform window focus sampled at the client edge.
+// Battle camera predicates consume this value without importing Ebitengine;
+// focus is checked before edge scrolling, and an unfocused window suppresses
+// it [07 §10].
 func (c *Client) IsFocused() bool {
-	return c != nil && ebiten.IsFocused()
+	return c != nil && c.focused
+}
+
+// SetFocused records the window focus for the current host frame. The window
+// loop samples it from the platform alongside the pointer each update; an
+// embedder without a window supplies it the same way it supplies the pointer.
+func (c *Client) SetFocused(focused bool) {
+	if c != nil {
+		c.focused = focused
+	}
 }
 
 // Buffer exposes the presentation snapshot source (diagnostics publish into

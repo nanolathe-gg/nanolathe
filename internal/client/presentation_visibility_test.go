@@ -70,10 +70,12 @@ func TestDrawProjectileViewsDropsEarlierInstructionsOnGlobalAbort(t *testing.T) 
 		{Handle: 1, RenderType: render.RenderTypeBeam},
 		{Handle: 2, RenderType: render.RenderTypeGlobalGAF},
 	}
+	// An absent visibility dependency fails closed and draws nothing [03 §5.4];
+	// the abort under test needs the records admitted to the rendertype gate.
 	stats := c.DrawProjectileViews(
 		views,
 		1,
-		nil,
+		func(frame.ProjectileView) bool { return true },
 		func(frame.ProjectileView) bool { return false },
 		render.ProjectileDispatchOptions{
 			Color: func(frame.ProjectileView) (int32, int32, bool) { return 7, 0, true },

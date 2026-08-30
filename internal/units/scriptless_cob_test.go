@@ -1,0 +1,216 @@
+package units
+
+// These fixtures exercise the strict catalog and production creation
+// boundaries without introducing a missing-program compatibility path.
+
+import (
+	"encoding/binary"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/nanolathe/nanolathe/internal/cob"
+	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/vfs"
+)
+
+// sideAnchorFixtures is the 30 mandatory side anchors [02 §6] C8; the
+// definition-load fixture needs a sides file every side compiler accepts.
+var sideAnchorFixtures = [30]string{
+	"LOGO", "ENERGYBAR", "ENERGYNUM", "ENERGYMAX", "ENERGY0",
+	"METALBAR", "METALNUM", "METALMAX", "METAL0", "TOTALUNITS",
+	"TOTALTIME", "ENERGYPRODUCED", "ENERGYCONSUMED", "METALPRODUCED",
+	"METALCONSUMED", "LOGO2", "UNITNAME", "DAMAGEBAR", "UNITMETALMAKE",
+	"UNITMETALUSE", "UNITENERGYMAKE", "UNITENERGYUSE", "MISSIONTEXT",
+	"UNITNAME2", "DAMAGEBAR2", "NAME", "DESCRIPTION", "RELOAD1",
+	"RELOAD2", "RELOAD3",
+}
+
+// minimalCOB builds the smallest byte-valid COB: one script named Create
+// whose entry is one code word [fmt cob] (44-byte header, 11 × u32 LE).
+func minimalCOB(t *testing.T) []byte {
+	t.Helper()
+	buf := make([]byte, 64)
+	u32 := func(off uint32, v uint32) { binary.LittleEndian.PutUint32(buf[off:], v) }
+	const headerSize = 44
+	u32(0x00, 4)                     // VersionSignature 4 [fmt cob]
+	u32(0x04, 1)                     // NumberOfScripts
+	u32(0x08, 0)                     // NumberOfPieces
+	u32(0x0C, 1)                     // CodeLength words
+	u32(0x10, 0)                     // NumberOfStatics
+	u32(0x14, 0)                     // Always_0
+	u32(0x18, headerSize)            // OffsetToScriptCodeIndexArray
+	u32(0x1C, headerSize+4)          // OffsetToScriptNameOffsetArray
+	u32(0x20, 0)                     // OffsetToPieceNameOffsetArray (count 0)
+	u32(0x24, headerSize+8)          // OffsetToScriptCode
+	u32(0x28, 0)                     // OffsetToFirstScriptName (purpose unknown [fmt cob])
+	u32(headerSize, 0)               // script 0 code index 0
+	u32(headerSize+4, headerSize+12) // script 0 name offset
+	u32(headerSize+8, 0x10000000)    // one code word, bit 28 set [04 §4.3]
+	copy(buf[headerSize+12:], "Create\x00")
+	return buf
+}
+
+// compileFixtureCatalog runs the real content compile over a minimal authored
+// install with a loadable COB for every unit definition.
+func compileFixtureCatalog(t *testing.T) *content.Catalog {
+	t.Helper()
+	root := t.TempDir()
+	write := func(logical, data string) {
+		t.Helper()
+		full := filepath.Join(root, filepath.FromSlash(logical))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", logical, err)
+		}
+		if err := os.WriteFile(full, []byte(data), 0o644); err != nil {
+			t.Fatalf("write %s: %v", logical, err)
+		}
+	}
+	fbi := "[UNITINFO]\n{\nunitname=%s;\nobjectname=%s;\nmaxdamage=100;\n}\n"
+	write("units/armtest.fbi", strings.ReplaceAll(fbi, "%s", "armtest"))
+	write("units/armless.fbi", strings.ReplaceAll(fbi, "%s", "armless"))
+	write("units/armnone.fbi", strings.ReplaceAll(fbi, "%s", "armnone"))
+	write("gamedata/moveinfo.tdf", "[MOVER]\n{\n}\n")
+	// content.Compile requires authored sight/LOS resources (retail semantic
+	// coverage); author the minimal one-table form the compiler accepts.
+	write("gamedata/los.tdf", "[TABLEINFO]\n{\nnumtables=1;\n}\n[TABLE1]\n{\nnumlines=1;\nline1=1,0,1;\n}\n")
+	write("anims/vismasks.gaf", string(testVismaskGAF()))
+	var b strings.Builder
+	b.WriteString("[SIDE0]\n{\nname=ARM;\ncommander=armtest;\nfont=fnt00x.fnt;\n")
+	for _, a := range sideAnchorFixtures {
+		b.WriteString("[" + a + "]\n{\nx1=0;\ny1=0;\nx2=1;\ny2=1;\n}\n")
+	}
+	b.WriteString("}\n")
+	write("gamedata/sidedata.tdf", b.String())
+	write("gamedata/sound.tdf", "[SOUNDS]\n{\n}\n")
+	write("gamedata/allsound.tdf", "[ALIASES]\n{\n}\n")
+	write("ai/default.txt", "plan any\n")
+	// Directories the compilers walk; empty is valid.
+	for _, dir := range []string{"maps", "features", "weapons"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	write("scripts/armtest.cob", string(minimalCOB(t)))
+	write("scripts/armless.cob", string(minimalCOB(t)))
+	write("scripts/armnone.cob", string(minimalCOB(t)))
+	fs := vfs.New()
+	if err := fs.MountDirectory(root, 10); err != nil {
+		t.Fatalf("MountDirectory: %v", err)
+	}
+	cat, err := content.Compile(fs)
+	if err != nil {
+		t.Fatalf("content.Compile: %v", err)
+	}
+	return cat
+}
+
+// TestDefinitionLoadRequiresLoadableCOB locks the strict catalog boundary:
+// every published unit definition carries a non-empty compiled program
+// [R-COB-04 §8].
+func TestDefinitionLoadRequiresLoadableCOB(t *testing.T) {
+	cat := compileFixtureCatalog(t)
+	for _, name := range []string{"armtest", "armless", "armnone"} {
+		def, ok := cat.Unit(name)
+		if !ok || def == nil || def.Script == nil || len(def.Script.Code) == 0 {
+			t.Fatalf("definition %s lacks a loadable COB: %#v", name, def)
+		}
+	}
+	armed, _ := cat.Unit("armtest")
+	if got, ok := armed.Script.Scripts["Create"]; !ok || got != 0 {
+		t.Fatalf("stored program scripts = %v, want Create at word 0", armed.Script.Scripts)
+	}
+}
+
+// TestLoaderMissRejectsProduction locks that a configured production source
+// rejects a missing script rather than fabricating an empty substitute VM
+// [R-COB-04 §8].
+func TestLoaderMissRejectsProduction(t *testing.T) {
+	world := NewSliced(4, nil)
+	world.SetCOBSource(vfs.New(), cob.NewCachedLoader())
+	def := &content.UnitDef{UnitName: "nosuchscript", MaxDamage: 100, Limit: -1}
+	h, err := world.Create(def, 0, 0, 0, 0)
+	if err == nil {
+		t.Fatalf("missing-script creation succeeded with handle %d", h)
+	}
+	if !strings.Contains(err.Error(), "unit script missing") {
+		t.Fatalf("missing-script rejection = %v, want missing-script diagnostic", err)
+	}
+	if world.Used() != 0 {
+		t.Fatalf("missing-script rejection consumed a pool slot: used=%d", world.Used())
+	}
+}
+
+func TestUnconfiguredWorldRejectsMissingCOBBeforeAllocation(t *testing.T) {
+	world := NewSliced(4, nil)
+	def := &content.UnitDef{UnitName: "unconfigured-missing", MaxDamage: 100, Limit: -1}
+	if _, err := world.Create(def, 0, 0, 0, 0); err == nil {
+		t.Fatal("unconfigured world accepted a missing COB")
+	} else if !strings.Contains(err.Error(), "unit script missing") {
+		t.Fatalf("unconfigured missing-script rejection = %v, want missing-script diagnostic", err)
+	}
+	if world.Used() != 0 {
+		t.Fatalf("unconfigured rejection consumed a pool slot: used=%d", world.Used())
+	}
+}
+
+func TestEmptyProgramRejectsBeforeAllocation(t *testing.T) {
+	world := NewSliced(4, nil)
+	world.SetCOBSource(vfs.New(), cob.NewCachedLoader())
+	def := &content.UnitDef{UnitName: "emptyprogram", MaxDamage: 100, Limit: -1, Script: &cob.Program{}}
+	if _, err := world.Create(def, 0, 0, 0, 0); err == nil {
+		t.Fatal("empty program creation succeeded")
+	} else if !strings.Contains(err.Error(), "unit script missing") {
+		t.Fatalf("empty-program rejection = %v, want missing-script diagnostic", err)
+	}
+	if world.Used() != 0 {
+		t.Fatalf("empty-program rejection consumed a pool slot: used=%d", world.Used())
+	}
+}
+
+func TestConfiguredLoaderReplacesEmptyDefinitionProgram(t *testing.T) {
+	world := NewSliced(4, nil)
+	world.SetCOBSource(fixtureCOBFS{}, cob.NewCachedLoader())
+	def := &content.UnitDef{UnitName: "loaderfixture", MaxDamage: 100, Limit: -1, Script: &cob.Program{}}
+	h, err := world.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("empty definition program with loadable source: %v", err)
+	}
+	if world.Unit(h) == nil || world.Unit(h).GetScript() == nil {
+		t.Fatal("configured loader did not attach its loadable COB")
+	}
+}
+
+// testVismaskGAF authors the minimal plural visibility-mask GAF the sight
+// compiler requires: one decoy-free entry set with a "vismask" entry of ten
+// 1x1 frames. Byte layout mirrors the authored fixture builder in the
+// content package's tests (GAF v1.0: 12-byte header, entry table, 40-byte
+// entry definitions, 8-byte frame references, 24-byte frame headers).
+func testVismaskGAF() []byte {
+	const entryTableOffset = 12
+	const entrySize = 40
+	const frameRefSize = 8
+	const frameSize = 24
+	const frames = 10
+	entryOffset := entryTableOffset + 4
+	frameDataOffset := entryOffset + entrySize + frames*frameRefSize + frames*frameSize
+	out := make([]byte, frameDataOffset+frames)
+	binary.LittleEndian.PutUint32(out[4:], 1) // one entry
+	binary.LittleEndian.PutUint32(out[entryTableOffset:], uint32(entryOffset))
+	binary.LittleEndian.PutUint16(out[entryOffset:], frames)
+	copy(out[entryOffset+8:], "vismask")
+	for i := 0; i < frames; i++ {
+		ref := entryOffset + entrySize + i*frameRefSize
+		frame := entryOffset + entrySize + frames*frameRefSize + i*frameSize
+		binary.LittleEndian.PutUint32(out[ref:], uint32(frame))
+		binary.LittleEndian.PutUint16(out[frame:], 1)   // width
+		binary.LittleEndian.PutUint16(out[frame+2:], 1) // height
+		binary.LittleEndian.PutUint16(out[frame+4:], 3) // compressed
+		binary.LittleEndian.PutUint16(out[frame+6:], 0xfffe)
+		out[frame+8] = 9 // palette index
+		binary.LittleEndian.PutUint32(out[frame+16:], uint32(frameDataOffset+i))
+		out[frameDataOffset+i] = 7 // one compressed run
+	}
+	return out
+}

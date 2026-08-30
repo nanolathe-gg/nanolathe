@@ -132,7 +132,7 @@ func (w *World) weaponSlotUpdate(u *Unit, tick uint32) {
 // order 0..7 then one piece-interpolation pass [04 §4.2] C13. Deferred callbacks
 // produced before this point run same visit [GAP T15] C17. An all-slot delta-0
 // barrier inside a starter can also execute a pending deferred callback earlier
-// [GAP T15] C17, but that path lives in cob.VM's immediate-start helpers [04 §4.2].
+// [GAP T15] C17, but that path lives in cob.VM's D+wake starter [04 §4.2].
 func (w *World) cobDrain(u *Unit, tick uint32) {
 	_ = tick
 	if u == nil {

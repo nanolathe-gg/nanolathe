@@ -28,7 +28,7 @@ func TestPathActivationPreflightsGoalBeforeSubmission(t *testing.T) {
 	s.Econ = economyForTest()
 	s.Econ.Players[0].Exists = true
 	s.Econ.Players[0].ControllerState = 1
-	s.Econ.Players[0].StatusHalfwordAt144 = 1
+	s.Econ.Players[0].SetSettlementStatusPair(1, 0)
 	s.Econ.SeedDeadlines(0)
 	s.InitBattleWindForSession()
 	if err := createAndBindServicesForTest(t, s); err != nil {
@@ -57,7 +57,7 @@ func TestPathActivationPreflightsGoalBeforeSubmission(t *testing.T) {
 		t.Fatal("bad order was not queued")
 	}
 	s.Step(1)
-	if s.Movement.Scheduler.HasRequest(h) {
+	if s.Movement.HasPathRequest(h) {
 		t.Fatal("impassable goal submitted a scheduler request")
 	}
 	if q.Head() != nil {
@@ -81,7 +81,7 @@ func TestPathActivationPreflightsGoalBeforeSubmission(t *testing.T) {
 	// Resolution must happen before preflight, otherwise this request slips
 	// through with the stale click and gets submitted.
 	s.Step(2)
-	if s.Movement.Scheduler.HasRequest(h) {
+	if s.Movement.HasPathRequest(h) {
 		t.Fatal("target order submitted using a stale passable goal")
 	}
 	if q.Head() != nil {
@@ -98,7 +98,7 @@ func TestPathActivationPreflightsGoalBeforeSubmission(t *testing.T) {
 	if validHead == nil || validHead.MoveState != orders.MoveEnRoute {
 		t.Fatalf("valid active head state=%v, want MoveEnRoute", validHead)
 	}
-	if !s.Movement.Scheduler.HasRequest(h) {
+	if !s.Movement.HasPathRequest(h) {
 		route := s.Movement.Routes[h]
 		if route == nil || !route.Active {
 			t.Fatal("valid active head produced neither pending request nor route")

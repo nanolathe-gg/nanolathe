@@ -26,7 +26,6 @@ const (
 	FindingAuthoredNonblocking
 	FindingStampMismatch
 	FindingStaleRoute
-	FindingSmoothing
 	FindingPlanner
 )
 
@@ -105,20 +104,16 @@ type MovementAudit struct {
 	RenderedBounds    AuditBounds
 	HasRenderedBounds bool
 
-	RayPassable         bool
-	RayAccepted         bool
-	HasRayVerdict       bool
-	SmoothingPassable   bool
-	SmoothingAccepted   bool
-	HasSmoothingVerdict bool
-
-	Finding AuditFinding
+	RayPassable   bool
+	RayAccepted   bool
+	HasRayVerdict bool
+	Finding       AuditFinding
 }
 
 // AuditContext supplies evidence that belongs to systems outside the profile
 // classifier. It is intentionally input-only: an audit cannot alter a route
-// or cause a restamp. Route/static revision and ray/smoothing values are
-// optional because current callers do not all expose them [04 §7.3][04 §7.5].
+// or cause a restamp. Route/static revision and ray values are optional because
+// current callers do not all expose them [04 §7.3].
 type AuditContext struct {
 	CompletedStructureBlocked bool
 	HasStructureVerdict       bool
@@ -135,13 +130,9 @@ type AuditContext struct {
 	RenderedBounds    AuditBounds
 	HasRenderedBounds bool
 
-	RayPassable         bool
-	RayAccepted         bool
-	HasRayVerdict       bool
-	SmoothingPassable   bool
-	SmoothingAccepted   bool
-	HasSmoothingVerdict bool
-
+	RayPassable   bool
+	RayAccepted   bool
+	HasRayVerdict bool
 	// Finding may be set by a caller with stronger evidence than this generic
 	// classifier. Zero asks ClassifyAuditFinding to use the observable fields.
 	Finding AuditFinding
@@ -231,9 +222,6 @@ func AuditCell(t *world.Terrain, p Profile, cell Cell, ctx AuditContext) Movemen
 	a.RayPassable = ctx.RayPassable
 	a.RayAccepted = ctx.RayAccepted
 	a.HasRayVerdict = ctx.HasRayVerdict
-	a.SmoothingPassable = ctx.SmoothingPassable
-	a.SmoothingAccepted = ctx.SmoothingAccepted
-	a.HasSmoothingVerdict = ctx.HasSmoothingVerdict
 	if a.Finding == FindingUnknown {
 		a.Finding = ClassifyAuditFinding(a)
 	}
@@ -266,9 +254,6 @@ func ClassifyAuditFinding(a MovementAudit) AuditFinding {
 	}
 	if a.Feature.Resolved && a.Feature.Blocking && a.HasStaticLayerValue && a.StaticLayerValue != LayerBlocked {
 		return FindingStampMismatch
-	}
-	if a.HasSmoothingVerdict && a.SmoothingAccepted && !a.SmoothingPassable {
-		return FindingSmoothing
 	}
 	return FindingPlanner
 }

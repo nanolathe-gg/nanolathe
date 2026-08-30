@@ -6,7 +6,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
-	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -30,7 +29,7 @@ func TestSearchFuncConfigBindsClassLayer(t *testing.T) {
 	terrain := syntheticTerrainForIntegrate()
 	grid := NewOccupancyGrid()
 	sys := NewSystem(terrain, wiringProfile, grid)
-	w := units.NewSliced(10, nil)
+	w := newMovementFixtureWorld(10)
 	sys.BindWorld(w)
 	h, err := w.Create(wiringDef(), 0, world.CellToWorld(2), terrain.HeightAt(world.CellToWorld(2), world.CellToWorld(2)), world.CellToWorld(2))
 	if err != nil {
@@ -46,7 +45,8 @@ func TestSearchFuncConfigBindsClassLayer(t *testing.T) {
 		Goal:   path.PointGoal(path.Cell{X: 9, Z: 9}, 0),
 	}
 	// A one-pop budget leaves the session alive for config inspection.
-	_, status, done := sys.searchFunc(req, 65536, 1)
+	work := sys.searchFunc(req, 65536, 1)
+	status, done := work.Status, work.Done
 	if done {
 		t.Fatalf("one pop must not finish the search (status %d)", status)
 	}
@@ -60,9 +60,6 @@ func TestSearchFuncConfigBindsClassLayer(t *testing.T) {
 	}
 	if cfg.Revise == nil {
 		t.Fatalf("config must carry the request revision binding [04 §6.1 R-DOC04-B]")
-	}
-	if cfg.IsPassable != nil {
-		t.Fatalf("the value form must replace the boolean injected form [04 §6.1 R-DOC04-B]")
 	}
 	// The closure reads the live layer: flat terrain stamps clear; painting
 	// the layer blocked flips the same cell to 0.
@@ -92,7 +89,7 @@ func TestSystemSearchConsultsLayer(t *testing.T) {
 	terrain := syntheticTerrainForIntegrate()
 	grid := NewOccupancyGrid()
 	sys := NewSystem(terrain, wiringProfile, grid)
-	w := units.NewSliced(10, nil)
+	w := newMovementFixtureWorld(10)
 	sys.BindWorld(w)
 	h, err := w.Create(wiringDef(), 0, world.CellToWorld(2), terrain.HeightAt(world.CellToWorld(2), world.CellToWorld(2)), world.CellToWorld(2))
 	if err != nil {
@@ -146,7 +143,7 @@ func TestOccupancyCommitNotesRevisionLayers(t *testing.T) {
 	terrain := syntheticTerrainFlat()
 	grid := NewOccupancyGrid()
 	sys := NewSystem(terrain, wiringProfile, grid)
-	w := units.NewSliced(10, nil)
+	w := newMovementFixtureWorld(10)
 	sys.BindWorld(w)
 	h, err := w.Create(wiringDef(), 0, world.CellToWorld(2), terrain.HeightAt(world.CellToWorld(2), world.CellToWorld(2)), world.CellToWorld(2))
 	if err != nil {

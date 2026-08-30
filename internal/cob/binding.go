@@ -26,7 +26,7 @@ type BindingRequest struct {
 	SFXSink              SFXSink
 	SFXVisible           func(piece int, sfxType int32) bool
 	PresentationSink     PresentationSink
-	// PortFuncs are installed before the mode-I Create callback. Production
+	// PortFuncs are installed before the D+wake Create callback. Production
 	// unit bindings use this for instance-owned engine-port state such as
 	// INBUILDSTANCE; leaving it nil preserves the existing default no-op ports.
 	PortFuncs map[Port]func(args []int32) int32
@@ -102,8 +102,8 @@ func (e *BindingError) Has(code BindingDiagnosticCode) bool {
 
 // Binding is a linked COB program and its per-unit VM. PieceMap maps each COB
 // piece index to its corresponding model piece index. CreateInvoked is true
-// only after the one immediate (mode I) Create start and delta-zero VM-wide
-// barrier completed [04 §4.2].
+// only after the one deferred Create start with wake=1 has completed its
+// delta-zero VM-wide barrier [R-CB-01 §2].
 type Binding struct {
 	Program          *Program
 	VM               *VM
@@ -121,7 +121,7 @@ type Binding struct {
 
 // BindStrict resolves, parses, links, and initializes one production COB
 // binding. Missing files are fatal here. RequiredScripts defaults to Create
-// because every live unit is initialized through Create in mode I [04 §5.1].
+// because every live unit is initialized through Create with wake=1 [R-CB-01 §2].
 // Each RequiredScriptGroups group is an explicit any-of requirement: at least
 // one named entry in each group must exist. This models established fallback
 // paths such as AimFromPrimary → QueryPrimary without assuming that every
@@ -179,17 +179,17 @@ func BindStrict(fs vfs.FSOps, req BindingRequest) (*Binding, error) {
 		pieceMap[i] = modelPieceIndex(req.ModelPieces, program.Pieces[i])
 	}
 	// A presentation sink may need the strict COB→model identity before the
-	// mode-I Create callback emits its first event. This optional adapter is
+	// Create callback emits its first event. This optional adapter is
 	// presentation-only and cannot affect binding or VM state.
 	if sink, ok := req.PresentationSink.(interface{ SetCOBPieceMap([]int) }); ok {
 		sink.SetCOBPieceMap(pieceMap)
 	}
-	// Create is an immediate mode-I lifecycle callback: start it once, then
-	// drain all eight slots with delta 0 and one piece pass [04 §4.2][04 §5.1].
+	// Create is a deferred callback with wake=1: start it once, then drain all
+	// eight slots with delta 0 and one piece pass [R-CB-01 §2].
 	create := bridge.Create()
 	if !create.Started {
 		return nil, &BindingError{Diagnostics: []BindingDiagnostic{{
-			Code: BindingCreateStart, Logical: logical, Provider: providersFor(fs, logical, info), Expected: "Create entry point runnable in mode I", Detail: fmt.Sprintf("unit %q could not allocate its Create thread", unitName),
+			Code: BindingCreateStart, Logical: logical, Provider: providersFor(fs, logical, info), Expected: "Create entry point runnable with wake=1", Detail: fmt.Sprintf("unit %q could not allocate its Create thread", unitName),
 		}}}
 	}
 

@@ -20,19 +20,17 @@ import (
 // unitPreUpdate is the per-unit pre-update/status work [04 §2.4][04 §5.1].
 // It maintains the 30-tick health sample used by the death severity input
 // [04 §5.1] C22: every 30 ticks it recomputes clamp(health*100/maxHealth,0,100)
-// and stores the previous window's percent. We keep a single PriorSample field
-// as the previous-window percent; the current window's sample overwrites it
-// directly for determinism without a second field — a one-window lag on
-// exact-boundary deaths remains TODO(question) but preserves the contract that
-// death severity uses the previous 30-tick window percent, not immediate
-// pre-lethal health.
+// and shifts the current sample into PriorSample before storing the new
+// CurrentSample. The two-byte state is required: local Killed consumes the
+// previous window, not the value sampled at the current boundary [04 §5.1].
 func (w *World) unitPreUpdate(u *Unit, tick uint32) {
 	if u == nil || !u.Alive || u.Dying {
 		return
 	}
 	if tick%30 == 0 && u.MaxHealth > 0 { // [04 §5.1] every 30 ticks clamp(health*100/maxHealth,0,100)
 		pct := cob.HealthPercent(u.Health, u.MaxHealth) // [04 §4.4] clamped 0..100
-		u.PriorSample = uint8(pct)                      // [04 §5.1] prior window percent for Killed severity
+		u.PriorSample = u.CurrentSample                 // [04 §5.1] previous window
+		u.CurrentSample = uint8(pct)                    // [04 §5.1] current window
 	}
 	// No Remaining mutation. No order creation. No RNG draws.
 }

@@ -72,8 +72,9 @@ func TestBuildRenderPieceFlags_GeometryDefaults(t *testing.T) {
 	}
 }
 
-func TestScriptlessUnitStillGetsTable(t *testing.T) {
-	// Scriptless unit must still build render-piece table; it must NOT live inside VM [R-COB-01 §1] [04 §"Piece flag polarity"].
+func TestRenderPieceTableBeforeScriptAttachment(t *testing.T) {
+	// The render-piece table is model-owned and may be built before the VM is
+	// attached; it must not live inside the VM [R-COB-01 §1] [04 §"Piece flag polarity"].
 	mdl := &model.Model{
 		Pieces: []model.Piece{
 			{Name: "base", Parent: -1, Vertices: [][3]numeric.Fixed{{0, 0, 0}, {1, 0, 0}, {2, 0, 0}}},
@@ -84,10 +85,10 @@ func TestScriptlessUnitStillGetsTable(t *testing.T) {
 	u := &Unit{Alive: true}
 	u.InitRenderPieceFlags(mdl)
 	if u.RenderPieceFlags == nil {
-		t.Fatalf("scriptless unit has nil RenderPieceFlags [04 §\"Piece flag polarity\"]")
+		t.Fatalf("pre-attachment unit has nil RenderPieceFlags [04 §\"Piece flag polarity\"]")
 	}
 	if len(u.RenderPieceFlags) != 2 {
-		t.Fatalf("scriptless flags len %d want 2", len(u.RenderPieceFlags))
+		t.Fatalf("pre-attachment flags len %d want 2", len(u.RenderPieceFlags))
 	}
 	if u.RenderPieceFlags[0] != 0x07 {
 		t.Fatalf("geometry piece flags %#x want 0x07", u.RenderPieceFlags[0])
@@ -96,7 +97,7 @@ func TestScriptlessUnitStillGetsTable(t *testing.T) {
 		t.Fatalf("bare piece flags %#x want 0x06", u.RenderPieceFlags[1])
 	}
 	if u.GetScript() != nil {
-		t.Fatalf("scriptless unit must have no VM [R-COB-01 §1]")
+		t.Fatalf("pre-attachment unit unexpectedly has a VM [R-COB-01 §1]")
 	}
 }
 
@@ -202,7 +203,7 @@ func TestUnitRenderFlagOpcodesToggleExactlyOneBit(t *testing.T) {
 
 func TestWorldCreateFixtureSharesFlags(t *testing.T) {
 	// Verify the fallback fixture path shares VM flags with the unit [04 §"Piece flag polarity"].
-	world := NewSliced(4, nil)
+	world := newFixtureWorld(4, nil)
 	def := &content.UnitDef{UnitName: "flagshare", MaxDamage: 100, Limit: -1}
 	// Provide a synthetic program via Def.Script
 	def.Script = &cob.Program{

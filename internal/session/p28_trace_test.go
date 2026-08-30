@@ -8,7 +8,31 @@ import (
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/units"
 )
+
+func TestP28ParityHashIncludesCurrentHealthSample(t *testing.T) {
+	w := &units.World{}
+	h, err := w.Create(nil, 1, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := w.Unit(h)
+	u.CurrentSample = 37
+	a := &Session{Clock: &clock.State{}, Econ: &economy.Service{}, Units: w}
+	first, err := a.ParityAuthoritativeHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.CurrentSample = 38
+	second, err := a.ParityAuthoritativeHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("current health sample did not affect parity hash")
+	}
+}
 
 func TestP28ParityHashRepeatReadPure(t *testing.T) {
 	s := &Session{Clock: &clock.State{Requested: 10, Active: 10}, Econ: &economy.Service{}}

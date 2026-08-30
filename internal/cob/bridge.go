@@ -59,9 +59,8 @@ func (b *CallbackBridge) BindRenderFlagsSlice(flags []uint8) {
 type CallbackMode uint8
 
 const (
-	ModeDeferred  CallbackMode = iota + 1 // D: allocate and return; normal drain later
-	ModeImmediate                         // I: allocate, all-slot delta-0 barrier
-	ModeQuery                             // Q: one-slot synchronous call, no piece pass
+	ModeDeferred CallbackMode = iota + 1 // D: allocate and return; normal drain later
+	ModeQuery                            // Q: one-slot synchronous call, no piece pass
 )
 
 // CallbackReturn is delivered to a deferred callback receiver only when the
@@ -97,12 +96,13 @@ type LifecycleSink func(LifecycleEvent)
 // has observed an explicit return, in ascending thread-slot order [04 §4.2].
 type CallbackReceiver func(CallbackReturn)
 
-// CallbackResult describes a callback start and, for Q/I calls, its immediate
-// result. Values are the four physical callback cells; only the cells
-// requested by the named operation are semantically copied back [04 §4.2].
+// CallbackResult describes a callback start and whether a D start performed
+// its wake barrier. Values are the four physical callback cells; only the
+// cells requested by the named operation are semantically copied back [04 §4.2].
 type CallbackResult struct {
 	Name      string
 	Mode      CallbackMode
+	Wake      bool // true when the D start performs the all-slot delta-zero barrier [04 §4.2]
 	Started   bool
 	Completed bool
 	Thread    int
@@ -167,14 +167,14 @@ func (b *CallbackBridge) lifecycleEvent(name string, mode CallbackMode, thread i
 	}
 }
 
-// Create invokes Create exactly once in mode I. A second call is rejected and
-// does not schedule another callback [04 §5.1].
+// Create invokes Create exactly once as a deferred start with wake=1. A
+// second call is rejected and does not schedule another callback [R-CB-01 §2].
 func (b *CallbackBridge) Create() CallbackResult {
 	if b == nil || b.VM == nil || b.createInvoked {
 		if b != nil && b.VM == nil {
-			b.lifecycleEvent("Create", ModeImmediate, -1, "start-failed")
+			b.lifecycleEvent("Create", ModeDeferred, -1, "start-failed")
 		}
-		return CallbackResult{Name: "Create", Mode: ModeImmediate, Thread: -1}
+		return CallbackResult{Name: "Create", Mode: ModeDeferred, Thread: -1}
 	}
 	b.createInvoked = true
 	ok := b.VM.StartByName("Create", nil)
@@ -183,18 +183,18 @@ func (b *CallbackBridge) Create() CallbackResult {
 		// A failed named start is an observed lifecycle boundary too; retaining
 		// it makes missing scripts and exhausted slots distinguishable from a
 		// callback that was never attempted [04 §4.2].
-		b.lifecycleEvent("Create", ModeImmediate, -1, "start-failed")
+		b.lifecycleEvent("Create", ModeDeferred, -1, "start-failed")
 	}
 	if ok && thread >= 0 && thread < len(b.lifecyclePending) {
-		b.lifecycleEvent("Create", ModeImmediate, thread, "start")
-		b.lifecyclePending[thread] = pendingCallback{active: true, name: "Create", mode: ModeImmediate}
+		b.lifecycleEvent("Create", ModeDeferred, thread, "start")
+		b.lifecyclePending[thread] = pendingCallback{active: true, name: "Create", mode: ModeDeferred}
 	}
 	if ok {
 		b.VM.Drain(0)
 	}
 	b.collectReturns()
 	completed := ok && (thread < 0 || !b.VM.IsThreadAlive(thread))
-	return CallbackResult{Name: "Create", Mode: ModeImmediate, Started: ok, Completed: completed, Thread: thread}
+	return CallbackResult{Name: "Create", Mode: ModeDeferred, Wake: ok, Started: ok, Completed: completed, Thread: thread}
 }
 
 // CreateInvoked reports whether this bridge has consumed its one Create slot.
@@ -241,35 +241,34 @@ func (b *CallbackBridge) Deferred(name string, args []int32, receiver CallbackRe
 	return result
 }
 
-// Immediate starts one I callback and performs the all-slot delta-zero
-// barrier. It is used by Activate/Deactivate and movement/lifecycle edges
-// whose research marks mode I [04 §4.2][04 §5.1].
-func (b *CallbackBridge) Immediate(name string, args []int32, receiver CallbackReceiver) CallbackResult {
-	result := CallbackResult{Name: name, Mode: ModeImmediate, Thread: -1}
+// DeferredWake starts a deferred callback and immediately performs the
+// callback's wake barrier. Retail labels these callbacks D with wake=1: the
+// start is deferred in mode, while the all-slot delta-zero drain runs before
+// the producer continues [04 §4.2][R-CB-01 §2].
+func (b *CallbackBridge) DeferredWake(name string, args []int32, receiver CallbackReceiver) CallbackResult {
+	result := CallbackResult{Name: name, Mode: ModeDeferred, Thread: -1}
 	if b == nil || b.VM == nil {
-		b.lifecycleEvent(name, ModeImmediate, -1, "start-failed")
+		b.lifecycleEvent(name, ModeDeferred, -1, "start-failed")
 		if receiver != nil {
-			receiver(CallbackReturn{Name: name, Mode: ModeImmediate, Thread: -1, Value: 0})
+			receiver(CallbackReturn{Name: name, Mode: ModeDeferred, Thread: -1, Value: 0})
 		}
 		return result
 	}
-	// Start first so the receiver can be associated with the allocated slot
-	// before the mode-I barrier drains it.
 	if !b.VM.StartByName(name, args) {
-		b.lifecycleEvent(name, ModeImmediate, -1, "start-failed")
+		b.lifecycleEvent(name, ModeDeferred, -1, "start-failed")
 		if receiver != nil {
-			receiver(CallbackReturn{Name: name, Mode: ModeImmediate, Thread: -1, Value: 0})
+			receiver(CallbackReturn{Name: name, Mode: ModeDeferred, Thread: -1, Value: 0})
 		}
 		return result
 	}
 	thread := b.VM.LastStartedThread()
-	result.Started, result.Thread = true, thread
-	b.lifecycleEvent(name, ModeImmediate, thread, "start")
+	result.Started, result.Wake, result.Thread = true, true, thread
+	b.lifecycleEvent(name, ModeDeferred, thread, "start")
 	if thread >= 0 && thread < len(b.lifecyclePending) {
-		b.lifecyclePending[thread] = pendingCallback{active: true, name: name, mode: ModeImmediate}
+		b.lifecyclePending[thread] = pendingCallback{active: true, name: name, mode: ModeDeferred}
 	}
 	if receiver != nil && thread >= 0 && thread < len(b.pending) {
-		b.pending[thread] = pendingCallback{active: true, name: name, mode: ModeImmediate, receiver: receiver}
+		b.pending[thread] = pendingCallback{active: true, name: name, mode: ModeDeferred, receiver: receiver}
 	}
 	b.VM.Drain(0)
 	b.collectReturns()
@@ -401,13 +400,13 @@ func (b *CallbackBridge) StartBuildingHeading(heading uint16) CallbackResult {
 	return b.Deferred("StartBuilding", []int32{int32(heading)}, nil)
 }
 func (b *CallbackBridge) StopBuilding() CallbackResult { return b.Deferred("StopBuilding", nil, nil) }
-func (b *CallbackBridge) StartMoving() CallbackResult  { return b.Immediate("StartMoving", nil, nil) }
-func (b *CallbackBridge) StopMoving() CallbackResult   { return b.Immediate("StopMoving", nil, nil) }
-func (b *CallbackBridge) MoveRate1() CallbackResult    { return b.Immediate("MoveRate1", nil, nil) }
-func (b *CallbackBridge) MoveRate2() CallbackResult    { return b.Immediate("MoveRate2", nil, nil) }
-func (b *CallbackBridge) MoveRate3() CallbackResult    { return b.Immediate("MoveRate3", nil, nil) }
+func (b *CallbackBridge) StartMoving() CallbackResult  { return b.DeferredWake("StartMoving", nil, nil) }
+func (b *CallbackBridge) StopMoving() CallbackResult   { return b.DeferredWake("StopMoving", nil, nil) }
+func (b *CallbackBridge) MoveRate1() CallbackResult    { return b.DeferredWake("MoveRate1", nil, nil) }
+func (b *CallbackBridge) MoveRate2() CallbackResult    { return b.DeferredWake("MoveRate2", nil, nil) }
+func (b *CallbackBridge) MoveRate3() CallbackResult    { return b.DeferredWake("MoveRate3", nil, nil) }
 func (b *CallbackBridge) SetSFXoccupy(v int32) CallbackResult {
-	return b.Immediate("setSFXoccupy", []int32{v}, nil)
+	return b.DeferredWake("setSFXoccupy", []int32{v}, nil)
 }
 func (b *CallbackBridge) TargetCleared(slot int32) CallbackResult {
 	return b.Deferred("TargetCleared", []int32{slot}, nil)
@@ -421,12 +420,12 @@ func (b *CallbackBridge) TakeDamage(percent int32) CallbackResult {
 }
 
 // Killed is the network-death-replay Killed start [R-COB-02 §1]: mode D with
-// the wake flag (immediate), one argument carrying the signed packet severity
-// byte, fillers zero, no receiver. The immediate start performs the all-slot
-// delta-0 barrier plus one piece pass inline, so a deferred callback queued
-// earlier on the same VM also runs at this flush point [R-COB-02 §2].
+// wake=1, one argument carrying the signed packet severity byte, fillers zero,
+// no receiver. The D+wake start performs the all-slot delta-0 barrier plus one
+// piece pass inline, so a deferred callback queued earlier on the same VM also
+// runs at this flush point [R-COB-02 §2].
 func (b *CallbackBridge) Killed(severity int32) CallbackResult {
-	return b.Immediate("Killed", []int32{severity}, nil)
+	return b.DeferredWake("Killed", []int32{severity}, nil)
 }
 
 // KilledLocal is the local authoritative death query [R-COB-02 §1]: mode Q,
@@ -458,10 +457,9 @@ func (b *CallbackBridge) SetSpeed(speed int32) CallbackResult {
 	return b.Deferred("SetSpeed", []int32{SetSpeedGeneral(speed)}, nil)
 }
 
-// SetSpeedFootprint is the footprint-path SetSpeed callback [R-COB-02 §1]:
-// mode D, one argument carrying the unsigned 16-bit footprint sum [04 §5.3];
-// the sum's semantic unit is not established [04 §5.3] (see the helper's
-// TODO), the conversion is the caller's.
+// SetSpeedFootprint is the extractor-path SetSpeed callback [R-COB-02 §1]:
+// mode D, one argument carrying the footprint metal sum reduced modulo 16 bits
+// and sign-extended [R-CB-01 §5].
 func (b *CallbackBridge) SetSpeedFootprint(sum int32) CallbackResult {
 	return b.Deferred("SetSpeed", []int32{SetSpeedFootprint(sum)}, nil)
 }
@@ -469,8 +467,8 @@ func (b *CallbackBridge) SetSpeedFootprint(sum int32) CallbackResult {
 // SetMaxReloadTime reports the maximum authored reload over the three weapon
 // slots converted to milliseconds [R-COB-02 §1]: mode D, one argument
 // trunc(maxReload·1000/30) [04 §5.3]. The caller scans the slots; this method
-// is issued after Create so it lands outside Create's own immediate drain
-// [04 §5.3] — the deferred thread first runs in the visit's normal drain.
+// is issued after Create, so the deferred thread first runs in the visit's
+// normal drain [R-CB-01 §2].
 func (b *CallbackBridge) SetMaxReloadTime(maxReloadTicks int32) CallbackResult {
 	return b.Deferred("SetMaxReloadTime", []int32{MaxReloadMillis(maxReloadTicks)}, nil)
 }

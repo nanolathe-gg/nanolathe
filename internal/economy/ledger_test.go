@@ -2,6 +2,7 @@ package economy
 
 import (
 	"math"
+	"reflect"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
@@ -9,6 +10,12 @@ import (
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
+
+func TestArchivedBucketHasOnlyReportSlots(t *testing.T) {
+	if got, want := reflect.TypeOf(ArchivedBucket{}).NumField(), 2; got != want {
+		t.Fatalf("archived bucket fields = %d, want %d", got, want)
+	}
+}
 
 // TestAuthoredIsPerPass locks C1: authored per-pass values accumulate verbatim,
 // not multiplied by the tick rate. An authored 5 stays 5 per pass, not 150.
@@ -33,7 +40,8 @@ func TestAuthoredIsPerPass(t *testing.T) {
 // TestCommitOrdering locks C10: per-pass counters report the PASS not available funds.
 // Counters are committed before opening stock folds into the allocation pool.
 func TestCommitOrdering(t *testing.T) {
-	var p Player
+	var svc Service
+	p := &svc.Players[0]
 	// Simulate a pass where mirror production was 10, opening stock 100, so if
 	// counters incorrectly included opening stock they'd be 110.
 	p.Mirror[Metal].Production = 10
@@ -45,7 +53,7 @@ func TestCommitOrdering(t *testing.T) {
 	p.Capacity[Metal] = 1000
 	p.Capacity[Energy] = 1000
 
-	p.CommitPostSettlement()
+	svc.Settle(0, 0, nil)
 
 	if p.PassProduced[Metal] != 10 {
 		t.Fatalf("C10: PassProduced Metal = %v, want 10 (pass, not pool)", p.PassProduced[Metal])
@@ -80,7 +88,8 @@ func TestCommitOrdering(t *testing.T) {
 // TestCapacityClampFractionalWaste locks C10: clamp stock to rebuilt capacity,
 // overflow to cumulative waste with fractional preserved, stock stays float32.
 func TestCapacityClampFractionalWaste(t *testing.T) {
-	var p Player
+	var svc Service
+	p := &svc.Players[0]
 	p.Stock[Metal] = 100.25
 	p.Capacity[Metal] = 100
 	p.Stock[Energy] = 10.5
@@ -88,7 +97,7 @@ func TestCapacityClampFractionalWaste(t *testing.T) {
 	p.Mirror[Metal].Production = 1
 	p.Mirror[Energy].Production = 1
 
-	p.CommitPostSettlement()
+	svc.Settle(0, 0, nil)
 
 	if p.Stock[Metal] != 100 {
 		t.Fatalf("C10 clamp: Metal stock = %v, want 100", p.Stock[Metal])
@@ -97,16 +106,27 @@ func TestCapacityClampFractionalWaste(t *testing.T) {
 		t.Fatalf("C10 clamp: Energy stock = %v, want 10", p.Stock[Energy])
 	}
 	// Waste must preserve fractional part. 0.25 and 0.5 are exactly representable.
-	if math.Abs(p.Waste[Metal]-0.25) > 1e-6 {
-		t.Fatalf("C10 waste Metal = %v, want 0.25 preserved", p.Waste[Metal])
+	if math.Abs(p.Waste[Metal]-1.25) > 1e-6 {
+		t.Fatalf("C10 waste Metal = %v, want 1.25 preserved", p.Waste[Metal])
 	}
-	if math.Abs(p.Waste[Energy]-0.5) > 1e-6 {
-		t.Fatalf("C10 waste Energy = %v, want 0.5 preserved", p.Waste[Energy])
+	if math.Abs(p.Waste[Energy]-1.5) > 1e-6 {
+		t.Fatalf("C10 waste Energy = %v, want 1.5 preserved", p.Waste[Energy])
 	}
 	// Stock stays float32: check type via assignment, already float32.
 	var _ float32 = p.Stock[Metal]
 	// Waste is float64 per I2.
 	var _ float64 = p.Waste[Metal]
+}
+
+func TestCapacityWasteUsesWorkingPrecisionDifference(t *testing.T) {
+	var svc Service
+	p := &svc.Players[0]
+	p.Stock[Energy] = 100000000
+	p.Capacity[Energy] = 1
+	svc.Settle(0, 0, nil)
+	if got, want := p.Waste[Energy], float64(99999999); got != want {
+		t.Fatalf("working-precision waste = %v, want %v", got, want)
+	}
 }
 
 // TestCloakSequentialDebitTruncation locks C13: direct sequential debit with truncation in slot order.
@@ -133,7 +153,7 @@ func TestCloakSequentialDebitTruncation(t *testing.T) {
 	var svc Service
 	svc.Players[0].Stock[Energy] = 10
 	w := units.NewSliced(10, nil)
-	def := &content.UnitDef{}
+	def := economyFixtureDef(&content.UnitDef{})
 	def.MaxDamage = 100
 	h1, _ := w.Create(def, 0, 0, 0, 0)
 	h2, _ := w.Create(def, 0, 0, 0, 0)
@@ -148,14 +168,15 @@ func TestCloakSequentialDebitTruncation(t *testing.T) {
 	getCost := func(u *units.Unit) float32 {
 		return costs[int(u.Handle)]
 	}
+	svc.CloakDue = func(*units.Unit) bool { return true }
 	ApplyCloakDebits(&svc, w, 0, getCost, nil, nil)
 	if svc.Players[0].Stock[Energy] != 4 {
 		t.Fatalf("C13 sequential: stock after first debit = %v want 4", svc.Players[0].Stock[Energy])
 	}
 	// Second should have failed due to insufficient stock (4 <6), so stock stays 4.
 	// Verify by checking that only one debit was recorded.
-	if svc.Players[0].Mirror[Energy].Requested != 6 {
-		t.Fatalf("C13: requested should be 6 (only first), got %v", svc.Players[0].Mirror[Energy].Requested)
+	if got := svc.UnitBuckets(h1)[Energy].Requested; got != 6 {
+		t.Fatalf("C13: unit requested should be 6 (only first), got %v", got)
 	}
 	// Single debit helper truncation test.
 	var p Player
@@ -184,11 +205,11 @@ func TestCloakSequentialDebitTruncation(t *testing.T) {
 func TestRebuildCapacity(t *testing.T) {
 	var svc Service
 	w := units.NewSliced(10, nil)
-	defA := &content.UnitDef{}
+	defA := economyFixtureDef(&content.UnitDef{})
 	defA.MaxDamage = 100
 	defA.EnergyStorage = 500
 	defA.MetalStorage = 1000
-	defB := &content.UnitDef{}
+	defB := economyFixtureDef(&content.UnitDef{})
 	defB.MaxDamage = 100
 	defB.EnergyStorage = 250
 	defB.MetalStorage = 0
@@ -227,10 +248,29 @@ func TestRebuildCapacity(t *testing.T) {
 	_ = h3
 }
 
+func TestSettleRebuildsOnlySettlingPlayerCapacity(t *testing.T) {
+	var svc Service
+	svc.Players[0].Exists = true
+	svc.Players[0].ControllerState = 1
+	svc.Players[0].SetSettlementStatusPair(1, 0)
+	svc.Players[0].EndGameCountdown = -1
+	svc.Players[1].Capacity[Metal] = 777
+	svc.Players[1].Capacity[Energy] = 888
+	w := units.NewSliced(10, nil)
+	def := economyFixtureDef(&content.UnitDef{MetalStorage: 100, EnergyStorage: 200, MaxDamage: 1})
+	if _, err := w.Create(def, 0, 0, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	svc.Settle(0, 0, w)
+	if got := svc.Players[1].Capacity; got != [2]float32{777, 888} {
+		t.Fatalf("settling player 0 changed player 1 capacity: %v", got)
+	}
+}
+
 // TestStableSlotOrderVisitation locks C6: units visited in slot ascending order.
 func TestStableSlotOrderVisitation(t *testing.T) {
 	w := units.NewSliced(10, nil)
-	def := &content.UnitDef{}
+	def := economyFixtureDef(&content.UnitDef{})
 	def.MaxDamage = 100
 	// Create units for player 0 in reverse creation order? But pool always lowest-free, so order is insertion order.
 	// Create three units, then free middle, reuse should give lowest-free and order still ascending.
@@ -264,14 +304,15 @@ func TestStableSlotOrderVisitation(t *testing.T) {
 
 // TestMirrorClosedWriterSurface locks C11: closed writer set enumerated, no factory queue-draw writer.
 func TestMirrorClosedWriterSurface(t *testing.T) {
-	var p Player
+	var svc Service
+	p := &svc.Players[0]
 	// Record init
-	InitPlayer(&p)
-	// Per-pass clear
+	InitPlayer(p)
+	// Per-pass clear through the assembled settlement pass.
 	p.Mirror[Metal].Production = 5
-	ClearMirrorPerPass(&p)
+	svc.Settle(0, 0, nil)
 	if p.Mirror[Metal].Production != 0 {
-		t.Fatal("ClearMirrorPerPass should zero")
+		t.Fatal("assembled settlement should clear mirror production")
 	}
 	// Two admission helpers
 	var b [2]Bucket
@@ -297,24 +338,16 @@ func TestMirrorClosedWriterSurface(t *testing.T) {
 	if b2[Energy].Accepted != 5 {
 		t.Fatal("AdmitOneResource should deny when carry positive")
 	}
-	AdmitTwoResourceToMirror(&p, 2, 2)
-	AdmitOneResourceToMirror(&p, 2)
+	AdmitTwoResourceToMirror(p, 2, 2)
+	AdmitOneResourceToMirror(p, 2)
 	// Immediate debit path
 	p.Stock[Energy] = 10
 	p.Stock[Metal] = 10
-	if !ImmediateDebit(&p, 3, 3) {
+	if !ImmediateDebit(p, 3, 3) {
 		t.Fatal("ImmediateDebit should succeed")
 	}
-	if ImmediateDebit(&p, 100, 100) {
+	if ImmediateDebit(p, 100, 100) {
 		t.Fatal("ImmediateDebit should fail when insufficient")
-	}
-	// Sharing transfers
-	var src, dst Player
-	src.Stock[Energy] = 20
-	dst.Stock[Energy] = 5
-	ShareTransfer(&src, &dst, Energy, 5)
-	if src.Stock[Energy] != 15 || dst.Stock[Energy] != 10 {
-		t.Fatalf("ShareTransfer failed %v %v", src.Stock[Energy], dst.Stock[Energy])
 	}
 	// Spawn credit
 	var sp Player
@@ -322,21 +355,21 @@ func TestMirrorClosedWriterSurface(t *testing.T) {
 	if sp.Stock[Metal] != 100 {
 		t.Fatal("CreditSpawn failed")
 	}
-	// Construction termination credit with special scales -0.7 and -0.5
+	// Construction termination credit with special scales -0.5 and -0.7
 	var ct Player
 	CreditConstructionTermination(&ct, 0.5, 100, -1) // normal add
 	if ct.Mirror[Metal].Production != 50 {
 		t.Fatalf("normal termination credit = %v want 50", ct.Mirror[Metal].Production)
 	}
 	ct.Mirror[Metal].Production = 0
-	CreditConstructionTermination(&ct, 0.5, 100, 0) // subtract 0.7
-	if ct.Mirror[Metal].Production != -35 {
-		t.Fatalf("special 0 credit = %v want -35", ct.Mirror[Metal].Production)
+	CreditConstructionTermination(&ct, 0.5, 100, 0) // credit 0.5
+	if ct.Mirror[Metal].Production != 25 {
+		t.Fatalf("special 0 credit = %v want 25", ct.Mirror[Metal].Production)
 	}
 	ct.Mirror[Metal].Production = 0
-	CreditConstructionTermination(&ct, 0.5, 100, 1) // subtract 0.5
-	if ct.Mirror[Metal].Production != -25 {
-		t.Fatalf("special 1 credit = %v want -25", ct.Mirror[Metal].Production)
+	CreditConstructionTermination(&ct, 0.5, 100, 1) // credit 0.7
+	if ct.Mirror[Metal].Production != 35 {
+		t.Fatalf("special 1 credit = %v want 35", ct.Mirror[Metal].Production)
 	}
 	// There is NO factory queue-draw writer — this comment is the contract.
 	// If a future helper named FactoryQueueDraw existed, this test would fail via vet
@@ -388,7 +421,7 @@ func TestTerrainMetalExtraction(t *testing.T) {
 	if got3 != 9 {
 		t.Fatalf("zero metal sample = %v want 9", got3)
 	}
-	def := &content.UnitDef{}
+	def := economyFixtureDef(&content.UnitDef{})
 	def.FootprintX = 2
 	def.FootprintZ = 2
 	def.ExtractsMetal = 1

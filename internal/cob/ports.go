@@ -48,7 +48,7 @@ var PortTable = []PortInfo{
 
 	{6, "busy", "a flag bit [04 §4.4]", "sets the bit from the low bit of the value [04 §4.4]"},
 
-	{7, "piece position XZ", "the piece's world transform packed with Z in the high half and X in the low half [04 §4.4]", "— [04 §4.4]"},
+	{7, "piece position XZ", "the piece's world transform packed with X in the high half and Z in the low half [R-COB-03 §3]", "— [04 §4.4]"},
 
 	{8, "piece position Y", "the piece's world transform Y [04 §4.4]", "— [04 §4.4]"},
 
@@ -290,10 +290,10 @@ const AimDeliveryZero int32 = 0 // [04 §5.3] [06 §3.3]
 // unit update (queues SetDirection/SetSpeed) → weapon update (queues
 // TargetCleared, Aim*, Fire*, RockUnit) → normal COB drain (delta 1, eight
 // thread slots then one piece pass) → orders/build work → movement integration
-// (immediate MoveRate, setSFXoccupy) → slot-end death handling. Deferred
+// (D+wake MoveRate, setSFXoccupy) → slot-end death handling. Deferred
 // callbacks produced before the normal pass run in the same visit; those after
-// normally wait, except an immediate wake-flag start does an all-slot delta-0
-// drain that can execute them earlier [GAP T15] C17.
+// normally wait, except a D+wake start does an all-slot delta-0 drain that can
+// execute them earlier [GAP T15] C17.
 type WindowPhase int
 
 const (
@@ -301,7 +301,7 @@ const (
 	PhaseWeaponUpdate   WindowPhase = 2 // queues TargetCleared/Aim*/Fire*/RockUnit [GAP T15] C17
 	PhaseNormalDrain    WindowPhase = 3 // normal COB drain delta 1, 8 slots then one piece pass [04 §4.6] C17
 	PhaseOrdersBuild    WindowPhase = 4 // orders and build work [GAP T15] C17
-	PhaseMovementIntegr WindowPhase = 5 // movement integration immediate MoveRate/setSFXoccupy [GAP T15] C17
+	PhaseMovementIntegr WindowPhase = 5 // movement integration D+wake MoveRate/setSFXoccupy [GAP T15] C17
 	PhaseSlotEndDeath   WindowPhase = 6 // slot-end death handling synchronous Killed query [GAP T15] C17
 )
 
@@ -335,34 +335,33 @@ const (
 	CallbackFireTertiary  CallbackKind = 9
 	CallbackRockUnit      CallbackKind = 10 // weapon update queued [GAP T15] C17
 
-	CallbackStartMoving  CallbackKind = 11 // movement integration immediate wake-flag [GAP T15] C17
+	CallbackStartMoving  CallbackKind = 11 // movement integration D+wake=1 [GAP T15] C17
 	CallbackStopMoving   CallbackKind = 12
-	CallbackMoveRate1    CallbackKind = 13 // immediate wake-flag tiers [GAP T15] C18
+	CallbackMoveRate1    CallbackKind = 13 // D+wake=1 tiers [GAP T15] C18
 	CallbackMoveRate2    CallbackKind = 14
 	CallbackMoveRate3    CallbackKind = 15
-	CallbackSetSFXoccupy CallbackKind = 16 // movement integration immediate [GAP T15] C17
+	CallbackSetSFXoccupy CallbackKind = 16 // movement integration D+wake=1 [GAP T15] C17
 
 	CallbackHitByWeapon CallbackKind = 17 // damage path async [04 §5.1] C26
 	CallbackTakeDamage  CallbackKind = 18
 	CallbackKilled      CallbackKind = 19 // slot-end sync [GAP T15] C17
 )
 
-// QueuedCallback is a deferred or immediate engine→COB callback pending drain.
-// Deferred callbacks produced before the normal pass run in the same visit;
-// those produced after normally wait for the next visit, except that any later
-// immediate-start callback on the same VM performs an all-slot delta-0 drain
-// that can execute it earlier [GAP T15] C17.
+// QueuedCallback is an engine→COB callback pending drain. All researched
+// callback starters are mode D; Wake marks the D+wake=1 callbacks whose
+// producer performs an all-slot delta-zero barrier [R-CB-01 §2].
 type QueuedCallback struct {
 	Kind     CallbackKind
 	Script   string // script name (e.g., "RockUnit") for VM.Start lookup
 	Args     []int32
-	Deferred bool // true if enqueued before NormalDrain, runs same visit
+	Deferred bool // true if queued for the next normal drain
+	Wake     bool // true for D+wake=1; the producer must perform the barrier
 }
 
 // DeferredQueue holds callbacks between windows for one unit tick. It is the
 // minimal scaffolding this contract needs; the driving subsystems (weapons
-// phase 9, movement phase 7/9) call EnqueueDeferred/EnqueueImmediate with
-// explicit TODO markers where they arrive.
+// phase 9, movement phase 7/9) call EnqueueDeferred/EnqueueWake with explicit
+// TODO markers where they arrive.
 type DeferredQueue struct {
 	Pending       []QueuedCallback
 	lifecycle     LifecycleSink
@@ -388,17 +387,13 @@ func (q *DeferredQueue) SetLifecycleContext(tick uint32, source uint16) {
 
 func (q *DeferredQueue) lifecycleEvent(cb QueuedCallback, phase string) {
 	if q != nil && q.lifecycle != nil {
-		mode := ModeImmediate
-		if cb.Deferred {
-			mode = ModeDeferred
-		}
-		q.lifecycle(LifecycleEvent{Tick: q.lifecycleTick, Source: q.lifecycleSrc, Name: cb.Script, Mode: mode, Thread: -1, Phase: phase})
+		q.lifecycle(LifecycleEvent{Tick: q.lifecycleTick, Source: q.lifecycleSrc, Name: cb.Script, Mode: ModeDeferred, Thread: -1, Phase: phase})
 	}
 }
 
 // EnqueueDeferred queues a callback that will run during the next normal drain
-// if queued before that drain, else will wait until the following tick unless an
-// immediate drain barrier runs [GAP T15] C17.
+// if queued before that drain, else will wait until the following tick unless a
+// later D+wake barrier runs [GAP T15] C17.
 //
 // TODO(question): weapons package (phase 9) will call this for TargetCleared /
 // Aim* / Fire* / RockUnit during weapon update (PhaseWeaponUpdate) before the
@@ -409,17 +404,13 @@ func (q *DeferredQueue) EnqueueDeferred(cb QueuedCallback) {
 	q.lifecycleEvent(cb, "enqueue")
 }
 
-// EnqueueImmediate records an immediate wake-flag callback such as MoveRateN or
-// setSFXoccupy issued from movement integration [GAP T15] C17/C18. Such starts
-// use the immediate drain barrier (all eight slots at delta 0 plus one piece
-// pass) so the StartMoving drain forms a barrier between it and the MoveRateN
-// that follows [GAP T15] C18.
-//
-// TODO(question): movement package (phase 7/9) will call this for StartMoving
-// then MoveRateN and setSFXoccupy. The barrier is StartWithImmediateBarrier
-// below, which issues a delta-0 drain after the first start.
-func (q *DeferredQueue) EnqueueImmediate(cb QueuedCallback) {
+// EnqueueWake records a D+wake=1 callback such as MoveRateN or setSFXoccupy
+// issued from movement integration [GAP T15] C17/C18. The callback remains
+// pending in this queue; the producer performs the VM-wide barrier through
+// StartDeferredWake after allocation.
+func (q *DeferredQueue) EnqueueWake(cb QueuedCallback) {
 	cb.Deferred = false
+	cb.Wake = true
 	q.Pending = append(q.Pending, cb)
 	q.lifecycleEvent(cb, "enqueue")
 }
@@ -453,19 +444,18 @@ func (q *DeferredQueue) DrainNormal(startVM func(cb QueuedCallback) bool) {
 	// C13. The VM implements it; this queue stub does not interpolate pieces.
 }
 
-// StartWithImmediateBarrier starts a script on vm for an immediate wake-flag
-// callback and performs the all-slot delta-0 barrier drain that retail issues
-// between StartMoving and MoveRateN [GAP T15] C18. The barrier runs every slot
-// at delta 0 plus one piece pass, so a deferred callback queued earlier but not
-// yet drained can also be executed earlier than the normal pass [GAP T15] C17.
+// StartDeferredWake starts a mode-D script on vm and performs its wake=1
+// all-slot delta-0 barrier. The barrier runs every slot at delta 0 plus one
+// piece pass, so a deferred callback queued earlier but not yet drained can
+// also execute earlier than the normal pass [R-CB-01 §2].
 // The caller typically does:
 //
-//	StartWithImmediateBarrier(vm, "StartMoving", nil)
-//	StartWithImmediateBarrier(vm, "MoveRate2", nil)
+//	StartDeferredWake(vm, "StartMoving", nil)
+//	StartDeferredWake(vm, "MoveRate2", nil)
 //
 // Returns whether the start succeeded (pool free and script present) [04 §4.3]
 // C14. Either starter can fail separately [04 §5.1] C26.
-func StartWithImmediateBarrier(vm *VM, scriptName string, args []int32) bool {
+func StartDeferredWake(vm *VM, scriptName string, args []int32) bool {
 	if vm == nil || vm.prog == nil {
 		return false
 	}
@@ -476,17 +466,16 @@ func StartWithImmediateBarrier(vm *VM, scriptName string, args []int32) bool {
 	if !vm.Start(pc, args) {
 		return false
 	}
-	// Immediate drain barrier [GAP T15] C18: all slots at delta 0 plus one piece pass.
-	vm.Drain(0) // [04 §4.2] [GAP T15] immediate wake-flag start
+	// D+wake barrier [R-CB-01 §2]: all slots at delta 0 plus one piece pass.
+	vm.Drain(0)
 	return true
 }
 
-// StartModeI starts one lifecycle callback in immediate mode I. The callback
-// is allocated once, then the VM-wide delta-zero drain visits all eight thread
-// slots and performs one piece pass [04 §4.2][04 §5.1]. This is the binding
-// surface used for Create; deferred engine callbacks use StartByName instead.
-func StartModeI(vm *VM, scriptName string, args []int32) bool {
-	return StartWithImmediateBarrier(vm, scriptName, args)
+// StartWithImmediateBarrier is kept temporarily for the movement consumer
+// until that package switches to StartDeferredWake. It has D+wake semantics;
+// it does not represent a separate mode [R-CB-01 §2].
+func StartWithImmediateBarrier(vm *VM, scriptName string, args []int32) bool {
+	return StartDeferredWake(vm, scriptName, args)
 }
 
 // ---------------------------------------------------------------------------
@@ -498,27 +487,12 @@ func StartModeI(vm *VM, scriptName string, args []int32) bool {
 // carrier (carrier dword nonzero), or both magnitude words are zero. Otherwise
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // 32-bit [04 §5.2]. On change: into 0 from nonzero issues StopMoving; into
-// nonzero from 0 issues StartMoving FIRST then MoveRateN with an immediate-drain
-// barrier; other nonzero-to-nonzero issues only MoveRateN [GAP T15] C18.
+// nonzero from 0 issues StartMoving FIRST then MoveRateN with a wake=1
+// delta-zero barrier; other nonzero-to-nonzero issues only MoveRateN [GAP T15] C18.
 //
-// Def offsets are identity per I13: the two thresholds are the compiled unit
-// definition fields MoveRate1 and MoveRate2 (default twice maxVelocity) [02
-// "Unit record"] [04 §5.2]. The Go fields live on content.UnitDef (WU-02-3)
-// as MoveRate1/MoveRate2; this function takes them as rate1/rate2 so ports.go
-// does not import content and the units-owner notes the mapping in comments
-// per the plan's "name the fields on whatever surface you can see" directive.
-//
-// TODO(question): which single magnitude word is classified is not fully named
-// here; the tier is a signed inclusive threshold classification of one 32-bit
-// magnitude word [04 §5.2]. The both-zero gate uses BOTH magnitude words
-// [GAP T15] C18. Callers should pass the retail magnitude word in magWord and
-// the two words for the zero gate in magA/magB; this helper combines them.
-// If retail's magnitude is a different derived word (e.g., 3-D speed vs scalar),
-// change exactly this helper.
-// TODO(question): SetSpeed domain [P1-11] — whether SetSpeed argument is
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// 0x1B2 are likely 16.16 (moverate1 default twice maxVelocity) but unit not
-// closed; keep TODO until decompile of engine write port proves domain.
+// The first magnitude is the signed scalar speed word; the second is the
+// adjacent signed turn-residual word used only by the both-zero override.
+// Thresholds are the compiled MoveRate1 and MoveRate2 values [R-MOV-01 §6].
 func MoveRateCategory(inhibit, attached bool, magA, magZ int32, rate1, rate2 int32) int {
 	if inhibit || attached { // [GAP T15] C18 category 0 overrides
 		return 0 // [04 §5.2] inhibit bit or attached (carrier dword nonzero)
@@ -526,8 +500,7 @@ func MoveRateCategory(inhibit, attached bool, magA, magZ int32, rate1, rate2 int
 	if magA == 0 && magZ == 0 { // [GAP T15] C18 both magnitudes zero
 		return 0
 	}
-	// The classified magnitude is one word; pick magA as the canonical one per
-	// TODO above. Signed comparisons [04 §5.2].
+	// Classify the scalar speed word with signed inclusive comparisons [04 §5.2].
 	mag := magA
 	if mag <= rate1 { // inclusive [04 §5.2]
 		return 1
@@ -550,7 +523,7 @@ func MoveRateTransition(prev, next int) []CallbackKind {
 	}
 	if prev == 0 && next != 0 {
 		// Into nonzero from 0 issues StartMoving FIRST then matching MoveRateN
-		// with an immediate-drain barrier between them [GAP T15] C18.
+		// with a wake=1 delta-zero barrier between them [GAP T15] C18.
 		var mr CallbackKind
 		switch next {
 		case 1:
@@ -779,37 +752,44 @@ func ApplyNormalDamage(v *VictimState, kind DamageKind, amount int32, dirByte ui
 // Engine-port read/write helpers (trunc/round notes)
 // ---------------------------------------------------------------------------
 
-// RelativeBearing computes the engine port 12 read [04 §4.4] C15: unpacks packed
-// XZ argument halves as signed 16.16 world deltas, takes arc tangent, subtracts
-// own heading, truncated to 16 bits. The atan scaling is the only rounding port
-// (round-to-nearest via 65536/2pi); all other ports truncate [04 §4.4].
-//
-// TODO(question): packing of halves into the int32 argument and the exact
-// Fixed→float promotion for atan are not fully closed; the helper below uses
-// float64 Atan2 and round-to-nearest, which matches the spec's "round rather
-// than truncates" wording. Confirm dx/dz extraction for negative halves against
-// retail before depending on packed bits.
+// RelativeBearing computes port 12: unpack the signed X/Z halves, evaluate
+// atan2(X,Z), subtract the unit heading, and retain the low 16 bits. The angle
+// conversion rounds to nearest [R-COB-03 §2][R-COB-03 §3].
 func RelativeBearing(packedXZ int32, heading uint16) uint16 {
-	// Unpack halves: low 16 = X, high 16 = Z as signed halves; each half is
-	// nominally the low 16 bits of a 16.16 fixed word (the integer world part)
-	// for this read path. TODO(question): whether the fractional bits are
-	// already discarded before atan is not closed; we treat halves as plain
-	// signed integers for the atan here.
-	dx := int32(int16(packedXZ & 0xFFFF))
-	dz := int32(int16((packedXZ >> 16) & 0xFFFF))
-	// Arc tangent, scaled to 65536 per circle, round-to-nearest [04 §4.4].
-	angle := math.Atan2(float64(dz), float64(dx)) * 65536.0 / (2 * math.Pi)
-	rounded := int32(math.Round(angle)) // round-to-nearest [04 §4.4]
-	rel := uint16(rounded) - heading    // subtract own heading, wrap via uint16 [04 §4.4]
+	x, z := unpackXZ(packedXZ)
+	// Port 12 evaluates atan2(X,Z), scaled to 65536 per circle [R-COB-03 §2].
+	angle := math.Atan2(float64(x), float64(z)) * 65536.0 / (2 * math.Pi)
+	rounded := roundNearestEven(math.Float64bits(angle)) // round-to-nearest-even [R-COB-03 §2]
+	rel := uint16(rounded) - heading                     // subtract own heading, wrap via uint16 [04 §4.4]
 	return rel
+}
+
+// roundNearestEven implements the engine's ties-to-even conversion for
+// scaled angles. The bit carrier keeps this transient conversion local to the
+// existing trig path; math.Round is ties-away-from-zero and is therefore not
+// interchangeable at half-way values [R-COB-03 §2].
+func roundNearestEven(bits uint64) int32 {
+	value := math.Float64frombits(bits)
+	base := math.Floor(value)
+	frac := value - base
+	if frac*2 < 1 {
+		return int32(base)
+	}
+	if frac*2 > 1 {
+		return int32(base + 1)
+	}
+	whole := int64(base)
+	if whole&1 != 0 {
+		whole++
+	}
+	return int32(whole)
 }
 
 // Distance computes engine port 13 read [04 §4.4] C15: hypotenuse of unpacked
 // halves, truncated toward zero [01 §8] I3.
 func Distance(packedXZ int32) int32 {
-	dx := int32(int16(packedXZ & 0xFFFF))
-	dz := int32(int16((packedXZ >> 16) & 0xFFFF))
-	h := math.Hypot(float64(dx), float64(dz))
+	x, z := unpackXZ(packedXZ)
+	h := math.Hypot(float64(x), float64(z))
 	return int32(h) // trunc toward zero [01 §8] I3 [04 §4.4]
 }
 
@@ -819,7 +799,7 @@ func Distance(packedXZ int32) int32 {
 // rounds, hypot truncates [04 §4.4].
 func AtanPort(a, b int32) uint16 {
 	angle := math.Atan2(float64(b), float64(a)) * 65536.0 / (2 * math.Pi)
-	return uint16(int32(math.Round(angle))) // round [04 §4.4]
+	return uint16(roundNearestEven(math.Float64bits(angle))) // round-to-nearest-even [R-COB-03 §2]
 }
 func HypotPort(a, b int32) int32 {
 	return int32(math.Hypot(float64(a), float64(b))) // trunc [01 §8] I3
@@ -846,27 +826,27 @@ func SetDirectionArg(dir uint16) int32 { return int32(dir) } // [04 §5.3] zero-
 // guarded on ... passes a signed dword shifted left by 4 [04 §5.3].
 func SetSpeedGeneral(speed int32) int32 { return speed << 4 } // [04 §5.3] signed <<4
 
-// SetSpeedFootprint is the footprint-path SetSpeed conversion [04 §5.3] C15:
-// guarded on a different positive definition float, passes the 16-bit sum over
-// covered footprint cells of each occupying unit's size byte plus one [04 §5.3].
-// Semantic unit not established [04 §5.3].
-//
-// TODO(question): the sum's exact terrain query and the definition float gate
-// are not closed; this helper is a pure pass-through for the summed value so
-// tests can pin the truncation (low 16 bits) without implying the gait.
+// SetSpeedFootprint is the creation-time extractor callback argument: the
+// footprint metal sum is accumulated modulo 16 bits and sign-extended when it
+// enters the script window [R-CB-01 §5].
 func SetSpeedFootprint(sum int32) int32 { return int32(int16(sum)) } // [04 §5.3] 16-bit sum
 
-// PackXZ packs X low, Z high halves for ports 7/9 [04 §4.4] C15.
-// TODO(question): packing is defined as Z in high half and X in low half; the
-// width and fixed scaling (whether high 16 bits of 16.16 or truncated int16)
-// are not fully closed for retail packed reads. This helper packs the integer
-// parts of 16.16 Fixed values truncated toward zero, matching the simplest
-// retail reading. Validate with a real piece world transform before using for
-// precise targeting.
+// PackXZ packs X into the high half and Z into the low half by adding the
+// arithmetic-shifted coordinates [R-COB-03 §3]. It is intentionally addition,
+// rather than OR: negative Z borrows one whole unit from X.
 func PackXZ(x, z numeric.Fixed) int32 {
-	xi := int32(x.Int()) // trunc toward zero [01 §8] I3
-	zi := int32(z.Int())
-	return (zi << 16) | (int32(uint16(xi)) & 0xFFFF)
+	return int32((uint32(x.Raw()) & 0xffff0000) + uint32(int32(z.Raw())>>16))
+}
+
+// unpackXZ reverses PackXZ, including the borrow correction for negative Z
+// [R-COB-03 §3]. The returned values are raw 16.16 coordinates.
+func unpackXZ(packed int32) (x, z int32) {
+	x = int32(uint32(packed) & 0xffff0000)
+	z = packed << 16
+	if z < 0 {
+		x += 0x10000
+	}
+	return x, z
 }
 
 // GroundHeight is the port 16 read stub [04 §4.4] C15: world height query at

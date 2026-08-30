@@ -9,8 +9,8 @@ import (
 // OW-3-P goal-families wiring [04 §7.2][04 §7.4][04 §3.5].
 //
 // Four families share the path.Goal interface [04 §7.2] C8:
-//   PointGoal, AnnulusGoal (stand-off), RectPerimeterGoal, SavedGoal.
-// Before this unit Annulus/Rect/Saved had zero callers; orbit/stand-off
+//   PointGoal, AnnulusGoal (stand-off), RectPerimeterGoal, and air-only goals.
+// Before this unit Annulus/Rect had zero callers; orbit/stand-off
 // degraded to PointGoal(0) [M-4]. This file wires the STRUCTURE with
 // placeholder values clearly marked where research does NOT establish a
 // constant; it does NOT invent constants. See citations and TODO(question)
@@ -69,12 +69,13 @@ const (
 //	  [04 §7.2][04 §7.4] defines the rectangle heuristic and enumeration, but no
 //	  handler in [04 §3.5][04 §10.3] describes a patrol-around-rect target that
 //	  constructs it. Forcing it would invent a producer; leave unwired.
-//	SavedGoal has no established patrol-leg producer; the class is defined as
+//	The withdrawn saved-goal compatibility surface has no producer; air work
+//	and moving goals now own the zero-heuristic, unsatisfied surface [04 R-PATH-01 §9].
 //	  "Base/restored-from-save goals have identically-zero heuristic and a null
 //	  start predicate" [04 §7.2], used for save restore (GoalKind 3 in
 //	  internal/save/boxes.go). Patrol legs (Patrol/QPatrol/VTOL_Patrol etc) are
 //	  queued as sequential PointGoals via the ordinary order queue [04 §3.3];
-//	  no bounded evidence shows patrol chaining via SavedGoal, so leave that
+//	  no bounded evidence shows patrol chaining via an air-goal surface, so leave that
 //	  path unwired rather than forcing it [04 §7.4] UNKNOWN frequency.
 //
 // All other orders => PointGoal(radius 0) [04 §7.2] C8.
@@ -121,7 +122,7 @@ func (s *System) goalForOrder(goalCell path.Cell, n *orders.Node) path.Goal {
 	default:
 		// Explicitly unwired families:
 		// - RectPerimeterGoal: no established producer [04 §7.2][04 §7.4] — leave as Point instead of inventing a patrol-rect order.
-		// - SavedGoal: not forced for patrol legs; only save restore uses it via GoalKind 3, which remains unwired here by design [04 §7.2].
+		// - Air work/moving goals: no ground-order producer exists [04 R-PATH-01 §9].
 		return path.PointGoal(goalCell, 0)
 	}
 }

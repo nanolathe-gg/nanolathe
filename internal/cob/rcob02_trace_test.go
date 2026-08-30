@@ -137,18 +137,18 @@ func newTraceBridge(t *testing.T) (*CallbackBridge, *traceRecorder) {
 
 func TestVerticalSliceCallbackModes(t *testing.T) {
 	// Per-callback mode and wake semantics [R-COB-02 §1]: D allocates only
-	// (first runs in the visit's normal drain), I is D plus the all-slot
+	// (first runs in the visit's normal drain), D+wake is D plus the all-slot
 	// delta-0 barrier inline, Q runs one slot inline with no drain and no
 	// piece pass. Return consumption: only the Aim* receiver consumes the
 	// delivered cell, and only a nonzero grant marks aim-ready.
 	cases := []struct {
-		name    string
-		start   func(b *CallbackBridge) CallbackResult
-		want    CallbackMode
-		wantI   bool // immediate: effect visible without any further drain
-		checkVM func(t *testing.T, b *CallbackBridge, rec *traceRecorder, res CallbackResult)
+		name     string
+		start    func(b *CallbackBridge) CallbackResult
+		want     CallbackMode
+		wantWake bool // D+wake: effect visible without any further drain
+		checkVM  func(t *testing.T, b *CallbackBridge, rec *traceRecorder, res CallbackResult)
 	}{
-		{"Create", func(b *CallbackBridge) CallbackResult { return b.Create() }, ModeImmediate, true,
+		{"Create", func(b *CallbackBridge) CallbackResult { return b.Create() }, ModeDeferred, true,
 			func(t *testing.T, b *CallbackBridge, rec *traceRecorder, res CallbackResult) {
 				if !b.CreateInvoked() {
 					t.Fatal("Create must consume its one-shot slot [04 §5.1]")
@@ -173,19 +173,19 @@ func TestVerticalSliceCallbackModes(t *testing.T) {
 		{"StopBuilding", func(b *CallbackBridge) CallbackResult { return b.StopBuilding() }, ModeDeferred, false, nil},
 		{"SetDirection", func(b *CallbackBridge) CallbackResult { return b.SetDirection(0x1234) }, ModeDeferred, false, nil},
 		{"SetSpeed", func(b *CallbackBridge) CallbackResult { return b.SetSpeed(321) }, ModeDeferred, false, nil},
-		{"StartMoving", func(b *CallbackBridge) CallbackResult { return b.StartMoving() }, ModeImmediate, true, nil},
-		{"StopMoving", func(b *CallbackBridge) CallbackResult { return b.StopMoving() }, ModeImmediate, true, nil},
-		{"MoveRate1", func(b *CallbackBridge) CallbackResult { return b.MoveRate1() }, ModeImmediate, true, nil},
-		{"MoveRate2", func(b *CallbackBridge) CallbackResult { return b.MoveRate2() }, ModeImmediate, true, nil},
-		{"MoveRate3", func(b *CallbackBridge) CallbackResult { return b.MoveRate3() }, ModeImmediate, true, nil},
-		{"setSFXoccupy", func(b *CallbackBridge) CallbackResult { return b.SetSFXoccupy(3) }, ModeImmediate, true, nil},
+		{"StartMoving", func(b *CallbackBridge) CallbackResult { return b.StartMoving() }, ModeDeferred, true, nil},
+		{"StopMoving", func(b *CallbackBridge) CallbackResult { return b.StopMoving() }, ModeDeferred, true, nil},
+		{"MoveRate1", func(b *CallbackBridge) CallbackResult { return b.MoveRate1() }, ModeDeferred, true, nil},
+		{"MoveRate2", func(b *CallbackBridge) CallbackResult { return b.MoveRate2() }, ModeDeferred, true, nil},
+		{"MoveRate3", func(b *CallbackBridge) CallbackResult { return b.MoveRate3() }, ModeDeferred, true, nil},
+		{"setSFXoccupy", func(b *CallbackBridge) CallbackResult { return b.SetSFXoccupy(3) }, ModeDeferred, true, nil},
 		{"Aim", func(b *CallbackBridge) CallbackResult { return b.Aim(WeaponPrimary, 0x0AAA, 0x0BBB, nil) }, ModeDeferred, false, nil},
 		{"Fire", func(b *CallbackBridge) CallbackResult { return b.Fire(WeaponPrimary) }, ModeDeferred, false, nil},
 		{"RockUnit", func(b *CallbackBridge) CallbackResult { return b.RockUnit(0x0200) }, ModeDeferred, false, nil},
 		{"HitByWeapon", func(b *CallbackBridge) CallbackResult { return b.HitByWeapon(0x40) }, ModeDeferred, false, nil},
 		{"TakeDamage", func(b *CallbackBridge) CallbackResult { return b.TakeDamage(66) }, ModeDeferred, false, nil},
 		{"TargetCleared", func(b *CallbackBridge) CallbackResult { return b.TargetCleared(2) }, ModeDeferred, false, nil},
-		{"Killed network replay", func(b *CallbackBridge) CallbackResult { return b.Killed(5) }, ModeImmediate, true, nil},
+		{"Killed network replay", func(b *CallbackBridge) CallbackResult { return b.Killed(5) }, ModeDeferred, true, nil},
 		{"KilledLocal query", func(b *CallbackBridge) CallbackResult { return b.KilledLocal(37) }, ModeQuery, true, nil},
 		{"QueryNanoPiece", func(b *CallbackBridge) CallbackResult { return b.QueryNanoPiece() }, ModeQuery, true, nil},
 		{"QueryTransport", func(b *CallbackBridge) CallbackResult { return b.QueryTransport() }, ModeQuery, true, nil},
@@ -199,11 +199,11 @@ func TestVerticalSliceCallbackModes(t *testing.T) {
 			if res.Mode != tc.want {
 				t.Fatalf("mode = %d want %d [R-COB-02 §1]", res.Mode, tc.want)
 			}
-			if tc.wantI {
-				// Immediate wake semantics: all-slot delta-0 barrier inline
-				// [04 §4.2][R-COB-02 §2]. Q adds no drain; I adds exactly one.
+			if tc.wantWake {
+				// D+wake semantics: all-slot delta-0 barrier inline
+				// [04 §4.2][R-CB-01 §2]. Q adds no drain; plain D adds none.
 				wantDrains := before
-				if tc.want == ModeImmediate {
+				if res.Wake {
 					wantDrains = before + 1
 				}
 				if b.VM.DrainCalls != wantDrains {
@@ -329,11 +329,11 @@ func TestSameTickTraceFixture(t *testing.T) {
 	// The composed order of one unit visit [R-COB-02 §2]: unit update
 	// (deferred SetDirection/SetSpeed) → weapon update (deferred
 	// TargetCleared/Aim/Fire/RockUnit, inline Q queries) → normal COB drain
-	// delta 1 → orders/build work → movement integration (immediate
+	// delta 1 → orders/build work → movement integration (D+wake
 	// StartMoving/MoveRateN/setSFXoccupy) → slot-end death handling
 	// (synchronous Killed query). Barriers: the normal drain executes
 	// everything queued in steps 1–2 ordered by thread slot, not queue order;
-	// every immediate start flushes earlier deferrals at its delta-0
+	// every D+wake start flushes earlier deferrals at its delta-0
 	// all-slot barrier; queries run one slot inline with no drain.
 	b, rec := newTraceBridge(t)
 	vm := b.VM
@@ -341,7 +341,7 @@ func TestSameTickTraceFixture(t *testing.T) {
 	slot.StartAim()
 	var delivered []CallbackReturn
 
-	// Creation, before visit 1: Create is immediate (one all-slot delta-0
+	// Creation, before visit 1: Create is D+wake (one all-slot delta-0
 	// drain plus one piece pass); SetMaxReloadTime is deferred and lands
 	// OUTSIDE Create's own drain [R-COB-02 §1].
 	b.Create()
@@ -417,7 +417,7 @@ func TestSameTickTraceFixture(t *testing.T) {
 		rec.want(evRockX, mustRock(t, 0x0200)[0]), rec.want(evRockZ, mustRock(t, 0x0200)[1]),
 	})
 
-	// Step 5 — movement integration. StartMoving is an immediate wake start:
+	// Step 5 — movement integration. StartMoving is a D+wake start:
 	// its all-slot delta-0 barrier flushes the step-4 deferrals (slots 0,1)
 	// BEFORE its own marker (slot 2) — the wake-flush barrier pulls a step-4
 	// deferral into the same visit [R-COB-02 §2].
@@ -435,8 +435,8 @@ func TestSameTickTraceFixture(t *testing.T) {
 		rec.want(evHitX, hx), rec.want(evHitZ, hz), // step-4 deferrals, flushed
 		rec.want(evTake, 66),    // slot 1
 		rec.want(evStartMov, 0), // slot 2 — the flushing start itself
-		rec.want(evMR2, 0),      // immediate
-		rec.want(evSFXOcc, 2),   // immediate
+		rec.want(evMR2, 0),      // D+wake
+		rec.want(evSFXOcc, 2),   // D+wake
 	})
 
 	// Step 6 — slot-end death handling runs the synchronous local Killed
@@ -462,7 +462,7 @@ func TestSameTickTraceFixture(t *testing.T) {
 			t.Fatalf("sleep 0 completed in its own visit: %v", rec.marks)
 		}
 	}
-	// Step 5 of visit 2 — StopMoving is immediate; its all-slot delta-0 wake
+	// Step 5 of visit 2 — StopMoving is D+wake; its all-slot delta-0 wake
 	// pass completes the sleeping timer-0 thread [04 §4.6].
 	b.StopMoving()
 	found := false
@@ -475,15 +475,15 @@ func TestSameTickTraceFixture(t *testing.T) {
 		t.Fatalf("the delta-0 wake pass must wake a timer-at-zero thread [04 §4.6]: %v", rec.marks)
 	}
 
-	// Visit 3 — the network-replay Killed is an immediate start whose
-	// barrier runs it inline [R-COB-02 §1].
+	// Visit 3 — the network-replay Killed is a deferred start with wake=1;
+	// its barrier runs it inline [R-CB-01 §2].
 	b.Drain(1)
 	if got := vm.DrainCalls; got != 8 {
 		t.Fatalf("drains after visit 3 normal pass = %d want 8", got)
 	}
 	netRes := b.Killed(5)
-	if netRes.Mode != ModeImmediate || !netRes.Started {
-		t.Fatalf("network Killed = %#v, want started immediate [R-COB-02 §1]", netRes)
+	if netRes.Mode != ModeDeferred || !netRes.Wake || !netRes.Started {
+		t.Fatalf("network Killed = %#v, want started deferred wake [R-CB-01 §2]", netRes)
 	}
 	assertMarks(t, rec, []string{
 		rec.want(evCreate, 0), rec.want(evNano, 42),

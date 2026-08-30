@@ -68,13 +68,14 @@ type Target struct {
 // Kept local to avoid the units→combat→economy→units import cycle.
 // Fields mirror the retail weapon-slot semantics [06 §1.2] [P0-10].
 type Slot struct {
-	Weapon       *content.WeaponDef // resolved weapon definition [06 §1.2] [P0-10]
-	Reload       int32              // signed reload countdown [06 §1.2] [P0-10]
-	Flags        uint8              // 0x02 armed, 0x01 Aim-latch, 0x10 tracking [06 §1.2] [P0-10]
-	DesiredYaw   uint16             // commanded yaw [06 §1.2] [P0-10]
-	DesiredPitch uint16             // commanded pitch [06 §1.2] [P0-10]
-	Ammo         int32              // remaining stockpile [06 §1.2] [P0-10]
-	MuzzlePiece  int32              // muzzle piece queried synchronously [06 §4.1] C3
+	Weapon         *content.WeaponDef // resolved weapon definition [06 §1.2] [P0-10]
+	Reload         int32              // signed reload countdown [06 §1.2] [P0-10]
+	Flags          uint8              // 0x02 armed, 0x01 Aim-latch, 0x10 tracking [06 §1.2] [P0-10]
+	DesiredYaw     uint16             // commanded yaw [06 §1.2] [P0-10]
+	DesiredPitch   uint16             // commanded pitch [06 §1.2] [P0-10]
+	Ammo           int32              // remaining stockpile [06 §1.2] [P0-10]
+	MuzzlePiece    int32              // Query* result retained as the weapon muzzle identity [06 §4.1] C3
+	AimOriginPiece int32              // AimFrom*/second-Query result retained for the later aim-origin consumer [R-CB-01 §4]
 
 	// Aim is the asynchronous Aim handshake [GAP T15] C16 [06 §3.3] [04 §5.3].
 	// IssueBit mirrors Flags&0x01 latch; Ready granted only on nonzero return [GAP T15] C16.
@@ -150,8 +151,8 @@ type AttachmentState struct {
 }
 
 // CallbackQueue holds engine→COB callback state between windows [GAP T15].
-// Deferred callbacks queued before the normal drain run same visit; immediate
-// wake-flag starts do an all-slot delta-0 drain [GAP T15] C17-C18.
+// Deferred callbacks queued before the normal drain run same visit; D+wake
+// starts do an all-slot delta-0 drain [R-CB-01 §2].
 // Backed by cob.DeferredQueue for engine→COB handshaking [04 §5].
 type CallbackQueue struct {
 	Deferred cob.DeferredQueue

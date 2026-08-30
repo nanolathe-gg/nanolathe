@@ -406,9 +406,9 @@ func TestFeaturePickingOverlap(t *testing.T) {
 	featDef := cat.Features[content.CanonicalKey("armrock")]
 	terrain.FeatureNames = []string{"armrock"}
 	terrain.FeatureDefs = []*content.FeatureDef{featDef}
-	idx := 5*int(terrain.CellW) + 9
-	terrain.Plot[idx][8] = 0
-	terrain.Plot[idx][9] = 0
+	// The feature service stamps the cell itself and refuses a cell that
+	// already carries a feature word [06 §13.1], so the plot is left empty
+	// until PlaceAt writes it.
 	b := newTestBattle(cat, terrain)
 	b.sess.LocalOwner = 0
 	b.cam.X = 0

@@ -21,7 +21,7 @@ import (
 
 func overkillWorld(t *testing.T) (*World, pool.Handle) {
 	t.Helper()
-	world := NewSliced(4, nil)
+	world := newFixtureWorld(4, nil)
 	def := &content.UnitDef{UnitName: "overkill", MaxDamage: 100, Limit: -1}
 	h, err := world.Create(def, 0, 0, 0, 0)
 	if err != nil {
