@@ -14,6 +14,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 )
 
@@ -212,7 +213,14 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 	}
 }
 
-func TestRetailNoSelectionUsesSideGeneralWindow(t *testing.T) {
+// TestRetailNoSelectionClosesCommandWindows was TestRetailNoSelectionUsesSideGeneralWindow,
+// which asserted that an empty selection opens <prefix>GEN.GUI. That is the
+// playtest defect, not the contract: [07 §6] "Command-window switch is closed"
+// establishes that when the selected-unit count becomes zero the switch closes
+// the command windows down to the root <prefix>MAIN2.GUI and opens nothing.
+// The general page belongs to a multiple selection or a single non-builder
+// selection.
+func TestRetailNoSelectionClosesCommandWindows(t *testing.T) {
 	root := os.Getenv("NANOLATHE_TA_ROOT")
 	if root == "" {
 		home, err := os.UserHomeDir()
@@ -260,13 +268,12 @@ func TestRetailNoSelectionUsesSideGeneralWindow(t *testing.T) {
 	if cur == nil {
 		t.Fatal("no-selection snapshot not published")
 	}
-	window, _ := b.hud.windowFor(b, cur)
-	want := strings.ToLower(b.hud.side.NamePrefix) + "gen.gui"
-	if window == nil || !strings.HasSuffix(strings.ToLower(window.Name), want) {
-		if window == nil {
-			t.Fatalf("no-selection window is nil; want %s", want)
-		}
-		t.Fatalf("no-selection window = %q; want suffix %q", window.Name, want)
+	if window, _ := b.hud.windowFor(b, cur); window != nil {
+		t.Fatalf("no-selection window = %q; the command windows are closed to the root [07 §6]", window.Name)
+	}
+
+	if shot := os.Getenv("NANOLATHE_HUD_EMPTY_SHOT"); shot != "" {
+		writeRetailHUDShot(t, b, cs, cam, pal, winW, winH, shot)
 	}
 
 	if shot := os.Getenv("NANOLATHE_HUD_MENU_SHOT"); shot != "" {
@@ -342,5 +349,33 @@ func TestRetailEnergyProductionAnchorFits640Viewport(t *testing.T) {
 	textWidth := client.MeasureText(h.console, text)
 	if anchor.X1 < 0 || anchor.Y1 < 0 || anchor.X1+int32(textWidth) > 640 || anchor.Y1 >= 480 {
 		t.Fatalf("ENERGYPRODUCED text %q at (%d,%d), width %d, escapes 640x480 viewport", text, anchor.X1, anchor.Y1, textWidth)
+	}
+}
+
+// writeRetailHUDShot composes one headless frame through the production
+// client and writes it as a PNG. It is the visual-evidence path for the HUD
+// units; the composition is exactly the draw loop's [I6].
+func writeRetailHUDShot(t *testing.T, b *battleSession, cs *contentSet, cam *camera.Camera, pal *palette.Tables, winW, winH int, path string) {
+	t.Helper()
+	cl, err := client.New(client.Options{Buffer: b.sess.Snapshot, Width: winW, Height: winH})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl.SetTerrain(b.sess.World)
+	cl.SetCamera(cam)
+	cl.SetPalette(pal)
+	cl.SetFNT(b.hud.console)
+	cl.SetModelFS(cs.fs)
+	cl.SetUIStage(battleHUDUIStage{hud: b.hud, battle: b})
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(file, cl.ComposeFrame()); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
 	}
 }

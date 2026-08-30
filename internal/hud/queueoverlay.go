@@ -43,11 +43,16 @@ type QueuePoint struct{ X, Y int32 }
 // supplies it because camera/view origin policy belongs to the client.
 type QueueRect struct{ Left, Top, Right, Bottom int32 }
 
+// QueueWorldPoint is a world-space point in 16.16 fixed units.  The dash chain
+// interpolates in world space and projects each sprite, so the segment endpoints
+// have to survive the presentation boundary unprojected [R-P0-11 §3].
+type QueueWorldPoint struct{ X, Y, Z numeric.Fixed }
+
 // QueuePrimitive is one immutable draw instruction.  Marker contains the
 // eight lines from BuildMarkerSegments; Dash and Circle contain one segment.
-// DashAge is intentionally retained rather than converted to a guessed
-// procedural pattern: the authored GAF dash chain and ticks-per-frame are
-// resolved by the client asset adapter [R-P0-11 §3].
+// A Dash carries its world-space endpoints and the order's age so the client
+// asset adapter can place the authored GAF sprite chain with DashSprites; it is
+// never a line to rasterize [R-P0-11 §3].
 type QueuePrimitive struct {
 	Kind       QueuePrimitiveKind
 	Unit       pool.Handle
@@ -59,6 +64,8 @@ type QueuePrimitive struct {
 	Color      uint8
 	ColorKnown bool
 	A, B       QueuePoint
+	WorldA     QueueWorldPoint
+	WorldB     QueueWorldPoint
 	Center     QueuePoint
 	Radius     int32
 	Segments   []MarkerSegment
@@ -141,35 +148,41 @@ func QueueOverlay(f *frame.Frame, opt QueueOverlayOptions) []QueuePrimitive {
 			continue
 		}
 		u := units[q.Unit]
-		prev := opt.Project(u.X, u.Y, u.Z)
+		// The per-unit dispatcher seeds the running anchor from the unit's own
+		// position and each helper advances it, so a queue's first dash segment
+		// runs from the unit to its first order [R-P0-11 §3].
+		prevWorld := QueueWorldPoint{X: u.X, Y: u.Y, Z: u.Z}
+		prev := opt.Project(prevWorld.X, prevWorld.Y, prevWorld.Z)
 		for list, orders := range [][]frame.OrderView{q.Primary, q.Secondary} {
 			for _, order := range orders {
 				orderMask := queueOrderMask(order.Kind) & mask
 				if orderMask == 0 {
 					continue
 				}
-				points := orderPoints(order, opt.Project)
-				if len(points) == 0 {
-					points = []QueuePoint{opt.Project(order.GoalX, order.GoalY, order.GoalZ)}
+				world := orderWorldPoints(order)
+				points := make([]QueuePoint, len(world))
+				for i, w := range world {
+					points[i] = opt.Project(w.X, w.Y, w.Z)
 				}
-				if orderMask&QueueDashMask != 0 {
-					for _, p := range points {
-						// The helper's GAF artwork and palette entry are not yet
-						// carried by the immutable frame. Keep the exact creation
-						// age in the instruction, but mark its raster color as
-						// unresolved so an integration cannot draw a guessed solid
-						// line in its place [R-P0-11 §3].
-						out = append(out, QueuePrimitive{Kind: QueuePrimitiveDash, Unit: q.Unit, List: uint8(list), Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, A: prev, B: p, DashAge: age(opt.Tick, order.CreationTick)})
-						prev = p
-					}
-				} else {
-					prev = points[len(points)-1]
-				}
+				// Helpers run in draw-mask bit order: marker (1), dash (2),
+				// circle (4), icon (8) [R-P0-11 §3].
 				if orderMask&QueueMarkerMask != 0 && order.BuildProduct != "" && opt.BuildRect != nil {
 					if rect, ok := opt.BuildRect(order); ok {
 						segments := BuildMarkerSegments(rect.Left, rect.Top, rect.Right, rect.Bottom, int(age(opt.Tick, order.CreationTick)), isSelected)
 						out = append(out, QueuePrimitive{Kind: QueuePrimitiveMarker, Unit: q.Unit, List: uint8(list), Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, Color: segments[0].Color, ColorKnown: true, Segments: segments})
 					}
+				}
+				if orderMask&QueueDashMask != 0 {
+					for i, p := range points {
+						// The dash chain is a sprite chain, not a line: the
+						// instruction keeps the world segment and the order's age
+						// and leaves placement to DashSprites, so an integration
+						// cannot substitute a guessed solid line [R-P0-11 §3].
+						out = append(out, QueuePrimitive{Kind: QueuePrimitiveDash, Unit: q.Unit, List: uint8(list), Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, A: prev, B: p, WorldA: prevWorld, WorldB: world[i], DashAge: age(opt.Tick, order.CreationTick)})
+						prev, prevWorld = p, world[i]
+					}
+				} else {
+					prev, prevWorld = points[len(points)-1], world[len(world)-1]
 				}
 				if orderMask&QueueCircleMask != 0 && opt.Circle != nil {
 					if radius, ok := opt.Circle(order); ok && radius > 0 {
@@ -236,16 +249,84 @@ func queueOrderMask(kind string) QueueOverlayMask {
 	}
 }
 
-func orderPoints(o frame.OrderView, project func(numeric.Fixed, numeric.Fixed, numeric.Fixed) QueuePoint) []QueuePoint {
-	points := make([]QueuePoint, 0, len(o.Route)+1)
+func orderWorldPoints(o frame.OrderView) []QueueWorldPoint {
+	points := make([]QueueWorldPoint, 0, len(o.Route)+1)
 	for _, route := range o.Route {
-		points = append(points, project(route.X, route.Y, route.Z))
+		points = append(points, QueueWorldPoint{X: route.X, Y: route.Y, Z: route.Z})
 	}
-	goal := project(o.GoalX, o.GoalY, o.GoalZ)
+	goal := QueueWorldPoint{X: o.GoalX, Y: o.GoalY, Z: o.GoalZ}
 	if len(points) == 0 || points[len(points)-1] != goal {
 		points = append(points, goal)
 	}
 	return points
+}
+
+// Travelling-dash chain constants [R-P0-11 §3]. Retail advances a phase along
+// the segment by three 16-unit cells per sprite, seeds that phase from the
+// order's age wrapped at 30 ticks so the chain marches once a second, and skips
+// a segment shorter than one world unit outright.
+const (
+	DashSpriteSpacing  = int64(3) << 20
+	DashPhaseWrapTicks = 30
+	DashMinSegment     = int64(1) << 16
+)
+
+// DashSprites places one travelling-dash segment's sprites [R-P0-11 §3].
+//
+// The segment length is the truncated 3-D distance between its world endpoints;
+// under one world unit nothing is drawn. The phase starts at
+// `((age mod 30) * 3 << 20) / 30`, advances DashSpriteSpacing per sprite, and
+// each sprite sits at the 16.16 fraction `(phase << 16) / distance` along the
+// segment. The first sprite takes frame `(age / ticksPerFrame) mod frameCount`
+// and every later sprite in the chain takes the next frame, which is what makes
+// a multi-frame chain read as motion along the line.
+//
+// age is the order's age in simulation ticks; the caller supplies the authored
+// GAF entry's frame count and its ticks-per-frame. Absent artwork (frameCount
+// zero) draws nothing rather than substituting a line.
+func DashSprites(a, b QueueWorldPoint, age uint32, ticksPerFrame, frameCount int, emit func(frame int, x, y, z numeric.Fixed)) {
+	if emit == nil || frameCount <= 0 {
+		return
+	}
+	if ticksPerFrame < 1 {
+		ticksPerFrame = 1
+	}
+	dx := int64(b.X) - int64(a.X)
+	dy := int64(b.Y) - int64(a.Y)
+	dz := int64(b.Z) - int64(a.Z)
+	distance := isqrt64(dx*dx + dy*dy + dz*dz)
+	if distance < DashMinSegment {
+		return
+	}
+	phase := (int64(age%DashPhaseWrapTicks) * 3 << 20) / DashPhaseWrapTicks
+	index := int(age/uint32(ticksPerFrame)) % frameCount
+	for ; phase < distance; phase += DashSpriteSpacing {
+		t := (phase << 16) / distance
+		emit(index,
+			numeric.Fixed(int64(a.X)+(dx*t>>16)),
+			numeric.Fixed(int64(a.Y)+(dy*t>>16)),
+			numeric.Fixed(int64(a.Z)+(dz*t>>16)))
+		index = (index + 1) % frameCount
+	}
+}
+
+// isqrt64 is floor(sqrt(v)) for a non-negative v. Retail truncates a hardware
+// square root toward zero; an exact integer root reproduces that without
+// bringing a float into the overlay path [INVARIANTS I2].
+func isqrt64(v int64) int64 {
+	if v <= 0 {
+		return 0
+	}
+	r := int64(0)
+	for bit := int64(1) << 62; bit != 0; bit >>= 2 {
+		if v >= r+bit {
+			v -= r + bit
+			r = (r >> 1) + bit
+		} else {
+			r >>= 1
+		}
+	}
+	return r
 }
 
 func age(now, born uint32) uint32 {

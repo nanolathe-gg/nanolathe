@@ -5,24 +5,28 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/frame"
+	compiledmodel "github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
 func TestSelectionPickCommittedUnitTieAndCopy(t *testing.T) {
 	cam := &camera.Camera{ViewW: 640, ViewH: 480, MapW: 1024, MapH: 1024}
+	// Both candidates carry the same hull, so their scores tie and the earlier
+	// ascending-pool member wins [07 R-REV-01 §5].
+	src := UnitHullModelFunc(func(string) *compiledmodel.Model { return hullTestModel() })
 	frame := &frame.Frame{Units: []frame.UnitView{
-		{Slot: 2, Owner: 0, X: numeric.Fixed(10 << 16), Z: numeric.Fixed(10 << 16)},
-		{Slot: 1, Owner: 0, X: numeric.Fixed(10 << 16), Z: numeric.Fixed(10 << 16)},
+		{Slot: 2, Owner: 0, Model: "synthetic-hull", X: numeric.Fixed(10 << 16), Z: numeric.Fixed(10 << 16)},
+		{Slot: 1, Owner: 0, Model: "synthetic-hull", X: numeric.Fixed(10 << 16), Z: numeric.Fixed(10 << 16)},
 	}}
 	x, y := cam.WorldToScreen(frame.Units[0].X, 0, frame.Units[0].Z)
-	h, _, ok := PickSnapshotUnit(frame, x-camera.OriginX, y-camera.OriginY, cam, 0)
+	h, _, ok := PickSnapshotUnit(frame, x-camera.OriginX, y-camera.OriginY, cam, 0, src)
 	if !ok || h != 1 {
 		t.Fatalf("tie winner=%d ok=%v, want lower slot 1", h, ok)
 	}
-	_, picked, _ := PickSnapshotUnit(frame, x-camera.OriginX, y-camera.OriginY, cam, 0)
+	_, picked, _ := PickSnapshotUnit(frame, x-camera.OriginX, y-camera.OriginY, cam, 0, src)
 	pickedX := picked.X
 	frame.Units[0].X += numeric.Fixed(100 << 16)
-	if h2, _, _ := PickSnapshotUnit(frame, x-camera.OriginX, y-camera.OriginY, cam, 0); h2 != 1 {
+	if h2, _, _ := PickSnapshotUnit(frame, x-camera.OriginX, y-camera.OriginY, cam, 0, src); h2 != 1 {
 		t.Fatalf("picker changed frame result unexpectedly: %d", h2)
 	}
 	if picked.X != pickedX {

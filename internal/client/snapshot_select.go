@@ -64,31 +64,77 @@ func SnapshotPointVisible(m frame.VisibilityView, x, y, z numeric.Fixed, viewer 
 
 // PickSnapshotUnit is the immutable presentation picker. It returns a copied
 // UnitView value and stable pool handle, never a pointer into the live world.
-// Keep the current 16px-radius approximation stable and deterministic while
-// the retail hull contract remains unpublished here [07 R-SEL-02B2].
-// TODO(question): replace this approximation only after the bounds-helper
-// component mapping, committed HOT UNITS inputs/order, and polygon edge
-// arithmetic are traced and published at the frame boundary [07 R-SEL-02B2].
-func PickSnapshotUnit(f *frame.Frame, sx, sy int32, cam *camera.Camera, viewer uint8) (pool.Handle, frame.UnitView, bool) {
+//
+// Retail's viewport hover is a hull test, not a proximity test
+// [07 R-REV-01][07 R-SEL-02B2]: each candidate's root-piece bounds become a
+// ground-level rectangle at the model's minimum Y, the four corners are
+// oriented and projected, and the pointer is admitted only by the strict
+// polygon predicate of [07 R-REV-01 §4]. That hull is the same quad the
+// selected-unit footprint outline draws, so the clickable area is exactly the
+// drawn rectangle. The 16-pixel radius this function used before had no
+// research behind it and made large units clickable only near their centre.
+//
+// Candidate order is the ascending unit-pool walk of [07 R-REV-01 §5], which is
+// reproduced here by keeping the admitted candidate with the lowest stable slot
+// rather than trusting the published slice order. The producer's three
+// admission tests map as follows: test 1 is the non-empty model reference; test
+// 3 is SnapshotVisible, which applies ownership bypass, the cloak gate and the
+// committed coverage cell. Test 2 — the projected definition-extent box against
+// the viewport bounds — is not reproduced: those six compiled extent words are
+// not published, and skipping it can only admit candidates whose hull is
+// off-screen, which no on-screen pointer can be inside.
+//
+// TODO(question): the hover reduction scores admitted candidates as
+// `((((modelHeight * 32768) >> 16) + zSpan) * xSpan) >> 16` and replaces the
+// winner only on a strictly smaller score, so equal scores retain the earlier
+// pool member [07 R-SEL-02B2][07 R-REV-01 §5]. The authored provenance of those
+// three compiled definition words is recorded Unknown in [07 R-REV-01 §6], and
+// the frame publishes no pick record carrying them, so the score cannot be
+// computed without inventing its inputs. Until a writer trace names the
+// definition fields, every admitted candidate is treated as scoring equally,
+// which is the Established equal-score outcome: the lowest-slot admitted
+// candidate wins. What would settle it is a writer trace from the definition
+// compiler into those three words, published as the ordered candidate record of
+// [07 R-REV-01 §6].
+//
+// models supplies the authored hull geometry. When no source is passed the
+// process-wide presentation cache installed by SetUnitHullModels is used; the
+// parameter is variadic so shell callers that hold no model cache keep working.
+// A unit whose model cannot be resolved has no hull and is never picked.
+func PickSnapshotUnit(f *frame.Frame, sx, sy int32, cam *camera.Camera, viewer uint8, models ...UnitHullModels) (pool.Handle, frame.UnitView, bool) {
 	if f == nil || cam == nil {
 		return 0, frame.UnitView{}, false
 	}
-	const radiusSq int64 = 16 * 16
+	src := hullModels
+	if len(models) > 0 {
+		src = models[0]
+	}
+	if src == nil {
+		return 0, frame.UnitView{}, false
+	}
 	best := pool.Handle(0)
 	var bestView frame.UnitView
-	bestDist := int64(1 << 62)
 	for i := 0; i < len(f.Units); i++ {
 		v := f.Units[i]
-		if v.Slot == 0 || !SnapshotVisible(f, v, viewer) {
+		// Test 1: a candidate without a model reference never reaches the hull
+		// helper [07 R-REV-01 §5].
+		if v.Slot == 0 || v.Model == "" {
 			continue
 		}
-		p := NewViewportTransform(cam, nil, 0, 0).WorldToSurface(v.X, v.Y, v.Z)
-		dx := int64(p.X) - int64(sx)
-		dy := int64(p.Y) - int64(sy)
-		d := dx*dx + dy*dy
-		if d <= radiusSq && (d < bestDist || (d == bestDist && (best == 0 || v.Slot < best))) {
-			bestDist, best, bestView = d, v.Slot, v
+		// Equal scores retain the earlier ascending-pool member, so a candidate
+		// whose slot is above the standing winner's cannot take it.
+		if best != 0 && v.Slot > best {
+			continue
 		}
+		// Test 3: ownership, or the mode-selected committed coverage cell.
+		if !SnapshotVisible(f, v, viewer) {
+			continue
+		}
+		corners, ok := hoverHullCorners(src.HullModel(v.Model), v, cam)
+		if !ok || !containsStrictPolygon(sx, sy, corners[:]) {
+			continue
+		}
+		best, bestView = v.Slot, v
 	}
 	return best, bestView, best != 0
 }

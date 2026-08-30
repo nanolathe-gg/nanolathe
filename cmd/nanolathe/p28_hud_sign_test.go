@@ -115,9 +115,12 @@ func TestRetailResourceConsumptionUsesAuthoredPanelMinus(t *testing.T) {
 			want := cloneRGBA(panelOnly)
 			mask := make([]byte, 640*480)
 			client.DrawText(mask, 640, 480, h.console, tc.text, int(anchor.X1), int(anchor.Y1), 0, 1)
+			// guiColor already resolves the semantic entry through the
+			// logical→physical map; present time then reads PALETTE.PAL alone
+			// [03 §4.3][07 "Retail palette contract"]. Applying the map a
+			// second time here was invisible only while it held identity.
 			idx := h.guiColor(hud.PaletteConsumption)
-			phys := pal.Logical[idx]
-			ink := color.RGBA{R: pal.Base[phys][0], G: pal.Base[phys][1], B: pal.Base[phys][2], A: pal.Base[phys][3]}
+			ink := color.RGBA{R: pal.Base[idx][0], G: pal.Base[idx][1], B: pal.Base[idx][2], A: pal.Base[idx][3]}
 			if ink.A == 0 {
 				ink.A = 255
 			}

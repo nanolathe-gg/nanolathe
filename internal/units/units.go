@@ -895,12 +895,37 @@ func (w *World) defIDClaimed(id uint16) bool {
 	return false
 }
 
-// Create allocates through the canonical per-player allocator: lowest-free
-// slot in the owning player's slice with slot 0 null, no generation tags,
-// immediate reuse [01 §6.1] C1 [P0-16 §3.2]. A slice-full failure is
-// reported even when other players have free slots [P0-16 §7.3]. Failures
-// before common initialization consume zero RNG draws [R-P28-ANG-01R §2].
+// Create allocates an ALREADY-BUILT unit record through the canonical
+// per-player allocator: lowest-free slot in the owning player's slice with
+// slot 0 null, no generation tags, immediate reuse [01 §6.1] C1
+// [P0-16 §3.2]. A slice-full failure is reported even when other players have
+// free slots [P0-16 §7.3]. Failures before common initialization consume zero
+// RNG draws [R-P28-ANG-01R §2].
+//
+// Already-built is the creation service's own argument in retail, and it is
+// what conditions the `activatewhenbuilt` raise of [04 R-SPEC-01 §12] site 1.
+// Nothing later in the record can stand in for it — a caller that demotes the
+// record to a frame afterwards has already let the raise start the unit's
+// `Activate` script. Callers building an unfinished frame must therefore say so
+// up front, through CreateNanoframe.
 func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed) (pool.Handle, error) {
+	return w.create(def, owner, x, y, z, true)
+}
+
+// CreateNanoframe allocates a unit record that is NOT created already-built:
+// the unfinished-frame form of the creation service. It is Create in every
+// respect except that `activatewhenbuilt` does not raise the activation edge,
+// because [04 R-SPEC-01 §12] site 1 conditions that raise on the creation being
+// an already-built one. Site 2 — build completion — raises it instead, and only
+// then does the unit's `Activate` script run.
+//
+// The caller still demotes the record's construction state (remaining fraction
+// and health); this entry point owns only the activation half.
+func (w *World) CreateNanoframe(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed) (pool.Handle, error) {
+	return w.create(def, owner, x, y, z, false)
+}
+
+func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed, alreadyBuilt bool) (pool.Handle, error) {
 	if w == nil || w.pool == nil {
 		return 0, fmt.Errorf("units: nil world")
 	}
@@ -960,12 +985,18 @@ func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed)
 		w.pool.Free(h)
 		return 0, fmt.Errorf("units: strict COB binding for %q: %w", def.UnitName, err)
 	} // per-unit VM with statics/pieces, Create run [04 §4.1][P1-I01]
-	// Pre-built creation site of `activatewhenbuilt`: the flag raises the
-	// activation edge through the shared setter, without consulting
-	// `onoffable`, after placement and before the unit is counted, so the
-	// `Activate` callback runs at creation [04 R-SPEC-01 §12]. Construction
-	// lowers it again when the record is demoted to a nanoframe.
-	if def.ActivateWhenBuilt {
+	// Site 1 of `activatewhenbuilt` [04 R-SPEC-01 §12]: "the unit creation
+	// service, WHEN CALLED WITH ITS ALREADY BUILT ARGUMENT ... activatewhenbuilt
+	// → raise bit 0", after placement and before the unit is counted. The raise
+	// goes through the shared edge setter without consulting `onoffable`, so the
+	// `Activate` callback runs at creation.
+	//
+	// A nanoframe is not created already-built, so it must not reach this at
+	// all. Raising here and clearing the bit afterwards is not equivalent and
+	// was a defect: the raise starts a script whose effect is self-sustaining
+	// (a stock extractor's `Activate` spins its arms until `Deactivate` stops
+	// it), so a mex spun and a solar opened for the whole of its own build.
+	if alreadyBuilt && def.ActivateWhenBuilt {
 		u.SetActivationEdge(true)
 	}
 	w.liveCounters[player]++
@@ -1075,8 +1106,12 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 		w.pool.Free(h)
 		return 0, fmt.Errorf("units: strict COB binding for %q: %w", def.UnitName, err)
 	} // [P1-I01] VM per-unit for forced slot
-	// Pre-built creation site of `activatewhenbuilt` [04 R-SPEC-01 §12]; see
-	// the note on the ordinary allocation path above.
+	// Site 1 of `activatewhenbuilt` [04 R-SPEC-01 §12]; see the note on the
+	// ordinary allocation path above. The forced-slot entry point restores an
+	// already-built record and has no unbuilt form, because every caller it has
+	// today places a finished unit; a restore that had to bring back a unit
+	// still under construction would need the already-built argument here too,
+	// the same way CreateNanoframe carries it on the ordinary path.
 	if def.ActivateWhenBuilt {
 		u.SetActivationEdge(true)
 	}

@@ -180,8 +180,16 @@ func (s *System) SyncCarriedMotion(w *units.World) {
 			if binding := carrier.COBBinding(); binding != nil {
 				if origin, ok := binding.ComposePiece(piece, carrier.Move.Heading, carrier.Move.Pitch, carrier.Move.Bank); ok {
 					hangX = hangX.Add(origin[0])
+					// Composed coordinates are model space, which is mirrored in
+					// Z against world space [03 R-RAST-01 §2]; the world hang
+					// point owes that negation. The factory build plate resolves
+					// its exit with the same negation, measured against the stock
+					// yard maps (construction.queryBuildPiecePosition), and the
+					// carried branch rewrites the product's position from the
+					// carrier every tick [04 R-FAC-02 §2] — an unnegated hang here
+					// would drag every nanoframe straight back off its pad.
 					hangY = hangY.Add(origin[1])
-					hangZ = hangZ.Add(origin[2])
+					hangZ = hangZ.Sub(origin[2])
 				}
 				if binding.VM != nil && piece < len(binding.VM.Pieces) {
 					state := binding.VM.Pieces[piece]

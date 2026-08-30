@@ -105,6 +105,64 @@ type retailBattleHUD struct {
 	// factoryDispatch is a narrow test seam for the presentation boundary;
 	// production calls battleSession.DispatchFactoryBuildDelta directly.
 	factoryDispatch func(*battleSession, string, int) error
+
+	// hoveredGadget is the battle window tree's hovered-gadget index, -1 when
+	// none, and hoveredGadgetName its authored name. It is the footer's
+	// highest-priority source [07 R-HUD-03 §1]; the gadget-tree pointer pass
+	// sets it from the authored rectangle containing the pointer, and it
+	// returns to -1 whenever no page is open or the pointer leaves every
+	// gadget, which is also what a window change produces.
+	// hoveredGadgetOK carries the -1 state without depending on a constructor:
+	// the zero value of a freshly built HUD is "no gadget", exactly as the
+	// tree-build reset leaves it.
+	hoveredGadget     int
+	hoveredGadgetName string
+	hoveredGadgetOK   bool
+}
+
+// hoveredGadgetSource reports the footer's first source: the hovered-gadget
+// index and its authored name, or hud.NoGadget when the pointer is over no
+// gadget [07 R-HUD-03 §1].
+func (h *retailBattleHUD) hoveredGadgetSource() (int, string) {
+	if h == nil || !h.hoveredGadgetOK {
+		return hud.NoGadget, ""
+	}
+	return h.hoveredGadget, h.hoveredGadgetName
+}
+
+// updateHoveredGadget runs the gadget-tree pointer pass over the open command
+// page: the hovered index is the gadget whose authored rectangle contains the
+// pointer, and it is reset when no window is open [07 R-HUD-03 §1]. A greyed
+// product slot is still hovered; its name simply does not resolve to a
+// definition, so the card draws nothing [07 R-HUD-03 §3][07 R-HUD-03 §6].
+func (h *retailBattleHUD) updateHoveredGadget(b *battleSession, f *frame.Frame, offset int32, x, y int32) {
+	if h == nil {
+		return
+	}
+	h.hoveredGadget, h.hoveredGadgetName, h.hoveredGadgetOK = 0, "", false
+	if b == nil {
+		return
+	}
+	window, _, err := h.windowForRequired(b, f)
+	if err != nil {
+		h.assetErr = err
+		return
+	}
+	if window == nil {
+		return
+	}
+	for i, gad := range window.Gadgets {
+		if i == 0 || gad.Active == 0 || gad.Kind != gui.KindButton {
+			continue
+		}
+		r := window.PlacedRect(i)
+		r.Y += offset
+		if !guiRectContains(r, x, y) {
+			continue
+		}
+		h.hoveredGadget, h.hoveredGadgetName, h.hoveredGadgetOK = i, gad.Name, true
+		return
+	}
 }
 
 // LastDispatchError returns the last factory-command enqueue failure observed
@@ -545,10 +603,13 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	if b != nil {
 		b.drawBuildGhost(c)
 		if frameOK && cur != nil {
-			// Selection.Primary is the authoritative focus handle published with
-			// the frame. A separate hover field is not yet established at this
-			// seam, so do not consult the live unit pool or pointer picker.
-			drawQueueOverlay(c, cur, cur.Tick, b.battleState().Input.ShiftHeld, cur.Selection.LocalPlayer, cur.Selection.Primary)
+			// TODO(question): retail's third full-mask source is the pointer-hover
+			// unit id, the same word the footer's first hover source reads
+			// [R-P0-11 §3][R-HUD-03 §1]. The committed frame does not publish it
+			// yet (WU-16-6 owns that publication), so the authoritative focus
+			// handle stands in; do not consult the live unit pool or the pointer
+			// picker from here.
+			drawQueueOverlay(c, b, cur, cur.Tick, b.battleState().Input.ShiftHeld, cur.Selection.LocalPlayer, cur.Selection.Primary)
 		}
 	}
 	// The shell call order is PANELTOP, PANELBOT, PANELSIDE. The two horizontal
@@ -562,12 +623,17 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	}
 	blitBattlePanel(c, h.panelSide, 0, offset)
 
+	// The hovered-gadget index is the footer's first source, so the pointer
+	// pass over the open page runs before the footer draws [07 R-HUD-03 §1].
+	if c.Input() != nil && c.Input().Mouse != nil {
+		mouse := c.Input().Mouse
+		h.updateHoveredGadget(b, cur, int32(offset), int32(mouse.X), int32(mouse.Y))
+	}
 	ok := false
 	ok = cur != nil
 	if ok && cur != nil {
 		h.drawResources(c, cur)
-		h.drawSelectedUnit(c, cur)
-		h.drawTopStatusValues(c, cur)
+		h.drawFooter(c, b, cur)
 	}
 	h.drawSidePage(c, b, offset, cur)
 	// Stock ARMINT.GAF and CORINT.GAF inspection shows PANELSIDE's decoded
@@ -1115,81 +1181,113 @@ func formatEnergyRate(value float32) string {
 	return hud.FormatEnergyRate(value)
 }
 
-func (h *retailBattleHUD) drawTopStatusValues(c *client.Client, f *frame.Frame) {
-	if f == nil {
+// The unit count and the game clock were drawn here, at the TOTALUNITS and
+// TOTALTIME anchors. That was our own defect, not authored data: the side
+// anchor block has exactly two consumers, the top-strip painter and the
+// footer, and TOTALUNITS/TOTALTIME are "loaded, never read"
+// [07 R-HUD-03 §5]. Stock ARM authors TOTALTIME at (605,7) and
+// ENERGYPRODUCED at (609,5), so painting the clock there overlapped the
+// energy production reading and partly occluded it. The running display
+// belongs to the Space-held slide strip, whose three translated lines are
+// `Game Time:` as hh:mm:ss, `Total Units: %d (Max %d)` and `Game Speed: %s%s`
+// [07 R-HUD-03 §6].
+//
+// TODO(question): the slide strip's three fixed text offsets are not stated —
+// [07 R-HUD-03 §6] gives the strings and the y+offset blit of the strip but
+// no per-line x/y. A capture of the strip at a known panel offset would
+// settle them; until then the strip draws its art with no text rather than
+// borrowing an anchor that has no consumer [07 R-HUD-03 §5].
+
+// drawFooter paints the ordinary footer [07 R-HUD-03 §1–§3]. It replaces the
+// former drawSelectedUnit, which drew the SELECTED unit's name, description
+// and bar at the wrong anchors: the footer never reads the selection. Its
+// three sources are the hovered gadget, the hovered world unit and the
+// hovered feature, in that fixed priority.
+//
+// Placement is shared by every field: each anchor's y is offset by
+// dy = screenHeight − baseheight (the side's [GENERAL] baseheight, default
+// 480 [02 §6]) and x is never shifted. Text uses the side's console face and,
+// unless a rule names a colour-map entry, the raw palette index 83. There is
+// no maximum width, so no footer field wraps, ellipsises or truncates.
+func (h *retailBattleHUD) drawFooter(c *client.Client, b *battleSession, f *frame.Frame) {
+	if h == nil || c == nil || f == nil {
 		return
 	}
-	localUnits := 0
-	for i := range f.Units {
-		if f.Units[i].Owner == h.owner {
-			localUnits++
+	footer := hud.BuildFooter(f, h.cat, h.owner, b.footerHover(f), false)
+	if footer.Empty() {
+		return
+	}
+	dy := h.footerDY(c)
+	for _, bar := range footer.Bars {
+		r, ok := h.anchors.ByIndex(bar.Anchor)
+		if !ok {
+			continue
 		}
+		h.drawFooterBar(c, r, dy, bar.HP, bar.Max)
 	}
-	if r, ok := h.anchors.ByIndex(hud.AnchorTotalUnits); ok {
-		c.UIText(h.console, fmt.Sprintf("%d", localUnits), int(r.X1), int(r.Y1), h.guiColor(15))
-	}
-	if r, ok := h.anchors.ByIndex(hud.AnchorTotalTime); ok {
-		c.UIText(h.console, hud.FormatGameTime(int(f.Tick)), int(r.X1), int(r.Y1), h.guiColor(15))
+	// TODO(question): the owner logo at LOGO2 is "the frame of the logos GAF
+	// indexed by the owner's lobby colour index" [07 R-HUD-03 §2], but which
+	// of textures/logos.gaf's entries that frame belongs to is not stated.
+	// The stock file holds 18 entries, 17 of them ten-frame team sets
+	// (colorslt, colorsmd, colorsdk, colordk2, Solid1a..Solgradb, 32xlogos,
+	// 32XGouraud, Arm32Lt/Dk, Core32Lt/Dk) [03 "Which primitives are
+	// team-coloured"], and the skirmish Color%d control resamples 32x32 raw
+	// frames into a 20x20 record [07 §6] without naming the entry either. An
+	// asset census of the entry the battle composer addresses would settle it;
+	// until then the logo is not drawn rather than picked from a plausible
+	// name. footer.Logos carries the resolved frame index so only this lookup
+	// is missing.
+	_ = footer.Logos
+	for _, text := range footer.Texts {
+		r, ok := h.anchors.ByIndex(text.Anchor)
+		if !ok || text.Text == "" {
+			continue
+		}
+		x, y := r.X1, r.Y1
+		if text.FromY2 {
+			y = r.Y2
+		}
+		y += text.OffsetY + dy
+		if text.Centered {
+			// "Centred at A" is x = A.x1 − trunc(textWidth/2), a signed divide
+			// truncating toward zero [07 R-HUD-03 §1].
+			x -= int32(client.MeasureText(h.console, text.Text)) / 2
+		}
+		color := text.Color.Value
+		if text.Color.Logical {
+			color = h.guiColor(color)
+		}
+		c.UIText(h.console, text.Text, int(x), int(y), color)
 	}
 }
 
-func (h *retailBattleHUD) drawSelectedUnit(c *client.Client, f *frame.Frame) {
-	var selected *frame.UnitView
-	for i := range f.Units {
-		u := &f.Units[i]
-		if u.Owner == h.owner && u.Flags&hud.SelectionFlag != 0 {
-			selected = u
-			break
-		}
+// footerDY is the shared vertical offset dy = screenHeight − baseheight
+// [07 R-HUD-03 §1][02 §6]. x is never shifted.
+func (h *retailBattleHUD) footerDY(c *client.Client) int32 {
+	base := int32(480)
+	if h.side != nil && h.side.BaseHeight > 0 {
+		base = h.side.BaseHeight
 	}
-	if selected == nil {
-		return
-	}
-	def, ok := h.defFor(selected)
-	if !ok || def == nil {
-		return
-	}
-	name := def.Name
-	if name == "" {
-		name = def.UnitName
-	}
-	if r, ok := h.anchors.ByIndex(hud.AnchorUnitName); ok {
-		c.UIText(h.console, name, int(r.X1), int(r.Y1), h.guiColor(15))
-	}
-	if r, ok := h.anchors.ByIndex(hud.AnchorDescription); ok && def.Description != "" {
-		c.UITextWidth(h.console, def.Description, int(r.X1), int(r.Y1), int(r.X2-r.X1), h.guiColor(15))
-	}
-	if r, ok := h.anchors.ByIndex(hud.AnchorDamageBar); ok {
-		h.drawHealthBar(c, r, selected.Health, selected.MaxHealth)
-	}
+	_, height := c.Size()
+	return int32(height) - base
 }
 
-func (h *retailBattleHUD) drawHealthBar(c *client.Client, r hud.Rect, health, max int32) {
+// drawFooterBar is the footer's two-part inclusive fill [07 R-HUD-03 §2]: the
+// filled span [x1..fill] takes dcb[10] and, when fill is not already x2, the
+// remainder [fill+1..x2] takes dcb[4]. A dead-level hp still paints the one
+// pixel column at x1; there is no threshold colouring here — that belongs to
+// the world health bar [03 R-FX-01 §6].
+func (h *retailBattleHUD) drawFooterBar(c *client.Client, r hud.Rect, dy int32, health, max int32) {
 	left, top, right, bottom := r.Ordered()
-	if right <= left || bottom <= top || max <= 0 {
+	if right < left || bottom < top || max <= 0 {
 		return
 	}
-	outer := h.guiColor(0)
-	inner := h.guiColor(12)
-	third := max / 3
-	if health > third*2 {
-		inner = h.guiColor(10)
-	} else if health > third {
-		inner = h.guiColor(14)
-	}
-	c.UIFillRect(int(left), int(top), int(right-left), int(bottom-top), outer)
-	left++
-	top++
-	bottom--
-	if right <= left || bottom <= top {
-		return
-	}
-	width := int((int64(health) * int64(right-left)) / int64(max))
-	if width > 0 {
-		if width > int(right-left) {
-			width = int(right - left)
-		}
-		c.UIFillRect(int(left), int(top), width, int(bottom-top), inner)
+	fill := hud.FooterBarFill(hud.Rect{X1: left, Y1: top, X2: right, Y2: bottom}, health, max)
+	top += dy
+	bottom += dy
+	c.UIFillRect(int(left), int(top), int(fill-left+1), int(bottom-top+1), h.guiColor(hud.PaletteProduction))
+	if fill != right {
+		c.UIFillRect(int(fill+1), int(top), int(right-fill), int(bottom-top+1), h.guiColor(hud.FooterBarRemainder))
 	}
 }
 
@@ -1312,8 +1410,10 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 	if h == nil || b == nil {
 		return false
 	}
-	// A committed frame is required for every HUD action [I6]. A frame without
-	// a command-page builder still exposes the authored general/order controls.
+	// A committed frame is required for every HUD action [I6]. A frame with a
+	// non-empty selection but no command-page builder still exposes the authored
+	// general/order controls; with an empty selection the command windows are
+	// closed to the root and there is nothing above it to click [07 §6].
 	f, ok := b.currentSnapshot()
 	if !ok {
 		return false
@@ -1584,7 +1684,19 @@ func (h *retailBattleHUD) windowForRequired(b *battleSession, f *frame.Frame) (*
 	} else {
 		name = "gen"
 	}
-	if b == nil || f == nil || f.CommandPage.Builder == 0 {
+	// [07 §6] "Command-window switch is closed": when the selected-unit count
+	// becomes zero the switch closes the command windows down to the root
+	// <prefix>MAIN2.GUI and opens nothing, so only the root shows through — no
+	// command page is composed. The page close of [07 R-HUD-04 §3] runs on every
+	// selection change and leaves the command window on top with nothing above
+	// it. A frame that has not been committed yet carries no selection either,
+	// and is the same closed state.
+	if b == nil || f == nil || len(f.Selection.Handles) == 0 {
+		return nil, nil, nil
+	}
+	// A multiple selection, or a single non-builder selection, formats and opens
+	// <prefix>GEN.GUI; a single builder opens its authored page below [07 §6].
+	if f.CommandPage.Builder == 0 {
 		window, page := h.loadWindow(name)
 		return window, page, nil
 	}

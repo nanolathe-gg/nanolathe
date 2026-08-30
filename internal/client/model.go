@@ -1106,11 +1106,22 @@ func (c *Client) drawProjectileModel(p frame.ProjectileView) bool {
 // feeds the key. Retail narrows the model-relative 16.16 value once, by
 // extracting its high word — an arithmetic shift, so it floors — and applies
 // the half-height shear with a second arithmetic shift [03 §2.5][R-REN-03A §1].
+//
+// The Z component carries the 3DO handedness flip: retail forms `Zn = hi16(-vz)`
+// — the negation happens BEFORE the narrowing, so the result is `-ceil(vz)` and
+// not `-floor(vz)`, and a vertex a fraction above zero lands one pixel higher on
+// screen [R-RAST-01 §2]. A unit's own position enters the blit unnegated, so
+// model space is mirrored in Z against world space; the selection quad of
+// [03 R-WATER-01 §1] rule 3 already spells the same negation out. This flip was
+// missing here, which rendered every model a half circle from its direction of
+// travel while its turn sense still looked right — the "walks backwards" defect.
+// It is corrected together with the root heading fold of [03 §2.4] C24, which
+// had been negated to compensate; either one alone reverses the turn sense.
 func modelLocalVertex(v, origin [3]numeric.Fixed) (lx, ly, ry int32) {
 	rx := int32(v[0].Sub(origin[0]).Floor())
 	ry = int32(v[1].Sub(origin[1]).Floor())
-	rz := int32(v[2].Sub(origin[2]).Floor())
-	return rx, rz - (ry >> 1), ry
+	zn := int32((-(v[2].Sub(origin[2]))).Floor()) // Zn = hi16(-vz) [R-RAST-01 §2]
+	return rx, zn - (ry >> 1), ry
 }
 
 // scaleModelLocal applies presentation zoom to a model-relative offset. Retail

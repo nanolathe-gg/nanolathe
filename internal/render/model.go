@@ -574,12 +574,15 @@ func AnyEmitPoints(m *model.Model, states []model.PieceState, worldPos [3]numeri
 	return out
 }
 
-// PaletteRGBA resolves an indexed pixel to RGBA at present time [03 §4.3] C10 via the 256-byte Logical table [03 §4.3].
+// PaletteRGBA resolves a final indexed pixel to RGBA at present time through
+// PALETTE.PAL [03 §4.3] C10. Model texture and flat-colour bytes are already
+// active palette indices, so the logical→physical map — a semantic-colour
+// route — is not applied here [07 "Retail palette contract"].
 func PaletteRGBA(tables *palette.Tables, idx byte) (r, g, b, a uint8) { // [03 §4.3] C10
 	if tables == nil {
 		return 0, 0, 0, 255
 	}
-	return tables.RGBA(idx) // C10 logical→physical at present time [03 §4.3]
+	return tables.RGBA(idx) // PALETTE.PAL at present time [03 §4.3]
 }
 
 // ShadeRGBA resolves a palette index through an SHD row for model lighting [03 §4.3] C10.
@@ -594,8 +597,10 @@ func ShadeRGBA(tables *palette.Tables, idx byte, row int) (r, g, b, a uint8) { /
 	if row >= 32 {
 		row = 31
 	}
-	phys := tables.Logical[idx]       // [03 §4.3] logical→physical at present time
-	shaded := tables.Shade[row][phys] // [03 §4.3] SHD row
+	// The texture byte is already a PALETTE.PAL index; the logical→physical
+	// map resolves semantic colour fields, never image bytes [03 §4.3]
+	// [07 "Retail palette contract"].
+	shaded := tables.Shade[row][idx] // [03 §4.3] SHD row
 	e := tables.Base[shaded]
 	return e[0], e[1], e[2], 255
 }

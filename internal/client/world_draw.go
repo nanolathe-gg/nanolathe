@@ -3,6 +3,7 @@ package client
 import (
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/hud"
 )
 
 // worldDrawable is one admitted object in the painter pass. The source slice
@@ -170,8 +171,17 @@ func (c *Client) drawWorldPass(cur *frame.Frame, ok bool) {
 	for _, d := range b.ordered() {
 		if d.unit != nil {
 			u := *d.unit
-			if u.Model != "" && c.drawUnitModel(u, d.screenX, d.screenY) {
-				c.selectionChrome = append(c.selectionChrome, selectionChrome{view: u, screenX: d.screenX, screenY: d.screenY})
+			if u.Model != "" {
+				// The selected-unit footprint quad occupies this unit's own
+				// depth slot and precedes its model present, so the model
+				// draws over it; the whole pass runs before the fog composite,
+				// so the quad is never fog-clipped [03 R-WATER-01 §1].
+				if u.Flags&hud.SelectionFlag != 0 {
+					c.drawSelectionQuad(u)
+				}
+				if c.drawUnitModel(u, d.screenX, d.screenY) {
+					c.selectionChrome = append(c.selectionChrome, selectionChrome{view: u, screenX: d.screenX, screenY: d.screenY})
+				}
 			}
 			continue
 		}

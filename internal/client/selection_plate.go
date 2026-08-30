@@ -2,9 +2,12 @@ package client
 
 // Authored selection-plate projection is a diagnostic geometry API only
 // [03 §2.4][03 §2.5][07 §8][07 §9]. Retail excludes the authored primitive from
-// body, wireframe, click, drag, and cursor consumers [R-SEL-02A]. This file
-// computes geometry only; it does not mutate selection membership or
-// authoritative state (I6).
+// body, wireframe, click, drag, and cursor consumers [R-SEL-02A][03 §2.4.1]
+// item 1, and that exclusion still holds. What retail does draw under a
+// selected unit is the footprint quad of [03 R-WATER-01 §1] — derived from the
+// root piece's vertex bounds, not from this authored plate — and it is owned
+// by selection_quad.go. This file computes geometry only; it does not mutate
+// selection membership or authoritative state (I6).
 
 import (
 	"github.com/nanolathe/nanolathe/internal/camera"

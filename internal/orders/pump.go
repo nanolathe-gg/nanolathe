@@ -754,6 +754,7 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 		}
 		ensureMoveHandlers()
 		ensureTransportHandlers()
+		ensureParkHandler()
 		// For transport and other wired handlers, the initial static gate (0x200/0x400 etc) is satisfied by construction (target/goal present) [04 §3.1] TODO(question) exact gate semantics.
 		// Clear it for phase 0 so the first dispatch is not blocked, mirroring the move arrival handle's clearing [R-P0-01].
 		// The descriptor gate is insertion metadata, not a pre-satisfied wait;
@@ -795,6 +796,9 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 		var code Code
 		if desc.Name == "BeCarried" {
 			code = beCarriedHandlerAtTick(u, n, satisfied, tick)
+		} else if desc.Name == "Park" {
+			// Phase 1 arms an exact thirty-tick deadline [04 R-ORD-01 §2].
+			code = parkHandlerAtTick(u, n, satisfied, tick)
 		} else if desc.Name == "GetBuilt" && q.getBuiltHandler != nil {
 			code = q.getBuiltHandler(u, n, tick)
 		} else {

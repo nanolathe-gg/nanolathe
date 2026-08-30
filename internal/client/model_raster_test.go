@@ -241,13 +241,21 @@ func TestCollectDrawTrisUsesCameraScale(t *testing.T) {
 	if len(tris) == 0 {
 		t.Fatal("expected projected triangles")
 	}
+	// The model path is deliberately NOT the world projection: a unit's own
+	// position enters the blit as +worldZ, while a model-relative vertex
+	// narrows as `Zn = hi16(-vz)` [R-RAST-01 §2]. Zoom then scales the
+	// model-relative offset. WorldPos is zero here, so the model-relative
+	// value is the vertex itself.
 	for i, vi := range []int{0, 1, 2} {
-		wantX, wantY := c.cam.WorldToScreen(vertices[vi][0], vertices[vi][1], vertices[vi][2])
-		wantX -= camera.OriginX
-		wantY -= camera.OriginY
+		zn := int32(-vertices[vi][2] >> 16)
+		wantX, wantY := c.scaleModelLocal(int32(vertices[vi][0]>>16), zn-(int32(vertices[vi][1]>>16)>>1))
 		if tris[0].x[i] != wantX || tris[0].y[i] != wantY {
-			t.Fatalf("corner %d = (%d,%d), want camera projection (%d,%d)", i, tris[0].x[i], tris[0].y[i], wantX, wantY)
+			t.Fatalf("corner %d = (%d,%d), want scaled model-local (%d,%d)", i, tris[0].x[i], tris[0].y[i], wantX, wantY)
 		}
+	}
+	// Spelled out for corner 0: x = 2*2, y = 2*(-6 - (4>>1)).
+	if tris[0].x[0] != 4 || tris[0].y[0] != -16 {
+		t.Fatalf("corner 0 = (%d,%d), want (4,-16)", tris[0].x[0], tris[0].y[0])
 	}
 }
 

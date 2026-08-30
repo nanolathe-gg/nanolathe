@@ -10,6 +10,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/features"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/input"
+	compiledmodel "github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -21,22 +22,22 @@ import (
 // Shared authored fixture catalog for battle-input tests. The definitions are
 // deliberately local test data, not a second content source.
 func testCatalogON05() *content.Catalog {
-	b1 := &content.UnitDef{UnitName: "armcons", Builder: true, CanMove: true, FootprintX: 2, FootprintZ: 2, YardMap: "oooo", MaxDamage: 100}
+	b1 := &content.UnitDef{UnitName: "armcons", ObjectName: "armcons", Builder: true, CanMove: true, FootprintX: 2, FootprintZ: 2, YardMap: "oooo", MaxDamage: 100}
 	b1.CanonicalKey = content.CanonicalKey(b1.UnitName)
 	b1.DefinitionHeader.CanonicalKey = b1.CanonicalKey
-	p1 := &content.UnitDef{UnitName: "armsolar", FootprintX: 2, FootprintZ: 2, YardMap: "oooo", MaxDamage: 100}
+	p1 := &content.UnitDef{UnitName: "armsolar", ObjectName: "armsolar", FootprintX: 2, FootprintZ: 2, YardMap: "oooo", MaxDamage: 100}
 	p1.CanonicalKey = content.CanonicalKey(p1.UnitName)
 	p1.DefinitionHeader.CanonicalKey = p1.CanonicalKey
 	// armfav is a vehicle: authored BMcode 1 and no yard map, like every stock
 	// mobile unit. That is what makes it a factory product rather than a
 	// placement one [07 §9].
-	p2 := &content.UnitDef{UnitName: "armfav", BMCode: true, FootprintX: 2, FootprintZ: 2, MaxDamage: 100}
+	p2 := &content.UnitDef{UnitName: "armfav", ObjectName: "armfav", BMCode: true, FootprintX: 2, FootprintZ: 2, MaxDamage: 100}
 	p2.CanonicalKey = content.CanonicalKey(p2.UnitName)
 	p2.DefinitionHeader.CanonicalKey = p2.CanonicalKey
-	fac := &content.UnitDef{UnitName: "armfac", Builder: true, CanMove: false, FootprintX: 3, FootprintZ: 3, YardMap: "ooooooooo", MaxDamage: 500}
+	fac := &content.UnitDef{UnitName: "armfac", ObjectName: "armfac", Builder: true, CanMove: false, FootprintX: 3, FootprintZ: 3, YardMap: "ooooooooo", MaxDamage: 500}
 	fac.CanonicalKey = content.CanonicalKey(fac.UnitName)
 	fac.DefinitionHeader.CanonicalKey = fac.CanonicalKey
-	reclaimUnit := &content.UnitDef{UnitName: "armrecl", CanReclamate: true, Builder: false, FootprintX: 1, FootprintZ: 1, MaxDamage: 100}
+	reclaimUnit := &content.UnitDef{UnitName: "armrecl", ObjectName: "armrecl", CanReclamate: true, Builder: false, FootprintX: 1, FootprintZ: 1, MaxDamage: 100}
 	reclaimUnit.CanonicalKey = content.CanonicalKey(reclaimUnit.UnitName)
 	reclaimUnit.DefinitionHeader.CanonicalKey = reclaimUnit.CanonicalKey
 	featDef := &content.FeatureDef{}
@@ -93,7 +94,42 @@ func newTestBattle(cat *content.Catalog, terrain *world.Terrain) *battleSession 
 	_ = orders.Lookup("Move_Ground")
 	b := &battleSession{sess: sess, cat: cat, cam: cam}
 	b.cam = cam
+	// Picking is a hull test over the candidate's root-piece bounds
+	// [07 R-REV-01], so a fixture unit needs a model the presentation can
+	// resolve. These tests hold no VFS, so they author one: a symmetric
+	// sixteen-unit-square root piece centred on the unit, which is enough for
+	// the projected origin to lie strictly inside the hull. Hull arithmetic
+	// itself is locked in internal/client, not here.
+	installTestHullModels()
 	return b
+}
+
+// installTestHullModels registers the fixture hull as the presentation model
+// source for tests that hold no VFS.
+func installTestHullModels() {
+	client.SetUnitHullModels(client.UnitHullModelFunc(testHullModel))
+}
+
+// testHullModel authors the fixture hull described in newTestBattle.
+func testHullModel(name string) *compiledmodel.Model {
+	if name == "" {
+		return nil
+	}
+	const half = numeric.Fixed(8 << 16)
+	m := &compiledmodel.Model{
+		Root: 0,
+		Name: name,
+		Pieces: []compiledmodel.Piece{{
+			Name:   "base",
+			Parent: -1,
+			Vertices: [][3]numeric.Fixed{
+				{-half, 0, -half},
+				{half, 0, half},
+				{0, 0, 0},
+			},
+		}},
+	}
+	return m
 }
 
 func placeUnit(b *battleSession, name string, x, z numeric.Fixed) *units.Unit {

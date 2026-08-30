@@ -253,9 +253,16 @@ func TestModelLocalVertexFloorsAndShears(t *testing.T) {
 	if lx != -2 || ry != -2 {
 		t.Fatalf("narrowing gave lx=%d ry=%d, want -2 and -2", lx, ry)
 	}
-	// ly = rz - (ry>>1) = -2 - (-1) = -1.
+	// Z carries the handedness flip: Zn = hi16(-vz) = floor(1.5) = 1, and the
+	// shear is ly = Zn - (ry>>1) = 1 - (-1) = 2 [R-RAST-01 §2].
+	if ly != 2 {
+		t.Fatalf("shear gave ly=%d, want 2", ly)
+	}
+	// The negation precedes the narrowing, so a fractional +Z floors after the
+	// sign change: -ceil(0.25) = -1, not -floor(0.25) = 0 [R-RAST-01 §2].
+	_, ly, _ = modelLocalVertex([3]numeric.Fixed{0, 0, 1 << 14}, origin)
 	if ly != -1 {
-		t.Fatalf("shear gave ly=%d, want -1", ly)
+		t.Fatalf("negate-then-floor gave ly=%d, want -1", ly)
 	}
 	// The origin is subtracted before narrowing, not after.
 	lx, _, _ = modelLocalVertex([3]numeric.Fixed{3 << 16, 0, 0}, [3]numeric.Fixed{1 << 15, 0, 0})

@@ -173,6 +173,18 @@ func (s *Service) UnitBuckets(handle pool.Handle) *[2]Bucket {
 	return &s.unitBuckets[handle].Buckets
 }
 
+// UnitArchived returns a copy of the per-unit archived report pair written by
+// the settlement apply-back of [R-ECO-01 §5]. It is a read-only accessor: the
+// slots are written there and nowhere else, and a reader must not be able to
+// disturb them. An unallocated handle reports the zero pair rather than
+// growing the slice, so a presentation read cannot allocate.
+func (s *Service) UnitArchived(handle pool.Handle) [2]ArchivedBucket {
+	if s == nil || handle == 0 || int(handle) >= len(s.unitBuckets) {
+		return [2]ArchivedBucket{}
+	}
+	return s.unitBuckets[handle].Archived
+}
+
 // ForEachUnitOrdered visits units owned by player in stable slot order
 // per [05 "Authoritative settlement order"] C6 and I1. Earlier units consume
 // live stock before later units are tested, so slot order matters.

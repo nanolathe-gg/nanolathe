@@ -335,8 +335,9 @@ func (c *Client) drawFog(cur *frame.Frame) {
 // drawSelectionStage emits unit selection and health chrome after fog. The
 // body stage only records model positions, so health pixels remain visible
 // above the fog overlay as required by the frame contract [03 §1][03 §3.3].
-// Retail does not emit a generic per-unit footprint bracket here; the
-// separate drag frame is the only selection rectangle [R-SEL-02A].
+// The per-unit footprint quad is not part of this stage: it belongs to the
+// unit's own depth slot in the world pass, before the fog composite
+// [03 R-WATER-01 §1].
 func (c *Client) drawSelectionStage() {
 	if c == nil {
 		return
@@ -348,19 +349,20 @@ func (c *Client) drawSelectionStage() {
 }
 
 // convertIndexedToRGBA converts the indexed framebuffer to RGBA at present
-// time only (C7). The indexed framebuffer contains active PALETTE.PAL indices:
+// time only. The indexed framebuffer contains active PALETTE.PAL indices:
 // GAF, PCX, TNT, FNT, and direct primitive writers all follow the same route.
-// GUI semantic colors are resolved by the caller before FNT/primitives write.
+// GUI semantic colors are resolved through the logical→physical map by the
+// caller before FNT/primitives write, and "no GUI lookup is performed again
+// during indexed-to-RGB presentation" [03 §4.3][07 "Retail palette contract"].
 func (c *Client) convertIndexedToRGBA() {
 	if len(c.indexed)*4 != len(c.rgba) {
 		return
 	}
 	for i, idx := range c.indexed {
-		phys := c.logical[idx]
-		c.rgba[i*4+0] = c.base[phys][0]
-		c.rgba[i*4+1] = c.base[phys][1]
-		c.rgba[i*4+2] = c.base[phys][2]
-		c.rgba[i*4+3] = c.base[phys][3]
+		c.rgba[i*4+0] = c.base[idx][0]
+		c.rgba[i*4+1] = c.base[idx][1]
+		c.rgba[i*4+2] = c.base[idx][2]
+		c.rgba[i*4+3] = c.base[idx][3]
 		// Ensure opaque; PALETTE.PAL's fourth byte is reserved zero.
 		if c.rgba[i*4+3] == 0 {
 			c.rgba[i*4+3] = 255

@@ -7,10 +7,16 @@
 // palette-install helper maintains. [fmt pal] gives the raw layouts
 // (no header, size-identified) and the per-entry PAL stride.
 //
-// C7 requires that every indexed-pixel → RGBA conversion go through the
-// 256-byte Logical table at present time, so palette animation stays
-// possible, and that model lighting select an SHD row and the explosion flash
-// halo select an LHT row [03 §4.3.1].
+// The 256-byte logical→physical table is NOT an indexed-pixel route. Retail
+// builds it at GUI bootstrap by matching every GUIPAL.PAL entry into the
+// installed PALETTE.PAL display palette, and consults it only when a
+// *semantic* colour entry is resolved — GUI colour fields, FNT colours, the
+// HUD's dcb[] health/resource entries, the selection overlays. Image bytes
+// (GAF frames, PCX backgrounds, TNT tiles) are already PALETTE.PAL indices and
+// are copied through unchanged; "no GUI lookup is performed again during
+// indexed-to-RGB presentation" [03 §4.3][07 "Retail palette contract"].
+// Model lighting selects an SHD row and the explosion flash halo selects an
+// LHT row, both on indices that are already physical [03 §4.3.1][03 §4.3.2].
 package palette
 
 import (
@@ -35,11 +41,16 @@ type Tables struct {
 	// GUI is the authored GUIPAL.PAL semantic color-field table. Retail's
 	// indexed display still resolves through Base (PALETTE.PAL); frontend setup
 	// uses GUI only when resolving a .GUI color field, never for image pixels.
-	GUI     [256][4]byte
-	Alpha   [65536]byte   // PALETTE.ALP 256×256 nearest-color blend [fmt pal]
-	Light   [8192]byte    // PALETTE.LHT 32×256 brightening [03 §4.3.1] [fmt pal]
-	Shade   [32][256]byte // PALETTE.SHD 32×256 shading/darkening [03 §4.3.2] [fmt pal]
-	Logical [256]byte     // logical → physical 256-byte lookup [03 §4.3] (C7)
+	GUI   [256][4]byte
+	Alpha [65536]byte   // PALETTE.ALP 256×256 nearest-color blend [fmt pal]
+	Light [8192]byte    // PALETTE.LHT 32×256 brightening [03 §4.3.1] [fmt pal]
+	Shade [32][256]byte // PALETTE.SHD 32×256 shading/darkening [03 §4.3.2] [fmt pal]
+	// Logical is the 256-byte logical→physical lookup retail builds at GUI
+	// bootstrap: entry i is the PALETTE.PAL index nearest GUIPAL.PAL[i]
+	// [03 §4.3]. BuildLogicalMap fills it; Load calls that. It resolves
+	// semantic colour entries only, never image bytes — see the package
+	// comment and BuildLogicalMap.
+	Logical [256]byte
 	// Gray is the retail "GRAY TABLE": a 256→256 palette LUT mapping each
 	// palette index to the palette entry nearest its grayscale average. Retail
 	// builds it at palette install into a named shared block and applies it to
@@ -60,13 +71,17 @@ type Tables struct {
 //	palettes/palette.lht  (8192 B, 32×256) [fmt pal]
 //	palettes/palette.shd  (8192 B, 32×256) [03 §4.3]
 //
-// The 256-byte logical→physical lookup is not a file on disk; retail
-// maintains it as the LOGPALETTE mapping [03 §4.3]. It is initialized to
-// identity (i → i) so palette animation can mutate it later. All indexed
-// → RGBA conversion must go through it at present time (C7).
+// The 256-byte logical→physical lookup is not a file on disk. Retail installs
+// PALETTE.PAL as the display palette and then, at GUI bootstrap, builds the
+// lookup by matching the authored GUIPAL.PAL entries into it [03 §4.3]. Load
+// is Nanolathe's equivalent of that install-then-bootstrap pair: it is the
+// only point that holds both inputs, and nothing reads the tables before it
+// returns. The identity fill below is the pre-bootstrap state; BuildLogicalMap
+// replaces it once both palettes are in hand.
 func Load(fs vfs.FSOps) (*Tables, error) {
 	t := &Tables{}
-	// Identity logical→physical until animated [03 §4.3].
+	// Pre-bootstrap state: identity until the GUI bootstrap builds the real
+	// map below [03 §4.3].
 	for i := 0; i < 256; i++ {
 		t.Logical[i] = byte(i)
 	}
@@ -90,7 +105,66 @@ func Load(fs vfs.FSOps) (*Tables, error) {
 		copy(t.Shade[row][:], shd[row*256:(row+1)*256])
 	}
 	buildGrayTable(t)
+	t.BuildLogicalMap() // GUI bootstrap [03 §4.3]
 	return t, nil
+}
+
+// BuildLogicalMap builds the 256-byte logical→physical lookup [03 §4.3].
+//
+// Retail's GUI bootstrap copies the 256 four-byte GUIPAL.PAL entries into the
+// window's GUI palette record, then compares each entry's RGB triple with all
+// 256 installed PALETTE.PAL entries using the sum of absolute per-channel
+// differences. The lowest distance wins; a tie keeps the lowest destination
+// index, which an ascending 0..255 scan with a strict-improvement compare
+// yields [03 §4.3][07 "Retail palette contract"].
+//
+// This matters because the two authored files order colours differently:
+// PALETTE.PAL entries 10..15 are the zeroed Windows-reserved slots, while
+// GUIPAL.PAL 10 is bright green, 12 bright red, 14 bright yellow and 15 white.
+// Reading a logical entry straight out of PALETTE.PAL paints those black.
+//
+// Consumers of this map, exhaustively as research establishes them:
+//   - GUI colour fields and FNT foreground/background colours
+//     [07 "Retail palette contract"];
+//   - the HUD health primitive's dcb[10]/dcb[14]/dcb[12] thresholds and its
+//     dcb[0] outer rectangle, and the resource text colours dcb[15] (normal),
+//     dcb[10] (production) and dcb[12] (consumption) [07 §6];
+//   - the drag-selection rectangle (outer entry 6 or 4 under a MOBILEBUILD
+//     latch, else 15; inner entry 0) and the minimap viewport cross's entry 15
+//     [07 §6];
+//   - the selected-unit footprint quad, logical entry 10 — "the physical byte
+//     the logical-to-physical map holds for logical entry 10, the same map
+//     beams use" [03 R-WATER-01 §1].
+//
+// It is NOT applied to: GAF frame bytes, PCX backgrounds or TNT tiles, which
+// are already active palette indices; the side-authored energycolor/metalcolor
+// resource-bar fills and the footer's raw palette index 83, which [07 §6]
+// names as raw active indices; the LHT and SHD lookups, whose source index is
+// already post-map [03 §4.3.1]; and the final indexed→RGB present-time
+// resolution, where "no GUI lookup is performed again"
+// [07 "Retail palette contract"].
+func (t *Tables) BuildLogicalMap() {
+	if t == nil {
+		return
+	}
+	for src := 0; src < 256; src++ {
+		best := 0
+		// Sum of absolute per-channel differences is bounded by 765, so any
+		// larger sentinel is out of reach of a real candidate.
+		bestDistance := 1 << 20
+		for dst := 0; dst < 256; dst++ {
+			dr := absPaletteDistance(t.GUI[src][0], t.Base[dst][0])
+			dg := absPaletteDistance(t.GUI[src][1], t.Base[dst][1])
+			db := absPaletteDistance(t.GUI[src][2], t.Base[dst][2])
+			// Strict improvement over an ascending scan keeps the lowest
+			// destination index on a tie [03 §4.3].
+			if distance := dr + dg + db; distance < bestDistance {
+				bestDistance = distance
+				best = dst
+			}
+		}
+		t.Logical[src] = byte(best)
+	}
 }
 
 // buildGrayTable constructs the retail gray-table LUT [03 §4.3.3]. It prepares
@@ -174,30 +248,36 @@ func nearestBySum(t *Tables, sums [256]int32, perm [256]uint8, r, g, b int) uint
 	return perm[best]
 }
 
-// RGBA resolves an indexed pixel to RGBA at present time (C7).
+// RGBA resolves a final indexed pixel to RGBA at present time.
 //
-// Lookup is logical → physical through the 256-byte table [03 §4.3],
-// then through Base. The fourth PAL byte is observed zero in every retail
-// entry [fmt pal] and matches a Windows PALETTEENTRY; it is not an alpha.
-// Returned alpha is always 255 (opaque). Model lighting selects an SHD row
-// before this lookup [03 §4.3.2]; the explosion halo selects an LHT row
-// [03 §4.3.1].
+// The index is already a physical PALETTE.PAL index, so the lookup is Base
+// alone: "every final indexed pixel is resolved to RGB only at present time
+// through PALETTE.PAL", and "no GUI lookup is performed again during
+// indexed-to-RGB presentation" [03 §4.3][07 "Retail palette contract"].
+// Callers that hold a *semantic* colour entry resolve it through
+// GUIColor/Logical before writing it into the surface, never here.
+//
+// The fourth PAL byte is observed zero in every retail entry [fmt pal] and
+// matches a Windows PALETTEENTRY; it is not an alpha. Returned alpha is always
+// 255 (opaque). Model lighting selects an SHD row before this lookup
+// [03 §4.3.2]; the explosion halo selects an LHT row [03 §4.3.1].
 func (t *Tables) RGBA(index byte) (r, g, b, a uint8) {
 	if t == nil {
 		return 0, 0, 0, 255
 	}
-	phys := t.Logical[index] // C7: logical→physical
-	e := t.Base[phys]
+	e := t.Base[index]
 	return e[0], e[1], e[2], 255
 }
 
 // LightLookup brightens a palette index through the LHT table.
 //
-// level 0 .. 31, index 0 .. 255 already logical→physical. The table is the
-// 8192-byte PALETTE.LHT file [fmt pal] [03 §4.3.1]. Result is again a palette
-// index, not an RGB triple. Level is clamped to 0 .. 31. Use for the
-// explosion and muzzle flash ground halo; no other retail consumer is
-// established.
+// level 0 .. 31, index 0 .. 255. The index is "the source palette index after
+// the logical-to-physical map" [03 §4.3.1] — that is, it is already physical,
+// because the halo reads back pixels the composer has already written. The map
+// is not applied again here. The table is the 8192-byte PALETTE.LHT file
+// [fmt pal] [03 §4.3.1]. Result is again a palette index, not an RGB triple.
+// Level is clamped to 0 .. 31. Use for the explosion and muzzle flash ground
+// halo; no other retail consumer is established.
 func (t *Tables) LightLookup(level int, index byte) byte {
 	if t == nil {
 		return index
@@ -207,12 +287,13 @@ func (t *Tables) LightLookup(level int, index byte) byte {
 	} else if level > 31 {
 		level = 31
 	}
-	phys := t.Logical[index]
-	return t.Light[level*256+int(phys)]
+	return t.Light[level*256+int(index)]
 }
 
 // ShadeLookup maps a palette index through the SHD table at the given row
-// (0 .. 31, middle row 15 is near-identity) [03 §4.3.2].
+// (0 .. 31, middle row 15 is near-identity) [03 §4.3.2]. The index is a
+// texture/screen byte and is therefore already physical; the logical→physical
+// map is a semantic-colour route and is not applied here [03 §4.3].
 func (t *Tables) ShadeLookup(row int, index byte) byte {
 	if t == nil {
 		return index
@@ -222,39 +303,23 @@ func (t *Tables) ShadeLookup(row int, index byte) byte {
 	} else if row > 31 {
 		row = 31
 	}
-	phys := t.Logical[index]
-	return t.Shade[row][phys]
+	return t.Shade[row][index]
 }
 
-// GUIToBase returns the retail frontend's semantic color-field map. GUI color
-// fields are authored against GUIPAL.PAL, while the indexed display surface is
-// presented through PALETTE.PAL. Retail chooses, for each source GUI entry,
-// the first PALETTE entry with the smallest Manhattan RGB distance. This map
-// must not be applied to GAF/PCX/TNT pixel bytes, which already are active
-// palette indices [07 "Retail palette contract"].
+// GUIToBase returns the retail frontend's semantic color-field map. There is
+// only one such map and it is Logical: retail's GUI bootstrap builds the
+// logical→physical lookup out of GUIPAL.PAL precisely so GUI colour fields can
+// be resolved into the installed PALETTE.PAL [03 §4.3]
+// [07 "Retail palette contract"]. Callers on a hand-built Tables must call
+// BuildLogicalMap first; Load does.
+//
+// This map must not be applied to GAF/PCX/TNT pixel bytes, which already are
+// active palette indices [07 "Retail palette contract"].
 func (t *Tables) GUIToBase() [256]byte {
-	var remap [256]byte
 	if t == nil {
-		return remap
+		return [256]byte{}
 	}
-	for src := 0; src < 256; src++ {
-		best := 0
-		bestDistance := int(^uint(0) >> 1)
-		for dst := 0; dst < 256; dst++ {
-			dr := absPaletteDistance(t.GUI[src][0], t.Base[dst][0])
-			dg := absPaletteDistance(t.GUI[src][1], t.Base[dst][1])
-			db := absPaletteDistance(t.GUI[src][2], t.Base[dst][2])
-			distance := dr + dg + db
-			// Retail's strict-lower comparison keeps the first palette entry
-			// on a tie.
-			if distance < bestDistance {
-				bestDistance = distance
-				best = dst
-			}
-		}
-		remap[src] = byte(best)
-	}
-	return remap
+	return t.Logical
 }
 
 // GUIColor resolves one GUI file color field to an active PALETTE.PAL index.
@@ -264,7 +329,7 @@ func (t *Tables) GUIColor(source byte) byte {
 	if t == nil {
 		return source
 	}
-	return t.GUIToBase()[source]
+	return t.Logical[source]
 }
 
 func absPaletteDistance(a, b byte) int {

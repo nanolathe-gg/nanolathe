@@ -93,6 +93,24 @@ type UnitView struct {
 	// Activated is the committed on/off state used by UI command dispatch.
 	// Presentation must not rehydrate a selected unit from the live pool [I6].
 	Activated bool
+	// Kills is the credited-kill counter the footer's kills line reads
+	// [07 R-HUD-03 §2].
+	Kills int32
+	// OwnerColor is the owning player's lobby colour index: the frame selector
+	// for the owner logo the footer blits at LOGO2 [07 R-HUD-03 §2].  It is
+	// carried per unit because the committed frame holds no player roster.
+	// OwnerColorKnown is false for a slot with no lobby record.
+	OwnerColor      uint8
+	OwnerColorKnown bool
+	// The four archived economy slots of [05 R-ECO-01 §5]: the production and
+	// requested totals of the most recent settlement pass, rewritten there
+	// every pass while the live buckets are cleared.  They are the only source
+	// the footer's four rate fields read [07 R-HUD-03 §2] — not the definition
+	// constants, and with no smoothing or other cadence.
+	ArchivedMetalMake  float32
+	ArchivedEnergyMake float32
+	ArchivedMetalUse   float32
+	ArchivedEnergyUse  float32
 }
 
 // ProjectileView is the committed copy of one projectile draw record

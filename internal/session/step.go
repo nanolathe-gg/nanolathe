@@ -260,7 +260,10 @@ func (s *Session) stepUnitPhase(tick uint32) {
 				}
 				if active != nil {
 					activeName := orders.DescriptorFor(active.ID).Name
-					activeMove := activeName == "Move_Ground" || activeName == "VTOL_Move" || activeName == "QMove" || activeName == "Patrol" || activeName == "QPatrol" || activeName == "VTOL_Patrol" || activeName == "RepairPatrol" || activeName == "VTOL_RepairPatrol"
+					// Park joins the move family: its phase 0 installs the
+					// rectangle goal that carries a no-rally factory product off
+					// its pad [04 R-ORD-01 §2][04 R-FAC-02 §4].
+					activeMove := activeName == "Move_Ground" || activeName == "VTOL_Move" || activeName == "QMove" || activeName == "Patrol" || activeName == "QPatrol" || activeName == "VTOL_Patrol" || activeName == "RepairPatrol" || activeName == "VTOL_RepairPatrol" || activeName == "Park"
 					isWalk := false
 					if s.Build != nil && (activeName == "MobileBuild" || activeName == "VTOL_MobileBuild") && s.Build.NeedsWalk(u, active) {
 						isWalk = true

@@ -39,21 +39,20 @@ func snapshotCursor(index uint8) *Cursors {
 func snapshotPalette() *palette.Tables {
 	p := &palette.Tables{}
 	for i := 0; i < 256; i++ {
-		logical := uint8(255 - i)
-		p.Logical[i] = logical
-		p.Base[logical] = [4]byte{byte(i), byte(i + 1), byte(i + 2), byte(i + 3)}
+		p.Base[i] = [4]byte{byte(i), byte(i + 1), byte(i + 2), byte(i + 3)}
 	}
 	// Exercise the existing present-time opaque-alpha rule through the same
 	// installed table route: convertIndexedToRGBA changes reserved zero to 255.
-	p.Base[p.Logical[19]][3] = 0
+	// Present time reads PALETTE.PAL directly; the logical→physical map is a
+	// semantic-colour route and never re-enters here [03 §4.3].
+	p.Base[19][3] = 0
 	return p
 }
 
 func wantSnapshotRGBA(c *Client, indexed []uint8) []byte {
 	got := make([]byte, len(indexed)*4)
 	for i, idx := range indexed {
-		physical := c.logical[idx]
-		copy(got[i*4:i*4+4], c.base[physical][:])
+		copy(got[i*4:i*4+4], c.base[idx][:])
 		if got[i*4+3] == 0 {
 			got[i*4+3] = 255
 		}

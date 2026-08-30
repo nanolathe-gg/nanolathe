@@ -22,18 +22,20 @@ func TestUnitOrientationFoldOrder(t *testing.T) {
 	}
 	m.Pieces[0].Children = []int{1}
 
-	// Heading Y 90deg (16384) clockwise north→east per [03 §2.4] C24: heading increases toward +X, Y rotation is CCW, so fold as -heading.
-	// child (1,0,0) east with heading 90 east should go to (0,0,-1) south (clockwise) not north. The Y rotation formula is CCW, heading is clockwise, so RotY = -16384 = 49152.
-	states := BuildUnitPieceStates(m, nil, 16384, 0, 0) // heading 16384→Y (as -16384), pitch 0→X, bank 0→Z [03 §2.4] C24
-	if states[0].RotY != 49152 || states[0].RotX != 0 || states[0].RotZ != 0 {
-		t.Fatalf("fold heading→Y got Y=%d X=%d Z=%d want 49152", states[0].RotY, states[0].RotX, states[0].RotZ)
+	// Heading folds into Y unchanged — the literal C24 fold [03 §2.4]. It once
+	// folded -heading to compensate for the model projection's missing
+	// handedness flip [R-RAST-01 §2]; both were corrected together.
+	states := BuildUnitPieceStates(m, nil, 16384, 0, 0) // heading 16384→Y, pitch 0→X, bank 0→Z [03 §2.4] C24
+	if states[0].RotY != 16384 || states[0].RotX != 0 || states[0].RotZ != 0 {
+		t.Fatalf("fold heading→Y got Y=%d X=%d Z=%d want 16384", states[0].RotY, states[0].RotX, states[0].RotZ)
 	}
 	tr := model.Compose(m, states, 1)
-	// child world origin before world pos = root chain: child translate rotated by root Y -90 (49152)
-	// Expected: (1,0,0) Ry270 -> (0,0,-1) = (0,0,-65536) clockwise east→south
+	// Ry per [03 §2.4]: x' = c*x - s*z, z' = s*x + c*z. A child at model (1,0,0)
+	// under a quarter turn lands at model (0,0,1), which the projection's
+	// handedness flip puts one unit UP-screen of the unit anchor.
 	expX := numeric.Fixed(0)
 	expY := numeric.Fixed(0)
-	expZ := numeric.Fixed(-65536)
+	expZ := numeric.Fixed(65536)
 	if tr.Origin[0] != expX || tr.Origin[1] != expY || tr.Origin[2] != expZ {
 		t.Fatalf("heading Y 90 fold: got %v want [%d %d %d]", tr.Origin, expX, expY, expZ)
 	}
@@ -99,8 +101,8 @@ func TestUnitOrientationFoldOrder(t *testing.T) {
 		t.Fatalf("committed world pos: got %d want 65536", draw.WorldPos[0])
 	}
 	// States should reflect cur heading/pitch not interpolated
-	if draw.PieceStates[m.Root].RotY != 49152 || draw.PieceStates[m.Root].RotX != 16384 {
-		t.Fatalf("angles interpolated: got Y=%d X=%d want 49152/16384", draw.PieceStates[m.Root].RotY, draw.PieceStates[m.Root].RotX)
+	if draw.PieceStates[m.Root].RotY != 16384 || draw.PieceStates[m.Root].RotX != 16384 {
+		t.Fatalf("angles interpolated: got Y=%d X=%d want 16384/16384", draw.PieceStates[m.Root].RotY, draw.PieceStates[m.Root].RotX)
 	}
 	// Also verify manual expected for combined Y+X: (1,0,0) with Y90+X90? Compute manually via Compose vs hand
 	// Use handCompose logic: our model.Compose already implements Z→X→Y with round-to-nearest NOT fixed tables [03 §2.4] C21
@@ -233,7 +235,10 @@ func TestPieceDrawOrder(t *testing.T) {
 			t.Fatalf("deterministic order not stable")
 		}
 	}
-	// Palette hook: indices convert via logical→physical at present time [03 §4.3] C10
+	// Palette hook: model bytes are already PALETTE.PAL indices and resolve
+	// through Base alone; the semantic logical→physical map is pointed
+	// elsewhere here to prove image bytes never take it [03 §4.3]
+	// [07 "Retail palette contract"].
 	tables := &palette.Tables{}
 	for i := 0; i < 256; i++ {
 		tables.Logical[i] = byte(i)
@@ -243,34 +248,34 @@ func TestPieceDrawOrder(t *testing.T) {
 	}
 	tables.Logical[5] = 42
 	r, g, b, a := PaletteRGBA(tables, 5) // [03 §4.3] C10
-	if r != 42 || g != 255-42 || b != 21 {
-		t.Fatalf("PaletteRGBA logical lookup: got %d %d %d want 42 %d 21", r, g, b, 255-42)
+	if r != 5 || g != 255-5 || b != 2 {
+		t.Fatalf("PaletteRGBA direct lookup: got %d %d %d want 5 %d 2", r, g, b, 255-5)
 	}
 	if a != 255 {
 		t.Fatalf("alpha")
 	}
-	// Shade row placeholder 16 [03 §4.3] TODO(question) — ensure ShadeRGBA uses Shade[16][phys]
+	// Shade row placeholder 16 [03 §4.3] TODO(question) — ensure ShadeRGBA uses Shade[16][idx]
 	for row := 0; row < 32; row++ {
 		for col := 0; col < 256; col++ {
 			tables.Shade[row][col] = byte((col + row) % 256)
 		}
 	}
-	rs, gs, bs, _ := ShadeRGBA(tables, 5, ModelShadeMidRow) // idx 5 -> phys 42 -> shade[16][42]= (42+16)%256=58 -> Base[58]
-	if rs != 58 || gs != 255-58 || bs != 29 {
-		t.Fatalf("ShadeRGBA: got %d %d %d want 58 %d 29", rs, gs, bs, 255-58)
+	rs, gs, bs, _ := ShadeRGBA(tables, 5, ModelShadeMidRow) // idx 5 -> shade[16][5]=(5+16)%256=21 -> Base[21]
+	if rs != 21 || gs != 255-21 || bs != 10 {
+		t.Fatalf("ShadeRGBA: got %d %d %d want 21 %d 10", rs, gs, bs, 255-21)
 	}
 	// PrimitiveRGBA bypass vs shade [03 §4.3]
 	primColored := PrimitiveDraw{ColorIndex: 5, IsColored: 1, ShadeRow: ModelShadeMidRow, TextureName: "foo"}
 	rc, gc, bc, _ := PrimitiveRGBA(tables, primColored)
-	if rc != 42 {
-		t.Fatalf("flat-colored bypass SHD: got %d want 42", rc)
+	if rc != 5 {
+		t.Fatalf("flat-colored bypass SHD: got %d want 5", rc)
 	}
 	_ = gc
 	_ = bc
 	primTex := PrimitiveDraw{ColorIndex: 5, IsColored: 0, ShadeRow: ModelShadeMidRow, TextureName: "tex"}
 	rt, gt, bt, _ := PrimitiveRGBA(tables, primTex)
-	if rt != 58 {
-		t.Fatalf("textured via SHD: got %d want 58", rt)
+	if rt != 21 {
+		t.Fatalf("textured via SHD: got %d want 21", rt)
 	}
 	_ = gt
 	_ = bt

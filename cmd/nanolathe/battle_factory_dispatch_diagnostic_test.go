@@ -30,6 +30,11 @@ func TestFactoryClickRetainsDispatchFailureDiagnostic(t *testing.T) {
 	buf := frame.NewBuffer()
 	w := buf.BeginWrite()
 	w.Units = append(w.Units, frame.UnitView{Slot: 1, Owner: 0, DefName: factory.UnitName})
+	// A builder command page is only ever published for a single selected
+	// builder; the command windows are closed to the root while the selected-unit
+	// count is zero [07 §6], so the fixture carries the selection that the
+	// authoritative publisher would have committed alongside the page.
+	w.Selection = frame.SelectionView{Handles: append(w.Selection.Handles, 1), Primary: 1, Count: 1}
 	w.CommandPage = frame.CommandPageView{Builder: 1, PageCount: 1, ProductKeys: []string{product.UnitName}}
 	if err := buf.Publish(1); err != nil {
 		t.Fatal(err)

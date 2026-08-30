@@ -114,7 +114,22 @@ func (s *Session) publishSnapshot(tick uint32) {
 				Pitch:          u.Move.Pitch,
 				Bank:           u.Move.Bank,
 				Activated:      u.Activated,
+				Kills:          u.Kills,
 			}
+			// The footer's four rate fields read the archived production and
+			// requested totals of the most recent settlement pass, not the
+			// definition constants [07 R-HUD-03 §2][05 R-ECO-01 §5].
+			if s.Econ != nil {
+				archived := s.Econ.UnitArchived(u.Handle)
+				v.ArchivedMetalMake = archived[economy.Metal].Production
+				v.ArchivedEnergyMake = archived[economy.Energy].Production
+				v.ArchivedMetalUse = archived[economy.Metal].Requested
+				v.ArchivedEnergyUse = archived[economy.Energy].Requested
+			}
+			// The owner logo the footer blits at LOGO2 is the logos frame at the
+			// owner's lobby colour index [07 R-HUD-03 §2]; it is the same
+			// selector the minimap contacts already carry.
+			v.OwnerColor, v.OwnerColorKnown = radarOwnerPalette(s, u.Owner, true)
 			if s.Movement != nil {
 				if st := s.Movement.Steers[u.Handle]; st != nil {
 					v.Heading = st.Heading

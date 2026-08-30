@@ -1204,6 +1204,7 @@ func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 	// site centre [04 §8.3][04 §7.4].
 	fx, fz := s.pathFootprint(u)
 	goalObj := s.goalForOrderWithFootprint(goal, head, fx, fz)
+	s.bindRectSteeringGoal(u, head, goalObj, fx, fz)
 	if route := s.Routes[u.Handle]; route != nil && !selectedPoint {
 		goalPointX, goalPointZ, haveGoalPoint := groundGoalPoint(goalObj, u, fx, fz)
 		installGroundGoal(route, u, goalObj, goalPointX, goalPointZ, haveGoalPoint, true, s.staticObstacleRevision(), s.tick)
@@ -1212,6 +1213,24 @@ func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 	s.submitGoalForOrder(u, start, goalObj, token)
 	s.bindArrivalHandle(u, head)
 	return true
+}
+
+// bindRectSteeringGoal is the rectangle-perimeter case of the goal-handle bind
+// described in movegoal.go: a Park record's stored position is the rectangle's
+// origin, not a cell the mover is supposed to stand on [04 R-ORD-01 §2]
+// [04 R-FAC-02 §4]. Binding the perimeter point the follower already steers by
+// keeps the steering target, the distance threshold and the arrival test on one
+// cell, exactly as the build-order bind does for its selected candidate.
+func (s *System) bindRectSteeringGoal(u *units.Unit, head *orders.Node, goalObj path.Goal, fx, fz int32) {
+	if s == nil || u == nil || head == nil || goalObj == nil {
+		return
+	}
+	if _, isRect := path.IsRectGoal(goalObj); !isRect {
+		return
+	}
+	if gx, gz, ok := groundGoalPoint(goalObj, u, fx, fz); ok {
+		s.BindMoveGoal(u.Handle, head, gx, gz)
+	}
 }
 
 func (s *System) pathCellsForOrder(u *units.Unit, head *orders.Node) (start, goal path.Cell, selectedPoint, ok bool) {
@@ -1266,6 +1285,7 @@ func (s *System) ReplanMove(u *units.Unit, head *orders.Node) bool {
 	// the selected perimeter candidate, not the site centre [04 §8.3][04 §7.4].
 	fx, fz := s.pathFootprint(u)
 	goalObj := s.goalForOrderWithFootprint(goal, head, fx, fz)
+	s.bindRectSteeringGoal(u, head, goalObj, fx, fz)
 	if route := s.Routes[u.Handle]; route != nil && !selectedPoint {
 		goalPointX, goalPointZ, haveGoalPoint := groundGoalPoint(goalObj, u, fx, fz)
 		installGroundGoal(route, u, goalObj, goalPointX, goalPointZ, haveGoalPoint, true, s.staticObstacleRevision(), s.tick)
@@ -1343,7 +1363,9 @@ func (s *System) bindArrivalHandle(u *units.Unit, head *orders.Node) {
 	// Only bind for Move_Ground-family orders [R-P0-01]; other orders not arrival-tracked.
 	name := orders.DescriptorFor(head.ID).Name
 	switch name {
-	case "Move_Ground", "VTOL_Move", "QMove", "Patrol", "QPatrol", "VTOL_Patrol", "RepairPatrol", "VTOL_RepairPatrol":
+	// Park joins the family: its phase 1 completes on the arrival bit this
+	// handle sets [04 R-ORD-01 §2][04 R-FAC-02 §4].
+	case "Move_Ground", "VTOL_Move", "QMove", "Patrol", "QPatrol", "VTOL_Patrol", "RepairPatrol", "VTOL_RepairPatrol", "Park":
 	default:
 		// Not a ground-move family order: ensure no stale handle remains.
 		delete(s.arrivalHandles, u.Handle)
@@ -1961,7 +1983,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
 	}
 	name := orders.DescriptorFor(head.ID).Name
-	if name != "Move_Ground" && name != "VTOL_Move" && name != "QMove" && name != "VTOL_MobileBuild" && name != "MobileBuild" && name != "VTOL_Patrol" && name != "Patrol" {
+	if name != "Move_Ground" && name != "VTOL_Move" && name != "QMove" && name != "VTOL_MobileBuild" && name != "MobileBuild" && name != "VTOL_Patrol" && name != "Patrol" && name != "Park" {
 		if head.GoalX == 0 && head.GoalZ == 0 && head.GoalY == 0 {
 			d := s.distToGoal(u)
 			s.emitMovementCallbacks(u, 0)

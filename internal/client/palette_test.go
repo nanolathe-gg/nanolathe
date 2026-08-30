@@ -20,9 +20,7 @@ func TestIndexedPixelsUseSharedPaletteDirectly(t *testing.T) {
 		tables.GUI[i] = tables.Base[i]
 	}
 	tables.GUI[7] = tables.Base[1]
-	for i := range tables.Logical {
-		tables.Logical[i] = byte(i)
-	}
+	tables.BuildLogicalMap() // the GUI bootstrap lookup [03 §4.3]
 
 	c, err := New(Options{Width: 2, Height: 1})
 	if err != nil {

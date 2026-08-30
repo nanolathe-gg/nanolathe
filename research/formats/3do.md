@@ -292,9 +292,17 @@ texture GAF holds turns the primitive into flat colour index 209
 - **Model facing is −Z, not +Z.** The TA Design Guide under "Sources"
   describes the modeling convention as +Z-forward, but retail data disagrees:
   muzzle locators (`flare*`) sit at negative Z from the barrel they are
-  mounted on 135 times against 13. Engine heading 0 travels toward +Z and
-  increases toward +X ([04 R-MOV-01 §2]),
-  so convert source Z with `z = -z` before piece rotations/translations and
+  mounted on 135 times against 13. **Correction (2026-08-30).** This bullet
+  previously read "Engine heading 0 travels toward +Z and increases toward +X
+  ([04 R-MOV-01 §2])". That is the inverted heading convention: the position
+  step is `vx = -(sin[h]·speed …)`, `vz = -(cos[h]·speed …)`, so heading 0
+  travels toward **−Z** and increasing heading runs −Z → −X → +Z → +X
+  ([04 R-MOV-01 §4], Established). The conclusion the bullet draws is
+  unaffected — a −Z-facing model still ends up nose-first along the travel
+  direction, because the projection negates the model-relative Z as well
+  ([R-RAST-01 §2]) — but the stated premise was wrong and was read as licence
+  to negate the folded heading in the renderer.
+  Convert source Z with `z = -z` before piece rotations/translations and
   then apply the engine heading directly. An added half turn makes the nose
   face the right direction only by rotating unconverted data; an asymmetric
   commander comparison shows that this leaves source X visibly mirrored. The

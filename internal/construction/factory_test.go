@@ -209,9 +209,17 @@ func TestFactoryAllocationPreservesAuthoredExitTransform(t *testing.T) {
 	if prod == nil {
 		t.Fatalf("factory did not allocate product: node id=%d phase=%d target=%d deadline=%d gate=%d messages=%v", node.ID, node.Phase, node.Target, node.Deadline, node.DynamicGate, svc.Messages())
 	}
+	// All three authored coordinates survive; Z arrives negated because the
+	// composed offset is model space and model space is mirrored in Z against
+	// world space [03 R-RAST-01 §2]. The sign is measured, not inferred: added
+	// unnegated, three of the six stock factories put their exit footprint on
+	// always-stamped `o` cells where no product could ever validate
+	// [04 R-FAC-02 §5]; negated, all six land in their own released yard
+	// corridor. This test's subject — that the exit is not collapsed to the
+	// factory's geometric centre — is unchanged.
 	wantX := factory.X + numeric.Fixed(exitX)
 	wantY := factory.Y + numeric.Fixed(exitY)
-	wantZ := factory.Z + numeric.Fixed(exitZ)
+	wantZ := factory.Z - numeric.Fixed(exitZ)
 	if prod.X != wantX || prod.Y != wantY || prod.Z != wantZ {
 		t.Fatalf("product transform=(%d,%d,%d), want authored=(%d,%d,%d)", prod.X.Raw(), prod.Y.Raw(), prod.Z.Raw(), wantX.Raw(), wantY.Raw(), wantZ.Raw())
 	}

@@ -56,6 +56,13 @@ const (
 //	Attack_Chase (orbit/stand-off) => AnnulusGoal with placeholder inner/outer
 //	  per substate Param2 [04 §3.5] orbit cycle 0..8, using the placeholder
 //	  radii above. Structure wired, constants remain TODO(question) [M-4].
+//	Park (a no-rally factory product's terminal record) => RectPerimeterGoal on
+//	  the rectangle the handler installed. [04 R-FAC-02 §4] closes the producer
+//	  this file previously recorded as missing: Park's phase 0 installs a
+//	  rectangle goal centred on the product's own committed cell, and the ground
+//	  search treats it as a perimeter goal whose admissible cells are exactly
+//	  the border [04 §7.2]. The arithmetic lives in orders.ParkGoalRect; this
+//	  case only reads it back.
 //	Follow_Ground / VTOL_Follow / Guard_NoMove (guard stand-off) => AnnulusGoal
 //	  centered on the ward (Target) when available, with Param1 as outer
 //	  (fallback placeholderGuardDefaultRaw) and half as inner [04 §3.2][04 §3.5].
@@ -64,10 +71,6 @@ const (
 //
 // Unwired families [OW-3-P] with citation why:
 //
-//	RectPerimeterGoal has no established order-layer producer in bounded search;
-//	  [04 §7.2][04 §7.4] defines the rectangle heuristic and enumeration, but no
-//	  handler in [04 §3.5][04 §10.3] describes a patrol-around-rect target that
-//	  constructs it. Forcing it would invent a producer; leave unwired.
 //	The withdrawn saved-goal compatibility surface has no producer; air work
 //	and moving goals now own the zero-heuristic, unsatisfied surface [04 R-PATH-01 §9].
 //	  "Base/restored-from-save goals have identically-zero heuristic and a null
@@ -91,6 +94,17 @@ func (s *System) goalForOrderWithFootprint(goalCell path.Cell, n *orders.Node, f
 	}
 	name := orders.DescriptorFor(n.ID).Name
 	switch name {
+	case "Park":
+		// The rectangle is authored by the Park handler [04 R-ORD-01 §2]
+		// [04 R-FAC-02 §4]; a record that has not run its phase 0 yet has no
+		// rectangle and falls back to the ordinary point goal.
+		if minX, minZ, maxX, maxZ, ok := orders.ParkGoalRect(n); ok {
+			return path.RectPerimeterGoal(path.Rect{
+				Min: path.Cell{X: minX, Z: minZ},
+				Max: path.Cell{X: maxX, Z: maxZ},
+			})
+		}
+		return path.PointGoal(goalCell, 0)
 	case "Attack_Chase":
 		// TODO(question): standoff radii source not located; orbit cadence 30+RNG placeholder [04 §3.5][M-4][04 §7.2][04 §7.4]
 		// TODO(question): per-substate band variation (approach/halved/banded zero etc) is established as 8-state machine [04 §3.5] but per-substate radii remain TODO(question); wire single placeholder Annulus structure here, not per-substate radii.
@@ -133,9 +147,9 @@ func (s *System) goalForOrderWithFootprint(goalCell path.Cell, n *orders.Node, f
 	}
 }
 
-// The above helper is the sole new producers of AnnulusGoal; call sites in
-// integrate.go (ActivateMove/ReplanMove) are the only consumers. Rect and Saved
-// producers are intentionally NOT added here; see file header.
+// The above helper is the sole producer of AnnulusGoal and of RectPerimeterGoal;
+// call sites in integrate.go (ActivateMove/ReplanMove) are the only consumers.
+// The saved-goal producer is intentionally NOT added here; see file header.
 
 // HeadingFromDelta returns the world heading (uint16, 0..65535 per circle)
 // whose position step of [04 R-MOV-01 §4] travels along the planar delta

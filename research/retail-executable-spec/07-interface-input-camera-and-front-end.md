@@ -4738,6 +4738,44 @@ real-time source §4 contrasts with the click message's modifier word, not a
 latched or remembered modifier. With Shift up, retail therefore draws **nothing
 at all** at a queued build site: no rectangle, no sweep, no dash chain.
 
+*Re-derived independently (2026-08-30), after a play observation contradicted
+it.* Every load-bearing claim above was checked a second time from the image by
+a different route, and each one held:
+
+* The call census is whole-image, not neighbourhood: the walker, the dispatcher
+  and the marker helper each appear as a call target exactly once, and a byte
+  scan of the entire file for their entry values finds only the two vestigial
+  descriptor fields described at the end of this subsection.
+* The vestigial field really is never read. Every load through the runtime
+  descriptor table's base pointer was enumerated and classified: the reads are
+  the state handler, the draw-mask word, the icon byte, the order-flags word
+  and the name pointer. The spare helper slot is read by nothing.
+* The guard gates the **whole** walker, not one branch inside it: the
+  conditional the key query feeds skips exactly the walker call and resumes at
+  the composer's next pass.
+* The key really is Shift. The held-key query is a small dispatch over eight
+  modifier/arrow tokens; the token the composer passes selects the arm that asks
+  the operating system for virtual key `0x10`, which is Shift. The other arms
+  cover Control, Alt, Space and the four arrows.
+
+**Unknown — the play observation.** A player reports seeing the sweeping
+build-site lines at a queued site with Shift *up*. Nothing in the overlay can
+produce that, and the two things the composer does draw without Shift are drawn
+elsewhere: the armed placement ghost (at the **cursor**, only while a build
+latch is armed, two nested outlines in one colour, no sweep) and the always-on
+selected-unit footprint quad (at the **unit**, gated on the interface-options
+word). Neither projects a footprint at an order's position and neither sweeps.
+The likeliest reconciliation is that the observation was of the overlay under
+Shift, and that it looked wrong rather than absent: for a MOBILEBUILD order the
+overlay draws three helpers, and the two beside the marker — the travelling-dash
+chain and the range rings — were both missing from Nanolathe when the comparison
+was made. Settling it needs a retail session with the key state observed rather
+than recalled. `TODO(question): does any retail path draw the sweeping
+build-site lines with Shift up? A retail session with the Shift key state
+observed, not recalled, would settle it [07 R-P0-11 §3].` Recorded here rather
+than changed in the gate, because inventing a second trigger would be inventing
+behavior.
+
 This corrects the earlier phrasing of the paragraph that opens §3, which said
 the full mask goes to "the acted-on/hovered/single-selected units". That
 wording was wrong in a way that mattered: it invited reading "acted-on" as a
@@ -4792,6 +4830,81 @@ read of a descriptor record uses the state handler, the draw mask, the icon
 byte, the order-flags word or the name pointer. It is dead metadata, not a
 second dispatch table, and it is the only place the marker helper is named
 outside the dispatcher.
+
+###### The dash chain's artwork, and the anchor getter that doubles as the icon
+
+**Established** (2026-08-30). Three facts the helper table above left open or
+stated too narrowly.
+
+*The dash chain's sprite is the authored GAF entry `pathicon`.* It is resolved
+by name at start-up by the same loader and into the same handle array as the
+twenty-one named cursors — `pathicon` is loaded in that run of names, between
+`cursorhourglass` and `cursorrevive` — so it comes from the cursor GAF root
+(`anims/cursors.gaf`, §8) and not from a separate animation file. In the stock
+install the entry has **one** frame with a frame duration of 3, so a stock
+queue line is one small sprite repeated along the segment and the chain's
+apparent motion comes entirely from the phase seed, not from frame cycling.
+The helper reads the entry's frame count and the **first frame reference's
+duration field** as its ticks-per-frame — it does not consult per-frame
+durations — and blits through the ordinary GAF frame blitter, which subtracts
+the frame's authored placement offsets, so those offsets are the sprite's
+hotspot exactly as they are for the software cursor [fmt gaf "Placement
+offsets"]. The frame index the helper table gives, `(age / tpf) mod nFrames`,
+is the index of the chain's **first** sprite; each later sprite along the same
+segment takes the next frame index, wrapping at the frame count. With a
+one-frame entry that increment is invisible, which is why a stock chain reads
+as a static sprite marching rather than an animating one.
+
+*The bit-8 helper is also the anchor getter, and the bit-2 helper calls it.*
+The helper the table lists under bit 8 does two jobs: it resolves the order's
+anchor — the target unit's position when the node carries a target, the node's
+own stored position otherwise, with the cached-position flag maintained there —
+into the running point the dispatcher threads through the helpers, and *then*,
+only if the order descriptor's icon byte is nonzero, draws the queued-order
+icon at it. The travelling-dash helper's first act is to call it with its own
+arguments, because it needs the segment's far end. The consequence matters for
+Nanolathe: an order kind whose mask sets bit 2 but not bit 8 still runs the
+icon helper, and whether an icon appears is decided by the descriptor's icon
+byte alone. For MOBILEBUILD and VTOL_MOBILEBUILD that byte is **0**, so a
+queued build site draws no per-order icon — the sprites a player sees strung
+between queued build sites are the `pathicon` dash chain, not order icons.
+
+*The per-kind census, corrected.* The paragraph in §9 above lists only MOVE,
+PATROL, QMOVE/QPATROL and "every attack-family kind"; the two static tables
+carry more, and the icon bytes come with them. Ground-state table, in table
+order — Standby `0x10`/15, Standby_Mine `0x10`/15, Move_Ground `0x12`/14,
+Follow_Ground `0x12`/5, Suppress `0x08`/1, Attack_Chase `0x08`/1,
+Attack_Kamikaze `0x08`/1, AttackSpecial `0x08`/1, Park `0x00`/14,
+Patrol `0x12`/7, Ground_Pickup `0x08`/12, Ground_Unload `0x08`/13,
+Teleport `0x08`/9, MobileBuild `0x13`/0, HelpBuild `0x18`/6,
+RepairPatrol `0x12`/7, RepairUnit `0x12`/6, Capture `0x08`/4,
+Resurrect `0x12`/11, Reclaim `0x12`/11, ReclaimUnit `0x12`/11,
+RepairUnitNoMove `0x18`/6. VTOL table — VTOL_Standby `0x00`/15,
+VTOL_Move `0x02`/14, VTOL_Landing `0x08`/14, VTOL_Pickup `0x08`/8,
+VTOL_Unload `0x08`/9, VTOL_Follow `0x02`/5, VTOL_Patrol `0x02`/7,
+AirStrike `0x08`/2, AirToAir `0x08`/1, AirToGround `0x08`/1,
+AirToGroundHover `0x08`/1, VTOL_MobileBuild `0x03`/0, VTOL_HelpBuild `0x08`/6,
+VTOL_RepairPatrol `0x02`/7, VTOL_RepairUnit `0x02`/6, VTOL_Reclaim `0x02`/11,
+VTOL_ReclaimUnit `0x02`/11, and VTOL_Evade, VTOL_SeekAttack, VTOL_SeekGuard,
+VTOL_GetRepaired, VTOL_LandIfCan all `0x00`/19. Notes: the `0x18` kinds
+(HelpBuild, RepairUnitNoMove) draw an icon plus range rings and no connector;
+a `0x00` mask draws nothing at all however privileged the unit; the circle bit
+is still set by no stock record; and no stock ground record and no stock VTOL
+record uses icon byte 0 except the two MOBILEBUILD-family records. The
+ground-special table (Stop, QMove, QPatrol and the rest) was not re-read in
+this pass, so the `0x02` values the §9 paragraph gives for QMOVE/QPATROL stand
+as previously recorded.
+
+*Re-verification of the marker arithmetic.* The marker helper's own numbers
+were re-read against the §9 marker paragraph and match it exactly: the
+rectangle's two corners are the definition's own corner-offset fields added to
+the order node's stored position; **both** corners take the same height, which
+is what flattens the marker onto the ground plane; the age is the global tick
+minus the node's birth tick, clamped into `0..10`; both offsets divide by ten
+truncating toward zero; and the eight lines are the four sweep positions drawn
+once one pixel out in the outer colour and once flush in the inner colour, with
+the colour pair chosen from the owning unit's selected flag. A node whose build
+definition id is zero draws nothing.
 
 ##### Latch persistence under Shift (R-P0-11 §4)
 

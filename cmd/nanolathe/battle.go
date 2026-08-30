@@ -60,6 +60,16 @@ type battleSession struct {
 	// Session.Step, before the following draw [03 §5.6][I6].
 	appliedShakeX int32
 	appliedShakeY int32
+
+	// The footer's pointer record [07 R-HUD-03 §1]. Both words are
+	// presentation-only: the simulation neither writes nor reads them [I6].
+	// footerHoverUnit is rewritten only while the pointer is inside the view
+	// with no drag rectangle armed, or over the minimap; anywhere else — the
+	// side rail, the top or bottom strip — it keeps its previous value, so a
+	// unit hovered on the way to the panel stays in the footer.
+	// footerHoverFeature is recomputed every frame wherever the pointer is.
+	footerHoverUnit    pool.Handle
+	footerHoverFeature string
 }
 
 // factoryBuildDelta applies the retail signed button count: left click adds
@@ -1444,6 +1454,9 @@ func (b *battleSession) updateCursor(cl *client.Client) {
 	}
 	mouse := cl.Input().Mouse
 	mx, my := int32(mouse.X), int32(mouse.Y)
+	// The footer's pointer record is written by the same per-frame pointer
+	// pass, and by nothing else [07 R-HUD-03 §1].
+	b.updateFooterHover(mx, my)
 	hover := hud.CursorHover{
 		OverWorld:      b.overWorld(mx, my),
 		Placing:        b.battleState().Input.BuildDef != "",
@@ -1516,6 +1529,139 @@ func (b *battleSession) hoverFeature(sx, sy int32) *content.FeatureDef {
 		return &content.FeatureDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: v.DefName}, FootprintX: int32(v.FootX), FootprintZ: int32(v.FootZ), Height: v.Height, Reclaimable: v.Reclaimable, Geothermal: v.Geothermal, Blocking: v.Blocking}
 	}
 	return nil
+}
+
+// updateFooterHover runs the battle pointer handler's per-frame pass over the
+// footer's two world sources [07 R-HUD-03 §1]. The hovered-unit word is
+// rewritten only inside the view with no drag-selection rectangle armed, or
+// over the minimap; everywhere else it is left alone. The hovered-feature
+// word is the feature under the pointer's ground cell and is recomputed every
+// frame wherever the pointer is. Neither reads the selection.
+func (b *battleSession) updateFooterHover(mx, my int32) {
+	if b == nil || b.sess == nil {
+		return
+	}
+	f, ok := b.currentSnapshot()
+	if !ok {
+		return
+	}
+	switch {
+	case b.isOverMinimap(mx, my):
+		b.footerHoverUnit = b.minimapHoverUnit(f, mx, my)
+	case b.overWorld(mx, my) && !b.battleState().Input.DragActive:
+		handle, _, _ := client.PickSnapshotUnit(f, mx, my, b.cam, b.sess.LocalOwner)
+		b.footerHoverUnit = handle
+	}
+	b.footerHoverFeature = ""
+	if def := b.hoverFeature(mx, my); def != nil {
+		b.footerHoverFeature = def.CanonicalKey
+	}
+}
+
+// minimapHoverUnit is the minimap half of the pointer's unit word: the unit
+// whose minimap dot lies within squared pixel distance < 4 of the pointer,
+// nearest first, else 0 [07 R-HUD-03 §1]. Ties keep the lower pool slot so the
+// result is stable [I1].
+func (b *battleSession) minimapHoverUnit(f *frame.Frame, mx, my int32) pool.Handle {
+	layout, dst, ok := b.minimapLayout()
+	if !ok {
+		return 0
+	}
+	playW, playH, ok := b.sess.PlayArea()
+	if !ok {
+		return 0
+	}
+	left, top, right, bottom := dst.Ordered()
+	width, height := right-left+1, bottom-top+1
+	best := pool.Handle(0)
+	bestDist := int64(1 << 62)
+	for i := range f.Units {
+		v := f.Units[i]
+		if v.Slot == 0 || !client.SnapshotVisible(f, v, b.sess.LocalOwner) {
+			continue
+		}
+		rx, ry := render.RadarProjection(radarMapPixel(v.X), radarMapPixel(v.Z), radarMapPixel(v.Y), playW, playH, layout)
+		px, py, ok := layout.CanvasToDisplay(rx+layout.PadX, ry+layout.PadY, left, top, width, height)
+		if !ok {
+			continue
+		}
+		dx, dy := int64(px-mx), int64(py-my)
+		d := dx*dx + dy*dy
+		if d >= 4 {
+			continue
+		}
+		if d < bestDist || (d == bestDist && (best == 0 || v.Slot < best)) {
+			bestDist, best = d, v.Slot
+		}
+	}
+	return best
+}
+
+// footerHover assembles the footer's pointer record for this frame. The
+// gadget index comes from the HUD's own hit test; the visibility predicate is
+// the committed mask, which only the composer can project into
+// [07 R-HUD-03 §1][03 R-VIS-01 §4][I6].
+func (b *battleSession) footerHover(f *frame.Frame) hud.FooterHover {
+	out := hud.FooterHover{Gadget: hud.NoGadget}
+	if b == nil {
+		return out
+	}
+	out.Unit = b.footerHoverUnit
+	out.Feature = b.footerHoverFeature
+	out.Visible = func(v *frame.UnitView) bool {
+		return v != nil && client.SnapshotVisible(f, *v, b.sess.LocalOwner)
+	}
+	out.Gadget, out.GadgetName = b.hud.hoveredGadgetSource()
+	out.StockpilePercent = footerStockpilePercent(f, b.cat, out.Unit)
+	return out
+}
+
+// footerStockpilePercent is the build-page percentage of a stockpiling
+// weapon: the BuildWeapon node's progress times 100 over the compiled reload
+// time of the weapon its slot index selects, an integer divide [06 §11.1].
+// Stockpile nodes live in the unit's secondary queue.
+func footerStockpilePercent(f *frame.Frame, cat *content.Catalog, handle pool.Handle) int32 {
+	if f == nil || cat == nil || handle == 0 {
+		return 0
+	}
+	view := hud.FooterUnit(f, handle)
+	if view == nil || view.DefName == "" {
+		return 0
+	}
+	def, ok := cat.Unit(view.DefName)
+	if !ok || def == nil {
+		return 0
+	}
+	for i := range f.OrderQueues {
+		q := &f.OrderQueues[i]
+		if q.Unit != handle {
+			continue
+		}
+		for _, node := range q.Secondary {
+			if node.Kind != "BuildWeapon" {
+				continue
+			}
+			weapon := stockpileWeaponForSlot(def, int(node.Param1))
+			if weapon == nil || weapon.ReloadTime <= 0 {
+				continue
+			}
+			return int32(int64(node.Param3) * 100 / int64(weapon.ReloadTime))
+		}
+		break
+	}
+	return 0
+}
+
+func stockpileWeaponForSlot(def *content.UnitDef, slot int) *content.WeaponDef {
+	slots := [3]*content.WeaponDef{def.Weapon1Def, def.Weapon2Def, def.Weapon3Def}
+	if slot < 0 || slot >= len(slots) {
+		return nil
+	}
+	weapon := slots[slot]
+	if content.IsWeaponInactive(weapon) || !weapon.Stockpile {
+		return nil
+	}
+	return weapon
 }
 
 func (b *battleSession) snapshotUnitCopy(v frame.UnitView) *units.Unit {

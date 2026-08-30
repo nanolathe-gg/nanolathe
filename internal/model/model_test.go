@@ -262,9 +262,10 @@ func TestFoldRootAngles(t *testing.T) {
 	st[0].RotY = 2000
 	st[0].RotZ = 3000
 	FoldRootAngles(st, 0, 500, 600, 700) // heading 500->Y, pitch 600->X, bank 700->Z [03 §2.4] C24
-	// Heading is clockwise north→east per [03 §2.4] and movement heading, but Y rotation is CCW per applyChain,
-	// so fold as -heading (65536-500) so 2000-500=1500 wraps [03 §2.4] C24.
-	if st[0].RotX != 1600 || st[0].RotY != 1500 || st[0].RotZ != 3700 {
+	// The fold is the literal C24 one — heading into Y with no sign change. It
+	// previously folded -heading, compensating for the model projection's
+	// missing handedness flip [R-RAST-01 §2]; both were corrected together.
+	if st[0].RotX != 1600 || st[0].RotY != 2500 || st[0].RotZ != 3700 {
 		t.Fatalf("fold root angles: got X=%d Y=%d Z=%d", st[0].RotX, st[0].RotY, st[0].RotZ)
 	}
 	// Unit position never enters piece math [03 §2.4] C24 — folding only touches angles

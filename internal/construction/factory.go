@@ -181,6 +181,16 @@ type Service struct {
 	lastPermanent AdmissionDiagnostic             // bounded malformed-node dedupe key
 	hasPermanent  bool
 	lastKill      KillInfo // most recent kind-9 kill packet [05 C21]
+	// completedInPump is the product the completion transition ran on during the
+	// pump StepUnit is currently driving, or 0. It exists because the factory
+	// state machine "restarts at state 0 within the same pump pass, so coalesced
+	// counts build back-to-back with no gap" [05 "Factory production lifecycle"]:
+	// by the time StepUnit inspects the node again its Target is the SUCCESSOR's
+	// nanoframe, so deriving the completed handle from the post-pump head
+	// reported completion only for the last product of a run. Every earlier
+	// product silently never reached the session's completion hook — it got no
+	// mover, so it never left the pad and never took a ground word there.
+	completedInPump pool.Handle
 }
 
 type placementRecord struct {
@@ -797,6 +807,22 @@ func (s *Service) YardOpenTransaction(u *units.Unit, requested bool) bool {
 		return false
 	}
 	id := int16(u.Handle)
+	// Retail reads one ground word per cell here, so a factory cannot close its
+	// yard while a released product still stands on a `c`/`C` cell, and cannot
+	// open it while a foreign unit stands on an `O` cell [04 R-FAC-02 §5].
+	// Nanolathe splits that plane in two — the terrain plot cell and the
+	// movement occupancy grid — and stampBuilding already writes both. The
+	// admission test has to read both for the same reason: construction's plot
+	// stamp is released when a mobile product completes, after which the grid is
+	// the only layer still holding the pad, so a plot-only test admitted the
+	// close with the product still standing in the yard and closed the doors on
+	// it. Whether the script retries the refused write is authored behavior
+	// [04 R-FAC-02 §5].
+	var grid *movement.OccupancyGrid
+	if s.Movement != nil {
+		grid = s.Movement.Grid // nil-safe: every OccupancyGrid method tolerates a nil receiver
+	}
+	gridID := int(u.Handle)
 	for z := record.rect.MinZ(); z < record.rect.MaxZ(); z++ {
 		for x := record.rect.MinX(); x < record.rect.MaxX(); x++ {
 			y := yard[int((z-record.rect.MinZ())*record.rect.Width()+(x-record.rect.MinX()))]
@@ -809,6 +835,9 @@ func (s *Service) YardOpenTransaction(u *units.Unit, requested bool) bool {
 			}
 			cell := s.Terrain.PlotAt(x, z)
 			if cell == nil || (cell.OccupantA() != 0 && cell.OccupantA() != id) {
+				return false
+			}
+			if occ, held := grid.OccupantAt(movement.Cell{X: x, Z: z}); held && occ != 0 && occ != gridID {
 				return false
 			}
 		}
@@ -1024,9 +1053,27 @@ func (s *Service) queryBuildPiecePosition(factory *units.Unit, m *model.Model) (
 	} else {
 		return -1, world.ModelWorldPosition{}, false
 	}
+	// Composed coordinates are MODEL space, and model space is mirrored in Z
+	// against world space: the projection narrows a model-relative vertex as
+	// hi16(-vz) while a unit's own position enters the blit unnegated
+	// [03 R-RAST-01 §2]. A consumer that adds a composed offset to a unit's
+	// world position therefore owes the Z negation, which model.Transform's
+	// note records and leaves to each call site.
+	//
+	// That note holds the heading-zero nose mapping as a supported inference
+	// with a probe still pending, and asks not to flip a sign on the note
+	// alone. This site is settled by authored data instead. The exit footprint
+	// has to land on cells the yard releases when it opens — the 'c'/'C'
+	// region, stamped only while closed [04 R-COLL-01 §4] — because the state-2
+	// area test runs with a null self identity and any non-zero ground word
+	// blocks it [04 R-FAC-02 §5]. Measured over the six stock factories at
+	// their authored build angles: unnegated, ARMAP, CORVP and CORAP put the
+	// exit footprint on always-stamped `o` cells, where no product could ever
+	// validate; negated, all six land inside their own released corridor. Only
+	// one sign choice lets the stock models and the stock yard maps agree.
 	worldX := factory.X.Add(pos[0])
 	worldY := factory.Y.Add(pos[1])
-	worldZ := factory.Z.Add(pos[2])
+	worldZ := factory.Z.Sub(pos[2])
 	return int(pieceIdx), world.NewModelWorldPosition(worldX, worldY, worldZ), true
 }
 
@@ -1337,8 +1384,11 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, r
 	if s.World == nil {
 		return nil, fmt.Errorf("construction: no world/allocator")
 	}
-	// Create at the authored exit model/world position.
-	h, err := s.World.Create(def, factory.Owner, position.X(), position.Y(), position.Z())
+	// Create at the authored exit model/world position. The product is a
+	// nanoframe, not an already-built unit, so it takes the creation service's
+	// unbuilt form and `activatewhenbuilt` does not raise its activation edge
+	// here — completion does [04 R-SPEC-01 §12].
+	h, err := s.World.CreateNanoframe(def, factory.Owner, position.X(), position.Y(), position.Z())
 	if err != nil {
 		return nil, err
 	}
@@ -1375,15 +1425,20 @@ func initializeNanoframe(prod *units.Unit, def *content.UnitDef) {
 	prod.MaxHealth = int32(def.MaxDamage)
 	prod.InBuildStance = false
 	prod.Alive = true
-	// A nanoframe is created INACTIVE. The allocator ran the *pre-built*
-	// creation path, which raises the activation edge for an
-	// `activatewhenbuilt` definition [04 R-SPEC-01 §12]; demoting the record to
-	// an unfinished frame has to take that back, or completion's raise is not
-	// an edge and the `Activate` script never starts [04 R-UNIT-06 §2].
-	// Written directly, not through the edge setter: the frame has no lifecycle
-	// to run down, and the pre-built raise it undoes is not a state the unit
-	// ever occupied.
-	prod.Activated = false
+	// A nanoframe is INACTIVE. The world's own allocation path no longer raises
+	// the edge for a frame (World.CreateNanoframe above), so for that path this
+	// is a no-op. It is kept because the Service.Allocator hook is
+	// caller-supplied and the fixtures behind it allocate through the
+	// already-built World.Create, which does raise; without a lowering here such
+	// a frame would reach completion already active and completion's raise would
+	// not be an edge, so `Activate` would never start [04 R-UNIT-06 §2].
+	//
+	// It goes through the edge setter, not a direct write. A raise that already
+	// happened has already started the unit's `Activate` script, and a stock
+	// extractor's `Activate` spins its arms until `Deactivate` stops it: only a
+	// real falling edge runs `Deactivate` and stops the animation. Clearing the
+	// bit by hand leaves the script running, which is the defect this replaces.
+	prod.SetActivationEdge(false)
 }
 
 // successEpilogue performs the success sequence after allocation [05 C18].
@@ -1731,6 +1786,9 @@ func (s *Service) applyCompletionPosture(product *units.Unit) {
 	}
 	product.Remaining = 0
 	product.Flags |= FlagCompleted
+	// Record the completion for StepUnit's caller; the transition is idempotent
+	// and the second invocation names the same product [04 R-FAC-02 §3].
+	s.completedInPump = product.Handle
 	// Completed units become eligible for AI classification (group 4 construction) [R-P0-04][08].
 	// Nanoframes are created with Flags without 0x20 (initializeNanoframe clears it); completion must restore it.
 	product.Flags |= units.ClassifierEligibleStatus
@@ -1862,6 +1920,30 @@ func (s *Service) handleState0(factory *units.Unit, node *orders.Node, tick uint
 		// bit 2 was invented, and it delayed every factory product by a tick
 		// and armed a gate retail never arms [05 "Factory production
 		// lifecycle"].
+		//
+		// The raise has to be a real edge, because the yard-door handshake is
+		// entirely script-owned: the engine raises Activate and waits, and
+		// nothing but the `Activate` script writes the in-build-stance bit
+		// state 1 tests [05 "Factory production lifecycle"][R-P0-10]. Nanolathe
+		// carries retail's engine-state byte bit 0 on units.Unit.Activated
+		// [04 R-UNIT-06 §2], and units.InitEconomyState pins that bit true at
+		// creation for every definition authoring neither `onoffable` nor
+		// `activatewhenbuilt`, as the economy's stand-in for the branch gate of
+		// [05 R-PROD-01 §2]. Every stock factory is such a definition, so a
+		// factory that reaches its first product with the pinned value still on
+		// it swallows this raise, never starts `Activate`, and waits in state 1
+		// forever. Retail creates a building INACTIVE [04 R-SPEC-01 §12], which
+		// is the state a factory that is not producing actually occupies — the
+		// non-positive branch below already leaves it there once a queue has
+		// drained. Clearing the pinned value immediately before the raise
+		// restores the edge and changes nothing the economy reads: this call
+		// leaves the bit set either way. The guard is the handshake itself. A
+		// factory already in the build stance is mid-production — this is the
+		// same-pass restart from state 4 — and retail's suppression of that
+		// repeat raise is correct, so it must not restart the door script.
+		if !factory.InBuildStance {
+			factory.Activated = false
+		}
 		s.activate(factory)
 		node.Phase = uint8(State1)
 		node.DynamicGate = 0
@@ -2682,7 +2764,10 @@ func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {
 	oldWorld, oldEcon, oldTerrain, oldCat := s.World, s.Economy, s.Terrain, s.Catalog
 	s.World, s.Economy, s.Terrain, s.Catalog = w, econ, terrain, cat
 	// Single-unit pump: only this builder advances.
+	s.completedInPump = 0
 	s.Pump(builder, tick)
+	completedInPump := s.completedInPump
+	s.completedInPump = 0
 	s.World, s.Economy, s.Terrain, s.Catalog = oldWorld, oldEcon, oldTerrain, oldCat
 	s.OnRefresh = oldRefresh
 	// After state.
@@ -2748,6 +2833,16 @@ func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {
 					}
 				}
 			}
+		}
+	}
+	// The completion transition is authoritative over every handle derived from
+	// the post-pump head: a same-pass successor allocation has already replaced
+	// the node's target [05 "Factory production lifecycle"].
+	if completedInPump != 0 {
+		completed = true
+		productHandle = completedInPump
+		if prod := w.Unit(completedInPump); prod != nil && prod.Def != nil {
+			defKey = prod.Def.CanonicalKey
 		}
 	}
 	if defKey == "" {

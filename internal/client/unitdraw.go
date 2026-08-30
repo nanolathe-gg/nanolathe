@@ -124,8 +124,7 @@ func (c *Client) frameIndexedRect(x, y, w, h int, idx uint8) {
 }
 
 // drawUnitOriented renders one interpolated unit as an oriented footprint
-// rectangle rotated by its heading, with its health bar. The generic
-// per-unit selection bracket is not a retail presentation pass [R-SEL-02A].
+// rectangle rotated by its heading, with its health bar.
 // Heading rotates about the projected center; the long axis follows heading
 // (north at 0) matching TA's top-down presentation.
 func (c *Client) drawUnitOriented(v frame.UnitView, sx, sy int32) {

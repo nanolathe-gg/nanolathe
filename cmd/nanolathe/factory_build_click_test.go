@@ -68,7 +68,16 @@ func TestRetailFactoryProductClickQueuesAndBuilds(t *testing.T) {
 	if spawnX == 0 && spawnZ == 0 {
 		t.Fatal("no local commander to place the lab beside")
 	}
-	labHandle, err := sess.Units.Create(labDef, sess.LocalOwner, spawnX, numeric.Fixed(0), spawnZ)
+	// Beside the commander, not on top of it. The lab is 6x6 cells and this
+	// fixture bypasses placement validation, so creating it at the commander's
+	// own position leaves the commander standing inside the yard — and a
+	// factory cannot open its yard while a foreign unit holds a cell the open
+	// state selects [04 R-FAC-02 §5], so the yard-door handshake state 1 waits
+	// on never completes. Ten cells clear of the spawn is a board state the
+	// game itself could produce.
+	const labOffsetCells = 10
+	labHandle, err := sess.Units.Create(labDef, sess.LocalOwner,
+		spawnX+numeric.Fixed(int64(labOffsetCells)<<20), numeric.Fixed(0), spawnZ)
 	if err != nil {
 		t.Fatal(err)
 	}

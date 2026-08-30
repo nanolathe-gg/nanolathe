@@ -120,11 +120,14 @@ func TestPieceParentChildComposition(t *testing.T) {
 	um := syntheticModel(pieces, []syntheticTri{triTurret}, 0)
 	c.models["syn_parent"] = um
 	// Snapshot with script translation (5,0,2) on turret.
+	// The unit sits a hundred units into the map: a model-space +Z vertex
+	// projects UP-screen (`Zn = hi16(-vz)`, [R-RAST-01 §2]), so a unit anchored
+	// at the framebuffer's top edge would compose entirely off it.
 	view := frame.UnitView{
 		Slot:  1,
 		Owner: 0,
-		X:     0,
-		Z:     0,
+		X:     numeric.Fixed(100 * 65536),
+		Z:     numeric.Fixed(100 * 65536),
 		Y:     0,
 		Model: "syn_parent",
 		Pieces: []frame.PieceView{
@@ -140,12 +143,11 @@ func TestPieceParentChildComposition(t *testing.T) {
 	if !c.drawUnitModel(view, sx, sy) {
 		t.Fatalf("drawUnitModel failed")
 	}
-	// Expected world position of child's local origin after composition: authored (10,0,5) + script (5,0,2) = (15,0,7).
-	// So triangle covering (15,0,7) - (19,0,7) - (15,0,11) should be visible.
-	// Screen of (15,0,7): px = 15 + 128 = 143, py = 7 - 0 +32 =39 (wy=0).
-	// Check that pixel at expected center has color 42.
-	// Find bounding box of tri to locate a pixel that must be inside.
-	// We sample a point inside triangle: average of vertices after transform: ( (15+19+15)/3≈16.3, (7+7+11)/3≈8.3) -> screen (144,40).
+	// Expected model-space position of the child's local origin after
+	// composition: authored (10,0,5) + script (5,0,2) = (15,0,7), so the
+	// triangle covers (15,0,7) - (19,0,7) - (15,0,11). Its screen offsets from
+	// the unit anchor are (+15,-7), (+19,-7), (+15,-11): X passes through, Z is
+	// negated by the handedness flip of [R-RAST-01 §2].
 	found := false
 	// Search framebuffer for color 42 to ensure something was drawn.
 	for _, b := range c.indexed {
@@ -178,7 +180,8 @@ func TestPieceParentChildComposition(t *testing.T) {
 	if hScript == h1 {
 		t.Fatalf("parent-child translation via script lane did not change framebuffer: hashes equal %d", hScript)
 	}
-	// Also verify authored translation alone is present: with zero script, triangle at (10,5) -> screen (138,37) should have color.
+	// Also verify authored translation alone is present: with zero script the
+	// triangle sits at model (10,0,5), screen offset (+10,-5) from the anchor.
 	clearIndexed(c)
 	c.drawUnitModel(view2, sx2, sy2)
 	found2 := false

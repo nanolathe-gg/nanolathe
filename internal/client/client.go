@@ -67,13 +67,13 @@ type Client struct {
 	// Runtime is presentation-only bookkeeping for backend frame cadence.
 	runtime float64
 
-	// Palette fallback (WU-04A-2 replaces this with full tables). Every indexed
-	// pixel goes logical → physical through the 256-byte table at present time
-	// only (C7). GUIPAL.PAL is retained by palette.Tables only for GUI semantic
-	// color fields; it is never an alternate pixel route.
-	base    [256][4]byte
-	logical [256]byte
-	pal     *palette.Tables
+	// base is the installed PALETTE.PAL display palette. Every final indexed
+	// pixel resolves through it and nothing else at present time [03 §4.3].
+	// The logical→physical map lives on palette.Tables and is consulted only
+	// where a semantic colour entry is resolved, before that byte is written
+	// into the indexed surface [07 "Retail palette contract"].
+	base [256][4]byte
+	pal  *palette.Tables
 
 	// World / camera for Gate 1 terrain viewer [PLAN_04A]. When set, Frame
 	// draws real TNT terrain instead of the placeholder gradient.
@@ -204,15 +204,13 @@ func New(opts Options) (*Client, error) {
 		featureGACErr:     map[string]error{},
 	}
 	c.in = *newInputState()
-	// Fallback palette: grayscale base and identity logical table. This keeps
-	// the framebuffer path valid before WU-04A-2 loads PALETTE.PAL/ALP/LHT/SHD
-	// and the 256-byte logical→physical lookup [03 §4.3] (C7).
+	// Fallback display palette: grayscale. This keeps the framebuffer path
+	// valid before SetPalette installs PALETTE.PAL [03 §4.3].
 	for i := 0; i < 256; i++ {
 		c.base[i][0] = byte(i)
 		c.base[i][1] = byte(i)
 		c.base[i][2] = byte(i)
 		c.base[i][3] = 255
-		c.logical[i] = byte(i)
 	}
 	return c, nil
 }
@@ -228,7 +226,6 @@ func (c *Client) SetPalette(p *palette.Tables) {
 	c.pal = p
 	if p != nil {
 		c.base = p.Base
-		c.logical = p.Logical
 		c.ResolveUnitStyle()
 	}
 }
@@ -300,6 +297,11 @@ func (c *Client) StepCursorScaledDelta(delta int32) {
 // texture-name index. Presentation state only.
 func (c *Client) SetModelFS(fs *vfs.FS) {
 	c.modelFS = fs
+	// The hover hull reads root-piece vertices from the same presentation model
+	// cache the draw path uses [07 R-REV-01 §1]. PickSnapshotUnit is handed a
+	// camera and a committed frame by shell callers that hold no cache, so the
+	// cache registers itself here, where models first become resolvable.
+	SetUnitHullModels(c)
 	c.modelPresentation = map[modelTextureKey]*modelTextureCursor{}
 	c.modelPlayers = nil
 	c.modelOrientation = map[uint64]*presentationrender.OrientationCache{}

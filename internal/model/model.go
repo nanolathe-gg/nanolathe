@@ -194,10 +194,20 @@ func FoldRootAngles(st []PieceState, root int, heading, pitch, bank uint16) {
 		return
 	}
 	st[root].RotZ += bank // Z = bank [03 §2.4] C24
-	// Heading increases toward +X (east) from north (+Z) per [03 §2.4] and [fmt 3do] "Model facing is −Z" note:
-	// Y rotation positive is CCW (east→north) per applyChain, but engine heading increases clockwise (north→east) [03 §2.4] C21.
-	// Fold as -heading (65536-heading) so heading 90 east (+X) rotates north (+Z) → east (+X) clockwise.
-	st[root].RotY -= heading // Y = -heading [03 §2.4] C24 (retail clockwise)
+	// Correction (the rendered-facing fix). This line previously folded
+	// `-heading`, justified by a comment claiming heading zero travels toward
+	// +Z and that the Y template turns the other way. Both halves were wrong:
+	// heading zero travels toward -Z [04 R-MOV-01 §4], and the negation was in
+	// truth compensating for the model path's missing handedness flip — the
+	// projection narrows the model-relative Z as hi16(-vz) [R-RAST-01 §2],
+	// which reverses the apparent turn sense on screen. With that flip restored
+	// in the projection, the fold is the literal C24 one: heading into Y with
+	// no sign change. Folding -heading while the flip is present renders a unit
+	// turning the wrong way; folding -heading with the flip absent renders it
+	// exactly a half circle from its direction of travel, which is the defect
+	// this pair corrects. Consumers that convert a composed model-space offset
+	// into a world position owe the same Z negation — see the note below.
+	st[root].RotY += heading // Y = heading [03 §2.4] C24 [03 §2.4] C24
 	st[root].RotX += pitch   // X = pitch [03 §2.4] C24
 }
 
@@ -211,6 +221,22 @@ type xformNode struct {
 
 // Transform is the composed world transform for one piece [03 §2.4] C21.
 // world(v) = M_root·…·M_leaf·v with M_i = T(t_i)·R_i [03 §2.4] C21.
+//
+// Composed coordinates are MODEL space, not world space. Model space is
+// mirrored in Z against world space: the projection narrows a model-relative
+// vertex as `hi16(-vz)` while a unit's own position enters the blit as
+// `hi16(unitZ - camZ)` [R-RAST-01 §2]. A consumer that adds a composed offset
+// to a unit's world position must therefore negate the Z component; the model
+// path does this in its projection, and the selection quad does it explicitly.
+//
+// TODO(question): [03 §2.4] says a muzzle flare reuses "the pristine post-load
+// vectors without a second negation" and appears at world `unit + offset`, which
+// contradicts the projection's Z negation above — under that reading a nose
+// muzzle sits behind the unit. [03 §2.4] flags the heading-zero nose mapping as
+// a supported inference with a probe (`ta_probe_xz`) still pending, so the sim
+// consumers of ComposePiece (weapon muzzles, cargo attach, factory build plate)
+// still add the offset unnegated and are a half circle out at every heading.
+// Settling the probe settles them; do not flip those signs on this note alone.
 // Each piece rotates about its own origin FIRST then translates [03 §2.4] C21.
 // Applying the transform replays the chain with float trig round-to-nearest
 // per [03 §2.4] (I2 allowlist: model draw trig), not fixed-point tables [03 §2.4] C25.

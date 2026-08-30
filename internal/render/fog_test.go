@@ -325,16 +325,19 @@ func TestFogPaletteDarkening(t *testing.T) {
 	}
 	cam := &camera.Camera{X: 0, Z: 0, MapW: 64, MapH: 64}
 
-	// Craft palette where dark index maps through logical to different physical
+	// The solid-dark fill writes FogDarkPaletteIndex straight into the indexed
+	// surface, so it is an active PALETTE.PAL index and resolves through Base
+	// alone at present time. The semantic logical→physical map is deliberately
+	// pointed elsewhere here to prove it is not consulted [03 §4.3]
+	// [07 "Retail palette contract"].
 	tables := &palette.Tables{}
 	for i := 0; i < 256; i++ {
 		tables.Logical[i] = byte(i)
 		tables.Base[i] = [4]byte{byte(i), byte(i), byte(i), 0}
 	}
-	// Logical remap: index FogDarkPaletteIndex (0) -> physical 42
 	tables.Logical[FogDarkPaletteIndex] = 42
-	tables.Base[42] = [4]byte{11, 22, 33, 0}
-	tables.Base[0] = [4]byte{99, 99, 99, 0} // should not be used when logical remapped
+	tables.Base[42] = [4]byte{99, 99, 99, 0} // must not be reached by an image byte
+	tables.Base[FogDarkPaletteIndex] = [4]byte{11, 22, 33, 0}
 
 	var ops []FogOp
 	for _, op := range BuildFogOpsInto(nil, cache, cam, 0, 0, 1, 1, tables, false) {
@@ -347,7 +350,7 @@ func TestFogPaletteDarkening(t *testing.T) {
 	}
 	r, g, b, a := FogDarkRGBA(tables)
 	if r != 11 || g != 22 || b != 33 || a != 255 {
-		t.Fatalf("FogDarkRGBA via logical→physical want 11,22,33,255 got %d,%d,%d,%d [03 §4.3]", r, g, b, a)
+		t.Fatalf("FogDarkRGBA through PALETTE.PAL want 11,22,33,255 got %d,%d,%d,%d [03 §4.3]", r, g, b, a)
 	}
 	if ops[0].R != r || ops[0].G != g || ops[0].B != b {
 		t.Fatalf("op dark color mismatch: op %d,%d,%d want %d,%d,%d", ops[0].R, ops[0].G, ops[0].B, r, g, b)
