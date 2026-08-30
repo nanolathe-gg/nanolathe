@@ -1315,6 +1315,16 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, offse
 	if window == nil {
 		return
 	}
+	// BUILD and ORDERS stage from the selected builder's page-shown bit
+	// [07 R-HUD-03 §6]; the committed unit flags carry it [07 §9]. Reading it
+	// once per page keeps the per-gadget verdict a pure function of the
+	// committed frame — no stage or grey state is written back anywhere [I6].
+	paged := false
+	if f != nil && f.CommandPage.Builder != 0 {
+		if builder, found := snapshotUnitByHandle(f, f.CommandPage.Builder); found {
+			paged = hud.IsPaged(builder.Flags)
+		}
+	}
 	for i, gad := range window.Gadgets {
 		if i == 0 || gad.Active == 0 || gad.Kind == gui.KindFont || gad.Kind == gui.KindPanel {
 			continue
@@ -1325,46 +1335,41 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, offse
 		if c.Input() != nil && c.Input().Mouse != nil && c.Input().Mouse.Held(input.MouseButtonLeft) {
 			pressed = guiRectContains(r, int32(c.Input().Mouse.X), int32(c.Input().Mouse.Y))
 		}
-		frame := h.gadgetFrame(gad, pageGAF, pressed, gad.GrayedOut != 0)
-		// [07 R-HUD-03 §6]: `ONOFF` shows the builder's on/off bit as its stage
-		// when the builder is a building, and the mouse-up art of a staged
-		// button is the authored `status` frame plus the stage. The stock
-		// ARMONOFF/CORONOFF gadgets author status 0, so an activated building
-		// selects frame 1.
-		// TODO(question): the general staged painter of that section — the
-		// greyed `status + min(stage + 2, frames − 1)` arm and the other staged
-		// gadgets (CLOAK, MOVEORD, FIREORD, BUILD/ORDERS) — needs the
-		// selection-aggregate words the command-window switch computes, which
-		// the committed frame does not carry yet; that is WU-16-6/WU-16-7
-		// territory, not WU-16-3's.
-		if !pressed && gad.GrayedOut == 0 && f != nil && f.CommandPage.Builder != 0 &&
-			strings.HasSuffix(strings.ToUpper(gad.Name), "ONOFF") {
-			if builder, found := snapshotUnitByHandle(f, f.CommandPage.Builder); found && builder.IsBuilding && builder.Activated {
-				art := gad.Art
-				if art == "" {
-					art = gad.Name
-				}
-				for _, g := range []*formats.GAF{pageGAF, h.intGAF, h.oldMain, h.share, h.common} {
-					if g == nil {
-						continue
-					}
-					entry, ok := g.Find(art)
-					if !ok {
-						continue
-					}
-					if idx := int(gad.Status) + 1; idx >= 0 && idx < len(entry.Frames) {
-						frame = entry.Frames[idx].Frame
-					}
-					break
-				}
-			}
+		command, isCommand := commandButtonState(commandButtonName(gad.Name), f, paged)
+		if isCommand && command.hidden {
+			// A hidden command button is one the switch deactivates outright —
+			// LOAD without the transport bit, BLAST with it [07 R-HUD-03 §6].
+			// An inactive gadget paints nothing [07 §3].
+			continue
 		}
-		if frame != nil {
+		grey := gad.GrayedOut != 0 || (isCommand && command.grey)
+		var frameArt *formats.GAFFrame
+		if isCommand {
+			frameArt = commandButtonFrame(h.gadgetArtEntry(gad, pageGAF), gad, command.stage, grey, pressed)
+		} else {
+			frameArt = h.gadgetFrame(gad, pageGAF, pressed, grey)
+		}
+		if frameArt != nil {
 			// .GUI controls use the authored rectangle origin; unlike the PANEL
 			// shell, their GAF offsets are not applied [07 §4].
-			c.UIBlit(frame, int(r.X), int(r.Y))
+			c.UIBlit(frameArt, int(r.X), int(r.Y))
 		}
-		if gad.Kind == gui.KindButton && gad.Text != "" {
+		// TODO(question): a greyed button's rectangle is darkened "by 20 palette
+		// steps afterwards" [07 R-HUD-03 §6] — after the frame is blitted, which
+		// is where this note sits — but §6 does not say what one palette step is.
+		// [03 R-COMP-02 §5] describes a rectangle shader taking a signed level
+		// whose negative values index the PALETTE.SHD darken rows as level + 32,
+		// which would make "20 steps" row 12; §6 never says the two are the same
+		// operator, so the row is not settled and nothing is darkened here.
+		// Settle it by tracing which level the greyed-button painter passes that
+		// shader. Two things are needed before the darkening can be written: that
+		// finding, and a darkening rectangle operator on internal/client, whose
+		// UILightRect only brightens through PALETTE.LHT — and internal/client is
+		// not this unit's to change.
+		// A command button never draws its caption: the painter reads the art
+		// alone [07 R-HUD-03 §6]. Stock content authors these gadgets with an
+		// empty label anyway.
+		if !isCommand && gad.Kind == gui.KindButton && gad.Text != "" {
 			text := gad.Text
 			if len(gad.Labels) != 0 {
 				text = gad.Labels[0]
@@ -1384,6 +1389,166 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, offse
 			}
 		}
 	}
+}
+
+// commandButtonNames are the gadget names of the command-button stage and grey
+// table [07 R-HUD-03 §6]. Every one of them is authored with the side's
+// nameprefix in stock content — ARMONOFF, CORMOVEORD, ARMUNLOAD — the same
+// shape §6 spells out for "%sPREV"/"%sNEXT", so a gadget is matched by the
+// table name that is a suffix of its own.
+var commandButtonNames = [...]string{
+	"BUILD", "ORDERS", "CLOAK", "ONOFF", "MOVEORD", "FIREORD",
+	"MOVE", "STOP", "ATTACK", "DEFEND", "PATROL", "RECLAIM", "CAPTURE", "REPAIR",
+	"LOAD", "UNLOAD", "BLAST",
+}
+
+// commandButtonName returns the table row a gadget belongs to, or "" when it is
+// not a command button. The longest matching suffix wins, which is what keeps
+// ARMUNLOAD out of the LOAD row and ARMMOVEORD out of the MOVE row.
+func commandButtonName(gadget string) string {
+	upper := strings.ToUpper(gadget)
+	best := ""
+	for _, name := range commandButtonNames {
+		if len(name) > len(best) && strings.HasSuffix(upper, name) {
+			best = name
+		}
+	}
+	return best
+}
+
+// commandButtonVerdict is one row of the stage and grey table, evaluated
+// against the committed frame [07 R-HUD-03 §6]. It is derived per draw and
+// never written back to the gadget, so nothing latches [I6].
+type commandButtonVerdict struct {
+	stage  int
+	grey   bool
+	hidden bool
+}
+
+// commandButtonState evaluates the stage and grey table of [07 R-HUD-03 §6] for
+// one command button. paged is the selected builder's page-shown bit. The
+// second result is false when the name is not a command button at all.
+//
+// The stance and pair values come from the committed selection aggregate the
+// command-window switch computes [07 §9]. A stance field greys at 4 and a
+// cloak/on-off pair at 3, which are the values each fold starts from — so a
+// selection containing nothing that accepts the command greys its button, and a
+// disagreeing selection stages from the disagreement value instead.
+func commandButtonState(name string, f *frame.Frame, paged bool) (commandButtonVerdict, bool) {
+	if name == "" || f == nil {
+		return commandButtonVerdict{}, false
+	}
+	page := f.CommandPage
+	// BUILD and ORDERS are the two halves of the page-shown bit; both grey when
+	// there is no builder or the builder has no pages.
+	noPages := page.Builder == 0 || page.PageCount == 0
+	switch name {
+	case "BUILD":
+		return commandButtonVerdict{stage: boolStage(paged), grey: noPages}, true
+	case "ORDERS":
+		return commandButtonVerdict{stage: boolStage(!paged), grey: noPages}, true
+	case "CLOAK":
+		return commandButtonVerdict{stage: int(page.CloakState), grey: page.CloakState == 3}, true
+	case "ONOFF":
+		return commandButtonVerdict{stage: int(page.OnOffState), grey: page.OnOffState == 3}, true
+	case "MOVEORD":
+		return commandButtonVerdict{stage: int(page.MoveStance), grey: page.MoveStance == 4}, true
+	case "FIREORD":
+		return commandButtonVerdict{stage: int(page.FireStance), grey: page.FireStance == 4}, true
+	// The eight capability buttons carry no stage; each greys when the
+	// selection's aggregate bit for its command is clear.
+	case "MOVE":
+		return commandButtonVerdict{grey: !page.CanMove}, true
+	case "STOP":
+		return commandButtonVerdict{grey: !page.CanStop}, true
+	case "ATTACK":
+		return commandButtonVerdict{grey: !page.CanAttack}, true
+	case "DEFEND":
+		return commandButtonVerdict{grey: !page.CanDefend}, true
+	case "PATROL":
+		return commandButtonVerdict{grey: !page.CanPatrol}, true
+	case "RECLAIM":
+		return commandButtonVerdict{grey: !page.CanReclaim}, true
+	case "CAPTURE":
+		return commandButtonVerdict{grey: !page.CanCapture}, true
+	case "REPAIR":
+		return commandButtonVerdict{grey: !page.CanRepair}, true
+	// The transport trio is the one row that hides rather than greys: without
+	// the transport bit LOAD disappears and UNLOAD greys, with it BLAST
+	// disappears. BLAST otherwise greys unless the selection carries the blast
+	// bit.
+	case "LOAD":
+		return commandButtonVerdict{hidden: !page.IsTransport}, true
+	case "UNLOAD":
+		return commandButtonVerdict{grey: !page.IsTransport}, true
+	case "BLAST":
+		if page.IsTransport {
+			return commandButtonVerdict{hidden: true}, true
+		}
+		return commandButtonVerdict{grey: !page.CanBlast}, true
+	}
+	return commandButtonVerdict{}, false
+}
+
+func boolStage(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+// guiAttribCycle is the cycle-button attribute bit [fmt gui][07 R-WGT-01 §3].
+// Every staged command button in stock content carries it: ARMONOFF, ARMCLOAK,
+// ARMMOVEORD and ARMFIREORD are all authored with it.
+const guiAttribCycle = 0x100
+
+// commandButtonFrame is the button painter's frame choice for a command button
+// [07 R-HUD-03 §6]. Not greyed, the mouse-up art is the authored starting frame
+// plus the stage; greyed it is that starting frame plus min(stage + 2,
+// frames − 1), except that a cycle button takes the last frame outright.
+//
+// §6 names a pressed frame without giving its index; [07 R-WGT-01 §3], which
+// completes §6, gives the layout — a plain button's art is rest, pressed,
+// greyed, and staged art keeps its pressed look in the second-to-last frame. A
+// cycle button has no held look at all: a press on one advances its state and
+// fires immediately, so it keeps showing its stage while the mouse is down.
+//
+// TODO(question): §6 reads the authored `status` field as the frame the stage
+// counts from, while [07 R-WGT-01 §3] reads the same field as the button's
+// down-state word and takes the frame base from art resolution. The two agree
+// wherever `status` is 0, which is how every stock command button is authored,
+// so nothing observable turns on it here; settling it needs a gadget authored
+// with a nonzero `status` and staged art to disagree over.
+func commandButtonFrame(entry *formats.GAFEntry, gad gui.Gadget, stage int, grey, pressed bool) *formats.GAFFrame {
+	if entry == nil || len(entry.Frames) == 0 {
+		return nil
+	}
+	last := len(entry.Frames) - 1
+	cycle := gad.Attribs&guiAttribCycle != 0
+	idx := 0
+	switch {
+	case grey && cycle:
+		idx = last
+	case grey:
+		idx = int(gad.Status) + min(stage+2, last)
+	case pressed && cycle:
+		idx = int(gad.Status) + stage
+	case pressed && gad.Stages != 0:
+		idx = last - 1
+	case pressed:
+		idx = int(gad.Status) + 1
+	default:
+		idx = int(gad.Status) + stage
+	}
+	// Authored art shorter than the frame the table asks for is a bounds guard,
+	// not a retail behavior: an out-of-range index would panic here [I11].
+	if idx < 0 {
+		idx = 0
+	}
+	if idx > last {
+		idx = last
+	}
+	return entry.Frames[idx].Frame
 }
 
 // consumeClick applies the retail order-button latch parser and data-driven build
@@ -1799,22 +1964,28 @@ func (h *retailBattleHUD) resolvePageArt(name string) *formats.GAF {
 	return nil
 }
 
-func (h *retailBattleHUD) gadgetFrame(gad gui.Gadget, page *formats.GAF, pressed, disabled bool) *formats.GAFFrame {
+// gadgetArtEntry resolves a gadget's GAF entry through the authored lookup
+// chain: the page's own GAF first, then the side interface GAF and the shared
+// support GAFs [07 §4].
+func (h *retailBattleHUD) gadgetArtEntry(gad gui.Gadget, page *formats.GAF) *formats.GAFEntry {
 	name := gad.Art
 	if name == "" {
 		name = gad.Name
 	}
-	var entry *formats.GAFEntry
-	stockButtons := false
 	for _, g := range []*formats.GAF{page, h.intGAF, h.oldMain, h.share, h.common} {
 		if g == nil {
 			continue
 		}
 		if found, ok := g.Find(name); ok {
-			entry = found
-			break
+			return found
 		}
 	}
+	return nil
+}
+
+func (h *retailBattleHUD) gadgetFrame(gad gui.Gadget, page *formats.GAF, pressed, disabled bool) *formats.GAFFrame {
+	entry := h.gadgetArtEntry(gad, page)
+	stockButtons := false
 	if entry == nil && gad.Kind == gui.KindButton && h.common != nil {
 		entry, _ = h.common.Find("BUTTONS0")
 		stockButtons = entry != nil

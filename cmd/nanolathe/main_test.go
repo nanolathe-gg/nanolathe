@@ -125,3 +125,28 @@ func TestMissingRootDiagnostic(t *testing.T) {
 		}
 	}
 }
+
+// TestShotFlagDefaults locks the --shot surface: the flag is empty by default,
+// so an ordinary run is unaffected, and --shot-ticks carries a positive default
+// so a capture without one still advances past the entry tail rather than
+// photographing tick zero [01 §4.1].
+func TestShotFlagDefaults(t *testing.T) {
+	var out bytes.Buffer
+	opts, err := parseFlags(nil, &out)
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if opts.Shot != "" {
+		t.Errorf("default Shot = %q, want empty", opts.Shot)
+	}
+	if opts.ShotTicks <= 0 {
+		t.Errorf("default ShotTicks = %d, want positive", opts.ShotTicks)
+	}
+	opts, err = parseFlags([]string{"-shot", "a.png", "-shot-ticks", "5"}, &out)
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if opts.Shot != "a.png" || opts.ShotTicks != 5 {
+		t.Errorf("parsed Shot=%q ShotTicks=%d, want a.png/5", opts.Shot, opts.ShotTicks)
+	}
+}

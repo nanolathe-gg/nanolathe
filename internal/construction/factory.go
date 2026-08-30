@@ -2358,35 +2358,25 @@ func (s *Service) handleState3(factory *units.Unit, node *orders.Node, tick uint
 	}
 	old := product.Remaining
 	nv, hg, energyDemand, metalDemand := ConstructionStep(old, worker, buildTime, product.MaxHealth, product.Def.BuildCostEnergy, product.Def.BuildCostMetal)
-	// Attempt two-resource admission via economy? For factory construction, admission is via builder's buckets.
-	// Simulate admission: if economy is set, try to admit; if fails, do not advance.
+	// This pass's two resource demands go to the builder's own economy subrecord
+	// as one transaction. The helper owns the whole decision: it adds both
+	// amounts to the requested accumulators unconditionally and only then tests
+	// the carries, so a denied pass still reports its demand to the HUD and the
+	// caller must not pre-test the carries for itself [05 R-ECO-01 §7]. The gate
+	// is all-or-nothing — there is no partial work at admission time
+	// [05 "Two-resource admission"] — so a denial advances nothing this tick.
 	admitted := true
 	if s.Economy != nil {
 		bIdx := int(factory.Owner)
 		if bIdx >= 0 && bIdx < len(s.Economy.Players) {
-			// Find builder's unit buckets? But construction admission is per builder's economy subrecord? The helper always records both requested amounts; records both as accepted only if both carries non-positive [05 "Two-resource admission"].
-			// For test, we can simulate that admission succeeds when builder's economy allows.
-			// Simplify: directly check if enough stock? For now assume always admitted unless test injects failure.
-			// Use economy.AdmitTwoResource to record.
-			// Need builder's buckets: s.Economy.UnitBuckets(factory.Handle)
 			if buckets := s.Economy.UnitBuckets(factory.Handle); buckets != nil {
-				// Copy to local to test carry gates?
-				beforeEnergyCarry := (*buckets)[economy.Energy].Carry
-				beforeMetalCarry := (*buckets)[economy.Metal].Carry
-				if beforeEnergyCarry > 0 || beforeMetalCarry > 0 {
-					admitted = false
-				} else {
-					economy.AdmitTwoResource(buckets, energyDemand, metalDemand)
-					// For two-stage settlement, admission success means accepted = demand.
-					// If carries were non-positive, it will be accepted.
-					// We consider admitted true.
-					admitted = true
-				}
+				admitted = economy.AdmitTwoResource(buckets, energyDemand, metalDemand)
 			}
 		}
 	}
 	if !admitted {
-		// Do not advance remaining fraction [05].
+		// Denied work leaves the remaining fraction untouched and retries on the
+		// next tick [05 "Two-resource admission"].
 		node.DynamicGate = WakeBit1 | WakeBit3
 		node.Deadline = int32(tick + 1)
 		return

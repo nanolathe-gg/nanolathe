@@ -45,6 +45,9 @@ func TestSensorTickRequiresTwoPlayers(t *testing.T) {
 // TestSensorCirclesNeverTouchTheWordMask locks C11.
 func TestSensorCirclesNeverTouchTheWordMask(t *testing.T) {
 	s := newTestService(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled)
+	// The emitter is the viewing player's own unit, so it passes the contacts
+	// pass's blip gate [03 §3.9] and reaches the circle layer at all.
+	s.SetLocal(1)
 	surf := &recordingSurfaces{}
 	s.SetSurfaces(surf)
 	before := append([]uint16(nil), s.wordMask...)
@@ -76,6 +79,9 @@ func TestSensorCirclesNeverTouchTheWordMask(t *testing.T) {
 
 func TestSensorActiveGateAndCircleSnapshot(t *testing.T) {
 	s := newTestService(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled)
+	// Both emitters belong to the viewing player, so the blip gate of
+	// [03 §3.9] admits them and the activation bit is what is under test.
+	s.SetLocal(1)
 	surf := &recordingSurfaces{}
 	s.SetSurfaces(surf)
 	var inactiveStatus, activeStatus uint32
@@ -94,6 +100,56 @@ func TestSensorActiveGateAndCircleSnapshot(t *testing.T) {
 	circles[0].Radius = 1
 	if got := s.SensorCircles()[0].Radius; got != 300 {
 		t.Fatalf("circle snapshot was not copied: got %d", got)
+	}
+}
+
+// TestSensorCirclesPassTheContactsPassBlipGate locks WU-17-5's contract: the
+// minimap's sensor circles are drawn by the contacts pass, "for each unit that
+// passes the contacts pass's gates" [03 §3.10], and that pass's gate is the
+// four-way blip disjunct of [03 §3.9]. An enemy radar tower the viewer has
+// neither detected nor sighted satisfies none of the four, so it contributes no
+// circle; the viewer's own tower satisfies the owner disjunct and contributes
+// exactly one.
+func TestSensorCirclesPassTheContactsPassBlipGate(t *testing.T) {
+	s := newTestService(&world.Terrain{CellW: 128, CellH: 128}, ModeHistoryEnabled|ModeCurrentEnabled)
+	s.SetLocal(0)
+	surf := &recordingSurfaces{}
+	s.SetSurfaces(surf)
+
+	var mine, theirs uint32
+	units := []SensorUnit{
+		{ID: 1, Owner: 0, Status: &mine, Alive: true, Active: true,
+			X: tileWorld(2), Z: tileWorld(2), RadarDistance: 100},
+		// Far outside the viewer's radar reach, and no observer covers it, so
+		// neither the contact callback nor the seen probe marks it.
+		{ID: 2, Owner: 1, Status: &theirs, Alive: true, Active: true,
+			X: tileWorld(50), Z: tileWorld(50), RadarDistance: 100},
+	}
+	s.SensorTick(1, 2, nil, units)
+
+	if theirs&FriendlyMask != 0 {
+		t.Fatalf("precondition: the enemy tower is detected, status %#x", theirs)
+	}
+	circles := s.SensorCircles()
+	if len(circles) != 1 {
+		t.Fatalf("emitted %d circles, want only the viewer's own [03 §3.9 blip gate]", len(circles))
+	}
+	if circles[0].SourceID != 1 || circles[0].Radius != 100 {
+		t.Fatalf("circle %+v, want the own tower's authored radius 100 [03 §3.10]", circles[0])
+	}
+	if len(surf.sensor) != 1 {
+		t.Fatalf("rasterized %d outer circles, want 1", len(surf.sensor))
+	}
+
+	// Sighting the enemy sets its seen bit, which is the gate's third
+	// disjunct, and its circle then appears.
+	s.Publish(0, 50, 50, 0, 320)
+	s.SensorTick(2, 2, nil, units)
+	if theirs&SeenBit == 0 {
+		t.Fatalf("precondition: the sighted enemy lacks the seen bit, status %#x", theirs)
+	}
+	if got := len(s.SensorCircles()); got != 2 {
+		t.Fatalf("emitted %d circles after the enemy was sighted, want 2 [03 §3.9]", got)
 	}
 }
 

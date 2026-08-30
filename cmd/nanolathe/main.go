@@ -82,7 +82,7 @@ func run(opts Options, out *os.File) error {
 	// A file-less headless report owns stdout as one JSON document. Windowed
 	// runs and headless runs with a separate report file retain the profile
 	// banner on stdout.
-	if !opts.Headless || opts.Report != "" {
+	if (!opts.Headless || opts.Report != "") && opts.Shot == "" {
 		fmt.Fprintf(out, "%s\n", version.ProfileID())
 	}
 
@@ -91,6 +91,10 @@ func run(opts Options, out *os.File) error {
 		return err
 	}
 	defer content.Close()
+
+	if opts.Shot != "" {
+		return runShot(opts, content)
+	}
 
 	if opts.Headless {
 		return runHeadless(opts, content, out)

@@ -380,8 +380,7 @@ type CommandPageView struct {
 	// unit's definition carries the key, so a button is greyed only when no
 	// selected unit can perform the command.
 	//
-	// TODO(question): [04 "mixed selection and control groups"] states the
-	// opposite — "a button is enabled only when every selected unit carries
+	// TODO(question): [04 §3.7] states the opposite — "a button is enabled only when every selected unit carries
 	// the capability bit" — and that conjunction is contradicted by the
 	// aggregate refresh's folds.  Settle it by landing the capability folds
 	// under [07 §9] as an addendum and correcting doc 04's sentence there,

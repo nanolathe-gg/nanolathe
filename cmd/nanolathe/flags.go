@@ -20,6 +20,8 @@ type Options struct {
 	Mission    string // campaign path and mission selector, e.g. "camps/Arm Campaign.tdf:MISSION0"
 	Difficulty int    // campaign difficulty
 	Report     string // JSON headless summary path; empty writes to stdout
+	Shot       string // compose one frame to this PNG and exit, opening no window
+	ShotTicks  int    // authoritative ticks to advance before the frame is captured
 }
 
 // ErrHelp reports that usage was requested and printed.
@@ -48,6 +50,8 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.Mission, "mission", "", "campaign selector, e.g. \"camps/Arm Campaign.tdf:MISSION0\"")
 	set.IntVar(&opts.Difficulty, "difficulty", 1, "campaign difficulty")
 	set.StringVar(&opts.Report, "report", "", "write the headless JSON summary to this file (default stdout)")
+	set.StringVar(&opts.Shot, "shot", "", "compose one battle frame to this PNG and exit, opening no window")
+	set.IntVar(&opts.ShotTicks, "shot-ticks", 90, "authoritative ticks to advance before --shot captures the frame")
 	set.Usage = func() {
 		fmt.Fprintf(out, "nanolathe — a reimplementation of the Total Annihilation engine\n\n")
 		fmt.Fprintf(out, "usage: nanolathe [flags]\n\nflags:\n")

@@ -68,9 +68,10 @@ func (s *System) SetMoverMode(u *units.Unit, mode uint8) bool {
 		}
 		u.Move.Speed = 0
 		// The setter also runs the bank/pitch routine with a zero delta, which
-		// levels the lean accumulator of [04 R-AIR-01 §2]. That accumulator is
-		// not represented on FlightState, so the level-out has nothing to write
-		// here; it belongs to whoever wires [04 R-AIR-01 §2], not to this call.
+		// decays the lean accumulator of [04 R-AIR-01 §2] by its 0xF333 factor
+		// exactly once and recomputes bank and pitch from the decayed
+		// accumulator. They are levelled, not snapped to zero.
+		s.levelFlightLean(u)
 		u.SetActivationEdge(false)
 	} else {
 		u.SetActivationEdge(true)

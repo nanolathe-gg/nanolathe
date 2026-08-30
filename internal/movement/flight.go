@@ -31,6 +31,7 @@ import (
 	"math"
 
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 // FlightState holds the mutable flight integrator state. See package comment
@@ -63,6 +64,106 @@ type FlightState struct {
 	TargetVZ int32 // command VZ 16.16 [04 §10.1]
 
 	Dirty bool // transform-dirty set when heading delta non-zero [04 §10.1] C30
+
+	// Command is the mover's one motion controller: the flight command block a
+	// can-fly mover allocates instead of the ground route follower
+	// [04 R-AIR-01 §1]. The integrator reads the command words copied out of it,
+	// never the block or an order record directly.
+	Command *FlightCommand
+
+	// Unit is the mover's back-reference to the unit whose two visual angle
+	// words the lean accumulator writes [04 R-AIR-01 §2]. Nil in the isolated
+	// integrator fixtures, which read Bank and Pitch here instead.
+	Unit *units.Unit
+
+	// LeanX/Y/Z are the mover's three-component lean accumulator, zeroed at
+	// mover construction and persistent across ticks [04 R-AIR-01 §1]. It is
+	// simulation state, not presentation: the bank and pitch it produces feed
+	// the piece-angle triple the occupancy commit builds [04 R-AIR-01 §2].
+	LeanX, LeanY, LeanZ int32
+
+	BankScale  int32 // definition bankscale, 16.16, default 1.0 [04 R-AIR-01 §2][02 "Unit record"]
+	PitchScale int32 // definition pitchscale, 16.16, default 0.0 [04 R-AIR-01 §2][02 "Unit record"]
+	Gravity    int32 // map gravity runtime word [04 R-AIR-01 §2][03 R-TERR-01 §6]
+
+	Bank  uint16 // bank angle word written by the lean accumulator [04 R-AIR-01 §2]
+	Pitch uint16 // pitch angle word written by the lean accumulator [04 R-AIR-01 §2]
+}
+
+// flightGoalDistance is the horizontal goal distance of the per-tick command
+// producer [04 R-AIR-01 §1] step 3: the double-precision hypot of the two raw
+// fixed-point differences, truncated toward zero. The result is a raw 16.16
+// quantity, compared against the producer's world-unit thresholds.
+func flightGoalDistance(dx, dz int64) int64 {
+	return int64(math.Hypot(float64(dx), float64(dz)))
+}
+
+// bearing is the shared helper every air call site uses [04 R-AIR-01 §1]:
+// round(atan2(aX − bX, aZ − bZ) · 65536 / 2π), stored under the retail control
+// word's round-to-nearest. Its argument order is (self, other) everywhere, so
+// the caller passes the unit's own position first. This says nothing about which
+// on-screen direction the result faces — the model loader's coordinate negation
+// applies to model data, not to these world coordinates.
+func bearing(ax, az, bx, bz numeric.Fixed) uint16 {
+	angle := math.Atan2(float64(int64(ax)-int64(bx)), float64(int64(az)-int64(bz)))
+	return uint16(roundAngleNearestEven(angle * 65536.0 / (2 * math.Pi)))
+}
+
+// rotateLeanPair rotates the lean accumulator's horizontal pair by the unit's
+// heading, leaving it unchanged when the heading is exactly zero, and stores
+// both results under round-to-nearest [04 R-AIR-01 §2].
+//
+// TODO(question): [04 R-AIR-01 §2] names the shared coordinate-pair rotation and
+// fixes its rounding and its identity at heading zero, but does not state its
+// sign convention, so which of the two transposes it is remains open. The form
+// below matches this codebase's heading convention — heading 0 is +Z and a
+// vector at heading t is (r·sin t, r·cos t) [04 §5.1] — read as body to world.
+// What would settle it is a trace of that shared rotation helper's two stores.
+// Only the bank sign is observable on stock content, because `pitchscale`
+// defaults to zero.
+func rotateLeanPair(x, z int32, heading uint16) (int32, int32) {
+	if heading == 0 {
+		return x, z
+	}
+	sin, cos := math.Sincos(float64(heading) * 2 * math.Pi / 65536.0)
+	px := roundAngleNearestEven(float64(x)*cos - float64(z)*sin)
+	pz := roundAngleNearestEven(float64(x)*sin + float64(z)*cos)
+	return px, pz
+}
+
+// ApplyLean advances the lean accumulator by one tick and rewrites the bank and
+// pitch angle words [04 R-AIR-01 §2]. It is called from the end of the flight
+// integrator with the tick's velocity delta, and from the mover-mode setter with
+// a zero delta.
+//
+// Each component decays by 62259/65536 as a 64-bit signed product shifted down,
+// this tick's velocity delta is added, the horizontal pair is rotated by the
+// unit's heading, and each scaled term is divided against the gravity term
+// L = (gravity << 16) / 3277 through atan2, scaled to the 16-bit angle circle
+// and rounded to nearest. Bank takes the negated rotated X, pitch the negated
+// rotated Z. There is no zero guard on L: a map whose gravity word is zero puts
+// the whole quarter turn on the angle, which is what retail computes.
+func (s *FlightState) ApplyLean(dvx, dvy, dvz int32) {
+	if s == nil {
+		return
+	}
+	s.LeanX = int32((int64(s.LeanX) * leanDecay) >> 16)
+	s.LeanY = int32((int64(s.LeanY) * leanDecay) >> 16)
+	s.LeanZ = int32((int64(s.LeanZ) * leanDecay) >> 16)
+	s.LeanX += dvx
+	s.LeanY += dvy
+	s.LeanZ += dvz
+
+	px, pz := rotateLeanPair(s.LeanX, s.LeanZ, s.Heading)
+	l := (int64(s.Gravity) << 16) / leanGravityDivisor // 64-bit signed divide, truncating [I3]
+	bankTerm := (int64(s.BankScale) * int64(-px)) >> 16
+	pitchTerm := (int64(s.PitchScale) * int64(-pz)) >> 16
+	s.Bank = uint16(roundAngleNearestEven(math.Atan2(float64(bankTerm), float64(l)) * 65536.0 / (2 * math.Pi)))
+	s.Pitch = uint16(roundAngleNearestEven(math.Atan2(float64(pitchTerm), float64(l)) * 65536.0 / (2 * math.Pi)))
+	if s.Unit != nil {
+		s.Unit.Move.Bank = s.Bank
+		s.Unit.Move.Pitch = s.Pitch
+	}
 }
 
 // IntegrateFlight runs the can-fly integrator [04 §10.1] C26–C30.
@@ -84,6 +185,11 @@ func IntegrateFlight(s *FlightState) {
 		s.TurnResidual = 0
 		return
 	}
+
+	// The lean accumulator is driven by the new-minus-old velocity vector
+	// captured after the position commit, so the old vector is taken here, before
+	// the decay [04 §10.1][04 R-AIR-01 §2].
+	oldVX, oldVY, oldVZ := s.VX, s.VY, s.VZ
 
 	// C27 — per-component decay BEFORE command input [04 §10.1].
 	// decay = 0x10000 − trunc((Acceleration<<16)/MaxVelocity)  // signed idiv, trunc toward zero [04 §10.1]
@@ -196,4 +302,7 @@ func IntegrateFlight(s *FlightState) {
 	s.X += s.VX
 	s.Y += s.VY
 	s.Z += s.VZ
+
+	// Bank and pitch, from this tick's velocity delta [04 R-AIR-01 §2].
+	s.ApplyLean(s.VX-oldVX, s.VY-oldVY, s.VZ-oldVZ)
 }

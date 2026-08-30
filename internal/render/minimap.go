@@ -345,7 +345,14 @@ func rebuildFinalExact(mapped *RadarSurface, m camera.Minimap, playW, playH int3
 	}
 
 	// Sensor callbacks are the final surface's circle layer and precede rings
-	// [03 §3.9][03 §3.10]. Their coordinates are 128-world-unit cells.
+	// [03 §3.9][03 §3.10]. Their coordinates are 128-world-unit cells and their
+	// radii are the authored world distances the emitting unit declares: this
+	// is the one place the RadarW · distance / PlayRight truncation of
+	// [03 §3.10] is applied to them, and the producer must not pre-scale.
+	//
+	// The split is [03 §3.10]'s: the single outer circle at
+	// max(radardistance, sonardistance) takes the radar index, and both jam
+	// circles take the jammer index.
 	for _, c := range sensors {
 		rx, ry := RadarProjection(c.U<<7, c.V<<7, 0, playW, playH, m)
 		r := RadarRadius(c.Radius, m.W, playW)

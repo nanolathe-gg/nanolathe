@@ -3463,19 +3463,27 @@ with attribute bit `0x04` (a product slot) is greyed when its name does not
 resolve to a definition. Queue counts on product buttons are [R-P0-11 §2].
 
 **Established — command-button stage and grey state.** After a page opens,
-the command buttons are set from the selection-aggregate words the switch
-computed (§9's "enabled/disabled/mixed" aggregate), by name:
+the command buttons are set from the selection-aggregate words the refresh
+computed. The fold that produces those words — its sentinels, its
+disagreement values, and the identity of every capability bit named "—" below
+— is [R-HUD-03 §13]:
 
 | Gadget | Stage | Greyed when |
 |---|---|---|
 | `BUILD` | builder's page-shown bit (status bit 22) | no builder, or page count 0 |
 | `ORDERS` | inverse of that bit | same |
-| `CLOAK` | aggregate cloak pair (bits 3–4 of the second aggregate word) `>> 3` | pair == 3 (mixed) |
-| `ONOFF` | aggregate on/off pair (bits 5–6) `>> 5` | pair == 3 |
-| `MOVEORD` | aggregate move-stance field (bits 0–2) | field == 4 (mixed) [R-STANCE-01 §1] |
+| `CLOAK` | aggregate cloak pair (bits 3–4 of the second aggregate word) `>> 3` | pair == 3 (not applicable) [R-HUD-03 §13] |
+| `ONOFF` | aggregate on/off pair (bits 5–6) `>> 5` | pair == 3 (not applicable) [R-HUD-03 §13] |
+| `MOVEORD` | aggregate move-stance field (bits 0–2) | field == 4 (not applicable) [R-STANCE-01 §1] |
 | `FIREORD` | aggregate fire-stance field (bits 12–14 of the first word) `>> 12` | field == 4 |
-| `MOVE` `STOP` `ATTACK` `DEFEND` `PATROL` `RECLAIM` `CAPTURE` `REPAIR` | — | the selection's capability bit for that command is clear |
-| `LOAD` / `UNLOAD` / `BLAST` | — | transport bit clear: `LOAD` hidden, `UNLOAD` greyed, `BLAST` greyed unless the blast bit; transport bit set: `BLAST` hidden |
+| `MOVE` `STOP` `ATTACK` `DEFEND` `PATROL` `RECLAIM` `CAPTURE` `REPAIR` | — | **no** selected unit carries that command's capability key [R-HUD-03 §13] |
+| `LOAD` / `UNLOAD` / `BLAST` | — | transport bit (`canload`) clear: `LOAD` hidden, `UNLOAD` greyed, `BLAST` greyed unless the blast bit (`candgun`); transport bit set: `BLAST` hidden |
+
+*Correction (2026-08-30).* This table previously glossed the `CLOAK` and
+`ONOFF` greying value `3` as "(mixed)" and left the capability row's bits
+unnamed. `3` is the not-applicable sentinel and `2` is the mixed value; the
+greying condition itself was and is `3`. [R-HUD-03 §13] carries the fold, the
+evidence, and the auditable form of the correction.
 
 A stage write goes to the gadget's stage word; greying sets bit 0 of the
 gadget's flag word and marks the tree dirty. The button painter then chooses
@@ -4450,7 +4458,8 @@ handler play the already-documented `specialorders`) and marks the panel dirty.
 The two three-bit fields live on **two different** sixteen-bit engine-root
 words — the fire stance in bits 12–14 of one, the move stance in bits 0–2 of
 the next, the latter also carrying the cloak pair (3–4), the on/off pair (5–6)
-and the `MOVE`/`STOP`/`ATTACK`/`DEFEND` enable bits (7–10). Values `0`, `1`
+and the command-capability enable bits (7–15, plus one bit of a third word —
+the full map is [R-HUD-03 §13]). Values `0`, `1`
 and `2` are the three stances, `3` means the selection disagrees, and `4` means
 no selected unit accepts that stance, in which case the repaint grays the
 gadget instead of writing its status word. Stock gadget names are
@@ -4475,7 +4484,8 @@ with bit 22 as the paged indicator (`(page > 0) << 22`, cleared by mask
 sets battle-interface dirty bit `0x10` and plays the `nextbuildmenu` cue.
 Generated side-specific build GUIs and selected-builder identifiers are
 asset/catalog driven, and aggregate command state has distinct
-enabled/disabled/mixed paths across the selected set.
+enabled/disabled/mixed paths across the selected set — the fold that produces
+it is [R-HUD-03 §13].
 
 **Product-page assembly is closed.** The generated-menu input records carry
 both an explicit `PAGE` byte and an explicit `BUTTON` byte. Assembly first
@@ -4945,6 +4955,142 @@ per-order-kind draw-mask bytes are established from the registration tables
 (above). The dash-chain phase arithmetic is established (above); the only
 remaining open cell is the text-pen formula of §5.
 
+### Closed — the selection-aggregate command-state fold, its two sentinel shapes, and two corrected glosses [R-HUD-03 §13] (2026-08-30)
+
+The command buttons of [R-HUD-03 §6] do not read the selection at paint time.
+A single **aggregate command-state refresh** folds the selection into three
+adjacent sixteen-bit interface words, and §6's repaint only reads those words.
+This section is that fold. It leaves every greying *condition* of §6
+unchanged, corrects §6's gloss of one value, and names the capability bits §6
+left unnamed. The three-bit stance half of the same fold is
+[04 R-STANCE-01 §1] and is unchanged by this section.
+
+**Established — when the fold runs, and when it is skipped.** The refresh
+first raises the battle panel's "refresh in progress" flag. It then tests the
+**selected-builder single-select id** (§9): when that id is nonzero the whole
+fold is skipped and the aggregate words keep whatever they already hold — the
+refresh only resolves that one unit for §6's build-page step, and when that
+unit no longer carries a definition index it clears the id and returns having
+touched nothing else. Only when the id is zero does the refresh walk the local
+player's inclusive unit range in ascending pool order at the fixed unit-record
+stride — §9's walk — folding every unit with a nonzero definition index whose
+status word carries selection bit `0x10`. The aggregate words are then written
+unconditionally, so an empty or all-ineligible selection deposits every
+field's starting value.
+
+**Established — four folded state fields, in two shapes.** Each field is
+gated on a per-definition capability; a unit without the gate does not
+participate in that field at all.
+
+| Panel field | Aggregate bits | Definition gate | Per-unit value folded | Starts at | Disagreement |
+|---|---|---|---|---|---|
+| fire stance | first word, 12–14 | `firestandorders` (capability bit 1) | status word bits 20–21 | `4` | `3` |
+| move stance | second word, 0–2 | `mobilestandorders` (capability bit 0) | status word bits 18–19 | `4` | `3` |
+| cloak pair | second word, 3–4 | can-cloak, i.e. `cloakcost > 0` (capability bit 13) [05 R-PROD-01 §7] | the cloak-requested status bit [05 R-ECO-01 §9] | `3` | `2` |
+| on/off pair | second word, 5–6 | `onoffable` (capability bit 2) | the state byte's activated bit (bit 0) [04 R-SPEC-01 §12] | `3` | `2` |
+
+All four folds have one shape: the accumulator starts at a value the per-unit
+field cannot hold; the first gated unit **replaces** that value with its own;
+a later gated unit moves the accumulator to the disagreement value one below
+it. The starting value therefore survives only a walk that folded nothing, and
+it is the **not-applicable** sentinel — "no selected unit carries this
+capability". The three-bit fields need two spare values because their unit
+field holds `0..3`; the two-bit pairs need two spare values because their unit
+field holds `0..1`.
+
+**Correction — [R-HUD-03 §6]'s "mixed" gloss was inverted.** §6's stage/grey
+table read "`CLOAK` … greyed when pair == 3 (mixed)", with the `ONOFF` row
+sharing that gloss. The *condition* is right and is unchanged: `3` greys both
+gadgets. The parenthetical was wrong. `3` is the value each pair starts from,
+so it means **not applicable** — no selected unit is cloak-capable, or none is
+`onoffable` — and `2` is the mixed value. The error was to read the two-bit
+pairs' top value as carrying the same meaning as the three-bit stance fields'
+`3`; the two shapes are parallel, not identical. The stance fields grey at `4`
+(not applicable) and show the generic plate at `3` (mixed); the two-bit pairs
+grey at `3` (not applicable) and show the generic plate at `2` (mixed). §6's
+table now reads "(not applicable)" and points here.
+
+**Established (asset census) — the artwork confirms which value is "mixed".**
+The `anims/commongui.gaf` entries `ARMCLOAK`/`CORCLOAK` and
+`ARMONOFF`/`CORONOFF` carry **five** frames each (the stance entries of
+[04 R-STANCE-01 §8] carry six), rendered through the repo's own GAF and
+palette decoders:
+
+| Frame | `ARMCLOAK` / `CORCLOAK` | `ARMONOFF` / `CORONOFF` |
+|---:|---|---|
+| 0 | `VISIBLE` | `OFF` |
+| 1 | `CLOAKED` | `ON` |
+| 2 | `CLOAK ORDERS` | `OFF/ON ORDERS` |
+| 3, 4 | unlabelled plate | unlabelled plate |
+
+Frame `2` is the generic "orders" plate — exactly the role frame `3` plays on
+the six-frame stance entries — and it is the frame the panel stages when the
+selection disagrees. A pair value of `3` never selects a labelled frame,
+because §6's repaint greys the gadget instead of writing its stage.
+
+**Established — the on/off and cloak folds are not symmetric.** The on/off
+fold compares: a later `onoffable` unit whose activated bit *equals* the
+accumulator leaves it alone, and only a differing one takes the pair to `2`.
+The cloak fold does not compare at all — once the pair is off its `3`
+sentinel, **any** second cloak-capable unit sets it to `2`, agreeing or not.
+The difference is visible in the panel: two units that are both on (or both
+off) still show `ON` (or `OFF`), while two units that are both cloaked still
+show the generic `CLOAK ORDERS` plate. A reimplementation must reproduce the
+asymmetry. Whether it is deliberate is **Unknown**, and it does not need
+deciding to clone the behavior: no observation can separate "intended" from "a
+missing compare", so it is recorded here rather than carried as an open item.
+
+**Established — the capability folds are a disjunction, and the bits are
+named.** §6's table said only "the selection's capability bit for that
+command" and did not identify the bits. They are, with the aggregate word each
+is deposited in:
+
+| Definition key (capability word bit) | Aggregate bit | Command button |
+|---|---|---|
+| `canmove` (7) | second word, bit 7 | `MOVE` |
+| `canstop` (3) | second word, bit 8 | `STOP` |
+| `canattack` (4) | second word, bit 9 | `ATTACK` |
+| `canguard` (5) | second word, bit 10 | `DEFEND` |
+| `canpatrol` (6) | second word, bit 11 | `PATROL` |
+| `canload` (8) | second word, bit 12 | `LOAD` / `UNLOAD`, and `BLAST` visibility |
+| `canreclamate` (10) | second word, bit 13 | `RECLAIM` |
+| `cancapture` (12) | second word, bit 14 | `CAPTURE` |
+| `canreclamate` via the parser's derived copy (9) | second word, bit 15 | `REPAIR` |
+| `candgun` (14) | third word, bit 0 | `BLAST` |
+
+Each fold is a plain OR: the refresh **sets** the aggregate bit for any
+selected unit whose definition carries the key, and never clears one during
+the walk. §6's repaint then greys the button when its aggregate bit is clear.
+So a button is greyed only when **no** selected unit can perform the command;
+one builder plus one tank offers both `RECLAIM` and `MOVE`. `canpatrol`,
+`canreclamate`, `cancapture`, `canload` and `candgun` are named here for the
+first time; the key-by-key record is doc 02's ([02 "Unit record"]).
+
+**Correction — [04 "Mixed selection and control groups"] had this
+conjoined.** Doc 04 said "Command palette enable is the AND across the
+selected set — a button is enabled only when every selected unit carries the
+capability bit, otherwise it is greyed". That is the opposite of the fold
+above, and it is corrected in doc 04 under the section that now carries that
+heading. The likely origin of the error is the observable behavior of the
+*stance* pair, which does grey on a selection where no unit accepts the
+stance; the capability bits behave the other way.
+
+**Established — `REPAIR` reads the derived bit-9 copy of `canreclamate`, and
+bit-9 readers do exist.** The unit-definition parser stores `canreclamate` in
+capability bit 10 and, in the same instruction sequence that stores
+`canresurrect`, writes bit 9 as a copy of bit 10 ([02 R-KEYS-01 §1]). The
+`REPAIR` aggregate above reads that derived copy; the `RECLAIM` aggregate
+reads the original. [02 R-KEYS-01 §1] recorded its decider as "a bit-9 reader
+census"; that census is not empty and not confined to this panel — the command
+resolver's patrol case tests bit 9 alone to choose the repair patrol over the
+plain patrol ([04 §3.4], code 9), the `VTOL_RepairPatrol` handler tests it as
+its own entry gate, and the repair-target predicate tests it on the repairer.
+Because the bit is a verbatim copy of bit 10, none of these can behave
+differently from testing `canreclamate`: `REPAIR` and `RECLAIM` are enabled
+and greyed together for every authored definition. Doc 02 owns that key's
+record and the closure of its open item; this section states only what doc
+07's reader does.
+
 ### Supported inference
 
 The command system should retain a canonical semantic order object from input
@@ -4963,7 +5109,8 @@ colour-map entries, factory product clicks and the queue-count label, the
 drag-rectangle truth table, the eligibility predicate, overlap pick order, the
 fog word-versus-byte gate, group assignment and recall gating, digit routing,
 pagination bit encoding, the latch/dispatcher/cursor tables, the
-mixed-selection AND gate, build cancellation with tombstones, queue-modifier
+mixed-selection capability gate (a disjunction, not the AND this line once
+named — [R-HUD-03 §13]), build cancellation with tombstones, queue-modifier
 mapping, and attack-ground discrimination — is established above, in
 [R-P0-11 §1–§3], [R-REV-01], and [P1-14].
 

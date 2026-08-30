@@ -66,6 +66,13 @@ func TestP0I07_TruthTable(t *testing.T) {
 	// 3. Jammer on minimap not LOS: jammer circles never author word mask [03 §3.4] C11.
 	s2 := newTestService(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled)
 	s2.SetLocal(0)
+	// The viewer sights the enemy jammer's tile. Circles are drawn by the
+	// contacts pass, only for units passing its blip gate [03 §3.9][03 §3.10];
+	// without coverage this enemy fails all four disjuncts and would emit
+	// nothing, which is not what this case is about. The word-mask snapshot is
+	// taken after the publish, so the assertion below still isolates the sensor
+	// phase's own writes.
+	s2.Publish(0, 10, 10, 0, 320)
 	before := append([]uint16(nil), s2.wordMask...)
 	surf := &recordingSurfaces{}
 	s2.SetSurfaces(surf)

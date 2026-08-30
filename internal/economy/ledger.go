@@ -462,16 +462,21 @@ func InitPlayer(p *Player) {
 
 // AdmitTwoResource admits energy and metal demands as one transaction per [05 "Two-resource admission"].
 // It always records both requested amounts; it records both as accepted only if both carries are non-positive.
-func AdmitTwoResource(buckets *[2]Bucket, energy, metal float32) {
+// The bool is the helper's own verdict — true when the work was admitted — so a
+// caller takes the decision from here instead of repeating the gate for itself
+// [05 R-ECO-01 §7].
+func AdmitTwoResource(buckets *[2]Bucket, energy, metal float32) bool {
 	if buckets == nil {
-		return
+		return false
 	}
 	buckets[Energy].Requested += energy
 	buckets[Metal].Requested += metal
 	if buckets[Energy].Carry <= 0 && buckets[Metal].Carry <= 0 {
 		buckets[Energy].Accepted += energy
 		buckets[Metal].Accepted += metal
+		return true
 	}
+	return false
 }
 
 // AdmitOneResource admits an energy-only demand per [05 "One-resource admission"].

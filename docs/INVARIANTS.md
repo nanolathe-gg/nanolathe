@@ -40,6 +40,8 @@ Allowed floating point, exhaustively:
 | Ballistic discriminant, `acos`, `sqrt` | `float64` | `[06 §3.3]` |
 | Area-damage range `sqrt` (radial falloff distance, truncated toward zero to `int32`) | `float64` transient, never stored | `[06 §9.3]` |
 | Flight brake integration temporaries (`hypot`, `h`, `b`, ratio) | `float64`, narrowed at the named fixed-point stores | `[04 §10.1]` |
+| Flight command producer's goal distance `hypot` and the shared air `bearing` `atan2` with its `65536/2π` scale | `float64` transient, narrowed at the `__ftol` truncation and the `uint16` angle store | `[04 R-AIR-01 §1]` |
+| Lean accumulator's two `atan2` terms and the `fsincos` coordinate-pair rotation that feeds them | `float64` transient; bank and pitch are stored as `uint16` angles and are **authoritative**, not presentation | `[04 R-AIR-01 §2]` |
 | Ground follower goal-point bearing and route-distance/lookahead `hypot` temporaries | `float64`, narrowed at the named angle and fixed-point boundaries | `[04 R-MOV-01 §2]`, `[04 R-MOV-01 §3]`, `[04 R-MOV-03 §2]`, `[04 R-PATH-01 §8]` |
 | `StartBuilding` first-argument bearing — `atan2` of the builder-minus-target delta, the compiled `65536/2π` scale, and its round-half-even store | `float64` transient, narrowed at the `uint16` script-argument boundary | `[04 R-CB-01 §3]` |
 | AI resource-score expressions (`energyRaw`, `metalRaw`) | `float32` temporaries and inputs; `TODO(question)` on exact x87 spills | `[08 "Established AI-facing data and rooted planner"]` |

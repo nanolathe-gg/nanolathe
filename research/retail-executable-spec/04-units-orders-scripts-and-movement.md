@@ -1719,8 +1719,9 @@ selected membership and the single-select identifier and sets the interface
 dirty bit.
 
 **Established fact — mixed selection and control groups [P1-14]:** Command
-palette enable is the AND across the selected set — a button is enabled only
-when every selected unit carries the capability bit, otherwise it is greyed.
+palette enable is the **OR** across the selected set — a button is enabled
+when *any* selected unit carries the capability bit, and greyed only when none
+does (corrected 2026-08-30; see the block below and [07 R-HUD-03 §13]).
 Control-group assignment scans the local player's inclusive unit range in
 ascending order; selected units receive the group value while unselected units
 already carrying that value are cleared. Group recall takes a preserve argument
@@ -1730,6 +1731,31 @@ through the authored `CTRL_F` 256-bit type mask indexed by definition
 identifier. Digit routing between build-page selection and group recall uses the
 battle-mode flag and held Alt query, exactly as documented in the interface
 contract.
+
+#### Mixed selection and control groups — the command-palette capability gate is a disjunction (2026-08-30)
+
+*What the previous text said, and why it was wrong.* The paragraph above read:
+"Command palette enable is the AND across the selected set — a button is
+enabled only when every selected unit carries the capability bit, otherwise it
+is greyed." The selection-aggregate refresh that produces those enable bits
+does the opposite. For each of the ten command capabilities it **sets** the
+aggregate bit for any selected unit whose definition carries the key and never
+clears one during the walk, and the panel repaint greys a button when its
+aggregate bit is **clear**. So the gate is a disjunction: a button is greyed
+only when *no* selected unit can perform the command, and a mixed selection of
+a construction unit and a tank offers `RECLAIM`, `REPAIR` and `MOVE` at once —
+issuing to units that cannot perform the command is filtered later, by the
+per-unit capability gates of the command resolver (§3.4). The likely origin of
+the inverted reading is the *stance* pair, which does grey when no selected
+unit accepts the stance ([R-STANCE-01 §1]); the capability bits behave the
+other way. **Established.**
+
+The fold itself, the ten capability keys and the aggregate bit each is
+deposited in, and the parallel two-bit cloak/on-off pairs are
+[07 R-HUD-03 §13]; that section also corrects the "mixed" gloss the interface
+document carried for those pairs. This paragraph's other three claims —
+control-group assignment, group recall and its type-mask branch, and digit
+routing — are unaffected by the correction.
 
 **Established fact — command latches [P1-14]:** The armed-order latch holds
 the order-dispatcher switch key. The GUI button dispatcher arms it by parsing the
