@@ -200,7 +200,14 @@ func raySideStep(pos *Cell, probe *uint8, lower bool, origin Cell, originDir uin
 	if mark(next, d) {
 		return false
 	}
-	*probe = (*probe + 7) & 7
+	if lower {
+		// The lower cursor steps in the direction opposite probe. Advancing the
+		// stored probe after a successful step therefore mirrors the upper
+		// cursor's decrement in actual-step direction space [04 R-PATH-01 §5].
+		*probe = (*probe + 1) & 7
+	} else {
+		*probe = (*probe + 7) & 7
+	}
 	return true
 }
 

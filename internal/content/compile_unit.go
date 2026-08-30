@@ -116,9 +116,10 @@ type UnitDef struct {
 	MoveRate2           int32 // moverate2 fixed default twice maxvelocity just read [02 "Unit record"]
 	TurnRate            int32 // turnrate integer default 0 [02 "Unit record"]
 	Waterline           int32 // waterline integer default 0 [02 "Unit record"]
-	MinWaterDepth       int32 // minwaterdepth integer default 0 — per-unit placement depth floor; classless buildings author it directly (coruwmex.fbi=10) [02 "Unit record"][P0-03]
-	MaxWaterDepth       int32 // maxwaterdepth integer default 0 — per-unit placement depth cap [02 "Unit record"][P0-03]
-	MaxSlope            int32 // maxslope integer default 0 — class-less building placement profile [fmt fbi]
+	MinWaterDepth       int32 // scratch-profile signed-16 minimum depth; template −10000 [02 §5 "Movement class record"][04 §6.1 R-DOC04-A]
+	MaxWaterDepth       int32 // scratch-profile signed-16 maximum depth; template 10000 [02 §5 "Movement class record"][04 §6.1 R-DOC04-A]
+	MaxSlope            int32 // scratch-profile byte slope after the ordered clamps [02 §5 "Movement class record"]
+	MaxWaterSlope       int32 // scratch-profile byte water slope copied with MaxSlope [02 §5 "Movement class record"]
 	CruiseAlt           int32 // cruisealt integer default 0 [02 "Unit record"]
 	TransportSize       int32 // transportsize integer default 0 [02 "Unit record"]
 	TransportCapacity   int32 // transportcapacity integer default 0 [02 "Unit record"]
@@ -285,7 +286,7 @@ func (u *UnitDef) UnknownKeysSorted() []string {
 var knownUnitKeys = map[string]struct{}{
 	"unitname": {}, "name": {}, "description": {}, "side": {}, "objectname": {}, "category": {}, "soundcategory": {}, "corpse": {}, "movementclass": {}, "weapon1": {}, "weapon2": {}, "weapon3": {}, "explodeas": {}, "selfdestructas": {}, "yardmap": {}, "defaultmissiontype": {}, "wpri_badtargetcategory": {}, "wsec_badtargetcategory": {}, "wspe_badtargetcategory": {}, "nochasecategory": {}, "ai_weight": {},
 	"buildcostenergy": {}, "buildcostmetal": {}, "energymake": {}, "energyuse": {}, "metalmake": {}, "extractsmetal": {}, "windgenerator": {}, "tidalgenerator": {}, "energystorage": {}, "metalstorage": {}, "makesmetal": {}, "buildtime": {}, "workertime": {}, "healtime": {}, "cloakcost": {}, "cloakcostmoving": {},
-	"maxvelocity": {}, "brakerate": {}, "acceleration": {}, "bankscale": {}, "pitchscale": {}, "damagemodifier": {}, "moverate1": {}, "moverate2": {}, "turnrate": {}, "waterline": {}, "minwaterdepth": {}, "maxwaterdepth": {}, "maxslope": {}, "cruisealt": {}, "transportsize": {}, "transportcapacity": {}, "buildangle": {}, "builddistance": {}, "sortbias": {}, "maneuverleashlength": {}, "attackrunlength": {}, "kamikazedistance": {}, "footprintx": {}, "footprintz": {},
+	"maxvelocity": {}, "brakerate": {}, "acceleration": {}, "bankscale": {}, "pitchscale": {}, "damagemodifier": {}, "moverate1": {}, "moverate2": {}, "turnrate": {}, "waterline": {}, "minwaterdepth": {}, "maxwaterdepth": {}, "maxslope": {}, "badslope": {}, "maxwaterslope": {}, "badwaterslope": {}, "cruisealt": {}, "transportsize": {}, "transportcapacity": {}, "buildangle": {}, "builddistance": {}, "sortbias": {}, "maneuverleashlength": {}, "attackrunlength": {}, "kamikazedistance": {}, "footprintx": {}, "footprintz": {},
 	"maxdamage": {}, "sightdistance": {}, "radardistance": {}, "sonardistance": {}, "radardistancejam": {}, "sonardistancejam": {}, "mincloakdistance": {},
 	"standingmoveorder": {}, "standingfireorder": {}, "init_cloaked": {}, "downloadable": {}, "builder": {}, "stealth": {}, "bmcode": {}, "zbuffer": {}, "isairbase": {}, "istargetingupgrade": {}, "teleporter": {}, "hidedamage": {}, "shootme": {}, "armoredstate": {}, "activatewhenbuilt": {}, "canfly": {}, "canhover": {}, "upright": {}, "floater": {}, "amphibious": {}, "isfeature": {}, "noshadow": {}, "immunetoparalyzer": {}, "hoverattack": {}, "antiweapons": {}, "digger": {}, "onoffable": {}, "mobilestandorders": {}, "firestandorders": {}, "canstop": {}, "canattack": {}, "canguard": {}, "canpatrol": {}, "canmove": {}, "canload": {}, "canreclamate": {}, "canresurrect": {}, "cancapture": {}, "candgun": {}, "kamikaze": {}, "norestrict": {}, "showplayername": {}, "commander": {}, "cantbetransported": {}, "wacky": {},
 	"selfdestructcountdown": {},
@@ -371,9 +372,17 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 	moveRate2 := section.FixedValue("moverate2", maxVelocity*2)   // [02 "Unit record"]
 	turnRate := section.IntValue("turnrate", 0)
 	waterline := section.IntValue("waterline", 0)
-	minWaterDepth := section.IntValue("minwaterdepth", 0)
-	maxWaterDepth := section.IntValue("maxwaterdepth", 0)
-	maxSlope := section.IntValue("maxslope", 0)
+	// Unit discovery precedes movement-class linking, so compile the per-unit
+	// scratch record now; linking replaces it when the authored class resolves,
+	// while an absent or unresolved name retains it. Reuse the CLASS reader so
+	// the startup template, eight-key parse order, field-width narrowing, and
+	// three unconditional clamps cannot drift between pool and scratch records
+	// [02 §5 "Movement class record"][04 §6.1 R-DOC04-A][fmt fbi].
+	scratchMovement := compileMovementSection(section, unitName, prov)
+	minWaterDepth := scratchMovement.MinWaterDepth
+	maxWaterDepth := scratchMovement.MaxWaterDepth
+	maxSlope := scratchMovement.MaxSlope
+	maxWaterSlope := scratchMovement.MaxWaterSlope
 	cruiseAlt := section.IntValue("cruisealt", 0)
 	transportSize := section.IntValue("transportsize", 0)
 	transportCapacity := section.IntValue("transportcapacity", 0)
@@ -383,8 +392,8 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 	maneuverLeashLength := section.IntValue("maneuverleashlength", 0)
 	attackRunLength := section.IntValue("attackrunlength", 0)
 	kamikazeDistance := section.IntValue("kamikazedistance", 0)
-	footprintX := section.IntValue("footprintx", 0)
-	footprintZ := section.IntValue("footprintz", 0)
+	footprintX := scratchMovement.FootprintX
+	footprintZ := scratchMovement.FootprintZ
 
 	// Combat and sensors [02 "Unit record"].
 	maxDamage := section.IntValue("maxdamage", 0)
@@ -544,6 +553,7 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 		MinWaterDepth:                minWaterDepth,
 		MaxWaterDepth:                maxWaterDepth,
 		MaxSlope:                     maxSlope,
+		MaxWaterSlope:                maxWaterSlope,
 		CruiseAlt:                    cruiseAlt,
 		TransportSize:                transportSize,
 		TransportCapacity:            transportCapacity,
@@ -626,7 +636,7 @@ func writeUnitCanonical(u *UnitDef) []byte {
 	fmt.Fprintf(&b, "%s|%d|%s|%s|%s|%s|%s|%s|%s|", u.CanonicalKey, u.UnitDefID, u.UnitName, u.Name, u.Description, u.Side, u.ObjectName, u.Category, u.SoundCategory)
 	fmt.Fprintf(&b, "%s|", u.Corpse)
 	fmt.Fprintf(&b, "%s|%d|%s|%s|%s|%s|%s|%s|", u.MovementClass, u.MobilityDomain, u.Weapon1, u.Weapon2, u.Weapon3, u.ExplodeAs, u.SelfDestructAs, u.YardMap)
-	fmt.Fprintf(&b, "%d|%d|%d|", u.MinWaterDepth, u.MaxWaterDepth, u.MaxSlope)
+	fmt.Fprintf(&b, "%d|%d|%d|%d|", u.MinWaterDepth, u.MaxWaterDepth, u.MaxSlope, u.MaxWaterSlope)
 	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|", u.DefaultMissionType, u.BadTargetCategoryWPRI, u.BadTargetCategoryWSEC, u.BadTargetCategoryWSPE, u.NoChaseCategory)
 	fmt.Fprintf(&b, "%s|", u.AIWeight)
 	fmt.Fprintf(&b, "%d|%d|%.10f|%.10f|%.10f|%.10f|", u.BuildCostEnergy, u.BuildCostMetal, u.EnergyMake, u.EnergyUse, u.MetalMake, u.ExtractsMetal)
@@ -796,10 +806,12 @@ func LinkUnitWeapons(units map[string]*UnitDef, weapons map[string]*WeaponDef) {
 	}
 }
 
-// ApplyMovementFootprints copies the compiled movement profile footprint into
-// each referencing unit definition. Retail's placement/locomotion definition
-// uses this compiled copy; an authored FBI extent is retained only when the
-// profile leaves that axis absent [07 §9] "The site".
+// ApplyMovementFootprints copies the resolved movement record fields retained
+// by the unit definition: footprint, depth limits, MaxSlope, and MaxWaterSlope
+// [02 §5 "Movement class record"]. An unresolved name keeps the FBI scratch
+// record compiled above. Retail's placement/locomotion definition uses this
+// resolved copy; an authored FBI extent is retained only when the profile
+// leaves that axis absent [07 §9] "The site".
 func ApplyMovementFootprints(units map[string]*UnitDef, movement map[string]*MovementClass) {
 	keys := make([]string, 0, len(units))
 	for key := range units {
@@ -821,8 +833,12 @@ func ApplyMovementFootprints(units map[string]*UnitDef, movement map[string]*Mov
 		if mc.FootprintZ > 0 {
 			u.FootprintZ = mc.FootprintZ
 		}
-		// The footprint is part of the immutable compiled definition and thus
-		// must participate in its canonical identity/hash.
+		u.MaxWaterDepth = mc.MaxWaterDepth
+		u.MinWaterDepth = mc.MinWaterDepth
+		u.MaxSlope = mc.MaxSlope
+		u.MaxWaterSlope = mc.MaxWaterSlope
+		// The resolved profile is part of the immutable compiled definition and
+		// thus must participate in its canonical identity/hash.
 		u.Hash = HashDefinition(writeUnitCanonical(u))
 	}
 }

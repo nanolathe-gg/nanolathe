@@ -93,6 +93,42 @@ func TestReconciliationRayNonStartRepeatContinues(t *testing.T) {
 	}
 }
 
+func TestReconciliationLowerRaySideReturnsToOwnOrigin(t *testing.T) {
+	origin := Cell{1, 1}
+	pos := origin
+	probe := DirNW
+	state := raySideState{}
+	result := rayResult{}
+	passable := func(c Cell) uint8 {
+		if c == origin || c == (Cell{0, 0}) {
+			return 3
+		}
+		return 0
+	}
+	mark := func(Cell, uint8) bool { return false }
+
+	// With the lower cursor's successful-step probe rewritten in the wrong
+	// direction, this exact two-cell fixture repeats a non-origin state
+	// forever. The established transition returns to the side's own origin
+	// state, which is the only permitted repeat termination [04 R-PATH-01 §5].
+	terminated := false
+	for range 16 {
+		if !raySideStep(&pos, &probe, true, origin, DirNW, &state, passable, &result, mark) {
+			terminated = true
+			break
+		}
+	}
+	if !terminated {
+		t.Fatal("lower side did not return to its origin state within 16 probes")
+	}
+	if !state.departed || pos != origin || probe != DirNW {
+		t.Fatalf("lower side terminated outside its origin state: pos=%v probe=%d state=%+v", pos, probe, state)
+	}
+	if result.steps != 12 {
+		t.Fatalf("lower side charged %d probes, want 12 [04 R-PATH-01 §5]", result.steps)
+	}
+}
+
 func TestReconciliationBudgetContinuation(t *testing.T) {
 	cfg := SearchConfig{Start: Cell{}, Goal: PointGoal(Cell{120, 0}, 0), PassableValue: func(Cell) uint8 { return 3 }, Scale: 65536}
 	one := Search(cfg)

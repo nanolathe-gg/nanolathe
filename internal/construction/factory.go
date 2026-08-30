@@ -2183,10 +2183,12 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 	if product != nil {
 		// The second transition must not create a duplicate Activate callback.
 		s.applyCompletionPosture(product)
-		// Clear the construction presentation payload before count bookkeeping.
+		// Clear the construction presentation payload before completion bookkeeping.
 		node.GoalX, node.GoalY, node.GoalZ = 0, 0, 0
-		// Decrement node's remaining count once [05].
-		if node.Param2 > 0 {
+		// Only BuildingBuild repeats through its count. MobileBuild and
+		// VTOL_MobileBuild are ordinary one-shot completions even when a
+		// coalesced record carries Param2 greater than one [04 R-ORD-01 §5].
+		if !isMobileBuild(node.ID) && node.Param2 > 0 {
 			node.Param2--
 		}
 		// Clear builder/product link on completion [P0-14]; the death/capture
@@ -2199,26 +2201,25 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 			s.OnRefresh(factory)
 			s.OnRefresh(product)
 		}
-		// Result 0 always restarts state 0 in this same primary-pump pass. The
-		// count test there is authoritative: an empty count lowers activation
-		// after StopBuilding, while a successor remains active and can allocate
-		// immediately through the already-high stance gate [R-FAC-01R].
+		// BuildingBuild result 0 restarts state 0 in this same primary-pump
+		// pass. The count test there is authoritative: an empty count lowers
+		// activation after StopBuilding, while a successor remains active and
+		// can allocate immediately through the already-high stance gate
+		// [R-FAC-01R].
 		node.Phase = uint8(State0)
 		node.DynamicGate = 0
 		node.Deadline = -1
 		node.Target = 0
 		if isMobileBuild(node.ID) {
-			// P28-FAC-01I changes only the building-class factory lifecycle.
-			// Mobile construction has no factory activation/door callback path.
-			if node.Param2 == 0 {
-				s.removeHead(factory, node)
-			}
+			// Phase-4 MobileBuild completion is an ordinary completion result:
+			// cleanup and remove the record once, independent of Param2
+			// [04 R-ORD-01 §5].
+			s.removeHead(factory, node)
 		} else {
 			s.handleState0(factory, node, tick)
 		}
 	} else {
-		// No product? Still decrement and free?
-		if node.Param2 > 0 {
+		if !isMobileBuild(node.ID) && node.Param2 > 0 {
 			node.Param2--
 		}
 		node.Phase = uint8(State0)
@@ -2226,9 +2227,7 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 		node.Deadline = -1
 		node.Target = 0
 		if isMobileBuild(node.ID) {
-			if node.Param2 == 0 {
-				s.removeHead(factory, node)
-			}
+			s.removeHead(factory, node)
 		} else {
 			s.handleState0(factory, node, tick)
 		}

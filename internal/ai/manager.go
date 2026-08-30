@@ -523,6 +523,15 @@ func (m *Manager) doConstruction(tick uint32, w *units.World, econ *economy.Serv
 		if !m.hasBuildOptionsForDef(u.Def) {
 			continue
 		}
+		// Pass 1 skips a builder whose current primary record carries static
+		// gate-mask bit 3. The bit's semantic name remains unknown; test the
+		// record copy directly, not its command identity or dynamic wake mask
+		// [08 R-AI-01 §3][04 "Order descriptor table"].
+		if q := orders.QueueOfUnit(u); q != nil {
+			if current := q.Head(); current != nil && current.StaticGate&0x8 != 0 {
+				continue
+			}
+		}
 		cand, ok := Select(m, u, econ)
 		if !ok {
 			continue
