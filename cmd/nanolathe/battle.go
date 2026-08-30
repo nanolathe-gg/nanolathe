@@ -79,10 +79,15 @@ var clPtr *client.Client
 
 // runBattleView launches the windowed battle view over the real session.
 func runBattleView(opts Options, cs *contentSet) error {
-	sess, cat, err := newBattleSession(opts, cs)
+	request, err := directMapBattleRequest(opts, cs, newBattleSeedSource(opts))
 	if err != nil {
 		return err
 	}
+	authoritative, err := composeAuthoritativeBattle(request)
+	if err != nil {
+		return err
+	}
+	sess, cat := authoritative.Session, authoritative.Session.Catalog
 	var (
 		b  *battleSession
 		cl *client.Client
@@ -112,7 +117,7 @@ func runBattleView(opts Options, cs *contentSet) error {
 			cl.RequestExit()
 		}
 	}
-	defer detachBattleAudio(cl, sess)
+	defer b.teardown(cl)
 	// Software cursor [07 §8]. The cursor GAF is mandatory for a windowed
 	// battle, and installation happens before entering Ebitengine's loop.
 	cursors, cerr := client.LoadCursors(cs.fs)
@@ -184,11 +189,60 @@ func composeBattleEntry(sess *session.Session, cat *content.Catalog, cs *content
 	return b, nil
 }
 
+// teardown is the one idempotent battle-exit boundary. Presentation joins are
+// detached before authoritative references are dropped, and every interaction
+// latch is reset so a later load cannot reach the old battle [08 "Session
+// states"][08 R-ENTRY-01 §8][I6].
+func (b *battleSession) teardown(cl *client.Client) {
+	if b == nil {
+		return
+	}
+	if b.battleUI != nil {
+		b.closeBattleMenu()
+		b.battleUI.SetPanelCue(nil)
+		b.battleUI.ResetInteraction()
+	}
+	if cl != nil {
+		cl.SetUIStage(nil)
+		cl.SetAudioService(nil)
+		cl.SetTerrain(nil)
+		cl.SetCamera(nil)
+		cl.SetPalette(nil)
+		cl.SetFNT(nil)
+		cl.SetSnapshot(&frame.Buffer{})
+		if in := cl.Input(); in != nil {
+			*in = *input.NewState()
+		}
+	}
+	detachBattleAudio(cl, b.sess)
+	if b.controller != nil {
+		b.controller.battle = nil
+	}
+	b.ended = true
+	b.sess = nil
+	b.cat = nil
+	b.cam = nil
+	b.hud = nil
+	b.fs = nil
+	b.shell = nil
+	b.battleUI = nil
+	b.controller = nil
+	b.returnToMenu = nil
+	b.returnToSkirmish = nil
+}
+
 // newBattleSession builds the integrated skirmish session for the window.
 // It uses the canonical DirectSkirmishConfig normalization [08 "Skirmish configuration"] [GAP T14].
 func newBattleSession(opts Options, cs *contentSet) (*session.Session, *content.Catalog, error) {
-	cfg := session.DirectSkirmishConfig(opts.Map)
-	return newBattleSessionWithConfigAndSource(opts, cs, cfg, newBattleSeedSource(opts))
+	request, err := directMapBattleRequest(opts, cs, newBattleSeedSource(opts))
+	if err != nil {
+		return nil, nil, err
+	}
+	authoritative, err := composeAuthoritativeBattle(request)
+	if err != nil {
+		return nil, nil, err
+	}
+	return authoritative.Session, authoritative.Session.Catalog, nil
 }
 
 // newBattleSessionWithConfig is the windowed composition path used by the
@@ -202,16 +256,15 @@ func newBattleSessionWithConfig(opts Options, cs *contentSet, cfg session.Skirmi
 // battle entry. The selected pair is copied into the session configuration
 // before NewSkirmishWithFS performs any setup-owned draw [R-CORE-02].
 func newBattleSessionWithConfigAndSource(opts Options, cs *contentSet, cfg session.SkirmishConfig, source BattleSeedSource) (*session.Session, *content.Catalog, error) {
-	if cfg.MapName == "" {
-		cfg.MapName = opts.Map
-	}
-	cfg.ApplyDefaults()
-	cfg = configWithBattleSeeds(cfg, source)
-	sess, err := session.NewSkirmishWithFS(cs.fs, nil, cfg)
+	request, err := skirmishBattleRequest(opts, cs, cfg, headlessScenarioSkirmish, nil, source)
 	if err != nil {
 		return nil, nil, err
 	}
-	return sess, sess.Catalog, nil
+	authoritative, err := composeAuthoritativeBattle(request)
+	if err != nil {
+		return nil, nil, err
+	}
+	return authoritative.Session, authoritative.Session.Catalog, nil
 }
 
 // configWithBattleSeeds is the composition boundary for skirmish setup. It
@@ -1578,15 +1631,19 @@ func (b *battleSession) continueFromResult(view frame.ResultView, cl *client.Cli
 			if nextIdx, hasNext, err := mission.NextCampaignMission(b.fs, campaignPath, curIdx); err == nil && hasNext {
 				nextPath := fmt.Sprintf("%s:MISSION%d", campaignPath, nextIdx)
 				prevProgress := b.sess.Progress
-				seeds := newBattleSeedSource(b.shell.opts).NextBattleSeeds()
-				b.shell.beginLoad("", modeMenuMission, func(state *loadingState) (*session.Session, error) {
-					sess2, err := session.NewMissionWithProgressSeeds(b.fs, nil, nextPath, difficulty, uint32(seeds.Simulation), seeds.CRT, state.report)
-					if err != nil {
-						return nil, err
+				shell := b.shell
+				opts := shell.opts
+				cs := shell.cs
+				request, requestErr := missionBattleRequest(opts, cs, nextPath, difficulty, nextIdx, nextIdx, nil, newBattleSeedSource(opts))
+				if requestErr != nil {
+					if b.returnToMenu != nil {
+						b.returnToMenu(cl)
 					}
+					return
+				}
+				shell.beginFreshBattleLoad("", modeMenuMission, request, func(sess2 *session.Session) {
 					sess2.Progress = prevProgress
 					sess2.CampaignSlot = nextIdx
-					return sess2, nil
 				})
 				return
 			}

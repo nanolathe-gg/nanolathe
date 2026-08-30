@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 // helper to make a collision state with defaults.
@@ -124,10 +125,11 @@ func TestHeadOnSwapBlocks(t *testing.T) { // [04 §8.2] C22 head-on swaps block
 
 func TestSameCellFastPathSkipsValidator(t *testing.T) { // [04 §8.2] C23
 	grid := NewOccupancyGrid()
+	startX, startZ := world.PlacementCenter(5, 3, 1, 1)
 	s := &CollisionState{
 		ID:           1,
-		X:            int32(5 * worldUnitsPerCell),
-		Z:            int32(3 * worldUnitsPerCell),
+		X:            int32(startX),
+		Z:            int32(startZ),
 		VX:           int32(1000), // small creep within same cell
 		VZ:           int32(-500),
 		FootPrintX:   1,

@@ -40,6 +40,7 @@ Allowed floating point, exhaustively:
 | Ballistic discriminant, `acos`, `sqrt` | `float64` | `[06 §3.3]` |
 | Area-damage range `sqrt` (radial falloff distance, truncated toward zero to `int32`) | `float64` transient, never stored | `[06 §9.3]` |
 | Flight brake integration temporaries (`hypot`, `h`, `b`, ratio) | `float64`, narrowed at the named fixed-point stores | `[04 §10.1]` |
+| Ground follower goal-point bearing and route-distance/lookahead `hypot` temporaries | `float64`, narrowed at the named angle and fixed-point boundaries | `[04 R-MOV-01 §2]`, `[04 R-MOV-01 §3]`, `[04 R-MOV-03 §2]`, `[04 R-PATH-01 §8]` |
 | AI resource-score expressions (`energyRaw`, `metalRaw`) | `float32` temporaries and inputs; `TODO(question)` on exact x87 spills | `[08 "Established AI-facing data and rooted planner"]` |
 | Per-unit order-guard float (eligibility exact compare `== 0.0`; nonzero while an order is processed) | `float32` | `[07 §8]`, `[07 §9]` |
 | Simulation trig-table construction at initialization | `float64` transient; authoritative table entries are integers | `[04 §5.1]` |

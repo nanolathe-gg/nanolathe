@@ -4,12 +4,11 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/orders"
-	pathpkg "github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 )
 
-func TestPathActivationPreflightsGoalBeforeSubmission(t *testing.T) {
+func TestPathActivationSubmitsGoalForSearchValidation(t *testing.T) {
 	rng.SeedGlobal(100, 200)
 	cat := minimalCatalogForStrict()
 	for _, def := range cat.Units {
@@ -57,15 +56,14 @@ func TestPathActivationPreflightsGoalBeforeSubmission(t *testing.T) {
 		t.Fatal("bad order was not queued")
 	}
 	s.Step(1)
-	if s.Movement.HasPathRequest(h) {
-		t.Fatal("impassable goal submitted a scheduler request")
+	if !s.Movement.HasPathRequest(h) {
+		t.Fatal("goal was not submitted for path search validation")
 	}
-	if q.Head() != nil {
-		t.Fatal("impassable goal was not removed")
+	if q.Head() != badHead || badHead.MoveState != orders.MoveEnRoute {
+		t.Fatal("submission consumed or blocked the active order before search")
 	}
-	if badHead.MoveState != orders.MoveBlocked || badHead.PathStatus != uint32(pathpkg.StatusRejected) {
-		t.Fatalf("bad order state=%d status=%#x, want blocked/rejected", badHead.MoveState, badHead.PathStatus)
-	}
+	q.CancelAll()
+	s.Movement.DeactivateMove(h)
 
 	targetH, err := s.Units.Create(def, 1, numeric.Fixed(100*16*65536), 0, numeric.Fixed(100*16*65536))
 	if err != nil {
@@ -78,18 +76,16 @@ func TestPathActivationPreflightsGoalBeforeSubmission(t *testing.T) {
 		t.Fatal("target order was not queued")
 	}
 	// The stored click is passable, but the target's current position is not.
-	// Resolution must happen before preflight, otherwise this request slips
-	// through with the stale click and gets submitted.
+	// Resolution still happens before submission; search owns the rejection.
 	s.Step(2)
-	if s.Movement.HasPathRequest(h) {
-		t.Fatal("target order submitted using a stale passable goal")
+	if !s.Movement.HasPathRequest(h) {
+		t.Fatal("resolved target position was not submitted")
 	}
-	if q.Head() != nil {
-		t.Fatal("target order with impassable current position was not removed")
+	if q.Head() != targetHead || targetHead.MoveState != orders.MoveEnRoute {
+		t.Fatal("target order was consumed before search validation")
 	}
-	if targetHead.MoveState != orders.MoveBlocked || targetHead.PathStatus != uint32(pathpkg.StatusRejected) {
-		t.Fatalf("target order state=%d status=%#x, want blocked/rejected", targetHead.MoveState, targetHead.PathStatus)
-	}
+	q.CancelAll()
+	s.Movement.DeactivateMove(h)
 
 	valid := orders.NewMoveNode(id, numeric.Fixed(10*16*65536), numeric.Fixed(10*16*65536), 1, h, false)
 	q.Push(id, valid)

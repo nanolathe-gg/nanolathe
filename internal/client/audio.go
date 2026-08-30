@@ -2,6 +2,7 @@ package client
 
 import (
 	"github.com/nanolathe/nanolathe/internal/audio"
+	"github.com/nanolathe/nanolathe/internal/audiobackend"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 )
@@ -37,16 +38,17 @@ func (c *Client) SetAudioService(a *audio.Service) {
 }
 
 // SetAudioBackend installs the PCM backend directly [03 §8.3] [I6].
-func (c *Client) SetAudioBackend(b *audio.Backend) {
+func (c *Client) SetAudioBackend(b *audiobackend.Backend) {
 	if c == nil {
 		return
 	}
-	audio.SetGlobalBackend(b)
+	audio.SetGlobalOutput(b)
 }
 
 // AudioBackend returns the installed PCM backend (presentation-only) [I6].
-func (c *Client) AudioBackend() *audio.Backend {
-	return audio.GlobalBackend()
+func (c *Client) AudioBackend() *audiobackend.Backend {
+	b, _ := audio.GlobalOutput().(*audiobackend.Backend)
+	return b
 }
 
 func (c *Client) ensureAudioBackend() {
@@ -56,8 +58,8 @@ func (c *Client) ensureAudioBackend() {
 	if audio.GlobalOutput() != nil {
 		return
 	}
-	b := audio.NewBackend()
-	audio.SetGlobalBackend(b)
+	b := audiobackend.New()
+	audio.SetGlobalOutput(b)
 }
 
 // SetAudioViewport sets the presentation viewport for positional pan and
@@ -131,7 +133,7 @@ func (c *Client) UpdateAudioViewportFromCamera() {
 		MapW:   mapW,
 		MapH:   mapH,
 	}
-	if be := audio.GlobalBackend(); be != nil {
+	if be := c.AudioBackend(); be != nil {
 		v.StereoCapable = be.Capabilities().Stereo
 	}
 	if c.audioService != nil {

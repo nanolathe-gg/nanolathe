@@ -49,7 +49,7 @@ func TestStepUnitMobileBuildStopsOnMoveArrived(t *testing.T) {
 	grid := NewOccupancyGrid()
 	system := NewSystem(terrain, profile, grid)
 	w := newMovementFixtureWorld(10)
-	def := &content.UnitDef{UnitName: "corcom", MaxVelocity: 3 * 65536, TurnRate: 800, SightDistance: 120}
+	def := &content.UnitDef{UnitName: "corcom", MaxVelocity: 3 * 65536, Acceleration: 3 * 65536, BrakeRate: 3 * 65536, TurnRate: 800, SightDistance: 120}
 	def.MaxDamage = 100
 	def.FootprintX = 1
 	def.FootprintZ = 1
@@ -72,8 +72,14 @@ func TestStepUnitMobileBuildStopsOnMoveArrived(t *testing.T) {
 	drive := func(moveState uint8) StepResult {
 		q := orders.QueueForUnit(u)
 		q.Push(mid, orders.Node{GoalX: goalX, GoalZ: goalZ, MoveState: moveState})
-		// No path request is submitted, so no route publishes: the direct-goal
-		// fallback is the only way the mover could advance.
+		route := system.Routes[h]
+		route.Active = false
+		if moveState == orders.MoveEnRoute {
+			route.PublishAtRevision([]Point{
+				{X: int32(u.X.Raw() >> 16), Z: int32(u.Z.Raw() >> 16)},
+				{X: int32(goalX.Raw() >> 16), Z: int32(goalZ.Raw() >> 16)},
+			}, system.staticObstacleRevision())
+		}
 		system.Scheduler.Tick(1)
 		beforeX := u.X
 		system.BeginTick(2)
@@ -84,7 +90,7 @@ func TestStepUnitMobileBuildStopsOnMoveArrived(t *testing.T) {
 		return res
 	}
 
-	// En-route: the direct-goal fallback drives the builder toward the site.
+	// En-route: an installed path drives the builder toward the site.
 	enRoute := drive(orders.MoveEnRoute)
 	if !enRoute.Moved {
 		t.Fatalf("en-route MobileBuild head did not drive toward the site: %+v", enRoute)
@@ -106,7 +112,7 @@ func TestStepUnitGroundArrival(t *testing.T) {
 	grid := NewOccupancyGrid()
 	system := NewSystem(terrain, profile, grid)
 	w := newMovementFixtureWorld(10)
-	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 3 * 65536, TurnRate: 800, SightDistance: 120}
+	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 3 * 65536, Acceleration: 3 * 65536, BrakeRate: 3 * 65536, TurnRate: 800, SightDistance: 120}
 	def.MaxDamage = 100
 	def.FootprintX = 1
 	def.FootprintZ = 1

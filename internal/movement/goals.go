@@ -3,7 +3,6 @@ package movement
 import (
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
-	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 // OW-3-P goal-families wiring [04 §7.2][04 §7.4][04 §3.5].
@@ -80,6 +79,13 @@ const (
 //
 // All other orders => PointGoal(radius 0) [04 §7.2] C8.
 func (s *System) goalForOrder(goalCell path.Cell, n *orders.Node) path.Goal {
+	return s.goalForOrderWithFootprint(goalCell, n, 1, 1)
+}
+
+// goalForOrderWithFootprint uses the owning mover's footprint for target
+// snapping. Annulus centres are constructed from target world positions with
+// the same footprint formula as point goals [04 R-MOV-03 §2].
+func (s *System) goalForOrderWithFootprint(goalCell path.Cell, n *orders.Node, footX, footZ int32) path.Goal {
 	if n == nil {
 		return path.PointGoal(goalCell, 0)
 	}
@@ -91,7 +97,7 @@ func (s *System) goalForOrder(goalCell path.Cell, n *orders.Node) path.Goal {
 		center := goalCell
 		if n.Target != 0 && s != nil && s.world != nil {
 			if tgt := s.world.Unit(n.Target); tgt != nil {
-				center = path.Cell{X: world.WorldToCell(tgt.X), Z: world.WorldToCell(tgt.Z)}
+				center = path.Cell{X: goalCellForWorld(tgt.X, footX), Z: goalCellForWorld(tgt.Z, footZ)}
 			}
 		}
 		// Wire AnnulusGoal structure with placeholder inner/outer; orbit cadence (Code 3 30+RNG) and vertical halve (Param2 substate) remain TODO(question) [04 §3.5][M-4][04 §7.2][04 §7.4]
@@ -102,7 +108,7 @@ func (s *System) goalForOrder(goalCell path.Cell, n *orders.Node) path.Goal {
 		center := goalCell
 		if n.Target != 0 && s != nil && s.world != nil {
 			if ward := s.world.Unit(n.Target); ward != nil {
-				center = path.Cell{X: world.WorldToCell(ward.X), Z: world.WorldToCell(ward.Z)}
+				center = path.Cell{X: goalCellForWorld(ward.X, footX), Z: goalCellForWorld(ward.Z, footZ)}
 			}
 		} else if n.Target != 0 {
 			// Target not yet resolvable; keep goalCell as center placeholder.

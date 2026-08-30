@@ -27,7 +27,12 @@ type Route struct {
 	Count  uint8
 	Active bool
 	Dirty  bool
-	Status path.Status // last publish status [04 §7.2] 0 success, 0x100 already, 0x200 rejected
+	// WantsRepath and LastRequestTick are the route follower's request-poll
+	// state. They are runtime state, not part of the compact route save form
+	// implemented below [04 R-MOV-01 §3][04 R-MOV-01 §7].
+	WantsRepath     bool
+	LastRequestTick uint32
+	Status          path.Status // last publish status [04 §7.2] 0 success, 0x100 already, 0x200 rejected
 	// StaticRevision is Nanolathe runtime metadata. It is not part of the
 	// retail route save encoding [04 §7.3].
 	StaticRevision uint64
@@ -57,6 +62,7 @@ func (r *Route) PublishAtRevision(points []Point, revision uint64) { // [04 §7.
 	if len(points) == 0 { // [04 §7.3] C14 zero publication
 		r.Active = false
 		r.Dirty = true
+		r.WantsRepath = false
 		return // count and array untouched
 	}
 	// nonempty publication: write count and points, set active+dirty
@@ -64,6 +70,7 @@ func (r *Route) PublishAtRevision(points []Point, revision uint64) { // [04 §7.
 	copy(r.Points[:], points)
 	r.Active = true
 	r.Dirty = true
+	r.WantsRepath = false
 	r.StaticRevision = revision
 }
 

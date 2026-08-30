@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/nanolathe/nanolathe/internal/audio"
+	"github.com/nanolathe/nanolathe/internal/audiobackend"
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/vfs"
@@ -43,7 +44,7 @@ func detachBattleAudio(cl *client.Client, sess *session.Session) {
 		return
 	}
 	if output := audio.GlobalOutput(); output != nil {
-		if be, ok := output.(*audio.Backend); ok {
+		if be, ok := output.(*audiobackend.Backend); ok {
 			be.Close()
 		}
 		audio.SetGlobalOutput(nil)

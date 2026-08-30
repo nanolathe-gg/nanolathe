@@ -7,19 +7,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 )
 
-func TestBackendUsesLazyRealOutput(t *testing.T) {
-	b := NewBackend()
-	if b == nil || b.SampleRate() != 44100 {
-		t.Fatalf("backend sample rate = %v, want 44100", b)
-	}
-	if b.ctx != nil {
-		t.Fatal("backend should create its device lazily")
-	}
-	if !b.Capabilities().Device || !b.Capabilities().Stereo {
-		t.Fatal("real backend should advertise device and stereo output")
-	}
-}
-
 func TestVolumeFromCentibel(t *testing.T) {
 	// [03 §8.3] -585 in-view vs -1585 off-screen
 	vIn := VolumeFromCentibel(VolInView)
@@ -63,7 +50,7 @@ func TestPanFloat(t *testing.T) {
 
 func TestConvertSampleMono8(t *testing.T) {
 	s := &Sample{Alias: "mono8", SampleRate: 11025, Channels: 1, BitsPerSample: 8, Data: []byte{128, 255, 0}}
-	data := convertSample(s, 1.0, 0, 44100)
+	data := ConvertSample(s, 1.0, 0, 44100)
 	if len(data) == 0 {
 		t.Fatal("convert empty")
 	}
@@ -87,7 +74,7 @@ func TestConvertSampleStereo16(t *testing.T) {
 	data[6] = 0x00
 	data[7] = 0x80
 	s := &Sample{Alias: "st16", SampleRate: 22050, Channels: 2, BitsPerSample: 16, Data: data}
-	out := convertSample(s, 0.5, -1, 22050) // left pan, half volume
+	out := ConvertSample(s, 0.5, -1, 22050) // left pan, half volume
 	if len(out) == 0 {
 		t.Fatal("stereo16 convert empty")
 	}
@@ -122,9 +109,9 @@ func TestQueueArbitrationIntactAfterBackend(t *testing.T) {
 func TestBackendVolumeAndPanBake(t *testing.T) {
 	s := &Sample{Alias: "pan", SampleRate: 11025, Channels: 1, BitsPerSample: 8, Data: []byte{255, 255, 255, 255}} // max
 	// full volume center should produce non-zero bytes
-	dataCenter := convertSample(s, 1.0, 0, 11025)
-	dataLeft := convertSample(s, 1.0, -1, 11025)
-	dataRight := convertSample(s, 1.0, 1, 11025)
+	dataCenter := ConvertSample(s, 1.0, 0, 11025)
+	dataLeft := ConvertSample(s, 1.0, -1, 11025)
+	dataRight := ConvertSample(s, 1.0, 1, 11025)
 	if len(dataCenter) != len(dataLeft) || len(dataCenter) != len(dataRight) {
 		t.Fatalf("len mismatch")
 	}

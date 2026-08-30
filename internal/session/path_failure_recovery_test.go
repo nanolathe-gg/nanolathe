@@ -15,7 +15,7 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
-func TestPathFailureRecovery_ImpasseGoalRecovers(t *testing.T) {
+func TestPathFailureRecovery_ImpasseGoalKeepsPollingUntilReplaced(t *testing.T) {
 	root := os.Getenv("NANOLATHE_TA_ROOT")
 	if root == "" {
 		if h := os.Getenv("HOME"); h != "" {
@@ -114,34 +114,26 @@ func TestPathFailureRecovery_ImpasseGoalRecovers(t *testing.T) {
 	}
 	node := orders.NewMoveNode(id, goalX, goalZ, sess.Clock.GlobalTick, comHandle, false)
 	q.Push(id, node)
-	popped := false
+	badHead := q.Head()
 	for i := 0; i < 200; i++ {
 		now++
 		sess.Step(now)
 		q2 := orders.QueueForUnit(sess.Units.Unit(comHandle))
-		if q2 == nil || q2.LenPrimary() == 0 {
-			popped = true
-			break
-		}
-		if head := q2.Head(); head != nil && head.MoveState == orders.MoveBlocked {
-			popped = true
-			break
+		if q2 == nil || q2.Head() != badHead {
+			t.Fatal("failed publication consumed or replaced the move order")
 		}
 		route := sess.Movement.Routes[comHandle]
 		if route != nil && route.Active {
 			t.Fatalf("bad goal should not produce active route, got active count %d", route.Count)
 		}
 	}
-	if !popped {
-		q2 := orders.QueueForUnit(sess.Units.Unit(comHandle))
-		headInfo := "nil"
-		if q2 != nil && q2.LenPrimary() > 0 {
-			if h := q2.Head(); h != nil {
-				headInfo = orders.DescriptorFor(h.ID).Name
-			}
-		}
-		t.Fatalf("bad order not popped within 200 ticks head %s", headInfo)
+	if !sess.Movement.HasPathFailure(comHandle) {
+		t.Fatal("impassable goal never recorded a rejected publication")
 	}
+	// A later user replacement, not an invented retry ceiling, ends the failed
+	// move and allows a new reachable command [04 R-MOV-01 §7].
+	q.CancelAll()
+	sess.Movement.DeactivateMove(comHandle)
 	beforeX := sess.Units.Unit(comHandle).X
 	beforeZ := sess.Units.Unit(comHandle).Z
 	var landCell path.Cell

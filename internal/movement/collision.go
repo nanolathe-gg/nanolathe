@@ -357,10 +357,12 @@ type CollisionState struct {
 	BlockerID int
 	Dirty     bool // transform dirty [04 §8.2] C23 C24 — marks transform/visibility dirty
 
-	// halfBiasX/Z are the packed half-cell biases for anchor quantize [04 §8.2] C23.
-	// If zero, HalfBias() derives from footprint as FootPrint*cell/2.
-	halfBiasX int32
-	halfBiasZ int32
+	// halfBiasX/Z are optional additive anchor-quantisation biases [04
+	// R-COLL-01 §1]. A zero pair means derive S-footprint*S, where S is half
+	// a cell; callers retain SetHalfBias for authored/saved instance overrides.
+	halfBiasX   int32
+	halfBiasZ   int32
+	halfBiasSet bool
 }
 
 // SetHalfBias overrides the packed half-cell bias [04 §8.2] C23. If not set,
@@ -371,6 +373,7 @@ func (s *CollisionState) SetHalfBias(bx, bz int32) {
 	}
 	s.halfBiasX = bx
 	s.halfBiasZ = bz
+	s.halfBiasSet = true
 }
 
 // HalfBias returns the packed half-cell bias in world units [04 §8.2] C23.
@@ -379,7 +382,7 @@ func (s *CollisionState) HalfBias() (int32, int32) {
 		return 0, 0
 	}
 	bx, bz := s.halfBiasX, s.halfBiasZ
-	if bx == 0 && bz == 0 {
+	if !s.halfBiasSet {
 		fx, fz := s.FootPrintX, s.FootPrintZ
 		if fx <= 0 {
 			fx = 1
@@ -387,8 +390,9 @@ func (s *CollisionState) HalfBias() (int32, int32) {
 		if fz <= 0 {
 			fz = 1
 		}
-		bx = int32(int64(fx) * worldUnitsPerCell / 2)
-		bz = int32(int64(fz) * worldUnitsPerCell / 2)
+		halfCell := int64(worldUnitsPerCell / 2)
+		bx = int32(halfCell - int64(fx)*halfCell)
+		bz = int32(halfCell - int64(fz)*halfCell)
 	}
 	return bx, bz
 }
@@ -396,7 +400,9 @@ func (s *CollisionState) HalfBias() (int32, int32) {
 // QuantizedAnchor quantizes a world X/Z proposal into its footprint anchor
 // using signed arithmetic and the instance's packed half-cell bias [04 §8.2] C23.
 //
-// anchor = floorDiv(proposed + halfBias, worldUnitsPerCell) [03 §2.1] I3
+// anchor = floorDiv(proposed + halfCell - footprint*halfCell, cell)
+// [04 R-COLL-01 §1][03 §2.1]. HalfBias carries the additive
+// halfCell-footprint*halfCell term.
 func QuantizedAnchor(proposedX, proposedZ int32, halfBiasX, halfBiasZ int32) Cell { // [04 §8.2] C23
 	return Cell{
 		X: int32(floorDiv(int64(proposedX)+int64(halfBiasX), worldUnitsPerCell)),
@@ -454,18 +460,29 @@ func (s *CollisionState) ApplyBlocked() { // [04 §8.2] C24
 	if s == nil {
 		return
 	}
+	s.applyBlockedProposal(s.X+s.VX, s.Z+s.VZ)
+}
+
+func (s *CollisionState) applyBlockedProposal(proposedX, proposedZ int32) {
+	if s == nil {
+		return
+	}
+	// The boundary clamp consumes the proposal that failed validation. Speed
+	// limiting affects the next movement proposal, not this position [04
+	// R-COLL-01 §2].
+	propX := int64(proposedX)
+	propZ := int64(proposedZ)
 	// cap scalar speed at MaxVelocity/2 if higher [04 §8.2] C24
 	half := s.MaxVelocity / 2
 	if s.Speed > half {
 		s.Speed = half
+		// Recompute horizontal velocity only when the strict half-speed cap fires
+		// [04 R-COLL-01 §2].
+		sin := numeric.Sin(numeric.Angle(s.Heading))
+		cos := numeric.Cos(numeric.Angle(s.Heading))
+		s.VX = int32((int64(s.Speed)*int64(sin) + 4096) >> 13)
+		s.VZ = int32((int64(s.Speed)*int64(cos) + 4096) >> 13)
 	}
-	// recompute horizontal velocity at that speed and heading [04 §8.2] C24
-	// via fixed-point trig tables scaled 8192 [04 §5.1]
-	sin := numeric.Sin(numeric.Angle(s.Heading)) // scaled 8192 [04 §5.1]
-	cos := numeric.Cos(numeric.Angle(s.Heading)) // scaled 8192 [04 §5.1]
-	// velocity = speed * sin/cos /8192 with round to nearest before truncation [04 §5.1]
-	s.VX = int32((int64(s.Speed)*int64(sin) + 4096) >> 13) // [04 §5.1]
-	s.VZ = int32((int64(s.Speed)*int64(cos) + 4096) >> 13) // [04 §5.1]
 
 	// clamp X and Z against OLD footprint boundary using 0x7FFFF [04 §8.2] C24
 	// centre = oldAnchor*cell + halfSpan for every footprint size [GAP 04-P1-GROUND]
@@ -481,11 +498,6 @@ func (s *CollisionState) ApplyBlocked() { // [04 §8.2] C24
 	centreX := int64(s.OldAnchor.X)*worldUnitsPerCell + halfSpanX
 	centreZ := int64(s.OldAnchor.Z)*worldUnitsPerCell + halfSpanZ
 	band := int64(blockedBand) // 0x7FFFF [04 §8.2] C24
-
-	// proposed position after recomputed velocity [04 §8.2] C24 — add to current committed X/Z
-	// Retail adds velocity to old position then clamps; we follow that literal.
-	propX := int64(s.X) + int64(s.VX)
-	propZ := int64(s.Z) + int64(s.VZ)
 
 	if propX < centreX-band {
 		propX = centreX - band
@@ -566,7 +578,7 @@ func (s *CollisionState) CommitOne(grid *OccupancyGrid, proposedMode uint8, perC
 	valid := ValidateFootprint(propAnchor, s.FootPrintX, s.FootPrintZ, perCell, aggregate) // [04 §8.2] C25
 	s.Blocked = !valid
 	if !valid {
-		s.ApplyBlocked() // [04 §8.2] C24 — includes speed cap, velocity recompute, clamp, dirty, no occupancy change, no second validator
+		s.applyBlockedProposal(propX, propZ) // [04 §8.2] C24 — includes speed cap, velocity recompute, clamp, dirty, no occupancy change, no second validator
 		return false, true
 	}
 	// success [04 §8.2] C22 C25

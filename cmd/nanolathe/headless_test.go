@@ -40,6 +40,15 @@ func TestHeadlessSkirmishStepsAndReports(t *testing.T) {
 	if report.Tick != 300 {
 		t.Fatalf("report tick = %d, want 300", report.Tick)
 	}
+	if report.ScenarioKind != "skirmish" || report.ScenarioIdentity != "ashap plateau" {
+		t.Fatalf("scenario = %q/%q", report.ScenarioKind, report.ScenarioIdentity)
+	}
+	if report.SimulationSeed != 1 || report.CRTSeed != 1 {
+		t.Fatalf("seeds = %d/%d, want 1/1", report.SimulationSeed, report.CRTSeed)
+	}
+	if report.Status != "tick_limit" || report.StateHash == "" {
+		t.Fatalf("status/hash = %q/%q", report.Status, report.StateHash)
+	}
 	if !report.Players[1].AIManagerBound {
 		t.Fatal("computer player's AI manager was not reported as bound")
 	}

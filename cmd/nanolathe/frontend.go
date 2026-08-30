@@ -530,6 +530,7 @@ func (g *gameShell) missionDifficulty() int {
 }
 
 func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) error {
+	g.teardownBattle(clPtr)
 	battle, err := composeBattleEntry(sess, cat, g.cs, clPtr, g)
 	if err != nil {
 		return err
@@ -539,21 +540,9 @@ func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) err
 	g.battle.returnToMenu = g.returnFromBattle
 	g.battle.returnToSkirmish = func(cl *client.Client) {
 		if g != nil {
-			detachBattleAudio(cl, sess)
-			g.battle = nil
+			g.teardownBattle(cl)
 			g.openMenu(modeMenuSkirmish)
-			if cl != nil {
-				cl.SetSnapshot(&frame.Buffer{})
-				cl.SetTerrain(nil)
-				cl.SetCamera(g.cam)
-				if g.assets != nil && g.assets.pal != nil {
-					cl.SetPalette(g.assets.pal)
-				}
-				if g.assets != nil {
-					cl.SetFNT(g.assets.font)
-				}
-				cl.SetUIStage(gameShellUIStage{shell: g})
-			}
+			g.bindFrontendClient(cl)
 		}
 	}
 	g.frontend.SetMode(modeBattle)
@@ -568,17 +557,21 @@ func (g *gameShell) returnFromBattle(cl *client.Client) {
 	if g == nil {
 		return
 	}
-	if g.battle != nil {
-		g.battle.closeBattleMenu()
-		// Release what entering the battle joined, so the abandoned session's
-		// music stops and the device is not held across the hand-off.
-		detachBattleAudio(cl, g.battle.sess)
-	}
-	g.battle = nil
-	g.cam = &camera.Camera{ViewW: retailScreenW, ViewH: retailScreenH, MapW: retailScreenW, MapH: retailScreenH}
+	g.teardownBattle(cl)
 	g.openMenu(modeMenuMain)
-	if cl == nil {
+	g.bindFrontendClient(cl)
+}
+
+// bindFrontendClient restores the established inert frontend/loading
+// presentation after battle teardown. The loading screen is a game-shell UI
+// mode over an empty snapshot and owns no terrain or battle presentation
+// references [07 §4][08 R-ENTRY-01 §1][I6].
+func (g *gameShell) bindFrontendClient(cl *client.Client) {
+	if g == nil || cl == nil {
 		return
+	}
+	if g.cam == nil {
+		g.cam = &camera.Camera{ViewW: retailScreenW, ViewH: retailScreenH, MapW: retailScreenW, MapH: retailScreenH}
 	}
 	cl.SetSnapshot(&frame.Buffer{})
 	cl.SetTerrain(nil)
@@ -590,6 +583,23 @@ func (g *gameShell) returnFromBattle(cl *client.Client) {
 		cl.SetFNT(g.assets.font)
 	}
 	cl.SetUIStage(gameShellUIStage{shell: g})
+}
+
+// teardownBattle clears the shell side of the idempotent battle-exit seam.
+// Loading ownership is also dropped here so a continuation cannot retain an
+// old progress callback while the next request is being built [08 "Session
+// states"][08 R-ENTRY-01 §1][I6].
+func (g *gameShell) teardownBattle(cl *client.Client) {
+	if g == nil {
+		return
+	}
+	if g.battle != nil {
+		g.battle.teardown(cl)
+		g.cam = nil
+	}
+	g.battle = nil
+	g.loading = nil
+	g.loadingReturn = modeMenuMain
 }
 
 // enumerateSkirmishMaps is the retail map census: only OTA files with a

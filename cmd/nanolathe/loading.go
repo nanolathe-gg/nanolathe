@@ -183,12 +183,15 @@ func (g *gameShell) startBattleLoad(mapName string) {
 	// engine opens SKIRMISH.GUI on the rows this battle was started with.
 	g.saveSettings()
 	cfg := g.skirmishConfigForStart(mapName)
-	seeds := newBattleSeedSource(g.opts).NextBattleSeeds()
-	cfg.RNGSimSeed = uint32(seeds.Simulation)
-	cfg.RNGCrtSeed = seeds.CRT
-	g.beginLoad(mapName, modeMenuSkirmish, func(state *loadingState) (*session.Session, error) {
-		return session.NewSkirmishWithProgress(g.cs.fs, nil, cfg, state.report)
-	})
+	request, err := skirmishBattleRequest(g.opts, g.cs, cfg, headlessScenarioSkirmish, nil, newBattleSeedSource(g.opts))
+	if err != nil {
+		reportRetailMessageError(g.showRetailMessage(err.Error()))
+		return
+	}
+	g.beginFreshBattleLoad(mapName, modeMenuSkirmish, request, nil)
+	// The request above is the sole owner of constructor selection and seeds;
+	// the loading worker only invokes the shared authoritative seam [08
+	// R-ENTRY-01 §1–§2].
 }
 
 // startMissionLoad is the campaign entry. Retail shows the same screen with
@@ -205,21 +208,31 @@ func (g *gameShell) startMissionLoad() {
 	}
 	path := fmt.Sprintf("%s:MISSION%d", c.Path, c.Missions[g.missionIdx].Index)
 	difficulty := g.missionDifficulty()
-	seeds := newBattleSeedSource(g.opts).NextBattleSeeds()
+	missionIndex := c.Missions[g.missionIdx].Index
+	campaignSlot := g.missionIdx
 	g.saveSettings()
-	g.beginLoad("", modeMenuMission, func(state *loadingState) (*session.Session, error) {
-		return session.NewMissionWithProgressSeeds(g.cs.fs, nil, path, difficulty, uint32(seeds.Simulation), seeds.CRT, state.report)
-	})
+	request, err := missionBattleRequest(g.opts, g.cs, path, difficulty, missionIndex, campaignSlot, nil, newBattleSeedSource(g.opts))
+	if err != nil {
+		reportRetailMessageError(g.showRetailMessage(err.Error()))
+		return
+	}
+	g.beginFreshBattleLoad("", modeMenuMission, request, nil)
 }
 
-func (g *gameShell) beginLoad(mapName string, back shellMode, load func(*loadingState) (*session.Session, error)) {
+func (g *gameShell) beginFreshBattleLoad(mapName string, back shellMode, request freshBattleRequest, after func(*session.Session)) {
+	g.teardownBattle(clPtr)
+	g.bindFrontendClient(clPtr)
 	state := newLoadingState(mapName)
+	request.value.Progress = state.report
 	g.loading = state
 	g.loadingReturn = back
 	g.openMenu(modeLoading)
 	go func() {
-		sess, err := load(state)
-		state.done <- loadResult{sess: sess, err: err}
+		authoritative, err := composeAuthoritativeBattle(request)
+		if err == nil && after != nil {
+			after(authoritative.Session)
+		}
+		state.done <- loadResult{sess: authoritative.Session, err: err}
 	}()
 }
 
@@ -237,14 +250,17 @@ func (g *gameShell) stepLoading(delta float64) {
 	}
 	select {
 	case res := <-l.done:
+		returnMode := g.loadingReturn
 		g.loading = nil
 		if res.err != nil {
-			g.openMenu(g.loadingReturn)
+			g.openMenu(returnMode)
 			reportRetailMessageError(g.showRetailMessage(res.err.Error()))
 			return
 		}
 		if err := g.enterBattle(res.sess, res.sess.Catalog); err != nil {
-			g.openMenu(g.loadingReturn)
+			g.loadingReturn = returnMode
+			g.openMenu(returnMode)
+			g.bindFrontendClient(clPtr)
 			reportRetailMessageError(g.showRetailMessage(err.Error()))
 		}
 	default:

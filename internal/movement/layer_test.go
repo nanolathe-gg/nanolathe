@@ -267,12 +267,17 @@ func TestRevisionWatermarkArithmetic(t *testing.T) {
 	}
 }
 
-// testAnchors is a deterministic committed-anchor source for tests.
-type testAnchors map[pool.Handle]Cell
+// testAnchors is a deterministic committed-footprint source for tests.
+type testFootprint struct {
+	anchor Cell
+	fx, fz int16
+}
 
-func (a testAnchors) CommittedAnchor(h pool.Handle, footX, footZ int16) (Cell, bool) {
-	c, ok := a[h]
-	return c, ok
+type testAnchors map[pool.Handle]testFootprint
+
+func (a testAnchors) CommittedFootprint(h pool.Handle) (Cell, int16, int16, bool) {
+	f, ok := a[h]
+	return f.anchor, f.fx, f.fz, ok
 }
 
 // TestLayerRevisionPass locks the crossed-window cohort and temporary
@@ -295,9 +300,9 @@ func TestLayerRevisionPass(t *testing.T) {
 		t.Fatalf("create stale: %v", err)
 	}
 	anchors := testAnchors{
-		hReq:   {X: 2, Z: 2},
-		hFresh: {X: 10, Z: 10},
-		hStale: {X: 20, Z: 20},
+		hReq:   {anchor: Cell{X: 2, Z: 2}, fx: 1, fz: 1},
+		hFresh: {anchor: Cell{X: 10, Z: 10}, fx: 1, fz: 1},
+		hStale: {anchor: Cell{X: 20, Z: 20}, fx: 2, fz: 1},
 	}
 	l := NewClassLayer(kbotsSS2, tr, grid)
 	l.NoteCommit(hReq, 50)
@@ -313,8 +318,9 @@ func TestLayerRevisionPass(t *testing.T) {
 			l.setValue(x, z, LayerBlocked)
 		}
 	}
-	grid.Stamp(Cell{X: 20, Z: 20}, 1, 1, int(hStale))
+	grid.Stamp(Cell{X: 20, Z: 20}, 2, 1, int(hStale))
 	l.setValue(20, 20, LayerSteep)
+	l.setValue(21, 20, LayerSteep)
 
 	l.Revise(60, hReq, w, anchors)
 
@@ -332,6 +338,9 @@ func TestLayerRevisionPass(t *testing.T) {
 	// occupancy hard-blocks its anchor.
 	if got := l.Value(20, 20); got != LayerBlocked {
 		t.Fatalf("crossed-window stale occupant must re-stamp blocked, got %d", got)
+	}
+	if got := l.Value(21, 20); got != LayerBlocked {
+		t.Fatalf("restamp omitted the occupant's second footprint cell, got %d", got)
 	}
 
 	// A requester older than the old watermark is re-stamped with its commit

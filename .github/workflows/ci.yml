@@ -10,6 +10,21 @@ env:
   CI: "true"
 
 jobs:
+  # This gate has no X server and installs no desktop graphics/audio headers.
+  # Importing the runner or tiny command must remain platform-device-free.
+  headless:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+          cache: true
+      - name: build displayless command
+        run: go build ./cmd/nanolathe-headless
+      - name: advance synthetic authoritative session
+        run: go test ./internal/headless ./cmd/nanolathe-headless
+
   # Formatting and static checks. Cheap, so it gates the rest.
   hygiene:
     runs-on: ubuntu-latest

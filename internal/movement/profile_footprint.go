@@ -2,6 +2,20 @@ package movement
 
 import "github.com/nanolathe/nanolathe/internal/world"
 
+func commitRectInBounds(t *world.Terrain, anchor Cell, fx, fz int16) bool {
+	if t == nil {
+		return true
+	}
+	if fx <= 0 {
+		fx = 1
+	}
+	if fz <= 0 {
+		fz = 1
+	}
+	return anchor.X >= 0 && anchor.Z >= 0 &&
+		anchor.X+int32(fx) < t.CellW && anchor.Z+int32(fz) < t.CellH
+}
+
 // footprintSize is the single derived footprint source used by path,
 // movement legality, and occupancy admission. Zero authored dimensions use
 // the runtime one-cell fallback.
@@ -108,4 +122,33 @@ func (p Profile) ClassifyFootprint(t *world.Terrain, ax, az int32) CellClass {
 // IsPassableFootprint is the path/commit predicate for a footprint anchor.
 func (p Profile) IsPassableFootprint(t *world.Terrain, ax, az int32) bool {
 	return p.ClassifyFootprint(t, ax, az) != ClassBlocked
+}
+
+// IsPassableCommitCell applies the final movement validator to one covered
+// cell. Unlike path-layer classification, the final commit treats both slope
+// tiers as a strict maximum and does not aggregate heights across neighboring
+// footprint cells [04 R-COLL-01 §2][04 R-COLL-01 §8].
+func (p Profile) IsPassableCommitCell(t *world.Terrain, cx, cz int32) bool {
+	if t == nil || isFeatureBlocked(t, cx, cz) {
+		return false
+	}
+	cell := t.PlotAt(cx, cz)
+	if cell == nil {
+		return false
+	}
+	low, high := int32(cell.MinHeight()), int32(cell.MaxHeight())
+	sea := int32(t.SeaLevel)
+	if low < sea-p.MaxWaterDepth || high > sea-p.MinWaterDepth {
+		return false
+	}
+	slope := high - low
+	if slope > int32(p.MaxSlope) {
+		if low >= sea {
+			return false
+		}
+		if slope > int32(p.MaxWaterSlope) {
+			return false
+		}
+	}
+	return true
 }

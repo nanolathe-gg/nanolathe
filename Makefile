@@ -32,10 +32,12 @@ test:
 test-retail:
 	@go test -tags retail $(GO_TEST_PACKAGES)
 
-# Ebiten initializes GLFW/AppKit during package initialization. Keep the
-# desktop-only packages explicit so the default loop stays usable headlessly.
+# Desktop packages retain Ebitengine window/device dependencies. Keep them
+# explicit while the displayless command and runner prove the authoritative
+# composition and Step topology independently [I6].
 test-desktop:
 	@go test ./internal/client ./cmd/nanolathe
 
 test-headless:
-	@go test ./cmd/nanolathe -run Headless
+	@go test ./internal/headless ./cmd/nanolathe-headless
+	@go build -o /tmp/nanolathe-headless ./cmd/nanolathe-headless

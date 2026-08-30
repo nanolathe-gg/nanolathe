@@ -94,14 +94,16 @@ func TestStaticRevisionInvalidatesGroundRouteAndPublishesCurrentRevision(t *test
 	w := newMovementFixtureWorld(16)
 	sys.BindWorld(w)
 	def := &content.UnitDef{
-		UnitName:    "ground-scout",
-		MaxVelocity: 2 * 65536,
-		TurnRate:    500,
-		FootprintX:  1,
-		FootprintZ:  1,
-		MaxDamage:   100,
-		BMCode:      true,
-		CanMove:     true,
+		UnitName:     "ground-scout",
+		MaxVelocity:  2 * 65536,
+		Acceleration: 2 * 65536,
+		BrakeRate:    2 * 65536,
+		TurnRate:     500,
+		FootprintX:   1,
+		FootprintZ:   1,
+		MaxDamage:    100,
+		BMCode:       true,
+		CanMove:      true,
 	}
 	h, err := w.Create(def, 0, world.CellToWorld(1), terrain.HeightAt(world.CellToWorld(1), world.CellToWorld(1)), world.CellToWorld(1))
 	if err != nil {
@@ -147,8 +149,11 @@ func TestStaticRevisionInvalidatesGroundRouteAndPublishesCurrentRevision(t *test
 	sys.BeginTick(2)
 	result := sys.StepUnit(h, 2)
 	sys.EndTick(2)
-	if !result.EmptyRoute || result.Moved || route.Active {
+	if !result.EmptyRoute || result.Moved || !route.Active || route.StaticRevision != terrain.StaticObstacleRevision() {
 		t.Fatalf("stale route was consumed instead of invalidated: result=%+v route=%+v", result, route)
+	}
+	if route.Count != 2 {
+		t.Fatalf("static replan should install the immediate two-point fallback, got route=%+v", route)
 	}
 	if !sys.HasPathRequest(h) {
 		t.Fatal("static invalidation did not resubmit the active order")

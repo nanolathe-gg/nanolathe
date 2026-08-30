@@ -103,7 +103,7 @@ func TestSystemSearchConsultsLayer(t *testing.T) {
 	sys.SubmitMove(h, 0, start, goal)
 	sys.Scheduler.Tick(50)
 	route := sys.Routes[h]
-	if route == nil || !route.Active || route.Status != 0 {
+	if route == nil || route.Count == 0 || route.Status != 0 {
 		t.Fatalf("flat terrain must publish a route, got %+v", route)
 	}
 
@@ -130,8 +130,8 @@ func TestSystemSearchConsultsLayer(t *testing.T) {
 	paintRing(LayerClear)
 	sys.SubmitMove(h, 0, start, goal)
 	sys.Scheduler.Tick(52)
-	if route.Status != 0 || !route.Active || route.Count == 0 {
-		t.Fatalf("cleared layer must publish a route again, status %d active %v count %d", route.Status, route.Active, route.Count)
+	if route.Status != 0 || route.Count == 0 {
+		t.Fatalf("cleared layer must publish a route again, status %d count %d", route.Status, route.Count)
 	}
 }
 
@@ -150,7 +150,7 @@ func TestConfiguredSchedulerPublishesOwnerOneRequest(t *testing.T) {
 	sys.SubmitMove(h, 1, path.Cell{X: 2, Z: 2}, path.Cell{X: 9, Z: 9})
 	for tick := uint32(1); tick < 10; tick++ {
 		sys.Scheduler.Tick(tick)
-		if route := sys.Routes[h]; route != nil && route.Active {
+		if route := sys.Routes[h]; route != nil && route.Count > 0 && route.Status == 0 {
 			return
 		}
 	}
@@ -183,9 +183,10 @@ func TestOccupancyCommitNotesRevisionLayers(t *testing.T) {
 	q := orders.QueueForUnit(w.Unit(h))
 	q.Push(id, orders.Node{GoalX: world.CellToWorld(12), GoalZ: world.CellToWorld(2)})
 
-	// Drive real ticks: no route publishes, so the direct-goal fallback
-	// advances the mover and the occupancy commit succeeds on the flat,
-	// unoccupied terrain.
+	startPoint := Point{X: int32(w.Unit(h).X.Raw() >> 16), Z: int32(w.Unit(h).Z.Raw() >> 16)}
+	sys.Routes[h].PublishAtRevision([]Point{startPoint, {X: 192, Z: startPoint.Z}}, sys.staticObstacleRevision())
+	// Drive real ticks along an installed route; the occupancy commit succeeds
+	// on flat, unoccupied terrain.
 	noted := uint32(0)
 	for tick := uint32(1); tick <= 40 && noted == 0; tick++ {
 		sys.BeginTick(tick)

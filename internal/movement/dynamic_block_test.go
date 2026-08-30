@@ -17,7 +17,8 @@ func TestStepUnitBlockedCommitKeepsOrderAndRequest(t *testing.T) {
 	w := newMovementFixtureWorld(4)
 	def := &content.UnitDef{
 		UnitName: "dynamic-block-test", FootprintX: 1, FootprintZ: 1,
-		MaxVelocity: int32(worldUnitsPerCell), TurnRate: 65535,
+		MaxVelocity: 2 * int32(worldUnitsPerCell), Acceleration: 2 * int32(worldUnitsPerCell),
+		BrakeRate: 2 * int32(worldUnitsPerCell), TurnRate: 65535,
 	}
 	blockerHandle, err := w.Create(def, 0, world.CellToWorld(1), 0, world.CellToWorld(0))
 	if err != nil {
@@ -40,7 +41,7 @@ func TestStepUnitBlockedCommitKeepsOrderAndRequest(t *testing.T) {
 	queue := orders.QueueForUnit(w.Unit(moverHandle))
 	queue.Push(moveID, orders.Node{GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(0)})
 	head := queue.Head()
-	system.Routes[moverHandle].Publish([]Point{{X: 0, Z: 0}, {X: 3, Z: 0}})
+	system.Routes[moverHandle].PublishAtRevision([]Point{{X: 0, Z: 0}, {X: 48, Z: 0}}, system.staticObstacleRevision())
 	system.activeOrders[moverHandle] = &activeMove{order: head, token: 41}
 	system.nextActivation = 41
 	// Seed an already-walking presentation tier. A rejected commit retains a
@@ -58,7 +59,7 @@ func TestStepUnitBlockedCommitKeepsOrderAndRequest(t *testing.T) {
 	nextBefore := system.nextActivation
 	result := system.StepUnit(moverHandle, 1)
 	if !result.Blocked {
-		t.Fatal("active route proposal into blocker was not rejected")
+		t.Fatalf("active route proposal into blocker was not rejected: result=%+v mover=%+v blocker=%+v", result, system.Collisions[moverHandle], system.Collisions[blockerHandle])
 	}
 	if requestsAfter := system.pathProvider.allRequests(); !reflect.DeepEqual(requestsAfter, requestsBefore) || !system.HasPathRequest(moverHandle) {
 		t.Fatalf("blocked commit changed scheduler requests: before=%#v after=%#v has=%v", requestsBefore, requestsAfter, system.HasPathRequest(moverHandle))
@@ -78,7 +79,7 @@ func TestStepUnitBlockedCommitKeepsOrderAndRequest(t *testing.T) {
 	if got := system.prevMoveTier[moverHandle]; got != 0 {
 		t.Fatalf("blocked mover presentation tier=%d want 0 [04 R-COLL-01 §5]", got)
 	}
-	if got, want := system.Collisions[moverHandle].Speed, int32(worldUnitsPerCell)/2; got != want {
+	if got, want := system.Collisions[moverHandle].Speed, int32(worldUnitsPerCell); got != want {
 		t.Fatalf("blocked commit speed=%d want half max velocity %d", got, want)
 	}
 	if got, ok := system.Grid.OccupantAt(Cell{X: 0, Z: 0}); !ok || got != int(moverHandle) {
@@ -87,14 +88,28 @@ func TestStepUnitBlockedCommitKeepsOrderAndRequest(t *testing.T) {
 	if got, ok := system.Grid.OccupantAt(Cell{X: 1, Z: 0}); !ok || got != int(blockerHandle) {
 		t.Fatalf("blocked commit changed blocker occupancy: (%d,%t)", got, ok)
 	}
-	// The no-replan implementation path contains no RNG call; the test only
-	// observes scheduler/order state because no RNG source is injectable here.
+	// The commit itself does not cancel or rebind. Once the prior request is no
+	// longer pending, the follower exposes the blocked state only at its
+	// inclusive 60-tick poll boundary [04 R-MOV-01 §7].
+	system.pathProvider.Cancel(moverHandle)
+	route := system.Routes[moverHandle]
+	route.LastRequestTick = 1
+	system.serviceGroundFollower(w.Unit(moverHandle), head, route, 60)
+	if system.HasPathRequest(moverHandle) {
+		t.Fatal("blocked follower requested before lastRequestTick+60")
+	}
+	system.serviceGroundFollower(w.Unit(moverHandle), head, route, 61)
+	afterPoll := system.pathProvider.allRequests()
+	if len(afterPoll) != 1 || afterPoll[0].Activation != activeBefore.token {
+		t.Fatalf("blocked follower request=%#v want one request retaining token %d", afterPoll, activeBefore.token)
+	}
 }
 
 // TestDynamicBlockCommitScenarios locks the established final-commit contract:
 // occupancy is checked synchronously in pool-slot order, a foreign occupant is
 // a hard blocker, and a rejected proposal leaves the old stamp in place. The
-// outer yield/replan policy remains Unknown [R-MOV-02A][04 §8.2].
+// outer follower replan is tested separately from this synchronous commit
+// boundary [04 R-MOV-01 §7][04 R-COLL-01 §7].
 func TestDynamicBlockCommitScenarios(t *testing.T) {
 	t.Run("stationary blocker", func(t *testing.T) {
 		grid := NewOccupancyGrid()

@@ -244,14 +244,13 @@ func (s *System) SubmitAirMove(vtolHandle pool.Handle, targetX, targetZ numeric.
 	if vtol == nil {
 		return
 	}
-	// Convert to cells for route
-	startCell := Cell{X: world.WorldToCell(vtol.X), Z: world.WorldToCell(vtol.Z)}
-	goalCell := Cell{X: world.WorldToCell(targetX), Z: world.WorldToCell(targetZ)}
-	prof := s.ProfileFor(vtolHandle)
-	bx := int32(prof.FootPrintX / 2)
-	bz := int32(prof.FootPrintZ / 2)
-	// Direct 2-point air route (no occupancy block)
-	pts := []Point{{X: startCell.X + bx, Z: startCell.Z + bz}, {X: goalCell.X + bx, Z: goalCell.Z + bz}}
+	// Route points are signed integer world coordinates for every follower;
+	// aircraft bypass the lattice but do not switch the point domain [04
+	// R-MOV-01 §3].
+	pts := []Point{
+		{X: int32(vtol.X.Raw() >> 16), Z: int32(vtol.Z.Raw() >> 16)},
+		{X: int32(targetX.Raw() >> 16), Z: int32(targetZ.Raw() >> 16)},
+	}
 	route := s.Routes[vtolHandle]
 	if route == nil {
 		route = &Route{}

@@ -1,0 +1,171 @@
+// Package audiobackend owns the desktop PCM device boundary.
+//
+// Keeping the Ebitengine audio import here lets authoritative packages import
+// internal/audio without initializing a graphical platform backend [I6].
+package audiobackend
+
+import (
+	"bytes"
+	"sync"
+
+	"github.com/hajimehoshi/ebiten/v2/audio"
+	retailaudio "github.com/nanolathe/nanolathe/internal/audio"
+)
+
+// Backend is the PCM output over Ebitengine audio [03 §8.2][03 §8.3].
+// Device construction remains lazy until the presentation edge admits a sample.
+type Backend struct {
+	sampleRate int
+	master     bool
+	effects    float64
+	mu         sync.Mutex
+	ctx        *audio.Context
+	players    []*audio.Player
+	next       int
+}
+
+// Capabilities describes the concrete presentation device surface.
+type Capabilities struct {
+	Device bool
+	Stereo bool
+}
+
+func New() *Backend { return NewWithRate(44100) }
+
+func NewWithRate(rate int) *Backend {
+	if rate <= 0 {
+		rate = 44100
+	}
+	return &Backend{sampleRate: rate, master: true, effects: 1}
+}
+
+func (b *Backend) Capabilities() Capabilities {
+	if b == nil {
+		return Capabilities{}
+	}
+	return Capabilities{Device: true, Stereo: true}
+}
+
+func (b *Backend) StereoCapable() bool { return b != nil }
+
+func (b *Backend) SetMasterEnabled(enabled bool) {
+	if b != nil {
+		b.master = enabled
+	}
+}
+
+func (b *Backend) SetEffectsVolume(volume float64) {
+	if b == nil {
+		return
+	}
+	if volume < 0 {
+		volume = 0
+	}
+	if volume > 1 {
+		volume = 1
+	}
+	b.effects = volume
+}
+
+func (b *Backend) CanPlay() bool { return b != nil && b.master && b.effects > 0 }
+
+func (b *Backend) SampleRate() int {
+	if b == nil || b.sampleRate == 0 {
+		return 44100
+	}
+	return b.sampleRate
+}
+
+func (b *Backend) ensureContext() {
+	if b == nil || b.ctx != nil {
+		return
+	}
+	if current := audio.CurrentContext(); current != nil {
+		b.ctx = current
+		return
+	}
+	func() {
+		defer func() {
+			if recover() != nil {
+				b.ctx = audio.CurrentContext()
+			}
+		}()
+		b.ctx = audio.NewContext(b.sampleRate)
+	}()
+}
+
+func (b *Backend) PlaySample(sample *retailaudio.Sample, volume, pan float64) error {
+	if b == nil || sample == nil || !b.CanPlay() {
+		return nil
+	}
+	volume *= b.effects
+	volume, pan = clampPlayback(volume, pan)
+	b.ensureContext()
+	if b.ctx == nil {
+		return nil
+	}
+	data := retailaudio.ConvertSample(sample, volume, pan, b.sampleRate)
+	if len(data) == 0 {
+		return nil
+	}
+	player, err := b.ctx.NewPlayerF32(bytes.NewReader(data))
+	if err != nil {
+		return nil
+	}
+	b.mu.Lock()
+	if len(b.players) < 8 {
+		b.players = append(b.players, player)
+	} else {
+		old := b.players[b.next]
+		if old != nil {
+			_ = old.Close()
+		}
+		b.players[b.next] = player
+		b.next = (b.next + 1) % len(b.players)
+	}
+	b.mu.Unlock()
+	player.Play()
+	return nil
+}
+
+// clampPlayback preserves the concrete backend's presentation boundary before
+// PCM conversion: effects scaling is narrowed to 0..1 and pan to -1..1.
+func clampPlayback(volume, pan float64) (float64, float64) {
+	if volume < 0 {
+		volume = 0
+	} else if volume > 1 {
+		volume = 1
+	}
+	if pan < -1 {
+		pan = -1
+	} else if pan > 1 {
+		pan = 1
+	}
+	return volume, pan
+}
+
+func (b *Backend) PlayAlias(alias string, cache *retailaudio.SampleCache, volume, pan float64) error {
+	if b == nil || alias == "" || cache == nil {
+		return nil
+	}
+	sample, err := cache.Load(alias)
+	if err != nil || sample == nil {
+		return nil
+	}
+	return b.PlaySample(sample, volume, pan)
+}
+
+func (b *Backend) Close() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, player := range b.players {
+		if player != nil {
+			_ = player.Close()
+		}
+	}
+	b.players = nil
+	b.next = 0
+}

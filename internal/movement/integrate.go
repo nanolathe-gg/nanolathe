@@ -17,6 +17,7 @@
 package movement
 
 import (
+	"math"
 	"math/bits"
 	"strings"
 
@@ -116,10 +117,8 @@ type System struct {
 
 // pathProvider is the movement-owned candidate surface. Submit/Cancel only
 // mutate this stable-slot source; path itself owns no compatibility queue.
-// TODO(question): the current movement unit model does not expose the retail
-// wants-repath flag and 60-tick follower poll. Until that upstream field is
-// available, this provider remains inert for units without an explicit path
-// request rather than guessing eligibility.
+// The per-route follower state arms submissions through serviceGroundFollower
+// at the established 60-tick cadence [04 R-MOV-01 §3][04 R-MOV-01 §7].
 type pathProvider struct {
 	requests [10][]path.Request
 	cursor   [10]int
@@ -292,21 +291,58 @@ func goalRadiusParamFor(name string, def *content.UnitDef) int32 {
 	return 4 // radius field (0 at order creation) + 4 [R-P0-01 corrected]
 }
 
-// goalCellForWorld computes goal cells (goal − bias·0x80000 + 0x80000) >>20 [R-P0-01].
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// the offset shifts by foot*halfCell. Using foot*halfCell offset makes tile and goal domains
-// consistent and inclusive compare planar in cell domain [R-P0-01].
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// gives identical domains for tile and goal for 1×1 and preserves inclusive distance semantics.
+// goalCellForWorld applies the same footprint-anchor quantisation as the
+// movement commit: floor((goal + halfCell - footprint*halfCell) / cell)
+// [04 R-COLL-01 §1][R-P0-01]. A placement centre therefore maps back to
+// its rectangle anchor for every footprint size.
 func goalCellForWorld(goal numeric.Fixed, foot int32) int32 {
 	if foot <= 0 {
 		foot = 1
 	}
 	half := int64(0x80000) // 1<<19 half cell [R-P0-01][03 §2.1]
 	cell := int64(1 << 20) // 0x100000 one cell [03 §2.1]
-	v := int64(goal) + int64(foot)*half
+	v := int64(goal) + half - int64(foot)*half
 	return int32(floorDiv(v, cell))
+}
+
+func (s *System) pathFootprint(u *units.Unit) (int32, int32) {
+	if s != nil && u != nil {
+		if coll := s.Collisions[u.Handle]; coll != nil {
+			return int32(coll.FootPrintX), int32(coll.FootPrintZ)
+		}
+		profile := s.ProfileFor(u.Handle)
+		fx, fz := int32(profile.FootPrintX), int32(profile.FootPrintZ)
+		if u.Def != nil {
+			if fx <= 0 {
+				fx = u.Def.FootprintX
+			}
+			if fz <= 0 {
+				fz = u.Def.FootprintZ
+			}
+		}
+		if fx <= 0 {
+			fx = 1
+		}
+		if fz <= 0 {
+			fz = 1
+		}
+		return fx, fz
+	}
+	return 1, 1
+}
+
+// pathStartCell returns the committed footprint anchor required by request
+// setup. WorldToCell is not equivalent for footprints larger than one cell
+// [04 R-PATH-01 §4][04 R-COLL-01 §1].
+func (s *System) pathStartCell(u *units.Unit) path.Cell {
+	if s != nil && u != nil {
+		if coll := s.Collisions[u.Handle]; coll != nil {
+			return path.Cell{X: coll.CachedAnchor.X, Z: coll.CachedAnchor.Z}
+		}
+		fx, fz := s.pathFootprint(u)
+		return path.Cell{X: goalCellForWorld(u.X, fx), Z: goalCellForWorld(u.Z, fz)}
+	}
+	return path.Cell{}
 }
 
 // ThresholdSqFromRadius is exported helper for tests [R-P0-01].
@@ -466,6 +502,100 @@ func isqrt(n uint64) uint64 {
 		}
 		x = y
 	}
+}
+
+const routeLookaheadRaw = int64(80 << 16)
+
+// groundHypotRaw reproduces the follower's double-precision hypot followed by
+// truncation toward zero. The inputs and result remain raw 16.16 values; the
+// float is only the established working-precision temporary [04 R-MOV-01 §3]
+// [04 R-PATH-01 §8][I2].
+func groundHypotRaw(dx, dz int64) int64 {
+	return int64(math.Hypot(float64(dx), float64(dz)))
+}
+
+// routeTargets emits the follower's clamped T0/T1/T2 triples and applies the
+// 80-world-unit pullback to T1 [04 R-MOV-01 §3].
+func routeTargets(route *Route, unitX, unitZ int32) (t1x, t1z, t2x, t2z int32) {
+	point := func(i int) Point {
+		last := int(route.Count) - 1
+		if i > last {
+			i = last
+		}
+		return route.Points[i]
+	}
+	t0, t1, t2 := point(0), point(1), point(2)
+	t0x, t0z := int64(t0.X)<<16, int64(t0.Z)<<16
+	x1, z1 := int64(t1.X)<<16, int64(t1.Z)<<16
+	dx1, dz1 := x1-int64(unitX), z1-int64(unitZ)
+	d1 := groundHypotRaw(dx1, dz1)
+	if d1 > routeLookaheadRaw {
+		sx, sz := x1-t0x, z1-t0z
+		length := groundHypotRaw(sx, sz)
+		if length >= 1<<16 {
+			ux, uz := (sx<<16)/length, (sz<<16)/length
+			pull := d1 - routeLookaheadRaw
+			if pull > length {
+				pull = length
+			}
+			x1 -= (ux * pull) >> 16
+			z1 -= (uz * pull) >> 16
+		}
+	}
+	return int32(x1), int32(z1), int32(int64(t2.X) << 16), int32(int64(t2.Z) << 16)
+}
+
+// followerAccelerates evaluates the two strict distance gates which select
+// +Acceleration instead of -BrakeRate [04 R-MOV-01 §4]. Valid mobile
+// content authors non-zero TurnRate and BrakeRate; synthetic partial
+// definitions retain their pre-existing forward-progress behavior.
+func followerAccelerates(s *SteerState, desired uint16, unitX, unitZ, t1x, t1z, t2x, t2z int32) bool {
+	if s == nil {
+		return false
+	}
+	// Authored mobile units provide both divisors. Preserve Nanolathe's
+	// existing bounded behavior for synthetic/partial definitions rather than
+	// reproducing the retail divide fault [04 R-MOV-01 §4].
+	if s.TurnRate == 0 || s.BrakeRate == 0 {
+		return true
+	}
+	err := int64(headingDelta(s.Heading, desired))
+	if err < 0 {
+		err = -err
+	}
+	err &= 0xffff
+	turnDist := (err * int64(s.Speed)) / int64(s.TurnRate)
+	stopDist := (((int64(s.Speed) * int64(s.Speed)) >> 16) << 16) / (2 * int64(s.BrakeRate))
+	dx1, dz1 := int64(t1x)-int64(unitX), int64(t1z)-int64(unitZ)
+	dx2, dz2 := int64(t2x)-int64(unitX), int64(t2z)-int64(unitZ)
+	a := ((dx1 * dx1) >> 32) + ((dz1 * dz1) >> 32)
+	b := ((dx2 * dx2) >> 32) + ((dz2 * dz2) >> 32)
+	turnGate := ((turnDist * turnDist) >> 32) * 4
+	stopGate := (stopDist * stopDist) >> 32
+	return a > turnGate && b > stopGate
+}
+
+// groundPostMoveHeight covers the model-independent post-move branches. The
+// selection-primitive conform for other vehicles needs compiled model ground
+// plate geometry and remains at its call site [04 R-MOV-01 §5][§9].
+func groundPostMoveHeight(t *world.Terrain, u *units.Unit) (numeric.Fixed, bool) {
+	if t == nil || u == nil {
+		return 0, false
+	}
+	if u.Def != nil && !u.Def.Upright && u.Def.Floater {
+		return numeric.Fixed((int64(t.SeaLevel) - int64(u.Def.Waterline)) << 16), true
+	}
+	terrainY := t.HeightAt(u.X, u.Z)
+	if terrainY == numeric.Fixed(-1) {
+		return 0, false
+	}
+	if u.Def != nil && u.Def.Upright && u.Def.CanHover {
+		waterY := numeric.Fixed((int64(t.SeaLevel) - int64(u.Def.Waterline)) << 16)
+		if terrainY < waterY {
+			return waterY, true
+		}
+	}
+	return terrainY, true
 }
 
 const maxUint64 = ^uint64(0)
@@ -969,7 +1099,12 @@ func (s *System) submitMove(handle pool.Handle, player uint8, start, goal path.C
 func (s *System) submitMoveForOrder(u *units.Unit, head *orders.Node, start, goal path.Cell, activation uint64) {
 	// OW-3-P: select Goal family per order [04 §7.2][04 §7.4][04 §3.5] — Annulus for attack/guard stand-off where retail establishes it, Point otherwise.
 	// RectPerimeterGoal remains unwired because no established order producer exists [04 §7.2][04 §7.4][M-4].
-	goalObj := s.goalForOrder(goal, head)
+	fx, fz := s.pathFootprint(u)
+	goalObj := s.goalForOrderWithFootprint(goal, head, fx, fz)
+	s.submitGoalForOrder(u, start, goalObj, activation)
+}
+
+func (s *System) submitGoalForOrder(u *units.Unit, start path.Cell, goalObj path.Goal, activation uint64) {
 	req := path.Request{
 		Unit:       u.Handle,
 		Player:     u.Owner,
@@ -1022,14 +1157,21 @@ func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 	}
 	token := s.nextActivation
 	s.activeOrders[u.Handle] = &activeMove{order: head, token: token}
-	start := path.Cell{X: world.WorldToCell(u.X), Z: world.WorldToCell(u.Z)}
+	start := s.pathStartCell(u)
 	// Path search is aimed at the goal handle, so a replan after a dynamic
 	// block re-paths to the same point the mover was already steering at —
 	// for a build order that is the selected perimeter candidate, not the
 	// site centre [04 §8.3][04 §7.4].
 	goalX, goalZ, _ := s.moveGoalFor(u.Handle, head)
-	goal := path.Cell{X: world.WorldToCell(goalX), Z: world.WorldToCell(goalZ)}
-	s.submitMoveForOrder(u, head, start, goal, token)
+	fx, fz := s.pathFootprint(u)
+	goal := path.Cell{X: goalCellForWorld(goalX, fx), Z: goalCellForWorld(goalZ, fz)}
+	goalObj := s.goalForOrderWithFootprint(goal, head, fx, fz)
+	if route := s.Routes[u.Handle]; route != nil {
+		goalPointX, goalPointZ, haveGoalPoint := groundGoalPoint(goalObj, u, fx, fz)
+		installGroundGoal(route, u, goalObj, goalPointX, goalPointZ, haveGoalPoint, true, s.staticObstacleRevision(), s.tick)
+		route.LastRequestTick = s.tick
+	}
+	s.submitGoalForOrder(u, start, goalObj, token)
 	s.bindArrivalHandle(u, head)
 	return true
 }
@@ -1056,15 +1198,60 @@ func (s *System) ReplanMove(u *units.Unit, head *orders.Node) bool {
 	}
 	token := s.nextActivation
 	s.activeOrders[u.Handle].token = token
-	start := path.Cell{X: world.WorldToCell(u.X), Z: world.WorldToCell(u.Z)}
+	start := s.pathStartCell(u)
 	// Path search is aimed at the goal handle, so a refresh re-paths to the
 	// same point the mover was already steering at — for a build order that is
 	// the selected perimeter candidate, not the site centre [04 §8.3][04 §7.4].
 	goalX, goalZ, _ := s.moveGoalFor(u.Handle, head)
-	goal := path.Cell{X: world.WorldToCell(goalX), Z: world.WorldToCell(goalZ)}
-	s.submitMoveForOrder(u, head, start, goal, token)
+	fx, fz := s.pathFootprint(u)
+	goal := path.Cell{X: goalCellForWorld(goalX, fx), Z: goalCellForWorld(goalZ, fz)}
+	goalObj := s.goalForOrderWithFootprint(goal, head, fx, fz)
+	if route := s.Routes[u.Handle]; route != nil {
+		goalPointX, goalPointZ, haveGoalPoint := groundGoalPoint(goalObj, u, fx, fz)
+		installGroundGoal(route, u, goalObj, goalPointX, goalPointZ, haveGoalPoint, true, s.staticObstacleRevision(), s.tick)
+		route.LastRequestTick = s.tick
+	}
+	s.submitGoalForOrder(u, start, goalObj, token)
 	s.bindArrivalHandle(u, head)
 	return true
+}
+
+// serviceGroundFollower runs the route follower's movement-tick service before
+// steering. It consumes at most one reached waypoint, arms a repath when the
+// previous commit was blocked or no waypoint remains, and submits at most once
+// per 60 ticks without discarding a still-usable route [04 R-MOV-01 §3]
+// [04 R-MOV-01 §7]. The scheduler runs earlier in the tick, so a request
+// admitted here becomes eligible at the next scheduler boundary.
+func (s *System) serviceGroundFollower(u *units.Unit, head *orders.Node, route *Route, tick uint32) {
+	if s == nil || u == nil || head == nil || route == nil || (u.Def != nil && u.Def.CanFly) {
+		return
+	}
+	if route.Active && route.Count > 1 {
+		route.Prune(Point{X: int32(int64(u.X) >> 16), Z: int32(int64(u.Z) >> 16)})
+	}
+	blocked := false
+	if coll := s.Collisions[u.Handle]; coll != nil {
+		blocked = coll.Blocked
+	}
+	if blocked || !route.Active || route.Count < 2 {
+		route.WantsRepath = true
+	}
+	if !route.WantsRepath || route.LastRequestTick+60 > tick || s.HasPathRequest(u.Handle) {
+		return
+	}
+	binding := s.activeOrders[u.Handle]
+	if binding == nil || binding.order != head {
+		return
+	}
+	start := s.pathStartCell(u)
+	goalX, goalZ, ok := s.moveGoalFor(u.Handle, head)
+	if !ok {
+		return
+	}
+	fx, fz := s.pathFootprint(u)
+	goal := path.Cell{X: goalCellForWorld(goalX, fx), Z: goalCellForWorld(goalZ, fz)}
+	s.submitMoveForOrder(u, head, start, goal, binding.token)
+	route.LastRequestTick = tick
 }
 
 // DeactivateMove drops the path binding for a unit whose active order is no
@@ -1266,6 +1453,134 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) path.WorkRe
 	return path.WorkResult{Points: points, Status: status, Done: done, SetupSteps: setup, Pops: pops}
 }
 
+// roundAngleNearestEven reproduces the default x87 conversion used by the
+// shared bearing helper. math.Round is ties-away-from-zero and is not
+// interchangeable at exact half-way values [04 R-MOV-01 §2].
+func roundAngleNearestEven(value float64) int32 {
+	base := math.Floor(value)
+	frac := value - base
+	if frac*2 < 1 {
+		return int32(base)
+	}
+	if frac*2 > 1 {
+		return int32(base + 1)
+	}
+	whole := int64(base)
+	if whole&1 != 0 {
+		whole++
+	}
+	return int32(whole)
+}
+
+// groundGoalPoint applies the three established goal-point queries. Point and
+// annulus cells use the owning unit's footprint bias; rectangle goals use the
+// middle X column and far Z edge [04 R-MOV-03 §2].
+func groundGoalPoint(goal path.Goal, u *units.Unit, footX, footZ int32) (numeric.Fixed, numeric.Fixed, bool) {
+	if goal == nil || u == nil {
+		return 0, 0, false
+	}
+	trace := path.DescribeGoal(goal)
+	if trace.Unknown {
+		return 0, 0, false
+	}
+	cellWorld := func(cell, foot int32) numeric.Fixed {
+		return numeric.Fixed((int64(cell)*16 + int64(foot)*8) << 16)
+	}
+	switch trace.Kind {
+	case 1:
+		return cellWorld(trace.Center.X, footX), cellWorld(trace.Center.Z, footZ), true
+	case 2:
+		centerX := cellWorld(trace.Center.X, footX)
+		centerZ := cellWorld(trace.Center.Z, footZ)
+		dx := int64(u.X) - int64(centerX)
+		dz := int64(u.Z) - int64(centerZ)
+		angle := math.Atan2(float64(dx), float64(dz)) * 65536.0 / (2 * math.Pi)
+		bearing := numeric.Angle(uint16(roundAngleNearestEven(angle)))
+		radius := int64(int32(trace.A+trace.B)/2) << 16
+		// The shared table biases the angle by 0x20 before selecting one of its
+		// 512 entries [04 R-MOV-01 §4].
+		tableAngle := bearing + 0x20
+		offsetX := (radius*int64(numeric.Sin(tableAngle)) + 0x1000) >> 13
+		offsetZ := (radius*int64(numeric.Cos(tableAngle)) + 0x1000) >> 13
+		return centerX + numeric.Fixed(offsetX), centerZ + numeric.Fixed(offsetZ), true
+	case 3:
+		midX := int32(trace.Rect.Min.X+trace.Rect.Max.X) / 2
+		return cellWorld(midX, footX), cellWorld(trace.Rect.Max.Z, footZ), true
+	default:
+		return 0, 0, false
+	}
+}
+
+// acceptGroundRoute applies the follower's acceptance gates to the currently
+// held points. Terminal acceptance clears wants-repath; half-distance
+// acceptance and the synthetic two-point route keep it armed [04 R-PATH-01 §8].
+func acceptGroundRoute(route *Route, u *units.Unit, goal path.Goal, goalX, goalZ numeric.Fixed, haveGoalPoint, allowSynthetic bool, revision uint64, tick uint32) {
+	if route == nil || goal == nil || u == nil {
+		return
+	}
+	accepted := false
+	if route.Count >= 3 {
+		last := route.Points[route.Count-1]
+		if goal.StartSatisfied(path.Cell{X: last.X >> 4, Z: last.Z >> 4}) {
+			route.WantsRepath = false
+			accepted = true
+		} else if haveGoalPoint {
+			dux, duz := int64(u.X)-int64(goalX), int64(u.Z)-int64(goalZ)
+			dpx := (int64(last.X) << 16) - int64(goalX)
+			dpz := (int64(last.Z) << 16) - int64(goalZ)
+			du := groundHypotRaw(dux, duz)
+			dp := groundHypotRaw(dpx, dpz)
+			accepted = 2*dp < du
+		}
+	}
+	if accepted {
+		route.Active = true
+	}
+	if !accepted && haveGoalPoint && allowSynthetic {
+		synthetic := []Point{
+			{X: int32(u.X.Raw() >> 16), Z: int32(u.Z.Raw() >> 16)},
+			{X: int32(goalX.Raw() >> 16), Z: int32(goalZ.Raw() >> 16)},
+		}
+		route.PublishAtRevision(synthetic, revision)
+		route.WantsRepath = true
+	} else if !accepted {
+		route.Active = false
+	}
+
+	if tick-route.LastRequestTick > 10 {
+		route.LastRequestTick = 0
+	}
+	route.Dirty = true
+}
+
+// installGroundGoal runs the same acceptance procedure when a new goal object
+// is installed. With no held points this immediately installs the established
+// two-point straight-line route, so steering need not wait for the
+// asynchronous search publication [04 R-PATH-01 §8].
+func installGroundGoal(route *Route, u *units.Unit, goal path.Goal, goalX, goalZ numeric.Fixed, haveGoalPoint, allowSynthetic bool, revision uint64, tick uint32) {
+	if route == nil {
+		return
+	}
+	route.Active = false
+	route.WantsRepath = goal != nil
+	acceptGroundRoute(route, u, goal, goalX, goalZ, haveGoalPoint, allowSynthetic, revision, tick)
+}
+
+// installGroundRoute publishes points, then applies the fixed acceptance
+// order. Empty publications only clear wants-repath; the per-tick follower
+// re-arms it and observes the 60-tick throttle [04 R-PATH-01 §8].
+func installGroundRoute(route *Route, u *units.Unit, goal path.Goal, goalX, goalZ numeric.Fixed, haveGoalPoint, allowSynthetic bool, points []Point, revision uint64, tick uint32) {
+	if route == nil {
+		return
+	}
+	route.PublishAtRevision(points, revision)
+	if len(points) == 0 {
+		return
+	}
+	route.WantsRepath = true
+	acceptGroundRoute(route, u, goal, goalX, goalZ, haveGoalPoint, allowSynthetic, revision, tick)
+}
+
 // publishFunc stores the published points into the per-unit Route via Route.Publish
 // [04 §7.3] C14 and leaves the order node as authority (caller keeps orders queue).
 // It surfaces non-success status via Route.Status and pathFailures for loop failure handling [04 §7.3] C12 [P0-08][P0-12].
@@ -1305,7 +1620,30 @@ func (s *System) publishFunc(r path.Request, points []path.Point, status path.St
 			revision = 0 // aircraft do not consume the ground static layer
 		}
 	}
-	route.PublishAtRevision(mPoints, revision)
+	if s.world != nil {
+		u := s.world.Unit(r.Unit)
+		if u != nil && (u.Def == nil || !u.Def.CanFly) {
+			goalX, goalZ, haveGoal := numeric.Fixed(0), numeric.Fixed(0), false
+			allowSynthetic := false
+			fx, fz := s.pathFootprint(u)
+			goalX, goalZ, haveGoal = groundGoalPoint(r.Goal, u, fx, fz)
+			if binding := s.activeOrders[r.Unit]; binding != nil && binding.order != nil {
+				// TODO(question): the queue-pump flag that suppresses the synthetic route while
+				// retiring an order is not represented on orders.Node. A publication
+				// whose binding still matches the active head is treated as live [04
+				// R-PATH-01 §8].
+				allowSynthetic = haveGoal
+			} else {
+				q := orders.QueueForUnit(u)
+				allowSynthetic = haveGoal && q != nil && q.Head() != nil
+			}
+			installGroundRoute(route, u, r.Goal, goalX, goalZ, haveGoal, allowSynthetic, mPoints, revision, s.tick)
+		} else {
+			route.PublishAtRevision(mPoints, revision)
+		}
+	} else {
+		route.PublishAtRevision(mPoints, revision)
+	}
 	route.Status = status
 	if status == path.StatusRejected {
 		s.recordPathFailure(r.Unit, status, s.tick)
@@ -1551,7 +1889,9 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		}
 	}
 	route := s.Routes[handle]
-	hadRoute := route != nil && route.Active && route.Count > 0
+	s.serviceGroundFollower(u, head, route, tick)
+	isAircraft := u.Def != nil && u.Def.CanFly
+	hadRoute := route != nil && route.Active && ((isAircraft && route.Count > 0) || (!isAircraft && route.Count > 1))
 	if hadRoute && (u.Def == nil || !u.Def.CanFly) && route.NeedsStaticReplan(s.staticObstacleRevision()) {
 		// A static mutation invalidates the published route before its next
 		// waypoint is consumed. Replanning retains the order identity; with no
@@ -1566,6 +1906,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	}
 	_ = s.resolveProfile(u) // retained for profile revision side-effects if any; outer profile not needed for pitch path [M2]
 	var directGoal bool
+	var brakingOnly bool
 	var directX, directZ numeric.Fixed
 	if !hadRoute {
 		// [R-P0-01] still test arrival even without an active route: handle is
@@ -1580,17 +1921,14 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 			// threshold; completion is via the arrival handle above [R-P0-01].
 			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: false}
 		}
-		// No active route (failed search, or route pruned out last tick): the
-		// mover still drives straight at the goal handle — retail keeps steering
-		// at the goal handle once the route is exhausted, and the arrival
-		// predicate completes the order when the tile lands on the goal cell.
-		// The handle, not the order's stored position, is the target: a build
-		// order stores the site centre but is walked to a perimeter candidate
-		// [04 §8.3][04 §7.4]. A head that reports MoveArrived has completed its
-		// approach (mobile build sets it once the builder is within nanolathe
-		// reach of the site), so the mover stops rather than keep steering at
-		// the goal handle [04 §7.4][04 §3.5].
-		if head != nil && head.MoveState != orders.MoveArrived {
+		// A ground follower with no waypoint brakes without turning. Straight
+		// goal motion is created only by the route-acceptance synthetic route; budget
+		// delay, empty publication, and route exhaustion do not synthesize it
+		// here [04 R-PATH-01 §8][04 R-MOV-01 §3]. Aircraft consume their goal
+		// point directly and retain the existing direct branch.
+		if u.Def == nil || !u.Def.CanFly {
+			brakingOnly = true
+		} else if head != nil && head.MoveState != orders.MoveArrived {
 			if gx, gz, okGoal := s.moveGoalFor(handle, head); okGoal {
 				directGoal = true
 				directX = gx
@@ -1603,49 +1941,16 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 			s.emitMovementCallbacks(u, 0)
 			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: false}
 		}
-	} else {
-		// Prune(mover pos) [04 §7.3] C15. The stored points carry the half-footprint bias,
-		// so the mover's position is compared in the same biased domain [04 §7.1] C1.
-		moverPt := Point{
-			X: int32(int64(u.X) / 65536),
-			Z: int32(int64(u.Z) / 65536),
-		}
-		route.Prune(moverPt)
-		if !route.Active || route.Count == 0 {
-			// No waypoint left this tick: check only the local steering threshold,
-			// then fall through to direct goal movement. This is not completion.
-			d := s.distToGoal(u)
-			d2, hasGoal := s.distSqToGoal(u)
-			if hasGoal && d2 <= localSteeringThresholdSquared {
-				arrived := s.finalGoalReached(u, hadRoute)
-				s.emitMovementCallbacks(u, 0) // arrived => tier 0 [04 §5.2][GAP T15] C18 ensure StopMoving
-				return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: false, Moved: false, Arrived: arrived}
-			}
-			// Still far: direct move to the goal handle [04 §8.3][04 §7.4].
-			// A head that reports MoveArrived has completed its approach (mobile
-			// build), so stop instead of steering at the goal handle.
-			if head != nil && head.MoveState != orders.MoveArrived {
-				if gx, gz, okGoal := s.moveGoalFor(handle, head); okGoal {
-					directGoal = true
-					directX = gx
-					directZ = gz
-				} else {
-					arrived := s.finalGoalReached(u, hadRoute)
-					s.emitMovementCallbacks(u, 0)
-					return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: false, Moved: false, Arrived: arrived}
-				}
-			} else {
-				arrived := s.finalGoalReached(u, hadRoute)
-				s.emitMovementCallbacks(u, 0)
-				return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: false, Moved: false, Arrived: arrived}
-			}
-		}
 	}
 	// Current waypoint or direct goal
 	var wp Point
 	var wpWorldX, wpWorldZ numeric.Fixed
 	var dx, dz int64
-	if directGoal {
+	if brakingOnly {
+		wpWorldX = u.X
+		wpWorldZ = u.Z
+		wp = Point{X: int32(int64(u.X) >> 16), Z: int32(int64(u.Z) >> 16)}
+	} else if directGoal {
 		wpWorldX = directX
 		wpWorldZ = directZ
 		dx = int64(wpWorldX) - int64(u.X)
@@ -1653,24 +1958,31 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		// For direct goal, keep wp as goal cell for pitch delta fallback (use goal cell)
 		wp = Point{X: world.WorldToCell(directX), Z: world.WorldToCell(directZ)}
 	} else {
-		// Current waypoint: index 1 if available else 0 [task]
-		if route.Count > 1 {
-			wp = route.Points[1]
+		if isAircraft {
+			if route.Count > 1 {
+				wp = route.Points[1]
+			} else {
+				wp = route.Points[0]
+			}
+			wpWorldX = numeric.Fixed(int64(wp.X) << 16)
+			wpWorldZ = numeric.Fixed(int64(wp.Z) << 16)
 		} else {
-			wp = route.Points[0]
+			t1x, t1z, _, _ := routeTargets(route, int32(u.X.Raw()), int32(u.Z.Raw()))
+			wpWorldX, wpWorldZ = numeric.Fixed(t1x), numeric.Fixed(t1z)
 		}
-		wpWorldX = numeric.Fixed(int64(wp.X) * 65536)
-		wpWorldZ = numeric.Fixed(int64(wp.Z) * 65536)
 		dx = int64(wpWorldX) - int64(u.X)
 		dz = int64(wpWorldZ) - int64(u.Z)
 	}
-	if dx == 0 && dz == 0 {
+	if !brakingOnly && dx == 0 && dz == 0 {
 		d := s.distToGoal(u)
 		arrived := s.finalGoalReached(u, hadRoute)
 		s.emitMovementCallbacks(u, 0) // no delta => tier 0 [04 §5.2][GAP T15] C18
 		return StepResult{Handle: handle, DistToGoal: d, HasRoute: true, EmptyRoute: false, Moved: false, Arrived: arrived}
 	}
-	desired := headingFromDelta(dx, dz)
+	desired := u.Move.Heading
+	if !brakingOnly {
+		desired = headingFromDelta(dx, dz)
+	}
 	oldXRaw := int64(u.X)
 	oldZRaw := int64(u.Z)
 	var moved bool
@@ -1749,12 +2061,16 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		steer.UpdatePitch(steer.PendingHeading) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 		cap := steer.SpeedCapFromPitch() // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		hasWaypoint := true // hadRoute true implies waypoint (directGoal fallback also true) [04 §7.3] C14
-		blockedPrev := coll != nil && coll.Blocked
-		distRaw := int32(s.distToGoal(u).Raw())                              // 16.16 trunc toward zero [I3][01 §8]
-		steer.UpdateSpeedWithBraking(cap, hasWaypoint, distRaw, blockedPrev) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		steer.Integrate()                                                    // [04 §8.1] C20: heading commit + fixed trig position step
+		// The follower selects acceleration only when both strict cornering and
+		// stopping-distance gates pass [04 R-MOV-01 §4].
+		hasWaypoint := !brakingOnly
+		accelerate := false
+		if hasWaypoint {
+			t1x, t1z, t2x, t2z := routeTargets(route, int32(u.X.Raw()), int32(u.Z.Raw()))
+			accelerate = followerAccelerates(steer, desired, int32(u.X.Raw()), int32(u.Z.Raw()), t1x, t1z, t2x, t2z)
+		}
+		steer.UpdateFollowerSpeed(cap, hasWaypoint, accelerate)
+		steer.Integrate() // [04 §8.1] C20: heading commit + fixed trig position step
 		oldX := int64(u.X)
 		oldZ := int64(u.Z)
 		newX := int64(steer.X)
@@ -1770,8 +2086,17 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 			coll.MaxVelocity = int32(u.Def.MaxVelocity)
 		}
 		moverProfile := s.ProfileFor(handle) // [04 §6.1][04 §8.2] per-unit profile
+		proposedAnchor := coll.ProposedAnchor(coll.Mode)
+		fx, fz := coll.FootPrintX, coll.FootPrintZ
+		inBounds := commitRectInBounds(s.Terrain, proposedAnchor, fx, fz)
 		blockerID := -1
 		perCell := func(c Cell) bool {
+			if !inBounds {
+				return false
+			}
+			if s.Terrain != nil && !moverProfile.IsPassableCommitCell(s.Terrain, c.X, c.Z) {
+				return false
+			}
 			if s.Grid != nil {
 				if occ, ok := s.Grid.OccupantAt(c); ok && occ != coll.ID {
 					blockerID = occ
@@ -1780,15 +2105,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 			}
 			return true
 		}
-		aggregate := func() bool {
-			if s.Terrain == nil {
-				return true
-			}
-			bx, bz := coll.HalfBias()
-			anchor := QuantizedAnchor(coll.X+coll.VX, coll.Z+coll.VZ, bx, bz)
-			return moverProfile.IsPassableFootprint(s.Terrain, anchor.X, anchor.Z)
-		}
-		fastPath, isBlocked := coll.CommitOne(s.Grid, coll.Mode, perCell, aggregate) // [04 §8.2] C23 C24: sync clear-then-stamp before next slot
+		fastPath, isBlocked := coll.CommitOne(s.Grid, coll.Mode, perCell, nil) // [04 §8.2] C23 C24: sync clear-then-stamp before next slot
 		blocked = isBlocked
 		// Occupancy was committed (clear/commit/stamp, [04 §8.2] C22): record
 		// the unit's occupancy-commit tick so the request revision pass of
@@ -1811,12 +2128,15 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		coll.BlockerID = blockerID
 		u.X = numeric.Fixed(int64(coll.X))
 		u.Z = numeric.Fixed(int64(coll.Z))
-		if s.Terrain != nil {
-			u.Y = s.Terrain.HeightAt(u.X, u.Z)
-			if u.Y == numeric.Fixed(-1) {
-				u.Y = numeric.Fixed(int64(coll.Y))
-			}
+		if y, ok := groundPostMoveHeight(s.Terrain, u); ok {
+			u.Y = y
+		} else {
+			u.Y = numeric.Fixed(int64(coll.Y))
 		}
+		// TODO(R-MOV-01 selection primitive): non-upright, non-floater units
+		// still need the compiled model ground plate to publish exact Y, pitch,
+		// and roll; retain the established centre-height placeholder until that
+		// geometry is available [04 R-MOV-01 §5].
 		steer.X = coll.X
 		steer.Z = coll.Z
 		steer.Heading = coll.Heading
@@ -1841,8 +2161,8 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	// call SubmitMove; the scheduler's HasRequest gate in session path-submit
 	// remains authority [04 §7.3] C11 C12.
 	hasRouteAfter := route != nil && route.Active
-	// EmptyRoute reports route absence at entry: with no route the mover still
-	// steers straight at the order goal, so the flag and movement are orthogonal.
+	// EmptyRoute reports route absence at entry. A ground mover brakes while
+	// waiting for the follower's next eligible request [04 R-MOV-01 §3][§7].
 	return StepResult{Handle: handle, DistToGoal: d2, HasRoute: hasRouteAfter, EmptyRoute: !hadRoute, Moved: moved, Blocked: blocked, Arrived: arrived}
 }
 

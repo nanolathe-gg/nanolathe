@@ -23,11 +23,32 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 )
+
+// TestHeadlessCommandHasNoDesktopDependency locks the SP-REV-00 process
+// topology: the displayless command may enter internal/session, but its import
+// closure cannot reach the Ebitengine device packages or internal/client [I6].
+func TestHeadlessCommandHasNoDesktopDependency(t *testing.T) {
+	root := repositoryRoot(t)
+	cmd := exec.Command("go", "list", "-deps", "./cmd/nanolathe-headless")
+	cmd.Dir = root
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("list headless dependencies: %v", err)
+	}
+	for _, dependency := range strings.Fields(string(output)) {
+		if dependency == "github.com/nanolathe/nanolathe/internal/client" ||
+			dependency == "github.com/nanolathe/nanolathe/internal/audiobackend" ||
+			strings.HasPrefix(dependency, "github.com/hajimehoshi/ebiten/v2") {
+			t.Fatalf("displayless command imports desktop dependency %s", dependency)
+		}
+	}
+}
 
 // occurrence is one counted site, kept only for failure messages.
 type occurrence struct {
@@ -212,6 +233,7 @@ var float64ExemptFiles = map[string]string{
 	"internal/economy/maker.go":            "I2 economy production contributions and difficulty discounts use double working precision before named float32 stores; authored stockpile costs narrow at their documented boundary [05 R-ECO-01 §1][05 R-ECO-01 §3][05 \"Construction arithmetic\"]",
 	"internal/economy/p28_parity_trace.go": "opt-in trace copy of ledger.go's I2 cumulative totals and waste counters (same I2 row; P28-OBS-00C)",
 	"internal/movement/flight.go":          "I2 flight brake integration temporaries, narrowed at the named fixed-point stores [04 §10.1]",
+	"internal/movement/integrate.go":       "I2 ground follower goal-point bearing and route-distance/lookahead hypot temporaries [04 R-MOV-01 §2][04 R-MOV-01 §3][04 R-MOV-03 §2][04 R-PATH-01 §8]",
 	"internal/combat/aim.go":               "I2 ballistic discriminant, acos, sqrt [06 §3.3]",
 	"internal/combat/impact.go":            "I2 area-damage range sqrt, float64 transient truncated to int32 [06 §9.3]",
 	"internal/sim/numeric/trig.go":         "I2 simulation trig-table construction, float64 transient [04 §5.1]",
@@ -334,10 +356,10 @@ var debtMarkerTotals = map[string]int{
 	// adding one still requires an explicit reviewed baseline update.
 	"legacy":         36,
 	"compatibility":  17,
-	"fallback":       187,
-	"guess":          11,
+	"fallback":       186,
+	"guess":          10,
 	"plausible":      1,
-	"todo(question)": 324,
+	"todo(question)": 322,
 }
 
 var debtMarkerFileCounts = map[string]map[string]int{
@@ -401,7 +423,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/movement/cargo.go":             1,
 		"internal/movement/collision.go":         2,
 		"internal/movement/goals.go":             4,
-		"internal/movement/integrate.go":         7,
+		"internal/movement/integrate.go":         6,
 		"internal/movement/profile.go":           2,
 		"internal/movement/profile_footprint.go": 1,
 		"internal/movement/steer.go":             1,
@@ -428,7 +450,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/combat/pool.go":               1,
 		"internal/construction/factory.go":      1,
 		"internal/construction/reclaim.go":      1,
-		"internal/movement/integrate.go":        2,
+		"internal/movement/integrate.go":        1,
 		"internal/movement/p28_parity_trace.go": 1,
 		"internal/path/queue.go":                1,
 		"internal/path/search.go":               1,
@@ -476,9 +498,8 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/movement/collision.go":           2,
 		"internal/movement/flight.go":              3,
 		"internal/movement/goals.go":               16,
-		"internal/movement/integrate.go":           6,
+		"internal/movement/integrate.go":           5,
 		"internal/movement/landing.go":             1,
-		"internal/movement/layer.go":               2,
 		"internal/movement/movegoal.go":            1,
 		"internal/movement/profile.go":             3,
 		"internal/movement/route.go":               2,
@@ -492,7 +513,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/pool/pool.go":                    1,
 		"internal/save/bank.go":                    3,
 		"internal/session/commands.go":             1,
-		"internal/session/composition.go":          1,
+		"internal/session/composition.go":          2,
 		"internal/session/mission.go":              3,
 		"internal/session/progression.go":          4,
 		"internal/session/post_loop.go":            1,

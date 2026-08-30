@@ -350,6 +350,26 @@ func (s *SteerState) UpdateSpeedWithBraking(cap int32, hasWaypoint bool, distToG
 	}
 }
 
+// UpdateFollowerSpeed applies the route follower's already-selected signed
+// acceleration or braking delta, then its pitch/water ceiling. The caller owns
+// the two strict turn/stopping-distance tests [04 R-MOV-01 §4].
+func (s *SteerState) UpdateFollowerSpeed(cap int32, hasWaypoint, accelerate bool) {
+	if s == nil {
+		return
+	}
+	if hasWaypoint && accelerate {
+		s.Speed += s.Acceleration
+	} else {
+		s.Speed -= s.BrakeRate
+	}
+	if s.Speed < 0 {
+		s.Speed = 0
+	}
+	if cap < s.Speed {
+		s.Speed = cap
+	}
+}
+
 // ClampSpeed is a helper that returns the capped speed without mutating state.
 // It is useful for tests that want to check the asymmetric table and halving
 // without constructing a full SteerState tick.

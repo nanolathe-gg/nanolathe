@@ -295,24 +295,32 @@ func revisionWatermark(tick uint32) uint32 {
 	return tick - 30
 }
 
-// AnchorSource resolves a unit's committed footprint anchor cell [04 §8.2]
-// C23 cached anchor. The revision pass re-stamps footprints at the committed
-// anchor, the same rectangle occupancy commits maintain.
+// AnchorSource resolves a unit's committed footprint rectangle [04 §8.2]
+// C23 cached anchor. The revision pass re-stamps the occupant's own rectangle,
+// which can be larger than the movement class whose layer is being revised
+// [04 R-MOV-03 §3].
 type AnchorSource interface {
-	CommittedAnchor(h pool.Handle, footX, footZ int16) (Cell, bool)
+	CommittedFootprint(h pool.Handle) (anchor Cell, footX, footZ int16, ok bool)
 }
 
-// CommittedAnchor adapts the System's collision states to AnchorSource; it is
-// the production resolver for the revision pass.
-func (s *System) CommittedAnchor(h pool.Handle, footX, footZ int16) (Cell, bool) {
+// CommittedFootprint adapts the System's collision states to AnchorSource; it
+// is the production resolver for the revision pass.
+func (s *System) CommittedFootprint(h pool.Handle) (Cell, int16, int16, bool) {
 	if s == nil {
-		return Cell{}, false
+		return Cell{}, 0, 0, false
 	}
 	coll, ok := s.Collisions[h]
 	if !ok || coll == nil {
-		return Cell{}, false
+		return Cell{}, 0, 0, false
 	}
-	return coll.CachedAnchor, true
+	fx, fz := coll.FootPrintX, coll.FootPrintZ
+	if fx <= 0 {
+		fx = 1
+	}
+	if fz <= 0 {
+		fz = 1
+	}
+	return coll.CachedAnchor, fx, fz, true
 }
 
 // Revise is the request revision pass run before expansion [04 R-PATH-01 §2]
@@ -351,10 +359,9 @@ func (l *ClassLayer) Revise(tick uint32, requester pool.Handle, w *units.World, 
 	if w == nil || anchors == nil {
 		return
 	}
-	fx, fz := l.footprintSize()
 	if requester != 0 && requesterCommit < oldWatermark {
-		if anchor, ok := anchors.CommittedAnchor(requester, int16(fx), int16(fz)); ok {
-			l.RestampRect(anchor.X, anchor.Z, anchor.X+fx-1, anchor.Z+fz-1)
+		if anchor, fx, fz, ok := anchors.CommittedFootprint(requester); ok {
+			l.RestampRect(anchor.X, anchor.Z, anchor.X+int32(fx)-1, anchor.Z+int32(fz)-1)
 		}
 	}
 	if newWatermark == oldWatermark {
@@ -373,11 +380,11 @@ func (l *ClassLayer) Revise(tick uint32, requester pool.Handle, w *units.World, 
 		if c < oldWatermark || c >= newWatermark {
 			continue // outside the crossed [old,new) window [04 R-MOV-03 §3]
 		}
-		anchor, ok := anchors.CommittedAnchor(h, int16(fx), int16(fz))
+		anchor, fx, fz, ok := anchors.CommittedFootprint(h)
 		if !ok {
 			continue
 		}
-		l.RestampRect(anchor.X, anchor.Z, anchor.X+fx-1, anchor.Z+fz-1)
+		l.RestampRect(anchor.X, anchor.Z, anchor.X+int32(fx)-1, anchor.Z+int32(fz)-1)
 	}
 }
 

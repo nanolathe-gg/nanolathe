@@ -54,7 +54,7 @@ func TestSchedulerRouteSteerArrival(t *testing.T) {
 
 	// Create world and unit at start cell (1,1)
 	w := newMovementFixtureWorld(10)
-	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 3 * 65536, TurnRate: 500}
+	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 3 * 65536, Acceleration: 3 * 65536, BrakeRate: 3 * 65536, TurnRate: 500}
 	def.MaxDamage = 100
 	def.FootprintX = 1
 	def.FootprintZ = 1
@@ -154,7 +154,7 @@ func TestIntegrateDeterminism(t *testing.T) {
 		grid := NewOccupancyGrid()
 		system := NewSystem(terrain, profile, grid)
 		w := newMovementFixtureWorld(10)
-		def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500}
+		def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, Acceleration: 2 * 65536, BrakeRate: 2 * 65536, TurnRate: 500}
 		def.MaxDamage = 100
 		h, _ := w.Create(def, 0, world.CellToWorld(0), numeric.Fixed(0), world.CellToWorld(0))
 		u := w.Unit(h)
@@ -235,7 +235,7 @@ func TestBigRequestStaysActiveAcrossTicks(t *testing.T) {
 	system := NewSystem(terrain, profile, grid)
 
 	w := newMovementFixtureWorld(10)
-	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 3 * 65536, TurnRate: 500}
+	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 3 * 65536, Acceleration: 3 * 65536, BrakeRate: 3 * 65536, TurnRate: 500}
 	def.MaxDamage = 100
 	def.FootprintX = 1
 	def.FootprintZ = 1
@@ -358,7 +358,7 @@ func TestActivateMoveExactlyOnceAndRejectsStalePublication(t *testing.T) {
 	terrain := syntheticTerrainForIntegrate()
 	system := NewSystem(terrain, Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}, NewOccupancyGrid())
 	w := newMovementFixtureWorld(10)
-	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500, MaxDamage: 100}
+	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, Acceleration: 2 * 65536, BrakeRate: 2 * 65536, TurnRate: 500, MaxDamage: 100}
 	h, _ := w.Create(def, 0, world.CellToWorld(0), 0, world.CellToWorld(0))
 	u := w.Unit(h)
 	system.BindWorld(w)
@@ -392,9 +392,16 @@ func TestActivateMoveExactlyOnceAndRejectsStalePublication(t *testing.T) {
 	}
 	// Simulate a late callback for the canceled first request.  It must not
 	// overwrite the route belonging to the current head.
+	route := system.Routes[h]
+	wantFallback := append([]Point(nil), route.Points[:route.Count]...)
 	system.publishFunc(firstRequest, []path.Point{{X: 99, Z: 99}}, 0)
-	if route := system.Routes[h]; route != nil && route.Active {
-		t.Fatalf("stale publication became active: %+v", route.Points[:route.Count])
+	if route == nil || !route.Active || len(wantFallback) != int(route.Count) {
+		t.Fatalf("replacement goal fallback was disturbed: %+v", route)
+	}
+	for i := range wantFallback {
+		if route.Points[i] != wantFallback[i] {
+			t.Fatalf("stale publication overwrote fallback point %d: got %v want %v", i, route.Points[i], wantFallback[i])
+		}
 	}
 	currentRequest := path.Request{Unit: h, Activation: system.activeOrders[h].token}
 	system.publishFunc(currentRequest, []path.Point{{X: 6, Z: 6}}, 0)

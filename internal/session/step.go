@@ -12,7 +12,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/triggers"
 	"github.com/nanolathe/nanolathe/internal/units"
-	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 // stepAuthoritativePhases runs only the twelve authoritative phase calls for
@@ -290,18 +289,12 @@ func (s *Session) stepUnitPhase(tick uint32) {
 							}
 						}
 						if qActive.Head() == active && s.World != nil {
-							goalCell := path.Cell{X: world.WorldToCell(active.GoalX), Z: world.WorldToCell(active.GoalZ)}
-							if !s.Movement.IsGoalCellPassable(h, goalCell) {
-								rejected := qActive.RemoveHead()
-								if rejected != nil {
-									rejected.MoveState = orders.MoveBlocked
-									rejected.PathStatus = uint32(path.StatusRejected)
-								}
-								s.Movement.DeactivateMove(h)
-							} else {
-								s.Movement.ActivateMove(u, active)
-								active.MoveState = orders.MoveEnRoute
-							}
+							// Submission, search, and publication own goal rejection. A
+							// session-level cell precheck incorrectly discards commands whose
+							// reachable acceptance area lies beside a blocked goal cell [04
+							// R-PATH-01 §4][04 R-PATH-01 §7].
+							s.Movement.ActivateMove(u, active)
+							active.MoveState = orders.MoveEnRoute
 						}
 					} else {
 						s.Movement.DeactivateMove(h)
@@ -335,36 +328,9 @@ func (s *Session) stepUnitPhase(tick uint32) {
 				// result path only (satisfied 0x20 → code 5); invented ≤2wu distance
 				// completion deleted. Route pruning (≤25 whole units) and
 				// localSteeringThreshold remain separate and never complete the order.
-				if s.Movement.HasPathFailure(h) {
-					if rec, ok := s.Movement.PathFailureRecord(h); ok {
-						if qFail := orders.QueueOfUnit(u); qFail != nil && qFail.LenPrimary() > 0 {
-							headFail := qFail.Head()
-							if headFail != nil {
-								nameFail := orders.DescriptorFor(headFail.ID).Name
-								isMoveFail := nameFail == "Move_Ground" || nameFail == "VTOL_Move" || nameFail == "QMove" || nameFail == "Patrol" || nameFail == "QPatrol" || nameFail == "VTOL_Patrol" || nameFail == "RepairPatrol" || nameFail == "VTOL_RepairPatrol"
-								if isMoveFail {
-									if rec.Retries >= 1 {
-										headFail.MoveState = orders.MoveBlocked
-										headFail.PathStatus = uint32(rec.Status)
-										qFail.RemoveHead()
-										if routeFail := s.Movement.Routes[h]; routeFail != nil {
-											routeFail.Active = false
-											routeFail.Dirty = true
-										}
-										s.Movement.CancelPathRequest(h)
-										s.Movement.ClearPathFailure(h)
-									}
-								} else {
-									s.Movement.ClearPathFailure(h)
-								}
-							} else {
-								s.Movement.ClearPathFailure(h)
-							}
-						} else {
-							s.Movement.ClearPathFailure(h)
-						}
-					}
-				}
+				// Failed publications do not consume the order. The follower keeps
+				// polling at its 60-tick cadence with no retry ceiling [04
+				// R-MOV-01 §7].
 			}
 			// Slot-end death, cleanup, corpse, occupancy, target invalidation
 			// [01 §4.4][04 §2.4]. This is the only gameplay finalizer in battle.
