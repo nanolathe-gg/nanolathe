@@ -68,6 +68,86 @@ func TestRefreshCadence(t *testing.T) {
 	}
 }
 
+func TestClassifyUsesEstablishedNetEnergyBranchOrder(t *testing.T) {
+	tests := []struct {
+		name string
+		def  *content.UnitDef
+		wind float32
+		tide float32
+		want float32
+	}{
+		{name: "nil definition", want: 0},
+		{name: "negative energy use short circuits generators", def: &content.UnitDef{EnergyUse: -3, WindGenerator: 80, TidalGenerator: 90}, wind: .5, tide: .25, want: -3},
+		{name: "positive energy use", def: &content.UnitDef{EnergyUse: 7, WindGenerator: 80, TidalGenerator: 90}, wind: .5, tide: .25, want: 7},
+		{name: "energy use narrowed to zero falls through", def: &content.UnitDef{EnergyUse: 1e-300, WindGenerator: 8, TidalGenerator: 90}, wind: .5, tide: .25, want: -4},
+		{name: "wind", def: &content.UnitDef{WindGenerator: 8, TidalGenerator: 90}, wind: .5, tide: .25, want: -4},
+		{name: "positive wind narrowed to zero falls through to tidal", def: &content.UnitDef{WindGenerator: 1e-300, TidalGenerator: 12}, wind: .5, tide: .25, want: -3},
+		{name: "nonpositive wind falls through to tidal", def: &content.UnitDef{WindGenerator: -8, TidalGenerator: 12}, wind: .5, tide: .25, want: -3},
+		{name: "tidal", def: &content.UnitDef{TidalGenerator: 12}, wind: .5, tide: .25, want: -3},
+		{name: "zero", def: &content.UnitDef{}, wind: .5, tide: .25, want: 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classify(tc.def, tc.wind, tc.tide); got != tc.want {
+				t.Fatalf("classify = %g, want %g [05 R-PROD-01 §1]", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestClassRefreshReadsLiveEnergyEnvironmentWithoutExtraDraws(t *testing.T) {
+	const key = "windgen"
+	def := &content.UnitDef{
+		DefinitionHeader: content.DefinitionHeader{CanonicalKey: key},
+		UnitName:         key,
+		WindGenerator:    10,
+	}
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{key: def}}
+	wind := float32(.25)
+	providerCalls := 0
+	s := &Strategic{Catalog: cat}
+	s.BindEnergyEnvironment(func() (float32, float32) {
+		providerCalls++
+		return wind, 0
+	})
+	s.Init([]string{key})
+	if got := s.ClassVectors[key].C2; got != 12 {
+		t.Fatalf("initial wind energy coefficient = %d, want 12", got)
+	}
+	if providerCalls != 1 {
+		t.Fatalf("initial recompute provider calls = %d, want one per definition", providerCalls)
+	}
+
+	wind = .75
+	r := rng.NewSimulation(1)
+	for tick := uint32(30); tick <= 3000; tick += 30 {
+		peek := r
+		gate := peek.Uint32n(30)
+		beforeDraws := r.Draws()
+		beforeCalls := providerCalls
+		if !s.MaybeRefresh(tick, &r, 0, nil) {
+			t.Fatalf("tick %d refresh not due", tick)
+		}
+		if got := r.Draws(); got != beforeDraws+1 {
+			t.Fatalf("tick %d draws = %d, want %d: helper adds no RNG calls", tick, got, beforeDraws+1)
+		}
+		if gate != 0 {
+			if providerCalls != beforeCalls {
+				t.Fatalf("tick %d nonzero gate called energy provider %d times", tick, providerCalls-beforeCalls)
+			}
+			continue
+		}
+		if providerCalls != beforeCalls+1 {
+			t.Fatalf("tick %d gated recompute provider calls = %d, want one", tick, providerCalls-beforeCalls)
+		}
+		if got := s.ClassVectors[key].C2; got != 37 {
+			t.Fatalf("refreshed wind energy coefficient = %d, want live-value result 37", got)
+		}
+		return
+	}
+	t.Fatal("deterministic fixture did not encounter RNG(30)==0 within 100 refreshes")
+}
+
 func TestClassRecomputeCadence(t *testing.T) {
 	types := []string{"armfav", "corfav", "armship"}
 	s := &Strategic{}

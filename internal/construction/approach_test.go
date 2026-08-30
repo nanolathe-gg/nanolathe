@@ -46,7 +46,11 @@ func approachFixture(t *testing.T, siteCellX, siteCellZ int32) (*Service, *units
 	}
 
 	w := newConstructionFixtureWorld(20, cat)
-	hb, err := w.Create(builderDef, 0, 0, 0, 0)
+	// A 2x2 mover centred at cell zero has cached anchor (-1,-1), which is an
+	// intentionally invalid retail request start. Keep this general approach
+	// fixture in bounds so it tests perimeter selection rather than the path
+	// setup bounds exit [04 R-PATH-01 §4 step 1].
+	hb, err := w.Create(builderDef, 0, world.CellToWorld(2), 0, world.CellToWorld(2))
 	if err != nil {
 		t.Fatalf("create builder: %v", err)
 	}

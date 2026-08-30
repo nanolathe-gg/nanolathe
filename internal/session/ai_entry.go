@@ -30,6 +30,14 @@ func initializeBattleAI(s *Session, player uint8, profile *ai.Profile) error {
 		Catalog:      s.Catalog,
 		SurfaceMetal: battleSurfaceMetal(s),
 	}
+	// Bind before Strategic.Init so the construction-time class vectors and
+	// every later gated refresh use the same live battle inputs. At battle
+	// entry WindScalar is still exactly zero; the first wind chain runs at tick
+	// one and consumes its established draws there [05 R-PROD-01 §1][08
+	// R-ENTRY-01 §3 step 19][08 R-P0-05 §5–§6].
+	mgr.Strategic.BindEnergyEnvironment(func() (windScalar, tidalStrength float32) {
+		return s.Econ.WindScalar(), s.Econ.TidalScalar()
+	})
 	if !mgr.Strategic.InitializeRandomState(s.SimRNG()) {
 		return fmt.Errorf("session: AI strategic state initialization failed for player %d", player)
 	}

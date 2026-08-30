@@ -74,6 +74,13 @@ type Strategic struct {
 	// Catalog is the content catalog for definition lookups [P0-I16].
 	Catalog *content.Catalog
 
+	// energyEnvironment reads the live wind scalar and immutable map tidal
+	// strength used by the computer player's signed net-energy query. It is a
+	// session binding rather than copied strategic state so a gated 30-tick
+	// recompute observes the current wind value [05 R-PROD-01 §1][08
+	// R-P0-05 §5–§6].
+	energyEnvironment func() (windScalar, tidalStrength float32)
+
 	// setupDraws retains the eight construction-time values for draw-ledger
 	// verification; LandRegion and WaterRegion are their semantic products
 	// [08 R-AI-03 §4].
@@ -83,6 +90,17 @@ type Strategic struct {
 	negRegionH      uint32
 	posRegionW      uint32
 	posRegionH      uint32
+}
+
+// BindEnergyEnvironment supplies the two battle values read by the signed
+// per-definition net-energy query. The provider is invoked only when class
+// vectors are recomputed and consumes no random numbers [05 R-PROD-01 §1]
+// [08 R-P0-05 §5–§6].
+func (s *Strategic) BindEnergyEnvironment(read func() (windScalar, tidalStrength float32)) {
+	if s == nil {
+		return
+	}
+	s.energyEnvironment = read
 }
 
 // InitializeRandomState consumes the strategic-constructor draws once. The
@@ -372,16 +390,41 @@ func (s *Strategic) hasBuildOptions(ck string) bool {
 	return false
 }
 
-// classify is an unresolved helper. Its signed result is compared
-// against zero by the class routine, but the helper's definition inputs and
-// semantic name were not recovered. Do not proxy it with CanMove,
-// MaxVelocity, or standing-order flags [P0-01 §2.2] [R-P0-05] [I9].
-func classify(def *content.UnitDef) float32 {
-	_ = def
-	// TODO(question): recover the exact classification inputs and
-	// signed result. Zero is the documented neutral placeholder; callers
-	// therefore do not invent either side of the <0 comparison.
-	return 0.0
+// classify evaluates the established signed net-energy query used by the
+// class routine. Its semantic name remains unknown; the exact branch order,
+// definition inputs, signs, and live battle inputs are established [05
+// R-PROD-01 §1][08 R-P0-05 §5]. Positive results consume energy and
+// negative results produce it. The float32 return is the recovered helper
+// boundary consumed by the class-vector arithmetic.
+func classify(def *content.UnitDef, windScalar, tidalStrength float32) float32 {
+	if def == nil {
+		return 0
+	}
+	// UnitDef retains parser precision, but these retail definition fields are
+	// single precision. Narrow before both predicate and arithmetic so a value
+	// that becomes float32 zero cannot incorrectly block a later branch [05
+	// R-PROD-01 §1][fmt fbi].
+	energyUse := float32(def.EnergyUse)
+	windGenerator := float32(def.WindGenerator)
+	tidalGenerator := float32(def.TidalGenerator)
+	if energyUse != 0 {
+		return energyUse
+	}
+	if windGenerator > 0 {
+		return -(windScalar * windGenerator)
+	}
+	if tidalGenerator > 0 {
+		return -(tidalStrength * tidalGenerator)
+	}
+	return 0
+}
+
+func (s *Strategic) classify(def *content.UnitDef) float32 {
+	var windScalar, tidalStrength float32
+	if s != nil && s.energyEnvironment != nil {
+		windScalar, tidalStrength = s.energyEnvironment()
+	}
+	return classify(def, windScalar, tidalStrength)
 }
 
 // ftol truncates toward zero as required by the retail conversion contract
@@ -461,7 +504,7 @@ func (s *Strategic) recomputeClassVectors() {
 		if def != nil && def.MakesMetal != 0 { // [P0-01 §2.2; R-P0-05]
 			acc0 += 10
 		}
-		fval := classify(def)
+		fval := s.classify(def)
 		if fval < 0 {
 			acc0 += 10
 		}

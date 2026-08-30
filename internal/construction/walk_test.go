@@ -6,7 +6,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -31,12 +30,16 @@ func TestWalkToSite(t *testing.T) {
 	terrain.SeaLevel = 0
 
 	w := newConstructionFixtureWorld(20, cat)
-	hb, _ := w.Create(builderDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
+	// Keep the even-footprint builder's cached committed anchor in bounds; a
+	// 2x2 mover centred at cell zero correctly starts at (-1,-1) and exercises
+	// request rejection instead of the walk contract [04 R-PATH-01 §4 step 1].
+	startX, startZ := world.CellToWorld(2), world.CellToWorld(2)
+	hb, _ := w.Create(builderDef, 0, startX, 0, startZ)
 	builder := w.Unit(hb)
 	bindConstructionFixture(builder, trivialModel(1, nil), false)
 	builder.Def = builderDef
-	builder.X = numeric.Fixed(0)
-	builder.Z = numeric.Fixed(0)
+	builder.X = startX
+	builder.Z = startZ
 	builder.Move.Heading = 0
 	siteX := world.CellToWorld(10)
 	siteZ := world.CellToWorld(10)

@@ -254,7 +254,7 @@ var float64ExemptFiles = map[string]string{
 var float64Baseline = map[string]int{
 	"internal/ai/placement.go":              4,
 	"internal/ai/selection.go":              2,
-	"internal/ai/strategic.go":              6,
+	"internal/ai/strategic.go":              5,
 	"internal/cob/ports.go":                 12,
 	"internal/combat/meteor.go":             10,
 	"internal/combat/motion.go":             12,
@@ -359,7 +359,7 @@ var debtMarkerTotals = map[string]int{
 	"fallback":       185,
 	"guess":          10,
 	"plausible":      1,
-	"todo(question)": 316,
+	"todo(question)": 315,
 }
 
 var debtMarkerFileCounts = map[string]map[string]int{
@@ -466,7 +466,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/ai/placement.go":                 3,
 		"internal/ai/profile.go":                   4,
 		"internal/ai/selection.go":                 4,
-		"internal/ai/strategic.go":                 6,
+		"internal/ai/strategic.go":                 5,
 		"internal/cob/load.go":                     2,
 		"internal/cob/ports.go":                    5,
 		"internal/cob/vm.go":                       3,

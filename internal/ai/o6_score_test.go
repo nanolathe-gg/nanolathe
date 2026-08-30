@@ -68,6 +68,48 @@ func TestClassVectorUsesRuntimeDefinitionFields(t *testing.T) {
 	}
 }
 
+func TestGuardedSolarAndExtractorEnergyVectorsAndScores(t *testing.T) {
+	solar := o6Def("corsolar")
+	solar.BuildCostMetal = 141
+	solar.BuildCostEnergy = 790
+	solar.EnergyUse = -20
+	mex := o6Def("cormex")
+	mex.BuildCostMetal = 51
+	mex.BuildCostEnergy = 514
+	mex.EnergyUse = 3
+	mex.ExtractsMetal = .001
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{
+		solar.CanonicalKey: solar,
+		mex.CanonicalKey:   mex,
+	}}
+	s := &Strategic{Catalog: cat}
+	s.BindEnergyEnvironment(func() (float32, float32) { return 0, 0 })
+	s.Init([]string{solar.CanonicalKey, mex.CanonicalKey})
+
+	if got, want := s.ClassVectors[solar.CanonicalKey], (ClassVector{C0: 100, C1: -2, C2: 98}); got != want {
+		t.Fatalf("CORSOLAR class vector = %+v, want %+v [05 R-PROD-01 §1][08 R-P0-05 §5]", got, want)
+	}
+	if got, want := s.ClassVectors[mex.CanonicalKey], (ClassVector{C0: 100, C1: 98, C2: -16}); got != want {
+		t.Fatalf("CORMEX class vector = %+v, want %+v [05 R-PROD-01 §1][08 R-P0-05 §5]", got, want)
+	}
+
+	// These settled inputs produce the exact 50 metal / 50 energy / 0 other
+	// mix, making both recovered energy coefficients observable in the score.
+	in := ScoreInputs{
+		CurEnergy: 200, CapEnergy: 1000, NetEnergy: 1, ProdEnergy: 200,
+		CurMetal: 300, CapMetal: 500, NetMetal: 1, ProdMetal: 5,
+	}
+	if metal, energy, other := ComputeMix(in); metal != 50 || energy != 50 || other != 0 {
+		t.Fatalf("mix = (%d,%d,%d), want (50,50,0)", metal, energy, other)
+	}
+	if got := ComputeScore(in, s.ClassVectors[solar.CanonicalKey], 100); got != 48 {
+		t.Fatalf("CORSOLAR score = %d, want 48", got)
+	}
+	if got := ComputeScore(in, s.ClassVectors[mex.CanonicalKey], 100); got != 41 {
+		t.Fatalf("CORMEX score = %d, want 41", got)
+	}
+}
+
 func TestClassVectorOldProxiesCannotAffectChoice(t *testing.T) {
 	a := o6Def("a")
 	b := o6Def("b")

@@ -4695,10 +4695,14 @@ from the options handlers, seeded at startup). The Shift-gated overlay walker
 then runs once per frame over the local player's unit slice — after the effect
 strips, before the drag-rectangle and GUI frames — consistent with the overlay
 paragraph above. The walker passes a caller mask to a per-unit dispatcher:
-mask `0x1F` for the acted-on/hovered/single-selected units, marker-only `1`
-for the remaining local units, and only when some builder context exists. Per
-order node the effective mask is `table[kind].drawMask & callerMask`; the five
-bits dispatch:
+mask `0x1F` for four privileged units and marker-only `1` for the remaining
+local units, the latter only when some builder context exists. The four
+privileged units, and the exact Shift gate, are enumerated in "Who gets the
+full mask, and is the marker Shift-only" below — an earlier reading of this
+sentence called them "the acted-on/hovered/single-selected units", which was
+too vague to implement and wrong about "acted-on". Per order node the
+effective mask is `table[kind].drawMask & callerMask`; the five bits
+dispatch:
 
 | Bit | Helper |
 |---:|---|
@@ -4717,6 +4721,77 @@ plain connecting segment, so the dash chain is the only connector. The
 per-order-kind mask byte values in the runtime-built table are now
 **established** from the three static registration tables (the full census is
 in the helper table above), with exact bit identities.
+
+###### Who gets the full mask, and is the marker Shift-only
+
+**Established.** The build-site marker is drawn **only while Shift is held**.
+There is no non-Shift path to it. The reachability is a single chain with no
+branch points: the battle world composer is the one and only caller of the
+overlay walker, the walker is the one and only caller of the five-bit per-node
+dispatcher, and the dispatcher is the one and only caller of the build-site
+marker helper. None of those entry points is ever taken as data anywhere in the
+image, so there is no indirect route either (see the vestigial descriptor field
+noted at the end of this subsection for the one apparent exception, which is
+not a call). The composer's guard is a **live asynchronous key-state query for
+the Shift key**, asked afresh every battle frame at draw time — the same
+real-time source §4 contrasts with the click message's modifier word, not a
+latched or remembered modifier. With Shift up, retail therefore draws **nothing
+at all** at a queued build site: no rectangle, no sweep, no dash chain.
+
+This corrects the earlier phrasing of the paragraph that opens §3, which said
+the full mask goes to "the acted-on/hovered/single-selected units". That
+wording was wrong in a way that mattered: it invited reading "acted-on" as a
+recency mark written when an order is issued — a unit id plus a timestamp, or a
+bit on the unit. **No such mark exists.** Issuing an order writes nothing that
+this overlay consults. The unit the old text called "acted-on" is the camera's
+follow target.
+
+The walker admits a local unit only when it is alive and not death-marked, then
+picks its caller mask by the first of these that matches:
+
+1. the unit the follow camera is currently tracking (the tracked-unit slot of
+   the camera block, cleared when the follow is cancelled, [R-CAM-01 §12]);
+2. the unit whose command page is currently open — the command-page subject id,
+   written when a page opens for a unit and zeroed both by the page-close
+   routine ([R-HUD-04 §3]) and by the select-all sweep;
+3. the hovered unit id — the same hover word the footer's first hover source
+   reads ([R-HUD-03 §1]);
+4. any unit carrying the selected flag.
+
+All four get the full mask `0x1F`. Every other local unit gets marker-only `1`,
+and that fallback runs **only when a builder context exists**, defined
+precisely as: at least one of (1), (2), (3) resolves to a live unit whose
+definition carries the builder capability. When none of them does, the
+remaining local units are skipped entirely and only the four privileged units
+draw anything. Note the asymmetry: the builder-context test gates the
+marker-only fallback alone — the four privileged units draw their queues
+regardless of whether anything is a builder.
+
+Two details that a reader of the old wording could get wrong. First,
+"single-selected" was misleading: **every** selected unit gets the full mask,
+not only a lone one; the command-page subject (2) is the separate notion that
+is single-unit-ish, and it is an id the page machinery owns, not a count of the
+selection. Second, the walker passes the dispatcher one further byte that
+distinguishes the selected-unit branch from the other three; no helper reads
+it, so it changes nothing that is drawn. In particular the marker's colour pair
+is still chosen from the **order node's owning unit's** selected flag (3/10 when
+set, 1/9 when clear), exactly as the marker paragraph in §9 states, and never
+from which branch admitted the unit.
+
+What *is* drawn without Shift, and is easy to mistake for this marker, is the
+always-on selected-unit footprint quad: gated on bit 2 of the interface-options
+word, built from the unit's own root-piece bounds, and drawn **at the unit** —
+never at an order's position. Nothing else in the world composer projects a
+build footprint at an order position.
+
+Vestigial descriptor field: each order-descriptor record carries, besides the
+draw-mask word, a spare helper pointer that always holds the helper for that
+record's **lowest set draw-mask bit** (so the two MOBILEBUILD-family records
+hold the marker helper). Nothing reads that field at runtime — every runtime
+read of a descriptor record uses the state handler, the draw mask, the icon
+byte, the order-flags word or the name pointer. It is dead metadata, not a
+second dispatch table, and it is the only place the marker helper is named
+outside the dispatcher.
 
 ##### Latch persistence under Shift (R-P0-11 §4)
 

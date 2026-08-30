@@ -343,6 +343,30 @@ func (s *System) pathStartCell(u *units.Unit) path.Cell {
 	return path.Cell{}
 }
 
+// livePathOrder resolves the status sink captured by a path request. Search
+// setup and publication can both finish after an order replacement, so all
+// three identities must still agree before either boundary wakes an order:
+// the live unit slot, the activation token, and the current queue-head node
+// [04 R-PATH-01 §7][04 R-PATH-01 §9].
+func (s *System) livePathOrder(r path.Request) (*units.Unit, *orders.Node, bool) {
+	if s == nil || s.world == nil || r.Activation == 0 {
+		return nil, nil, false
+	}
+	binding := s.activeOrders[r.Unit]
+	if binding == nil || binding.order == nil || binding.token != r.Activation {
+		return nil, nil, false
+	}
+	u := s.world.Unit(r.Unit)
+	if u == nil || u.Handle != r.Unit {
+		return nil, nil, false
+	}
+	q, ok := u.Orders.(*orders.Queue)
+	if !ok || q == nil || q.Head() != binding.order {
+		return nil, nil, false
+	}
+	return u, binding.order, true
+}
+
 // ThresholdSqFromRadius is exported helper for tests [R-P0-01].
 func ThresholdSqFromRadius(radiusParam int32) int32 { return thresholdSqFromRadius(radiusParam) }
 
@@ -1187,9 +1211,10 @@ func (s *System) pathCellsForOrder(u *units.Unit, head *orders.Node) (start, goa
 	goalX, goalZ, ok := s.moveGoalFor(u.Handle, head)
 	name := orders.DescriptorFor(head.ID).Name
 	if name == "MobileBuild" || name == "VTOL_MobileBuild" {
-		// This producer's selected point and start use the whole-cell domain
-		// already established at the construction boundary [04 §7.4].
-		return path.Cell{X: world.WorldToCell(u.X), Z: world.WorldToCell(u.Z)},
+		// The selected approach remains in the construction producer's whole-cell
+		// domain, but every admitted request copies the mover's cached committed
+		// cell as its start [04 R-PATH-01 §4 step 1].
+		return s.pathStartCell(u),
 			path.Cell{X: world.WorldToCell(goalX), Z: world.WorldToCell(goalZ)}, true, ok
 	}
 	fx, fz := s.pathFootprint(u)
@@ -1464,6 +1489,15 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) path.WorkRe
 		}
 		sess = path.NewSession(cfg)
 		s.sessions[idx] = sess
+		// Request setup reports its established 0x100/0x200 notification to
+		// the goal object's owning order even when search work continues. These
+		// bits are distinct from the final route diagnostic [04 R-PATH-01
+		// §4][04 R-PATH-01 §9].
+		if notified := sess.Notified(); notified != 0 {
+			if _, order, live := s.livePathOrder(r); live {
+				order.Satisfied |= uint32(notified)
+			}
+		}
 	}
 	before := sess.Popped()
 	points, status, done := sess.Resume(budget) // [04 §7.3] C11 budget, C12 full-or-empty
@@ -1618,17 +1652,15 @@ func (s *System) publishFunc(r path.Request, points []path.Point, status path.St
 	// the node that activated this request.  Leave the current route untouched
 	// when identity no longer matches; the next active head will submit through
 	// ActivateMove.
-	if binding, bound := s.activeOrders[r.Unit]; bound {
-		if binding == nil || binding.token != r.Activation {
-			return
-		}
-		if s.world != nil {
-			u := s.world.Unit(r.Unit)
-			q := orders.QueueForUnit(u)
-			if u == nil || q == nil || q.Head() != binding.order {
-				return
-			}
-		}
+	boundUnit, boundOrder, liveBinding := s.livePathOrder(r)
+	if _, bound := s.activeOrders[r.Unit]; bound && !liveBinding {
+		return
+	}
+	if len(points) == 0 && liveBinding && r.Goal != nil && !r.Goal.StartSatisfied(s.pathStartCell(boundUnit)) {
+		// Empty publication, not search rejection itself, is retail's
+		// "cannot get there" notification [04 R-PATH-01 §7][04
+		// R-PATH-01 §9][04 R-COLL-01 §6].
+		boundOrder.Satisfied |= 0x40
 	}
 	route := s.Routes[r.Unit]
 	if route == nil {

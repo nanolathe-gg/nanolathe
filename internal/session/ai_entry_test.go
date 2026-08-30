@@ -11,6 +11,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
@@ -21,14 +22,28 @@ func TestInitializeBattleAIPrecedesUnitDraws(t *testing.T) {
 		terrain.Plot[i].SetFeature(world.PlotFeatureNone)
 		terrain.Plot[i][7] = 44
 	}
+	terrain.Tidal = numeric.Fixed(16384) // 0.25 map tidal strength.
 	ota, err := formats.LoadOTA([]byte("[GlobalHeader]{SurfaceMetal=300;}"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	wind := world.NewWind(100, 200)
+	econ := &economy.Service{Wind: wind, Terrain: terrain}
+	windDef := &content.UnitDef{
+		DefinitionHeader: content.DefinitionHeader{CanonicalKey: "windgen"},
+		UnitName:         "windgen",
+		WindGenerator:    8,
+	}
+	tidalDef := &content.UnitDef{
+		DefinitionHeader: content.DefinitionHeader{CanonicalKey: "tidalgen"},
+		UnitName:         "tidalgen",
+		TidalGenerator:   8,
+	}
 	s := &Session{
 		World:   terrain,
-		Catalog: &content.Catalog{Units: map[string]*content.UnitDef{}},
-		Econ:    &economy.Service{},
+		Catalog: &content.Catalog{Units: map[string]*content.UnitDef{"windgen": windDef, "tidalgen": tidalDef}},
+		Econ:    econ,
+		Wind:    wind,
 		Mission: &mission.Mission{OTA: ota},
 	}
 	s.Econ.Players[1].Exists = true
@@ -45,6 +60,15 @@ func TestInitializeBattleAIPrecedesUnitDraws(t *testing.T) {
 	}
 	if got := s.SimRNG().Draws(); got != 8 {
 		t.Fatalf("manager constructor draws = %d, want exact pre-unit count 8 [08 R-ENTRY-01 §3 step 24]", got)
+	}
+	if wind.Scalar != 0 || wind.Strength != 0 || wind.LastChange != 0 {
+		t.Fatalf("tick-zero wind state changed during AI binding: %+v", wind)
+	}
+	if got := mgr.Strategic.ClassVectors["windgen"].C2; got != 0 {
+		t.Fatalf("tick-zero wind-generator coefficient = %d, want zero before first wind chain", got)
+	}
+	if got := mgr.Strategic.ClassVectors["tidalgen"].C2; got != 10 {
+		t.Fatalf("tick-zero tidal-generator coefficient = %d, want 10 from bound map strength", got)
 	}
 	if mgr.SurfaceMetal != 300 || terrain.Plot[0].Metal() != 44 {
 		t.Fatalf("SurfaceMetal = %d and plot byte = %d, want distinct raw word 300 and narrowed seed 44", mgr.SurfaceMetal, terrain.Plot[0].Metal())

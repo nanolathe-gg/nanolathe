@@ -162,6 +162,110 @@ func TestConfiguredSchedulerPublishesOwnerOneRequest(t *testing.T) {
 	t.Fatalf("owner-one request did not publish with two-player session topology: route=%+v", sys.Routes[h])
 }
 
+// TestMobileBuildRequestsStartAtCommittedAnchor locks the request-init source
+// for a build walk whose even footprint makes its transform-centre cell differ
+// from its committed footprint anchor. Every admitted request copies the
+// cached committed cell; MobileBuild's separately selected approach point
+// remains its goal [04 R-PATH-01 §4 step 1][04 §7.4].
+func TestMobileBuildRequestsStartAtCommittedAnchor(t *testing.T) {
+	terrain := syntheticTerrainForIntegrate()
+	profile := wiringProfile
+	profile.FootPrintX, profile.FootPrintZ = 2, 2
+	sys := NewSystem(terrain, profile, NewOccupancyGrid())
+	sys.ConfigurePath(2, 10)
+	w := newMovementFixtureWorld(10)
+	sys.BindWorld(w)
+
+	def := wiringDef()
+	def.UnitName = "c10-builder"
+	def.FootprintX, def.FootprintZ = 2, 2
+	h, err := w.Create(def, 1, world.CellToWorld(8), 0, world.CellToWorld(18))
+	if err != nil {
+		t.Fatalf("create 2x2 builder: %v", err)
+	}
+	u := w.Unit(h)
+	sys.EnsureUnit(u)
+	if got, want := sys.pathStartCell(u), (path.Cell{X: 7, Z: 17}); got != want {
+		t.Fatalf("committed start = %v, want %v", got, want)
+	}
+	if got := (path.Cell{X: world.WorldToCell(u.X), Z: world.WorldToCell(u.Z)}); got != (path.Cell{X: 8, Z: 18}) {
+		t.Fatalf("fixture transform-centre cell = %v, want asymmetric (8,18)", got)
+	}
+
+	id := orders.Lookup("MobileBuild")
+	if id == 0 {
+		t.Fatal("MobileBuild order unavailable")
+	}
+	q := orders.QueueForUnit(u)
+	q.Push(id, orders.Node{GoalX: world.CellToWorld(10), GoalZ: world.CellToWorld(15)})
+	head := q.Head()
+	selected := path.Cell{X: 8, Z: 13}
+	sys.BindMoveGoal(h, head, world.CellToWorld(selected.X), world.CellToWorld(selected.Z))
+	wantNode := *head
+	schedulerBefore := sys.Scheduler.TraceState()
+
+	if !sys.ActivateMove(u, head) {
+		t.Fatal("fresh MobileBuild activation was not accepted")
+	}
+	requests := sys.PathRequestsSnapshot()
+	if len(requests) != 1 {
+		t.Fatalf("fresh activation requests = %d, want 1", len(requests))
+	}
+	first := requests[0]
+	if first.Start != (path.Cell{X: 7, Z: 17}) {
+		t.Fatalf("fresh request start = %v, want cached committed anchor (7,17)", first.Start)
+	}
+	if goals := first.Goal.Enumerate(nil); !reflect.DeepEqual(goals, []path.Cell{selected}) || !first.Goal.StartSatisfied(selected) || first.Goal.StartSatisfied(path.Cell{X: selected.X + 1, Z: selected.Z}) {
+		t.Fatalf("fresh request goal = %v, want selected exact point %v", goals, selected)
+	}
+	binding := sys.activeOrders[h]
+	if binding == nil || binding.order != head || binding.token == 0 || first.Activation != binding.token {
+		t.Fatalf("fresh activation identity request=%d binding=%+v head=%p", first.Activation, binding, head)
+	}
+	if got := sys.Scheduler.TraceState(); !reflect.DeepEqual(got, schedulerBefore) {
+		t.Fatalf("request submission consumed scheduler budget: before=%+v after=%+v", schedulerBefore, got)
+	}
+	if q.Head() != head || !reflect.DeepEqual(*head, wantNode) {
+		t.Fatalf("fresh activation mutated order identity/state: head=%p/%p got=%+v want=%+v", q.Head(), head, *head, wantNode)
+	}
+
+	// Empty/exhausted publication leaves the same head bound. Once the prior
+	// request is gone, the follower must resubmit once at the inclusive
+	// LastRequestTick+60 boundary, keeping start, goal and activation identity.
+	sys.CancelPathRequest(h)
+	route := sys.Routes[h]
+	route.Active = false
+	route.Count = 3 // stale backing count is irrelevant while inactive.
+	route.WantsRepath = true
+	route.LastRequestTick = 100
+	sys.serviceGroundFollower(u, head, route, 159)
+	if got := sys.PathRequestsSnapshot(); len(got) != 0 {
+		t.Fatalf("request submitted before inclusive 60-tick boundary: %v", got)
+	}
+	sys.serviceGroundFollower(u, head, route, 160)
+	requests = sys.PathRequestsSnapshot()
+	if len(requests) != 1 {
+		t.Fatalf("boundary resubmission requests = %d, want 1", len(requests))
+	}
+	retry := requests[0]
+	if retry.Start != first.Start || retry.Activation != first.Activation || !reflect.DeepEqual(path.DescribeGoal(retry.Goal), path.DescribeGoal(first.Goal)) {
+		t.Fatalf("boundary request changed identity: first=%+v retry=%+v", first, retry)
+	}
+	if route.LastRequestTick != 160 {
+		t.Fatalf("boundary request tick = %d, want 160", route.LastRequestTick)
+	}
+	sys.serviceGroundFollower(u, head, route, 160)
+	if got := sys.PathRequestsSnapshot(); len(got) != 1 {
+		t.Fatalf("repeated boundary visit duplicated request: %v", got)
+	}
+	if got := sys.Scheduler.TraceState(); !reflect.DeepEqual(got, schedulerBefore) {
+		t.Fatalf("repath submission consumed scheduler budget: before=%+v after=%+v", schedulerBefore, got)
+	}
+	if q.Head() != head || !reflect.DeepEqual(*head, wantNode) || sys.activeOrders[h] != binding {
+		t.Fatalf("repath mutated order/binding: head=%p/%p got=%+v want=%+v binding=%p/%p", q.Head(), head, *head, wantNode, sys.activeOrders[h], binding)
+	}
+}
+
 // TestOccupancyCommitNotesRevisionLayers locks the commit-site wiring: a
 // successful occupancy commit records the unit's commit tick on every
 // allocated class layer, so the request revision pass of [04 §6.1 R-DOC04-B]
