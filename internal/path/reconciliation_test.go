@@ -124,8 +124,46 @@ func TestReconciliationLowerRaySideReturnsToOwnOrigin(t *testing.T) {
 	if !state.departed || pos != origin || probe != DirNW {
 		t.Fatalf("lower side terminated outside its origin state: pos=%v probe=%d state=%+v", pos, probe, state)
 	}
-	if result.steps != 12 {
-		t.Fatalf("lower side charged %d probes, want 12 [04 R-PATH-01 §5]", result.steps)
+	if result.steps != 14 {
+		t.Fatalf("lower side charged %d probes, want 14 [04 R-PATH-01 §5]", result.steps)
+	}
+}
+
+func TestReconciliationLowerRaySuccessfulStepReturnsToOrigin(t *testing.T) {
+	origin := Cell{}
+	pos := origin
+	probe := DirNW
+	state := raySideState{}
+	result := rayResult{}
+	passable := func(c Cell) uint8 {
+		switch c {
+		case origin, (Cell{0, -2}), (Cell{-1, -1}):
+			return 3
+		default:
+			return 0
+		}
+	}
+	mark := func(Cell, uint8) bool { return false }
+
+	// Advancing the stored lower probe by only one sector after a successful
+	// step repeats the non-origin state (0,-2,DirS) forever on this fixture.
+	// The established two-sector transition returns to the side's own origin
+	// state after exactly 20 charged probes [04 R-PATH-01 §5].
+	terminated := false
+	for range 24 {
+		if !raySideStep(&pos, &probe, true, origin, DirNW, &state, passable, &result, mark) {
+			terminated = true
+			break
+		}
+	}
+	if !terminated {
+		t.Fatal("lower side did not return to its origin state within 24 probes")
+	}
+	if !state.departed || pos != origin || probe != DirNW {
+		t.Fatalf("lower side terminated outside its origin state: pos=%v probe=%d state=%+v", pos, probe, state)
+	}
+	if result.steps != 20 {
+		t.Fatalf("lower side charged %d probes, want 20 [04 R-PATH-01 §5]", result.steps)
 	}
 }
 

@@ -103,6 +103,18 @@ func TestStepUnitBlockedCommitKeepsOrderAndRequest(t *testing.T) {
 	if len(afterPoll) != 1 || afterPoll[0].Activation != activeBefore.token {
 		t.Fatalf("blocked follower request=%#v want one request retaining token %d", afterPoll, activeBefore.token)
 	}
+
+	// A bound order without a derived or stored goal is not a request for the
+	// zero cell. Preserve the follower's existing no-goal return while sharing
+	// MobileBuild's order-aware cell selection [04 R-MOV-01 §7].
+	system.pathProvider.Cancel(moverHandle)
+	head.GoalX, head.GoalZ = 0, 0
+	route.LastRequestTick = 61
+	route.WantsRepath = true
+	system.serviceGroundFollower(w.Unit(moverHandle), head, route, 121)
+	if system.HasPathRequest(moverHandle) {
+		t.Fatal("blocked follower submitted a request for an order with no goal")
+	}
 }
 
 // TestDynamicBlockCommitScenarios locks the established final-commit contract:

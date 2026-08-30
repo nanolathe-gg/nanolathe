@@ -187,6 +187,12 @@ type GuardLatches struct {
 	HelpBuild   [GuardLatchSize]pool.Handle
 }
 
+// YardOpenTransaction owns an installed port-18 request, including admission,
+// the YardOpen commit, and any world restamp. The callback is runtime
+// composition topology, not authoritative unit state or save data
+// [04 §4.7 port 18][04 R-COLL-01 §4].
+type YardOpenTransaction func(requested bool)
+
 // Unit is a live unit instance [04 §2.3] C1.
 // Retail unit records have a 280-byte identity [P0-16] [01 §6.1]; Nanolathe
 // uses named Go fields in a slot-indexed array parallel to pool.Units and
@@ -271,6 +277,11 @@ type Unit struct {
 	PlacementIdx      int // index in Mission.Units placement order, -1 if not scenario-spawned
 	PlacementIdent    string
 	PlacementUnitName string
+
+	// yardTransaction is runtime topology installed by composition before strict
+	// COB Create; it is deliberately absent from authoritative snapshots and
+	// save records [04 §4.7 port 18].
+	yardTransaction YardOpenTransaction
 }
 
 // MakeSelectable applies retail's make-selectable order: clear the transient status bit
@@ -331,6 +342,16 @@ func (u *Unit) SetActivated(on bool) {
 		return
 	}
 	u.Activated = on
+}
+
+// SetYardOpenTransaction installs the optional port-18 transaction callback.
+// Session composition installs it before strict COB binding runs Create. The
+// callback owns the accepted commit and any restamp; a nil callback preserves
+// direct writes for synthetic fixtures [04 §4.7 port 18][04 R-COLL-01 §4].
+func (u *Unit) SetYardOpenTransaction(transaction YardOpenTransaction) {
+	if u != nil {
+		u.yardTransaction = transaction
+	}
 }
 
 // SetCloaked sets cloak state for upkeep debit [05 "Cloak debit"] [P1-I04].

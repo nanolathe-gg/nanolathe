@@ -349,22 +349,22 @@ func TestFactoryReservationReleaseAndCompletedRetention(t *testing.T) {
 	if cell.OccupantA() != 0 || cell.Occupied() {
 		t.Fatalf("reservation leaked after release: occupant=%d", cell.OccupantA())
 	}
-	// A COMPLETED product must not hold the mobile-occupancy shorts — its own
-	// stamp would deadlock its factory's exit-spot validation forever. Blocking
-	// duty for finished buildings moves to the structures registry [04 §6.2];
-	// this completion still reserves while unfinished (through state3 work).
+	// A completed building keeps the same placement record and the ground word
+	// on every yard-selected cell [04 R-COLL-01 §3–§4].
 	rect, _ := world.NewFootprintRect(world.NewFootprintAnchor(4, 4), mustExtent(2, 2))
-	if err := svc.reservePlacement(product.Handle, nil, rect); err != nil {
+	if err := svc.reservePlacement(product.Handle, prodDef, rect); err != nil {
 		t.Fatal(err)
 	}
-	svc.recordPlacement(product.Handle, rect)
+	svc.recordPlacement(product.Handle, prodDef, rect)
 	svc.applyCompletionPosture(product)
-	if cell.OccupantA() != 0 || cell.Occupied() {
-		t.Fatalf("completed product kept the occupancy short: occupant=%d", cell.OccupantA())
+	if cell.OccupantA() != int16(product.Handle) || cell.Occupied() {
+		t.Fatalf("completed building lost its yard-selected ground word: occupant=%d", cell.OccupantA())
 	}
-	bh, blocked := svc.StructureBlocks(0, rect)
-	if !blocked || bh != product.Handle {
-		t.Fatalf("completed building rect not registered in structures registry: (%d,%v)", bh, blocked)
+	if _, ok := svc.PlacementForProduct(product.Handle); !ok {
+		t.Fatal("completed building did not retain its placement record")
+	}
+	if _, err := terrain.CheckPlacement(world.PlacementQuery{Rect: rect, Yard: []world.YardCell{0x2f, 0x2f, 0x2f, 0x2f}, Self: 0}); err == nil {
+		t.Fatal("canonical plot check accepted a completed all-o building")
 	}
 }
 
@@ -566,7 +566,7 @@ func TestCancelCurrentRunsCompletionPostureBeforeCause9(t *testing.T) {
 	if err := svc.reservePlacement(ph, nil, placement); err != nil {
 		t.Fatal(err)
 	}
-	svc.recordPlacement(ph, placement)
+	svc.recordPlacement(ph, nil, placement)
 	svc.SetBuilderLink(ph, fh)
 	svc.getBuiltLinks[ph] = fh
 	svc.handleCancelCurrent(factory, node, 4)

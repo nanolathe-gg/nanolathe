@@ -82,11 +82,9 @@ type System struct {
 
 	// layerRegistry is the per-class stamped passability layer registry
 	// [04 §6.1 R-DOC04-B]. It is constructed from the terrain, the occupancy
-	// grid, the bound unit world and this System's own committed-anchor
-	// adapter, and is created at first use rather than in NewSystem because
-	// the request revision pass needs the unit world [04 §6.1 R-DOC04-B],
-	// which production binds via BindWorld before the first search or
-	// occupancy commit.
+	// grid and this System's own committed-anchor adapter. It may be created by
+	// an occupancy commit before the unit world is bound; every BindWorld call
+	// refreshes its revision-pass world [04 §6.1 R-DOC04-B].
 	layerRegistry *ClassLayers
 
 	// per-tick shared indexing built deterministically ONCE in BeginTick [04 §8.2] C22.
@@ -447,14 +445,14 @@ func (s *System) BindWorld(w *units.World) {
 		return
 	}
 	s.world = w
-	// The layer registry must capture the bound unit world for the request
-	// revision pass [04 §6.1 R-DOC04-B]; production binds the world in the
-	// unit-sweep phase before the first search or occupancy commit. The lazy
-	// ensureLayerRegistry covers the Tick entry point, which binds the world
-	// itself without a BindWorld call.
+	// The layer registry must use the current bound unit world for the request
+	// revision pass [04 §6.1 R-DOC04-B]. Occupancy publication can allocate it
+	// before this bind, so refresh an existing registry as well as constructing
+	// one for the Tick entry point.
 	if s.layerRegistry == nil {
 		s.layerRegistry = s.newLayerRegistry()
 	}
+	s.layerRegistry.BindWorld(w)
 }
 
 // newLayerRegistry constructs the per-class layer registry over the terrain,
@@ -1030,12 +1028,13 @@ func (s *System) EnsureUnit(u *units.Unit) {
 	coll.CachedMode = 1
 	s.Collisions[h] = coll
 	if s.Grid != nil {
-		// The creation-time stamp writes no occupancy-commit tick: commit
-		// ticks are noted at the movement commit site (StepUnit) [04 §6.1
-		// R-DOC04-B]. Whether retail also writes the unit record's
-		// commit-tick field at the creation-time stamp is untraced and is
-		// recorded with the write-site questions at that commit site.
-		s.Grid.Stamp(anchor, footX, footZ, coll.ID)
+		// Every successful stamp writes the occupant-age clock first. Recording
+		// the same tick here lets a later request revision cross a stationary
+		// building into the shared class layer [04 R-COLL-01 §4]
+		// [04 R-PATH-01 §2][04 §6.1 R-DOC04-B].
+		if s.Grid.Stamp(anchor, footX, footZ, coll.ID) {
+			s.noteOccupancyCommit(h, s.tick)
+		}
 	}
 	// Init move mode to parked [04 §9.1] 1 stopped/parked; TakeOff/Sumbit will set 2 active
 	u.Move.Mode = 1
@@ -1124,12 +1123,13 @@ func (s *System) staticObstacleRevision() uint64 {
 	return s.Terrain.StaticObstacleRevision()
 }
 
-// ActivateMove binds one path request to the current primary order head and
-// submits it exactly once.  The queue head is the authority: a repeated call
+// ActivateMove binds the current primary order head and, for a fresh route,
+// submits one path request. The queue head is the authority: a repeated call
 // for the same node is a no-op, while a new node cancels the old request and
-// invalidates its route before submitting the replacement.  This closes the
-// activation/submission boundary used by session's authoritative loop [04
-// §3.3][04 §7.3].
+// invalidates its route before submitting the replacement. A usable active
+// route restored without derived bindings is adopted without another request;
+// its follower retains the route's existing request-poll state [04 R-MOV-01
+// §3][04 R-MOV-01 §7][04 R-PATH-01 §8].
 //
 // The caller must have resolved a target's current position into head.GoalX/Z
 // before calling this method.  Target tracking is deliberately kept at the
@@ -1144,7 +1144,8 @@ func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 	if old, ok := s.activeOrders[u.Handle]; ok && old.order == head {
 		return false // exactly one submission per active order
 	}
-	if _, wasBound := s.activeOrders[u.Handle]; wasBound {
+	_, wasBound := s.activeOrders[u.Handle]
+	if wasBound {
 		s.CancelPathRequest(u.Handle)
 		if route := s.Routes[u.Handle]; route != nil {
 			route.Active = false
@@ -1156,17 +1157,23 @@ func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 		s.nextActivation++
 	}
 	token := s.nextActivation
-	s.activeOrders[u.Handle] = &activeMove{order: head, token: token}
-	start := s.pathStartCell(u)
+	binding := &activeMove{order: head, token: token}
+	s.activeOrders[u.Handle] = binding
+	if route := s.Routes[u.Handle]; !wasBound && usableActiveRoute(u, route) && !s.HasPathRequest(u.Handle) {
+		// The route is persisted but its order/goal binding is derived. Adoption
+		// does not stamp request-poll state; the wants-repath poll is the writer of
+		// LastRequestTick [04 R-MOV-01 §7][04 R-PATH-01 §8].
+		s.bindArrivalHandle(u, head)
+		return true
+	}
+	start, goal, selectedPoint, _ := s.pathCellsForOrder(u, head)
 	// Path search is aimed at the goal handle, so a replan after a dynamic
 	// block re-paths to the same point the mover was already steering at —
 	// for a build order that is the selected perimeter candidate, not the
 	// site centre [04 §8.3][04 §7.4].
-	goalX, goalZ, _ := s.moveGoalFor(u.Handle, head)
 	fx, fz := s.pathFootprint(u)
-	goal := path.Cell{X: goalCellForWorld(goalX, fx), Z: goalCellForWorld(goalZ, fz)}
 	goalObj := s.goalForOrderWithFootprint(goal, head, fx, fz)
-	if route := s.Routes[u.Handle]; route != nil {
+	if route := s.Routes[u.Handle]; route != nil && !selectedPoint {
 		goalPointX, goalPointZ, haveGoalPoint := groundGoalPoint(goalObj, u, fx, fz)
 		installGroundGoal(route, u, goalObj, goalPointX, goalPointZ, haveGoalPoint, true, s.staticObstacleRevision(), s.tick)
 		route.LastRequestTick = s.tick
@@ -1174,6 +1181,29 @@ func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 	s.submitGoalForOrder(u, start, goalObj, token)
 	s.bindArrivalHandle(u, head)
 	return true
+}
+
+func (s *System) pathCellsForOrder(u *units.Unit, head *orders.Node) (start, goal path.Cell, selectedPoint, ok bool) {
+	goalX, goalZ, ok := s.moveGoalFor(u.Handle, head)
+	name := orders.DescriptorFor(head.ID).Name
+	if name == "MobileBuild" || name == "VTOL_MobileBuild" {
+		// This producer's selected point and start use the whole-cell domain
+		// already established at the construction boundary [04 §7.4].
+		return path.Cell{X: world.WorldToCell(u.X), Z: world.WorldToCell(u.Z)},
+			path.Cell{X: world.WorldToCell(goalX), Z: world.WorldToCell(goalZ)}, true, ok
+	}
+	fx, fz := s.pathFootprint(u)
+	return s.pathStartCell(u), path.Cell{X: goalCellForWorld(goalX, fx), Z: goalCellForWorld(goalZ, fz)}, false, ok
+}
+
+func usableActiveRoute(u *units.Unit, route *Route) bool {
+	if u == nil || route == nil || !route.Active {
+		return false
+	}
+	if u.Def != nil && u.Def.CanFly {
+		return route.Count > 0
+	}
+	return route.Count > 1
 }
 
 // ReplanMove replaces the pending path for the currently active order. It
@@ -1198,15 +1228,13 @@ func (s *System) ReplanMove(u *units.Unit, head *orders.Node) bool {
 	}
 	token := s.nextActivation
 	s.activeOrders[u.Handle].token = token
-	start := s.pathStartCell(u)
+	start, goal, selectedPoint, _ := s.pathCellsForOrder(u, head)
 	// Path search is aimed at the goal handle, so a refresh re-paths to the
 	// same point the mover was already steering at — for a build order that is
 	// the selected perimeter candidate, not the site centre [04 §8.3][04 §7.4].
-	goalX, goalZ, _ := s.moveGoalFor(u.Handle, head)
 	fx, fz := s.pathFootprint(u)
-	goal := path.Cell{X: goalCellForWorld(goalX, fx), Z: goalCellForWorld(goalZ, fz)}
 	goalObj := s.goalForOrderWithFootprint(goal, head, fx, fz)
-	if route := s.Routes[u.Handle]; route != nil {
+	if route := s.Routes[u.Handle]; route != nil && !selectedPoint {
 		goalPointX, goalPointZ, haveGoalPoint := groundGoalPoint(goalObj, u, fx, fz)
 		installGroundGoal(route, u, goalObj, goalPointX, goalPointZ, haveGoalPoint, true, s.staticObstacleRevision(), s.tick)
 		route.LastRequestTick = s.tick
@@ -1243,13 +1271,10 @@ func (s *System) serviceGroundFollower(u *units.Unit, head *orders.Node, route *
 	if binding == nil || binding.order != head {
 		return
 	}
-	start := s.pathStartCell(u)
-	goalX, goalZ, ok := s.moveGoalFor(u.Handle, head)
+	start, goal, _, ok := s.pathCellsForOrder(u, head)
 	if !ok {
 		return
 	}
-	fx, fz := s.pathFootprint(u)
-	goal := path.Cell{X: goalCellForWorld(goalX, fx), Z: goalCellForWorld(goalZ, fz)}
 	s.submitMoveForOrder(u, head, start, goal, binding.token)
 	route.LastRequestTick = tick
 }

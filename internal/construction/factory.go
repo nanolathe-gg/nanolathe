@@ -11,7 +11,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
-	"github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -169,24 +168,20 @@ type Service struct {
 	// so an authored factory close resumes on the identical callback and tick.
 	// The current codebase has no in-battle codec [I13]; do not invent a
 	// factory-only format.
-	placements    map[pool.Handle]world.FootprintRect // product -> occupancy footprint
-	productIndex  map[uint32]string                   // product id -> catalog key, built once
-	getBuiltLinks map[pool.Handle]pool.Handle         // product -> builder until GetBuilt consumes it [R-P0-09]
-	messages      []string                            // verbatim diagnostics [05 C18][05 C21][05 C22]
-	admissions    []AdmissionDiagnostic               // state-2 outcomes, diagnostic only
-	commands      []CommandDiagnostic                 // command-boundary rejections
-	lastPermanent AdmissionDiagnostic                 // bounded malformed-node dedupe key
+	placements    map[pool.Handle]placementRecord // product -> occupancy footprint and immutable definition
+	productIndex  map[uint32]string               // product id -> catalog key, built once
+	getBuiltLinks map[pool.Handle]pool.Handle     // product -> builder until GetBuilt consumes it [R-P0-09]
+	messages      []string                        // verbatim diagnostics [05 C18][05 C21][05 C22]
+	admissions    []AdmissionDiagnostic           // state-2 outcomes, diagnostic only
+	commands      []CommandDiagnostic             // command-boundary rejections
+	lastPermanent AdmissionDiagnostic             // bounded malformed-node dedupe key
 	hasPermanent  bool
 	lastKill      KillInfo // most recent kind-9 kill packet [05 C21]
-	// structures records the footprint rectangle of every COMPLETED building.
-	// It is this engine's stand-in for retail's separate building-mask layer
-	// [04 §6.2]: completed buildings must keep blocking new placement after
-	// their plot occupancy shorts are released, because those shorts are
-	// mobile-occupancy state and a factory's own stamp would otherwise block
-	// its exit spot forever ([04 §6.2] names terrain versus building-mask as
-	// distinct layers; movement models the latter via OccupancyGrid stamps).
-	// save persistence TODO(question), same gap as placements.
-	structures map[pool.Handle]world.FootprintRect
+}
+
+type placementRecord struct {
+	rect world.FootprintRect
+	def  *content.UnitDef
 }
 
 // queueForUnit is the construction-owned queue admission point. Factory
@@ -293,10 +288,10 @@ func (s *Service) isWithinNanoRange(builder *units.Unit, siteX, siteZ numeric.Fi
 	return dist2 <= reach2
 }
 
-// ensureWalk submits a walk request toward the site via the normal
-// Move_Ground machinery, without adding new path code [04 §7.3].
-// It is idempotent: repeated calls while a request or active route already
-// exists do not resubmit, preserving determinism I1 and RNG call order I4.
+// ensureWalk activates a walk toward the site through movement's current-head
+// boundary [04 R-MOV-01 §3][04 R-PATH-01 §8]. ActivateMove owns exactly-once
+// submission and restored-route adoption; repeated visits for the same node do
+// not resubmit, preserving determinism I1 and RNG call order I4.
 //
 // The goal handed to path search is a build-site perimeter candidate, never
 // the footprint centre [07 §9][04 §7.4]: the order's stored position stays the
@@ -312,20 +307,11 @@ func (s *Service) ensureWalk(builder *units.Unit, node *orders.Node) {
 	// restore must re-establish it even when the restored route is still
 	// active — otherwise the mover would spend that route steering at the
 	// order's stored position and walk into the site [04 §8.3][04 §7.4].
-	goal := path.Cell{X: world.WorldToCell(node.GoalX), Z: world.WorldToCell(node.GoalZ)}
 	if _, standX, standZ, ok := s.selectBuildApproach(builder, node); ok {
-		goal = path.Cell{X: world.WorldToCell(standX), Z: world.WorldToCell(standZ)}
 		s.Movement.BindMoveGoal(builder.Handle, node, standX, standZ)
 	}
-	if s.Movement.HasPathRequest(builder.Handle) {
-		return
-	}
-	if r := s.Movement.Routes[builder.Handle]; r != nil && r.Active {
-		return
-	}
 	s.Movement.EnsureUnit(builder)
-	start := path.Cell{X: world.WorldToCell(builder.X), Z: world.WorldToCell(builder.Z)}
-	s.Movement.SubmitMove(builder.Handle, builder.Owner, start, goal)
+	s.Movement.ActivateMove(builder, node)
 }
 
 // clearWalk cancels any walk route/request for the builder after it arrives
@@ -379,9 +365,8 @@ func (s *Service) CheckLimit(factory *units.Unit, defKey string) bool {
 func NewService(terrain *world.Terrain, catalog *content.Catalog, w *units.World, econ *economy.Service) *Service {
 	s := &Service{Terrain: terrain, Catalog: catalog, World: w, Economy: econ}
 	s.builderLinks = make(map[pool.Handle]pool.Handle)
-	s.placements = make(map[pool.Handle]world.FootprintRect)
+	s.placements = make(map[pool.Handle]placementRecord)
 	s.getBuiltLinks = make(map[pool.Handle]pool.Handle)
-	s.structures = make(map[pool.Handle]world.FootprintRect)
 	s.buildProductIndex()
 	return s
 }
@@ -545,40 +530,20 @@ func (s *Service) PlacementForProduct(product pool.Handle) (world.FootprintRect,
 		return world.FootprintRect{}, false
 	}
 	r, ok := s.placements[product]
-	return r, ok
+	return r.rect, ok
 }
 
-func (s *Service) recordPlacement(product pool.Handle, rect world.FootprintRect) {
+func (s *Service) recordPlacement(product pool.Handle, def *content.UnitDef, rect world.FootprintRect) {
 	if s.placements == nil {
-		s.placements = make(map[pool.Handle]world.FootprintRect)
+		s.placements = make(map[pool.Handle]placementRecord)
 	}
-	s.placements[product] = rect
+	s.placements[product] = placementRecord{rect: rect, def: def}
 }
 
-// reservePlacement commits the product's footprint after a complete
-// validation pass. Construction uses the established layer-A occupancy
-// accessors because the placement validator compares both occupancy layers;
-// the exact structure-vs-mobile layer alias remains TODO(question) [04 §6.2].
-// The full rectangle is prechecked before any cell is stamped, so a failed
-// reservation cannot leave a partial occupancy footprint.
-//
-// The precheck is gated by the yard map, exactly as the canonical validator
-// gates it [04 §6.2] C10 [R-P0-08]: only a cell whose control byte carries
-// bits 1-2 tests for a foreign occupant. It used to test every cell in the
-// rectangle unconditionally, which contradicted the validator and rejected
-// placements retail accepts — measured on ARMLAB, whose authored yard map
-// "yoccoy ooccoo ..." puts control byte 0x29 on its four corners, and 0x29
-// carries neither occupancy bit. A lab may therefore legally interlock a
-// corner with an existing building, and the canonical preview/commit check
-// said so while this reservation refused, so the order retried forever with
-// no nanoframe.
-//
-// TODO(question): whether retail stamps every footprint cell or only the
-// occupancy-gated ones is untraced. A cell already owned by another unit is
-// left with its owner rather than overwritten, which is the conservative
-// reading and the one ReleasePlacement already assumes — it clears only cells
-// whose layer-A occupant is the releasing product. Tracing the yard-map stamp
-// would settle whether a non-occupancy cell is stamped at all.
+// reservePlacement commits the product's footprint after the canonical
+// placement query has accepted it. Mobile products stamp the complete ground
+// footprint. Building-class products stamp exactly the yard cells selected by
+// their current port-18 state [04 R-COLL-01 §3–§4].
 func (s *Service) reservePlacement(product pool.Handle, def *content.UnitDef, rect world.FootprintRect) error {
 	if s == nil || s.Terrain == nil {
 		return fmt.Errorf("construction: placement terrain unavailable")
@@ -587,14 +552,22 @@ func (s *Service) reservePlacement(product pool.Handle, def *content.UnitDef, re
 		return fmt.Errorf("construction: placement identity %d exceeds occupancy identity range", product)
 	}
 	id := int16(product)
-	yard := reservationYard(def, rect)
+	building := def != nil && !def.BMCode
+	var yard []world.YardCell
+	if building {
+		var err error
+		yard, err = buildingYard(def, rect)
+		if err != nil {
+			return err
+		}
+	}
 	for z := rect.MinZ(); z < rect.MaxZ(); z++ {
 		for x := rect.MinX(); x < rect.MaxX(); x++ {
 			cell := s.Terrain.PlotAt(x, z)
 			if cell == nil {
 				return fmt.Errorf("construction: placement cell %d,%d unavailable", x, z)
 			}
-			if !yardTestsOccupancy(yard, rect, x, z) {
+			if building && !yardTestsOccupancy(yard, rect, x, z) {
 				continue // [04 §6.2] C10: bits 1-2 clear, no occupant test
 			}
 			if (cell.OccupantA() != 0 && cell.OccupantA() != id) ||
@@ -603,65 +576,67 @@ func (s *Service) reservePlacement(product pool.Handle, def *content.UnitDef, re
 			}
 		}
 	}
+	if building {
+		open := false
+		if s.World != nil {
+			if u := s.World.Unit(product); u != nil {
+				open = u.YardOpen
+			}
+		}
+		s.stampBuilding(product, placementRecord{rect: rect, def: def}, open)
+		return nil
+	}
 	for z := rect.MinZ(); z < rect.MaxZ(); z++ {
 		for x := rect.MinX(); x < rect.MaxX(); x++ {
 			cell := s.Terrain.PlotAt(x, z)
-			if cell.OccupantA() != 0 && cell.OccupantA() != id {
-				continue // another owner keeps the cell; see TODO(question) above
+			if cell.OccupantA() == 0 || cell.OccupantA() == id {
+				cell.SetOccupantA(id)
 			}
-			cell.SetOccupantA(id)
 		}
 	}
 	return nil
 }
 
-// retirePlacement releases a nanoframe's plot occupancy reservation and
-// records the completed building's footprint in the structures registry.
-// Occupancy shorts are mobile-occupancy state ([fmt tnt] runtime writer model:
-// unit stomp/unstomp), so a finished building must not keep squatting them —
-// its own stamp is what deadlocked every factory's first exit-spot validation.
-// Blocking duty moves to s.structures, the building-mask stand-in [04 §6.2].
+// retirePlacement releases a completed mobile product. A completed building
+// keeps its placement record and its canonical yard-selected ground stamp, so
+// Terrain.CheckPlacement remains the single blocker source [04 R-COLL-01 §3].
 func (s *Service) retirePlacement(product pool.Handle) {
 	if s == nil || product == 0 {
 		return
 	}
-	rect, ok := s.placements[product]
-	s.releaseFrameStamps(product)
+	record, ok := s.placements[product]
 	if !ok {
-		// Nothing was reserved for this product (fixture-created units); the
-		// structures registry only tracks footprints construction itself laid.
 		return
 	}
-	// Only building-class completions join the structures registry. A finished
-	// mobile unit walks away, so blocking overlap against it must not persist;
-	// its frame stamps still release like every other product's [04 §6.2].
-	if u := s.World.Unit(product); u != nil && u.Def != nil && u.Flags&units.BuildingClassStatus == 0 {
+	if record.def == nil || record.def.BMCode {
+		s.ReleasePlacement(product)
 		return
 	}
-	if s.structures == nil {
-		s.structures = make(map[pool.Handle]world.FootprintRect)
-	}
-	s.structures[product] = rect
-}
-
-// reservationYard resolves the product's yard-map control bytes over its
-// footprint [04 §6.2] C10. A definition that authors no yard map reserves
-// every cell, which is the yard the commit validator synthesises for it.
-func reservationYard(def *content.UnitDef, rect world.FootprintRect) []world.YardCell {
-	w, d := int(rect.Width()), int(rect.Depth())
-	if w <= 0 || d <= 0 {
-		return nil
-	}
-	if def != nil && def.YardMap != "" {
-		if y, err := world.ParseYardMap(def.YardMap, w, d); err == nil && len(y) == w*d {
-			return y
+	open := false
+	if s.World != nil {
+		if u := s.World.Unit(product); u != nil {
+			open = u.YardOpen
 		}
 	}
-	y := make([]world.YardCell, w*d)
-	for i := range y {
-		y[i] = 0x06 // bits 1-2 reject any occupant [04 §6.2]
+	s.stampBuilding(product, record, open)
+}
+
+func buildingYard(def *content.UnitDef, rect world.FootprintRect) ([]world.YardCell, error) {
+	w, d := int(rect.Width()), int(rect.Depth())
+	if w <= 0 || d <= 0 {
+		return nil, fmt.Errorf("construction: invalid building footprint %dx%d", w, d)
 	}
-	return y
+	if def == nil || def.BMCode {
+		return nil, fmt.Errorf("construction: building yard unavailable")
+	}
+	yard, err := world.ParseYardMap(def.YardMap, w, d)
+	if err != nil {
+		return nil, err
+	}
+	if len(yard) != w*d {
+		return nil, fmt.Errorf("construction: building yard length %d != footprint %d", len(yard), w*d)
+	}
+	return yard, nil
 }
 
 // yardTestsOccupancy reports whether the yard byte covering (x,z) carries the
@@ -678,23 +653,166 @@ func yardTestsOccupancy(yard []world.YardCell, rect world.FootprintRect, x, z in
 	return yard[idx]&0x06 != 0
 }
 
+func yardSelects(yard world.YardCell, open bool) bool {
+	if open {
+		return yard&0x02 != 0
+	}
+	return yard&0x04 != 0
+}
+
+// stampBuilding normalizes one building to the exact ground cells selected by
+// its current yard state. The global clear pass precedes the global stamp pass
+// so an accepted yard transition preserves retail's clear-then-restamp order
+// [04 R-COLL-01 §4].
+func (s *Service) stampBuilding(product pool.Handle, record placementRecord, open bool) {
+	if s == nil || s.Terrain == nil || product == 0 || uint64(product) > uint64(^uint16(0)>>1) {
+		return
+	}
+	yard, err := buildingYard(record.def, record.rect)
+	if err != nil {
+		return
+	}
+	id := int16(product)
+	// First release every self-owned cell no longer selected by the new state.
+	for z := record.rect.MinZ(); z < record.rect.MaxZ(); z++ {
+		for x := record.rect.MinX(); x < record.rect.MaxX(); x++ {
+			cell := s.Terrain.PlotAt(x, z)
+			if cell == nil {
+				continue
+			}
+			y := yard[int((z-record.rect.MinZ())*record.rect.Width()+(x-record.rect.MinX()))]
+			if !yardSelects(y, open) && cell.OccupantA() == id {
+				cell.SetOccupantA(0)
+			}
+		}
+	}
+	// Only after the complete clear pass, stamp every cell selected by the new
+	// state and set the structure-yard mark on every yard-bit-0 cell.
+	for z := record.rect.MinZ(); z < record.rect.MaxZ(); z++ {
+		for x := record.rect.MinX(); x < record.rect.MaxX(); x++ {
+			cell := s.Terrain.PlotAt(x, z)
+			if cell == nil {
+				continue
+			}
+			y := yard[int((z-record.rect.MinZ())*record.rect.Width()+(x-record.rect.MinX()))]
+			if yardSelects(y, open) && (cell.OccupantA() == 0 || cell.OccupantA() == id) {
+				cell.SetOccupantA(id)
+			}
+			if y&0x01 != 0 {
+				cell.SetStructureYard(true)
+			}
+		}
+	}
+	// TODO(question): complete [04 R-COLL-01 §4] overlap arbitration when unit
+	// flag bits 26/27, player state 3, sector buckets, cargo scans, and
+	// class-layer reclassification have shared APIs. The narrow plot
+	// implementation intentionally leaves a foreign word unchanged.
+}
+
+// RegisterBuildingPlacement records and stamps a building at the exact
+// footprint derived by session composition before strict COB Create. This is
+// the unit-creation stamp writer of [04 R-COLL-01 §4], not a reservation or a
+// whole-rectangle approximation.
+func (s *Service) RegisterBuildingPlacement(u *units.Unit) error {
+	if s == nil || u == nil || u.Def == nil || u.Def.BMCode {
+		return nil
+	}
+	extent, err := world.NewFootprintExtent(int32(u.Def.FootprintX), int32(u.Def.FootprintZ))
+	if err != nil {
+		return err
+	}
+	placement, err := world.SnapMobilePlacement(u.X, u.Y, u.Z, extent)
+	if err != nil {
+		return err
+	}
+	record := placementRecord{rect: placement.Rect(), def: u.Def}
+	if _, err := buildingYard(record.def, record.rect); err != nil {
+		return err
+	}
+	s.recordPlacement(u.Handle, u.Def, record.rect)
+	s.stampBuilding(u.Handle, record, u.YardOpen)
+	return nil
+}
+
+// YardOpenTransaction performs port 18's admission and accepted restamp as
+// one ordered operation. It returns false on silent denial [04 §4.7 port 18]
+// [04 R-COLL-01 §4][04 R-FAC-02 §5].
+func (s *Service) YardOpenTransaction(u *units.Unit, requested bool) bool {
+	if s == nil || s.Terrain == nil || u == nil || u.Handle == 0 || uint64(u.Handle) > uint64(^uint16(0)>>1) {
+		return false
+	}
+	record, ok := s.placements[u.Handle]
+	if !ok {
+		// TODO(question): if a port-18 write can precede the unit-creation
+		// placement record, establish whether retail preserves the requested
+		// bit for its later initial stamp. Decider: trace creation's cached-pair
+		// write versus synchronous COB Create. Fail closed meanwhile [04 §4.7].
+		return false
+	}
+	yard, err := buildingYard(record.def, record.rect)
+	if err != nil {
+		return false
+	}
+	// The admission bounds are the mobile validator's exact building bounds:
+	// positive cached pair and the final map row/column excluded [04 R-COLL-01
+	// §2][04 R-FAC-02 §5].
+	if record.rect.MinX() <= 0 || record.rect.MinZ() <= 0 ||
+		record.rect.MaxX() >= s.Terrain.CellW || record.rect.MaxZ() >= s.Terrain.CellH {
+		return false
+	}
+	id := int16(u.Handle)
+	for z := record.rect.MinZ(); z < record.rect.MaxZ(); z++ {
+		for x := record.rect.MinX(); x < record.rect.MaxX(); x++ {
+			y := yard[int((z-record.rect.MinZ())*record.rect.Width()+(x-record.rect.MinX()))]
+			checked := y&0x04 != 0
+			if requested {
+				checked = y&(0x02|0x08) != 0
+			}
+			if !checked {
+				continue
+			}
+			cell := s.Terrain.PlotAt(x, z)
+			if cell == nil || (cell.OccupantA() != 0 && cell.OccupantA() != id) {
+				return false
+			}
+		}
+	}
+
+	// The authoritative bit commits before the clear/stamp pass [04 R-COLL-01 §4].
+	u.YardOpen = requested
+	s.stampBuilding(u.Handle, record, requested)
+	return true
+}
+
 func (s *Service) releaseFrameStamps(product pool.Handle) bool {
 	if s == nil || s.placements == nil {
 		return false
 	}
-	rect, ok := s.placements[product]
+	record, ok := s.placements[product]
 	if !ok {
 		return false
 	}
 	if s.Terrain != nil && uint64(product) <= uint64(^uint16(0)>>1) {
 		id := int16(product)
-		for z := rect.MinZ(); z < rect.MaxZ(); z++ {
-			for x := rect.MinX(); x < rect.MaxX(); x++ {
+		var yard []world.YardCell
+		if record.def != nil && !record.def.BMCode {
+			yard, _ = buildingYard(record.def, record.rect)
+		}
+		for z := record.rect.MinZ(); z < record.rect.MaxZ(); z++ {
+			for x := record.rect.MinX(); x < record.rect.MaxX(); x++ {
 				cell := s.Terrain.PlotAt(x, z)
-				if cell == nil || cell.OccupantA() != id {
+				if cell == nil {
 					continue
 				}
-				cell.SetOccupantA(0)
+				if cell.OccupantA() == id {
+					cell.SetOccupantA(0)
+				}
+				if len(yard) != 0 {
+					y := yard[int((z-record.rect.MinZ())*record.rect.Width()+(x-record.rect.MinX()))]
+					if y&0x01 != 0 {
+						cell.SetStructureYard(false)
+					}
+				}
 			}
 		}
 	}
@@ -702,45 +820,11 @@ func (s *Service) releaseFrameStamps(product pool.Handle) bool {
 	return true
 }
 
-// ReleasePlacement removes an unfinished/dead product's reserved frame
-// footprint and any completed-structure registry entry for the handle; the
-// death/teardown observer calls this exactly once per leaving unit [R-P0-09].
+// ReleasePlacement clears only ground words equal to the leaving identity,
+// clears its structure-yard marks, and deletes its placement record. The
+// death/teardown observer calls this exactly once [04 R-COLL-01 §4][R-P0-09].
 func (s *Service) ReleasePlacement(product pool.Handle) bool {
-	dropped := s.releaseFrameStamps(product)
-	if s != nil && s.structures != nil {
-		if _, ok := s.structures[product]; ok {
-			delete(s.structures, product)
-			dropped = true
-		}
-	}
-	return dropped
-}
-
-// StructureBlocks reports whether any completed building other than self
-// covers any cell of rect. Callers that validate a producer against its own
-// body pass that body as self so a factory exit inside its own yard stays
-// legal while foreign structures still block [05 "Factory production
-// lifecycle"][04 §6.2]. Deterministic scan: keys sorted ascending (I1).
-func (s *Service) StructureBlocks(self pool.Handle, rect world.FootprintRect) (pool.Handle, bool) {
-	if s == nil || len(s.structures) == 0 {
-		return 0, false
-	}
-	keys := make([]pool.Handle, 0, len(s.structures))
-	for h := range s.structures {
-		keys = append(keys, h)
-	}
-	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
-	for _, h := range keys {
-		if h == self {
-			continue
-		}
-		r := s.structures[h]
-		if rect.MinX() < r.MaxX() && r.MinX() < rect.MaxX() &&
-			rect.MinZ() < r.MaxZ() && r.MinZ() < rect.MaxZ() {
-			return h, true
-		}
-	}
-	return 0, false
+	return s.releaseFrameStamps(product)
 }
 
 // BuilderLinks returns a copy of all builder/product links (ON-02).
@@ -1097,15 +1181,12 @@ func placementRules(s *Service, def *content.UnitDef) (world.PlacementRules, err
 // "Factory production lifecycle"], [04 §6.4] "a nonzero occupant other than
 // the passed self identity rejects"). skipAggregates is false for both the
 // factory exit and the chosen site — retail passes mode 1 at every allocator
-// call site [04 R-FAC-02 §4] (see PlacementQuery.SkipTerrainAggregates). Completed
-// buildings register in s.structures and reject overlap here so releasing
-// frame stamps cannot let structures stack.
+// call site [04 R-FAC-02 §4] (see PlacementQuery.SkipTerrainAggregates).
+// Completed buildings retain their yard-selected ground words, so this shared
+// query sees them without a second rectangle registry [04 R-COLL-01 §3].
 func (s *Service) validatePlacement(self pool.Handle, rect world.FootprintRect, def *content.UnitDef, yard []world.YardCell, skipAggregates bool) (world.PlacementResult, error) {
 	if s == nil || s.Terrain == nil {
 		return world.PlacementResult{}, fmt.Errorf("construction: placement terrain unavailable")
-	}
-	if _, blocked := s.StructureBlocks(self, rect); blocked {
-		return world.PlacementResult{}, fmt.Errorf("construction: footprint overlaps a completed structure")
 	}
 	// The carried-position setter stamps the ordinary movement grid. State 2
 	// uses null self identity, so the first product's retained pad stamp blocks
@@ -1125,9 +1206,7 @@ func (s *Service) validatePlacement(self pool.Handle, rect world.FootprintRect, 
 		if producer := s.World.Unit(self); producer != nil && producer.Flags&units.BuildingClassStatus != 0 {
 			// Factory state 2 passes a null self identity. The producer's yard,
 			// not an identity exemption, makes its open pad legal
-			// [04 R-FAC-02 §5]. The separate structures registry still exempts
-			// this producer above because it is Nanolathe bookkeeping, not the
-			// plot-word validator.
+			// [04 R-FAC-02 §5].
 			plotSelf = 0
 		}
 	}
@@ -1198,7 +1277,7 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, r
 				prod.Alive = false
 				return nil, err
 			}
-			s.recordPlacement(prod.Handle, rect)
+			s.recordPlacement(prod.Handle, def, rect)
 		}
 		return prod, nil
 	}
@@ -1218,7 +1297,7 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, r
 		s.World.Destroy(prod.Handle, units.DeathKilled)
 		return nil, err
 	}
-	s.recordPlacement(prod.Handle, rect)
+	s.recordPlacement(prod.Handle, def, rect)
 	initializeNanoframe(prod, def)
 	// Extractor yield is sampled once at placement and stored on the product
 	// [P1-10][P1-15]: Σ(cellMetal+1)*extractsMetal, never resampled.
@@ -1598,10 +1677,8 @@ func (s *Service) applyCompletionPosture(product *units.Unit) {
 		product.IsCloaked = true
 	}
 	product.Health = product.MaxHealth
-	// Completion releases the frame's plot occupancy stamps and hands blocking
-	// duty to the structures registry: finished buildings must not occupy the
-	// mobile-occupancy shorts, or every factory's exit-spot validation would
-	// deadlock against its own yard [04 §6.2][05 "Factory production lifecycle"].
+	// Completion releases mobile products but retains building-class products
+	// on exactly the cells selected by the current yard state [04 R-COLL-01 §4].
 	s.retirePlacement(product.Handle)
 }
 

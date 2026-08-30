@@ -275,11 +275,31 @@ func (s *Session) bindUnitCOB(fs vfs.FSOps, u *units.Unit) error {
 		// combat acquisition; it never mutates authoritative state [03 §3.2].
 		return s.IsUnitVisible(localPlayerForSession(s), u)
 	}
+	registeredPlacement := false
+	if !u.Def.BMCode && s.Build != nil {
+		// Port 18 may run synchronously from COB Create. Install the transaction
+		// and the exact unit-creation stamp before strict binding starts Create;
+		// the callback therefore observes the cached placement and can commit the
+		// bit before restamping [04 §4.7 port 18][04 R-COLL-01 §4].
+		u.SetYardOpenTransaction(func(requested bool) {
+			s.Build.YardOpenTransaction(u, requested)
+		})
+		if err := s.Build.RegisterBuildingPlacement(u); err != nil {
+			return fmt.Errorf("unit %q building placement: %w", u.Def.UnitName, err)
+		}
+		registeredPlacement = true
+	}
 	binding, err := units.BindCOBWithPortsAndVisibilityForUnit(fs, u, mdl, s.SimRNG(), sink, visible)
 	if err != nil {
+		if registeredPlacement {
+			s.Build.ReleasePlacement(u.Handle)
+		}
 		return fmt.Errorf("unit %q model %q script binding: %w", u.Def.UnitName, mdl.Name, err)
 	}
 	if err := u.AttachCOBBinding(binding); err != nil {
+		if registeredPlacement {
+			s.Build.ReleasePlacement(u.Handle)
+		}
 		return fmt.Errorf("unit %q attach strict COB: %w", u.Def.UnitName, err)
 	}
 	return nil
@@ -684,7 +704,8 @@ func createAndBindServices(s *Session) error {
 	s.Build.Movement = s.Movement
 	// Placement release is an independent lifecycle observer. The primary
 	// OnDeath hook remains owned by the session loop for triggers/corpse/Killed;
-	// this observer only releases unfinished construction occupancy once.
+	// this observer releases the leaving unit's retained construction placement,
+	// including completed building occupancy, once.
 	priorDeathExtra := s.Units.OnDeathExtra
 	s.Units.OnDeathExtra = func(h pool.Handle, cause units.DeathCause, u *units.Unit) {
 		if priorDeathExtra != nil {

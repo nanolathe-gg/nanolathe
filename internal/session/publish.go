@@ -70,11 +70,6 @@ func (s *Session) PreviewPlacement(cx, cz int32, def *content.UnitDef, footX, fo
 			return world.PlacementResult{}, err
 		}
 	}
-	if s.Build != nil {
-		if _, blocked := s.Build.StructureBlocks(self, rect); blocked {
-			return world.PlacementResult{Rect: rect, SiteHeight: s.World.SiteHeight(cx, cz, yard, int(footX), int(footZ), def.Waterline)}, fmt.Errorf("session: footprint overlaps a completed structure")
-		}
-	}
 	result, err := s.World.CheckPlacement(world.PlacementQuery{Rect: rect, Yard: yard, Rules: rules, Self: uint16(self), Mobile: def.BMCode})
 	if err != nil {
 		result = world.PlacementResult{Rect: rect, SiteHeight: s.World.SiteHeight(cx, cz, yard, int(footX), int(footZ), def.Waterline)}

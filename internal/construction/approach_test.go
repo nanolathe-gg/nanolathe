@@ -166,6 +166,9 @@ func TestEnsureWalkSubmitsApproachNotCentre(t *testing.T) {
 	if !found {
 		t.Fatalf("ensureWalk submitted no path request")
 	}
+	if req.Activation == 0 {
+		t.Fatal("MobileBuild walk bypassed the active-order activation boundary")
+	}
 	centre := path.Cell{X: world.WorldToCell(node.GoalX), Z: world.WorldToCell(node.GoalZ)}
 	cells := req.Goal.Enumerate(nil)
 	if len(cells) != 1 {
@@ -186,6 +189,14 @@ func TestEnsureWalkSubmitsApproachNotCentre(t *testing.T) {
 	if gx == node.GoalX && gz == node.GoalZ {
 		t.Fatalf("movement goal handle is the order's stored position; it must be the approach point [04 §7.4]")
 	}
+	// The construction handler and session reconciliation can both visit this
+	// seam in one tick. The current head must retain exactly one request and
+	// activation token [04 R-MOV-01 §3].
+	svc.ensureWalk(builder, node)
+	repeated := svc.Movement.PathRequestsSnapshot()
+	if len(repeated) != 1 || repeated[0].Unit != builder.Handle || repeated[0].Activation != req.Activation {
+		t.Fatalf("repeated ensureWalk changed the active request: first=%#v repeated=%#v", req, repeated)
+	}
 }
 
 func insideRect(c path.Cell, minX, minZ, w, d int32) bool {
@@ -203,12 +214,21 @@ func TestApproachGoalRebindsOverARestoredRoute(t *testing.T) {
 	svc, builder, node := approachFixture(t, 10, 10)
 	builder.X, builder.Z = world.CellToWorld(1), world.CellToWorld(1)
 
-	// Stand in for a restore: an active route with no movement goal bound.
+	// Stand in for a restore: an active route with no movement goal or active
+	// order bound. The points are deliberately distinct so adoption cannot be
+	// mistaken for fresh activation's synthetic two-point route.
 	svc.Movement.EnsureUnit(builder)
-	svc.Movement.Routes[builder.Handle] = &movement.Route{Active: true, Count: 2}
+	route := &movement.Route{Active: true, Count: 2, LastRequestTick: 100}
+	route.Points[0] = movement.Point{X: 17, Z: 19}
+	route.Points[1] = movement.Point{X: 23, Z: 29}
+	svc.Movement.Routes[builder.Handle] = route
 	svc.Movement.ClearMoveGoal(builder.Handle)
 
+	// Adoption occurs at a nonzero system tick distinct from the route's
+	// existing request tick. Only the wants-repath poll may stamp that field.
+	svc.Movement.BeginTick(137)
 	svc.ensureWalk(builder, node)
+	svc.Movement.EndTick(137)
 
 	_, standX, standZ, ok := svc.SelectBuildApproach(builder, node)
 	if !ok {
@@ -226,5 +246,35 @@ func TestApproachGoalRebindsOverARestoredRoute(t *testing.T) {
 		if r.Unit == builder.Handle {
 			t.Fatalf("ensureWalk resubmitted a path request while a route was active")
 		}
+	}
+	if !route.Active || route.Count != 2 || route.Points[0] != (movement.Point{X: 17, Z: 19}) || route.Points[1] != (movement.Point{X: 23, Z: 29}) {
+		t.Fatalf("restored route was replaced during adoption: %+v", route)
+	}
+	if route.LastRequestTick != 100 {
+		t.Fatalf("restored route request tick changed during adoption: got %d want 100", route.LastRequestTick)
+	}
+
+	// Once the restored route is absent, the ordinary follower owns the retry.
+	// The inclusive boundary is LastRequestTick+60; no construction-side direct
+	// submission or synthetic fallback may bypass it [04 R-MOV-01 §7].
+	route.Active = false
+	route.Count = 1
+	route.WantsRepath = false
+	svc.Movement.StepUnit(builder.Handle, 159)
+	if got := svc.Movement.PathRequestsSnapshot(); len(got) != 0 {
+		t.Fatalf("restored follower requested before preserved tick 100+60: %#v", got)
+	}
+	svc.Movement.StepUnit(builder.Handle, 160)
+	got := svc.Movement.PathRequestsSnapshot()
+	if len(got) != 1 || got[0].Unit != builder.Handle || got[0].Activation == 0 {
+		t.Fatalf("restored follower request at tick 160=%#v, want one order-bound request", got)
+	}
+	if route.LastRequestTick != 160 {
+		t.Fatalf("wants-repath poll stamped request tick %d, want 160", route.LastRequestTick)
+	}
+	svc.Movement.StepUnit(builder.Handle, 161)
+	after := svc.Movement.PathRequestsSnapshot()
+	if len(after) != 1 || after[0].Activation != got[0].Activation {
+		t.Fatalf("restored follower submitted more than once: tick160=%#v tick161=%#v", got, after)
 	}
 }

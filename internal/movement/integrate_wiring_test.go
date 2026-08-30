@@ -1,11 +1,13 @@
 package movement
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -107,10 +109,13 @@ func TestSystemSearchConsultsLayer(t *testing.T) {
 		t.Fatalf("flat terrain must publish a route, got %+v", route)
 	}
 
-	// Paint an 8-neighbour enclosure of the start cell. The enclosure lies
-	// outside the 1x1 footprint the revision pass re-stamps, so only the
-	// layer can have blocked it.
+	// Paint an 8-neighbour enclosure of the start cell directly into the
+	// packed layer so this test isolates the search consumer.
 	layer := sys.layerRegistry.For("", wiringProfile)
+	// Keep this fixture about search consumption, not requester-cohort
+	// invalidation: a current commit does not trigger the requester's stale
+	// footprint-and-ring restamp [04 R-MOV-03 §3].
+	layer.NoteCommit(h, 50)
 	paintRing := func(v uint8) {
 		for z := int32(1); z <= 3; z++ {
 			for x := int32(1); x <= 3; x++ {
@@ -204,5 +209,159 @@ func TestOccupancyCommitNotesRevisionLayers(t *testing.T) {
 	}
 	if c, ok := lb.CommitTick(h); !ok || c != noted {
 		t.Fatalf("commit tick must be noted on every allocated layer, want %d got %d ok %v", noted, c, ok)
+	}
+}
+
+// TestEnsureUnitStampFeedsClassLayerRevision locks the creation/completion
+// stamp's occupant-age publication. A stationary building blocks path search
+// only after its frozen stamp tick strictly predates the class watermark; the
+// stamp itself does not service the scheduler or submit a request
+// [04 R-COLL-01 §4][04 R-PATH-01 §2][04 §6.1 R-DOC04-B].
+func TestEnsureUnitStampFeedsClassLayerRevision(t *testing.T) {
+	const stampTick = uint32(40)
+	terrain := syntheticTerrainFlat()
+	grid := NewOccupancyGrid()
+	sys := NewSystem(terrain, wiringProfile, grid)
+	w := newMovementFixtureWorld(10)
+	sys.BindWorld(w)
+	sys.ConfigurePath(2, 10)
+
+	requester, err := w.Create(wiringDef(), 0, world.CellToWorld(2), terrain.HeightAt(world.CellToWorld(2), world.CellToWorld(2)), world.CellToWorld(2))
+	if err != nil {
+		t.Fatalf("create requester: %v", err)
+	}
+	sys.EnsureUnit(w.Unit(requester))
+	layer := sys.ensureLayerRegistry().For("", wiringProfile)
+	wantRoute := Route{Count: 2, Active: true, Points: [20]Point{{X: 32, Z: 32}, {X: 64, Z: 32}}}
+	*sys.Routes[requester] = wantRoute
+
+	buildingDef := &content.UnitDef{UnitName: "armmex", MaxDamage: 100, BMCode: false, FootprintX: 1, FootprintZ: 1}
+	building, err := w.Create(buildingDef, 0, world.CellToWorld(8), terrain.HeightAt(world.CellToWorld(8), world.CellToWorld(8)), world.CellToWorld(8))
+	if err != nil {
+		t.Fatalf("create building: %v", err)
+	}
+	requestsBefore := sys.PathRequestsSnapshot()
+	schedulerBefore := sys.Scheduler.TraceState()
+	sys.BeginTick(stampTick)
+	sys.EnsureUnit(w.Unit(building))
+
+	coll := sys.Collisions[building]
+	if coll == nil {
+		t.Fatal("building collision state missing")
+	}
+	if occupant, ok := grid.OccupantAt(coll.CachedAnchor); !ok || occupant != int(building) {
+		t.Fatalf("creation stamp at %v = %d/%v, want building %d", coll.CachedAnchor, occupant, ok, building)
+	}
+	if got, ok := layer.CommitTick(building); !ok || got != stampTick {
+		t.Fatalf("creation stamp commit tick = %d/%v, want %d/true", got, ok, stampTick)
+	}
+	if got := sys.PathRequestsSnapshot(); !reflect.DeepEqual(got, requestsBefore) {
+		t.Fatalf("EnsureUnit submitted path requests: before=%v after=%v", requestsBefore, got)
+	}
+	if got := sys.Scheduler.TraceState(); !reflect.DeepEqual(got, schedulerBefore) {
+		t.Fatalf("EnsureUnit serviced scheduler: before=%+v after=%+v", schedulerBefore, got)
+	}
+	if got := *sys.Routes[requester]; !reflect.DeepEqual(got, wantRoute) {
+		t.Fatalf("EnsureUnit mutated requester route: got=%+v want=%+v", got, wantRoute)
+	}
+
+	// At equality the occupant does not predate the watermark, so it remains
+	// traversable. One tick later it belongs to the crossed [40,41) cohort and
+	// its footprint is reclassified as blocked. Movement has no RNG input; the
+	// request/scheduler assertions above lock the only adjacent call-order seams.
+	layer.Revise(stampTick+30, requester, w, sys)
+	if got := layer.Watermark(); got != stampTick {
+		t.Fatalf("equality watermark = %d, want %d", got, stampTick)
+	}
+	if got := layer.Value(coll.CachedAnchor.X, coll.CachedAnchor.Z); got == LayerBlocked {
+		t.Fatalf("commit tick equal to watermark must remain nonblocked, got %d", got)
+	}
+	layer.Revise(stampTick+31, requester, w, sys)
+	if got := layer.Watermark(); got != stampTick+1 {
+		t.Fatalf("crossed watermark = %d, want %d", got, stampTick+1)
+	}
+	if got := layer.Value(coll.CachedAnchor.X, coll.CachedAnchor.Z); got != LayerBlocked {
+		t.Fatalf("stationary building after strict watermark crossing = %d, want blocked(0)", got)
+	}
+}
+
+func TestEnsureUnitFailedStampDoesNotPublishCommitTick(t *testing.T) {
+	terrain := syntheticTerrainFlat()
+	grid := NewOccupancyGrid()
+	sys := NewSystem(terrain, wiringProfile, grid)
+	w := newMovementFixtureWorld(10)
+	sys.BindWorld(w)
+	layer := sys.ensureLayerRegistry().For("", wiringProfile)
+	anchor := Cell{X: 8, Z: 8}
+	if !grid.Stamp(anchor, 1, 1, 999) {
+		t.Fatal("fixture blocker stamp failed")
+	}
+	def := &content.UnitDef{UnitName: "armmex", MaxDamage: 100, BMCode: false, FootprintX: 1, FootprintZ: 1}
+	h, err := w.Create(def, 0, world.CellToWorld(anchor.X), terrain.HeightAt(world.CellToWorld(anchor.X), world.CellToWorld(anchor.Z)), world.CellToWorld(anchor.Z))
+	if err != nil {
+		t.Fatalf("create blocked building: %v", err)
+	}
+	sys.BeginTick(50)
+	sys.EnsureUnit(w.Unit(h))
+	if got, ok := layer.CommitTick(h); ok {
+		t.Fatalf("failed creation stamp published commit tick %d", got)
+	}
+	if got, ok := grid.OccupantAt(anchor); !ok || got != 999 {
+		t.Fatalf("failed creation stamp changed blocker: got %d/%v", got, ok)
+	}
+}
+
+// TestBindWorldRefreshesPreallocatedClassLayerRegistry locks the production
+// lifecycle where an occupancy commit can allocate the registry before the
+// first unit-sweep bind. Revision must still walk owner-1 and the final
+// physical pool slot in ascending slot order [01 §6.1–§6.2]
+// [04 R-MOV-03 §3].
+func TestBindWorldRefreshesPreallocatedClassLayerRegistry(t *testing.T) {
+	terrain := syntheticTerrainFlat()
+	grid := NewOccupancyGrid()
+	sys := NewSystem(terrain, wiringProfile, grid)
+	registry := sys.ensureLayerRegistry()
+	layer := registry.For("", wiringProfile)
+	if registry.world != nil && registry.world.Capacity() != 0 {
+		t.Fatalf("pre-bind registry world must have no live pool, got %v", registry.world)
+	}
+
+	w := newMovementFixtureWorld(8)
+	sys.BindWorld(w)
+	if registry.world != w {
+		t.Fatalf("BindWorld did not refresh preallocated registry: got %p want %p", registry.world, w)
+	}
+	def := &content.UnitDef{UnitName: "stationary-blocker", MaxDamage: 100, BMCode: false, FootprintX: 2, FootprintZ: 2}
+	hOwner1, err := w.Create(def, 1, world.CellToWorld(8), terrain.HeightAt(world.CellToWorld(8), world.CellToWorld(8)), world.CellToWorld(8))
+	if err != nil {
+		t.Fatalf("create owner-1 blocker: %v", err)
+	}
+	if int(hOwner1) <= w.Capacity()/pool.PlayerCount {
+		t.Fatalf("owner-1 handle %d must follow first slice end %d", hOwner1, w.Capacity()/pool.PlayerCount)
+	}
+	last := pool.Handle(w.TotalRecords() - 1)
+	hLast, err := w.CreateWithForcedSlot(def, 9, world.CellToWorld(16), terrain.HeightAt(world.CellToWorld(16), world.CellToWorld(16)), world.CellToWorld(16), last)
+	if err != nil {
+		t.Fatalf("create final-slot blocker: %v", err)
+	}
+	if hLast != last {
+		t.Fatalf("final-slot handle = %d, want %d", hLast, last)
+	}
+
+	sys.BeginTick(5)
+	sys.EnsureUnit(w.Unit(hOwner1))
+	sys.EnsureUnit(w.Unit(hLast))
+	if got, ok := layer.CommitTick(hOwner1); !ok || got != 5 {
+		t.Fatalf("owner-1 commit = %d/%v, want 5/true", got, ok)
+	}
+	if got, ok := layer.CommitTick(hLast); !ok || got != 5 {
+		t.Fatalf("final-slot commit = %d/%v, want 5/true", got, ok)
+	}
+
+	registry.ReviseFor("", wiringProfile, 0, 60)
+	for _, cell := range []Cell{{X: 8, Z: 8}, {X: 16, Z: 16}} {
+		if got := layer.Value(cell.X, cell.Z); got != LayerBlocked {
+			t.Fatalf("full-pool revision anchor %v = %d, want blocked", cell, got)
+		}
 	}
 }

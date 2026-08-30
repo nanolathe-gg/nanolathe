@@ -1,6 +1,5 @@
 // Factory exit-spot placement contracts [05 "Factory production lifecycle"]
-// C16-C18 and the structures registry that stands in for retail's separate
-// building-mask layer [04 §6.2].
+// C16-C18 and the canonical yard-selected plot occupancy [04 R-COLL-01 §4].
 package construction
 
 import (
@@ -123,13 +122,12 @@ func headNodeForTest(u *units.Unit) *orders.Node {
 	return q.Primary()[0]
 }
 
-// TestFactoryExitValidatesInsideOwnCompletedYard locks the observed deadlock
-// fix: after a factory completes, its frame occupancy stamps are released and
-// the finished building registers in the structures registry, so its first
-// production validates inside its own yard instead of retrying in silent
-// blocked revalidation every 15 ticks forever.
+// TestFactoryExitValidatesInsideOwnCompletedYard locks the retail exemption:
+// an accepted yard-open transaction releases c/C pad cells before state 2,
+// while the completed factory retains its placement record.
 func TestFactoryExitValidatesInsideOwnCompletedYard(t *testing.T) {
 	lab := newFactoryDef("exitlab", 4, 4, 300)
+	lab.YardMap = "yyyy yccy yccy yyyy"
 	lab.MinWaterDepth = -10000 // established land-profile template [04 §6.1]
 	comDef := newProductDef("exitcom", 1, 1, 10, 10)
 	comDef.WorkerTime = 300
@@ -158,27 +156,30 @@ func TestFactoryExitValidatesInsideOwnCompletedYard(t *testing.T) {
 	}
 	labH := stepUntil(t, svc, cat, com, 20000, "exitcom", "exitlab")
 
-	for z := int32(siteZ); z < siteZ+4; z++ {
-		for x := int32(siteX); x < siteX+4; x++ {
+	labRect, ok := svc.PlacementForProduct(labH)
+	if !ok {
+		t.Fatal("completed factory did not retain its placement record")
+	}
+	for _, c := range [][2]int32{{labRect.MinX() + 1, labRect.MinZ() + 1}, {labRect.MinX() + 2, labRect.MinZ() + 1}, {labRect.MinX() + 1, labRect.MinZ() + 2}, {labRect.MinX() + 2, labRect.MinZ() + 2}} {
+		if got := terrain.PlotAt(c[0], c[1]).OccupantA(); got != int16(labH) {
+			t.Fatalf("closed factory pad %d,%d occupant=%d, want %d", c[0], c[1], got, labH)
+		}
+	}
+
+	labU := w.Unit(labH)
+	if !svc.YardOpenTransaction(labU, true) {
+		t.Fatal("unoccupied completed factory yard refused open")
+	}
+	for z := labRect.MinZ(); z < labRect.MaxZ(); z++ {
+		for x := labRect.MinX(); x < labRect.MaxX(); x++ {
 			if cell := terrain.PlotAt(x, z); cell.OccupantA() != 0 {
-				t.Fatalf("completed building still occupies plot %d,%d (occA=%d): its own exit validation would deadlock", x, z, cell.OccupantA())
+				t.Fatalf("open factory retained ground word at %d,%d: %d", x, z, cell.OccupantA())
 			}
 		}
 	}
-	if _, ok := svc.PlacementForProduct(labH); ok {
-		t.Fatal("frame placement record should be retired at completion")
-	}
-	labRect := exitRect(siteX, siteZ, 4)
-	if h, blocked := svc.StructureBlocks(0, labRect); !blocked || h != labH {
-		t.Fatalf("StructureBlocks(0, lab rect) = (%d,%v), want (%d,true)", h, blocked, labH)
-	}
-	if _, blocked := svc.StructureBlocks(labH, labRect); blocked {
-		t.Fatal("a structure must never block against itself")
-	}
 
-	// The completed lab now produces a mobile unit from its authored exit
-	// transform while its own footprint remains registered in the building mask.
-	labU := w.Unit(labH)
+	// The completed lab now produces a mobile unit only through its genuinely
+	// released c/C pad cells [04 R-FAC-02 §5].
 	bindConstructionFixture(labU, trivialModel(1, nil), true)
 	if err := QueueFactoryBuild(labU, "exitmob", 1, cat); err != nil {
 		t.Fatalf("QueueFactoryBuild: %v", err)
@@ -193,15 +194,12 @@ func TestFactoryExitValidatesInsideOwnCompletedYard(t *testing.T) {
 			return prodU.Flags
 		}())
 	}
-	// Completed mobile unit: frame stamps released, no structure registration.
+	// Completed mobile unit: frame stamps and placement record release.
 	if _, ok := svc.PlacementForProduct(prodH); ok {
 		t.Fatal("completed mobile unit must not retain frame placement")
 	}
-	if _, isStruct := svc.structures[prodH]; isStruct {
-		t.Fatal("completed mobile unit must not register as a structure")
-	}
-	if _, isStruct := svc.structures[labH]; !isStruct {
-		t.Fatal("completed factory must register as a structure")
+	if _, ok := svc.PlacementForProduct(labH); !ok {
+		t.Fatal("completed factory placement record was lost during production")
 	}
 }
 

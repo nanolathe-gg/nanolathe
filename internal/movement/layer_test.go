@@ -357,6 +357,112 @@ func TestLayerRevisionPass(t *testing.T) {
 	}
 }
 
+// TestLayerRevisionRestampsEveryOverlappingRequesterAnchor locks the exact
+// footprint- and ring-aware invalidation rectangle. For a 3x2 requester class
+// and a 2x3 occupant at (8,9), overlapping anchors x=6..9, z=8..11 block;
+// the ring-only border x=5/10 and z=7/12 is rewritten steep; the next border
+// remains untouched
+// [04 R-PATH-01 §2][04 R-MOV-03 §3][fmt tdf][fmt fbi].
+func TestLayerRevisionRestampsEveryOverlappingRequesterAnchor(t *testing.T) {
+	tr := layerTerrain(24, 24, 20)
+	grid := NewOccupancyGrid()
+	w := newMovementFixtureWorld(8)
+	def := &content.UnitDef{UnitName: "asymmetric-blocker", MaxDamage: 100, BMCode: false}
+	h, err := w.Create(def, 1, world.CellToWorld(8), 30*65536, world.CellToWorld(9))
+	if err != nil {
+		t.Fatalf("create occupant: %v", err)
+	}
+	if int(h) <= w.Capacity()/pool.PlayerCount {
+		t.Fatalf("fixture occupant %d must lie beyond the first player slice %d", h, w.Capacity()/pool.PlayerCount)
+	}
+	last := pool.Handle(w.TotalRecords() - 1)
+	hLast, err := w.CreateWithForcedSlot(def, 9, world.CellToWorld(16), 30*65536, world.CellToWorld(16), last)
+	if err != nil {
+		t.Fatalf("create final-slot occupant: %v", err)
+	}
+	if hLast != last {
+		t.Fatalf("final-slot occupant = %d, want %d", hLast, last)
+	}
+	anchors := testAnchors{
+		h:     {anchor: Cell{X: 8, Z: 9}, fx: 2, fz: 3},
+		hLast: {anchor: Cell{X: 16, Z: 16}, fx: 1, fz: 1},
+	}
+	profile := tankDS2
+	profile.FootPrintX = 3
+	profile.FootPrintZ = 2
+	l := NewClassLayer(profile, tr, grid)
+	if !grid.Stamp(Cell{X: 8, Z: 9}, 2, 3, int(h)) {
+		t.Fatal("occupant stamp failed")
+	}
+	if !grid.Stamp(Cell{X: 16, Z: 16}, 1, 1, int(hLast)) {
+		t.Fatal("final-slot occupant stamp failed")
+	}
+	l.NoteCommit(h, 5)
+	l.NoteCommit(hLast, 5)
+
+	// Sentinels immediately beyond all four exact bounds expose an off-by-one
+	// expansion: a correct restamp leaves them untouched.
+	outside := []Cell{{X: 4, Z: 9}, {X: 11, Z: 9}, {X: 8, Z: 6}, {X: 8, Z: 13}}
+	for _, cell := range outside {
+		l.setValue(cell.X, cell.Z, LayerBlocked)
+	}
+
+	l.Revise(60, 0, w, anchors)
+
+	for z := int32(8); z <= 11; z++ {
+		for x := int32(6); x <= 9; x++ {
+			if got := l.Value(x, z); got != LayerBlocked {
+				t.Fatalf("overlapping requester anchor (%d,%d) = %d, want blocked", x, z, got)
+			}
+		}
+	}
+	ringOnly := []Cell{{X: 5, Z: 9}, {X: 10, Z: 9}, {X: 8, Z: 7}, {X: 8, Z: 12}}
+	for _, cell := range ringOnly {
+		if got := l.Value(cell.X, cell.Z); got != LayerSteep {
+			t.Fatalf("ring-only anchor %v = %d, want steep", cell, got)
+		}
+	}
+	for _, cell := range outside {
+		if got := l.Value(cell.X, cell.Z); got != LayerBlocked {
+			t.Fatalf("non-overlapping anchor %v was rewritten to %d", cell, got)
+		}
+	}
+	if got := l.Value(14, 15); got != LayerBlocked {
+		t.Fatalf("last physical slot's overlapping anchor = %d, want blocked", got)
+	}
+}
+
+func TestLayerRevisionCommitAtWatermarkRemainsNonblocking(t *testing.T) {
+	tr := layerTerrain(24, 24, 20)
+	grid := NewOccupancyGrid()
+	w := newMovementFixtureWorld(8)
+	def := &content.UnitDef{UnitName: "watermark-blocker", MaxDamage: 100, BMCode: false}
+	h, err := w.Create(def, 0, world.CellToWorld(8), 30*65536, world.CellToWorld(9))
+	if err != nil {
+		t.Fatalf("create occupant: %v", err)
+	}
+	anchors := testAnchors{h: {anchor: Cell{X: 8, Z: 9}, fx: 2, fz: 3}}
+	profile := tankDS2
+	profile.FootPrintX = 3
+	profile.FootPrintZ = 2
+	l := NewClassLayer(profile, tr, grid)
+	if !grid.Stamp(Cell{X: 8, Z: 9}, 2, 3, int(h)) {
+		t.Fatal("occupant stamp failed")
+	}
+	l.NoteCommit(h, 30)
+
+	// The strict [old,new) cohort excludes equality at watermark 30.
+	l.Revise(60, 0, w, anchors)
+	if got := l.Value(6, 8); got != LayerClear {
+		t.Fatalf("commit equal to watermark blocked overlapping anchor: got %d", got)
+	}
+	// Advancing one tick crosses commit 30 and restamps the overlap rectangle.
+	l.Revise(61, 0, w, anchors)
+	if got := l.Value(6, 8); got != LayerBlocked {
+		t.Fatalf("commit after strict watermark crossing = %d, want blocked", got)
+	}
+}
+
 // TestClassLayersSharedPerClass locks record+layer sharing [04 §6.1
 // R-DOC04-B]: all requests of one class share one record and layer; distinct
 // classes own distinct layers.

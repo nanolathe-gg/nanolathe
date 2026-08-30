@@ -119,6 +119,11 @@ func (p PlotCell) Occupied() bool { return p[0xC]&0x01 != 0 }
 // owned by phase 5 — this package stores the byte but never gates gameplay on it [PLAN_04 C13].
 func (p PlotCell) FlagByte() uint8 { return p[0xC] }
 
+// StructureYard reports the completed-building yard mark at flag-byte bit 1.
+// The building stamp sets it on every yard cell whose control byte carries
+// bit 0, independent of the current open/closed selection [04 R-COLL-01 §4].
+func (p PlotCell) StructureYard() bool { return p[0xC]&0x02 != 0 }
+
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // Presentation-owned; do not gate simulation on this bit [PLAN_04 C13].
 func (p PlotCell) IsUnexplored() bool { return p[0xC]&0x04 != 0 }
@@ -216,6 +221,16 @@ func (p *PlotCell) SetOccupied(v bool) {
 		p[0xC] |= 0x01
 	} else {
 		p[0xC] &^= 0x01
+	}
+}
+
+// SetStructureYard updates only the completed-building yard mark, preserving
+// live-instance, fog, placer, and residual flag bits [04 R-COLL-01 §4].
+func (p *PlotCell) SetStructureYard(v bool) {
+	if v {
+		p[0xC] |= 0x02
+	} else {
+		p[0xC] &^= 0x02
 	}
 }
 

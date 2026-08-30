@@ -128,7 +128,10 @@ func walkRay(start, target Cell, passable func(Cell) uint8, goal Goal, scale int
 			continue
 		}
 		upPos, downPos := cur, cur
-		upDir, downDir := (d+1)&7, (d+7)&7
+		// The blocked cardinal candidate was already charged above. The lower
+		// cursor's first actual probe is the next sector downward; it stores the
+		// negated direction because its steps subtract the probe [04 R-PATH-01 §5].
+		upDir, downDir := (d+1)&7, opposite((d+7)&7)
 		upOrigin, downOrigin := upPos, downPos
 		upOriginDir, downOriginDir := upDir, downDir
 		upState := raySideState{}
@@ -201,11 +204,15 @@ func raySideStep(pos *Cell, probe *uint8, lower bool, origin Cell, originDir uin
 		return false
 	}
 	if lower {
-		// The lower cursor steps in the direction opposite probe. Advancing the
-		// stored probe after a successful step therefore mirrors the upper
-		// cursor's decrement in actual-step direction space [04 R-PATH-01 §5].
-		*probe = (*probe + 1) & 7
+		// The lower cursor stores the negated probe. A successful step advances
+		// that stored direction by two sectors before the next alternating probe
+		// [04 R-PATH-01 §5].
+		*probe = (*probe + 2) & 7
 	} else {
+		// TODO(question): The preserved upper-success update is -1. A coordinated
+		// trace of upper initialization, stored-versus-actual direction, successful
+		// transition, and origin-repeat state must settle it; changing this update
+		// alone breaks the established wall-rejoin fixtures [04 R-PATH-01 §5].
 		*probe = (*probe + 7) & 7
 	}
 	return true

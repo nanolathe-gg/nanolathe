@@ -7016,7 +7016,7 @@ a unit standing off-map inside its goal's radius reports `0x100`, not `0x200`;
 and the goal enumeration runs **before** either, so its marks and its nearest
 cell survive both early exits.
 
-### Closed — the pre-search wall-following ray [R-PATH-01 §5] (2026-08-29)
+### Established — pre-search wall-follow protocol with upper-transition residual [R-PATH-01 §5] (2026-08-29)
 
 The ray is not a plain greedy walk. It is a cardinal-stepping probe with a
 two-sided wall follow, and its only product is the acceptance threshold.
@@ -7071,6 +7071,30 @@ cell the ray touched, including the start's own. Every step of both phases is
 charged to the scheduler's step counter for the admitting slice, so a long
 wall-follow eats directly into the same budget the pops draw on. The ray draws
 no random numbers and never writes a node or the heap.
+
+**Established correction — lower-cursor stored probe transition (2026-08-30,
+SP-REV-07-C7).** The preceding description did not distinguish the lower
+cursor's stored probe from the direction of its actual step, and “starting
+from the blocked direction” could consequently be read as probing the already
+rejected cardinal cell again. That reading was incomplete. The greedy probe
+has already charged and rejected direction `d`. The lower cursor's first
+actual candidate is `(d − 1) mod 8`; because the lower cursor steps in the
+negated direction, it stores `opposite(d − 1)`. A blocked lower candidate
+decrements the stored probe by one, which also decrements the actual direction
+by one. After a successful lower step, the stored probe advances by two before
+that cursor's next alternating turn. Thus its next actual direction also
+advances by two. These initialization and success updates are one state
+transition contract; applying either in isolation does not preserve the
+two-sided wall-follow.
+
+**Unknown — upper successful-step state.** The exact upper successful-step
+update is not closed independently of its initialization and origin-repeat
+state. Nanolathe preserves its existing one-sector decrement as a
+`TODO(question)` placeholder because changing that update alone breaks the
+established wall-rejoin fixtures. *Decider:* a coordinated clean-room trace of
+the upper cursor's initialization, stored-versus-actual direction, successful
+transition, and origin-repeat comparison, verified by a bounded authored
+wall-rejoin fixture.
 
 ### Closed — the goal classes, exactly [R-PATH-01 §9] (2026-08-29)
 
@@ -10200,11 +10224,29 @@ route is the one it currently holds ([R-PATH-01 §8]).
   than the rectangle at both ends) and demotes the result to *steep* (1)
   when any strip is not clear. This is the restamp-side form of
   [R-DOC04-B]'s contagion pass;
+* **Established correction — the invalidated anchor rectangle is ring-aware.**
+  The earlier shorthand that the revision pass restamps a unit's "own
+  rectangle" could imply rewriting only anchors inside the occupant's stored
+  footprint. The call instead supplies the occupant origin `(ox, oz)` and
+  size `(ow, oh)` to a class-layer restamp that first subtracts that layer's
+  requester footprint `(rw, rh)` from the lower bound. The cached occupant
+  sizes are the authored/resolved footprint dimensions. It therefore rewrites
+  the inclusive anchor rectangle
+  `[ox-rw .. ox+ow] × [oz-rh .. oz+oh]`, equivalently the half-open rectangle
+  `[ox-rw, ox+ow+1) × [oz-rh, oz+oh+1)`, clipped to the layer. The inner
+  `[ox-rw+1 .. ox+ow-1] × [oz-rh+1 .. oz+oh-1]` anchors have requester
+  footprints that overlap the occupant and classify blocked through the
+  age gate. The surrounding one-anchor border is also invalidated because
+  its classifier ring reads the changed occupant cells and may demote clear
+  to steep. The next anchor beyond that border is not rewritten. A complete
+  call-site and callee trace settles both the subtraction and the inclusive
+  upper endpoint; this is not padding inferred from cache coherence;
 * the **request revision pass** temporarily writes the current tick into the
   requester's commit-tick field while it restamps, restamps the requester's
   own rectangle when its previous commit tick predates the old watermark,
   and — only when the watermark actually advanced — restamps every live unit
-  with a mover whose commit tick lies in `[oldWatermark, newWatermark)`;
+  with a mover whose commit tick lies in `[oldWatermark, newWatermark)`. The
+  walk covers the entire physical unit pool in ascending slot order;
   the requester's commit tick is restored afterwards. The **release-time
   restamp** run by the scheduler on a finished request restamps the unit's
   rectangle when its commit tick predates the watermark.
@@ -10637,6 +10679,11 @@ orchestrator).
   are Established; the steady-state tier is a Supported inference from the
   iteration rate · §7.3 [R-PATH-01 §6] · manual retail observation, or a static
   trace of the iteration count under a known unit population.
+- Exact upper wall-follow successful-step state, including its initialization,
+  stored-versus-actual direction, and origin-repeat comparison; changing the
+  preserved one-sector decrement alone breaks the established rejoin fixtures
+  · §7.1 [R-PATH-01 §5] · coordinated clean-room trace plus a bounded authored
+  wall-rejoin fixture. Marked `TODO(question)`.
 
 ### Ground movement
 

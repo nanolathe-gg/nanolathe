@@ -57,7 +57,24 @@ func unitPortHandlers(vm *cob.VM, u *Unit) map[cob.Port]func([]int32) int32 {
 	}
 	bindUnitPort(cob.Port(5), func() bool { return u.InBuildStance }, func(v bool) { u.InBuildStance = v })
 	bindUnitPort(cob.Port(6), func() bool { return u.Busy }, func(v bool) { u.Busy = v })
-	bindUnitPort(cob.Port(18), func() bool { return u.YardOpen }, func(v bool) { u.YardOpen = v })
+	ports[cob.Port(18)] = func(args []int32) int32 {
+		if len(args) >= 2 {
+			requested := args[1]&1 != 0
+			// The installed callback owns admission, the authoritative bit commit,
+			// and the later restamp as one ordered transaction. Fixtures without a
+			// callback retain the direct-write path [04 §4.7 port 18][04 R-COLL-01 §4].
+			if u.yardTransaction != nil {
+				u.yardTransaction(requested)
+			} else {
+				u.YardOpen = requested
+			}
+			return 0
+		}
+		if u.YardOpen {
+			return 1
+		}
+		return 0
+	}
 	bindUnitPort(cob.Port(19), func() bool { return u.BuggerOff }, func(v bool) { u.BuggerOff = v })
 	bindUnitPort(cob.Port(20), func() bool { return u.Armored }, func(v bool) { u.Armored = v })
 	// Port 1 is the activation edge input. The callback starts the authored

@@ -254,6 +254,31 @@ func (l *ClassLayer) RestampRect(x1, z1, x2, z2 int32) {
 	}
 }
 
+// restampOccupantRect rewrites every requester anchor whose footprint or
+// classifier ring can read the committed occupant rectangle. The traced
+// inclusive bounds are [origin-requesterFootprint, origin+occupantSize] on
+// each axis; RestampRect supplies the layer-edge clipping
+// [04 R-PATH-01 §2][04 R-MOV-03 §3][fmt tdf][fmt fbi].
+func (l *ClassLayer) restampOccupantRect(anchor Cell, footX, footZ int16) {
+	if l == nil {
+		return
+	}
+	occupantX, occupantZ := int32(footX), int32(footZ)
+	if occupantX <= 0 {
+		occupantX = 1
+	}
+	if occupantZ <= 0 {
+		occupantZ = 1
+	}
+	requesterX, requesterZ := l.footprintSize()
+	l.RestampRect(
+		anchor.X-requesterX,
+		anchor.Z-requesterZ,
+		anchor.X+occupantX,
+		anchor.Z+occupantZ,
+	)
+}
+
 // Watermark returns the class record's revision watermark [04 §6.1 R-DOC04-B].
 func (l *ClassLayer) Watermark() uint32 {
 	if l == nil {
@@ -361,13 +386,15 @@ func (l *ClassLayer) Revise(tick uint32, requester pool.Handle, w *units.World, 
 	}
 	if requester != 0 && requesterCommit < oldWatermark {
 		if anchor, fx, fz, ok := anchors.CommittedFootprint(requester); ok {
-			l.RestampRect(anchor.X, anchor.Z, anchor.X+int32(fx)-1, anchor.Z+int32(fz)-1)
+			l.restampOccupantRect(anchor, fx, fz)
 		}
 	}
 	if newWatermark == oldWatermark {
 		return
 	}
-	// Deterministic unit-pool walk, slots ascending [I1][04 §6.1 R-DOC04-B].
+	// Deterministic full physical unit-pool walk, slots ascending
+	// [I1][01 §6.1–§6.2][04 R-MOV-03 §3]. Capacity is the total usable
+	// record count excluding the null slot.
 	for h := pool.Handle(1); int(h) <= w.Capacity(); h++ {
 		if h == requester {
 			continue
@@ -384,7 +411,7 @@ func (l *ClassLayer) Revise(tick uint32, requester pool.Handle, w *units.World, 
 		if !ok {
 			continue
 		}
-		l.RestampRect(anchor.X, anchor.Z, anchor.X+int32(fx)-1, anchor.Z+int32(fz)-1)
+		l.restampOccupantRect(anchor, fx, fz)
 	}
 }
 
@@ -411,6 +438,17 @@ func NewClassLayers(t *world.Terrain, grid *OccupancyGrid, w *units.World, ancho
 		anchors: anchors,
 		byName:  make(map[string]*ClassLayer),
 	}
+}
+
+// BindWorld refreshes the unit-pool source used by every later request
+// revision. The registry may be allocated by an occupancy commit before the
+// session's first unit-sweep bind, so construction-time capture alone is not
+// sufficient [01 §6.1–§6.2][04 R-MOV-03 §3].
+func (c *ClassLayers) BindWorld(w *units.World) {
+	if c == nil {
+		return
+	}
+	c.world = w
 }
 
 // For returns the layer for one movement class, allocating and map-load

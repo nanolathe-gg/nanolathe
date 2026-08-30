@@ -359,7 +359,7 @@ var debtMarkerTotals = map[string]int{
 	"fallback":       185,
 	"guess":          10,
 	"plausible":      1,
-	"todo(question)": 318,
+	"todo(question)": 316,
 }
 
 var debtMarkerFileCounts = map[string]map[string]int{
@@ -482,7 +482,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/combat/target.go":                3,
 		"internal/construction/approach.go":        6,
 		"internal/construction/capture.go":         4,
-		"internal/construction/factory.go":         20,
+		"internal/construction/factory.go":         17,
 		"internal/construction/reclaim.go":         1,
 		"internal/construction/reverse.go":         1,
 		"internal/economy/ledger.go":               3,
@@ -510,6 +510,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/orders/transport.go":             24,
 		"internal/path/goals.go":                   4,
 		"internal/path/queue.go":                   1,
+		"internal/path/search.go":                  1,
 		"internal/pool/pool.go":                    1,
 		"internal/save/bank.go":                    3,
 		"internal/session/commands.go":             1,
