@@ -53,7 +53,7 @@ func exitCatalog(defs ...*content.UnitDef) *content.Catalog {
 }
 
 func exitService(t *testing.T, terrain *world.Terrain, cat *content.Catalog) (*Service, *units.World) {
-	svc := NewService(terrain, cat, units.NewSliced(64, cat), &economy.Service{})
+	svc := NewService(terrain, cat, newConstructionFixtureWorld(64, cat), &economy.Service{})
 	if svc == nil {
 		t.Fatal("nil service")
 	}

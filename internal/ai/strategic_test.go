@@ -6,7 +6,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
-	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 func TestRefreshCadence(t *testing.T) {
@@ -259,7 +258,7 @@ func TestCenterComputation(t *testing.T) {
 	types := []string{"armfav"}
 	s.Init(types)
 
-	w := units.NewSliced(10, nil)
+	w := newAIFixtureWorld(10, nil)
 	defA := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armfav")}, UnitName: "armfav", MaxDamage: 100}
 	x1 := numeric.FixedFromInt(0)
 	z1 := numeric.FixedFromInt(0)
@@ -295,7 +294,7 @@ func TestCenterComputation(t *testing.T) {
 	}
 	s2 := &Strategic{}
 	s2.Init([]string{"armfav"})
-	w2 := units.NewSliced(10, nil)
+	w2 := newAIFixtureWorld(10, nil)
 	r2 := rng.NewSimulation(1)
 	if !s2.MaybeRefresh(30, &r2, 1, w2) {
 		t.Fatalf("empty world refresh")
@@ -308,7 +307,7 @@ func TestCenterComputation(t *testing.T) {
 	}
 	s3 := &Strategic{}
 	s3.Init([]string{"armfav"})
-	w3 := units.NewSliced(10, nil)
+	w3 := newAIFixtureWorld(10, nil)
 	if _, err := w3.Create(defA, 1, numeric.FixedFromInt(-100), numeric.Fixed(0), numeric.FixedFromInt(-50)); err != nil {
 		t.Fatalf("create neg: %v", err)
 	}

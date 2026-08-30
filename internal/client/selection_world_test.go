@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -13,7 +14,12 @@ import (
 func TestSelectionPickWorld(t *testing.T) {
 	cam := &camera.Camera{X: 0, Z: 0, ViewW: 640, ViewH: 480, MapW: 1000, MapH: 1000}
 	w := units.NewSliced(10, nil)
-	def := &content.UnitDef{UnitName: "u"}
+	// Selection is the subject of this test, but creation still requires a
+	// loadable COB [R-COB-04 §8]. RETURN is a complete authored fixture program
+	// [04 §4.3].
+	def := &content.UnitDef{UnitName: "u", Script: &cob.Program{
+		Code: []uint32{0x10065000}, Scripts: map[string]int{}, Pieces: []string{"base"},
+	}}
 	def.MaxDamage = 100
 	// Place three units at X=0,10,20 pixels world (Fixed 16.16). Y=0.
 	positions := []int32{0, 10, 20}

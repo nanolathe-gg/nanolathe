@@ -86,7 +86,7 @@ func TestSessionVisibility(t *testing.T) {
 		t.Fatalf("bind: %v", err)
 	}
 	// Create two units far apart > sight. Y above sea (30) so not underwater.
-	def := &content.UnitDef{UnitName: "testunit", MaxDamage: 100, SightDistance: 160, FootprintX: 1, FootprintZ: 1}
+	def := &content.UnitDef{UnitName: "testunit", MaxDamage: 100, SightDistance: 160, FootprintX: 1, FootprintZ: 1, Script: fixtureCOBProgram()}
 	def.CanonicalKey = content.CanonicalKey(def.UnitName)
 	h0, _ := s.Units.Create(def, 0, numeric.Fixed(10*32*65536), numeric.Fixed(30*65536), numeric.Fixed(10*32*65536))
 	h1, _ := s.Units.Create(def, 1, numeric.Fixed(50*32*65536), numeric.Fixed(30*65536), numeric.Fixed(50*32*65536))
@@ -245,7 +245,7 @@ func TestMovementRefreshViaTick(t *testing.T) {
 	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
-	def := &content.UnitDef{UnitName: "scout", MaxDamage: 100, SightDistance: 160, FootprintX: 1, FootprintZ: 1}
+	def := &content.UnitDef{UnitName: "scout", MaxDamage: 100, SightDistance: 160, FootprintX: 1, FootprintZ: 1, Script: fixtureCOBProgram()}
 	def.CanonicalKey = content.CanonicalKey(def.UnitName)
 	h, _ := s.Units.Create(def, 0, numeric.Fixed(10*32*65536), 0, numeric.Fixed(10*32*65536))
 	u := s.Units.Unit(h)
@@ -304,7 +304,7 @@ func TestSaveLoadRebuild(t *testing.T) {
 	// Bind fixture sight shapes for sprite-mask raster (catalog has none in minimal fixture) [03 §3.2].
 	s.Vis.SetMode(visibility.ModeHistoryEnabled | visibility.ModeCurrentEnabled)
 	s.Vis.SetShapes(fixtureShapesForTest())
-	def := &content.UnitDef{UnitName: "scout", MaxDamage: 100, SightDistance: 160}
+	def := &content.UnitDef{UnitName: "scout", MaxDamage: 100, SightDistance: 160, Script: fixtureCOBProgram()}
 	def.CanonicalKey = content.CanonicalKey(def.UnitName)
 	h, _ := s.Units.Create(def, 0, numeric.Fixed(10*32*65536), numeric.Fixed(30*65536), numeric.Fixed(10*32*65536))
 	u := s.Units.Unit(h)

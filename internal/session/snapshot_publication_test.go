@@ -13,7 +13,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
@@ -27,7 +26,7 @@ func TestRadarStepPublishesAuthoritativeSensorIdentity(t *testing.T) {
 		OnOffable:         true,
 		ActivateWhenBuilt: true,
 	}
-	w := units.NewSliced(4, nil)
+	w := newSessionFixtureWorld(4, nil)
 	h, err := w.Create(def, 1, numeric.Fixed(10<<16), 0, numeric.Fixed(12<<16))
 	if err != nil {
 		t.Fatalf("create unit: %v", err)
@@ -50,7 +49,7 @@ func TestRadarStepPublishesAuthoritativeSensorIdentity(t *testing.T) {
 
 func TestPublishSnapshotCarriesCommittedUnitActivation(t *testing.T) {
 	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "switchable"}, MaxDamage: 1, OnOffable: true}
-	w := units.NewSliced(2, nil)
+	w := newSessionFixtureWorld(2, nil)
 	h, err := w.Create(def, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("create unit: %v", err)
@@ -70,7 +69,7 @@ func TestPublishSnapshotCarriesCommittedUnitActivation(t *testing.T) {
 
 func TestPublishSnapshotDoesNotAllocateMissingOrderQueue(t *testing.T) {
 	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "no-orders"}, MaxDamage: 1}
-	w := units.NewSliced(2, nil)
+	w := newSessionFixtureWorld(2, nil)
 	h, err := w.Create(def, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("create unit: %v", err)
@@ -88,7 +87,7 @@ func TestPublishSnapshotDoesNotAllocateMissingOrderQueue(t *testing.T) {
 
 func TestPublishSnapshotCarriesRadarOwnerPalettes(t *testing.T) {
 	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "radar-palette"}, MaxDamage: 1}
-	w := units.NewSliced(4, nil)
+	w := newSessionFixtureWorld(4, nil)
 	if _, err := w.Create(def, 0, 0, 0, 0); err != nil {
 		t.Fatalf("create owner-zero unit: %v", err)
 	}
@@ -134,7 +133,7 @@ func TestPublishSnapshotCarriesRadarOwnerPalettes(t *testing.T) {
 
 func TestRadarStepClearsSeenWithSingleActivePlayer(t *testing.T) {
 	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "seen"}, MaxDamage: 1}
-	w := units.NewSliced(4, nil)
+	w := newSessionFixtureWorld(4, nil)
 	h, err := w.Create(def, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("create unit: %v", err)
@@ -151,7 +150,7 @@ func TestRadarStepClearsSeenWithSingleActivePlayer(t *testing.T) {
 
 func TestRadarCirclesDropWhenSourceIsCleanedUp(t *testing.T) {
 	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "circle"}, MaxDamage: 1}
-	w := units.NewSliced(4, nil)
+	w := newSessionFixtureWorld(4, nil)
 	h, err := w.Create(def, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("create unit: %v", err)
@@ -234,7 +233,7 @@ func TestRadarSelectedRangeStatusGatePreservesSlotOrder(t *testing.T) {
 		{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "off"}, MaxDamage: 1, RadarDistance: 200, OnOffable: true, ActivateWhenBuilt: false},
 		{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "unselected"}, MaxDamage: 1, RadarDistance: 300, OnOffable: false},
 	}
-	w := units.NewSliced(4, nil)
+	w := newSessionFixtureWorld(4, nil)
 	for i, def := range defs {
 		h, err := w.Create(def, 0, numeric.Fixed(int64(i+1)<<16), 0, 0)
 		if err != nil {
@@ -264,7 +263,7 @@ func TestRadarSelectedRangeStatusGatePreservesSlotOrder(t *testing.T) {
 
 func TestRadarGameplayVisibilityUsesStealthAndInitCloak(t *testing.T) {
 	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "stealth"}, MaxDamage: 1, Stealth: true, InitCloaked: true}
-	w := units.NewSliced(4, nil)
+	w := newSessionFixtureWorld(4, nil)
 	_, err := w.Create(def, 1, numeric.Fixed(10<<16), 0, numeric.Fixed(10<<16))
 	if err != nil {
 		t.Fatalf("create unit: %v", err)
@@ -318,7 +317,7 @@ func TestSnapshotVisibilityOwnsMasksAcrossBeginWrite(t *testing.T) {
 func TestSnapshotPublicationUsesWordCoverageWhenBytesDisabled(t *testing.T) {
 	terrain := &world.Terrain{CellW: 64, CellH: 64}
 	vis := visibility.New(terrain, visibility.ModeHistoryEnabled)
-	unitsPool := units.NewSliced(4, nil)
+	unitsPool := newSessionFixtureWorld(4, nil)
 	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "foreign"}, MaxDamage: 1}
 	if _, err := unitsPool.Create(def, 1, 0, 0, 0); err != nil {
 		t.Fatalf("create foreign unit: %v", err)
@@ -512,7 +511,7 @@ func TestSnapshotPublishesConstructionLink(t *testing.T) {
 	builderDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "builder"}, UnitName: "builder", Builder: true, MaxDamage: 100, FootprintX: 2, FootprintZ: 2}
 	productDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "product"}, UnitName: "product", MaxDamage: 200, FootprintX: 1, FootprintZ: 1}
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{builderDef.CanonicalKey: builderDef, productDef.CanonicalKey: productDef}}
-	unitsWorld := units.NewSliced(8, cat)
+	unitsWorld := newSessionFixtureWorld(8, cat)
 	builder, err := unitsWorld.Create(builderDef, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)

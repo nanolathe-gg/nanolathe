@@ -164,6 +164,40 @@ func TestSteepCostEveryNeighborExpansion(t *testing.T) {
 	}
 }
 
+func TestOpenNodeRevalidatesBeforeExpansion(t *testing.T) {
+	blocked := map[Cell]bool{}
+	cfg := SearchConfig{
+		Start: Cell{5, 5},
+		Goal:  PointGoal(Cell{5, 12}, 0),
+		PassableValue: func(c Cell) uint8 {
+			if blocked[c] {
+				return 0
+			}
+			return 3
+		},
+		Scale:     65536,
+		HasBounds: true,
+		Bounds:    Rect{Min: Cell{0, 0}, Max: Cell{15, 15}},
+	}
+	s := NewSession(cfg)
+	if _, _, done := s.Resume(1); done {
+		t.Fatal("fixture search completed before an open node could be revised")
+	}
+	id, _, ok := s.heap.Peek()
+	if !ok {
+		t.Fatal("first expansion left no open node")
+	}
+	cell := s.ns.Get(id).Cell
+	blocked[cell] = true
+	if _, _, done := s.Resume(1); done {
+		t.Fatal("fixture search completed while revalidating one node")
+	}
+	n := s.ns.Get(id)
+	if !n.Closed || n.Open || s.entries[cell].status&3 != 3 {
+		t.Fatalf("revised open node was expanded instead of closed blocked: node=%+v entry=%+v", *n, s.entries[cell])
+	}
+}
+
 func TestHeuristicScaling(t *testing.T) {
 	// [04 §7.2] C6 hScaled = (h*scale)>>16 with signed 64 product and arithmetic shift, no float
 	if got := ScaledHeuristic(0, 65536); got != 0 {

@@ -129,6 +129,7 @@ func strictMinimalCatalog() *content.Catalog {
 		u.CanonicalKey = content.CanonicalKey(u.UnitName)
 		u.MovementClass = "testmove"
 	}
+	installFixtureCOB(cat)
 	return cat
 }
 

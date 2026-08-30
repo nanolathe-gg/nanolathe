@@ -5,7 +5,6 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
-	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 func weaponDefForBuild(stockpile bool, reload int32) *content.WeaponDef {
@@ -18,7 +17,7 @@ func weaponDefForBuild(stockpile bool, reload int32) *content.WeaponDef {
 
 func TestBuildWeaponStockpileQueue(t *testing.T) {
 	// Unit with stockpile weapon at slot 0.
-	w := units.NewSliced(10, nil)
+	w := newOrdersFixtureWorld(10, nil)
 	def := &content.UnitDef{UnitName: "armsilo", MaxDamage: 100}
 	// Install stockpile weapon via direct slot.
 	h, err := w.Create(def, 0, 0, 0, 0)
@@ -104,7 +103,7 @@ func TestBuildWeaponStockpileQueue(t *testing.T) {
 }
 
 func TestBuildWeaponBlockedAt199(t *testing.T) {
-	w := units.NewSliced(10, nil)
+	w := newOrdersFixtureWorld(10, nil)
 	def := &content.UnitDef{UnitName: "armsilo", MaxDamage: 100}
 	h, _ := w.Create(def, 0, 0, 0, 0)
 	u := w.Unit(h)
@@ -130,7 +129,7 @@ func TestBuildWeaponBlockedAt199(t *testing.T) {
 }
 
 func TestBuildWeaponCoalesceAndUI(t *testing.T) {
-	w := units.NewSliced(10, nil)
+	w := newOrdersFixtureWorld(10, nil)
 	def := &content.UnitDef{UnitName: "armsilo", MaxDamage: 100}
 	h, _ := w.Create(def, 0, 0, 0, 0)
 	u := w.Unit(h)

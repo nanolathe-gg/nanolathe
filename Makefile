@@ -1,4 +1,4 @@
-.PHONY: check check-all build test test-retail test-desktop
+.PHONY: check check-all build test test-retail test-desktop test-headless
 
 GO_TEST_PACKAGES := $(shell go list ./... | grep -vE '/(cmd/nanolathe|internal/client)$$')
 
@@ -36,3 +36,6 @@ test-retail:
 # desktop-only packages explicit so the default loop stays usable headlessly.
 test-desktop:
 	@go test ./internal/client ./cmd/nanolathe
+
+test-headless:
+	@go test ./cmd/nanolathe -run Headless

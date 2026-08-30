@@ -105,7 +105,7 @@ func hashTransportState(carrier, cargo *units.Unit) uint64 {
 
 func runTransportScenario(seed uint32) (uint64, int, []string) {
 	rng.SeedGlobal(seed, 0)
-	w := units.NewSliced(10, nil)
+	w := newOrdersFixtureWorld(10, nil)
 	carrier := mkTransportCarrier(1, 0, true)
 	cargo := mkCargo(2, 0)
 	// Place cargo slightly offset but within boarding range (16) [04 §10.2]
@@ -121,7 +121,7 @@ func runTransportScenario(seed uint32) (uint64, int, []string) {
 	// Instead, use w.Create with defs and then replace?
 	// Simpler: create world via NewSliced and Create.
 	cat := &content.Catalog{}
-	w2 := units.NewSliced(10, cat)
+	w2 := newOrdersFixtureWorld(10, cat)
 	hC, _ := w2.Create(carrier.Def, 0, carrier.X, carrier.Y, carrier.Z)
 	hCargo, _ := w2.Create(cargo.Def, 0, cargo.X, cargo.Y, cargo.Z)
 	uC := w2.Unit(hC)
@@ -201,9 +201,9 @@ func TestTransportLoadMoveUnloadDeterministic(t *testing.T) {
 	// Cargo should be detached at drop point after second run
 	// Re-run with detailed check
 	rng.SeedGlobal(12345, 0)
-	w2 := units.NewSliced(10, &content.Catalog{})
-	defCarrier := &content.UnitDef{CanLoad: true, CanFly: true, CanMove: true, TransportSize: 10, TransportCapacity: 1, FootprintX: 2, FootprintZ: 2, MaxDamage: 100}
-	defCargo := &content.UnitDef{CanMove: true, CantBeTransported: false, FootprintX: 1, FootprintZ: 1, MaxDamage: 50}
+	w2 := newOrdersFixtureWorld(10, &content.Catalog{})
+	defCarrier := &content.UnitDef{UnitName: "carrier", CanLoad: true, CanFly: true, CanMove: true, TransportSize: 10, TransportCapacity: 1, FootprintX: 2, FootprintZ: 2, MaxDamage: 100}
+	defCargo := &content.UnitDef{UnitName: "cargo", CanMove: true, CantBeTransported: false, FootprintX: 1, FootprintZ: 1, MaxDamage: 50}
 	hC, _ := w2.Create(defCarrier, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	hCargo, _ := w2.Create(defCargo, 0, numeric.Fixed(5*65536), numeric.Fixed(10*65536), numeric.Fixed(0))
 	uC := w2.Unit(hC)
@@ -297,9 +297,9 @@ func TestTransportLoadMoveUnloadDeterministic(t *testing.T) {
 
 func TestTransportHeavyAndGates(t *testing.T) {
 	rng.SeedGlobal(1, 0)
-	w2 := units.NewSliced(10, &content.Catalog{})
-	defCarrier := &content.UnitDef{CanLoad: true, CanFly: true, CanMove: true, TransportSize: 1, TransportCapacity: 1, FootprintX: 2, FootprintZ: 2, MaxDamage: 100}
-	defCargo := &content.UnitDef{CanMove: true, CantBeTransported: false, FootprintX: 5, FootprintZ: 5, MaxDamage: 50}
+	w2 := newOrdersFixtureWorld(10, &content.Catalog{})
+	defCarrier := &content.UnitDef{UnitName: "heavycarrier", CanLoad: true, CanFly: true, CanMove: true, TransportSize: 1, TransportCapacity: 1, FootprintX: 2, FootprintZ: 2, MaxDamage: 100}
+	defCargo := &content.UnitDef{UnitName: "heavycargo", CanMove: true, CantBeTransported: false, FootprintX: 5, FootprintZ: 5, MaxDamage: 50}
 	hC, _ := w2.Create(defCarrier, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	hCargo, _ := w2.Create(defCargo, 0, numeric.Fixed(5*65536), numeric.Fixed(10*65536), numeric.Fixed(0))
 	uC := w2.Unit(hC)
@@ -329,9 +329,9 @@ func TestTransportHeavyAndGates(t *testing.T) {
 		t.Fatalf("heavy transport should have recorded diagnostic %q, got %v", transportHeavyMessage, qC.Diagnostics())
 	}
 	// Test cargo empty gate for air: second load should fail 8 with no message when cargo already loaded
-	defCarrier2 := &content.UnitDef{CanLoad: true, CanFly: true, CanMove: true, TransportSize: 10, TransportCapacity: 1, FootprintX: 2, FootprintZ: 2, MaxDamage: 100}
-	defCargo2 := &content.UnitDef{CanMove: true, CantBeTransported: false, FootprintX: 1, FootprintZ: 1, MaxDamage: 50}
-	w2 = units.NewSliced(10, &content.Catalog{})
+	defCarrier2 := &content.UnitDef{UnitName: "carrier", CanLoad: true, CanFly: true, CanMove: true, TransportSize: 10, TransportCapacity: 1, FootprintX: 2, FootprintZ: 2, MaxDamage: 100}
+	defCargo2 := &content.UnitDef{UnitName: "cargo", CanMove: true, CantBeTransported: false, FootprintX: 1, FootprintZ: 1, MaxDamage: 50}
+	w2 = newOrdersFixtureWorld(10, &content.Catalog{})
 	hC, _ = w2.Create(defCarrier2, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	hCargo, _ = w2.Create(defCargo2, 0, numeric.Fixed(5*65536), numeric.Fixed(10*65536), numeric.Fixed(0))
 	hCargo2, _ := w2.Create(defCargo2, 0, numeric.Fixed(6*65536), numeric.Fixed(10*65536), numeric.Fixed(0))
@@ -370,9 +370,9 @@ func TestTransportHeavyAndGates(t *testing.T) {
 
 func TestTransportLanding(t *testing.T) {
 	rng.SeedGlobal(2, 0)
-	w2 := units.NewSliced(10, &content.Catalog{})
-	defVTOL := &content.UnitDef{CanFly: true, CanMove: true, MaxDamage: 100}
-	defPad := &content.UnitDef{IsAirBase: true, MaxDamage: 100}
+	w2 := newOrdersFixtureWorld(10, &content.Catalog{})
+	defVTOL := &content.UnitDef{UnitName: "vtol", CanFly: true, CanMove: true, MaxDamage: 100}
+	defPad := &content.UnitDef{UnitName: "airbase", IsAirBase: true, MaxDamage: 100}
 	hVTOL, _ := w2.Create(defVTOL, 0, numeric.Fixed(0), numeric.Fixed(100*65536), numeric.Fixed(0))
 	hPad, _ := w2.Create(defPad, 0, numeric.Fixed(10*65536), numeric.Fixed(0), numeric.Fixed(10*65536))
 	uVTOL := w2.Unit(hVTOL)

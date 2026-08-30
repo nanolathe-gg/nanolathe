@@ -14,6 +14,7 @@ func TestHumanFactoryCommandRetainsPermanentQueueRejection(t *testing.T) {
 		DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armlab"},
 		UnitName:         "armlab",
 		Builder:          true,
+		Script:           fixtureCOBProgram(),
 	}
 	broken := &content.UnitDef{
 		DefinitionHeader: content.DefinitionHeader{CanonicalKey: "broken"},

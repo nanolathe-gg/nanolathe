@@ -60,6 +60,16 @@ type CandidateProvider interface {
 	Poll(player int) (Request, PollResult)
 }
 
+// mutableCandidateProvider is the scheduler-owned cancellation/inspection
+// extension used by the movement follower. An admitted request no longer
+// resides in CandidateProvider, so Scheduler must include its active request
+// in both operations [04 R-PATH-01 §8].
+type mutableCandidateProvider interface {
+	CandidateProvider
+	Cancel(unit pool.Handle) bool
+	HasRequest(unit pool.Handle) bool
+}
+
 type PollResult uint8
 
 const (
@@ -235,6 +245,32 @@ func (s *Scheduler) SetCandidateProvider(p CandidateProvider) {
 	}
 }
 
+// HasRequest reports queued or active work for unit.
+func (s *Scheduler) HasRequest(unit pool.Handle) bool {
+	if s == nil {
+		return false
+	}
+	if s.active != nil && s.active.Unit == unit {
+		return true
+	}
+	p, ok := s.provider.(mutableCandidateProvider)
+	return ok && p.HasRequest(unit)
+}
+
+// Cancel removes queued work or releases the single active working set owned
+// by unit [04 R-PATH-01 §8].
+func (s *Scheduler) Cancel(unit pool.Handle) bool {
+	if s == nil {
+		return false
+	}
+	if s.active != nil && s.active.Unit == unit {
+		s.active = nil
+		return true
+	}
+	p, ok := s.provider.(mutableCandidateProvider)
+	return ok && p.Cancel(unit)
+}
+
 // SetBase sets the heuristic base for this scheduler [04 §7.2].
 // If not set, the established default base is used.
 func (s *Scheduler) SetBase(b int32) {
@@ -379,7 +415,12 @@ func (s *Scheduler) Tick(tick uint32) {
 	share := s.stepAllowance / int32(players)
 	total := int32(0)
 	for p := 0; p < 10; p++ {
-		if s.provider != nil && s.provider.Eligible(p) {
+		// An admitted request is removed from the provider while the global
+		// working set owns it. Its player's accumulator must still receive this
+		// tick's equal share or a search that outlives the previously accumulated
+		// work can never resume [04 R-PATH-01 §6].
+		activePlayer := s.active != nil && s.activePlayer == p
+		if activePlayer || s.provider != nil && s.provider.Eligible(p) {
 			s.accumulator[p] += share
 		}
 		total += s.accumulator[p]

@@ -135,6 +135,28 @@ func TestSystemSearchConsultsLayer(t *testing.T) {
 	}
 }
 
+func TestConfiguredSchedulerPublishesOwnerOneRequest(t *testing.T) {
+	terrain := syntheticTerrainForIntegrate()
+	sys := NewSystem(terrain, wiringProfile, NewOccupancyGrid())
+	w := newMovementFixtureWorld(10)
+	sys.BindWorld(w)
+	sys.ConfigurePath(2, 10)
+	h, err := w.Create(wiringDef(), 1, world.CellToWorld(2), terrain.HeightAt(world.CellToWorld(2), world.CellToWorld(2)), world.CellToWorld(2))
+	if err != nil {
+		t.Fatalf("create owner-one unit: %v", err)
+	}
+	sys.EnsureUnit(w.Unit(h))
+	sys.BeginTick(1)
+	sys.SubmitMove(h, 1, path.Cell{X: 2, Z: 2}, path.Cell{X: 9, Z: 9})
+	for tick := uint32(1); tick < 10; tick++ {
+		sys.Scheduler.Tick(tick)
+		if route := sys.Routes[h]; route != nil && route.Active {
+			return
+		}
+	}
+	t.Fatalf("owner-one request did not publish with two-player session topology: route=%+v", sys.Routes[h])
+}
+
 // TestOccupancyCommitNotesRevisionLayers locks the commit-site wiring: a
 // successful occupancy commit records the unit's commit tick on every
 // allocated class layer, so the request revision pass of [04 §6.1 R-DOC04-B]

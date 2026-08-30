@@ -13,8 +13,8 @@ func TestP0I16_MissionCatalogIsolation(t *testing.T) {
 	catB := initialMissionCatalog(true)
 	catA.Units[content.CanonicalKey("known")] = &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("known")}, UnitName: "known", MaxDamage: 100}
 	catB.Units[content.CanonicalKey("known")] = &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("known")}, UnitName: "known", MaxDamage: 100}
-	wA := units.NewSliced(5, catA)
-	wB := units.NewSliced(5, catB)
+	wA := newMissionFixtureWorld(5, catA)
+	wB := newMissionFixtureWorld(5, catB)
 	def := &content.UnitDef{UnitName: "known", MaxDamage: 100, CanMove: true, CanAttack: true}
 	hA, _ := wA.Create(def, 0, 0, 0, 0)
 	uA := wA.Unit(hA)
@@ -39,7 +39,7 @@ func TestP0I16_MissionCatalogIsolation(t *testing.T) {
 		t.Fatalf("catalog B should allow unknown_type")
 	}
 	// Interleaved second run: ensure no cross contamination
-	wA2 := units.NewSliced(5, catA)
+	wA2 := newMissionFixtureWorld(5, catA)
 	hA2, _ := wA2.Create(def, 0, 0, 0, 0)
 	uA2 := wA2.Unit(hA2)
 	uA2.Flags |= 1 << 5

@@ -12,7 +12,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
-	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -27,7 +26,7 @@ func TestRS06_TwoDamagedEnemiesSlotOrder(t *testing.T) {
 		},
 		Weapons: map[string]*content.WeaponDef{},
 	}
-	uw := units.NewSliced(3, cat)
+	uw := newSessionFixtureWorld(3, cat)
 	// Create session with AI manager for player 0 (local)
 	mgr := &ai.Manager{Player: 0, IsAlliance: func(a, b uint8) bool { return false }}
 	s := &Session{
@@ -92,7 +91,7 @@ func TestRS06_MapSeedNotAffectState(t *testing.T) {
 				"cormex": {DefinitionHeader: content.DefinitionHeader{CanonicalKey: "cormex"}, UnitName: "cormex", MaxDamage: 500, Side: "CORE"},
 			},
 		}
-		uw := units.NewSliced(2, cat)
+		uw := newSessionFixtureWorld(2, cat)
 		s := &Session{
 			Units:   uw,
 			Catalog: cat,
@@ -130,7 +129,7 @@ func TestRS06_TwoSessionsIsolated(t *testing.T) {
 				"cormex": {DefinitionHeader: content.DefinitionHeader{CanonicalKey: "cormex"}, UnitName: "cormex", MaxDamage: 500, Side: "CORE"},
 			},
 		}
-		uw := units.NewSliced(2, cat)
+		uw := newSessionFixtureWorld(2, cat)
 		s := &Session{
 			Units:   uw,
 			Catalog: cat,

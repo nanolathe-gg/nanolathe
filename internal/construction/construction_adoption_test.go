@@ -52,7 +52,7 @@ func TestMobileBuildEmitsStartBuildingThroughOrders(t *testing.T) {
 	for i := range terrain.Plot {
 		terrain.Plot[i].SetFeature(world.PlotFeatureNone)
 	}
-	w := units.NewSliced(10, cat)
+	w := newConstructionFixtureWorld(10, cat)
 	hb, _ := w.Create(builderDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	builder := w.Unit(hb)
 	builder.Def = builderDef

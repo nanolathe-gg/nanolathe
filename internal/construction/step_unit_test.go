@@ -32,7 +32,7 @@ func TestStepUnit_Isolation(t *testing.T) {
 	flashDef := cat.Units[content.CanonicalKey("armflash")]
 	flashDef.BuildCostMetal = 100
 	flashDef.BuildCostEnergy = 100
-	w := units.NewSliced(20, cat)
+	w := newConstructionFixtureWorld(20, cat)
 	hA, _ := w.Create(facDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	hB, _ := w.Create(facDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	builderA := w.Unit(hA)
@@ -108,7 +108,7 @@ func TestStepUnit_MobileSiteSurvives(t *testing.T) {
 	prodDef.CanonicalKey = content.CanonicalKey("armllt")
 	cat.Units[content.CanonicalKey("armck")] = builderDef
 	cat.Units[content.CanonicalKey("armllt")] = prodDef
-	w := units.NewSliced(20, cat)
+	w := newConstructionFixtureWorld(20, cat)
 	hb, _ := w.Create(builderDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	builder := w.Unit(hb)
 	builder.Def = builderDef
@@ -162,7 +162,7 @@ func TestStepUnit_MobileSiteSurvives(t *testing.T) {
 		prodDef,
 	)
 	facDef := cat2.Units[content.CanonicalKey("armfac")]
-	w2 := units.NewSliced(20, cat2)
+	w2 := newConstructionFixtureWorld(20, cat2)
 	hf, _ := w2.Create(facDef, 0, world.CellToWorld(5), 0, world.CellToWorld(5))
 	factory := w2.Unit(hf)
 	factory.Def = facDef
@@ -202,7 +202,7 @@ func TestStepUnit_DistinctDescriptors(t *testing.T) {
 	cat.Units[content.CanonicalKey("armck")] = mobileDef
 	cat.Units[content.CanonicalKey("armfac")] = factoryDef
 	cat.Units[content.CanonicalKey("armllt")] = prodDef
-	w := units.NewSliced(20, cat)
+	w := newConstructionFixtureWorld(20, cat)
 	hm, _ := w.Create(mobileDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	mobile := w.Unit(hm)
 	mobile.Def = mobileDef
@@ -222,7 +222,7 @@ func TestStepUnit_DistinctDescriptors(t *testing.T) {
 		t.Fatalf("queue should not be silently cleared on descriptor mismatch, len %d", q.LenPrimary())
 	}
 	// Conversely factory + mobile descriptor
-	w2 := units.NewSliced(20, cat)
+	w2 := newConstructionFixtureWorld(20, cat)
 	hf, _ := w2.Create(factoryDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	factory := w2.Unit(hf)
 	factory.Def = factoryDef
@@ -251,7 +251,7 @@ func TestStepUnit_ZeroStockWithCarryAdmits(t *testing.T) {
 	flashDef := cat.Units[content.CanonicalKey("armflash")]
 	flashDef.BuildCostMetal = 100
 	flashDef.BuildCostEnergy = 100
-	w := units.NewSliced(20, cat)
+	w := newConstructionFixtureWorld(20, cat)
 	hf, _ := w.Create(facDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	factory := w.Unit(hf)
 	factory.Def = facDef
@@ -300,7 +300,7 @@ func TestStepUnit_SettlementDeniesPausesAndResumes(t *testing.T) {
 	facDef := cat.Units[content.CanonicalKey("armfac")]
 	flashDef := cat.Units[content.CanonicalKey("armflash")]
 	flashDef.BuildCostMetal = 100
-	w := units.NewSliced(20, cat)
+	w := newConstructionFixtureWorld(20, cat)
 	hf, _ := w.Create(facDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	factory := w.Unit(hf)
 	factory.Def = facDef
@@ -356,7 +356,7 @@ func TestStepUnit_CancelBeforeAndAfterNanoframe(t *testing.T) {
 		&content.UnitDef{UnitName: "armflash", FootprintX: 2, FootprintZ: 2, YardMap: "o", MaxDamage: 100, BuildTime: 100, BuildCostMetal: 100},
 	)
 	facDef := cat.Units[content.CanonicalKey("armfac")]
-	w := units.NewSliced(20, cat)
+	w := newConstructionFixtureWorld(20, cat)
 	hf, _ := w.Create(facDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	factory := w.Unit(hf)
 	factory.Def = facDef
@@ -385,7 +385,7 @@ func TestStepUnit_CancelBeforeAndAfterNanoframe(t *testing.T) {
 		t.Fatalf("builderLinks leaked before nanoframe cancel")
 	}
 	// Now test cancel after nanoframe: create product, queue state3, then cancel
-	w2 := units.NewSliced(20, cat)
+	w2 := newConstructionFixtureWorld(20, cat)
 	hf2, _ := w2.Create(facDef, 0, world.CellToWorld(5), numeric.Fixed(0), world.CellToWorld(5))
 	factory2 := w2.Unit(hf2)
 	factory2.Def = facDef
@@ -429,7 +429,7 @@ func TestStepUnit_CompletionExactlyOnce(t *testing.T) {
 	flashDef := cat.Units[content.CanonicalKey("armflash")]
 	flashDef.BuildTime = 2
 	flashDef.MaxDamage = 100
-	w := units.NewSliced(20, cat)
+	w := newConstructionFixtureWorld(20, cat)
 	hf, _ := w.Create(facDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	factory := w.Unit(hf)
 	factory.Def = facDef
@@ -493,7 +493,7 @@ func TestStepUnit_NoPresentationCalls(t *testing.T) {
 		&content.UnitDef{UnitName: "armflash", FootprintX: 2, FootprintZ: 2, YardMap: "o", MaxDamage: 100, BuildTime: 100, BuildCostMetal: 10},
 	)
 	facDef := cat.Units[content.CanonicalKey("armfac")]
-	w := units.NewSliced(20, cat)
+	w := newConstructionFixtureWorld(20, cat)
 	hf, _ := w.Create(facDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	factory := w.Unit(hf)
 	factory.Def = facDef

@@ -6,7 +6,6 @@ import (
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
-	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -23,7 +22,7 @@ func TestUnboundMobileSitePathReportsMissingQueue(t *testing.T) {
 		content.CanonicalKey("armcom"):   {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armcom")}, UnitName: "armcom", FootprintX: 2, FootprintZ: 2, YardMap: "oooo", Builder: true, CanMove: true, MaxDamage: 100},
 		content.CanonicalKey("armsolar"): {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armsolar")}, UnitName: "armsolar", FootprintX: 2, FootprintZ: 2, YardMap: "oooo", MaxDamage: 100},
 	}}
-	w := units.NewSliced(16, cat)
+	w := newAIFixtureWorld(16, cat)
 	h, err := w.Create(cat.Units[content.CanonicalKey("armcom")], 0, world.CellToWorld(2), 0, world.CellToWorld(2))
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +42,7 @@ func TestUnboundFactoryQueuePathReportsMissingQueue(t *testing.T) {
 		content.CanonicalKey("armfactory"): {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armfactory")}, UnitName: "armfactory", FootprintX: 4, FootprintZ: 4, YardMap: "oooo oooo oooo oooo", Builder: true, CanMove: false, MaxDamage: 100},
 		content.CanonicalKey("armflea"):    {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armflea")}, UnitName: "armflea", FootprintX: 1, FootprintZ: 1, BMCode: true, CanMove: true, MaxVelocity: 30, MaxDamage: 50},
 	}}
-	w := units.NewSliced(16, cat)
+	w := newAIFixtureWorld(16, cat)
 	h, err := w.Create(cat.Units[content.CanonicalKey("armfactory")], 0, world.CellToWorld(2), 0, world.CellToWorld(2))
 	if err != nil {
 		t.Fatal(err)

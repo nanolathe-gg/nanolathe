@@ -128,16 +128,20 @@ type pathProvider struct {
 }
 
 func (s *System) CancelPathRequest(h pool.Handle) bool {
-	if s == nil || s.pathProvider == nil {
+	if s == nil || s.Scheduler == nil {
 		return false
 	}
-	return s.pathProvider.Cancel(h)
+	canceled := s.Scheduler.Cancel(h)
+	if int(h) < len(s.sessions) {
+		s.sessions[int(h)] = nil
+	}
+	return canceled
 }
 func (s *System) HasPathRequest(h pool.Handle) bool {
-	if s == nil || s.pathProvider == nil {
+	if s == nil || s.Scheduler == nil {
 		return false
 	}
-	return s.pathProvider.HasRequest(h)
+	return s.Scheduler.HasRequest(h)
 }
 
 // PathRequestsSnapshot returns the provider's deterministic request order for
@@ -152,10 +156,13 @@ func (s *System) PathRequestsSnapshot() []path.Request {
 func (p *pathProvider) PlayerCount() int { return p.players }
 func (p *pathProvider) UnitLimit() int32 { return p.limit }
 func (p *pathProvider) Eligible(player int) bool {
-	return player >= 0 && player < p.players && len(p.requests[player]) > 0
+	// Eligibility is player-record existence, not queue non-emptiness. Retail
+	// accrues and spends the equal share while polling that player's followers
+	// even when none currently wants a route [04 R-PATH-01 §6].
+	return player >= 0 && player < p.players
 }
 func (p *pathProvider) Poll(player int) (path.Request, path.PollResult) {
-	if !p.Eligible(player) {
+	if !p.Eligible(player) || len(p.requests[player]) == 0 {
 		return path.Request{}, path.PollNoUnit
 	}
 	q := p.requests[player]
@@ -365,6 +372,23 @@ func NewSystem(terrain *world.Terrain, fallback Profile, grid *OccupancyGrid) *S
 	sched.SetBase(path.DefaultBase)
 	s.Scheduler = sched
 	return s
+}
+
+// ConfigurePath supplies the session topology that owns the scheduler's
+// equal-share divisor and pressure tiers [04 R-PATH-01 §6]. Production calls
+// this after the economy player records and sliced unit pool exist.
+func (s *System) ConfigurePath(players int, unitLimit int32) {
+	if s == nil || s.pathProvider == nil || s.Scheduler == nil {
+		return
+	}
+	if players < 0 || players > 10 || unitLimit <= 0 {
+		return
+	}
+	s.PathPlayers = players
+	s.PathUnitLimit = unitLimit
+	s.pathProvider.players = players
+	s.pathProvider.limit = unitLimit
+	s.Scheduler.SetCandidateProvider(s.pathProvider)
 }
 
 // SetClasses binds the compiled movement-class table. Call it before the first
@@ -1322,7 +1346,8 @@ func headingFromDelta(dx, dz int64) uint16 {
 // emitMovementCallbacks emits StartMoving/StopMoving/MoveRateN and setSFXoccupy per [04 §5.2][GAP T15] C17 C18.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // Must be called after steering/flight integration but before the next slot's clear/commit so the VM sees the walk loops [04 §1.1][01 §4.4].
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Retail classification: category 0 when blocked/inhibited/attached/both mags
+// zero, else 1..3 via signed definition thresholds [04 R-COLL-01 §5][04 §5.2].
 // We map def MoveRate1/2 via content.UnitDef.MoveRate1/2 (defaults twice MaxVelocity) [02 "Unit record"] [04 §5.2].
 func (s *System) emitMovementCallbacks(u *units.Unit, speed int32) {
 	if s == nil || u == nil {
@@ -1800,7 +1825,13 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		u.Move.Speed = numeric.Fixed(coll.Speed)
 		// Emit StartMoving/StopMoving/MoveRateN and setSFXoccupy per [04 §5.2][GAP T15] C17 C18 via immediate barrier [GAP T15] C18.
 		// Must run after speed commit so tier reflects current capped speed [04 §5.2][GAP T15] C18.
-		s.emitMovementCallbacks(u, coll.Speed)
+		callbackSpeed := coll.Speed
+		if coll.Blocked {
+			// A blocked mover is movement tier zero even though collision retains
+			// a capped scalar speed for its next proposal [04 R-COLL-01 §5].
+			callbackSpeed = 0
+		}
+		s.emitMovementCallbacks(u, callbackSpeed)
 		moved = int64(u.X) != oldXRaw || int64(u.Z) != oldZRaw
 	}
 	// Arrival via goal tolerance, not merely route active [task]

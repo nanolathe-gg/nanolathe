@@ -124,7 +124,6 @@ func TestStaticRevisionInvalidatesGroundRouteAndPublishesCurrentRevision(t *test
 	if route == nil || !route.Active || route.StaticRevision != terrain.StaticObstacleRevision() {
 		t.Fatalf("initial route = %#v, terrain revision %d", route, terrain.StaticObstacleRevision())
 	}
-	oldPoints := route.Points
 	oldCount := route.Count
 	if oldCount < 2 {
 		t.Fatalf("route count %d, want a waypoint beyond the start", oldCount)
@@ -135,22 +134,35 @@ func TestStaticRevisionInvalidatesGroundRouteAndPublishesCurrentRevision(t *test
 	wreck := &content.FeatureDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "wreck"}, Blocking: true, FootprintX: 1, FootprintZ: 1}
 	terrain.FeatureDefs = []*content.FeatureDef{wreck}
 	featureService := features.NewService(terrain, nil, nil, nil)
-	blocked := oldPoints[1]
-	if featureService.PlaceAt(int(blocked.X/16), int(blocked.Z/16), wreck) == nil {
-		t.Fatalf("wreck placement at route waypoint %v failed", blocked)
+	// Any blocking-feature mutation invalidates the layer revision. Keep this
+	// fixture off the requested line: obstacle avoidance has its own tests and
+	// the direct-ray rejection threshold is not this test's subject.
+	const blockedX, blockedZ = 14, 1
+	if featureService.PlaceAt(blockedX, blockedZ, wreck) == nil {
+		t.Fatalf("wreck placement at off-route cell (%d,%d) failed", blockedX, blockedZ)
 	}
 	if route.StaticRevision == terrain.StaticObstacleRevision() {
 		t.Fatalf("route revision %d did not become stale at terrain revision %d", route.StaticRevision, terrain.StaticObstacleRevision())
 	}
+	sys.BeginTick(2)
 	result := sys.StepUnit(h, 2)
+	sys.EndTick(2)
 	if !result.EmptyRoute || result.Moved || route.Active {
 		t.Fatalf("stale route was consumed instead of invalidated: result=%+v route=%+v", result, route)
 	}
 	if !sys.HasPathRequest(h) {
 		t.Fatal("static invalidation did not resubmit the active order")
 	}
-	sys.Scheduler.Tick(3)
-	route = sys.Routes[h]
+	// The footprint/ring classifier can turn the detour into a multi-slice
+	// search. Budget exhaustion retains the active heap and publishes only on a
+	// later tick [04 R-PATH-01 §6–§7].
+	for tick := uint32(3); tick < 20; tick++ {
+		sys.Scheduler.Tick(tick)
+		route = sys.Routes[h]
+		if route != nil && route.Active && route.StaticRevision == terrain.StaticObstacleRevision() {
+			break
+		}
+	}
 	if route == nil || !route.Active || route.StaticRevision != terrain.StaticObstacleRevision() {
 		t.Fatalf("replanned route = %#v, terrain revision %d", route, terrain.StaticObstacleRevision())
 	}

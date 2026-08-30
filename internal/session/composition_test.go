@@ -21,7 +21,7 @@ import (
 
 func TestBindExistingOrderQueuesKeepsLazyQueuesLazy(t *testing.T) {
 	w := units.NewSliced(4, nil)
-	def := &content.UnitDef{UnitName: "queue-binding", MaxDamage: 1}
+	def := &content.UnitDef{UnitName: "queue-binding", MaxDamage: 1, Script: fixtureCOBProgram()}
 	h1, _ := w.Create(def, 0, 0, 0, 0)
 	h2, _ := w.Create(def, 0, 0, 0, 0)
 	u1, u2 := w.Unit(h1), w.Unit(h2)
@@ -124,6 +124,7 @@ func minimalCatalogForStrict() *content.Catalog {
 	for _, u := range cat.Units {
 		u.CanonicalKey = content.CanonicalKey(u.UnitName)
 	}
+	installFixtureCOB(cat)
 	return cat
 }
 

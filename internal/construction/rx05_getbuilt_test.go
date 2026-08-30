@@ -6,7 +6,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/orders"
-	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 // RX-05: a completed product whose queue head is a stale GetBuilt node must
@@ -18,7 +17,7 @@ func TestRX05_GetBuiltDropsAndUnblocksFactoryWork(t *testing.T) {
 			content.CanonicalKey("armflea"): {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armflea")}, UnitName: "armflea", FootprintX: 1, FootprintZ: 1, CanMove: true, MaxDamage: 50},
 		},
 	}
-	w := units.NewSliced(10, cat)
+	w := newConstructionFixtureWorld(10, cat)
 	facH, _ := w.Create(cat.Units[content.CanonicalKey("armfac")], 0, 0, 0, 0)
 	fac := w.Unit(facH)
 	fac.Remaining = 0 // completed
@@ -53,7 +52,7 @@ func TestRX05_GetBuiltWaitsWhileUnderConstruction(t *testing.T) {
 			content.CanonicalKey("armfac"): {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armfac")}, UnitName: "armfac", FootprintX: 2, FootprintZ: 2, YardMap: "oo", Builder: true, MaxDamage: 100},
 		},
 	}
-	w := units.NewSliced(10, cat)
+	w := newConstructionFixtureWorld(10, cat)
 	labH, _ := w.Create(cat.Units[content.CanonicalKey("armfac")], 0, 0, 0, 0)
 	lab := w.Unit(labH)
 	lab.Remaining = 0.5 // still under construction

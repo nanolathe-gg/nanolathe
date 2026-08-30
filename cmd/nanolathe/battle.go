@@ -83,23 +83,28 @@ func runBattleView(opts Options, cs *contentSet) error {
 	if err != nil {
 		return err
 	}
-	terrain := sess.World
-	pal, err := loadPaletteStrict(cs)
+	var (
+		b  *battleSession
+		cl *client.Client
+	)
+	cl, err = client.New(client.Options{
+		Buffer: sess.Snapshot,
+		Width:  retailScreenW,
+		Height: retailScreenH,
+		Title:  "Nanolathe — " + opts.Map,
+		Step: func(delta float64) {
+			b.viewerStep(delta, cl)
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("nanolathe: client: %w", err)
+	}
+	cl.SetModelFS(cs.fs)
+	b, err = composeBattleEntry(sess, cat, cs, cl, nil)
 	if err != nil {
 		return err
 	}
-
-	const winW, winH = 640, 480
-	terrainW := int32(terrain.CellW * 16)
-	terrainH := int32(terrain.CellH * 16)
-	// Camera clamp uses the same playable insets consumed by minimap input and
-	// marker projection; raw terrain extents include the void margins [07 §10].
-	cam := camera.NewFromTerrain(terrainW, terrainH, terrain.PlayRight, terrain.PlayBottom, winW, winH)
-	cam.Pan(0, 0)
-	centerOnCommanderForSession(sess, cam, winW, winH)
-
-	b := &battleSession{sess: sess, cat: cat, cam: cam, fs: cs.fs, millisSource: newMonotonicMillisSource()}
-	b.battleUI = ui.NewProductionBattleState()
+	clPtr = cl
 	b.returnToMenu = func(cl *client.Client) {
 		// The battle view has no menu shell callback; mark it ended and exit.
 		b.ended = true
@@ -107,13 +112,54 @@ func runBattleView(opts Options, cs *contentSet) error {
 			cl.RequestExit()
 		}
 	}
+	defer detachBattleAudio(cl, sess)
+	// Software cursor [07 §8]. The cursor GAF is mandatory for a windowed
+	// battle, and installation happens before entering Ebitengine's loop.
+	cursors, cerr := client.LoadCursors(cs.fs)
+	if cerr != nil {
+		return cerr
+	}
+	cl.SetCursors(cursors)
+	fmt.Fprintln(os.Stderr, "nanolathe: battle view — drag=select left-click=action right-click=deselect/cancel M=move A=attack P=patrol R=repair E=reclaim C=capture G=guard D=blast B=build X=cancel O=on/off N=stockpile Esc=cancel 1..9=buildpage Shift=queue")
+	return client.RunGame(cl)
+}
+
+// composeBattleEntry is the single presentation composition for every
+// constructed battle session. Session construction has already completed the
+// authoritative entry tail's tick-zero per-player priming and second resource
+// grant [08 R-ENTRY-01 §8]. This helper does not change which authored HUD
+// surfaces the existing battle loader provides.
+func composeBattleEntry(sess *session.Session, cat *content.Catalog, cs *contentSet, cl *client.Client, shell *gameShell) (*battleSession, error) {
+	if sess == nil {
+		return nil, fmt.Errorf("nil session")
+	}
+	terrain := sess.World
+	if terrain == nil {
+		return nil, fmt.Errorf("selected mission has no terrain data")
+	}
+	pal, err := loadPaletteStrict(cs)
+	if err != nil {
+		return nil, err
+	}
+
+	terrainW := int32(terrain.CellW * 16)
+	terrainH := int32(terrain.CellH * 16)
+	// Camera clamp uses the same playable insets consumed by minimap input and
+	// marker projection; raw terrain extents include the void margins [07 §10].
+	cam := camera.NewFromTerrain(terrainW, terrainH, terrain.PlayRight, terrain.PlayBottom, retailScreenW, retailScreenH)
+	cam.Pan(0, 0)
+	centerOnCommanderForSession(sess, cam, retailScreenW, retailScreenH)
+
 	// The battle HUD is mandatory retail content: side-selected PANELTOP,
 	// PANELSIDE, PANELBOT, the 30 SIDEDATA anchors, side fonts, and the authored
-	// <prefix>main/<prefix>gen/<unit>N GUI pages [07 §6][07 §9]. A production
-	// battle must never silently fall back to Nanolathe-owned rectangles.
-	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal)
+	// general command page [07 §6][07 §9].
+	hud, err := loadRetailBattleHUD(cs.fs, sess, cat, pal)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	b := &battleSession{
+		sess: sess, cat: cat, cam: cam, hud: hud, fs: cs.fs, shell: shell,
+		millisSource: newMonotonicMillisSource(), battleUI: ui.NewProductionBattleState(),
 	}
 	// Rail detent cues are emitted by canonical UI state; this callback only
 	// adapts the authored cue to the session audio sink [07 §6][I6].
@@ -122,41 +168,20 @@ func runBattleView(opts Options, cs *contentSet) error {
 			_ = sess.Audio.PlayUICue(name)
 		}
 	})
-	cl, err := client.New(client.Options{
-		Buffer: sess.Snapshot,
-		Width:  winW,
-		Height: winH,
-		Title:  "Nanolathe — " + opts.Map,
-		Step: func(delta float64) {
-			b.viewerStep(delta, clPtr)
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("nanolathe: client: %w", err)
-	}
-	clPtr = cl
-	cl.SetModelFS(cs.fs)
-	cl.SetTerrain(terrain)
-	cl.SetCamera(cam)
-	if pal != nil {
+	if cl != nil {
+		cl.SetSnapshot(sess.Snapshot)
+		cl.SetTerrain(terrain)
+		cl.SetCamera(cam)
 		cl.SetPalette(pal)
+		cl.SetFNT(hud.console)
+		// The shared battle HUD adapter is live only after all of its palette,
+		// font, terrain, and camera inputs have been installed [I6].
+		cl.SetUIStage(battleHUDUIStage{hud: hud, battle: b})
+		// Join the session's audio queue/cache/music to the client's device and
+		// per-frame drain [03 §8.2][03 §8.3][03 §8.4].
+		attachBattleAudio(cl, sess, cs.fs)
 	}
-	cl.SetFNT(b.hud.console)
-	// Software cursor [07 §8]. The cursor GAF is mandatory for a windowed
-	// battle, and installation happens before entering Ebitengine's loop.
-	cursors, cerr := client.LoadCursors(cs.fs)
-	if cerr != nil {
-		return cerr
-	}
-	cl.SetCursors(cursors)
-	cl.SetUIStage(battleHUDUIStage{hud: b.hud, battle: b})
-	// Join the session's audio queue/cache/music to the client's device and
-	// per-frame drain [03 §8.2][03 §8.3][03 §8.4]. Without this the client
-	// drains a queue it was never given and no cue reaches playback.
-	attachBattleAudio(cl, sess, cs.fs)
-	defer detachBattleAudio(cl, sess)
-	fmt.Fprintln(os.Stderr, "nanolathe: battle view — drag=select left-click=action right-click=deselect/cancel M=move A=attack P=patrol R=repair E=reclaim C=capture G=guard D=blast B=build X=cancel O=on/off N=stockpile Esc=cancel 1..9=buildpage Shift=queue")
-	return client.RunGame(cl)
+	return b, nil
 }
 
 // newBattleSession builds the integrated skirmish session for the window.

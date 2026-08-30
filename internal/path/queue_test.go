@@ -388,9 +388,11 @@ func TestSchedulerZeroPlayersDoesNotAdvanceCadence(t *testing.T) {
 	}
 }
 
-func TestSchedulerActiveIneligiblePlayerGetsNoTopUp(t *testing.T) {
+func TestSchedulerActiveRequestKeepsReceivingPlayerShare(t *testing.T) {
+	calls := 0
 	s := newTestScheduler(func(Request, int32, int) WorkResult {
-		return WorkResult{Done: false}
+		calls++
+		return WorkResult{Done: false, Pops: 100}
 	}, nil)
 	s.SetUnitLimit(1)
 	s.SetPlayerCount(1)
@@ -399,13 +401,35 @@ func TestSchedulerActiveIneligiblePlayerGetsNoTopUp(t *testing.T) {
 	if s.active == nil {
 		t.Fatal("request did not become active")
 	}
-	before := s.accumulator[0]
 	if s.provider.(*testCandidateProvider).Eligible(0) {
 		t.Fatal("test provider still eligible after admission")
 	}
+	// Cross the regression boundary directly: the admitted request no longer
+	// exists in the provider and its previously accumulated share is spent.
+	s.accumulator[0] = 0
+	beforeCalls := calls
 	s.Tick(1)
-	if s.accumulator[0] > before {
-		t.Fatalf("ineligible active player received top-up: before=%d after=%d", before, s.accumulator[0])
+	if calls <= beforeCalls || s.accumulator[0] <= 0 {
+		t.Fatalf("active request did not resume with a new player share: calls=%d beforeCalls=%d accumulator=%d", calls, beforeCalls, s.accumulator[0])
+	}
+}
+
+func TestSchedulerCancelReleasesAdmittedRequest(t *testing.T) {
+	s := newTestScheduler(func(Request, int32, int) WorkResult {
+		return WorkResult{Done: false, Pops: 100}
+	}, nil)
+	s.SetUnitLimit(1)
+	s.SetPlayerCount(1)
+	s.Submit(Request{Unit: 7, Player: 0, Start: Cell{0, 0}, Goal: PointGoal(Cell{30, 30}, 0)})
+	s.Tick(0)
+	if !s.HasRequest(7) || s.active == nil {
+		t.Fatal("request was not admitted")
+	}
+	if !s.Cancel(7) {
+		t.Fatal("active request was not canceled")
+	}
+	if s.HasRequest(7) || s.active != nil {
+		t.Fatal("canceled request still owns scheduler state")
 	}
 }
 

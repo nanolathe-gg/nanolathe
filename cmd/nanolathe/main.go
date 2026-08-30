@@ -52,6 +52,9 @@ func mainOptions(args []string, out io.Writer) (Options, int, bool) {
 // runOptions executes a parsed command line and returns the process exit code.
 func runOptions(opts Options, out, errOut *os.File) int {
 	if err := run(opts, out); err != nil {
+		if errors.Is(err, errHeadlessTickLimit) {
+			return 2
+		}
 		fmt.Fprintln(errOut, err)
 		return 1
 	}
@@ -76,13 +79,22 @@ func seedsFor(opts Options) (sim, crt uint32) {
 }
 
 func run(opts Options, out *os.File) error {
-	fmt.Fprintf(out, "%s\n", version.ProfileID())
+	// A file-less headless report owns stdout as one JSON document. Windowed
+	// runs and headless runs with a separate report file retain the profile
+	// banner on stdout.
+	if !opts.Headless || opts.Report != "" {
+		fmt.Fprintf(out, "%s\n", version.ProfileID())
+	}
 
 	content, err := openContent(opts)
 	if err != nil {
 		return err
 	}
 	defer content.Close()
+
+	if opts.Headless {
+		return runHeadless(opts, content, out)
+	}
 
 	// All runtime entry points compose the retail game shell. The shell opens
 	// the authored menus, or enters the battle directly when --map is supplied.

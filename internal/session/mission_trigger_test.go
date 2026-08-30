@@ -25,7 +25,7 @@ func minimalWorld() *world.Terrain {
 func TestKillUnitTypeOnlyOnDeath(t *testing.T) {
 	// KillUnitType should not advance from poll alone, only on death notification.
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}, Features: map[string]*content.FeatureDef{}}
-	w := units.NewSliced(16, cat)
+	w := newSessionFixtureWorld(16, cat)
 	def := &content.UnitDef{UnitName: "CORLAB", MaxDamage: 100, CanMove: true}
 	def.CanonicalKey = content.CanonicalKey(def.UnitName)
 	h, _ := w.Create(def, 1, numeric.FixedFromInt(0), 0, numeric.FixedFromInt(0))
@@ -56,7 +56,7 @@ func TestKillUnitTypeOnlyOnDeath(t *testing.T) {
 
 func TestCaptureUnitTypeOnlyOnTransfer(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
-	w := units.NewSliced(16, cat)
+	w := newSessionFixtureWorld(16, cat)
 	def := &content.UnitDef{UnitName: "CORLAB", MaxDamage: 100}
 	h, _ := w.Create(def, 1, 0, 0, 0)
 	u := w.Unit(h)
@@ -78,7 +78,7 @@ func TestCaptureUnitTypeOnlyOnTransfer(t *testing.T) {
 
 func TestBuildUnitTypePoll(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
-	w := units.NewSliced(16, cat)
+	w := newSessionFixtureWorld(16, cat)
 	def := &content.UnitDef{UnitName: "ARMSY", MaxDamage: 100}
 	def.CanonicalKey = content.CanonicalKey(def.UnitName)
 	tr := triggers.New(triggers.KindBuildUnitType, "ARMSY", 1)

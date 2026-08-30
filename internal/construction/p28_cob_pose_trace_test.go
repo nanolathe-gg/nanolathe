@@ -30,7 +30,7 @@ func p28RetailFactoryWorld(t *testing.T) (*content.Catalog, *units.World, func(*
 	if err != nil {
 		t.Fatalf("compile retail catalog: %v", err)
 	}
-	w := units.NewSliced(len(cat.Units), cat)
+	w := newConstructionFixtureWorld(len(cat.Units), cat)
 	sim := rng.NewSimulation(1)
 	w.SetSimulationRNG(&sim)
 	models := make(map[string]*model.Model)

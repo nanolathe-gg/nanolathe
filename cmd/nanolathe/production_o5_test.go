@@ -182,6 +182,7 @@ func queueFixtureCatalog() (*content.Catalog, *content.UnitDef, *content.UnitDef
 	builder := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "builder"}, UnitName: "builder", Builder: true, CanMove: true, CanAttack: true, FootprintX: 2, FootprintZ: 2, MaxDamage: 100, Weapon1Def: weapon}
 	product := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "product"}, UnitName: "product", FootprintX: 3, FootprintZ: 2, YardMap: "oooooo", MaxDamage: 100}
 	target := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "target"}, UnitName: "target", CanMove: true, FootprintX: 2, FootprintZ: 2, MaxDamage: 100}
+	authorTestUnitScripts(builder, product, target)
 	cat := &content.Catalog{
 		Units:      map[string]*content.UnitDef{builder.CanonicalKey: builder, product.CanonicalKey: product, target.CanonicalKey: target},
 		Weapons:    map[string]*content.WeaponDef{weapon.CanonicalKey: weapon},

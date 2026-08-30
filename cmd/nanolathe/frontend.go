@@ -530,29 +530,12 @@ func (g *gameShell) missionDifficulty() int {
 }
 
 func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) error {
-	if sess == nil {
-		return fmt.Errorf("nil session")
-	}
-	terrain := sess.World
-	if terrain == nil {
-		return fmt.Errorf("selected mission has no terrain data")
-	}
-	const winW, winH = 640, 480
-	g.cam = &camera.Camera{
-		X: 0, Z: 0, ViewW: winW, ViewH: winH,
-		MapW: int32(terrain.CellW * 16), MapH: int32(terrain.CellH * 16),
-	}
-	g.cam.Pan(0, 0)
-	centerOnCommanderForSession(sess, g.cam, winW, winH)
-	pal, err := loadPaletteStrict(g.cs)
+	battle, err := composeBattleEntry(sess, cat, g.cs, clPtr, g)
 	if err != nil {
 		return err
 	}
-	battleHUD, err := loadRetailBattleHUD(g.cs.fs, sess, cat, pal)
-	if err != nil {
-		return err
-	}
-	g.battle = &battleSession{sess: sess, cat: cat, cam: g.cam, hud: battleHUD, fs: g.cs.fs, shell: g}
+	g.cam = battle.cam
+	g.battle = battle
 	g.battle.returnToMenu = g.returnFromBattle
 	g.battle.returnToSkirmish = func(cl *client.Client) {
 		if g != nil {
@@ -574,23 +557,6 @@ func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) err
 		}
 	}
 	g.frontend.SetMode(modeBattle)
-	if clPtr != nil {
-		clPtr.SetSnapshot(sess.Snapshot)
-		clPtr.SetTerrain(terrain)
-		clPtr.SetCamera(g.cam)
-		if pal != nil {
-			clPtr.SetPalette(pal)
-		}
-		clPtr.SetFNT(battleHUD.console)
-		clPtr.SetUIStage(battleHUDUIStage{hud: battleHUD, battle: g.battle})
-		// The menu morphs its own client into the battle rather than building a
-		// new one, so it must make the same session joins the direct battle
-		// entry makes. Without this the client has no presentation CRT, and
-		// every consumer of that stream degrades silently: nano particles all
-		// draw the same trajectory, screen shake never jitters, and no cue
-		// reaches the audio device [01 §7.2][03 §5.5][03 §5.6][03 §8.3].
-		attachBattleAudio(clPtr, sess, g.cs.fs)
-	}
 	return nil
 }
 

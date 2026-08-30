@@ -266,10 +266,10 @@ func TestLoop_DeathFinalizeBeforeLaterSlot(t *testing.T) {
 		if h == hB {
 			finalizeTick = s.Clock.GlobalTick
 			if a := s.Units.Unit(hA); a != nil {
-				aAtFinalize = a.PriorSample
+				aAtFinalize = a.CurrentSample
 			}
 			if c := s.Units.Unit(hC); c != nil {
-				cAtFinalize = c.PriorSample
+				cAtFinalize = c.CurrentSample
 			}
 		}
 	}
@@ -294,13 +294,15 @@ func TestLoop_DeathFinalizeBeforeLaterSlot(t *testing.T) {
 	uB.DeathCause = units.DeathKilled
 	s.Clock.GlobalTick = 30
 	s.stepAuthoritativePhases(30)
-	// At tick 30, A's pre-update has run before B finalization, while C's has
-	// not. After the full sweep both live units must have observed the update.
+	// At the first 30-tick boundary, pre-update writes the sampled percentage
+	// to CurrentSample and shifts the prior (initially zero) window separately
+	// [04 §5.1]. A has run before B finalization while C has not; after the full
+	// sweep both live units must have observed the update.
 	if finalizeTick != 30 || aAtFinalize == 0 || cAtFinalize != 0 {
 		t.Fatalf("visit/finalize order not observable: finalizeTick=%d A-sample=%d C-sample=%d", finalizeTick, aAtFinalize, cAtFinalize)
 	}
-	if s.Units.Unit(hA).PriorSample == 0 || s.Units.Unit(hC).PriorSample == 0 {
-		t.Fatalf("later sweep visits did not update live-unit samples: A=%d C=%d", s.Units.Unit(hA).PriorSample, s.Units.Unit(hC).PriorSample)
+	if s.Units.Unit(hA).CurrentSample == 0 || s.Units.Unit(hC).CurrentSample == 0 {
+		t.Fatalf("later sweep visits did not update live-unit samples: A=%d C=%d", s.Units.Unit(hA).CurrentSample, s.Units.Unit(hC).CurrentSample)
 	}
 	// The slot-end lifecycle must free the dead record while retaining later slots.
 	if s.Units.Unit(hB) != nil {

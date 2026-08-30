@@ -43,7 +43,7 @@ func p28CompletionFixture(t *testing.T, count int) (*Service, *units.Unit, *unit
 	productDef.ActivateWhenBuilt = true
 	cat.Units[factoryDef.CanonicalKey] = factoryDef
 	cat.Units[productDef.CanonicalKey] = productDef
-	w := units.NewSliced(12, cat)
+	w := newConstructionFixtureWorld(12, cat)
 	fh, err := w.Create(factoryDef, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)

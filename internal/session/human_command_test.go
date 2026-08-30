@@ -9,13 +9,12 @@ import (
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 func TestHumanCommandSequenceAndDueTickAreSessionOwned(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "scout"}, UnitName: "scout", MaxDamage: 10}
-	w := units.NewSliced(8, cat)
+	w := newSessionFixtureWorld(8, cat)
 	first, _ := w.Create(def, 0, 0, 0, 0)
 	second, _ := w.Create(def, 0, 0, 0, 0)
 	s := &Session{Units: w, LocalOwner: 0, Clock: &clock.State{GlobalTick: 7}}
@@ -50,7 +49,7 @@ func TestHumanCommandSequenceAndDueTickAreSessionOwned(t *testing.T) {
 
 func TestHumanSelectionCommandDrainsAtInputBoundary(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
-	w := units.NewSliced(8, cat)
+	w := newSessionFixtureWorld(8, cat)
 	def := &content.UnitDef{UnitName: "armcom", MaxDamage: 100}
 	def.CanonicalKey = "armcom"
 	h, err := w.Create(def, 0, 0, 0, 0)
@@ -84,7 +83,7 @@ func TestHumanCommandKindsQueueAndApplyAtBoundary(t *testing.T) {
 	factoryDef.CanonicalKey = "factory"
 	cat.Units[builderDef.CanonicalKey] = builderDef
 	cat.Units[factoryDef.CanonicalKey] = factoryDef
-	builderWorld := units.NewSliced(16, cat)
+	builderWorld := newSessionFixtureWorld(16, cat)
 	hBuilder, _ := builderWorld.Create(builderDef, 0, 0, 0, 0)
 	hFactory, _ := builderWorld.Create(factoryDef, 0, 4<<16, 0, 0)
 	s := &Session{Units: builderWorld, Catalog: cat, LocalOwner: 0}
@@ -122,7 +121,7 @@ func TestSelectionThenImplicitOrderAndStopUsesCurrentSelection(t *testing.T) {
 	def := &content.UnitDef{UnitName: "scout", CanMove: true, MaxDamage: 100}
 	def.CanonicalKey = "scout"
 	cat.Units[def.CanonicalKey] = def
-	w := units.NewSliced(8, cat)
+	w := newSessionFixtureWorld(8, cat)
 	h, _ := w.Create(def, 0, 0, 0, 0)
 	s := &Session{Units: w, Catalog: cat, LocalOwner: 0}
 	_ = s.EnqueueHumanCommand(HumanCommand{Kind: HumanSelectionReplace, Selection: HumanSelectionCommand{Handles: []pool.Handle{h}}})
@@ -151,7 +150,7 @@ func TestHumanBuildMetadataIsStampedAtInputBoundary(t *testing.T) {
 	fdef := &content.UnitDef{UnitName: "factory", Builder: true, CanMove: false, MaxDamage: 10}
 	fdef.CanonicalKey = "factory"
 	cat.Units[fdef.CanonicalKey] = fdef
-	w := units.NewSliced(8, cat)
+	w := newSessionFixtureWorld(8, cat)
 	hb, _ := w.Create(bdef, 0, 0, 0, 0)
 	hf, _ := w.Create(fdef, 0, 0, 0, 0)
 	s := &Session{Units: w, Catalog: cat, LocalOwner: 0}
@@ -189,7 +188,7 @@ func TestHumanCancelWithoutQueueBindsLazyQueue(t *testing.T) {
 	def := &content.UnitDef{UnitName: "builder", Builder: true, CanMove: true, MaxDamage: 10}
 	def.CanonicalKey = "builder"
 	cat.Units[def.CanonicalKey] = def
-	w := units.NewSliced(4, cat)
+	w := newSessionFixtureWorld(4, cat)
 	h, _ := w.Create(def, 0, 0, 0, 0)
 	s := &Session{Units: w, Catalog: cat, LocalOwner: 0}
 	s.applyHumanCommand(HumanCommand{Kind: HumanCancelProduction, CancelProduction: HumanCancelProductionCommand{Unit: h}}, 1)
@@ -208,7 +207,7 @@ func TestHumanBuildPageUsesAuthoritativeBuilderAndAuthoredPageGuard(t *testing.T
 	cat.Units[bdef.CanonicalKey], cat.Units[other.CanonicalKey] = bdef, other
 	buttons := []string{"armsolar", "armmex", "armlab", "armllt", "armstump", "armham", "armflash"}
 	cat.BuildMenus[bdef.CanonicalKey] = &content.BuildMenuPage{Buttons: buttons}
-	w := units.NewSliced(8, cat)
+	w := newSessionFixtureWorld(8, cat)
 	h, _ := w.Create(bdef, 0, 0, 0, 0)
 	ho, _ := w.Create(other, 0, 0, 0, 0)
 	w.Unit(h).Flags |= 0x10
@@ -247,7 +246,7 @@ func TestHumanBuildPageSelectionThenPageSameBoundary(t *testing.T) {
 	bdef.CanonicalKey = "builder"
 	cat.Units[bdef.CanonicalKey] = bdef
 	cat.BuildMenus[bdef.CanonicalKey] = &content.BuildMenuPage{Buttons: []string{"a", "b", "c", "d", "e", "f", "g"}}
-	w := units.NewSliced(8, cat)
+	w := newSessionFixtureWorld(8, cat)
 	h, _ := w.Create(bdef, 0, 0, 0, 0)
 	s := &Session{Units: w, Catalog: cat, LocalOwner: 0}
 	_ = s.EnqueueHumanCommand(HumanCommand{Kind: HumanSelectionReplace, Selection: HumanSelectionCommand{Handles: []pool.Handle{h}}})
@@ -265,7 +264,7 @@ func TestCommandPagePublicationIsImmutableAndUsesSelectedPage(t *testing.T) {
 	cat.Units[bdef.CanonicalKey] = bdef
 	menu := &content.BuildMenuPage{Buttons: []string{"a", "b", "c", "d", "e", "f", "g"}}
 	cat.BuildMenus[bdef.CanonicalKey] = menu
-	w := units.NewSliced(8, cat)
+	w := newSessionFixtureWorld(8, cat)
 	h, _ := w.Create(bdef, 0, 0, 0, 0)
 	w.Unit(h).Flags = 0x10 | hud.EncodePageBits(0, 1)
 	s := &Session{Units: w, Catalog: cat, LocalOwner: 0, Snapshot: &frame.Buffer{}}
@@ -293,7 +292,7 @@ func TestHumanBuildPageRejectsMixedAndMultiBuilderSelection(t *testing.T) {
 	cat.Units[otherBuilder.CanonicalKey] = otherBuilder
 	cat.BuildMenus[bdef.CanonicalKey] = &content.BuildMenuPage{Buttons: []string{"a", "b", "c", "d", "e", "f", "g"}}
 	cat.BuildMenus[otherBuilder.CanonicalKey] = &content.BuildMenuPage{Buttons: []string{"a", "b", "c", "d", "e", "f", "g"}}
-	w := units.NewSliced(8, cat)
+	w := newSessionFixtureWorld(8, cat)
 	h, _ := w.Create(bdef, 0, 0, 0, 0)
 	n, _ := w.Create(workerDef, 0, 0, 0, 0)
 	o, _ := w.Create(otherBuilder, 0, 0, 0, 0)
@@ -344,7 +343,7 @@ func TestHumanGroupDoesNotWriteAIUnits(t *testing.T) {
 	def := &content.UnitDef{UnitName: "scout", MaxDamage: 10}
 	def.CanonicalKey = "scout"
 	cat.Units[def.CanonicalKey] = def
-	w := units.NewSliced(4, cat)
+	w := newSessionFixtureWorld(4, cat)
 	human, err := w.Create(def, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)

@@ -383,8 +383,17 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 		if n.Closed || !n.Open || f != n.F {
 			continue
 		}
-		n.Open, n.Closed = false, true
+		// Class-layer revisions can change while this working set spans ticks.
+		// Revalidate an existing open node at expansion time instead of trusting
+		// the value captured when it entered the heap [04 §7.4].
 		e := s.entries[n.Cell]
+		if s.passValue(n.Cell) == 0 && e.status&8 == 0 {
+			n.Open, n.Closed = false, true
+			e.status = (e.status &^ 3) | 3
+			s.touch(n.Cell, e)
+			continue
+		}
+		n.Open, n.Closed = false, true
 		e.status = (e.status &^ 3) | 2
 		s.touch(n.Cell, e)
 		if e.status&4 != 0 || s.isGoal(n.Cell) {

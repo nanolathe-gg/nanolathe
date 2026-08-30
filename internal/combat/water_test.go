@@ -25,7 +25,7 @@ func mkWaterWorldDef(name string, canHover bool, armored bool, dmgMod int32) *co
 }
 
 func mkWaterWorld() (*units.World, *world.Terrain) {
-	w := units.NewSliced(4, nil)
+	w := newCombatFixtureWorld(4, nil)
 	ter := &world.Terrain{CellW: 10, CellH: 10, SeaLevel: 10}
 	return w, ter
 }

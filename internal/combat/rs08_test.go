@@ -186,7 +186,7 @@ func TestRS08_AimReturnSemantics(t *testing.T) {
 
 // TestRS08_CandidateFacts verifies ally excluded, cloaked/underwater/category truth table [06 §3.1][03 §3.2].
 func TestRS08_CandidateFacts(t *testing.T) {
-	w := units.NewSliced(10, nil)
+	w := newCombatFixtureWorld(10, nil)
 	terrain := &world.Terrain{CellW: 100, CellH: 100, Gravity: numeric.Fixed(0)}
 	terrain.Plot = make([]world.PlotCell, 100*100)
 	terrain.SeaLevel = 10 // sea level 10
@@ -253,7 +253,7 @@ func TestRS08_CandidateFacts(t *testing.T) {
 	}
 	// Test category preference: create two enemies both valid distance, one preferred (ARM TANK) and one fallback (VTOL)
 	// Reset world: create new shooter and two enemies at equal distance
-	w2 := units.NewSliced(10, nil)
+	w2 := newCombatFixtureWorld(10, nil)
 	terrain2 := &world.Terrain{CellW: 100, CellH: 100, Gravity: numeric.Fixed(0)}
 	terrain2.Plot = make([]world.PlotCell, 100*100)
 	sh2H, _ := w2.Create(defShooter, 0, numeric.FixedFromInt(int64(10)), numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(10)))
@@ -337,7 +337,7 @@ func TestRS08_SamplingBoundary50_51(t *testing.T) {
 
 // TestRS08_NaturalFireImpactDeath verifies fire→impact→death without pool injection [06 §5][06 §9].
 func TestRS08_NaturalFireImpactDeath(t *testing.T) {
-	w := units.NewSliced(10, nil)
+	w := newCombatFixtureWorld(10, nil)
 	terrain := &world.Terrain{CellW: 100, CellH: 100, Gravity: numeric.Fixed(0)}
 	terrain.Plot = make([]world.PlotCell, 100*100)
 	terrain.SeaLevel = 0
@@ -403,7 +403,7 @@ func TestRS08_NaturalFireImpactDeath(t *testing.T) {
 
 // TestRS08_VisibilityCanonical ensures acquisition routes through canonical predicate.
 func TestRS08_VisibilityCanonical(t *testing.T) {
-	w := units.NewSliced(10, nil)
+	w := newCombatFixtureWorld(10, nil)
 	terrain := &world.Terrain{CellW: 64, CellH: 64, Gravity: numeric.Fixed(0), SeaLevel: 0}
 	terrain.Plot = make([]world.PlotCell, 64*64)
 	defShooter := &content.UnitDef{UnitName: "shooter", MaxDamage: 100, Category: "ARM", SightDistance: 300, Limit: -1, FootprintX: 1, FootprintZ: 1}

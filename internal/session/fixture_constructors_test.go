@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/binary"
 	"fmt"
 	"sort"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/clock"
+	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -23,6 +25,77 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
+
+// fixtureCOBProgram supplies the smallest authored program needed by tests
+// whose subject is not script execution. Unit creation rejects a missing or
+// empty program before allocation [R-COB-04 §8]; RETURN is a complete COB
+// instruction [04 §4.3]. Production composition never calls this helper.
+func fixtureCOBProgram() *cob.Program {
+	return &cob.Program{
+		Code:    []uint32{0x10065000},
+		Scripts: map[string]int{},
+		Pieces:  []string{"base"},
+	}
+}
+
+type sessionFixtureCOBFS struct{}
+
+func (sessionFixtureCOBFS) Open(string) (vfs.File, error) { return nil, vfs.ErrNotFound }
+
+func (sessionFixtureCOBFS) ReadFileLimit(name string, _ int64) ([]byte, error) {
+	if !strings.HasPrefix(strings.ToLower(name), "scripts/") {
+		return nil, vfs.ErrNotFound
+	}
+	// This is an independently authored one-script COB container [fmt cob].
+	// Its Create entry point immediately returns [04 §4.3].
+	const headerSize = 44
+	data := make([]byte, 64)
+	put := func(off, value uint32) { binary.LittleEndian.PutUint32(data[off:], value) }
+	put(0x00, 4)
+	put(0x04, 1)
+	put(0x08, 0)
+	put(0x0c, 1)
+	put(0x18, headerSize)
+	put(0x1c, headerSize+4)
+	put(0x24, headerSize+8)
+	put(headerSize, 0)
+	put(headerSize+4, headerSize+12)
+	put(headerSize+8, 0x10065000) // RETURN [04 §4.3].
+	copy(data[headerSize+12:], "Create\x00")
+	return data, nil
+}
+
+func (sessionFixtureCOBFS) ReadDir(string) ([]vfs.EntryInfo, error) { return nil, vfs.ErrNotFound }
+func (sessionFixtureCOBFS) Stat(string) (vfs.EntryInfo, error) {
+	return vfs.EntryInfo{}, vfs.ErrNotFound
+}
+func (sessionFixtureCOBFS) CacheStamp(string) (string, error) { return "session-fixture", nil }
+
+// newSessionFixtureWorld keeps non-COB tests on the production strict-binding
+// boundary while supplying their independently authored no-op program
+// [R-COB-04 §8]. Tests of missing-script rejection construct worlds directly.
+func newSessionFixtureWorld(maxDefs int, cat *content.Catalog) *units.World {
+	w := units.NewSliced(maxDefs, cat)
+	w.SetCOBSource(sessionFixtureCOBFS{}, cob.NewCachedLoader())
+	return w
+}
+
+func installFixtureCOB(cat *content.Catalog) {
+	if cat == nil {
+		return
+	}
+	keys := make([]string, 0, len(cat.Units))
+	for key := range cat.Units {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		def := cat.Units[key]
+		if def != nil && (def.Script == nil || len(def.Script.Code) == 0) {
+			def.Script = fixtureCOBProgram()
+		}
+	}
+}
 
 // scopeTestRNGStreams temporarily supplies deterministic streams to a fixture
 // constructor and restores only streams it installed.
@@ -140,6 +213,7 @@ func NewSyntheticMissionForTest(fs vfs.FSOps, cat *content.Catalog, path string,
 	if err := placeFeatures(s, m); err != nil {
 		return nil, err
 	}
+	installFixtureCOB(cat)
 	if err := reconstructUnitsFixture(s, m); err != nil {
 		return nil, err
 	}
@@ -391,6 +465,7 @@ func NewSyntheticSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 		}
 	}
 	prepareFixtureSkirmishCatalog(cat, &cfg)
+	installFixtureCOB(cat)
 	if err := skirmishPlaceFeatures(s, m); err != nil {
 		return nil, err
 	}

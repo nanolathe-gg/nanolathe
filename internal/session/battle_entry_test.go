@@ -68,7 +68,7 @@ func TestStorageBonusFloorAndEnable(t *testing.T) {
 func TestRebuildCapacityBonusInclusive(t *testing.T) {
 	var svc economy.Service
 	w := units.NewSliced(10, nil)
-	def := &content.UnitDef{}
+	def := &content.UnitDef{Script: fixtureCOBProgram()}
 	def.MaxDamage = 100
 	def.EnergyStorage = 0
 	def.MetalStorage = 0
@@ -96,7 +96,7 @@ func TestRebuildCapacityBonusInclusive(t *testing.T) {
 		t.Fatalf("without enable flag capacity should be 0 got %v %v", svc2.Players[0].Capacity[economy.Metal], svc2.Players[0].Capacity[economy.Energy])
 	}
 	// With unit storage plus bonus: unit adds 500, bonus 1000 => 1500
-	def2 := &content.UnitDef{}
+	def2 := &content.UnitDef{Script: fixtureCOBProgram()}
 	def2.MaxDamage = 100
 	def2.MetalStorage = 500
 	def2.EnergyStorage = 250

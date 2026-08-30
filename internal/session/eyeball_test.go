@@ -41,7 +41,7 @@ func newEyeballSession(t *testing.T) *Session {
 
 func spawnEyeballVictim(t *testing.T, s *Session, owner uint8, tile int32) *units.Unit {
 	t.Helper()
-	def := &content.UnitDef{UnitName: fmt.Sprintf("victim%d", owner), MaxDamage: 100, SightDistance: 160, FootprintX: 1, FootprintZ: 1}
+	def := &content.UnitDef{UnitName: fmt.Sprintf("victim%d", owner), MaxDamage: 100, SightDistance: 160, FootprintX: 1, FootprintZ: 1, Script: fixtureCOBProgram()}
 	def.CanonicalKey = content.CanonicalKey(def.UnitName)
 	h, err := s.Units.Create(def, owner, numeric.Fixed(tile*32*65536), numeric.Fixed(30*65536), numeric.Fixed(tile*32*65536))
 	if err != nil {

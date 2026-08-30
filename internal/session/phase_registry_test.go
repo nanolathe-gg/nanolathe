@@ -7,7 +7,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
@@ -29,7 +28,7 @@ func visibilityFixture(t *testing.T, withVis bool) *Session {
 		Sounds:  map[string]*content.SoundCategory{},
 	}
 	cat.Units[content.CanonicalKey("armcom")] = &content.UnitDef{UnitName: "armcom", MaxDamage: 100, SightDistance: 128}
-	uw := units.NewSliced(8, cat)
+	uw := newSessionFixtureWorld(8, cat)
 	s := &Session{
 		Catalog:  cat,
 		World:    terrain,

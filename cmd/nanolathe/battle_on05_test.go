@@ -45,6 +45,8 @@ func testCatalogON05() *content.Catalog {
 	featDef.FootprintX = 1
 	featDef.FootprintZ = 1
 
+	authorTestUnitScripts(b1, p1, p2, fac, reclaimUnit)
+
 	cat := &content.Catalog{
 		Units: map[string]*content.UnitDef{
 			b1.CanonicalKey:          b1,

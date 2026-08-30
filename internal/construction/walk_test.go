@@ -7,7 +7,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -31,7 +30,7 @@ func TestWalkToSite(t *testing.T) {
 	}
 	terrain.SeaLevel = 0
 
-	w := units.NewSliced(20, cat)
+	w := newConstructionFixtureWorld(20, cat)
 	hb, _ := w.Create(builderDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	builder := w.Unit(hb)
 	bindConstructionFixture(builder, trivialModel(1, nil), false)

@@ -6,14 +6,15 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/cob"
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 func TestP28ParityHashIncludesCurrentHealthSample(t *testing.T) {
-	w := &units.World{}
-	h, err := w.Create(nil, 1, 0, 0, 0)
+	w := newSessionFixtureWorld(1, nil)
+	def := &content.UnitDef{UnitName: "parity-health", MaxDamage: 100}
+	h, err := w.Create(def, 1, 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,7 +8,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
-	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -137,7 +136,7 @@ func TestResourceProbeKeepsIdleFactoryQueueNil(t *testing.T) {
 			def.CanonicalKey: {Buttons: []string{"idle-factory"}},
 		},
 	}
-	w := units.NewSliced(2, cat)
+	w := newAIFixtureWorld(2, cat)
 	h, err := w.Create(def, 1, world.CellToWorld(1), 0, world.CellToWorld(1))
 	if err != nil {
 		t.Fatalf("create AI-owned idle factory: %v", err)
@@ -158,7 +157,7 @@ func TestResourceProbeKeepsIdleFactoryQueueNil(t *testing.T) {
 
 func TestRegroupMoveBindsQueueBeforeSubmission(t *testing.T) {
 	def := &content.UnitDef{UnitName: "ai-mover", MaxDamage: 100, CanMove: true}
-	w := units.NewSliced(4, nil)
+	w := newAIFixtureWorld(4, nil)
 	hOwn, err := w.Create(def, 0, world.CellToWorld(1), 0, world.CellToWorld(1))
 	if err != nil {
 		t.Fatalf("create regroup unit: %v", err)
@@ -182,7 +181,7 @@ func TestRegroupMoveBindsQueueBeforeSubmission(t *testing.T) {
 
 func TestClassificationCadencePublishesGroups(t *testing.T) {
 	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "builder"}, UnitName: "builder", Builder: true}
-	w := units.NewSliced(2, &content.Catalog{Units: map[string]*content.UnitDef{"builder": def}})
+	w := newAIFixtureWorld(2, &content.Catalog{Units: map[string]*content.UnitDef{"builder": def}})
 	h, err := w.Create(def, 0, world.CellToWorld(1), 0, world.CellToWorld(1))
 	if err != nil {
 		t.Fatal(err)
@@ -212,7 +211,7 @@ func TestClassificationCadencePublishesGroups(t *testing.T) {
 func TestDispatchPrecedesStrategicRefresh(t *testing.T) {
 	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "scout"}, UnitName: "scout"}
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{"scout": def}}
-	w := units.NewSliced(1, cat)
+	w := newAIFixtureWorld(1, cat)
 	terrain := &world.Terrain{CellW: 32, CellH: 24}
 	r := rng.NewSimulation(41)
 	m := &Manager{Player: 0, Catalog: cat, RNG: &r, Terrain: terrain, GroupExplore: []pool.Handle{1}}

@@ -64,7 +64,7 @@ func TestLayerClassifierChain(t *testing.T) {
 	// Flat land (hmin=hmax=30) above sea 20: land, slope 0 → clear.
 	tr := layerTerrain(8, 8, 20)
 	l := NewClassLayer(kbotsSS2, tr, nil)
-	if got := l.classify(3, 3); got != LayerClear {
+	if got := l.classifyRect(3, 3, 3, 3); got != LayerClear {
 		t.Fatalf("flat land want clear(3) got %d", got)
 	}
 
@@ -72,17 +72,17 @@ func TestLayerClassifierChain(t *testing.T) {
 	// Depth 20 > 12: hmin(0) < 20−12=8 → blocked [R-DOC04-B stock: land
 	// classes block water deeper than authored MaxWaterDepth (KBOTSS2 12)].
 	setDerived(tr, 1, 1, 0, 0)
-	if got := l.classify(1, 1); got != LayerBlocked {
+	if got := l.classifyRect(1, 1, 1, 1); got != LayerBlocked {
 		t.Fatalf("KBOTSS2 deep water want blocked got %d", got)
 	}
 	// TANKDS2 MaxWaterDepth 100 passes the same depth [R-DOC04-B stock].
 	lt := NewClassLayer(tankDS2, tr, nil)
-	if got := lt.classify(1, 1); got != LayerClear {
+	if got := lt.classifyRect(1, 1, 1, 1); got != LayerClear {
 		t.Fatalf("TANKDS2 deep water want clear got %d", got)
 	}
 	// Depth exactly at the limit passes (hmin == sea − mwd).
 	setDerived(tr, 2, 1, 8, 8)
-	if got := l.classify(2, 1); got != LayerClear {
+	if got := l.classifyRect(2, 1, 2, 1); got != LayerClear {
 		t.Fatalf("depth == limit must pass, got %d", got)
 	}
 
@@ -91,12 +91,12 @@ func TestLayerClassifierChain(t *testing.T) {
 	lb := NewClassLayer(boats4, tr, nil)
 	// hmax 18 above the shallow ceiling sea−minwd = 17 → blocked.
 	setDerived(tr, 3, 3, 10, 18)
-	if got := lb.classify(3, 3); got != LayerBlocked {
+	if got := lb.classifyRect(3, 3, 3, 3); got != LayerBlocked {
 		t.Fatalf("boat hmax above shallow ceiling want blocked got %d", got)
 	}
 	// hmax exactly at the ceiling (17) passes.
 	setDerived(tr, 3, 3, 10, 17)
-	if got := lb.classify(3, 3); got != LayerClear {
+	if got := lb.classifyRect(3, 3, 3, 3); got != LayerClear {
 		t.Fatalf("boat hmax == ceiling must pass got %d", got)
 	}
 
@@ -107,11 +107,11 @@ func TestLayerClassifierChain(t *testing.T) {
 	tr2 := layerTerrain(8, 8, 20)
 	lw := NewClassLayer(kbotsSS2, tr2, nil)
 	setDerived(tr2, 4, 4, 8, 208) // hmin 8 < sea 20 → water; slope 200
-	if got := lw.classify(4, 4); got != LayerSteep {
+	if got := lw.classifyRect(4, 4, 4, 4); got != LayerSteep {
 		t.Fatalf("water slope 200 want steep(1) got %d", got)
 	}
 	setDerived(tr2, 4, 4, 20, 220) // hmin 20 >= sea → land; slope 200 > 32
-	if got := lw.classify(4, 4); got != LayerBlocked {
+	if got := lw.classifyRect(4, 4, 4, 4); got != LayerBlocked {
 		t.Fatalf("land slope 200 want blocked got %d", got)
 	}
 
@@ -120,19 +120,19 @@ func TestLayerClassifierChain(t *testing.T) {
 	tr3 := layerTerrain(8, 8, 20)
 	l3 := NewClassLayer(kbotsSS2, tr3, nil)
 	setDerived(tr3, 5, 1, 20, 36) // slope 16 == bad → clear
-	if got := l3.classify(5, 1); got != LayerClear {
+	if got := l3.classifyRect(5, 1, 5, 1); got != LayerClear {
 		t.Fatalf("slope == bad want clear(3) got %d", got)
 	}
 	setDerived(tr3, 5, 2, 20, 37) // slope 17 → steep
-	if got := l3.classify(5, 2); got != LayerSteep {
+	if got := l3.classifyRect(5, 2, 5, 2); got != LayerSteep {
 		t.Fatalf("slope bad+1 want steep(1) got %d", got)
 	}
 	setDerived(tr3, 5, 3, 20, 52) // slope 32 == max → steep, not blocked
-	if got := l3.classify(5, 3); got != LayerSteep {
+	if got := l3.classifyRect(5, 3, 5, 3); got != LayerSteep {
 		t.Fatalf("slope == max want steep(1) got %d", got)
 	}
 	setDerived(tr3, 5, 4, 20, 53) // slope 33 > max → blocked
-	if got := l3.classify(5, 4); got != LayerBlocked {
+	if got := l3.classifyRect(5, 4, 5, 4); got != LayerBlocked {
 		t.Fatalf("slope > max want blocked(0) got %d", got)
 	}
 
@@ -141,7 +141,7 @@ func TestLayerClassifierChain(t *testing.T) {
 	tr4 := layerTerrain(8, 8, 0)
 	l4 := NewClassLayer(spid3, tr4, nil)
 	setDerived(tr4, 2, 2, 0, 255)
-	if got := l4.classify(2, 2); got != LayerSteep {
+	if got := l4.classifyRect(2, 2, 2, 2); got != LayerSteep {
 		t.Fatalf("spider slope 255 want steep(1), passable, got %d", got)
 	}
 
@@ -150,15 +150,15 @@ func TestLayerClassifierChain(t *testing.T) {
 	tr5 := layerTerrain(8, 8, 20)
 	l5 := NewClassLayer(kbotsSS2, tr5, nil)
 	setFeatureIndex(tr5, 6, 6, 0, &content.FeatureDef{Blocking: true})
-	if got := l5.classify(6, 6); got != LayerBlocked {
+	if got := l5.classifyRect(6, 6, 6, 6); got != LayerBlocked {
 		t.Fatalf("blocking feature want blocked got %d", got)
 	}
 	setFeatureIndex(tr5, 6, 6, 0, &content.FeatureDef{Blocking: false})
-	if got := l5.classify(6, 6); got != LayerClear {
+	if got := l5.classifyRect(6, 6, 6, 6); got != LayerClear {
 		t.Fatalf("non-blocking feature want clear got %d", got)
 	}
 	tr5.PlotAt(7, 7).SetFeature(world.PlotFeatureVoid)
-	if got := l5.classify(7, 7); got != LayerBlocked {
+	if got := l5.classifyRect(7, 7, 7, 7); got != LayerBlocked {
 		t.Fatalf("void cell want blocked got %d", got)
 	}
 }
@@ -238,63 +238,27 @@ func TestLayerPacking(t *testing.T) {
 	}
 }
 
-// TestLayerContagion locks the two-direction contagion pass [04 §6.1
-// R-DOC04-B]: a clear cell bordering (4-neighbourhood, in-window) a non-clear
-// cell is demoted to steep; map edges are not obstructions; diagonal-only
-// neighbours do not demote. The sweeps read the layer in place, so a demoted
-// cell demotes its successor in the sweep direction (the documented
-// TODO(question) on the sweep's read semantics).
-func TestLayerContagion(t *testing.T) {
-	tr := layerTerrain(16, 16, 20)
+func TestLayerFootprintAggregateAndRing(t *testing.T) {
+	tr := layerTerrain(12, 12, 20)
 	l := NewClassLayer(kbotsSS2, tr, nil)
-	// A blocked column at x=8.
-	for z := int32(0); z < 16; z++ {
-		setDerived(tr, 8, z, 0, 0)
-		l.setValue(8, z, LayerBlocked)
+	setDerived(tr, 4, 4, 0, 0)
+	if got := l.classify(3, 3); got != LayerBlocked {
+		t.Fatalf("blocked cell inside 2x2 footprint want blocked got %d", got)
 	}
-	l.Contagion()
-	if got := l.Value(7, 5); got != LayerSteep {
-		t.Fatalf("clear west of blocked column want steep(1) got %d", got)
-	}
-	if got := l.Value(9, 5); got != LayerSteep {
-		t.Fatalf("clear east of blocked column want steep(1) got %d", got)
-	}
-	if got := l.Value(6, 5); got != LayerClear {
-		t.Fatalf("two cells away want clear(3) got %d", got)
-	}
-	// Map edge: column 0 has no out-of-map neighbour in the window; with its
-	// in-window neighbours clear it stays clear.
-	if got := l.Value(0, 0); got != LayerClear {
-		t.Fatalf("map edge with clear in-window neighbours want clear got %d", got)
-	}
-	// Vertical-only obstruction: blocked row segment at z=12 (x<8) demotes
-	// the cells below via the column scan.
-	for x := int32(0); x < 8; x++ {
-		setDerived(tr, x, 12, 0, 0)
-		l.setValue(x, 12, LayerBlocked)
-	}
-	l.Contagion()
-	if got := l.Value(3, 13); got != LayerSteep {
-		t.Fatalf("clear south of blocked row want steep got %d", got)
-	}
-	// The sweeps evaluate against their start state: one cell further south
-	// keeps its clear tier (no cascade across the map).
-	if got := l.Value(3, 14); got != LayerClear {
-		t.Fatalf("no cascade: want clear got %d", got)
-	}
-	// Diagonal-only: (11,11) touches neither obstruction orthogonally.
-	if got := l.Value(11, 11); got != LayerClear {
-		t.Fatalf("diagonal-only neighbour must stay clear got %d", got)
+	setDerived(tr, 4, 4, 30, 30)
+	setDerived(tr, 2, 3, 20, 37)
+	if got := l.classify(3, 3); got != LayerSteep {
+		t.Fatalf("non-clear outside ring must demote clear footprint, got %d", got)
 	}
 }
 
-// TestRevisionWatermarkArithmetic locks max(tick, 30) − 30 [04 §6.1
-// R-DOC04-B]: the first revision arms at zero; later revisions advance it.
+// TestRevisionWatermarkArithmetic locks max(tick, 31) − 30
+// [04 R-PATH-01 §2].
 func TestRevisionWatermarkArithmetic(t *testing.T) {
 	cases := []struct {
 		tick, want uint32
 	}{
-		{0, 0}, {1, 0}, {29, 0}, {30, 0}, {31, 1}, {45, 15}, {60, 30}, {61, 31},
+		{0, 1}, {1, 1}, {29, 1}, {30, 1}, {31, 1}, {32, 2}, {45, 15}, {60, 30}, {61, 31},
 	}
 	for _, c := range cases {
 		if got := revisionWatermark(c.tick); got != c.want {
@@ -311,9 +275,8 @@ func (a testAnchors) CommittedAnchor(h pool.Handle, footX, footZ int16) (Cell, b
 	return c, ok
 }
 
-// TestLayerRevisionPass locks the request revision pass [04 §6.1 R-DOC04-B]:
-// watermark set, requester commit tick refreshed, fresh (window) footprints
-// re-stamped, stale occupants block re-stamped cells, dead units skipped.
+// TestLayerRevisionPass locks the crossed-window cohort and temporary
+// requester commit of [04 R-MOV-03 §3].
 func TestLayerRevisionPass(t *testing.T) {
 	tr := layerTerrain(32, 32, 20)
 	grid := NewOccupancyGrid()
@@ -338,23 +301,19 @@ func TestLayerRevisionPass(t *testing.T) {
 	}
 	l := NewClassLayer(kbotsSS2, tr, grid)
 	l.NoteCommit(hReq, 50)
-	l.NoteCommit(hFresh, 45) // within the window [30, 60)
-	l.NoteCommit(hStale, 5)  // predates the watermark
-	// A dead unit whose tick would be in the window must be skipped.
+	l.NoteCommit(hFresh, 45) // outside the crossed window [0,30)
+	l.NoteCommit(hStale, 5)  // inside the crossed window [0,30)
+	// A dead unit is skipped even when otherwise eligible.
 	fresh := w.Unit(hFresh)
 	fresh.Alive = false
 	defer func() { fresh.Alive = true }()
-	// Corrupt the fresh unit's footprint cells; a re-stamp must restore them.
+	// Corrupt both cohort footprints so the restamp choice is observable.
 	for z := int32(10); z < 12; z++ {
 		for x := int32(10); x < 12; x++ {
 			l.setValue(x, z, LayerBlocked)
 		}
 	}
-	// Stale occupant on a cell the requester's footprint re-stamps: the gate
-	// consults the cell's occupant, whose tick predates the watermark → 0.
-	grid.Stamp(Cell{X: 2, Z: 2}, 1, 1, int(hStale))
-	// Corrupt one of the stale unit's own cells: not in the re-stamp set, so
-	// the corruption survives (only fresh footprints re-stamp).
+	grid.Stamp(Cell{X: 20, Z: 20}, 1, 1, int(hStale))
 	l.setValue(20, 20, LayerSteep)
 
 	l.Revise(60, hReq, w, anchors)
@@ -362,30 +321,30 @@ func TestLayerRevisionPass(t *testing.T) {
 	if l.Watermark() != 30 {
 		t.Fatalf("watermark want 30 got %d", l.Watermark())
 	}
-	if c, _ := l.CommitTick(hReq); c != 60 {
-		t.Fatalf("requester commit tick want refreshed 60 got %d", c)
+	if c, _ := l.CommitTick(hReq); c != 50 {
+		t.Fatalf("requester commit tick was not restored: want 50 got %d", c)
 	}
-	// Fresh-but-dead unit: not re-stamped (corruption survives).
+	// Outside-window/dead unit: not re-stamped (corruption survives).
 	if got := l.Value(10, 10); got != LayerBlocked {
 		t.Fatalf("dead unit must not re-stamp, got %d", got)
 	}
-	// Requester (tick refreshed into the window) re-stamps its rectangle; the
-	// stale occupant at (2,2) blocks that cell via the gate, the rest clear.
-	if got := l.Value(2, 2); got != LayerBlocked {
-		t.Fatalf("stale occupant must block re-stamped cell, got %d", got)
+	// The [0,30) cohort is re-stamped after watermark 30, so its frozen
+	// occupancy hard-blocks its anchor.
+	if got := l.Value(20, 20); got != LayerBlocked {
+		t.Fatalf("crossed-window stale occupant must re-stamp blocked, got %d", got)
 	}
-	if got := l.Value(3, 2); got != LayerClear {
-		t.Fatalf("requester footprint re-stamp want clear got %d", got)
-	}
-	// Stale unit's own cells: not re-stamped (corruption survives).
-	if got := l.Value(20, 20); got != LayerSteep {
-		t.Fatalf("stale unit must not re-stamp, got %d", got)
-	}
-	// Revive the fresh unit and revise again: its footprint restores.
-	fresh.Alive = true
+
+	// A requester older than the old watermark is re-stamped with its commit
+	// temporarily set to the current tick, then receives its real tick back.
+	l.NoteCommit(hReq, 5)
+	grid.Stamp(Cell{X: 2, Z: 2}, 1, 1, int(hReq))
+	l.setValue(2, 2, LayerBlocked)
 	l.Revise(61, hReq, w, anchors)
-	if got := l.Value(10, 10); got != LayerClear {
-		t.Fatalf("revived fresh unit footprint re-stamped, got %d", got)
+	if c, _ := l.CommitTick(hReq); c != 5 {
+		t.Fatalf("requester old commit was not restored: want 5 got %d", c)
+	}
+	if got := l.Value(2, 2); got == LayerBlocked {
+		t.Fatalf("requester blocked itself during temporary-commit restamp")
 	}
 }
 

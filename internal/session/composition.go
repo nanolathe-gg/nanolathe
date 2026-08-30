@@ -650,6 +650,9 @@ func createAndBindServices(s *Session) error {
 	}
 	// Bind movement classes explicitly [02 "Movement class record"]
 	s.Movement.SetClasses(s.Catalog.Movement)
+	// Path work is shared across the existing session players and uses the
+	// session unit-limit word as its pressure divisor [04 R-PATH-01 §6].
+	s.Movement.ConfigurePath(s.activePlayerCount(), sessionPathUnitLimit(s))
 	// Path is alias to movement scheduler; one scheduler only [04 §7.3]
 	if s.Movement.Scheduler == nil {
 		return fmt.Errorf("session: Movement.Scheduler nil")
@@ -807,6 +810,19 @@ func createAndBindServices(s *Session) error {
 		s.InitAudio(nil)
 	}
 	return nil
+}
+
+func sessionPathUnitLimit(s *Session) int32 {
+	// Skirmish copies the clamped Preferences UnitLimit, whose established
+	// missing-value default is 250 [08 R-SKIR-01 §6].
+	limit := int32(250)
+	if s != nil && s.Mission != nil && s.Mission.Type == mission.TypeCampaign && s.Mission.OTA != nil {
+		limit = mission.DecodeMissionGlobals(s.Mission.OTA.Global).MaxUnits
+	}
+	// TODO(question): surface the loaded Preferences UnitLimit and restored
+	// save Summary word on Session; until then skirmish/save composition can
+	// only supply the established missing-preference default above.
+	return limit
 }
 
 // visibilityModeForSession computes the LOS mode word from SkirmishConfig [08 "Skirmish configuration"][03 §3.1] C2.

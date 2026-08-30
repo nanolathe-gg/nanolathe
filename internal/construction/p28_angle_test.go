@@ -15,7 +15,7 @@ import (
 func TestP28FactoryProductKeepsSampledHeadingAndAxisAlignedFootprint(t *testing.T) {
 	sim := rng.NewSimulation(67)
 	expected := rng.NewSimulation(67)
-	unitWorld := units.NewSliced(4, nil)
+	unitWorld := newConstructionFixtureWorld(4, nil)
 	unitWorld.SetSimulationRNG(&sim)
 	factoryDef := &content.UnitDef{UnitName: "factory", BuildAngle: 0, MaxDamage: 100, Limit: -1}
 	factoryHandle, err := unitWorld.Create(factoryDef, 0, 0, 0, 0)
@@ -72,7 +72,7 @@ func TestP28FactoryState2FailuresDoNotAdvanceAngleStream(t *testing.T) {
 	setup := func(t *testing.T, seed uint32) (*Service, *units.Unit, *orders.Node, *rng.Simulation, *world.Terrain) {
 		t.Helper()
 		sim := rng.NewSimulation(seed)
-		unitWorld := units.NewSliced(4, nil)
+		unitWorld := newConstructionFixtureWorld(4, nil)
 		unitWorld.SetSimulationRNG(&sim)
 		factoryDef := newFactoryDef("factory", 2, 2, 300)
 		factoryDef.BuildAngle = 0

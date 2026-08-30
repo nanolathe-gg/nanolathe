@@ -9,11 +9,10 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// TestStaticLayerIgnoresTransientMover locks [04 §8.2] static-layer pathing:
-// mobile units are NOT A* walls; pathing runs on the static layer (terrain +
-// static features + yard/building occupancy) and arbitrates at commit.
-// A route must be found through a cell occupied only by a transient mover.
-func TestStaticLayerIgnoresTransientMover(t *testing.T) {
+// TestClassLayerAvoidsStaleMover locks the occupant-age channel: a mover whose
+// commit predates the request watermark is a path obstacle until it commits
+// occupancy again [04 R-PATH-01 §2].
+func TestClassLayerAvoidsStaleMover(t *testing.T) {
 	terrain := syntheticTerrainForIntegrate()
 	// Flat terrain ensures IsPassableFootprint is true everywhere for ground profile.
 	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
@@ -68,10 +67,10 @@ func TestStaticLayerIgnoresTransientMover(t *testing.T) {
 		t.Fatalf("route should be active through transient mover cell [04 §8.2] static layer, got active=%v status=%v", route.Active, route.Status)
 	}
 	if route.Status == path.StatusRejected {
-		t.Fatalf("route rejected despite static-layer ignore of mover")
+		t.Fatalf("route rejected instead of diverting around stale mover")
 	}
-	// Route should be deterministic regardless of mover presence.
-	// Compute reference route without mover via direct path.Search on same static passability.
+	// Compute the unobstructed reference. The stale mover must force a
+	// different route rather than being deferred solely to commit arbitration.
 	refProfile := sys.ProfileFor(hReq)
 	refIsPassable := func(c path.Cell) bool {
 		if !refProfile.IsPassableFootprint(terrain, c.X, c.Z) {
@@ -99,13 +98,8 @@ func TestStaticLayerIgnoresTransientMover(t *testing.T) {
 	if len(ref.Points) == 0 || ref.Status != 0 {
 		t.Fatalf("reference static route should succeed")
 	}
-	if int(route.Count) != len(ref.Points) {
-		t.Fatalf("route count with mover present %d vs reference static %d should match [04 §8.2] mover not a wall", route.Count, len(ref.Points))
-	}
-	for i := 0; i < len(ref.Points); i++ {
-		if route.Points[i].X != ref.Points[i].X || route.Points[i].Z != ref.Points[i].Z {
-			t.Fatalf("point %d with mover %v vs without %v diverged [04 §8.2]", i, route.Points[i], ref.Points[i])
-		}
+	if int(route.Count) <= len(ref.Points) {
+		t.Fatalf("stale mover did not divert route: with mover %d points, unobstructed %d", route.Count, len(ref.Points))
 	}
 	// Commit-stage arbitration still sees the mover: validate that TryFastPath not taken and blocked handling would trigger if stepping into occupied cell.
 	// We simply check that OccupancyGrid still reports mover at (5,5) after search.

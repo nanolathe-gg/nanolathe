@@ -62,11 +62,11 @@ func TestSessionBootPopulatesCommanders(t *testing.T) {
 		if u == nil {
 			t.Fatalf("commander %d missing", i)
 		}
-		// Missing/empty COB stores the null program at definition load and
-		// scriptless creation skips VM attach — no substitute VM exists
-		// [R-COB-01 §1]. These authored fixture commanders carry no scripts.
-		if u.GetScript() != nil {
-			t.Fatalf("commander %d unexpectedly bound a COB VM for a scriptless definition", i)
+		// Creation succeeds only after attaching a loadable program
+		// [R-COB-04 §8]. The fixture catalog supplies an authored no-op COB so
+		// this composition test exercises the same mandatory binding boundary.
+		if u.GetScript() == nil {
+			t.Fatalf("commander %d did not bind its fixture COB VM", i)
 		}
 		ensureMovementForAll(s)
 		publishVisibilityForAll(s)

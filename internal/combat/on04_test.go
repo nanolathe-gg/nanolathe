@@ -66,7 +66,7 @@ func weaponNonTurret(id int32) *content.WeaponDef {
 
 func newTestWorldAndUnits(t *testing.T) (*units.World, *world.Terrain, *units.Unit, *units.Unit) {
 	t.Helper()
-	w := units.NewSliced(10, nil)
+	w := newCombatFixtureWorld(10, nil)
 	// terrain with zero gravity and sea level 0
 	terrain := &world.Terrain{
 		CellW:   100,
@@ -77,11 +77,19 @@ func newTestWorldAndUnits(t *testing.T) (*units.World, *world.Terrain, *units.Un
 	// Initialize minimal terrain plot to avoid nil.
 	terrain.Plot = make([]world.PlotCell, 100*100)
 	// SeaLevel default 0, so Y>0 passes water check
-	def := &content.UnitDef{MaxDamage: 100, Limit: -1}
-	shooterH, _ := w.Create(def, 0, numeric.FixedFromInt(10), numeric.FixedFromInt(10), numeric.FixedFromInt(10))
-	targetH, _ := w.Create(def, 1, numeric.FixedFromInt(20), numeric.FixedFromInt(10), numeric.FixedFromInt(20))
+	def := &content.UnitDef{UnitName: "combatfixture", MaxDamage: 100, Limit: -1}
+	shooterH, err := w.Create(def, 0, numeric.FixedFromInt(10), numeric.FixedFromInt(10), numeric.FixedFromInt(10))
+	if err != nil {
+		t.Fatalf("create shooter: %v", err)
+	}
+	targetH, err := w.Create(def, 1, numeric.FixedFromInt(20), numeric.FixedFromInt(10), numeric.FixedFromInt(20))
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
 	shooter := w.Unit(shooterH)
 	target := w.Unit(targetH)
+	attachTestCOB(shooter, shooter.GetScript())
+	attachTestCOB(target, target.GetScript())
 	// Set Y above sea level
 	shooter.Y = numeric.FixedFromInt(10)
 	target.Y = numeric.FixedFromInt(10)

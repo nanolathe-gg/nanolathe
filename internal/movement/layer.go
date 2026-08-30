@@ -100,7 +100,6 @@ func NewClassLayer(p Profile, t *world.Terrain, grid *OccupancyGrid) *ClassLayer
 	}
 	l.owner = make([]uint16, int(l.stride)*int(((t.CellH+1)>>1)+2))
 	l.stampAll()
-	l.Contagion()
 	return l
 }
 
@@ -115,71 +114,70 @@ func (l *ClassLayer) stampAll() {
 	}
 }
 
-// classify is the per-cell passability classifier [04 §6.1 R-DOC04-B], the
-// contract for both the map-load single-cell stamp and rectangle restamps.
-// Per attribute cell, in order, all comparisons on the derived 2×2 heights
-// hmin/hmax (the plot expansion's per-cell derived minimum/maximum):
-//
-//  1. Feature gate: a resolved blocking feature, a stale feature identity or
-//     a void cell blocks; no feature passes.
-//  2. Occupant-age gate: the cell's mobile occupant whose last
-//     occupancy-commit tick predates the revision watermark blocks.
-//  3. Deep gate (signed 32-bit): blocked iff hmin < SeaLevel − MaxWaterDepth,
-//     the depth a sign-extended 16-bit record field.
-//  4. Shallow gate (signed 32-bit): blocked iff hmax > SeaLevel − MinWaterDepth.
-//  5. Medium split (unsigned byte): land iff hmin >= SeaLevel.
-//  6. Slope tier (unsigned byte, slope = hmax − hmin): slope <= Bad (land) or
-//     BadWater (water) → 3 clear; slope > Max (land) or MaxWater (water) →
-//     0 blocked; otherwise → 1 steep. Equality with the bad threshold is
-//     clear; equality with the max threshold is steep, not blocked.
+// classify stamps one candidate anchor for this movement class. The authored
+// footprint is classified as one aggregate; a clear result is demoted to
+// steep when any cell in the surrounding one-cell ring is non-clear
+// [04 R-PATH-01 §2][04 R-MOV-03 §3].
 func (l *ClassLayer) classify(cx, cz int32) uint8 {
+	fx, fz := l.footprintSize()
+	result := l.classifyRect(cx, cz, cx+fx-1, cz+fz-1)
+	if result != LayerClear {
+		return result
+	}
+	// The four strips cover the complete ring. Overlapping corner reads do not
+	// change the all-clear predicate [04 R-MOV-03 §3].
+	if l.classifyRect(cx-1, cz-1, cx+fx, cz-1) != LayerClear ||
+		l.classifyRect(cx+fx, cz-1, cx+fx, cz+fz) != LayerClear ||
+		l.classifyRect(cx-1, cz+fz, cx+fx, cz+fz) != LayerClear ||
+		l.classifyRect(cx-1, cz-1, cx-1, cz+fz) != LayerClear {
+		return LayerSteep
+	}
+	return LayerClear
+}
+
+// classifyRect applies immediate feature/occupant rejection, aggregates the
+// derived terrain range as min-of-mins/max-of-maxes, then evaluates the depth,
+// medium and slope gates once for the rectangle [04 §6.1 R-DOC04-B]
+// [04 R-PATH-01 §2]. Coordinates are inclusive.
+func (l *ClassLayer) classifyRect(x1, z1, x2, z2 int32) uint8 {
 	if l.Terrain == nil {
 		return LayerBlocked
 	}
-	cell := l.Terrain.PlotAt(cx, cz)
-	if cell == nil {
-		return LayerBlocked // out of bounds [04 §6.1]
-	}
-	// 1. Feature gate [04 §6.1 R-DOC04-B][04 §6.2][GAP T14].
-	if isFeatureBlocked(l.Terrain, cx, cz) {
+	if x1 < 0 || z1 < 0 || x2 < x1 || z2 < z1 || x2 >= l.W || z2 >= l.H {
 		return LayerBlocked
 	}
-	// 2. Occupant-age gate [04 §6.1 R-DOC04-B]: blocks iff the occupant's
-	// last occupancy-commit tick predates the revision watermark. The tick is
-	// a unit field zero until its first occupancy commit, so a missing record
-	// reads as zero. With the watermark zero (map load) the gate never fires.
-	if l.Grid != nil {
-		if id, ok := l.Grid.OccupantAt(Cell{X: cx, Z: cz}); ok {
-			c, have := l.commits[pool.Handle(id)]
-			if !have {
-				c = 0
-			}
-			if c < l.watermark {
+	minLow, maxHigh := int32(255), int32(0)
+	for z := z1; z <= z2; z++ {
+		for x := x1; x <= x2; x++ {
+			cell := l.Terrain.PlotAt(x, z)
+			if cell == nil || isFeatureBlocked(l.Terrain, x, z) {
 				return LayerBlocked
+			}
+			if l.Grid != nil {
+				if id, ok := l.Grid.OccupantAt(Cell{X: x, Z: z}); ok && l.commits[pool.Handle(id)] < l.watermark {
+					return LayerBlocked
+				}
+			}
+			if h := int32(cell.MinHeight()); h < minLow {
+				minLow = h
+			}
+			if h := int32(cell.MaxHeight()); h > maxHigh {
+				maxHigh = h
 			}
 		}
 	}
-	hmin := int32(cell.MinHeight()) // derived 2×2 minimum [fmt tnt][04 §6.1]
-	hmax := int32(cell.MaxHeight()) // derived 2×2 maximum [fmt tnt][04 §6.1]
 	sea := int32(l.Terrain.SeaLevel)
-	// 3. Deep gate — signed 32-bit on the sign-extended 16-bit depth field
-	// [04 §6.1 R-DOC04-B]. Equality passes.
-	if hmin < sea-l.MaxWaterDepth {
+	if minLow < sea-l.MaxWaterDepth {
 		return LayerBlocked
 	}
-	// 4. Shallow gate — signed 32-bit [04 §6.1 R-DOC04-B]. Equality passes.
-	if hmax > sea-l.MinWaterDepth {
+	if maxHigh > sea-l.MinWaterDepth {
 		return LayerBlocked
 	}
-	// 5. Medium split — unsigned byte: land iff hmin >= SeaLevel
-	// [04 §6.1 R-DOC04-B]. hmin/hmax/sea are 0..255 bytes, so plain integer
-	// comparison is the unsigned byte comparison.
-	slope := hmax - hmin // byte difference, 0..255 [04 §6.1 R-DOC04-B]
+	slope := maxHigh - minLow
 	bad, max := l.BadWaterSlope, l.MaxWaterSlope
-	if hmin >= sea {
+	if minLow >= sea {
 		bad, max = l.BadSlope, l.MaxSlope
 	}
-	// 6. Slope tier [04 §6.1 R-DOC04-B].
 	if slope <= int32(bad) {
 		return LayerClear
 	}
@@ -228,19 +226,11 @@ func (l *ClassLayer) syncStaticRevision() {
 		return
 	}
 	l.stampAll()
-	l.Contagion()
 	l.staticRevision = revision
 }
 
-// RestampRect re-runs the per-cell classifier over the rectangle and rewrites
-// the packing per cell [04 §6.1 rectangle restamp; R-DOC04-B footprint form:
-// the same chain per cell inside the footX×footZ loop]. The rectangle is
-// clamped to the map.
-//
-// TODO(question): the raw trail attaches the two contagion passes to the
-// map-load stamp only and does not show one over restamp rectangles; whether a
-// restamp re-runs contagion (and over which window) is unresolved. Implemented
-// without contagion, matching the trail.
+// RestampRect rewrites each candidate anchor through the footprint classifier
+// and clips the anchor rectangle to the layer [04 R-MOV-03 §3].
 func (l *ClassLayer) RestampRect(x1, z1, x2, z2 int32) {
 	if l == nil {
 		return
@@ -260,53 +250,6 @@ func (l *ClassLayer) RestampRect(x1, z1, x2, z2 int32) {
 	for z := z1; z <= z2; z++ {
 		for x := x1; x <= x2; x++ {
 			l.setValue(x, z, l.classify(x, z))
-		}
-	}
-}
-
-// Contagion runs the two-direction contagion pass [04 §6.1 R-DOC04-B]: a row
-// scan then a column scan, each demoting a clear (3) cell to 1 (steep) when a
-// 4-neighbour inside the scan window is not 3. Neighbours outside the map are
-// not in the window, so map-edge cells are not demoted for the edge. Each
-// sweep evaluates its neighbours against the layer as it stood at the sweep's
-// start, so demotion marks the cells edging an obstruction without cascading
-// across the map.
-//
-// TODO(question): whether each sweep reads pre-sweep or in-progress values is
-// unresolved; the sweep-anchored reading implemented here keeps the documented
-// effect — passable cells edging an obstruction become the steep tier.
-func (l *ClassLayer) Contagion() {
-	if l == nil {
-		return
-	}
-	// Row sweep: horizontal neighbours against the row sweep's start state.
-	rowSnap := append([]uint32(nil), l.cells...)
-	value := func(cells []uint32, x, z int32) uint8 {
-		return uint8((cells[(z>>4)*l.W+x] >> (uint(z&15) * 2)) & 3)
-	}
-	for z := int32(0); z < l.H; z++ {
-		for x := int32(0); x < l.W; x++ {
-			if value(l.cells, x, z) != LayerClear {
-				continue
-			}
-			if (x > 0 && value(rowSnap, x-1, z) != LayerClear) ||
-				(x+1 < l.W && value(rowSnap, x+1, z) != LayerClear) {
-				l.setValue(x, z, LayerSteep)
-			}
-		}
-	}
-	// Column sweep: vertical neighbours against the column sweep's start
-	// state (which includes the row sweep's demotions).
-	colSnap := append([]uint32(nil), l.cells...)
-	for x := int32(0); x < l.W; x++ {
-		for z := int32(0); z < l.H; z++ {
-			if value(l.cells, x, z) != LayerClear {
-				continue
-			}
-			if (z > 0 && value(colSnap, x, z-1) != LayerClear) ||
-				(z+1 < l.H && value(colSnap, x, z+1) != LayerClear) {
-				l.setValue(x, z, LayerSteep)
-			}
 		}
 	}
 }
@@ -340,14 +283,14 @@ func (l *ClassLayer) NoteCommit(h pool.Handle, tick uint32) {
 	l.commits[h] = tick
 }
 
-// revisionWatermark is the request revision pass's watermark arithmetic
-// [04 §6.1 R-DOC04-B]: max(tick, 30) − 30. The first revision (any tick below
-// 30) arms the watermark at zero; from tick 30 on the armed window is the
-// preceding 30 ticks, so an occupant is stale — blocked by the gate — once its
-// last commit predates the window.
+// revisionWatermark is the request revision pass's corrected watermark
+// arithmetic: max(tick, 31) − 30 [04 R-PATH-01 §2]. The first revision
+// therefore arms the class layer at 1, so a frozen creation stamp at tick zero
+// enters the first crossed window instead of remaining permanently invisible
+// to path search.
 func revisionWatermark(tick uint32) uint32 {
-	if tick < 30 {
-		return 0
+	if tick < 31 {
+		return 1
 	}
 	return tick - 30
 }
@@ -372,45 +315,63 @@ func (s *System) CommittedAnchor(h pool.Handle, footX, footZ int16) (Cell, bool)
 	return coll.CachedAnchor, true
 }
 
-// Revise is the request revision pass [04 §6.1 R-DOC04-B], run at request
-// init before any expansion:
-//
-//   - the class record's revision watermark is set to max(tick, 30) − 30;
-//   - the requesting unit's own commit tick is refreshed, so its own footprint
-//     re-stamps below and the requester never blocks itself;
-//   - every unit carrying the alive state bit (bit 28 of the retail status
-//     word; units.Unit.Alive here) whose last occupancy-commit tick falls in
-//     the watermark window has its footprint rectangle re-stamped into the
-//     layer.
-//
-// The window is the armed 30-tick window ending at the request tick: commits
-// with tick >= watermark. The classifier's occupant-age gate then gives the
-// documented effect — units that committed within the last 30 ticks do not
-// block the layer (their footprints are re-stamped and pass the gate), while
-// an occupant whose commit tick predates the watermark blocks any cell it
-// occupies that is re-stamped afterwards [04 §6.1 R-DOC04-B]. Footprint
-// extents are the layer's own class record's — the layer is class-uniform.
+// Revise is the request revision pass run before expansion [04 R-PATH-01 §2]
+// [04 R-MOV-03 §3]. It advances the shared class watermark and re-stamps the
+// cohort whose commit ticks lie in the window just crossed, [old,new). The
+// requester is handled separately: its real commit tick is saved, replaced by
+// the current tick while its own stale rectangle is refreshed, then restored.
+// This keeps self occupancy transparent without falsifying the occupant-age
+// clock that later requests observe.
 func (l *ClassLayer) Revise(tick uint32, requester pool.Handle, w *units.World, anchors AnchorSource) {
 	if l == nil {
 		return
 	}
-	l.watermark = revisionWatermark(tick)
+	// A feature mutation refreshes the terrain layer before the request's
+	// temporary self-commit/restamp. Refreshing lazily on the first expansion
+	// would run after the requester commit is restored and can make the unit
+	// block its own start cell.
+	l.syncStaticRevision()
+	oldWatermark := l.watermark
+	newWatermark := revisionWatermark(tick)
+	requesterCommit, requesterHadCommit := l.commits[requester]
 	if requester != 0 {
 		l.commits[requester] = tick
 	}
+	l.watermark = newWatermark
+	defer func() {
+		if requester == 0 {
+			return
+		}
+		if requesterHadCommit {
+			l.commits[requester] = requesterCommit
+		} else {
+			delete(l.commits, requester)
+		}
+	}()
 	if w == nil || anchors == nil {
 		return
 	}
 	fx, fz := l.footprintSize()
+	if requester != 0 && requesterCommit < oldWatermark {
+		if anchor, ok := anchors.CommittedAnchor(requester, int16(fx), int16(fz)); ok {
+			l.RestampRect(anchor.X, anchor.Z, anchor.X+fx-1, anchor.Z+fz-1)
+		}
+	}
+	if newWatermark == oldWatermark {
+		return
+	}
 	// Deterministic unit-pool walk, slots ascending [I1][04 §6.1 R-DOC04-B].
 	for h := pool.Handle(1); int(h) <= w.Capacity(); h++ {
+		if h == requester {
+			continue
+		}
 		u := w.Unit(h)
 		if u == nil || !u.Alive {
 			continue // alive state bit not carried [R-DOC04-B]
 		}
-		c, ok := l.commits[h]
-		if !ok || c < l.watermark {
-			continue // outside the window: not re-stamped
+		c := l.commits[h] // absent is the unit record's zero-initialized tick
+		if c < oldWatermark || c >= newWatermark {
+			continue // outside the crossed [old,new) window [04 R-MOV-03 §3]
 		}
 		anchor, ok := anchors.CommittedAnchor(h, int16(fx), int16(fz))
 		if !ok {

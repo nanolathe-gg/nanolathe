@@ -23,7 +23,7 @@ func TestRS10_MobileBuildLegalSite(t *testing.T) {
 	cat.Units[content.CanonicalKey("armck")] = builderDef
 	cat.Units[content.CanonicalKey("armllt")] = prodDef
 
-	w := units.NewSliced(20, cat)
+	w := newConstructionFixtureWorld(20, cat)
 	hb, _ := w.Create(builderDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	builder := w.Unit(hb)
 	builder.Def = builderDef
@@ -103,7 +103,7 @@ func TestRS10_MobileBuildBlockedAreaBudget(t *testing.T) {
 	// self identity [04 §6.4].
 	terrain.Plot[5*10+5].SetOccupantA(9)
 
-	w := units.NewSliced(10, cat)
+	w := newConstructionFixtureWorld(10, cat)
 	hb, _ := w.Create(builderDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	builder := w.Unit(hb)
 	builder.Def = builderDef
@@ -189,7 +189,7 @@ func TestRS10_StarveResume(t *testing.T) {
 	flashDef := cat.Units[content.CanonicalKey("armflash")]
 	flashDef.BuildCostMetal = 100
 	flashDef.BuildCostEnergy = 100
-	w := units.NewSliced(20, cat)
+	w := newConstructionFixtureWorld(20, cat)
 	hf, _ := w.Create(facDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	factory := w.Unit(hf)
 	factory.Def = facDef
@@ -240,7 +240,7 @@ func TestRS10_MultiBuilderLowestSlot(t *testing.T) {
 	cat.Units[content.CanonicalKey("armck")] = builderDef
 	cat.Units[content.CanonicalKey("armlab")] = prodDef
 
-	w := units.NewSliced(10, cat)
+	w := newConstructionFixtureWorld(10, cat)
 	hp, _ := w.Create(prodDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	prod := w.Unit(hp)
 	prod.Def = prodDef
@@ -302,7 +302,7 @@ func TestRS10_FactoryBlockedRetryAndLimit(t *testing.T) {
 	prodDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armflash"}, UnitName: "armflash", FootprintX: 2, FootprintZ: 2, YardMap: "oo\noo", MaxDamage: 200, BuildTime: 100, BuildCostMetal: 100}
 	cat.Units[content.CanonicalKey("armfac")] = facDef
 	cat.Units[content.CanonicalKey("armflash")] = prodDef
-	w := units.NewSliced(20, cat)
+	w := newConstructionFixtureWorld(20, cat)
 	h, _ := w.Create(facDef, 0, world.CellToWorld(5), 0, world.CellToWorld(5))
 	factory := w.Unit(h)
 	factory.Def = facDef
@@ -354,7 +354,7 @@ func TestRS10_CancelRefundAndLinks(t *testing.T) {
 	prodDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armflash"}, UnitName: "armflash", FootprintX: 2, FootprintZ: 2, YardMap: "o", MaxDamage: 100, BuildTime: 100, BuildCostMetal: 200}
 	cat.Units[content.CanonicalKey("armfac")] = facDef
 	cat.Units[content.CanonicalKey("armflash")] = prodDef
-	w := units.NewSliced(10, cat)
+	w := newConstructionFixtureWorld(10, cat)
 	econ := &economy.Service{}
 	h, _ := w.Create(facDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	factory := w.Unit(h)
@@ -407,7 +407,7 @@ func TestRS10_CancelRefundAndLinks(t *testing.T) {
 		t.Fatalf("cancel should not decrement count, got %d", head.Param2)
 	}
 	// Stop interrupt: should decrement once and survive, state0
-	w2 := units.NewSliced(10, cat)
+	w2 := newConstructionFixtureWorld(10, cat)
 	h2, _ := w2.Create(facDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	factory2 := w2.Unit(h2)
 	factory2.Def = facDef
@@ -439,7 +439,7 @@ func TestRS10_CancelRefundAndLinks(t *testing.T) {
 		t.Fatalf("stop message missing")
 	}
 	// Death/capture link behavior: leaked on death (no walk) [P0-14], cleared on completion
-	w3 := units.NewSliced(10, cat)
+	w3 := newConstructionFixtureWorld(10, cat)
 	h3, _ := w3.Create(facDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	factory3 := w3.Unit(h3)
 	factory3.Def = facDef
@@ -454,7 +454,7 @@ func TestRS10_CancelRefundAndLinks(t *testing.T) {
 		t.Fatalf("builder link should leak on death/capture (no walk)")
 	}
 	// Completion clears
-	w4 := units.NewSliced(10, cat)
+	w4 := newConstructionFixtureWorld(10, cat)
 	h4, _ := w4.Create(facDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	factory4 := w4.Unit(h4)
 	factory4.Def = facDef

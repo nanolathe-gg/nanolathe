@@ -43,6 +43,9 @@ func TestStepUnitBlockedCommitKeepsOrderAndRequest(t *testing.T) {
 	system.Routes[moverHandle].Publish([]Point{{X: 0, Z: 0}, {X: 3, Z: 0}})
 	system.activeOrders[moverHandle] = &activeMove{order: head, token: 41}
 	system.nextActivation = 41
+	// Seed an already-walking presentation tier. A rejected commit retains a
+	// capped physical speed but must emit the tier-zero transition.
+	system.prevMoveTier[moverHandle] = 1
 	// Keep one pre-existing request so a collision-triggered Cancel/Submit pair
 	// would be observable in its activation and start fields. StepUnit must
 	// leave this scheduler state and the active-order token untouched.
@@ -71,6 +74,9 @@ func TestStepUnitBlockedCommitKeepsOrderAndRequest(t *testing.T) {
 	}
 	if !system.Collisions[moverHandle].Blocked {
 		t.Fatal("collision state did not retain blocked result")
+	}
+	if got := system.prevMoveTier[moverHandle]; got != 0 {
+		t.Fatalf("blocked mover presentation tier=%d want 0 [04 R-COLL-01 §5]", got)
 	}
 	if got, want := system.Collisions[moverHandle].Speed, int32(worldUnitsPerCell)/2; got != want {
 		t.Fatalf("blocked commit speed=%d want half max velocity %d", got, want)
