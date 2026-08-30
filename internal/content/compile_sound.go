@@ -145,10 +145,7 @@ func gatherVariants(section *formats.Section, base string) ([]string, []string) 
 // SoundCategory. It uses typed accessors only from formats/tdf_typed.go.
 func compileSoundCategorySection(section *formats.Section, categoryName string, prov Provenance) *SoundCategory {
 	// Truncate category name to 64 bytes as per 352-byte record [02 "Sound category record"].
-	name64 := categoryName
-	if len(name64) > 64 {
-		name64 = name64[:64]
-	}
+	name64 := boundedString(categoryName, 63)
 	sc := &SoundCategory{
 		DefinitionHeader: DefinitionHeader{
 			CanonicalKey: CanonicalKey(categoryName),
@@ -165,13 +162,13 @@ func compileSoundCategorySection(section *formats.Section, categoryName string, 
 		var captions []string
 		if slot != 0 && key != "" {
 			v, c := gatherVariants(section, key)
-			// Truncate each alias to 64 bytes as per parallel 64-byte strings [02 "Sound category record"].
+			// Each parallel string occupies a 64-byte NUL-terminated slot [02 "Sound category record"].
 			for i, alias := range v {
-				if len(alias) > 64 {
-					v[i] = alias[:64]
-				}
+				v[i] = boundedString(alias, 63)
 			}
-			// Captions also bounded by 64 in retail but keep full for fidelity; truncate to 64 in hash if needed.
+			for i, caption := range c {
+				c[i] = boundedString(caption, 63)
+			}
 			variants = v
 			captions = c
 		}
@@ -213,7 +210,9 @@ func CompileSoundCategories(fs vfs.FSOps) (map[string]*SoundCategory, error) {
 	}
 	data, err := fs.ReadFileLimit("gamedata/sound.tdf", 2<<20)
 	if err != nil {
-		return nil, fmt.Errorf("content: gamedata/sound.tdf: %w", err)
+		// Both sound tables are optional.  Missing sound data leaves the
+		// catalog with no categories [02 "Sound category record"].
+		return map[string]*SoundCategory{}, nil
 	}
 	prov := Provenance{}
 	if info, statErr := fs.Stat("gamedata/sound.tdf"); statErr == nil {
@@ -279,7 +278,9 @@ func compileSoundAliasesOrdered(fs vfs.FSOps) (map[string]*SoundAlias, []*SoundA
 	}
 	data, err := fs.ReadFileLimit("gamedata/allsound.tdf", 1<<20)
 	if err != nil {
-		return nil, nil, fmt.Errorf("content: gamedata/allsound.tdf: %w", err)
+		// Alias registrations are optional; absence does not invalidate units
+		// or the category table [02 "Sound aliases"].
+		return map[string]*SoundAlias{}, nil, nil
 	}
 	prov := Provenance{}
 	if info, statErr := fs.Stat("gamedata/allsound.tdf"); statErr == nil {
@@ -303,10 +304,15 @@ func compileSoundAliasesOrdered(fs vfs.FSOps) (map[string]*SoundAlias, []*SoundA
 			continue
 		}
 		// 32-byte names [02 "Sound aliases"] — truncate to 32 bytes if longer.
-		if len(aliasName) > 32 {
-			aliasName = aliasName[:32]
+		aliasName = boundedString(aliasName, 32)
+		soundVal, present := section.StringValue("sound", "")
+		if !present {
+			// A section without a sound key is not a registration; an authored
+			// empty value is present and remains a valid empty alias [02
+			// "Sound aliases"].
+			continue
 		}
-		soundVal, _ := section.StringValue("sound", "")
+		soundVal = boundedString(soundVal, 255)
 		key := CanonicalKey(aliasName)
 		// Deduplicate: the first registration owns the identity.  The runtime
 		// registry is ordered and case-insensitive; later authored sections do

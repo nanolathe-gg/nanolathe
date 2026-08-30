@@ -1114,12 +1114,17 @@ expiry callback settle it:
 - The expiry callback is the throttled LOS refresh of [03 R-VIS-01 §2]
   itself, invoked with the record; what the refresh publishes or removes for
   an expiring record is doc 03's contract.
-- **The only producer is the handler of a received network packet** in the
-  packet dispatcher: it appends when LOS mode bit 1 is set and the count is
-  below 20 (silently dropped at 20). No single-player code path appends, and
-  the single-player pump never drains packets ([08 R-OOS-01 §1]), so **in
-  single player the list is always empty and the post-loop pass is a no-op**
-  (Established, bounded to the recovered image).
+- **The producer is the central unit-death handler**: it appends when the
+  victim is owned by the local slot, LOS mode bit 1 is set (`Circular` or
+  `True`) and the count is below 20 (silently dropped at 20). **Correction
+  (2026-08-29, RWU-08-9):** this text previously said the only producer was
+  the handler of a received network packet and concluded that in single
+  player the list is always empty and the post-loop pass a no-op. That was
+  wrong: the packet handler *is* the central death handler, which the local
+  death path calls directly after building the death record networking
+  would send, so the list is populated in every session kind and the
+  post-loop expiry pass does real work ([08 R-SESS-01 §3], Established); the
+  pass itself is stated in [03 R-COMP-02 §2].
 
 The pass itself, for completeness (Established): for every record whose
 expiry is **strictly below** the global tick (unsigned), call the refresh
@@ -1328,7 +1333,8 @@ later occupant after reuse.
   of §6.1. **Correction (2026-08-29, RWU-01-3):** the records are 36 bytes
   (the earlier "24" read a hexadecimal stride as decimal) and the list is
   the temporary-sight observer list of [R-PLAT-02 §5], not a missile or
-  interceptor structure; its only producer is a received network packet.
+  interceptor structure; its producer is the central unit-death handler,
+  reached directly in single player ([08 R-SESS-01 §3]).
 - Delayed status events use deadlines of `globalTick + 30 + random(300 or
   900)`, with the choice depending on the event family.
 - Audio arbitration uses an eight-slot channel ring, described in document 03.

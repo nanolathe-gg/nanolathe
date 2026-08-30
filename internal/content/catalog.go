@@ -978,9 +978,8 @@ func cloneCategoryRegistry(r *CategoryRegistry) *CategoryRegistry {
 		return nil
 	}
 	out := &CategoryRegistry{
-		entries:  make([]CategoryEntry, len(r.entries)),
-		byName:   make(map[string]int, len(r.byName)),
-		sentinel: r.sentinel,
+		entries: make([]CategoryEntry, len(r.entries)),
+		byName:  make(map[string]int, len(r.byName)),
 	}
 	copy(out.entries, r.entries)
 	for k, v := range r.byName {
@@ -1170,11 +1169,9 @@ func manifestHashFor(fs vfs.FSOps) (string, error) {
 // fillModelTops resolves each unit's ModelTop from its 3DO, reading every
 // distinct objects3d/<ObjectName>.3do once [03 §3.2].
 //
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// missing or unparsable model leaves ModelTop zero — the observer then sits on
-// the ground, which is what an absent model means, not an invented height.
+// Retail computes this at model load as a 16.16 model extent; the LOS writer
+// consumes its whole-unit component as the observer height addend [03 §3.2].
+// A missing or unparsable model leaves ModelTop zero.
 func fillModelTops(fs vfs.FSOps, units map[string]*UnitDef) {
 	if fs == nil || len(units) == 0 {
 		return
@@ -1189,7 +1186,7 @@ func fillModelTops(fs vfs.FSOps, units map[string]*UnitDef) {
 		if !done {
 			if data, err := fs.ReadFileLimit("objects3d/"+name+".3do", 1<<22); err == nil {
 				if model, perr := formats.LoadThreeDO(data); perr == nil {
-					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+					// Convert the model's 16.16 extent to whole world units.
 					top = (model.ModelTop() >> 16) & 0xFF
 				}
 			}

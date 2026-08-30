@@ -17,6 +17,19 @@ import (
 // disagree with sort order.
 func CanonicalKey(name string) string { return strings.ToLower(strings.TrimSpace(name)) }
 
+// boundedString models a fixed-width authored string buffer.  Retail copies
+// bytes into the destination and leaves one byte for a terminator on the
+// fields whose documented width is a C string; callers pass the usable width.
+func boundedString(value string, maxBytes int) string {
+	if maxBytes <= 0 || len(value) <= maxBytes {
+		if maxBytes <= 0 {
+			return ""
+		}
+		return value
+	}
+	return value[:maxBytes]
+}
+
 // Provenance records where a definition's bytes came from, for diagnostics.
 type Provenance struct {
 	LogicalPath string
@@ -26,7 +39,10 @@ type Provenance struct {
 
 // ProvenanceFrom adapts a VFS entry.
 func ProvenanceFrom(info vfs.EntryInfo) Provenance {
-	id := info.Source.SourcePath
+	// ProviderID is the portable identity supplied by the VFS provider.  A
+	// source path may be absolute (and therefore machine-specific), while the
+	// provider identity is stable across equivalent mounts [02 §2].
+	id := info.Source.ProviderID()
 	if id == "" {
 		id = info.Source.ProviderType
 	}

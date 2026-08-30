@@ -27,7 +27,7 @@ func TestCompileCategoriesRegistryAndMasks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantNames := []string{"arm", "later", "none", "tank", "unknown"}
+	wantNames := []string{"all", "arm", "later", "none", "tank", "unknown"}
 	gotNames := r.CategoryNames()
 	if len(gotNames) != len(wantNames) {
 		t.Fatalf("names = %v, want %v", gotNames, wantNames)
@@ -51,7 +51,7 @@ func TestCompileCategoriesRegistryAndMasks(t *testing.T) {
 		t.Fatalf("unknown membership = %#v", unknown.Words)
 	}
 	if !r.SentinelMembership().Contains(1) || !r.SentinelMembership().Contains(3) {
-		t.Fatalf("sentinel membership = %#v", r.SentinelMembership().Words)
+		t.Fatalf("ALL membership = %#v", r.SentinelMembership().Words)
 	}
 	if r.SentinelMembership().Contains(0) || units["alpha"].DefinitionMask().Contains(0) {
 		t.Fatal("null definition ID 0 must remain an unassigned sentinel")

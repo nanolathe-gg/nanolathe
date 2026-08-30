@@ -69,18 +69,14 @@ type CategoryEntry struct {
 }
 
 // CategoryRegistry is the sorted, case-insensitive category token registry
-// [R-P0-03]. The empty-name sentinel is retained privately; it has no invented
-// user-visible spelling [R-P0-03, "Implementation guidance"].
-// TODO(question): the retail symbol's exact internal sentinel label and any
-// consumers beyond category compilation remain unresolved [R-P0-03].
+// [R-P0-03]. ALL is an ordinary authored token with mandatory membership for
+// every compiled unit; it is not a private or empty-name sentinel.
 type CategoryRegistry struct {
-	entries  []CategoryEntry
-	byName   map[string]int
-	sentinel CategoryMask
+	entries []CategoryEntry
+	byName  map[string]int
 }
 
-// Entries returns user-visible registry entries in case-insensitive sorted
-// order. The mandatory empty/sentinel row is intentionally not named here.
+// Entries returns registry entries in case-insensitive sorted order.
 func (r *CategoryRegistry) Entries() []CategoryEntry {
 	if r == nil {
 		return nil
@@ -103,13 +99,14 @@ func (r *CategoryRegistry) Lookup(name string) (CategoryMask, bool) {
 	return r.entries[i].Membership, true
 }
 
-// SentinelMembership returns the mandatory internal empty/sentinel membership
-// without assigning it a user-visible token [R-P0-03].
+// SentinelMembership is retained as a source-compatible accessor.  Retail's
+// mandatory membership is the literal ALL category, so this returns ALL.
 func (r *CategoryRegistry) SentinelMembership() CategoryMask {
 	if r == nil {
 		return CategoryMask{}
 	}
-	return r.sentinel
+	m, _ := r.Lookup("ALL")
+	return m
 }
 
 // CategoryNames returns a copy of sorted user-visible registry names.
@@ -150,16 +147,17 @@ func CompileCategories(units map[string]*UnitDef) (*CategoryRegistry, error) {
 			return nil, err
 		}
 		u.UnitMask = ownMask
+		// Every unit belongs to the literal ALL category, in addition to each
+		// authored category token [R-P0-03].
+		allIdx := r.ensure("ALL")
+		if err := r.entries[allIdx].Membership.set(id); err != nil {
+			return nil, err
+		}
 		for _, token := range strings.Fields(u.Category) {
 			idx := r.ensure(token)
 			if err := r.entries[idx].Membership.set(id); err != nil {
 				return nil, err
 			}
-		}
-		// The recovered compiler always adds the current ID to its internal
-		// empty/sentinel entry, including missing/empty authored categories.
-		if err := r.sentinel.set(id); err != nil {
-			return nil, err
 		}
 	}
 

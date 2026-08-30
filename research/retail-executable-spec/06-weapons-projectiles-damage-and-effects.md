@@ -2658,9 +2658,12 @@ still see the **previous** packet's kind and attacker-side snapshot):
    definition index is left unlinked) — is walked from its head and each node
    carrying a handler receives event code **16**; nodes without a handler are
    skipped. Order tasks install themselves as the handler; the air-movement
-   markers construct their nodes unlinked and with no handler. **Unknown:** which task
-   types act on code 16 and how; *decider:* a census of the task event
-   handlers for that code (doc 04 owns the tasks; cross-document need).
+   markers construct their nodes unlinked and with no handler. **Closed
+   (2026-08-29, RWU-04-13):** every order task handles code 16 identically —
+   the observer handler ORs the event code into the record's pending word, so
+   code 16 *is* pending bit `0x10` and is consumed by the queue pump exactly
+   as [04 R-MOV-03 §7] and [04 R-ORD-01 §6] state; no task type has a
+   per-type reaction (Established).
 2. *Attacker validation.* An attacker whose definition index is zero (a freed
    slot) counts as no attacker for the rest of the routine.
 3. *Throttle and retaliation* — exactly `[08 R-AI-01 §11]`: the
@@ -4262,13 +4265,27 @@ means 7.
 | `startsmoke` (§4.1, muzzle point) | `(3, 1, 30, 0, 0)` | one particle, frames 0..3 of `smoke 1`, hold 30 — a slow four-frame puff |
 | land dust of every above-sea explosion (§2) | `(0, 7, 0, 15, 0)` | one particle at spawn and one every 7 ticks while `nextSpawn ≤ now + 15`: three particles, all frames, hold 7 |
 
-Per particle: spawn draws one CRT value for its first countdown
-`crtRand() · (hold − 2) / 0x8000 + 2`; every tick it moves by `windX · 8`,
-`+gravity · 4` in Y (upward), `windZ · 8`, decrements the countdown, and at
+Per particle (**corrected 2026-08-29, RWU-03-10**; the previous text is
+quoted in the next paragraph): at spawn the emitter draws one CRT value for
+the particle's **last frame**, `crtRand() · (frames − 2) / 0x8000 + 2` where
+`frames` is the emitter's frame-limit field, and sets the first countdown to
+`hold` directly (no draw). Every tick the particle moves by `windX · 8`,
+`+gravity · 16` in Y (upward), `windZ · 8`, decrements the countdown, and at
 zero advances one frame and redraws `crtRand() · (hold/2) / 0x8000 + hold/2`;
 it is removed when its frame index reaches its last frame. Each particle is
-drawn (after its own one-point coverage gate) as the selected frame at its
-projected point. Exhaustion of the shared strip pool drops the puff silently;
+drawn as the selected frame at its projected point with **no** coverage gate
+of its own. Established from the emitter's spawn loop and the particle update.
+*Supported inference:* the frame-limit field holds the resolved frame count
+(the table's `frameCap`, or the sequence length when `frameCap` is 0); the
+emitter's only virtual initializer takes three arguments, so `frameCap` and
+the smoke selector reach the record as producer-side field writes whose site
+is not yet traced (Unknown, tail).
+
+Previous text: "spawn draws one CRT value for its first countdown
+`crtRand() · (hold − 2) / 0x8000 + 2`; … `+gravity · 4` in Y … drawn (after
+its own one-point coverage gate)". The draw scales by the frame field, not
+`hold`; the Y multiplier is 16, not 4; and there is no per-particle coverage
+test — the trail's instruction listing shows all three. Exhaustion of the shared strip pool drops the puff silently;
 a root flag byte disables every strip allocation (`[03 R-STRIP-01 §1]`).
 
 ### Closed — the presentation RNG census [R-WFX-01 §6] (2026-08-29)
@@ -4572,10 +4589,6 @@ damage".
 
 ### Collision and damage
 
-- Which order-task types act on observer event code 16 (delivered to every
-  task observing the victim by the damage-intake reaction step) and what they
-  do · `[R-WPN-04 §2]`, doc 04 · census of the task event handlers for that
-  code (doc 04 owns the tasks).
 - Malformed feature-sentinel behavior at the collision gate's fringe
   resolution, when the anchor deltas address a cell outside the map · §8.1,
   doc 03 · static trace.
@@ -4620,6 +4633,11 @@ damage".
   implementation scope (no multiplayer).
 
 ### Features and effects
+
+- Where the smoke emitter's frame-limit and smoke-selector fields are written
+  by each weapon-side producer — the only virtual initializer takes three
+  arguments · `[R-WFX-01 §5]` · trace the field writes at the producer sites
+  listed in that section's table.
 
 - Remaining geothermal and malformed burn cases beyond the established shipped
   filename-based extinction, finite lifetimes, 48-candidate neighborhood,

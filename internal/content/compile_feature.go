@@ -43,7 +43,7 @@ type FeatureDef struct {
 	ReproduceArea   int32  // reproducearea integer default 0 [02 "Feature record"] [GAP T14]
 	SparkTime       int32  // sparktime floating default 0.0 *30 truncated ticks [02 "Feature record"]
 	BurnWeapon      string // burnweapon string empty [02 "Feature record"]
-	ResurrectSpread uint8  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	ResurrectSpread uint8  // authored spread byte for resurrection jitter; key remains TODO(T25)
 	// Animation flags [02 "Feature record"].
 	Animating int32 // animating integer default 0 [02 "Feature record"]
 	AnimTrans int32 // animtrans integer default 0 [02 "Feature record"]
@@ -124,6 +124,18 @@ func compileFeatureSection(section *formats.Section, featureName string, prov Pr
 	seqnamereclamate, _ := section.StringValue("seqnamereclamate", "")
 	seqnamereclamateshad, _ := section.StringValue("seqnamereclamateshad", "")
 	burnweapon, _ := section.StringValue("burnweapon", "")
+	description = boundedString(description, 19)
+	object = boundedString(object, 255)
+	filename = boundedString(filename, 255)
+	seqname = boundedString(seqname, 255)
+	seqnameshad = boundedString(seqnameshad, 255)
+	seqnameburn = boundedString(seqnameburn, 255)
+	seqnameburnshad = boundedString(seqnameburnshad, 255)
+	seqnamedie = boundedString(seqnamedie, 255)
+	seqnamedieshad = boundedString(seqnamedieshad, 255)
+	seqnamereclamate = boundedString(seqnamereclamate, 255)
+	seqnamereclamateshad = boundedString(seqnamereclamateshad, 255)
+	burnweapon = boundedString(burnweapon, 255)
 
 	// Numeric scalars — integer accessor default 0 [02 "Feature record"].
 	footprintx := section.IntValue("footprintx", 0)
@@ -143,7 +155,8 @@ func compileFeatureSection(section *formats.Section, featureName string, prov Pr
 	sparktimeFloat := section.FloatValue("sparktime", 0)
 	sparktime := int32(sparktimeFloat * 30)
 
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(T25): the retail FBI spelling for the resurrection spread byte is
+	// unsettled; preserve the known authored spellings without inventing one.
 	var resurrectSpread uint8
 	if _, ok := section.RawValue("resurrectspread"); ok {
 		resurrectSpread = uint8(section.IntValue("resurrectspread", 0))
@@ -338,16 +351,7 @@ func CompileFeatures(fs vfs.FSOps) (map[string]*FeatureDef, error) {
 			if err != nil {
 				continue
 			}
-			prov := Provenance{
-				LogicalPath: e.Path,
-				ProviderID:  e.Source.SourcePath,
-				MountOrder:  e.Source.MountOrder,
-			}
-			if prov.ProviderID == "" {
-				if info, serr := fs.Stat(e.Path); serr == nil {
-					prov = ProvenanceFrom(info)
-				}
-			}
+			prov := ProvenanceFrom(e)
 			doc, err := formats.ParseTDF(data)
 			if err != nil {
 				return fmt.Errorf("content: %s: %w", e.Path, err)
@@ -362,8 +366,11 @@ func CompileFeatures(fs vfs.FSOps) (map[string]*FeatureDef, error) {
 				}
 				fd := compileFeatureSection(section, name, prov)
 				key := CanonicalKey(name)
-				// Duplicate canonical keys: last wins is file-order deterministic; a later file overwrites earlier.
-				result[key] = fd
+				// Duplicate section names retain the first parsed record [02
+				// "Feature record"]. ReadDir and section order are deterministic.
+				if _, exists := result[key]; !exists {
+					result[key] = fd
+				}
 			}
 		}
 		return nil

@@ -178,6 +178,7 @@ func compileWeaponSection(section *formats.Section, sectionName string, prov Pro
 	// C2 weapon identity: read ID first, default -1, use to select record; section name is catalog key; name is display string [02 "Weapon record"]
 	id := section.IntValue("ID", -1)
 	displayName, _ := section.StringValue("name", "")
+	displayName = boundedString(displayName, 63)
 	// Conversions exactly as tabulated, each truncated after multiply, never composed differently [02 "Weapon record"] C3
 	// Velocities *65536/30 truncated — 16.16 per tick
 	weaponVelocity := int32(section.FloatValue("weaponvelocity", 0) * 65536.0 / 30.0)
@@ -262,6 +263,16 @@ func compileWeaponSection(section *formats.Section, sectionName string, prov Pro
 	soundStart, _ := section.StringValue("soundstart", "")
 	soundHit, _ := section.StringValue("soundhit", "")
 	soundWater, _ := section.StringValue("soundwater", "")
+	model = boundedString(model, 255)
+	explosionGaf = boundedString(explosionGaf, 255)
+	explosionArt = boundedString(explosionArt, 255)
+	waterExplosionGaf = boundedString(waterExplosionGaf, 255)
+	waterExplosionArt = boundedString(waterExplosionArt, 255)
+	lavaExplosionGaf = boundedString(lavaExplosionGaf, 255)
+	lavaExplosionArt = boundedString(lavaExplosionArt, 255)
+	soundStart = boundedString(soundStart, 255)
+	soundHit = boundedString(soundHit, 255)
+	soundWater = boundedString(soundWater, 255)
 
 	// Damage table [02 "Weapon record"] C4
 	// Its default key is read with integer accessor default 0 and becomes fallback.
@@ -514,17 +525,7 @@ func CompileWeaponsWithDuplicates(fs vfs.FSOps) (map[string]*WeaponDef, []Weapon
 		if err != nil {
 			continue
 		}
-		prov := Provenance{
-			LogicalPath: e.Path,
-			ProviderID:  e.Source.SourcePath,
-			MountOrder:  e.Source.MountOrder,
-		}
-		// Fallback to Stat provenance if ReadDir entry lacks it (should not happen).
-		if prov.ProviderID == "" {
-			if info, serr := fs.Stat(e.Path); serr == nil {
-				prov = ProvenanceFrom(info)
-			}
-		}
+		prov := ProvenanceFrom(e)
 		if err := processFile(data, prov); err != nil {
 			return nil, nil, fmt.Errorf("content: %s: %w", e.Path, err)
 		}

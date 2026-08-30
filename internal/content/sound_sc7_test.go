@@ -63,7 +63,7 @@ func TestSoundSC7Gather(t *testing.T) {
 
 // TestOVRResidualInert ensures OVR strings have no consumer path [P1-12].
 func TestOVRResidualInert(t *testing.T) {
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// OVR constants have no established content reader.
 	// This test locks that compilation does not use them: compiling a unit with
 	// those keys as Unknown must retain them as inert, not consume.
 	sec := mustParseTDF(t, `[UNITINFO]

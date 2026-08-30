@@ -445,15 +445,21 @@ markers, 2 build-footprint.
 **Retained-opaque static gate-mask bits — Established census, no located reader.** The union
 of the 68 static masks is bits 1-11, 16, 17, 18, 19, 20, and 24. Beyond the named bits above
 (9, 10, 18, 20 static; 14 and 21 exist only at runtime and appear in no static mask), the
-following static bits have no located consumer and must be stored opaque, not interpreted:
+following static bits have no located consumer and must be stored opaque, not interpreted
+(two of them have since been located — bit 2 is the purge-survivor bit, [R-MOV-03 §6];
+bit 7 is read by the under-attack notice, [06 R-WPN-04 §2] — and are kept in the list
+only so the census stays auditable):
 bit 1 (0x2 — `Move_Ground`, `Patrol`, `RepairPatrol`, `VTOL_Move`, `VTOL_Patrol`,
 `VTOL_RepairPatrol`); bit 2 (0x4 — `MakeSelectable`, `Wait`, `AttackUType`,
-`WaitForAttack`, `GetBuilt`, `BeCarried`, `Paralyze`, `SelfRepair`, `BuildingBuild`);
+`WaitForAttack`, `GetBuilt`, `BeCarried`, `Paralyze`, `SelfRepair`, `BuildingBuild`;
+**located:** the purge-survivor bit of section 3.3, [R-MOV-03 §6]);
 bit 3 (0x8 — the build family: `BuildingBuild`, `HelpBuild`, `MobileBuild`, `VTOL_HelpBuild`,
 `VTOL_MobileBuild`); bit 4 (0x10 — `Suppress`, `Patrol`, `RepairPatrol`, `VTOL_Patrol`,
 `VTOL_RepairPatrol`); bit 5 (0x20 — the cloak/standing family, `Guard_NoMove`, `Paralyze`,
 `BeCarried`, `GetBuilt`); bit 6 (0x40 — the cloak/standing family, `BuildWeapon`,
-`SelfDestruct`); bit 7 (0x80 — `Attack_NoMove`, `Attack_Chase`, `AttackSpecial`); bit 8
+`SelfDestruct`); bit 7 (0x80 — `Attack_NoMove`, `Attack_Chase`, `AttackSpecial`;
+**located:** the damage dispatcher's under-attack notice reads it on the victim's front
+primary order and stays silent while it is set, [06 R-WPN-04 §2]); bit 8
 (0x100 — the cloak/standing family, `BuildingBuild`, `BuildWeapon`, `MobileBuild`,
 `VTOL_MobileBuild`); bit 11 (0x800 — `Reclaim`); bit 16 (0x10000 — the cloak/standing
 family, `BuildWeapon`); bit 17 (0x20000 — `Standby`, `Standby_Mine`); bit 19 (0x80000 —
@@ -2958,7 +2964,9 @@ and copies the experience word only for a computer-owned builder.
   the bounded set. The guards' `0x18` gate is therefore satisfied in practice
   only by `0x8` and by their own deadlines. **Unknown** whether any path
   raises it; *decider:* enumerate every call through the reference header's
-  first method (an indirect-call census, not a constant grep).
+  first method (an indirect-call census, not a constant grep). **Closed
+  (2026-08-29):** that census is [R-MOV-03 §7] — the damage-intake observer
+  notice delivers `0x10` through the same method.
 
 ### Closed — the five VTOL work twins [R-ORD-01 §7] (2026-08-29)
 
@@ -3442,12 +3450,13 @@ phase: cancel-all.
 
 ### R-ORD-02 §6 — what this unit leaves open
 
-- The post-capture unit byte read by the contextual resolver's own-unit
-  reject · [R-ORD-02 §1] · static trace of its writers (doc 05's ownership
-  transfer writes 150; its decrement is untraced).
-- The identity of the ward's recorded-attacker reference that `VTOL_Follow`
-  leg 1 defends against · [R-ORD-02 §3] · doc 06's damage-intake trace
-  naming the field it stores the attacker into.
+- *Closed (2026-08-29, RWU-04-13):* the post-capture unit byte read by the
+  contextual resolver's own-unit reject is the countdown doc 05's ownership
+  transfer writes as 150; the unit sweep decrements it once per unit visit
+  ([R-MOV-03 §1] step 6).
+- *Closed (2026-08-29, RWU-06-7):* the ward's recorded-attacker reference that
+  `VTOL_Follow` leg 1 defends against is the damage dispatcher's damage-time
+  attacker pointer, [06 R-WPN-04 §2].
 - What the pump does with a spawned record of identity 0 (`VTOL_SeekGuard`
   spawns the code-7 result unchecked) · [R-ORD-02 §3], §3.1 · static read of
   descriptor 0's handler pointer.
@@ -10013,6 +10022,300 @@ table. The command-target supply is the flight command block of
 [R-AIR-01 §1]: there is exactly one supply for every air order, and the orders
 differ only in which goal payload they install ([R-AIR-01 §4]).
 
+## R-MOV-03 — the unit sweep composed, and the small contracts the ledger left open (RWU-04-13, 2026-08-29)
+
+This unit closed the lane-04 rows of the executable coverage ledger. Most
+rows were already stated by an earlier closure and are only cited there; the
+sections below carry what no earlier section spelled out. Every claim is
+Established by direct static trace unless marked otherwise.
+
+### Closed — the per-player unit sweep, step by step [R-MOV-03 §1] (2026-08-29)
+
+Section 1 states the order of one unit visit; this section pins the gates,
+counters and cadences around it so the visit can be written without choosing
+anything.
+
+**The player gate.** The sweep zeroes the session's live-unit counter, then
+visits player slots 0 through 9 in order. A slot is processed only when its
+record exists, its controller byte is 1, 2 or 3, and its state byte is not
+the eliminated value 10. Within the slot every unit record of the player's
+slice is visited in ascending pool order; a record whose definition index is
+zero is skipped. The controller-1/2 test that gates the order pumps and the
+mover (section 8.3's "compact ground controller" closure) is re-evaluated per
+unit from the **owner** record, not from the slot being swept.
+
+**Per unit, in this order:**
+
+1. the live-unit counter is incremented;
+2. the general unit update runs (the wind-generator notifier of
+   [05 R-PROD-01 §3] lives here);
+3. for an owner of controller 1 or 2 only, the weapon update (doc 06);
+4. when the unit has a script VM, the normal drain with tick delta 1
+   ([04 §4.6] "drain and lerp order");
+5. the minimap blink byte, if nonzero, is decremented as a signed byte
+   ([06 R-WPN-04 §2]);
+6. the **post-capture countdown**, if nonzero, is decremented by one. This is
+   the decrement [R-ORD-02 §6] asked for: doc 05's ownership transfer writes
+   150, and the sweep counts it down one per unit visit; the contextual
+   resolver's own-unit reject ([R-ORD-02 §1]) and the selection predicates
+   read it;
+7. **selection maintenance:** a unit carrying the *selected* bit (bit 4 of
+   the state word) loses it when it is no longer *ready*, where ready means
+   all of: the *selectable* bit (bit 5, the bit the `MakeSelectable` order
+   sets) is set, the remaining-build fraction compares exactly equal to
+   `0.0f`, the post-capture countdown is zero, and either the unit has no
+   carrier or its carrier's state word has bit 30 set;
+8. on ticks where `tick mod 30 == 0` the unit's health percentage pair is
+   rolled: the previous-percent byte takes the current-percent byte, and the
+   current-percent byte is written as `clamp((int16)health · 100 /
+   maxdamage, 0, 100)` — the same unsigned division and clamps as the
+   `TakeDamage` percent of section 5.1 (the `< 0 → 0` clamp is unreachable
+   for an unsigned quotient below `2^31` and is kept only for fidelity);
+9. **for an owner of controller 1 or 2:** the water-damage packet of section
+   9.2 (its own `tick mod 30 == 0` cadence, the mission's `waterdoesdamage`
+   and `waterdamage`, unit integer height `<=` the sea-level byte, and the
+   definition's `canhover` exemption); then the `healtime` self-repair step of
+   [R-SPEC-01 §4] on ticks where `tick & 7 == 0` while `(uint16)health <
+   maxdamage`; then the primary pump and the secondary pump (section 3.3);
+   then, when the unit has a mover, the mover tick ([R-MOV-01 §1]) followed
+   by the post-move correction gate ([R-MOV-01 §5]);
+10. when the death-pending bit (bit 14) is set, the death mark runs with the
+    unit's stored death-kind byte (doc 06 [R-DMG-01 §3]).
+
+After a player's units, and only in a networked session whose owner is
+controller 1 or 2, the engine emits the unit-state synchronization bitstream
+(packet kind 44). That packet, its bit writer and the per-payload stream
+writers of the ground follower, the air controller, the path marker and the
+velocity marker are **multiplayer transport** and out of Nanolathe's scope;
+they write no simulation state other than the player's last-sync tick, which
+only the network layer reads.
+
+**The sweep tail — the `+BigBrother` cycle.** When the camera-flags bit that
+`+BigBrother` toggles ([07 R-CAM-01 §12]) is set and the camera's hold key is
+**not** held, the 16-bit companion counter that closure left with an unlocated
+reader is decremented here; when it falls below 1 it is reset to **90** and
+two things happen in order: (a) the **next-ready-unit selector** runs, and
+(b) the camera's tracked object is re-picked from the selection as the `t`
+key does ([07 R-CAM-01 §2]). The selector walks the local player's slice in
+ascending order remembering the first *ready* unit (the same four-part
+predicate as step 7); if it meets a ready unit that is currently selected it
+clears the selected bit and the two selection-companion bits (bits 4, 6, 7)
+on **every** unit of the whole pool, closes the command panel pages (doc 07),
+and selects the next ready unit after it — wrapping to the remembered first
+ready unit when none follows; if no selected ready unit exists it selects the
+remembered first ready unit. In every case it raises the interface's
+selection-changed flag (Supported inference for the flag's name; the write is
+direct). The counter starts from whatever value the toggle wrote, so the first
+cycle after enabling is not 90 ticks long. **Unknown:** the identity of the
+held key the query tests (doc 07 owns the key table; decider: the camera
+held-key census of [07 R-CAM-01 §2]).
+
+**Band-classifier note.** The medium classifier of [R-MOV-01 §8a] evaluates
+its tests in a fixed order with later results overriding earlier ones: above
+sea level is band 4; otherwise the band starts from the previous value, then
+`height − sea > −5` sets 1, then `height + waterline == sea` sets 2, then
+`height + modelBottom < sea` sets 3 (with `waterline` the definition byte and
+`modelBottom` the signed 16-bit reference-height word). A mover whose mode is
+neither grounded nor airborne classifies as band 0. The `setSFXoccupy` start
+fires only on a change of band.
+
+### Closed — the goal-payload method table, and the three goal-point queries [R-MOV-03 §2] (2026-08-29)
+
+[R-PATH-01 §9] states the start predicates, enumerators and heuristics of the
+goal classes. The remaining entries of the shared method table are:
+
+* an **is-a-search-goal** flag returning 1 for the point, annulus and
+  rectangle classes and 0 for the two air classes — the static counterpart of
+  the "never reach the search" statement of [R-PATH-01 §9];
+* a **satisfied-from-unit** adapter that forwards the unit's committed cell
+  pair to the two-argument start predicate (the base and rectangle classes
+  share one adapter; point and annulus carry their own);
+* the base class's remaining methods return 0 or write nothing;
+* a **save-class code** on the air path marker (value 2; the codes are
+  [08 R-SAVE-02 §10]'s);
+* the **persistence** query — 0 for the base and the velocity marker,
+  [R-AIR-01 §4]'s rule for the path marker.
+
+**The goal-point queries — Established.** [R-PATH-01 §9] gives the point
+class's query. The other two:
+
+* **Annulus.** The centre cell is converted to world exactly as for the point
+  class (`(FootPrint + 2·cell) · 2^19` per axis, footprint from the owning
+  order's unit); then `b = bearing(unitPos, centre)` (the section-10 helper,
+  argument order self-then-other) and `r = ((inner + outer) / 2) << 16`, the
+  divide a signed integer division; the query returns `centre + polar(b, r)`
+  on X and Z, with Y untouched. `inner` and `outer` are the octile radii the
+  installer supplied.
+* **Rectangle.** `X = (FootPrintX + 2·((x1 + x2) / 2)) · 2^19` (signed
+  integer division) and `Z = (FootPrintZ + 2·z2) · 2^19` — the middle column
+  and the **far** Z edge, not the centre.
+
+**The annulus constructor — Established.** Given world X and Z and the two
+octile radii, the centre cell is `(w − FootPrint · 2^19 + 2^19) >> 20` per
+axis (arithmetic shift; the footprint snap of [R-ORD-01 §1]); the two squared
+cell radii are `((r + (r >> 31 & 15)) >> 4)²` for `outer` and `inner`
+respectively — a divide by 16 rounded toward zero for negative values, then
+squared. Both pairs are stored ([R-PATH-01 §9]'s dual-radius contract).
+
+**The velocity marker's turn clamp — Established, refining [R-AIR-01 §8].**
+The per-tick goal update computes `d = (int16)(commanded − bearing(velocity))`
+and `lim = TurnRate >> 3` (the definition word, unsigned shift); the applied
+delta is `d` when `−lim < d < lim`, `lim` when `d >= lim`, and `−lim` when
+`d <= −lim` — inclusive at both ends, so a delta of exactly `±lim` is not
+reduced. The horizontal velocity pair is then rotated by the negated delta
+and the vertical component is zeroed; the update returns the position
+*before* this tick's advance as the goal.
+
+**The follower's per-tick service — Established, completing [R-MOV-01 §3].**
+(1) With a payload installed, ask it whether the unit has arrived; on arrival
+raise pending `0x20` on the owning record, ask the payload whether it is
+persistent, and if not release it through the follower's owner. (2) Waypoint
+pruning: while more than one point remains and the unit's committed cell is
+within `dx² + dz² < 26` of the first point's cell (strict, cell domain), drop
+the first point (shift the rest down), and when fewer than two remain clear
+the follower's "has route" bit; every prune sets the "route changed" bit.
+(3) With a payload installed, when the mover's blocked bit is set **or** fewer
+than two points remain, arm the repath bit ([R-MOV-01 §7]). The point fill
+that feeds steering converts the stored 16-bit cell pair of each point to
+16.16 with Y zero and clamps the index to the last point. The route-release
+notification zeroes the follower's four route words only when the released
+route is the one it currently holds ([R-PATH-01 §8]).
+
+### Closed — the class-layer restamp family, exactly [R-MOV-03 §3] (2026-08-29)
+
+[R-DOC04-B] states the classifier and the revision pass. The stamp geometry:
+
+* the layer is one 32-bit word per **cell column × 16-row band**, indexed
+  `width · (z >> 4) + x`; a cell's 2-bit value sits at bit position
+  `2 · (z & 15)`;
+* a **rectangle restamp** clips the rectangle to the layer (origin at or
+  above 0, extent at or below the layer's width and height, the extent being
+  `origin + size + 1` exclusive) and rewrites each cell's two bits from the
+  footprint classifier;
+* the **footprint classifier** classifies the footprint rectangle as one
+  block; when the result is *clear* (3) it additionally classifies the four
+  one-cell-wide strips just outside the rectangle (the row above, the column
+  to the right, the row below, the column to the left, each one cell longer
+  than the rectangle at both ends) and demotes the result to *steep* (1)
+  when any strip is not clear. This is the restamp-side form of
+  [R-DOC04-B]'s contagion pass;
+* the **request revision pass** temporarily writes the current tick into the
+  requester's commit-tick field while it restamps, restamps the requester's
+  own rectangle when its previous commit tick predates the old watermark,
+  and — only when the watermark actually advanced — restamps every live unit
+  with a mover whose commit tick lies in `[oldWatermark, newWatermark)`;
+  the requester's commit tick is restored afterwards. The **release-time
+  restamp** run by the scheduler on a finished request restamps the unit's
+  rectangle when its commit tick predates the watermark.
+
+### Closed — the model adapter's piece getters and setters [R-MOV-03 §4] (2026-08-29)
+
+Section 4.6 names the adapter's get/set-position and get/set-angle; doc 03
+([03 R-COMP-01 §4]) records their presentation effect as an inference. The
+writes, exactly:
+
+* **get translation lane / get angle lane** return the raw stored dword /
+  word for `(piece, axis)`; no bounds check.
+* **set translation lane / set angle lane** write only when the value
+  changes; on a change they zero the piece's per-piece stamp word, set the
+  model's rebuild flag, and, when the piece's *cache* flag bit is set, clear
+  the model's cached-image word.
+* **show/hide** (the draw bit) flips the bit only on a change, zeroes the
+  stamp word and applies the same cache-conditional clear, but does **not**
+  set the rebuild flag.
+* **cache** and **shade** (the two other flag bits) are written
+  unconditionally and reset a third model word each time.
+
+This confirms doc 03's reading of the setters' second word as the cached-image
+validity the cached-body path tests; the reader side stays doc 03's.
+
+### Closed — the get-value case bodies and port 11's field [R-MOV-03 §5] (2026-08-29)
+
+The twenty jump-table bodies of the value-reading switch compute exactly the
+row expressions of section 4.4 ([R-COB-03 §2]); each was read against its
+row and none differs. One naming precision: port 11's "definition height" is
+the definition's **model bounding-box maximum Y** in 16.16 — the same field
+the `BeginTransport` argument carries ([R-AIR-01 §9]) and the visibility
+predicate compares against sea level (doc 03).
+
+### Closed — queue helpers, the purge, and the static purge-survivor bit [R-MOV-03 §6] (2026-08-29)
+
+* **Descriptor lookup.** A descriptor record is `table + id · 25` bytes; the
+  static gate mask is a 32-bit word inside the record (section 3.1).
+* **Find by identity.** The lookup of a queued order by descriptor identity
+  walks the chain the descriptor's rear-segment flag selects (the same
+  `0x40000` bit of the static mask that insertion uses) and returns the first
+  record with that identity, or none.
+* **Toggle remove-or-add.** The interface's toggling issue (the mobile-build
+  toggle of doc 07 is one caller) walks the **front** chain for the first
+  record matching the identity, the target when one is supplied, and the goal
+  when one is supplied — `|goalX − recX| <= 0x100000` and the same on Z, i.e.
+  within 16 world units per axis, inclusive; a match is unlinked from its own
+  segment, tombstoned unless it is the front head, cleaned up and freed, and
+  nothing is added; with no match the record is added through the ordinary
+  counted insertion. Supplying no unit skips the search.
+* **The purge.** One helper serves both purges of section 3.3: in
+  *keep-survivors* mode it removes every front-chain record whose static-mask
+  copy lacks **bit 2** (`0x4`); in *full* mode it removes every record of the
+  front chain and then of the rear chain. Every removal tombstones unless the
+  record is the front head, runs the cleanup of [R-ORDER-02 §2], and frees.
+  The keep-survivors mode is what the damage-reaction auto-engage issue
+  ([08 R-AI-01 §11], [R-STANCE-01 §3]) calls before inserting its attack; the
+  full mode is the pump's cancel-all (code 7) and unit finalisation. **Static
+  bit 2 is therefore the purge-survivor bit** section 3.3 names —
+  `MakeSelectable`, `Wait`, `AttackUType`, `WaitForAttack`, `GetBuilt`,
+  `BeCarried`, `Paralyze`, `SelfRepair` and `BuildingBuild` survive an
+  auto-engage purge. This closes that bit's "no located consumer" entry of
+  section 3.1.
+* **An identity predicate.** A three-identity predicate returns 0 for
+  `Attack_Chase`, `BeCarried` and `Cloak_Off` and 1 for every other identity;
+  its only caller is the battle host's event pump (doc 01/07). **Unknown:**
+  what the caller does with it; *decider:* the event pump's trace (doc 07).
+
+### Closed — the observer node, and pending bit 0x10's producer [R-MOV-03 §7] (2026-08-29)
+
+The order record's *target smart-reference* (section 3.2) is a 16-byte
+**observer node** embedded in the record: a method table, the observed unit,
+a link to the next node on that unit's observer list, and a handler
+reference. Construction links the node at the **head** of the target's list
+when the target is live (definition index nonzero); otherwise the node stays
+unlinked. The record constructor sets the handler to the record itself,
+clears `0x200` from the static-mask copy when no target was supplied and
+`0x400` when no goal was supplied, and — when `0x200` is clear after that —
+unlinks the node again, so a record whose descriptor does not carry `0x200`
+never observes its target. Relinking to another unit splices the node out of
+the old list and pushes it at the head of the new one; the record cleanup
+splices it out.
+
+The record's own method table has two entries: the first ORs its argument
+into the record's pending word ([R-ORD-01 §6]'s "first method"); the second
+is an empty stub. Every observer notification calls the first entry of each
+listed node's handler with an event code, so **an event code is a pending
+bit**: unit removal delivers `0x8` (target lost, [R-ORD-01 §6]), cloak
+delivers `0x10000`, and the damage-intake observer notice of
+[06 R-WPN-04 §2] delivers **`0x10`** — every order whose target has just
+taken damage wakes with pending bit 4. That is the producer [R-ORD-01 §6]
+could not locate, and it is why the guard handlers' `0x18` gate reads
+"target lost or target hit". Doc 06's "which task types act on code 16" has
+the same answer: all of them, identically, through the pending word.
+
+**Correction to [R-ORD-01 §6].** Its third bullet said `0x10` "has no located
+producer" and that the guards' `0x18` gate "is satisfied in practice only by
+`0x8` and by their own deadlines". Both are superseded by the paragraph
+above: the producer is the damage-intake observer notice.
+
+### Closed — case bodies and fragments cited to their handlers [R-MOV-03 §8] (2026-08-29)
+
+The ledger rows that are jump-table case bodies of already-closed handlers
+were each read against the handler's contract and cited there; nothing new
+was found. Three details worth stating because the closures name the outcome
+but not the mechanism: the **free-pad predicate** of [R-AIR-01 §6] is "the
+pad has no carrier and no unit in its cargo list has the queried attach-piece
+index recorded"; the pad-landing leg that spawns `SelfRepair` requires the
+pad's definition to carry both `isairbase` and `builder`, the pad to be
+complete, and the lander's `(int16)health < maxdamage`; and the attack-run
+marker's radius is `128 + random below 128` from one simulation draw.
+
 ## 11. Evidence basis and correction boundaries
 
 The movement and script sections above were derived only from these areas of the retail executable:
@@ -10104,8 +10407,9 @@ replacement bullet is needed because the ground path has no vertical term.
   family; the 68-descriptor handler set itself is closed · §3.1 · static
   trace.
 - Consumers of the order descriptor's class parameter and of the unnamed
-  gate-mask bits (statically: 1–8, 11, 16, 17, 19, 24) · §3.1 [R-DOC04-C] ·
-  static trace. Marked `TODO(question)` at both sites; store the bytes opaque.
+  gate-mask bits (statically: 1, 3–6, 8, 11, 16, 17, 19, 24; bit 2 is
+  [R-MOV-03 §6], bit 7 is [06 R-WPN-04 §2]) · §3.1 [R-DOC04-C] · static
+  trace. Marked `TODO(question)` at both sites; store the bytes opaque.
 - Reader for the acknowledgement-group byte · §3.1 · static trace. Marked
   `TODO(question)`.
 - Upstream producers of production-node wake mask 8 (Construction stopped)
@@ -10116,11 +10420,10 @@ replacement bullet is needed because the ground path has no vertical term.
 - The standoff value bound by the attack-chase orbit substates; it is produced
   by the weapon-slot engagement-distance helper and remains inference · §8.3,
   doc 06 · static trace.
-- Producer of pending bit `0x10` (the second guard re-arm bit; `0x8` and
-  `0x10000` are located in [R-ORD-01 §6]), the writer of bit 16 in the unit
-  capability word, and the semantic name of the weapon-slot control byte's
-  bit 4 · §3.3, [R-ORD-01 §6] · indirect-call census through the target
-  reference header's first method.
+- The writer of bit 16 in the unit capability word, and the semantic name of
+  the weapon-slot control byte's bit 4 · §3.3, [R-ORD-01 §6] · static trace
+  of the capability word's writers. (Pending bit `0x10`'s producer is closed:
+  [R-MOV-03 §7].)
 - Producer of `GetBuilt`'s wake bit `0x8000`, and therefore whether the
   11-tick nanoframe decay of [R-ORD-01 §5] runs while a builder is working
   · [R-ORD-01 §5], doc 05 · static trace of the work helper's callers, or a
@@ -10145,11 +10448,9 @@ replacement bullet is needed because the ground path has no vertical term.
   trace of the button draw routine.
 - Construction and economy carry, and worktime-under-one-tick behavior
   · doc 05 · static trace.
-- The post-capture unit byte the contextual resolver's own-unit reject reads
-  · §3.4 [R-ORD-02 §1] · static trace of its writers (doc 05's ownership
-  transfer writes 150; the decrement is untraced).
-- The ward's recorded-attacker reference that `VTOL_Follow` defends against
-  · [R-ORD-02 §3] · doc 06's damage-intake trace naming the stored field.
+- What the interface's event pump does with the three-identity predicate
+  (`Attack_Chase`, `BeCarried`, `Cloak_Off` → 0) · [R-MOV-03 §6], doc 07 ·
+  static trace of that pump's consumer.
 - What the pump does with a spawned record of identity 0, which
   `VTOL_SeekGuard` can produce by spawning an unchecked code-7 resolution
   · §3.1, [R-ORD-02 §3] · static read of descriptor 0's handler pointer.
@@ -10304,7 +10605,11 @@ state and page-flip availability, not follower state — doc 03 owns them.)*
   `1` (grounded) and `2` (airborne) are named and their writers censused by
   [R-MOV-01 §8] and [R-AIR-01 §3].
 - Wake and SFX-piece mapping beyond the `setSFXoccupy` five-band classifier
-  · §9.2, doc 03 · static trace.
+  · §9.2, doc 03 · static trace. (The classifier's test order is
+  [R-MOV-03 §1].)
+- Identity of the held key whose release gates the `+BigBrother` 90-tick
+  selection cycle in the sweep tail · [R-MOV-03 §1], doc 07 [R-CAM-01 §2] ·
+  the camera held-key census.
 - Whether the hover bob's per-corner perturbation — at most two height units,
   [R-MOV-01 §5] — can carry a hovering unit's committed integer height across
   the sea-level, waterline, or model-bottom thresholds that the band

@@ -2394,6 +2394,63 @@ cache/shadow bit setters write unconditionally and reset a third model word.
 (The setters' own contract is document 04's; only their effect on the
 presentation cache is recorded here.)
 
+### Closed — render piece state: allocation, the point-list copies, release, and the composition-cache purge [R-COMP-02 §3] (2026-08-29)
+
+Status: **Established** (direct-static: the allocator, the recursive fill,
+the piece counter, the release and the cache purge). The flag polarity is
+[04 §4.3 "Piece flag polarity"] and is not restated; the transform passes over
+these records are [R-COMP-01 §4].
+
+**Allocation.** Binding a model to a unit (and to a feature that carries a
+3DO) allocates one tagged block `Object State` of `34 + 54 × n` bytes,
+zero-filled, where `n` is the piece count of the model tree — counted
+recursively as `1 + count(child) + count(sibling)` from the root. The 34-byte
+header holds the piece count, a word that the allocator sets to 1, a back
+pointer the unit binder fills with the unit record, two cache-key words (the
+composition-image cache of [R-REN-03A §4] keys its entries on the address of
+each), and the pointer to the root piece state. Piece states follow, 54 bytes
+each, filled by a pre-order walk (self, then the child chain, then the
+sibling chain) so the root is state 0 and a piece's children immediately
+follow it. Each piece state holds: the model piece pointer; a live vertex
+array — a tagged `Point List` block of `12 × vertexCount` bytes, filled with a
+copy of the model piece's vertices (three 32-bit words each); the flags byte
+(bit 0 set iff `vertexCount ≥ 3`, bits 1 and 2 set); a zero word; and the
+child, sibling and parent state pointers (null when absent). A piece with no
+vertices still gets a zero-length `Point List` allocation.
+
+**Release.** Freeing a state frees every piece's `Point List` in state order,
+then — if the composition-image cache exists — **purges** every cache entry
+whose key equals either of the header's two cache-key addresses, and frees
+the block. The purge walks the cache's variable-length records (each carries
+its own byte length) from the front to the recorded total and nulls the key
+of every match; it does not reclaim the record. A clone that reuses cache
+entries across a unit's death without this purge shows the dead unit's body
+on the next unit to occupy the same record address.
+
+### Closed — the animated-texture cursor registry and the phase-7 advance [R-COMP-02 §4] (2026-08-29)
+
+Status: **Established** (direct-static: the model loader's texture bind, the
+registry, the phase-7 walker; the cursor step itself is [06 R-WFX-01 §1] /
+[02 "Animation playback"]).
+
+When the model loader resolves a textured primitive's name against the
+texture GAF banks, it examines the entry's frame count. An entry with fewer
+than two frames binds its single frame and clears the primitive's animated
+bit. An entry with two or more frames binds a **playback cursor** inside the
+primitive record (start frame 0), sets the animated bit, and — unless the
+primitive's *team-colour* bit is set, which the loader sets when the entry has
+exactly ten frames (the `LOGOS` bank) — appends the cursor's address to a
+global registry (`Animplay Pointers`, reallocated by one slot per append; the
+count starts at 0 at battle entry and is reset at teardown). Team-colour
+textures are therefore never animated; every other multi-frame texture is.
+
+Phase 7 of the sub-tick ([01 §4.4]) walks the registry **from the last
+registered cursor to the first** and steps each once with the playback-cursor
+advance of [06 R-WFX-01 §1] (countdown, then frame; wrap or detach by the
+entry's loop byte). Order matters only for determinism of the step count,
+which is one per cursor per sub-tick; no random draw is made. The step is the
+same one the effect strips use, which is why [01 §4.4] groups them.
+
 ### 2.5 Orthographic screen projection
 
 The established beam/line projection is orthographic and integer based:
@@ -2909,6 +2966,12 @@ tick, while the LOS mask persists.
 
 Status: **Established** (direct static trace of the sweep, the per-unit record
 builder, the throttled refresh and both publishers).
+
+**Producers of the temporary-sight ("eyeball") record (2026-08-29).** Besides
+the per-unit stamp below, the central unit-death handler appends a 60-tick
+eyeball for a locally owned victim under `Circular`/`True` LOS in every
+session kind, single player included ([08 R-SESS-01 §3]); its expiry and
+compaction pass is [R-COMP-02 §2].
 
 **The sweep.** The phase-5 per-player LOS stamp sweep (`[R-LAYER §1]` write
 site 3) walks the player record's own unit block — a contiguous range of unit
@@ -3757,6 +3820,72 @@ the **viewing** player's record, returns false for that unit. It is **not** a
 distinct sensor state: there is no "radar-only contact" or "jammed contact"
 presentation state, and the seen/sonar/jammed bits are not consulted by the
 caption at all. Doc 07 owns the caption's placement.
+
+### Closed — the LOS table accessors are one-based: the raster reads table `g − 1` [R-COMP-02 §1] (2026-08-29)
+
+Status: **Established** (instruction-level read of the six table accessors,
+the `los.tdf` loader's per-table store, and all three LOS publishers' table
+selection). This corrects the "Table selection" paragraph of [R-VIS-01 §3].
+
+The loaded `los.tdf` lives in three nested dynamic arrays with six trivial
+accessors: the table list (16-byte table records; *count* = `(end − begin) /
+16`, 0 when unallocated), a table's line list (16-byte line records; the same
+count form), and a line's point list (4-byte records holding one `(dx, dz)`
+signed 16-bit pair; count = `(end − begin) / 4`; the point accessor returns
+the pair at `begin + 4 × index`). The line-by-index accessor returns
+`begin + 16 × index`. The **table-by-index accessor returns `begin + 16 ×
+(index − 1)`** — it is one-based — while the loader stores `TABLE%d` at
+`begin + 16 × d`, zero-based, after resizing the list to exactly the declared
+`numtables` records.
+
+All three publishers (the ray-walk stamper, the byte-grid increment and the
+byte-grid decrement) select the table identically:
+
+```
+g = floorDiv(sightdistance, 32)          ; signed 16-bit sightdistance
+if g < count − 1 : g = max(g, 0)
+else             : g = count − 1
+table = tableByIndex(g)                  ; = record g − 1
+```
+
+So the table actually walked for a sight distance in `[32(k+1), 32(k+2))` is
+`TABLE k`, the highest table any unit can reach is `TABLE numtables − 2`
+(`TABLE 7` with the shipped `numtables = 9`, leaving `TABLE 8` unreachable as
+well as the three undeclared sections), and a sight distance below 32 selects
+`g = 0`, whose record lies **16 bytes before the table list's storage**. What
+those bytes hold at run time — and therefore how many "lines" such an
+observer walks — is **Unknown** (decider: the tagged allocator's block header
+layout, or a retail capture of a unit with `sightdistance < 32`). Which stock
+definitions have `sightdistance < 32` is also **Unknown** (decider: a catalog
+census). A clone must reproduce the skew for `g ≥ 1`; for `g = 0` it may
+substitute an empty line list as a sanctioned divergence, stated as such.
+
+### Closed — eyeball expiry: the post-phase sweep removes the byte-grid footprint and compacts the list [R-COMP-02 §2] (2026-08-29)
+
+Status: **Established** (direct-static: the sweep, its call site in the tick
+executor, and the decrement publisher). Closes the standing question of how a
+temporary sight source ("eyeball", [01 R-PLAT-02 §5] / [08 R-OOS-01 §1]) expires;
+the producer remains packet-only, so the sweep is inert in single-player.
+
+The tick executor runs the eyeball sweep once per sub-tick **after the twelve
+phases and after the deadline-ring slide**, as its last step. Over the eyeball
+list (at most 20 records, 36 bytes each, count held beside the block):
+
+1. For every record whose **expiry tick is strictly below the current tick**
+   (unsigned compare), the byte-grid **decrement publisher** of [R-VIS-01 §2]
+   is invoked with the record — the same removal call the unit stamp uses,
+   with the record's own stored tile pair and stored coverage byte, and with
+   no `storedByte != 0` guard. Records with `expiry ≥ tick` are untouched, so
+   an eyeball still covers on its expiry tick and is removed on the next.
+2. If at least one expired, the list is compacted **in place and stably**:
+   from the first expired record onward, every surviving record is copied
+   down one slot at a time, and because each record carries pointers to its
+   own inline coverage-tile pair and coverage byte, those two pointers are
+   re-aimed at the destination slot during the copy. The count becomes the
+   number of survivors.
+
+The history (word-grid) footprint an eyeball published is never removed —
+history is permanent for every observer. No CRT or simulation draw is made.
 
 ### 3.5 LOS observer height, coverage tile, and the terrain height word [R-P0-18-A] [R-P0-18-B]
 
@@ -4747,6 +4876,105 @@ onward.
 rectangle, two float-scaled (magnifying) keyed/tinted frame blitters, and a
 named-region registry have no callers anywhere in the image; an
 implementation does not need them.
+
+### Closed — circle rasterizers, the rectangle shader, image-record wrappers, and screen redirection [R-COMP-02 §5] (2026-08-29)
+
+Status: **Established (direct-static)** unless marked. These are the raster
+helpers [R-COMP-01 §2] listed by name but did not spell out.
+
+**The sin/cos helper pair.** One 512-entry signed 16-bit table holds
+`8192 × sin(2π k / 512)` ([R-WIND-01]). The *sine* helper of a `uint16` angle
+`a` and radius `r` computes `t = table[((a + 0x20) >> 6) & 0x1ff]` — the
+angle rounded to the nearest of 512 steps — and returns `(t × r + 0x1000) >>
+13` (64-bit product, arithmetic shift: round-to-nearest of `r × sin`). The
+*cosine* helper is the same with `a + 0x4020` (a quarter turn added before
+the rounding). Both are the helpers the minimap circles and the flash disc
+spokes use.
+
+**The solid circle** (centre `(cx, cy)`, radius `r`, colour byte, target
+image or null = screen) draws **32 chords**: starting from `p₀ = (cx + r,
+cy)`, for `k = 1 … 32` it computes `pₖ = (cx + cos(k × 0x800) × r, cy +
+sin(k × 0x800) × r)` with the helpers above and draws the clipped line
+`pₖ₋₁ → pₖ` through the line entry of [R-COMP-01 §2]. **The dashed circle**
+takes a segment count `n` and a phase word: `step = trunc(0x10000 / n)`
+(64-bit division; `n = 0` faults), angles `step, 2·step, …` while `≤ 0x10000`
+(so `n` chords, or `n + 1` when `0x10000` is not a multiple of `step`), the
+same chord construction, and the chord for segment index `i` (counting from
+0 at the first chord) is drawn iff `(i + phase) & 1 == 1` — exactly the
+[03 §3.10] parity rule. Neither routine paints the last chord back to `p₀`
+separately; with 32 steps of `0x800` the final angle is `0x10000 ≡ 0`, so
+the ring closes on `p₀` itself.
+
+**The rectangle shader** (target or null = screen; rectangle or null = the
+whole surface; a signed level). Level `< 0` selects the **darken** table and
+uses row `level + 32` after clamping the level to `≥ −32`; level `≥ 0`
+selects the **lighten** table at row `min(level, 31)`. If the selected table
+is absent the call returns 0 and draws nothing. Otherwise, over the clipped
+rectangle (the inclusive clipper of [R-COMP-01 §2]) every destination byte is
+replaced by `table[row × 256 + byte]` in place. The two tables are the
+`PALETTE.SHD` block (rows 0–31, [03 §4.3.2]) and the light table of
+[R-FONT-01 §6]; the caller census is the campaign report state 3 and the
+camera fade ([08 R-CAMP-01 §6]).
+
+**The 64-bit scale helper** the line clipper's second pass uses computes
+`(a × b) / c` with a 64-bit product and truncating division and returns **0
+when `c` is 0** — a zero-extent clip axis never faults.
+
+**Image-record wrappers.** Besides the DIB descriptor of [03 §4.4] and the
+scratch images of [R-COMP-01 §4], a third builder turns a **GAF frame header**
+into a 12-dword drawable image: width and height from the frame, pitch =
+width, the frame's pixel pointer, the constant words `10000` and `−1`, the
+frame's signed placement-offset pair, flags `|= 1, &= ~2`, then the common
+finaliser sets the clip rectangle to `[0, 0, w−1, h−1]`. It is how the
+generated minimap picture and the nanolathe scratch frames become blit
+targets. The **screen-redirection** setter stores an image record pointer in
+the display window and raises its redirect flag; while the flag is set, every
+null-target draw "locks the screen" by copying that record instead of
+touching the DIB or DirectDraw surface, and the corresponding unlock is a
+no-op. The front-end screens and the battle composer alike redirect
+null-target drawing to their back image this way. The **current-cursor-frame accessor** returns
+the frame header the cursor layer of [R-FX-01 §5] is showing; the gadget
+driver compares it to decide whether a widget's cursor request changed.
+
+**The minimap repaint pre-pass** the composer runs right before it sets the
+viewport clip: when bit 1 of the minimap dirty word is set, clear it, copy the
+minimap picture (an unclipped image-to-image copy, no key) to the panel
+position held in engine state, then draw the panel frame rectangle outline
+(four clipped lines, [R-COMP-01 §2]) in logical entry 14 of the
+logical-to-physical map. The composer-time viewport marker of [03 §3.12] is
+separate and runs every frame. Which events set bit 1 is [03 §3.6]'s
+lifecycle; the pre-pass itself is only the consumer.
+
+### Closed — the two standalone unshaded-renderer entries: debris pieces and effect/projectile models [R-COMP-02 §6] (2026-08-29)
+
+Status: **Established** (direct-static). The primitive dispatch and span
+writers are [R-REN-03A §5]; [R-RND-02A] names the unshaded renderer; this
+closes the two entries that reach it outside the unit path.
+
+Both entries take a model piece and a world position triple (16.16), project
+every vertex to the screen — `sx = high16(X + vx) + 128`, `sy = high16(Z −
+vz) − (high16(Y + vy) >> 1) + 32`, each `high16` a truncating shift after the
+32-bit add — into a scratch point array, and then walk the piece's
+primitives **from index 1 when the piece has a selection primitive, else
+from 0** (the primitive count and the "first primitive is the selection
+box" marker come from the model piece). Per 32-byte primitive: gather its
+vertex indices into the point array; if the coloured flag is set, the flat
+polygon filler; else if the vertex count is exactly 4, resolve the texture
+(the resolve-at-draw-time bit → the entry's frame; the **debris** entry
+additionally honours the team bit by taking the `LOGOS` frame selected by the
+owning player's colour index) and run the textured quad mapper; else draw
+nothing.
+
+The **effect/projectile entry** (3DO projectiles and the pooled explosion
+models) first rotates each vertex by the object's three angle words through
+the rotation helper of [03 §2.4] — about the Z axis by the first word, then
+the X axis by the third, then the Y axis by the second — into the shared
+rotated-point scratch, then projects. The **debris entry** ([04 R-COB-04 §2])
+takes the debris record's position directly, applies no rotation, and is
+gated on the projected origin lying inside the viewport rectangle
+(inclusive point-in-rectangle test); the fixed-effect draw pass applies the
+same test before calling the effect entry. Neither entry reads `SHD`, the height key, or the
+composition image; both write straight to the target image.
 
 ## 5. World render passes and object presentation
 
@@ -5771,6 +5999,123 @@ own coverage gate.
 ([R-P0-19-P]) are unchanged by this pass; the nano particle's `0x100` word is
 now bounded-negative over that class's particle advance and particle draw (neither
 reads it) and stays in the tail.
+
+### Closed — the strip object pool and the base object [R-FX-02 §1] (2026-08-29)
+
+Status: **Established** (direct-static). Supplements [R-STRIP-01 §1]'s "one
+shared fixed pool".
+
+The strip pool is a **LIFO free list of fixed-size slots**: a slot array, a
+pointer stack of free slots, a capacity and a stack top. *Take* returns null
+when the top has reached the capacity, else pops the next pointer and
+advances the top; *return* pushes the pointer back one below the top. Every
+producer zeroes the taken slot (13 dwords, the largest container) before
+running the family constructor. The base constructor stores the vtable and
+zeroes the deadline word; the base *init* sets `deadline = tick +
+lifetime`; the pooled **destructor** re-installs the base vtable and, when
+its delete flag bit 0 is set (as the sweep's eviction and removal always
+pass), returns the slot to the pool. The 400-object eviction of
+[R-STRIP-01 §1] destroys the **front** object of the strip (the oldest) with
+that flag and shifts the vector down. The pool's capacity is the vector
+grown by the pool's own allocator; its initial size is [R-STRIP-01 §1]'s
+concern and is not re-derived here.
+
+The sweep ([01 §4.4] phase 11) runs strips 0 … 9 in order and, per object in
+insertion order, the removal-verdict virtual before the update virtual; a
+true verdict runs the destructor with flag 1 and compacts the vector by one.
+The composer's per-strip walk calls each object's draw virtual with the
+target image, in insertion order. The COB `emit-sfx` cases 0–5 of
+[04 R-COB-03 §6] are the producers of [R-STRIP-01 §1] / [R-FX-01 §3]: types
+0 and 1 build the strip-7 flame-stream trail with `(hold 1, lifetime 6)` and
+`(hold 1, lifetime 7)`; types 2–5 build the strip-2 sprinkle with spacing
+16, 8, 16, 8 and the endpoints swapped for 4 and 5.
+
+### Closed — the strip-5 flame family, exactly: segment life is `floor(span / 5)` ticks, not an interval [R-FX-02 §2] (2026-08-29)
+
+Status: **Established** (instruction-level read of the family init, spawn,
+step, expiry and draw). This corrects [R-LAYER §4]'s "expiry tick: spawn
+tick plus the container's per-segment interval word … 10 for the teleport
+call's 30-tick container — supported inference". The word is not an
+interval and is not 10.
+
+**Init** `(A, B, lifetime)`: `deadline = tick + lifetime`; copy `A`, `B`;
+`Δ = B − A` per axis (16.16); `L = sqrt(Δx² + Δy² + Δz²)` in floating point
+over the raw 16.16 deltas, truncated to an integer `n`; then
+
+```
+segLife = high16( (n << 16) / 0x50000 )        ; 64-bit shift and division
+        = floor( n / (5 × 65536) )             ; whole world units of span, divided by 5
+step    = Δ / segLife  per axis                 ; signed 32-bit division, truncating
+```
+
+so each segment crosses the whole span in `segLife` ticks at **five world
+units per tick**. Edge: a span shorter than five world units gives `segLife
+= 0` and the per-axis division **faults** (retail contract; teleport
+destinations closer than that to a unit reach it). The init then spawns once.
+
+**Spawn** (also the update's re-lay): grow the segment vector's capacity to
+`size + (deadline − tick + 10) / 10` when that is larger (signed division;
+no growth when the quotient is not positive), then append one 52-byte
+segment: the flame-stream GAF entry, position = a copy of `A`, target `B`,
+`step`, `frameCount − 1`, start frame `crtRand × (frameCount − 1) / 0x8000`
+(one CRT draw), and `expiry = tick + segLife`; then `nextSpawn = tick + 10`.
+The spawn-due predicate is the common `nextSpawn ≤ deadline && nextSpawn ≤
+tick` of [R-FX-01 §3], so the teleport call's 30-tick container lays a
+segment at ticks 0, 10, 20 and 30 — four in all.
+
+**Step per segment:** `pos += step` (three axes); `frame = (frame + 1) mod
+(frameCount − 1)` — advancing every tick and never showing the entry's last
+frame; the carry the step function returns is ignored. **Expiry:** removed
+when `expiry < tick` (strict) by stable compaction; the container's verdict
+is "no segments". **Draw:** the one-point coverage gate of [R-FX-01 §3] at
+tile `(high16(X) >> 5, (high16(Z) − high16(Y)/2) >> 5)`, then the frame at
+`(high16(X) − viewX + 128, high16(Z) − high16(Y)/2 − viewZ + 32)` through the
+**tinted blitter** of [R-COMP-01 §2] / [R-REN-03D §4] — the `ALP`-blend
+family, not the opaque keyed blitter — which draws nothing when its gate flag
+is clear. **Supported inference:** that gate is the `Shading` display option
+([R-REN-03D §4] states the early return; [R-COMP-01 §2] names the same flag
+"ALP table present"); decider: the palette-init request word that loads
+`ALP`. If so, every flame, trail and smoke strip sprite vanishes with
+`Shading` off.
+
+### Closed — the 32-byte smoke-puff family, exactly; the geothermal steam is this class on strip 4 [R-FX-02 §3] (2026-08-29)
+
+Status: **Established** (instruction-level read of the constructor, the
+three-argument init, spawn, update and draw). This corrects [R-STRIP-01 §1]
+row 4 ("a flame-class object") and adds strip 4 to [R-FX-01 §3]'s "smoke
+puff family (strips 5 and 9)".
+
+**Constructor:** base constructor, then the smoke vtable, creation tick,
+empty puff vector. **Init** `(point, interval, hold, lifetime)`: `deadline =
+tick + lifetime`; store the point; `interval`; `lastFrameBase = frameCount −
+1` of the bank's first smoke entry ([R-FX-01 §1]); `hold`, or **7 when 0**;
+then spawn once. The geothermal producer of [05 R-ECO-02 §3] takes a pool
+slot, zeroes it, constructs this class and calls init with `(vent point,
+interval 5, hold 0 → 7, lifetime 150)` under the 400-cap eviction, appending
+to **strip 4**; the literals' roles are therefore settled. Its update is the
+smoke update of [06 R-WFX-01 §5] (wind drift, rise, countdown, frame
+advance, removal at the last frame).
+
+**Spawn:** grow capacity to `size + (deadline − tick + interval) /
+interval` when larger; append one 32-byte puff: the smoke entry, position =
+the point, **`lastFrame = crtRand × (lastFrameBase − 2) / 0x8000 + 2`** (one
+CRT draw; a random last frame in `2 … lastFrameBase − 1`, so puffs of one
+producer vanish after differing frame counts), `frame = 0`, `hold`, and
+`countdown = hold` — the first countdown is **not** random; then `nextSpawn
+= tick + interval`. With `interval 5, lifetime 150` the steam vent lays a
+puff every fifth tick, 31 puffs per container, one container per producer
+tick of [05 R-ECO-02 §3].
+
+**Draw:** for every puff, `(high16(X) − viewX + 128, high16(Z) −
+high16(Y)/2 − viewZ + 32)`, frame `frame` of the entry, through the tinted
+blitter — **with no coverage gate**: this family's draw walk tests nothing
+before blitting, unlike the flame and sprinkle families. Cross-document:
+[06 R-WFX-01 §5] states "after its own one-point coverage gate", "first
+countdown `crtRand · (hold − 2) / 0x8000 + 2`" and "removed when its frame
+index reaches its last frame"; the puff record read here has the random
+draw in the last-frame word and the hold in the countdown word, and no gate
+in the draw. Document 06's producer-parameter table is unaffected; the
+per-puff sentences should be re-derived against this section.
 
 ### Closed — the flash and lens blitters, and which families do not use the countdown cursor [R-FX-01 §4] (2026-08-29)
 
@@ -7919,6 +8264,15 @@ buried inside prose that read as if it were still open. Every such narrative is
 deleted here only; the findings stand in the body sections that own them.
 
 ### World and visibility
+- What the LOS table-by-index accessor reads for group 0 (`sightdistance <
+  32`), and which stock definitions have such a sight distance · [R-COMP-02
+  §1] · decider: the tagged allocator's block-header layout or a retail
+  capture of such a unit; a catalog census for the second half.
+- Whether the tinted blitter's gate flag ("ALP table present" in
+  [R-COMP-01 §2], "the `Shading` option" in [R-REN-03D §4]) is one bit,
+  making every strip sprite of [R-FX-02 §2–§3] invisible with `Shading` off ·
+  decider: the palette-init request word that loads `ALP`.
+
 
 **Correction (2026-08-29, RWU-03-2).** Five bullets are removed here. Four
 were closed by `[R-VIS-01]`: *"palette mapping of each of the three

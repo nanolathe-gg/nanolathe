@@ -61,9 +61,9 @@ type MapHeader struct {
 	// OTA GlobalHeader fields [fmt ota] [02 "Map files"].
 	// Language-prefixed keys use LanguageString with empty language (English fallback)
 	// so the plain key is read; the typed accessor family is still used [02 §3] [02 §4].
-	MissionName        string // missionname language-prefixed string empty [02 "Map files"]
+	MissionName        string // reserved campaign field; not read from OTA GlobalHeader [02 "Map files"]
 	MissionDescription string // missiondescription string default "No description available" [02 "Map files"]
-	MissionFile        string // missionfile string empty [02 "Map files"] map-global key table; consumed by the phase 10 mission loader
+	MissionFile        string // reserved campaign field; not read from OTA GlobalHeader [02 "Map files"]
 	Planet             string // planet string empty [02 "Map files"] — vocabulary listed in [fmt ota]
 	Memory             string // memory string empty [fmt ota]
 	NumPlayers         string // numplayers string empty [fmt ota]
@@ -80,7 +80,7 @@ type MapHeader struct {
 	Mapping           int32   // mapping integer default 0 [02 "Map files"]
 	NoMovie           int32   // nomovie integer default 0 [fmt ota]
 	TidalStrength     float64 // tidalstrength floating default 0.0 [02 "Map files"]
-	SolarStrength     int32   // solarstrength integer, inert (no executable string) [fmt ota]
+	SolarStrength     int32   // reserved/inert OTA vocabulary; not read [fmt ota]
 	LavaWorld         int32   // lavaworld integer default 0 [02 "Map files"]
 	WaterDoesDamage   int32   // waterdoesdamage integer default 0 [fmt ota]
 	WaterDamage       int32   // waterdamage integer default 0 [fmt ota]
@@ -139,9 +139,7 @@ func compileMapHeader(otaLogical, tntLogical string, otaProv, tntProv Provenance
 		// Use typed accessors only [02 §4]. StringValue and LanguageString are the
 		// typed string family; IntValue/FloatValue are the numeric family.
 		// Language-prefixed keys try <language><key> then plain key [02 §3].
-		mh.MissionName, _ = global.LanguageString("", "missionname", "")
 		mh.MissionDescription, _ = global.StringValue("missiondescription", "No description available")
-		mh.MissionFile, _ = global.StringValue("missionfile", "") // [02 "Map files"] map-global key table
 		mh.Planet, _ = global.StringValue("planet", "")
 		mh.Memory, _ = global.StringValue("memory", "")
 		mh.NumPlayers, _ = global.StringValue("numplayers", "")
@@ -157,7 +155,6 @@ func compileMapHeader(otaLogical, tntLogical string, otaProv, tntProv Provenance
 		mh.Mapping = global.IntValue("mapping", 0)                     // [02 "Map files"]
 		mh.NoMovie = global.IntValue("nomovie", 0)                     // [fmt ota]
 		mh.TidalStrength = global.FloatValue("tidalstrength", 0)       // [02 "Map files"]
-		mh.SolarStrength = global.IntValue("solarstrength", 0)         // author inert [fmt ota]
 		mh.LavaWorld = global.IntValue("lavaworld", 0)                 // [02 "Map files"]
 		mh.WaterDoesDamage = global.IntValue("waterdoesdamage", 0)     // [fmt ota]
 		mh.WaterDamage = global.IntValue("waterdamage", 0)             // [fmt ota]
@@ -170,13 +167,13 @@ func compileMapHeader(otaLogical, tntLogical string, otaProv, tntProv Provenance
 		mh.MaxUnits = global.IntValue("maxunits", 200)                 // [02 "Map files"] default 200
 	}
 
-	// Compile schemas from the OTA's probed [Schema N] sections [fmt ota].
-	// OTA already probed upward via HasNetwork etc, but we rebuild via typed
-	// accessors for defaults and determinism.
+	// Compile schemas by probing Schema 0, Schema 1, ... and stop at the first
+	// missing section [fmt ota]. This preserves retail's gap-terminating scan.
 	if global != nil {
-		for _, sec := range global.Sections() {
-			if !isSchemaName(sec.Name) {
-				continue
+		for i := 0; ; i++ {
+			sec := global.Section(fmt.Sprintf("Schema %d", i))
+			if sec == nil {
+				break
 			}
 			sch := MapSchema{
 				Name: sec.OriginalName,
@@ -185,7 +182,6 @@ func compileMapHeader(otaLogical, tntLogical string, otaProv, tntProv Provenance
 			// Use typed accessors only [02 §4].
 			sch.AIProfile, _ = sec.StringValue("aiprofile", "")
 			sch.SurfaceMetal = sec.IntValue("surfacemetal", 0)        // [02 "Map files"]
-			sch.MohoMetal = sec.IntValue("mohometal", 0)              // inert [fmt ota]
 			sch.HumanMetal = sec.IntValue("humanmetal", 0)            // [02 "Map files"]
 			sch.HumanEnergy = sec.IntValue("humanenergy", 0)          // [02 "Map files"]
 			sch.ComputerMetal = sec.IntValue("computermetal", 0)      // [02 "Map files"]
@@ -219,13 +215,13 @@ func compileMapHeader(otaLogical, tntLogical string, otaProv, tntProv Provenance
 	}
 	var b strings.Builder
 	// Every compiled scalar is hashed, including defaults [02 §5] C12.
-	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|%s|%s|%s|%s|", mh.CanonicalKey, mh.Name, mh.MissionName, mh.MissionFile, mh.MissionDescription, mh.Planet, mh.Size, mh.NumPlayers, mh.Memory)
+	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|%s|%s|", mh.CanonicalKey, mh.Name, mh.MissionDescription, mh.Planet, mh.Size, mh.NumPlayers, mh.Memory)
 	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|%s|", mh.Brief, mh.Narration, mh.MissionHint, mh.Glamour, mh.GlamourSound, mh.UseOnlyUnits)
-	fmt.Fprintf(&b, "%d|%d|%d|%d|%d|", mh.LineOfSight, mh.Mapping, mh.NoMovie, mh.SolarStrength, mh.LavaWorld)
-	fmt.Fprintf(&b, "%d|%d|%d|%.10f|%d|", mh.WaterDoesDamage, mh.WaterDamage, mh.MinWindSpeed, mh.TidalStrength, mh.Gravity)
-	fmt.Fprintf(&b, "%d|%d|%d|%.10f|%.10f|%s|", mh.MaxUnits, mh.MaxWindSpeed, mh.TNTVersion, mh.KillMul, mh.TimeMul, mh.UseOnlyUnits)
+	fmt.Fprintf(&b, "%d|%d|%d|%d|", mh.LineOfSight, mh.Mapping, mh.NoMovie, mh.LavaWorld)
+	fmt.Fprintf(&b, "%d|%d|%d|%d|%.10f|%d|", mh.WaterDoesDamage, mh.WaterDamage, mh.NoSeaLevelTrigger, mh.MinWindSpeed, mh.TidalStrength, mh.Gravity)
+	fmt.Fprintf(&b, "%d|%d|%d|%.10f|%.10f|", mh.MaxUnits, mh.MaxWindSpeed, mh.TNTVersion, mh.KillMul, mh.TimeMul)
 	for i, s := range mh.Schemas {
-		fmt.Fprintf(&b, "schema%d:%s|%s|%d|%d|%d|%d|%d|%d|%s|%d|%.10f|%.10f|%.10f|%d|", i, s.Name, s.Type, s.SurfaceMetal, s.HumanMetal, s.HumanEnergy, s.ComputerMetal, s.ComputerEnergy, s.MohoMetal, s.MeteorWeapon, s.MeteorRadius, s.MeteorDensity, s.MeteorDuration, s.MeteorInterval, s.StartPosCount)
+		fmt.Fprintf(&b, "schema%d:%s|%s|%s|%d|%d|%d|%d|%d|%s|%d|%.10f|%.10f|%.10f|%d|", i, s.Name, s.Type, s.AIProfile, s.SurfaceMetal, s.HumanMetal, s.HumanEnergy, s.ComputerMetal, s.ComputerEnergy, s.MeteorWeapon, s.MeteorRadius, s.MeteorDensity, s.MeteorDuration, s.MeteorInterval, s.StartPosCount)
 	}
 	fmt.Fprintf(&b, "tnt:%d|%d|%d|%d|%d|%d|%d|%d|", mh.TNTWidth, mh.TNTHeight, mh.TNTSeaLevel, mh.TNTTiles, mh.TNTTileAnims, mh.MinimapWidth, mh.MinimapHeight, mh.UnknownHeader1)
 	mh.Hash = HashDefinition([]byte(b.String()))
@@ -257,7 +253,7 @@ type tntHeaderLite struct {
 // 99.5% of the way through each one, so reading them whole to collect a few
 // kilobytes of headers is what a map census costs if it opens files instead of
 // ranges. Retail's own census opens only the OTA of each map and never its
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// terrain [07 §4].
 func loadTNTHeaderLite(fs vfs.FSOps, logical string) (tntHeaderLite, error) {
 	read := func(offset int64, length int) ([]byte, error) {
 		if ranged, ok := fs.(vfs.RangeReader); ok {
@@ -312,11 +308,6 @@ func loadTNTHeaderLite(fs vfs.FSOps, logical string) (tntHeaderLite, error) {
 // lists a legacy map — only loading its terrain fails, in world.Load — so this
 // header reader must resolve its slots correctly rather than reject.
 const versionLegacyTNT = 0x1020
-
-func isSchemaName(name string) bool {
-	// Retail probes "Schema %i" case-insensitively via formatting [fmt ota] [02 "Map files"].
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(name)), "schema ")
-}
 
 func baseNameWithoutExt(logical string) string {
 	base := logical

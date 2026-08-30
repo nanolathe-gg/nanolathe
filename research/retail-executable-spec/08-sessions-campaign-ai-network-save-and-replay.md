@@ -6089,6 +6089,213 @@ placed. "Excess" is therefore the `EnergyWasted`/`MetalWasted` overflow
 accumulator of §7. Established as to fields; OOS as to consumers.
 
 
+## R-AI-02 — Computer player: ledger-closure findings (2026-08-29)
+
+Bottom-up closure of the last open lane-08 computer-player rows. Everything
+here is small; each paragraph exists because an implementer reading
+[R-AI-01] alone would still have had to choose a value.
+
+### R-AI-02 §1 — The rally task's constructor state — Established [R-AI-02]
+
+[R-AI-01 §7] names the rally task's three vectors (**best**, **probe**,
+**drift**) and its **best score** but not their initial values. The
+constructor sets them, in this order, from the map's world-unit extents
+(`terrainWidthCells × 16` and `terrainHeightCells × 16` [03 §2.2]):
+
+```text
+halfX = trunc(mapWidthWorld  / 2)        # signed integer divide, toward zero
+halfZ = trunc(mapHeightWorld / 2)
+best  = (halfX << 16, 0, halfZ << 16)    # computed as trunc(float(half) * 65536.0)
+probe = best
+drift = best
+bestScore = 0
+```
+
+The conversion goes through the x87 stack (integer loaded, multiplied by the
+double `65536.0`, truncated once); because `half` is an integer the result is
+exactly `half << 16`, and the form is recorded only so the truncation site is
+not mistaken for a rounding one. The base task fields — manager back-pointer,
+group record, deadline `0`, owning slot — are written first by the shared task
+constructor ([R-P0-04 §2]); the rally-specific fields follow. Every other task
+class starts with only the base fields plus the per-class tunables listed in
+[08 "Strategy manager and its task graph"] (wave A: threshold 20000, min 3,
+max 6, peer slot 3; wave B: 50000, 3, 6, peer 7; regroup A peer 2; regroup B
+peer 6).
+
+**Consequence (Established from §7's body).** The body adds `drift` to
+`probe` on *every* invocation and reseeds `drift` only on a `RNG(10) == 0`
+draw. With the constructor's values the first invocation already moves the
+probe to `(mapWidthWorld, 0, mapHeightWorld)` and each later one adds another
+half map, so until the first reseed the probe lies outside the map, the
+on-known-ground test fails at its bounds check, and no score is adopted. The
+rally point therefore stays at the map centre for a geometrically distributed
+number of runs (mean ten). This is retail's behavior, not a defect to fix.
+
+### R-AI-02 §2 — Small contracts the ledger pass settled — Established [R-AI-02]
+
+* **Profile-limit gate edges.** The per-candidate limit test of [R-P0-05 §3]
+  (`count < limit`, `-1` unlimited) is reached through a one-argument
+  narrowing thunk (the player index is masked to a byte) and **rejects** —
+  returns "over limit" — for candidate type `0` and for any type index at or
+  above the catalog count, before the limit vector is read. The count it
+  compares is the strategic state's per-type completed count (a signed 16-bit
+  word), the limit the per-type 32-bit word the profile pass writes
+  ([R-AI-01 §12]).
+* **Strategic-centre and build-capable-count accessors.** The construction
+  task reads the centre once into a local through a three-word copy accessor
+  and the build-capable count through a plain word accessor; both read the
+  strategic state fields the 30-tick refresh writes ([R-AI-01 §16]). Neither
+  accessor computes anything, so the "read once" wording of [R-AI-01 §3] is
+  the whole contract: a refresh landing between the two passes is not seen by
+  pass 2.
+* **Classifier standing-order encoding.** The two writes of [R-AI-01 §10]
+  are field writes into the runtime status word: the standing move order
+  occupies two bits, value `2` (roam) when `cancapture` is clear and `1`
+  (maneuver) when set, the other value's bit being cleared in the same store;
+  the standing fire order's two-bit field is then set to `2` (fire at will),
+  its other bit cleared. The writes happen before the ungrouped test, so an
+  already-grouped unit still gets both fields rewritten every 30 manager
+  entries.
+* **The AI status dump is dead.** The image contains a writer that prints a
+  computer slot's game time, name, controller (`HUMAN`/`AI`/`INVALID`),
+  terrain and profile names, difficulty, and one `<limit> <base:baseML:baseEL>`
+  row per definition to a text file. Its only caller is a debug entry that no
+  code, table or callback references; no retail path produces the file.
+* **The target pick's vector removal.** The candidate picker of [06 §3.2]
+  that the computer player's order dispatch also uses draws a random index
+  into a temporary candidate vector, reads the entry, and then removes it by
+  **overwriting the drawn slot with the vector's last entry and shortening
+  the vector by one** (swap-remove; order is not preserved) before scoring
+  it, so a later draw in the same 50-iteration loop can never return the
+  same candidate, while the index-to-candidate mapping of later draws
+  depends on this exact removal shape. The removal draws nothing.
+* **The eco task is vtable-reached.** The resource/builder-queue body of
+  [R-AI-01 §2] has no direct caller; like the other task bodies it is entered
+  only through the task-class virtual table run by the manager sweep
+  ([R-AI-01 §1]). It is not dead.
+
+
+## R-SESS-01 — Session and account material: ledger-closure findings (2026-08-29)
+
+Closure of the remaining lane-08 rows that belong to no computer-player
+section: two per-player counters the per-player phase reads, the bank's box
+write primitives, a feature-writer edge, the session-kind accessor, and the
+single-player producer of the temporary-sight ("eyeball") record that doc 01
+recorded as unreachable.
+
+### R-SESS-01 §1 — The two live-player counters — Established [R-SESS-01]
+
+The per-player phase's end-of-battle block ([R-TRIG-01 §6], [R-SKIR-01 §3])
+calls two counters over the ten player slots, in slot order, each returning a
+plain count. Both first require the slot's record to exist (its first word is
+non-zero) and the slot's side index to differ from `10`, and both treat a
+slot as *live* when its 16-bit live-unit count is non-zero **or** its 32-bit
+created-unit count is zero (a player that has not yet created anything counts
+as live — the same "created nothing yet" rule the kind-3 victory sweep uses).
+
+* **Live computer players hosted here**: additionally the controller byte
+  equals `2`. Nothing else is tested; watch mode does not apply to computer
+  slots.
+* **Live human players still playing**: the controller byte is `1`, `2` or
+  `3`; then the slot must be either a local human (`1`) or a remote slot
+  (`3`) whose lobby record's registration byte equals `1` — the byte slot
+  registration writes ([R-SKIR-01 §2]); that `1` means "registered as human"
+  is **Supported inference** from that writer, the test itself is
+  Established — so a hosted computer slot (`2`) never counts; and finally the
+  lobby record's watch-mode bit (the bit the elimination handler sets,
+  [R-SKIR-01 §3]) must be clear.
+
+Every consumer of both counters is on the **kind-3** (multiplayer) branch of
+the block: the first decides between `You're out!  Continue Watching?` and
+the "hosting AI players" message and gates the whole watch-mode path together
+with the lobby's *watching allowed* bit; the second posts the watch-mode
+placement line and, at the top of the kind-3 block, steps the shared
+countdown toward the end latch when no human is left playing. Kinds 1 and 2
+never call either counter, so a single-player engine needs neither; they are
+recorded so the boundary is explicit ([R-OOS-01]).
+
+### R-SESS-01 §2 — Box write primitives — Established [R-SESS-01]
+
+[R-ENTRY-02 §3] gives the bounded box **read**. The subsystem writers use
+three more primitives on the current account's current box:
+
+* **size** — returns the box's byte count;
+* **seek** — sets the box's cursor to `clamp(requested, 0, size)`; a negative
+  request seeks to 0, a request past the end seeks to the end;
+* **append** — writes `n` bytes at the cursor, first growing the box's buffer
+  to exactly `cursor + n` bytes when that exceeds the current capacity (the
+  buffer is reallocated in place, existing bytes preserved), then advances the
+  cursor by `n` and returns `n`. The copy is a plain forward byte copy; no
+  bound other than the grow applies.
+
+The feature writer's idiom — `seek(size)` then `append(record)` — is
+therefore "append at end", and a writer that seeks to 0 and appends
+overwrites from the start while never shrinking the box. Reads and writes
+share the one cursor.
+
+### R-SESS-01 §3 — The single-player eyeball producer — Established; corrects [01 R-PLAT-02 §5] [R-SESS-01]
+
+[01 R-PLAT-02 §5] states that the temporary-sight observer list ("eyeball"
+records) has as its only producer the handler of a received unit-death
+packet, and concludes that in single player the list is always empty. The
+first half is right and the conclusion is wrong: the **same handler is the
+central death handler** the local death path calls directly, after building
+the death record that networking would send ([R-OOS-01 §1], type `0x0c`;
+[06 §12.1]). Retail therefore appends an eyeball in every session kind.
+
+The handler appends when all of these hold, in order:
+
+1. the victim's runtime status carries the *live* bit;
+2. the victim's owner slot index equals the local slot index;
+3. the visibility mode word has bit 1 set — the `Circular` or `True` modes
+   of [03 R-VIS-01 §1], never `Permanent`;
+4. the list holds fewer than 20 records (at 20 the append is silently
+   dropped).
+
+The record is then filled exactly as [01 R-PLAT-02 §5] lays it out: owner =
+the local player record; sight distance = the victim definition's
+`sightdistance` word [fmt fbi]; height byte = the low byte of the
+definition's height field (the field the target-top and repair-admission
+tests read, [04 R-SPEC-01 §15]); position = the victim's world X, Y, Z with
+Y raised to `(SeaLevel + 1) << 16` when lower; expiry = `globalTick + 60`.
+Before the count is incremented the record's coverage is computed and
+published through doc 03's observer path — the true-LOS raster when the mode
+word's bit 2 is also set (`True`), the circular coverage tile otherwise
+([03 R-VIS-01 §2]); that arithmetic is doc 03's contract and is cited here
+only to fix the order: **coverage publish, then count increment**. The 60-tick expiry is then consumed by the
+post-loop expiry pass of [01 R-PLAT-02 §5], which is therefore **not** a
+no-op in single player.
+
+Implementation consequence: a unit the local player loses keeps revealing
+its sight radius for two seconds after death under `Circular`/`True` line
+of sight. Doc 01's "always empty" paragraph and its expiry-pass remark, and
+doc 03's visibility-producer census, need the corresponding correction
+(cross-document follow-up; not edited by this unit).
+
+### R-SESS-01 §4 — Feature writer: an animating cell whose sequence matches no family writes no record — Established [R-SESS-01]
+
+[R-SAVE-FEATURE-01] gives the three record maps and says the animating
+record's selector nibble is `0`, `1` or `2` for the burn, death and reclaim
+families. The writer side has one more edge: the nibble is chosen by
+comparing the cell's live animation-sequence pointer against the
+definition's three family sequences in that order, and when it matches
+**none** of them the cell is skipped entirely — no `Animating Features`
+record, and the `Number of Animating Features` count is not incremented.
+Such a feature (one whose live sequence pointer was set by some path other
+than the three families) is simply absent from the save and does not exist
+after load. The "other selector values" the reader tolerates therefore never
+originate from the retail writer. The 3D and normal branches have no such
+skip.
+
+### R-SESS-01 §5 — The session-kind accessor — Established [R-SESS-01]
+
+The many sites that "test the session kind" (46 callers across every lane)
+read it through one accessor that returns the **first word of the session
+object** — the game type of "Game session": `1` campaign, `2` skirmish, `3`
+multiplayer ("Mission type dispatch"). There is no other reader shape.
+[08 "Mission type dispatch"]
+
+
 ## Required implementation invariants
 
 A conforming clean-room implementation must preserve these established
@@ -6193,6 +6400,12 @@ finding. The recitals are deleted here only; the body sections and the
   whether the download-menu list is allocated for every definition ·
   [R-ENTRY-02 §2], "Strategic state construction and refresh" · static trace
   of the download-menu compile's per-definition allocation.
+- The authored FBI key behind the definition height field whose low byte
+  the death-eyeball record copies · [R-SESS-01 §3], [04 R-SPEC-01 §15] ·
+  static trace of the FBI reader's key table (doc 04 / doc 02 own the key).
+- Whether the lobby record's registration byte value `1` means "registered
+  as human" for the remote-slot branch of the live-human counter ·
+  [R-SESS-01 §1] · static trace of the registration writer's value table.
 
 ### Computer player
 

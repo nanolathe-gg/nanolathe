@@ -37,7 +37,7 @@ func catalogHash(c *Catalog) string {
 		}
 	}
 	// Categories — sorted registry names and fixed-width membership values
-	// [R-P0-03]. The private sentinel is included without inventing a label.
+	// [R-P0-03]. ALL is included as an ordinary category token.
 	if c.Categories != nil {
 		for _, e := range c.Categories.entries {
 			fmt.Fprintf(h, "category %s", e.Name)
@@ -46,11 +46,6 @@ func catalogHash(c *Catalog) string {
 			}
 			fmt.Fprintln(h)
 		}
-		fmt.Fprint(h, "category-sentinel")
-		for _, word := range c.Categories.sentinel.Words {
-			fmt.Fprintf(h, " %08x", word)
-		}
-		fmt.Fprintln(h)
 	}
 	// Weapons — sorted [02 §5] C12. Weapon ID selects record [02 "Weapon record"] C2 but catalog key is section name.
 	if len(c.Weapons) > 0 {
