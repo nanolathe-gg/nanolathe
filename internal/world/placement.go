@@ -611,7 +611,13 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 					maxHigh = h
 				}
 			}
-			if q.Mobile || yard&0x10 != 0 {
+			// The separate height maximum is yard bit 4's participation only;
+			// a yardless mobile product never sets it, so the `bit4Max >
+			// siteHeight` gate below cannot reject a sloped factory exit
+			// [04 R-FAC-02 §6][04 §6.4]. An earlier build sampled every mobile
+			// cell here and every stock lab on a slope then failed its exit
+			// validation forever.
+			if yard&0x10 != 0 {
 				if h := int32(cell.MaxHeight()); h > bit4Max {
 					bit4Max = h
 				}

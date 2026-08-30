@@ -77,9 +77,12 @@ func (s *Service) spriteShapeIndex(radius int32) int {
 	return q
 }
 
-// rayTableIndex quantizes a sight radius to a LOS.TDF table index [03 §3.2] C2 [P0-18].
-// The terrain-ray path divides by 32 WITHOUT the -5 and clamps into the declared table range 0..9-1 [P0-18][SC9].
-// Common q via floorDiv32 then g=clamp(q,0,nsRay-1).
+// rayTableIndex quantizes a sight radius to the terrain-ray table GROUP
+// g = clamp(floor(radius/32), 0, numtables-1) [03 §3.2] C2 [P0-18][SC9].
+//
+// g is the refresh-throttle key, not the table walked: retail's table-by-index
+// accessor is one-based against a zero-based store, so group g walks TABLE g-1
+// [03 R-COMP-02 §1]. rayTableRecord does that translation.
 func (s *Service) rayTableIndex(radius int32) int {
 	n := s.rayTableCount()
 	if n == 0 {
@@ -160,9 +163,20 @@ func (s *Service) walkTerrainRay(cx, cz int32, heightByte uint8, radius int32, v
 	if s.terrain == nil {
 		return
 	}
-	spokes := s.raySpokes(s.rayTableIndex(radius))
-	if len(spokes) == 0 {
+	g := s.rayTableIndex(radius)
+	if g < 0 {
 		return
+	}
+	// Group g walks TABLE g-1 [03 R-COMP-02 §1]: sight in [32(k+1), 32(k+2))
+	// walks TABLE k, and TABLE numtables-1 is unreachable.
+	//
+	// TODO(question): group 0 (sightdistance < 32) reads the record before
+	// the table list in retail and its content is unknown [03 R-COMP-02 §1];
+	// the doc sanctions an empty line list here, so only the origin is
+	// admitted. A retail capture of a unit with sightdistance < 32 settles it.
+	var spokes [][]step
+	if g >= 1 {
+		spokes = s.raySpokes(g - 1)
 	}
 	// Origin admitted unconditionally when the selected authored table exists
 	// [C5]. A missing table is an absent asset, not a synthetic one.

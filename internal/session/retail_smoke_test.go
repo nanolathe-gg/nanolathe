@@ -13,6 +13,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/orders"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -176,23 +177,82 @@ func TestRetailFactoryAndEconomyAdvance(t *testing.T) {
 		t.Fatal("CORE commander not spawned")
 	}
 	startMetal := s.Econ.Players[0].Stock[economy.Metal]
-	goalX := builder.X.Add(world.CellToWorld(20))
-	goalZ := builder.Z.Add(world.CellToWorld(20))
+	goalX, goalZ := retailBuildSite(t, s, f.cat, builder, retailARMLab)
 	if err := construction.QueueMobileBuild(builder, retailARMLab, goalX, goalZ, 1, f.cat); err != nil {
 		t.Fatalf("queue authored factory: %v", err)
 	}
-	coreX := coreBuilder.X.Add(world.CellToWorld(20))
-	coreZ := coreBuilder.Z.Add(world.CellToWorld(20))
+	coreX, coreZ := retailBuildSite(t, s, f.cat, coreBuilder, retailCORELab)
 	if err := construction.QueueMobileBuild(coreBuilder, retailCORELab, coreX, coreZ, 1, f.cat); err != nil {
 		t.Fatalf("queue authored CORE factory: %v", err)
 	}
-	stepRetail(s, 120)
-	if s.Clock.GlobalTick != 120 {
-		t.Fatalf("global tick = %d, want 120", s.Clock.GlobalTick)
+	// The builder walks to nano range before the nanoframe is allocated and
+	// the first debit lands [05 "Factory production lifecycle"]; the walk
+	// length is authored by the map, so advance in bounded rounds rather than
+	// asserting a fixed arrival tick.
+	const round, maxRounds = 120, 8
+	progressed := func() bool {
+		return s.Econ.Players[0].Stock[economy.Metal] < startMetal || retailUnit(s, 0, retailARMLab) != nil
 	}
-	if s.Econ.Players[0].Stock[economy.Metal] >= startMetal && retailUnit(s, 0, retailARMLab) == nil {
+	rounds := 0
+	for ; rounds < maxRounds && !progressed(); rounds++ {
+		stepRetail(s, round)
+	}
+	if want := uint32(rounds * round); s.Clock.GlobalTick != want {
+		t.Fatalf("global tick = %d, want %d", s.Clock.GlobalTick, want)
+	}
+	if !progressed() {
 		t.Fatalf("factory order made no authored progress and did not settle economy: metal %.1f", s.Econ.Players[0].Stock[economy.Metal])
 	}
+}
+
+// retailBuildSite picks the nearest cell offset from the builder whose
+// footprint passes the shared placement legality query for the product. A
+// blind fixed offset landed on a slope the lab's authored limit rejects, so
+// the order was abandoned through the blocked-area budget [R-ORDER-02 §1]
+// rather than ever reaching construction.
+func retailBuildSite(t *testing.T, s *Session, cat *content.Catalog, builder *units.Unit, key string) (numeric.Fixed, numeric.Fixed) {
+	t.Helper()
+	def, ok := cat.Unit(key)
+	if !ok || def == nil {
+		t.Fatalf("product %q absent", key)
+	}
+	extent, err := world.NewFootprintExtent(int32(def.FootprintX), int32(def.FootprintZ))
+	if err != nil {
+		t.Fatalf("footprint for %q: %v", key, err)
+	}
+	yard, err := world.ParseYardMap(def.YardMap, int(def.FootprintX), int(def.FootprintZ))
+	if err != nil {
+		t.Fatalf("yardmap for %q: %v", key, err)
+	}
+	rules, err := world.PlacementRulesForUnit(cat, def)
+	if err != nil {
+		t.Fatalf("placement rules for %q: %v", key, err)
+	}
+	const maxRadius = 24
+	for r := 2; r <= maxRadius; r += 2 {
+		for dz := -r; dz <= r; dz += 2 {
+			for dx := -r; dx <= r; dx += 2 {
+				if dx != -r && dx != r && dz != -r && dz != r {
+					continue
+				}
+				x := builder.X.Add(world.CellToWorld(int32(dx)))
+				z := builder.Z.Add(world.CellToWorld(int32(dz)))
+				anchor, err := world.SnapFootprintAnchor(x, z, extent)
+				if err != nil {
+					continue
+				}
+				rect, err := world.NewFootprintRect(anchor, extent)
+				if err != nil {
+					continue
+				}
+				if _, err := s.World.CheckPlacement(world.PlacementQuery{Rect: rect, Yard: yard, Rules: rules, Self: uint16(builder.Handle), Mobile: def.BMCode}); err == nil {
+					return x, z
+				}
+			}
+		}
+	}
+	t.Fatalf("no legal %q site within %d cells of %s", key, maxRadius, builder.Def.UnitName)
+	return 0, 0
 }
 
 // TestRetailCombatPublishesProjectileAndDeath exercises authored weapon

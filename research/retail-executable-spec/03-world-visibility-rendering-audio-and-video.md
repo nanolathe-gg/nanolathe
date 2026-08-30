@@ -3864,8 +3864,10 @@ substitute an empty line list as a sanctioned divergence, stated as such.
 
 Status: **Established** (direct-static: the sweep, its call site in the tick
 executor, and the decrement publisher). Closes the standing question of how a
-temporary sight source ("eyeball", [01 R-PLAT-02 §5] / [08 R-OOS-01 §1]) expires;
-the producer remains packet-only, so the sweep is inert in single-player.
+temporary sight source ("eyeball", [01 R-PLAT-02 §5] / [08 R-OOS-01 §1]) expires.
+(An earlier draft of this paragraph said the producer is packet-only and the
+sweep inert in single player; the central death handler appends eyeballs in
+every session kind — [08 R-SESS-01 §3] — so the sweep does real work.)
 
 The tick executor runs the eyeball sweep once per sub-tick **after the twelve
 phases and after the deadline-ring slide**, as its last step. Over the eyeball
@@ -4975,6 +4977,74 @@ gated on the projected origin lying inside the viewport rectangle
 (inclusive point-in-rectangle test); the fixed-effect draw pass applies the
 same test before calling the effect entry. Neither entry reads `SHD`, the height key, or the
 composition image; both write straight to the target image.
+
+### Closed — the composition memory cache and its composite surface, the strip pool's growth, and the container `finished` query [R-COMP-02 §7] (2026-08-29)
+
+Status: **Established (direct-static)** except where marked.
+
+**The composition memory cache — creation and size.** The catalog compiler
+([02 R-CAT-01 §5] step 2) creates the cache after the movement classes are
+read: a 20-byte cache object (capacity, block pointer, first-span pointer,
+composite-surface pointer) is allocated and reset, then initialised with a
+size computed as follows, in this order:
+
+1. `a = trunc(double(W × H × 2) × 1.3)` — `W`, `H` the display width and
+   height ([07 R-FE-02 §2]'s 640×480 in the battle), the product and doubling
+   in 32-bit integer arithmetic, the multiply in double precision, the
+   result truncated toward zero;
+2. `n = trunc(v / 2^20) + 1`, where `v` is a word of the terrain record and
+   the division truncates toward zero (the sign-corrected arithmetic shift);
+3. `f = 1.0` when `n ≤ 16`; otherwise `f = n × 0.0625` when that product is
+   `≤ 5.0`, else `f = 5.0` — so `f = min(n / 16, 5)` for every map deeper
+   than the threshold;
+4. `size = trunc(a × f)` rounded **up** to a multiple of 4096 (add 4095 and
+   clear the low twelve bits).
+
+The initialiser frees any previous block, allocates `size` bytes under the
+tag `CMemoryCache`, records `size` as the capacity, points both the block and
+the first-span pointer at it, and writes one free-span header at the start of
+the block — a zero word followed by the capacity — so the whole block begins
+as a single free span; the records [R-COMP-02 §3]'s purge walks are carved
+from it. It then allocates the `CompositeBuffer` surface: an indexed image of
+**600 × 600** — a 24-byte header (width and height words, zeroed offset and
+flag words) followed by two contiguous `w × h` planes, the body plane and
+then the key plane, with the header holding a pointer to each — the staging
+image of [R-REN-03A §4]. Failure of either allocation leaves the compiler's
+return unread; retail does not check it. **Supported inference:** `v` is the
+map's height in 16.16 world units, making `n` the map height in 16-unit
+footprint cells plus one (the reading of the catalog trail); decider: the
+terrain loader's writer of that word. The purge-time record format and the
+two-key match are [R-COMP-02 §3]'s and are not restated.
+
+**The strip pool's constructor and growth** ([R-FX-02 §1], the "vector grown
+by the pool's own allocator"). The constructor stores the low byte of the
+requested slot count, clears the block vector and the slot array, installs
+the pool's table, and — only when both the count `n` and the slot size `m`
+are non-zero — grows to `n` slots of `m` bytes. Growth is a no-op returning
+success when `n` does not exceed the current count. Otherwise it reallocates
+the slot-pointer array to `n` entries, allocates **one** block of
+`(n − old) × m` bytes, fills entries `old … n − 1` with successive `m`-byte
+offsets into that block, appends the block pointer to the block vector (the
+doubling rule of the shared vector helpers), and records `n` and `m`. Either
+allocation failing returns 0 with the pool unchanged in count. The static
+initialiser that builds the pool and its slot count is
+[01 R-PLAT-02 §1]'s.
+
+**The container `finished` query.** The effect base class of [R-FX-02 §3]
+carries a virtual entry returning `deadline ≤ currentTick` (unsigned,
+**inclusive**). The removal rule the family bodies apply is [R-FX-01 §3]'s
+strict `expiry < tick`; because the call is virtual, which bodies consult
+this base entry (and on which side of the tick increment) is not traced —
+**Unknown**, decider: a caller census of the table slot.
+
+**Cited, not restated.** The presentation-surface (re)creation family (GDI
+DIB or DirectDraw path, the lost-surface restore, the surface-lock event) is
+[03 §4.1] and [03 §4.2]; the surface clear (one index over the whole surface,
+a DirectDraw colour fill when the surface is a device surface) and the
+surface descriptor initialiser (size, pitch, clip rectangle, owned bit) are
+[R-COMP-01 §2] and [03 §4.4]'s descriptor rules. Nanolathe's presentation is
+Ebitengine (`docs/INVARIANTS.md` I6); the contract those sections carry is the 640×480
+enforcement and the lost-surface replay, not the DirectDraw calls.
 
 ## 5. World render passes and object presentation
 
@@ -8338,6 +8408,12 @@ by the sharper question it turned into.
 
 ### Renderer
 
+- The unit of the terrain-record word that sizes the composition memory
+  cache (read as the map height in 16.16; `n = trunc(v / 2^20) + 1`) ·
+  [R-COMP-02 §7] · the terrain loader's writer of that word.
+- Which effect bodies consult the base container's inclusive `finished`
+  query, and on which side of the tick increment · [R-COMP-02 §7] · caller
+  census of the table slot.
 - Which stock GAF sub-frames set the alternate-blitter flag that routes a
   sub-frame through the tinted blitter · [R-COMP-01 §2] · asset census over
   every sub-frame header settles it.

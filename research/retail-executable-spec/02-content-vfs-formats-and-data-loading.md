@@ -4276,11 +4276,6 @@ finding they recited remains in the body sections that own it.
 * Reader of the four-byte definition field the catalog loader sets to −1
   after the Version/Copyright gate (`[R-CAT-01 §4]` step 9) · §5 · reader
   census on that field (naming only; no load-path behaviour depends on it).
-* The map-size factor in the composition memory-cache size (`trunc(W × H ×
-  2 × 1.3)` scaled by a factor chosen from the map's height in 1,024-unit
-  cells against a threshold of 16) · §5 `[R-CAT-01 §5]` step 2, owner
-  `[03 R-REN-03A]` · static trace of the two float constants the compiler
-  selects between.
 * Whether the settings saver writes the `Image Output Directory` default
   (`user_images\<account name>`) back to the registry · §3 `[R-CAT-01 §2]`
   · static trace of the saver's value list.

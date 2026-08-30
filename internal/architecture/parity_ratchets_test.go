@@ -206,15 +206,16 @@ func TestAuthoritativeMapIterationDoesNotGrow(t *testing.T) {
 // the authoritative packages: files whose float64 use is named by an I2 row.
 // Each entry carries the row it mirrors; the list only shrinks.
 var float64ExemptFiles = map[string]string{
-	"internal/clock/clock.go":      "I2 clock budget product (delta × speed + carry float64, carry float32) and clock float seconds [01 §4.2]",
-	"internal/economy/ledger.go":   "I2 economy cumulative totals and waste counters [05 \"Stocks, counters, and waste\"]",
-	"internal/movement/flight.go":  "I2 flight brake integration temporaries, narrowed at the named fixed-point stores [04 §10.1]",
-	"internal/combat/aim.go":       "I2 ballistic discriminant, acos, sqrt [06 §3.3]",
-	"internal/combat/impact.go":    "I2 area-damage range sqrt, float64 transient truncated to int32 [06 §9.3]",
-	"internal/sim/numeric/trig.go": "I2 simulation trig-table construction, float64 transient [04 §5.1]",
-	"internal/save/boxes.go":       "I2/I13 save float boxes: the game-time save box and account doubles are byte-layout contracts",
-	"internal/save/bank.go":        "I13 HAPIBANK account record doubles are a byte-layout contract",
-	"internal/session/strips.go":   "I2 nanolathe particle travel distance (sqrt, truncated to the tick count), float64 temporary never stored [03 §5.5]",
+	"internal/clock/clock.go":              "I2 clock budget product (delta × speed + carry float64, carry float32) and clock float seconds [01 §4.2]",
+	"internal/economy/ledger.go":           "I2 economy cumulative totals and waste counters [05 \"Stocks, counters, and waste\"]",
+	"internal/economy/p28_parity_trace.go": "opt-in trace copy of ledger.go's I2 cumulative totals and waste counters (same I2 row; P28-OBS-00C)",
+	"internal/movement/flight.go":          "I2 flight brake integration temporaries, narrowed at the named fixed-point stores [04 §10.1]",
+	"internal/combat/aim.go":               "I2 ballistic discriminant, acos, sqrt [06 §3.3]",
+	"internal/combat/impact.go":            "I2 area-damage range sqrt, float64 transient truncated to int32 [06 §9.3]",
+	"internal/sim/numeric/trig.go":         "I2 simulation trig-table construction, float64 transient [04 §5.1]",
+	"internal/save/boxes.go":               "I2/I13 save float boxes: the game-time save box and account doubles are byte-layout contracts",
+	"internal/save/bank.go":                "I13 HAPIBANK account record doubles are a byte-layout contract",
+	"internal/session/strips.go":           "I2 nanolathe particle travel distance (sqrt, truncated to the tick count), float64 temporary never stored [03 §5.5]",
 }
 
 // float64Baseline records float64 occurrences per remaining (non-exempt)
@@ -338,7 +339,7 @@ var debtMarkerTotals = map[string]int{
 	"fallback":       189,
 	"guess":          7,
 	"plausible":      1,
-	"todo(question)": 353, // main's step.go tighten (-3) plus five combat/damage.go water-damage placeholders
+	"todo(question)": 351, // 2026-08-29: step.go 5->3, placement.go 4->3 tightened; visibility/publish.go +1 (LOS group 0)
 }
 
 var debtMarkerFileCounts = map[string]map[string]int{
@@ -506,7 +507,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/session/session.go":              3,
 		"internal/session/skirmish.go":             6,
 		"internal/session/state.go":                1,
-		"internal/session/step.go":                 5,
+		"internal/session/step.go":                 3,
 		"internal/session/strips.go":               15,
 		"internal/sim/numeric/numeric.go":          1,
 		"internal/sim/numeric/trig.go":             1,
@@ -515,8 +516,9 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/units/types.go":                  1,
 		"internal/units/units.go":                  7,
 		"internal/visibility/fog.go":               1,
+		"internal/visibility/publish.go":           1, // LOS group-0 record content is Unknown [03 R-COMP-02 §1]
 		"internal/world/feature_stamp.go":          1,
-		"internal/world/placement.go":              4,
+		"internal/world/placement.go":              3,
 		"internal/world/plot.go":                   3,
 		"internal/world/terrain.go":                1,
 		"internal/world/wind.go":                   2,

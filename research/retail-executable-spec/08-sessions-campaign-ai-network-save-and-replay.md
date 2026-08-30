@@ -5522,7 +5522,7 @@ constructors that make each class:
 | Code | Payload | Class | Constructed by |
 |---:|---:|---|---|
 | `2` | `0x36` | the **path marker** (air work point) — flag word, arrival radius, height offset, side word, owner and target unit links, goal X/Y/Z 16.16 ([R-PATH-01 §9] "Class-D"; [R-AIR-01]) | the VTOL move/patrol/follow order handlers |
-| `3` | `0x2A` | a two-vector work record: owner unit link, two 16.16 triples, three `u16` words | one VTOL-family order handler (which one is **Unknown** — decider: trace of that handler's descriptor) |
+| `3` | `0x2A` | a two-vector work record: owner unit link, two 16.16 triples, three `u16` words | the `AirToAir` handler — its only runtime constructor ([R-SESS-01 §6]; this cell said **Unknown** until 2026-08-29) |
 | `4` | `0x10` | the **point goal** handle (relative cell pair, radius parameter, squared threshold) | `Move_Ground`/`Patrol` goal install ([R-ORD-01 §1]) |
 | `5` | `0x18` | the **annulus goal** (outer/inner) | annulus goal install ([R-ORD-01 §1]) |
 | `6` | `0x14` | the **rectangle goal** (packed origin, packed size) | rectangle goal install ([R-ORD-01 §1]) |
@@ -6295,6 +6295,30 @@ object** — the game type of "Game session": `1` campaign, `2` skirmish, `3`
 multiplayer ("Mission type dispatch"). There is no other reader shape.
 [08 "Mission type dispatch"]
 
+
+### R-SESS-01 §6 — The code-3 order sub-object has one runtime constructor: the `AirToAir` handler — Established [R-SESS-01]
+
+[R-SAVE-02 §10] left "which VTOL-family order handler" constructs the
+code-3 payload (the two-vector work record) as **Unknown**. The class is
+[04 R-PATH-01 §9]'s air moving point — the *velocity marker* whose per-tick
+turn clamp is [04 R-MOV-03 §2]'s — and its runtime constructor has exactly
+one call site: the `AirToAir` handler's phase 0/1 leg ([04 R-AIR-01 §8],
+[04 R-ORD-02 §5]). Its only other constructor is the save reader's, which
+rebuilds it from the code-3 box. A code-3 record in a save therefore always
+belongs to an `AirToAir` order that was in flight at save time; its first
+triple is the marker's position and the second its per-tick velocity, and
+the class code the reader matches is the marker's own class-code slot
+(`3`, [04 R-MOV-03 §9]). The three trailing `u16` words remain unnamed
+(the "Save and replay" tail keeps that item).
+
+The AI planner's group-centroid helper the ledger had left uncited is
+[R-AI-01 §9]'s ("Group centroid"); the empty virtual slot on the task-class
+method table is the base task's ([R-AI-01 §1]) and has no behaviour. The
+eleven-slot connection table's static initialiser (send interval 200 ms,
+time-out clamp, and the `(ms × 30 + 999) / 1000` tick conversion of
+[01 R-PLAT-01 §2]) and the packet-buffer class's empty virtual stubs are
+transport code and stay outside the single-player boundary of
+[R-OOS-01 §3].
 
 ## Required implementation invariants
 

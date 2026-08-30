@@ -6525,13 +6525,14 @@ and completed buildings register in a structures registry that placement
 consults instead. Self identity passed to the validator exempts only the
 producing factory or walking builder; foreign stamps still block silently.
 
-`TODO(question)`: the exit caller's terrain-check mode value is unresolved —
-the inline aggregate gates (slope/height/water, recovered mode value 1)
-need not run at exits at all. Nanolathe currently runs factory exit-spot
-validation outside those aggregates (`PlacementQuery.SkipTerrainAggregates`)
-while mobile builder site builds keep them; a targeted executable trace of
-the mode argument at the production state machine's validation call would
-settle it.
+**Closed (2026-08-29, RWU-04-10 / [R-FAC-02 §5–§6]):** the exit caller's
+terrain-check mode is 1 — the state-2 validator receives the factory's own
+class/state pair, which is 1, and every allocator call site passes 1 — so
+the inline gates run at exits exactly as at a chosen site. The separate
+bit-4 height maximum is a yard-map participation, which a yardless mobile
+product never contributes to; Nanolathe's earlier build sampled every
+mobile cell into it and rejected every sloped exit (fixed forward
+2026-08-29). Earlier text here left the mode value as a `TODO(question)`.
 
 **Established fact — yard control bytes [R-P0-08]:** The compiled yard-map
 characters are:
@@ -10316,6 +10317,65 @@ pad's definition to carry both `isairbase` and `builder`, the pad to be
 complete, and the lander's `(int16)health < maxdamage`; and the attack-run
 marker's radius is `128 + random below 128` from one simulation draw.
 
+### Closed — the remaining goal-class and controller slots, and the rectangle border order [R-MOV-03 §9] (2026-08-29)
+
+The last ledger rows of the goal family and the motion-controller family
+were read against [R-PATH-01 §9], [R-MOV-03 §2] and [R-AIR-01 §1]. Nothing
+there is contradicted; four details are added so the tables are complete.
+
+**The class-code slot, whole table — Established.** The method table's
+class-code entry returns `1` for the abstract base, `2` for the air work
+point (path marker), `3` for the air moving point (the velocity marker of
+[R-MOV-03 §2]), `4` point/radius, `5` annulus and `6` rectangle. Codes 2–6 are
+[08 R-SAVE-02 §10]'s; code `1` is the base's own. **Supported inference:**
+code `1` never reaches a save, because every constructor installs a derived
+table after the base's ([R-PATH-01 §9]'s base-then-derived chain) and no
+site constructs the base alone; what would settle it is a constructor census
+of the base table. The *is-a-search-goal* entry ([R-MOV-03 §2]) is the slot
+immediately before the class code; the base returns 0 there.
+
+**The base enumerator empties the cell vector — Established.** The base
+class's enumerate entry sets the goal's cell-vector end to its begin and
+enumerates nothing; the two air classes inherit exactly that, which is the
+mechanism behind [R-PATH-01 §9]'s "empty enumerator". The class-E entry that
+returns 0 in the slot after the class code is the base's null method of
+[R-MOV-03 §2], not a distinct contract.
+
+**The rectangle enumerator's order — Established.** With `x1 ≤ x2` and
+`z1 ≤ z2` the stored corners, the enumerator first empties the vector, then
+for `x = x1 … x2` (inclusive) appends `(x, z1)` and then `(x, z2)`, and
+then for `z = z1 + 1 … z2 − 1` (inclusive) appends `(x1, z)` and then
+`(x2, z)`. Each cell is one 32-bit word, `x` in the low half and `z` in the
+high half. There is no de-duplication: a rectangle with `z1 == z2` lists
+every top-row cell twice, and one with `x1 == x2` lists every column cell
+twice. The vector grows by the doubling rule of the shared vector helpers.
+The border is therefore exactly [R-PATH-01 §9]'s; the order matters only to
+the search's goal-cell marking, which is order-insensitive.
+
+**Controller teardown and the overlay slot — Established.** The ground route
+follower's deleting destructor first hands itself to the path scheduler's
+route-release path ([R-PATH-01 §8]) — so a unit that dies mid-route releases
+its route the same way a replaced route does — then frees the record. The
+flight command block family has three method tables; one of them carries its
+own deleting destructor, which virtually deletes the goal payload it holds
+([R-AIR-01 §1]) before freeing the block, while the other two use the
+compiler's plain scalar destructor and free only the block — the payload
+those two hold is released through the order record's payload release
+([R-ORD-01 §1]), not by the controller. The controller method table ends in a
+presentation hook: only the ground follower's entry has a body (a walk of the
+stored route points that draws through the raster layer); the base
+controller's and every flight block's entry is empty. **Unknown:** what the
+ground entry draws and which developer overlay calls it · decider: a read of
+that entry against [03 R-COMP-01 §5].
+
+**Cited, not restated.** The annulus-goal installer used by the order case
+bodies and by `HelpBuild` is [R-ORD-01 §1]'s (it installs an *annulus*, not a
+rectangle — an earlier ledger note mis-named it); the pad-landing phase that
+builds a follow-unit marker with the reserved no-piece index and horizontal
+arrival radius 160 is [R-AIR-01 §6]'s phase 2; the flight block's input fetch
+(command position, command velocity, command heading) is [R-AIR-01 §1]'s; the
+observer node's unlink-on-destroy is [R-MOV-03 §7]'s.
+
 ## 11. Evidence basis and correction boundaries
 
 The movement and script sections above were derived only from these areas of the retail executable:
@@ -10607,9 +10667,6 @@ state and page-flip availability, not follower state — doc 03 owns them.)*
 - Wake and SFX-piece mapping beyond the `setSFXoccupy` five-band classifier
   · §9.2, doc 03 · static trace. (The classifier's test order is
   [R-MOV-03 §1].)
-- Identity of the held key whose release gates the `+BigBrother` 90-tick
-  selection cycle in the sweep tail · [R-MOV-03 §1], doc 07 [R-CAM-01 §2] ·
-  the camera held-key census.
 - Whether the hover bob's per-corner perturbation — at most two height units,
   [R-MOV-01 §5] — can carry a hovering unit's committed integer height across
   the sea-level, waterline, or model-bottom thresholds that the band

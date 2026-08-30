@@ -5,20 +5,32 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 func TestPhase2AlreadyDyingRunsNormalStagesAndFinalizesOnce(t *testing.T) {
-	s := newLoopTestSession(t, 1)
-	u := s.Units.IterSliced()[0]
-	h := pool.Handle(u.Handle)
-	vm := cob.NewVM(&cob.Program{Code: []uint32{
+	s := newLoopTestSession(t, 0)
+	// The unit must be allocated with its script so the engine-port handlers
+	// are bound at attachment; a VM installed directly through SetScript has
+	// no port 5 receiver, and the write below would land nowhere.
+	def := s.Catalog.Units["armcom"]
+	def.Script = &cob.Program{Code: []uint32{
 		0x10021001, 5, // push INBUILDSTANCE port
 		0x10021001, 1, // push true
 		0x10082000, // set port during the normal COB stage
-	}})
+	}}
+	h, err := s.Units.Create(def, 0, numeric.Fixed(10*65536), 0, numeric.Fixed(10*65536))
+	if err != nil {
+		t.Fatalf("create scripted unit: %v", err)
+	}
+	ensureMovementForAll(s)
+	u := s.Units.Unit(h)
+	vm := u.GetScript()
+	if vm == nil {
+		t.Fatal("scripted unit has no VM")
+	}
 	vm.Threads[0].Status = cob.ThreadRunning
-	u.SetScript(vm)
 	u.PriorSample = 17
 	u.Dying = true
 	u.DeathCause = units.DeathKilled

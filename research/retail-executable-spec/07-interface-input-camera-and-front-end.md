@@ -441,7 +441,7 @@ controller kind is `1..3` and its side byte is not `10`.
 | `NetStats` | reset the network statistics block |
 | `Sing` | toggle the "sing" flag read by the unit-chat voice path ([R-CAM-01 §7]) |
 | `NoMetal [p] n` / `NoEnergy [p] n` | slot `p` (own slot when one argument): metal / energy stock = float(`n`) — 1-argument form writes the local player |
-| `BigBrother` | toggle a camera-flags bit; when set, write `1` to a companion camera word; when cleared, cancel the follow target ([R-CAM-01 §12]). **Unknown:** the companion word's reader · static trace |
+| `BigBrother` | toggle a camera-flags bit; when set, write `1` to a companion camera word; when cleared, cancel the follow target ([R-CAM-01 §12]). The companion word is the 90-tick cycle counter of the unit sweep tail, paused while Shift is held ([R-CAM-01 §12], [04 R-MOV-03 §1]). |
 | `Now Film Chris Include Reload Assert` | exactly six words with these exact (case-sensitive) spellings: set the developer bit; any other `+Now …` clears it ([R-CAM-01 §9]) |
 | `Drop n` | flags bit 0 = (`n == 0`) |
 | `ShootAll` | toggle flags bit 10 |
@@ -3215,10 +3215,15 @@ field wraps, ellipsises or truncates. "Centred at anchor A" below means
 glyph-advance sum of the string in the side font (signed division, truncating
 toward zero).
 
-**Established — the panel-slide gate.** The side-rail slide of §6 (the Space
-key contract) runs only when the session kind is 2 or 3 (skirmish or
-multiplayer in doc 08's vocabulary); in a campaign mission (kind 1) the
-composer skips the slide step and the strip stays parked.
+**Established — the panel-slide gate (corrected 2026-08-29, RWU-07-6).**
+The session-kind gate belongs to the Space-held **Kills/Losses score panel**
+([R-HUD-04 §1]): the composer draws it only when the session kind is 2 or 3
+(skirmish or multiplayer in doc 08's vocabulary) and never in a campaign
+mission (kind 1). The previous text attributed the gate to "the side-rail
+slide of §6"; that was wrong — the §6 slide strip (`Game Time` / `Total
+Units` / `Game Speed`, 15 ms throttle, −31/0 detents) is stepped
+unconditionally in every session kind, and it is not a side rail but the
+strip that slides up from the bottom edge of the view when Space is held.
 
 ### Closed — the unit readout: name, damage bar, logo, rates, kills, caption and the secondary field [R-HUD-03 §2] (2026-08-29)
 
@@ -5207,6 +5212,15 @@ copying it to the desired origin. Every writer:
 | Phase 10 itself | steps current toward desired; a dead tracked object (alive bit clear) clears all three | — |
 | `+BigBrother` off, `+Move x y` (developer) | cancel / jump | yes / (developer, untraced) |
 
+**Established — the `+BigBrother` companion word (closed 2026-08-29,
+RWU-07-6).** The word `+BigBrother` writes `1` into is the 16-bit cycle
+counter of the unit sweep tail ([04 R-MOV-03 §1]): while the camera-flags
+bit is set and **Shift** (held-key query for token `0xF9`, §2) is not held,
+the tail decrements it each tick and, when it falls below 1, resets it to 90
+and re-picks the selection and the tracked object as `t` does. Shift held
+pauses the cycle. The "Unknown" for this word's reader in §2 and doc 04's
+held-key Unknown are both closed by this paragraph.
+
 Unit positions enter the desired origin through one conversion:
 `desiredX = sext16(unitX >> 16) − trunc(viewWidth / 2)`,
 `desiredZ = sext16((unitZ − (unitY >> 1)) >> 16) − trunc(viewHeight / 2)` —
@@ -5458,6 +5472,351 @@ are established above.
   separable statically · manual retail observation.
 
 
+## R-HUD-04 — the Kills/Losses score panel, the options-window unfold, and the latch-to-idle group reset (2026-08-29)
+
+Closed by RWU-07-6 (Wave 4 ledger closure, lane 07). Trail:
+`/tmp/ta-decompile/notes/gui/rwu-07-6.md`.
+
+### The Space-held Kills/Losses score panel [R-HUD-04 §1]
+
+**Established — what it is and when it runs.** Holding Space in a skirmish
+or multiplayer battle slides a score panel in from the **right** screen edge
+listing every player's kills and losses. It is drawn by the battle frame
+composer ([03 R-COMP-01]) after the world and chrome and only when the
+session kind is 2 or 3 (skirmish / multiplayer — doc 08's kind vocabulary);
+a campaign mission (kind 1) never calls it, so its slide word is inert
+there. It is separate from the bottom *slide strip* of §6 (`Game Time` /
+`Total Units` / `Game Speed`), which the composer steps unconditionally in
+every session kind — see the correction under [R-HUD-03 §1].
+
+**Established — show/hide polarity.** The panel is *showing* when the F4
+interface bit ([R-CAM-01 §2]) is set, or when Space is held (held-key query
+for token `0x20`) **and** the focused gadget of the top window is not a
+kind-3 text editor. Otherwise it is *hiding*: a text editor with the focus
+takes Space for itself and the panel retracts. (The bottom slide strip uses
+the same "Space unless a text editor has focus" test, §6.)
+
+**Established — the slide arithmetic.** One signed slide word `s` in
+`0..125` is the number of panel pixels on screen; it is stepped once per
+composed frame (no wall-clock throttle — unlike the §6 strip's 15 ms gate):
+
+* hiding: if `s < 1` nothing is drawn and the routine returns; if `s == 125`
+  the cue `Panel` plays (leaving the open detent); `step := trunc(s / 4)`
+  (signed, toward zero), `max(step, 1)`; `s := s − step`; if `s < 1` then
+  `s := 0` and the cue `Options` plays (reached the closed detent);
+* showing: if `s < 125`: if `s == 0` the cue `Panel` plays; `step :=
+  trunc((125 − s) / 4)`, `max(step, 1)`; `s := s + step`; if `s > 124` then
+  `s := 125` and the cue `Options` plays;
+* the panel is then drawn at the new `s` in the same frame, including every
+  intermediate position, so a press shows one frame of a 31-pixel sliver
+  (`125/4`).
+
+The cues are the same two aliases the §6 strip plays, through the sound
+alias cue of [08 R-CAMP-01 §6]. Because the step is a quarter of the
+remaining distance with a floor of one pixel, both directions converge in a
+bounded number of frames: 18 composed frames from fully closed to fully
+open, and 18 back.
+
+**Established — geometry and painting.** With `W` the composer surface
+width, `x0 = W − s`, `x1 = x0 + 125`, `y0 = 32`, `y1 = 40 × playerCount +
+46` (the session's player-count word): the rectangle `(x0, y0)–(x1, y1)` is
+darkened through the rectangle shader at level `−24` ([03 R-COMP-02 §5]).
+The localised `Kills` heading is written at `(x0 + 2, 32)` and `Losses`
+right-aligned at `(x1 − textWidth − 2, 32)`, both with a text width limit of
+119 and light-table row 0 (the panel text writer's brightness argument).
+Rows start at `y = 47` and advance by 40 per row drawn.
+
+**Established — row order and content.** Rows are emitted in **rank order**
+`r = 0 .. playerCount − 1`. For each rank the ten player slots are scanned
+in slot order for the first that qualifies: record present; controller byte
+1, 2 or 3; side byte ≠ 10; live-unit count ≠ 0 **or** the slot's auxiliary
+word == 0 (the word doc 08 leaves unnamed); the lobby record's watcher bit
+(`0x40`) clear; and the slot's **rank byte equals `r`** (the rank byte and
+its maintenance on every credited kill are [08 R-CAMP-01 §9]). The first
+match draws the row and the scan stops; if **no** slot holds rank `r`, every
+qualifying slot whose rank is greater than `r` has its rank byte
+decremented by one (compaction of a vacated rank) and the next rank is
+tried — so a vacated rank collapses in the same frame and the row count on
+screen equals the number of qualifying slots. For the drawn row, with `y`
+the row's top:
+
+* when the slot is the **local** player, the rectangle `(x0 + 4, y − 1)–
+  (x1 − 4, y + 38)` is lightened twice, at levels `31` then `20`;
+* the side logo is the frame numbered by the lobby record's logo byte in
+  the side-logo GAF entry, drawn by the quad-mapped blitter
+  ([03 R-RAST-01 §1]) from source corners `(1,1) (w−1,1) (w−1,h−1)
+  (1,h−1)` (the frame interior, `w`/`h` the frame size) onto the destination
+  quad `(x0+7, y+1) (x0+119, y+1) (x0+119, y+37) (x0+7, y+37)` — i.e.
+  stretched to 112 × 36;
+* the player name is written at `(x0 + 9, y + 6)`, width limit 119, row 0;
+* the kill count is formatted `%d` and written at `(x0 + 9, y + 21)`; the
+  loss count `%d` right-aligned at `(x0 + 119 − textWidth − 2, y + 21)`;
+  both with width limit 119 and their **flash brightness** (below).
+
+**Established — which counters, and the flash.** The kills value is the
+slot's kill counter, or its **commander-kill** counter when the
+commander-death option word is 2 (*Deathmatch* — [R-FE-01 §7] names the
+values); losses likewise select the loss counter or the commander-loss
+counter. These are the same words the report screen's `Kills`/`Losses`
+columns and the kill-lead line read ([08 R-CAMP-01 §7, §9]); the save
+account of the same name persists the first pair ([08 "Player records"]).
+Two ten-entry byte arrays hold a per-slot flash for kills and for losses:
+the kill-record finalize ([08 R-SKIR-01 §3]) sets the crediting slot's kill
+flash and the victim slot's loss flash to **30**; the score panel routine
+decays every non-zero entry by **2** once per unit of the scaled timer
+([R-CAM-01 §10], 30 units per second — the same once-per-unit latch as
+[R-WGT-01 §1] step 1) whether or not the panel is showing, and passes the
+byte as the light-table row of the number's text ([03 R-FONT-01 §6]): a
+fresh kill draws its number bright and fades to row 0 over half a second.
+Battle entry zeroes both arrays.
+
+**Supported inference.** The rank byte's initial assignment at battle entry
+(before any kill) is not traced here; the row order before the first kill is
+therefore whatever the entry path wrote — decider: the per-player reset row
+of [08 R-ENTRY-01 §2] (static trace).
+
+### The in-battle options window unfold [R-HUD-04 §2]
+
+**Established.** Opening the options root in battle (`PREFS.GUI`,
+[R-FE-01 §6]) snapshots the top window's surface into the `FLIPSURFACE`
+backup, wraps it as a one-frame sprite, and arms an *unfold* animation:
+`counter := 0`, `limit := windowWidth − 1`, `top := windowY` (the window
+record's y), `skew := 0`, and the options-open word. While that word is set
+the composer runs the unfold once per frame, after the score panel and the
+chat/diagnostic overlays and before presentation:
+
+1. If `counter < 277`: `counter := counter + 21`; if it is now `> 276` the
+   cue `Options` plays and `counter := 277`. Then, if `counter > limit` and
+   the **previous** counter was `< limit`, frame 2 of the `LIGHTBAR` entry of
+   the common GUI GAF is blitted once into the snapshot at the frame's own
+   hotspot (a one-time stamp on the backdrop).
+2. `skew := skew + 6` while `counter < limit`; otherwise `skew := max(skew −
+   6, 0)`.
+3. If `limit < counter < 277`: `counter := counter + 1` (one extra pixel per
+   frame after the width is passed).
+4. The snapshot is drawn onto the composer surface by the quad-mapped
+   blitter ([03 R-RAST-01 §1]) from source corners `(1,1) (w−1,1) (w−1,h−1)
+   (1,h−1)` (the snapshot interior) onto a destination quad whose bottom is
+   pinned to screen row **479** and whose top edge is skewed by `skew`:
+   * while `counter ≤ limit`: corners `(counter, top − skew) (127, top)
+     (127, 479) (counter, 479)` — the left edge sweeps right from `x = 0`
+     while the right edge stays at the side rail's edge `x = 127`;
+   * once `counter > limit`: corners `(limit, top) (counter, top − skew)
+     (counter, 479) (limit, 479)` — the left edge parks at the window width
+     and the right edge continues to `x = 277`.
+   Whether an inverted quad (left corner past the right corner) paints is the
+   two-chain rule of [03 R-RAST-01 §1] step 7, not a separate test here.
+5. The top window's redraw word is set, battle-interface dirty bit 2 is set,
+   and the "full chrome repaint" word is set to 1 — so the HUD repaints every
+   frame while the options window is open, not only during the sweep.
+
+The counter, skew and limit words have no other reader; the only observable
+effects are the `Options` cue when the counter saturates, the one-time
+`LIGHTBAR` stamp, the per-frame quad and the per-frame repaint requests.
+Closing the options root clears the options-open word and frees the
+snapshot ([R-FE-01 §6]).
+
+**Supported inference.** With the stock in-battle `PREFS` layout (the
+window widened by 150, [R-FE-01 §6]) `limit` equals the 277 saturation
+value, so the "counter > limit" branch — the `LIGHTBAR` stamp, the extra
+one-pixel steps and the second quad form — is unreachable, and the skew
+rises for the whole sweep (13 frames, to 78) and then decays. Decider: the
+authored `PREFS.GUI` panel width plus 150 (asset census).
+
+### Command-panel page close and the latch-to-idle group reset [R-HUD-04 §3]
+
+**Established — the page close.** The command-panel *page close* is called
+by every selection change ([R-CAM-01 §2]'s deselect, the `n`/`t` cycles,
+the `+BigBrother` sweep tail [04 R-MOV-03 §1], the build-page switch of
+[R-HUD-03 §6] and the front-end teardown) with one argument, *force*:
+
+1. When *force* is 0 and any of: battle-interface flag bit `0x800`, any of
+   its bits `0x65` (bits 0, 2, 5, 6), or any of bits 5–7 of the session-shell
+   byte (set while `TABMENU` is open, [R-FE-01 §7]) is set, the close is **deferred**: battle-interface dirty bit
+   `0x10` is set and the routine returns 0 without closing anything — the
+   interface pass that clears those bits re-runs the close.
+2. Otherwise the current-page word is zeroed; if no window is open the
+   routine returns 0.
+3. Then, while a window is open: if the **top** window's name equals (first
+   16 bytes) the command-window name the HUD recorded at battle entry, the
+   routine returns 1 — the command window is on top and the pages above it
+   are gone; else the top window is closed through the top-object close of
+   §3 ([R-WGT-01 §1]) and the test repeats. Returns 0 when the stack empties
+   without meeting the command window.
+
+**Established — the latch-to-idle reset.** The *return the command latch to
+idle* step named by [R-CAM-01 §2] (Escape with a latch armed) and §8
+(right-click) is one routine: the armed-order latch byte becomes 1 (idle),
+bit `0x20` of the latch flags byte (the Shift-latch persistence bit) is
+cleared, and — the "palette's default control" phrase of [R-CAM-01 §2] —
+the gadget named `STOP` is looked up by index (non-fatal; a miss skips the
+rest) and every kind-1 gadget with the same `assoc` byte as `STOP` (the
+radio group of [R-WGT-01 §3]) whose status word is non-zero has that word zeroed and is repainted, then
+the window redraw word is set. The status word is the button's authored
+`status` ([fmt gui]) — the frame base of [R-HUD-03 §6] — so this returns
+every button of the order palette's radio group to its up frame. The
+group-reset helper takes any gadget index and is shared with the other
+latch writers.
+
+## R-WGT-02 — the bitmap cache, window-record words, gadget appenders and small gadget contracts (2026-08-29)
+
+Closed by RWU-07-6. Trail: `/tmp/ta-decompile/notes/gui/rwu-07-6.md`.
+
+### The front-end bitmap cache [R-WGT-02 §1]
+
+**Established.** Every front-end screen and the in-battle options root
+request their backdrop by name through one cache (`FrontendX`, `options4x`,
+`dhelp`, `drestart`, `GameSettings`, … — the names in [R-FE-01]). The
+request carries the name (or null), a *clear-first* flag, an *apply
+palette* flag and a *keep-window* flag:
+
+1. With *clear-first* set, the display is cleared through the framebuffer's
+   clear and presented before anything else.
+2. A null name skips the cache: the image is null.
+3. Otherwise the cache — **ten** entries, each an image, a palette and a
+   name, most-recently-used first — is searched by exact (case-sensitive)
+   name. A hit is moved to the front (the entries above it shift down by
+   one).
+4. A miss decodes `bitmaps\<name>.pcx` with a fresh 1024-byte palette
+   buffer; a decoder failure is fatal through the modal status channel
+   ([01 R-PLAT-01 §8]) with the composed path as the message. Unless the
+   host mode word is 6 (the in-battle briefing of [R-FE-01 §4] — the one
+   request made from inside a battle is decoded but not cached), the last entry's image is freed with its palette, every entry
+   shifts down by one and the new image, palette and name take entry 0.
+5. With *keep-window* clear: when **no** window is open the image becomes the
+   global background image and the name is copied into the background-name
+   field (an empty name when the request was null); when a window is open
+   the image is handed to the **top window's background-image slot** (the
+   window record's backdrop pointer) and, if *apply palette* is set, the
+   decoded palette is installed as the display palette. The return is 1
+   when an image was resolved (or the name was null), else 0. With
+   *keep-window* set nothing is installed and the return is 0.
+
+So the ten most recent backdrops stay decoded across screen changes, a
+name is never decoded twice while it remains in the ten, and the front-end
+never evicts during a load. The `.pcx` decoder itself is [02 "PCX"] /
+[fmt pcx].
+
+### Window-record words and their setters [R-WGT-02 §2]
+
+**Established.** The interface object owns a stack of *window records*
+(one per open `.GUI`, head = top window; each record holds the gadget
+array, the rectangle, the backdrop image and the words below). The
+screen-side helpers that every screen calls set single words; naming them
+here so the screen closures can be read without the helper census:
+
+| Word | Meaning | Setters |
+|---|---|---|
+| fired-result word (interface object) | non-zero after a gadget fires; a callback that leaves it set closes the window ([R-WGT-01 §1] step 8) | *request close* sets 1; *stay open* clears to 0 — the clear is the first line of nearly every screen callback; the window open routine sets it to 1 |
+| redraw-request word (interface object) | 1 = repaint the top window this pass | *request redraw*; set by every text/stage/grey mutation of [R-FE-02 §5] and by the unfold of [R-HUD-04 §2] |
+| dirty word (window record) | 1 = the gadget painter re-lays the whole window | *mark dirty* (through the top record; a no-op with no window); the painter and every gadget mutation set it |
+| token-mode word (window record) | non-zero = the GUI pass pops keyboard tokens, zero = it peeks ([R-WGT-01 §1] step 3; with zero the text editor pops for itself) | *set token mode*; the front-end shell and the options root set 1 |
+| quickkey-enable word (interface object) | 1 = button and label quickkeys are honoured; the window open routine sets 1 | *set quickkey enable* — `LOADGAME`/`SAVELIST`/`RESTRICT2` clear it while a name is typed ([R-WGT-01 §7] gates on it after the Alt test) |
+| fired-button word (interface object, mirrored into the window record) | 1 = the fired gadget was pressed with the left button, 2 = the right button; the button, label, link and list handlers write it when they fire; a screen reads the mirror to distinguish a right-click on a row (`SKIRMISH` uses 2 for its row actions, [R-FE-01 §5]) | written by the gadget handlers only |
+| held-button bits (interface object) | the mouse sample's held-button mask of [R-WGT-01 §1] step 2 (1 left, 2 right) | the sample fetch; the *held-button test* helper masks it |
+| top-window backdrop pointer (window record) | the image the window painter blits behind the gadgets | the bitmap cache (§1) |
+
+**Established — the two mouse-message predicates.** The "last mouse
+message" word of [R-WGT-01 §1] step 2 holds the Win32 message identity.
+*Pressed* with mask 1 is true for `WM_LBUTTONDOWN` or `WM_LBUTTONDBLCLK`,
+with mask 2 for `WM_RBUTTONDOWN` or `WM_RBUTTONDBLCLK`; mask 1 is tested
+first and a mask with both bits tests only the left button. *Double-clicked*
+is the same with only the `…DBLCLK` identities. These are the press and
+double-click tests every kind handler of [R-WGT-01 §§3–8] uses.
+
+**Established — the window stack repaint.** Repainting walks the window
+records from the **bottom** of the stack to the top (recursion before
+work). A record is repainted when its dirty word is 1, or — when a clip
+rectangle is supplied — when its rectangle (`x, y, x + w − 1, y + h − 1`)
+overlaps the clip rectangle by the inclusive overlap test of
+[03 R-COMP-01 §2]; a repaint clears the dirty word and blits the record's
+backdrop image at the record's origin. Records that are neither dirty nor
+overlapped are skipped, so a top window that moves leaves the windows below
+untouched unless the clip rectangle says otherwise.
+
+**Established — top-window name test.** "Is `<name>` the top window" is a
+16-byte compare of the top record's name (false with no window). The page
+close of [R-HUD-04 §3] and the options-close path use it.
+
+**Established — the fired-gadget name test.** The callback-side "which
+gadget fired" test of [R-FE-01 §2] compares the **focused** gadget's name
+(the record at the interface object's focused index — the fired gadget
+becomes the focused gadget before the fired callback runs, [R-WGT-01 §1]
+step 8) with the wanted text by a full C string compare — not the 16-byte
+bounded compare of the lookups in [R-FE-02 §5]; false when no window is
+open or no gadget is focused. Because authored names are at most 16 bytes
+with a terminator the two compares agree on stock content.
+
+### Gadget appenders for the dialog builders [R-WGT-02 §3]
+
+**Established.** Beside the *append record* of [R-FE-02 §5] (forces kind 1)
+there are two more appenders with the same 200-gadget refusal: *append
+text region* copies a 204-byte template into the next 347-byte record,
+forces kind **6** (the text-region gadget that `MOREBAR` pages,
+[R-HUD-03 §10]) and zeroes its text word, its two scroll words and its
+16-bit page word; *append stat bar* copies a 214-byte template and forces
+kind **13** (the score bar of [R-HUD-03 §11]). `MSGBOX`, `CDCHECK` and the
+report screen use them; the three appenders are the only way a window grows
+after the `.GUI` parse.
+
+### Small gadget contracts [R-WGT-02 §4]
+
+**Established — set text by index, refined.** The *set text* of
+[R-FE-02 §5] has two additions. For a kind-1 button whose `stages` byte is
+non-zero, after the 128-byte copy and the label-fit the text is split at
+every `|` into NUL-separated pieces (the multi-line / per-stage labels of
+§4), each piece is re-localised and the pieces are re-packed
+back-to-back into the 128-byte field — `stages` pieces are read. For a kind
+3 input a non-zero fourth argument replaces the input's `maxchars` word.
+Kind 5 labels get the copy and the label-fit only. Every kind sets the
+redraw-request word.
+
+**Established — the text-input caret and the length clamp.** The interface
+object's caret word is the insertion index the editor of §4 uses. The
+*re-lay* of [R-WGT-01 §6] is: with the *force-empty* flag clear and
+`len(text) ≤ maxchars` the caret becomes `len(text)`; otherwise the text is
+emptied and the caret is 0; the gadget is then re-laid.
+
+**Established — the edit-token loop, refined.** The kind-3 editor of §4
+runs as a loop: with the window's token-mode word zero it pops its first
+token itself, otherwise it takes the token the pass hands it; after each
+token it pops the next until the ring is empty ([01 R-PLAT-01 §6]) or an
+Escape token (`0x1B`) stops the loop; it returns the last token seen, and
+re-lays the gadget once if any token was processed. Per token: Backspace
+(`0x08`) with the caret above 0 moves the caret back one and closes the
+gap; Delete (`0xEF`) with a non-empty text and the caret below the length
+closes the gap at the caret; Home (`0xF0`) and End (`0xF1`) move the caret
+to 0 / the length; Left (`0xF4`) and Right (`0xF6`) move it by one within
+`0..len`; the paste tokens (`0xBF`, `0xEE`) are §2's; a printable token
+(`0x20..0x7F`) is inserted at the caret — shifting the tail right — when
+the current length is not already `maxchars`, the attribute-`0x02` filter
+admits it (alphanumeric, or space, underscore, apostrophe), and the rendered
+width rule of §4 holds, and the caret advances. Other tokens are ignored.
+
+**Established — font by `fontnumber`, gadget parse, basename.** *Select
+font by gadget*: the n-th kind-7 record of the window (n = the gadget's
+`fontnumber`, counting from 0 in index order) selects its font and returns
+that record's index; with no such record the default (common) font is
+selected and −1 returned ([R-FE-02 §5] "focus a text input"). *Gadget
+parse of the common keys*: `status` → the 16-bit status word; `text` →
+128 bytes, then re-localised in place; `quickkey` → the byte is the first
+character when it is a letter, else the decimal value of the text
+(`83` → `S`); `grayedout` → bit 0 of the flag word (the other bits are
+preserved); `stages` → the stages byte — the grammar is [fmt gui]. *GUI
+basename*: a loader path is reduced in place to the text after its last
+backslash before it is used as the window name (the `.GUI` opener of §4).
+
+### The keyboard-ring flush [R-WGT-02 §5]
+
+**Established.** The flush called by the front-end controller at each screen
+change, by the window open path and by the report and end-mission screens
+zeroes both indices of the 30-slot key-token ring of §2 ([01 R-PLAT-01
+§6]): pending tokens are discarded and the ring is empty. Nothing else is
+touched — the button ring and the held-key table keep their state. (The
+ledger row for this routine had been filed as a "content catalog" helper;
+it is the key ring.)
+
+
 ## Missing and unknown
 
 Open items only. Each bullet states what is unknown, the section that owns it,
@@ -5484,9 +5843,10 @@ section rather than deleted.
 - The complete right-button cursor column under `Interface Type 1` · §8
   [R-CAM-01 §5] · static trace of the cursor resolver's second case family.
 - The user-facing name of the F4 toggle and the visible effect of the two
-  30-frame counters it arms; the reader of the `+BigBrother` companion word;
-  the `+MakePoster` argument grammar · §2 [R-CAM-01 §2, §6] · static trace /
-  manual retail observation (developer tooling, low priority).
+  30-frame counters it arms; the `+MakePoster` argument grammar · §2
+  [R-CAM-01 §2, §6] · static trace / manual retail observation (developer
+  tooling, low priority). (The `+BigBrother` companion word's reader is
+  closed in [R-CAM-01 §12].)
 - How the multiplayer receive path applies the lobby `Cheat Codes` bit before
   re-dispatching a received `+` line · §5 [R-CAM-01 §6] · out of scope.
 - Text-input code page and IME behavior · §2, §7 · presentation-level platform
@@ -5535,6 +5895,15 @@ section rather than deleted.
   asset census.
 - Whether any content authors a `<unit>0.GUI` page for the authored-page bit ·
   §6 [R-HUD-03 §6] · asset census.
+- The rank byte's initial assignment at battle entry (the score panel's row
+  order before the first kill) · §6 [R-HUD-04 §1] · static trace of the
+  per-player reset of [08 R-ENTRY-01 §2].
+- The authored width of the in-battle `PREFS` window (decides whether the
+  options unfold's second quad form and `LIGHTBAR` stamp are reachable) · §6
+  [R-HUD-04 §2] · asset census.
+- The name of the player-slot auxiliary word the score panel's row filter
+  tests (`live-unit count ≠ 0 or auxiliary word == 0`) · §6 [R-HUD-04 §1],
+  doc 08 · static trace.
 
 ### Picking, selection, and orders
 

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -133,11 +134,20 @@ func TestSkirmishDefaults(t *testing.T) {
 	// the retail accept-and-store quirk without inventing placement behavior.
 	// The direct Validate assertions above are the supported contract [02 §3]
 	// [P0-05].
-	otaMinimal := "[GlobalHeader]\n{\n[Schema 0]\n{\nType=Network 1;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\nXPos=0;\nZPos=0;\n}\n}\n}\n}\n"
-	fs := fsFromMapSkirmish(t, map[string]string{"maps/dummy.ota": otaMinimal})
+	// Battle entry resolves each eligible slot's commander from the side
+	// record's commander name and looks up StartPos<i+1> for every eligible
+	// slot; neither has a substitute [08 R-ENTRY-01 §5]. The fixture therefore
+	// supplies an authored side catalog and ten start positions.
+	var ota strings.Builder
+	ota.WriteString("[GlobalHeader]\n{\n[Schema 0]\n{\nType=Network 1;\n[specials]\n{\n")
+	for i := 0; i < 10; i++ {
+		fmt.Fprintf(&ota, "[special%d]\n{\nspecialwhat=StartPos%d;\nXPos=%d;\nZPos=%d;\n}\n", i, i+1, i*16, i*16)
+	}
+	ota.WriteString("}\n}\n}\n")
+	fs := fsFromMapSkirmish(t, map[string]string{"maps/dummy.ota": ota.String()})
 	for _, good := range []int{2, 10} {
 		cfg := SkirmishConfig{MapName: "dummy", NumPlayers: good}
-		if _, err := NewSyntheticSkirmishForTest(fs, nil, cfg); err != nil {
+		if _, err := NewSyntheticSkirmishForTest(fs, minimalCatalogForStrict(), cfg); err != nil {
 			t.Fatalf("NewSkirmish NumPlayers %d should not error: %v", good, err)
 		}
 	}
@@ -209,8 +219,7 @@ func TestSkirmishDefaults(t *testing.T) {
 		t.Fatalf("computer slot per config controller 2")
 	}
 	// Validate computer slots via session economy mapping (fixture)
-	fs2 := fsFromMapSkirmish(t, map[string]string{"maps/dummy.ota": otaMinimal})
-	s, err := NewSyntheticSkirmishForTest(fs2, &content.Catalog{Units: map[string]*content.UnitDef{"armcom": {UnitName: "armcom", MaxDamage: 100}}, Maps: map[string]*content.MapHeader{}, Sides: []*content.SideDef{{Name: "ARM", Commander: "armcom"}, {Name: "CORE", Commander: "corcom"}}}, cfg2)
+	s, err := NewSyntheticSkirmishForTest(fs, minimalCatalogForStrict(), cfg2)
 	if err != nil {
 		t.Fatalf("NewSkirmish computer slots: %v", err)
 	}

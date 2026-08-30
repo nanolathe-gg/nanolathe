@@ -543,20 +543,15 @@ func (w *World) initializeAllocationHeading(u *Unit, def *content.UnitDef) {
 // attachCOB binds the definition's program to a per-unit VM and runs Create
 // once in mode I [04 §4.1][P1-I01].
 //
-// UNIT-04 missing/empty COB policy [R-COB-01 §1]: when the definition's
-// program is null (missing or unreadable script, or an empty program), unit
-// creation takes the explicit scriptless branch — no VM instance is
-// allocated, the render-piece table is still built from the model in its
-// program-less form (the model-binding half lives in the composition-owned
-// strict binder), and no Create is started. Retail neither rejects the unit
-// nor substitutes a program, and no diagnostic is emitted here. The
-// definition-stored program (content's definition load) is preferred; the
-// loader lookup remains for fixture definitions content never compiled.
-// TODO(question): the crash-policy residual — a scriptless unit whose
-// producer path runs (the general unit update's SetDirection/SetSpeed site
-// has no null test in the traced window) would dereference null in retail;
-// the settling probe is a synthetic scriptless definition with a forced
-// mover-active tick [R-COB-01 §1] (UNIT-04 residual).
+// Missing/empty COB policy [04 R-COB-04 §8] (supersedes the UNIT-04 reading
+// of [R-COB-01 §1]): retail faults while creating a unit whose program is
+// null — the creation-time QueryPrimary query dereferences the VM reference
+// with no null test — so such a definition cannot exist in retail. Nanolathe
+// rejects it at catalog compile with the standard diagnostic (content's
+// definition load). The program-less branch below therefore serves only
+// fixture definitions that content never compiled: no VM, no Create, the
+// unit stays live for the test. The definition-stored program is preferred;
+// the loader lookup remains for those fixtures.
 func (w *World) attachCOB(u *Unit) error {
 	if w == nil || u == nil || u.Def == nil {
 		return nil
@@ -569,8 +564,7 @@ func (w *World) attachCOB(u *Unit) error {
 		// strict binder can return an error after allocation, but retail establishes
 		// RNG order only for successful initialization and pre-initializer refusal; a
 		// traced retail post-allocation failure would settle whether either draw is
-		// retained. Separately, the scriptless mover crash policy described above
-		// needs its forced-active probe. Do not roll back or reorder the successful path.
+		// retained. Do not roll back or reorder the successful path.
 		return w.cobBinder(u)
 	}
 	prog := u.Def.Script
@@ -583,9 +577,9 @@ func (w *World) attachCOB(u *Unit) error {
 		}
 	}
 	if prog == nil || len(prog.Code) == 0 {
-		// Null program: scriptless creation — no VM, no Create, no diagnostic,
-		// no substitute [R-COB-01 §1] (UNIT-04). The unit stays fully live;
-		// its pieces render and animate never. The render-piece table is still
+		// Null program: fixture-only scriptless creation — no VM, no Create
+		// (a compiled catalog never carries one, [04 R-COB-04 §8]). The unit
+		// stays live; its pieces never animate. The render-piece table is still
 		// built when a model is available via the strict binder; for this
 		// fixture path without a model we leave the table nil — the production
 		// strict binder (session) builds it from the authored 3DO [04 §"Piece flag polarity"].

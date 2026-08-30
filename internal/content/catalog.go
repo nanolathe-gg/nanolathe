@@ -18,6 +18,11 @@ import (
 // expose only Stat, so both paths are supported without widening FSOps
 // [AGENTS.md diagnostics].
 func requiredContentError(fs vfs.FSOps, logical, expected string, cause error) error {
+	providers := searchedProviderIDs(fs, logical)
+	return fmt.Errorf("nanolathe: required authored resource: logical path %s, providers searched [%s], expected %s: %w", logical, strings.Join(providers, ", "), expected, cause)
+}
+
+func searchedProviderIDs(fs vfs.FSOps, logical string) []string {
 	providers := make([]string, 0, 2)
 	if sourceLister, ok := fs.(interface{ Sources(string) []vfs.EntryInfo }); ok {
 		for _, info := range sourceLister.Sources(logical) {
@@ -37,7 +42,11 @@ func requiredContentError(fs vfs.FSOps, logical, expected string, cause error) e
 			providers = append(providers, id)
 		}
 	}
-	return fmt.Errorf("nanolathe: required authored resource: logical path %s, providers searched [%s], expected %s: %w", logical, strings.Join(providers, ", "), expected, cause)
+	return providers
+}
+
+func unitScriptMissingError(fs vfs.FSOps, logical string) error {
+	return fmt.Errorf("nanolathe: unit script missing: logical path %s, providers searched [%s], expected COB program", logical, strings.Join(searchedProviderIDs(fs, logical), ", "))
 }
 
 // WeaponDuplicate records sections that shared one weapon record slot, for
@@ -255,7 +264,9 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 	report.Report(FamilyBuildMenus, 100)
 	sortedModels, modelIndex := buildModelCatalog(units)
 	fillModelTops(fs, units)
-	fillUnitScripts(fs, units)
+	if err := fillUnitScripts(fs, units); err != nil {
+		return nil, err
+	}
 	report.Report(FamilyModels, 100)
 
 	// Manifest: vfs.ManifestHash() for identity [PLAN 02].
@@ -1196,32 +1207,30 @@ func fillModelTops(fs vfs.FSOps, units map[string]*UnitDef) {
 	}
 }
 
-// fillUnitScripts resolves each unit definition's compiled COB program at
-// definition load, exactly as retail's loader builds the script path from the
-// unit name and stores the program pointer on the definition [R-COB-01 §1]
-// (UNIT-04). A missing, unreadable, or otherwise unloadable script file leaves
-// the definition's program null and the definition accepted: no diagnostic,
-// no substitution, no fallback program — the same silent-existence-gate the
-// loader applies to the FBI half of the same record. An empty program (no
-// code words) is stored as the null program too: it is the scriptless form
-// unit creation consumes [R-COB-01 §1].
-//
-// Load failures are deliberately swallowed here; the skirmish preflight owns
-// malformed-COB diagnostics as a separate layer. Iteration order does not
-// affect results: each definition resolves its own program independently (I1).
-func fillUnitScripts(fs vfs.FSOps, units map[string]*UnitDef) {
+// fillUnitScripts resolves every unit's required compiled COB program at
+// catalog link time. Retail cannot create a unit with a null program, so the
+// catalog rejects missing, unreadable, malformed, nil, and empty programs
+// before publishing any definition [04 R-COB-04 §8].
+func fillUnitScripts(fs vfs.FSOps, units map[string]*UnitDef) error {
 	if fs == nil || len(units) == 0 {
-		return
+		return nil
 	}
-	for _, u := range units {
+	keys := make([]string, 0, len(units))
+	for key := range units {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		u := units[key]
 		if u == nil {
 			continue
 		}
-		prog, found, _ := cob.LoadFromFS(fs, u.UnitName)
-		if !found || prog == nil || len(prog.Code) == 0 {
-			u.Script = nil // null program: definition accepted [R-COB-01 §1]
-			continue
+		logical := "scripts/" + CanonicalKey(u.UnitName) + ".cob"
+		prog, found, err := cob.LoadFromFS(fs, u.UnitName)
+		if err != nil || !found || prog == nil || len(prog.Code) == 0 {
+			return unitScriptMissingError(fs, logical)
 		}
 		u.Script = prog
 	}
+	return nil
 }

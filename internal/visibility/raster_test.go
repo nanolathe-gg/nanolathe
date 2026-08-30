@@ -94,11 +94,16 @@ func TestRayUsesAuthoredSpokes(t *testing.T) {
 	terrain := flatTerrain(64, 10)
 	s := New(terrain, ModeHistoryEnabled|ModeCurrentEnabled|ModeTerrainRay)
 	s.SetRayTables(&content.LOSTables{
-		NumTables: 1,
+		// Two declared tables: radius 32 is group 1, which walks TABLE 0
+		// under the one-based accessor skew [03 R-COMP-02 §1].
+		NumTables: 2,
 		Tables: []content.LOSTable{{
-			TableNum: 1, NumLines: 1,
+			TableNum: 0, NumLines: 1,
 			// One line: two steps due north.
 			Lines: [][]int32{{2, 0, 1, 0, 2}},
+		}, {
+			TableNum: 1, NumLines: 1,
+			Lines: [][]int32{{3, 0, 1, 0, 2, 0, 3}},
 		}},
 	})
 	// The observer stands above the ground it is looking across. An observer at
@@ -138,10 +143,14 @@ func TestRayStrictTieNeverAdmits(t *testing.T) {
 
 	s := New(terrain, ModeHistoryEnabled|ModeCurrentEnabled|ModeTerrainRay)
 	s.SetRayTables(&content.LOSTables{
-		NumTables: 1,
+		// Radius 32 is group 1, which walks TABLE 0 [03 R-COMP-02 §1]; a
+		// second declared table makes group 1 reachable.
+		NumTables: 2,
 		Tables: []content.LOSTable{{
-			TableNum: 1, NumLines: 1,
+			TableNum: 0, NumLines: 1,
 			Lines: [][]int32{{3, 0, 1, 0, 2, 0, 3}},
+		}, {
+			TableNum: 1, NumLines: 1, Lines: [][]int32{{1, 0, 1}},
 		}},
 	})
 	s.Publish(0, 10, 10, 0, 32)
@@ -170,10 +179,14 @@ func TestRayExactEqualityTie(t *testing.T) {
 	terrain.SetLOSHeightWord(10, 13, 61, 61) // 20*3 < 61*1 — strictly greater
 	s := New(terrain, ModeHistoryEnabled|ModeCurrentEnabled|ModeTerrainRay)
 	s.SetRayTables(&content.LOSTables{
-		NumTables: 1,
+		// Radius 32 is group 1, which walks TABLE 0 [03 R-COMP-02 §1]; a
+		// second declared table makes group 1 reachable.
+		NumTables: 2,
 		Tables: []content.LOSTable{{
-			TableNum: 1, NumLines: 1,
+			TableNum: 0, NumLines: 1,
 			Lines: [][]int32{{3, 0, 1, 0, 2, 0, 3}},
+		}, {
+			TableNum: 1, NumLines: 1, Lines: [][]int32{{1, 0, 1}},
 		}},
 	})
 	s.Publish(0, 10, 10, 0, 32)
@@ -207,10 +220,14 @@ func TestRayHighByteGatesHorizonUpdate(t *testing.T) {
 
 	s := New(terrain, ModeHistoryEnabled|ModeCurrentEnabled|ModeTerrainRay)
 	s.SetRayTables(&content.LOSTables{
-		NumTables: 1,
+		// Radius 32 is group 1, which walks TABLE 0 [03 R-COMP-02 §1]; a
+		// second declared table makes group 1 reachable.
+		NumTables: 2,
 		Tables: []content.LOSTable{{
-			TableNum: 1, NumLines: 1,
+			TableNum: 0, NumLines: 1,
 			Lines: [][]int32{{2, 0, 1, 0, 2}},
+		}, {
+			TableNum: 1, NumLines: 1, Lines: [][]int32{{1, 0, 1}},
 		}},
 	})
 	s.Publish(0, 10, 10, 0, 32)
@@ -261,5 +278,38 @@ func TestRefreshThrottle(t *testing.T) {
 	s.Refresh(1, ob)
 	if got := s.byteGrids[0][int(20*s.W+20)]; got != 0 {
 		t.Fatalf("old cell refcount %d after the observer moved away", got)
+	}
+}
+
+// TestRayTableSkew locks the one-based table accessor of [03 R-COMP-02 §1]:
+// group g = clamp(floor(radius/32), 0, numtables-1) walks TABLE g-1, so the
+// top declared table is unreachable and group 0 walks no line at all (the
+// retail record there is unknown; only the origin is admitted).
+func TestRayTableSkew(t *testing.T) {
+	terrain := flatTerrain(64, 10)
+	tables := &content.LOSTables{
+		NumTables: 3,
+		Tables: []content.LOSTable{
+			{TableNum: 0, NumLines: 1, Lines: [][]int32{{1, 0, 1}}},
+			{TableNum: 1, NumLines: 1, Lines: [][]int32{{2, 0, 1, 0, 2}}},
+			{TableNum: 2, NumLines: 1, Lines: [][]int32{{5, 0, 1, 0, 2, 0, 3, 0, 4, 0, 5}}},
+		},
+	}
+	cases := []struct {
+		radius int32
+		want   int
+	}{
+		{16, 1},        // group 0: origin only
+		{32, 1 + 4*1},  // group 1 -> TABLE 0
+		{64, 1 + 4*2},  // group 2 -> TABLE 1
+		{200, 1 + 4*2}, // clamped to group 2 -> TABLE 1; TABLE 2 unreachable
+	}
+	for _, c := range cases {
+		s := New(terrain, ModeHistoryEnabled|ModeCurrentEnabled|ModeTerrainRay)
+		s.SetRayTables(tables)
+		s.Publish(0, 10, 10, 20, c.radius)
+		if got := coveredTiles(s, 0); got != c.want {
+			t.Fatalf("radius %d covered %d tiles, want %d", c.radius, got, c.want)
+		}
 	}
 }
