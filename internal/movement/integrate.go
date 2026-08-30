@@ -107,6 +107,11 @@ type System struct {
 	arrivalHandles map[pool.Handle]*arrivalHandle // per-unit Move_Ground arrival handle [R-P0-01]
 	moveGoals      map[pool.Handle]*moveGoal      // per-unit movement-goal handle [04 §8.3][04 §7.4]
 	pathProvider   *pathProvider
+	// takeoffClimb holds the outstanding initial-climb altitude installed by the
+	// air takeoff preamble's point marker, keyed by handle. The entry is removed
+	// when the marker's altitude arrival window is entered [04 R-AIR-01 §6]
+	// [04 R-AIR-01 §4][04 R-AIR-02]. Lookup-only; never ranged over [I1].
+	takeoffClimb map[pool.Handle]int32
 	// These are session-owned lobby values. Zero keeps path scheduling inert
 	// until the session supplies explicit limits [04 R-PATH-01 §6].
 	PathPlayers   int
@@ -231,6 +236,13 @@ type arrivalHandle struct {
 	goalX    int32 // goal cells (bias-corrected) [R-P0-01]
 	goalZ    int32
 	threshSq int32 // floor(radiusParam/16)² inclusive [R-P0-01]; 0 for ground moves
+	// border is the rectangle whose perimeter is the goal-cell enumeration for a
+	// rectangle-perimeter goal. When set, arrival is membership of that border
+	// and the point test above is not used: "enumerated goal cells are exactly
+	// the rectangle border, where h is 0, and arrival requires lying on that
+	// border" [04 §7.2], which [04 R-FAC-02 §4] names as the arrival rule for a
+	// no-rally product's `Park`.
+	border *path.Rect
 }
 
 // localSteeringThresholdSquared is only the near-waypoint brake/steering
@@ -704,6 +716,16 @@ func (s *System) distToGoal(u *units.Unit) numeric.Fixed {
 // cell in the cell domain, planar only, inclusive: dx*dx+dz*dz <= threshold².
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // speed or blocked term participates. Route pruning (<=25 whole units) is separate [R-P0-01].
+// onRectBorder reports whether cell (x, z) lies on rect's border — the exact
+// enumeration a rectangle-perimeter goal admits, with h of 0 [04 §7.2]. Min and
+// Max are inclusive, so a degenerate rectangle is its own border.
+func onRectBorder(rect path.Rect, x, z int32) bool {
+	if x < rect.Min.X || x > rect.Max.X || z < rect.Min.Z || z > rect.Max.Z {
+		return false
+	}
+	return x == rect.Min.X || x == rect.Max.X || z == rect.Min.Z || z == rect.Max.Z
+}
+
 func (s *System) finalGoalReached(u *units.Unit, hadRoute bool) bool {
 	if u == nil {
 		return false
@@ -731,6 +753,15 @@ func (s *System) finalGoalReached(u *units.Unit, hadRoute bool) bool {
 		// bias offset is the same foot*half used for goal cells.
 		tileX = world.WorldToCell(u.X)
 		tileZ = world.WorldToCell(u.Z)
+	}
+	// A rectangle-perimeter goal arrives on membership of the border, not on
+	// proximity to one cell [04 §7.2][04 R-FAC-02 §4].
+	if ah.border != nil {
+		if onRectBorder(*ah.border, tileX, tileZ) {
+			ah.order.Satisfied |= arrivalSatisfiedBit // [R-P0-01] OR 0x20
+			return hadRoute
+		}
+		return false
 	}
 	dx := int64(tileX) - int64(ah.goalX)
 	dz := int64(tileZ) - int64(ah.goalZ)
@@ -1172,6 +1203,13 @@ func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 	if s.activeOrders == nil {
 		s.activeOrders = make(map[pool.Handle]*activeMove)
 	}
+	// The air executors' phase 0 is the shared takeoff preamble: a grounded
+	// aircraft is put into mode 2 and given an initial climb goal before any
+	// horizontal leg exists [04 R-AIR-01 §6][04 R-AIR-02]. This is the
+	// activation boundary, which is where a fresh head is first seen; step 4 of
+	// the preamble is itself guarded on the committed mode, so a repeat visit
+	// for the same head does nothing.
+	s.activateTakeoff(u, head)
 	if old, ok := s.activeOrders[u.Handle]; ok && old.order == head {
 		return false // exactly one submission per active order
 	}
@@ -1401,7 +1439,22 @@ func (s *System) bindArrivalHandle(u *units.Unit, head *orders.Node) {
 	// range/acquire paths, never the goal handle.
 	radiusParam := goalRadiusParamFor(name, u.Def)
 	threshSq := thresholdSqFromRadius(radiusParam) // [R-P0-01] floor(radiusParam/16)²
-	s.arrivalHandles[u.Handle] = &arrivalHandle{order: head, goalX: goalX, goalZ: goalZ, threshSq: threshSq}
+	ah := &arrivalHandle{order: head, goalX: goalX, goalZ: goalZ, threshSq: threshSq}
+	// A rectangle-perimeter goal does not arrive at a point. Its enumerated goal
+	// cells are exactly the rectangle border and "arrival requires lying on that
+	// border" [04 §7.2] — the rule [04 R-FAC-02 §4] cites for the `Park` a
+	// no-rally factory product receives. The steering point bound beside this
+	// handle is one border cell chosen to steer at ([04 R-MOV-03 §2]'s far-edge
+	// midpoint); testing arrival against that one cell made every OTHER border
+	// cell a non-arrival, so a mover that reached the border anywhere else — the
+	// A* endpoint whenever the published route is long enough to be accepted, or
+	// a blocked mover clamped along the edge — never retired its record. The
+	// column of products behind a factory is a separate, retail-faithful shape
+	// [04 R-EGRESS-01]; this is the arrival predicate only.
+	if minX, minZ, maxX, maxZ, ok := orders.ParkGoalRect(head); ok {
+		ah.border = &path.Rect{Min: path.Cell{X: minX, Z: minZ}, Max: path.Cell{X: maxX, Z: maxZ}}
+	}
+	s.arrivalHandles[u.Handle] = ah
 	// [R-P0-01] initial gate must be 0 so phase 0 handler can arm 0xE0; otherwise static 0x402 would block.
 	if head.Phase == 0 && head.DynamicGate != 0 {
 		// Only clear initial static gate; preserve armed 0xE0 for re-binds after a replan where Phase already 1
@@ -1989,6 +2042,13 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 			s.emitMovementCallbacks(u, 0)
 			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
 		}
+	}
+	// The takeoff preamble's initial climb marker owns the aircraft until its
+	// altitude window is entered; the record's 0xE0 gate is still waiting on it,
+	// so no horizontal leg and no arrival test runs yet [04 R-AIR-01 §6]
+	// [04 R-AIR-01 §4][04 R-AIR-02].
+	if climb, done := s.stepTakeoffClimb(u); !done {
+		return climb
 	}
 	route := s.Routes[handle]
 	s.serviceGroundFollower(u, head, route, tick)

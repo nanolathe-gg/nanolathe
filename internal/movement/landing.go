@@ -115,7 +115,6 @@ func (s *System) Land(w *units.World, vtolHandle pool.Handle, pad *units.Unit) b
 	} else {
 		vtol.Y = pad.Y
 	}
-	vtol.Move.Mode = 1 // parked [04 §9.1] 1 stopped/parked
 	if fl, ok := s.Flights[vtolHandle]; ok {
 		fl.X = int32(vtol.X.Raw())
 		fl.Z = int32(vtol.Z.Raw())
@@ -124,23 +123,37 @@ func (s *System) Land(w *units.World, vtolHandle pool.Handle, pad *units.Unit) b
 		fl.VY = 0
 		fl.VZ = 0
 		fl.Speed = 0
-		fl.Mode = 1
 	}
 	if st, ok := s.Steers[vtolHandle]; ok {
 		st.X = int32(vtol.X.Raw())
 		st.Z = int32(vtol.Z.Raw())
 	}
+	// The pad footprint is the anchor the ground-plane re-stamp below uses, so
+	// the cached pair has to name the touchdown cell before the mode write.
 	if coll, ok := s.Collisions[vtolHandle]; ok {
 		coll.X = int32(vtol.X.Raw())
 		coll.Z = int32(vtol.Z.Raw())
 		coll.Y = int32(vtol.Y.Raw())
+		coll.VX, coll.VZ = 0, 0
+		anchor := coll.ProposedAnchor(1)
+		coll.CachedAnchor = anchor
+		coll.OldAnchor = anchor
 	}
-	// Occupancy stamp landed footprint
-	if s.Grid != nil {
+	// Touchdown goes through the one mover-mode setter: mode 1 is grounded, so
+	// the setter zeroes the velocity components and the scalar speed and lowers
+	// the activation edge (`Deactivate`, the landing script hook)
+	// [04 R-AIR-01 §3], and re-stamps the ground plane the airborne mover
+	// released on takeoff [04 R-COLL-01 §4].
+	delete(s.takeoffClimb, vtolHandle) // any outstanding climb marker is superseded
+	if !s.SetMoverMode(vtol, 1) && s.Grid != nil {
+		// Already grounded: the mode write is a no-op, so stamp the new pad
+		// cells directly.
 		if coll, ok := s.Collisions[vtolHandle]; ok {
-			anchor := coll.ProposedAnchor(1)
-			s.Grid.Stamp(anchor, coll.FootPrintX, coll.FootPrintZ, coll.ID)
+			s.Grid.Stamp(coll.CachedAnchor, coll.FootPrintX, coll.FootPrintZ, coll.ID)
 		}
+	}
+	if fl, ok := s.Flights[vtolHandle]; ok {
+		fl.Mode = 1
 	}
 	return true
 }
@@ -209,9 +222,12 @@ func (s *System) TryLandOrRetry(w *units.World, vtolHandle pool.Handle) (landed 
 	return true, false, ""
 }
 
-// TakeOff transitions VTOL from landed (mode 1) to active (mode 2) and sets initial cruise altitude [04 §10.1][04 §10.2].
-// Requires live mover and canfly; mode 1 -> 2 forced in load phase 0 [04 §10.2].
-// For standalone gunship/bomber, use this to become airborne.
+// TakeOff runs the shared air takeoff preamble on a handle [04 R-AIR-01 §6]:
+// detach from any carrier, raise the activation edge, and — only from the
+// grounded mode 1 — set mode 2 and install the initial climb marker at the
+// unit's own X/Z with altitude offset `cruisealt / 2`. It is the surface a
+// caller outside the order boundary uses; the air executors themselves reach the
+// same routine through the order activation boundary [04 R-AIR-02].
 func (s *System) TakeOff(w *units.World, vtolHandle pool.Handle) bool {
 	if w == nil {
 		return false
@@ -220,15 +236,7 @@ func (s *System) TakeOff(w *units.World, vtolHandle pool.Handle) bool {
 	if vtol == nil || vtol.Def == nil || !vtol.Def.CanFly {
 		return false
 	}
-	vtol.Move.Mode = 2 // active locomotion [04 §9.1]
-	if fl, ok := s.Flights[vtolHandle]; ok {
-		fl.Mode = 2
-		// Initial climb target altitude cruisealt/2 at current XZ [04 §10.2] phase 0
-		targetY := CruiseAltitudeForCarrier(s.Terrain, vtol.X, vtol.Z, vtol, true)
-		fl.TargetY = int32(targetY.Raw())
-		fl.TargetX = int32(vtol.X.Raw())
-		fl.TargetZ = int32(vtol.Z.Raw())
-	}
+	s.takeoffPreamble(vtol)
 	return true
 }
 
@@ -264,10 +272,12 @@ func (s *System) SubmitAirMove(vtolHandle pool.Handle, targetX, targetZ numeric.
 		fl.TargetX = int32(targetX.Raw())
 		fl.TargetZ = int32(targetZ.Raw())
 	}
-	// Ensure mode active
-	if vtol.Move.Mode != 2 {
-		vtol.Move.Mode = 2
-	}
+	// Airborne through the one mover-mode setter, so the ground plane the mover
+	// held while grounded is released [04 R-AIR-01 §3][04 R-COLL-01 §4]. This
+	// direct surface has no order record to hold a climb marker, so it commands
+	// the goal altitude straight away.
+	s.SetMoverMode(vtol, 2)
+	delete(s.takeoffClimb, vtolHandle)
 	if fl, ok := s.Flights[vtolHandle]; ok {
 		fl.Mode = 2
 	}

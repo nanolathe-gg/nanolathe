@@ -39,6 +39,12 @@ func replayBattleFrame(c *BattleController, cl *client.Client, f BattleInputFram
 // replay uses the same logical input seam as Ebitengine: select the commander,
 // then issue a contextual move from an empty world click. No order or session
 // state is written by the test itself [07 §8][07 §9].
+//
+// The controller's host clock is pinned (newReplayController) so the replay is
+// a function of its input frames alone. On the default monotonic source it
+// would sample the whole test-process uptime on its first step and spend the
+// clamped catch-up burst of [01 §4.2] before the click is ever enqueued, which
+// makes the result depend on how long the tests that ran earlier took.
 func TestStrictSkirmish_ProductionInputReplayG10A(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(40, 40))
 	b.battleState().Input.Latch = input.LatchNormal
@@ -54,7 +60,7 @@ func TestStrictSkirmish_ProductionInputReplayG10A(t *testing.T) {
 	}
 	cl.SetTerrain(b.sess.World)
 	cl.SetCamera(b.cam)
-	c := NewBattleController(b)
+	c := newReplayController(b)
 
 	sx, sy := screenPos(b.cam, commander)
 	frame := BattleInputFrame{MouseX: sx, MouseY: sy, Buttons: BattleMouseButtons{Left: true}}
@@ -92,7 +98,9 @@ func TestBattleControllerReleasesKeysAndHandlesZeroElapsed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client.New: %v", err)
 	}
-	c := NewBattleController(b)
+	// Pinned host clock: "zero elapsed" has to mean the frames carry no time,
+	// not that the process happened to be young when the test ran.
+	c := newReplayController(b)
 	beforeTick := b.sess.Clock.GlobalTick
 	c.Step(BattleInputFrame{
 		HeldKeys:  []input.Key{input.KeyW},

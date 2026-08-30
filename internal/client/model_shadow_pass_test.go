@@ -10,14 +10,20 @@ import (
 
 // TestShadowProjectionShearsByAQuarterHeight locks retail's shadow shear: a
 // quarter of the vertex height added in X and subtracted in screen Y, with no
-// half-height term at all [R-REN-03D §2].
+// half-height term at all [R-REN-03D §2]. The screen Y lane itself is the body
+// projection's `Zn = hi16(-vz)` handedness flip [R-RAST-01 §2].
+//
+// The Z expectations were corrected: they previously read the model Z without
+// the flip, which is the code block of [R-REN-03D §2] taken literally against
+// [R-RAST-01 §2]'s later narrowing and against the body pass. See the doc
+// comment on shadowLocalVertex.
 func TestShadowProjectionShearsByAQuarterHeight(t *testing.T) {
 	f := func(v int64) numeric.Fixed { return numeric.Fixed(v << 16) }
 	origin := [3]numeric.Fixed{0, 0, 0}
 
 	sx, sy, ry := shadowLocalVertex([3]numeric.Fixed{f(10), f(8), f(20)}, origin)
-	if sx != 12 || sy != 18 || ry != 8 {
-		t.Fatalf("shadow projection = (%d,%d) ry=%d, want (12,18) ry=8", sx, sy, ry)
+	if sx != 12 || sy != -22 || ry != 8 {
+		t.Fatalf("shadow projection = (%d,%d) ry=%d, want (12,-22) ry=8", sx, sy, ry)
 	}
 	// The quarter is an arithmetic shift, so a negative height floors.
 	sx, sy, _ = shadowLocalVertex([3]numeric.Fixed{0, f(-3), 0}, origin)
@@ -26,8 +32,8 @@ func TestShadowProjectionShearsByAQuarterHeight(t *testing.T) {
 	}
 	// A ground-level vertex is not sheared: the shadow lies flat.
 	sx, sy, _ = shadowLocalVertex([3]numeric.Fixed{f(7), 0, f(9)}, origin)
-	if sx != 7 || sy != 9 {
-		t.Fatalf("ground vertex = (%d,%d), want (7,9)", sx, sy)
+	if sx != 7 || sy != -9 {
+		t.Fatalf("ground vertex = (%d,%d), want (7,-9)", sx, sy)
 	}
 }
 

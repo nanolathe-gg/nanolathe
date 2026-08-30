@@ -131,7 +131,17 @@ func TestPublishSnapshotCarriesRadarOwnerPalettes(t *testing.T) {
 	}
 }
 
-func TestRadarStepClearsSeenWithSingleActivePlayer(t *testing.T) {
+// TestRadarStepLeavesStatusWithSingleActivePlayer locks the sensor phase's
+// outermost gate [R-VIS-01 §4] "Gate": with one active player none of the five
+// passes runs, so the seen, sonar and jammed bits keep whatever value they
+// already carry.
+//
+// Correction (2026-08-30). This test was named ...ClearsSeen... and asserted
+// "single-player SeenBit = %#x, want clear" — that the skip path scrubs the
+// marker. Nothing in retail clears it there: the phase's own first pass is the
+// only clear writer besides the radar-jam callback, and neither runs when the
+// gate rejects.
+func TestRadarStepLeavesStatusWithSingleActivePlayer(t *testing.T) {
 	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "seen"}, MaxDamage: 1}
 	w := newSessionFixtureWorld(4, nil)
 	h, err := w.Create(def, 0, 0, 0, 0)
@@ -143,8 +153,8 @@ func TestRadarStepClearsSeenWithSingleActivePlayer(t *testing.T) {
 	econ.Players[0].Exists = true
 	s := &Session{Units: w, Vis: vis, Econ: econ, visStatus: map[int]uint32{int(h): visibility.SeenBit}}
 	s.stepSensorPhase(8)
-	if got := s.visStatus[int(h)]; got&visibility.SeenBit != 0 {
-		t.Fatalf("single-player SeenBit = %#x, want clear", got)
+	if got := s.visStatus[int(h)]; got&visibility.SeenBit == 0 {
+		t.Fatalf("single-player SeenBit = %#x, want the pre-existing bit untouched [R-VIS-01 §4]", got)
 	}
 }
 

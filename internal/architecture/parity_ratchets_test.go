@@ -360,7 +360,7 @@ var debtMarkerTotals = map[string]int{
 	"fallback":       185,
 	"guess":          10,
 	"plausible":      1,
-	"todo(question)": 315,
+	"todo(question)": 316,
 }
 
 var debtMarkerFileCounts = map[string]map[string]int{
@@ -534,6 +534,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/units/units.go":                  8, // +1: the activation edge has no status-cue sink [04 R-UNIT-06 §2] (PLAN_16 WU-16-3)
 		"internal/visibility/fog.go":               1,
 		"internal/visibility/publish.go":           1, // LOS group-0 record content is Unknown [03 R-COMP-02 §1]
+		"internal/visibility/sensors.go":           1, // +1: five stock sensor definitions have no traced activation writer [03 §3.4 R-VIS-01 §4]
 		"internal/world/feature_stamp.go":          1,
 		"internal/world/placement.go":              3,
 		"internal/world/plot.go":                   3,

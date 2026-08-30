@@ -3171,6 +3171,19 @@ Both successful `OpenYard` and successful `CloseYard` branches clear the
 `BUGGER_OFF` port before returning; the port is asserted only around a denied
 yard transition's retry loop.
 
+**Established — the engine never reads `BUGGER_OFF` [04 R-COB-05] (2026-08-30).**
+The bit the yard scripts toggle here has no simulation consumer: a complete
+census of the second state byte's bit 3 finds only the COB get and set port
+arms, the creation clear of that byte's low nibble, and the save writer. The
+assertion above is therefore entirely script-internal bookkeeping — the flag
+tells the engine nothing, and clearing it on the successful branch changes no
+engine state beyond the interface-refresh bit the set-port arm raises. This
+does not weaken the warning below; it strengthens it. A reimplementation must
+attach no movement, collision, scatter or crowd behavior to the flag. The
+observable "units in the way of a factory exit" behavior is owned by the
+state-2 exit retry, the yard-close admission gate, and the ordinary blocked
+mover [04 R-FAC-02 §5][04 R-FAC-02 §6].
+
 **Established — product movement is a separate boundary.** `GetBuilt` is on
 the product's primary queue, not on the factory's close path. Once product
 remaining is zero, it copies queued move/patrol rally records from the

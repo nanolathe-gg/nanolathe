@@ -96,6 +96,17 @@ type UnitView struct {
 	// Kills is the credited-kill counter the footer's kills line reads
 	// [07 R-HUD-03 §2].
 	Kills int32
+	// MoverMode is the committed low two bits of the unit's mover mode word:
+	// 1 is on the ground or on the surface, 2 is airborne, and 0 and 3 reach a
+	// unit only through a save file [04 R-MOV-01 §8].  It is the unit
+	// painter's pass selector — pass A draws the grounded units interleaved
+	// with that row's tall features, pass B draws everything else after the
+	// projectile and effect strips [03 R-RAST-01 §7].
+	MoverMode uint8
+	// Group is the unit's one stored control-group value [07 §9].  The
+	// health-bar pass draws the digit '0'+Group beside the bar of a unit whose
+	// group number is nonzero [03 R-FX-01 §6].
+	Group uint8
 	// OwnerColor is the owning player's lobby colour index: the frame selector
 	// for the owner logo the footer blits at LOGO2 [07 R-HUD-03 §2].  It is
 	// carried per unit because the committed frame holds no player roster.
@@ -302,12 +313,89 @@ type SelectionView struct {
 	CommandMask uint32
 }
 
-// CommandPageView describes the selected builder's authored command page.
+// CommandPageView describes the selected builder's authored command page and
+// carries the selection-aggregate command state the side panel stages and
+// greys its command buttons from [07 §9][07 R-HUD-03 §6].
+//
+// Every aggregate field below is folded over the local player's selected units
+// in ascending pool order — the order [07 §9] fixes for every selection walk —
+// so the value is a pure function of committed state and is recomputed each
+// tick.  The interface's own latch, the local write a stance or on/off click
+// makes to stage the button before the next refresh, stays presentation-owned
+// [04 R-STANCE-01 §2].
 type CommandPageView struct {
 	Builder     pool.Handle
 	Page        uint16
 	PageCount   uint16
 	ProductKeys []string
+
+	// MoveStance and FireStance are the two three-bit standing-order
+	// aggregates [04 R-STANCE-01 §1].  0, 1 and 2 are the three stances, 3
+	// means the selected units that accept the stance disagree, and 4 — the
+	// value the fold starts from — means no selected unit accepts it, which is
+	// the value that greys MOVEORD/FIREORD [07 R-HUD-03 §6].  A unit joins the
+	// fold only when its definition authors the matching accept key:
+	// mobilestandorders for the move field, firestandorders for the fire one
+	// [04 R-STANCE-01 §5].
+	MoveStance uint8
+	FireStance uint8
+
+	// CloakState and OnOffState are the two-bit cloak and on/off aggregates
+	// CLOAK and ONOFF are staged from, greyed when the value is 3
+	// [07 R-HUD-03 §6].  0 and 1 are the agreed states of the units that carry
+	// the capability, and 3 — the value the fold starts from — means no
+	// selected unit carries it.
+	//
+	// A disagreeing selection folds to 2, not to 3.  The aggregate refresh
+	// starts each pair at 3, lets the first capable unit replace it with that
+	// unit's state, and moves it to 2 from there; 3 therefore survives only a
+	// walk that folded nothing.
+	//
+	// TODO(question): [07 R-HUD-03 §6] glosses the greying value 3 as "mixed",
+	// which the fold above contradicts — 3 is the not-applicable sentinel and
+	// 2 is the disagreement value, the same shape the three-bit stance fields
+	// carry with their 4/3 pair [04 R-STANCE-01 §1].  Settle it by landing the
+	// two-bit folds under [07 §9] as an addendum with an auditable correction
+	// of §6's gloss; the greying condition §6 states (value 3) is unaffected.
+	// One asymmetry belongs in that addendum: the on/off fold compares the
+	// next unit's state before taking 2, while the cloak fold takes 2 for any
+	// second cloak-capable unit whether or not it agrees.
+	CloakState uint8
+	OnOffState uint8
+
+	// The capability aggregates the stage/grey table of [07 R-HUD-03 §6]
+	// reads: each button is greyed when its aggregate bit is clear.  Every
+	// selected unit contributes its definition's authored capability key
+	// [02 "Unit record"]: canmove, canstop, canattack, canguard (DEFEND),
+	// canpatrol, canreclamate (RECLAIM), cancapture, canload (the transport
+	// bit) and candgun (the blast bit).
+	//
+	// Repair is a separate aggregate bit fed by the parser's derived copy of
+	// canreclamate, so it always agrees with Reclaim [02 R-KEYS-01 §1]; it is
+	// published separately because §6's table greys REPAIR from its own bit.
+	// IsTransport additionally hides BLAST when it is set and hides LOAD when
+	// it is clear [07 R-HUD-03 §6].
+	//
+	// The fold is a disjunction: the aggregate bit is set once any selected
+	// unit's definition carries the key, so a button is greyed only when no
+	// selected unit can perform the command.
+	//
+	// TODO(question): [04 "mixed selection and control groups"] states the
+	// opposite — "a button is enabled only when every selected unit carries
+	// the capability bit" — and that conjunction is contradicted by the
+	// aggregate refresh's folds.  Settle it by landing the capability folds
+	// under [07 §9] as an addendum and correcting doc 04's sentence there,
+	// stating what it said and why it was wrong.
+	CanMove     bool
+	CanStop     bool
+	CanAttack   bool
+	CanDefend   bool
+	CanPatrol   bool
+	CanReclaim  bool
+	CanCapture  bool
+	CanRepair   bool
+	IsTransport bool
+	CanBlast    bool
 }
 
 // BuildProgressView carries construction progress in its authored float32

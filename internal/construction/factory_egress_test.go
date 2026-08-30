@@ -1,6 +1,8 @@
 package construction
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/cob"
@@ -8,6 +10,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
@@ -237,4 +240,340 @@ func TestCompletionIsReportedWhenASuccessorAllocatesInTheSamePass(t *testing.T) 
 	if len(reported) < 2 {
 		t.Fatalf("a two-count run reported %d distinct completions, want both: %v", len(reported), reported)
 	}
+}
+
+// exitAircraftDef is exitMobileDef's air twin: a canfly product with the flight
+// constants the §10.1 integrator needs. Aircraft are not classified against the
+// ground lattice, but the factory's own state-2 exit test still validates the
+// product's footprint per cell against its definition [04 R-FAC-02 §5], so the
+// movement class is kept.
+func exitAircraftDef(name string, fx, fz int32) *content.UnitDef {
+	d := exitMobileDef(name, fx, fz)
+	d.CanFly = true
+	d.CanMove = true
+	d.CruiseAlt = 60
+	d.MaxVelocity = 4 * 65536
+	d.Acceleration = 65536 / 4
+	d.BrakeRate = 65536 / 8
+	d.TurnRate = 500
+	return d
+}
+
+// TestAircraftProductTakesOffAndFreesTheYard is the air half of the egress
+// contract the ground tests above lock. [04 R-AIR-02] composes it from two
+// direct traces: `Park` re-identifies a canfly product's record as `VTOL_Move`
+// with the product's own position as goal [04 R-FAC-02 §4], whose phase 0 is the
+// shared takeoff preamble — mode 1 → 2 plus an initial climb marker at
+// `cruisealt / 2` [04 R-AIR-01 §6] — and the mode write is what moves the
+// aircraft's occupancy off the ground plane [04 R-COLL-01 §4], which is the
+// event [04 R-FAC-02 §6] names for the exit clearing and [04 R-FAC-02 §5] for
+// the yard closing.
+//
+// Before this test the product reached mode 1 and stopped there: nothing in the
+// sim ran the preamble, so a finished aircraft sat on its pad forever, holding
+// the exit cells and pinning the doors open.
+func TestAircraftProductTakesOffAndFreesTheYard(t *testing.T) {
+	plant := newFactoryDef("airplant", 4, 4, 300)
+	plant.YardMap = "yccy yccy yccy yccy" // 'c' pad lane: stamped only while closed
+	air := exitAircraftDef("airprod", 1, 1)
+	air.BuildTime = 1
+	air.BuildCostEnergy = 1
+	air.BuildCostMetal = 1
+	cat := exitCatalog(plant, air)
+	cat.Movement["exitmove"].MinWaterDepth = -10000
+	terrain := exitTerrain(24, 24)
+	svc, w := exitService(t, terrain, cat)
+	sys := movement.NewSystem(terrain, movement.Profile{}, movement.NewOccupancyGrid())
+	sys.SetClasses(cat.Movement)
+	sys.BindWorld(w)
+	svc.Movement = sys
+	for i := range svc.Economy.Players {
+		svc.Economy.Players[i].Stock[0] = 1e9
+		svc.Economy.Players[i].Stock[1] = 1e9
+		svc.Economy.Players[i].Capacity[0] = 2e9
+		svc.Economy.Players[i].Capacity[1] = 2e9
+	}
+
+	fh, err := w.Create(plant, 0, world.CellToWorld(10), 0, world.CellToWorld(10))
+	if err != nil {
+		t.Fatalf("create plant: %v", err)
+	}
+	factory := w.Unit(fh)
+	bindConstructionFixture(factory, trivialModel(1, [][3]int64{{0, 0, 0}}), true)
+	if err := svc.RegisterBuildingPlacement(factory); err != nil {
+		t.Fatalf("RegisterBuildingPlacement: %v", err)
+	}
+	if !svc.YardOpenTransaction(factory, true) {
+		t.Fatal("plant yard refused to open")
+	}
+	q := orders.QueueForUnit(factory)
+	q.Push(orders.Lookup("BuildingBuild"), orders.Node{BuildDefKey: air.CanonicalKey, Param1: prodIdx(cat, air.CanonicalKey), Param2: 1, Phase: uint8(State2), Deadline: -1})
+	q.Primary()[0].Phase = uint8(State2)
+
+	ctx := TickContext{World: w, Economy: svc.Economy, Terrain: svc.Terrain, Catalog: cat}
+	var product pool.Handle
+	for i := 1; i <= 60 && product == 0; i++ {
+		ctx.Tick = uint32(i)
+		svc.Economy.TickPlayer(0, uint32(i), w, func() {})
+		if res := svc.StepUnit(ctx, fh); res.Completed && res.Product != 0 {
+			product = res.Product
+		}
+	}
+	if product == 0 {
+		t.Fatal("plant never completed an aircraft")
+	}
+	// The session's completion hook: the finished product joins the movement
+	// system, which stamps its footprint on the ground plane at mode 1.
+	sys.EnsureUnit(w.Unit(product))
+	prod := w.Unit(product)
+	if prod.Move.Mode != 1 {
+		t.Fatalf("completed aircraft mover mode=%d, want the grounded 1 the detach leaves [04 R-FAC-02 §1]", prod.Move.Mode)
+	}
+	padY := prod.Y
+	// The grounded aircraft holds its exit cells, so the doors cannot close.
+	if svc.YardOpenTransaction(factory, false) {
+		t.Fatal("yard closed over a grounded aircraft still standing on its pad [04 R-FAC-02 §5]")
+	}
+
+	// No rally: GetBuilt appends Park, whose canfly arm restarts the record as
+	// VTOL_Move at the product's own position [04 R-FAC-02 §4].
+	svc.rallyInheritance(factory, prod)
+	pq := orders.QueueForUnit(prod)
+	if pq == nil || pq.LenPrimary() == 0 {
+		t.Fatal("product queue is empty after rally inheritance")
+	}
+
+	wantClimb := movement.CruiseAltitudeForCarrier(terrain, prod.X, prod.Z, prod, true)
+	sawMode2 := false
+	for tick := uint32(61); tick <= 400; tick++ {
+		sys.Scheduler.Tick(tick)
+		pq.Pump(prod, tick)
+		if head := headNodeForTest(prod); head != nil {
+			switch orders.DescriptorFor(head.ID).Name {
+			case "VTOL_Move", "Park":
+				sys.ActivateMove(prod, head)
+			}
+		}
+		sys.BeginTick(tick)
+		sys.StepUnit(product, tick)
+		sys.EndTick(tick)
+		if prod.Move.Mode == 2 {
+			sawMode2 = true
+		}
+		if sawMode2 && movement.AltitudesEqual(prod.Y, wantClimb) {
+			break
+		}
+	}
+	if !sawMode2 {
+		t.Fatalf("aircraft never reached active locomotion; mover mode=%d [04 R-AIR-01 §6 step 4]", prod.Move.Mode)
+	}
+	if prod.Move.Mode != 2 {
+		t.Fatalf("aircraft mover mode=%d after takeoff, want 2 [04 R-AIR-01 §3]", prod.Move.Mode)
+	}
+	if prod.Y <= padY {
+		t.Fatalf("aircraft did not climb: Y=%d, pad Y=%d [04 R-AIR-02]", prod.Y, padY)
+	}
+	if !movement.AltitudesEqual(prod.Y, wantClimb) {
+		t.Fatalf("aircraft did not reach the initial climb marker: Y=%d want %d within one world unit [04 R-AIR-01 §4][04 R-AIR-01 §6]", prod.Y, wantClimb)
+	}
+	// The mode write moved the stamp off the ground plane, so nothing of the
+	// aircraft is left on the exit and the doors close [04 R-COLL-01 §4]
+	// [04 R-FAC-02 §5][04 R-FAC-02 §6].
+	rect, ok := svc.PlacementForProduct(fh)
+	if !ok {
+		t.Fatal("no placement record for the plant")
+	}
+	for z := rect.MinZ(); z < rect.MaxZ(); z++ {
+		for x := rect.MinX(); x < rect.MaxX(); x++ {
+			if id, occupied := sys.Grid.OccupantAt(movement.Cell{X: x, Z: z}); occupied && id == int(product) {
+				t.Fatalf("airborne aircraft still holds ground cell (%d,%d) [04 R-COLL-01 §4]", x, z)
+			}
+		}
+	}
+	if !svc.YardOpenTransaction(factory, false) {
+		t.Fatal("yard refused to close after the aircraft took off [04 R-FAC-02 §5]")
+	}
+	if factory.YardOpen {
+		t.Fatal("accepted close did not commit the bit")
+	}
+}
+
+// TestFourGroundProductsEachLeaveTheYard settles, empirically, the second half
+// of the playtest report "units pile up at factory exit instead of making room
+// for newly produced units to exit the yard". [04 R-COB-05] establishes that
+// the mechanism the report names — COB port 19 — has no engine reader, so if a
+// stall were real it would have another cause. This drives one factory's
+// counted run of four ground products end to end through the real order pump,
+// the real GetBuilt/Park insertion and the real movement follower.
+//
+// What must hold, and does: production never deadlocks. Every product of the
+// run completes, is released, walks clear of the plant's footprint, and stands
+// on a cell of its own — the exit test rejects any non-zero ground word with
+// self identity 0, so retail cannot stack two products [04 R-FAC-02 §6] — and
+// the counted node drops so the doors close behind the last one
+// [04 R-FAC-02 §5].
+//
+// What is NOT asserted, because research says it is retail: the products end up
+// queued in a column rather than fanned out. Every no-rally product of one
+// factory receives a `Park` rectangle anchored on the same plate, so the
+// rectangles are identical [04 R-FAC-02 §4]; the rectangle class's goal-point
+// query is the constant middle column of the FAR Z edge, not a per-mover point
+// [04 R-MOV-03 §2]; and route acceptance rewrites any route of fewer than three
+// points into a straight line at that goal point [04 R-PATH-01 §8]. The first
+// product parks on that cell and the rest close up behind it. Retail has no
+// push, no stacking and no force-placement [04 R-FAC-02 §6], and no engine
+// scatter [04 R-COB-05]: the queue is the behavior, and a rally point is what
+// disperses it. [04 R-EGRESS-01] composes that chain; the far-edge goal point
+// itself is locked by TestGroundRouteAcceptanceGates in the movement package.
+func TestFourGroundProductsEachLeaveTheYard(t *testing.T) {
+	const productCount = 4
+	lab := newFactoryDef("queuelab", 4, 4, 300)
+	lab.YardMap = "yccy yccy yccy yccy" // 'c' pad lane: released while the yard is open
+	prodDef := exitMobileDef("queueprod", 1, 1)
+	prodDef.BuildTime = 1
+	prodDef.BuildCostEnergy = 1
+	prodDef.BuildCostMetal = 1
+	prodDef.MaxVelocity = 2 * 65536
+	prodDef.Acceleration = 65536 / 2
+	prodDef.BrakeRate = 65536 / 2
+	prodDef.TurnRate = 1000
+	cat := exitCatalog(lab, prodDef)
+	cat.Movement["exitmove"].MinWaterDepth = -10000
+	terrain := exitTerrain(32, 32)
+	svc, w := exitService(t, terrain, cat)
+	sim := rng.NewSimulation(4242)
+	w.SetSimulationRNG(&sim)
+	sys := movement.NewSystem(terrain, movement.Profile{FootPrintX: 1, FootPrintZ: 1, MinWaterDepth: -10000, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 255, BadWaterSlope: 127}, movement.NewOccupancyGrid())
+	sys.SetClasses(cat.Movement)
+	sys.BindWorld(w)
+	svc.Movement = sys
+	for i := range svc.Economy.Players {
+		svc.Economy.Players[i].Stock[0] = 1e9
+		svc.Economy.Players[i].Stock[1] = 1e9
+		svc.Economy.Players[i].Capacity[0] = 2e9
+		svc.Economy.Players[i].Capacity[1] = 2e9
+	}
+
+	fh, err := w.Create(lab, 0, world.CellToWorld(12), 0, world.CellToWorld(12))
+	if err != nil {
+		t.Fatalf("create lab: %v", err)
+	}
+	factory := w.Unit(fh)
+	bindConstructionFixture(factory, trivialModel(1, [][3]int64{{0, 0, 0}}), true)
+	if err := svc.RegisterBuildingPlacement(factory); err != nil {
+		t.Fatalf("RegisterBuildingPlacement: %v", err)
+	}
+	if !svc.YardOpenTransaction(factory, true) {
+		t.Fatal("lab yard refused to open")
+	}
+	rect, ok := svc.PlacementForProduct(fh)
+	if !ok {
+		t.Fatal("no placement record for the lab")
+	}
+	q := orders.QueueForUnit(factory)
+	q.Push(orders.Lookup("BuildingBuild"), orders.Node{BuildDefKey: prodDef.CanonicalKey, Param1: prodIdx(cat, prodDef.CanonicalKey), Param2: productCount, Phase: uint8(State2), Deadline: -1})
+	q.Primary()[0].Phase = uint8(State2)
+
+	// The session's per-unit visit, reduced to the three services this contract
+	// needs: the order pump, the movement activation boundary, and the two
+	// per-unit steps [04 §3.3][04 §8.1].
+	ordersPump := &orders.Pump{World: w}
+	completed := []pool.Handle{}
+	seen := map[pool.Handle]bool{}
+	ctx := TickContext{World: w, Economy: svc.Economy, Terrain: svc.Terrain, Catalog: cat}
+	const maxTicks = 4000
+	lastCompletion := uint32(0)
+	for tick := uint32(1); tick <= maxTicks; tick++ {
+		ctx.Tick = tick
+		svc.Economy.TickPlayer(0, tick, w, func() {})
+		sys.Scheduler.Tick(tick)
+		sys.BeginTick(tick)
+		for _, u := range w.IterSliced() {
+			if u == nil || !u.Alive {
+				continue
+			}
+			h := u.Handle
+			ordersPump.PumpUnit(h, tick)
+			if head := headNodeForTest(u); head != nil {
+				switch orders.DescriptorFor(head.ID).Name {
+				case "Move_Ground", "QMove", "Park", "VTOL_Move":
+					sys.ActivateMove(u, head)
+				}
+			}
+			if res := svc.StepUnit(ctx, h); res.Completed && res.Product != 0 && !seen[res.Product] {
+				seen[res.Product] = true
+				completed = append(completed, res.Product)
+				lastCompletion = tick
+				// The session's completion hook: the finished product joins the
+				// movement system, stamping its footprint on the ground plane.
+				sys.EnsureUnit(w.Unit(res.Product))
+			}
+			sys.StepUnit(h, tick)
+		}
+		sys.EndTick(tick)
+		if len(completed) == productCount && allClearOfRect(w, completed, rect) {
+			break
+		}
+	}
+
+	if len(completed) != productCount {
+		var detail []string
+		for _, h := range completed {
+			u := w.Unit(h)
+			detail = append(detail, fmt.Sprintf("%d at cell (%d,%d)", h, world.WorldToCell(u.X), world.WorldToCell(u.Z)))
+		}
+		node := headNodeForTest(factory)
+		nodeTxt := "queue-empty"
+		if node != nil {
+			nodeTxt = fmt.Sprintf("%s phase=%d deadline=%d", orders.DescriptorFor(node.ID).Name, node.Phase, node.Deadline)
+		}
+		t.Fatalf("only %d of %d products completed (last at tick %d); factory node %s; completed=[%s] — the counted run stalled [04 R-FAC-02 §6]",
+			len(completed), productCount, lastCompletion, nodeTxt, strings.Join(detail, ", "))
+	}
+	for i, h := range completed {
+		u := w.Unit(h)
+		if u == nil || !u.Alive {
+			t.Fatalf("product %d (#%d) is not alive after the run", h, i)
+		}
+		cx, cz := world.WorldToCell(u.X), world.WorldToCell(u.Z)
+		if cx >= rect.MinX() && cx < rect.MaxX() && cz >= rect.MinZ() && cz < rect.MaxZ() {
+			t.Fatalf("product %d (#%d) never left the plant footprint: cell (%d,%d) inside [%d,%d)x[%d,%d) [04 R-FAC-02 §4]",
+				h, i, cx, cz, rect.MinX(), rect.MaxX(), rect.MinZ(), rect.MaxZ())
+		}
+	}
+	// Two products must never end on the same cell: the exit test rejects any
+	// non-zero ground word with self identity 0, so retail cannot stack them
+	// [04 R-FAC-02 §6].
+	occupied := map[[2]int32]pool.Handle{}
+	for _, h := range completed {
+		u := w.Unit(h)
+		key := [2]int32{world.WorldToCell(u.X), world.WorldToCell(u.Z)}
+		if other, clash := occupied[key]; clash {
+			t.Fatalf("products %d and %d both stand on cell (%d,%d) [04 R-FAC-02 §6]", other, h, key[0], key[1])
+		}
+		occupied[key] = h
+	}
+	// The counted run is exhausted, so the node is dropped and the doors close
+	// behind the last product [05 "Factory production lifecycle"][04 R-FAC-02 §5].
+	if node := headNodeForTest(factory); node != nil && orders.DescriptorFor(node.ID).Name == "BuildingBuild" {
+		t.Fatalf("factory still holds a BuildingBuild node after %d completions: phase=%d deadline=%d", productCount, node.Phase, node.Deadline)
+	}
+	if !svc.YardOpenTransaction(factory, false) {
+		t.Fatal("yard refused to close after every product left the pad [04 R-FAC-02 §5]")
+	}
+}
+
+// allClearOfRect reports whether every named unit stands outside rect.
+func allClearOfRect(w *units.World, handles []pool.Handle, rect world.FootprintRect) bool {
+	for _, h := range handles {
+		u := w.Unit(h)
+		if u == nil || !u.Alive {
+			return false
+		}
+		cx, cz := world.WorldToCell(u.X), world.WorldToCell(u.Z)
+		if cx >= rect.MinX() && cx < rect.MaxX() && cz >= rect.MinZ() && cz < rect.MaxZ() {
+			return false
+		}
+	}
+	return true
 }

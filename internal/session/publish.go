@@ -115,6 +115,13 @@ func (s *Session) publishSnapshot(tick uint32) {
 				Bank:           u.Move.Bank,
 				Activated:      u.Activated,
 				Kills:          u.Kills,
+				// The unit painter's pass selector is the committed low two
+				// bits of the mover mode word, never a screen coordinate
+				// [03 R-RAST-01 §7][04 R-MOV-01 §8].
+				MoverMode: u.Move.Mode & 3,
+				// The health-bar pass draws '0'+Group beside the bar of a unit
+				// whose group number is nonzero [03 R-FX-01 §6][07 §9].
+				Group: u.Group,
 			}
 			// The footer's four rate fields read the archived production and
 			// requested totals of the most recent settlement pass, not the
@@ -236,6 +243,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 		}
 		published.Selection.LocalPlayer = s.LocalOwner
 		published.Selection.Count = uint16(len(published.Selection.Handles))
+		publishSelectionAggregate(s, published.Selection.Handles, &published.CommandPage)
 		// Command-page state is authored by the selected builder's CANBUILD
 		// page. Shift/input latches are presentation-owned and therefore remain
 		// at their zero value until a typed input state is introduced [07 §9].
@@ -620,6 +628,95 @@ func (s *Session) publishSnapshot(tick uint32) {
 	}
 	if s.publication != nil && s.publication.events != nil {
 		s.publication.events.Reset()
+	}
+}
+
+// publishSelectionAggregate folds the local player's selection into the
+// selection-aggregate command state the side panel stages and greys its
+// command buttons from [07 §9][07 R-HUD-03 §6].  handles carries the selection
+// in ascending pool order, the order every selection walk uses [07 §9].
+//
+// The fold is a copy out of authoritative state at the publication boundary and
+// mutates nothing [I6].  Values and folds are documented on
+// frame.CommandPageView; the two open spec conflicts are marked there.
+func publishSelectionAggregate(s *Session, handles []pool.Handle, page *frame.CommandPageView) {
+	// Each field starts at its not-applicable sentinel: 4 for the three-bit
+	// stance fields [04 R-STANCE-01 §1], 3 for the two-bit pairs, which is
+	// also the value that greys CLOAK and ONOFF [07 R-HUD-03 §6].
+	page.MoveStance = 4
+	page.FireStance = 4
+	page.CloakState = 3
+	page.OnOffState = 3
+	if s == nil || s.Units == nil {
+		return
+	}
+	for _, h := range handles {
+		u := s.Units.Unit(h)
+		if u == nil || !u.Alive || u.Def == nil {
+			continue
+		}
+		// A unit joins a stance fold only when its definition authors the
+		// matching accept key [04 R-STANCE-01 §5]; the unit's own two-bit
+		// fields are bits 18-19 (move) and 20-21 (fire) of its status word
+		// [04 R-STANCE-01 §2].
+		if u.Def.MobileStandOrders {
+			v := uint8((u.Flags >> 18) & 3)
+			if page.MoveStance == 4 {
+				page.MoveStance = v
+			} else if page.MoveStance != v {
+				page.MoveStance = 3
+			}
+		}
+		if u.Def.FireStandOrders {
+			v := uint8((u.Flags >> 20) & 3)
+			if page.FireStance == 4 {
+				page.FireStance = v
+			} else if page.FireStance != v {
+				page.FireStance = 3
+			}
+		}
+		// onoffable gates the on/off pair; the folded state is the unit's
+		// committed activation [04 R-SPEC-01 §11][02 "Unit record"].
+		if u.Def.OnOffable {
+			v := uint8(0)
+			if u.Activated {
+				v = 1
+			}
+			if page.OnOffState == 3 {
+				page.OnOffState = v
+			} else if page.OnOffState != v {
+				page.OnOffState = 2
+			}
+		}
+		// The can-cloak capability is derived at definition load as
+		// cloakcost > 0 [05 "which units can request cloak at all"]; the folded
+		// state is the unit's cloak-requested bit.  Unlike the on/off fold this
+		// one takes the disagreement value for any second cloak-capable unit,
+		// agreeing or not.
+		if u.Def.CloakCost > 0 {
+			if page.CloakState == 3 {
+				v := uint8(0)
+				if u.IsCloaked {
+					v = 1
+				}
+				page.CloakState = v
+			} else {
+				page.CloakState = 2
+			}
+		}
+		// The capability aggregates of the stage/grey table [07 R-HUD-03 §6],
+		// each from its authored key [02 "Unit record"].  REPAIR reads the
+		// parser's derived copy of canreclamate [02 R-KEYS-01 §1].
+		page.CanMove = page.CanMove || u.Def.CanMove
+		page.CanStop = page.CanStop || u.Def.CanStop
+		page.CanAttack = page.CanAttack || u.Def.CanAttack
+		page.CanDefend = page.CanDefend || u.Def.CanGuard
+		page.CanPatrol = page.CanPatrol || u.Def.CanPatrol
+		page.CanReclaim = page.CanReclaim || u.Def.CanReclamate
+		page.CanCapture = page.CanCapture || u.Def.CanCapture
+		page.CanRepair = page.CanRepair || u.Def.CanReclamate
+		page.IsTransport = page.IsTransport || u.Def.CanLoad
+		page.CanBlast = page.CanBlast || u.Def.CanDGun
 	}
 }
 

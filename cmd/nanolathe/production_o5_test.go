@@ -60,7 +60,7 @@ func TestBattleCommandsPublishQueueAndShiftOverlay(t *testing.T) {
 	// command path. The fixture unit handles are known from the allocator's
 	// initial setup, never injected after command admission begins.
 	advanceQueueFixture(t, s)
-	controller := NewBattleController(b)
+	controller := newReplayController(b)
 	sx, sy := queueScreenPos(b.cam, builderHandle, unitsWorld)
 	queueClick(t, controller, sx, sy, BattleModifiers{})
 	// The click is admitted through the human-command queue and reaches the

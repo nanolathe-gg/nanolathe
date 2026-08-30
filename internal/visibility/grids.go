@@ -48,6 +48,11 @@ type Service struct {
 	// word mask and wiped each tick [03 §3.4] C11.
 	surfaces     SensorSurfaces
 	sensorInputs []SensorInput
+
+	// viewerDefeated mirrors the viewing player's defeated/observer rule flag.
+	// It is the friendly pass's third disjunct: a defeated viewer marks every
+	// live unit friendly [R-VIS-01 §4] pass 1.
+	viewerDefeated bool
 }
 
 // ObserverID identifies one sight source across ticks — the owning unit's pool
@@ -264,10 +269,10 @@ type Observer struct {
 // GridDimensions returns the visibility grid dimensions (W,H) as per C1.
 func (s *Service) GridDimensions() (int32, int32) { return s.W, s.H }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// water impact and splash but never ORs into the LOS word mask [P1-07 §2.4]
-// [03 §3.2]. Jammer circles are presentation-only on the minimap final surface
-// and never affect the authoritative word mask [P1-07][P0-11]; this mode is
-// separate from LOS and is the liquid forced dead|2 that overrides noexplode
-// [P1-07 §2.4] [06 §13.2] C28.
+// OpaqueLiquidGatesCollision reports the opaque-liquid mode, the global that
+// gates collision water impact and splash but never ORs into the LOS word mask
+// [P1-07 §2.4][03 §3.2]. Jammer circles are presentation-only on the minimap
+// final surface and never affect the authoritative word mask [R-VIS-01 §5];
+// this mode is separate from LOS and is the liquid forced dead|2 that overrides
+// noexplode [P1-07 §2.4][06 §13.2] C28.
 func OpaqueLiquidGatesCollision(opaqueMode bool) bool { return opaqueMode } // [P1-07 §2.4]

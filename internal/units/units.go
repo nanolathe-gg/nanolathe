@@ -425,28 +425,36 @@ func (u *Unit) CloakCost() float32 {
 	return float32(u.Def.CloakCost)
 }
 
-// InitEconomyState initializes Activated and IsCloaked from the definition
-// per [02 "Unit record"] ActivateWhenBuilt / OnOffable / InitCloaked [P1-I04].
+// InitEconomyState initializes the engine-state activation bit and IsCloaked
+// from the definition per [02 "Unit record"] InitCloaked [P1-I04].
+//
+// EVERY unit is created INACTIVE, with no definition key consulted. Neither
+// `onoffable` nor `activatewhenbuilt` is a creation-time copy of the bit:
+// `activatewhenbuilt` raises the edge through the shared setter at pre-built
+// creation and again at build completion [04 R-SPEC-01 §12], and `onoffable`
+// gates only the Activate/Deactivate order handlers [04 R-SPEC-01 §11].
+//
+// The previous text pinned the bit true for a definition authoring neither
+// key, calling it a stand-in for the economy's branch gate and justifying it
+// as avoiding "the upkeep of 122 stock definitions" falling silent. Both
+// halves were wrong. There is no separate branch gate to stand in for: the
+// economy's building branch tests this same engine-state bit [05 R-ECO-01 §2],
+// and [05 R-PROD-01 §2] states the consequence outright — a definition that
+// omits both keys "never activates and never runs any generator". The count
+// was wrong too. Over the full reference install (278 definitions) the
+// pinning affects the economy of exactly three: the two Galactic Gates and
+// the Stinger. Not one stock generator is touched, because every stock
+// solar, wind, tidal, extractor, moho and metal maker authors
+// `activatewhenbuilt` and is raised by the completion edge [I14].
+//
+// The pinning also swallowed the factory's state-0 activate edge, which the
+// script-owned yard-door handshake depends on [05 "Factory production
+// lifecycle"].
 func (u *Unit) InitEconomyState() {
 	if u == nil || u.Def == nil {
 		return
 	}
-	if u.Def.OnOffable || u.Def.ActivateWhenBuilt {
-		// A unit is created INACTIVE. `activatewhenbuilt` is not a creation-time
-		// copy of the bit: it raises the edge through the shared setter at
-		// pre-built creation and again at build completion, without consulting
-		// `onoffable` [04 R-SPEC-01 §12]. Pre-setting the bit here suppressed
-		// both edges, so a completed mex never ran its `Activate` script.
-		u.Activated = false
-	} else {
-		// A definition with neither key can never be toggled [04 R-SPEC-01 §11]
-		// and nanolathe treats it as permanently on, because the economy branch
-		// gate reads this bit for every definition. [05 R-PROD-01 §2] says such
-		// a definition "never activates and never runs any generator"; making
-		// that literal is an economy change outside WU-16-3 [PLAN_16 §WU-16-3 C4]
-		// and it would silence the upkeep of 122 stock definitions.
-		u.Activated = true
-	}
+	u.Activated = false
 	u.IsCloaked = u.Def.InitCloaked
 }
 

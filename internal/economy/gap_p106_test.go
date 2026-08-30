@@ -40,7 +40,14 @@ func TestMakerStall(t *testing.T) {
 	svc.Players[0].ControllerState = 1
 	svc.Players[0].SetSettlementStatusPair(1, 0)
 	svc.Players[0].EndGameCountdown = -1
-	def := economyFixtureDef(&content.UnitDef{UnitName: "armmakr", MakesMetal: 1, ExtractsMetal: 0, EnergyMake: 0, MetalMake: 0, BuildTime: 100, MaxDamage: 100})
+	// Both generator fixtures author `activatewhenbuilt`, as every stock maker
+	// and extractor in the reference install does. That is what activates them:
+	// the building branch of [R-ECO-01 §2] runs only on the engine-state
+	// activation bit, and a definition authoring neither `activatewhenbuilt`
+	// nor `onoffable` "never activates and never runs any generator"
+	// [05 R-PROD-01 §2]. Already-built creation raises the edge, per
+	// [04 R-SPEC-01 §12] site 1.
+	def := economyFixtureDef(&content.UnitDef{UnitName: "armmakr", MakesMetal: 1, ExtractsMetal: 0, EnergyMake: 0, MetalMake: 0, BuildTime: 100, MaxDamage: 100, ActivateWhenBuilt: true})
 	def.CanonicalKey = content.CanonicalKey("armmakr")
 	// Create unit with energy carry >0
 	h, _ := w.Create(def, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
@@ -61,7 +68,7 @@ func TestMakerStall(t *testing.T) {
 		t.Fatalf("maker not stalled should produce 1, got %v", b[Metal].Production)
 	}
 	// Extractor with spotMetal
-	def2 := economyFixtureDef(&content.UnitDef{UnitName: "armmex", ExtractsMetal: 0.5, BuildTime: 100, MaxDamage: 100})
+	def2 := economyFixtureDef(&content.UnitDef{UnitName: "armmex", ExtractsMetal: 0.5, BuildTime: 100, MaxDamage: 100, ActivateWhenBuilt: true})
 	def2.CanonicalKey = content.CanonicalKey("armmex")
 	h2, _ := w.Create(def2, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	u2 := w.Unit(h2)

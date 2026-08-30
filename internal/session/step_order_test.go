@@ -26,6 +26,14 @@ func TestStepOrderPathPublicationAfterMovement(t *testing.T) {
 	u.Def.CanMove = true
 	u.Def.MaxVelocity = 2000
 	u.Def.TurnRate = 1000
+	// The ground follower gains speed only by adding +Acceleration and sheds it
+	// by subtracting -BrakeRate; both gates of [04 R-MOV-01 §4] are also
+	// divisions by TurnRate and BrakeRate. A definition that authors neither
+	// stays at speed zero for ever, so a fixture asserting movement must author
+	// them — the earlier fixture set only MaxVelocity and TurnRate and could
+	// never move, whatever the phase order did.
+	u.Def.Acceleration = 1000
+	u.Def.BrakeRate = 1000
 	ensureMovementForAll(s)
 	id := orders.Lookup("Move_Ground")
 	if id == 0 {

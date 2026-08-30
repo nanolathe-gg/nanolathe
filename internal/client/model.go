@@ -886,9 +886,6 @@ func (c *Client) supersampleModel(structure bool) bool {
 // and then recolours it band by band and overdraws its polygon outlines, which
 // is the nanoframe [03 §5.2].
 func (c *Client) drawModel(draw *presentationrender.UnitDraw, owner uint8, id uint64, kind uint8, reveal *presentationrender.NanoframeReveal, outline uint8) bool {
-	// TODO(question): model shadows remain suppressed because the published
-	// frame has no visual-options word, terrain ground/depth input, or model
-	// shadow flag needed by the established pre-body shadow path [03 §5.3].
 	tris := c.collectDrawTris(draw, owner, id, kind)
 	if len(tris) == 0 {
 		return false
@@ -935,8 +932,10 @@ func (c *Client) drawModel(draw *presentationrender.UnitDraw, owner uint8, id ui
 		target.eraseAtOrBelow(uint8(diggerKeyBias + presentationrender.NanoframeHeightBias))
 	}
 	// The shadow is composed and blitted before the body for the same subject
-	// [03 §5.3].
-	c.drawModelShadow(draw)
+	// [03 §5.3]. It reads the finished body image to punch the body's own
+	// silhouette out of itself [R-REN-03D §5][R-RAST-01 §4], which is why it
+	// runs after the raster and the anti-alias resolve rather than first.
+	c.drawModelShadow(draw, target)
 	target.commit(c.indexed, c.width, c.height)
 	if reveal != nil {
 		c.drawModelOutline(draw, outline, raster)
@@ -980,6 +979,21 @@ func (c *Client) attachModelTrace(t *modelTarget, id uint64) {
 // The trace target, when present, is the image the model was rasterized into,
 // so outline points are converted back into its coordinate space before they
 // are recorded; the visible line itself is drawn in framebuffer space.
+//
+// The outline projects each vertex through exactly the body's own path:
+// [R-COMP-01 §3] gives the outline vertex as `sx = hi16(x) + originX`,
+// `sy = hi16(-z) - (hi16(y) >> 1) + originY` — the composition image's own
+// projection and origin pair — and the image is then blitted at the unit
+// anchor, so a screen point is modelLocalVertex plus modelAnchor.
+//
+// This previously passed the composed vertices straight to the camera's
+// world-space projection. Those vertices are the model-space piece chain with
+// the unit position added componentwise ([03 §2.4]), not world coordinates:
+// the camera adds screen Y from +Z, so the wireframe came out mirrored against
+// the body it outlines by the handedness flip of [R-RAST-01 §2], and it
+// composed the unit's own height into the model's half-height shear instead of
+// leaving it to the anchor. A nanoframe's outline therefore drifted off its
+// body and turned the wrong way as the unit turned.
 func (c *Client) drawModelOutline(draw *presentationrender.UnitDraw, color uint8, target *modelTarget) {
 	if c == nil || c.cam == nil || draw == nil || draw.Model == nil {
 		return
@@ -988,6 +1002,7 @@ func (c *Client) drawModelOutline(draw *presentationrender.UnitDraw, color uint8
 	if target != nil {
 		trace = target.trace
 	}
+	anchorX, anchorY := c.modelAnchor(draw)
 	for pi, piece := range draw.Pieces {
 		if pi >= len(draw.Model.Pieces) {
 			continue
@@ -1006,9 +1021,9 @@ func (c *Client) drawModelOutline(draw *presentationrender.UnitDraw, color uint8
 				if vi >= len(piece.WorldVertices) {
 					break
 				}
-				v := piece.WorldVertices[vi]
-				sx, sy := c.cam.WorldToScreen(v[0], v[1], v[2])
-				sx, sy = sx-camera.OriginX, sy-camera.OriginY
+				lx, ly, _ := modelLocalVertex(piece.WorldVertices[vi], draw.WorldPos)
+				lx, ly = c.scaleModelLocal(lx, ly)
+				sx, sy := anchorX+lx, anchorY+ly
 				if k > 0 && !c.segmentOffscreen(px, py, sx, sy) {
 					c.drawIndexedLine(px, py, sx, sy, color)
 					if trace != nil {

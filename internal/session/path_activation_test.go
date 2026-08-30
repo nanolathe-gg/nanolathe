@@ -4,9 +4,30 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/orders"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 )
+
+// goalReachedSearch reports that the unit's goal reached the path search: it
+// is either still queued as a live request, or the search already ran to a
+// published route within the same tick.
+//
+// A still-pending request is not the contract. The scheduler runs once per
+// tick, first, and keeps popping until an iteration's step charge reaches 100
+// [04 §7.3 R-PATH-01 §6]; a short search therefore reconstructs and publishes
+// in the very call that admitted it, and the request is released before the
+// tick ends. "Requests are full-or-empty… budget exhaustion leaves the heap and
+// request active for later ticks" [04 §7.3] — the surviving request is the
+// budget-exhaustion case, not the normal one. Asserting HasPathRequest alone
+// tests how long the search took.
+func goalReachedSearch(s *Session, h pool.Handle) bool {
+	if s.Movement.HasPathRequest(h) {
+		return true
+	}
+	route := s.Movement.Routes[h]
+	return route != nil && route.Active
+}
 
 func TestPathActivationSubmitsGoalForSearchValidation(t *testing.T) {
 	rng.SeedGlobal(100, 200)
@@ -56,7 +77,7 @@ func TestPathActivationSubmitsGoalForSearchValidation(t *testing.T) {
 		t.Fatal("bad order was not queued")
 	}
 	s.Step(1)
-	if !s.Movement.HasPathRequest(h) {
+	if !goalReachedSearch(s, h) {
 		t.Fatal("goal was not submitted for path search validation")
 	}
 	if q.Head() != badHead || badHead.MoveState != orders.MoveEnRoute {
@@ -78,7 +99,7 @@ func TestPathActivationSubmitsGoalForSearchValidation(t *testing.T) {
 	// The stored click is passable, but the target's current position is not.
 	// Resolution still happens before submission; search owns the rejection.
 	s.Step(2)
-	if !s.Movement.HasPathRequest(h) {
+	if !goalReachedSearch(s, h) {
 		t.Fatal("resolved target position was not submitted")
 	}
 	if q.Head() != targetHead || targetHead.MoveState != orders.MoveEnRoute {

@@ -109,17 +109,28 @@ func TestSensorSeenBitClearsAtFrameStart(t *testing.T) {
 
 // TestFriendlyMarkingExemptsUnderwater locks the coupling between the sensor
 // phase and the predicate: the friendly mask's upper bit IS the underwater
-// exemption [03 §3.2] C8 step 3, [03 §3.4].
+// exemption [03 §3.2] C8 step 3, [03 §3.4] — and locks WHO gets that pair.
+//
+// Correction (2026-08-30). This test previously fed an allied predicate and
+// asserted "allied unit status lacks the friendly mask" against an ally of the
+// local player, i.e. that the friendly pass marks allies. [R-VIS-01 §7]
+// establishes the opposite: pass 1's allied disjunct gates on an option-word
+// bit that no writer anywhere in the image sets, so allies get nothing from
+// this pass — an ally's radar contact never reaches the viewer's minimap and an
+// ally's submerged units are not exempted on the viewer's behalf. The friendly
+// pair goes to own units, and to everything only when the viewer is defeated
+// [R-VIS-01 §4] pass 1.
 func TestFriendlyMarkingExemptsUnderwater(t *testing.T) {
 	terrain := &world.Terrain{CellW: 128, CellH: 128, SeaLevel: 20}
 	s := newTestService(terrain, ModeHistoryEnabled|ModeCurrentEnabled)
 	s.SetLocal(0)
 	s.Publish(0, 10, 10, 0, 320)
 
-	var mine, theirs uint32
+	var mine, allies, theirs uint32
 	allied := func(a, b PlayerID) bool { return a == 0 && b == 1 }
 	units := []SensorUnit{
-		{Owner: 1, Status: &mine, Alive: true},   // allied with the local player
+		{Owner: 0, Status: &mine, Alive: true},   // the viewing player's own unit
+		{Owner: 1, Status: &allies, Alive: true}, // allied with the local player
 		{Owner: 2, Status: &theirs, Alive: true}, // not allied
 	}
 	s.SensorTick(0, 3, allied, units)
@@ -128,14 +139,17 @@ func TestFriendlyMarkingExemptsUnderwater(t *testing.T) {
 	// discriminating bit is the upper one — which is exactly the underwater
 	// exemption [03 §3.4].
 	if mine&FriendlyMask != FriendlyMask {
-		t.Fatalf("allied unit status %#x lacks the friendly mask", mine)
+		t.Fatalf("own unit status %#x lacks the friendly mask", mine)
+	}
+	if allies&underwaterExempt != 0 {
+		t.Fatalf("allied unit status %#x carries the exemption bit [R-VIS-01 §7]", allies)
 	}
 	if theirs&underwaterExempt != 0 {
 		t.Fatalf("enemy unit status %#x carries the exemption bit", theirs)
 	}
-	// A submerged allied unit is now exempt from the sea-level rejection.
+	// A submerged own unit is exempt from the sea-level rejection.
 	sub := Target{
-		Owner: 1, Status: mine,
+		Owner: 0, Status: mine,
 		X: tileWorld(10), Y: numeric.Fixed(10 * 65536),
 		Z: tileWorld(10) + numeric.Fixed(5*65536),
 	}
@@ -150,7 +164,8 @@ func TestFriendlyMarkingExemptsUnderwater(t *testing.T) {
 }
 
 // TestProximityDecloak locks C10/C12: a cloaked unit's proximity search writes
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// the decloak deadline (tick+90) and the decloak bit into the cloaked unit
+// itself when an enemy is within mincloakdistance [03 §3.4][R-VIS-01 §4] pass 4.
 func TestProximityDecloak(t *testing.T) {
 	s := newTestService(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled)
 	var cloakedStatus, nearStatus, farStatus uint32

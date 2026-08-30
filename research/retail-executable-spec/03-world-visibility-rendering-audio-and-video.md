@@ -1595,16 +1595,43 @@ all three together; the per-category keys move only their own bit.
 ##### 2. The structure-shadow rasterization
 
 The structure shadow is **a second rasterization of the model**, not a reuse of
-the body image. Its projection has no half-height shear at all — the shadow
-lies flat on the ground — and instead shears each vertex by a quarter of its
-own height:
+the body image. Its projection is the composition path's own narrowing
+([R-RAST-01 §2]) — the high word of each model-relative 16.16 coordinate, with
+the Z lane negated *before* that narrowing, which is the 3DO handedness flip
+the body pass applies too. It differs from the body only in the shear: there is
+no half-height term at all — the shadow lies flat on the ground — and instead
+each vertex is sheared by a quarter of its own height:
 
 ```
-q  = trunc(vertexY) >> 2                 (arithmetic shift; floors)
-sx = trunc(vertexX) + q
-sy = trunc(vertexZ) - q
-key = trunc(vertexY) + 25
+q   = hi16(vertexY) >> 2                 (arithmetic shift; floors)
+sx  = hi16(vertexX) + q
+sy  = hi16(-vertexZ) - q
+key = hi16(vertexY) + 25
 ```
+
+**Correction (2026-08-30).** This block previously read `q = trunc(vertexY)
+>> 2`, `sx = trunc(vertexX) + q`, `sy = trunc(vertexZ) - q`, `key =
+trunc(vertexY) + 25` — narrowing by truncation toward zero, and building the
+screen Y lane from the **plain** vertex Z with no negation. Both halves were
+wrong and the missing Z sign was the material one. Three things settle it.
+First, [R-RAST-01 §2] later established that every composition-path vertex
+narrows by taking the high word of the 16.16 value — floor, which differs from
+truncation by one on a negative fractional coordinate, and rotated vertices
+routinely carry a fractional part — and restated the body's own screen Y lane
+as `Zn = hi16(-vz)`, the negation applied before the narrowing; that section
+corrected [R-REN-03A §1] and [R-REN-03A §6] but did not reach this block.
+Second, this section's own prose names exactly three differences between the
+shadow walk and the body walk — the cache-bit gate, the flat filler at any
+vertex count, and the literal fill colour — and a Z sign is not among them; the
+only projection difference it states is quarter-shear-instead-of-half. Third,
+the old reading is self-refuting on the geometry: two projections of one model
+that disagree on handedness make a structure's shadow a Z-mirrored copy of its
+own body, swinging the wrong way as the unit turns, and put the structure
+branch out of step with the Digger and mobile branches of §6, which cast the
+finished body silhouette itself and therefore carry the body's sign by
+construction. The negated, high-word form above is **Established
+(direct-static)**; the previous form was a transcription slip in this write-up,
+not a second observation that competes with it.
 
 That is a 45-degree light in screen space: a vertex one unit up moves a quarter
 pixel right and a quarter pixel up. The key base is **25**, not the body
@@ -8377,6 +8404,32 @@ by the sharper question it turned into.
   (two-human-ally skirmish probe in which only one ally has radar coverage of
   a third player's unit). Until it lands, the bounded behavior — no allied
   sensor sharing on any channel — is what Nanolathe implements.
+- Whether the five stock definitions that author a sensor distance but that no
+  traced edge can ever activate are meant to emit at all. `ARMANNI`
+  (`radardistance` 1200), `ARMSS` and `CORSS` (`sonardistance` 489), and
+  `ARMACSUB` and `CORACSUB` (`sonardistance` 400 and 500) author neither
+  `activatewhenbuilt` nor `onoffable`, are not aircraft and are not factories,
+  so not one of the traced writers of the activation bit reaches them:
+  pre-built creation and build completion, the Activate/Deactivate handlers,
+  the factory production pump, and the aircraft mover-mode setter. Under
+  §3.4's emitter gate — "active" is the instance activation bit — their
+  authored range is therefore dead data. **Supported inference** that they
+  never emit; **Unknown** whether that is retail's intent. The reading is
+  self-consistent rather than obviously wrong, which is why it must not be
+  "fixed" on sight: doc 05's `[R-PROD-01 §2]` says a definition omitting both
+  keys "never activates and never runs any generator", and the emitter gate
+  and the economy branch gate read the same engine-state byte through one edge
+  machine, so restoring emission means asserting a further writer nobody has
+  found. It stays open because "retail's Annihilator offers no radar and
+  retail's stealth subs no sonar" is an inference from that shared bit, not an
+  observation · §3.4 `[R-VIS-01 §4]` pass 2 and the "Sensor callback gate
+  correction" above · decider: a manual retail observation is enough — park a
+  stealth sub within `sonardistance` of an enemy unit that no other sensor and
+  no line of sight covers, and watch for the contact; failing that, a static
+  trace for a further writer of the activation bit. Definition counts are
+  checked against the reference install — 278 definitions, 52 authoring a
+  sensor distance, 37 of them `activatewhenbuilt` [I14]. Marked
+  `TODO(question)`.
 - What the 450-tick allied radar/sensor share command carries on the receiving
   side; nothing in the recovered visibility or sensor path consumes an
   incoming share · doc 05 "Sensor sharing", doc 08 · static trace of the

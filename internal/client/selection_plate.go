@@ -73,7 +73,10 @@ func BuildSelectionPlateGeometry(m *compiledmodel.Model, pose frame.UnitView, ca
 	if draw == nil {
 		return []SelectionPlateGeometry{selectionPlateFallback(pose.Slot, visible, "model draw could not be built")}
 	}
-	_, unitScreenY := render.ModelProjectToScreen(cam, [3]numeric.Fixed{pose.X, pose.Y, pose.Z})
+	// The unit's own position is a genuine world point and takes the world
+	// projection; the plate's vertices below are model-space and do not.
+	unitWorldPos := [3]numeric.Fixed{pose.X, pose.Y, pose.Z}
+	_, unitScreenY := render.ModelProjectToScreen(cam, unitWorldPos)
 
 	out := make([]SelectionPlateGeometry, 0, len(primitives))
 	for _, selection := range primitives {
@@ -113,7 +116,13 @@ func BuildSelectionPlateGeometry(m *compiledmodel.Model, pose frame.UnitView, ca
 				valid = false
 				break
 			}
-			sx, sy := render.ModelProjectToScreen(cam, piece.WorldVertices[vertexIndex])
+			// WorldVertices are composed model vertices — the piece chain with
+			// the unit position added componentwise — not world points, so
+			// they take the handedness flip of [R-RAST-01 §2] through the
+			// world-object form of [R-WATER-01 §1] item 3. This previously
+			// called ModelProjectToScreen, the world-point projection, which
+			// mirrored every plate in Z against the body it belongs to.
+			sx, sy := render.ModelVertexToScreen(cam, unitWorldPos, piece.WorldVertices[vertexIndex])
 			vertices[i] = [2]int32{sx, sy}
 		}
 		if !valid {

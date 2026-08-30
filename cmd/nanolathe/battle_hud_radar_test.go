@@ -14,6 +14,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/ui"
+	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -109,6 +110,35 @@ func TestRadarPublishedOwnerZeroNeedsPublishedVisibility(t *testing.T) {
 	contact.Visible = true
 	if !radarPublishedContactVisible(contact, 0) {
 		t.Fatal("published visible owner-zero contact was rejected")
+	}
+}
+
+// TestRadarBlipGateKeepsUndetectedEnemiesOff locks the consumer half of the
+// minimap admission chain [03 §3.9]: an enemy contact whose committed status
+// carries no bit of the 0x300 mask draws no blip, and the same contact with the
+// seen marker set — the bit the sensor phase writes for a radar or
+// line-of-sight admission [R-VIS-01 §4] — does. The producer half is locked in
+// internal/session.
+func TestRadarBlipGateKeepsUndetectedEnemiesOff(t *testing.T) {
+	// MinimapMode 1 is the ordinary battle mode; the "all mapped" mode word and
+	// the global show-all option bit are both off [03 §3.9].
+	undetected := render.MinimapContact{Owner: 2, LocalPlayer: 1, MinimapMode: 1}
+	if radarContactAdmitted(undetected, render.BlinkState{}) {
+		t.Fatal("an enemy contact with no sensor or LOS admission drew a minimap blip [03 §3.9]")
+	}
+
+	detected := undetected
+	detected.Status = uint32(visibility.SeenBit)
+	detected.Visible = true
+	if !radarContactAdmitted(detected, render.BlinkState{}) {
+		t.Fatal("an enemy contact carrying the seen marker was not admitted [03 §3.9][R-VIS-01 §4]")
+	}
+
+	// The viewer's own units are admitted by owner identity regardless of any
+	// sensor state [03 §3.9].
+	ownUnit := render.MinimapContact{Owner: 1, LocalPlayer: 1, MinimapMode: 1}
+	if !radarContactAdmitted(ownUnit, render.BlinkState{}) {
+		t.Fatal("the viewing player's own unit was not admitted [03 §3.9]")
 	}
 }
 

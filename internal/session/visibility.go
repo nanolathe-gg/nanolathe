@@ -167,7 +167,9 @@ func stampPlayerSlice(s *Session, player int) {
 // contacts pass and 30-tick victory/defeat block, immediately before the
 // mapped-minimap rebuild; nanolathe's residual deltas are recorded at
 // tickPlayers). Callers: tickPlayers calls it unconditionally — SensorTick
-// owns the player-count gate and clears SeenBit when that gate skips.
+// owns the player-count gate. When that gate skips, retail leaves the three
+// status bits exactly as unit construction wrote them [R-VIS-01 §4] "Gate",
+// so this pass writes nothing either.
 func (s *Session) stepSensorPhase(tick uint32) {
 	if s.Vis == nil || s.Units == nil {
 		return
@@ -178,9 +180,9 @@ func (s *Session) stepSensorPhase(tick uint32) {
 	if s.visDecloak == nil {
 		s.visDecloak = make(map[int]uint32)
 	}
-	// SensorTick owns the active-player gate, but still clears SeenBit and its
-	// prior callback snapshot when that gate skips [03 §3.4] P0-11 — so this
-	// pass calls it unconditionally.
+	// SensorTick owns the active-player gate and drops its prior callback
+	// snapshot when that gate skips [R-VIS-01 §4] — so this pass calls it
+	// unconditionally.
 	active := s.activePlayerCount()
 	type holder struct {
 		statusPtr *uint32
@@ -201,23 +203,28 @@ func (s *Session) stepSensorPhase(tick uint32) {
 		dp := new(uint32)
 		*dp = dlVal
 		holders = append(holders, holder{statusPtr: sp, deadPtr: dp, handle: h})
-		// Gameplay visibility owns the cloak state. Do not reuse unrelated
-		// presentation/status bits from Unit.Flags here: authored stealth and
-		// init-cloak both feed the predicate state, while the committed radar
-		// payload keeps its own presentation flags [03 §3.2][03 §3.4].
+		// Hidden is the INSTANCE cloak bit — the seen probe's only gate
+		// besides the seen bit itself — seeded at construction from the
+		// definition's init_cloaked flag [R-VIS-01 §4] pass 5, [R-VIS-01 §6].
+		// Definition stealth is a different input entirely: it is the contact
+		// callback's third reject, so it suppresses radar and sonar detection
+		// outright but never line of sight [R-VIS-01 §5]. The two must not be
+		// folded together, and neither is reconstructed from presentation bits
+		// in Unit.Flags.
 		hidden := u.IsCloaked
 		stealth := false
-		var rd, sd, rj, sj, mc int32
+		var rd, sd, rj, sj, mc, modelTop int32
 		onOffable := false
 		if u.Def != nil {
 			stealth = u.Def.Stealth
-			hidden = hidden || u.Def.Stealth || u.Def.InitCloaked
+			hidden = hidden || u.Def.InitCloaked
 			onOffable = u.Def.OnOffable
 			rd = u.Def.RadarDistance
 			sd = u.Def.SonarDistance
 			rj = u.Def.RadarDistanceJam
 			sj = u.Def.SonarDistanceJam
 			mc = u.Def.MinCloakDistance
+			modelTop = u.Def.ModelTop
 		}
 		sensorUnits = append(sensorUnits, visibility.SensorUnit{
 			ID:               uint16(u.Handle),
@@ -236,20 +243,44 @@ func (s *Session) stepSensorPhase(tick uint32) {
 			RadarJam:         rj,
 			SonarJam:         sj,
 			MinCloakDistance: mc,
+			ModelTop:         modelTop,
 			DecloakDeadline:  dp,
 		})
 	}
+	// The alliance row. AllyGroup 5 is the UNASSIGNED sentinel, not a team:
+	// every slot carries it in a default lobby, so equality alone would make
+	// every player everyone's ally [08 "Skirmish configuration"] — the same
+	// reading teamForOwner already applies. The sensor phase consumes this row
+	// for the proximity scan only; pass 1's allied disjunct cannot fire in
+	// retail [R-VIS-01 §7].
 	allied := func(a, b visibility.PlayerID) bool {
 		if a == b {
 			return true
 		}
-		if s.Skirmish.NumPlayers > 0 {
-			if int(a) < 10 && int(b) < 10 {
-				return s.Skirmish.Players[a].AllyGroup == s.Skirmish.Players[b].AllyGroup
+		if s.Skirmish.NumPlayers > 0 && int(a) < 10 && int(b) < 10 {
+			ga := s.Skirmish.Players[a].AllyGroup
+			gb := s.Skirmish.Players[b].AllyGroup
+			if ga == SkirmishDefaultAllyGroup || gb == SkirmishDefaultAllyGroup {
+				return false
 			}
+			return ga == gb
 		}
 		return false
 	}
+	// The friendly pass's third disjunct: a defeated or observing viewer marks
+	// every live unit friendly [R-VIS-01 §4] pass 1. Retail keeps the local
+	// player's own slot and the viewing slot as two separate globals and reads
+	// the viewing one here; Nanolathe's two coincide today because composition
+	// binds the visibility service's viewing slot from LocalOwner. They diverge
+	// only in an observer session, which phase 5 does not reach at all — the
+	// caller's local-player scan rejects observer records.
+	viewer := int(s.LocalOwner)
+	defeated := false
+	if s.Econ != nil && viewer >= 0 && viewer < len(s.Econ.Players) {
+		p := &s.Econ.Players[viewer]
+		defeated = p.IsObserver || p.Eliminated
+	}
+	s.Vis.SetViewerDefeated(defeated)
 	s.Vis.SensorTick(tick, active, allied, sensorUnits)
 	for _, h := range holders {
 		s.visStatus[h.handle] = *h.statusPtr

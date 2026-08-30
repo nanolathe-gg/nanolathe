@@ -68,13 +68,19 @@ func TestSelectionPlateGeometryUsesNestedPoseAndPreservesEdges(t *testing.T) {
 			t.Fatalf("edge %d=%+v, want %d→%d", i, edge, i, (i+1)%4)
 		}
 	}
-	// Child origin is root origin plus authored parent translation. The
-	// half-height shear makes screen Y = 5 - (2 >> 1) + 32 = 36 [03 §2.4]
-	// [03 §2.5].
-	if got[1].ScreenVertices[0] != [2]int32{138, 36} {
-		t.Fatalf("nested first vertex=%v, want [138 36]", got[1].ScreenVertices[0])
+	// Child origin is root origin plus authored parent translation, model
+	// (10,2,5) at a unit sitting on the world origin. Model space is mirrored
+	// in Z, so the screen Y lane takes the negated model Z and the half-height
+	// shear: -5 - (2 >> 1) + 32 = 26 [03 §2.4][R-RAST-01 §2][R-WATER-01 §1].
+	//
+	// These expectations were corrected: they previously read the model Z with
+	// its plain sign (5 - 1 + 32 = 36), which is the world-point projection
+	// applied to a model-space vertex. That mirrored every plate against the
+	// body it belongs to. See the call site in selection_plate.go.
+	if got[1].ScreenVertices[0] != [2]int32{138, 26} {
+		t.Fatalf("nested first vertex=%v, want [138 26]", got[1].ScreenVertices[0])
 	}
-	if got[1].Bounds != (Rect{MinX: 138, MinY: 36, MaxX: 140, MaxY: 38}) {
+	if got[1].Bounds != (Rect{MinX: 138, MinY: 24, MaxX: 140, MaxY: 26}) {
 		t.Fatalf("nested bounds=%+v, want raw authored bounds", got[1].Bounds)
 	}
 	if got[0].FrontKey != got[1].FrontKey || got[1].FrontKey != 32 {
@@ -143,13 +149,17 @@ func TestSelectionPlateGeometryExposesRawBounds(t *testing.T) {
 	if got[0].ScreenVertices[0] != [2]int32{0, 0} {
 		t.Fatalf("translated vertex=%v, want [0 0]", got[0].ScreenVertices[0])
 	}
-	if got[0].Bounds != (Rect{MinX: 0, MinY: 0, MaxX: 4, MaxY: 6}) {
-		t.Fatalf("raw bounds=%+v, want [0,0]..[4,6]", got[0].Bounds)
+	// The plate reaches up-screen from the unit, not down: model +Z projects to
+	// negative screen Y through the handedness flip [R-RAST-01 §2]. These
+	// expectations were corrected with the call site; they previously read the
+	// model Z with its plain sign.
+	if got[0].Bounds != (Rect{MinX: 0, MinY: -6, MaxX: 4, MaxY: 0}) {
+		t.Fatalf("raw bounds=%+v, want [0,-6]..[4,0]", got[0].Bounds)
 	}
 	// Viewport/HUD-rail clipping is deferred to OTA-SEL-02; this helper exposes
 	// the raw projection even when Camera.ViewW/ViewH are smaller than the plate.
-	if got[0].ScreenVertices[2] != [2]int32{4, 4} {
-		t.Fatalf("unclipped vertex=%v, want [4 4]", got[0].ScreenVertices[2])
+	if got[0].ScreenVertices[2] != [2]int32{4, -4} {
+		t.Fatalf("unclipped vertex=%v, want [4 -4]", got[0].ScreenVertices[2])
 	}
 }
 

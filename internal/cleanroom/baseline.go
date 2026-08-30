@@ -68,8 +68,6 @@ var Baseline = map[string]int{
 	"internal/settings/settings_test.go":            1,
 	"internal/units/sweep.go":                       4,
 	"internal/visibility/fog.go":                    1,
-	"internal/visibility/grids.go":                  1,
-	"internal/visibility/sensors_test.go":           1,
 	"internal/world/picking.go":                     1,
 	"internal/world/placement.go":                   2,
 	"internal/world/placement_test.go":              2,

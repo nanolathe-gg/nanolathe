@@ -49,8 +49,16 @@ func visibilityFixture(t *testing.T, withVis bool) *Session {
 		}
 		s.Vis.SetShapes(shapes)
 	}
+	// Production shape: every existing slot carries a controller state. Slot 1
+	// is the human/local viewer, slot 0 a computer opponent. Without these the
+	// session finds no local player at all and phase 5's sensor seam never
+	// runs, which is not a property of any fixture this file means to model
+	// [08 "Skirmish configuration"][R-SENSOR-01].
 	s.Econ.Players[0].Exists = true
+	s.Econ.Players[0].ControllerState = 2
 	s.Econ.Players[1].Exists = true
+	s.Econ.Players[1].ControllerState = 1
+	s.LocalOwner = 1
 	s.SeedSessionRNG(12345, 67890)
 	return s
 }

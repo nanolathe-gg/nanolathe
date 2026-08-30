@@ -1924,23 +1924,24 @@ func (s *Service) handleState0(factory *units.Unit, node *orders.Node, tick uint
 		// The raise has to be a real edge, because the yard-door handshake is
 		// entirely script-owned: the engine raises Activate and waits, and
 		// nothing but the `Activate` script writes the in-build-stance bit
-		// state 1 tests [05 "Factory production lifecycle"][R-P0-10]. Nanolathe
-		// carries retail's engine-state byte bit 0 on units.Unit.Activated
-		// [04 R-UNIT-06 §2], and units.InitEconomyState pins that bit true at
-		// creation for every definition authoring neither `onoffable` nor
-		// `activatewhenbuilt`, as the economy's stand-in for the branch gate of
-		// [05 R-PROD-01 §2]. Every stock factory is such a definition, so a
-		// factory that reaches its first product with the pinned value still on
-		// it swallows this raise, never starts `Activate`, and waits in state 1
-		// forever. Retail creates a building INACTIVE [04 R-SPEC-01 §12], which
-		// is the state a factory that is not producing actually occupies — the
-		// non-positive branch below already leaves it there once a queue has
-		// drained. Clearing the pinned value immediately before the raise
-		// restores the edge and changes nothing the economy reads: this call
-		// leaves the bit set either way. The guard is the handshake itself. A
-		// factory already in the build stance is mid-production — this is the
-		// same-pass restart from state 4 — and retail's suppression of that
-		// repeat raise is correct, so it must not restart the door script.
+		// state 1 tests [05 "Factory production lifecycle"][R-P0-10]. A factory
+		// authors neither `onoffable` nor `activatewhenbuilt`, so it is created
+		// inactive [04 R-SPEC-01 §12] and stays there between queues — the
+		// non-positive branch below lowers the edge once a queue has drained.
+		// This raise is therefore already a true rising edge on a factory's
+		// first product, and already suppressed on the same-pass restart from
+		// state 4, which is what retail does [04 R-UNIT-06 §2].
+		//
+		// The clear below is consequently dead on every path a factory reaches
+		// here through. It was a workaround for a creation-time pinning in
+		// units.InitEconomyState that set the bit true for any definition
+		// authoring neither key and so swallowed this raise; that pinning has
+		// been removed. The clear is retained only because
+		// TestStateZeroActivateIsARealEdge constructs the pinned state by hand
+		// and would fail without it. It is also a second writer of the
+		// engine-state bit, which retail does not have — the edge machine is
+		// the only writer [04 R-UNIT-06 §2]. Deleting both this clear and that
+		// test's `factory.Activated = true` setup line is the follow-up.
 		if !factory.InBuildStance {
 			factory.Activated = false
 		}
@@ -2116,6 +2117,15 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 		node.DynamicGate = WakeBit1 | WakeBit2
 		node.Deadline = int32(tick + 15)
 		// No message, no allocation — silent.
+		//
+		// This silent retry, the yard-close admission gate (YardOpenTransaction)
+		// and the ordinary blocked mover are the WHOLE of retail's policy for a
+		// crowded factory exit [04 R-FAC-02 §5][04 R-FAC-02 §6]. Nothing here
+		// asks the units in the way to move: COB port 19 (`BUGGER_OFF`) has no
+		// engine reader at all — a census of the second state byte's bit 3 finds
+		// only the get/set port arms, the creation clear and the save writer
+		// [04 R-COB-05]. Do not add a scatter, push or crowd-avoidance rule
+		// keyed on that flag.
 		return
 	}
 	s.recordAdmission(tick, factory.Handle, def.UnitName, AdmissionAdmitted, nil)

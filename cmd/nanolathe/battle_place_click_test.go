@@ -80,7 +80,7 @@ func TestHeldPlacementClickQueuesOnlyTheBuildOrder(t *testing.T) {
 	for _, held := range []int{1, 4, 12} {
 		t.Run(fmt.Sprintf("held%dframes", held), func(t *testing.T) {
 			b, s, builder := placeClickFixture(t, 64, 64)
-			c := NewBattleController(b)
+			c := newReplayController(b)
 			s.Step(s.Clock.ScaledAnchor + 1)
 
 			if err := b.enqueueHumanCommand(session.HumanCommand{
@@ -140,7 +140,7 @@ func TestHeldRefusedPlacementClickQueuesNothing(t *testing.T) {
 	// A map smaller than the viewport leaves screen area past its south-east
 	// corner, where the footprint rectangle falls out of bounds.
 	b, s, builder := placeClickFixture(t, 20, 20)
-	c := NewBattleController(b)
+	c := newReplayController(b)
 	s.Step(s.Clock.ScaledAnchor + 1)
 	if err := b.enqueueHumanCommand(session.HumanCommand{
 		Kind:      session.HumanSelectionReplace,
@@ -177,7 +177,7 @@ func TestHeldRefusedPlacementClickQueuesNothing(t *testing.T) {
 // world order either.
 func TestHeldRejectedPlacementClickQueuesNothing(t *testing.T) {
 	b, s, builder := placeClickFixture(t, 64, 64)
-	c := NewBattleController(b)
+	c := newReplayController(b)
 	s.Step(s.Clock.ScaledAnchor + 1)
 	if err := b.enqueueHumanCommand(session.HumanCommand{
 		Kind:      session.HumanSelectionReplace,

@@ -2394,9 +2394,10 @@ While the product stands on `c`/`C` cells the factory's yard cannot close
   build stance (so that the state-2 test never idles on the factory's own
   `c`/`C` stamp) · authored data · decider: a census of the stock factory
   COBs' `Activate` / `StartBuilding` bodies for the yard-open port write.
-* The aircraft product's first-goal geometry and climb after `Park` →
-  `VTOL_Move` at its own position · §10 · decider: the `VTOL_Move` zero-length
-  goal path in [R-AIR-01 §6] read for a grounded start.
+* ~~The aircraft product's first-goal geometry and climb after `Park` →
+  `VTOL_Move` at its own position~~ — **closed** by [R-AIR-02] below; the
+  decider named here (the zero-length `VTOL_Move` path of [R-AIR-01 §6] read
+  for a grounded start) was carried out.
 * The lifetime and cleanup of the product-side builder link after `GetBuilt`
   (the kind-18 event's consumer) · §3.8 · decider: trace the event sink's
   kind-18 handler and the unit finalisation's reference walk.
@@ -2404,6 +2405,137 @@ While the product stands on `c`/`C` cells the factory's yard cannot close
   under 300 ticks after attach dwells on the pad until tick 301) · §3.8 ·
   decider: one timed retail observation; the static composition stands
   regardless.
+
+### Closed — why no-rally products queue at a factory exit [R-EGRESS-01] (2026-08-30)
+
+**Established by composition of four direct traces.** A 2026-08-30 playtest
+reported "units pile up at factory exit instead of making room for newly
+produced units to exit the yard" and attributed it to a missing `BUGGER_OFF`.
+[R-COB-05] disposes of the attribution — the engine never reads that bit — so
+this section answers what the observation actually is. Every link is already
+Established elsewhere; nothing new is traced here, and the composition is
+recorded because the shape looks like a defect and invites an invented fix.
+
+1. **Every product of one factory gets the same rectangle.** A `canfly`-clear
+   product with no rally reaches `Park`, whose phase 0 installs a rectangle
+   goal centred on the product's **own committed cell**: origin
+   `(cellX − 4s, cellZ − 3s)`, size `(8s, 6s)` ([R-FAC-02 §4],
+   [R-ORD-01 §2]). Every product of a counted run is allocated at the same
+   resolved exit transform ([R-FAC-02 §5]), so every product's rectangle is
+   the *same* rectangle.
+2. **The rectangle's goal point is a constant, not a per-mover point.** The
+   rectangle class's goal-point query returns
+   `X = (FootPrintX + 2·((x1 + x2) / 2)) · 2^19` and
+   `Z = (FootPrintZ + 2·z2) · 2^19` — the middle column of the **far** Z edge
+   ([R-MOV-03 §2]). It reads nothing about the mover asking. Two movers with
+   the same rectangle are handed the same world point.
+3. **A short route is replaced by a straight line at that point.** Both
+   point-count gates of the route-acceptance rule require **three or more**
+   stored points; a one- or two-point route skips to the synthetic fallback,
+   which overwrites the route with the unit's own position and the goal point
+   ([R-PATH-01 §8]). A mover one or two cells from a free border cell
+   therefore does not walk to that free cell — it is aimed back at the
+   constant goal point.
+4. **Nothing moves the mover already standing there.** Arrival is lying on the
+   border ([§7.2]), so the first product to reach the far edge parks on the
+   goal-point cell and its record retires. A later product meets it as an
+   ordinary blocked mover: the half-`MaxVelocity` cap and the half-cell clamp
+   ([R-COLL-01 §1]) and the 60-tick repath throttle ([R-MOV-01 §7]). Retail
+   has no push, no stacking, no force-placement ([R-FAC-02 §6]) and no engine
+   scatter ([R-COB-05]).
+
+**The observable, and what it is not.** A counted run's products leave the pad
+one at a time and close up into a column behind the first one, at the middle of
+their shared rectangle's far edge. Only the leading product's `Park` retires;
+the ones behind it re-arm every 30 ticks against a goal they cannot occupy and
+idle in place. This is **not** a deadlock and does not block the factory: each
+product clears the exit cells before the next is allocated, so the counted run
+drains and the yard closes ([R-FAC-02 §5], [R-FAC-02 §6]). What disperses the
+column is a rally point, which replaces `Park` with the producer's own
+`QMove`/`QPatrol` goal ([R-FAC-02 §4]) — a per-order destination instead of a
+shared rectangle.
+
+**Do not "fix" this** by making the rectangle goal point per-mover, by relaxing
+the three-point acceptance gates, or by scattering neighbours. Each of those
+contradicts an Established trace above. A reimplementation that wants fanned-out
+products has to change the *content* (rally points), not the engine.
+
+**Correction — the arrival predicate is the border, not the goal point.**
+Nanolathe tested a rectangle-goal arrival as proximity to the single goal point
+of step 2 with a zero threshold, which is not what §7.2 says: "enumerated goal
+cells are exactly the rectangle border, where h is 0, and arrival requires lying
+on that border". Under the point test a mover that reached the border anywhere
+else — the A* endpoint when the route is long enough, or a clamped mover
+sliding along the edge — never completed its record. Corrected 2026-08-30;
+the point test remains for the point and annulus classes.
+
+### Closed — how a factory-built aircraft actually leaves the pad [R-AIR-02] (2026-08-30)
+
+**Established by composition of two direct traces.** [R-FAC-02 §4] establishes
+that a `canfly` product with no rally reaches `Park`, whose phase 0 sets the
+goal to the product's own position, re-identifies the record as `VTOL_Move` and
+*restarts*. [R-ORD-02 §2] and [R-AIR-01 §6] give `VTOL_Move`'s phases and the
+shared takeoff preamble; [R-AIR-01 §4] gives the marker's arrival test. Reading
+them together for a grounded start settles the whole egress, with no new term:
+
+1. **`VTOL_Move` phase 0 is the takeoff.** It runs the preamble: release the
+   manual-target latch on all three weapon slots; detach from a carrier, if
+   any, requesting mover mode `2`; set the unit state byte's bit `0x01`
+   (raising `Activate` and notification 3, the takeoff script hook); and —
+   **only because the committed mover mode is `1`**, which is exactly what the
+   completion detach left ([R-FAC-02 §1]) — call the mode setter with mode `2`,
+   build a point marker on the unit's own current X/Y/Z, set its altitude
+   offset to `cruisealt / 2`, install it as the record's goal payload and OR
+   `0xE0` into the gate. Result 1: advance.
+2. **The record then waits on a purely vertical arrival.** The altitude setter
+   sets marker flag `0x08`, so the marker's arrival test is the default
+   horizontal `hypot ≤ 0.5` **plus** `|unitY − goalY| < 0x10001`
+   ([R-AIR-01 §4]). The horizontal half is satisfied at the instant the marker
+   is built — its goal is the aircraft's own position — so the only thing
+   between phase 0 and phase 1 is the climb to
+   `max(seaLevel, terrainHeight(ownXZ)) + cruisealt/2`, flown by the ordinary
+   §10.1 integrator with its vertical limit of one world unit per tick below
+   `0x40000` scalar speed and `speed >> 2` above it. There is **no**
+   factory-specific takeoff state, timer or lane; the ota-fac-01e claim to that
+   effect is confirmed a second time here.
+3. **The mode change is what frees the pad.** The ground occupancy word is
+   written by mode-`1` movers and by the building class; the air word by
+   mode-`2` movers ([R-COLL-01 §4]). The setter's write of mode `2` is
+   therefore the moment the aircraft stops holding the exit's ground cells —
+   which is precisely the event [R-FAC-02 §6] names for the next product's
+   state-2 test ("for an aircraft product, after its mode change to airborne
+   has moved its stamp to the air plane") and, by the same cells, the event
+   that lets the yard-close admission gate of [R-FAC-02 §5] pass. A ground
+   product frees the pad by walking off it; an aircraft frees it by climbing,
+   and the two are the same test on the same plane.
+4. **Phase 1 then installs a zero-length goal.** It clears the caption, inhibits
+   all three weapon slots, snaps the record's goal X and Z onto the unit's own
+   footprint — a no-op here, the goal already being the unit's committed cell —
+   and builds a point marker with **no** altitude or radius setter; gate `0xE0`.
+   With no `0x08` flag the arrival test is the horizontal `hypot ≤ 0.5` alone,
+   already true, so phase 2 follows on the next visit: status 6 `Arrived` when
+   nothing follows the record, and complete.
+
+**The observable end state.** A no-rally aircraft product climbs vertically off
+its pad to half its cruise altitude, its order completes there, and it holds
+station above the plant — it does not travel. The pile of aircraft over a stock
+aircraft plant is this contract, not a defect. The marker's `cruisealt / 2` is
+an *initial climb* goal only: a subsequent air order's phase 1 marker is
+terrain-derived (flag `0x20`, no `0x08`) and flies at the full sector-height
+altitude of [R-AIR-01 §1] step 4.
+
+**Edge — an aircraft that is already airborne.** [R-AIR-01 §6] is explicit that
+the preamble builds no marker when the committed mode is not `1`, and the phase
+still advances. A mid-air order therefore does not reset the aircraft's climb
+goal, and a second `VTOL_Move` issued to a flying aircraft has no phase-0 climb
+wait at all.
+
+**Unknown — what holds the aircraft at altitude once the record completes.**
+The per-tick flight command block of [R-AIR-01 §1] is the only candidate
+producer of a command altitude for an aircraft with an empty order queue, and
+its idle-input arm was not traced here. *Decider:* read that block's input
+fetch for the empty-queue case. Until then a reimplementation should leave the
+last commanded altitude standing rather than invent a hover controller.
 
 ### 3.9 Order handler bodies, per visit [R-ORD-01]
 
@@ -4147,7 +4279,7 @@ below are as pushed back on the script stack.
 | 16 | ground height | the shared terrain height query at the unpacked X and Z, **shifted left 16** into 16.16. The query returns −1 off-map, so an off-map read is `−0x10000` (−1.0), not zero | — |
 | 17 | build percent left | from the remaining-build fraction *f*: zero when *f* compares exactly equal to `0.0f`, otherwise `1 - trunc(f * -99.0f)`. *f* is `1.0f` for a fresh nanoframe (reads 100) and `0` once complete (reads 0) | ignored |
 | 18 | yard open | bit 2 of the second state byte, 0 or 1. Zero at creation | a gated admission — see §4.7 |
-| 19 | bugger off | bit 3 of the second state byte, 0 or 1, a plain flag, not a queued request. Zero at creation | sets the bit from the low bit of the value |
+| 19 | bugger off | bit 3 of the second state byte, 0 or 1, a plain flag, not a queued request. Zero at creation. **The engine never reads it** — see [R-COB-05] | sets the bit from the low bit of the value |
 | 20 | armored | bit 1 of the first state byte, 0 or 1. Zero at creation | drives the armor edge event |
 
 The two angle ports are the **only** place in the port arithmetic that rounds
@@ -4591,6 +4723,58 @@ The unit keeps two port-relevant state bytes: one holds bits 0 = activated,
 1 = armored, 2 = engine-driven (cloak family; its rising edge releases cargo
 and notifies presentation codes 0xe/0xf), and 3 = building; the other holds
 bits 0..3 = in-build-stance, busy, yard-open, bugger-off.
+
+### Closed — `BUGGER_OFF` has no engine reader [R-COB-05] (2026-08-30)
+
+**Established — the bugger-off bit is script-visible state and nothing else.**
+A complete census of every access to the second port-relevant state byte, taken
+over the whole recovered function set and confirmed against the image's
+instruction stream, finds exactly six sites that touch its bit 3:
+
+* two **reads**, and both are the same thing — the COB get-port dispatch's arm
+  for port 19 (the dispatch's arms are also exported individually, so the one
+  arm appears twice);
+* the COB **set-port** dispatch's arm for port 19, which writes the bit from
+  the low bit of the value and sets the unit's interface-refresh bit;
+* the **creation/reset** clear that zeroes the byte's whole low nibble (the
+  "zero at creation" of §4.4);
+* the **save writer**'s pack of that low nibble into the packed status word of
+  doc 08.
+
+There is no test of that bit anywhere in the movement follower, the collision
+commit, the occupancy stamp/clear/restamp, the placement validator, the order
+pump or any order handler, the factory production node, or the AI. Setting
+`BUGGER_OFF` therefore asks the engine for nothing: a script can set it and
+read it back, the interface refreshes, and the save file carries it. From the
+simulation's point of view port 19 is a **write-only flag** — the same shape as
+`canstop` in [R-STANCE-01 §8].
+
+This settles, negatively, the question the port's Cavedog comment ("ask other
+units to clear the area", `[fmt cob]`) invites. The comment describes what the
+*authored* scripts use the flag for — a yard script raises it around a denied
+yard transition and clears it on success ([R-FAC-02 §5]; doc 05's
+`RequestState(1)`/`Stop`/`CloseYard` row) — not an engine service. Nothing asks
+other units to clear anything.
+
+**Consequence for a reimplementation.** Do not attach behavior to the bit. What
+actually happens around a crowded factory exit is established elsewhere and
+owns no part of port 19: the state-2 exit test fails against the standing
+product's own stamp and retries silently every 15 ticks with no timeout
+([R-FAC-02 §6]); the yard-state admission gate refuses a close while a unit
+stands on a `c`/`C` cell, so the doors stay open ([R-FAC-02 §5]); and the
+standing product is an ordinary blocked mover with the half-`MaxVelocity` cap,
+the half-cell clamp and the 60-tick repath throttle ([R-COLL-01 §1],
+[R-MOV-01 §7]). Retail has no push, no stacking, no force-placement and no
+scatter order. An engine-side "nearby units path away" rule keyed on this bit
+would be invented behavior.
+
+**Scope note, not a correction of fact.** Doc 05's residual list for
+[R-FAC-01R]/[P28-FAC-01R] said "any runtime observation that would couple
+product release to producer clearance" was not established by the static
+evidence, and warned against generalizing the authored retry. That warning
+stands and is now stronger than a warning: on the engine side of this bit the
+coupling does not exist, established by census rather than by absence of
+search. The doc 05 warning is left in place and cross-referenced there.
 
 **Established fact — activation edge machine and engine drivers [R-P0-10]:**
 The shared edge machine computes the old and new state, writes back, and on a

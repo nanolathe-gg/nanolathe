@@ -619,11 +619,47 @@ func PrimitiveRGBA(tables *palette.Tables, prim PrimitiveDraw) (r, g, b, a uint8
 
 // ModelProjectToScreen projects a world-space point to screen via the orthographic formula [03 §2.5].
 // Uses camera.WorldToScreen with the half-height shear [03 §2.5].
+//
+// This takes a genuine world point. A composed model vertex is not one — see
+// ModelVertexToScreen — and passing one here mirrors the result in Z.
 func ModelProjectToScreen(cam *camera.Camera, world [3]numeric.Fixed) (sx, sy int32) { // [03 §2.5]
 	if cam == nil {
 		return 0, 0
 	}
 	return cam.WorldToScreen(world[0], world[1], world[2]) // [03 §2.5]
+}
+
+// ModelVertexToScreen projects one composed model vertex: a piece-chain output
+// with the unit's world position already added componentwise, which is what
+// PieceDraw.WorldVertices holds and what a UnitTransforms origin plus the unit
+// position is. It is not interchangeable with ModelProjectToScreen, and the
+// two names exist so the space a caller is in is explicit at the call site.
+//
+// Model space is mirrored in Z against world space, so the model-relative part
+// of the vertex reaches the screen Y lane with its sign flipped while the
+// unit's own Z keeps its ordinary sign. [R-WATER-01 §1] item 3 states the
+// world-object form for rotated model geometry drawn at a unit position:
+//
+//	sx = hi16(rx + ux - camX) + 128
+//	sy = hi16((uz - camZ) - rz) - (hi16(ry + uy) >> 1) + 32
+//
+// with r the model-relative vertex and u the unit position — "the rotated Z is
+// subtracted, the 3DO handedness flip of [R-RAST-01 §2]". Reflecting the
+// composed vertex's Z about the unit's own Z produces exactly that: the
+// model-relative part changes sign, the unit's part does not, and the shear
+// still reads the composed height ry + uy.
+//
+// This is the sum-before-floor world-object form, not the cached composition
+// image's anchor-plus-local form. [R-RAST-01 §2] requires both to exist
+// separately: floor(a) + floor(b) is floor(a+b) or one less, so the same vertex
+// can land a pixel apart under the two, and the two forms must not share a
+// helper.
+func ModelVertexToScreen(cam *camera.Camera, unit, v [3]numeric.Fixed) (sx, sy int32) { // [R-WATER-01 §1] [R-RAST-01 §2]
+	if cam == nil {
+		return 0, 0
+	}
+	flippedZ := unit[2].Sub(v[2].Sub(unit[2]))
+	return cam.WorldToScreen(v[0], v[1], flippedZ)
 }
 
 // UnitScreenPositions returns screen positions for all piece world origins in stable order (I1) [03 §1] C3.
@@ -640,7 +676,10 @@ func UnitScreenPositions(m *model.Model, states []model.PieceState, worldPos [3]
 			tr.Origin[1].Add(worldPos[1]),
 			tr.Origin[2].Add(worldPos[2]),
 		}
-		sx, sy := ModelProjectToScreen(cam, worldOrigin) // [03 §2.5]
+		// worldOrigin is a composed model vertex, not a world point: the piece
+		// origin is model-relative and only the unit position is world. It
+		// therefore needs the handedness flip [R-RAST-01 §2].
+		sx, sy := ModelVertexToScreen(cam, worldPos, worldOrigin)
 		out[i][0] = sx
 		out[i][1] = sy
 	}

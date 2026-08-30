@@ -5,20 +5,27 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
-// Status-field roles [03 §3.4] P0-11. The upper bit of the friendly mask doubles as
-// the underwater-rejection exemption of [03 §3.2], which is why owned and
-// allied units are implicitly exempt from the sea-level test.
+// Status-field roles [03 §3.4][R-VIS-01 §4]. The sonar bit doubles as the
+// underwater-rejection exemption of [03 §3.2], which is why own units — whose
+// friendly pair includes it — are implicitly exempt from the sea-level test.
 const (
-	SeenBit      uint32 = 0x100  // per-frame seen marker [03 §3.4] P0-11
-	FriendlyMask uint32 = 0x300  // friendly contact [03 §3.4] P0-11 includes 0x200 underwater exempt alias
-	DecloakBit   uint32 = 0x1000 // decloak timer running [03 §3.4] P0-11 GT+90
+	SeenBit      uint32 = 0x100  // seen marker [03 §3.4][R-VIS-01 §4]
+	SonarBit     uint32 = 0x200  // sonar contact; also the underwater exemption [03 §3.2][R-VIS-01 §4]
+	FriendlyMask uint32 = 0x300  // the pair the friendly pass writes [R-VIS-01 §4]
+	JammedBit    uint32 = 0x400  // jam marker; no reader anywhere [R-VIS-01 §4]
+	DecloakBit   uint32 = 0x1000 // decloak timer running [03 §3.4][R-VIS-01 §4]
+
+	// sensorClearMask is what the friendly pass clears on every unit that is
+	// neither own nor seen by a defeated viewer: seen, sonar and jammed
+	// together [R-VIS-01 §4] pass 1.
+	sensorClearMask uint32 = 0x700
 )
 
-// DecloakDeadlineAdd is the decloak deadline offset in ticks [03 §3.4] P0-11.
-const DecloakDeadlineAdd = 90 // 0x5A P0-11
+// DecloakDeadlineAdd is the decloak deadline offset in ticks [R-VIS-01 §4] pass 4.
+const DecloakDeadlineAdd = 90
 
 // sensorSurfaceShift projects world coordinates onto the sensor backing
-// surfaces: one surface cell per 128 world units [03 §3.4] P0-11.
+// surfaces: one surface cell per 128 world units [03 §3.4][R-VIS-01 §5].
 const sensorSurfaceShift = 23
 
 // SensorUnit is one unit as the sensor phase sees it [03 §3.4] P0-11.
@@ -30,13 +37,13 @@ type SensorUnit struct {
 	// ID correlates the sensor result with its committed unit pool slot.
 	ID        uint16
 	Owner     PlayerID
-	Status    *uint32       // runtime status field; the phase writes 0x100/0x300/0x1000 P0-11
+	Status    *uint32       // runtime status field; the phase writes 0x100/0x200/0x300/0x400/0x1000
 	X, Z      numeric.Fixed // 16.16 world position
 	Y         numeric.Fixed
 	Alive     bool
-	Hidden    bool // hidden/cloaked instance bit [03 §3.2]
-	Stealth   bool // definition stealth state also fed into gameplay visibility [03 §3.2][03 §3.4]
-	Active    bool // runtime activation/on-state bit required by sensor callbacks [03 §3.4]
+	Hidden    bool // instance cloak bit; the seen probe's second gate [R-VIS-01 §4] pass 5
+	Stealth   bool // definition stealth: the contact callback's third reject [R-VIS-01 §5]
+	Active    bool // runtime activation/on-state bit required by the emitters [R-VIS-01 §4]
 	OnOffable bool // definition on/off flag used by selected-unit circle presentation [03 §3.9]
 
 	// Authored sensor distances [02 "Unit record"] P0-11. Zero means absent.
@@ -46,7 +53,13 @@ type SensorUnit struct {
 	SonarJam         int32
 	MinCloakDistance int32
 
-	// DecloakDeadline receives tick+90 when this unit is decloaked by proximity [03 §3.4] P0-11.
+	// ModelTop is the candidate's bounding-box top extent in whole world
+	// units. The radar admission test compares the top of that box against the
+	// sea plane, so a submarine whose hull breaks the surface is radar-visible
+	// while a fully submerged one is not [R-VIS-01 §5].
+	ModelTop int32
+
+	// DecloakDeadline receives tick+90 when this unit is decloaked by proximity [R-VIS-01 §4] pass 4.
 	DecloakDeadline *uint32
 }
 
@@ -67,35 +80,49 @@ type SensorInput struct {
 	Circles []SensorCircle
 }
 
-// SensorCircle is one callback-table result from the completed sensor pass.
-// Coordinates are surface cells (one cell per 128 world units); Kind is zero
-// for the outer radar/sonar callback and nonzero for jammer callbacks [03 §3.4].
+// SensorCircle is one minimap circle emitted for a unit with authored sensor
+// distances. Coordinates are surface cells (one cell per 128 world units);
+// Kind is zero for the outer radar/sonar circle and nonzero for jammer
+// circles [03 §3.9 layer 4][03 §3.10].
+//
+// These are presentation only. [03 §3.10] establishes that the sensor phase
+// itself rasterizes nothing — the circles belong to the minimap contacts pass
+// — so nothing downstream may read a circle as evidence of detection.
 type SensorCircle struct {
-	// SourceID identifies the live unit that emitted this callback. The
+	// SourceID identifies the live unit that emitted this circle. The
 	// committed publisher uses it to discard circles left behind when cleanup
-	// frees a unit after the sensor pass [03 §3.4][I6].
+	// frees a unit after the sensor pass [03 §3.9][I6].
 	SourceID uint16
 	U, V     int32
 	Radius   int32
 	Kind     uint8
 }
 
-// SensorSurfaces receives the rasterized circles [03 §3.4] C11 P0-11.
+// SensorSurfaces receives the rasterized circles [03 §3.9 layer 4][03 §3.10].
 //
-// Radar, sonar and jammers NEVER author the word mask: they rasterize onto
-// separate minimap surfaces (RADAR FINAL etc at 0x142DB/E3/EB) that are wiped each tick while the LOS mask persists [03 §3.4] P0-11.
-// The three callback tables are distinct; jammer circles are drawn onto same FINAL with last-writer-wins presentation-only, never OR into word mask.
+// Radar, sonar and jammers NEVER author the word mask or any per-player byte
+// grid: they reach a separate minimap surface that is wiped each tick while
+// the LOS grids persist [03 §3.10][R-VIS-01 §5].
 type SensorSurfaces interface {
-	Wipe()                       // wiped each tick [03 §3.4]
-	Sensor(u, v, radius int32)   // combined radar/sonar outer circle [03 §3.4]
-	RadarJam(u, v, radius int32) // separate radar-jam circle [03 §3.4]
-	SonarJam(u, v, radius int32) // separate sonar-jam circle [03 §3.4]
+	Wipe()                       // wiped each tick [03 §3.10]
+	Sensor(u, v, radius int32)   // combined radar/sonar outer circle [03 §3.10]
+	RadarJam(u, v, radius int32) // separate radar-jam circle [03 §3.10]
+	SonarJam(u, v, radius int32) // separate sonar-jam circle [03 §3.10]
 }
 
 // SetSurfaces binds the sensor backing surfaces. Nil discards them.
 func (s *Service) SetSurfaces(sf SensorSurfaces) {
 	if s != nil {
 		s.surfaces = sf
+	}
+}
+
+// SetViewerDefeated records whether the viewing player has been defeated or is
+// an observer. It is the third disjunct of the friendly pass: a defeated
+// viewer marks every live unit friendly [R-VIS-01 §4] pass 1.
+func (s *Service) SetViewerDefeated(defeated bool) {
+	if s != nil {
+		s.viewerDefeated = defeated
 	}
 }
 
@@ -112,8 +139,8 @@ func (s *Service) SensorInputs() []SensorInput {
 	return out
 }
 
-// SensorCircles returns a copy of the callback results from the last completed
-// sensor pass [03 §3.4].
+// SensorCircles returns a copy of the circle results from the last completed
+// sensor pass [03 §3.10].
 func (s *Service) SensorCircles() []SensorCircle {
 	if s == nil || len(s.sensorInputs) == 0 || len(s.sensorInputs[0].Circles) == 0 {
 		return nil
@@ -122,105 +149,182 @@ func (s *Service) SensorCircles() []SensorCircle {
 }
 
 // surfaceProject maps a world coordinate onto a sensor surface cell: one cell
-// per 128 world units, a shift of 23 [03 §3.4] P0-11.
+// per 128 world units, an arithmetic shift of 23 on the 16.16 coordinate
+// [R-VIS-01 §5].
 func surfaceProject(v numeric.Fixed) int32 {
 	return int32(int64(v) >> sensorSurfaceShift)
 }
 
-// SensorTick runs the per-tick sensor and proximity phase [03 §3.4] C11 C12 P0-11.
+// worldUnit narrows a 16.16 coordinate to whole world units with an arithmetic
+// shift. The radius visitor and both contact callbacks square whole world
+// units, not map pixels and not fixed point [R-VIS-01 §5].
+func worldUnit(v numeric.Fixed) int64 { return int64(v) >> 16 }
+
+// planarSquared is the visitor's metric: the sum of the squared whole-world-unit
+// axis deltas [R-VIS-01 §5].
+func planarSquared(a, b *SensorUnit) int64 {
+	dx := worldUnit(b.X) - worldUnit(a.X)
+	dz := worldUnit(b.Z) - worldUnit(a.Z)
+	return dx*dx + dz*dz
+}
+
+// SensorTick runs the per-tick sensor and proximity phase [03 §3.4][R-VIS-01 §4].
 //
-// It runs ONLY when more than one player is active (activePlayers>1 via CMP 1 JBE skip) [03 §3.4] P0-11.
-// Passes in order P0-11:
-//  1. ownership/status: clear expired decloak state, then set friendly bits;
-//  2. sensor circles: each active unit with radar or sonar emits one outer circle, with separate jam circles;
-//  3. minimum-cloak proximity: qualifying cloaked units search by squared planar distance;
-//  4. final visibility: use the shared four-point predicate and set SeenBit.
+// It runs only when more than one player is active. In a one-player session
+// none of the passes runs and the three status bits keep whatever value unit
+// construction gave them [R-VIS-01 §4] "Gate".
 //
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Ally vision never OR'd: writer ORs only own bit, reader tests only local bit [03 §3.4] P0-11.
+// The five unit walks, in order [R-VIS-01 §4]:
+//
+//  1. clear the decloak-timer bit; set the friendly pair on own units (and on
+//     everything when the viewer has been defeated), clear seen/sonar/jammed
+//     otherwise;
+//  2. radar and sonar emission from the viewing player's own active units;
+//  3. radar-jam and sonar-jam emission from every other active unit;
+//  4. the minimum-cloak proximity scan;
+//  5. the seen probe, which sets the seen bit for any remaining unit standing
+//     on a lit visibility tile.
+//
+// The phase writes neither visibility grid, and it consumes no random draws
+// [R-VIS-01 §4] "Ordering and outputs", "Random draws".
+//
+// allied supplies the caller's alliance row. It is deliberately NOT consulted
+// by pass 1: [R-VIS-01 §7] establishes that pass 1's allied disjunct cannot
+// fire in retail — no writer anywhere sets the option bit it gates on — so an
+// ally's radar contact never appears on the viewer's minimap and an ally's
+// units are not exempted from the underwater rejection on the viewer's behalf.
+// Only the proximity scan of pass 4 uses it, to separate hostiles from friends.
 func (s *Service) SensorTick(tick uint32, playerCount int, allied func(a, b PlayerID) bool, units []SensorUnit) {
 	if s == nil {
 		return
 	}
-	// SeenBit is a per-frame marker. Clear it before the final visibility walk,
-	// including the single-player skip, so it cannot leak into another
-	// committed frame [03 §3.4].
-	for i := range units {
-		if units[i].Status != nil {
-			*units[i].Status &^= SeenBit
-		}
-	}
 	s.sensorInputs = s.sensorInputs[:0]
 	if playerCount <= 1 {
-		return // more than one player required [03 §3.4] P0-11 activePlayers>1 gate
+		return // more than one player required [R-VIS-01 §4] "Gate"
 	}
-	var circles []SensorCircle
-	// 1. Ownership and status + decloak timeout.
+	sea := s.seaLevelWorld()
+
+	// Pass 1 — clear and friendly marking [R-VIS-01 §4].
 	for i := range units {
 		u := &units[i]
 		if u.Status == nil || !u.Alive {
 			continue
 		}
-		// Decloak timeout: when GT >= deadline, clear 0x1000 [03 §3.4] P0-11
-		if *u.Status&DecloakBit != 0 && u.DecloakDeadline != nil && tick >= *u.DecloakDeadline {
-			*u.Status &^= DecloakBit
-		}
-		// Friendly bits 0x300 including 0x200 underwater exempt alias [03 §3.4] P0-11
-		friendly := u.Owner == s.local
-		if !friendly && allied != nil {
-			friendly = allied(s.local, u.Owner)
-		}
-		if friendly {
+		*u.Status &^= DecloakBit
+		if u.Owner == s.local || s.viewerDefeated {
 			*u.Status |= FriendlyMask
 		} else {
-			*u.Status &^= FriendlyMask
+			*u.Status &^= sensorClearMask
 		}
 	}
-	// 2. Sensor and jam circles onto the backing surfaces [03 §3.4] C11 P0-11.
-	// Surfaces are wiped each tick while the LOS mask persists [03 §3.4].
-	if s.surfaces != nil {
-		s.surfaces.Wipe()
-	}
+
+	// Pass 2 — radar and sonar emission over the viewing player's own units
+	// only [R-VIS-01 §4]. The candidate rejects and the two strict admission
+	// tests are [R-VIS-01 §5]'s contact callback.
+	//
+	// e.Active is the instance activation bit: a live unit with a nonzero
+	// radar or sonar distance queries the contact callback, and draws its
+	// circle below, only after that test [03 §3.4 "Sensor callback gate
+	// correction"].
+	//
+	// TODO(question): five stock definitions author a sensor distance that
+	// this gate can never admit, because no traced writer of the activation
+	// bit reaches them — ARMANNI, ARMSS, CORSS, ARMACSUB and CORACSUB author
+	// neither `activatewhenbuilt` nor `onoffable`, and are neither aircraft
+	// nor factories. Their authored range is dead data, which is consistent
+	// with [05 R-PROD-01 §2] but is an inference, not an observation. Do not
+	// widen this gate to "fix" it: doing so asserts a further activation
+	// writer nobody has found. Recorded with its decider in doc 03's "Missing
+	// and unknown"; a manual retail observation of a stealth sub's sonar
+	// contact settles it.
 	for i := range units {
-		u := &units[i]
-		if !u.Alive {
+		e := &units[i]
+		if !e.Alive || e.Owner != s.local || !e.Active {
 			continue
 		}
-		cu, cv := surfaceProject(u.X), surfaceProject(u.Z)
-		// Sensor callbacks require the unit's runtime active/on state. Cloak and
-		// hidden state belong to the separate visibility/decloak paths [03 §3.4].
-		if u.Active && (u.RadarDistance != 0 || u.SonarDistance != 0) {
-			outer := u.RadarDistance // ONE circle, the larger of the two [03 §3.4] P0-11
-			if u.SonarDistance > outer {
-				outer = u.SonarDistance
-			}
-			circles = append(circles, SensorCircle{SourceID: u.ID, U: cu, V: cv, Radius: outer})
-			if s.surfaces != nil {
-				s.surfaces.Sensor(cu, cv, outer) // color 0xDD5 onto FINAL P0-11
-			}
+		if e.RadarDistance == 0 && e.SonarDistance == 0 {
+			continue
 		}
-		if u.Active && u.RadarJam != 0 {
-			circles = append(circles, SensorCircle{SourceID: u.ID, U: cu, V: cv, Radius: u.RadarJam, Kind: 1})
-			if s.surfaces != nil {
-				s.surfaces.RadarJam(cu, cv, u.RadarJam) // separate table 0x20A color 0xDD7 P0-11
-			}
+		// The visitor searches the two AUTHORED distances, unbonused; the
+		// elevation bonus enters the squared radar test radius only, so any
+		// extra reach beyond the search is unreachable [R-VIS-01 §4] pass 2.
+		search := e.RadarDistance
+		if e.SonarDistance > search {
+			search = e.SonarDistance
 		}
-		if u.Active && u.SonarJam != 0 {
-			circles = append(circles, SensorCircle{SourceID: u.ID, U: cu, V: cv, Radius: u.SonarJam, Kind: 2})
-			if s.surfaces != nil {
-				s.surfaces.SonarJam(cu, cv, u.SonarJam) // separate table 0x20C P0-11
+		search2 := int64(search) * int64(search)
+		radarRadius := int64(e.RadarDistance) + 2*worldUnit(e.Y)
+		radar2 := radarRadius * radarRadius
+		sonar2 := int64(e.SonarDistance) * int64(e.SonarDistance)
+		for j := range units {
+			c := &units[j]
+			if !c.Alive || c.Status == nil {
+				continue
+			}
+			// Rejects in order: an own-side candidate, then definition
+			// stealth, which suppresses radar and sonar outright with no
+			// distance or elevation term [R-VIS-01 §5].
+			if c.Owner == s.local || c.Stealth {
+				continue
+			}
+			d2 := planarSquared(e, c)
+			if d2 > search2 {
+				continue // the visitor's own test is inclusive [R-VIS-01 §5]
+			}
+			// Both callback comparisons are strict [R-VIS-01 §5].
+			if c.Y <= sea && d2 < sonar2 {
+				*c.Status |= SonarBit
+			}
+			if sea <= c.Y+numeric.Fixed(int64(c.ModelTop)<<16) && d2 < radar2 {
+				*c.Status |= SeenBit
 			}
 		}
 	}
-	// 3. Minimum-cloak proximity [03 §3.2] C10 [03 §3.4] C12.
+
+	// Pass 3 — jam emission from every active unit the viewing player does not
+	// own. The jam callbacks apply no owner, alliance or stealth test, so they
+	// reach friend and foe alike including the jammer's own side [R-VIS-01 §5].
+	for i := range units {
+		e := &units[i]
+		if !e.Alive || e.Owner == s.local || !e.Active {
+			continue
+		}
+		if e.RadarJam != 0 {
+			r2 := int64(e.RadarJam) * int64(e.RadarJam)
+			for j := range units {
+				c := &units[j]
+				if !c.Alive || c.Status == nil || planarSquared(e, c) > r2 {
+					continue
+				}
+				*c.Status = (*c.Status &^ SeenBit) | JammedBit
+			}
+		}
+		if e.SonarJam != 0 {
+			r2 := int64(e.SonarJam) * int64(e.SonarJam)
+			for j := range units {
+				c := &units[j]
+				if !c.Alive || c.Status == nil || planarSquared(e, c) > r2 {
+					continue
+				}
+				*c.Status = (*c.Status &^ SonarBit) | JammedBit
+			}
+		}
+	}
+
+	// Pass 4 — minimum-cloak proximity [R-VIS-01 §4]. Retail searches the
+	// cloaking unit's own side's primary candidate list of [06 §3.1], which is
+	// rebuilt at most once every thirty ticks, so its breach test reads "an
+	// enemy I could see up to a second ago is within mincloakdistance".
+	// Nanolathe has no such per-side registry yet, so this scan walks live
+	// hostiles directly and therefore breaches up to a second earlier than
+	// retail. Nothing here is unknown: wiring the scan to that list once it
+	// exists is the whole of the remaining work.
 	for i := range units {
 		src := &units[i]
 		if !src.Alive || !src.Hidden || src.MinCloakDistance <= 0 || src.Status == nil {
 			continue
 		}
-		// Cloaked candidate seeks any enemy within minCloak²; on hit set its own DecloakBit and deadline GT+90 P0-11
 		r2 := int64(src.MinCloakDistance) * int64(src.MinCloakDistance)
-		decloaked := false
 		for j := range units {
 			if i == j {
 				continue
@@ -229,8 +333,6 @@ func (s *Service) SensorTick(tick uint32, playerCount int, allied func(a, b Play
 			if !dst.Alive {
 				continue
 			}
-			// Only enemy units count? Spec checks enemy via player list; we check owner != src owner and not allied?
-			// Use allied predicate: if src owner == dst owner or allied, skip (friendly not enemy)
 			isEnemy := dst.Owner != src.Owner
 			if allied != nil && allied(src.Owner, dst.Owner) {
 				isEnemy = false
@@ -238,46 +340,76 @@ func (s *Service) SensorTick(tick uint32, playerCount int, allied func(a, b Play
 			if !isEnemy {
 				continue
 			}
-			// Use integer world units for distance: pixel() narrow s16 then difference, per predicate 4-point line uses pixel s16 wrap.
-			// For decloak, spec says dx²+dz² ≤ minCloak² via __allmul [03 §3.2] P0-11, with world X/Z high word narrow s16? Use pixel.
-			dx := int64(pixel(dst.X)) - int64(pixel(src.X))
-			dz := int64(pixel(dst.Z)) - int64(pixel(src.Z))
-			if dx*dx+dz*dz > r2 { // inclusive ≤ via > check [03 §3.2] P0-11
-				continue
+			if planarSquared(src, dst) > r2 {
+				continue // the breach test is inclusive [R-VIS-01 §4] pass 4
 			}
 			*src.Status |= DecloakBit
 			if src.DecloakDeadline != nil {
-				*src.DecloakDeadline = tick + DecloakDeadlineAdd // GT+90 0x5A P0-11
+				*src.DecloakDeadline = tick + DecloakDeadlineAdd
 			}
-			decloaked = true
-			break // one hit enough P0-11
+			break
 		}
-		_ = decloaked
 	}
-	// 4. Final visibility pass uses the standard single-point half-height
-	// projection through the mode-selected source [03 §3.4]. It sets SeenBit
-	// for an admitted point after the hidden/decloak gates above.
+
+	// Pass 5 — the seen probe: the single-point form of the §3.2 predicate
+	// against the VIEWING player's mode-selected source, regardless of who owns
+	// the unit. It runs after the jam pass, so line of sight restores a jammed
+	// unit's seen bit within the same tick [R-VIS-01 §4] pass 5.
 	for i := range units {
 		u := &units[i]
 		if u.Status == nil || !u.Alive {
 			continue
 		}
 		if *u.Status&SeenBit != 0 {
-			continue // already seen P0-11
+			continue
 		}
-		// Definition stealth participates in the same gameplay hidden predicate
-		// as init-cloak/runtime cloak. It remains separately published so the
-		// presentation blink gate does not infer gameplay state from art bits
-		// [03 §3.2][03 §3.9].
-		if (u.Hidden || u.Stealth) && (*u.Status&DecloakBit) == 0 {
-			continue // cloaked and not within 90-tick decloak window → not visible P0-11
+		if u.Hidden {
+			continue // the instance cloak bit is the pass's only other gate
 		}
-		// The sensor final pass is the single-point form. It deliberately does
-		// not apply the owner bypass or gameplay hull/sea checks [03 §3.4].
 		if s.VisiblePoint(s.local, u.X, u.Y, u.Z) {
 			*u.Status |= SeenBit
 		}
 	}
+
+	// Presentation: the minimap's sensor circles. [03 §3.10] attributes them to
+	// the contacts pass, not to the sensor phase; they are emitted here only
+	// because this walk already holds the per-unit sensor distances, and they
+	// are published as an immutable per-frame list no gameplay path reads.
+	var circles []SensorCircle
+	if s.surfaces != nil {
+		s.surfaces.Wipe() // the final surface is wiped and rebuilt every tick [03 §3.10]
+	}
+	for i := range units {
+		u := &units[i]
+		if !u.Alive || !u.Active {
+			continue
+		}
+		cu, cv := surfaceProject(u.X), surfaceProject(u.Z)
+		if u.RadarDistance != 0 || u.SonarDistance != 0 {
+			// One outer circle at max(radardistance, sonardistance) [03 §3.10].
+			outer := u.RadarDistance
+			if u.SonarDistance > outer {
+				outer = u.SonarDistance
+			}
+			circles = append(circles, SensorCircle{SourceID: u.ID, U: cu, V: cv, Radius: outer})
+			if s.surfaces != nil {
+				s.surfaces.Sensor(cu, cv, outer)
+			}
+		}
+		if u.RadarJam != 0 {
+			circles = append(circles, SensorCircle{SourceID: u.ID, U: cu, V: cv, Radius: u.RadarJam, Kind: 1})
+			if s.surfaces != nil {
+				s.surfaces.RadarJam(cu, cv, u.RadarJam)
+			}
+		}
+		if u.SonarJam != 0 {
+			circles = append(circles, SensorCircle{SourceID: u.ID, U: cu, V: cv, Radius: u.SonarJam, Kind: 2})
+			if s.surfaces != nil {
+				s.surfaces.SonarJam(cu, cv, u.SonarJam)
+			}
+		}
+	}
+
 	for i := range units {
 		u := &units[i]
 		if u.Alive && u.Status != nil {
@@ -289,9 +421,9 @@ func (s *Service) SensorTick(tick uint32, playerCount int, allied func(a, b Play
 	}
 }
 
-// ClearSeen drops the per-frame seen markers. The marker is per frame, so the
-// caller clears it at the start of a pass rather than the sensor phase clearing
-// it mid-walk [03 §3.4] P0-11.
+// ClearSeen drops a unit's seen marker. The phase's own first pass is the
+// clear writer [R-VIS-01 §4]; this helper exists for callers that retire a
+// unit outside the phase.
 func ClearSeen(status *uint32) {
 	if status != nil {
 		*status &^= SeenBit
