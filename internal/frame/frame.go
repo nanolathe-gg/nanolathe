@@ -351,15 +351,11 @@ type CommandPageView struct {
 	// unit's state, and moves it to 2 from there; 3 therefore survives only a
 	// walk that folded nothing.
 	//
-	// TODO(question): [07 R-HUD-03 §6] glosses the greying value 3 as "mixed",
-	// which the fold above contradicts — 3 is the not-applicable sentinel and
-	// 2 is the disagreement value, the same shape the three-bit stance fields
-	// carry with their 4/3 pair [04 R-STANCE-01 §1].  Settle it by landing the
-	// two-bit folds under [07 §9] as an addendum with an auditable correction
-	// of §6's gloss; the greying condition §6 states (value 3) is unaffected.
-	// One asymmetry belongs in that addendum: the on/off fold compares the
-	// next unit's state before taking 2, while the cloak fold takes 2 for any
-	// second cloak-capable unit whether or not it agrees.
+	// The two-bit folds, their sentinel and disagreement values, and the
+	// on/off-vs-cloak asymmetry are [07 R-HUD-03 §13], which also corrects
+	// §6's gloss of the greying value 3 as "mixed": 3 is the not-applicable
+	// sentinel and 2 is the disagreement value.  §6's greying condition
+	// (grey at 3) is unaffected.
 	CloakState uint8
 	OnOffState uint8
 
@@ -380,11 +376,9 @@ type CommandPageView struct {
 	// unit's definition carries the key, so a button is greyed only when no
 	// selected unit can perform the command.
 	//
-	// TODO(question): [04 §3.7] states the opposite — "a button is enabled only when every selected unit carries
-	// the capability bit" — and that conjunction is contradicted by the
-	// aggregate refresh's folds.  Settle it by landing the capability folds
-	// under [07 §9] as an addendum and correcting doc 04's sentence there,
-	// stating what it said and why it was wrong.
+	// The disjunction is [07 R-HUD-03 §13].  [04 §3.7] previously stated the
+	// conjunction — "enabled only when every selected unit carries the bit" —
+	// and is corrected there and in place.
 	CanMove     bool
 	CanStop     bool
 	CanAttack   bool

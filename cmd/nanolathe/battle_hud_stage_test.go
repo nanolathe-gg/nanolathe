@@ -4,8 +4,13 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/gui"
+	"github.com/nanolathe/nanolathe/internal/hud"
+	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe/nanolathe/vfs"
 )
 
 // The command-button stage and grey table [07 R-HUD-03 §6] read off the
@@ -135,5 +140,142 @@ func TestCommandButtonFrameChoice(t *testing.T) {
 	staged := gui.Gadget{Name: "ARMONOFF", Kind: gui.KindButton, Status: 1}
 	if got := frameIndex(commandButtonFrame(entry, staged, 1, false, false)); got != 2 {
 		t.Fatalf("status 1 stage 1 chose frame %d, want 2", got)
+	}
+}
+
+// The page-shown bit the command-window switch and the BUILD/ORDERS stages
+// both read is the selected builder's status bit 22, taken off the committed
+// frame at each use [07 §9][07 R-HUD-03 §6]. Nothing latches it [I6].
+func TestCommandPageIsPagedReadsTheCommittedBit(t *testing.T) {
+	build := func(flags uint32) *frame.Frame {
+		return &frame.Frame{
+			Units:       []frame.UnitView{{Slot: 7, Flags: flags}},
+			CommandPage: frame.CommandPageView{Builder: 7, PageCount: 4},
+		}
+	}
+	unpaged := build(0)
+	paged := build(hud.EncodePageBits(0, 2))
+	if commandPageIsPaged(unpaged) {
+		t.Fatal("a builder with the page-shown bit clear reported paged")
+	}
+	if !commandPageIsPaged(paged) {
+		t.Fatal("a builder with the page-shown bit set reported unpaged")
+	}
+	// No builder at all, and a builder handle that names no committed unit,
+	// are both the unpaged state: the switch has nothing to read.
+	if commandPageIsPaged(&frame.Frame{}) {
+		t.Fatal("an empty command page reported paged")
+	}
+	if commandPageIsPaged(&frame.Frame{CommandPage: frame.CommandPageView{Builder: 9}}) {
+		t.Fatal("a stale builder handle reported paged")
+	}
+	// BUILD and ORDERS are the two halves of that bit [07 R-HUD-03 §6].
+	orders, _ := commandButtonState("ORDERS", paged, commandPageIsPaged(paged))
+	build1, _ := commandButtonState("BUILD", paged, commandPageIsPaged(paged))
+	if orders.stage != 0 || build1.stage != 1 {
+		t.Fatalf("paged builder staged ORDERS %d BUILD %d, want 0 and 1", orders.stage, build1.stage)
+	}
+	orders, _ = commandButtonState("ORDERS", unpaged, commandPageIsPaged(unpaged))
+	build0, _ := commandButtonState("BUILD", unpaged, commandPageIsPaged(unpaged))
+	if orders.stage != 1 || build0.stage != 0 {
+		t.Fatalf("unpaged builder staged ORDERS %d BUILD %d, want 1 and 0", orders.stage, build0.stage)
+	}
+}
+
+// "Greyed buttons ignore everything" [07 R-WGT-01 §3], and a hidden gadget is
+// skipped before the hit test [07 R-WGT-01 §1]. Both verdicts come from the
+// selection aggregate the painter reads [07 R-HUD-03 §6], not from the
+// authored gadget, so the click path has to consult the same function the
+// painter does.
+func TestClickPathRefusesDerivedGreyAndHiddenGadgets(t *testing.T) {
+	gadget := func(name string, y int32) gui.Gadget {
+		return gui.Gadget{Kind: gui.KindButton, Active: 1, Name: name, Rect: gui.Rect{X: 0, Y: y, W: 20, H: 10}}
+	}
+	// PATROL greys when no selected unit carries canpatrol; LOAD hides when no
+	// selected unit carries the transport bit.
+	window := &gui.Window{Gadgets: []gui.Gadget{{}, gadget("ARMPATROL", 0), gadget("ARMLOAD", 20)}}
+
+	newSession := func(canPatrol, transport bool) *battleSession {
+		buf := frame.NewBuffer()
+		w := buf.BeginWrite()
+		w.Units = append(w.Units, frame.UnitView{Slot: 1, Owner: 0})
+		w.Selection = frame.SelectionView{Handles: append(w.Selection.Handles, 1), Primary: 1, Count: 1}
+		w.CommandPage = frame.CommandPageView{
+			MoveStance: 4, FireStance: 4, CloakState: 3, OnOffState: 3,
+			CanPatrol: canPatrol, IsTransport: transport,
+		}
+		if err := buf.Publish(1); err != nil {
+			t.Fatal(err)
+		}
+		h := &retailBattleHUD{fs: vfs.New(), windows: map[string]*gui.Window{"gen": window}}
+		return &battleSession{sess: &session.Session{Snapshot: buf, LocalOwner: 0}, cat: &content.Catalog{}, hud: h}
+	}
+
+	// A selection that can patrol arms the latch, which is the observable the
+	// two refusals below are measured against.
+	live := newSession(true, false)
+	if !live.hud.consumeClick(live, 5, 5) {
+		t.Fatal("a live PATROL button did not consume its click")
+	}
+	if got := live.battleState().Input.Latch; got != input.LatchPatrol {
+		t.Fatalf("live PATROL armed latch %v, want %v", got, input.LatchPatrol)
+	}
+
+	greyed := newSession(false, false)
+	if greyed.hud.consumeClick(greyed, 5, 5) {
+		t.Fatal("a greyed PATROL button consumed its click")
+	}
+	if got := greyed.battleState().Input.Latch; got != input.LatchNormal {
+		t.Fatalf("greyed PATROL armed latch %v, want the idle latch", got)
+	}
+	if greyed.hud.hitTestFor(greyed, 5, 5) {
+		t.Fatal("a greyed button reported a hit for the press/release capture")
+	}
+
+	// LOAD without the transport bit is hidden, and a hidden gadget is not
+	// clickable either.
+	if greyed.hud.consumeClick(greyed, 5, 25) {
+		t.Fatal("a hidden LOAD button consumed its click")
+	}
+	if got := greyed.battleState().Input.Latch; got != input.LatchNormal {
+		t.Fatalf("hidden LOAD armed latch %v, want the idle latch", got)
+	}
+	// With the transport bit LOAD is shown, and clicking it arms its latch.
+	shown := newSession(false, true)
+	if !shown.hud.consumeClick(shown, 5, 25) {
+		t.Fatal("a shown LOAD button did not consume its click")
+	}
+	if got := shown.battleState().Input.Latch; got != input.LatchLoad {
+		t.Fatalf("shown LOAD armed latch %v, want %v", got, input.LatchLoad)
+	}
+}
+
+// The hovered-gadget index the footer reads is set for any button whose
+// rectangle contains the pointer, with no grey test; only hidden gadgets are
+// skipped, and before the hit test [07 R-HUD-03 §1][07 R-WGT-01 §1].
+func TestHoveredGadgetKeepsGreyedButtonsAndSkipsHiddenOnes(t *testing.T) {
+	gadget := func(name string, y int32) gui.Gadget {
+		return gui.Gadget{Kind: gui.KindButton, Active: 1, Name: name, Rect: gui.Rect{X: 0, Y: y, W: 20, H: 10}}
+	}
+	window := &gui.Window{Gadgets: []gui.Gadget{{}, gadget("ARMPATROL", 0), gadget("ARMLOAD", 20)}}
+	buf := frame.NewBuffer()
+	w := buf.BeginWrite()
+	w.Units = append(w.Units, frame.UnitView{Slot: 1, Owner: 0})
+	w.Selection = frame.SelectionView{Handles: append(w.Selection.Handles, 1), Primary: 1, Count: 1}
+	w.CommandPage = frame.CommandPageView{MoveStance: 4, FireStance: 4, CloakState: 3, OnOffState: 3}
+	if err := buf.Publish(1); err != nil {
+		t.Fatal(err)
+	}
+	h := &retailBattleHUD{fs: vfs.New(), windows: map[string]*gui.Window{"gen": window}}
+	b := &battleSession{sess: &session.Session{Snapshot: buf, LocalOwner: 0}, cat: &content.Catalog{}, hud: h}
+	f := buf.Current()
+
+	h.updateHoveredGadget(b, f, 0, 5, 5)
+	if _, name := h.hoveredGadgetSource(); name != "ARMPATROL" {
+		t.Fatalf("greyed PATROL hovered as %q, want ARMPATROL", name)
+	}
+	h.updateHoveredGadget(b, f, 0, 5, 25)
+	if index, name := h.hoveredGadgetSource(); index != hud.NoGadget || name != "" {
+		t.Fatalf("hidden LOAD hovered as %d %q, want no gadget", index, name)
 	}
 }

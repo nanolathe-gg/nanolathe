@@ -2356,13 +2356,13 @@ left by `PREV` persist at the next save point.
 | `Gamma` | `VISUALS` `GAMMA`, `RESTORE` (12) | applied as the palette factor `0.5 + g/24` at battle init and at every slider move |
 | `DitheredFog` | `VISUALS` `RESTORE` clears it (front end); no gadget sets it | fog presenter (doc 03) — reader not traced here |
 | `SwitchAlt` | nothing | [R-CAM-01 §4] |
-| `screenchat` | nothing | the footer's chat-line filter branches on it: with `screenchat` 0 the lines whose routing class is 1, 4 or 8 take a different branch from the rest — which side draws is not settled here · static trace of the footer line filter |
-| `textlines` | `SPEEDS` `MAXLINES` | the chat line ring: a line is stored only when `textlines ≠ 0`, and when storing one would exceed `textlines` visible lines the oldest visible line is dropped (`(head + 1) mod textlines == tail` advances the tail; both indices wrap at 30) — `textlines` is the on-screen line budget |
+| `screenchat` | nothing | the **message column**'s class filter, closed 2026-08-30 in [R-HUD-03 §14]: `screenchat` 0 draws only the lines whose routing class is 1, 4 or 8, and any other value draws every class. The row previously called this "the footer's chat-line filter" and left the polarity open; the filter is not in the footer |
+| `textlines` | `SPEEDS` `MAXLINES` | the message line ring: a line is stored only when `textlines ≠ 0`, and when storing one would exceed `textlines` visible lines the oldest visible line is dropped (`(head + 1) mod textlines == tail` advances the tail; both indices wrap at 30). `textlines` is the **modulus**, not the on-screen budget: the drawer shows `textlines − 1` lines ([R-HUD-03 §14.3], [R-HUD-03 §14.4]) |
 | `textscroll` | `SPEEDS` `TXTSCROL` | line ageing: the oldest visible line expires once `(textscroll + 1) × 30` ticks have passed since it was stored |
 | `mousespeed` | nothing | **nothing** — no reader in the whole export beyond the loader; persisted and inert |
 | `gamespeed` | `SPEEDS` `GAME` (the mirror word too) | the speed setter of [R-CAM-01 §3] |
 | `unitchat` | `SOUND` `SPEECH` gauge × 5 ([03 R-AUD-01 §2]); `SPEEDS` `RESTORE` (10) | voice crowding threshold [03 R-AUD-01 §3] |
-| `unitchattext` | `SPEEDS` `UNITCHAT` stage × 5 | the caption presenter admits a unit caption when `10 − unitchattext < priority` — the same crowding form as the voice gate |
+| `unitchattext` | `SPEEDS` `UNITCHAT` stage × 5 | the caption presenter admits a unit caption when `10 − unitchattext < priority` — the same crowding form as the voice gate. The presenter is [R-HUD-03 §14]: the admitted caption is appended to the message line ring, not drawn directly |
 | `side` | `NEWGAME` side buttons; load-game `summary` | `SINGLE` opener, briefing planet override, briefing font index |
 | `Difficulty` | `NEWGAME` / `ENDMSN` / `RESTART` / `SKIRMISH` `Difficulty` | [08 R-CAMP-01 §3] |
 
@@ -2745,9 +2745,6 @@ recorded once in [R-FE-02 §1].
   `RESTART` button (the restart control is described from the campaign side
   in [08 R-CAMP-01 §8]; the word's reader in the battle pump is not cited) ·
   [R-FE-01 §7], doc 08 · static trace.
-- Which branch of the footer's chat-line filter draws when `screenchat` is 0
-  (routing classes 1, 4, 8 versus the rest) · [R-FE-01 §11], §11 · static
-  trace.
 - The `DitheredFog` bit's presenter and the `Gamma` factor's exact palette
   application beyond the `0.5 + g/24` factor · [R-FE-01 §11], doc 03 ·
   static trace.
@@ -3604,6 +3601,296 @@ strip (§6), which is the player's live unit count against its limit, not the
 selection. Group membership is shown only as the `'0' + group` digit under
 own units ([03 R-FX-01 §6]) and, on the footer, not at all.
 
+### Closed — unit captions: the presenter, the message-line ring, and the column that draws it [R-HUD-03 §14] (2026-08-30)
+
+Closes three rows of [R-FE-01 §11] (`unitchattext`, `textlines`/`textscroll`,
+`screenchat`), the "which branch of the footer's chat-line filter draws when
+`screenchat` is 0" item of [R-FE-02 §12]'s Unknown list, and the presenter
+question left open by [05 "the build-order caption census"].
+
+**Correction to [R-FE-01 §11] (2026-08-30).** Its `screenchat` row said "the
+**footer's** chat-line filter branches on it: with `screenchat` 0 the lines
+whose routing class is 1, 4 or 8 take a different branch from the rest — which
+side draws is not settled here", and [R-FE-02 §12]'s Unknown list repeated
+"which branch of the **footer's** chat-line filter draws". Both were wrong
+about the owner. The footer draws no message line at any setting; the filter
+belongs to a separate column that the master composer paints near the end of
+the frame, long after the footer. The earlier pass reached the filter through
+the settings-key consumer census, which names the reading routine but not the
+routine's caller, and attributed it to the footer because the footer is the
+other consumer of the same font and colour table. The correct owner and the
+settled polarity are [R-HUD-03 §14.4] below.
+
+**Established — a raised caption is not the footer's order caption.** Two
+different mechanisms, with no connection between them:
+
+* The footer's `MISSIONTEXT` field ([R-HUD-03 §2]) is *derived, per frame*:
+  the localized caption column of the order-kind table for the **hovered**
+  unit's current order kind. It has no history, no lifetime and no producer —
+  it is recomputed from current state whenever the footer repaints, and it is
+  gone the moment the pointer leaves the unit.
+* The captions of [05]'s census are *transient events*: raised once, at the
+  instant an order handler reaches the state that names them, and routed
+  through the unit voice/caption queue of [03 §8.3] into the shared
+  message-line ring, where they persist for a wall of ticks set by
+  `textscroll` regardless of hover, selection or pointer position.
+
+The footer never reads the ring and the ring's drawer never reads the
+order-kind table. A reimplementation that only draws `MISSIONTEXT` shows the
+player nothing about a blocked build.
+
+#### The raiser and its gates [R-HUD-03 §14.1]
+
+**Established.** The order handlers call one *raise unit caption* helper with
+three arguments: the unit, the sound **event slot** of [03 §8.3]'s static slot
+table, and an optional caption string. It does nothing at all unless all three
+hold:
+
+1. the unit's owner slot equals the viewing player's slot (so an enemy's
+   blocked build is never captioned);
+2. the unit's state word carries the live bit (bit 28, [04 §8]);
+3. the unit's death-pending bit (bit 14) is clear.
+
+A null caption argument is replaced by the slot's default caption from the slot
+table; the caption — given or defaulted — then goes through the localization
+table before it is queued. Two further variants of the helper exist that
+additionally require the unit to be, or not to be, in the current selection;
+only the *not selected* variant has a caller, and the *selected* variant is
+unreachable code.
+
+*Cross-doc:* [03 R-AUD-01 §3] names these same two gates "the unit's
+chat-enable status bit" and "the silenced bit". Doc 04's state-word census
+([04 §8]) names them the **live bit (28)** and **death-pending (14)**, which is
+what they are; lane 03 should adopt that naming. The predicate itself is
+identical in both readings, so nothing downstream changes.
+
+**Correction to [05 "the build-order caption census"] (2026-08-30) — the
+`Slot` column is an event slot, not a priority.** That census tabulates each
+caption with a bare number under the heading `Slot` (9, 8, 7) and says nothing
+about what the number indexes; read alongside [R-FE-01 §11]'s gate
+`10 − unitchattext < priority`, the only number on offer, it invites the
+reading that the slot *is* the priority — which inverts the result, because
+the gate would then admit slots 8 and 9 at the default setting and reject
+nothing that slot 7 raises. It is not a priority. It is the **sound event
+slot** of [03 §8.3]'s static slot table, i.e. which `[SOUNDS]` event of the
+unit's sound category the caption rides on. The priority the gate compares is a
+separate column of that table, looked up by the slot, and the two numbers move
+in opposite directions here: the *lowest*-numbered slot the census uses carries
+the *highest* priority. For the three slots the census uses:
+
+| Slot | Key | Priority | Cooldown |
+|---:|---|---:|---:|
+| 7 | `cant` | 8 | 1 s |
+| 8 | `unitcomplete` | 3 | 3 s |
+| 9 | `build` | 4 | 2 s |
+
+**Established — what `UNITCHAT` therefore does to the census.** The caption
+gate is `10 − unitchattext < priority` ([03 §8.3] step 4, signed byte compare),
+and `unitchattext` is `0` / `5` / `10` for `Off` / `Medium` / `Full`
+([R-CAM-01 §7]), default `5`:
+
+* `Off` — no caption of any slot appears (the highest stock priority is 10 and
+  the compare is strict).
+* `Medium`, the shipped default — only priority above 5 passes, so **only the
+  slot-7 captions appear**: `Waiting for target area to clear`,
+  `Target area was blocked`, `Unable to create any more units`,
+  `Construction stopped`, `Construction terminated`,
+  `Construction terminated by hostile action`, and
+  `I can't reach the construction site`.
+* `Full` — everything passes, adding `Starting construction` (slot 9) and
+  `Building complete` (slot 8).
+
+**This is a contract, not a nicety, and it is the practical answer a
+reimplementation needs.** At the shipped default (`UNITCHAT = Medium`,
+`unitchattext = 5`) `Waiting for target area to clear` and
+`Target area was blocked` **do** appear on screen, and `Starting construction`
+and `Building complete` **do not** — they require `Full`. A build that stalls
+for want of energy raises no caption at all at any setting (no handler raises
+one for it), so at the default the presence of the slot-7 line is exactly what
+distinguishes a blocked build from a starved one. An implementation that gates
+all seven or nine captions alike, or that shows the slot-8/9 pair at Medium,
+is wrong in the one place a player can see.
+
+**Established — the per-slot cooldown is not a text throttle.** [03 §8.3]
+establishes that the slot's next-allowed frame gates *insertion*, and that it
+is re-armed only on an **audible** resolve. So with voice suppressed — sound
+off, `unitchat` low, or a unit whose sound category has no variant for the slot
+— the cooldown is never armed and every raise queues. Slot 7's cooldown is 1
+second, and `MobileBuild`'s blocked-site retry is 30 ticks
+([05 "the build-order caption census"]), so the blocked-build line repeats
+roughly once per retry either way.
+
+#### From the queue to the ring: the presenter [R-HUD-03 §14.2]
+
+**Established.** [03 §8.3]'s resolve step 4 does not draw. It composes the line
+as `"<name>: <caption>"` (a two-`%s` format with a colon and a space), where
+`<name>` is the acting unit's **definition display-name field** — the same
+string `UNITNAME` draws for an own unit ([R-HUD-03 §2]), taken verbatim with no
+second localization pass — and `<caption>` is the entry's override text or the
+slot row's caption for the drawn variant. It then **appends that line to the
+message-line ring** (§14.3) with:
+
+* routing class **1**;
+* the source-unit word set to the acting unit's id;
+* the speaker slot set to the no-speaker sentinel, so no arrival cue plays and
+  no logo is stamped.
+
+Nothing is appended when the composed caption is empty or when the unit's live
+bit has cleared since the entry was queued.
+
+#### The message-line ring [R-HUD-03 §14.3]
+
+**Established.** There is exactly one ring, shared by unit captions, chat and
+the announcement lines. It is 30 fixed slots of 72 bytes: a 64-byte text field
+copied with a bounded copy and a terminator forced at index 63 (so **63
+characters survive**, and a longer composed line is silently truncated), the
+tick it was stored, a source-unit word, a speaker-slot byte and a class byte
+whose low four bits are the routing class. A 16-bit producer index and a 16-bit
+display index both wrap at 30.
+
+Append (`text`, `class`, `sourceUnit`, `speakerSlot`):
+
+1. an empty text is dropped; `textlines == 0` drops the line outright — no
+   store, no index movement, no cue;
+2. when `(producer + 1) mod textlines == display`, the display index advances
+   first, wrapping at 30 — this is the drop of the oldest visible line;
+3. the five fields are written at `producer`; the class byte is a read-modify-
+   write that touches only its low four bits;
+4. the producer index advances, wrapping at 30;
+5. the `MessageArrived` cue plays **only** when the speaker slot is not the
+   sentinel;
+6. if a window named `TIMEOUT.GUI` is open it is repainted.
+
+Ageing is [R-CAM-01 §7]'s rule unchanged: once per host frame after the
+sub-tick loop, the oldest visible line expires when
+`storedTick + (textscroll + 1) × 30 < currentTick`, and the display index
+advances by one.
+
+**Correction to [R-CAM-01 §7] (2026-08-30) — the fourth append field is a
+player slot, not a silence flag.** That section's `textlines` bullet said the
+stored line is "stamped with the current tick, kind nibble, source unit and a
+**silence byte**", and that "`MessageArrived` plays unless the silence byte is
+`'\n'`". The arithmetic is right and nothing about the cue changes, but the
+name misses what the field is for and hides a second consumer. The field is the
+**speaker's player slot**. The value 10 is a sentinel meaning "no speaker" —
+`'\n'` is simply what 10 renders as, and no real slot reaches 10 — so the cue
+rule is "plays only for a line with a real speaker", not "plays unless
+silenced". The earlier reading came from the poster alone, where the byte is
+only ever compared against `'\n'`; the drawer is the second reader, and there
+the same byte selects the owner logo stamped ahead of the text (§14.4), which
+is why the field exists at all. Unit captions and chat lines both pass the
+sentinel — the chat composer already embeds `<name>` in the text itself
+([R-FE-02 §12]) — so in a single-player session no line is ever "silenced" and
+none draws a logo.
+
+**Correction to [R-CAM-01 §7] (2026-08-30) — the on-screen budget is
+`textlines − 1`.** That section's `textlines` bullet said "The composer draws
+at most `count` lines walking back from the producer to the display index
+(fewer when the ring holds fewer)", and [R-FE-01 §11]'s `textlines` row called
+the value "the on-screen line budget". Both are off by one. The walk-back runs
+at most `textlines − 1` steps before drawing forward (§14.4), so `textlines`
+lines are never on screen: `textlines = 1` draws **nothing at all**, and the
+default 10 shows nine. The append rule agrees and always did — the drop test
+`(producer + 1) mod textlines == display` keeps at most `textlines − 1` lines
+between the two indices — so the earlier text contradicted the rule quoted two
+lines above it. `textlines` is a **modulus**; the budget is one less.
+
+#### Where the lines are drawn [R-HUD-03 §14.4]
+
+**Established — the owner.** The **master composer** draws the column itself,
+onto the same composed surface as everything else, and only when its
+"draw the interface" argument is set (it is clear for movie capture). Order
+within the frame: the footer and minimap are painted early ([R-HUD-03 §1]);
+the message column is painted much later, after the Space-held slide strip
+(§6) and the network meter, and before the developer overlays and the
+in-battle options unfold ([R-HUD-04 §2]). The same column is repainted by the
+frozen-frame path that puts a `MSGBOX` over the last game frame.
+
+**Established — geometry.** All coordinates are absolute screen pixels; unlike
+the footer there is **no `baseheight` adjustment**, so the column does not move
+with screen height.
+
+1. The start index is the producer walked back at most `textlines − 1` times,
+   decrementing with a wrap to 29 and stopping early if it reaches the display
+   index. Lines are then drawn forward from that index up to, but not
+   including, the producer.
+2. The primary UI font (`fonts/COMIX`, [03 R-FONT-01 §5]) is selected; let `h`
+   be that font's glyph height.
+3. The first line is drawn at `y = 52`; each drawn line advances `y` by `h`.
+4. The foreground is `dcb[15]`.
+5. A line whose speaker slot is not the sentinel first stamps that player's
+   owner logo — the same primitive that draws `LOGO2` ([R-HUD-03 §2]), keyed by
+   the owner's lobby colour index — stretched into the square
+   `(138, y) .. (138 + a, y + a)`, where `a = trunc(h × 0.8)`; the text then
+   starts at `x = trunc(138.0 + 1.5 × a)`, the multiply and the add done in
+   doubles and truncated toward zero. A line carrying the sentinel — every unit
+   caption, and every chat line — draws no logo and starts at `x = 138`.
+6. The text goes through the shared glyph drawer with an **unbounded** maximum
+   width and no outline colour, so a long line is bounded only by the
+   destination surface.
+
+**Supported inference — the second colour is unreachable.** The drawer has a
+second branch that uses `dcb[10]` when bit 5 of the entry's class byte is set,
+but no writer anywhere in the image sets that bit: the only writer of the class
+byte masks its input to the low four bits and preserves the rest. With a
+zero-initialised ring every line is `dcb[15]`. *Decider:* confirm the ring's
+backing memory is zeroed at session start; until then treat `dcb[15]` as the
+only colour and do not implement the alternate.
+
+**Established — the class filter, and the `screenchat` polarity.** The drawer
+selects on a presenter-mode word. Process init sets that word to 3 and nothing
+else in the image writes it, so the other two branches (mode 1: draw only class
+2; mode 2: draw everything except class 8) are unreachable. In mode 3:
+
+* `screenchat ≠ 0` — the shipped default is 1 ([02 R-KEYS-01 §5]) — **every** class
+  draws;
+* `screenchat == 0` — only classes **1, 4 and 8** draw.
+
+**Established — the routing-class census** (every producer in the image):
+
+| Class | Producers |
+|---:|---|
+| 0 | one announcement producer that passes 16, which the writer's low-nibble mask folds to 0 |
+| 1 | unit captions (§14.2) — the only producer |
+| 2 | the score announcements (`… has taken the lead with %d kills`) and the resource-share line |
+| 4 | the ordinary chat commit ([R-FE-02 §12]) and the player-scoped announcements, which are the only lines that carry a real speaker slot and therefore the only ones that draw a logo and play `MessageArrived` |
+| 8 | two session/network lines |
+
+So `screenchat = 0` hides the score and share announcements and the class-0
+producer, and keeps captions and chat. This closes [R-FE-02 §12]'s open item.
+
+#### What a reimplementation must do to put `Target area was blocked` on screen [R-HUD-03 §14.5]
+
+**Established — the whole chain, in order.** Every step is required; skipping
+the ring is why the string can be produced and still never be seen.
+
+1. `MobileBuild`'s site test fails with the retry count already above 10
+   ([05 "the build-order caption census"]); the handler raises event slot 7
+   with the literal caption.
+2. The raiser drops it unless the builder is the viewing player's, live, and
+   not death-pending (§14.1).
+3. The caption is localized and offered to the voice/caption queue: dropped if
+   slot 7's next-allowed frame is in the future, dropped if a slot-7 entry is
+   already queued, otherwise inserted in descending-priority order, evicting
+   and silently resolving the tail if the queue already holds eight
+   ([03 §8.3]).
+4. Once per host frame the queue's head is resolved. Text is emitted when
+   `10 − unitchattext < 8`, i.e. at `Medium` or `Full`.
+5. The emitted line is `"<builder display name>: Target area was blocked"`,
+   appended to the message ring with class 1, the builder's id, and the
+   no-speaker sentinel — truncated to 63 characters, dropped entirely if
+   `textlines` is 0, and evicting the oldest visible line if the ring is at
+   `textlines − 1` (§14.3).
+6. The master composer draws the last `textlines − 1` ring lines as a
+   left-aligned column at `x = 138`, first line at `y = 52`, one font height
+   apart, in `dcb[15]`, filtered by class as above (§14.4).
+7. The line ages out `(textscroll + 1) × 30` ticks after it was stored.
+
+**Unknown — what a mission scripting layer can put in this ring.** None of the
+producers above is the campaign/objective text path; whether mission scripts
+reach this ring or a separate one is not established here. *Decider:* trace the
+mission-event text producers of doc 08 for a call into the ring append.
+
 ### Supported inference
 
 Battle chrome should be data-driven from side-data, while semantic values and
@@ -3627,6 +3914,14 @@ tuple order are established above.
 - Whether any stock or third-party content authors a `<unit>0.GUI` page (the
   authored-page bit of [R-HUD-03 §6] is never set by stock content) · asset
   census.
+- Whether the message ring's backing memory is zero-initialised at session
+  start, which decides whether the drawer's second text colour (`dcb[10]`, on
+  class-byte bit 5) is reachable at all · [R-HUD-03 §14.4] · static trace of
+  the session-init clear.
+- Whether a mission script can post to the message ring, or whether campaign
+  objective text has its own path; none of the ring's producers in
+  [R-HUD-03 §14.4]'s class census is a mission-event producer · doc 08 ·
+  static trace of the mission-event text producers.
 
 
 ## 7. Fonts, text, palette, and localization use
@@ -6214,10 +6509,11 @@ section rather than deleted.
 - The key-navigation flag's clear state per front-end screen; the kind-10
   outline X coordinate; who fills each listbox's `maxTop`; the record-list
   item structures · §3, §4 [R-WGT-01] · static trace.
-- The restart request word's consumer; the `screenchat` filter polarity; the
-  `DitheredFog` presenter · §5 [R-FE-01 §7, §11] · static trace. (The single-player transition graph,
-  movie machine, campaign continuation, error dialogs and registry write
-  census are closed in [R-FE-01].)
+- The restart request word's consumer; the
+  `DitheredFog` presenter · §5 [R-FE-01 §7, §11] · static trace. (The
+  `screenchat` filter polarity is closed in [R-HUD-03 §14]; the single-player
+  transition graph, movie machine, campaign continuation, error dialogs and
+  registry write census are closed in [R-FE-01].)
 - Process-level outcome of a missing or parser-rejected required `.GUI` file,
   and of malformed HATTFONT or malformed GAF payloads whose decoders return
   null; the front-end screen openers do not check the open result (the

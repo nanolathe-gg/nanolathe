@@ -102,7 +102,11 @@ func TestDrawWorldPassProcessesAllDrawablesInPainterOrder(t *testing.T) {
 		},
 	}
 
+	// These units carry no mover, so all three belong to pass B; the bucket
+	// build and pass A run first because pass B walks that build
+	// [03 R-RAST-01 §7].
 	c.drawWorldPass(cur, true)
+	c.drawWorldPassB(cur, true)
 	want := []pool.Handle{2, 3, 1}
 	if len(c.selectionChrome) != len(want) {
 		t.Fatalf("drawn units = %d, want %d", len(c.selectionChrome), len(want))

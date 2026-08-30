@@ -3583,6 +3583,19 @@ user-visible edges of the arithmetic above. All are raised on the builder.
 | `Target area was blocked` | 7 | the same site test once the retry count exceeds 10; terminal |
 | `I can't reach the construction site` | 7 | `MobileBuild`'s approach phase when the arrival-failure executor-flag bit is set and the range test of [R-WORK-01 §2] still fails |
 
+**Established — what the `Slot` column is, and where these captions go**
+(added 2026-08-30, [07 R-HUD-03 §14]). `Slot` is the **sound event slot** of
+[03 §8.3]'s static slot table — 7 `cant`, 8 `unitcomplete`, 9 `build` — not a
+priority and not a screen position. The caption is raised only for the viewing
+player's own live unit, queued on the unit voice/caption queue, and, when
+`10 − unitchattext < the slot's priority`, appended to the shared message-line
+ring as `"<unit display name>: <caption>"`; the master composer draws that ring
+as a column at the top-left of the view. At the shipped `UNITCHAT = Medium`
+only the slot-7 captions clear the gate, so `Starting construction` and
+`Building complete` are not shown by default. None of this is the footer's
+`MISSIONTEXT` field, which is a separate per-frame readout of the hovered
+unit's order kind ([07 R-HUD-03 §2]).
+
 **Unknown — the executor-flag bits.** Several of the predicates above and in
 [R-WORK-01 §3..§7] test bits of the flag word the order pump passes into an
 executor: a terminate/interrupt bit, a cancel bit, an arrival-failure bit, and

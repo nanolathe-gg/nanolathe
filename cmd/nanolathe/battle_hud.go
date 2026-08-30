@@ -151,8 +151,17 @@ func (h *retailBattleHUD) updateHoveredGadget(b *battleSession, f *frame.Frame, 
 	if window == nil {
 		return
 	}
+	paged := commandPageIsPaged(f)
 	for i, gad := range window.Gadgets {
 		if i == 0 || gad.Active == 0 || gad.Kind != gui.KindButton {
+			continue
+		}
+		// A command button the aggregate hides is deactivated, and hidden
+		// gadgets are skipped before the hit test [07 R-HUD-03 §6]
+		// [07 R-WGT-01 §1]. A greyed one is not: the hovered-gadget writer has
+		// no grey test, so a greyed button still fills the footer's first
+		// source [07 R-HUD-03 §1].
+		if command, isCommand := commandGadgetVerdict(gad, f, paged); isCommand && command.hidden {
 			continue
 		}
 		r := window.PlacedRect(i)
@@ -1315,16 +1324,7 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, offse
 	if window == nil {
 		return
 	}
-	// BUILD and ORDERS stage from the selected builder's page-shown bit
-	// [07 R-HUD-03 §6]; the committed unit flags carry it [07 §9]. Reading it
-	// once per page keeps the per-gadget verdict a pure function of the
-	// committed frame — no stage or grey state is written back anywhere [I6].
-	paged := false
-	if f != nil && f.CommandPage.Builder != 0 {
-		if builder, found := snapshotUnitByHandle(f, f.CommandPage.Builder); found {
-			paged = hud.IsPaged(builder.Flags)
-		}
-	}
+	paged := commandPageIsPaged(f)
 	for i, gad := range window.Gadgets {
 		if i == 0 || gad.Active == 0 || gad.Kind == gui.KindFont || gad.Kind == gui.KindPanel {
 			continue
@@ -1335,7 +1335,7 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, offse
 		if c.Input() != nil && c.Input().Mouse != nil && c.Input().Mouse.Held(input.MouseButtonLeft) {
 			pressed = guiRectContains(r, int32(c.Input().Mouse.X), int32(c.Input().Mouse.Y))
 		}
-		command, isCommand := commandButtonState(commandButtonName(gad.Name), f, paged)
+		command, isCommand := commandGadgetVerdict(gad, f, paged)
 		if isCommand && command.hidden {
 			// A hidden command button is one the switch deactivates outright —
 			// LOAD without the transport bit, BLAST with it [07 R-HUD-03 §6].
@@ -1391,6 +1391,33 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, offse
 	}
 }
 
+// commandPageIsPaged reports the selected builder's page-shown bit (status bit
+// 22) off the committed frame [07 §9]. BUILD stages from that bit and ORDERS
+// from its inverse [07 R-HUD-03 §6].
+//
+// Every caller derives it again from the frame it is acting on rather than
+// keeping a copy, so the painter, the pointer pass and the click path cannot
+// drift apart and nothing about a gadget is latched [I6].
+func commandPageIsPaged(f *frame.Frame) bool {
+	if f == nil || f.CommandPage.Builder == 0 {
+		return false
+	}
+	builder, found := snapshotUnitByHandle(f, f.CommandPage.Builder)
+	if !found {
+		return false
+	}
+	return hud.IsPaged(builder.Flags)
+}
+
+// commandGadgetVerdict resolves one authored gadget against the command-button
+// stage and grey table [07 R-HUD-03 §6]. It is the single decision the painter,
+// the pointer pass and the click path all consult, so what a button looks like
+// and whether it responds can never disagree. The second result is false for a
+// gadget the table does not name — a product slot, NEXT/PREV, a label.
+func commandGadgetVerdict(gad gui.Gadget, f *frame.Frame, paged bool) (commandButtonVerdict, bool) {
+	return commandButtonState(commandButtonName(gad.Name), f, paged)
+}
+
 // commandButtonNames are the gadget names of the command-button stage and grey
 // table [07 R-HUD-03 §6]. Every one of them is authored with the side's
 // nameprefix in stock content — ARMONOFF, CORMOVEORD, ARMUNLOAD — the same
@@ -1430,10 +1457,14 @@ type commandButtonVerdict struct {
 // second result is false when the name is not a command button at all.
 //
 // The stance and pair values come from the committed selection aggregate the
-// command-window switch computes [07 §9]. A stance field greys at 4 and a
-// cloak/on-off pair at 3, which are the values each fold starts from — so a
-// selection containing nothing that accepts the command greys its button, and a
-// disagreeing selection stages from the disagreement value instead.
+// command-window switch computes [07 §9][07 R-HUD-03 §13]. A stance field greys
+// at 4 and a cloak/on-off pair at 3: both are the not-applicable value their
+// fold starts from, so a selection carrying nothing that accepts the command
+// greys its button. A disagreeing selection folds to one below that instead — 3
+// and 2 — which stages the generic orders plate rather than greying.
+//
+// The capability folds are a disjunction, so a button greys only when no
+// selected unit can perform its command [07 R-HUD-03 §13].
 func commandButtonState(name string, f *frame.Frame, paged bool) (commandButtonVerdict, bool) {
 	if name == "" || f == nil {
 		return commandButtonVerdict{}, false
@@ -1607,13 +1638,34 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 	if b != nil {
 		offset = int32(b.battleState().PanelOffset)
 	}
+	paged := commandPageIsPaged(f)
 	for i, gad := range window.Gadgets {
 		if i == 0 || gad.Active == 0 || gad.GrayedOut != 0 || gad.Kind != gui.KindButton {
+			continue
+		}
+		// The painter's verdict decides the click too. Greying a command button
+		// from the selection aggregate [07 R-HUD-03 §6] does not touch the
+		// authored gadget, so the authored-grey test above cannot see it, and a
+		// button drawn greyed used to act on a click anyway.
+		command, isCommand := commandGadgetVerdict(gad, f, paged)
+		if isCommand && command.hidden {
+			// A hidden command button is deactivated outright — LOAD without the
+			// transport bit, BLAST with it [07 R-HUD-03 §6]. Hidden gadgets are
+			// skipped before the hit test [07 R-WGT-01 §1], so one neither acts
+			// nor shields whatever lies behind it.
 			continue
 		}
 		r := window.PlacedRect(i)
 		r.Y += offset
 		if !guiRectContains(r, x, y) {
+			continue
+		}
+		if isCommand && command.grey {
+			// "Greyed buttons ignore everything" [07 R-WGT-01 §3]: the grey test
+			// runs before any activation effect [07 §3], so a greyed button takes
+			// no capture and fires nothing. It is still hit-tested — only hidden
+			// gadgets are skipped before that — so it does not fire and the pass
+			// simply goes on to the gadgets after it [07 R-WGT-01 §1].
 			continue
 		}
 		upperName := strings.ToUpper(gad.Name)
@@ -1750,8 +1802,15 @@ func (h *retailBattleHUD) hitTestFor(b *battleSession, x, y int32) bool {
 	if b != nil {
 		offset = int32(b.battleState().PanelOffset)
 	}
+	paged := commandPageIsPaged(f)
 	for i, gad := range window.Gadgets {
 		if i == 0 || gad.Active == 0 || gad.GrayedOut != 0 || gad.Kind != gui.KindButton {
+			continue
+		}
+		// Neither a greyed nor a hidden command button is an activation target
+		// [07 R-WGT-01 §3][07 R-HUD-03 §6], so neither reports a hit here — the
+		// same reading the authored-grey test above already applies.
+		if command, isCommand := commandGadgetVerdict(gad, f, paged); isCommand && (command.grey || command.hidden) {
 			continue
 		}
 		r := window.PlacedRect(i)
@@ -1783,8 +1842,15 @@ func (h *retailBattleHUD) buttonAt(b *battleSession, x, y int32) int {
 	if b != nil {
 		offset = int32(b.battleState().PanelOffset)
 	}
+	paged := commandPageIsPaged(f)
 	for i, gad := range window.Gadgets {
 		if i == 0 || gad.Active == 0 || gad.GrayedOut != 0 || gad.Kind != gui.KindButton {
+			continue
+		}
+		// A greyed button takes no capture and a hidden one is skipped before
+		// the hit test [07 R-WGT-01 §3][07 R-WGT-01 §1], so neither can be the
+		// gadget a press and its release identify.
+		if command, isCommand := commandGadgetVerdict(gad, f, paged); isCommand && (command.grey || command.hidden) {
 			continue
 		}
 		r := window.PlacedRect(i)
@@ -1878,6 +1944,30 @@ func (h *retailBattleHUD) windowForRequired(b *battleSession, f *frame.Frame) (*
 		// display GEN for stale/malformed builder state [07 §9].
 		return nil, nil, nil
 	}
+	// Divergence, stated rather than papered over. Retail's switch reads the
+	// builder's page-shown bit first: page 0 with that bit clear is the *orders*
+	// state and opens "%sGEN.GUI" from the side's nameprefix, and only a page
+	// N >= 1 composes "%s%d.GUI" — ARMCOM1.GUI is page 1 [07 R-HUD-03 §6]. (Page
+	// 0 can also compose a page window when the definition's word A bit 31 is
+	// set, which is written by probing guis/<internal name>0.GUI at definition
+	// load; the reference install ships no such file for any unit, so stock
+	// content never takes that branch and none is written here.)
+	//
+	// The switch below opens a page for every selected builder, so a builder
+	// whose bit is clear shows its first build page while ORDERS stages as the
+	// selected half of the pair — the inconsistency report 6 saw. It cannot be
+	// corrected here alone: the committed page state has no slot for the orders
+	// page. `CommandPage.PageCount` is published as the number of authored build
+	// pages and `Page` as a 0-based index into them, with the products for index
+	// p published as build-menu entries p*6..p*6+5, so the unpaged state has to
+	// double as build page 1 and a builder with a single page (every factory)
+	// has no other reachable state at all. Retail's convention is the one its own
+	// digit rule implies — "digit d selects page d-1" [07 R-HUD-03 §6], which
+	// `hud.DigitToPage` already implements — namely page-count = authored pages +
+	// 1, page 0 the orders window, page N the entries (N-1)*6..N*6-1. Moving the
+	// published page state onto that convention is a change to
+	// internal/session/publish.go, which this unit does not own; the switch here
+	// is one line once it lands.
 	def, ok := h.defFor(&view)
 	if !ok || def == nil || !def.Builder {
 		return nil, nil, nil
