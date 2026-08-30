@@ -77,24 +77,12 @@ func unitPortHandlers(vm *cob.VM, u *Unit) map[cob.Port]func([]int32) int32 {
 	}
 	bindUnitPort(cob.Port(19), func() bool { return u.BuggerOff }, func(v bool) { u.BuggerOff = v })
 	bindUnitPort(cob.Port(20), func() bool { return u.Armored }, func(v bool) { u.Armored = v })
-	// Port 1 is the activation edge input. The callback starts the authored
-	// lifecycle script only on an actual edge; engine-side activation raises
-	// use the same named callbacks elsewhere in construction/economy [R-P0-10].
+	// Port 1 is the activation edge input. The write arm shares one edge
+	// semantics with every engine-side producer, so it defers to the single
+	// edge setter instead of writing the bit itself [04 R-UNIT-06 §2].
 	ports[cob.Port(1)] = func(args []int32) int32 {
 		if len(args) >= 2 {
-			on := args[1]&1 != 0
-			if on != u.Activated {
-				u.Activated = on
-				callbackVM := vm
-				if callbackVM == nil {
-					callbackVM = u.Script
-				}
-				if callbackVM != nil && on {
-					_ = callbackVM.StartByName("Activate", nil)
-				} else if callbackVM != nil {
-					_ = callbackVM.StartByName("Deactivate", nil)
-				}
-			}
+			u.setActivationEdge(args[1]&1 != 0, vm)
 			return 0
 		}
 		if u.Activated {
@@ -339,6 +327,39 @@ func (u *Unit) AttachCOBBinding(binding *cob.Binding) error {
 	u.ScriptState = &ScriptState{VM: binding.VM, Binding: binding}
 	u.Script = binding.VM
 	return nil
+}
+
+// NotifyExtractorFootprint starts the creation-time extractor `SetSpeed`
+// callback [05 R-PROD-01 §6][04 R-COB-04 §9].
+//
+// Immediately after a creation path stores the sampled extraction rate — and
+// only when the unit has a script VM — the creator starts a deferred
+// `SetSpeed` carrying the footprint metal accumulator sign-extended from
+// sixteen bits: the summed metal-map value under the stamped footprint, one
+// metal byte plus one per covered cell. That is what stock extractor scripts
+// use to size their animation rate; `armmex` stores the argument scaled and
+// spins its top piece at that speed, so a unit that never receives the
+// callback keeps the zero its `Create` wrote and its spin issues a per-tick
+// step of zero [04 §4.6 "zero-speed and zero-decel"].
+//
+// Every creation path that samples the footprint must call this, and must call
+// it after `Create` has run: `Create` is what zeroes the script's speed
+// variable in the stock scripts, so an earlier notification would be
+// overwritten.
+func (u *Unit) NotifyExtractorFootprint(footprintSum uint16) {
+	if u == nil {
+		return
+	}
+	// Sign extension from sixteen bits is the callback's own contract, applied
+	// by cob.SetSpeedFootprint; a sum of 0x8000 or more arrives negative
+	// [04 R-COB-04 §9].
+	if binding := u.COBBinding(); binding != nil && binding.Callbacks != nil {
+		binding.Callbacks.SetSpeedFootprint(int32(footprintSum))
+		return
+	}
+	if vm := u.GetScript(); vm != nil {
+		_ = vm.StartByName("SetSpeed", []int32{cob.SetSpeedFootprint(int32(footprintSum))})
+	}
 }
 
 // COBBinding returns the strict production binding attached to the unit, or

@@ -336,12 +336,63 @@ func (u *Unit) EconomyOperational() bool {
 	return u.EconomyActive()
 }
 
-// SetActivated toggles activation for OnOffable units [05] [P1-I04].
-func (u *Unit) SetActivated(on bool) {
-	if u == nil {
+// SetActivationEdge is the single writer of the unit's activation state — bit
+// 0 of retail's one engine-state byte [04 R-UNIT-06 §2]. The state is written
+// FIRST and only an actual change is an edge; producer-side suppression of an
+// unchanged value is exactly that change test and nothing more. On the rising
+// edge the COB `Activate` callback is started asynchronously (deferred, no
+// arguments) and engine notification 3 is emitted; on the falling edge
+// `Deactivate` and notification 4.
+//
+// Every producer routes through here so the bit has exactly one writer and
+// cannot drift: the `Activate`/`Deactivate` order handlers [04 R-ORD-01 §2],
+// the COB port-1 write arm [04 §4.7], construction's `activatewhenbuilt`
+// completion and pre-built creation sites [04 R-SPEC-01 §12], and the
+// per-player settlement-pass activation toggles [04 R-UNIT-06 §2].
+func (u *Unit) SetActivationEdge(on bool) {
+	u.setActivationEdge(on, nil)
+}
+
+// setActivationEdge is SetActivationEdge with an explicit VM for the port-1
+// arm, which is installed before the strict binding is attached and therefore
+// has a live VM the unit record cannot yet reach [04 §4.1][04 §4.7].
+func (u *Unit) setActivationEdge(on bool, vm *cob.VM) {
+	if u == nil || on == u.Activated {
 		return
 	}
 	u.Activated = on
+	// TODO(question): the edge emits engine notification code 3 (rising) or 4
+	// (falling) [04 R-UNIT-06 §2] and the unit record has no status-cue sink to
+	// carry them. What would settle it: the presentation channel that drains
+	// engine notification codes, which doc 03/07 has not yet named. Do not
+	// invent a sink here.
+	if binding := u.COBBinding(); binding != nil && binding.Callbacks != nil {
+		if on {
+			binding.Callbacks.Activate()
+		} else {
+			binding.Callbacks.Deactivate()
+		}
+		return
+	}
+	callbackVM := vm
+	if callbackVM == nil {
+		callbackVM = u.GetScript()
+	}
+	if callbackVM == nil {
+		return
+	}
+	if on {
+		_ = callbackVM.StartByName("Activate", nil)
+		return
+	}
+	_ = callbackVM.StartByName("Deactivate", nil)
+}
+
+// SetActivated toggles activation for OnOffable units [05] [P1-I04]. It is a
+// thin alias for the one edge setter above; retail has no second activation
+// writer [04 R-UNIT-06 §2].
+func (u *Unit) SetActivated(on bool) {
+	u.SetActivationEdge(on)
 }
 
 // SetYardOpenTransaction installs the optional port-18 transaction callback.
@@ -380,9 +431,20 @@ func (u *Unit) InitEconomyState() {
 	if u == nil || u.Def == nil {
 		return
 	}
-	if u.Def.OnOffable {
-		u.Activated = u.Def.ActivateWhenBuilt
+	if u.Def.OnOffable || u.Def.ActivateWhenBuilt {
+		// A unit is created INACTIVE. `activatewhenbuilt` is not a creation-time
+		// copy of the bit: it raises the edge through the shared setter at
+		// pre-built creation and again at build completion, without consulting
+		// `onoffable` [04 R-SPEC-01 §12]. Pre-setting the bit here suppressed
+		// both edges, so a completed mex never ran its `Activate` script.
+		u.Activated = false
 	} else {
+		// A definition with neither key can never be toggled [04 R-SPEC-01 §11]
+		// and nanolathe treats it as permanently on, because the economy branch
+		// gate reads this bit for every definition. [05 R-PROD-01 §2] says such
+		// a definition "never activates and never runs any generator"; making
+		// that literal is an economy change outside WU-16-3 [PLAN_16 §WU-16-3 C4]
+		// and it would silence the upkeep of 122 stock definitions.
 		u.Activated = true
 	}
 	u.IsCloaked = u.Def.InitCloaked
@@ -898,6 +960,14 @@ func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed)
 		w.pool.Free(h)
 		return 0, fmt.Errorf("units: strict COB binding for %q: %w", def.UnitName, err)
 	} // per-unit VM with statics/pieces, Create run [04 §4.1][P1-I01]
+	// Pre-built creation site of `activatewhenbuilt`: the flag raises the
+	// activation edge through the shared setter, without consulting
+	// `onoffable`, after placement and before the unit is counted, so the
+	// `Activate` callback runs at creation [04 R-SPEC-01 §12]. Construction
+	// lowers it again when the record is demoted to a nanoframe.
+	if def.ActivateWhenBuilt {
+		u.SetActivationEdge(true)
+	}
 	w.liveCounters[player]++
 	if w.OnCreate != nil {
 		w.OnCreate(h, u)
@@ -1005,6 +1075,11 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 		w.pool.Free(h)
 		return 0, fmt.Errorf("units: strict COB binding for %q: %w", def.UnitName, err)
 	} // [P1-I01] VM per-unit for forced slot
+	// Pre-built creation site of `activatewhenbuilt` [04 R-SPEC-01 §12]; see
+	// the note on the ordinary allocation path above.
+	if def.ActivateWhenBuilt {
+		u.SetActivationEdge(true)
+	}
 	w.liveCounters[player]++
 	if w.OnCreate != nil {
 		w.OnCreate(h, u)

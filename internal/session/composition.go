@@ -383,6 +383,20 @@ func applySchemaStrict(terrain *world.Terrain, cat *content.Catalog, m *mission.
 	if err := terrain.ApplySchema(mh, idx); err != nil {
 		return fmt.Errorf("session: ApplySchema: %w", err)
 	}
+	// The uniform seed is not the whole story: indestructible metal-bearing
+	// features overwrite the byte across their footprint, and that pass runs
+	// after the feature stamps [05 R-FEAT-01 §7] — an explicit correction to
+	// the earlier "canonical maps keep the uniform seed everywhere" reading of
+	// [05 R-PROD-01 §6]. Terrain-file features are already stamped by
+	// world.Load before this point, so the deposits they carry seed here.
+	//
+	// The pass runs once per placement source: here for the terrain-file
+	// stamps, and again after each mission/skirmish feature-placement helper.
+	// Re-running it is idempotent — every anchor rewrites the same byte over
+	// the same footprint, and no reader of the byte sits between the calls —
+	// so the composed result is the single trailing pass over the finished
+	// plot that [05 R-FEAT-01 §7] describes.
+	terrain.SeedFeatureMetalDeposits()
 	return nil
 }
 

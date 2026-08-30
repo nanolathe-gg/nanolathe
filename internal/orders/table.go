@@ -72,8 +72,8 @@ type Descriptor struct {
 var batch1 = []Descriptor{
 	{Name: "Stop", StateLabel: "Stopping", Class: 0x00, AckGroup: 19, StaticGate: 0x0, Presentation: HelperNone},
 	{Name: "Attack_NoMove", StateLabel: "Attacking", Class: 0x08, AckGroup: 1, StaticGate: 0x280, Presentation: HelperGoalResolveAck},
-	{Name: "Activate", StateLabel: "Activate", Class: 0x00, AckGroup: 19, StaticGate: 0x10060, Presentation: HelperNone},
-	{Name: "Deactivate", StateLabel: "Deactivate", Class: 0x00, AckGroup: 19, StaticGate: 0x10060, Presentation: HelperNone},
+	{Name: "Activate", StateLabel: "Activate", Class: 0x00, AckGroup: 19, StaticGate: 0x10060, Presentation: HelperNone, Handler: activateHandler},
+	{Name: "Deactivate", StateLabel: "Deactivate", Class: 0x00, AckGroup: 19, StaticGate: 0x10060, Presentation: HelperNone, Handler: deactivateHandler},
 	{Name: "Cloak_On", StateLabel: "Cloaking", Class: 0x00, AckGroup: 19, StaticGate: 0x10060, Presentation: HelperNone},
 	{Name: "Cloak_Off", StateLabel: "Decloaking", Class: 0x00, AckGroup: 19, StaticGate: 0x10060, Presentation: HelperNone},
 	{Name: "Standing_MoveOrder", StateLabel: "Acknowledged", Class: 0x00, AckGroup: 19, StaticGate: 0x10060, Presentation: HelperNone},

@@ -236,6 +236,7 @@ var float64ExemptFiles = map[string]string{
 	"internal/movement/integrate.go":       "I2 ground follower goal-point bearing and route-distance/lookahead hypot temporaries [04 R-MOV-01 §2][04 R-MOV-01 §3][04 R-MOV-03 §2][04 R-PATH-01 §8]",
 	"internal/combat/aim.go":               "I2 ballistic discriminant, acos, sqrt [06 §3.3]",
 	"internal/combat/impact.go":            "I2 area-damage range sqrt, float64 transient truncated to int32 [06 §9.3]",
+	"internal/orders/callbacks.go":         "I2 StartBuilding first-argument bearing: atan2 of the builder-minus-target delta, the compiled 65536/2*pi scale and its round-half-even store, narrowed at the uint16 script-argument boundary [04 R-CB-01 §3]",
 	"internal/sim/numeric/trig.go":         "I2 simulation trig-table construction, float64 transient [04 §5.1]",
 	"internal/save/boxes.go":               "I2/I13 save float boxes: the game-time save box and account doubles are byte-layout contracts",
 	"internal/save/bank.go":                "I13 HAPIBANK account record doubles are a byte-layout contract",
@@ -482,7 +483,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/combat/target.go":                3,
 		"internal/construction/approach.go":        6,
 		"internal/construction/capture.go":         4,
-		"internal/construction/factory.go":         17,
+		"internal/construction/factory.go":         16, // -1: the retired FlagActivated placeholder took its TODO with it (PLAN_16 WU-16-3)
 		"internal/construction/reclaim.go":         1,
 		"internal/construction/reverse.go":         1,
 		"internal/economy/ledger.go":               3,
@@ -530,7 +531,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/sim/numeric/trig.go":             1,
 		"internal/sim/rng/rng.go":                  1,
 		"internal/units/types.go":                  1,
-		"internal/units/units.go":                  7,
+		"internal/units/units.go":                  8, // +1: the activation edge has no status-cue sink [04 R-UNIT-06 §2] (PLAN_16 WU-16-3)
 		"internal/visibility/fog.go":               1,
 		"internal/visibility/publish.go":           1, // LOS group-0 record content is Unknown [03 R-COMP-02 §1]
 		"internal/world/feature_stamp.go":          1,

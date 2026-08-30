@@ -91,11 +91,15 @@ const (
 
 // Flags on units.Unit.Flags for COB edges [04 §4.4] [05].
 const (
-	FlagActivated     uint32 = 1 << 0     // activate edge placeholder [05 "Factory production lifecycle"] TODO(question): exact bit not located
+	// The activation edge has no flag here. Bits 0 and 1 of this word were a
+	// placeholder second copy of the activated bit that drifted from the
+	// authoritative one; retail keeps a single engine-state byte written
+	// through a single edge machine [04 R-UNIT-06 §2], which nanolathe models
+	// as units.Unit.Activated with units.Unit.SetActivationEdge as its one
+	// writer — the same bit the economy branch gate reads [05 R-PROD-01 §2].
 	FlagCompleted     uint32 = 0x00002000 // completion marker in the instance flag word [R-P0-09]
 	FlagInitCloak     uint32 = 0x00004000 // init-cloak posture in the instance flag word [R-P0-09]
 	FlagStartBuilding uint32 = 1 << 2     // start-building edge [05]
-	FlagDeactivate    uint32 = 1 << 1     // deactivate edge [05 C21]
 )
 
 // Damage constants [05 "Cancel-current and stop interrupts"] C21.
@@ -664,6 +668,14 @@ func yardSelects(yard world.YardCell, open bool) bool {
 // its current yard state. The global clear pass precedes the global stamp pass
 // so an accepted yard transition preserves retail's clear-then-restamp order
 // [04 R-COLL-01 §4].
+//
+// Retail writes one ground word per cell. Nanolathe splits that plane in two —
+// the terrain plot cell read by the placement validator, and the movement
+// occupancy grid read by the mover commit and the path search — so both must
+// follow the yard state together. A building that released its `c`/`C` pad in
+// the plot alone still held it in the grid, and the exit-spot query of
+// [04 R-FAC-02 §5] (null self identity, so the producer's own stamp blocks it)
+// rejected every product forever.
 func (s *Service) stampBuilding(product pool.Handle, record placementRecord, open bool) {
 	if s == nil || s.Terrain == nil || product == 0 || uint64(product) > uint64(^uint16(0)>>1) {
 		return
@@ -673,6 +685,20 @@ func (s *Service) stampBuilding(product pool.Handle, record placementRecord, ope
 		return
 	}
 	id := int16(product)
+	var grid *movement.OccupancyGrid
+	if s.Movement != nil {
+		grid = s.Movement.Grid // nil-safe: every OccupancyGrid method tolerates a nil receiver
+	}
+	gridID := int(product)
+	// TODO(T25): movement's EnsureUnit stamps a completed building's WHOLE
+	// footprint into the grid, and it runs after this normalization on both the
+	// completion path and the load path. Cells the yard map never selects
+	// ('Y', 'y', '.' — [04 R-COLL-01 §4]) therefore stay held in the grid while
+	// the plot has them free, until the building's first yard transition clears
+	// them here. Blocked item: EnsureUnit is owned by internal/movement, which
+	// this unit may not modify. Placeholder: normalize every cell we are called
+	// for and accept the residual on never-selected cells; the fix is for
+	// EnsureUnit to stamp building-class units by yard selection.
 	// First release every self-owned cell no longer selected by the new state.
 	for z := record.rect.MinZ(); z < record.rect.MaxZ(); z++ {
 		for x := record.rect.MinX(); x < record.rect.MaxX(); x++ {
@@ -681,8 +707,13 @@ func (s *Service) stampBuilding(product pool.Handle, record placementRecord, ope
 				continue
 			}
 			y := yard[int((z-record.rect.MinZ())*record.rect.Width()+(x-record.rect.MinX()))]
-			if !yardSelects(y, open) && cell.OccupantA() == id {
-				cell.SetOccupantA(0)
+			if !yardSelects(y, open) {
+				if cell.OccupantA() == id {
+					cell.SetOccupantA(0)
+				}
+				// Clear only touches cells this identity holds, which is the
+				// plot's self-owned test in the other layer [04 R-COLL-01 §4].
+				grid.Clear(movement.Cell{X: x, Z: z}, 1, 1, gridID)
 			}
 		}
 	}
@@ -695,8 +726,13 @@ func (s *Service) stampBuilding(product pool.Handle, record placementRecord, ope
 				continue
 			}
 			y := yard[int((z-record.rect.MinZ())*record.rect.Width()+(x-record.rect.MinX()))]
-			if yardSelects(y, open) && (cell.OccupantA() == 0 || cell.OccupantA() == id) {
-				cell.SetOccupantA(id)
+			if yardSelects(y, open) {
+				if cell.OccupantA() == 0 || cell.OccupantA() == id {
+					cell.SetOccupantA(id)
+				}
+				// Stamp refuses a cell another identity holds, which is the
+				// plot's foreign-word test in the other layer [04 R-COLL-01 §4].
+				grid.Stamp(movement.Cell{X: x, Z: z}, 1, 1, gridID)
 			}
 			if y&0x01 != 0 {
 				cell.SetStructureYard(true)
@@ -794,6 +830,13 @@ func (s *Service) releaseFrameStamps(product pool.Handle) bool {
 	}
 	if s.Terrain != nil && uint64(product) <= uint64(^uint16(0)>>1) {
 		id := int16(product)
+		// The leaving identity releases both halves of Nanolathe's split ground
+		// plane, exactly as it took them in stampBuilding [04 R-COLL-01 §4].
+		var grid *movement.OccupancyGrid
+		if s.Movement != nil {
+			grid = s.Movement.Grid // nil-safe: every OccupancyGrid method tolerates a nil receiver
+		}
+		gridID := int(product)
 		var yard []world.YardCell
 		if record.def != nil && !record.def.BMCode {
 			yard, _ = buildingYard(record.def, record.rect)
@@ -807,6 +850,7 @@ func (s *Service) releaseFrameStamps(product pool.Handle) bool {
 				if cell.OccupantA() == id {
 					cell.SetOccupantA(0)
 				}
+				grid.Clear(movement.Cell{X: x, Z: z}, 1, 1, gridID)
 				if len(yard) != 0 {
 					y := yard[int((z-record.rect.MinZ())*record.rect.Width()+(x-record.rect.MinX()))]
 					if y&0x01 != 0 {
@@ -1191,6 +1235,11 @@ func (s *Service) validatePlacement(self pool.Handle, rect world.FootprintRect, 
 	// The carried-position setter stamps the ordinary movement grid. State 2
 	// uses null self identity, so the first product's retained pad stamp blocks
 	// the next product until it crosses a cell boundary [04 R-FAC-02 §5-§6].
+	// The null identity stays: there is no producer/product exemption, and an
+	// "ignore the factory" arm here would also admit a product onto a closed
+	// yard. What makes a legal exit legal is the producer no longer holding the
+	// cells its open yard released — stampBuilding now follows the yard state in
+	// this layer too [04 R-FAC-02 §5][04 R-COLL-01 §4].
 	if def != nil && def.BMCode && s.Movement != nil && s.Movement.Grid != nil {
 		anchor := movement.Cell{X: rect.MinX(), Z: rect.MinZ()}
 		if !s.Movement.Grid.CanOccupy(anchor, int16(rect.Width()), int16(rect.Depth()), 0) {
@@ -1268,8 +1317,12 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, r
 		// Extractor yield is sampled once at placement and stored on the product
 		// [P1-10][P1-15]: Σ(cellMetal+1)*extractsMetal, never resampled.
 		if prod != nil && def.ExtractsMetal != 0 && s.Terrain != nil {
-			if v, err := s.Terrain.SampleMetal(rect.MinX(), rect.MinZ(), int(def.FootprintX), int(def.FootprintZ), float32(def.ExtractsMetal)); err == nil {
+			if v, sum, err := s.Terrain.SampleMetalWithFootprintSum(rect.MinX(), rect.MinZ(), int(def.FootprintX), int(def.FootprintZ), float32(def.ExtractsMetal)); err == nil {
 				prod.SpotMetal = v // once, never resampled [P1-10]
+				// The creator then hands the raw footprint accumulator to the
+				// script so the extractor can size its animation
+				// [05 R-PROD-01 §6][04 R-COB-04 §9].
+				prod.NotifyExtractorFootprint(sum)
 			}
 		}
 		if prod != nil {
@@ -1302,8 +1355,10 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, r
 	// Extractor yield is sampled once at placement and stored on the product
 	// [P1-10][P1-15]: Σ(cellMetal+1)*extractsMetal, never resampled.
 	if def.ExtractsMetal != 0 && s.Terrain != nil {
-		if v, err := s.Terrain.SampleMetal(rect.MinX(), rect.MinZ(), int(def.FootprintX), int(def.FootprintZ), float32(def.ExtractsMetal)); err == nil {
+		if v, sum, err := s.Terrain.SampleMetalWithFootprintSum(rect.MinX(), rect.MinZ(), int(def.FootprintX), int(def.FootprintZ), float32(def.ExtractsMetal)); err == nil {
 			prod.SpotMetal = v // once, never resampled [P1-10]
+			// Footprint accumulator to the script [05 R-PROD-01 §6][04 R-COB-04 §9].
+			prod.NotifyExtractorFootprint(sum)
 		}
 	}
 	return prod, nil
@@ -1320,6 +1375,15 @@ func initializeNanoframe(prod *units.Unit, def *content.UnitDef) {
 	prod.MaxHealth = int32(def.MaxDamage)
 	prod.InBuildStance = false
 	prod.Alive = true
+	// A nanoframe is created INACTIVE. The allocator ran the *pre-built*
+	// creation path, which raises the activation edge for an
+	// `activatewhenbuilt` definition [04 R-SPEC-01 §12]; demoting the record to
+	// an unfinished frame has to take that back, or completion's raise is not
+	// an edge and the `Activate` script never starts [04 R-UNIT-06 §2].
+	// Written directly, not through the edge setter: the frame has no lifecycle
+	// to run down, and the pre-built raise it undoes is not a state the unit
+	// ever occupied.
+	prod.Activated = false
 }
 
 // successEpilogue performs the success sequence after allocation [05 C18].
@@ -1398,11 +1462,22 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 
 // startBuilding/stopBuilding are edge helpers. The bridge owns callback mode
 // and argument shape; construction only changes the cached edge bit [04 §5.3].
-// startBuilding issues the slot-form heading variant, which per the corrected
-// section is a construction-command producer that starts the slot and emits
-// its network event WITHOUT touching the order record's StopBuilding-pending
-// flag — exactly one writer of that flag exists, the order-record emitter
-// orders.EmitStartBuilding [R-ORDER-02 §2].
+// startBuilding issues the slot-form heading variant: the construction-command
+// producer, which carries the PRODUCER'S OWN current heading as the script's
+// first argument [04 §2.3b] rather than the relative bearing to a work target
+// that the order-record emitter passes [04 R-CB-01 §3]. Those are two
+// different arguments and this site keeps its own.
+//
+// The order-record emitter orders.EmitStartBuilding stays the only writer of
+// the StopBuilding-pending flag here [R-ORDER-02 §2]. Note that
+// [04 R-CB-01 §3] correction 2 withdrew the reading that made the slot form a
+// separate function from the emission helper — retail's producer census finds
+// one function, and its last act is to OR the pending flag into the order
+// record. This helper has no order record to flag, so it cannot mirror that
+// half yet.
+// TODO(question): whether a Nanolathe construction-command start should route
+// through the order record and set the pending flag, given [04 R-CB-01 §3]
+// correction 2 collapses the two variants into one retail function.
 func (s *Service) startBuilding(u *units.Unit) {
 	if u == nil || u.Flags&FlagStartBuilding != 0 {
 		return
@@ -1423,24 +1498,19 @@ func (s *Service) stopBuilding(u *units.Unit) {
 	}
 }
 
+// activate and deactivate are construction's two producers of the activation
+// edge. They hold no state of their own: retail keeps one engine-state byte
+// written through one edge machine, and the change test in that machine is the
+// only suppression of an unchanged value [04 R-UNIT-06 §2]. The former local
+// FlagActivated/FlagDeactivate mirror of bit 0 was a second copy that drifted
+// from units.Unit.Activated — the bit the economy branch gate actually reads
+// [05 R-PROD-01 §2] — whenever an order, a script or the AI toggled the unit.
 func (s *Service) activate(u *units.Unit) {
-	if u == nil || u.Flags&FlagActivated != 0 {
-		return
-	}
-	u.Flags |= FlagActivated
-	if binding := u.COBBinding(); binding != nil && binding.Callbacks != nil {
-		binding.Callbacks.Activate()
-	}
+	u.SetActivationEdge(true)
 }
 
 func (s *Service) deactivate(u *units.Unit) {
-	if u == nil || u.Flags&(FlagActivated|FlagDeactivate) == 0 {
-		return
-	}
-	u.Flags &^= FlagActivated | FlagDeactivate
-	if binding := u.COBBinding(); binding != nil && binding.Callbacks != nil {
-		binding.Callbacks.Deactivate()
-	}
+	u.SetActivationEdge(false)
 }
 
 // copyStandingFlags is the recovered initial standing-field merge guard. The
@@ -1848,6 +1918,22 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 		s.handleMobileState2(factory, node, tick)
 		return
 	}
+	// An armed wait is a visit boundary. The blocked exit "schedules a retry in
+	// exactly 15 ticks, sets wake bit 2, and stays"; the allocator refusal takes
+	// the distinct 300-tick wait [05 "Factory production lifecycle"]. Both were
+	// written to the node and then ignored, because this handler re-ran the
+	// whole exit-spot query on every visit: the probe saw an admission attempt
+	// on 1517, 1518, 1519 … instead of one every fifteenth tick. Consuming the
+	// deadline here is the same visit boundary handleMobileState2 already
+	// applies for its 30-tick blocked-area waits; the pump's wake semantics are
+	// untouched [04 §3.3].
+	if node.Deadline >= 0 {
+		if tick < uint32(node.Deadline) {
+			return
+		}
+		node.DynamicGate = 0
+		node.Deadline = -1
+	}
 	// Resolve and classify before arming a retry. Missing definitions,
 	// unresolved movement profiles, and malformed extents are permanent content
 	// failures; only a valid footprint rejected by occupancy/terrain is the
@@ -2117,15 +2203,15 @@ func (s *Service) successEpilogueMobile(builder *units.Unit, node *orders.Node, 
 		pq := orders.BindQueueBinding(product, s.OrderBinding)
 		pq.Push(getBuiltID, orders.Node{Param2: 0})
 	}
-	// Turn the builder to face the build site before construction begins.
-	// Retail computes the bearing from the builder to the site [04 §5.3]; the
-	// exact consumer of that bearing is the open question recorded below, so
-	// the rotation is retained as the builder's approach posture and nothing
-	// more.
-	// TODO(question): whether retail rotates the unit heading itself or leaves
-	// the turn to the script is not traced.
-	heading := movement.HeadingFromDelta(int64(node.GoalX)-int64(builder.X), int64(node.GoalZ)-int64(builder.Z))
-	builder.Move.Heading = heading
+	// No heading snap here. The question this site used to record — whether
+	// retail rotates the unit or leaves the turn to the script — is answered:
+	// "A mobile builder's heading toward the selected build goal is produced by
+	// ordinary movement steering" [04 §2.3b], and the script turns its torso
+	// with the relative bearing the emitter below passes as the first
+	// StartBuilding argument [04 R-CB-01 §3]. Writing Move.Heading straight
+	// from the site delta bypassed the turn clamp and, once the mover's records
+	// carry the allocated heading, would also fight the steering that owns it.
+	//
 	// The MobileBuild/VTOL_MobileBuild handler's StartBuilding emission is the
 	// order-record emitter, one of the nine nanolathe/assist sites [R-ORDER-02
 	// §2]: it arranges the name-form StartBuilding and sets the record's

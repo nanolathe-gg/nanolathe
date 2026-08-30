@@ -275,11 +275,13 @@ func TestPendingBeforeIntegration(t *testing.T) {
 		t.Fatal("after Integrate position should have advanced along heading 100")
 	}
 	// Ensure Integrate used pending heading, not stale
-	// Check that X/Z roughly correspond to heading 100 via fixed trig
+	// Check that X/Z correspond to heading 100 via fixed trig. The step is
+	// vx = -((sin*speed + 0x1000) >> 13), vz = -((cos*speed + 0x1000) >> 13)
+	// [04 R-MOV-01 §4]; the mirror below carried the pre-correction signs.
 	sin := numeric.Sin(numeric.Angle(100))
 	cos := numeric.Cos(numeric.Angle(100))
-	wantX := int32((int64(65536)*int64(sin) + 4096) >> 13)
-	wantZ := int32((int64(65536)*int64(cos) + 4096) >> 13)
+	wantX := -int32((int64(sin)*int64(65536) + 0x1000) >> 13)
+	wantZ := -int32((int64(cos)*int64(65536) + 0x1000) >> 13)
 	if s.X != wantX || s.Z != wantZ {
 		t.Fatalf("integration step X/Z %d/%d want %d/%d heading 100", s.X, s.Z, wantX, wantZ)
 	}

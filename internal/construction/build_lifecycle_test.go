@@ -550,7 +550,8 @@ func TestCancelCurrentRunsCompletionPostureBeforeCause9(t *testing.T) {
 	ph, _ := w.Create(prodDef, 0, 0, 0, 0)
 	factory, product := w.Unit(fh), w.Unit(ph)
 	product.Remaining, product.MaxHealth, product.Health = 0.5, 100, 30
-	factory.Flags = FlagActivated | FlagStartBuilding
+	factory.Activated = true
+	factory.Flags = FlagStartBuilding
 	q := orders.QueueForUnit(factory)
 	q.Push(orders.Lookup("BuildingBuild"), orders.Node{BuildDefKey: prodDef.CanonicalKey, Param2: 2, Phase: uint8(State3), Target: ph})
 	node := q.Primary()[0]
@@ -573,8 +574,8 @@ func TestCancelCurrentRunsCompletionPostureBeforeCause9(t *testing.T) {
 	if product.Remaining != 0 || product.Health != product.MaxHealth || product.Flags&FlagCompleted == 0 || product.Flags&FlagInitCloak == 0 || !product.IsCloaked {
 		t.Fatalf("cancel completion posture missing: remaining=%v health=%d flags=%x cloaked=%t", product.Remaining, product.Health, product.Flags, product.IsCloaked)
 	}
-	if factory.Flags&(FlagActivated|FlagStartBuilding) != 0 || product.Alive {
-		t.Fatalf("cancel edges/death ordering wrong: factory flags=%x alive=%t", factory.Flags, product.Alive)
+	if factory.Activated || factory.Flags&FlagStartBuilding != 0 || product.Alive {
+		t.Fatalf("cancel edges/death ordering wrong: factory activated=%t flags=%x alive=%t", factory.Activated, factory.Flags, product.Alive)
 	}
 	if node.Param2 != 2 {
 		t.Fatalf("cancel decremented queued count to %d", node.Param2)

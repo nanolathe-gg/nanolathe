@@ -157,7 +157,14 @@ func TestFactoryProductionEndToEndRetail(t *testing.T) {
 		t.Fatalf("QueueFactoryBuild %q: %v", productKey, err)
 	}
 
-	prod := waitCompletedUnit(t, sess, stepOne, 6000, func(u *units.Unit) bool {
+	// A lone commander makes 25 energy per settlement pass while the lab's
+	// accepted work draws close to 39, so the first product builds at the
+	// energy-starved rate the two-stage settlement allows [05 "Two-stage
+	// settlement algorithm"]. The exit-spot deadlock this test was written for
+	// now resolves on the first state-2 visit; what remains is that build rate,
+	// which needs roughly 7,500 ticks for ARMCK on the stock economy — the
+	// former 6,000-step budget expired with the product at remaining 0.17.
+	prod := waitCompletedUnit(t, sess, stepOne, 12000, func(u *units.Unit) bool {
 		return u.Def.CanonicalKey == productKey && int(u.Owner) == local
 	})
 	if prod == nil {

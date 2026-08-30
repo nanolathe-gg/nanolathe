@@ -16,6 +16,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
@@ -359,16 +360,38 @@ func TestStopBuildingEmittedOnSecondaryAndCancelRemovals(t *testing.T) {
 }
 
 func TestEmitStartBuildingSetsPendingFlagAndArgs(t *testing.T) {
-	t.Run("arranges (creationTick&0xffff) as the first argument and sets the record flag", func(t *testing.T) {
+	// The first argument is the bearing from the builder to its work target,
+	// relative to the builder's own heading [04 R-CB-01 §3]. It was the
+	// record's CreationTick & 0xffff while the argument was believed to be an
+	// order-record identity; the census of scripts reading it as an angle is
+	// what the correction explains.
+	t.Run("arranges the relative bearing to the work target and sets the record flag", func(t *testing.T) {
 		u, vm := cbUnit(cbProgram("StartBuilding"))
-		n := &Node{ID: Lookup("MobileBuild"), Owner: u.Handle, Deadline: -1, CreationTick: 0x12345678}
+		// Builder at the origin, work target 64 world units toward +X. The
+		// bearing whose position step travels +X is 49152 [04 R-MOV-01 §4].
+		u.X, u.Z = 0, 0
+		u.Move.Heading = 0
+		n := &Node{ID: Lookup("MobileBuild"), Owner: u.Handle, Deadline: -1, CreationTick: 0x12345678,
+			GoalX: numeric.Fixed(64 << 16)}
 		EmitStartBuilding(u, n)
 		args := startedArgs(vm)
-		if len(args) != 1 || !argsEqual(args[0], []int32{0x5678}) {
-			t.Fatalf("StartBuilding arrange %v, want [0x5678]", args)
+		if len(args) != 1 || !argsEqual(args[0], []int32{49152}) {
+			t.Fatalf("StartBuilding arrange %v, want [49152] [04 R-CB-01 §3]", args)
 		}
 		if n.Flags&FlagStopBuildingPending == 0 {
 			t.Fatalf("emitter must set the record's pending flag")
+		}
+	})
+	t.Run("subtracts the builder's own heading", func(t *testing.T) {
+		u, vm := cbUnit(cbProgram("StartBuilding"))
+		u.X, u.Z = 0, 0
+		u.Move.Heading = 49152 // already facing the target
+		n := &Node{ID: Lookup("MobileBuild"), Owner: u.Handle, Deadline: -1,
+			GoalX: numeric.Fixed(64 << 16)}
+		EmitStartBuilding(u, n)
+		args := startedArgs(vm)
+		if len(args) != 1 || !argsEqual(args[0], []int32{0}) {
+			t.Fatalf("StartBuilding arrange %v, want [0]: a builder already facing its target gets a zero relative bearing [04 R-CB-01 §3]", args)
 		}
 	})
 	t.Run("no script: arrange no-ops, flag still set", func(t *testing.T) {

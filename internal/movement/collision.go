@@ -472,16 +472,36 @@ func (s *CollisionState) applyBlockedProposal(proposedX, proposedZ int32) {
 	// R-COLL-01 §2].
 	propX := int64(proposedX)
 	propZ := int64(proposedZ)
-	// cap scalar speed at MaxVelocity/2 if higher [04 §8.2] C24
+	// cap scalar speed at MaxVelocity/2 if higher [04 §8.2] C24; the division
+	// truncates toward zero, which Go's int32 `/` already does.
 	half := s.MaxVelocity / 2
 	if s.Speed > half {
 		s.Speed = half
-		// Recompute horizontal velocity only when the strict half-speed cap fires
-		// [04 R-COLL-01 §2].
+		// Recompute horizontal velocity only when the strict half-speed cap
+		// fires. The blocked branch writes it with the SAME negated form as the
+		// ordinary position step [04 R-COLL-01 §1] "The blocked branch":
+		//
+		//	vx = -sinq(heading, half);  vy = 0;  vz = -cosq(heading, half)
+		//
+		// where sinq/cosq are the 512-entry table lookups with the 0x1000
+		// round-to-nearest addend of [04 R-MOV-01 §4] and `heading` is the
+		// heading the steering step just turned — a blocked unit keeps turning
+		// toward its waypoint at full turn rate while its speed is capped.
+		// (PLAN_16 WU-16-1 step 1 cites this as [04 R-MOV-01 §8]; that section
+		// is the mover-modes correction. The velocity rewrite is owned by
+		// [04 R-COLL-01 §1], with [R-MOV-01 §7]'s blocked-mover correction
+		// pointing at the same trig table.)
+		//
+		// Nothing reads these components before they are overwritten: StepUnit
+		// re-derives VX/VZ from the steer delta at the top of the next tick, and
+		// within this tick the proposal was already formed. The flip is for
+		// contract consistency with the step that produced the proposal, not a
+		// live defect — an unnegated copy here would silently become one the
+		// moment a reader lands between the two writes.
 		sin := numeric.Sin(numeric.Angle(s.Heading))
 		cos := numeric.Cos(numeric.Angle(s.Heading))
-		s.VX = int32((int64(s.Speed)*int64(sin) + 4096) >> 13)
-		s.VZ = int32((int64(s.Speed)*int64(cos) + 4096) >> 13)
+		s.VX = -int32((int64(sin)*int64(s.Speed) + 0x1000) >> 13)
+		s.VZ = -int32((int64(cos)*int64(s.Speed) + 0x1000) >> 13)
 	}
 
 	// clamp X and Z against OLD footprint boundary using 0x7FFFF [04 §8.2] C24

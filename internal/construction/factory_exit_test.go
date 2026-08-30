@@ -9,6 +9,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -298,5 +299,166 @@ func TestExitQueryKeepsAggregates(t *testing.T) {
 	}
 	if _, err := svc.validatePlacement(999, rect, mob, yard, true); err != nil {
 		t.Fatalf("domain-skip query rejected on sloped yard: %v", err)
+	}
+}
+
+// TestYardStateFollowsBothOccupancyLayers locks the split-plane contract: a
+// building holds, in the terrain plot AND in the movement occupancy grid the
+// ground validator reads, exactly the cells its current yard state selects
+// [04 R-COLL-01 §4]. Retail has one ground word per cell; Nanolathe has two
+// layers, and a yard-open transaction that released only the plot left the
+// factory blocking its own exit spot forever [04 R-FAC-02 §5].
+func TestYardStateFollowsBothOccupancyLayers(t *testing.T) {
+	lab := newFactoryDef("exitlab", 4, 4, 300)
+	// 'o' is selected in both yard states, 'c' only while closed, 'y' never
+	// [04 R-COLL-01 §4].
+	lab.YardMap = "yooy occo occo yooy"
+	cat := exitCatalog(lab)
+	cat.Movement["exitmove"].MinWaterDepth = -10000 // land-profile template [04 §6.1]
+	terrain := exitTerrain(24, 24)
+	svc, w := exitService(t, terrain, cat)
+	svc.Movement = &movement.System{Grid: movement.NewOccupancyGrid()}
+
+	h, err := w.Create(lab, 0, world.CellToWorld(8), 0, world.CellToWorld(8))
+	if err != nil {
+		t.Fatalf("create factory: %v", err)
+	}
+	u := w.Unit(h)
+	if err := svc.RegisterBuildingPlacement(u); err != nil {
+		t.Fatalf("RegisterBuildingPlacement: %v", err)
+	}
+	rect, ok := svc.PlacementForProduct(h)
+	if !ok {
+		t.Fatal("building did not retain its placement record")
+	}
+	yard, err := world.ParseYardMap(lab.YardMap, int(rect.Width()), int(rect.Depth()))
+	if err != nil {
+		t.Fatalf("ParseYardMap: %v", err)
+	}
+	// Both layers agree with the yard selection for the state under test.
+	check := func(stage string, open bool) {
+		t.Helper()
+		for z := rect.MinZ(); z < rect.MaxZ(); z++ {
+			for x := rect.MinX(); x < rect.MaxX(); x++ {
+				want := yardSelects(yard[int((z-rect.MinZ())*rect.Width()+(x-rect.MinX()))], open)
+				if got := terrain.PlotAt(x, z).OccupantA() == int16(h); got != want {
+					t.Fatalf("%s: plot cell %d,%d held=%v, want %v", stage, x, z, got, want)
+				}
+				id, held := svc.Movement.Grid.OccupantAt(movement.Cell{X: x, Z: z})
+				if held != want || (held && id != int(h)) {
+					t.Fatalf("%s: grid cell %d,%d held=%v occupant=%d, want held=%v by %d", stage, x, z, held, id, want, h)
+				}
+			}
+		}
+	}
+	check("closed", false)
+
+	// EnsureUnit stamps the whole footprint for a completed building; the
+	// yard-selected normalization must win over it in the grid as it does in
+	// the plot [04 R-COLL-01 §4].
+	if !svc.Movement.Grid.Stamp(movement.Cell{X: rect.MinX(), Z: rect.MinZ()}, int16(rect.Width()), int16(rect.Depth()), int(h)) {
+		t.Fatal("whole-footprint grid stamp refused")
+	}
+	if !svc.YardOpenTransaction(u, true) {
+		t.Fatal("unoccupied yard refused open")
+	}
+	check("open", true)
+
+	if !svc.YardOpenTransaction(u, false) {
+		t.Fatal("unoccupied yard refused close")
+	}
+	check("closed again", false)
+
+	// The exit-spot query is the reader that was deadlocking: with the yard
+	// open the released pad admits a mobile product under null self identity
+	// [04 R-FAC-02 §4-§5], and with it closed it does not.
+	mob := exitMobileDef("exitmob", 2, 2)
+	cat.Units[mob.CanonicalKey] = mob
+	pad := exitRect(rect.MinX()+1, rect.MinZ()+1, 2)
+	padYard := make([]world.YardCell, 4)
+	for i := range padYard {
+		padYard[i] = 0x06
+	}
+	if _, err := svc.validatePlacement(h, pad, mob, padYard, false); err == nil {
+		t.Fatal("closed yard admitted a product onto its own pad")
+	}
+	if !svc.YardOpenTransaction(u, true) {
+		t.Fatal("unoccupied yard refused reopen")
+	}
+	if _, err := svc.validatePlacement(h, pad, mob, padYard, false); err != nil {
+		t.Fatalf("open yard rejected its own released pad: %v", err)
+	}
+
+	// Release drops both layers together.
+	if !svc.ReleasePlacement(h) {
+		t.Fatal("ReleasePlacement reported nothing to release")
+	}
+	for z := rect.MinZ(); z < rect.MaxZ(); z++ {
+		for x := rect.MinX(); x < rect.MaxX(); x++ {
+			if got := terrain.PlotAt(x, z).OccupantA(); got != 0 {
+				t.Fatalf("released plot cell %d,%d occupant=%d", x, z, got)
+			}
+			if _, held := svc.Movement.Grid.OccupantAt(movement.Cell{X: x, Z: z}); held {
+				t.Fatalf("released grid cell %d,%d still held", x, z)
+			}
+		}
+	}
+}
+
+// TestBlockedExitRetriesOnTheFifteenthTick locks C3 / [05 C17]: the silent
+// blocked revalidation "schedules a retry in exactly 15 ticks … and repeats
+// every 15 ticks for as long as the footprint is obstructed". The handler used
+// to re-run the whole exit-spot query on every visit, so the probe recorded an
+// admission attempt on every consecutive tick.
+func TestBlockedExitRetriesOnTheFifteenthTick(t *testing.T) {
+	lab := newFactoryDef("exitlab", 4, 4, 300)
+	mob := exitMobileDef("exitmob", 2, 2)
+	cat := exitCatalog(lab, mob)
+	cat.Movement["exitmove"].MinWaterDepth = -10000 // land-profile template [04 §6.1]
+	terrain := exitTerrain(24, 24)
+	svc, w := exitService(t, terrain, cat)
+
+	hf, err := w.Create(lab, 0, world.CellToWorld(8), 0, world.CellToWorld(8))
+	if err != nil {
+		t.Fatalf("create factory: %v", err)
+	}
+	factory := w.Unit(hf)
+	bindConstructionFixture(factory, trivialModel(1, nil), true)
+	if err := QueueFactoryBuild(factory, "exitmob", 1, cat); err != nil {
+		t.Fatalf("QueueFactoryBuild: %v", err)
+	}
+	// A foreign identity over the snapped exit rectangle keeps state 2 blocked.
+	for _, c := range [][2]int32{{7, 7}, {8, 7}, {7, 8}, {8, 8}} {
+		terrain.PlotAt(c[0], c[1]).SetOccupantA(77)
+	}
+	head := headNodeForTest(factory)
+
+	// The fixture enters with the build stance already high, so state 0 and
+	// state 1 both complete inside the first pass and state 2 runs on the
+	// first pumped tick [05 "Factory production lifecycle"].
+	const start = 100
+	var attempts []uint32
+	for tick := uint32(start); tick <= start+45; tick++ {
+		before := len(svc.AdmissionDiagnostics())
+		svc.Pump(factory, tick)
+		for _, a := range svc.AdmissionDiagnostics()[before:] {
+			attempts = append(attempts, a.Tick)
+		}
+		if head.Target != 0 {
+			t.Fatalf("product allocated despite foreign occupant at tick %d", tick)
+		}
+	}
+	want := []uint32{start, start + 15, start + 30, start + 45}
+	if len(attempts) != len(want) {
+		t.Fatalf("admission attempts %v, want exactly %v [05 C17]", attempts, want)
+	}
+	for i, tick := range want {
+		if attempts[i] != tick {
+			t.Fatalf("admission attempts %v, want %v [05 C17]", attempts, want)
+		}
+	}
+	if head.DynamicGate != WakeBit1|WakeBit2 || head.Deadline != int32(start+60) {
+		t.Fatalf("blocked node gate=%d deadline=%d, want gate=%d deadline=%d",
+			head.DynamicGate, head.Deadline, WakeBit1|WakeBit2, start+60)
 	}
 }

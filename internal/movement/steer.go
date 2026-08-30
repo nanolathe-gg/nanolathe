@@ -403,17 +403,32 @@ func (s *SteerState) Integrate() { // [04 §8.1] C20
 	if s.Dirty {
 		s.Heading = s.PendingHeading
 	}
-	// Position step: X += (Speed * sin(Heading)) / 8192, Z += (Speed * cos(Heading)) / 8192
-	// using the shared 512-entry sine table scaled 8192 [04 §5.1] with round-to-nearest
-	// before truncation as in [04 §5.1] products. Speed is 16.16; sin is 8192-scaled,
-	// so product>>13 yields 16.16 delta.
+	// Position step, exactly as retail writes it [04 R-MOV-01 §4]:
+	//
+	//	vx = -((sin[heading] * speed + 0x1000) >> 13)
+	//	vy = 0
+	//	vz = -((cos[heading] * speed + 0x1000) >> 13)
+	//
+	// The negation is applied AFTER the rounding shift, not folded into the
+	// product, so the two forms are not interchangeable on odd remainders. The
+	// table is the shared 512-entry round(8192*sin) family [04 §5.1]; the
+	// 0x1000 addend is round-to-nearest at that scale, and the shift is
+	// arithmetic.
+	// Speed is 16.16 and the table is 8192-scaled, so product>>13 is a 16.16
+	// delta.
+	//
+	// Consequence of the sign, and the whole point of it: heading 0 steps
+	// toward -Z (up-screen), 16384 toward -X, 32768 toward +Z, 49152 toward +X
+	// [04 R-MOV-01 §4]. A unit's rendered facing therefore agrees with the
+	// direction it travels.
+	//
 	// No reverse branch: Speed is non-negative, so step is forward only [04 §8.1] C20.
 	if s.Speed != 0 {
 		sin := numeric.Sin(numeric.Angle(s.Heading)) // scaled 8192 [04 §5.1]
 		cos := numeric.Cos(numeric.Angle(s.Heading)) // scaled 8192 [04 §5.1]
-		// Use int64 intermediate to avoid overflow; rounding to nearest [04 §5.1]
-		s.X += int32((int64(s.Speed)*int64(sin) + 4096) >> 13)
-		s.Z += int32((int64(s.Speed)*int64(cos) + 4096) >> 13)
+		// int64 intermediate against overflow; round-to-nearest then negate.
+		s.X += -int32((int64(sin)*int64(s.Speed) + 0x1000) >> 13)
+		s.Z += -int32((int64(cos)*int64(s.Speed) + 0x1000) >> 13)
 	}
 	// Dirty remains set; caller may clear if desired. Retail keeps dirty set for the tick.
 }

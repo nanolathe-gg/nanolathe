@@ -360,7 +360,8 @@ func TestRS10_CancelRefundAndLinks(t *testing.T) {
 	factory := w.Unit(h)
 	factory.Def = facDef
 	factory.Owner = 0
-	factory.Flags = FlagDeactivate | FlagStartBuilding
+	factory.Activated = true
+	factory.Flags = FlagStartBuilding
 
 	// Create product with remaining 0.25 => refund trunc((1-0.25)*200)=150
 	hp, _ := w.Create(prodDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
@@ -394,7 +395,7 @@ func TestRS10_CancelRefundAndLinks(t *testing.T) {
 	if svc.LastKill().Damage != 30000 || svc.LastKill().Severity != 0 || !svc.LastKill().NoCorpse {
 		t.Fatalf("kill packet wrong %+v", svc.LastKill())
 	}
-	if factory.Flags&(FlagDeactivate|FlagStartBuilding) != 0 {
+	if factory.Activated || factory.Flags&FlagStartBuilding != 0 {
 		t.Fatalf("callback bits not cleared together")
 	}
 	if q2 := orders.QueueForUnit(factory); q2.LenPrimary() != 0 {

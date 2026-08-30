@@ -313,7 +313,7 @@ func TestBlockedSpeedCapOnlyWhenHigher(t *testing.T) { // [04 §8.2] C24 cap at 
 		X:            0,
 		Z:            0,
 		Speed:        80000,
-		Heading:      0, // north (+Z)
+		Heading:      0, // -Z, up-screen [04 R-MOV-01 §4]
 		MaxVelocity:  80000,
 		FootPrintX:   1,
 		FootPrintZ:   1,
@@ -323,13 +323,20 @@ func TestBlockedSpeedCapOnlyWhenHigher(t *testing.T) { // [04 §8.2] C24 cap at 
 		OldAnchor:    Cell{0, 0},
 	}
 	s3.ApplyBlocked()
-	// speed capped to 40000, heading north => VX ~0, VZ ~40000
+	// Speed capped to 40000; the blocked branch writes the SAME negated form as
+	// the ordinary position step — vx = -sinq(heading, half),
+	// vz = -cosq(heading, half) [04 R-COLL-01 §1] "The blocked branch",
+	// [04 R-MOV-01 §4]. Heading 0 therefore gives VX ~0 and VZ ~-40000; the
+	// mirror below carried the pre-correction signs.
 	sin := numeric.Sin(numeric.Angle(s3.Heading))
 	cos := numeric.Cos(numeric.Angle(s3.Heading))
-	wantVX := int32((int64(s3.Speed)*int64(sin) + 4096) >> 13)
-	wantVZ := int32((int64(s3.Speed)*int64(cos) + 4096) >> 13)
+	wantVX := -int32((int64(sin)*int64(s3.Speed) + 0x1000) >> 13)
+	wantVZ := -int32((int64(cos)*int64(s3.Speed) + 0x1000) >> 13)
+	if s3.VZ >= 0 {
+		t.Fatalf("heading 0 must recompute a blocked velocity toward -Z [04 R-COLL-01 §1], got VZ=%d", s3.VZ)
+	}
 	if s3.VX != wantVX || s3.VZ != wantVZ {
-		t.Fatalf("blocked must recompute velocity at capped speed+heading [04 §8.2] C24, got (%d,%d) want (%d,%d)", s3.VX, s3.VZ, wantVX, wantVZ)
+		t.Fatalf("blocked must recompute velocity at capped speed+heading [04 R-COLL-01 §1], got (%d,%d) want (%d,%d)", s3.VX, s3.VZ, wantVX, wantVZ)
 	}
 }
 

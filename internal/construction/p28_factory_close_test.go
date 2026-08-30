@@ -53,11 +53,15 @@ func p28CompletionFixture(t *testing.T, count int) (*Service, *units.Unit, *unit
 		t.Fatal(err)
 	}
 	factory, product := w.Unit(fh), w.Unit(ph)
-	factory.Flags |= units.BuildingClassStatus | FlagActivated | FlagStartBuilding
+	factory.Flags |= units.BuildingClassStatus | FlagStartBuilding
+	factory.Activated = true
 	factory.InBuildStance = true
 	product.Remaining = 1
 	product.Health = 0
-	product.Flags &^= FlagCompleted | FlagActivated
+	product.Flags &^= FlagCompleted
+	// A nanoframe is created inactive so completion's raise is a real edge
+	// [04 R-SPEC-01 §12][04 R-UNIT-06 §2].
+	product.Activated = false
 	p28FactoryLifecycleBinding(factory)
 	p28FactoryLifecycleBinding(product)
 	q := orders.QueueForUnit(factory)
@@ -98,8 +102,8 @@ func TestP28FactoryFinalIncrementCompletesBeforeStopThenDeactivates(t *testing.T
 	if q := orders.QueueForUnit(factory); q.LenPrimary() != 0 {
 		t.Fatalf("empty-count production node survived: %d", q.LenPrimary())
 	}
-	if factory.Flags&(FlagActivated|FlagStartBuilding) != 0 {
-		t.Fatalf("empty path retained factory edges: flags=%x", factory.Flags)
+	if factory.Activated || factory.Flags&FlagStartBuilding != 0 {
+		t.Fatalf("empty path retained factory edges: activated=%t flags=%x", factory.Activated, factory.Flags)
 	}
 }
 
@@ -121,8 +125,8 @@ func TestP28FactoryCountedSuccessorStaysActiveAndRestartsSamePass(t *testing.T) 
 	if !reflect.DeepEqual(got, []string{"StopBuilding", "StartBuilding"}) {
 		t.Fatalf("queued callback order = %v, want StopBuilding then StartBuilding", got)
 	}
-	if factory.Flags&FlagActivated == 0 || factory.Flags&FlagStartBuilding == 0 {
-		t.Fatalf("queued path lowered active/building state: flags=%x", factory.Flags)
+	if !factory.Activated || factory.Flags&FlagStartBuilding == 0 {
+		t.Fatalf("queued path lowered active/building state: activated=%t flags=%x", factory.Activated, factory.Flags)
 	}
 }
 

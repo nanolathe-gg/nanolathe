@@ -970,12 +970,19 @@ func (s *System) EnsureUnit(u *units.Unit) {
 	profile := s.resolveProfile(u)
 	s.profiles[h] = profile
 	s.profileNames[h] = s.classKeyOf(u)
-	// SteerState [M2][M3] with pitch accumulator and accel/brake plumbing
+	// SteerState [M2][M3] with pitch accumulator and accel/brake plumbing.
+	//
+	// The mover's records start from the heading the unit already carries, not
+	// from zero. The allocator is the only heading writer in the common
+	// creation path and it draws the initial heading from `buildangle`
+	// [04 §2.3b]; a mover record seeded with 0 would have the first movement
+	// step commit that 0 back over the allocated heading and silently discard
+	// the build angle of every finished unit.
 	steer := &SteerState{
 		X:              int32(u.X.Raw()),
 		Z:              int32(u.Z.Raw()),
-		Heading:        0,
-		PendingHeading: 0,
+		Heading:        u.Move.Heading,
+		PendingHeading: u.Move.Heading,
 		Dirty:          false,
 		Speed:          0,
 		MaxVelocity:    int32(u.Def.MaxVelocity),
@@ -1030,7 +1037,7 @@ func (s *System) EnsureUnit(u *units.Unit) {
 		VX:          0,
 		VZ:          0,
 		Speed:       0,
-		Heading:     0,
+		Heading:     u.Move.Heading, // allocated `buildangle` heading [04 §2.3b]
 		MaxVelocity: int32(u.Def.MaxVelocity),
 		FootPrintX:  footX,
 		FootPrintZ:  footZ,
@@ -1073,8 +1080,8 @@ func (s *System) EnsureUnit(u *units.Unit) {
 			VY:                   0,
 			VZ:                   0,
 			Speed:                0,
-			Heading:              0,
-			TargetHeading:        0,
+			Heading:              u.Move.Heading, // allocated `buildangle` heading [04 §2.3b]
+			TargetHeading:        u.Move.Heading,
 			TurnResidual:         0,
 			MaxVelocity:          int32(u.Def.MaxVelocity),
 			Acceleration:         int32(u.Def.Acceleration),
@@ -1709,16 +1716,31 @@ func (s *System) publishFunc(r path.Request, points []path.Point, status path.St
 	}
 }
 
-// headingFromDelta computes a uint16 heading for a ground delta dx (east), dz (north)
-// where heading 0 = north (+Z), 16384 = east (+X) [04 §5.1][04 §8.1] C20.
+// headingFromDelta returns the heading whose position step of
+// [04 R-MOV-01 §4] travels along the planar delta (dx, dz) — the delta from
+// the unit TO its waypoint. Because that step is (-sin h, -cos h), the
+// cardinals are (0,-1) → 0, (0,+1) → 32768, (-1,0) → 16384 and (+1,0) →
+// 49152: heading 0 is -Z (up-screen), not the +Z this function assumed while
+// the convention was inverted.
 //
-// Integer-only per I2: the angle is bisected against the simulation trig
-// tables (the same 512-entry round(8192·sin) family PLAN_03 C17 sanctions),
-// comparing the cross product of the delta with the candidate direction. The
-// result is exact on axis/diagonal boundaries and within one table step
-// (1/512 of a circle) elsewhere.
-// TODO(question): [04 §8.1] does not name retail's arctan method; this
-// bisection is our deterministic stand-in, not an attested sequence.
+// Integer-only: the angle is bisected against the simulation trig tables (the
+// same 512-entry round(8192·sin) family PLAN_03 C17 sanctions), comparing the
+// cross product of the delta with the candidate direction. The bracket closes
+// on the step below the answer, so the result is exact where the bracket
+// opens on it and one unit short otherwise — inside the one-table-step
+// (1/512 of a circle) tolerance this stand-in has always carried.
+//
+// The earlier TODO(question) here said retail's arctan method was unnamed.
+// That is no longer true and the correction is recorded rather than acted on:
+// [04 R-MOV-01 §2] establishes one shared helper,
+// angleOf(a, b) = round_to_nearest(atan2(a, b) * 65536/2*pi), with the mover
+// calling desired = angleOf(unitX - targetX, unitZ - targetZ) — the offset
+// taken from the target to the unit, whose sign inversion cancels §4's
+// negated velocity. Adopting it exactly would replace this bisection with a
+// float64 bearing (the I2 row for the ground-follower bearing already cites
+// that section) and shift every non-cardinal desired heading by up to one
+// unit, which changes movement quantization: it belongs in its own unit with
+// its own gate, not in the sign correction.
 func headingFromDelta(dx, dz int64) uint16 {
 	if dx == 0 && dz == 0 {
 		return 0
@@ -1726,9 +1748,10 @@ func headingFromDelta(dx, dz int64) uint16 {
 	lo, hi := int32(0), int32(65536)
 	for hi-lo > 1 {
 		mid := (lo + hi) / 2
-		// Direction at heading mid is (sin, cos): 0 points north, +Z.
-		cross := int64(numeric.Sin(numeric.Angle(mid)))*dz -
-			int64(numeric.Cos(numeric.Angle(mid)))*dx
+		// Direction at heading mid is (-sin, -cos) [04 R-MOV-01 §4]; its cross
+		// product with the delta is the negation of the (sin, cos) form.
+		cross := int64(numeric.Cos(numeric.Angle(mid)))*dx -
+			int64(numeric.Sin(numeric.Angle(mid)))*dz
 		if cross < 0 {
 			lo = mid // candidate is short of the target direction
 		} else {

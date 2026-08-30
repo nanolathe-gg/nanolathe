@@ -846,7 +846,8 @@ func TestKind9Kill(t *testing.T) {
 	h, _ := w.Create(facDef, 0, 0, 0, 0)
 	factory := w.Unit(h)
 	factory.Def = facDef
-	factory.Flags = FlagDeactivate | FlagStartBuilding
+	factory.Activated = true
+	factory.Flags = FlagStartBuilding
 	q := orders.QueueForUnit(factory)
 	bid := orders.Lookup("BuildingBuild")
 	if bid == 0 {
@@ -872,8 +873,8 @@ func TestKind9Kill(t *testing.T) {
 	if !svc.LastKill().NoCorpse {
 		t.Fatalf("expected no corpse for cause-9")
 	}
-	if factory.Flags&(FlagDeactivate|FlagStartBuilding) != 0 {
-		t.Fatalf("deactivate+start-building bits not lowered together, flags %b", factory.Flags)
+	if factory.Activated || factory.Flags&FlagStartBuilding != 0 {
+		t.Fatalf("deactivate+start-building bits not lowered together, activated=%t flags %b", factory.Activated, factory.Flags)
 	}
 	// Node should be dropped without decrementing remaining count (2 stays 2? But node removed)
 	if q2 := orders.QueueForUnit(factory); q2.LenPrimary() != 0 {
@@ -888,7 +889,8 @@ func TestKind9Kill(t *testing.T) {
 	h2, _ := w2.Create(facDef, 0, 0, 0, 0)
 	factory2 := w2.Unit(h2)
 	factory2.Def = facDef
-	factory2.Flags = FlagDeactivate | FlagStartBuilding
+	factory2.Activated = true
+	factory2.Flags = FlagStartBuilding
 	q2 := orders.QueueForUnit(factory2)
 	q2.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 1, Phase: uint8(State2), Target: 0})
 	head2 := q2.Primary()[0]
@@ -1057,7 +1059,7 @@ func TestStateGates(t *testing.T) {
 	head.Phase = uint8(State0)
 	svc := NewService(nil, cat, w, &economy.Service{})
 	svc.Pump(factory, 10)
-	if factory.Flags&FlagActivated == 0 {
+	if !factory.Activated {
 		t.Fatalf("state0 positive should raise activate")
 	}
 	if head.Phase != uint8(State1) {
@@ -1071,7 +1073,7 @@ func TestStateGates(t *testing.T) {
 	// OR rather than assign: the allocator-initialized status word carries the
 	// building-class bit the state-0 gate reads [05 "Factory production
 	// lifecycle"].
-	factory2.Flags |= FlagActivated
+	factory2.Activated = true
 	q2 := orders.QueueForUnit(factory2)
 	q2.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 0, Phase: uint8(State0)})
 	head2 := q2.Primary()[0]
@@ -1083,7 +1085,7 @@ func TestStateGates(t *testing.T) {
 	if q2b.LenPrimary() != 0 {
 		t.Fatalf("state0 nonpositive should free node, got len %d", q2b.LenPrimary())
 	}
-	if factory2.Flags&FlagActivated != 0 {
+	if factory2.Activated {
 		t.Fatalf("should lower activate")
 	}
 	// State1 waits for in-build-stance

@@ -8,7 +8,10 @@ package orders
 // them through it.
 
 import (
+	"math"
+
 	"github.com/nanolathe/nanolathe/internal/cob"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
@@ -100,28 +103,68 @@ func emitStopBuilding(u *units.Unit, n *Node) {
 	n.Flags &^= FlagStopBuildingPending
 }
 
+// startBuildingBearing is the shared two-position bearing helper behind every
+// `StartBuilding` emission [04 R-CB-01 §3]. Given the builder's own position
+// and its work target's it forms
+//
+//	dx = selfX - targetX
+//	dz = selfZ - targetZ          (both in whole world units)
+//	bearing = round_half_even(atan2(dx, dz) * 65536/2*pi)
+//
+// The reversed delta is not a slip: with the position step of
+// [04 R-MOV-01 §4] travelling along (-sin h, -cos h), the angle of
+// (self - target) is exactly the heading that points from the builder at the
+// target. The scale factor is the compiled-in 65536/2*pi and the store is an
+// x87 integer store, so it rounds to nearest EVEN rather than truncating.
+//
+// I2 allowlist: retail evaluates this in floating point and the allowlist
+// carries the row "`StartBuilding` first-argument bearing"; the float64 is a
+// transient narrowed here at the uint16 angle boundary.
+func startBuildingBearing(selfX, selfZ, targetX, targetZ numeric.Fixed) uint16 {
+	// Whole world units: the high word of a 16.16 coordinate, taken with an
+	// arithmetic shift so negative coordinates floor [03 §2.1].
+	dx := float64(int64(selfX) >> 16)
+	dz := float64(int64(selfZ) >> 16)
+	dx -= float64(int64(targetX) >> 16)
+	dz -= float64(int64(targetZ) >> 16)
+	// 10430.37835047 = 65536 / 2*pi, the constant retail compiles in.
+	return uint16(int32(math.RoundToEven(math.Atan2(dx, dz) * 65536.0 / (2 * math.Pi))))
+}
+
 // EmitStartBuilding is the StartBuilding emitter [R-ORDER-02 §2] and the ONLY
 // writer of FlagStopBuildingPending. Its nine call sites are the
 // nanolathe/assist handlers: MobileBuild, VTOL_MobileBuild, HelpBuild,
 // VTOL_HelpBuild, Capture (two sites), Reclaim, Resurrect, and RepairUnit.
 // It resolves the function named StartBuilding in the owning unit's COB
-// script and arranges it at arity 1 with the record-form payload as the
-// FIRST script argument, window words 1..3 zero-filled [R-UNIT-06 §4]:
-// retail pushes the low 16 bits of the issuing record's identity there, and
-// stock scripts (49 of 133 StartBuilding bodies) consume it as a
-// build-heading angle in the 65536 domain.
+// script and arranges it at arity 1, window words 1..3 zero-filled
+// [R-UNIT-06 §4].
 //
-// Retail's value is the low half of a heap order-record pointer — an
-// allocation artifact with no semantic meaning beyond arbitrary-but-stable
-// per-record variety [R-UNIT-06 §4]. Deriving it from a pointer is forbidden
-// [INVARIANTS I1], so Nanolathe substitutes the record's CreationTick &
-// 0xffff: deterministic, stable per record, and filling the same
-// arbitrary-but-stable angle role. This is a recorded divergence
-// (docs/PLAN_06_UNITS_ORDERS_COB.md, Divergences).
+// The FIRST script argument is the bearing from the builder to its work
+// target, in the 65536-per-circle domain, relative to the builder's own
+// heading [04 R-CB-01 §3]. That correction retired the earlier reading, which
+// had the value as the low 16 bits of the issuing order record's identity —
+// a heap address that no implementation could reproduce — and with it the
+// `CreationTick & 0xffff` substitute this emitter used to push. The stock
+// census stands and now has an explanation: 49 of 133 shipped StartBuilding
+// bodies consume the argument as a build/turret heading because it IS an
+// angle. Pushing an order age there turned commander and factory torsos to a
+// meaningless direction.
+//
+// The work target is the order record's goal. The session refreshes a
+// target-bearing record's goal from the live target unit each tick, so the
+// goal is the work position for the unit-target sites (Reclaim, HelpBuild,
+// Capture, Resurrect, RepairUnit) as well as for the placed-site ones.
+//
+// Eight of retail's nine sites subtract the builder's own heading; the ninth,
+// `VTOL_HelpBuild`, passes the absolute bearing so an air builder's script
+// receives a world heading [04 R-CB-01 §3]. This build has no VTOL_HelpBuild
+// emitter yet; when one is added it must skip the subtraction below.
 func EmitStartBuilding(u *units.Unit, n *Node) {
 	if u == nil || n == nil {
 		return
 	}
-	arrangeDeferred(callbackBridgeFor(u), "StartBuilding", []int32{int32(n.CreationTick & 0xffff)})
+	bearing := startBuildingBearing(u.X, u.Z, n.GoalX, n.GoalZ)
+	arg := bearing - u.Move.Heading // relative to the builder's facing [04 R-CB-01 §3]
+	arrangeDeferred(callbackBridgeFor(u), "StartBuilding", []int32{int32(arg)})
 	n.Flags |= FlagStopBuildingPending
 }

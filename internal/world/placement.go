@@ -790,17 +790,39 @@ func (t *Terrain) SiteHeight(cx, cz int32, yard []YardCell, footX, footZ int, wa
 // clean-room contract and is what this computes; the exact intermediate shape
 // is not recovered.
 func (t *Terrain) SampleMetal(cx, cz int32, footX, footZ int, extractsMetal float32) (float32, error) {
+	rate, _, err := t.SampleMetalWithFootprintSum(cx, cz, footX, footZ, extractsMetal)
+	return rate, err
+}
+
+// SampleMetalWithFootprintSum is SampleMetal plus the raw footprint
+// accumulator the creator also hands to the unit's script.
+//
+// The accumulator is Σ(cell metal byte + 1) over the stamped footprint, kept
+// to sixteen bits [05 R-PROD-01 §6]. Immediately after storing the rate the
+// creator starts a deferred `SetSpeed` whose single argument is that
+// accumulator sign-extended from sixteen bits, and stock extractor scripts
+// size their animation rate from it [04 R-COB-04 §9]. Returning it here is the
+// only way a creation path can issue that callback without walking the
+// footprint a second time.
+//
+// The rate itself is unchanged: still float32(Σ(byte+1)) × extractsMetal over
+// a wide accumulator, so the modulo-65536 wrap retail's sixteen-bit
+// accumulator would take is visible in the second return value only. Reaching
+// it needs Σ(byte+1) ≥ 65536, which no shipped footprint approaches
+// [05 R-PROD-01 §6]; the rate-side divergence is the open question recorded
+// above and is deliberately not resolved here.
+func (t *Terrain) SampleMetalWithFootprintSum(cx, cz int32, footX, footZ int, extractsMetal float32) (float32, uint16, error) {
 	if t == nil {
-		return 0, fmt.Errorf("world: nil terrain")
+		return 0, 0, fmt.Errorf("world: nil terrain")
 	}
 	if footX <= 0 || footZ <= 0 {
-		return 0, fmt.Errorf("world: invalid footprint %dx%d", footX, footZ)
+		return 0, 0, fmt.Errorf("world: invalid footprint %dx%d", footX, footZ)
 	}
 	if cx < 0 || cz < 0 || cx+int32(footX) > t.CellW || cz+int32(footZ) > t.CellH {
-		return 0, fmt.Errorf("world: sample %d,%d %dx%d out of bounds %dx%d", cx, cz, footX, footZ, t.CellW, t.CellH)
+		return 0, 0, fmt.Errorf("world: sample %d,%d %dx%d out of bounds %dx%d", cx, cz, footX, footZ, t.CellW, t.CellH)
 	}
 	if t.Plot == nil || len(t.Plot) < int(t.CellW*t.CellH) {
-		return 0, fmt.Errorf("world: terrain plot not initialized")
+		return 0, 0, fmt.Errorf("world: terrain plot not initialized")
 	}
 	if !t.metalSeeded {
 		// An unseeded metal field reads as zero everywhere, which is
@@ -808,7 +830,7 @@ func (t *Terrain) SampleMetal(cx, cz int32, footX, footZ int, extractsMetal floa
 		// scale every extractor's yield down to the bare footprint count.
 		// Battle setup must call ApplySchema first
 		// [05 "Terrain metal extraction"].
-		return 0, fmt.Errorf("world: surface metal not seeded; call Terrain.ApplySchema before sampling [05 %q]", "Terrain metal extraction")
+		return 0, 0, fmt.Errorf("world: surface metal not seeded; call Terrain.ApplySchema before sampling [05 %q]", "Terrain metal extraction")
 	}
 	sum := int64(0)
 	for dz := 0; dz < footZ; dz++ {
@@ -816,5 +838,5 @@ func (t *Terrain) SampleMetal(cx, cz int32, footX, footZ int, extractsMetal floa
 			sum += int64(t.Plot[(cz+int32(dz))*t.CellW+cx+int32(dx)].Metal()) + 1
 		}
 	}
-	return float32(sum) * extractsMetal, nil
+	return float32(sum) * extractsMetal, uint16(sum), nil
 }

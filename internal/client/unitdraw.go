@@ -145,11 +145,19 @@ func (c *Client) drawUnitOriented(v frame.UnitView, sx, sy int32) {
 	if halfH < 4 {
 		halfH = 4
 	}
-	// Heading is clockwise north→east per [03 §2.4] and movement.TestHeadingUsesTAWorldConvention, but screen Y down makes north down (+Y).
-	// Unrotated rect must have north (+Z world) at +Y screen (down) and east (+X) at +X screen (right) per camera.WorldToScreen [03 §2.5].
-	// Apply -heading so positive heading (north→east clockwise) rotates north (+Y) → east (+X) via Y-down screen.
-	cos, sin := headingCosSin(uint16(0 - v.Heading))
-	// Corners of the unrotated rect relative to center; long axis = Z (down) with north at +Y [03 §2.5].
+	// The old comment here claimed "north at +Z" and applied -heading to
+	// compensate. Heading 0 is -Z, not +Z: the mover's position step is
+	// (-sin h, -cos h), so heading 0 travels up-screen [04 R-MOV-01 §4].
+	//
+	// This fallback is a stand-in for the model path, so it applies the model
+	// path's own rotation rather than a second convention: the Ry template of
+	// [03 §2.4] at +heading, x' = c*x - s*z, z' = s*x + c*z, over the footprint
+	// corners in place of piece vertices. camera.WorldToScreen maps world +X to
+	// screen +X and world +Z to screen +Y [03 §2.5], so ry below is the world Z
+	// lane.
+	cos, sin := headingCosSin(v.Heading)
+	// Corners of the unrotated rect relative to centre; long axis = world Z,
+	// which is the screen Y lane [03 §2.5].
 	type pt struct{ x, y int }
 	pts := [4]pt{}
 	corners := [4][2]int{

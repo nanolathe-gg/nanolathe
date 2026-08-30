@@ -675,6 +675,9 @@ func skirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission) err
 	if err := skirmishPlaceFeatures(s, m); err != nil {
 		return err
 	}
+	// The deposit pass runs after every feature stamp, mission-placed ones
+	// included [05 R-FEAT-01 §7].
+	s.World.SeedFeatureMetalDeposits()
 	if err := skirmishReconstructUnits(s, cfg, m); err != nil {
 		return err
 	}
@@ -930,8 +933,10 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 				}
 				cx -= int32(footX / 2)
 				cz -= int32(footZ / 2)
-				if v, err := s.World.SampleMetal(cx, cz, footX, footZ, float32(def.ExtractsMetal)); err == nil {
+				if v, sum, err := s.World.SampleMetalWithFootprintSum(cx, cz, footX, footZ, float32(def.ExtractsMetal)); err == nil {
 					u.SpotMetal = v
+					// Footprint accumulator to the script [05 R-PROD-01 §6][04 R-COB-04 §9].
+					u.NotifyExtractorFootprint(sum)
 				}
 			}
 			// Publish visibility synchronously before loader returns — no empty-coverage frame [03 §3.3] C10.
@@ -986,8 +991,10 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 						}
 						cx -= int32(footX / 2)
 						cz -= int32(footZ / 2)
-						if v, err := s.World.SampleMetal(cx, cz, footX, footZ, float32(def.ExtractsMetal)); err == nil {
+						if v, sum, err := s.World.SampleMetalWithFootprintSum(cx, cz, footX, footZ, float32(def.ExtractsMetal)); err == nil {
 							u.SpotMetal = v // once, never resampled [P1-10]
+							// Footprint accumulator to the script [05 R-PROD-01 §6][04 R-COB-04 §9].
+							u.NotifyExtractorFootprint(sum)
 						}
 					}
 					publishOne(s, u)

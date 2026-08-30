@@ -1228,6 +1228,39 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, offse
 			pressed = guiRectContains(r, int32(c.Input().Mouse.X), int32(c.Input().Mouse.Y))
 		}
 		frame := h.gadgetFrame(gad, pageGAF, pressed, gad.GrayedOut != 0)
+		// [07 R-HUD-03 §6]: `ONOFF` shows the builder's on/off bit as its stage
+		// when the builder is a building, and the mouse-up art of a staged
+		// button is the authored `status` frame plus the stage. The stock
+		// ARMONOFF/CORONOFF gadgets author status 0, so an activated building
+		// selects frame 1.
+		// TODO(question): the general staged painter of that section — the
+		// greyed `status + min(stage + 2, frames − 1)` arm and the other staged
+		// gadgets (CLOAK, MOVEORD, FIREORD, BUILD/ORDERS) — needs the
+		// selection-aggregate words the command-window switch computes, which
+		// the committed frame does not carry yet; that is WU-16-6/WU-16-7
+		// territory, not WU-16-3's.
+		if !pressed && gad.GrayedOut == 0 && f != nil && f.CommandPage.Builder != 0 &&
+			strings.HasSuffix(strings.ToUpper(gad.Name), "ONOFF") {
+			if builder, found := snapshotUnitByHandle(f, f.CommandPage.Builder); found && builder.IsBuilding && builder.Activated {
+				art := gad.Art
+				if art == "" {
+					art = gad.Name
+				}
+				for _, g := range []*formats.GAF{pageGAF, h.intGAF, h.oldMain, h.share, h.common} {
+					if g == nil {
+						continue
+					}
+					entry, ok := g.Find(art)
+					if !ok {
+						continue
+					}
+					if idx := int(gad.Status) + 1; idx >= 0 && idx < len(entry.Frames) {
+						frame = entry.Frames[idx].Frame
+					}
+					break
+				}
+			}
+		}
 		if frame != nil {
 			// .GUI controls use the authored rectangle origin; unlike the PANEL
 			// shell, their GAF offsets are not applied [07 §4].
@@ -1405,6 +1438,17 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 			}
 		}
 		upper := strings.ToUpper(gad.Name)
+		// The side-prefixed ONOFF gadget (ARMONOFF / CORONOFF) is the button
+		// form of the on/off command [07 R-HUD-03 §6]; it issues exactly what
+		// key `O` issues, for every selected onoffable unit, with Shift queuing
+		// the record [04 R-ORD-01 §2].
+		if strings.HasSuffix(upper, "ONOFF") {
+			if rightClick {
+				return true
+			}
+			b.toggleOnOffSelected(b.battleState().Input.ShiftHeld)
+			return true
+		}
 		if strings.Contains(upper, "MOVE") ||
 			strings.Contains(upper, "ATTACK") || strings.Contains(upper, "BLAST") ||
 			strings.Contains(upper, "DEFEND") || strings.Contains(upper, "REPAIR") ||
