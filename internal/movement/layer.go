@@ -458,6 +458,9 @@ func (c *ClassLayers) For(name string, p Profile) *ClassLayer {
 	if c == nil {
 		return nil
 	}
+	if name == "" {
+		name = scratchLayerKey(p)
+	}
 	if l, ok := c.byName[name]; ok {
 		return l
 	}

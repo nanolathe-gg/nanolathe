@@ -13,10 +13,10 @@ import (
 
 // wiringDef is a minimal movable ground unit for the wiring tests.
 func wiringDef() *content.UnitDef {
-	return &content.UnitDef{
+	return setScratchMovement(&content.UnitDef{
 		UnitName: "armflea", MaxDamage: 100, BMCode: true, CanMove: true,
 		MaxVelocity: 8 * 65536, Acceleration: 8 * 65536, BrakeRate: 8 * 65536, TurnRate: 500,
-	}
+	}, wiringProfile)
 }
 
 // wiringProfile is a plain 1x1 ground profile for the wiring tests.

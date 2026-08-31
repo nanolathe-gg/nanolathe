@@ -70,10 +70,6 @@ func TestTwoMovementClassesInOneWorldKeepTheirOwnProfiles(t *testing.T) {
 	sys.EnsureUnit(scout)
 	sys.EnsureUnit(ship)
 
-	if len(sys.Unresolved) != 0 {
-		t.Fatalf("both classes should resolve, unresolved %v", sys.Unresolved)
-	}
-
 	scoutProfile := sys.ProfileFor(scout.Handle)
 	shipProfile := sys.ProfileFor(ship.Handle)
 	if scoutProfile.FootPrintX != 1 || shipProfile.FootPrintX != 4 {
@@ -99,41 +95,70 @@ func TestTwoMovementClassesInOneWorldKeepTheirOwnProfiles(t *testing.T) {
 	}
 }
 
-// A definition naming a class the table does not hold is a content error, not
-// a licence to path it permissively in silence.
-func TestMissingMovementClassIsRecorded(t *testing.T) {
+// A definition naming a class the table does not hold keeps its complete FBI
+// scratch profile. Retail's degraded path is not a content error, and each
+// distinct scratch profile gets its own layer identity [02 §5][04 §6.1].
+func TestMissingMovementClassUsesUnitScratch(t *testing.T) {
 	terrain := flatTerrain(t, 32, 32, 100)
 	sys := NewSystem(terrain, Profile{FootPrintX: 1, FootPrintZ: 1}, NewOccupancyGrid())
 	sys.SetClasses(map[string]*content.MovementClass{})
 
-	u := newTestUnit(t, "ARMFLEA", "NOSUCHCLASS", 1, 1)
-	sys.EnsureUnit(u)
+	first := newTestUnit(t, "ARMFLEA", "NOSUCHCLASS", 1, 1)
+	first.Def.MaxWaterDepth, first.Def.MinWaterDepth = 1, -10000
+	first.Def.MaxSlope, first.Def.BadSlope = 20, 10
+	first.Def.MaxWaterSlope, first.Def.BadWaterSlope = 30, 15
+	second := newTestUnit(t, "ARMFLEA2", "NOSUCHCLASS2", 1, 1)
+	second.Def.MaxWaterDepth, second.Def.MinWaterDepth = 20, -10000
+	second.Def.MaxSlope, second.Def.BadSlope = 40, 20
+	second.Def.MaxWaterSlope, second.Def.BadWaterSlope = 50, 25
+	sys.EnsureUnit(first)
+	sys.EnsureUnit(second)
 
-	if len(sys.Unresolved) != 1 || sys.Unresolved[0] != "NOSUCHCLASS" {
-		t.Fatalf("unresolved %v, want [NOSUCHCLASS]", sys.Unresolved)
+	wantFirst := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 1, MinWaterDepth: -10000, MaxSlope: 20, BadSlope: 10, MaxWaterSlope: 30, BadWaterSlope: 15}
+	wantSecond := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 20, MinWaterDepth: -10000, MaxSlope: 40, BadSlope: 20, MaxWaterSlope: 50, BadWaterSlope: 25}
+	if got := sys.ProfileFor(first.Handle); got != wantFirst {
+		t.Fatalf("first unresolved profile %+v, want %+v", got, wantFirst)
 	}
-	// Repeated misses are recorded once.
-	sys.EnsureUnit(newTestUnit(t, "ARMFLEA2", "NOSUCHCLASS", 1, 1))
-	if len(sys.Unresolved) != 1 {
-		t.Fatalf("duplicate recorded: %v", sys.Unresolved)
+	if got := sys.ProfileFor(second.Handle); got != wantSecond {
+		t.Fatalf("second unresolved profile %+v, want %+v", got, wantSecond)
+	}
+	if sys.profileNames[first.Handle] == sys.profileNames[second.Handle] {
+		t.Fatalf("distinct scratch profiles aliased layer identity %q", sys.profileNames[first.Handle])
+	}
+	// At a 20-deep water cell, the two unresolved units classify differently.
+	terrain.SeaLevel = 120
+	for _, c := range terrain.Plot {
+		c.SetHeight(100)
+		c.SetMinHeight(100)
+		c.SetMaxHeight(100)
+	}
+	if sys.ProfileFor(first.Handle).IsPassable(terrain, 2, 2) {
+		t.Fatal("first unresolved scratch profile admitted water deeper than MaxWaterDepth")
+	}
+	if !sys.ProfileFor(second.Handle).IsPassable(terrain, 2, 2) {
+		t.Fatal("second unresolved scratch profile rejected water within MaxWaterDepth")
 	}
 }
 
-// A definition naming no class at all takes the fallback — aircraft and
-// buildings are not classified against the ground lattice [04 §6.1].
-func TestNoMovementClassTakesTheFallback(t *testing.T) {
+// A definition naming no class at all retains its complete unit-local scratch
+// profile. Aircraft and buildings do not normally use the ground lattice, but
+// consumers that do must still see the FBI record [02 §5][04 §6.1].
+func TestNoMovementClassUsesUnitScratch(t *testing.T) {
 	terrain := flatTerrain(t, 32, 32, 100)
-	fallback := Profile{FootPrintX: 3, FootPrintZ: 3}
-	sys := NewSystem(terrain, fallback, NewOccupancyGrid())
+	scratch := Profile{FootPrintX: 3, FootPrintZ: 3, MaxWaterDepth: 10000, MinWaterDepth: -10000, MaxSlope: 255, BadSlope: 127, MaxWaterSlope: 255, BadWaterSlope: 127}
+	sys := NewSystem(terrain, Profile{}, NewOccupancyGrid())
 
 	u := newTestUnit(t, "ARMFIG", "", 3, 3)
+	u.Def.MaxWaterDepth = scratch.MaxWaterDepth
+	u.Def.MinWaterDepth = scratch.MinWaterDepth
+	u.Def.MaxSlope = int32(scratch.MaxSlope)
+	u.Def.BadSlope = int32(scratch.BadSlope)
+	u.Def.MaxWaterSlope = int32(scratch.MaxWaterSlope)
+	u.Def.BadWaterSlope = int32(scratch.BadWaterSlope)
 	sys.EnsureUnit(u)
 
-	if len(sys.Unresolved) != 0 {
-		t.Fatalf("an empty class is not a missing class: %v", sys.Unresolved)
-	}
-	if sys.ProfileFor(u.Handle) != fallback {
-		t.Fatalf("profile %+v, want the fallback %+v", sys.ProfileFor(u.Handle), fallback)
+	if sys.ProfileFor(u.Handle) != scratch {
+		t.Fatalf("profile %+v, want the unit scratch profile %+v", sys.ProfileFor(u.Handle), scratch)
 	}
 }
 

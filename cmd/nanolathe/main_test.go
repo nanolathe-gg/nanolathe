@@ -53,6 +53,20 @@ func TestParseFlagsDefaults(t *testing.T) {
 	if opts.Root == "" {
 		t.Fatal("default root is empty")
 	}
+	if opts.LoadSave != "" {
+		t.Fatalf("default LoadSave = %q, want empty", opts.LoadSave)
+	}
+}
+
+func TestParseFlagsLoadSave(t *testing.T) {
+	var out bytes.Buffer
+	opts, err := parseFlags([]string{"--load-save", "/tmp/slot.sav"}, &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.LoadSave != "/tmp/slot.sav" {
+		t.Fatalf("LoadSave = %q", opts.LoadSave)
+	}
 }
 
 func TestParseFlagsHelp(t *testing.T) {

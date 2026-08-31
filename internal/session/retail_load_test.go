@@ -2,9 +2,12 @@ package session
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/save"
+	"github.com/nanolathe/nanolathe/vfs"
 )
 
 func retailLoadBank(t *testing.T, summary save.Summary, includeSummary bool) *save.Bank {
@@ -25,6 +28,23 @@ func retailLoadBank(t *testing.T, summary save.Summary, includeSummary bool) *sa
 		t.Fatalf("open authored bank: %v", err)
 	}
 	return bank
+}
+
+func retailContinuationFS(t *testing.T) *vfs.FS {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "camps"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("\n[HEADER]\n{\n campaignside=ARM;\n}\n[MISSION0]\n{\n missionfile=A.ota;\n missionname=First;\n}\n[MISSION1]\n{\n missionfile=B.ota;\n missionname=Second;\n}\n")
+	if err := os.WriteFile(filepath.Join(dir, "camps", "c.tdf"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	fs := vfs.New()
+	if err := fs.MountDirectory(dir, 10); err != nil {
+		t.Fatal(err)
+	}
+	return fs
 }
 
 func TestPreflightRetailLoadRequiresSummary(t *testing.T) {
@@ -84,11 +104,10 @@ func TestPreflightRetailLoadRejectsUnknownGametype(t *testing.T) {
 	}
 }
 
-func TestLoadRetailSaveReturnsMetadataAndDoesNotConstructSession(t *testing.T) {
-	// This campaign continuation has no authored VFS/catalog dependency in the
-	// test. Success therefore proves this boundary does not call
-	// NewMissionWithProgress (or enter any RNG/projectile continuation path).
-	got, err := LoadRetailSave(retailLoadBank(t, save.Summary{
+func TestPreflightRetailLoadDoesNotConstructSession(t *testing.T) {
+	// Route-only callers use preflight; production LoadRetailSave requires
+	// dependencies and constructs a detached continuation.
+	got, err := PreflightRetailLoad(retailLoadBank(t, save.Summary{
 		Campaign:        "ARM",
 		Mission:         "MISSION1",
 		Gametype:        GametypeCampaign,
@@ -105,14 +124,42 @@ func TestLoadRetailSaveReturnsMetadataAndDoesNotConstructSession(t *testing.T) {
 	}
 }
 
-func TestLoadRetailSaveBattleRestorationIsExplicitlyUnsupported(t *testing.T) {
-	got, err := LoadRetailSave(retailLoadBank(t, save.Summary{
+func TestLoadRetailSaveBattleRestorationPreflightDoesNotUseUnsupportedSentinel(t *testing.T) {
+	got, err := PreflightRetailLoad(retailLoadBank(t, save.Summary{
 		Gametype: GametypeMultiplayer,
 	}, true))
-	if !errors.Is(err, ErrRetailBattleRestorationUnsupported) {
-		t.Fatalf("battle restoration error = %v, want ErrRetailBattleRestorationUnsupported", err)
+	if err != nil {
+		t.Fatalf("battle restoration preflight: %v", err)
 	}
 	if got.Route != RetailLoadRouteBattleRestoration {
 		t.Fatalf("route = %v, want battle restoration", got.Route)
+	}
+}
+
+func TestLoadRetailSaveWithDepsMapsContinuationIdentityAndThumbs(t *testing.T) {
+	fs := retailContinuationFS(t)
+	defer fs.Close()
+	thumbs := "ABCDEFGHIJKLMNOPQRSTUVWXY"
+	b := save.NewBuilder(save.RetailTag)
+	save.WriteSummary(b, save.Summary{
+		Campaign: "camps/c.tdf", Mission: "sEcOnD", Gametype: GametypeCampaign,
+		BetweenMissions: 1, Difficulty: 2, Side: 1, Thumbs: thumbs,
+	})
+	bank, err := save.OpenBytes(b.Bytes(), save.RetailTag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadRetailSaveWithDeps(bank, RetailLoadDeps{FS: fs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Continuation == nil || got.Continuation.MissionIndex != 1 || got.Continuation.Difficulty != 2 || got.Continuation.Side != 1 {
+		t.Fatalf("continuation = %#v", got.Continuation)
+	}
+	if got.Continuation.CampaignPath != "camps/c.tdf" || got.Continuation.MissionName != "Second" {
+		t.Fatalf("identity = %#v", got.Continuation)
+	}
+	if string(got.Continuation.Thumbs[:]) != thumbs {
+		t.Fatalf("thumbs = %q, want %q", got.Continuation.Thumbs, thumbs)
 	}
 }

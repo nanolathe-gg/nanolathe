@@ -11,11 +11,18 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/palette"
+	"github.com/nanolathe/nanolathe/internal/save"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/ui"
+	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
+
+type atomicTestUIStage struct{}
+
+func (*atomicTestUIStage) DrawUI(*client.Client, client.UIFrame) {}
 
 func TestBattleCompositionAdaptersSnapshotEqualRequest(t *testing.T) {
 	root := probeRetail(t)
@@ -69,6 +76,71 @@ func TestBattleCompositionAdaptersSnapshotEqualRequest(t *testing.T) {
 				t.Fatalf("terrain/player setup is incomplete: %+v", composed)
 			}
 		})
+	}
+}
+
+func TestEnterBattlePreparationFailureIsAtomic(t *testing.T) {
+	oldSession := &session.Session{Snapshot: frame.NewBuffer()}
+	oldSession.InitAudio(vfs.New())
+	oldCamera := &camera.Camera{X: 17, Z: 23}
+	oldUI := ui.NewProductionBattleState()
+	oldBattle := &battleSession{sess: oldSession, cam: oldCamera, battleUI: oldUI}
+	frontend := ui.NewFrontend(modeMenuMission)
+	progress := session.BankProgress{BetweenMissions: 1, WL: [10]byte{'L'}, Thumbs: [25]byte{'W'}}
+	contentFS := vfs.New()
+	shell := &gameShell{
+		battle: oldBattle, cam: oldCamera, frontend: frontend,
+		loading: newLoadingState("old"), campaignProgress: progress,
+		campaignProgressSet: true, cs: &contentSet{fs: contentFS}, audioOwner: oldSession.Audio,
+	}
+	cl, err := client.New(client.Options{Width: 64, Height: 64, Buffer: oldSession.Snapshot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl.SetCamera(oldCamera)
+	cl.SetAudioService(oldSession.Audio)
+	oldStage := &atomicTestUIStage{}
+	cl.SetUIStage(oldStage)
+	previousClient := clPtr
+	clPtr = cl
+	defer func() { clPtr = previousClient }()
+	candidate := &session.Session{
+		World:    &world.Terrain{CellW: 64, CellH: 64},
+		Mission:  &mission.Mission{Type: mission.TypeCampaign},
+		Snapshot: frame.NewBuffer(),
+	}
+	if err := shell.enterBattle(candidate, nil); err == nil {
+		t.Fatal("candidate with missing palette unexpectedly succeeded")
+	}
+	if candidate.Audio != oldSession.Audio || !reflect.DeepEqual(candidate.Progress, progress) {
+		t.Fatal("candidate-only audio/progress adoption did not occur before failure")
+	}
+	if shell.battle != oldBattle || shell.cam != oldCamera || shell.loading == nil || shell.frontend.Mode != modeMenuMission {
+		t.Fatal("failed preparation changed active shell state")
+	}
+	if !reflect.DeepEqual(shell.campaignProgress, progress) || !shell.campaignProgressSet {
+		t.Fatal("failed preparation changed campaign progress")
+	}
+	if cl.Buffer() != oldSession.Snapshot {
+		t.Fatal("failed preparation changed client snapshot")
+	}
+	if got := reflect.ValueOf(cl).Elem().FieldByName("cam").Pointer(); got != reflect.ValueOf(oldCamera).Pointer() {
+		t.Fatal("failed preparation changed client camera")
+	}
+	if got := reflect.ValueOf(cl).Elem().FieldByName("audioService").Pointer(); got != reflect.ValueOf(oldSession.Audio).Pointer() {
+		t.Fatal("failed preparation changed client audio")
+	}
+	uiStage := reflect.ValueOf(cl).Elem().FieldByName("uiStage")
+	if uiStage.IsNil() || uiStage.Elem().Pointer() != reflect.ValueOf(oldStage).Pointer() {
+		t.Fatal("failed preparation changed client UI stage")
+	}
+}
+
+func TestRetailSavedCameraWinsOverCommanderCentering(t *testing.T) {
+	cam := &camera.Camera{X: 1, Z: 2}
+	applyRetailSavedCamera(cam, &save.Camera{XPosition: 317, ZPosition: 419})
+	if cam.X != 317 || cam.Z != 419 {
+		t.Fatalf("saved camera = %d,%d, want 317,419", cam.X, cam.Z)
 	}
 }
 

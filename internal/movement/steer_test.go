@@ -293,22 +293,25 @@ func TestPendingBeforeIntegration(t *testing.T) {
 	}
 }
 
-// TestNoReverse checks that negative target speed never produces negative speed — absence of reverse branch [04 §8.1] C20.
+// TestNoReverse checks that the authored braking integrator never produces a
+// reverse speed [04 R-MOV-01 §4].
 func TestNoReverse(t *testing.T) {
 	s := &SteerState{
-		MaxVelocity: 65536,
-		HeightWord:  20, // above sea
-		SeaLevel:    10,
-		DefFlags:    0,
-		Speed:       65536,
+		MaxVelocity:  65536,
+		HeightWord:   20, // above sea
+		SeaLevel:     10,
+		DefFlags:     0,
+		Speed:        65536,
+		Acceleration: 16384,
+		BrakeRate:    32768,
 	}
-	// Negative target must not appear: UpdateSpeed with negative target clamps to 0 [04 §8.1] C20 no reverse
-	s.UpdateSpeed(-50000, 0)
+	// A no-waypoint visit applies the authored brake rate and clamps at zero.
+	s.UpdateSpeedWithBraking(s.SpeedCapForPitch(0), false, 0, false)
 	if s.Speed < 0 {
-		t.Fatalf("negative target produced negative speed %d; no reverse branch must be absent [04 §8.1] C20", s.Speed)
+		t.Fatalf("braking produced negative speed %d; no reverse branch [04 R-MOV-01 §4]", s.Speed)
 	}
-	if s.Speed != 0 {
-		t.Fatalf("negative target should clamp to 0, got %d", s.Speed)
+	if s.Speed != 32768 {
+		t.Fatalf("one authored brake step speed=%d, want 32768", s.Speed)
 	}
 	// Also via ClampSpeed helper
 	if got := ClampSpeed(-100, 0, 65536, 20, 10, 0); got < 0 {
@@ -319,21 +322,16 @@ func TestNoReverse(t *testing.T) {
 	}
 	// Speed should never go negative even when cap is small and current Speed is high then pitch changes
 	s.Speed = 50000
-	s.UpdateSpeed(50000, 5<<11) // table 15% => cap ~15% => 9830, target 50000 clamped to cap positive
+	s.UpdateSpeedWithBraking(s.SpeedCapForPitch(5<<11), true, 1<<30, false) // table 15% => cap ~15% => 9830
 	if s.Speed < 0 {
 		t.Fatalf("capped speed negative %d", s.Speed)
 	}
-	// Even with MaxVelocity negative? Speed still not negative (no reverse branch)
-	s2 := &SteerState{MaxVelocity: -65536, HeightWord: 20, SeaLevel: 10, DefFlags: 0, Speed: 100}
-	s2.UpdateSpeed(100, 0) // cap = 100*-65536/100 = -65536, target 100 > cap => clamp to cap negative but Speed must not stay negative due to no reverse rule
-	if s2.Speed < 0 {
-		t.Fatalf("negative cap should not produce negative speed (no reverse) got %d", s2.Speed)
-	}
-	// Starting speed negative should be corrected to 0 before any update [04 §8.1] C20
-	s3 := &SteerState{MaxVelocity: 65536, HeightWord: 20, SeaLevel: 10, Speed: -100}
-	s3.UpdateSpeed(0, 0)
+	// An already negative fixture value is clamped by the integrator's final
+	// no-reverse floor after an authored acceleration step.
+	s3 := &SteerState{MaxVelocity: 65536, HeightWord: 20, SeaLevel: 10, Speed: -100, Acceleration: 1, BrakeRate: 1}
+	s3.UpdateSpeedWithBraking(s3.SpeedCapForPitch(0), true, 1<<30, false)
 	if s3.Speed < 0 {
-		t.Fatalf("initial negative speed not corrected to 0, got %d", s3.Speed)
+		t.Fatalf("negative speed was retained, got %d", s3.Speed)
 	}
 	// Ensure UpdateHeading never touches speed (no reverse branch touch)
 	s4 := &SteerState{Heading: 0, Speed: 32768, TurnRate: 10}

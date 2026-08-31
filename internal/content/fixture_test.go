@@ -83,9 +83,12 @@ func (f *fixtureFS) ReadDir(name string) ([]vfs.EntryInfo, error) {
 		}
 		seen[base] = true
 		out = append(out, vfs.EntryInfo{
-			Path:   path,
-			Name:   base,
-			Source: vfs.Provenance{LogicalPath: path},
+			Path: path,
+			Name: base,
+			// Content fixtures model archived authored data. Production unit
+			// and weapon discovery applies retail's archive-only gate, so tests
+			// must state their provider provenance explicitly [02 §2][SC24].
+			Source: vfs.Provenance{LogicalPath: path, ProviderType: "hpi", SourcePath: "fixture.hpi"},
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })

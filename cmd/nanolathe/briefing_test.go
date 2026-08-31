@@ -1,12 +1,48 @@
 package main
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/vfs"
 )
+
+func TestRetailContinuationPreflightFailureIsAtomic(t *testing.T) {
+	progress := session.BankProgress{BetweenMissions: 1, WL: [10]byte{'L'}, Thumbs: [25]byte{'W'}}
+	shell := &gameShell{
+		cs: &contentSet{fs: vfs.New()}, campaignIdx: 4, missionIdx: 3,
+		missionDifficultyValue: 2, missionSide: 1, campaignProgress: progress,
+		campaignProgressSet: true,
+	}
+	if err := shell.applyRetailContinuation(&session.RetailCampaignContinuation{CampaignPath: "camps/nope.tdf", MissionIndex: -1}); err == nil {
+		t.Fatal("invalid continuation unexpectedly succeeded")
+	}
+	if shell.campaignIdx != 4 || shell.missionIdx != 3 || shell.missionDifficultyValue != 2 || shell.missionSide != 1 {
+		t.Fatal("failed continuation changed campaign selection")
+	}
+	if !reflect.DeepEqual(shell.campaignProgress, progress) || !shell.campaignProgressSet || shell.battle != nil {
+		t.Fatal("failed continuation changed live progress/battle state")
+	}
+}
+
+func TestRetailContinuationCopiesThumbsWithoutWLConversion(t *testing.T) {
+	progress := session.BankProgress{WL: [10]byte{'L'}, Thumbs: [25]byte{'U'}}
+	var thumbs [25]byte
+	for i := range thumbs {
+		thumbs[i] = 'W'
+	}
+	applyRetailContinuationProgress(&progress, thumbs)
+	if progress.Thumbs != thumbs || progress.BetweenMissions != 1 {
+		t.Fatalf("continuation progress = %#v", progress)
+	}
+	if progress.WL != [10]byte{} {
+		t.Fatalf("continuation retained stale WL state: %q", progress.WL)
+	}
+}
 
 func briefingMission(t *testing.T, planet string) *mission.Mission {
 	t.Helper()

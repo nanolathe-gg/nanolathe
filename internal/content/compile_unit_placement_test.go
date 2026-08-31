@@ -42,8 +42,8 @@ func TestUnitPlacementProfileAuthoredAndDefaults(t *testing.T) {
 	if authored.FootprintX != -1 || authored.FootprintZ != 2 {
 		t.Fatalf("authored narrowed footprint = %d/%d, want -1/2", authored.FootprintX, authored.FootprintZ)
 	}
-	if authored.MaxSlope != 9 || authored.MaxWaterSlope != 9 || authored.MaxWaterDepth != 4464 || authored.MinWaterDepth != -4465 || authored.Waterline != 2 {
-		t.Fatalf("authored scratch profile = slope %d waterslope %d maxwater %d minwater %d waterline %d, want 9/9/4464/-4465/2", authored.MaxSlope, authored.MaxWaterSlope, authored.MaxWaterDepth, authored.MinWaterDepth, authored.Waterline)
+	if authored.MaxSlope != 9 || authored.BadSlope != 4 || authored.MaxWaterSlope != 9 || authored.BadWaterSlope != 9 || authored.MaxWaterDepth != 4464 || authored.MinWaterDepth != -4465 || authored.Waterline != 2 {
+		t.Fatalf("authored scratch profile = slopes %d/%d waterslopes %d/%d maxwater %d minwater %d waterline %d, want 9/4/9/9/4464/-4465/2", authored.MaxSlope, authored.BadSlope, authored.MaxWaterSlope, authored.BadWaterSlope, authored.MaxWaterDepth, authored.MinWaterDepth, authored.Waterline)
 	}
 	for _, key := range []string{"FootprintX", "FootprintZ", "MaxSlope", "BadSlope", "MaxWaterSlope", "BadWaterSlope", "MaxWaterDepth", "MinWaterDepth"} {
 		for unknown := range authored.Unknown {
@@ -58,8 +58,8 @@ func TestUnitPlacementProfileAuthoredAndDefaults(t *testing.T) {
  UnitName=ARMLAB;
 }
 `).Root.Sections()[0], "units/armlab.fbi", "", Provenance{})
-	if defaults.FootprintX != 0 || defaults.FootprintZ != 0 || defaults.MaxSlope != 255 || defaults.MaxWaterSlope != 255 || defaults.MaxWaterDepth != 10000 || defaults.MinWaterDepth != -10000 || defaults.Waterline != 0 {
-		t.Fatalf("default scratch profile = footprint %d/%d slope %d waterslope %d maxwater %d minwater %d waterline %d, want 0/0/255/255/10000/-10000/0", defaults.FootprintX, defaults.FootprintZ, defaults.MaxSlope, defaults.MaxWaterSlope, defaults.MaxWaterDepth, defaults.MinWaterDepth, defaults.Waterline)
+	if defaults.FootprintX != 0 || defaults.FootprintZ != 0 || defaults.MaxSlope != 255 || defaults.BadSlope != 127 || defaults.MaxWaterSlope != 255 || defaults.BadWaterSlope != 127 || defaults.MaxWaterDepth != 10000 || defaults.MinWaterDepth != -10000 || defaults.Waterline != 0 {
+		t.Fatalf("default scratch profile = footprint %d/%d slopes %d/%d waterslopes %d/%d maxwater %d minwater %d waterline %d, want 0/0/255/127/255/127/10000/-10000/0", defaults.FootprintX, defaults.FootprintZ, defaults.MaxSlope, defaults.BadSlope, defaults.MaxWaterSlope, defaults.BadWaterSlope, defaults.MaxWaterDepth, defaults.MinWaterDepth, defaults.Waterline)
 	}
 
 	second := compileUnitSection(mustParseTDF(t, `[UNITINFO]
@@ -87,11 +87,11 @@ func TestUnitPlacementProfileAuthoredAndDefaults(t *testing.T) {
 	movement := map[string]*MovementClass{CanonicalKey("TANK"): {
 		FootprintX: 2, FootprintZ: 3,
 		MaxWaterDepth: 12, MinWaterDepth: -10000,
-		MaxSlope: 32, MaxWaterSlope: 255,
+		MaxSlope: 32, BadSlope: 16, MaxWaterSlope: 255, BadWaterSlope: 127,
 	}}
 	ApplyMovementFootprints(map[string]*UnitDef{resolved.CanonicalKey: resolved}, movement)
-	if resolved.FootprintX != 2 || resolved.FootprintZ != 3 || resolved.MaxWaterDepth != 12 || resolved.MinWaterDepth != -10000 || resolved.MaxSlope != 32 || resolved.MaxWaterSlope != 255 {
-		t.Fatalf("resolved movement profile = footprint %d/%d maxwater %d minwater %d slope %d waterslope %d, want 2/3/12/-10000/32/255", resolved.FootprintX, resolved.FootprintZ, resolved.MaxWaterDepth, resolved.MinWaterDepth, resolved.MaxSlope, resolved.MaxWaterSlope)
+	if resolved.FootprintX != 2 || resolved.FootprintZ != 3 || resolved.MaxWaterDepth != 12 || resolved.MinWaterDepth != -10000 || resolved.MaxSlope != 32 || resolved.BadSlope != 16 || resolved.MaxWaterSlope != 255 || resolved.BadWaterSlope != 127 {
+		t.Fatalf("resolved movement profile = footprint %d/%d maxwater %d minwater %d slopes %d/%d waterslopes %d/%d, want 2/3/12/-10000/32/16/255/127", resolved.FootprintX, resolved.FootprintZ, resolved.MaxWaterDepth, resolved.MinWaterDepth, resolved.MaxSlope, resolved.BadSlope, resolved.MaxWaterSlope, resolved.BadWaterSlope)
 	}
 	if resolved.Hash == scratchHash {
 		t.Fatal("resolved movement profile did not change the canonical unit hash")
@@ -107,12 +107,14 @@ func TestUnitPlacementProfileAuthoredAndDefaults(t *testing.T) {
  UnitName=MODBUILDING;
  MovementClass=MISSING;
  MinWaterDepth=11;
+	BadSlope=12;
+	BadWaterSlope=34;
 }
 `).Root.Sections()[0], "units/modbuilding.fbi", "", Provenance{})
 	unresolvedHash := unresolved.Hash
 	ApplyMovementFootprints(map[string]*UnitDef{unresolved.CanonicalKey: unresolved}, map[string]*MovementClass{})
-	if unresolved.MinWaterDepth != 11 || unresolved.MaxWaterDepth != 10000 || unresolved.MaxSlope != 255 || unresolved.MaxWaterSlope != 255 {
-		t.Fatalf("unresolved class scratch profile = minwater %d maxwater %d slope %d waterslope %d, want 11/10000/255/255", unresolved.MinWaterDepth, unresolved.MaxWaterDepth, unresolved.MaxSlope, unresolved.MaxWaterSlope)
+	if unresolved.MinWaterDepth != 11 || unresolved.MaxWaterDepth != 10000 || unresolved.MaxSlope != 255 || unresolved.BadSlope != 12 || unresolved.MaxWaterSlope != 255 || unresolved.BadWaterSlope != 34 {
+		t.Fatalf("unresolved class scratch profile = minwater %d maxwater %d slopes %d/%d waterslopes %d/%d, want 11/10000/255/12/255/34", unresolved.MinWaterDepth, unresolved.MaxWaterDepth, unresolved.MaxSlope, unresolved.BadSlope, unresolved.MaxWaterSlope, unresolved.BadWaterSlope)
 	}
 	if unresolved.Hash != unresolvedHash {
 		t.Fatalf("unresolved class linking changed the scratch canonical hash: %s != %s", unresolved.Hash, unresolvedHash)
@@ -141,8 +143,8 @@ func TestRetailClasslessExtractorScratchProfiles(t *testing.T) {
 	// retain the startup template. This mixed record proves both authored
 	// overrides and the classless land default that keeps the waterline gate
 	// from rejecting every terrain sample [02 §5][04 §6.1 R-DOC04-A].
-	if cormex.MaxWaterDepth != 0 || cormex.MinWaterDepth != -10000 || cormex.MaxSlope != 10 || cormex.MaxWaterSlope != 255 {
-		t.Fatalf("CORMEX scratch profile = maxwater %d minwater %d slope %d waterslope %d, want 0/-10000/10/255", cormex.MaxWaterDepth, cormex.MinWaterDepth, cormex.MaxSlope, cormex.MaxWaterSlope)
+	if cormex.MaxWaterDepth != 0 || cormex.MinWaterDepth != -10000 || cormex.MaxSlope != 10 || cormex.BadSlope != 5 || cormex.MaxWaterSlope != 255 || cormex.BadWaterSlope != 127 {
+		t.Fatalf("CORMEX scratch profile = maxwater %d minwater %d slopes %d/%d waterslopes %d/%d, want 0/-10000/10/5/255/127", cormex.MaxWaterDepth, cormex.MinWaterDepth, cormex.MaxSlope, cormex.BadSlope, cormex.MaxWaterSlope, cormex.BadWaterSlope)
 	}
 
 	coruwmex := cat.Units[CanonicalKey("CORUWMEX")]

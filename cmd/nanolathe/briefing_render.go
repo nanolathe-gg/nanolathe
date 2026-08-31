@@ -72,6 +72,89 @@ func (g *gameShell) openCampaignBriefing() {
 	g.briefingNowMS = 0
 }
 
+// applyRetailContinuation maps the typed Summary continuation into the same
+// campaign-selection state used by NEWGAME and then enters the authored
+// briefing. It never constructs a battle directly: Start remains the typed
+// BriefingActionStart boundary [08 R-CAMP-01 §§1–2, 6–8].
+func (g *gameShell) applyRetailContinuation(c *session.RetailCampaignContinuation) error {
+	if g == nil || c == nil || g.cs == nil || g.cs.fs == nil {
+		return fmt.Errorf("nanolathe: retail continuation has no campaign state")
+	}
+	if c.MissionIndex < 0 || strings.TrimSpace(c.CampaignPath) == "" {
+		return fmt.Errorf("nanolathe: retail continuation has incomplete authored identity")
+	}
+	// Validate the authored mission before changing any shell selection or
+	// retiring an active battle. openCampaignBriefing performs the same load as
+	// part of its existing route; this preflight keeps failures atomic here.
+	if _, err := mission.LoadCampaignWithSink(g.cs.fs, c.CampaignPath, c.MissionIndex, c.Difficulty, 0, nil); err != nil {
+		return fmt.Errorf("nanolathe: retail continuation mission: %w", err)
+	}
+	// Build the selection candidate locally. In particular, do not append a
+	// newly discovered campaign to live frontend state until every identity
+	// check below has passed.
+	options := g.campaignOptions
+	optionIndex := -1
+	for i := range options {
+		candidate := options[i]
+		if strings.EqualFold(candidate.Path, c.CampaignPath) || strings.EqualFold(candidate.Name, c.CampaignName) {
+			optionIndex = i
+			break
+		}
+	}
+	if optionIndex < 0 {
+		campaign, err := mission.DiscoverCampaign(g.cs.fs, c.CampaignPath)
+		if err != nil {
+			return fmt.Errorf("nanolathe: retail continuation campaign: %w", err)
+		}
+		if campaign == nil {
+			return fmt.Errorf("nanolathe: retail continuation campaign is unavailable")
+		}
+		options = append(append([]mission.Campaign(nil), options...), *campaign)
+		optionIndex = len(options) - 1
+	}
+	missionUIIndex, ok := campaignMissionUIIndex(options, optionIndex, c.MissionIndex)
+	if !ok {
+		return fmt.Errorf("nanolathe: retail continuation mission index %d is not selectable", c.MissionIndex)
+	}
+	// Selection/progress are now complete typed state. Only Thumbs is
+	// established on the between-missions Summary path. The older ten-slot WL
+	// view belongs to a fresh/default campaign lifetime and is reset below;
+	// there is no Thumbs-to-WL conversion.
+	g.campaignOptions = options
+	g.campaignIdx = optionIndex
+	g.missionIdx = missionUIIndex
+	g.missionDifficultyValue = c.Difficulty
+	g.missionSide = c.Side
+	applyRetailContinuationProgress(&g.campaignProgress, c.Thumbs)
+	g.campaignProgressSet = true
+
+	// This is the continuation commit. A campaign load never uses the battle
+	// restoration path; it returns to the normal mission panel and briefing
+	// action sequence.
+	if g.battle != nil {
+		g.teardownBattle(clPtr)
+	}
+	if g.frontend != nil {
+		g.openMenu(modeMenuMission)
+	}
+	g.openCampaignBriefing()
+	if clPtr != nil {
+		g.bindFrontendClient(clPtr)
+	}
+	return nil
+}
+
+func applyRetailContinuationProgress(progress *session.BankProgress, thumbs [25]byte) {
+	if progress == nil {
+		return
+	}
+	// Thumbs is the established between-missions campaign mark array. Build a
+	// fresh value so stale state from an earlier campaign cannot leak
+	// into this newly loaded lifetime. WL has no established Summary mapping;
+	// it therefore remains its zero/default value [08 R-CAMP-01 §8].
+	*progress = session.BankProgress{BetweenMissions: 1, Thumbs: thumbs}
+}
+
 // briefingBattleSeedSource carries the front-end CRT state across the battle
 // boundary; the simulation seed is selected independently as usual [I4].
 type briefingBattleSeedSource struct {

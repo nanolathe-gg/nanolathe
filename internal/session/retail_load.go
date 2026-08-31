@@ -3,8 +3,11 @@ package session
 import (
 	"errors"
 	"fmt"
+	"strings"
 
+	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/save"
+	"github.com/nanolathe/nanolathe/vfs"
 )
 
 // RetailLoadRoute is the load branch selected by the Summary account. A
@@ -23,16 +26,34 @@ var (
 	ErrRetailSummaryMissing = errors.New("session: retail save missing Summary account")
 	// ErrRetailGametypeInvalid is returned for every Gametype other than 1 or 2.
 	ErrRetailGametypeInvalid = errors.New("session: retail save has invalid gametype")
-	// ErrRetailBattleRestorationUnsupported is explicit because the established
-	// Units, script, feature, and trigger bodies are not a complete path yet.
-	ErrRetailBattleRestorationUnsupported = errors.New("session: retail battle restoration unsupported")
+	// ErrRetailLoadDependenciesMissing means the caller requested a live load
+	// without supplying the mounted content and seed dependencies needed to
+	// construct its detached candidate.
+	ErrRetailLoadDependenciesMissing = errors.New("session: retail load dependencies missing")
 )
 
-// RetailLoadResult is the route and authored metadata read from Summary. It
-// contains no Session or native snapshot.
+// RetailCampaignContinuation is the typed state carried from a between-
+// missions Summary into the existing briefing route. Thumbs is copied with
+// retail's 25-byte bound and reset to all U when the source is not exactly 25
+// bytes [08 R-CAMP-01 §8].
+type RetailCampaignContinuation struct {
+	CampaignPath string
+	CampaignName string
+	MissionName  string
+	MissionIndex int
+	Difficulty   int
+	Side         int
+	Thumbs       [25]byte
+}
+
+// RetailLoadResult is the route and detached candidate produced from a save.
+// Exactly one of Battle and Continuation is populated for a successful load.
+// Route-only callers use PreflightRetailLoad.
 type RetailLoadResult struct {
-	Summary save.Summary
-	Route   RetailLoadRoute
+	Summary      save.Summary
+	Route        RetailLoadRoute
+	Battle       *RetailBattleStage
+	Continuation *RetailCampaignContinuation
 }
 
 // PreflightRetailLoad validates the Summary account and selects the established
@@ -57,23 +78,100 @@ func PreflightRetailLoad(bank *save.Bank) (RetailLoadResult, error) {
 	return RetailLoadResult{Summary: summary, Route: route}, nil
 }
 
-// LoadRetailSave performs retail-save preflight and exposes only the route
-// boundary currently supported by Nanolathe. Campaign continuation returns
-// Summary metadata for the caller/front end. Full in-battle restoration returns
-// an explicit unsupported sentinel because its Units/script/feature/trigger
-// bodies are incomplete.
-func LoadRetailSave(bank *save.Bank) (RetailLoadResult, error) {
+// LoadRetailSave fully prepares the detached battle candidate or authored
+// continuation. No live Session or presentation state is touched; callers
+// that only need route validation should use PreflightRetailLoad.
+func LoadRetailSave(bank *save.Bank, deps RetailLoadDeps) (RetailLoadResult, error) {
+	return LoadRetailSaveWithDeps(bank, deps)
+}
+
+// LoadRetailSaveWithDeps prepares a complete detached load result. Branching
+// is strictly on Summary.BetweenMissions == 1: every other value is an
+// in-battle restoration [08 R-SAVE-02 §11].
+func LoadRetailSaveWithDeps(bank *save.Bank, deps RetailLoadDeps) (RetailLoadResult, error) {
 	preflight, err := PreflightRetailLoad(bank)
 	if err != nil {
 		return RetailLoadResult{}, err
 	}
-	if preflight.Route == RetailLoadRouteBattleRestoration {
-		return preflight, ErrRetailBattleRestorationUnsupported
+	if deps.FS == nil {
+		return RetailLoadResult{}, ErrRetailLoadDependenciesMissing
 	}
+	if preflight.Route == RetailLoadRouteCampaignContinuation {
+		continuation, err := resolveRetailContinuation(deps.FS, preflight.Summary)
+		if err != nil {
+			return RetailLoadResult{}, err
+		}
+		return RetailLoadResult{Summary: preflight.Summary, Route: preflight.Route, Continuation: continuation}, nil
+	}
+	stage, err := StageRetailBattle(bank, deps)
+	if err != nil {
+		return RetailLoadResult{}, err
+	}
+	if err := RestoreRetailBattleCore(stage); err != nil {
+		return RetailLoadResult{}, err
+	}
+	return RetailLoadResult{Summary: preflight.Summary, Route: preflight.Route, Battle: stage}, nil
+}
 
-	// TODO(question): map Summary.Campaign and Summary.Mission to the exact
-	// authored mission path and NewMissionWithProgress arguments. Campaign
-	// catalog/path evidence and mission-index conversion would settle this;
-	// until then this boundary returns metadata without constructing a session.
-	return RetailLoadResult{Summary: preflight.Summary, Route: preflight.Route}, nil
+// LoadRetailSavePath is the production file-path entrypoint. It parses the
+// retail HAPIBANK and only returns after detached staging and restoration have
+// completed successfully.
+func LoadRetailSavePath(path string, deps RetailLoadDeps) (RetailLoadResult, error) {
+	bank, err := save.Open(path)
+	if err != nil {
+		return RetailLoadResult{}, fmt.Errorf("session: open retail save %q: %w", path, err)
+	}
+	return LoadRetailSaveWithDeps(bank, deps)
+}
+
+// LoadRetailSaveBytes is the equivalent production entrypoint for callers
+// that already own the file bytes (for example, a platform file dialog).
+func LoadRetailSaveBytes(data []byte, deps RetailLoadDeps) (RetailLoadResult, error) {
+	bank, err := save.OpenBytes(data, save.RetailTag)
+	if err != nil {
+		return RetailLoadResult{}, fmt.Errorf("session: open retail save bytes: %w", err)
+	}
+	return LoadRetailSaveWithDeps(bank, deps)
+}
+
+func resolveRetailContinuation(fs vfs.FSOps, summary save.Summary) (*RetailCampaignContinuation, error) {
+	if strings.TrimSpace(summary.Campaign) == "" {
+		return nil, fmt.Errorf("session: retail continuation missing campaign identity")
+	}
+	campaign, err := mission.DiscoverCampaign(fs, summary.Campaign)
+	if err != nil {
+		return nil, fmt.Errorf("session: retail continuation campaign: %w", err)
+	}
+	if campaign == nil {
+		return nil, fmt.Errorf("session: retail continuation campaign is unavailable")
+	}
+	var stub mission.Stub
+	found := false
+	for _, candidate := range campaign.Missions {
+		if strings.EqualFold(strings.TrimSpace(candidate.Name), strings.TrimSpace(summary.Mission)) {
+			stub = candidate
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("session: retail continuation mission %q not found in campaign %q", summary.Mission, campaign.OriginalPath)
+	}
+	var thumbs [25]byte
+	if len(summary.Thumbs) == len(thumbs) {
+		copy(thumbs[:], summary.Thumbs)
+	} else {
+		for i := range thumbs {
+			thumbs[i] = 'U'
+		}
+	}
+	return &RetailCampaignContinuation{
+		CampaignPath: campaign.Path,
+		CampaignName: campaign.Name,
+		MissionName:  stub.Name,
+		MissionIndex: stub.Index,
+		Difficulty:   int(summary.Difficulty),
+		Side:         int(summary.Side),
+		Thumbs:       thumbs,
+	}, nil
 }

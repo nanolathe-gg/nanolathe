@@ -53,6 +53,7 @@ func TestStepUnitMobileBuildStopsOnMoveArrived(t *testing.T) {
 	def.MaxDamage = 100
 	def.FootprintX = 1
 	def.FootprintZ = 1
+	setScratchMovement(def, profile)
 	startWorldX := world.CellToWorld(1)
 	startWorldZ := world.CellToWorld(1)
 	h, err := w.Create(def, 0, startWorldX, terrain.HeightAt(startWorldX, startWorldZ), startWorldZ)
@@ -116,6 +117,7 @@ func TestStepUnitGroundArrival(t *testing.T) {
 	def.MaxDamage = 100
 	def.FootprintX = 1
 	def.FootprintZ = 1
+	setScratchMovement(def, profile)
 	startWorldX := world.CellToWorld(1)
 	startWorldZ := world.CellToWorld(1)
 	startWorldY := terrain.HeightAt(startWorldX, startWorldZ)
@@ -203,6 +205,7 @@ func TestStepUnitEmptyRouteDoesNotArrive(t *testing.T) {
 	def.MaxDamage = 100
 	def.FootprintX = 1
 	def.FootprintZ = 1
+	setScratchMovement(def, profile)
 	h, _ := w.Create(def, 0, world.CellToWorld(0), numeric.Fixed(0), world.CellToWorld(0))
 	u := w.Unit(h)
 	system.BindWorld(w)
@@ -284,6 +287,7 @@ func TestStepUnitOrderIndependence(t *testing.T) {
 		def.MaxDamage = 100
 		def.FootprintX = 1
 		def.FootprintZ = 1
+		setScratchMovement(def, profile)
 		// Two units far apart (non-interfering footprints) => order should not matter
 		hA, _ := w.Create(def, 0, world.CellToWorld(1), terrain.HeightAt(world.CellToWorld(1), world.CellToWorld(1)), world.CellToWorld(1))
 		hB, _ := w.Create(def, 0, world.CellToWorld(10), terrain.HeightAt(world.CellToWorld(10), world.CellToWorld(10)), world.CellToWorld(10))
@@ -331,6 +335,7 @@ func TestStepUnitOrderIndependence(t *testing.T) {
 		def.MaxDamage = 100
 		def.FootprintX = 1
 		def.FootprintZ = 1
+		setScratchMovement(def, profile)
 		hA, _ := w.Create(def, 0, world.CellToWorld(2), terrain.HeightAt(world.CellToWorld(2), world.CellToWorld(2)), world.CellToWorld(2))
 		hB, _ := w.Create(def, 0, world.CellToWorld(4), terrain.HeightAt(world.CellToWorld(4), world.CellToWorld(4)), world.CellToWorld(2))
 		uA := w.Unit(hA)
@@ -381,6 +386,7 @@ func TestStepUnitStoppedStaysStopped(t *testing.T) {
 	w := newMovementFixtureWorld(10)
 	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500}
 	def.MaxDamage = 100
+	setScratchMovement(def, profile)
 	h, _ := w.Create(def, 0, world.CellToWorld(5), terrain.HeightAt(world.CellToWorld(5), world.CellToWorld(5)), world.CellToWorld(5))
 	u := w.Unit(h)
 	system.BindWorld(w)
@@ -418,6 +424,7 @@ func TestStepUnitAircraftAndTransportRegression(t *testing.T) {
 	airDef.CanFly = true
 	airDef.FootprintX = 1
 	airDef.FootprintZ = 1
+	setScratchMovement(airDef, profile)
 	hAir, _ := w.Create(airDef, 0, world.CellToWorld(2), numeric.Fixed(80*65536), world.CellToWorld(2))
 	uAir := w.Unit(hAir)
 	system.BindWorld(w)
@@ -440,10 +447,12 @@ func TestStepUnitAircraftAndTransportRegression(t *testing.T) {
 	transDef.CanFly = true
 	transDef.FootprintX = 2
 	transDef.FootprintZ = 2
+	setScratchMovement(transDef, profile)
 	cargoDef := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500}
 	cargoDef.MaxDamage = 100
 	cargoDef.FootprintX = 1
 	cargoDef.FootprintZ = 1
+	setScratchMovement(cargoDef, profile)
 	hTrans, _ := w.Create(transDef, 0, world.CellToWorld(5), numeric.Fixed(80*65536), world.CellToWorld(5))
 	hCargo, _ := w.Create(cargoDef, 0, world.CellToWorld(5), numeric.Fixed(0), world.CellToWorld(5))
 	uTrans := w.Unit(hTrans)
@@ -501,6 +510,7 @@ func TestStepUnitDeterminism(t *testing.T) {
 		def.MaxDamage = 100
 		def.FootprintX = 1
 		def.FootprintZ = 1
+		setScratchMovement(def, profile)
 		h, _ := w.Create(def, 0, world.CellToWorld(0), numeric.Fixed(0), world.CellToWorld(0))
 		u := w.Unit(h)
 		system.BindWorld(w)
@@ -531,7 +541,8 @@ func TestStepUnitDeterminism(t *testing.T) {
 	}
 }
 
-// TestStepUnitTickWrapperParity ensures the production per-unit loop matches a direct single-unit step.
+// TestStepUnitLoopParity ensures the production per-unit loop matches a direct
+// single-unit step inside the same explicit lifecycle transaction.
 func TestStepUnitLoopParity(t *testing.T) {
 	// Run via the deterministic world sweep.
 	runTick := func() (int64, int64) {
@@ -542,6 +553,7 @@ func TestStepUnitLoopParity(t *testing.T) {
 		w := newMovementFixtureWorld(10)
 		def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500}
 		def.MaxDamage = 100
+		setScratchMovement(def, profile)
 		h, _ := w.Create(def, 0, world.CellToWorld(0), numeric.Fixed(0), world.CellToWorld(0))
 		u := w.Unit(h)
 		system.BindWorld(w)
@@ -565,6 +577,7 @@ func TestStepUnitLoopParity(t *testing.T) {
 		w := newMovementFixtureWorld(10)
 		def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500}
 		def.MaxDamage = 100
+		setScratchMovement(def, profile)
 		h, _ := w.Create(def, 0, world.CellToWorld(0), numeric.Fixed(0), world.CellToWorld(0))
 		u := w.Unit(h)
 		system.BindWorld(w)
@@ -585,7 +598,7 @@ func TestStepUnitLoopParity(t *testing.T) {
 	x1, z1 := runTick()
 	x2, z2 := runStep()
 	if x1 != x2 || z1 != z2 {
-		t.Fatalf("Tick wrapper parity failed: Tick (%d,%d) vs StepUnit loop (%d,%d)", x1, z1, x2, z2)
+		t.Fatalf("phase-2 loop parity failed: sweep (%d,%d) vs StepUnit loop (%d,%d)", x1, z1, x2, z2)
 	}
 }
 
@@ -598,6 +611,7 @@ func TestStepUnitPublishedRouteNoDuplicate(t *testing.T) {
 	w := newMovementFixtureWorld(10)
 	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500}
 	def.MaxDamage = 100
+	setScratchMovement(def, profile)
 	h, _ := w.Create(def, 0, world.CellToWorld(0), numeric.Fixed(0), world.CellToWorld(0))
 	u := w.Unit(h)
 	system.BindWorld(w)
@@ -667,6 +681,7 @@ func TestArrivalInclusiveBoundary(t *testing.T) {
 	system := NewSystem(terrain, profile, grid)
 	w := newMovementFixtureWorld(10)
 	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500, SightDistance: 28}
+	setScratchMovement(def, profile)
 	// Ground move binds radiusParam 4 → threshSq 0: only the exact goal cell
 	// satisfies the inclusive predicate [R-P0-01 corrected].
 	def.MaxDamage = 100
@@ -700,6 +715,7 @@ func TestArrivalInclusiveBoundary(t *testing.T) {
 	w1 := newMovementFixtureWorld(10)
 	system1 := NewSystem(terrain, profile, NewOccupancyGrid())
 	def1 := &content.UnitDef{UnitName: "armflea1", MaxVelocity: 2 * 65536, TurnRate: 500, SightDistance: 28, MaxDamage: 100, FootprintX: 1, FootprintZ: 1}
+	setScratchMovement(def1, profile)
 	h1, _ := w1.Create(def1, 0, world.CellToWorld(5), numeric.Fixed(0), world.CellToWorld(1))
 	u1 := w1.Unit(h1)
 	system1.BindWorld(w1)
@@ -718,6 +734,7 @@ func TestArrivalInclusiveBoundary(t *testing.T) {
 	w2 := newMovementFixtureWorld(10)
 	system2 := NewSystem(terrain, profile, NewOccupancyGrid())
 	def2 := &content.UnitDef{UnitName: "armflea2", MaxVelocity: 2 * 65536, TurnRate: 500, SightDistance: 28, MaxDamage: 100, FootprintX: 1, FootprintZ: 1}
+	setScratchMovement(def2, profile)
 	h2, _ := w2.Create(def2, 0, world.CellToWorld(5), numeric.Fixed(0), world.CellToWorld(1))
 	u2 := w2.Unit(h2)
 	system2.BindWorld(w2)
@@ -742,6 +759,7 @@ func TestArrivalIsPlanarNoYHeading(t *testing.T) {
 	system := NewSystem(terrain, profile, grid)
 	w := newMovementFixtureWorld(10)
 	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500, SightDistance: 120, MaxDamage: 100, FootprintX: 1, FootprintZ: 1}
+	setScratchMovement(def, profile)
 	h, _ := w.Create(def, 0, world.CellToWorld(0), numeric.Fixed(100*65536), world.CellToWorld(0))
 	u := w.Unit(h)
 	u.Y = numeric.Fixed(100 * 65536) // high Y, but arrival planar only [R-P0-01]

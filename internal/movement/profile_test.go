@@ -98,6 +98,19 @@ func TestProfileFromMovementClass(t *testing.T) {
 	}
 }
 
+func TestProfileFromUnitScratchRecord(t *testing.T) {
+	def := &content.UnitDef{
+		FootprintX: 3, FootprintZ: 4,
+		MaxWaterDepth: 12, MinWaterDepth: -10000,
+		MaxSlope: 32, BadSlope: 16, MaxWaterSlope: 48, BadWaterSlope: 24,
+	}
+	got := NewScratchProfile(def)
+	want := Profile{FootPrintX: 3, FootPrintZ: 4, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 32, BadSlope: 16, MaxWaterSlope: 48, BadWaterSlope: 24}
+	if got != want {
+		t.Fatalf("scratch profile %+v, want %+v", got, want)
+	}
+}
+
 func TestLandCellPassable(t *testing.T) {
 	// Land cell: height 20 above seaLevel 10 => depth 0, no feature, flat
 	// ground profile MaxWaterDepth 12 allows land [02 "Movement class record"].

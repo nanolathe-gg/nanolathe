@@ -505,7 +505,7 @@ func CompileWeaponsWithDuplicates(fs vfs.FSOps) (map[string]*WeaponDef, []Weapon
 		return nil
 	}
 
-	entries, err := fs.ReadDir("weapons")
+	entries, err := discoverArchiveContent(fs, "weapons", ".tdf")
 	if err != nil {
 		return nil, nil, fmt.Errorf("content: weapons: %w", err)
 	}
@@ -513,18 +513,9 @@ func CompileWeaponsWithDuplicates(fs vfs.FSOps) (map[string]*WeaponDef, []Weapon
 	// order and then sorts by Path [vfs.ReadDir] — provider mount precedence,
 	// then host directory order with the lexical divergence [SPEC_CONFLICTS
 	// SC3]. This iteration is the discovery order (I1).
-	for _, e := range entries {
-		if e.IsDir {
-			continue
-		}
-		// Filter by extension — directory also holds .bat, .pl, .txt, .xls junk [PLAN Discovery]
-		if !strings.HasSuffix(strings.ToLower(e.Path), ".tdf") {
-			continue
-		}
-		data, err := fs.ReadFileLimit(e.Path, 1<<20)
-		if err != nil {
-			continue
-		}
+	for _, entry := range entries {
+		data := entry.data
+		e := entry.info
 		prov := ProvenanceFrom(e)
 		if err := processFile(data, prov); err != nil {
 			return nil, nil, fmt.Errorf("content: %s: %w", e.Path, err)

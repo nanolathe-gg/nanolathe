@@ -178,35 +178,6 @@ func (s *SteerState) UpdateHeading(desired uint16) { // [04 §8.1] C20
 	// No reverse-speed branch: Speed is left untouched and never made negative here [04 §8.1] C20
 }
 
-// UpdateSpeed clamps the scalar speed to the pitch-derived cap [04 §8.1] C21.
-// It enforces the no-reverse rule: a negative target never produces a negative speed [04 §8.1] C20.
-// If target < 0 it is treated as 0; if target > cap it is clamped to cap.
-//
-// Retained for backward compat with legacy tests; new code uses UpdateSpeedWithBraking [M3].
-func (s *SteerState) UpdateSpeed(target int32, pitchDelta int32) { // [04 §8.1] C20 C21
-	if s == nil {
-		return
-	}
-	cap := s.SpeedCap(pitchDelta) // includes halving [04 §8.1] C21
-	// No reverse-speed branch: negative target must not produce negative speed [04 §8.1] C20
-	if target < 0 {
-		target = 0
-	}
-	if target > cap {
-		target = cap
-	}
-	// Also clamp current speed if it already exceeds cap (e.g., terrain change)
-	if s.Speed > cap {
-		s.Speed = cap
-	} else {
-		s.Speed = target
-	}
-	// Ensure speed never negative — reproduce absence of reverse branch [04 §8.1] C20
-	if s.Speed < 0 {
-		s.Speed = 0
-	}
-}
-
 // UpdateSpeedWithBraking advances speed toward cap using Acceleration/BrakeRate
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // cap is the pitch-capped speed from SpeedCapForPitch [04 R-MOV-01 §4].

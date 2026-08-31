@@ -219,6 +219,42 @@ func (g *gameShell) startMissionLoad() {
 	g.beginFreshBattleLoad("", modeMenuMission, request, nil)
 }
 
+// loadRetailSavePath is the explicit production save-file seam. It is called
+// on the render thread by a host/UI integration that already selected a path;
+// no file-picker policy is invented here. The session package prepares all
+// authoritative state detached, and this method commits only after battle
+// presentation composition has also succeeded [08 R-SAVE-02 §11–§12].
+func (g *gameShell) loadRetailSavePath(path string) error {
+	if g == nil || g.cs == nil || g.cs.fs == nil {
+		return fmt.Errorf("nanolathe: retail save load requires mounted content")
+	}
+	sim, crt := seedsFor(g.opts)
+	loaded, err := session.LoadRetailSavePath(path, session.RetailLoadDeps{
+		FS: g.cs.fs, SimSeed: sim, CRTSeed: crt,
+	})
+	if err != nil {
+		return err
+	}
+	if loaded.Route == session.RetailLoadRouteCampaignContinuation {
+		return g.applyRetailContinuation(loaded.Continuation)
+	}
+	if loaded.Battle == nil || loaded.Battle.Session == nil || loaded.Battle.Image == nil {
+		return fmt.Errorf("nanolathe: retail save load returned no battle candidate")
+	}
+	sess := loaded.Battle.Session
+	if g.audioOwner != nil {
+		sess.Audio = g.audioOwner
+	}
+	battle, err := composeBattleEntryDetached(sess, sess.Catalog, g.cs, g, &loaded.Battle.Image.Camera)
+	if err != nil {
+		return err
+	}
+	// The only mutation of the active battle/frontend/client state occurs here,
+	// after both authoritative and presentation candidates are complete.
+	g.commitBattleCandidate(battle)
+	return nil
+}
+
 func (g *gameShell) beginFreshBattleLoad(mapName string, back shellMode, request freshBattleRequest, after func(*session.Session)) {
 	g.teardownBattle(clPtr)
 	g.bindFrontendClient(clPtr)

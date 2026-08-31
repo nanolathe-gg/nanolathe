@@ -79,6 +79,9 @@ func seedsFor(opts Options) (sim, crt uint32) {
 }
 
 func run(opts Options, out *os.File) error {
+	if opts.LoadSave != "" && (opts.Map != "" || opts.Mission != "" || opts.Headless || opts.Shot != "") {
+		return fmt.Errorf("nanolathe: --load-save cannot be combined with --map, --mission, --headless, or --shot")
+	}
 	// A file-less headless report owns stdout as one JSON document. Windowed
 	// runs and headless runs with a separate report file retain the profile
 	// banner on stdout.

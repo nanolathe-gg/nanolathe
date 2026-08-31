@@ -17,6 +17,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/render"
+	"github.com/nanolathe/nanolathe/internal/save"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/settings"
 	"github.com/nanolathe/nanolathe/internal/ui"
@@ -266,6 +267,14 @@ func runGameShell(opts Options, cs *contentSet) error {
 	}
 	cl.SetCursors(cursors)
 	cl.SetUIStage(gameShellUIStage{shell: shell})
+	if opts.LoadSave != "" {
+		// The host supplied an explicit path; loading is performed before the
+		// client loop starts, on the same thread that owns render-thread state.
+		// No file-picker or alternate save format is introduced here.
+		if err := shell.loadRetailSavePath(opts.LoadSave); err != nil {
+			return err
+		}
+	}
 	fmt.Fprintf(os.Stderr, "nanolathe: retail frontend: %d skirmish maps\n", len(maps))
 	return client.RunGame(cl)
 }
@@ -559,17 +568,46 @@ func (g *gameShell) missionDifficulty() int {
 }
 
 func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) error {
+	return g.enterBattleAtCamera(sess, cat, nil)
+}
+
+// enterBattleAtCamera prepares the complete battle presentation before
+// retiring the current battle/frontend state. This ordering is the atomic
+// save-load boundary: every fallible operation happens on the detached
+// candidate, while the grouped adoption below runs only on the render thread
+// [08 R-SAVE-02 §11–§12].
+func (g *gameShell) enterBattleAtCamera(sess *session.Session, cat *content.Catalog, savedCamera *save.Camera) error {
+	if g == nil || sess == nil {
+		return fmt.Errorf("nil battle session")
+	}
 	if g.audioOwner != nil && sess != nil {
-		// The frontend briefing and battle share one semantic audio owner;
-		// attach it at the existing battle adoption boundary [03 §8][I6].
+		// The frontend briefing and battle share one semantic audio owner. This
+		// only changes the detached candidate until adoption below.
 		sess.Audio = g.audioOwner
 	}
 	g.adoptCampaignProgress(sess)
-	g.teardownBattle(clPtr)
-	battle, err := composeBattleEntry(sess, cat, g.cs, clPtr, g)
+	battle, err := composeBattleEntryDetached(sess, cat, g.cs, g, savedCamera)
 	if err != nil {
 		return err
 	}
+	g.commitBattleCandidate(battle)
+	return nil
+}
+
+// commitBattleCandidate is the sole render-thread installation point for a
+// prepared battle. It intentionally contains no fallible work: the previous
+// battle and its client bindings are retired only after candidate preparation
+// has completed successfully [I6].
+func (g *gameShell) commitBattleCandidate(battle *battleSession) {
+	if g == nil || battle == nil {
+		return
+	}
+	if g.battle != nil {
+		g.battle.teardown(clPtr)
+	}
+	g.battle = nil
+	g.cam = nil
+	installBattleClient(clPtr, battle)
 	g.cam = battle.cam
 	g.battle = battle
 	g.battle.returnToMenu = g.returnFromBattle
@@ -580,8 +618,9 @@ func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) err
 			g.bindFrontendClient(cl)
 		}
 	}
-	g.frontend.SetMode(modeBattle)
-	return nil
+	if g.frontend != nil {
+		g.frontend.SetMode(modeBattle)
+	}
 }
 
 // returnFromBattle is the retail MAINMENU confirmation outcome: discard the

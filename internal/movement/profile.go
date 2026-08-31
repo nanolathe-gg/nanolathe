@@ -31,10 +31,9 @@ type Profile struct {
 // R-DOC04-A]: 255 slopes, depth limits ±10000. These are the values every
 // class record holds before any parse, and the same values back the scratch
 // profile retail uses when an FBI movementclass name does not resolve
-// [02 §5 "Movement class record"] — unauthored means unlimited. Callers that
-// must fabricate a permissive fallback record (units with no movement class)
-// should start from this, not from the zero value: a zeroed record is a real
-// record whose zero thresholds block every slope.
+// [02 §5 "Movement class record"] — unauthored means unlimited. Unit
+// consumers should use NewScratchProfile so their complete FBI record remains
+// unit-local; a zeroed Profile is only an absent/uninitialized surface.
 func Template() Profile {
 	return Profile{
 		MaxWaterDepth: 10000,
@@ -79,6 +78,28 @@ func NewProfile(c *content.MovementClass) Profile {
 		BadSlope:      bs,
 		MaxWaterSlope: mws,
 		BadWaterSlope: bws,
+	}
+}
+
+// NewScratchProfile adapts the complete movement scratch record retained on a
+// unit definition into the movement Profile used by all consumers. The unit
+// compiler fills these fields from the FBI's movement keys using the startup
+// template and the movement-record width conversions; an unresolved or blank
+// movementclass therefore still has a unit-local profile [02 §5 "Movement
+// class record"][04 §6.1 R-DOC04-A].
+func NewScratchProfile(d *content.UnitDef) Profile {
+	if d == nil {
+		return Profile{}
+	}
+	return Profile{
+		FootPrintX:    clampInt16(d.FootprintX),
+		FootPrintZ:    clampInt16(d.FootprintZ),
+		MaxWaterDepth: narrowInt16(d.MaxWaterDepth),
+		MinWaterDepth: narrowInt16(d.MinWaterDepth),
+		MaxSlope:      clampUint8(d.MaxSlope),
+		BadSlope:      clampUint8(d.BadSlope),
+		MaxWaterSlope: clampUint8(d.MaxWaterSlope),
+		BadWaterSlope: clampUint8(d.BadWaterSlope),
 	}
 }
 

@@ -19,6 +19,7 @@ package movement
 import (
 	"math"
 	"math/bits"
+	"strconv"
 	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/cob"
@@ -40,11 +41,10 @@ import (
 type System struct {
 	Terrain *world.Terrain
 
-	// Fallback is the profile used by a unit whose definition names no
-	// movement class. Aircraft and buildings legitimately have none: they are
-	// not classified against the ground lattice at all. It is NOT a permissive
-	// stand-in for a class that failed to resolve — that is a load error, and
-	// EnsureUnit records it in Unresolved.
+	// Fallback is retained for callers that ask for a handle before its unit
+	// surface exists. Initialized units always use either their resolved class
+	// record or their own FBI scratch profile; it is never shared by unresolved
+	// definitions [02 §5 "Movement class record"][04 §6.1].
 	Fallback Profile
 
 	// Classes is the compiled movement-class table, keyed as
@@ -52,10 +52,6 @@ type System struct {
 	// passability, path bias, collision footprint and occupancy stamps are
 	// per-unit identity, not session-wide [04 §6.1] [04 §7.1].
 	Classes map[string]*content.MovementClass
-
-	// Unresolved names the movement classes a unit definition asked for and
-	// the table did not have, for load diagnostics. Order is first-seen.
-	Unresolved []string
 
 	Grid       *OccupancyGrid
 	Scheduler  *path.Scheduler
@@ -75,7 +71,7 @@ type System struct {
 	prevMoveTier            map[pool.Handle]int     // cached mover tier per unit for MoveRate edge emission [04 §5.2][GAP T15] C18
 	prevSFXBand             map[pool.Handle]int     // cached setSFXoccupy band per unit for edge emission [04 §5.2][GAP T15] C17 C18
 
-	// world is the units world bound via BindWorld (or via Tick for legacy path).
+	// world is the units world bound via BindWorld for the phase-2 transaction.
 	// StepUnit needs it to fetch the *units.Unit for a handle without passing
 	// the world on every per-unit call, so the caller can invoke StepUnit
 	// inside its own slot visit [04 §1.1] sweep order.
@@ -410,13 +406,17 @@ func (s *System) ArrivalHandleFor(h pool.Handle) (goalX, goalZ int32, threshSq i
 // active") [R-P0-01]. DistToGoal is a publication-only integer-sqrt
 // diagnostic in Fixed 16.16 units.
 type StepResult struct {
-	Handle     pool.Handle   // the stepped handle
-	Arrived    bool          // final completion remains false until R-P0-01 closes
-	DistToGoal numeric.Fixed // diagnostic distance after step; sentinel when no goal
-	HasRoute   bool          // route.Active after step (pruning may have cleared it)
-	Moved      bool          // position changed this tick
-	Blocked    bool          // collision blocked this tick [04 §8.2] C24
-	EmptyRoute bool          // true when no active route at entry (empty/failed) [task]
+	Handle pool.Handle // the stepped handle
+	// LifecycleError reports that StepUnit was called outside the active
+	// BeginTick/EndTick transaction. The production session owns that
+	// transaction; callers must not fall back to direct unit state [01 §4.4].
+	LifecycleError bool
+	Arrived        bool          // final completion remains false until R-P0-01 closes
+	DistToGoal     numeric.Fixed // diagnostic distance after step; sentinel when no goal
+	HasRoute       bool          // route.Active after step (pruning may have cleared it)
+	Moved          bool          // position changed this tick
+	Blocked        bool          // collision blocked this tick [04 §8.2] C24
+	EmptyRoute     bool          // true when no active route at entry (empty/failed) [task]
 }
 
 // NewSystem creates a System bound to terrain/profile/grid. It allocates the per-unit
@@ -484,10 +484,9 @@ func (s *System) SetClasses(classes map[string]*content.MovementClass) {
 
 // BindWorld binds the units world for per-unit stepping [04 §1.1].
 // The world is needed to fetch the *units.Unit for a handle inside StepUnit
-// so the caller can drive movement from its own slot visit without passing the
-// world on every call. Tick also binds it for legacy callers.
-// This is the minimal additive interface for ON-03; it does not change
-// internal/path or internal/orders.
+// so the session can drive movement from its own slot visit without passing
+// the world on every call. This is the minimal additive interface for ON-03;
+// it does not change internal/path or internal/orders.
 func (s *System) BindWorld(w *units.World) {
 	if s == nil {
 		return
@@ -510,9 +509,8 @@ func (s *System) newLayerRegistry() *ClassLayers {
 	return NewClassLayers(s.Terrain, s.Grid, s.world, s)
 }
 
-// ensureLayerRegistry returns the layer registry, creating it at first use
-// for wiring sites reached without a BindWorld call (System.Tick binds the
-// world itself).
+// ensureLayerRegistry returns the layer registry, creating it at first use for
+// wiring sites reached without a prior BindWorld call.
 func (s *System) ensureLayerRegistry() *ClassLayers {
 	if s == nil {
 		return nil
@@ -969,62 +967,76 @@ func (s *System) finalGoalReached(u *units.Unit, hadRoute bool) bool {
 // with the diagnostic false in finalGoalReached above.
 
 // resolveProfile derives a unit's movement profile from its definition's
-// movement class [02 "Unit record"] [04 §6.1].
-//
-// A definition naming no class gets the fallback: aircraft and buildings are
-// not classified against the ground lattice. A definition naming a class the
-// table does not hold is a content error, recorded in Unresolved so a load can
-// report it rather than silently pathing a ship like a scout.
+// movement class [02 "Unit record"] [04 §6.1]. Resolved names use the catalog
+// record. Blank and unresolved names use the complete unit-local FBI scratch
+// record; retail keeps this degraded path alive and does not report a missing
+// class as a content error [02 §5 "Movement class record"].
 func (s *System) resolveProfile(u *units.Unit) Profile {
 	if s == nil || u == nil || u.Def == nil {
 		return Profile{}
 	}
 	name := u.Def.MovementClass
 	if strings.TrimSpace(name) == "" {
-		return s.Fallback
+		return s.scratchProfile(u.Def)
 	}
 	mc := s.Classes[content.CanonicalKey(name)]
 	if mc == nil {
-		s.noteUnresolved(name)
-		return s.Fallback
+		return s.scratchProfile(u.Def)
 	}
 	return NewProfile(mc)
 }
 
-// noteUnresolved records a missing movement class once, in first-seen order.
-func (s *System) noteUnresolved(name string) {
-	for _, have := range s.Unresolved {
-		if have == name {
-			return
-		}
-	}
-	s.Unresolved = append(s.Unresolved, name)
+// scratchProfile returns the unit's retained FBI movement record. The compiler
+// owns the startup-template defaults, so this remains unit-local even when a
+// movement class name is blank or cannot be resolved [02 §5][04 §6.1].
+func (s *System) scratchProfile(d *content.UnitDef) Profile {
+	return NewScratchProfile(d)
 }
 
-// classKeyOf returns the compiled class-table key a unit's movement profile
-// resolves from, or "" when the definition names no class or an unresolved
-// one — both carry the shared scratch profile [04 §6.1 R-DOC04-A]. It
-// mirrors resolveProfile's resolution so the layer registry keys a unit's
-// layer by the same canonical class name the profile came from [04 §6.1
-// R-DOC04-B: all requests of one class share one record and layer].
+// classKeyOf returns the deterministic layer identity for a unit's movement
+// profile. Resolved names share their catalog class layer. Blank and
+// unresolved names use a profile-derived key, allowing distinct FBI scratch
+// profiles to retain distinct stamped layers instead of aliasing on an empty
+// class name [04 §6.1 R-DOC04-B].
 func (s *System) classKeyOf(u *units.Unit) string {
 	if s == nil || u == nil || u.Def == nil {
 		return ""
 	}
 	name := u.Def.MovementClass
 	if strings.TrimSpace(name) == "" {
-		return ""
+		return scratchLayerKey(NewScratchProfile(u.Def))
 	}
 	key := content.CanonicalKey(name)
-	if s.Classes[key] == nil {
-		return ""
+	if s.Classes[key] != nil {
+		return key
 	}
-	return key
+	return scratchLayerKey(NewScratchProfile(u.Def))
 }
 
-// classKeyFor returns the recorded class key of a handle; "" for a unit
-// without an initialized surface, which shares the single scratch-profile
-// layer keyed by the empty name.
+// scratchLayerKey encodes every stored profile field in a stable lookup key.
+// The prefix keeps it disjoint from ordinary canonical class names, while the
+// profile fields ensure two distinct unit-local records cannot alias merely
+// because movementclass is blank or unresolved [I1].
+func scratchLayerKey(p Profile) string {
+	buf := make([]byte, 0, 80)
+	// Authored canonical names originate in NUL-terminated content strings, so
+	// a leading NUL makes this namespace structurally disjoint from every
+	// catalog key rather than merely relying on a conventional prefix.
+	buf = append(buf, 0)
+	buf = append(buf, "scratch/"...)
+	for _, v := range []int64{
+		int64(p.FootPrintX), int64(p.FootPrintZ), int64(p.MaxWaterDepth),
+		int64(p.MinWaterDepth), int64(p.MaxSlope), int64(p.BadSlope),
+		int64(p.MaxWaterSlope), int64(p.BadWaterSlope),
+	} {
+		buf = strconv.AppendInt(buf, v, 10)
+		buf = append(buf, '/')
+	}
+	return string(buf)
+}
+
+// classKeyFor returns the recorded class/layer key of a handle; "" for a unit
+// without an initialized surface.
 func (s *System) classKeyFor(h pool.Handle) string {
 	if s == nil || s.profileNames == nil {
 		return ""
@@ -2130,8 +2142,7 @@ func (s *System) emitMovementCallbacks(u *units.Unit, speed int32) {
 // The occupancy grid itself is synchronous; clear-then-stamp finishes before the
 // next slot [04 §8.2] C22, so later StepUnit calls immediately observe earlier
 // commits without needing a separate grid copy. BeginTick must be called once
-// before any StepUnit in the tick; the world must have been bound via BindWorld
-// (or via Tick's legacy path).
+// before any StepUnit in the tick; the world must have been bound via BindWorld.
 func (s *System) BeginTick(tick uint32) {
 	if s == nil {
 		return
@@ -2193,18 +2204,23 @@ func (s *System) EndTick(tick uint32) {
 	s.tickStarted = false
 }
 
-// StepUnit advances ONLY the unit identified by handle through the same
-// integration path Tick uses today [04 §8.1][04 §8.2][04 §10.1]. The per-unit
-// body is extracted so Tick becomes BeginTick+loop(StepUnit)+EndTick wrapper,
-// kept for compatibility and documented non-authoritative so the future central
-// loop replaces it. Shared per-tick indexing from BeginTick is consumed;
+// StepUnit advances ONLY the unit identified by handle through the phase-2
+// integration path [04 §8.1][04 §8.2][04 §10.1]. The session composes the
+// BeginTick+ascending StepUnit loop+EndTick transaction. Shared per-tick indexing
+// from BeginTick is consumed;
 // published routes are consumed without duplicate submission; route/goal
 // completion uses goal tolerance (arrival) and is exposed via StepResult.
 // Ground, air, landing, transport states keep working [04 §9.1][04 §10.2].
 // No presentation/camera state enters movement [I6]. Deterministic.
 func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	if s == nil {
-		return StepResult{Handle: handle, EmptyRoute: true, DistToGoal: numeric.Fixed(1 << 30)}
+		return StepResult{Handle: handle, EmptyRoute: true, LifecycleError: true, DistToGoal: numeric.Fixed(1 << 30)}
+	}
+	// Phase 2 is one explicit transaction. A direct StepUnit call cannot
+	// reconstruct its per-tick cargo snapshot safely, so report the lifecycle
+	// violation and leave gameplay state untouched [01 §4.4][04 §8.2].
+	if !s.tickStarted || s.tick != tick {
+		return StepResult{Handle: handle, EmptyRoute: true, LifecycleError: true, DistToGoal: numeric.Fixed(1 << 30)}
 	}
 	w := s.world
 	if w == nil {
@@ -2214,20 +2230,14 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	if u == nil || !u.Alive {
 		return StepResult{Handle: handle, EmptyRoute: true, DistToGoal: numeric.Fixed(1 << 30)}
 	}
-	// Cargo check via per-tick indexing [04 §10.2]. If BeginTick was not called
-	// we fall back to direct carrier check for backward compat (still deterministic).
-	if s.tickCarried != nil {
-		if _, isCarried := s.tickCarried[handle]; isCarried {
-			// Transport removes the mover from the ground route scheduler. Keep
-			// the queue record intact for the eventual unload, but clear all
-			// follower state so a carried unit cannot re-arm an old request
-			// [04 §10.2][04 R-PATH-01 §8].
-			s.DeactivateMove(handle)
-			d := s.distToGoal(u)
-			s.emitMovementCallbacks(u, 0) // carried cargo does not drive own mover [04 §10.2]
-			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
-		}
-	} else if u.Attachment.Carrier != 0 {
+	// Cargo membership is read only from the snapshot captured by BeginTick
+	// [04 §10.2]. The active lifecycle check above makes a direct carrier read
+	// unnecessary and prevents StepUnit from becoming a second transaction owner.
+	if _, isCarried := s.tickCarried[handle]; isCarried {
+		// Transport removes the mover from the ground route scheduler. Keep
+		// the queue record intact for the eventual unload, but clear all
+		// follower state so a carried unit cannot re-arm an old request
+		// [04 §10.2][04 R-PATH-01 §8].
 		s.DeactivateMove(handle)
 		d := s.distToGoal(u)
 		s.emitMovementCallbacks(u, 0)

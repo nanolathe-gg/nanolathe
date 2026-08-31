@@ -16,7 +16,7 @@ func takeoffFixture(t *testing.T) (*System, *units.World, *units.Unit) {
 	sys := NewSystem(ter, Profile{FootPrintX: 1, FootPrintZ: 1, MinWaterDepth: -10000, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 255, BadWaterSlope: 127}, NewOccupancyGrid())
 	w := newMovementFixtureWorld(16)
 	sys.BindWorld(w)
-	def := &content.UnitDef{
+	def := setScratchMovement(&content.UnitDef{
 		DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("takeoffscout")},
 		UnitName:         "takeoffscout",
 		CanFly:           true,
@@ -30,7 +30,7 @@ func takeoffFixture(t *testing.T) (*System, *units.World, *units.Unit) {
 		Acceleration:     65536 / 4,
 		BrakeRate:        65536 / 8,
 		TurnRate:         500,
-	}
+	}, Profile{FootPrintX: 1, FootPrintZ: 1, MinWaterDepth: -10000, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 255, BadWaterSlope: 127})
 	x, z := world.CellToWorld(8), world.CellToWorld(8)
 	h, err := w.Create(def, 0, x, ter.HeightAt(x, z), z)
 	if err != nil {
@@ -49,7 +49,7 @@ func parkFixture(t *testing.T) (*System, *units.World, *units.Unit) {
 	sys := NewSystem(ter, Profile{FootPrintX: 1, FootPrintZ: 1, MinWaterDepth: -10000, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 255, BadWaterSlope: 127}, NewOccupancyGrid())
 	w := newMovementFixtureWorld(16)
 	sys.BindWorld(w)
-	def := &content.UnitDef{
+	def := setScratchMovement(&content.UnitDef{
 		DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("parkscout")},
 		UnitName:         "parkscout",
 		CanMove:          true,
@@ -62,7 +62,7 @@ func parkFixture(t *testing.T) (*System, *units.World, *units.Unit) {
 		Acceleration:     65536 / 2,
 		BrakeRate:        65536 / 2,
 		TurnRate:         1000,
-	}
+	}, Profile{FootPrintX: 1, FootPrintZ: 1, MinWaterDepth: -10000, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 255, BadWaterSlope: 127})
 	x, z := world.CellToWorld(12), world.CellToWorld(12)
 	h, err := w.Create(def, 0, x, ter.HeightAt(x, z), z)
 	if err != nil {

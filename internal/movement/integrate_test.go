@@ -58,6 +58,7 @@ func TestSchedulerRouteSteerArrival(t *testing.T) {
 	def.MaxDamage = 100
 	def.FootprintX = 1
 	def.FootprintZ = 1
+	setScratchMovement(def, profile)
 	startWorldX := world.CellToWorld(1)
 	startWorldZ := world.CellToWorld(1)
 	startWorldY := terrain.HeightAt(startWorldX, startWorldZ)
@@ -98,7 +99,8 @@ func TestSchedulerRouteSteerArrival(t *testing.T) {
 	}
 
 	// Drive movement ticks until arrival or limit
-	// Use System.Tick which does Prune+Steer+Collision
+	// Drive the explicit BeginTick/StepUnit/EndTick transaction through
+	// Prune+Steer+Collision.
 	for tick := uint32(2); tick < 200; tick++ {
 		// Scheduler may already be empty, but tick anyway
 		system.Scheduler.Tick(tick)
@@ -156,6 +158,7 @@ func TestIntegrateDeterminism(t *testing.T) {
 		w := newMovementFixtureWorld(10)
 		def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, Acceleration: 2 * 65536, BrakeRate: 2 * 65536, TurnRate: 500}
 		def.MaxDamage = 100
+		setScratchMovement(def, profile)
 		h, _ := w.Create(def, 0, world.CellToWorld(0), numeric.Fixed(0), world.CellToWorld(0))
 		u := w.Unit(h)
 		system.EnsureUnit(u)
@@ -239,6 +242,7 @@ func TestBigRequestStaysActiveAcrossTicks(t *testing.T) {
 	def.MaxDamage = 100
 	def.FootprintX = 1
 	def.FootprintZ = 1
+	setScratchMovement(def, profile)
 	startWorldX := world.CellToWorld(1)
 	startWorldZ := world.CellToWorld(1)
 	startWorldY := terrain.HeightAt(startWorldX, startWorldZ)
@@ -358,7 +362,8 @@ func TestActivateMoveExactlyOnceAndRejectsStalePublication(t *testing.T) {
 	terrain := syntheticTerrainForIntegrate()
 	system := NewSystem(terrain, Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}, NewOccupancyGrid())
 	w := newMovementFixtureWorld(10)
-	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, Acceleration: 2 * 65536, BrakeRate: 2 * 65536, TurnRate: 500, MaxDamage: 100}
+	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25}
+	def := setScratchMovement(&content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, Acceleration: 2 * 65536, BrakeRate: 2 * 65536, TurnRate: 500, MaxDamage: 100}, profile)
 	h, _ := w.Create(def, 0, world.CellToWorld(0), 0, world.CellToWorld(0))
 	u := w.Unit(h)
 	system.BindWorld(w)

@@ -119,7 +119,9 @@ type UnitDef struct {
 	MinWaterDepth       int32 // scratch-profile signed-16 minimum depth; template −10000 [02 §5 "Movement class record"][04 §6.1 R-DOC04-A]
 	MaxWaterDepth       int32 // scratch-profile signed-16 maximum depth; template 10000 [02 §5 "Movement class record"][04 §6.1 R-DOC04-A]
 	MaxSlope            int32 // scratch-profile byte slope after the ordered clamps [02 §5 "Movement class record"]
+	BadSlope            int32 // scratch-profile byte soft land-slope threshold [02 §5 "Movement class record"]
 	MaxWaterSlope       int32 // scratch-profile byte water slope copied with MaxSlope [02 §5 "Movement class record"]
+	BadWaterSlope       int32 // scratch-profile byte soft water-slope threshold [02 §5 "Movement class record"]
 	CruiseAlt           int32 // cruisealt integer default 0 [02 "Unit record"]
 	TransportSize       int32 // transportsize integer default 0 [02 "Unit record"]
 	TransportCapacity   int32 // transportcapacity integer default 0 [02 "Unit record"]
@@ -414,7 +416,9 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 	minWaterDepth := scratchMovement.MinWaterDepth
 	maxWaterDepth := scratchMovement.MaxWaterDepth
 	maxSlope := scratchMovement.MaxSlope
+	badSlope := scratchMovement.BadSlope
 	maxWaterSlope := scratchMovement.MaxWaterSlope
+	badWaterSlope := scratchMovement.BadWaterSlope
 	cruiseAlt := section.IntValue("cruisealt", 0)
 	transportSize := section.IntValue("transportsize", 0)
 	transportCapacity := section.IntValue("transportcapacity", 0)
@@ -585,7 +589,9 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 		MinWaterDepth:                minWaterDepth,
 		MaxWaterDepth:                maxWaterDepth,
 		MaxSlope:                     maxSlope,
+		BadSlope:                     badSlope,
 		MaxWaterSlope:                maxWaterSlope,
+		BadWaterSlope:                badWaterSlope,
 		CruiseAlt:                    cruiseAlt,
 		TransportSize:                transportSize,
 		TransportCapacity:            transportCapacity,
@@ -668,7 +674,7 @@ func writeUnitCanonical(u *UnitDef) []byte {
 	fmt.Fprintf(&b, "%s|%d|%s|%s|%s|%s|%s|%s|%s|", u.CanonicalKey, u.UnitDefID, u.UnitName, u.Name, u.Description, u.Side, u.ObjectName, u.Category, u.SoundCategory)
 	fmt.Fprintf(&b, "%s|", u.Corpse)
 	fmt.Fprintf(&b, "%s|%d|%s|%s|%s|%s|%s|%s|", u.MovementClass, u.MobilityDomain, u.Weapon1, u.Weapon2, u.Weapon3, u.ExplodeAs, u.SelfDestructAs, u.YardMap)
-	fmt.Fprintf(&b, "%d|%d|%d|%d|", u.MinWaterDepth, u.MaxWaterDepth, u.MaxSlope, u.MaxWaterSlope)
+	fmt.Fprintf(&b, "%d|%d|%d|%d|%d|%d|", u.MinWaterDepth, u.MaxWaterDepth, u.MaxSlope, u.BadSlope, u.MaxWaterSlope, u.BadWaterSlope)
 	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|", u.DefaultMissionType, u.BadTargetCategoryWPRI, u.BadTargetCategoryWSEC, u.BadTargetCategoryWSPE, u.NoChaseCategory)
 	fmt.Fprintf(&b, "%s|", u.AIWeight)
 	fmt.Fprintf(&b, "%d|%d|%.10f|%.10f|%.10f|%.10f|", u.BuildCostEnergy, u.BuildCostMetal, u.EnergyMake, u.EnergyUse, u.MetalMake, u.ExtractsMetal)
@@ -723,24 +729,15 @@ func CompileUnitsWithLanguage(fs vfs.FSOps, language string) (map[string]*UnitDe
 	// should load the table itself rather than re-parse or carry an unused
 	// map through the catalog.
 
-	entries, err := fs.ReadDir("units")
+	entries, err := discoverArchiveContent(fs, "units", ".fbi")
 	if err != nil {
 		return nil, fmt.Errorf("content: units: %w", err)
 	}
 	// ReadDir already sorts by Path [vfs.ReadDir], so iteration is stable (I1).
 	result := make(map[string]*UnitDef)
-	for _, e := range entries {
-		if e.IsDir {
-			continue
-		}
-		// Filter by extension — directory also holds .bat, .pl, .txt, .xls junk [PLAN Discovery]
-		if !strings.HasSuffix(strings.ToLower(e.Path), ".fbi") {
-			continue
-		}
-		data, err := fs.ReadFileLimit(e.Path, 1<<20)
-		if err != nil {
-			continue
-		}
+	for _, entry := range entries {
+		data := entry.data
+		e := entry.info
 		prov := ProvenanceFrom(e)
 		doc, err := formats.ParseTDF(data)
 		if err != nil {
@@ -839,11 +836,10 @@ func LinkUnitWeapons(units map[string]*UnitDef, weapons map[string]*WeaponDef) {
 }
 
 // ApplyMovementFootprints copies the resolved movement record fields retained
-// by the unit definition: footprint, depth limits, MaxSlope, and MaxWaterSlope
-// [02 §5 "Movement class record"]. An unresolved name keeps the FBI scratch
-// record compiled above. Retail's placement/locomotion definition uses this
-// resolved copy; an authored FBI extent is retained only when the profile
-// leaves that axis absent [07 §9] "The site".
+// by the unit definition: footprint, depth limits, and all four slope bytes
+// [02 §5 "Movement class record"]. An unresolved name keeps the complete FBI
+// scratch record compiled above. A resolved class replaces every linked field,
+// including zero-valued footprint extents.
 func ApplyMovementFootprints(units map[string]*UnitDef, movement map[string]*MovementClass) {
 	keys := make([]string, 0, len(units))
 	for key := range units {
@@ -859,16 +855,14 @@ func ApplyMovementFootprints(units map[string]*UnitDef, movement map[string]*Mov
 		if mc == nil {
 			continue
 		}
-		if mc.FootprintX > 0 {
-			u.FootprintX = mc.FootprintX
-		}
-		if mc.FootprintZ > 0 {
-			u.FootprintZ = mc.FootprintZ
-		}
+		u.FootprintX = mc.FootprintX
+		u.FootprintZ = mc.FootprintZ
 		u.MaxWaterDepth = mc.MaxWaterDepth
 		u.MinWaterDepth = mc.MinWaterDepth
 		u.MaxSlope = mc.MaxSlope
+		u.BadSlope = mc.BadSlope
 		u.MaxWaterSlope = mc.MaxWaterSlope
+		u.BadWaterSlope = mc.BadWaterSlope
 		// The resolved profile is part of the immutable compiled definition and
 		// thus must participate in its canonical identity/hash.
 		u.Hash = HashDefinition(writeUnitCanonical(u))

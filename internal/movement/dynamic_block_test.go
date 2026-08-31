@@ -61,7 +61,9 @@ func TestStepUnitBlockedCommitKeepsOrderAndRequest(t *testing.T) {
 	requestsBefore := system.pathProvider.allRequests()
 	activeBefore := *system.activeOrders[moverHandle]
 	nextBefore := system.nextActivation
+	system.BeginTick(1)
 	result := system.StepUnit(moverHandle, 1)
+	system.EndTick(1)
 	if !result.Blocked {
 		t.Fatalf("active route proposal into blocker was not rejected: result=%+v mover=%+v blocker=%+v", result, system.Collisions[moverHandle], system.Collisions[blockerHandle])
 	}

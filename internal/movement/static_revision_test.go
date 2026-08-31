@@ -105,6 +105,7 @@ func TestStaticRevisionInvalidatesGroundRouteAndPublishesCurrentRevision(t *test
 		BMCode:       true,
 		CanMove:      true,
 	}
+	setScratchMovement(def, profile)
 	h, err := w.Create(def, 0, world.CellToWorld(1), terrain.HeightAt(world.CellToWorld(1), world.CellToWorld(1)), world.CellToWorld(1))
 	if err != nil {
 		t.Fatal(err)
@@ -213,7 +214,9 @@ func TestStaticRevisionDoesNotInvalidateAircraftRoute(t *testing.T) {
 	route.PublishAtRevision([]Point{{X: 5, Z: 5}, {X: 6, Z: 6}, {X: 7, Z: 7}}, 0)
 	sys.Routes[h] = route
 	terrain.BumpStaticObstacleRevision()
+	sys.BeginTick(1)
 	result := sys.StepUnit(h, 1)
+	sys.EndTick(1)
 	if !result.HasRoute || !route.Active {
 		t.Fatalf("aircraft route was invalidated by ground revision: result=%+v route=%+v", result, route)
 	}

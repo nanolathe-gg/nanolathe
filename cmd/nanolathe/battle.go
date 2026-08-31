@@ -18,6 +18,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/render"
+	"github.com/nanolathe/nanolathe/internal/save"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/settings"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -169,6 +170,22 @@ func runBattleView(opts Options, cs *contentSet) error {
 // grant [08 R-ENTRY-01 §8]. This helper does not change which authored HUD
 // surfaces the existing battle loader provides.
 func composeBattleEntry(sess *session.Session, cat *content.Catalog, cs *contentSet, cl *client.Client, shell *gameShell) (*battleSession, error) {
+	b, err := composeBattleEntryDetached(sess, cat, cs, shell, nil)
+	if err != nil {
+		return nil, err
+	}
+	if cl != nil {
+		installBattleClient(cl, b)
+	}
+	return b, nil
+}
+
+// composeBattleEntryDetached performs every fallible presentation
+// construction without touching the active client or frontend. A saved
+// camera is applied only to this candidate and is installed at the same
+// render-thread commit as the rest of the battle presentation [08
+// R-SAVE-02 §11–§12].
+func composeBattleEntryDetached(sess *session.Session, cat *content.Catalog, cs *contentSet, shell *gameShell, savedCamera *save.Camera) (*battleSession, error) {
 	if sess == nil {
 		return nil, fmt.Errorf("nil session")
 	}
@@ -187,7 +204,11 @@ func composeBattleEntry(sess *session.Session, cat *content.Catalog, cs *content
 	// marker projection; raw terrain extents include the void margins [07 §10].
 	cam := camera.NewFromTerrain(terrainW, terrainH, terrain.PlayRight, terrain.PlayBottom, retailScreenW, retailScreenH)
 	cam.Pan(0, 0)
-	centerOnCommanderForSession(sess, cam, retailScreenW, retailScreenH)
+	if savedCamera != nil {
+		applyRetailSavedCamera(cam, savedCamera)
+	} else {
+		centerOnCommanderForSession(sess, cam, retailScreenW, retailScreenH)
+	}
 
 	// The battle HUD is mandatory retail content: side-selected PANELTOP,
 	// PANELSIDE, PANELBOT, the 30 SIDEDATA anchors, side fonts, and the authored
@@ -207,25 +228,37 @@ func composeBattleEntry(sess *session.Session, cat *content.Catalog, cs *content
 			_ = sess.Audio.PlayUICue(name)
 		}
 	})
-	if cl != nil {
-		cl.SetSnapshot(sess.Snapshot)
-		cl.SetTerrain(terrain)
-		cl.SetCamera(cam)
-		cl.SetPalette(pal)
-		cl.SetFNT(hud.console)
-		// The "label every unit" bit is read from the stored settings the way
-		// retail reads `damagebars` into bit 0 of the interface-flags word at
-		// settings load; the composer's label walk is its only consumer
-		// [07 R-HUD-03 §7][03 R-FX-01 §6].
-		applyDamageBarsSetting(loadedSettings())
-		// The shared battle HUD adapter is live only after all of its palette,
-		// font, terrain, and camera inputs have been installed [I6].
-		cl.SetUIStage(battleHUDUIStage{hud: hud, battle: b})
-		// Join the session's audio queue/cache/music to the client's device and
-		// per-frame drain [03 §8.2][03 §8.3][03 §8.4].
-		attachBattleAudio(cl, sess, cs.fs)
-	}
 	return b, nil
+}
+
+func applyRetailSavedCamera(cam *camera.Camera, saved *save.Camera) {
+	if cam == nil || saved == nil {
+		return
+	}
+	// Retail copies saved X/Z into current and target camera positions.
+	// Target/glide/state-bit names are not established by the presentation API,
+	// so this seam deliberately does not synthesize them.
+	cam.X = saved.XPosition
+	cam.Z = saved.ZPosition
+	// TODO(question): camera target/glide/state-bit semantics are unknown; a
+	// retail probe is needed before exposing those words here.
+}
+
+// installBattleClient is the non-fallible render-thread half of battle
+// adoption. Resource construction and authoritative restoration have already
+// succeeded before this grouped setter sequence runs [I6].
+func installBattleClient(cl *client.Client, b *battleSession) {
+	if cl == nil || b == nil || b.sess == nil {
+		return
+	}
+	cl.SetSnapshot(b.sess.Snapshot)
+	cl.SetTerrain(b.sess.World)
+	cl.SetCamera(b.cam)
+	cl.SetPalette(b.hud.pal)
+	cl.SetFNT(b.hud.console)
+	applyDamageBarsSetting(loadedSettings())
+	cl.SetUIStage(battleHUDUIStage{hud: b.hud, battle: b})
+	attachBattleAudio(cl, b.sess, b.fs)
 }
 
 // teardown is the one idempotent battle-exit boundary. Presentation joins are

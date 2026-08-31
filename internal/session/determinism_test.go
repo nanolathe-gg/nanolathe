@@ -312,6 +312,20 @@ func TestRS06_LegacyProductionGuard(t *testing.T) {
 	if !strings.Contains(registry, "func (s *Session) stepAuthoritativePhases") || !strings.Contains(registry, "s.phaseUnits(tick)") {
 		t.Fatalf("stepAuthoritativePhases must be the single phase registry containing the retail sequence [RS-06][DET-02]")
 	}
+	phaseStart := strings.Index(content, "func (s *Session) stepUnitPhase")
+	if phaseStart < 0 {
+		t.Fatalf("phase-2 movement lifecycle boundary missing [01 §4.4]")
+	}
+	phaseEnd := strings.Index(content[phaseStart:], "// stepProjectilePhase")
+	if phaseEnd < 0 {
+		t.Fatalf("phase-2 movement lifecycle boundary missing [01 §4.4]")
+	}
+	phase2 := content[phaseStart : phaseStart+phaseEnd]
+	if strings.Count(phase2, "s.Movement.BeginTick(tick)") != 1 ||
+		strings.Count(phase2, "s.Movement.StepUnit(h, tick)") != 1 ||
+		strings.Count(phase2, "s.Movement.EndTick(tick)") != 1 {
+		t.Fatalf("phase 2 must own exactly one BeginTick → ascending StepUnit → EndTick transaction [01 §4.4]")
+	}
 	registryStart := strings.Index(registry, "func (s *Session) stepAuthoritativePhases")
 	registryEnd := strings.Index(registry[registryStart:], "// stepOneSubTick")
 	if registryEnd < 0 {

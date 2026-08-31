@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/cob"
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -20,6 +21,24 @@ func (movementFixtureCOBFS) ReadFileLimit(name string, _ int64) ([]byte, error) 
 		return movementFixtureCOB(), nil
 	}
 	return nil, vfs.ErrNotFound
+}
+
+// setScratchMovement makes hand-built test definitions carry the same
+// movement record that their System profile represents. Production compiled
+// definitions already contain these fields from the FBI scratch record.
+func setScratchMovement(def *content.UnitDef, p Profile) *content.UnitDef {
+	if def == nil {
+		return nil
+	}
+	def.FootprintX = int32(p.FootPrintX)
+	def.FootprintZ = int32(p.FootPrintZ)
+	def.MaxWaterDepth = p.MaxWaterDepth
+	def.MinWaterDepth = p.MinWaterDepth
+	def.MaxSlope = int32(p.MaxSlope)
+	def.BadSlope = int32(p.BadSlope)
+	def.MaxWaterSlope = int32(p.MaxWaterSlope)
+	def.BadWaterSlope = int32(p.BadWaterSlope)
+	return def
 }
 func (movementFixtureCOBFS) ReadDir(string) ([]vfs.EntryInfo, error) { return nil, vfs.ErrNotFound }
 func (movementFixtureCOBFS) Stat(string) (vfs.EntryInfo, error) {
