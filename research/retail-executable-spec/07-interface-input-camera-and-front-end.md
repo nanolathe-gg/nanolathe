@@ -3626,6 +3626,36 @@ value (one step per tick for values below 15). This closes doc 08's "whether
 the per-gadget `value / 15` float is the bar renderer's fill increment"
 (cross-doc: doc 08 to cite) — it is the animation step, not a fill fraction.
 
+**Correction (2026-08-31, Wave B3).** The runtime kind-13 record keeps the
+authored dimensions `width=67,height=18`, but its inclusive painted footprint
+is `(x,y)..(x+67,y+18)` (68×19). The standard raised two-pixel bevel is the
+`fill + raised` primitive of [R-FE-02 §4]: semantic fields 0 on the top/left
+runs, 17 on the bottom/right runs, and the record's inner span is
+`(x+2,y+2)..(x+65,y+16)` (64×15). ENDMSN supplies dcb[8] as the inner
+background and dcb[4] as the foreground; the latter is painted through the
+inclusive endpoint `x+2 + trunc(63*current/max)`. The displayed decimal is
+centred at `x+33-textWidth/2`, `y+9-fontMetric/2` (the stock text origin is
+therefore y+2 for its font metric). These are semantic palette fields, never
+literal RGB values.
+
+The service examines only active, visible bars and enters its body only while
+`current < target`. A bar is then due only when `nextDue < presentationUnit`;
+it advances once and then stores
+`nextDue = presentationUnit + 1`, even if the sampled clock jumped. Landing
+exactly on the target leaves the animation flag set; only a candidate step
+that strictly overshoots the target clears it (the prior "when it lands"
+wording was too broad). The result rows'
+player surface is 91×21 at x=16 and uses the source slot's frame from
+`textures/logos.gaf:32xlogos`, stretched by the established surface painter;
+the name is centred in the 90×15 text area at x=16 with foreground field 15.
+The row ordinal is not a logo-frame selector. The reveal deadline comparison
+is also strict (`deadline < presentationUnit`), with the inherited deadline
+expired so Kills can reveal on the first pass; each group then schedules
+`deadline = presentationUnit + 10`. In the single-player result surface, a
+keyboard edge activates all seven groups and plays `ActivateAllStatBars`, then
+the same pass performs the ordinary one-group reveal and cue. Mouse input does
+not skip the reveal. **Established.**
+
 ### Closed — selection-count and group displays [R-HUD-03 §12] (2026-08-29)
 
 **Established — there is no selection-count readout.** Nothing in the battle

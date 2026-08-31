@@ -177,11 +177,11 @@ func decodeCamera(bank *Bank, image *BattleImage) error {
 	if !ok {
 		return battleImageError("missing Camera account", "Camera account")
 	}
-	if _, ok := ac.Double("X Position"); !ok {
-		return battleImageError("missing Camera X Position", "Camera X Position double")
+	if _, ok := ac.Int("X Position"); !ok {
+		return battleImageError("missing Camera X Position", "Camera X Position integer")
 	}
-	if _, ok := ac.Double("Z Position"); !ok {
-		return battleImageError("missing Camera Z Position", "Camera Z Position double")
+	if _, ok := ac.Int("Z Position"); !ok {
+		return battleImageError("missing Camera Z Position", "Camera Z Position integer")
 	}
 	image.Camera, _ = ReadCamera(bank)
 	return nil
@@ -224,7 +224,18 @@ func decodeUnits(bank *Bank, image *UnitImage) error {
 		return battleImageError("missing Units account", "Units account")
 	}
 	version, count, present := ReadUnitsHeader(bank)
-	if !present || version != UnitsVersionRetail {
+	if !present {
+		return battleImageError("missing Units account", "Units account")
+	}
+	// Empty Units accounts produced by retail may omit both header scalars.
+	// Treat that exact empty form as an empty, loadable account; a nonempty
+	// account still requires Version 0x11 [08 R-SAVE-02 §6].
+	if _, versionPresent := ac.Int("Version"); !versionPresent {
+		if _, countPresent := ac.Int("Number of Units"); !countPresent && len(ac.Boxes) == 0 {
+			version, count = UnitsVersionRetail, 0
+		}
+	}
+	if version != UnitsVersionRetail {
 		return battleImageError("invalid Units version", "integer Version equal to 0x11")
 	}
 	if count < 0 || int64(count) > int64(maxWireUnitRecords) {
@@ -565,7 +576,7 @@ func decodeTerrain(bank *Bank, image *BattleImage) error {
 	}{
 		{account: "Metal", box: "Plotmap", dst: &image.Metal},
 		{account: "PlayerFeatures", box: "Plotmap", dst: &image.PlayerFeatures},
-		{account: "Mapping", box: "Data", dst: &image.Mapping},
+		{account: "Mapping", box: "", dst: &image.Mapping},
 	} {
 		ac, ok := bank.Account(family.account)
 		if !ok {
@@ -581,9 +592,19 @@ func decodeTerrain(bank *Bank, image *BattleImage) error {
 }
 
 func decodeMeteor(bank *Bank, meteor *MeteorScalars) error {
-	value, ok := ReadMeteorScalars(bank)
-	if !ok {
-		return battleImageError("incomplete Meteor account", "all nine established Meteor integer items")
+	// Meteor is optional. Missing or mistyped items are zero and therefore
+	// disable/deactivate the scheduler [08 R-SAVE-02 §12].
+	var value MeteorScalars
+	if bank != nil {
+		if ac, ok := bank.Account(MeteorAccount); ok {
+			fields := [...]*int32{&value.Enabled, &value.Active, &value.NextStrikeTime, &value.TimeStrikeEnds, &value.NextHitTime, &value.OriginX, &value.OriginZ, &value.TargetX, &value.TargetZ}
+			names := [...]string{"Enabled", "Active", "Next Strike Time", "Time Strike Ends", "Next Hit Time", "Origin X", "Origin Z", "Target X", "Target Z"}
+			for i, name := range names {
+				if v, present := ac.Int(name); present {
+					*fields[i] = v
+				}
+			}
+		}
 	}
 	*meteor = value
 	return nil

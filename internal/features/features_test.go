@@ -1,6 +1,7 @@
 package features
 
 import (
+	"encoding/binary"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
@@ -24,6 +25,91 @@ func newEmptyTerrain(w, h int) *world.Terrain {
 		FeatureDefs: []*content.FeatureDef{},
 		SeaLevel:    10,
 		Gravity:     numeric.Fixed(0x1FDB),
+	}
+}
+
+func TestRestoreAtCopiesNormalAnchorAndAnimationState(t *testing.T) {
+	terrain := newEmptyTerrain(4, 4)
+	def := featureDef("tree", 0, 0, 10)
+	svc := NewService(terrain, nil, nil, nil)
+	normal := make([]byte, 8)
+	binary.LittleEndian.PutUint16(normal[4:], 3)
+	binary.LittleEndian.PutUint16(normal[6:], 0x4321)
+	if _, err := svc.RestoreAt(1, 2, def, 0, normal); err != nil {
+		t.Fatal(err)
+	}
+	if got := terrain.PlotAt(1, 2).AnchorWord(); got != 0x4321 {
+		t.Fatalf("normal anchor %#x, want %#x", got, 0x4321)
+	}
+
+	terrain = newEmptyTerrain(4, 4)
+	svc = NewService(terrain, nil, nil, nil)
+	anim := make([]byte, 10)
+	binary.LittleEndian.PutUint16(anim[6:], 0x2211)
+	anim[8], anim[9] = 7, 0xA0 // selector 0 (burn), countdown high nibble 10
+	inst, err := svc.RestoreAt(1, 2, def, 1, anim)
+	if err != nil || inst == nil || !inst.IsBurning || !inst.IsAnimating || inst.AnimationState != 0x2211 || inst.AnimationFrame != 7 || inst.AnimationSelector != 0 || inst.AnimationCountdown != 10 || inst.BurnCountdown != 10 || inst.BurnTicks != 7 {
+		t.Fatalf("anim restore: inst=%#v err=%v", inst, err)
+	}
+	if !terrain.PlotAt(1, 2).Occupied() {
+		t.Fatal("animating restore did not attach the anchor instance bit")
+	}
+
+	terrain = newEmptyTerrain(4, 4)
+	svc = NewService(terrain, nil, nil, nil)
+	threeD := make([]byte, 26)
+	binary.LittleEndian.PutUint16(threeD[6:], 0xBEEF)
+	var opaque [18]byte
+	for i := range opaque {
+		opaque[i] = byte(i + 1)
+		threeD[8+i] = opaque[i]
+	}
+	threeDInst, err := svc.RestoreAt(2, 1, def, 2, threeD)
+	if err != nil || threeDInst == nil || threeDInst.AnimationState != 0xBEEF || threeDInst.OpaqueState != opaque {
+		t.Fatalf("3D restore state: inst=%#v err=%v", threeDInst, err)
+	}
+	if !terrain.PlotAt(2, 1).Occupied() {
+		t.Fatal("3D restore did not attach the anchor instance bit")
+	}
+}
+
+func TestRestoreAnimatingSelectorsRetainStateWithoutBurnCompletion(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		selector  uint8
+		countdown uint8
+	}{
+		{name: "death", selector: 1, countdown: 11},
+		{name: "reclaim", selector: 2, countdown: 12},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			terrain := newEmptyTerrain(4, 4)
+			def := featureDef("source-"+tc.name, 0, 0, 10)
+			svc := NewService(terrain, nil, nil, nil)
+			hookCalls := 0
+			svc.SetBurnAnimationTicks(func(*content.FeatureDef) int32 {
+				hookCalls++
+				return 1
+			})
+			data := make([]byte, 10)
+			binary.LittleEndian.PutUint16(data[6:], 0x1234)
+			data[8] = 7
+			data[9] = tc.countdown<<4 | tc.selector
+			inst, err := svc.RestoreAt(1, 1, def, 1, data)
+			if err != nil || inst == nil || !inst.IsAnimating || inst.IsBurning || inst.AnimationState != 0x1234 || inst.AnimationFrame != 7 || inst.AnimationSelector != tc.selector || inst.AnimationCountdown != tc.countdown || inst.BurnCountdown != 0 || inst.BurnTicks != 0 || inst.BurnDuration != 0 {
+				t.Fatalf("restore: inst=%#v err=%v", inst, err)
+			}
+			if !terrain.PlotAt(1, 1).Occupied() {
+				t.Fatal("restored transition did not attach the anchor instance bit")
+			}
+			svc.TickLifecycle(0)
+			if got := svc.InstanceAt(1, 1); got != inst {
+				t.Fatalf("selector %d instance=%#v, want retained instance", tc.selector, got)
+			}
+			if hookCalls != 0 {
+				t.Fatalf("selector %d invoked burn duration hook %d times", tc.selector, hookCalls)
+			}
+		})
 	}
 }
 

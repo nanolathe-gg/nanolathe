@@ -103,7 +103,7 @@ type PieceTrace struct {
 
 type ThreadTrace struct {
 	Status, PC, SP                                     int
-	Stack                                              [10]int32
+	Stack                                              [32]int32
 	Sleep, WaitPiece, WaitAxis, WaitThread, SignalMask int
 }
 

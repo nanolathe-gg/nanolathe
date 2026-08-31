@@ -52,13 +52,14 @@ type retailBattleHUD struct {
 	confirmWin         *gui.Window
 	modalFont          *formats.GAFEntry
 	pausedFrame        *formats.GAFFrame
-	victoryFrame       *formats.GAFFrame // [07 §11] igvictory from anims/igtitles.gaf via intgaf/gui machinery
-	defeatFrame        *formats.GAFFrame // [07 §11] igdefeat from anims/igtitles.gaf
-	resultWin          *gui.Window       // [07 §11] authored ENDMSN.GUI result surface
-	resultGAF          *formats.GAF      // [07 §11] authored endmsn.gaf outcome controls
-	resultVictoryFrame *formats.GAFFrame // [07 §11] authored endmsn.gaf victory copy
-	resultDefeatFrame  *formats.GAFFrame // [07 §11] authored endmsn.gaf defeat copy
-	resultPanel        *ui.Panel         // shared authored gesture state [07 §3]
+	victoryFrame       *formats.GAFFrame  // [07 §11] igvictory from anims/igtitles.gaf via intgaf/gui machinery
+	defeatFrame        *formats.GAFFrame  // [07 §11] igdefeat from anims/igtitles.gaf
+	resultWin          *gui.Window        // [07 §11] authored ENDMSN.GUI result surface
+	resultGAF          *formats.GAF       // [07 §11] authored endmsn.gaf outcome controls
+	resultVictoryFrame *formats.GAFFrame  // [07 §11] authored endmsn.gaf victory copy
+	resultDefeatFrame  *formats.GAFFrame  // [07 §11] authored endmsn.gaf defeat copy
+	resultPanel        *ui.Panel          // shared authored gesture state [07 §3]
+	resultState        resultPresentation // ENDMSN dynamic bars/reveal state [08 R-CAMP-01 §7]
 
 	fs    vfs.FSOps
 	pages map[string]*formats.GAF

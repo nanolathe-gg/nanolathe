@@ -1,14 +1,17 @@
 package ui
 
 // ResultAction is the semantic action emitted by an authored end-mission
-// control. The frontend adapter turns it into the existing battle transition;
-// UI does not touch session state [07 §11].
+// control. It is passed across the UI boundary as a typed value; no control
+// name or string route is used after this point [07 §11].
 type ResultAction uint8
 
 const (
 	ResultActionNone ResultAction = iota
 	ResultActionContinue
 	ResultActionMainMenu
+	// ResultActionSkirmish is retained for the existing skirmish return route;
+	// ENDMSN itself does not author a control that emits it [07 §11].
+	ResultActionSkirmish
 )
 
 // ResultActionForControl accepts only authored ENDMSN route controls. Unknown

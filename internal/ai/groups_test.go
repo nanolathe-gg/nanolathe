@@ -37,6 +37,33 @@ func TestGroupsRequireAnEstablishedWriter(t *testing.T) {
 	}
 }
 
+func TestRestoreGroupsDoNotOverwriteUIGroup(t *testing.T) {
+	def := &content.UnitDef{
+		DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("restore-group")},
+		UnitName:         "restore-group",
+		CanMove:          true,
+		FootprintX:       1,
+		FootprintZ:       1,
+		MaxVelocity:      100,
+	}
+	w := newAIFixtureWorld(8, &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}})
+	h, err := w.Create(def, 0, world.CellToWorld(1), 0, world.CellToWorld(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := w.Unit(h)
+	u.Group = 7 // UI control group is a separate saved/runtime concept.
+	u.RestoredAIGroup = 3
+	m := &Manager{Player: 0}
+	m.RestoreGroupsFromUnits(w)
+	if u.Group != 7 {
+		t.Fatalf("restore changed UI group to %d", u.Group)
+	}
+	if got := m.GroupRegroupA; len(got) != 1 || got[0] != h {
+		t.Fatalf("restored AI group vector=%v, want [%d]", got, h)
+	}
+}
+
 func TestClassifierDestinations(t *testing.T) {
 	defs := []*content.UnitDef{
 		{UnitName: "maker", MakesMetal: 1},

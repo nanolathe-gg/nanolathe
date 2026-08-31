@@ -5494,13 +5494,19 @@ state.
    bind computes for the compiled program; the reader compares it with the
    live VM's and rejects the box on mismatch (so a save cannot install a
    different script's threads into a unit). `0x004 + 0xA4·t` for `t = 0..7`:
-   thread record `t` verbatim — status, program counter, depth, sleep timer,
-   wait piece, wait axis, wait-for-caller slot, signal mask, completion
-   receiver and the ten window words, in the layout of [R-COB-01 §1] — except
-   that the word at record offset `0x20` is written as `0` (a thread-record
-   word [R-COB-01 §1] does not name; **Unknown** — it is never restored). `0x524..0x527`: the
-   active-thread count. The reader copies all eight records back in place and
-   restores the count.
+   thread record `t` — raw status, program-counter word index, signed logical
+   top, sleep timer, wait piece, wait axis, waited-on callee slot, signal mask,
+   the native completion receiver, and 32 physical window words. Raw statuses
+   map to idle `0`, running `0x01000000`, wait-turn `0x02100000`, wait-move
+   `0x02200000`, sleep `0x02400000`, and wait-call `0x02800000`; other values
+   reject the image. The wire logical top is `-1..31` and becomes Go's count
+   `top + 1`, so an empty window has `SP=0`. The receiver at record offset
+   `0x20` is deliberately zeroed by the writer and is cleared rather than
+   reconstructed by the reader; it is not a window word. The 32 window words
+   occupy `0x24..0xA0`, and all are restored, while authored opcode pushes and
+   locals retain their separate depth-10 semantic limit [04 §4.2] [R-COB-01
+   §1]. `0x524..0x527`: the active-thread count. The reader copies all eight
+   records back in place and restores the count.
 2. **Statics, `4·S` bytes**: the script statics array verbatim.
 3. **Piece states, `0x6C·P` bytes**, one record per piece: 24 words of
    per-axis animation state — for axis `a` in `0..2` the words at dword
@@ -5513,7 +5519,19 @@ state.
    load each piece's first animation word is set to `1` before the setters
    run, then the six words per axis are copied back and the position/angle
    are re-committed through the adapter's set-position/set-angle
-   (move-now/turn-now) slots; finally the VM's "script restored" word is set.
+   (move-now/turn-now) slots; finally the global animation-dirty gate is set
+   and every per-piece busy gate is forced for the next interpolation pass.
+
+**Correction (2026-08-31).** The earlier wording called the record word at
+`0x20` unnamed, described only ten physical window words, and called the final
+restore state a separate "script restored" word. The settled record census
+identifies `0x20` as the native completion receiver, expands the physical
+window to 32 words (`0x24..0xA0`), and identifies the final restore state as
+the existing global animation-dirty gate. The ten-word limit remains an
+authored opcode semantic limit, not a wire-image truncation. This correction
+is why the loader validates raw status/top values and restores the complete
+window while deliberately leaving the receiver unbound. [Established; [04
+§4.1], [04 §4.2], [04 §4.6], [R-COB-01 §1]]
 
 The writer's decompilation stores only one of its three piece-level getter
 results inside dwords 24..26 (the other two land in a stack slot the axis
@@ -5993,6 +6011,24 @@ score panel's column labels [07 §11]; `Energy Produced`, `Metal Produced`,
 `I am Winner` are the field names of the network statistics rows (§9).
 
 **Confidence.** Established except the bar-increment inference marked above.
+
+**Correction (2026-08-31, Wave B3).** The ENDMSN dynamic presentation uses
+the exact kind-13 geometry and strict presentation-clock service recorded in
+[07 R-HUD-03 §11]: stored dimensions 67×18 are painted inclusively as 68×19,
+with the two-pixel raised bevel, inner span `(x+2,y+2)..(x+65,y+16)`, and
+foreground endpoint `x+2 + trunc(63*current/max)`. A visible bar enters the
+service body only while `current < target`, then advances once only when
+`nextDue < presentationUnit`, and schedules the next due unit
+one unit after the sample; exact target equality leaves animation set, while a
+strictly overshooting candidate clears it. PlayerColor
+uses the source slot's colour frame from `textures/logos.gaf:32xlogos` in a
+stretched 91×21 surface, with the slot name centred in its 90×15 text area;
+the compact result-row ordinal is not substituted for that source slot. The
+reveal deadline is strict, the inherited deadline is expired for the first
+Kills pass, and each subsequent group is ten presentation units later. In the
+single-player surface, a keyboard edge activates all seven groups and plays
+`ActivateAllStatBars`, while the same pass still performs only one ordinary
+reveal/cue; mouse input is not a shortcut. **Established.**
 
 ### Closed — `ENDMSN.GUI`: outcome art, mission list, next mission, `AdjustDiff`, progress write [R-CAMP-01 §8] (2026-08-29)
 
@@ -6772,6 +6808,11 @@ finding. The recitals are deleted here only; the body sections and the
 
 ### Sessions and campaign
 
+- The runtime player row that owns the single 11-byte `Players/Alliances`
+  save box during battle restoration; the box's detached bytes and forced
+  self byte are established, but applying them to a particular player row is
+  **Unknown** · "Player records" / [R-SAVE-02 §6] · static trace of the
+  alliance reader's destination.
 - UI-level names for session states 0–4; their behavior, transitions,
   callbacks, and admission-mask classes are established · "Session states" ·
   static trace.

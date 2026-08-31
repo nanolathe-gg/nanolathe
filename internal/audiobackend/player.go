@@ -21,6 +21,7 @@ type Backend struct {
 	mu         sync.Mutex
 	ctx        *audio.Context
 	players    []*audio.Player
+	streams    []*audio.Player
 	next       int
 }
 
@@ -128,6 +129,48 @@ func (b *Backend) PlaySample(sample *retailaudio.Sample, volume, pan float64) er
 	return nil
 }
 
+// PlayStream is the optional non-looping stream boundary. The sample is
+// already decoded by internal/audio; keeping a separate player list lets a
+// narration stop leave ordinary cue voices untouched [03 R-AUD-02 §1].
+func (b *Backend) PlayStream(sample *retailaudio.Sample, volume float64) error {
+	if b == nil || sample == nil || !b.CanPlay() {
+		return nil
+	}
+	volume *= b.effects
+	volume, _ = clampPlayback(volume, 0)
+	b.ensureContext()
+	if b.ctx == nil {
+		return nil
+	}
+	data := retailaudio.ConvertSample(sample, volume, 0, b.sampleRate)
+	if len(data) == 0 {
+		return nil
+	}
+	player, err := b.ctx.NewPlayerF32(bytes.NewReader(data))
+	if err != nil {
+		return nil
+	}
+	b.mu.Lock()
+	b.streams = append(b.streams, player)
+	b.mu.Unlock()
+	player.Play()
+	return nil
+}
+
+func (b *Backend) StopStream() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, player := range b.streams {
+		if player != nil {
+			_ = player.Close()
+		}
+	}
+	b.streams = nil
+}
+
 // clampPlayback preserves the concrete backend's presentation boundary before
 // PCM conversion: effects scaling is narrowed to 0..1 and pan to -1..1.
 func clampPlayback(volume, pan float64) (float64, float64) {
@@ -166,6 +209,12 @@ func (b *Backend) Close() {
 			_ = player.Close()
 		}
 	}
+	for _, player := range b.streams {
+		if player != nil {
+			_ = player.Close()
+		}
+	}
 	b.players = nil
+	b.streams = nil
 	b.next = 0
 }

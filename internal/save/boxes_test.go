@@ -22,7 +22,7 @@ func TestSummaryRoundTrip(t *testing.T) {
 		Side:            0,
 		Players:         2,
 		Gametype:        2,
-		Thumbs:          7,
+		Thumbs:          "UUW______________________",
 		CommanderDeath:  1,
 		Location:        2,
 		Mapping:         1,
@@ -38,7 +38,7 @@ func TestSummaryRoundTrip(t *testing.T) {
 	}
 	WriteSummary(b, s)
 	// Also write other established boxes so opaque test doesn't interfere.
-	WriteCamera(b, Camera{XPosition: 123.5, ZPosition: 456.5})
+	WriteCamera(b, Camera{XPosition: 123, ZPosition: 456})
 	payload := b.Bytes()
 	bank, err := OpenBytes(payload, RetailTag)
 	if err != nil {
@@ -70,7 +70,7 @@ func TestSummaryRoundTrip(t *testing.T) {
 // TestCameraRoundTrip locks Camera X Position / Z Position [08 "Account inventory"].
 func TestCameraRoundTrip(t *testing.T) {
 	b := NewBuilder("")
-	c := Camera{XPosition: 320.5, ZPosition: -100.25}
+	c := Camera{XPosition: 320, ZPosition: -100}
 	WriteCamera(b, c)
 	payload := b.Bytes()
 	bank, err := OpenBytes(payload, RetailTag)
@@ -83,6 +83,27 @@ func TestCameraRoundTrip(t *testing.T) {
 	}
 	if got.XPosition != c.XPosition || got.ZPosition != c.ZPosition {
 		t.Fatalf("camera mismatch got %+v want %+v", got, c)
+	}
+}
+
+func TestRetailIntegerCameraAndThumbString(t *testing.T) {
+	b := NewBuilder("")
+	WriteCamera(b, Camera{XPosition: 320, ZPosition: -100})
+	WriteSummary(b, Summary{Gametype: 1, Thumbs: "thumbs-identity", IsBattle: true})
+	bank, err := OpenBytes(b.Bytes(), RetailTag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	camera, ok := bank.Account(CameraAccount)
+	if !ok {
+		t.Fatal("missing camera account")
+	}
+	if _, ok := camera.Int("X Position"); !ok {
+		t.Fatal("retail camera X Position was not encoded as integer")
+	}
+	summary, ok := ReadSummary(bank)
+	if !ok || summary.Thumbs != "thumbs-identity" {
+		t.Fatalf("Thumbs = %q, want bounded string", summary.Thumbs)
 	}
 }
 

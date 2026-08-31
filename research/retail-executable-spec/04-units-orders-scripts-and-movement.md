@@ -4118,9 +4118,16 @@ read it.
 
 **Established fact:** A compiled script file is read whole into one allocation and relocated in place; its header, tables, and record layout are specified in document 02. The loader binds one compiled script object to each unit definition, caches it by file, and stamps it with the content checksum that save/load validation later compares.
 
-**Established fact:** Each live unit receives a COB VM instance. The VM has eight execution threads, per-thread status/PC/stack/sleep/wait/caller/signal state, static variables, and per-piece animation state. Thread stack depth is limited to ten values by the retail layout; no safe expansion behavior is demonstrated.
+**Established fact:** Each live unit receives a COB VM instance. The VM has eight execution threads, per-thread status/PC/stack/sleep/wait/caller/signal state, static variables, and per-piece animation state. Each thread record physically carries 32 window words, while authored opcode stack/local operations enforce a separate ten-value semantic limit; save/load restores the complete physical window.
 
 **Established fact:** The loader allocates script statics and piece states when binding. Save/load validates the expected blob size and a cache/signature value. Static variables and piece animation state are represented in the save payload. Fractional movement deltas are not saved; the next tick resumes from integer state.
+
+**Correction (2026-08-31):** The preceding thread descriptions formerly treated
+the ten-value authored stack limit as the complete physical window and did not
+identify the receiver word's position. The settled record census distinguishes
+the 32-word physical window from that semantic limit and identifies the native
+completion receiver as a separate field that save restoration clears rather
+than reconstructs. [Established; [R-COB-01 §1], [08 R-SAVE-02 §9]]
 
 **Unknown:** Some anonymous save fields and exact failure behavior of allocation or corrupted piece indexes remain unresolved. Retail may abort through its allocator where a clean implementation should terminate the affected script deterministically.
 
@@ -4130,7 +4137,7 @@ read it.
 
 **Established fact:** The engine reaches scripts through four adapter roots: the zero-argument name-form start, the argument-carrying name-form start, the argument-carrying slot-form start, and the name-form synchronous four-cell query (direct-static: the name-form roots resolve through the shared name-lookup helper and the slot-form roots through the shared slot-lookup helper). The zero-argument name-form start is a name-based zero-argument start (15 direct call sites); the argument-carrying name-form start is name-based, taking up to four arguments, resolving the name, then forwarding to the argument-carrying slot-form start (21 direct call sites); the argument-carrying slot-form start is slot-based, writing four physical cells then setting the logical top to `arity−1` (5 direct call sites: four producers outside the adapter roots plus the argument-carrying name-form forwarding); and the name-form synchronous query forwards to the query interpreter (14 direct call sites). A bounded call census over the code sections counts 55 direct calls to those four roots; one is the internal argument-carrying name-form→slot-form forwarding, so 54 are producer call sites outside the four roots. The adjacent slot-based zero-argument helper has no direct caller in the bounded census (negative-bounded). The fixed-name producer census yields 40 distinct case-sensitive callback names; the packet path `0x0E` (section 5.3) can additionally start an authored slot by index and is not limited to those 40 names.
 
-**Established fact:** Each VM has eight thread slots of `0xA4` bytes. Allocation takes the first inactive slot in ascending order. A new root thread begins runnable at the selected function entry with logical stack top `−1`, no completion receiver, and signal mask `1`; child script starts inherit their parent's current mask. There is no name-level or producer-level duplicate suppression in the adapters — repeated successful starts occupy independent slots, and any repeat suppression lives in the producers' own state caches. Invalid identity (name lookup `−1` or slot out of range) and a full eight-slot pool are the same allocation failure to the adapters: the zero-argument name-form start and the slot-based zero-argument helper return false without notifying a supplied receiver, while the argument-carrying slot-form start and the argument-carrying name-form start return false and, if a receiver is supplied, invoke it with `0`. `HitByWeapon` and `TakeDamage` are independent argument-carrying name-form starts and can fail separately; `Aim*` failures also deliver `0` via that path and therefore leave aim-ready clear (section 5.3).
+**Established fact:** Each VM has eight thread slots of `0xA4` bytes. Allocation takes the first inactive slot in ascending order. A new root thread begins runnable at the selected function entry with logical stack top `−1`, no completion receiver, and signal mask `1`; child script starts inherit their parent's current mask. A thread record contains 32 physical window words even though authored stack/local operations enforce a ten-value semantic limit. There is no name-level or producer-level duplicate suppression in the adapters — repeated successful starts occupy independent slots, and any repeat suppression lives in the producers' own state caches. Invalid identity (name lookup `−1` or slot out of range) and a full eight-slot pool are the same allocation failure to the adapters: the zero-argument name-form start and the slot-based zero-argument helper return false without notifying a supplied receiver, while the argument-carrying slot-form start and the argument-carrying name-form start return false and, if a receiver is supplied, invoke it with `0`. `HitByWeapon` and `TakeDamage` are independent argument-carrying name-form starts and can fail separately; `Aim*` failures also deliver `0` via that path and therefore leave aim-ready clear (section 5.3).
 
 **Established fact:** Entry modes are D, I, and Q. D (deferred) allocates and initializes a thread then returns without interpreting it. I (immediate) after allocation interprets all eight slots once with delta `0` in slot order, then runs one piece pass with delta `0` — a VM-wide drain, not a drain of only the new callback. Q (synchronous query) interprets only the newly allocated slot with delta `0`, snapshots up to four cells, and returns; it does not scan the other seven slots and does not run a piece pass. The zero-argument name-form start takes zero logical arguments; the argument-carrying slot-form start always writes four physical values to cells `0..3` then sets logical top to `arity−1`; the synchronous query roots treat null cell pointers as seeded zero and excluded from copy-back, while non-null cells are logically exposed. A Q callback is not guaranteed to have returned when the host snapshots it: if it sleeps, waits for move/turn, or waits for another script, the one-slot interpretation stops and the host copies the current four cells immediately; the blocked thread remains active and may resume in a later VM-wide or normal drain, but it has no completion receiver that can revise the already returned host values, so callers must pre-initialize outputs and handle partial results.
 
@@ -5372,8 +5379,8 @@ Unknown pending RWU-03-4.
 only each thread's status word and the instance's active-thread counter, and
 latches the tick denominator once from the engine's tick-rate global. Nothing
 else in the eight thread records is initialized: program counter, depth, timer,
-signal mask, receiver word and the ten window words of an unallocated slot
-hold whatever the instance's memory held. Every field that matters is (re)seeded
+signal mask, receiver word and the 32 physical window words of an unallocated
+slot hold whatever the instance's memory held. Every field that matters is (re)seeded
 at thread allocation or thread start, so the construction-time state is
 unobservable except through the window words described below.
 
@@ -5396,7 +5403,7 @@ identity against the program's script count (a negative or out-of-range index
 is the same allocation failure as a full pool), takes the lowest slot whose
 status is idle, and seeds: status running, program counter at the script's
 entry word, logical stack top −1, no completion receiver, signal mask 1,
-active count incremented. The ten window words are not cleared.
+ active count incremented. The 32 physical window words are not cleared.
 
 **Established — the engine-call argument area and garbage propagation.**
 The argument-carrying starter always writes **four physical cells** (window
@@ -8341,15 +8348,33 @@ B = (height[2] + height[3]) / 2
 unitIntegerHeight = (A + B) / 2            // written as the HIGH WORD of Y only;
                                            //   the 16 fractional bits are left alone
 pitch = angleOf( B - A, (int16)(|mz0 - mz3| >> 16) )
-roll  = angleOf( height[0] - height[1], (int16)(|mx1 - mx2| >> 16) )
+roll  = angleOf( height[0] - height[1], (int16)(|mx0 - mx1| >> 16) )
 ```
+
+**Correction (2026-08-31).** The roll line previously read
+`|mx1 - mx2|`. That pairing is wrong for the content this conform actually
+runs on. A stock ground plate is authored as a ring — `(+x,+z)`, `(-x,+z)`,
+`(-x,-z)`, `(+x,-z)` — so corners 1 and 2 share an X and their span is zero.
+Measured over this install: of the 538 stock models whose compiled root
+carries a selection primitive, `|mx1 - mx2|` is zero for **522**, while
+`|mx0 - mx1|` is zero for **16** — exactly the 16 whose plate is also
+degenerate in Z, i.e. the plates that are genuinely a point or a line. The
+run must be the span of the two corners the numerator differences, which for
+`height[0] - height[1]` is the corner 0 to corner 1 span; the pitch line is
+already consistent in this way, differencing the two Z-edge pair averages over
+the corner 0 to corner 3 span. The address-level trail records the roll
+inputs as "corner-0 minus corner-1 height and the unrotated model-space X
+span", which names a span rather than an index pair and does not support the
+withdrawn text. Implementing `|mx1 - mx2|` gives every non-`upright`,
+non-`floater` ground mover a quarter-circle roll the first time it crosses a
+cross-slope, which renders it lying on its side.
 
 `angleOf` is the §2 helper. The rise terms are in height-byte units and the run
 terms are the **unrotated** model-space spans truncated to signed 16-bit whole
-world units, so a model whose selection primitive is degenerate along either
-axis produces a run of zero and a pitch or roll of a quarter circle, which the
-pitch index of §4 then saturates at `±5`. The pitch this writes is the pitch the
-**next** tick's speed cap reads.
+world units, so a model whose selection primitive is genuinely degenerate along
+either axis produces a run of zero and a pitch or roll of a quarter circle,
+which the pitch index of §4 then saturates at `±5`. The pitch this writes is
+the pitch the **next** tick's speed cap reads.
 
 **The hover bob — Established, and it is the one non-tick input in the mover
 chain.** When the definition has `canhover`, the unit's live bit (bit 28) is

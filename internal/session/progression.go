@@ -233,7 +233,11 @@ func (r *Registry) ValidateNumSkirmishPlayers(val int) int {
 type BankProgress struct {
 	BetweenMissions int // 1 outside live battle [P0-05][P1-01] — Summary/BetweenMissions
 	Alliances       [11]byte
-	WL              [10]byte // 'W'/'L' at the mission slot [P0-05][P1-01 §2.3]
+	WL              [10]byte // compatibility view of the first ten marks [P0-05][P1-01 §2.3]
+	// Thumbs is the 25-slot campaign mark array.  The older WL view is kept for
+	// callers that only model the ten-player result table; campaign progression
+	// writes both views at the same one-byte site [08 R-CAMP-01 §8].
+	Thumbs [25]byte // 'U', 'W', or 'L' by campaign mission slot
 }
 
 // TeardownOrder documents the final-tick order per [P1-01 §2.4] and
@@ -245,17 +249,26 @@ type BankProgress struct {
 // TODO(question): exact WinLoseTime/DisplayTimer UI consumers outside save [P1-01 §8].
 const TeardownOrder = "network→units→projectiles→player/economy/triggers→sharing→features→visibility→wind→cleanup→barrier→cadence"
 
-// ApplyCampaignResult writes 'W'/'L' at the mission slot and updates
-// BetweenMissions persistence via the post-battle handler [P1-01 §2.3].
-// slot is the mission list slot; win true writes 'W' else 'L'.
+// ApplyCampaignResult writes the single 'W'/'L' mark at the mission slot.
+// Session's score-teardown path owns this write before the post-battle handler
+// is installed; BetweenMissions is a save-summary projection, not a second
+// mark write [08 R-CAMP-01 §7–8]. slot is the mission list slot; win true
+// writes 'W' else 'L'.
 func (b *BankProgress) ApplyCampaignResult(slot int, win bool) {
 	if slot < 0 || slot >= len(b.WL) {
-		return
+		if slot < 0 || slot >= len(b.Thumbs) {
+			return
+		}
 	}
+	mark := byte('L')
 	if win {
-		b.WL[slot] = 'W'
-	} else {
-		b.WL[slot] = 'L'
+		mark = 'W'
+	}
+	if slot < len(b.WL) {
+		b.WL[slot] = mark
+	}
+	if slot < len(b.Thumbs) {
+		b.Thumbs[slot] = mark
 	}
 }
 

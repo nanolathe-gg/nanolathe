@@ -732,8 +732,22 @@ func applyGroundConform(t *world.Terrain, u *units.Unit) {
 	b := (height[2] + height[3]) / 2
 	integerHeight := (a + b) / 2
 	u.Y = numeric.Fixed((int64(integerHeight) << 16) | (int64(u.Y) & 0xffff))
+	// Each run is the unrotated model-space span of the very corners whose
+	// heights the matching numerator differences, so both angles are a genuine
+	// rise over run [04 R-MOV-01 §5a]. Pitch differences the two Z-edge pair
+	// averages and corners 0 and 3 sit on opposite Z edges; roll differences
+	// corner 0 against corner 1, so its run is the span between those two.
+	//
+	// Correction. The roll run was written as the corner 1 to corner 2 span.
+	// Stock plates are authored as a ring — (+x,+z), (-x,+z), (-x,-z), (+x,-z)
+	// — so corners 1 and 2 share an X and that span is zero for 522 of the 538
+	// stock models that carry a root selection primitive. A zero run makes the
+	// arc tangent a quarter circle for any non-zero cross-slope, which laid
+	// every ground vehicle on its side the first time it crossed one. The
+	// corner 0 to corner 1 span is non-zero for all but the 16 models whose
+	// plate is degenerate on both axes anyway.
 	modelZRun := int16(conformAbsFixed(vertexZ(piece, primitive.VertexIndices[0])-vertexZ(piece, primitive.VertexIndices[3])) >> 16)
-	modelXRun := int16(conformAbsFixed(vertexX(piece, primitive.VertexIndices[1])-vertexX(piece, primitive.VertexIndices[2])) >> 16)
+	modelXRun := int16(conformAbsFixed(vertexX(piece, primitive.VertexIndices[0])-vertexX(piece, primitive.VertexIndices[1])) >> 16)
 	u.Move.Pitch = numeric.AngleFromAtan2(int64(b-a), int64(modelZRun)).Raw()
 	u.Move.Bank = numeric.AngleFromAtan2(int64(height[0]-height[1]), int64(modelXRun)).Raw()
 }
@@ -1244,8 +1258,13 @@ func (s *System) EnsureUnit(u *units.Unit) {
 			s.noteOccupancyCommit(h, s.tick)
 		}
 	}
-	// Init move mode to parked [04 §9.1] 1 stopped/parked; TakeOff/Sumbit will set 2 active
-	u.Move.Mode = 1
+	// Init move mode to parked [04 §9.1] 1 stopped/parked; a retail restore
+	// already copied the unit-side packed mirror and it must survive this
+	// bootstrap allocation until the mover pass applies its own state [08
+	// R-SAVE-02 §6].
+	if !u.RestoredMoveMode {
+		u.Move.Mode = 1
+	}
 	// FlightState for can-fly units
 	if u.Def.CanFly {
 		flight := &FlightState{

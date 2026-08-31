@@ -38,3 +38,29 @@ func TestIndexedPixelsUseSharedPaletteDirectly(t *testing.T) {
 		t.Fatalf("GUI semantic pixel red=%d, want mapped PALETTE index 1 result 20", got)
 	}
 }
+
+func TestUIShadeRectUsesSignedTables(t *testing.T) {
+	tables := &palette.Tables{}
+	tables.Light[5*256+7] = 11
+	tables.Shade[13][7] = 12 // -19 + 32
+	tables.Shade[0][7] = 13  // levels below -32 clamp before offset
+	c, err := New(Options{Width: 1, Height: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.indexed[0] = 7
+	c.UIShadeRect(tables, 0, 0, 1, 1, 5)
+	if c.indexed[0] != 11 {
+		t.Fatalf("positive signed level used index %d, want LHT result 11", c.indexed[0])
+	}
+	c.indexed[0] = 7
+	c.UIShadeRect(tables, 0, 0, 1, 1, -19)
+	if c.indexed[0] != 12 {
+		t.Fatalf("negative signed level used index %d, want SHD row 13 result 12", c.indexed[0])
+	}
+	c.indexed[0] = 7
+	c.UIShadeRect(tables, 0, 0, 1, 1, -33)
+	if c.indexed[0] != 13 {
+		t.Fatalf("clamped negative level used index %d, want SHD row 0 result 13", c.indexed[0])
+	}
+}

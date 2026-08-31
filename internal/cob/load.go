@@ -24,11 +24,26 @@ import (
 // ScriptsByID is the script code index array in table order 0..numScripts-1,
 // preserved for the VM's script-id operand (E shape) [04 §4.3] C12.
 type Program struct {
-	Code        []uint32
-	Scripts     map[string]int
-	Pieces      []string
-	Statics     int
-	ScriptsByID []int // [fmt cob] ScriptCodeIndexArray in table order [04 §4.3]
+	Code           []uint32
+	Scripts        map[string]int
+	Pieces         []string
+	Statics        int
+	ScriptsByID    []int  // [fmt cob] ScriptCodeIndexArray in table order [04 §4.3]
+	SourceChecksum uint32 // four-accumulator checksum of original raw COB bytes [02 "Content checksum"]
+}
+
+// ContentChecksum is the retail four-accumulator byte checksum. Each lane is
+// eight bits and wraps independently; the packed result is lane order
+// additive, xor, indexed-additive, indexed-xor [02 "Content checksum"].
+func ContentChecksum(data []byte) uint32 {
+	var add, xor, indexedAdd, indexedXor uint8
+	for i, b := range data {
+		add += b
+		xor ^= b
+		indexedAdd += uint8((i & 0xff) ^ int(b))
+		indexedXor ^= uint8((i + int(b)) & 0xff)
+	}
+	return uint32(add) | uint32(xor)<<8 | uint32(indexedAdd)<<16 | uint32(indexedXor)<<24
 }
 
 // Load parses COB bytes per [fmt cob] container reference.
@@ -41,6 +56,7 @@ func Load(data []byte) (*Program, error) {
 	if len(data) < headerSize {
 		return nil, fmt.Errorf("cob: header too short %d < %d", len(data), headerSize)
 	}
+	sourceChecksum := ContentChecksum(data)
 	readU32 := func(off int) uint32 { return binary.LittleEndian.Uint32(data[off:]) }
 
 	version := readU32(0x00)                  // VersionSignature [fmt cob]
@@ -226,11 +242,12 @@ func Load(data []byte) (*Program, error) {
 	}
 
 	return &Program{
-		Code:        code,
-		Scripts:     scripts,
-		Pieces:      pieces,
-		Statics:     int(numStatics),
-		ScriptsByID: byID,
+		Code:           code,
+		Scripts:        scripts,
+		Pieces:         pieces,
+		Statics:        int(numStatics),
+		ScriptsByID:    byID,
+		SourceChecksum: sourceChecksum,
 	}, nil
 }
 

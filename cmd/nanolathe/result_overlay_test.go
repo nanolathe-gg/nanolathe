@@ -50,7 +50,7 @@ func TestResultPanelActivatesOnlyEstablishedRoute(t *testing.T) {
 	window := &gui.Window{Gadgets: []gui.Gadget{
 		{Name: "GADGET0"},
 		{Name: "Start"},
-		{Name: "MainMenu"},
+		{Name: "MainMenu", Rect: gui.Rect{Y: 333, RawY: 333}},
 		{Name: "LoadGame"},
 	}}
 	panel := ui.NewPanel(window)
@@ -61,8 +61,15 @@ func TestResultPanelActivatesOnlyEstablishedRoute(t *testing.T) {
 	if !panel.ActiveOf("MainMenu") {
 		t.Fatal("MainMenu not activated for terminal route")
 	}
+	if got := window.Gadgets[2].Rect.Y; got != 416 {
+		t.Fatalf("terminal MainMenu y=%d, want 416", got)
+	}
 	if panel.ActiveOf("LoadGame") {
 		t.Fatal("untraced result control was force-enabled")
+	}
+	configureResultControls(panel, true)
+	if got := window.Gadgets[2].Rect.Y; got != 333 {
+		t.Fatalf("reused route MainMenu y=%d, want authored 333", got)
 	}
 }
 
@@ -136,20 +143,40 @@ func TestResultOverlayHonorsCanonicalDismissalState(t *testing.T) {
 }
 
 func TestResultControlRequiresAuthoredStart(t *testing.T) {
-	if got := resultActionForControl("START"); got != "result_continue" {
+	if got := resultActionForControl("START"); got != ui.ResultActionContinue {
 		t.Fatalf("authored Start action = %q", got)
 	}
 	for _, name := range []string{"Continue", "Retry", "Main Menu", "Skirmish Setup", "synthetic"} {
-		if got := resultActionForControl(name); got != "" {
+		if got := resultActionForControl(name); got != ui.ResultActionNone {
 			t.Fatalf("unsupported result control %q mapped to %q", name, got)
 		}
+	}
+}
+
+func TestResultBarsUseAuthoredOrderAndKind13Step(t *testing.T) {
+	row := frame.ResultScore{Kills: 1, Losses: 2, EnergyProduced: 3, MetalProduced: 4, EnergyWasted: 5, MetalWasted: 6, Score: 7}
+	for i, want := range []int{1, 2, 3, 4, 5, 6, 7} {
+		if got := resultBarValue(row, i); got != want {
+			t.Fatalf("result column %d = %d, want %d", i, got, want)
+		}
+	}
+	for _, tc := range []struct{ value, want int }{{0, 1}, {14, 1}, {15, 1}, {30, 2}, {300, 20}} {
+		if got := resultBarStep(tc.value); got != tc.want {
+			t.Fatalf("kind-13 step(%d) = %d, want %d", tc.value, got, tc.want)
+		}
+	}
+	if got := resultPlayerColorRect(2); got != (gui.Rect{X: 16, Y: 133, W: 91, H: 21}) {
+		t.Fatalf("PlayerColor2 rect = %+v", got)
+	}
+	if got := resultBarOrigin(2, 6); got.X != 556 || got.Y != 133 {
+		t.Fatalf("Score2 origin = %+v", got)
 	}
 }
 
 func TestResultMainMenuActionKeepsSemanticTransition(t *testing.T) {
 	called := false
 	b := &battleSession{returnToMenu: func(*client.Client) { called = true }}
-	b.doResultAction("result_main", nil)
+	b.doResultAction(ui.ResultActionMainMenu, nil)
 	if !called {
 		t.Fatal("result main-menu action did not invoke semantic callback")
 	}
@@ -171,7 +198,7 @@ func TestResultContinueRequiresCommittedResult(t *testing.T) {
 	sess.Latch.Bits = session.LatchBitEnding | session.LatchBitWin1
 	called := false
 	b := &battleSession{sess: sess, returnToMenu: func(*client.Client) { called = true }}
-	b.doResultAction("result_continue", nil)
+	b.doResultAction(ui.ResultActionContinue, nil)
 	if called {
 		t.Fatal("live victory fields overrode the absence of a committed result")
 	}
@@ -253,7 +280,61 @@ missionfile=AC02.ota;
 	window := &gui.Window{Gadgets: []gui.Gadget{{Name: "Start"}, {Name: "MainMenu"}}}
 	panel := ui.NewPanel(window)
 	configureResultPanel(fs, sess, panel)
-	if !panel.ActiveOf("Start") || panel.ActiveOf("MainMenu") {
+	if !panel.ActiveOf("Start") || !panel.ActiveOf("MainMenu") {
 		t.Fatalf("next-mission metadata did not select authored Start route: start=%t main=%t", panel.ActiveOf("Start"), panel.ActiveOf("MainMenu"))
+	}
+}
+
+func TestResultPresentationUsesStrictDeadlinesAndInclusiveFill(t *testing.T) {
+	if x, y, x2, y2 := resultBarFrame(0, 0); x != 112 || y != 93 || x2 != 179 || y2 != 111 {
+		t.Fatalf("kind-13 inclusive frame = (%d,%d)-(%d,%d)", x, y, x2, y2)
+	}
+	if got, ok := resultBarFillX(112, 30, 100); !ok || got != 132 {
+		t.Fatalf("kind-13 fill endpoint = (%d,%t), want (132,true)", got, ok)
+	}
+
+	h := &retailBattleHUD{resultState: resultPresentation{
+		initialized: true,
+		rows:        []frame.ResultScore{{Kills: 30}},
+		max:         [7]int{100, 100, 100, 100, 100, 100, 100},
+		group:       -1,
+	}}
+	h.advanceResultReveal(0, nil, nil)
+	if h.resultState.group != -1 {
+		t.Fatalf("deadline equality revealed group %d", h.resultState.group)
+	}
+	h.advanceResultReveal(1, nil, nil)
+	if h.resultState.group != 0 || !h.resultState.active[0] || h.resultState.deadline != 11 {
+		t.Fatalf("first strict reveal state = group %d active=%v deadline=%d", h.resultState.group, h.resultState.active[0], h.resultState.deadline)
+	}
+	h.advanceResultReveal(11, nil, nil)
+	if h.resultState.group != 0 {
+		t.Fatalf("deadline equality advanced group %d", h.resultState.group)
+	}
+	h.advanceResultBars(1)
+	first := h.resultState.current[0][0]
+	h.advanceResultBars(1)
+	if h.resultState.current[0][0] != first {
+		t.Fatalf("bar advanced without strict due: %d -> %d", first, h.resultState.current[0][0])
+	}
+	h.advanceResultBars(2)
+	if h.resultState.current[0][0] != first {
+		t.Fatalf("bar advanced at due equality: %d -> %d", first, h.resultState.current[0][0])
+	}
+	h.advanceResultBars(3)
+	if h.resultState.current[0][0] <= first {
+		t.Fatalf("bar did not advance after strict due: %d -> %d", first, h.resultState.current[0][0])
+	}
+	exact := &retailBattleHUD{resultState: resultPresentation{
+		initialized: true,
+		rows:        []frame.ResultScore{{Kills: 2}},
+		max:         [7]int{100, 100, 100, 100, 100, 100, 100},
+		group:       0,
+		active:      [7]bool{true},
+	}}
+	exact.advanceResultBars(1)
+	exact.advanceResultBars(3)
+	if exact.resultState.current[0][0] != 2 || !exact.resultState.animating[0][0] {
+		t.Fatalf("exact target hit state = current %d animating %t, want 2,true", exact.resultState.current[0][0], exact.resultState.animating[0][0])
 	}
 }

@@ -423,6 +423,36 @@ func (c *SampleCache) Load(alias string) (*Sample, error) {
 	return s, nil
 }
 
+// LoadPath resolves one authored path without prepending the conventional
+// sounds/ alias candidates. Stream media carries a path rather than an alias;
+// keeping this boundary explicit preserves the authored resource name while
+// retaining the session cache and optional-media silence policy.
+func (c *SampleCache) LoadPath(path string) (*Sample, error) {
+	if c == nil {
+		return nil, fmt.Errorf("audio: nil cache")
+	}
+	if path == "" {
+		return nil, fmt.Errorf("audio: empty path")
+	}
+	if s, ok := c.Get(path); ok {
+		return s, nil
+	}
+	if c.fs == nil {
+		return nil, fmt.Errorf("audio: no VFS for path %q", path)
+	}
+	data, prov, err := c.resolveCandidates([]string{path})
+	if err != nil {
+		return nil, err
+	}
+	s, err := Decode(path, data)
+	if err != nil {
+		return nil, err
+	}
+	s.Provenance = prov
+	c.putSample(path, s)
+	return s, nil
+}
+
 // loadCandidates resolves an already-registered identity using its authored
 // path candidates. The cache key remains the alias, preserving one sample per
 // registered identity.

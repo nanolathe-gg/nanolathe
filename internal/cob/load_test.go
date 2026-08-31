@@ -120,6 +120,9 @@ func TestLoadValidMinimal(t *testing.T) {
 	if prog.Statics != 0 {
 		t.Fatalf("Statics=%d want 0", prog.Statics)
 	}
+	if prog.SourceChecksum != ContentChecksum(data) {
+		t.Fatalf("SourceChecksum=%#x want %#x", prog.SourceChecksum, ContentChecksum(data))
+	}
 	// Deterministic map iteration check via sorted keys (I1): ensure Scripts map has expected size.
 	if len(prog.Scripts) != 1 {
 		t.Fatalf("Scripts len=%d want 1", len(prog.Scripts))

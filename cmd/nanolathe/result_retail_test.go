@@ -10,6 +10,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/gui"
+	"github.com/nanolathe/nanolathe/internal/ui"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -51,10 +52,10 @@ func TestRetailEndMissionAuthoredControls(t *testing.T) {
 	if start := findGadget(window, "Start"); start == nil || start.Rect.X != 460 || start.Rect.Y != 315 || start.Rect.W != 120 || start.Rect.H != 20 {
 		t.Fatalf("retail ENDMSN Start geometry changed: %#v", start)
 	}
-	if got := resultActionForControl("Start"); got != "result_continue" {
+	if got := resultActionForControl("Start"); got != ui.ResultActionContinue {
 		t.Fatalf("authored Start action = %q", got)
 	}
-	if got := resultActionForControl("Continue"); got != "" {
+	if got := resultActionForControl("Continue"); got != ui.ResultActionNone {
 		t.Fatalf("non-authored Continue action = %q", got)
 	}
 

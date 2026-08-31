@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/audio"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -76,6 +77,9 @@ type menuAssets struct {
 	missionCampaign *formats.PCX
 	missionSmall    *formats.PCX
 	missionAny      *formats.PCX
+	// briefing is loaded lazily after a campaign mission resolves its planet;
+	// MSNBRIEF is not needed by the shell's skirmish path.
+	briefing *retailPanelAssets
 }
 
 // gameShell owns only frontend state and the battle hand-off. Menu state is
@@ -119,6 +123,23 @@ type gameShell struct {
 	missionAny             bool
 	missionSide            int
 	missionDifficultyValue int
+	// briefing owns the explicit campaign presentation state between mission
+	// selection and the shared battle loading request [08 R-CAMP-01 §2].
+	briefing      *campaignBriefingController
+	briefingPanel *ui.Panel
+	briefingNowMS int64
+
+	// audioOwner is shared by the frontend briefing and the subsequently
+	// composed battle. It is the one semantic audio owner for both seams;
+	// briefing effects are never sent to a second frontend-only service
+	// [03 R-AUD-02 §1][I6].
+	audioOwner *audio.Service
+
+	// campaignProgress is copied from the frozen result session when Start
+	// selects a successor or retry. The next battle receives the same bank
+	// value through its loading adoption callback; no UI path writes W/L.
+	campaignProgress    session.BankProgress
+	campaignProgressSet bool
 
 	// loading is live only while mode is modeLoading. The loader runs on its
 	// own goroutine, so the shell reads its progress and adopts its result
@@ -515,6 +536,14 @@ func (g *gameShell) step(delta float64, cl *client.Client) {
 		// [07 §8]. Menu animation still advances at the renderer's cadence so a
 		// visible hourglass keeps turning.
 		cursors := cl.Cursors()
+		if g.briefing != nil && g.briefing.State() == BriefingOpen {
+			// Renderer delta is the shell's monotonic presentation clock; the
+			// briefing callbacks consume its scaled units [07 R-CAM-01 §1].
+			g.briefingNowMS += int64(delta * 1000)
+			if g.audioOwner != nil {
+				g.audioOwner.TickStream(uint32(briefingPresentationTick(g.briefingNowMS)))
+			}
+		}
 		cursors.SetIndex(render.CursorNormal)
 		g.cursorAccum += delta * 30
 		if n := int(g.cursorAccum); n > 0 {
@@ -530,6 +559,12 @@ func (g *gameShell) missionDifficulty() int {
 }
 
 func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) error {
+	if g.audioOwner != nil && sess != nil {
+		// The frontend briefing and battle share one semantic audio owner;
+		// attach it at the existing battle adoption boundary [03 §8][I6].
+		sess.Audio = g.audioOwner
+	}
+	g.adoptCampaignProgress(sess)
 	g.teardownBattle(clPtr)
 	battle, err := composeBattleEntry(sess, cat, g.cs, clPtr, g)
 	if err != nil {
@@ -576,6 +611,9 @@ func (g *gameShell) bindFrontendClient(cl *client.Client) {
 	cl.SetSnapshot(&frame.Buffer{})
 	cl.SetTerrain(nil)
 	cl.SetCamera(g.cam)
+	if g.audioOwner != nil {
+		cl.SetAudioService(g.audioOwner)
+	}
 	if g.assets != nil {
 		if g.assets.pal != nil {
 			cl.SetPalette(g.assets.pal)

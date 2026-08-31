@@ -89,6 +89,17 @@ type Slot struct {
 
 	// Target is the decoded current target [06 §1.2].
 	Target Target
+	// SavedTargetLow/High preserve the complete on-disk target pair, including
+	// the 0x8000 unit-mode sentinel. The resolved Target is populated only
+	// after all forced unit slots exist [08 R-SAVE-WEAPON-01].
+	SavedTargetLow  uint16
+	SavedTargetHigh uint16
+	// SavedActiveByte and payload words are copied from the fixed record. The
+	// active byte gates the resolved definition; it is never a weapon identity,
+	// while the payload words remain intentionally unnamed [08 R-SAVE-WEAPON-01].
+	SavedActiveByte   uint8
+	SavedPayloadWord0 uint32
+	SavedPayloadWord1 uint32
 }
 
 // IsPopulated reports whether the slot has a resolved weapon [06 §1.2] C1.

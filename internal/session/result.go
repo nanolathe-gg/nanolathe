@@ -94,6 +94,24 @@ func (s *Session) GetResult() Result {
 	return r
 }
 
+// FrozenResultView returns the immutable presentation copy consumed by the
+// post-battle controller. It is a value snapshot, including all result slices,
+// so presentation sequencing cannot observe a later authoritative mutation
+// [03 §2.4][08 R-CAMP-01 §6].
+func (s *Session) FrozenResultView() frame.ResultView {
+	if s == nil {
+		return frame.ResultView{}
+	}
+	r := s.GetResult()
+	return frame.ResultView{
+		Ended: r.Ended, Kind: r.Kind, WinnerTeam: r.WinnerTeam,
+		Winners: append([]int(nil), r.Winners...), Losers: append([]int(nil), r.Losers...),
+		Reason: r.Reason, Tick: r.Tick, ArmedTick: r.ArmedTick,
+		Countdown: r.Countdown, Draw: r.Draw,
+		Scores: append([]frame.ResultScore(nil), r.Scores...), ColumnMaxima: r.ColumnMaxima,
+	}
+}
+
 // resultKindFor returns "victory" | "defeat" | "draw" for local perspective [RS-05][08].
 func (s *Session) resultKindFor(draw bool, winner int) string {
 	if draw {

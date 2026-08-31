@@ -43,7 +43,9 @@ type Summary struct {
 	Side       int32  // default 0 [08 "Summary"]
 	Players    int32
 	Gametype   int32 // 1 campaign, 2 multiplayer [08 "Summary"] [GAP T9]
-	Thumbs     int32 // copied during preflight; malformed absence can copy from null [08 "Summary"]
+	// Retail stores Thumbs as a bounded 25-byte string. Reset/application
+	// semantics belong to the progression pass [08 R-SAVE-02 §3].
+	Thumbs string
 
 	// Multiplayer-only fields: written only when Gametype==2; defaults 1 on
 	// missing/mistyped per [08 "Summary"].
@@ -62,6 +64,13 @@ type Summary struct {
 
 	IsMultiplayer bool // derived: Gametype==2
 	IsBattle      bool // true if live-battle save (RadarImage present or BetweenMissions==0)
+}
+
+func boundedSummaryString(s string) string {
+	if len(s) > 25 {
+		return s[:25]
+	}
+	return s
 }
 
 // builderAccount returns the existing account for name or creates it.
@@ -116,7 +125,7 @@ func WriteSummary(b *Builder, s Summary) {
 	ac.SetInt("Side", s.Side)
 	ac.SetInt("Players", s.Players)
 	ac.SetInt("Gametype", s.Gametype)
-	ac.SetInt("Thumbs", s.Thumbs)
+	ac.SetString("Thumbs", boundedSummaryString(s.Thumbs))
 	// Multiplayer-only [08 "Summary"].
 	if s.IsMultiplayer || s.Gametype == 2 {
 		ac.SetInt("CommanderDeath", s.CommanderDeath)
@@ -215,10 +224,10 @@ func ReadSummary(bank *Bank) (Summary, bool) {
 	} else {
 		s.Gametype = 0
 	}
-	if v, ok := ac.Int("Thumbs"); ok {
-		s.Thumbs = v
+	if v, ok := ac.Str("Thumbs"); ok {
+		s.Thumbs = boundedSummaryString(v)
 	} else {
-		s.Thumbs = 0
+		s.Thumbs = ""
 	}
 	s.IsMultiplayer = s.Gametype == 2
 	// Multiplayer-only defaults 1 [08 "Summary"].
@@ -272,10 +281,10 @@ func ReadSummary(bank *Bank) (Summary, bool) {
 // Camera account [08 "Save-file organization"] Account inventory.
 // ---------------------------------------------------------------------------
 
-// Camera holds the established Camera fields [08 "Account inventory"].
+// Camera holds the established integer world-coordinate words [08 R-SAVE-02 §12].
 type Camera struct {
-	XPosition float64 // "X Position" double [08 "Account inventory"]
-	ZPosition float64 // "Z Position" double
+	XPosition int32
+	ZPosition int32
 }
 
 // WriteCamera writes the Camera account [08 "Account inventory"].
@@ -284,8 +293,8 @@ func WriteCamera(b *Builder, c Camera) {
 		return
 	}
 	ac := builderAccount(b, CameraAccount)
-	ac.SetDouble("X Position", c.XPosition)
-	ac.SetDouble("Z Position", c.ZPosition)
+	ac.SetInt("X Position", c.XPosition)
+	ac.SetInt("Z Position", c.ZPosition)
 }
 
 // ReadCamera reads the Camera account [08 "Account inventory"].
@@ -295,10 +304,10 @@ func ReadCamera(bank *Bank) (Camera, bool) {
 		return Camera{}, false
 	}
 	var c Camera
-	if v, ok := ac.Double("X Position"); ok {
+	if v, ok := ac.Int("X Position"); ok {
 		c.XPosition = v
 	}
-	if v, ok := ac.Double("Z Position"); ok {
+	if v, ok := ac.Int("Z Position"); ok {
 		c.ZPosition = v
 	}
 	return c, true

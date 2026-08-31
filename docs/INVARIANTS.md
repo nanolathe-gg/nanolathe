@@ -241,9 +241,8 @@ The exceptions — where byte layout *is* the contract, because bytes cross a
 boundary — are: file formats in `formats/`, the 13-byte plot cell (`[03 §2.2]`),
 the 28-byte game-time save box, HAPIBANK headers and account records, the
 9-byte damage packet's wire form if it is ever serialized, and route save
-records. The active save boundary is retail account parsing: campaign
-continuation exposes account metadata, while in-battle restoration is an
-explicit unsupported result. There is no alternate Nanolathe save codec.
+records. The active save boundary is retail account parsing and staged battle
+restoration. There is no alternate Nanolathe save codec.
 Everything else is a Go struct.
 
 **Why.** Pool capacities (300 projectiles, 8 COB threads, 86-byte order nodes)

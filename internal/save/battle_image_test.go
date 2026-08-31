@@ -20,7 +20,7 @@ func minimalBattleBuilder() *Builder {
 	features.SetInt("Number of 3D Features", 0)
 	b.Add("Metal").AppendBox("Plotmap", 0, []byte{1})
 	b.Add("PlayerFeatures").AppendBox("Plotmap", 0, []byte{2})
-	b.Add("Mapping").AppendBox("Data", 0, []byte{3})
+	b.Add("Mapping").AppendBox("", 0, []byte{3})
 	WriteMeteorScalars(b, MeteorScalars{})
 	return b
 }

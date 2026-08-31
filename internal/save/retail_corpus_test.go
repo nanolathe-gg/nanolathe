@@ -165,7 +165,7 @@ func TestRetailSummaryDefaultsAndOrder(t *testing.T) {
 	if s.Campaign != "camp" || s.Mission != "mission" || s.MapName != "map" {
 		t.Fatalf("metadata = %+v", s)
 	}
-	if s.Difficulty != 0 || s.Side != 0 || s.Players != 0 || s.Thumbs != 0 {
+	if s.Difficulty != 0 || s.Side != 0 || s.Players != 0 || s.Thumbs != "" {
 		t.Fatalf("missing scalar defaults = %+v", s)
 	}
 	if !s.IsMultiplayer || s.CommanderDeath != 1 || s.Location != 1 || s.Mapping != 1 || s.LineOfSight != 1 || s.LineOfSightType != 1 {
@@ -184,13 +184,13 @@ func TestRetailSummaryDefaultsAndOrder(t *testing.T) {
 
 func TestRetailCameraMissingFieldDefaultsZero(t *testing.T) {
 	b := NewBuilder(RetailTag)
-	b.Add(CameraAccount).SetDouble("X Position", 12.5)
+	b.Add(CameraAccount).SetInt("X Position", 12)
 	bank, err := OpenBytes(b.Bytes(), RetailTag)
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}
 	c, ok := ReadCamera(bank)
-	if !ok || c.XPosition != 12.5 || c.ZPosition != 0 {
+	if !ok || c.XPosition != 12 || c.ZPosition != 0 {
 		t.Fatalf("camera = %+v, ok=%v", c, ok)
 	}
 }

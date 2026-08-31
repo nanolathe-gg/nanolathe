@@ -200,6 +200,19 @@ func (s *Service) UnitArchived(handle pool.Handle) [2]ArchivedBucket {
 	return s.unitBuckets[handle].Archived
 }
 
+// RestoreUnitEconomy installs the complete per-unit live and archived bucket
+// state after a save image has been validated. The bounded setter keeps the
+// ledger's unit arena authoritative; no parallel raw image store is needed
+// [05 "Unit instance economy state"].
+func (s *Service) RestoreUnitEconomy(handle pool.Handle, buckets [2]Bucket, archived [2]ArchivedBucket) bool {
+	if s == nil || handle == 0 {
+		return false
+	}
+	s.ensureUnitBuckets(handle)
+	s.unitBuckets[handle] = UnitEconomy{Buckets: buckets, Archived: archived}
+	return true
+}
+
 // ForEachUnitOrdered visits units owned by player in stable slot order
 // per [05 "Authoritative settlement order"] C6 and I1. Earlier units consume
 // live stock before later units are tested, so slot order matters.

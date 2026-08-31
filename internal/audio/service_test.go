@@ -74,3 +74,70 @@ func TestServiceDrainEventsDefersPositionalPlaybackUntilPresentation(t *testing.
 		t.Fatalf("committed event replayed on second rendered frame: %d", len(spy.plays))
 	}
 }
+
+func TestServiceStreamDelayCancelPlayOnceAndStop(t *testing.T) {
+	s := NewService(testAudioFS(t, "voice"))
+	old := GlobalOutput()
+	spy := &streamOutputSpy{}
+	SetGlobalOutput(spy)
+	t.Cleanup(func() { SetGlobalOutput(old) })
+
+	s.StartStream("sounds/voice.wav", 0, 60, 0)
+	s.TickStream(59)
+	if len(spy.streamPlays) != 0 {
+		t.Fatal("stream played before its 60-unit due time")
+	}
+	s.TickStream(60)
+	s.TickStream(61)
+	if len(spy.streamPlays) != 1 {
+		t.Fatalf("stream play count=%d, want one", len(spy.streamPlays))
+	}
+	if spy.streamPlays[0].Alias != "sounds/voice.wav" {
+		t.Fatalf("stream alias=%q, want authored path", spy.streamPlays[0].Alias)
+	}
+	s.StopStream()
+	if spy.streamStops != 1 {
+		t.Fatalf("active stream stop count=%d, want one", spy.streamStops)
+	}
+
+	s.StartStream("sounds/voice.wav", 0, 60, 100)
+	s.StopStream()
+	s.TickStream(160)
+	if len(spy.streamPlays) != 1 {
+		t.Fatalf("cancelled pending stream played: %d", len(spy.streamPlays))
+	}
+}
+
+func TestServiceStreamEarlierTimerUsesLaterPath(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "sounds"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"first", "later"} {
+		if err := os.WriteFile(filepath.Join(root, "sounds", name+".wav"), buildRIFF(1, 11025, 8, []byte{128, 129}), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fs := vfs.New()
+	if err := fs.MountDirectory(root, 1); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fs.Close() })
+	s := NewService(fs)
+	old := GlobalOutput()
+	spy := &streamOutputSpy{}
+	SetGlobalOutput(spy)
+	t.Cleanup(func() { SetGlobalOutput(old) })
+
+	s.StartStream("sounds/first.wav", 0, 100, 0)
+	s.StartStream("sounds/later.wav", 0, 200, 0)
+	s.TickStream(99)
+	s.TickStream(100)
+	if len(spy.streamPlays) != 1 || spy.streamPlays[0].Alias != "sounds/later.wav" {
+		t.Fatalf("earlier timer did not play later path once: plays=%d", len(spy.streamPlays))
+	}
+	s.TickStream(200)
+	if len(spy.streamPlays) != 1 {
+		t.Fatalf("later recorded timer replayed stream: %d", len(spy.streamPlays))
+	}
+}

@@ -12,7 +12,7 @@ func TestCommittedStatusEventReachesMessageLines(t *testing.T) {
 	f := b.BeginWrite()
 	f.Events = append(f.Events, frame.EventView{
 		Kind: frame.EventKindStatus, Tick: 7, Source: 3,
-		StatusKind: 7, StatusText: "ARMADA: Can't build", StatusClass: 1,
+		StatusKind: 7, StatusText: "Can't build", StatusClass: 1,
 	})
 	if err := b.Publish(7); err != nil {
 		t.Fatal(err)

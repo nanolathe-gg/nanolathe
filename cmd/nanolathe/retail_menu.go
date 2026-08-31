@@ -668,6 +668,10 @@ func (g *gameShell) gadgetArt(gad gui.Gadget, status int) *formats.GAFFrame {
 }
 
 func (g *gameShell) drawRetailPanel(c *client.Client) {
+	if g != nil && g.briefing != nil && g.briefing.State() == BriefingOpen {
+		g.drawBriefing(c)
+		return
+	}
 	p := g.activePanel()
 	if p == nil || p.Window == nil || g.assets == nil {
 		return
@@ -1710,6 +1714,10 @@ func (g *gameShell) menuInput(cl *client.Client) {
 	if cl == nil || cl.Input() == nil {
 		return
 	}
+	if g != nil && g.briefing != nil && g.briefing.State() == BriefingOpen {
+		g.briefingInput(cl)
+		return
+	}
 	if g.frontend.Panels.Modal() != nil {
 		g.modalInput(cl)
 		return
@@ -2072,9 +2080,10 @@ func (g *gameShell) activateGadget(name string) {
 	case modeMenuMission:
 		switch key {
 		case "start":
-			// The campaign Start leaves for the same loading screen the
-			// skirmish Start does [07 §4].
-			g.startMissionLoad()
+			// Campaign Start first opens MSNBRIEF. Its Start action later
+			// emits the same shared battle request used by every entry path
+			// [08 R-CAMP-01 §2].
+			g.openCampaignBriefing()
 		case "difficulty":
 			g.missionDifficultyValue = cycleInt(g.missionDifficultyValue, 0, 2, 1)
 			if p := g.activePanel(); p != nil {
@@ -2290,6 +2299,14 @@ func (g *gameShell) openMissionMenu(any bool) {
 	g.missionIdx = 0
 	g.campaigns = nil
 	g.campaignOptions = nil
+	// NEWGAME starts a distinct campaign lifetime. Retail's 25 mission marks
+	// begin Unknown here; continuation enters briefing directly and therefore
+	// preserves the copied result bank instead of taking this reset path.
+	g.campaignProgress = session.BankProgress{}
+	for i := range g.campaignProgress.Thumbs {
+		g.campaignProgress.Thumbs[i] = 'U'
+	}
+	g.campaignProgressSet = true
 	g.openMenu(modeMenuMission)
 }
 

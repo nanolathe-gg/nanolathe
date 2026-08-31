@@ -335,8 +335,8 @@ type CollisionState struct {
 	X, Z int32 // position 16.16 [04 §8.2] C22 C23 C24 — world X/Z
 	Y    int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 
-	VX, VZ int32 // velocity 16.16 [04 §8.2] C24 — horizontal components recomputed at blocked
-	Speed  int32 // scalar speed word 16.16 [04 §8.2] C24 — capped at MaxVelocity/2
+	VX, VY, VZ int32 // velocity 16.16 [04 §8.2] C24 — horizontal components recomputed at blocked
+	Speed      int32 // scalar speed word 16.16 [04 §8.2] C24 — capped at MaxVelocity/2
 
 	Heading uint16 // current heading [04 §5.1][04 §8.2] C24
 
@@ -352,7 +352,14 @@ type CollisionState struct {
 
 	OldAnchor Cell // old footprint anchor for clamp reference [04 §8.2] C24 centre±0x7FFFF
 
-	Blocked bool // mover blocked bit 2 at mover+? [04 §8.2] C23 C24 — rewritten by validator result
+	Blocked        bool  // mover blocked bit 2 at mover+? [04 §8.2] C23 C24 — rewritten by validator result
+	SavedStateByte uint8 // complete saved state byte; only low mode/blocked groups are consumed [08 R-SAVE-02 §8]
+	// These saved mover words have no live consumer in the ground integrator,
+	// but are retained verbatim so a restore does not silently discard them.
+	LeanX, LeanY, LeanZ int32
+	TurnResidual        int16
+	LastStampTick       uint32
+	LastProposalTick    uint32
 	// BlockerID is the dynamic occupant that rejected the last proposal, or -1
 	// for static/terrain rejection. It never causes pushing or displacement.
 	BlockerID int

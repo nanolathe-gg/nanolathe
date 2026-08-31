@@ -224,16 +224,39 @@ type Unit struct {
 	// The six engine-write port markers occupy the instance stance byte's
 	// low six bits [R-P0-10]. They remain named fields so production code does
 	// not confuse the classifier bit in Flags with COB state.
-	InBuildStance bool         // engine-write port 5 [R-P0-10]
-	Busy          bool         // engine-write port 6 [R-P0-10]
-	YardOpen      bool         // engine-write port 18 [R-P0-10]
-	BuggerOff     bool         // engine-write port 19 [R-P0-10]
-	Armored       bool         // engine-write port 20 [R-P0-10]
-	Group         uint8        // one stored control-group value 0..9 [07 §9]
-	Pending       uint32       // capability/pending word for gate intersection [04 §3.3] C6
-	Orders        any          // [04 §3.2] front/rear segment anchors on the unit (stored as *orders.Queue via opaque to avoid import cycle)
-	Script        *cob.VM      // typed COB VM per-unit [04 §4.2][P1-I01] — not any, typed per acceptance
-	GuardLatches  GuardLatches // per-unit dedup array for guard assistance [04 §3.5]
+	InBuildStance   bool  // engine-write port 5 [R-P0-10]
+	Busy            bool  // engine-write port 6 [R-P0-10]
+	YardOpen        bool  // engine-write port 18 [R-P0-10]
+	BuggerOff       bool  // engine-write port 19 [R-P0-10]
+	Armored         bool  // engine-write port 20 [R-P0-10]
+	BuildingState   bool  // persisted state-byte bit 3 [08 R-SAVE-02 §6]
+	Group           uint8 // one stored control-group value 0..9 [07 §9]
+	RestoredAIGroup int32 // saved owner-group index, -1 means none [08 R-SAVE-02 §6]
+	HasMover        bool  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// RestoredMoveMode marks the packed unit-side mover mirror as authoritative
+	// during the restore bootstrap. EnsureUnit normally initializes this mirror
+	// for newly created units, but must preserve the saved value while the
+	// mover-side record is applied [08 R-SAVE-02 §6].
+	RestoredMoveMode bool
+	Pending          uint32 // capability/pending word for gate intersection [04 §3.3] C6
+	// Save-restored unit words whose consumers are owned by later phases. The
+	// names stay neutral where the retail census remains Unknown [08
+	// R-SAVE-02 §6].
+	RelationDomainByte   uint8
+	CachedOccupancyX     int16
+	CachedOccupancyZ     int16
+	SightCellX           int16
+	SightCellZ           int16
+	FootprintSizeX       int16
+	FootprintSizeZ       int16
+	RevealDeadline       uint32
+	UnknownByteAC        uint8
+	UnknownByteAD        uint8
+	LOSByte              uint8
+	UnknownCountdownByte uint8
+	Orders               any          // [04 §3.2] front/rear segment anchors on the unit (stored as *orders.Queue via opaque to avoid import cycle)
+	Script               *cob.VM      // typed COB VM per-unit [04 §4.2][P1-I01] — not any, typed per acceptance
+	GuardLatches         GuardLatches // per-unit dedup array for guard assistance [04 §3.5]
 	// RenderPieceFlags is the per-unit render-piece record [04 §"Piece flag polarity"] [R-COB-01 §1].
 	// One flags byte per piece in a separate array from the script's piece-animation state.
 	// Allocation is zero-filled then the fill pass sets bit 1 (0x02 cache) and bit 2 (0x04 shade)
@@ -245,10 +268,11 @@ type Unit struct {
 	// Typed per-unit state introduced for P0-I02 real pipeline [04 §1.1][04 §4][06][GAP T15].
 	// These fields own the authoritative per-unit data that the phase-2 sweep
 	// visits in players-asc then slots-asc order [01 §6.2] C2 [P0-16].
-	ScriptState *ScriptState    // per-unit COB VM/thread/piece state [04 §4.1][04 §4.2][GAP T15]; nil if not yet wired
-	Slots       [NumSlots]Slot  // three weapon slots [06 §1.2] C1 P0-10; local Slot avoids units→combat→economy→units cycle
-	Move        MoveState       // movement status shared with movement.System [04 §8.1][04 §9.1] (movement imports units)
-	Attachment  AttachmentState // carrier/cargo linkage [04 §4.4] attach-unit
+	ScriptState      *ScriptState    // per-unit COB VM/thread/piece state [04 §4.1][04 §4.2][GAP T15]; nil if not yet wired
+	Slots            [NumSlots]Slot  // three weapon slots [06 §1.2] C1 P0-10; local Slot avoids units→combat→economy→units cycle
+	Move             MoveState       // movement status shared with movement.System [04 §8.1][04 §9.1] (movement imports units)
+	Attachment       AttachmentState // carrier/cargo linkage [04 §4.4] attach-unit
+	EngagementTarget pool.Handle     // saved plain engagement link; no attachment side effect [08 R-SAVE-02 §6]
 	// SpotMetal is the extractor yield sampled once at placement: Σ(cellMetal+1)*extractsMetal [05 "Terrain metal extraction"] C14 [P1-10][P1-15].
 	// Stored on the instance once at creation via SampleMetal, never resampled even if terrain metal changes.
 	SpotMetal float32 // [P1-10] once Σ(byte+1)*extractsMetal, [P1-15] uniform char write
@@ -1080,9 +1104,9 @@ func installWeapons(u *Unit, def *content.UnitDef) {
 // [P0-16 §3.3]. A successful reconstruction allocation runs the normal draw
 // sequence before its caller restores the saved heading; validation failures
 // consume zero draws [R-P28-ANG-01R §2]. Returns error on
-// limit/slice-full/forced-OOB/occupied.
-// Active in-battle restore is explicitly unsupported, so this allocator does
-// not add a save codec or reconstruct a saved heading [INVARIANTS I13].
+// limit/slice-full/forced-OOB/occupied. The retail staged battle loader uses
+// this path for active in-battle restoration; later fix-up passes restore the
+// remaining saved unit state.
 func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed, forced pool.Handle) (pool.Handle, error) {
 	if w == nil || w.pool == nil {
 		return 0, fmt.Errorf("units: nil world")

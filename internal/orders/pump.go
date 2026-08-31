@@ -72,6 +72,16 @@ type Node struct {
 	// blocked-area retry counter [04 §3.2][R-ORDER-02 §1].
 	// Assist/repair/reclaim/capture/resurrection: Target + operation-specific progress in Param2/3 [05].
 	BuildDefKey string // canonical unit key for build products [P0-I05][02 §5]
+	// RetailSubtypeCode and RetailSubtype preserve the optional handler payload
+	// attached to a saved order.  The payload is deliberately opaque here: its
+	// owning handler performs any typed fix-up, while this node keeps every word
+	// available across a catalog/session restore [08 R-SAVE-02 §10].
+	RetailSubtypeCode    uint32
+	RetailSubtype        []byte
+	RetailSubtypeUnitA   pool.Handle
+	RetailSubtypeUnitB   pool.Handle
+	RetailSubtypeWords16 []uint16
+	RetailSubtypeWords32 []uint32
 }
 
 // Queue holds the two segments [04 §3.2] C5.

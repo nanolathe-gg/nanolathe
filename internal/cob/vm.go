@@ -44,7 +44,9 @@ const (
 
 // Thread is one of the eight 164-byte retail records [01 §6.1] C13, [04 §4.2] (I13).
 // Go stores named fields; byte size is not reproduced, but capacities and
-// scan order are. Stack depth 10 [04 §4.2] C13; overflow kills thread
+// scan order are. The wire image carries 32 physical window words; authored
+// script operations still enforce their established depth-10 limit [04 §4.2] C13.
+// Overflow kills thread
 // (status cleared, active count --, drain yields) per [P1-11] §2.4 — same as
 // illegal opcode kill path. Bad piece index (<0 or >=pieceCount) also kills
 // Corrupt COB/save: header offset bounds-checked vs retail no-check —
@@ -53,10 +55,10 @@ const (
 // and iteration limit 200, divide-by-zero via thread kill (not process #DE)
 // [P2-03][04 §4.3] C14 I11.
 type Thread struct {
-	Status     int // one of Thread* constants [04 §4.2]
-	PC         int // word index into Program.Code [04 §4.3] C12
-	Stack      [10]int32
-	SP         int // stack depth 0..10 [04 §4.2] C13; overflow kills per [P1-11] §2.4
+	Status     int       // one of Thread* constants [04 §4.2]
+	PC         int       // word index into Program.Code [04 §4.3] C12
+	Stack      [32]int32 // complete wire window; authored VM uses the first ten as stack/locals
+	SP         int       // logical stack count; authored operations cap pushes at 10 [04 §4.2] C13
 	Sleep      int32
 	WaitPiece  int
 	WaitAxis   int
@@ -80,6 +82,7 @@ type VM struct {
 	prog        *Program
 	statics     []int32
 	anims       []pieceAnim // per-piece per-axis animation state [04 §4.6]
+	pieceBusy   []bool      // per-piece animation dirty/busy reduction [04 §4.6]
 	pieceFlags  []uint8     // per-piece draw/cache/shade/shadow flags [04 §4.3] — fallback for fixture VMs; production flags live on units.Unit.RenderPieceFlags [04 §"Piece flag polarity"]
 	simRng      *rng.Simulation
 	portFuncs   map[Port]func(args []int32) int32   // minimal hook for WU-06-7; nil means default 0 [04 §4.4]
@@ -98,7 +101,9 @@ type VM struct {
 	// speed/deceleration divides and the sleep conversion read it.
 	tickDenom int32
 
-	DrainCalls int // count of Drain invocations for RS-08 one-drain invariant [04 §4.2][GAP T15]
+	DrainCalls        int    // count of Drain invocations for RS-08 one-drain invariant [04 §4.2][GAP T15]
+	activeThreadCount uint32 // authoritative active-thread count [04 §4.2]
+	dirty             bool   // global animation dirty flag [04 §4.6]
 
 	// Render-piece flag delegation [04 §"Piece flag polarity"] [R-COB-01 §1].
 	// Production units own RenderPieceFlags on units.Unit; the VM delegates its
@@ -234,17 +239,20 @@ func NewVM(prog *Program) *VM {
 // status word and the instance's active-thread count (derived here from the
 // status words) and latches the tick denominator once. Nothing else in the
 // eight thread records is initialized — PC, depth, timer, signal mask, wait
-// words and the ten window words of an unallocated slot keep whatever the
+// words and the 32 physical window words of an unallocated slot keep whatever the
 // instance's memory held (Go's zero values on a fresh instance; a previous
 // tenant's bytes on a reused one). Every field that matters is re-seeded at
 // thread allocation or thread start, so construction-time state is
-// unobservable except through the window words.
+// unobservable except through the physical window words.
 func (v *VM) SetProgram(prog *Program) {
 	v.prog = prog
 	if prog == nil {
 		v.statics = nil
 		v.Pieces = nil
 		v.anims = nil
+		v.pieceBusy = nil
+		v.activeThreadCount = 0
+		v.dirty = false
 		v.pieceFlags = nil
 		v.renderFlags = nil
 		v.renderFlagsBound = false
@@ -259,6 +267,7 @@ func (v *VM) SetProgram(prog *Program) {
 	v.statics = make([]int32, prog.Statics)
 	v.Pieces = make([]model.PieceState, len(prog.Pieces)) // zero-filled by the bind [R-COB-01 §1]
 	v.anims = make([]pieceAnim, len(prog.Pieces))         // piece animation words all zero [R-COB-01 §1]
+	v.pieceBusy = make([]bool, len(prog.Pieces))          // piece dirty/busy flags all zero [04 §4.6]
 	v.pieceFlags = make([]uint8, len(prog.Pieces))
 	// Defaults: bit 1 (cache) and bit 2 (shade) set, bit 0 (draw) clear for
 	// now; retail sets bit 0 per-geometry at creation [04 §4.3] "allocation is
@@ -300,6 +309,8 @@ func (v *VM) SetProgram(prog *Program) {
 	v.tickDenom = 30
 	v.lastStarted = -1
 	v.lastQueryThread = -1
+	v.activeThreadCount = 0
+	v.dirty = false
 	for i := range v.lastReturnValid {
 		v.lastReturnValid[i] = false
 		v.lastReturnValue[i] = 0
@@ -313,6 +324,19 @@ func (v *VM) Program() *Program {
 		return nil
 	}
 	return v.prog
+}
+
+// ActiveThreadCount returns the VM's authoritative active-thread count.
+func (v *VM) ActiveThreadCount() uint32 {
+	if v == nil {
+		return 0
+	}
+	return v.activeThreadCount
+}
+
+// ScriptDirty reports the global piece-animation dirty flag [04 §4.6].
+func (v *VM) ScriptDirty() bool {
+	return v != nil && v.dirty
 }
 
 // BindPort registers a port handler for WU-06-7 [PLAN_06 Public API] [04 §4.4].
@@ -545,6 +569,7 @@ func (v *VM) Start(script int, args []int32) bool {
 	}
 	t := &v.Threads[idx]
 	t.Status = ThreadRunning
+	v.activeThreadCount++
 	t.PC = script
 	// Engine-created root threads start with signal mask 1. Child threads
 	// inherit their caller's mask below; this seed is the retail factory/COB
@@ -624,6 +649,7 @@ func (v *VM) CallQuery(script int, args []int32) (started, returned bool) {
 	v.lastQueryThread = idx
 	t := &v.Threads[idx]
 	t.Status = ThreadRunning
+	v.activeThreadCount++
 	// Clear a stale explicit-return marker if this slot was reused after a
 	// prior callback. The current Q result must only observe this invocation.
 	v.lastReturnValid[idx] = false
@@ -785,6 +811,9 @@ func (v *VM) killThread(idx int) {
 	if t.Status == ThreadIdle {
 		return
 	}
+	if v.activeThreadCount > 0 {
+		v.activeThreadCount--
+	}
 	t.Status = ThreadIdle
 	t.PC = 0
 	t.SP = 0
@@ -878,17 +907,28 @@ func (v *VM) isMoveBusy(piece, axis int) bool {
 	return anim.moveBusy && anim.moveSpeed != 0
 }
 
+func (v *VM) markAnimationDirty(piece int) {
+	v.dirty = true
+	if piece >= 0 && piece < len(v.pieceBusy) {
+		v.pieceBusy[piece] = true
+	}
+}
+
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // Division uses IDIV trunc toward zero (Go int64/ trunc) per I3 [04 §4.6] [DEC-033]; no remainder carry; -100/30 is -3.
 func (v *VM) interpolate(delta int) {
-	if delta == 0 || len(v.anims) == 0 {
+	if delta == 0 || !v.dirty || len(v.anims) == 0 {
 		return
 	}
+	v.dirty = false
 	// Deterministic iteration: pieces ascending (I1) [04 §4.2]; axis 0..2.
 	for p := range v.anims {
 		if p >= len(v.Pieces) {
 			continue
+		}
+		if p < len(v.pieceBusy) {
+			v.pieceBusy[p] = false
 		}
 		for axis := 0; axis < 3; axis++ {
 			anim := &v.anims[p].axes[axis]
@@ -1026,6 +1066,16 @@ func (v *VM) interpolate(delta int) {
 				}
 			}
 		}
+		if p < len(v.pieceBusy) {
+			for axis := 0; axis < 3; axis++ {
+				anim := &v.anims[p].axes[axis]
+				if anim.moveBusy || anim.turnBusy || (anim.spinActive && (anim.spinSpeed != 0 || anim.spinAccel != 0)) {
+					v.pieceBusy[p] = true
+					v.dirty = true
+					break
+				}
+			}
+		}
 	}
 }
 
@@ -1098,8 +1148,8 @@ func (v *VM) runThread(idx int) {
 			}
 			anim.moveSpeed = perTick     // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			anim.moveBusy = perTick != 0 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			anim.spinActive = false // move cancels spin on same axis? Last writer wins [03 §2.4] C22
+			v.markAnimationDirty(piece)  // move dirties the piece and global flag, including zero-speed issue [04 §4.6]
+			anim.spinActive = false      // move cancels spin on same axis? Last writer wins [03 §2.4] C22
 			t.PC += 3
 		case 0x10002000: // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			if t.PC+2 >= len(v.prog.Code) {
@@ -1138,7 +1188,7 @@ func (v *VM) runThread(idx int) {
 			anim.turnSpeed = perTick     // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			anim.turnBusy = perTick != 0 // zero perTick wakes wait immediate [04 §4.6] [DEC-033] §5.4
 			anim.spinActive = false
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			v.markAnimationDirty(piece) // turn dirties the piece and global flag, including zero-speed issue [04 §4.6]
 			t.PC += 3
 		case 0x10003000: // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			if t.PC+2 >= len(v.prog.Code) {
@@ -1167,7 +1217,7 @@ func (v *VM) runThread(idx int) {
 			}
 			anim.spinActive = true
 			anim.turnBusy = false
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			v.markAnimationDirty(piece) // spin dirties the piece and global flag, including zero-speed issue [04 §4.6]
 			t.PC += 3
 		case 0x10004000: // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			if t.PC+2 >= len(v.prog.Code) {
@@ -1742,6 +1792,7 @@ func (v *VM) runThread(idx int) {
 			// identical for both start forms [04 §4.3].
 			nt := &v.Threads[newIdx]
 			nt.Status = ThreadRunning
+			v.activeThreadCount++
 			nt.PC = targetPC
 			nt.SignalMask = t.SignalMask // inherited [04 §4.3]
 			nt.WaitThread = -1
@@ -1789,6 +1840,7 @@ func (v *VM) runThread(idx int) {
 			}
 			nt := &v.Threads[newIdx]
 			nt.Status = ThreadRunning
+			v.activeThreadCount++
 			nt.PC = targetPC
 			nt.SignalMask = t.SignalMask
 			nt.WaitThread = -1

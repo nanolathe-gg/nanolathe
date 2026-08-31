@@ -33,6 +33,10 @@ type Service struct {
 	musicFSBound      bool
 	lastEventTick     uint32
 	hasEventTick      bool
+	streamPath        string
+	streamVolume      int
+	streamDeadlines   []uint32
+	streamPlaying     bool
 }
 
 // NewService constructs the queue, registry/cache, and music controller with
@@ -312,10 +316,81 @@ func (a *Service) PlayBriefing(glamourSound, brief, narration, missionHint strin
 	return a.Music != nil && a.Music.NumTracks() > 0 && a.Music.Play(1)
 }
 
+// StartStream arms one authored narration/glamour timer on the existing
+// semantic audio owner. Starts overwrite the current path/volume but retain
+// every armed deadline; the earliest deadline admits that current path once
+// [03 R-AUD-02 §1].
+func (a *Service) StartStream(path string, volume int, delay, now uint32) {
+	if a == nil || path == "" {
+		return
+	}
+	a.streamPath, a.streamVolume = path, volume
+	a.streamDeadlines = append(a.streamDeadlines, now+delay)
+}
+
+// TickStream admits a pending stream exactly once when the presentation clock
+// reaches its due unit. Missing files and outputs without StreamOutput remain
+// silent at this boundary.
+func (a *Service) TickStream(now uint32) {
+	if a == nil || len(a.streamDeadlines) == 0 {
+		return
+	}
+	earlest := a.streamDeadlines[0]
+	for _, due := range a.streamDeadlines[1:] {
+		if due < earlest {
+			earlest = due
+		}
+	}
+	if now < earlest {
+		return
+	}
+	a.streamDeadlines = nil
+	output, ok := GlobalOutput().(StreamOutput)
+	if a.streamPlaying {
+		if ok {
+			output.StopStream()
+		}
+		a.streamPlaying = false
+	}
+	if !ok {
+		return
+	}
+	a.Init(nil)
+	if a.Cache == nil {
+		return
+	}
+	sample, err := a.Cache.LoadPath(a.streamPath)
+	if err != nil || sample == nil {
+		return
+	}
+	if err := output.PlayStream(sample, VolumeFromCentibel(int32(a.streamVolume))); err == nil {
+		a.streamPlaying = true
+	}
+}
+
+// StopStream cancels delayed narration and stops only the active stream
+// player, leaving the ordinary 8-slot cue pool alone.
+func (a *Service) StopStream() {
+	if a == nil {
+		return
+	}
+	a.streamDeadlines = nil
+	if a.streamPlaying {
+		if output, ok := GlobalOutput().(StreamOutput); ok {
+			output.StopStream()
+		}
+	}
+	a.streamPlaying = false
+}
+
 // Close stops presentation music when the battle view leaves. Queue and
 // decoded aliases remain service-owned for the session lifetime.
 func (a *Service) Close() {
-	if a == nil || a.Music == nil {
+	if a == nil {
+		return
+	}
+	a.StopStream()
+	if a.Music == nil {
 		return
 	}
 	a.Music.Stop()

@@ -414,7 +414,8 @@ func TestBankEmptyAccountsNotEmitted(t *testing.T) {
 }
 
 func TestBankCompressedPoolValid(t *testing.T) {
-	// Valid compressed pool: compress real pool via zlib and set flag.
+	// Valid compressed pool: wrap a zlib payload in the established SQSH
+	// framing and set the bank compression flag.
 	b := NewBuilder("")
 	ac := b.Add("Summary")
 	ac.SetInt("maxunits", 42)
@@ -428,9 +429,16 @@ func TestBankCompressedPoolValid(t *testing.T) {
 	}
 	w.Close()
 	compressed := buf.Bytes()
+	chunk := make([]byte, 19+len(compressed))
+	copy(chunk, []byte("SQSH"))
+	chunk[4], chunk[5], chunk[6] = 2, 2, 0
+	binary.LittleEndian.PutUint32(chunk[7:], uint32(len(compressed)))
+	binary.LittleEndian.PutUint32(chunk[11:], uint32(len(rawPool)))
+	binary.LittleEndian.PutUint32(chunk[15:], sumBytes(compressed))
+	copy(chunk[19:], compressed)
 	// Build new image: header+accounts+compressed pool
 	newPayload := append([]byte(nil), payload[:poolOff]...)
-	newPayload = append(newPayload, compressed...)
+	newPayload = append(newPayload, chunk...)
 	// Update header compression flag and keep pool offset same (since accounts unchanged, pool offset stays same)
 	newPayload[0x18] = 1
 	// Pool length changed, but pool offset is still start of pool, which is correct.

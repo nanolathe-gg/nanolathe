@@ -1,6 +1,8 @@
 package features
 
 import (
+	"encoding/binary"
+	"fmt"
 	"sort"
 
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -26,6 +28,7 @@ type Instance struct {
 
 	// Burning state [05 "Feature burning"].
 	IsBurning        bool
+	IsAnimating      bool  // saved selector identifies a live animation record; completion is unresolved
 	BurnCountdown    int32 // countdown to burn event, decremented each tick
 	BurnTicks        int32 // elapsed animation ticks
 	BurnDuration     int32 // finite lifetimes 46–282 visits [05 "Feature burning"]
@@ -45,6 +48,15 @@ type Instance struct {
 
 	// Footprint cached from Def for removal without re-reading Def after clear.
 	FootprintX, FootprintZ int32
+
+	// Save-restored animation words.  The selector is retained as the authored
+	// burn/death/reclaim discriminator; opaque 3D words are not interpreted.
+	SavedAnchorWord    uint16
+	AnimationState     uint16
+	AnimationFrame     uint8
+	AnimationSelector  uint8
+	AnimationCountdown uint8
+	OpaqueState        [18]byte
 }
 
 // Cause selects the successor hop [05 "Removal and successor replacement"].
@@ -169,6 +181,97 @@ func (s *Service) TickLifecycle(tick uint32) {
 // failure [P1-10].
 func (s *Service) PlaceAt(cx, cz int, def *content.FeatureDef) *Instance {
 	return s.spawnFeatureAt(cx, cz, def)
+}
+
+// RestoreAt places a saved feature through PlaceAt and then copies only the
+// family state words defined by the battle-save format.  The placement helper
+// remains the sole owner of terrain/plot writes [08 R-SAVE-02 §11].
+func (s *Service) RestoreAt(cx, cz int, def *content.FeatureDef, family int, data []byte) (*Instance, error) {
+	want := RetailRestorePayloadSize(family)
+	if want == 0 || len(data) != want {
+		return nil, fmt.Errorf("features: retail restore: family %d payload size %d", family, len(data))
+	}
+	inst := s.PlaceAt(cx, cz, def)
+	if inst == nil {
+		return nil, fmt.Errorf("features: retail restore: placement rejected at (%d,%d)", cx, cz)
+	}
+	switch family {
+	case 0:
+		inst.SavedAnchorWord = binary.LittleEndian.Uint16(data[6:8])
+		idx := cz*int(s.Terrain.CellW) + cx
+		if idx < 0 || idx >= len(s.Terrain.Plot) {
+			return nil, fmt.Errorf("features: retail restore: anchor outside terrain")
+		}
+		s.Terrain.Plot[idx].SetAnchorWord(inst.SavedAnchorWord)
+	case 1:
+		inst.AnimationState = binary.LittleEndian.Uint16(data[6:8])
+		inst.AnimationFrame = data[8]
+		inst.AnimationSelector = data[9] & 0x0f
+		inst.AnimationCountdown = data[9] >> 4
+		// The animation selector has its own wire vocabulary: 0 burn, 1 death,
+		// 2 reclaim.  It is not the successor Cause enum above [R-SAVE-FEATURE-01].
+		inst.IsBurning = inst.AnimationSelector == 0
+		inst.IsAnimating = inst.AnimationSelector <= 2
+		// The saved countdown and frame are animation-family state. Only the
+		// established burn selector may feed the burn-specific counters; death
+		// and reclaim use distinct authored sequences whose binding is unknown.
+		if inst.IsBurning {
+			inst.BurnCountdown = int32(inst.AnimationCountdown)
+			inst.BurnTicks = int32(inst.AnimationFrame)
+		}
+		if inst.IsBurning && s.BurnAnimationTicks != nil {
+			inst.BurnDuration = s.BurnAnimationTicks(def)
+		}
+		// Animating records have a live instance attached even when their
+		// selector is death or reclaim; placement already stamps the footprint,
+		// but this explicit anchor write preserves the saved-instance bit [05
+		// R-FEAT-01 §15] [08 R-SAVE-FEATURE-01].
+		idx := cz*int(s.Terrain.CellW) + cx
+		if idx >= 0 && idx < len(s.Terrain.Plot) {
+			s.Terrain.Plot[idx].SetOccupied(true)
+		}
+	case 2:
+		inst.AnimationState = binary.LittleEndian.Uint16(data[6:8])
+		copy(inst.OpaqueState[:], data[8:])
+		idx := cz*int(s.Terrain.CellW) + cx
+		if idx >= 0 && idx < len(s.Terrain.Plot) {
+			s.Terrain.Plot[idx].SetOccupied(true)
+		}
+	default:
+		return nil, fmt.Errorf("features: retail restore: unknown family %d", family)
+	}
+	return inst, nil
+}
+
+// RetailRestorePayloadSize returns the exact byte count for one saved feature
+// family. A switch keeps the wire contract explicit and avoids a mutable
+// lookup table on the restore path [08 R-SAVE-FEATURE-01].
+func RetailRestorePayloadSize(family int) int {
+	switch family {
+	case 0:
+		return 8
+	case 1:
+		return 10
+	case 2:
+		return 26
+	default:
+		return 0
+	}
+}
+
+// ResetForRestore drops map-authored instances before the saved feature rows
+// are replayed.  It intentionally uses the service's footprint clear helper,
+// rather than allowing the session to mutate plot cells directly.
+func (s *Service) ResetForRestore() {
+	if s == nil {
+		return
+	}
+	for _, inst := range s.Instances() {
+		if inst != nil {
+			s.clearFootprintNoRevision(inst.CX, inst.CZ, inst.Def)
+		}
+	}
+	s.instances = make(map[int]*Instance)
 }
 
 // PlaceAtWorld stamps a feature at world position (x,z) using floor-corrected

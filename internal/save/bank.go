@@ -12,11 +12,9 @@ package save
 
 import (
 	"bytes"
-	"compress/zlib"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"strings"
@@ -42,15 +40,6 @@ const (
 	diagPoolDecompress    = "HapiBank::OpenBank::Decompression failed"
 	diagAccountDecompress = "HapiBank::LoadAccount::Decompression failed"
 )
-
-// TODO(question): compressed bank framing is not established beyond the
-// flag and the diagnostic strings [08 "Location and representation"].
-// The pool/account body flag is 0 raw / 1 compressed and the reader is said
-// to use "the same decompressor the archive reader uses" [08 "Location and representation"],
-// but the on-disk framing (zlib stream vs SQSH chunk table+header, chunk
-// size, checksums) is not specified. We treat flag==1 as opaque: attempt a
-// single zlib inflate and on failure emit the verbatim diagnostic and
-// continue parsing with the raw bytes.
 
 type IntItem struct {
 	Name  string
@@ -433,7 +422,6 @@ func OpenBytes(data []byte, expectedTag string) (*Bank, error) {
 	var warnings []string
 	poolRaw := data[poolFileOffset:]
 	if compressionFlag != 0 {
-		// TODO(question): see package comment on unknown framing.
 		dec, err := tryDecompress(poolRaw)
 		if err != nil {
 			warnings = append(warnings, diagPoolDecompress)
@@ -506,103 +494,39 @@ func OpenBytes(data []byte, expectedTag string) (*Bank, error) {
 			break
 		}
 		accountOffset := uint32(cursor)
-		// Handle compressed body: diagnostic and continue parsing [08 "Location and representation"] C12.
+		// Account bodies use the same SQSH chunk framing as archive files. The
+		// account header stays uncompressed; only the body after it is framed
+		// [fmt hpi] [08 R-ENTRY-02 §3].
+		body := data[cursor+AccountHeaderSize : cursor+int(span)]
 		if compressed != 0 {
-			warnings = append(warnings, diagAccountDecompress)
-			// For opaque pass-through, skip parsing this account's body but
-			// advance by span per enumeration rule, so later accounts remain reachable.
-			// TODO(question): if framing were known we would decompress body here.
+			decoded, err := decodeSQSH(body)
+			if err != nil {
+				warnings = append(warnings, diagAccountDecompress)
+				// Keep the retail-compatible skip-on-error behavior used by the
+				// existing bank API; staging treats missing accounts as invalid.
+				cursor += int(span)
+				bank.warnings = warnings
+				continue
+			}
+			body = decoded
+			accountCompressed := true
+			account := parseAccountBody(pool, body, span, accountOffset, nameOffset, intCount, doubleCount, stringCount, boxCount, data, accountCompressed, &warnings)
+			if account != nil {
+				if existing, ok := bank.Account(account.Name); ok {
+					mergeAccount(existing, account)
+				} else {
+					bank.accounts = append(bank.accounts, account)
+				}
+			}
 			cursor += int(span)
 			bank.warnings = warnings
 			continue
 		}
-		body := data[cursor+AccountHeaderSize : cursor+int(span)]
-		account := &Account{
-			Name:       readPoolString(pool, nameOffset),
-			Span:       span,
-			NameOffset: nameOffset,
-			Offset:     accountOffset,
-			Compressed: false,
-			Body:       append([]byte(nil), body...),
+		account := parseAccountBody(pool, body, span, accountOffset, nameOffset, intCount, doubleCount, stringCount, boxCount, data, false, &warnings)
+		if account == nil {
+			cursor += int(span)
+			continue
 		}
-		// Negative counts skip loops rather than reject [08 "Location and representation"].
-		if intCount < 0 {
-			intCount = 0
-		}
-		if doubleCount < 0 {
-			doubleCount = 0
-		}
-		if stringCount < 0 {
-			stringCount = 0
-		}
-		if boxCount < 0 {
-			boxCount = 0
-		}
-		read := 0
-		for i := int32(0); i < intCount && read+8 <= len(body); i++ {
-			nameOff := binary.LittleEndian.Uint32(body[read:])
-			val := int32(binary.LittleEndian.Uint32(body[read+4:]))
-			name := readPoolString(pool, nameOff)
-			account.Ints = append(account.Ints, IntItem{Name: name, Value: val})
-			read += 8
-		}
-		for i := int32(0); i < doubleCount && read+12 <= len(body); i++ {
-			nameOff := binary.LittleEndian.Uint32(body[read:])
-			bits := binary.LittleEndian.Uint64(body[read+4:])
-			name := readPoolString(pool, nameOff)
-			account.Doubles = append(account.Doubles, DoubleItem{Name: name, Value: math.Float64frombits(bits)})
-			read += 12
-		}
-		for i := int32(0); i < stringCount && read+8 <= len(body); i++ {
-			nameOff := binary.LittleEndian.Uint32(body[read:])
-			valOff := binary.LittleEndian.Uint32(body[read+4:])
-			name := readPoolString(pool, nameOff)
-			value := readPoolString(pool, valOff)
-			account.Strings = append(account.Strings, StringItem{Name: name, Value: value})
-			read += 8
-		}
-		// Box descriptors: 16 bytes each [08 "Location and representation"].
-		for i := int32(0); i < boxCount && read+16 <= len(body); i++ {
-			marker := int32(binary.LittleEndian.Uint32(body[read:]))
-			number := int32(binary.LittleEndian.Uint32(body[read+4:]))
-			payloadOffset := binary.LittleEndian.Uint32(body[read+8:])
-			length := binary.LittleEndian.Uint32(body[read+12:])
-			box := &Box{Number: number}
-			if marker >= 0 {
-				box.Name = readPoolString(pool, uint32(marker))
-			} else if marker == -1 {
-				box.Name = ""
-			} else {
-				// Negative marker other than -1: treat as numbered with marker as name offset? Retail not validated.
-				box.Name = ""
-				box.Number = marker
-			}
-			// Payload offsets are absolute pre-compression image; for raw banks they are absolute file offsets.
-			// We bound them against the full file (C13) and copy the slice.
-			// Retail does not validate before copy; we do.
-			start := int(payloadOffset)
-			end := start + int(length)
-			if start >= 0 && end >= start && start < len(data) && end <= len(data) {
-				// Ensure payload lies within the account's span area (extra bound).
-				if start >= cursor && end <= cursor+int(span) {
-					box.Data = append([]byte(nil), data[start:end]...)
-				} else {
-					// Allow payload outside strict span for compatibility with
-					// writers that may place payloads elsewhere? We still bound to file.
-					box.Data = append([]byte(nil), data[start:end]...)
-				}
-			} else {
-				// Out of bounds: leave empty but continue.
-				box.Data = nil
-				warnings = append(warnings, fmt.Sprintf("box payload out of bounds %d+%d", start, length))
-			}
-			account.Boxes = append(account.Boxes, box)
-			read += 16
-		}
-		// Binary payload bytes follow descriptors; but our Boxes already copied via absolute offsets.
-		// For raw banks, data after descriptors is the payload bytes themselves, and descriptor offsets point into that region.
-		// The above copy already extracts them; no extra handling needed.
-
 		if existing, ok := bank.Account(account.Name); ok {
 			mergeAccount(existing, account)
 		} else {
@@ -621,6 +545,83 @@ func OpenBytes(data []byte, expectedTag string) (*Bank, error) {
 	return bank, nil
 }
 
+// parseAccountBody decodes typed rows and boxes from an already detached
+// logical body. For raw accounts payload offsets are absolute file offsets;
+// compressed accounts retain those offsets from the pre-compression image and
+// are translated to body-relative offsets before slicing.
+func parseAccountBody(pool, body []byte, span, accountOffset, nameOffset uint32, intCount, doubleCount, stringCount, boxCount int32, fileData []byte, compressed bool, warnings *[]string) *Account {
+	account := &Account{Name: readPoolString(pool, nameOffset), Span: span, NameOffset: nameOffset, Offset: accountOffset, Compressed: compressed, Body: append([]byte(nil), body...)}
+	if intCount < 0 {
+		intCount = 0
+	}
+	if doubleCount < 0 {
+		doubleCount = 0
+	}
+	if stringCount < 0 {
+		stringCount = 0
+	}
+	if boxCount < 0 {
+		boxCount = 0
+	}
+	read := 0
+	for i := int32(0); i < intCount && read+8 <= len(body); i++ {
+		nameOff := binary.LittleEndian.Uint32(body[read:])
+		val := int32(binary.LittleEndian.Uint32(body[read+4:]))
+		account.Ints = append(account.Ints, IntItem{Name: readPoolString(pool, nameOff), Value: val})
+		read += 8
+	}
+	for i := int32(0); i < doubleCount && read+12 <= len(body); i++ {
+		nameOff := binary.LittleEndian.Uint32(body[read:])
+		bits := binary.LittleEndian.Uint64(body[read+4:])
+		account.Doubles = append(account.Doubles, DoubleItem{Name: readPoolString(pool, nameOff), Value: math.Float64frombits(bits)})
+		read += 12
+	}
+	for i := int32(0); i < stringCount && read+8 <= len(body); i++ {
+		nameOff := binary.LittleEndian.Uint32(body[read:])
+		valueOff := binary.LittleEndian.Uint32(body[read+4:])
+		account.Strings = append(account.Strings, StringItem{Name: readPoolString(pool, nameOff), Value: readPoolString(pool, valueOff)})
+		read += 8
+	}
+	for i := int32(0); i < boxCount && read+16 <= len(body); i++ {
+		marker := int32(binary.LittleEndian.Uint32(body[read:]))
+		number := int32(binary.LittleEndian.Uint32(body[read+4:]))
+		payloadOffset := binary.LittleEndian.Uint32(body[read+8:])
+		length := binary.LittleEndian.Uint32(body[read+12:])
+		read += 16
+		box := &Box{Number: number}
+		if marker >= 0 {
+			box.Name = readPoolString(pool, uint32(marker))
+		} else if marker < -1 {
+			box.Number = marker
+		}
+		start := -1
+		if compressed {
+			// Retail writes an absolute offset into the pre-compression image;
+			// after decompression it is body-relative [08 R-ENTRY-02 §3].
+			bodyBase := uint64(accountOffset) + AccountHeaderSize
+			if uint64(payloadOffset) >= bodyBase {
+				candidate := uint64(payloadOffset) - bodyBase
+				if candidate <= uint64(len(body)) && candidate+uint64(length) <= uint64(len(body)) {
+					start = int(candidate)
+				}
+			}
+		} else if payloadOffset <= uint32(len(fileData)) && uint64(payloadOffset)+uint64(length) <= uint64(len(fileData)) {
+			start = int(payloadOffset)
+		}
+		if start >= 0 {
+			if compressed {
+				box.Data = append([]byte(nil), body[start:start+int(length)]...)
+			} else {
+				box.Data = append([]byte(nil), fileData[start:start+int(length)]...)
+			}
+		} else if warnings != nil {
+			*warnings = append(*warnings, fmt.Sprintf("box payload out of bounds %d+%d", payloadOffset, length))
+		}
+		account.Boxes = append(account.Boxes, box)
+	}
+	return account
+}
+
 func readPoolString(pool []byte, offset uint32) string {
 	if int(offset) >= len(pool) {
 		return ""
@@ -636,20 +637,7 @@ func tryDecompress(src []byte) ([]byte, error) {
 	if len(src) == 0 {
 		return src, nil
 	}
-	// Attempt zlib inflate (standard). This matches the archive zlib path [fmt hpi].
-	r, err := zlib.NewReader(bytes.NewReader(src))
-	if err != nil {
-		return nil, err
-	}
-	defer r.Close()
-	var out bytes.Buffer
-	if _, err := io.Copy(&out, r); err != nil {
-		return nil, err
-	}
-	if err := r.Close(); err != nil {
-		return nil, err
-	}
-	return out.Bytes(), nil
+	return decodeSQSH(src)
 }
 
 // NormalizeSAV reproduces the retail naming rule: strip the last dot and

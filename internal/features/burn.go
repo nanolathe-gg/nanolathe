@@ -12,7 +12,7 @@ func floorShift16(v int64) int64 { return v >> 16 }
 
 // burnTick implements the feature burning phase [05 "Feature burning"] [06 §13.1].
 // Smoke emission gated on tick%3==0, animation and countdown every tick,
-// animation-driven completion, one-shot spread+burnweapon event.
+// animation-driven burn completion, one-shot spread+burnweapon event.
 
 func (s *Service) burnTick(tick uint32) {
 	// One smoke flag per call, true when global tick %3==0, shared across every
@@ -25,7 +25,14 @@ func (s *Service) burnTick(tick uint32) {
 	var finished []int
 	for _, idx := range keys {
 		inst := s.instances[idx]
-		if inst == nil || !inst.IsBurning {
+		if inst == nil {
+			continue
+		}
+		if !inst.IsBurning {
+			// TODO(question): The complete interpretation of AnimationState and
+			// its binding to the death/reclaim animation sequences is unknown;
+			// tracing that animation-state/sequence binding would settle how
+			// selectors 1/2 advance and when they complete.
 			continue
 		}
 		if smoke {
@@ -66,7 +73,9 @@ func (s *Service) burnTick(tick uint32) {
 			}
 		}
 	}
-	// Process finished burns: clear and spawn burnt successor.
+	// Process finished burn animations through the established burnt successor
+	// path. Restored death/reclaim selectors remain attached records: their
+	// animation-state/sequence consumer is not established here.
 	for _, idx := range finished {
 		inst := s.instances[idx]
 		if inst == nil {
@@ -74,9 +83,7 @@ func (s *Service) burnTick(tick uint32) {
 		}
 		cx, cz := inst.CX, inst.CZ
 		def := inst.Def
-		// Clear burning cell — releases instance [05 "Feature burning"].
 		s.clearFootprint(cx, cz, def)
-		// Spawn featureburnt successor when linked [05 ...].
 		if def != nil && def.FeatureBurntDef != nil {
 			s.spawnFeatureAt(cx, cz, def.FeatureBurntDef)
 		}

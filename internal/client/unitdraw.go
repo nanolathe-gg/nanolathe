@@ -273,15 +273,27 @@ func (c *Client) UIBlitFrameScaled(f *formats.GAFFrame, x, y, w, h int) {
 // UIBlitFrameScaled. Sampling still spans the complete destination rectangle;
 // the clip only rejects writes outside the owning GUI surface [07 §4].
 func (c *Client) UIBlitFrameScaledClipped(f *formats.GAFFrame, x, y, w, h, clipX, clipY, clipW, clipH int) {
-	if f == nil || w <= 0 || h <= 0 || f.Width == 0 || f.Height == 0 {
+	if f == nil {
+		return
+	}
+	c.UIBlitFrameSourceRectScaledClipped(f, 0, 0, int(f.Width), int(f.Height), x, y, w, h, clipX, clipY, clipW, clipH)
+}
+
+// UIBlitFrameSourceRectScaledClipped stretches an inclusive source sub-rect
+// across a destination rectangle. ENDMSN's PlayerColor surface uses the
+// interior source `(1,1)..(frameWidth-1,frameHeight-1)` rather than sampling
+// the logo frame's outer border [07 R-HUD-03 §11].
+func (c *Client) UIBlitFrameSourceRectScaledClipped(f *formats.GAFFrame, srcX, srcY, srcW, srcH, x, y, w, h, clipX, clipY, clipW, clipH int) {
+	if f == nil || w <= 0 || h <= 0 || srcW <= 0 || srcH <= 0 || f.Width == 0 || f.Height == 0 {
 		return
 	}
 	minX, minY := max(clipX, 0), max(clipY, 0)
 	maxX, maxY := min(clipX+clipW, c.width), min(clipY+clipH, c.height)
 	// Inclusive corner spans: the last destination column samples the last
-	// source column, which is what the quad's corner pairs describe.
+	// source column of the selected sub-rect, which is what the quad's corner
+	// pairs describe.
 	spanX, spanY := w-1, h-1
-	srcX, srcY := int(f.Width)-1, int(f.Height)-1
+	srcSpanX, srcSpanY := srcW-1, srcH-1
 	for dy := 0; dy < h; dy++ {
 		py := y + dy
 		if py < minY || py >= maxY {
@@ -289,8 +301,9 @@ func (c *Client) UIBlitFrameScaledClipped(f *formats.GAFFrame, x, y, w, h, clipX
 		}
 		sy := 0
 		if spanY > 0 {
-			sy = dy * srcY / spanY
+			sy = dy * srcSpanY / spanY
 		}
+		sy += srcY
 		for dx := 0; dx < w; dx++ {
 			px := x + dx
 			if px < minX || px >= maxX {
@@ -298,8 +311,9 @@ func (c *Client) UIBlitFrameScaledClipped(f *formats.GAFFrame, x, y, w, h, clipX
 			}
 			sx := 0
 			if spanX > 0 {
-				sx = dx * srcX / spanX
+				sx = dx * srcSpanX / spanX
 			}
+			sx += srcX
 			b, ok := f.At(sx, sy)
 			if !ok {
 				continue
@@ -371,6 +385,48 @@ func (c *Client) UILightRect(pal *palette.Tables, x, y, w, h, level int) {
 				continue
 			}
 			c.indexed[row+px] = pal.LightLookup(level, c.indexed[row+px])
+		}
+	}
+}
+
+// UIShadeRect remaps a rectangle through the signed full-screen fade table.
+// Negative levels address SHD row level+32 after clamping at -32; nonnegative
+// levels use the brighten-only LHT row. This is the two-table signed shader
+// contract, not a single-table approximation [03 R-COMP-02 §5].
+func (c *Client) UIShadeRect(pal *palette.Tables, x, y, w, h, level int) {
+	if c == nil || pal == nil || w <= 0 || h <= 0 {
+		return
+	}
+	useShade := level < 0
+	row := level
+	if useShade {
+		if row < -32 {
+			row = -32
+		}
+		row += 32
+	}
+	if row > 31 {
+		row = 31
+	}
+	if row < 0 {
+		row = 0
+	}
+	for dy := 0; dy < h; dy++ {
+		py := y + dy
+		if py < 0 || py >= c.height {
+			continue
+		}
+		base := py * c.width
+		for dx := 0; dx < w; dx++ {
+			px := x + dx
+			if px < 0 || px >= c.width {
+				continue
+			}
+			if useShade {
+				c.indexed[base+px] = pal.ShadeLookup(row, c.indexed[base+px])
+			} else {
+				c.indexed[base+px] = pal.LightLookup(row, c.indexed[base+px])
+			}
 		}
 	}
 }

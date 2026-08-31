@@ -216,6 +216,16 @@ type Output interface {
 	PlaySample(*Sample, float64, float64) error
 }
 
+// StreamOutput is the optional delayed-stream seam used by briefing and
+// glamour narration. Ordinary cue outputs need only implement Output; stream
+// support is discovered at the presentation boundary and missing support is
+// silent [03 R-AUD-02 §1].
+type StreamOutput interface {
+	Output
+	PlayStream(*Sample, float64) error
+	StopStream()
+}
+
 // globalOutput is the presentation singleton used by the audio service [I6].
 var (
 	globalMu     sync.Mutex
