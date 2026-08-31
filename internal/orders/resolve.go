@@ -536,7 +536,7 @@ func setBandedGoalAroundWard(n *Node, ward *units.Unit, standoff int32) {
 }
 
 // attackChaseHandler implements Attack_Chase [04 §3.5] phases 0-3 and orbit substate 0..8.
-func attackChaseHandler(u *units.Unit, n *Node, satisfied uint32) Code {
+func attackChaseHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code {
 	if satisfied&chaseAbandonMask != 0 {
 		return Code(5) // TODO(question) abandon code value not established; using 5 unlink placeholder [04 §3.3]
 	}
@@ -692,7 +692,7 @@ func wardHasBuildOrder(ward *units.Unit) bool {
 }
 
 // guardHandler implements Follow_Ground / VTOL_Follow / Guard_NoMove [04 §3.5] top-down (a)-(e).
-func guardHandler(u *units.Unit, n *Node, satisfied uint32) Code {
+func guardHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code {
 	_ = satisfied
 	if n.Target == 0 {
 		return Code(5) // no ward

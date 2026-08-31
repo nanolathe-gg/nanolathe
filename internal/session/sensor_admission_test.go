@@ -178,15 +178,20 @@ func TestEnemyInLineOfSightIsAdmittedWithoutRadar(t *testing.T) {
 // TestRadarEmissionRequiresTheActivationBit locks the interaction between the
 // activation edge and the sensor phase's emitters. "Active" in the sensor phase
 // means the unit instance's activation/on-state bit is set: a live unit whose
-// radar or sonar distance is nonzero emits its outer circle, and queries its
-// contact callback, only after that test [03 §3.4 "Sensor callback gate
-// correction"][R-VIS-01 §4] pass 2.
+// radar or sonar distance is nonzero queries its contact callback only after
+// that test [03 §3.4 "Sensor callback gate correction"][R-VIS-01 §4] pass 2.
 //
-// Every unit is now created inactive and the bit is raised only through the
-// shared edge setter [04 R-UNIT-06 §2] — at completion for a definition that
-// authors `activatewhenbuilt`, or by an Activate order for an `onoffable` one.
-// A radar tower that has not completed therefore detects nothing and draws no
-// circle, and the same tower after its completion edge does both.
+// Every unit is created inactive and the bit is raised only through the shared
+// edge setter [04 R-UNIT-06 §2] — at completion for a definition that authors
+// `activatewhenbuilt`, or by an Activate order for an `onoffable` one. A radar
+// tower that has not completed therefore detects nothing, and the same tower
+// after its completion edge does.
+//
+// The minimap circle is a separate question and is asserted separately below:
+// [03 §3.10]'s 2026-08-29 correction establishes the circles as presentation
+// drawn by the contacts pass, so detection and the circle no longer share a
+// producer. This test previously read the circle list as a proxy for the
+// activation gate; it now reads the status bit the gate actually writes.
 func TestRadarEmissionRequiresTheActivationBit(t *testing.T) {
 	cell := func(n int32) numeric.Fixed { return numeric.Fixed(int64(n) << 16) }
 
@@ -209,13 +214,10 @@ func TestRadarEmissionRequiresTheActivationBit(t *testing.T) {
 	}
 	publishVisibilityForAll(s)
 
-	// Inactive: no contact query, no circle.
+	// Inactive: no contact query, so no detection.
 	s.stepAuthoritativePhases(1)
 	if got := s.visStatus[int(enemyH)]; got&visibility.SeenBit != 0 {
 		t.Fatalf("an INACTIVE radar emitter detected an enemy: status %#x [03 §3.4]", got)
-	}
-	if c := s.Vis.SensorCircles(); len(c) != 0 {
-		t.Fatalf("an INACTIVE radar emitter drew %d circles, want none [03 §3.4]", len(c))
 	}
 
 	// The completion edge raises the bit through the one writer retail has.
@@ -224,18 +226,84 @@ func TestRadarEmissionRequiresTheActivationBit(t *testing.T) {
 	if got := s.visStatus[int(enemyH)]; got&visibility.SeenBit == 0 {
 		t.Fatalf("an ACTIVE radar emitter did not detect an enemy inside its range: status %#x [R-VIS-01 §5]", got)
 	}
-	circles := s.Vis.SensorCircles()
-	if len(circles) != 1 || circles[0].SourceID != uint16(towerH) || circles[0].Radius != 900 {
-		t.Fatalf("active emitter circles = %+v, want one outer circle of radius 900 from the tower [03 §3.10]", circles)
-	}
 
-	// Lowering the edge again withdraws both.
+	// Lowering the edge again withdraws detection.
 	tower.SetActivationEdge(false)
 	s.stepAuthoritativePhases(3)
 	if got := s.visStatus[int(enemyH)]; got&visibility.SeenBit != 0 {
 		t.Fatalf("a DEACTIVATED radar emitter kept detecting an enemy: status %#x", got)
 	}
-	if c := s.Vis.SensorCircles(); len(c) != 0 {
-		t.Fatalf("a DEACTIVATED radar emitter drew %d circles, want none", len(c))
+}
+
+// TestMinimapCirclesOnlyForTheViewersSelectedUnits locks report 4's three
+// observable outcomes at the frame boundary, where the sole circle producer now
+// lives [03 §3.10] correction of 2026-08-29:
+//
+//  1. an enemy radar tower the viewer CAN see publishes no circle distances;
+//  2. the viewer's own UNSELECTED tower publishes none;
+//  3. the viewer's own SELECTED tower publishes exactly its authored ones.
+//
+// The gate is [03 §3.9] "Selected-unit circle gate correction" (Established):
+// the selected/range-status bit must be set. Only the local player's own units
+// can carry that bit, so outcome 1 holds however well the enemy is detected —
+// which is what the older sensor-phase producer got wrong.
+func TestMinimapCirclesOnlyForTheViewersSelectedUnits(t *testing.T) {
+	cell := func(n int32) numeric.Fixed { return numeric.Fixed(int64(n) << 16) }
+
+	s := visibilityFixture(t, true)
+	s.Vis.SetLocal(visibility.PlayerID(1))
+	s.LocalOwner = 1
+	def := s.Catalog.Units[content.CanonicalKey("armcom")]
+	def.RadarDistance = 900
+
+	mineH, err := s.Units.Create(def, 1, cell(128), 0, cell(128))
+	if err != nil {
+		t.Fatalf("create own tower: %v", err)
+	}
+	enemyH, err := s.Units.Create(def, 0, cell(256), 0, cell(256))
+	if err != nil {
+		t.Fatalf("create enemy tower: %v", err)
+	}
+	s.Units.Unit(mineH).SetActivationEdge(true)
+	s.Units.Unit(enemyH).SetActivationEdge(true)
+	publishVisibilityForAll(s)
+
+	s.stepAuthoritativePhases(1)
+	s.publishSnapshot(1)
+	cur := s.Snapshot.Current()
+
+	enemy, ok := radarContactFor(cur, enemyH)
+	if !ok {
+		t.Fatal("the enemy tower published no contact")
+	}
+	if !enemy.Seen {
+		t.Fatalf("precondition: this case needs a DETECTED enemy, status %#x", enemy.Status)
+	}
+	if enemy.RangeStatus || enemy.RadarDistance != 0 {
+		t.Fatalf("a detected enemy published circle distances: %+v [03 §3.9]", enemy)
+	}
+
+	mine, ok := radarContactFor(cur, mineH)
+	if !ok {
+		t.Fatal("the viewer's own tower published no contact")
+	}
+	if mine.RangeStatus || mine.RadarDistance != 0 {
+		t.Fatalf("the viewer's own UNSELECTED tower published circle distances: %+v [03 §3.9]", mine)
+	}
+
+	// Selecting it is the whole difference.
+	s.Units.Unit(mineH).Flags |= 0x10 // the authoritative selected bit [07 §9]
+	s.stepAuthoritativePhases(2)
+	s.publishSnapshot(2)
+	mine, ok = radarContactFor(s.Snapshot.Current(), mineH)
+	if !ok {
+		t.Fatal("the viewer's own tower published no contact after selection")
+	}
+	if !mine.RangeStatus || mine.RadarDistance != 900 {
+		t.Fatalf("the viewer's own SELECTED tower published no circle: %+v [03 §3.9]", mine)
+	}
+	// Selection does not leak across owners.
+	if enemy, _ := radarContactFor(s.Snapshot.Current(), enemyH); enemy.RangeStatus {
+		t.Fatalf("the enemy tower gained the circle gate: %+v", enemy)
 	}
 }

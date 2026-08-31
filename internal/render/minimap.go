@@ -259,7 +259,11 @@ type MinimapContact struct {
 	Palette                byte // caller-resolved owning-player palette index [03 §3.9]
 	IsCommander            bool // when true draws commander GAF after blip [03 §3.9]
 	Stealth                bool // when true gate on blink [03 §3.9]
-	NoRadar                bool // authored no-radar flag; affects sensor circles only [03 §3.9]
+	// RangeStatus is the selected-unit circle gate of [03 §3.9] "Selected-unit
+	// circle gate correction": the selected/range-status bit is set AND the
+	// instance is active or the definition is not on/off-capable. It governs
+	// layer 4 only; the blip layer has no such term.
+	RangeStatus bool
 	// Status and BlinkSuppress are copied from the immutable unit record. The
 	// contact gate uses FriendlyMask/owner, while the suppress byte admits a
 	// blip only during the shared blink phase. [03 §3.9]
@@ -267,15 +271,25 @@ type MinimapContact struct {
 	BlinkSuppress uint8
 	Visible       bool
 	LocalPlayer   uint8
-	Options       uint32
-	MinimapMode   uint8
-	RawDistRadar  int32
-	RawDistSonar  int32
-	RawDistJamR   int32
-	RawDistJamS   int32 // radar distances, 0 means absent [03 §3.10][07 §10]
-	RingEnabled   bool
-	RingDashed    bool
-	RingRange     int32
+	// Options is the global options word whose bit 9 is the blip gate's first
+	// disjunct [03 §3.9] "Blip gate".
+	//
+	// TODO(question): [03 §3.9] names "a global options word bit 9" without
+	// saying which word that is, what the bit means, or where it is authored,
+	// and no writer for it has been traced. Nothing publishes a value here
+	// today, so the disjunct reads false and the gate is narrower than retail's
+	// by exactly that term. Tracing the word's owner and its authored source
+	// settles it; until then this stays one named seam rather than an invented
+	// session field.
+	Options      uint32
+	MinimapMode  uint8
+	RawDistRadar int32
+	RawDistSonar int32
+	RawDistJamR  int32
+	RawDistJamS  int32 // radar distances, 0 means absent [03 §3.10][07 §10]
+	RingEnabled  bool
+	RingDashed   bool
+	RingRange    int32
 }
 
 // MinimapContactBlitter is the resolved authored-art adapter. It is called
@@ -283,7 +297,7 @@ type MinimapContact struct {
 // absent and therefore leaves FINAL untouched. [03 §3.9]
 type MinimapContactBlitter func(dst *RadarSurface, x, y int, palette byte, commander bool)
 
-func rebuildFinalExact(mapped *RadarSurface, m camera.Minimap, playW, playH int32, contacts []MinimapContact, sensors []MinimapCircle, blink BlinkState, blit MinimapContactBlitter, radarColor, jammerColor, ringColor byte) *RadarSurface {
+func rebuildFinalExact(mapped *RadarSurface, m camera.Minimap, playW, playH int32, contacts []MinimapContact, blink BlinkState, blit MinimapContactBlitter, radarColor, jammerColor, ringColor byte) *RadarSurface {
 	if mapped == nil || mapped.W <= 0 || mapped.H <= 0 || len(mapped.Bits) < mapped.W*mapped.H {
 		return nil
 	}
@@ -311,15 +325,24 @@ func rebuildFinalExact(mapped *RadarSurface, m camera.Minimap, playW, playH int3
 		}
 	}
 
-	// Sensor circles follow every contact blit. The no-radar flag suppresses
-	// these circles only while stealth is inactive; it never suppresses blips
-	// [03 §3.9].
+	// Layer 4 — sensor circles, drawn in this same ascending walk after every
+	// blit, so they overwrite earlier contact pixels [03 §3.9] "Contact
+	// layering and ring-only cases".
+	//
+	// Two gates, and only two. The unit must pass the pass's blip gate, and the
+	// selected-unit circle gate must hold: the selected/range-status bit set,
+	// and the instance active or the definition not on/off-capable [03 §3.9]
+	// "Selected-unit circle gate correction" (Established). The producer folds
+	// the activation term into RangeStatus, so the test here is the bit alone.
+	//
+	// The per-unit blink countdown and the definition stealth flag are NOT
+	// terms of this gate: the same section establishes that a unit whose blip
+	// is suppressed on a non-blink phase still runs its range branches, which
+	// is what "ring-only" names, and that the cloak/hidden bit and `stealth`
+	// are not this callback gate.
 	for _, c := range contacts {
 		admit := c.Visible || c.Options&(1<<9) != 0 || c.MinimapMode&3 == 0 || c.Status&0x300 != 0 || c.Owner == c.LocalPlayer
-		if !admit || (c.BlinkSuppress != 0 && blink.Phase&1 == 0) || c.Stealth && !blink.IsBlinkOn() {
-			continue
-		}
-		if c.NoRadar && !c.Stealth {
+		if !admit || !c.RangeStatus {
 			continue
 		}
 		rx, ry := RadarProjection(c.WorldX, c.WorldZ, c.WorldY, playW, playH, m)
@@ -344,29 +367,16 @@ func rebuildFinalExact(mapped *RadarSurface, m camera.Minimap, playW, playH int3
 		}
 	}
 
-	// Sensor callbacks are the final surface's circle layer and precede rings
-	// [03 §3.9][03 §3.10]. Their coordinates are 128-world-unit cells and their
-	// radii are the authored world distances the emitting unit declares: this
-	// is the one place the RadarW · distance / PlayRight truncation of
-	// [03 §3.10] is applied to them, and the producer must not pre-scale.
+	// Layer 5 — weapon/interceptor rings, a separate layer after the circles
+	// [03 §3.9].
 	//
-	// The split is [03 §3.10]'s: the single outer circle at
-	// max(radardistance, sonardistance) takes the radar index, and both jam
-	// circles take the jammer index.
-	for _, c := range sensors {
-		rx, ry := RadarProjection(c.U<<7, c.V<<7, 0, playW, playH, m)
-		r := RadarRadius(c.Radius, m.W, playW)
-		if r <= 0 {
-			continue
-		}
-		color := radarColor
-		if c.Kind != 0 {
-			color = jammerColor
-		}
-		drawCircle(final, int(rx), int(ry), int(r), color)
-	}
-
-	// Rings are a separate layer after sensor circles [03 §3.9].
+	// TODO(question): [03 §3.9]'s "Selected-unit circle gate correction" is
+	// worded for the circle branch of layer 4; whether the same
+	// selected/range-status bit also precedes the ring loop of layer 5 is not
+	// stated there, and the ring paragraph names only the definition and
+	// weapon flag bits. Until that is traced the ring loop keeps the gate it
+	// has, so a detected enemy with the ring-enable flag still draws its
+	// weapon rings. Tracing the ring loop's entry condition settles it.
 	for _, c := range contacts {
 		admit := c.Visible || c.Options&(1<<9) != 0 || c.MinimapMode&3 == 0 || c.Status&0x300 != 0 || c.Owner == c.LocalPlayer
 		if !admit || (c.BlinkSuppress != 0 && blink.Phase&1 == 0) || c.Stealth && !blink.IsBlinkOn() || !c.RingEnabled {

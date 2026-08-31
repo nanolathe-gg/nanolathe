@@ -107,11 +107,20 @@ type System struct {
 	arrivalHandles map[pool.Handle]*arrivalHandle // per-unit Move_Ground arrival handle [R-P0-01]
 	moveGoals      map[pool.Handle]*moveGoal      // per-unit movement-goal handle [04 §8.3][04 §7.4]
 	pathProvider   *pathProvider
-	// takeoffClimb holds the outstanding initial-climb altitude installed by the
-	// air takeoff preamble's point marker, keyed by handle. The entry is removed
-	// when the marker's altitude arrival window is entered [04 R-AIR-01 §6]
-	// [04 R-AIR-01 §4][04 R-AIR-02]. Lookup-only; never ranged over [I1].
-	takeoffClimb map[pool.Handle]int32
+	// AirSectors is the coarse second grid the map loader builds after the
+	// terrain is decoded: 128-world-unit cells whose smoothed byte is the
+	// maximum terrain height over the 3x3 block of sectors around each one
+	// [04 R-AIR-01 §5]. It is the source the per-tick cruise-altitude rule of
+	// [04 R-AIR-01 §1] step 4 reads — explicitly NOT the four-corner terrain
+	// query — and the sentinel test the off-map recovery legs run. It is built
+	// once, with the terrain, and never rebuilt.
+	AirSectors *AirSectorGrid
+	// airOrders is the movement-side dispatch state of each aircraft's current
+	// air order record. It replaces the takeoffClimb map: the initial climb is
+	// now a goal payload on the flight command block, not a separate altitude
+	// cache [04 R-AIR-01 §1][04 R-AIR-01 §6]. Lookup-only; never ranged over
+	// [I1].
+	airOrders map[pool.Handle]*airOrderState
 	// These are session-owned lobby values. Zero keeps path scheduling inert
 	// until the session supplies explicit limits [04 R-PATH-01 §6].
 	PathPlayers   int
@@ -416,6 +425,8 @@ type StepResult struct {
 func NewSystem(terrain *world.Terrain, fallback Profile, grid *OccupancyGrid) *System {
 	s := &System{
 		Terrain:        terrain,
+		AirSectors:     NewAirSectorGrid(terrain), // built once at map load [04 R-AIR-01 §5]
+		airOrders:      make(map[pool.Handle]*airOrderState),
 		Fallback:       fallback,
 		Grid:           grid,
 		Routes:         make(map[pool.Handle]*Route),
@@ -1203,13 +1214,10 @@ func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 	if s.activeOrders == nil {
 		s.activeOrders = make(map[pool.Handle]*activeMove)
 	}
-	// The air executors' phase 0 is the shared takeoff preamble: a grounded
-	// aircraft is put into mode 2 and given an initial climb goal before any
-	// horizontal leg exists [04 R-AIR-01 §6][04 R-AIR-02]. This is the
-	// activation boundary, which is where a fresh head is first seen; step 4 of
-	// the preamble is itself guarded on the committed mode, so a repeat visit
-	// for the same head does nothing.
-	s.activateTakeoff(u, head)
+	// The air executors' phase 0 is the shared takeoff preamble, but it does not
+	// run here: it is the first leg the air executor of [04 R-AIR-01 §6] runs
+	// from the mover tick, where it installs the climb marker as the record's
+	// goal payload [04 R-AIR-01 §1]. Path activation is a ground concern.
 	if old, ok := s.activeOrders[u.Handle]; ok && old.order == head {
 		return false // exactly one submission per active order
 	}
@@ -2014,6 +2022,15 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		s.emitMovementCallbacks(u, 0)
 		return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
 	}
+	// The mover tick is five calls and the flight branch is the second: the
+	// controller's per-tick hook, then the flight integrator when the
+	// definition's `canfly` bit is set [04 R-AIR-01 §1]. The flight integrator
+	// never reads an order record — it reads only the flight command block — so
+	// an aircraft takes this path whatever its queue holds, and an aircraft with
+	// a released payload continues on its last command.
+	if u.Def != nil && u.Def.CanFly {
+		return s.stepAir(u, tick)
+	}
 	// Keep orders queue as authority: only follow route if primary order is Move_Ground-class [task]
 	q := orders.QueueForUnit(u)
 	if q == nil || q.LenPrimary() == 0 {
@@ -2042,13 +2059,6 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 			s.emitMovementCallbacks(u, 0)
 			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
 		}
-	}
-	// The takeoff preamble's initial climb marker owns the aircraft until its
-	// altitude window is entered; the record's 0xE0 gate is still waiting on it,
-	// so no horizontal leg and no arrival test runs yet [04 R-AIR-01 §6]
-	// [04 R-AIR-01 §4][04 R-AIR-02].
-	if climb, done := s.stepTakeoffClimb(u); !done {
-		return climb
 	}
 	route := s.Routes[handle]
 	s.serviceGroundFollower(u, head, route, tick)
@@ -2149,45 +2159,14 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	oldZRaw := int64(u.Z)
 	var moved bool
 	var blocked bool
-	// Ground vs air branch [04 §10.1] C26
+	// Ground vs air branch [04 §10.1] C26. The air half of this branch is
+	// unreachable: an aircraft returns at the mover tick's flight branch, above
+	// [04 R-AIR-01 §1]. The guard remains so a future caller that arrives here
+	// with an aircraft cannot fall into the ground route follower — the exact
+	// path that left a construction aircraft's facing to the ground code and
+	// made it fly sideways.
 	if u.Def != nil && u.Def.CanFly {
-		flight := s.Flights[handle]
-		if flight == nil {
-			d := s.distToGoal(u)
-			s.emitMovementCallbacks(u, 0)
-			return StepResult{Handle: handle, DistToGoal: d, HasRoute: true, EmptyRoute: false, Moved: false, Arrived: s.finalGoalReached(u, hadRoute)}
-		}
-		flight.X = int32(u.X.Raw())
-		flight.Y = int32(u.Y.Raw())
-		flight.Z = int32(u.Z.Raw())
-		flight.TargetX = int32(wpWorldX.Raw())
-		flight.TargetZ = int32(wpWorldZ.Raw())
-		flight.TargetHeading = desired
-		if s.Terrain != nil && u.Def != nil {
-			targetY := CruiseAltitudeForOffset(s.Terrain, wpWorldX, wpWorldZ, u.Def.CruiseAlt)
-			flight.TargetY = int32(targetY.Raw())
-		} else {
-			flight.TargetY = int32(u.Y.Raw())
-		}
-		if flight.MaxVelocity == 0 && u.Def.MaxVelocity != 0 {
-			flight.MaxVelocity = int32(u.Def.MaxVelocity)
-		}
-		if flight.Acceleration == 0 && u.Def.Acceleration != 0 {
-			flight.Acceleration = int32(u.Def.Acceleration)
-		}
-		if flight.BrakeRate == 0 && u.Def.BrakeRate != 0 {
-			flight.BrakeRate = int32(u.Def.BrakeRate)
-		}
-		flight.TurnRate = int32(u.Def.TurnRate)
-		IntegrateFlight(flight) // [04 §10.1] C26–C30, arithmetic preserved
-		u.X = numeric.Fixed(int64(flight.X))
-		u.Y = numeric.Fixed(int64(flight.Y))
-		u.Z = numeric.Fixed(int64(flight.Z))
-		u.Move.Heading = flight.Heading
-		u.Move.Speed = numeric.Fixed(int64(flight.Speed))
-		s.emitMovementCallbacks(u, flight.Speed) // [04 §5.2][GAP T15] C18 flight path also uses MoveRate tiers with same thresholds
-		moved = int64(u.X) != oldXRaw || int64(u.Z) != oldZRaw
-		blocked = false
+		return s.stepAir(u, tick)
 	} else {
 		steer := s.Steers[handle]
 		coll := s.Collisions[handle]

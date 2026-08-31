@@ -185,6 +185,8 @@ func ebitenKey(k input.Key) (ebiten.Key, bool) {
 		return ebiten.KeyNumpadAdd, true
 	case input.KeyNumpadSubtract:
 		return ebiten.KeyNumpadSubtract, true
+	case input.KeyBackquote:
+		return ebiten.KeyBackquote, true
 	case input.KeyShift:
 		return ebiten.KeyShiftLeft, true
 	case input.KeyCtrl:

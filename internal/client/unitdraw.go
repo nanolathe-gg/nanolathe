@@ -4,8 +4,6 @@ import (
 	"math"
 
 	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/frame"
-	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
@@ -70,19 +68,6 @@ func (c *Client) paletteIndex(logical byte) uint8 {
 	return c.pal.Logical[logical]
 }
 
-// retailHealthColor returns the three-tier health color selection. Integer
-// max/3 thresholds select logical entries 10, 14, or 12 [07 §6].
-func (c *Client) retailHealthColor(health, max int32) uint8 {
-	third := max / 3
-	if health > third*2 {
-		return c.paletteIndex(10)
-	}
-	if health > third {
-		return c.paletteIndex(14)
-	}
-	return c.paletteIndex(12)
-}
-
 // fillIndexedRect fills an axis-aligned rectangle, clipped.
 func (c *Client) fillIndexedRect(x, y, w, h int, idx uint8) {
 	W := c.width
@@ -123,172 +108,15 @@ func (c *Client) frameIndexedRect(x, y, w, h int, idx uint8) {
 		idx, Rect{MinX: 0, MinY: 0, MaxX: int32(c.width) - 1, MaxY: int32(c.height) - 1})
 }
 
-// drawUnitOriented renders one interpolated unit as an oriented footprint
-// rectangle rotated by its heading, with its health bar.
-// Heading rotates about the projected center; the long axis follows heading
-// (north at 0) matching TA's top-down presentation.
-func (c *Client) drawUnitOriented(v frame.UnitView, sx, sy int32) {
-	fx, fz := int(v.FootX), int(v.FootZ)
-	if fx <= 0 {
-		fx = 1
-	}
-	if fz <= 0 {
-		fz = 1
-	}
-	const pxPerCell = 16
-	halfW := fx * pxPerCell / 2
-	halfH := fz * pxPerCell / 2
-	if halfW < 4 {
-		halfW = 4
-	}
-	if halfH < 4 {
-		halfH = 4
-	}
-	// The old comment here claimed "north at +Z" and applied -heading to
-	// compensate. Heading 0 is -Z, not +Z: the mover's position step is
-	// (-sin h, -cos h), so heading 0 travels up-screen [04 R-MOV-01 §4].
-	//
-	// This fallback is a stand-in for the model path, so it applies the model
-	// path's own rotation rather than a second convention: the Ry template of
-	// [03 §2.4] at +heading, x' = c*x - s*z, z' = s*x + c*z, over the footprint
-	// corners in place of piece vertices. camera.WorldToScreen maps world +X to
-	// screen +X and world +Z to screen +Y [03 §2.5], so ry below is the world Z
-	// lane.
-	cos, sin := headingCosSin(v.Heading)
-	// Corners of the unrotated rect relative to centre; long axis = world Z,
-	// which is the screen Y lane [03 §2.5].
-	type pt struct{ x, y int }
-	pts := [4]pt{}
-	corners := [4][2]int{
-		{-halfW, halfH}, {halfW, halfH}, {halfW, -halfH}, {-halfW, -halfH},
-	}
-	for i, cnr := range corners {
-		rx, ry := float64(cnr[0]), float64(cnr[1])
-		pts[i] = pt{
-			x: int(sx) + int(cos*rx-sin*ry),
-			y: int(sy) + int(sin*rx+cos*ry),
-		}
-	}
-	// Painter: fill via two-triangle scan over bounding box using sign tests.
-	minX, minY, maxX, maxY := int(sx), int(sy), int(sx), int(sy)
-	for _, p := range pts {
-		if p.x < minX {
-			minX = p.x
-		}
-		if p.x > maxX {
-			maxX = p.x
-		}
-		if p.y < minY {
-			minY = p.y
-		}
-		if p.y > maxY {
-			maxY = p.y
-		}
-	}
-	W := c.width
-	HMax := c.height
-	clamp := func(v, lo, hi int) int {
-		if v < lo {
-			return lo
-		}
-		if v > hi {
-			return hi
-		}
-		return v
-	}
-	minX, minY = clamp(minX, 0, W-1), clamp(minY, 0, HMax-1)
-	maxX, maxY = clamp(maxX, 0, W-1), clamp(maxY, 0, HMax-1)
-	inside := func(px, py int) bool {
-		sign := 0
-		for i := 0; i < 4; i++ {
-			a, b := pts[i], pts[(i+1)%4]
-			ex, ey := b.x-a.x, b.y-a.y
-			cross := ex*(py-a.y) - ey*(px-a.x)
-			s := 0
-			if cross > 0 {
-				s = 1
-			} else if cross < 0 {
-				s = -1
-			}
-			if s == 0 {
-				continue
-			}
-			if sign == 0 {
-				sign = s
-			} else if s != sign {
-				return false
-			}
-		}
-		return true
-	}
-	litEdge := func(px, py int) bool {
-		// Light from screen top: upper half of the shape gets the lit shade.
-		return py <= int(sy)
-	}
-	for py := minY; py <= maxY; py++ {
-		rowBase := py * W
-		for px := minX; px <= maxX; px++ {
-			if inside(px, py) {
-				idx := unitStyle.BodyMid
-				if litEdge(px, py) {
-					idx = unitStyle.BodyLit
-				} else {
-					idx = unitStyle.BodyDark
-				}
-				c.indexed[rowBase+px] = idx
-			}
-		}
-	}
-	// Black outline along the polygon edges.
-	for i := 0; i < 4; i++ {
-		a, b := pts[i], pts[(i+1)%4]
-		steps := 2 * (abs(a.x-b.x) + abs(a.y-b.y))
-		if steps == 0 {
-			continue
-		}
-		for s := 0; s <= steps; s++ {
-			px := a.x + (b.x-a.x)*s/steps
-			py := a.y + (b.y-a.y)*s/steps
-			if px < 0 || px >= W || py < 0 || py >= HMax {
-				continue
-			}
-			c.indexed[py*W+px] = unitStyle.Outline
-		}
-	}
-	// Nanoframe: dashed outline only grows more solid as remaining falls.
-	if v.BuildRemaining > 0 {
-		for i := 0; i < 4; i++ {
-			a, b := pts[i], pts[(i+1)%4]
-			steps := 2 * (abs(a.x-b.x) + abs(a.y-b.y))
-			for s := 0; s <= steps; s += 3 {
-				px := a.x + (b.x-a.x)*s/steps
-				py := a.y + (b.y-a.y)*s/steps
-				if px >= 0 && px < W && py >= 0 && py < HMax {
-					c.indexed[py*W+px] = unitStyle.HealthGreen
-				}
-			}
-		}
-	}
-	// Health bar under the footprint when damaged or selected.
-	if v.MaxHealth > 0 && (v.Health != v.MaxHealth || v.Flags&hud.SelectionFlag != 0) {
-		bw := halfW * 2
-		if bw < 12 {
-			bw = 12
-		}
-		bx := int(sx) - bw/2
-		by := maxY + 3
-		c.fillIndexedRect(bx-1, by-1, bw+2, 4, c.paletteIndex(0))
-		frac := float64(v.Health) / float64(v.MaxHealth)
-		if frac < 0 {
-			frac = 0
-		}
-		if frac > 1 {
-			frac = 1
-		}
-		fill := c.retailHealthColor(v.Health, v.MaxHealth)
-		c.fillIndexedRect(bx, by, int(float64(bw)*frac), 2, fill)
-	}
-}
+// The oriented-footprint fallback renderer that stood here was deleted with
+// WU-17-6.  It had no callers anywhere in the tree, and every part of it was
+// invented rather than traced: a footprint rectangle standing in for the model,
+// a dashed nanoframe outline, and a health bar derived from the footprint box
+// and drawn whenever a unit was "damaged or selected".  Retail's per-unit bar is
+// the 35x5 raster of [03 R-FX-01 §6], gated on the damagebars interface bit and
+// on the unit belonging to the viewing player, and it lives in healthbar.go.
+// Dead code that reads like a contract is how an invention outlives the session
+// that wrote it (AGENTS.md rule 1), so it is removed rather than left.
 
 func abs(v int) int {
 	if v < 0 {

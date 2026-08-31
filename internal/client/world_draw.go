@@ -247,8 +247,13 @@ func (c *Client) drawCommittedFrame(cur *frame.Frame, ok bool) {
 	// leave this established slot empty rather than inventing a route [03 §1].
 	// Strip slot 8 is unconditional; no published producer exists [03 §1].
 
-	// Key overlays and labels have no concrete authored client route yet. Strip
-	// 9 remains an explicit empty position; unknown producers remain unresolved [03 §1][I9].
+	// The key-controlled overlay has no concrete authored client route yet.
+	// The unit labels follow it and precede strip 9: the health bar and the
+	// control-group digit, each gated on the option byte and on the labelled
+	// owner equalling the local player slot [03 §1][03 R-FX-01 §6].
+	c.drawUnitLabels(cur, ok)
+	// Strip 9 remains an explicit empty position; unknown producers remain
+	// unresolved [03 §1][I9].
 	// TODO(T23): strip slot 9 has no published live producer.
 	c.drawFog(cur)
 	c.drawSelectionStage()

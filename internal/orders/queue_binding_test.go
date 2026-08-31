@@ -50,7 +50,7 @@ func TestQueueBindingKeepsSessionInputsInterleaved(t *testing.T) {
 	}
 
 	moveID := Lookup("Move_Ground")
-	restore := setHandler(moveID, func(_ *units.Unit, _ *Node, _ uint32) Code { return Code(3) })
+	restore := setHandler(moveID, func(_ *units.Unit, _ *Node, _ uint32, _ uint32) Code { return Code(3) })
 	defer restore()
 	q1.Push(moveID, Node{})
 	q2.Push(moveID, Node{})

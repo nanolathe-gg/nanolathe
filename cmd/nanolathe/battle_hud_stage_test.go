@@ -279,3 +279,59 @@ func TestHoveredGadgetKeepsGreyedButtonsAndSkipsHiddenOnes(t *testing.T) {
 		t.Fatalf("hidden LOAD hovered as %d %q, want no gadget", index, name)
 	}
 }
+
+// The command-window switch reads the page-shown bit first: page 0 with that
+// bit clear is the orders state and opens the side's "%sGEN.GUI", while a page
+// N >= 1 composes "%s%d.GUI" from the builder's own internal name, so page 1 is
+// ARMCOM1.GUI [07 R-HUD-03 §6].
+func TestCommandWindowNameSwitchesOnThePageShownBit(t *testing.T) {
+	if got := commandWindowName("ARM", "ARMCOM", false, 0); got != "armgen" {
+		t.Fatalf("orders window = %q, want armgen", got)
+	}
+	if got := commandWindowName("COR", "CORCOM", true, 1); got != "corcom1" {
+		t.Fatalf("page 1 window = %q, want corcom1", got)
+	}
+	if got := commandWindowName("ARM", "ARMCOM", true, 4); got != "armcom4" {
+		t.Fatalf("page 4 window = %q, want armcom4", got)
+	}
+	// A page-shown bit over a zero page field is the definition word A bit 31
+	// branch, which is written by probing guis/<internal name>0.GUI at
+	// definition load; no stock unit ships one (WU-17-13's census of the
+	// reference install's 375 guis/ entries), so "<name>0.GUI" is never
+	// composed and the orders window stands.
+	if got := commandWindowName("ARM", "ARMCOM", true, 0); got != "armgen" {
+		t.Fatalf("page 0 with the bit set = %q, want the orders window", got)
+	}
+}
+
+// A BUILD click sets the page-shown bit, and the page it brings back is the one
+// the builder's page field still holds: selecting page 0 clears bit 22 and
+// leaves bits 23-25 alone [07 §9], so the field is the builder's memory of
+// where it was. Page 1 stands in for a builder that has never left the orders
+// page — see the TODO(question) at buildButtonPage.
+func TestBuildButtonPageRestoresTheRememberedPage(t *testing.T) {
+	build := func(flags uint32, count uint16) *frame.Frame {
+		return &frame.Frame{
+			Units:       []frame.UnitView{{Slot: 7, Flags: flags}},
+			CommandPage: frame.CommandPageView{Builder: 7, PageCount: count},
+		}
+	}
+	// Page 3, then the orders page: the field survives the round trip.
+	remembered := hud.EncodePageBits(hud.EncodePageBits(0, 3), 0)
+	if hud.IsPaged(remembered) {
+		t.Fatal("selecting page 0 left the page-shown bit set")
+	}
+	if got := buildButtonPage(build(remembered, 5)); got != 3 {
+		t.Fatalf("BUILD after page 3 selects page %d, want 3", got)
+	}
+	if got := buildButtonPage(build(0, 5)); got != 1 {
+		t.Fatalf("BUILD on a builder that has never paged selects page %d, want 1", got)
+	}
+	// A remembered page the builder no longer has falls back the same way.
+	if got := buildButtonPage(build(remembered, 2)); got != 1 {
+		t.Fatalf("BUILD with an out-of-range remembered page selects %d, want 1", got)
+	}
+	if got := buildButtonPage(&frame.Frame{}); got != 0 {
+		t.Fatalf("BUILD with no builder selects page %d, want 0", got)
+	}
+}

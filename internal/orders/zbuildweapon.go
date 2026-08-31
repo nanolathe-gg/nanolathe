@@ -24,15 +24,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
-// secondaryTick returns the per-queue tick for the handler's unit [RS-P0-018].
-// It reads Queue.SecondaryTick when available, else 0 (fixtures without pump).
-func secondaryTick(u *units.Unit) uint32 {
-	if q := QueueForUnit(u); q != nil {
-		return q.SecondaryTick
-	}
-	return 0
-}
-
 // BuildWeaponHandler is the secondary-queue handler for BUILDWEAPON per [06 §11]
 // C29 and [04 §3.1] 0x40000. It advances the linked stockpile slot via
 // combat.TickStockpile's contract, performing truncated cumulative cost deltas,
@@ -46,7 +37,7 @@ func secondaryTick(u *units.Unit) uint32 {
 // Launch-before-production is preserved by phase order: weapon firing
 // (PhaseUnitsScripts) runs before the orders pump (PhaseOrdersPathEconomy),
 // so a round completed here cannot launch until the next tick [06 §11.1] C29.
-func buildWeaponHandler(u *units.Unit, n *Node, satisfied uint32) Code {
+func buildWeaponHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	_ = satisfied
 	if u == nil || n == nil {
 		return Code(5)
@@ -81,7 +72,7 @@ func buildWeaponHandler(u *units.Unit, n *Node, satisfied uint32) Code {
 		// removed by the stockpile handler. Real stray nodes will simply wait
 		// [05] and be cleaned via cancel.
 		n.DynamicGate = 1
-		n.Deadline = int32(secondaryTick(u) + 30)
+		n.Deadline = int32(tick + 30)
 		return Code(2)
 	}
 	weapon := slot.Weapon
@@ -126,7 +117,7 @@ func buildWeaponHandler(u *units.Unit, n *Node, satisfied uint32) Code {
 		economy.AdmitTwoResource(buckets, e, m)
 		return wasAccepted
 	}
-	nextTick, _, completedRounds := combat.TickStockpile(ce, cs, secondaryTick(u), admit)
+	nextTick, _, completedRounds := combat.TickStockpile(ce, cs, tick, admit)
 	// Copy back slot ammo (TickStockpile wraps 255->0) and node fields.
 	slot.Ammo = cs.Ammo
 	n.Param2 = uint32(ce.Count)
@@ -148,7 +139,7 @@ func buildWeaponHandler(u *units.Unit, n *Node, satisfied uint32) Code {
 	}
 	// No nextTick but count remains: keep node, schedule default 5-tick retry
 	// so the pump does not spin. Use 5 as accepted-incomplete boundary.
-	n.Deadline = int32(secondaryTick(u) + combat.StockpileRetryAccepted)
+	n.Deadline = int32(tick + combat.StockpileRetryAccepted)
 	n.DynamicGate = 1
 	return Code(2)
 }

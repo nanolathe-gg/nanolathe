@@ -50,7 +50,7 @@ func newProbe() *probe { return &probe{calls: map[uint32]int{}} }
 
 func (p *probe) install(t *testing.T, id ID, first func(n *Node) Code) {
 	t.Helper()
-	restore := setHandler(id, func(u *units.Unit, n *Node, s uint32) Code {
+	restore := setHandler(id, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 		p.calls[n.Param1]++
 		if p.calls[n.Param1] > 1 {
 			n.DynamicGate = 0x400 // nonzero gate, nothing satisfied [04 §3.3] step 3

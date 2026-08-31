@@ -22,15 +22,6 @@ type MinimapService struct {
 	local                  uint8
 	dcb                    byte
 	remap                  []byte
-	sensorCircles          []MinimapCircle
-}
-
-// MinimapCircle is a presentation-only sensor callback result. Coordinates
-// are the 128-world-unit surface cells emitted by visibility.SensorTick.
-type MinimapCircle struct {
-	U, V   int32
-	Radius int32
-	Kind   uint8 // 0 outer radar/sonar, 1 radar jam, 2 sonar jam
 }
 
 // MinimapServiceConfig supplies the map-sized picture and MAPPED inputs.
@@ -119,49 +110,11 @@ func (s *MinimapService) RebuildFinal(m camera.Minimap, playW, playH int32, cont
 	if s == nil || s.mapped == nil {
 		return false
 	}
-	// Sensor callback tables are the canonical circle source. Once the sensor
-	// phase has published callbacks, contact records still provide blips and
-	// commander art but must not draw the same circles a second time [03 §3.4].
-	if len(s.sensorCircles) != 0 && len(contacts) != 0 {
-		contacts = append([]MinimapContact(nil), contacts...)
-		for i := range contacts {
-			contacts[i].RawDistRadar = 0
-			contacts[i].RawDistSonar = 0
-			contacts[i].RawDistJamR = 0
-			contacts[i].RawDistJamS = 0
-		}
-	}
-	s.final = rebuildFinalExact(s.mapped, m, playW, playH, contacts, s.sensorCircles, BlinkState{Phase: s.blinkPhase}, blit, radarColor, jammerColor, ringColor)
+	// The contacts pass is the sole circle producer: every circle on FINAL comes
+	// from a contact record's own authored distances, drawn in the contact walk
+	// [03 §3.10] correction of 2026-08-29 ("presentation drawn by the contacts
+	// pass"). There is no second circle list to reconcile against.
+	s.final = rebuildFinalExact(s.mapped, m, playW, playH, contacts, BlinkState{Phase: s.blinkPhase}, blit, radarColor, jammerColor, ringColor)
 	s.dirty &^= MinimapDirtyFinal
 	return s.final != nil
-}
-
-// Wipe implements the sensor backing-surface contract. It clears only the
-// presentation circle list; LOS grids remain owned by visibility.Service.
-func (s *MinimapService) Wipe() {
-	if s != nil {
-		s.sensorCircles = s.sensorCircles[:0]
-		s.dirty |= MinimapDirtyFinal
-	}
-}
-
-func (s *MinimapService) Sensor(u, v, radius int32) {
-	if s != nil {
-		s.sensorCircles = append(s.sensorCircles, MinimapCircle{U: u, V: v, Radius: radius})
-		s.dirty |= MinimapDirtyFinal
-	}
-}
-
-func (s *MinimapService) RadarJam(u, v, radius int32) {
-	if s != nil {
-		s.sensorCircles = append(s.sensorCircles, MinimapCircle{U: u, V: v, Radius: radius, Kind: 1})
-		s.dirty |= MinimapDirtyFinal
-	}
-}
-
-func (s *MinimapService) SonarJam(u, v, radius int32) {
-	if s != nil {
-		s.sensorCircles = append(s.sensorCircles, MinimapCircle{U: u, V: v, Radius: radius, Kind: 2})
-		s.dirty |= MinimapDirtyFinal
-	}
 }

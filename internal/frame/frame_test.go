@@ -125,11 +125,10 @@ func TestFrameResetRetainsNestedCapacities(t *testing.T) {
 	}
 }
 
-func TestFrameRadarResetRetainsContactsAndCircleStorage(t *testing.T) {
+func TestFrameRadarResetRetainsContactStorage(t *testing.T) {
 	f := Frame{
 		Radar: RadarView{
 			Contacts:   make([]RadarContactView, 1, 2),
-			Circles:    make([]RadarCircleView, 1, 2),
 			BlinkPhase: 1,
 		},
 	}
@@ -138,8 +137,8 @@ func TestFrameRadarResetRetainsContactsAndCircleStorage(t *testing.T) {
 	if f.Radar.BlinkPhase != 0 {
 		t.Fatalf("radar blink phase reset = %d, want 0", f.Radar.BlinkPhase)
 	}
-	if len(f.Radar.Contacts) != 0 || cap(f.Radar.Contacts) != 2 || len(f.Radar.Circles) != 0 || cap(f.Radar.Circles) != 2 {
-		t.Fatalf("radar top-level storage len/cap = %d/%d contacts, %d/%d circles", len(f.Radar.Contacts), cap(f.Radar.Contacts), len(f.Radar.Circles), cap(f.Radar.Circles))
+	if len(f.Radar.Contacts) != 0 || cap(f.Radar.Contacts) != 2 {
+		t.Fatalf("radar top-level storage len/cap = %d/%d contacts", len(f.Radar.Contacts), cap(f.Radar.Contacts))
 	}
 	if got := f.Radar.Contacts[:1][0].Rings; len(got) != 0 || cap(got) != 3 {
 		t.Fatalf("radar nested ring storage len/cap = %d/%d", len(got), cap(got))

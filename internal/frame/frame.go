@@ -43,7 +43,6 @@ type Capacities struct {
 	CommandProducts int
 	Visibility      int
 	RadarContacts   int
-	RadarCircles    int
 	Fog             int
 }
 
@@ -489,23 +488,15 @@ type RadarContactView struct {
 	Rings         []RadarRingView
 }
 
-// RadarCircleView is one callback result from the completed sensor pass.
-// U/V are the 128-world-unit callback coordinates and Kind preserves callback
-// table order (outer, radar jammer, sonar jammer) [03 §3.4].
-type RadarCircleView struct {
-	// SourceID identifies the live unit that emitted this callback. It is
-	// retained so cleanup cannot leave an orphaned circle in a committed frame.
-	SourceID uint16
-	U, V     int32
-	Radius   int32
-	Kind     uint8
-}
-
 // RadarView is the committed radar/contact payload. It is rebuilt at every
 // completed simulation tick and owns all nested slices [03 §3.6].
 type RadarView struct {
+	// Contacts is the whole contacts-pass input: blips, commander markers,
+	// sensor circles and weapon rings all come from these records. There is no
+	// second circle list — [03 §3.10]'s 2026-08-29 correction establishes the
+	// contacts pass as the sole circle producer and retracts the reading that
+	// gave the sensor phase a callback surface of its own.
 	Contacts []RadarContactView
-	Circles  []RadarCircleView
 	// BlinkPhase is the committed bit-0 radar phase. It carries no countdown
 	// or surface dirty flags; presentation consumes only this scalar
 	// [R-CORE-03][03 §3.6].
@@ -673,7 +664,6 @@ func (f *Frame) Reserve(c Capacities) {
 	f.CommandPage.ProductKeys = reserve(f.CommandPage.ProductKeys, c.CommandProducts)
 	f.Visibility.Visible = reserve(f.Visibility.Visible, c.Visibility)
 	f.Radar.Contacts = reserve(f.Radar.Contacts, c.RadarContacts)
-	f.Radar.Circles = reserve(f.Radar.Circles, c.RadarCircles)
 	f.Fog.Ch0 = reserve(f.Fog.Ch0, c.Fog)
 	f.Fog.Ch1 = reserve(f.Fog.Ch1, c.Fog)
 }
@@ -763,10 +753,8 @@ func (f *Frame) Reset() {
 		clear(f.Radar.Contacts[i].Rings)
 		f.Radar.Contacts[i] = RadarContactView{Rings: f.Radar.Contacts[i].Rings[:0]}
 	}
-	clear(f.Radar.Circles)
 	f.Radar.Contacts = f.Radar.Contacts[:0]
-	f.Radar.Circles = f.Radar.Circles[:0]
-	f.Radar = RadarView{Contacts: f.Radar.Contacts, Circles: f.Radar.Circles}
+	f.Radar = RadarView{Contacts: f.Radar.Contacts}
 	f.Fog = FogView{Ch0: f.Fog.Ch0, Ch1: f.Fog.Ch1}
 	f.Result = ResultView{Winners: f.Result.Winners, Losers: f.Result.Losers, Scores: f.Result.Scores}
 }

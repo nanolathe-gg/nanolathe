@@ -138,22 +138,92 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 	if cur == nil {
 		t.Fatal("selected commander snapshot disappeared")
 	}
+	// The command window is the page-shown bit's, not the selection's: with the
+	// bit clear the switch opens the side's "%sGEN.GUI" orders window, and only
+	// a page N >= 1 composes "%s%d.GUI" from the builder's own internal name
+	// [07 R-HUD-03 §6].
 	w, _ := b.hud.windowFor(b, cur)
+	ordersWindow := strings.ToLower(b.hud.side.NamePrefix) + "gen.gui"
+	if w == nil || !strings.HasSuffix(strings.ToLower(w.Name), ordersWindow) {
+		if w == nil {
+			t.Fatalf("commander orders window is nil; want %s", ordersWindow)
+		}
+		t.Fatalf("commander orders window = %q; want suffix %q", w.Name, ordersWindow)
+	}
+	// BUILD sets the page-shown bit and ORDERS clears it: the two halves of the
+	// pair select the state each one stages from [07 R-HUD-03 §6]. Both plates
+	// are authored into both windows, so the round trip is a click each way.
+	step := int32(31)
+	clickCommandButton := func(suffix string) {
+		t.Helper()
+		window, _ := b.hud.windowFor(b, sess.Snapshot.Current())
+		if window == nil {
+			t.Fatalf("no command window to click %s in", suffix)
+		}
+		for i, gad := range window.Gadgets {
+			if i == 0 || gad.Kind != gui.KindButton || gad.Active == 0 {
+				continue
+			}
+			if !strings.HasSuffix(strings.ToUpper(gad.Name), suffix) {
+				continue
+			}
+			r := window.PlacedRect(i)
+			if !b.hud.consumeClick(b, r.X+r.W/2, r.Y+r.H/2) {
+				t.Fatalf("%s click was not consumed", suffix)
+			}
+			for end := step + 4; step <= end; step++ {
+				sess.Step(step)
+			}
+			return
+		}
+		t.Fatalf("window %q authors no %s gadget", window.Name, suffix)
+	}
 	wantWindow := strings.ToLower(commanderName) + "1.gui"
+	clickCommandButton("BUILD")
+	cur = sess.Snapshot.Current()
+	if cur == nil {
+		t.Fatal("paged commander snapshot disappeared")
+	}
+	if cur.CommandPage.Page != 1 || !commandPageIsPaged(cur) {
+		t.Fatalf("BUILD left the commander on page %d (paged=%v), want build page 1", cur.CommandPage.Page, commandPageIsPaged(cur))
+	}
+	w, _ = b.hud.windowFor(b, cur)
 	if w == nil || !strings.HasSuffix(strings.ToLower(w.Name), wantWindow) {
 		if w == nil {
 			t.Fatalf("commander window is nil; want %s", wantWindow)
 		}
 		t.Fatalf("commander window = %q; want suffix %q", w.Name, wantWindow)
 	}
+	// ORDERS goes back to page 0, and BUILD brings that same page back: page 0
+	// leaves the page field alone, so the builder remembers where it was.
+	clickCommandButton("ORDERS")
+	if cur = sess.Snapshot.Current(); cur.CommandPage.Page != 0 || commandPageIsPaged(cur) || len(cur.CommandPage.ProductKeys) != 0 {
+		t.Fatalf("ORDERS left page %d (paged=%v) with products %v, want the orders page", cur.CommandPage.Page, commandPageIsPaged(cur), cur.CommandPage.ProductKeys)
+	}
+	clickCommandButton("BUILD")
+	cur = sess.Snapshot.Current()
+	if cur.CommandPage.Page != 1 {
+		t.Fatalf("BUILD returned to page %d, want the remembered page 1", cur.CommandPage.Page)
+	}
+	w, _ = b.hud.windowFor(b, cur)
+	if w == nil || !strings.HasSuffix(strings.ToLower(w.Name), wantWindow) {
+		t.Fatalf("commander window after the round trip = %v; want suffix %q", w, wantWindow)
+	}
 	menu := cat.BuildMenus[content.CanonicalKey(commanderName)]
-	wantPages := hud.PageCountFromButtons(len(menu.Buttons), hud.RetailBuildButtonsPerPage)
+	// The published page-count byte counts the orders page too, so the authored
+	// <name>N.GUI windows on disk are one fewer [07 R-HUD-03 §6]. The reference
+	// install is what settles the convention: armcom1..4.GUI are the four
+	// authored pages of a nineteen-entry build menu.
+	wantPages := hud.PageCountFromButtons(len(menu.Buttons), hud.RetailBuildButtonsPerPage) - 1
 	commanderDef, ok := cat.Unit(commanderName)
 	if !ok || commanderDef == nil {
 		t.Fatalf("commander definition %q missing from catalog", commanderName)
 	}
 	if got := b.hud.buildPageCount(commanderDef); got != wantPages {
 		t.Fatalf("%s authored page count = %d; want %d from CANBUILD", commanderName, got, wantPages)
+	}
+	if got := int(cur.CommandPage.PageCount); got != wantPages+1 {
+		t.Fatalf("published page count = %d; want %d authored pages plus the orders page", got, wantPages)
 	}
 
 	clicked := ""

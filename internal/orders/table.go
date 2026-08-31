@@ -40,12 +40,23 @@ const (
 
 // Descriptor is one order descriptor [04 §3.1] C4.
 type Descriptor struct {
-	Name       string                                              // canonical, the sort key and binary-search key [04 §3.1]
-	StateLabel string                                              // state label the interface uses for a unit running this order [04 §3.1]
-	Class      uint8                                               // small class parameter [04 §3.1] TODO(question) [P0-07]: bounded census over function boundaries found no reader — stored opaque, never branched on
-	AckGroup   uint8                                               // acknowledgement group index [04 §3.1]
-	StaticGate uint32                                              // 32-bit static gate mask; see the census note below
-	Handler    func(u *units.Unit, n *Node, satisfied uint32) Code // [04 §3.1] called with the owning unit, the order record, and the bits satisfied this tick
+	Name       string // canonical, the sort key and binary-search key [04 §3.1]
+	StateLabel string // state label the interface uses for a unit running this order [04 §3.1]
+	Class      uint8  // small class parameter [04 §3.1] TODO(question) [P0-07]: bounded census over function boundaries found no reader — stored opaque, never branched on
+	AckGroup   uint8  // acknowledgement group index [04 §3.1]
+	StaticGate uint32 // 32-bit static gate mask; see the census note below
+	// Handler is called with the owning unit, the order record, the bits
+	// satisfied this tick [04 §3.1], and the tick the pump is running.
+	//
+	// The tick is an argument because handler bodies read the current tick
+	// directly: [04 R-ORD-01 §1]'s deadline setter stores "current tick + n"
+	// into the record, and a record's deadline is an absolute tick [04 §3.2].
+	// Before WU-18-7 the primary walk passed no tick and four descriptors
+	// reached one through by-name special cases in the pump, so every other row
+	// that arms an exact deadline (`Attack_Kamikaze`'s 60, `AttackUType`'s
+	// RNG(90)+1, the work family's 1/2/15/30) either could not form it or
+	// measured it from the rear-segment walk's stale publication.
+	Handler func(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code
 	// Presentation is the descriptor's goal-resolution presentation-helper
 	// identity, one of the four PresentationHelper values [04 §3.1][R-DOC04-C].
 	Presentation PresentationHelper
@@ -176,6 +187,52 @@ func buildTable() {
 	byName = make(map[string]ID, len(table))
 	for i, d := range table {
 		byName[d.Name] = ID(i)
+	}
+	installHandlers() // the table is not finished until its handlers are on it
+}
+
+// handlerInstallers is the ordered list of per-family handler installers — the
+// single place a handler family is registered onto the descriptor table.
+//
+// Retail compiles the handler into each static descriptor, so all 68 records
+// carry theirs before play begins [04 §3.1]. We build the same table from Go
+// files that cannot all initialise before table.go's init, so each family owns
+// an installer that assigns its handlers onto the built table, and this list
+// runs them. One family, one file, one line here.
+//
+// The list is a slice, not a map: registration order is source order, and map
+// iteration would make "which family claimed a descriptor first" vary per run
+// (I1). Every installer is idempotent — each assigns only where the
+// descriptor's Handler is still nil — so running the list again is a no-op,
+// which is what lets the pump re-run it after a fixture has cleared a handler.
+//
+// Adding a family: write internal/orders/<family>.go with an ensure<Family>
+// function shaped like ensureStopHandler, then add exactly one line below.
+var handlerInstallers = []func(){
+	ensureMoveHandlers,         // pump.go — the move, patrol and queued-move family
+	ensureTransportHandlers,    // transport.go — pickup, unload, landing, BeCarried
+	ensureParkHandler,          // park.go
+	ensureStopHandler,          // stop.go
+	ensureStandingHandlers,     // standing.go — standing, cloak, wait, paralyze, teleport, standby
+	ensureSelfDestructHandlers, // selfdestruct.go — SelfDestruct and SelfDestructFG
+	ensureWorkHandlers,         // work.go — capture, reclaim, resurrect, assist, the repair trio
+	ensureVTOLWorkHandlers,     // vtolwork.go — the VTOL work twins of [04 R-ORD-01 §7]
+	ensureHandlers,             // resolve.go — Attack_Chase and the three guards
+	ensureCombatHandlers,       // combat.go — the combat handlers of [04 R-ORD-01 §3]
+}
+
+// installHandlers runs every family installer in list order. buildTable calls
+// it so the table is complete before the first pump, and the pump's walk calls
+// it again, which is what restores a handler a fixture cleared.
+//
+// Handlers a subsystem owns rather than this package are not installed here:
+// `GetBuilt`'s lifecycle belongs to the construction service and binds per
+// queue through Queue.SetGetBuiltHandler [04 R-FAC-02 §4], and the seven
+// handler-less records another package drives from its own per-unit step are
+// listed at handlerlessButDriven in pump.go.
+func installHandlers() {
+	for _, install := range handlerInstallers {
+		install()
 	}
 }
 

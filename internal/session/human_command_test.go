@@ -212,7 +212,9 @@ func TestHumanBuildPageUsesAuthoritativeBuilderAndAuthoredPageGuard(t *testing.T
 	ho, _ := w.Create(other, 0, 0, 0, 0)
 	w.Unit(h).Flags |= 0x10
 	s := &Session{Units: w, Catalog: cat, LocalOwner: 0}
-	// Seven authored products make two six-button pages; page 1 is valid.
+	// Seven authored products make two authored build pages, so the page-count
+	// byte is three: page 0 the orders state, pages 1 and 2 the build pages
+	// [07 R-HUD-03 §6].
 	if err := s.EnqueueHumanCommand(HumanCommand{Kind: HumanBuildPage, BuildPage: HumanBuildPageCommand{Builder: h, Page: 1}}); err != nil {
 		t.Fatal(err)
 	}
@@ -235,8 +237,8 @@ func TestHumanBuildPageUsesAuthoritativeBuilderAndAuthoredPageGuard(t *testing.T
 	}
 	_ = s.EnqueueHumanCommand(HumanCommand{Kind: HumanBuildPage, BuildPage: HumanBuildPageCommand{Builder: h, Page: 9}})
 	s.applyHumanCommands(4)
-	if got := hud.DecodePage(w.Unit(h).Flags); got != 1 {
-		t.Fatalf("page-count clamp got %d, want 1", got)
+	if got := hud.DecodePage(w.Unit(h).Flags); got != 2 {
+		t.Fatalf("page-count clamp got %d, want 2", got)
 	}
 }
 
@@ -266,11 +268,14 @@ func TestCommandPagePublicationIsImmutableAndUsesSelectedPage(t *testing.T) {
 	cat.BuildMenus[bdef.CanonicalKey] = menu
 	w := newSessionFixtureWorld(8, cat)
 	h, _ := w.Create(bdef, 0, 0, 0, 0)
-	w.Unit(h).Flags = 0x10 | hud.EncodePageBits(0, 1)
+	// Page 2 is the second authored build page and holds the seventh entry
+	// alone: page N carries entries (N-1)*6..N*6-1 and page 0 carries none
+	// [07 R-HUD-03 §6].
+	w.Unit(h).Flags = 0x10 | hud.EncodePageBits(0, 2)
 	s := &Session{Units: w, Catalog: cat, LocalOwner: 0, Snapshot: &frame.Buffer{}}
 	s.publishSnapshot(4)
 	frame := s.Snapshot.Current()
-	if frame == nil || frame.CommandPage.Page != 1 || len(frame.CommandPage.ProductKeys) != 1 || frame.CommandPage.ProductKeys[0] != "g" {
+	if frame == nil || frame.CommandPage.Page != 2 || len(frame.CommandPage.ProductKeys) != 1 || frame.CommandPage.ProductKeys[0] != "g" {
 		t.Fatalf("published page=%d products=%v", frame.CommandPage.Page, frame.CommandPage.ProductKeys)
 	}
 	menu.Buttons[6] = "mutated-after-publish"

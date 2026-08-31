@@ -247,7 +247,7 @@ func TestMakeSelectableHandler(t *testing.T) {
 	if id == 0 || DescriptorFor(id).Handler == nil {
 		t.Fatal("MakeSelectable handler is not registered")
 	}
-	if got := DescriptorFor(id).Handler(u, &Node{}, 0); got != Code(5) {
+	if got := DescriptorFor(id).Handler(u, &Node{}, 0, 0); got != Code(5) {
 		t.Fatalf("MakeSelectable returned %d, want 5", got)
 	}
 	if u.Flags != units.ClassifierEligibleStatus {

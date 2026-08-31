@@ -189,6 +189,11 @@ func composeBattleEntry(sess *session.Session, cat *content.Catalog, cs *content
 		cl.SetCamera(cam)
 		cl.SetPalette(pal)
 		cl.SetFNT(hud.console)
+		// The "label every unit" bit is read from the stored settings the way
+		// retail reads `damagebars` into bit 0 of the interface-flags word at
+		// settings load; the composer's label walk is its only consumer
+		// [07 R-HUD-03 §7][03 R-FX-01 §6].
+		applyDamageBarsSetting(loadedSettings())
 		// The shared battle HUD adapter is live only after all of its palette,
 		// font, terrain, and camera inputs have been installed [I6].
 		cl.SetUIStage(battleHUDUIStage{hud: hud, battle: b})
@@ -635,6 +640,24 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	if kbd.KeyDown(input.KeyN) {
 		b.stockpileSelected(kbd.HasShift())
 	}
+	// The "label every unit" bit. Retail's dispatcher has a case for each of
+	// five character tokens — `!` `#` `*` `` ` `` `~` — and every one of them
+	// flips interface-flags bit 0 and writes all settings back
+	// [07 R-CAM-01 §2][07 R-HUD-03 §7]. Both backquote tokens are the same
+	// physical key, shifted and unshifted, so one key edge covers them.
+	//
+	// TODO(question): the other three tokens are the shifted digits 1, 3 and 8,
+	// which in this key-based input layer are indistinguishable from Shift+digit
+	// — and Shift+digit is already additive group recall here, which
+	// [07 R-CAM-01 §2]'s own digit row and [07 §9] describe. Under the token
+	// model of [07 R-CAM-01 §2] Shift+1 can only produce `!`, so the two rules
+	// cannot both hold; which one retail actually reaches would be settled by
+	// tracing whether the digit case is reachable at all with Shift held. The
+	// chosen placeholder is to leave the digit routing alone and bind only the
+	// two tokens that collide with nothing [07 R-CAM-01 §2].
+	if kbd.KeyDown(input.KeyBackquote) {
+		b.toggleDamageBars()
+	}
 	// Game-speed and pause keys [07 §2][07 §11]: +/- clamp Requested 1..20
 	// with localized messages; Pause toggles pause with the retail message.
 	if kbd.KeyDown(input.KeyPause) {
@@ -1060,6 +1083,43 @@ func (b *battleSession) scrollSetting() byte { // [07 §10] [02 "Settings"]
 		ss = settings.DefaultScrollSpeed
 	}
 	return byte(ss)
+}
+
+// loadedSettings reads the persisted block, ignoring a read failure the same
+// way scrollSetting does: a preferences file that cannot be read yields the
+// defaults rather than refusing to start the battle.
+func loadedSettings() settings.Settings {
+	s, _ := settings.Load()
+	return s
+}
+
+// applyDamageBarsSetting installs bit 0 of the interface-flags word from the
+// loaded block. Retail reads `damagebars` once at settings load
+// [07 R-HUD-03 §7]; the bit's only consumer is the composer's label walk
+// [03 R-FX-01 §6].
+func applyDamageBarsSetting(s settings.Settings) {
+	client.SetDamageBars(s.DamageBarsEnabled())
+}
+
+// damageBarsSettingValue is the live bit, in the form the persisted block
+// stores it. The whole block is written from live state, so the value the
+// frontend writes back has to come from the interface word, not from the file
+// [07 R-HUD-03 §7].
+func damageBarsSettingValue() int {
+	if client.DamageBars() {
+		return settings.InterfaceFlagDamageBars
+	}
+	return 0
+}
+
+// toggleDamageBars is the battle key command of [07 R-CAM-01 §2]: it flips bit
+// 0 of the interface-flags word and writes every setting back immediately
+// [07 R-HUD-03 §7]. A failed write costs the persistence, never the toggle.
+func (b *battleSession) toggleDamageBars() {
+	on := client.ToggleDamageBars()
+	if err := settings.StoreDamageBars(on); err != nil {
+		fmt.Fprintf(os.Stderr, "nanolathe: %v\n", err)
+	}
 }
 
 // isTalkGUIActive reports whether TALK.GUI suppresses held-arrow movement [07 §10].

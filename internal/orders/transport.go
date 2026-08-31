@@ -121,7 +121,7 @@ func checkPickupEntryGates(carrier *units.Unit, n *Node) (failed bool, code Code
 // pickupHandler implements Ground_Pickup / VTOL_Pickup per [04 §10.2] load phase table.
 // It advances phases 0..5 and performs attachment at phase 4.
 // All fixed-point world state remains 16.16 [I2]; no float64; no map iteration [I1].
-func pickupHandler(carrier *units.Unit, n *Node, satisfied uint32) Code {
+func pickupHandler(carrier *units.Unit, n *Node, satisfied uint32, _ uint32) Code {
 	_ = satisfied
 	if carrier == nil || n == nil {
 		return 8
@@ -265,7 +265,7 @@ func pickupHandler(carrier *units.Unit, n *Node, satisfied uint32) Code {
 
 // unloadHandler implements Ground_Unload / VTOL_Unload per [04 §10.2] unload dispatch.
 // Returns done 5 immediately when cargo list already empty, then dispatches on phase.
-func unloadHandler(carrier *units.Unit, n *Node, satisfied uint32) Code {
+func unloadHandler(carrier *units.Unit, n *Node, satisfied uint32, _ uint32) Code {
 	_ = satisfied
 	if carrier == nil || n == nil {
 		return 7
@@ -404,7 +404,7 @@ func unloadHandler(carrier *units.Unit, n *Node, satisfied uint32) Code {
 // landingHandler implements VTOL_Landing per [04 §10.2] landing pads.
 // QueryLandingPad is synchronous four-output query on target script; candidates tried order 0..3 and first free wins [04 §10.2].
 // With no pad the loiter/spiral heading step is used; no free pad keeps order alive for next-tick retry or 30+rand(15) delayed retry [04 §10.2].
-func landingHandler(carrier *units.Unit, n *Node, satisfied uint32) Code {
+func landingHandler(carrier *units.Unit, n *Node, satisfied uint32, _ uint32) Code {
 	_ = satisfied
 	if carrier == nil || n == nil {
 		return 7
@@ -444,15 +444,14 @@ func landingHandler(carrier *units.Unit, n *Node, satisfied uint32) Code {
 
 // beCarriedHandler implements BeCarried (Being transported) per [04 §3.1] 0x24.
 // It keeps the cargo's order alive while attached, and completes when detached.
-func beCarriedHandler(u *units.Unit, n *Node, satisfied uint32) Code {
-	return beCarriedHandlerAtTick(u, n, satisfied, 0)
-}
-
-// beCarriedHandlerAtTick is the exact two-phase carried wait. It draws no RNG:
-// phase 0 releases weapon slots and advances; phase 1 holds on an exact
-// ten-tick deadline until detach makes the pre-check complete
-// [04 R-ORD-01 §2][04 R-FAC-02 §4].
-func beCarriedHandlerAtTick(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
+//
+// It is the exact two-phase carried wait and draws no RNG: phase 0 releases
+// weapon slots and advances; phase 1 holds on an exact ten-tick deadline until
+// detach makes the pre-check complete [04 R-ORD-01 §2][04 R-FAC-02 §4]. The
+// deadline is measured from the handler's tick argument (WU-18-7 retired the
+// by-name `beCarriedHandlerAtTick` special case the pump used to reach this
+// body with).
+func beCarriedHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	_ = satisfied
 	if u == nil || n == nil {
 		return 5
@@ -495,7 +494,7 @@ func ensureTransportHandlers() {
 	}
 	mappings := []struct {
 		name string
-		h    func(*units.Unit, *Node, uint32) Code
+		h    func(*units.Unit, *Node, uint32, uint32) Code
 	}{
 		{"Ground_Pickup", pickupHandler},
 		{"VTOL_Pickup", pickupHandler},

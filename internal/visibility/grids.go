@@ -44,9 +44,9 @@ type Service struct {
 	// throttle can compare against it [03 §3.2] C6.
 	footprints map[ObserverID]footprint
 
-	// surfaces receives the sensor phase's circles. They are separate from the
-	// word mask and wiped each tick [03 §3.4] C11.
-	surfaces     SensorSurfaces
+	// sensorInputs is the sensor phase's per-unit status snapshot. The phase has
+	// no presentation surface of its own: the minimap's circles are drawn by
+	// the contacts pass [03 §3.10] correction of 2026-08-29.
 	sensorInputs []SensorInput
 
 	// viewerDefeated mirrors the viewing player's defeated/observer rule flag.

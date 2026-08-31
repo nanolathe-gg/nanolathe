@@ -52,7 +52,15 @@ const (
 	DefaultMetal          = 1000 // Player%dMetal
 	DefaultEnergy         = 1000 // Player%dEnergy
 	DefaultScrollSpeed    = 32   // scrollspeed [02 "Settings"] default 32 [07 §10]
+	DefaultDamageBars     = 0    // damagebars absent: the bit is cleared [03 R-FX-01 §6]
 )
+
+// InterfaceFlagDamageBars is bit 0 of the interface-flags word — the "label
+// every unit" bit. The stored `damagebars` value and that bit are the same
+// thing: at settings load the bit takes the value's low bit, and the battle
+// key command flips the bit and rewrites the whole block immediately
+// [07 R-HUD-03 §7][03 R-FX-01 §6].
+const InterfaceFlagDamageBars = 1
 
 // Player is one skirmish slot, holding the six Player%d* registry values.
 // Controller is retail's raw row value — 0 open, 1 human, 2 computer — not the
@@ -86,9 +94,42 @@ type Settings struct {
 	// Difficulty is retail's top-level "Difficulty" value, the campaign and
 	// mission setting. It is separate from Skirmish.Difficulty, which retail
 	// keeps as its own "SkirmishDifficulty" value.
-	Difficulty  int      `json:"difficulty"`
-	ScrollSpeed int      `json:"scrollSpeed"` // scrollspeed [02 "Settings"] [07 §10] C2
-	Skirmish    Skirmish `json:"skirmish"`
+	Difficulty  int `json:"difficulty"`
+	ScrollSpeed int `json:"scrollSpeed"` // scrollspeed [02 "Settings"] [07 §10] C2
+	// DamageBars is the stored `damagebars` value. Only its low bit is read:
+	// it becomes bit 0 of the interface-flags word [03 R-FX-01 §6].
+	DamageBars int      `json:"damagebars"`
+	Skirmish   Skirmish `json:"skirmish"`
+}
+
+// DamageBarsEnabled is the loader's rule for the value: present → bit 0 of the
+// interface-flags word takes the value's low bit; absent → the bit is cleared
+// and the default is written back with the rest of the block
+// [03 R-FX-01 §6][07 R-HUD-03 §7].
+func (s Settings) DamageBarsEnabled() bool { return s.DamageBars&InterfaceFlagDamageBars != 0 }
+
+// SetDamageBarsEnabled writes the bit back into the stored value.
+func (s *Settings) SetDamageBarsEnabled(on bool) {
+	if on {
+		s.DamageBars |= InterfaceFlagDamageBars
+		return
+	}
+	s.DamageBars &^= InterfaceFlagDamageBars
+}
+
+// StoreDamageBars persists one damagebars state. Retail's key command flips
+// the bit and immediately writes every setting back, so this reads the whole
+// block, replaces the bit and rewrites the whole block [07 R-HUD-03 §7].
+// A block that could not be read is reported and the write still proceeds from
+// the defaults, because losing the rest of the preferences must not silently
+// swallow the toggle the player just pressed.
+func StoreDamageBars(on bool) error {
+	s, loadErr := Load()
+	s.SetDamageBarsEnabled(on)
+	if err := s.Save(); err != nil {
+		return err
+	}
+	return loadErr
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -98,7 +139,7 @@ type Settings struct {
 // start positions, commander death continues, all terrain visible, LOS off,
 // elevation ignored — so a loader may not treat a zero as an absent value.
 func Defaults() Settings {
-	s := Settings{Version: FileVersion, Difficulty: DefaultDifficulty, ScrollSpeed: DefaultScrollSpeed}
+	s := Settings{Version: FileVersion, Difficulty: DefaultDifficulty, ScrollSpeed: DefaultScrollSpeed, DamageBars: DefaultDamageBars}
 	s.Skirmish = Skirmish{
 		NumPlayers:     DefaultNumPlayers,
 		Difficulty:     DefaultDifficulty,

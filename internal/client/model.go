@@ -17,7 +17,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
-	"github.com/nanolathe/nanolathe/internal/hud"
 	compiledmodel "github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	presentationrender "github.com/nanolathe/nanolathe/internal/render"
@@ -1658,55 +1657,6 @@ func blitTexturedTriToDest(dest []byte, mask []bool, w, h int, t *screenTri, fra
 			if mask != nil {
 				mask[idx] = true
 			}
-		}
-	}
-}
-
-// drawUnitChrome overlays the selected/damaged health bar for a model-drawn
-// unit. Retail does not emit a generic per-unit footprint bracket in this
-// post-fog stage [R-SEL-02A]. Geometry follows the footprint box [04 §6.2];
-// the model itself may extend above it.
-func (c *Client) drawUnitChrome(v frame.UnitView, sx, sy int32) {
-	fx, fz := int(v.FootX), int(v.FootZ)
-	if fx <= 0 {
-		fx = 1
-	}
-	if fz <= 0 {
-		fz = 1
-	}
-	const pxPerCell = 16
-	halfW := int32(fx * pxPerCell / 2)
-	halfH := int32(fz * pxPerCell / 2)
-	if halfW < 4 {
-		halfW = 4
-	}
-	if halfH < 4 {
-		halfH = 4
-	}
-	if v.MaxHealth > 0 && (v.Health != v.MaxHealth || v.Flags&hud.SelectionFlag != 0) {
-		bw := halfW * 2
-		if bw < 12 {
-			bw = 12
-		}
-		frac := float64(v.Health) / float64(v.MaxHealth)
-		if frac < 0 {
-			frac = 0
-		} else if frac > 1 {
-			frac = 1
-		}
-		by := sy + halfH + 2
-		background := c.paletteIndex(0)
-		fill := c.retailHealthColor(v.Health, v.MaxHealth)
-		for i := int32(0); i < bw; i++ {
-			px := sx - bw/2 + i
-			if px < 0 || px >= int32(c.width) || by < 0 || by >= int32(c.height) {
-				continue
-			}
-			idx := background
-			if float64(i) < frac*float64(bw) {
-				idx = fill
-			}
-			c.indexed[by*int32(c.width)+px] = idx
 		}
 	}
 }

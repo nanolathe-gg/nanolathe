@@ -101,6 +101,18 @@ type Queue struct {
 
 	binding *QueueBinding
 
+	// lastPumpTick is the tick this queue was last pumped at. It is the tick a
+	// handler invoked OUTSIDE a pump visit is given — the cancel notification
+	// of [R-ORDER-02 §2], which cleanupNode delivers through the record's own
+	// handler at removal time. Retail's handler bodies read the engine's
+	// current tick [04 R-ORD-01 §1]; a removal reaches this package either
+	// from inside a pump (where this is that pump's tick) or from a command
+	// that ran in the same tick as the unit's last pump, so it is the current
+	// tick in both. It is deliberately NOT SecondaryTick: that field is public
+	// state the construction service transfers across a queue rebind, and
+	// writing it from the primary walk would destroy that transfer.
+	lastPumpTick uint32
+
 	// getBuiltHandler is supplied by the construction service that owns the
 	// product lifecycle. Keeping it on the queue preserves the ordinary ordered
 	// primary walk without introducing package-global session state
@@ -338,7 +350,7 @@ func (q *Queue) randBelow30() uint32 {
 // moveGroundHandler implements the Move_Ground-family handler [R-P0-01].
 // Phase 0 arms gate 0xE0 and returns 1; phase 1 tests satisfied&0x20 -> 5 else 9.
 // The attach check returns 7 while the unit's carrier handle is nonzero [R-P0-01].
-func moveGroundHandler(u *units.Unit, n *Node, satisfied uint32) Code {
+func moveGroundHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code {
 	if u != nil && u.Attachment.Carrier != 0 {
 		return 7 // reject while attached [R-P0-01]
 	}
@@ -352,6 +364,38 @@ func moveGroundHandler(u *units.Unit, n *Node, satisfied uint32) Code {
 		return 5
 	}
 	return 9 // [R-P0-01] drop when further records else 30+RNG30 wait
+}
+
+// handlerlessButDriven reports whether a record with no descriptor handler is
+// nevertheless being run — by a subsystem that dispatches on the head record's
+// descriptor name from its own per-unit step, and that reads and writes the
+// record's phase, dynamic gate and deadline as its state machine:
+//
+//   - the factory and mobile-build lifecycle, in internal/construction
+//     ([05 "Factory production lifecycle"][04 R-FAC-02 §4]);
+//   - the unit-reclaim state machine, in internal/construction
+//     ([05 "Unit reclaim"]);
+//   - the air executors, in internal/movement ([04 R-AIR-01 §6, §7]) — the
+//     other two air heads, `VTOL_Move` and `Park`, reach a handler above.
+//
+// For these the pump is not the driver, and a result code applied here would
+// overwrite the driver's own deadline — a factory record parked for 30 to 44
+// ticks in the middle of its build states is precisely the "the plant will not
+// build another" stall of PLAN 17 §0 row 3. They are therefore left untouched
+// and are not diagnosed: a driven record is not a missing handler.
+//
+// TODO(T25): the durable shape is the one `GetBuilt` already uses — the owning
+// subsystem registers its handler on the queue (Queue.SetGetBuiltHandler), so
+// the pump stays the sole dispatcher and this list disappears. Doing that for
+// the other six is a cross-package change no single unit here owns.
+func handlerlessButDriven(name string) bool {
+	switch name {
+	case "BuildingBuild", "MobileBuild", "VTOL_MobileBuild",
+		"ReclaimUnit", "VTOL_ReclaimUnit",
+		"VTOL_LandIfCan", "VTOL_Standby":
+		return true
+	}
+	return false
 }
 
 func ensureMoveHandlers() {
@@ -404,15 +448,38 @@ func (q *Queue) ensureSingleActive() {
 	}
 }
 
+// newNode is the record constructor every insertion path goes through.
+//
+// Correction (WU-18-0). This function used to seed the record's DYNAMIC gate
+// from the descriptor's STATIC mask:
+//
+//	if nn.DynamicGate == 0 { nn.DynamicGate = desc.StaticGate }
+//
+// The two are different fields with different meanings and must not be
+// conflated. The static mask is insertion metadata: [04 §3.1]'s census names
+// bit 9 (0x200) "constructed without a target unit clears it", bit 10 (0x400)
+// the same for a goal position, bit 18 (0x40000) rear-segment selection, and
+// bit 20 (0x100000) the nanolathe/build-site class; every other static bit has
+// no located reader and is stored opaque. Not one of them is a thing to wait
+// for. The dynamic gate is the opposite field: [04 §3.3] step 2 intersects it
+// with the record's own satisfied bits and the unit's capability word, and
+// step 3 stops the whole walk when the gate is nonzero and nothing in it is
+// satisfied. Seeding it with insertion metadata therefore made a record ask to
+// be woken by bits nothing raises — a `Capture` or `Reclaim` record parked at
+// the head of its unit's primary queue forever, taking every order behind it
+// down with it, and never reaching the pump's missing-handler diagnostic.
+//
+// The contract is explicit: "the record constructor zeroes the dynamic gate and
+// the pending word, so a freshly inserted record is dispatched on its very next
+// pump visit with an empty satisfied set" [04 R-ORD-01 §1]. A record waits only
+// for what a handler asks it to wait for; the copy of the static mask is kept,
+// because [04 §3.2] gives the record a static-mask copy field of its own.
 func newNode(id ID, n Node) *Node {
 	desc := DescriptorFor(id)
 	nn := n
 	nn.ID = id
 	if nn.StaticGate == 0 {
 		nn.StaticGate = desc.StaticGate
-	}
-	if nn.DynamicGate == 0 {
-		nn.DynamicGate = desc.StaticGate
 	}
 	if nn.Deadline == 0 {
 		nn.Deadline = -1
@@ -510,7 +577,7 @@ func (q *Queue) cleanupNode(n *Node) {
 	u := q.ownerUnit(n)
 	if n.DynamicGate&2 != 0 { // cancel-notification guard: dynamic gate bit 1 (value 2) [R-ORDER-02 §2]
 		if h := DescriptorFor(n.ID).Handler; u != nil && h != nil {
-			_ = h(u, n, 2)
+			_ = h(u, n, 2, q.lastPumpTick)
 		}
 	}
 	emitStopBuilding(u, n)
@@ -603,6 +670,50 @@ func (q *Queue) Push(id ID, n Node) {
 			node.Flags |= FlagActive
 		}
 	}
+}
+
+// PushHead is the handler-side head insert [04 R-ORD-01 §1]: a record a
+// handler spawns goes to the FRONT of the primary segment, so the spawned
+// order runs before the spawning one resumes, and the displaced head's
+// auto/default-operation flag is inherited by the new head.
+//
+// It is deliberately not Push. Push is the interface insertion, which places a
+// new record immediately AFTER the active marker so that repeated player adds
+// queue first-in-first-out behind the running order [04 §3.1]. A spawn is the
+// other shape: `Stop`'s `VTOL_LandIfCan`, the kamikaze arrival's
+// `SelfDestruct`, the guard's auto-engage attack — all of them run before the
+// record that asked for them [04 R-ORD-01 §2, §3].
+//
+// The spawned record's dynamic gate is the caller's value verbatim. A freshly
+// allocated record awaits nothing [04 R-ORD-01 §1], and every documented spawn
+// site that does wait on something states its own gate ("gate = 0",
+// "gate |= 0xE0"). This used to be a difference from Push, whose records took
+// the descriptor's static mask; since WU-18-0 corrected newNode both insertion
+// paths produce a record with an empty gate unless the caller asks for one.
+//
+// TODO(question): the active marker's behavior at a head insert is not
+// established — [04 R-ORD-01 §1] describes the link and the auto-flag
+// inheritance and says nothing about the insertion-point marker. The marker is
+// left on the displaced record here, so a later interface Append still queues
+// behind the order that spawned this one rather than between the two. A trace
+// of the head-insert helper's writes to the marker word would settle it.
+func (q *Queue) PushHead(id ID, n Node) *Node {
+	if q == nil {
+		return nil
+	}
+	if len(q.primary) >= OOMGuardQueue {
+		q.recordDiagnostic(fmt.Sprintf("orders: primary queue OOM guard (%d), dropping spawned %s", len(q.primary), DescriptorFor(id).Name))
+		return nil
+	}
+	node := newNode(id, n)
+	node.DynamicGate = n.DynamicGate // verbatim: the descriptor's static mask is insertion metadata, not a wait [04 §3.1]
+	node.Flags &^= FlagActive
+	if len(q.primary) > 0 {
+		node.Flags |= q.primary[0].Flags & FlagAutoOp // inherit the displaced head's auto flag [04 R-ORD-01 §1]
+	}
+	q.primary = append([]*Node{node}, q.primary...)
+	q.ensureSingleActive() // an empty segment's new head takes the marker [04 §3.3]
+	return node
 }
 
 func (q *Queue) PushSecondary(id ID, n Node) {
@@ -713,6 +824,7 @@ func (q *Queue) Pump(u *units.Unit, tick uint32) {
 	if q == nil || u == nil {
 		return
 	}
+	q.lastPumpTick = tick
 	// Order-guard float [07 §8/§9]: nonzero (a clamped 0..1 ratio) while the
 	// unit is mid-order, zero at order completion — i.e. when the primary
 	// queue empties (completion, cancellation, or expiry all land here). The
@@ -742,33 +854,42 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 	if q == nil || u == nil {
 		return
 	}
+	q.lastPumpTick = tick
 	// No iteration cap here (ORD-02): a handler looping through the continue
 	// codes wedges exactly as retail's does [04 §3.3][I11].
 	// TODO(question) idle default-op creation when primary empty [05 "Queue pumping and result codes"] step 1: owner player-state settling byte, definition default-idle-op field
 	for cursor := 0; cursor < len(q.primary); {
 		n := q.primary[cursor]
-		desc := DescriptorFor(n.ID)
 		if n.Deadline != -1 && tick >= uint32(n.Deadline) {
 			n.Deadline = -1
 			n.Satisfied |= 1 // ordinary deadline expiry raises only bit 0 [04 R-ORD-01 §0]
 		}
-		ensureMoveHandlers()
-		ensureTransportHandlers()
-		ensureParkHandler()
-		// For transport and other wired handlers, the initial static gate (0x200/0x400 etc) is satisfied by construction (target/goal present) [04 §3.1] TODO(question) exact gate semantics.
-		// Clear it for phase 0 so the first dispatch is not blocked, mirroring the move arrival handle's clearing [R-P0-01].
-		// The descriptor gate is insertion metadata, not a pre-satisfied wait;
-		// BeCarried phase 0 must dispatch so phase 1 can arm its exact ten-tick
-		// deadline [04 R-ORD-01 §2][04 R-FAC-02 §4].
-		if n.Phase == 0 && n.DynamicGate != 0 {
-			if h := DescriptorFor(n.ID).Handler; h != nil || (desc.Name == "GetBuilt" && q.getBuiltHandler != nil) {
-				if n.DynamicGate == DescriptorFor(n.ID).StaticGate {
-					n.DynamicGate = 0
-					n.Satisfied = 0
-					n.Deadline = -1
-				}
-			}
-		}
+		installHandlers()
+		// The descriptor is read AFTER the installers run. Descriptor is a
+		// value, so a copy taken before them carries whatever Handler the entry
+		// held at that moment: taking it first made the first record of the
+		// first pump see a nil handler for a family that had just been
+		// installed, and park itself for 30..44 ticks with a "no handler for
+		// Stop" diagnostic that was not true by the time it was written.
+		desc := DescriptorFor(n.ID)
+		// Removed (WU-18-0): a phase-0 pre-dispatch clear used to stand here.
+		// When the record was at phase 0 and its dynamic gate still equalled
+		// the descriptor's static mask, it wiped the gate, the pending word and
+		// the deadline so that the first dispatch was not blocked. It existed
+		// only to compensate for newNode seeding the dynamic gate from the
+		// static mask (see the correction there), and it is not a clear retail
+		// performs. [04 §3.3] gives the pump exactly one gate clear — step 4's,
+		// on the record it is about to dispatch, below — and reaches the
+		// dispatch-on-first-visit property a different way: the record
+		// constructor zeroes the gate and the pending word [04 R-ORD-01 §1], so
+		// step 3's block test passes on a fresh record without any pump help.
+		// With the constructor corrected the block is unreachable for a fresh
+		// record (its gate is 0, so the outer test fails), and for any record
+		// that reaches phase 0 with a gate a handler armed — result code 0
+		// resets the phase while leaving the gate and deadline standing — it
+		// would be actively wrong: it would discard a wait, its deadline, and
+		// the pending bits [04 §3.3] steps 1 and 2 require to survive into the
+		// satisfied intersection.
 		satisfied := (n.Satisfied | u.Pending) & n.DynamicGate // [04 §3.3] C6
 		if n.DynamicGate != 0 && satisfied == 0 {
 			return // blocked head stalls [04 §3.3] C6
@@ -790,19 +911,49 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 				n.MoveState = MoveEnRoute
 				return
 			}
-			q.recordDiagnostic(fmt.Sprintf("orders: nil handler for %s", DescriptorFor(n.ID).Name)) // [AGENTS.md §Diagnostics] never spin
+			if handlerlessButDriven(name) {
+				// The record has no descriptor handler because another
+				// subsystem runs it from its own per-unit step and owns its
+				// phase, gate and deadline. The pump must leave every one of
+				// those fields alone: writing a result code over them is
+				// writing over a live state machine.
+				return
+			}
+			// TODO(T25): this descriptor has no handler and nothing else runs
+			// it, so the order is unimplemented in this build. Retail has a
+			// handler for every named descriptor, so there is no retail
+			// behavior to clone here; what the pump owes is an outcome that is
+			// bounded and visible rather than a jam. The record is parked with
+			// the contract's own wait, code 3 — lowest gate bit, deadline
+			// `tick + 30 + random below 15` [04 §3.3] — which stops the walk,
+			// keeps the record the player still owns, and re-diagnoses once
+			// per wait instead of once per tick. The alternatives are all
+			// worse: codes 0, 1, 2, 4 and 6 re-dispatch the same record from
+			// the head and spin (0 and 1 corrupting the phase on the way), and
+			// 5, 7, 8 and 9 free it, turning a missing handler into a silently
+			// dropped order.
+			q.recordDiagnostic(fmt.Sprintf("orders: no handler for %s, parked for 30..44 ticks", name))
+			q.applyPrimaryResultCode(n, 3, tick)
 			return
 		}
 		var code Code
-		if desc.Name == "BeCarried" {
-			code = beCarriedHandlerAtTick(u, n, satisfied, tick)
-		} else if desc.Name == "Park" {
-			// Phase 1 arms an exact thirty-tick deadline [04 R-ORD-01 §2].
-			code = parkHandlerAtTick(u, n, satisfied, tick)
-		} else if desc.Name == "GetBuilt" && q.getBuiltHandler != nil {
+		if desc.Name == "GetBuilt" && q.getBuiltHandler != nil {
+			// GetBuilt is not a descriptor handler: the construction service
+			// that owns the product lifecycle binds it per queue, and its
+			// third argument has always been the tick [04 R-FAC-02 §4]. The
+			// result-code handling below is its own too, so this stays a named
+			// case.
 			code = q.getBuiltHandler(u, n, tick)
 		} else {
-			code = handler(u, n, satisfied)
+			// Removed (WU-18-7): three by-name cases stood here, calling
+			// `beCarriedHandlerAtTick`, `stopHandlerAtTick` and
+			// `parkHandlerAtTick` so those three bodies could see the tick that
+			// the Handler signature did not carry. The tick is now the
+			// handler's fourth argument, so every descriptor gets it the same
+			// way — which is what [04 R-ORD-01 §1] describes: the deadline
+			// setter stores "current tick + n", and any row with a deadline
+			// needs the tick to form one.
+			code = handler(u, n, satisfied, tick)
 		}
 		// A primary code-2 hold continues to the following record in the same
 		// ordered pass. This is observable for the factory composition: the
@@ -829,6 +980,40 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 	}
 }
 
+// indexOfPrimary locates a record in the primary segment by identity, or -1.
+func (q *Queue) indexOfPrimary(n *Node) int {
+	for i, p := range q.primary {
+		if p == n {
+			return i
+		}
+	}
+	return -1
+}
+
+// unlinkPrimary removes the dispatched record from the primary segment and
+// runs the removal cleanup [05 "Queue subtraction"]. The record is found by
+// identity rather than assumed to be at the front: a handler that head-inserts
+// a spawned record [04 R-ORD-01 §1] is no longer the front record when its own
+// result code is applied, and freeing slot 0 there would free the spawned
+// order instead of the one that finished.
+//
+// The tombstone follows [R-ORDER-02 §2]: it is set on every freed record
+// except the one that is the primary segment's front head at that moment, and
+// it is what suppresses that record's weapon-target-clear notification.
+func (q *Queue) unlinkPrimary(n *Node) {
+	idx := q.indexOfPrimary(n)
+	if idx < 0 {
+		return
+	}
+	if idx != 0 {
+		n.Flags |= FlagTombstone
+	}
+	q.cleanupNode(n)
+	copy(q.primary[idx:], q.primary[idx+1:])
+	q.primary = q.primary[:len(q.primary)-1]
+	q.ensureSingleActive() // mark moves to the successor [04 §3.3]
+}
+
 // applyPrimaryResultCode is the PRIMARY result-code table [04 §3.3] C7: it
 // maps the handler's return code to queue effects for the head record n.
 // Deliberately distinct from applySecondaryResultCode — the segments share
@@ -851,11 +1036,14 @@ func (q *Queue) applyPrimaryResultCode(n *Node, code Code, tick uint32) bool {
 		n.Deadline = int32(tick + 30 + q.randBelow15()) // [04 §3.3][I4] wait 30..44; the only arm drawing RNG(15)
 		return false
 	case 5, 8:
-		q.cleanupNode(n) // [05 "Queue subtraction"]
-		q.primary = q.primary[1:]
-		q.ensureSingleActive() // mark moves to the successor [04 §3.3]
+		q.unlinkPrimary(n) // [04 §3.3][05 "Queue subtraction"]
 	case 6:
-		q.primary = q.primary[1:]
+		idx := q.indexOfPrimary(n)
+		if idx < 0 {
+			return false
+		}
+		copy(q.primary[idx:], q.primary[idx+1:])
+		q.primary = q.primary[:len(q.primary)-1]
 		n.Flags &^= FlagActive
 		q.primary = append(q.primary, n) // move to segment tail and continue [04 §3.3]
 		q.ensureSingleActive()           // exactly one marker remains
@@ -864,7 +1052,11 @@ func (q *Queue) applyPrimaryResultCode(n *Node, code Code, tick uint32) bool {
 		return false
 	case 9:
 		n.Flags |= FlagRetryMark // [04 §3.3][R-ORDER-02 §2] completion flag; write-only — no reader may be invented
-		if len(q.primary) == 1 {
+		// "Last" is having no record after it in the segment, which is not the
+		// same as being the only record: a handler that head-inserts a spawned
+		// record [04 R-ORD-01 §1] leaves itself behind that record and can
+		// still be the tail.
+		if idx := q.indexOfPrimary(n); idx >= 0 && idx == len(q.primary)-1 {
 			// [R-P0-01][04 §3.3] last record re-arms: phase reset, wait
 			// 30..59 — the distinct RNG(30) arm, not code 3's RNG(15).
 			n.Phase = 0
@@ -872,17 +1064,13 @@ func (q *Queue) applyPrimaryResultCode(n *Node, code Code, tick uint32) bool {
 			n.Deadline = int32(tick + 30 + q.randBelow30())
 			return false
 		}
-		q.cleanupNode(n) // [04 §3.3] otherwise unlink and free
-		q.primary = q.primary[1:]
-		q.ensureSingleActive() // mark moves to the successor [04 §3.3]
+		q.unlinkPrimary(n) // [04 §3.3] otherwise unlink and free
 	default:
 		if code > 9 {
 			// [04 §3.3] above 9: single-node expiry helper — unlink, clean,
 			// free, and return; no draw, no whole-queue cancel [P0-08].
 			// Whole-queue cancel is exclusively code 7 [P0-08] A09.
-			q.cleanupNode(n)
-			q.primary = q.primary[1:]
-			q.ensureSingleActive()
+			q.unlinkPrimary(n)
 			return false
 		}
 		return false
@@ -894,15 +1082,19 @@ func (q *Queue) pumpSecondary(u *units.Unit, tick uint32) {
 	if q == nil || u == nil {
 		return
 	}
+	q.lastPumpTick = tick
 	for idx := 0; idx < len(q.secondary); {
 		n := q.secondary[idx]
-		// Fresh BuildWeapon nodes are created with DynamicGate = StaticGate
-		// (0xc0140) and Deadline -1 via newNode. For secondary, DynamicGate 0
-		// means ready [05] literal, so fresh nodes would never dispatch.
-		// Normalize fresh BuildWeapon nodes to ready on first tick [06 §11.1] C29.
-		if n.Deadline == -1 && n.DynamicGate != 0 && DescriptorFor(n.ID).Name == "BuildWeapon" {
-			n.DynamicGate = 0
-		}
+		// Removed (WU-18-0): a per-name normalization stood here, clearing the
+		// dynamic gate of a deadline-less `BuildWeapon` record because fresh
+		// ones were born carrying their descriptor's static mask (0xc0140) and
+		// a rear record with a gate never dispatches. It was the rear-segment
+		// half of the same conflation newNode has now dropped, and it was
+		// narrower than the defect and wider than the fix: it named one
+		// descriptor, and it would equally have cleared a gate the stockpile
+		// handler armed without a deadline. A fresh rear record now arrives
+		// with an empty gate [04 R-ORD-01 §1], so it is ready by construction.
+		//
 		// [R-ORDER-02 §1] A rear-segment record is dispatched only when its
 		// gate mask is empty or its deadline has arrived; the deadline compare
 		// is unsigned, so the -1 sentinel (0xffffffff) reads as not-due.
@@ -921,15 +1113,28 @@ func (q *Queue) pumpSecondary(u *units.Unit, tick uint32) {
 		// no satisfied-word read, and no capability-word consumption. Rear
 		// records run purely on their own deadlines; movement or wake bits can
 		// never drive them.
-		// Publish tick for BuildWeapon stockpile handler's retry deadlines
-		// [06 §11.1] C29 (5/10/300) without changing Handler signature [RS-P0-018].
+		// The per-queue published tick [RS-P0-018]. Every handler now takes the
+		// tick as its fourth argument (WU-18-7), so no handler reads this field
+		// for its deadlines any more; it stays because it is the queue's own
+		// record of the tick it was last pumped at, and the construction service
+		// transfers it across a queue rebind [04 R-FAC-02 §4].
 		q.SecondaryTick = tick
 		handler := DescriptorFor(n.ID).Handler
 		if handler == nil {
-			q.recordDiagnostic(fmt.Sprintf("orders: nil handler for secondary %s", DescriptorFor(n.ID).Name))
-			return
+			// TODO(T25): the same missing-handler park as the primary walk
+			// above, through the secondary table's code 3 — which parks this
+			// record for 30..44 ticks and, unlike the primary, continues the
+			// walk, so one unimplemented rear-segment record does not hide the
+			// records behind it [04 §3.3].
+			q.recordDiagnostic(fmt.Sprintf("orders: nil handler for secondary %s, parked for 30..44 ticks", DescriptorFor(n.ID).Name))
+			advance, walking := q.applySecondaryResultCode(n, 3, tick)
+			if !walking {
+				return
+			}
+			idx += advance
+			continue
 		}
-		code := handler(u, n, 0)
+		code := handler(u, n, 0, tick)
 		advance, walking := q.applySecondaryResultCode(n, code, tick)
 		if !walking {
 			return // codes 6 and 7: remove the single record and return [04 §3.3] C8

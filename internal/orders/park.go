@@ -53,14 +53,11 @@ func ParkGoalRect(n *Node) (minX, minZ, maxX, maxZ int32, ok bool) {
 	return minX, minZ, minX + 8*s - 1, minZ + 6*s - 1, true
 }
 
-// parkHandler is the satisfied-only adapter the descriptor table holds; the
-// pump calls parkHandlerAtTick so phase 1 can arm its exact thirty-tick
-// deadline.
-func parkHandler(u *units.Unit, n *Node, satisfied uint32) Code {
-	return parkHandlerAtTick(u, n, satisfied, 0)
-}
-
-func parkHandlerAtTick(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
+// parkHandler runs the parking rectangle. Phase 1 arms its exact thirty-tick
+// deadline from the tick the pump is running (WU-18-7 retired the by-name
+// `parkHandlerAtTick` special case the pump used to reach this body with; the
+// tick is now the handler's fourth argument [04 R-ORD-01 §1]).
+func parkHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	if u == nil || n == nil {
 		return 7
 	}

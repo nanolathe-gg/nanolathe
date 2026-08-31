@@ -27,7 +27,7 @@ func TestPumpUnit_Isolation(t *testing.T) {
 		t.Fatalf("Move_Ground not found")
 	}
 	// Handlers: each advance phase then wait, so we can detect pumping.
-	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code {
+	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 		// Advance phase once, then wait.
 		if n.Phase == 0 {
 			return Code(1)
@@ -102,7 +102,7 @@ func TestPumpUnit_HeadBlockingPreserved(t *testing.T) {
 	q.Primary()[0].Satisfied = 0
 	patrolID := Lookup("Patrol")
 	called := false
-	restore := setHandler(patrolID, func(u *units.Unit, n *Node, s uint32) Code { called = true; return Code(2) })
+	restore := setHandler(patrolID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { called = true; return Code(2) })
 	defer restore()
 	q.Push(patrolID, Node{})
 	q.Primary()[1].DynamicGate = 0
@@ -138,7 +138,7 @@ func TestPumpUnit_SecondarySkipNotDue(t *testing.T) {
 		{ID: buildID, DynamicGate: 0, Deadline: -1},
 	})
 	called := 0
-	restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32) Code { called++; return Code(2) })
+	restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { called++; return Code(2) })
 	defer restore()
 	pump := &Pump{World: w}
 	// Primary empty => secondary can be pumped; first not due should be skipped, second dispatched.

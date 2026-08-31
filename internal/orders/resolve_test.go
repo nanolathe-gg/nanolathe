@@ -502,7 +502,7 @@ func TestAttackChaseOrbit(t *testing.T) {
 		if n.Param2 != expected {
 			t.Fatalf("orbit substate want %d got %d before handler", expected, n.Param2)
 		}
-		code := attackChaseHandler(actor, n, 0)
+		code := attackChaseHandler(actor, n, 0, 0)
 		if code == Code(7) {
 			t.Fatalf("substate %d should not cancel", expected)
 		}
@@ -520,23 +520,23 @@ func TestAttackChaseOrbit(t *testing.T) {
 		t.Fatalf("orbit should set goal")
 	}
 	n.Param2 = 9
-	code := attackChaseHandler(actor, n, 0)
+	code := attackChaseHandler(actor, n, 0, 0)
 	if code != Code(7) {
 		t.Fatalf("substate >=9 should cancel-all Code(7) got %d", code)
 	}
 	n.Param2 = 0
 	n.Phase = 4
-	code = attackChaseHandler(actor, n, 0)
+	code = attackChaseHandler(actor, n, 0, 0)
 	if code != Code(7) {
 		t.Fatalf("phase >3 should cancel-all got %d", code)
 	}
 	n2 := &Node{ID: Lookup("Attack_Chase"), Phase: 0, Target: 0}
-	code = attackChaseHandler(actor, n2, 0)
+	code = attackChaseHandler(actor, n2, 0, 0)
 	if code != Code(5) {
 		t.Fatalf("missing target should abandon Code(5) got %d", code)
 	}
 	n3 := &Node{ID: Lookup("Attack_Chase"), Phase: 0, Target: 99}
-	code = attackChaseHandler(actor, n3, chaseAbandonMask)
+	code = attackChaseHandler(actor, n3, chaseAbandonMask, 0)
 	if code != Code(5) {
 		t.Fatalf("abandon satisfied should return 5 got %d", code)
 	}
@@ -546,20 +546,20 @@ func TestAttackChaseOrbit(t *testing.T) {
 	actorFar := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(nil))
 	actorFar.X = numeric.Fixed(100 * 65536)
 	actorFar.Z = numeric.Fixed(0)
-	code = attackChaseHandler(actorFar, n4, 0)
+	code = attackChaseHandler(actorFar, n4, 0, 0)
 	if code != Code(5) {
 		t.Fatalf("leash exceeded should abandon got %d", code)
 	}
 	actorAir := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanFly = true }))
 	n5 := &Node{ID: Lookup("Attack_Chase"), Phase: 0, Target: 99}
-	code = attackChaseHandler(actorAir, n5, 0)
+	code = attackChaseHandler(actorAir, n5, 0, 0)
 	if code != Code(5) {
 		t.Fatalf("admit requiring ground unit with CanFly should abandon got %d", code)
 	}
 	actorGround := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanFly = false }))
 	n6 := &Node{ID: Lookup("Attack_Chase"), Phase: 0, Target: 99, Param1: 0}
 	n6.GoalX = numeric.Fixed(999)
-	code = attackChaseHandler(actorGround, n6, 0)
+	code = attackChaseHandler(actorGround, n6, 0, 0)
 	if code != Code(1) || n6.Phase != 1 {
 		t.Fatalf("phase 0 admit should advance to 1 got code %d phase %d", code, n6.Phase)
 	}
@@ -609,7 +609,7 @@ func TestGuardAssistOrdering(t *testing.T) {
 	q.primary = nil
 	q.secondary = nil
 	// First call should pick (a) build assist – top priority (ward unfinished, friendly)
-	code := guardHandler(actor, n, 0)
+	code := guardHandler(actor, n, 0, 0)
 	if code != Code(3) {
 		t.Fatalf("(a) first call should return Code(3) wait got %d", code)
 	}
@@ -626,7 +626,7 @@ func TestGuardAssistOrdering(t *testing.T) {
 	// TODO(question): auto-fire (b) pending WU-06-7; stub returns false, so ordering skips (b)
 	q.primary = nil
 	q.secondary = nil
-	code = guardHandler(actor, n, 0)
+	code = guardHandler(actor, n, 0, 0)
 	if code != Code(3) {
 		t.Fatalf("(c) after (a) dedup should return Code(3) got %d", code)
 	}
@@ -641,7 +641,7 @@ func TestGuardAssistOrdering(t *testing.T) {
 	}
 	// Third: (a) deduped, (c) deduped, should fall to (d) join ward's build
 	q.primary = nil
-	code = guardHandler(actor, n, 0)
+	code = guardHandler(actor, n, 0, 0)
 	if code != Code(3) {
 		t.Fatalf("(d) after (a)(c) dedup should return 3 got %d", code)
 	}
@@ -658,7 +658,7 @@ func TestGuardAssistOrdering(t *testing.T) {
 	q.primary = nil
 	n.GoalX = numeric.Fixed(0)
 	n.GoalZ = numeric.Fixed(0)
-	code = guardHandler(actor, n, 0)
+	code = guardHandler(actor, n, 0, 0)
 	if code != Code(3) {
 		t.Fatalf("(e) fallback should return 3 got %d", code)
 	}
@@ -672,7 +672,7 @@ func TestGuardAssistOrdering(t *testing.T) {
 	// Verify top-down order: if (a) not deduped, it wins even when lower conditions also true
 	actor.GuardLatches.BuildAssist = [units.GuardLatchSize]pool.Handle{}
 	q.primary = nil
-	code = guardHandler(actor, n, 0)
+	code = guardHandler(actor, n, 0, 0)
 	if code != Code(3) || len(q.primary) == 0 || DescriptorFor(q.primary[0].ID).Name != "HelpBuild" {
 		t.Fatalf("top-down: (a) should win when not deduped")
 	}
@@ -695,7 +695,7 @@ func TestGuardAssistOrdering(t *testing.T) {
 	n2.GoalX = numeric.Fixed(0)
 	q2 := QueueForUnit(actorZero)
 	q2.primary = nil
-	code = guardHandler(actorZero, n2, 0)
+	code = guardHandler(actorZero, n2, 0, 0)
 	if code != Code(3) {
 		t.Fatalf("Handle 0 should still return Code(3) via (e) got %d", code)
 	}
@@ -710,14 +710,14 @@ func TestGuardAssistOrdering(t *testing.T) {
 func TestGuardHandlerMissingWard(t *testing.T) {
 	actor := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(nil))
 	n := &Node{ID: Lookup("Follow_Ground"), Target: 0}
-	code := guardHandler(actor, n, 0)
+	code := guardHandler(actor, n, 0, 0)
 	if code != Code(5) {
 		t.Fatalf("missing ward should abandon code 5 got %d", code)
 	}
 	setTestLookup(actor, func(h pool.Handle) *units.Unit { return nil })
 	defer setTestLookup(actor, nil)
 	n.Target = 99
-	code = guardHandler(actor, n, 0)
+	code = guardHandler(actor, n, 0, 0)
 	if code != Code(5) {
 		t.Fatalf("nil ward lookup should abandon")
 	}

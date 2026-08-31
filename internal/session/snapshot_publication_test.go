@@ -158,25 +158,39 @@ func TestRadarStepLeavesStatusWithSingleActivePlayer(t *testing.T) {
 	}
 }
 
-func TestRadarCirclesDropWhenSourceIsCleanedUp(t *testing.T) {
-	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "circle"}, MaxDamage: 1}
+// TestRadarContactsAreTheSoleCircleSource replaces
+// TestRadarCirclesDropWhenSourceIsCleanedUp, retired 2026-08-30.
+//
+// What the retired test locked: that the sensor phase published a separate
+// circle list onto the committed frame, and that the publisher dropped an entry
+// whose source unit had been freed since the pass ran. There is no such list
+// any more. [03 §3.10]'s 2026-08-29 correction establishes the circles as
+// presentation drawn by the CONTACTS pass and retracts the reading that gave
+// the sensor phase three rasterizing callback tables, so the stale-source
+// hazard the test guarded cannot arise: a circle now exists only as a
+// distance on a contact record, and a contact record only exists for a live
+// unit.
+func TestRadarContactsAreTheSoleCircleSource(t *testing.T) {
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "circle"}, MaxDamage: 1, RadarDistance: 50}
 	w := newSessionFixtureWorld(4, nil)
 	h, err := w.Create(def, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("create unit: %v", err)
 	}
+	w.Unit(h).Activated = true
+	w.Unit(h).Flags |= 0x10 // the authoritative selected bit [07 §9]
 	vis := visibility.New(&world.Terrain{CellW: 64, CellH: 64}, visibility.ModeHistoryEnabled|visibility.ModeCurrentEnabled)
-	var status uint32
-	vis.SensorTick(1, 2, nil, []visibility.SensorUnit{{ID: uint16(h), Status: &status, Alive: true, Active: true, RadarDistance: 50}})
-	s := &Session{Units: w, Vis: vis, Snapshot: frame.NewBuffer()}
+	s := &Session{Units: w, Vis: vis, Snapshot: frame.NewBuffer(), LocalOwner: 0}
 	s.publishSnapshot(1)
-	if got := s.Snapshot.Current(); got == nil || len(got.Radar.Circles) != 1 {
-		t.Fatalf("live source circles = %#v, want one", got)
+	cur := s.Snapshot.Current()
+	if cur == nil || len(cur.Radar.Contacts) != 1 || cur.Radar.Contacts[0].RadarDistance != 50 {
+		t.Fatalf("selected unit contact = %#v, want its authored 50 [03 §3.9]", cur)
 	}
+	// A freed unit publishes no contact, and therefore no circle.
 	w.Unit(h).Alive = false
 	s.publishSnapshot(2)
-	if got := s.Snapshot.Current(); got == nil || len(got.Radar.Circles) != 0 {
-		t.Fatalf("cleaned source circles = %#v, want none", got)
+	if got := s.Snapshot.Current(); got == nil || len(got.Radar.Contacts) != 0 {
+		t.Fatalf("cleaned source contacts = %#v, want none", got)
 	}
 }
 

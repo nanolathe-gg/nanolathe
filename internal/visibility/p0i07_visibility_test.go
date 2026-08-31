@@ -66,16 +66,11 @@ func TestP0I07_TruthTable(t *testing.T) {
 	// 3. Jammer on minimap not LOS: jammer circles never author word mask [03 §3.4] C11.
 	s2 := newTestService(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled)
 	s2.SetLocal(0)
-	// The viewer sights the enemy jammer's tile. Circles are drawn by the
-	// contacts pass, only for units passing its blip gate [03 §3.9][03 §3.10];
-	// without coverage this enemy fails all four disjuncts and would emit
-	// nothing, which is not what this case is about. The word-mask snapshot is
-	// taken after the publish, so the assertion below still isolates the sensor
+	// The viewer sights the enemy jammer's tile. The word-mask snapshot is
+	// taken after the publish, so the assertion below isolates the sensor
 	// phase's own writes.
 	s2.Publish(0, 10, 10, 0, 320)
 	before := append([]uint16(nil), s2.wordMask...)
-	surf := &recordingSurfaces{}
-	s2.SetSurfaces(surf)
 	var st uint32
 	s2.SensorTick(0, 2, nil, []SensorUnit{{
 		Owner: 1, Status: &st, Alive: true, Active: true,
@@ -87,8 +82,10 @@ func TestP0I07_TruthTable(t *testing.T) {
 			t.Fatalf("jammer circle wrote LOS word mask at %d", i)
 		}
 	}
-	if len(surf.radarJam) != 1 {
-		t.Fatalf("jammer should rasterize to presentation surface, got %d", len(surf.radarJam))
+	// The jam pass's only output is the status bits [R-VIS-01 §5]; the jammer
+	// circle itself belongs to the contacts pass [03 §3.10].
+	if st&JammedBit == 0 {
+		t.Fatalf("the jam pass did not mark its own emitter, status %#x", st)
 	}
 	// Even with jammer present, enemy outside LOS still not visible via IsVisible.
 	if s.IsVisible(0, Target{Owner: 1, X: tileWorld(50), Z: tileWorld(50)}) {
@@ -188,16 +185,14 @@ func TestP0I07_SaveLoadRebuildOrder(t *testing.T) {
 // TestP0I07_SensorGateRequiresTwoPlayers already covered in sensors_test but re-assert.
 func TestP0I07_SensorGate(t *testing.T) {
 	s := newTestService(&world.Terrain{CellW: 32, CellH: 32}, ModeHistoryEnabled|ModeCurrentEnabled)
-	surf := &recordingSurfaces{}
-	s.SetSurfaces(surf)
 	var st uint32
-	u := []SensorUnit{{Owner: 0, Status: &st, Alive: true, Active: true, RadarDistance: 100, X: tileWorld(5), Z: tileWorld(5)}}
+	u := []SensorUnit{{ID: 1, Owner: 0, Status: &st, Alive: true, Active: true, RadarDistance: 100, X: tileWorld(5), Z: tileWorld(5)}}
 	s.SensorTick(0, 1, nil, u)
-	if surf.wipes != 0 {
+	if len(s.SensorInputs()) != 0 {
 		t.Fatalf("sensor should not run with 1 player")
 	}
 	s.SensorTick(0, 2, nil, u)
-	if surf.wipes != 1 {
+	if len(s.SensorInputs()) != 1 {
 		t.Fatalf("sensor should run with 2 players")
 	}
 }

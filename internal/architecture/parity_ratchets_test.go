@@ -271,12 +271,23 @@ var float64Baseline = map[string]int{
 	"internal/mission/placement.go":         7,
 	"internal/movement/altitude.go":         6,
 	"internal/orders/pump.go":               4,
-	"internal/session/progression.go":       5,
-	"internal/session/session.go":           1,
-	"internal/session/step.go":              1,
-	"internal/units/units.go":               1,
-	"internal/world/terrain.go":             1,
-	"internal/world/wind.go":                2,
+	// WU-18-2, the work handlers. Two sites, both retail's own floating point
+	// and both narrowed immediately to the integer the record stores: the
+	// capture budget's three float32 constants
+	// (0.015·buildcostenergy + 0.2142857142857·buildcostmetal + 150.0,
+	// [05 R-WORK-01 §6]) and the resurrection delay's stored double
+	// (0.3·buildtime / (workertime/30), [05 R-WORK-01 §7], "the 0.3 belongs to
+	// this state alone"). docs/INVARIANTS.md I2 has no row for either; WU-18-2
+	// reports them as rows the allowlist needs rather than editing a file it
+	// does not own. Reproducing them in rationals would change which values
+	// truncate, so the arithmetic stays as retail computes it.
+	"internal/orders/work.go":         6,
+	"internal/session/progression.go": 5,
+	"internal/session/session.go":     1,
+	"internal/session/step.go":        1,
+	"internal/units/units.go":         1,
+	"internal/world/terrain.go":       1,
+	"internal/world/wind.go":          2,
 }
 
 // TestAuthoritativeFloat64DoesNotGrow enforces the PROC-03 float ratchet
@@ -355,12 +366,32 @@ var debtMarkerTotals = map[string]int{
 	// Reconciled against the authoritative-source census after the merged
 	// cleanups. These are shrink-only counts; changing a marker's location or
 	// adding one still requires an explicit reviewed baseline update.
-	"legacy":         36,
-	"compatibility":  17,
-	"fallback":       185,
-	"guess":          10,
-	"plausible":      1,
-	"todo(question)": 319,
+	"legacy":        36,
+	"compatibility": 17,
+	"fallback":      185,
+	"guess":         10,
+	"plausible":     1,
+	// 323 at the point both units branched. WU-17-11 moved one marker out of
+	// the scanned authoritative dirs (into internal/render, which this ratchet
+	// does not scan), and WU-17-14 added two in internal/orders. Composed:
+	// 323 − 1 + 2 = 324. WU-18-0 then retired one in internal/orders/pump.go:
+	// the pump's phase-0 gate clear carried "TODO(question) exact gate
+	// semantics", asking what the descriptor's static mask meant as a wait.
+	// [04 §3.1] and [04 §3.3] answer it — the static mask is insertion
+	// metadata and the dynamic gate is the wait — so the clear and its question
+	// both went with the record constructor's correction. Composed: 324 − 1.
+	// WU-18-4 then added five in the new internal/orders/combat.go — the five
+	// questions [04 R-ORD-01 §3] and [04 R-AIR-01 §8] leave open at the sites
+	// that depend on them, enumerated in that file's baseline row below.
+	// Composed: 323 + 5 = 328. Three family units then landed in parallel and
+	// each composed against 328 without seeing the others: WU-18-1 added three
+	// (two in standing.go, one in selfdestruct.go) and WU-18-2 three more in
+	// work.go. Both branches wrote 331 by their own arithmetic; composed the
+	// total is 323 + 5 + 3 + 3 = 334, and every file row below survives.
+	// WU-18-3 then added two in the new internal/orders/vtolwork.go — the two
+	// questions [04 R-ORD-01 §7] and [05 R-WORK-01 §8] leave open, enumerated
+	// in that file's baseline row below. Composed: 334 + 2 = 336.
+	"todo(question)": 336,
 }
 
 var debtMarkerFileCounts = map[string]map[string]int{
@@ -502,19 +533,106 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		// rotation's sign convention, and the command block's flags byte, whose
 		// reader, clearing site and initial value the section does not name. Both
 		// are honest gaps written at their site per I9.
-		"internal/movement/flight.go":         4,
-		"internal/movement/flightcommand.go":  1,
-		"internal/movement/goals.go":          16,
-		"internal/movement/integrate.go":      5,
-		"internal/movement/landing.go":        1,
-		"internal/movement/movegoal.go":       1,
-		"internal/movement/profile.go":        3,
-		"internal/movement/route.go":          2,
-		"internal/movement/transport.go":      14,
-		"internal/orders/pump.go":             5,
-		"internal/orders/resolve.go":          36,
-		"internal/orders/table.go":            1,
-		"internal/orders/transport.go":        24,
+		"internal/movement/flight.go":        4,
+		"internal/movement/flightcommand.go": 1,
+		// airorders.go 0 -> 4: WU-17-3 records the four gaps the air sections
+		// leave open at the sites that depend on them. (a) [04 R-AIR-01 §4] says
+		// a follow marker's goal is the target's *attach-piece* world position,
+		// and this package has no compiled piece transform to evaluate, so the
+		// marker takes the target's origin — that transform's unit-origin term
+		// with a zero piece offset. (b) [04 R-AIR-01 §7] has VTOL_Standby phase 1
+		// ask the ordinary autonomous acquisition for a target; acquisition is
+		// the combat layer's and is not reachable here, so the no-target arm
+		// stands. (c) [04 R-AIR-01 §6] calls a landing-legality test in
+		// VTOL_LandIfCan phase 1 but neither states its predicate nor cites a
+		// section that does. All three are written at their site with the
+		// question and its decider, per I9. (d) [04 R-AIR-01 §6]'s gloss that
+		// VTOL_LandIfCan phase 1 commands "exactly the terrain height" does not
+		// follow from [04 R-AIR-01 §4]'s Established setter expression; the code
+		// follows the Established expression and records the disagreement.
+		"internal/movement/airorders.go": 4,
+		"internal/movement/goals.go":     16,
+		"internal/movement/integrate.go": 5,
+		"internal/movement/landing.go":   1,
+		"internal/movement/movegoal.go":  1,
+		"internal/movement/profile.go":   3,
+		"internal/movement/route.go":     2,
+		"internal/movement/transport.go": 14,
+		// pump.go 5 -> 6 and stop.go 0 -> 1: WU-17-14 implements the `Stop`
+		// handler of [04 R-ORD-01 §2] and records the two gaps it ran into.
+		// (a) [04 R-ORD-01 §1] gives the handler-side head insert as a link
+		// change plus the displaced head's auto-flag inheritance and says
+		// nothing about the insertion (active) marker, so PushHead states which
+		// way it leaves the marker and what would settle it. (b) [R-ORDER-02
+		// §2] separates the three weapon-target-clear entry points only by
+		// their latch guard, so what the unconditional entry the `Stop` row
+		// calls does to the slot control byte is unstated. Both are written at
+		// their site with the question and its decider, per I9.
+		// 6 -> 5: WU-18-0 retired the phase-0 gate clear's question (see the
+		// totals row above).
+		"internal/orders/pump.go": 5,
+		// combat.go 0 -> 5: WU-18-4 records the five questions its rows leave
+		// open, each at the site that depends on it. (a) [R-ORDER-02 §2]'s
+		// weapon-target-clear guard reads a slot control byte — bit 1 assigned,
+		// bit 4 inhibit — that this build's units.Slot does not have, and
+		// [04 §3.9]'s own missing list still carries that byte's bit 4 as
+		// unlocated, so release/inhibit reproduce only the empty test.
+		// (b) [04 R-ORD-01 §3] defers `Suppress`'s engagement distance to doc 06,
+		// which does not define it, and [04 §3.9] lists the same helper's value
+		// as inference; no distance is chosen, which leaves phase 2 on its own
+		// `p2 < 1` arm. (c) [04 R-ORD-01 §2]'s `AttackSpecial` row describes only
+		// the resolving case and not what the handler does when command code 3
+		// rejects. (d) [04 R-AIR-01 §8]'s entry step 1 gates its seek-attack
+		// replacement on a record successor marker, two status-word bits and a
+		// "cached goal valid" bit, none of which the section locates in a named
+		// field. (e) the same section gives step 1's interrupt mask for three of
+		// the four air executors and omits `AirToAir`, whose mask therefore
+		// remains unstated. All five are written at their site with the question
+		// and its decider, per I9.
+		"internal/orders/combat.go":  5,
+		"internal/orders/resolve.go": 36,
+		// selfdestruct.go 0 -> 1 and standing.go 0 -> 2: WU-18-1 implements the
+		// trivial, standing, wait, cloak and standby handlers of
+		// [04 R-ORD-01 §2] plus the self-destruct pair, and records the three
+		// gaps those rows leave open. (a) [04 R-ORD-01 §1] gives *release slot*
+		// and *inhibit slot* one line each and puts only the `TargetCleared`
+		// notification "under the guard of [R-ORDER-02 §2]", so whether the
+		// target clear itself is guarded too is unstated. (b) `Standby_Mine`'s
+		// row adds a status-word bit-29 test to a body whose inherited first
+		// clause cancels on a missing mover reference, and the two cannot both
+		// hold — a bit-29 unit is building-class and a building-class unit owns
+		// no mover [04 R-FAC-02 §5]; every stock mine in the reference install
+		// is `bmcode 0` (I14), so the site states which reading it takes and
+		// what would settle it. (c) [04 R-ORD-01 §2] locates the self-destruct
+		// initialisation marker in p2's high nibble without giving its value.
+		// All three are written at their site with the question and its
+		// decider, per I9.
+		"internal/orders/selfdestruct.go": 1,
+		"internal/orders/standing.go":     2,
+		"internal/orders/stop.go":         1,
+		"internal/orders/table.go":        1,
+		"internal/orders/transport.go":    24,
+		// WU-18-2, the work handlers: three questions research does not settle,
+		// each written at its site with its decider (I9). (1) `SelfRepair`'s
+		// phase-0 admission — [04 R-ORD-01 §2] puts "complete and activated" on
+		// the order's target while [05 R-WORK-01 §3] splits the pair between
+		// repairer and patient. (2) The "target state-word bits 2-3" arm of
+		// `RepairUnit` and `Capture` — units.Unit mirrors only the low two
+		// status bits, and no section names bits 2 and 3. (3) The assist
+		// approach radius — [04 R-ORD-01 §5] takes its footprint from the
+		// builder, [05 R-WORK-01 §2] from the target, over identical
+		// arithmetic. None is a value this unit picked.
+		"internal/orders/work.go": 3,
+		// WU-18-3, the VTOL work twins: two questions [04 R-ORD-01 §7] and
+		// [05 R-WORK-01 §8] leave open, each written at its site with its
+		// decider (I9). (1) `VTOL_HelpBuild`'s phase 0 adds "the definition's
+		// builder-specific script slot must be present" and no section names
+		// that slot; this build caches no script-function indices on a
+		// definition, so the clause is not evaluated rather than guessed at.
+		// (2) [05 R-WORK-01 §8] records as Unknown which of the two model-box
+		// forms the four VTOL work executors build for their spray, where both
+		// ground forms are Established. Neither is a value this unit picked.
+		"internal/orders/vtolwork.go":         2,
 		"internal/path/goals.go":              4,
 		"internal/path/queue.go":              1,
 		"internal/path/search.go":             1,
@@ -540,7 +658,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/units/units.go":             8, // +1: the activation edge has no status-cue sink [04 R-UNIT-06 §2] (PLAN_16 WU-16-3)
 		"internal/visibility/fog.go":          1,
 		"internal/visibility/publish.go":      1, // LOS group-0 record content is Unknown [03 R-COMP-02 §1]
-		"internal/visibility/sensors.go":      2, // +1: five stock sensor definitions have no traced activation writer [03 §3.4 R-VIS-01 §4]; +1: the contacts pass's blip gate reads a global options word bit 9 whose owner is untraced [03 §3.9] (PLAN_17 WU-17-5)
+		"internal/visibility/sensors.go":      1, // five stock sensor definitions have no traced activation writer [03 §3.4 R-VIS-01 §4]. -1 (PLAN_17 WU-17-11): the untraced global-options-word bit 9 of the blip gate [03 §3.9] is NOT retired — it moved with its gate. The sensor phase no longer emits minimap circles ([03 §3.10] correction of 2026-08-29 makes the contacts pass the sole producer), so the blip gate left this file with the circle walk; the marker now sits on internal/render/minimap.go's MinimapContact.Options, which this guard does not scan.
 		"internal/world/feature_stamp.go":     1,
 		"internal/world/placement.go":         3,
 		"internal/world/plot.go":              3,

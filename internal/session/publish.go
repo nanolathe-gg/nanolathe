@@ -254,25 +254,21 @@ func (s *Session) publishSnapshot(tick uint32) {
 			if u := s.Units.Unit(published.Selection.Primary); u != nil && u.Alive && u.Owner == s.LocalOwner && u.Flags&0x10 != 0 && u.Def != nil && u.Def.Builder {
 				if page := s.Catalog.BuildMenus[content.CanonicalKey(u.Def.CanonicalKey)]; page != nil {
 					published.CommandPage.Builder = u.Handle
-					const buttonsPerPage = 6 // authored build rail page [07 §9]
-					published.CommandPage.PageCount = uint16((len(page.Buttons) + buttonsPerPage - 1) / buttonsPerPage)
-					if published.CommandPage.PageCount == 0 {
-						published.CommandPage.PageCount = 1
-					}
-					pageNumber := 0
-					if hud.IsPaged(u.Flags) {
-						pageNumber = hud.DecodePage(u.Flags)
-					}
-					pageNumber = hud.ClampPage(pageNumber, int(published.CommandPage.PageCount))
+					const buttonsPerPage = hud.RetailBuildButtonsPerPage // authored build rail page [07 §9]
+					// Page 0 is the orders state, not a build page: the count is
+					// the maximum authored build page plus one, page N carries the
+					// authored entries (N-1)*6..N*6-1, and page 0 carries none
+					// [07 R-HUD-03 §6]. The page number itself is the builder's
+					// own state — the page-shown bit and the page field of [07 §9]
+					// — copied out here, never derived from the renderer.
+					pageCount := hud.PageCountFromButtons(len(page.Buttons), buttonsPerPage)
+					published.CommandPage.PageCount = uint16(pageCount)
+					pageNumber := hud.ClampPage(hud.DecodePage(u.Flags), pageCount)
 					published.CommandPage.Page = uint16(pageNumber)
-					start := pageNumber * buttonsPerPage
-					end := start + buttonsPerPage
-					if start < len(page.Buttons) {
-						if end > len(page.Buttons) {
-							end = len(page.Buttons)
-						}
-						published.CommandPage.ProductKeys = append(published.CommandPage.ProductKeys[:0], page.Buttons[start:end]...)
-					}
+					// The keys are copied, not aliased: the catalog's slice must
+					// not reach presentation through the frame [I6].
+					products := hud.ProductsForPage(page.Buttons, pageNumber, buttonsPerPage)
+					published.CommandPage.ProductKeys = append(published.CommandPage.ProductKeys[:0], products...)
 				}
 			}
 		}
@@ -407,16 +403,13 @@ func (s *Session) publishSnapshot(tick uint32) {
 	// one coherent tick-end view and never needs to bind callbacks or inspect
 	// mutable session services [03 §3.4][03 §3.9].
 	published.Radar.Contacts = published.Radar.Contacts[:0]
-	published.Radar.Circles = published.Radar.Circles[:0]
 	// The minimap mode is session state supplied by the authoritative composer
 	// input seam. Preserve its exact value; presentation must not manufacture a
 	// viewport marker mode at the frame boundary [03 §3.12][I6].
 	published.Radar.MarkerMode = s.RadarMarkerMode
 	var sensorInputs []visibility.SensorInput
-	var sensorCircles []visibility.SensorCircle
 	if s.Vis != nil {
 		sensorInputs = s.Vis.SensorInputs()
-		sensorCircles = s.Vis.SensorCircles()
 	}
 	if s.Units != nil {
 		sensorIndex := 0
@@ -475,10 +468,14 @@ func (s *Session) publishSnapshot(tick uint32) {
 			if u.Def != nil {
 				contact.Commander = u.Def.Commander
 				contact.Graphic = u.Def.ObjectName
-				// Contact-side range circles are the selected/range-status
-				// branch. It runs before the activation/onoffable gate; inactive
-				// on/off units therefore publish no range distances, while units
-				// without that capability remain eligible [03 §3.9].
+				// The selected-unit circle gate of [03 §3.9] "Selected-unit
+				// circle gate correction" (Established): the selected/range-status
+				// bit must be set, and the circles are then drawn when the
+				// instance is active OR the definition's on/off bit is clear. An
+				// inactive on/off-capable unit therefore publishes no range
+				// distances, while a unit without that capability stays eligible.
+				// This is the ONLY producer of minimap circles — the sensor phase
+				// rasterizes nothing [03 §3.10] correction of 2026-08-29.
 				contact.RangeStatus = status&0x10 != 0 && (active || !onOffable)
 				if contact.RangeStatus {
 					contact.RadarDistance = u.Def.RadarDistance
@@ -507,15 +504,6 @@ func (s *Session) publishSnapshot(tick uint32) {
 			}
 			published.Radar.Contacts = append(published.Radar.Contacts, contact)
 		}
-	}
-	// Cleanup follows the visibility pass in the committed-tick order. Keep a
-	// callback only when its source unit survived that boundary; source identity
-	// makes this deterministic and prevents stale circles from freed slots.
-	for _, c := range sensorCircles {
-		if c.SourceID == 0 || !radarHasLiveUnit(published.Radar.Contacts, c.SourceID) {
-			continue
-		}
-		published.Radar.Circles = append(published.Radar.Circles, frame.RadarCircleView{SourceID: c.SourceID, U: c.U, V: c.V, Radius: c.Radius, Kind: c.Kind})
 	}
 	for _, p := range published.Projectiles {
 		owner := p.Owner
@@ -732,15 +720,6 @@ func radarOwnerPalette(s *Session, owner uint8, ownerKnown bool) (uint8, bool) {
 		return 0, false
 	}
 	return uint8(color), true
-}
-
-func radarHasLiveUnit(contacts []frame.RadarContactView, id uint16) bool {
-	for _, c := range contacts {
-		if c.Kind == frame.RadarContactUnit && uint16(c.Handle) == id {
-			return true
-		}
-	}
-	return false
 }
 
 // featureOwnerSelector reads the plot placer nibble. Selector 10 identifies a

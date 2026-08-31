@@ -195,7 +195,7 @@ func TestStopBuildingEmittedOnPrimaryPumpRemovals(t *testing.T) {
 	}
 	t.Run("code 5 removal: StopBuilding then TargetCleared, flag cleared", func(t *testing.T) {
 		c := newCleanupCase(t)
-		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return 5 })
+		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return 5 })
 		defer restore()
 		n := c.flagged(moveID)
 		c.q.Push(moveID, *n)
@@ -222,7 +222,7 @@ func TestStopBuildingEmittedOnPrimaryPumpRemovals(t *testing.T) {
 	})
 	t.Run("code 9 last-record re-arm keeps the build alive", func(t *testing.T) {
 		c := newCleanupCase(t)
-		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return 9 })
+		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return 9 })
 		defer restore()
 		c.q.Push(moveID, *c.flagged(moveID))
 		node := c.q.primary[0]
@@ -245,7 +245,7 @@ func TestStopBuildingEmittedOnPrimaryPumpRemovals(t *testing.T) {
 	})
 	t.Run("code 9 non-last removal emits StopBuilding", func(t *testing.T) {
 		c := newCleanupCase(t)
-		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code {
+		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 			if n.Param1 == 1 {
 				return 9
 			}
@@ -268,7 +268,7 @@ func TestStopBuildingEmittedOnPrimaryPumpRemovals(t *testing.T) {
 	})
 	t.Run("cancel-all: flagged non-head record emits StopBuilding, tombstone gates the target clear", func(t *testing.T) {
 		c := newCleanupCase(t)
-		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return 7 })
+		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return 7 })
 		defer restore()
 		c.q.Push(moveID, Node{Param1: 1})
 		c.q.Push(moveID, Node{Param1: 2})
@@ -301,7 +301,7 @@ func TestStopBuildingEmittedOnSecondaryAndCancelRemovals(t *testing.T) {
 	}
 	t.Run("secondary removal: rear record always tombstoned, StopBuilding still emitted", func(t *testing.T) {
 		c := newCleanupCase(t)
-		restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32) Code { return 9 }) // plain removal
+		restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return 9 }) // plain removal
 		defer restore()
 		n := c.flagged(buildID)
 		c.q.PushSecondary(buildID, *n)
@@ -411,7 +411,7 @@ func TestCancelNotificationMaskDeliveredOnRemoval(t *testing.T) {
 	}
 	c := newCleanupCase(t)
 	seen := map[uint32][]uint32{} // Param1 -> satisfied values seen
-	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code {
+	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 		seen[n.Param1] = append(seen[n.Param1], s)
 		return 2
 	})
@@ -439,7 +439,7 @@ func TestCleanupLeavesCompletionFlagWriteOnly(t *testing.T) {
 	// identical with and without the flag.
 	moveID := Lookup("Move_Ground")
 	c := newCleanupCase(t)
-	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return 5 })
+	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return 5 })
 	defer restore()
 	n := &Node{ID: moveID, Owner: c.u.Handle, Deadline: -1}
 	n.Flags |= FlagRetryMark | FlagTombstone

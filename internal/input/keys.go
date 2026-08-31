@@ -80,6 +80,10 @@ const (
 	KeyEqual // '=' / '+'  [07 §2] game-speed increase retail equivalent
 	KeyNumpadAdd
 	KeyNumpadSubtract
+	// KeyBackquote is the `/~ key. Retail's battle dispatcher reaches it as the
+	// character tokens ` and ~, two of the five that toggle the "label every
+	// unit" bit [07 R-CAM-01 §2][07 R-HUD-03 §7].
+	KeyBackquote
 	KeyCount
 )
 

@@ -19,20 +19,6 @@ import (
 // [04 R-AIR-01 §4].
 const climbArrivalWindow = 0x10001
 
-// usesTakeoffPreamble reports whether an order descriptor name is one of the air
-// executors established to run the shared takeoff preamble. `VTOL_Move`,
-// `VTOL_Patrol` and `VTOL_MobileBuild` are named by [04 R-ORD-02 §2];
-// `VTOL_Landing` and `VTOL_LandIfCan` run it in their own phase 0
-// [04 R-AIR-01 §6]. Nothing else in the table is established to run it, and an
-// unlisted name must not be added on resemblance.
-func usesTakeoffPreamble(name string) bool {
-	switch name {
-	case "VTOL_Move", "VTOL_Patrol", "VTOL_MobileBuild", "VTOL_Landing", "VTOL_LandIfCan":
-		return true
-	}
-	return false
-}
-
 // SetMoverMode is retail's committed-mover-mode setter [04 R-AIR-01 §3].
 //
 // It does nothing when the current low two bits already equal the request.
@@ -118,20 +104,23 @@ func (s *System) applyOccupancyPlane(u *units.Unit, prev, mode uint8) {
 //  2. if the unit has a carrier, detach it requesting mover mode 2;
 //  3. set the state byte's activation bit, raising `Activate` — the engine's
 //     takeoff script hook;
-//  4. only if the committed mode is 1 (grounded): set mode 2 and install a
-//     point marker on the unit's own X/Y/Z whose altitude offset is
-//     `cruisealt / 2` (signed, truncating toward zero);
+//  4. only if the committed mode is 1 (grounded): set mode 2, build a point
+//     marker on the unit's own X/Y/Z whose altitude offset is `cruisealt / 2`
+//     (signed, truncating toward zero), install it as the record's goal payload
+//     and OR 0xE0 into the record's gate;
 //  5. advance the phase.
+//
+// It reports whether step 4 built a marker. When the unit is already airborne no
+// marker is built and the phase still advances, so a mid-air order does not
+// reset the aircraft's climb goal [04 R-AIR-01 §6].
 //
 // Step 4's marker is an initial *climb* goal only: its explicit altitude offset
 // makes its arrival test `|unitY − goalY| < 0x10001` on top of a horizontal test
 // the marker satisfies the instant it is built, so the record's 0xE0 gate holds
-// until the aircraft has climbed [04 R-AIR-01 §4][04 R-AIR-02]. When the unit is
-// already airborne no marker is built and the phase still advances, so a mid-air
-// order does not reset the climb goal [04 R-AIR-01 §6].
-func (s *System) takeoffPreamble(u *units.Unit) {
+// until the aircraft has climbed [04 R-AIR-01 §4][04 R-AIR-02].
+func (s *System) takeoffPreamble(u *units.Unit, rec *orders.Node) bool {
 	if s == nil || u == nil || u.Def == nil || !u.Def.CanFly {
-		return
+		return false
 	}
 	// Step 2 — the self-detach requests mode 2, so the mode write below is the
 	// one that runs for a unit that was carried [04 R-AIR-01 §3][04 R-AIR-01 §6].
@@ -144,106 +133,42 @@ func (s *System) takeoffPreamble(u *units.Unit) {
 	u.SetActivationEdge(true)
 	// Step 4 — grounded only.
 	if u.Move.Mode&0x3 != 1 {
-		return
+		return false
 	}
-	climbY := CruiseAltitudeForCarrier(s.Terrain, u.X, u.Z, u, true)
 	s.SetMoverMode(u, 2)
-	if s.takeoffClimb == nil {
-		s.takeoffClimb = make(map[pool.Handle]int32)
+	m := s.newPointMarker(u, Vec3{X: u.X, Y: u.Y, Z: u.Z})
+	m.setAltitudeOffset(halfCruiseAlt(u.Def.CruiseAlt))
+	s.installAirGoal(u, rec, m)
+	if rec != nil {
+		rec.DynamicGate |= airLegGate
 	}
-	s.takeoffClimb[u.Handle] = int32(climbY.Raw())
-	if fl := s.Flights[u.Handle]; fl != nil {
-		fl.TargetX = int32(u.X.Raw())
-		fl.TargetZ = int32(u.Z.Raw())
-		fl.TargetY = int32(climbY.Raw())
-	}
+	return true
 }
 
-// activateTakeoff runs the preamble for an order head whose executor is
-// established to carry it. It is the phase-0 half of that executor: the
-// activation boundary visits a fresh head exactly once, and step 4 is itself
-// guarded on the committed mode, so a repeat visit is inert.
-func (s *System) activateTakeoff(u *units.Unit, head *orders.Node) {
-	if s == nil || u == nil || head == nil || u.Def == nil || !u.Def.CanFly {
-		return
+// halfCruiseAlt is the preamble's `cruisealt / 2`: a signed 16-bit halving with
+// C division, truncating toward zero [04 R-AIR-01 §6][I3].
+func halfCruiseAlt(cruiseAlt int32) int16 {
+	v := int16(cruiseAlt)
+	if v >= 0 {
+		return v / 2
 	}
-	if !usesTakeoffPreamble(orders.DescriptorFor(head.ID).Name) {
-		return
-	}
-	s.takeoffPreamble(u)
+	return -((-v) / 2)
 }
 
-// stepTakeoffClimb flies the initial climb leg installed by the preamble. It
-// returns done=true when no climb is outstanding — either none was installed or
-// the marker's altitude window has been entered — in which case the caller
-// proceeds with the ordinary air step. While the climb is outstanding the
-// aircraft's commanded X and Z are its own position, so the §10.1 integrator
-// produces vertical motion only, and the caller must not test arrival: the
-// record's gate is still waiting on this marker [04 R-AIR-01 §4][04 R-AIR-02].
-func (s *System) stepTakeoffClimb(u *units.Unit) (StepResult, bool) {
-	if s == nil || u == nil || s.takeoffClimb == nil {
-		return StepResult{}, true
-	}
-	target, pending := s.takeoffClimb[u.Handle]
-	if !pending {
-		return StepResult{}, true
-	}
-	fl := s.Flights[u.Handle]
-	if fl == nil {
-		delete(s.takeoffClimb, u.Handle)
-		return StepResult{}, true
-	}
-	dy := int64(u.Y.Raw()) - int64(target)
-	if dy < 0 {
-		dy = -dy
-	}
-	if dy < climbArrivalWindow {
-		delete(s.takeoffClimb, u.Handle)
-		return StepResult{}, true
-	}
-	fl.X = int32(u.X.Raw())
-	fl.Y = int32(u.Y.Raw())
-	fl.Z = int32(u.Z.Raw())
-	fl.TargetX = fl.X
-	fl.TargetZ = fl.Z
-	fl.TargetY = target
-	fl.TargetHeading = u.Move.Heading
-	if fl.MaxVelocity == 0 && u.Def != nil && u.Def.MaxVelocity != 0 {
-		fl.MaxVelocity = int32(u.Def.MaxVelocity)
-	}
-	if fl.Acceleration == 0 && u.Def != nil && u.Def.Acceleration != 0 {
-		fl.Acceleration = int32(u.Def.Acceleration)
-	}
-	if fl.BrakeRate == 0 && u.Def != nil && u.Def.BrakeRate != 0 {
-		fl.BrakeRate = int32(u.Def.BrakeRate)
-	}
-	if u.Def != nil {
-		fl.TurnRate = int32(u.Def.TurnRate)
-	}
-	oldY := int64(u.Y)
-	IntegrateFlight(fl) // [04 §10.1] C26–C30
-	u.X = numeric.Fixed(int64(fl.X))
-	u.Y = numeric.Fixed(int64(fl.Y))
-	u.Z = numeric.Fixed(int64(fl.Z))
-	u.Move.Heading = fl.Heading
-	u.Move.Speed = numeric.Fixed(int64(fl.Speed))
-	s.emitMovementCallbacks(u, fl.Speed) // [04 §5.2] tiers apply to the flight path too
-	return StepResult{
-		Handle:     u.Handle,
-		DistToGoal: s.distToGoal(u),
-		HasRoute:   false,
-		EmptyRoute: true,
-		Moved:      int64(u.Y) != oldY,
-	}, false
-}
-
-// ClimbTargetFor exposes the outstanding initial-climb altitude for a handle,
-// for tests and diagnostics. ok is false once the marker's altitude window has
-// been entered and the record's gate has been released.
+// ClimbTargetFor reports the commanded altitude of an outstanding initial-climb
+// marker, for tests and diagnostics. ok is false once no marker with an explicit
+// altitude offset is installed [04 R-AIR-01 §6].
 func (s *System) ClimbTargetFor(h pool.Handle) (numeric.Fixed, bool) {
-	if s == nil || s.takeoffClimb == nil {
+	if s == nil {
 		return 0, false
 	}
-	y, ok := s.takeoffClimb[h]
-	return numeric.Fixed(int64(y)), ok
+	fl := s.Flights[h]
+	if fl == nil || fl.Command == nil {
+		return 0, false
+	}
+	m, ok := fl.Command.Payload.(*airMarker)
+	if !ok || m == nil || m.flags&airMarkerExplicitAlt == 0 {
+		return 0, false
+	}
+	return m.goal.Y, true
 }

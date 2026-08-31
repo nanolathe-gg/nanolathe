@@ -215,6 +215,18 @@ func TestFactoryRepeatThroughDispatchRetail(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		rich()
 	}
+	// A freshly selected builder shows the orders page, which carries no
+	// products: page 0 is the orders state and page 1 is the first authored
+	// build page [07 R-HUD-03 §6]. Clicking BUILD is what a player does here,
+	// and the page it selects is dispatched as this same absolute page command.
+	if err := sess.EnqueueHumanCommand(HumanCommand{
+		Kind: HumanBuildPage, BuildPage: HumanBuildPageCommand{Builder: plant.Handle, Page: 1},
+	}); err != nil {
+		t.Fatalf("build page: %v", err)
+	}
+	for i := 0; i < 4; i++ {
+		rich()
+	}
 
 	f := sess.Snapshot.Current()
 	if f == nil {

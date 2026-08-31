@@ -144,7 +144,9 @@ func (s *System) Land(w *units.World, vtolHandle pool.Handle, pad *units.Unit) b
 	// the activation edge (`Deactivate`, the landing script hook)
 	// [04 R-AIR-01 §3], and re-stamps the ground plane the airborne mover
 	// released on takeoff [04 R-COLL-01 §4].
-	delete(s.takeoffClimb, vtolHandle) // any outstanding climb marker is superseded
+	// Any outstanding goal payload is superseded: the touchdown is the end of
+	// the leg that produced it [04 R-AIR-01 §1] step 6.
+	s.releaseAirGoal(vtol)
 	if !s.SetMoverMode(vtol, 1) && s.Grid != nil {
 		// Already grounded: the mode write is a no-op, so stamp the new pad
 		// cells directly.
@@ -236,7 +238,12 @@ func (s *System) TakeOff(w *units.World, vtolHandle pool.Handle) bool {
 	if vtol == nil || vtol.Def == nil || !vtol.Def.CanFly {
 		return false
 	}
-	s.takeoffPreamble(vtol)
+	head := airHeadFor(vtol)
+	s.takeoffPreamble(vtol, head)
+	// Publish the command words from the freshly installed marker at once, so a
+	// caller outside the mover tick sees the climb goal without waiting a tick
+	// [04 R-AIR-01 §1].
+	s.StepFlightCommand(vtol, head, s.AirSectors)
 	return true
 }
 
@@ -265,22 +272,25 @@ func (s *System) SubmitAirMove(vtolHandle pool.Handle, targetX, targetZ numeric.
 		s.Routes[vtolHandle] = route
 	}
 	route.Publish(pts)
-	// Set flight target altitude to full cruisealt at goal [04 §10.1]
-	if fl, ok := s.Flights[vtolHandle]; ok {
-		targetY := CruiseAltitudeForOffset(s.Terrain, targetX, targetZ, vtol.Def.CruiseAlt)
-		fl.TargetY = int32(targetY.Raw())
-		fl.TargetX = int32(targetX.Raw())
-		fl.TargetZ = int32(targetZ.Raw())
+	// The command block is the only input the flight integrator has, so a direct
+	// air move installs a point marker with the full `cruisealt` offset rather
+	// than writing the mover's command words behind the producer's back
+	// [04 R-AIR-01 §1][04 R-AIR-01 §4].
+	m := s.newPointMarker(vtol, Vec3{X: targetX, Y: vtol.Y, Z: targetZ})
+	if vtol.Def != nil {
+		m.setAltitudeOffset(int16(vtol.Def.CruiseAlt))
 	}
+	head := airHeadFor(vtol)
+	s.installAirGoal(vtol, head, m)
 	// Airborne through the one mover-mode setter, so the ground plane the mover
 	// held while grounded is released [04 R-AIR-01 §3][04 R-COLL-01 §4]. This
 	// direct surface has no order record to hold a climb marker, so it commands
 	// the goal altitude straight away.
 	s.SetMoverMode(vtol, 2)
-	delete(s.takeoffClimb, vtolHandle)
 	if fl, ok := s.Flights[vtolHandle]; ok {
 		fl.Mode = 2
 	}
+	s.StepFlightCommand(vtol, head, s.AirSectors)
 }
 
 // ValidateAirMoveSite validates air arrival without terrain blocking (air bypass) but still checks pad for landing [04 §10.2].

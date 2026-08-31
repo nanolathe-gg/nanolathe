@@ -270,6 +270,15 @@ func decodeGAFFrame(data []byte, offset uint32, cache map[uint32]*GAFFrame, stac
 		return frame, nil
 	}
 
+	// Per-row RLE [fmt gaf "RLE pixels"]. Each row is a u16 payload length
+	// followed by commands decoded until the row holds exactly width pixels.
+	//
+	// A decode of the retail interface side panels that comes out as
+	// high-entropy, near-black indexes is correct, not a defect: that art is a
+	// dithered panel texture built from the darkest entry of many palette
+	// ramps, so it reads as coloured static when brightened. WU-17-12 traced
+	// it and left the caveat in [fmt gaf "Unknowns and caveats"]; read that
+	// before changing anything below to make a picture look better.
 	position := uint64(frame.DataOffset)
 	for row := 0; row < int(height); row++ {
 		if position > uint64(len(data)) || uint64(len(data))-position < 2 {

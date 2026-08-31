@@ -38,6 +38,9 @@ func (g *gameShell) applySettings(s settings.Settings) {
 	if s.ScrollSpeed != 0 {
 		g.scrollSpeed = s.ScrollSpeed
 	}
+	// `damagebars` becomes bit 0 of the interface-flags word at settings load
+	// [07 R-HUD-03 §7][03 R-FX-01 §6].
+	applyDamageBarsSetting(s)
 
 	sk := s.Skirmish
 	// ApplyDefaults has already run in newGameShell, so the six scalars below
@@ -116,7 +119,14 @@ func (g *gameShell) syncMapIndex() {
 // captureSettings reads the shell's live frontend state back into the
 // persisted block.
 func (g *gameShell) captureSettings() settings.Settings {
-	s := settings.Settings{Version: settings.FileVersion, Difficulty: g.missionDifficultyValue, ScrollSpeed: g.scrollSpeed}
+	s := settings.Settings{
+		Version:     settings.FileVersion,
+		Difficulty:  g.missionDifficultyValue,
+		ScrollSpeed: g.scrollSpeed,
+		// The whole block is rewritten from live state, so the interface
+		// word's bit 0 is what the file records [07 R-HUD-03 §7].
+		DamageBars: damageBarsSettingValue(),
+	}
 	if s.ScrollSpeed == 0 {
 		s.ScrollSpeed = settings.DefaultScrollSpeed
 	}

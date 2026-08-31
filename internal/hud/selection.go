@@ -92,6 +92,12 @@ func DecodePage(flags uint32) int { // [07 §9] C10
 // IsPaged reports whether the paged indicator bit 22 is set [07 §9] C10.
 func IsPaged(flags uint32) bool { return flags&PagePagedBit != 0 }
 
+// RememberedPage returns the page number bits 23-25 still hold, whether or not
+// the page-shown bit is set. Selecting page 0 clears bit 22 and leaves those
+// bits alone [07 §9], so the field is where a builder showing the orders page
+// remembers the build page it was on.
+func RememberedPage(flags uint32) int { return int((flags & PageBitsMask) >> 23) }
+
 // SelectUnit is the minimal unit view the HUD selection logic operates on
 // [07 §9] C9, C10. Flags carries runtime bits including SelectionFlag (0x10)
 // and CtrlFFlag (0x80000000). Group is a single stored value 0..9 (0 = none)

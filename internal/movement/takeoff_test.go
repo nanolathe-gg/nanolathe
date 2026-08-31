@@ -112,7 +112,7 @@ func TestTakeoffPreambleLeavesTheGroundPlane(t *testing.T) {
 		t.Fatalf("fixture mover mode=%d, want the grounded 1", u.Move.Mode)
 	}
 
-	sys.takeoffPreamble(u)
+	sys.takeoffPreamble(u, nil)
 
 	if u.Move.Mode != 2 {
 		t.Fatalf("mover mode=%d after the preamble, want 2 [04 R-AIR-01 §6 step 4]", u.Move.Mode)
@@ -138,12 +138,12 @@ func TestTakeoffPreambleLeavesTheGroundPlane(t *testing.T) {
 // advances, so a mid-air order does not reset the aircraft's climb goal."
 func TestTakeoffPreambleIsInertWhenAlreadyAirborne(t *testing.T) {
 	sys, _, u := takeoffFixture(t)
-	sys.takeoffPreamble(u)
+	sys.takeoffPreamble(u, nil)
 	// Fly it clear of the marker, then consume the marker as the climb step does.
 	u.Y = numeric.Fixed(int64(400) << 16)
-	delete(sys.takeoffClimb, u.Handle)
+	sys.releaseAirGoal(u)
 
-	sys.takeoffPreamble(u)
+	sys.takeoffPreamble(u, nil)
 
 	if _, pending := sys.ClimbTargetFor(u.Handle); pending {
 		t.Fatal("a mid-air order rebuilt the initial climb marker [04 R-AIR-01 §6]")

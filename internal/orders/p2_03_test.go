@@ -98,7 +98,7 @@ func TestPumpWedgeIsNotRescued(t *testing.T) {
 		}
 		// Handler that always returns 2 (continue) forces an endless cascade
 		// over the same head [04 §3.3] — retail wedges here, so must we.
-		restore := setHandler(id, func(u *units.Unit, n *Node, s uint32) Code { return Code(2) })
+		restore := setHandler(id, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return Code(2) })
 		defer restore()
 		q.Push(id, Node{})
 		clearGates(q)

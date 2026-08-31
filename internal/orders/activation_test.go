@@ -54,7 +54,7 @@ func TestActivateOrderRaisesEdgeOnce(t *testing.T) {
 		t.Fatal("Activate descriptor carries no handler")
 	}
 
-	if code := handler(u, &Node{ID: id}, 0); code != Code(5) {
+	if code := handler(u, &Node{ID: id}, 0, 0); code != Code(5) {
 		t.Fatalf("Activate result = %d, want 5 (complete)", code)
 	}
 	if !u.Activated {
@@ -64,7 +64,7 @@ func TestActivateOrderRaisesEdgeOnce(t *testing.T) {
 		t.Fatalf("started callback threads = %d, want 1", got)
 	}
 
-	if code := handler(u, &Node{ID: id}, 0); code != Code(5) {
+	if code := handler(u, &Node{ID: id}, 0, 0); code != Code(5) {
 		t.Fatalf("repeated Activate result = %d, want 5 (complete)", code)
 	}
 	if !u.Activated {
@@ -85,7 +85,7 @@ func TestActivateOrderIgnoredWithoutOnOffable(t *testing.T) {
 	if handler == nil {
 		t.Fatal("Activate descriptor carries no handler")
 	}
-	if code := handler(u, &Node{ID: id}, 0); code != Code(5) {
+	if code := handler(u, &Node{ID: id}, 0, 0); code != Code(5) {
 		t.Fatalf("Activate result = %d, want 5 (complete)", code)
 	}
 	if u.Activated {
@@ -108,7 +108,7 @@ func TestDeactivateOrderLowersEdge(t *testing.T) {
 	if handler == nil {
 		t.Fatal("Deactivate descriptor carries no handler")
 	}
-	if code := handler(u, &Node{ID: id}, 0); code != Code(5) {
+	if code := handler(u, &Node{ID: id}, 0, 0); code != Code(5) {
 		t.Fatalf("Deactivate result = %d, want 5 (complete)", code)
 	}
 	if u.Activated {

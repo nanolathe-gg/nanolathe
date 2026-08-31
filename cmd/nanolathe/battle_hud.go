@@ -768,20 +768,10 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 	if cur.Visibility.Valid {
 		h.radar.RebuildMapped(cur.Visibility.WordVisible, cur.Visibility.Visible)
 	}
-	// Wipe and replay the completed callback sequence for this frame. This
-	// presentation cache is intentionally rebuilt from immutable values, so a
-	// stale callback cannot survive a frame with no sensors [03 §3.10].
-	h.radar.Wipe()
-	for _, circle := range cur.Radar.Circles {
-		switch circle.Kind {
-		case 1:
-			h.radar.RadarJam(circle.U, circle.V, circle.Radius)
-		case 2:
-			h.radar.SonarJam(circle.U, circle.V, circle.Radius)
-		default:
-			h.radar.Sensor(circle.U, circle.V, circle.Radius)
-		}
-	}
+	// The committed contacts are the whole circle input: the sensor phase has no
+	// surface of its own and rasterizes nothing [03 §3.10] correction of
+	// 2026-08-29. FINAL is wiped from MAPPED and rebuilt from these records
+	// every tick, so no stale circle can survive a frame.
 	contacts := make([]render.MinimapContact, 0, len(cur.Radar.Contacts))
 	regularArt := make([]*formats.GAFFrame, 0, len(cur.Radar.Contacts))
 	commanderArt := make([]*formats.GAFFrame, 0, len(cur.Radar.Contacts))
@@ -793,10 +783,9 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 		if published.Kind != frame.RadarContactUnit {
 			continue
 		}
-		// Range circles belong to the selected/range-status branch. An active
-		// unit contributes its authored circles; an on/off-capable unit must also
-		// be active. Unselected units never inherit circles from their blip [03
-		// §3.9].
+		// The selected-unit circle gate [03 §3.9]. Only a selected unit's
+		// authored distances reach layer 4, and an on/off-capable one must also
+		// be active; the publisher folded both terms before the frame boundary.
 		rangeCircles := radarContactRangeEnabled(published)
 		contact := render.MinimapContact{
 			WorldX:      radarMapPixel(published.X),
@@ -804,10 +793,9 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 			WorldY:      radarMapPixel(published.Y),
 			Owner:       published.Owner,
 			IsCommander: published.Commander, Stealth: published.Stealth,
-			// The renderer's NoRadar slot carries the reviewed selected-unit
-			// circle gate: an on/off-capable unit contributes its authored range only
-			// while active. Cloak is kept separate for the blip blink gate [03 §3.9].
-			NoRadar: !rangeCircles, Status: published.Status,
+			// RangeStatus is the selected-unit circle gate; Stealth stays separate
+			// because it is a blip-blink term, not a circle term [03 §3.9].
+			RangeStatus: rangeCircles, Status: published.Status,
 			BlinkSuppress: published.BlinkSuppress, Visible: published.Visible,
 			LocalPlayer:  cur.Selection.LocalPlayer,
 			RawDistRadar: published.RadarDistance, RawDistSonar: published.SonarDistance,
@@ -832,7 +820,7 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 			ringContact := render.MinimapContact{
 				WorldX: contact.WorldX, WorldZ: contact.WorldZ, WorldY: contact.WorldY,
 				Owner: contact.Owner, Status: contact.Status, Stealth: contact.Stealth,
-				NoRadar: contact.NoRadar, BlinkSuppress: contact.BlinkSuppress,
+				RangeStatus: contact.RangeStatus, BlinkSuppress: contact.BlinkSuppress,
 				Visible: contact.Visible, LocalPlayer: contact.LocalPlayer, MinimapMode: 1,
 				RingEnabled: ring.Enabled, RingDashed: ring.Dashed, RingRange: ring.Range,
 			}
@@ -1409,6 +1397,33 @@ func commandPageIsPaged(f *frame.Frame) bool {
 	return hud.IsPaged(builder.Flags)
 }
 
+// buildButtonPage is the build page a BUILD click selects. Selecting page 0
+// clears the page-shown bit and leaves the page field alone [07 §9], so that
+// field still names the build page the builder was last on and setting the bit
+// again brings that page back.
+//
+// TODO(question): which page a BUILD click selects for a builder whose page
+// field is still 0 — one that has never left the orders page — is not
+// established. [07 R-HUD-03 §6] gives the field's persistence and the stage the
+// button reads, but not the click's own producer, and with the bit set over a
+// zero field retail composes "<internal name>0.GUI", the word-A bit-31 branch
+// no stock unit reaches. Page 1 stands in here because it is where both
+// established forward moves out of page 0 land — the `.` key and the NEXT
+// gadget [07 R-HUD-03 §6]. Tracing the BUILD gadget's handler settles it.
+func buildButtonPage(f *frame.Frame) int {
+	if f == nil || f.CommandPage.Builder == 0 {
+		return 0
+	}
+	remembered := 0
+	if builder, found := snapshotUnitByHandle(f, f.CommandPage.Builder); found {
+		remembered = hud.RememberedPage(builder.Flags)
+	}
+	if remembered <= 0 || remembered >= int(f.CommandPage.PageCount) {
+		return 1
+	}
+	return remembered
+}
+
 // commandGadgetVerdict resolves one authored gadget against the command-button
 // stage and grey table [07 R-HUD-03 §6]. It is the single decision the painter,
 // the pointer pass and the click path all consult, so what a button looks like
@@ -1670,29 +1685,56 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 		}
 		upperName := strings.ToUpper(gad.Name)
 		upperText := strings.ToUpper(gad.Text)
-		// Page navigation data-driven [R-P0-03][07 §9] C10
+		// BUILD and ORDERS are the two halves of the page-shown bit: they stage
+		// from it and from its inverse [07 R-HUD-03 §6], and clicking one sets
+		// the state its stage names. ORDERS selects page 0, which is what clears
+		// the bit; BUILD selects a build page, which is what sets it.
+		if isCommand {
+			switch commandButtonName(gad.Name) {
+			case "ORDERS":
+				if rightClick {
+					return true
+				}
+				_ = b.DispatchBuildPage(0)
+				return true
+			case "BUILD":
+				if rightClick {
+					return true
+				}
+				_ = b.DispatchBuildPage(buildButtonPage(f))
+				return true
+			}
+		}
+		// Page navigation. The NEXT and PREV gadgets are the two rows of the
+		// page cycle that never return to page 0 [07 R-HUD-03 §6]; the target is
+		// computed from the committed page and dispatched as an absolute page,
+		// so the cycle's wrap lives in one place [I6].
+		nextPage := hud.NextPageButton(int(f.CommandPage.Page), int(f.CommandPage.PageCount))
+		prevPage := hud.PrevPageButton(int(f.CommandPage.Page), int(f.CommandPage.PageCount))
 		if strings.Contains(upperName, "NEXTPAGE") || strings.Contains(upperName, "NEXT") && strings.Contains(upperName, "PAGE") || strings.Contains(upperName, "PAGEDOWN") {
 			if rightClick {
 				return true
 			}
-			b.nextBuildPage()
+			_ = b.DispatchBuildPage(nextPage)
 			return true
 		}
 		if strings.Contains(upperName, "PREVPAGE") || strings.Contains(upperName, "PREV") && strings.Contains(upperName, "PAGE") || strings.Contains(upperName, "PAGEUP") {
 			if rightClick {
 				return true
 			}
-			b.prevBuildPage()
+			_ = b.DispatchBuildPage(prevPage)
 			return true
 		}
 		if strings.Contains(upperName, "NEXT") || strings.Contains(upperText, "NEXT") {
 			if rightClick {
 				return true
 			}
-			// Generic NEXT is active only when the committed page has another
-			// page [07 §9].
+			// PREV and NEXT are deactivated outright after a page opens when the
+			// page-count byte is below 2 [07 R-HUD-03 §6]. With page 0 counted,
+			// a builder that has any authored page has a count of at least 2, so
+			// the test only ever refuses a builder with no build page at all.
 			if f.CommandPage.PageCount > 1 {
-				b.nextBuildPage()
+				_ = b.DispatchBuildPage(nextPage)
 				return true
 			}
 		}
@@ -1701,7 +1743,7 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 				return true
 			}
 			if f.CommandPage.PageCount > 1 {
-				b.prevBuildPage()
+				_ = b.DispatchBuildPage(prevPage)
 				return true
 			}
 		}
@@ -1944,41 +1986,58 @@ func (h *retailBattleHUD) windowForRequired(b *battleSession, f *frame.Frame) (*
 		// display GEN for stale/malformed builder state [07 §9].
 		return nil, nil, nil
 	}
-	// Divergence, stated rather than papered over. Retail's switch reads the
-	// builder's page-shown bit first: page 0 with that bit clear is the *orders*
-	// state and opens "%sGEN.GUI" from the side's nameprefix, and only a page
-	// N >= 1 composes "%s%d.GUI" — ARMCOM1.GUI is page 1 [07 R-HUD-03 §6]. (Page
-	// 0 can also compose a page window when the definition's word A bit 31 is
-	// set, which is written by probing guis/<internal name>0.GUI at definition
-	// load; the reference install ships no such file for any unit, so stock
-	// content never takes that branch and none is written here.)
-	//
-	// The switch below opens a page for every selected builder, so a builder
-	// whose bit is clear shows its first build page while ORDERS stages as the
-	// selected half of the pair — the inconsistency report 6 saw. It cannot be
-	// corrected here alone: the committed page state has no slot for the orders
-	// page. `CommandPage.PageCount` is published as the number of authored build
-	// pages and `Page` as a 0-based index into them, with the products for index
-	// p published as build-menu entries p*6..p*6+5, so the unpaged state has to
-	// double as build page 1 and a builder with a single page (every factory)
-	// has no other reachable state at all. Retail's convention is the one its own
-	// digit rule implies — "digit d selects page d-1" [07 R-HUD-03 §6], which
-	// `hud.DigitToPage` already implements — namely page-count = authored pages +
-	// 1, page 0 the orders window, page N the entries (N-1)*6..N*6-1. Moving the
-	// published page state onto that convention is a change to
-	// internal/session/publish.go, which this unit does not own; the switch here
-	// is one line once it lands.
+	// The switch reads the builder's page-shown bit first: page 0 — that bit
+	// clear — is the orders state and opens the side's "%sGEN.GUI", and only a
+	// page N >= 1 composes "%s%d.GUI" from the builder's internal name, so
+	// ARMCOM1.GUI is page 1 [07 R-HUD-03 §6]. The published page count is the
+	// maximum authored page plus one and page N carries entries (N-1)*6..N*6-1,
+	// so both halves of the pair are reachable and every factory keeps a build
+	// page. Before that count landed the orders state had no slot of its own and
+	// this switch opened a page for every builder, which is why ORDERS drew
+	// selected over a build page.
 	def, ok := h.defFor(&view)
 	if !ok || def == nil || !def.Builder {
 		return nil, nil, nil
 	}
-	pageNum := hud.ClampPage(int(f.CommandPage.Page), int(f.CommandPage.PageCount))
-	name = strings.ToLower(def.UnitName) + fmt.Sprintf("%d", pageNum+1)
+	// Page 0 can also compose a page window, when the definition's word A bit 31
+	// is set — written at definition load by probing guis/<internal name>0.GUI
+	// [07 R-HUD-03 §6]. A census of the reference install's 375 guis/ entries
+	// finds no such file (WU-17-13), so stock content never reaches that branch
+	// and none is written here; a page-shown bit with a zero page field takes the
+	// orders window instead of composing "<name>0.GUI".
+	paged, pageNum := commandPageIsPaged(f), int(f.CommandPage.Page)
+	name = commandWindowName(sideNamePrefix(h.side), def.UnitName, paged, pageNum)
+	if !paged || pageNum == 0 {
+		window, page := h.loadWindow(name)
+		return window, page, nil
+	}
 	window, page, err := h.loadWindowRequired(name)
 	if err != nil {
 		return nil, nil, err
 	}
 	return window, page, nil
+}
+
+// sideNamePrefix is the side's authored nameprefix, the "%s" of "%sGEN.GUI"
+// [07 R-HUD-03 §6]. A HUD built without a side resolves the bare name, which is
+// what the empty-selection path above already does.
+func sideNamePrefix(side *content.SideDef) string {
+	if side == nil {
+		return ""
+	}
+	return side.NamePrefix
+}
+
+// commandWindowName composes the window the command switch opens for a selected
+// builder [07 R-HUD-03 §6]. With the page-shown bit clear — page 0, the orders
+// state — that is the side's "%sGEN.GUI"; with it set, "%s%d.GUI" from the
+// builder's own internal name and the page number, so page 1 is ARMCOM1.GUI.
+// The returned name carries no extension: the loader appends it.
+func commandWindowName(namePrefix, unitName string, paged bool, page int) string {
+	if !paged || page <= 0 {
+		return strings.ToLower(namePrefix) + "gen"
+	}
+	return fmt.Sprintf("%s%d", strings.ToLower(unitName), page)
 }
 
 func (h *retailBattleHUD) loadWindow(name string) (*gui.Window, *formats.GAF) {

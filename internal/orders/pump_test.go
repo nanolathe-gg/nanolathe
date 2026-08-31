@@ -32,7 +32,7 @@ func TestQueueOfUnitDoesNotAllocate(t *testing.T) {
 	}
 }
 
-func setHandler(id ID, fn func(u *units.Unit, n *Node, satisfied uint32) Code) func() {
+func setHandler(id ID, fn func(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code) func() {
 	prev := DescriptorFor(id).Handler
 	table[int(id)].Handler = fn
 	return func() { table[int(id)].Handler = prev }
@@ -65,7 +65,7 @@ func TestPumpResultCodes(t *testing.T) {
 		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
 		calls := 0
-		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code {
+		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 			calls++
 			if calls == 1 {
 				n.Phase = 5
@@ -92,7 +92,7 @@ func TestPumpResultCodes(t *testing.T) {
 		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
 		calls := 0
-		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code {
+		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 			calls++
 			if calls == 1 {
 				return Code(1)
@@ -115,7 +115,7 @@ func TestPumpResultCodes(t *testing.T) {
 		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
 		calls := 0
-		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code {
+		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 			calls++
 			if calls == 1 {
 				return Code(2)
@@ -137,7 +137,7 @@ func TestPumpResultCodes(t *testing.T) {
 		rng.SeedGlobal(42, 0)
 		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
-		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(3) })
+		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return Code(3) })
 		defer restore()
 		q.Push(moveID, Node{})
 		clearGates(q)
@@ -158,7 +158,7 @@ func TestPumpResultCodes(t *testing.T) {
 		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
 		calls := 0
-		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code {
+		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 			calls++
 			if calls == 1 {
 				return Code(4)
@@ -179,7 +179,7 @@ func TestPumpResultCodes(t *testing.T) {
 	t.Run("code5", func(t *testing.T) {
 		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
-		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(5) })
+		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return Code(5) })
 		defer restore()
 		q.Push(moveID, Node{})
 		clearGates(q)
@@ -191,7 +191,7 @@ func TestPumpResultCodes(t *testing.T) {
 	t.Run("code6 primary", func(t *testing.T) {
 		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
-		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code {
+		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 			if n.Param1 == 1 {
 				return Code(6)
 			}
@@ -212,7 +212,7 @@ func TestPumpResultCodes(t *testing.T) {
 		// Use separate restore for second case
 		q2 := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		calls2 := map[uint32]int{}
-		restore2 := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code {
+		restore2 := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 			c := calls2[n.Param1]
 			calls2[n.Param1]++
 			if n.Param1 == 1 && c == 0 {
@@ -239,7 +239,7 @@ func TestPumpResultCodes(t *testing.T) {
 	t.Run("code6 secondary", func(t *testing.T) {
 		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
-		restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32) Code { return Code(6) })
+		restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return Code(6) })
 		defer restore()
 		q.PushSecondary(buildID, Node{})
 		q.PushSecondary(buildID, Node{})
@@ -252,7 +252,7 @@ func TestPumpResultCodes(t *testing.T) {
 	t.Run("code7 cancel all", func(t *testing.T) {
 		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
-		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(7) })
+		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return Code(7) })
 		defer restore()
 		q.Push(moveID, Node{})
 		q.Push(moveID, Node{})
@@ -266,9 +266,9 @@ func TestPumpResultCodes(t *testing.T) {
 	t.Run("code7 secondary", func(t *testing.T) {
 		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
-		restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32) Code { return Code(7) })
+		restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return Code(7) })
 		defer restore()
-		restore2 := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(3) })
+		restore2 := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return Code(3) })
 		defer restore2()
 		q.PushSecondary(buildID, Node{})
 		q.PushSecondary(buildID, Node{})
@@ -279,7 +279,7 @@ func TestPumpResultCodes(t *testing.T) {
 		// Our primary handler returns 3 which sets waiting and returns, so pumpPrimary returns and secondary not dispatched
 		// To test secondary 7, we need primary to be empty or not blocked
 		// So use primary with handler that returns 5 to remove itself
-		table[int(moveID)].Handler = func(u *units.Unit, n *Node, s uint32) Code { return Code(5) }
+		table[int(moveID)].Handler = func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return Code(5) }
 		q2 := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		q2.PushSecondary(buildID, Node{})
 		q2.PushSecondary(buildID, Node{})
@@ -293,7 +293,7 @@ func TestPumpResultCodes(t *testing.T) {
 	t.Run("code8", func(t *testing.T) {
 		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
-		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(8) })
+		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return Code(8) })
 		defer restore()
 		q.Push(moveID, Node{})
 		clearGates(q)
@@ -306,7 +306,7 @@ func TestPumpResultCodes(t *testing.T) {
 		rng.SeedGlobal(99, 0)
 		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
-		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(9) })
+		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return Code(9) })
 		defer restore()
 		q.Push(moveID, Node{Phase: 5})
 		clearGates(q)
@@ -325,7 +325,7 @@ func TestPumpResultCodes(t *testing.T) {
 	t.Run("code9 not last", func(t *testing.T) {
 		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
-		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(9) })
+		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return Code(9) })
 		defer restore()
 		q.Push(moveID, Node{Param1: 1})
 		q.Push(moveID, Node{Param1: 2})
@@ -344,7 +344,7 @@ func TestPumpResultCodes(t *testing.T) {
 		// Whole-queue cancel is exclusively code 7 [P0-08] A09.
 		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
-		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(12) })
+		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return Code(12) })
 		defer restore()
 		q.Push(moveID, Node{Param1: 1})
 		q.Push(moveID, Node{Param1: 2})
@@ -370,7 +370,7 @@ func TestPumpResultCodes(t *testing.T) {
 	t.Run("code >9 single vs code7 cancel-all", func(t *testing.T) {
 		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
-		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(7) })
+		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return Code(7) })
 		defer restore()
 		q.Push(moveID, Node{Param1: 1})
 		q.Push(moveID, Node{Param1: 2})
@@ -395,7 +395,7 @@ func TestPumpBlockedHeadStalls(t *testing.T) {
 	q.primary[0].DynamicGate = 0x400
 	q.primary[0].Satisfied = 0
 	called := false
-	restore := setHandler(patrolID, func(u *units.Unit, n *Node, s uint32) Code {
+	restore := setHandler(patrolID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 		called = true
 		return Code(2)
 	})
@@ -403,7 +403,7 @@ func TestPumpBlockedHeadStalls(t *testing.T) {
 	q.Push(patrolID, Node{})
 	q.primary[1].DynamicGate = 0
 	q.primary[1].Satisfied = 0
-	restore2 := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code {
+	restore2 := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 		t.Fatalf("blocked head handler should not run")
 		return Code(2)
 	})
@@ -416,10 +416,10 @@ func TestPumpBlockedHeadStalls(t *testing.T) {
 		t.Fatalf("blocked head should remain len 2 got %d", len(q.primary))
 	}
 	u.Pending |= 0x400
-	table[int(moveID)].Handler = func(u *units.Unit, n *Node, s uint32) Code { return Code(5) }
+	table[int(moveID)].Handler = func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return Code(5) }
 	defer func() { table[int(moveID)].Handler = nil }()
 	// Make patrol head not spin after promotion: return waiting
-	table[int(patrolID)].Handler = func(u *units.Unit, n *Node, s uint32) Code { return Code(3) }
+	table[int(patrolID)].Handler = func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return Code(3) }
 	q.Pump(u, 11)
 	if len(q.primary) != 1 {
 		t.Fatalf("after satisfying, head should be removed len %d", len(q.primary))
@@ -435,7 +435,7 @@ func TestDeadline(t *testing.T) {
 	q.primary[0].DynamicGate = 1
 	q.primary[0].Satisfied = 0
 	calls := 0
-	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code {
+	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 		calls++
 		if calls == 1 {
 			if s&1 == 0 {
@@ -579,7 +579,7 @@ func TestSecondarySkipsNotDue(t *testing.T) {
 		{ID: buildID, DynamicGate: 0, Deadline: -1, Flags: 0},
 	}
 	called := 0
-	restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32) Code {
+	restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 		called++
 		return Code(2)
 	})
@@ -596,7 +596,7 @@ func TestCascadeUntilWaiting(t *testing.T) {
 	u := newTestUnit()
 	moveID := Lookup("Move_Ground")
 	calls := 0
-	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code {
+	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 		calls++
 		if calls <= 2 {
 			return Code(1)
@@ -631,12 +631,12 @@ func TestBlockedFrontSkipsSecondary(t *testing.T) {
 	q.primary[0].DynamicGate = 0x400
 	q.secondary = []*Node{{ID: buildID, DynamicGate: 0, Deadline: -1}}
 	secondaryCalled := false
-	restore2 := setHandler(buildID, func(u *units.Unit, n *Node, s uint32) Code {
+	restore2 := setHandler(buildID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 		secondaryCalled = true
 		return Code(2)
 	})
 	defer restore2()
-	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code {
+	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 		t.Fatalf("blocked head should not be dispatched")
 		return Code(2)
 	})
@@ -655,7 +655,7 @@ func TestCode7CleansSecondary(t *testing.T) {
 	u := newTestUnit()
 	moveID := Lookup("Move_Ground")
 	buildID := Lookup("BuildWeapon")
-	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(7) })
+	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return Code(7) })
 	defer restore()
 	q.Push(moveID, Node{})
 	sec1 := &Node{ID: buildID, Param1: 1}
@@ -733,25 +733,45 @@ func TestDropLeadingAutoOps(t *testing.T) {
 	}
 }
 
-func TestNilHandlerDiagnostic(t *testing.T) {
-	q := &Queue{}
+// TestNilHandlerParksInsteadOfJamming locks the missing-handler arm. A
+// descriptor with no handler is a Nanolathe gap, and the pump's answer to it is
+// the result-code table's wait, code 3: the record is kept — the air executors
+// run off a parked head — the walk stops, and the record comes back after
+// 30..44 ticks [04 §3.3]. What it must never do is spin (a diagnostic per tick
+// and a permanently dispatchable head) or free the player's order.
+func TestNilHandlerParksInsteadOfJamming(t *testing.T) {
+	rng.SeedGlobal(1, 0)
+	q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	u := newTestUnit()
-	// Use a non-move order so the synthetic move wait [P0-I03] does not interfere.
-	nilID := Lookup("Stop")
-	if nilID == 0 {
-		nilID = Lookup("Activate")
+	// Cloak_On has no handler and no ensure* installer that would reinstate
+	// one, so this exercises the arm rather than a temporarily blanked entry.
+	nilID := Lookup("Cloak_On")
+	if DescriptorFor(nilID).Handler != nil {
+		t.Skip("Cloak_On now has a handler; pick another handler-less descriptor")
 	}
-	orig := DescriptorFor(nilID).Handler
-	table[int(nilID)].Handler = nil
-	defer func() { table[int(nilID)].Handler = orig }()
 	q.Push(nilID, Node{})
 	clearGates(q)
 	q.Pump(u, 10)
-	if len(q.Diagnostics()) == 0 {
-		t.Fatalf("nil handler should record diagnostic")
+	if len(q.Diagnostics()) != 1 {
+		t.Fatalf("nil handler diagnostics = %d, want exactly one per park: %v", len(q.Diagnostics()), q.Diagnostics())
 	}
 	if len(q.primary) != 1 {
-		t.Fatalf("nil handler should not remove node")
+		t.Fatalf("nil handler should not remove the record, primary=%d", len(q.primary))
+	}
+	head := q.primary[0]
+	if head.DynamicGate != 1 {
+		t.Fatalf("parked gate = %#x, want the code-3 lowest gate bit [04 §3.3]", head.DynamicGate)
+	}
+	if head.Deadline < 40 || head.Deadline > 54 {
+		t.Fatalf("parked deadline = %d, want tick 10 + 30..44 [04 §3.3]", head.Deadline)
+	}
+	// The record is not re-dispatched while it waits: no second diagnostic and
+	// no unbounded growth over a run of ticks inside the wait.
+	for tick := uint32(11); tick < uint32(head.Deadline); tick++ {
+		q.Pump(u, tick)
+	}
+	if len(q.Diagnostics()) != 1 {
+		t.Fatalf("the parked record was re-dispatched during its wait: %v", q.Diagnostics())
 	}
 }
 
@@ -761,7 +781,7 @@ func TestSC8_RNG15_30_44(t *testing.T) {
 	rng.SeedGlobal(1, 0)
 	q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	u := newTestUnit()
-	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(3) })
+	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return Code(3) })
 	defer restore()
 	q.Push(moveID, Node{})
 	clearGates(q)
@@ -777,7 +797,7 @@ func TestSC8_RNG15_30_44(t *testing.T) {
 	rng.SeedGlobal(99, 0)
 	q2 := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	u2 := newTestUnit()
-	restore2 := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(9) })
+	restore2 := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return Code(9) })
 	defer restore2()
 	q2.Push(moveID, Node{Phase: 5})
 	clearGates(q2)
@@ -833,7 +853,7 @@ func TestMoveGroundArrivalPumpTransition(t *testing.T) {
 	// Pump should halt (not call handler) while combined==0
 	called := false
 	orig := DescriptorFor(moveID).Handler
-	table[int(moveID)].Handler = func(u *units.Unit, n *Node, s uint32) Code { called = true; return 9 }
+	table[int(moveID)].Handler = func(u *units.Unit, n *Node, s uint32, tick uint32) Code { called = true; return 9 }
 	defer func() { table[int(moveID)].Handler = orig }()
 	q2.Pump(u, 20)
 	if called {
@@ -844,7 +864,7 @@ func TestMoveGroundArrivalPumpTransition(t *testing.T) {
 	}
 	// Now set bit and ensure handler called and returns 5
 	q2.primary[0].Satisfied |= 0x20
-	table[int(moveID)].Handler = func(u *units.Unit, n *Node, s uint32) Code {
+	table[int(moveID)].Handler = func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 		if s&0x20 == 0 {
 			t.Fatalf("combined should contain 0x20")
 		}
@@ -918,7 +938,7 @@ func TestOrderGuardFloat(t *testing.T) {
 	// unsatisfied gate: the record stays queued (mid-order) and the walk
 	// stops on the blocked head [04 §3.3] step 3 — no iteration cap exists
 	// to rescue a continue-code loop (ORD-02).
-	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code {
+	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 		n.DynamicGate = 0x400
 		return Code(2)
 	})
@@ -964,7 +984,7 @@ func TestMobileBuildBlockedAreaBudget(t *testing.T) {
 	}
 	var visits []visit
 	visitTick := uint32(0)
-	restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32) Code {
+	restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 		text, code := MobileBuildBlockedVisit(n, visitTick)
 		visits = append(visits, visit{tick: visitTick, text: text, code: code, counter: n.Param3})
 		if code == 2 && n.Deadline != int32(visitTick+MobileBuildBlockedWaitTicks) {
@@ -1059,7 +1079,7 @@ func TestSecondaryPumpDeliversEmptySatisfiedSet(t *testing.T) {
 	u := newTestUnit()
 	u.Pending = 0x2 // capability word holds bits: the secondary dispatch must not consume them
 	var got []uint32
-	restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32) Code {
+	restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 		got = append(got, s)
 		return 2
 	})
@@ -1093,7 +1113,7 @@ func TestSecondaryPumpDeliversEmptySatisfiedSet(t *testing.T) {
 	if selfID == 0 {
 		t.Fatalf("lookup SelfDestruct")
 	}
-	restoreSelf := setHandler(selfID, func(u *units.Unit, n *Node, s uint32) Code {
+	restoreSelf := setHandler(selfID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 		got = append(got, s)
 		return 2
 	})
@@ -1116,5 +1136,80 @@ func TestSecondaryPumpDeliversEmptySatisfiedSet(t *testing.T) {
 	q.Pump(u, probeTick)
 	if len(got) != 1 || got[0] != 0 {
 		t.Fatalf("empty-gate dispatch satisfied %v, want [0]", got)
+	}
+}
+
+// TestPumpPassesItsTickToEveryHandler locks WU-18-7's seam: the primary walk
+// hands the tick it is running to the descriptor handler, and the rear-segment
+// walk does the same, so a handler's deadline setter can store "current tick +
+// n" [04 R-ORD-01 §1]. Before this, only four descriptors reached a tick, each
+// through a by-name special case in pumpPrimary, and every other row measured
+// its wait from `Queue.SecondaryTick` — a base the primary walk never wrote.
+//
+// The relationship asserted is the identity of the two ticks, on a
+// FRONT-segment record (`Wait`, static mask 0x4) and a rear-segment one
+// (`BuildWeapon`, static mask 0xc0140, bit 18 selects the rear segment
+// [04 §3.1]), for a tick that is neither zero nor a queue field's stale value.
+func TestPumpPassesItsTickToEveryHandler(t *testing.T) {
+	const tick = 4711
+	for _, name := range []string{"Wait", "BuildWeapon"} {
+		id := Lookup(name)
+		if id == 0 {
+			t.Fatalf("%s is not in the descriptor table", name)
+		}
+		q, u := gateFixture()
+		seen := int64(-1)
+		restore := setHandler(id, func(_ *units.Unit, _ *Node, _ uint32, got uint32) Code {
+			seen = int64(got)
+			return Code(5) // complete: leave nothing behind for the next case
+		})
+		if isSecondary(id) {
+			q.PushSecondary(id, Node{Owner: u.Handle})
+		} else {
+			q.Push(id, Node{Owner: u.Handle})
+		}
+		q.Pump(u, tick)
+		restore()
+		if seen != tick {
+			t.Fatalf("%s handler saw tick %d, want the pump's own %d", name, seen, tick)
+		}
+	}
+}
+
+// TestArmedDeadlineIsMeasuredFromThePumpTick is the same seam stated as the
+// behavior it exists for: a front-segment handler that arms `deadline n`
+// [04 R-ORD-01 §1] produces `pump tick + n`, and the record is then blocked on
+// gate bit 0 until that tick [04 §3.3] steps 1 and 3 — not before it.
+func TestArmedDeadlineIsMeasuredFromThePumpTick(t *testing.T) {
+	const tick = 900
+	const wait = 17
+	id := Lookup("Wait")
+	if id == 0 {
+		t.Fatal("Wait is not in the descriptor table")
+	}
+	q, u := gateFixture()
+	visits := 0
+	restore := setHandler(id, func(_ *units.Unit, n *Node, _ uint32, got uint32) Code {
+		visits++
+		armDeadline(n, got, wait)
+		return Code(2) // hold: the walk continues and re-reads this same head
+	})
+	defer restore()
+	q.Push(id, Node{Owner: u.Handle})
+	q.Pump(u, tick)
+	if visits != 1 {
+		t.Fatalf("handler ran %d times in one pump, want 1: an armed deadline must block the walk [04 §3.3]", visits)
+	}
+	n := q.Primary()[0]
+	if n.Deadline != tick+wait || n.DynamicGate&1 == 0 {
+		t.Fatalf("deadline = %d gate = %#x, want %d with gate bit 0 [04 R-ORD-01 §1]", n.Deadline, n.DynamicGate, tick+wait)
+	}
+	q.Pump(u, tick+wait-1)
+	if visits != 1 {
+		t.Fatalf("handler ran again at tick %d, before its deadline %d", tick+wait-1, n.Deadline)
+	}
+	q.Pump(u, tick+wait)
+	if visits != 2 {
+		t.Fatalf("handler ran %d times, want a second visit once the deadline arrived [04 §3.3]", visits)
 	}
 }

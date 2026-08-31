@@ -1,10 +1,12 @@
 package session
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
@@ -109,4 +111,77 @@ func TestPublishSnapshotFoldsDisagreeingOnOffSelection(t *testing.T) {
 	if got := s.Snapshot.Current().CommandPage.OnOffState; got != 3 {
 		t.Fatalf("not-applicable on/off aggregate = %d, want 3", got)
 	}
+}
+
+// The published page model [07 R-HUD-03 §6]: page 0 is the orders state and
+// carries no products, the page-count byte is the maximum authored build page
+// plus one, and page N carries the authored entries (N-1)*6..N*6-1. A commander
+// with nineteen products has four authored pages and a count of five; a factory
+// with one authored page still has a count of two, so BUILD has somewhere to go.
+func TestPublishedCommandPageCountsTheOrdersPage(t *testing.T) {
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{}, BuildMenus: map[string]*content.BuildMenuPage{}}
+	newBuilder := func(key string, products int) []string {
+		def := &content.UnitDef{UnitName: key, Builder: true, MaxDamage: 100}
+		def.CanonicalKey = key
+		cat.Units[key] = def
+		buttons := make([]string, products)
+		for i := range buttons {
+			buttons[i] = fmt.Sprintf("%s-p%d", key, i+1)
+		}
+		cat.BuildMenus[key] = &content.BuildMenuPage{Buttons: buttons}
+		return buttons
+	}
+	commanderProducts := newBuilder("commander", 19)
+	factoryProducts := newBuilder("factory", 4)
+
+	publish := func(key string, page int) *frame.CommandPageView {
+		w := newSessionFixtureWorld(8, cat)
+		h, err := w.Create(cat.Units[key], 0, 0, 0, 0)
+		if err != nil {
+			t.Fatalf("create %s: %v", key, err)
+		}
+		w.Unit(h).Flags = 0x10 | hud.EncodePageBits(0, page)
+		s := &Session{Units: w, Catalog: cat, LocalOwner: 0, Snapshot: frame.NewBuffer()}
+		s.publishSnapshot(1)
+		cur := s.Snapshot.Current()
+		if cur == nil {
+			t.Fatalf("%s published no frame", key)
+		}
+		return &cur.CommandPage
+	}
+	sameKeys := func(t *testing.T, got, want []string) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Fatalf("page products = %v, want %v", got, want)
+		}
+		for i := range got {
+			if got[i] != want[i] {
+				t.Fatalf("page products = %v, want %v", got, want)
+			}
+		}
+	}
+
+	orders := publish("commander", 0)
+	if orders.PageCount != 5 {
+		t.Fatalf("commander page count = %d, want 4 authored pages plus the orders page", orders.PageCount)
+	}
+	if orders.Page != 0 || len(orders.ProductKeys) != 0 {
+		t.Fatalf("commander orders page = %d with products %v, want page 0 and none", orders.Page, orders.ProductKeys)
+	}
+	first := publish("commander", 1)
+	if first.Page != 1 {
+		t.Fatalf("commander build page = %d, want 1", first.Page)
+	}
+	sameKeys(t, first.ProductKeys, commanderProducts[0:6])
+	last := publish("commander", 4)
+	sameKeys(t, last.ProductKeys, commanderProducts[18:19])
+
+	plant := publish("factory", 0)
+	if plant.PageCount != 2 {
+		t.Fatalf("factory page count = %d, want its one authored page plus the orders page", plant.PageCount)
+	}
+	if len(plant.ProductKeys) != 0 {
+		t.Fatalf("factory orders page carried %v, want no products", plant.ProductKeys)
+	}
+	sameKeys(t, publish("factory", 1).ProductKeys, factoryProducts)
 }

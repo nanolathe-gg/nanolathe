@@ -207,6 +207,32 @@ null sequence with no message.
   into solid rectangles of palette 9 (bright blue, `84,84,252`) and fills every
   sight shape to its bounding box. The handful of stray key pixels elsewhere
   (4-8 per file in a few unit textures) is noise.
+- **A correct decode of the interface side panels looks like coloured static.
+  Established 2026-08-30 (WU-17-12).** The panel entries of the side interface
+  GAFs (`anims/ARMINT.GAF` `PANELSIDE` and `PANELSIDE2`, both 129×480, RLE) are
+  authored as a per-pixel dither drawn almost entirely from the *darkest* entry
+  of many different palette ramps — `PALETTE.PAL` is 16 ramps of 16 shades,
+  bright at `base+0` and darkest at `base+15`, and roughly 90% of the panel's
+  pixels are a `base+15` index (`159`, `95`, `63`, `143`, `47`, `127` …, 41
+  distinct indexes in all, every one of them under RGB `(23,19,39)`). Decoded
+  and rendered at 1:1 the panel is near-black with a faint mottled texture;
+  brightened, it is dense multi-hue noise. **This is the art, not a decode
+  defect** — three independent checks:
+  1. The RLE stream is exactly self-consistent. All 480 rows decode to exactly
+     129 pixels and consume their payload to the byte, and the last row ends
+     precisely at the next frame's `data_offset`. A misread stream cannot land
+     on the width 480 times in a row.
+  2. `PANELSIDE2` — same file, same size, same RLE path, decoded by the same
+     code — resolves under the same dither to a clean, coherent ARM diamond
+     emblem with unbroken diagonal highlight strokes. A row-stride or
+     run-length error would shear that emblem; it does not.
+  3. Retail's own rendering of the panel background uses exactly this index
+     set, in the same rank order (`159` most common, then `95`, `63`, `143`,
+     `47`, `127`), and none of it is brighter than the values above.
+  A reader that "fixes" this into something that looks like a metal panel has
+  invented art. The engine draws the widgets — minimap frame, order and build
+  buttons — *over* this background; a HUD showing bare dark static is missing
+  those widgets, not mis-decoding the panel.
 - Controlled retail model probes establish that a 10-frame `LOGOS.GAF`
   entry stores ten complete player-specific indexed textures: select frame
   *n* for player *n*, sample that frame's indexes, then apply the model's

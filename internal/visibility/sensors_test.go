@@ -7,54 +7,41 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// recordingSurfaces captures what the sensor phase rasterizes.
-type recordingSurfaces struct {
-	wipes    int
-	sensor   [][3]int32
-	radarJam [][3]int32
-	sonarJam [][3]int32
-}
-
-func (r *recordingSurfaces) Wipe()                  { r.wipes++ }
-func (r *recordingSurfaces) Sensor(u, v, rad int32) { r.sensor = append(r.sensor, [3]int32{u, v, rad}) }
-func (r *recordingSurfaces) RadarJam(u, v, rad int32) {
-	r.radarJam = append(r.radarJam, [3]int32{u, v, rad})
-}
-func (r *recordingSurfaces) SonarJam(u, v, rad int32) {
-	r.sonarJam = append(r.sonarJam, [3]int32{u, v, rad})
-}
-
-// TestSensorTickRequiresTwoPlayers locks C12's outermost gate.
+// TestSensorTickRequiresTwoPlayers locks C12's outermost gate. The phase's
+// only observable output is the status bits it writes plus the per-unit
+// snapshot it publishes, so the snapshot is what tells the two apart
+// [R-VIS-01 §4] "Gate".
 func TestSensorTickRequiresTwoPlayers(t *testing.T) {
 	s := newTestService(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled)
-	surf := &recordingSurfaces{}
-	s.SetSurfaces(surf)
 	var status uint32
-	units := []SensorUnit{{Owner: 0, Status: &status, Alive: true, Active: true, RadarDistance: 100}}
+	units := []SensorUnit{{ID: 1, Owner: 0, Status: &status, Alive: true, Active: true, RadarDistance: 100}}
 
 	s.SensorTick(0, 1, nil, units)
-	if surf.wipes != 0 {
-		t.Fatal("the sensor phase ran with a single player")
+	if len(s.SensorInputs()) != 0 || status != 0 {
+		t.Fatalf("the sensor phase ran with a single player: inputs %d, status %#x", len(s.SensorInputs()), status)
 	}
 	s.SensorTick(0, 2, nil, units)
-	if surf.wipes != 1 {
-		t.Fatal("the sensor phase did not run with two players")
+	if len(s.SensorInputs()) != 1 || status&FriendlyMask == 0 {
+		t.Fatalf("the sensor phase did not run with two players: inputs %d, status %#x", len(s.SensorInputs()), status)
 	}
 }
 
-// TestSensorCirclesNeverTouchTheWordMask locks C11.
-func TestSensorCirclesNeverTouchTheWordMask(t *testing.T) {
+// TestSensorPhaseNeverTouchesTheWordMask locks C11 and, since 2026-08-30, the
+// stronger statement that replaced it: the sensor phase rasterizes nothing at
+// all. [03 §3.10]'s 2026-08-29 correction establishes that the minimap's
+// radar/sonar/jammer circles are presentation drawn by the CONTACTS pass and
+// retracts the reading that gave this phase three rasterizing callback tables;
+// [R-VIS-01 §5] establishes those callbacks are one-line status-bit writers.
+// The phase therefore has no surface of its own to write, and it still must not
+// reach the authoritative word mask.
+func TestSensorPhaseNeverTouchesTheWordMask(t *testing.T) {
 	s := newTestService(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled)
-	// The emitter is the viewing player's own unit, so it passes the contacts
-	// pass's blip gate [03 §3.9] and reaches the circle layer at all.
 	s.SetLocal(1)
-	surf := &recordingSurfaces{}
-	s.SetSurfaces(surf)
 	before := append([]uint16(nil), s.wordMask...)
 
 	var status uint32
 	units := []SensorUnit{{
-		Owner: 1, Status: &status, Alive: true, Active: true,
+		ID: 1, Owner: 1, Status: &status, Alive: true, Active: true,
 		X: tileWorld(10), Z: tileWorld(10),
 		RadarDistance: 200, SonarDistance: 500, RadarJam: 80, SonarJam: 90,
 	}}
@@ -65,91 +52,37 @@ func TestSensorCirclesNeverTouchTheWordMask(t *testing.T) {
 			t.Fatalf("the sensor phase wrote the word mask at %d", i)
 		}
 	}
-	// ONE sensor circle, at the larger of radar and sonar [03 §3.4].
-	if len(surf.sensor) != 1 {
-		t.Fatalf("emitted %d sensor circles, want 1", len(surf.sensor))
-	}
-	if surf.sensor[0][2] != 500 {
-		t.Fatalf("sensor radius %d, want 500 (the larger of 200 and 500)", surf.sensor[0][2])
-	}
-	if len(surf.radarJam) != 1 || len(surf.sonarJam) != 1 {
-		t.Fatalf("jam circles: radar %d sonar %d, want 1 each", len(surf.radarJam), len(surf.sonarJam))
+	// The snapshot carries status and identity, and nothing shaped like a
+	// circle: the authored distances stay on the unit definition, where the
+	// contacts pass reads them [03 §3.10].
+	got := s.SensorInputs()
+	if len(got) != 1 || got[0].ID != 1 || got[0].Status&FriendlyMask == 0 {
+		t.Fatalf("sensor snapshot = %+v, want one own-unit record carrying the friendly pair", got)
 	}
 }
 
-func TestSensorActiveGateAndCircleSnapshot(t *testing.T) {
-	s := newTestService(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled)
-	// Both emitters belong to the viewing player, so the blip gate of
-	// [03 §3.9] admits them and the activation bit is what is under test.
-	s.SetLocal(1)
-	surf := &recordingSurfaces{}
-	s.SetSurfaces(surf)
-	var inactiveStatus, activeStatus uint32
-	units := []SensorUnit{
-		{ID: 1, Owner: 1, Status: &inactiveStatus, Alive: true, Active: false, Hidden: true, RadarDistance: 200, RadarJam: 10},
-		{ID: 2, Owner: 1, Status: &activeStatus, Alive: true, Active: true, Hidden: true, RadarDistance: 300, SonarJam: 20},
-	}
-	s.SensorTick(4, 2, nil, units)
-	if len(surf.sensor) != 1 || surf.sensor[0][2] != 300 || len(surf.radarJam) != 0 || len(surf.sonarJam) != 1 {
-		t.Fatalf("active callback gate: outer=%v radarJam=%v sonarJam=%v", surf.sensor, surf.radarJam, surf.sonarJam)
-	}
-	circles := s.SensorCircles()
-	if len(circles) != 2 || circles[0].Radius != 300 || circles[1].Kind != 2 {
-		t.Fatalf("circle snapshot = %+v, want outer then sonar jammer", circles)
-	}
-	circles[0].Radius = 1
-	if got := s.SensorCircles()[0].Radius; got != 300 {
-		t.Fatalf("circle snapshot was not copied: got %d", got)
-	}
-}
-
-// TestSensorCirclesPassTheContactsPassBlipGate locks WU-17-5's contract: the
-// minimap's sensor circles are drawn by the contacts pass, "for each unit that
-// passes the contacts pass's gates" [03 §3.10], and that pass's gate is the
-// four-way blip disjunct of [03 §3.9]. An enemy radar tower the viewer has
-// neither detected nor sighted satisfies none of the four, so it contributes no
-// circle; the viewer's own tower satisfies the owner disjunct and contributes
-// exactly one.
-func TestSensorCirclesPassTheContactsPassBlipGate(t *testing.T) {
+// TestSensorEmissionRequiresTheActivationBit locks the emitter-side activation
+// gate of [R-VIS-01 §4] pass 2: an inactive emitter queries no contact
+// callback, so it marks nothing seen, and the same emitter after its activation
+// edge detects the enemy standing inside its authored radar distance.
+func TestSensorEmissionRequiresTheActivationBit(t *testing.T) {
 	s := newTestService(&world.Terrain{CellW: 128, CellH: 128}, ModeHistoryEnabled|ModeCurrentEnabled)
-	s.SetLocal(0)
-	surf := &recordingSurfaces{}
-	s.SetSurfaces(surf)
-
+	s.SetLocal(1)
 	var mine, theirs uint32
 	units := []SensorUnit{
-		{ID: 1, Owner: 0, Status: &mine, Alive: true, Active: true,
-			X: tileWorld(2), Z: tileWorld(2), RadarDistance: 100},
-		// Far outside the viewer's radar reach, and no observer covers it, so
-		// neither the contact callback nor the seen probe marks it.
-		{ID: 2, Owner: 1, Status: &theirs, Alive: true, Active: true,
-			X: tileWorld(50), Z: tileWorld(50), RadarDistance: 100},
+		{ID: 1, Owner: 1, Status: &mine, Alive: true, Active: false,
+			X: tileWorld(2), Z: tileWorld(2), RadarDistance: 900},
+		{ID: 2, Owner: 0, Status: &theirs, Alive: true, Hidden: true,
+			X: tileWorld(6), Z: tileWorld(6)},
 	}
-	s.SensorTick(1, 2, nil, units)
-
-	if theirs&FriendlyMask != 0 {
-		t.Fatalf("precondition: the enemy tower is detected, status %#x", theirs)
+	s.SensorTick(4, 2, nil, units)
+	if theirs&SeenBit != 0 {
+		t.Fatalf("an INACTIVE emitter detected an enemy: status %#x [R-VIS-01 §4] pass 2", theirs)
 	}
-	circles := s.SensorCircles()
-	if len(circles) != 1 {
-		t.Fatalf("emitted %d circles, want only the viewer's own [03 §3.9 blip gate]", len(circles))
-	}
-	if circles[0].SourceID != 1 || circles[0].Radius != 100 {
-		t.Fatalf("circle %+v, want the own tower's authored radius 100 [03 §3.10]", circles[0])
-	}
-	if len(surf.sensor) != 1 {
-		t.Fatalf("rasterized %d outer circles, want 1", len(surf.sensor))
-	}
-
-	// Sighting the enemy sets its seen bit, which is the gate's third
-	// disjunct, and its circle then appears.
-	s.Publish(0, 50, 50, 0, 320)
-	s.SensorTick(2, 2, nil, units)
+	units[0].Active = true
+	s.SensorTick(5, 2, nil, units)
 	if theirs&SeenBit == 0 {
-		t.Fatalf("precondition: the sighted enemy lacks the seen bit, status %#x", theirs)
-	}
-	if got := len(s.SensorCircles()); got != 2 {
-		t.Fatalf("emitted %d circles after the enemy was sighted, want 2 [03 §3.9]", got)
+		t.Fatalf("an ACTIVE emitter missed an enemy inside its authored range: status %#x", theirs)
 	}
 }
 

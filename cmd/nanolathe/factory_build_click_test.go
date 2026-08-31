@@ -91,7 +91,11 @@ func TestRetailFactoryProductClickQueuesAndBuilds(t *testing.T) {
 		}
 		u.Flags &^= hud.SelectionFlag
 		if u.Handle == labHandle {
+			// Selected and showing its first build page. Page 0 is the orders
+			// state and carries no products, so the product rail this test
+			// clicks only exists from page 1 up [07 R-HUD-03 §6].
 			u.Flags |= hud.SelectionFlag
+			u.Flags = hud.EncodePageBits(u.Flags, 1)
 		}
 	}
 	for step := int32(31); step <= 60; step++ {

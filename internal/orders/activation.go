@@ -11,12 +11,12 @@ import "github.com/nanolathe/nanolathe/internal/units"
 // The `onoffable` test is the handlers' own; a definition without it silently
 // accepts and discards the order, still reporting completion
 // [04 R-SPEC-01 §11][05 R-PROD-01 §2].
-func activateHandler(u *units.Unit, _ *Node, _ uint32) Code {
+func activateHandler(u *units.Unit, _ *Node, _ uint32, _ uint32) Code {
 	setActivationIfOnOffable(u, true)
 	return Code(5)
 }
 
-func deactivateHandler(u *units.Unit, _ *Node, _ uint32) Code {
+func deactivateHandler(u *units.Unit, _ *Node, _ uint32, _ uint32) Code {
 	setActivationIfOnOffable(u, false)
 	return Code(5)
 }

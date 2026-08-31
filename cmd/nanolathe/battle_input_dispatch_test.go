@@ -11,22 +11,36 @@ import (
 	"github.com/nanolathe/nanolathe/internal/visibility"
 )
 
+// TestStopDispatchHasNoContextualOriginOrder guards the HUD stop button
+// against dispatching a contextual order at the map origin instead of the
+// `Stop` descriptor [04 §3.4][07 §9].
+//
+// Rewritten by WU-18-0. It used to assert that exactly one record — `Stop`
+// with a zero target and goal — was still queued after the applying tick. That
+// held only because the pump read its descriptor copy before running the lazy
+// handler installers, so the first record of the first pump saw a nil handler
+// and parked itself for 30..44 ticks. With the installers run before the
+// descriptor is read, `Stop` dispatches on that first visit and completes
+// ([04 R-ORD-01 §2] — its row ends in *complete*), so the queue is empty when
+// the tick ends and the record can no longer be inspected there. The contract
+// the test exists for is checked on the dispatched command instead, plus the
+// stronger post-condition that no contextual record was left behind.
 func TestStopDispatchHasNoContextualOriginOrder(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
 	u := placeUnit(b, "armcons", numeric.Fixed(8*65536), numeric.Fixed(8*65536))
 	replaceSelectionForTest(t, b, u)
 	b.handleHudOrderButton("stop")
+	pending := b.sess.PendingHumanCommands()
+	if len(pending) != 1 || pending[0].Kind != session.HumanStop {
+		t.Fatalf("stop dispatched %+v, want exactly one HumanStop command", pending)
+	}
+	if pending[0].Order.Code != 0 || pending[0].Order.Target != 0 || pending[0].Order.Position != (orders.ResolvePos{}) {
+		t.Fatalf("stop carried a contextual order payload: %+v", pending[0].Order)
+	}
 	applyPendingBattleCommands(b)
 	q := orders.QueueForUnit(u)
-	if q == nil || q.LenPrimary() != 1 {
-		t.Fatalf("stop queued %d nodes, want exactly one", q.LenPrimary())
-	}
-	n := q.Primary()[0]
-	if got := orders.DescriptorFor(n.ID).Name; got != "Stop" {
-		t.Fatalf("stop descriptor = %q, want Stop", got)
-	}
-	if n.Target != 0 || n.GoalX != 0 || n.GoalY != 0 || n.GoalZ != 0 {
-		t.Fatalf("stop carried contextual target/goal: target=%d goal=(%d,%d,%d)", n.Target, n.GoalX, n.GoalY, n.GoalZ)
+	if q != nil && q.LenPrimary() != 0 {
+		t.Fatalf("stop left %q queued; Stop completes on its first visit", orders.DescriptorFor(q.Primary()[0].ID).Name)
 	}
 }
 

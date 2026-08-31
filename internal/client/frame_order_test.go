@@ -219,22 +219,13 @@ func TestSelectionChromeKeepsFogWhenNoUnitBracketIsEmitted(t *testing.T) {
 	}
 }
 
-func TestSelectedFullHealthKeepsHealthBarWithoutUnitBracket(t *testing.T) {
-	c := &Client{width: 64, height: 64, indexed: make([]uint8, 64*64)}
-	for i := range c.indexed {
-		c.indexed[i] = 77
-	}
-	c.selectionChrome = []selectionChrome{{view: frame.UnitView{
-		Flags: hud.SelectionFlag, FootX: 1, FootZ: 1, Health: 100, MaxHealth: 100,
-	}, screenX: 32, screenY: 32}}
-	c.drawSelectionStage()
-	if got := c.indexed[24*64+24]; got != 77 {
-		t.Fatalf("full-health selected unit emitted footprint bracket %d, want untouched 77", got)
-	}
-	if got := c.indexed[42*64+24]; got != c.paletteIndex(10) {
-		t.Fatalf("selected full-health unit health bar = %d, want logical entry 10 (%d)", got, c.paletteIndex(10))
-	}
-}
+// The former TestSelectedFullHealthKeepsHealthBarWithoutUnitBracket is gone
+// with the bar it locked: the selection stage's "selected or damaged" health
+// bar was invented and is deleted with drawUnitChrome. Retail's bar is the
+// label walk of [03 R-FX-01 §6], drawn before the fog composite and covered by
+// healthbar_test.go; the remaining half of the old assertion — that the stage
+// emits no footprint bracket — is TestSelectionChromeKeepsFogWhenNoUnitBracketIsEmitted
+// above.
 
 func TestUnresolvedGlobalGAFDoesNotAbortOtherProjectiles(t *testing.T) {
 	c := &Client{width: 8, height: 8, indexed: make([]uint8, 64), cam: &camera.Camera{}}

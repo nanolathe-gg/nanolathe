@@ -24,46 +24,6 @@ const (
 // DecloakDeadlineAdd is the decloak deadline offset in ticks [R-VIS-01 §4] pass 4.
 const DecloakDeadlineAdd = 90
 
-// minimapBlipOptionBit is bit 9 of the global options word, the first disjunct
-// of the contacts pass's blip gate [03 §3.9] "Blip gate".
-const minimapBlipOptionBit uint32 = 1 << 9
-
-// minimapBlipAdmits is the contacts pass's blip gate, stated in [03 §3.9] as:
-// the unit is drawn when any of a global options word bit 9 is set, the
-// minimap mode word's low two bits are zero, the unit carries the
-// friendly-contact status bits (mask 0x300), or the unit's owner is the local
-// player. All four disjuncts are reproduced; none of them is an alliance test,
-// and none of them is a separate line-of-sight test — an enemy reaches the
-// third disjunct only once a sensor contact or the seen probe has set its seen
-// bit earlier in this same tick [R-VIS-01 §4].
-//
-// The mode word is the visibility mode word: its low two bits are Mapping and
-// LineOfSight, and both clear is the Mapped + Permanent state in which every
-// grid is filled all-visible for the whole battle [R-VIS-01 §1]. The defeat
-// handler clears exactly those two bits, which is how a defeated viewer comes
-// to see every contact [R-VIS-01 §4] pass 1.
-func minimapBlipAdmits(options uint32, mode Mode, status uint32, owner, viewing PlayerID) bool {
-	return options&minimapBlipOptionBit != 0 ||
-		mode&(ModeHistoryEnabled|ModeCurrentEnabled) == 0 ||
-		status&FriendlyMask != 0 ||
-		owner == viewing
-}
-
-// minimapOptions returns the global options word read by the blip gate's first
-// disjunct [03 §3.9].
-//
-// TODO(question): [03 §3.9] names "a global options word bit 9" without saying
-// which word that is, what the bit means, or where it is authored, and no
-// writer for it has been traced; no session state carries such a word today, so
-// the disjunct reads false and the gate is narrower than retail's by exactly
-// that term. Tracing the word's owner and its authored source settles it — until
-// then this stays one named seam rather than an invented session field.
-func (s *Service) minimapOptions() uint32 { return 0 }
-
-// sensorSurfaceShift projects world coordinates onto the sensor backing
-// surfaces: one surface cell per 128 world units [03 §3.4][R-VIS-01 §5].
-const sensorSurfaceShift = 23
-
 // SensorUnit is one unit as the sensor phase sees it [03 §3.4] P0-11.
 //
 // The phase mutates Status through the pointer — that is its entire
@@ -111,50 +71,6 @@ type SensorInput struct {
 	Stealth   bool // retained separately for the presentation blink gate
 	Active    bool
 	OnOffable bool
-	// Circles is populated on the first input and carries the callback result
-	// window without introducing a second mutable service side channel.
-	Circles []SensorCircle
-}
-
-// SensorCircle is one minimap circle emitted for a unit with authored sensor
-// distances. Coordinates are surface cells (one cell per 128 world units);
-// Kind is zero for the outer radar/sonar circle and nonzero for jammer
-// circles [03 §3.9 layer 4][03 §3.10].
-//
-// These are presentation only. [03 §3.10] establishes that the sensor phase
-// itself rasterizes nothing — the circles belong to the minimap contacts pass
-// — so nothing downstream may read a circle as evidence of detection.
-//
-// Radius is the authored world distance, unscaled: the
-// RadarW · distance / PlayRight truncation of [03 §3.10] is applied once, by
-// the minimap geometry layer, and must not be pre-applied here.
-type SensorCircle struct {
-	// SourceID identifies the live unit that emitted this circle. The
-	// committed publisher uses it to discard circles left behind when cleanup
-	// frees a unit after the sensor pass [03 §3.9][I6].
-	SourceID uint16
-	U, V     int32
-	Radius   int32
-	Kind     uint8
-}
-
-// SensorSurfaces receives the rasterized circles [03 §3.9 layer 4][03 §3.10].
-//
-// Radar, sonar and jammers NEVER author the word mask or any per-player byte
-// grid: they reach a separate minimap surface that is wiped each tick while
-// the LOS grids persist [03 §3.10][R-VIS-01 §5].
-type SensorSurfaces interface {
-	Wipe()                       // wiped each tick [03 §3.10]
-	Sensor(u, v, radius int32)   // combined radar/sonar outer circle [03 §3.10]
-	RadarJam(u, v, radius int32) // separate radar-jam circle [03 §3.10]
-	SonarJam(u, v, radius int32) // separate sonar-jam circle [03 §3.10]
-}
-
-// SetSurfaces binds the sensor backing surfaces. Nil discards them.
-func (s *Service) SetSurfaces(sf SensorSurfaces) {
-	if s != nil {
-		s.surfaces = sf
-	}
 }
 
 // SetViewerDefeated records whether the viewing player has been defeated or is
@@ -173,26 +89,7 @@ func (s *Service) SensorInputs() []SensorInput {
 	}
 	out := make([]SensorInput, len(s.sensorInputs))
 	copy(out, s.sensorInputs)
-	if len(out) != 0 && len(out[0].Circles) != 0 {
-		out[0].Circles = append([]SensorCircle(nil), out[0].Circles...)
-	}
 	return out
-}
-
-// SensorCircles returns a copy of the circle results from the last completed
-// sensor pass [03 §3.10].
-func (s *Service) SensorCircles() []SensorCircle {
-	if s == nil || len(s.sensorInputs) == 0 || len(s.sensorInputs[0].Circles) == 0 {
-		return nil
-	}
-	return append([]SensorCircle(nil), s.sensorInputs[0].Circles...)
-}
-
-// surfaceProject maps a world coordinate onto a sensor surface cell: one cell
-// per 128 world units, an arithmetic shift of 23 on the 16.16 coordinate
-// [R-VIS-01 §5].
-func surfaceProject(v numeric.Fixed) int32 {
-	return int32(int64(v) >> sensorSurfaceShift)
 }
 
 // worldUnit narrows a 16.16 coordinate to whole world units with an arithmetic
@@ -411,74 +308,19 @@ func (s *Service) SensorTick(tick uint32, playerCount int, allied func(a, b Play
 		}
 	}
 
-	// Presentation: the minimap's sensor circles. [03 §3.10] attributes them to
-	// the contacts pass, not to the sensor phase; they are emitted here only
-	// because this walk already holds the per-unit sensor distances, and they
-	// are published as an immutable per-frame list no gameplay path reads.
-	//
-	// [03 §3.10] draws them "for each unit that passes the contacts pass's
-	// gates", so the emission gate is that pass's blip gate of [03 §3.9] — not
-	// "every live unit". The gate is read AFTER the five passes above, so it
-	// sees this tick's friendly pair and this tick's seen bit: an enemy the
-	// viewer has neither detected nor sighted carries neither, and contributes
-	// no circle. The activation test is the sensor callback gate that already
-	// governs passes 2 and 3.
-	//
-	// Radii published here are the AUTHORED world distances. The
-	// RadarW · distance / PlayRight truncation of [03 §3.10] belongs to the
-	// layer that owns minimap geometry and is applied there exactly once
-	// (internal/render's RadarRadius); applying it here as well would scale
-	// twice.
-	var circles []SensorCircle
-	if s.surfaces != nil {
-		s.surfaces.Wipe() // the final surface is wiped and rebuilt every tick [03 §3.10]
-	}
-	for i := range units {
-		u := &units[i]
-		if !u.Alive || !u.Active {
-			continue
-		}
-		status := uint32(0)
-		if u.Status != nil {
-			status = *u.Status
-		}
-		if !minimapBlipAdmits(s.minimapOptions(), s.mode, status, u.Owner, s.local) {
-			continue
-		}
-		cu, cv := surfaceProject(u.X), surfaceProject(u.Z)
-		if u.RadarDistance != 0 || u.SonarDistance != 0 {
-			// One outer circle at max(radardistance, sonardistance) [03 §3.10].
-			outer := u.RadarDistance
-			if u.SonarDistance > outer {
-				outer = u.SonarDistance
-			}
-			circles = append(circles, SensorCircle{SourceID: u.ID, U: cu, V: cv, Radius: outer})
-			if s.surfaces != nil {
-				s.surfaces.Sensor(cu, cv, outer)
-			}
-		}
-		if u.RadarJam != 0 {
-			circles = append(circles, SensorCircle{SourceID: u.ID, U: cu, V: cv, Radius: u.RadarJam, Kind: 1})
-			if s.surfaces != nil {
-				s.surfaces.RadarJam(cu, cv, u.RadarJam)
-			}
-		}
-		if u.SonarJam != 0 {
-			circles = append(circles, SensorCircle{SourceID: u.ID, U: cu, V: cv, Radius: u.SonarJam, Kind: 2})
-			if s.surfaces != nil {
-				s.surfaces.SonarJam(cu, cv, u.SonarJam)
-			}
-		}
-	}
-
+	// The phase's whole output is the status bits the five passes above wrote,
+	// plus this immutable per-unit snapshot of them. It rasterizes nothing:
+	// [03 §3.10]'s 2026-08-29 correction establishes that the minimap's sensor
+	// circles are presentation drawn by the CONTACTS pass, and retracts the
+	// older reading that attributed them to this phase's callback tables — the
+	// callbacks are one-line status-bit writers [R-VIS-01 §5]. The contacts
+	// pass reads the authored distances from the unit definition and gates them
+	// on its own blip and selected-unit-circle gates [03 §3.9].
 	for i := range units {
 		u := &units[i]
 		if u.Alive && u.Status != nil {
 			s.sensorInputs = append(s.sensorInputs, SensorInput{ID: u.ID, Owner: u.Owner, X: u.X, Y: u.Y, Z: u.Z, Status: *u.Status, Hidden: u.Hidden, Stealth: u.Stealth, Active: u.Active, OnOffable: u.OnOffable})
 		}
-	}
-	if len(s.sensorInputs) != 0 && len(circles) != 0 {
-		s.sensorInputs[0].Circles = circles
 	}
 }
 

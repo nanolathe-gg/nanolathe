@@ -151,6 +151,10 @@ func (c *Client) composeIndexed(cur *frame.Frame, ok bool) {
 	c.drawCommittedFrame(cur, ok)
 }
 
+// selectionChrome is the frame's record of which units the two unit passes
+// actually presented, in paint order. It no longer carries a draw of its own:
+// the health bar it used to feed is now the label walk of [03 R-FX-01 §6],
+// which runs before the fog composite and derives its own geometry.
 type selectionChrome struct {
 	view    frame.UnitView
 	screenX int32
@@ -332,18 +336,27 @@ func (c *Client) drawFog(cur *frame.Frame) {
 	// No world stage has work outside the explicit adapters above.
 }
 
-// drawSelectionStage emits unit selection and health chrome after fog. The
-// body stage only records model positions, so health pixels remain visible
-// above the fog overlay as required by the frame contract [03 §1][03 §3.3].
-// The per-unit footprint quad is not part of this stage: it belongs to the
-// unit's own depth slot in the world pass, before the fog composite
+// drawSelectionStage emits the drag-selection rectangle, which the composer
+// draws after the fog presentation together with the rest of the interface
+// work [03 §1].
+//
+// Correction: this comment previously said the stage "emits unit selection and
+// health chrome after fog" and that health pixels had to stay "visible above
+// the fog overlay as required by the frame contract". No frame contract
+// requires that. [03 §1] item 9 puts the unit labels — the health bar and the
+// group digit — between the strip-8 and strip-9 walks, and item 10 puts fog
+// after all ten strips, so retail's bars are drawn *under* the fog composite,
+// not over it. The bar this stage used to draw was invented besides: it took
+// its geometry from the footprint box, drew for any owner, and gated on
+// "selected or damaged". It is deleted; [03 R-FX-01 §6]'s raster replaces it
+// in drawUnitLabels, at the barrier the composer actually uses.
+//
+// The per-unit footprint quad is not part of this stage either: it belongs to
+// the unit's own depth slot in the world pass, before the fog composite
 // [03 R-WATER-01 §1].
 func (c *Client) drawSelectionStage() {
 	if c == nil {
 		return
-	}
-	for _, item := range c.selectionChrome {
-		c.drawUnitChrome(item.view, item.screenX, item.screenY)
 	}
 	c.drawSelectionDrag()
 }

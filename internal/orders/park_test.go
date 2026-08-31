@@ -43,7 +43,7 @@ func TestParkPhase0InstallsRectangleGoal(t *testing.T) {
 	ensureParkHandler()
 	_, u := parkTestUnit(t, 2, -10000, false)
 	n := &Node{ID: Lookup("Park"), Deadline: -1}
-	if code := parkHandlerAtTick(u, n, 0, 100); code != 1 {
+	if code := parkHandler(u, n, 0, 100); code != 1 {
 		t.Fatalf("phase 0 code=%d, want advance (1)", code)
 	}
 	if n.DynamicGate != 0xE0 {
@@ -73,8 +73,8 @@ func TestParkAddsThreeOnNonNegativeMinWaterDepth(t *testing.T) {
 	_, ship := parkTestUnit(t, 2, 0, false)
 	landNode := &Node{ID: Lookup("Park"), Deadline: -1}
 	shipNode := &Node{ID: Lookup("Park"), Deadline: -1}
-	parkHandlerAtTick(land, landNode, 0, 0)
-	parkHandlerAtTick(ship, shipNode, 0, 0)
+	parkHandler(land, landNode, 0, 0)
+	parkHandler(ship, shipNode, 0, 0)
 	if landNode.Param3 != 2 {
 		t.Fatalf("land s=%d, want 2 (no +3 on the template default)", landNode.Param3)
 	}
@@ -90,7 +90,7 @@ func TestParkPhase1Branches(t *testing.T) {
 
 	// Arrival bit completes.
 	n := &Node{ID: Lookup("Park"), Phase: 1, Deadline: -1}
-	if code := parkHandlerAtTick(u, n, parkArrivalBit, 100); code != 5 {
+	if code := parkHandler(u, n, parkArrivalBit, 100); code != 5 {
 		t.Fatalf("arrival code=%d, want complete (5)", code)
 	}
 
@@ -101,7 +101,7 @@ func TestParkPhase1Branches(t *testing.T) {
 	head := q.Primary()[0]
 	head.Phase = 1
 	head.DynamicGate = 0
-	if code := parkHandlerAtTick(u, head, 0, 100); code != 0 {
+	if code := parkHandler(u, head, 0, 100); code != 0 {
 		t.Fatalf("waiting code=%d, want restart (0)", code)
 	}
 	if head.Deadline != 130 || head.DynamicGate&1 == 0 {
@@ -111,7 +111,7 @@ func TestParkPhase1Branches(t *testing.T) {
 	// A record behind it completes it immediately.
 	q.Push(Lookup("Move_Ground"), Node{Deadline: -1})
 	head.Phase = 1
-	if code := parkHandlerAtTick(u, head, 0, 200); code != 5 {
+	if code := parkHandler(u, head, 0, 200); code != 5 {
 		t.Fatalf("record-behind code=%d, want complete (5)", code)
 	}
 }
@@ -122,7 +122,7 @@ func TestParkCanFlyReidentifiesAsAirMove(t *testing.T) {
 	ensureParkHandler()
 	_, u := parkTestUnit(t, 2, -10000, true)
 	n := &Node{ID: Lookup("Park"), Deadline: -1}
-	if code := parkHandlerAtTick(u, n, 0, 0); code != 0 {
+	if code := parkHandler(u, n, 0, 0); code != 0 {
 		t.Fatalf("canfly code=%d, want restart (0)", code)
 	}
 	if n.ID != Lookup("VTOL_Move") {

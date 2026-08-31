@@ -333,7 +333,7 @@ func TestMinimapRebuildFinalLayerOrderAndBlink(t *testing.T) {
 			dst.Set(x+1, y, color)
 		}
 	}
-	final := rebuildFinalExact(mapped, m, playW, playH, contacts, nil, blink, blit, 0xA0, 0xB0, 0xC0)
+	final := rebuildFinalExact(mapped, m, playW, playH, contacts, blink, blit, 0xA0, 0xB0, 0xC0)
 	if final == nil {
 		t.Fatalf("final nil")
 	}
@@ -350,7 +350,7 @@ func TestMinimapRebuildFinalLayerOrderAndBlink(t *testing.T) {
 		{WorldX: 20, WorldZ: 20, WorldY: 0, Palette: 10, IsCommander: false},
 		{WorldX: 20, WorldZ: 20, WorldY: 0, Palette: 30, IsCommander: true},
 	}
-	final2 := rebuildFinalExact(mapped, m, playW, playH, contacts2, nil, blink, blit, 0xA0, 0xB0, 0xC0)
+	final2 := rebuildFinalExact(mapped, m, playW, playH, contacts2, blink, blit, 0xA0, 0xB0, 0xC0)
 	rx2, ry2 := RadarProjection(20, 20, 0, playW, playH, m)
 	if v, _ := final2.At(int(rx2), int(ry2)); v != 30 {
 		t.Fatalf("commander should overwrite blip at same pixel, got %d want 30", v)
@@ -360,10 +360,12 @@ func TestMinimapRebuildFinalLayerOrderAndBlink(t *testing.T) {
 		t.Fatalf("commander second pixel not drawn")
 	}
 	// Circles overwrite blip: create contact with circle radius
+	// Circles reach layer 4 only through the selected-unit circle gate
+	// [03 §3.9] "Selected-unit circle gate correction".
 	contacts3 := []MinimapContact{
-		{WorldX: 50, WorldZ: 50, WorldY: 0, Palette: 10, RawDistRadar: 20}, // outer radius ~ 10*20/100=2
+		{WorldX: 50, WorldZ: 50, WorldY: 0, Palette: 10, RawDistRadar: 20, RangeStatus: true}, // outer radius ~ 10*20/100=2
 	}
-	final3 := rebuildFinalExact(mapped, m, playW, playH, contacts3, nil, blink, blit, 0xA0, 0xB0, 0xC0)
+	final3 := rebuildFinalExact(mapped, m, playW, playH, contacts3, blink, blit, 0xA0, 0xB0, 0xC0)
 	// circle radius 2 should overwrite blip at offset: blip at rx,ry, circle outline at rx+2,ry should be circle color (0xA0 placeholder)
 	rx3, ry3 := RadarProjection(50, 50, 0, playW, playH, m)
 	r := RadarRadius(20, m.W, playW)
@@ -381,35 +383,77 @@ func TestMinimapRebuildFinalLayerOrderAndBlink(t *testing.T) {
 	}
 }
 
-func TestMinimapNoRadarCircleGate(t *testing.T) {
+// TestMinimapSelectedUnitCircleGate replaces TestMinimapNoRadarCircleGate,
+// retired 2026-08-30.
+//
+// What the retired test locked: that MinimapContact.NoRadar suppressed a
+// contact's sensor circles, and that setting Stealth overrode it so a
+// "stealthed no-radar" unit drew its circles again. Both halves are wrong.
+// [03 §3.9] "Selected-unit circle gate correction" (Established) says in terms
+// that the previous "no-radar" label was wrong, that the unit parser loads no
+// unit `noradar` key at all, and that "the cloak/hidden instance bit and the
+// definition `stealth` flag are not this callback gate". The real gate is the
+// selected/range-status bit, and then active OR not on/off-capable.
+//
+// The three observable outcomes of that gate, which is what this test locks:
+// a unit the viewer can see but has not selected draws no circle; a selected
+// on/off-capable unit that is inactive draws none; a selected unit that passes
+// draws one. The producer folds the active/onoffable term into RangeStatus, so
+// the first two arrive here as RangeStatus == false.
+func TestMinimapSelectedUnitCircleGate(t *testing.T) {
 	m := camera.Minimap{W: 10, H: 10}
 	playW, playH := int32(100), int32(100)
 	blit := func(dst *RadarSurface, x, y int, color byte, commander bool) {
 		dst.Set(x, y, color)
 	}
-	contact := MinimapContact{
+	base := MinimapContact{
 		WorldX: 50, WorldZ: 50, Visible: true, Palette: 9,
-		RawDistRadar: 20, NoRadar: true,
+		RawDistRadar: 20,
 	}
-	centerX, centerY := RadarProjection(contact.WorldX, contact.WorldZ, 0, playW, playH, m)
-	outerX := centerX + RadarRadius(contact.RawDistRadar, m.W, playW)
+	centerX, centerY := RadarProjection(base.WorldX, base.WorldZ, 0, playW, playH, m)
+	outerX := centerX + RadarRadius(base.RawDistRadar, m.W, playW)
 
-	// An unstealthed no-radar unit still emits its blip, but suppresses sensor
-	// circles [03 §3.9].
+	// Gate closed: the blip still draws, the circle does not. This is the
+	// visible enemy the playtest reported, and the viewer's own unselected
+	// tower, which reach this layer identically.
 	mapped := &RadarSurface{W: 10, H: 10, Bits: make([]byte, 100)}
-	final := rebuildFinalExact(mapped, m, playW, playH, []MinimapContact{contact}, nil, BlinkState{Phase: 1}, blit, 7, 8, 9)
+	closed := base
+	final := rebuildFinalExact(mapped, m, playW, playH, []MinimapContact{closed}, BlinkState{Phase: 1}, blit, 7, 8, 9)
 	if got, _ := final.At(int(centerX), int(centerY)); got != 9 {
-		t.Fatalf("no-radar must not suppress blip: got %d want 9", got)
+		t.Fatalf("the circle gate must not suppress the blip: got %d want 9 [03 §3.9]", got)
 	}
 	if got, _ := final.At(int(outerX), int(centerY)); got != 0 {
-		t.Fatalf("unstealthed no-radar must suppress circle: got %d", got)
+		t.Fatalf("an unselected unit drew a circle: got %d want none [03 §3.9]", got)
 	}
 
-	// Stealth overrides no-radar for sensor circles [03 §3.9].
-	contact.Stealth = true
-	final = rebuildFinalExact(mapped, m, playW, playH, []MinimapContact{contact}, nil, BlinkState{Phase: 1}, blit, 7, 8, 9)
+	// Stealth is not a term of this gate: it cannot reopen it.
+	stealthed := base
+	stealthed.Stealth = true
+	final = rebuildFinalExact(mapped, m, playW, playH, []MinimapContact{stealthed}, BlinkState{Phase: 1}, blit, 7, 8, 9)
+	if got, _ := final.At(int(outerX), int(centerY)); got != 0 {
+		t.Fatalf("stealth reopened the selected-unit circle gate: got %d want none [03 §3.9]", got)
+	}
+
+	// Gate open: the selected unit draws exactly one outer circle in the radar
+	// index, over its own blip.
+	open := base
+	open.RangeStatus = true
+	final = rebuildFinalExact(mapped, m, playW, playH, []MinimapContact{open}, BlinkState{Phase: 1}, blit, 7, 8, 9)
 	if got, _ := final.At(int(outerX), int(centerY)); got != 7 {
-		t.Fatalf("stealthed no-radar must retain circle: got %d want 7", got)
+		t.Fatalf("a selected unit drew no circle: got %d want the radar index 7 [03 §3.9][03 §3.10]", got)
+	}
+
+	// The per-unit blink countdown suppresses the blip but not the circle:
+	// [03 §3.9] "Contact layering and ring-only cases" establishes that a unit
+	// can appear ring-only while its range branches still run.
+	ringOnly := open
+	ringOnly.BlinkSuppress = 1
+	final = rebuildFinalExact(mapped, m, playW, playH, []MinimapContact{ringOnly}, BlinkState{Phase: 0}, blit, 7, 8, 9)
+	if got, _ := final.At(int(centerX), int(centerY)); got == 9 {
+		t.Fatalf("a blink-suppressed contact drew its blip on a non-blink phase [03 §3.9]")
+	}
+	if got, _ := final.At(int(outerX), int(centerY)); got != 7 {
+		t.Fatalf("a blink-suppressed contact lost its circle: got %d want 7 [03 §3.9 ring-only]", got)
 	}
 }
 
@@ -424,13 +468,13 @@ func TestMinimapBlinkGate(t *testing.T) {
 		dst.Set(x, y, color)
 	}
 	blinkOff := BlinkState{Phase: 0}
-	finalOff := rebuildFinalExact(mapped, m, 100, 100, contacts, nil, blinkOff, blit, 0xA0, 0xB0, 0xC0)
+	finalOff := rebuildFinalExact(mapped, m, 100, 100, contacts, blinkOff, blit, 0xA0, 0xB0, 0xC0)
 	rx, ry := RadarProjection(10, 10, 0, 100, 100, m)
 	if v, _ := finalOff.At(int(rx), int(ry)); v != 5 {
 		t.Fatalf("stealth hidden when blink==0, got %d want mapped 5 [03 §3.9]", v)
 	}
 	blinkOn := BlinkState{Phase: 1}
-	finalOn := rebuildFinalExact(mapped, m, 100, 100, contacts, nil, blinkOn, blit, 0xA0, 0xB0, 0xC0)
+	finalOn := rebuildFinalExact(mapped, m, 100, 100, contacts, blinkOn, blit, 0xA0, 0xB0, 0xC0)
 	if v, _ := finalOn.At(int(rx), int(ry)); v != 9 {
 		t.Fatalf("stealth visible when blink==1, got %d want 9", v)
 	}
@@ -468,8 +512,8 @@ func TestMinimapPhaseGatesRegularAndDashedPresentation(t *testing.T) {
 		dst.Set(x, y, color)
 	}
 	rx, ry := RadarProjection(50, 50, 0, 100, 100, m)
-	off := rebuildFinalExact(mapped, m, 100, 100, contacts, nil, BlinkState{Phase: 0}, blit, 7, 8, 9)
-	on := rebuildFinalExact(mapped, m, 100, 100, contacts, nil, BlinkState{Phase: 1}, blit, 7, 8, 9)
+	off := rebuildFinalExact(mapped, m, 100, 100, contacts, BlinkState{Phase: 0}, blit, 7, 8, 9)
+	on := rebuildFinalExact(mapped, m, 100, 100, contacts, BlinkState{Phase: 1}, blit, 7, 8, 9)
 	if got, _ := off.At(int(rx), int(ry)); got != 0 {
 		t.Fatalf("regular suppressed contact phase 0 pixel = %d, want mapped 0", got)
 	}

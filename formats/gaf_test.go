@@ -87,3 +87,124 @@ func TestGAFRLERowsPreserveSkipAndOpaqueZero(t *testing.T) {
 		}
 	}
 }
+
+// TestGAFRLEOddWidthRowsDecodeExactly locks the row decoder against a width
+// that is odd and not a multiple of a run's maximum length. 129 is the width
+// of the retail interface side panels (`anims/ARMINT.GAF` PANELSIDE and
+// PANELSIDE2), whose rows are encoded almost entirely as maximal 64-byte
+// literal runs: 64 + 64 + 1 exactly fills the row, so a run-length or
+// remaining-width error scrambles every row after the first and produces
+// per-pixel noise rather than a load failure [fmt gaf "RLE pixels"].
+//
+// The three encodings below are the whole retail command vocabulary at the
+// awkward width: maximal literal runs that land exactly on the row end, a
+// maximal repeat run followed by a one-pixel remainder, and a skip run that
+// offsets everything after it. Row 3 is the zero-payload row the format
+// defines as fully transparent.
+//
+// WU-17-12 note: a decode of PANELSIDE that yields high-entropy, near-black
+// indexes is **correct**, not a defect. That art is a dithered panel texture
+// drawn from the darkest entry of many palette ramps; see the caveat in
+// [fmt gaf "Unknowns and caveats"] before "fixing" this path.
+func TestGAFRLEOddWidthRowsDecodeExactly(t *testing.T) {
+	const width, height = 129, 4
+	const entryOffset = 16
+	const refOffset = entryOffset + 40
+	const frameOffset = refOffset + 8
+	const dataOffset = frameOffset + 24
+
+	// Row 0: literal 64, literal 64, literal 1. Every pixel differs from its
+	// neighbours so a one-pixel stride slip cannot pass.
+	literals := make([]byte, width)
+	for i := range literals {
+		literals[i] = byte(11 + i*7) // 11, 18, 25, ... wraps, never constant
+	}
+	row0 := []byte{0xFC}
+	row0 = append(row0, literals[:64]...)
+	row0 = append(row0, 0xFC)
+	row0 = append(row0, literals[64:128]...)
+	row0 = append(row0, 0x00, literals[128])
+
+	// Row 1: repeat 64 × 0x21, repeat 64 × 0x22, repeat 1 × 0x23.
+	row1 := []byte{0xFE, 0x21, 0xFE, 0x22, 0x02, 0x23}
+
+	// Row 2: skip 63, literal 64, repeat 2 × 0x44.
+	row2 := []byte{0x7F, 0xFC}
+	row2 = append(row2, literals[:64]...)
+	row2 = append(row2, 0x06, 0x44)
+
+	// Row 3: zero payload — fully transparent.
+	rows := [][]byte{row0, row1, row2, nil}
+
+	size := dataOffset
+	for _, r := range rows {
+		size += 2 + len(r)
+	}
+	data := make([]byte, size)
+	binary.LittleEndian.PutUint32(data[4:], 1)
+	binary.LittleEndian.PutUint32(data[12:], entryOffset)
+	binary.LittleEndian.PutUint16(data[entryOffset:], 1)
+	copy(data[entryOffset+8:], "panelwidth")
+	binary.LittleEndian.PutUint32(data[refOffset:], frameOffset)
+	binary.LittleEndian.PutUint16(data[frameOffset:], width)
+	binary.LittleEndian.PutUint16(data[frameOffset+2:], height)
+	data[frameOffset+8] = 9 // color key, ignored on the RLE path
+	data[frameOffset+9] = 1 // compressed
+	binary.LittleEndian.PutUint32(data[frameOffset+16:], dataOffset)
+	pos := dataOffset
+	for _, r := range rows {
+		binary.LittleEndian.PutUint16(data[pos:], uint16(len(r)))
+		pos += 2
+		pos += copy(data[pos:], r)
+	}
+
+	gaf, err := LoadGAF(data)
+	if err != nil {
+		t.Fatalf("LoadGAF: %v", err)
+	}
+	frame := gaf.Entries[0].Frames[0].Frame
+	if frame.Width != width || frame.Height != height {
+		t.Fatalf("frame = %dx%d, want %dx%d", frame.Width, frame.Height, width, height)
+	}
+
+	for x := 0; x < width; x++ {
+		got, opaque := frame.At(x, 0)
+		if !opaque || got != literals[x] {
+			t.Fatalf("row 0 x=%d = %d,opaque=%v, want %d,true", x, got, opaque, literals[x])
+		}
+	}
+	for x := 0; x < width; x++ {
+		want := byte(0x21)
+		switch {
+		case x == 128:
+			want = 0x23
+		case x >= 64:
+			want = 0x22
+		}
+		got, opaque := frame.At(x, 1)
+		if !opaque || got != want {
+			t.Fatalf("row 1 x=%d = %d,opaque=%v, want %d,true", x, got, opaque, want)
+		}
+	}
+	for x := 0; x < 63; x++ {
+		if _, opaque := frame.At(x, 2); opaque {
+			t.Fatalf("row 2 x=%d should be a skip pixel", x)
+		}
+	}
+	for x := 63; x < 127; x++ {
+		got, opaque := frame.At(x, 2)
+		if !opaque || got != literals[x-63] {
+			t.Fatalf("row 2 x=%d = %d,opaque=%v, want %d,true", x, got, opaque, literals[x-63])
+		}
+	}
+	for x := 127; x < width; x++ {
+		if got, opaque := frame.At(x, 2); !opaque || got != 0x44 {
+			t.Fatalf("row 2 x=%d = %d,opaque=%v, want 68,true", x, got, opaque)
+		}
+	}
+	for x := 0; x < width; x++ {
+		if _, opaque := frame.At(x, 3); opaque {
+			t.Fatalf("row 3 x=%d should be transparent (zero payload)", x)
+		}
+	}
+}

@@ -82,57 +82,134 @@ func ValidateBuildProduct(cat *content.Catalog, builderKey, product string) bool
 }
 
 // NextPage returns flags with page incremented data-driven with guard [07 §9] C10.
-// It uses pageCount from authored build list (len Buttons split by perPage) and
-// never invents a page beyond count-1. count <=1 means no paging.
+// It is the NEXT gadget's move, which never returns to page 0
+// [07 R-HUD-03 §6]. count <=1 means no paging.
 func NextPage(flags uint32, count int) uint32 {
 	if count <= 1 {
 		return flags
 	}
-	cur := 0
-	if IsPaged(flags) {
-		cur = DecodePage(flags)
-	}
-	cur = ClampPage(cur+1, count)
-	return EncodePageBits(flags, cur)
+	return EncodePageBits(flags, NextPageButton(DecodePage(flags), count))
 }
 
-// PrevPage returns flags with page decremented [07 §9] C10.
+// PrevPage returns flags with page decremented — the PREV gadget's move
+// [07 §9][07 R-HUD-03 §6].
 func PrevPage(flags uint32, count int) uint32 {
 	if count <= 1 {
 		return flags
 	}
-	cur := 0
-	if IsPaged(flags) {
-		cur = DecodePage(flags)
-	}
-	cur = ClampPage(cur-1, count)
-	return EncodePageBits(flags, cur)
+	return EncodePageBits(flags, PrevPageButton(DecodePage(flags), count))
 }
 
-// PageCountFromButtons computes page count from button count and perPage size
-// data-driven. perPage is the GUI's authored product count; callers without a
-// generated page mapping use RetailBuildButtonsPerPage.
-func PageCountFromButtons(n, perPage int) int {
-	if n <= 0 {
+// The page cycle [07 R-HUD-03 §6]. Page 0 is the orders state and pages
+// 1..count-1 are the authored build pages, so the producers below are three
+// different walks over the same range:
+//
+//   - the `.` and `,` keys cycle through every page, page 0 included, and wrap
+//     at both ends: `.` from the last page returns to page 0, `,` from page 0
+//     goes to the last page. That is modular arithmetic over 0..count-1.
+//   - the NEXT and PREV gadgets never return to page 0: NEXT from the last page
+//     wraps to page 1, and PREV from page 1 goes to the last page.
+//   - a digit selects page digit-1 outright and does nothing at all when that
+//     page does not exist. It is the only producer that can refuse.
+//
+// Each takes and returns a page number rather than a flag word, so the caller
+// keeps the committed page as the one identity it acts on [I6].
+
+// NextPageKey is the `.` key's move: the next page, wrapping past the last one
+// back to the orders page [07 R-HUD-03 §6].
+func NextPageKey(page, count int) int {
+	if count <= 0 || page < 0 || page >= count-1 {
 		return 0
 	}
+	return page + 1
+}
+
+// PrevPageKey is the `,` key's move: the previous page, wrapping past the
+// orders page back to the last one [07 R-HUD-03 §6].
+func PrevPageKey(page, count int) int {
+	if count <= 0 {
+		return 0
+	}
+	if page <= 0 || page > count-1 {
+		return count - 1
+	}
+	return page - 1
+}
+
+// NextPageButton is the NEXT gadget's move. Unlike the `.` key it never returns
+// to page 0: from the last page it wraps to page 1 [07 R-HUD-03 §6].
+func NextPageButton(page, count int) int {
+	if count <= 1 {
+		return 0
+	}
+	if page <= 0 || page >= count-1 {
+		return 1
+	}
+	return page + 1
+}
+
+// PrevPageButton is the PREV gadget's move. From page 1 — and from the orders
+// page — it goes to the last page rather than to page 0 [07 R-HUD-03 §6].
+func PrevPageButton(page, count int) int {
+	if count <= 1 {
+		return 0
+	}
+	if page <= 1 || page > count-1 {
+		return count - 1
+	}
+	return page - 1
+}
+
+// DigitPage is the digit rule: digit d selects page d-1 when that page exists,
+// and otherwise selects nothing [07 R-HUD-03 §6]. The second result reports
+// whether the digit named a page at all; false is a no-op, not a clamp, which
+// is what separates the digits from the keys and the gadgets.
+func DigitPage(digit, count int) (int, bool) {
+	if digit < 1 || digit > 9 || count <= 0 {
+		return 0, false
+	}
+	page := DigitToPage(digit)
+	if page >= count {
+		return 0, false
+	}
+	return page, true
+}
+
+// PageCountFromButtons is the builder definition's page-count byte: the maximum
+// authored build page plus one, so the valid pages are 0..count-1
+// [07 R-HUD-03 §6]. Page 0 is the orders state — the command window opens the
+// side's "%sGEN.GUI" for it and it carries no products — and the authored build
+// pages are 1..count-1, page N holding entries (N-1)*perPage..N*perPage-1.
+//
+// A builder with no authored products therefore has a count of 1: the orders
+// page and nothing else. perPage is the GUI's authored product count; callers
+// without a generated page mapping use RetailBuildButtonsPerPage.
+//
+// This previously returned the number of authored build pages, with page 0 the
+// first of them, which left the orders state no slot of its own — the defect
+// WU-17-13 recorded and could not fix from the HUD alone.
+func PageCountFromButtons(n, perPage int) int {
 	if perPage <= 0 {
 		perPage = RetailBuildButtonsPerPage
 	}
-	return (n + perPage - 1) / perPage
+	if n <= 0 {
+		return 1
+	}
+	return (n+perPage-1)/perPage + 1
 }
 
-// ProductsForPage slices the authored button list for the given page data-driven.
+// ProductsForPage slices the authored button list for the given page. Page 0 is
+// the orders page and carries no products; page N carries the authored entries
+// (N-1)*perPage..N*perPage-1 [07 R-HUD-03 §6]. A page past the last authored
+// one carries nothing rather than repeating the last page's products.
 func ProductsForPage(all []string, page, perPage int) []string {
-	if len(all) == 0 {
+	if len(all) == 0 || page <= 0 {
 		return nil
 	}
 	if perPage <= 0 {
 		perPage = RetailBuildButtonsPerPage
 	}
-	cnt := PageCountFromButtons(len(all), perPage)
-	page = ClampPage(page, cnt)
-	start := page * perPage
+	start := (page - 1) * perPage
 	if start >= len(all) {
 		return nil
 	}
