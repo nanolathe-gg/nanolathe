@@ -211,16 +211,22 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 	}
 	menu := cat.BuildMenus[content.CanonicalKey(commanderName)]
 	// The published page-count byte counts the orders page too, so the authored
-	// <name>N.GUI windows on disk are one fewer [07 R-HUD-03 §6]. The reference
-	// install is what settles the convention: armcom1..4.GUI are the four
-	// authored pages of a nineteen-entry build menu.
-	wantPages := hud.PageCountFromButtons(len(menu.Buttons), hud.RetailBuildButtonsPerPage) - 1
+	// <name>N.GUI windows on disk are one fewer [07 R-HUD-03 §6]. The compiled
+	// byte is the probe of those windows [02 R-CAT-01 §5 step 5]; the HUD's own
+	// probe of the same files must agree with it, which is what pins the
+	// compiled value to the install rather than to itself. The reference
+	// install settles the convention: armcom1..4.GUI are the commander's four
+	// authored pages.
 	commanderDef, ok := cat.Unit(commanderName)
 	if !ok || commanderDef == nil {
 		t.Fatalf("commander definition %q missing from catalog", commanderName)
 	}
-	if got := b.hud.buildPageCount(commanderDef); got != wantPages {
-		t.Fatalf("%s authored page count = %d; want %d from CANBUILD", commanderName, got, wantPages)
+	wantPages := b.hud.buildPageCount(commanderDef)
+	if wantPages < 1 {
+		t.Fatalf("%s authored no build page window", commanderName)
+	}
+	if got := hud.BuilderPageCount(commanderDef); got != wantPages+1 {
+		t.Fatalf("%s compiled page count = %d; want %d authored windows plus the orders page", commanderName, got, wantPages)
 	}
 	if got := int(cur.CommandPage.PageCount); got != wantPages+1 {
 		t.Fatalf("published page count = %d; want %d authored pages plus the orders page", got, wantPages)

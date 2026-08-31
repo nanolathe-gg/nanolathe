@@ -253,3 +253,106 @@ func TestMinimapPlaySizeForMinimap(t *testing.T) {
 		t.Fatalf("PlaySizeForMinimap want 992,896 got %d,%d", w, h)
 	}
 }
+
+// TestMinimapMappedFollowsExploredMaskEachTick locks the explored-terrain
+// contract of [03 §3.8] on the surface the client actually draws: a cell the
+// local player has ever seen keeps its picture byte, tinted through the GUI
+// remap once current sight leaves it, and only a never-explored cell takes the
+// fog fill. The mapping word grid is an idempotent OR that is never
+// decremented, so exploration is permanent [03 §3.2].
+//
+// It is the regression test for playtest defect PT3-13. The MAPPED composite
+// used to run only while the allocation-time dirty bit stood, and nothing in
+// this port could raise that bit again, so the surface froze at the first
+// frame the HUD composited and no terrain explored afterwards ever appeared.
+// Retail raises the same bit from the tail of every local LOS raster that
+// changed a cell [03 §3.6 "Mapped-surface invalidation"], so the composite
+// must follow the committed stores on every tick.
+func TestMinimapMappedFollowsExploredMaskEachTick(t *testing.T) {
+	const grid = 4
+	const terrainIndex, dimIndex, fogIndex = byte(7), byte(3), byte(1)
+	picture := &render.RadarSurface{W: grid, H: grid, Pitch: grid, Bits: make([]byte, grid*grid)}
+	for i := range picture.Bits {
+		picture.Bits[i] = terrainIndex
+	}
+	remap := make([]byte, 256)
+	for i := range remap {
+		remap[i] = byte(i)
+	}
+	remap[terrainIndex] = dimIndex
+	svc := render.NewMinimapService(render.MinimapServiceConfig{
+		Picture: picture, MapW: grid, MapH: grid, LocalSlot: 0,
+		FogFill: fogIndex, GUIRemap: remap,
+	})
+	layout := camera.LayoutMinimap(1024, 1024)
+
+	// stores builds the committed pair for one tick: every cell in an explored
+	// column carries the local player's word bit, and every cell in a
+	// currently-sighted column carries a nonzero byte refcount [03 §3.1].
+	stores := func(explored, sighted []int) ([]uint16, []uint8) {
+		word := make([]uint16, grid*grid)
+		current := make([]uint8, grid*grid)
+		for y := 0; y < grid; y++ {
+			for _, x := range explored {
+				word[y*grid+x] = 1 << 0
+			}
+			for _, x := range sighted {
+				current[y*grid+x] = 1
+			}
+		}
+		return word, current
+	}
+	compose := func(explored, sighted []int) *render.RadarSurface {
+		t.Helper()
+		word, current := stores(explored, sighted)
+		svc.RebuildMapped(word, current)
+		if !svc.RebuildFinal(layout, 1024, 1024, nil, nil, 0, 0, 0) {
+			t.Fatal("FINAL rebuild produced no surface")
+		}
+		return svc.Final()
+	}
+	check := func(surf *render.RadarSurface, want [grid]byte, when string) {
+		t.Helper()
+		if surf == nil {
+			t.Fatalf("%s: no surface", when)
+		}
+		for y := 0; y < grid; y++ {
+			for x := 0; x < grid; x++ {
+				if got := surf.Bits[y*grid+x]; got != want[x] {
+					t.Fatalf("%s: cell %d,%d = %d, want %d", when, x, y, got, want[x])
+				}
+			}
+		}
+	}
+
+	// Tick one: the observer sights column 0 only.
+	check(compose([]int{0}, []int{0}),
+		[grid]byte{terrainIndex, fogIndex, fogIndex, fogIndex}, "first sighting")
+
+	// Tick two: the observer has moved to column 1. Column 0 is explored but no
+	// longer sighted, so it must stay drawn through the remap rather than
+	// revert to the fog fill; column 2 was never explored and stays filled.
+	check(compose([]int{0, 1}, []int{1}),
+		[grid]byte{dimIndex, terrainIndex, fogIndex, fogIndex}, "after the observer moved")
+
+	// Tick three: nothing is sighted any more — a dead observer stops sweeping
+	// and its already-mapped bits persist [03 §3.2].
+	final := compose([]int{0, 1}, nil)
+	check(final, [grid]byte{dimIndex, dimIndex, fogIndex, fogIndex}, "after the observer died")
+
+	// The explored-but-fogged tint must survive the draw into the framebuffer,
+	// not just the composite.
+	c := &Client{width: camera.MinimapLongSide, height: camera.MinimapLongSide,
+		indexed: make([]uint8, camera.MinimapLongSide*camera.MinimapLongSide)}
+	dst := hud.Rect{X1: 0, Y1: 0, X2: camera.MinimapLongSide - 1, Y2: camera.MinimapLongSide - 1}
+	c.DrawMinimapLayout(final, dst, layout, 0, 0, 0, 0)
+	seen := map[uint8]bool{}
+	for _, v := range c.indexed {
+		seen[v] = true
+	}
+	for _, want := range []byte{dimIndex, fogIndex} {
+		if !seen[want] {
+			t.Fatalf("drawn minimap never wrote index %d; got %v", want, seen)
+		}
+	}
+}

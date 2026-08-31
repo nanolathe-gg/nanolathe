@@ -151,6 +151,38 @@ type UnitDef struct {
 	// asset with its own provenance.
 	ModelTop int32
 
+	// BuildPageCount is the definition's build-menu page-count byte
+	// [02 R-CAT-01 §5 step 5]. With `<n>` the unit name, the compiler probes
+	// `guis/<n>1.GUI`, `guis/<n>2.GUI`, … until the first missing one; the byte
+	// is the index of that first missing page when at least one numbered page
+	// existed (so page 0 — the orders state — is counted whether or not
+	// `guis/<n>0.GUI` exists), else 1 when page 0 exists, else 0. Valid pages
+	// are therefore `0 .. BuildPageCount-1`.
+	//
+	// The authored `<n>N.GUI` pages are the sole authority for page existence:
+	// "a replacement engine must not infer an eight-slot grid or synthesize
+	// missing pages" [07 §9]. Dividing the `CANBUILD` list by six instead
+	// invents pages no page window exists for — three Arm and three Core
+	// builders author nineteen or twenty products across three authored pages,
+	// so that arithmetic claims a fourth — and selecting one leaves the command
+	// panel with no window at all.
+	//
+	// Like ModelTop this comes from a different asset than the FBI record and
+	// is deliberately absent from the canonical identity string below.
+	//
+	// TODO(question): `download*.TDF` raises this byte to the largest `MENU`
+	// byte naming the definition, never lowering it [02 R-CAT-01 §8 step 2].
+	// The reference install ships no such file, so the raise has no input and
+	// is not implemented; a mod that shipped one would need it.
+	BuildPageCount int32
+
+	// HasPageZeroGUI is bit 31 of the first flags word: `guis/<n>0.GUI` exists
+	// with a non-zero size [02 R-CAT-01 §5 step 5]. It lets page 0 compose a
+	// page window instead of the side's `%sGEN.GUI` [07 R-HUD-03 §6]. No entry
+	// of the reference install's `guis/` sets it, so stock content never
+	// reaches that branch.
+	HasPageZeroGUI bool
+
 	// Flags and postures — integer accessor default 0 booleans except standing orders default 2 [02 "Unit record"].
 	StandingMoveOrder  int32 // standingmoveorder default 2 [02 "Unit record"]
 	StandingFireOrder  int32 // standingfireorder default 2 [02 "Unit record"]

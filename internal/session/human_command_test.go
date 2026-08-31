@@ -200,7 +200,9 @@ func TestHumanCancelWithoutQueueBindsLazyQueue(t *testing.T) {
 
 func TestHumanBuildPageUsesAuthoritativeBuilderAndAuthoredPageGuard(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}, BuildMenus: map[string]*content.BuildMenuPage{}}
-	bdef := &content.UnitDef{UnitName: "armcom", Builder: true, MaxDamage: 100}
+	// BuildPageCount is the compiled page-count byte of [02 R-CAT-01 §5 step 5]:
+	// two authored page windows plus the orders page.
+	bdef := &content.UnitDef{UnitName: "armcom", Builder: true, MaxDamage: 100, BuildPageCount: 3}
 	bdef.CanonicalKey = "armcom"
 	other := &content.UnitDef{UnitName: "other", Builder: true, MaxDamage: 100}
 	other.CanonicalKey = "other"
@@ -244,7 +246,7 @@ func TestHumanBuildPageUsesAuthoritativeBuilderAndAuthoredPageGuard(t *testing.T
 
 func TestHumanBuildPageSelectionThenPageSameBoundary(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}, BuildMenus: map[string]*content.BuildMenuPage{}}
-	bdef := &content.UnitDef{UnitName: "builder", Builder: true, MaxDamage: 100}
+	bdef := &content.UnitDef{UnitName: "builder", Builder: true, MaxDamage: 100, BuildPageCount: 3}
 	bdef.CanonicalKey = "builder"
 	cat.Units[bdef.CanonicalKey] = bdef
 	cat.BuildMenus[bdef.CanonicalKey] = &content.BuildMenuPage{Buttons: []string{"a", "b", "c", "d", "e", "f", "g"}}
@@ -261,7 +263,7 @@ func TestHumanBuildPageSelectionThenPageSameBoundary(t *testing.T) {
 
 func TestCommandPagePublicationIsImmutableAndUsesSelectedPage(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}, BuildMenus: map[string]*content.BuildMenuPage{}}
-	bdef := &content.UnitDef{UnitName: "builder", Builder: true, MaxDamage: 100}
+	bdef := &content.UnitDef{UnitName: "builder", Builder: true, MaxDamage: 100, BuildPageCount: 3}
 	bdef.CanonicalKey = "builder"
 	cat.Units[bdef.CanonicalKey] = bdef
 	menu := &content.BuildMenuPage{Buttons: []string{"a", "b", "c", "d", "e", "f", "g"}}

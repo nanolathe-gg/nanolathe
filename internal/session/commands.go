@@ -254,7 +254,7 @@ func (s *Session) applyHumanBuildPage(c HumanBuildPageCommand) {
 	if menu == nil || len(menu.Buttons) == 0 {
 		return
 	}
-	pageCount := hud.PageCountFromButtons(len(menu.Buttons), hud.RetailBuildButtonsPerPage)
+	pageCount := hud.BuilderPageCount(u.Def)
 	defID, ok := s.Catalog.UnitDefIndex(u.Def.CanonicalKey)
 	if !ok || defID == 0 || defID > 0xffff {
 		return
@@ -330,12 +330,36 @@ func (s *Session) normalizeSelectedBuilderPages() {
 	}
 	view := hud.SelectUnit{Flags: u.Flags, DefID: uint16(defID)}
 	page := 0
-	if hud.IsPaged(view.Flags) {
+	switch {
+	case hud.IsPaged(view.Flags):
+		// The unit is on a build page: keep it there.
 		page = hud.DecodePage(view.Flags)
+	case hud.RememberedPage(view.Flags) == 0:
+		// The unit has never had a page selected — neither the page-shown bit
+		// nor the remembered page field of [07 §9] has ever been written — so
+		// this is its first selection. A builder opens on its first build page
+		// rather than on the orders state.
+		//
+		// Established by manual retail observation (2026-08-30 playtest report,
+		// recorded under [07 R-HUD-03 §6]): selecting a builder in retail shows
+		// its build menu, not its order palette. The page state itself is
+		// per-unit and persistent, so this fires once: selecting ORDERS clears
+		// the page-shown bit but leaves the page field alone, which is exactly
+		// what keeps that choice from being undone by the next selection.
+		page = 1
 	}
-	hud.SetBuildPage(&view, page, hud.PageCountFromButtons(len(menu.Buttons), hud.RetailBuildButtonsPerPage), nil)
+	// SetBuildPage clamps against the page-count byte, so a builder whose
+	// definition authors no page window stays on the orders state [07 §9].
+	hud.SetBuildPage(&view, page, hud.BuilderPageCount(u.Def), nil)
 	u.Flags = view.Flags
 }
+
+// TODO(question): which retail writer puts a builder on its first build page.
+// The behaviour is observed and the page bits are established [07 §9], but no
+// traced site sets the page-shown bit at unit creation, so the default is
+// applied here, at the selection boundary that already normalizes the page,
+// and keyed on "never paged" so it cannot overwrite a remembered choice.
+// Decider: a static trace of the writers of unit status bit 22.
 
 func stampHumanBuild(u *units.Unit, product string, tick uint32, queued bool, goalY numeric.Fixed) {
 	if u == nil {

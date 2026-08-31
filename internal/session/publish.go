@@ -118,7 +118,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 				// The unit painter's pass selector is the committed low two
 				// bits of the mover mode word, never a screen coordinate
 				// [03 R-RAST-01 §7][04 R-MOV-01 §8].
-				MoverMode: u.Move.Mode & 3,
+				MoverMode: publishedMoverMode(u),
 				// The health-bar pass draws '0'+Group beside the bar of a unit
 				// whose group number is nonzero [03 R-FX-01 §6][07 §9].
 				Group: u.Group,
@@ -256,12 +256,14 @@ func (s *Session) publishSnapshot(tick uint32) {
 					published.CommandPage.Builder = u.Handle
 					const buttonsPerPage = hud.RetailBuildButtonsPerPage // authored build rail page [07 §9]
 					// Page 0 is the orders state, not a build page: the count is
-					// the maximum authored build page plus one, page N carries the
-					// authored entries (N-1)*6..N*6-1, and page 0 carries none
-					// [07 R-HUD-03 §6]. The page number itself is the builder's
-					// own state — the page-shown bit and the page field of [07 §9]
-					// — copied out here, never derived from the renderer.
-					pageCount := hud.PageCountFromButtons(len(page.Buttons), buttonsPerPage)
+					// the definition's page-count byte, compiled from the
+					// authored page windows [02 R-CAT-01 §5 step 5], page N
+					// carries the authored entries (N-1)*6..N*6-1, and page 0
+					// carries none [07 R-HUD-03 §6]. The page number itself is
+					// the builder's own state — the page-shown bit and the page
+					// field of [07 §9] — copied out here, never derived from the
+					// renderer.
+					pageCount := hud.BuilderPageCount(u.Def)
 					published.CommandPage.PageCount = uint16(pageCount)
 					pageNumber := hud.ClampPage(hud.DecodePage(u.Flags), pageCount)
 					published.CommandPage.Page = uint16(pageNumber)
@@ -835,4 +837,35 @@ func publishVisibilityView(vis *visibility.Service, local uint8, out *frame.Visi
 	out.WordVisible = copyWordsInto(out.WordVisible, word)
 	out.W, out.H = w, h
 	out.CoverageBytes, out.Valid = byteCoverage, true
+}
+
+// publishedMoverMode is the mover mode the two unit passes select on
+// [03 R-RAST-01 §7]: grounded (1) is pass A, and everything else — structures
+// with no mover at all (0) and airborne units (2) — is pass B.
+//
+// A building-class unit owns no mover in retail ("the allocator constructs one
+// only for `bmcode 1`", [04 R-FAC-02 §5]), so the composer reads 0 for it and
+// paints it in pass B, over every feature, grounded unit and projectile. Our
+// movement system installs a mover record for every unit, buildings included,
+// so `Move.Mode` is 1 for a completed building and 0 only while it is still a
+// nanoframe — which put finished buildings in pass A and made a nanoframe
+// change passes at the moment it completed.
+//
+// The sim-side word is deliberately left alone. Retail has two: the mover
+// object's mode, which is what this pass split reads, and the unit record's
+// flags-word mode mirror, which "every allocation call site in the export
+// passes the literal 1" and which stays 1 for a factory's whole life
+// [04 R-FAC-02 §5]. `Move.Mode` is our single stand-in for both, and the
+// handlers that read it read it as the mirror — `RepairUnit` refuses a target
+// whose mode is not 1 [04 R-ORD-01 §5], which is how a building stays
+// repairable. Narrowing it here gives the painter the mover's word without
+// taking the mirror's meaning away from the handlers.
+func publishedMoverMode(u *units.Unit) uint8 {
+	if u == nil {
+		return 0
+	}
+	if u.Def != nil && !u.Def.BMCode {
+		return 0
+	}
+	return u.Move.Mode & 3
 }

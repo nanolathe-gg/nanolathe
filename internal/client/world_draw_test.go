@@ -168,3 +168,100 @@ func TestFrameWindowClipsToTheMapAndZero(t *testing.T) {
 		t.Fatalf("row %d should fall outside the %d bucket rows", row, win.bucketRows)
 	}
 }
+
+// flatModelNorthWest is flatModel's mirror: its screen footprint is a right
+// triangle reaching `size` pixels left of and above the anchor, so a feature
+// anchored past the right edge of the viewport still has pixels inside it
+// [R-RAST-01 §2].
+func flatModelNorthWest(c *Client, name string, size float64, colour uint8) {
+	c.models[name] = syntheticModel(
+		[]pieceInfo{{name: "root", parent: -1}},
+		[]syntheticTri{makeTriangle(0, "root", [3][3]float64{{0, 0, 0}, {-size, 0, 0}, {0, 0, size}}, colour, 0)},
+		0,
+	)
+}
+
+// TestFeaturePassesDoNotReadFog locks the gate of [03 R-RAST-01 §6]: neither
+// feature pass reads the explored mask or the fog grids. A tree standing on a
+// never-seen plot cell is drawn, and the fog overlay composed after strip 9 is
+// what hides it — which is why retail shows the top of a tree poking out of the
+// black instead of popping the whole sprite in when the cell is first explored.
+//
+// This is the PT3-10 regression: the passes previously culled a feature whose
+// anchor tile read Ch0 == 15, an edge that does not line up with the 32-pixel
+// fog blocks the overlay actually paints.
+func TestFeaturePassesDoNotReadFog(t *testing.T) {
+	c := newTestClient(t)
+	flatModel(c, "m_short", 40, 50)
+	flatModel(c, "m_tall", 40, 60)
+
+	short := frame.FeatureView{CX: 26, CZ: 10, X: px(430), Z: px(160), Height: 5, Model: "m_short"}
+	tall := frame.FeatureView{CX: 29, CZ: 10, X: px(470), Z: px(160), Height: 20, Model: "m_tall"}
+
+	// Every tile never seen: Ch0 == 15 is the solid-dark short-circuit
+	// [03 §3.3], the state the old gate culled on.
+	dark := make([]byte, 32*32)
+	for i := range dark {
+		dark[i] = 15
+	}
+	cur := &frame.Frame{
+		Selection: frame.SelectionView{LocalPlayer: 0},
+		Fog:       frame.FogView{Valid: true, W: 32, H: 32, Ch0: dark, Ch1: make([]byte, 32*32)},
+		Features:  []frame.FeatureView{short, tall},
+	}
+	if !fogUnexploredFeature(cur.Fog, short) || !fogUnexploredFeature(cur.Fog, tall) {
+		t.Fatal("scene does not exercise the never-seen state both features must ignore")
+	}
+
+	clearIndexed(c)
+	c.drawFeaturePass(cur, true)
+	c.drawWorldPass(cur, true)
+
+	if got := c.indexed[165*c.width+432]; got != 50 {
+		t.Fatalf("short feature on a never-seen cell: pixel = %d, want the feature's 50", got)
+	}
+	if got := c.indexed[165*c.width+472]; got != 60 {
+		t.Fatalf("tall feature on a never-seen cell: pixel = %d, want the feature's 60", got)
+	}
+}
+
+// TestFeatureWindowAdmitsSpriteOverhang locks the frame window's margin
+// [03 R-RAST-01 §6]: the column count is the viewport in whole plot cells plus
+// twelve, and the origin is ten columns left of the camera, so the window runs
+// two columns past the right edge of the view. A feature whose anchor cell is
+// entirely off-screen but whose sprite reaches back into the viewport is drawn.
+func TestFeatureWindowAdmitsSpriteOverhang(t *testing.T) {
+	c := newTestClient(t)
+	flatModelNorthWest(c, "m_overhang", 120, 70)
+
+	win := c.worldWindow()
+	// Camera at the origin, 640×480: columns 0..41 and rows 0..45 after the
+	// below-zero reduction. Column 40 begins at map pixel 640 — one past the
+	// last drawn column — and is still admitted; column 42 is not.
+	lastVisibleCol := c.cam.ViewW/cellPixels - 1
+	if !win.admitsCell(lastVisibleCol+1, 10) {
+		t.Fatalf("column %d, the first fully off-screen one, must stay in the window", lastVisibleCol+1)
+	}
+	if win.admitsCell(win.firstCol+win.colCount, 10) {
+		t.Fatalf("column %d is past the window and must be culled", win.firstCol+win.colCount)
+	}
+
+	f := frame.FeatureView{CX: lastVisibleCol + 1, CZ: 10, X: px(660), Z: px(160), Height: 5, Model: "m_overhang"}
+	cur := &frame.Frame{
+		Selection: frame.SelectionView{LocalPlayer: 0},
+		Fog:       frame.FogView{Valid: true, W: 32, H: 32, Ch0: make([]byte, 32*32), Ch1: make([]byte, 32*32)},
+		Features:  []frame.FeatureView{f},
+	}
+	clearIndexed(c)
+	c.drawFeaturePass(cur, true)
+
+	painted := 0
+	for i := range c.indexed {
+		if c.indexed[i] == 70 {
+			painted++
+		}
+	}
+	if painted == 0 {
+		t.Fatal("a sprite anchored past the right edge painted nothing inside the viewport")
+	}
+}

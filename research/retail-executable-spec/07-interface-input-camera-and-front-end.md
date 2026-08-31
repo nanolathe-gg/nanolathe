@@ -3441,6 +3441,40 @@ every build-menu entry whose builder matches and whose authored `PAGE` byte
 minus one equals the page number. The definition's page-count byte is the
 maximum authored page plus one, so valid pages are `0 .. count−1`.
 
+**Where the page-count byte comes from (Established, 2026-08-30).** It is the
+probe of `guis/<internal name>N.GUI` the catalog compiler runs per record,
+[02 R-CAT-01 §5] step 5 — not the length of the builder's `CANBUILD` list
+divided by the six product gadgets a full stock page carries. The two agree
+for 39 of the reference install's 45 builders and disagree for six:
+`ARMCA`/`ARMCK`/`ARMCV` author nineteen `CANBUILD` products and
+`CORCA`/`CORCK`/`CORCV` twenty, while all six author only three page windows,
+so the division claims a fourth page that no window backs. Retail cannot
+select it — its count byte is 4, not 5 — and those builders' last one or two
+authored products are simply unreachable, which is the data's own state, not a
+defect to repair. This is what §9's "generated `<unit>N.GUI` pages are
+authoritative for page existence and placement" means in arithmetic. A count
+of 0 (no numbered window and no `<n>0.GUI`) is a valid state and not malformed
+state: the switch opens the side's `%sGEN.GUI` and the stage/grey table below
+greys `BUILD` and `ORDERS` on its own "page count 0" arm. Eight stock builders
+are in it — `ARMASP`/`CORASP`, `ARMCARRY`/`CORCARRY`, `ARMDECOM`/`CORDECOM`,
+`ARMFARK` and `CORNECRO`.
+
+**The state a builder is first selected in (Established — manual retail
+observation, 2026-08-30).** Selecting a builder that has not yet had a page
+selected shows its **first build page**, not the orders state; the order
+palette is reached by clicking `ORDERS`. Because `ORDERS` selects page 0,
+which clears the page-shown bit and leaves the page field alone, the choice is
+remembered per unit from then on and the default fires only once. A builder
+whose page-count byte is below 2 has no build page to open and stays on the
+orders state.
+
+```text
+TODO(question): which retail writer puts a builder on its first build page.
+The page bits are established (§9) and the observation above is direct, but no
+traced site sets the page-shown bit at unit creation. Decider: a static trace
+of the writers of unit status bit 22.
+```
+
 The page-cycle keys and buttons ([R-CAM-01 §2]) move as follows, every
 change setting battle-interface dirty bit `0x10` and playing `nextbuildmenu`:
 
@@ -4550,6 +4584,144 @@ a further trace. The authored provenance of the three score terms — which
 compiled definition fields they are loaded from — is also **Unknown**; the
 decider is a writer trace from the definition compiler into those words.
 
+**Correction (2026-08-30) — score-term provenance now closed [R-REV-01 §7].**
+The sentence immediately above recorded the authored provenance of the three
+score terms as **Unknown**, and the paragraph before it said the current
+presentation picker "cannot reproduce this hover contract without guessing a
+bounds source". The provenance trace has since been done and that item is
+closed: the X and Z extents are written by the FBI unit-record compiler from
+the authored `FootprintX`/`FootprintZ` keys as `footprint << 20`, and the Y
+extent is rewritten by the catalog loader as the model total height once the
+3DO is loaded. Because both inputs are already committed — `FootX`/`FootZ` on
+the published unit view and the authored model the hull path already resolves —
+the reduction is reproducible at the presentation boundary with no new record
+[R-REV-01 §10]. What is still unpublished is the producer's list rank and its
+viewport/visibility admission result, so the `TODO(question)` below stands for
+a pixel-for-pixel replacement of the producer itself.
+
+#### R-REV-01 §7–§10 — the three hover score terms, their definition-compiler writers, and what decides an overlapping click (2026-08-30)
+
+This section closes the last open item of [R-REV-01 §6]: the authored
+provenance of the three compiled definition words the hover reduction reads.
+[R-REV-01 §6] recorded it as **Unknown** with "a writer trace from the
+definition compiler into those words" named as the decider. That trace has now
+been done, and all three writers are in the definition compiler and the catalog
+loader. Nothing here changes the hull geometry, the projection, the polygon
+predicate, or the producer's admission tests.
+
+**7. The three words and their writers — Established (direct-static).** Each
+compiled unit definition carries a six-word model box — a per-axis minimum and
+maximum — followed by three extent words and a derived mean. The extents are
+differences of the box:
+
+```text
+xExtent = maxX - minX
+yExtent = maxY - minY
+zExtent = maxZ - minZ
+```
+
+Two separate passes fill them, in this order:
+
+* The **FBI unit-record compiler**, having read the authored `FootprintX` and
+  `FootprintZ` keys into two definition halfwords, writes the horizontal box
+  purely from the footprint and centres it on the model origin:
+  `minX = -(footprintX << 20) / 2`, `maxX = (footprintX << 20) / 2`, and the
+  same pair for Z from `footprintZ`. It then writes the three extents as the
+  differences above and a fourth word `(zExtent + xExtent) / 3` that the hover
+  path never reads. So `xExtent = footprintX << 20` and
+  `zExtent = footprintZ << 20` exactly — a footprint cell is sixteen world
+  units, and `<< 20` is that sixteen expressed in 16.16, so each horizontal
+  extent is the footprint cell count times sixteen world units in 16.16. These
+  two words are **not** hull-helper outputs and are unrelated to the six hull
+  extrema of [R-REV-01 §1]; nothing later overwrites them.
+
+* The **catalog loader**, immediately after loading the definition's 3DO and
+  binding its textures, zeroes the definition's minimum-Y word, calls the
+  **model-height helper** on the loaded node tree, stores the answer as the
+  maximum-Y word, and rewrites `yExtent = maxY - minY`. Because the minimum was
+  just zeroed, the Y extent the reduction reads **is** the model total height.
+  This second pass runs after the FBI compiler's write, so the footprint-derived
+  Y extent the compiler produced never survives; the X and Z extents do.
+
+**Model-height helper — Established (direct-static).** It returns one signed
+16.16 vertical value for a node and takes no arguments beyond the node. Its
+running maximum is seeded at **zero**, not at the first vertex. It walks the
+node's sibling chain; for each node it takes the maximum of
+`vertexY + nodeTranslationY` over that node's own vertex array, and, when the
+node has a child chain, takes the maximum against `helper(child) + nodeTranslationY`.
+Two consequences follow from the zero seed: a model whose vertices all lie below
+the origin has height zero rather than a negative height, and a subtree lying
+entirely below its parent contributes zero rather than lowering the result. The
+helper applies **no** minimum-vertex-count gate — that gate belongs to the hull
+bounds helper of [R-REV-01 §1] and not to this one — reads no orientation, and
+runs once per definition at load time on the authored bind pose.
+
+**8. The reduction, restated with its terms named — Established
+(direct-static).** [R-SEL-02B2] already established the arithmetic; only the
+term names were open. With the writers above it reads:
+
+```text
+score = ((((yExtent * 32768) >> 16) + zExtent) * xExtent) >> 16
+      = ((((modelTotalHeight * 32768) >> 16) + (footprintZ << 20)) * (footprintX << 20)) >> 16
+```
+
+Both multiplications are signed 64-bit products; each `>> 16` is an arithmetic
+shift of that 64-bit intermediate whose result is taken as a signed 32-bit value
+before the next step, including the addition, which wraps in 32 bits. There is
+no overflow guard. The running best is seeded above every reachable score and
+replaced only on a strictly smaller score, so an equal score retains the earlier
+`HOT UNITS` member — the lower stable pool position [R-REV-01 §5].
+
+**9. What decides a click that hits more than one unit — Established
+(direct-static), with one consequence a Supported inference.** The whole of
+retail's overlap rule is the §8 reduction over the candidates whose hull admits
+the pointer. Enumerated against the plausible alternatives, none of which appear
+anywhere in the producer or the consumer:
+
+* **Not draw order or depth.** The hover consumer walks the `HOT UNITS` list in
+  the producer's ascending pool order [R-REV-01 §5]. It reads no bucket, row,
+  pass or depth key, and the painter's two-pass split of [03 R-RAST-01 §7] has
+  no counterpart here.
+* **Not altitude.** No unit Y, terrain height, or airborne test is read by the
+  consumer. The producer touches a terrain record only to clamp one projected
+  viewport bound before its bounds/viewport intersection [R-REV-01 §5 test 2];
+  that clamp cannot reorder candidates because it feeds an inclusion test, not a
+  rank.
+* **Not a mover-class or unit-category priority.** The consumer repeats exactly
+  one per-candidate gate, the non-empty model reference; it evaluates no
+  movement-mode, building, or category predicate.
+* **Not list order alone.** List order is only the tie-break, reached when two
+  scores are exactly equal.
+* **Not a bounding radius.** Admission is the four-point strict polygon test of
+  [R-REV-01 §4]; the only distance comparison in the function is the minimap
+  branch's separate squared-distance test against four, over a different list.
+
+The score is therefore a pure definition-size measure — half the model's height
+plus its Z footprint, scaled by its X footprint — and **the smallest definition
+wins**. The airborne-unit precedence a player observes when clicking a plane
+that is flying over a plant is this rule and not an altitude rule: an aircraft's
+definition is smaller than the plant's, so it scores lower. The **Supported
+inference** is only the generalization, not the mechanism: because stock
+aircraft carry small footprints and short models, the size rule reproduces
+airborne precedence over stock buildings across the stock unit set. It does not
+hold by construction — a click landing inside both hulls of a large aircraft and
+a 2×2 building resolves to the building — and what would settle the stock-set
+claim is a census of `FootprintX`/`FootprintZ` and model heights over the stock
+definitions, not a further trace.
+
+**10. Presentation boundary — Established consequence.** [R-SEL-02B2]'s
+"presentation publication gap" concluded that the three score terms could not be
+computed at the committed-frame boundary without guessing. With §7 that no longer
+holds: `frame.UnitView` already publishes `FootX`/`FootZ` — the same authored
+`FootprintX`/`FootprintZ` the compiler read — and the authored model the hull
+path already resolves supplies the model total height by the §7 walk. The
+reduction is reproducible from what is already committed, so no new pick record
+is needed for the ordering. The rest of [R-REV-01 §6] is unaffected: the
+producer's viewport/visibility admission and its list rank are still not
+published, and the `TODO(question)` for the ordered candidate record still
+stands for anyone wanting a pixel-for-pixel replacement of the producer.
+
+
 ### Supported inference
 
 Picking should return a typed hit result with ownership/visibility metadata,
@@ -4604,9 +4776,23 @@ component mapping as still Unknown and called the earlier "picking hull closed"
 wording too broad. The mapping is closed by [R-REV-01]; what remains open is
 the committed publication record, not the arithmetic.
 
-- The committed pick record, and the authored provenance of the three score
-  terms · [R-REV-01 §6] · static trace. A pixel-for-pixel presentation
-  replacement is blocked on both.
+**Correction (2026-08-30).** The first bullet below previously read "The
+committed pick record, and the authored provenance of the three score terms ·
+[R-REV-01 §6] · static trace. A pixel-for-pixel presentation replacement is
+blocked on both." The score-term half is closed by [R-REV-01 §7] — they are the
+footprint-derived X and Z extents and the model total height — and with it the
+ordering itself is reproducible from what the committed frame already carries
+[R-REV-01 §10], so a replacement is no longer blocked on the reduction. Only the
+producer's own list rank and admission result remain unpublished.
+
+- The committed pick record: the producer's list rank and its
+  viewport/visibility admission result · [R-REV-01 §6] · static trace. A
+  pixel-for-pixel replacement of the *producer* is blocked on it; the hull test
+  and the score reduction are not.
+- Whether a stock aircraft always outscores the stock buildings it can fly over
+  · [R-REV-01 §9] · a census of `FootprintX`/`FootprintZ` and model heights over
+  the stock definitions. The mechanism is Established; only the generalization
+  over the stock set is a Supported inference.
 - Cursor handle slot 0 identity — the unused/overflow slot · static trace. The
   only remaining cursor-table item.
 - Feature-versus-unit pointer priority; features are absent from the unit

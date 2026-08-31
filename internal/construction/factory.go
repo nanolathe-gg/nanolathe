@@ -2383,6 +2383,9 @@ func (s *Service) handleState3(factory *units.Unit, node *orders.Node, tick uint
 	}
 	// Update remaining and health with fractional carry [05 C24].
 	product.Remaining = nv
+	// An admitted work step is what holds the product's own decay off for the
+	// next decay window. See deferGetBuiltDecay and [04 R-ORD-01 §5].
+	deferGetBuiltDecay(product, tick)
 	if hg != 0 {
 		product.Health += hg
 		if product.Health > product.MaxHealth {
@@ -2623,7 +2626,14 @@ func (s *Service) handleGetBuiltOrder(product *units.Unit, node *orders.Node, ti
 				return 2
 			}
 			// Phase 2 applies the shared negative work arm before rearming
-			// eleven ticks [04 R-FAC-02 §4][04 R-ORD-01 §5].
+			// eleven ticks [04 R-FAC-02 §4][04 R-ORD-01 §5] — but only on a
+			// visit that a builder's work step has not already deferred. See
+			// deferGetBuiltDecay for why the decay cannot be unconditional.
+			if node.Param1 != 0 && tick < node.Param1 {
+				node.DynamicGate = 0x8001
+				node.Deadline = int32(node.Param1)
+				return 2
+			}
 			if product.Def != nil && product.Def.BuildCostEnergy > 0 {
 				worker := -(11 * product.Def.BuildTime / product.Def.BuildCostEnergy)
 				var bucket *float32
@@ -2856,5 +2866,72 @@ func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {
 		Completed:   completed,
 		State:       afterState,
 		Diagnostics: append([]string(nil), s.messages...),
+	}
+}
+
+// getBuiltDecayPeriod is the eleven-tick rearm of `GetBuilt`'s phase-2 decay
+// visit [04 R-ORD-01 §5].
+const getBuiltDecayPeriod = 11
+
+// deferGetBuiltDecay pushes a product's `GetBuilt` decay visit one decay period
+// past this tick. Every admitted construction step on the product calls it, so
+// the decay only ever fires once a full period has passed with no work
+// admitted — which is what "while a builder is working" means.
+//
+// [04 R-ORD-01 §5] leaves this as an explicit Unknown: it establishes that
+// phase 2, "on expiry with `0x8000` absent", applies the shared work step with
+// a negative quantum of `−(11 · buildtime / buildcostenergy)`, and records that
+// the producer of the wake bit `0x8000` — "and therefore whether the 11-tick
+// nanoframe decay runs while a builder is working" — was not found in the
+// bounded trace. Its named deciders are a static trace of the work helper's
+// callers *or* "a timed build measured against the formula". The timed
+// measurement settles it, and it settles it against an unconditional decay:
+//
+//   - construction advances the fraction by `trunc(workertime/30) / buildtime`
+//     per tick; the decay retreats it by `1 / buildcostenergy` per tick.
+//   - A construction kbot (`workertime` 80, quantum 2) building a stock
+//     Arm level-1 factory (`buildtime` 6760, `buildcostenergy` 1130) advances
+//     0.000296 per tick against a decay of 0.000885 — three times its own
+//     work. An advanced construction aircraft (quantum 1) is six times short.
+//     With the decay unconditional, neither could finish a factory at all: the
+//     frame would run backwards to full and pay its metal back on the way,
+//     which is exactly the playtest report this closes.
+//   - Retail plainly lets a construction kbot finish a factory, so the decay
+//     is suppressed while work is being admitted. [04 R-FAC-02 §4]'s aside
+//     that "nothing" suppresses it reasoned only about the *factory-product*
+//     case, where the producing factory advances the same record it holds; it
+//     is not evidence about a mobile builder's site.
+//
+// The retail mechanism is presumably the missing `0x8000` producer. What is
+// reproduced here is its measured effect, not a claim about its encoding.
+//
+// TODO(question): the producer of `GetBuilt`'s wake bit `0x8000` and what its
+// phase-2 arm does with it. Decider: a static trace of the shared work helper's
+// callers for a wake into the product's `GetBuilt` record. The window used here
+// is the decay period itself; a traced producer may name another.
+func deferGetBuiltDecay(product *units.Unit, tick uint32) {
+	if product == nil {
+		return
+	}
+	q := orders.QueueForUnit(product)
+	if q == nil {
+		return
+	}
+	getBuiltID := orders.Lookup("GetBuilt")
+	if getBuiltID == 0 {
+		return
+	}
+	for _, n := range q.Primary() {
+		if n == nil || n.ID != getBuiltID {
+			continue
+		}
+		// Param1 is unused by GetBuilt (the record is pushed with a zero
+		// payload), so it carries the tick the decay may next fire on. Zero
+		// stays "never deferred", which is why the guard tests it first.
+		next := tick + getBuiltDecayPeriod
+		if next > n.Param1 {
+			n.Param1 = next
+		}
+		return
 	}
 }

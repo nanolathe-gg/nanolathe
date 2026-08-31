@@ -2247,11 +2247,23 @@ attach therefore stands complete on the pad until `t0 + 301` before it
 receives any movement order; one finishing later waits at most 11 ticks plus
 the `BeCarried` alignment. This composition is Established from the two
 traces; the observable pad dwell it predicts is the natural retail
-confirmation and is listed in §8. It also answers, for factory products, the
-[R-ORD-01 §5] question "what suppresses this decay while a builder is
-working": nothing — the nanoframe decays by `11 / buildcostenergy` of its
-remaining fraction on every 20-tick decay visit from `t0 + 351`, in
-competition with construction, until completion.
+confirmation and is listed in §8.
+
+**Correction (2026-08-30).** This paragraph used to close by answering the
+[R-ORD-01 §5] question "what suppresses this decay while a builder is working"
+with "nothing — the nanoframe decays by `11 / buildcostenergy` of its remaining
+fraction on every 20-tick decay visit from `t0 + 351`, in competition with
+construction, until completion." That answer was wrong, and it came from the
+wrong evidence: the gate census above establishes only that nothing wakes
+`GetBuilt` **early**, which is a statement about the pump, not about what the
+phase-2 arm does on a visit it does reach. [R-ORD-01 §5] now closes the
+question the other way — an admitted work step defers the decay one period — on
+arithmetic this section could not see, because a factory product is advanced by
+the very factory that holds its record while a mobile builder's site is not.
+The cadence above stands unchanged: `GetBuilt` is woken only by its own
+deadline, and a carried product's phase-2 visits fall every 20 ticks from
+`t0 + 351`. What changes is that a visit reached while work is still being
+admitted defers instead of decaying.
 
 **Established — the release target.** With a rally, the product's release
 target is the rally's own goal triple in the resolved move/patrol handler
@@ -3090,13 +3102,47 @@ its own deadline — on expiry with `0x8000` absent it sets deadline **11** and
 applies the shared work step with a **negative** quantum, `−(11 · buildtime /
 buildcostenergy)`, i.e. the nanoframe **decays** by `11 / buildcostenergy`
 of its remaining fraction every 11 ticks, with the refund arithmetic of doc
-05 (the work helper's negative arm). **Unknown:** what suppresses this decay
-while a builder is working — a producer of `0x8000` that the bounded trace
-did not find, or nothing (in which case decay competes with construction).
-*Decider:* trace the work helper's callers for a wake into the product's
-`GetBuilt` record, or measure a timed build against the formula. **(b)** the
+05 (the work helper's negative arm). **(b)** the
 standing-bit copy runs only under the double bit-28 / bit-14 guard of §3.8
 and copies the experience word only for a computer-owned builder.
+
+**Closed (2026-08-30) — an admitted work step suppresses the decay.** This
+paragraph previously carried the **Unknown** "what suppresses this decay while
+a builder is working — a producer of `0x8000` that the bounded trace did not
+find, or nothing (in which case decay competes with construction)", with the
+named deciders "trace the work helper's callers for a wake into the product's
+`GetBuilt` record, **or measure a timed build against the formula**". The
+second decider settles it, and it settles it against the "or nothing" arm.
+Established by measurement and arithmetic; the wake's encoding stays open.
+
+Per tick, construction advances the fraction by
+`trunc(workertime / 30) / buildtime` and the decay retreats it by
+`1 / buildcostenergy` (the 11-tick quantum spread over its own 11 ticks). The
+decay therefore outruns the builder whenever
+`trunc(workertime / 30) · buildcostenergy < buildtime`. On stock Arm content a
+construction kbot (`workertime` 80, quantum 2) building a level-1 factory
+(`buildtime` 6760, `buildcostenergy` 1130) advances `0.000296` per tick
+against a decay of `0.000885` — three times its own work; a construction
+aircraft (quantum 1) is six times short. With the decay unconditional neither
+could ever finish a factory: the frame would run backwards to full and pay its
+metal back on the way. Retail plainly lets both finish one, so the decay is
+held off while work is being admitted, and the missing `0x8000` producer is
+the shared work step itself.
+
+The **window** reproduced is the decay period: an admitted step pushes the
+product's next decay visit to `tick + 11`, so the decay fires only once a full
+period has passed with nothing admitted. A denied work step (the two-resource
+admission of doc 05) admits nothing and therefore defers nothing — a builder
+stalled on metal watches its own site decay, which is the behavior the
+resource stall is supposed to have.
+
+```text
+TODO(question): the producer and phase-2 reading of `GetBuilt`'s wake bit
+`0x8000`. The suppression above is its observable effect, measured, not its
+encoding; the window may be some other value the trace would name. Decider:
+a static trace of the shared work helper's callers for a wake into the
+product's `GetBuilt` record.
+```
 
 ### Closed — two gate-bit producers, located [R-ORD-01 §6] (2026-08-29)
 
@@ -10736,10 +10782,12 @@ replacement bullet is needed because the ground path has no vertical term.
   the weapon-slot control byte's bit 4 · §3.3, [R-ORD-01 §6] · static trace
   of the capability word's writers. (Pending bit `0x10`'s producer is closed:
   [R-MOV-03 §7].)
-- Producer of `GetBuilt`'s wake bit `0x8000`, and therefore whether the
-  11-tick nanoframe decay of [R-ORD-01 §5] runs while a builder is working
-  · [R-ORD-01 §5], doc 05 · static trace of the work helper's callers, or a
-  timed build measured against the formula.
+- Producer and phase-2 reading of `GetBuilt`'s wake bit `0x8000`
+  · [R-ORD-01 §5], doc 05 · static trace of the work helper's callers.
+  (Narrowed 2026-08-30: the half of this item that asked *whether* the 11-tick
+  nanoframe decay runs while a builder is working is closed — it does not; an
+  admitted work step defers it one period. What stays open is the bit's own
+  encoding and the exact deferral window.)
 - `SelfDestruct` with a `selfdestructcountdown` of 6 or 7 indexes past the
   six-entry countdown caption table · [R-ORD-01 §2] · the FBI parser's clamp
   on the 3-bit field.

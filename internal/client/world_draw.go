@@ -52,12 +52,25 @@ type worldWindow struct {
 // worldWindow derives this frame's plot-cell window from the committed camera.
 //
 // The row and column counts are the viewport measured in 16-pixel plot cells
-// plus a fixed margin — thirty-two rows and twelve columns — fixed once when
+// plus a fixed margin — thirty-two rows and twelve columns — sized once when
 // the map is loaded, which together with the window origin gives sixteen rows
 // of margin above the viewport and sixteen below, ten columns left and two
-// right. [03 R-RAST-01 §6] records the origin and the clipping but names the
-// two counts only as map-derived globals; the margins above are what the
-// composer allocates them from.
+// right. [03 R-RAST-01 §6] records the origin and the clipping and names the
+// two counts only as map-derived globals; the decomposition above is
+// Established: the map loader stores the viewport width and height each
+// truncated to whole plot cells, and sizes the window's column array at that
+// column count plus twelve and its row array at that row count plus
+// thirty-two. See the addendum reported for [03 R-RAST-01 §6].
+//
+// Retail measures the *battle* viewport (the beam rectangle inset at 128,32)
+// while Nanolathe composes the world across the whole framebuffer and paints
+// the chrome over it, so `cam.EffectiveView()` is 128 wider and 64 taller than
+// retail's count. The window origin absorbs the difference exactly: retail's
+// anchor formula folds the 128/32 beam offset in as eight columns and two rows
+// [03 §5.1.4], which Nanolathe subtracts back out at the projection. Both
+// windows therefore admit the same absolute pixel band — 160 map pixels left
+// of the visible edge and 17 right, 256 above and 241 below — and neither
+// culls a sprite the other would draw.
 //
 // Presentation zoom is not a retail concept: the effective view is used so
 // that zooming out cannot clip a visible unit out of the window [F-P1-008].
@@ -264,6 +277,27 @@ func (c *Client) drawCommittedFrame(cur *frame.Frame, ok bool) {
 // (authored height below 10) whose plot cell is inside the frame window. A
 // tall feature is deferred here and drawn in pass A, interleaved with that
 // row's grounded units [03 R-RAST-01 §6].
+//
+// The window is the only admission test either feature pass applies to a tree,
+// rock or wreck. Retail's gate is "the definition does not carry
+// nodrawundergray, or the plot cell's placer nibble equals the local player's
+// slot, or the two-corner LOS predicate passes", and it reads neither the
+// explored mask nor the fog grids: fog and LOS are not applied at raster time
+// — the fog overlay is composed after strip 9 and darkens features, units,
+// shadows and projectiles alike [03 R-RAST-01 §6][03 §5.1.5]. Gating the draw
+// on the anchor cell's fog tile instead was the PT3-10 defect: it culled the
+// whole sprite on a per-tile edge that does not line up with the 32-pixel fog
+// blocks, so a tree vanished while the ground it stands on was lit and
+// reappeared whole the moment its own tile flipped.
+//
+// TODO(T25): the nodrawundergray branch needs the feature definition's flag
+// published on frame.FeatureView; internal/frame and internal/features are
+// owned elsewhere. Placeholder: the unconditional branch, which is retail for
+// every definition that lacks the flag — every tree, rock and wreck, i.e.
+// everything these passes draw on the stock feature tables. Wall and fort
+// types carry it and are drawn here where retail would hide them under
+// never-seen cells; FeatureView already carries the placer selector the second
+// branch needs [03 §5.1.5].
 func (c *Client) drawFeaturePass(cur *frame.Frame, ok bool) {
 	if !ok || cur == nil || c.cam == nil {
 		return
@@ -271,7 +305,7 @@ func (c *Client) drawFeaturePass(cur *frame.Frame, ok bool) {
 	win := c.worldWindow()
 	for i := range cur.Features {
 		f := &cur.Features[i]
-		if f.Height >= 10 || fogUnexploredFeature(cur.Fog, *f) {
+		if f.Height >= 10 {
 			continue
 		}
 		if !win.admitsCell(f.CX, f.CZ) {
@@ -321,9 +355,11 @@ func (c *Client) drawWorldPass(cur *frame.Frame, ok bool) {
 		sy -= camera.OriginY
 		b.add(worldDrawable{row: row, unit: u, screenX: sx, screenY: sy})
 	}
+	// The deferred tall features take the same gate as pass 1: the window, and
+	// nothing that reads fog or LOS [03 R-RAST-01 §6].
 	for i := range cur.Features {
 		f := &cur.Features[i]
-		if f.Height < 10 || fogUnexploredFeature(cur.Fog, *f) {
+		if f.Height < 10 {
 			continue
 		}
 		if !win.admitsCell(f.CX, f.CZ) {

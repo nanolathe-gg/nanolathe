@@ -369,16 +369,30 @@ func (m *Manager) Tick(tick uint32, w *units.World, econ *economy.Service) {
 	} else if m.Strategic.Catalog != nil && m.Catalog == nil {
 		m.Catalog = m.Strategic.Catalog
 	}
-	// Eligible entry — count for classification cadence [08] "classifications run every 30 eligible manager entries" [PLAN_11 C3]
-	if m.countdown == 0 {
-		m.countdown = 30
-	}
-	m.countdown--
-	if m.countdown == 0 { // [08] every 30 eligible entries [PLAN_11 C3]
-		m.runClassifications(tick, w, econ)
-	}
-	// Inner gate: due virtual tasks execute only when manager player controller ==2 [08] [PLAN_11 C1]
+	// Inner gate: the 30-countdown, the classification sweep and the due virtual
+	// tasks all run only when this manager's own controller equals the computer
+	// policy value [08 "Dispatch gates and order sinks"] [PLAN_11 C1].
+	//
+	// The countdown and the sweep used to sit above this gate, on the outer
+	// eligible cadence, so a human slot (controller 1) classified its own units
+	// as well. That stamped an AI task-group number on every unit a human owned,
+	// and the composer's unit-label walk draws the digit `'0' + group` under any
+	// unit carrying a nonzero group [03 R-FX-01 §6] — which is why a stock
+	// skirmish showed a "4" under the commander and a "1" under every unarmed
+	// building of the local player. The section is explicit about the order: the
+	// outer failure arm "still runs weapon maintenance but no virtual tasks",
+	// and it is only "when the gate passes" that "the manager decrements its
+	// 30-countdown; when it reaches zero it resets to 30 and runs the
+	// classification sweep".
 	if ctrl == 2 {
+		// Eligible entry — count for classification cadence [08] "classifications run every 30 eligible manager entries" [PLAN_11 C3]
+		if m.countdown == 0 {
+			m.countdown = 30
+		}
+		m.countdown--
+		if m.countdown == 0 { // [08] every 30 eligible entries [PLAN_11 C3]
+			m.runClassifications(tick, w, econ)
+		}
 		// Class vectors are initialized before the first task can select a
 		// candidate, but their periodic refresh is deliberately below task
 		// dispatch. Selection therefore observes the prior refresh for this tick

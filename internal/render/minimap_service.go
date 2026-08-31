@@ -33,7 +33,13 @@ type MinimapServiceConfig struct {
 	MapH      int
 	LocalSlot uint8
 	FogFill   byte
-	GUIRemap  []byte
+	// GUIRemap is the 256-entry index translation MAPPED applies to explored
+	// but currently unseen cells. Despite the field name, the table retail
+	// reads here is the palette-install gray table — the same grayscale-nearest
+	// LUT the main-view fog overlay uses, which desaturates fogged terrain
+	// while preserving its texture — and not the GUI colour-field lookup
+	// [03 §3.8 correction of 2026-08-30][03 §3.3].
+	GUIRemap []byte
 }
 
 // NewMinimapService creates a surface lifecycle. A nil picture remains
@@ -82,10 +88,27 @@ func (s *MinimapService) SetBlinkPhase(phase uint8) {
 	s.dirty |= MinimapDirtyFinal
 }
 
-// RebuildMapped consumes LOS stores only when mapped is dirty. It does not
-// mutate the supplied stores and marks FINAL dirty after the copy. [03 §3.8]
+// RebuildMapped composites the picture against the supplied LOS stores. It
+// does not mutate them and marks FINAL dirty after the composite. [03 §3.8]
+//
+// Retail gates the composite on the MAPPED dirty bit, and that bit is raised
+// by the tail of the LOS raster publication — the same tail that clears the
+// fog-cache-valid mode bit, and under the same two conditions: the raster
+// changed at least one cell, and the observer belongs to the local viewing
+// player [03 §3.6 "Mapped-surface invalidation"][R-VIS-01 §2]. Our
+// presentation layer receives the committed word mask and byte grid once per
+// tick and has no separate invalidation channel from the publisher, so the
+// composite runs on every supplied pair instead of behind a bit nothing can
+// raise. The picture is identical either way: MAPPED is a pure function of the
+// picture and the two stores, which is exactly what the dirty bit caches, and
+// the composite is bounded by the 126-pixel radar canvas rather than by the
+// map-sized stores.
+//
+// Gating on the allocation-time bit alone froze MAPPED at the first frame the
+// HUD composited, so terrain explored after that frame never reached the
+// minimap and the fog tint never changed (playtest defect PT3-13).
 func (s *MinimapService) RebuildMapped(word []uint16, current []uint8) bool {
-	if s == nil || s.picture == nil || s.dirty&MinimapDirtyMapped == 0 {
+	if s == nil || s.picture == nil {
 		return false
 	}
 	s.mapped = BuildMapped(s.picture, word, current, s.mapW, s.mapH, s.local, s.dcb, s.remap)

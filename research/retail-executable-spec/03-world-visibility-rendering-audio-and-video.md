@@ -4133,6 +4133,31 @@ down to 0 drives the blink phase. The picture is built once, dirty-triggered;
 mapped composites when dirty; final is rebuilt every tick after the sensor
 phase.
 
+**Mapped-surface invalidation, exactly (Established, 2026-08-30).** "Placement
+invalidation" in the cadence paragraph above is the LOS *raster* publication,
+not unit or building placement. The tail of the raster that ORs a footprint's
+bits into the mapping word grid raises the mapped-dirty bit and clears the
+fog-cache-valid mode bit **together**, under one shared pair of conditions: the
+raster changed at least one cell, and the observer's owning slot is the local
+viewing slot. The bulk rebuild of the whole mapping state (§3.2's rebuild-fills
+path) ends with the same two writes, followed immediately by the mapped
+composite and the final rebuild. There is no third writer: nothing else in the
+minimap, sensor or contacts paths sets the mapped-dirty bit, so the only events
+that recomposite MAPPED are surface allocation, a local observer's raster
+changing a cell, and a bulk rebuild. This is the same event set §3.1 already
+records for the fog-cache-valid bit ("cleared at map load, on camera moves, and
+by LOS publication (any local coverage change)"), minus camera moves, which
+touch the fog cache only.
+
+Consequence for a reimplementation: the mapped composite is a pure function of
+the picture and the two LOS stores, and the dirty bit is only a cache over it.
+A port whose presentation layer reads the committed stores once per tick may
+composite unconditionally and obtain the identical surface; what it must not do
+is gate on a bit that only surface allocation ever raises, which freezes the
+minimap at the first composited frame and loses the explored-terrain memory the
+idempotent-OR word grid exists to provide (§3.2 "a dead unit merely stops being
+swept and its already-mapped bits persist").
+
 **Save/load.** The final surface is serialized into the save blob. The picture,
 mapped, and temp are rebuilt through the dirty bits on load; the mapping word
 mask and the per-player byte grids are serialized as the Mapping blob. The fog
@@ -4245,7 +4270,7 @@ for y in 0 .. h-1, x in 0 .. w-1:
     visIdx = (y*mapH2/h)*mapW2 + (x*mapW2/w)       truncating integer scale
     word = mapping word mask[visIdx]
     if word bit (1 << (localPlayer & 31)) is set:
-        if local byte grid[visIdx] == 0:  out = guiRemap[src]   explored but currently unseen → tinted
+        if local byte grid[visIdx] == 0:  out = grayTable[src]   explored but currently unseen → desaturated
         else:                             out = src             currently visible → raw picture byte
     else:
         out = fogFillIndex                                     unexplored → solid fill
@@ -4253,12 +4278,31 @@ for y in 0 .. h-1, x in 0 .. w-1:
 ```
 
 The order is word → byte → remap: the word bit decides explored, the byte grid
-decides currently seen, and explored-but-unseen cells pass through the GUI
-remap table (a 256-entry index-translation table populated at palette load)
-instead of drawing raw. Unexplored cells take the fog-fill palette index, the
-same dark index the viewport fog cache uses as its default fill. The composite
-shares the LOS grids with gameplay visibility but is a distinct presentation:
-it never writes the word mask, and it sets the final-dirty bit when done.
+decides currently seen, and explored-but-unseen cells pass through a 256-entry
+index-translation table populated at palette load instead of drawing raw.
+Unexplored cells take the fog-fill palette index, the same dark index the
+viewport fog cache uses as its default fill. The composite shares the LOS grids
+with gameplay visibility but is a distinct presentation: it never writes the
+word mask, and it sets the final-dirty bit when done.
+
+**Correction (2026-08-30): the remap is the gray table, not a GUI remap
+(Established, direct static).** The two sentences above previously named that
+table "the GUI remap table". That was wrong, and it inverted the intended
+appearance. The composite loads the remap pointer from the display
+environment's table slot that the platform layer fills with the 256-byte
+**GRAY TABLE** at environment initialization — the same allocation, the same
+slot, and the same table the main-view fog overlay's gray-family span writer
+applies as `dst = grayTable[dst]` for fogged-but-explored terrain (§3.3,
+§4.3.3, and §4.3's "applies it to the screen for fogged-but-explored tiles").
+Explored-but-unseen minimap terrain is therefore **desaturated with its texture
+preserved**, exactly as the main view's fogged terrain is, and the minimap and
+the viewport agree on what fog looks like.
+
+The GUI palette resolves authored `.GUI` colour fields and is not defined over
+image bytes (§4.3), so a port that feeds terrain picture indices through a
+GUI→base lookup paints explored terrain in unrelated interface colours rather
+than dimming it. Confidence: **Established** — the slot the composite reads is
+the slot the named-block allocator writes, and no other writer touches it.
 
 ### 3.9 Contacts pass on the minimap
 

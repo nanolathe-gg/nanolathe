@@ -75,27 +75,29 @@ func SnapshotPointVisible(m frame.VisibilityView, x, y, z numeric.Fixed, viewer 
 // research behind it and made large units clickable only near their centre.
 //
 // Candidate order is the ascending unit-pool walk of [07 R-REV-01 §5], which is
-// reproduced here by keeping the admitted candidate with the lowest stable slot
-// rather than trusting the published slice order. The producer's three
-// admission tests map as follows: test 1 is the non-empty model reference; test
-// 3 is SnapshotVisible, which applies ownership bypass, the cloak gate and the
-// committed coverage cell. Test 2 — the projected definition-extent box against
-// the viewport bounds — is not reproduced: those six compiled extent words are
-// not published, and skipping it can only admit candidates whose hull is
-// off-screen, which no on-screen pointer can be inside.
+// reproduced here by walking the published slice and breaking ties on the
+// lowest stable slot. The producer's three admission tests map as follows: test
+// 1 is the non-empty model reference; test 3 is SnapshotVisible, which applies
+// ownership bypass, the cloak gate and the committed coverage cell. Test 2 —
+// the projected definition-extent box against the viewport bounds — is not
+// reproduced: those six compiled extent words are not published, and skipping
+// it can only admit candidates whose hull is off-screen, which no on-screen
+// pointer can be inside.
 //
-// TODO(question): the hover reduction scores admitted candidates as
-// `((((modelHeight * 32768) >> 16) + zSpan) * xSpan) >> 16` and replaces the
-// winner only on a strictly smaller score, so equal scores retain the earlier
-// pool member [07 R-SEL-02B2][07 R-REV-01 §5]. The authored provenance of those
-// three compiled definition words is recorded Unknown in [07 R-REV-01 §6], and
-// the frame publishes no pick record carrying them, so the score cannot be
-// computed without inventing its inputs. Until a writer trace names the
-// definition fields, every admitted candidate is treated as scoring equally,
-// which is the Established equal-score outcome: the lowest-slot admitted
-// candidate wins. What would settle it is a writer trace from the definition
-// compiler into those three words, published as the ordered candidate record of
-// [07 R-REV-01 §6].
+// Among the candidates whose hull admits the pointer, the winner is the one
+// with the smallest hoverScore, replaced only on a strictly smaller score, so
+// an equal score retains the earlier (lower-slot) pool member
+// [07 R-SEL-02B2][07 R-REV-01 §5][07 R-REV-01 §8]. This is the whole of retail's
+// overlap rule: there is no draw-order, depth, altitude or mover-class
+// precedence anywhere in the pick. An aircraft flying over a plant wins because
+// its definition is smaller, not because it is in the air [07 R-REV-01 §9].
+//
+// The score's three compiled definition words were recorded Unknown in
+// [07 R-REV-01 §6]. Their writers are now traced in [07 R-REV-01 §7]: the X and
+// Z extents are the authored footprint scaled by sixteen world units and the Y
+// extent is the model total height, both already available at this boundary
+// from the committed footprint and the authored model. No new committed pick
+// record is needed to reproduce the ordering.
 //
 // models supplies the authored hull geometry. When no source is passed the
 // process-wide presentation cache installed by SetUnitHullModels is used; the
@@ -114,6 +116,9 @@ func PickSnapshotUnit(f *frame.Frame, sx, sy int32, cam *camera.Camera, viewer u
 	}
 	best := pool.Handle(0)
 	var bestView frame.UnitView
+	// The reduction seeds its running best above every reachable score and
+	// replaces it only on a strictly smaller one [07 R-REV-01 §5].
+	bestScore := int32(0x7fff0000)
 	for i := 0; i < len(f.Units); i++ {
 		v := f.Units[i]
 		// Test 1: a candidate without a model reference never reaches the hull
@@ -121,20 +126,22 @@ func PickSnapshotUnit(f *frame.Frame, sx, sy int32, cam *camera.Camera, viewer u
 		if v.Slot == 0 || v.Model == "" {
 			continue
 		}
-		// Equal scores retain the earlier ascending-pool member, so a candidate
-		// whose slot is above the standing winner's cannot take it.
-		if best != 0 && v.Slot > best {
-			continue
-		}
 		// Test 3: ownership, or the mode-selected committed coverage cell.
 		if !SnapshotVisible(f, v, viewer) {
 			continue
 		}
-		corners, ok := hoverHullCorners(src.HullModel(v.Model), v, cam)
+		m := src.HullModel(v.Model)
+		corners, ok := hoverHullCorners(m, v, cam)
 		if !ok || !containsStrictPolygon(sx, sy, corners[:]) {
 			continue
 		}
-		best, bestView = v.Slot, v
+		score := hoverScore(m, v.FootX, v.FootZ)
+		// Strictly smaller replaces; an equal score keeps the standing winner,
+		// which the ascending-slot tie-break below makes the lower slot.
+		if score > bestScore || (score == bestScore && best != 0 && v.Slot >= best) {
+			continue
+		}
+		best, bestView, bestScore = v.Slot, v, score
 	}
 	return best, bestView, best != 0
 }

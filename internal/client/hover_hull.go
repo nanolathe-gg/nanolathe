@@ -23,6 +23,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	compiledmodel "github.com/nanolathe/nanolathe/internal/model"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
 // UnitHullModels resolves a committed unit's authored model name to the
@@ -96,6 +97,77 @@ func hoverHullCorners(m *compiledmodel.Model, v frame.UnitView, cam *camera.Came
 		out[i] = [2]int32{sx - camera.OriginX, sy - camera.OriginY}
 	}
 	return out, true
+}
+
+// modelTotalHeight is the compiled definition's model total-height term
+// [07 R-REV-01 §7]. The catalog loader asks the model-height helper for the
+// loaded 3DO node tree and stores the answer, then rewrites the definition's Y
+// extent as that height minus a minimum-Y word it has just zeroed — so the Y
+// extent the hover reduction reads *is* the model total height.
+//
+// The helper accumulates only the vertical component. Each call seeds its
+// running maximum at zero, takes the maximum of `vertexY + nodeTranslateY` over
+// the node's own vertices, and then, for the node's child chain, adds the
+// node's own translation to whatever that recursive call returned. Because the
+// seed is zero at every level rather than the first vertex, a subtree lying
+// entirely below its parent's origin contributes zero and never pulls the
+// height down. There is no minimum-vertex-count gate here — that gate belongs
+// to the hull bounds helper of [07 R-REV-01 §1], not to this one — and no
+// orientation is applied: this is the authored bind pose, resolved once per
+// definition at load time.
+func modelTotalHeight(m *compiledmodel.Model) numeric.Fixed { // [07 R-REV-01 §7]
+	if m == nil || m.Root < 0 || m.Root >= len(m.Pieces) {
+		return 0
+	}
+	return pieceTotalHeight(m, m.Root)
+}
+
+func pieceTotalHeight(m *compiledmodel.Model, index int) numeric.Fixed {
+	best := numeric.Fixed(0) // zero-seeded at every level [07 R-REV-01 §7]
+	if index < 0 || index >= len(m.Pieces) {
+		return best
+	}
+	piece := m.Pieces[index]
+	for _, vertex := range piece.Vertices {
+		if h := vertex[1].Add(piece.Translate[1]); h > best {
+			best = h
+		}
+	}
+	for _, child := range piece.Children {
+		if h := pieceTotalHeight(m, child).Add(piece.Translate[1]); h > best {
+			best = h
+		}
+	}
+	return best
+}
+
+// hoverScore is the hover reduction's per-candidate score [07 R-REV-01 §8].
+//
+//	score = ((((yExtent * 32768) >> 16) + zExtent) * xExtent) >> 16
+//
+// The three terms are compiled definition words, not hull-helper outputs. The
+// definition compiler writes the X and Z extents from the authored footprint —
+// each extent is `footprint << 20`, i.e. the footprint cell count times sixteen
+// world units, expressed in 16.16 — and the catalog loader rewrites the Y
+// extent as the model total height once the 3DO is loaded [07 R-REV-01 §7].
+//
+// Both multiplications are signed 64-bit products, each `>> 16` is an
+// arithmetic shift of that 64-bit intermediate, and the result of each shift is
+// taken as a signed 32-bit value before the next step — including the addition,
+// which wraps in 32 bits. Retail has no overflow guard here and must not be
+// silently widened.
+//
+// The score is a pure size measure: half the model's height plus its Z
+// footprint, scaled by its X footprint. Nothing about altitude, draw order or
+// mover class enters it. A small unit therefore outranks a large one whose hull
+// also admits the pointer, which is why an aircraft over an aircraft plant
+// picks the aircraft.
+func hoverScore(m *compiledmodel.Model, footX, footZ int8) int32 { // [07 R-REV-01 §8]
+	xExtent := int32(footX) << 20
+	zExtent := int32(footZ) << 20
+	yExtent := int32(modelTotalHeight(m))
+	half := int32((int64(yExtent) * 32768) >> 16)
+	return int32((int64(half+zExtent) * int64(xExtent)) >> 16)
 }
 
 // containsStrictPolygon is the four-point hull admission test [07 R-REV-01 §4].

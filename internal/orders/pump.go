@@ -347,9 +347,19 @@ func (q *Queue) randBelow30() uint32 {
 	return q.simForJitter().Uint32n(30) // [R-P0-01] code 9's last re-arm draws RNG(30), a distinct draw site from code 3's RNG(15)
 }
 
-// moveGroundHandler implements the Move_Ground-family handler [R-P0-01].
-// Phase 0 arms gate 0xE0 and returns 1; phase 1 tests satisfied&0x20 -> 5 else 9.
-// The attach check returns 7 while the unit's carrier handle is nonzero [R-P0-01].
+// moveGroundHandler is `Move_Ground`, and since WU-18-8 that descriptor alone
+// (see ensureMoveHandlers below for what else used to run this body and why it
+// was wrong).
+//
+// Row [04 R-ORD-01 §4][R-P0-01]: phase 0: carried -> cancel-all; caption clear;
+// point goal at the record's goal with radius `(int16)payloadType + 4`; gate =
+// 0xE0; advance. Phase 1: satisfied 0x20 -> status 6 (`Arrived`), complete;
+// else *re-arm* (9), which resets the phase and rebinds from phase 0 after
+// 30..59 ticks. Other phase: cancel-all — a phase byte outside the machine
+// cancels the whole queue [R-ORDER-02 §1].
+//
+// The goal's arrival radius is internal/movement's: it binds the arrival handle
+// for this family and already applies the row's `+ 4` [R-P0-01 corrected].
 func moveGroundHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code {
 	if u != nil && u.Attachment.Carrier != 0 {
 		return 7 // reject while attached [R-P0-01]
@@ -357,6 +367,9 @@ func moveGroundHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code 
 	if n.Phase == 0 {
 		n.DynamicGate = 0xE0 // [R-P0-01] phase 0 arms gate 0xE0
 		return 1
+	}
+	if n.Phase > 1 {
+		return 7 // cancel-all: a phase outside the machine [R-ORDER-02 §1]
 	}
 	if satisfied&0x20 != 0 { // [R-P0-01] combined&0x20 -> ack + return 5
 		// TODO(question): acknowledgement emission (kind 6) is not yet wired to
@@ -398,12 +411,29 @@ func handlerlessButDriven(name string) bool {
 	return false
 }
 
+// ensureMoveHandlers installs moveGroundHandler on the one descriptor whose row
+// it is.
+//
+// Correction (WU-18-8). This installer used to name all eight members of the
+// move family — `Move_Ground`, `VTOL_Move`, `QMove`, `Patrol`, `QPatrol`,
+// `VTOL_Patrol`, `RepairPatrol`, `VTOL_RepairPatrol` — and give every one of
+// them the ground move's body. Only the first IS that body. [04 R-ORD-01 §4]
+// gives `Patrol` and `RepairPatrol` their own multi-phase machines built on the
+// patrol-chain setup; [04 R-ORD-01 §2] gives the queued-move pair a single row
+// of its own ("Deadline 60, *rotate*") that owns no goal and reads no target;
+// [04 R-ORD-02 §2] gives the two air forms bodies that end differently from the
+// ground move; and [04 R-ORD-01 §7] gives `VTOL_RepairPatrol` a body vtolwork.go
+// had already written. The over-claim was not inert: a family installer assigns
+// only where a descriptor's handler is still nil and this list runs first, so
+// claiming the seven other names took them out of the reach of the installers
+// that owned them. A `Patrol` walked to its first waypoint and completed, a
+// `RepairPatrol` neither patrolled nor repaired, and `VTOL_RepairPatrol`'s
+// written and tested body could never install. The seven rows now live in
+// patrol.go and vtolwork.go.
 func ensureMoveHandlers() {
-	for _, name := range []string{"Move_Ground", "VTOL_Move", "QMove", "Patrol", "QPatrol", "VTOL_Patrol", "RepairPatrol", "VTOL_RepairPatrol"} {
-		id := Lookup(name)
-		if id != 0 && int(id) < len(table) && table[int(id)].Handler == nil {
-			table[int(id)].Handler = moveGroundHandler
-		}
+	id := Lookup("Move_Ground")
+	if id != 0 && int(id) < len(table) && table[int(id)].Handler == nil {
+		table[int(id)].Handler = moveGroundHandler
 	}
 }
 

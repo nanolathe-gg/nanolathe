@@ -421,7 +421,11 @@ func repairUnitHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Co
 		workStatus(u, statusCant, "Repairs unsuccessful.")
 		return 5 // complete — this row ends the order rather than abandoning it
 	}
-	if leashExceeded(u, n) {
+	// The leash pre-check is `Attack_Chase`'s, which is combat.go's leashBroken
+	// [R-STANCE-01 §4]. WU-18-8 folded this call over from resolve.go's second
+	// leash test, which measured the same contract in 16.16 and abandoned early
+	// on a diagonal; the retirement note stands at that helper's old site.
+	if leashBroken(u, n) {
 		return 5 // complete
 	}
 	if target.Move.Mode&0x3 != 1 {

@@ -483,20 +483,27 @@ const (
 	stubStandoffWorld  int32  = 64   // TODO(question) standoff distance source not located; stub world units [04 §3.5]
 )
 
-func leashExceeded(u *units.Unit, n *Node) bool {
-	if n.Param3 == 0 {
-		return false // zero means unlimited [04 §3.2]
-	}
-	// GuardX/Y are 16-bit anchor [04 §3.2]; treat as Fixed world units [04 §3.5] TODO(question) units
-	gx := int64(n.GuardX) * 65536
-	gz := int64(n.GuardY) * 65536
-	dx := u.X.Raw() - gx
-	dz := u.Z.Raw() - gz
-	leashFixed := int64(n.Param3) * 65536 // TODO(question) leash units not established; treating as world units [04 §3.5]
-	dist2 := dx*dx + dz*dz
-	leash2 := leashFixed * leashFixed
-	return dist2 >= leash2
-}
+// Retired (WU-18-8): `leashExceeded` stood here. It was this package's second
+// pursuit-leash test, cited to the same contract as combat.go's `leashBroken`
+// and disagreeing with it below one world unit, so which one an order used
+// decided whether it abandoned. What it did: it promoted the record's 16-bit
+// anchor pair to 16.16 (`anchor * 65536`), subtracted it from the unit's
+// FRACTIONAL 16.16 position, promoted the leash the same way, and compared
+// `dx² + dz² >= leash²` entirely in 16.16 — carrying two open-question markers
+// that said the units of the anchor and of the leash were not established.
+//
+// [R-STANCE-01 §4] settles both questions and the arithmetic with them: the
+// deltas are taken between WHOLE world units on both sides (the unit's
+// position's high half against the sign-extended 16-bit anchor), the distance
+// is `trunc(hypot(dx, dz))` — truncated toward zero before the compare — and
+// the test is the inclusive `leash <= d`. Truncating the distance is what the
+// retired form got wrong: keeping the fractional parts inside the hypot
+// abandons early on any diagonal. With an anchor at the origin and a leash of
+// 5, a unit at (3.9, 3.9) whole units is at `trunc(hypot(3, 3)) = 4` by the
+// contract and continues; the 16.16 form measured 5.51 and abandoned. The
+// contract's form is combat.go's `leashBroken`, which is now the package's only
+// leash test — used by `Attack_Chase` (resolve.go), the ground `RepairUnit`
+// (work.go), the air executors, and `VTOL_RepairUnit` (vtolwork.go).
 
 func verticalSeparation(u *units.Unit, target *units.Unit) int64 {
 	if u == nil || target == nil {
@@ -546,8 +553,11 @@ func attackChaseHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code
 	if satisfied&chaseDisengageMask == chaseDisengageMask {
 		return Code(5) // TODO(question) disengage combination [04 §3.5]
 	}
-	if n.Param3 != 0 && leashExceeded(u, n) {
-		return Code(5) // pursuit leash at or beyond leash abandons [04 §3.5]
+	// The leash is tested before the phase switch, on every dispatch, and only
+	// when it is non-zero — leashBroken carries that guard itself
+	// [R-STANCE-01 §4]. This is the handler the section states the test for.
+	if leashBroken(u, n) {
+		return Code(5) // at or beyond the leash abandons; the compare is inclusive
 	}
 	if n.Phase > 3 {
 		return Code(7) // cancel-all [04 §3.5][04 §3.3]

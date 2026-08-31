@@ -6,6 +6,7 @@ package content
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
@@ -264,6 +265,9 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 	report.Report(FamilyBuildMenus, 100)
 	sortedModels, modelIndex := buildModelCatalog(units)
 	fillModelTops(fs, units)
+	// The page-count byte is a per-record probe of the authored page windows,
+	// step 5 of the compiler's own order [02 R-CAT-01 §5].
+	fillBuildPages(fs, units)
 	if err := fillUnitScripts(fs, units); err != nil {
 		return nil, err
 	}
@@ -1233,4 +1237,49 @@ func fillUnitScripts(fs vfs.FSOps, units map[string]*UnitDef) error {
 		u.Script = prog
 	}
 	return nil
+}
+
+// fillBuildPages compiles every definition's build-menu page-count byte from
+// the authored page windows, which is step 5 of the catalog compiler's per-
+// record work [02 R-CAT-01 §5]: with `<n>` the unit name, `guis/<n>0.GUI`
+// existing sets the page-zero bit, then `guis/<n>1.GUI`, `guis/<n>2.GUI`, …
+// are probed until the first missing one, and the byte becomes the index of
+// that first missing page when at least one numbered page existed, else 1 when
+// page 0 exists, else 0.
+//
+// The probe is by existence and non-zero size, and it stops at the first gap:
+// `guis/<n>1.GUI` and `guis/<n>3.GUI` with no `<n>2` is a count of 2, not 4.
+func fillBuildPages(fs vfs.FSOps, units map[string]*UnitDef) {
+	if fs == nil || len(units) == 0 {
+		return
+	}
+	exists := func(name string) bool {
+		info, err := fs.Stat("guis/" + name + ".gui")
+		return err == nil && info.Size > 0
+	}
+	for _, u := range units {
+		name := strings.ToLower(strings.TrimSpace(u.UnitName))
+		if name == "" {
+			continue
+		}
+		u.HasPageZeroGUI = exists(name + "0")
+		numbered := 0
+		// The page number lives in three status-word bits, so page 7 is the
+		// last addressable one [07 §9]; a further authored page could not be
+		// selected and is not counted.
+		for page := 1; page <= 7; page++ {
+			if !exists(name + strconv.Itoa(page)) {
+				break
+			}
+			numbered = page
+		}
+		switch {
+		case numbered > 0:
+			u.BuildPageCount = int32(numbered) + 1
+		case u.HasPageZeroGUI:
+			u.BuildPageCount = 1
+		default:
+			u.BuildPageCount = 0
+		}
+	}
 }

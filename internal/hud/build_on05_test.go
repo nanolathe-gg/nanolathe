@@ -3,16 +3,20 @@ package hud
 import (
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
 )
 
 func TestBuildProductsDataDrivenPaging(t *testing.T) {
-	// Ten authored products make two six-button build pages, so the page-count
-	// byte is three: page 0 is the orders state and carries no products, pages
-	// 1 and 2 carry entries 1-6 and 7-10 [07 R-HUD-03 §6].
+	// Ten authored products across two authored six-button page windows: the
+	// page-count byte is three — page 0 is the orders state and carries no
+	// products, pages 1 and 2 carry entries 1-6 and 7-10 [07 R-HUD-03 §6].
+	// The count itself comes from the definition's compiled page-count byte
+	// [02 R-CAT-01 §5 step 5]; this fixture states it directly because the
+	// slicing below, not the probe, is what it locks.
 	all := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}
 	perPage := RetailBuildButtonsPerPage
-	cnt := PageCountFromButtons(len(all), perPage)
+	cnt := BuilderPageCount(&content.UnitDef{BuildPageCount: 3})
 	if cnt != 3 {
 		t.Fatalf("page count want 3 got %d", cnt)
 	}
@@ -32,9 +36,14 @@ func TestBuildProductsDataDrivenPaging(t *testing.T) {
 	if beyond := ProductsForPage(all, 5, perPage); len(beyond) != 0 {
 		t.Fatalf("page beyond the last authored one carried %v", beyond)
 	}
-	// A builder with no authored products has the orders page and nothing else.
-	if got := PageCountFromButtons(0, perPage); got != 1 {
-		t.Fatalf("empty build list page count = %d, want 1", got)
+	// A builder whose definition authors no page window has no page at all:
+	// the probe of [02 R-CAT-01 §5 step 5] leaves the byte at zero, and the
+	// gadget producers below refuse rather than clamp.
+	if got := BuilderPageCount(&content.UnitDef{}); got != 0 {
+		t.Fatalf("unauthored page count = %d, want 0", got)
+	}
+	if got := BuilderPageCount(nil); got != 0 {
+		t.Fatalf("nil definition page count = %d, want 0", got)
 	}
 	// The NEXT and PREV gadgets never return to page 0 [07 R-HUD-03 §6].
 	flags := uint32(0) // page 0

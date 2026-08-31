@@ -391,7 +391,26 @@ var debtMarkerTotals = map[string]int{
 	// WU-18-3 then added two in the new internal/orders/vtolwork.go — the two
 	// questions [04 R-ORD-01 §7] and [05 R-WORK-01 §8] leave open, enumerated
 	// in that file's baseline row below. Composed: 334 + 2 = 336.
-	"todo(question)": 336,
+	// WU-18-5 then added six in internal/movement/airorders.go — the six
+	// questions [04 R-AIR-01 §8] and [04 R-ORD-02 §3, §4] leave open at the
+	// sites the seven pump-driven air executors depend on, enumerated in that
+	// file's baseline row below. Its own new file, internal/orders/vtolair.go,
+	// adds none: every open question its handlers depend on is one WU-18-4
+	// already recorded in combat.go. Composed: 336 + 6 = 342.
+	// WU-18-8 branched from the same 336 and did not see WU-18-5: it added one
+	// in the new internal/orders/patrol.go and retired two in
+	// internal/orders/resolve.go with the second pursuit-leash helper (both
+	// rows below carry the reasoning). Composed across both: 336 + 6 + 1 − 2 =
+	// 341, and every file row below survives.
+	// The nanoframe-decay gate then added one in
+	// internal/construction/factory.go: [04 R-ORD-01 §5]'s measurement closes
+	// whether the decay runs while a builder works, but not the producer or
+	// encoding of the `0x8000` wake it stands in for. The first-selection
+	// build-page default added one in internal/session/commands.go: the
+	// behaviour is a direct retail observation recorded under
+	// [07 R-HUD-03 §6], but no traced writer sets status bit 22 at unit
+	// creation. Composed: 341 + 1 + 1 = 343.
+	"todo(question)": 343,
 }
 
 var debtMarkerFileCounts = map[string]map[string]int{
@@ -494,27 +513,31 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/world/placement.go": 1,
 	},
 	"todo(question)": {
-		"internal/ai/manager.go":                   4,
-		"internal/ai/placement.go":                 3,
-		"internal/ai/profile.go":                   4,
-		"internal/ai/selection.go":                 4,
-		"internal/ai/strategic.go":                 5,
-		"internal/cob/load.go":                     2,
-		"internal/cob/ports.go":                    5,
-		"internal/cob/vm.go":                       3,
-		"internal/combat/death.go":                 6,
-		"internal/combat/damage.go":                5,
-		"internal/combat/fire.go":                  3,
-		"internal/combat/impact.go":                1,
-		"internal/combat/meteor.go":                2,
-		"internal/combat/motion.go":                2,
-		"internal/combat/service.go":               2,
-		"internal/combat/slots.go":                 1,
-		"internal/combat/stockpile.go":             12,
-		"internal/combat/target.go":                3,
-		"internal/construction/approach.go":        6,
-		"internal/construction/capture.go":         4,
-		"internal/construction/factory.go":         16, // -1: the retired FlagActivated placeholder took its TODO with it (PLAN_16 WU-16-3)
+		"internal/ai/manager.go":            4,
+		"internal/ai/placement.go":          3,
+		"internal/ai/profile.go":            4,
+		"internal/ai/selection.go":          4,
+		"internal/ai/strategic.go":          5,
+		"internal/cob/load.go":              2,
+		"internal/cob/ports.go":             5,
+		"internal/cob/vm.go":                3,
+		"internal/combat/death.go":          6,
+		"internal/combat/damage.go":         5,
+		"internal/combat/fire.go":           3,
+		"internal/combat/impact.go":         1,
+		"internal/combat/meteor.go":         2,
+		"internal/combat/motion.go":         2,
+		"internal/combat/service.go":        2,
+		"internal/combat/slots.go":          1,
+		"internal/combat/stockpile.go":      12,
+		"internal/combat/target.go":         3,
+		"internal/construction/approach.go": 6,
+		"internal/construction/capture.go":  4,
+		// +1: the nanoframe-decay gate of [04 R-ORD-01 §5] leaves the producer
+		// and encoding of `GetBuilt`'s wake bit `0x8000` open at the site that
+		// reproduces its measured effect. The behaviour half of that Unknown is
+		// closed in doc 04; the bit itself is not.
+		"internal/construction/factory.go":         17, // -1 then +1: the retired FlagActivated placeholder took its TODO with it (PLAN_16 WU-16-3); the GetBuilt decay gate added one
 		"internal/construction/reclaim.go":         1,
 		"internal/construction/reverse.go":         1,
 		"internal/economy/ledger.go":               3,
@@ -550,7 +573,23 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		// VTOL_LandIfCan phase 1 commands "exactly the terrain height" does not
 		// follow from [04 R-AIR-01 §4]'s Established setter expression; the code
 		// follows the Established expression and records the disagreement.
-		"internal/movement/airorders.go": 4,
+		// airorders.go 4 -> 10: WU-18-5 landed the seven pump-driven air
+		// executors in the same file and recorded six more questions the air
+		// sections leave open at the sites that depend on them. (e) The
+		// base-candidate scan four sections invoke ("the base candidates within
+		// 0xF00 for my side") has no admission predicate: [04 R-ORD-02 §4]
+		// enumerates the scan visitors and defines only two others, so the list
+		// is reported empty rather than chosen. (f) [04 R-ORD-02 §4]'s
+		// guard-candidate visitor turns on a diplomacy-byte polarity the section
+		// states ambiguously; implementing either reading would invert who a
+		// seeking guard attaches itself to. (g) and (h) [04 R-AIR-01 §8] says
+		// VTOL_Evade and AirToGroundHover use "record scratch words" without
+		// naming which of p1..p3 holds them. (i) Neither AirToAir leg is said to
+		// set the velocity payload's steer-to-heading flag, which changes that
+		// payload's arrival test. (j) §8 gives no arm for AirToAir phase 1 with
+		// the arrival bits clear, the counter below 0x5A, and the range to the
+		// target at or below 0xA0.
+		"internal/movement/airorders.go": 10,
 		"internal/movement/goals.go":     16,
 		"internal/movement/integrate.go": 5,
 		"internal/movement/landing.go":   1,
@@ -589,8 +628,22 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		// the four air executors and omits `AirToAir`, whose mask therefore
 		// remains unstated. All five are written at their site with the question
 		// and its decider, per I9.
-		"internal/orders/combat.go":  5,
-		"internal/orders/resolve.go": 36,
+		"internal/orders/combat.go": 5,
+		// patrol.go 0 -> 1 and resolve.go 36 -> 34: WU-18-8. The one new
+		// question is the successor test the patrol cycle turns on —
+		// [04 R-ORD-01 §4] words it "a next patrol record exists" and
+		// [04 R-ORD-02 §2] words the air move's as "no successor", and neither
+		// says whether the patrol form additionally filters the successor by
+		// the chain-member mask bit; the readings differ only for a patrol with
+		// an unrelated order queued behind it, and the site states which it
+		// takes and what would settle it (I9). The two retired in resolve.go
+		// went with `leashExceeded`: they asked what units the pursuit leash
+		// and its anchor pair are in, which [R-STANCE-01 §4] answers — whole
+		// world units on both sides, distance truncated toward zero before an
+		// inclusive compare — so that helper folded into combat.go's
+		// `leashBroken` and its questions were answered, not moved.
+		"internal/orders/patrol.go":  1,
+		"internal/orders/resolve.go": 34,
 		// selfdestruct.go 0 -> 1 and standing.go 0 -> 2: WU-18-1 implements the
 		// trivial, standing, wait, cloak and standby handlers of
 		// [04 R-ORD-01 §2] plus the self-destruct pair, and records the three
@@ -632,13 +685,15 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		// (2) [05 R-WORK-01 §8] records as Unknown which of the two model-box
 		// forms the four VTOL work executors build for their spray, where both
 		// ground forms are Established. Neither is a value this unit picked.
-		"internal/orders/vtolwork.go":         2,
-		"internal/path/goals.go":              4,
-		"internal/path/queue.go":              1,
-		"internal/path/search.go":             1,
-		"internal/pool/pool.go":               1,
-		"internal/save/bank.go":               3,
-		"internal/session/commands.go":        1,
+		"internal/orders/vtolwork.go": 2,
+		"internal/path/goals.go":      4,
+		"internal/path/queue.go":      1,
+		"internal/path/search.go":     1,
+		"internal/pool/pool.go":       1,
+		"internal/save/bank.go":       3,
+		// +1: the first-selection build-page default of [07 R-HUD-03 §6] is a
+		// direct retail observation with no traced writer for status bit 22.
+		"internal/session/commands.go":        2,
 		"internal/session/composition.go":     2,
 		"internal/session/mission.go":         3,
 		"internal/session/progression.go":     4,

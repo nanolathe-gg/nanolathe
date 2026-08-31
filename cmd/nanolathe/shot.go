@@ -8,6 +8,24 @@ import (
 	"github.com/nanolathe/nanolathe/internal/client"
 )
 
+// shotMillisSource is the capture path's host clock. The windowed loop samples
+// a monotonic wall clock, so a capture that only calls the viewer step in a
+// tight loop advances the simulation by however much real time the loop took —
+// six ticks for nine hundred iterations — and `--shot-ticks` named a count it
+// did not deliver. The capture drives this source instead, one 30 Hz tick per
+// viewer step, so the flag means the authoritative ticks it says it means and
+// two captures of the same seed compose the same frame [01 §4.1][I6].
+type shotMillisSource struct{ step uint32 }
+
+// Millis32 returns the smallest millisecond count whose ScaledNow is the
+// current step, so each viewer step advances the scaled clock by exactly one.
+func (s *shotMillisSource) Millis32() uint32 {
+	if s == nil {
+		return 0
+	}
+	return (s.step*1000 + 29) / 30
+}
+
 // runShot composes one frame of a battle without opening a window and writes it
 // as a PNG. It is the diagnostic path `Client.ComposeFrame` was written for
 // [03 §2.4][I6]: the same session composition, the same presentation entry, and
@@ -57,7 +75,10 @@ func runShot(opts Options, cs *contentSet) error {
 	// The viewer step owns the clock, the sub-tick budget and the publication
 	// boundary, so driving it is what makes the captured frame a committed one.
 	const tickSeconds = 1.0 / 30.0
+	millis := &shotMillisSource{}
+	b.millisSource = millis
 	for i := 0; i < opts.ShotTicks; i++ {
+		millis.step = uint32(i) + 1
 		b.viewerStep(tickSeconds, cl)
 	}
 

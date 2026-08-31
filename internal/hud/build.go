@@ -175,27 +175,35 @@ func DigitPage(digit, count int) (int, bool) {
 	return page, true
 }
 
-// PageCountFromButtons is the builder definition's page-count byte: the maximum
-// authored build page plus one, so the valid pages are 0..count-1
-// [07 R-HUD-03 §6]. Page 0 is the orders state — the command window opens the
-// side's "%sGEN.GUI" for it and it carries no products — and the authored build
-// pages are 1..count-1, page N holding entries (N-1)*perPage..N*perPage-1.
+// BuilderPageCount is the builder definition's build-menu page-count byte, the
+// guard every page producer below is bounded by: valid pages are
+// `0 .. count-1`, page 0 is the orders state, and the authored build pages are
+// `1 .. count-1` with page N holding entries `(N-1)*perPage .. N*perPage-1`
+// [07 R-HUD-03 §6].
 //
-// A builder with no authored products therefore has a count of 1: the orders
-// page and nothing else. perPage is the GUI's authored product count; callers
-// without a generated page mapping use RetailBuildButtonsPerPage.
+// The byte is compiled from the authored `guis/<unitname>N.GUI` windows
+// [02 R-CAT-01 §5 step 5], never from the length of the `CANBUILD` list.
+// "Generated `<unit>N.GUI` pages are authoritative for page existence and
+// placement, so a replacement engine must not infer an eight-slot grid or
+// synthesize missing pages" [07 §9].
 //
-// This previously returned the number of authored build pages, with page 0 the
-// first of them, which left the orders state no slot of its own — the defect
-// WU-17-13 recorded and could not fix from the HUD alone.
-func PageCountFromButtons(n, perPage int) int {
-	if perPage <= 0 {
-		perPage = RetailBuildButtonsPerPage
+// This replaces PageCountFromButtons, which derived the count as
+// `ceil(len(CANBUILD)/6) + 1`. That agrees with the authored pages for 39 of
+// the reference install's 45 builders and overshoots by one for the other six:
+// `ARMCA`/`ARMCK`/`ARMCV` author nineteen products and `CORCA`/`CORCK`/`CORCV`
+// twenty, all across three authored pages, so the arithmetic claimed a fourth.
+// Paging onto it asked the command switch for a window that does not exist,
+// and the panel went blank — no build page and no orders page — until the
+// selection changed.
+//
+// A definition with no authored page window has a count of 0, which is the
+// established value and not an error: its products are unreachable in retail
+// too, because there is no window to reach them through.
+func BuilderPageCount(def *content.UnitDef) int {
+	if def == nil {
+		return 0
 	}
-	if n <= 0 {
-		return 1
-	}
-	return (n+perPage-1)/perPage + 1
+	return int(def.BuildPageCount)
 }
 
 // ProductsForPage slices the authored button list for the given page. Page 0 is

@@ -209,7 +209,8 @@ func buildTable() {
 // Adding a family: write internal/orders/<family>.go with an ensure<Family>
 // function shaped like ensureStopHandler, then add exactly one line below.
 var handlerInstallers = []func(){
-	ensureMoveHandlers,         // pump.go — the move, patrol and queued-move family
+	ensureMoveHandlers,         // pump.go — Move_Ground, and only that row
+	ensurePatrolHandlers,       // patrol.go — the queued-move pair, both ground patrols, the two air moves
 	ensureTransportHandlers,    // transport.go — pickup, unload, landing, BeCarried
 	ensureParkHandler,          // park.go
 	ensureStopHandler,          // stop.go
@@ -218,6 +219,7 @@ var handlerInstallers = []func(){
 	ensureWorkHandlers,         // work.go — capture, reclaim, resurrect, assist, the repair trio
 	ensureVTOLWorkHandlers,     // vtolwork.go — the VTOL work twins of [04 R-ORD-01 §7]
 	ensureHandlers,             // resolve.go — Attack_Chase and the three guards
+	ensureVTOLAirHandlers,      // vtolair.go — the air executors of [04 R-AIR-01 §7, §8]; ahead of combat.go, whose four air-attack rows are its documented placeholder
 	ensureCombatHandlers,       // combat.go — the combat handlers of [04 R-ORD-01 §3]
 }
 

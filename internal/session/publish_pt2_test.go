@@ -12,9 +12,11 @@ import (
 
 // The unit painter's pass selector is the committed low two bits of the mover
 // mode word: mode 2 is airborne and belongs to pass B, which paints after the
-// projectile and effect strips [03 R-RAST-01 §7][04 R-MOV-01 §8].
+// projectile and effect strips [03 R-RAST-01 §7][04 R-MOV-01 §8]. `bmcode`
+// non-zero is the mobile class, the one the allocator gives a mover
+// [04 R-FAC-02 §5].
 func TestPublishSnapshotCarriesCommittedMoverMode(t *testing.T) {
-	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "flyer"}, MaxDamage: 1}
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "flyer"}, MaxDamage: 1, BMCode: true}
 	w := newSessionFixtureWorld(2, nil)
 	h, err := w.Create(def, 0, 0, 0, 0)
 	if err != nil {
@@ -35,6 +37,31 @@ func TestPublishSnapshotCarriesCommittedMoverMode(t *testing.T) {
 	// [03 R-FX-01 §6].
 	if cur.Units[0].Group != 3 {
 		t.Fatalf("published group = %d, want 3", cur.Units[0].Group)
+	}
+}
+
+// A building-class unit owns no mover in retail, so the pass selector reads 0
+// for it whatever our own mover record says, and it paints in pass B for its
+// whole life rather than moving from pass B to pass A at completion
+// [03 R-RAST-01 §7][04 R-FAC-02 §5].
+func TestPublishSnapshotGivesStructuresNoMoverMode(t *testing.T) {
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "lab"}, MaxDamage: 1}
+	w := newSessionFixtureWorld(2, nil)
+	h, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create unit: %v", err)
+	}
+	// The movement system installs a mover record for every unit and parks it
+	// at mode 1; a building must not inherit pass A from it.
+	w.Unit(h).Move.Mode = 1
+	s := &Session{Snapshot: frame.NewBuffer(), Units: w, LocalOwner: 0}
+	s.publishSnapshot(1)
+	cur := s.Snapshot.Current()
+	if cur == nil || len(cur.Units) != 1 {
+		t.Fatalf("published frame = %#v, want one unit", cur)
+	}
+	if cur.Units[0].MoverMode != 0 {
+		t.Fatalf("published structure mover mode = %d, want 0", cur.Units[0].MoverMode)
 	}
 }
 
@@ -114,14 +141,16 @@ func TestPublishSnapshotFoldsDisagreeingOnOffSelection(t *testing.T) {
 }
 
 // The published page model [07 R-HUD-03 §6]: page 0 is the orders state and
-// carries no products, the page-count byte is the maximum authored build page
-// plus one, and page N carries the authored entries (N-1)*6..N*6-1. A commander
-// with nineteen products has four authored pages and a count of five; a factory
-// with one authored page still has a count of two, so BUILD has somewhere to go.
+// carries no products, the page-count byte is the definition's compiled
+// page-count byte — one more than its last authored page window
+// [02 R-CAT-01 §5 step 5] — and page N carries the authored entries
+// (N-1)*6..N*6-1. A commander with four authored page windows has a count of
+// five; a factory with one authored page still has a count of two, so BUILD has
+// somewhere to go.
 func TestPublishedCommandPageCountsTheOrdersPage(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}, BuildMenus: map[string]*content.BuildMenuPage{}}
-	newBuilder := func(key string, products int) []string {
-		def := &content.UnitDef{UnitName: key, Builder: true, MaxDamage: 100}
+	newBuilder := func(key string, products, pages int) []string {
+		def := &content.UnitDef{UnitName: key, Builder: true, MaxDamage: 100, BuildPageCount: int32(pages) + 1}
 		def.CanonicalKey = key
 		cat.Units[key] = def
 		buttons := make([]string, products)
@@ -131,8 +160,8 @@ func TestPublishedCommandPageCountsTheOrdersPage(t *testing.T) {
 		cat.BuildMenus[key] = &content.BuildMenuPage{Buttons: buttons}
 		return buttons
 	}
-	commanderProducts := newBuilder("commander", 19)
-	factoryProducts := newBuilder("factory", 4)
+	commanderProducts := newBuilder("commander", 19, 4)
+	factoryProducts := newBuilder("factory", 4, 1)
 
 	publish := func(key string, page int) *frame.CommandPageView {
 		w := newSessionFixtureWorld(8, cat)

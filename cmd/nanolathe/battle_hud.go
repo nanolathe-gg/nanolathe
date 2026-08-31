@@ -441,15 +441,22 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 		// mutable visibility service during composition [03 §3.8][I6].
 		mapW, mapH = int(sess.World.CellW/2), int(sess.World.CellH/2)
 	}
-	// MAPPED consumes the palette-install GUI remap and the active logical fog
-	// index. Sensor callbacks are supplied from the committed frame by
-	// rebuildRadar; the HUD never binds to mutable visibility state [03
-	// §3.4][03 §3.8].
+	// MAPPED consumes the palette-install remap for explored-but-unseen cells
+	// and the active logical fog index. Sensor callbacks are supplied from the
+	// committed frame by rebuildRadar; the HUD never binds to mutable
+	// visibility state [03 §3.4][03 §3.8].
+	//
+	// That remap is the gray table, not the GUI colour-field lookup: the
+	// composite reads the same 256-byte grayscale-nearest LUT the main-view fog
+	// overlay applies to fogged-but-explored terrain [03 §3.8 correction of
+	// 2026-08-30][03 §3.3][03 §4.3.3]. GUIToBase resolves authored .GUI colour
+	// fields and is not defined over image bytes, so feeding it terrain picture
+	// indices painted explored terrain in unrelated interface colours instead
+	// of desaturating it (playtest defect PT3-13).
 	guiRemap := []byte(nil)
 	fogFill := render.FogDarkPaletteIndex
 	if pal != nil {
-		mapped := pal.GUIToBase()
-		guiRemap = mapped[:]
+		guiRemap = pal.Gray[:]
 		fogFill = pal.Logical[render.FogDarkPaletteIndex]
 	}
 	h.radar = render.NewMinimapService(render.MinimapServiceConfig{
@@ -1973,10 +1980,21 @@ func (h *retailBattleHUD) windowForRequired(b *battleSession, f *frame.Frame) (*
 		window, page := h.loadWindow(name)
 		return window, page, nil
 	}
-	if b.cat == nil || f.CommandPage.PageCount == 0 {
-		// A nonzero builder with no valid page count is malformed command-page
-		// state, not the established empty-selection case.
+	if b.cat == nil {
+		// A nonzero builder with no catalog is malformed command-page state,
+		// not the established empty-selection case.
 		return nil, nil, nil
+	}
+	if f.CommandPage.PageCount == 0 {
+		// A builder whose definition authors no page window has no build page
+		// to open. That is the orders state — the side's "%sGEN.GUI", with
+		// BUILD and ORDERS greyed on the "page count 0" arm of
+		// [07 R-HUD-03 §6] — not an absent panel. Eight stock builders
+		// (ARMASP/CORASP, ARMCARRY/CORCARRY, ARMDECOM/CORDECOM, ARMFARK,
+		// CORNECRO) reach this, and returning no window left them showing
+		// neither a build page nor an order palette.
+		window, page := h.loadWindow(name)
+		return window, page, nil
 	}
 	// The committed CommandPage identifies both the builder and page. No live
 	// unit selection or synthesized view participates in GUI selection [I6].

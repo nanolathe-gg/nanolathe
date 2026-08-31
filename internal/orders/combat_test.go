@@ -217,14 +217,17 @@ func TestKamikazeArrivalSpawnsTheImmediateSelfDestruct(t *testing.T) {
 // world units against the record's anchor pair and it is INCLUSIVE, so a unit
 // exactly at the leash distance is already back-to-post. A strict compare here
 // would let an aircraft sit one unit outside its post forever.
-// Both outcomes free the record while the phase legs are the seam this unit
-// reports, so the two are told apart by the diagnostic: the leash arm ends the
-// order silently, and only the fall-through past the entry sequence names the
-// missing legs.
+// Updated by WU-18-5. This test used to assert that BOTH outcomes free the
+// record, because WU-18-4's `airAttackHandler` completed with a diagnostic once
+// the entry sequence fell through — the placeholder that stood in for the phase
+// legs. Those legs now exist (internal/movement/airorders.go) and vtolair.go
+// claims the four descriptors ahead of combat.go, so the fall-through hands the
+// record to them and it survives. The contract this test exists for is
+// unchanged and is what is asserted below: the leash arm ends the order, one
+// whole world unit further out does not.
 func TestAirAttackEntryEndsOnTheManeuverLeash(t *testing.T) {
 	for _, tc := range []struct {
 		leash    uint32
-		onLeash  bool
 		leashHit bool
 	}{
 		{leash: 30, leashHit: true},  // leash <= distance: return 5 from step 5
@@ -237,12 +240,9 @@ func TestAirAttackEntryEndsOnTheManeuverLeash(t *testing.T) {
 		q.Push(Lookup("AirToAir"), Node{Owner: u.Handle, Target: 7, GuardX: 70, GuardY: 60, Param3: tc.leash})
 		q.Pump(u, 40)
 
-		if q.LenPrimary() != 0 {
-			t.Fatalf("leash %d: record survived; every entry arm here completes [04 R-AIR-01 §8]", tc.leash)
-		}
-		hitLeash := len(q.Diagnostics()) == 0
-		if hitLeash != tc.leashHit {
-			t.Fatalf("leash %d: ended on the leash = %v, want %v [04 R-AIR-01 §8] step 5", tc.leash, hitLeash, tc.leashHit)
+		freed := q.LenPrimary() == 0
+		if freed != tc.leashHit {
+			t.Fatalf("leash %d: order ended = %v, want %v [04 R-AIR-01 §8] step 5", tc.leash, freed, tc.leashHit)
 		}
 	}
 }
