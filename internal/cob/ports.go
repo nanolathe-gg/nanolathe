@@ -653,32 +653,11 @@ func ApplyNormalDamage(v *VictimState, kind DamageKind, amount int32, dirByte ui
 // conversion rounds to nearest [R-COB-03 §2][R-COB-03 §3].
 func RelativeBearing(packedXZ int32, heading uint16) uint16 {
 	x, z := unpackXZ(packedXZ)
-	// Port 12 evaluates atan2(X,Z), scaled to 65536 per circle [R-COB-03 §2].
-	angle := math.Atan2(float64(x), float64(z)) * 65536.0 / (2 * math.Pi)
-	rounded := roundNearestEven(math.Float64bits(angle)) // round-to-nearest-even [R-COB-03 §2]
-	rel := uint16(rounded) - heading                     // subtract own heading, wrap via uint16 [04 §4.4]
+	// Port 12 evaluates atan2(X,Z) in the shared 65536-per-circle domain
+	// [R-COB-03 §2]. Its operands remain raw signed 16.16 words [R-COB-03 §3].
+	angle := numeric.AngleFromAtan2(int64(x), int64(z)).Raw()
+	rel := angle - heading // subtract own heading, wrap via uint16 [04 §4.4]
 	return rel
-}
-
-// roundNearestEven implements the engine's ties-to-even conversion for
-// scaled angles. The bit carrier keeps this transient conversion local to the
-// existing trig path; math.Round is ties-away-from-zero and is therefore not
-// interchangeable at half-way values [R-COB-03 §2].
-func roundNearestEven(bits uint64) int32 {
-	value := math.Float64frombits(bits)
-	base := math.Floor(value)
-	frac := value - base
-	if frac*2 < 1 {
-		return int32(base)
-	}
-	if frac*2 > 1 {
-		return int32(base + 1)
-	}
-	whole := int64(base)
-	if whole&1 != 0 {
-		whole++
-	}
-	return int32(whole)
 }
 
 // Distance computes engine port 13 read [04 §4.4] C15: hypotenuse of unpacked
@@ -693,9 +672,10 @@ func Distance(packedXZ int32) int32 {
 // Atan (port 14) returns low 16 bits of rounded angle; Hypot (port 15) is
 // truncated integer hypotenuse. These share the rounding note: only atan
 // rounds, hypot truncates [04 §4.4].
-func AtanPort(a, b int32) uint16 {
-	angle := math.Atan2(float64(b), float64(a)) * 65536.0 / (2 * math.Pi)
-	return uint16(roundNearestEven(math.Float64bits(angle))) // round-to-nearest-even [R-COB-03 §2]
+func AtanPort(first, second int32) uint16 {
+	// Port 14 evaluates atan2(first, second), with no heading subtraction
+	// [R-COB-03 §2]. Keep that order explicit at the shared helper boundary.
+	return numeric.AngleFromAtan2(int64(first), int64(second)).Raw()
 }
 func HypotPort(a, b int32) int32 {
 	return int32(math.Hypot(float64(a), float64(b))) // trunc [01 §8] I3
@@ -777,4 +757,3 @@ func GroundHeight(packedXZ int32, heightFn func(packedXZ int32) numeric.Fixed) n
 // The model draw path uses float trig with round-to-nearest [03 §2.4] (I2) and
 // must not call numeric.Sin/Cos; this package's callback arguments use
 // numeric.Sin/Cos exclusively [04 §5.1] C25.
-var _ = math.Pi // force math citation anchor [04 §4.4] rounding

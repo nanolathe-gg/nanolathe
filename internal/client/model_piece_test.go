@@ -53,8 +53,17 @@ func syntheticModel(pieces []pieceInfo, tris []syntheticTri, root int) *unitMode
 				numeric.Fixed(int64(c.x * 65536)), numeric.Fixed(int64(c.y * 65536)), numeric.Fixed(int64(c.z * 65536)),
 			})
 		}
+		// Fixture faces are authored front-facing. The composition projection's
+		// corner ring has to run clockwise or the winding cull of
+		// [R-RAST-01 §1] step 7 drops the face and the fixture draws nothing.
+		// Callers give corners in whatever order reads well for the geometry
+		// they are testing, so the ring is reversed here when it needs to be.
+		indices := []uint16{uint16(base), uint16(base + 1), uint16(base + 2), uint16(base + 2)}
+		if !modelFacePaints(piece.Vertices, indices, [3]numeric.Fixed{}) {
+			indices = []uint16{uint16(base + 2), uint16(base + 2), uint16(base + 1), uint16(base)}
+		}
 		piece.Primitives = append(piece.Primitives, compiledmodel.Primitive{
-			ColorIndex: uint32(tri.color), VertexIndices: []uint16{uint16(base), uint16(base + 1), uint16(base + 2), uint16(base + 2)}, IsColored: 1,
+			ColorIndex: uint32(tri.color), VertexIndices: indices, IsColored: 1,
 		})
 	}
 	byName := make(map[string]int, len(m.Pieces))

@@ -9,6 +9,26 @@ package numeric
 
 import "math"
 
+const angleScale = 10430.37835047
+
+// AngleFromAtan2 converts the two signed integer operands used by retail's
+// bearing helper into the 16-bit circular angle domain. The first operand is
+// the X-like component and the second is the Z-like component; callers choose
+// whether those operands are a self-minus-target or target-minus-self delta.
+// Retail scales atan2 by the stored 65536/(2*pi) constant and narrows with the
+// default round-to-nearest-even mode before wrapping to 16 bits [01 §8][04
+// R-MOV-01 §2].
+//
+// Retail's fpatan computes the angle in the x87 stack before the stored scale
+// is narrowed under the default x87 round-to-nearest-even control word [01
+// §8][R-DET-01 §2]. Go's math package supplies float64 intermediates; I2
+// explicitly permits this bounded transient, and the result is immediately
+// narrowed to the retail angle word.
+func AngleFromAtan2(first, second int64) Angle {
+	value := math.Atan2(float64(first), float64(second)) * angleScale
+	return Angle(uint16(int32(math.RoundToEven(value))))
+}
+
 // sineTable is the shared 512-entry word sine table scaled by 8192 [04 §5.1].
 var sineTable [512]int32
 

@@ -63,7 +63,16 @@ var MissionGlobalCensus = []CensusEntry{
 	{Key: "HumanEnergy", VA: "", Offset: "", Type: "int", Default: "0", Clamp: "—", Consumer: "spawn-credit pass, as HumanMetal [02 map-global keys]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "ComputerMetal", VA: "", Offset: "", Type: "int", Default: "0", Clamp: "—", Consumer: "spawn-credit pass (computer side) [02 map-global keys]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "ComputerEnergy", VA: "", Offset: "", Type: "int", Default: "0", Clamp: "—", Consumer: "spawn-credit pass (computer side) [02 map-global keys]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "SurfaceMetal", VA: "", Offset: "", Type: "int", Default: "0", Clamp: "0..255 → byte trunc at cell+7", Consumer: "uniform per-cell metal-byte seeding; extractor helper draws once with bound 255 and compares against this value [03][08 placement helpers]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	// CORRECTION: this row previously read Offset "" and a Consumer that named
+	// only the seeding and the extractor-helper draw, filing SurfaceMetal with
+	// the [GlobalHeader] keys around it. That placement is wrong. The key is
+	// authored per schema: across the reference install's 275 map .ota files it
+	// occurs 635 times and every occurrence is inside a [Schema N] section,
+	// none in [GlobalHeader] [08 R-AI-03 §4-A]. Decoding it from the global
+	// section therefore yields the accessor default of zero for every map in
+	// the corpus, and a battle-setup consumer that trusted this row got a zero
+	// that disagreed with the terrain's own seed — Nanolathe defect PT3-14.
+	{Key: "SurfaceMetal", VA: "", Offset: "per-schema key, NOT [GlobalHeader]", Type: "int", Default: "0", Clamp: "0..255 → byte trunc at cell+7", Consumer: "battle setup must read the SELECTED SCHEMA's word [08 R-AI-03 §4-A]: uniform per-cell metal-byte seeding, the AI scatter helper's acceptance limit surfaceMetal*footZ*footX*2, and the extractor-helper selector draw with bound 255 [03][08 placement helpers]. The GlobalHeader decode below is retained for a mission file that does author one there, and is the accessor default otherwise", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "maxunits", VA: "", Offset: "unit-limit word", Type: "int", Default: "200", Clamp: "—", Consumer: "read into the active unit-limit word used during play; the save Summary persists the low 16 bits [02 unit limit][08 Summary]. The 250 figure is the totala.ini [Preferences] UnitLimit profile default — a different mechanism [02 §5 R-CONTENT-03]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "UseOnlyUnits", VA: "", Offset: "path", Type: "string", Default: "empty", Clamp: "—", Consumer: "resolves into the campaign useonly area [08 restriction-flag disposition]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "aiprofile", VA: "", Offset: "", Type: "string", Default: "empty", Clamp: "—", Consumer: "resource slot loads ai\\<profile>.txt with fallback to ai\\default.txt, feeding strategic weights [08 planner]", Class: GlobalAuthoritative, Fatal: FatalKindDegrade},
@@ -177,7 +186,7 @@ type MissionGlobals struct {
 	HumanEnergy        int32   // starting human energy, integer accessor, default 0 [02 map-global keys]
 	ComputerMetal      int32   // starting computer metal, integer accessor, default 0 [02 map-global keys]
 	ComputerEnergy     int32   // starting computer energy, integer accessor, default 0 [02 map-global keys]
-	SurfaceMetal       int32   // surface metal seeding, default 0; per-cell metal byte [P1-02 §2.1][P1-15]
+	SurfaceMetal       int32   // [GlobalHeader] SurfaceMetal only, default 0. NOT the battle-setup word: the key is authored per schema and no reference map authors it here, so this field is the accessor default on the whole corpus. Battle setup reads the selected schema's word [08 R-AI-03 §4-A][P1-02 §2.1][P1-15]
 	MaxUnits           int32   // maxunits default 200 into the active unit-limit word [02 map-global keys][02 unit limit]
 	UseOnlyUnitsPath   string  // UseOnlyUnits → camps\useonly [P1-02 §2.1]
 	AIProfile          string  // aiprofile, empty; ai\default.txt fallback happens at profile load [02 map-global keys][08 planner]
@@ -231,6 +240,9 @@ func DecodeMissionGlobals(global *formats.Section) *MissionGlobals {
 	mg.HumanEnergy = global.IntValue("HumanEnergy", 0)
 	mg.ComputerMetal = global.IntValue("ComputerMetal", 0)
 	mg.ComputerEnergy = global.IntValue("ComputerEnergy", 0)
+	// The global section is not where maps author this key; the selected schema
+	// is [08 R-AI-03 §4-A]. The read stays for a mission file that does author
+	// one here, but no consumer may treat its default as the battle word.
 	mg.SurfaceMetal = global.IntValue("SurfaceMetal", 0)  // 0 [02 map-global keys] → byte cell+7
 	mg.MaxUnits = global.IntValue("maxunits", 200)        // 200 [02 map-global keys]; 250 is the totala.ini UnitLimit profile default, a different mechanism [02 §5 R-CONTENT-03]
 	mg.UseOnlyUnitsPath = DecodeUseOnlyUnits(global)      // path building [P1-02 §2.1] C8

@@ -61,6 +61,15 @@ type battleSession struct {
 	appliedShakeX int32
 	appliedShakeY int32
 
+	// The scroll pass's own clock [07 §10]. scrollAnchor is the previous host
+	// frame's scaled reading (floor(hostMillis*30/1000), the timebase of
+	// [01 §4.1]) and scrollDelta is this frame's reading minus it — the same
+	// raw delta retail's tick-budget step stores and its scroll pass consumes.
+	// Presentation-only [I6].
+	scrollAnchor    int32
+	scrollDelta     int32
+	scrollAnchorSet bool
+
 	// The footer's pointer record [07 R-HUD-03 §1]. Both words are
 	// presentation-only: the simulation neither writes nor reads them [I6].
 	// footerHoverUnit is rewritten only while the pointer is inside the view
@@ -391,6 +400,11 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		if b.controller == nil {
 			b.controller = NewBattleController(b)
 		}
+		// The scroll pass's raw delta is refreshed here, at retail's tick-budget
+		// step, rather than down in the camera pass: the budget step runs before
+		// hotkey dispatch, so the frame that presses pause still refreshes the
+		// delta and it is that frame's value the pause freezes [07 §1][07 §10].
+		b.refreshScrollDelta()
 		b.controller.Step(input.SampleFromState(in, delta), cl)
 		b.applyCommittedShake()
 	}
@@ -414,10 +428,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	if b.cam != nil && state.Modal() == ui.BattleModalClosed {
 		kbd := cl.Input().Kbd
 		mouse := cl.Input().Mouse
-		rawDelta := int32(delta * 1000)
-		if rawDelta <= 0 {
-			rawDelta = 16
-		}
+		rawDelta := b.scrollDelta // refreshed at the budget step above [07 §1]
 		scrollSetting := b.scrollSetting()
 		focused := cl.IsFocused()
 		w, h := cl.Size()
@@ -1085,6 +1096,67 @@ func (b *battleSession) scrollSetting() byte { // [07 §10] [02 "Settings"]
 	return byte(ss)
 }
 
+// refreshScrollDelta advances the scroll pass's clock and returns this host
+// frame's raw delta [07 §10].
+//
+// Retail's scroll pass does not measure the frame in milliseconds: it reads
+// the delta word the tick-budget step stored earlier in the same host frame,
+// which is this frame's scaled reading minus the previous frame's, and the
+// scaled reading is floor(hostMillis*30/1000) — thirtieths of a second, the
+// simulation timebase of [01 §4.1]. Feeding milliseconds here multiplies the
+// scroll rate by thirty at the source and then pins every frame to the 128-pixel
+// cap, which is defect PT3-11
+// [07 §10 "Correction — the raw delta is thirtieths of a second"].
+//
+// Because the reading is integral, most frames at 60 Hz return 0 and scroll
+// nothing; the sustained rate is scrollByte*30 map pixels per second at any
+// frame rate.
+//
+// The paused branch below looks like the bug this function fixes and is not:
+// it is what retail does, established from the image and written up in
+// [07 §10 "The scroll pass while paused"]. In single-player the pump gates the
+// budget call behind the pause test, and the delta word has exactly one writer
+// — that budget step — so while paused neither the delta nor the anchor is
+// refreshed. The scroll pass itself is gated only on the in-battle options
+// window, never on pause, so it keeps running and keeps re-multiplying the
+// frozen delta. Retail therefore scrolls a paused camera at scrollByte map
+// pixels per host frame when the pause landed on a frame whose delta was 1,
+// and not at all when it landed on a frame whose delta was 0. Do not "fix"
+// this into a zero: paused camera movement is a feature (the player looks
+// around a frozen battle), and its rate is retail's.
+//
+// Leaving the anchor alone across the pause is the same contract: the first
+// unpaused frame spends the whole pause in one delta and takes a single
+// 128-pixel capped step, the scroll-pass twin of the single-player unpause
+// burst of [01 §4.3].
+func (b *battleSession) refreshScrollDelta() int32 { // [07 §10]
+	if b == nil {
+		return 0
+	}
+	if b.sess != nil && b.sess.Clock != nil && b.sess.Clock.Paused {
+		// Established, not inferred: neither delta nor anchor moves while
+		// single-player is paused [07 §10 "The scroll pass while paused"].
+		// Multiplayer differs — its budget runs every iteration — but this is a
+		// single-player engine.
+		return b.scrollDelta
+	}
+	if b.millisSource == nil {
+		b.millisSource = newMonotonicMillisSource()
+	}
+	now := clock.ScaledNow(b.millisSource.Millis32())
+	if !b.scrollAnchorSet {
+		// Retail's anchor is already tracking wall-clock when the battle mode
+		// takes over, so its first battle frame sees an ordinary one-frame
+		// delta. Seeding here reproduces that instead of charging the whole
+		// pre-battle uptime to the first frame.
+		b.scrollAnchor, b.scrollAnchorSet, b.scrollDelta = now, true, 0
+		return 0
+	}
+	b.scrollDelta = now - b.scrollAnchor // signed; a wrapped host counter reverses one frame [07 §10]
+	b.scrollAnchor = now
+	return b.scrollDelta
+}
+
 // loadedSettings reads the persisted block, ignoring a read failure the same
 // way scrollSetting does: a preferences file that cannot be read yields the
 // defaults rather than refusing to start the battle.
@@ -1294,6 +1366,16 @@ func (b *battleSession) commitBuild(queued bool) bool {
 	// site height as Y [07 §9]. Sending the cursor point instead would put the
 	// building half a footprint off the box the player aimed with.
 	wx, wz := world.PlacementCenter(b.battleState().Input.BuildCellX, b.battleState().Input.BuildCellZ, b.battleState().Input.BuildFootX, b.battleState().Input.BuildFootZ)
+	// A queued (Shift) click on a point that already carries a queued order of
+	// this kind removes that order and issues nothing — one node, front-most
+	// match, goal within one map cell on X and Z, product not part of the match
+	// [07 R-P0-11 §6]. That test lives at the authoritative order-insertion
+	// boundary, where the builder's live queue is, not here: the presentation
+	// sends the same command either way and the session decides whether it adds
+	// or removes. The Shift-gated overlay walks the live queues every frame, so
+	// a removal stops drawing on the next published tick with no invalidation
+	// of its own.
+	//
 	// Queue the typed command; the session applies it at the authoritative input
 	// phase [01 §4.4][07 §9].
 	wy := numeric.Fixed(int64(b.battleState().Input.BuildSiteH) << 16)

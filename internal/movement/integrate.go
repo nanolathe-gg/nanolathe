@@ -1602,25 +1602,6 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) path.WorkRe
 	return path.WorkResult{Points: points, Status: status, Done: done, SetupSteps: setup, Pops: pops}
 }
 
-// roundAngleNearestEven reproduces the default x87 conversion used by the
-// shared bearing helper. math.Round is ties-away-from-zero and is not
-// interchangeable at exact half-way values [04 R-MOV-01 §2].
-func roundAngleNearestEven(value float64) int32 {
-	base := math.Floor(value)
-	frac := value - base
-	if frac*2 < 1 {
-		return int32(base)
-	}
-	if frac*2 > 1 {
-		return int32(base + 1)
-	}
-	whole := int64(base)
-	if whole&1 != 0 {
-		whole++
-	}
-	return int32(whole)
-}
-
 // groundGoalPoint applies the three established goal-point queries. Point and
 // annulus cells use the owning unit's footprint bias; rectangle goals use the
 // middle X column and far Z edge [04 R-MOV-03 §2].
@@ -1643,8 +1624,7 @@ func groundGoalPoint(goal path.Goal, u *units.Unit, footX, footZ int32) (numeric
 		centerZ := cellWorld(trace.Center.Z, footZ)
 		dx := int64(u.X) - int64(centerX)
 		dz := int64(u.Z) - int64(centerZ)
-		angle := math.Atan2(float64(dx), float64(dz)) * 65536.0 / (2 * math.Pi)
-		bearing := numeric.Angle(uint16(roundAngleNearestEven(angle)))
+		bearing := numeric.AngleFromAtan2(dx, dz)
 		radius := int64(int32(trace.A+trace.B)/2) << 16
 		// The shared table biases the angle by 0x20 before selecting one of its
 		// 512 entries [04 R-MOV-01 §4].
@@ -1797,51 +1777,6 @@ func (s *System) publishFunc(r path.Request, points []path.Point, status path.St
 	} else {
 		s.ClearPathFailure(r.Unit)
 	}
-}
-
-// headingFromDelta returns the heading whose position step of
-// [04 R-MOV-01 §4] travels along the planar delta (dx, dz) — the delta from
-// the unit TO its waypoint. Because that step is (-sin h, -cos h), the
-// cardinals are (0,-1) → 0, (0,+1) → 32768, (-1,0) → 16384 and (+1,0) →
-// 49152: heading 0 is -Z (up-screen), not the +Z this function assumed while
-// the convention was inverted.
-//
-// Integer-only: the angle is bisected against the simulation trig tables (the
-// same 512-entry round(8192·sin) family PLAN_03 C17 sanctions), comparing the
-// cross product of the delta with the candidate direction. The bracket closes
-// on the step below the answer, so the result is exact where the bracket
-// opens on it and one unit short otherwise — inside the one-table-step
-// (1/512 of a circle) tolerance this stand-in has always carried.
-//
-// The earlier TODO(question) here said retail's arctan method was unnamed.
-// That is no longer true and the correction is recorded rather than acted on:
-// [04 R-MOV-01 §2] establishes one shared helper,
-// angleOf(a, b) = round_to_nearest(atan2(a, b) * 65536/2*pi), with the mover
-// calling desired = angleOf(unitX - targetX, unitZ - targetZ) — the offset
-// taken from the target to the unit, whose sign inversion cancels §4's
-// negated velocity. Adopting it exactly would replace this bisection with a
-// float64 bearing (the I2 row for the ground-follower bearing already cites
-// that section) and shift every non-cardinal desired heading by up to one
-// unit, which changes movement quantization: it belongs in its own unit with
-// its own gate, not in the sign correction.
-func headingFromDelta(dx, dz int64) uint16 {
-	if dx == 0 && dz == 0 {
-		return 0
-	}
-	lo, hi := int32(0), int32(65536)
-	for hi-lo > 1 {
-		mid := (lo + hi) / 2
-		// Direction at heading mid is (-sin, -cos) [04 R-MOV-01 §4]; its cross
-		// product with the delta is the negation of the (sin, cos) form.
-		cross := int64(numeric.Cos(numeric.Angle(mid)))*dx -
-			int64(numeric.Sin(numeric.Angle(mid)))*dz
-		if cross < 0 {
-			lo = mid // candidate is short of the target direction
-		} else {
-			hi = mid
-		}
-	}
-	return uint16(lo)
 }
 
 // emitMovementCallbacks emits StartMoving/StopMoving/MoveRateN and setSFXoccupy per [04 §5.2][GAP T15] C17 C18.
@@ -2153,7 +2088,11 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	}
 	desired := u.Move.Heading
 	if !brakingOnly {
-		desired = headingFromDelta(dx, dz)
+		// The mover's desired heading uses the self-minus-target vector; the
+		// ground velocity step negates its sine/cosine components, so this
+		// operand reversal points the unit toward its waypoint [04 R-MOV-01
+		// §2][04 R-MOV-01 §4].
+		desired = numeric.AngleFromAtan2(-dx, -dz).Raw()
 	}
 	oldXRaw := int64(u.X)
 	oldZRaw := int64(u.Z)
@@ -2342,7 +2281,10 @@ func IntegrateFlightForUnit(u *units.Unit, w *world.Terrain) {
 			if dx != 0 || dz != 0 {
 				f.TargetX = int32(head.GoalX.Raw())
 				f.TargetZ = int32(head.GoalZ.Raw())
-				f.TargetHeading = headingFromDelta(dx, dz)
+				// This wrapper is an isolated flight fixture; keep the same
+				// self-minus-target operand order as the live flight producer
+				// [04 R-AIR-01 §1].
+				f.TargetHeading = numeric.AngleFromAtan2(-dx, -dz).Raw()
 			}
 		}
 	}

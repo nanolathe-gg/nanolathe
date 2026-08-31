@@ -1,6 +1,7 @@
 package construction
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -177,5 +178,160 @@ func TestNoOtherStartBuildingFlagWriterInConstruction(t *testing.T) {
 	}
 	if len(headingSites) != 1 || !headingSites["factory.go"] {
 		t.Errorf("slot-form heading emission sites %v, want only factory.go (the construction-command producer)", headingSites)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Build assistance across the two packages (PT3-04)
+// ---------------------------------------------------------------------------
+
+// assistFixture stands a factory up in its work state on one nanoframe and puts
+// `assistantQuanta` separate builders on the same frame through the order pump's
+// `HelpBuild` row. It is the cross-package shape of the defect: the frame's
+// owner is driven by this package's state machine and the assistants by
+// internal/orders, and both call the shared construction step of
+// [05 R-WORK-01 §1] against the one shared remaining fraction.
+func assistFixture(t *testing.T, factoryWorkerTime int32, assistantQuanta ...int32) (*Service, *units.Unit, []*units.Unit, *units.Unit) {
+	t.Helper()
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
+	factoryDef := newFactoryDef("assist_factory", 1, 1, factoryWorkerTime)
+	factoryDef.BuildDistance = 1000
+	productDef := newProductDef("assist_product", 1, 1, 100, 100)
+	cat.Units[factoryDef.CanonicalKey] = factoryDef
+	cat.Units[productDef.CanonicalKey] = productDef
+	assistDefs := make([]*content.UnitDef, len(assistantQuanta))
+	for i, quantum := range assistantQuanta {
+		d := newFactoryDef(fmt.Sprintf("assist_helper_%d", i), 1, 1, 30*quantum)
+		d.BMCode = true
+		d.CanMove = true
+		d.BuildDistance = 1000
+		assistDefs[i] = d
+		cat.Units[d.CanonicalKey] = d
+	}
+
+	w := newConstructionFixtureWorld(16, cat)
+	fh, err := w.Create(factoryDef, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ph, err := w.Create(productDef, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	factory, product := w.Unit(fh), w.Unit(ph)
+	factory.Activated = true
+	factory.InBuildStance = true
+	product.Remaining = 1
+	product.Health = 0
+	product.Flags &^= FlagCompleted
+
+	econ := &economy.Service{}
+	binding := &orders.QueueBinding{
+		StockpileEconomy: econ,
+		Lookup:           func(h pool.Handle) *units.Unit { return w.Unit(h) },
+	}
+	svc := NewService(exitTerrain(16, 16), cat, w, econ)
+	svc.OrderBinding = binding
+
+	fq := orders.QueueForUnit(factory)
+	fq.SetBinding(binding)
+	fq.Push(orders.Lookup(FactoryBuildOrder), orders.Node{
+		BuildDefKey: productDef.CanonicalKey, Param2: 1, Phase: uint8(State3), Target: ph,
+	})
+
+	assistants := make([]*units.Unit, 0, len(assistDefs))
+	for _, d := range assistDefs {
+		ah, err := w.Create(d, 0, 0, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a := w.Unit(ah)
+		a.Activated = true
+		a.InBuildStance = true
+		aq := orders.QueueForUnit(a)
+		aq.SetBinding(binding)
+		aq.Push(orders.Lookup("HelpBuild"), orders.Node{Owner: ah, Target: ph})
+		assistants = append(assistants, a)
+	}
+	return svc, factory, assistants, product
+}
+
+// assistTick is one authoritative tick over the fixture: the frame's owner
+// advances through this package's pump, then each assistant through the order
+// pump, in slot order.
+func assistTick(svc *Service, factory *units.Unit, assistants []*units.Unit, tick uint32) {
+	svc.Pump(factory, tick)
+	for _, a := range assistants {
+		orders.QueueForUnit(a).Pump(a, tick)
+	}
+}
+
+// TestAssistantsAddTheirRateToAFactoryProduct is PT3-04's cross-package
+// regression, and covers two of the three cases the defect named: a builder
+// assisting a factory's production, and several builders on one frame. Before
+// the fix the `HelpBuild` work phase admitted no work, so the frame advanced by
+// the factory's quantum alone no matter how many builders were attached.
+func TestAssistantsAddTheirRateToAFactoryProduct(t *testing.T) {
+	// Factory quantum 1, assistants 20 and 9: 30 quanta over a build time of
+	// 100 advances the frame by 0.30 in one tick.
+	svc, factory, assistants, product := assistFixture(t, 30, 20, 9)
+
+	assistTick(svc, factory, assistants, 1)
+
+	want := float32(1)
+	for _, quantum := range []int32{1, 20, 9} {
+		want -= float32(quantum) / float32(100)
+	}
+	if product.Remaining != want {
+		t.Fatalf("remaining after one tick = %v, want %v: the owner's and both assistants' quanta sum on the one shared fraction [05 R-WORK-01 §1]", product.Remaining, want)
+	}
+	// Each contributor billed its own subrecord; nothing is pooled.
+	for i, u := range append([]*units.Unit{factory}, assistants...) {
+		b := svc.Economy.UnitBuckets(u.Handle)
+		if b[economy.Metal].Accepted <= 0 || b[economy.Energy].Accepted <= 0 {
+			t.Fatalf("contributor %d accepted %v energy / %v metal, want its own share of the drain [05 R-ECO-01 §7]", i, b[economy.Energy].Accepted, b[economy.Metal].Accepted)
+		}
+	}
+}
+
+// TestAssistedFrameCompletesUnderItsOwnersTransition locks the completion end:
+// an assisted frame reaches a zero fraction sooner, and the completion posture
+// is applied exactly once, by the owner whose state machine owns the product
+// [04 R-FAC-02 §3].
+//
+// The one extra tick is deliberate and is the divergence work.go's `HelpBuild`
+// work phase records: [05 R-WORK-01 §1] ends "on both arms and also on the
+// admission-refused path, if remaining == 0 run the completion transition",
+// i.e. whichever builder zeroed the fraction completes the product. The
+// transition needs this package's Service (occupancy retirement, cargo detach,
+// the activation edge) and internal/orders cannot reach it, so when an ASSISTANT
+// lands the last increment the posture arrives on the owner's next visit
+// instead of within the same one.
+func TestAssistedFrameCompletesUnderItsOwnersTransition(t *testing.T) {
+	run := func(assistants ...int32) uint32 {
+		svc, factory, helpers, product := assistFixture(t, 30, assistants...)
+		var zeroed uint32
+		for tick := uint32(1); tick <= 200; tick++ {
+			assistTick(svc, factory, helpers, tick)
+			if product.Remaining == 0 {
+				if zeroed == 0 {
+					zeroed = tick
+					continue // the owner's next visit runs the transition
+				}
+				break
+			}
+		}
+		if product.Flags&FlagCompleted == 0 {
+			t.Fatal("frame reached a zero fraction without the completion posture [04 R-FAC-02 §3]")
+		}
+		if product.Health != product.MaxHealth {
+			t.Fatalf("completed frame health = %d/%d", product.Health, product.MaxHealth)
+		}
+		return zeroed
+	}
+	alone := run()
+	helped := run(9)
+	if helped >= alone {
+		t.Fatalf("assisted build took %d ticks, unassisted %d: the assistant's rate must shorten it [05 R-WORK-01 §1]", helped, alone)
 	}
 }

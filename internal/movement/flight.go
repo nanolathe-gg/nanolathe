@@ -98,15 +98,11 @@ func flightGoalDistance(dx, dz int64) int64 {
 	return int64(math.Hypot(float64(dx), float64(dz)))
 }
 
-// bearing is the shared helper every air call site uses [04 R-AIR-01 §1]:
-// round(atan2(aX − bX, aZ − bZ) · 65536 / 2π), stored under the retail control
-// word's round-to-nearest. Its argument order is (self, other) everywhere, so
-// the caller passes the unit's own position first. This says nothing about which
-// on-screen direction the result faces — the model loader's coordinate negation
-// applies to model data, not to these world coordinates.
+// bearing is the movement package's air-order adapter. It delegates the
+// self-minus-target operand order and exact round-to-nearest-even conversion
+// to the shared numeric helper [04 R-AIR-01 §1][04 R-MOV-01 §2].
 func bearing(ax, az, bx, bz numeric.Fixed) uint16 {
-	angle := math.Atan2(float64(int64(ax)-int64(bx)), float64(int64(az)-int64(bz)))
-	return uint16(roundAngleNearestEven(angle * 65536.0 / (2 * math.Pi)))
+	return numeric.AngleFromAtan2(int64(ax)-int64(bx), int64(az)-int64(bz)).Raw()
 }
 
 // rotateLeanPair rotates the lean accumulator's horizontal pair by the unit's
@@ -126,8 +122,8 @@ func rotateLeanPair(x, z int32, heading uint16) (int32, int32) {
 		return x, z
 	}
 	sin, cos := math.Sincos(float64(heading) * 2 * math.Pi / 65536.0)
-	px := roundAngleNearestEven(float64(x)*cos - float64(z)*sin)
-	pz := roundAngleNearestEven(float64(x)*sin + float64(z)*cos)
+	px := int32(math.RoundToEven(float64(x)*cos - float64(z)*sin))
+	pz := int32(math.RoundToEven(float64(x)*sin + float64(z)*cos))
 	return px, pz
 }
 
@@ -158,8 +154,8 @@ func (s *FlightState) ApplyLean(dvx, dvy, dvz int32) {
 	l := (int64(s.Gravity) << 16) / leanGravityDivisor // 64-bit signed divide, truncating [I3]
 	bankTerm := (int64(s.BankScale) * int64(-px)) >> 16
 	pitchTerm := (int64(s.PitchScale) * int64(-pz)) >> 16
-	s.Bank = uint16(roundAngleNearestEven(math.Atan2(float64(bankTerm), float64(l)) * 65536.0 / (2 * math.Pi)))
-	s.Pitch = uint16(roundAngleNearestEven(math.Atan2(float64(pitchTerm), float64(l)) * 65536.0 / (2 * math.Pi)))
+	s.Bank = numeric.AngleFromAtan2(bankTerm, l).Raw()
+	s.Pitch = numeric.AngleFromAtan2(pitchTerm, l).Raw()
 	if s.Unit != nil {
 		s.Unit.Move.Bank = s.Bank
 		s.Unit.Move.Pitch = s.Pitch

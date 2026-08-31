@@ -1,6 +1,9 @@
 package numeric
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 // TestNarrowingTruncatesTowardZero locks the __ftol half of I3: narrowing a
 // value to whole units truncates toward zero, not floor and not round
@@ -68,5 +71,41 @@ func TestAngleWraps(t *testing.T) {
 	}
 	if got := Angle(1).Sub(Angle(2)); got != 65535 {
 		t.Fatalf("1 - 2 = %d, want 65535", got)
+	}
+}
+
+func TestAngleFromAtan2RetailTable(t *testing.T) {
+	tests := []struct {
+		name   string
+		first  int64
+		second int64
+		want   Angle
+	}{
+		{"+Z", 0, 1, 0},
+		{"+X", 1, 0, 16384},
+		{"-Z", 0, -1, 32768},
+		{"-X", -1, 0, 49152},
+		{"+X+Z", 1, 1, 8192},
+		{"+X-Z", 1, -1, 24576},
+		{"-X-Z", -1, -1, 40960},
+		{"-X+Z", -1, 1, 57344},
+		{"negative wrap", -1, 2, 60700},
+	}
+	for _, test := range tests {
+		if got := AngleFromAtan2(test.first, test.second); got != test.want {
+			t.Errorf("AngleFromAtan2(%d, %d) = %d, want %d (%s)", test.first, test.second, got, test.want, test.name)
+		}
+	}
+
+	// The narrowing instruction is round-to-nearest-even, including negative
+	// values; these are the two tie parities in each direction [01 §8].
+	for _, test := range []struct {
+		in, want float64
+	}{
+		{0.5, 0}, {1.5, 2}, {-0.5, 0}, {-1.5, -2},
+	} {
+		if got := math.RoundToEven(test.in); got != test.want {
+			t.Errorf("round-to-even(%v) = %v, want %v", test.in, got, test.want)
+		}
 	}
 }

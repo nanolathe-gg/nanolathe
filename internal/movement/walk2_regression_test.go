@@ -1,7 +1,6 @@
 package movement
 
 import (
-	"math"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -170,7 +169,7 @@ func TestAnnulusGoalPointUsesBearingAndBandMidpoint(t *testing.T) {
 		t.Fatal("annulus declined its goal point")
 	}
 	radius := int64(48 << 16)
-	bearing := numeric.Angle(uint16(roundAngleNearestEven(math.Atan2(200, 100) * 65536.0 / (2 * math.Pi))))
+	bearing := numeric.AngleFromAtan2(200, 100)
 	tableAngle := bearing + 0x20
 	offsetX := numeric.Fixed((radius*int64(numeric.Sin(tableAngle)) + 0x1000) >> 13)
 	offsetZ := numeric.Fixed((radius*int64(numeric.Cos(tableAngle)) + 0x1000) >> 13)

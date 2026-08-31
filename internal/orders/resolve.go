@@ -124,11 +124,26 @@ func isDamaged(u *units.Unit) bool {
 	}
 	return u.Health < u.MaxHealth
 }
+
+// isUnfinished is the "target unfinished" predicate the assist-or-repair
+// resolutions read (command codes 1, 2 and 8, [04 R-ORD-01 §5]).
+//
+// Correction (PT3-04). This used to read `0 < remaining < 1`, excluding a
+// remaining fraction of exactly 1 — which is precisely the state a freshly
+// allocated nanoframe is created in (internal/construction sets the product's
+// fraction to 1 and steps it down from there [04 §2.3]). A right-click on a
+// brand-new frame therefore never resolved to `HelpBuild`, and the frame only
+// became assistable after its own builder had landed one admitted work step.
+// Every predicate retail spends on this quantity is a comparison against zero —
+// the shared work step's own entry test is `remaining == 0.0f`
+// [05 R-WORK-01 §1], `Capture`'s "cloud of vapor" rejection is `remaining != 0`,
+// and `HelpBuild`'s own "nothing left to assist" arm is `remaining == 0` — so
+// unfinished is "not zero", with no upper bound.
 func isUnfinished(u *units.Unit) bool {
 	if u == nil {
 		return false
 	}
-	return u.Remaining > 0 && u.Remaining < 1 // remaining 1→0 [04 §2.3]
+	return u.Remaining != 0 // remaining 1→0 [04 §2.3][05 R-WORK-01 §1]
 }
 func canResurrect(u *units.Unit) bool {
 	if u == nil || u.Def == nil {
@@ -676,8 +691,11 @@ func guardWard(n *Node) *units.Unit {
 }
 
 func wardHasConstruction(ward *units.Unit) bool {
-	// Default stub: active construction when Remaining 0<rem<1 [04 §2.3][04 §3.5] (a)
-	return ward != nil && ward.Remaining > 0 && ward.Remaining < 1
+	// An unfinished ward, on the same "not zero" reading isUnfinished carries
+	// [04 §2.3][05 R-WORK-01 §1]; a ward whose fraction is still exactly 1 is a
+	// nanoframe nobody has worked yet, which is the case a guard is most likely
+	// to be pointed at (PT3-04).
+	return isUnfinished(ward)
 }
 func isFriendlyConstruction(actor, ward *units.Unit) bool {
 	return !isHostile(actor, ward)

@@ -1,7 +1,6 @@
 package combat
 
 import (
-	"math"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -506,9 +505,10 @@ func TestBallisticBurnBlowExpiry(t *testing.T) {
 	}()
 }
 
-// TestYawPitchDerivationTruncation per [06 §6.3] [06 §6.4] trunc towards zero.
-func TestYawPitchDerivationTruncation(t *testing.T) {
-	// delta dx=1.0, dz=1.0 => yaw 45deg => trunc(45*32768/180)=8192
+// TestYawPitchDerivation uses the shared rounded atan2q conversion [06 §3.3]
+// [06 §6.3] [06 §6.4].
+func TestYawPitchDerivation(t *testing.T) {
+	// delta dx=1.0, dz=1.0 => yaw 45deg => 8192.
 	dx := fix(65536)
 	dz := fix(65536)
 	yaw := YawFromDelta(dx, dz)
@@ -520,20 +520,19 @@ func TestYawPitchDerivationTruncation(t *testing.T) {
 	if yaw != 0 {
 		t.Fatalf("yaw 0 got %d want 0", yaw)
 	}
-	// dy=1, horiz 1 => pitch 45deg =>8192
+	// The direct solver negates the whole-unit vertical operand, so +Y gives
+	// the signed -45-degree result 57344 [06 §3.3].
 	dy := fix(65536)
 	pitch := PitchFromDelta(fix(65536), dy, fix(0))
-	// dx 1, dy 1, dz0 => h=1, atan2(1,1)=45deg
-	if pitch != numeric.Angle(8192) {
-		t.Fatalf("pitch 45 got %d want 8192", pitch)
+	if pitch != numeric.Angle(57344) {
+		t.Fatalf("pitch -45 got %d want 57344", pitch)
 	}
-	// check truncation: atan2 *32768/pi trunc, not round
-	// For small angle, verify trunc behavior: dx small vs dz large gives small yaw
-	// Use dx=0.1 (6553), dz=1.0(65536): atan2(0.1,1)=5.71deg => 5.71*32768/180=1040.2 trunc 1040
+	// A non-cardinal vector proves the exact operands and rounding path are
+	// used rather than the removed truncating conversion.
 	yaw = YawFromDelta(fix(6553), fix(65536))
-	expected := int32(math.Atan2(0.1, 1.0) * 32768 / math.Pi)
-	if int32(yaw) != expected {
-		t.Fatalf("yaw trunc got %d want %d", yaw, expected)
+	expected := numeric.AngleFromAtan2(6553, 65536)
+	if yaw != expected {
+		t.Fatalf("yaw exact got %d want %d", yaw, expected)
 	}
 }
 

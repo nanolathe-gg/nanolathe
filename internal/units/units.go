@@ -903,6 +903,26 @@ func (w *World) defIDClaimed(id uint16) bool {
 	return false
 }
 
+// CreatedMoverMode is the mover-mode mirror every newly created unit record
+// carries. Retail's creation service forces the flags word's low two bits to
+// `1` before it has tested the definition's class at all, and the spawn
+// wrapper that calls it then rewrites those bits from its own mode argument —
+// which every spawn call site in the image passes as the literal `1`: the
+// order handler that lays a building nanoframe, the mobile build handlers, the
+// map-start placer, commander respawn and the campaign placer alike. The mover
+// constructor writes `1` too, so a mobile unit's two words agree.
+//
+// The mirror therefore starts at `1` for every unit, including a building that
+// will never own a mover, and only the air setter ever moves it off `1` —
+// to `2` on takeoff, back to `1` on landing, and to `0` for a unit attached to
+// a carrier or parked on a pad [04 R-MOV-01 §8].
+//
+// This matters beyond movement: the frame composer's two unit passes select on
+// this mirror, and a unit left at `0` sorts into the pass that runs after the
+// nanolathe strip, which hid every construction spray behind the building it
+// was completing [03 R-RAST-01 §7, correction of 2026-08-30].
+const CreatedMoverMode uint8 = 1
+
 // Create allocates an ALREADY-BUILT unit record through the canonical
 // per-player allocator: lowest-free slot in the owning player's slice with
 // slot 0 null, no generation tags, immediate reuse [01 §6.1] C1
@@ -979,6 +999,7 @@ func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed,
 		Z:            z,
 		Alive:        true,
 		Flags:        initialStatusFlags(def),
+		Move:         MoveState{Mode: CreatedMoverMode},
 		Remaining:    0,
 		MaxHealth:    int32(def.MaxDamage),
 		Health:       int32(def.MaxDamage),
@@ -1100,6 +1121,7 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 		Z:            z,
 		Alive:        true,
 		Flags:        initialStatusFlags(def),
+		Move:         MoveState{Mode: CreatedMoverMode},
 		Remaining:    0,
 		MaxHealth:    int32(def.MaxDamage),
 		Health:       int32(def.MaxDamage),

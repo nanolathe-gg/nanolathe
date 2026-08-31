@@ -214,12 +214,31 @@ func deadlineHold(n *Node, tick uint32, ticks int32) Code {
 // returns *advance* (1) once the unit's build-stance byte is set, and otherwise
 // writes the dynamic gate to `extra | 0x4` and returns *hold* (2). The gate is
 // assigned, not ORed, exactly as the section states.
-func inBuildStanceWait(u *units.Unit, n *Node, extra uint32) Code {
+//
+// TODO(T25): gate bit `0x4` has no producer in this build. [04 §3.1]'s gate-bit
+// table names this wait and the wait/select family as the bit's consumers and
+// names no producer for it; the COB engine-write port that carries the stance
+// byte ([R-COB-03 §3]) writes the unit field and nothing else. The byte is set
+// by the script's own `StartBuilding` body, which the emitter of [R-ORDER-02 §2]
+// arranges as a DEFERRED callback, so it is never already set on the visit that
+// first reaches this wait: with the gate armed and nothing able to satisfy it,
+// every work record that reaches this helper would park at the head of its
+// unit's queue permanently. Retail's stance byte does clear this wait, so a
+// permanent park is not the behavior being cloned. Placeholder, the same shape
+// airHandOff uses (vtolair.go): arm the shared deadline setter for one tick
+// alongside the row's own gate, so the stance byte is re-polled on the next
+// visit. The record keeps its place at the head and its phase, exactly as
+// *hold* requires, and the added bit becomes inert the moment a producer for
+// `0x4` exists.
+// Decider: trace the INBUILDSTANCE engine-write port for a write of bit 2 into
+// the unit's pending word.
+func inBuildStanceWait(u *units.Unit, n *Node, extra uint32, tick uint32) Code {
 	if u != nil && u.InBuildStance {
 		return 1
 	}
 	if n != nil {
 		n.DynamicGate = extra | gateBuildStance
+		deadlineHold(n, tick, 1)
 	}
 	return 2
 }
@@ -331,6 +350,142 @@ func workerQuantum(u *units.Unit) int32 {
 		return 0
 	}
 	return u.Def.WorkerTime / 30
+}
+
+// nanoframeDecayRearm is the eleven-tick rearm of `GetBuilt`'s phase-2 decay
+// visit [04 R-FAC-02 §4]. An admitted work step pushes the product's next decay
+// visit to `tick + 11`, so the decay fires only once a full period has passed
+// with nothing admitted.
+const nanoframeDecayRearm = 11
+
+// deferNanoframeDecay is the target-side half of the work step: the
+// "worked this tick" flag of [05 R-WORK-01 §1], which the helper sets for any
+// non-negative quantum BEFORE its zero test and before admission. The product's
+// own `GetBuilt` record carries the deferral in Param1, which is the same field
+// and the same protocol internal/construction's factory step writes
+// [04 R-FAC-02 §4]; a builder assisting a frame therefore holds that frame's
+// decay off exactly as the frame's own builder does.
+//
+// The record is looked up without materialising a queue: a product that has no
+// queue has no `GetBuilt` record and nothing to defer.
+func deferNanoframeDecay(target *units.Unit, tick uint32) {
+	q := QueueOfUnit(target)
+	if q == nil {
+		return
+	}
+	getBuiltID := Lookup("GetBuilt")
+	if getBuiltID == 0 {
+		return
+	}
+	for _, n := range q.Primary() {
+		if n == nil || n.ID != getBuiltID {
+			continue
+		}
+		if next := tick + nanoframeDecayRearm; next > n.Param1 {
+			n.Param1 = next
+		}
+		return
+	}
+}
+
+// nanoWorkStep is the shared construction step of [05 R-WORK-01 §1] — the one
+// helper behind every build, assist and factory-product visit — as the two
+// build-assist rows in this package call it. Only the forward arm (a
+// non-negative quantum) is reachable from here; the reverse arm belongs to
+// resurrection and to `GetBuilt`'s decay, both of which internal/construction
+// owns.
+//
+//	if (target.remaining == 0.0f)  return notCommitted   // exact float compare
+//	if (worker >= 0.0f)            setWorkedThisTickFlag(target)
+//	if (worker == 0.0f)            return notCommitted
+//	new       = clamp(old - worker/buildtime, 0, 1)
+//	delta     = old - new
+//	energy    = buildcostenergy * delta
+//	metal     = buildcostmetal  * delta
+//	gain      = trunc(maxdamageF * old) - trunc(maxdamageF * new)
+//	if (!admitTwoResource(BUILDER.subrecord, energy, metal)) return notCommitted
+//	h = health + gain; if ((unsigned)h >= (unsigned)maxdamage) h = maxdamage
+//	target.health = (int16)h ;  target.remaining = new
+//
+// Three properties of that body are the whole of build assistance, and none of
+// them is a special case anywhere in retail:
+//
+//   - the quantum is the CALLER's `workertime/30` and the subrecord billed is
+//     the CALLER's, so N builders visiting one target in one tick step the
+//     fraction N times and each pays its own share of the drain;
+//   - there is no owner check, no attach limit and no per-target rate cap: the
+//     target carries a fraction, not a builder list;
+//   - a shortfall is not this helper's business. Admission only records the
+//     demand and gates on carry; the two-stage settlement of
+//     [05 "Two-stage settlement algorithm"][05 R-ECO-01 §5] scales every
+//     contributor's accepted work by the same per-resource ratio afterwards.
+//
+// `maxdamageF` is the definition word widened through a 64-bit integer load
+// whose high word is zero, so a negative authored `maxdamage` reads as a large
+// positive value [05 R-WORK-01 §1]; the maximum-health cap is UNSIGNED, so a
+// `health + gain` that went negative is clamped UP to `maxdamage`.
+//
+// Malformed build times need no guard and get none [05 R-WORK-01 §1]: a zero
+// `buildtime` makes the division an infinity, so the fraction goes to negative
+// infinity and the lower clamp stores zero — the target finishes in one step
+// and pays its whole remaining cost; a negative one drives the fraction the
+// wrong way into the upper clamp. Neither faults, and Go's IEEE division
+// reproduces both without a branch.
+func nanoWorkStep(q *Queue, builder, target *units.Unit, worker int32, tick uint32) bool {
+	if builder == nil || target == nil || target.Def == nil {
+		return false
+	}
+	if target.Remaining == 0 {
+		return false // exact float compare [05 R-WORK-01 §1]
+	}
+	if worker >= 0 {
+		// Set before the zero test, exactly as §1 orders it, and before the
+		// admission: a builder that requested work but was refused still holds
+		// the frame's decay off for this window.
+		deferNanoframeDecay(target, tick)
+	}
+	if worker <= 0 {
+		// §1's own zero test, plus the negative case: the reverse arm is
+		// internal/construction's (resurrection and the `GetBuilt` decay), and
+		// no row in this package passes a negative quantum.
+		return false
+	}
+	def := target.Def
+	old := target.Remaining
+	newRemaining := old - float32(worker)/float32(def.BuildTime)
+	if newRemaining <= 0 {
+		newRemaining = 0
+	}
+	if newRemaining >= 1 {
+		newRemaining = 1
+	}
+	delta := old - newRemaining
+	energyDemand := float32(def.BuildCostEnergy) * delta
+	metalDemand := float32(def.BuildCostMetal) * delta
+	maxDamageF := float32(uint32(def.MaxDamage))
+	gain := int32(maxDamageF*old) - int32(maxDamageF*newRemaining)
+	if q == nil || q.StockpileEconomy == nil {
+		// TODO(T25): the queue carries the economy service only under its
+		// stockpile name (QueueBinding, pump.go). With none bound there is no
+		// subrecord to bill, and the helper's own contract is that unadmitted
+		// work commits nothing — the notCommitted arm, which is a traced path
+		// rather than an invented one. Same reasoning as repairStep above.
+		return false
+	}
+	buckets := q.StockpileEconomy.UnitBuckets(builder.Handle)
+	if buckets == nil {
+		return false
+	}
+	if !economy.AdmitTwoResource(buckets, energyDemand, metalDemand) {
+		return false
+	}
+	h := target.Health + gain
+	if uint32(h) >= uint32(def.MaxDamage) {
+		h = def.MaxDamage
+	}
+	target.Health = int32(int16(h))
+	target.Remaining = newRemaining
+	return true
 }
 
 // ---------------------------------------------------------------------------
@@ -458,7 +613,7 @@ func repairUnitHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Co
 		EmitStartBuilding(u, n)
 		return 1
 	case 2:
-		return inBuildStanceWait(u, n, pendTargetRemoved)
+		return inBuildStanceWait(u, n, pendTargetRemoved, tick)
 	case 3:
 		// Unsigned compare [05 R-WORK-01 §3]; see selfRepairHandler.
 		if target.Def != nil && uint32(target.Health) >= uint32(target.Def.MaxDamage) {
@@ -577,6 +732,20 @@ func helpBuildHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Cod
 		}
 		_ = assistApproachHalf(u.Def.FootprintX, u.Def.FootprintZ) // the annulus radii; see the header's goal-installer TODO(T25)
 		installWorkGoal(u, n, target.X, target.Y, target.Z)
+		if inBuildRangeOf(u, target) {
+			// Already inside the annulus. Retail's route follower asks the
+			// installed payload whether the unit has arrived on its very next
+			// service and raises pending 0x20 straight away for a unit that is
+			// already there [04 §10 "The follower's per-tick service"], so the
+			// record reaches phase 1 without any motion. This build binds an
+			// arrival handle only for the move-family descriptors (the file
+			// header's goal-installer TODO(T25)), so arming the approach gate
+			// for an assistant that is already in reach would park the order on
+			// a bit nothing can raise. The gate is therefore left clear and the
+			// pump cascades into phase 1 in this same pass, which is the
+			// observable retail outcome for this case.
+			return 1
+		}
 		n.DynamicGate = gateWorkApproach
 		return 1
 	case 1:
@@ -591,19 +760,35 @@ func helpBuildHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Cod
 		EmitStartBuilding(u, n)
 		return 1
 	case 2:
-		return inBuildStanceWait(u, n, gateCancelCurrent|pendTargetRemoved)
+		return inBuildStanceWait(u, n, gateCancelCurrent|pendTargetRemoved, tick)
 	case 3:
-		// TODO(T25): the work step is the shared construction helper with a
-		// quantum of workertime/30 [05 R-WORK-01 §1][05 "Construction
-		// arithmetic"], whose body internal/construction owns
-		// (ConstructionStep, its two-resource admission and its health gain).
-		// internal/construction imports this package, so no call into it can be
-		// made from here and no seam of the SetGetBuiltHandler shape exists for
-		// it. Placeholder: no work is admitted and none is applied, which is
-		// the helper's own rejected-work arm — "no query and no segment is
-		// emitted when the two-resource construction admission rejects the work
-		// step" [05 R-P0-06 §1] — so the row's unfinished branch runs. A
-		// builder assisting therefore adds no progress until the seam exists.
+		// The work step, quantum `workertime/30` [05 R-WORK-01 §1]
+		// [05 "Construction arithmetic"].
+		//
+		// Correction (PT3-04). This arm used to admit no work and apply none,
+		// on the reading that the step's body belongs to internal/construction
+		// and that package imports this one. That made build assistance a
+		// no-op: a second builder approached, opened its nanolathe and added
+		// nothing, for every assist in the game. The step is not construction's
+		// to lend — [05 R-WORK-01 §1] gives it instruction-exact and it needs
+		// only the target's definition and the BUILDER's own economy subrecord,
+		// both of which this package already reaches (the same arrangement
+		// repairStep has used for the repair helper of §3). nanoWorkStep above
+		// is that body; construction keeps its own copy for the factory and
+		// mobile-build rows it drives.
+		// TODO(T25): [05 R-WORK-01 §1] closes with "on both arms and also on the
+		// admission-refused path: if (target.remaining == 0.0f)
+		// completionTransition(builder, target)" — whichever builder zeroes the
+		// fraction runs the completion transition. That transition is
+		// internal/construction's (occupancy retirement, cargo detach, the
+		// activation edge, the completed-flag posture) and this package cannot
+		// reach it. Placeholder: an assistant that lands the last increment
+		// leaves the posture to the frame's OWNER, whose own work state observes
+		// the zero fraction on its next visit and runs the same idempotent
+		// transition [04 R-FAC-02 §3]. The observable difference is one tick of
+		// completion latency, and only when the assistant rather than the owner
+		// lands the final increment. A frame with no live owner is not covered.
+		nanoWorkStep(QueueForUnit(u), u, target, workerQuantum(u), tick)
 		if target.Remaining != 0 {
 			n.DynamicGate |= gateCancelCurrent | pendTargetRemoved
 			return deadlineHold(n, tick, 1)
@@ -718,7 +903,7 @@ func captureHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 		EmitStartBuilding(u, n)
 		return 1
 	case 2:
-		return inBuildStanceWait(u, n, pendTargetGone)
+		return inBuildStanceWait(u, n, pendTargetGone, tick)
 	case 3:
 		workStatus(u, statusWorking, "") // kind 11 has no default text
 		return 1
@@ -797,7 +982,7 @@ func reclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 		EmitStartBuilding(u, n)
 		return 1
 	case 2:
-		return inBuildStanceWait(u, n, 0)
+		return inBuildStanceWait(u, n, 0, tick)
 	case 3, 4:
 		if n.Phase == 3 {
 			workStatus(u, statusWorking, "") // kind 11, no text, on every visit it stays in phase 3
@@ -875,7 +1060,7 @@ func resurrectHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Cod
 		EmitStartBuilding(u, n)
 		return 1
 	case 2:
-		return inBuildStanceWait(u, n, 0)
+		return inBuildStanceWait(u, n, 0, tick)
 	case 3:
 		// TODO(T25): the corpse name, its truncation at the first underscore and
 		// the catalog lookup all read the feature record; see the resolver

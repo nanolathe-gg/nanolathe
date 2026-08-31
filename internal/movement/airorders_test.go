@@ -336,3 +336,253 @@ func TestVTOLEvadeBreaksTwiceOnTheSameSide(t *testing.T) {
 		t.Fatalf("phase 2 returned %d, want the 5 that ends the evasion [04 R-AIR-01 §8]", code)
 	}
 }
+
+// airBuildFixture is airFixture with a construction aircraft's authored build
+// reach and a completed target standing away from it, which is the shape the
+// air build orders run in.
+func airBuildFixture(t *testing.T) (*System, *units.World, *units.Unit, *units.Unit) {
+	t.Helper()
+	sys, w, u := airFixture(t)
+	u.Def.BuildDistance = 40
+	u.Def.Builder = true
+	target, err := w.Create(u.Def, 0, world.CellToWorld(20), sys.Terrain.HeightAt(world.CellToWorld(20), world.CellToWorld(8)), world.CellToWorld(8))
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	tu := w.Unit(target)
+	sys.EnsureUnit(tu)
+	return sys, w, u, tu
+}
+
+// installedMarker is the air marker currently on the unit's flight command
+// block, which is the only output the air executors have [04 R-AIR-01 §1].
+func installedMarker(t *testing.T, sys *System, u *units.Unit) *airMarker {
+	t.Helper()
+	fl := sys.Flights[u.Handle]
+	if fl == nil || fl.Command == nil {
+		t.Fatal("the unit has no flight command block [04 R-AIR-01 §1]")
+	}
+	m, ok := fl.Command.Payload.(*airMarker)
+	if !ok || m == nil {
+		t.Fatal("no air marker is installed [04 R-AIR-01 §4]")
+	}
+	return m
+}
+
+// TestAirConstructionOrbitRecurrence locks the geometry of §10.3, which the
+// playtest found missing entirely: a construction aircraft that reaches its
+// work target hovers on a repeating closed circuit of stations around it.
+//
+// Every station is `builddistance` from the target; each one is the builder's
+// own angular position about the target advanced by the signed step 0xDB6E;
+// seven steps close the circle, which is where "about seven stations" comes
+// from — the count is a consequence of the step, not an authored constant; and
+// the marker's explicit heading is the direction from the station back at the
+// target, so the aircraft faces what it is building.
+func TestAirConstructionOrbitRecurrence(t *testing.T) {
+	sys, _, u, target := airBuildFixture(t)
+	head := pushAirOrder(t, u, "VTOL_MobileBuild", target.X, target.Z)
+	head.Target = target.Handle
+
+	radius := numeric.Fixed(int64(u.Def.BuildDistance) << 16)
+	first := uint16(0)
+	prev := uint16(0)
+	for station := 0; station < 8; station++ {
+		sys.tick = uint32(station+1) * airOrbitPeriod
+		expect := bearing(u.X, u.Z, target.X, target.Z) + airOrbitStep
+		sys.airBuildOrbitStation(u, head)
+		m := installedMarker(t, sys, u)
+
+		// The station's distance from the target is the authored build reach.
+		if d := airPlanarDistance(m.goal.X, m.goal.Z, target.X, target.Z); absInt64(d-int64(radius)) > 1<<12 {
+			t.Fatalf("station %d sits %d from the target, want builddistance %d [04 §10.3]", station, d, int64(radius))
+		}
+		// The marker's explicit heading points from the station back at the
+		// target: the aircraft faces the unit it is building.
+		if m.flags&airMarkerExplicitHead == 0 {
+			t.Fatalf("station %d carries no explicit heading [04 §10.3]", station)
+		}
+		// The station is placed through the 512-entry trig table, so recovering
+		// its angle back out of the two components costs up to about one table
+		// step (128 of the 65,536 units) plus the arctangent's own rounding.
+		if want := bearing(m.goal.X, m.goal.Z, target.X, target.Z); angleDelta(m.heading, want) > 256 {
+			t.Fatalf("station %d heading %d does not face the target (%d) [04 §10.3]", station, m.heading, want)
+		}
+		if m.heading != expect {
+			t.Fatalf("station %d heading %d, want the builder's bearing plus the step %d [04 §10.3]", station, m.heading, expect)
+		}
+		if m.flags&airMarkerExplicitRadius != 0 || m.flags&airMarkerExplicitAlt != 0 {
+			t.Fatalf("station %d carries a radius or altitude setter; §10.3 writes neither", station)
+		}
+		if station == 0 {
+			first = m.heading
+		} else if step := uint16(m.heading - prev); angleDelta(step, airOrbitStep) > 256 {
+			// Retail recomputes the bearing from the builder's actual position
+			// every time, so the step carries the same one-table-step slack the
+			// placement does; it is the step, not a stored angle advanced in
+			// closed form.
+			t.Fatalf("station %d advanced by %d, want the step %d [04 §10.3]", station, step, airOrbitStep)
+		}
+		prev = m.heading
+
+		// Walk the builder onto the station it was just given, which is what the
+		// flight integrator does between two 150-tick edges.
+		u.X, u.Y, u.Z = m.goal.X, m.goal.Y, m.goal.Z
+	}
+	// Seven steps of 0xDB6E are 65,534 of the 65,536-unit circle, so the eighth
+	// station lands two units short of the first: the circuit closes.
+	if d := angleDelta(prev, first); d > 2048 {
+		t.Fatalf("the circuit did not close after seven steps: station 7 is %d units from station 0 [04 §10.3]", d)
+	}
+}
+
+// TestAirBuildTakesOffAndOrbits is the same contract through the whole mover
+// tick rather than through the executor alone: a grounded construction aircraft
+// given an air build order leaves the ground, closes on the target, and then
+// keeps being handed fresh stations around it instead of sitting still.
+func TestAirBuildTakesOffAndOrbits(t *testing.T) {
+	sys, w, u, target := airBuildFixture(t)
+	head := pushAirOrder(t, u, "VTOL_MobileBuild", target.X, target.Z)
+	head.Target = target.Handle
+
+	var stations []Vec3
+	for tick := uint32(1); tick <= 700; tick++ {
+		runMovementTick(sys, tick, w)
+		if tick%airOrbitPeriod != 0 || tick < airOrbitPeriod*2 {
+			continue
+		}
+		m := installedMarker(t, sys, u)
+		stations = append(stations, m.goal)
+	}
+	if u.Move.Mode&0x3 != 2 {
+		t.Fatalf("the builder never left the ground: mover mode %d [04 R-AIR-01 §6]", u.Move.Mode)
+	}
+	if len(stations) < 3 {
+		t.Fatalf("only %d orbit stations were installed in 700 ticks [04 §10.3]", len(stations))
+	}
+	radius := int64(u.Def.BuildDistance) << 16
+	for i, st := range stations {
+		if d := airPlanarDistance(st.X, st.Z, target.X, target.Z); absInt64(d-radius) > 1<<12 {
+			t.Fatalf("station %d is %d from the target, want %d [04 §10.3]", i, d, radius)
+		}
+		if i > 0 && stations[i-1] == st {
+			t.Fatalf("station %d repeats its predecessor; the circuit does not advance [04 §10.3]", i)
+		}
+	}
+	// The aircraft is flying the circuit, not parked on the target.
+	if d := airPlanarDistance(u.X, u.Z, target.X, target.Z); d > radius+(8<<16) {
+		t.Fatalf("the builder is %d from its target, well outside the orbit [04 §10.3]", d)
+	}
+}
+
+// TestVTOLLandIfCanSettlesOnTheTerrain locks the corrected altitude-offset
+// branches of [04 R-AIR-01 §6]: the offset is zero on dry land and
+// `terrainHeight − seaLevel` over water, so composed with the setter's
+// `max(seaLevel, terrainHeight) + offset` both branches command exactly the
+// terrain height. Read the other way round — which is what the doc said before
+// this unit re-traced it — an aircraft landing on ground above sea level
+// commands `terrain + (terrain − sea)` and settles that far in the air.
+func TestVTOLLandIfCanSettlesOnTheTerrain(t *testing.T) {
+	sys, w, u := airFixture(t)
+	pushAirOrder(t, u, "VTOL_LandIfCan", 0, 0)
+	terrain := sys.Terrain.HeightAt(u.X, u.Z)
+	if terrain>>16 <= numeric.Fixed(sys.Terrain.SeaLevel) {
+		t.Fatal("the fixture's terrain must stand above sea level for this contract to bite")
+	}
+	for tick := uint32(1); tick <= 300; tick++ {
+		runMovementTick(sys, tick, w)
+	}
+	if u.Move.Mode&0x3 != 1 {
+		t.Fatalf("the aircraft never touched down: mover mode %d [04 R-AIR-01 §6]", u.Move.Mode)
+	}
+	if absFixed(u.Y-terrain) > numeric.Fixed(1<<16) {
+		t.Fatalf("landed at Y=%d with terrain at %d [04 R-AIR-01 §6]", u.Y, terrain)
+	}
+}
+
+// TestAirOffsetSignFamilies locks the two placement families apart. The travel
+// direction of a heading is (−sin, −cos) [04 R-MOV-01 §4], so a leg that places
+// its marker ALONG a bearing subtracts the component pair and the air build
+// orbit, which places its station on the target's far side from that bearing,
+// adds it. Getting this backwards is what put an orbit station across the
+// target instead of around it.
+func TestAirOffsetSignFamilies(t *testing.T) {
+	const north = uint16(0) // heading 0 travels toward −Z [04 R-MOV-01 §4]
+	ox, oz := offsetAtBearing(north, numeric.Fixed(100<<16))
+	if ox != 0 {
+		t.Fatalf("the X component at heading 0 is %d, want 0", ox)
+	}
+	if oz <= 0 {
+		t.Fatalf("the Z component at heading 0 is %d, want the un-negated +cos [04 R-MOV-01 §4]", oz)
+	}
+	// Subtracting moves along the heading; adding moves opposite it.
+	if along := numeric.Fixed(0) - oz; along >= 0 {
+		t.Fatalf("pos − offset at heading 0 moved to %d, want the negative Z the travel direction gives", along)
+	}
+}
+
+func absInt64(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+// angleDelta is the unsigned separation of two 16-bit angles on the shorter arc.
+func angleDelta(a, b uint16) uint16 {
+	d := a - b
+	if d > 0x8000 {
+		d = -d
+	}
+	return d
+}
+
+// TestVTOLLandingParksOnThePad walks the seven-phase pad machine end to end
+// [04 R-AIR-01 §6]: the aircraft takes off, closes on the pad through the
+// follow marker legs, and the touchdown attaches it to the pad owner on the
+// chosen pad piece with request mode 0 — the attached/parked mode
+// [04 R-AIR-01 §3][04 R-UNIT-06 §3].
+func TestVTOLLandingParksOnThePad(t *testing.T) {
+	sys, w, u := airFixture(t)
+	padDef := &content.UnitDef{
+		DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("padfixture")},
+		UnitName:         "padfixture",
+		IsAirBase:        true,
+		FootprintX:       1,
+		FootprintZ:       1,
+		MaxDamage:        100,
+	}
+	px, pz := world.CellToWorld(18), world.CellToWorld(8)
+	ph, err := w.Create(padDef, 0, px, sys.Terrain.HeightAt(px, pz), pz)
+	if err != nil {
+		t.Fatalf("create pad: %v", err)
+	}
+	pad := w.Unit(ph)
+	sys.EnsureUnit(pad)
+
+	head := pushAirOrder(t, u, "VTOL_Landing", pad.X, pad.Z)
+	head.Target = ph
+
+	for tick := uint32(1); tick <= 900; tick++ {
+		runMovementTick(sys, tick, w)
+		if u.Attachment.Carrier == ph {
+			break
+		}
+	}
+	if u.Attachment.Carrier != ph {
+		t.Fatalf("the aircraft never parked: carrier=%d, position (%d,%d,%d) [04 R-AIR-01 §6]", u.Attachment.Carrier, u.X, u.Y, u.Z)
+	}
+	if u.Attachment.AttachPiece != 0 {
+		t.Fatalf("parked on piece %d, want the first free candidate 0 [04 R-AIR-01 §6]", u.Attachment.AttachPiece)
+	}
+	if u.Move.Mode&0x3 != 0 {
+		t.Fatalf("mover mode %d after touchdown, want the parked 0 [04 R-AIR-01 §3]", u.Move.Mode)
+	}
+	// A second lander finds that piece taken and takes the next candidate.
+	if sys.padPieceFree(pad, 0) {
+		t.Fatal("the occupied pad piece still reports free [04 R-AIR-01 §6]")
+	}
+	if piece, ok := sys.queryLandingPad(pad); !ok || piece != 1 {
+		t.Fatalf("the scan offered piece %d (ok=%v), want the next candidate 1 [04 R-AIR-01 §6]", piece, ok)
+	}
+}

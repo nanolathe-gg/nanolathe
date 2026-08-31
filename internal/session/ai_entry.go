@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/nanolathe/nanolathe/internal/ai"
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -22,13 +23,17 @@ func initializeBattleAI(s *Session, player uint8, profile *ai.Profile) error {
 	if int(player) >= len(s.AI) || int(player) >= len(s.Econ.Players) {
 		return fmt.Errorf("session: AI player %d out of range", player)
 	}
+	surfaceMetal, err := battleSurfaceMetal(s)
+	if err != nil {
+		return err
+	}
 	mgr := &ai.Manager{
 		Player:       player,
 		Profile:      profile,
 		RNG:          s.SimRNG(),
 		Terrain:      s.World,
 		Catalog:      s.Catalog,
-		SurfaceMetal: battleSurfaceMetal(s),
+		SurfaceMetal: surfaceMetal,
 	}
 	// Bind before Strategic.Init so the construction-time class vectors and
 	// every later gated refresh use the same live battle inputs. At battle
@@ -81,11 +86,56 @@ func initializeBattleAI(s *Session, player uint8, profile *ai.Profile) error {
 // the AI selector and limit arithmetic. It remains the authored signed value;
 // only the distinct per-cell canonical metal seed narrows through a byte
 // [08 R-AI-03 §4][05 R-PROD-01 §6].
-func battleSurfaceMetal(s *Session) int32 {
-	if s == nil || s.Mission == nil || s.Mission.OTA == nil || s.Mission.OTA.Global == nil {
-		return 0
+//
+// It used to read the OTA's [GlobalHeader] section through
+// mission.DecodeMissionGlobals. That was the wrong source: SurfaceMetal is
+// authored per schema. Across the reference install's 275 map .ota files the
+// key occurs 635 times and every occurrence sits inside a [Schema N] section,
+// none in [GlobalHeader], so the global read returned its accessor default of
+// zero for every map in the corpus [08 R-AI-03 §4-A]. The terrain seeds its
+// per-cell metal byte from the selected schema's word instead
+// (applySchemaStrict then world.Terrain.ApplySchema), so the two readers of
+// one quantity disagreed by construction: the AI's scatter acceptance limit,
+// surfaceMetal * footZ * footX * 2, was zero while every trial footprint's
+// metal-byte sum was positive, and the helper rejected every geometrically
+// valid non-extractor site for the whole battle. That is Nanolathe defect
+// PT3-14: a computer player that placed nothing but metal extractors, because
+// those take the exhaustive helper, which has no limit test.
+//
+// Resolution order: the selected schema by name; then the map's only schema
+// when it authors exactly one, which is unambiguous because it is the only
+// schema the terrain could have been seeded from; then an authored
+// [GlobalHeader] word, kept for a mission file that does author one there,
+// but only when the key is actually present. A miss is a diagnostic error
+// rather than a zero — a silent zero is precisely what hid this defect, and
+// the caller refuses to build a manager whose limit disagrees with the
+// terrain. An authored zero is not a miss: a metal-free map seeds zero bytes
+// too, and limit and sum stay consistent at zero.
+func battleSurfaceMetal(s *Session) (int32, error) {
+	if s == nil || s.Mission == nil {
+		return 0, fmt.Errorf("nanolathe: AI surface-metal binding failed: logical path <session mission record>, providers searched [], expected the loaded mission record")
 	}
-	return mission.DecodeMissionGlobals(s.Mission.OTA.Global).SurfaceMetal
+	schemaName := s.Mission.Schema.Name
+	var header *content.MapHeader
+	if s.Catalog != nil {
+		header = s.Catalog.Maps[content.CanonicalKey(s.Mission.TerrainKey)]
+	}
+	if header != nil {
+		for i := range header.Schemas {
+			if header.Schemas[i].Name == schemaName {
+				return header.Schemas[i].SurfaceMetal, nil
+			}
+		}
+		if len(header.Schemas) == 1 {
+			return header.Schemas[0].SurfaceMetal, nil
+		}
+	}
+	if s.Mission.OTA != nil && s.Mission.OTA.Global != nil {
+		if value, found, err := s.Mission.OTA.Global.Int("SurfaceMetal"); err == nil && found {
+			return int32(value), nil
+		}
+	}
+	return 0, fmt.Errorf("nanolathe: AI surface-metal binding failed: logical path %s, providers searched [map schema %q, OTA GlobalHeader], expected the selected schema's SurfaceMetal word [08 R-AI-03 §4-A]", s.Mission.TerrainKey, schemaName)
 }
 
 // finishBattleEntry performs the tail owned solely by [08 R-ENTRY-01 §8]:

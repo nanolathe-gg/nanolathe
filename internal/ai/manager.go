@@ -507,35 +507,61 @@ func (m *Manager) nextDeadline(k TaskKind, tick uint32) uint32 {
 	}
 }
 
+// doConstruction is the construction-and-positioning task body. It reschedules
+// first (the caller has already written tick+90), reads the strategic centre
+// once into a local, and then runs the two independent passes over the task's
+// group vector in vector order: pass one places buildings, pass two
+// repositions builders. A member can be acted on by both passes in the same
+// invocation [08 R-AI-01 §3].
+//
+// Two corrections to the previous body are folded in here, both from the same
+// section. It used to score every eligible builder and act only on the
+// highest-scoring one, so a computer player with two mobile builders started
+// at most one building per ninety ticks; the section places for **each**
+// member in vector order. And the manager's damage/loss throttle deadline used
+// to return from the whole task, so a single unit loss silenced every builder;
+// the section gates only `cancapture` builders on it, next to the
+// build-capable-count gate.
 func (m *Manager) doConstruction(tick uint32, w *units.World, econ *economy.Service) {
-	_, _ = tick, econ
 	if w == nil || econ == nil {
 		return
 	}
-	// Unit loss arms a manager throttle deadline. Construction retries are
-	// deferred until that absolute unsigned deadline is due; zero means the
-	// manager has not been throttled [08 RNG inventory].
-	if m.unitLossDeadline != 0 && m.unitLossDeadline > tick {
-		return
-	}
-	// Find best builder+candidate in this task's assigned construction vector
-	// [P0-02]. The retail task does not rediscover builders from the world when
-	// its vector is empty; the classifier and ordinary group writers are the
-	// admissions to this input.
-	var bestBuilder *units.Unit
-	var bestCand Candidate
-	var bestScore int32 = -1
-	found := false
+	// The centre is read once, before either pass, and both passes use that
+	// copy [08 R-AI-01 §3].
+	centreX, centreY, centreZ := m.Strategic.CenterX, m.Strategic.CenterY, m.Strategic.CenterZ
+	// The build-capable count is the strategic refresh's product, never
+	// recomputed here [08 R-AI-01 §3][08 R-P0-05 §5].
+	buildCapable := m.Strategic.BuildCapable
+	m.constructionPlacePass(tick, w, econ, centreX, centreZ, buildCapable)
+	m.constructionRepositionPass(tick, w, centreX, centreY, centreZ, buildCapable)
+}
+
+// constructionPlacePass is pass one: choose and place a building for every
+// member of the construction vector, in vector order [08 R-AI-01 §3].
+func (m *Manager) constructionPlacePass(tick uint32, w *units.World, econ *economy.Service, centreX, centreZ numeric.Fixed, buildCapable int32) {
+	// The retail task does not rediscover builders from the world when its
+	// vector is empty; the classifier and ordinary group writers are the
+	// admissions to this input [R-P0-04].
 	for _, h := range m.GroupConstruction {
 		u := w.Unit(h)
-		if u == nil || !u.Alive || u.Owner != m.Player || u.Remaining != 0 {
+		if u == nil || !u.Alive || u.Owner != m.Player || u.Remaining != 0 || u.Def == nil {
 			continue
 		}
-		if u.Def == nil || !u.Def.Builder {
-			continue
-		}
+		// The membership test is the definition's build-option count, not its
+		// authored builder flag [08 R-AI-01 §3].
 		if !m.hasBuildOptionsForDef(u.Def) {
 			continue
+		}
+		if u.Def.CanCapture {
+			// Signed compare against five build-capable own units, then the
+			// manager's damage/loss throttle deadline as an unsigned compare.
+			// Both gates are `cancapture`-only [08 R-AI-01 §3].
+			if buildCapable >= 5 {
+				continue
+			}
+			if tick < m.unitLossDeadline {
+				continue
+			}
 		}
 		// Pass 1 skips a builder whose current primary record carries static
 		// gate-mask bit 3. The bit's semantic name remains unknown; test the
@@ -550,73 +576,158 @@ func (m *Manager) doConstruction(tick uint32, w *units.World, econ *economy.Serv
 		if !ok {
 			continue
 		}
-		if !found || cand.Score > bestScore {
-			bestBuilder = u
-			bestCand = cand
-			bestScore = cand.Score
-			found = true
+		// P0-07: typed build path [P0-07] ON-06 F-P0-004.
+		// Mobile builders use placement with MobileSite site coordinates;
+		// factories use FactoryQueue without site. Factory vs mobile is
+		// determined by both builder immobility and target mobility [P0-07].
+		// Buildings (non-mobile targets) always require site placement even if
+		// the builder is factory-like, preserving yard validation
+		// [04 §6.2][P0-03]. Orders are issued ONLY through the typed queue and
+		// the descriptor registry [PLAN_11 C12] [08].
+		// The allocator's runtime building-class bit is the authored bmcode
+		// discriminator. It is set for buildings (bmcode zero), independently
+		// of yard text, movement flags, or velocity [08 "Classifier
+		// eligibility, destinations, and order"; 05 "Factory production
+		// lifecycle"].
+		isFactoryBuilder := u.Def.Builder && u.Flags&classifierBuilding != 0
+		isTargetMobile := false
+		cat := m.Catalog
+		if cat == nil {
+			cat = m.Strategic.Catalog
 		}
-	}
-	if !found || bestBuilder == nil {
-		// Debug: log why no builder found (for TestDebugG5LabQueue)
-		// fmt.Printf("doConstruction tick %d found %v bestBuilder %v GroupConstruction %v\n", tick, found, bestBuilder, m.GroupConstruction)
-		return
-	}
-	builder := bestBuilder
-	cand := bestCand
-	// Debug log for G5
-	// fmt.Printf("doConstruction tick %d builder %d cand %s score %d isFactory %v isTargetMobile %v\n", tick, builder.Handle, cand.DefKey, cand.Score, isFactoryBuilder, isTargetMobile)
-	// P0-07: typed build path [P0-07] ON-06 F-P0-004.
-	// Mobile builders use Place with MobileSite site coordinates; factories use FactoryQueue without site.
-	// Factory vs mobile is determined by both builder immobility and target mobility: factories (immobile builders) producing mobile units use FactoryQueue [P0-07].
-	// Buildings (non-mobile targets) always require site placement even if builder is factory-like, preserving yard validation [04 §6.2][P0-03].
-	// Issues orders ONLY through typed queue and descriptor registry [PLAN_11 C12] [08].
-	// No privileged mutation. Chain Select → Place → QueueBuildTyped [PLAN_11 C8+C12] [P0-07].
-	// The allocator's runtime building-class bit is the authored bmcode
-	// discriminator. It is set for buildings (bmcode zero), independently of
-	// yard text, movement flags, or velocity [08 "Classifier eligibility,
-	// destinations, and order"; 05 "Factory production lifecycle"].
-	isFactoryBuilder := builder.Def != nil && builder.Def.Builder && builder.Flags&classifierBuilding != 0
-	isTargetMobile := false
-	cat := m.Catalog
-	if cat == nil {
-		cat = m.Strategic.Catalog
-	}
-	if cat != nil {
-		if def, ok := cat.Unit(cand.DefKey); ok && def != nil {
-			isTargetMobile = def.BMCode
+		if cat != nil {
+			if def, ok := cat.Unit(cand.DefKey); ok && def != nil {
+				isTargetMobile = def.BMCode
+			}
 		}
-	}
-	if isFactoryBuilder && isTargetMobile {
-		// Factory production: direct typed queue without placement [P0-07] FactoryQueue.
-		if m.QueueBuildTyped == nil {
-			// Production composition binds this ordinary order sink. An unbound
-			// fixture has no supported submission path, so this task is a no-op.
-			return
+		if isFactoryBuilder && isTargetMobile {
+			// Factory production: direct typed queue without placement.
+			if m.QueueBuildTyped == nil {
+				// Production composition binds this ordinary order sink. An
+				// unbound fixture has no supported submission path.
+				continue
+			}
+			req := BuildRequest{
+				Builder: u.Handle,
+				UnitKey: cand.DefKey,
+				Count:   1,
+				Kind:    BuildKindFactoryQueue,
+			}
+			_ = m.QueueBuildTyped(req)
+			continue
 		}
-		req := BuildRequest{
-			Builder: builder.Handle,
-			UnitKey: cand.DefKey,
-			Count:   1,
-			Kind:    BuildKindFactoryQueue,
+		// Mobile site construction via the placement root. The root searches
+		// and validates but does not submit: the task applies the distance cap
+		// to the returned site first, and only then submits the typed
+		// MobileSite request [08 R-AI-03 §5][08 R-AI-01 §3].
+		origFactory := m.Factory
+		m.Factory = u
+		res := PlaceCandidate(m, cand.DefKey, m.Terrain)
+		placed := res.Valid
+		if placed && u.Def.CanCapture && !withinConstructionCap(m.Terrain, res.WorldX, res.WorldZ, centreX, centreZ) {
+			// The cap vetoes the placement without resetting anything; the
+			// radius is already zero by then [08 R-AI-01 §3][08 R-AI-03 §5].
+			placed = false
 		}
-		if err := m.QueueBuildTyped(req); err != nil {
-			return
+		if placed {
+			_ = queueExactResult(m, cand.DefKey, res)
 		}
-		return
+		m.Factory = origFactory
 	}
-	// Mobile site construction via placement [P0-07] MobileSite.
-	origFactory := m.Factory
-	m.Factory = builder
-	x, z, ok := Place(m, cand.DefKey, m.Terrain) // [PLAN_11 C8][C12] [P0-07] preserves X/Z via typed request
-	m.Factory = origFactory
-	if !ok {
-		return
+}
+
+// withinConstructionCap applies the `cancapture` distance cap of
+// [08 R-AI-01 §3]: the site is vetoed when its planar distance from the
+// strategic centre exceeds one third of the sum of the map's playfield
+// extents. The playfield extents are the terrain's world-unit width less 32
+// and height less 128; the divide truncates toward zero and the result is a
+// plain world-unit radius. The vertical term of the distance is a literal
+// zero, not an omitted term. Non-`cancapture` builders are not capped, and a
+// manager without terrain has no map extent to derive a cap from.
+func withinConstructionCap(terrain *world.Terrain, siteX, siteZ, centreX, centreZ numeric.Fixed) bool {
+	if terrain == nil {
+		return true
 	}
-	// Placement has already issued the typed MobileSite request. The world and
-	// construction services own the resulting state transition.
-	_ = x
-	_ = z
+	playW := terrain.CellW*16 - 32
+	playH := terrain.CellH*16 - 128
+	limit := int64((playW+playH)/3) << 16
+	dx := int64(fixedWordDelta(siteX, centreX))
+	dz := int64(fixedWordDelta(siteZ, centreZ))
+	d := int64(placementIntegerSqrt(uint64(dx*dx) + uint64(dz*dz)))
+	return d <= limit
+}
+
+// constructionRepositionPass is pass two: reposition the vector's builders
+// around the strategic centre [08 R-AI-01 §3]. A member whose current order
+// does not carry static gate-mask bit 14 is skipped, so a builder already
+// carrying a build order keeps it; only an order-free builder is repositioned.
+func (m *Manager) constructionRepositionPass(tick uint32, w *units.World, centreX, centreY, centreZ numeric.Fixed, buildCapable int32) {
+	for _, h := range m.GroupConstruction {
+		u := w.Unit(h)
+		if u == nil || !u.Alive || u.Owner != m.Player || u.Def == nil {
+			continue
+		}
+		if q := orders.QueueOfUnit(u); q != nil {
+			if current := q.Head(); current != nil && current.StaticGate&0x4000 == 0 {
+				continue
+			}
+		}
+		if u.Def.CanCapture {
+			if buildCapable < 5 {
+				continue
+			}
+			// The working copy of the centre takes the unit's own height; the
+			// distance forces its vertical term to zero [08 R-AI-01 §3].
+			dx := int64(fixedWordDelta(centreX, u.X))
+			dz := int64(fixedWordDelta(centreZ, u.Z))
+			d := int64(placementIntegerSqrt(uint64(dx*dx) + uint64(dz*dz)))
+			var tx, tz numeric.Fixed
+			if d > int64(640)<<16 {
+				s := m.simRNG()
+				if s == nil {
+					// The production session always binds the simulation
+					// stream; there is no alternate random source [I4].
+					continue
+				}
+				a := numeric.Angle(uint16(s.Uint32n(65536)))
+				tx = numeric.Fixed(int32(centreX) - numeric.MulRound(numeric.Sin(a), 640<<16))
+				tz = numeric.Fixed(int32(centreZ) - numeric.MulRound(numeric.Cos(a), 640<<16))
+			} else {
+				tx = numeric.Fixed(2*int32(centreX) - int32(u.X))
+				tz = numeric.Fixed(2*int32(centreZ) - int32(u.Z))
+			}
+			m.submitResolvedOrder(u, resolveAIIntent(2, u, nil, tx, u.Y, tz), nil, tx, u.Y, tz, tick, 0)
+			m.submitResolvedOrder(u, resolveAIIntent(9, u, nil, centreX, u.Y, centreZ), nil, centreX, u.Y, centreZ, tick, 1)
+			continue
+		}
+		dx := int64(fixedWordDelta(centreX, u.X))
+		dy := int64(fixedWordDelta(centreY, u.Y))
+		dz := int64(fixedWordDelta(centreZ, u.Z))
+		d := int64(placementIntegerSqrt(uint64(dx*dx) + uint64(dy*dy) + uint64(dz*dz)))
+		tx, ty, tz := centreX, centreY, centreZ
+		switch {
+		case d >= int64(320)<<16:
+			// The target is the centre itself.
+		case d < int64(16)<<16:
+			s := m.simRNG()
+			if s == nil {
+				continue
+			}
+			a := numeric.Angle(uint16(s.Uint32n(65536)))
+			tx = numeric.Fixed(int32(u.X) - numeric.MulRound(numeric.Sin(a), 320<<16))
+			ty = u.Y
+			tz = numeric.Fixed(int32(u.Z) - numeric.MulRound(numeric.Cos(a), 320<<16))
+		default:
+			// A fixed-point interpolation that lands 320 world units from the
+			// unit along the direction to the centre; each axis is scaled
+			// independently by the same 64-bit quotient [08 R-AI-01 §3].
+			scale := (int64(320) << 32) / d
+			tx = numeric.Fixed(int32(u.X) + int32((dx*scale)>>16))
+			ty = numeric.Fixed(int32(u.Y) + int32((dy*scale)>>16))
+			tz = numeric.Fixed(int32(u.Z) + int32((dz*scale)>>16))
+		}
+		m.submitResolvedOrder(u, resolveAIIntent(9, u, nil, tx, ty, tz), nil, tx, ty, tz, tick, 0)
+	}
 }
 
 // doResource implements the eco/queue task at tick plus thirty. It consumes

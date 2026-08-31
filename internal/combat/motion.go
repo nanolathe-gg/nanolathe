@@ -145,31 +145,20 @@ func VelocityFromAngles(yaw, pitch numeric.Angle, speed numeric.Fixed) Vec3 {
 }
 
 // YawFromDelta derives yaw from XZ delta per [06 §6.3] ordinary creator.
-// Uses atan2(dx, dz) mapping to 16-bit circular domain trunc(angle*32768/pi) [06 §6.4].
+// The operands are the signed raw 16.16 words consumed by retail atan2q, and
+// the shared helper performs its round-to-nearest-even narrowing [06 §6.4].
 func YawFromDelta(dx, dz numeric.Fixed) numeric.Angle {
-	// Convert fixed to float world units for atan2, then trunc toward zero per [01 §8] I3.
-	x := float64(dx.Raw()) / 65536.0
-	z := float64(dz.Raw()) / 65536.0
-	if x == 0 && z == 0 {
-		return 0
-	}
-	a := math.Atan2(x, z)             // yaw 0 => +Z, 90deg => +X per retail Sin/Cos convention [04 §5.1]
-	raw := int32(a * 32768 / math.Pi) // [06 §6.4] trunc(angle*32768/pi) I3
-	return numeric.Angle(uint16(raw))
+	return numeric.AngleFromAtan2(dx.Raw(), dz.Raw())
 }
 
 // PitchFromDelta derives pitch from XYZ delta per [06 §6.3].
 func PitchFromDelta(dx, dy, dz numeric.Fixed) numeric.Angle {
-	x := float64(dx.Raw()) / 65536.0
-	y := float64(dy.Raw()) / 65536.0
-	z := float64(dz.Raw()) / 65536.0
-	h := math.Hypot(x, z)
-	if h == 0 && y == 0 {
-		return 0
-	}
-	a := math.Atan2(y, h)
-	raw := int32(a * 32768 / math.Pi) // [06 §6.4] trunc
-	return numeric.Angle(uint16(raw))
+	// Retail first truncates the vertical and planar distance operands to
+	// signed whole units, then invokes the same atan2q conversion [06 §3.3].
+	vertical := -int64(int16(dy.Raw() >> 16))
+	distanceRaw := int64(math.Trunc(math.Hypot(float64(dx.Raw()), float64(dz.Raw()))))
+	horizontal := int64(int16(distanceRaw >> 16))
+	return numeric.AngleFromAtan2(vertical, horizontal)
 }
 
 // OrdinaryExpiry computes expiry for ordinary/vertical/selfProp creation per

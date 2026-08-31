@@ -3481,8 +3481,10 @@ preamble; then inhibit all three slots; advance. Phase 1: clear the five
 movement pending bits `0x20`–`0x200` from the record's pending word;
 advance. Phase 2, in order: satisfied ∩ `0xE0` → *rotate* (the record moves
 to the tail with its phase left at 2, so the next visit re-arms the leg);
-build a point marker at `goal − offset(bearing(me → goal), 320)` world
-units — 320 units short of the waypoint along the approach — with
+build a point marker at the waypoint displaced 320 world units **along** the
+bearing from the aircraft to it — the goal plus the negated component pair at
+`bearing(me → goal)`, i.e. 320 units **beyond** the waypoint, not short of it
+(corrected 2026-08-30, see the note closing this row) — with
 horizontal arrival radius `0x150` (336; explicit-radius strict test); install;
 gate `|= 0xE0`; then, if health `< (maxdamage >> 2) · 3` (unsigned): collect
 the base candidates within `0xF00` for my side ([R-AIR-01 §7]); any → release
@@ -3490,9 +3492,24 @@ the payload, draw `RNG(count)`, spawn `VTOL_Landing` at that candidate at
 the head, gate = 0, *restart*; then the opportunity scan of [R-STANCE-01 §3]
 (fire-at-will only) → a target that the auto-engage issuer accepts without
 the force flag → gate = 0, *wait*; else deadline 30, hold. Other phase:
-cancel-all. Because the marker stops 320 units short and the arrival radius
-is 336, an air patrol leg is satisfied about 320 units before the authored
-waypoint; a patrol with waypoints closer than that rotates every visit.
+cancel-all.
+
+**Correction (2026-08-30, RWU-PT3) — the 320-unit setback is an overshoot.**
+This row previously read "`goal − offset(bearing(me → goal), 320)` world units
+— 320 units short of the waypoint along the approach", and closed with
+"Because the marker stops 320 units short and the arrival radius is 336, an air
+patrol leg is satisfied about 320 units before the authored waypoint; a patrol
+with waypoints closer than that rotates every visit." Re-traced against the leg:
+it forms both components at `bearing(me → goal)`, negates each, and **adds**
+them to the goal — the same negate-then-add shape the off-map recovery and the
+guard orbit use (§10.3's station closure names the two families). The negated pair is the
+direction of the angle [R-MOV-01 §4], and `bearing(me → goal)`'s direction
+points from the aircraft at the goal, so the marker sits 320 world units
+**beyond** the waypoint. With the strict 336 arrival radius the leg is therefore
+satisfied about 16 world units **before** the waypoint, not 656 before it: the
+aircraft flies essentially the whole leg and aims through the corner rather than
+braking into it, and a patrol whose waypoints are closer together than about
+336 units still rotates every visit.
 
 **`VTOL_MobileBuild`.** Pre-checks as the ground twin: satisfied bit 1 →
 refresh the builder interface, complete; satisfied `0x8` → status 7
@@ -3515,11 +3532,17 @@ twin; contrast `VTOL_HelpBuild` of [R-ORD-01 §7]), refresh; advance. Phase
 result** — when the stance byte is clear it writes gate `= 0xE` as a side
 effect, but the work body below runs regardless; the phase then falls into
 the shared work body. Phase 4: the work body alone. The work body: on every
-tick with `tick mod 150 = 0`, build the orbit marker of §10.3 at `product +
-offset(bearing(me → product) + 0xDB6E, builddistance)` — note the **plus**,
-the marker is on the far side of the bearing helper's axis from every
-`unitPos − offset(…)` leg of [R-AIR-01 §8] — with the marker's heading set
-to that bearing (flag `0x40`) and no radius setter; install. Then the work
+tick with `tick mod 150 = 0`, build the orbit marker of §10.3: the station is
+the product's position plus the **un-negated** component pair at
+`bearing(me → product) + 0xDB6E` and radius `builddistance`. That is the
+opposite sign from every `pos − offset(…)` leg of [R-AIR-01 §8], and it puts
+the station on the builder's own side of the product, which is what makes the
+circuit an orbit rather than a shuttle across it — §10.3's station closure gives the
+arithmetic, the two component helpers and the seven-station consequence, and
+supersedes this row's earlier "note the **plus**, the marker is on the far side
+of the bearing helper's axis" wording, which named the right asymmetry but left
+the resulting geometry open. The marker's heading is set to that same angle
+(flag `0x40`) and no radius setter is called; install. Then the work
 step with quantum `workertime / 30` (integer division, then float); when it
 did work draw the spray from `QueryNanoPiece` to the product's model box.
 Product finished (remaining fraction `0.0`) → advance; else deadline 1,
@@ -9958,11 +9981,23 @@ three-phase machine is the one an idle aircraft with nowhere to park runs.
 * Phase 1: ask the landing-legality test whether the unit's **current**
   position is landable. If it is: start the asynchronous `EndTransport` with
   the wake flag; build a point marker at the unit's own position whose altitude
-  offset is `0` when the terrain height there is at or below sea level and
-  `terrainHeight − seaLevel` otherwise — both branches place the marker's
+  offset is `0` when the terrain height there is **above** sea level and
+  `terrainHeight − seaLevel` (a value at or below zero) when it is not —
+  the leg forms `max(terrainHeight, seaLevel)`, compares it against the sea
+  level byte, and takes the zero arm on the strictly-greater side. Both branches
+  place the marker's
   commanded Y at exactly the terrain height, because the marker's
-  terrain-derived altitude rule adds the offset to `max(seaLevel, terrainHeight)`;
-  install; gate `0xE0`; **clear** the unit state byte's bit `0x01`, raising the
+  terrain-derived altitude rule adds the offset to `max(seaLevel, terrainHeight)`
+  ([R-AIR-01 §4]): on dry land `terrain + 0`, over water `seaLevel + (terrain −
+  seaLevel)`. **Correction (2026-08-30, RWU-PT3):** this sentence previously
+  read "`0` when the terrain height there is at or below sea level and
+  `terrainHeight − seaLevel` otherwise" — the two branches the other way round.
+  That reading contradicts the gloss it carried in the same sentence and is
+  disproved by the leg itself: composed with §4's Established setter it commands
+  `terrain + (terrain − seaLevel)` on any ground above sea level, so an aircraft
+  would settle that far **above** the surface instead of on it, which is what
+  the reversal looked like in play.
+  Install; gate `0xE0`; **clear** the unit state byte's bit `0x01`, raising the
   `Deactivate` COB callback and notification event `4` — the landing script
   hook. Result 1.
   Otherwise search for a landable spot: for `k = 0,1,…,11`, with
@@ -10287,6 +10322,84 @@ seven-station observation as an exact array size would misstate the executable
 behavior. The per-waypoint travel time is a consequence of the integrator
 (computable, not an authored constant), so the §11 bullet on it is closed as a
 consequence, not a separate contract [movement/13].
+
+### Closed — the orbit station, exactly, and what starts and ends the circuit (2026-08-30)
+
+The paragraph above states the cadence, the step and the radius but not **which
+way round** the station is placed, and the two readings its wording admits are
+not close: one puts each station on the builder's side of the target and the
+other diametrically across it. They differ in station count as well — a step of
+`-51.43` degrees walks seven stations per revolution, its reflection walks
+`180 - 51.43 = 128.57` degrees per station and needs fourteen before it repeats
+— so an implementation cannot pick either and be nearly right. Re-traced
+against the two work bodies that carry it (RWU-PT3, 2026-08-30). Everything
+here is **Established** by direct trace of those two bodies unless a sentence
+says otherwise.
+
+**The two component helpers.** Two shared routines take (angle, magnitude) and
+return one component each at the trig table's 8192 scale:
+
+```
+sinComponent(a, m) = (table[((a + 0x20) >> 7) & 0x1ff] * m + 0x1000) >> 13
+cosComponent(a, m) = sinComponent(a + 0x4000, m)      // same table, quarter turn
+```
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**The station.** On every tick with `globalTick % 150 == 0`, with `me` the
+builder, `T` the work target and `bd` the builder definition's `builddistance`:
+
+```
+a       = bearing(me, T) + 0xDB6E                      // signed add, 16-bit wrap
+station = ( T.x + sinComponent(a, bd << 16),
+            T.y,
+            T.z + cosComponent(a, bd << 16) )
+```
+
+Note the sign: the station is the target's position **plus the un-negated
+component pair**, which is the target displaced *opposite* the direction of `a`.
+Since the direction of `bearing(me, T)` points from the builder at the target,
+the station therefore lies at radius `bd` from the target **on the builder's own
+side**, at the builder's current angular position about the target advanced by
+`0xDB6E`. That is what makes the circuit an orbit: consecutive stations are
+`51.43` degrees apart on one circle of radius `bd` about the target, and
+`7 x 0xDB6E = 0xFFFE`, two units short of the full circle, so seven stations
+close it. The other reading — the pair subtracted, as the approach and search
+legs of [R-AIR-01 §7] and [R-AIR-01 §8] use it — would place each station across
+the target from the builder and make the aircraft cross over its work every
+five seconds.
+
+**The marker.** A fresh `0x36`-byte **point** marker at that station, then the
+**heading setter** with `a & 0xFFFF` (so marker flag `0x40`, explicit heading),
+then the ordinary payload install. **No arrival-radius setter and no altitude
+setter are called.** Three consequences follow from [R-AIR-01 §4] rather than
+from anything the tail does:
+
+* Arrival is the default `hypot <= 0.5` world units, so the aircraft flies the
+  station out rather than being released early.
+* With flag `0x08` clear, the marker's own goal update rewrites the goal **Y**
+  every tick by the sector-height rule — `(cruisealt + sectorHeight) << 16` —
+  so the circuit is flown at cruise altitude over the terrain the aircraft is
+  currently above, not at the target's own height.
+* The stored heading is the direction from the station back at the target
+  (`a` is `bearing(me, T)` rotated, and the station sits opposite `a` from the
+  target), and the marker's heading-supply method hands it to the command
+  producer, so **the aircraft faces the unit it is building** all the way round
+  the circuit.
+
+**What starts and ends it.** The recurrence lives in the work body, which is
+`VTOL_MobileBuild` phases 3 and 4 and `VTOL_HelpBuild` phase 3
+([R-ORD-02 §2], [R-ORD-01 §7]). It therefore begins on the first
+multiple-of-150 tick after the executor reaches that body — after the
+`builddistance` approach marker of phase 1 has been reached and, for
+`VTOL_MobileBuild`, after the nanoframe exists — and it ends when the work body
+does: the product's remaining fraction reaching `0.0` advances out of the body,
+and abandonment or cancellation leaves it. Nothing re-arms it between edges: on
+the other 149 ticks the tail runs only the work step (`workertime / 30`) and the
+spray, so the dwell at each station is exactly 150 ticks minus the flight time
+to it, and the flight time is the integrator's, not an authored constant. The
+identical code appears in both bodies; the only difference is which record field
+supplies `T`.
 
 **Unknown:** Ground-following and sea behavior while orbiting, and carrier
 collision beyond the ordinary shared-mover rules.
@@ -10990,10 +11103,18 @@ state and page-flip availability, not follower state — doc 03 owns them.)*
   one, every `0x10`/`0x30`/`0x40`/`0x80`/`0xA0`/`0x140`/`0x150`/`0x1E0`/`0x3C0`
   value is a per-leg horizontal arrival radius ([R-AIR-01 §4]), and pad
   reservation and the loiter retry are closed by [R-AIR-01 §6].
-- The sign convention of the bearing helper on screen · §10.2
-  [R-AIR-01 §8] · manual retail observation. (The `AirToAir` third leg is
-  closed: it spawns `VTOL_Evade`, [R-ORD-02 §5]; `VTOL_Follow`/`VTOL_SeekGuard`
-  are closed in [R-ORD-02 §3].)
-- Construction target-eligibility gates for air construction orders; the
-  `150`-tick recurrence at `builddistance << 16` with offset `0xDB6E` and
-  build power `work/30` per tick is established · §10.3 · static trace.
+- The sign convention of the bearing helper **on screen** · §10.2
+  [R-AIR-01 §8] · manual retail observation. Narrowed 2026-08-30: the
+  engine-internal axis is closed — a heading's direction is `(−sin, −cos)`
+  [R-MOV-01 §4], so `bearing(a, b)`'s direction points from `a` toward `b`, and
+  every air leg's placement sign is decidable without this bullet
+  (§10.3's station closure names the two families and which legs are in each). What
+  remains open is only which on-screen direction a heading of zero faces, which
+  the model loader's coordinate negation ([R-REV-02]) governs. (The `AirToAir`
+  third leg is closed: it spawns `VTOL_Evade`, [R-ORD-02 §5];
+  `VTOL_Follow`/`VTOL_SeekGuard` are closed in [R-ORD-02 §3].)
+- Construction target-eligibility gates for air construction orders · §10.3 ·
+  static trace. The orbit itself is closed: the `150`-tick recurrence at
+  `builddistance << 16` with step `0xDB6E`, its placement sign, its explicit
+  heading, its absent radius and altitude setters, and build power `work/30`
+  per tick are established in §10.3's station closure.

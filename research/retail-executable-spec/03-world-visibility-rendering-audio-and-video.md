@@ -5283,9 +5283,13 @@ work sits outside the strip abstraction:
   (**Correction, 2026-08-29:** this sentence previously read "walks screen-Y
   bucket rows mixing soft units and deferred tall/shadow features so that
   feature–unit overlap is painter-ordered by projected Y". The rows are world
-  Z plot rows, "soft" is the grounded mover mode, and the deferred features
-  are the tall ones; structures and airborne units are drawn in a later pass
-  after projectiles — [R-RAST-01 §6], [R-RAST-01 §7].)
+  Z plot rows, "soft" is the mode-mirror value `1`, and the deferred features
+  are the tall ones; the units drawn in the later pass after projectiles are
+  the ones whose mirror is not `1` — [R-RAST-01 §6], [R-RAST-01 §7].
+  **Second correction, 2026-08-30:** the first correction ended "structures
+  and airborne units are drawn in a later pass after projectiles". Structures
+  are not: their mode mirror is `1`, so they are in this interleaved pass with
+  the grounded units — see the 2026-08-30 correction under [R-RAST-01 §7].)
 - The ten-strip strip objects are confined to the strip dispatcher and capped
   per strip; the fixed 300-record effect pool sits between strips 6 and 7
   behind the same mode gate. Features are not strip objects and are not
@@ -5470,16 +5474,20 @@ set and the feature is deferred. The gate is: definition without
 `nodrawundergray`, **or** the plot cell's placer nibble equals the local
 player's slot, **or** the two-corner LOS predicate of §5.1.5 passes.
 
-**Pass 2 — grounded units and tall features (between strips 4 and 5).** For
+**Pass 2 — mode-`1` units and tall features (between strips 4 and 5).** For
 each window row in order: first every unit in that row's bucket whose
-committed mover mode is **grounded** (`1`, [04 R-MOV-01 §8]) — §7 gives the
-bucket rule — then, column-major across the row, every cell whose never-seen
+flags-word mode mirror is `1` (`[04 R-MOV-01 §8]`; structures included — see
+the 2026-08-30 correction under §7) — §7 gives the bucket rule — then,
+column-major across the row, every cell whose never-seen
 bit is set (a deferred tall feature), under the same gate as pass 1.
 Consequences an implementer must keep: a tall feature paints **over** the
-grounded units of its own row and of every earlier row; a short feature
-paints **under** every unit; a grounded unit paints over the short features
-and over tall features in rows above it; and structures and airborne units
-paint over all features because they are drawn later (§7).
+mode-`1` units of its own row and of every earlier row; a short feature
+paints **under** every unit; a mode-`1` unit paints over the short features
+and over tall features in rows above it; and airborne aircraft and units
+attached to a carrier paint over all features because they are drawn later
+(§7). **Correction, 2026-08-30:** that last clause read "structures and
+airborne units paint over all features because they are drawn later" —
+structures are in this pass, not the later one.
 
 **Per feature (the per-cell dispatcher).** The anchor is §5.1.4's formula.
 Then:
@@ -5656,8 +5664,9 @@ depth-tested whenever the image has a key plane. **Established
 vertical/screen position" and §5.1.3 says the second pass "walks screen-Y
 bucket rows mixing soft units and deferred tall/shadow features". The bucket
 key is the unit's **world Z in 16-pixel plot rows relative to the camera**,
-not a screen coordinate and not the sheared Y; "soft" is the committed mover
-mode **grounded** (`1`, [04 R-MOV-01 §8]); and the deferred features are the
+not a screen coordinate and not the sheared Y; "soft" is the flags-word mode
+mirror value `1` ([04 R-MOV-01 §8] — read the 2026-08-30 correction below
+before using this section's pass split); and the deferred features are the
 **tall** ones (`height >= 10`), shadow or not. Everything below is
 **Established (direct-static)**.
 
@@ -5678,9 +5687,10 @@ minus `trunc(camZ / 16) - 16`, the unit row is `trunc((z - camZ) / 16) + 16`,
 and the two differ by one when `camZ` is not a multiple of 16 — reproduce
 both expressions rather than one shared cell index.
 
-**Pass A — grounded units, interleaved with tall features (between strips 4
-and 5).** For each window row in order, each bucketed unit whose mover mode
-is grounded: (i) when the unit's **selected** bit is set and the diagnostic
+**Pass A — mode-`1` units, interleaved with tall features (between strips 4
+and 5).** For each window row in order, each bucketed unit whose **flags-word
+mode mirror** is `1` — and only when the composer's render-mode argument is
+nonzero: (i) when the unit's **selected** bit is set and the diagnostic
 bit permits (set unconditionally at settings load), the selected-unit
 footprint quad of [R-WATER-01 §1] is drawn — there is no water-wake
 rectangle; this step previously said "wake status bit … water-wake rectangle
@@ -5689,12 +5699,71 @@ when the unit has a model draw record, the per-unit present runs. Then that
 row's deferred tall features ([R-RAST-01 §6]).
 
 **Pass B — everything else (after strip 7, i.e. after projectiles and the
-fixed effect pool).** Every row in order, every bucketed unit whose mover
-mode is **not** grounded — structures (no mover, mode `0`) and airborne
-units (mode `2`) — with the same two steps. Structures therefore paint over
-every feature, every grounded unit and every projectile regardless of their
-Z row; aircraft paint over structures in earlier rows and under structures
-in later ones. This is the retail order; it is not a bug to fix.
+fixed effect pool).** Every row in order, every bucketed unit whose mode
+mirror is **not** `1`, with the same two steps.
+
+#### Correction — the pass split reads the unit record's mode mirror, and a structure's mirror is `1`, so structures are pass A [R-RAST-01 §7] (2026-08-30)
+
+**What the previous text said.** The two paragraphs above read "each bucketed
+unit whose mover mode is grounded" for pass A and, for pass B, "every bucketed
+unit whose mover mode is **not** grounded — structures (no mover, mode `0`)
+and airborne units (mode `2`) … Structures therefore paint over every feature,
+every grounded unit and every projectile regardless of their Z row … This is
+the retail order; it is not a bug to fix."
+
+**Why it was wrong.** The pass predicate was read as the **mover object's**
+mode, and from there it followed that a unit which owns no mover at all —
+every building, since the allocator constructs a mover only for `bmcode 1`
+([04 R-FAC-02 §5]) — must read `0` and belong to pass B. The composer never
+touches a mover. Both passes load the **unit record's own flags word** and
+test its low two bits, which is the *mode mirror* of [04 R-MOV-01 §8], not the
+mover's copy; a unit with no mover still has a mirror. And the mirror is `1`
+for a structure: unit creation writes the low two bits to `01` before any
+class test, and the spawn wrapper then overwrites them with its own mode
+argument, which **every spawn call site in the image passes as the literal
+`1`** — the `BuildingBuild` order handler that lays a nanoframe, the mobile
+`Build` handlers, the map-start placer, the commander respawn, the campaign
+placer. The mover constructor writes `1` as well, so the two words agree for a
+mobile unit and the older reading was invisible there. Nothing ever writes a
+different mirror for a unit that owns no mover, so a building's mirror is `1`
+from the tick it is laid as a nanoframe until it dies — which is also what
+[04 R-FAC-02 §5] already states ("stays `1` for a factory's whole life") and
+what makes a factory pass its own mirror as the placement validator's mode
+argument ([04 §10] `BuildingBuild`).
+
+**The corrected contract — Established (direct-static).**
+
+* **Pass A** is every bucketed unit whose mirror is `1`: ground and sea
+  movers, landed aircraft, **and every structure, complete or still a
+  nanoframe**. A building does not change pass when it completes.
+* **Pass B** is every bucketed unit whose mirror is not `1`: airborne aircraft
+  (`2`), the attached/parked mode (`0` — cargo inside a transport and an
+  aircraft parked on a pad, [04 R-AIR-01 §3]), and the save-installed `3`.
+* **The mirror is written at creation, not by the mover.** A reimplementation
+  must seed it in its own unit-creation service, before any class test and
+  independently of whether the unit will ever own a mover; deriving it from a
+  mover record installed later leaves a unit sorted into the wrong pass for
+  the frames between its creation and that installation, which for a building
+  nanoframe is the whole of its most visible life.
+* Consequences that reverse: structures do **not** paint over grounded units,
+  projectiles or the effect strips; they are painted in Z-row order among the
+  grounded units, so a mobile unit in a later row paints over the building in
+  front of it. What paints over everything world-drawn is the airborne set,
+  which is the point of a second pass.
+* **The nanolathe spray therefore paints over the unit being built.** Strip 6
+  ([R-STRIP-01 §1]) is drawn after pass A and before pass B, so its particles
+  land over every structure, every nanoframe and every grounded builder, and
+  under airborne aircraft and units riding a transport. A construction spray
+  hidden behind the building it is completing is a defect, not the retail
+  order; the sentence "This is the retail order; it is not a bug to fix" was
+  reasoning from the inverted partition and does not survive.
+
+The bucket build, the in-row ordering, the interleaved tall features and the
+per-unit present below are unaffected; only which pass a unit falls into
+changes. One detail the previous text omitted: pass A's per-unit work is
+itself inside the render-mode gate — a zero render-mode argument suppresses
+pass A, pass B and strips 5–7 alike, leaving only strips 0–4, the feature
+pass and strip 8.
 
 **The per-unit present.** For the unit and then each attached child that is
 not carried piece-less ([04 R-UNIT-06 §3]): if
@@ -6001,6 +6070,14 @@ as a thin dotted line rather than the dense cone retail draws — the four-fold
 difference in coverage is what makes it look like a spray at all. The particle
 record carries one further field, set to `0x100` at spawn and read by nothing
 observed; its purpose is `TODO(question)`.
+
+**Where the spray lands in the frame.** Strip 6 is drawn after the first unit
+pass and before the second, so the particles paint **over** the unit being
+built — a nanoframe, a finished structure and a grounded builder alike — and
+under airborne aircraft and units riding a carrier. See the 2026-08-30
+correction under [R-RAST-01 §7]: the pass split is on the unit record's mode
+mirror, and a structure's mirror is `1`, so a structure is in the *first*
+pass. A spray hidden behind the building it is completing is a defect.
 
 **Nanolathe presentation pipeline [R-P0-19]:** Construction and reclaim work
 producers route their nano events through the beam-family strip-6 identity and

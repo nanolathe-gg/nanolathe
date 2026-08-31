@@ -3,6 +3,7 @@ package movement
 import (
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
 // OW-3-P goal-families wiring [04 §7.2][04 §7.4][04 §3.5].
@@ -161,5 +162,5 @@ func (s *System) goalForOrderWithFootprint(goalCell path.Cell, n *orders.Node, f
 // [04 §2.3b], and the script's torso turn comes from the relative bearing the
 // StartBuilding emitter passes [04 R-CB-01 §3].
 func HeadingFromDelta(dx, dz int64) uint16 {
-	return headingFromDelta(dx, dz)
+	return numeric.AngleFromAtan2(-dx, -dz).Raw()
 }

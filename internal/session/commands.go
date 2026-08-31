@@ -384,6 +384,65 @@ func stampHumanBuild(u *units.Unit, product string, tick uint32, queued bool, go
 	}
 }
 
+// queuedPointTolerance is the duplicate test's per-axis window: one map cell,
+// sixteen world units, in 16.16 [07 R-P0-11 §6]. Retail compares X and Z
+// independently and inclusively at the boundary, which makes the accepted
+// region a square of side two cells centred on the queued goal — not a radius,
+// and not an exact site match.
+const queuedPointTolerance = numeric.Fixed(16 << 16)
+
+// mobileBuildKind is the order identity a mobile-build click issues for this
+// builder: the VTOL variant for a flyer, the ground variant otherwise. It
+// mirrors the choice construction.QueueMobileBuild makes for the same unit, so
+// the duplicate test below compares a queued node against the identity that
+// created it. A zero here (neither descriptor registered) matches no node, so
+// the click falls through to an ordinary enqueue rather than removing the
+// wrong one.
+func mobileBuildKind(builder *units.Unit) orders.ID {
+	if builder != nil && builder.Def != nil && builder.Def.CanFly {
+		if id := orders.Lookup(construction.VTOLMobileBuildOrder); id != 0 {
+			return id
+		}
+	}
+	return orders.Lookup(construction.MobileBuildOrder)
+}
+
+// removeQueuedOrderAtPoint is retail's queued-order duplicate test
+// [07 R-P0-11 §6]: walk the unit's primary queue from the front and remove the
+// first node whose order kind matches and whose goal lies within one map cell
+// of the issued point on X and on Z independently. It reports whether a node
+// went, in which case the caller issues nothing at all.
+//
+// Three properties are deliberate and are locked by tests, because each is the
+// kind of thing a later reader would "correct":
+//
+//   - The product is not part of the match. Retail passes the product
+//     definition id in a separate argument that the duplicate test never
+//     reads, so a repeat click carrying a different product still removes
+//     whatever building was queued at that spot.
+//   - The tolerance is a whole cell, inclusive, per axis — a square, not a
+//     radius. Sites one cell apart are within tolerance of each other.
+//   - Y is not compared. The site height plays no part.
+func removeQueuedOrderAtPoint(builder *units.Unit, kind orders.ID, wx, wz numeric.Fixed) bool {
+	if builder == nil || kind == 0 {
+		return false
+	}
+	q := orders.QueueForUnit(builder)
+	if q == nil {
+		return false
+	}
+	within := func(a, b numeric.Fixed) bool {
+		d := a - b
+		if d < 0 {
+			d = -d
+		}
+		return d <= queuedPointTolerance // inclusive at the boundary [07 R-P0-11 §6]
+	}
+	return q.CancelFrontMost(func(n orders.Node) bool {
+		return n.ID == kind && within(n.GoalX, wx) && within(n.GoalZ, wz)
+	})
+}
+
 func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 	if s == nil || s.Units == nil {
 		return
@@ -460,7 +519,15 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 			return
 		}
 		s.bindOrderQueue(u)
-		if !c.MobileBuild.Queued {
+		if c.MobileBuild.Queued {
+			// A queued click on a point that already carries a queued order of
+			// this kind removes that order and issues nothing [07 R-P0-11 §6].
+			// The test runs only in queued mode; a non-queued click purges and
+			// re-issues as before.
+			if removeQueuedOrderAtPoint(u, mobileBuildKind(u), c.MobileBuild.WX, c.MobileBuild.WZ) {
+				return
+			}
+		} else {
 			if q := orders.QueueForUnit(u); q != nil {
 				q.PurgeUnprotected()
 				q.DropLeadingAutoOps()

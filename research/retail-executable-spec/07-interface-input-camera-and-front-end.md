@@ -5426,6 +5426,66 @@ earlier "mask 0" guess for engine-started COB threads. (Engine-side finding
 folded here with the addendum that shipped it; its natural home is the COB VM
 contract, and it is recorded here so the consolidation loses nothing.)
 
+##### Queued world orders: a repeat click at an already-queued point removes it (R-P0-11 §6)
+
+**Established (2026-08-30).** Every world order the interface issues goes
+through one producer that takes the order's canonical kind, the click's
+**queue flag** (the Shift bit of the click record's key-state word, [R-P0-11
+§4]), the acting unit, an optional target handle, and an optional goal point.
+Its first act is a **duplicate test that runs only when the queue flag is
+set**:
+
+* Walk the acting unit's **primary** order list from the front.
+* A node matches when *all* of these hold:
+  * its order kind equals the kind being issued;
+  * the issued target handle is absent (zero), or equals the node's target;
+  * the issued goal point is absent, or lies within **one map cell on each
+    of the X and Z axes** of the node's goal — the test is
+    `|issued − queued| ≤ 0x100000` in 16.16 world units on X and on Z
+    independently, inclusive at the boundary. Y (the site height) is not
+    compared.
+* On the **first** match the producer unlinks that node from whichever
+  segment holds it (the rear segment when the node carries the rear-segment
+  bit, the primary segment otherwise), marks it tombstoned unless it was the
+  list head, frees it, and **returns without issuing anything**.
+* With no match — and on every non-queued (Shift-up) click, which does not
+  run the test at all — control falls through to the ordinary insertion,
+  which purges the existing unprotected orders first when the queue flag is
+  clear and appends when it is set.
+
+So a Shift-click that repeats an already-queued order at (or within one cell
+of) the same point is a **toggle that removes exactly one queued order**, not
+a second enqueue: one node per repeat click, front-most match first, and the
+click produces no order of its own. Two consequences are worth stating
+because they are easy to get wrong:
+
+* **The product identity is not part of the match.** For the build-placement
+  producer the product definition id travels in a separate argument that the
+  duplicate test never reads. Shift-clicking a site where *any* queued
+  building of the same order kind (`MOBILEBUILD`, or `VTOL_MOBILEBUILD` for a
+  flying builder — the two are distinct kinds and do not match each other)
+  already stands removes that queued building, whatever it was going to be.
+* **The tolerance is a whole cell, not an exact site match.** Queued sites
+  one cell apart are within tolerance of each other, so the front-most of the
+  two is the one that goes.
+
+The build-placement click ("*The click*" above) reaches this producer once
+per selected builder, so one repeat click clears the queued site from every
+selected builder that has one there. The queue-count label writer of
+[R-P0-11 §2] runs after cancels as well as enqueues, and the Shift-gated
+overlay walker of [R-P0-11 §3] redraws from the live queues every frame, so
+the removed site stops being drawn on the next frame with no separate
+invalidation.
+
+Nanolathe impact: the presentation may not implement this as "coalesce a
+repeat build click into the tail node" — that adds a second building where
+retail removes the first (defect PT3-12). The removal belongs at the
+authoritative order-insertion boundary, before the queued build is
+constructed, and must search the primary queue front-to-back. It is
+implemented there, and the removal frees the whole node: there is no count
+decrement on this path, unlike the factory producer's negative-count
+subtraction of [R-P0-11 §1].
+
 ##### Unknowns carried from R-P0-11
 
 The overlay color-map questions are closed: the map itself is the boot-installed
@@ -5877,8 +5937,11 @@ hotkey dispatch ([R-CAM-01 §1]). Its inputs, with their sources:
   target, bookmarks and hold state and restores the byte).
 * **Raw delta** — a signed 32-bit host value: this frame's scaled
   `GetTickCount()` reading minus the previous frame's, as stored by the
-  tick-budget step ([R-CAM-01 §1]); with the default time scale of `1000`
-  it is milliseconds elapsed since the previous outer frame. It is refreshed
+  tick-budget step ([R-CAM-01 §1]). The scale is the presentation object's
+  time-scale integer, which the battle boot path sets to **30**, so the
+  reading is `floor(GetTickCount() × 30 / 1000)` and the delta counts
+  **thirtieths of a second** elapsed since the previous outer frame — not
+  milliseconds (see the correction below). It is refreshed
   only when the budget step runs (never while paused in single-player), and
   the movie writer resets its base after each capture ([R-CAM-01 §8]).
 * **Pointer position** — when the presentation object has not captured the
@@ -5893,15 +5956,101 @@ hotkey dispatch ([R-CAM-01 §1]). Its inputs, with their sources:
   while `TALK.GUI` is open.
 
 The magnitude is `min(128, scrollByte × rawDelta)` in **map pixels per host
-frame** — with the default byte, `32` pixels per millisecond, so at any
-frame interval of 4 ms or more the cap makes every scrolling frame move
-exactly `128` pixels; the setting only matters below the cap (`scrollByte ×
-rawDelta < 128`, i.e. very high frame rates or very low settings). The
+frame**, where `rawDelta` is the thirtieths-of-a-second delta above. The
+whole pass — cursor read, edge tests, direction tests and all — is skipped
+when the magnitude is zero, so a host frame that lands inside the same
+thirtieth as the previous one scrolls nothing at all. With the default byte
+the sustained rate is therefore `32 × 30 = 960` map pixels per second and is
+**independent of frame rate**: at 60 fps every other frame contributes `32`
+pixels, at 30 fps every frame contributes `32`, and at 10 fps every frame
+contributes `96`. The `128` cap bites only once a single frame spans four or
+more thirtieths at the default byte (a frame interval of about 133 ms, or a
+proportionally shorter one at a higher setting), which degrades the rate
+rather than raising it. The
 product is a signed 32-bit multiply of the zero-extended byte and the raw
 delta; a negative delta (a wrapped tick count) yields a negative magnitude
-that the `> 128` test does not cap and the `!= 0` test does not skip, so it
+that the `> 128` test does not cap (it is a signed comparison) and the
+`!= 0` test does not skip, so it
 scrolls the opposite way for one frame. The direction tests and the
 sequential opposing-direction behaviour are as [R-CRD-006 §1] states.
+
+**Correction — the raw delta is thirtieths of a second, not milliseconds
+(2026-08-30).** This section previously said the raw delta was taken "with
+the default time scale of `1000`" and was therefore "milliseconds elapsed
+since the previous outer frame", and concluded that "at any frame interval
+of 4 ms or more the cap makes every scrolling frame move exactly `128`
+pixels" with the setting mattering only at very high frame rates. Both
+sentences were wrong, and the second is wrong by a factor of eight at 60 fps.
+
+*Why it was wrong.* The scroll pass and the tick-budget step read the same
+stored delta word — the budget step writes `scaledNow − previousAnchor` into
+it and the scroll pass multiplies it by the scroll byte — and the scaled
+reading both share is the one helper that returns
+`GetTickCount() × timeScale / 1000`, whose time-scale integer is set once, to
+`30`, on the way into the battle mode. That is the same `floor(ms × 30 /
+1000)` timebase [01 §4.1] establishes for the budget, and it has to be: the
+budget's runnable-tick count is `delta × speed + carry` truncated and clamped
+to `0..5` [01 §4.2], which only yields a 30 Hz simulation if `delta` is
+already in simulation ticks. A millisecond delta would run five sub-ticks on
+every 16 ms frame — a 150 Hz simulation — and would make the scroll cap fire
+on every frame at every playable frame rate.
+
+*What changes.* Only the units of `rawDelta` and everything derived from
+them: the sustained scroll rate is `scrollByte × 30` map pixels per second
+instead of `128` per frame, and the cap is a low-frame-rate limiter rather
+than the normal case. The inputs, the direction predicates, the signed
+multiply, the negative-delta reversal, and the cancel set below are
+unaffected. Nanolathe impact: the battle screen's keyboard and edge scroll
+must derive `rawDelta` from a 30-per-second scaled clock; feeding it
+milliseconds scrolls eight times too fast at 60 fps (defect PT3-11).
+
+#### The scroll pass while paused [R-CAM-01 §10] (2026-08-30)
+
+**Established — the single-player pump skips the budget but not the scroll
+pass.** The battle host pump's single-player arm evaluates
+`pauseBitClear && (budgetStep(), runnableTicks != 0)`. The C short-circuit is
+the whole contract: with the pause bit set the budget step is **not called at
+all**, so neither the stored raw delta nor the scaled-time anchor is touched.
+The hotkey dispatch and the scroll pass then run from a block placed *outside*
+that arm, gated only on the in-battle options-window bit — never on pause. So
+while single-player is paused the scroll pass still runs once per host frame
+and still multiplies the scroll byte by the **frozen** pre-pause delta.
+
+A whole-image census of the raw-delta word settles that nothing else can
+disturb it: exactly one writer (the budget step) and two readers (the budget's
+own runnable-tick product, and the scroll pass). The anchor's other writers are
+battle entry, the screenshot hotkey and the movie-capture writer
+([R-CAM-01 §8]); none of them is a pause or unpause path.
+
+**Established — what the player sees.** Three consequences follow, and all
+three look like defects to a reader who has not traced them:
+
+* **A paused camera scrolls**, by keyboard or by edge, at `scrollByte ×
+  frozenDelta` map pixels per **host frame**. Unlike unpaused scrolling this is
+  frame-rate *dependent*: at the default byte and a frozen delta of 1 it is
+  `32` pixels per frame, about `1920` map pixels per second at 60 Hz.
+* **The rate depends on which frame the pause landed on.** The frozen value is
+  the delta of the frame in which pause was pressed ([R-CAM-01 §1]) — the
+  budget step runs before hotkey dispatch, so that frame is still budgeted.
+  At 60 Hz that delta is 0 about half the time, and a pause that lands on such
+  a frame leaves the paused camera **completely immobile** until unpause.
+* **Unpause takes one capped step.** The anchor did not move either, so the
+  first unpaused budget spends the entire pause in one delta. That is the
+  single-player unpause burst of [01 §4.3] seen from the scroll pass: with an
+  arrow held, one frame at the `128`-pixel cap, then the ordinary rate.
+
+**Multiplayer differs** and is out of scope here: its arm calls the budget step
+every iteration even while paused, so anchor and delta keep tracking wall
+clock and paused scrolling behaves exactly as unpaused scrolling does
+([01 §4.3]).
+
+The in-battle options window does not reach any of this: opening it sets the
+pause bit *and* the options-window bit, and the latter skips hotkey dispatch
+and the scroll pass outright ([R-CAM-01 §1]). The reachable case is the pause
+hotkey.
+
+Nanolathe impact: a paused-scroll rate that looks like the PT3-11 runaway is
+correct, and zeroing the delta on pause would be a divergence, not a fix.
 
 **Established fact — what a scroll cancels.** When the pass changes either
 origin coordinate it: writes the origin, sets the view-dirty bit, runs the

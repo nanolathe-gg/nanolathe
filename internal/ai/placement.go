@@ -185,6 +185,27 @@ func queueExactResult(m *Manager, defKey string, res PlacementResult) error {
 // the corrected MinWaterDepth class-field label still needs a whole-reader
 // census to determine whether any other reader is affected [08 R-AI-03 §6].
 func PlaceWithResult(m *Manager, defKey string, w *world.Terrain) PlacementResult {
+	res := PlaceCandidate(m, defKey, w)
+	if !res.Valid {
+		return res
+	}
+	// TODO(question): retail writes only X/Z; submitted Y is stack residue.
+	// Static tracing of MobileBuild decides whether Y is read [08 R-AI-03 §6].
+	if err := queueExactResult(m, defKey, res); err != nil {
+		res.Valid = false
+		res.Reason = ReasonQueueFailed
+		res.Proof = err
+	}
+	return res
+}
+
+// PlaceCandidate is the placement root's search half: it moves the origin,
+// selects and runs a helper, and returns the validated site without
+// submitting anything. The root itself never issues the build order — the
+// construction task applies its distance cap to the returned site and submits
+// afterwards [08 R-AI-03 §5][08 R-AI-01 §3]. PlaceWithResult keeps the
+// combined search-and-submit shape for callers that do not apply a cap.
+func PlaceCandidate(m *Manager, defKey string, w *world.Terrain) PlacementResult {
 	if m == nil {
 		return placementFailure(HelperNone, ReasonNilManager, "nil manager")
 	}
@@ -252,13 +273,6 @@ func PlaceWithResult(m *Manager, defKey string, w *world.Terrain) PlacementResul
 	// Root success resets before later caller gates or queue submission
 	// [08 R-AI-03 §5].
 	m.Strategic.Radius = 0
-	// TODO(question): retail writes only X/Z; submitted Y is stack residue.
-	// Static tracing of MobileBuild decides whether Y is read [08 R-AI-03 §6].
-	if err := queueExactResult(m, defKey, res); err != nil {
-		res.Valid = false
-		res.Reason = ReasonQueueFailed
-		res.Proof = err
-	}
 	return res
 }
 

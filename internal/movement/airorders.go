@@ -325,13 +325,21 @@ func clampGoalCeiling(y numeric.Fixed) numeric.Fixed {
 	return y
 }
 
-// offsetAtBearing is the sine/cosine pair every air executor's "offset at a
-// bearing and radius" leg builds, in this codebase's heading convention:
-// heading 0 is +Z and a vector at heading t is (r·sin t, r·cos t) [04 §5.1].
+// offsetAtBearing is the shared component pair every air executor's "offset at
+// a bearing and radius" leg builds: `(sin(h)·r, cos(h)·r)` at the trig table's
+// 8192 scale, with retail's round-to-nearest before the shift [04 R-MOV-01 §4].
+//
+// The pair returned is the UN-negated one, and the sign belongs to the call
+// site. The travel direction of a heading is `(−sin h, −cos h)`
+// [04 R-MOV-01 §4], so `pos − offsetAtBearing(h, r)` moves r world units ALONG
+// h and `pos + offsetAtBearing(h, r)` moves r world units OPPOSITE it. Both
+// families exist among the air legs — the second is the marker's radial follow
+// offset and the air construction orbit — and each call site below names which
+// one it is [04 §10.3][04 R-AIR-01 §4].
 func offsetAtBearing(heading uint16, radius numeric.Fixed) (numeric.Fixed, numeric.Fixed) {
 	sin := int64(numeric.Sin(numeric.Angle(heading)))
 	cos := int64(numeric.Cos(numeric.Angle(heading)))
-	return numeric.Fixed((int64(radius) * sin) >> 13), numeric.Fixed((int64(radius) * cos) >> 13)
+	return numeric.Fixed((int64(radius)*sin + 0x1000) >> 13), numeric.Fixed((int64(radius)*cos + 0x1000) >> 13)
 }
 
 // firstWeaponRange is the unit's first weapon slot's `Range` in whole world
@@ -423,10 +431,15 @@ type airOrderState struct {
 	waiting bool   // a marker with gate 0xE0 is outstanding
 	arrived bool   // the producer reported arrival last tick
 	bearing uint16 // the search/loiter bearing scratch word
-	low     uint8  // the low bit of the drawn bearing, the second scratch word
-	goal    Vec3   // the record's cached goal
-	post    Vec3   // VTOL_Standby's recorded post
-	done    bool   // the executor reported completion
+	// padPiece is the second use of that same scratch word: `VTOL_Landing`
+	// reuses it for the chosen pad piece index from phase 3 onward
+	// [04 R-AIR-01 §6]. It is a separate field here because Go gains nothing
+	// from the overlay and a reader gains the distinction.
+	padPiece uint16
+	low      uint8 // the low bit of the drawn bearing, the second scratch word
+	goal     Vec3  // the record's cached goal
+	post     Vec3  // VTOL_Standby's recorded post
+	done     bool  // the executor reported completion
 }
 
 // airStateFor returns the executor state for the unit's current head record,
@@ -481,6 +494,10 @@ func (s *System) runAirExecutor(u *units.Unit, head *orders.Node, st *airOrderSt
 		s.execVTOLLandIfCan(u, head, st)
 	case "VTOL_Standby":
 		s.execVTOLStandby(u, head, st)
+	case "VTOL_Landing":
+		s.execVTOLLanding(u, head, st)
+	case "VTOL_MobileBuild", "VTOL_HelpBuild":
+		s.execVTOLAirBuild(u, head, st)
 	default:
 		// Every other head leaves the command block alone. With a null payload
 		// the producer does nothing at all and the aircraft continues on its
@@ -569,22 +586,15 @@ func (s *System) execVTOLLandIfCan(u *units.Unit, head *orders.Node, st *airOrde
 		st.phase = 1
 	case 1:
 		if s.landable(u, u.X, u.Z) {
-			// TODO(question): [04 R-AIR-01 §6] gives phase 1's altitude offset as
-			// "0 when the terrain height there is at or below sea level and
-			// terrainHeight - seaLevel otherwise", and glosses both branches as
-			// placing "the marker's commanded Y at exactly the terrain height,
-			// because the marker's terrain-derived altitude rule adds the offset
-			// to max(seaLevel, terrainHeight)". The gloss does not follow from
-			// [04 R-AIR-01 §4]'s Established setter expression: with terrain above
-			// sea level that expression yields terrain + (terrain - seaLevel), and
-			// with terrain at or below it, seaLevel. Only a setter whose base were
-			// seaLevel alone would satisfy the gloss for the second branch. The
-			// offsets below are the ones §6 states, run through §4's expression,
-			// so an aircraft settles a little above the surface on high ground.
-			// What would settle it is a re-trace of the setter's base term against
-			// this executor's leg.
+			// The altitude offset is zero on dry land and `terrainHeight −
+			// seaLevel` (a negative quantity) over water, so composed with the
+			// setter's `max(seaLevel, terrainHeight) + offset` both branches
+			// command exactly the terrain height and the aircraft settles ON the
+			// surface [04 R-AIR-01 §6]. The doc carried these two branches the
+			// other way round until the re-trace this unit ran; the correction
+			// and its evidence are recorded there.
 			offset := int16(0)
-			if h, sea, ok := s.terrainAndSea(u.X, u.Z); ok && h > sea {
+			if h, sea, ok := s.terrainAndSea(u.X, u.Z); ok && h <= sea {
 				offset = int16(h - sea)
 			}
 			m := s.newPointMarker(u, Vec3{X: u.X, Y: u.Y, Z: u.Z})
@@ -626,8 +636,9 @@ func (s *System) execVTOLLandIfCan(u *units.Unit, head *orders.Node, st *airOrde
 		if head.Satisfied&airLegGate == airLegGate {
 			st.bearing -= 0x5555
 		}
+		// Along the search bearing, so the pair is subtracted [04 R-AIR-01 §6].
 		ox, oz := offsetAtBearing(st.bearing, numeric.Fixed(0xA0<<16))
-		m := s.newPointMarker(u, Vec3{X: st.goal.X + ox, Y: st.goal.Y, Z: st.goal.Z + oz})
+		m := s.newPointMarker(u, Vec3{X: st.goal.X - ox, Y: st.goal.Y, Z: st.goal.Z - oz})
 		m.setArrivalRadius(0x40)
 		s.installAirGoal(u, head, m)
 		head.DynamicGate |= airLegGate
@@ -684,8 +695,10 @@ func (s *System) execVTOLStandby(u *units.Unit, head *orders.Node, st *airOrderS
 			b := uint16(sim.Uint32n(0x10000))
 			radius := numeric.Fixed(int64(8+sim.Uint32n(0x20)) << 16)
 			delay := sim.Uint32n(15)
+			// Along the drawn bearing, so the pair is subtracted
+			// [04 R-AIR-01 §7].
 			ox, oz := offsetAtBearing(b, radius)
-			m := s.newPointMarker(u, Vec3{X: st.post.X + ox, Y: st.post.Y, Z: st.post.Z + oz})
+			m := s.newPointMarker(u, Vec3{X: st.post.X - ox, Y: st.post.Y, Z: st.post.Z - oz})
 			if u.Def != nil {
 				m.setAltitudeOffset(int16(u.Def.CruiseAlt))
 			}
@@ -694,13 +707,291 @@ func (s *System) execVTOLStandby(u *units.Unit, head *orders.Node, st *airOrderS
 			st.phase = 1
 			return
 		}
-		// TODO(T25): the no-cargo arm allocates a `VTOL_LandIfCan` record
-		// carrying this record's cached goal and pushes it on the unit
-		// [04 R-AIR-01 §7]. Record insertion belongs to internal/orders, which
-		// this unit does not own. Placeholder: hold, so an unloaded idle
-		// aircraft keeps its last command instead of landing.
+		// The no-cargo arm allocates a `VTOL_LandIfCan` record carrying this
+		// record's cached goal and pushes it on the unit, then completes: an
+		// idle unloaded aircraft always tries to land, and only a loaded one
+		// loiters [04 R-AIR-01 §7].
+		airSpawnAtHead(u, "VTOL_LandIfCan", 0, st.goal, s.tick)
 		st.done = true
 	default:
+		st.done = true
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The air construction orbit [04 §10.3][04 R-ORD-02 §2][04 R-ORD-01 §7]
+// ---------------------------------------------------------------------------
+
+// Air construction orbit constants [04 §10.3].
+const (
+	// airOrbitPeriod is the recurrence cadence: the orbit marker is rebuilt on
+	// every tick whose global tick number is an exact multiple of 150.
+	airOrbitPeriod = 150
+	// airOrbitStep is the signed angular step 0xDB6E (−9362), about −51.43
+	// degrees. Seven of them are 65,534 of the 65,536-unit circle, which is why
+	// the recurrence walks about seven stations per revolution — a consequence
+	// of the step, not an authored station count.
+	airOrbitStep = uint16(0xDB6E)
+)
+
+// execVTOLAirBuild is the movement half of the two air build orders,
+// `VTOL_MobileBuild` [04 R-ORD-02 §2] and `VTOL_HelpBuild` [04 R-ORD-01 §7].
+//
+// The record itself belongs to another driver: internal/construction runs the
+// mobile-build lifecycle from its own per-unit step and owns this record's
+// phase byte, dynamic gate and deadline (orders.handlerlessButDriven). This
+// executor therefore keeps its own phase in the movement-side state and writes
+// NOTHING on the record — not the phase, not the gate, not the deadline. Its
+// only outputs are the goal payloads on the flight command block, and arrival
+// is read back from the payload's own test, which is how stepAir observes every
+// air leg [04 R-AIR-01 §1].
+//
+//	Phase 0: a live mover and `canfly`; the shared takeoff preamble; advance.
+//	Phase 1: a point marker at the site with horizontal arrival radius
+//	         `builddistance` and no altitude setter; install; advance.
+//	Phase 2+: the work body's orbit — on every tick with `tick mod 150 == 0`,
+//	         rebuild the station marker of [04 §10.3].
+func (s *System) execVTOLAirBuild(u *units.Unit, head *orders.Node, st *airOrderState) {
+	switch st.phase {
+	case 0:
+		if !s.airMoverReady(u) {
+			st.done = true
+			return
+		}
+		st.waiting = s.takeoffPreamble(u, head)
+		st.phase = 1
+	case 1:
+		// The record's own goal, not the movement goal handle: a ground builder's
+		// bound goal is a build-site perimeter candidate chosen for a walker,
+		// and the air leg's marker is the site itself.
+		//
+		// TODO(T25): `VTOL_MobileBuild` phase 1 snaps that goal onto the
+		// PRODUCT's footprint before building the marker [04 R-ORD-02 §2], and
+		// `VTOL_HelpBuild` phase 1 takes the target's own position
+		// [04 R-ORD-01 §7]. The product's footprint pair is a definition this
+		// package cannot resolve — the catalog lives behind internal/content and
+		// the record carries only the canonical key. Placeholder: the record's
+		// stored goal, which is the site anchor the order layer already centred,
+		// and the target's position whenever the record names a live one.
+		goalX, goalY, goalZ := head.GoalX, head.GoalY, head.GoalZ
+		if t := s.unitFor(head.Target); t != nil && t.Alive {
+			goalX, goalY, goalZ = t.X, t.Y, t.Z
+		}
+		m := s.newPointMarker(u, Vec3{X: goalX, Y: goalY, Z: goalZ})
+		m.setArrivalRadius(airBuildDistance(u))
+		s.installAirGoal(u, head, m)
+		st.waiting = true
+		st.phase = 2
+	default:
+		// The work body runs every visit; only the 150-tick edge rebuilds the
+		// station. `waiting` stays clear so the executor is dispatched on every
+		// tick, which is what "on every tick with tick mod 150 == 0" requires.
+		st.waiting = false
+		s.airBuildOrbitStation(u, head)
+	}
+}
+
+// airBuildDistance is the builder's authored `builddistance` as the 16-bit
+// horizontal arrival radius the air build legs write [04 R-ORD-02 §2]
+// [04 R-ORD-01 §7], and as the orbit radius of [04 §10.3].
+func airBuildDistance(u *units.Unit) uint16 {
+	if u == nil || u.Def == nil {
+		return 0
+	}
+	return uint16(u.Def.BuildDistance)
+}
+
+// airBuildOrbitStation is the orbit recurrence of [04 §10.3][04 §10.3],
+// rebuilt on every
+// tick whose number is an exact multiple of 150.
+//
+// The station is `builddistance` world units from the work target, at the
+// builder's own angular position about that target advanced by `airOrbitStep`,
+// and the marker carries that same angle as its explicit heading — which is the
+// direction from the station back at the target, so the aircraft faces what it
+// is building. The arithmetic is the target's position PLUS the un-negated
+// component pair, which is the opposite sign from the approach and orbit legs
+// of [04 R-AIR-01 §7] and is what makes the stations circle the target instead
+// of crossing over it. There is no arrival radius and no altitude setter: the
+// marker's own goal update keeps its Y at the cruise altitude over the sector
+// the aircraft is in, every tick [04 R-AIR-01 §4].
+func (s *System) airBuildOrbitStation(u *units.Unit, head *orders.Node) {
+	if s == nil || u == nil || head == nil {
+		return
+	}
+	if s.tick%airOrbitPeriod != 0 {
+		return
+	}
+	targetX, targetY, targetZ := head.GoalX, head.GoalY, head.GoalZ
+	if t := s.unitFor(head.Target); t != nil && t.Alive {
+		targetX, targetY, targetZ = t.X, t.Y, t.Z
+	}
+	angle := bearing(u.X, u.Z, targetX, targetZ) + airOrbitStep
+	r := numeric.Fixed(int64(airBuildDistance(u)) << 16)
+	ox, oz := offsetAtBearing(angle, r)
+	m := s.newPointMarker(u, Vec3{X: targetX + ox, Y: targetY, Z: targetZ + oz})
+	m.setHeading(angle)
+	s.installAirGoal(u, head, m)
+}
+
+// ---------------------------------------------------------------------------
+// VTOL_Landing — the seven-phase pad-landing machine [04 R-AIR-01 §6]
+// ---------------------------------------------------------------------------
+
+// airPadCandidates is the candidate count `QueryLandingPad` offers: pieces 0
+// through 3, tried strictly in index order, a −1 cell skipped rather than
+// treated as end-of-list [04 R-AIR-01 §6].
+const airPadCandidates = 4
+
+// airNoPiece is the reserved no-piece index [04 R-UNIT-06 §3].
+const airNoPiece = 0xFF
+
+// queryLandingPad is the pad scan of [04 R-AIR-01 §6]: the first candidate
+// piece 0..3 of the target that is free wins, where a pad piece is free exactly
+// when the pad owner is not itself carried and no unit in the pad owner's cargo
+// list records that same attach-piece index.
+//
+// TODO(T25): retail obtains the four candidate piece indices from a synchronous
+// `QueryLandingPad` on the TARGET's script, with all four outputs pre-seeded
+// −1, so a target whose script answers nothing offers no pad at all. This
+// package has no COB surface — internal/movement holds no script handle and
+// internal/cob is not reachable from here — so the candidates cannot be asked
+// for. Placeholder: the four indices are offered unconditionally by an
+// `isairbase` target, which is the arrangement that lets a pad be used at all;
+// the free-pad predicate itself is the established one. What would settle it is
+// a synchronous script-query seam reaching this package.
+func (s *System) queryLandingPad(pad *units.Unit) (uint16, bool) {
+	if pad == nil || !pad.Alive || pad.Attachment.Carrier != 0 {
+		return 0, false
+	}
+	if pad.Def == nil || !pad.Def.IsAirBase {
+		return 0, false
+	}
+	for candidate := 0; candidate < airPadCandidates; candidate++ {
+		if s.padPieceFree(pad, uint16(candidate)) {
+			return uint16(candidate), true
+		}
+	}
+	return 0, false
+}
+
+// padPieceFree is the free-pad predicate of [04 R-AIR-01 §6]: the pad owner is
+// not itself carried and no unit in its cargo list holds this attach piece.
+func (s *System) padPieceFree(pad *units.Unit, piece uint16) bool {
+	if pad == nil || pad.Attachment.Carrier != 0 {
+		return false
+	}
+	for _, h := range pad.Attachment.Cargo {
+		guest := s.unitFor(h)
+		if guest == nil {
+			continue
+		}
+		if guest.Attachment.AttachPiece == int(piece) {
+			return false
+		}
+	}
+	return true
+}
+
+// execVTOLLanding is `VTOL_Landing` [04 R-AIR-01 §6], the machine that flies an
+// aircraft to a landing pad and parks it there. Its scratch word is reused for
+// two things: the loiter bearing in phases 0–1 and the chosen pad piece from
+// phase 3 onward, which is why one state carries both.
+//
+// The phases that only wait — 4 and the "no work" arms — are folded into their
+// neighbours' returns exactly as the row table gives them; every marker install
+// arms this executor's own wait, which stepAir releases from the payload's
+// arrival test rather than from the record's satisfied word [04 R-AIR-01 §6].
+func (s *System) execVTOLLanding(u *units.Unit, head *orders.Node, st *airOrderState) {
+	pad := s.unitFor(head.Target)
+	if pad == nil || !pad.Alive {
+		// The null-target entry guard: status cue `Landing aborted`, abort.
+		st.done = true
+		return
+	}
+	sim := s.simRNG(u)
+	switch st.phase {
+	case 0:
+		if !s.airMoverReady(u) {
+			st.done = true
+			return
+		}
+		st.waiting = s.takeoffPreamble(u, head)
+		if sim != nil {
+			// The single random draw in the whole machine: one full-circle
+			// loiter bearing [04 R-AIR-01 §6].
+			st.bearing = uint16(sim.Uint32n(0x10000))
+		}
+		st.phase = 1
+	case 1:
+		if piece, ok := s.queryLandingPad(pad); ok {
+			st.padPiece = piece
+			st.phase = 2
+			return
+		}
+		// No free pad: loiter about the target at the first weapon slot's
+		// `Range`, arrival radius 0x80, and advance the bearing by a quarter
+		// turn. The leg re-runs every time the loiter marker is reached; there
+		// is no separate delayed retry.
+		r := numeric.Fixed(int64(firstWeaponRange(u)) << 16)
+		ox, oz := offsetAtBearing(st.bearing, r)
+		m := s.newPointMarker(u, Vec3{X: pad.X - ox, Y: pad.Y, Z: pad.Z - oz})
+		m.setArrivalRadius(0x80)
+		s.installAirGoal(u, head, m)
+		st.bearing += 0x4000
+		st.waiting = true
+	case 2:
+		m := s.newFollowPieceMarker(u, head.Target, airNoPiece)
+		m.setArrivalRadius(0xA0)
+		s.installAirGoal(u, head, m)
+		st.waiting = true
+		st.phase = 3
+	case 3:
+		piece, ok := s.queryLandingPad(pad)
+		if !ok {
+			// Status cue `Landing failed`: reset to phase zero, which restarts
+			// the machine from the takeoff preamble.
+			st.phase = 0
+			return
+		}
+		st.padPiece = piece
+		m := s.newFollowPieceMarker(u, head.Target, piece)
+		m.setArrivalRadius(0x30)
+		s.installAirGoal(u, head, m)
+		st.waiting = true
+		st.phase = 5 // phase 4 does no work
+	case 5:
+		if !s.padPieceFree(pad, st.padPiece) {
+			// Status cue `Landing aborted: all pads are occupied`.
+			st.phase = 0
+			return
+		}
+		// The touchdown marker: the same follow-piece marker with an explicit
+		// altitude offset — zero for an empty lander — so its arrival also
+		// requires the aircraft to be within one world unit of the pad's own
+		// height [04 R-AIR-01 §4][04 R-AIR-01 §6].
+		m := s.newFollowPieceMarker(u, head.Target, st.padPiece)
+		m.setAltitudeOffset(0)
+		s.installAirGoal(u, head, m)
+		st.waiting = true
+		st.phase = 6
+	default:
+		if !s.padPieceFree(pad, st.padPiece) {
+			// Status cue `Landing aborted: no pads available`.
+			st.phase = 0
+			return
+		}
+		// The touchdown itself: the lander attaches to the pad owner on the pad
+		// piece with request mode 0 — the attached/parked mode, written straight
+		// into the committed mover-mode pair, so the attach never zeroes
+		// velocity, never levels bank and pitch and never raises `Deactivate`
+		// [04 R-AIR-01 §3][04 R-UNIT-06 §3].
+		s.releaseAirGoal(u)
+		AttachCargo(s.world, head.Target, u.Handle, int(st.padPiece))
+		u.Move.Mode = 0
+		if fl := s.Flights[u.Handle]; fl != nil {
+			fl.Mode = 0
+		}
 		st.done = true
 	}
 }

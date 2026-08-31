@@ -809,6 +809,45 @@ func (q *Queue) CoalesceTail(id ID, n Node) {
 	}
 }
 
+// CancelFrontMost removes the first matching node walking the primary queue
+// from the front, and reports whether one went [07 R-P0-11 §6].
+//
+// This is the queued-order duplicate removal, not a counted subtraction, and
+// it differs from CancelTailMost in both directions that matter:
+//
+//   - It scans front to back. Retail's producer walks the acting unit's
+//     primary chain from the head and returns on the first match, so the
+//     oldest queued order at a point is the one that goes.
+//   - It unlinks the whole node. There is no count decrement here: the
+//     traced path frees the matched node outright whatever its count field
+//     says. The decrement belongs to the factory producer's negative-count
+//     path [R-P0-11 §1], which is a different routine.
+//
+// The scan is over the primary segment only, which is what retail walks; the
+// secondary segment is not searched. Tombstoning follows the same rule as
+// every other removal: the node is tombstoned unless it is the list head
+// [04 §3.3].
+func (q *Queue) CancelFrontMost(match func(Node) bool) bool {
+	if q == nil || match == nil {
+		return false
+	}
+	for i := 0; i < len(q.primary); i++ {
+		if !match(*q.primary[i]) {
+			continue
+		}
+		n := q.primary[i]
+		if i != 0 {
+			n.Flags |= FlagTombstone // [04 §3.3]
+		}
+		q.cleanupNode(n) // [05 "Queue subtraction"]
+		copy(q.primary[i:], q.primary[i+1:])
+		q.primary = q.primary[:len(q.primary)-1]
+		q.ensureSingleActive() // mark moves to the successor [04 §3.3]
+		return true
+	}
+	return false
+}
+
 func (q *Queue) CancelTailMost(match func(Node) bool) bool {
 	if q == nil || match == nil {
 		return false

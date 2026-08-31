@@ -115,7 +115,10 @@ func TestShadowIsFilledWithPaletteIndexZero(t *testing.T) {
 func TestCollectShadowTrisIgnoresTexturesAndTheSelectionPlate(t *testing.T) {
 	c := compositionClient(t)
 	f := func(v int64) numeric.Fixed { return numeric.Fixed(v << 16) }
-	verts := [][3]numeric.Fixed{{0, 0, 0}, {f(4), 0, 0}, {f(4), 0, f(4)}, {0, 0, f(4)}, {f(2), f(4), f(2)}}
+	// Authored front-facing for the shadow's own quarter-shear projection: a
+	// counter-clockwise ring paints nothing there for the same reason it
+	// paints nothing in the body pass [R-RAST-01 §1] step 7.
+	verts := [][3]numeric.Fixed{{0, 0, 0}, {f(4), 0, 0}, {f(4), 0, -f(4)}, {0, 0, -f(4)}, {f(2), f(4), -f(2)}}
 	draw := &presentationrender.UnitDraw{
 		Model: &compiledmodel.Model{Pieces: []compiledmodel.Piece{{Selection: true}}},
 		Pieces: []presentationrender.PieceDraw{{

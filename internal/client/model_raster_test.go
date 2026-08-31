@@ -79,6 +79,13 @@ func TestCollectDrawTrisUsesPrimitiveCornerShadeRows(t *testing.T) {
 	for i := range vertices {
 		vertices[i] = fixedVertex(int64(i), 0, int64(i))
 	}
+	// The four corners the primitive names are authored front-facing: their
+	// projected ring (x, -z) has to run clockwise or the winding cull of
+	// [R-RAST-01 §1] step 7 drops the face.
+	vertices[2] = fixedVertex(0, 0, 0)
+	vertices[4] = fixedVertex(1, 0, 0)
+	vertices[5] = fixedVertex(1, 0, -1)
+	vertices[6] = fixedVertex(0, 0, -1)
 	tris := c.collectDrawTris(testPrimitiveDraw(pr, vertices), 0, 1, modelCursorUnit)
 	if len(tris) != 2 {
 		t.Fatalf("triangle count = %d, want 2", len(tris))
@@ -102,7 +109,7 @@ func TestCollectDrawTrisCarriesNoShadeRowToRaster(t *testing.T) {
 	}
 	vertices := [][3]numeric.Fixed{
 		fixedVertex(0, 0, 0), fixedVertex(1, 0, 0),
-		fixedVertex(1, 0, 1), fixedVertex(0, 0, 1),
+		fixedVertex(1, 0, -1), fixedVertex(0, 0, -1),
 	}
 	tris := c.collectDrawTris(testPrimitiveDraw(pr, vertices), 0, 1, modelCursorUnit)
 	if len(tris) != 2 {
@@ -160,7 +167,7 @@ func TestCollectDrawTrisSelectsTeamLogoFrame(t *testing.T) {
 	c.texIndex["logo"] = texRef{kind: texTeam, key: "logo", entry: entry}
 	pr := presentationrender.PrimitiveDraw{TextureName: "logo", VertexIndices: []uint16{0, 1, 2, 3}}
 	tris := c.collectDrawTris(testPrimitiveDraw(pr, [][3]numeric.Fixed{
-		fixedVertex(0, 0, 0), fixedVertex(1, 0, 0), fixedVertex(1, 0, 1), fixedVertex(0, 0, 1),
+		fixedVertex(0, 0, 0), fixedVertex(1, 0, 0), fixedVertex(1, 0, -1), fixedVertex(0, 0, -1),
 	}), 7, 1, modelCursorUnit)
 	if len(tris) != 2 || tris[0].frame != frames[7].Frame || tris[1].frame != frames[7].Frame {
 		t.Fatalf("team texture did not select owner frame")
@@ -176,7 +183,7 @@ func TestCollectDrawTrisFlatOverrideWinsOverTeamLogo(t *testing.T) {
 	c.texIndex["logo"] = texRef{kind: texTeam, key: "logo", entry: &formats.GAFEntry{Frames: frames}}
 	pr := presentationrender.PrimitiveDraw{TextureName: "logo", IsColored: 1, ColorIndex: 56, VertexIndices: []uint16{0, 1, 2, 3}}
 	tris := c.collectDrawTris(testPrimitiveDraw(pr, [][3]numeric.Fixed{
-		fixedVertex(0, 0, 0), fixedVertex(1, 0, 0), fixedVertex(1, 0, 1), fixedVertex(0, 0, 1),
+		fixedVertex(0, 0, 0), fixedVertex(1, 0, 0), fixedVertex(1, 0, -1), fixedVertex(0, 0, -1),
 	}), 7, 1, modelCursorUnit)
 	if len(tris) != 2 {
 		t.Fatalf("flat team override emitted %d triangles, want 2", len(tris))
@@ -207,7 +214,7 @@ func TestFeatureStaticModelAllowsMissingIdentity(t *testing.T) {
 			compiled: &compiledmodel.Model{Pieces: []compiledmodel.Piece{{
 				Parent:     -1,
 				Primitives: []compiledmodel.Primitive{{ColorIndex: 56, IsColored: 1, VertexIndices: []uint16{0, 1, 2, 3}}},
-				Vertices:   [][3]numeric.Fixed{{0, 0, 0}, {1 << 16, 0, 0}, {1 << 16, 0, 1 << 16}, {0, 0, 1 << 16}},
+				Vertices:   [][3]numeric.Fixed{{0, 0, 0}, {1 << 16, 0, 0}, {1 << 16, 0, -1 << 16}, {0, 0, -1 << 16}},
 			}}},
 		},
 	}
@@ -223,7 +230,7 @@ func TestFeatureAnimatedModelSuppressesMissingIdentity(t *testing.T) {
 		{Frame: &formats.GAFFrame{Width: 1, Height: 1, Pixels: []byte{2}}},
 	}}}
 	pr := presentationrender.PrimitiveDraw{TextureName: "anim", VertexIndices: []uint16{0, 1, 2, 3}}
-	vertices := [][3]numeric.Fixed{fixedVertex(0, 0, 0), fixedVertex(1, 0, 0), fixedVertex(1, 0, 1), fixedVertex(0, 0, 1)}
+	vertices := [][3]numeric.Fixed{fixedVertex(0, 0, 0), fixedVertex(1, 0, 0), fixedVertex(1, 0, -1), fixedVertex(0, 0, -1)}
 	if got := c.collectDrawTris(testPrimitiveDraw(pr, vertices), 0, 0, modelCursorFeature); len(got) != 0 {
 		t.Fatalf("animated feature with missing identity emitted %d triangles", len(got))
 	}
@@ -235,7 +242,7 @@ func TestFeatureAnimatedModelSuppressesMissingIdentity(t *testing.T) {
 func TestCollectDrawTrisUsesCameraScale(t *testing.T) {
 	c := testModelTextureClient()
 	c.cam.Scale = 2
-	vertices := [][3]numeric.Fixed{fixedVertex(2, 4, 6), fixedVertex(4, 4, 6), fixedVertex(2, 4, 8), fixedVertex(2, 4, 6)}
+	vertices := [][3]numeric.Fixed{fixedVertex(2, 4, 6), fixedVertex(4, 4, 6), fixedVertex(2, 4, 4), fixedVertex(2, 4, 6)}
 	pr := presentationrender.PrimitiveDraw{TextureName: "tex", VertexIndices: []uint16{0, 1, 2, 3}}
 	tris := c.collectDrawTris(testPrimitiveDraw(pr, vertices), 0, 1, modelCursorUnit)
 	if len(tris) == 0 {

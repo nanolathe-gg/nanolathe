@@ -8,8 +8,6 @@ package orders
 // them through it.
 
 import (
-	"math"
-
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -123,12 +121,9 @@ func emitStopBuilding(u *units.Unit, n *Node) {
 func startBuildingBearing(selfX, selfZ, targetX, targetZ numeric.Fixed) uint16 {
 	// Whole world units: the high word of a 16.16 coordinate, taken with an
 	// arithmetic shift so negative coordinates floor [03 §2.1].
-	dx := float64(int64(selfX) >> 16)
-	dz := float64(int64(selfZ) >> 16)
-	dx -= float64(int64(targetX) >> 16)
-	dz -= float64(int64(targetZ) >> 16)
-	// 10430.37835047 = 65536 / 2*pi, the constant retail compiles in.
-	return uint16(int32(math.RoundToEven(math.Atan2(dx, dz) * 65536.0 / (2 * math.Pi))))
+	dx := (selfX.Raw() >> 16) - (targetX.Raw() >> 16)
+	dz := (selfZ.Raw() >> 16) - (targetZ.Raw() >> 16)
+	return numeric.AngleFromAtan2(dx, dz).Raw()
 }
 
 // EmitStartBuilding is the StartBuilding emitter [R-ORDER-02 §2] and the ONLY

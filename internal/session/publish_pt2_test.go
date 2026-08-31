@@ -40,28 +40,57 @@ func TestPublishSnapshotCarriesCommittedMoverMode(t *testing.T) {
 	}
 }
 
-// A building-class unit owns no mover in retail, so the pass selector reads 0
-// for it whatever our own mover record says, and it paints in pass B for its
-// whole life rather than moving from pass B to pass A at completion
-// [03 R-RAST-01 §7][04 R-FAC-02 §5].
-func TestPublishSnapshotGivesStructuresNoMoverMode(t *testing.T) {
+// A structure and a still-unfinished nanoframe both publish the mirror value
+// `1`, which is pass A — the pass that runs before the nanolathe strip, so the
+// construction spray paints over the unit being built. Retail's spawn writes
+// `1` into the flags word's low two bits for every unit, a building included,
+// and nothing rewrites it for a unit that owns no mover
+// [03 R-RAST-01 §7, correction of 2026-08-30][04 R-MOV-01 §8].
+//
+// This test previously asserted 0 and was named ...GivesStructuresNoMoverMode,
+// on the retracted reading that the composer reads the mover object rather than
+// the mirror. That published every building into pass B, behind its own
+// construction spray — playtest defect PT3-01.
+func TestPublishSnapshotGivesStructuresTheGroundedMirror(t *testing.T) {
 	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "lab"}, MaxDamage: 1}
 	w := newSessionFixtureWorld(2, nil)
-	h, err := w.Create(def, 0, 0, 0, 0)
-	if err != nil {
+	if _, err := w.Create(def, 0, 0, 0, 0); err != nil {
 		t.Fatalf("create unit: %v", err)
 	}
-	// The movement system installs a mover record for every unit and parks it
-	// at mode 1; a building must not inherit pass A from it.
-	w.Unit(h).Move.Mode = 1
 	s := &Session{Snapshot: frame.NewBuffer(), Units: w, LocalOwner: 0}
 	s.publishSnapshot(1)
 	cur := s.Snapshot.Current()
 	if cur == nil || len(cur.Units) != 1 {
 		t.Fatalf("published frame = %#v, want one unit", cur)
 	}
-	if cur.Units[0].MoverMode != 0 {
-		t.Fatalf("published structure mover mode = %d, want 0", cur.Units[0].MoverMode)
+	if cur.Units[0].MoverMode != 1 {
+		t.Fatalf("published structure mover mode = %d, want 1", cur.Units[0].MoverMode)
+	}
+}
+
+// The nanoframe half of the same contract, and the hole the creation-time seed
+// closes: a unit the movement system has not reached yet — a building
+// nanoframe on the tick it is laid — must already carry the mirror, because
+// the composer sorts it into a pass on that very frame. Nothing here calls
+// into movement.
+func TestPublishSnapshotGivesANanoframeTheGroundedMirror(t *testing.T) {
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "lab"}, MaxDamage: 1}
+	w := newSessionFixtureWorld(2, nil)
+	h, err := w.CreateNanoframe(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create nanoframe: %v", err)
+	}
+	if got := w.Unit(h).Move.Mode; got != 1 {
+		t.Fatalf("nanoframe mover mode at creation = %d, want 1", got)
+	}
+	s := &Session{Snapshot: frame.NewBuffer(), Units: w, LocalOwner: 0}
+	s.publishSnapshot(1)
+	cur := s.Snapshot.Current()
+	if cur == nil || len(cur.Units) != 1 {
+		t.Fatalf("published frame = %#v, want one unit", cur)
+	}
+	if cur.Units[0].MoverMode != 1 {
+		t.Fatalf("published nanoframe mover mode = %d, want 1", cur.Units[0].MoverMode)
 	}
 }
 

@@ -327,8 +327,12 @@ func (c *Client) unitModelFor(name string) *unitModel {
 //     the vertical axis applied to the whole model).
 //
 // Pieces walk depth-first (root → child → sibling); primitives fan-triangulate
-// [03 §2.4 "N-gon primitives"]. Faces draw double-sided in the 8-bit path —
-// no backface cull exists in the established model composer [03 §2.4.1].
+// [03 §2.4 "N-gon primitives"]. A face is dropped when its projected corner
+// ring runs counter-clockwise, which is what retail's two-chain edge walk does
+// to a back face [R-RAST-01 §1] step 7 — see modelFacePaints. (This comment
+// previously said faces draw double-sided with no backface cull, citing
+// [03 §2.4.1]; that sentence predates the scan converter's closure and is
+// wrong — the cull is not a separate test, it is the span comparison.)
 // This version stores the hierarchy for dynamic piece transforms [03 §2.4] C21–C22.
 func (c *Client) expandModel(name string) *unitModel {
 	path := name
@@ -676,6 +680,72 @@ func modelStatesForCompiled(m *compiledmodel.Model, pieces []frame.PieceView) []
 	return states
 }
 
+// modelFacePaints applies retail's winding cull to one authored primitive
+// [R-RAST-01 §1] step 7.
+//
+// Retail has no normal test, no signed-area test and no backface flag. What
+// removes a back face is the scan converter itself: from the polygon's topmost
+// corner it walks decreasing indices as the *left* edge chain and increasing
+// indices as the *right* chain, and a span writer runs only where `xr > xl`.
+// A convex face whose projected corners run clockwise in index order (screen Y
+// increasing downward) therefore paints, and a counter-clockwise one produces
+// an empty span on every row and paints nothing. The doubled signed area of
+// the projected corner ring is exactly the sign of that comparison for a
+// convex face, and it is positive for a clockwise ring in a Y-down frame.
+//
+// This is why it matters here rather than as a micro-optimisation. Authored
+// 3DO order is counter-clockwise seen from outside the piece (measured: 2,029
+// pieces outward against 90 inward across the 608 stock models, [fmt 3do]
+// "Unknowns and caveats"), and the composition projection negates the
+// model-relative Z ([R-RAST-01 §2]), a reflection that reverses winding — so
+// outward faces arrive clockwise and paint while the inward faces behind them
+// are dropped. Drawing both sides let an interior face that shares a plane
+// with the skin win the height key's equal-key tie-break, which is drawn later
+// wins ([R-REN-03A §2]): on `ARMCK` the team-coloured inner face of each
+// shoulder flap is coplanar with the grey ribbed outer face and index-ordered
+// after it, so the whole flap came out solid team colour.
+//
+// The corners are the projection the face is actually rasterized with, taken
+// before the presentation zoom of scaleModelLocal, so the test is evaluated on
+// exactly the quantity retail's chains compare. The shadow pass passes its own
+// quarter-shear projection for the same reason.
+//
+// TODO(question): retail's cull is per scanline, so a primitive whose
+// projection folds — a concave n-gon or a bow-tie quad — paints in retail
+// exactly the rows where the right chain is still right of the left chain,
+// while this whole-polygon test drops it outright. Settling it means
+// implementing the two-chain edge walk of [R-RAST-01 §1] in place of the
+// barycentric filler, which would also replace the fan triangulation; no
+// stock face is known to fold, and this filler already mis-fills a concave
+// polygon.
+func modelFacePaints(vertices [][3]numeric.Fixed, indices []uint16, origin [3]numeric.Fixed) bool {
+	return facePaints(vertices, indices, origin, modelLocalVertex)
+}
+
+// facePaints is modelFacePaints over an arbitrary vertex projection, so the
+// body and shadow passes share one cull evaluated on their own corners.
+func facePaints(vertices [][3]numeric.Fixed, indices []uint16, origin [3]numeric.Fixed, project func(v, origin [3]numeric.Fixed) (int32, int32, int32)) bool {
+	n := len(indices)
+	if n < 3 {
+		// A two-corner flat primitive makes both chains the same single edge,
+		// so `xr == xl` on every row and nothing is drawn [R-RAST-01 §1] step 7.
+		return false
+	}
+	for _, vi := range indices {
+		if int(vi) >= len(vertices) {
+			return false // malformed primitive suppresses the whole face [fmt 3do]
+		}
+	}
+	var area int64
+	px, py, _ := project(vertices[indices[n-1]], origin)
+	for _, vi := range indices {
+		x, y, _ := project(vertices[vi], origin)
+		area += int64(px)*int64(y) - int64(x)*int64(py)
+		px, py = x, y
+	}
+	return area > 0
+}
+
 // collectDrawTris adapts canonical render records to the indexed framebuffer.
 // It owns no hierarchy math: units, features, and projectiles all pass through
 // render.UnitDraw [03 §2.4][03 §5.2].
@@ -750,6 +820,9 @@ func (c *Client) collectDrawTris(draw *presentationrender.UnitDraw, owner uint8,
 			}
 			if !valid {
 				continue // malformed primitive suppresses the whole face [fmt 3do]
+			}
+			if !modelFacePaints(piece.WorldVertices, pr.VertexIndices, draw.WorldPos) {
+				continue // the winding cull of [R-RAST-01 §1] step 7
 			}
 			uvFor := func(corner int) (float64, float64) {
 				uv := [4][2]float64{{0, 0}, {1, 0}, {1, 1}, {0, 1}}
@@ -1012,6 +1085,11 @@ func (c *Client) drawModelOutline(draw *presentationrender.UnitDraw, color uint8
 			}
 			n := len(pr.VertexIndices)
 			if n < 2 {
+				continue
+			}
+			if !modelFacePaints(piece.WorldVertices, pr.VertexIndices, draw.WorldPos) {
+				// The outline is the same edge walk as the body, so the
+				// winding cull removes the same faces from it [R-COMP-01 §3].
 				continue
 			}
 			var px, py int32

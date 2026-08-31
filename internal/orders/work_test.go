@@ -245,3 +245,191 @@ func TestBuildRangeTestSubtractsBothFootprints(t *testing.T) {
 		t.Fatal("one world unit beyond the sum must be out of reach")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Build assistance (PT3-04) [05 R-WORK-01 §1][05 "Two-stage settlement algorithm"]
+// ---------------------------------------------------------------------------
+
+// assistFixture is one nanoframe and `n` builders, all standing on it so the
+// reach test of [05 R-WORK-01 §2] passes, each with its own bound queue and all
+// sharing one economy service. The i-th builder's `workertime` is
+// `30 * quanta[i]`, so its quantum is exactly `quanta[i]`.
+func assistFixture(quanta ...int32) (*economy.Service, []*units.Unit, *units.Unit) {
+	rng.SeedGlobal(1, 0)
+	econ := &economy.Service{}
+	frameDef := &content.UnitDef{
+		MaxDamage: 100, BuildTime: 100, BuildCostEnergy: 200, BuildCostMetal: 100,
+		FootprintX: 2, FootprintZ: 2,
+	}
+	frame := &units.Unit{
+		Handle: 100, Def: frameDef, Alive: true,
+		Health: 0, MaxHealth: 100, Remaining: 1,
+		X: numeric.Fixed(70 << 16), Y: numeric.Fixed(40 << 16), Z: numeric.Fixed(90 << 16),
+	}
+	builders := make([]*units.Unit, 0, len(quanta))
+	lookup := func(h pool.Handle) *units.Unit {
+		if h == frame.Handle {
+			return frame
+		}
+		for _, b := range builders {
+			if b.Handle == h {
+				return b
+			}
+		}
+		return nil
+	}
+	for i, quantum := range quanta {
+		def := &content.UnitDef{
+			BMCode: true, Builder: true,
+			WorkerTime: 30 * quantum, BuildDistance: 1000,
+			FootprintX: 2, FootprintZ: 2, MaxDamage: 100,
+		}
+		b := &units.Unit{
+			Handle: pool.Handle(i + 1), Def: def, Alive: true, Activated: true, InBuildStance: true,
+			Health: 100, MaxHealth: 100,
+			X: frame.X, Y: frame.Y, Z: frame.Z,
+		}
+		builders = append(builders, b)
+		q := &Queue{}
+		q.SetBinding(&QueueBinding{SimRNG: rng.Global.Sim, StockpileEconomy: econ, Lookup: lookup})
+		BindQueue(b, q)
+		q.Push(Lookup("HelpBuild"), Node{Owner: b.Handle, Target: frame.Handle})
+	}
+	return econ, builders, frame
+}
+
+// pumpAssistants runs one authoritative tick's worth of assist visits: every
+// builder's queue is pumped once, in slot order.
+func pumpAssistants(builders []*units.Unit, tick uint32) {
+	for _, b := range builders {
+		QueueForUnit(b).Pump(b, tick)
+	}
+}
+
+// TestBuildAssistRatesSumOnOneTarget is PT3-04's regression. Before the fix the
+// `HelpBuild` work phase admitted no work at all, so a second builder on a
+// nanoframe added nothing: this asserted a strictly decreasing fraction and
+// failed on the first tick with remaining still 1.
+//
+// The relationships locked are [05 R-WORK-01 §1]'s, not a census: each builder
+// steps the SHARED fraction by its OWN quantum over the target's build time, so
+// two builders advance the frame by the sum of their quanta in one tick, and
+// each bills its OWN subrecord for that share of the cost.
+func TestBuildAssistRatesSumOnOneTarget(t *testing.T) {
+	econ, builders, frame := assistFixture(10, 20)
+
+	pumpAssistants(builders, 1)
+
+	// 10/100 + 20/100 of the fraction in one tick.
+	if got, want := frame.Remaining, float32(1)-float32(10)/100-float32(20)/100; got != want {
+		t.Fatalf("remaining after one tick with two assistants = %v, want %v (the two quanta sum) [05 R-WORK-01 §1]", got, want)
+	}
+	// The drain is the sum of the two demands, each recorded against its own
+	// builder — there is no shared or pooled billing. The expected shares are
+	// re-formed with the same single-precision steps the helper takes, because
+	// the second builder starts from the fraction the first one stored.
+	var shares [2]float32
+	old := float32(1)
+	for i, quantum := range []int32{10, 20} {
+		next := old - float32(quantum)/float32(100)
+		shares[i] = old - next
+		old = next
+	}
+	for i, share := range shares {
+		b := econ.UnitBuckets(builders[i].Handle)
+		wantE, wantM := 200*share, 100*share
+		if b[economy.Energy].Requested != wantE || b[economy.Energy].Accepted != wantE {
+			t.Fatalf("builder %d energy requested/accepted = %v/%v, want %v", i, b[economy.Energy].Requested, b[economy.Energy].Accepted, wantE)
+		}
+		if b[economy.Metal].Requested != wantM || b[economy.Metal].Accepted != wantM {
+			t.Fatalf("builder %d metal requested/accepted = %v/%v, want %v", i, b[economy.Metal].Requested, b[economy.Metal].Accepted, wantM)
+		}
+	}
+}
+
+// TestBuildAssistFinishesInTheSummedRateTime locks the consequence a player
+// sees: two builders whose quanta sum to one bigger builder's finish the same
+// frame in the same number of ticks that bigger builder would need, and every
+// contributor's health gain lands on the one shared target.
+func TestBuildAssistFinishesInTheSummedRateTime(t *testing.T) {
+	run := func(quanta ...int32) (uint32, *units.Unit) {
+		_, builders, frame := assistFixture(quanta...)
+		var tick uint32
+		for tick = 1; tick <= 100; tick++ {
+			pumpAssistants(builders, tick)
+			if frame.Remaining == 0 {
+				break
+			}
+		}
+		return tick, frame
+	}
+	pair, frame := run(10, 20)
+	solo, _ := run(30)
+	if pair != solo {
+		t.Fatalf("two assistants at quanta 10+20 finished in %d ticks, one at quantum 30 in %d: the rates must sum [05 R-WORK-01 §1]", pair, solo)
+	}
+	if frame.Health != frame.MaxHealth {
+		t.Fatalf("assisted frame health = %d/%d at completion, want full: the health gain is the difference of truncations on the SHARED fraction", frame.Health, frame.MaxHealth)
+	}
+}
+
+// TestBuildAssistAdmitsEachBuilderSeparately locks the shortfall shape of
+// [05 R-ECO-01 §7]: admission is per-builder and all-or-nothing on that
+// builder's own carry, so one contributor stalling does not stall the others —
+// the proportional split across contributors happens later, in the settlement
+// of [05 "Two-stage settlement algorithm"], on what each of them accepted.
+func TestBuildAssistAdmitsEachBuilderSeparately(t *testing.T) {
+	econ, builders, frame := assistFixture(10, 20)
+	// Leave the first builder carrying unpaid debt; the second is clear.
+	econ.UnitBuckets(builders[0].Handle)[economy.Metal].Carry = 5
+
+	pumpAssistants(builders, 1)
+
+	if got, want := frame.Remaining, float32(1)-float32(20)/100; got != want {
+		t.Fatalf("remaining = %v, want %v: only the unencumbered builder's quantum may be committed", got, want)
+	}
+	denied := econ.UnitBuckets(builders[0].Handle)
+	if denied[economy.Energy].Requested == 0 {
+		t.Fatal("a denied two-resource admission still records its demand [05 R-ECO-01 §7]")
+	}
+	if denied[economy.Energy].Accepted != 0 || denied[economy.Metal].Accepted != 0 {
+		t.Fatalf("denied builder accepted %v/%v, want nothing", denied[economy.Energy].Accepted, denied[economy.Metal].Accepted)
+	}
+}
+
+// TestBuildAssistDefersTheFrameDecay locks the target-side half of the step:
+// the worked-this-tick flag of [05 R-WORK-01 §1], carried here on the frame's
+// own `GetBuilt` record as the eleven-tick decay deferral of [04 R-FAC-02 §4] —
+// the same field and protocol internal/construction's factory step writes, so an
+// assistant holds a frame's decay off exactly as its own builder does.
+func TestBuildAssistDefersTheFrameDecay(t *testing.T) {
+	_, builders, frame := assistFixture(10)
+	fq := &Queue{}
+	fq.SetBinding(QueueForUnit(builders[0]).Binding())
+	BindQueue(frame, fq)
+	fq.Push(Lookup("GetBuilt"), Node{})
+
+	pumpAssistants(builders, 40)
+
+	if got := fq.Primary()[0].Param1; got != 40+nanoframeDecayRearm {
+		t.Fatalf("GetBuilt decay deferral = %d, want %d", got, 40+nanoframeDecayRearm)
+	}
+}
+
+// TestFreshNanoframeResolvesToHelpBuild is the order-issue half of PT3-04: a
+// nanoframe is created with a remaining fraction of exactly 1, and the
+// unfinished predicate used to exclude that value, so a right-click on a
+// brand-new frame produced no assist order at all.
+func TestFreshNanoframeResolvesToHelpBuild(t *testing.T) {
+	_, builders, frame := assistFixture(10)
+	if !isUnfinished(frame) {
+		t.Fatal("a frame at remaining 1 is unfinished [05 R-WORK-01 §1]")
+	}
+	if name := resolveContextual(builders[0], frame, nil); name != "HelpBuild" {
+		t.Fatalf("contextual resolution against a fresh nanoframe = %q, want HelpBuild [04 R-ORD-01 §5]", name)
+	}
+	frame.Remaining = 0
+	if isUnfinished(frame) {
+		t.Fatal("a completed unit is not unfinished")
+	}
+}

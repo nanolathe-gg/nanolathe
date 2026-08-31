@@ -15,9 +15,8 @@ import (
 // was 180 degrees off, which left every rendered facing backwards while
 // movement still reached its goal.
 //
-// The bisection lands within one unit of the exact bearing (see the function's
-// own note on [04 R-MOV-01 §2]), so the assertion is the wrapped difference,
-// not equality. One unit of slack cannot hide a half-turn.
+// The shared helper is exact at these cardinal boundaries [04 R-MOV-01 §2],
+// so equality also locks the mover's sign convention.
 func TestHeadingFromDeltaCardinals(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -30,10 +29,9 @@ func TestHeadingFromDeltaCardinals(t *testing.T) {
 		{"+X", 1 << 16, 0, 49152},
 	}
 	for _, tc := range cases {
-		got := headingFromDelta(tc.dx, tc.dz)
-		off := int32(int16(got - tc.want))
-		if off < -1 || off > 1 {
-			t.Errorf("headingFromDelta(%s) = %d, want %d (+/-1) [04 R-MOV-01 §4]", tc.name, got, tc.want)
+		got := HeadingFromDelta(tc.dx, tc.dz)
+		if got != tc.want {
+			t.Errorf("HeadingFromDelta(%s) = %d, want %d [04 R-MOV-01 §4]", tc.name, got, tc.want)
 		}
 	}
 }

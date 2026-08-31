@@ -261,6 +261,11 @@ func vtolHelpBuildHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32)
 		// the file header for why the radius has nowhere to go.
 		_ = u.Def.BuildDistance
 		installWorkGoal(u, n, target.X, target.Y, target.Z)
+		if inBuildRangeOf(u, target) {
+			// Already within reach: the ground twin's phase 0 records why the
+			// approach gate is left clear in that case (work.go, PT3-04).
+			return 1
+		}
 		n.DynamicGate = gateMoveOutcomes
 		return 1
 	case 2:
@@ -276,12 +281,10 @@ func vtolHelpBuildHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32)
 		// TODO(T25): the 150-tick orbit-marker rebuild (bearing builder->target
 		// plus 0xDB6E, radius `builddistance`, heading stored on the marker,
 		// [04 §10.3]) is a marker-family call; see the file header.
-		// TODO(T25): the work step is internal/construction's shared helper
-		// with a quantum of workertime/30; work.go's helpBuildHandler records
-		// why this package cannot call it. Placeholder: no work is admitted,
-		// which is the helper's own rejected-work arm, so the unfinished branch
-		// runs.
-		_ = workerQuantum(u)
+		// The work step, quantum `workertime/30` [05 R-WORK-01 §1]. Corrected
+		// with the ground twin (PT3-04): this arm used to admit no work at all,
+		// which made an air builder's assistance a no-op.
+		nanoWorkStep(QueueForUnit(u), u, target, workerQuantum(u), tick)
 		if target.Remaining != 0 {
 			n.DynamicGate |= gateWorkRetry
 			return deadlineHold(n, tick, 1)

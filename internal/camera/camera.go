@@ -207,17 +207,26 @@ func NewFromTerrain(terrainWpix, terrainHpix, playRight, playBottom, viewW, view
 }
 
 // Scroll moves the camera in dir by magnitude = setting * rawDelta capped at
-// 128 [07 §10] C2. Zero rawDelta skips movement entirely.
+// 128 map pixels [07 §10] C2. Zero rawDelta skips movement entirely.
+//
+// rawDelta is the scroll pass's raw wall-clock delta: thirtieths of a second
+// elapsed since the previous host frame, the same delta the tick budget
+// consumes [07 §10 "Correction — the raw delta is thirtieths of a second"]
+// [01 §4.1]. It is NOT milliseconds; at the default setting byte 32 a delta of
+// 1 is 32 map pixels and the sustained rate is 32*30 = 960 map pixels per
+// second at any frame rate. The 128 cap is a low-frame-rate limiter, not the
+// normal case.
+//
+// The cap is a signed comparison and there is no absolute value: a negative
+// rawDelta (a wrapped host tick count) keeps its sign and scrolls the opposite
+// way for one frame, exactly as retail does [07 §10].
 func (c *Camera) Scroll(setting byte, rawDelta int32, dir Direction) { // [07 §10]
 	if rawDelta == 0 {
 		return
 	}
 	mag := int32(setting) * rawDelta // [07 §10] delta = setting * rawDelta
-	if mag < 0 {
-		mag = -mag
-	}
 	if mag > 128 {
-		mag = 128 // capped at 128 [07 §10]
+		mag = 128 // capped at 128 [07 §10]; signed test, negatives pass through
 	}
 	switch dir {
 	case DirectionLeft:

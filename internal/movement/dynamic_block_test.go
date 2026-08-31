@@ -20,7 +20,11 @@ func TestStepUnitBlockedCommitKeepsOrderAndRequest(t *testing.T) {
 		MaxVelocity: 2 * int32(worldUnitsPerCell), Acceleration: 2 * int32(worldUnitsPerCell),
 		BrakeRate: 2 * int32(worldUnitsPerCell), TurnRate: 65535,
 	}
-	blockerHandle, err := w.Create(def, 0, world.CellToWorld(1), 0, world.CellToWorld(0))
+	// The mover accelerates to two cells on its first tick. The final-commit
+	// validator checks the proposed footprint, not every intermediate cell, so
+	// place the blocker on the proposed destination rather than relying on a
+	// swept-path assumption [04 R-COLL-01 §2][04 R-MOV-01 §4].
+	blockerHandle, err := w.Create(def, 0, world.CellToWorld(2), 0, world.CellToWorld(0))
 	if err != nil {
 		t.Fatalf("create blocker: %v", err)
 	}
@@ -85,7 +89,7 @@ func TestStepUnitBlockedCommitKeepsOrderAndRequest(t *testing.T) {
 	if got, ok := system.Grid.OccupantAt(Cell{X: 0, Z: 0}); !ok || got != int(moverHandle) {
 		t.Fatalf("blocked commit changed mover occupancy: (%d,%t)", got, ok)
 	}
-	if got, ok := system.Grid.OccupantAt(Cell{X: 1, Z: 0}); !ok || got != int(blockerHandle) {
+	if got, ok := system.Grid.OccupantAt(Cell{X: 2, Z: 0}); !ok || got != int(blockerHandle) {
 		t.Fatalf("blocked commit changed blocker occupancy: (%d,%t)", got, ok)
 	}
 	// The commit itself does not cancel or rebind. Once the prior request is no

@@ -61,6 +61,13 @@ type Strategic struct {
 	// Per-type completed counts, keyed by canonical definition name [08].
 	Counts map[string]int32
 
+	// BuildCapable is the owning player's count of live, completed units whose
+	// definition carries a non-empty build-option list. The 30-tick refresh
+	// clears it and increments it once per qualifying unit during its live-pool
+	// scan; the construction task reads it and never recomputes it
+	// [08 R-AI-01 §3][08 R-P0-05 §5].
+	BuildCapable int32
+
 	// Per-type refreshed class vectors [08].
 	ClassVectors map[string]ClassVector
 
@@ -293,6 +300,9 @@ func (s *Strategic) refreshCountsAndCenter(player uint8, w *units.World) {
 			s.Counts[k] = 0
 		}
 	}
+	// The refresh clears the build-capable count before its live-pool scan
+	// [08 R-AI-01 §3][08 R-P0-05 §5].
+	s.BuildCapable = 0
 	var sumX, sumY, sumZ int64
 	var n int64
 	if w != nil {
@@ -345,6 +355,11 @@ func (s *Strategic) refreshCountsAndCenter(player uint8, w *units.World) {
 				s.SingleVectors[ck] = 0
 			}
 			s.Counts[ck]++
+			if s.hasBuildOptions(ck) {
+				// The build-capable count is the construction task's own
+				// per-player gate input [08 R-AI-01 §3].
+				s.BuildCapable++
+			}
 			sumX += int64(u.X)
 			sumY += int64(u.Y)
 			sumZ += int64(u.Z)

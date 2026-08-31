@@ -3603,6 +3603,41 @@ a high bit that unit reclaim and capture treat as terminal. Their producers and
 names belong to doc 04 §3.1 and are not established here. Decider: static trace
 of the pump's writer set for that word.
 
+#### R-WORK-01 §9 — The clamp kill is the only thing that removes an abandoned frame [R-WORK-01] (2026-08-30)
+
+**Established by composition of three traces already in these docs; nothing new
+is traced here.** The composition is written down because the reverse arm's
+last line reads like bookkeeping and is easy to drop, and dropping it produces
+a permanent, silent world defect rather than a visible one.
+
+1. The reverse arm ends `if (newStored >= 1.0f) selfKill(target, target,
+   30000, kind 9)` — the no-corpse, no-explosion path, severity zero
+   ([R-WORK-01 §1]'s listing above, and [05 "Resurrection"]'s prose statement
+   of the same line).
+2. A nanoframe with no builder decays: `GetBuilt` phase 2, on a visit no
+   admitted work step has deferred, applies that arm with a quantum of
+   `−(11 · buildtime / buildcostenergy)` ([04 R-ORD-01 §5]). Nothing else
+   advances an unattended frame, so it walks monotonically to the clamp and
+   stops there.
+3. A frame holds the ground words of its footprint from the allocation call
+   itself, and a factory's state-2 area test runs with self identity 0, so any
+   non-zero word refuses it ([04 R-FAC-02 §5], [04 R-FAC-02 §6]).
+
+Therefore the clamp kill of (1) is the **only** engine event that ever removes
+an abandoned frame from the ground plane. Retail has no push, no stacking, no
+force-placement and no alternative allocation site ([04 R-FAC-02 §6]), so a
+frame that survives its own clamp is an obstruction with no remover: a frame
+left on a factory's exit spot — by the producing factory being destroyed
+mid-product, or by a mobile builder abandoning its site — pins that factory in
+the silent 15-tick state-2 retry for the rest of the battle. The observable is
+a factory with a queue, no progress, and **no resource demand at all**, because
+the demand is raised in state 3 and state 3 is never reached.
+
+Health is not the terminator and must not be treated as one: the reverse arm
+floors health at zero with no `maxdamage` cap ([R-WORK-01 §1]), so the frame
+reaches zero health one or more visits *before* the fraction reaches one, and
+sits there at zero health, alive, until the clamp fires.
+
 #### R-WORK-01 §2 — Build-distance range test and approach radii [R-WORK-01] (2026-08-29)
 
 **Established.** The range test shared by mobile construction, repair and the

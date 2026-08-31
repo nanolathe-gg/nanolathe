@@ -618,21 +618,16 @@ func TestPackHelpers(t *testing.T) {
 	}
 }
 
-func TestRoundNearestEven(t *testing.T) {
-	cases := []struct {
-		in   float64
-		want int32
-	}{
-		{0.5, 0},
-		{1.5, 2},
-		{2.5, 2},
-		{-0.5, 0},
-		{-1.5, -2},
-		{-2.5, -2},
+func TestBearingPortsUseRetailAngleConversion(t *testing.T) {
+	// Port 12 is atan2(X,Z) followed by relative-heading subtraction; port 14
+	// evaluates its two arguments as atan2(first, second) [R-COB-03 §2].
+	if got := RelativeBearing(PackXZ(numeric.FixedFromInt(1), 0), 0); got != 16384 {
+		t.Fatalf("RelativeBearing(+X)=%d want 16384", got)
 	}
-	for _, tc := range cases {
-		if got := roundNearestEven(math.Float64bits(tc.in)); got != tc.want {
-			t.Errorf("roundNearestEven(%v)=%d want %d", tc.in, got, tc.want)
-		}
+	if got := RelativeBearing(PackXZ(0, numeric.FixedFromInt(1)), 16384); got != 49152 {
+		t.Fatalf("RelativeBearing(+Z, heading +X)=%d want 49152", got)
+	}
+	if got := AtanPort(1, 0); got != 16384 {
+		t.Fatalf("AtanPort(+X, 0)=%d want 16384", got)
 	}
 }

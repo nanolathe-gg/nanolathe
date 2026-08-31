@@ -252,6 +252,14 @@ func TestBattleCameraIgnoresWASD(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(100, 100)
 	b := newTestBattle(cat, terrain)
+	// The scroll pass consumes a scaled 30-per-second delta, so a frame has to
+	// cost wall-clock time before it can scroll at all: three back-to-back
+	// viewerStep calls inside the same thirtieth of a second scroll nothing
+	// [07 §10 "Correction — the raw delta is thirtieths of a second"]. Drive a
+	// deterministic host clock and advance it a full unit per frame.
+	millis := &fakeMillisSource{}
+	b.millisSource = millis
+	advance := func() { millis.ms += 34 }
 	b.cam.X = 500
 	b.cam.Z = 500
 	// Place minimal client for viewerStep
@@ -266,6 +274,9 @@ func TestBattleCameraIgnoresWASD(t *testing.T) {
 	cl.Input().Kbd.SetKey(input.KeyS, true)
 	cl.Input().Kbd.SetKey(input.KeyD, true)
 	// Call viewerStep with delta 16ms
+	advance()
+	b.viewerStep(0.016, cl)
+	advance()
 	b.viewerStep(0.016, cl)
 	if b.cam.X != origX || b.cam.Z != origZ {
 		t.Fatalf("WASD should not move camera, got %d,%d want %d,%d", b.cam.X, b.cam.Z, origX, origZ)
@@ -277,6 +288,7 @@ func TestBattleCameraIgnoresWASD(t *testing.T) {
 	b.cam.Z = 500
 	cl2.Input().Mouse.SetPosition(320, 240)
 	cl2.Input().Kbd.SetKey(input.KeyUp, true)
+	advance()
 	b.viewerStep(0.016, cl2)
 	if b.cam.Z == 500 {
 		t.Fatalf("arrow up should move camera")
@@ -289,6 +301,7 @@ func TestBattleCameraIgnoresWASD(t *testing.T) {
 	cl3.SetCamera(b.cam)
 	cl3.Input().Mouse.SetPosition(0, 240) // left edge exact [07 §10] x==0
 	cl3.SetFocused(true)                  // edge scroll is suppressed without window focus [07 §10]
+	advance()
 	b.viewerStep(0.016, cl3)
 	if b.cam.X == 500 {
 		t.Fatalf("edge scroll should move left")

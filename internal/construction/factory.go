@@ -2643,7 +2643,23 @@ func (s *Service) handleGetBuiltOrder(product *units.Unit, node *orders.Node, ti
 					}
 				}
 				special := s.IsSpecialSecondState != nil && s.IsSpecialSecondState(product.Owner)
-				ApplyReverse(product, product, worker, special, s.ModeSelector, bucket)
+				// The reverse arm carries its own terminator: "If the remaining
+				// fraction is clamped to one, the unit kills itself with a
+				// kind-9 30000 packet — the no-corpse, no-explosion path
+				// (severity zero)" [05 "Reverse and deconstruction"], written
+				// out as `if (newStored >= 1.0f) selfKill(target, target,
+				// 30000, kind 9)` in [05 "Two-stage settlement algorithm"]'s
+				// reverse-arm listing. The result was discarded here, so a
+				// nanoframe whose builder went away decayed to zero health and
+				// then stayed alive forever, holding the ground words of its
+				// footprint. One standing on a factory's exit spot fails every
+				// later product's state-2 area test [04 R-FAC-02 §6], which
+				// leaves the factory in the silent 15-tick retry for the rest
+				// of the battle: no progress, and no resource demand at all,
+				// because state 3 is never reached.
+				if ApplyReverse(product, product, worker, special, s.ModeSelector, bucket) {
+					s.killDecayedNanoframe(product)
+				}
 			} else {
 				// TODO(question): retail behavior for malformed products with zero
 				// BuildCostEnergy; stock factory products provide a positive divisor.
@@ -2678,6 +2694,31 @@ func (s *Service) handleGetBuiltOrder(product *units.Unit, node *orders.Node, ti
 	}
 	delete(s.getBuiltLinks, product.Handle)
 	return 5
+}
+
+// killDecayedNanoframe sends the reverse arm's termination packet for a frame
+// whose remaining fraction the decay has just clamped to one: kind-9 damage of
+// exactly 30000, severity zero, no corpse and no explosion
+// [05 "Reverse and deconstruction"][05 C21]. It is the same packet
+// cancel-current sends, minus cancel-current's refund and completion
+// transition — the reverse arm has already paid its own metal back through
+// ApplyReverse, and the completion transition runs only on a remaining
+// fraction of zero, which this is the opposite of.
+//
+// Releasing the placement here is what unblocks whatever the frame was sitting
+// on. The frame is not a completed building, so it keeps no reservation.
+func (s *Service) killDecayedNanoframe(product *units.Unit) {
+	if s == nil || product == nil || !product.Alive {
+		return
+	}
+	s.lastKill = KillInfo{Damage: Kind9Damage, Severity: 0, NoCorpse: true}
+	if s.World != nil && s.World.Unit(product.Handle) != nil {
+		s.World.Destroy(product.Handle, units.DeathKilled)
+	}
+	product.Alive = false
+	s.ReleasePlacement(product.Handle)
+	delete(s.builderLinks, product.Handle)
+	delete(s.getBuiltLinks, product.Handle)
 }
 
 func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {

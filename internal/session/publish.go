@@ -839,32 +839,30 @@ func publishVisibilityView(vis *visibility.Service, local uint8, out *frame.Visi
 	out.CoverageBytes, out.Valid = byteCoverage, true
 }
 
-// publishedMoverMode is the mover mode the two unit passes select on
-// [03 R-RAST-01 §7]: grounded (1) is pass A, and everything else — structures
-// with no mover at all (0) and airborne units (2) — is pass B.
+// publishedMoverMode is the selector the composer's two unit passes split on:
+// the low two bits of the unit record's own flags word — the mover-mode
+// *mirror* of [04 R-MOV-01 §8], not the mover object's copy. Pass A takes the
+// units whose mirror is `1` and pass B, which runs after the nanolathe strip,
+// the projectile pool and the fixed effect pool, takes the rest
+// [03 R-RAST-01 §7].
 //
-// A building-class unit owns no mover in retail ("the allocator constructs one
-// only for `bmcode 1`", [04 R-FAC-02 §5]), so the composer reads 0 for it and
-// paints it in pass B, over every feature, grounded unit and projectile. Our
-// movement system installs a mover record for every unit, buildings included,
-// so `Move.Mode` is 1 for a completed building and 0 only while it is still a
-// nanoframe — which put finished buildings in pass A and made a nanoframe
-// change passes at the moment it completed.
+// Every unit is created with the mirror at `1` (units.CreatedMoverMode), a
+// building included, and only the air setter moves it off `1`. So pass A is
+// ground and sea movers, landed aircraft and every structure — nanoframe or
+// finished — and pass B is airborne aircraft (`2`) plus the attached/parked
+// mode (`0`). A building does not change pass when it completes.
 //
-// The sim-side word is deliberately left alone. Retail has two: the mover
-// object's mode, which is what this pass split reads, and the unit record's
-// flags-word mode mirror, which "every allocation call site in the export
-// passes the literal 1" and which stays 1 for a factory's whole life
-// [04 R-FAC-02 §5]. `Move.Mode` is our single stand-in for both, and the
-// handlers that read it read it as the mirror — `RepairUnit` refuses a target
-// whose mode is not 1 [04 R-ORD-01 §5], which is how a building stays
-// repairable. Narrowing it here gives the painter the mover's word without
-// taking the mirror's meaning away from the handlers.
+// This function previously narrowed the published word to `0` for every
+// building-class definition, on the reading that a structure owns no mover and
+// so must read `0`. That was wrong twice over: the composer never dereferences
+// a mover, and a unit with no mover still has a mirror, which stays at the `1`
+// its spawn wrote. The narrowing put every building and every nanoframe in
+// pass B, where it painted over the construction spray aimed at it — playtest
+// defect PT3-01. See the 2026-08-30 correction under [03 R-RAST-01 §7], which
+// retracts that section's "structures (no mover, mode `0`) … This is the
+// retail order; it is not a bug to fix".
 func publishedMoverMode(u *units.Unit) uint8 {
 	if u == nil {
-		return 0
-	}
-	if u.Def != nil && !u.Def.BMCode {
 		return 0
 	}
 	return u.Move.Mode & 3

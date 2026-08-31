@@ -6613,6 +6613,44 @@ prefers a sane test (the trial footprint's own metal-byte sum) takes a
 sanctioned divergence, since the two differ only in *which* valid trial is
 accepted, never in whether a placement is legal.
 
+#### R-AI-03 §4-A — Which authored key the `surfaceMetal` word is — Established [R-AI-03]
+
+§4 above says the limit's `surfaceMetal` is "the mission's `SurfaceMetal` word
+on the session record" without saying which authored key fills that word. It
+is the **selected schema's** `SurfaceMetal`, not a `[GlobalHeader]` key — the
+same word that seeds every plot cell's metal byte [05 R-PROD-01 §6], which is
+why §1 can say the metal-spot scan scores "at the uniform surface value".
+
+Evidence is the authored corpus of the reference install: across its 275 map
+`.ota` files the key `SurfaceMetal` occurs 635 times and **every** occurrence
+is inside a schema section (`[Schema N]`); none is in `[GlobalHeader]`. The
+count exceeds the file count because a map authors one per schema. A reader
+that takes the word from the OTA's global section therefore yields zero on
+every map in the corpus.
+
+**Why this matters, and the failure it produces.** On a canonical map every
+cell's metal byte is that same schema word `M`, so a valid trial footprint of
+`footX × footZ` cells sums to `M × footX × footZ` — exactly **half** the
+`M × footZ × footX × 2` limit. The inclusive `<= limit` test therefore passes
+for any ordinary site and bites only where indestructible metal-bearing
+features have raised the bytes above the uniform seed across the footprint
+[05 R-FEAT-01 §7]; that is what the limit is for. It follows that the
+sanctioned divergence of §4 — comparing the trial footprint's own metal-byte
+sum instead of retail's stale process accumulator — is only equivalent while
+the limit is built from the *same* word that seeded the cells. Supply zero
+there and the limit is zero while the sum is positive, and the helper rejects
+**every** geometrically valid trial for **every** building: thirty trials
+exhausted, no non-extractor site ever accepted, and a computer player that
+places nothing but metal extractors (those take the exhaustive helper of §3,
+which has no limit test) for the whole battle. This was Nanolathe defect
+PT3-14; the reading corrected here is the one that produced it.
+
+**The selector draw reads the same word.** §2's helper selection compares
+`surfaceMetal < RNG(255)` (signed) for an extractor definition. A zeroed word
+makes that comparison true on 254 of 255 draws, so extractor placement is
+effectively always exhaustive; with the schema value of a stock map (`3` on
+`Ashap Plateau`, for instance) the scatter branch is reachable as authored.
+
 ### R-AI-03 §5 — What the root returns, and the radius — Established [R-AI-03]
 
 On helper success the root converts the cell to a world position and writes

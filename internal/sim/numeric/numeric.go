@@ -83,8 +83,7 @@ func (v Fixed) Clamp(minimum, maximum Fixed) Fixed {
 	return v
 }
 
-// Angle is a full-turn 16-bit angle, 65,536 per circle [04 §5.1]. Conversion is
-// integer-only so it is deterministic across platforms.
+// Angle is a full-turn 16-bit angle, 65,536 per circle [04 §5.1].
 type Angle uint16
 
 func AngleFromRaw(raw uint16) Angle   { return Angle(raw) }

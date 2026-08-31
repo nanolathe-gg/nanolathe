@@ -97,6 +97,14 @@ func (c *Client) collectShadowTris(draw *presentationrender.UnitDraw) []screenTr
 			if !valid {
 				continue
 			}
+			if !facePaints(piece.WorldVertices, pr.VertexIndices, draw.WorldPos, shadowLocalVertex) {
+				// The shadow rerasterizes every face through the same
+				// two-chain filler as the body, so the same span comparison
+				// removes the same back faces [R-RAST-01 §1] step 7. The test
+				// runs on the shadow's own quarter-shear projection, not the
+				// body's: two projections of one face can wind differently.
+				continue
+			}
 			for k := 1; k+1 < n; k++ {
 				indices := [3]int{int(pr.VertexIndices[0]), int(pr.VertexIndices[k]), int(pr.VertexIndices[k+1])}
 				var tri screenTri
