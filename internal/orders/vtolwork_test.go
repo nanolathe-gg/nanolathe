@@ -44,9 +44,13 @@ func vtolWorkFixture() (*Queue, *units.Unit, *units.Unit) {
 		X: numeric.Fixed(70 << 16), Y: numeric.Fixed(40 << 16), Z: numeric.Fixed(90 << 16),
 	}
 	target.Move.Mode = 1 // grounded: VTOL_RepairUnit refuses any other mode
+	// The air feature-reclaim row resolves a feature at its goal on every visit
+	// [04 R-ORD-01 §5], through the terrain the session's economy service
+	// carries. One stock-shaped tree stands on the builder's own cell.
+	tree, _ := retailShapedTree()
 	q := &Queue{binding: &QueueBinding{
 		SimRNG:           rng.Global.Sim,
-		StockpileEconomy: &economy.Service{},
+		StockpileEconomy: &economy.Service{Terrain: reclaimFixtureTerrain([]*content.FeatureDef{tree}, 4, 5)},
 		Lookup: func(h pool.Handle) *units.Unit {
 			switch h {
 			case target.Handle:
@@ -79,7 +83,11 @@ func TestVTOLWorkTwinsDispatchAndReachTheirTerminal(t *testing.T) {
 			t.Fatalf("%s has no handler after every installer ran", name)
 		}
 		q, builder, target := vtolWorkFixture()
-		q.Push(id, Node{Owner: builder.Handle, Target: target.Handle})
+		// The goal is the fixture's feature cell: `VTOL_Reclaim` resolves a
+		// feature at its goal before it looks at anything else, and the other
+		// two twins overwrite the goal from their target [04 R-ORD-01 §5, §7].
+		q.Push(id, Node{Owner: builder.Handle, Target: target.Handle,
+			GoalX: numeric.Fixed(70 << 16), GoalY: numeric.Fixed(40 << 16), GoalZ: numeric.Fixed(90 << 16)})
 		head := q.Primary()[0]
 		if head.DynamicGate != 0 {
 			t.Fatalf("%s: fresh record waits on %#x [04 R-ORD-01 §1]", name, head.DynamicGate)
@@ -205,14 +213,16 @@ func TestVTOLRepairUnitAbandonsOnANullTarget(t *testing.T) {
 // feature reclaim from the ground one: the countdown seed is 30 where the
 // ground row uses 15, so an aircraft takes fifteen more ticks per feature, and
 // the two-segment spray gate moves with it [04 R-ORD-01 §7][05 R-WORK-01 §5].
-// The relationship asserted is the one that survives the missing feature
-// resolver: the work phase spends exactly two per visit, so a seed of 30 costs
-// fifteen visits where the ground seed of 15 costs eight.
+// The relationship asserted is the seed-independent one: the work phase spends
+// exactly two per visit, so a seed of 30 costs fifteen visits where the ground
+// seed of 15 costs eight. The record is entered at phase 3 with the seed
+// already stored, so the assertion is about the countdown alone.
 func TestVTOLReclaimCountdownUsesThirty(t *testing.T) {
 	_, builder, _ := vtolWorkFixture()
 
 	visits := func(seed uint32) int {
-		n := &Node{ID: Lookup("VTOL_Reclaim"), Owner: builder.Handle, Phase: 3, Param1: seed, Deadline: -1}
+		n := &Node{ID: Lookup("VTOL_Reclaim"), Owner: builder.Handle, Phase: 3, Param1: seed, Deadline: -1,
+			GoalX: numeric.Fixed(70 << 16), GoalZ: numeric.Fixed(90 << 16)}
 		count := 0
 		for n.Phase == 3 && count < 200 {
 			code := vtolReclaimHandler(builder, n, 0, uint32(count))

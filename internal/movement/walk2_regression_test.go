@@ -103,6 +103,12 @@ func TestFollowerSpeedHasNoZeroAccelerationShortcut(t *testing.T) {
 	}
 }
 
+// TestGroundRouteAcceptanceGates locks the three acceptance gates of
+// [04 R-PATH-01 §8]. They belong to the GOAL INSTALLER, not to publication:
+// the search's publisher adopts a route verbatim [04 R-PATH-01 §7]
+// [05 R-EGRESS-02]. The arithmetic asserted below is unchanged; only the entry
+// point moved, from installGroundRoute to installGroundGoal, and each case now
+// seeds the points the installer inherits from the previous goal.
 func TestGroundRouteAcceptanceGates(t *testing.T) {
 	unit := &units.Unit{X: 0, Z: 0}
 	goal := path.PointGoal(path.Cell{X: 20, Z: 0}, 0)
@@ -110,8 +116,8 @@ func TestGroundRouteAcceptanceGates(t *testing.T) {
 
 	t.Run("terminal cell", func(t *testing.T) {
 		route := &Route{LastRequestTick: 80}
-		installGroundRoute(route, unit, goal, goalX, 0, true, true,
-			[]Point{{X: 0}, {X: 100}, {X: 320}}, 7, 100)
+		route.PublishAtRevision([]Point{{X: 0}, {X: 100}, {X: 320}}, 7)
+		installGroundGoal(route, unit, goal, goalX, 0, true, true, 7, 100)
 		if !route.Active || route.WantsRepath || route.Count != 3 || route.LastRequestTick != 0 {
 			t.Fatalf("terminal acceptance route=%+v", route)
 		}
@@ -119,8 +125,8 @@ func TestGroundRouteAcceptanceGates(t *testing.T) {
 
 	t.Run("strictly inside half", func(t *testing.T) {
 		route := &Route{}
-		installGroundRoute(route, unit, goal, goalX, 0, true, true,
-			[]Point{{X: 0}, {X: 100}, {X: 200}}, 7, 1)
+		route.PublishAtRevision([]Point{{X: 0}, {X: 100}, {X: 200}}, 7)
+		installGroundGoal(route, unit, goal, goalX, 0, true, true, 7, 1)
 		if !route.Active || !route.WantsRepath || route.Count != 3 {
 			t.Fatalf("half-distance acceptance route=%+v", route)
 		}
@@ -128,8 +134,8 @@ func TestGroundRouteAcceptanceGates(t *testing.T) {
 
 	t.Run("half equality falls back", func(t *testing.T) {
 		route := &Route{}
-		installGroundRoute(route, unit, goal, goalX, 0, true, true,
-			[]Point{{X: 0}, {X: 100}, {X: 160}}, 7, 1)
+		route.PublishAtRevision([]Point{{X: 0}, {X: 100}, {X: 160}}, 7)
+		installGroundGoal(route, unit, goal, goalX, 0, true, true, 7, 1)
 		if !route.Active || !route.WantsRepath || route.Count != 2 ||
 			route.Points[0] != (Point{X: 0, Z: 0}) || route.Points[1] != (Point{X: 320, Z: 0}) {
 			t.Fatalf("synthetic route=%+v", route)
@@ -138,8 +144,8 @@ func TestGroundRouteAcceptanceGates(t *testing.T) {
 
 	t.Run("short route falls back", func(t *testing.T) {
 		route := &Route{}
-		installGroundRoute(route, unit, goal, goalX, 0, true, true,
-			[]Point{{X: 0}, {X: 300}}, 7, 1)
+		route.PublishAtRevision([]Point{{X: 0}, {X: 300}}, 7)
+		installGroundGoal(route, unit, goal, goalX, 0, true, true, 7, 1)
 		if route.Count != 2 || route.Points[1] != (Point{X: 320}) || !route.WantsRepath {
 			t.Fatalf("short synthetic route=%+v", route)
 		}
@@ -152,8 +158,8 @@ func TestGroundRouteAcceptanceGates(t *testing.T) {
 		if !ok || goalX != numeric.Fixed(360<<16) || goalZ != numeric.Fixed(136<<16) {
 			t.Fatalf("rectangle goal point=(%d,%d,%v) want middle X 360 and far Z 136", goalX, goalZ, ok)
 		}
-		installGroundRoute(route, unit, rect, goalX, goalZ, true, true,
-			[]Point{{X: 0}, {X: 100}, {X: 160}}, 7, 1)
+		route.PublishAtRevision([]Point{{X: 0}, {X: 100}, {X: 160}}, 7)
+		installGroundGoal(route, unit, rect, goalX, goalZ, true, true, 7, 1)
 		if !route.Active || !route.WantsRepath || route.Count != 2 || route.Points[1] != (Point{X: 360, Z: 136}) {
 			t.Fatalf("rectangle synthetic route=%+v", route)
 		}

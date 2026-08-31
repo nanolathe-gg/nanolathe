@@ -251,7 +251,8 @@ func (c *Client) drawCommittedFrame(cur *frame.Frame, ok bool) {
 	// TODO(T23): strip slot 6 has no published live producer.
 	c.drawProjectiles(cur)
 	c.drawEffects(cur)
-	// Pass B: structures and airborne units, at the end of strip 7 — after the
+	// Pass B: the units whose mode mirror is not 1 — airborne aircraft,
+	// attached/parked cargo, save-installed — at the end of strip 7, after the
 	// projectile pool and the fixed effect pool [03 R-RAST-01 §7][03 §1].
 	c.drawWorldPassB(cur, ok)
 	// TODO(T23): strip slot 7 and auxiliary traversal have no published live
@@ -387,12 +388,21 @@ func (c *Client) drawWorldPass(cur *frame.Frame, ok bool) {
 }
 
 // drawWorldPassB is the second unit pass: every bucketed unit whose committed
-// mover mode is not grounded — structures, which have no mover at all, and
-// airborne units. It runs after the projectile and effect strips, so a
-// structure paints over every feature, every grounded unit and every
-// projectile whatever its Z row, and an aircraft paints over structures in
-// earlier rows and under structures in later ones. That is the retail order
-// and not a defect to correct [03 R-RAST-01 §7][03 §1].
+// mode mirror is not 1 — airborne aircraft (2), units attached to a carrier or
+// parked on a pad (0), and the save-installed mode (3). It runs after the
+// projectile and effect strips, so those units paint over every feature, every
+// mode-1 unit and every projectile whatever their Z row
+// [03 R-RAST-01 §7][03 §1].
+//
+// Structures are NOT in this pass. That reading was retracted on 2026-08-30:
+// the pass predicate is the unit record's own flags-word mode mirror, never a
+// mover, and a structure's mirror is 1 for its whole life — so a structure is
+// painted in Z-row order among the grounded units of pass A, and does not
+// change pass when it completes. The sentence that used to close this comment,
+// "That is the retail order and not a defect to correct", rested on the
+// inverted partition and does not survive it; the nanolathe spray of strip 6,
+// drawn between the two passes, therefore paints over the unit being built.
+// See the 2026-08-30 correction under [03 R-RAST-01 §7].
 //
 // Unlike pass A this walks the whole bucket array, not the clipped window: a
 // unit's only admission test was the bucket build's row bound.

@@ -150,6 +150,7 @@ func (s *Service) crt() *rng.CRT {
 // burning/sinking and avoids double Tick when both phases call [P0-I06].
 func (s *Service) TickMotion(tick uint32) {
 	_ = tick
+	s.syncInstancesToGrid()
 	s.reproduceTick()
 }
 
@@ -691,6 +692,267 @@ func (s *Service) PopulateFromTerrain() int {
 		}
 	}
 	return n
+}
+
+// ---------------------------------------------------------------------------
+// The feature grid, reachable without this service
+// ---------------------------------------------------------------------------
+//
+// Retail keeps two structures for one feature: the terrain's feature grid — the
+// authoritative record of what stands on a cell, which the stamp writes and the
+// transition rewrites [05 R-FEAT-01 §3, §5] — and the animation-instance side
+// that carries the burning, sinking and reclaim-animation state, linked to the
+// grid by the anchor cell's instance-attached bit [05 R-FEAT-01 §15]. Nanolathe
+// splits them the same way: `world.Terrain.Plot` is the grid and this service's
+// instance map is the animation side.
+//
+// The feature-reclaim executor lives in internal/orders, which reaches the
+// terrain through its queue's economy service but has no reference to this
+// service. The two functions below are therefore the grid half of the resolver
+// and the transition, taking a terrain rather than a receiver, and
+// syncInstancesToGrid is the animation-side half that follows them.
+
+// FeatureAt is the world-position feature resolver of [05 R-ECO-02 §2]. Given a
+// 16.16 world position it floors to the sixteen-unit attribute cell, hops a
+// fringe cell to its anchor through the two stored signed offset bytes, and
+// reports the ANCHOR cell together with the definition its index binds to.
+// Off-map, an empty cell, a void threshold and a fringe whose anchor carries no
+// live index all report not found — retail's NONE, which the feature-reclaim
+// executor turns into `Reclamation failed` [04 R-ORD-01 §5].
+//
+// The shifts are arithmetic on signed words, so a position west or north of the
+// map floors to a negative cell and reports off-map; world.WorldToCell is that
+// floor [03 §2.1].
+func FeatureAt(t *world.Terrain, x, z numeric.Fixed) (def *content.FeatureDef, cx, cz int, ok bool) {
+	if t == nil || t.CellW <= 0 || t.CellH <= 0 {
+		return nil, 0, 0, false
+	}
+	cx = int(world.WorldToCell(x))
+	cz = int(world.WorldToCell(z))
+	cell := t.PlotAt(int32(cx), int32(cz))
+	if cell == nil {
+		return nil, 0, 0, false
+	}
+	if cell.IsFringe() {
+		// The hop uses the stored signed offsets exactly as the stamp wrote
+		// them; retail does not re-test the hopped cell for off-map, but a Go
+		// index out of range is a fault rather than a stale read, so PlotAt's
+		// bounds test stands in for it [05 R-ECO-02 §2].
+		cx += int(cell.AnchorDXSigned())
+		cz += int(cell.AnchorDZSigned())
+		cell = t.PlotAt(int32(cx), int32(cz))
+		if cell == nil {
+			return nil, 0, 0, false
+		}
+	}
+	if !cell.IsRealFeature() {
+		return nil, 0, 0, false
+	}
+	def, bound := t.FeatureDefAt(cell.Feature())
+	if !bound || def == nil {
+		return nil, 0, 0, false
+	}
+	return def, cx, cz, true
+}
+
+// ReclaimTransition is the grid half of the feature-reclaim payout
+// [05 R-WORK-01 §5]: it reports the definition's WHOLE metal and energy pools —
+// the payout is a one-time completion event, never a per-tick drip — and
+// replaces the feature with its `featurereclamate` successor, or removes it
+// when the definition names none [05 "Removal and successor replacement"].
+// The caller owns the credit; this owns the grid.
+//
+// A definition that is not reclaimable, or is indestructible, pays nothing and
+// is left standing, which is the executor's silent abandon arm.
+//
+// TODO(T25): [05 R-FEAT-01 §15] adds one more refusal — a SPRITE
+// (filename-bearing) definition whose anchor cell carries the instance-attached
+// bit, i.e. one that is burning or already playing a death or reclaim
+// animation. This build never writes that bit: spawnFeatureAt clears the
+// anchor's flag byte and ignition does not set it, so the refusal cannot be
+// tested from the grid and is not applied. Placeholder: the transition proceeds,
+// which means a burning tree can be reclaimed through this entry; Service.Reclaim,
+// which can see the live instance, still refuses one. Decider: give the anchor's
+// flag byte the instance-attached bit at the three sites §15 names (the stamp
+// for 3D definitions; ignition and the die/reclaim transitions for sprite ones),
+// then test it here.
+func ReclaimTransition(t *world.Terrain, cx, cz int) (metal, energy float32, ok bool) {
+	if t == nil {
+		return 0, 0, false
+	}
+	cell := t.PlotAt(int32(cx), int32(cz))
+	if cell == nil || !cell.IsRealFeature() {
+		return 0, 0, false
+	}
+	def, bound := t.FeatureDefAt(cell.Feature())
+	if !bound || def == nil {
+		return 0, 0, false
+	}
+	if !def.Reclaimable || def.Indestructible {
+		return 0, 0, false
+	}
+	// I2 allowlist: the pools cross into the economy ledger as float32
+	// contributions [05 "Feature reclaim"][05 R-ECO-01 §2].
+	metal = float32(def.Metal)
+	energy = float32(def.Energy)
+	clearFeatureRect(t, cx, cz, def)
+	successor := def.FeatureReclamateDef
+	placed := false
+	if successor != nil {
+		placed = stampFeatureDef(t, cx, cz, successor)
+	}
+	// One revision bump for the whole replacement: a blocking successor bumps
+	// inside the stamp, so this covers only the case where the blocking
+	// footprint went away [05 "Removal and successor replacement"].
+	if def.Blocking && (!placed || successor == nil || !successor.Blocking) {
+		t.BumpStaticObstacleRevision()
+	}
+	return metal, energy, true
+}
+
+// clearFeatureRect returns a stamped footprint to the free sentinel. It is the
+// grid-only twin of clearFootprintNoRevision, which additionally releases this
+// service's instances.
+func clearFeatureRect(t *world.Terrain, cx, cz int, def *content.FeatureDef) {
+	if t == nil {
+		return
+	}
+	fx, fz := 1, 1
+	if def != nil {
+		if def.FootprintX > 0 {
+			fx = int(def.FootprintX)
+		}
+		if def.FootprintZ > 0 {
+			fz = int(def.FootprintZ)
+		}
+	}
+	for dz := 0; dz < fz; dz++ {
+		for dx := 0; dx < fx; dx++ {
+			cell := t.PlotAt(int32(cx+dx), int32(cz+dz))
+			if cell == nil {
+				continue
+			}
+			cell.SetFeature(world.PlotFeatureNone) // free sentinel [GAP T14]
+			cell.SetFlagByte(0)
+			cell.SetAnchor(0, 0)
+		}
+	}
+}
+
+// stampFeatureDef writes a definition's footprint rectangle at an anchor cell,
+// binding the definition into the terrain's own record list when the map did
+// not author it — the same admission spawnFeatureAt performs, so a successor
+// the map never names can still be stamped [05 R-FEAT-01 §2].
+func stampFeatureDef(t *world.Terrain, cx, cz int, def *content.FeatureDef) bool {
+	if t == nil || def == nil {
+		return false
+	}
+	idx := featureIndexIn(t, def)
+	if idx == world.PlotFeatureNone {
+		if len(t.FeatureDefs) >= FeatureCatalogLimit {
+			return false // catalog pool 0x100 silent fail [P1-10][P1-15]
+		}
+		t.FeatureDefs = append(t.FeatureDefs, def)
+		idx = uint16(len(t.FeatureDefs) - 1)
+	}
+	footX, footZ := def.FootprintX, def.FootprintZ
+	if footX <= 0 {
+		footX = 1
+	}
+	if footZ <= 0 {
+		footZ = 1
+	}
+	if err := t.StampFeatureRect(int32(cx), int32(cz), idx, footX, footZ); err != nil {
+		return false
+	}
+	if def.Blocking {
+		t.BumpStaticObstacleRevision()
+	}
+	return true
+}
+
+func featureIndexIn(t *world.Terrain, def *content.FeatureDef) uint16 {
+	if t == nil || def == nil {
+		return world.PlotFeatureNone
+	}
+	for i, d := range t.FeatureDefs {
+		if d == def {
+			return uint16(i)
+		}
+	}
+	for i, d := range t.FeatureDefs {
+		if d != nil && d.CanonicalKey == def.CanonicalKey {
+			return uint16(i)
+		}
+	}
+	return world.PlotFeatureNone
+}
+
+// syncInstancesToGrid is the animation-side half of a grid transition performed
+// by a caller that holds the terrain but not this service — the feature-reclaim
+// executor of [04 R-ORD-01 §5] phase 5, and the resurrection grid removal. The
+// grid is authoritative for what stands on a cell [05 R-FEAT-01 §3, §5]; an
+// instance whose anchor no longer carries its definition is a stale animation
+// record, and one whose anchor now carries a DIFFERENT definition is the
+// successor that transition stamped. It runs at the head of the feature phase,
+// after the tick's order and construction work, so a reclaim completed this
+// tick is gone from the same tick's published frame.
+//
+// The walk is over sorted instance keys, so it is deterministic (I1), and it is
+// idempotent: with no grid transition since the last visit it changes nothing.
+func (s *Service) syncInstancesToGrid() {
+	if s == nil || s.Terrain == nil || s.Terrain.CellW <= 0 {
+		return
+	}
+	w := int(s.Terrain.CellW)
+	for _, idx := range s.sortedInstanceKeys() {
+		inst := s.instances[idx]
+		if inst == nil || inst.Def == nil {
+			delete(s.instances, idx)
+			continue
+		}
+		cx, cz := idx%w, idx/w
+		cell := s.Terrain.PlotAt(int32(cx), int32(cz))
+		if cell == nil || !cell.IsRealFeature() {
+			delete(s.instances, idx)
+			continue
+		}
+		def, bound := s.Terrain.FeatureDefAt(cell.Feature())
+		if !bound || def == nil {
+			delete(s.instances, idx)
+			continue
+		}
+		if def == inst.Def || def.CanonicalKey == inst.Def.CanonicalKey {
+			continue
+		}
+		s.instances[idx] = s.newInstanceAt(cx, cz, def)
+	}
+}
+
+// newInstanceAt builds the animation record for a definition already stamped on
+// the grid. It is the instance half of spawnFeatureAt, without the stamp.
+func (s *Service) newInstanceAt(cx, cz int, def *content.FeatureDef) *Instance {
+	footX, footZ := def.FootprintX, def.FootprintZ
+	if footX <= 0 {
+		footX = 1
+	}
+	if footZ <= 0 {
+		footZ = 1
+	}
+	inst := &Instance{
+		Def:        def,
+		Terrain:    s.Terrain,
+		CX:         cx,
+		CZ:         cz,
+		MaxHealth:  def.Damage,
+		Health:     def.Damage,
+		FootprintX: footX,
+		FootprintZ: footZ,
+	}
+	inst.Y = s.Terrain.CoarseHeightAt(int32(cx), int32(cz))
+	inst.X = world.CellToWorld(int32(cx)).Add(numeric.Fixed(int64(footX) * 1048576 / 2))
+	inst.Z = world.CellToWorld(int32(cz)).Add(numeric.Fixed(int64(footZ) * 1048576 / 2))
+	return inst
 }
 
 // Cursor returns the current global cursor value for tests [06 §13.1].

@@ -5,6 +5,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -125,8 +126,13 @@ func TestUnitReclaimCadenceAndFatalRefundCleanup(t *testing.T) {
 			t.Errorf("extra death cause=%d want reclaimed", cause)
 		}
 	}
-	// Eight admitted visits are required: 2,4,...,16 exceeds the 14 gate.
-	reclaimVisits(s, builder, node, 0, 2, 4, 6, 8, 10, 12, 14)
+	// Nine admitted visits are required. [05 R-WORK-01 §4] tests the counter
+	// BEFORE raising it, so the pre-check values are 0, 2, ... 16 and the pulse
+	// fires on the visit that sees 16 — the ninth, at tick 16, "eight
+	// qualifying visits = sixteen ticks" after the setup visit. Corrected with
+	// the handler (PT3-05): the old ordering raised the counter first and fired
+	// one visit early.
+	reclaimVisits(s, builder, node, 0, 2, 4, 6, 8, 10, 12, 14, 16)
 	// Signed overkill: the fatal pulse's signed health remainder survives
 	// until severity and death callbacks finish — no clamp at zero
 	// [04 §5.1] Killed severity contract (UNIT-05).
@@ -157,3 +163,58 @@ func TestUnitReclaimCadenceAndFatalRefundCleanup(t *testing.T) {
 		t.Fatalf("death observers duplicated at finalization primary=%d extra=%d", deaths, extras)
 	}
 }
+
+// TestUnitReclaimRefusesACommanderAndAnAircraft locks the two target clauses of
+// the eligibility predicate [05 R-WORK-01 §4]. Before PT3-05 neither was
+// evaluated, so a construction unit ordered onto a commander (or onto anything
+// airborne) started reclaiming it. There is no separate capture-immunity bit:
+// the predicate reads the same `cancapture` key the capture executor rejects.
+func TestUnitReclaimRefusesACommanderAndAnAircraft(t *testing.T) {
+	t.Run("cancapture target", func(t *testing.T) {
+		s, builder, target, _ := reclaimFixture(t, 100, 10)
+		target.Def.CanCapture = true // a commander
+		s.StepUnit(TickContext{Tick: 0, World: s.World, Economy: s.Economy, Catalog: s.Catalog}, builder.Handle)
+		if orders.QueueForUnit(builder).LenPrimary() != 0 {
+			t.Fatalf("a cancapture target was admitted for reclaim")
+		}
+		if target.Health != 100 {
+			t.Fatalf("a cancapture target lost health: %d", target.Health)
+		}
+	})
+	t.Run("airborne target", func(t *testing.T) {
+		s, builder, target, _ := reclaimFixture(t, 100, 10)
+		target.Move.Mode = 2 // airborne [04 R-MOV-01 §8]
+		s.StepUnit(TickContext{Tick: 0, World: s.World, Economy: s.Economy, Catalog: s.Catalog}, builder.Handle)
+		if orders.QueueForUnit(builder).LenPrimary() != 0 {
+			t.Fatalf("an airborne target was admitted for reclaim")
+		}
+	})
+	t.Run("grounded ordinary target stays admitted", func(t *testing.T) {
+		s, builder, target, _ := reclaimFixture(t, 100, 10)
+		target.Move.Mode = 1
+		s.StepUnit(TickContext{Tick: 0, World: s.World, Economy: s.Economy, Catalog: s.Catalog}, builder.Handle)
+		if orders.QueueForUnit(builder).LenPrimary() != 1 {
+			t.Fatalf("an ordinary grounded target was refused")
+		}
+	})
+}
+
+// TestUnitReclaimEmitsOneSegmentPerVisit locks the presentation cadence §4
+// separates from the damage gate: one nano segment per qualifying work visit,
+// not one per bite. Before PT3-05 the emission sat behind the pulse gate, so
+// seven of every eight visits drew nothing.
+func TestUnitReclaimEmitsOneSegmentPerVisit(t *testing.T) {
+	s, builder, target, node := reclaimFixture(t, 100, 10)
+	target.Move.Mode = 1
+	sink := &countingNanoSink{}
+	s.Presentation = sink
+	bindConstructionFixture(builder, trivialModel(1, nil), true)
+	reclaimVisits(s, builder, node, 0, 2, 4, 6)
+	if sink.count != 4 {
+		t.Fatalf("four qualifying visits emitted %d nano segments, want 4 [05 R-WORK-01 §4]", sink.count)
+	}
+}
+
+type countingNanoSink struct{ count int }
+
+func (c *countingNanoSink) EmitNanolathe(frame.Event) bool { c.count++; return true }

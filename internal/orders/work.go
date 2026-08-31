@@ -56,9 +56,12 @@ import (
 	"fmt"
 
 	"github.com/nanolathe/nanolathe/internal/combat"
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/features"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 // Gate bits the work rows arm, named once [04 R-ORD-01 §0][04 R-ORD-01 §6].
@@ -98,6 +101,14 @@ func workStatus(u *units.Unit, kind uint8, text string) {
 	if q := QueueForUnit(u); q != nil {
 		q.recordDiagnostic(fmt.Sprintf("orders: status %d %q", kind, text))
 	}
+}
+
+// NotifyStatus is the exported form of workStatus, for the two work rows whose
+// bodies live outside this package: the mobile-build row, driven from
+// internal/construction and from the session's walk boundary. It carries the
+// same placeholder contract as workStatus above [04 R-ORD-01 §1].
+func NotifyStatus(u *units.Unit, kind uint8, text string) {
+	workStatus(u, kind, text)
 }
 
 // hasMover reports whether the unit owns a mover reference — the "mover
@@ -705,6 +716,15 @@ func assistApproachHalf(footX, footZ int32) int32 {
 	return int32(isqrt64(256*r)) / 2 // 16·sqrt(r) = sqrt(256r); the /2 is signed
 }
 
+// AssistApproachHalf is the exported form of the term above. internal/movement
+// needs it to build the annulus payload `HelpBuild` phase 0 installs — outer
+// `builddistance + half`, inner `half` [04 R-ORD-01 §5] — because this package
+// carries no goal payloads of its own (the installer TODO(T25) in the file
+// header).
+func AssistApproachHalf(footX, footZ int32) int32 {
+	return assistApproachHalf(footX, footZ)
+}
+
 // helpBuildHandler is the build-assist executor.
 //
 // Row: target null -> status 7 `Construction terminated`, abandon (8). Phase 0:
@@ -936,6 +956,92 @@ func captureHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 // Reclaim (feature) [04 R-ORD-01 §5][05 R-WORK-01 §5]
 // ---------------------------------------------------------------------------
 
+// queueEconomy is the concrete economy service behind the queue binding's
+// narrow stockpile interface. The binding declares only the bucket accessor the
+// stockpile handler needs; the feature-reclaim payout needs two more things
+// that live on the same session-owned object — the terrain, which carries the
+// feature grid [05 R-ECO-02 §2], and the unconditional production credit of
+// [05 R-WORK-01 §5]. A binding built with a different implementation reports
+// nothing and the executor abandons rather than half-completing.
+func queueEconomy(q *Queue) *economy.Service {
+	if q == nil {
+		return nil
+	}
+	svc, _ := q.StockpileEconomy.(*economy.Service)
+	return svc
+}
+
+func queueTerrain(q *Queue) *world.Terrain {
+	if svc := queueEconomy(q); svc != nil {
+		return svc.Terrain
+	}
+	return nil
+}
+
+// featureAtGoal is the per-visit feature lookup every `Reclaim`, `VTOL_Reclaim`
+// and `Resurrect` visit opens with [04 R-ORD-01 §5]: the record's goal position
+// resolved through the feature grid to an anchor cell and a definition
+// [05 R-ECO-02 §2].
+func featureAtGoal(u *units.Unit, n *Node) (def *content.FeatureDef, cx, cz int, ok bool) {
+	if u == nil || n == nil {
+		return nil, 0, 0, false
+	}
+	t := queueTerrain(QueueForUnit(u))
+	if t == nil {
+		return nil, 0, 0, false
+	}
+	return features.FeatureAt(t, n.GoalX, n.GoalZ)
+}
+
+// featureBoxCentre is the world centre of a feature's footprint rectangle —
+// the point the rectangle goal and the spray target are built around
+// [04 R-ORD-01 §5]. A footprint cell spans sixteen world units, so half a
+// footprint is `foot * 16 * 65536 / 2` in 16.16.
+func featureBoxCentre(cx, cz int, def *content.FeatureDef) (x, z numeric.Fixed) {
+	footX, footZ := int32(1), int32(1)
+	if def != nil {
+		if def.FootprintX > 0 {
+			footX = def.FootprintX
+		}
+		if def.FootprintZ > 0 {
+			footZ = def.FootprintZ
+		}
+	}
+	x = world.CellToWorld(int32(cx)).Add(numeric.Fixed(int64(footX) * 1048576 / 2))
+	z = world.CellToWorld(int32(cz)).Add(numeric.Fixed(int64(footZ) * 1048576 / 2))
+	return x, z
+}
+
+// featureWork is the reclaim countdown seed `trunc(k + (metal + energy) / 2)`
+// [05 R-WORK-01 §5]. `k` is fifteen for the ground row and thirty for the air
+// twin [04 R-ORD-01 §5, §7]; nothing else differs. Retail forms the sum,
+// multiplies it by a stored -0.5f, subtracts that from k, and truncates the
+// WHOLE expression toward zero (I3) — the halving is on the sum, and the
+// truncation is not. A feature with empty pools still costs the fixed k.
+//
+// The equivalent integer form doubles the scale before dividing, so the single
+// truncation lands in the same place: halving the pools first would round a
+// negative authored pool the other way (`15 + (-3)/2` is 14, where the retail
+// expression's 13.5 truncates to 13). Keeping it integer also keeps the
+// countdown out of floating point, which I2 does not license here.
+func featureWork(def *content.FeatureDef, k int32) int32 {
+	if def == nil {
+		return k
+	}
+	return (2*k + def.Metal + def.Energy) / 2 // Go's / truncates toward zero
+}
+
+// randBelow is the bounded simulation draw [01 §7.1]: a bound below two returns
+// zero WITHOUT advancing the seed, which the stream helper already enforces.
+// A queue with no simulation stream bound takes no draw at all — the fixtures
+// that omit it are the ones with no determinism to preserve.
+func (q *Queue) randBelow(bound uint32) uint32 {
+	if q == nil || q.simForJitter() == nil {
+		return 0
+	}
+	return q.simForJitter().Uint32n(bound)
+}
+
 // reclaimHandler is the feature-reclaim executor. Its countdown lives on
 // the order record, is seeded from the feature definition's energy and metal
 // pools, and is decremented by a fixed two per visit, so the reclaimer's
@@ -952,33 +1058,84 @@ func captureHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 // p1 -= 2; p1 > 0 -> (p1 > 15 -> two spray segments) hold; p1 <= 0 -> advance.
 // Phase 5: finish the reclaim, complete. Other: cancel-all.
 //
-// TODO(T25): the feature resolver of [05 R-ECO-02 §2] needs the plot grid, and
-// the queue binding carries no terrain or feature service. Placeholder: the
-// per-visit feature lookup is skipped rather than answered "none" — answering
-// "none" would abandon every reclaim a player issues, a failure retail does not
-// produce. Two consequences are recorded rather than invented: phase 1 cannot
-// seed p1 from the feature's pools and cannot take the one simulation draw the
-// row makes there (a draw-count divergence, I4), and phase 5 cannot credit the
-// pools or remove the feature (economy.Service.CreditFeatureReclaim is the
-// credit half and is reachable; the feature half is not).
+// Correction (PT3-05). This body used to skip the per-visit feature lookup
+// entirely, on the reading that the resolver "needs the plot grid, and the
+// queue binding carries no terrain or feature service". The consequence was
+// that a player could not reclaim anything: p1 was never seeded, so phase 3
+// read a countdown of zero, fell straight through phases 4 and 5, and completed
+// the order having credited nothing and removed nothing. The premise was wrong
+// on both halves. The grid is reachable — the queue binding's economy service
+// is the session's, and it carries the terrain for tidal strength already
+// [05 "Tidal generation"] — and the transition is a grid operation, not this
+// package's to invent: internal/features owns it as FeatureAt and
+// ReclaimTransition, taking a terrain rather than a service receiver, and
+// reconciles its own animation-instance map to the grid in the same tick's
+// feature phase.
+//
+// The payout itself is [05 R-WORK-01 §5]'s: the definition's WHOLE energy and
+// metal values are added to the builder's production accumulators, neither
+// passing through an admission helper, and the feature is replaced by its
+// `featurereclamate` successor or removed. It is a one-time completion event,
+// not a per-tick drip.
 func reclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	if u == nil || n == nil {
 		return 7
+	}
+	def, cx, cz, found := featureAtGoal(u, n)
+	if !found {
+		workStatus(u, statusCant, "Reclamation failed")
+		return 8 // abandon
+	}
+	if !def.Reclaimable {
+		return 8 // abandon, silently
 	}
 	switch n.Phase {
 	case 0:
 		if !hasMover(u) || u.Def == nil || !u.Def.CanReclamate {
 			return 7 // cancel-all
 		}
-		installWorkGoal(u, n, n.GoalX, n.GoalY, n.GoalZ)
+		bx, bz := featureBoxCentre(cx, cz, def)
+		installWorkGoal(u, n, bx, n.GoalY, bz)
+		if inBuildRange(u, bx, bz, def.FootprintX, def.FootprintZ) {
+			// In reach the gate is left clear and the pump cascades into phase
+			// 1 in this same pass: retail's follower raises arrival on its next
+			// service for a unit already at its goal [04 §10 "The follower's
+			// per-tick service"]. This build binds an arrival handle only for
+			// the move-family descriptors (the file header's goal-installer
+			// TODO(T25)), so arming 0xE0 here parked every reclaim a player
+			// issued from inside nanolathe range on a bit nothing can raise —
+			// half of PT3-05, and the same defect the assist row carried.
+			return 1
+		}
+		// TODO(T25): out of reach the row installs its rectangle goal, arms
+		// 0xE0 and advances, and phase 1 waits on arrival. Nothing in this
+		// build approaches for a work descriptor (no arrival handle, and
+		// internal/session activates movement only for the move-family names),
+		// so advancing here would run the whole reclaim from wherever the
+		// builder happens to stand. Placeholder: the record arms the row's gate
+		// AND a plain thirty-tick re-poll — no random draw, so no stream
+		// divergence (I4) — and HOLDS at phase 0, re-testing reach on every
+		// wake. The order therefore never reclaims out of range and never
+		// permanently jams the head; it starts the moment the builder is within
+		// `builddistance` of the feature by any other means. Decider: bind an
+		// arrival handle for the work descriptors, then restore the row's
+		// advance.
 		n.DynamicGate = gateMoveOutcomes
-		return 1
+		n.MoveState = MoveEnRoute
+		return deadlineHold(n, tick, 30)
 	case 1:
 		if satisfied&gateNoRoute != 0 {
 			return 8 // abandon
 		}
-		// p1 = trunc(15 + (energy + metal)/2) from the feature definition; see
-		// the resolver TODO(T25) above for why the pools are not readable here.
+		n.Param1 = uint32(featureWork(def, 15))
+		// The row's one simulation draw, bounded by the feature definition's
+		// height byte, contributing only the vertical component of the spray
+		// target [05 R-WORK-01 §5]. The spray is not emitted from this package
+		// (the file header), but the draw is behavior: skipping it would shift
+		// every later draw in the tick (I4).
+		if q := QueueForUnit(u); q != nil {
+			_ = q.randBelow(uint32(def.Height))
+		}
 		EmitStartBuilding(u, n)
 		return 1
 	case 2:
@@ -995,10 +1152,43 @@ func reclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 		}
 		return code
 	case 5:
+		finishFeatureReclaim(u, cx, cz)
 		return 5 // complete
 	default:
 		return 7 // cancel-all
 	}
+}
+
+// finishFeatureReclaim is phase 5's payout, shared by the ground and air rows
+// [05 R-WORK-01 §5]. The credit is unconditional — it lands in the production
+// accumulators the settlement pass reads, with no admission helper between —
+// and the grid transition is what removes the feature, so the two cannot come
+// apart and pay twice.
+//
+// The order is the payout helper's: the pools are read and the grid rewritten
+// by ReclaimTransition first, and only a transition that actually happened
+// credits anything.
+//
+// TODO(T25): [05 R-WORK-01 §5] step 4 applies the special-player scaling to
+// each addition separately (selector 0 halves, selector 1 takes seven tenths)
+// [05 R-ECO-01 §3]. economy.Service.CreditFeatureReclaim adds both
+// contributions with a NIL player record, which takes the undiscounted path for
+// every owner, so a computer player reclaiming on easy or medium is credited in
+// full where retail would scale it. Placeholder: the credit is made through
+// that helper unchanged, because the discount is the helper's to apply — every
+// other member of the family applies it inside addContribution — and this unit
+// does not own internal/economy. Reported for correction there.
+func finishFeatureReclaim(u *units.Unit, cx, cz int) {
+	q := QueueForUnit(u)
+	econ := queueEconomy(q)
+	if econ == nil {
+		return
+	}
+	metal, energy, ok := features.ReclaimTransition(econ.Terrain, cx, cz)
+	if !ok {
+		return
+	}
+	econ.CreditFeatureReclaim(u.Handle, metal, energy)
 }
 
 // ---------------------------------------------------------------------------

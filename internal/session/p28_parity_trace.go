@@ -439,7 +439,7 @@ func (s *Session) ParityAuthoritativeHash() (string, error) {
 				w("movement:%d:%d:%d:%d:%d:%d:%d|", m.Slot, m.X, m.Z, m.Heading, m.Speed, m.VelocityX, m.VelocityZ)
 				w("route-meta:%d:%t:%t:%d:%d|", m.Slot, m.CurrentActive, m.CurrentDirty, m.CurrentStatus, m.CurrentStaticRevision)
 				if m.PathFailure != nil {
-					w("path-failure:%d:%d:%d:%d:%d|", m.Slot, m.PathFailure.Status, m.PathFailure.Tick, m.PathFailure.Retries, m.PathFailure.NextRetry)
+					w("path-failure:%d:%d:%d|", m.Slot, m.PathFailure.Status, m.PathFailure.Tick)
 				}
 				w("route-storage:%d:%d|", m.Slot, m.CurrentRouteCount)
 				for i, p := range m.CurrentRouteStorage {

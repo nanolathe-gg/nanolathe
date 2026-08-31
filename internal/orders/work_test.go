@@ -4,12 +4,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/features"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 // workFixture is a builder with every work capability, a bound queue carrying a
@@ -431,5 +434,163 @@ func TestFreshNanoframeResolvesToHelpBuild(t *testing.T) {
 	frame.Remaining = 0
 	if isUnfinished(frame) {
 		t.Fatal("a completed unit is not unfinished")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Feature reclaim (PT3-05) [04 R-ORD-01 §5][05 R-WORK-01 §5][05 R-ECO-02 §2]
+// ---------------------------------------------------------------------------
+
+// reclaimFixtureTerrain is a 16x16 attribute grid with one feature record
+// stamped at (cx, cz). Sixteen world units to a cell, so the builder at world
+// (70, 90) of the work fixtures stands on cell (4, 5) [03 §2.1].
+func reclaimFixtureTerrain(defs []*content.FeatureDef, cx, cz int) *world.Terrain {
+	const w, h = 16, 16
+	attrs := make([]formats.TNTAttribute, w*h)
+	for i := range attrs {
+		attrs[i] = formats.TNTAttribute{Height: 10, Feature: world.PlotFeatureNone}
+	}
+	attrs[cz*w+cx] = formats.TNTAttribute{Height: 10, Feature: 0} // record 0 = defs[0]
+	return &world.Terrain{
+		CellW: w, CellH: h,
+		Plot:        world.ExpandPlot(attrs, w, h),
+		FeatureDefs: defs,
+	}
+}
+
+// retailShapedTree is the shape every stock tree has in the reference install
+// (features/trees/*.tdf, verified against ~/TotalAnnihilation): no metal, a
+// large energy pool, reclaimable, blocking, a height byte, and `smudge01` as
+// its `featurereclamate` successor — a non-blocking, non-reclaimable scorch.
+// A stock wreck (`*_dead`) is the mirror image: metal, no energy, the same
+// successor.
+func retailShapedTree() (*content.FeatureDef, *content.FeatureDef) {
+	smudge := &content.FeatureDef{
+		DefinitionHeader: content.DefinitionHeader{CanonicalKey: "smudge01"},
+		FootprintX:       1, FootprintZ: 1,
+	}
+	tree := &content.FeatureDef{
+		DefinitionHeader:    content.DefinitionHeader{CanonicalKey: "tree1"},
+		Metal:               0,
+		Energy:              250,
+		Height:              40,
+		FootprintX:          1,
+		FootprintZ:          1,
+		Reclaimable:         true,
+		Blocking:            true,
+		FeatureReclamate:    "smudge01",
+		FeatureReclamateDef: smudge,
+	}
+	return tree, smudge
+}
+
+func reclaimFixture(defs []*content.FeatureDef) (*Queue, *units.Unit, *economy.Service) {
+	q, builder, _ := workFixture()
+	econ := queueEconomy(q)
+	econ.Terrain = reclaimFixtureTerrain(defs, 4, 5)
+	return q, builder, econ
+}
+
+// TestFeatureReclaimRemovesTheFeatureAndCreditsItsPools is the PT3-05
+// regression. Before the fix a `Reclaim` record parked at the head of its
+// builder's queue forever on the 0xE0 approach gate; with that gate forced
+// satisfied it ran a countdown of zero straight through phases 3, 4 and 5 and
+// completed having credited nothing and removed nothing. The contract is
+// [05 R-WORK-01 §5]: the definition's WHOLE energy and metal values go to the
+// builder's production accumulators as a one-time completion event, and the
+// feature is replaced by its `featurereclamate` successor.
+func TestFeatureReclaimRemovesTheFeatureAndCreditsItsPools(t *testing.T) {
+	tree, smudge := retailShapedTree()
+	q, builder, econ := reclaimFixture([]*content.FeatureDef{tree})
+
+	id := Lookup("Reclaim")
+	q.Push(id, Node{Owner: builder.Handle, GoalX: numeric.Fixed(70 << 16), GoalZ: numeric.Fixed(90 << 16)})
+
+	if ticks := pumpUntilEmpty(t, q, builder, 4000); q.LenPrimary() != 0 {
+		head := q.Primary()[0]
+		t.Fatalf("the reclaim never completed: %d ticks, phase %d, gate %#x", ticks, head.Phase, head.DynamicGate)
+	}
+
+	buckets := econ.UnitBuckets(builder.Handle)
+	if got := buckets[economy.Energy].Production; got != 250 {
+		t.Fatalf("energy production = %v, want the tree's whole 250 pool [05 R-WORK-01 §5]", got)
+	}
+	if got := buckets[economy.Metal].Production; got != 0 {
+		t.Fatalf("metal production = %v, want 0 — a tree carries no metal", got)
+	}
+	// The grid transition: the tree is gone and its scorch stands in its place
+	// [05 "Removal and successor replacement"].
+	def, _, _, ok := features.FeatureAt(econ.Terrain, numeric.Fixed(70<<16), numeric.Fixed(90<<16))
+	if !ok || def != smudge {
+		t.Fatalf("cell holds %v (found %v), want the featurereclamate successor", def, ok)
+	}
+}
+
+// TestFeatureReclaimIsNotAPerTickDrip locks the half of §5 that a per-tick
+// implementation would get wrong: nothing is credited until the countdown
+// finishes, and the countdown is the feature's, not the builder's work rate.
+func TestFeatureReclaimIsNotAPerTickDrip(t *testing.T) {
+	tree, _ := retailShapedTree()
+	q, builder, econ := reclaimFixture([]*content.FeatureDef{tree})
+	q.Push(Lookup("Reclaim"), Node{Owner: builder.Handle, GoalX: numeric.Fixed(70 << 16), GoalZ: numeric.Fixed(90 << 16)})
+
+	for tick := uint32(1); tick <= 40; tick++ {
+		q.Pump(builder, tick)
+		if q.LenPrimary() == 0 {
+			t.Fatalf("a 250-energy tree finished by tick %d; the countdown is trunc(15+250/2)=140 at two per visit", tick)
+		}
+		if got := econ.UnitBuckets(builder.Handle)[economy.Energy].Production; got != 0 {
+			t.Fatalf("tick %d credited %v before the reclaim completed [05 R-WORK-01 §5]", tick, got)
+		}
+	}
+}
+
+// TestFeatureReclaimSeedIsFifteenPlusHalfThePools locks the countdown seed and
+// with it the fact that `workertime` does not enter it: two builders whose work
+// rates differ by an order of magnitude seed the same countdown
+// [05 R-WORK-01 §5].
+func TestFeatureReclaimSeedIsFifteenPlusHalfThePools(t *testing.T) {
+	cases := []struct {
+		metal, energy int32
+		want          int32
+	}{
+		{0, 0, 15},     // empty pools still cost the fixed fifteen
+		{0, 250, 140},  // a stock tree
+		{1768, 0, 899}, // a stock heavy wreck
+		{86, 0, 58},    // a stock metal deposit-sized pool
+		{1, 0, 15},     // trunc(15 + 0.5) is fifteen, not sixteen (I3)
+	}
+	for _, c := range cases {
+		def := &content.FeatureDef{Metal: c.metal, Energy: c.energy}
+		if got := featureWork(def, 15); got != c.want {
+			t.Fatalf("metal %d energy %d seeded %d, want %d", c.metal, c.energy, got, c.want)
+		}
+		// The air twin is the same expression with thirty [04 R-ORD-01 §7].
+		if got := featureWork(def, 30); got != c.want+15 {
+			t.Fatalf("air seed for metal %d energy %d was %d, want %d", c.metal, c.energy, got, c.want+15)
+		}
+	}
+}
+
+// TestFeatureReclaimAbandonsWithoutAFeature locks the row's own entry arm: no
+// feature at the goal is `Reclamation failed` and abandon, not a silent
+// completion [04 R-ORD-01 §5].
+func TestFeatureReclaimAbandonsWithoutAFeature(t *testing.T) {
+	tree, _ := retailShapedTree()
+	q, builder, _ := reclaimFixture([]*content.FeatureDef{tree})
+	// A goal three cells away from the stamped feature.
+	q.Push(Lookup("Reclaim"), Node{Owner: builder.Handle, GoalX: numeric.Fixed(150 << 16), GoalZ: numeric.Fixed(150 << 16)})
+	q.Pump(builder, 1)
+	if q.LenPrimary() != 0 {
+		t.Fatalf("an empty cell left the record queued at phase %d", q.Primary()[0].Phase)
+	}
+	found := false
+	for _, d := range q.Diagnostics() {
+		if strings.Contains(d, "Reclamation failed") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no `Reclamation failed` caption: %v", q.Diagnostics())
 	}
 }

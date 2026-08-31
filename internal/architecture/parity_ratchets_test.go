@@ -236,7 +236,6 @@ var float64ExemptFiles = map[string]string{
 	"internal/movement/integrate.go":       "I2 ground follower goal-point bearing and route-distance/lookahead hypot temporaries [04 R-MOV-01 §2][04 R-MOV-01 §3][04 R-MOV-03 §2][04 R-PATH-01 §8]",
 	"internal/combat/aim.go":               "I2 ballistic discriminant, acos, sqrt [06 §3.3]",
 	"internal/combat/impact.go":            "I2 area-damage range sqrt, float64 transient truncated to int32 [06 §9.3]",
-	"internal/orders/callbacks.go":         "I2 StartBuilding first-argument bearing: atan2 of the builder-minus-target delta, the compiled 65536/2*pi scale and its round-half-even store, narrowed at the uint16 script-argument boundary [04 R-CB-01 §3]",
 	"internal/sim/numeric/trig.go":         "I2 simulation trig-table construction, float64 transient [04 §5.1]",
 	"internal/save/boxes.go":               "I2/I13 save float boxes: the game-time save box and account doubles are byte-layout contracts",
 	"internal/save/bank.go":                "I13 HAPIBANK account record doubles are a byte-layout contract",
@@ -253,12 +252,12 @@ var float64ExemptFiles = map[string]string{
 // fixes the world as 16.16 fixed point with an exhaustive float allowlist;
 // new float64 sites outside that list are parity drift.
 var float64Baseline = map[string]int{
-	"internal/ai/placement.go":              4,
+	"internal/ai/placement.go":              1,
 	"internal/ai/selection.go":              2,
 	"internal/ai/strategic.go":              5,
-	"internal/cob/ports.go":                 12,
+	"internal/cob/ports.go":                 6,
 	"internal/combat/meteor.go":             10,
-	"internal/combat/motion.go":             12,
+	"internal/combat/motion.go":             4,
 	"internal/combat/service.go":            2,
 	"internal/combat/stockpile.go":          5,
 	"internal/construction/capture.go":      5,
@@ -366,8 +365,15 @@ var debtMarkerTotals = map[string]int{
 	// Reconciled against the authoritative-source census after the merged
 	// cleanups. These are shrink-only counts; changing a marker's location or
 	// adding one still requires an explicit reviewed baseline update.
-	"legacy":        36,
-	"compatibility": 17,
+	"legacy": 36,
+	// 17 -> 18: PT3 added one in internal/orders/pump.go. It is a comment that
+	// NAMES an existing compatibility synthesis rather than introducing one —
+	// Queue.Binding() has always read the legacy value-fixture fields without
+	// caching, and the new sentence records that it survives only while
+	// construction and older fixture callers write Queue.Lookup/Hostility/
+	// StockpileEconomy directly. Reviewed and accepted as a documentation
+	// gain: the debt was already there and unlabelled.
+	"compatibility": 18,
 	"fallback":      185,
 	"guess":         10,
 	"plausible":     1,
@@ -410,7 +416,16 @@ var debtMarkerTotals = map[string]int{
 	// behaviour is a direct retail observation recorded under
 	// [07 R-HUD-03 §6], but no traced writer sets status bit 22 at unit
 	// creation. Composed: 341 + 1 + 1 = 343.
-	"todo(question)": 343,
+	// The PT3 playtest round then retired three, one per file, each because the
+	// question was answered rather than moved: internal/movement/airorders.go
+	// 10 -> 9 (VTOL_LandIfCan's altitude offset — [04 R-AIR-01] had the two
+	// branches reversed, and the correction closes the contradiction the
+	// question flagged); internal/movement/integrate.go 5 -> 4 and
+	// internal/orders/pump.go 5 -> 4 (the route acceptance rule's entry point
+	// and the synthetic-fallback suppressor — [04 R-PATH-01 §8]'s corrected
+	// text and its closed TODO(question), the record completion flag the
+	// primary pump's code-9 arm sets). Composed: 343 − 3 = 340.
+	"todo(question)": 340,
 }
 
 var debtMarkerFileCounts = map[string]map[string]int{
@@ -438,11 +453,13 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/movement/admission.go":      1,
 		"internal/movement/goals.go":          1,
 		"internal/movement/integrate.go":      2,
-		"internal/orders/pump.go":             2,
-		"internal/save/bank.go":               2,
-		"internal/session/commands.go":        1,
-		"internal/visibility/fog.go":          1,
-		"internal/world/placement.go":         1,
+		// pump.go 2 -> 3: the Binding() compatibility-synthesis note; see the
+		// totals row above.
+		"internal/orders/pump.go":      3,
+		"internal/save/bank.go":        2,
+		"internal/session/commands.go": 1,
+		"internal/visibility/fog.go":   1,
+		"internal/world/placement.go":  1,
 	},
 	"fallback": {
 		"internal/ai/groups.go":                  1,
@@ -589,9 +606,12 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		// payload's arrival test. (j) §8 gives no arm for AirToAir phase 1 with
 		// the arrival bits clear, the counter below 0x5A, and the range to the
 		// target at or below 0xA0.
-		"internal/movement/airorders.go": 10,
+		// airorders.go 10 -> 9 and integrate.go 5 -> 4: PT3 closed one question
+		// in each (the landing altitude offset, and the route acceptance rule's
+		// entry point). See the totals row above.
+		"internal/movement/airorders.go": 9,
 		"internal/movement/goals.go":     16,
-		"internal/movement/integrate.go": 5,
+		"internal/movement/integrate.go": 4,
 		"internal/movement/landing.go":   1,
 		"internal/movement/movegoal.go":  1,
 		"internal/movement/profile.go":   3,
@@ -608,8 +628,10 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		// calls does to the slot control byte is unstated. Both are written at
 		// their site with the question and its decider, per I9.
 		// 6 -> 5: WU-18-0 retired the phase-0 gate clear's question (see the
-		// totals row above).
-		"internal/orders/pump.go": 5,
+		// totals row above). 5 -> 4: PT3 closed [04 R-PATH-01 §8]'s question on
+		// the record flag that suppresses the synthetic fallback — it is the
+		// completion flag the primary pump's code-9 arm sets.
+		"internal/orders/pump.go": 4,
 		// combat.go 0 -> 5: WU-18-4 records the five questions its rows leave
 		// open, each at the site that depends on it. (a) [R-ORDER-02 §2]'s
 		// weapon-target-clear guard reads a slot control byte — bit 1 assigned,

@@ -15,7 +15,16 @@ const (
 // UnitReclaimPulse computes the one-time pulse stored on a ReclaimUnit order.
 // The value is established at order setup, not recomputed as the target loses
 // health. All operands are integer fields in the authored/runtime records, and
-// the division is the retail truncation boundary [01 §8][05 "Unit reclaim"].
+// the division is the retail truncation boundary [01 §8][05 R-WORK-01 §4]:
+//
+//	costM = max(target.definition.buildcostmetal, 10)
+//	n     = workertime * ((kills + 5) / 5) * target.definition.maxdamage * 15
+//	pulse = max(1, trunc(n / (costM * 300)))
+//
+// Correction (PT3-05): the health operand is the TARGET DEFINITION's
+// `maxdamage`, not the instance's current maximum. The two agree for a stock
+// unit and part company for anything that has had its maximum adjusted, and §4
+// gives the definition word.
 func UnitReclaimPulse(builder, target *units.Unit) int32 {
 	if builder == nil || target == nil || builder.Def == nil || target.Def == nil {
 		return 1
@@ -24,17 +33,22 @@ func UnitReclaimPulse(builder, target *units.Unit) int32 {
 	if metalCost < 10 {
 		metalCost = 10
 	}
+	// The kill divisor is a signed integer division by five [05 R-WORK-01 §4].
 	killsFactor := (builder.Kills + 5) / 5
 	if killsFactor < 0 {
 		killsFactor = 0
 	}
-	denom := int64(metalCost) * 300 // [05 "Unit reclaim"]
+	denom := int64(metalCost) * 300 // [05 R-WORK-01 §4]
 	if denom <= 0 {
 		return 1
 	}
-	numer := int64(target.MaxHealth) * int64(builder.Def.WorkerTime) * int64(killsFactor) * 15
+	maxDamage := target.Def.MaxDamage
+	if maxDamage <= 0 {
+		maxDamage = target.MaxHealth
+	}
+	numer := int64(maxDamage) * int64(builder.Def.WorkerTime) * int64(killsFactor) * 15
 	pulse := int32(numer / denom) // [01 §8] truncation toward zero
-	if pulse < 1 {
+	if pulse <= 1 {
 		pulse = 1
 	}
 	return pulse
@@ -58,12 +72,27 @@ func reclaimInRange(builder, target *units.Unit) bool {
 	return dx*dx+dz*dz <= int64(radius)*int64(radius)
 }
 
-// reclaimTargetEligible preserves the command-layer target family: this is a
-// unit target, unlike feature reclaim. The command resolver's code-12 unit
-// branch does not impose an owner comparison; ownership and the target's
-// capture-immunity bit are separate fields in the retail handler. The latter
-// is not represented by a named UnitDef field yet; do not guess one here [04
-// §3.4][05 "Unit reclaim"][GAP T25].
+// reclaimTargetEligible is the eligibility predicate the executor consults at
+// start and re-checks on every work visit [05 R-WORK-01 §4]:
+//
+//	builder.definition.canreclamate      // capability bit
+//	&& (target.status & 3) != 2          // mover mode mirror: not airborne
+//	&& !target.definition.cancapture     // commanders cannot be reclaimed
+//
+// Correction (PT3-05). The previous text said the target's "capture-immunity
+// bit ... is not represented by a named UnitDef field yet; do not guess one
+// here", and the predicate therefore tested neither target clause: any live
+// unit, including a flying one and including a commander, was reclaimable.
+// [05 R-WORK-01 §4] closes both. There is no separate capture-immunity flag —
+// the predicate reads the SAME `cancapture` key the builder side reads for its
+// own capture capability and demands it be clear, which is why a unit authored
+// `cancapture=1` is both un-capturable and un-reclaimable, and in stock content
+// that is exactly the commanders. The mover-mode clause is the low two bits of
+// the target's status word, which units.Unit mirrors as Move.Mode
+// [04 R-MOV-01 §8]: 0 none, 1 grounded, 2 airborne.
+//
+// The command resolver's code-12 unit branch still imposes no owner comparison
+// [04 §3.4], so an own unit is a legal reclaim target; that half is unchanged.
 func reclaimTargetEligible(builder, target *units.Unit) bool {
 	if builder == nil || target == nil || builder.Def == nil || target.Def == nil {
 		return false
@@ -73,6 +102,12 @@ func reclaimTargetEligible(builder, target *units.Unit) bool {
 	}
 	if !builder.Def.CanReclamate {
 		return false
+	}
+	if target.Move.Mode&0x3 == 2 {
+		return false // airborne [05 R-WORK-01 §4]
+	}
+	if target.Def.CanCapture {
+		return false // the same bit the capture executor rejects [05 R-WORK-01 §4]
 	}
 	return true
 }
@@ -127,28 +162,39 @@ func (s *Service) stepUnitReclaim(builder *units.Unit, node *orders.Node, tick u
 		// unknown"].
 		orders.EmitStartBuilding(builder, node)
 	}
-	// The order's second accumulator is cadence, not a resource fraction. A
-	// valid in-range visit advances it by two; a pulse is applied only after it
-	// exceeds fourteen, then the accumulator is reset [05 "Unit reclaim"].
-	node.Param2 += reclaimCadenceStep
-	if node.Param2 <= reclaimPulseThreshold {
-		node.Deadline = int32(tick + reclaimCadenceStep)
-		return res
+	// The order's second accumulator is cadence, not a resource fraction. The
+	// visit order is [05 R-WORK-01 §4]'s: the pulse test comes FIRST, on the
+	// counter as the visit found it; a firing visit zeroes the counter; then
+	// every qualifying visit — firing or not — emits one nano segment,
+	// reschedules two ticks, and raises the counter by two.
+	//
+	// Correction (PT3-05). This used to raise the counter before the test and
+	// hold whenever the raised value was still at or below fourteen. That put
+	// the first bite one visit early (tick 14 rather than tick 16) and, worse,
+	// emitted the nano segment only on the visit that landed a bite, where §4
+	// gives "one nano segment per qualifying work visit ... a one-segment /
+	// two-tick presentation cadence, distinct from the damage-pulse gate" — so
+	// seven of every eight visits drew no nanolathe at all.
+	var oldRemaining float32
+	fired := false
+	if node.Param2 > reclaimPulseThreshold {
+		node.Param2 = 0
+		pulse := int32(node.Param1)
+		if pulse < 1 {
+			pulse = 1
+		}
+		oldRemaining = target.Remaining
+		// Route the pulse through the world's ordinary damage receiver. Besides
+		// preserving the packet boundary, this clamps lethal health to zero
+		// before the cause-5 death latch [05 "Unit reclaim"][06 §9.1].
+		s.World.ApplyDamage(target.Handle, pulse)
+		fired = true
 	}
-	node.Param2 = 0
-	pulse := int32(node.Param1)
-	if pulse < 1 {
-		pulse = 1
-	}
-	oldRemaining := target.Remaining
-	// Route the pulse through the world's ordinary damage receiver. Besides
-	// preserving the packet boundary, this clamps lethal health to zero before
-	// the cause-5 death latch [05 "Unit reclaim"][06 §9.1].
-	s.World.ApplyDamage(target.Handle, pulse)
 	if s.Presentation != nil {
 		s.emitReclaimNano(tick, builder, target)
 	}
-	if target.Health > 0 {
+	if !fired || target.Health > 0 {
+		node.Param2 += reclaimCadenceStep
 		node.Deadline = int32(tick + reclaimCadenceStep)
 		return res
 	}

@@ -118,9 +118,12 @@ func TestReclaimEmitsStartBuildingThroughOrders(t *testing.T) {
 	if liveThreads(vm) != 1 {
 		t.Fatalf("StartBuilding arrangements %d, want exactly one deferred start", liveThreads(vm))
 	}
-	// Seven more admitted visits exceed the cadence gate and reclaim fatally;
-	// the removal emits the StopBuilding counterpart through cleanup.
-	reclaimVisits(s, builder, node, 2, 4, 6, 8, 10, 12, 14)
+	// Eight more admitted visits exceed the cadence gate and reclaim fatally;
+	// the removal emits the StopBuilding counterpart through cleanup. The
+	// eighth was added with the PT3-05 cadence correction: [05 R-WORK-01 §4]
+	// tests the counter before raising it, so the pulse fires on the visit that
+	// sees 16 rather than on the one that raises the counter to 16.
+	reclaimVisits(s, builder, node, 2, 4, 6, 8, 10, 12, 14, 16)
 	if !target.Dying {
 		t.Fatal("reclaim did not complete fatally")
 	}

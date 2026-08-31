@@ -133,7 +133,7 @@ const NumSlots = 3 // [06 §1.2] primary, secondary, tertiary
 // TODO(question): exact layout of mover mode bits and velocity domain remains
 // open; kept minimal for P0-I02/P0-I15 wiring.
 type MoveState struct {
-	Mode    uint8         // low two bits runtime mover mode: 0 none, 1 stopped/parked, 2 active locomotion [04 §9.1]
+	Mode    uint8         // low two bits of the flags-word mode mirror: 1 grounded/surface (every structure too), 2 airborne, 0 attached/parked, 3 save-installed [04 R-MOV-01 §8]; seeded to 1 at creation. The older "0 none, 1 stopped/parked, 2 active locomotion" reading is retracted [03 R-RAST-01 §7 correction].
 	Heading uint16        // 0..65535 per circle [04 §5.1] C25 (I2) [03 §2.4] C24 bank→Z heading→Y pitch→X
 	Pitch   uint16        // pitch per [03 §2.4] C24 [03 §5.2] (flight lean pitch)
 	Bank    uint16        // bank per [03 §2.4] C24 [03 §2.4] C21

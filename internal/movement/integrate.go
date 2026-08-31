@@ -93,7 +93,10 @@ type System struct {
 	tick        uint32
 	tickCarried map[pool.Handle]struct{}
 
-	pathFailures map[pool.Handle]PathFailure // last non-success publish per handle [04 §7.3] C12 [P0-08][P0-12]
+	// pathFailures is a publication diagnostic only. It never gates, counts, or
+	// schedules recovery; WantsRepath/LastRequestTick on Route own that state
+	// [04 R-MOV-01 §7][04 R-PATH-01 §8].
+	pathFailures map[pool.Handle]PathFailure
 
 	// activeOrders is the single path activation boundary.  A route belongs to
 	// the order node that was active when its request was submitted, not merely
@@ -245,6 +248,13 @@ type arrivalHandle struct {
 	goalX    int32 // goal cells (bias-corrected) [R-P0-01]
 	goalZ    int32
 	threshSq int32 // floor(radiusParam/16)² inclusive [R-P0-01]; 0 for ground moves
+	// payload is the goal object the record installed. Retail's follower does not
+	// re-derive an arrival predicate: it asks the payload "has the unit arrived",
+	// forwarding the mover's committed cell to that class's own start predicate
+	// [04 R-MOV-03 §2][04 R-PATH-01 §9]. The work family's annulus and rectangle
+	// payloads are carried here so the arrival band is the same object the search
+	// was aimed at; with none set, the point and border tests below apply.
+	payload path.Goal
 	// border is the rectangle whose perimeter is the goal-cell enumeration for a
 	// rectangle-perimeter goal. When set, arrival is membership of that border
 	// and the point test above is not used: "enumerated goal cells are exactly
@@ -265,19 +275,9 @@ const (
 	arrivalGateMask     uint32 = 0xE0 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 )
 
-// These are explicit Nanolathe land-skirmish retry policy values. Retail's
-// dynamic-blocker retry cadence/count remain unresolved [R-P1-10]; they are not
-// presented as recovered executable constants.
-const (
-	landPathFailureRetryInterval = 30
-	landPathFailureMaxRetries    = 1
-)
-
 type PathFailure struct {
-	Status    path.Status
-	Tick      uint32
-	Retries   int
-	NextRetry uint32
+	Status path.Status
+	Tick   uint32
 }
 
 // thresholdSqFromRadius computes the goal-handle threshold² = floor(radiusParam/16)² [R-P0-01].
@@ -765,6 +765,17 @@ func (s *System) finalGoalReached(u *units.Unit, hadRoute bool) bool {
 		tileX = world.WorldToCell(u.X)
 		tileZ = world.WorldToCell(u.Z)
 	}
+	// A payload answers the arrival question itself: the satisfied-from-unit
+	// adapter forwards the committed cell pair to the class's start predicate
+	// [04 R-MOV-03 §2]. The annulus band and the work rectangle both arrive
+	// beside their target, never on its own anchor cell [04 R-PATH-01 §9].
+	if ah.payload != nil {
+		if ah.payload.StartSatisfied(path.Cell{X: tileX, Z: tileZ}) {
+			ah.order.Satisfied |= arrivalSatisfiedBit // [R-P0-01] OR 0x20
+			return hadRoute
+		}
+		return false
+	}
 	// A rectangle-perimeter goal arrives on membership of the border, not on
 	// proximity to one cell [04 §7.2][04 R-FAC-02 §4].
 	if ah.border != nil {
@@ -907,15 +918,7 @@ func (s *System) recordPathFailure(h pool.Handle, status path.Status, tick uint3
 	if s.pathFailures == nil {
 		s.pathFailures = make(map[pool.Handle]PathFailure)
 	}
-	if rec, ok := s.pathFailures[h]; ok {
-		rec.Status = status
-		rec.Tick = tick
-		rec.Retries++
-		rec.NextRetry = tick + landPathFailureRetryInterval
-		s.pathFailures[h] = rec
-		return
-	}
-	s.pathFailures[h] = PathFailure{Status: status, Tick: tick, Retries: 0, NextRetry: tick + landPathFailureRetryInterval}
+	s.pathFailures[h] = PathFailure{Status: status, Tick: tick}
 }
 
 func (s *System) HasPathFailure(h pool.Handle) bool {
@@ -950,39 +953,6 @@ func (s *System) ClearPathFailure(h pool.Handle) {
 		return
 	}
 	delete(s.pathFailures, h)
-}
-
-func (s *System) NextRetryTick(h pool.Handle) uint32 {
-	if s == nil || s.pathFailures == nil {
-		return 0
-	}
-	if rec, ok := s.pathFailures[h]; ok {
-		return rec.NextRetry
-	}
-	return 0
-}
-
-func (s *System) RetryCount(h pool.Handle) int {
-	if s == nil || s.pathFailures == nil {
-		return 0
-	}
-	if rec, ok := s.pathFailures[h]; ok {
-		return rec.Retries
-	}
-	return 0
-}
-
-func (s *System) IncrementPathFailureRetry(h pool.Handle, nextTick uint32) {
-	if s == nil || s.pathFailures == nil {
-		return
-	}
-	rec, ok := s.pathFailures[h]
-	if !ok {
-		return
-	}
-	rec.Retries++
-	rec.NextRetry = nextTick
-	s.pathFailures[h] = rec
 }
 
 func (s *System) IsGoalCellPassable(h pool.Handle, cell path.Cell) bool {
@@ -1172,7 +1142,7 @@ func (s *System) submitMoveForOrder(u *units.Unit, head *orders.Node, start, goa
 	// OW-3-P: select Goal family per order [04 §7.2][04 §7.4][04 §3.5] — Annulus for attack/guard stand-off where retail establishes it, Point otherwise.
 	// RectPerimeterGoal remains unwired because no established order producer exists [04 §7.2][04 §7.4][M-4].
 	fx, fz := s.pathFootprint(u)
-	goalObj := s.goalForOrderWithFootprint(goal, head, fx, fz)
+	goalObj := s.goalForOrderWithFootprint(u, goal, head, fx, fz)
 	s.submitGoalForOrder(u, start, goalObj, activation)
 }
 
@@ -1197,6 +1167,23 @@ func (s *System) staticObstacleRevision() uint64 {
 }
 
 // ActivateMove binds the current primary order head and, for a fresh route,
+// isPrimaryHead reports whether head is the record the unit's primary queue
+// walk would reach first — the only record whose handler can be running, and
+// therefore the only one that may own the mover's goal payload [04 §3.3]
+// [04 R-PATH-01 §8]. A unit with no queue, or with an empty primary segment,
+// has no competing record, so a bare fixture is unaffected.
+func isPrimaryHead(u *units.Unit, head *orders.Node) bool {
+	q := orders.QueueOfUnit(u)
+	if q == nil {
+		return true
+	}
+	prim := q.Primary()
+	if len(prim) == 0 {
+		return true
+	}
+	return prim[0] == head
+}
+
 // submits one path request. The queue head is the authority: a repeated call
 // for the same node is a no-op, while a new node cancels the old request and
 // invalidates its route before submitting the replacement. A usable active
@@ -1209,6 +1196,20 @@ func (s *System) staticObstacleRevision() uint64 {
 // order boundary; a path request never captures a mutable *units.Unit.
 func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 	if s == nil || u == nil || head == nil || s.Scheduler == nil {
+		return false
+	}
+	if !isPrimaryHead(u, head) {
+		// Only the record the pump is servicing may own the mover. The pump
+		// walks from the front head and stops at the first record whose gate is
+		// nonzero and unsatisfied, so no record behind a blocked head ever runs
+		// its handler [04 §3.3] step 3, and only a handler that ran can install
+		// a goal payload [04 R-ORD-01 §1]; the follower holds exactly one goal
+		// object at a time [04 R-PATH-01 §8]. Honouring a bind for a record
+		// behind the head let a second record steal the mover — a construction
+		// walk stepped past a blocked `Park` head cancelled that head's path
+		// request and deleted its arrival handle on every visit, so the head
+		// waited on an arrival bit nothing could raise and the 30-tick re-arm
+		// that lives behind its gate never ran [04 R-EGRESS-01].
 		return false
 	}
 	if s.activeOrders == nil {
@@ -1224,10 +1225,7 @@ func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 	_, wasBound := s.activeOrders[u.Handle]
 	if wasBound {
 		s.CancelPathRequest(u.Handle)
-		if route := s.Routes[u.Handle]; route != nil {
-			route.Active = false
-			route.Dirty = true
-		}
+		s.clearPathState(u.Handle)
 	}
 	s.nextActivation++
 	if s.nextActivation == 0 { // reserve zero for unbound/direct requests
@@ -1249,7 +1247,7 @@ func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 	// for a build order that is the selected perimeter candidate, not the
 	// site centre [04 §8.3][04 §7.4].
 	fx, fz := s.pathFootprint(u)
-	goalObj := s.goalForOrderWithFootprint(goal, head, fx, fz)
+	goalObj := s.goalForOrderWithFootprint(u, goal, head, fx, fz)
 	s.bindRectSteeringGoal(u, head, goalObj, fx, fz)
 	if route := s.Routes[u.Handle]; route != nil && !selectedPoint {
 		goalPointX, goalPointZ, haveGoalPoint := groundGoalPoint(goalObj, u, fx, fz)
@@ -1315,10 +1313,7 @@ func (s *System) ReplanMove(u *units.Unit, head *orders.Node) bool {
 		return s.ActivateMove(u, head)
 	}
 	s.CancelPathRequest(u.Handle)
-	if route := s.Routes[u.Handle]; route != nil {
-		route.Active = false
-		route.Dirty = true
-	}
+	s.clearPathState(u.Handle)
 	s.nextActivation++
 	if s.nextActivation == 0 {
 		s.nextActivation++
@@ -1330,7 +1325,7 @@ func (s *System) ReplanMove(u *units.Unit, head *orders.Node) bool {
 	// same point the mover was already steering at — for a build order that is
 	// the selected perimeter candidate, not the site centre [04 §8.3][04 §7.4].
 	fx, fz := s.pathFootprint(u)
-	goalObj := s.goalForOrderWithFootprint(goal, head, fx, fz)
+	goalObj := s.goalForOrderWithFootprint(u, goal, head, fx, fz)
 	s.bindRectSteeringGoal(u, head, goalObj, fx, fz)
 	if route := s.Routes[u.Handle]; route != nil && !selectedPoint {
 		goalPointX, goalPointZ, haveGoalPoint := groundGoalPoint(goalObj, u, fx, fz)
@@ -1362,6 +1357,9 @@ func (s *System) serviceGroundFollower(u *units.Unit, head *orders.Node, route *
 	if blocked || !route.Active || route.Count < 2 {
 		route.WantsRepath = true
 	}
+	// The follower owns both the wants-repath arm and the exact inclusive
+	// admission boundary. Session only invokes this once in the unit sweep;
+	// it never submits a second copy [04 R-MOV-01 §7][04 R-PATH-01 §6].
 	if !route.WantsRepath || route.LastRequestTick+60 > tick || s.HasPathRequest(u.Handle) {
 		return
 	}
@@ -1377,6 +1375,25 @@ func (s *System) serviceGroundFollower(u *units.Unit, head *orders.Node, route *
 	route.LastRequestTick = tick
 }
 
+// clearPathState is the single lifecycle reset for follower-owned path state.
+// Cancelling the request separately is not enough: a route with wants-repath
+// left armed could resurrect a removed order on a later unit visit. The order
+// binding, request cancellation, and follower state are therefore cleared at
+// each head/death/transport/completion boundary [04 R-PATH-01 §8].
+func (s *System) clearPathState(handle pool.Handle) {
+	if s == nil {
+		return
+	}
+	if route := s.Routes[handle]; route != nil {
+		route.Active = false
+		route.WantsRepath = false
+		route.LastRequestTick = 0
+		route.Status = 0
+		route.Dirty = true
+	}
+	s.ClearPathFailure(handle)
+}
+
 // DeactivateMove drops the path binding for a unit whose active order is no
 // longer path-backed.  It is intentionally idempotent so every queue/head
 // transition can pass through the same boundary.
@@ -1387,12 +1404,9 @@ func (s *System) DeactivateMove(handle pool.Handle) {
 	if s.Scheduler != nil {
 		s.CancelPathRequest(handle)
 	}
+	s.clearPathState(handle)
 	if s.activeOrders != nil {
 		delete(s.activeOrders, handle)
-	}
-	if route := s.Routes[handle]; route != nil && route.Active {
-		route.Active = false
-		route.Dirty = true
 	}
 	if s.arrivalHandles != nil {
 		delete(s.arrivalHandles, handle)
@@ -1410,8 +1424,13 @@ func (s *System) bindArrivalHandle(u *units.Unit, head *orders.Node) {
 	name := orders.DescriptorFor(head.ID).Name
 	switch name {
 	// Park joins the family: its phase 1 completes on the arrival bit this
-	// handle sets [04 R-ORD-01 §2][04 R-FAC-02 §4].
-	case "Move_Ground", "VTOL_Move", "QMove", "Patrol", "QPatrol", "VTOL_Patrol", "RepairPatrol", "VTOL_RepairPatrol", "Park":
+	// handle sets [04 R-ORD-01 §2][04 R-FAC-02 §4]. The ground work rows join it
+	// for the same reason: they install a movement goal in phase 0 or 1 and then
+	// wait behind 0xE0/0xE8 for the follower's verdict [04 R-ORD-01 §5], so
+	// without a handle their approach gate had no producer at all and the record
+	// parked at the head of its queue for the rest of the game.
+	case "Move_Ground", "VTOL_Move", "QMove", "Patrol", "QPatrol", "VTOL_Patrol", "RepairPatrol", "VTOL_RepairPatrol", "Park",
+		"HelpBuild", "RepairUnit", "Capture", "Reclaim", "Resurrect":
 	default:
 		// Not a ground-move family order: ensure no stale handle remains.
 		delete(s.arrivalHandles, u.Handle)
@@ -1461,6 +1480,18 @@ func (s *System) bindArrivalHandle(u *units.Unit, head *orders.Node) {
 	// [04 R-EGRESS-01]; this is the arrival predicate only.
 	if minX, minZ, maxX, maxZ, ok := orders.ParkGoalRect(head); ok {
 		ah.border = &path.Rect{Min: path.Cell{X: minX, Z: minZ}, Max: path.Cell{X: maxX, Z: maxZ}}
+	}
+	// The work rows' payload is the object the search is aimed at, built once
+	// here so steering target, search goal and arrival test can never disagree
+	// [04 R-ORD-01 §5][04 R-MOV-03 §2].
+	// TODO(question): `Reclaim` and `Resurrect` want the same rectangle on the
+	// FEATURE's footprint and this layer cannot read a feature record, so their
+	// records fall back to the point goal and arrive only on the feature's own
+	// anchor cell. Decider: a feature-footprint accessor reachable from the
+	// movement layer — this is plumbing, not an untraced contract
+	// [04 R-ORD-01 §5].
+	if payload, ok := s.workApproachGoal(u, path.Cell{X: goalX, Z: goalZ}, head, int32(footX), int32(footZ)); ok {
+		ah.payload = payload
 	}
 	s.arrivalHandles[u.Handle] = ah
 	// [R-P0-01] initial gate must be 0 so phase 0 handler can arm 0xE0; otherwise static 0x402 would block.
@@ -1695,19 +1726,32 @@ func installGroundGoal(route *Route, u *units.Unit, goal path.Goal, goalX, goalZ
 	acceptGroundRoute(route, u, goal, goalX, goalZ, haveGoalPoint, allowSynthetic, revision, tick)
 }
 
-// installGroundRoute publishes points, then applies the fixed acceptance
-// order. Empty publications only clear wants-repath; the per-tick follower
-// re-arms it and observes the 60-tick throttle [04 R-PATH-01 §8].
-func installGroundRoute(route *Route, u *units.Unit, goal path.Goal, goalX, goalZ numeric.Fixed, haveGoalPoint, allowSynthetic bool, points []Point, revision uint64, tick uint32) {
+// installGroundRoute is the search's publication and nothing else.
+//
+// Correction (2026-08-31, [05 R-EGRESS-02]). This used to run the three
+// acceptance gates of [04 R-PATH-01 §8] over every publication, on that
+// section's parenthetical "when a newly published route (or a new goal object)
+// is installed". The parenthetical is inverted: the gates belong to the GOAL
+// INSTALLER alone (installGroundGoal below). The publisher itself — the only
+// writer the search uses — clamps the count to 20, writes the count and the
+// points, sets has-waypoint and dirty, and clears wants-repath, with no
+// point-count test, no goal-point query, no terminal-cell test, no
+// half-distance test and no synthetic rewrite; [04 R-PATH-01 §7]'s publication
+// contract states exactly those five effects and Route.PublishAtRevision
+// already implements them.
+//
+// The consequence of the inversion was a liveness bug, not a cosmetic one:
+// collinear removal collapses a straight or diagonal A* run to exactly TWO
+// points, both point-count gates require three or more, so a perfectly good
+// two-point route around an obstacle was rejected and overwritten by the
+// synthetic straight line at the goal — aiming the mover back into whatever it
+// had just routed around, on every republication, forever. The follower kept
+// believing it held a route, so nothing ever reported blocked.
+func installGroundRoute(route *Route, points []Point, revision uint64) {
 	if route == nil {
 		return
 	}
 	route.PublishAtRevision(points, revision)
-	if len(points) == 0 {
-		return
-	}
-	route.WantsRepath = true
-	acceptGroundRoute(route, u, goal, goalX, goalZ, haveGoalPoint, allowSynthetic, revision, tick)
 }
 
 // publishFunc stores the published points into the per-unit Route via Route.Publish
@@ -1747,30 +1791,10 @@ func (s *System) publishFunc(r path.Request, points []path.Point, status path.St
 			revision = 0 // aircraft do not consume the ground static layer
 		}
 	}
-	if s.world != nil {
-		u := s.world.Unit(r.Unit)
-		if u != nil && (u.Def == nil || !u.Def.CanFly) {
-			goalX, goalZ, haveGoal := numeric.Fixed(0), numeric.Fixed(0), false
-			allowSynthetic := false
-			fx, fz := s.pathFootprint(u)
-			goalX, goalZ, haveGoal = groundGoalPoint(r.Goal, u, fx, fz)
-			if binding := s.activeOrders[r.Unit]; binding != nil && binding.order != nil {
-				// TODO(question): the queue-pump flag that suppresses the synthetic route while
-				// retiring an order is not represented on orders.Node. A publication
-				// whose binding still matches the active head is treated as live [04
-				// R-PATH-01 §8].
-				allowSynthetic = haveGoal
-			} else {
-				q := orders.QueueForUnit(u)
-				allowSynthetic = haveGoal && q != nil && q.Head() != nil
-			}
-			installGroundRoute(route, u, r.Goal, goalX, goalZ, haveGoal, allowSynthetic, mPoints, revision, s.tick)
-		} else {
-			route.PublishAtRevision(mPoints, revision)
-		}
-	} else {
-		route.PublishAtRevision(mPoints, revision)
-	}
+	// One publisher for ground and air alike: a published route is adopted
+	// verbatim [04 R-PATH-01 §7][05 R-EGRESS-02]. The acceptance gates run only
+	// where a goal object is installed (installGroundGoal).
+	installGroundRoute(route, mPoints, revision)
 	route.Status = status
 	if status == path.StatusRejected {
 		s.recordPathFailure(r.Unit, status, s.tick)
@@ -1948,11 +1972,17 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	// we fall back to direct carrier check for backward compat (still deterministic).
 	if s.tickCarried != nil {
 		if _, isCarried := s.tickCarried[handle]; isCarried {
+			// Transport removes the mover from the ground route scheduler. Keep
+			// the queue record intact for the eventual unload, but clear all
+			// follower state so a carried unit cannot re-arm an old request
+			// [04 §10.2][04 R-PATH-01 §8].
+			s.DeactivateMove(handle)
 			d := s.distToGoal(u)
 			s.emitMovementCallbacks(u, 0) // carried cargo does not drive own mover [04 §10.2]
 			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
 		}
 	} else if u.Attachment.Carrier != 0 {
+		s.DeactivateMove(handle)
 		d := s.distToGoal(u)
 		s.emitMovementCallbacks(u, 0)
 		return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}

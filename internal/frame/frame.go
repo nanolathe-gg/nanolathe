@@ -95,12 +95,16 @@ type UnitView struct {
 	// Kills is the credited-kill counter the footer's kills line reads
 	// [07 R-HUD-03 §2].
 	Kills int32
-	// MoverMode is the committed low two bits of the unit's mover mode word:
-	// 1 is on the ground or on the surface, 2 is airborne, and 0 and 3 reach a
-	// unit only through a save file [04 R-MOV-01 §8].  It is the unit
-	// painter's pass selector — pass A draws the grounded units interleaved
-	// with that row's tall features, pass B draws everything else after the
-	// projectile and effect strips [03 R-RAST-01 §7].
+	// MoverMode is the committed low two bits of the unit record's flags-word
+	// mode mirror: 1 is on the ground or on the surface — which includes every
+	// structure, nanoframe or complete — 2 is airborne, 0 is attached to a
+	// carrier or parked on a pad, and 3 reaches a unit only through a save file
+	// [04 R-MOV-01 §8].  It is the unit painter's pass selector: pass A draws
+	// the mirror-1 units interleaved with that row's tall features, pass B
+	// draws everything else after the projectile and effect strips
+	// [03 R-RAST-01 §7].  Structures are pass A; the earlier reading that put
+	// them in pass B read this word as the mover object's mode rather than the
+	// record's own mirror and was retracted on 2026-08-30.
 	MoverMode uint8
 	// Group is the unit's one stored control-group value [07 §9].  The
 	// health-bar pass draws the digit '0'+Group beside the bar of a unit whose

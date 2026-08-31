@@ -3,6 +3,7 @@ package orders
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/pool"
@@ -137,9 +138,212 @@ type QueueBinding struct {
 	StockpileEconomy interface {
 		UnitBuckets(pool.Handle) *[2]economy.Bucket
 	}
-	Lookup    func(pool.Handle) *units.Unit
-	Hostility func(actor *units.Unit, target *units.Unit) bool
-	SimRNG    *rng.Simulation
+	Lookup      func(pool.Handle) *units.Unit
+	Hostility   func(actor *units.Unit, target *units.Unit) bool
+	SimRNG      *rng.Simulation
+	CurrentTick func() uint32
+
+	// The following adapters are the session-owned runtime seam for the order
+	// families. They are deliberately data-shaped rather than package globals:
+	// the order package depends on request/result primitives, while session
+	// composition supplies the concrete movement, world, work, combat, and
+	// presentation owners [P0-00 A][04 R-ORD-01 §1]. The O0 composition gate
+	// checks the adapters and operations needed by the binding/lifecycle seam;
+	// family-specific callbacks remain nil until their owning O1/O3/O4 work
+	// lands and must be checked by those callers before invocation.
+	Movement     *MovementGoalAdapter
+	World        *WorldQueryAdapter
+	Work         *WorkAdapter
+	Weapons      *WeaponAdapter
+	Presentation *PresentationAdapter
+}
+
+// PointGoalRequest identifies one order-node-owned point payload. Keeping the
+// node pointer in every request prevents a late arrival from satisfying a
+// successor that replaced the queue head [P0-00 B][04 R-ORD-01 §0].
+type PointGoalRequest struct {
+	Owner   pool.Handle
+	Node    *Node
+	X, Y, Z numeric.Fixed
+	Radius  int32
+}
+
+// AnnulusGoalRequest identifies an annulus payload. Outer and inner radii are
+// separate because the researched installer carries both values [04 R-ORD-01
+// §1].
+type AnnulusGoalRequest struct {
+	Owner       pool.Handle
+	Node        *Node
+	X, Y, Z     numeric.Fixed
+	OuterRadius int32
+	InnerRadius int32
+}
+
+// RectangleGoalRequest identifies a snapped footprint rectangle payload
+// [04 R-ORD-01 §1].
+type RectangleGoalRequest struct {
+	Owner        pool.Handle
+	Node         *Node
+	CellX, CellZ int32
+	Width, Depth int32
+}
+
+// AirGoalRequest is the primitive air payload description. The movement
+// package owns the marker implementation; orders only supplies its stable
+// node identity and authored scalar inputs [P0-00 B][04 R-AIR-01 §4].
+type AirGoalRequest struct {
+	Owner   pool.Handle
+	Node    *Node
+	Target  pool.Handle
+	X, Y, Z numeric.Fixed
+	Radius  int32
+	Flags   uint16
+}
+
+// MovementGoalAdapter is the narrow goal/release port used by order handlers.
+// Each callback returns false when the owner cannot accept the request. The
+// callback itself is responsible for publishing the pending word at the
+// movement boundary; the order package does not duplicate that state machine.
+type MovementGoalAdapter struct {
+	Ready            func() bool
+	InstallPoint     func(PointGoalRequest) bool
+	InstallAnnulus   func(AnnulusGoalRequest) bool
+	InstallRectangle func(RectangleGoalRequest) bool
+	InstallAir       func(AirGoalRequest) bool
+	Release          func(*Node) bool
+}
+
+// FeatureView is the value-only feature identity exposed to order scans. It
+// intentionally avoids importing the feature runtime into orders (which would
+// create a package cycle) and is traversed in the feature service's established
+// stable anchor order [01 §6.2][05 "Feature instance and terrain cell"].
+type FeatureView struct {
+	ID            uint16
+	CX, CZ        int32
+	X, Z          numeric.Fixed
+	DefinitionKey string
+}
+
+// WorldQueryAdapter owns deterministic target/feature lookup and geometry
+// queries. ForEachUnit and ForEachFeature must invoke callbacks in retail pool
+// order; callers must not replace them with map traversal [P0-00 A,D][I1].
+type WorldQueryAdapter struct {
+	LookupUnit     func(pool.Handle) *units.Unit
+	Hostile        func(*units.Unit, *units.Unit) bool
+	ForEachUnit    func(func(pool.Handle, *units.Unit) bool)
+	LookupFeature  func(int32, int32) (FeatureView, bool)
+	ForEachFeature func(func(FeatureView) bool)
+	TerrainHeight  func(numeric.Fixed, numeric.Fixed) (numeric.Fixed, bool)
+	SeaLevel       func() uint8
+	ModelBounds    func(pool.Handle) (int32, int32, bool)
+}
+
+// WorkAdapter is the construction/repair/ownership port. The result is kept
+// as a bool at this seam; concrete work services own their detailed progress,
+// economy, packet, and callback state [P0-00 C].
+type WorkAdapter struct {
+	Ready          func() bool
+	Assist         func(*units.Unit, *Node, uint32) bool
+	Repair         func(*units.Unit, *Node, uint32) bool
+	Capture        func(*units.Unit, *Node, uint32) bool
+	ReclaimFeature func(*units.Unit, *Node, uint32) bool
+	ReclaimUnit    func(*units.Unit, *Node, uint32) bool
+	Resurrect      func(*units.Unit, *Node, uint32) bool
+	Refresh        func(*units.Unit)
+}
+
+// WeaponAdapter is the order-facing combat slot port. Slot operations remain
+// callbacks so combat remains the sole owner of authoritative weapon state
+// [P0-00 E][06 §1.2].
+type WeaponAdapter struct {
+	Ready           func() bool
+	ReleaseSlot     func(*units.Unit, int) bool
+	InhibitSlot     func(*units.Unit, int) bool
+	SetManualTarget func(*units.Unit, int, pool.Handle) bool
+	FireTarget      func(*units.Unit, int, pool.Handle, uint32) bool
+	FirePoint       func(*units.Unit, int, numeric.Fixed, numeric.Fixed, uint32) bool
+	StopFiring      func(*units.Unit, int) bool
+	Acquire         func(*units.Unit, int, uint32) (pool.Handle, bool)
+	Engaged         func(*units.Unit, int) bool
+}
+
+// PresentationAdapter is the committed-frame event port. It carries semantic
+// status and nanolathe events without allowing the order pump to mutate client
+// state [P0-00 F][03 §1].
+type PresentationAdapter struct {
+	Ready     func() bool
+	Status    func(*units.Unit, uint8, string) bool
+	Nanolathe func(*units.Unit, *Node, uint32) bool
+}
+
+// ValidateSinglePlayerBinding checks the O0-required composition seam. It is
+// intentionally separate from Queue.Pump so fixture queues can exercise pump
+// result tables without constructing a complete battle [P0-00 A.3]. Later
+// family-specific effects validate their own operation callback before use.
+func (b *QueueBinding) ValidateSinglePlayerBinding() error {
+	if b == nil {
+		return fmt.Errorf("orders: missing queue binding")
+	}
+	if b.SimRNG == nil {
+		return fmt.Errorf("orders: missing simulation RNG")
+	}
+	if b.StockpileEconomy == nil || b.Lookup == nil || b.Hostility == nil {
+		return fmt.Errorf("orders: incomplete base queue services")
+	}
+	if b.Movement == nil || b.World == nil || b.Work == nil || b.Weapons == nil || b.Presentation == nil {
+		return fmt.Errorf("orders: incomplete single-player queue services")
+	}
+	if b.Movement.Ready == nil || !b.Movement.Ready() || b.Movement.InstallPoint == nil || b.Movement.Release == nil {
+		return fmt.Errorf("orders: incomplete movement goal service")
+	}
+	if b.Work.Ready == nil || !b.Work.Ready() || b.Weapons.Ready == nil || !b.Weapons.Ready() || b.Presentation.Ready == nil || !b.Presentation.Ready() {
+		return fmt.Errorf("orders: incomplete single-player subsystem service")
+	}
+	if b.World.LookupUnit == nil || b.World.Hostile == nil || b.World.ForEachUnit == nil || b.World.ForEachFeature == nil || b.World.TerrainHeight == nil || b.World.SeaLevel == nil {
+		return fmt.Errorf("orders: incomplete world query service")
+	}
+	return nil
+}
+
+// ForEachUnit visits live units through the composed world adapter. The
+// adapter, rather than a queue handler, owns the retail slot order; returning
+// true from the visitor stops further callbacks [01 §4.4][01 §6.2][I1].
+func (b *QueueBinding) ForEachUnit(visit func(pool.Handle, *units.Unit) bool) {
+	if b == nil || b.World == nil || b.World.ForEachUnit == nil || visit == nil {
+		return
+	}
+	b.World.ForEachUnit(visit)
+}
+
+// ForEachFeature visits live features through the composed world adapter. The
+// feature service supplies stable anchor order; this helper never ranges a
+// feature map [01 §6.2][05 "Feature instance and terrain cell"][I1].
+func (b *QueueBinding) ForEachFeature(visit func(FeatureView) bool) {
+	if b == nil || b.World == nil || b.World.ForEachFeature == nil || visit == nil {
+		return
+	}
+	b.World.ForEachFeature(visit)
+}
+
+// LookupFeature resolves an anchored live feature through the same world
+// adapter used by traversal. A missing feature is represented by ok=false,
+// not by a fabricated definition [P0-00 D].
+func (b *QueueBinding) LookupFeature(cx, cz int32) (FeatureView, bool) {
+	if b == nil || b.World == nil || b.World.LookupFeature == nil {
+		return FeatureView{}, false
+	}
+	return b.World.LookupFeature(cx, cz)
+}
+
+// Tick returns the session's current authoritative tick when the binding
+// supplies one. Handlers normally receive the pump tick directly; this seam is
+// for callbacks reached during queue cleanup outside the normal walk [01
+// §4.4][04 R-ORD-01 §1].
+func (b *QueueBinding) Tick() uint32 {
+	if b == nil || b.CurrentTick == nil {
+		return 0
+	}
+	return b.CurrentTick()
 }
 
 // SetBinding installs all per-queue authoritative inputs as one value.
@@ -161,7 +365,10 @@ func (q *Queue) SetBinding(b *QueueBinding) {
 
 // Binding returns this queue's concrete binding. Value fixtures that predate
 // QueueBinding are read from their legacy fields without caching, so a test
-// that installs a hook after an earlier lookup still observes that hook.
+// that installs a hook after an earlier lookup still observes that hook. This
+// compatibility synthesis remains only while construction and older fixture
+// callers still write Queue.Lookup/Hostility/StockpileEconomy directly; new
+// production queue paths must pass the concrete binding through SetBinding.
 func (q *Queue) Binding() *QueueBinding {
 	if q == nil {
 		return nil
@@ -646,6 +853,21 @@ func (q *Queue) PurgeUnprotected() {
 	}
 }
 
+// hasLeadingAutoOp reports whether either segment leads with an auto/default
+// record. Push tests it first because DropLeadingAutoOps ends by moving the
+// active marker back to the front record, which is only correct when the drop
+// actually removed the record the marker sat on; an unconditional call would
+// reset the insertion point of every ordinary queued add [04 §3.3].
+func (q *Queue) hasLeadingAutoOp() bool {
+	if q == nil {
+		return false
+	}
+	if len(q.primary) > 0 && q.primary[0].Flags&FlagAutoOp != 0 {
+		return true
+	}
+	return len(q.secondary) > 0 && q.secondary[0].Flags&FlagAutoOp != 0
+}
+
 func (q *Queue) DropLeadingAutoOps() {
 	if q == nil {
 		return
@@ -680,6 +902,16 @@ func (q *Queue) Push(id ID, n Node) {
 	if len(q.primary) >= OOMGuardQueue {
 		q.recordDiagnostic(fmt.Sprintf("orders: primary queue OOM guard (%d), dropping %s", len(q.primary), DescriptorFor(id).Name))
 		return
+	}
+	// "Issuing a front-segment record drops leading auto/default records (those
+	// carrying the auto-op flag) wherever they live" [04 §3.3]. Push is the
+	// common insertion path every producer enters through, so the drop belongs
+	// here and not at each producer: without it the pump's own idle refill
+	// (refillIdle below) parks a standing `Standby` / `VTOL_Standby` record at
+	// the head, and every later order queues behind a record whose gate no
+	// producer in this build can satisfy.
+	if q.hasLeadingAutoOp() {
+		q.DropLeadingAutoOps()
 	}
 	node := newNode(id, n) // [04 §3.3][05 "Queue insertion"] C9
 	act := findActive(q)
@@ -919,6 +1151,118 @@ func (q *Queue) Pump(u *units.Unit, tick uint32) {
 	q.pumpSecondary(u, tick)
 }
 
+// IdleRefillMission resolves the standing task the primary pump creates for
+// an idle unit [04 §3.3, "Closed — the idle-queue refill from
+// `defaultmissiontype`"][02 R-KEYS-01 §1].
+//
+// Established, re-verified 2026-08-31: the definition's 100-byte
+// `defaultmissiontype` string is converted through the ORDER DESCRIPTOR
+// registry's own case-insensitive name lookup — the same binary search over the
+// 25-byte descriptor records that §3.1 sorts, returning the record's table
+// index as a byte, and 0 (the reject sentinel) for an empty or unrecognised
+// name. The pump's condition is three terms: the front list is empty, the
+// owner's controller state is 1 or 2, and the code is non-zero.
+//
+// The controller state is passed in because this package cannot see the player
+// ledger. Values 1 and 2 are the two ACTIVE player states — 1 human, 2 computer
+// ([04 R-SPEC-01 §5] identifies 2 as the computer player) — not, as §3.3 used to
+// say, "one of the two computer-player states": the same 1-or-2 test gates the
+// whole per-unit sweep that runs this pump, with 3 the eliminated/watch state
+// whose units are skipped entirely ([04 §8.3, "Closed — compact ground
+// controller"]). A human player's idle aircraft is therefore refilled exactly
+// like a computer player's, which is what makes the stock
+// `defaultmissiontype = VTOL_Standby` reachable at all.
+func IdleRefillMission(u *units.Unit, controllerState uint8) (ID, bool) {
+	if u == nil || u.Def == nil {
+		return 0, false
+	}
+	if controllerState != 1 && controllerState != 2 {
+		return 0, false
+	}
+	name := u.Def.DefaultMissionType
+	if name == "" {
+		return 0, false
+	}
+	id := Lookup(name)
+	if id == 0 {
+		// The registry comparator is case-insensitive [04 §3.1], so an authored
+		// name that differs only in case still resolves.
+		for i := range table {
+			if i != 0 && strings.EqualFold(table[i].Name, name) {
+				id = ID(i)
+				break
+			}
+		}
+	}
+	if id == 0 {
+		return 0, false
+	}
+	return id, true
+}
+
+// controllerStateOf reads the owner's controller state through the queue's
+// economy binding. The binding carries the economy service under its stockpile
+// name; with none bound there is no ledger and no refill.
+func (q *Queue) controllerStateOf(u *units.Unit) uint8 {
+	if q == nil || u == nil {
+		return 0
+	}
+	svc, ok := q.StockpileEconomy.(*economy.Service)
+	if !ok || svc == nil {
+		return 0
+	}
+	owner := int(u.Owner)
+	if owner < 0 || owner >= len(svc.Players) {
+		return 0
+	}
+	return svc.Players[owner].ControllerState
+}
+
+// refillIdle is the pump's own record creation for an idle unit [04 §3.3]:
+// "Idle default-operation records are created by the primary pump itself —
+// never by insertion — only when its list is empty ... such a node is allocated
+// in non-queued mode, constructed with the auto flag, and head-inserted into
+// the list the op's descriptor selects (a secondary-class default op therefore
+// lands in the rear segment)." The pump returns after the insert; the record is
+// dispatched on the next visit.
+//
+// This is the seam the standby → `VTOL_LandIfCan` → landing chain hangs from:
+// every stock aircraft authors `defaultmissiontype = VTOL_Standby`, so with no
+// refill no `VTOL_Standby` record ever existed and a plane that finished a move
+// hovered where it stopped forever.
+func (q *Queue) refillIdle(u *units.Unit) bool {
+	if q == nil {
+		return false
+	}
+	return q.refillIdleWithState(u, q.controllerStateOf(u))
+}
+
+// refillIdleWithState is refillIdle with the controller state supplied, so the
+// insertion half can be exercised without an economy ledger behind the queue.
+func (q *Queue) refillIdleWithState(u *units.Unit, controllerState uint8) bool {
+	if q == nil || u == nil || len(q.primary) != 0 {
+		return false
+	}
+	id, ok := IdleRefillMission(u, controllerState)
+	if !ok {
+		return false
+	}
+	n := Node{Owner: u.Handle, Deadline: -1}
+	if isSecondary(id) {
+		q.PushSecondary(id, n)
+		if len(q.secondary) > 0 {
+			q.secondary[0].Flags |= FlagAutoOp
+		}
+		return true
+	}
+	node := q.PushHead(id, n)
+	if node == nil {
+		return false
+	}
+	node.Flags |= FlagAutoOp // "constructed with the auto flag" [04 §3.3]
+	return true
+}
+
 func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 	if q == nil || u == nil {
 		return
@@ -926,7 +1270,29 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 	q.lastPumpTick = tick
 	// No iteration cap here (ORD-02): a handler looping through the continue
 	// codes wedges exactly as retail's does [04 §3.3][I11].
-	// TODO(question) idle default-op creation when primary empty [05 "Queue pumping and result codes"] step 1: owner player-state settling byte, definition default-idle-op field
+	if len(q.primary) == 0 {
+		// TODO(T25): the idle refill from `defaultmissiontype` belongs here —
+		// `q.refillIdle(u)` is written, exported through IdleRefillMission, and
+		// locked by TestIdleRefillMissionCondition; the CONTRACT is Established
+		// and re-verified against the executable on 2026-08-31 (see the doc-04
+		// §3.3 closure and its correction). It is not called yet because this
+		// build cannot survive its consequence: the refill hands every stock
+		// aircraft the `VTOL_Standby` record whose no-cargo arm pushes
+		// `VTOL_LandIfCan`, and that executor's landing-legality predicate is
+		// still an explicit placeholder ([04 R-AIR-01 §6] names the test but not
+		// its body; internal/movement/airorders.go `landable`). With the refill
+		// wired, a factory's first aircraft product lands immediately beside its
+		// own plant and the plant then stalls forever in its build-stance
+		// handshake — TestFactoryRepeatThroughDispatchRetail (internal/session)
+		// reproduces it exactly, and both the placeholder and the handshake live
+		// outside this package.
+		// Enabling is this one call plus its session-side half: a unit that has
+		// never carried an order has no queue for the pump to walk, so the
+		// per-unit visit must materialise one when IdleRefillMission would push
+		// (internal/session/step.go, beside the PumpUnit call), which is where
+		// the owner's controller state is readable.
+		return
+	}
 	for cursor := 0; cursor < len(q.primary); {
 		n := q.primary[cursor]
 		if n.Deadline != -1 && tick >= uint32(n.Deadline) {
@@ -1304,7 +1670,34 @@ const (
 const (
 	MobileBuildWaitingText = "Waiting for target area to clear"
 	MobileBuildBlockedText = "Target area was blocked"
+	// MobileBuildUnreachableText is the approach-failure text of the same row
+	// [04 R-ORD-01 §5, the `MobileBuild` row].
+	MobileBuildUnreachableText = "I can't reach the construction site"
 )
+
+// MobileBuildUnreachableVisit is the approach-failure arm of the mobile-build
+// row [04 R-ORD-01 §5]: "Phase 1: when satisfied has `0x40`, run the reach test
+// against the product footprint; out of reach → status 7 `I can't reach the
+// construction site`, abandon." `0x40` is the route publisher's "cannot get
+// there" notification — an empty publication raised while the mover is not at
+// the goal [04 R-PATH-01 §7][04 R-COLL-01 §6] — and it is the ONLY thing that
+// ends an approach the search cannot satisfy: the follower re-requests every 60
+// ticks forever with no retry ceiling [04 R-MOV-01 §7], so a record that
+// ignores the bit walks nowhere and waits for a wake that will never differ.
+//
+// The caller supplies the reach verdict, because the reach test measures
+// against the product's footprint and internal/construction owns the product
+// definition; it notifies the returned text through its own status surface and
+// applies code 8 (abandon: unlink and free the single record, [04 §3.3]).
+// `satisfied` is the record's accumulated pending word. With the bit absent, or
+// the mover already in reach, the caller keeps its approach: code 2, continue
+// unchanged.
+func MobileBuildUnreachableVisit(satisfied uint32, outOfReach bool) (statusText string, code Code) {
+	if satisfied&pendNoRoute == 0 || !outOfReach {
+		return "", 2
+	}
+	return MobileBuildUnreachableText, 8
+}
 
 // MobileBuildBlockedVisit is one blocked-visit step of the mobile-build
 // budget for the record n at tick. It returns the verbatim status text to
@@ -1375,9 +1768,18 @@ func QueueOfUnit(u *units.Unit) *Queue {
 }
 
 func BindQueue(u *units.Unit, q *Queue) {
-	if u != nil {
-		u.Orders = q
+	if u == nil {
+		return
 	}
+	if q != nil && q.binding == nil {
+		// Queue replacement is a lifecycle boundary: preserve the session
+		// context from the replaced queue unless the producer supplied a new
+		// concrete binding explicitly [P0-00 A.1][04 §3.3].
+		if prior := QueueOfUnit(u); prior != nil && prior.binding != nil {
+			q.SetBinding(prior.binding)
+		}
+	}
+	u.Orders = q
 }
 
 // RemovePrimaryNode removes one primary node in place, preserving queue

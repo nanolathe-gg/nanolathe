@@ -4,6 +4,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 // OW-3-P goal-families wiring [04 §7.2][04 §7.4][04 §3.5].
@@ -83,15 +84,82 @@ const (
 //
 // All other orders => PointGoal(radius 0) [04 §7.2] C8.
 func (s *System) goalForOrder(goalCell path.Cell, n *orders.Node) path.Goal {
-	return s.goalForOrderWithFootprint(goalCell, n, 1, 1)
+	return s.goalForOrderWithFootprint(nil, goalCell, n, 1, 1)
+}
+
+// workApproachGoal is the goal payload the ground work rows install
+// [04 R-ORD-01 §5]. Two shapes cover the family, and both are stated per-row:
+//
+//   - `HelpBuild` phase 0 installs an ANNULUS at the target's position with
+//     outer radius `builddistance + half` and inner radius `half`, where
+//     `half` is the assist approach term taken from the assistant's OWN
+//     footprint (orders.AssistApproachHalf). The annulus class stores the
+//     octile radii the heuristic clamps against and, separately, the squared
+//     cell radii the arrival predicate compares — internal/path derives the
+//     second pair by the >>4 quantisation [04 R-PATH-01 §9][04 R-MOV-03 §2].
+//     The band is what lets an assistant arrive BESIDE its target: a point
+//     goal on the target's own anchor cell can never be occupied, so the
+//     search fails and the record abandons instead of working.
+//   - `RepairUnit` phase 1 and `Capture` phase 0 install a RECTANGLE on the
+//     target's footprint; its admissible cells are exactly the border and
+//     arrival is lying on it [04 §7.2].
+//
+// `Reclaim` and `Resurrect` install that same rectangle on the FEATURE's
+// footprint [04 R-ORD-01 §5], and this build has no feature resolver reachable
+// from the order layer (the resolver placeholder on reclaimHandler,
+// internal/orders/work.go). They keep the default point goal until a feature
+// footprint is readable here; a trace is not what is missing, the plumbing is.
+// The open marker for that gap stands at the payload bind in integrate.go.
+func (s *System) workApproachGoal(mover *units.Unit, goalCell path.Cell, n *orders.Node, footX, footZ int32) (path.Goal, bool) {
+	if s == nil || n == nil || mover == nil || mover.Def == nil {
+		return nil, false
+	}
+	target := (*units.Unit)(nil)
+	if n.Target != 0 && s.world != nil {
+		target = s.world.Unit(n.Target)
+	}
+	switch orders.DescriptorFor(n.ID).Name {
+	case "HelpBuild":
+		center := goalCell
+		if target != nil {
+			center = path.Cell{X: goalCellForWorld(target.X, footX), Z: goalCellForWorld(target.Z, footZ)}
+		}
+		half := orders.AssistApproachHalf(mover.Def.FootprintX, mover.Def.FootprintZ)
+		outer := mover.Def.BuildDistance + half
+		if outer < half {
+			outer = half
+		}
+		return path.AnnulusGoal(center, half, outer), true
+	case "RepairUnit", "Capture":
+		if target == nil || target.Def == nil {
+			return nil, false
+		}
+		tfx, tfz := target.Def.FootprintX, target.Def.FootprintZ
+		if tfx <= 0 {
+			tfx = 1
+		}
+		if tfz <= 0 {
+			tfz = 1
+		}
+		anchorX := goalCellForWorld(target.X, tfx)
+		anchorZ := goalCellForWorld(target.Z, tfz)
+		return path.RectPerimeterGoal(path.Rect{
+			Min: path.Cell{X: anchorX, Z: anchorZ},
+			Max: path.Cell{X: anchorX + tfx - 1, Z: anchorZ + tfz - 1},
+		}), true
+	}
+	return nil, false
 }
 
 // goalForOrderWithFootprint uses the owning mover's footprint for target
 // snapping. Annulus centres are constructed from target world positions with
 // the same footprint formula as point goals [04 R-MOV-03 §2].
-func (s *System) goalForOrderWithFootprint(goalCell path.Cell, n *orders.Node, footX, footZ int32) path.Goal {
+func (s *System) goalForOrderWithFootprint(mover *units.Unit, goalCell path.Cell, n *orders.Node, footX, footZ int32) path.Goal {
 	if n == nil {
 		return path.PointGoal(goalCell, 0)
+	}
+	if g, ok := s.workApproachGoal(mover, goalCell, n, footX, footZ); ok {
+		return g
 	}
 	name := orders.DescriptorFor(n.ID).Name
 	switch name {

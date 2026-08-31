@@ -3319,6 +3319,135 @@ retail post-completion egress/takeoff mechanism, its collision exemption, and
 its blocked-lane policy are not. Implementations must retain these as
 `TODO(question)` until executable or authored-data evidence closes them.
 
+### Correction — a no-rally product column is a route-publication defect, not retail [R-EGRESS-02] (2026-08-31)
+
+**Established by direct trace of the route follower's two entry points.** This
+section reverses the conclusion of `[04 R-EGRESS-01]` and closes the question
+its composition left open. It is written here because doc 05 owns the factory
+production lifecycle; `[04 R-EGRESS-01]` and `[04 R-PATH-01 §8]` need the
+pointer added by doc 04's owner.
+
+**What `[04 R-EGRESS-01]` said, and which part is wrong.** Its step 3 read:
+"A short route is replaced by a straight line at that point. Both point-count
+gates of the route-acceptance rule require **three or more** stored points; a
+one- or two-point route skips to the synthetic fallback, which overwrites the
+route with the unit's own position and the goal point." Its conclusion read:
+"This is **not** a deadlock and does not block the factory: each product clears
+the exit cells before the next is allocated." The gate arithmetic is right; the
+place it is applied is wrong, and the conclusion that follows is wrong.
+
+**Established — the acceptance rule belongs to the goal installer, and only to
+it.** The ground route follower has two distinct entry points and they do
+different things:
+
+* The **goal installer** (the follower method an order handler's phase 0
+  reaches when it hands over a new goal object — `Park`'s rectangle installer
+  among them) cancels any in-flight search for this follower, releases the
+  previous goal payload with `0x80`, adopts the new goal, sets *wants-repath*,
+  and then runs the three gates in the order `[04 R-PATH-01 §8]` states:
+  terminal-cell test, half-distance test, synthetic fallback. Both point-count
+  gates require three or more **currently held** points — which, at the moment
+  a goal is installed, is whatever the follower was carrying for the *previous*
+  goal, usually nothing. That is what the synthetic fallback is for: it gives
+  the mover a provisional straight line to walk while the asynchronous search
+  runs, instead of standing still.
+* The **publisher** is a separate method, and it is the only writer the path
+  search uses — its four call sites are route reconstruction, the two
+  request-init early exits, and heap exhaustion. Its whole body is: clamp any
+  count above 20 to 20; write the count; copy the points; set *has-waypoint*,
+  clear *wants-repath*, set *dirty*. On an empty publication it asks the goal
+  whether the unit is at the goal, raises `0x40` if not, clears *has-waypoint*
+  and *wants-repath*, sets *dirty*, and writes neither count nor array. There
+  is **no** point-count test beyond the 20-clamp, no goal-point query, no
+  terminal-cell test, no half-distance test and no synthetic rewrite anywhere
+  in it. **A published route is adopted verbatim.**
+
+`[04 R-PATH-01 §8]`'s sentence "When a newly published route (or a new goal
+object) is installed, the follower does, in order: …" is therefore wrong in its
+parenthetical — it is the goal object alone. Everything else in that section
+stands, including the two three-or-more thresholds and the synthetic fallback's
+shape.
+
+**Established — the flag that suppresses the synthetic fallback.** The same
+trace closes `[04 R-PATH-01 §8]`'s `TODO(question)` ("the semantic name of the
+order-record flag that suppresses the synthetic fallback"). The installer emits
+the synthetic route only when the unit has a primary queue head **and** that
+head's flags word does not carry the **completion flag** — the same bit the
+primary pump's code-9 arm sets before it re-arms or removes the record
+(`[04 §3.3]`). A record being taken down by a code-9 completion gets no
+straight-line consolation route.
+
+**Established — why the column is a deadlock and not a contract.** With the
+gates confined to the goal installer, the egress composition of
+`[04 R-EGRESS-01]` steps 1, 2 and 4 no longer produces a column, because three
+mechanisms it omitted do their work:
+
+1. **The rectangle goal's admissible set is its whole border, not its goal
+   point.** The rectangle enumerator appends every cell of the perimeter, and
+   request setup marks every in-bounds enumerated cell as an acceptable
+   terminal; the search's pop loop stops at the first terminal it pops
+   (`[04 R-PATH-01 §4][04 R-PATH-01 §9][04 R-MOV-03 §9]`). For a land product
+   of footprint width 2 the rectangle is 16 by 12 cells, so about fifty
+   distinct cells satisfy the goal. The far-edge goal point matters only to the
+   *installer's* half-distance test and its synthetic route — never to where
+   the search terminates, and never to arrival, which is lying on the border
+   (`[04 §7.2]`).
+2. **A settled neighbour becomes opaque to the next search.** The class layer's
+   occupant test blocks a cell whose occupant's last-stamp tick predates the
+   layer watermark, and the watermark trails the current tick by 30
+   (`[04 R-MOV-03 §3][04 R-COLL-01 §7]`). A product that has arrived and
+   stopped committing is a hard obstacle to every request issued more than 30
+   ticks later.
+3. **The blocked follower re-requests, and its order re-goals.** A blocked
+   mover arms *wants-repath* every tick and the scheduler admits it at most
+   once per 60 ticks (`[04 R-MOV-01 §7]`). If the search finds a way round, the
+   route publishes and is adopted verbatim. If it does not, the empty
+   publication raises `0x40`, and `Park`'s phase 1 — no arrival bit, no record
+   behind it — arms a 30-tick deadline and returns *restart*, which the pump
+   maps to **phase reset to zero** (`[04 §3.3]`). Thirty ticks later phase 0
+   installs a **fresh** rectangle centred on the unit's *current* committed
+   cell: the rectangle is re-derived per re-arm, not held for the life of the
+   order. (Phase 1 never runs in the same cascade as phase 0: phase 0 leaves
+   gate `0xE0` and its own goal install has just wiped the record's satisfied
+   bits `0x20` through `0x200`, so the pump's walk stops on the unsatisfied
+   gate.)
+
+The observable is therefore not a column: products fan out around the shared
+rectangle's border, one per cell, and the exit clears behind each of them. A
+rally point still replaces `Park` with the producer's own goal
+(`[04 R-FAC-02 §4]`); it is a convenience, not the only thing that prevents a
+stall.
+
+**What `[04 R-EGRESS-01]`'s prohibitions still forbid, and what they do not.**
+Do not make the rectangle goal point per-mover, do not relax the installer's
+three-point gates, and do not scatter neighbours: those three remain
+contradicted by direct traces, and no push, stacking, force-placement or engine
+scatter exists (`[04 R-FAC-02 §6][04 R-COB-05]`). What is *not* forbidden — and
+is required — is publishing a search result verbatim.
+
+**Nanolathe divergence this reverses (2026-08-31).** Nanolathe applied the
+acceptance gates on every publication as well as on goal install. A no-rally
+product blocked behind a parked predecessor repaths on the 60-tick cadence, the
+aged predecessor blocks in the class layer, and the search correctly returns a
+route around it to a different border cell — but a straight or diagonal run
+collapses under collinear removal to exactly **two** points
+(`[04 R-PATH-01 §7]`), the misapplied gates rejected it for being under three,
+and the synthetic fallback overwrote it with the straight line at the constant
+far-edge goal point, walking the mover back into the column. The column grew
+backwards into the exit footprint and the factory's exit test never passed
+again: a permanent stall with no resource consumption, reproduced with eight
+products out of one plant. Confining the gates to the goal installer — the
+publisher writing points, count and flags and nothing else — makes the same
+scenario fan out and the exit clear. The fix is a movement-layer change owned
+by another file this round; this section is the contract it must satisfy.
+
+**Confidence.** Established: direct static trace of the follower's install and
+publish methods and their call sites, the rectangle enumerator, the search's
+terminal marking and pop test, the class-layer occupant-age gate, the `Park`
+handler, and the primary pump's code-0 arm. The only inference is the
+attribution of *purpose* to the synthetic route (a provisional line to walk
+while the search runs); its arithmetic and call sites are direct.
+
 ### Rally inheritance
 
 **Rally inheritance is the factory's own queued orders.** When a product
@@ -4441,6 +4570,63 @@ or already playing its death or reclaim animation. The refusal is what
 to a 3D wreck (its instance bit is always set but its definition bit is
 clear), so a sinking wreck stays reclaimable throughout, as "Feature sinking
 and water interaction" states. The item is closed.
+
+#### R-WORK-01 §5-A — What the pools are worth in stock content, and the two payout hazards [R-WORK-01] (2026-08-30)
+
+**Established (reference install, `~/TotalAnnihilation`, 1644 compiled feature
+definitions).** The two halves of §5's payout are not symmetric in the shipped
+data, and the difference is what a player sees:
+
+* 922 definitions carry `reclaimable`; 933 name a `featurereclamate`
+  successor. **Every reclaimable stock feature that names one names
+  `smudge01`** — a one-cell, non-blocking, non-reclaimable scorch with empty
+  pools. Feature reclaim in stock content is therefore never a plain removal:
+  it is a replacement, and an implementation that only clears the grid loses
+  the scorch.
+* 134 definitions carry a positive `energy` and no metal; 902 carry a positive
+  `metal` and no energy. The split is by kind, not by chance: **the vegetation
+  (`features/trees`, `features/acid`, the plant groups) pays ENERGY and the
+  wreckage (`*_dead`, and the metal deposits) pays METAL.** `tree1` is
+  `metal 0, energy 250, damage 0, reclaimable 1, blocking 1, height 40,
+  featurereclamate smudge01, filename trees`; `armaap_dead` is
+  `metal 1768, energy 0, damage 1680, reclaimable 1, blocking 1, height 20,
+  featurereclamate smudge01`, with no `filename` because it is a 3D wreck.
+  No shipped definition pays both.
+* `damage` is unrelated to the countdown, and the data says so plainly:
+  `tree1` has `damage 0` and still takes `trunc(15 + 250/2) = 140` work, i.e.
+  seventy visits and 140 ticks. The retired "damage value is the completion
+  threshold" reading that §5 corrects would have made every tree instant.
+
+Two consequences follow for any implementation of §5's phase 5, and both are
+worth stating because getting either wrong is worse than not implementing
+reclaim at all:
+
+1. **The credit and the grid transition are one event.** The pools are paid
+   once, unconditionally, on the visit that removes the feature. Crediting
+   without removing pays the same tree forever; removing without crediting
+   deletes the map's economy. There is no partial-progress payment anywhere in
+   §5 — the countdown is on the order node and is discarded with it, exactly as
+   [R-WORK-01 §4] describes for the unit form.
+2. **The countdown is the feature's, not the builder's.** `workertime` does not
+   appear in `trunc(k + (metal + energy) / 2)`. A commander and a construction
+   aircraft take the same number of ticks over the same tree; only `k` differs,
+   and only by ground (15) versus air (30) [04 R-ORD-01 §5, §7].
+
+**Established — the truncation is on the whole expression.** §5 gives the form
+as "the sum is multiplied by a stored `-0.5f` and then subtracted **from**
+`15.0f`", with one float-to-integer conversion at the end. The halving is on
+the SUM and the truncation is not distributed over it: for a negative authored
+pool sum of −3 the value is `trunc(15 − 1.5) = 13`, where halving first and
+truncating each part gives 14. No stock definition authors a negative pool, so
+the difference is unobservable on retail content; it is recorded because the
+integer form an implementation naturally reaches for is the wrong one.
+
+**Unknown — the height byte's TDF key.** §5's phase-1 draw is bounded by "the
+feature definition's height byte". The compiled catalog's `height` key is the
+only height-shaped field on a feature record [02 "Feature record"] and its
+stock range is 0..490, so it is the field this build draws against; whether
+retail reads that key or a derived byte is still open. *Decider:* the feature
+parser's key list against the draw site's operand.
 
 ### Closed — the world-position feature resolver [R-ECO-02 §2] (2026-08-29)
 

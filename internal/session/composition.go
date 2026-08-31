@@ -479,15 +479,14 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 	if s == nil {
 		return nil
 	}
-	return &orders.QueueBinding{
-		StockpileEconomy: s.Econ,
-		Lookup: func(h pool.Handle) *units.Unit {
+	worldQueries := &orders.WorldQueryAdapter{
+		LookupUnit: func(h pool.Handle) *units.Unit {
 			if s.Units == nil {
 				return nil
 			}
 			return s.Units.Unit(h)
 		},
-		Hostility: func(actor, target *units.Unit) bool {
+		Hostile: func(actor, target *units.Unit) bool {
 			if actor == nil || target == nil {
 				return false
 			}
@@ -496,7 +495,117 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 			}
 			return actor.Owner != target.Owner
 		},
-		SimRNG: s.SimRNG(),
+		ForEachUnit: func(visit func(pool.Handle, *units.Unit) bool) {
+			if s.Units == nil || visit == nil {
+				return
+			}
+			stopped := false
+			s.Units.VisitActiveSlots(func(v units.SlotVisit) {
+				if stopped {
+					return
+				}
+				if visit(v.Handle, v.Unit) {
+					stopped = true
+					return
+				}
+			})
+		},
+		LookupFeature: func(cx, cz int32) (orders.FeatureView, bool) {
+			if s.Features == nil {
+				return orders.FeatureView{}, false
+			}
+			inst := s.Features.InstanceAt(int(cx), int(cz))
+			if inst == nil {
+				return orders.FeatureView{}, false
+			}
+			id := uint16(world.PlotFeatureNone)
+			if s.World != nil {
+				if cell := s.World.PlotAt(cx, cz); cell != nil {
+					id = cell.Feature()
+				}
+			}
+			var key string
+			if inst.Def != nil {
+				key = inst.Def.CanonicalKey
+			}
+			return orders.FeatureView{ID: id, CX: int32(inst.CX), CZ: int32(inst.CZ), X: inst.X, Z: inst.Z, DefinitionKey: key}, true
+		},
+		ForEachFeature: func(visit func(orders.FeatureView) bool) {
+			if s.Features == nil || visit == nil {
+				return
+			}
+			for _, inst := range s.Features.Instances() {
+				if inst == nil {
+					continue
+				}
+				id := uint16(world.PlotFeatureNone)
+				if s.World != nil {
+					if cell := s.World.PlotAt(int32(inst.CX), int32(inst.CZ)); cell != nil {
+						id = cell.Feature()
+					}
+				}
+				var key string
+				if inst.Def != nil {
+					key = inst.Def.CanonicalKey
+				}
+				if visit(orders.FeatureView{ID: id, CX: int32(inst.CX), CZ: int32(inst.CZ), X: inst.X, Z: inst.Z, DefinitionKey: key}) {
+					break
+				}
+			}
+		},
+		TerrainHeight: func(x, z numeric.Fixed) (numeric.Fixed, bool) {
+			if s.World == nil {
+				return 0, false
+			}
+			return s.World.HeightAt(x, z), true
+		},
+		SeaLevel: func() uint8 {
+			if s.World == nil {
+				return 0
+			}
+			return s.World.SeaLevel
+		},
+	}
+	movementGoals := &orders.MovementGoalAdapter{}
+	if s.Movement != nil {
+		movementGoals.Ready = func() bool { return s.Movement != nil }
+		movementGoals.InstallPoint = func(req orders.PointGoalRequest) bool {
+			if req.Node == nil {
+				return false
+			}
+			s.Movement.BindMoveGoal(req.Owner, req.Node, req.X, req.Z)
+			return true
+		}
+		movementGoals.Release = func(node *orders.Node) bool {
+			if node == nil {
+				return false
+			}
+			s.Movement.ClearMoveGoal(node.Owner)
+			return true
+		}
+	}
+	return &orders.QueueBinding{
+		StockpileEconomy: s.Econ,
+		Lookup:           worldQueries.LookupUnit,
+		Hostility:        worldQueries.Hostile,
+		SimRNG:           s.SimRNG(),
+		CurrentTick: func() uint32 {
+			if s.Clock == nil {
+				return 0
+			}
+			return s.Clock.GlobalTick
+		},
+		Movement: movementGoals,
+		World:    worldQueries,
+		Work: &orders.WorkAdapter{Ready: func() bool {
+			return s.Build != nil
+		}},
+		Weapons: &orders.WeaponAdapter{Ready: func() bool {
+			return s.Combat != nil
+		}},
+		Presentation: &orders.PresentationAdapter{Ready: func() bool {
+			return s.publication != nil && s.publication.events != nil
+		}},
 	}
 }
 
@@ -509,6 +618,12 @@ func (s *Session) bindOrderQueue(u *units.Unit) {
 	}
 	if s.Build == nil {
 		s.Build = construction.NewService(s.World, s.Catalog, s.Units, s.Econ)
+	}
+	// Combat is a required single-player owner of weapon state. Construct it
+	// before validating the queue seam so a normal session cannot enter the
+	// binding check with an absent, but later-created, service [P0-00 A.3].
+	if s.Combat == nil {
+		s.Combat = &combat.Service{}
 	}
 	if s.Build.OrderBinding == nil {
 		s.Build.OrderBinding = s.newOrderBinding()
@@ -601,14 +716,6 @@ func createAndBindServices(s *Session) error {
 	if s.Econ == nil {
 		s.Econ = &economy.Service{}
 	}
-	// Every newly-created queue receives this one session-owned binding. It
-	// carries the economy admission service, target lookup, hostility predicate,
-	// and simulation RNG together so producer seams can bind before dispatch and
-	// replacements can copy one value [04 §3.3][04 §3.4][06 §11.1][I4].
-	queueBinding := s.newOrderBinding()
-	if s.Build != nil && s.Build.OrderBinding != nil {
-		queueBinding = s.Build.OrderBinding
-	}
 	// Bind authoritative wind and terrain to the one ledger per [05] [P1-I04].
 	// All other producers must go through bucket Production/Requested/Accepted;
 	// only CreditSpawn (spawn) may write directly to Stock outside the ledger.
@@ -692,6 +799,31 @@ func createAndBindServices(s *Session) error {
 		return fmt.Errorf("session: Movement.Scheduler nil")
 	}
 	s.Path = s.Movement.Scheduler
+	// Construct the work owner before composing its readiness adapter. The
+	// adapter reports the concrete service's presence; it is not an inert
+	// placeholder used to let a battle enter composition [P0-00 A.3].
+	if s.Build == nil {
+		s.Build = construction.NewService(s.World, s.Catalog, s.Units, s.Econ)
+	}
+	// Combat is a required single-player owner of weapon state. Construct it
+	// before validating the queue seam so a normal session cannot enter the
+	// binding check with an absent, but later-created, service [P0-00 A.3].
+	if s.Combat == nil {
+		s.Combat = &combat.Service{}
+	}
+	// Every newly-created queue receives this one session-owned binding. It
+	// carries the economy admission service, target lookup, hostility predicate,
+	// deterministic world traversal, and simulation RNG together so producer
+	// seams can bind before dispatch and replacements can copy one value
+	// [04 §3.3][04 §3.4][06 §11.1][I4]. Create it after movement and features so
+	// the adapter callbacks capture the complete battle topology.
+	queueBinding := s.newOrderBinding()
+	if queueBinding == nil {
+		return fmt.Errorf("session: failed to compose order binding")
+	}
+	if err := queueBinding.ValidateSinglePlayerBinding(); err != nil {
+		return fmt.Errorf("session: %w", err)
+	}
 	// Construction [05]
 	if s.Build == nil {
 		s.Build = construction.NewService(s.World, s.Catalog, s.Units, s.Econ)
@@ -728,10 +860,6 @@ func createAndBindServices(s *Session) error {
 		if s.Build != nil {
 			s.Build.ReleasePlacement(h)
 		}
-	}
-	// Combat [06] sole projectile authority
-	if s.Combat == nil {
-		s.Combat = &combat.Service{}
 	}
 	// Combat emits immutable authoritative events in impact order. The
 	// collector is presentation-only; EventUnitKilled remains a death/corpse

@@ -405,11 +405,20 @@ func vtolReclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 	if u == nil || n == nil {
 		return 7
 	}
-	// The per-visit feature lookup is skipped rather than answered "none", for
-	// the reason work.go's reclaimHandler records: the feature resolver needs
-	// the plot grid and the queue binding carries no feature service, and
-	// answering "none" would abandon every reclaim a player issues. Its two
-	// consequences here are phase 2's seed and phase 4's payout.
+	// Correction (PT3-05), with the ground twin: the per-visit feature lookup
+	// used to be skipped entirely, so phase 2's seed stayed zero and phase 4's
+	// payout was empty — an air reclaim removed nothing and paid nothing. The
+	// resolver is internal/features' FeatureAt over the terrain the queue's
+	// economy service carries; work.go's reclaimHandler records why that is
+	// reachable and why the earlier reading was wrong.
+	def, cx, cz, found := featureAtGoal(u, n)
+	if !found {
+		workStatus(u, statusCant, "Reclamation failed")
+		return 8 // abandon
+	}
+	if !def.Reclaimable {
+		return 8 // abandon, silently
+	}
 	switch n.Phase {
 	case 0:
 		if u.Def == nil || !u.Def.CanReclamate {
@@ -420,17 +429,27 @@ func vtolReclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 		// No altitude and no radius setter: arrival is the air marker family's
 		// default `dist <= 0.5` world units at the goal's own Y
 		// [04 R-AIR-01 §4]. See the file header.
-		installWorkGoal(u, n, n.GoalX, n.GoalY, n.GoalZ)
+		bx, bz := featureBoxCentre(cx, cz, def)
+		installWorkGoal(u, n, bx, n.GoalY, bz)
+		if inBuildRange(u, bx, bz, def.FootprintX, def.FootprintZ) {
+			// Already within reach: the ground twin's phase 0 records why the
+			// approach gate is left clear in that case (work.go, PT3-05).
+			return 1
+		}
+		// Out of reach: the ground twin's phase 0 records the placeholder and
+		// its decider. The record holds at this phase, re-testing reach, rather
+		// than advancing into a work phase that would reclaim from anywhere.
 		n.DynamicGate = gateMoveOutcomes
-		return 1
+		return deadlineHold(n, tick, 30)
 	case 2:
 		if satisfied&gateNoRoute != 0 {
 			return 8 // abandon
 		}
 		// p1 = trunc(30 + (energy + metal)/2) from the feature definition —
-		// THIRTY, not the ground row's fifteen. The pools are unreadable here
-		// (see the lookup note above), so the countdown starts at whatever the
-		// producer left in p1.
+		// THIRTY, not the ground row's fifteen [04 R-ORD-01 §7]. The air twin
+		// takes NO height draw here: the walk target's Y carries none, which is
+		// one fewer simulation draw per air reclaim (I4).
+		n.Param1 = uint32(featureWork(def, 30))
 		workStatus(u, statusWorking, "") // kind 11 has no default text
 		return 1
 	case 3:
@@ -451,6 +470,7 @@ func vtolReclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 		// work > 30 draws the spray twice, where the ground row's gate is 15.
 		return code
 	case 4:
+		finishFeatureReclaim(u, cx, cz)
 		return 5 // complete
 	default:
 		return 7 // cancel-all

@@ -1,9 +1,11 @@
 package orders
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -121,5 +123,70 @@ func TestPumpUnitDoesNotMaterializeAbsentQueue(t *testing.T) {
 	}
 	if u.Orders != nil {
 		t.Fatal("pumping an idle unit materialized an empty queue")
+	}
+}
+
+func TestQueueBindingTraversalPreservesAdapterOrder(t *testing.T) {
+	var unitsSeen []pool.Handle
+	var featuresSeen []int32
+	b := &QueueBinding{World: &WorldQueryAdapter{
+		ForEachUnit: func(visit func(pool.Handle, *units.Unit) bool) {
+			for _, h := range []pool.Handle{7, 3, 9} {
+				if visit(h, &units.Unit{Handle: h}) {
+					return
+				}
+			}
+		},
+		ForEachFeature: func(visit func(FeatureView) bool) {
+			for _, cx := range []int32{2, 5, 8} {
+				if visit(FeatureView{CX: cx}) {
+					return
+				}
+			}
+		},
+	}}
+	b.ForEachUnit(func(h pool.Handle, _ *units.Unit) bool {
+		unitsSeen = append(unitsSeen, h)
+		return h == 3
+	})
+	b.ForEachFeature(func(f FeatureView) bool {
+		featuresSeen = append(featuresSeen, f.CX)
+		return false
+	})
+	if got, want := fmt.Sprint(unitsSeen), "[7 3]"; got != want {
+		t.Fatalf("unit traversal = %s, want %s", got, want)
+	}
+	if got, want := fmt.Sprint(featuresSeen), "[2 5 8]"; got != want {
+		t.Fatalf("feature traversal = %s, want %s", got, want)
+	}
+}
+
+func TestQueueBindingValidationRejectsMissingProductionAdapters(t *testing.T) {
+	sim := rng.NewSimulation(1)
+	b := &QueueBinding{SimRNG: &sim,
+		StockpileEconomy: &economy.Service{},
+		Lookup:           func(pool.Handle) *units.Unit { return nil },
+		Hostility:        func(*units.Unit, *units.Unit) bool { return false },
+	}
+	if err := b.ValidateSinglePlayerBinding(); err == nil {
+		t.Fatal("missing single-player adapters accepted by composition seam")
+	}
+}
+
+func TestQueueReplacementInheritsConcreteBinding(t *testing.T) {
+	w := newOrdersFixtureWorld(2, nil)
+	def := &content.UnitDef{UnitName: "replacement-binding", MaxDamage: 1}
+	h, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create unit: %v", err)
+	}
+	u := w.Unit(h)
+	sim := rng.NewSimulation(13)
+	b := &QueueBinding{SimRNG: &sim}
+	old := BindQueueBinding(u, b)
+	replacement := NewQueueWith(nil, nil)
+	BindQueue(u, replacement)
+	if got := QueueOfUnit(u).Binding(); got != b {
+		t.Fatalf("replacement binding = %p, want original %p (old %p)", got, b, old.Binding())
 	}
 }

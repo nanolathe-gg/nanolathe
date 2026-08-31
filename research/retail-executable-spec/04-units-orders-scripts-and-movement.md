@@ -671,7 +671,7 @@ record whose descriptor carries the rear-segment selection flag head-inserts at
 the front of that segment instead, inheriting the old head's auto flag when
 present. Idle default-operation records are created by the primary pump
 itself — never by insertion — only when its list is empty, the owner player
-state byte holds one of the two computer-player states, and the definition
+state byte holds one of the two ACTIVE player states (1 or 2), and the definition
 names a default op; such a node is allocated in non-queued mode, constructed
 with the auto flag, and head-inserted into the list the op's descriptor
 selects (a secondary-class default op therefore lands in the rear segment).
@@ -715,16 +715,53 @@ set. Because the tombstone test compares against the front anchor regardless
 of which segment the removed record lived in, `BuildWeapon`/`SelfDestruct`
 removals are effectively always tombstoned and never emit that notification.
 
-### Closed — the idle-queue refill from `defaultmissiontype` (2026-08-29)
+### Closed — the idle-queue refill from `defaultmissiontype` (2026-08-29, extended 2026-08-31)
 
 **Established ([02 R-KEYS-01 §1]).** When a unit's order queue is empty, its
 owner's controller type is 1 or 2, and the definition's compiled
 `defaultmissiontype` code is non-zero, the primary queue pump allocates a
 fresh order record carrying that mission code and pushes it as the unit's
 standing task; a zero code (empty or unrecognised name) leaves the unit idle.
-The name is resolved through the same mission-type vocabulary as
-`InitialMission` (§3.6). This is the only reader of the key; doc 02 owns the
-parse.
+This is the only reader of the key; doc 02 owns the parse.
+
+**Correction (2026-08-31, PT3-WAKE) — states 1 and 2 are the two ACTIVE player
+states, not two computer-player states.** The insertion paragraph of this
+section above read "the owner player state byte holds one of the two
+computer-player states". That is wrong, and wrong in the direction that matters:
+it says a human player's units are never refilled, which would make every stock
+aircraft's authored `defaultmissiontype = VTOL_Standby` unreachable for the
+player's own planes and leave an idle aircraft hovering forever instead of
+landing. Direct re-trace of the pump's empty-list arm and of the per-unit sweep
+that calls it: the sweep visits player slots whose state byte is 1, 2 **or** 3
+but gates the order pumps and the movement tick on the byte being 1 or 2 only,
+which is the same pair the pump then re-tests; state 3 is the eliminated/watch
+population whose units are skipped ([04 §8.3, "Closed — compact ground
+controller"]). Controller type **2 is the computer player**, Established
+independently at [04 R-SPEC-01 §5] ("the searching unit's owning player has
+controller type 2 (a computer player)"), so 1 is the ordinary playing type and
+"1 or 2" reads as "any player still in the game". The refill therefore applies
+to human- and computer-owned units alike. Nothing else in the closure changes.
+
+**Established (2026-08-31, PT3-WAKE) — the name resolves through the ORDER
+DESCRIPTOR registry, not a separate vocabulary.** The earlier sentence "the name
+is resolved through the same mission-type vocabulary as `InitialMission` (§3.6)"
+is imprecise rather than wrong: the converter the unit parser calls is the
+descriptor registry's own binary search over the 25-byte descriptor records
+sorted in §3.1, comparing canonical names case-insensitively and returning the
+matched record's **table index** as a single byte, with 0 — the reject sentinel
+of §3.1 — for no match. The compiled `defaultmissiontype` code is therefore an
+order identity, which is why the pump can hand it straight to the record
+constructor. An implementation must use the same case-insensitive registry
+lookup and must not build a parallel name table.
+
+**Established (2026-08-31, PT3-WAKE) — the insertion, in order.** The pump
+allocates the record through the ordinary order-record constructor with the
+mission code as its identity and no target, goal, or parameters; ORs the auto-op
+flag into the record's gate word; and then head-inserts it into the **rear**
+segment when the record's static mask carries the rear-segment selection flag
+`0x40000`, or into the front segment otherwise. It returns immediately after the
+insert — the record is dispatched on the unit's next pump visit, never in the
+same one.
 
 ### Closed — handler retry and pre-reject mapping [R-ORDER-02 §1] (2026-08-27)
 
@@ -2495,7 +2532,16 @@ shared rectangle.
 
 **Do not "fix" this** by making the rectangle goal point per-mover, by relaxing
 the three-point acceptance gates, or by scattering neighbours. Each of those
-contradicts an Established trace above. A reimplementation that wants fanned-out
+contradicts an Established trace above. (2026-08-31: the three-point gates are
+real, but they run only at goal INSTALLATION — see the correction in
+[R-PATH-01 §8] and [05 R-EGRESS-02]. Applying them to the search's own
+publications, which Nanolathe did, turned this retail-faithful column into a
+permanent jam: the two-point routes A\* publishes around the leading product
+were rejected and replaced by a straight line back into it. The unjamming
+mechanism is the one this section describes — an unreachable goal's empty
+publication raises `0x40`, whose `Park` phase-1 arm returns *restart*, and phase
+0 then installs a fresh rectangle centred on the unit's CURRENT cell — and it is
+only reachable once the record's wake actually arrives.) A reimplementation that wants fanned-out
 products has to change the *content* (rally points), not the engine.
 
 **Correction — the arrival predicate is the border, not the goal point.**
@@ -7684,8 +7730,34 @@ record's pending word before detaching.
 | *(unnamed fourth)* | An empty method. It exists to fill the slot; no behavior. |
 | *debug draw* | Draws the route as `pointCount − 1` line segments between consecutive points, in one of two palette entries chosen by the has-waypoint flag, under the developer overlay only. |
 
-**Established — the route-acceptance rule.** When a newly published route (or a
-new goal object) is installed, the follower does, in order:
+**Correction (2026-08-31, PT3-WAKE, composed with [05 R-EGRESS-02]) — the
+acceptance rule belongs to the goal installer alone.** The sentence below read
+"When a newly published route (or a **new goal object**) is installed"; the
+parenthetical is inverted. The ground follower has two entry points and the
+three gates live on only one of them. The **goal installer** — reached when a
+handler's phase 0 hands over a new goal object, `Park`'s rectangle among them —
+cancels the in-flight search, releases the old payload, adopts the new goal,
+arms wants-repath, and only then runs the gates over whatever points it still
+holds from the *previous* goal; the synthetic straight line exists to give it
+something to walk while the asynchronous search runs. The **publisher**, which
+is the only writer the search itself uses, does exactly the five things §7's
+publication contract lists — clamp the count to 20, store the count, copy the
+points, set has-waypoint and dirty, clear wants-repath — with no point-count
+test, no goal-point query, no terminal-cell test, no half-distance test and no
+synthetic rewrite. A published route is adopted verbatim.
+
+The inversion was a liveness defect, not a wording slip: collinear removal
+collapses a straight or diagonal A\* run to exactly **two** points, both
+point-count gates below require three or more, so a correct two-point route
+around an obstacle was rejected on arrival and overwritten by the synthetic
+straight line at the constant goal — aiming the mover back into the obstacle it
+had just routed around, on every republication, with the follower still
+believing it held a route so nothing ever reported blocked. §7's contract is
+unchanged and was always the direct trace; this correction only removes the
+parenthetical that contradicted it.
+
+**Established — the route-acceptance rule (goal installation).** When a new goal
+object is installed, the follower does, in order:
 
 1. Cancel any in-flight search that belongs to this follower.
 2. If a goal object was already installed, OR `0x80` into its order record's
@@ -7721,10 +7793,16 @@ Both point-count gates require **three or more** stored points; a one- or
 two-point route skips straight to the synthetic fallback, which would rewrite
 it with the straight line.
 
-**Unknown:** the semantic name of the order-record flag that suppresses the
-synthetic fallback. It is set by one disposition branch of the queue pump
-(§3.3) on an order it is taking down. *Decider: static trace of that
-disposition branch.* `TODO(question)`
+**Closed (2026-08-31, [05 R-EGRESS-02]) — the record flag that suppresses the
+synthetic fallback is the completion flag.** This paragraph previously read
+"**Unknown:** the semantic name of the order-record flag that suppresses the
+synthetic fallback. It is set by one disposition branch of the queue pump (§3.3)
+on an order it is taking down." The disposition branch is named: it is the
+pump's **code-9 arm**, which sets a completion flag on the record before
+re-arming it or freeing it (§3.3's result table, the code-9 row). The synthetic
+fallback is therefore suppressed for exactly the records the pump has already
+declared complete, which is why a retiring order does not get one last straight
+line aimed at a goal it has finished with.
 
 **Established — aircraft never enter this scheduler.** The air route follower
 is a separate class whose repath poll returns zero unconditionally and whose
@@ -8287,6 +8365,76 @@ appears in the call graph of the mover tick, the ground steering, the speed
 update, the position commit, the movement-rate classifier, the band
 classifier, the post-move correction, the terrain conform, or the follower
 service. The mover draws no random numbers at all.
+
+### Revalidated — ground attitude is terrain conform, not mover lean [R-MOV-01 §5a] (2026-08-31)
+
+**Correction record.** The opening pitch-cap paragraph of section 8.1 says
+that the final integrator applies "terrain height, gravity and lean". Section
+`[R-MOV-01 §5]` later corrected that clause to **no ground gravity and no
+ground lean**, but the stale sentence made it possible to read the flight lean
+contract of `[R-AIR-01 §2]` back into ground locomotion. A fresh bounded
+writer and caller census confirms that `[R-MOV-01 §5]` is correct; the stale
+clause is withdrawn in full, not merely incomplete.
+
+**Writer and call boundary — Established by direct static trace.** The mover
+tick runs its controller hook and then selects exactly one integrator by the
+definition's `canfly` bit. A definition without `canfly` enters ground
+steering; a definition with it enters the flight integrator, even while its
+committed mover mode is grounded. The ground branch has no call to the flight
+lean routine. Its speed update writes horizontal velocity from heading and
+scalar speed and writes vertical velocity as literal zero. The mover then
+commits position and occupancy, classifies the movement-rate callback, and
+classifies the medium band. Only after that five-call mover tick returns does
+the owning unit sweep invoke the post-move correction of `[R-MOV-01 §5]` for
+the same unit.
+
+Within ordinary non-flying ground locomotion, the **only** pitch/roll writer is
+the successful tail of the four-corner selection-primitive conform. Its
+per-visit inputs are the unit's committed X/Z and heading, the first four
+corners of the compiled root selection primitive, the map dimensions and raw
+terrain height bytes, and — for an eligible `canhover` unit only — the hover
+bob inputs already named in §5. It reads neither velocity nor a position or
+velocity delta, and it reads neither map gravity nor `bankscale` or
+`pitchscale`. There is no persistent ground attitude accumulator.
+
+**Persistence and narrowing — Established.** A successful conform computes
+both angles with the shared `angleOf` helper: x87 `atan2`, the double
+`65536 / 2π` scale, and a direct 32-bit round-to-nearest/ties-to-even store,
+then narrows that result to the unit's 16-bit pitch or roll word. Those two
+unit words are authoritative pose state. They persist when the correction
+gate is closed, the mover is not grounded, an `upright` or `floater` branch
+writes height only, the compiled root has no selection primitive, or any
+corner is out of bounds; persistence of the words is not a hidden residual
+controller. A retained value may have come from an earlier successful terrain
+conform, the flight lean writer, or a carrier/factory piece transform.
+
+**Speed-cap relationship — Established.** The ground speed update reads the
+unit's signed pitch word **before** position commit and before this tick's
+post-move conform. It arithmetic-shifts that word by 11, clamps the result to
+`[-5,+5]`, applies the eleven-entry percentage table, and only then applies
+the below-water half-speed gate. Thus tick *N* normally caps speed from the
+pitch written by tick *N−1*'s successful conform; tick *N*'s conform writes the
+pitch first available to tick *N+1*. There is no same-tick terrain-attitude
+feedback into speed.
+
+**Flight boundary — Established.** The persistent decay, velocity-delta,
+heading rotation, runtime-gravity and scale-word pipeline belongs only to the
+can-fly mover. Its second caller is the mover-mode setter, which supplies a
+zero delta on a transition to grounded mode and thereby performs the
+one-step landed-aircraft levelling of `[R-AIR-01 §2]`. That path must not be
+deleted when removing a ground lean approximation. Nor should an aircraft be
+invented as universally exempt from the existing post-move gate: while its
+mode is grounded, the same transform-dirty/`canhover` gate can still select a
+height-only branch or terrain conform exactly as §5 states.
+
+**Implementation consequence.** Keep one authoritative pitch/roll pair on the
+unit. Ground steering reads that pitch for its cap, owns no gravity or lean
+residuals, and the unit-sweep post-move stage writes the pair from the compiled
+root selection primitive after the mover tick. Keep the separate
+three-component lean accumulator only on the can-fly mover, including its
+zero-delta mode-transition call. Serialization and deterministic hashing need
+the shared unit pose and the flight accumulator; they do not need a second
+ground attitude state.
 
 ### Closed — the movement-rate tiers [R-MOV-01 §6] (2026-08-28)
 
@@ -9465,6 +9613,14 @@ would on a map whose sector height plus `cruisealt` exceeds 511.
 
 ### Closed — bank and pitch: the lean accumulator, exactly [R-AIR-01 §2] (2026-08-29)
 
+**Correction (2026-08-31).** The formula below previously fed the second
+rotated component to `pitchscale`. That was wrong. Direct data flow through
+both angle-call arguments shows that **both** scale expressions consume the
+first rotated component; the coordinate-pair rotation computes and stores the
+second component, but this routine has no reader of it before returning. This
+correction changes the can-fly/landed-aircraft writer only and does not create
+a ground lean path.
+
 **Established.** Bank and pitch are computed by one routine, called from the end
 of the flight integrator with the tick's velocity delta and from the mover-mode
 setter with a zero delta. It maintains a persistent three-component **lean
@@ -9478,7 +9634,8 @@ lean  += (dvx, dvy, dvz)                  // this tick's velocity delta, 16.16
 (px, pz) = rotate(lean.x, lean.z) by the unit's heading    // identity when heading == 0
 L = (gravity << 16) / 0xCCD               // 64-bit signed divide
 bank  = round( atan2( (bankscale  * (-px)) >> 16, L ) * 65536 / 2pi )
-pitch = round( atan2( (pitchscale * (-pz)) >> 16, L ) * 65536 / 2pi )
+pitch = round( atan2( (pitchscale * (-px)) >> 16, L ) * 65536 / 2pi )
+                                                // pz is computed but not consumed
 ```
 
 with `0xF333 = 62259`, i.e. a per-tick decay of `62259/65536` (0.9500 truncated

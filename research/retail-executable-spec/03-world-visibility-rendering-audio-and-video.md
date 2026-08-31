@@ -5531,6 +5531,64 @@ rasterizers reads the visibility grids. The fog overlay of §3.3 is composed
 after strip 9 and darkens features, units, shadows and projectiles alike
 ([R-SEL-02A]).
 
+### Closed — the feature window's two counts, and the gate has no fog term [R-RAST-01 §6-A] (2026-08-30)
+
+Two residuals of [R-RAST-01 §6] are closed. Both are **Established
+(direct-static)**.
+
+**The window's row and column counts are viewport-derived, not map-derived.**
+§6 named `rows` and `cols` only as "map-derived globals". They are fields of
+the frame-window descriptor, written once during map load from the battle
+viewport's pixel dimensions:
+
+```text
+viewCols = trunc(viewportWidthPixels  / 16)     truncation toward zero
+viewRows = trunc(viewportHeightPixels / 16)
+cols     = viewCols + 12
+rows     = viewRows + 32
+```
+
+The descriptor's row-pointer array is then allocated at `rows * cols` dwords,
+its per-row pointer array at `rows` dwords and its per-row count array at
+`rows` words. Nothing rescales them per frame. Combined with §6's origin
+(`trunc(camZ/16) - 16`, `trunc(camX/16) - 10`), the window gives sixteen rows
+of margin above the viewport and sixteen below, ten columns left and two
+right. Against the 512x416 battle rectangle inset at (128,32) that is 160 map
+pixels of slack left of the drawn area, 17 right, 256 above and 241 below: the
+right and bottom margins are deliberately tight, and a feature anchored more
+than seventeen pixels past the right edge is dropped by the window even when
+its sprite would have reached back onto the screen. That asymmetry is retail's
+and is not a defect to correct.
+
+The camera-to-cell conversions in the window setup and in the unit bucket key
+divide by sixteen with a sign correction that **truncates toward zero**, not
+floor: the dividend is biased by fifteen when negative before the arithmetic
+shift. The unit bucket key is `trunc((unitZ - camZ)/16) + 16` and is admitted
+on `0 <= row < rows` against the *unclipped* row count, as §7 states.
+
+**The gate contains no visibility term of its own.** §5.1.5's phrasing
+"features that do not carry the `nodrawundergray` flag draw unconditionally
+once explored" has been read as an explored precondition. It is not one. The
+per-cell loop of pass 1 is, in order: clear the never-seen bit unconditionally;
+skip when the cell's feature word is not live (`>= 0xFFFB`); read the
+definition; if `height >= 10` set the never-seen bit and defer to pass 2;
+otherwise draw when the definition's `nodrawundergray` bit is clear, else draw
+when the plot cell's placer nibble equals the local player's slot, else draw
+when the two-corner LOS predicate returns nonzero, else skip. The loop reads
+neither fog channel and neither visibility grid. §6's "fog and LOS are not
+applied at raster time" is exact, and the clause in §5.1.5 describes the
+overlay's effect on the finished frame, not a branch in the pass.
+
+The practical consequence, and the one a reimplementation must keep: a feature
+whose cell has never been seen is still composed, and the 32-pixel fog blocks
+laid down after strip 9 are the only thing that hides it. Where a tall sprite
+straddles the boundary the covered part goes black and the rest stays visible —
+treetops stand out of the unexplored dark — and no feature ever appears or
+disappears as a whole when a visibility tile changes state. This is what
+playtest defect PT3-10 was: our two feature passes gated each feature on its
+anchor cell's fog tile, an edge that does not line up with the fog blocks.
+
+
 ### 5.2 Units and 3DO models
 
 Units are bucketed by projected vertical/screen position so that the software

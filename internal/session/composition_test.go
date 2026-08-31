@@ -38,6 +38,29 @@ func TestBindExistingOrderQueuesKeepsLazyQueuesLazy(t *testing.T) {
 	}
 }
 
+func TestNewOrderBindingUsesRetailUnitPoolOrder(t *testing.T) {
+	w := newSessionFixtureWorld(3, nil)
+	def := &content.UnitDef{UnitName: "binding-order", MaxDamage: 1}
+	h0, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create player 0 unit: %v", err)
+	}
+	h1, err := w.Create(def, 1, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create player 1 unit: %v", err)
+	}
+	s := &Session{Units: w, Econ: &economy.Service{}}
+	b := s.newOrderBinding()
+	var got []pool.Handle
+	b.ForEachUnit(func(h pool.Handle, _ *units.Unit) bool {
+		got = append(got, h)
+		return false
+	})
+	if len(got) != 2 || got[0] != h0 || got[1] != h1 {
+		t.Fatalf("unit binding traversal = %v, want [%d %d]", got, h0, h1)
+	}
+}
+
 // TestSeedSessionRNGWipesPreBattleDrawsAndLeavesGlobalAlone locks the DET-01
 // seeding contract [R-CORE-02]: seeding both session streams fresh wipes
 // every draw made before it (retail's reseed-wipes-history property at battle

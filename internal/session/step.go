@@ -264,15 +264,43 @@ func (s *Session) stepUnitPhase(tick uint32) {
 					// rectangle goal that carries a no-rally factory product off
 					// its pad [04 R-ORD-01 §2][04 R-FAC-02 §4].
 					activeMove := activeName == "Move_Ground" || activeName == "VTOL_Move" || activeName == "QMove" || activeName == "Patrol" || activeName == "QPatrol" || activeName == "VTOL_Patrol" || activeName == "RepairPatrol" || activeName == "VTOL_RepairPatrol" || activeName == "Park"
+					// The ground work family installs a movement goal and then
+					// waits behind gate 0xE0/0xE8 for the follower's outcome
+					// [04 R-ORD-01 §5]. Those records need the mover as much as
+					// the move family does; excluding them from this boundary
+					// deactivated the mover the moment a work record reached the
+					// head, so an out-of-reach assistant, repairer or captor
+					// never took a step and its approach gate was never
+					// satisfied by anything.
+					activeWork := activeName == "HelpBuild" || activeName == "RepairUnit" || activeName == "Capture" || activeName == "Reclaim" || activeName == "Resurrect"
 					isWalk := false
 					if s.Build != nil && (activeName == "MobileBuild" || activeName == "VTOL_MobileBuild") && s.Build.NeedsWalk(u, active) {
 						isWalk = true
 					}
 					if isWalk {
-						s.Build.EnsureWalkPublic(u, active)
-						active.MoveState = orders.MoveEnRoute
-					} else if activeMove {
-						if active.Target != 0 {
+						// [04 R-ORD-01 §5], the `MobileBuild` row's phase 1:
+						// with `0x40` in the satisfied set and the reach test
+						// failing, the approach is over — retail emits status 7
+						// `I can't reach the construction site` and abandons the
+						// record. `isWalk` is exactly "the reach test failed",
+						// so the two halves of the row's condition are both
+						// here. Without this arm the record re-polled its own
+						// one-tick deadline forever while the follower
+						// re-requested an impossible path every 60 ticks
+						// [04 R-MOV-01 §7], which idled the whole builder.
+						text, code := orders.MobileBuildUnreachableVisit(active.Satisfied, true)
+						if code == 8 {
+							orders.NotifyStatus(u, 7, text)
+							if q := orders.QueueOfUnit(u); q != nil {
+								q.RemoveHead()
+							}
+							s.Movement.DeactivateMove(h)
+						} else {
+							s.Build.EnsureWalkPublic(u, active)
+							active.MoveState = orders.MoveEnRoute
+						}
+					} else if activeMove || activeWork {
+						if activeMove && active.Target != 0 {
 							var target *units.Unit
 							if binding := qActive.Binding(); binding != nil && binding.Lookup != nil {
 								target = binding.Lookup(active.Target)
@@ -334,6 +362,9 @@ func (s *Session) stepUnitPhase(tick uint32) {
 				// Failed publications do not consume the order. The follower keeps
 				// polling at its 60-tick cadence with no retry ceiling [04
 				// R-MOV-01 §7].
+				// Session does not inspect path-failure diagnostics or submit a second
+				// request; movement's follower state is the sole recovery owner
+				// [04 R-PATH-01 §6–§8].
 			}
 			// Slot-end death, cleanup, corpse, occupancy, target invalidation
 			// [01 §4.4][04 §2.4]. This is the only gameplay finalizer in battle.

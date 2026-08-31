@@ -26,14 +26,18 @@ func flatModel(c *Client, name string, size float64, colour uint8) {
 // TestUnitRowKeyIsWorldZNotScreenY locks the two consequences [03 R-RAST-01 §7]
 // spells out for the pass split. The bucket key is world Z in plot rows, so an
 // airborne unit does not sort into an earlier row as it climbs; and pass B runs
-// after the projectile and effect strips, so a structure (mover mode 0) and an
-// airborne unit (mover mode 2) both paint after a grounded unit (mover mode 1)
-// even when their rows are earlier than its. "This is the retail order; it is
-// not a bug to fix."
+// after the projectile and effect strips, so a parked/attached unit (mirror 0)
+// and an airborne unit (mirror 2) both paint after a mode-1 unit even when
+// their rows are earlier than its.
+//
+// The pass-B unit here is a PARKED unit, not a structure: a structure's mirror
+// is 1 and it belongs to pass A, per the 2026-08-30 correction under
+// [03 R-RAST-01 §7]. The test always set MoverMode by hand and so still held
+// when that partition was corrected; only its labels were wrong.
 func TestUnitRowKeyIsWorldZNotScreenY(t *testing.T) {
 	c := newTestClient(t)
 	flatModel(c, "m_ground", 100, 40)
-	flatModel(c, "m_structure", 40, 20)
+	flatModel(c, "m_parked", 40, 20)
 	flatModel(c, "m_air", 40, 30)
 
 	// The camera sits at the origin, so each unit's bucket row is z/16+16 and
@@ -41,13 +45,13 @@ func TestUnitRowKeyIsWorldZNotScreenY(t *testing.T) {
 	// [03 R-RAST-01 §7]. The two pass-B units are placed sixteen pixels north
 	// of the grounded one, one whole plot row earlier.
 	ground := frame.UnitView{Slot: 1, Owner: 0, X: px(200), Z: px(160), MoverMode: 1, Model: "m_ground"}
-	structure := frame.UnitView{Slot: 2, Owner: 0, X: px(210), Z: px(144), MoverMode: 0, Model: "m_structure"}
+	parked := frame.UnitView{Slot: 2, Owner: 0, X: px(210), Z: px(144), MoverMode: 0, Model: "m_parked"}
 	air := frame.UnitView{Slot: 3, Owner: 0, X: px(250), Z: px(144), Y: px(8), MoverMode: 2, Model: "m_air"}
 
 	if got, want := unitBucketRow(ground.Z, 0), int32(26); got != want {
 		t.Fatalf("grounded row = %d, want %d", got, want)
 	}
-	for _, u := range []frame.UnitView{structure, air} {
+	for _, u := range []frame.UnitView{parked, air} {
 		if row := unitBucketRow(u.Z, 0); row >= unitBucketRow(ground.Z, 0) {
 			t.Fatalf("slot %d row %d is not earlier than the grounded unit's row", u.Slot, row)
 		}
@@ -62,7 +66,7 @@ func TestUnitRowKeyIsWorldZNotScreenY(t *testing.T) {
 
 	cur := &frame.Frame{
 		Selection: frame.SelectionView{LocalPlayer: 0},
-		Units:     []frame.UnitView{ground, structure, air},
+		Units:     []frame.UnitView{ground, parked, air},
 	}
 	clearIndexed(c)
 	c.drawWorldPass(cur, true)
@@ -86,7 +90,7 @@ func TestUnitRowKeyIsWorldZNotScreenY(t *testing.T) {
 	// Where each of the two pass-B units overlaps the grounded unit, its own
 	// colour survives: it painted last.
 	if got := c.indexed[165*c.width+212]; got != 20 {
-		t.Fatalf("structure over grounded unit: pixel = %d, want the structure's 20", got)
+		t.Fatalf("parked unit over mode-1 unit: pixel = %d, want the parked unit's 20", got)
 	}
 	if got := c.indexed[165*c.width+252]; got != 30 {
 		t.Fatalf("airborne unit over grounded unit: pixel = %d, want the aircraft's 30", got)

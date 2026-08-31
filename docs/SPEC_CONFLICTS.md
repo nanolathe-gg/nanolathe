@@ -661,7 +661,11 @@ BMcode-zero gate was right all along.
 
 ## SC22 — Static-layer path search and Nanolathe dynamic-block / retry policy [OW-3-O]
 
-**Status:** retry policy closed by `[R-MOV-01 §7]` (2026-08-28): retail re-arms a path request when a route is installed and the mover is blocked or has fewer than two points, throttled to one request per 60 ticks with no retry ceiling. Nanolathe's `landPathFailureRetryInterval = 30` / `landPathFailureMaxRetries = 1` are now measured divergences to remove in the reconciliation pass, not undetermined policy. The search-versus-commit split itself is closed by `[R-MOV-02A]`; only the retry policy below is Nanolathe's own.
+**Status:** closed by `[R-MOV-01 §7]` (2026-08-28) and the P0-03
+reconciliation (2026-08-31). Retail re-arms a path request when a route is
+installed and the mover is blocked or has fewer than two points, throttled to
+one request per 60 ticks with no retry ceiling. The search-versus-commit split
+itself is closed by `[R-MOV-02A]`.
 
 **Spec** `[04 §8.2]` (static and mobile collision): mobile units are not
 permanent A* walls in the map-load layer; path search uses the static terrain,
@@ -671,7 +675,16 @@ described in `[04 §6.1 R-DOC04-B]`. Final mobile contention is arbitrated at
 commit `[04 §8.2]`; mobile units are hard blockers there even though their
 projected motion is not inserted into the expansion heap.
 
-**Observed:** `internal/movement/integrate.go:searchFunc` previously checked `OccupancyGrid.OccupantAt` for every neighbor and rejected occupied cells, turning transient traffic into static obstacles and feeding an invented retry/removal policy (needless rejected routes around movers, then path-failure retry count). `OccupancyGrid.Revision/Bump` (`internal/movement/collision.go:Revision/Bump/BumpRevision`) had no explicit consumer beyond diagnostics; search already rechecks `isPassable` lazily at expansion, so an explicit revision guard is unnecessary, but `Stamp`/`Clear` correctly bumped `rev` per `[04 §7.4]` C18 and tests locked the bump. `landPathFailureRetryInterval = 30` and `landPathFailureMaxRetries = 1` (`integrate.go:127-128`) and the `rec.Retries >= 1` hard-coded check in `internal/session/loop.go:1149` are Nanolathe retry policy where retail's dynamic-blocker retry cadence/count remain unresolved `[04 §7.3]`.
+**Observed:** `internal/movement/integrate.go:searchFunc` previously checked
+`OccupancyGrid.OccupantAt` for every neighbor and rejected occupied cells,
+turning transient traffic into static obstacles and feeding an invented
+retry/removal policy. `OccupancyGrid.Revision/Bump`
+(`internal/movement/collision.go:Revision/Bump/BumpRevision`) had no explicit
+consumer beyond diagnostics; search already rechecks `isPassable` lazily at
+expansion, so an explicit revision guard is unnecessary, but `Stamp`/`Clear`
+correctly bump `rev` per `[04 §7.4]` C18 and tests lock the bump. The obsolete
+30-tick/one-retry path-failure policy and its session-side removal branch are
+deleted; follower state is now the sole retry owner.
 
 **Correction history [R-MOV-02A]:** The previous Decision said that mobile
 occupancy was "ignored at search time" without qualification. That sentence
@@ -704,18 +717,6 @@ under `[R-MOV-02A]`: there is no lower-slot priority, `avoidNext` cadence, or
 commit response is therefore the sole implemented collision response; outer
 yield/replan and ordinary open-group liveness remain **Unknown** as stated in
 `[R-MOV-02A]`.
-
-One separate policy divergence is retained with `I9`/`I11` hygiene:
-
-* `landPathFailureRetryInterval = 30`, `landPathFailureMaxRetries = 1`
-  (`integrate.go`) plus `internal/session/loop.go:1149` `if rec.Retries >= 1` —
-  explicit Nanolathe failed-path recovery where retail's retry cadence/count
-  remain unresolved `[04 §7.3]`. The hard-coded `>=1` in `loop.go` is
-  session-owned, so per `OW-3-O` ownership it is **not** changed here; it
-  mirrors the movement-owned constant and is documented as policy, not spec.
-  If the hunk were movement-owned it would reference
-  `landPathFailureMaxRetries`; as session-owned it is reported and left
-  intact.
 
 **Falsifies:** the previous mobile-as-wall search behavior and the blanket
 claim that mobile occupancy is always ignored at search time. It does not
