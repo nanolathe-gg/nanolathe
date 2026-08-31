@@ -32,6 +32,78 @@ type EffectDrawStats struct {
 	Strokes  int
 }
 
+// effectViewsForStrip selects one committed strip without changing source
+// order. The composer calls this at each retail barrier so effects cannot
+// drift into a single after-the-world pass [03 §1][03 R-STRIP-01 §1–§3].
+func effectViewsForStrip(effects []frame.EffectView, strip int8) []frame.EffectView {
+	count := 0
+	for i := range effects {
+		if effects[i].Strip == strip {
+			count++
+		}
+	}
+	if count == 0 {
+		return nil
+	}
+	selected := make([]frame.EffectView, 0, count)
+	for i := range effects {
+		if effects[i].Strip == strip {
+			selected = append(selected, effects[i])
+		}
+	}
+	return selected
+}
+
+// unstrippedEffectViews selects fixed-pool records. A negative strip is the
+// published unresolved/unstripped sentinel; it is distinct from every one of
+// the ten strip barriers and is drawn at the fixed-pool position [03 §1]
+// [03 R-STRIP-01 §3].
+func unstrippedEffectViews(effects []frame.EffectView) []frame.EffectView {
+	count := 0
+	for i := range effects {
+		if effects[i].Strip < 0 {
+			count++
+		}
+	}
+	if count == 0 {
+		return nil
+	}
+	selected := make([]frame.EffectView, 0, count)
+	for i := range effects {
+		if effects[i].Strip < 0 {
+			selected = append(selected, effects[i])
+		}
+	}
+	return selected
+}
+
+// drawEffectStrip consumes the immutable records assigned to one established
+// barrier. It deliberately does no admission or simulation work [I6].
+func (c *Client) drawEffectStrip(cur *frame.Frame, strip int8) {
+	if c == nil || cur == nil || c.cam == nil {
+		return
+	}
+	effects := effectViewsForStrip(cur.Effects, strip)
+	if len(effects) == 0 {
+		return
+	}
+	c.DrawEffectViews(effects, c.effectDrawOptions())
+}
+
+// drawFixedEffects consumes the unstripped fixed-effect pool at its one
+// established location, after projectiles and before strip 7 [03 §1]
+// [03 R-STRIP-01 §3].
+func (c *Client) drawFixedEffects(cur *frame.Frame) {
+	if c == nil || cur == nil || c.cam == nil {
+		return
+	}
+	effects := unstrippedEffectViews(cur.Effects)
+	if len(effects) == 0 {
+		return
+	}
+	c.DrawEffectViews(effects, c.effectDrawOptions())
+}
+
 // DrawEffectViews draws snapshot effects in stable producer admission order.
 // The caller supplies asset resolution because the content catalog is owned
 // outside the client; no generic explosion/smoke sprite is selected here.

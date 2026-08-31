@@ -225,7 +225,7 @@ func TestGetBuiltCompletionRebindsAndConsumesWatcher(t *testing.T) {
 	pq.Primary()[0].DynamicGate = 0
 	hostility := func(*units.Unit, *units.Unit) bool { return true }
 	lookup := func(pool.Handle) *units.Unit { return factory }
-	pq.Hostility, pq.Lookup, pq.StockpileEconomy, pq.SecondaryTick = hostility, lookup, &economy.Service{}, 77
+	pq.SetBinding(&orders.QueueBinding{Hostility: hostility, Lookup: lookup, Economy: &economy.Service{}})
 	svc := NewService(nil, cat, w, nil)
 	svc.getBuiltLinks[product.Handle] = factory.Handle
 	svc.queueForUnit(product)
@@ -241,7 +241,7 @@ func TestGetBuiltCompletionRebindsAndConsumesWatcher(t *testing.T) {
 	if _, ok := svc.getBuiltLinks[product.Handle]; ok {
 		t.Fatal("GetBuilt side-map link survived watcher consumption")
 	}
-	if newQ.Hostility == nil || newQ.Lookup == nil || newQ.StockpileEconomy == nil || newQ.SecondaryTick != 77 {
+	if binding := newQ.Binding(); binding == nil || binding.Hostility == nil || binding.Lookup == nil || binding.Economy == nil {
 		t.Fatal("rally queue hooks were not preserved")
 	}
 }

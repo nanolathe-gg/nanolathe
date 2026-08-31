@@ -9,18 +9,18 @@ import (
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
-// stubStockpileEconomy is a queue-owned economy binding stand-in. Only its
+// stubEconomy is a queue-owned economy binding stand-in. Only its
 // identity matters to this test.
-type stubStockpileEconomy struct {
+type stubEconomy struct {
 	buckets [2]economy.Bucket
 }
 
-func (s *stubStockpileEconomy) UnitBuckets(pool.Handle) *[2]economy.Bucket { return &s.buckets }
+func (s *stubEconomy) UnitBuckets(pool.Handle) *[2]economy.Bucket { return &s.buckets }
 
 // TestRemoveHead_PreservesQueueOwnedServices locks the queue-subtraction
 // contract that a construction removal must not replace the unit's queue
-// [04 §3.3][05 C21]. The queue owns Hostility, Lookup, StockpileEconomy,
-// SecondaryTick and its diagnostics; rebuilding the segment into a fresh
+// [04 §3.3][05 C21]. The queue owns its concrete binding and diagnostics;
+// rebuilding the segment into a fresh
 // orders.Queue silently dropped all of them, so the successor order lost
 // target lookup and hostility and secondary stockpile admission lost the
 // economy buckets after the first factory product completed.
@@ -30,19 +30,20 @@ func TestRemoveHead_PreservesQueueOwnedServices(t *testing.T) {
 	target := &units.Unit{Handle: 7, Owner: 1, Alive: true}
 
 	q := orders.QueueForUnit(factory)
-	econ := &stubStockpileEconomy{}
+	econ := &stubEconomy{}
 	hostilityCalls := 0
 	lookupCalls := 0
-	q.Hostility = func(actor, other *units.Unit) bool { hostilityCalls++; return true }
-	q.Lookup = func(h pool.Handle) *units.Unit {
-		lookupCalls++
-		if h == target.Handle {
-			return target
-		}
-		return nil
-	}
-	q.StockpileEconomy = econ
-	q.SecondaryTick = 4242
+	q.SetBinding(&orders.QueueBinding{
+		Hostility: func(actor, other *units.Unit) bool { hostilityCalls++; return true },
+		Lookup: func(h pool.Handle) *units.Unit {
+			lookupCalls++
+			if h == target.Handle {
+				return target
+			}
+			return nil
+		},
+		Economy: econ,
+	})
 
 	build := orders.Node{Param2: 1}
 	q.Push(orders.Lookup("BuildingBuild"), build)
@@ -61,17 +62,14 @@ func TestRemoveHead_PreservesQueueOwnedServices(t *testing.T) {
 	if after != q {
 		t.Fatalf("removeHead replaced the unit's queue; queue identity must survive subtraction [05 C21]")
 	}
-	if after.Hostility == nil {
+	if after.Binding() == nil || after.Binding().Hostility == nil {
 		t.Errorf("Hostility hook lost across removal")
 	}
-	if after.Lookup == nil {
+	if after.Binding() == nil || after.Binding().Lookup == nil {
 		t.Errorf("Lookup hook lost across removal")
 	}
-	if after.StockpileEconomy != econ {
-		t.Errorf("StockpileEconomy binding lost across removal: got %v want %v", after.StockpileEconomy, econ)
-	}
-	if after.SecondaryTick != 4242 {
-		t.Errorf("SecondaryTick reset across removal: got %d want 4242", after.SecondaryTick)
+	if after.Binding() == nil || after.Binding().Economy != econ {
+		t.Errorf("Economy binding lost across removal: got %v want %v", after.Binding(), econ)
 	}
 	if got := after.LenSecondary(); got != 1 {
 		t.Errorf("secondary segment length after removal = %d, want 1", got)
@@ -79,7 +77,7 @@ func TestRemoveHead_PreservesQueueOwnedServices(t *testing.T) {
 
 	// The successor must still resolve its target through the queue's own
 	// lookup, which is the concrete failure the replacement queue caused.
-	if after.Hostility(factory, after.Lookup(target.Handle)) != true || lookupCalls == 0 || hostilityCalls == 0 {
+	if after.Binding().Hostility(factory, after.Binding().Lookup(target.Handle)) != true || lookupCalls == 0 || hostilityCalls == 0 {
 		t.Errorf("successor order could not resolve target/hostility after removal")
 	}
 

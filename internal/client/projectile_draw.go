@@ -6,6 +6,7 @@ package client
 // ownership of render dispatch or asset policy.
 
 import (
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/render"
 )
@@ -62,12 +63,14 @@ func (c *Client) DrawProjectileViews(current []frame.ProjectileView, now uint32,
 				stats.Skipped++
 				continue
 			}
-			// Retail emits the common base sprite before the model. Asset
-			// admission above ensures a missing model cannot leave a partial
-			// sprite behind.
-			x, y := c.cam.WorldToScreen(view.X, view.Y, view.Z)
-			c.UIBlitAnchor(d.BaseFrame, int(x-128), int(y-32))
-			stats.Sprites++
+			// The common frame is the ground shadow, not a projectile-body
+			// sprite. Its Y anchor uses the record's cached average floor height
+			// [03 §5.4][06 R-WFX-01 §4]. That publication field is not present in
+			// ProjectileView, so keep the exact frame route resolved while
+			// suppressing this pixel write until the owner publishes it.
+			if c.drawProjectileShadow(d.BaseFrame, view) {
+				stats.Sprites++
+			}
 			if !c.drawProjectileModel(view) {
 				stats.Skipped++
 				continue
@@ -93,12 +96,26 @@ func (c *Client) DrawProjectileViews(current []frame.ProjectileView, now uint32,
 				stats.Skipped++
 				continue
 			}
+			if d.BaseFrame != nil && c.drawProjectileShadow(d.BaseFrame, view) {
+				stats.Sprites++
+			}
 			x, y := c.cam.WorldToScreen(view.X, view.Y, view.Z)
 			c.UIBlitAnchor(d.FrameAsset, int(x-128), int(y-32))
 			stats.Sprites++
 		}
 	}
 	return stats
+}
+
+// drawProjectileShadow is intentionally dormant until the committed frame
+// publishes the cached average floor height required by the shared `shadow`
+// entry. Using projectile Y here would make the ground sprite float with the
+// projectile and would invent the missing route arithmetic [03 §5.4][I9].
+// TODO(question): publish the projectile's cached average floor height (the
+// same value used by simulation's projectile terrain sampling), then project
+// the shadow at (X-viewX+128, (Z-floor/2)-viewZ+32).
+func (c *Client) drawProjectileShadow(shadow *formats.GAFFrame, _ frame.ProjectileView) bool {
+	return false
 }
 
 func projectileViewByHandle(views []frame.ProjectileView, handle uint16) frame.ProjectileView {

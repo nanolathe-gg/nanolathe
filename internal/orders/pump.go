@@ -95,20 +95,11 @@ type Queue struct {
 	// [AGENTS.md §Diagnostics].
 	diagnostics []string
 
-	// P0-I16: authoritative hooks moved onto the owning queue/service.
-	// Hostility and Lookup were package globals; now per-queue to avoid shared mutable.
-	Hostility func(actor *units.Unit, target *units.Unit) bool `json:"-"` // per-queue hostility [P0-I16]
-	Lookup    func(pool.Handle) *units.Unit                    `json:"-"` // per-queue target lookup [P0-I16]
-
-	// StockpileEconomy is the per-queue economy service for BuildWeapon admission
-	// [06 §11.1][P1-09] I16: per-queue to avoid shared mutable global [RS-P0-018][INVARIANTS I1].
-	StockpileEconomy interface {
-		UnitBuckets(pool.Handle) *[2]economy.Bucket
-	} `json:"-"`
-
-	// SecondaryTick is the per-queue tick for BuildWeapon handler deadlines [06 §11.1][RS-P0-018].
-	// Was package-global currentSecondaryTick; now per-queue for session isolation [INVARIANTS I1].
-	SecondaryTick uint32 `json:"-"`
+	// secondaryTick is the per-queue tick published by the secondary walk. It
+	// remains queue-owned state for handlers that need the most recent rear
+	// segment visit; callers obtain session inputs from binding instead of
+	// mirrored queue fields [06 §11.1][RS-P0-018].
+	secondaryTick uint32
 
 	binding *QueueBinding
 
@@ -119,7 +110,8 @@ type Queue struct {
 	// current tick [04 R-ORD-01 §1]; a removal reaches this package either
 	// from inside a pump (where this is that pump's tick) or from a command
 	// that ran in the same tick as the unit's last pump, so it is the current
-	// tick in both. It is deliberately NOT SecondaryTick: that field is public
+	// tick in both. It is deliberately NOT secondaryTick: that state is the
+	// queue's rear-walk marker
 	// state the construction service transfers across a queue rebind, and
 	// writing it from the primary walk would destroy that transfer.
 	lastPumpTick uint32
@@ -145,7 +137,7 @@ func (q *Queue) SetGetBuiltHandler(handler func(*units.Unit, *Node, uint32) Code
 // reconstruction an explicit value transfer instead of a collection of
 // package-level fallbacks [04 §3.3][04 §3.4][06 §11.1].
 type QueueBinding struct {
-	StockpileEconomy interface {
+	Economy interface {
 		UnitBuckets(pool.Handle) *[2]economy.Bucket
 	}
 	Lookup      func(pool.Handle) *units.Unit
@@ -323,7 +315,7 @@ func (b *QueueBinding) ValidateSinglePlayerBinding() error {
 	if b.SimRNG == nil {
 		return fmt.Errorf("orders: missing simulation RNG")
 	}
-	if b.StockpileEconomy == nil || b.Lookup == nil || b.Hostility == nil || b.Resources == nil {
+	if b.Economy == nil || b.Lookup == nil || b.Hostility == nil || b.Resources == nil {
 		return fmt.Errorf("orders: incomplete base queue services")
 	}
 	if b.Movement == nil || b.World == nil || b.Work == nil || b.Weapons == nil || b.Presentation == nil {
@@ -388,34 +380,15 @@ func (q *Queue) SetBinding(b *QueueBinding) {
 		return
 	}
 	q.binding = b
-	if b == nil {
-		q.StockpileEconomy = nil
-		q.Lookup = nil
-		q.Hostility = nil
-		return
-	}
-	q.StockpileEconomy = b.StockpileEconomy
-	q.Lookup = b.Lookup
-	q.Hostility = b.Hostility
 }
 
-// Binding returns this queue's concrete binding. Value fixtures that predate
-// QueueBinding are read from their legacy fields without caching, so a test
-// that installs a hook after an earlier lookup still observes that hook. This
-// compatibility synthesis remains only while construction and older fixture
-// callers still write Queue.Lookup/Hostility/StockpileEconomy directly; new
-// production queue paths must pass the concrete binding through SetBinding.
+// Binding returns this queue's concrete, session-owned binding. A queue has no
+// implicit or synthesized runtime context: an unbound queue returns nil.
 func (q *Queue) Binding() *QueueBinding {
 	if q == nil {
 		return nil
 	}
-	if q.binding != nil {
-		return q.binding
-	}
-	if q.StockpileEconomy == nil && q.Lookup == nil && q.Hostility == nil {
-		return nil
-	}
-	return &QueueBinding{StockpileEconomy: q.StockpileEconomy, Lookup: q.Lookup, Hostility: q.Hostility}
+	return q.binding
 }
 
 // BindQueueBinding ensures a lazily-created queue receives its owner's session
@@ -1271,7 +1244,10 @@ func (q *Queue) controllerStateOf(u *units.Unit) uint8 {
 	if q == nil || u == nil {
 		return 0
 	}
-	svc, ok := q.StockpileEconomy.(*economy.Service)
+	if q.binding == nil {
+		return 0
+	}
+	svc, ok := q.binding.Economy.(*economy.Service)
 	if !ok || svc == nil {
 		return 0
 	}
@@ -1617,7 +1593,7 @@ func (q *Queue) pumpSecondary(u *units.Unit, tick uint32) {
 		// for its deadlines any more; it stays because it is the queue's own
 		// record of the tick it was last pumped at, and the construction service
 		// transfers it across a queue rebind [04 R-FAC-02 §4].
-		q.SecondaryTick = tick
+		q.secondaryTick = tick
 		handler := DescriptorFor(n.ID).Handler
 		if handler == nil {
 			// TODO(T25): the same missing-handler park as the primary walk
@@ -1872,9 +1848,9 @@ func (q *Queue) releaseBoundGoals() {
 }
 
 // RemovePrimaryNode removes one primary node in place, preserving queue
-// identity and every queue-owned service binding (Hostility, Lookup,
-// StockpileEconomy, SecondaryTick, diagnostics). Callers that rebuilt the
-// segment into a fresh Queue silently dropped those hooks, so successor
+// identity and the queue's concrete binding (including Economy), plus its
+// secondary tick and diagnostics. Callers that rebuilt the segment into a
+// fresh Queue silently dropped those hooks, so successor
 // orders lost target lookup and stockpile admission after a construction
 // removal.
 //

@@ -42,7 +42,7 @@ const (
 // delivers bit 0 on expiry [04 §3.3].
 //
 // The tick is the handler's own fourth argument. WU-18-1 had to arm against
-// `Queue.SecondaryTick` — a base the rear-segment walk publishes and the
+// queue's rear-segment tick — a base the rear-segment walk publishes and the
 // front-segment walk did not, so every front-segment arm here measured its
 // wait from a stale tick and could run a wait or a countdown faster than its
 // row's arithmetic. WU-18-7 put the tick in the Handler signature, which is

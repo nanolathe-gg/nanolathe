@@ -269,3 +269,46 @@ func TestFeatureWindowAdmitsSpriteOverhang(t *testing.T) {
 		t.Fatal("a sprite anchored past the right edge painted nothing inside the viewport")
 	}
 }
+
+// TestFeatureVisibilityGate locks the four established feature admissions of
+// [03 R-RAST-01 §6][03 §5.1.5]: unflagged definitions are unconditional,
+// flagged definitions accept the local placer, then either of the two
+// footprint corners in committed visibility, and otherwise are denied.
+func TestFeatureVisibilityGate(t *testing.T) {
+	const local = uint8(0)
+	base := frame.FeatureView{
+		Owner: 1, OwnerKnown: true, CX: 2, CZ: 2, FootX: 2, FootZ: 2,
+		Y: 0, NoDrawUnderGray: true,
+	}
+	invalid := &frame.Frame{Selection: frame.SelectionView{LocalPlayer: local}}
+	if !featureVisibleForFrame(invalid, frame.FeatureView{NoDrawUnderGray: false}) {
+		t.Fatal("unflagged feature was denied without visibility data")
+	}
+	if featureVisibleForFrame(invalid, base) {
+		t.Fatal("flagged foreign feature bypassed missing visibility data")
+	}
+
+	placer := base
+	placer.Owner = local
+	if !featureVisibleForFrame(invalid, placer) {
+		t.Fatal("flagged local-placer feature was denied")
+	}
+
+	// The anchor corner (2,2) maps to visibility tile (1,1), while the
+	// footprint-displaced corner (4,4) maps to (2,2). Only the latter is lit,
+	// proving this is the two-corner predicate rather than an anchor-only gate.
+	los := &frame.Frame{
+		Selection: frame.SelectionView{LocalPlayer: local},
+		Visibility: frame.VisibilityView{
+			W: 4, H: 4, Valid: true, CoverageBytes: true,
+			Visible: []uint8{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0},
+		},
+	}
+	if !featureVisibleForFrame(los, base) {
+		t.Fatal("flagged feature with visible displaced corner was denied")
+	}
+	los.Visibility.Visible[10] = 0
+	if featureVisibleForFrame(los, base) {
+		t.Fatal("flagged feature with both LOS corners denied was admitted")
+	}
+}

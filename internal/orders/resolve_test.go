@@ -56,11 +56,23 @@ func mkUnit(handle pool.Handle, owner uint8, side string, health, max int32, ali
 }
 
 func setTestHostility(u *units.Unit, fn func(*units.Unit, *units.Unit) bool) {
-	QueueForUnit(u).Hostility = fn
+	q := QueueForUnit(u)
+	b := q.Binding()
+	if b == nil {
+		b = &QueueBinding{}
+	}
+	b.Hostility = fn
+	q.SetBinding(b)
 }
 
 func setTestLookup(u *units.Unit, fn func(pool.Handle) *units.Unit) {
-	QueueForUnit(u).Lookup = fn
+	q := QueueForUnit(u)
+	b := q.Binding()
+	if b == nil {
+		b = &QueueBinding{}
+	}
+	b.Lookup = fn
+	q.SetBinding(b)
 }
 
 func TestResolveFullTable(t *testing.T) {

@@ -98,7 +98,7 @@ func buildWeaponHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 			return false
 		}
 		binding := q.Binding()
-		if binding == nil || binding.StockpileEconomy == nil {
+		if binding == nil || binding.Economy == nil {
 			// Stockpile work is admitted only through the owning session's
 			// economy ledger. An unbound queue cannot make progress: silently
 			// treating it as an accepted request bypasses two-resource carry
@@ -106,7 +106,7 @@ func buildWeaponHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 			// settlement algorithm"][06 §11.1].
 			return false
 		}
-		buckets := binding.StockpileEconomy.UnitBuckets(u.Handle)
+		buckets := binding.Economy.UnitBuckets(u.Handle)
 		if buckets == nil {
 			return false
 		}

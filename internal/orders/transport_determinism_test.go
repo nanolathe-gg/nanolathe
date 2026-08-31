@@ -170,8 +170,8 @@ func runTransportScenario(seed uint32) (uint64, int, []string) {
 	qCargo := QueueForUnit(uCargo)
 	// Bind lookup for target resolution
 	lookup := func(h pool.Handle) *units.Unit { return w2.Unit(h) }
-	qC.Lookup = lookup
-	qCargo.Lookup = lookup
+	qC.SetBinding(&QueueBinding{Lookup: lookup})
+	qCargo.SetBinding(&QueueBinding{Lookup: lookup})
 	// Push VTOL_Pickup order onto carrier targeting cargo
 	idPickup := Lookup("VTOL_Pickup")
 	if idPickup == 0 {
@@ -248,8 +248,8 @@ func TestTransportLoadMoveUnloadDeterministic(t *testing.T) {
 	uC.Move.Mode = 1
 	uCargo.Move.Mode = 1
 	qC := QueueForUnit(uC)
-	qC.Lookup = func(h pool.Handle) *units.Unit { return w2.Unit(h) }
-	QueueForUnit(uCargo).Lookup = qC.Lookup
+	qC.SetBinding(&QueueBinding{Lookup: func(h pool.Handle) *units.Unit { return w2.Unit(h) }})
+	QueueForUnit(uCargo).SetBinding(&QueueBinding{Lookup: qC.Binding().Lookup})
 	idPickup := Lookup("VTOL_Pickup")
 	qC.Push(idPickup, NewNodeForOrder(idPickup, hCargo, 0, 0, 0, 0, hC, false))
 	pump := &Pump{World: w2}
@@ -344,7 +344,7 @@ func TestTransportHeavyAndGates(t *testing.T) {
 	uC.Move.Mode = 1
 	uCargo.Move.Mode = 1
 	qC := QueueForUnit(uC)
-	qC.Lookup = func(h pool.Handle) *units.Unit { return w2.Unit(h) }
+	qC.SetBinding(&QueueBinding{Lookup: func(h pool.Handle) *units.Unit { return w2.Unit(h) }})
 	idPickup := Lookup("VTOL_Pickup")
 	qC.Push(idPickup, NewNodeForOrder(idPickup, hCargo, 0, 0, 0, 0, hC, false))
 	pump := &Pump{World: w2}
@@ -379,7 +379,7 @@ func TestTransportHeavyAndGates(t *testing.T) {
 	uCargo.Move.Mode = 1
 	uCargo2.Move.Mode = 1
 	qC = QueueForUnit(uC)
-	qC.Lookup = func(h pool.Handle) *units.Unit { return w2.Unit(h) }
+	qC.SetBinding(&QueueBinding{Lookup: func(h pool.Handle) *units.Unit { return w2.Unit(h) }})
 	// Load first cargo
 	qC.Push(idPickup, NewNodeForOrder(idPickup, hCargo, 0, 0, 0, 0, hC, false))
 	pump = &Pump{World: w2}
@@ -417,7 +417,7 @@ func TestTransportLanding(t *testing.T) {
 	uVTOL.Move.Mode = 2
 	uPad.Move.Mode = 1
 	qVTOL := QueueForUnit(uVTOL)
-	qVTOL.Lookup = func(h pool.Handle) *units.Unit { return w2.Unit(h) }
+	qVTOL.SetBinding(&QueueBinding{Lookup: func(h pool.Handle) *units.Unit { return w2.Unit(h) }})
 	idLand := Lookup("VTOL_Landing")
 	if idLand == 0 {
 		t.Fatalf("VTOL_Landing lookup failed")

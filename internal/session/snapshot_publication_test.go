@@ -67,6 +67,33 @@ func TestPublishSnapshotCarriesCommittedUnitActivation(t *testing.T) {
 	}
 }
 
+func TestPublishSnapshotCarriesFeatureNoDrawUnderGray(t *testing.T) {
+	terrain := strictMinimalTerrain()
+	def := &content.FeatureDef{
+		DefinitionHeader: content.DefinitionHeader{CanonicalKey: "gray-feature"},
+		FootprintX:       1,
+		FootprintZ:       1,
+		Damage:           100,
+		NoDrawUnderGray:  true,
+	}
+	featureSvc := features.NewService(terrain, nil, nil, nil)
+	if featureSvc.PlaceAt(2, 2, def) == nil {
+		t.Fatal("feature placement failed")
+	}
+	s := &Session{Snapshot: frame.NewBuffer(), Features: featureSvc, LocalOwner: 0}
+	s.publishSnapshot(1)
+	cur := s.Snapshot.Current()
+	if cur == nil || len(cur.Features) != 1 || !cur.Features[0].NoDrawUnderGray {
+		t.Fatalf("published feature = %#v, want nodrawundergray", cur)
+	}
+	// The frame owns the definition flag; mutating the catalog object after
+	// publication must not change the committed presentation input [I6].
+	def.NoDrawUnderGray = false
+	if !cur.Features[0].NoDrawUnderGray {
+		t.Fatal("mutating live feature definition changed committed frame")
+	}
+}
+
 func TestPublishSnapshotDoesNotAllocateMissingOrderQueue(t *testing.T) {
 	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "no-orders"}, MaxDamage: 1}
 	w := newSessionFixtureWorld(2, nil)

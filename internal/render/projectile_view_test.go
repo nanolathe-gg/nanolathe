@@ -71,6 +71,10 @@ func TestDispatchProjectileViewAllAuthoredGAFFamilies(t *testing.T) {
 			if d.BaseFrame == nil || d.FrameAsset != nil {
 				t.Fatalf("rt %d base frame contract got %+v", tc.rt, d)
 			}
+		} else if tc.rt == RenderTypeSelectorGAF {
+			if d.BaseFrame == nil || d.FrameAsset == nil {
+				t.Fatalf("rt %d shadow+selected frame contract got %+v", tc.rt, d)
+			}
 		} else if d.FrameAsset == nil || d.BaseFrame != nil {
 			t.Fatalf("rt %d selected frame contract got %+v", tc.rt, d)
 		}
@@ -114,6 +118,18 @@ func TestDispatchProjectileViewFrameFamilies(t *testing.T) {
 	d = DispatchProjectileView(lifetime, 105, ProjectileDispatchOptions{FrameCount: testFrameCount, ResolveGAF: testGAF})
 	if d.Frame != 3 || d.Suppressed {
 		t.Fatalf("lifetime frame got %+v want 3 [03 §5.4]", d)
+	}
+}
+
+func TestDispatchProjectileViewAbsentSelectorStaysSuppressed(t *testing.T) {
+	v := frame.ProjectileView{
+		RenderType:       RenderTypeSelectorGAF,
+		Selector:         -1,
+		SelectorSequence: 0, // zero value is not an authoritative presence bit
+		FrameCount:       10,
+	}
+	if d := DispatchProjectileView(v, 5, ProjectileDispatchOptions{ResolveGAF: testGAF}); !d.Suppressed {
+		t.Fatalf("absent selector was inferred from zero-valued alias: %+v", d)
 	}
 }
 

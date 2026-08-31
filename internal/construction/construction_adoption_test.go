@@ -63,7 +63,7 @@ func TestMobileBuildEmitsStartBuildingThroughOrders(t *testing.T) {
 		t.Fatalf("QueueMobileBuild: %v", err)
 	}
 	// Cleanup resolves the record's owner through the queue binding [R-ORDER-02 §2].
-	orders.QueueForUnit(builder).Lookup = func(pool.Handle) *units.Unit { return builder }
+	orders.QueueForUnit(builder).SetBinding(&orders.QueueBinding{Lookup: func(pool.Handle) *units.Unit { return builder }})
 	node := orders.QueueForUnit(builder).Primary()[0]
 	node.Phase = uint8(State2)
 	svc := NewService(terrain, cat, w, &economy.Service{})
@@ -103,7 +103,7 @@ func TestReclaimEmitsStartBuildingThroughOrders(t *testing.T) {
 	s, builder, target, node := reclaimFixture(t, 1, 10)
 	builder.Def.WorkerTime = 300 // pulse 15, one pulse reclaims fatally
 	// Cleanup resolves the record's owner through the queue binding [R-ORDER-02 §2].
-	orders.QueueForUnit(builder).Lookup = func(pool.Handle) *units.Unit { return builder }
+	orders.QueueForUnit(builder).SetBinding(&orders.QueueBinding{Lookup: func(pool.Handle) *units.Unit { return builder }})
 	vm := bindScriptBridge(t, builder, "StartBuilding", "StopBuilding")
 	target.Remaining = 0.25
 
@@ -230,8 +230,8 @@ func assistFixture(t *testing.T, factoryWorkerTime int32, assistantQuanta ...int
 
 	econ := &economy.Service{}
 	binding := &orders.QueueBinding{
-		StockpileEconomy: econ,
-		Lookup:           func(h pool.Handle) *units.Unit { return w.Unit(h) },
+		Economy: econ,
+		Lookup:  func(h pool.Handle) *units.Unit { return w.Unit(h) },
 	}
 	svc := NewService(exitTerrain(16, 16), cat, w, econ)
 	svc.OrderBinding = binding

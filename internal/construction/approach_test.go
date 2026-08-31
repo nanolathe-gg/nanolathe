@@ -8,6 +8,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
@@ -62,6 +63,10 @@ func approachFixture(t *testing.T, siteCellX, siteCellZ int32) (*Service, *units
 	if err := QueueMobileBuild(builder, "corlab", siteX, siteZ, 1, cat); err != nil {
 		t.Fatalf("queue mobile build: %v", err)
 	}
+	// The queue is restored with its session context explicitly attached. The
+	// movement lifecycle must never synthesize context from legacy queue fields.
+	binding := &orders.QueueBinding{SimRNG: rng.Global.Sim, Lookup: w.Unit}
+	orders.QueueForUnit(builder).SetBinding(binding)
 	node := orders.QueueForUnit(builder).Primary()[0]
 	node.Phase = uint8(State2)
 
@@ -264,11 +269,15 @@ func TestApproachGoalRebindsOverARestoredRoute(t *testing.T) {
 	route.Active = false
 	route.Count = 1
 	route.WantsRepath = false
+	svc.Movement.BeginTick(159)
 	svc.Movement.StepUnit(builder.Handle, 159)
+	svc.Movement.EndTick(159)
 	if got := svc.Movement.PathRequestsSnapshot(); len(got) != 0 {
 		t.Fatalf("restored follower requested before preserved tick 100+60: %#v", got)
 	}
+	svc.Movement.BeginTick(160)
 	svc.Movement.StepUnit(builder.Handle, 160)
+	svc.Movement.EndTick(160)
 	got := svc.Movement.PathRequestsSnapshot()
 	if len(got) != 1 || got[0].Unit != builder.Handle || got[0].Activation == 0 {
 		t.Fatalf("restored follower request at tick 160=%#v, want one order-bound request", got)
@@ -276,7 +285,9 @@ func TestApproachGoalRebindsOverARestoredRoute(t *testing.T) {
 	if route.LastRequestTick != 160 {
 		t.Fatalf("wants-repath poll stamped request tick %d, want 160", route.LastRequestTick)
 	}
+	svc.Movement.BeginTick(161)
 	svc.Movement.StepUnit(builder.Handle, 161)
+	svc.Movement.EndTick(161)
 	after := svc.Movement.PathRequestsSnapshot()
 	if len(after) != 1 || after[0].Activation != got[0].Activation {
 		t.Fatalf("restored follower submitted more than once: tick160=%#v tick161=%#v", got, after)

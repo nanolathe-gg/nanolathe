@@ -199,10 +199,11 @@ func (c *Client) drawEffects(cur *frame.Frame) {
 	// tick and then paint their live particles [03 §5.5].
 	c.tickNanolathe(cur)
 	c.drawNanolathe(cur)
-	if len(cur.Effects) == 0 {
-		return
-	}
-	c.DrawEffectViews(cur.Effects, c.effectDrawOptions())
+	// Strip 6 is the construction/reclaim barrier. Nanolathe particles are
+	// painted here, and the already-published strip records follow them; the
+	// other strips are consumed by drawCommittedFrame at their own barriers
+	// [03 §1][03 R-STRIP-01 §2].
+	c.drawEffectStrip(cur, int8(frame.StripBeam))
 }
 
 func (c *Client) drawFog(cur *frame.Frame) {

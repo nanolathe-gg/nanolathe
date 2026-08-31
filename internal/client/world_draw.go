@@ -5,6 +5,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 // worldDrawable is one admitted object in the painter pass. The source slice
@@ -235,40 +236,47 @@ func (c *Client) drawCommittedFrame(cur *frame.Frame, ok bool) {
 	// Terrain/static preparation, radar preparation, and viewport clipping are
 	// unconditional. Radar and clip have no concrete frame input yet.
 	c.drawTerrainPrep()
-	// TODO(T23): strip slots 0-2 have no published live producer; preserve the
-	// established positions without claiming that an empty strip was drawn.
+	// Strips 0 and 1 are unconditional but producerless; strip 2 is the first
+	// published effect barrier [03 §1][03 R-STRIP-01 §2].
+	// TODO(T23): strip slots 0-1 have no published live producer.
+	c.drawEffectStrip(cur, 0)
+	c.drawEffectStrip(cur, 1)
+	c.drawEffectStrip(cur, 2)
 
 	// The first feature traversal owns the never-seen admission. Features with
 	// height >= 10 are deferred to pass A [03 R-RAST-01 §6].
 	c.drawFeaturePass(cur, ok)
-	// TODO(T23): strip slots 3-4 have no published live producer.
+	// TODO(T23): strip slot 3 has no published live producer.
+	c.drawEffectStrip(cur, 3)
+	c.drawEffectStrip(cur, 4)
 
 	// Pass A: the grounded units of each window row, interleaved with that
 	// row's deferred tall features [03 R-RAST-01 §7].
 	c.drawWorldPass(cur, ok)
-	// TODO(T23): strip slot 5 has no published live producer.
+	c.drawEffectStrip(cur, 5)
 
-	// TODO(T23): strip slot 6 has no published live producer.
-	c.drawProjectiles(cur)
+	// Strip 6 advances and paints nanolathe once, then consumes its committed
+	// effect records at the same barrier [03 §1][03 R-STRIP-01 §2].
 	c.drawEffects(cur)
+	c.drawProjectiles(cur)
+	c.drawFixedEffects(cur)
+	c.drawEffectStrip(cur, 7)
 	// Pass B: the units whose mode mirror is not 1 — airborne aircraft,
 	// attached/parked cargo, save-installed — at the end of strip 7, after the
 	// projectile pool and the fixed effect pool [03 R-RAST-01 §7][03 §1].
 	c.drawWorldPassB(cur, ok)
-	// TODO(T23): strip slot 7 and auxiliary traversal have no published live
-	// producer; retain the established position without inventing a route.
 	// Auxiliary unit traversal has no published auxiliary draw records yet;
 	// leave this established slot empty rather than inventing a route [03 §1].
 	// Strip slot 8 is unconditional; no published producer exists [03 §1].
+	// TODO(T23): strip slot 8 has no published live producer.
+	c.drawEffectStrip(cur, 8)
 
 	// The key-controlled overlay has no concrete authored client route yet.
 	// The unit labels follow it and precede strip 9: the health bar and the
 	// control-group digit, each gated on the option byte and on the labelled
 	// owner equalling the local player slot [03 §1][03 R-FX-01 §6].
 	c.drawUnitLabels(cur, ok)
-	// Strip 9 remains an explicit empty position; unknown producers remain
-	// unresolved [03 §1][I9].
-	// TODO(T23): strip slot 9 has no published live producer.
+	c.drawEffectStrip(cur, 9)
 	c.drawFog(cur)
 	c.drawSelectionStage()
 	c.drawInterface(cur)
@@ -290,15 +298,6 @@ func (c *Client) drawCommittedFrame(cur *frame.Frame, ok bool) {
 // whole sprite on a per-tile edge that does not line up with the 32-pixel fog
 // blocks, so a tree vanished while the ground it stands on was lit and
 // reappeared whole the moment its own tile flipped.
-//
-// TODO(T25): the nodrawundergray branch needs the feature definition's flag
-// published on frame.FeatureView; internal/frame and internal/features are
-// owned elsewhere. Placeholder: the unconditional branch, which is retail for
-// every definition that lacks the flag — every tree, rock and wreck, i.e.
-// everything these passes draw on the stock feature tables. Wall and fort
-// types carry it and are drawn here where retail would hide them under
-// never-seen cells; FeatureView already carries the placer selector the second
-// branch needs [03 §5.1.5].
 func (c *Client) drawFeaturePass(cur *frame.Frame, ok bool) {
 	if !ok || cur == nil || c.cam == nil {
 		return
@@ -312,8 +311,43 @@ func (c *Client) drawFeaturePass(cur *frame.Frame, ok bool) {
 		if !win.admitsCell(f.CX, f.CZ) {
 			continue
 		}
+		if !featureVisibleForFrame(cur, *f) {
+			continue
+		}
 		c.drawFeature(f)
 	}
+}
+
+// featureVisibleForFrame applies the feature draw gate after window admission.
+// Definitions without nodrawundergray draw unconditionally. Flagged
+// definitions draw only for a local-player placer selector or when either of
+// the two footprint corners is visible in the committed visibility mask; the
+// fog/explored channels are deliberately not consulted [03 R-RAST-01 §6]
+// [03 §5.1.5].
+func featureVisibleForFrame(cur *frame.Frame, f frame.FeatureView) bool {
+	if cur == nil {
+		return false
+	}
+	if !f.NoDrawUnderGray {
+		return true
+	}
+	viewer := cur.Selection.LocalPlayer
+	if viewer >= 10 {
+		return false
+	}
+	if f.OwnerKnown && f.Owner < 10 && f.Owner == viewer {
+		return true
+	}
+	// The feature predicate samples the anchor cell origin, then one opposite
+	// corner displaced by the authored footprint offsets [03 §3.2]. CellToWorld
+	// preserves the established cell-origin conversion, including its signed
+	// 16.16 representation [03 §2.1].
+	minX := world.CellToWorld(f.CX)
+	minZ := world.CellToWorld(f.CZ)
+	maxX := world.CellToWorld(f.CX + int32(f.FootX))
+	maxZ := world.CellToWorld(f.CZ + int32(f.FootZ))
+	return SnapshotPointVisible(cur.Visibility, minX, f.Y, minZ, viewer) ||
+		SnapshotPointVisible(cur.Visibility, maxX, f.Y, maxZ, viewer)
 }
 
 // drawWorldPass builds this frame's world-Z row buckets and then runs pass A:
@@ -364,6 +398,9 @@ func (c *Client) drawWorldPass(cur *frame.Frame, ok bool) {
 			continue
 		}
 		if !win.admitsCell(f.CX, f.CZ) {
+			continue
+		}
+		if !featureVisibleForFrame(cur, *f) {
 			continue
 		}
 		sx, sy := c.featureScreenPos(*f)

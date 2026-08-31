@@ -49,8 +49,8 @@ func vtolWorkFixture() (*Queue, *units.Unit, *units.Unit) {
 	// carries. One stock-shaped tree stands on the builder's own cell.
 	tree, _ := retailShapedTree()
 	q := &Queue{binding: &QueueBinding{
-		SimRNG:           rng.Global.Sim,
-		StockpileEconomy: &economy.Service{Terrain: reclaimFixtureTerrain([]*content.FeatureDef{tree}, 4, 5)},
+		SimRNG:  rng.Global.Sim,
+		Economy: &economy.Service{Terrain: reclaimFixtureTerrain([]*content.FeatureDef{tree}, 4, 5)},
 		Lookup: func(h pool.Handle) *units.Unit {
 			switch h {
 			case target.Handle:

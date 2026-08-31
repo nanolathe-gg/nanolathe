@@ -617,10 +617,10 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 		}
 	}
 	return &orders.QueueBinding{
-		StockpileEconomy: s.Econ,
-		Lookup:           worldQueries.LookupUnit,
-		Hostility:        worldQueries.Hostile,
-		SimRNG:           s.SimRNG(),
+		Economy:   s.Econ,
+		Lookup:    worldQueries.LookupUnit,
+		Hostility: worldQueries.Hostile,
+		SimRNG:    s.SimRNG(),
 		CurrentTick: func() uint32 {
 			if s.Clock == nil {
 				return 0

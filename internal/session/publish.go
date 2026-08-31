@@ -322,16 +322,17 @@ func (s *Session) publishSnapshot(tick uint32) {
 				FootX:      int8(inst.FootprintX),
 				FootZ:      int8(inst.FootprintZ),
 
-				Filename:    inst.Def.Filename,
-				SeqName:     inst.Def.SeqName,
-				SeqNameShad: inst.Def.SeqNameShad,
-				Animating:   inst.Def.Animating != 0,
-				AnimTrans:   inst.Def.AnimTrans != 0,
-				ShadTrans:   inst.Def.ShadTrans != 0,
-				Blocking:    inst.Def.Blocking,
-				Reclaimable: inst.Def.Reclaimable,
-				Height:      inst.Def.Height,
-				Geothermal:  inst.Def.Geothermal,
+				Filename:        inst.Def.Filename,
+				SeqName:         inst.Def.SeqName,
+				SeqNameShad:     inst.Def.SeqNameShad,
+				Animating:       inst.Def.Animating != 0,
+				AnimTrans:       inst.Def.AnimTrans != 0,
+				ShadTrans:       inst.Def.ShadTrans != 0,
+				Blocking:        inst.Def.Blocking,
+				Reclaimable:     inst.Def.Reclaimable,
+				NoDrawUnderGray: inst.Def.NoDrawUnderGray,
+				Height:          inst.Def.Height,
+				Geothermal:      inst.Def.Geothermal,
 			}
 			if fv.Model == "" {
 				fv.Model = inst.Def.Filename

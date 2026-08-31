@@ -24,7 +24,7 @@ import (
 // arms is `current tick + 30` measured from the tick the handler ran on
 // [04 R-ORD-01 §1]. The first pump is deliberately at a tick that is neither 0
 // nor the tick the rear-segment walk would have published: before WU-18-7 the
-// handler armed against `Queue.SecondaryTick`, which no primary walk ever
+// handler armed against the rear-segment tick, which no primary walk ever
 // wrote, so every step of this countdown was already expired when it was armed
 // and one pump ran the whole timeline to the unit's death.
 func TestSelfDestructFGDispatchesOnSightAndDestroysTheUnit(t *testing.T) {

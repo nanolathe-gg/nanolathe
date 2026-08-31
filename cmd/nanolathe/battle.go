@@ -1867,8 +1867,10 @@ func (b *battleSession) hostile(actor, target *units.Unit) bool {
 	if actor == nil || target == nil {
 		return false
 	}
-	if q := orders.QueueForUnit(actor); q != nil && q.Hostility != nil {
-		return q.Hostility(actor, target)
+	if q := orders.QueueForUnit(actor); q != nil {
+		if binding := q.Binding(); binding != nil && binding.Hostility != nil {
+			return binding.Hostility(actor, target)
+		}
 	}
 	return actor.Owner != target.Owner
 }

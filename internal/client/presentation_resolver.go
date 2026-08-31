@@ -6,11 +6,26 @@ package client
 // plausible while violating the clean-room contract [03 §5.4][I9].
 
 import (
+	"strings"
+
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
+
+const projectileGAFPath = "anims/fx.gaf"
+
+// The fixed engine slots are the only shared projectile GAF identities closed
+// by the retail contract. Selector 4 intentionally binds the same `plasmasm`
+// entry as selector 1 [06 R-WFX-01 §1][06 R-WFX-01 §4].
+var projectileSelectorSequences = [...]string{
+	"cannonshell",
+	"plasmasm",
+	"plasmamd",
+	"ultrashell",
+	"plasmasm",
+}
 
 // ProjectileVisibilityMode selects the published coverage representation.
 // Byte coverage is the current local-player grid; zero selects the local bit
@@ -77,8 +92,8 @@ func (c *Client) projectileDispatchOptions() render.ProjectileDispatchOptions {
 			}
 			return int32(v.PrimaryColor), secondary, true
 		},
-		// GAF frames and segmented geometry are resolved by the battle asset
-		// adapter. There is intentionally no compatibility fallback here.
+		// GAF frames resolve only the fixed shared fx.gaf slots closed by the
+		// retail trace. There is intentionally no AssetID or model-name fallback.
 		SegmentPoints: func(v frame.ProjectileView) (first, second []render.ProjectilePoint, ok bool) {
 			if c == nil || c.crt == nil {
 				return nil, nil, false
@@ -89,14 +104,80 @@ func (c *Client) projectileDispatchOptions() render.ProjectileDispatchOptions {
 			// the copy is absent [03 §5.4][I4].
 			return render.SnapshotSegmentedPointPasses(v, c.crt)
 		},
-		ResolveGAF: func(req render.ProjectileGAFRequest) (*formats.GAFFrame, bool) {
-			// TODO(question): the committed projectile view does not publish the
-			// archive/entry route needed to resolve AssetID and sequence names.
-			// Suppress only this unresolved instruction; global-GAF admission below
-			// remains open so unrelated authored projectiles are not discarded.
-			return nil, false
-		},
+		ResolveGAF: c.resolveProjectileGAF,
 	}
+}
+
+// ensureProjectileGAF performs one lazy lookup of the shared projectile bank.
+// A failed load is cached for this client, matching the existing feature/fog
+// cache boundary and ensuring one missing bank cannot cause repeated VFS work
+// during a render loop [03 §4.4][I6].
+func (c *Client) ensureProjectileGAF() *formats.GAF {
+	if c == nil || c.projectileGAFLoaded {
+		if c == nil {
+			return nil
+		}
+		return c.projectileGAF
+	}
+	c.projectileGAFLoaded = true
+	if c.modelFS == nil {
+		return nil
+	}
+	gaf, err := formats.LoadGAFFile(c.modelFS, projectileGAFPath)
+	if err != nil {
+		c.projectileGAFErr = err
+		return nil
+	}
+	c.projectileGAF = gaf
+	return gaf
+}
+
+// resolveProjectileGAF resolves only exact shared fx.gaf entries. Empty or
+// content-supplied identities do not select a fallback: the authoritative
+// frame carries no published route for those cases [03 §5.4][I9].
+func (c *Client) resolveProjectileGAF(req render.ProjectileGAFRequest) (*formats.GAFFrame, bool) {
+	var name string
+	switch {
+	case req.Base:
+		// Render types 1, 3, 4, and 6 all use frame 0 of the fixed shadow entry.
+		if req.Family != render.RenderTypeBaseSpriteModel && req.Family != render.RenderTypeBaseModelDistinct && req.Family != render.RenderTypeSelectorGAF && req.Family != render.RenderTypeRecordOrientation {
+			return nil, false
+		}
+		name = "shadow"
+	case req.Family == render.RenderTypeSelectorGAF:
+		if req.Sequence < 0 || req.Sequence >= int32(len(projectileSelectorSequences)) {
+			return nil, false
+		}
+		name = projectileSelectorSequences[req.Sequence]
+	case req.Family == render.RenderTypeLifetimeGAF:
+		// Type 5 has one fixed sequence; its lifetime/frame arithmetic is
+		// performed before this resolver is called [03 §5.4].
+		if req.Sequence != 0 {
+			return nil, false
+		}
+		name = "flamestream"
+	default:
+		// Type 2's lens is a startup-built displacement frame rather than a
+		// shared fx.gaf entry. Its pixel mechanics remain owned by doc 03.
+		return nil, false
+	}
+
+	gaf := c.ensureProjectileGAF()
+	if gaf == nil || strings.TrimSpace(name) == "" {
+		return nil, false
+	}
+	entry, ok := gaf.Find(name)
+	if !ok || entry == nil || entry.FrameCount == 0 || len(entry.Frames) == 0 {
+		return nil, false
+	}
+	if req.Frame < 0 || req.Frame >= int(entry.FrameCount) || req.Frame >= len(entry.Frames) {
+		return nil, false
+	}
+	frame := entry.Frames[req.Frame].Frame
+	if frame == nil {
+		return nil, false
+	}
+	return frame, true
 }
 
 // effectDrawOptions keeps LHT admission terrain-bounded.  Authored LHT row,

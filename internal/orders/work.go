@@ -860,7 +860,10 @@ func queueEconomy(q *Queue) *economy.Service {
 	if q == nil {
 		return nil
 	}
-	svc, _ := q.StockpileEconomy.(*economy.Service)
+	var svc *economy.Service
+	if q != nil && q.Binding() != nil {
+		svc, _ = q.Binding().Economy.(*economy.Service)
+	}
 	return svc
 }
 

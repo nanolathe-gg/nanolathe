@@ -18,8 +18,9 @@ func TestP0I16_HostilityIsolation(t *testing.T) {
 	// Queue for u1 says hostile always true, for u2 always false
 	q1 := QueueForUnit(u1)
 	q2 := QueueForUnit(u2)
-	q1.Hostility = func(a, b *units.Unit) bool { return true }
-	q2.Hostility = func(a, b *units.Unit) bool { return false }
+	hostile := func(a, b *units.Unit) bool { return true }
+	q1.SetBinding(&QueueBinding{Hostility: hostile})
+	q2.SetBinding(&QueueBinding{Hostility: func(a, b *units.Unit) bool { return false }})
 
 	if !isHostile(u1, target) {
 		t.Fatalf("q1 hostility true should be hostile")
@@ -32,11 +33,12 @@ func TestP0I16_HostilityIsolation(t *testing.T) {
 		t.Fatalf("interleaved hostility contaminated")
 	}
 	// Save/reload: copy hostility
-	saved := q1.Hostility
+	saved := q1.Binding().Hostility
 	q1Dup := &Queue{}
-	q1Dup.Hostility = func(a, b *units.Unit) bool { return false }
+	q1Dup.SetBinding(&QueueBinding{Hostility: func(a, b *units.Unit) bool { return false }})
 	// Destroy q1Dup, reload
-	reloadedQ1 := &Queue{Hostility: saved}
+	reloadedQ1 := &Queue{}
+	reloadedQ1.SetBinding(&QueueBinding{Hostility: saved})
 	// Need to test via a unit that uses reloaded queue
 	u1Dup := &units.Unit{Handle: 4, Owner: 0, Def: defA, Alive: true}
 	BindQueue(u1Dup, reloadedQ1)
@@ -53,18 +55,18 @@ func TestP0I16_TargetLookupIsolation(t *testing.T) {
 	targetB := &units.Unit{Handle: 200, Owner: 1, Alive: true}
 	qA := QueueForUnit(uA)
 	qB := QueueForUnit(uB)
-	qA.Lookup = func(h pool.Handle) *units.Unit {
+	qA.SetBinding(&QueueBinding{Lookup: func(h pool.Handle) *units.Unit {
 		if h == 100 {
 			return targetA
 		}
 		return nil
-	}
-	qB.Lookup = func(h pool.Handle) *units.Unit {
+	}})
+	qB.SetBinding(&QueueBinding{Lookup: func(h pool.Handle) *units.Unit {
 		if h == 200 {
 			return targetB
 		}
 		return nil
-	}
+	}})
 	nA := &Node{Target: 100}
 	nB := &Node{Target: 200}
 	if got := getLookupForWard(nA, uA); got != targetA {

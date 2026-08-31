@@ -667,7 +667,7 @@ func TestRallyInheritanceOrdering(t *testing.T) {
 	hostile := &units.Unit{Handle: 901}
 	sim := rng.NewSimulation(77)
 	orderBinding := &orders.QueueBinding{
-		StockpileEconomy: svc.Economy,
+		Economy: svc.Economy,
 		Lookup: func(h pool.Handle) *units.Unit {
 			switch h {
 			case target.Handle:

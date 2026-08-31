@@ -44,8 +44,8 @@ func workFixture() (*Queue, *units.Unit, *units.Unit) {
 	}
 	target.Move.Mode = 1 // grounded: RepairUnit refuses any other mover mode [04 R-ORD-01 §5]
 	q := &Queue{binding: &QueueBinding{
-		SimRNG:           rng.Global.Sim,
-		StockpileEconomy: &economy.Service{},
+		SimRNG:  rng.Global.Sim,
+		Economy: &economy.Service{},
 		Lookup: func(h pool.Handle) *units.Unit {
 			if h == target.Handle {
 				return target
@@ -67,7 +67,7 @@ func workFixture() (*Queue, *units.Unit, *units.Unit) {
 			if t.Remaining < 0 {
 				t.Remaining = 0
 			}
-			economy.AdmitTwoResource(q.StockpileEconomy.UnitBuckets(builder.Handle), float32(t.Def.BuildCostEnergy)*(old-t.Remaining), float32(t.Def.BuildCostMetal)*(old-t.Remaining))
+			economy.AdmitTwoResource(q.Binding().Economy.UnitBuckets(builder.Handle), float32(t.Def.BuildCostEnergy)*(old-t.Remaining), float32(t.Def.BuildCostMetal)*(old-t.Remaining))
 			return true
 		},
 		Repair: func(_ *units.Unit, _ *units.Unit, n *Node, _ uint32) bool {
@@ -75,7 +75,7 @@ func workFixture() (*Queue, *units.Unit, *units.Unit) {
 			if t == nil || t.Health >= t.Def.MaxDamage {
 				return false
 			}
-			economy.AdmitOneResource(q.StockpileEconomy.UnitBuckets(n.Target), 1)
+			economy.AdmitOneResource(q.Binding().Economy.UnitBuckets(n.Target), 1)
 			t.Health++
 			return true
 		},
@@ -162,7 +162,7 @@ func TestRepairStepHealsOnePointAndBillsOneEnergy(t *testing.T) {
 	q, builder, target := workFixture()
 	target.Health = 50
 	q.binding.Work = &WorkAdapter{Repair: func(_ *units.Unit, _ *units.Unit, _ *Node, _ uint32) bool {
-		b := q.StockpileEconomy.UnitBuckets(builder.Handle)
+		b := q.Binding().Economy.UnitBuckets(builder.Handle)
 		economy.AdmitOneResource(b, 1)
 		target.Health++
 		return true
@@ -174,7 +174,7 @@ func TestRepairStepHealsOnePointAndBillsOneEnergy(t *testing.T) {
 	if target.Health != 51 {
 		t.Fatalf("health = %d after one accepted visit, want 51 (the heal term clamps to one)", target.Health)
 	}
-	buckets := q.StockpileEconomy.UnitBuckets(builder.Handle)
+	buckets := q.Binding().Economy.UnitBuckets(builder.Handle)
 	if buckets[economy.Energy].Requested != 1 || buckets[economy.Energy].Accepted != 1 {
 		t.Fatalf("energy requested/accepted = %v/%v, want 1/1 (the resource term clamps to one, billed to the BUILDER)",
 			buckets[economy.Energy].Requested, buckets[economy.Energy].Accepted)
@@ -207,10 +207,10 @@ func TestSelfRepairBillsTheRepairerAndHealsThePatient(t *testing.T) {
 	if patient.Health != 51 {
 		t.Fatalf("patient health = %d, want 51", patient.Health)
 	}
-	if b := q.StockpileEconomy.UnitBuckets(repairer.Handle); b[economy.Energy].Requested != 1 {
+	if b := q.Binding().Economy.UnitBuckets(repairer.Handle); b[economy.Energy].Requested != 1 {
 		t.Fatalf("repairer energy requested = %v, want 1: SelfRepair bills the repairer, not the patient", b[economy.Energy].Requested)
 	}
-	if b := q.StockpileEconomy.UnitBuckets(patient.Handle); b[economy.Energy].Requested != 0 {
+	if b := q.Binding().Economy.UnitBuckets(patient.Handle); b[economy.Energy].Requested != 0 {
 		t.Fatalf("patient energy requested = %v, want 0", b[economy.Energy].Requested)
 	}
 }
@@ -332,7 +332,7 @@ func assistFixture(quanta ...int32) (*economy.Service, []*units.Unit, *units.Uni
 		}
 		builders = append(builders, b)
 		q := &Queue{}
-		binding := &QueueBinding{SimRNG: rng.Global.Sim, StockpileEconomy: econ, Lookup: lookup}
+		binding := &QueueBinding{SimRNG: rng.Global.Sim, Economy: econ, Lookup: lookup}
 		binding.Movement = &MovementGoalAdapter{
 			InstallPoint:     func(PointGoalRequest) bool { return true },
 			InstallAnnulus:   func(AnnulusGoalRequest) bool { return true },

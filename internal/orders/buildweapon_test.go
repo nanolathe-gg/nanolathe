@@ -34,7 +34,7 @@ func TestBuildWeaponStockpileQueue(t *testing.T) {
 		t.Fatalf("BuildWeapon not found")
 	}
 	q := QueueForUnit(u)
-	q.SetBinding(&QueueBinding{StockpileEconomy: &economy.Service{}})
+	q.SetBinding(&QueueBinding{Economy: &economy.Service{}})
 	// Ensure handler is registered.
 	if DescriptorFor(bid).Handler == nil {
 		t.Fatalf("BuildWeapon handler not registered [06 §11.1]")
@@ -111,7 +111,7 @@ func TestBuildWeaponBlockedAt199(t *testing.T) {
 	u.Slots[0].Weapon = wd
 	u.Slots[0].Ammo = 200 // blocked >199
 	q := QueueForUnit(u)
-	q.SetBinding(&QueueBinding{StockpileEconomy: &economy.Service{}})
+	q.SetBinding(&QueueBinding{Economy: &economy.Service{}})
 	bid := Lookup("BuildWeapon")
 	q.CoalesceTail(bid, Node{Param1: 0, Param2: 1, Param3: 0})
 	q.Pump(u, 0)

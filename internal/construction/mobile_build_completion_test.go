@@ -36,7 +36,7 @@ func mobileBuildCompletionFixture(t *testing.T, count uint32) (*Service, *units.
 	vm := bindScriptBridge(t, builder, "StartBuilding", "StopBuilding")
 
 	q := orders.QueueForUnit(builder)
-	q.Lookup = func(h pool.Handle) *units.Unit { return w.Unit(h) }
+	q.SetBinding(&orders.QueueBinding{Lookup: func(h pool.Handle) *units.Unit { return w.Unit(h) }})
 	q.Push(orders.Lookup(MobileBuildOrder), orders.Node{
 		BuildDefKey: productDef.CanonicalKey,
 		Param2:      count,

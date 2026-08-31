@@ -124,6 +124,14 @@ type Client struct {
 	featureGACErr map[string]error             // memoised load failures (presentation-only)
 	featureYSort  bool                         // when true force Y-bucket sort for feature pass [03 §1]
 
+	// Projectile presentation uses the one shared fx bank. It is loaded on
+	// first use through the VFS boundary and retained for this client only;
+	// unresolved art is memoised as an ordinary optional-resource miss [03
+	// R-FX-01 §2][06 R-WFX-01 §1][I6].
+	projectileGAF       *formats.GAF
+	projectileGAFErr    error
+	projectileGAFLoaded bool
+
 	// Fog overlay — anims/fog.gaf handles, presentation-only [03 §3.3].
 	fogGAF      *formats.GAF
 	fogGray     [4]*formats.GAFEntry // Gray1-4 variant family [03 §3.3]
@@ -323,6 +331,9 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 	c.featureGAFs = map[string]*formats.GAF{}
 	c.featureFrames = map[string]*formats.GAFFrame{}
 	c.featureGACErr = map[string]error{}
+	c.projectileGAF = nil
+	c.projectileGAFErr = nil
+	c.projectileGAFLoaded = false
 	c.fogGAF = nil
 	c.fogLoaded = false
 	c.fogLoadErr = nil

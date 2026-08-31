@@ -1941,7 +1941,7 @@ func (s *Service) applyCompletionPosture(product *units.Unit) {
 // removeHead removes the head node from factory's primary queue without
 // decrement [05 C21]. Removal happens in place through the queue's own
 // subtraction path so queue identity and every queue-owned service binding
-// (Hostility, Lookup, StockpileEconomy, SecondaryTick, diagnostics) survive.
+// (the concrete binding and diagnostics) survive.
 // The previous implementation rebuilt the segment into a fresh orders.Queue
 // and rebound it, which dropped those hooks: after the first factory product
 // completed, successor target orders lost target lookup and hostility, and
@@ -2461,7 +2461,6 @@ func (s *Service) handleState3(factory *units.Unit, node *orders.Node, tick uint
 		if q != nil {
 			newQ := orders.NewQueueWith(nil, nil)
 			newQ.SetBinding(q.Binding())
-			newQ.SecondaryTick = q.SecondaryTick
 			orders.BindQueue(factory, newQ)
 		}
 		return

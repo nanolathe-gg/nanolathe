@@ -204,9 +204,9 @@ func DispatchProjectileView(v frame.ProjectileView, now uint32, opts ProjectileD
 	case RenderTypeSelectorGAF:
 		d.Kind = "selector-gaf"
 		selector := v.Selector
-		if selector == -1 && v.SelectorSequence != -1 {
-			selector = v.SelectorSequence
-		}
+		// SelectorSequence has no presence bit in the committed view. Its zero
+		// value therefore cannot stand in for an absent authoritative selector;
+		// use only the published selector and preserve -1 suppression [I9].
 		if selector == -1 {
 			d.Suppressed = true
 			return d
@@ -222,6 +222,16 @@ func DispatchProjectileView(v frame.ProjectileView, now uint32, opts ProjectileD
 			d.Suppressed = true
 			return d
 		}
+		// Type 4 has the same fixed ground shadow as the model-bearing
+		// families, followed by its selector-selected fx frame [03 §5.4][06
+		// R-WFX-01 §4]. Resolve both through the shared route; a missing shadow
+		// is an unresolved record, not permission to draw only the foreground.
+		base, ok := opts.ResolveGAF(ProjectileGAFRequest{View: v, Family: v.RenderType, Sequence: -1, Frame: 0, Base: true})
+		if !ok || base == nil {
+			d.Suppressed = true
+			return d
+		}
+		d.BaseFrame = base
 		frame, ok := opts.ResolveGAF(ProjectileGAFRequest{View: v, Family: v.RenderType, Sequence: selector, Frame: d.Frame, AssetID: v.AssetID})
 		if !ok || frame == nil {
 			d.Suppressed = true

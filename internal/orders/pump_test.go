@@ -1144,7 +1144,7 @@ func TestSecondaryPumpDeliversEmptySatisfiedSet(t *testing.T) {
 // walk does the same, so a handler's deadline setter can store "current tick +
 // n" [04 R-ORD-01 §1]. Before this, only four descriptors reached a tick, each
 // through a by-name special case in pumpPrimary, and every other row measured
-// its wait from `Queue.SecondaryTick` — a base the primary walk never wrote.
+// its wait from the queue's rear-segment tick — a base the primary walk never wrote.
 //
 // The relationship asserted is the identity of the two ticks, on a
 // FRONT-segment record (`Wait`, static mask 0x4) and a rear-segment one

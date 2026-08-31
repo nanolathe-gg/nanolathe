@@ -44,7 +44,7 @@ func TestQueueBindingKeepsSessionInputsInterleaved(t *testing.T) {
 	if q1.Binding() == q2.Binding() {
 		t.Fatal("two sessions must not share a queue binding")
 	}
-	if got := q1.Lookup(target1.Handle); got != target1 || q2.Lookup(target1.Handle) != nil {
+	if got := q1.Binding().Lookup(target1.Handle); got != target1 || q2.Binding().Lookup(target1.Handle) != nil {
 		t.Fatal("target lookup crossed queue binding")
 	}
 	if !isHostile(u1, target1) || isHostile(u2, target1) {
@@ -67,6 +67,21 @@ func TestQueueBindingKeepsSessionInputsInterleaved(t *testing.T) {
 	want2 := int32(100 + 30 + wantSim2.Uint32n(15))
 	if q1.Primary()[0].Deadline != want1 || q2.Primary()[0].Deadline != want2 {
 		t.Fatalf("queue jitter did not follow its own stream: %d/%d want %d/%d", q1.Primary()[0].Deadline, q2.Primary()[0].Deadline, want1, want2)
+	}
+}
+
+func TestQueueBindingIsStoredAndClearedAsOneContext(t *testing.T) {
+	u := &units.Unit{Handle: 1}
+	q := QueueForUnit(u)
+	sim := rng.NewSimulation(9)
+	b := &QueueBinding{SimRNG: &sim}
+	q.SetBinding(b)
+	if got := q.Binding(); got != b {
+		t.Fatalf("Binding returned %p, want stored binding %p", got, b)
+	}
+	q.SetBinding(nil)
+	if got := q.Binding(); got != nil {
+		t.Fatalf("Binding after SetBinding(nil) = %p, want nil", got)
 	}
 }
 
@@ -164,9 +179,9 @@ func TestQueueBindingTraversalPreservesAdapterOrder(t *testing.T) {
 func TestQueueBindingValidationRejectsMissingProductionAdapters(t *testing.T) {
 	sim := rng.NewSimulation(1)
 	b := &QueueBinding{SimRNG: &sim,
-		StockpileEconomy: &economy.Service{},
-		Lookup:           func(pool.Handle) *units.Unit { return nil },
-		Hostility:        func(*units.Unit, *units.Unit) bool { return false },
+		Economy:   &economy.Service{},
+		Lookup:    func(pool.Handle) *units.Unit { return nil },
+		Hostility: func(*units.Unit, *units.Unit) bool { return false },
 	}
 	if err := b.ValidateSinglePlayerBinding(); err == nil {
 		t.Fatal("missing single-player adapters accepted by composition seam")

@@ -203,8 +203,13 @@ type FeatureView struct {
 	ShadTrans          bool
 	Blocking           bool
 	Reclaimable        bool
-	Height             int32
-	Geothermal         bool
+	// NoDrawUnderGray is the authored nodrawundergray gate. It is copied into
+	// the committed frame so the feature passes can apply the memory/LOS
+	// predicate without consulting the mutable catalog [02 "Feature record"]
+	// [03 §5.1.5].
+	NoDrawUnderGray bool
+	Height          int32
+	Geothermal      bool
 }
 
 // SFXClass is the typed COB sound/effect class carried by a cue.
