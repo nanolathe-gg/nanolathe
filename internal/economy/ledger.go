@@ -44,17 +44,32 @@ type Player struct {
 	// strategic planner. They are distinct from the reporting counters for the
 	// most recent pass [05 "Player slot"] [08 "Established AI-facing data and
 	// rooted planner"].
-	AIProduction   [2]float32
-	AIConsumption  [2]float32
-	UpdateTime     uint32 // settlement deadline [05 "Authoritative settlement order"] [GAP T1]
-	WinLoseTime    uint32 // sibling deadline used by mission evaluation [08 "Evaluation"]
-	DisplayTimer   uint32 // HUD refresh deadline [05 "Saving economy, construction, and features"]
-	Waste          [2]float64
-	TotalProduced  [2]float64
-	TotalConsumed  [2]float64
-	PassProduced   [2]float32
-	PassConsumed   [2]float32
-	ArchivedMirror [2]ArchivedBucket
+	AIProduction  [2]float32
+	AIConsumption [2]float32
+	UpdateTime    uint32 // settlement deadline [05 "Authoritative settlement order"] [GAP T1]
+	WinLoseTime   uint32 // sibling deadline used by mission evaluation [08 "Evaluation"]
+	DisplayTimer  uint32 // HUD refresh deadline [05 "Saving economy, construction, and features"]
+	Waste         [2]float64
+	TotalProduced [2]float64
+	TotalConsumed [2]float64
+	// Kill/loss counters are the signed 16-bit per-player words consumed by
+	// the result helper. They are written at the death finalization boundary,
+	// not reconstructed from the remaining live pool [06 §12.1][08 R-CAMP-01 §7].
+	Kills           int16
+	Losses          int16
+	CommanderKills  int16
+	CommanderLosses int16
+	// Lobby metadata is retained on the authoritative player record so result
+	// row eligibility and owner art do not need to inspect mutable world state.
+	Name            string
+	Side            uint8
+	Logo            uint8
+	Watcher         bool
+	RejectionReason uint8
+	ResultAuxiliary uint32
+	PassProduced    [2]float32
+	PassConsumed    [2]float32
+	ArchivedMirror  [2]ArchivedBucket
 	// Control fields for deadline block and gate chain per [05 "Authoritative settlement order"].
 	Exists          bool  // whether slot exists and participates [05 "Player slot"]
 	ControllerState uint8 // controller/state byte; three values allow traversal, two allow settlement [05 "Authoritative settlement order"] TODO(question): semantic names unknown

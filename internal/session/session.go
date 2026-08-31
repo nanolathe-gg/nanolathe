@@ -200,6 +200,21 @@ type Session struct {
 	resultArmedTick     uint32
 	resultNextDue       uint32
 
+	// Commander death is observed by the unit finalizer, then settled once at
+	// the owner boundary after the live counter has been decremented. Keeping
+	// this fixed array preserves slot order and prevents a death hook from
+	// recursively changing the owner while it is still being accounted
+	// [08 R-SKIR-01 §3].
+	pendingCommanderDeaths [10]bool
+	// Deathmatch's shared five-due countdown is separate from the terminal
+	// result latch: crossing below zero invokes respawn and does not end the
+	// match [08 R-SKIR-01 §3][R-TRIG-01 §6].
+	deathmatchCountdown int16
+	deathmatchNextDue   uint32
+	deathmatchActive    bool
+	deathmatchAttempts  uint16
+	deathmatchExhausted bool
+
 	Wind *world.Wind
 
 	// MeteorState is the shower scheduler per [08 "Meteor showers"] [02 "Map files"] [06 §6.5].
@@ -879,6 +894,21 @@ func (s *Session) RegisterAll() {
 			}
 		}
 		s.Units.OnDeath = func(h pool.Handle, cause units.DeathCause, u *units.Unit) {
+			// Statistics are filed at the same FinalizeDeath callback boundary as
+			// the other victim teardown records [06 §12.1]. Packet-aware combat
+			// paths may call RecordDeathStatistics with the stored attacker side.
+			s.recordFinalizedDeathStatistics(cause, u)
+			// Commander identity is owner/side data, not the broad authored
+			// Commander convenience flag. The owner transition is deferred until
+			// FinalizeDeath has decremented the live counter [08 R-SKIR-01 §3].
+			if u != nil && s.isCommanderForOwner(u) {
+				if s.Econ != nil && int(u.Owner) < len(s.Econ.Players) {
+					s.Econ.Players[u.Owner].StorageBonusEnabled = false
+				}
+				if int(u.Owner) < len(s.pendingCommanderDeaths) {
+					s.pendingCommanderDeaths[u.Owner] = true
+				}
+			}
 			// A computer player's unit loss arms that manager's retry throttle at
 			// the authoritative death boundary. The manager owns the draw and
 			// fails closed if setup did not bind a session stream. Human-owned

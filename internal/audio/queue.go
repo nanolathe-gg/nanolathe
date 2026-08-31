@@ -53,6 +53,7 @@ type Queue struct {
 	nextAllowed     [24]uint32
 	onPlay          func(alias string, slot Slot, unit pool.Handle)
 	onSpeech        func(line string)
+	onCaption       func(line string, slot Slot, unit pool.Handle)
 	resolver        func(pool.Handle) (*Category, string, bool)
 	categories      map[pool.Handle]*Category
 	unitNames       map[pool.Handle]string
@@ -263,6 +264,15 @@ func (q *Queue) OnSpeech(fn func(line string)) {
 	}
 }
 
+// OnCaption sets the semantic message-line sink. It runs only after the same
+// caption, liveness, crowding and slot-resolution gates as speech output; the
+// presentation client owns the resulting ring [07 R-HUD-03 §14].
+func (q *Queue) OnCaption(fn func(line string, slot Slot, unit pool.Handle)) {
+	if q != nil {
+		q.onCaption = fn
+	}
+}
+
 // SetResolver sets a custom unit resolver for category lookup [03 §8.3] (C17).
 func (q *Queue) SetResolver(fn func(pool.Handle) (*Category, string, bool)) {
 	if q != nil {
@@ -457,6 +467,9 @@ func (q *Queue) resolve(e Entry, now uint32, audible, showText bool) {
 			line = unitName + ": " + line
 			if q.onSpeech != nil {
 				q.onSpeech(line)
+			}
+			if q.onCaption != nil {
+				q.onCaption(line, e.Slot, e.Unit)
 			}
 		}
 	}

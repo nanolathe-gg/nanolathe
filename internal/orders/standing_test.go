@@ -144,7 +144,7 @@ func TestFireOrderClearsAutonomousSlotTargetsOnlyOnZeroOrOne(t *testing.T) {
 	arm := func(u *units.Unit) {
 		for slot := 0; slot < units.NumSlots; slot++ {
 			s := u.SlotAt(slot)
-			s.Flags |= slotClearedLatch
+			s.Flags |= slotTracking
 			s.Target = units.Target{Kind: units.TargetUnit, Unit: 9}
 		}
 	}
@@ -158,7 +158,7 @@ func TestFireOrderClearsAutonomousSlotTargetsOnlyOnZeroOrOne(t *testing.T) {
 		if s.Target.Kind != units.TargetNone {
 			t.Fatalf("slot %d kept its target on a transition to return fire", slot)
 		}
-		if s.Flags&slotClearedLatch == 0 {
+		if s.Flags&slotTracking == 0 {
 			t.Fatalf("slot %d lost the autonomous-targeting bit; the row does not clear it", slot)
 		}
 	}
@@ -242,7 +242,7 @@ func TestWaitForAttackWaitsOnTheInterruptPairThenCompletes(t *testing.T) {
 // lowers it again. The clamp is the assertion that is easy to regress silently.
 func TestParalyzeClampsTheCreditAndLowersTheStunOnExpiry(t *testing.T) {
 	q, u := standingFixture(nil)
-	u.SlotAt(0).Flags |= slotClearedLatch
+	u.SlotAt(0).Flags |= slotTracking
 	u.SlotAt(0).Target = units.Target{Kind: units.TargetUnit, Unit: 9}
 	q.Push(Lookup("Paralyze"), Node{Owner: u.Handle, Param1: 9000})
 	q.Pump(u, 0)

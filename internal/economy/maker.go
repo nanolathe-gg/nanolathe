@@ -197,16 +197,112 @@ func (s *Service) AdmitRepair(builderHandle pool.Handle, targetMaxDamage, target
 	return b[Energy].Accepted != before || resourceTerm == 0
 }
 
-func (s *Service) CreditFeatureReclaim(builderHandle pool.Handle, metal, energy float32) {
+// creditReclaimedMaterial is the production-credit form both reclaim payouts
+// use, cloned from the two sites rather than from the shared contribution
+// helper [05 R-ECO-01 §3][05 R-ECO-01 §11]:
+//
+//	if (!discounted)      production := float32( production + contribution )
+//	else if (sel == 0)    production := float32( production - contribution * -0.5 )
+//	else if (sel == 1)    production := float32( production - contribution * -0.7 )
+//	else                  production := float32( production + contribution )
+//
+// Three properties of that body matter and are the reason it is written out
+// here instead of calling addContribution:
+//
+//   - the subtraction and the multiply happen at the x87 working precision of
+//     [R-ECO-01 §1] and the store is the ONLY narrowing. Scaling into a float32
+//     first and adding afterwards — which this file's unit-reclaim refund used
+//     to do — narrows twice and rounds differently, which §3 warns about
+//     explicitly ("the factored form rounds differently");
+//   - neither traced site tests the sign of the contribution, where
+//     addContribution short-circuits a non-positive one to the plain add. No
+//     shipped feature authors a negative pool [05 R-WORK-01 §5-A], so the
+//     difference is unobservable on retail content, but cloning the guard here
+//     would be cloning something the sites do not have;
+//   - a selector this build has not been given is the undiscounted path, which
+//     is also what the traced ladder does for any selector above one (hard).
+func creditReclaimedMaterial(s *Service, b *Bucket, contribution float32, discounted bool) {
+	if b == nil {
+		return
+	}
+	selector := 2
+	if s != nil && s.EconomySelector != nil {
+		selector = *s.EconomySelector
+	}
+	if discounted {
+		switch selector {
+		case 0:
+			b.Production = float32(float64(b.Production) - float64(contribution)*-0.5)
+			return
+		case 1:
+			b.Production = float32(float64(b.Production) - float64(contribution)*-0.7)
+			return
+		}
+	}
+	b.Production = float32(float64(b.Production) + float64(contribution))
+}
+
+// specialPlayerSlot reports whether a player slot takes the difficulty-scaled
+// production path: the slot's record must exist and its control byte must be 2,
+// the computer-controlled value [05 R-ECO-01 §3][05 R-ECO-01 §11]. An owner
+// outside the ten slots is not a record and takes the plain path.
+func (s *Service) specialPlayerSlot(owner uint8) bool {
+	if s == nil || int(owner) >= len(s.Players) {
+		return false
+	}
+	p := &s.Players[owner]
+	return p.Exists && p.ControllerState == 2
+}
+
+// CreditFeatureReclaim is the credit half of the feature-reclaim payout
+// [05 R-WORK-01 §5]: the feature definition's WHOLE energy and metal values are
+// added to the reclaiming builder's production accumulators, neither passing
+// through an admission helper, as one completion event.
+//
+// Correction (PT3-05 follow-up). Both additions used to be made with a NIL
+// player record, so the computer player's difficulty discount was never applied
+// to reclaimed trees, rocks or wrecks, while the sibling unit-reclaim refund
+// below did apply it — two credit paths for reclaimed material, one adjusted
+// and one not. The trace settles it: the payout reads the builder's player
+// record, tests that the record exists and that its control byte is 2, and
+// routes EACH of the two additions through the same selector ladder as every
+// other member of the family, with the same pairing (selector 0 halves,
+// selector 1 takes seven tenths, anything else is the plain add). The omission
+// was a defect, not a faithful reading [05 R-ECO-01 §11].
+//
+// Retail credits ENERGY first and metal second. The two buckets are
+// independent, so the order is not observable; it is matched anyway because
+// nothing is gained by differing.
+//
+// builderOwner is required rather than optional on purpose. An owner that a
+// caller may omit is an owner a future call site omits by accident, and the
+// omission is silent: the credit simply lands on the undiscounted arm, which is
+// the exact defect this correction removed. A caller that genuinely has no
+// player record — none exists in this build — would name a slot outside the
+// ten, which specialPlayerSlot already reports as not special.
+func (s *Service) CreditFeatureReclaim(builderHandle pool.Handle, builderOwner uint8, metal, energy float32) {
 	if s == nil || builderHandle == 0 {
 		return
 	}
 	s.ensureUnitBuckets(builderHandle)
 	b := &s.unitBuckets[builderHandle].Buckets
-	addContribution(s, nil, &b[Metal], float64(metal))
-	addContribution(s, nil, &b[Energy], float64(energy))
+	discounted := s.specialPlayerSlot(builderOwner)
+	creditReclaimedMaterial(s, &b[Energy], energy, discounted)
+	creditReclaimedMaterial(s, &b[Metal], metal, discounted)
 }
 
+// CreditUnitReclaimRefund is the death-side metal refund of a lethal cause-5
+// reclaim pulse [05 "Unit reclaim"]: `(1 - victim remaining) x victim metal
+// build cost`, paid to the killing builder's metal production accumulator, with
+// no energy counterpart.
+//
+// Correction (PT3-05 follow-up). The discount is unchanged in substance — the
+// gate is the killer's control byte 2 and the pairing is selector 0 to a half,
+// selector 1 to seven tenths, which the trace confirms is NOT inverted here —
+// but the arithmetic was not the traced one. It scaled the refund into a
+// float32 and then added that, narrowing twice; the site subtracts
+// `contribution x K` from the accumulator in one expression and stores once.
+// Both reclaim payouts now share that single form.
 func (s *Service) CreditUnitReclaimRefund(killerHandle pool.Handle, victimRemaining float32, victimBuildCostMetal int32, killerController uint8) {
 	if s == nil || killerHandle == 0 {
 		return
@@ -214,15 +310,7 @@ func (s *Service) CreditUnitReclaimRefund(killerHandle pool.Handle, victimRemain
 	s.ensureUnitBuckets(killerHandle)
 	refund := float32((1 - victimRemaining) * float32(victimBuildCostMetal))
 	b := &s.unitBuckets[killerHandle].Buckets[Metal]
-	if killerController == 2 && s.EconomySelector != nil {
-		switch *s.EconomySelector {
-		case 0:
-			refund = float32(0 - float64(refund)*-0.5)
-		case 1:
-			refund = float32(0 - float64(refund)*-0.7)
-		}
-	}
-	b.Production = float32(float64(b.Production) + float64(refund))
+	creditReclaimedMaterial(s, b, refund, killerController == 2)
 }
 
 func StockpileCostDeltaForTick(oldProg, newProg int32, cost float64, buildTime int32) float32 {

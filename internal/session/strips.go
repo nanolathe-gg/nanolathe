@@ -577,6 +577,13 @@ func divByTicks(delta numeric.Fixed, ticks int32) numeric.Fixed {
 // draws at the producer [03 §5.5]. Eviction runs at insert; exhaustion is
 // not modelled (see the storage note above).
 func (s *Session) appendStripNanoEmitter(srcPoint, dstPoint [3]numeric.Fixed) {
+	s.appendStripNanoEmitterBox(srcPoint, dstPoint, dstPoint)
+}
+
+// appendStripNanoEmitterBox retains the authored target footprint for feature
+// reclaim/resurrection spray. Unit/build callers use the degenerate wrapper
+// above until their model-box adapter supplies extents [05 R-WORK-01 §8].
+func (s *Session) appendStripNanoEmitterBox(srcPoint, dstMin, dstMax [3]numeric.Fixed) {
 	if s == nil || s.strips == nil {
 		return
 	}
@@ -589,7 +596,7 @@ func (s *Session) appendStripNanoEmitter(srcPoint, dstPoint [3]numeric.Fixed) {
 		tick = s.Clock.GlobalTick
 	}
 	srcOrigin, srcExtent := narrowBox(srcPoint, srcPoint)
-	dstOrigin, dstExtent := narrowBox(dstPoint, dstPoint)
+	dstOrigin, dstExtent := narrowBox(dstMin, dstMax)
 	o := stripObject{
 		family:        stripFamilyNano,
 		windowEnd:     tick + 1,

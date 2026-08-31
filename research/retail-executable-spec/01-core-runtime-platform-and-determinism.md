@@ -1709,7 +1709,7 @@ phase-2 pump; a handler that returns before the draw consumes nothing.
 | 2 — weapon update, line-of-sight executor | — | 0 | [06 R-WPN-03 §2] |
 | 2 — COB drain | sim | `random` opcode: `sim(high − low + 1)`; `explode` opcode: `sim(3000)`×3, `sim(40)`, `sim(10)`, `sim(40)` unless the bitmap-only flag is set | [04 R-COB-01 §2] |
 | 2 — primary and secondary order pumps | sim | `sim(15)` once per pump visit that lands on disposition case 3 (the wait dispositions) | [04 R-P0-01] |
-| 2 — order handlers (ground) | sim | `Wait` `sim(30)` (+150 ticks); `AttackUType` `sim(90)` then `sim(x ÷ 2)`; `SelfDestruct` `sim(15)` when the countdown reaches zero; `Patrol` `sim(30)`; `Suppress` `sim(d ÷ 3)`; `RepairUnit` `sim(30)` (+30) in the out-of-range retry; `Follow_Ground` `sim(65536)`; `Reclaim`/`Resurrect` approach `sim(featureHeight)`; `RepairPatrol` — **scan visit**: the candidate-gather helper draws `sim(n₁)` three times for the energy-need list and `sim(n₂)` three times for the metal-need list, each triple only when its list is non-empty (best-scored of three random picks), then **pick visit**: `sim(count)` | [04 R-ORD-01 §2–§5], [05 R-WORK-01 §8], [R-DET-01 §6] |
+| 2 — order handlers (ground) | sim | `Wait` `sim(30)` (+150 ticks); `AttackUType` `sim(90)` then `sim(x ÷ 2)`; `SelfDestruct` `sim(15)` when the countdown reaches zero; `Patrol` `sim(30)`; `Suppress` `sim(d ÷ 3)`; `RepairUnit` `sim(30)` (+30) in the out-of-range retry; `Follow_Ground` `sim(65536)`; `Reclaim`/`Resurrect` approach `sim(featureHeight)`; `RepairPatrol` — **unit scan/pick**: one ordered candidate gather and one bounded `sim(count)` pick, followed only when the handler reaches feature pairing by three energy-list draws and then three metal-list draws (each triple conditional on a nonempty sampled list) | [04 R-ORD-01 §2–§5], [05 R-WORK-01 §8], [R-DET-01 §6] |
 | 2 — order handlers (air) | sim | `VTOL_Standby` `sim(30)`, then `sim(65536)` bearing and `sim(32)` radius (+8), then `sim(15)` (+30) delay; `VTOL_SeekAttack`/`VTOL_SeekGuard`/`VTOL_Follow` `sim(65536)` bearing, `sim(count)` for the damaged-retreat pad, `sim(8192)` orbit angle only when the interrupt bits are set, `sim(30)` deadline; `VTOL_Patrol` `sim(count)`; `AirStrike`-family case bodies `sim(16384)`; `VTOL_Evade` `sim(2)`; further air case bodies `sim(128)`, `sim(2)`, `sim(30)` | [04 R-AIR-01 §7, §8], [04 §10.3] |
 | 2 — movement integration, route follower, path search | — | 0 | [04 R-MOV-01], [04 R-PATH-01 §11] |
 | 2 — death handling | CRT | 1 when the victim's owner's live-unit count reaches zero: skirmish `crt() mod 3`, multiplayer `crt() & 7` (announcement line choice; presentation text, but the draw is inside the tick) | [08 R-CAMP-01 §9], [R-DET-01 §6] |
@@ -1813,12 +1813,13 @@ skirmish `mod 3` draw is inside the tick on the death path).
 Contradicted — reported to the owning lanes, not edited here:
 
 1. **[05 R-WORK-01 §8] "RepairPatrol: 1 draw" and
-   [04 R-ORD-01 §4] "two simulation draws at most per visit".** The
-   RepairPatrol and VTOL_RepairPatrol scan visits call a candidate-gather
-   helper that, for each of its two need lists that is non-empty, draws three
-   bounded indices and keeps the best-scored pick — up to **six** draws on the
-   scan visit, before the pick visit's single `sim(count)`. Established (the
-   helper is a direct call from both handlers).
+   [04 R-ORD-01 §4] "two simulation draws at most per visit".** The old
+   wording incorrectly put two three-pick tournaments in the repair-unit
+   gather, and therefore described up to six draws before the unit pick. The
+   corrected contract has one ordered unit gather and one bounded pick; only
+   the later sampled feature-pairing helper makes three energy picks and three
+   metal picks when those lists are nonempty. This correction is recorded here
+   after the verified scan-visitor review (2026-08-31).
 2. **[08 R-CAMP-01 §9] "the eight-entry table … has no reference in the
    image — dead data".** The eight-entry table is read by the multiplayer
    (session kind 3) elimination path of the same death handler: when the local

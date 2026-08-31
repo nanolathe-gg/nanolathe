@@ -232,6 +232,7 @@ var float64ExemptFiles = map[string]string{
 	"internal/economy/ledger.go":           "I2 economy cumulative totals and waste counters [05 \"Stocks, counters, and waste\"]",
 	"internal/economy/maker.go":            "I2 economy production contributions and difficulty discounts use double working precision before named float32 stores; authored stockpile costs narrow at their documented boundary [05 R-ECO-01 §1][05 R-ECO-01 §3][05 \"Construction arithmetic\"]",
 	"internal/economy/p28_parity_trace.go": "opt-in trace copy of ledger.go's I2 cumulative totals and waste counters (same I2 row; P28-OBS-00C)",
+	"internal/movement/airorders.go":       "I2 AirStrike release lead sqrt((2·cruisealt)/gravity) · 30 · speedInteger, narrowed by truncation toward zero [04 R-AIR-01 §8]",
 	"internal/movement/flight.go":          "I2 flight brake integration temporaries [04 §10.1], the shared air bearing [04 R-AIR-01 §1], and the lean accumulator's atan2 and rotation [04 R-AIR-01 §2] — all narrowed at the named fixed-point and uint16 angle stores",
 	"internal/movement/integrate.go":       "I2 ground follower goal-point bearing and route-distance/lookahead hypot temporaries [04 R-MOV-01 §2][04 R-MOV-01 §3][04 R-MOV-03 §2][04 R-PATH-01 §8]",
 	"internal/combat/aim.go":               "I2 ballistic discriminant, acos, sqrt [06 §3.3]",
@@ -261,7 +262,7 @@ var float64Baseline = map[string]int{
 	"internal/combat/service.go":            2,
 	"internal/combat/stockpile.go":          5,
 	"internal/construction/capture.go":      5,
-	"internal/construction/factory.go":      2,
+	"internal/construction/factory.go":      18,
 	"internal/construction/resurrection.go": 3,
 	"internal/construction/reverse.go":      4,
 	"internal/economy/tick.go":              2,
@@ -374,9 +375,11 @@ var debtMarkerTotals = map[string]int{
 	// StockpileEconomy directly. Reviewed and accepted as a documentation
 	// gain: the debt was already there and unlabelled.
 	"compatibility": 18,
-	"fallback":      185,
-	"guess":         10,
-	"plausible":     1,
+	// O3 records three explicit fallback notes at the sites where the cited
+	// research leaves the AirToAir interrupt mask unresolved.
+	"fallback":  186,
+	"guess":     10,
+	"plausible": 1,
 	// 323 at the point both units branched. WU-17-11 moved one marker out of
 	// the scanned authoritative dirs (into internal/render, which this ratchet
 	// does not scan), and WU-17-14 added two in internal/orders. Composed:
@@ -425,7 +428,13 @@ var debtMarkerTotals = map[string]int{
 	// and the synthetic-fallback suppressor — [04 R-PATH-01 §8]'s corrected
 	// text and its closed TODO(question), the record completion flag the
 	// primary pump's code-9 arm sets). Composed: 343 − 3 = 340.
-	"todo(question)": 340,
+	// B1 then closed three result/skirmish questions, retained one pre-existing
+	// movement marker, and added two explicit commander-death gaps: net 339.
+	// O3 adds two net markers: the explicit AirToAir mask and omitted
+	// control-byte/save questions, less the retired combat placeholder. B2
+	// then closes one result question while adding two exact Unknown sites
+	// for commander save keys and cargo provenance: net 342.
+	"todo(question)": 342,
 }
 
 var debtMarkerFileCounts = map[string]map[string]int{
@@ -476,7 +485,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/combat/service.go":             4,
 		"internal/combat/target.go":              9,
 		"internal/construction/approach.go":      1,
-		"internal/construction/factory.go":       7,
+		"internal/construction/factory.go":       5,
 		"internal/construction/queue.go":         10,
 		"internal/features/reproduce.go":         1,
 		"internal/features/service.go":           3,
@@ -488,6 +497,8 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/mission/placement.go":          1,
 		"internal/mission/schema.go":             1,
 		"internal/movement/admission.go":         5,
+		"internal/movement/airorders.go":         1,
+		"internal/orders/vtolair.go":             2,
 		"internal/movement/cargo.go":             1,
 		"internal/movement/collision.go":         2,
 		"internal/movement/goals.go":             4,
@@ -611,7 +622,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		// entry point). See the totals row above.
 		"internal/movement/airorders.go": 9,
 		"internal/movement/goals.go":     16,
-		"internal/movement/integrate.go": 4,
+		"internal/movement/integrate.go": 5,
 		"internal/movement/landing.go":   1,
 		"internal/movement/movegoal.go":  1,
 		"internal/movement/profile.go":   3,
@@ -650,7 +661,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		// the four air executors and omits `AirToAir`, whose mask therefore
 		// remains unstated. All five are written at their site with the question
 		// and its decider, per I9.
-		"internal/orders/combat.go": 5,
+		"internal/orders/combat.go": 4,
 		// patrol.go 0 -> 1 and resolve.go 36 -> 34: WU-18-8. The one new
 		// question is the successor test the patrol cycle turns on —
 		// [04 R-ORD-01 §4] words it "a next patrol record exists" and
@@ -707,6 +718,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		// (2) [05 R-WORK-01 §8] records as Unknown which of the two model-box
 		// forms the four VTOL work executors build for their spray, where both
 		// ground forms are Established. Neither is a value this unit picked.
+		"internal/orders/vtolair.go":  1,
 		"internal/orders/vtolwork.go": 2,
 		"internal/path/goals.go":      4,
 		"internal/path/queue.go":      1,
@@ -720,10 +732,13 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/session/mission.go":         3,
 		"internal/session/progression.go":     4,
 		"internal/session/post_loop.go":       1,
-		"internal/session/result.go":          5,
+		"internal/session/result.go":          1,
+		"internal/session/stats.go":           1,
+		"internal/save/boxes.go":              1,
 		"internal/session/retail_load.go":     1,
 		"internal/session/session.go":         3,
-		"internal/session/skirmish.go":        6,
+		"internal/session/skirmish.go":        5,
+		"internal/session/commander_death.go": 2,
 		"internal/session/state.go":           1,
 		"internal/session/step.go":            2,
 		"internal/session/strips.go":          15,
@@ -731,7 +746,8 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/sim/numeric/numeric.go":     1,
 		"internal/sim/numeric/trig.go":        1,
 		"internal/sim/rng/rng.go":             1,
-		"internal/units/types.go":             1,
+		"internal/combat/weapon_adapter.go":   1,
+		"internal/units/types.go":             2,
 		"internal/units/units.go":             8, // +1: the activation edge has no status-cue sink [04 R-UNIT-06 §2] (PLAN_16 WU-16-3)
 		"internal/visibility/fog.go":          1,
 		"internal/visibility/publish.go":      1, // LOS group-0 record content is Unknown [03 R-COMP-02 §1]

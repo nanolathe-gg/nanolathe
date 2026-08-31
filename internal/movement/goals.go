@@ -3,9 +3,159 @@ package movement
 import (
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
+
+const goalPendingMask uint32 = 0x20 | 0x40 | 0x80 | 0x100 | 0x200
+
+func (s *System) releaseGoalNode(n *orders.Node) {
+	if s == nil || n == nil {
+		return
+	}
+	if g := s.moveGoals[n.Owner]; g != nil && g.order == n {
+		n.Satisfied |= 0x80
+		delete(s.moveGoals, n.Owner)
+	}
+	if st := s.airOrders[n.Owner]; st != nil && st.order == n {
+		n.Satisfied |= 0x80
+		s.releaseAirGoalForNode(n.Owner, n)
+	}
+}
+
+// ReleaseGoal releases the payload owned by n. The node identity check keeps
+// replacement/cancel cleanup from detaching a successor's payload.
+func (s *System) ReleaseGoal(n *orders.Node) bool {
+	if s == nil || n == nil {
+		return false
+	}
+	s.releaseGoalNode(n)
+	return true
+}
+
+func (s *System) installGroundPayload(owner pool.Handle, n *orders.Node, goal path.Goal, x, z numeric.Fixed) bool {
+	if s == nil || n == nil {
+		return false
+	}
+	if prior := s.moveGoals[owner]; prior != nil {
+		if prior.order != n {
+			prior.order.Satisfied |= 0x80
+		}
+		delete(s.moveGoals, owner)
+	}
+	if prior := s.airOrders[owner]; prior != nil {
+		if prior.order != n {
+			prior.order.Satisfied |= 0x80
+		}
+		s.releaseAirGoalForNode(owner, prior.order)
+	}
+	if s.moveGoals == nil {
+		s.moveGoals = make(map[pool.Handle]*moveGoal)
+	}
+	n.Satisfied &^= goalPendingMask
+	s.moveGoals[owner] = &moveGoal{order: n, x: x, z: z, goal: goal}
+	return true
+}
+
+// InstallPointGoal binds a point payload and its arrival radius to n.
+func (s *System) InstallPointGoal(req orders.PointGoalRequest) bool {
+	if s == nil || req.Node == nil {
+		return false
+	}
+	u := s.unitFor(req.Owner)
+	if u != nil && u.Def != nil && u.Def.CanFly {
+		return false
+	}
+	fx, fz := s.pathFootprint(u)
+	center := path.Cell{X: goalCellForWorld(req.X, fx), Z: goalCellForWorld(req.Z, fz)}
+	return s.installGroundPayload(req.Owner, req.Node, path.PointGoal(center, req.Radius), req.X, req.Z)
+}
+
+// InstallAnnulusGoal binds a stand-off payload to n.
+func (s *System) InstallAnnulusGoal(req orders.AnnulusGoalRequest) bool {
+	if s == nil || req.Node == nil {
+		return false
+	}
+	u := s.unitFor(req.Owner)
+	if u != nil && u.Def != nil && u.Def.CanFly {
+		return false
+	}
+	fx, fz := s.pathFootprint(u)
+	center := path.Cell{X: goalCellForWorld(req.X, fx), Z: goalCellForWorld(req.Z, fz)}
+	return s.installGroundPayload(req.Owner, req.Node, path.AnnulusGoal(center, req.InnerRadius, req.OuterRadius), req.X, req.Z)
+}
+
+// InstallRectangleGoal binds a footprint rectangle payload to n.
+func (s *System) InstallRectangleGoal(req orders.RectangleGoalRequest) bool {
+	if s == nil || req.Node == nil {
+		return false
+	}
+	if u := s.unitFor(req.Owner); u != nil && u.Def != nil && u.Def.CanFly {
+		return false
+	}
+	goal := path.RectPerimeterGoal(path.Rect{Min: path.Cell{X: req.CellX, Z: req.CellZ}, Max: path.Cell{X: req.CellX + req.Width - 1, Z: req.CellZ + req.Depth - 1}})
+	return s.installGroundPayload(req.Owner, req.Node, goal, worldCellCenter(req.CellX), worldCellCenter(req.CellZ))
+}
+
+func worldCellCenter(c int32) numeric.Fixed { return numeric.Fixed(int64(c) << 20) }
+
+// InstallAirGoal binds the existing flight marker family. Flags are marker
+// flags supplied by the order seam; the constructor still establishes the
+// required point/follow family bits before optional flags are added.
+func (s *System) InstallAirGoal(req orders.AirGoalRequest) bool {
+	if s == nil || req.Node == nil {
+		return false
+	}
+	u := s.unitFor(req.Owner)
+	if u == nil || u.Def == nil || !u.Def.CanFly {
+		return false
+	}
+	if s.Flights[req.Owner] == nil {
+		return false
+	}
+	if prior := s.airOrders[req.Owner]; prior != nil {
+		if prior.order != req.Node {
+			prior.order.Satisfied |= 0x80
+		}
+		s.releaseAirGoalForNode(req.Owner, prior.order)
+	}
+	if prior := s.moveGoals[req.Owner]; prior != nil {
+		if prior.order != req.Node {
+			prior.order.Satisfied |= 0x80
+		}
+		delete(s.moveGoals, req.Owner)
+	}
+	var marker *airMarker
+	if req.Target != 0 {
+		marker = s.newFollowUnitMarker(u, req.Target)
+	} else if req.Flags&airMarkerFreeze != 0 {
+		marker = s.newFrozenTerrainPointMarker(u, Vec3{X: req.X, Y: req.Y, Z: req.Z})
+	} else {
+		marker = s.newPointMarker(u, Vec3{X: req.X, Y: req.Y, Z: req.Z})
+	}
+	marker.flags |= req.Flags
+	if req.Radius > 0 {
+		marker.setArrivalRadius(uint16(req.Radius))
+	}
+	s.installAirGoal(u, req.Node, marker)
+	st := s.airStateFor(u, req.Node)
+	st.order = req.Node
+	return true
+}
+
+// releaseAirGoalForNode is the identity-aware wrapper around the existing air
+// command release helper.
+func (s *System) releaseAirGoalForNode(owner pool.Handle, n *orders.Node) {
+	if s == nil || n == nil {
+		return
+	}
+	if st := s.airOrders[owner]; st == nil || st.order != n {
+		return
+	}
+	s.releaseAirGoal(s.unitFor(owner))
+	delete(s.airOrders, owner)
+}
 
 // OW-3-P goal-families wiring [04 §7.2][04 §7.4][04 §3.5].
 //
@@ -157,6 +307,9 @@ func (s *System) workApproachGoal(mover *units.Unit, goalCell path.Cell, n *orde
 func (s *System) goalForOrderWithFootprint(mover *units.Unit, goalCell path.Cell, n *orders.Node, footX, footZ int32) path.Goal {
 	if n == nil {
 		return path.PointGoal(goalCell, 0)
+	}
+	if bound := s.moveGoalPayload(n.Owner, n); bound != nil {
+		return bound
 	}
 	if g, ok := s.workApproachGoal(mover, goalCell, n, footX, footZ); ok {
 		return g

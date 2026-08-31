@@ -297,6 +297,102 @@ same difficulty ladder, the source debited in full — and doc 05's sharing
 sections keep it; what must be retracted is the "no production multiplier"
 sentence. Doc 08 owns that retraction.
 
+#### R-ECO-01 §11 — The discount's fourteen sites, one pairing, and a reduced credit rather than a debit [R-ECO-01] (2026-08-31)
+
+**Correction to [R-ECO-01 §3].** §3 closes its site list with "Sites,
+exhaustively:" and names nine — passive `energymake`, passive `metalmake`, the
+extraction output, the maker output, the wind output, the tidal output, the
+negative-`energyuse` refund, the reverse-construction metal refund, and the
+direct production credit written at spawn. It is not exhaustive, and the
+omission mattered twice: it is why an implementation could reasonably conclude
+that feature reclaim is credited raw, and why a build-cancel refund could be
+written with the wrong sign under a comment defending it.
+
+**Correction to the first issue of this section.** This section first said
+**twelve** sites drawn from **four** operand pairs, and reconciled that against
+§3 as 5 + 4 + 2 + 1 = 12, minus the two feature sites and the one unit-reclaim
+refund, leaving §3's nine. That arithmetic was wrong. The census behind it read
+the values of only the operand pairs whose use counts appeared more than once in
+a frequency table and never read two operands that appear exactly once each;
+those two are a further pair of the same constants, and a second such pair was
+missed the same way. Reading **every** distinct multiply operand in the image
+against the two bit patterns gives **six** pairs and **fourteen** sites. The two
+recovered sites are precisely the two construction refunds, which is why the
+error hid the defect it was most needed to find.
+
+**Established — fourteen sites, six operand pairs, one body.** The read-only
+data holds six separate copies of the `(-0.7, -0.5)` double pair, each with the
+two constants adjacent and the medium factor at the lower address. Their twenty-
+eight multiply operands make fourteen sites, and every site is the same
+sequence, differing only in which value it has just formed and which accumulator
+it targets:
+
+```
+record = owner.playerRecord
+if (*record == 0)            goto plain      // the record's first word: "exists"
+if (record.controlByte != 2) goto plain      // 2 is the computer player
+switch (difficultyWord):
+  case 0:  production := (float32)( production - contribution * (-0.5) )   // easy
+  case 1:  production := (float32)( production - contribution * (-0.7) )   // medium
+  default: goto plain                                                       // hard
+plain:     production := (float32)( production + contribution )
+```
+
+**Established — the pairing is uniform, at all fourteen.** In every site the
+selector-0 branch is the jump target and takes the `-0.5` operand, and the
+selector-1 fall-through takes the `-0.7` one. **No site inverts the pairing.**
+This retires, at the executable rather than by argument, the standing claim that
+some member of the family pairs them the other way round — a claim Nanolathe's
+construction service carried as an instruction not to reconcile the two.
+
+**Established — the scaled arm is a reduced CREDIT, not a debit.** The constants
+are negative and the operation is a subtraction, so `production - contribution x
+(-0.5)` **adds half** the contribution. A computer player on easy receives half
+of each production contribution, on medium seven tenths, on hard all of it. An
+implementation that reads the constant's sign alone and writes
+`production += contribution x -0.7` inverts the whole effect: it charges the
+player where retail pays. §3's prose already said "scaled by 0.5 on easy" and
+never said "debited"; the arithmetic above is what settles it.
+
+**Established — five of the fourteen, by their own contracts.** The
+feature-reclaim payout's two additions (energy first, then metal, each through
+its own copy of the ladder, gated on the BUILDER's player record —
+[R-WORK-01 §5] step 4); the unit-reclaim death-side metal refund
+(`(1.0f - victim.remaining) x victim.buildcostmetal`, gated on the killer's
+record — [05 "Unit reclaim"]); the **build-cancel refund** in the factory
+handler, which forms the same `(1 - remaining) x buildcostmetal`, truncates it
+to an integer, credits the builder's metal accumulator and then sends the
+cause-9 kill packet; and the **reverse-construction refund**, which negates its
+value before the gate and credits the same accumulator.
+
+**Established — §3 undercounts by at least four.** §3 names one construction
+refund; there are two, in different handlers, each its own site. Adding the two
+feature-reclaim sites and the unit-reclaim refund, at least four of the fourteen
+are outside §3's list. The remaining nine sit in the two per-unit
+production-gather passes.
+
+**Unknown — which of those nine is which.** The one-to-one mapping of the nine
+onto §3's named members (`energymake`, `metalmake`, extraction, maker, wind,
+tidal, the negative-`energyuse` refund, the spawn credit) is not re-derived
+here, and two of the nine credit a **player-indexed record** rather than a
+unit's accumulator, which none of §3's named members obviously is. *Decider:*
+name each of the nine by the value it forms and the accumulator it stores to,
+and re-issue §3's list as fourteen rows. Until then §3's list should be read as
+incomplete rather than as a closed census, and no site should be "harmonized"
+away on the strength of it.
+
+**Established — neither reclaim site tests the sign of the contribution.** §3's
+prose says "every **positive** production contribution is scaled". Whatever
+justifies that word, it is not a compare at the sites examined: the ladder is
+entered on the player gate alone, and the negative-`energyuse` site negates its
+value immediately before entering it, which is a deliberate negative
+contribution taking the discounted path. **Unknown:** whether any site carries a
+positivity test. *Decider:* a read of each site for a compare against zero
+between forming the contribution and entering the ladder. Until then an
+implementation should not add a positivity guard it cannot point at; no shipped
+feature authors a negative pool [R-WORK-01 §5-A], so the reclaim sites are
+unaffected either way.
+
 **Established fact — player-side storage is floating point.** Live stock,
 the per-pass produced and requested snapshots, and the capacities are stored
 and copied as 32-bit floats, not integers. Closing stock is copied bit-exactly
@@ -4136,7 +4232,7 @@ this document:
 | Build (all forms), assist, deconstruction | 0 | — |
 | Repair helper and all four executors | 0 | — |
 | `RepairUnit` approach | 1 | `30 + boundedDraw(30)` out-of-range retry |
-| `RepairPatrol` | 1 | choosing a candidate from the gathered list |
+| `RepairPatrol` | 1 plus conditional feature tournaments | one bounded pick from the ordered unit gather; if the handler reaches feature pairing, three picks over the energy-bearing sampled list and then three over the metal-bearing sampled list, each only for a nonempty list |
 | `healtime` self-repair | 0 | — |
 | Unit reclaim | 0 | — |
 | Feature reclaim | 1 | phase 1 walk-target height |
@@ -4288,14 +4384,15 @@ its producing predicate:
 | `Repair mission failed` | 7 | `VTOL_RepairUnit` phase 0 only, after the definition's air-work capability bit passes but the air repair-eligibility predicate on the target fails. It is the air twin of `Repairs unsuccessful.`, not of `Repair aborted.`. |
 
 **Established — repair's randomness.** The helper itself, every executor's
-work visit, and the `healtime` path draw nothing. Two draws exist in the
-family, both outside the work visit: `RepairUnit` phase 1's out-of-range
-`30 + boundedDraw(30)` retry, and `RepairPatrol`'s pick draw over the
-damaged-unit list it gathers within its sight distance — **correction
-(2026-08-29, [01 R-DET-01 §6]):** that gather is not draw-free; its helper
-draws three bounded picks per non-empty need list (energy, metal), so a
-`RepairPatrol` scan visit costs up to six draws before the pick, and the
-earlier "single draw" wording undercounted. A
+work visit, and the `healtime` path draw nothing. Outside the work visit,
+`RepairUnit` phase 1 has the out-of-range `30 + boundedDraw(30)` retry, and
+`RepairPatrol` has one pick over the ordered damaged-unit list it gathers
+within its sight distance. If no unit action
+terminates the visit, feature pairing samples its 48-world-unit lattice and
+makes three bounded picks with replacement over each nonempty energy-bearing
+and metal-bearing list, in that order. **Correction (2026-08-31,
+[01 R-DET-01 §6]):** the previous text assigned those six draws to the unit
+gather; the unit gather is one ordered vector and costs no RNG. A
 bounded draw whose bound is below two returns zero **without advancing the
 seed**, so a single-candidate list costs no draw [01 §8].
 

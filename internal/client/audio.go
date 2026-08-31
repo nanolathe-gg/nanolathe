@@ -4,6 +4,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/audio"
 	"github.com/nanolathe/nanolathe/internal/audiobackend"
 	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 )
 
@@ -34,6 +35,16 @@ func (c *Client) SetAudioService(a *audio.Service) {
 		return
 	}
 	c.audioService = a
+	if a != nil {
+		a.Init(nil)
+	}
+	if a != nil && a.Queue != nil {
+		a.Queue.OnCaption(func(line string, _ audio.Slot, unit pool.Handle) {
+			// The queue has already applied liveness, caption/default-text,
+			// UNITCHAT priority and cooldown gates when this callback runs.
+			c.messages.Append(line, 1, unit, 10, c.messageEventsTick)
+		})
+	}
 	c.ensureAudioBackend()
 }
 
@@ -93,17 +104,77 @@ func (c *Client) TickAudio() {
 		return
 	}
 	c.ensureAudioBackend()
-	if c.audioService != nil {
-		var committedTick uint32
-		var events []frame.EventView
-		if c.buffer != nil {
-			if current := c.buffer.Current(); current != nil {
-				committedTick = current.Tick
-				events = current.Events
-			}
+	var committedTick uint32
+	var events []frame.EventView
+	if c.buffer != nil {
+		if current := c.buffer.Current(); current != nil {
+			committedTick = current.Tick
+			events = current.Events
 		}
-		c.audioService.DrainEvents(c.audioService.Frame()+1, committedTick, events)
 	}
+	if c.audioService != nil {
+		c.enqueueStatusEvents(committedTick, events)
+		c.audioService.DrainEvents(c.audioService.Frame()+1, committedTick, events)
+		c.messages.Expire(committedTick)
+	}
+}
+
+// enqueueStatusEvents submits committed status requests to the existing audio
+// queue. Caption composition and all UNITCHAT/cooldown gates therefore remain
+// in one resolver; only its OnCaption callback writes the client ring [03
+// §8.3][07 R-HUD-03 §14.1–§14.3].
+func (c *Client) enqueueStatusEvents(tick uint32, events []frame.EventView) {
+	if c == nil {
+		return
+	}
+	if c.messageEventsSeen && c.messageEventsTick == tick {
+		return
+	}
+	for _, event := range events {
+		if event.Kind != frame.EventKindStatus {
+			continue
+		}
+		_ = c.audioService.Emit(tick, audio.Slot(event.StatusKind), event.Source, event.StatusText)
+	}
+	c.messageEventsTick = tick
+	c.messageEventsSeen = true
+}
+
+// ConfigureMessageLines installs the authored ring controls. textlines is the
+// ring modulus (the drawer shows textlines-1 lines); textscroll is in seconds
+// and ageing uses simulation ticks [07 R-HUD-03 §14.3].
+func (c *Client) ConfigureMessageLines(textLines, textScroll uint16) {
+	if c == nil {
+		return
+	}
+	c.messages.Configure(textLines, textScroll)
+}
+
+// SetScreenChat sets the message-column class filter. Nonzero modes draw all
+// classes; zero retains only classes 1, 4 and 8 [07 R-HUD-03 §14.4].
+func (c *Client) SetScreenChat(mode uint8) {
+	if c != nil {
+		c.screenChat = mode
+	}
+}
+
+// MessageLines returns the currently visible message-column lines after the
+// screenchat class filter. The returned slice is detached from the ring.
+func (c *Client) MessageLines() []frame.MessageLine {
+	if c == nil {
+		return nil
+	}
+	lines := c.messages.Visible()
+	if c.screenChat != 0 {
+		return lines
+	}
+	out := lines[:0]
+	for _, line := range lines {
+		if line.Class == 1 || line.Class == 4 || line.Class == 8 {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 // UpdateAudioViewportFromCamera builds the audio viewport from the current

@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -329,6 +330,71 @@ func ApplyHealing(currentHealth int32, maxHealth int32, amount uint16) int32 {
 	return newHealth
 }
 
+// DispatchHealingPacket is the central kind-10 intake. It resolves the victim
+// from the authoritative world and applies the same alive/death-latch gates as
+// ordinary damage intake before applying early healing [06 §9.1].
+func (s *Service) DispatchHealingPacket(w *units.World, packet Packet) bool {
+	if s == nil || w == nil || !ValidatePacketKind(packet.Kind) || packet.Victim == 0 {
+		return false
+	}
+	victim := w.Unit(pool.Handle(packet.Victim))
+	if victim == nil || !victim.Alive || victim.Dying {
+		return false
+	}
+	switch packet.Kind {
+	case KindHeal:
+		if victim.Def == nil {
+			return false
+		}
+		victim.Health = ApplyHealing(victim.Health, victim.Def.MaxDamage, packet.Amount)
+		return true
+	default:
+		return false
+	}
+}
+
+// ApplySelfDestructDamage sends the fixed self-damage packet through the
+// ordinary health/reaction funnel. The packet's 30000 amount is at the strict
+// armor-bypass boundary; defender veterancy still applies, and a lethal result
+// is marked with cause 3 so the normal death finalizer performs callbacks and
+// death effects [08 R-SKIR-01 §3][06 §9.1][06 §12.1].
+func (s *Service) ApplySelfDestructDamage(w *units.World, target pool.Handle, tick uint32) bool {
+	if s == nil || w == nil || target == 0 {
+		return false
+	}
+	victim := w.Unit(target)
+	if victim == nil || !victim.Alive || victim.Dying {
+		return false
+	}
+	armored := victim.Armored
+	damageModifier := int32(65536)
+	if victim.Def != nil {
+		armored = armored || victim.Def.ArmoredState
+		damageModifier = victim.Def.DamageModifier
+	}
+	amount := ComputeScaledAmount(30000, 1, victim.Kills, victim.Kills, armored, damageModifier, false, false, false)
+	victim.LastDamageSide = victim.Owner
+	victim.LastDamageCause = uint8(CauseSelfDestruct)
+	victim.Health = ApplyDamage(victim.Health, amount)
+	packet := &Projectile{Shooter: target}
+	if victim.Health <= 0 {
+		w.Destroy(target, units.DeathSelfDestruct)
+		if s.deathNotified == nil {
+			s.deathNotified = make(map[pool.Handle]*units.Unit)
+		}
+		if s.deathNotified[target] != victim {
+			s.deathNotified[target] = victim
+			s.emitEvent(Event{Kind: EventUnitKilled, Tick: tick, Source: target, Target: target, Position: Vec3{X: victim.X, Y: victim.Y, Z: victim.Z}})
+		}
+		return true
+	}
+	if bridge := s.callbackBridgeForUnit(victim); bridge != nil {
+		bridge.HitByWeapon(uint8(packet.Yaw.Raw() >> 8))
+		bridge.TakeDamage(cob.HealthPercent(victim.Health, victim.MaxHealth))
+	}
+	return true
+}
+
 // ApplyDamage performs exact 16-bit modular subtraction from health [06 §9.1].
 // The health word wraps modulo 65,536 and the result is read as SIGNED 16-bit
 // (sign-extended for the caller): a non-positive signed result is what makes
@@ -493,7 +559,10 @@ func TickWaterDamage(tick uint32, w *units.World, terrain *world.Terrain, waterD
 		// Apply through standard damage funnel without callbacks [04 §9.2] type 0xB skips HitByWeapon/TakeDamage and feature effects.
 		// Use 16-bit modular subtraction per [06 §9.1] ApplyDamage, then death latch via world.Destroy for lethal [04 §9.2][06 §12.1] cause 11 normal death-pending.
 		// No packet construction needed for health path, but kind is 11 for citation.
-		_ = KindNoReaction                         // 0xB [04 §9.2][06 §9.1]
+		_ = KindNoReaction // 0xB [04 §9.2][06 §9.1]
+		u.LastDamageCause = uint8(CauseWaterDamage)
+		// Water has no attacking unit; its side byte remains the prior known
+		// source. Cause 11 is sufficient to clear the repair-patrol cause-5 gate.
 		newHealth := ApplyDamage(u.Health, scaled) // [06 §9.1] exact 16-bit modular subtraction
 		u.Health = newHealth
 		if newHealth <= 0 {

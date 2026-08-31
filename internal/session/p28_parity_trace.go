@@ -394,6 +394,11 @@ func (s *Session) ParityAuthoritativeHash() (string, error) {
 	for _, u := range s.allParityUnits() {
 		writeParityUnit(w, u)
 	}
+	if s.Units != nil {
+		for player := 0; player < 10; player++ {
+			w("units-created:%d:%d|", player, s.Units.CreatedCountForPlayer(player))
+		}
+	}
 	if s.Econ != nil {
 		e := economy.TraceSnapshot{}
 		if s.Econ != nil {

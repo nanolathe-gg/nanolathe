@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/clock"
+	"github.com/nanolathe/nanolathe/internal/economy"
 )
 
 // ---------------------------------------------------------------------------
@@ -414,6 +415,10 @@ type PlayerSlot struct {
 	// Wire type integer, runtime low signed 16 bits [08 "Player records"]:
 	Kills  int16
 	Losses int16
+	// TODO(question): the save writer's Player%i table establishes Kills and
+	// Losses but does not establish commander-counter keys. Commander counters
+	// remain authoritative runtime/result data until a save-writer trace settles
+	// whether they have a separate account or are not persisted [08 "Player records"] [08 R-CAMP-01 §10].
 
 	// Wire type integer, runtime i32 [08 "Player records"]:
 	// UpdateTime is the player's economy settlement deadline — absolute tick
@@ -431,6 +436,50 @@ type PlayerSlot struct {
 	// TODO(T25): fields beyond the established table (network identity,
 	// connection/alive state, sharing options, etc) remain unknown and are kept
 	// unsupported until their retail consumers are established [GAP T25].
+}
+
+// PlayerSlotFromEconomy projects the established scalar/statistics fields into
+// the typed bank record. It intentionally omits live buckets and derived
+// capacities, whose existing save writers own separate persistence rules
+// [05 "Saving economy, construction, and features"].
+func PlayerSlotFromEconomy(index int, p economy.Player) PlayerSlot {
+	return PlayerSlot{
+		Index:  index,
+		Energy: p.Stock[economy.Energy], Metal: p.Stock[economy.Metal],
+		TotalEnergyProduced: p.TotalProduced[economy.Energy], TotalMetalProduced: p.TotalProduced[economy.Metal],
+		TotalEnergyConsumed: p.TotalConsumed[economy.Energy], TotalMetalConsumed: p.TotalConsumed[economy.Metal],
+		EnergyWasted: p.Waste[economy.Energy], MetalWasted: p.Waste[economy.Metal],
+		PlayerEnergyStorage: p.Capacity[economy.Energy], PlayerMetalStorage: p.Capacity[economy.Metal],
+		AddPlayerStorage: boolWord(p.StorageBonusEnabled),
+		Kills:            p.Kills, Losses: p.Losses,
+		UpdateTime: int32(p.UpdateTime), WinLoseTime: int32(p.WinLoseTime), DisplayTimer: int32(p.DisplayTimer),
+		Controller: p.ControllerState, Logo: p.Logo, Side: p.Side,
+	}
+}
+
+// ApplyToEconomy restores the scalar/statistics fields that PlayerSlot owns.
+// Runtime bucket carry and alliance state remain with their existing account
+// readers, preserving the retail partial-load boundaries [08 "Player records"].
+func (p PlayerSlot) ApplyToEconomy(dst *economy.Player) {
+	if dst == nil {
+		return
+	}
+	dst.Stock[economy.Energy], dst.Stock[economy.Metal] = p.Energy, p.Metal
+	dst.TotalProduced[economy.Energy], dst.TotalProduced[economy.Metal] = p.TotalEnergyProduced, p.TotalMetalProduced
+	dst.TotalConsumed[economy.Energy], dst.TotalConsumed[economy.Metal] = p.TotalEnergyConsumed, p.TotalMetalConsumed
+	dst.Waste[economy.Energy], dst.Waste[economy.Metal] = p.EnergyWasted, p.MetalWasted
+	dst.Capacity[economy.Energy], dst.Capacity[economy.Metal] = p.PlayerEnergyStorage, p.PlayerMetalStorage
+	dst.StorageBonusEnabled = p.AddPlayerStorage&1 != 0
+	dst.Kills, dst.Losses = p.Kills, p.Losses
+	dst.UpdateTime, dst.WinLoseTime, dst.DisplayTimer = uint32(p.UpdateTime), uint32(p.WinLoseTime), uint32(p.DisplayTimer)
+	dst.ControllerState, dst.Logo, dst.Side = p.Controller, p.Logo, p.Side
+}
+
+func boolWord(v bool) uint16 {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 // playerAccountName returns Player%i account name [08 "Player records"].

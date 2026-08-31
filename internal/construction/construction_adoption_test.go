@@ -235,6 +235,21 @@ func assistFixture(t *testing.T, factoryWorkerTime int32, assistantQuanta ...int
 	}
 	svc := NewService(exitTerrain(16, 16), cat, w, econ)
 	svc.OrderBinding = binding
+	binding.Movement = &orders.MovementGoalAdapter{
+		InstallPoint:     func(orders.PointGoalRequest) bool { return true },
+		InstallAnnulus:   func(orders.AnnulusGoalRequest) bool { return true },
+		InstallRectangle: func(orders.RectangleGoalRequest) bool { return true },
+		InstallAir:       func(orders.AirGoalRequest) bool { return true },
+		Release:          func(*orders.Node) bool { return true },
+	}
+	binding.Work = &orders.WorkAdapter{
+		Assist: func(builder *units.Unit, n *orders.Node, tick uint32) bool {
+			return svc.Assist(builder, w.Unit(n.Target), tick)
+		},
+		Repair: func(builder, _ *units.Unit, n *orders.Node, _ uint32) bool {
+			return svc.Repair(builder, w.Unit(n.Target), builder.Def.WorkerTime/30)
+		},
+	}
 
 	fq := orders.QueueForUnit(factory)
 	fq.SetBinding(binding)
@@ -297,30 +312,21 @@ func TestAssistantsAddTheirRateToAFactoryProduct(t *testing.T) {
 	}
 }
 
-// TestAssistedFrameCompletesUnderItsOwnersTransition locks the completion end:
-// an assisted frame reaches a zero fraction sooner, and the completion posture
-// is applied exactly once, by the owner whose state machine owns the product
-// [04 R-FAC-02 §3].
-//
-// The one extra tick is deliberate and is the divergence work.go's `HelpBuild`
-// work phase records: [05 R-WORK-01 §1] ends "on both arms and also on the
-// admission-refused path, if remaining == 0 run the completion transition",
-// i.e. whichever builder zeroed the fraction completes the product. The
-// transition needs this package's Service (occupancy retirement, cargo detach,
-// the activation edge) and internal/orders cannot reach it, so when an ASSISTANT
-// lands the last increment the posture arrives on the owner's next visit
-// instead of within the same one.
-func TestAssistedFrameCompletesUnderItsOwnersTransition(t *testing.T) {
+// TestAssistedFrameCompletesAtOwningBoundary locks the completion end: an
+// assisted frame reaches a zero fraction sooner, and the construction service
+// applies its completion posture exactly once at the accepted step's owning
+// boundary [04 R-FAC-02 §3][05 R-WORK-01 §1].
+func TestAssistedFrameCompletesAtOwningBoundary(t *testing.T) {
 	run := func(assistants ...int32) uint32 {
 		svc, factory, helpers, product := assistFixture(t, 30, assistants...)
 		var zeroed uint32
 		for tick := uint32(1); tick <= 200; tick++ {
 			assistTick(svc, factory, helpers, tick)
 			if product.Remaining == 0 {
-				if zeroed == 0 {
-					zeroed = tick
-					continue // the owner's next visit runs the transition
+				if product.Flags&FlagCompleted == 0 {
+					t.Fatalf("frame reached zero without same-step completion posture [05 R-WORK-01 §1]")
 				}
+				zeroed = tick
 				break
 			}
 		}

@@ -61,6 +61,28 @@ func TestNewOrderBindingUsesRetailUnitPoolOrder(t *testing.T) {
 	}
 }
 
+func TestNewOrderBindingUsesDirectionalDiplomacyAndResources(t *testing.T) {
+	s := &Session{Econ: &economy.Service{}}
+	s.Econ.Players[0].Allies[1] = true
+	s.Econ.Players[1].Allies[0] = false
+	s.Econ.Players[0].Stock = [2]float32{7, 11}
+	s.Econ.Players[0].Capacity = [2]float32{70, 110}
+	b := s.newOrderBinding()
+	actor := &units.Unit{Owner: 0, Def: &content.UnitDef{Side: "blue"}}
+	target := &units.Unit{Owner: 1, Def: &content.UnitDef{Side: "blue"}}
+	if b.Hostility(actor, target) {
+		t.Fatal("directional player alliance should admit the candidate")
+	}
+	s.Econ.Players[0].Allies[1] = false
+	if !b.Hostility(actor, target) {
+		t.Fatal("directional player diplomacy should reject the candidate")
+	}
+	resources, ok := b.Resources(0)
+	if !ok || resources.Stock != [2]float32{7, 11} || resources.Capacity != [2]float32{70, 110} {
+		t.Fatalf("resource binding = %#v, %v", resources, ok)
+	}
+}
+
 // TestSeedSessionRNGWipesPreBattleDrawsAndLeavesGlobalAlone locks the DET-01
 // seeding contract [R-CORE-02]: seeding both session streams fresh wipes
 // every draw made before it (retail's reseed-wipes-history property at battle

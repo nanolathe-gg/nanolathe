@@ -91,14 +91,6 @@ func selfDestructCountdownField(def *content.UnitDef) uint32 {
 // mask 2 whenever the record being freed still has that bit armed
 // [04 R-ORD-01 §0][R-ORDER-02 §2]. Arming it on every counting visit is what
 // makes a re-issued or purged countdown announce its termination.
-//
-// TODO(T25): the row's status emissions — kinds 17..22 (`five` .. `zero`) while
-// counting and kind 23 (`Self destruct terminated`) on cancellation, the latter
-// suppressed for a unit carrying auto flag 14 — have no surface in this
-// package. The status emitter of [04 R-ORD-01 §1] belongs to the presentation
-// side and this build reaches it only from the session, not from an order
-// handler (the same gap `Stop`'s caption clear records). Placeholder: the
-// simulation half of every step runs and the announcement is a no-op.
 func selfDestructHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	if u == nil || n == nil {
 		return Code(5)
@@ -115,6 +107,7 @@ func selfDestructHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 			} else {
 				n.Param2 = (n.Param2 &^ selfDestructCountField) | (count - 1)
 			}
+			workStatus(u, uint8(22-count), "")
 			if count == 0 {
 				armDeadline(n, tick, drawBelow(u, 15)) // the one draw of the timeline [04 R-SPEC-01 §13]
 			} else {
@@ -122,6 +115,9 @@ func selfDestructHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 			}
 			n.DynamicGate |= gateCancelBit
 			return Code(1) // *advance* [04 R-ORD-01 §2]
+		}
+		if u.Flags&0x4000 == 0 {
+			workStatus(u, 23, "Self destruct terminated")
 		}
 		return Code(5) // cancelled: *complete* without damage [04 R-ORD-01 §2]
 	}
@@ -159,6 +155,8 @@ func applySelfDestructDamage(u *units.Unit) {
 		u.Def.DamageModifier,
 		false, false, false,
 	)
+	u.LastDamageSide = u.Owner
+	u.LastDamageCause = uint8(combat.CauseSelfDestruct)
 	u.Health = combat.ApplyDamage(u.Health, amount)
 	if u.Health <= 0 && !u.Dying {
 		u.Dying = true

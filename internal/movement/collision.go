@@ -39,6 +39,7 @@ import (
 	"sort"
 
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 // worldUnitsPerCell is one attribute cell in 16.16 world units: 16 map pixels × 65536 [03 §2.1] C1.
@@ -356,6 +357,14 @@ type CollisionState struct {
 	// for static/terrain rejection. It never causes pushing or displacement.
 	BlockerID int
 	Dirty     bool // transform dirty [04 §8.2] C23 C24 — marks transform/visibility dirty
+
+	// Building and Yard retain the immutable class split and parsed yard bytes
+	// used by every initial and teardown occupancy stamp. Mobile units leave
+	// Yard nil and continue to use their full rectangular footprint
+	// [04 R-COLL-01 §4].
+	Building bool
+	Yard     []world.YardCell
+	YardOpen bool
 
 	// halfBiasX/Z are optional additive anchor-quantisation biases [04
 	// R-COLL-01 §1]. A zero pair means derive S-footprint*S, where S is half

@@ -122,8 +122,11 @@ type EffectRecord struct {
 
 	// HasModel indicates a model-bearing record; the integrator can clear the
 	// model pointer on terrain/water contact as the alternative to bouncing [03 §1] C5.
-	HasModel               bool
-	NanolatheGeometryKnown bool
+	HasModel                bool
+	NanolatheGeometryKnown  bool
+	NanolatheTargetBoxKnown bool
+	NanolatheTargetMin      [3]numeric.Fixed
+	NanolatheTargetMax      [3]numeric.Fixed
 }
 
 // AppendView admits one immutable event view into the canonical fixed pool.
@@ -152,6 +155,8 @@ func (p *FixedEffectPool) AppendView(v frame.EffectView) bool {
 		AnimA:    EffectAnimPlayer{Idx: v.SeqA, Active: validDurations(v.DurationsA), Frames: len(v.DurationsA), Durations: append([]int32(nil), v.DurationsA...), Loop: v.LoopA},
 		AnimB:    EffectAnimPlayer{Idx: v.SeqB, Active: validDurations(v.DurationsB), Frames: len(v.DurationsB), Durations: append([]int32(nil), v.DurationsB...), Loop: v.LoopB},
 		HasModel: v.HasModel, NanolatheGeometryKnown: v.NanolatheGeometryKnown,
+		NanolatheTargetBoxKnown: v.NanolatheTargetBoxKnown,
+		NanolatheTargetMin:      v.NanolatheTargetMin, NanolatheTargetMax: v.NanolatheTargetMax,
 	}
 	if r.AnimA.Active {
 		r.AnimA.Countdown = r.AnimA.frameDuration(r.AnimA.Idx)
@@ -200,7 +205,9 @@ func (p *FixedEffectPool) SnapshotViewsInto(out []frame.EffectView) []frame.Effe
 			TargetX: r.TargetX, TargetY: r.TargetY, TargetZ: r.TargetZ,
 			HasModel: r.HasModel,
 			Gravity:  r.Gravity, ExpiryTick: r.ExpiryTick,
-			NanolatheGeometryKnown: r.NanolatheGeometryKnown,
+			NanolatheGeometryKnown:  r.NanolatheGeometryKnown,
+			NanolatheTargetBoxKnown: r.NanolatheTargetBoxKnown,
+			NanolatheTargetMin:      r.NanolatheTargetMin, NanolatheTargetMax: r.NanolatheTargetMax,
 		}
 	}
 	return out

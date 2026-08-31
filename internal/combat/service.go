@@ -175,6 +175,12 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		if slot == nil || !slot.IsPopulated() {
 			continue
 		}
+		// Inhibit is an order-side stop latch, distinct from autonomous
+		// tracking. It suppresses both reacquisition and the retained-target
+		// firing path until the order side releases it [04 R-ORD-01 §1].
+		if slot.IsOrderInhibited() {
+			continue
+		}
 		if slot.Target.Kind == units.TargetUnit && slot.Target.Unit != 0 {
 			tu := w.Unit(slot.Target.Unit)
 			if tu == nil || !tu.Alive || tu.Dying {
@@ -489,6 +495,13 @@ func (s *Service) TickWeapons(tick uint32, w *units.World, vis *visibility.Servi
 }
 
 func acquireTargetForSlot(u *units.Unit, slot *units.Slot, idx int, w *units.World, vis *visibility.Service, terrain *world.Terrain, simRNG *rng.Simulation, econ *economy.Service, catalogs ...*content.Catalog) (pool.Handle, bool) {
+	return acquireTargetForSlotRange(u, slot, idx, w, vis, terrain, simRNG, econ, -1, catalogs...)
+}
+
+// acquireTargetForSlotRange is the non-mutating form used by order-facing
+// acquisition. A nonnegative range overrides only the query's range operand;
+// the compiled WeaponDef remains immutable [02 "Weapon record"][06 §3.2].
+func acquireTargetForSlotRange(u *units.Unit, slot *units.Slot, idx int, w *units.World, vis *visibility.Service, terrain *world.Terrain, simRNG *rng.Simulation, econ *economy.Service, rangeLimit int32, catalogs ...*content.Catalog) (pool.Handle, bool) {
 	if u == nil || w == nil || slot == nil || slot.Weapon == nil {
 		return 0, false
 	}
@@ -535,12 +548,16 @@ func acquireTargetForSlot(u *units.Unit, slot *units.Slot, idx int, w *units.Wor
 		}
 		candidates = append(candidates, c)
 	}
+	queryRange := weapon.Range
+	if rangeLimit >= 0 {
+		queryRange = rangeLimit
+	}
 	acq := Acquisition{
 		ShooterX:      u.X,
 		ShooterZ:      u.Z,
 		ShooterY:      u.Y,
 		SeaLevel:      seaLevel,
-		Range:         weapon.Range,
+		Range:         queryRange,
 		BadTargetMask: badMaskForSlot(u.Def, idx),
 		MaskResolved:  catalog != nil && u.Def != nil,
 		WaterWeapon:   weapon.WaterWeapon,
@@ -1246,13 +1263,20 @@ func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weap
 	if victim == nil || weapon == nil || w == nil {
 		return
 	}
+	shooter := w.Unit(p.Shooter)
+	if shooter != nil {
+		// Any later known weapon intake clears a stale reclaim bite marker,
+		// including paralyzer packets that do not reduce health [06 §9.1].
+		victim.LastDamageSide = shooter.Owner
+		victim.LastDamageCause = uint8(CauseOrdinary)
+	}
 	if weapon.Paralyzer {
 		if victim.Def != nil && victim.Def.ImmuneToParalyzer {
 			return
 		}
 		base := SelectBaseDamage(weapon, victim.Def.UnitName)
 		attackerKills := int32(0)
-		if shooter := w.Unit(p.Shooter); shooter != nil {
+		if shooter != nil {
 			attackerKills = shooter.Kills
 		}
 		amount := ComputeScaledAmount(base, falloff, attackerKills, victim.Kills, false, 0, false, false, false)

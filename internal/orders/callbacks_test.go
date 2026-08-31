@@ -89,7 +89,8 @@ func TestTargetClearedWalkGuardBitsAndArgs(t *testing.T) {
 	u, vm := cbUnit(cbProgram("TargetCleared"))
 	assignSlot(u, 0, 0x02, units.Target{Kind: units.TargetUnit, Unit: 7})      // assigned, unit target
 	assignSlot(u, 1, 0x02, units.Target{Kind: units.TargetGround, X: 1, Z: 2}) // assigned, ground target
-	assignSlot(u, 2, 0x02|0x10, units.Target{Kind: units.TargetUnit, Unit: 9}) // bit 4 already set: skipped
+	assignSlot(u, 2, 0x02, units.Target{Kind: units.TargetUnit, Unit: 9})      // assigned
+	u.SlotAt(2).OrderControl |= slotOrderInhibit                               // bit 4 already set: skipped
 
 	clearWeaponBuildTargets(u)
 
@@ -103,14 +104,14 @@ func TestTargetClearedWalkGuardBitsAndArgs(t *testing.T) {
 			t.Fatalf("arrangement %d args %v, want %v", i, args[i], w)
 		}
 	}
-	if s := u.SlotAt(0); s.Target.Kind != units.TargetNone || s.Flags&0x10 == 0 {
-		t.Fatalf("slot 0 not cleared: target %v flags %x", s.Target, s.Flags)
+	if s := u.SlotAt(0); s.Target.Kind != units.TargetNone || s.OrderControl&slotOrderInhibit == 0 {
+		t.Fatalf("slot 0 not cleared: target %v control %x", s.Target, s.OrderControl)
 	}
-	if s := u.SlotAt(1); s.Target.Kind != units.TargetNone || s.Flags&0x10 == 0 {
-		t.Fatalf("slot 1 not cleared: target %v flags %x", s.Target, s.Flags)
+	if s := u.SlotAt(1); s.Target.Kind != units.TargetNone || s.OrderControl&slotOrderInhibit == 0 {
+		t.Fatalf("slot 1 not cleared: target %v control %x", s.Target, s.OrderControl)
 	}
-	if s := u.SlotAt(2); s.Target.Kind != units.TargetUnit || s.Target.Unit != 9 || s.Flags&0x10 == 0 {
-		t.Fatalf("slot 2 must be skipped (bit 4 already set): target %v flags %x", s.Target, s.Flags)
+	if s := u.SlotAt(2); s.Target.Kind != units.TargetUnit || s.Target.Unit != 9 || s.OrderControl&slotOrderInhibit == 0 {
+		t.Fatalf("slot 2 must be skipped (bit 4 already set): target %v control %x", s.Target, s.OrderControl)
 	}
 }
 
@@ -122,8 +123,8 @@ func TestTargetClearedWalkAlreadyEmptyAndMissingScript(t *testing.T) {
 		if got := startedArgs(vm); len(got) != 0 {
 			t.Fatalf("empty target signalled TargetCleared %v, want no arrangement", got)
 		}
-		if s := u.SlotAt(0); s.Flags&0x10 == 0 {
-			t.Fatalf("bit 4 must be set before the empty test, flags %x", s.Flags)
+		if s := u.SlotAt(0); s.OrderControl&slotOrderInhibit == 0 {
+			t.Fatalf("bit 4 must be set before the empty test, control %x", s.OrderControl)
 		}
 	})
 	t.Run("no TargetCleared script: words still reset, arrange no-op", func(t *testing.T) {
@@ -134,8 +135,8 @@ func TestTargetClearedWalkAlreadyEmptyAndMissingScript(t *testing.T) {
 			t.Fatalf("missing script started threads %v, want no-op", got)
 		}
 		s := u.SlotAt(0)
-		if s.Target.Kind != units.TargetNone || s.Flags&0x10 == 0 {
-			t.Fatalf("words must reset and latch set even without the script: target %v flags %x", s.Target, s.Flags)
+		if s.Target.Kind != units.TargetNone || s.OrderControl&slotOrderInhibit == 0 {
+			t.Fatalf("words must reset and latch set even without the script: target %v control %x", s.Target, s.OrderControl)
 		}
 	})
 }

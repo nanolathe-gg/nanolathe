@@ -235,6 +235,7 @@ func TestRS06_FloatAudit(t *testing.T) {
 		"internal/combat/impact.go":        true, // area damage distance [I2][06 §9.3] transient
 		"internal/combat/stockpile.go":     true, // var _ import keep, not authoritative
 		"internal/movement/flight.go":      true, // flight brake hypot [I2][04 §10.1]
+		"internal/movement/airorders.go":   true, // AirStrike release lead sqrt, narrowed by truncation [I2][04 R-AIR-01 §8]
 		"internal/movement/integrate.go":   true, // ground movement distance [I2] TODO(question) but with citation
 		"internal/movement/altitude.go":    true, // altitude explicit radius [I2] TODO(question)
 		"internal/client/model.go":         true, // model draw trig [I2][03 §2.4]

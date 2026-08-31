@@ -34,7 +34,6 @@ var vtolAirOrders = []string{
 // the pump's own deadline expiry raises its bit. The one thing that must never
 // appear is the pump's missing-handler diagnostic.
 func TestVTOLAirOrdersDispatchAndDoNotPark(t *testing.T) {
-	SetAirLegRunner(nil) // no movement system in this package's tests
 	for _, name := range vtolAirOrders {
 		q, u := gateFixture()
 		// A live target reference: three of these rows end the order on a null

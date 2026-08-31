@@ -490,10 +490,13 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 			if actor == nil || target == nil {
 				return false
 			}
-			if actor.Def != nil && target.Def != nil && actor.Def.Side != "" && target.Def.Side != "" {
-				return actor.Def.Side != target.Def.Side
+			if actor.Owner == target.Owner {
+				return false
 			}
-			return actor.Owner != target.Owner
+			if s.Econ == nil || int(actor.Owner) >= len(s.Econ.Players) || int(target.Owner) >= len(s.Econ.Players) {
+				return true
+			}
+			return !s.Econ.Players[actor.Owner].Allies[target.Owner]
 		},
 		ForEachUnit: func(visit func(pool.Handle, *units.Unit) bool) {
 			if s.Units == nil || visit == nil {
@@ -511,24 +514,37 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 			})
 		},
 		LookupFeature: func(cx, cz int32) (orders.FeatureView, bool) {
-			if s.Features == nil {
+			if s.Features == nil || s.World == nil {
 				return orders.FeatureView{}, false
 			}
-			inst := s.Features.InstanceAt(int(cx), int(cz))
+			// Resolve the sampled cell through the terrain's fringe-parent hop;
+			// lattice scans may land on any stamped footprint cell, not only its
+			// anchor [05 R-ECO-02 §2].
+			_, anchorX, anchorZ, ok := features.FeatureAt(s.World, numeric.Fixed(int64(cx)<<20), numeric.Fixed(int64(cz)<<20))
+			if !ok {
+				return orders.FeatureView{}, false
+			}
+			inst := s.Features.InstanceAt(anchorX, anchorZ)
 			if inst == nil {
 				return orders.FeatureView{}, false
 			}
 			id := uint16(world.PlotFeatureNone)
-			if s.World != nil {
-				if cell := s.World.PlotAt(cx, cz); cell != nil {
-					id = cell.Feature()
-				}
+			if cell := s.World.PlotAt(int32(anchorX), int32(anchorZ)); cell != nil {
+				id = cell.Feature()
 			}
 			var key string
 			if inst.Def != nil {
 				key = inst.Def.CanonicalKey
 			}
-			return orders.FeatureView{ID: id, CX: int32(inst.CX), CZ: int32(inst.CZ), X: inst.X, Z: inst.Z, DefinitionKey: key}, true
+			var metal, energy int32
+			var footprintX, footprintZ, height int32
+			var reclaimable, autoreclaimable bool
+			if inst.Def != nil {
+				metal, energy = inst.Def.Metal, inst.Def.Energy
+				footprintX, footprintZ, height = inst.Def.FootprintX, inst.Def.FootprintZ, inst.Def.Height
+				reclaimable, autoreclaimable = inst.Def.Reclaimable, inst.Def.Autoreclaimable
+			}
+			return orders.FeatureView{ID: id, CX: int32(inst.CX), CZ: int32(inst.CZ), X: inst.X, Y: inst.Y, Z: inst.Z, FootprintX: footprintX, FootprintZ: footprintZ, Height: height, DefinitionKey: key, Metal: metal, Energy: energy, Reclaimable: reclaimable, Autoreclaimable: autoreclaimable}, true
 		},
 		ForEachFeature: func(visit func(orders.FeatureView) bool) {
 			if s.Features == nil || visit == nil {
@@ -548,7 +564,15 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 				if inst.Def != nil {
 					key = inst.Def.CanonicalKey
 				}
-				if visit(orders.FeatureView{ID: id, CX: int32(inst.CX), CZ: int32(inst.CZ), X: inst.X, Z: inst.Z, DefinitionKey: key}) {
+				var metal, energy int32
+				var footprintX, footprintZ, height int32
+				var reclaimable, autoreclaimable bool
+				if inst.Def != nil {
+					metal, energy = inst.Def.Metal, inst.Def.Energy
+					footprintX, footprintZ, height = inst.Def.FootprintX, inst.Def.FootprintZ, inst.Def.Height
+					reclaimable, autoreclaimable = inst.Def.Reclaimable, inst.Def.Autoreclaimable
+				}
+				if visit(orders.FeatureView{ID: id, CX: int32(inst.CX), CZ: int32(inst.CZ), X: inst.X, Y: inst.Y, Z: inst.Z, FootprintX: footprintX, FootprintZ: footprintZ, Height: height, DefinitionKey: key, Metal: metal, Energy: energy, Reclaimable: reclaimable, Autoreclaimable: autoreclaimable}) {
 					break
 				}
 			}
@@ -569,19 +593,27 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 	movementGoals := &orders.MovementGoalAdapter{}
 	if s.Movement != nil {
 		movementGoals.Ready = func() bool { return s.Movement != nil }
+		movementGoals.RunAir = s.Movement.AirLegRunner()
 		movementGoals.InstallPoint = func(req orders.PointGoalRequest) bool {
 			if req.Node == nil {
 				return false
 			}
-			s.Movement.BindMoveGoal(req.Owner, req.Node, req.X, req.Z)
-			return true
+			return s.Movement.InstallPointGoal(req)
 		}
 		movementGoals.Release = func(node *orders.Node) bool {
 			if node == nil {
 				return false
 			}
-			s.Movement.ClearMoveGoal(node.Owner)
-			return true
+			return s.Movement.ReleaseGoal(node)
+		}
+		movementGoals.InstallAnnulus = func(req orders.AnnulusGoalRequest) bool {
+			return s.Movement.InstallAnnulusGoal(req)
+		}
+		movementGoals.InstallRectangle = func(req orders.RectangleGoalRequest) bool {
+			return s.Movement.InstallRectangleGoal(req)
+		}
+		movementGoals.InstallAir = func(req orders.AirGoalRequest) bool {
+			return s.Movement.InstallAirGoal(req)
 		}
 	}
 	return &orders.QueueBinding{
@@ -597,15 +629,217 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 		},
 		Movement: movementGoals,
 		World:    worldQueries,
-		Work: &orders.WorkAdapter{Ready: func() bool {
-			return s.Build != nil
-		}},
-		Weapons: &orders.WeaponAdapter{Ready: func() bool {
-			return s.Combat != nil
-		}},
-		Presentation: &orders.PresentationAdapter{Ready: func() bool {
-			return s.publication != nil && s.publication.events != nil
-		}},
+		Resources: func(owner uint8) (orders.ResourceView, bool) {
+			if s.Econ == nil || int(owner) >= len(s.Econ.Players) {
+				return orders.ResourceView{}, false
+			}
+			p := s.Econ.Players[owner]
+			return orders.ResourceView{Stock: p.Stock, Capacity: p.Capacity}, true
+		},
+		Work: &orders.WorkAdapter{
+			Ready: func() bool { return s.Build != nil && s.Econ != nil },
+			Assist: func(builder *units.Unit, n *orders.Node, tick uint32) bool {
+				if s.Build == nil || n == nil || worldQueries.LookupUnit == nil {
+					return false
+				}
+				return s.Build.Assist(builder, worldQueries.LookupUnit(n.Target), tick)
+			},
+			Repair: func(builder, patient *units.Unit, n *orders.Node, _ uint32) bool {
+				if s.Build == nil || n == nil || worldQueries.LookupUnit == nil {
+					return false
+				}
+				if builder == nil || builder.Def == nil {
+					return false
+				}
+				return s.Build.Repair(builder, patient, construction.WorkerQuantum(builder.Def.WorkerTime))
+			},
+		},
+		Weapons: &orders.WeaponAdapter{
+			Ready: func() bool { return s.Combat != nil },
+			ReleaseSlot: func(u *units.Unit, idx int) bool {
+				return combat.ReleaseWeaponSlot(u, idx)
+			},
+			InhibitSlot: func(u *units.Unit, idx int) bool {
+				return combat.InhibitWeaponSlot(u, idx)
+			},
+			SetManualTarget: func(u *units.Unit, idx int, target pool.Handle) bool {
+				return combat.SetManualWeaponTarget(u, idx, target)
+			},
+			FireTarget: func(u *units.Unit, idx int, target pool.Handle, tick uint32) bool {
+				return combat.FireWeaponTarget(u, idx, target, tick)
+			},
+			FirePoint: func(u *units.Unit, idx int, x, z numeric.Fixed, tick uint32) bool {
+				return combat.FireWeaponPoint(u, idx, x, z, tick)
+			},
+			StopFiring: func(u *units.Unit, idx int) bool {
+				return combat.StopWeaponFiring(u, idx)
+			},
+			Acquire: func(u *units.Unit, idx int, limit uint32) (pool.Handle, bool) {
+				return s.Combat.AcquireWeaponTarget(u, idx, limit, s.Units, s.Vis, s.World, s.Econ, s.Catalog, s.SimRNG())
+			},
+			Engaged: func(u *units.Unit, idx int) bool {
+				if u == nil || u.SlotAt(idx) == nil {
+					return false
+				}
+				target := u.SlotAt(idx).Target
+				if target.Kind != units.TargetUnit || s.Units == nil {
+					return false
+				}
+				return combat.WeaponCanEngage(u, idx, s.Units.Unit(target.Unit))
+			},
+		},
+		Presentation: &orders.PresentationAdapter{
+			Ready: func() bool {
+				return s.publication != nil && s.publication.events != nil
+			},
+			Status: func(u *units.Unit, kind uint8, text string) bool {
+				if s.publication == nil || s.publication.events == nil || u == nil {
+					return false
+				}
+				// The status request is presentation-only, but its admission gate is
+				// authoritative unit ownership/state: dead or dying units and other
+				// players never reach the local message line [04 R-ORD-01 §1][07
+				// R-HUD-03 §14]. Unit.Alive/Dying are this model's live/death state.
+				if int(u.Owner) != localPlayerForSession(s) || !u.Alive || u.Dying {
+					return false
+				}
+				tick := uint32(0)
+				if s.Clock != nil {
+					tick = s.Clock.GlobalTick
+				}
+				// Store the semantic request at the committed boundary. The
+				// presentation edge then submits it to the existing audio queue,
+				// whose resolver supplies the definition display name, slot default
+				// caption/localization, UNITCHAT priority gate and cooldown [03
+				// §8.3][07 R-HUD-03 §14].
+				return s.publication.events.EmitStatus(frame.Event{
+					Tick: tick, Source: u.Handle, StatusKind: kind,
+					StatusText: text, StatusClass: 1,
+				})
+			},
+			Nanolathe: func(builder *units.Unit, n *orders.Node, tick uint32) bool {
+				if s.publication == nil || s.publication.events == nil || s.Build == nil || builder == nil || n == nil {
+					return false
+				}
+				_, source, ok := s.Build.QueryNanoPiece(builder)
+				if !ok {
+					// QueryNanoPiece is the authored model/piece geometry gate. Do
+					// not synthesize a muzzle point when that lookup is unresolved
+					// [03 §5.5][I9].
+					return false
+				}
+				target := worldQueries.LookupUnit(n.Target)
+				if target == nil || !target.Alive || target.Dying {
+					return false
+				}
+				activeUntil := uint32(0)
+				name := orders.DescriptorFor(n.ID).Name
+				switch name {
+				case "RepairUnit", "RepairUnitNoMove", "SelfRepair":
+					activeUntil = tick + 150
+				case "HelpBuild", "MobileBuild", "BuildingBuild", "Reclaim", "Resurrect", "VTOL_Reclaim":
+					activeUntil = tick + 300
+				case "Capture", "ReclaimUnit", "VTOL_ReclaimUnit":
+					activeUntil = tick + 900
+				case "VTOL_HelpBuild", "VTOL_RepairUnit":
+					// These air rows spray but have no nanolathe-active stamp
+					// [04 R-ORD-01 §7].
+				default:
+					return false
+				}
+				x, y, z := source.X(), source.Y(), source.Z()
+				targetX, targetY, targetZ := target.X, target.Y, target.Z
+				if name == "Capture" || name == "ReclaimUnit" || name == "VTOL_ReclaimUnit" {
+					x, y, z = target.X, target.Y, target.Z
+					targetX, targetY, targetZ = source.X(), source.Y(), source.Z()
+				}
+				e := frame.Event{
+					Tick: tick, Source: builder.Handle, Target: target.Handle,
+					X: x, Y: y, Z: z,
+					TargetX: targetX, TargetY: targetY, TargetZ: targetZ,
+					EffectID: 6, Mode: 1, Team: builder.Owner,
+					Producer: frame.ProducerBeam, PaletteRow: 6,
+					NanolatheGeometryKnown: true, NanolatheActiveUntil: activeUntil,
+				}
+				if !s.publication.events.EmitNanolathe(e) {
+					return false
+				}
+				if s.strips != nil {
+					s.appendStripNanoEmitter(
+						[3]numeric.Fixed{e.X, e.Y, e.Z},
+						[3]numeric.Fixed{e.TargetX, e.TargetY, e.TargetZ})
+				}
+				return true
+			},
+			NanolatheFeature: func(builder *units.Unit, n *orders.Node, feature orders.FeatureView, tick uint32) bool {
+				if s.publication == nil || s.publication.events == nil || s.Build == nil || builder == nil || n == nil {
+					return false
+				}
+				_, source, ok := s.Build.QueryNanoPiece(builder)
+				if !ok {
+					return false
+				}
+				footX, footZ := feature.FootprintX, feature.FootprintZ
+				if footX <= 0 {
+					footX = 1
+				}
+				if footZ <= 0 {
+					footZ = 1
+				}
+				minX := world.CellToWorld(feature.CX)
+				minZ := world.CellToWorld(feature.CZ)
+				maxX := minX.Add(numeric.Fixed(int64(footX) * 1048576))
+				maxZ := minZ.Add(numeric.Fixed(int64(footZ) * 1048576))
+				minY, ok := worldQueries.TerrainHeight(minX, minZ)
+				if !ok {
+					return false
+				}
+				maxY := minY.Add(numeric.Fixed(int64(feature.Height) * 65536))
+				e := frame.Event{
+					Tick: tick, Source: builder.Handle, Target: 0,
+					X: minX, Y: minY, Z: minZ,
+					TargetX: source.X(), TargetY: source.Y(), TargetZ: source.Z(),
+					EffectID: 6, Mode: 0, Team: builder.Owner,
+					Producer: frame.ProducerBeam, PaletteRow: 6,
+					NanolatheActiveUntil:    tick + 300,
+					NanolatheTargetBoxKnown: true,
+					NanolatheTargetMin:      [3]numeric.Fixed{minX, minY, minZ},
+					NanolatheTargetMax:      [3]numeric.Fixed{maxX, maxY, maxZ},
+				}
+				name := orders.DescriptorFor(n.ID).Name
+				if name == "Reclaim" && n.Param1 > 15 || name == "VTOL_Reclaim" && n.Param1 > 30 {
+					e.Mode = uint8(frame.NanolatheBuild)
+					e.NanolatheGeometryKnown = true
+					segments := frame.BuildNanolatheSegments(e, tick)
+					if len(segments) != 2 {
+						return false
+					}
+					if s.publication.events.EmitNanolatheSegments(e, tick) != len(segments) {
+						return false
+					}
+					for range segments {
+						s.appendStripNanoEmitterBox(
+							[3]numeric.Fixed{source.X(), source.Y(), source.Z()},
+							[3]numeric.Fixed{minX, minY, minZ},
+							[3]numeric.Fixed{maxX, maxY, maxZ})
+					}
+					return true
+				}
+				if name == "Resurrect" {
+					e.Mode = uint8(frame.NanolatheReclaim)
+					e.NanolatheGeometryKnown = true
+					if !s.publication.events.EmitNanolathe(e) {
+						return false
+					}
+					s.appendStripNanoEmitterBox(
+						[3]numeric.Fixed{source.X(), source.Y(), source.Z()},
+						[3]numeric.Fixed{minX, minY, minZ},
+						[3]numeric.Fixed{maxX, maxY, maxZ})
+					return true
+				}
+				return s.publication.events.EmitNanolathe(e)
+			},
+		},
 	}
 }
 
@@ -625,6 +859,8 @@ func (s *Session) bindOrderQueue(u *units.Unit) {
 	if s.Combat == nil {
 		s.Combat = &combat.Service{}
 	}
+	s.Build.Combat = s.Combat
+	s.Build.World = s.Units
 	if s.Build.OrderBinding == nil {
 		s.Build.OrderBinding = s.newOrderBinding()
 	}
@@ -811,6 +1047,8 @@ func createAndBindServices(s *Session) error {
 	if s.Combat == nil {
 		s.Combat = &combat.Service{}
 	}
+	s.Build.Combat = s.Combat
+	s.Build.World = s.Units
 	// Every newly-created queue receives this one session-owned binding. It
 	// carries the economy admission service, target lookup, hostility predicate,
 	// deterministic world traversal, and simulation RNG together so producer

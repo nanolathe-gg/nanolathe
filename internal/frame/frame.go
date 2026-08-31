@@ -221,46 +221,49 @@ const (
 // [03 §1].  Effect lifecycle remains presentation-owned, but the renderer
 // consumes the tick-end result through this immutable value.
 type EffectView struct {
-	PresentationID         uint64
-	ID                     uint32
-	EventSeq               uint64
-	Source                 pool.Handle
-	Target                 pool.Handle
-	EffectID               uint32
-	Piece                  int32
-	SFXType                int32
-	SFXClass               SFXClass
-	Mode                   uint8
-	StartTick              uint32
-	ExpiryTick             uint32
-	Lifetime               int32
-	X, Y, Z                numeric.Fixed
-	TargetX                numeric.Fixed
-	TargetY                numeric.Fixed
-	TargetZ                numeric.Fixed
-	VX, VY, VZ             numeric.Fixed
-	Gravity                numeric.Fixed
-	Kind                   string
-	HasModel               bool
-	SeqA                   int32
-	SeqB                   int32
-	Graphic                string
-	PaletteRow             int16
-	Light                  bool
-	Shake                  int32
-	AssetID                string
-	SequenceID             string
-	DurationsA             []int32
-	DurationsB             []int32
-	LoopA                  bool
-	LoopB                  bool
-	FlashRadius            int32
-	FlashLevel             int32
-	HasFlashDisc           bool
-	Strip                  int8
-	NanolatheIndex         int32
-	NanolatheCount         int32
-	NanolatheGeometryKnown bool
+	PresentationID          uint64
+	ID                      uint32
+	EventSeq                uint64
+	Source                  pool.Handle
+	Target                  pool.Handle
+	EffectID                uint32
+	Piece                   int32
+	SFXType                 int32
+	SFXClass                SFXClass
+	Mode                    uint8
+	StartTick               uint32
+	ExpiryTick              uint32
+	Lifetime                int32
+	X, Y, Z                 numeric.Fixed
+	TargetX                 numeric.Fixed
+	TargetY                 numeric.Fixed
+	TargetZ                 numeric.Fixed
+	VX, VY, VZ              numeric.Fixed
+	Gravity                 numeric.Fixed
+	Kind                    string
+	HasModel                bool
+	SeqA                    int32
+	SeqB                    int32
+	Graphic                 string
+	PaletteRow              int16
+	Light                   bool
+	Shake                   int32
+	AssetID                 string
+	SequenceID              string
+	DurationsA              []int32
+	DurationsB              []int32
+	LoopA                   bool
+	LoopB                   bool
+	FlashRadius             int32
+	FlashLevel              int32
+	HasFlashDisc            bool
+	Strip                   int8
+	NanolatheIndex          int32
+	NanolatheCount          int32
+	NanolatheGeometryKnown  bool
+	NanolatheTargetBoxKnown bool
+	NanolatheTargetMin      [3]numeric.Fixed
+	NanolatheTargetMax      [3]numeric.Fixed
 }
 
 // RoutePoint is one fixed-point point in an order's committed route.
@@ -530,10 +533,11 @@ const (
 	EventKindShake
 	EventKindCorpse
 	EventKindAudio
+	EventKindStatus
 )
 
 func (k EventKind) String() string {
-	names := [...]string{"invalid", "cob_sfx", "nanolathe", "muzzle_flash", "smoke_start", "smoke_end", "projectile_trail", "impact", "water_impact", "explosion", "lht_flash", "shake", "corpse", "audio"}
+	names := [...]string{"invalid", "cob_sfx", "nanolathe", "muzzle_flash", "smoke_start", "smoke_end", "projectile_trail", "impact", "water_impact", "explosion", "lht_flash", "shake", "corpse", "audio", "status"}
 	if int(k) >= len(names) {
 		return names[0]
 	}
@@ -575,20 +579,42 @@ type EventView struct {
 	NanolatheIndex            int32
 	NanolatheCount            int32
 	NanolatheGeometryKnown    bool
-	Sound                     string
-	AudioPositional           bool
-	AudioWater                bool
-	AudioAudible              bool
+	// NanolatheActiveUntil is the committed unit-caption/work highlight stamp;
+	// zero means the producer supplied no stamp [04 R-ORD-01 §1].
+	NanolatheActiveUntil    uint32
+	NanolatheTargetBoxKnown bool
+	NanolatheTargetMin      [3]numeric.Fixed
+	NanolatheTargetMax      [3]numeric.Fixed
+	Sound                   string
+	AudioPositional         bool
+	AudioWater              bool
+	AudioAudible            bool
+	// Status events are semantic unit-caption requests. They are consumed by
+	// the presentation edge, never by authoritative simulation [03 §8.3][07
+	// R-HUD-03 §14].
+	StatusKind  uint8
+	StatusText  string
+	StatusClass uint8
 }
 
 // ResultScore is one player's committed result statistic.
 type ResultScore struct {
-	Player int
-	Team   int
-	Kills  int
-	Losses int
-	Score  int
-	Kind   string
+	Player           int
+	Team             int
+	Name             string
+	Logo             uint8
+	Kills            int
+	Losses           int
+	EnergyProduced   int
+	MetalProduced    int
+	EnergyConsumed   int
+	MetalConsumed    int
+	EnergyWasted     int
+	MetalWasted      int
+	CommandersKilled int
+	CommandersLost   int
+	Score            int
+	Kind             string
 }
 
 // ResultView is the committed terminal result shown by the frontend.
@@ -604,6 +630,11 @@ type ResultView struct {
 	Countdown  int16
 	Draw       bool
 	Scores     []ResultScore
+	// ColumnMaxima are the seven ENDMSN bar maxima in Kills, Losses,
+	// EProduced, MProduced, EWasted, MWasted, Score order. They are part of
+	// the committed result so presentation never derives denominators from the
+	// live world [08 R-CAMP-01 §7].
+	ColumnMaxima [7]int
 }
 
 // FogView is the committed two-channel fog cache [03 §3.3].
@@ -760,7 +791,7 @@ func (f *Frame) Reset() {
 	f.Radar.Contacts = f.Radar.Contacts[:0]
 	f.Radar = RadarView{Contacts: f.Radar.Contacts}
 	f.Fog = FogView{Ch0: f.Fog.Ch0, Ch1: f.Fog.Ch1}
-	f.Result = ResultView{Winners: f.Result.Winners, Losers: f.Result.Losers, Scores: f.Result.Scores}
+	f.Result = ResultView{Winners: f.Result.Winners, Losers: f.Result.Losers, Scores: f.Result.Scores, ColumnMaxima: f.Result.ColumnMaxima}
 }
 
 func resetOrders(s []OrderView) {

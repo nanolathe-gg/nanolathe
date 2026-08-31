@@ -68,14 +68,20 @@ type Target struct {
 // Kept local to avoid the units→combat→economy→units import cycle.
 // Fields mirror the retail weapon-slot semantics [06 §1.2] [P0-10].
 type Slot struct {
-	Weapon         *content.WeaponDef // resolved weapon definition [06 §1.2] [P0-10]
-	Reload         int32              // signed reload countdown [06 §1.2] [P0-10]
-	Flags          uint8              // 0x02 armed, 0x01 Aim-latch, 0x10 tracking [06 §1.2] [P0-10]
-	DesiredYaw     uint16             // commanded yaw [06 §1.2] [P0-10]
-	DesiredPitch   uint16             // commanded pitch [06 §1.2] [P0-10]
-	Ammo           int32              // remaining stockpile [06 §1.2] [P0-10]
-	MuzzlePiece    int32              // Query* result retained as the weapon muzzle identity [06 §4.1] C3
-	AimOriginPiece int32              // AimFrom*/second-Query result retained for the later aim-origin consumer [R-CB-01 §4]
+	Weapon *content.WeaponDef // resolved weapon definition [06 §1.2] [P0-10]
+	Reload int32              // signed reload countdown [06 §1.2] [P0-10]
+	Flags  uint8              // 0x02 armed, 0x01 Aim-latch, 0x10 tracking [06 §1.2] [P0-10]
+	// OrderControl is the opaque order-side control byte retained separately
+	// from Flags. Its inhibit latch is written by release/inhibit operations;
+	// the byte's remaining assignment and callback semantics are not yet
+	// represented. TODO(question): add this field to the parity/save codecs when
+	// their weapon-slot state contract is traced [04 R-ORD-01 §1].
+	OrderControl   uint8
+	DesiredYaw     uint16 // commanded yaw [06 §1.2] [P0-10]
+	DesiredPitch   uint16 // commanded pitch [06 §1.2] [P0-10]
+	Ammo           int32  // remaining stockpile [06 §1.2] [P0-10]
+	MuzzlePiece    int32  // Query* result retained as the weapon muzzle identity [06 §4.1] C3
+	AimOriginPiece int32  // AimFrom*/second-Query result retained for the later aim-origin consumer [R-CB-01 §4]
 
 	// Aim is the asynchronous Aim handshake [GAP T15] C16 [06 §3.3] [04 §5.3].
 	// IssueBit mirrors Flags&0x01 latch; Ready granted only on nonzero return [GAP T15] C16.
@@ -126,6 +132,16 @@ func (s *Slot) CanFire() bool {
 // NumSlots is the retail slot count [06 §1.2].
 const NumSlots = 3 // [06 §1.2] primary, secondary, tertiary
 
+// OrderControlInhibit is the order-side slot inhibit latch. It is separate
+// from Flags' autonomous-tracking bit, and is read by the normal combat slot
+// pipeline before acquisition or firing [04 R-ORD-01 §1][06 §3.3].
+const OrderControlInhibit uint8 = 1 << 4
+
+// IsOrderInhibited reports whether an order has inhibited this weapon slot.
+func (s *Slot) IsOrderInhibited() bool {
+	return s != nil && s.OrderControl&OrderControlInhibit != 0
+}
+
 // MoveState is the mover status shared with movement.System [04 §8.1][04 §9.1][GAP T15].
 // The mover reads this field after the unit-phase preserves it for the movement
 // window; integration via movement.System.Tick runs in phase 5 [01 §4.4] [GAP T15].
@@ -135,8 +151,8 @@ const NumSlots = 3 // [06 §1.2] primary, secondary, tertiary
 type MoveState struct {
 	Mode    uint8         // low two bits of the flags-word mode mirror: 1 grounded/surface (every structure too), 2 airborne, 0 attached/parked, 3 save-installed [04 R-MOV-01 §8]; seeded to 1 at creation. The older "0 none, 1 stopped/parked, 2 active locomotion" reading is retracted [03 R-RAST-01 §7 correction].
 	Heading uint16        // 0..65535 per circle [04 §5.1] C25 (I2) [03 §2.4] C24 bank→Z heading→Y pitch→X
-	Pitch   uint16        // pitch per [03 §2.4] C24 [03 §5.2] (flight lean pitch)
-	Bank    uint16        // bank per [03 §2.4] C24 [03 §2.4] C21
+	Pitch   uint16        // authoritative ground-conform or flight-lean pitch [03 §2.4] C24 [04 R-MOV-01 §5a][04 R-AIR-01 §2]
+	Bank    uint16        // authoritative ground-conform or flight-lean bank [03 §2.4] C24 [04 R-MOV-01 §5a][04 R-AIR-01 §2]
 	Speed   numeric.Fixed // current scalar speed, 16.16 [04 §8.1]
 	// Pending callbacks for movement window [GAP T15] C18.
 	PendingHeading uint16 // desired heading queued before movement window

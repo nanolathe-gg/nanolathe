@@ -192,6 +192,9 @@ func (s *Session) finalizePhase2Death(h pool.Handle, tick uint32) {
 	if result := s.Units.FinalizeDeath(h, tick); !result.Freed {
 		return
 	}
+	// Commander rule transitions run only after FinalizeDeath has filed the
+	// owner's live-count decrement and released the slot [08 R-SKIR-01 §3].
+	s.processPendingCommanderDeaths(tick)
 	// The slot finalizer is the sole gameplay teardown point for a running
 	// battle: remove occupancy/path state only after the unit has been freed.
 	// [01 §4.4][04 §2.4]
@@ -458,9 +461,9 @@ func (s *Session) stepResultPhase(tick uint32) {
 	// mission-type mapping. Keep it out of all current mission types until the
 	// session dispatcher and its authoritative gate are identified [08
 	// "Evaluation"].
-	// Configured lobby skirmish alliance-aware result. EvaluateResult selects
-	// commander-only or all-live-unit survival from the lobby rule [08
-	// "Skirmish configuration"].
+	// Configured lobby skirmish result. Commander death transitions are filed
+	// at the post-accounting boundary and the evaluator owns the terminal latch
+	// [08 R-SKIR-01 §3][08 R-TRIG-01 §6].
 	if s.Mission != nil && s.Mission.Type == mission.TypeSkirmish && s.Skirmish.NumPlayers > 0 {
 		s.EvaluateResult(tick)
 	}
@@ -744,7 +747,7 @@ func (s *Session) pollMissionTriggers(tick uint32) {
 			} else if !win && len(s.Mission.Defeat) > 0 {
 				reason = "defeat_trigger"
 			}
-			s.result = Result{Ended: true, Draw: false, Kind: kind, WinnerTeam: winners[0], Winners: winners, Losers: losers, Reason: reason, Tick: tick, ArmedTick: tick, Countdown: s.Latch.Countdown, Scores: scores}
+			s.result = Result{Ended: true, Draw: false, Kind: kind, WinnerTeam: winners[0], Winners: winners, Losers: losers, Reason: reason, Tick: tick, ArmedTick: tick, Countdown: s.Latch.Countdown, Scores: scores, ColumnMaxima: resultColumnMaxima(scores)}
 		}
 		_ = s.TransitionTo(StatePostBattle)
 	}

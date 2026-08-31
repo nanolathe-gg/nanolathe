@@ -287,6 +287,21 @@ func FactoryPlacementFromQueryBuildInfo(x, y, z numeric.Fixed, extent FootprintE
 // requirement (bit7) [04 §6.2][05 "Geothermal requirement"].
 type YardCell uint8
 
+// Selects reports whether this yard cell owns the ground occupancy word in
+// the requested yard state [04 R-COLL-01 §4]. Open yards select bit 1;
+// closed yards select bit 2. The selector is shared by placement,
+// construction, and movement so a cell is never blocked in only one layer.
+func (y YardCell) Selects(open bool) bool {
+	if open {
+		return y&0x02 != 0
+	}
+	return y&0x04 != 0
+}
+
+// TestsOccupancy reports whether placement must reject a foreign mobile
+// occupant on this yard cell [04 §6.2].
+func (y YardCell) TestsOccupancy() bool { return y&0x06 != 0 }
+
 // ParseYardMap fills a footX*footZ row-major yard buffer from an authored
 // YardMap string, exactly as retail's definition compiler does [04 §6.2] C10.
 //
@@ -307,8 +322,7 @@ type YardCell uint8
 // Forty-six of the 126 stock yard maps disagree with their own footprint, so
 // rejecting a length mismatch — as this parser used to — makes those buildings
 // unplaceable. There is no error case left but a degenerate footprint: an empty
-// string yields an all-`.` buffer rather than reading past the terminator the
-// way retail does.
+// string uses the established all-`o` building default [fmt fbi].
 //
 // Non-building classes carry no yard map at all: retail parses this only when
 // the definition's BMcode is zero [04 §6.2].
@@ -324,9 +338,11 @@ func ParseYardMap(s string, footX, footZ int) ([]YardCell, error) {
 		var b YardCell
 		for {
 			if at >= len(src) {
-				// Only reachable from an empty or wholly unusable string;
-				// retail would run off the end of its buffer here.
-				b = 0x00
+				// A structure without an authored yard map uses the one-cell
+				// `o` default for every packed cell [fmt fbi]. This also keeps
+				// an unusable empty source from inventing an unoccupied building
+				// footprint.
+				b = 0x2f
 				break
 			}
 			v, ok := yardControlByte(src[at])

@@ -61,6 +61,29 @@ func vtolWorkFixture() (*Queue, *units.Unit, *units.Unit) {
 			return nil
 		},
 	}}
+	q.binding.Work = &WorkAdapter{
+		Assist: func(_ *units.Unit, n *Node, _ uint32) bool {
+			if n == nil || q.binding.Lookup(n.Target) == nil {
+				return false
+			}
+			return true
+		},
+		Repair: func(_ *units.Unit, _ *units.Unit, n *Node, _ uint32) bool {
+			t := q.binding.Lookup(n.Target)
+			if t == nil || t.Health >= t.Def.MaxDamage {
+				return false
+			}
+			t.Health++
+			return true
+		},
+	}
+	q.binding.Movement = &MovementGoalAdapter{
+		InstallPoint:     func(PointGoalRequest) bool { return true },
+		InstallAnnulus:   func(AnnulusGoalRequest) bool { return true },
+		InstallRectangle: func(RectangleGoalRequest) bool { return true },
+		InstallAir:       func(AirGoalRequest) bool { return true },
+		Release:          func(*Node) bool { return true },
+	}
 	q.SetBinding(q.binding)
 	BindQueue(builder, q)
 	return q, builder, target

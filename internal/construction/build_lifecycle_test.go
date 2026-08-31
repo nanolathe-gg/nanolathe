@@ -70,7 +70,7 @@ func TestGetBuiltRetryStates(t *testing.T) {
 	product := w.Unit(h)
 	q := orders.QueueForUnit(product)
 	q.Push(orders.Lookup("GetBuilt"), orders.Node{Phase: uint8(State0), Deadline: -1})
-	svc := NewService(nil, cat, w, nil)
+	svc := NewService(nil, cat, w, &economy.Service{})
 	product.Remaining = 1
 	svc.handleGetBuiltOrder(product, q.Primary()[0], 10)
 	gb := orders.QueueForUnit(product).Primary()[0]
@@ -436,7 +436,7 @@ func TestAcceptedWorkEmitsNanoAndStallDoesNot(t *testing.T) {
 	product.Remaining, product.MaxHealth = 0.5, 100
 	q := orders.QueueForUnit(factory)
 	q.Push(orders.Lookup("BuildingBuild"), orders.Node{BuildDefKey: prodDef.CanonicalKey, Param2: 1, Phase: uint8(State3), Target: ph})
-	svc := NewService(nil, cat, w, nil)
+	svc := NewService(nil, cat, w, &economy.Service{})
 	svc.ModelForUnit = func(*units.Unit) *model.Model { return trivialModel(1, nil) }
 	collector := frame.NewEventBuffer(frame.Limits{})
 	svc.Presentation = collector

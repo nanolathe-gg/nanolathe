@@ -101,6 +101,62 @@ type DeathContext struct {
 	UnitDef           *content.UnitDef
 }
 
+// DeathCreditInput is the identity snapshot retained by the death packet's
+// accounting boundary. AttackerSide is deliberately a side value rather than
+// a live-unit lookup: retail credits from the stored packet snapshot and does
+// not validate the reconstructed attacker pointer [06 §12.1].
+type DeathCreditInput struct {
+	Cause             Cause
+	VictimOwner       uint8
+	AttackerSide      uint8
+	AttackerPresent   bool
+	VictimCommander   bool
+	RemainingFraction float32
+	// Cause3LossEligible is supplied by the owner/alliance gate. The retail
+	// trace establishes the gate but not the reduction of a non-local alliance
+	// aggregate, so callers must not infer it from side equality [06 §12.1].
+	Cause3LossEligible bool
+}
+
+// DeathCredit is the player-level accounting decision for one finalized unit
+// death. It contains no mutation; the session/economy owner applies the four
+// increments at the event site [06 §12.1][08 R-CAMP-01 §7].
+type DeathCredit struct {
+	VictimLoss            bool
+	AttackerKill          bool
+	VictimCommanderLoss   bool
+	AttackerCommanderKill bool
+}
+
+// ComputeDeathCredit applies the exact cause and identity gates for result
+// statistics. Ordinary weapon (1) and cargo cascade (6) deaths use the full
+// path; self-destruct (3) is loss-only when its alliance gate allows it;
+// reclaim (5) uses the full path only for a non-neutral, non-self attacker.
+// Construction, capture, feature conversion, teardown and water deaths do
+// not credit player statistics [06 §12.1].
+func ComputeDeathCredit(in DeathCreditInput) DeathCredit {
+	full := in.Cause == CauseOrdinary || in.Cause == CauseCargo
+	if in.Cause == CauseReclaim {
+		full = in.AttackerPresent && in.AttackerSide != 10 && in.AttackerSide != in.VictimOwner
+	}
+	loss := full || (in.Cause == CauseSelfDestruct && in.Cause3LossEligible)
+	// Ordinary unit kills use all three packet gates. Commander credit is a
+	// separate full-path branch: its only attacker identity gate is the
+	// non-neutral side test. Consequently a self-killed or incomplete commander
+	// still contributes commander-kill credit when the packet has an attacker
+	// side, while it contributes no ordinary unit kill [06 §12.1].
+	kill := full && in.AttackerPresent && in.AttackerSide != 10 &&
+		in.AttackerSide != in.VictimOwner && in.RemainingFraction == 0
+	commanderLoss := loss && in.VictimCommander
+	commanderKill := full && in.AttackerPresent && in.VictimCommander && in.AttackerSide != 10
+	return DeathCredit{
+		VictimLoss:            loss,
+		AttackerKill:          kill,
+		VictimCommanderLoss:   commanderLoss,
+		AttackerCommanderKill: commanderKill,
+	}
+}
+
 // DeathResolution is the result of the shared death path [06 §12.1] C22-C25.
 type DeathResolution struct {
 	Severity    uint8               // 0 when query bypassed else 1..100 [06 §12.1] C22 C24

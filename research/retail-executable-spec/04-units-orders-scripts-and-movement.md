@@ -2930,30 +2930,40 @@ set only here and read only by this setup.
 **`RepairPatrol`.** Phase 0: with a target, goal = its position; run the
 patrol-chain setup above; advance. Phase 1: satisfied ∩ `0xE0` → *rotate*.
 Point goal at the goal radius 16; deadline 60; gate |= `0xE0`. Then, only
-when the player's energy is at least 20 % of energy storage: enumerate units
-within `sightdistance` of the unit through the repair-candidate filter — the
-gather helper itself draws `sim(n)` three times for the energy-need list and
-three times for the metal-need list, each triple only when that list is
-non-empty (best-scored of three random picks; corrected 2026-08-29 against
-[01 R-DET-01 §6], the earlier text implied the single pick below was the only
-draw) — then pick
-index `RNG(count)`, and when its owner is **not** hostile to mine (diplomacy
-byte nonzero) resolve command code 8 (assist or repair) against it; when
-resolvable and the issue helper accepts it → *rotate*, else *wait*. Then when
-both energy and metal are at least 20 % of their storages → hold. Otherwise
-scan features within `sightdistance` for the nearest energy-bearing and the
-nearest metal-bearing reclaimable feature (both with their values); none →
-hold. In order: a metal feature exists and metal < 20 % of storage → spawn
-`Reclaim` on it; else if no energy feature or energy ≥ 20 %: a metal feature
-whose value fits under storage → spawn `Reclaim` on it, no metal feature →
-hold, otherwise the energy feature's value does not fit → hold, else spawn
-`Reclaim` on the energy feature; else (energy feature and energy < 20 %) spawn
-`Reclaim` on the energy feature. Every spawn releases this record's payload,
-inserts the reclaim (goal = the feature position) at the head, clears this
-record's gate, and returns *wait*. Other phase: cancel-all. The player
-resource fields are identified by the pairing of the energy gate with the
-repair scan and of the metal gate with the metal-feature reclaim
-(**Supported inference** for the labels; the arithmetic is Established).
+when the player's energy is at least 20 % of energy storage: gather one
+ordered vector of eligible units within `sightdistance` through the shared
+repair-candidate filter and make one bounded `RNG(count)` pick. The filter
+uses the scanning player's outbound diplomacy row toward the candidate owner,
+grounded mover mode, damaged-or-unfinished state, and the last-damage reclaim
+exclusion. Ground repair repeats that same diplomacy check after the pick;
+when it remains nonhostile, resolve command code 8 (assist or repair) against
+the target; when resolvable and the issue helper accepts it → *rotate*, else
+*wait*. Then when both energy and metal are at least 20 % of their storages →
+hold. Otherwise feature pairing samples a square lattice at 48-world-unit
+steps; the helper argument is the diameter (`sightdistance`, hence ±half the
+value). Each sampled point resolves independently and appends its sample
+coordinates and authored resource values to the energy and/or metal list when
+both `reclaimable` and `autoreclaimable` are set. For each nonempty list,
+three bounded picks with replacement retain the greatest value using strict
+`>` (the first sampled tie wins), energy list before metal list. There is no
+nearest-feature score or deduplication. None → hold. In order: a metal feature
+exists and metal < 20 % of storage → spawn `Reclaim` on it; else if no energy
+feature or energy ≥ 20 %: a metal feature whose value fits under storage →
+spawn `Reclaim` on it, no metal feature → hold, otherwise the energy feature's
+value does not fit → hold, else spawn `Reclaim` on the energy feature; else
+(energy feature and energy < 20 %) spawn `Reclaim` on the energy feature. Every
+spawn releases this record's payload, inserts the reclaim (goal = the sampled
+feature position) at the head, clears this record's gate, and returns *wait*.
+Other phase: cancel-all. The player resource fields are identified by the
+pairing of the energy gate with the repair scan and of the metal gate with the
+metal-feature reclaim (**Supported inference** for the labels; the arithmetic
+is Established).
+
+**Correction (2026-08-31, [R-ORD-01 §4]).** The previous text assigned two
+three-pick tournaments to the repair gather and retained nearest feature
+instances. The corrected contract separates one unit-vector pick from the
+later feature helper: tournaments belong only to qualifying 48-unit lattice
+samples, in traversal order, with duplicates retained.
 
 ### Closed — the work handlers [R-ORD-01 §5] (2026-08-29)
 
@@ -3330,22 +3340,34 @@ position; the patrol-chain setup of [R-ORD-01 §4]; preamble with
    spawn `VTOL_Landing` at that pad at the head, gate = 0, *restart*. This
    is the same seek-a-pad rule [R-AIR-01 §7] gives `VTOL_SeekAttack`.
 4. If energy ≥ 20 % of energy storage: enumerate units within
-   `sightdistance` through the repair-candidate filter; when the list is
-   non-empty draw `RNG(count)` and take that unit `u`: admission passes and
-   `u` is complete → the issue helper for command code 8 accepts → *rotate*,
-   refuses → *wait*; admission passes and `u` is unfinished → release the
-   payload, spawn `VTOL_HelpBuild` on `u` at the head, gate = 0, *wait*.
-   (There is no diplomacy test here — the ground twin's "owner not hostile"
-   gate is absent; the admission test is the only filter.)
-5. Feature pairing over a square of ±120 world units around the unit sampled
-   every 48 world units (a **fixed** radius, where the ground twin passes
-   `sightdistance`), keeping reclaimable features with nonzero energy and,
-   separately, nonzero metal; none → hold. Then the ground twin's decision
-   tree verbatim ([R-ORD-01 §4]) with one substitution: every spawn is
-   `VTOL_Reclaim` on the feature, inserted at the head with gate = 0, *wait*.
+   `sightdistance` through the shared repair-candidate filter; when the list is
+   non-empty draw `RNG(count)` and take that unit `u`: the filter includes the
+   scanner-owner → candidate-owner nonhostile diplomacy gate. The VTOL path
+   does not repeat that diplomacy read. A complete `u` reaches the issue helper
+   for command code 8: acceptance → *rotate*, refusal → *wait*. An unfinished
+   `u` releases the payload, explicitly spawns `VTOL_HelpBuild` on `u` at the
+   head, gate = 0, and returns *wait*.
+5. Feature pairing uses a diameter of 240 world units (±120), samples every
+   48 world units, and resolves each lattice point independently. Qualifying
+   entries require both `reclaimable` and `autoreclaimable`; nonzero authored
+   energy and metal values put an entry in the corresponding list, with
+   duplicates retained in sample order. Each nonempty list then takes three
+   bounded picks with replacement and keeps the greatest authored value under
+   strict `>` (energy before metal). There is no nearest-feature selection.
+   None → hold. Then the ground twin's decision tree verbatim
+   ([R-ORD-01 §4]) with one substitution: every spawn is `VTOL_Reclaim` on the
+   sampled feature, inserted at the head with gate = 0, *wait*.
 
-Other phase: cancel-all. Two simulation draws at most per visit (the pad
-pick, then the candidate pick), each only when its list is non-empty.
+Other phase: cancel-all. Draws occur only at reached sites: the low-health pad
+pick, the unit-candidate pick, and the conditional energy and metal feature
+tournaments (three calls per nonempty list).
+
+**Correction (2026-08-31, [R-ORD-01 §7]).** The previous text omitted the
+shared diplomacy gate, described feature pairing as a fixed-radius nearest
+scan, and treated the unfinished branch as a generic repair wait. The verified
+contract has one shared scanner-to-candidate diplomacy test, no VTOL repeat,
+the 240-diameter lattice helper with two strict tournaments, and the explicit
+`VTOL_HelpBuild`/wait versus complete/accepted/rotate split.
 
 **The repair admission test** (shared by `VTOL_RepairUnit` phase 0 and the
 patrol scan): the target exists; my definition carries the `canreclamate`
@@ -3671,8 +3693,8 @@ phase: cancel-all.
 
 * **The repair-candidate filter** (the visitor behind `RepairPatrol`'s and
   `VTOL_RepairPatrol`'s candidate gather, [R-ORD-01 §4] and [§7]) admits a
-  unit `u` when: `u` is not the scanning unit; `u`'s owner's diplomacy byte
-  toward my side is nonzero; `u`'s mover mode is grounded (`1`); `u`'s
+  unit `u` when: `u` is not the scanning unit; the scanning player's outbound
+  diplomacy byte toward `u`'s owner is nonzero; `u`'s mover mode is grounded (`1`); `u`'s
   16-bit health is below its `maxdamage` (unsigned) **or** `u` is
   unfinished; and **not** (`u`'s last-damage side byte equals my side and
   its last-damage cause byte is 5) — a unit my side is currently reclaiming
@@ -3697,6 +3719,12 @@ phase: cancel-all.
 * **The velocity marker's heading supply** ([R-AIR-01 §8]) writes
   `bearing(unitPos → markerGoal)` and returns 1 unconditionally; its arrival
   and goal update are as stated there.
+
+**Correction (2026-08-31, [R-ORD-02 §4]).** The previous visitor sentence
+reversed the diplomacy pair. It said to read the candidate owner's row toward
+the scanner; the established directional contract reads the scanner owner's
+row indexed by the candidate owner. Both repair visitors use that direction;
+only ground repeats it after the pick.
 
 ### Corrections and closures recorded by this unit [R-ORD-02 §5] (2026-08-29)
 

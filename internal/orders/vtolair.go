@@ -54,28 +54,11 @@ const pendNoRoute uint32 = 0x40
 // drive, or a unit that belongs to a different world than the runner's.
 type AirLegRunner func(u *units.Unit, n *Node, satisfied uint32, tick uint32) (Code, bool)
 
-// airLegRunner is the currently bound runner.
-//
-// TODO(T25): a single binding is not the durable shape. pump.go already names
-// it: "the owning subsystem registers its handler on the queue
-// (Queue.SetGetBuiltHandler), so the pump stays the sole dispatcher and this
-// list disappears" — a per-queue field, which is a pump.go change no single
-// unit in PLAN 18 owns. Until then two simultaneously live movement systems in
-// one process share this slot; the ownership test inside the runner keeps that
-// safe (a runner that does not own the unit declines) at the cost of the
-// declining system's aircraft taking the one-tick hold below.
-var airLegRunner AirLegRunner
-
-// SetAirLegRunner binds the air executor legs. It is called by
-// internal/movement; passing nil unbinds.
-func SetAirLegRunner(run AirLegRunner) { airLegRunner = run }
-
 // airHandOff hands a record whose entry sequence did not end the order to the
 // air executor legs, and returns the leg's own result code.
 //
-// TODO(T25): with no runner bound — the movement system has not stepped this
-// unit yet, or does not own it — there is no leg to run and no established
-// behavior to reproduce. Placeholder: the deadline setter of [04 R-ORD-01 §1]
+// With no runner bound — the movement system has not stepped this unit yet, or
+// does not own it — the deadline setter of [04 R-ORD-01 §1]
 // with `n = 1` (the one-tick hold `AirToAir` phase 0 and `VTOL_Standby` phase 0
 // both arm) plus *hold*, so the record keeps its place at the head, is
 // re-dispatched on the next tick, and never parks on a gate nothing can raise.
@@ -83,9 +66,11 @@ func SetAirLegRunner(run AirLegRunner) { airLegRunner = run }
 // still owns; returning *hold* with no gate would spin the pump, because code 2
 // restarts the walk from the head.
 func airHandOff(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
-	if run := airLegRunner; run != nil {
-		if code, handled := run(u, n, satisfied, tick); handled {
-			return code
+	if q := QueueForUnit(u); q != nil && q.Binding() != nil && q.Binding().Movement != nil {
+		if run := q.Binding().Movement.RunAir; run != nil {
+			if code, handled := run(u, n, satisfied, tick); handled {
+				return code
+			}
 		}
 	}
 	n.Deadline = int32(tick + 1)
@@ -215,6 +200,19 @@ func airAttackExecutorHandler(u *units.Unit, n *Node, satisfied uint32, tick uin
 		return code
 	}
 	return airHandOff(u, n, satisfied, tick)
+}
+
+// airInterruptMask is the shared-entry pending mask [04 R-AIR-01 §8].
+// TODO(question): §8 names 0x1000A for AirStrike/AirToGround and 0x10008 for
+// AirToGroundHover, but does not assign AirToAir. Keep the existing narrower
+// fallback until a direct trace settles whether AirToAir includes bit 0x2.
+func airInterruptMask(id ID) uint32 {
+	switch DescriptorFor(id).Name {
+	case "AirStrike", "AirToGround":
+		return 0x1000A
+	default:
+		return pendTargetGone
+	}
 }
 
 // ---------------------------------------------------------------------------

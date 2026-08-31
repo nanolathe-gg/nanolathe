@@ -20,42 +20,16 @@
 //     re-arm 9, rotate 6, hold 2 or 4, advance 1, restart 0. Each return below
 //     names which and why.
 //
-// Four capabilities the rows use do not exist in this build. They are recorded
-// once here rather than at each of their forty-odd call sites:
-//
-// TODO(T25): the status emitter of [04 R-ORD-01 §1] (kind, optional text, the
-// local-player/bit-28/bit-14 guard) has no counterpart. Placeholder: a caption
-// carrying text is recorded on the queue's diagnostic sink, verbatim, so a
-// failing order fails visibly (PLAN 18 gate 10); a caption with no text (kinds
-// 5, 11, 16) is dropped, since the kind alone reaches presentation and there is
-// no presentation to reach. The caption-clear helper's one-shot mask bit has no
-// record field, so "caption clear" is the text emission alone.
-//
-// TODO(T25): the nanolathe spray of [04 R-ORD-01 §1] and its per-unit
-// nanolathe-active stamp (tick + 150 / + 300 / + 900) are presentation state
-// [03 §5.5] with no field on units.Unit and no emitter reachable from this
-// package. Placeholder: neither is written. Nothing authoritative reads them
-// [05 R-WORK-01 §8]: "nothing in the emission path is authoritative".
-//
-// TODO(T25): the four goal installers (point, annulus, rectangle, release) of
-// [04 R-ORD-01 §1] do not exist, and internal/movement binds an arrival handle
-// only for the move-family descriptor names, so nothing raises the movement
-// outcome bits 0x20/0x40 into a work record. Placeholder: installWorkGoal below
-// writes the record's goal triple and reproduces the one part of the installers
-// that is record-local and observable — the release of the previous payload and
-// the clearing of pending bits 0x20..0x200 [04 R-ORD-01 §0]. The rows' armed
-// movement gates are still armed exactly as written, so a work record whose row
-// waits on arrival waits until that seam exists; the arms that also carry a
-// deadline (`RepairUnit` phase 1) keep moving on their own.
+// Movement goal installation is routed through the session-owned binding. The
+// Standalone order fixtures must provide the same composed movement service as
+// production queues; the movement payload adapter retains exact node identity
+// [04 R-ORD-01 §1][P0-00 B].
 //
 // TODO(T25): "refresh the builder interface" is a presentation call [07]; this
 // package cannot make one and does not.
 package orders
 
 import (
-	"fmt"
-
-	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/features"
@@ -90,25 +64,57 @@ const (
 	statusCapture  uint8 = 16 // `capture`, no default text
 )
 
-// workStatus is the status emitter placeholder described in the file header.
-// A kind with no text emits nothing here; a kind with text records it verbatim
-// (including retail's trailing periods and its misspelling) so the failure is
-// visible [04 R-ORD-01 §1].
+// workStatus sends the semantic status request to the session-owned
+// presentation adapter. Ordinary command feedback is not a diagnostic: the
+// committed event is later arbitrated by the caption/audio queue and appended
+// to the shared message-line ring [04 R-ORD-01 §1][07 R-HUD-03 §14].
 func workStatus(u *units.Unit, kind uint8, text string) {
-	if u == nil || text == "" {
+	if u == nil {
 		return
 	}
 	if q := QueueForUnit(u); q != nil {
-		q.recordDiagnostic(fmt.Sprintf("orders: status %d %q", kind, text))
+		if b := q.Binding(); b != nil {
+			if b.Presentation != nil && b.Presentation.Status != nil {
+				_ = b.Presentation.Status(u, kind, text)
+			}
+		}
 	}
 }
 
-// NotifyStatus is the exported form of workStatus, for the two work rows whose
-// bodies live outside this package: the mobile-build row, driven from
-// internal/construction and from the session's walk boundary. It carries the
-// same placeholder contract as workStatus above [04 R-ORD-01 §1].
+// NotifyStatus is the exported form of workStatus, for the mobile-build row
+// driven from internal/construction and the session's walk boundary [04
+// R-ORD-01 §1].
 func NotifyStatus(u *units.Unit, kind uint8, text string) {
 	workStatus(u, kind, text)
+}
+
+// emitNanolathe asks the committed presentation adapter to publish one
+// accepted work-step emitter. Geometry remains owned by the concrete session
+// adapter; this package supplies only the acting unit, order identity and
+// tick [03 §5.5][04 R-ORD-01 §1].
+func emitNanolathe(u *units.Unit, n *Node, tick uint32) {
+	if u == nil || n == nil {
+		return
+	}
+	if q := QueueForUnit(u); q != nil {
+		if b := q.Binding(); b != nil && b.Presentation != nil && b.Presentation.Nanolathe != nil {
+			_ = b.Presentation.Nanolathe(u, n, tick)
+		}
+	}
+}
+
+// emitFeatureNanolathe publishes a feature-box work step only after the
+// authoritative countdown has accepted it. The session adapter owns the
+// six-word box and presentation event admission [03 §5.5][05 R-WORK-01 §8].
+func emitFeatureNanolathe(u *units.Unit, n *Node, feature FeatureView, tick uint32) {
+	if u == nil || n == nil {
+		return
+	}
+	if q := QueueForUnit(u); q != nil {
+		if b := q.Binding(); b != nil && b.Presentation != nil && b.Presentation.NanolatheFeature != nil {
+			_ = b.Presentation.NanolatheFeature(u, n, feature, tick)
+		}
+	}
 }
 
 // hasMover reports whether the unit owns a mover reference — the "mover
@@ -185,21 +191,80 @@ func inBuildRangeOf(builder, target *units.Unit) bool {
 	return inBuildRange(builder, target.X, target.Z, target.Def.FootprintX, target.Def.FootprintZ)
 }
 
-// installWorkGoal is the rectangle and annulus goals these rows install. The
-// four installers of [04 R-ORD-01 §1] differ only in the shape of the payload
-// they publish — a point with an arrival radius, an annulus with two radii, a
-// rectangle from a footprint cell origin and size — and share every effect the
-// record can observe: release the previous payload, skip the install entirely
-// for an owner whose definition has `canfly`, and clear pending bits
-// 0x20..0x200 last so the record cannot see a stale outcome. This build carries
-// no payload at all (see the file header), so all four collapse onto that
-// shared half, which combat.go's installPointGoal already implements; the
-// rectangle's origin and size and the annulus's two radii have nowhere to go.
-func installWorkGoal(u *units.Unit, n *Node, x, y, z numeric.Fixed) {
+// installWorkGoal selects the researched payload shape for each work row. The
+// session-owned movement adapter is required for production work records.
+func installWorkGoal(u *units.Unit, n *Node, x, y, z numeric.Fixed) bool {
+	return installWorkGoalWithRadius(u, n, x, y, z, 0)
+}
+
+func installWorkGoalWithRadius(u *units.Unit, n *Node, x, y, z numeric.Fixed, airRadius int32) bool {
 	if n == nil {
-		return
+		return false
 	}
-	installPointGoal(u, n, x, y, z, 0)
+	if q := QueueOfUnit(u); q != nil {
+		if b := q.Binding(); b != nil && b.Movement != nil {
+			if u != nil && u.Def != nil && u.Def.CanFly {
+				if b.Movement.InstallAir != nil {
+					// Work rows install a point marker at the copied target
+					// position. Target is retained as a separate request field for
+					// follow markers, but these rows do not use that family.
+					return b.Movement.InstallAir(AirGoalRequest{Owner: n.Owner, Node: n, X: x, Y: y, Z: z, Radius: airRadius})
+				}
+			} else {
+				name := DescriptorFor(n.ID).Name
+				switch name {
+				case "HelpBuild":
+					half := int32(0)
+					if target := targetOf(u, n); target != nil && target.Def != nil {
+						half = assistApproachHalf(target.Def.FootprintX, target.Def.FootprintZ)
+					} else if u.Def != nil {
+						half = assistApproachHalf(u.Def.FootprintX, u.Def.FootprintZ)
+					}
+					if b.Movement.InstallAnnulus != nil {
+						return b.Movement.InstallAnnulus(AnnulusGoalRequest{Owner: n.Owner, Node: n, X: x, Y: y, Z: z, OuterRadius: u.Def.BuildDistance + half, InnerRadius: half})
+					}
+				case "RepairUnit":
+					if target := targetOf(u, n); target != nil && target.Def != nil && b.Movement.InstallRectangle != nil {
+						cellX := world.WorldToCell(target.X) - target.Def.FootprintX/2
+						cellZ := world.WorldToCell(target.Z) - target.Def.FootprintZ/2
+						return b.Movement.InstallRectangle(RectangleGoalRequest{Owner: n.Owner, Node: n, CellX: cellX, CellZ: cellZ, Width: target.Def.FootprintX, Depth: target.Def.FootprintZ})
+					}
+				}
+				if b.Movement.InstallPoint != nil {
+					return b.Movement.InstallPoint(PointGoalRequest{Owner: n.Owner, Node: n, X: x, Y: y, Z: z})
+				}
+			}
+		}
+	}
+	return false
+}
+
+func boundAssist(q *Queue, builder *units.Unit, n *Node, tick uint32) (bool, bool) {
+	if q == nil || n == nil {
+		return false, false
+	}
+	if b := q.Binding(); b != nil && b.Work != nil && b.Work.Assist != nil {
+		ok := b.Work.Assist(builder, n, tick)
+		if ok {
+			emitNanolathe(builder, n, tick)
+		}
+		return ok, true
+	}
+	return false, false
+}
+
+func boundRepair(q *Queue, builder, patient *units.Unit, n *Node, tick uint32) (bool, bool) {
+	if q == nil || n == nil {
+		return false, false
+	}
+	if b := q.Binding(); b != nil && b.Work != nil && b.Work.Repair != nil {
+		ok := b.Work.Repair(builder, patient, n, tick)
+		if ok {
+			emitNanolathe(builder, n, tick)
+		}
+		return ok, true
+	}
+	return false, false
 }
 
 // deadlineHold is the rows' "deadline n; hold": store current tick + n, OR gate
@@ -254,7 +319,8 @@ func inBuildStanceWait(u *units.Unit, n *Node, extra uint32, tick uint32) Code {
 	return 2
 }
 
-// repairStep is the repair helper of [05 R-WORK-01 §3], instruction-exact:
+// workerQuantum is the construction quantum [05 R-WORK-01 §3]. Production
+// handlers receive it through the session-owned Work adapter.
 //
 //	if ((int32)def.maxdamage <= (int32)(int16)target.health) return notCommitted
 //	healTerm     = trunc(1 + (maxdamage       · worker - 1) / buildtime)
@@ -285,77 +351,14 @@ func inBuildStanceWait(u *units.Unit, n *Node, extra uint32, tick uint32) Code {
 // passes them the other way round, which is the whole of its difference
 // [05 R-WORK-01 §3].
 //
-// TODO(T25): retail applies the heal as a kind-10 damage packet so it competes
-// with the same tick's other packets in slot order [06 §5.1]. This build has no
-// packet queue reachable from the order pump, so the heal is applied through
-// the same clamp directly. Ordering against other packets is the only
-// observable difference, and only when two events hit one unit in one tick.
+// The kind-10 packet is formed at combat's packet boundary. Packet ordering is
+// still owned by the caller's normal combat window [06 §5.1][06 §9.1].
 // repairTerms forms the helper's two terms exactly as [05 R-WORK-01 §3] gives
 // them: widen, multiply by the worker, subtract one, divide by the build time,
 // add one, truncate — then replace the term by exactly one whenever it is at
 // least one, leaving zero and negative terms unchanged. A zero build time makes
 // both terms zero, so the visit requests no energy, is admitted whenever energy
 // carry is non-positive, and applies a zero-magnitude heal [01 §7].
-func repairTerms(maxDamage, buildCostEnergy, worker, buildTime int32) (healTerm, resourceTerm int32) {
-	if buildTime == 0 {
-		return 0, 0
-	}
-	healTerm = int32(1 + (int64(maxDamage)*int64(worker)-1)/int64(buildTime))
-	resourceTerm = int32(1 + (int64(buildCostEnergy)*int64(worker)-1)/int64(buildTime))
-	if healTerm >= 1 {
-		healTerm = 1
-	}
-	if resourceTerm >= 1 {
-		resourceTerm = 1
-	}
-	return healTerm, resourceTerm
-}
-
-// The queue is the order's own — the economy service is session-wide and is
-// reached through the queue the record is being pumped from, while the handle
-// billed is the builder's. `SelfRepair` needs that separation: its billed unit
-// is the order's target, which owns a different queue.
-func repairStep(q *Queue, builder, target *units.Unit, worker int32) bool {
-	if builder == nil || target == nil || target.Def == nil {
-		return false
-	}
-	def := target.Def
-	if def.MaxDamage <= int32(int16(target.Health)) {
-		return false
-	}
-	healTerm, resourceTerm := repairTerms(def.MaxDamage, def.BuildCostEnergy, worker, def.BuildTime)
-	if q == nil || q.StockpileEconomy == nil {
-		// TODO(T25): the queue carries the economy service only under its
-		// stockpile name (QueueBinding, pump.go). With none bound there is no
-		// bucket to bill, and the helper's own contract is that unadmitted work
-		// commits nothing — the notCommitted arm, which is a traced path rather
-		// than an invented one.
-		return false
-	}
-	buckets := q.StockpileEconomy.UnitBuckets(builder.Handle)
-	if buckets == nil {
-		return false
-	}
-	// The one-resource helper admits when energy carry is non-positive; that
-	// verdict is the helper's own [05 "One-resource admission"][05 R-ECO-01 §7].
-	admitted := buckets[economy.Energy].Carry <= 0
-	economy.AdmitOneResource(buckets, float32(resourceTerm))
-	if !admitted {
-		return false
-	}
-	maxHealth := def.MaxDamage
-	if maxHealth <= 0 {
-		maxHealth = target.MaxHealth
-	}
-	if healTerm < 0 {
-		healTerm = 0
-	}
-	target.Health = combat.ApplyHealing(target.Health, maxHealth, uint16(healTerm))
-	return true
-}
-
-// workerQuantum is `workertime / 30`, the quantum every work executor passes
-// [05 R-WORK-01 §3][05 "Construction arithmetic"].
 func workerQuantum(u *units.Unit) int32 {
 	if u == nil || u.Def == nil {
 		return 0
@@ -363,48 +366,8 @@ func workerQuantum(u *units.Unit) int32 {
 	return u.Def.WorkerTime / 30
 }
 
-// nanoframeDecayRearm is the eleven-tick rearm of `GetBuilt`'s phase-2 decay
-// visit [04 R-FAC-02 §4]. An admitted work step pushes the product's next decay
-// visit to `tick + 11`, so the decay fires only once a full period has passed
-// with nothing admitted.
-const nanoframeDecayRearm = 11
-
-// deferNanoframeDecay is the target-side half of the work step: the
-// "worked this tick" flag of [05 R-WORK-01 §1], which the helper sets for any
-// non-negative quantum BEFORE its zero test and before admission. The product's
-// own `GetBuilt` record carries the deferral in Param1, which is the same field
-// and the same protocol internal/construction's factory step writes
-// [04 R-FAC-02 §4]; a builder assisting a frame therefore holds that frame's
-// decay off exactly as the frame's own builder does.
-//
-// The record is looked up without materialising a queue: a product that has no
-// queue has no `GetBuilt` record and nothing to defer.
-func deferNanoframeDecay(target *units.Unit, tick uint32) {
-	q := QueueOfUnit(target)
-	if q == nil {
-		return
-	}
-	getBuiltID := Lookup("GetBuilt")
-	if getBuiltID == 0 {
-		return
-	}
-	for _, n := range q.Primary() {
-		if n == nil || n.ID != getBuiltID {
-			continue
-		}
-		if next := tick + nanoframeDecayRearm; next > n.Param1 {
-			n.Param1 = next
-		}
-		return
-	}
-}
-
-// nanoWorkStep is the shared construction step of [05 R-WORK-01 §1] — the one
-// helper behind every build, assist and factory-product visit — as the two
-// build-assist rows in this package call it. Only the forward arm (a
-// non-negative quantum) is reachable from here; the reverse arm belongs to
-// resurrection and to `GetBuilt`'s decay, both of which internal/construction
-// owns.
+// The ordinary construction step is owned by internal/construction and reached
+// through the session Work adapter [05 R-WORK-01 §1].
 //
 //	if (target.remaining == 0.0f)  return notCommitted   // exact float compare
 //	if (worker >= 0.0f)            setWorkedThisTickFlag(target)
@@ -442,63 +405,6 @@ func deferNanoframeDecay(target *units.Unit, tick uint32) {
 // and pays its whole remaining cost; a negative one drives the fraction the
 // wrong way into the upper clamp. Neither faults, and Go's IEEE division
 // reproduces both without a branch.
-func nanoWorkStep(q *Queue, builder, target *units.Unit, worker int32, tick uint32) bool {
-	if builder == nil || target == nil || target.Def == nil {
-		return false
-	}
-	if target.Remaining == 0 {
-		return false // exact float compare [05 R-WORK-01 §1]
-	}
-	if worker >= 0 {
-		// Set before the zero test, exactly as §1 orders it, and before the
-		// admission: a builder that requested work but was refused still holds
-		// the frame's decay off for this window.
-		deferNanoframeDecay(target, tick)
-	}
-	if worker <= 0 {
-		// §1's own zero test, plus the negative case: the reverse arm is
-		// internal/construction's (resurrection and the `GetBuilt` decay), and
-		// no row in this package passes a negative quantum.
-		return false
-	}
-	def := target.Def
-	old := target.Remaining
-	newRemaining := old - float32(worker)/float32(def.BuildTime)
-	if newRemaining <= 0 {
-		newRemaining = 0
-	}
-	if newRemaining >= 1 {
-		newRemaining = 1
-	}
-	delta := old - newRemaining
-	energyDemand := float32(def.BuildCostEnergy) * delta
-	metalDemand := float32(def.BuildCostMetal) * delta
-	maxDamageF := float32(uint32(def.MaxDamage))
-	gain := int32(maxDamageF*old) - int32(maxDamageF*newRemaining)
-	if q == nil || q.StockpileEconomy == nil {
-		// TODO(T25): the queue carries the economy service only under its
-		// stockpile name (QueueBinding, pump.go). With none bound there is no
-		// subrecord to bill, and the helper's own contract is that unadmitted
-		// work commits nothing — the notCommitted arm, which is a traced path
-		// rather than an invented one. Same reasoning as repairStep above.
-		return false
-	}
-	buckets := q.StockpileEconomy.UnitBuckets(builder.Handle)
-	if buckets == nil {
-		return false
-	}
-	if !economy.AdmitTwoResource(buckets, energyDemand, metalDemand) {
-		return false
-	}
-	h := target.Health + gain
-	if uint32(h) >= uint32(def.MaxDamage) {
-		h = def.MaxDamage
-	}
-	target.Health = int32(int16(h))
-	target.Remaining = newRemaining
-	return true
-}
-
 // ---------------------------------------------------------------------------
 // SelfRepair [04 R-ORD-01 §2, the `SelfRepair` row][05 R-WORK-01 §3]
 // ---------------------------------------------------------------------------
@@ -544,11 +450,15 @@ func selfRepairHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
 		// The advance test is UNSIGNED — "(unsigned)maxdamage <= (unsigned)health"
 		// [05 R-WORK-01 §3] — so an overkilled unit's negative health reads as a
 		// very large value and leaves the work state at once. The helper's own
-		// first compare, inside repairStep, is the signed one.
+		// first compare in the construction repair helper is the signed one.
 		if u.Def != nil && uint32(u.Health) >= uint32(u.Def.MaxDamage) {
 			return 1 // advance
 		}
-		repairStep(QueueForUnit(u), repairer, u, workerQuantum(repairer))
+		if _, bound := boundRepair(QueueForUnit(u), repairer, u, n, tick); !bound {
+			return 7
+			// The bound service owns admission; the order still re-arms exactly
+			// as the ordinary work row does.
+		}
 		n.DynamicGate |= pendTargetRemoved
 		return deadlineHold(n, tick, 1)
 	case 2:
@@ -610,7 +520,9 @@ func repairUnitHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Co
 			return 8 // abandon
 		}
 		if !inBuildRangeOf(u, target) {
-			installWorkGoal(u, n, target.X, target.Y, target.Z)
+			if !installWorkGoal(u, n, target.X, target.Y, target.Z) {
+				return 7
+			}
 			// The row's one simulation draw [05 R-WORK-01 §8]'s census counts
 			// for this executor (I4).
 			wait := int32(30)
@@ -637,7 +549,9 @@ func repairUnitHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Co
 		// 3 of that word would settle what they mirror; until then this arm —
 		// StopBuilding, deadline 15, restart — is left unreachable rather than
 		// invented.
-		repairStep(QueueForUnit(u), u, target, workerQuantum(u))
+		if _, bound := boundRepair(QueueForUnit(u), u, target, n, tick); !bound {
+			return 7
+		}
 		n.DynamicGate |= pendTargetRemoved
 		return deadlineHold(n, tick, 1)
 	case 4:
@@ -684,7 +598,9 @@ func repairUnitNoMoveHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code
 		}
 		// The bits 2-3 arm of this row advances rather than restarting; it is
 		// unreachable for the reason given in repairUnitHandler.
-		repairStep(QueueForUnit(u), u, target, workerQuantum(u))
+		if _, bound := boundRepair(QueueForUnit(u), u, target, n, tick); !bound {
+			return 7
+		}
 		n.DynamicGate |= pendTargetRemoved
 		return deadlineHold(n, tick, 1)
 	case 2:
@@ -717,10 +633,8 @@ func assistApproachHalf(footX, footZ int32) int32 {
 }
 
 // AssistApproachHalf is the exported form of the term above. internal/movement
-// needs it to build the annulus payload `HelpBuild` phase 0 installs — outer
-// `builddistance + half`, inner `half` [04 R-ORD-01 §5] — because this package
-// carries no goal payloads of its own (the installer TODO(T25) in the file
-// header).
+// uses it to build the annulus payload that `HelpBuild` phase 0 installs —
+// outer `builddistance + half`, inner `half` [04 R-ORD-01 §5].
 func AssistApproachHalf(footX, footZ int32) int32 {
 	return assistApproachHalf(footX, footZ)
 }
@@ -750,20 +664,18 @@ func helpBuildHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Cod
 		if !hasMover(u) || u.Def == nil || !u.Def.Builder {
 			return 7 // cancel-all
 		}
-		_ = assistApproachHalf(u.Def.FootprintX, u.Def.FootprintZ) // the annulus radii; see the header's goal-installer TODO(T25)
-		installWorkGoal(u, n, target.X, target.Y, target.Z)
+		if !installWorkGoal(u, n, target.X, target.Y, target.Z) {
+			return 7
+		}
 		if inBuildRangeOf(u, target) {
 			// Already inside the annulus. Retail's route follower asks the
 			// installed payload whether the unit has arrived on its very next
 			// service and raises pending 0x20 straight away for a unit that is
 			// already there [04 §10 "The follower's per-tick service"], so the
-			// record reaches phase 1 without any motion. This build binds an
-			// arrival handle only for the move-family descriptors (the file
-			// header's goal-installer TODO(T25)), so arming the approach gate
-			// for an assistant that is already in reach would park the order on
-			// a bit nothing can raise. The gate is therefore left clear and the
-			// pump cascades into phase 1 in this same pass, which is the
-			// observable retail outcome for this case.
+			// record reaches phase 1 without any motion. The bound movement
+			// service publishes that result through the node's pending word; the
+			// gate is therefore left clear and the pump cascades into phase 1 in
+			// this same pass.
 			return 1
 		}
 		n.DynamicGate = gateWorkApproach
@@ -782,33 +694,11 @@ func helpBuildHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Cod
 	case 2:
 		return inBuildStanceWait(u, n, gateCancelCurrent|pendTargetRemoved, tick)
 	case 3:
-		// The work step, quantum `workertime/30` [05 R-WORK-01 §1]
-		// [05 "Construction arithmetic"].
-		//
-		// Correction (PT3-04). This arm used to admit no work and apply none,
-		// on the reading that the step's body belongs to internal/construction
-		// and that package imports this one. That made build assistance a
-		// no-op: a second builder approached, opened its nanolathe and added
-		// nothing, for every assist in the game. The step is not construction's
-		// to lend — [05 R-WORK-01 §1] gives it instruction-exact and it needs
-		// only the target's definition and the BUILDER's own economy subrecord,
-		// both of which this package already reaches (the same arrangement
-		// repairStep has used for the repair helper of §3). nanoWorkStep above
-		// is that body; construction keeps its own copy for the factory and
-		// mobile-build rows it drives.
-		// TODO(T25): [05 R-WORK-01 §1] closes with "on both arms and also on the
-		// admission-refused path: if (target.remaining == 0.0f)
-		// completionTransition(builder, target)" — whichever builder zeroes the
-		// fraction runs the completion transition. That transition is
-		// internal/construction's (occupancy retirement, cargo detach, the
-		// activation edge, the completed-flag posture) and this package cannot
-		// reach it. Placeholder: an assistant that lands the last increment
-		// leaves the posture to the frame's OWNER, whose own work state observes
-		// the zero fraction on its next visit and runs the same idempotent
-		// transition [04 R-FAC-02 §3]. The observable difference is one tick of
-		// completion latency, and only when the assistant rather than the owner
-		// lands the final increment. A frame with no live owner is not covered.
-		nanoWorkStep(QueueForUnit(u), u, target, workerQuantum(u), tick)
+		// The construction service owns admission, the shared arithmetic, and
+		// completion posture for the accepted step [05 R-WORK-01 §1].
+		if _, bound := boundAssist(QueueForUnit(u), u, n, tick); !bound {
+			return 7
+		}
 		if target.Remaining != 0 {
 			n.DynamicGate |= gateCancelCurrent | pendTargetRemoved
 			return deadlineHold(n, tick, 1)
@@ -910,7 +800,9 @@ func captureHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 		workStatus(u, statusOK, "Capturing") // caption clear with a state text
 		n.Param2 = uint32(captureBudget(target.Def.BuildCostEnergy, target.Def.BuildCostMetal, target.Health, target.Def.MaxDamage, target.Kills))
 		releaseSlot(u, slotAll) // "release all slots": k = 3 is slots 0, 1, 2 in order [04 R-ORD-01 §1]
-		installWorkGoal(u, n, target.X, target.Y, target.Z)
+		if !installWorkGoal(u, n, target.X, target.Y, target.Z) {
+			return 7
+		}
 		n.DynamicGate = gateCaptureApproach
 		return 1
 	case 1:
@@ -933,6 +825,7 @@ func captureHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 		if int32(n.Param1) < int32(n.Param2) {
 			// The completion test precedes the increment, so the number of
 			// qualifying visits is ceil(timer/2) [05 R-WORK-01 §6].
+			emitNanolathe(u, n, tick)
 			n.Param1 += 2
 			return deadlineHold(n, tick, 2)
 		}
@@ -991,6 +884,25 @@ func featureAtGoal(u *units.Unit, n *Node) (def *content.FeatureDef, cx, cz int,
 		return nil, 0, 0, false
 	}
 	return features.FeatureAt(t, n.GoalX, n.GoalZ)
+}
+
+// featureViewAtGoal resolves the same anchored feature as featureAtGoal, then
+// obtains its authored footprint and height through the composed world seam.
+// Keeping both lookups on the same anchor prevents a presentation event from
+// targeting a fringe cell after an authoritative transition [05 R-ECO-02 §2].
+func featureViewAtGoal(u *units.Unit, n *Node) (FeatureView, bool) {
+	if u == nil || n == nil {
+		return FeatureView{}, false
+	}
+	q := QueueForUnit(u)
+	if q == nil || q.Binding() == nil || q.Binding().World == nil || q.Binding().World.LookupFeature == nil {
+		return FeatureView{}, false
+	}
+	_, cx, cz, ok := featureAtGoal(u, n)
+	if !ok {
+		return FeatureView{}, false
+	}
+	return q.Binding().LookupFeature(int32(cx), int32(cz))
 }
 
 // featureBoxCentre is the world centre of a feature's footprint rectangle —
@@ -1095,7 +1007,9 @@ func reclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 			return 7 // cancel-all
 		}
 		bx, bz := featureBoxCentre(cx, cz, def)
-		installWorkGoal(u, n, bx, n.GoalY, bz)
+		if !installWorkGoal(u, n, bx, n.GoalY, bz) {
+			return 7
+		}
 		if inBuildRange(u, bx, bz, def.FootprintX, def.FootprintZ) {
 			// In reach the gate is left clear and the pump cascades into phase
 			// 1 in this same pass: retail's follower raises arrival on its next
@@ -1150,6 +1064,9 @@ func reclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 		if work <= 0 {
 			return 1 // advance
 		}
+		if feature, ok := featureViewAtGoal(u, n); ok {
+			emitFeatureNanolathe(u, n, feature, tick)
+		}
 		return code
 	case 5:
 		finishFeatureReclaim(u, cx, cz)
@@ -1169,15 +1086,11 @@ func reclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 // by ReclaimTransition first, and only a transition that actually happened
 // credits anything.
 //
-// TODO(T25): [05 R-WORK-01 §5] step 4 applies the special-player scaling to
-// each addition separately (selector 0 halves, selector 1 takes seven tenths)
-// [05 R-ECO-01 §3]. economy.Service.CreditFeatureReclaim adds both
-// contributions with a NIL player record, which takes the undiscounted path for
-// every owner, so a computer player reclaiming on easy or medium is credited in
-// full where retail would scale it. Placeholder: the credit is made through
-// that helper unchanged, because the discount is the helper's to apply — every
-// other member of the family applies it inside addContribution — and this unit
-// does not own internal/economy. Reported for correction there.
+// The builder's OWNER is passed with the credit, not just its handle: step 4 of
+// [05 R-WORK-01 §5] scales each addition for a computer player, and the gate is
+// the builder's own player record — the slot must exist and its control byte
+// must be 2 [05 R-ECO-01 §11]. The ledger holds the records, so the owner index
+// is all it needs from here.
 func finishFeatureReclaim(u *units.Unit, cx, cz int) {
 	q := QueueForUnit(u)
 	econ := queueEconomy(q)
@@ -1188,7 +1101,7 @@ func finishFeatureReclaim(u *units.Unit, cx, cz int) {
 	if !ok {
 		return
 	}
-	econ.CreditFeatureReclaim(u.Handle, metal, energy)
+	econ.CreditFeatureReclaim(u.Handle, u.Owner, metal, energy)
 }
 
 // ---------------------------------------------------------------------------
@@ -1240,7 +1153,9 @@ func resurrectHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Cod
 		if !hasMover(u) || u.Def == nil || !u.Def.CanResurrect {
 			return 7 // cancel-all
 		}
-		installWorkGoal(u, n, n.GoalX, n.GoalY, n.GoalZ)
+		if !installWorkGoal(u, n, n.GoalX, n.GoalY, n.GoalZ) {
+			return 7
+		}
 		n.DynamicGate = gateMoveOutcomes
 		return 1
 	case 1:
@@ -1267,6 +1182,9 @@ func resurrectHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Cod
 		n.Param2 = uint32(v - 1)
 		if v == 0 {
 			return 1 // advance
+		}
+		if feature, ok := featureViewAtGoal(u, n); ok {
+			emitFeatureNanolathe(u, n, feature, tick)
 		}
 		return deadlineHold(n, tick, 1)
 	case 5:

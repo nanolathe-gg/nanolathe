@@ -10,6 +10,8 @@
 package movement
 
 import (
+	"math"
+
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -1232,12 +1234,40 @@ func airHeadFor(u *units.Unit) *orders.Node {
 // the leg's own, and the arrival bits it waits on are the ones the flight
 // command producer raises on that record [04 R-AIR-01 §1] step 6.
 
-// BindAirOrderLegs binds this system's air executor legs to the order pump.
+// BindAirOrderLegs is retained for callers that explicitly initialize movement
+// before session composition. It installs this system's runner on the existing
+// unit queues only; the runner remains queue-local and there is no process-wide
+// dispatch state [04 §3.3]. Session composition performs the same binding for
+// queues created after this initialization point.
 func (s *System) BindAirOrderLegs() {
-	if s == nil {
+	if s == nil || s.world == nil {
 		return
 	}
-	orders.SetAirLegRunner(s.runAirOrderLeg)
+	runner := s.AirLegRunner()
+	for _, u := range s.world.Iter() {
+		q := orders.QueueOfUnit(u)
+		if q == nil {
+			continue
+		}
+		binding := q.Binding()
+		if binding == nil {
+			binding = &orders.QueueBinding{}
+			q.SetBinding(binding)
+		}
+		if binding.Movement == nil {
+			binding.Movement = &orders.MovementGoalAdapter{}
+		}
+		binding.Movement.RunAir = runner
+	}
+}
+
+// AirLegRunner returns this system's executor for installation on a
+// session-owned queue binding.
+func (s *System) AirLegRunner() orders.AirLegRunner {
+	if s == nil {
+		return nil
+	}
+	return s.runAirOrderLeg
 }
 
 // runAirOrderLeg is the orders.AirLegRunner this system registers. It declines
@@ -1294,6 +1324,101 @@ const (
 // opens with [04 R-AIR-01 §7][04 R-ORD-02 §2][04 R-ORD-02 §3].
 func (s *System) airMoverReady(u *units.Unit) bool {
 	return s != nil && u != nil && u.Def != nil && u.Def.CanFly && s.Flights[u.Handle] != nil
+}
+
+// orderWeapons returns the session-owned weapon port for this aircraft. Air
+// legs run after the order pump, while the combat pipeline runs at the next
+// unit phase; these calls therefore only latch authoritative slot state and
+// never allocate a presentation-only shot [04 R-AIR-01 §8][06 §3.3].
+func orderWeapons(u *units.Unit) *orders.WeaponAdapter {
+	if u == nil {
+		return nil
+	}
+	q := orders.QueueOfUnit(u)
+	if q == nil || q.Binding() == nil {
+		return nil
+	}
+	return q.Binding().Weapons
+}
+
+func setManualTarget(u *units.Unit, target pool.Handle) bool {
+	w := orderWeapons(u)
+	if w == nil || w.SetManualTarget == nil {
+		return false
+	}
+	ok := true
+	for idx := 0; idx < units.NumSlots; idx++ {
+		if !w.SetManualTarget(u, idx, target) {
+			ok = false
+		}
+	}
+	return ok
+}
+
+func releaseWeapon(u *units.Unit, idx int) bool {
+	w := orderWeapons(u)
+	return w != nil && w.ReleaseSlot != nil && w.ReleaseSlot(u, idx)
+}
+
+func inhibitWeapons(u *units.Unit) {
+	w := orderWeapons(u)
+	if w == nil || w.InhibitSlot == nil {
+		return
+	}
+	for idx := 0; idx < units.NumSlots; idx++ {
+		w.InhibitSlot(u, idx)
+	}
+}
+
+func fireTargetWeapons(u *units.Unit, target pool.Handle, tick uint32) bool {
+	w := orderWeapons(u)
+	if w == nil || w.FireTarget == nil || target == 0 {
+		return false
+	}
+	ok := true
+	for idx := 0; idx < units.NumSlots; idx++ {
+		if !w.FireTarget(u, idx, target, tick) {
+			ok = false
+		}
+	}
+	return ok
+}
+
+func firePointWeapons(u *units.Unit, x, z numeric.Fixed, tick uint32) bool {
+	w := orderWeapons(u)
+	if w == nil || w.FirePoint == nil {
+		return false
+	}
+	ok := true
+	for idx := 0; idx < units.NumSlots; idx++ {
+		if !w.FirePoint(u, idx, x, z, tick) {
+			ok = false
+		}
+	}
+	return ok
+}
+
+func stopWeapons(u *units.Unit) {
+	w := orderWeapons(u)
+	if w == nil || w.StopFiring == nil {
+		return
+	}
+	for idx := 0; idx < units.NumSlots; idx++ {
+		w.StopFiring(u, idx)
+	}
+}
+
+func acquireWeaponTarget(u *units.Unit, idx int, limit uint32) (pool.Handle, bool) {
+	w := orderWeapons(u)
+	if w == nil || w.Acquire == nil {
+		return 0, false
+	}
+	return w.Acquire(u, idx, limit)
+}
+
+func weaponEngaged(u *units.Unit, idx int) bool {
+	w := orderWeapons(u)
+	return w != nil && w.Engaged != nil && w.Engaged(u, idx)
 }
 
 // airDeadline is the deadline setter of [04 R-ORD-01 §1]: it stores
@@ -1468,14 +1593,8 @@ func airLegUnbound(n *orders.Node, tick uint32) orders.Code {
 //	deadline to the current tick plus 30 + random below 30, OR 0xE0 into the
 //	gate word, and return 2.
 //
-// TODO(T25): three steps belong to the weapon layer and are not reachable from
-// internal/movement — phase 0's latch attempt on an already-bound target, phase
-// 1's manual-target latch on all three slots, and phase 1's autonomous
-// acquisition. Placeholder: the latch attempt does not succeed and the
-// acquisition finds nothing, so phase 0 always takes the search-setup arm and
-// phase 1 always reaches the orbit step. Both are the sections' own "otherwise"
-// arms, so the search still runs; what is missing is the shortcut that ends it
-// the moment a target is latched.
+// Weapon-facing latch and acquisition calls use the queue binding; the fallback
+// arms below remain the established no-target search behavior.
 func (s *System) legVTOLSeekAttack(u *units.Unit, n *orders.Node, satisfied uint32, tick uint32) orders.Code {
 	if s.installOffMapRecoveryMarker(u, n) {
 		return 2 // the recovery leg pre-empts and holds [04 R-AIR-01 §5]
@@ -1485,6 +1604,10 @@ func (s *System) legVTOLSeekAttack(u *units.Unit, n *orders.Node, satisfied uint
 	case 0:
 		if !s.airMoverReady(u) {
 			return 7 // *cancel-all* [04 R-ORD-02 §3]
+		}
+		if n.Target != 0 && setManualTarget(u, n.Target) {
+			n.DynamicGate = 0
+			return 0 // acquired target ends the seek orbit [04 R-AIR-01 §7]
 		}
 		if sim == nil {
 			return airLegUnbound(n, tick)
@@ -1504,6 +1627,10 @@ func (s *System) legVTOLSeekAttack(u *units.Unit, n *orders.Node, satisfied uint
 		if sim == nil {
 			return airLegUnbound(n, tick)
 		}
+		// The manual-target latch is installed before the health and
+		// acquisition branches, in slot order [04 R-AIR-01 §7]. A zero target
+		// disables autonomous tracking without inventing a target.
+		setManualTarget(u, n.Target)
 		if airBelowThreeQuarters(u) {
 			if bases := s.airBaseCandidates(u); len(bases) > 0 {
 				s.releaseAirGoal(u)
@@ -1512,6 +1639,11 @@ func (s *System) legVTOLSeekAttack(u *units.Unit, n *orders.Node, satisfied uint
 				n.DynamicGate = 0
 				return 0 // *restart*
 			}
+		}
+		if target, ok := acquireWeaponTarget(u, 0, uint32(firstWeaponRange(u))); ok {
+			n.Target = target
+			n.DynamicGate = 0
+			return 5 // acquisition succeeds and the seek order completes
 		}
 		if satisfied&airLegGate != 0 {
 			// The step is subtractive and never additive: about −120 degrees
@@ -1647,43 +1779,23 @@ func (s *System) airGravityWord() int64 {
 // free-fall time from seconds to ticks against a per-tick speed, so the whole
 // expression is `speed_per_tick · 30 · sqrt(2·cruisealt/gravity)` world units.
 //
-// Retail evaluates the square root and the product in double precision. This
-// build forms the same value in fixed point instead — `q = (2·cruisealt << 32)
-// / gravity` makes `isqrt(q)` equal `sqrt(2·cruisealt/gravity) << 16`, and the
-// final shift takes the product back down — so I2 needs no row here, because
-// there is no float temporary to allow.
-//
-// That is a deliberate, closed choice, not a deferred one. The two forms agree
-// except in the last bit of a truncation, the result is a bomb-release lead in
-// whole world units where one unit is imperceptible, and competitive desync
-// hashes are explicitly out of scope for this project (AGENTS.md "Not now"), so
-// nothing downstream can observe the difference. Matching retail's double here
-// would buy exactness in a quantity nothing compares, at the cost of a float
-// site in a simulation package.
+// Retail evaluates the square root and product in double precision; the final
+// conversion truncates toward zero [01 §8][I3].
 func airReleaseLead(u *units.Unit, gravity int64) int64 {
 	if u == nil || u.Def == nil || gravity == 0 {
 		return 0
 	}
-	num := int64(u.Def.CruiseAlt) * 2
-	if num <= 0 {
-		return 0
-	}
-	root := int64(isqrt(uint64((num << 32) / gravity))) // sqrt(2c/g) in 16.16
-	speed := int64(int16(u.Move.Speed.Raw() >> 16))
-	return (30 * speed * root) >> 16
+	cruise := float64(u.Def.CruiseAlt)
+	speed := float64(int16(u.Move.Speed.Raw() >> 16))
+	return int64(math.Sqrt((2.0*cruise)/float64(gravity)) * 30.0 * speed)
 }
 
 // legAirStrike is the bombing run, with the ballistic release lead of
 // [04 R-AIR-01 §8]'s seven-row table. Phase 6 either loops back to phase 3 for
 // another run or breaks off to land.
 //
-// TODO(T25): every weapon-layer step of the table is out of this package's
-// reach — phase 0's `Attacking` status caption, phase 1's manual-target latch
-// on all three slots and its release on slot 0, phase 5's "order the weapons to
-// fire at the cached goal position", and phase 6's "stop firing". Placeholder:
-// the flight legs run and the guns do not, so an aircraft flies the whole run
-// and drops nothing. internal/combat owns the slots; the seam that would let an
-// order reach them does not exist yet.
+// Weapon slot operations are issued through the queue binding; combat consumes
+// the resulting armed targets in its ordinary next unit phase.
 func (s *System) legAirStrike(u *units.Unit, n *orders.Node, satisfied uint32, tick uint32) orders.Code {
 	// Step 4 of the shared entry sequence: `AirStrike` "tests the sentinel
 	// nowhere at all", so there is no off-map recovery on this executor
@@ -1697,6 +1809,8 @@ func (s *System) legAirStrike(u *units.Unit, n *orders.Node, satisfied uint32, t
 		s.takeoffPreamble(u, n)
 		return 1
 	case 1:
+		setManualTarget(u, n.Target)
+		releaseWeapon(u, 0)
 		// The test only decides whether a repositioning marker is installed;
 		// both branches return 1, so the phase advances either way.
 		if airPlanarDistance(n.GoalX, n.GoalZ, u.X, u.Z) < 0x1E00000 {
@@ -1748,6 +1862,12 @@ func (s *System) legAirStrike(u *units.Unit, n *orders.Node, satisfied uint32, t
 		n.DynamicGate |= airLegGateStrike
 		return 2
 	case 5:
+		// Release slot 0's latch before issuing the fire-at-point command. The
+		// combat unit phase consumes this armed target on its next visit.
+		releaseWeapon(u, 0)
+		// The bomber's release row always orders a point shot at the cached
+		// goal, even when that cache came from a live target [04 R-AIR-01 §8].
+		firePointWeapons(u, n.GoalX, n.GoalZ, tick)
 		runLength := int64(0)
 		if u.Def != nil {
 			runLength = int64(u.Def.AttackRunLength)
@@ -1760,6 +1880,7 @@ func (s *System) legAirStrike(u *units.Unit, n *orders.Node, satisfied uint32, t
 		n.DynamicGate = airLegGateReposition
 		return 1
 	case 6:
+		stopWeapons(u)
 		ox, oz := offsetAtBearing(u.Move.Heading, numeric.Fixed(0x5A00000)) // 1440 world units
 		m := s.newPointMarker(u, Vec3{X: u.X - ox, Y: u.Y, Z: u.Z - oz})
 		m.setArrivalRadius(0x80)
@@ -1838,9 +1959,8 @@ func (s *System) airJitteredApproach(u *units.Unit, n *orders.Node, sim *rng.Sim
 //	    0x80; gate = 0x100EA.
 //	5 — set the phase to 2 and return 2, closing the loop.
 //
-// TODO(T25): the weapon-layer steps — the phase 0 caption, phase 1's latch,
-// phase 2's release and fire order — are internal/combat's and are not
-// reachable here. Placeholder: the flight legs run and the guns do not.
+// The phase 1 latch and phase 2 release/fire order are issued through the queue
+// binding; combat owns the subsequent admission and fire.
 func (s *System) legAirToGround(u *units.Unit, n *orders.Node, tick uint32) orders.Code {
 	if s.installOffMapRecoveryMarker(u, n) {
 		return 2 // step 4: `AirToGround` "takes the recovery leg" [04 R-AIR-01 §8]
@@ -1857,10 +1977,17 @@ func (s *System) legAirToGround(u *units.Unit, n *orders.Node, tick uint32) orde
 		if sim == nil {
 			return airLegUnbound(n, tick)
 		}
+		setManualTarget(u, n.Target)
 		s.airJitteredApproach(u, n, sim, 0x80)
 		n.DynamicGate = airLegGateStrike
 		return 1
 	case 2:
+		releaseWeapon(u, 0)
+		if n.Target != 0 {
+			fireTargetWeapons(u, n.Target, tick)
+		} else {
+			firePointWeapons(u, n.GoalX, n.GoalZ, tick)
+		}
 		m := s.newPointMarker(u, Vec3{X: n.GoalX, Y: n.GoalY, Z: n.GoalZ})
 		m.setArrivalRadius(airRadiusWord(int64(firstWeaponRange(u))))
 		s.installAirGoal(u, n, m)
@@ -1917,15 +2044,8 @@ func (s *System) legAirToGround(u *units.Unit, n *orders.Node, tick uint32) orde
 // a random full-circle reposition at `targetPos − offset(bearing, Range)`
 // instead.
 //
-// TODO(T25): "ask the weapon layer whether the unit can engage the target; if
-// it cannot, increment the miss counter" is internal/combat's question and this
-// package cannot ask it. Placeholder: the unit is treated as able to engage, so
-// the miss counter never rises and the leg always takes the deterministic
-// alternating-sides orbit — the arm that is the executor's actual standoff
-// behavior. The random reposition arm is therefore unreachable until the seam
-// exists; it is written out so that wiring the question is a one-line change.
-// The phase 0 caption, phase 2's latch release and its aim are the same
-// unreachable weapon layer.
+// The weapon layer supplies the engagement result; a failed query increments
+// the miss counter before selecting the recovery orbit.
 //
 // TODO(question): [04 R-AIR-01 §8] does not name which record scratch words
 // phase 2 zeroes; p1 (the side flag) and p2 (the miss counter) are used, in the
@@ -1950,10 +2070,17 @@ func (s *System) legAirToGroundHover(u *units.Unit, n *orders.Node, tick uint32)
 		if sim == nil {
 			return airLegUnbound(n, tick)
 		}
+		setManualTarget(u, n.Target)
 		s.airJitteredApproach(u, n, sim, 0x80)
 		n.DynamicGate = airLegGateStrike
 		return 1
 	case 2:
+		releaseWeapon(u, 0)
+		if n.Target != 0 {
+			fireTargetWeapons(u, n.Target, tick)
+		} else {
+			firePointWeapons(u, targetX, targetZ, tick)
+		}
 		m := s.newPointMarker(u, Vec3{X: targetX, Y: targetY, Z: targetZ})
 		m.setArrivalRadius(airRadiusWord(int64(firstWeaponRange(u))))
 		s.installAirGoal(u, n, m)
@@ -1966,6 +2093,9 @@ func (s *System) legAirToGroundHover(u *units.Unit, n *orders.Node, tick uint32)
 			return airLegUnbound(n, tick)
 		}
 		rangeUnits := int64(firstWeaponRange(u))
+		if !weaponEngaged(u, 0) {
+			n.Param2++
+		}
 		if n.Param2 > 1 {
 			n.Param2 = 0
 			b := uint16(sim.Uint32n(0x10000))
@@ -2171,8 +2301,8 @@ func (s *System) installAirPayload(u *units.Unit, rec *orders.Node, p GoalPayloa
 // The one-tick deadline hold is taken there so the record neither parks nor
 // invents a leg; a trace of that fall-through settles it.
 //
-// TODO(T25): "aims at the target" is internal/combat's and is not reachable
-// from this package.
+// Target aiming is issued through the queue binding and consumed by combat's
+// ordinary slot pipeline.
 func (s *System) legAirToAir(u *units.Unit, n *orders.Node, satisfied uint32, tick uint32) orders.Code {
 	if s.installOffMapRecoveryMarker(u, n) {
 		return 2 // step 4: `AirToAir` takes the recovery leg [04 R-AIR-01 §8]
@@ -2190,6 +2320,10 @@ func (s *System) legAirToAir(u *units.Unit, n *orders.Node, satisfied uint32, ti
 		if sim == nil {
 			return airLegUnbound(n, tick)
 		}
+		// Dogfight aiming uses the same manual target and armed slot state as
+		// the other air attack families; subsequent fire admission is owned by
+		// combat's ordinary unit-phase pipeline.
+		setManualTarget(u, n.Target)
 		targetX, targetY, targetZ := n.GoalX, n.GoalY, n.GoalZ
 		t := s.unitFor(n.Target)
 		if t != nil && t.Alive {

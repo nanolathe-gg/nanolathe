@@ -156,6 +156,18 @@ type QueueBinding struct {
 	Work         *WorkAdapter
 	Weapons      *WeaponAdapter
 	Presentation *PresentationAdapter
+	// Resources supplies the owning player's current stock and storage. It is
+	// read by repair-patrol admission only; the economy service remains the
+	// owner of these values [04 R-ORD-01 §4][05 "Player slot"].
+	Resources func(uint8) (ResourceView, bool)
+}
+
+// ResourceView is the value-only economy snapshot needed by repair patrol's
+// twenty-percent admission gates [04 R-ORD-01 §4]. Index 0 is metal and index
+// 1 is energy, matching economy.Res [05 "Player slot"].
+type ResourceView struct {
+	Stock    [2]float32
+	Capacity [2]float32
 }
 
 // PointGoalRequest identifies one order-node-owned point payload. Keeping the
@@ -211,6 +223,9 @@ type MovementGoalAdapter struct {
 	InstallRectangle func(RectangleGoalRequest) bool
 	InstallAir       func(AirGoalRequest) bool
 	Release          func(*Node) bool
+	// RunAir is the queue-local air executor. Keeping it on the binding avoids
+	// a process-global runner when more than one session exists [04 §3.3].
+	RunAir AirLegRunner
 }
 
 // FeatureView is the value-only feature identity exposed to order scans. It
@@ -218,10 +233,20 @@ type MovementGoalAdapter struct {
 // create a package cycle) and is traversed in the feature service's established
 // stable anchor order [01 §6.2][05 "Feature instance and terrain cell"].
 type FeatureView struct {
-	ID            uint16
-	CX, CZ        int32
-	X, Z          numeric.Fixed
-	DefinitionKey string
+	ID      uint16
+	CX, CZ  int32
+	X, Y, Z numeric.Fixed
+	// Footprint and Height are the authored feature-box dimensions used by
+	// nanolathe presentation [05 R-WORK-01 §8]. They remain value-only here so
+	// orders does not import the feature runtime.
+	FootprintX      int32
+	FootprintZ      int32
+	Height          int32
+	DefinitionKey   string
+	Metal           int32
+	Energy          int32
+	Reclaimable     bool
+	Autoreclaimable bool
 }
 
 // WorldQueryAdapter owns deterministic target/feature lookup and geometry
@@ -244,7 +269,7 @@ type WorldQueryAdapter struct {
 type WorkAdapter struct {
 	Ready          func() bool
 	Assist         func(*units.Unit, *Node, uint32) bool
-	Repair         func(*units.Unit, *Node, uint32) bool
+	Repair         func(builder, patient *units.Unit, node *Node, tick uint32) bool
 	Capture        func(*units.Unit, *Node, uint32) bool
 	ReclaimFeature func(*units.Unit, *Node, uint32) bool
 	ReclaimUnit    func(*units.Unit, *Node, uint32) bool
@@ -271,9 +296,10 @@ type WeaponAdapter struct {
 // status and nanolathe events without allowing the order pump to mutate client
 // state [P0-00 F][03 §1].
 type PresentationAdapter struct {
-	Ready     func() bool
-	Status    func(*units.Unit, uint8, string) bool
-	Nanolathe func(*units.Unit, *Node, uint32) bool
+	Ready            func() bool
+	Status           func(*units.Unit, uint8, string) bool
+	Nanolathe        func(*units.Unit, *Node, uint32) bool
+	NanolatheFeature func(*units.Unit, *Node, FeatureView, uint32) bool
 }
 
 // ValidateSinglePlayerBinding checks the O0-required composition seam. It is
@@ -287,19 +313,19 @@ func (b *QueueBinding) ValidateSinglePlayerBinding() error {
 	if b.SimRNG == nil {
 		return fmt.Errorf("orders: missing simulation RNG")
 	}
-	if b.StockpileEconomy == nil || b.Lookup == nil || b.Hostility == nil {
+	if b.StockpileEconomy == nil || b.Lookup == nil || b.Hostility == nil || b.Resources == nil {
 		return fmt.Errorf("orders: incomplete base queue services")
 	}
 	if b.Movement == nil || b.World == nil || b.Work == nil || b.Weapons == nil || b.Presentation == nil {
 		return fmt.Errorf("orders: incomplete single-player queue services")
 	}
-	if b.Movement.Ready == nil || !b.Movement.Ready() || b.Movement.InstallPoint == nil || b.Movement.Release == nil {
+	if b.Movement.Ready == nil || !b.Movement.Ready() || b.Movement.InstallPoint == nil || b.Movement.Release == nil || b.Movement.RunAir == nil {
 		return fmt.Errorf("orders: incomplete movement goal service")
 	}
 	if b.Work.Ready == nil || !b.Work.Ready() || b.Weapons.Ready == nil || !b.Weapons.Ready() || b.Presentation.Ready == nil || !b.Presentation.Ready() {
 		return fmt.Errorf("orders: incomplete single-player subsystem service")
 	}
-	if b.World.LookupUnit == nil || b.World.Hostile == nil || b.World.ForEachUnit == nil || b.World.ForEachFeature == nil || b.World.TerrainHeight == nil || b.World.SeaLevel == nil {
+	if b.World.LookupUnit == nil || b.World.Hostile == nil || b.World.ForEachUnit == nil || b.World.ForEachFeature == nil || b.World.LookupFeature == nil || b.World.TerrainHeight == nil || b.World.SeaLevel == nil {
 		return fmt.Errorf("orders: incomplete world query service")
 	}
 	return nil
@@ -818,6 +844,9 @@ func (q *Queue) cleanupNode(n *Node) {
 		}
 	}
 	emitStopBuilding(u, n)
+	if q.binding != nil && q.binding.Movement != nil && q.binding.Movement.Release != nil {
+		q.binding.Movement.Release(n)
+	}
 	if n.Flags&FlagTombstone == 0 {
 		clearWeaponBuildTargets(u)
 	}
@@ -975,6 +1004,31 @@ func (q *Queue) PushHead(id ID, n Node) *Node {
 	}
 	q.primary = append([]*Node{node}, q.primary...)
 	q.ensureSingleActive() // an empty segment's new head takes the marker [04 §3.3]
+	return node
+}
+
+// appendTail is the patrol-chain append. Unlike Push, it does not insert
+// behind the active marker: patrol setup walks its selected segment and adds
+// the return waypoint at that segment's tail [04 R-ORD-01 §4][04 R-ORD-02 §4].
+// The new record receives no active marker, preserving the current head.
+func (q *Queue) appendTail(id ID, n Node) *Node {
+	if q == nil {
+		return nil
+	}
+	segment := &q.primary
+	if isSecondary(id) {
+		segment = &q.secondary
+	}
+	if len(*segment) >= OOMGuardQueue {
+		q.recordDiagnostic(fmt.Sprintf("orders: queue OOM guard (%d), dropping patrol waypoint %s", len(*segment), DescriptorFor(id).Name))
+		return nil
+	}
+	node := newNode(id, n)
+	node.Flags &^= FlagActive
+	*segment = append(*segment, node)
+	if segment == &q.primary && len(*segment) == 1 {
+		node.Flags |= FlagActive
+	}
 	return node
 }
 
@@ -1771,6 +1825,12 @@ func BindQueue(u *units.Unit, q *Queue) {
 	if u == nil {
 		return
 	}
+	if q != nil {
+		prior := QueueOfUnit(u)
+		if prior != nil && prior != q && prior.binding != nil {
+			prior.releaseBoundGoals()
+		}
+	}
 	if q != nil && q.binding == nil {
 		// Queue replacement is a lifecycle boundary: preserve the session
 		// context from the replaced queue unless the producer supplied a new
@@ -1780,6 +1840,25 @@ func BindQueue(u *units.Unit, q *Queue) {
 		}
 	}
 	u.Orders = q
+}
+
+// releaseBoundGoals is the queue-replacement lifecycle edge. It only releases
+// movement payloads; order-record cleanup remains the removal path's owner.
+// Movement checks node identity, so a late cleanup cannot detach a successor.
+func (q *Queue) releaseBoundGoals() {
+	if q == nil || q.binding == nil || q.binding.Movement == nil || q.binding.Movement.Release == nil {
+		return
+	}
+	for _, n := range q.primary {
+		if n != nil {
+			q.binding.Movement.Release(n)
+		}
+	}
+	for _, n := range q.secondary {
+		if n != nil {
+			q.binding.Movement.Release(n)
+		}
+	}
 }
 
 // RemovePrimaryNode removes one primary node in place, preserving queue

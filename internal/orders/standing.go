@@ -112,8 +112,8 @@ func releaseWeaponSlot(u *units.Unit, slot int) {
 	if s == nil {
 		return
 	}
-	notify := s.Flags&slotClearedLatch != 0 && s.Target.Kind != units.TargetNone
-	s.Flags &^= slotClearedLatch
+	notify := s.OrderControl&slotOrderInhibit != 0 && s.Target.Kind != units.TargetNone
+	s.OrderControl &^= slotOrderInhibit
 	s.Target = units.Target{Kind: units.TargetNone}
 	if notify {
 		arrangeDeferred(callbackBridgeFor(u), "TargetCleared", []int32{int32(slot)})
@@ -129,8 +129,8 @@ func inhibitWeaponSlot(u *units.Unit, slot int) {
 	if s == nil {
 		return
 	}
-	notify := s.Flags&slotControlAssigned != 0 && s.Flags&slotClearedLatch == 0 && s.Target.Kind != units.TargetNone
-	s.Flags |= slotClearedLatch
+	notify := s.Flags&slotControlAssigned != 0 && s.OrderControl&slotOrderInhibit == 0 && s.Target.Kind != units.TargetNone
+	s.OrderControl |= slotOrderInhibit
 	s.Target = units.Target{Kind: units.TargetNone}
 	if notify {
 		arrangeDeferred(callbackBridgeFor(u), "TargetCleared", []int32{int32(slot)})
@@ -244,7 +244,7 @@ func clearAutonomousSlotTargets(u *units.Unit) {
 	bridge := callbackBridgeFor(u)
 	for slot := 0; slot < units.NumSlots; slot++ {
 		s := u.SlotAt(slot)
-		if s == nil || s.Flags&slotClearedLatch == 0 {
+		if s == nil || s.Flags&slotTracking == 0 {
 			continue // only slots carrying the autonomous-targeting bit
 		}
 		s.Target = units.Target{Kind: units.TargetNone}
@@ -378,17 +378,14 @@ const waitScanBudgetStep = 150
 // The budget test is `p1 < 1`, not `p1 == 0`: the drain subtracts at least 150
 // per failed scan and so runs the budget negative, and the signed test is what
 // terminates it [04 R-ORD-01 §2][R-ORDER-02 §1 "Wait | timeout drain"].
-//
-// TODO(T25): the scan is the target-registry enumeration of [04 R-ORD-01 §2],
-// and the orders package has no registry surface — a queue's binding resolves
-// one handle to one unit and cannot enumerate. Placeholder: the scan finds
-// nothing, which is the same arm retail takes with an empty radius, so the
-// budget drains and the record completes rather than waiting forever.
 func waitHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
 	if n == nil {
 		return Code(5)
 	}
 	if n.Param2 != 0 {
+		if scanRadiusTarget(u, int32(n.Param2), true) != nil {
+			return Code(5) // a hostile registry entry is already in range
+		}
 		if int32(n.Param1) < 1 {
 			return Code(5) // *complete* — budget exhausted [04 R-ORD-01 §2]
 		}
@@ -443,15 +440,24 @@ func teleportHandler(_ *units.Unit, _ *Node, _ uint32, _ uint32) Code {
 // `sightdistance` as its range; otherwise it returns nothing WITHOUT searching.
 // That gate is the whole behavioral difference between return fire and fire at
 // will.
-//
-// TODO(T25): the search itself is the order-work acquisition path of [06 §3.2],
-// which the combat layer owns and which is not reachable from a handler. The
-// established gate above is implemented; the search is not, so the helper takes
-// the no-target exit. Placeholder: callers therefore take their no-issue arm,
-// which is a bounded re-poll, never a park.
 func opportunityScan(u *units.Unit) *units.Unit {
 	if u == nil || u.Flags>>stanceFireShift&stanceFieldMask != 2 {
 		return nil // not fire at will: no search at all [04 R-STANCE-01 §3]
+	}
+	q := QueueOfUnit(u)
+	if q == nil || q.Binding() == nil || q.Binding().Weapons == nil || q.Binding().Weapons.Acquire == nil {
+		return nil
+	}
+	rangeLimit := uint32(0)
+	if u.Def != nil && u.Def.SightDistance > 0 {
+		rangeLimit = uint32(u.Def.SightDistance)
+	}
+	for slot := 0; slot < units.NumSlots; slot++ {
+		if handle, ok := q.Binding().Weapons.Acquire(u, slot, rangeLimit); ok {
+			if target := q.Binding().Lookup(handle); target != nil {
+				return target
+			}
+		}
 	}
 	return nil
 }

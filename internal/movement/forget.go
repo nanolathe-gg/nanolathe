@@ -26,12 +26,24 @@ func (s *System) ForgetUnit(h pool.Handle) {
 	}
 	// Release the grid stamp before the collision record that describes it.
 	if coll, ok := s.Collisions[h]; ok && coll != nil && s.Grid != nil {
-		s.Grid.Clear(coll.CachedAnchor, coll.FootPrintX, coll.FootPrintZ, int(h))
+		if coll.Building && len(coll.Yard) == int(coll.FootPrintX)*int(coll.FootPrintZ) {
+			s.clearBuildingGrid(coll.CachedAnchor, coll.FootPrintX, coll.FootPrintZ, coll.Yard, coll.YardOpen, int(h))
+		} else {
+			s.Grid.Clear(coll.CachedAnchor, coll.FootPrintX, coll.FootPrintZ, int(h))
+		}
 	}
 	// Cancels the scheduler request and drops the active order binding.
 	s.DeactivateMove(h)
 	if s.Scheduler != nil {
 		s.CancelPathRequest(h)
+	}
+	// Death/transport teardown may run after the unit is no longer resolvable;
+	// release the node-bound payload while its identity is still available.
+	if g := s.moveGoals[h]; g != nil {
+		s.releaseGoalNode(g.order)
+	}
+	if st := s.airOrders[h]; st != nil {
+		s.releaseGoalNode(st.order)
 	}
 
 	delete(s.Collisions, h)

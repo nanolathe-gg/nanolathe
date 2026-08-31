@@ -156,6 +156,13 @@ type Client struct {
 	// Audio is the concrete internal/audio owner. The client only binds the
 	// service and drains it at the rendered-frame boundary [03 §8.3–§8.4] [I6].
 	audioService *audio.Service
+	// messages is the presentation-owned shared caption/chat ring. It is
+	// rebuilt only from committed semantic events and never read by simulation
+	// [07 R-HUD-03 §14][I6].
+	messages          frame.MessageRing
+	messageEventsTick uint32
+	messageEventsSeen bool
+	screenChat        uint8
 }
 
 // New creates a client. It allocates the indexed framebuffer at the negotiated
@@ -202,7 +209,13 @@ func New(opts Options) (*Client, error) {
 		featureGAFs:       map[string]*formats.GAF{},
 		featureFrames:     map[string]*formats.GAFFrame{},
 		featureGACErr:     map[string]error{},
+		messages:          *frame.NewMessageRing(),
+		screenChat:        1,
 	}
+	// TODO(question): the composition root does not yet expose persisted
+	// textlines/textscroll/screenchat/unitchattext settings. Keep the documented
+	// shipped presentation defaults here and expose explicit setters until that
+	// owner is traced [07 R-HUD-03 §14].
 	c.in = *newInputState()
 	// Fallback display palette: grayscale. This keeps the framebuffer path
 	// valid before SetPalette installs PALETTE.PAL [03 §4.3].

@@ -23,6 +23,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/model"
 
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
@@ -621,8 +622,8 @@ func followerAccelerates(s *SteerState, desired uint16, unitX, unitZ, t1x, t1z, 
 }
 
 // groundPostMoveHeight covers the model-independent post-move branches. The
-// selection-primitive conform for other vehicles needs compiled model ground
-// plate geometry and remains at its call site [04 R-MOV-01 §5][§9].
+// selection-primitive conform is applied by applyGroundPostMove below
+// [04 R-MOV-01 §5].
 func groundPostMoveHeight(t *world.Terrain, u *units.Unit) (numeric.Fixed, bool) {
 	if t == nil || u == nil {
 		return 0, false
@@ -641,6 +642,145 @@ func groundPostMoveHeight(t *world.Terrain, u *units.Unit) (numeric.Fixed, bool)
 		}
 	}
 	return terrainY, true
+}
+
+const unitTransformDirty uint32 = 1 << 16
+
+// applyGroundPostMove is the sole ordinary ground writer for Y, pitch, and
+// bank. Its four-corner path follows the root selection primitive, while the
+// upright and floater paths deliberately leave the angle words unchanged
+// [04 R-MOV-01 §5a].
+func applyGroundPostMove(t *world.Terrain, u *units.Unit, dirty bool, mode uint8) {
+	if t == nil || u == nil || u.Def == nil {
+		return
+	}
+	if !dirty && !u.Def.CanHover {
+		return
+	}
+	// The transform-dirty bit is consumed before the mode branch. The local
+	// mover dirty signals are the movement package's equivalent until the unit
+	// flag is populated by the session writer.
+	u.Flags &^= unitTransformDirty
+	if mode&3 != 1 {
+		return
+	}
+
+	if u.Def.Upright {
+		if y, ok := groundPostMoveHeight(t, u); ok {
+			u.Y = y
+		}
+		return
+	}
+	if u.Def.Floater {
+		u.Y = numeric.Fixed((int64(t.SeaLevel) - int64(u.Def.Waterline)) << 16)
+		return
+	}
+	if u.Def.CanHover {
+		// TODO(question): the established hover conform requires the
+		// presentation-shared wall-clock animation counter, configured rate,
+		// per-unit bob phase, and mover last-commit tick [04 R-MOV-01 §5a].
+		// This movement System currently exposes none of those inputs. Do not
+		// substitute the ordinary terrain plate path until that clock boundary
+		// is wired by the session owner.
+		return
+	}
+	applyGroundConform(t, u)
+}
+
+// applyGroundConform samples the four vertices of the root selection plate.
+// Invalid geometry and any out-of-map corner abandon the complete correction,
+// preserving the previous Y and orientation [04 R-MOV-01 §5a].
+func applyGroundConform(t *world.Terrain, u *units.Unit) {
+	binding := u.COBBinding()
+	if binding == nil || binding.Model == nil {
+		return
+	}
+	m := binding.Model
+	if t.CellW <= 1 || t.CellH <= 1 || int64(t.CellW)*int64(t.CellH) > int64(len(t.Plot)) {
+		return
+	}
+	if m.Root < 0 || m.Root >= len(m.Pieces) {
+		return
+	}
+	piece := m.Pieces[m.Root]
+	if !piece.Selection || len(piece.Primitives) == 0 {
+		return
+	}
+	primitive := piece.Primitives[0]
+	if len(primitive.VertexIndices) < 4 {
+		return
+	}
+
+	var worldX, worldZ [4]int16
+	var height [4]int32
+	for i := 0; i < 4; i++ {
+		index := primitive.VertexIndices[i]
+		if int(index) >= len(piece.Vertices) {
+			return
+		}
+		vertex := piece.Vertices[index]
+		rx, rz := rotateGroundPair(vertex[0], vertex[2], u.Move.Heading)
+		worldX[i] = int16((rx + int64(u.X)) >> 16)
+		worldZ[i] = int16((int64(u.Z) - rz) >> 16)
+		if uint32(worldX[i]>>4) >= uint32(t.CellW-1) || uint32(worldZ[i]>>4) >= uint32(t.CellH-1) {
+			return
+		}
+		height[i] = conformHeight(t, worldX[i], worldZ[i])
+	}
+
+	a := (height[0] + height[1]) / 2
+	b := (height[2] + height[3]) / 2
+	integerHeight := (a + b) / 2
+	u.Y = numeric.Fixed((int64(integerHeight) << 16) | (int64(u.Y) & 0xffff))
+	modelZRun := int16(conformAbsFixed(vertexZ(piece, primitive.VertexIndices[0])-vertexZ(piece, primitive.VertexIndices[3])) >> 16)
+	modelXRun := int16(conformAbsFixed(vertexX(piece, primitive.VertexIndices[1])-vertexX(piece, primitive.VertexIndices[2])) >> 16)
+	u.Move.Pitch = numeric.AngleFromAtan2(int64(b-a), int64(modelZRun)).Raw()
+	u.Move.Bank = numeric.AngleFromAtan2(int64(height[0]-height[1]), int64(modelXRun)).Raw()
+}
+
+func vertexX(piece model.Piece, index uint16) numeric.Fixed {
+	if int(index) >= len(piece.Vertices) {
+		return 0
+	}
+	return piece.Vertices[index][0]
+}
+
+func vertexZ(piece model.Piece, index uint16) numeric.Fixed {
+	if int(index) >= len(piece.Vertices) {
+		return 0
+	}
+	return piece.Vertices[index][2]
+}
+
+func conformAbsFixed(value numeric.Fixed) int64 {
+	v := int64(value)
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func rotateGroundPair(x, z numeric.Fixed, heading uint16) (int64, int64) {
+	// Ground conform and flight lean use the same body-to-world pair rotation
+	// and rounding closure [01 R-DET-01 §2][04 R-MOV-01 §5a]. Model vertices
+	// originate as signed 32-bit 16.16 values, so the established helper's
+	// narrow inputs and outputs preserve the authored domain exactly.
+	rx, rz := rotateLeanPair(int32(x), int32(z), heading)
+	return int64(rx), int64(rz)
+}
+
+func conformHeight(t *world.Terrain, x, z int16) int32 {
+	cx, cz := int32(x>>4), int32(z>>4)
+	fx, fz := int32(x&15), int32(z&15)
+	w := t.CellW
+	h := func(px, pz int32) int32 {
+		return int32(t.Plot[int(pz*w+px)].Height())
+	}
+	h00, h10 := h(cx, cz), h(cx+1, cz)
+	h01, h11 := h(cx, cz+1), h(cx+1, cz+1)
+	top := h00 + (h10-h00)*fx/16
+	bottom := h01 + (h11-h01)*fx/16
+	return top + (bottom-top)*fz/16
 }
 
 const maxUint64 = ^uint64(0)
@@ -1002,15 +1142,8 @@ func (s *System) EnsureUnit(u *units.Unit) {
 		HeightWord:     int16(u.Y.Raw() >> 16),
 		SeaLevel:       0,
 		DefFlags:       0,
-		Pitch:          0,
-		Bank:           0,
-		PitchScale:     int32(u.Def.PitchScale),
-		BankScale:      int32(u.Def.BankScale),
 		Acceleration:   int32(u.Def.Acceleration),
 		BrakeRate:      int32(u.Def.BrakeRate),
-		ResidualX:      0,
-		ResidualY:      0,
-		ResidualZ:      0,
 	}
 	if s.Terrain != nil {
 		steer.SeaLevel = s.Terrain.SeaLevel
@@ -1026,9 +1159,32 @@ func (s *System) EnsureUnit(u *units.Unit) {
 	steer.DefFlags = flags
 	s.Steers[h] = steer
 
-	// CollisionState
+	// CollisionState. Building-class units use their authored FBI rectangle and
+	// yard bytes; mobile units retain the resolved movement-class rectangle and
+	// full rectangular stamp [04 R-COLL-01 §4].
+	building := !u.Def.BMCode
+	var yard []world.YardCell
 	footX := profile.FootPrintX
 	footZ := profile.FootPrintZ
+	if building {
+		footX = int16(u.Def.FootprintX)
+		footZ = int16(u.Def.FootprintZ)
+		if footX <= 0 {
+			footX = 1
+		}
+		if footZ <= 0 {
+			footZ = 1
+		}
+		var err error
+		yard, err = world.ParseYardMap(u.Def.YardMap, int(footX), int(footZ))
+		if err != nil {
+			// ParseYardMap accepts every normalized building extent, so this is
+			// unreachable after the local extent normalization. Keep the map
+			// empty only if a future parser adds a data error; never substitute
+			// a mobile whole-rectangle stamp for a building.
+			yard = nil
+		}
+	}
 	if footX <= 0 {
 		footX = int16(u.Def.FootprintX)
 		if footX <= 0 {
@@ -1057,6 +1213,9 @@ func (s *System) EnsureUnit(u *units.Unit) {
 		Blocked:     false,
 		Dirty:       false,
 		BlockerID:   -1,
+		Building:    building,
+		Yard:        yard,
+		YardOpen:    u.YardOpen,
 	}
 	// Quantized anchor via half bias [04 §8.2] C23
 	// Use footprint-derived half bias if not set
@@ -1075,7 +1234,13 @@ func (s *System) EnsureUnit(u *units.Unit) {
 		// the same tick here lets a later request revision cross a stationary
 		// building into the shared class layer [04 R-COLL-01 §4]
 		// [04 R-PATH-01 §2][04 §6.1 R-DOC04-B].
-		if s.Grid.Stamp(anchor, footX, footZ, coll.ID) {
+		stamped := false
+		if coll.Building {
+			stamped = s.stampBuildingGrid(anchor, footX, footZ, coll.Yard, coll.YardOpen, coll.ID)
+		} else {
+			stamped = s.Grid.Stamp(anchor, footX, footZ, coll.ID)
+		}
+		if stamped {
 			s.noteOccupancyCommit(h, s.tick)
 		}
 	}
@@ -1110,6 +1275,68 @@ func (s *System) EnsureUnit(u *units.Unit) {
 		// A stationary aircraft is a visible content bug; a fabricated one is
 		// not.
 		s.Flights[h] = flight
+	}
+}
+
+// stampBuildingGrid applies the shared yard selector to movement occupancy.
+// The caller has already performed the terrain/foreign-occupant admission;
+// each selected cell is still stamped separately so the grid preserves its
+// self-identity and foreign-occupant denial semantics [04 R-COLL-01 §4].
+func (s *System) stampBuildingGrid(anchor Cell, footX, footZ int16, yard []world.YardCell, open bool, id int) bool {
+	if s == nil || s.Grid == nil || len(yard) != int(footX)*int(footZ) {
+		return false
+	}
+	if footX <= 0 || footZ <= 0 {
+		return false
+	}
+	stamped := false
+	for dz := int32(0); dz < int32(footZ); dz++ {
+		for dx := int32(0); dx < int32(footX); dx++ {
+			if !yard[int(dz)*int(footX)+int(dx)].Selects(open) {
+				continue
+			}
+			if s.Grid.Stamp(Cell{X: anchor.X + dx, Z: anchor.Z + dz}, 1, 1, id) {
+				stamped = true
+			}
+		}
+	}
+	return stamped
+}
+
+// clearBuildingGrid removes only cells selected by the building's current
+// yard state. The parsed yard remains attached to the collision state so
+// teardown uses the same selector as creation and open/close [04 R-COLL-01
+// §4].
+func (s *System) clearBuildingGrid(anchor Cell, footX, footZ int16, yard []world.YardCell, open bool, id int) bool {
+	if s == nil || s.Grid == nil || len(yard) != int(footX)*int(footZ) {
+		return false
+	}
+	if footX <= 0 || footZ <= 0 {
+		return false
+	}
+	cleared := false
+	for dz := int32(0); dz < int32(footZ); dz++ {
+		for dx := int32(0); dx < int32(footX); dx++ {
+			if !yard[int(dz)*int(footX)+int(dx)].Selects(open) {
+				continue
+			}
+			if s.Grid.Clear(Cell{X: anchor.X + dx, Z: anchor.Z + dz}, 1, 1, id) {
+				cleared = true
+			}
+		}
+	}
+	return cleared
+}
+
+// SetBuildingYardState updates the movement-side state used by destruction
+// cleanup. Construction owns admission and calls this after an accepted
+// port-18 transaction [04 R-COLL-01 §4].
+func (s *System) SetBuildingYardState(h pool.Handle, open bool) {
+	if s == nil {
+		return
+	}
+	if coll := s.Collisions[h]; coll != nil && coll.Building {
+		coll.YardOpen = open
 	}
 }
 
@@ -2161,16 +2388,12 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 				f |= 0x80000
 			}
 			steer.DefFlags = f
-			steer.PitchScale = int32(u.Def.PitchScale)
-			steer.BankScale = int32(u.Def.BankScale)
 			steer.Acceleration = int32(u.Def.Acceleration)
 			steer.BrakeRate = int32(u.Def.BrakeRate)
 		}
 		steer.UpdateHeading(desired) // [04 §8.1] C20
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		steer.UpdatePitch(steer.PendingHeading) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		cap := steer.SpeedCapFromPitch() // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// Speed capping consumes the authoritative unit pitch word [04 R-MOV-01 §4].
+		cap := steer.SpeedCapForPitch(int16(u.Move.Pitch))
 		// The follower selects acceleration only when both strict cornering and
 		// stopping-distance gates pass [04 R-MOV-01 §4].
 		hasWaypoint := !brakingOnly
@@ -2238,15 +2461,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		coll.BlockerID = blockerID
 		u.X = numeric.Fixed(int64(coll.X))
 		u.Z = numeric.Fixed(int64(coll.Z))
-		if y, ok := groundPostMoveHeight(s.Terrain, u); ok {
-			u.Y = y
-		} else {
-			u.Y = numeric.Fixed(int64(coll.Y))
-		}
-		// TODO(R-MOV-01 selection primitive): non-upright, non-floater units
-		// still need the compiled model ground plate to publish exact Y, pitch,
-		// and roll; retain the established centre-height placeholder until that
-		// geometry is available [04 R-MOV-01 §5].
+		groundDirty := u.Flags&unitTransformDirty != 0 || steer.Dirty || coll.Dirty || (u.Def != nil && u.Def.CanHover)
 		steer.X = coll.X
 		steer.Z = coll.Z
 		steer.Heading = coll.Heading
@@ -2262,6 +2477,14 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 			callbackSpeed = 0
 		}
 		s.emitMovementCallbacks(u, callbackSpeed)
+		// This follows the complete mover tick, including its callbacks, and is
+		// the only ordinary ground pose writer [04 R-MOV-01 §5a].
+		applyGroundPostMove(s.Terrain, u, groundDirty, coll.Mode)
+		if groundDirty {
+			u.Flags &^= unitTransformDirty
+			steer.Dirty = false
+			coll.Dirty = false
+		}
 		moved = int64(u.X) != oldXRaw || int64(u.Z) != oldZRaw
 	}
 	// Arrival via goal tolerance, not merely route active [task]

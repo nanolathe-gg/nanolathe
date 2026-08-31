@@ -17,17 +17,12 @@ import "github.com/nanolathe/nanolathe/internal/units"
 // [04 R-AIR-01 §6] is `VTOL_LandIfCan`, and this is one of its two producers
 // (the other is `VTOL_Standby`'s idle unloaded arm, [04 R-AIR-01 §7]).
 //
-// TODO(T25): the caption clear [04 R-ORD-01 §1] clears the record's one-shot
-// caption-pending bit and emits status kind 5 with no text. This build has no
-// status emitter and no caption-pending field on the record, so there is
-// nothing to clear and nowhere to emit; the step is therefore not represented
-// here. Placeholder: the two observable halves of the row — the slot clear and
-// the landing spawn — run, and the caption step is a no-op.
 // stopHandler is the row of [04 R-ORD-01 §2]. The spawned `VTOL_LandIfCan`
 // record carries a true creation-tick snapshot [04 §3.2] because the tick is
 // the handler's fourth argument (WU-18-7 retired the by-name
 // `stopHandlerAtTick` special case the pump used to reach this body with).
 func stopHandler(u *units.Unit, _ *Node, _ uint32, tick uint32) Code {
+	captionClear(u)
 	clearWeaponTargetsUnconditional(u)
 	if u != nil && u.Def != nil && u.Def.CanFly && u.Move.Mode&0x3 == 2 {
 		spawnLandIfCan(u, tick)

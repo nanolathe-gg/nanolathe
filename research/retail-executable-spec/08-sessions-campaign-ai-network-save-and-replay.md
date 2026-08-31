@@ -5948,10 +5948,21 @@ with `pool = stored + tickProduction` (after the split that pays
 consumption), when `pool > capacity` the stored value becomes `capacity` and
 `wasted += pool − capacity` (float, widened). Fixed per-tick order:
 production/consumption sums → the capacity adjustment of [05] → produced/
-consumed totals → overflow clamp and wasted totals. All twelve values are saved and
-restored verbatim under the `Players` account keys of that name [08 "Account
-inventory"], and the network statistics copy carries the same fields as
-floats.
+consumed totals → overflow clamp and wasted totals. The established Player%i
+economy values are saved and restored verbatim under the `Players` account keys
+of that name [08 "Account inventory"], and the network statistics copy carries
+the same fields as floats. The `Player%i` save table above establishes keys for
+Kills and Losses;
+it does not establish save keys for the commander-specific counters. Those
+counters therefore remain runtime/result data until a separate save-writer
+trace settles their persistence.
+
+**Correction (2026-08-31, Wave B2):** The previous wording said that all
+twelve displayed values were restored under `Players` keys. That over-read the
+statistics/network row census: the Player%i writer/reader table establishes
+the economy values plus `Kills` and `Losses`, while commander-specific names
+are established only for the network statistics copy. The persistence status
+of commander counters is therefore Unknown pending the save-writer trace.
 
 **Screen fields** (the `ENDMSN.GUI` score population, run when the panel is
 populated): for every display-array row in slot order, with `r` the running
@@ -6770,6 +6781,9 @@ finding. The recitals are deleted here only; the body sections and the
 - The meaning of the per-slot auxiliary word that admits a slot to the score
   display and statistics rows even when its controller test fails ·
   [R-CAMP-01 §7] · static trace of the word's writers.
+- Whether commander-kill and commander-loss counters have save-bank keys in
+  addition to the established `Kills` and `Losses` entries · "Player records"
+  / [R-CAMP-01 §10] · static trace of the Player%i writer and reader.
 - Transport-selection policy beyond generic move orders, and any distinct
   naval or air placement geometry · "Placement root and search helpers"
   [P0-04] · static trace.

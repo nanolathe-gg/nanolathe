@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -52,7 +53,7 @@ func mobileBuildCompletionFixture(t *testing.T, count uint32) (*Service, *units.
 		t.Fatalf("StartBuilding arrangements = %d, want 1", liveThreads(vm))
 	}
 
-	svc := NewService(nil, cat, w, nil)
+	svc := NewService(nil, cat, w, &economy.Service{})
 	svc.SetBuilderLink(product.Handle, builder.Handle)
 	return svc, builder, product, node
 }

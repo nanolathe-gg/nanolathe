@@ -36,6 +36,30 @@ const (
 	skirmishNickPayload           = 16 // usable chars (17 includes NUL) [02 §3]
 )
 
+// CommanderDeathRule is the closed retail rule vocabulary.  The setup field
+// remains an int for save/menu source assignment; every gameplay consumer
+// passes it through CommanderDeathMode, so values outside this vocabulary can
+// never select a fourth behavior [08 R-SKIR-01 §3].
+type CommanderDeathRule int
+
+const (
+	CommanderDeathContinues  CommanderDeathRule = iota // 0: keep the owner's units
+	CommanderDeathEnds                                 // 1: owner elimination
+	CommanderDeathDeathmatch                           // 2: local commander respawn
+)
+
+// CommanderDeathMode accepts only the three values present in retail.  An
+// invalid setup word is not a new mode; callers fail closed to the established
+// game-ends path [08 R-SKIR-01 §3].
+func CommanderDeathMode(v int) CommanderDeathRule {
+	switch CommanderDeathRule(v) {
+	case CommanderDeathContinues, CommanderDeathEnds, CommanderDeathDeathmatch:
+		return CommanderDeathRule(v)
+	default:
+		return CommanderDeathEnds
+	}
+}
+
 // Shell controller states distinguished at lobby boundary before conversion [08 "Skirmish configuration"].
 const (
 	ShellControllerOpen     = 0 // open/inactive slot [08 "Skirmish configuration"]
@@ -91,7 +115,7 @@ type SkirmishConfig struct {
 	Players        [10]SkirmishPlayer
 	Difficulty     int // 0 easy, 1 medium, 2 hard [08 "Skirmish configuration"]
 	Location       int // 0 randomized (CRT Fisher-Yates), !=0 identity [P0-04]
-	CommanderDeath int // 0 continues after commander death, 1 ends [08 "Skirmish configuration"]
+	CommanderDeath int // CommanderDeathRule values 0/1/2 [08 R-SKIR-01 §3]
 	Mapping        int // 0 all terrain visible, 1 blacked out until explored [08 "Skirmish configuration"]
 	LineOfSight    int // 0 disables LOS, 1 enables it [08 "Skirmish configuration"]
 	LOSType        int // 0 elevations ignored, 1 elevations affect LOS [08 "Skirmish configuration"]
@@ -122,7 +146,13 @@ func (c *SkirmishConfig) ApplyDefaults() {
 		// changes them, so apply the retail missing-value defaults only once.
 		c.Difficulty = SkirmishDefaultDifficulty
 		c.Location = SkirmishDefaultLocation
-		c.CommanderDeath = SkirmishDefaultCommanderDeath
+		// Preserve the explicit Deathmatch value when a caller supplies it
+		// before applying the remaining missing registry defaults [08
+		// R-SKIR-01 §3].  Zero remains the missing-value sentinel here;
+		// callers selecting value 0 should set it after ApplyDefaults.
+		if c.CommanderDeath != int(CommanderDeathDeathmatch) {
+			c.CommanderDeath = SkirmishDefaultCommanderDeath
+		}
 		c.Mapping = SkirmishDefaultMapping
 		c.LineOfSight = SkirmishDefaultLineOfSight
 		c.LOSType = SkirmishDefaultLOSType
@@ -211,7 +241,9 @@ func (c *SkirmishConfig) Normalize() error {
 	if !c.rulesDefaultsApplied {
 		c.Difficulty = SkirmishDefaultDifficulty
 		c.Location = SkirmishDefaultLocation
-		c.CommanderDeath = SkirmishDefaultCommanderDeath
+		if c.CommanderDeath != int(CommanderDeathDeathmatch) {
+			c.CommanderDeath = SkirmishDefaultCommanderDeath
+		}
 		c.Mapping = SkirmishDefaultMapping
 		c.LineOfSight = SkirmishDefaultLineOfSight
 		c.LOSType = SkirmishDefaultLOSType
@@ -587,13 +619,13 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 	}); err != nil {
 		return nil, err
 	}
-	// Alliance-aware skirmish victory: team eliminated when all its commanders
-	// are dead; when <=1 hostile team remains, latch result (draw on mutual
-	// destruction) [08 "Victory and defeat triggers"][08 "Skirmish configuration"]
-	// CommanderDeath==1. Countdown via EndLatch [P1-01 §2.2] before visible.
+	// Alliance-aware skirmish victory: rule 0 and rule 1 use the owner's live
+	// unit count; rule 1 first sweeps the owner's remaining units after a
+	// commander death.  Rule 2 suppresses elimination while respawn remains
+	// applicable [08 R-SKIR-01 §3][08 R-TRIG-01 §6]. Countdown via EndLatch
+	// [P1-01 §2.2] remains the result visibility boundary.
 	// Victory evaluation runs inside authoritativeTick (loop.go) after ledger
 	// cleanup [RX-08][ON-09]; victory evaluation is part of the direct session tick.
-	// TODO(question): CommanderDeath==0 annihilation mode not researched; defer [08 "Skirmish configuration"].
 	// 12. transition through state machine [08 "Session states"] C3
 	if err := s.SelectForGametype(GametypeMultiplayer); err != nil {
 		return nil, err

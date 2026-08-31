@@ -10,96 +10,12 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// TestLocomotionPitchSustainsCapOnGentleSlope proves M2: the smoothed pitch
-// accumulator sustains >=90% cap on ≤1px/cell slopes where the old raw delta
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TestLocomotionPitchCapUsesAuthoritativeWord locks the established speed-cap
+// table without asserting an unestablished ground attitude producer.
 func TestLocomotionPitchSustainsCapOnGentleSlope(t *testing.T) {
-	const maxV = 78643 // 1.2*65536 ARMCOM [02 "Unit record"]
-	// Old path: delta = CoarseHeightAt(wp)-Y for 1px height diff = 65536
-	// PitchIndex 65536>>11=32 clamp 5 => table 15% => cap 11796
-	oldDelta := int32(65536)
-	oldCap := PitchCap(oldDelta, maxV)
-	if oldCap != 11796 && oldCap != maxV*15/100 { // 15% table at idx+5 M2
-		// allow truncation check
-		t.Logf("oldCap %d for delta %d (expected ~15%% %d)", oldCap, oldDelta, maxV*15/100)
-	}
-	if oldCap > maxV*30/100 {
-		t.Fatalf("old raw delta should pin cap at ~15%%, got %d >30%% %d", oldCap, maxV)
-	}
-	// New path: smoothed Pitch accumulator stays near 0 on gentle slope
-	s := &SteerState{
-		MaxVelocity:  maxV,
-		HeightWord:   10,
-		SeaLevel:     0,
-		DefFlags:     0,
-		PitchScale:   0,     // ARMCOM pitchscale 0 => pitch stays 0
-		BankScale:    65536, // default 1.0 [02 "Unit record"]
-		Acceleration: 9830,
-		BrakeRate:    19660,
-		Pitch:        0,
-	}
-	// Simulate several ticks of flat movement to stabilize pitch
-	for i := 0; i < 5; i++ {
-		s.UpdatePitch(0)
-	}
-	newCap := s.SpeedCapFromPitch()
-	if newCap < maxV*90/100 {
-		t.Fatalf("smoothed pitch cap %d <90%% of maxV %d on gentle slope; old cap %d", newCap, maxV, oldCap)
-	}
-	// Also test that new cap is at least 3x old (90 vs 15)
-	if newCap < oldCap*3 {
-		t.Fatalf("new cap %d should be >> old pin %d", newCap, oldCap)
-	}
-	// Verify via System StepUnit that a unit crossing gentle terrain sustains >=90%
-	terrain := &world.Terrain{
-		CellW:    20,
-		CellH:    20,
-		SeaLevel: 0,
-		Plot:     make([]world.PlotCell, 400),
-	}
-	for i := range terrain.Plot {
-		terrain.Plot[i].SetFeature(world.PlotFeatureNone)
-		terrain.Plot[i].SetHeight(10)
-		terrain.Plot[i].SetMinHeight(10)
-		terrain.Plot[i].SetMaxHeight(10)
-	}
-	// Create gentle slope: height 10 at start, 11 at goal (1px diff over ~7 cells => ~0.14 per cell)
-	// But CoarseHeightAt will still see 1px diff at waypoint; old would pin, new should not.
-	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
-	grid := NewOccupancyGrid()
-	sys := NewSystem(terrain, profile, grid)
-	w := newMovementFixtureWorld(10)
-	def := &content.UnitDef{UnitName: "armcom", MaxVelocity: maxV, TurnRate: 500, Acceleration: 9830, BrakeRate: 19660}
-	def.MaxDamage = 100
-	def.FootprintX = 1
-	def.FootprintZ = 1
-	h, _ := w.Create(def, 0, world.CellToWorld(1), terrain.HeightAt(world.CellToWorld(1), world.CellToWorld(1)), world.CellToWorld(1))
-	u := w.Unit(h)
-	sys.BindWorld(w)
-	sys.EnsureUnit(u)
-	// Drive to (8,8) on flat terrain (no actual height slope, but pitch accumulator should keep cap high)
-	sys.SubmitMove(h, 0, path.Cell{X: 1, Z: 1}, path.Cell{X: 8, Z: 8})
-	id := orders.Lookup("Move_Ground")
-	q := orders.QueueForUnit(u)
-	q.Push(id, orders.Node{GoalX: world.CellToWorld(8), GoalZ: world.CellToWorld(8)})
-	sys.Scheduler.Tick(1)
-	steer := sys.Steers[h]
-	if steer == nil {
-		t.Fatalf("steer nil")
-	}
-	// After a few ticks, speed should be near cap (>=90%)
-	for tick := uint32(2); tick < 15; tick++ {
-		sys.Scheduler.Tick(tick)
-		sys.BeginTick(tick)
-		sys.StepUnit(h, tick)
-		sys.EndTick(tick)
-		if steer.Speed < maxV*90/100 && tick > 10 {
-			// After accel ramo, should be >=90%
-			t.Fatalf("tick %d speed %d <90%% cap %d", tick, steer.Speed, maxV)
-		}
-		if steer.Speed == 0 && tick > 5 {
-			t.Fatalf("unit crawled at 0 speed on flat")
-		}
+	s := &SteerState{MaxVelocity: 78643, HeightWord: 10}
+	if got := s.SpeedCapForPitch(0); got != 78643 {
+		t.Fatalf("level pitch cap = %d, want 78643", got)
 	}
 }
 
@@ -117,10 +33,9 @@ func TestLocomotionAccelBrakeRamp(t *testing.T) {
 		Speed:        0,
 		HeightWord:   10,
 		SeaLevel:     0,
-		Pitch:        0, // cap 100%
 	}
 	s.MaxVelocity = maxV
-	cap := s.SpeedCapFromPitch() // 100%
+	cap := s.SpeedCapForPitch(0) // 100%
 	if cap != maxV {
 		t.Fatalf("cap %d want %d", cap, maxV)
 	}

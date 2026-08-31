@@ -36,13 +36,6 @@ const (
 	flagNoHalve  = flagCanHover | flagFloater // 0x81000 [04 §8.1] C21 neither set => halve
 )
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-const (
-	pitchDecay     = 0xf333 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	gravityRaw     = 8155   // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	gravityDivisor = 0xccd  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-)
-
 // pitchTable is the exact pitch speed percent table [04 §8.1] C21.
 // Index -5..+5 maps to offset +5 = 0..10; values are signed bytes
 // 25,55,70,85,100,100,75,50,25,20,15 in index order -5 through +5.
@@ -67,18 +60,8 @@ type SteerState struct {
 	SeaLevel   uint8  // sea-level byte [04 §8.1] C21 0..255
 	DefFlags   uint32 // definition flags word [04 §8.1] C21; gate 0x81000
 
-	Pitch int16 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	Bank  int16 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-
-	PitchScale int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	BankScale  int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-
 	Acceleration int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	BrakeRate    int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-
-	ResidualX int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	ResidualY int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	ResidualZ int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 }
 
 // PitchIndex maps a signed height delta to the clamped table index [04 §8.1] C21.
@@ -128,79 +111,24 @@ func (s *SteerState) SpeedCap(delta int32) int32 { // [04 §8.1] C21
 	return cap
 }
 
-// SpeedCapFromPitch returns the pitch-capped speed using the smoothed
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// It replaces the old CoarseHeightAt delta source; the table and halving
-// remain identical to SpeedCap.
-func (s *SteerState) SpeedCapFromPitch() int32 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// SpeedCapForPitch returns the pitch-capped speed using the authoritative
+// unit pitch word [04 R-MOV-01 §4].
+func (s *SteerState) SpeedCapForPitch(pitch int16) int32 {
 	if s == nil {
 		return 0
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	idx := int(int16(s.Pitch) >> 11)
+	idx := int(pitch >> 11)
 	if idx < -5 {
 		idx = -5
 	} else if idx > 5 {
 		idx = 5
 	}
-	pct := pitchTable[idx+5]                                                           // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	cap := int32(int64(pct) * int64(s.MaxVelocity) / 100)                              // trunc toward zero [I3][01 §8] via /100
-	if int16(s.HeightWord) < int16(int16(s.SeaLevel)) && s.DefFlags&flagNoHalve == 0 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		cap = cap / 2 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	pct := pitchTable[idx+5]
+	cap := int32(int64(pct) * int64(s.MaxVelocity) / 100) // trunc toward zero [I3]
+	if int16(s.HeightWord) < int16(s.SeaLevel) && s.DefFlags&flagNoHalve == 0 {
+		cap /= 2
 	}
 	return cap
-}
-
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// It decays residuals by 0xf333>>16, rotates the residual pair by heading,
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Integer math truncates toward zero for divisions [I3][01 §8]; shifts floor [I3].
-// No float64, no map iteration, deterministic [I1][I2][I4].
-func (s *SteerState) UpdatePitch(heading uint16) { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	if s == nil {
-		return
-	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	s.ResidualX = int32((int64(s.ResidualX) * pitchDecay) >> 16)
-	s.ResidualY = int32((int64(s.ResidualY) * pitchDecay) >> 16)
-	s.ResidualZ = int32((int64(s.ResidualZ) * pitchDecay) >> 16)
-	// No explicit velocity delta added here; terrain slope influences via
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// zero sustains cap on gentle slopes [M2]. If a delta is later needed,
-	// caller can add to ResidualX/Z before this call.
-	// Rotate residual pair by heading via fixed trig (deterministic stand-in
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	sin := int32(numeric.Sin(numeric.Angle(heading))) // scaled 8192 [04 §5.1]
-	cos := int32(numeric.Cos(numeric.Angle(heading))) // scaled 8192 [04 §5.1]
-	// Apply rotation: rx = (cos*rx - sin*rz +4096)>>13 [04 §5.1] round to nearest before trunc
-	rx := int32((int64(cos)*int64(s.ResidualX) - int64(sin)*int64(s.ResidualZ) + 4096) >> 13)
-	// rz not directly used for pitch in simplified linear model; compute for completeness
-	_ = int32((int64(sin)*int64(s.ResidualX) + int64(cos)*int64(s.ResidualZ) + 4096) >> 13)
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	grav := int32(gravityRaw / gravityDivisor) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	if grav == 0 {
-		grav = 1
-	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// Use arithmetic shift floors; division truncates toward zero via Go /
-	pitchTerm := int32((int64(s.PitchScale) * int64(-rx)) >> 16)
-	bankTerm := int32((int64(s.BankScale) * int64(-rx)) >> 16)
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// Retail does atan2(term, grav)*10430 via FSINCOS; for small residuals linear term/grav is near zero and preserves >=90% cap.
-	p := pitchTerm / grav // trunc toward zero [I3][01 §8]
-	if p > 32767 {
-		p = 32767
-	} else if p < -32768 {
-		p = -32768
-	}
-	s.Pitch = int16(p)
-	b := bankTerm / grav
-	if b > 32767 {
-		b = 32767
-	} else if b < -32768 {
-		b = -32768
-	}
-	s.Bank = int16(b)
 }
 
 // headingDelta wraps the heading difference on the 16-bit circle [04 §8.1] C20.
@@ -281,7 +209,7 @@ func (s *SteerState) UpdateSpeed(target int32, pitchDelta int32) { // [04 §8.1]
 
 // UpdateSpeedWithBraking advances speed toward cap using Acceleration/BrakeRate
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// cap is the pitch-capped speed from SpeedCapForPitch [04 R-MOV-01 §4].
 // hasWaypoint is true while waypoints remain (route.Active or directGoal) [04 §7.3] C14.
 // distToGoal is the Euclidean distance to the final goal in 16.16 units (Fixed.Raw) [03 §2.1][04 §7.3] C15.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.

@@ -1,8 +1,6 @@
 package orders
 
 import (
-	"fmt"
-
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -154,13 +152,7 @@ func engagementDistance(_ *units.Unit, _ uint32) int32 { return 0 }
 // captionClear is [04 R-ORD-01 §1]'s "caption clear": the one-shot helper that
 // clears the record's runtime caption-pending bit and emits status kind 5
 // (`ok`) with no text.
-//
-// TODO(T25): this build has neither a status emitter nor a caption-pending
-// field on the record, so there is nothing to clear and nowhere to emit.
-// Placeholder: the step is a no-op, exactly as stop.go's `Stop` row records for
-// the same helper. The rows' observable halves — the slot binds, the goals and
-// the result codes — all run.
-func captionClear(_ *units.Unit) {}
+func captionClear(u *units.Unit) { workStatus(u, statusOK, "") }
 
 // installPointGoal is the point form of [04 R-ORD-01 §1]'s goal installers:
 // "a **point** goal at a position with an arrival radius ... skip the install
@@ -311,8 +303,8 @@ func attackKamikazeHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32
 		return Code(1) // *advance* [04 R-ORD-01 §3]
 	case 1:
 		if satisfied&0x20 != 0 {
-			// Status 6 (`Arrived`) is the caption half [04 R-ORD-01 §1]; see
-			// captionClear's TODO(T25) for why it is not emitted here.
+			// Status 6 (`Arrived`) is the caption half [04 R-ORD-01 §1].
+			workStatus(u, statusArrived, "Arrived")
 			spawnImmediateSelfDestruct(u, n)
 			return Code(5) // *complete* [04 R-ORD-01 §3]
 		}
@@ -424,26 +416,6 @@ func attackSpecialHandler(u *units.Unit, n *Node, _ uint32, _ uint32) Code {
 //	code 3 against it, spawn the resolved attack record (target = it) at the
 //	head, restart. Other phase: cancel-all.
 //
-// TODO(T25): phase 1's scan has no input. The scan walks the live unit array
-// from slot 1 onward; the queue's binding [P0-I16] exposes `Lookup(handle)` and
-// `Hostility(actor, target)` but no enumerator, and the world the pump holds is
-// not reachable from a queue. Placeholder: with no candidates the row's own
-// "None → complete" arm runs, which is the same outcome retail reaches when
-// nothing of that definition is hostile and in play. The per-candidate
-// `RNG(d²/2)` draw (subject to [04 R-ORD-01 §1]'s rule that a bound below 2
-// returns 0 without advancing the stream) belongs with the enumerator and is
-// not taken either.
-//
-// WU-18-7 examined this and left it: closing it needs two things this package
-// cannot settle. (a) A slot-ASCENDING live-unit enumerator on the binding —
-// the session's existing `units.World.VisitActiveSlots` is player-major, a
-// different order, and the row's "ties → later unit" makes iteration order
-// behavior (I1). The producer of the binding is the session, not this package.
-// (b) An answer to which index space p1 is in: the row says "definition
-// index", and the only producer in this build (the initial-mission `a name`
-// verb) stores its catalog index there alongside the canonical key. Treating
-// the two as the same numbering is an assumption, not a finding.
-//
 // Phase 0's "deadline RNG(90) + 1" is armed from the handler's tick argument
 // (WU-18-7); WU-18-4 could not form it and took no draw, because the draw
 // exists only to size that wait and taking it would have moved every later
@@ -458,10 +430,17 @@ func attackUTypeHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
 		armDeadline(n, tick, drawBelow(u, 90)+1) // "deadline RNG(90) + 1"
 		return Code(1)                           // *advance* [04 R-ORD-01 §3]
 	case 1:
-		if q := QueueForUnit(u); q != nil {
-			q.recordDiagnostic(fmt.Sprintf("orders: AttackUType hunt for definition index %d found no candidate: the queue binding exposes no live-unit enumerator", n.Param1))
+		if target := scanAttackUType(u, n.Param1); target != nil {
+			id := Resolve(3, u, target, nil)
+			if id != 0 {
+				q := QueueOfUnit(u)
+				if q != nil {
+					q.PushHead(id, NewNodeForOrder(id, target.Handle, target.X, target.Y, target.Z, tick, u.Handle, false))
+					return Code(0) // restart with the spawned attack at the head
+				}
+			}
 		}
-		return Code(5) // none → *complete* [04 R-ORD-01 §3]
+		return Code(5) // none (or rejected resolution) → *complete* [04 R-ORD-01 §3]
 	default:
 		return Code(7) // *cancel-all* [04 R-ORD-01 §3]
 	}
@@ -578,12 +557,9 @@ func suppressHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code {
 // not issued; the established return code is. A trace naming those three fields
 // settles it.
 //
-// TODO(T25): step 4 is not reproduced. Off-map recovery is [04 R-AIR-01 §5], a
-// leg of internal/movement's air marker family, and `AirToGround`'s divergence
-// from it ("sets the record's deadline to the current tick plus 30, forces the
-// phase to 2, and falls through") needs both that family and the tick the
-// primary pump does not pass down. Placeholder: the step is skipped, so an
-// aircraft that has left the map does not take the recovery leg.
+// Off-map recovery is owned by the movement runner's marker family [04
+// R-AIR-01 §5]. The queue-side entry performs the shared record checks first;
+// the runner then applies the recovery leg with the current tick.
 func airEntry(u *units.Unit, n *Node, satisfied uint32, interruptMask uint32) (Code, bool) {
 	if satisfied&interruptMask != 0 {
 		return Code(5), true // step 1, "return 5 either way"
@@ -603,57 +579,6 @@ func airEntry(u *units.Unit, n *Node, satisfied uint32, interruptMask uint32) (C
 	return Code(0), false
 }
 
-// airAttackHandler is the descriptor handler the four air-attack executors
-// share. It runs the entry sequence above and then stops.
-//
-// TODO(T25): the four phase machines are not here. [04 R-AIR-01 §8] builds
-// every leg of `AirStrike`, `AirToGround`, `AirToGroundHover` and `AirToAir`
-// out of air path markers — the point marker, the frozen terrain-relative
-// marker, the follow-unit marker, the takeoff preamble, and, for `AirToAir`,
-// a second payload class that carries a velocity and steers it toward a
-// commanded heading. That whole family is internal/movement's
-// (`airorders.go`, which already owns `VTOL_Move`, `VTOL_LandIfCan` and
-// `VTOL_Standby` for exactly this reason), it is unexported, and this package
-// cannot import it — internal/movement imports internal/orders, not the other
-// way round. Writing half a leg here and half there would be worse than saying
-// so, so the bodies belong beside their twins in internal/movement.
-//
-// Placeholder: the record completes with a queue diagnostic naming the order.
-// Completion is bounded and visible, and it is the code three of the entry
-// sequence's own four arms return; the alternative — arming a leg's gate
-// (0x100E8, 0xE2, 0x110E8) with no marker behind it to raise those bits — is
-// exactly the silent forever-park PLAN 18 exists to remove.
-func airAttackHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code {
-	mask := airInterruptMask(n.ID)
-	if code, done := airEntry(u, n, satisfied, mask); done {
-		return code
-	}
-	if q := QueueForUnit(u); q != nil {
-		q.recordDiagnostic(fmt.Sprintf("orders: %s entry sequence ran but its attack legs live in internal/movement's air marker family, completed", DescriptorFor(n.ID).Name))
-	}
-	return Code(5)
-}
-
-// airInterruptMask is step 1's per-order mask: 0x1000A for `AirStrike` and
-// `AirToGround`, 0x10008 for `AirToGroundHover` [04 R-AIR-01 §8].
-//
-// TODO(question): [04 R-AIR-01 §8] gives the mask for three of the four
-// executors and omits `AirToAir` from both lists, while calling step 1 part of
-// the sequence "all four share". Which of the two masks `AirToAir` takes is
-// therefore unstated, and the two differ by pending bit `0x2` — the
-// cancel-current notification [04 R-ORD-01 §0], whose producer is a removal
-// path. The narrower `0x10008` is used, so an `AirToAir` record is not ended by
-// a bit its own section never lists for it. A trace of that executor's entry
-// test settles it.
-func airInterruptMask(id ID) uint32 {
-	switch DescriptorFor(id).Name {
-	case "AirStrike", "AirToGround":
-		return 0x1000A
-	default:
-		return pendTargetGone // 0x10008
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
@@ -669,10 +594,6 @@ var combatHandlers = []struct {
 	{"AttackSpecial", attackSpecialHandler},
 	{"AttackUType", attackUTypeHandler},
 	{"Suppress", suppressHandler},
-	{"AirStrike", airAttackHandler},
-	{"AirToAir", airAttackHandler},
-	{"AirToGround", airAttackHandler},
-	{"AirToGroundHover", airAttackHandler},
 }
 
 // ensureCombatHandlers installs this family onto the descriptor table. It is

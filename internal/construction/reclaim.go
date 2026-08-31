@@ -184,6 +184,8 @@ func (s *Service) stepUnitReclaim(builder *units.Unit, node *orders.Node, tick u
 			pulse = 1
 		}
 		oldRemaining = target.Remaining
+		target.LastDamageSide = builder.Owner
+		target.LastDamageCause = 5
 		// Route the pulse through the world's ordinary damage receiver. Besides
 		// preserving the packet boundary, this clamps lethal health to zero
 		// before the cause-5 death latch [05 "Unit reclaim"][06 §9.1].
@@ -233,17 +235,18 @@ func (s *Service) emitReclaimNano(tick uint32, builder, target *units.Unit) {
 	if !ok {
 		return
 	}
-	// Selector 6 and one event per admitted reclaim pulse are established; the
-	// producer identity routes the event to effect strip 6 (beam/muzzle/
-	// nanolathe) and the geometry flag opens the client's nanolathe draw gate
-	// [R-P0-06][03 §5.5].
+	// Selector 6 and one event per admitted reclaim pulse are established. Unit
+	// reclaim reverses the ordinary work direction: the target box is the
+	// source and the builder's QueryNanoPiece is the destination [05 R-WORK-01
+	// §8].
 	s.Presentation.EmitNanolathe(frame.Event{
 		Tick: tick, Source: builder.Handle, Target: target.Handle, Piece: piece,
-		X: source.X(), Y: source.Y(), Z: source.Z(),
-		TargetX: target.X, TargetY: target.Y, TargetZ: target.Z,
+		X: target.X, Y: target.Y, Z: target.Z,
+		TargetX: source.X(), TargetY: source.Y(), TargetZ: source.Z(),
 		EffectID: 6, Mode: 2, Team: builder.Owner,
 		Producer:               frame.ProducerBeam,
 		PaletteRow:             6,
+		NanolatheActiveUntil:   tick + 900,
 		NanolatheGeometryKnown: true,
 	})
 }

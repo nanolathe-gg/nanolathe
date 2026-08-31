@@ -6,7 +6,7 @@ package cleanroom
 // line that still has to be rewritten as clean-room prose, with its
 // address-level trail moved to /tmp/ta-decompile/notes/.
 //
-// Total at baseline: 561 occurrences across 67 files.
+// Total at baseline: 494 occurrences across 63 files.
 //
 // A file absent from this map must have zero occurrences. Counts may only
 // go down, and going down requires updating this file in the same change.
@@ -50,10 +50,10 @@ var Baseline = map[string]int{
 	"internal/mission/sparse_test.go":               1,
 	"internal/movement/collision.go":                13,
 	"internal/movement/flight.go":                   5,
-	"internal/movement/integrate.go":                13,
-	"internal/movement/locomotion_fidelity_test.go": 4,
+	"internal/movement/integrate.go":                9,
+	"internal/movement/locomotion_fidelity_test.go": 2,
 	"internal/movement/profile.go":                  9,
-	"internal/movement/steer.go":                    71,
+	"internal/movement/steer.go":                    31,
 	"internal/movement/transport.go":                1,
 	"internal/orders/pump_test.go":                  2,
 	"internal/orders/resolve.go":                    1,

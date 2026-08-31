@@ -178,21 +178,6 @@ func patrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 //
 // The gate here is ORed, not assigned, so the 60-tick deadline survives it and
 // the row re-runs its scan every 60 ticks whether or not the leg has finished.
-//
-// TODO(T25): the scan, the resource gates and the feature pairing are not
-// reachable. The candidate scan needs a live-unit enumerator within
-// `sightdistance` and the pairing needs a feature enumerator; QueueBinding
-// exposes only Lookup and Hostility, and PLAN 18's WU-18-7 established why the
-// enumerator cannot be added from this package — the binding's only producer is
-// internal/session's composition, and the world's active-slot walk is
-// player-major where slot-ascending order is the behavioural contract (I1). The
-// resource gates additionally need the player's energy and metal against their
-// storages, which no per-queue binding carries. Placeholder: the row falls
-// through to its own established "none -> hold", so the record re-arms its leg
-// on the 60-tick deadline and never parks; what it does not do is repair or
-// reclaim anything it passes. The scan's six gather draws and its pick draw
-// belong with those lists and are therefore not taken (I4) — the same shape
-// WU-18-3 left in `VTOL_RepairPatrol`.
 func repairPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	if u == nil || n == nil {
 		return 7 // cancel-all
@@ -211,7 +196,21 @@ func repairPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 		installPointGoal(u, n, n.GoalX, n.GoalY, n.GoalZ, 16)
 		armDeadline(n, tick, 60)
 		n.DynamicGate |= gateMoveOutcomes // ORed: the 60-tick deadline survives
-		return 2                          // *hold*: the row's own "none -> hold"
+		if resources, ok := playerResources(u); ok && resourceAtLeastTwenty(resources.Stock[1], resources.Capacity[1]) {
+			candidates := scanRepairCandidates(u, u.Def.SightDistance)
+			if target := pickRepairCandidate(u, candidates); target != nil && !scanHostile(bindingFor(u), u, target) && spawnPatrolRepair(u, target, tick) {
+				n.DynamicGate = 0
+				return 6 // rotate after the accepted repair issue
+			}
+		}
+		if resources, ok := playerResources(u); ok && resourceAtLeastTwenty(resources.Stock[1], resources.Capacity[1]) && resourceAtLeastTwenty(resources.Stock[0], resources.Capacity[0]) {
+			return 2 // both stores are healthy: keep patrolling
+		}
+		if feature, ok := chooseReclaimFeature(u, u.Def.SightDistance); ok && spawnPatrolReclaim(u, feature, false, tick) {
+			n.DynamicGate = 0
+			return 3 // wait while the spawned reclaim runs at the head
+		}
+		return 2 // no repair/reclaim candidate
 	default:
 		return 7 // cancel-all
 	}
@@ -288,13 +287,6 @@ func vtolMoveHandler(u *units.Unit, n *Node, _ uint32, _ uint32) Code {
 // radius is 336, an air patrol leg is satisfied about 320 units before the
 // authored waypoint, and a patrol whose waypoints are closer together than that
 // rotates on every visit [04 R-ORD-02 §2].
-//
-// TODO(T25): the pad seek and the opportunity scan need the same live-unit
-// enumerator repairPatrolHandler above records, and the marker's 320-unit
-// setback needs the air marker family. Placeholder: the row falls through to
-// its own established "deadline 30, hold", so the leg re-arms every 30 ticks
-// and the record never parks; the pad-pick draw belongs with the candidate list
-// and is not taken (I4).
 func vtolPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	if u == nil || n == nil {
 		return 7 // cancel-all
@@ -319,6 +311,10 @@ func vtolPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Co
 		}
 		installPointGoal(u, n, n.GoalX, n.GoalY, n.GoalZ, 0x150)
 		n.DynamicGate |= gateMoveOutcomes
+		if target := opportunityScan(u); target != nil && autoEngage(u, target) {
+			n.DynamicGate = 0
+			return 3 // the spawned attack runs at the head
+		}
 		armDeadline(n, tick, 30)
 		return 2 // *hold*
 	default:

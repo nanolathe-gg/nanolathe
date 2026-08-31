@@ -28,6 +28,7 @@ const (
 	KindShake           = EventKindShake
 	KindCorpse          = EventKindCorpse
 	KindAudio           = EventKindAudio
+	KindStatus          = EventKindStatus
 )
 
 const (
@@ -75,10 +76,20 @@ type Event struct {
 	NanolatheIndex         int32
 	NanolatheCount         int32
 	NanolatheGeometryKnown bool
-	Sound                  string
-	AudioPositional        bool
-	AudioWater             bool
-	AudioAudible           bool
+	NanolatheActiveUntil   uint32
+	// Feature reclaim/resurrection carries the authored target box through the
+	// committed boundary; unit/build producers may leave it unset [05 R-WORK-01
+	// §8].
+	NanolatheTargetBoxKnown bool
+	NanolatheTargetMin      [3]numeric.Fixed
+	NanolatheTargetMax      [3]numeric.Fixed
+	Sound                   string
+	AudioPositional         bool
+	AudioWater              bool
+	AudioAudible            bool
+	StatusKind              uint8
+	StatusText              string
+	StatusClass             uint8
 }
 
 // Limits are presentation-only admission bounds. They do not limit the
@@ -164,6 +175,14 @@ func (c *EventBuffer) EmitAudio(e Event) bool {
 	e.Kind = KindAudio
 	e.AudioPositional = true
 	e.AudioAudible = true
+	return c.Admit(e)
+}
+
+// EmitStatus admits a semantic unit-caption request. It is intentionally a
+// value event: the session owns the request, while the client owns caption
+// arbitration and message-line drawing [03 §8.3][07 R-HUD-03 §14][I6].
+func (c *EventBuffer) EmitStatus(e Event) bool {
+	e.Kind = KindStatus
 	return c.Admit(e)
 }
 
@@ -285,18 +304,28 @@ func (c *EventBuffer) SnapshotEventsInto(dst []EventView) []EventView {
 			LoopA: e.LoopA, LoopB: e.LoopB,
 			FlashRadius: e.FlashRadius, FlashLevel: e.FlashLevel, HasFlashDisc: e.HasFlashDisc,
 			Strip: e.Strip, NanolatheIndex: e.NanolatheIndex, NanolatheCount: e.NanolatheCount,
-			NanolatheGeometryKnown: e.NanolatheGeometryKnown,
-			Sound:                  e.Sound, AudioPositional: e.AudioPositional, AudioWater: e.AudioWater, AudioAudible: e.AudioAudible,
+			NanolatheGeometryKnown:  e.NanolatheGeometryKnown,
+			NanolatheActiveUntil:    e.NanolatheActiveUntil,
+			NanolatheTargetBoxKnown: e.NanolatheTargetBoxKnown,
+			NanolatheTargetMin:      e.NanolatheTargetMin, NanolatheTargetMax: e.NanolatheTargetMax,
+			Sound: e.Sound, AudioPositional: e.AudioPositional, AudioWater: e.AudioWater, AudioAudible: e.AudioAudible,
+			StatusKind: e.StatusKind, StatusText: e.StatusText, StatusClass: e.StatusClass,
 		}
 	}
 	return dst
 }
 
 func (c *EventBuffer) countEffects() int {
-	return len(c.events)
+	count := 0
+	for _, e := range c.events {
+		if e.Kind != KindStatus {
+			count++
+		}
+	}
+	return count
 }
 
-func validKind(k Kind) bool { return k >= KindCOBSFX && k <= KindAudio }
+func validKind(k Kind) bool { return k >= KindCOBSFX && k <= KindStatus }
 
 func cloneEvent(e Event) Event {
 	e.DurationsA = append([]int32(nil), e.DurationsA...)

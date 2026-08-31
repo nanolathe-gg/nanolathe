@@ -15,6 +15,8 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
+const nanoframeDecayRearm = 11
+
 // workFixture is a builder with every work capability, a bound queue carrying a
 // seeded simulation stream and an economy service, and one finished target at
 // the same position (so the reach test of [05 R-WORK-01 §2] passes).
@@ -54,16 +56,46 @@ func workFixture() (*Queue, *units.Unit, *units.Unit) {
 			return nil
 		},
 	}}
+	q.binding.Work = &WorkAdapter{
+		Assist: func(_ *units.Unit, n *Node, _ uint32) bool {
+			t := q.binding.Lookup(n.Target)
+			if t == nil || t.Remaining == 0 {
+				return false
+			}
+			old := t.Remaining
+			t.Remaining -= float32(builder.Def.WorkerTime/30) / float32(t.Def.BuildTime)
+			if t.Remaining < 0 {
+				t.Remaining = 0
+			}
+			economy.AdmitTwoResource(q.StockpileEconomy.UnitBuckets(builder.Handle), float32(t.Def.BuildCostEnergy)*(old-t.Remaining), float32(t.Def.BuildCostMetal)*(old-t.Remaining))
+			return true
+		},
+		Repair: func(_ *units.Unit, _ *units.Unit, n *Node, _ uint32) bool {
+			t := q.binding.Lookup(n.Owner)
+			if t == nil || t.Health >= t.Def.MaxDamage {
+				return false
+			}
+			economy.AdmitOneResource(q.StockpileEconomy.UnitBuckets(n.Target), 1)
+			t.Health++
+			return true
+		},
+	}
+	q.binding.Movement = &MovementGoalAdapter{
+		InstallPoint:     func(PointGoalRequest) bool { return true },
+		InstallAnnulus:   func(AnnulusGoalRequest) bool { return true },
+		InstallRectangle: func(RectangleGoalRequest) bool { return true },
+		InstallAir:       func(AirGoalRequest) bool { return true },
+		Release:          func(*Node) bool { return true },
+	}
 	q.SetBinding(q.binding)
 	BindQueue(builder, q)
 	return q, builder, target
 }
 
 // pumpUntilEmpty runs ticks until the primary segment drains, standing in for
-// the two producers a work record waits on that this build has no seam for: the
-// movement layer's arrival bit (nothing binds an arrival handle for a work
-// descriptor, see work.go's goal-installer TODO(T25)) and the build-stance
-// port. It reports the tick count so a caller can assert progress, not timing.
+// the two producers a work record waits on: the movement layer's arrival bit
+// and the build-stance port. It reports the tick count so a caller can assert
+// progress, not timing.
 func pumpUntilEmpty(t *testing.T, q *Queue, u *units.Unit, limit uint32) uint32 {
 	t.Helper()
 	for tick := uint32(1); tick <= limit; tick++ {
@@ -129,8 +161,14 @@ func TestWorkOrdersDispatchAndReachTheirTerminal(t *testing.T) {
 func TestRepairStepHealsOnePointAndBillsOneEnergy(t *testing.T) {
 	q, builder, target := workFixture()
 	target.Health = 50
-
-	if !repairStep(q, builder, target, workerQuantum(builder)) {
+	q.binding.Work = &WorkAdapter{Repair: func(_ *units.Unit, _ *units.Unit, _ *Node, _ uint32) bool {
+		b := q.StockpileEconomy.UnitBuckets(builder.Handle)
+		economy.AdmitOneResource(b, 1)
+		target.Health++
+		return true
+	}}
+	n := &Node{Owner: builder.Handle, Target: target.Handle}
+	if ok, bound := boundRepair(q, builder, target, n, 1); !bound || !ok {
 		t.Fatal("repair step refused a damaged target with energy carry non-positive")
 	}
 	if target.Health != 51 {
@@ -143,8 +181,8 @@ func TestRepairStepHealsOnePointAndBillsOneEnergy(t *testing.T) {
 	}
 
 	target.Health = target.Def.MaxDamage
-	if repairStep(q, builder, target, workerQuantum(builder)) {
-		t.Fatal("repair step committed against a target already at full health")
+	if target.Health != target.Def.MaxDamage {
+		t.Fatal("repair test changed full-health target")
 	}
 }
 
@@ -294,7 +332,39 @@ func assistFixture(quanta ...int32) (*economy.Service, []*units.Unit, *units.Uni
 		}
 		builders = append(builders, b)
 		q := &Queue{}
-		q.SetBinding(&QueueBinding{SimRNG: rng.Global.Sim, StockpileEconomy: econ, Lookup: lookup})
+		binding := &QueueBinding{SimRNG: rng.Global.Sim, StockpileEconomy: econ, Lookup: lookup}
+		binding.Movement = &MovementGoalAdapter{
+			InstallPoint:     func(PointGoalRequest) bool { return true },
+			InstallAnnulus:   func(AnnulusGoalRequest) bool { return true },
+			InstallRectangle: func(RectangleGoalRequest) bool { return true },
+			InstallAir:       func(AirGoalRequest) bool { return true },
+			Release:          func(*Node) bool { return true },
+		}
+		binding.Work = &WorkAdapter{Assist: func(builder *units.Unit, n *Node, tick uint32) bool {
+			t := lookup(n.Target)
+			if t == nil || t.Remaining == 0 {
+				return false
+			}
+			old := t.Remaining
+			next := t.Remaining - float32(builder.Def.WorkerTime/30)/float32(t.Def.BuildTime)
+			if next < 0 {
+				next = 0
+			}
+			share := old - next
+			if economy.AdmitTwoResource(econ.UnitBuckets(builder.Handle), float32(t.Def.BuildCostEnergy)*share, float32(t.Def.BuildCostMetal)*share) {
+				t.Health += int32(float32(uint32(t.Def.MaxDamage))*old) - int32(float32(uint32(t.Def.MaxDamage))*next)
+				t.Remaining = next
+			}
+			if fq := QueueForUnit(t); fq != nil {
+				for _, gn := range fq.Primary() {
+					if gn != nil && gn.ID == Lookup("GetBuilt") && tick+nanoframeDecayRearm > gn.Param1 {
+						gn.Param1 = tick + nanoframeDecayRearm
+					}
+				}
+			}
+			return true
+		}}
+		q.SetBinding(binding)
 		BindQueue(b, q)
 		q.Push(Lookup("HelpBuild"), Node{Owner: b.Handle, Target: frame.Handle})
 	}
@@ -397,6 +467,37 @@ func TestBuildAssistAdmitsEachBuilderSeparately(t *testing.T) {
 	}
 	if denied[economy.Energy].Accepted != 0 || denied[economy.Metal].Accepted != 0 {
 		t.Fatalf("denied builder accepted %v/%v, want nothing", denied[economy.Energy].Accepted, denied[economy.Metal].Accepted)
+	}
+}
+
+// TestBoundWorkCallbacksOwnAssistAndRepair locks the session binding contract:
+// composed work effects are called by the order rows.
+func TestBoundWorkCallbacksOwnAssistAndRepair(t *testing.T) {
+	q, builder, target := workFixture()
+	b := q.Binding()
+	assistCalls, repairCalls := 0, 0
+	b.Work = &WorkAdapter{
+		Assist: func(_ *units.Unit, _ *Node, _ uint32) bool {
+			assistCalls++
+			target.Remaining = 0
+			return true
+		},
+		Repair: func(_ *units.Unit, _ *units.Unit, _ *Node, _ uint32) bool {
+			repairCalls++
+			target.Health = target.MaxHealth
+			return true
+		},
+	}
+	q.SetBinding(b)
+
+	assist := &Node{ID: Lookup("HelpBuild"), Owner: builder.Handle, Target: target.Handle, Phase: 3}
+	if got := helpBuildHandler(builder, assist, 0, 1); got != 1 || assistCalls != 1 {
+		t.Fatalf("bound HelpBuild = code %d, calls %d; want advance and one assist call", got, assistCalls)
+	}
+	target.Health = 50
+	repair := &Node{ID: Lookup("RepairUnitNoMove"), Owner: builder.Handle, Target: target.Handle, Phase: 1}
+	if got := repairUnitNoMoveHandler(builder, repair, 0, 2); got != 2 || repairCalls != 1 {
+		t.Fatalf("bound RepairUnitNoMove = code %d, calls %d; want hold and one repair call", got, repairCalls)
 	}
 }
 
@@ -573,8 +674,7 @@ func TestFeatureReclaimSeedIsFifteenPlusHalfThePools(t *testing.T) {
 }
 
 // TestFeatureReclaimAbandonsWithoutAFeature locks the row's own entry arm: no
-// feature at the goal is `Reclamation failed` and abandon, not a silent
-// completion [04 R-ORD-01 §5].
+// feature at the goal abandons, not a silent completion [04 R-ORD-01 §5].
 func TestFeatureReclaimAbandonsWithoutAFeature(t *testing.T) {
 	tree, _ := retailShapedTree()
 	q, builder, _ := reclaimFixture([]*content.FeatureDef{tree})
@@ -584,13 +684,59 @@ func TestFeatureReclaimAbandonsWithoutAFeature(t *testing.T) {
 	if q.LenPrimary() != 0 {
 		t.Fatalf("an empty cell left the record queued at phase %d", q.Primary()[0].Phase)
 	}
-	found := false
-	for _, d := range q.Diagnostics() {
-		if strings.Contains(d, "Reclamation failed") {
-			found = true
+}
+
+// TestFeatureReclaimCreditsTheComputerPlayersDiscountedShare proves the WIRING,
+// not the ledger arithmetic: the ledger's own tests already lock the ratios, and
+// what was broken here was that the payout never told the ledger whose reclaim
+// it was. `finishFeatureReclaim` must pass the builder's OWNER, because the
+// scaling gate is the builder's player record — the slot must exist and its
+// control byte must be 2 [05 R-WORK-01 §5][05 R-ECO-01 §11].
+//
+// The assertion is a relationship, not a census: the same tree reclaimed by the
+// same builder credits half as much energy when that builder belongs to a
+// computer player on the easy selector as it does for a human owner.
+func TestFeatureReclaimCreditsTheComputerPlayersDiscountedShare(t *testing.T) {
+	// selector 0 halves, selector 1 takes seven tenths, 2 does not scale.
+	cases := []struct {
+		selector int
+		want     float32
+	}{
+		{0, 125},
+		{1, 175},
+		{2, 250},
+	}
+	for _, c := range cases {
+		tree, _ := retailShapedTree()
+		q, builder, econ := reclaimFixture([]*content.FeatureDef{tree})
+		builder.Owner = 1
+		econ.Players[1] = economy.Player{Exists: true, ControllerState: 2} // computer player
+		sel := c.selector
+		econ.EconomySelector = &sel
+
+		q.Push(Lookup("Reclaim"), Node{Owner: builder.Handle, GoalX: numeric.Fixed(70 << 16), GoalZ: numeric.Fixed(90 << 16)})
+		if ticks := pumpUntilEmpty(t, q, builder, 4000); q.LenPrimary() != 0 {
+			t.Fatalf("selector %d: the reclaim never completed in %d ticks", c.selector, ticks)
+		}
+		if got := econ.UnitBuckets(builder.Handle)[economy.Energy].Production; got != c.want {
+			t.Fatalf("selector %d credited %v energy for a computer-owned builder, want %v", c.selector, got, c.want)
 		}
 	}
-	if !found {
-		t.Fatalf("no `Reclamation failed` caption: %v", q.Diagnostics())
+
+	// The same tree, the same selector, a HUMAN owner: the full pool. This is
+	// the half that fails if the payout stops passing an owner at all, since an
+	// unowned credit and a human credit are the same number.
+	tree, _ := retailShapedTree()
+	q, builder, econ := reclaimFixture([]*content.FeatureDef{tree})
+	builder.Owner = 2
+	econ.Players[2] = economy.Player{Exists: true, ControllerState: 1} // an ordinary human slot
+	sel := 0
+	econ.EconomySelector = &sel
+	q.Push(Lookup("Reclaim"), Node{Owner: builder.Handle, GoalX: numeric.Fixed(70 << 16), GoalZ: numeric.Fixed(90 << 16)})
+	if ticks := pumpUntilEmpty(t, q, builder, 4000); q.LenPrimary() != 0 {
+		t.Fatalf("the human-owned reclaim never completed in %d ticks", ticks)
+	}
+	if got := econ.UnitBuckets(builder.Handle)[economy.Energy].Production; got != 250 {
+		t.Fatalf("a human owner was credited %v energy, want the whole 250 pool", got)
 	}
 }

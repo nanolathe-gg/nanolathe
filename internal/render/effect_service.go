@@ -196,7 +196,9 @@ func (s *EffectService) admit(now uint32, e Event) {
 		FlashRadius: e.FlashRadius, FlashLevel: e.FlashLevel,
 		HasFlashDisc: e.HasFlashDisc, Strip: e.Strip,
 		NanolatheIndex: e.NanolatheIndex, NanolatheCount: e.NanolatheCount,
-		NanolatheGeometryKnown: e.NanolatheGeometryKnown,
+		NanolatheGeometryKnown:  e.NanolatheGeometryKnown,
+		NanolatheTargetBoxKnown: e.NanolatheTargetBoxKnown,
+		NanolatheTargetMin:      e.NanolatheTargetMin, NanolatheTargetMax: e.NanolatheTargetMax,
 	}
 	if e.ExpiryTick != 0 {
 		view.ExpiryTick = e.ExpiryTick

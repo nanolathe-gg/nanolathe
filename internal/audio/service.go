@@ -41,7 +41,7 @@ func NewService(fs vfs.FSOps) *Service {
 	a := &Service{fs: fs}
 	a.Queue = NewQueue()
 	a.Queue.Seed(1)
-	a.Queue.Configure(10, 10, true, true)
+	a.Queue.Configure(10, 5, true, true)
 	a.Registry = NewRegistry(fs)
 	a.Cache = a.Registry.Cache()
 	a.Music = NewMusicController()
@@ -62,7 +62,7 @@ func (a *Service) Init(fs vfs.FSOps) {
 	if a.Queue == nil {
 		a.Queue = NewQueue()
 		a.Queue.Seed(1)
-		a.Queue.Configure(10, 10, true, true)
+		a.Queue.Configure(10, 5, true, true)
 	}
 	if a.Registry == nil {
 		a.Registry = NewRegistry(a.fs)

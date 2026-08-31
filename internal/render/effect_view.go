@@ -29,6 +29,9 @@ type EffectDraw struct {
 	NanolatheIndex            int32
 	NanolatheCount            int32
 	NanolatheGeometryKnown    bool
+	NanolatheTargetBoxKnown   bool
+	NanolatheTargetMin        [3]numeric.Fixed
+	NanolatheTargetMax        [3]numeric.Fixed
 }
 
 // BuildEffectDraws copies effect metadata in admission order.  The source is

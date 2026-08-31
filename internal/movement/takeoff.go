@@ -99,8 +99,8 @@ func (s *System) applyOccupancyPlane(u *units.Unit, prev, mode uint8) {
 // takeoffPreamble is the five-step routine every air executor that must get the
 // unit off the ground runs [04 R-AIR-01 §6], in this order:
 //
-//  1. release the manual-target latch on all three weapon slots — owned by the
-//     weapon layer, not by this package, and therefore not performed here;
+//  1. release the manual-target latch on all three weapon slots through the
+//     owning queue's weapon adapter;
 //  2. if the unit has a carrier, detach it requesting mover mode 2;
 //  3. set the state byte's activation bit, raising `Activate` — the engine's
 //     takeoff script hook;
@@ -121,6 +121,14 @@ func (s *System) applyOccupancyPlane(u *units.Unit, prev, mode uint8) {
 func (s *System) takeoffPreamble(u *units.Unit, rec *orders.Node) bool {
 	if s == nil || u == nil || u.Def == nil || !u.Def.CanFly {
 		return false
+	}
+	// Step 1 — each air takeoff releases all three manual-target latches in
+	// numeric slot order. The queue binding owns the combat state; a missing
+	// adapter is an unbound fixture and leaves that state untouched.
+	if q := orders.QueueOfUnit(u); q != nil && q.Binding() != nil && q.Binding().Weapons != nil && q.Binding().Weapons.ReleaseSlot != nil {
+		for idx := 0; idx < units.NumSlots; idx++ {
+			q.Binding().Weapons.ReleaseSlot(u, idx)
+		}
 	}
 	// Step 2 — the self-detach requests mode 2, so the mode write below is the
 	// one that runs for a unit that was carried [04 R-AIR-01 §3][04 R-AIR-01 §6].

@@ -4,6 +4,7 @@ package construction
 import (
 	"errors"
 	"fmt"
+	"math"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/cob"
@@ -824,15 +825,28 @@ func TestRefundArithmetic(t *testing.T) {
 	if got != 150 {
 		t.Fatalf("normal refund got %v want 150", got)
 	}
-	// Special mode 0 subtracts 7/10 => refund * -0.7 = -105
+	// Corrected (PT3-05 follow-up). These used to expect -105 and -75: the arm
+	// paired selector 0 with seven tenths and selector 1 with a half, and it
+	// SUBTRACTED. The executable pairs selector 0 with the half at all fourteen
+	// sites of the family and credits a reduced positive amount, so cancelling
+	// a build pays a computer player back 0.5 or 0.7 of the refund rather than
+	// charging it [05 R-ECO-01 §11].
+	// Special mode 0 credits one half => 75
 	got = runCancel(true, 0)
-	if got != -105 {
-		t.Fatalf("special mode 0 got %v want -105", got)
+	if got != 75 {
+		t.Fatalf("special mode 0 got %v want 75", got)
 	}
-	// Special mode 1 subtracts 1/2 => -75
+	// Special mode 1 credits seven tenths => 105
 	got = runCancel(true, 1)
-	if got != -75 {
-		t.Fatalf("special mode 1 got %v want -75", got)
+	if got != 105 {
+		t.Fatalf("special mode 1 got %v want 105", got)
+	}
+	// Whatever the selector, the special arm is never larger than the plain
+	// refund and never negative — the property the old pairing violated.
+	for _, mode := range []int{0, 1, 2} {
+		if v := runCancel(true, mode); v < 0 || v > 150 {
+			t.Fatalf("special mode %d credited %v, outside (0, the plain refund 150]", mode, v)
+		}
 	}
 	// Other fallback adds => 150
 	got = runCancel(true, 2)
@@ -983,6 +997,9 @@ func TestConstructionArithmeticCarry(t *testing.T) {
 	if got := WorkerQuantum(29); got != 0 {
 		t.Fatalf("WorkerQuantum 29 => %d want 0", got)
 	}
+	if got := WorkerQuantum(-1); got != 2184 {
+		t.Fatalf("WorkerQuantum -1 => %d want unsigned 65535/30 = 2184", got)
+	}
 	// RemainingStep
 	if got := RemainingStep(1.0, 3, 30); got != 0.9 {
 		t.Fatalf("RemainingStep 1-3/30 => %v want 0.9", got)
@@ -1014,8 +1031,8 @@ func TestConstructionArithmeticCarry(t *testing.T) {
 	if totalGain != 10 {
 		t.Fatalf("total health gain %d want 10", totalGain)
 	}
-	if old != 0 {
-		t.Fatalf("final remaining %v want 0", old)
+	if old >= 0.0000001 {
+		t.Fatalf("final remaining %v want only float32 narrowing residue", old)
 	}
 	// Test multiple builders: order matters via stable iteration, but arithmetic per builder is same helper called sequentially
 	// Simulate two builders each worker 15 (quantum 0? actually 45/30=1) with buildTime 30
@@ -1044,6 +1061,32 @@ func TestConstructionArithmeticCarry(t *testing.T) {
 		t.Fatalf("demands m %v want 20", mDem)
 	}
 	// Test admission failure does not advance (already covered in handleState3)
+}
+
+func TestConstructionStepUsesExtendedWorkingPrecision(t *testing.T) {
+	old := math.Float32frombits(0x3b036f7f)
+	nv, _, _, _ := ConstructionStep(old, 1, 499, 100, 0, 0)
+	want := float32(float64(old) - 1.0/499.0)
+	early := float32(old - float32(1)/float32(499))
+	if nv != want {
+		t.Fatalf("new remaining %v want widened calculation %v", nv, want)
+	}
+	if nv == early {
+		t.Fatalf("new remaining %v unexpectedly matches premature float32 calculation", nv)
+	}
+}
+
+func TestRepairTermsUseWideDivision(t *testing.T) {
+	heal, energy := repairTerms(-3, -7, 2, 5)
+	maxDamage, energyCost, worker, buildTime := float64(-3), float64(-7), float64(2), float64(5)
+	wantHeal := int32(1 + (maxDamage*worker-1)/buildTime)
+	wantEnergy := int32(1 + (energyCost*worker-1)/buildTime)
+	if heal != wantHeal || energy != wantEnergy {
+		t.Fatalf("repair terms = %d/%d want %d/%d from widened truncation", heal, energy, wantHeal, wantEnergy)
+	}
+	if gotHeal, gotEnergy := repairTerms(10, 10, 2, 0); gotHeal != 0 || gotEnergy != 0 {
+		t.Fatalf("zero build time terms = %d/%d want 0/0", gotHeal, gotEnergy)
+	}
 }
 
 // TestStateGates verifies state0/state1 gates [05 "Factory production lifecycle"].

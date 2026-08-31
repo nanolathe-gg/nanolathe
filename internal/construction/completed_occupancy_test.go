@@ -106,7 +106,7 @@ func TestCompletedMobileStillReleasesPlacement(t *testing.T) {
 	}
 }
 
-func TestEmptyBuildingYardUsesAllZeroParserBuffer(t *testing.T) {
+func TestEmptyBuildingYardUsesDefaultOccupiedParserBuffer(t *testing.T) {
 	terrain := completedOccupancyTerrain(8, 8)
 	def := &content.UnitDef{UnitName: "emptyyard", FootprintX: 2, FootprintZ: 2, BMCode: false}
 	rect := completedOccupancyRect(t, 2, 3, 2, 2)
@@ -118,8 +118,8 @@ func TestEmptyBuildingYardUsesAllZeroParserBuffer(t *testing.T) {
 		t.Fatalf("empty building yard length = %d, want 4", len(yard))
 	}
 	for i, cell := range yard {
-		if cell != 0 {
-			t.Fatalf("empty building yard cell %d = %#x, want zero", i, cell)
+		if cell != world.YardCell(0x2f) {
+			t.Fatalf("empty building yard cell %d = %#x, want default o (0x2f)", i, cell)
 		}
 	}
 	svc := NewService(terrain, nil, nil, nil)
@@ -129,8 +129,8 @@ func TestEmptyBuildingYardUsesAllZeroParserBuffer(t *testing.T) {
 	for z := rect.MinZ(); z < rect.MaxZ(); z++ {
 		for x := rect.MinX(); x < rect.MaxX(); x++ {
 			cell := terrain.PlotAt(x, z)
-			if cell.OccupantA() != 0 || cell.StructureYard() {
-				t.Fatalf("empty yard cell %d,%d = occupant %d yard=%t", x, z, cell.OccupantA(), cell.StructureYard())
+			if cell.OccupantA() != 10 || !cell.StructureYard() {
+				t.Fatalf("default yard cell %d,%d = occupant %d yard=%t, want occupied by 10", x, z, cell.OccupantA(), cell.StructureYard())
 			}
 		}
 	}

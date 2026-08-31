@@ -17,31 +17,26 @@
 // live state machine.
 //
 // Everything work.go's header records applies here unchanged and is not
-// repeated per site: the status emitter, the nanolathe spray and its stamp, the
-// four goal installers, and "refresh the builder interface" have no counterpart
-// in this build, and are placeholders documented there. Two facts of this file
+// repeated per site: the status emitter, the nanolathe spray and its stamp, and
+// "refresh the builder interface" remain presentation-facing details documented
+// there. Two facts of this file
 // are worth stating once:
 //
 //   - installWorkGoal's `canfly` arm IS the air side of [04 R-ORD-01 §1]: all
 //     four installers "skip the install entirely — release only — when the
 //     owner's definition has the `canfly` bit", so every twin below gets the
 //     release-and-clear half for free and none of them writes a ground goal
-//     payload. What is missing is the air marker that replaces it.
+//     payload. The air marker replacement is wired below through the adapter.
 //
-// TODO(T25): the air marker family of [04 R-AIR-01 §4] — the point marker, its
-// altitude offset, its horizontal arrival radius, the orbit marker of §10.3 —
-// lives in internal/movement (airorders.go, which already owns `VTOL_Move`,
-// `VTOL_LandIfCan` and `VTOL_Standby`), is unexported, and cannot be reached
-// from here: internal/movement imports internal/orders, not the other way
-// round. Placeholder: each row's install site calls installWorkGoal, which
-// performs the release and the pending-bit clear the record itself observes,
-// and arms the row's gate exactly as written. A row that waits on arrival
-// therefore waits until that seam exists — the same standing condition
-// work.go's ground twins carry.
+// Air marker installation is routed through the session-owned movement
+// adapter. The movement package retains ownership of marker construction and
+// release; this package supplies only the node identity and scalar goal data
+// [04 R-AIR-01 §4][P0-00 B].
 package orders
 
 import (
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
@@ -142,7 +137,9 @@ func airWorkPreamble(u *units.Unit, n *Node, stateText string) Code {
 		// definition word. Only the release half of the install is reachable
 		// (see the file header), so the offset has nowhere to go.
 		_ = u.Def.CruiseAlt / 2
-		installWorkGoal(u, n, u.X, u.Y, u.Z)
+		if !installWorkGoal(u, n, u.X, u.Y+numeric.Fixed(int64(u.Def.CruiseAlt/2)<<16), u.Z) {
+			return 7
+		}
 		n.DynamicGate |= gateMoveOutcomes
 	}
 	return 1 // advance, marker or no marker
@@ -260,7 +257,9 @@ func vtolHelpBuildHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32)
 		// units — strict, unlike the ground reach test's inclusive compare. See
 		// the file header for why the radius has nowhere to go.
 		_ = u.Def.BuildDistance
-		installWorkGoal(u, n, target.X, target.Y, target.Z)
+		if !installWorkGoalWithRadius(u, n, target.X, target.Y, target.Z, u.Def.BuildDistance) {
+			return 7
+		}
 		if inBuildRangeOf(u, target) {
 			// Already within reach: the ground twin's phase 0 records why the
 			// approach gate is left clear in that case (work.go, PT3-04).
@@ -284,7 +283,11 @@ func vtolHelpBuildHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32)
 		// The work step, quantum `workertime/30` [05 R-WORK-01 §1]. Corrected
 		// with the ground twin (PT3-04): this arm used to admit no work at all,
 		// which made an air builder's assistance a no-op.
-		nanoWorkStep(QueueForUnit(u), u, target, workerQuantum(u), tick)
+		if ok, bound := boundAssist(QueueForUnit(u), u, n, tick); !bound {
+			return 7
+		} else if !ok {
+			// Admission refusal leaves the order armed for the next visit.
+		}
 		if target.Remaining != 0 {
 			n.DynamicGate |= gateWorkRetry
 			return deadlineHold(n, tick, 1)
@@ -350,7 +353,9 @@ func vtolRepairUnitHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32
 		return airWorkPreamble(u, n, "Repairing")
 	case 1:
 		_ = u.Def.CruiseAlt // the marker's full-cruise-altitude offset; see the file header
-		installWorkGoal(u, n, n.GoalX, n.GoalY, n.GoalZ)
+		if !installWorkGoal(u, n, n.GoalX, n.GoalY+numeric.Fixed(int64(u.Def.CruiseAlt)<<16), n.GoalZ) {
+			return 7
+		}
 		n.DynamicGate = gateWorkApproach // 0xE8
 		return 1
 	case 2:
@@ -365,7 +370,9 @@ func vtolRepairUnitHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32
 		// build mirrors only the low two status bits, as Move.Mode, so bits 2
 		// and 3 have no field. Left unreachable rather than invented.
 		if health16(target) < uint32(target.Def.MaxDamage) {
-			repairStep(QueueForUnit(u), u, target, workerQuantum(u))
+			if _, bound := boundRepair(QueueForUnit(u), u, target, n, tick); !bound {
+				return 7
+			}
 			n.DynamicGate |= pendTargetRemoved
 			return deadlineHold(n, tick, 1)
 		}
@@ -430,7 +437,9 @@ func vtolReclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 		// default `dist <= 0.5` world units at the goal's own Y
 		// [04 R-AIR-01 §4]. See the file header.
 		bx, bz := featureBoxCentre(cx, cz, def)
-		installWorkGoal(u, n, bx, n.GoalY, bz)
+		if !installWorkGoal(u, n, bx, n.GoalY, bz) {
+			return 7
+		}
 		if inBuildRange(u, bx, bz, def.FootprintX, def.FootprintZ) {
 			// Already within reach: the ground twin's phase 0 records why the
 			// approach gate is left clear in that case (work.go, PT3-05).
@@ -453,14 +462,6 @@ func vtolReclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 		workStatus(u, statusWorking, "") // kind 11 has no default text
 		return 1
 	case 3:
-		// TODO(question): [05 R-WORK-01 §8] leaves Unknown which of the two
-		// model-box forms the four VTOL work executors build for their spray —
-		// the form that adds the first Y extent, or the majority form that
-		// writes `y1 = target.y` and omits it. The two ground forms are
-		// Established; the air ones are not. No form is chosen: the spray is
-		// not emitted at all in this build (work.go's header), so the question
-		// sits at the site it will be answered for. A static trace of the four
-		// air work phases settles it [05 R-WORK-01 §8].
 		code := deadlineHold(n, tick, 2)
 		work := int32(n.Param1) - 2
 		n.Param1 = uint32(work)
@@ -486,27 +487,24 @@ func vtolReclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 // static-mask COPY carries bit 15; when none does, allocate a record of this
 // same descriptor with goal = the unit's current position and append it at the
 // tail (the return-to-start waypoint); in every case set bit 15 on this record.
-//
-// TODO(T25): the append is `Queue.Push`, which is the interface insertion —
-// it places a new record immediately after the active marker rather than at the
-// segment tail (PushHead is the other shape, and is the wrong end). The two
-// agree whenever the patrol record is the only order queued, which is the
-// common case, and diverge when a player has queued orders behind it. A tail
-// append belongs on Queue in pump.go, which this unit does not own.
 func patrolChainSetup(u *units.Unit, n *Node) {
 	q := QueueOfUnit(u)
 	if q == nil || n == nil {
 		return
 	}
+	segment := q.Primary()
+	if n.StaticGate&0x40000 != 0 {
+		segment = q.Secondary()
+	}
 	found := false
-	for _, rec := range q.Primary() {
+	for _, rec := range segment {
 		if rec.StaticGate&patrolChainMember != 0 {
 			found = true
 			break
 		}
 	}
 	if !found {
-		q.Push(n.ID, Node{
+		q.appendTail(n.ID, Node{
 			Owner:        u.Handle,
 			GoalX:        u.X,
 			GoalY:        u.Y,
@@ -530,23 +528,12 @@ func patrolChainSetup(u *units.Unit, n *Node) {
 // phase: cancel-all.
 //
 // The divergences from the ground `RepairPatrol` are steps 3 to 5: the pad seek
-// exists only here, step 4 has no diplomacy test (the admission test is the
-// only filter, where the ground twin also demands a non-hostile owner) and its
+// exists only here, step 4 uses the shared scanner-owner-to-candidate-owner
+// diplomacy test once (the ground twin repeats that check) and its
 // unfinished-target arm spawns `VTOL_HelpBuild` rather than issuing code 8, and
 // step 5's search radius is a fixed ±120 world units where the ground twin
-// passes `sightdistance`. At most two simulation draws per visit, each only
-// when its list is non-empty.
-//
-// TODO(T25): steps 3, 4 and 5 are not reachable. All three need a live-unit or
-// feature enumerator, and QueueBinding exposes only Lookup and Hostility —
-// PLAN 18's WU-18-7 seam 2, which landed the tick but not the enumerator (the
-// same wall combat.go's `AttackUType` phase 1 reports). Steps 4 and 5 also read
-// the player's energy and metal against their storages, which no per-queue
-// binding carries. Placeholder: the row falls through to step 5's own
-// established "none -> hold", so the record holds on the deadline step 2 armed
-// and re-runs the patrol leg every 45 ticks. It never parks and never spins;
-// what it does not do is repair or reclaim anything it passes. The two draws
-// belong with those lists and are therefore not taken (I4).
+// passes `sightdistance`. Draws occur only at reached sites: the pad pick, the
+// unit pick, and the conditional feature tournaments.
 func vtolRepairPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	if u == nil || n == nil {
 		return 7
@@ -570,10 +557,39 @@ func vtolRepairPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint
 			return 6 // rotate: the leg is done, the next waypoint takes the head
 		}
 		_ = u.Def.CruiseAlt // the marker's full-cruise-altitude offset; see the file header
-		installWorkGoal(u, n, n.GoalX, n.GoalY, n.GoalZ)
+		if !installWorkGoal(u, n, n.GoalX, n.GoalY, n.GoalZ) {
+			return 7
+		}
 		armDeadline(n, tick, 45)
 		n.DynamicGate |= gateMoveOutcomes
-		return 2 // hold — step 5's "none -> hold"
+		if u.Def.MaxDamage > 0 && health16(u) < uint32((u.Def.MaxDamage>>2)*3) {
+			pads := scanAirBasePads(u, 0xF00)
+			if pad := pickCandidate(u, pads); pad != nil {
+				releaseGoalPayload(n)
+				if spawnPatrolLanding(u, pad, tick) {
+					n.DynamicGate = 0
+					return 0 // restart with the landing record at the head
+				}
+			}
+		}
+		if resources, ok := playerResources(u); ok && resourceAtLeastTwenty(resources.Stock[1], resources.Capacity[1]) {
+			candidates := scanRepairCandidates(u, u.Def.SightDistance)
+			if target := pickRepairCandidate(u, candidates); target != nil && spawnPatrolRepair(u, target, tick) {
+				n.DynamicGate = 0
+				if target.Remaining != 0 {
+					return 3 // unfinished targets explicitly spawn VTOL_HelpBuild
+				}
+				return 6 // accepted complete target repair rotates
+			}
+		}
+		if resources, ok := playerResources(u); ok && resourceAtLeastTwenty(resources.Stock[1], resources.Capacity[1]) && resourceAtLeastTwenty(resources.Stock[0], resources.Capacity[0]) {
+			return 2
+		}
+		if feature, ok := chooseReclaimFeature(u, 240); ok && spawnPatrolReclaim(u, feature, true, tick) {
+			n.DynamicGate = 0
+			return 3 // wait while the spawned VTOL reclaim runs at the head
+		}
+		return 2 // no repair/reclaim candidate
 	default:
 		return 7 // cancel-all
 	}
@@ -587,15 +603,6 @@ func vtolRepairPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint
 // a map: registration order is source order (I1).
 //
 // `VTOL_ReclaimUnit` is absent by design (see the file header).
-//
-// TODO(T25): `VTOL_RepairPatrol` will not take the handler below. pump.go's
-// ensureMoveHandlers runs first in handlerInstallers and assigns the move
-// family's placeholder to every patrol descriptor including this one, and every
-// installer here assigns only where the descriptor's handler is still nil. The
-// body above is therefore written, tested directly, and inert until whoever
-// owns pump.go drops `VTOL_RepairPatrol` (and `RepairPatrol`, whose own body
-// [04 R-ORD-01 §4] is likewise unwritten) from that list. Reported upward by
-// WU-18-3 rather than resolved by editing a file this unit does not own.
 var vtolWorkHandlers = []struct {
 	name    string
 	handler func(*units.Unit, *Node, uint32, uint32) Code

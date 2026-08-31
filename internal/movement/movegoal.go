@@ -2,6 +2,7 @@ package movement
 
 import (
 	"github.com/nanolathe/nanolathe/internal/orders"
+	"github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -48,6 +49,7 @@ type moveGoal struct {
 	order *orders.Node  // the node this goal belongs to; identity gates its use
 	x     numeric.Fixed // world point the mover steers at
 	z     numeric.Fixed
+	goal  path.Goal // optional shape payload; nil means the ordinary point goal
 }
 
 // BindMoveGoal binds the movement goal for handle h to the world point (x,z)
@@ -65,7 +67,23 @@ func (s *System) BindMoveGoal(h pool.Handle, head *orders.Node, x, z numeric.Fix
 	if s.moveGoals == nil {
 		s.moveGoals = make(map[pool.Handle]*moveGoal)
 	}
-	s.moveGoals[h] = &moveGoal{order: head, x: x, z: z}
+	goal := path.Goal(nil)
+	if prior := s.moveGoals[h]; prior != nil && prior.order == head {
+		// Rectangle steering refreshes the world point after the shape payload
+		// has been installed. Keep that payload attached to the same node.
+		goal = prior.goal
+	}
+	s.moveGoals[h] = &moveGoal{order: head, x: x, z: z, goal: goal}
+}
+
+func (s *System) moveGoalPayload(h pool.Handle, head *orders.Node) path.Goal {
+	if s == nil || s.moveGoals == nil || head == nil {
+		return nil
+	}
+	if g := s.moveGoals[h]; g != nil && g.order == head {
+		return g.goal
+	}
+	return nil
 }
 
 // ClearMoveGoal drops the movement goal for handle h.

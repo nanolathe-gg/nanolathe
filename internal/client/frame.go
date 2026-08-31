@@ -179,6 +179,7 @@ func (c *Client) drawInterface(cur *frame.Frame) {
 	if c.uiStage != nil {
 		c.uiStage.DrawUI(c, UIFrame{Committed: cur})
 	}
+	c.drawMessageLines()
 }
 
 func (c *Client) drawProjectiles(cur *frame.Frame) {

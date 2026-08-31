@@ -56,9 +56,10 @@ func (s *Session) InitAudio(fs vfs.FSOps) {
 	s.Audio.ConfigureMusic(hasBrief)
 }
 
-// audioResolver maps a unit handle to its Category, name and alive flag
-// [03 §8.3] C17. It uses the catalog's Sounds map and the unit's SoundCategory
-// field via content.CanonicalKey [02 §5]. Presentation-only, uses no Sim RNG.
+// audioResolver maps a unit handle to its Category, definition display name
+// and alive flag [03 §8.3] C17. It uses the catalog's Sounds map and the
+// unit's SoundCategory field via content.CanonicalKey [02 §5]. Presentation-
+// only, uses no Sim RNG.
 func (s *Session) audioResolver(h pool.Handle) (*audio.Category, string, bool) {
 	if s == nil || s.Catalog == nil || s.Units == nil {
 		return nil, "", false
@@ -69,13 +70,13 @@ func (s *Session) audioResolver(h pool.Handle) (*audio.Category, string, bool) {
 	}
 	ck := content.CanonicalKey(u.Def.SoundCategory)
 	if ck == "" {
-		return nil, u.Def.UnitName, u.Alive && !u.Dying
+		return nil, u.Def.Name, u.Alive && !u.Dying
 	}
 	sc, ok := s.Catalog.Sounds[ck]
 	if !ok || sc == nil {
-		return nil, u.Def.UnitName, u.Alive && !u.Dying
+		return nil, u.Def.Name, u.Alive && !u.Dying
 	}
-	return audio.CategoryFromContent(sc), u.Def.UnitName, u.Alive && !u.Dying
+	return audio.CategoryFromContent(sc), u.Def.Name, u.Alive && !u.Dying
 }
 
 // SetAudioViewport sets the presentation viewport for positional pan and

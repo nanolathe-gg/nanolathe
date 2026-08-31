@@ -317,7 +317,7 @@ func TestYardStateFollowsBothOccupancyLayers(t *testing.T) {
 	cat.Movement["exitmove"].MinWaterDepth = -10000 // land-profile template [04 §6.1]
 	terrain := exitTerrain(24, 24)
 	svc, w := exitService(t, terrain, cat)
-	svc.Movement = &movement.System{Grid: movement.NewOccupancyGrid()}
+	svc.Movement = movement.NewSystem(terrain, movement.Template(), movement.NewOccupancyGrid())
 
 	h, err := w.Create(lab, 0, world.CellToWorld(8), 0, world.CellToWorld(8))
 	if err != nil {
@@ -327,6 +327,10 @@ func TestYardStateFollowsBothOccupancyLayers(t *testing.T) {
 	if err := svc.RegisterBuildingPlacement(u); err != nil {
 		t.Fatalf("RegisterBuildingPlacement: %v", err)
 	}
+	// Initial movement occupancy is published before any COB yard write. It
+	// must already agree with the closed authored yard state [04 R-COLL-01 §4].
+	svc.Movement.BindWorld(w)
+	svc.Movement.EnsureUnit(u)
 	rect, ok := svc.PlacementForProduct(h)
 	if !ok {
 		t.Fatal("building did not retain its placement record")
@@ -340,7 +344,7 @@ func TestYardStateFollowsBothOccupancyLayers(t *testing.T) {
 		t.Helper()
 		for z := rect.MinZ(); z < rect.MaxZ(); z++ {
 			for x := rect.MinX(); x < rect.MaxX(); x++ {
-				want := yardSelects(yard[int((z-rect.MinZ())*rect.Width()+(x-rect.MinX()))], open)
+				want := yard[int((z-rect.MinZ())*rect.Width()+(x-rect.MinX()))].Selects(open)
 				if got := terrain.PlotAt(x, z).OccupantA() == int16(h); got != want {
 					t.Fatalf("%s: plot cell %d,%d held=%v, want %v", stage, x, z, got, want)
 				}
@@ -353,12 +357,6 @@ func TestYardStateFollowsBothOccupancyLayers(t *testing.T) {
 	}
 	check("closed", false)
 
-	// EnsureUnit stamps the whole footprint for a completed building; the
-	// yard-selected normalization must win over it in the grid as it does in
-	// the plot [04 R-COLL-01 §4].
-	if !svc.Movement.Grid.Stamp(movement.Cell{X: rect.MinX(), Z: rect.MinZ()}, int16(rect.Width()), int16(rect.Depth()), int(h)) {
-		t.Fatal("whole-footprint grid stamp refused")
-	}
 	if !svc.YardOpenTransaction(u, true) {
 		t.Fatal("unoccupied yard refused open")
 	}

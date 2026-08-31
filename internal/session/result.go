@@ -3,16 +3,17 @@ package session
 import (
 	"sort"
 
+	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/mission"
 )
 
 // ReasonCommanderDeath is the skirmish commander-death termination reason
 // [08 "Skirmish configuration"] CommanderDeath default 1 = commander death ends the game.
 const ReasonCommanderDeath = "commander_death"
 
-// ReasonAllUnits is the lobby skirmish all-units termination reason. The
-// value-zero survival sweep is a supported inference pending an exact retail
-// evaluator trace [08 "Skirmish configuration"].
+// ReasonAllUnits is the lobby skirmish all-units termination reason [08
+// R-SKIR-01 §3][08 R-TRIG-01 §6].
 const ReasonAllUnits = "all_units"
 
 // Result is the authoritative latched terminal result for a skirmish session.
@@ -22,24 +23,24 @@ const ReasonAllUnits = "all_units"
 // EndLatch countdown/bits per [P1-01 §2.2] already implemented in progression.go —
 // reuse, do not bypass. Result is owned by Session (RS-05 RS-P0-012) not a
 // package global; one terminal point is latch visible (Ended) and one stop point
-// is State != Battle. Research does NOT decompose the general alliance endgame
-// sweep: CommanderDeath==1 eliminates a team when all its commanders are dead;
-// CommanderDeath==0 uses the supported-inference all-live-unit survival rule.
-// TODO(question): trace the exact retail value-zero team-elimination sweep and
-// its handling of extra/resurrected commanders; the UI text and observed setup
-// semantics establish the distinction but not the executable sweep.
+// is State != Battle. The value-zero alliance corner remains deliberately
+// narrow: research establishes the live-unit predicate but does not settle
+// how a non-local alliance aggregate is reduced. Keep that question at this
+// owner/team boundary until the deciding retail trace is available [08
+// R-SKIR-01 §3][08 R-TRIG-01 §6].
 type Result struct {
-	Ended      bool                `json:"ended"`
-	Draw       bool                `json:"draw"`
-	Kind       string              `json:"kind"` // "victory" | "defeat" | "draw" [RS-05][08]
-	WinnerTeam int                 `json:"winner_team"`
-	Winners    []int               `json:"winners,omitempty"`
-	Losers     []int               `json:"losers"`
-	Reason     string              `json:"reason"`
-	Tick       uint32              `json:"tick"`
-	ArmedTick  uint32              `json:"armed_tick,omitempty"`
-	Countdown  int16               `json:"countdown"`
-	Scores     []frame.ResultScore `json:"scores,omitempty"`
+	Ended        bool                `json:"ended"`
+	Draw         bool                `json:"draw"`
+	Kind         string              `json:"kind"` // "victory" | "defeat" | "draw" [RS-05][08]
+	WinnerTeam   int                 `json:"winner_team"`
+	Winners      []int               `json:"winners,omitempty"`
+	Losers       []int               `json:"losers"`
+	Reason       string              `json:"reason"`
+	Tick         uint32              `json:"tick"`
+	ArmedTick    uint32              `json:"armed_tick,omitempty"`
+	Countdown    int16               `json:"countdown"`
+	Scores       []frame.ResultScore `json:"scores,omitempty"`
+	ColumnMaxima [7]int              `json:"column_maxima,omitempty"`
 }
 
 // TeamForOwner maps an owner slot to its team identifier [RS-05][08].
@@ -51,8 +52,10 @@ func (s *Session) TeamForOwner(owner int) int { return s.teamForOwner(owner) }
 // AllyGroup 5 is the unassigned sentinel [08 "Skirmish configuration"]
 // [GAP T14]; when it appears we treat each owner as its own hostile team
 // (100+owner) so that default skirmishes are FFA. Explicit non-sentinel
-// groups share a team. TODO(question): research does NOT decompose the general
-// alliance endgame sweep; this mapping is the minimal CommanderDeath==1 rule.
+// groups share a team. TODO(question): the retail trace names the local
+// player's first alliance row for the value-zero alliance aggregate, but does
+// not establish how a non-local aggregate is reduced; retain this narrow
+// unresolved corner rather than generalizing it [08 R-TRIG-01 §6].
 func (s *Session) teamForOwner(owner int) int {
 	if owner < 0 || owner >= 10 {
 		return owner
@@ -103,11 +106,10 @@ func (s *Session) resultKindFor(draw bool, winner int) string {
 	return "defeat"
 }
 
-// collectScores builds per-player ResultScore slice [P1-01 §2.3] RS-05.
-// Kills/Losses are tracked by player counters, but are not yet in
-// economy.Player [P1-01 §2.3]. Until those counters and authored multipliers
-// are wired, the snapshot carries neutral zero counters and score, plus the
-// result kind per team.
+// collectScores builds the immutable per-player result rows [08 R-CAMP-01 §7].
+// All counters and economy totals are read after their authoritative event
+// sites have committed them; conversions here are presentation-data shaping,
+// not simulation mutations.
 func (s *Session) collectScores(winner int, draw bool) []frame.ResultScore {
 	if s.Econ == nil {
 		return nil
@@ -115,7 +117,7 @@ func (s *Session) collectScores(winner int, draw bool) []frame.ResultScore {
 	var out []frame.ResultScore
 	for i := 0; i < 10; i++ {
 		p := s.Econ.Players[i]
-		if !p.Exists {
+		if !s.resultScoreRowEligible(i, p) {
 			continue
 		}
 		team := s.teamForOwner(i)
@@ -127,22 +129,120 @@ func (s *Session) collectScores(winner int, draw bool) []frame.ResultScore {
 		} else {
 			kind = "lose"
 		}
-		kills := 0
-		losses := 0
-		// TODO(question): identify the authored kill/time multipliers and wire the
-		// player kill/loss counters before deriving a nonzero score [P1-01 §2.3][P1-01 §8].
-		score := 0
-		out = append(out, frame.ResultScore{Player: i, Team: team, Kills: kills, Losses: losses, Score: score, Kind: kind})
+		kills := int(p.Kills)
+		losses := int(p.Losses)
+		energyProduced := int(p.TotalProduced[1])
+		metalProduced := int(p.TotalProduced[0])
+		energyConsumed := int(p.TotalConsumed[1])
+		metalConsumed := int(p.TotalConsumed[0])
+		energyWasted := int(p.Waste[1])
+		metalWasted := int(p.Waste[0])
+		score := s.resultScore(kills)
+		name := p.Name
+		logo := int(p.Logo)
+		if s.Skirmish.NumPlayers > 0 && i < len(s.Skirmish.Players) {
+			sp := s.Skirmish.Players[i]
+			if name == "" {
+				name = sp.Nickname
+			}
+			if logo == 0 {
+				logo = sp.Color
+			}
+		}
+		out = append(out, frame.ResultScore{
+			Player: i, Team: team, Name: name, Logo: uint8(logo),
+			Kills: kills, Losses: losses,
+			EnergyProduced: energyProduced, MetalProduced: metalProduced,
+			EnergyConsumed: energyConsumed, MetalConsumed: metalConsumed,
+			EnergyWasted: energyWasted, MetalWasted: metalWasted,
+			CommandersKilled: int(p.CommanderKills), CommandersLost: int(p.CommanderLosses),
+			Score: score, Kind: kind,
+		})
 	}
 	return out
 }
 
+// resultScoreRowEligible is the ENDMSN row gate. Skirmish setup metadata is
+// authoritative when present; otherwise the runtime player record supplies the
+// controller/side fields. Watchers and rejected records never receive a row,
+// while the established auxiliary-word escape is retained [08 R-CAMP-01 §7].
+func (s *Session) resultScoreRowEligible(i int, p economy.Player) bool {
+	if i < 0 || i >= 10 || !p.Exists || p.RejectionReason != 0 {
+		return false
+	}
+	if p.ResultAuxiliary != 0 {
+		return true
+	}
+	controller := p.ControllerState
+	side := int(p.Side)
+	watcher := p.Watcher
+	if s.Skirmish.NumPlayers > 0 && i < len(s.Skirmish.Players) {
+		sp := s.Skirmish.Players[i]
+		if sp.IsObserver() {
+			return false
+		}
+		if sp.Controller == SkirmishControllerHuman {
+			controller = 1
+		} else if sp.Controller == SkirmishControllerObserver {
+			controller = 3
+		} else {
+			controller = 2
+		}
+		side = sp.Side
+	}
+	if controller != 1 && controller != 2 && controller != 3 {
+		return false
+	}
+	if side == 10 || watcher {
+		return false
+	}
+	return true
+}
+
+// resultScore reads authored kill/time multipliers from the selected mission
+// and performs the two __ftol conversions in retail order [08 R-CAMP-01 §7].
+func (s *Session) resultScore(kills int) int {
+	var killMul, timeMul float32
+	if s != nil && s.Mission != nil && s.Mission.OTA != nil {
+		if globals := mission.DecodeMissionGlobals(s.Mission.OTA.Global); globals != nil {
+			killMul = float32(globals.KillMul)
+			timeMul = float32(globals.TimeMul)
+		}
+	}
+	var tick uint32
+	if s != nil && s.Clock != nil {
+		tick = s.Clock.GlobalTick
+	}
+	// The source expression explicitly narrows the elapsed-tick and kill
+	// values to the authored single-precision multiplier path before each
+	// __ftol conversion [08 R-CAMP-01 §7].
+	timeTerm := int64(int32(float32(tick/60) * float32(timeMul)))
+	killTerm := int64(int32(float32(kills) * float32(killMul)))
+	total := timeTerm + killTerm
+	if total < 0 {
+		return 0
+	}
+	return int(total)
+}
+
+func resultColumnMaxima(rows []frame.ResultScore) [7]int {
+	max := [7]int{10, 10, 100, 100, 100, 100, 100}
+	for _, row := range rows {
+		values := [...]int{row.Kills, row.Losses, row.EnergyProduced, row.MetalProduced, row.EnergyWasted, row.MetalWasted, row.Score}
+		for i, value := range values {
+			if value > max[i] {
+				max[i] = value
+			}
+		}
+	}
+	return max
+}
+
 // EvaluateResult is the alliance-aware victory evaluator [08][RS-05][RR-04].
 // The authoritative tick invokes it after death finalization each tick. It
-// computes active teams from live units each evaluation. CommanderDeath==1
-// counts only commanders; CommanderDeath==0 counts every unit, including
-// buildings, as a supported inference from the lobby's commander-versus-all-
-// units setup semantics [08 "Skirmish configuration"]. When <=1 hostile team
+// computes active teams from live units each evaluation. Both non-deathmatch
+// values use owner live-unit counts; rule 1's commander transition first
+// sweeps the owner's remaining units. When <=1 hostile team
 // remains it latches the result (draw on mutual destruction), preserving the
 // researched EndLatch countdown via Arm/AdvanceWin/AdvanceLose with once-per-
 // 30-tick cadence [08 "Evaluation"][RR-04] (4 → -1 over five invocations,
@@ -156,22 +256,29 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 	if s == nil || s.Units == nil {
 		return false
 	}
-	commanderOnly := false
-	switch s.Skirmish.CommanderDeath {
-	case 0:
-		// Supported inference: the menu's continue-after-commander-death mode
-		// keeps a team alive while any unit remains. TODO(question): trace the
-		// exact retail value-zero all-units sweep [08 "Skirmish configuration"].
-	case 1:
-		commanderOnly = true
-	default:
-		// TODO(question): value two has an established commander-respawn path,
-		// but Session does not yet implement that placement/resource sequence.
-		return false
-	}
 	if s.result.Ended {
 		return false
 	}
+	// Finalization normally calls this before the evaluator. Keeping the call
+	// here also covers direct composition seams that invoke EvaluateResult after
+	// filing a death through the unit world [08 R-SKIR-01 §3].
+	s.processPendingCommanderDeaths(tick)
+	rule := CommanderDeathMode(s.Skirmish.CommanderDeath)
+	if rule == CommanderDeathDeathmatch {
+		if s.deathmatchActive {
+			_ = s.advanceDeathmatch(tick)
+			return false
+		}
+		if !s.deathmatchExhausted {
+			// Deathmatch does not end through elimination while respawn remains
+			// applicable; a commander loss is the only defeat trigger here [08
+			// R-SKIR-01 §3].
+			return false
+		}
+	}
+	// Both non-deathmatch values use owner live-unit accounting. Rule 1's
+	// owner sweep drives that count to zero; it is not a commander-only scan
+	// [08 R-SKIR-01 §3].
 	// Compute allTeams from SkirmishConfig players (fallback per-owner).
 	var allTeams [10]int
 	allTeamCount := 0
@@ -192,6 +299,15 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 			n = 10
 		}
 		for i := 0; i < n; i++ {
+			if !s.resultOwnerEligible(i) {
+				continue
+			}
+			// A participating slot that has not created any unit is not an
+			// eliminated opponent; victory waits for its first allocation
+			// [08 R-SKIR-01 §3].
+			if s.Units.CreatedCountForPlayer(i) == 0 && !s.resultPending {
+				return false
+			}
 			addTeam(s.teamForOwner(i))
 		}
 	} else {
@@ -203,7 +319,10 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 		}
 		if s.Econ != nil {
 			for i := 0; i < 10; i++ {
-				if s.Econ.Players[i].Exists {
+				if s.resultOwnerEligible(i) {
+					if s.Units.CreatedCountForPlayer(i) == 0 && !s.resultPending {
+						return false
+					}
 					addTeam(s.teamForOwner(i))
 				}
 			}
@@ -214,7 +333,12 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 			}
 		}
 	}
-	// Active teams: those with at least one alive non-dying commander.
+	// Active owners are derived from the authoritative live counters. A death
+	// remains live until phase-2 finalization, so a same-tick commander sweep
+	// cannot arm victory merely because a unit has been marked Dying
+	// [08 R-SKIR-01 §3]. In skirmish, each participating player's counter is
+	// tested independently; AllyGroup affects result presentation only and does
+	// not collapse allied players into one surviving side.
 	var active [10]int
 	activeCount := 0
 	addActive := func(team int) {
@@ -228,14 +352,26 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 			activeCount++
 		}
 	}
-	for _, u := range s.Units.IterSliced() {
-		if u == nil || !u.Alive || u.Dying {
-			continue
+	activeOwner := -1
+	if s.Skirmish.NumPlayers > 0 {
+		n := s.Skirmish.NumPlayers
+		if n > len(active) {
+			n = len(active)
 		}
-		if commanderOnly && (u.Def == nil || !u.Def.Commander) {
-			continue
+		for owner := 0; owner < n; owner++ {
+			if !s.resultOwnerEligible(owner) || s.Units.LiveCountForPlayer(owner) == 0 {
+				continue
+			}
+			activeOwner = owner
+			addActive(owner)
 		}
-		addActive(s.teamForOwner(int(u.Owner)))
+	} else {
+		for owner := 0; owner < len(active); owner++ {
+			if s.resultOwnerEligible(owner) && s.Units.LiveCountForPlayer(owner) != 0 {
+				activeOwner = owner
+				addActive(s.teamForOwner(owner))
+			}
+		}
 	}
 	if activeCount > 1 {
 		return false
@@ -245,7 +381,7 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 	var winners []int
 	var draw bool
 	reason := ReasonAllUnits
-	if commanderOnly {
+	if rule != CommanderDeathContinues {
 		reason = ReasonCommanderDeath
 	}
 	if activeCount == 0 {
@@ -256,7 +392,11 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 		}
 		sort.Ints(losers)
 	} else {
-		winner = active[0]
+		if activeOwner >= 0 {
+			winner = s.teamForOwner(activeOwner)
+		} else {
+			winner = active[0]
+		}
 		winners = []int{winner}
 		for i := 0; i < allTeamCount; i++ {
 			t := allTeams[i]
@@ -301,17 +441,18 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 		// 4, not yet Ended).
 		scores := s.collectScores(winner, draw)
 		pending := Result{
-			Ended:      false,
-			Draw:       draw,
-			Kind:       kind,
-			WinnerTeam: winner,
-			Winners:    append([]int(nil), winners...),
-			Losers:     append([]int(nil), losers...),
-			Reason:     reason,
-			Tick:       0,
-			ArmedTick:  tick,
-			Countdown:  s.Latch.Countdown,
-			Scores:     scores,
+			Ended:        false,
+			Draw:         draw,
+			Kind:         kind,
+			WinnerTeam:   winner,
+			Winners:      append([]int(nil), winners...),
+			Losers:       append([]int(nil), losers...),
+			Reason:       reason,
+			Tick:         0,
+			ArmedTick:    tick,
+			Countdown:    s.Latch.Countdown,
+			Scores:       scores,
+			ColumnMaxima: resultColumnMaxima(scores),
 		}
 		// Hold pending result for snapshot? We store in result but Ended false means not terminal.
 		// Keep result.Ended false until latch visible; but store pending for later commit.
@@ -327,17 +468,18 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 				winners2 = []int{w2}
 			}
 			s.result = Result{
-				Ended:      true,
-				Draw:       s.resultPendingDraw,
-				Kind:       kind2,
-				WinnerTeam: w2,
-				Winners:    winners2,
-				Losers:     append([]int(nil), s.resultPendingLosers...),
-				Reason:     s.resultPendingReason,
-				Tick:       tick,
-				ArmedTick:  s.resultArmedTick,
-				Countdown:  s.Latch.Countdown,
-				Scores:     scores2,
+				Ended:        true,
+				Draw:         s.resultPendingDraw,
+				Kind:         kind2,
+				WinnerTeam:   w2,
+				Winners:      winners2,
+				Losers:       append([]int(nil), s.resultPendingLosers...),
+				Reason:       s.resultPendingReason,
+				Tick:         tick,
+				ArmedTick:    s.resultArmedTick,
+				Countdown:    s.Latch.Countdown,
+				Scores:       scores2,
+				ColumnMaxima: resultColumnMaxima(scores2),
 			}
 			if s.State == StateBattle {
 				_ = s.TransitionTo(StatePostBattle)
@@ -366,17 +508,18 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 			winners2 = []int{s.resultPendingWinner}
 		}
 		s.result = Result{
-			Ended:      false,
-			Draw:       s.resultPendingDraw,
-			Kind:       kind2,
-			WinnerTeam: s.resultPendingWinner,
-			Winners:    winners2,
-			Losers:     append([]int(nil), s.resultPendingLosers...),
-			Reason:     s.resultPendingReason,
-			Tick:       0,
-			ArmedTick:  s.resultArmedTick,
-			Countdown:  s.Latch.Countdown,
-			Scores:     scores,
+			Ended:        false,
+			Draw:         s.resultPendingDraw,
+			Kind:         kind2,
+			WinnerTeam:   s.resultPendingWinner,
+			Winners:      winners2,
+			Losers:       append([]int(nil), s.resultPendingLosers...),
+			Reason:       s.resultPendingReason,
+			Tick:         0,
+			ArmedTick:    s.resultArmedTick,
+			Countdown:    s.Latch.Countdown,
+			Scores:       scores,
+			ColumnMaxima: resultColumnMaxima(scores),
 		}
 		if s.Econ != nil {
 			for i := 0; i < 10; i++ {
@@ -423,17 +566,18 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 			winners2 = []int{s.resultPendingWinner}
 		}
 		s.result = Result{
-			Ended:      true,
-			Draw:       s.resultPendingDraw,
-			Kind:       kind2,
-			WinnerTeam: s.resultPendingWinner,
-			Winners:    winners2,
-			Losers:     append([]int(nil), s.resultPendingLosers...),
-			Reason:     s.resultPendingReason,
-			Tick:       tick,
-			ArmedTick:  s.resultArmedTick,
-			Countdown:  s.Latch.Countdown,
-			Scores:     scores,
+			Ended:        true,
+			Draw:         s.resultPendingDraw,
+			Kind:         kind2,
+			WinnerTeam:   s.resultPendingWinner,
+			Winners:      winners2,
+			Losers:       append([]int(nil), s.resultPendingLosers...),
+			Reason:       s.resultPendingReason,
+			Tick:         tick,
+			ArmedTick:    s.resultArmedTick,
+			Countdown:    s.Latch.Countdown,
+			Scores:       scores,
+			ColumnMaxima: resultColumnMaxima(scores),
 		}
 		if s.State == StateBattle {
 			_ = s.TransitionTo(StatePostBattle)
@@ -448,19 +592,38 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 		winners2 = []int{s.resultPendingWinner}
 	}
 	s.result = Result{
-		Ended:      false,
-		Draw:       s.resultPendingDraw,
-		Kind:       kind2,
-		WinnerTeam: s.resultPendingWinner,
-		Winners:    winners2,
-		Losers:     append([]int(nil), s.resultPendingLosers...),
-		Reason:     s.resultPendingReason,
-		Tick:       0,
-		ArmedTick:  s.resultArmedTick,
-		Countdown:  s.Latch.Countdown,
-		Scores:     scores,
+		Ended:        false,
+		Draw:         s.resultPendingDraw,
+		Kind:         kind2,
+		WinnerTeam:   s.resultPendingWinner,
+		Winners:      winners2,
+		Losers:       append([]int(nil), s.resultPendingLosers...),
+		Reason:       s.resultPendingReason,
+		Tick:         0,
+		ArmedTick:    s.resultArmedTick,
+		Countdown:    s.Latch.Countdown,
+		Scores:       scores,
+		ColumnMaxima: resultColumnMaxima(scores),
 	}
 	return false
+}
+
+func (s *Session) resultOwnerEligible(owner int) bool {
+	if s == nil || owner < 0 || owner >= 10 {
+		return false
+	}
+	if s.Skirmish.NumPlayers > 0 && owner < s.Skirmish.NumPlayers {
+		// Skirmish setup rows are the participating-player authority. The
+		// economy controller byte is a runtime binding and may still be its
+		// zero fixture value when a result is evaluated directly [08
+		// R-SKIR-01 §3].
+		return !s.Skirmish.Players[owner].IsObserver()
+	}
+	if s.Econ != nil {
+		p := s.Econ.Players[owner]
+		return p.Exists && !p.IsObserver && (p.ControllerState == 1 || p.ControllerState == 2)
+	}
+	return !s.Skirmish.Players[owner].IsObserver()
 }
 
 // GetResultArmedTick returns the tick when the result was armed (milestone).
@@ -484,6 +647,12 @@ func (s *Session) ResetResultForRetry() {
 	s.resultPendingDraw = false
 	s.resultArmedTick = 0
 	s.resultNextDue = 0
+	s.pendingCommanderDeaths = [10]bool{}
+	s.deathmatchCountdown = 0
+	s.deathmatchNextDue = 0
+	s.deathmatchActive = false
+	s.deathmatchAttempts = 0
+	s.deathmatchExhausted = false
 	s.Latch = NewEndLatch()
 	s.VictoryDone = false
 	s.DefeatDone = false

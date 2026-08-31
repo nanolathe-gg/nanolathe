@@ -74,6 +74,9 @@ func TestResult_TwoPlayerHostileCommanderDeath(t *testing.T) {
 	handles := commanderHandles(s)
 	h := handles[1][0]
 	s.Units.Destroy(poolHandle(h), units.DeathKilled)
+	if result := s.Units.FinalizeDeath(poolHandle(h), 0); !result.Freed {
+		t.Fatal("enemy commander was not finalized")
+	}
 	// Evaluate until latched [RS-05][RR-04] 4→-1 over ~150 ticks (once per 30)
 	var latched bool
 	for tick := uint32(0); tick < 200; tick++ {
@@ -155,7 +158,11 @@ func TestResult_ThreePlayerFFA(t *testing.T) {
 		t.Fatalf("expected 3 commanders")
 	}
 	// Kill one enemy (owner 1) – should NOT end
-	s.Units.Destroy(poolHandle(commanderHandles(s)[1][0]), units.DeathKilled)
+	h1 := poolHandle(commanderHandles(s)[1][0])
+	s.Units.Destroy(h1, units.DeathKilled)
+	if result := s.Units.FinalizeDeath(h1, 0); !result.Freed {
+		t.Fatal("first FFA commander was not finalized")
+	}
 	for tick := uint32(0); tick < 200; tick++ {
 		s.EvaluateResult(tick)
 	}
@@ -163,7 +170,11 @@ func TestResult_ThreePlayerFFA(t *testing.T) {
 		t.Fatalf("FFA: killing one of three should not end match, got %+v", s.GetResult())
 	}
 	// Kill second enemy (owner 2) – now only owner 0 remains, should end with winner 0
-	s.Units.Destroy(poolHandle(commanderHandles(s)[2][0]), units.DeathKilled)
+	h2 := poolHandle(commanderHandles(s)[2][0])
+	s.Units.Destroy(h2, units.DeathKilled)
+	if result := s.Units.FinalizeDeath(h2, 0); !result.Freed {
+		t.Fatal("second FFA commander was not finalized")
+	}
 	var latched bool
 	for tick := uint32(60); tick < 260; tick++ {
 		if s.EvaluateResult(tick) {
@@ -202,7 +213,11 @@ func TestResult_AlliedPairVsEnemy(t *testing.T) {
 	s.State = StateBattle
 	s.RegisterAll()
 	// Kill enemy commander (owner 2)
-	s.Units.Destroy(poolHandle(commanderHandles(s)[2][0]), units.DeathKilled)
+	h := poolHandle(commanderHandles(s)[2][0])
+	s.Units.Destroy(h, units.DeathKilled)
+	if result := s.Units.FinalizeDeath(h, 0); !result.Freed {
+		t.Fatal("enemy commander was not finalized")
+	}
 	var latched bool
 	for tick := uint32(0); tick < 200; tick++ {
 		if s.EvaluateResult(tick) {
@@ -210,11 +225,25 @@ func TestResult_AlliedPairVsEnemy(t *testing.T) {
 			break
 		}
 	}
+	if latched || s.GetResult().Ended {
+		t.Fatalf("allied pair vs enemy: enemy death must not end while allied peer lives, got %+v latch %+v", s.GetResult(), s.Latch)
+	}
+	peer := poolHandle(commanderHandles(s)[1][0])
+	s.Units.Destroy(peer, units.DeathKilled)
+	if result := s.Units.FinalizeDeath(peer, 200); !result.Freed {
+		t.Fatal("allied peer commander was not finalized")
+	}
+	for tick := uint32(200); tick < 400; tick++ {
+		if s.EvaluateResult(tick) {
+			latched = true
+			break
+		}
+	}
 	if !latched {
-		t.Fatalf("allied pair vs enemy: enemy death should latch allies win, got %+v latch %+v", s.GetResult(), s.Latch)
+		t.Fatalf("allied pair vs enemy: final allied peer death should latch victory, got %+v latch %+v", s.GetResult(), s.Latch)
 	}
 	res := s.GetResult()
-	// Winner should be team 1 (allied pair)
+	// Winner should be team 1 (the surviving local owner's allied group).
 	if res.WinnerTeam != 1 {
 		t.Fatalf("allied pair winner want 1 got %d", res.WinnerTeam)
 	}
@@ -242,7 +271,11 @@ func TestResult_LocalDefeat(t *testing.T) {
 	s.RegisterAll()
 	// LocalOwner is 0 by default (first human)
 	// Kill local commander
-	s.Units.Destroy(poolHandle(commanderHandles(s)[0][0]), units.DeathKilled)
+	h := poolHandle(commanderHandles(s)[0][0])
+	s.Units.Destroy(h, units.DeathKilled)
+	if result := s.Units.FinalizeDeath(h, 0); !result.Freed {
+		t.Fatal("local commander was not finalized")
+	}
 	var latched bool
 	for tick := uint32(0); tick < 200; tick++ {
 		if s.EvaluateResult(tick) {
@@ -280,8 +313,16 @@ func TestResult_MutualDestructionDraw(t *testing.T) {
 	s.RegisterAll()
 	// Kill both commanders before evaluation (same evaluation)
 	handles := commanderHandles(s)
-	s.Units.Destroy(poolHandle(handles[0][0]), units.DeathKilled)
-	s.Units.Destroy(poolHandle(handles[1][0]), units.DeathKilled)
+	h0 := poolHandle(handles[0][0])
+	h1 := poolHandle(handles[1][0])
+	s.Units.Destroy(h0, units.DeathKilled)
+	s.Units.Destroy(h1, units.DeathKilled)
+	if result := s.Units.FinalizeDeath(h0, 0); !result.Freed {
+		t.Fatal("first mutual-destruction commander was not finalized")
+	}
+	if result := s.Units.FinalizeDeath(h1, 0); !result.Freed {
+		t.Fatal("second mutual-destruction commander was not finalized")
+	}
 	var latched bool
 	for tick := uint32(0); tick < 200; tick++ {
 		if s.EvaluateResult(tick) {
@@ -322,7 +363,11 @@ func TestResult_ResultViewExposesEnded(t *testing.T) {
 			t.Fatalf("initial ResultView should not be ended")
 		}
 	}
-	s.Units.Destroy(poolHandle(commanderHandles(s)[1][0]), units.DeathKilled)
+	h := poolHandle(commanderHandles(s)[1][0])
+	s.Units.Destroy(h, units.DeathKilled)
+	if result := s.Units.FinalizeDeath(h, 0); !result.Freed {
+		t.Fatal("result-view commander was not finalized")
+	}
 	for tick := uint32(0); tick < 200; tick++ {
 		s.EvaluateResult(tick)
 	}
@@ -427,16 +472,71 @@ func TestSkirmishLobby_DefaultMissionTriggersDoNotEndLiveMatch(t *testing.T) {
 	}
 }
 
-func TestSkirmishLobby_CommanderDeathModeEndsWithOtherUnitsAlive(t *testing.T) {
+func TestSkirmishLobby_CommanderDeathModeSweepsOwnerUnits(t *testing.T) {
 	s, ordinary := newLobbyEndRuleSession(t, 1, true)
 	killCommander(t, s, 1)
 	stepLobbyThrough(t, s, 0, 220)
-	if u := s.Units.Unit(ordinary); u == nil || !u.Alive || u.Dying {
-		t.Fatalf("ordinary enemy unit did not survive commander loss")
+	if u := s.Units.Unit(ordinary); u != nil && u.Alive {
+		t.Fatalf("ordinary enemy unit survived the commander owner sweep")
 	}
 	res := s.GetResult()
 	if s.State != StatePostBattle || !res.Ended || res.Reason != ReasonCommanderDeath {
 		t.Fatalf("commander-death mode did not end on commander loss: state=%v result=%+v", s.State, res)
+	}
+}
+
+func TestSkirmishDeathmatchRespawnDrawsXThenZ(t *testing.T) {
+	s, _ := newLobbyEndRuleSession(t, int(CommanderDeathDeathmatch), false)
+	s.World = minimalTerrain()
+	// This test isolates commander placement and draw order; production
+	// composition supplies movement for occupancy and rebinding.
+	s.Movement = nil
+	h := poolHandle(commanderHandles(s)[0][0])
+	simState := s.SimRNG().State
+	simDraws := s.SimRNG().Draws()
+	s.Units.Destroy(h, units.DeathKilled)
+	if result := s.Units.FinalizeDeath(h, 0); !result.Freed {
+		t.Fatal("commander was not finalized")
+	}
+	s.NotifyDeathFinalized(0, 0)
+	active, countdown, _, exhausted := s.DeathmatchStatus()
+	if !active || countdown != 4 || exhausted {
+		t.Fatalf("deathmatch did not arm: active=%v countdown=%d exhausted=%v", active, countdown, exhausted)
+	}
+	// Predict the first candidate from a copy of the stream. The candidate
+	// rectangle is W/D minus one tenth on each side, with X sampled before Z
+	// [01 §7.1][08 R-SKIR-01 §3].
+	predict := rng.SimulationFromState(simState)
+	mapW := uint32(s.World.CellW * 16)
+	mapH := uint32(s.World.CellH * 16)
+	insetW, insetH := mapW/10, mapH/10
+	rx := predict.Uint32n(mapW - 2*insetW)
+	rz := predict.Uint32n(mapH - 2*insetH)
+	wantX := numeric.Fixed(int64(insetW+rx) << 16)
+	wantZ := numeric.Fixed(int64(insetH+rz) << 16)
+	for tick := uint32(30); tick <= 150; tick += 30 {
+		s.EvaluateResult(tick)
+	}
+	var commander *units.Unit
+	for _, u := range s.Units.IterSliced() {
+		if u != nil && u.Alive && s.isCommanderForOwner(u) {
+			commander = u
+			break
+		}
+	}
+	if commander == nil {
+		t.Fatal("deathmatch did not create a commander")
+	}
+	if commander.X != wantX || commander.Z != wantZ {
+		t.Fatalf("respawn position = (%v,%v), want (%v,%v)", commander.X, commander.Z, wantX, wantZ)
+	}
+	// This synthetic constructor intentionally leaves the unit world's
+	// allocation RNG unbound; only the two candidate draws belong to this
+	// fixture's stream. Production composition binds the allocator stream
+	// before any creation and accounts for its common-initializer draws.
+	wantDraws := uint64(2)
+	if got := s.SimRNG().Draws() - simDraws; got != wantDraws {
+		t.Fatalf("respawn consumed %d simulation draws, want %d candidate draws", got, wantDraws)
 	}
 }
 

@@ -27,6 +27,9 @@ func HashState(s *Session) string {
 	}
 	h := sha256.New()
 	if s.Units != nil {
+		for player := 0; player < 10; player++ {
+			fmt.Fprintf(h, "C%d:%d|", player, s.Units.CreatedCountForPlayer(player))
+		}
 		for _, u := range s.Units.Iter() {
 			if u == nil || !u.Alive {
 				continue

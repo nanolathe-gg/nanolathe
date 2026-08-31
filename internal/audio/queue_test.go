@@ -116,6 +116,60 @@ func TestInsertCooldownDrop(t *testing.T) {
 	}
 }
 
+func TestCaptionResolvesWhileInaudibleAndCooldownNeedsAudibleResolve(t *testing.T) {
+	q := NewQueue()
+	h := pool.Handle(1)
+	q.Register(h, categoryFixture(), "Peewee", true)
+	var captions []string
+	var plays []string
+	q.OnCaption(func(line string, _ Slot, _ pool.Handle) { captions = append(captions, line) })
+	q.OnPlay(func(alias string, _ Slot, _ pool.Handle) { plays = append(plays, alias) })
+	if !q.InsertAt(1, SlotCant, h, "blocked") {
+		t.Fatal("caption cue rejected")
+	}
+	q.Drain(1) // inside the 30-frame audible window: text resolves, sound does not
+	if len(captions) != 1 || captions[0] != "Peewee: blocked" {
+		t.Fatalf("captions = %v, want one resolved caption", captions)
+	}
+	if len(plays) != 0 || q.nextAllowed[SlotCant] != 0 {
+		t.Fatalf("inaudible resolve played=%v cooldown=%d; audible gates must be separate", plays, q.nextAllowed[SlotCant])
+	}
+	if !q.InsertAt(2, SlotCant, h, "again") {
+		t.Fatal("cooldown armed during inaudible resolve")
+	}
+	q.Drain(31)
+	if q.nextAllowed[SlotCant] != 61 {
+		t.Fatalf("audible resolve cooldown=%d, want 61", q.nextAllowed[SlotCant])
+	}
+}
+
+func TestDefaultCaptionThresholdIsMedium(t *testing.T) {
+	services := []*Service{NewService(nil)}
+	var zero Service
+	zero.Init(nil)
+	services = append(services, &zero)
+	for _, service := range services {
+		q := service.Queue
+		if q.audioThreshold != 10 || q.speechThreshold != 5 {
+			t.Fatalf("defaults audio=%d speech=%d, want 10/5", q.audioThreshold, q.speechThreshold)
+		}
+		q.Register(1, categoryFixture(), "Peewee", true)
+		var lines []string
+		q.OnCaption(func(line string, _ Slot, _ pool.Handle) { lines = append(lines, line) })
+		for _, slot := range []Slot{7, 8, 9} {
+			if !q.InsertAt(0, slot, 1, "") {
+				t.Fatalf("slot %d was not queued", slot)
+			}
+		}
+		for q.Count != 0 {
+			q.Drain(0)
+		}
+		if len(lines) != 1 || lines[0] != "Peewee: Cannot Comply" {
+			t.Fatalf("default medium captions=%v, want only slot 7 priority 8", lines)
+		}
+	}
+}
+
 func TestInsertDuplicateDrop(t *testing.T) {
 	q := NewQueue()
 	cat := categoryFixture()

@@ -6,6 +6,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -71,7 +72,7 @@ func p28CompletionFixture(t *testing.T, count int) (*Service, *units.Unit, *unit
 		Phase:       uint8(State3),
 		Target:      ph,
 	})
-	svc := NewService(exitTerrain(16, 16), cat, w, nil)
+	svc := NewService(exitTerrain(16, 16), cat, w, &economy.Service{})
 	svc.ModelForFactory = func(*units.Unit) *model.Model { return trivialModel(1, nil) }
 	return svc, factory, product, q.Primary()[0]
 }

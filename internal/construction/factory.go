@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/frame"
@@ -117,6 +118,7 @@ type Service struct {
 	Catalog *content.Catalog
 	World   *units.World
 	Economy *economy.Service
+	Combat  *combat.Service
 	// OrderBinding is the owning session context copied to every product and
 	// reconstructed/replaced queue [04 §3.3][06 §11.1].
 	OrderBinding *orders.QueueBinding
@@ -140,10 +142,14 @@ type Service struct {
 	// factory hook remains the compatibility name for factory/model fixtures.
 	ModelForUnit func(unit *units.Unit) *model.Model
 
-	// ModeSelector selects the special-player refund scaling [05 C21]:
-	// 0 => subtract 7/10, 1 => subtract 1/2, other => add fallback. This
-	// pairing is INVERTED relative to the ledger's negative-energy-use refund
-	// site [05 C21].
+	// ModeSelector is the difficulty word that selects the computer player's
+	// production scaling: 0 credits a HALF, 1 credits seven tenths, any other
+	// value credits the whole amount [05 R-ECO-01 §3][05 R-ECO-01 §11].
+	//
+	// Correction (PT3-05 follow-up). This used to read "0 => subtract 7/10,
+	// 1 => subtract 1/2 ... This pairing is INVERTED relative to the ledger's
+	// negative-energy-use refund site". Both halves were wrong; see the
+	// cancel-refund arm below for the trace that retires them.
 	ModeSelector int
 	// IsSpecialSecondState reports whether the referenced player object is in
 	// the special second state [05 C21]. nil means no player is special.
@@ -194,8 +200,9 @@ type Service struct {
 }
 
 type placementRecord struct {
-	rect world.FootprintRect
-	def  *content.UnitDef
+	rect     world.FootprintRect
+	def      *content.UnitDef
+	yardOpen bool
 }
 
 // queueForUnit is the construction-owned queue admission point. Factory
@@ -581,7 +588,7 @@ func (s *Service) reservePlacement(product pool.Handle, def *content.UnitDef, re
 			if cell == nil {
 				return fmt.Errorf("construction: placement cell %d,%d unavailable", x, z)
 			}
-			if building && !yardTestsOccupancy(yard, rect, x, z) {
+			if building && !yard[int((z-rect.MinZ())*rect.Width()+(x-rect.MinX()))].TestsOccupancy() {
 				continue // [04 §6.2] C10: bits 1-2 clear, no occupant test
 			}
 			if (cell.OccupantA() != 0 && cell.OccupantA() != id) ||
@@ -653,27 +660,6 @@ func buildingYard(def *content.UnitDef, rect world.FootprintRect) ([]world.YardC
 	return yard, nil
 }
 
-// yardTestsOccupancy reports whether the yard byte covering (x,z) carries the
-// occupancy bits [04 §6.2] C10. An unresolvable yard falls back to testing,
-// so a parse failure can never silently loosen the check.
-func yardTestsOccupancy(yard []world.YardCell, rect world.FootprintRect, x, z int32) bool {
-	if len(yard) == 0 {
-		return true
-	}
-	idx := int((z-rect.MinZ())*rect.Width() + (x - rect.MinX()))
-	if idx < 0 || idx >= len(yard) {
-		return true
-	}
-	return yard[idx]&0x06 != 0
-}
-
-func yardSelects(yard world.YardCell, open bool) bool {
-	if open {
-		return yard&0x02 != 0
-	}
-	return yard&0x04 != 0
-}
-
 // stampBuilding normalizes one building to the exact ground cells selected by
 // its current yard state. The global clear pass precedes the global stamp pass
 // so an accepted yard transition preserves retail's clear-then-restamp order
@@ -700,15 +686,14 @@ func (s *Service) stampBuilding(product pool.Handle, record placementRecord, ope
 		grid = s.Movement.Grid // nil-safe: every OccupancyGrid method tolerates a nil receiver
 	}
 	gridID := int(product)
-	// TODO(T25): movement's EnsureUnit stamps a completed building's WHOLE
-	// footprint into the grid, and it runs after this normalization on both the
-	// completion path and the load path. Cells the yard map never selects
-	// ('Y', 'y', '.' — [04 R-COLL-01 §4]) therefore stay held in the grid while
-	// the plot has them free, until the building's first yard transition clears
-	// them here. Blocked item: EnsureUnit is owned by internal/movement, which
-	// this unit may not modify. Placeholder: normalize every cell we are called
-	// for and accept the residual on never-selected cells; the fix is for
-	// EnsureUnit to stamp building-class units by yard selection.
+	if current, ok := s.placements[product]; ok {
+		current.yardOpen = open
+		s.placements[product] = current
+	}
+	// Keep movement's teardown state in lockstep with this accepted yard state.
+	if s.Movement != nil {
+		s.Movement.SetBuildingYardState(product, open)
+	}
 	// First release every self-owned cell no longer selected by the new state.
 	for z := record.rect.MinZ(); z < record.rect.MaxZ(); z++ {
 		for x := record.rect.MinX(); x < record.rect.MaxX(); x++ {
@@ -717,7 +702,7 @@ func (s *Service) stampBuilding(product pool.Handle, record placementRecord, ope
 				continue
 			}
 			y := yard[int((z-record.rect.MinZ())*record.rect.Width()+(x-record.rect.MinX()))]
-			if !yardSelects(y, open) {
+			if !y.Selects(open) {
 				if cell.OccupantA() == id {
 					cell.SetOccupantA(0)
 				}
@@ -736,7 +721,7 @@ func (s *Service) stampBuilding(product pool.Handle, record placementRecord, ope
 				continue
 			}
 			y := yard[int((z-record.rect.MinZ())*record.rect.Width()+(x-record.rect.MinX()))]
-			if yardSelects(y, open) {
+			if y.Selects(open) {
 				if cell.OccupantA() == 0 || cell.OccupantA() == id {
 					cell.SetOccupantA(id)
 				}
@@ -876,6 +861,15 @@ func (s *Service) releaseFrameStamps(product pool.Handle) bool {
 				if cell == nil {
 					continue
 				}
+				if len(yard) != 0 {
+					y := yard[int((z-record.rect.MinZ())*record.rect.Width()+(x-record.rect.MinX()))]
+					if !y.Selects(record.yardOpen) {
+						if y&0x01 != 0 {
+							cell.SetStructureYard(false)
+						}
+						continue
+					}
+				}
 				if cell.OccupantA() == id {
 					cell.SetOccupantA(0)
 				}
@@ -944,11 +938,9 @@ func (s *Service) SnapshotLinks() []LinkRecord {
 
 // WorkerQuantum derives integer worker quantum floor(workerTime/30) [05 "Construction arithmetic"].
 func WorkerQuantum(workerTime int32) int32 {
-	// [05 "Construction arithmetic"] floor division, trunc toward zero for positive inputs [01 §8] I3.
-	if workerTime < 0 {
-		return workerTime / 30
-	}
-	return workerTime / 30 // trunc toward zero == floor for non-negative
+	// The definition word is read unsigned before the integer division [05
+	// "Construction arithmetic"].
+	return int32(uint16(workerTime) / 30)
 }
 
 // RemainingStep computes new remaining fraction clamp(old - worker/buildTime,0,1) [05 "Construction arithmetic"].
@@ -977,12 +969,119 @@ func HealthGain(old, newRemaining float32, maxDamage int32) int32 {
 // ConstructionStep performs one construction helper step [05 "Construction arithmetic"].
 // Returns newRemaining, healthGain, energyDemand, metalDemand.
 func ConstructionStep(old float32, worker int32, buildTime int32, maxDamage int32, energyCost, metalCost int32) (float32, int32, float32, float32) {
-	nv := RemainingStep(old, worker, buildTime)
-	hg := HealthGain(old, nv, maxDamage)
-	delta := old - nv // positive decrease [05]
-	energyDemand := float32(energyCost) * delta
-	metalDemand := float32(metalCost) * delta
-	return nv, hg, energyDemand, metalDemand
+	return wideConstructionStep(old, worker, buildTime, maxDamage, energyCost, metalCost)
+}
+
+func wideConstructionStep(old float32, worker int32, buildTime int32, maxDamage int32, energyCost, metalCost int32) (float32, int32, float32, float32) {
+	old80 := float64(old)
+	new80 := old80 - float64(worker)/float64(buildTime)
+	if new80 <= 0 {
+		new80 = 0
+	}
+	if new80 >= 1 {
+		new80 = 1
+	}
+	newStored := float32(new80)
+	delta32 := float32(old80 - float64(newStored))
+	energy := float32(float64(energyCost) * float64(delta32))
+	metal := float32(float64(metalCost) * float64(delta32))
+	max80 := float64(uint32(maxDamage))
+	healthGain := int32(max80*old80) - int32(max80*float64(newStored))
+	return newStored, healthGain, energy, metal
+}
+
+func repairTerms(maxDamage, energyCost, worker, buildTime int32) (int32, int32) {
+	if buildTime == 0 {
+		return 0, 0
+	}
+	heal := int32(1 + (float64(maxDamage)*float64(worker)-1)/float64(buildTime))
+	energy := int32(1 + (float64(energyCost)*float64(worker)-1)/float64(buildTime))
+	if heal >= 1 {
+		heal = 1
+	}
+	if energy >= 1 {
+		energy = 1
+	}
+	return heal, energy
+}
+
+// Assist applies one ordinary construction work step to a live nanoframe.
+// It is the session-bound entry point for HelpBuild: admission, progress,
+// health, and decay deferral remain owned here just as they are for factory
+// products [05 R-WORK-01 §1].
+func (s *Service) Assist(builder, target *units.Unit, tick uint32) bool {
+	if !s.applyWorkStep(builder, target, tick) {
+		return false
+	}
+	if target.Remaining == 0 {
+		// Assist is the owning boundary for a mobile helper's final increment.
+		s.applyCompletionPosture(target)
+	}
+	return true
+}
+
+// applyWorkStep is the one ordinary construction helper used by factory
+// products and assistants [05 R-WORK-01 §1]. It intentionally keeps the
+// admission boundary and state stores together so the two callers cannot
+// diverge in arithmetic or completion ownership.
+func (s *Service) applyWorkStep(builder, target *units.Unit, tick uint32) bool {
+	if s == nil || builder == nil || builder.Def == nil || target == nil || target.Def == nil {
+		return false
+	}
+	if target.Remaining == 0 {
+		return false
+	}
+	worker := WorkerQuantum(builder.Def.WorkerTime)
+	if worker >= 0 {
+		deferGetBuiltDecay(target, tick)
+	}
+	if worker <= 0 || s.Economy == nil {
+		return false
+	}
+	nv, healthGain, energy, metal := wideConstructionStep(target.Remaining, worker, target.Def.BuildTime, target.Def.MaxDamage, target.Def.BuildCostEnergy, target.Def.BuildCostMetal)
+	if !economy.AdmitTwoResource(s.Economy.UnitBuckets(builder.Handle), energy, metal) {
+		return false
+	}
+	health := target.Health + healthGain
+	if uint32(health) >= uint32(target.Def.MaxDamage) {
+		health = target.Def.MaxDamage
+	}
+	target.Health = int32(int16(health))
+	target.Remaining = nv
+	return true
+}
+
+// Repair applies one accepted repair packet. The packet is formed at this
+// service boundary so repair shares combat's kind-10 early-heal path [05
+// R-WORK-01 §3][06 §9.1].
+func (s *Service) Repair(builder, target *units.Unit, worker int32) bool {
+	if s == nil || builder == nil || target == nil || target.Def == nil {
+		return false
+	}
+	def := target.Def
+	if def.MaxDamage <= int32(int16(target.Health)) {
+		return false
+	}
+	heal, energy := repairTerms(def.MaxDamage, def.BuildCostEnergy, worker, def.BuildTime)
+	if s.Economy == nil {
+		return false
+	}
+	buckets := s.Economy.UnitBuckets(builder.Handle)
+	admitted := buckets != nil && buckets[economy.Energy].Carry <= 0
+	economy.AdmitOneResource(buckets, float32(energy))
+	if !admitted {
+		return false
+	}
+	if heal < 0 {
+		heal = 0
+	}
+	if s.Combat == nil || s.World == nil {
+		return false
+	}
+	return s.Combat.DispatchHealingPacket(s.World, combat.Packet{
+		Victim: uint16(target.Handle), Attacker: uint16(builder.Handle),
+		Amount: uint16(heal), Kind: combat.KindHeal,
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -1194,6 +1293,7 @@ func (s *Service) emitAcceptedNano(tick uint32, builder, product *units.Unit) {
 		EffectID: 6, Mode: 1, Team: builder.Owner,
 		Producer:               frame.ProducerBeam,
 		PaletteRow:             6,
+		NanolatheActiveUntil:   tick + 300,
 		NanolatheGeometryKnown: true,
 	})
 }
@@ -1715,13 +1815,41 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 				isSpecial = s.IsSpecialSecondState(factory.Owner)
 			}
 			if isSpecial {
-				// Mode selector decides: 0 subtracts 7/10, 1 subtracts 1/2, other fallback to adding [05 C21].
-				// This pairing is INVERTED vs ledger negative-energy site [05 C21] — do not harmonize.
+				// The computer player's difficulty scaling. This site is one of
+				// the fourteen members of that family, and every one of them
+				// pairs the constants the same way: selector 0 credits a HALF,
+				// selector 1 seven tenths, any other selector the whole amount
+				// [05 R-ECO-01 §3][05 R-ECO-01 §11].
+				//
+				// Correction (PT3-05 follow-up). This arm used to read
+				// `case 0: += refund * -0.7` and `case 1: += refund * -0.5`,
+				// under a comment stating the pairing was inverted relative to
+				// the ledger's negative-`energyuse` site and instructing that it
+				// must not be harmonized. Both halves were wrong, and the
+				// executable settles both: the pairing is uniform across all
+				// fourteen sites, this one included, and the scaled arm is a
+				// REDUCED CREDIT rather than a debit — the site forms
+				// `accumulator - refund * (-0.5)`, which ADDS half the refund.
+				// The old arm subtracted seven tenths of it, so cancelling a
+				// build CHARGED a computer player metal where retail pays it
+				// back at a discount, and charged it the wrong fraction. The
+				// "do not harmonize" instruction is retired with the reading it
+				// defended.
+				//
+				// The fraction is applied to the float32 refund rather than
+				// through internal/economy's single-narrowing helper: retail
+				// forms the product and the subtraction at working precision and
+				// narrows once [05 R-ECO-01 §3], where this rounds the product
+				// first. The refund is an integer-valued float32 (truncated
+				// above), so the two agree at every stock magnitude; the
+				// residual is the same class as the one locked in
+				// internal/economy's reclaim-credit tests, and closing it means
+				// moving this site onto that helper.
 				switch s.ModeSelector {
 				case 0:
-					player.Mirror[economy.Metal].Production += refund * -0.7 // subtract seven tenths [05 C21]
+					player.Mirror[economy.Metal].Production += refund * 0.5 // credit one half [05 R-ECO-01 §11]
 				case 1:
-					player.Mirror[economy.Metal].Production += refund * -0.5 // subtract one half [05 C21]
+					player.Mirror[economy.Metal].Production += refund * 0.7 // credit seven tenths [05 R-ECO-01 §11]
 				default:
 					player.Mirror[economy.Metal].Production += refund
 				}
@@ -2344,56 +2472,12 @@ func (s *Service) handleState3(factory *units.Unit, node *orders.Node, tick uint
 		node.Deadline = int32(tick + 1)
 		return
 	}
-	worker := WorkerQuantum(factory.Def.WorkerTime)
-	if worker <= 0 {
-		// Zero quantum unless distinct caller supplies another value [05].
-		// For zero worker, no progress — retry one tick later.
-		node.DynamicGate = WakeBit1 | WakeBit3
-		node.Deadline = int32(tick + 1)
-		return
-	}
-	buildTime := product.Def.BuildTime
-	if buildTime <= 0 {
-		buildTime = 1 // avoid div0
-	}
-	old := product.Remaining
-	nv, hg, energyDemand, metalDemand := ConstructionStep(old, worker, buildTime, product.MaxHealth, product.Def.BuildCostEnergy, product.Def.BuildCostMetal)
-	// This pass's two resource demands go to the builder's own economy subrecord
-	// as one transaction. The helper owns the whole decision: it adds both
-	// amounts to the requested accumulators unconditionally and only then tests
-	// the carries, so a denied pass still reports its demand to the HUD and the
-	// caller must not pre-test the carries for itself [05 R-ECO-01 §7]. The gate
-	// is all-or-nothing — there is no partial work at admission time
-	// [05 "Two-resource admission"] — so a denial advances nothing this tick.
-	admitted := true
-	if s.Economy != nil {
-		bIdx := int(factory.Owner)
-		if bIdx >= 0 && bIdx < len(s.Economy.Players) {
-			if buckets := s.Economy.UnitBuckets(factory.Handle); buckets != nil {
-				admitted = economy.AdmitTwoResource(buckets, energyDemand, metalDemand)
-			}
-		}
-	}
-	if !admitted {
+	if !s.applyWorkStep(factory, product, tick) {
 		// Denied work leaves the remaining fraction untouched and retries on the
 		// next tick [05 "Two-resource admission"].
 		node.DynamicGate = WakeBit1 | WakeBit3
 		node.Deadline = int32(tick + 1)
 		return
-	}
-	// Update remaining and health with fractional carry [05 C24].
-	product.Remaining = nv
-	// An admitted work step is what holds the product's own decay off for the
-	// next decay window. See deferGetBuiltDecay and [04 R-ORD-01 §5].
-	deferGetBuiltDecay(product, tick)
-	if hg != 0 {
-		product.Health += hg
-		if product.Health > product.MaxHealth {
-			product.Health = product.MaxHealth
-		}
-		if product.Health < 0 {
-			product.Health = 0
-		}
 	}
 	// Query and emit only after the two-resource admission and authoritative
 	// state update have committed [R-P0-06]. Rejected work reaches no query.

@@ -54,6 +54,9 @@ func (c *Client) tickNanolathe(cur *frame.Frame) {
 // is not resolvable collapses to the published target point, which keeps the
 // spray a straight line rather than inventing a spread [I9].
 func (c *Client) nanoTargetBox(cur *frame.Frame, e *frame.EffectView) (min, max [3]numeric.Fixed) {
+	if e.NanolatheTargetBoxKnown {
+		return e.NanolatheTargetMin, e.NanolatheTargetMax
+	}
 	point := [3]numeric.Fixed{e.TargetX, e.TargetY, e.TargetZ}
 	for i := range cur.Units {
 		u := &cur.Units[i]

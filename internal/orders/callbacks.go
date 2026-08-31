@@ -14,13 +14,14 @@ import (
 )
 
 // Weapon-slot control-byte bits [R-ORDER-02 §2]. Bit 1 marks the slot as
-// assigned; bit 4 is the clear latch this package's walk sets and the
-// mid-life clear variant clears.
+// assigned in the represented slot flags; bit 4 is the separate order-control
+// clear latch this package's walk sets and the mid-life clear variant clears.
 // TODO(T25): bit 4's semantic name is an open research item; only the
 // set/clear behavior is established.
 const (
 	slotControlAssigned uint8 = 1 << 1
-	slotClearedLatch    uint8 = 1 << 4
+	slotOrderInhibit    uint8 = units.OrderControlInhibit
+	slotTracking        uint8 = 1 << 4 // Flags' autonomous-tracking bit [06 §1.2]
 )
 
 // callbackBridgeFor returns the strict production callback bridge attached to
@@ -69,10 +70,10 @@ func clearWeaponBuildTargets(u *units.Unit) {
 		if s == nil {
 			continue
 		}
-		if s.Flags&slotControlAssigned == 0 || s.Flags&slotClearedLatch != 0 {
+		if s.Flags&slotControlAssigned == 0 || s.OrderControl&slotOrderInhibit != 0 {
 			continue
 		}
-		s.Flags |= slotClearedLatch
+		s.OrderControl |= slotOrderInhibit
 		if s.Target.Kind == units.TargetNone {
 			continue // target words already empty: reset and signal are skipped
 		}

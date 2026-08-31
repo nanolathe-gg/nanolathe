@@ -3,9 +3,12 @@ package movement
 import (
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/cob"
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 // TestMoveGoalHandleIdentityAndLifetime locks the movement-goal handle's three
@@ -54,5 +57,60 @@ func TestMoveGoalClear(t *testing.T) {
 	s.ClearMoveGoal(h)
 	if x, z, ok := s.MoveGoalFor(h, n); !ok || x != n.GoalX || z != n.GoalZ {
 		t.Fatalf("ClearMoveGoal did not fall back to the order position: (%d,%d,%v)", x, z, ok)
+	}
+}
+
+func TestBoundGoalShapesReplaceAndReleaseByNode(t *testing.T) {
+	s := NewSystem(nil, Profile{FootPrintX: 1, FootPrintZ: 1}, NewOccupancyGrid())
+	n1 := &orders.Node{Owner: 1, GoalX: numeric.Fixed(16 << 16), GoalZ: numeric.Fixed(16 << 16)}
+	n2 := &orders.Node{Owner: 1, GoalX: numeric.Fixed(32 << 16), GoalZ: numeric.Fixed(32 << 16)}
+	if !s.InstallAnnulusGoal(orders.AnnulusGoalRequest{Owner: 1, Node: n1, X: n1.GoalX, Z: n1.GoalZ, InnerRadius: 2, OuterRadius: 8}) {
+		t.Fatal("annulus payload was rejected")
+	}
+	if s.moveGoalPayload(1, n1) == nil {
+		t.Fatal("annulus payload was not retained")
+	}
+	if !s.InstallRectangleGoal(orders.RectangleGoalRequest{Owner: 1, Node: n2, CellX: 2, CellZ: 3, Width: 2, Depth: 2}) {
+		t.Fatal("rectangle payload was rejected")
+	}
+	if n1.Satisfied&0x80 == 0 {
+		t.Fatal("replaced node did not receive release bit")
+	}
+	if s.ReleaseGoal(n1) != true || s.moveGoalPayload(1, n2) == nil {
+		t.Fatal("stale release detached successor payload")
+	}
+	if !s.ReleaseGoal(n2) || s.moveGoalPayload(1, n2) != nil {
+		t.Fatal("current payload was not released")
+	}
+}
+
+func TestAirGoalUsesExistingFlightPayloadAndReleasesOnce(t *testing.T) {
+	w := units.NewSliced(2, nil)
+	h, err := w.Create(&content.UnitDef{CanFly: true, BMCode: true, MaxDamage: 10, Script: &cob.Program{Code: []uint32{0x10065000}, Scripts: map[string]int{}, Pieces: []string{"base"}}}, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create aircraft: %v", err)
+	}
+	s := NewSystem(nil, Profile{}, NewOccupancyGrid())
+	s.BindWorld(w)
+	s.Flights[h] = &FlightState{}
+	n1 := &orders.Node{Owner: h}
+	n2 := &orders.Node{Owner: h}
+	if !s.InstallAirGoal(orders.AirGoalRequest{Owner: h, Node: n1, X: 1 << 16, Y: 2 << 16, Z: 3 << 16, Radius: 4}) {
+		t.Fatal("air payload was rejected")
+	}
+	if s.Flights[h].Command == nil || s.Flights[h].Command.Payload == nil {
+		t.Fatal("air payload was not installed")
+	}
+	if !s.InstallAirGoal(orders.AirGoalRequest{Owner: h, Node: n2, X: 4 << 16, Y: 5 << 16, Z: 6 << 16}) {
+		t.Fatal("replacement air payload was rejected")
+	}
+	if n1.Satisfied&0x80 == 0 {
+		t.Fatal("replaced air node did not receive release bit")
+	}
+	if !s.ReleaseGoal(n1) || s.Flights[h].Command.Payload == nil {
+		t.Fatal("stale air release detached successor payload")
+	}
+	if !s.ReleaseGoal(n2) || s.Flights[h].Command.Payload != nil {
+		t.Fatal("current air payload was not released")
 	}
 }

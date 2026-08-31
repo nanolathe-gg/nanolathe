@@ -204,7 +204,11 @@ type Unit struct {
 	X, Y, Z   numeric.Fixed
 	Health    int32 // current health; max from Def?
 	MaxHealth int32
-	Alive     bool // slot valid; cleared by the phase-2 finalizer [04 §2.4] C2
+	// LastDamageSide/Cause retain the provenance used by repair-patrol
+	// admission. Cause 5 is the unit-reclaim bite [04 R-ORD-02 §4].
+	LastDamageSide  uint8
+	LastDamageCause uint8
+	Alive           bool // slot valid; cleared by the phase-2 finalizer [04 §2.4] C2
 	// Dying is the death mark, separate from Alive [04 §2.3] C2: Destroy sets
 	// it and the unit stays visible to later phases and Unit() until the next
 	// phase-2 slot finalizer frees the slot.
@@ -517,6 +521,10 @@ type World struct {
 	claimedDefIDs []uint16
 	// per-player live counters mirror the retail live count, which decrements on free [P0-16 §3.4]
 	liveCounters [10]int
+	// createdCounters is the monotonic per-player allocation count.  Result
+	// evaluation uses it to distinguish an eliminated owner from an eligible
+	// slot that has not created a unit yet [05 "Player slot"][08 R-SKIR-01 §3].
+	createdCounters [10]uint32
 
 	// COB loader for per-unit VM creation [04 §4.1][P1-I01].
 	cobFS     vfs.FSOps
@@ -1029,6 +1037,7 @@ func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed,
 		u.SetActivationEdge(true)
 	}
 	w.liveCounters[player]++
+	w.createdCounters[player]++
 	if w.OnCreate != nil {
 		w.OnCreate(h, u)
 	}
@@ -1146,6 +1155,7 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 		u.SetActivationEdge(true)
 	}
 	w.liveCounters[player]++
+	w.createdCounters[player]++
 	if w.OnCreate != nil {
 		w.OnCreate(h, u)
 	}
@@ -1330,6 +1340,16 @@ func (w *World) LiveCountForPlayer(player int) int {
 		return 0
 	}
 	return w.liveCounters[player]
+}
+
+// CreatedCountForPlayer returns the monotonic number of units allocated for a
+// player, including units later finalized.  It is the retail "ever created"
+// counter used by elimination sweeps [08 R-SKIR-01 §3].
+func (w *World) CreatedCountForPlayer(player int) uint32 {
+	if w == nil || player < 0 || player >= 10 {
+		return 0
+	}
+	return w.createdCounters[player]
 }
 
 // Iter returns units in deterministic order for tests (pool asc).

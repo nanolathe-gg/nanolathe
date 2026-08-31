@@ -1,0 +1,263 @@
+package session
+
+import (
+	"strings"
+
+	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe/nanolathe/internal/movement"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe/nanolathe/internal/world"
+)
+
+const (
+	deathmatchCandidateLimit = 9999 // [08 R-SKIR-01 §3]
+)
+
+// isCommanderForOwner applies the retail identity check: the dead definition
+// name must equal the commander's name on the owner's side record. The
+// authored Commander bit is not a substitute for that side identity
+// [08 R-SKIR-01 §3].
+func (s *Session) isCommanderForOwner(u *units.Unit) bool {
+	if s == nil || u == nil || u.Def == nil {
+		return false
+	}
+	owner := int(u.Owner)
+	if owner >= 0 && owner < len(s.Skirmish.Players) && s.Catalog != nil {
+		side := s.Skirmish.Players[owner].Side
+		if side >= 0 && side < len(s.Catalog.Sides) && s.Catalog.Sides[side] != nil {
+			name := strings.TrimSpace(s.Catalog.Sides[side].Commander)
+			if name == "" {
+				return false
+			}
+			return strings.EqualFold(strings.TrimSpace(u.Def.UnitName), name)
+		}
+	}
+	return false
+}
+
+// processPendingCommanderDeaths is called only after the unit finalizer has
+// filed normal death accounting. The owner sweep therefore observes the
+// decremented live count and cannot run twice for one commander [08
+// R-SKIR-01 §3].
+func (s *Session) processPendingCommanderDeaths(tick uint32) {
+	if s == nil || s.Units == nil || s.result.Ended {
+		return
+	}
+	rule := CommanderDeathMode(s.Skirmish.CommanderDeath)
+	for owner := 0; owner < len(s.pendingCommanderDeaths); owner++ {
+		if !s.pendingCommanderDeaths[owner] {
+			continue
+		}
+		s.pendingCommanderDeaths[owner] = false
+		if rule == CommanderDeathContinues {
+			continue
+		}
+		// Rule 2 uses the same owner sweep as rule 1 before arming the local
+		// respawn countdown [08 R-SKIR-01 §3].
+		s.sweepOwnerAfterCommanderDeath(owner, tick)
+		if rule == CommanderDeathDeathmatch && owner == int(s.LocalOwner) && !s.result.Ended {
+			s.deathmatchCountdown = 4
+			s.deathmatchNextDue = tick + 30
+			s.deathmatchActive = true
+			s.deathmatchAttempts = 0
+		}
+	}
+}
+
+func (s *Session) sweepOwnerAfterCommanderDeath(owner int, tick uint32) {
+	if s == nil || s.Units == nil || owner < 0 || owner >= 10 {
+		return
+	}
+	if s.Units.LiveCountForPlayer(owner) == 0 {
+		return
+	}
+	controlled := false
+	if s.Econ != nil {
+		p := &s.Econ.Players[owner]
+		controlled = p.Exists && !p.IsObserver && (p.ControllerState == 1 || p.ControllerState == 2)
+	}
+	// IterSliced is player/slot ordered; this loop only mutates death marks,
+	// leaving finalization to the normal phase-2 sweep [01 §6.2][08 §3].
+	for _, u := range s.Units.IterSliced() {
+		if u == nil || !u.Alive || u.Dying || int(u.Owner) != owner {
+			continue
+		}
+		if !controlled {
+			s.Units.Destroy(u.Handle, units.DeathSelfDestruct)
+			continue
+		}
+		// The ordinary damage path is intentional: the sweep gives controlled
+		// units 30000 self-damage so armour/death effects retain their normal
+		// accounting [08 R-SKIR-01 §3].
+		if s.Combat != nil {
+			s.Combat.ApplySelfDestructDamage(s.Units, u.Handle, tick)
+		}
+	}
+}
+
+// advanceDeathmatch performs one shared countdown step. It returns true only
+// when the countdown has crossed below zero and candidate search was run.
+func (s *Session) advanceDeathmatch(tick uint32) bool {
+	if s == nil || !s.deathmatchActive || tick < s.deathmatchNextDue {
+		return false
+	}
+	s.deathmatchNextDue += 30
+	s.deathmatchCountdown--
+	if s.deathmatchCountdown >= 0 {
+		return false
+	}
+	s.deathmatchActive = false
+	if s.respawnLocalCommander() {
+		return true
+	}
+	// TODO(question): the retail post-9999 exhaustion transition is not traced;
+	// the deciding probe is the rule-2 defeat branch after its candidate loop.
+	// Keep the bounded-search result deterministic while that branch remains
+	// unresolved: the local owner stays eliminated and the normal defeat latch
+	// may settle [08 R-SKIR-01 §3].
+	s.deathmatchExhausted = true
+	return true
+}
+
+func (s *Session) respawnLocalCommander() bool {
+	if s == nil || s.Units == nil || s.World == nil || s.Catalog == nil {
+		return false
+	}
+	owner := int(s.LocalOwner)
+	if owner < 0 || owner >= 10 {
+		return false
+	}
+	for _, u := range s.Units.IterSliced() {
+		if u != nil && u.Alive && !u.Dying && int(u.Owner) == owner && s.isCommanderForOwner(u) {
+			return true // a duplicate death event cannot create a second commander
+		}
+	}
+	def, err := skirmishCommander(s.Catalog, s.Skirmish.Players[owner].Side, owner)
+	if err != nil {
+		return false
+	}
+	rules, err := world.PlacementRulesForUnit(s.Catalog, def)
+	if err != nil {
+		return false
+	}
+	extent, err := world.NewFootprintExtent(3, 3)
+	if err != nil {
+		return false
+	}
+	sim := s.SimRNG()
+	mapW := int64(s.World.CellW) * 16
+	mapH := int64(s.World.CellH) * 16
+	// The candidate rectangle removes one tenth of each map dimension from
+	// both sides.  Keep the integer division before subtraction: the draw
+	// bounds and the coordinate offsets use the same truncated inset
+	// [01 §7.1][08 R-SKIR-01 §3].
+	insetW, insetH := mapW/10, mapH/10
+	boundW, boundH := mapW-2*insetW, mapH-2*insetH
+	for attempt := 0; attempt < deathmatchCandidateLimit; attempt++ {
+		s.deathmatchAttempts++
+		// Candidate draws are deliberately adjacent and in X then Z order. The
+		// simulation helper's sub-two rule preserves the retail zero-bound
+		// behavior [01 §7.1][08 R-SKIR-01 §3].
+		var rx, rz uint32
+		if sim != nil {
+			if boundW > 0 {
+				rx = sim.Uint32n(uint32(boundW))
+			}
+			if boundH > 0 {
+				rz = sim.Uint32n(uint32(boundH))
+			}
+		}
+		xPixels := int64(rx) + insetW
+		zPixels := int64(rz) + insetH
+		x := numeric.Fixed(xPixels << 16)
+		z := numeric.Fixed(zPixels << 16)
+		anchor := world.NewFootprintAnchor(world.WorldToCell(x), world.WorldToCell(z))
+		rect, err := world.NewFootprintRect(anchor, extent)
+		if err != nil {
+			continue
+		}
+		// The side-commander's placement test owns terrain, feature, and map
+		// bounds admission. Mobile queries cover all nine cells [04 §6.1].
+		if _, err = s.World.CheckPlacement(world.PlacementQuery{Rect: rect, Rules: rules, Mobile: true}); err != nil {
+			continue
+		}
+		if s.Movement != nil && s.Movement.Grid != nil && s.Movement.Grid.FootprintOccupied(movement.Cell{X: anchor.CellX(), Z: anchor.CellZ()}, 3, 3, 0) {
+			continue
+		}
+		y := numeric.Fixed(0)
+		if h := s.World.HeightAt(x, z); h != -1 {
+			y = h
+		}
+		// The height gate is a lava/water-sentinel test, not a generic
+		// sea-level test.  The map-global lava flag is the established reader
+		// for this candidate rejection; ordinary maps may have a non-zero
+		// terrain sea level without enabling it [08 R-SKIR-01 §3].
+		if s.respawnRejectsSubmerged() && y <= s.World.SeaLevelWorld() {
+			continue
+		}
+		h, err := s.Units.Create(def, uint8(owner), x, y, z)
+		if err != nil {
+			continue
+		}
+		if u := s.Units.Unit(h); u != nil {
+			if s.Econ != nil {
+				p := &s.Econ.Players[owner]
+				bonusMetal, bonusEnergy := 0, 0
+				if s.Mission == nil || s.Mission.Type != mission.TypeSkirmish {
+					bonusMetal = s.Skirmish.Players[owner].Metal * 100
+					bonusEnergy = s.Skirmish.Players[owner].Energy * 100
+					// TODO(question): locate the per-unit stored energy/metal
+					// fields and difficulty-scaled writer in the retail respawn
+					// path; the deciding trace is the kind-2 post-allocation
+					// resource write [08 R-SKIR-01 §3]. The in-scope skirmish
+					// products are zero, so no unsupported state is created here.
+				}
+				// The storage setter consumes the lobby shorts independently of
+				// the per-unit resource products; skirmish reaches rule 2 with
+				// zero products and therefore retains only the 200 floor
+				// [08 R-SKIR-01 §3][05 "Storage capacity"].
+				p.InstallStorageBonus(bonusMetal, bonusEnergy)
+				economy.RebuildCapacity(s.Econ, s.Units)
+			}
+			if s.Movement != nil {
+				s.Movement.EnsureUnit(u)
+			}
+			// Respawn rebuilds the observer table after the new unit has its
+			// movement/occupancy identity; this also repairs any stale owner
+			// visibility left by the death path [08 R-SKIR-01 §3][R-ENTRY-01 §7].
+			publishVisibilityForAll(s)
+		}
+		return true
+	}
+	return false
+}
+
+func (s *Session) respawnRejectsSubmerged() bool {
+	if s == nil || s.Mission == nil || s.Mission.OTA == nil || s.Mission.OTA.Global == nil {
+		return false
+	}
+	return mission.DecodeMissionGlobals(s.Mission.OTA.Global).LavaWorld != 0
+}
+
+// DeathmatchStatus is a compact diagnostic view used by tests and future
+// front-end consumers; presentation does not own or mutate this state [I6].
+func (s *Session) DeathmatchStatus() (active bool, countdown int16, attempts uint16, exhausted bool) {
+	if s == nil {
+		return false, 0, 0, false
+	}
+	return s.deathmatchActive, s.deathmatchCountdown, s.deathmatchAttempts, s.deathmatchExhausted
+}
+
+// NotifyDeathFinalized lets non-pump composition seams deliver the same
+// owner-level transition as phase-2 finalization. It is intentionally narrow:
+// callers provide only the already-filed owner slot [08 R-SKIR-01 §3].
+func (s *Session) NotifyDeathFinalized(owner int, tick uint32) {
+	if s == nil || owner < 0 || owner >= len(s.pendingCommanderDeaths) {
+		return
+	}
+	if s.pendingCommanderDeaths[owner] {
+		s.processPendingCommanderDeaths(tick)
+	}
+}

@@ -591,15 +591,20 @@ func (s *Session) publishSnapshot(tick uint32) {
 	// exists.
 	{
 		r := s.result
+		columnMaxima := r.ColumnMaxima
+		if columnMaxima == [7]int{} {
+			columnMaxima = resultColumnMaxima(r.Scores)
+		}
 		published.Result = frame.ResultView{
-			Ended:      r.Ended,
-			Kind:       r.Kind,
-			WinnerTeam: r.WinnerTeam,
-			Reason:     r.Reason,
-			Tick:       r.Tick,
-			ArmedTick:  r.ArmedTick,
-			Countdown:  r.Countdown,
-			Draw:       r.Draw,
+			Ended:        r.Ended,
+			Kind:         r.Kind,
+			WinnerTeam:   r.WinnerTeam,
+			Reason:       r.Reason,
+			Tick:         r.Tick,
+			ArmedTick:    r.ArmedTick,
+			Countdown:    r.Countdown,
+			Draw:         r.Draw,
+			ColumnMaxima: columnMaxima,
 		}
 		published.Result.Winners = copyIntsInto(published.Result.Winners, r.Winners)
 		published.Result.Losers = copyIntsInto(published.Result.Losers, r.Losers)
