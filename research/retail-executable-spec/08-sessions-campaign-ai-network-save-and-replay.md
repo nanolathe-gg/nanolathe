@@ -389,6 +389,21 @@ equals, case-insensitively, the local player's side name **or** the literal
 `ALL`. Files without `[HEADER]` are skipped silently. The returned count is
 the number admitted; the list order is the enumeration order.
 
+**Note (2026-08-31) — `campaignside` filters, it does not assign.** The
+direction matters to anything that wants a campaign battle's local side. The
+side is decided *first*: the registry `side` value (0 Arm, 1 Core) is written
+into the local player's side record when `SINGLE.GUI` opens, and the `Side0` /
+`Side1` buttons of `NEWGAME.GUI` rewrite it and rebuild the list
+`[07 R-FE-01 §4]`. `campaignside` is then only the admission test above. It
+follows that for every campaign that names a side, that name **is** the side the
+mission is played as — a campaign is not offered to the other one — and both
+stock files name one (`camps\arm campaign.tdf` `ARM`, `camps\core campaign.tdf`
+`CORE`; asset census). It does **not** follow for `campaignside=ALL`, which is
+admitted to both lists and settles nothing; no stock campaign authors it. An
+engine that reconstructs the side from the campaign file alone is exact for a
+named side and has no answer for `ALL` — that is a real gap, not a defaulting
+opportunity.
+
 **Opening a campaign.** The catalog opener copies the requested name into the
 record, resets all nine slots to empty, and — when the name is non-empty —
 resolves slot 0 as `camps\<name>.TDF` and parses it. A parse failure raises
@@ -1103,6 +1118,38 @@ InitialMission timing").**
 camera *jumped*, copies the target into the glide words and clears mode bit
 3 ([07 R-CAM-01 §12]). No such special → the camera keeps the world-rebuild
 reset position; no diagnostic.
+
+*Precision added 2026-08-31 (defect PT4-camera).* `viewW`/`viewH` here — and
+in every other "minus half the viewport" writer of [07 R-CAM-01 §12], the
+skirmish commander centring below included — is the **game viewport subrect**
+of [03 §4.1] (`W−128 × H−64`, so `512 × 416` at `640×480`), not the negotiated
+surface size. A retail camera origin is the world point drawn at that
+subrect's top-left corner `(128, 32)`, which is what makes the halving centre
+the target in what the player can see. An implementation whose camera origin is
+instead the world point at the *framebuffer's* top-left corner — Nanolathe's
+is, because it composes the world across the whole framebuffer and paints the
+chrome over it — must add the subrect's inset back in: `origin = point − 128 −
+viewportW/2` on X and `point − 32 − viewportH/2` on Z. Halving the framebuffer
+is right only by accident on Z, where the 32-pixel insets are symmetric and
+`32 + (H−64)/2 = H/2`; on X it lands the target 64 pixels right of centre.
+This was Nanolathe defect PT4-camera, alongside the invented commander-identity
+heuristic recorded under [R-SKIR-01 §3].
+
+**Unknown — the reset origin.** "Keeps the world-rebuild reset position" names
+a position that is not itself established: [07 R-CAM-01 §10] records only that
+the camera-block reset preserves the scroll setting byte and zeroes the tracked
+object, follow target, bookmarks and hold state. Whether the origin words come
+out of that reset at `(0, 0)` or at something else needs a static trace of the
+reset routine. Nanolathe uses `(0, 0)` clamped, and carries the question as a
+`TODO(question)` at the camera construction site.
+
+**Unknown — does the battle-start jump shear?** [07 R-CAM-01 §12] gives unit
+positions entering the *desired* origin a half-height shear
+(`Z − (Y >> 1)`), but the battle-start row of that section's writer table
+names only "the commander stamp position minus half the viewport". Whether the
+skirmish commander jump applies the shear is unresolved; the campaign branch
+cannot, since a start-position special carries no height. A static trace of the
+stamp helper's camera write would settle it.
 
 ### Closed — the visibility and mapping rebuild, exactly [R-ENTRY-01 §7] (2026-08-29)
 

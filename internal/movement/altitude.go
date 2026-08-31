@@ -106,66 +106,79 @@ func AirArrival(ax, az, bx, bz numeric.Fixed, explicitRadius int32, ay, by numer
 	return true
 }
 
-// MediumBand returns the setSFXoccupy band 0..4 [04 §9.1] using unit Y vs sea level and waterline/modelBottom.
-// Bands: 0 land, 1 hover fringe, 2/3 water/wake, 4 deeper? Actual mapping per §9.1 not fully enumerated [04 §9.1];
-// we return simplified:
+// MediumBand is the `setSFXoccupy` classifier of [04 §9.1][04 R-MOV-01 §8a]:
+// five values, computed by sequential overwrite from the committed mover-mode
+// mirror, the signed height word, the map sea level, the definition's waterline
+// byte and its model-bottom word, starting from the band cached for this unit.
 //
-//	0: height > seaLevel (land)
-//	1: height == seaLevel fringe (hover stripe)
-//	2: height < seaLevel but above waterline threshold (shallow water)
-//	3: height deep water below modelBottom threshold
-//	4: submerged
+//	if mode not in {1,2}: band = 0
+//	else if wy > wt:      band = 4
+//	else:
+//	    band = cached
+//	    if wy - wt > -5:  band = 1
+//	    if wl + wy == wt: band = 2
+//	    if mb + wy < wt:  band = 3
 //
-// TODO(question): exact band thresholds untraced [04 §9.1].
-func MediumBand(terrain *world.Terrain, u *units.Unit) int {
+// The three underwater tests are ordered overwrites, not exclusive branches:
+// `3` wins if both `2` and `3` hold, and if none matches the cached band is
+// retained. Every comparison is a signed integer in height-byte units, never
+// 16.16 world units. Band `4` is strictly above water, `1` the shoreline skirt
+// within five units above water, `2` draft exactly at the surface, `3` model
+// bottom below water.
+//
+// Corrected 2026-08-31: this function previously returned an invented mapping —
+// `0` for anything above sea level, `1` at exactly sea level, then `2`/`3` split
+// on `y + waterline >= sea` — and carried a deferral marker claiming the
+// thresholds were untraced. They are traced and Established; the old mapping
+// inverted the above-water band (retail's `4`, not `0`), ignored the mover-mode
+// gate that owns band `0`, dropped the cached-band retention entirely, and made
+// the tests exclusive.
+//
+// TODO(question): the band-3 test needs `mb`, the definition's signed
+// model-bottom word — the model's min-Y bound, a different word from the
+// model total-height dword that [04 R-AIR-01 §9] reads, and there is no
+// authored `model-bottom` key to read it from. `content.UnitDef` carries
+// `ModelTop` but no counterpart, so this build has no source for `mb` and the
+// overwrite is not run: band `3` is unreachable today. What would settle it is
+// the retail loader's min-Y walk over the 3DO, the counterpart of the
+// established model-top walk in `formats.ThreeDO.ModelTop`.
+func MediumBand(terrain *world.Terrain, u *units.Unit, cached int) int {
 	if u == nil {
 		return 0
 	}
-	var sea int32
-	if terrain != nil {
-		sea = int32(terrain.SeaLevel)
-	}
-	y := int32(u.Y.Raw() >> 16) // signed height high word [04 §8.1] C21
-	if y > sea {
-		return 0 // land [04 §9.1]
-	}
-	if y == sea {
-		return 1
-	}
-	// Below water: use waterline/modelBottom (waterline is draft for band 2 [02 "Unit record"])
-	if u.Def != nil {
-		wl := u.Def.Waterline
-		// Simple: shallow if y + wl >= sea? Actually waterline is draft depth.
-		// Keep bands 2 and 3 distinguished by waterline.
-		if y+wl >= sea {
-			return 2 // shallow hover wake [04 §9.1]
-		}
-		// Check upright/floater modelBottom not available; treat wl deep as 3
-		return 3
-	}
-	return 2
-}
-
-// ShouldEmitWake reports whether hover wake SFX should emit [04 §9.1].
-// Engine emits only band change; shipped hover scripts gate wake on bands 2 or 3 and spawn via emit-sfx types 2..5 from dedicated wake pieces [04 §9.1].
-// This helper mirrors that band check.
-func ShouldEmitWake(terrain *world.Terrain, u *units.Unit) bool {
-	band := MediumBand(terrain, u)
-	return band == 2 || band == 3
-}
-
-// WakeSFXType returns the SFX emit type for wake per band [04 §9.1].
-// Types 2..5 from dedicated wake pieces (single-vertex pieces) [04 §9.1]; single-vertex pieces are leaf attachments [03 §2.4].
-// Returns 0 if no wake.
-func WakeSFXType(terrain *world.Terrain, u *units.Unit) int {
-	if !ShouldEmitWake(terrain, u) {
+	// Mode 0 (attached/parked) and 3 (save-installed) classify as band 0; only
+	// grounded (1) and airborne (2) movers reach the height tests
+	// [04 R-MOV-01 §8].
+	if mode := u.Move.Mode & 0x3; mode != 1 && mode != 2 {
 		return 0
 	}
-	band := MediumBand(terrain, u)
-	if band == 2 {
-		return 2
+	var wt int32
+	if terrain != nil {
+		wt = int32(terrain.SeaLevel)
 	}
-	return 3 // band 3 => type 3 etc [04 §9.1]
+	wy := int32(u.Y.Raw() >> 16) // signed height high word [04 §8.1] C21
+	if wy > wt {
+		return 4 // strictly above water [04 §9.1]
+	}
+	band := cached
+	if wy-wt > -5 {
+		band = 1 // shoreline skirt [04 §9.1]
+	}
+	if u.Def != nil && u.Def.Waterline+wy == wt {
+		band = 2 // draft exactly at the surface [04 §9.1]
+	}
+	// The band-3 overwrite is not run; see the note above the classifier.
+	return band
+}
+
+// ShouldEmitWake reports whether a shipped hover script would spawn its wake
+// effect for this unit's current band. The engine itself emits only the band
+// change — wake is not an engine effect [04 §9.1] — so this is a description of
+// what the stock scripts do with bands `2` and `3`, offered for tests and
+// diagnostics, not an engine emitter.
+func ShouldEmitWake(terrain *world.Terrain, u *units.Unit, cached int) bool {
+	band := MediumBand(terrain, u, cached)
+	return band == 2 || band == 3
 }
 
 // IsCruiseClamped reports whether altitude was capped at 0x1FF0000 [04 §10.1].

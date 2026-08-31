@@ -14,6 +14,8 @@ package client
 
 import (
 	"image"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -21,6 +23,7 @@ import (
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/audio"
 	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/palette"
@@ -123,6 +126,17 @@ type Client struct {
 	featureFrames map[string]*formats.GAFFrame // lower "filename|seqname" -> frame
 	featureGACErr map[string]error             // memoised load failures (presentation-only)
 	featureYSort  bool                         // when true force Y-bucket sort for feature pass [03 §1]
+	// featureAnim holds the per-DEFINITION rest cursors of the animating
+	// features, keyed by the lower-case "filename|seqname" that names the
+	// definition's sequence. Retail initialises one cursor per definition, not
+	// one per instance, and every placed copy of an animating feature is
+	// therefore always on the same frame [05 R-FEAT-01 §1 "Established — the
+	// rest cursors"]. featureAnimTick is the committed tick the cursors were
+	// last advanced on, so recomposing one snapshot never advances them twice
+	// [03 §4.4][I6].
+	featureAnim         map[string]*featureAnimCursor
+	featureAnimTick     uint32
+	featureAnimTickSeen bool
 
 	// Projectile presentation uses the one shared fx bank. It is loaded on
 	// first use through the VFS boundary and retained for this client only;
@@ -217,6 +231,7 @@ func New(opts Options) (*Client, error) {
 		featureGAFs:       map[string]*formats.GAF{},
 		featureFrames:     map[string]*formats.GAFFrame{},
 		featureGACErr:     map[string]error{},
+		featureAnim:       map[string]*featureAnimCursor{},
 		messages:          *frame.NewMessageRing(),
 		screenChat:        1,
 	}
@@ -516,7 +531,151 @@ func (c *Client) featureFrameFor(f frame.FeatureView, shadow bool) *formats.GAFF
 		}
 		return nil
 	}
-	return c.animatedGAFFrame(strings.ToLower(filename)+"|"+strings.ToLower(seq), featurePresentationID(f), entry)
+	return c.featureAnimatedFrame(strings.ToLower(filename)+"|"+strings.ToLower(seq), entry)
+}
+
+// featureAnimCursor is one animating feature definition's rest cursor. It
+// pairs the generic tick-stepped playback cursor with the decoded frames of
+// the definition's own GAF entry [03 §4.4].
+type featureAnimCursor struct {
+	player *presentationrender.TexturePlayer
+	frames []*formats.GAFFrame
+	// cycle is the sum of the entry's authored per-frame durations: the whole
+	// number of simulation ticks one loop of the sequence takes [03 §4.4].
+	// Zero means the sequence has no usable timing and is left on frame zero.
+	cycle uint32
+}
+
+// featureAnimatedFrame resolves the current frame of one animating feature
+// definition.
+//
+// Correction. This previously routed through the model-texture cursor
+// adapter, which keys a cursor by a per-INSTANCE identity and refuses the
+// zero identity. `frame.FeatureView.InstanceID` has no writer anywhere in the
+// publication path, so every animating feature arrived with identity zero and
+// the adapter answered nil — the ten multi-frame animating definitions in the
+// stock corpus (the `acidplant01..05` gas plants, twenty frames each) drew no
+// pixels at all, and nothing ever stepped a feature cursor either, so they
+// would have been frozen on frame 0 even with an identity. Per-instance was
+// also the wrong shape: retail builds the rest cursor once per DEFINITION from
+// `seqname`, shares it across every placed copy, and advances it in the
+// feature phase every tick, so all copies of an animating feature are always
+// on the same frame [05 R-FEAT-01 §1 "Established — the rest cursors"].
+//
+// Single-frame entries never advance [03 §4.4] — which is every `*vent*`
+// definition in the stock corpus, `geothermal` included.
+func (c *Client) featureAnimatedFrame(key string, entry *formats.GAFEntry) *formats.GAFFrame {
+	if c == nil || entry == nil || len(entry.Frames) == 0 {
+		return nil
+	}
+	if len(entry.Frames) == 1 {
+		return entry.Frames[0].Frame
+	}
+	// Advance every live definition cursor exactly once per committed tick,
+	// before this tick's first animating feature reads one. The feature pass
+	// runs inside one committed frame, so the whole set moves together and a
+	// repainted snapshot moves nothing [03 §4.4][I6].
+	c.stepFeatureAnimations()
+	cur := c.featureAnim[key]
+	if cur == nil {
+		frames := make([]*formats.GAFFrame, len(entry.Frames))
+		ids := make([]content.AssetID, len(frames))
+		durations := make([]uint32, len(frames))
+		cycle := uint64(0)
+		for i, ref := range entry.Frames {
+			frames[i] = ref.Frame
+			ids[i] = content.AssetID(key + "#" + strconv.Itoa(i))
+			durations[i] = ref.Value // authored whole simulation ticks [03 §4.4]
+			cycle += uint64(ref.Value)
+		}
+		if cycle > uint64(^uint32(0)) {
+			cycle = 0 // unusable authored timing; hold frame zero rather than invent one
+		}
+		cur = &featureAnimCursor{
+			player: presentationrender.NewTexturePlayer(content.AssetSequence{
+				ID: content.AssetID(key), Frames: ids, Durations: durations, Loop: true,
+			}),
+			frames: frames,
+			cycle:  uint32(cycle),
+		}
+		if c.featureAnim == nil {
+			c.featureAnim = map[string]*featureAnimCursor{}
+		}
+		c.featureAnim[key] = cur
+		// Retail's rest cursor is created at map load on frame 0 and advanced by
+		// the feature phase on every tick since [05 R-FEAT-01 §1]. A cursor this
+		// client only builds when the definition first enters the viewport must
+		// therefore catch up to the committed tick, or the frame shown would
+		// depend on when the camera arrived instead of on the tick. The sequence
+		// loops, so the catch-up is bounded by one cycle.
+		if cur.cycle != 0 {
+			for i := uint32(0); i < c.frameTick%cur.cycle; i++ {
+				cur.player.Step()
+			}
+		}
+	}
+	asset, ok := cur.player.Frame()
+	if !ok {
+		return nil
+	}
+	for i := range cur.frames {
+		if content.AssetID(key+"#"+strconv.Itoa(i)) == asset {
+			return cur.frames[i]
+		}
+	}
+	return nil
+}
+
+// stepFeatureAnimations advances the feature rest cursors one simulation tick
+// when the committed tick has moved. Feature cursors are explicitly not part
+// of the phase-7 model-texture registry [03 §4.4 R-CRD-005 §1]; their owning
+// presentation path drives them, which is here.
+func (c *Client) stepFeatureAnimations() {
+	if c == nil {
+		return
+	}
+	if c.featureAnimTickSeen && c.featureAnimTick == c.frameTick {
+		return
+	}
+	// Multiple simulation ticks in one present advance the cursor multiple
+	// times; a present with no new tick freezes it [03 §4.4]. A tick that moved
+	// backwards (a client re-attached to a fresh session) advances nothing.
+	steps := uint32(0)
+	if c.featureAnimTickSeen && c.frameTick > c.featureAnimTick {
+		steps = c.frameTick - c.featureAnimTick
+	}
+	c.featureAnimTick = c.frameTick
+	c.featureAnimTickSeen = true
+	for _, cur := range sortedFeatureAnim(c.featureAnim) {
+		// The sequence loops, so replaying more than one cycle is wasted work
+		// that lands on the same frame.
+		n := steps
+		if cur.cycle != 0 && n >= cur.cycle {
+			n %= cur.cycle
+		}
+		for i := uint32(0); i < n; i++ {
+			cur.player.Step()
+		}
+	}
+}
+
+// sortedFeatureAnim returns the live cursors in ascending key order. The set
+// is presentation-only, but a stable order keeps a composed frame reproducible
+// from one run to the next (I1 in spirit; nothing here reaches simulation).
+func sortedFeatureAnim(m map[string]*featureAnimCursor) []*featureAnimCursor {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]*featureAnimCursor, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, m[k])
+	}
+	return out
 }
 
 // blitGAFFrame blits a GAF indexed frame to the indexed framebuffer at

@@ -1830,13 +1830,31 @@ inset where a minimum exceeds a maximum writes no inner frame. The solid
 frame writer is clipped against the active inclusive world-surface clip.
 
 The palette argument is already a physical indexed-pixel value. The outer
-frame selects logical map entry 4, or entry 6 when the armed build/wake flag
-is set; outside that box-selection mode it selects entry 15. The inner frame
-always selects entry 0. Each logical entry is resolved once through the
-runtime logical-to-physical map before the solid writer; there is no ALP,
-LHT, or SHD operation and no per-pixel blend. This is the complete palette
-contract for the observed selection outline; no authored-plate wireframe
-palette exists in the traced renderer.
+frame selects logical map entry 15 and the inner frame always selects entry 0;
+the 6/4 pair replaces the outer entry only while the armed latch is MOBILEBUILD
+— entry 6 when latch-flag bit `0x40` is set, entry 4 when it is clear
+[07 R-P0-11 §1 "The drawing."][07 §6 "Frame composition passes"]. Each logical
+entry is resolved once through the runtime logical-to-physical map before the
+solid writer; there is no ALP, LHT, or SHD operation and no per-pixel blend.
+This is the complete palette contract for the observed selection outline; no
+authored-plate wireframe palette exists in the traced renderer.
+
+**Correction (2026-08-31, PT4).** The previous text of this paragraph said
+"The outer frame selects logical map entry 4, or entry 6 when the armed
+build/wake flag is set; outside that box-selection mode it selects entry 15."
+That is inverted. It read the 6/4 pair as the ordinary case and entry 15 as a
+fallback reached only outside box-selection mode, but the two independent
+statements in doc 07 agree that entry 15 is the ordinary drag rectangle and
+that the 6/4 pair is conditioned on the armed MOBILEBUILD latch, not on the
+existence of a drag: [07 R-P0-11 §1 "The drawing."] states that the
+drag-selection rectangle "takes 15 (white) outer and 0 (black) inner", and
+[07 §6]'s minimap-marker correction states that the 6/4 values are "the
+drag-selection rectangle's outer colour-map entries chosen by that same latch
+bit **while the armed latch is MOBILEBUILD** (outer entry 6 when the bit is
+set, 4 when clear, else entry 15; inner entry 0)". The inverted reading was
+observable: logical 4 resolves to a dark red, so a build following this
+paragraph painted every selection drag red. What writes latch-flag bit `0x40`
+while MOBILEBUILD is armed remains **Unknown** ([07 "Missing and unknown"]).
 
 Fog is composed after the world strips, units, projectiles, and effects, and
 before this selection overlay. Thus world pixels are subject to the fog/LOS
@@ -4505,39 +4523,89 @@ write. The Ctrl+right drag-scroll of the world view moves the camera by
 owning statement; this section keeps only the radar↔world scale, which is
 right.
 
-### 3.12 Viewport marker (composer-time)
+### 3.12 Ground-pick crosshair, and the debug display mode (composer-time)
 
-The camera marker on the minimap is drawn at composer time, not in the contacts
-pass. When the minimap mode byte equals 2, two 1-pixel Bresenham lines are
-drawn in the viewport palette index: a horizontal segment and a vertical
-segment crossing at the camera-derived radar position offset by the constants
-+128 in X and +32 in Y, each segment spanning ±2 pixels about the crossing
-(five pixels long). The lines clip to the inclusive minimap rect. **Established.**
-The two line calls are `(cx+126, cy+32) → (cx+130, cy+32)` and `(cx+128, cy+30)
-→ (cx+128, cy+34)` where `cx = cameraCenterX − camX` and `cy = cameraCenterZ −
-(cameraCenterY >> 1) − camZ` — the camera centre projected with the same
-half-height shear as world drawing — so the figure is exactly the five-pixel
-cross of two one-pixel lines, and the endpoints are literals, not an inference.
-The color is the ring/viewport palette index held in engine root state — the
-same index the weapon/interceptor rings use — distinct
-from the radar-circle and jammer indices. **Bounded-negative.** The minimap rect
-is written by exactly one routine (the surface allocator); the composer only
-reads it — no hidden second writer. A capture probe is retained only for visual
-confirmation of the figure, which the calls fully determine; the earlier
-`TODO(question)` on figure and thickness is closed, and thickness claims of 6/4
-pixels belong to the selection brackets, not this marker (the marker is 1-pixel
-lines). (Corpus trail: minimap note §5.5, viewport note §2, and the composer
-decompile; the corresponding resolution note is r03-03 §4.)
+**Correction (2026-08-31).** This section was headed "Viewport marker
+(composer-time)" and opened "The camera marker on the minimap is drawn at
+composer time, not in the contacts pass … The lines clip to the inclusive
+minimap rect", and it named the crossing point "the camera-derived radar
+position" from "camera centre" fields. Two of those three claims are wrong, and
+the third is a misnomer:
 
-**Mode-byte source (Unknown).** The composer-time marker condition is
-established as an equality test against value 2, but the available clean-room
-writer census found no simulation, session, mission, or map input that writes
-this distinct minimap mode byte. The existing battle input mode is a separate
-UI routing value and is not evidence for the marker condition. Nanolathe keeps
-the value as an explicit authoritative session input and publishes it unchanged
-through the frame; zero is therefore an explicit mode-off value until a traced
-writer is available. `TODO(question):` identify the retail mode-byte writer or
-the authoritative setup value that selects 2; do not infer it from HUD state.
+* **The figure is not drawn on the minimap.** It is drawn by the **world**
+  composer, into the main backbuffer through the clipped **game viewport**
+  descriptor the composer re-establishes before its tile pass (§4.1) — the same
+  surface the tile pass, the debug terrain grid and the unit band draw into. The
+  `+128` and `+32` are that viewport's origin literals (§4.1), applied
+  per-primitive exactly as §4.1 records for beam and site projection; they are
+  not a minimap offset. The lines clip to the game viewport, not to the minimap
+  rect. Retail's minimap carries its radar picture and its contacts, and no
+  camera or viewport indicator of any kind.
+* **The crossing point is not the camera centre.** The three fields the composer
+  reads are the **ground resolver's** output — the world point under the pointer
+  (or, while the pointer is over the radar rect, the lens-projected point), as
+  §3.11 and the ground resolver of `[07 §8]` produce it. The resolver writes X,
+  Y and Z as three 16.16 words and the composer reads each one's high word, so
+  the values are the integer world coordinates of the picked point. The
+  half-height shear and the camera-scroll subtraction are then the ordinary
+  world-to-screen projection of §2.1, which is why the earlier reading — a
+  minimap position — looked self-consistent.
+* **"Minimap mode byte" is a misnomer** for the mode byte, kept only by
+  inheritance from an older note. Nothing about the byte concerns the radar; it
+  selects among the composer's debug displays. See "Debug display mode" below.
+
+**Established.** The figure itself stands exactly as previously recorded: two
+1-pixel Bresenham lines in the ring/viewport palette index — the same index the
+weapon and interceptor rings use, distinct from the radar-circle and jammer
+indices — drawn when the debug display mode byte equals 2, as
+`(px+126, py+32) → (px+130, py+32)` and `(px+128, py+30) → (px+128, py+34)`
+where `px = pickX − camX` and `py = pickZ − (pickY >> 1) − camZ`. So it is a
+five-pixel cross of two one-pixel lines crossing at `(px+128, py+32)`, and the
+endpoints are literals, not an inference. Thickness claims of 6/4 pixels belong
+to the selection brackets, not this figure. (Corpus trail: minimap note §5.5,
+viewport note §2, r03-03 §4, and the world-composer decompile; the ground
+resolver's three-word output is the r03-03 §3 lens/pick path.)
+
+**Debug display mode (Established, was Unknown).** The previous text recorded
+the mode byte's source as an explicit Unknown — "the available clean-room writer
+census found no simulation, session, mission, or map input that writes this
+distinct minimap mode byte" — with a standing `TODO(question)`. That is now
+closed, and the reason the census came up empty is that the byte has no
+simulation, session, mission or map input at all: it is a **developer film-mode
+display selector**, and its complete writer set is three sites.
+
+* The **battle interface initializer** stores zero, alongside the rest of the
+  interface state it clears at battle entry.
+* **Film mode's `m` key** increments the byte and stores zero when the
+  incremented value reaches 5. The cycle is therefore `0,1,2,3,4,0`: 4 is a
+  valid mode and 5 is never observable. This is the second switch the battle
+  key dispatcher runs after the first, on the same token, and only while film
+  mode is on — the `m` case of the film-mode key set enumerated in
+  `[07 R-CAM-01 §9]`.
+* **Leaving film mode** stores zero again, which `[07 R-CAM-01 §9]` already
+  records ("on exit also clears that word's bit 0, zeroes the minimap mode byte
+  and re-shows the HUD").
+
+Film mode is reached only by F11, F11 only in developer mode, and developer mode
+only through the six-word `+Now` password of `[07 R-CAM-01 §6]` or the registry
+pair `DisplaymodeDepth = 256` with `Games = 1` `[07 R-CAM-01 §9]`. **None of it
+is reachable in a stock configuration**, so in ordinary play the byte holds zero
+from battle entry to battle exit and neither the crosshair above nor the debug
+grid below is ever drawn. A player who remembers a camera indicator on TA's
+minimap is not remembering this figure; retail has no such indicator.
+
+The other two readers of the same byte, for completeness: the debug terrain-grid
+overlay draws its wireframe whenever the byte is nonzero and takes an extra
+per-cell pass at mode 1, and one unit-drawing gate admits only while the byte is
+zero. Both are film-mode diagnostics on the same selector; neither is specified
+further here because neither is reachable in a stock configuration.
+
+Nanolathe keeps the byte as an explicit authoritative session input
+(`Session.DebugDisplayMode`) with the two established producers — a reset to
+zero and the `0..4` cycle — and publishes it unchanged through the frame. It
+implements neither developer nor film mode, so nothing calls the cycle and the
+value is zero throughout, which is what retail does too. The minimap draw takes
+no marker argument.
 
 ## 4. Indexed renderer, palettes, and asset layers
 
@@ -6145,6 +6213,33 @@ the strip destination, so the client's strip-6 nanolathe draw branch fires
 instead of skipping the beam. One segment is emitted per accepted work step
 (mobile/factory construction and reclaim), matching the per-path cadence of
 [R-P0-06 §1]; build assist's two-segment cadence is separate.
+
+**The nano source point's coordinate space [R-P0-19-P].** The source end of a
+nano record is "the piece's world point", and this section had never said which
+sense of Z that is. It matters by twice the piece's authored depth offset,
+which for the stock two-emitter builders is tens of whole world units, and the
+strip-6 particle draw carries the error straight into `sy = (Zword − Yword/2) −
+viewZ`, so a wrong sign moves the whole spray that many pixels down or up the
+screen. Two established contracts pin it. The model pass narrows a
+model-relative vertex as `Zn = hi16(−vz)` while a unit's own position enters
+the blit unnegated — model space is mirrored in Z against world space
+([R-RAST-01 §2], §2.4). The particle pass projects a plain world triple with
+no such mirror (§5.5 above, and [R-FX-01 §3]'s common sub-record projection).
+For the spray to leave the nano piece the model pass draws — which is what
+retail shows — the world point handed to the record must therefore be
+`unit + (offsetX, offsetY, −offsetZ)` of the composed piece offset, not
+`unit + offset`. **Supported inference**, derived from the two projections
+rather than traced at the submission site. Decider: the `ta_probe_xz` fixture
+that §2.4 already names for the heading-zero nose mapping settles the sense of
+the composed offset directly, and observing one stock aircraft plant's spray
+against its `beam1`/`beam2` posts settles it for this producer alone.
+
+The same question stands, untraced, over every other consumer that turns a
+queried piece into a world point: the weapon muzzle of [06 §4.1], the carrier
+attach point, and the factory build plate. Only the build plate has been
+settled independently, by the stock yard maps ([05 "Factory production
+lifecycle"], exit-footprint evidence); the muzzle is **Unknown** and is listed
+as such under §2.4's note.
 
 The cursor is software-drawn. Cursor GAF entries are loaded into a table;
 `GetCursorPos` and configured hotspots determine placement. The renderer saves
@@ -8634,9 +8729,6 @@ by the sharper question it turned into.
   the bar fill 0 probe). Marked `TODO(question)`.
 - Minimap marker blit site · §3.9 · static trace. The layer ordering
   (contacts overwrite markers) is supported inference. Marked `TODO(question)`.
-- Writer of the viewport-marker mode byte, or the authoritative setup value
-  that selects mode 2 · §3.12 · static trace; it must not be inferred from HUD
-  state. Marked `TODO(question)`.
 
 ### Renderer
 
@@ -8751,6 +8843,19 @@ by the sharper question it turned into.
   game · §8.3 · static trace over the unrecovered regions.
 - Exact PCM conversion for every legacy WAV variant beyond the DIGI and raw
   rules of §8.2 · §8.2 · asset census of the non-RIFF files.
+- Whether the variant draw of Resolve step 2 consumes a CRT draw when the
+  resolved row's variant count is **zero** · §8.3 · static trace of the
+  resolve body. §8.3 says two things that do not settle each other: "the draw
+  happens on **every** resolve — including silent ones — before any gate",
+  which reads as unconditional, and "Count zero produces no pick and the cue
+  is silent", which describes only the result. It is worth a bullet because it
+  changes the stream's draw count, and §8.3's random-stream contract makes
+  that count the thing a reimplementation is asked to reproduce; an empty row
+  is reached often rather than rarely, since the reference install's 120
+  categories author no `load` or `unload` variant at all and only two author
+  `cloak`. Nanolathe skips the draw on an empty row today and carries a
+  `TODO(question)` at the site; because our queue draws a private presentation
+  copy of the stream, the choice cannot reach the simulation either way.
 
 ### Video and capture
 

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -266,5 +267,61 @@ func TestCombatFamilyNeverOverwritesAnotherInstaller(t *testing.T) {
 	// with an out-of-range phase, so the two are distinguishable.
 	if got := DescriptorFor(id).Handler(nil, &Node{Target: 1, Phase: 9}, 0, 0); got != Code(5) {
 		t.Fatalf("installer overwrote an already-assigned handler: got code %d from the probe's slot", got)
+	}
+}
+
+// TestInstallPointGoalRoutesRadius locks the two halves of [04 R-ORD-01 §1]'s
+// point installer that the retired TODO(T25) had dropped: the arrival radius
+// reaches the payload owner, and a `canfly` owner gets a release instead of an
+// install.
+func TestInstallPointGoalRoutesRadius(t *testing.T) {
+	var installs []PointGoalRequest
+	var releases []*Node
+	adapter := &MovementGoalAdapter{
+		InstallPoint: func(req PointGoalRequest) bool { installs = append(installs, req); return true },
+		Release:      func(n *Node) bool { releases = append(releases, n); return true },
+	}
+	bind := &QueueBinding{Movement: adapter}
+
+	ground := &units.Unit{Def: &content.UnitDef{UnitName: "ground"}}
+	QueueForUnit(ground).SetBinding(bind)
+	n := &Node{Owner: ground.Handle, Satisfied: 0x3E0}
+	installPointGoal(ground, n, numeric.Fixed(7<<16), 0, numeric.Fixed(9<<16), 0x150)
+
+	if len(installs) != 1 {
+		t.Fatalf("installs = %d, want 1", len(installs))
+	}
+	if installs[0].Radius != 0x150 {
+		t.Fatalf("radius = %#x, want 0x150 — the installer dropped it", installs[0].Radius)
+	}
+	if installs[0].Node != n {
+		t.Fatalf("install carried the wrong node identity")
+	}
+	if n.Satisfied&0x3E0 != 0 {
+		t.Fatalf("pending 0x20..0x200 not cleared: %#x", n.Satisfied)
+	}
+	if n.GoalX != numeric.Fixed(7<<16) || n.GoalZ != numeric.Fixed(9<<16) {
+		t.Fatalf("goal triple not written for a ground owner")
+	}
+	if len(releases) != 0 {
+		t.Fatalf("a ground owner must not take the release-only arm")
+	}
+
+	// canfly: release only, no install, and no goal triple write.
+	flier := &units.Unit{Def: &content.UnitDef{UnitName: "flier", CanFly: true}}
+	QueueForUnit(flier).SetBinding(bind)
+	fn := &Node{Owner: flier.Handle, Satisfied: 0x3E0}
+	installPointGoal(flier, fn, numeric.Fixed(7<<16), 0, numeric.Fixed(9<<16), 0x150)
+	if len(installs) != 1 {
+		t.Fatalf("canfly owner installed a point goal [04 R-ORD-01 §1]")
+	}
+	if len(releases) != 1 || releases[0] != fn {
+		t.Fatalf("canfly owner did not release its previous payload")
+	}
+	if fn.Satisfied&0x3E0 != 0 {
+		t.Fatalf("release-only arm must still clear pending 0x20..0x200: %#x", fn.Satisfied)
+	}
+	if fn.GoalX != 0 || fn.GoalZ != 0 {
+		t.Fatalf("canfly owner must not write the goal triple")
 	}
 }

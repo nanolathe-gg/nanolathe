@@ -42,17 +42,25 @@ package orders
 // `Move_Ground` and `Patrol` as a "blocked-head stall at gate 0xE0 — no timer,
 // no draw", which is exactly what the assignment produces.
 //
-// TODO(T25): the air marker family of [04 R-AIR-01 §4] and the takeoff preamble
-// of [04 R-AIR-01 §6] live in internal/movement, which imports this package and
-// therefore cannot be imported back. `VTOL_Move`'s executor there already owns
-// the preamble, the footprint snap and the point marker for the record's goal,
-// and publishes the arrival bit this file's phase 2 completes on; `VTOL_Patrol`
-// has no executor there yet. Placeholder: the rows below run their
-// record-visible half — the phase machine, the slot writes, the goal release
-// and the gates — and leave the marker geometry to that seam, exactly as
-// vtolwork.go's twins do.
+// The air marker family of [04 R-AIR-01 §4] lives in internal/movement, which
+// imports this package and therefore cannot be imported back. That is not a
+// barrier: `MovementGoalAdapter.InstallAir` is the seam the session composes for
+// exactly this, and it carries the absolute marker position and the arrival
+// radius. `VTOL_Patrol` computes its displaced waypoint here and installs
+// through that seam; the takeoff preamble it needs is `airWorkPreamble`, which
+// this package already owns.
+//
+// Corrected 2026-08-31: this header carried a TODO(T25) saying `VTOL_Patrol`
+// "has no executor there yet" and left the marker geometry unbuilt, so an air
+// patrol installed no payload at all — it armed gate 0xE0 and waited for an
+// arrival bit that nothing could raise. Since the point installer now takes the
+// canfly release-only arm faithfully, that left an air patrol with no goal
+// whatsoever.
 
-import "github.com/nanolathe/nanolathe/internal/units"
+import (
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/units"
+)
 
 // statusArrived is status kind 6 (`arrived`), whose default display text is
 // `Arrived` [04 R-ORD-01 §1].
@@ -278,15 +286,30 @@ func vtolMoveHandler(u *units.Unit, n *Node, _ uint32, _ uint32) Code {
 // slots; advance. Phase 1: clear the five movement pending bits 0x20-0x200 from
 // the record's pending word; advance. Phase 2, in order: satisfied ∩ 0xE0 ->
 // rotate (the phase is left at 2, so the next visit re-arms the leg); a point
-// marker 320 world units short of the waypoint along the approach with
-// horizontal arrival radius 0x150; install; gate |= 0xE0; then the low-health
-// pad seek; then the fire-at-will opportunity scan; else deadline 30, hold.
-// Other phase: cancel-all.
+// marker at the waypoint displaced 320 world units along `bearing(me -> goal)`
+// with horizontal arrival radius 0x150; install; gate |= 0xE0; then the
+// low-health pad seek; then the fire-at-will opportunity scan; else deadline
+// 30, hold. Other phase: cancel-all.
 //
-// Because the marker stops 320 units short of the waypoint and its arrival
-// radius is 336, an air patrol leg is satisfied about 320 units before the
-// authored waypoint, and a patrol whose waypoints are closer together than that
-// rotates on every visit [04 R-ORD-02 §2].
+// Corrected 2026-08-31: this comment said the marker stops "320 world units
+// short of the waypoint along the approach", and concluded that a leg is
+// satisfied about 320 units early and that closer waypoints rotate every visit.
+// That is the reading [04 R-ORD-02 §2] retracted on 2026-08-30. The leg forms
+// both components at `bearing(me -> goal)`, negates each and ADDS them to the
+// goal, so the marker sits 320 units BEYOND the waypoint. With the strict 336
+// arrival radius the leg is satisfied about 16 world units before the waypoint,
+// not 656 before it: the aircraft flies essentially the whole leg and aims
+// through the corner rather than braking into it. Waypoints closer together
+// than about 336 units still rotate every visit.
+//
+// TODO(T25): the low-health pad seek — health < (maxdamage >> 2) * 3 collects
+// this side's base candidates within 0xF00, releases the payload, draws
+// RNG(count) and spawns `VTOL_Landing` at that candidate [04 R-ORD-02 §2]
+// [04 R-AIR-01 §7] — is not implemented here. Its candidate list is the
+// air-base enumeration the seek states build in internal/movement, which owns
+// the pad predicate, and its draw belongs with that list; taking the draw here
+// against a differently ordered list would diverge the stream (I4). Placeholder:
+// the row proceeds to the opportunity scan, which is the next step in order.
 func vtolPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	if u == nil || n == nil {
 		return 7 // cancel-all
@@ -309,7 +332,7 @@ func vtolPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Co
 		if satisfied&gateMoveOutcomes != 0 {
 			return 6 // *rotate*, phase left at 2: the next visit re-arms the leg
 		}
-		installPointGoal(u, n, n.GoalX, n.GoalY, n.GoalZ, 0x150)
+		installAirPatrolMarker(u, n)
 		n.DynamicGate |= gateMoveOutcomes
 		if target := opportunityScan(u); target != nil && autoEngage(u, target) {
 			n.DynamicGate = 0
@@ -320,6 +343,47 @@ func vtolPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Co
 	default:
 		return 7 // cancel-all
 	}
+}
+
+// airPatrolSetback is the 320 world units `VTOL_Patrol`'s leg displaces its
+// marker by, and airPatrolArrivalRadius the strict horizontal arrival radius
+// 0x150 (336) that goes with it — the fourth value of the radius-flag family
+// [04 R-ORD-02 §2][04 R-AIR-01 §4].
+const (
+	airPatrolSetback       = 320
+	airPatrolArrivalRadius = 0x150
+)
+
+// installAirPatrolMarker builds `VTOL_Patrol`'s point marker and installs it
+// through the air seam.
+//
+// The geometry is the negate-then-add shape [04 R-ORD-02 §2] gives: both
+// components are formed at `bearing(me -> goal)`, negated, and added to the
+// goal, which places the marker 320 world units BEYOND the waypoint. Subtracting
+// the offset pair is that negate-and-add, and it is the same sign the air legs
+// in internal/movement use for this family.
+//
+// A record whose goal the patrol chain has not filled in yet, or a unit whose
+// binding has no air seam, installs nothing and leaves the caller to arm its
+// gate — the leg then holds on its deadline exactly as it does between waypoints.
+func installAirPatrolMarker(u *units.Unit, n *Node) {
+	if u == nil || n == nil {
+		return
+	}
+	b := bindingOfUnit(u)
+	if b == nil || b.Movement == nil || b.Movement.InstallAir == nil {
+		return
+	}
+	heading := startBuildingBearing(u.X, u.Z, n.GoalX, n.GoalZ)
+	ox, oz := bearingOffset(heading, numeric.Fixed(int64(airPatrolSetback)<<16))
+	b.Movement.InstallAir(AirGoalRequest{
+		Owner:  n.Owner,
+		Node:   n,
+		X:      n.GoalX - ox,
+		Y:      n.GoalY,
+		Z:      n.GoalZ - oz,
+		Radius: airPatrolArrivalRadius,
+	})
 }
 
 // ---------------------------------------------------------------------------

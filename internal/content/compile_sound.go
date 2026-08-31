@@ -17,9 +17,12 @@ import (
 // Priority and Cooldown are static per slot and global across every category,
 // compiled in here from [03 §8.3] and consumed by phase 13.
 type SoundSlot struct {
-	Key      string   // authored key name, e.g., "select" [02 "Sound category record"]
-	Priority int32    // priority from [03 §8.3] static table, global per slot
-	Cooldown int32    // cooldown in seconds from [03 §8.3] static table
+	Key      string // authored key name, e.g., "select" [02 "Sound category record"]
+	Priority int32  // priority from [03 §8.3] static table, global per slot
+	// Cooldown is the [03 §8.3] static table's multiplier: the window is
+	// multiplier x 30 frames. The earlier "seconds" reading coincides
+	// numerically at 30 Hz but names the wrong mechanism.
+	Cooldown int32
 	Variants []string // ordered variant aliases gathered K, K1, K2… [02 "Sound category record"] C11
 	Captions []string // parallel captions per variant, from <key>text companion key [02 "Sound category record"]
 }

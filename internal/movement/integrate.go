@@ -67,7 +67,7 @@ type System struct {
 	Flights                 map[pool.Handle]*FlightState
 	profiles                map[pool.Handle]Profile // per-unit resolved movement profile [04 §6.1]
 	profileNames            map[pool.Handle]string  // per-unit canonical class key the profile resolved from [04 §6.1]; lookup-only [I1]
-	sessions                []*path.Session         // deterministic slice indexed by handle [04 §7.3] C11 C12 budget-honoring sessions
+	sessions                []*pathWorkingSet       // deterministic slice indexed by handle [04 §7.3] C11 C12 budget-honoring sessions
 	prevMoveTier            map[pool.Handle]int     // cached mover tier per unit for MoveRate edge emission [04 §5.2][GAP T15] C18
 	prevSFXBand             map[pool.Handle]int     // cached setSFXoccupy band per unit for edge emission [04 §5.2][GAP T15] C17 C18
 
@@ -275,6 +275,22 @@ const (
 type PathFailure struct {
 	Status path.Status
 	Tick   uint32
+}
+
+// pathWorkingSet is one admitted path request's resumable working set: the
+// search session plus the identity of the request that owns it.
+//
+// The start cell is deliberately NOT part of that identity. Request setup
+// copies the requesting unit's cached committed cell as the start cell at
+// ADMISSION [04 R-PATH-01 §4] step 1, and every later budget slice resumes the
+// same working set [04 R-PATH-01 §6]; re-reading the live cell on each slice
+// would restart the search under a moving unit and it would never finish. The
+// owning request is therefore identified by its goal object and its activation
+// token, which is what a replan or a queue-head replacement changes.
+type pathWorkingSet struct {
+	session    *path.Session
+	goal       path.Goal
+	activation uint64
 }
 
 // thresholdSqFromRadius computes the goal-handle threshold² = floor(radiusParam/16)² [R-P0-01].
@@ -1785,16 +1801,42 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) path.WorkRe
 	if idx >= len(s.sessions) {
 		need := idx + 1
 		if cap(s.sessions) < need {
-			ns := make([]*path.Session, need)
+			ns := make([]*pathWorkingSet, need)
 			copy(ns, s.sessions)
 			s.sessions = ns
 		} else {
 			s.sessions = s.sessions[:need]
 		}
 	}
-	sess := s.sessions[idx]
-	needsNew := sess == nil || sess.Start() != r.Start || sess.Goal() != r.Goal
+	ws := s.sessions[idx]
+	needsNew := ws == nil || ws.session == nil || ws.goal != r.Goal || ws.activation != r.Activation
+	var sess *path.Session
+	if !needsNew {
+		sess = ws.session
+	}
 	if needsNew {
+		// [04 R-PATH-01 §4] step 1: request setup copies the requesting unit's
+		// CACHED COMMITTED CELL — the anchor the occupancy commit last wrote,
+		// read at ADMISSION — as the start cell. The cell the follower held when
+		// it submitted the request is not that value: a request waits in the
+		// provider until the single global working set is free, and the mover
+		// keeps walking meanwhile, so the submitted cell can be many cells
+		// behind by the time setup runs. Consuming it made the early-exit
+		// ladder judge a stale position: a request submitted while the mover
+		// stood on its own goal took step 6's already-satisfied exit and
+		// published an empty route, and [04 R-PATH-01 §7]'s count-zero branch
+		// then asked the LIVE position, disagreed, and raised `0x40` — the
+		// "cannot get there" bit — for a goal that was plainly reachable. The
+		// work and mobile-build rows abandon their record on that bit
+		// [04 R-ORD-01 §5], which is what surfaced as a unit refusing a goal
+		// that an identical second order reached.
+		start := r.Start
+		if s.world != nil {
+			if u := s.world.Unit(r.Unit); u != nil && u.Handle == r.Unit {
+				start = s.pathStartCell(u)
+			}
+		}
+		r.Start = start
 		// The REQUESTING unit's profile decides passability and bias. Sharing
 		// one profile across the world paths a ship, a hover and a Krogoth as
 		// the same 1x1 ground scout [04 §6.1] [04 §7.1].
@@ -1867,7 +1909,7 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) path.WorkRe
 			}
 		}
 		sess = path.NewSession(cfg)
-		s.sessions[idx] = sess
+		s.sessions[idx] = &pathWorkingSet{session: sess, goal: r.Goal, activation: r.Activation}
 		// Request setup reports its established 0x100/0x200 notification to
 		// the goal object's owning order even when search work continues. These
 		// bits are distinct from the final route diagnostic [04 R-PATH-01
@@ -2127,9 +2169,11 @@ func (s *System) emitMovementCallbacks(u *units.Unit, speed int32) {
 		}
 		s.prevMoveTier[u.Handle] = cat
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	band := MediumBand(s.Terrain, u) // simplified mapping [04 §9.1]; exact overwrite 1→2→3 via wy/wt/wl/mb is TODO(question) for hover
+	// setSFXoccupy band 0..4 [04 §9.1] — the classifier starts from this unit's
+	// cached band and the one-argument callback is edge-triggered, emitted only
+	// when the band changes [GAP T15] C17 C18.
 	prevBand := s.prevSFXBand[u.Handle]
+	band := MediumBand(s.Terrain, u, prevBand)
 	if band != prevBand {
 		cob.StartDeferredWake(vm, "setSFXoccupy", []int32{int32(band)}) // [04 §9.1][GAP T15] deferred callback wake
 		s.prevSFXBand[u.Handle] = band

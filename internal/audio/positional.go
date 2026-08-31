@@ -27,13 +27,24 @@ type Pan struct {
 	X, Y, Z int32
 }
 
-// MixerCenter returns the reference-center floats used before playback when
-// stereo capable: (mapW+mapH)/2 <<4 and
-// ?? (world center). We expose the scalar used there for tests.
-func MixerCenter(v Viewport) (cx, cy float32) {
-	cx = float32((v.MapW + v.MapH) / 2 << 4)
-	cy = float32((v.MapW + v.MapH) / 2 * 0x10) // same as cx in retail, kept distinct for doc
-	return cx, cy
+// DistanceBounds returns the two distances the positional helper installs on
+// the device before a 3-D placement: the minimum is the viewport's half
+// extent, the maximum the map's extent, both in 16-pixel units
+// [R-AUD-01 §1 "the 3-D placement"]:
+//
+//	minDist = trunc((viewH + viewW) / 2) * 16
+//	maxDist = (mapW + mapH) * 16
+//
+// Correction. This replaces a MixerCenter helper that returned
+// `(mapW + mapH) / 2 << 4` twice as a "mixer reference centre". That reading
+// came from §8.3's original text, and [R-AUD-01 §1] retracted it: the buffers
+// are DS3D buffers, the vector is a position, and the two floats the helper
+// writes are the DS3D minimum and maximum distance. The old helper had no
+// caller, so only the formula changes.
+func DistanceBounds(v Viewport) (minDist, maxDist int32) {
+	minDist = ((v.Height + v.Width) / 2) * 16
+	maxDist = (v.MapW + v.MapH) * 16
+	return minDist, maxDist
 }
 
 // ComputePan returns the retail pan vector for a world position in 16.16
@@ -125,12 +136,15 @@ func IsAudible(cellX, cellY int, localSlot int, mode VisibilityMode, wordMask []
 	return wordMask[idx]&bit != 0
 }
 
-// CellFromWorld converts a 16.16 world position to visibility tile coordinates
-// via sign-corrected floor division.
-// For retail map sizes this equals worldToCell >>1? We keep the literal shift
-// so edge at negative coordinates matches the sign-corrected floor (Invariants I3).
+// CellFromWorld converts a 16.16 world position to a visibility plot cell —
+// the audience gate's cell of [03 §8.3]. A plot cell is one 32-pixel tile
+// (two terrain cells), which is why the visibility grid is half the terrain
+// grid in each axis [03 §3.1], so the divisor is 32 x 65,536 world units
+// [03 §2.1]. The division floors with an explicit sign correction rather than
+// truncating, matching retail's arithmetic shift on the map's west and north
+// edges [I3]; it is world.WorldToTile's arithmetic, restated here because the
+// presentation audio package holds no authoritative world dependency.
 func CellFromWorld(p numeric.Fixed) int {
-	// floorDiv on 16.16 units where tile is 32 pixels = 32*65536 = 0x200000
 	raw := int64(p)
 	const tile = 32 * 65536
 	q := raw / tile

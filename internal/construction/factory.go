@@ -270,14 +270,28 @@ func nanoReach(builder *units.Unit) numeric.Fixed {
 	return numeric.Fixed(int64(builder.Def.BuildDistance) * 65536)
 }
 
-// isWithinNanoRange reports whether the builder's nano piece (or its base
-// position as fallback) is within nanolathe range of the site [04 §3.4][05][R-P0-06][fmt fbi].
+// isWithinNanoRange reports whether the builder is within nanolathe range of
+// the site [04 §3.4][05][R-P0-06][fmt fbi].
 // The reach is nanoReach above; distance is planar X/Z only, as the reclaim
 // range check is planar [05 "Unit reclaim"]. The site point is supplied by the
 // caller: needsApproach and build-site selection both pass the nearest point of
 // the site's footprint rectangle, not its centre — see Service.siteRangePoint
 // for why the centre reading is disproved by the authored data, and for the
 // TODO(question) that remains on retail's own comparison [R-P0-06].
+//
+// Correction. This measured from the result of a speculative `QueryNanoPiece`,
+// falling back to the builder's own position. Two things were wrong with that.
+// The reach tests of the work rows measure `dx² + dz²` from the acting unit
+// against `builddistance` (with the target's model radius added where the row
+// says so) and never resolve a nano piece [04 R-ORD-01 §5]; and the query is
+// forbidden outside an accepted work step — "a rejected work step emits none
+// and must not call QueryNanoPiece merely to draw a speculative spray"
+// [R-P0-06 §4], with the query ordered strictly after admission [R-P0-06 §6].
+// The second point is what the player saw: session step calls NeedsWalk for
+// every MobileBuild head on every tick, so an actively building construction
+// kbot spent two script calls per tick where the emitter spends one. The stock
+// two-emitter scripts alternate their piece per call, so the parity never
+// moved and only one of ARMACK's two nano guns ever sprayed.
 func (s *Service) isWithinNanoRange(builder *units.Unit, siteX, siteZ numeric.Fixed) bool {
 	if builder == nil || builder.Def == nil {
 		return true
@@ -292,13 +306,7 @@ func (s *Service) isWithinNanoRange(builder *units.Unit, siteX, siteZ numeric.Fi
 	if reach == 0 {
 		return true
 	}
-	var srcX, srcZ numeric.Fixed
-	if piece, pos, ok := s.QueryNanoPiece(builder); ok {
-		srcX, srcZ = pos.X(), pos.Z()
-		_ = piece // piece index is presentation data; range uses world position only
-	} else {
-		srcX, srcZ = builder.X, builder.Z
-	}
+	srcX, srcZ := builder.X, builder.Z
 	// Callers now pass the point of the site's footprint rectangle nearest the
 	// builder rather than the site centre; see Service.siteRangePoint for the
 	// evidence and for what is still untraced [R-P0-06].
@@ -1224,7 +1232,13 @@ func (s *Service) QueryBuildInfo(factory *units.Unit, m *model.Model) (world.Cel
 
 // QueryNanoPiece synchronously resolves the builder's authored nano piece and
 // transforms it through the current model hierarchy. Cell zero is seeded to 0;
-// no engine-side piece alternation is permitted [R-P0-06][04 §5.3].
+// no engine-side piece alternation is permitted [R-P0-06 §2][04 §5.3]. Stock
+// multi-emitter builders alternate their spray piece from inside the script —
+// ARMAP returns beam1/beam2 and ARMACK rnanospray/lnanospray on successive
+// calls — so the caller must issue exactly one query per accepted work step
+// and never a speculative one: an extra call per tick rotates the script past
+// the emitter the work step would have used and pins the spray to one piece
+// [R-P0-06 §4][R-P0-06 §6].
 func (s *Service) QueryNanoPiece(builder *units.Unit) (int32, world.ModelWorldPosition, bool) {
 	if s == nil || builder == nil {
 		return 0, world.ModelWorldPosition{}, false
@@ -1268,7 +1282,26 @@ func (s *Service) QueryNanoPiece(builder *units.Unit) (int32, world.ModelWorldPo
 	} else {
 		return piece, world.ModelWorldPosition{}, false
 	}
-	return piece, world.NewModelWorldPosition(builder.X.Add(pos[0]), builder.Y.Add(pos[1]), builder.Z.Add(pos[2])), true
+	// Composed coordinates are MODEL space, and model space is mirrored in Z
+	// against world space: the projection narrows a model-relative vertex as
+	// hi16(-vz) while a unit's own position enters the blit unnegated
+	// [03 R-RAST-01 §2]. A consumer that turns a composed offset into a world
+	// point therefore owes the Z negation, exactly as the build-plate query
+	// above already does.
+	//
+	// This site previously added the composed Z. That mirrored the emitter
+	// about the builder's own centre, and because the screen ordinate is
+	// `Z - Y/2`, a Z error of twice the piece's depth offset moves the spray
+	// origin by that many whole pixels down the screen — for the Arm aircraft
+	// plant's beam pieces roughly seventy, which is how a nano piece authored
+	// on top of the building came out spraying from the ground. The negated
+	// form is the only one that puts the origin where the model pass actually
+	// draws that piece: the model path composes the same offset and emits it at
+	// `hi16(-vz)` relative to the unit's blit anchor, and
+	// `WorldToScreen(unit + (x, y, -z))` is precisely that pixel [03 §2.4]
+	// [03 §2.5]. It also agrees with the build-plate sign that the stock yard
+	// maps settled independently.
+	return piece, world.NewModelWorldPosition(builder.X.Add(pos[0]), builder.Y.Add(pos[1]), builder.Z.Sub(pos[2])), true
 }
 
 func (s *Service) emitAcceptedNano(tick uint32, builder, product *units.Unit) {

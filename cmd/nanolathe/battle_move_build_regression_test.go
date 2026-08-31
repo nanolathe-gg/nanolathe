@@ -45,7 +45,7 @@ func TestBattleMoveAndBuildReachGoal(t *testing.T) {
 		MapW: int32(sess.World.CellW * 16), MapH: int32(sess.World.CellH * 16),
 	}
 	b := &battleSession{sess: sess, cat: cat, cam: cam}
-	centerOnCommanderForSession(sess, b.cam, 640, 480)
+	centerBattleStartCamera(sess, b.cam)
 
 	var com *units.Unit
 	for _, u := range sess.Units.Iter() {

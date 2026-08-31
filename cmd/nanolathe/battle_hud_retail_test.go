@@ -70,7 +70,7 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 		ViewW: winW, ViewH: winH,
 		MapW: int32(sess.World.CellW * 16), MapH: int32(sess.World.CellH * 16),
 	}
-	centerOnCommanderForSession(sess, cam, winW, winH)
+	centerBattleStartCamera(sess, cam)
 	b := &battleSession{sess: sess, cat: cat, cam: cam}
 	pal := loadPalette(cs)
 	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal)
@@ -333,7 +333,7 @@ func TestRetailNoSelectionClosesCommandWindows(t *testing.T) {
 		ViewW: winW, ViewH: winH,
 		MapW: int32(sess.World.CellW * 16), MapH: int32(sess.World.CellH * 16),
 	}
-	centerOnCommanderForSession(sess, cam, winW, winH)
+	centerBattleStartCamera(sess, cam)
 	b := &battleSession{sess: sess, cat: cat, cam: cam}
 	pal := loadPalette(cs)
 	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal)

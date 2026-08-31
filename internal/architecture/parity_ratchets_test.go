@@ -434,7 +434,7 @@ var debtMarkerTotals = map[string]int{
 	// control-byte/save questions, less the retired combat placeholder. B2
 	// then closes one result question while adding two exact Unknown sites
 	// for commander save keys and cargo provenance: net 342.
-	"todo(question)": 342,
+	"todo(question)": 341,
 }
 
 var debtMarkerFileCounts = map[string]map[string]int{
@@ -620,9 +620,17 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		// airorders.go 10 -> 9 and integrate.go 5 -> 4: PT3 closed one question
 		// in each (the landing altitude offset, and the route acceptance rule's
 		// entry point). See the totals row above.
+		//
+		// integrate.go 5 -> 4 (2026-08-31): the medium-band call site's
+		// "exact overwrite 1->2->3 via wy/wt/wl/mb is TODO(question) for hover"
+		// is retired with MediumBand, which now IS that overwrite [04 §9.1].
+		// The one question the classifier still carries — no source for the
+		// model-bottom word `mb` — moved to altitude.go, whose own baseline of
+		// one is unchanged because the marker it already had was this same
+		// question in its older, wider form ("exact band thresholds untraced").
 		"internal/movement/airorders.go": 9,
 		"internal/movement/goals.go":     16,
-		"internal/movement/integrate.go": 5,
+		"internal/movement/integrate.go": 4,
 		"internal/movement/landing.go":   1,
 		"internal/movement/movegoal.go":  1,
 		"internal/movement/profile.go":   3,

@@ -142,22 +142,30 @@ func TestPanelSemanticActivationAndThumbDrag(t *testing.T) {
 	}
 }
 
-func TestPanelMessageRequiresAuthoredTextControl(t *testing.T) {
+// TestPanelMessageDoesNotNeedAnAuthoredTextControl locks the corrected
+// contract: the message box's labels are runtime gadgets carrying their own
+// text, so a window with no authored label still retains the message
+// [07 R-FE-01 §9]. The superseded test asserted the opposite — that SetMessage
+// refused such a window — and `MSGBOX.GUI` is exactly such a window, which is
+// what made every shell diagnostic unreachable.
+func TestPanelMessageDoesNotNeedAnAuthoredTextControl(t *testing.T) {
 	withoutText := NewPanel(&gui.Window{Gadgets: []gui.Gadget{{Kind: gui.KindPanel, Active: 1}}})
-	if withoutText.SetMessage("diagnostic") {
-		t.Fatal("message unexpectedly bound without an authored text control")
+	withoutText.SetMessage("diagnostic")
+	if withoutText.Message() != "diagnostic" {
+		t.Fatalf("message=%q, want diagnostic", withoutText.Message())
 	}
-	if withoutText.Message() != "" {
-		t.Fatal("unbound message was retained")
-	}
-	withAlternateText := NewPanel(&gui.Window{Gadgets: []gui.Gadget{
+	// A runtime label's own text is what the painter draws; SetMessage rewrites
+	// no gadget.
+	runtimeLabels := NewPanel(&gui.Window{Gadgets: []gui.Gadget{
 		{Kind: gui.KindPanel, Active: 1},
-		{Kind: gui.KindLabel, Name: "MESSAGE", Active: 1},
+		{Kind: gui.KindLabel, Name: "TEXT", SourceName: "GADGET1", Active: 1, Text: "first line"},
+		{Kind: gui.KindLabel, Name: "TEXT", SourceName: "GADGET2", Active: 1, Text: "second line"},
 	}})
-	if !withAlternateText.SetMessage("diagnostic") || withAlternateText.Message() != "diagnostic" {
-		t.Fatal("alternate authored message control was not selected")
+	runtimeLabels.SetMessage("first line\nsecond line")
+	if got := runtimeLabels.TextFor(runtimeLabels.Window.Gadgets[1]); got != "first line" {
+		t.Fatalf("first label text=%q", got)
 	}
-	if got := withAlternateText.TextOf("MESSAGE"); got != "diagnostic" {
-		t.Fatalf("message control text=%q, want diagnostic", got)
+	if got := runtimeLabels.TextFor(runtimeLabels.Window.Gadgets[2]); got != "second line" {
+		t.Fatalf("second label text=%q", got)
 	}
 }

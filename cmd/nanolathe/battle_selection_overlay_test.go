@@ -21,10 +21,12 @@ func TestBattleSelectionDragBridgeMirrorsGestureAndClears(t *testing.T) {
 	b.syncSelectionDrag(cl)
 	// The bridge is intentionally exercised through composition: active drag
 	// state must reach the same visible-panel frame writer used by production.
-	// The fallback palette is identity, so logical entry 4 is RGBA red 4.
+	// The fallback palette is identity, so logical entry 15 is RGBA 15. An
+	// ordinary selection drag is white, entry 15, not the armed 6/4 pair
+	// [07 R-P0-11 §1 "The drawing."][07 §6 "Frame composition passes"].
 	img := cl.ComposeFrame()
-	if got := img.RGBAAt(140, 40).R; got != 4 {
-		t.Fatalf("active drag pixel = %d, want outer logical entry 4", got)
+	if got := img.RGBAAt(140, 40).R; got != 15 {
+		t.Fatalf("active drag pixel = %d, want outer logical entry 15", got)
 	}
 
 	b.battleState().Input.DragActive = false

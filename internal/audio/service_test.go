@@ -46,7 +46,9 @@ func TestServiceInitBindsLaterFSWithoutReplacingStateOrPlayback(t *testing.T) {
 	if sample, err := s.Registry.Load(id); err != nil || sample == nil {
 		t.Fatalf("later filesystem was not bound: sample=%v err=%v", sample, err)
 	}
-	s.DrainEvents(30, 0, nil)
+	// The queue clock is the committed global tick, not the rendered-frame
+	// counter [03 §8.3]; the cue was inserted at tick 30, so drain there.
+	s.DrainEvents(30, 30, nil)
 	if calls != 1 {
 		t.Fatalf("Drain reconfigured playback callback: calls=%d", calls)
 	}
@@ -139,5 +141,69 @@ func TestServiceStreamEarlierTimerUsesLaterPath(t *testing.T) {
 	s.TickStream(200)
 	if len(spy.streamPlays) != 1 {
 		t.Fatalf("later recorded timer replayed stream: %d", len(spy.streamPlays))
+	}
+}
+
+// TestServiceQueueClockIsTheCommittedTick locks the single-clock contract of
+// [03 §8.3]: producers stamp inserts with the global tick counter, and the
+// drain must arbitrate against that same counter. When the drain ran on a
+// private rendered-frame counter that outran the tick, the per-slot
+// next-allowed frames it wrote were in the wrong domain, `tick < nextAllowed`
+// held forever, and each slot went permanently silent after its first audible
+// resolve — the "played rarely" defect.
+func TestServiceQueueClockIsTheCommittedTick(t *testing.T) {
+	s := NewService(testAudioFS(t, "voice"))
+	old := GlobalOutput()
+	spy := &outputSpy{}
+	SetGlobalOutput(spy)
+	t.Cleanup(func() { SetGlobalOutput(old) })
+
+	// Slot 5 (`ok`) carries cooldown multiplier 1, i.e. a 30-frame window.
+	s.Queue.Register(1, &Category{Rows: [24]Row{5: {Variants: []string{"voice"}}}}, "unit", true)
+
+	// A 60 Hz host against the 30 Hz simulation: two rendered frames per tick.
+	renderedFrame := uint32(0)
+	audible := 0
+	for tick := uint32(1); tick <= 600; tick++ {
+		s.Emit(tick, SlotOK, 1, "")
+		for i := 0; i < 2; i++ {
+			renderedFrame++
+			before := len(spy.plays)
+			s.DrainEvents(renderedFrame, tick, nil)
+			audible += len(spy.plays) - before
+		}
+	}
+	// 600 ticks with a 30-frame window admit twenty audible resolves; the
+	// exact count is the contract, not merely "more than one".
+	if audible != 20 {
+		t.Fatalf("audible resolves over 600 ticks = %d, want 20", audible)
+	}
+}
+
+// TestServiceVoiceLinesDoNotConsumeAliasRegistry locks [R-AUD-01 §1]: a unit
+// voice line is a mode-1 load read straight from the VFS under `sounds`, and
+// never enters the 255-entry alias registry that the mode-0 aliases own. The
+// stock corpus authors 219 distinct voice variants, so registering them here
+// exhausted the registry and silenced every later cue.
+func TestServiceVoiceLinesDoNotConsumeAliasRegistry(t *testing.T) {
+	s := NewService(testAudioFS(t, "voice"))
+	old := GlobalOutput()
+	spy := &outputSpy{}
+	SetGlobalOutput(spy)
+	t.Cleanup(func() { SetGlobalOutput(old) })
+
+	s.Queue.Register(1, &Category{Rows: [24]Row{1: {Variants: []string{"voice"}}}}, "unit", true)
+	before := s.Registry.Count()
+	tick := uint32(0)
+	for i := 0; i < 300; i++ {
+		tick += 30
+		s.Emit(tick, SlotSelect, 1, "")
+		s.DrainEvents(tick, tick, nil)
+	}
+	if len(spy.plays) == 0 {
+		t.Fatal("no voice line reached the backend")
+	}
+	if got := s.Registry.Count(); got != before {
+		t.Fatalf("voice playback registered %d alias identities, want none", got-before)
 	}
 }

@@ -25,8 +25,12 @@ type Service struct {
 	Cache    *SampleCache
 	Music    *Controller
 
-	viewport          Viewport
-	frame             uint32
+	viewport Viewport
+	frame    uint32
+	// drainSeq counts rendered frames. The media poll of [03 §8.4] runs once
+	// per rendered frame, which is a different cadence from the queue clock
+	// below, so it gets its own counter.
+	drainSeq          uint32
 	fs                vfs.FSOps
 	playbackInstalled bool
 	musicConfigured   bool
@@ -89,15 +93,20 @@ func (a *Service) installPlayback() {
 		return
 	}
 	a.Queue.OnPlay(func(alias string, _ Slot, _ pool.Handle) {
-		if a == nil || alias == "" || a.Registry == nil {
+		if a == nil || alias == "" {
 			return
 		}
-		id := a.Registry.Lookup(alias)
-		if id == MissingAlias {
-			id = a.Registry.Register(alias)
-		}
-		sample, err := a.Registry.Load(id)
-		if err != nil || sample == nil {
+		// A unit voice line is the loader's mode 1 [R-AUD-01 §1]: it is read
+		// from the VFS under the `sounds` prefix on every play and never
+		// consults the alias registry, whose 255 entries belong to the
+		// mode-0 aliases (sound.tdf/allsound registrations, weapon and
+		// feature sounds). Registering each resolved variant here consumed
+		// those entries — the stock corpus authors 219 distinct voice
+		// variants against 41 authored aliases and 62 weapon sounds — and
+		// once the registry filled, registration returned the null identity
+		// and every later cue, voice or weapon, was silent.
+		sample := a.loadVoiceLine(alias)
+		if sample == nil {
 			return
 		}
 		if output := GlobalOutput(); output != nil {
@@ -106,6 +115,26 @@ func (a *Service) installPlayback() {
 	})
 	a.Queue.OnSpeech(func(string) {})
 	a.playbackInstalled = true
+}
+
+// loadVoiceLine resolves one unit voice variant through the sample cache's
+// canonical `sounds` candidates without touching the alias registry
+// [R-AUD-01 §1 mode 1]. Retail re-decodes the file on every play; the retained
+// cache here is the documented presentation divergence of [03 §8.2]. A
+// missing file stays silent, as it does in retail.
+func (a *Service) loadVoiceLine(alias string) *Sample {
+	if a == nil || strings.TrimSpace(alias) == "" {
+		return nil
+	}
+	a.Init(nil)
+	if a.Cache == nil {
+		return nil
+	}
+	sample, err := a.Cache.Load(alias)
+	if err != nil {
+		return nil
+	}
+	return sample
 }
 
 // BindCatalog registers authored aliases in catalog order and installs the
@@ -149,14 +178,26 @@ func (a *Service) Emit(frame uint32, slot Slot, unit pool.Handle, text string) b
 // DrainEvents resolves queued cues and committed positional events at the
 // presentation edge. A committed tick is consumed once; repeated rendered
 // frames must not replay its events [03 §8.3] [I6].
-func (a *Service) DrainEvents(frame, committedTick uint32, events []framepkg.EventView) {
+//
+// The drain runs once per rendered frame, but the value it arbitrates against
+// is the global tick counter, not a private presentation counter: the queue's
+// thirty-frame window and the per-slot next-allowed frames are expressed in
+// that one counter [03 §8.3], and [R-AUD-01 §3] names it "the global tick
+// counter" where the honk/sing alias divides it by thirty. Producers stamp
+// their inserts with the same tick (Service.Emit), so a second clock here put
+// the next-allowed frames in a domain the insert test could never satisfy —
+// with a rendered frame ahead of the tick, `tick < nextAllowed` held forever
+// and every slot fell silent after its first audible resolve. renderedFrame is
+// retained for callers that count their own presentation cadence.
+func (a *Service) DrainEvents(renderedFrame, committedTick uint32, events []framepkg.EventView) {
 	if a == nil {
 		return
 	}
 	if a.Queue == nil || a.Music == nil {
 		a.Init(nil)
 	}
-	a.Queue.Drain(frame)
+	_ = renderedFrame
+	a.Queue.Drain(committedTick)
 	if events != nil && (!a.hasEventTick || committedTick != a.lastEventTick) {
 		for _, ev := range events {
 			if ev.Kind != framepkg.EventKindAudio || !ev.AudioPositional || ev.Sound == "" {
@@ -169,11 +210,13 @@ func (a *Service) DrainEvents(frame, committedTick uint32, events []framepkg.Eve
 		a.lastEventTick = committedTick
 		a.hasEventTick = true
 	}
-	a.frame = frame
-	a.Music.TickFrame(frame, a.Music.IsPlaying())
+	a.frame = committedTick
+	a.drainSeq++
+	a.Music.TickFrame(a.drainSeq, a.Music.IsPlaying())
 }
 
-// Frame returns the most recently drained presentation frame.
+// Frame returns the queue clock as of the last drain — the committed global
+// tick counter [03 §8.3].
 func (a *Service) Frame() uint32 {
 	if a == nil {
 		return 0

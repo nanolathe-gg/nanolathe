@@ -1278,6 +1278,8 @@ func (s *System) runAirOrderLeg(u *units.Unit, n *orders.Node, satisfied uint32,
 		return 0, false
 	}
 	switch orders.DescriptorFor(n.ID).Name {
+	case "VTOL_LandIfCan":
+		return s.reportLandIfCanOutcome(u, n, tick), true
 	case "VTOL_Evade":
 		return s.legVTOLEvade(u, n, tick), true
 	case "VTOL_SeekAttack":
@@ -1294,6 +1296,39 @@ func (s *System) runAirOrderLeg(u *units.Unit, n *orders.Node, satisfied uint32,
 		return s.legAirToAir(u, n, satisfied, tick), true
 	}
 	return 0, false
+}
+
+// reportLandIfCanOutcome publishes the landing machine's outcome to the pump.
+//
+// `VTOL_LandIfCan` is not driven by the pump: its executor is `execVTOLLandIfCan`
+// below, which the mover tick runs off the head record because the landing
+// machine of [04 R-AIR-01 §6] owns the air marker family. That left the record
+// with no way to finish. The executor set `st.done` on touchdown and nothing
+// read it, so the record sat at the head of the queue for the rest of the
+// unit's life and every later order queued behind it — a `Stop` landed the
+// aircraft and then jammed its queue.
+//
+// This does NOT re-run the executor. It reads the outcome the mover tick
+// already produced and translates it into a result code, which is the whole of
+// what the pump was missing:
+//
+//   - the executor has finished this record -> *complete* (5), and the pump
+//     frees it in the ordinary way;
+//   - the executor is still working, or has not seen this record yet -> the
+//     one-tick deadline hold of [04 R-ORD-01 §1] plus *hold* (2), the same arm
+//     `airHandOff` takes with no runner bound. The record keeps its place at
+//     the head and is re-dispatched next tick.
+//
+// The one-tick hold is what makes the hand-off safe in either dispatch order:
+// when the pump runs before the mover tick, a completion published this tick is
+// read on the next one.
+func (s *System) reportLandIfCanOutcome(u *units.Unit, n *orders.Node, tick uint32) orders.Code {
+	st := s.airOrders[u.Handle]
+	if st != nil && st.order == n && st.done {
+		return 5 // *complete* [04 R-ORD-01 §1]
+	}
+	airDeadline(n, tick, 1)
+	return 2 // *hold* [04 R-ORD-01 §1]
 }
 
 // --- shared leg vocabulary ---

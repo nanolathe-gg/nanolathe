@@ -105,6 +105,77 @@ func (c *Camera) EffectiveView() (int32, int32) {
 	return int32(float32(c.ViewW) / s), int32(float32(c.ViewH) / s)
 }
 
+// BattleView returns the size of the *battle viewport* in map pixels — the
+// part of the framebuffer the world is actually seen through, which is smaller
+// than the framebuffer this camera reports through EffectiveView.
+//
+// Retail rebuilds the game viewport subrect on every mode change as
+// left = 128, top = 32, right = W-1, bottom = H-33 — a width of W-128 and a
+// height of H-64, so 512x416 at 640x480 [03 §4.1]. Those insets are the
+// OriginX/OriginY constants above.
+//
+// The zero floor is presentation robustness for a framebuffer smaller than the
+// chrome; retail has no such mode.
+func (c *Camera) BattleView() (int32, int32) { // [03 §4.1]
+	if c == nil {
+		return 0, 0
+	}
+	viewW, viewH := c.EffectiveView()
+	w := viewW - OriginX   // left inset only; the viewport runs to the framebuffer edge
+	h := viewH - 2*OriginY // equal top and bottom insets [03 §4.1]
+	if w < 0 {
+		w = 0
+	}
+	if h < 0 {
+		h = 0
+	}
+	return w, h
+}
+
+// JumpTo is the retail camera *jump*: the current origin is written outright
+// and clamped, with no glide [07 R-CAM-01 §12]. Nanolathe's presentation holds
+// no separate desired-origin word, so copying the target into it — which retail
+// does — has no observable counterpart here.
+func (c *Camera) JumpTo(x, z int32) { // [07 R-CAM-01 §12]
+	if c == nil {
+		return
+	}
+	c.X, c.Z = x, z
+	c.Clamp()
+}
+
+// JumpToBattleViewCenter jumps so that the map-pixel point (x, z) is seen at
+// the centre of the battle viewport [07 R-CAM-01 §12][03 §4.1]. It is the
+// battle-start placement writer for both the campaign start-position special
+// and the skirmish commander.
+//
+// Retail's contract is `origin = point - viewport/2`, because a retail camera
+// origin is the world point drawn at the viewport's top-left corner. This
+// build's origin is instead the world point drawn at the *framebuffer's*
+// top-left corner: the world is composed across the whole framebuffer and the
+// chrome painted over it, and the projection subtracts OriginX/OriginY back out
+// of the beam offset for exactly that reason (internal/client world draw). The
+// two origins therefore differ by the viewport's top-left inset, and this frame
+// of reference is what the clamp already assumes (the maximum is
+// mapSize - framebuffer, not mapSize - viewport).
+//
+// Converting retail's formula into it once, here, keeps every caller honest:
+//
+//	origin = (point - OriginX - viewportW/2, point - OriginY - viewportH/2)
+//
+// At 640x480 that is point - 384 and point - 240. Halving the framebuffer
+// instead — point - 320, point - 240 — is right only by accident on the Z axis,
+// where the 32-pixel insets are symmetric; on X it lands the target 64 pixels
+// right of centre. Both halvings are truncating integer divides, as retail's
+// are.
+func (c *Camera) JumpToBattleViewCenter(x, z int32) { // [07 R-CAM-01 §12]
+	if c == nil {
+		return
+	}
+	viewW, viewH := c.BattleView()
+	c.JumpTo(x-OriginX-viewW/2, z-OriginY-viewH/2)
+}
+
 // Pan applies dx,dz to the camera and then clamps per [07 §10] C3.
 // When terrain is available, MapW/MapH are the playable extents PlayRight/PlayBottom
 // (Wpix-32/Hpix-128) set at void-fixup time [P1-15], not the raw Wpix/Hpix;

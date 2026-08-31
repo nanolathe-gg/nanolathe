@@ -2283,6 +2283,56 @@ continues. The call sites in this document use widths 200 (disc prompts),
 320 (map/save refusals), 480 (skirmish preflight), 500 (checksum and sound
 warnings), and the checksum text width `+ 20` for pending lobby errors.
 
+**Refinement (2026-08-31) — the labels are runtime gadgets, and what the
+constants above name.** Nothing in the paragraph above is wrong; three points
+it leaves implicit are worth stating, because reading `MSGBOX.GUI` and looking
+for the text control it describes finds none and leads straight to an
+unimplementable message box.
+
+*The authored file holds no text control at all.* `MSGBOX.GUI` is two gadgets:
+the `HEADER` panel (116,82,372,272; empty `panel=`, so the `BackTile` fallback
+of §4 fills it) and the `OK` button (264,208,80,42, text `OK`, quickkey 13). Its
+`crdefault`, `escdefault` and `defaultfocus` are all already `OK`, so the
+opener's write of the Enter/Escape defaults is a no-op on the stock file. The
+`TEXT` labels are **appended to the window at run time**, one per wrapped line,
+through the same append-a-gadget helper the rest of the interface uses: kind 5
+(label), name `TEXT`, local x = 0, height 15, colour-foreground 15, and the
+attribute word 2 — which is the centring bit the label painter of §4 tests — and
+the line's text in the gadget's own text field. They are appended before the
+panel is resized, and the widening pass afterwards sets every kind-5 gadget's
+width to the finished panel width and re-stamps attribute 2.
+
+*`titleHeight` is the second gadget record's height field.* The opener addresses
+it as a fixed displacement from the start of the window's gadget array, and with
+the array's uniform record stride that displacement lands on gadget 1's height —
+for `MSGBOX.GUI` the `OK` button, so the term is 42 and the height is
+`lines × 25 + 82`. There is no title gadget in the file; the name is descriptive
+only.
+
+*`fontHeight` is the FNT's, not the GAF font's.* The line advance comes from the
+active FNT's height byte even though the same routine measures the line
+**widths** through the GUI's GAF font when one is loaded (§4). The two font
+paths are genuinely mixed here.
+
+*The wrapper.* It is a distinct routine from the label painter's wrapper. It
+copies the source byte by byte and measures the current line only when the
+**next** byte is a space, a newline or a hyphen; when the measured width has
+reached the wrap width it rewinds over the word just copied — in the output and
+the source together — to that separator, overwrites the separator with `CR` and
+inserts `LF` after it, and resumes from the byte after the separator. Splitting
+the finished buffer at `\n`, as the opener does, therefore yields a **trailing
+`CR` on every broken line**; control bytes have no glyph and measure zero (§4),
+so the carriage return neither draws nor advances the pen. The scratch buffer is
+sized `len + 2 + (len / (width / w("...")))·3`, which is an allocation bound and
+not a layout term.
+
+*Argument census.* Over all 73 call sites, 63 pass literal arguments the static
+reduction resolves: `showOK` is 1 at every one of them but a single site, and
+`autoWidth` is 1 at every one but a single (different) site, so the panel is
+essentially always sized to its content and always carries `OK`. The widths are
+500 (25 sites), 200 (18), 320 (12), 480 (5), 250 (1), 150 (1) and 400 (1). The
+remaining 10 sites compute their width.
+
 **Established fact — `YESORNO`.** Four openers: the CD-player question
 (§3), the surrender/exit question (§7), the lobby reject question
 (`%s: %s` from `Reject` and the player name, flags `0x100`), and the
@@ -5207,6 +5257,49 @@ window's font handle and foreground/background GUI color fields, anchored by
 the toy's authored rectangle); there is no separate count primitive and no
 display cap.
 
+**Refinement (2026-08-31) — which flag field, and what each format prints.**
+The paragraph above is right that the toy's flag bits select the format and that
+the sum spans both lists. Two things it leaves open have been read wrongly in
+implementation and are pinned here.
+
+*The flag field is the toy's authored `commonattribs` byte* — the `[COMMON]`
+key of that name, which the loader keeps in the runtime toy record immediately
+after `active`, in the same order the authored block lists them
+`[02 §6 "COMMON"]`.
+The writer walks the open page window's toys from index 1, skips anything whose
+kind is not the button kind, and tests `commonattribs & 4` first, then
+`commonattribs & 8`. An asset census over the reference install's 375 `guis/`
+files settles what authors them: **all 480 build-product buttons author
+`commonattribs = 4`** (`ARMAAP1:ARMACA`, `ARMVP1:ARMFAV`, `ARMCOM1:ARMSOLAR`, …,
+alongside `attribs = 32` and an **empty** `text=`), and **the eight stockpile
+buttons author 8** (`ARMAMD1:ARMMAKEANTI`, `ARMEMP1:EMPMAKENUKE`,
+`Armscab1:ARMMAKEANTI`, …). Every other side-panel button — the command buttons,
+`PREV`/`NEXT` — authors 0. A count therefore never appears on an authored
+caption, because the toys that carry a count author no caption; an
+implementation that gates the counter on the toy having authored text writes no
+count at all.
+
+*Bit `0x04` prints one number, not two.* The bit-4 branch resolves the toy's
+**name** to a unit definition id, and prints nothing when the name resolves to
+zero. The count query it then calls walks the builder's primary list and then
+its secondary list, admitting nodes whose flag word carries the
+counted-production bit and whose id field equals the requested id, and returns
+**one running total across both lists**. That single total is formatted `+%d`, so
+a queue of five in the primary list and two in the secondary shows `+7`, not
+`5 +2`. A zero total clears the slot. A format that prints the two lists as
+separate numbers is not a retail shape.
+
+*Bit `0x08`'s two numbers are two different quantities.* The bit-8 branch prints
+`%d` of a **byte on the builder unit** — the stockpile count — clearing the slot
+first and printing nothing when that byte is zero, and then appends ` +%d` of
+the same count query run with id **0**, which is the pending build-weapon queue
+(the `BUILDWEAPON` nodes the stockpile buttons enqueue through, §1). So the
+stockpile button reads "held +pending". The second number is not the secondary
+order list.
+
+*Whose queues.* The writer is handed the single selected builder the click
+handler resolved (§1), so only that unit's two lists are counted.
+
 ##### Order-queue overlay helpers (R-P0-11 §3)
 
 **Established, gate and ordering.** The world composer draws the selected
@@ -6914,6 +7007,15 @@ section rather than deleted.
 - Remaining command-specific cursor validity rules · §8 · static trace.
 - Manual unit and point target encoding, command-fire replacement, and the
   manual-versus-autonomous latch callers · §9, doc 06 §3.2 · static trace.
+- What writes latch-flag bit `0x40` while the MOBILEBUILD latch is armed. The
+  bit's own role — immediate-versus-special helptext — and its writers in the
+  order-button dispatcher's arming chain are established in §9, but that chain
+  never arms MOBILEBUILD; the battle-HUD build-button handler does, and it is
+  not recorded as touching the flags word. The bit is not cosmetic there: it
+  picks the drag/wake rectangle's outer colour-map entry, 6 when set and 4 when
+  clear (§6 "Frame composition passes"). · §6, §9 [R-P0-11 §1] · static trace
+  of the build-button handler's writes to the latch-flags word. Marked
+  `TODO(question)`.
 
 ### Camera, minimap, and session UI
 

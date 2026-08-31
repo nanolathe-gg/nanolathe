@@ -91,7 +91,7 @@ func footerShotSession(t *testing.T) (*battleSession, *contentSet, *camera.Camer
 	for ; step <= 100; step++ {
 		sess.Step(step)
 	}
-	centerOnCommanderForSession(sess, cam, footerShotW, footerShotH)
+	centerBattleStartCamera(sess, cam)
 	pal := loadPalette(cs)
 	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal)
 	if err != nil {

@@ -346,7 +346,16 @@ func recentred(draw uint32, bound int32) int32 {
 // Successful clones consume spray sample when spray configured, including final attempt; final sample written to soon-retired parent [06 §4.3].
 // Captures entry count once; clones appended during scan wait next tick [06 §5.1] [01 §6.2] I1.
 // Returns number of clones created.
-func (s *Service) AdvanceBursts(tick uint32, simRNG *rng.Simulation, weapons map[int32]*content.WeaponDef, muzzlePos func(piece int16) Vec3) int {
+//
+// muzzlePos re-runs the piece-to-world conversion for the anchor's own shooter
+// with the record's *stored* firing piece; it makes no COB call [06 §4.3]
+// [R-P0-07]. It reports false when that conversion cannot be made, in which
+// case the anchor keeps the position it already holds.
+// TODO(question): retail anchors always belong to a live shooter — a shooter's
+// death sweeps its anchors dead [06 §4.3] — so retail has no path where the
+// conversion fails. Holding the last position is our fail-safe, not a traced
+// behavior; implementing that death sweep would settle it.
+func (s *Service) AdvanceBursts(tick uint32, simRNG *rng.Simulation, weapons map[int32]*content.WeaponDef, muzzlePos func(shooter pool.Handle, piece int16) (Vec3, bool)) int {
 	if s == nil {
 		return 0
 	}
@@ -379,9 +388,10 @@ func (s *Service) AdvanceBursts(tick uint32, simRNG *rng.Simulation, weapons map
 		// Condition uses current remaining before decrement [06 §4.3].
 		if interval > 4 || (p.BurstRemaining%2 == 1) {
 			if muzzlePos != nil {
-				pos := muzzlePos(p.MuzzlePiece)
-				p.Pos = pos
-				p.StartPos = pos
+				if pos, ok := muzzlePos(p.Shooter, p.MuzzlePiece); ok {
+					p.Pos = pos
+					p.StartPos = pos
+				}
 			}
 		}
 		// Decrement remaining and advance deadline [06 §4.3] burst state copy.

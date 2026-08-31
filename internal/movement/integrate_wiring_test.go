@@ -52,11 +52,11 @@ func TestSearchFuncConfigBindsClassLayer(t *testing.T) {
 	if done {
 		t.Fatalf("one pop must not finish the search (status %d)", status)
 	}
-	sess := sys.sessions[int(h)]
-	if sess == nil {
+	ws := sys.sessions[int(h)]
+	if ws == nil || ws.session == nil {
 		t.Fatalf("session missing after partial search")
 	}
-	cfg := sess.Config()
+	cfg := ws.session.Config()
 	if cfg.PassableValue == nil {
 		t.Fatalf("config must carry the layer PassableValue binding [04 §6.1 R-DOC04-B]")
 	}

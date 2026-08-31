@@ -312,3 +312,56 @@ func TestVTOLRepairPatrolHoldsOnItsOwnDeadline(t *testing.T) {
 		t.Fatalf("interrupt deadline = %d, want 130 [04 R-ORD-01 §7]", n.Deadline)
 	}
 }
+
+// TestRepairWaterClause locks both halves of the air-repair water clause of
+// [04 R-ORD-01 §7], which was passed unconditionally while its TODO(T25) stood.
+func TestRepairWaterClause(t *testing.T) {
+	const sea = 40
+	bind := &QueueBinding{World: &WorldQueryAdapter{SeaLevel: func() uint8 { return sea }}}
+
+	mk := func(def *content.UnitDef, y int32) *units.Unit {
+		u := &units.Unit{Def: def, Y: numeric.Fixed(int64(y) * 65536)}
+		q := QueueForUnit(u)
+		q.SetBinding(bind)
+		return u
+	}
+	targetDef := &content.UnitDef{UnitName: "tgt", MaxDamage: 100, ModelTop: 6}
+	air := &content.UnitDef{UnitName: "air", CanFly: true, CanReclamate: true}
+	amphibAir := &content.UnitDef{UnitName: "amphair", CanFly: true, Amphibious: true, CanReclamate: true}
+	walker := &content.UnitDef{UnitName: "walk", CanReclamate: true, MaxWaterDepth: 10}
+
+	hurt := func(y int32) *units.Unit {
+		u := mk(targetDef, y)
+		u.Health = 50
+		u.Move.Mode = 1
+		return u
+	}
+
+	// Target top at 36+6 = 42, above sea level 40: an aircraft repairs it.
+	if !repairAdmission(mk(air, 60), hurt(36)) {
+		t.Fatalf("aircraft should repair a target whose top is above water")
+	}
+	// Target top at 30+6 = 36, under sea level 40: retail refuses.
+	if repairAdmission(mk(air, 60), hurt(30)) {
+		t.Fatalf("aircraft must refuse a target whose top is under water")
+	}
+	// The amphibious disjunct rescues the air half.
+	if !repairAdmission(mk(amphibAir, 60), hurt(30)) {
+		t.Fatalf("amphibious aircraft should repair a submerged target")
+	}
+	// A walker wades to its own MaxWaterDepth: sea-10 = 30 <= top.
+	if !repairAdmission(mk(walker, 38), hurt(30)) {
+		t.Fatalf("walker should repair a target within its wading depth")
+	}
+	if repairAdmission(mk(walker, 38), hurt(20)) {
+		t.Fatalf("walker must refuse a target below its wading depth")
+	}
+
+	// No world adapter: the clause passes rather than abandoning the repair.
+	loose := &units.Unit{Def: air}
+	tgt := &units.Unit{Def: targetDef, Health: 50}
+	tgt.Move.Mode = 1
+	if !repairAdmission(loose, tgt) {
+		t.Fatalf("unbound queue should not fail the water clause")
+	}
+}

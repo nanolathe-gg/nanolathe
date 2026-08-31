@@ -34,20 +34,44 @@ func (s *System) ReleaseGoal(n *orders.Node) bool {
 	return true
 }
 
+// installGroundPayload publishes n's new goal payload [04 R-ORD-01 §1].
+//
+// The pending `0x80` an installer raises belongs to the record it is installing
+// FOR, never to another record. [R-ORD-01 §1] describes the goal payload as a
+// field of the record ("it reads and writes the record fields of §3.2: ... and
+// the goal payload"), and the four installers "first release the previous
+// payload (raising pending `0x80`) ... and finish by clearing pending bits
+// `0x20`-`0x200`" — so the self-raise is cancelled by the installer's own
+// closing clear and is never observable. A record OTHER than n keeps its own
+// payload field; nothing about installing for n detaches it [04 R-ORD-01 §0].
+//
+// Corrected 2026-08-31 (ground movement was frozen game-wide). This raised
+// `0x80` on the record that happened to hold the single per-mover payload slot
+// when it was not n. A patrol chain is several `Patrol` records on one mover:
+// the record ahead sits at phase 2 behind gate `0xE0` waiting for its leg's
+// verdict while the pump walks on to the record behind it, whose phase 1
+// installs its own point goal. The stolen-slot `0x80` then satisfied that
+// `0xE0` outright, and doc 04's path-outcome mapping for the movement families
+// maps a `Patrol` record's stale bit to code 6 — rotate to the tail with phase
+// reset to 1. Every leg therefore "arrived" on the tick it was armed and the
+// chain spun in place: over an AC01 run the raise fired 37,196 times and the
+// whole army's largest displacement was 20 world units. Retail patrols travel,
+// so the cross-record raise is disproved by the outcome table it feeds.
+//
+// TODO(question): retail's payload is a record field, so two records on one
+// mover can each hold one; this build keeps a single per-mover slot, so
+// installing for n evicts another record's payload outright. That eviction is a
+// representation artifact of the single slot and deliberately raises no bit —
+// the evicted record reinstalls when its own phase 1 next runs. Whether retail
+// lets a non-head record's payload stay live alongside the head's, and what
+// drives the mover if so, is untraced [04 §8.3][04 R-ORD-01 §1]. A trace of the
+// goal-handle bind at the mover would settle it.
 func (s *System) installGroundPayload(owner pool.Handle, n *orders.Node, goal path.Goal, x, z numeric.Fixed) bool {
 	if s == nil || n == nil {
 		return false
 	}
-	if prior := s.moveGoals[owner]; prior != nil {
-		if prior.order != n {
-			prior.order.Satisfied |= 0x80
-		}
-		delete(s.moveGoals, owner)
-	}
+	delete(s.moveGoals, owner)
 	if prior := s.airOrders[owner]; prior != nil {
-		if prior.order != n {
-			prior.order.Satisfied |= 0x80
-		}
 		s.releaseAirGoalForNode(owner, prior.order)
 	}
 	if s.moveGoals == nil {
@@ -103,6 +127,14 @@ func worldCellCenter(c int32) numeric.Fixed { return numeric.Fixed(int64(c) << 2
 // InstallAirGoal binds the existing flight marker family. Flags are marker
 // flags supplied by the order seam; the constructor still establishes the
 // required point/follow family bits before optional flags are added.
+//
+// It carries the same rule as installGroundPayload above: the `0x80` an
+// installer raises belongs to the record being installed for, so evicting
+// another record from this build's single per-mover slot raises nothing
+// [04 R-ORD-01 §0][04 R-ORD-01 §1]. `VTOL_Patrol` is a record chain exactly as
+// `Patrol` is, and the outcome table gives it the same phase-per-satisfied-visit
+// advance, so the cross-record raise cycled an air patrol's waypoints without
+// flying them.
 func (s *System) InstallAirGoal(req orders.AirGoalRequest) bool {
 	if s == nil || req.Node == nil {
 		return false
@@ -115,17 +147,9 @@ func (s *System) InstallAirGoal(req orders.AirGoalRequest) bool {
 		return false
 	}
 	if prior := s.airOrders[req.Owner]; prior != nil {
-		if prior.order != req.Node {
-			prior.order.Satisfied |= 0x80
-		}
 		s.releaseAirGoalForNode(req.Owner, prior.order)
 	}
-	if prior := s.moveGoals[req.Owner]; prior != nil {
-		if prior.order != req.Node {
-			prior.order.Satisfied |= 0x80
-		}
-		delete(s.moveGoals, req.Owner)
-	}
+	delete(s.moveGoals, req.Owner)
 	var marker *airMarker
 	if req.Target != 0 {
 		marker = s.newFollowUnitMarker(u, req.Target)

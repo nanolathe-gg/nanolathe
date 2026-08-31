@@ -156,17 +156,29 @@ func TestMinimapDisplayDrawClickRelationship(t *testing.T) {
 	}
 }
 
-func TestDrawMinimapLayoutUsesLetterboxAndMarker(t *testing.T) {
+// TestDrawMinimapLayoutDrawsPictureOnlyLocks the corrected contract: the
+// minimap carries its radar picture and nothing else. The three superseded
+// tests here asserted a five-pixel camera cross at "marker mode" 2, its arm
+// clipping, and its absence at mode 0. That figure is not a minimap feature at
+// all — the world composer draws it over the game viewport at the ground
+// resolver's world point, and only in film mode [03 §3.12].
+func TestDrawMinimapLayoutDrawsPictureOnly(t *testing.T) {
 	playW, playH := int32(608), int32(352)
 	layout := camera.LayoutMinimap(playW, playH)
 	dst := hud.Rect{X1: 10, Y1: 20, X2: 135, Y2: 145}
 	c := &Client{width: 160, height: 170, indexed: make([]uint8, 160*170)}
 	surf := &render.RadarSurface{W: 1, H: 1, Pitch: 4, Bits: []byte{7}}
-	markerX, markerY := layout.PadX+layout.W/2, layout.PadY+layout.H/2
-	c.DrawMinimapLayout(surf, dst, layout, 2, markerX, markerY, 9)
-	dx, dy, ok := layout.CanvasToDisplay(markerX, markerY, dst.X1, dst.Y1, 126, 126)
-	if !ok || c.indexed[int(dy)*c.width+int(dx)] != 9 {
-		t.Fatalf("marker did not land in canonical display transform at %d,%d", dx, dy)
+	c.DrawMinimapLayout(surf, dst, layout)
+	centerX, centerY := layout.PadX+layout.W/2, layout.PadY+layout.H/2
+	dx, dy, ok := layout.CanvasToDisplay(centerX, centerY, dst.X1, dst.Y1, 126, 126)
+	if !ok || c.indexed[int(dy)*c.width+int(dx)] != 7 {
+		t.Fatalf("radar picture did not land in the canonical display transform at %d,%d", dx, dy)
+	}
+	// Nothing but the authored surface's own index may be written.
+	for _, v := range c.indexed {
+		if v != 0 && v != 7 {
+			t.Fatalf("minimap wrote index %d, which is not the radar picture", v)
+		}
 	}
 	// Letterbox bars are untouched by the picture blit, while the interior is
 	// populated from the same authored surface [07 §10].
@@ -178,71 +190,6 @@ func TestDrawMinimapLayoutUsesLetterboxAndMarker(t *testing.T) {
 	}
 	if layout.PadY > 0 && c.indexed[int(barY)*c.width+int(barX)] != 0 {
 		t.Fatalf("letterbox bar was written at %d,%d", barX, barY)
-	}
-}
-
-func TestDrawMinimapLayoutClipsEveryMarkerArmToFittedRect(t *testing.T) {
-	tests := []struct {
-		name    string
-		playW   int32
-		playH   int32
-		topLeft bool
-	}{
-		// Wide maps have vertical letterbox bars. At the top-left fitted pixel,
-		// only the crossing and inward arms may be written.
-		{name: "wide top-left", playW: 640, playH: 480, topLeft: true},
-		{name: "wide bottom-right", playW: 640, playH: 480},
-		// Tall maps exercise the corresponding horizontal bars.
-		{name: "tall top-left", playW: 480, playH: 640, topLeft: true},
-		{name: "tall bottom-right", playW: 480, playH: 640},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			layout := camera.LayoutMinimap(tc.playW, tc.playH)
-			// Place the center at each fitted edge, not at a canvas edge. This
-			// catches a marker that clips to the 126-pixel canvas but not radar.
-			centerX, centerY := layout.Right(), layout.Bottom()
-			if tc.topLeft {
-				centerX, centerY = layout.PadX, layout.PadY
-			}
-			c := &Client{width: 126, height: 126, indexed: make([]uint8, 126*126)}
-			surf := &render.RadarSurface{W: 1, H: 1, Pitch: 4, Bits: []byte{7}}
-			c.DrawMinimapLayout(surf, hud.Rect{X1: 0, Y1: 0, X2: 125, Y2: 125}, layout, 2, centerX, centerY, 9)
-			for y := int32(0); y < 126; y++ {
-				for x := int32(0); x < 126; x++ {
-					got := c.indexed[int(y)*126+int(x)]
-					if got != 9 {
-						continue
-					}
-					canvasX, canvasY, ok := layout.DisplayToCanvas(x, y, 0, 0, 126, 126)
-					if !ok || !layout.HitTest(canvasX, canvasY) {
-						t.Fatalf("marker pixel at display %d,%d mapped outside fitted rect to %d,%d", x, y, canvasX, canvasY)
-					}
-				}
-			}
-			found := false
-			for _, v := range c.indexed {
-				if v == 9 {
-					found = true
-					break
-				}
-			}
-			if !found {
-				t.Fatal("fitted marker crossing was not drawn")
-			}
-		})
-	}
-}
-
-func TestDrawMinimapLayoutMarkerModeOffDoesNotDraw(t *testing.T) {
-	layout := camera.LayoutMinimap(640, 480)
-	c := &Client{width: 126, height: 126, indexed: make([]uint8, 126*126)}
-	surf := &render.RadarSurface{W: 1, H: 1, Pitch: 4, Bits: []byte{7}}
-	c.DrawMinimapLayout(surf, hud.Rect{X1: 0, Y1: 0, X2: 125, Y2: 125}, layout, 0, layout.PadX+layout.W/2, layout.PadY+layout.H/2, 9)
-	for _, v := range c.indexed {
-		if v == 9 {
-			t.Fatal("marker mode 0 drew viewport marker")
-		}
 	}
 }
 
@@ -345,7 +292,7 @@ func TestMinimapMappedFollowsExploredMaskEachTick(t *testing.T) {
 	c := &Client{width: camera.MinimapLongSide, height: camera.MinimapLongSide,
 		indexed: make([]uint8, camera.MinimapLongSide*camera.MinimapLongSide)}
 	dst := hud.Rect{X1: 0, Y1: 0, X2: camera.MinimapLongSide - 1, Y2: camera.MinimapLongSide - 1}
-	c.DrawMinimapLayout(final, dst, layout, 0, 0, 0, 0)
+	c.DrawMinimapLayout(final, dst, layout)
 	seen := map[uint8]bool{}
 	for _, v := range c.indexed {
 		seen[v] = true

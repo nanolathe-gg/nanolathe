@@ -645,6 +645,20 @@ so a target closer than one world unit horizontally quantizes to a pitch of
 line-of-sight executor (writing absolute yaw, without the heading subtraction),
 in the ordinary creator, and in projectile guidance.
 
+**Implementation note (2026-08-31, play-test PT4).** Both operands of the pitch
+expression are written in **muzzle-minus-target** order and the vertical term is
+then negated, so the value handed to the conversion is `target.Y - muzzle.Y`: a
+target above the muzzle aims up, one below aims down. An implementation whose
+own delta convention is target-minus-muzzle must drop the negation rather than
+keep it. Keeping both inverts every direct-fire pitch, and because a muzzle
+piece sits above a ground unit's origin the ordinary case is a target slightly
+*below* the muzzle — so an inverted solver makes every shot climb away from its
+target and never impact. The operand order also decides the truncation: the
+shift is arithmetic, so `-(int16)(dy >> 16)` and `(int16)((-dy) >> 16)` differ
+by one whole world unit for every negative delta. Nanolathe carried the
+inverted form until this play-test, and the result was a game in which nothing
+was ever damaged.
+
 **Established fact:** The angular-drift gate compares the slot's stored angles
 against a wanted pair:
 
@@ -1102,6 +1116,22 @@ reason to authorize a shot. A non-negative piece argument (the burst
 re-query, §4.3) uses that piece directly and makes no COB call. The root
 projectile records the muzzle piece identity so a later burst clone can
 re-query the muzzle world position `[R-P0-07]`.
+
+**Unknown — the sense of "added to the unit's world position".** The sentence
+above does not say which sign the composed offset's Z carries when it is added,
+and the two are tens of whole world units apart on a long-barrelled model. The
+composed piece offset is in model space, which is mirrored in Z against world
+space: the model pass narrows a model-relative vertex as `hi16(-vz)` while the
+unit's own position enters the blit unnegated `[03 R-RAST-01 §2]`. A consumer
+that wants the muzzle to sit at the barrel the model pass draws therefore owes
+that mirror. Two sibling consumers have already been settled the same way and
+independently of each other — the factory build plate, by the stock yard maps
+(`[05 "Factory production lifecycle"]`), and the nanolathe source point, by the
+two projections it has to agree with (`[03 §5.5 "The nano source point's
+coordinate space"]`) — but neither is evidence for this one, because a muzzle
+point is consumed by projectile spawn arithmetic rather than by a draw.
+Decider: the `ta_probe_xz` fixture of `[03 §2.4]`, which settles the sense of a
+composed offset directly.
 
 **Established fact:** FirePrimary, FireSecondary, or FireTertiary is a deferred
 zero-cell callback and RockUnit is a deferred two-cell callback. RockUnit's
@@ -4531,6 +4561,22 @@ damage".
   over the root expression.
 - Target replacement during an outstanding Aim, and malformed-state
   interactions around the closed family readiness gates · §3.4 · static trace.
+- **The bearing's operand order and the relative-to-absolute yaw conversion,
+  taken together** (2026-08-31, play-test PT4) · §3.3 · static trace of
+  `atan2q`'s operand order and of the turret executor's conversion. §3.3 writes
+  the aim bearing as `atan2q(p.X - t.X, p.Z - t.Z)` — muzzle minus target, which
+  is the reverse of the direction of fire — and separately says the turret's
+  aim-time yaw is that bearing **minus the unit heading**, converted back to
+  absolute at fire time. Those two statements cannot both be transcribed
+  literally on top of a target-minus-muzzle delta convention: doing so aims the
+  COB turret at the wrong angle. Nanolathe currently commands the absolute
+  target-minus-muzzle bearing, which is the form that demonstrably puts
+  projectiles on their targets; subtracting the unit heading on top of it
+  lengthened the scripted turret turn and lowered the shot count in an Arm
+  campaign mission-0 run. Until this is traced, the heading commanded to the COB
+  Aim callback and the drift gate that would read it are both untraced, and the
+  §3.3 drift gate above therefore has no implementation. Marked in code as
+  `TODO(question)` at the aim-angle site.
 - Boundary between the general muzzle query and the per-family dropped/meteor
   muzzle paths, and the side effects of the shared muzzle fallback on
   malformed piece indices · §3.4 [R-P0-07] · static trace. Medium confidence

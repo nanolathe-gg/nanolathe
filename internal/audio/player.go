@@ -160,8 +160,9 @@ func ConvertSample(s *Sample, volume float64, pan float64, dstRate int) []byte {
 			}
 		}
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// Pan -1 left, 1 right, 0 center. Use balance: leftVol = vol*(1 - pan) blend.
+	// Apply volume and pan — the stereo branch of the mixer's placement step
+	// [03 §8.3]. Pan -1 is left, 1 is right, 0 is centred; the balance is
+	// leftVol = vol * (1 - pan) blended against the opposite channel.
 	var leftVol, rightVol float64
 	if pan < -1 {
 		pan = -1

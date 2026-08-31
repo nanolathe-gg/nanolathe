@@ -216,6 +216,35 @@ func airInterruptMask(id ID) uint32 {
 }
 
 // ---------------------------------------------------------------------------
+// VTOL_LandIfCan [04 R-AIR-01 §6]
+// ---------------------------------------------------------------------------
+
+// vtolLandIfCanHandler gives the landing machine a descriptor handler whose
+// only job is to let the record finish.
+//
+// The machine itself is `execVTOLLandIfCan` in internal/movement, which the
+// mover tick runs off the head record because it owns the air marker family.
+// It has always reached touchdown; what it could not do is say so. With no
+// handler here the record fell into the pump's `handlerlessButDriven` arm,
+// which deliberately writes none of a driven record's fields — correct while
+// the machine is running, and terminal once it stops, because the record then
+// sat at the head forever and every later order queued behind it. `Stop` on an
+// airborne aircraft landed it and jammed its queue; the next order the player
+// gave never ran.
+//
+// The hand-off is the one the four air-attack executors already use, so the
+// pump stays the sole dispatcher [04 §3.3] and the marker work stays in the
+// package that owns markers [04 R-AIR-01 §4]. The runner's answer for this
+// descriptor reads the executor's outcome rather than re-running it.
+//
+// `VTOL_Standby` deliberately keeps its place in `handlerlessButDriven`: it is
+// a standing auto-op record with its own idle-refill lifecycle [04 §3.3], not a
+// machine that finishes, and giving it a completion is a separate question.
+func vtolLandIfCanHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
+	return airHandOff(u, n, satisfied, tick)
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -225,6 +254,7 @@ var vtolAirHandlers = []struct {
 	name    string
 	handler func(*units.Unit, *Node, uint32, uint32) Code
 }{
+	{"VTOL_LandIfCan", vtolLandIfCanHandler},
 	{"VTOL_Evade", vtolEvadeHandler},
 	{"VTOL_SeekAttack", vtolSeekHandler},
 	{"VTOL_SeekGuard", vtolSeekHandler},

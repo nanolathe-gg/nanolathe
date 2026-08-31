@@ -406,10 +406,11 @@ func (s *Session) publishSnapshot(tick uint32) {
 	// one coherent tick-end view and never needs to bind callbacks or inspect
 	// mutable session services [03 §3.4][03 §3.9].
 	published.Radar.Contacts = published.Radar.Contacts[:0]
-	// The minimap mode is session state supplied by the authoritative composer
-	// input seam. Preserve its exact value; presentation must not manufacture a
-	// viewport marker mode at the frame boundary [03 §3.12][I6].
-	published.Radar.MarkerMode = s.RadarMarkerMode
+	// The debug display mode is session state written only by the film-mode key
+	// set [03 §3.12][07 R-CAM-01 §9]. Preserve its exact value; presentation
+	// must not manufacture a mode at the frame boundary [I6]. The frame field's
+	// "MarkerMode" name predates the trace that identified the byte.
+	published.Radar.MarkerMode = s.DebugDisplayMode
 	var sensorInputs []visibility.SensorInput
 	if s.Vis != nil {
 		sensorInputs = s.Vis.SensorInputs()

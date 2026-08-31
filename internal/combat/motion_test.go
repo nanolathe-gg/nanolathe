@@ -520,10 +520,15 @@ func TestYawPitchDerivation(t *testing.T) {
 	if yaw != 0 {
 		t.Fatalf("yaw 0 got %d want 0", yaw)
 	}
-	// The direct solver negates the whole-unit vertical operand, so +Y gives
-	// the signed -45-degree result 57344 [06 §3.3].
-	dy := fix(65536)
-	pitch := PitchFromDelta(fix(65536), dy, fix(0))
+	// [06 §3.3] the vertical operand is -(p.Y - t.Y) = t.Y - p.Y, so a target
+	// one whole unit ABOVE the muzzle aims +45 degrees (8192) and one unit
+	// below aims -45 degrees (57344). The earlier expectation here had those
+	// two swapped, which is the inversion this test now locks against.
+	pitch := PitchFromDelta(fix(65536), fix(65536), fix(0))
+	if pitch != numeric.Angle(8192) {
+		t.Fatalf("pitch +45 got %d want 8192", pitch)
+	}
+	pitch = PitchFromDelta(fix(65536), fix(-65536), fix(0))
 	if pitch != numeric.Angle(57344) {
 		t.Fatalf("pitch -45 got %d want 57344", pitch)
 	}

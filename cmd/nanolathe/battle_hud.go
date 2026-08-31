@@ -273,7 +273,7 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 	if pal == nil {
 		return nil, fmt.Errorf("battle HUD: PALETTE.PAL tables are required [03 §4.3]")
 	}
-	side, err := battleSide(sess, cat)
+	side, err := battleSide(fs, sess, cat)
 	if err != nil {
 		return nil, err
 	}
@@ -534,46 +534,101 @@ func battleFrame(g *formats.GAF, name string) (*formats.GAFFrame, error) {
 	return e.Frames[0].Frame, nil
 }
 
-func battleSide(sess *session.Session, cat *content.Catalog) (*content.SideDef, error) {
+// battleSide resolves the side whose SIDEDATA anchors, fonts and interface GAF
+// the battle HUD is built from.
+//
+// Skirmish retains the lobby's authored SIDE ordinal. A campaign mission has no
+// lobby row: retail writes the registry `side` word (0 Arm, 1 Core) into the
+// local player's side record when `SINGLE.GUI` opens, and the new-game panel
+// then admits a campaign to the list only when its `[HEADER] campaignside`
+// equals that side's name case-insensitively, or the literal `ALL`
+// [08 "Enumeration of campaigns"][07 R-FE-01 §4]. The campaign file's
+// `campaignside` is therefore the authored record of the side the mission is
+// played as whenever it names one, and it is the only such record a session
+// started from a campaign path carries.
+//
+// This replaces a scan of the local player's units for one whose `UnitName`
+// matched a side's `Commander`. That was invented: nothing in retail derives
+// the interface side from unit identity, and the scan simply failed on the Arm
+// campaign's first mission (AC01), which gives the local player no commander at
+// all — the HUD then refused to build with "local side -1 is unavailable".
+func battleSide(fs vfs.FSOps, sess *session.Session, cat *content.Catalog) (*content.SideDef, error) {
 	if cat == nil || len(cat.Sides) == 0 {
 		return nil, fmt.Errorf("battle HUD: no compiled side definitions [02 §6]")
 	}
 	idx := 0
-	if sess != nil && sess.Mission != nil && sess.Mission.Type == mission.TypeCampaign { // campaign missions use commander identity below
-		idx = -1
-	}
 	if sess != nil {
-		// Skirmish retains the lobby's authored SIDE ordinal. Mission sessions
-		// do not have a lobby row, so their local commander selects the side.
-		if sess.Mission == nil || sess.Mission.Type != mission.TypeCampaign {
-			owner := int(sess.LocalOwner)
-			if owner >= 0 && owner < len(sess.Skirmish.Players) {
-				idx = sess.Skirmish.Players[owner].Side
-			}
+		if sess.Mission != nil && sess.Mission.Type == mission.TypeCampaign {
+			return campaignBattleSide(fs, sess.Mission, cat)
 		}
-		if idx < 0 {
-			if sess.Units != nil {
-				for _, u := range sess.Units.Iter() {
-					if u == nil || !u.Alive || u.Owner != sess.LocalOwner || u.Def == nil {
-						continue
-					}
-					for i, side := range cat.Sides {
-						if side != nil && strings.EqualFold(side.Commander, u.Def.UnitName) {
-							idx = i
-							break
-						}
-					}
-					if idx >= 0 {
-						break
-					}
-				}
-			}
+		owner := int(sess.LocalOwner)
+		if owner >= 0 && owner < len(sess.Skirmish.Players) {
+			idx = sess.Skirmish.Players[owner].Side
 		}
 	}
 	if idx < 0 || idx >= len(cat.Sides) || cat.Sides[idx] == nil {
 		return nil, fmt.Errorf("battle HUD: local side %d is unavailable [02 §6]", idx)
 	}
 	return cat.Sides[idx], nil
+}
+
+// campaignBattleSide resolves a campaign mission's interface side from the
+// campaign file's `[HEADER] campaignside` name [08 "Enumeration of campaigns"].
+func campaignBattleSide(fs vfs.FSOps, m *mission.Mission, cat *content.Catalog) (*content.SideDef, error) {
+	logical := ""
+	if m != nil {
+		logical = m.CampaignPath
+	}
+	name, err := campaignSideName(fs, logical)
+	if err != nil {
+		return nil, err
+	}
+	// TODO(question): `campaignside=ALL` (and a campaign file with no
+	// `campaignside` key, which the enumerator skips outright) names no side.
+	// Retail still has one, because the local player's side record was written
+	// from the registry `side` word before the campaign was ever chosen
+	// [07 R-FE-01 §4]; nothing here carries that word into a battle. Plumbing
+	// the shell's side word through battle entry settles it. Until then this is
+	// a diagnostic, not a default: no stock campaign authors ALL.
+	if name == "" || name == "ALL" {
+		return nil, hudAssetError(fs, logical,
+			fmt.Sprintf("campaign HEADER campaignside naming a compiled side, got %q [08 \"Enumeration of campaigns\"]", name),
+			fmt.Errorf("campaignside does not name a side"))
+	}
+	for _, side := range cat.Sides {
+		if side != nil && strings.EqualFold(strings.TrimSpace(side.Name), name) {
+			return side, nil
+		}
+	}
+	return nil, hudAssetError(fs, logical,
+		fmt.Sprintf("a compiled side named %q [02 §6]", name),
+		fmt.Errorf("campaignside %q matches no compiled side", name))
+}
+
+// campaignSideName reads the campaign file's `[HEADER] campaignside` value,
+// upper-cased and trimmed. An absent HEADER or key yields the empty string;
+// only an unreadable or unparsable file is an error.
+func campaignSideName(fs vfs.FSOps, logical string) (string, error) {
+	if fs == nil || strings.TrimSpace(logical) == "" {
+		return "", fmt.Errorf("battle HUD: campaign mission carries no campaign file path [08 \"Enumeration of campaigns\"]")
+	}
+	data, err := fs.ReadFileLimit(logical, int64(formats.DefaultTDFLimits().MaxBytes))
+	if err != nil {
+		return "", hudAssetError(fs, logical, "the campaign file naming the mission's side", err)
+	}
+	doc, err := formats.ParseTDF(data)
+	if err != nil {
+		return "", hudAssetError(fs, logical, "a parsable campaign TDF", err)
+	}
+	if doc == nil || doc.Root == nil {
+		return "", nil
+	}
+	header := doc.Root.Section("HEADER")
+	if header == nil {
+		return "", nil
+	}
+	side, _ := header.StringValue("campaignside", "")
+	return strings.ToUpper(strings.TrimSpace(side)), nil
 }
 
 // blitBattlePanel mirrors TotalA's battle-shell call sites: the desired final
@@ -895,15 +950,12 @@ func (h *retailBattleHUD) drawMinimap(c *client.Client, b *battleSession, cur *f
 	if surf == nil {
 		return
 	}
-	viewW, viewH := b.cam.EffectiveView()
-	centerX, centerZ := b.cam.X+viewW/2, b.cam.Z+viewH/2
-	playW, playH, ok := b.sess.PlayArea()
-	if !ok {
-		return
-	}
-	markerX, markerY := render.RadarProjection(centerX, centerZ, 0, playW, playH, layout)
 	// Drawing and input receive the same layout and destination rectangle.
-	c.DrawMinimapLayout(surf, dst, layout, cur.Radar.MarkerMode, markerX+layout.PadX, markerY+layout.PadY, h.paletteIndex(15))
+	// Retail's minimap carries contacts and nothing else: no camera marker, no
+	// viewport rectangle. The five-pixel cross that used to be passed here is a
+	// film-mode diagnostic the **world** composer draws over the game viewport
+	// [03 §3.12].
+	c.DrawMinimapLayout(surf, dst, layout)
 }
 
 func (h *retailBattleHUD) drawPausedTitle(c *client.Client) {
@@ -1365,26 +1417,89 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, offse
 		// A command button never draws its caption: the painter reads the art
 		// alone [07 R-HUD-03 §6]. Stock content authors these gadgets with an
 		// empty label anyway.
-		if !isCommand && gad.Kind == gui.KindButton && gad.Text != "" {
+		if !isCommand && gad.Kind == gui.KindButton {
 			text := gad.Text
 			if len(gad.Labels) != 0 {
 				text = gad.Labels[0]
 			}
-			if f != nil {
-				candidates := []string{gad.Name, gad.Text}
-				candidates = append(candidates, gad.Labels...)
-				for _, candidate := range candidates {
-					if label := hud.QueueCountLabel(f.OrderQueues, candidate); label != "" {
-						text += " " + label
-						break
-					}
-				}
+			// The count-label writer runs over the open page's toys after every
+			// enqueue or cancel and writes the count **into the toy's own text
+			// slot**; the ordinary window text pass then draws that slot with
+			// the window's font and the toy's authored rectangle and GUI colour
+			// fields [07 R-P0-11 §2]. The toy's `commonattribs` byte selects the
+			// format, bit 0x04 tested before bit 0x08:
+			//
+			//   0x04 — resolve the toy's *name* to a unit definition and write
+			//          "+%d" of that product's queued total; a zero total clears
+			//          the slot.
+			//   0x08 — the MAKENUKE/MAKEANTI stockpile toys: "%d" of the
+			//          builder's stockpile count, with " +%d" of the pending
+			//          build-weapon total appended.
+			//
+			// Stock content authors 0x04 on all 480 build-product buttons and
+			// 0x08 on the eight stockpile buttons; every other side-panel button
+			// authors 0 (asset census over the reference install's guis/*.gui).
+			// The 0x08 half is not written here: the committed frame carries no
+			// stockpile count for the selected builder, only the hovered unit's
+			// percentage, so there is nothing to format yet.
+			//
+			// This replaces a gate of `gad.Text != ""` that appended " N" to an
+			// authored caption. Every build-product button authors an empty
+			// caption, so the count could never appear on the only toys that
+			// carry one.
+			if f != nil && gad.CommonAttribs&0x04 != 0 {
+				text = productQueueCountLabel(f, gad.Name)
 			}
 			if text != "" {
 				c.UITextWidth(h.guiFont, text, int(r.X)+3, int(r.Y)+(int(r.H)-int(h.guiFont.Height))/2, int(r.W), h.guiColor(byte(gad.ColorF)))
 			}
 		}
 	}
+}
+
+// productQueueCountLabel is the bit-0x04 format of the count-label writer
+// [07 R-P0-11 §2]: the toy's name resolves to a product definition, and the
+// label is "+%d" of the counts summed over **both** the selected builder's
+// primary and secondary order lists for that product. A zero total clears the
+// label; there is no clamp and no display cap.
+//
+// It is deliberately not hud.QueueCountLabel, which sums the two lists into two
+// separate numbers and formats them as "%d", "+%d" or "%d +%d". Retail's
+// counter is one sum over both lists and the product-button format is always
+// "+%d"; the two-number form is not a retail shape. internal/hud is not this
+// unit's to change, so the correct label is written here and the divergence is
+// reported upstream.
+func productQueueCountLabel(f *frame.Frame, product string) string {
+	key := content.CanonicalKey(product)
+	if f == nil || key == "" || f.CommandPage.Builder == 0 {
+		return ""
+	}
+	// The writer is handed the single selected builder, so only that unit's
+	// queues are counted [07 R-P0-11 §1]. Retail additionally admits only nodes
+	// carrying the counted-production flag; internal/orders models no such flag
+	// yet, and only build nodes carry a product key at all, so matching on the
+	// product is equivalent over the queues nanolathe produces today.
+	total := uint32(0)
+	for i := range f.OrderQueues {
+		q := &f.OrderQueues[i]
+		if q.Unit != f.CommandPage.Builder {
+			continue
+		}
+		for _, o := range q.Primary {
+			if content.CanonicalKey(o.BuildProduct) == key {
+				total += o.BuildCount
+			}
+		}
+		for _, o := range q.Secondary {
+			if content.CanonicalKey(o.BuildProduct) == key {
+				total += o.BuildCount
+			}
+		}
+	}
+	if total == 0 {
+		return ""
+	}
+	return fmt.Sprintf("+%d", total)
 }
 
 // commandPageIsPaged reports the selected builder's page-shown bit (status bit

@@ -330,16 +330,35 @@ func TestRadarGameplayVisibilityUsesStealthAndInitCloak(t *testing.T) {
 	}
 }
 
-func TestRadarMarkerModeDefaultsToExplicitOff(t *testing.T) {
-	s := &Session{Snapshot: frame.NewBuffer(), RadarMarkerMode: 2}
+// TestDebugDisplayModeCyclesAndPublishesUnchanged locks the byte's three traced
+// writers [03 §3.12][07 R-CAM-01 §9]: battle entry and film-mode exit store zero,
+// and film mode's `m` key cycles 0,1,2,3,4,0. The publisher copies the value
+// through unchanged.
+func TestDebugDisplayModeCyclesAndPublishesUnchanged(t *testing.T) {
+	s := &Session{Snapshot: frame.NewBuffer()}
+	if s.DebugDisplayMode != 0 {
+		t.Fatalf("initial mode = %d, want the explicit off value", s.DebugDisplayMode)
+	}
+	for want := 1; want <= 4; want++ {
+		s.CycleDebugDisplayMode()
+		if int(s.DebugDisplayMode) != want {
+			t.Fatalf("cycle %d gave %d", want, s.DebugDisplayMode)
+		}
+	}
+	s.CycleDebugDisplayMode()
+	if s.DebugDisplayMode != 0 {
+		t.Fatalf("cycle past 4 gave %d, want the wrap to 0", s.DebugDisplayMode)
+	}
+	s.CycleDebugDisplayMode()
+	s.CycleDebugDisplayMode()
 	s.publishSnapshot(1)
 	if got := s.Snapshot.Current().Radar.MarkerMode; got != 2 {
-		t.Fatalf("marker mode = %d, want authoritative mode 2", got)
+		t.Fatalf("published mode = %d, want the session's 2", got)
 	}
-	s.RadarMarkerMode = 0
+	s.ResetDebugDisplayMode()
 	s.publishSnapshot(2)
 	if got := s.Snapshot.Current().Radar.MarkerMode; got != 0 {
-		t.Fatalf("marker mode = %d, want explicit mode-off", got)
+		t.Fatalf("published mode = %d, want the reset 0", got)
 	}
 }
 

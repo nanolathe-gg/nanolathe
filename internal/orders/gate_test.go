@@ -153,18 +153,26 @@ func TestUnwiredStaticMaskedRecordReachesTheDiagnosticArm(t *testing.T) {
 	}
 }
 
-// drivenDescriptors are the seven handler-less records another package runs
-// from its own per-unit step, reading and writing the record's phase, dynamic
-// gate and deadline as its state machine (handlerlessButDriven, pump.go). The
-// list is a fixed slice, not a map, so the assertions run in one order (I1).
+// drivenDescriptors are the handler-less records another package runs from its
+// own per-unit step, reading and writing the record's phase, dynamic gate and
+// deadline as its state machine (handlerlessButDriven, pump.go). The list is a
+// fixed slice, not a map, so the assertions run in one order (I1).
+//
+// `VTOL_LandIfCan` left this list on 2026-08-31 and the count went from seven
+// to six. It is still driven from the mover tick, but a machine that finishes
+// needs a way to say so: with no handler nothing freed the record on touchdown
+// and it sat at the head of the queue for the rest of the unit's life. It now
+// has a descriptor handler that hands off to the air runner, which reports the
+// executor's outcome rather than re-running it. See
+// TestLandIfCanCompletesOnTouchdown below.
 var drivenDescriptors = []string{
 	"BuildingBuild", "MobileBuild", "VTOL_MobileBuild", // internal/construction
 	"ReclaimUnit", "VTOL_ReclaimUnit", // internal/construction
-	"VTOL_LandIfCan", "VTOL_Standby", // internal/movement
+	"VTOL_Standby", // internal/movement
 }
 
-// TestDrivenRecordsKeepTheirOwnersScheduling covers the seven records the pump
-// does not drive. Correcting the record constructor touches every record's
+// TestDrivenRecordsKeepTheirOwnersScheduling covers the records the pump does
+// not drive. Correcting the record constructor touches every record's
 // birth, and these are the ones where the pump must then keep its hands off:
 // writing a result code over a live state machine's phase, gate or deadline is
 // the factory stall of PLAN 17 §0 row 3 (internal/construction/factory.go gates

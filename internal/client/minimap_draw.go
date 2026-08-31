@@ -21,9 +21,16 @@ func (c *Client) putIndexed(x, y int32, value byte) {
 
 // DrawMinimapLayout draws a radar surface through the canonical 126-pixel
 // canvas. The display rectangle may be scaled, but its aspect and letterbox
-// are always those in layout; bars remain untouched. markerCenterX/Y are
-// canvas-local coordinates and markerMode 2 draws the five-pixel cross.
-func (c *Client) DrawMinimapLayout(surf *render.RadarSurface, dst hud.Rect, layout camera.Minimap, markerMode byte, markerCenterX, markerCenterY int32, paletteViewport byte) {
+// are always those in layout; bars remain untouched.
+//
+// It draws no camera marker, because retail's minimap has none. The five-pixel
+// cross this used to paint here belongs to the **world** composition: the world
+// composer draws it, at debug display mode 2, over the game viewport at the
+// screen position of the ground resolver's world point — the point under the
+// pointer — and mode 2 is reachable only from film mode. See the corrected
+// [03 §3.12]; the superseded text called the figure a minimap camera marker
+// clipped to the minimap rect, and this drew it there.
+func (c *Client) DrawMinimapLayout(surf *render.RadarSurface, dst hud.Rect, layout camera.Minimap) {
 	if c == nil || surf == nil || surf.W <= 0 || surf.H <= 0 || len(surf.Bits) < surf.W*surf.H || layout.W <= 0 || layout.H <= 0 {
 		return
 	}
@@ -50,23 +57,6 @@ func (c *Client) DrawMinimapLayout(surf *render.RadarSurface, dst hud.Rect, layo
 			if sx >= 0 && sx < int32(surf.W) {
 				c.putIndexed(dl+x, dt+y, surf.Bits[int(sy)*surf.W+int(sx)])
 			}
-		}
-	}
-	if markerMode != 2 || paletteViewport == 0 {
-		return
-	}
-	// The marker is authored in the fixed 126-pixel canvas. Clip each arm
-	// pixel against the inclusive fitted radar rect before converting it to
-	// the display rectangle; clipping only the crossing lets the ±2 arms leak
-	// into aspect letterbox bars at the extreme map edges [03 §3.12][07 §10].
-	for _, p := range [][2]int32{{0, 0}, {-2, 0}, {2, 0}, {0, -2}, {0, 2}} {
-		canvasX, canvasY := markerCenterX+p[0], markerCenterY+p[1]
-		if !layout.HitTest(canvasX, canvasY) {
-			continue
-		}
-		displayX, displayY, ok := layout.CanvasToDisplay(canvasX, canvasY, dl, dt, dw, dh)
-		if ok {
-			c.putIndexed(displayX, displayY, paletteViewport)
 		}
 	}
 }

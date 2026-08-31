@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
@@ -166,4 +167,56 @@ func TestReconciledLeashAgreesBetweenGroundRowAndAirTwin(t *testing.T) {
 			t.Fatalf("%s: returned %d at distance 5 with leash 5; the compare is inclusive [R-STANCE-01 §4]", row.name, code)
 		}
 	}
+}
+
+// TestAirPatrolInstallsItsMarker covers the payload an air patrol had never
+// installed: its phase 2 called the point installer, which takes the canfly
+// release-only arm, so the record armed gate 0xE0 and waited for an arrival bit
+// nothing could raise.
+//
+// The geometry assertion is the one [04 R-ORD-02 §2] corrected on 2026-08-30:
+// the marker sits 320 world units BEYOND the waypoint on the far side from the
+// aircraft, not short of it.
+func TestAirPatrolInstallsItsMarker(t *testing.T) {
+	var got []AirGoalRequest
+	u := &units.Unit{Def: &content.UnitDef{UnitName: "flier", CanFly: true}, Alive: true}
+	u.X, u.Z = numeric.Fixed(100<<16), numeric.Fixed(500<<16)
+	q := QueueForUnit(u)
+	q.SetBinding(&QueueBinding{Movement: &MovementGoalAdapter{
+		InstallAir: func(req AirGoalRequest) bool { got = append(got, req); return true },
+		InstallPoint: func(PointGoalRequest) bool {
+			t.Fatalf("an air patrol must not install a ground point goal")
+			return false
+		},
+	}})
+
+	// Waypoint due +X of the aircraft at the same Z.
+	n := &Node{Owner: u.Handle, GoalX: numeric.Fixed(900 << 16), GoalZ: numeric.Fixed(500 << 16)}
+	installAirPatrolMarker(u, n)
+
+	if len(got) != 1 {
+		t.Fatalf("installs = %d, want 1 — the air patrol installed no payload", len(got))
+	}
+	if got[0].Radius != airPatrolArrivalRadius {
+		t.Fatalf("radius = %#x, want %#x", got[0].Radius, airPatrolArrivalRadius)
+	}
+	if got[0].Node != n {
+		t.Fatalf("install carried the wrong node identity")
+	}
+	// Beyond, not short: the marker's X must exceed the waypoint's, by the
+	// setback, and Z must be unchanged along this axis-aligned leg.
+	markerX := got[0].X.Raw() >> 16
+	if markerX <= 900 {
+		t.Fatalf("marker X = %d, want beyond the waypoint at 900 [04 R-ORD-02 §2 correction]", markerX)
+	}
+	if delta := markerX - 900; delta < airPatrolSetback-2 || delta > airPatrolSetback+2 {
+		t.Fatalf("marker overshoot = %d, want %d", delta, airPatrolSetback)
+	}
+	if markerZ := got[0].Z.Raw() >> 16; markerZ < 498 || markerZ > 502 {
+		t.Fatalf("marker Z = %d, want the waypoint's 500 on an axis-aligned leg", markerZ)
+	}
+
+	// No air seam bound: nothing installs and nothing panics.
+	loose := &units.Unit{Def: u.Def, Alive: true}
+	installAirPatrolMarker(loose, &Node{Owner: loose.Handle})
 }

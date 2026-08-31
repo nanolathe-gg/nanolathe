@@ -260,11 +260,19 @@ type Session struct {
 	visStatus  map[int]uint32
 	visDecloak map[int]uint32
 
-	// RadarMarkerMode is the composer-owned minimap mode byte. Its writer is
-	// not represented by the current simulation/session inputs; callers that
-	// have that authoritative mode may provide it here. Zero remains the
-	// explicit mode-off value until that source is wired [03 §3.12].
-	RadarMarkerMode uint8
+	// DebugDisplayMode is the world composer's debug display mode byte
+	// [03 §3.12]. Its writers are now traced and there are exactly three: the
+	// battle interface initializer zeroes it, film mode's `m` key cycles it
+	// `0..4` wrapping at 5, and leaving film mode zeroes it again
+	// [07 R-CAM-01 §9]. Mode 1 draws the terrain-grid wireframe and mode 2 the
+	// five-pixel ground-pick crosshair; both are film-mode diagnostics and
+	// neither is reachable without the developer password, so zero is the value
+	// ordinary play holds throughout.
+	//
+	// It is published unchanged through the frame as Radar.MarkerMode, which is
+	// a misnomer retained only because internal/frame is not this file's to
+	// rename: nothing about this byte concerns the radar.
+	DebugDisplayMode uint8
 
 	// Audio is a reference to the concrete internal/audio owner. Queue/cache/
 	// controller state and presentation draining live in that package; Session
@@ -1139,4 +1147,38 @@ func (s *Session) ContinueCampaign() bool {
 	// CONTINUE only follows the established post-battle transition [P1-01 §2.3]
 	// [P1-01 §7.5].
 	return s.TransitionTo(StateRouter)
+}
+
+// The debug display mode's writers [03 §3.12][07 R-CAM-01 §9]. Retail has
+// exactly three and they are all here:
+//
+//   - the battle interface initializer stores zero (ResetDebugDisplayMode);
+//   - film mode's `m` key increments the byte and wraps it to zero when the
+//     increment reaches 5, so the cycle is 0,1,2,3,4,0 (CycleDebugDisplayMode);
+//   - leaving film mode stores zero again (ResetDebugDisplayMode).
+//
+// Nanolathe implements neither developer mode nor film mode, so nothing calls
+// the cycle yet and the byte holds zero for the whole of ordinary play — which
+// is what retail does too: developer mode needs the six-word `+Now` password or
+// the registry pair, and film mode needs developer mode, so none of it is
+// reachable in a stock configuration [07 R-CAM-01 §9].
+
+// ResetDebugDisplayMode is the battle-entry and film-mode-exit writer.
+func (s *Session) ResetDebugDisplayMode() {
+	if s != nil {
+		s.DebugDisplayMode = 0
+	}
+}
+
+// CycleDebugDisplayMode is film mode's `m` key: increment, and wrap to zero on
+// reaching 5. The comparison is against the incremented value, so 4 is a valid
+// mode and 5 is never observable.
+func (s *Session) CycleDebugDisplayMode() {
+	if s == nil {
+		return
+	}
+	s.DebugDisplayMode++
+	if s.DebugDisplayMode == 5 {
+		s.DebugDisplayMode = 0
+	}
 }

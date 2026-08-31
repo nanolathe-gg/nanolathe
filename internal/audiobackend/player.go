@@ -22,7 +22,6 @@ type Backend struct {
 	ctx        *audio.Context
 	players    []*audio.Player
 	streams    []*audio.Player
-	next       int
 }
 
 // Capabilities describes the concrete presentation device surface.
@@ -114,19 +113,50 @@ func (b *Backend) PlaySample(sample *retailaudio.Sample, volume, pan float64) er
 		return nil
 	}
 	b.mu.Lock()
-	if len(b.players) < 8 {
-		b.players = append(b.players, player)
-	} else {
-		old := b.players[b.next]
-		if old != nil {
-			_ = old.Close()
+	b.reapLocked()
+	// The voice limit is compared against the voices that are still playing:
+	// retail's reaper frees every finished buffer from the application pump,
+	// so the mixer's steal only ever evicts a live voice [R-AUD-01 §1 step 2]
+	// [R-AUD-02 §2]. Without the reap the list saturated at eight voices ever
+	// started, and from the ninth cue on every play closed a sound that had
+	// only just begun.
+	for len(b.players) >= voiceLimit {
+		// Oldest start first: the steal picks the smallest sequence number
+		// among the non-looping voices [R-AUD-01 §1 step 2]. Appends keep the
+		// slice in start order, so that voice is the front one.
+		if oldest := b.players[0]; oldest != nil {
+			_ = oldest.Close()
 		}
-		b.players[b.next] = player
-		b.next = (b.next + 1) % len(b.players)
+		b.players = append(b.players[:0], b.players[1:]...)
 	}
+	b.players = append(b.players, player)
 	b.mu.Unlock()
 	player.Play()
 	return nil
+}
+
+// voiceLimit is the device's `MixingBuffers` default [R-AUD-01 §2].
+const voiceLimit = 8
+
+// reapLocked drops every voice whose buffer has stopped, mirroring the
+// application pump's media keepalive walk [R-AUD-02 §2]. The caller holds
+// b.mu.
+func (b *Backend) reapLocked() {
+	live := b.players[:0]
+	for _, player := range b.players {
+		if player == nil {
+			continue
+		}
+		if !player.IsPlaying() {
+			_ = player.Close()
+			continue
+		}
+		live = append(live, player)
+	}
+	for i := len(live); i < len(b.players); i++ {
+		b.players[i] = nil
+	}
+	b.players = live
 }
 
 // PlayStream is the optional non-looping stream boundary. The sample is
@@ -216,5 +246,4 @@ func (b *Backend) Close() {
 	}
 	b.players = nil
 	b.streams = nil
-	b.next = 0
 }

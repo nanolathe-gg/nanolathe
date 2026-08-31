@@ -603,6 +603,41 @@ five bits on the record as its last act before publishing the new payload. A
 handler that installs a goal therefore cannot see a stale outcome from the
 previous one, and the re-arm loop of [R-ORDER-02 §1] is clean by construction.
 
+**Established — whose pending word an installer's `0x80` lands in (2026-08-31).**
+The row above says only "a previous goal object is released", and a
+reimplementation read that as licence for an installer to raise `0x80` on
+whichever *other* record last held the mover's goal. It does not, and the
+mistake is not a matter of degree: **an installer writes `0x80` into the record
+it is installing for, and into no other record's pending word.** Three things
+fix this. The goal payload is a field *of the record* — [R-ORD-01 §1] lists it
+among the record fields a handler reads and writes — so "the previous payload"
+an installer releases is that record's own previous payload, and a different
+record's payload field is not something installing for this record can reach.
+The installers' closing clear of `0x20`–`0x200` (paragraph above) then cancels
+that self-raise, which is why the bit is never observable from an installer at
+all and only a *detach* from outside the record — queue teardown, head
+replacement, cancel — makes `0x80` visible. And the outcome table under
+"Established — the path-outcome mapping for the movement families" rules the
+cross-record reading out on behaviour: a `Patrol` record that sees `0x80`
+rotates to the tail with its phase reset to 1. A patrol chain is several
+`Patrol` records on one mover, and the pump walks past a record stalled at gate
+`0xE0` to the records behind it; if the record behind installing its own leg
+raised `0x80` on the record ahead, every leg would retire on the tick it was
+armed and no patrolling unit in the game would ever travel. Retail patrols
+travel. Measured on our side when the cross-record raise was live: 37,196 such
+raises over one AC01 mission run and a whole-army maximum displacement of 20
+world units, against 1,759 with the raise confined to the installing record.
+
+**Unknown — whether two records on one mover hold live payloads at once.**
+Because the payload is a record field, nothing in the traced material stops a
+stalled record and the record behind it from each holding one, while the mover
+itself has a single goal handle [04 §8.3]. Which payload then drives the mover,
+and whether the handle rebind that hands it over is the `0x80` producer named
+"goal-handle detach or rebind" in the movement families' outcome table, is not
+established. *Decider:* a trace of the goal-handle bind at the mover, and of
+whether an install for one record touches the handle another record's payload
+is bound to.
+
 **Established — the gate is what makes a bit matter.** A pending bit reaches
 the handler only through the pump's intersection with the record's dynamic gate
 mask (step 2 above). The masks handlers actually arm, across the whole
@@ -856,12 +891,46 @@ not been turned into arrival-or-release motion satisfies nothing.
 The movement families therefore have NO per-handler retry counters and no
 pre-reject: an unreachable or budget-starved goal stalls or loops forever,
 consuming one random draw per re-arm cycle, until the player cancels or the
-goal becomes reachable. **Unknown:** whether the route-release event fires
-for a route that was NEVER published (a goal the search cannot reach at all).
-If it fires, the unreachable case is the 30–59-tick rebind loop; if not, it
-is a silent indefinite stall with no draw. Settling it requires enumerating
-the movement wrapper's per-tick states that invoke the release callback —
-the wrapper state machine itself is the one untraced piece.
+goal becomes reachable.
+
+**Correction — the never-published route is settled, and it was never a second
+case [R-PATH-01 §4][R-PATH-01 §7] (2026-08-31).** The sentence that stood here
+left an **Unknown**: "whether the route-release event fires for a route that
+was NEVER published (a goal the search cannot reach at all). If it fires, the
+unreachable case is the 30–59-tick rebind loop; if not, it is a silent
+indefinite stall with no draw", to be settled by enumerating the movement
+wrapper's release-callback states. That is superseded, and it was wrong in its
+premise rather than merely undecided: it assumed a failed search can end
+without reaching the publisher. Two closures that landed two days later
+(2026-08-29) show it cannot. [R-PATH-01 §4]'s early-exit ladder gives each
+setup-time outcome the same three-part ending — *notify, publish empty, release
+the request, return*: step 6 for a start the goal predicate already accepts
+(`0x100`), step 8 for an off-map start (`0x200`), and step 9 for a ray whose
+threshold does not improve on the start's own scaled heuristic (`0x200`). A
+heap that empties without a terminal ends the same way. There is therefore no
+route that is "never published": **every** request reaches [R-PATH-01 §7]'s
+publisher, and its count-zero branch raises `0x40` whenever the goal object's
+live *is the unit at the goal* query says no. The disjunction had only one arm.
+The unreachable goal IS the 30–59-tick rebind loop, one draw per cycle, and the
+`0x40` the work and mobile-build rows abandon on ([R-ORD-01 §5]) is reached for
+a goal the search cannot satisfy, not only for a route torn up mid-approach.
+Enumerating the wrapper's release-callback states is not needed for this
+question: `0x40` on an empty publication is the publisher's own act.
+
+The corollary is where that bit can become a false accusation, so it is stated
+here rather than left implicit. Because step 6's `0x100` publishes empty too,
+the setup predicate (*does this cell satisfy the goal*, asked of the request's
+start cell) and the publisher's query (*is the unit at the goal*, asked of the
+live unit — distinct vtable slots, [R-PATH-01 §8]) must be asked about the same
+position, or an already-satisfied request raises `0x40` against itself. Retail
+keeps them consistent by construction: step 1 copies the start cell **at
+admission**, and steps 6 through 9 run in that same call, so no motion can
+separate the two queries. Carrying instead a start cell captured when the
+request was *submitted* separates them by however long the request waited for
+the single global working set ([R-PATH-01 §6]); a request submitted while the
+mover stood on its own goal then reports "cannot get there" about a goal it is
+merely walking away from. That is a divergence from step 1, not a second retail
+behavior.
 
 ### Closed — cleanup callbacks: tombstone, TargetCleared, StopBuilding [R-ORDER-02 §2] (2026-08-27)
 
@@ -11119,9 +11188,6 @@ replacement bullet is needed because the ground path has no vertical term.
 - Producer that sets a unit's engagement-target link — the ward-side reference
   both guard handlers attack toward · [R-UNIT-06 §1] · static trace. Not found
   in the bounded decompiled set or by instruction-pattern scan.
-- Whether the route-release event fires for a route that was never published
-  (unreachable goal as rebind loop versus silent stall) · [R-ORDER-02 §1] ·
-  static trace of the movement wrapper's per-tick release-callback states.
 - Meaning of the unit state word's low two bits, which `Standby_Mine` compares
   against `1` on the scanned target before it self-destructs · §2.4,
   [R-STANCE-01 §3] · static trace of the writers of those two bits.

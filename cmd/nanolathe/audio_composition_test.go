@@ -73,10 +73,15 @@ func TestAttachBattleAudio_CueReachesBackend(t *testing.T) {
 		t.Fatalf("authoring the ok1 sample: %v", err)
 	}
 
-	// At most one voice is audible per 30 rendered frames [03 §8.3] C18, so
-	// step the client past the opening window on an empty queue first —
-	// otherwise the single cue is resolved silently on the first frame.
-	for i := 0; i < drainWindowFrames+1; i++ {
+	// At most one voice is audible per 30 ticks [03 §8.3] C18, so advance the
+	// committed tick past the opening window on an empty queue first —
+	// otherwise the single cue is resolved silently on the first drain. The
+	// window is measured on the global tick counter the producers stamp their
+	// inserts with, not on a presentation frame count [03 §8.3][R-AUD-01 §3],
+	// so the session has to advance for the window to clear; ticking the
+	// client alone leaves the committed tick at zero forever.
+	for i := int32(1); i <= drainWindowFrames+1; i++ {
+		b.sess.Step(i)
 		cl.TickAudio()
 	}
 
@@ -91,6 +96,7 @@ func TestAttachBattleAudio_CueReachesBackend(t *testing.T) {
 	// Drain the way the rendered frame does. The client owns the drain; the
 	// test does not call Queue.Drain itself.
 	before := len(rec.aliases)
+	tickBeforeDrain := b.sess.Clock.GlobalTick
 	cl.TickAudio()
 	if len(rec.aliases) == before {
 		t.Fatalf("queued acknowledgement never reached the backend; "+
@@ -100,9 +106,13 @@ func TestAttachBattleAudio_CueReachesBackend(t *testing.T) {
 		t.Errorf("backend received %v, want the authored ok1 variant last", got)
 	}
 
-	// Simulation state must be untouched by the presentation drain [I6].
-	if b.sess.Clock.GlobalTick != 0 {
-		t.Errorf("audio drain advanced the simulation clock to %d", b.sess.Clock.GlobalTick)
+	// Simulation state must be untouched by the presentation drain [I6]. The
+	// clock is no longer zero here — clearing the opening window above is what
+	// advanced it — so the invariant is asserted against the tick captured
+	// before the drain rather than against a literal.
+	if b.sess.Clock.GlobalTick != tickBeforeDrain {
+		t.Errorf("audio drain advanced the simulation clock from %d to %d",
+			tickBeforeDrain, b.sess.Clock.GlobalTick)
 	}
 }
 

@@ -151,11 +151,27 @@ func YawFromDelta(dx, dz numeric.Fixed) numeric.Angle {
 	return numeric.AngleFromAtan2(dx.Raw(), dz.Raw())
 }
 
-// PitchFromDelta derives pitch from XYZ delta per [06 §6.3].
+// PitchFromDelta derives pitch from an XYZ delta per [06 §3.3][06 §6.3].
+//
+// The solver [06 §3.3] gives is written over the muzzle point p and the target
+// point t as `atan2q(-(int16)((p.Y - t.Y) >> 16), (int16)(dist >> 16))`, and
+// the same expression appears in the ordinary creator and in guidance. Our
+// callers all pass deltas in target-minus-muzzle order, so the vertical operand
+// is built from the negated raw word — `p.Y - t.Y` — before the shift, and only
+// then negated. Sign and truncation both matter: the shift is arithmetic, so
+// deriving the operand as `-(dy >> 16)` instead rounds a negative delta the
+// wrong way as well as inverting it.
+//
+// Correction: this helper previously computed `-int16(dy >> 16)` directly from
+// the target-minus-muzzle delta, which is retail's negation applied to operands
+// already in the opposite order. It inverted every direct-fire pitch — a target
+// below the muzzle aimed upward — so projectiles climbed away from ground
+// targets and never impacted, and the drift gate compared against a
+// wrong-signed pitch.
 func PitchFromDelta(dx, dy, dz numeric.Fixed) numeric.Angle {
 	// Retail first truncates the vertical and planar distance operands to
 	// signed whole units, then invokes the same atan2q conversion [06 §3.3].
-	vertical := -int64(int16(dy.Raw() >> 16))
+	vertical := -int64(int16((-dy.Raw()) >> 16))
 	distanceRaw := int64(math.Trunc(math.Hypot(float64(dx.Raw()), float64(dz.Raw()))))
 	horizontal := int64(int16(distanceRaw >> 16))
 	return numeric.AngleFromAtan2(vertical, horizontal)

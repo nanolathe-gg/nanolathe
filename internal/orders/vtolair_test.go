@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
@@ -148,4 +149,67 @@ func TestVTOLAirFamilyOwnsTheFourAirAttackRows(t *testing.T) {
 			t.Fatalf("%s: entry fall-through returned %d, want the 2 that hands off to the legs", name, code)
 		}
 	}
+}
+
+// TestLandIfCanCompletesOnTouchdown covers the record lifecycle the landing
+// machine could not finish while `VTOL_LandIfCan` had no descriptor handler:
+// the executor reached touchdown, nothing read that, and the record stayed at
+// the head of the queue jamming every order behind it.
+//
+// The runner stands in for internal/movement here — this package cannot import
+// it — and answers exactly as `reportLandIfCanOutcome` does: hold while the
+// machine is working, complete once it has finished.
+func TestLandIfCanCompletesOnTouchdown(t *testing.T) {
+	id := Lookup("VTOL_LandIfCan")
+	if id == 0 {
+		t.Fatalf("VTOL_LandIfCan is not in the descriptor table")
+	}
+	if DescriptorFor(id).Handler == nil {
+		t.Fatalf("VTOL_LandIfCan must have a descriptor handler so its record can finish")
+	}
+
+	landed := false
+	u := &units.Unit{Def: &content.UnitDef{UnitName: "flier", CanFly: true}}
+	q := QueueForUnit(u)
+	q.SetBinding(&QueueBinding{Movement: &MovementGoalAdapter{
+		RunAir: func(_ *units.Unit, n *Node, _ uint32, tick uint32) (Code, bool) {
+			if landed {
+				return Code(5), true
+			}
+			n.Deadline = int32(tick + 1)
+			n.DynamicGate |= 1
+			return Code(2), true
+		},
+	}})
+
+	q.Push(id, Node{Owner: u.Handle})
+	moveID := Lookup("Move_Ground")
+	if moveID == 0 {
+		t.Fatalf("Move_Ground is not in the descriptor table")
+	}
+	q.Push(moveID, Node{Owner: u.Handle})
+
+	// While the machine works the record holds its place at the head, and the
+	// queued order behind it does not run.
+	for tick := uint32(1); tick <= 5; tick++ {
+		q.Pump(u, tick)
+		if len(q.Primary()) == 0 || DescriptorFor(q.Primary()[0].ID).Name != "VTOL_LandIfCan" {
+			t.Fatalf("tick %d: landing record left the head while still working", tick)
+		}
+	}
+
+	// Touchdown: the next visit frees the record and the queued order becomes
+	// the head. This is the whole defect — before the handler existed, this
+	// loop ran forever.
+	landed = true
+	for tick := uint32(6); tick <= 12; tick++ {
+		q.Pump(u, tick)
+		if len(q.Primary()) > 0 && DescriptorFor(q.Primary()[0].ID).Name != "VTOL_LandIfCan" {
+			return
+		}
+		if len(q.Primary()) == 0 {
+			return
+		}
+	}
+	t.Fatalf("landing record never freed after touchdown; the queue is jammed")
 }

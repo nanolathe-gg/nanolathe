@@ -48,3 +48,33 @@ func TestEmptySelectionClosesCommandWindows(t *testing.T) {
 		t.Fatalf("single non-builder selection did not open the general page: window=%v err=%v", window, err)
 	}
 }
+
+// TestProductQueueCountLabel locks the bit-0x04 count format of the count-label
+// writer [07 R-P0-11 §2]: one total summed over the selected builder's primary
+// and secondary lists, formatted "+%d", cleared at zero, and never counting
+// another unit's queue.
+func TestProductQueueCountLabel(t *testing.T) {
+	f := &frame.Frame{CommandPage: frame.CommandPageView{Builder: 1}}
+	f.OrderQueues = []frame.OrderQueueView{
+		{
+			Unit:      1,
+			Primary:   []frame.OrderView{{BuildProduct: "armsolar", BuildCount: 5}, {BuildProduct: "armmex", BuildCount: 3}},
+			Secondary: []frame.OrderView{{BuildProduct: "ARMSOLAR", BuildCount: 2}},
+		},
+		// Another builder's queue must not contribute.
+		{Unit: 2, Primary: []frame.OrderView{{BuildProduct: "armsolar", BuildCount: 9}}},
+	}
+	if got := productQueueCountLabel(f, "ARMSOLAR"); got != "+7" {
+		t.Fatalf("summed label = %q, want +7", got)
+	}
+	if got := productQueueCountLabel(f, "armmex"); got != "+3" {
+		t.Fatalf("primary-only label = %q, want +3", got)
+	}
+	if got := productQueueCountLabel(f, "ARMWIN"); got != "" {
+		t.Fatalf("zero total label = %q, want empty", got)
+	}
+	// No selected builder means no page and no counter.
+	if got := productQueueCountLabel(&frame.Frame{OrderQueues: f.OrderQueues}, "ARMSOLAR"); got != "" {
+		t.Fatalf("label without a selected builder = %q, want empty", got)
+	}
+}

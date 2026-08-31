@@ -100,11 +100,17 @@ func TestMuzzleWorldPosComposesMappedRotatedHierarchy(t *testing.T) {
 	states[1] = vm.Pieces[0]
 	states[0] = vm.Pieces[1]
 	wantLocal := model.Compose(mdl, states, 1).Origin
-	want := Vec3{X: u.X.Add(wantLocal[0]), Y: u.Y.Add(wantLocal[1]), Z: u.Z.Add(wantLocal[2])}
+	// Z is subtracted because composed coordinates are model space, mirrored
+	// in Z against world space [03 R-RAST-01 §2][03 §5.5]. What this test
+	// locks is that the muzzle comes from the composed hierarchy rather than
+	// the raw COB translation, which the naive comparison below is the point
+	// of; the sign is asserted against the established convention, not
+	// restated from the implementation.
+	want := Vec3{X: u.X.Add(wantLocal[0]), Y: u.Y.Add(wantLocal[1]), Z: u.Z.Sub(wantLocal[2])}
 	if got != want {
 		t.Fatalf("composed muzzle = %#v, want %#v", got, want)
 	}
-	naive := Vec3{X: u.X.Add(vm.Pieces[0].Trans[0]), Y: u.Y.Add(vm.Pieces[0].Trans[1]), Z: u.Z.Add(vm.Pieces[0].Trans[2])}
+	naive := Vec3{X: u.X.Add(vm.Pieces[0].Trans[0]), Y: u.Y.Add(vm.Pieces[0].Trans[1]), Z: u.Z.Sub(vm.Pieces[0].Trans[2])}
 	if got == naive {
 		t.Fatalf("muzzle unexpectedly used raw COB translation: %#v", got)
 	}

@@ -512,9 +512,9 @@ func TestBurstMuzzleRequeryAndSprayOrder(t *testing.T) {
 	svc.Records[0].Pitch = 0
 	// Muzzle pos spy: returns distinct pos per piece.
 	muzzlePosCalls := 0
-	muzzlePos := func(piece int16) Vec3 {
+	muzzlePos := func(shooter pool.Handle, piece int16) (Vec3, bool) {
 		muzzlePosCalls++
-		return Vec3{X: numeric.FixedFromInt(int64(100 + muzzlePosCalls)), Y: numeric.FixedFromInt(0), Z: numeric.FixedFromInt(200)}
+		return Vec3{X: numeric.FixedFromInt(int64(100 + muzzlePosCalls)), Y: numeric.FixedFromInt(0), Z: numeric.FixedFromInt(200)}, true
 	}
 	// Interval 5 >4 so should re-query even though remaining 2 is even.
 	beforeDraws := r.Draws()
@@ -554,7 +554,10 @@ func TestBurstMuzzleRequeryAndSprayOrder(t *testing.T) {
 	TryFire(&svc2, slot2, 0, Target{Kind: TargetPoint}, 0, FirePorts{RNG: &r2})
 	svc2.Records[0].Velocity = Vec3{X: numeric.FixedFromInt(5)}
 	muzzleCalls2 := 0
-	muzzlePos2 := func(int16) Vec3 { muzzleCalls2++; return Vec3{X: numeric.FixedFromInt(999)} }
+	muzzlePos2 := func(pool.Handle, int16) (Vec3, bool) {
+		muzzleCalls2++
+		return Vec3{X: numeric.FixedFromInt(999)}, true
+	}
 	// First due tick 2: remaining 2 even and interval 2 <=4 → no re-query [06 §4.3]
 	svc2.AdvanceBursts(2, &r2, weapons2, muzzlePos2)
 	if muzzleCalls2 != 0 {

@@ -386,22 +386,20 @@ func (p *Panel) CancelScrollDrag() {
 	}
 }
 
-// SetMessage stores a modal message without fabricating controls or geometry.
-// The authored message window decides whether and where this text is bound;
-// unresolved binding details remain a research question [07 §3].
-func (p *Panel) SetMessage(message string) bool {
-	if p == nil || p.Window == nil {
-		return false
+// SetMessage records the modal message this panel is showing so a caller can
+// read it back.
+//
+// It no longer binds the text to an authored control. `MSGBOX.GUI` authors only
+// its panel and its `OK` button; the message box's `TEXT` labels are appended by
+// the opener, one per wrapped line, so the message already lives in those
+// gadgets' own text before a Panel is built over the window [07 R-FE-01 §9].
+// Searching for an authored label could only ever fail, and that failure used to
+// swallow the very diagnostic the box exists to show.
+func (p *Panel) SetMessage(message string) {
+	if p == nil {
+		return
 	}
-	for i, gadget := range p.Window.Gadgets {
-		if i == 0 || gadget.Active == 0 || (gadget.Kind != gui.KindLabel && gadget.Kind != gui.KindText) {
-			continue
-		}
-		p.message = message
-		p.SetText(gadget.Name, message)
-		return true
-	}
-	return false
+	p.message = message
 }
 
 func (p *Panel) Message() string {

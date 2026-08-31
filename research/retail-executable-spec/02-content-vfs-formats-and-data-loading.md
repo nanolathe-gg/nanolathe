@@ -1850,6 +1850,25 @@ numbered loop at 1. The earlier sentence was a mis-reading of the loop
 structure — the only tested result is that of each numbered read. The
 install observation is thereby explained, not merely tolerated.
 
+**What the reference install actually authors [I14].** Counted over the 120
+categories of the reference `sound.tdf`, so that a future silence bug is not
+mistaken for a compilation or VFS failure. Every category authors exactly one
+variant for `select`, `underattack` and each of the seven countdown slots
+(17–23); 76 author `ok` and `cant`, 63 `arrived`, 36 `working`, 30 `build`,
+22 `repair`, 21 each `activate` and `deactivate`, 12 `unitcomplete`, and two
+each `cloak`, `uncloak` and `capture`. **No category authors `load` or
+`unload` at all**, so slots 12 and 13 are silent in a stock install however
+they are driven, and an empty row is a common case rather than an edge one.
+That is 219 distinct alias names across the whole table; 206 of them resolve
+to a sample through the mount order of §2 and 13 do not (among them `build`,
+`untdone`, `snipsel1`, `torpsel1`), which is the registration probe's
+retained-but-unresolved outcome of `[03 §8.3]` and is silent by design, not a
+defect. Separately, 278 unit definitions name a `soundcategory`: 267 resolve
+against the table and 11 do not (`none` six times, plus `core_kbot`,
+`cor_tank` and `core_mex`), and those eleven units are voiceless. Weapon
+sounds are a different family and are healthy: 198 weapon definitions supply
+62 distinct `soundstart`/`soundhit`/`soundwater` names and all 62 resolve.
+
 ### Closed — the sound-category loader: file, record, bare and numbered keys, captions [R-SND-01 §1] (2026-08-29)
 
 Everything here is the content layer; the reader side (queue, draw, gates)

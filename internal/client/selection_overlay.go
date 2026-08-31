@@ -5,8 +5,8 @@ package client
 // [03 §1][R-SEL-02A].
 
 // SelectionDrag is the current input-owned drag gesture in logical framebuffer
-// coordinates. BuildWake selects the established armed build/wake palette
-// entry; the caller supplies it because the renderer does not own input latches.
+// coordinates. The caller supplies the latch state because the renderer does
+// not own input latches.
 type SelectionDrag struct {
 	Active bool
 	StartX int32
@@ -14,10 +14,23 @@ type SelectionDrag struct {
 	EndX   int32
 	EndY   int32
 
-	// BoxMode distinguishes the normal box-selection writer from the fallback
-	// outside-box mode that uses logical palette entry 15 [R-SEL-02A].
-	BoxMode   bool
-	BuildWake bool
+	// MobileBuildLatch is true while the armed order latch is MOBILEBUILD
+	// (latch value 0xE) [07 §9]. Only then does the outer frame take the 6/4
+	// pair; an ordinary selection drag takes logical entry 15
+	// [07 R-P0-11 §1 "The drawing."][07 §6 "Frame composition passes"].
+	MobileBuildLatch bool
+	// SpecialLatchFlag mirrors latch-flag bit 0x40, which picks outer entry 6
+	// over entry 4 while MOBILEBUILD is armed [07 §6].
+	//
+	// TODO(question): what writes latch-flag bit 0x40 while the MOBILEBUILD
+	// latch is armed is unknown. The bit's documented role is selecting
+	// immediate-versus-special helptext and its only established writers are
+	// the order-button dispatcher's arming chain, which never arms MOBILEBUILD
+	// — the battle-HUD build-button handler does, and it is not recorded as
+	// touching the flags word [07 §9]. Tracing the build-button handler's
+	// writes to the latch-flags word would settle it; until then Nanolathe
+	// leaves the bit clear and the armed drag takes entry 4.
+	SpecialLatchFlag bool
 
 	// VisiblePanel is true for the captured visible-panel battle surface. The
 	// hidden/panel-mode descriptor is not established and is never inferred.
@@ -56,10 +69,17 @@ func (c *Client) drawSelectionDrag() {
 		return
 	}
 	r := NormalizeRect(d.StartX, d.StartY, d.EndX, d.EndY)
+	// The ordinary drag-selection rectangle is white: outer logical entry 15,
+	// inner entry 0 [07 R-P0-11 §1 "The drawing."]. The 6/4 pair belongs to the
+	// armed MOBILEBUILD latch alone — entry 6 when latch-flag bit 0x40 is set,
+	// 4 when it is clear [07 §6 "Frame composition passes"]. An earlier reading
+	// had this inverted, taking entry 4 for every drag and reaching 15 only on
+	// a branch the caller could not select, which painted the selection box
+	// dark red (logical 4 resolves to a dark red physical index).
 	logicalOuter := byte(15)
-	if d.BoxMode {
+	if d.MobileBuildLatch {
 		logicalOuter = 4
-		if d.BuildWake {
+		if d.SpecialLatchFlag {
 			logicalOuter = 6
 		}
 	}

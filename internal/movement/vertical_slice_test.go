@@ -328,17 +328,25 @@ func TestTransportAirHoverNaval(t *testing.T) {
 	_ = classes
 	_ = fallback
 
-	// Wake band check for hover over water [04 §9.1]
+	// Wake band check for a hover over water [04 §9.1]. Corrected 2026-08-31
+	// with MediumBand: the wake band is `2`, "draft exactly at the surface",
+	// which for a zero-waterline hover is Y exactly at sea level — not "one
+	// below sea level", which is the shoreline skirt band `1`. A hover on land
+	// is band `4` (strictly above water), not `0`; band `0` belongs to the
+	// mover-mode gate.
 	terWake := syntheticWaterTer(16, 16, 10)
-	// Create hover unit over water (carrier Y at sea level -1) => band 2 or 3
-	hoverUnit := &units.Unit{Def: hoverDef, Y: numeric.Fixed(int64(9) * 65536), X: world.CellToWorld(12), Z: world.CellToWorld(5)}
-	if !ShouldEmitWake(terWake, hoverUnit) {
-		t.Fatalf("hover over shallow water should emit wake bands 2/3 [04 §9.1]")
+	surfaceHover := &units.Unit{Def: hoverDef, Y: numeric.Fixed(int64(10) * 65536), X: world.CellToWorld(12), Z: world.CellToWorld(5)}
+	surfaceHover.Move.Mode = 1
+	if !ShouldEmitWake(terWake, surfaceHover, 0) {
+		t.Fatalf("hover at surface draft should emit wake band 2 [04 §9.1]")
 	}
-	// Land hover band 0 no wake
 	landHover := &units.Unit{Def: hoverDef, Y: numeric.Fixed(int64(15) * 65536), X: world.CellToWorld(2), Z: world.CellToWorld(2)}
-	if ShouldEmitWake(terWake, landHover) {
+	landHover.Move.Mode = 1
+	if ShouldEmitWake(terWake, landHover, 0) {
 		t.Fatalf("hover on land should not emit wake")
+	}
+	if got := MediumBand(terWake, landHover, 0); got != 4 {
+		t.Fatalf("hover on land band = %d, want 4 [04 §9.1]", got)
 	}
 }
 

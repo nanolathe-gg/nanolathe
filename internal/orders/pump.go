@@ -605,7 +605,16 @@ func moveGroundHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code 
 //   - the unit-reclaim state machine, in internal/construction
 //     ([05 "Unit reclaim"]);
 //   - the air executors, in internal/movement ([04 R-AIR-01 §6, §7]) — the
-//     other two air heads, `VTOL_Move` and `Park`, reach a handler above.
+//     other air heads, `VTOL_Move`, `Park` and `VTOL_LandIfCan`, reach a
+//     handler above.
+//
+// `VTOL_LandIfCan` left this list on 2026-08-31. Being driven is only half the
+// story for a machine that finishes: the pump wrote none of its fields, which
+// is right while it runs, but nothing then freed the record when the aircraft
+// touched down, so it sat at the head of the queue for the rest of the unit'"'"'s
+// life. It now has a descriptor handler that hands off to the same air runner
+// the attack executors use, and that runner reports the executor'"'"'s outcome
+// instead of re-running it (vtolair.go, movement.reportLandIfCanOutcome).
 //
 // For these the pump is not the driver, and a result code applied here would
 // overwrite the driver's own deadline — a factory record parked for 30 to 44
@@ -621,7 +630,7 @@ func handlerlessButDriven(name string) bool {
 	switch name {
 	case "BuildingBuild", "MobileBuild", "VTOL_MobileBuild",
 		"ReclaimUnit", "VTOL_ReclaimUnit",
-		"VTOL_LandIfCan", "VTOL_Standby":
+		"VTOL_Standby":
 		return true
 	}
 	return false

@@ -5145,6 +5145,31 @@ what the feature phase advances every tick (§10); they are shared by every
 placed instance of the definition, so all copies of an animating feature are
 always on the same frame.
 
+**Established (reference census) — what `animating=1` actually animates.**
+`animating=1` is a parser flag, not a promise of motion, and the shipped corpus
+makes that distinction load-bearing. Counted over the compiled feature catalog
+of the reference install (I14): **82** definitions carry `animating=1` with a
+`seqname` that resolves in its named GAF, and of those exactly **ten** have a
+sequence with more than one frame — `acidplant01`…`acidplant05` and their `b`
+variants, the gas plants of the acid worlds, each **20 frames at 4 ticks per
+frame** (an 80-tick loop). Every other animating definition, including the
+whole `*vent*` family across the acid, arch, crystal, dry, green, ice, lava,
+lush, mars, metal, slate and wet sets, resolves to a **single-frame** entry,
+and a single-frame entry never advances ([03 §4.4]). The visible motion a
+player associates with a vent is therefore not in the feature at all.
+
+`geothermal` is the extreme case, and it is worth naming because it looks like
+a missing asset and is not one: it compiles `animating=1`, `seqname=geotherm`,
+`filename=geotherm`, and `anims/geotherm.gaf` holds one entry, `geotherm`, of
+one frame, **one pixel by one pixel**. A `geothermal` feature is the placement
+marker the geothermal-plant build test reads, not artwork; the vent a player
+sees under it is the map's own tile art. Arm campaign `AC04` (`MISSION3`)
+places three `geothermal` instances and no other vent-family feature, so that
+mission renders no vent sprite whatever the presentation layer does. The
+multi-frame gas plants are placed by nine stock maps, of which `Gasbag Forests`
+(1026 instances) and `Gasplant Plain` (615) are the dense ones — those are the
+maps on which a feature animation is observable at all.
+
 #### R-FEAT-01 §2 — Catalog build order and the successor pass [R-FEAT-01] (2026-08-29)
 
 **Established.** At map load the loader allocates the live-instance arena

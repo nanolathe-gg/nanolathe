@@ -429,9 +429,19 @@ func (q *Queue) resolve(e Entry, now uint32, audible, showText bool) {
 	}
 	var alias string
 	var caption string
-	// Variant selection is presentation-random even for a silent resolve, but
-	// a row with no variants has no random choice and consumes no draw [03
+	// Variant selection is presentation-random even for a silent resolve [03
 	// §8.3].
+	//
+	// TODO(question): whether a row whose variant count is zero still consumes
+	// a CRT draw is unknown. [03 §8.3] says the draw "happens on every resolve
+	// — including silent ones — before any gate", which reads as
+	// unconditional, and also that "Count zero produces no pick", which
+	// describes only the result. A static trace of the resolve body's draw
+	// site against its count test would settle it; the reference install
+	// authors no `load` or `unload` variant in any of its 120 categories, so
+	// the empty row is reached often. Skipping the draw is the reading in
+	// force here. It cannot reach the simulation: the queue draws a private
+	// presentation copy of the stream [01 §7.2][I4].
 	draw := uint32(0)
 	if len(variants) > 0 {
 		draw = q.drawCRT()

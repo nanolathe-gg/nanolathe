@@ -127,6 +127,23 @@ func startBuildingBearing(selfX, selfZ, targetX, targetZ numeric.Fixed) uint16 {
 	return numeric.AngleFromAtan2(dx, dz).Raw()
 }
 
+// bearingOffset resolves a heading and a radius into the signed component pair
+// the air legs displace a position by: `pos - bearingOffset(h, r)` moves r world
+// units ALONG h, and `pos + bearingOffset(h, r)` moves r units opposite it
+// [04 §10.3][04 R-AIR-01 §4].
+//
+// This is the same four-line arithmetic as `offsetAtBearing` in
+// internal/movement, deliberately restated rather than shared: that package
+// imports this one, so the helper cannot travel in the direction that would let
+// one copy serve both, and promoting it into internal/sim/numeric would be a
+// cross-package refactor for four lines. Both copies cite the same contract, and
+// a change to one is a change to the other.
+func bearingOffset(heading uint16, radius numeric.Fixed) (numeric.Fixed, numeric.Fixed) {
+	sin := int64(numeric.Sin(numeric.Angle(heading)))
+	cos := int64(numeric.Cos(numeric.Angle(heading)))
+	return numeric.Fixed((int64(radius)*sin + 0x1000) >> 13), numeric.Fixed((int64(radius)*cos + 0x1000) >> 13)
+}
+
 // EmitStartBuilding is the StartBuilding emitter [R-ORDER-02 §2] and the ONLY
 // writer of FlagStopBuildingPending. Its nine call sites are the
 // nanolathe/assist handlers: MobileBuild, VTOL_MobileBuild, HelpBuild,

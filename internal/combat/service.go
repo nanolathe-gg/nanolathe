@@ -175,6 +175,17 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		if slot == nil || !slot.IsPopulated() {
 			continue
 		}
+		// The slot visit's first step: decrement a nonzero reload countdown.
+		// It happens for every populated slot, before the target is resolved
+		// and before any later gate can skip the visit, so a weapon that is
+		// out of range, inhibited or waiting on Aim still recovers its shot
+		// [06 §1.2][06 §4.1]. Only after the decrement can the reload-zero
+		// fire-time pipeline below admit the visit, which is why a one-tick
+		// reloadtime fires on the tick after the decrement, never the same
+		// tick [06 §4.1].
+		if slot.Reload > 0 {
+			slot.Reload--
+		}
 		// Inhibit is an order-side stop latch, distinct from autonomous
 		// tracking. It suppresses both reacquisition and the retained-target
 		// firing path until the order side releases it [04 R-ORD-01 §1].
@@ -292,6 +303,19 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 			desiredYaw = uint16(YawFromDelta(dx, dz))
 			desiredPitch = uint16(PitchFromDelta(dx, dy, dz))
 		}
+		// TODO(question): [06 §3.3] states the aim-time yaw is relative — the
+		// bearing minus the unit heading — and that the fire-time executor
+		// converts it back to absolute, while the same section writes the
+		// bearing as atan2q(muzzle - target) where every caller here supplies
+		// target - muzzle. The two cannot both be transcribed literally: our
+		// absolute target-minus-muzzle bearing is the one that demonstrably
+		// puts projectiles on their targets, so it is kept. Subtracting the
+		// unit heading here on top of it lengthened the COB turn and lowered
+		// the shot count in the Arm campaign mission-0 run, which is evidence
+		// the two conventions are not independent. Settling this needs a trace
+		// of atan2q's operand order and the turret executor's relative-to-
+		// absolute conversion; until then the aim heading commanded to the COB
+		// turret and the drift gate that would read it stay untraced.
 		slot.DesiredYaw = desiredYaw
 		slot.DesiredPitch = desiredPitch
 		needLatch, needResult := aimRequirement(weapon)
@@ -374,14 +398,17 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 			continue
 		}
 		if !checkAdmission(u, slot, weapon, pre.tgtPos, pre.tgtHandle, w, vis, terrain, pre.ballisticOk, pre.pitch) {
-			if weapon.Turret {
-				slot.Aim.IssueBit = false
-				slot.Aim.Ready = false
-				slot.Flags &^= 0x01
-				if s.pendingAims != nil {
-					delete(s.pendingAims, pendingKey{Unit: u.Handle, Slot: idx})
-				}
-			}
+			// A failed shot-time gate sets the shooter's "could not fire"
+			// status and clears no latch [06 §3.3]. Clearing the aim issue
+			// bit and the aim result here — which this path used to do for
+			// turret weapons — discarded a completed handshake every time a
+			// moving target stepped briefly out of range, so the turret had
+			// to re-run the whole Aim* turn before it could shoot again and
+			// in practice never caught up with a mover.
+			// TODO(question): the "could not fire" status bit itself has no
+			// home on units.Slot yet and no consumer in this build; adding it
+			// means a field on a package this unit does not own. Nothing here
+			// reads it, so its absence changes no firing decision [06 §3.3].
 			continue
 		}
 		if weapon.Stockpile {
@@ -681,7 +708,17 @@ func muzzleWorldPosResolved(u *units.Unit, piece int32) (Vec3, bool) {
 		if !ok {
 			return Vec3{}, false
 		}
-		return Vec3{X: u.X.Add(origin[0]), Y: u.Y.Add(origin[1]), Z: u.Z.Add(origin[2])}, true
+		// Composed piece coordinates are model space, which is mirrored in Z
+		// against world space: the model pass narrows a model-relative vertex
+		// as hi16(-vz) while the unit's own position enters the blit
+		// unnegated [03 R-RAST-01 §2]. Every other consumer that turns a
+		// composed offset into a world point already subtracts — the build
+		// plate and nano emitter queries [03 §5.5], the hover hull, and the
+		// selection quad. This site added it, so a muzzle authored forward of
+		// the unit's origin was reflected to the same distance behind it,
+		// which moves both the spawn point and the aim delta the pitch and
+		// yaw solvers are handed [06 §3.3].
+		return Vec3{X: u.X.Add(origin[0]), Y: u.Y.Add(origin[1]), Z: u.Z.Sub(origin[2])}, true
 	}
 	return Vec3{}, false
 }
@@ -841,8 +878,22 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 	}
 	// DET-01: no global fallback; session must inject simRNG.
 	// ON-04 stable lookup: use once-compiled catalog index, not per-tick map rebuild
-	muzzleForBurst := func(piece int16) Vec3 {
-		return Vec3{}
+	// A burst anchor is parked at its shooter's muzzle and re-runs the
+	// piece-to-world conversion with the piece identity the root stored at
+	// creation — no COB query, so it can never alternate between the Query
+	// and AimFrom callbacks [06 §4.3][06 "Per-slot and aim-time pipeline"]
+	// [R-P0-07]. Returning a zero vector here instead parked every burst
+	// anchor at the world origin and teleported each pellet there with it,
+	// which is why burst weapons never reached their targets.
+	muzzleForBurst := func(shooter pool.Handle, piece int16) (Vec3, bool) {
+		if w == nil || shooter == 0 {
+			return Vec3{}, false
+		}
+		su := w.Unit(shooter)
+		if su == nil || !su.Alive {
+			return Vec3{}, false
+		}
+		return muzzleWorldPosResolved(su, int32(piece))
 	}
 	// ON-04 stable lookup for burst params: use once-compiled index deterministically
 	var weaponByID map[int32]*content.WeaponDef

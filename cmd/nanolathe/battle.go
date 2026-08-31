@@ -14,6 +14,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/pool"
@@ -203,11 +204,21 @@ func composeBattleEntryDetached(sess *session.Session, cat *content.Catalog, cs 
 	// Camera clamp uses the same playable insets consumed by minimap input and
 	// marker projection; raw terrain extents include the void margins [07 §10].
 	cam := camera.NewFromTerrain(terrainW, terrainH, terrain.PlayRight, terrain.PlayBottom, retailScreenW, retailScreenH)
+	// The world rebuild resets the camera block before any battle-start writer
+	// runs [08 R-ENTRY-01 §3 step 12]. Only the scroll setting byte is
+	// established to survive that reset, so this is the reset origin Nanolathe
+	// has always used and the position a campaign without a start-position
+	// special keeps [08 "Campaign camera"].
+	// TODO(question): the origin words' value after the camera-block reset is
+	// not established — [07 R-CAM-01 §10] records only that the scroll byte is
+	// restored and that the tracked object, follow target, bookmarks and hold
+	// state are zeroed. A static trace of the reset routine would settle
+	// whether retail leaves (0,0) or something else here.
 	cam.Pan(0, 0)
 	if savedCamera != nil {
 		applyRetailSavedCamera(cam, savedCamera)
 	} else {
-		centerOnCommanderForSession(sess, cam, retailScreenW, retailScreenH)
+		centerBattleStartCamera(sess, cam)
 	}
 
 	// The battle HUD is mandatory retail content: side-selected PANELTOP,
@@ -352,21 +363,105 @@ func configWithBattleSeeds(cfg session.SkirmishConfig, source BattleSeedSource) 
 	return cfg
 }
 
-// centerOnCommanderForSession pans to the Session.LocalOwner commander [08 "Skirmish configuration"].
-func centerOnCommanderForSession(sess *session.Session, cam *camera.Camera, winW, winH int32) {
-	if sess == nil {
+// centerBattleStartCamera is the retail battle-start camera placement: the one
+// camera writer between the world rebuild's camera reset and the first composed
+// frame, and a *jump* rather than a glide [07 R-CAM-01 §12 "Battle-start
+// placement"]. It branches on the session kind, exactly as retail does.
+//
+// Campaign (kind 1): the first start-position special with stored number 0 —
+// the special authored as StartPos1 — is centred in the battle viewport. A
+// mission with no such special keeps the world-rebuild reset position, and
+// there is no diagnostic [08 "Campaign camera"]. The campaign spawner creates
+// units straight from the mission's placement records and no commander, so
+// nothing here looks for one.
+//
+// Skirmish (kind 2): retail's per-slot stamp helper resolves the slot's
+// StartPos, creates the side's commander there, and centres the camera on the
+// local player's commander [08 "Resource grant" and the stamp paragraph above
+// it]. It never searches for a commander by name — it centres on the unit it
+// just created — so the commander identity used here is the only one retail
+// has: the definition name equals the Commander name on the owner's side
+// record [08 R-SKIR-01 §3]. (Until this commit the search was a `"com"` suffix
+// test on the unit name, which found no unit at all in Arm campaign mission 1 —
+// it fields ARMFAV, ARMPW, ARMFLASH, ARMSTUMP, ARMROCK, ARMHAM and ARMGATE and
+// no commander — leaving the camera at the reset origin and the world viewport
+// black, and which would equally match any unit whose name merely ends in
+// those letters.)
+//
+// Both branches centre through Camera.JumpToBattleViewCenter, which halves the
+// battle viewport rather than the framebuffer and converts retail's camera
+// origin into this build's [07 R-CAM-01 §12][03 §4.1].
+func centerBattleStartCamera(sess *session.Session, cam *camera.Camera) {
+	if sess == nil || cam == nil {
 		return
 	}
-	owner := sess.LocalOwner
-	for _, u := range sess.Units.Iter() {
-		if u != nil && u.Alive && u.Owner == owner && u.Def != nil &&
-			strings.HasSuffix(strings.ToLower(u.Def.UnitName), "com") {
-			cam.X = int32(u.X>>16) - winW/2
-			cam.Z = int32(u.Z>>16) - winH/2
-			cam.Pan(0, 0)
-			return
+	if sess.Mission != nil && sess.Mission.Type == mission.TypeCampaign {
+		if start, ok := campaignStartPosition(sess.Mission); ok {
+			cam.JumpToBattleViewCenter(int32(start.X), int32(start.Z))
+		}
+		// No special → keep the reset position, emit nothing
+		// [08 "Campaign camera"].
+		return
+	}
+	if u, ok := localCommanderUnit(sess); ok {
+		cam.JumpToBattleViewCenter(int32(u.X>>16), int32(u.Z>>16))
+	}
+	// TODO(question): [07 R-CAM-01 §12] gives unit positions entering the
+	// *desired* origin a half-height shear (z - y/2), but the battle-start row
+	// of that section's writer table names only "the commander stamp position
+	// minus half the viewport". Whether the jump shears is unresolved; a static
+	// trace of the stamp helper's camera write would settle it. No shear is
+	// applied here, matching the table's wording.
+}
+
+// campaignStartPosition returns the start-position special the campaign camera
+// jumps to: the first special in authored record order that is a start position
+// and whose stored number is 0. Retail stores the number as the authored suffix
+// minus one, so StartPos1 is stored number 0; mission.Special keeps the suffix
+// itself, hence the comparison against 1 [08 "Campaign camera"] [fmt ota].
+// Record order is the OTA enumeration order and is deliberately not sorted:
+// "first" is a scan, not a minimum.
+func campaignStartPosition(m *mission.Mission) (mission.Special, bool) {
+	if m == nil {
+		return mission.Special{}, false
+	}
+	for _, sp := range m.Specials {
+		if sp.Kind == 1 && sp.ID == 1 {
+			return sp, true
 		}
 	}
+	return mission.Special{}, false
+}
+
+// localCommanderUnit finds the local player's commander using retail's only
+// commander identity: the unit's definition name equals the Commander name on
+// its owner's side record [08 R-SKIR-01 §3]. Scan order is unit-pool record
+// order, the order retail's own sweeps use.
+func localCommanderUnit(sess *session.Session) (*units.Unit, bool) {
+	if sess == nil || sess.Units == nil || sess.Catalog == nil {
+		return nil, false
+	}
+	owner := int(sess.LocalOwner)
+	if owner < 0 || owner >= len(sess.Skirmish.Players) {
+		return nil, false
+	}
+	side := sess.Skirmish.Players[owner].Side
+	if side < 0 || side >= len(sess.Catalog.Sides) || sess.Catalog.Sides[side] == nil {
+		return nil, false
+	}
+	name := strings.TrimSpace(sess.Catalog.Sides[side].Commander)
+	if name == "" {
+		return nil, false
+	}
+	for _, u := range sess.Units.Iter() {
+		if u == nil || !u.Alive || u.Def == nil || int(u.Owner) != owner {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(u.Def.UnitName), name) {
+			return u, true
+		}
+	}
+	return nil, false
 }
 
 // viewerStep runs one rendered frame: input → session ticks → camera pan.
@@ -544,15 +639,24 @@ func (b *battleSession) syncSelectionDrag(cl *client.Client) {
 	}
 	state := b.battleState()
 	in := state.Input
+	// The outer colour is chosen by the armed latch, not by the fact that a
+	// drag is running: an ordinary selection drag is white (logical entry 15),
+	// and only an armed MOBILEBUILD latch takes the 6/4 pair
+	// [07 R-P0-11 §1 "The drawing."][07 §6 "Frame composition passes"].
+	// Passing DragActive as the box-mode selector made every drag take entry 4
+	// — a dark red — and left the entry-15 branch unreachable.
 	cl.SetSelectionDrag(client.SelectionDrag{
-		Active:       in.DragActive,
-		StartX:       in.DragStartX,
-		StartY:       in.DragStartY,
-		EndX:         in.DragEndX,
-		EndY:         in.DragEndY,
-		BoxMode:      in.DragActive,
-		BuildWake:    in.Latch == input.LatchMobileBuild,
-		VisiblePanel: state.PanelOffset == ui.PanelVisible,
+		Active:           in.DragActive,
+		StartX:           in.DragStartX,
+		StartY:           in.DragStartY,
+		EndX:             in.DragEndX,
+		EndY:             in.DragEndY,
+		MobileBuildLatch: in.Latch == input.LatchMobileBuild,
+		// TODO(question): Nanolathe keeps no latch-flags word, so latch-flag
+		// bit 0x40 is always clear here and an armed drag takes entry 4. What
+		// writes that bit while MOBILEBUILD is armed is unknown [07 §9].
+		SpecialLatchFlag: false,
+		VisiblePanel:     state.PanelOffset == ui.PanelVisible,
 	})
 }
 

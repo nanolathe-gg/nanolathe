@@ -61,8 +61,11 @@ func TestGroundPathStatusSink(t *testing.T) {
 	})
 
 	t.Run("out of bounds then empty away from goal", func(t *testing.T) {
-		sys, _, _, head, req := newGroundPathStatusFixture(t, path.Cell{X: 2, Z: 2}, path.Cell{X: 5, Z: 5})
-		req.Start = path.Cell{X: 25, Z: 25}
+		sys, u, _, head, req := newGroundPathStatusFixture(t, path.Cell{X: 2, Z: 2}, path.Cell{X: 5, Z: 5})
+		// Setup reads the mover's CACHED COMMITTED CELL at admission, not the
+		// cell the request was submitted with [04 R-PATH-01 §4] step 1, so the
+		// off-map start of step 8 is staged on the committed anchor.
+		sys.Collisions[u.Handle].CachedAnchor = Cell{X: 25, Z: 25}
 		work := sys.searchFunc(req, 65536, 0)
 		if !work.Done || work.Status != path.StatusRejected || len(work.Points) != 0 {
 			t.Fatalf("out-of-bounds work = %+v", work)

@@ -176,16 +176,28 @@ func emitStartBuildingAbsolute(u *units.Unit, n *Node, target *units.Unit) {
 // `canreclamate` key as bit 10 [04 R-ORD-02 §1], so this build's single
 // CanReclamate bool is both.
 //
-// TODO(T25): the water clause — `(I am not canfly, or I am amphibious, or
-// seaLevel <= targetY + targetModelHeight)` and `(I am canfly, or
-// seaLevel - myMaxWaterDepth <= targetY + targetModelHeight)`, which for an
-// aircraft reduces to "will not repair a unit whose top is under water" — needs
-// the map's sea level, and the queue binding carries no terrain or world
-// reference. Placeholder: the clause is treated as satisfied rather than
-// failed. Failing it would abandon every air repair a player issues, which is a
-// failure retail does not produce; passing it admits the one case retail
-// refuses (a submerged target). The definition halves of the clause are already
-// evaluable and are left in place for when the seam arrives.
+// The water clause is
+//
+//	(not canfly or amphibious or seaLevel <= targetTop) and
+//	(canfly       or seaLevel - myMaxWaterDepth <= targetTop)
+//
+// where `targetTop` is the target's signed height word plus its model total
+// height in whole world units. For an aircraft this reduces to "will not repair
+// a unit whose top is under water"; for a ground repairer it is "the target's
+// top must not be deeper than my own wading depth". Sea level comes from the
+// queue binding's world adapter, and the model height is the definition's
+// model total-height word — the same positive max-Y dword `BeginTransport`
+// carries [04 R-AIR-01 §9] — which this build stores as `ModelTop`.
+//
+// Corrected 2026-08-31: this carried a TODO(T25) claiming "the queue binding
+// carries no terrain or world reference" and passed the clause unconditionally,
+// admitting the submerged target retail refuses. `WorldQueryAdapter.SeaLevel`
+// is required of every composed binding and has been since the world adapter
+// landed.
+//
+// A binding with no world adapter still passes the clause rather than failing
+// it: an unbound queue is a test or bootstrap arrangement, not a submerged
+// target, and failing there would abandon repairs retail completes.
 func repairAdmission(me, target *units.Unit) bool {
 	if me == nil || me.Def == nil || target == nil || target.Def == nil {
 		return false
@@ -196,7 +208,28 @@ func repairAdmission(me, target *units.Unit) bool {
 	if health16(target) == uint32(target.Def.MaxDamage) {
 		return false
 	}
-	return moverMode(target) != 2
+	if moverMode(target) == 2 {
+		return false
+	}
+	return repairWaterClause(me, target)
+}
+
+// repairWaterClause is the water half of repairAdmission, split out so the
+// unbound-binding arm is visible at its own site.
+func repairWaterClause(me, target *units.Unit) bool {
+	b := bindingOfUnit(me)
+	if b == nil || b.World == nil || b.World.SeaLevel == nil {
+		return true // no world adapter: see the note on repairAdmission
+	}
+	sea := int32(b.World.SeaLevel())
+	// The target's top: signed height word [04 §8.1] plus the model total
+	// height in whole world units.
+	top := int32(target.Y.Raw()>>16) + target.Def.ModelTop
+	// Both halves written literally: the disjuncts are not exclusive and
+	// collapsing them by case has already gone wrong once.
+	airHalf := !me.Def.CanFly || me.Def.Amphibious || sea <= top
+	wadeHalf := me.Def.CanFly || sea-me.Def.MaxWaterDepth <= top
+	return airHalf && wadeHalf
 }
 
 // ---------------------------------------------------------------------------

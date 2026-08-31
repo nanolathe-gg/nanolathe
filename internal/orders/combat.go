@@ -159,23 +159,58 @@ func captionClear(u *units.Unit) { workStatus(u, statusOK, "") }
 // entirely — release only — when the owner's definition has the `canfly` bit,
 // and finish by clearing pending bits `0x20`–`0x200`".
 //
-// TODO(T25): two halves of the installer have no home in this build. (a) The
-// arrival radius is a field of the goal payload, and this package's record
-// carries only the goal triple — internal/movement owns the payload classes
-// (its air marker's setArrivalRadius is the air half) and is not reachable from
-// here, so the radius argument is accepted, documented per call site, and
-// dropped. (b) The release of the PREVIOUS payload raises pending `0x80` on the
-// record that owned it [04 R-ORD-01 §0]; with no payload registry in this
-// package there is no way to find that record, so no `0x80` is raised.
-// Placeholder: the goal triple is written and the five movement pending bits
-// are cleared, which is the half the pump and the handlers themselves observe.
+// The helper performs all three halves of that contract by routing through the
+// queue binding's movement adapter, which owns the payload registry:
+// `InstallPoint` releases THIS record's previous payload and carries the
+// arrival radius into the point goal; `Release` is the canfly release-only arm.
+// The pending clear is applied here afterwards because retail clears
+// `0x20`–`0x200` at the end of all four helpers, including the release-only
+// arm, so the release's own `0x80` — raised on the record being installed for,
+// which is the only record an installer touches [04 R-ORD-01 §0]
+// [04 R-ORD-01 §1] — is cleared again by its own installer.
+//
+// Corrected 2026-08-31 (first correction): this carried a TODO(T25) saying the
+// radius had nowhere to go and the previous payload could not be found, so the
+// radius was dropped (`_ = radius`) and no release ran at all. Both seams are
+// in this package already — `PointGoalRequest.Radius` and
+// `MovementGoalAdapter.Release`, which `installWorkGoalWithRadius` next door
+// has been using — and the movement side has implemented the release and the
+// pending clear all along.
+//
+// Corrected 2026-08-31 (second correction): that first correction also read
+// [04 R-ORD-01 §0]'s "a previous goal object is released" as licence to raise
+// `0x80` on whichever OTHER record held the mover's payload slot, and the
+// movement side did so. It froze every ground mover in the game — the
+// root-cause note is on `installGroundPayload` in internal/movement/goals.go.
+// An installer's `0x80` never leaves the record it is installing for.
 func installPointGoal(u *units.Unit, n *Node, x, y, z numeric.Fixed, radius int32) {
-	_ = radius
+	if n == nil {
+		return
+	}
+	canfly := u != nil && u.Def != nil && u.Def.CanFly
+	if b := bindingOfUnit(u); b != nil && b.Movement != nil {
+		if canfly {
+			if b.Movement.Release != nil {
+				b.Movement.Release(n)
+			}
+		} else if b.Movement.InstallPoint != nil {
+			b.Movement.InstallPoint(PointGoalRequest{Owner: n.Owner, Node: n, X: x, Y: y, Z: z, Radius: radius})
+		}
+	}
 	n.Satisfied &^= 0x3E0 // clear pending 0x20..0x200 [04 R-ORD-01 §0][04 R-ORD-01 §1]
-	if u != nil && u.Def != nil && u.Def.CanFly {
+	if canfly {
 		return // canfly: release only, no install [04 R-ORD-01 §1]
 	}
 	n.GoalX, n.GoalY, n.GoalZ = x, y, z
+}
+
+// bindingOfUnit reads a unit's queue binding without creating a queue.
+func bindingOfUnit(u *units.Unit) *QueueBinding {
+	q := QueueOfUnit(u)
+	if q == nil {
+		return nil
+	}
+	return q.Binding()
 }
 
 // targetOf reads the record's target smart-reference through the owning
