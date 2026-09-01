@@ -42,7 +42,7 @@ func unitPortHandlers(vm *cob.VM, u *Unit) map[cob.Port]func([]int32) int32 {
 	if u == nil {
 		return nil
 	}
-	ports := make(map[cob.Port]func([]int32) int32, 6)
+	ports := make(map[cob.Port]func([]int32) int32, 8)
 	bindUnitPort := func(port cob.Port, get func() bool, set func(bool)) {
 		ports[port] = func(args []int32) int32 {
 			if len(args) >= 2 {
@@ -74,6 +74,21 @@ func unitPortHandlers(vm *cob.VM, u *Unit) map[cob.Port]func([]int32) int32 {
 			return 1
 		}
 		return 0
+	}
+	// Port 4 (health) and port 17 (build percent left) are read-only engine
+	// ports [04 §4.4]. They must be bound on the instance: an unbound port
+	// reads zero, and zero is a meaningful — and wrong — answer to both. The
+	// stock damage-smoke helper shipped in the retail archive
+	// (`scripts/SMOKEUNIT.H`, included by most unit scripts) waits on
+	// `while (get BUILD_PERCENT_LEFT) sleep 400;` and then puffs smoke
+	// whenever `get HEALTH` is below 66, so a pair of zero reads walks every
+	// nanoframe straight past the "wait until the unit is actually built"
+	// loop and into a permanent smoke plume at full health.
+	ports[cob.Port(4)] = func([]int32) int32 {
+		return cob.HealthPercent(u.Health, u.MaxHealth) // [04 §4.4] port 4
+	}
+	ports[cob.Port(17)] = func([]int32) int32 {
+		return cob.BuildPercentLeft(u.Remaining) // [04 §4.4] port 17
 	}
 	bindUnitPort(cob.Port(19), func() bool { return u.BuggerOff }, func(v bool) { u.BuggerOff = v })
 	bindUnitPort(cob.Port(20), func() bool { return u.Armored }, func(v bool) { u.Armored = v })

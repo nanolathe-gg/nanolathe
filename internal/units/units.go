@@ -1022,6 +1022,29 @@ func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed,
 		copy(newUnits, w.units)
 		w.units = newUnits
 	}
+	// The unfinished form seeds its construction state here, before the script
+	// bind below runs `Create`: creating an unfinished unit "sets the remaining
+	// construction fraction to one and its health to zero" as part of the
+	// creation act [05 "Nanoframe allocation"], which is what port 4 means by
+	// health "seeded ... to 0 for a nanoframe" and port 17 by a remaining
+	// fraction of 1.0 for a fresh one [04 §4.4].
+	//
+	// The ordering is load-bearing, not tidiness. `Create` is a wake callback:
+	// its drain runs all eight thread slots inline at the creation site
+	// [04 R-CB-01 §2][04 "barriers and flush points"], so a thread that `Create`
+	// starts reads these two ports before the creation call has returned. The
+	// stock damage-smoke helper (`scripts/SMOKEUNIT.H`, started from `Create` by
+	// most unit scripts) is exactly such a thread, and it waits on
+	// `while (get BUILD_PERCENT_LEFT)`. Seeding a nanoframe as built and
+	// demoting it after the bind walks that thread straight past its "wait until
+	// the unit is actually built" loop, and the frame smokes for its whole
+	// build.
+	remaining := float32(0)
+	health := int32(def.MaxDamage)
+	if !alreadyBuilt {
+		remaining = 1
+		health = 0
+	}
 	u := &Unit{
 		Handle:       h,
 		Def:          def,
@@ -1032,9 +1055,9 @@ func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed,
 		Alive:        true,
 		Flags:        initialStatusFlags(def),
 		Move:         MoveState{Mode: CreatedMoverMode},
-		Remaining:    0,
+		Remaining:    remaining,
 		MaxHealth:    int32(def.MaxDamage),
-		Health:       int32(def.MaxDamage),
+		Health:       health,
 		PlacementIdx: -1,
 	}
 	installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions into Slots [P0-I04]
