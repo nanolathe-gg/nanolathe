@@ -202,6 +202,31 @@ func TestTopologyAlliedHumansHostileAI(t *testing.T) {
 	}
 }
 
+func TestTopologySkirmishAlliancePredicate(t *testing.T) {
+	cases := []struct {
+		name     string
+		groups   [2]int
+		a, b     int
+		wantAlly bool
+	}{
+		{name: "self in unassigned group", groups: [2]int{5, 5}, a: 0, b: 0, wantAlly: true},
+		{name: "distinct unassigned players", groups: [2]int{5, 5}, a: 0, b: 1, wantAlly: false},
+		{name: "equal assigned group", groups: [2]int{2, 2}, a: 0, b: 1, wantAlly: true},
+		{name: "unassigned and assigned", groups: [2]int{5, 2}, a: 0, b: 1, wantAlly: false},
+		{name: "unequal assigned groups", groups: [2]int{1, 2}, a: 0, b: 1, wantAlly: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := SkirmishConfig{NumPlayers: 2}
+			cfg.Players[0].AllyGroup = tc.groups[0]
+			cfg.Players[1].AllyGroup = tc.groups[1]
+			if got := skirmishPlayersAllied(cfg, tc.a, tc.b); got != tc.wantAlly {
+				t.Fatalf("skirmishPlayersAllied(%d, %d) with groups %v = %v, want %v [08 R-SKIR-01 §2]", tc.a, tc.b, tc.groups, got, tc.wantAlly)
+			}
+		})
+	}
+}
+
 // TestTopologyDirectAndMenuByteEquivalent ensures direct and menu paths produce byte-equivalent normalized SkirmishConfig [08 "Skirmish configuration"].
 func TestTopologyDirectAndMenuByteEquivalent(t *testing.T) {
 	// Direct path via canonical helper.

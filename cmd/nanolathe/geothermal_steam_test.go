@@ -46,6 +46,17 @@ func TestGeothermalVentSteamsOnGreatDivide(t *testing.T) {
 		t.Skip("Great Divide composed without its geothermal vent")
 	}
 
+	// The frame-count seam, filled the way the composer fills it: after the
+	// session exists, and therefore after the map stamp already built every
+	// vent's container. Filling it must finish those containers, or the plume
+	// never retires a puff — see TestSteamCreatedBeforeTheSeamStillRetires.
+	sess.SetEffectEntryFrameCount(func(bank, entry string) (int, bool) {
+		if entry != "smoke 1" {
+			return 0, false
+		}
+		return 12, true // the stock `anims/fx.gaf` entry's frame count
+	})
+
 	scaled := sess.Clock.ScaledAnchor
 	puffs := 0
 	for i := 0; i < 60 && puffs == 0; i++ {
@@ -80,5 +91,48 @@ func TestGeothermalVentSteamsOnGreatDivide(t *testing.T) {
 	}
 	if puffs == 0 {
 		t.Fatalf("the vent at (%d,%d) published no strip-4 steam in 60 ticks", ventX, ventZ)
+	}
+
+	// And the plume must still be there, and still be a plume, a full minute
+	// later. Two things have to hold at once and they pull against each other:
+	// the container never stops emitting — its removal verdict is a constant
+	// false and its spawn predicate has no deadline term
+	// [03 R-FX-01 §3 addendum] — while each puff dies when its cursor reaches
+	// its own last frame [06 R-WFX-01 §5]. Fail either and the play test sees
+	// it: a plume that stops after five seconds, or one that piles up and slides
+	// downwind forever.
+	for i := 0; i < 1800; i++ {
+		scaled++
+		sess.Step(scaled)
+	}
+	late, farthest := 0, int64(0)
+	if f := sess.Snapshot.Current(); f != nil {
+		for _, e := range f.Effects {
+			if e.Strip != 4 {
+				continue
+			}
+			late++
+			dx, dz := e.X.Raw()>>16-ventX, e.Z.Raw()>>16-ventZ
+			if dx < 0 {
+				dx = -dx
+			}
+			if dz < 0 {
+				dz = -dz
+			}
+			if dx+dz > farthest {
+				farthest = dx + dz
+			}
+		}
+	}
+	if late == 0 {
+		t.Fatal("the vent stopped steaming; retail's plume runs for the whole battle [03 R-FX-01 §3 addendum]")
+	}
+	// One spawn every five ticks over 1800 ticks is 360 puffs. A plume that
+	// retires nothing holds all of them and walks off the map with the wind.
+	if late > 40 {
+		t.Fatalf("the vent holds %d live puffs; they are not retiring at their last frame [06 R-WFX-01 §5]", late)
+	}
+	if farthest > 200 {
+		t.Fatalf("a puff is %d world units from its vent after a minute; retail's plume stays anchored", farthest)
 	}
 }

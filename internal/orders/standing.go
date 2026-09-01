@@ -539,6 +539,28 @@ func autoEngage(u *units.Unit, target *units.Unit) bool {
 	return true
 }
 
+// AutonomousAcquire is "the ordinary autonomous acquisition" the idle rows of
+// [04 R-ORD-01 §2] and [04 R-AIR-01 §7] ask for: the fire-at-will opportunity
+// scan of [04 R-STANCE-01 §3] followed by the auto-engage issuer, reporting
+// whether a target was both FOUND and ACCEPTED.
+//
+// It exists because the air family's idle row lives in another package.
+// `VTOL_Standby` is `handlerlessButDriven` — its executor is the mover-side
+// machine that owns the air marker family [04 R-AIR-01 §4] — and internal/
+// movement cannot reach an unexported pair in here. Without a seam that
+// executor's phase 1 stood as a placeholder that always took the no-target arm,
+// so every stock aircraft, all of which author `defaultmissiontype =
+// VTOL_Standby`, was incapable of acquiring anything on its own: an idle
+// fighter or gunship with `fire at will` fell straight through to phase 2's
+// no-cargo arm and landed itself instead of attacking.
+//
+// The scan's own stance gates still apply, so a definition that authors hold
+// fire (every stock bomber does) still acquires nothing.
+func AutonomousAcquire(u *units.Unit) bool {
+	target := opportunityScan(u)
+	return target != nil && autoEngage(u, target)
+}
+
 // ---------------------------------------------------------------------------
 // Registration [04 §3.1]
 // ---------------------------------------------------------------------------

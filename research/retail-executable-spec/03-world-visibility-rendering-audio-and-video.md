@@ -146,9 +146,25 @@ expired sub-records (each carries its own expiry tick) with stable in-place
 compaction, and may spawn new sub-records through a spawn gate (next-spawn tick
 compared against both the object's window end and the global tick). The removal
 verdict is "the internal list is empty" (the container object dies once its
-last particle/segment expires; one family additionally requires its window to
-have passed). One family's sub-records also expire early when the terrain
-height beneath them falls below sea level — its marks die on water.
+last particle/segment expires). One family's sub-records also expire early when
+the terrain height beneath them falls below sea level — its marks die on water.
+
+**Correction, 2026-09-01 — neither the verdict nor the gate is general, and
+"the smoke family" is two classes.** The parenthesis above used to end "; one
+family additionally requires its window to have passed", and the spawn-gate
+parenthesis before it is not universal either. Both virtuals are per class, and
+a reimplementation must take each family's pair from its own class rather than
+from this summary.
+
+An earlier version of this correction, written the same day, said the override
+with neither term belonged to "the smoke-puff family". It belongs to the
+**geothermal vent's** class alone. The strips-5/9 smoke puffer — impact,
+muzzle, trail, emit-sfx, burning-feature and sinking-wreck smoke, which is all
+the smoke a player normally sees — keeps both terms, so the deadline its
+producer stores is a real lifetime and a weapon-side container with lifetime 0
+is a one-shot. Getting this backwards left an immortal emitter at every place a
+shot had landed. Full table of the four differences, and the parts that are
+identical, in [R-FX-01 §3 addendum §B].
 
 **Correction, 2026-08-31 — the smoke puff's own draw and its end.** §3 below
 called the smoke family's per-spawn draw "the start frame". It is not: the
@@ -6685,6 +6701,118 @@ index reaches its last frame"; the puff record read here has the random
 draw in the last-frame word and the hold in the countdown word, and no gate
 in the draw. Document 06's producer-parameter table is unaffected; the
 per-puff sentences should be re-derived against this section.
+
+### Correction — the smoke-puff container is immortal and its gate has no window [R-FX-01 §3 addendum] (2026-09-01)
+
+Status: **Established** (the class's four overridden virtuals read directly,
+plus the ten-strip sweep that calls them; corroborated by an eighteen-second
+retail capture of a geothermal vent on a green map).
+
+**What the earlier text said.** The paragraph above closed with "With
+`interval 5, lifetime 150` the steam vent lays a puff every fifth tick, 31
+puffs per container", and [R-STRIP-01 §2] gave the family's removal verdict as
+"the internal list is empty; the smoke family additionally requires its window
+to have passed" and its spawn gate as "the next-spawn tick is compared against
+both the object's window end and the global tick". [05 R-ECO-02 §3] drew the
+consequence in as many words: "A vent therefore produces thirty-one puffs over
+five seconds … and then stops. There is no perpetual plume."
+
+**Why that is wrong.** A retail capture of a vent shows its plume still
+running, anchored and undiminished, eighteen seconds after the recording
+starts — no thinning, no downwind slide, no end. Reading the smoke-puff class's
+own virtuals settles why. The class overrides four slots of its object vtable,
+and two of them are the ones in question:
+
+* the **removal verdict** — the virtual the ten-strip sweep evaluates before
+  it runs any update work — is a body that does nothing but `return 0`. A
+  smoke container is never removed by the sweep, whatever its sub-record list
+  holds and whatever tick it is. The only thing that removes one is the
+  401-record eviction in the producer.
+* the **"is it time to spawn" predicate**, which the update calls at its end
+  and then acts on, is a single unsigned compare: the stored next-spawn tick
+  at or before the global tick. There is **no** second term. The deadline the
+  init stores is never consulted here.
+
+The stored deadline (`currentTick + lifetime`) has exactly one reader in the
+whole class: the spawn's capacity reservation, which grows the sub-record
+vector by `(deadline − tick + interval) / interval` records when that count is
+positive. Past the deadline the expression is non-positive and the reservation
+is skipped; the spawn then appends as usual. It is an allocation hint, not a
+lifetime, and calling it one is what produced the wrong reading.
+
+The update itself is unchanged from the paragraph above and was re-read
+alongside: per sub-record, add the first published wind word × 8 to the raw X
+and the second × 8 to the raw Z, add the map's gravity word × 16 to the raw Y,
+decrement the countdown, and on reaching zero advance the frame and redraw the
+countdown as `hold/2 + crtRand × (hold/2) / 0x8000`. The removal compare is
+then made **on every visit**, not only on the visits that advanced the cursor:
+a sub-record survives while `frame < lastFrame`, signed, and is compacted out
+otherwise. Because a puff's whole life is a few tens of ticks, the drift terms
+move it a fraction of a world unit before it retires — which is why retail's
+plume looks anchored even in a gale, and why the immortal puffs of the earlier
+reading were the only ones ever seen to travel.
+
+**Consequences for the producer that builds this class.** The geothermal steam
+producer of [05 R-ECO-02 §3] cannot bound its container. A geothermal vent
+therefore steams for the whole battle, which is what a player sees.
+
+### Correction to the correction — this is the VENT's class, not the smoke family's [R-FX-01 §3 addendum §B] (2026-09-01)
+
+Status: **Established** (both class vtables read out and every overridden slot
+decompiled; the differing instructions are single shift immediates).
+
+**What the section above said.** Its last paragraph read "There are exactly two
+call sites that construct it — the geothermal steam producer and the general
+smoke-puff producer that serves the strip-5 and strip-9 sites — and neither can
+bound its container. Every smoke emitter in the game runs until the strip evicts
+it." That paragraph is withdrawn; it is replaced by the one now in its place.
+
+**Why that is wrong.** The vent and the strips-5/9 smoke puffer are **two
+classes with two object vtables**, not one class reached from two producers.
+Everything the section above establishes is true — of the vent's class only.
+Reading the two vtables side by side, they differ in exactly four places:
+
+| | strips-5/9 smoke puffer | geothermal vent |
+|---|---|---|
+| removal verdict | sub-record list empty **and** stored deadline `< tick` | `return 0` — constant false |
+| spawn gate | next-spawn `<=` deadline **and** next-spawn `<=` tick | next-spawn `<=` tick |
+| vertical drift | gravity word **× 4** | gravity word **× 16** |
+| blitted entry | selected by an init flag between the two smoke entries | the first smoke entry, bound directly |
+
+Everything else is identical, instruction for instruction: the two wind terms
+(both × 8), the countdown and its `hold/2 + crtRand × (hold/2) / 0x8000`
+redraw, the retirement compare `frame < lastFrame` made on every visit, the
+single-puff spawn with its one draw for `crtRand × (frameCount − 1 − 2) / 0x8000
++ 2`, and `nextSpawn = tick + interval` written unconditionally at the end of
+the spawn. The record layouts differ only by the selector word the puffer
+carries and the vent does not, which shifts the puffer's position triple one
+word later.
+
+The capacity-reservation finding above survives intact and applies to both
+classes: the reservation is guarded by "is this count positive", and that guard
+covers only the vector resize — the puff-append below it is unconditional. So
+the deadline never gates a spawn *directly* in either class. What gates the
+puffer's spawn is its own gate's first term, which the vent's class drops.
+
+**What this means for the deadline.** For the strips-5/9 puffer the stored
+`tick + lifetime` **is** a lifetime, exactly as [R-STRIP-01 §2] originally
+said. Every weapon-side site passes lifetime 0 — the trail puff, `endsmoke` at
+impact, `startsmoke` at the muzzle, and both emit-sfx smoke points — which
+leaves the deadline at the creation tick. The gate then refuses the second
+spawn (the next-spawn tick is already past the window) and the verdict retires
+the container on the first tick after its one puff is gone. That is what makes
+these producers one-shots. The two parameterised sites are the only ones with a
+real window: the above-sea explosion's land dust (interval 7, lifetime 15 —
+three puffs) and the sinking-wreck column (interval 15, lifetime 900).
+
+**How the conflation showed.** Applying the vent's virtuals to the puffer turns
+every muzzle, impact and trail container into an immortal one-puff-per-tick
+emitter. Twenty seconds of a small firefight saturates strip 9 at its
+401-object bound and parks it there, holding roughly fifteen thousand live
+puffs for the rest of the battle — a carpet of smoke standing over every place
+a shot has ever landed. Retail shows nothing of the kind, which is the
+observation that should have been weighed against the vent capture from the
+start: both captures are real, and they are of different classes.
 
 ### Closed — the flash and lens blitters, and which families do not use the countdown cursor [R-FX-01 §4] (2026-08-29)
 

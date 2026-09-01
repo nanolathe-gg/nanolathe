@@ -671,11 +671,33 @@ func (s *System) execVTOLStandby(u *units.Unit, head *orders.Node, st *airOrderS
 		st.post = Vec3{X: u.X, Y: u.Y, Z: u.Z}
 		st.phase = 1
 	case 1:
-		// TODO(question): phase 1 "asks the ordinary autonomous acquisition for
-		// a target and, if one is found and accepted, clears the gate word,
-		// resets the phase to zero and returns 3" [04 R-AIR-01 §7]. Autonomous
-		// acquisition is the combat layer's and is not reachable from this
-		// package. Placeholder: the no-target arm, which advances.
+		// Phase 1 "asks the ordinary autonomous acquisition for a target and,
+		// if one is found and accepted, clears the gate word, resets the phase
+		// to zero and returns 3 (the pump's `30 + random below 15` wait)"
+		// [04 R-AIR-01 §7].
+		//
+		// This stood as a placeholder that always took the no-target arm,
+		// because the acquisition pair lives in internal/orders and had no
+		// exported seam. The cost was total: every stock aircraft authors
+		// `defaultmissiontype = VTOL_Standby`, so no aircraft in the game could
+		// ever engage anything on its own. An idle fighter or gunship fell
+		// through to phase 2, which for an unloaded aircraft spawns
+		// `VTOL_LandIfCan` — so a plane parked itself next to an enemy and sat
+		// there. `orders.AutonomousAcquire` is that seam; its own stance gates
+		// still refuse a hold-fire or hold-position definition.
+		//
+		// The wait draw is taken here rather than in the pump for the same
+		// reason phase 2's three draws are: this record is
+		// `handlerlessButDriven`, so no pump result code is ever applied to it
+		// and the executor arms its own deadline [04 R-AIR-01 §1].
+		if orders.AutonomousAcquire(u) {
+			head.DynamicGate = 0
+			if sim != nil {
+				head.Deadline = int32(s.tick + 30 + sim.Uint32n(15))
+			}
+			st.phase = 0
+			return
+		}
 		st.phase = 2
 	case 2:
 		if u.Def == nil || !u.Def.CanFly || u.Move.Mode&0x3 != 2 {

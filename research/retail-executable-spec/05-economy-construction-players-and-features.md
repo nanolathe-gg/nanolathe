@@ -5360,6 +5360,31 @@ and finds the census wrong on one row:
   the misattribution would have given a vent flame segments marching toward a
   target point instead of puffs rising in place.
 
+  **Correction (2026-09-01) — the third literal is not a lifetime, and the
+  plume is perpetual.** The paragraph below closes with "A vent therefore
+  produces thirty-one puffs over five seconds — one from the constructor and
+  one every fifth tick while the next-spawn tick is still inside the window —
+  and then stops. There is no perpetual plume." Both sentences are withdrawn.
+  A retail capture shows a vent's plume still running eighteen seconds in, and
+  the class's own virtuals say why: its removal verdict is a body that returns
+  a constant false, and its spawn predicate is a bare "next-spawn tick at or
+  before the global tick" with no window term. The stored `currentTick + 150`
+  is read by nothing but the spawn's capacity reservation. A vent lays one puff
+  at construction and one every fifth tick for the rest of the battle; what
+  thins the plume to a handful of puffs is each puff retiring when its own
+  animation cursor reaches its own randomly drawn last frame. Full derivation
+  and the corrected update in [03 R-FX-01 §3 addendum]. Everything else in the
+  paragraph — the interval, the frame hold, the class, the single call site —
+  stands.
+
+  **Scope of that correction (2026-09-01).** It is about the vent's own class
+  and no other. The strips-5/9 smoke puffer is a **different class** whose
+  removal verdict and spawn gate both keep the window term, so its producers'
+  stored deadlines are real lifetimes; do not carry this paragraph's reading
+  across to impact, muzzle, trail or burning-feature smoke. The vent also
+  drifts upward four times as fast as those do. See
+  [03 R-FX-01 §3 addendum §B] for the two vtables side by side.
+
   **Closed (2026-08-31) — the three literals.** The Unknown recorded here
   asked which init parameter each literal binds to. Reading the class's init
   virtual settles it: the first argument after the position is the **spawn

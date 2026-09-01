@@ -349,6 +349,18 @@ func LocalOwnerForConfig(cfg SkirmishConfig) int {
 	return 0
 }
 
+// skirmishPlayersAllied is the battle-entry alliance predicate. The frontend
+// has already compacted open rows out of cfg, so every index below NumPlayers
+// is live at this boundary. Group 5 is unassigned, not a team: it allies no
+// two distinct players even when both rows carry 5 [08 R-SKIR-01 §2].
+func skirmishPlayersAllied(cfg SkirmishConfig, a, b int) bool {
+	if a == b {
+		return true
+	}
+	group := cfg.Players[a].AllyGroup
+	return group != SkirmishDefaultAllyGroup && group == cfg.Players[b].AllyGroup
+}
+
 // NormalizedBytes returns a deterministic byte representation for equivalence checks.
 // It encodes NumPlayers and all player rows in a stable order.
 func (c SkirmishConfig) NormalizedBytes() []byte {
@@ -458,7 +470,7 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 		if i == localOwner {
 			continue
 		}
-		if cfg.Players[i].IsComputer() && cfg.Players[i].AllyGroup != cfg.Players[localOwner].AllyGroup {
+		if cfg.Players[i].IsComputer() && !skirmishPlayersAllied(cfg, i, localOwner) {
 			enemyOwner = i
 			break
 		}
@@ -517,12 +529,13 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 		p.GameEnded = false
 		p.EndGameCountdown = -1
 	}
-	// Apply alliances: AllyGroup equality => allied [GAP T14][08 "Skirmish configuration"]
+	// Apply the skirmish first alliance row. Group 5 is the unassigned
+	// sentinel, so equality allies only non-5 groups; self is always allied
+	// [08 R-SKIR-01 §2].
 	for i := 0; i < nPlayers && i < 10; i++ {
 		for j := 0; j < nPlayers && j < 10; j++ {
-			s.Econ.Players[i].Allies[j] = cfg.Players[i].AllyGroup == cfg.Players[j].AllyGroup
+			s.Econ.Players[i].Allies[j] = skirmishPlayersAllied(cfg, i, j)
 		}
-		s.Econ.Players[i].Allies[i] = true
 	}
 	// Validate at least one hostile alliance for skirmish start [08 "Skirmish configuration"].
 	// Retail sentinel: all groups 5 is allowed (no error) [08 "Skirmish configuration"].

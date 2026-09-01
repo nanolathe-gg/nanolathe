@@ -23,11 +23,14 @@ func newStripTestSession(simSeed, crtSeed uint32) (*Session, *rng.CRT) {
 // aliveSmokeContainer builds a smoke-family container that survives a sweep
 // (one unexpiring particle, window in the future) and carries an identifying
 // marker in src[0]. A marker < 0 means terminal: empty list, window passed.
-func smokeContainer(marker int64) stripObject {
-	o := stripObject{family: stripFamilySmoke, windowEnd: 0xFFFFFFFF}
+// It is deliberately NOT the smoke family: that class overrides the removal
+// verdict with a constant false, so a smoke container is never a compaction
+// subject [03 R-FX-01 §3 addendum]. The flame family's verdict is the ordinary
+// "the sub-record list is empty".
+func terminalOrLiveContainer(marker int64) stripObject {
+	o := stripObject{family: stripFamilyFlame, windowEnd: 0xFFFFFFFF}
 	if marker < 0 {
-		o.windowEnd = 1 // passed at any swept tick >= 2
-		return o
+		return o // empty list: terminal
 	}
 	o.src[0] = numeric.FixedFromInt(marker)
 	o.particles = []stripParticle{{expiry: 0xFFFFFFFF}}
@@ -85,14 +88,14 @@ func TestStripSweepVerdictBeforeUpdate(t *testing.T) {
 func TestStripSweepStableLeftCompaction(t *testing.T) {
 	s, crt := newStripTestSession(12, 12)
 
-	// Five smoke containers, markers 0..4; odd markers are terminal (empty
-	// list, window passed), even markers carry one live particle.
+	// Five containers, markers 0..4; odd markers are terminal (empty list),
+	// even markers carry one live particle.
 	for i := 0; i < 5; i++ {
 		var o stripObject
 		if i%2 == 0 {
-			o = smokeContainer(int64(i))
+			o = terminalOrLiveContainer(int64(i))
 		} else {
-			o = smokeContainer(-1)
+			o = terminalOrLiveContainer(-1)
 		}
 		s.strips.append(9, o)
 	}
@@ -122,7 +125,7 @@ func TestStripAppendEvictsOldestAbove400(t *testing.T) {
 	s, _ := newStripTestSession(13, 13)
 
 	for i := 0; i <= 400; i++ {
-		s.strips.append(2, smokeContainer(int64(i)))
+		s.strips.append(2, terminalOrLiveContainer(int64(i)))
 	}
 	if n := len(s.strips.strips[2]); n != 401 {
 		t.Fatalf("count = %d at the cap boundary, want 401", n)
@@ -132,7 +135,7 @@ func TestStripAppendEvictsOldestAbove400(t *testing.T) {
 	}
 
 	// Pre-insert count 401 exceeds 400: the marker-0 object dies first.
-	s.strips.append(2, smokeContainer(401))
+	s.strips.append(2, terminalOrLiveContainer(401))
 	strip := s.strips.strips[2]
 	if len(strip) != 401 {
 		t.Fatalf("count = %d after the eviction append, want 401", len(strip))
@@ -308,14 +311,14 @@ func TestStripProducerCensusKeepsWriterlessStripsEmpty(t *testing.T) {
 	}
 }
 
-// TestSmokeFamilySweepDrawsAndWindow locks the smoke family's committed
-// behavior: one CRT draw per spawned puff (start frame), one draw per
+// TestSmokeFamilySweepDrawsAndDrift locks the smoke family's committed
+// behavior: one CRT draw per spawned puff (its last frame), one draw per
 // animation-frame advance with the next delay drawn as half to full of the
 // authored delay [R-STRIP-01 §3], and the published wind words applied ×8 to
 // the X and Z terms each tick [R-WIND-01]. The container is assembled
 // directly so the gate, animation, and drift mechanics are pinned
 // independently of any producer site's parameters.
-func TestSmokeFamilySweepDrawsAndWindow(t *testing.T) {
+func TestSmokeFamilySweepDrawsAndDrift(t *testing.T) {
 	s, crt := newStripTestSession(17, 17)
 	ref := rng.NewCRT(17)
 	// Corrected 2026-08-31: the spawn's single draw is the puff's LAST FRAME,
@@ -327,7 +330,11 @@ func TestSmokeFamilySweepDrawsAndWindow(t *testing.T) {
 
 	s.Clock.GlobalTick = 50
 	pos := [3]numeric.Fixed{numeric.FixedFromInt(100), numeric.FixedFromInt(0), numeric.FixedFromInt(200)}
-	o := stripObject{family: stripFamilySmoke, src: pos, frameDelayParam: 8, windowEnd: 50, nextSpawn: 50, spawnInterval: 3}
+	// The interval is wide enough that the eight ticks under test hold no
+	// second spawn: the gate is perpetual for this family
+	// [03 R-FX-01 §3 addendum], so isolating the animation draw means spacing
+	// the spawns, not waiting for a window to close.
+	o := stripObject{family: stripFamilySmoke, src: pos, frameDelayParam: 8, windowEnd: 50, nextSpawn: 50, spawnInterval: 100}
 	s.strips.append(9, o)
 
 	draws0 := crt.Draws()
@@ -406,16 +413,25 @@ func TestSmokeProducerSpawnsFirstPuff(t *testing.T) {
 	if p.x != pos[0] || p.z != pos[2] {
 		t.Fatal("first puff did not spawn at the site's position")
 	}
-	// The trail producer's lifetime is 0, so its spawn window closes
-	// immediately: the gate is armed for the next tick but can never fire past
-	// a window that has already passed, and the container dies with its one
-	// particle [06 R-WFX-01 §5].
-	if strip[0].windowEnd != 0 {
-		t.Fatalf("window end %d, want the lifetime-0 window closed at once", strip[0].windowEnd)
+	// The trail producer passes lifetime 0, so the init stores the creation
+	// tick itself as the deadline. That is what makes it a one-shot: the gate
+	// is armed for tick 10 but the window closed at tick 9, so the second
+	// spawn never fires [03 R-FX-01 §3 addendum].
+	//
+	// Corrected 2026-09-01: this briefly asserted the opposite — no deadline
+	// and a puff every tick forever — after the vent's virtuals were applied
+	// to this class. The two assertions below pull against each other on
+	// purpose: the gate IS armed, and it still must not fire.
+	if strip[0].windowEnd != 9 {
+		t.Fatalf("stored deadline %d, want the creation tick 9 for a lifetime-0 producer", strip[0].windowEnd)
 	}
-	if strip[0].nextSpawn <= strip[0].windowEnd {
-		t.Fatalf("gate %d is inside a window ending %d; a lifetime-0 emitter must spawn exactly once",
-			strip[0].nextSpawn, strip[0].windowEnd)
+	if strip[0].nextSpawn != 10 || strip[0].spawnInterval != 1 {
+		t.Fatalf("gate armed at %d interval %d, want tick 10 and interval 1", strip[0].nextSpawn, strip[0].spawnInterval)
+	}
+	s.Clock.GlobalTick = 10
+	s.phaseObjectSweeps(10)
+	if n := len(s.strips.strips[9][0].particles); n != 1 {
+		t.Fatalf("the trail emitter holds %d puffs one tick on, want its single one; the window closed at creation", n)
 	}
 	if p.expiry != 0 {
 		t.Fatalf("puff tick deadline %d, want none — this family expires on its frame cursor", p.expiry)
@@ -496,25 +512,45 @@ func TestSprinkleProducerTwoPuffsAndLifetime(t *testing.T) {
 	}
 }
 
-// TestSmokeWindowPassedVerdict locks the smoke family's verdict: the
-// container dies only when its list is empty AND its window has passed
-// [R-STRIP-01 §2].
-func TestSmokeWindowPassedVerdict(t *testing.T) {
+// TestPuffContainerVerdictsDivergeByClass locks the one difference that makes
+// the two smoke-puff classes two classes [03 R-FX-01 §3 addendum].
+//
+// It asserts the pair that pulls against itself, because either half alone
+// passes on a broken build:
+//
+//   - the strips-5/9 puffer's verdict keeps BOTH terms — empty list AND the
+//     stored deadline passed — so a weapon-side container really does die;
+//   - the vent's class returns a constant false, so an identically-shaped
+//     container on strip 4 survives the same sweep.
+//
+// The history is worth keeping: this file first asserted only the first half,
+// then (wrongly) only the second. Asserting only the second gave every muzzle
+// and impact site an immortal emitter; asserting only the first stopped a
+// vent's plume after five seconds, against a retail capture of one still
+// steaming eighteen seconds in. Both readings were right about their own class.
+func TestPuffContainerVerdictsDivergeByClass(t *testing.T) {
 	s, _ := newStripTestSession(18, 18)
 
-	s.strips.append(5, stripObject{family: stripFamilySmoke, windowEnd: 200}) // empty, window not passed
-	s.strips.append(5, stripObject{family: stripFamilySmoke, windowEnd: 5})   // empty, window passed
-	busy := stripObject{family: stripFamilySmoke, windowEnd: 5}               // window passed, list not empty
+	s.strips.append(5, stripObject{family: stripFamilySmoke, windowEnd: 200}) // empty, deadline ahead
+	s.strips.append(5, stripObject{family: stripFamilySmoke, windowEnd: 5})   // empty, deadline long passed
+	busy := stripObject{family: stripFamilySmoke, windowEnd: 5}
 	busy.particles = []stripParticle{{expiry: 0xFFFFFFFF}}
 	s.strips.append(5, busy)
 
+	// The vent's class, given the very same closed window and empty list.
+	s.strips.append(4, stripObject{family: stripFamilyVentSteam, windowEnd: 5})
+
 	s.phaseObjectSweeps(100)
+
 	strip := s.strips.strips[5]
 	if len(strip) != 2 {
-		t.Fatalf("%d containers survived, want 2", len(strip))
+		t.Fatalf("%d puffer containers survived, want 2: the one whose window is still open and the one still holding a puff", len(strip))
 	}
 	if strip[0].windowEnd != 200 || len(strip[1].particles) != 1 {
-		t.Fatal("wrong survivors: the verdict must require an empty list AND a passed window")
+		t.Fatal("the sweep removed the wrong container, or reordered the survivors")
+	}
+	if n := len(s.strips.strips[4]); n != 1 {
+		t.Fatalf("%d vent containers survived, want 1; the vent's verdict is a constant false and its window is not a lifetime", n)
 	}
 }
 
@@ -604,16 +640,18 @@ func TestFlameTrailSweepSpendsNoDraws(t *testing.T) {
 	}
 }
 
-// TestGeothermalSteamCadenceAndWindow locks the strip-4 producer of
-// [05 R-ECO-02 §3] as [06-adjacent research] closed it: spawn interval 5,
-// frame hold 7, container lifetime 150 ticks, one puff from the constructor.
+// TestGeothermalSteamCadence locks the strip-4 producer of [05 R-ECO-02 §3]:
+// spawn interval 5, frame hold 7, one puff from the constructor, and a cadence
+// that does not stop.
 //
 // The three literals were recorded as "which of the family's init parameters
 // each binds to" Unknown until 2026-08-31, and the family was recorded as the
-// flame class rather than the smoke-puff class. Both are now traced, and the
-// cadence is the whole visible behaviour of a geothermal vent — the definition
-// itself is a one-pixel placement marker with no artwork.
-func TestGeothermalSteamCadenceAndWindow(t *testing.T) {
+// flame class rather than the smoke-puff class. The third literal was then read
+// as a container lifetime, which it is not [03 R-FX-01 §3 addendum]. The
+// cadence is the whole visible behaviour of a geothermal vent on a map like
+// Great Divide, whose vent definition is a one-pixel placement marker with no
+// artwork of its own.
+func TestGeothermalSteamCadence(t *testing.T) {
 	s, _ := newStripTestSession(21, 21)
 	pos := [3]numeric.Fixed{numeric.FixedFromInt(104), numeric.FixedFromInt(40), numeric.FixedFromInt(152)}
 
@@ -625,11 +663,11 @@ func TestGeothermalSteamCadenceAndWindow(t *testing.T) {
 		t.Fatalf("strip 4 holds %d objects after the producer, want 1", len(objs))
 	}
 	o := objs[0]
-	if o.family != stripFamilySmoke {
-		t.Fatalf("the geothermal producer built family %d; it is the smoke-puff family, not the flame class", o.family)
+	if o.family != stripFamilyVentSteam {
+		t.Fatalf("the geothermal producer built family %d; it is the vent's own class — not the flame class it was first recorded as, and not the strips-5/9 puffer it was briefly merged into", o.family)
 	}
-	if o.spawnInterval != geothermalSteamInterval || o.windowEnd != geothermalSteamLifetime {
-		t.Fatalf("interval %d window %d, want interval 5 and a 150-tick window", o.spawnInterval, o.windowEnd)
+	if o.spawnInterval != geothermalSteamInterval || o.windowEnd != geothermalSteamCapacityHorizon {
+		t.Fatalf("interval %d horizon %d, want interval 5 and a 150-tick capacity horizon", o.spawnInterval, o.windowEnd)
 	}
 	if o.frameDelayParam != smokeDefaultFrameDelay {
 		t.Fatalf("frame hold %d; the producer passes 0 and the constructor defaults it to 7", o.frameDelayParam)
@@ -641,10 +679,10 @@ func TestGeothermalSteamCadenceAndWindow(t *testing.T) {
 		t.Fatalf("the emitter sits at %v, want the stamp's centre/height point %v", o.src, pos)
 	}
 
-	// Sweeping across the window must spawn on the fifth tick and every fifth
-	// tick after it, and must stop once the next-spawn tick passes the window.
-	// Puffs expire on their own animation clock, so the count is read as
-	// "spawns seen", tracked by watching it rise.
+	// The gate must fire on the fifth tick and every fifth tick after it, past
+	// the capacity horizon and for as long as the sweep runs. Puffs expire on
+	// their own animation clock, so the count is read as "spawns seen", tracked
+	// by watching it rise.
 	spawns := 1
 	last := 1
 	for tick := uint32(1); tick <= 400; tick++ {
@@ -652,10 +690,7 @@ func TestGeothermalSteamCadenceAndWindow(t *testing.T) {
 		s.phaseObjectSweeps(tick)
 		cur := s.strips.strips[stripGeothermalSteam]
 		if len(cur) == 0 {
-			if tick <= geothermalSteamLifetime {
-				t.Fatalf("the emitter was destroyed at tick %d, inside its own %d-tick window", tick, geothermalSteamLifetime)
-			}
-			break
+			t.Fatalf("the emitter was destroyed at tick %d; the vent class's removal verdict is a constant false [03 R-FX-01 §3 addendum]", tick)
 		}
 		if n := len(cur[0].particles); n > last {
 			spawns += n - last
@@ -663,12 +698,12 @@ func TestGeothermalSteamCadenceAndWindow(t *testing.T) {
 		last = len(cur[0].particles)
 	}
 
-	// The window admits next-spawn ticks 5, 10, ... 150: thirty gate spawns
-	// plus the constructor's own.
-	const wantSpawns = 1 + int(geothermalSteamLifetime)/int(geothermalSteamInterval)
+	// Next-spawn ticks 5, 10, ... 400: eighty gate spawns plus the
+	// constructor's own. The horizon at 150 must not have stopped it.
+	const wantSpawns = 1 + 400/int(geothermalSteamInterval)
 	if spawns != wantSpawns {
-		t.Fatalf("the emitter produced %d puffs over its window, want %d (one at construction plus one every %d ticks through tick %d)",
-			spawns, wantSpawns, geothermalSteamInterval, geothermalSteamLifetime)
+		t.Fatalf("the emitter produced %d puffs over 400 ticks, want %d (one at construction plus one every %d ticks); a plume that stops at the %d-tick horizon is the corrected defect",
+			spawns, wantSpawns, geothermalSteamInterval, geothermalSteamCapacityHorizon)
 	}
 }
 
@@ -799,20 +834,26 @@ func TestSmokePuffRetiresAtItsOwnLastFrame(t *testing.T) {
 		t.Fatalf("puff last frame %d, want 2..10 for a twelve-frame entry", p.lastFrame)
 	}
 
-	// Sweeping long enough must retire it. Twelve frames at a hold of at most
-	// seven is well under 200 ticks.
+	// Sweeping long enough must retire that FIRST puff. Twelve frames at a hold
+	// of at most seven is well under 200 ticks. The container itself outlives
+	// it — the class's removal verdict is a constant false
+	// [03 R-FX-01 §3 addendum] — so the assertion is on the sub-record, not on
+	// the container.
 	for tick := uint32(1); tick <= 400; tick++ {
 		s.Clock.GlobalTick = tick
 		s.phaseObjectSweeps(tick)
-		if len(s.strips.strips[9]) == 0 {
+		obj = &s.strips.strips[9][0]
+		gone := true
+		for i := range obj.particles {
+			if obj.particles[i].lastFrame == p.lastFrame && obj.particles[i].frame < p.lastFrame {
+				gone = false
+			}
+		}
+		if gone {
 			return
 		}
 	}
-	live := 0
-	if len(s.strips.strips[9]) > 0 {
-		live = len(s.strips.strips[9][0].particles)
-	}
-	t.Fatalf("after 400 ticks the smoke container is still alive with %d puffs; a puff must die when its cursor passes its last frame", live)
+	t.Fatalf("after 400 ticks the constructor's puff has still not reached its last frame %d", p.lastFrame)
 }
 
 // TestSmokeProducersCarryTheirOwnParameters locks the per-producer table of
@@ -825,8 +866,9 @@ func TestSmokeProducersCarryTheirOwnParameters(t *testing.T) {
 	if SmokePuffStart.FrameCap != 3 || SmokePuffStart.FrameHold != 30 || SmokePuffStart.SpawnInterval != 1 || SmokePuffStart.Lifetime != 0 {
 		t.Fatalf("startsmoke init %+v, want frameCap 3, interval 1, hold 30, lifetime 0", SmokePuffStart)
 	}
-	// The land dust of an above-sea explosion: one at spawn and one every
-	// seven ticks while the fifteen-tick window stands — three particles.
+	// The land dust of an above-sea explosion. The third literal is the
+	// producer's stored deadline, and for THIS class it closes the gate: only
+	// the vent's class ignores it [03 R-FX-01 §3 addendum].
 	if SmokePuffLandDust.SpawnInterval != 7 || SmokePuffLandDust.Lifetime != 15 || SmokePuffLandDust.FrameCap != 0 {
 		t.Fatalf("land dust init %+v, want interval 7, lifetime 15, no frame cap", SmokePuffLandDust)
 	}
@@ -863,18 +905,24 @@ func TestSmokeProducersCarryTheirOwnParameters(t *testing.T) {
 		t.Fatalf("trail frame limit %d, want the entry's twelve frames less one", got)
 	}
 
-	// The land dust really does spawn three particles: one at construction and
-	// one every seven ticks while its fifteen-tick window stands.
+	// The land dust's fifteen-tick window bounds its cadence: one puff at
+	// construction, then the gate fires at tick 7 and tick 14 and refuses tick
+	// 21, because by then the next-spawn tick has passed the deadline. Three
+	// particles, and then a container that retires once they have.
+	//
+	// Corrected 2026-09-01: this briefly expected six, on the reading that the
+	// deadline never closes the gate. That is true only of the vent's class.
 	s2, _ := newStripTestSession(42, 42)
 	s2.SetEffectEntryFrameCount(func(bank, entry string) (int, bool) { return 12, true })
 	s2.Clock.GlobalTick = 0
 	s2.appendStripSmokePuffer(9, [3]numeric.Fixed{}, SmokePuffLandDust)
-	spawns, last := 1, 1
-	for tick := uint32(1); tick <= 40; tick++ {
+	spawns, last, gone := 1, 1, uint32(0)
+	for tick := uint32(1); tick <= 400; tick++ {
 		s2.Clock.GlobalTick = tick
 		s2.phaseObjectSweeps(tick)
 		cur := s2.strips.strips[9]
 		if len(cur) == 0 {
+			gone = tick
 			break
 		}
 		if n := len(cur[0].particles); n > last {
@@ -883,6 +931,166 @@ func TestSmokeProducersCarryTheirOwnParameters(t *testing.T) {
 		last = len(cur[0].particles)
 	}
 	if spawns != 3 {
-		t.Fatalf("land dust produced %d particles over its window, want 3", spawns)
+		t.Fatalf("land dust produced %d particles, want 3 (one at construction plus the gate at ticks 7 and 14)", spawns)
+	}
+	// The other half of the pair: the container must actually go, or an
+	// explosion leaves a permanent emitter behind.
+	if gone == 0 {
+		t.Fatal("the land-dust container was still alive 400 ticks on; its window closed at tick 15")
+	}
+}
+
+// TestSteamCreatedBeforeTheSeamThinsOutButKeepsEmitting locks both halves of
+// the geothermal plume against a retail capture.
+//
+// The PUFFS must retire. The ordering that stopped them from retiring is
+// unavoidable: the steam producer of [05 R-ECO-02 §3] runs from the feature
+// stamp, so a vent's container is built while the map's terrain features are
+// populated — inside the authoritative session constructor, long before any
+// composer exists to fill the frame-count seam. The container resolved a count
+// of zero, its puffs got no last frame, and a smoke puff's ONLY retirement is
+// its cursor reaching that frame [06 R-WFX-01 §5]. The seam now finishes what
+// it finds, taking no draw to do it: each puff retained its own spawn draw, so
+// the value finished is the one retail computes from the same draw.
+//
+// The CONTAINER must not retire, and neither must its spawning. The smoke class
+// overrides the removal verdict with a constant false and its spawn predicate
+// is a bare `nextSpawn <= tick` with no window term
+// [03 R-FX-01 §3 addendum], which is why a retail vent is still steaming
+// eighteen seconds into a capture. Asserting only that the puffs thin out would
+// pass on the build that stopped the whole plume after five seconds.
+func TestSteamCreatedBeforeTheSeamThinsOutButKeepsEmitting(t *testing.T) {
+	s, _ := newStripTestSession(57, 57)
+	s.Clock.GlobalTick = 0
+
+	// The container is built with no resolver installed, exactly as a vent's is.
+	s.appendStripGeothermalSteam([3]numeric.Fixed{})
+	obj := &s.strips.strips[stripGeothermalSteam][0]
+	if obj.frameCountBase != 0 {
+		t.Fatalf("fixture is not exercising the defect: the container resolved %d without a seam", obj.frameCountBase)
+	}
+	if len(obj.particles) != 1 || obj.particles[0].lastFrame != 0 {
+		t.Fatalf("the constructor's own puff is %+v, want one puff with no last frame yet", obj.particles)
+	}
+	if !obj.particles[0].lastFrameDrawn {
+		t.Fatal("the producer spends its draw whether or not the entry resolved; it must be retained")
+	}
+
+	// Filling the seam finishes the container and the puff it already spawned.
+	s.SetEffectEntryFrameCount(func(bank, entry string) (int, bool) {
+		if entry != smokePuffEntry {
+			return 0, false
+		}
+		return 12, true
+	})
+	obj = &s.strips.strips[stripGeothermalSteam][0]
+	if obj.frameCountBase != 11 {
+		t.Fatalf("container frame-count base %d after the seam was filled, want 11", obj.frameCountBase)
+	}
+	if lf := obj.particles[0].lastFrame; lf < 2 || lf > 10 {
+		t.Fatalf("the already-spawned puff's last frame is %d, want 2..10 for a twelve-frame entry", lf)
+	}
+
+	// Individual puffs must retire, so the plume settles at a handful rather
+	// than growing without bound, and the container must still be emitting
+	// long after the 150-tick capacity horizon has passed.
+	peak := 0
+	for tick := uint32(1); tick <= 1800; tick++ {
+		s.Clock.GlobalTick = tick
+		s.phaseObjectSweeps(tick)
+		if len(s.strips.strips[stripGeothermalSteam]) == 0 {
+			t.Fatalf("the vent's container was removed at tick %d; retail never removes one [03 R-FX-01 §3 addendum]", tick)
+		}
+		if n := len(s.strips.strips[stripGeothermalSteam][0].particles); n > peak {
+			peak = n
+		}
+	}
+	live := len(s.strips.strips[stripGeothermalSteam][0].particles)
+	if live == 0 {
+		t.Fatal("the vent stopped emitting; retail's spawn predicate has no window term [03 R-FX-01 §3 addendum]")
+	}
+	// One puff every five ticks over 1800 ticks is 360 spawns. A plume that
+	// retires nothing would hold every one of them.
+	if peak > 40 {
+		t.Fatalf("the plume peaked at %d puffs; puffs are not retiring at their last frame [06 R-WFX-01 §5]", peak)
+	}
+}
+
+// TestWeaponSmokeDrainsAfterTheShootingStops is the test the smoke-container
+// regression got past, written from the play test that found it.
+//
+// A firefight creates weapon-side smoke containers at a high rate: two per shot
+// at the muzzle and the impact, plus one per trail tick along each projectile's
+// flight. Every one of them carries lifetime 0, so each must spawn its single
+// puff and go. When they stopped going, strip 9 saturated at its 401-object
+// bound within twenty seconds of contact and held roughly fifteen thousand live
+// puffs for the rest of the battle — a carpet of smoke over every place a shot
+// had ever landed, and about thirteen milliseconds a frame of blitting on a
+// thirty-three millisecond budget.
+//
+// The assertion is the shape of the defect rather than a puff census: after the
+// shooting stops, the strip must drain to nothing.
+func TestWeaponSmokeDrainsAfterTheShootingStops(t *testing.T) {
+	s, _ := newStripTestSession(23, 23)
+	s.SetEffectEntryFrameCount(func(bank, entry string) (int, bool) { return 12, true })
+	pos := [3]numeric.Fixed{numeric.FixedFromInt(64), numeric.FixedFromInt(0), numeric.FixedFromInt(64)}
+
+	peak := 0
+	for tick := uint32(1); tick <= 600; tick++ {
+		s.Clock.GlobalTick = tick
+		if tick <= 300 && tick%5 == 0 {
+			// Ten shooters, one shot every five ticks: muzzle, trail, impact.
+			for i := 0; i < 10; i++ {
+				s.appendStripSmokePuffer(9, pos, SmokePuffStart)
+				s.appendStripSmokePuffer(9, pos, SmokePuffTrail)
+				s.appendStripSmokePuffer(9, pos, SmokePuffTrail)
+			}
+		}
+		s.phaseObjectSweeps(tick)
+		if n := len(s.strips.strips[9]); n > peak {
+			peak = n
+		}
+	}
+
+	// While the shooting lasts the strip must stay clear of the eviction bound.
+	// Eighteen hundred containers are created here; the live count is bounded
+	// by how long ONE puff's animation runs, not by how many shots have been
+	// fired, so it settles near six a tick times a puff's few dozen ticks. The
+	// regression pegged it at exactly 401 and left it there.
+	if peak >= 401 {
+		t.Fatalf("strip 9 peaked at %d containers during the firefight; it reached the eviction bound, so containers are not retiring", peak)
+	}
+	// And once it stops, nothing is left behind.
+	if n := len(s.strips.strips[9]); n != 0 {
+		t.Fatalf("%d smoke containers survived 300 ticks after the last shot; every weapon-side producer passes lifetime 0 and must leave nothing", n)
+	}
+}
+
+// TestPuffFamiliesRiseAtDifferentRates locks the second difference between the
+// two puff classes [03 R-FX-01 §3 addendum]: both add the published wind words
+// multiplied by 8 to the raw X and Z words, but the strips-5/9 puffer scales
+// the map's authored gravity word by 4 where the vent scales it by 16. A vent's
+// steam climbs four times as fast as a shot's smoke.
+//
+// The single scale of 16 was read off the vent's update on the assumption that
+// there was one class; it made every weapon-side puff rise like steam.
+func TestPuffFamiliesRiseAtDifferentRates(t *testing.T) {
+	const gravity = 100
+
+	rise := func(family stripFamily, strip int) int64 {
+		s, _ := newStripTestSession(24, 24)
+		o := stripObject{family: family, windowEnd: 0xFFFFFFFF}
+		o.particles = []stripParticle{{lastFrame: 0, frameDelay: 0}}
+		s.strips.append(strip, o)
+		before := s.strips.strips[strip][0].particles[0].y
+		s.strips.sweepStrip(strip, 1, s.CrtRNG(), nil, gravity)
+		return s.strips.strips[strip][0].particles[0].y.Raw() - before.Raw()
+	}
+
+	if got := rise(stripFamilySmoke, 9); got != gravity*4 {
+		t.Fatalf("a weapon-side puff rose by %d raw words a tick, want the gravity word times 4", got)
+	}
+	if got := rise(stripFamilyVentSteam, 4); got != gravity*16 {
+		t.Fatalf("a vent puff rose by %d raw words a tick, want the gravity word times 16", got)
 	}
 }

@@ -4360,18 +4360,41 @@ zero advances one frame and redraws `crtRand() · (hold/2) / 0x8000 + hold/2`;
 it is removed when its frame index reaches its last frame. Each particle is
 drawn as the selected frame at its projected point with **no** coverage gate
 of its own. Established from the emitter's spawn loop and the particle update.
-*Supported inference:* the frame-limit field holds the resolved frame count
-(the table's `frameCap`, or the sequence length when `frameCap` is 0); the
-emitter's only virtual initializer takes three arguments, so `frameCap` and
-the smoke selector reach the record as producer-side field writes whose site
-is not yet traced (Unknown, tail).
+The frame-limit field holds the resolved frame count (the table's `frameCap`,
+or the sequence length when `frameCap` is 0) — **Established** as of
+2026-09-01; see the closure note below, which withdraws the *Supported
+inference* that used to stand here.
 
 Previous text: "spawn draws one CRT value for its first countdown
 `crtRand() · (hold − 2) / 0x8000 + 2`; … `+gravity · 4` in Y … drawn (after
 its own one-point coverage gate)". The draw scales by the frame field, not
-`hold`; the Y multiplier is 16, not 4; and there is no per-particle coverage
-test — the trail's instruction listing shows all three. Exhaustion of the shared strip pool drops the puff silently;
-a root flag byte disables every strip allocation (`[03 R-STRIP-01 §1]`).
+`hold`; and there is no per-particle coverage test — the trail's instruction
+listing shows both. Exhaustion of the shared strip pool drops the puff
+silently; a root flag byte disables every strip allocation
+(`[03 R-STRIP-01 §1]`).
+
+**Correction, 2026-09-01 — the Y multiplier for these producers is 4.** The
+sentence above also said "the Y multiplier is 16, not 4", reverting the
+original `· 4`. That part of the 2026-08-29 correction is itself withdrawn: it
+was read off the **geothermal vent's** class, which is a different class from
+the strips-5/9 puffer every producer in the table above uses. The two updates
+are identical instruction for instruction except the shift on the gravity word
+— two for the puffer (× 4), four for the vent (× 16) — so the original `· 4`
+was right for this section all along, and a weapon-side puff rises at a quarter
+of a vent plume's rate. Both vtables are tabulated in
+[03 R-FX-01 §3 addendum §B]. The rest of the 2026-08-29 correction (the draw
+scaling by the frame field, and the absence of a per-particle coverage gate)
+stands.
+
+**Closed, 2026-09-01 — how `frameCap` and the selector reach the record.** The
+*Supported inference* below the per-particle paragraph guessed that they arrive
+as "producer-side field writes whose site is not yet traced", on the premise
+that "the emitter's only virtual initializer takes three arguments". It takes
+**six**: `(point, frameCap, spawnInterval, frameHold, lifetime, smokeSelector)`,
+exactly the row this section's table already assumed. The init clamps the bound
+entry's frame count less one by `frameCap` when that is nonzero, stores the
+selector, and picks `smoke 1` or `smoke 2` from it. There are no producer-side
+field writes; every producer in the table passes all six as literals.
 
 ### Closed — the presentation RNG census [R-WFX-01 §6] (2026-08-29)
 

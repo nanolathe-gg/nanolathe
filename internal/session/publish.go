@@ -149,15 +149,21 @@ func (s *Session) publishSnapshot(tick uint32) {
 			// owner's lobby colour index [07 R-HUD-03 §2]; it is the same
 			// selector the minimap contacts already carry.
 			v.OwnerColor, v.OwnerColorKnown = radarOwnerPalette(s, u.Owner, true)
-			if s.Movement != nil {
-				if st := s.Movement.Steers[u.Handle]; st != nil {
-					v.Heading = st.Heading
-				} else if fl := s.Movement.Flights[u.Handle]; fl != nil {
-					v.Heading = fl.Heading
-				} else if coll := s.Movement.Collisions[u.Handle]; coll != nil {
-					v.Heading = coll.Heading
-				}
-			}
+			// The heading published is the unit record's own word and nothing
+			// else. There is exactly one heading word — "the unit's current
+			// heading word", the one the steering step just turned
+			// [04 §8.1][R-MOV-01 §4] — and every mover surface beside it is a
+			// copy that surface's own step maintains (I13).
+			//
+			// This used to prefer the ground steer record's copy, falling back
+			// to the flight record and then to the collision record. Every unit
+			// gets a steer record at EnsureUnit, including an aircraft, and the
+			// air mover writes the unit record and the collision record but
+			// never the steer — so an aircraft published the heading its steer
+			// was seeded with at creation and never turned into the direction it
+			// was flying. Reading the record itself is both correct and
+			// unambiguous: the ground commit writes the record and both mirrors
+			// together, so no reachable state has them disagreeing.
 			if u.Def != nil {
 				v.DefName = u.Def.CanonicalKey
 				v.Model = u.Def.ObjectName
