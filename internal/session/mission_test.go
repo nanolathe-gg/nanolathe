@@ -6,10 +6,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/save"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -216,6 +220,121 @@ func TestSyntheticCampaignRetainsCompositionIdentity(t *testing.T) {
 	// restore/continuation once a session constructor for that seam exists in
 	// the repository; the save player-table/mission-identity decoder and its
 	// constructor are the deciders. Do not reconstruct it from the OTA title.
+}
+
+// TestCampaignPlayerTableSidesFromAuthoredCampaignSide locks the campaign
+// player-table writer: the new-game panel stamps the two campaign slots'
+// side bytes as (0, 1) for Arm and (1, 0) for Core [08 R-CAMP-01 §3], and a
+// campaign whose `[HEADER] campaignside` names a side is played as that side
+// [08 R-CAMP-01 §1]. `ALL` and an unresolved name name no side and must leave
+// the commander identity unknown [08 R-TRIG-01 §3].
+func TestCampaignPlayerTableSidesFromAuthoredCampaignSide(t *testing.T) {
+	fs := fsFromMap(t, map[string]string{
+		"camps/Arm Test.tdf":     "[HEADER]\n{\ncampaignside=ARM;\n}\n[MISSION0]\n{\nmissionname=First;\nmissionfile=Valid.ota;\n}\n",
+		"camps/Core Test.tdf":    "[HEADER]\n{\ncampaignside=core;\n}\n[MISSION0]\n{\nmissionname=First;\nmissionfile=Valid.ota;\n}\n",
+		"camps/Any Test.tdf":     "[HEADER]\n{\ncampaignside=ALL;\n}\n[MISSION0]\n{\nmissionname=First;\nmissionfile=Valid.ota;\n}\n",
+		"camps/Unknown Test.tdf": "[HEADER]\n{\ncampaignside=Zaxxon;\n}\n[MISSION0]\n{\nmissionname=First;\nmissionfile=Valid.ota;\n}\n",
+	})
+	cat := minimalCatalogForStrict() // Sides: ordinal 0 ARM/armcom, ordinal 1 CORE/corcom.
+	cases := []struct {
+		path      string
+		wantKnown bool
+		want      [2]int8
+	}{
+		{"camps/arm test.tdf", true, [2]int8{0, 1}},
+		{"camps/core test.tdf", true, [2]int8{1, 0}},
+		{"camps/any test.tdf", false, [2]int8{}},
+		{"camps/unknown test.tdf", false, [2]int8{}},
+		{"", false, [2]int8{}}, // bare-OTA type 1: no campaign file, no authored side
+	}
+	for _, tc := range cases {
+		s := &Session{Catalog: cat}
+		m := &mission.Mission{Type: mission.TypeCampaign, CampaignPath: tc.path}
+		applyCampaignPlayerTableSides(s, fs, m)
+		for slot := 0; slot < 2; slot++ {
+			if s.campaignPlayerSideKnown[slot] != tc.wantKnown {
+				t.Fatalf("campaign %q slot %d known = %v, want %v", tc.path, slot, s.campaignPlayerSideKnown[slot], tc.wantKnown)
+			}
+			if tc.wantKnown && s.campaignPlayerSide[slot] != tc.want[slot] {
+				t.Fatalf("campaign %q slot %d side = %d, want %d [08 R-CAMP-01 §3]", tc.path, slot, s.campaignPlayerSide[slot], tc.want[slot])
+			}
+		}
+		// The panel writes two rows; slots 2..9 are not part of a campaign
+		// battle's owner tests and stay unknown [08 R-TRIG-01 §3].
+		for slot := 2; slot < len(s.campaignPlayerSideKnown); slot++ {
+			if s.campaignPlayerSideKnown[slot] {
+				t.Fatalf("campaign %q wrote an untraced row for slot %d", tc.path, slot)
+			}
+		}
+	}
+}
+
+// TestCampaignPlayerTableSidesDrawNothing proves the player-table stamp is a
+// pure identity copy: it consumes neither stream [I4].
+func TestCampaignPlayerTableSidesDrawNothing(t *testing.T) {
+	fs := fsFromMap(t, map[string]string{
+		"camps/Arm Test.tdf": "[HEADER]\n{\ncampaignside=ARM;\n}\n[MISSION0]\n{\nmissionname=First;\nmissionfile=Valid.ota;\n}\n",
+	})
+	rng.SeedGlobal(0x1234, 0x5678)
+	simBefore, crtBefore := rng.Global.Sim.Draws(), rng.Global.Crt.Draws()
+	s := &Session{Catalog: minimalCatalogForStrict()}
+	applyCampaignPlayerTableSides(s, fs, &mission.Mission{Type: mission.TypeCampaign, CampaignPath: "camps/arm test.tdf"})
+	if !s.campaignPlayerSideKnown[0] {
+		t.Fatal("fixture did not stamp the campaign player table")
+	}
+	if got, want := rng.Global.Sim.Draws(), simBefore; got != want {
+		t.Fatalf("player-table stamp drew %d simulation values, want %d [I4]", got-want, 0)
+	}
+	if got, want := rng.Global.Crt.Draws(), crtBefore; got != want {
+		t.Fatalf("player-table stamp drew %d CRT values, want %d [I4]", got-want, 0)
+	}
+}
+
+// TestRetailRestoreKeepsPlayerTableSides locks the restore-side writer: each
+// `Player%i` account's `Side` item is that slot's player-table side ordinal
+// [08 "Player records"], so a resumed battle keeps the commander identity of
+// [08 R-TRIG-01 §3].
+func TestRetailRestoreKeepsPlayerTableSides(t *testing.T) {
+	cat := minimalCatalogForStrict()
+	s := &Session{
+		Catalog: cat,
+		Clock:   &clock.State{Requested: 10, Active: 10},
+		Econ:    &economy.Service{},
+		Units:   units.NewSliced(8, cat),
+		Mission: &mission.Mission{Type: mission.TypeCampaign},
+	}
+	// A construction-time row that the save does not name must survive; a row
+	// the save names must take the saved value.
+	s.campaignPlayerSide[1], s.campaignPlayerSideKnown[1] = 1, true
+	stage := &RetailBattleStage{
+		Session:    s,
+		StableUnit: map[uint16]pool.Handle{},
+		Image: &save.BattleImage{
+			HumanPlayer: 0,
+			Players:     []save.PlayerSlot{{Index: 0, Side: 1}, {Index: 2, Side: 0}},
+		},
+	}
+	if err := RestoreRetailBattleCore(stage); err != nil {
+		t.Fatalf("RestoreRetailBattleCore: %v", err)
+	}
+	if !s.campaignPlayerSideKnown[0] || s.campaignPlayerSide[0] != 1 {
+		t.Fatalf("slot 0 side = %d known %v, want 1/true from the Player0 account [08 \"Player records\"]", s.campaignPlayerSide[0], s.campaignPlayerSideKnown[0])
+	}
+	if !s.campaignPlayerSideKnown[1] || s.campaignPlayerSide[1] != 1 {
+		t.Fatalf("restore dropped the constructed row for slot 1: side %d known %v", s.campaignPlayerSide[1], s.campaignPlayerSideKnown[1])
+	}
+	if !s.campaignPlayerSideKnown[2] || s.campaignPlayerSide[2] != 0 {
+		t.Fatalf("slot 2 side = %d known %v, want 0/true from the Player2 account", s.campaignPlayerSide[2], s.campaignPlayerSideKnown[2])
+	}
+	// A slot no account named stays unknown and the identity fails closed.
+	if s.campaignPlayerSideKnown[3] {
+		t.Fatal("restore invented a side for a slot no Player account named")
+	}
+	// The restored ordinal is what the commander identity resolves through.
+	u := &units.Unit{Owner: 0, Def: cat.Units["corcom"]}
+	if !s.missionTriggerContext(0).IsCommander(u) {
+		t.Fatal("restored player-table side did not resolve the owner's side commander [08 R-TRIG-01 §3]")
+	}
 }
 
 func TestLoadCampaignAIProfileRequiresAuthoredProfile(t *testing.T) {

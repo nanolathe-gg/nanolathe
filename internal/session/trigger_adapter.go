@@ -73,10 +73,11 @@ func (s *Session) missionTriggerContext(tick uint32) triggers.PollContext {
 		} else if s.Mission != nil && s.Mission.Type == mission.TypeCampaign && s.campaignPlayerSideKnown[u.Owner] {
 			side = int(s.campaignPlayerSide[u.Owner])
 		} else {
-			// TODO(question): expose the campaign player table's side ordinal at
-			// first construction and restore; a trace of the campaign player-table
-			// writer is the decider. Do not infer it from owner parity, commander
-			// type, or side name [08 R-TRIG-01 §3].
+			// The campaign player table is written at construction and again by a
+			// retail restore (see Session.campaignPlayerSide). A slot neither
+			// writer supplied has no authored side, and the identity fails closed
+			// rather than being inferred from owner parity, commander type, or
+			// side name [08 R-TRIG-01 §3].
 			return false
 		}
 		if side < 0 || side >= len(s.Catalog.Sides) || s.Catalog.Sides[side] == nil {

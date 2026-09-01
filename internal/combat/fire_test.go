@@ -157,7 +157,15 @@ func TestFirePoolFullSuppressesCallbacksButRetainsDraws(t *testing.T) {
 	if svc.Count() != ProjectileCapacity {
 		t.Fatalf("count %d", svc.Count())
 	}
-	w := weaponForFire(10, 10, 45, 0, 0, false, false, false, true, "s.wav", 0, 0) // spray nonzero
+	// Correction (WU-19-2): this case used to author a nonzero `sprayangle` on
+	// a line-of-sight weapon. `sprayangle`'s one reader is the burst
+	// scheduler's projectile-phase draw [06 §4.3] [06 R-WPN-03 §1]; the two
+	// retained fire-time draws are the TURRET executor's accuracy spread
+	// [06 §4.4] [06 R-WPN-03 §4]. The fixture is therefore a turret weapon
+	// whose shooter is below full health, so its computed bound is nonzero
+	// even with `accuracy` at the default 0.
+	w := weaponForFire(10, 10, 0, 0, 0, false, false, false, true, "s.wav", 0, 0)
+	w.Turret = true
 	slot := &Slot{Weapon: w, Reload: 0, Target: Target{Kind: TargetPoint}}
 	spy := &FireSpy{}
 	muzzleCalls := 0
@@ -165,7 +173,7 @@ func TestFirePoolFullSuppressesCallbacksButRetainsDraws(t *testing.T) {
 	r := rng.NewSimulation(42)
 	before := r.Draws()
 	// Need to supply slot muzzle piece tracking; but we test retains.
-	h, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint, X: numeric.FixedFromInt(5)}, 0, FirePorts{RNG: &r, MuzzlePiece: muzzle, Spy: spy})
+	h, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint, X: numeric.FixedFromInt(5)}, 0, FirePorts{RNG: &r, MuzzlePiece: muzzle, Spy: spy, ShooterHealth: 50, ShooterMaxHealth: 100})
 	if ok || h != 0 {
 		t.Fatalf("pool-full fire should fail")
 	}
@@ -179,21 +187,43 @@ func TestFirePoolFullSuppressesCallbacksButRetainsDraws(t *testing.T) {
 	if after-before != 2 {
 		t.Fatalf("pool-full with nonzero spread must retain 2 RNG draws [06 §4.4] I4, got %d draws", after-before)
 	}
-	// Zero spread should retain 0 draws.
+	// A full-health turret shooter with `accuracy` 0 has a bound of exactly 0,
+	// fires on its solved angles and draws nothing [06 R-WPN-03 §4].
 	var svc2 Service
 	for i := 0; i < ProjectileCapacity; i++ {
 		svc2.Reserve()
 	}
 	w2 := weaponForFire(11, 10, 0, 0, 0, false, false, false, false, "", 0, 0)
+	w2.Turret = true
 	slot2 := &Slot{Weapon: w2}
 	r2 := rng.NewSimulation(99)
 	before2 := r2.Draws()
-	_, ok2 := TryFire(&svc2, slot2, 0, Target{Kind: TargetPoint}, 0, FirePorts{RNG: &r2, Spy: &FireSpy{}})
+	_, ok2 := TryFire(&svc2, slot2, 0, Target{Kind: TargetPoint}, 0, FirePorts{RNG: &r2, Spy: &FireSpy{}, ShooterHealth: 100, ShooterMaxHealth: 100})
 	if ok2 {
-		t.Fatalf("should fail pool full zero spray")
+		t.Fatalf("should fail pool full zero spread")
 	}
 	if r2.Draws()-before2 != 0 {
-		t.Fatalf("zero spray should consume 0 draws, got %d", r2.Draws()-before2)
+		t.Fatalf("zero spread should consume 0 draws, got %d", r2.Draws()-before2)
+	}
+
+	// A non-turret weapon computes no spread and draws nothing at all,
+	// whatever its `accuracy` and whatever the shooter's health
+	// [06 §4.4 correction] [06 R-WPN-03 §4].
+	var svc3 Service
+	for i := 0; i < ProjectileCapacity; i++ {
+		svc3.Reserve()
+	}
+	w3 := weaponForFire(12, 10, 0, 0, 0, false, false, false, false, "", 0, 0)
+	w3.Accuracy = 4096
+	slot3 := &Slot{Weapon: w3}
+	r3 := rng.NewSimulation(7)
+	before3 := r3.Draws()
+	_, ok3 := TryFire(&svc3, slot3, 0, Target{Kind: TargetPoint}, 0, FirePorts{RNG: &r3, Spy: &FireSpy{}, ShooterHealth: 50, ShooterMaxHealth: 100})
+	if ok3 {
+		t.Fatalf("should fail pool full non-turret")
+	}
+	if r3.Draws()-before3 != 0 {
+		t.Fatalf("a non-turret weapon must consume no fire-time draws, got %d", r3.Draws()-before3)
 	}
 }
 

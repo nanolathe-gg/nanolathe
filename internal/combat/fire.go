@@ -95,6 +95,14 @@ type FirePorts struct {
 	// [01 §7.1] I4.
 	RNG *rng.Simulation
 
+	// ShooterHealth, ShooterMaxHealth and ShooterKills are the three shooter
+	// terms of the turret executor's accuracy spread [06 §4.4]
+	// [06 R-WPN-03 §4]. They are the shooter's own current and maximum health
+	// and its credited-kill count; nothing about the target enters the bound.
+	ShooterHealth    int32
+	ShooterMaxHealth int32
+	ShooterKills     int32
+
 	// Spy observes the callback order for tests. It is an observer only —
 	// nothing in the spawner branches on it.
 	Spy *FireSpy
@@ -167,24 +175,42 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 		target = pos
 	}
 
-	// Spread. Up to two simulation-RNG draws whenever the spread term is
-	// nonzero, retained on pool-full [06 §4.4] C5 I4. The sampling shape is
-	// the one [06 §4.3] gives: each draw is bounded by the authored spray
-	// field and re-centred by half that bound. The offsets are computed here,
-	// before allocation, so the draw count survives a pool-full failure, and
-	// applied after initialization, where the angles exist.
+	// The accuracy spread. It lives in the **turret** executor and only there
+	// [06 §4.4] [06 R-WPN-03 §4]: a weapon without `turret` reaches the same
+	// ordinary creator, computes no spread and consumes no randomness at all.
+	// Both draws use the same computed bound, yaw first, and the shared
+	// simulation generator returns zero without advancing for a bound below
+	// two — so a bound of exactly 1 passes the nonzero test and draws nothing.
 	//
-	// TODO(question): [06 §4.4] establishes the draw count and that an
-	// "accuracy calculation" precedes it, but the parsed accuracy, tolerance
-	// and pitchtolerance fields are dead stores [06 §3.3] — the retained
-	// spread is the executor's own. The bound used here is sprayangle, the
-	// same field the burst path samples; the second bound is the adjacent
-	// wobble field [06 §4.3], not yet identified in the compiled record.
+	// The site is fixed: after the muzzle query above and before the creator
+	// below, so the two draws are consumed even when the allocation then fails
+	// [06 §4.4] C5 I4.
+	//
+	// Correction (WU-19-2): this block used to draw twice bounded by the
+	// authored `sprayangle`, on the reading that the accuracy family were dead
+	// stores. [06 R-WPN-03 §1]'s whole-image census retracts that: `accuracy`
+	// is this spread's base term, and `sprayangle`'s one reader is the burst
+	// scheduler's single spray draw in the projectile phase [06 §4.3], which
+	// AdvanceBursts already performs. Drawing on it here as well both used the
+	// wrong bound and double-counted the field.
 	var yawSpread, pitchSpread int32
-	if ports.RNG != nil && w.SprayAngle != 0 {
-		bound := uint32(w.SprayAngle)
-		yawSpread = recentred(ports.RNG.Uint32n(bound), w.SprayAngle)
-		pitchSpread = recentred(ports.RNG.Uint32n(bound), w.SprayAngle)
+	if w.Turret {
+		bound := AccuracySpreadBound(w.Accuracy, ports.ShooterHealth, ports.ShooterMaxHealth, ports.ShooterKills)
+		if bound != 0 && ports.RNG != nil {
+			yawSpread = recentred(ports.RNG.Uint32n(uint32(bound)), int32(bound))
+			pitchSpread = recentred(ports.RNG.Uint32n(uint32(bound)), int32(bound))
+		}
+		// The spread lands on the slot's stored angles, and that mutation is
+		// retained on a pool-full failure: the next tick's drift gate then
+		// measures a freshly solved pair against angles that already carry a
+		// draw [06 §4.4 "Retention after a full pool"]. Our stored yaw is
+		// already absolute where retail's is relative-plus-heading at this
+		// point (see the convention marker in StepWeaponsForUnit), so only the
+		// draw is added here.
+		if yawSpread != 0 || pitchSpread != 0 {
+			slot.DesiredYaw = uint16(int32(slot.DesiredYaw) + yawSpread)
+			slot.DesiredPitch = uint16(int32(slot.DesiredPitch) + pitchSpread)
+		}
 	}
 
 	// The creation family decides whether a record is created at all: a weapon
@@ -262,7 +288,19 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 
 	// Apply the retained spread to the aimed trajectory, recomputing the
 	// velocity components from the perturbed angles through the fixed-point
-	// helpers rather than nudging them in Cartesian space [06 §4.3].
+	// helpers rather than nudging them in Cartesian space.
+	//
+	// The ballistic creator consumes the slot's stored yaw and pitch directly
+	// [06 §6.4], so the draw reaches its trajectory by construction.
+	// TODO(question): [06 §6.3] writes the ordinary creator's own arithmetic
+	// as re-deriving yaw and pitch from the muzzle and the aim point, which
+	// does not by itself show how the slot's spread reaches an ordinary shot's
+	// trajectory — yet [06 R-WPN-03 §4] states the effect in firing terms ("a
+	// full-health shooter with accuracy = 0 ... fires exactly on its solved
+	// angles"), which is only true if the draw does steer the shot. The
+	// owning section is followed here and the offset is applied to both
+	// families. Settling it needs a trace of the aim point the turret executor
+	// hands the ordinary creator.
 	if yawSpread != 0 || pitchSpread != 0 {
 		p.Yaw = numeric.Angle(uint16(int32(p.Yaw) + yawSpread))
 		p.Pitch = numeric.Angle(uint16(int32(p.Pitch) + pitchSpread))

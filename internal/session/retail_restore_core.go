@@ -40,6 +40,16 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 		}
 		p.ApplyToEconomy(&s.Econ.Players[p.Index])
 		s.Econ.Players[p.Index].Exists = true
+		// The `Player%i` account's `Side` item is that slot's player-table side
+		// ordinal, restored into the low byte with 0 for a missing or mistyped
+		// item [08 "Player records"]. It is the restore-side source of the
+		// commander identity of [08 R-TRIG-01 §3], which is otherwise lost when
+		// a battle is resumed instead of constructed. A byte outside the signed
+		// slot names no row in the side-data table, so it stays unknown.
+		if p.Index < len(s.campaignPlayerSide) && p.Side <= 0x7f {
+			s.campaignPlayerSide[p.Index] = int8(p.Side)
+			s.campaignPlayerSideKnown[p.Index] = true
+		}
 	}
 	if image.HumanPlayer >= 0 && image.HumanPlayer < 10 {
 		s.LocalOwner = uint8(image.HumanPlayer)

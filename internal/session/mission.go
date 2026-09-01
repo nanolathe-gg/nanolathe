@@ -126,6 +126,9 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 		p.EndGameCountdown = -1
 		p.Allies[i] = true
 	}
+	// The two campaign player rows exist now, so the panel's side bytes can be
+	// stamped onto them before any trigger consumer runs.
+	applyCampaignPlayerTableSides(s, fs, m)
 	s.Econ.SeedDeadlines(0) // UpdateTime/WinLoseTime/DisplayTimer seeded to GlobalTick per [05] C5; WinLoseTime is trigger poll deadline [08 "Evaluation"]
 	// DET-01 [R-CORE-02]: battle bootstrap seeds both streams fresh before any
 	// battle setup draw; battle-entry wind zeroes the deadline with NO draws
@@ -189,6 +192,80 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 		return nil, fmt.Errorf("session: composition invalid: %w", err)
 	}
 	return s, nil
+}
+
+// applyCampaignPlayerTableSides stamps the campaign player table's per-slot
+// side ordinal. That ordinal is the whole of the commander identity every
+// commander-driven trigger resolves through: a unit is a commander when its
+// definition name equals, case-insensitively, the commander name of the
+// *unit's own owner's* side in the side-data table — not the local side's and
+// not the definition's own flag [08 R-TRIG-01 §3].
+//
+// The writer is the single-player new-game panel. Choosing Arm sets the local
+// side index to 0 and the two campaign player slots' side bytes to (0, 1);
+// choosing Core sets 1 and (1, 0) [08 R-CAMP-01 §3]. Those two rows are the
+// whole table: every trigger owner test compares against slot 0 or slot 1 and
+// no other slot is visible to one [08 R-TRIG-01 §3].
+//
+// Which of the two rows a battle runs under is settled before the campaign
+// list is ever filtered, and a campaign whose `[HEADER] campaignside` names a
+// side is offered to that side alone — so for a named side that name is the
+// side the mission is played as [08 R-CAMP-01 §1 "campaignside filters, it
+// does not assign"]. The same section records that the literal `ALL` is
+// admitted to both lists and settles nothing, so it stays unknown here and the
+// identity fails closed rather than defaulting.
+func applyCampaignPlayerTableSides(s *Session, fs vfs.FSOps, m *mission.Mission) {
+	if s == nil || fs == nil || m == nil || s.Catalog == nil {
+		return
+	}
+	if m.Type != mission.TypeCampaign || m.CampaignPath == "" {
+		// A type-1 mission reached by a bare OTA path carries no campaign file
+		// and therefore no authored side name. The front end's local-side value
+		// is the only other source [08 R-CAMP-01 §1] and no constructor seam
+		// carries it, so the identity stays unknown.
+		return
+	}
+	campaign, err := mission.DiscoverCampaign(fs, m.CampaignPath)
+	if err != nil || campaign == nil || campaign.Document == nil || campaign.Document.Root == nil {
+		return
+	}
+	header := campaign.Document.Root.Section("HEADER")
+	if header == nil {
+		// A campaign file without a `[HEADER]` block is skipped by the
+		// enumeration that offers it, so it names no side [08 R-CAMP-01 §1].
+		return
+	}
+	name, ok := header.StringValue("campaignside", "")
+	name = strings.TrimSpace(name)
+	if !ok || name == "" || strings.EqualFold(name, "ALL") {
+		// TODO(question): `campaignside=ALL` names no side and no stock campaign
+		// authors it; the decider is the front-end local-side value, which
+		// [08 R-CAMP-01 §1] records as settled before the campaign list is
+		// filtered. Do not default a side here.
+		return
+	}
+	// The admission test compares `campaignside` case-insensitively against the
+	// side's name, so the side-data table's ordinal for that name is the local
+	// side index [08 R-CAMP-01 §1], [02 §6].
+	local := -1
+	for i, side := range s.Catalog.Sides {
+		if side != nil && strings.EqualFold(strings.TrimSpace(side.Name), name) {
+			local = i
+			break
+		}
+	}
+	switch local {
+	case 0:
+		s.campaignPlayerSide[0], s.campaignPlayerSide[1] = 0, 1
+	case 1:
+		s.campaignPlayerSide[0], s.campaignPlayerSide[1] = 1, 0
+	default:
+		// The panel writes exactly the two pairs above; an unresolved name, or
+		// one resolving to a further side-table ordinal, has no authored row
+		// [08 R-CAMP-01 §3].
+		return
+	}
+	s.campaignPlayerSideKnown[0], s.campaignPlayerSideKnown[1] = true, true
 }
 
 // parseCampaignMissionSelector accepts only the explicit composition identity

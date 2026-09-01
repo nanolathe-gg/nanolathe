@@ -725,24 +725,67 @@ func unpackXZ(packed int32) (x, z int32) {
 	return x, z
 }
 
-// GroundHeight is the port 16 read stub [04 §4.4] C15: world height query at
-// packed coordinates, shifted into 16.16. The terrain height byte is queried
-// via injected height func; without one we return 0 per fallback.
+// groundHeightOffMapSentinel is the raw, unshifted −1 that world.Terrain.
+// HeightAt returns when the packed coordinate falls off the last valid
+// interior cell [03 §2.3]. It is an out-of-band marker in that function's own
+// contract (see its doc comment), not a height in 16.16 — retail's port
+// shifts its off-map −1 left 16 into −0x10000, so this function must reshape
+// the marker rather than pass it through [04 §4.4].
+const groundHeightOffMapSentinel = numeric.Fixed(-1)
+
+// GroundHeightOffMap is engine port 16's off-map read: the terrain query's
+// raw −1 sentinel shifted left 16 into 16.16, i.e. −0x10000 (−1.0), not zero
+// [04 §4.4].
+const GroundHeightOffMap = numeric.Fixed(-0x10000)
+
+// GroundHeight is engine port 16's read arithmetic [04 §4.4] C15: the shared
+// terrain height query at the unpacked X and Z, in 16.16. PackXZ/unpackXZ's
+// [R-COB-03 §3] high-half-X/low-half-Z convention applies — packedXZ is the
+// single argument authored `GROUND_HEIGHT(x, z)` scripts pass after packing
+// [fmt cob]. heightFn is the shared world height query in 16.16
+// (world.Terrain.HeightAt or an injected test double per [03 §2.3]); this
+// package takes it as a parameter rather than importing internal/world so the
+// engine-port arithmetic stays free of a world dependency — the production
+// binding lives at internal/session/composition.go, the one seam allowed to
+// wire the two together.
 //
-// TODO(question): world height query is 16.16 via bilinear interpolation [03
-// §2.3] and uses the signed floor shift helper for cell math [03 §2.1] I3. The
-// pack interpretation also matters (see PackXZ). Until the movement world is
-// available in phase 7, this stub returns 0 when heightFn is nil.
-func GroundHeight(packedXZ int32, heightFn func(packedXZ int32) numeric.Fixed) numeric.Fixed {
+// heightFn is expected to return world.Terrain.HeightAt's own off-map
+// contract: the raw, unshifted −1 sentinel (not −0x10000) for a coordinate
+// outside the last valid interior cell. This function performs the one
+// reshape retail's port applies so callers see −0x10000, never the raw
+// marker or an invented zero [04 §4.4].
+//
+// A nil heightFn returns 0 — no production caller may bind with one; see the
+// TODO(question) on readPortDefault below for the fixture/no-terrain case.
+func GroundHeight(packedXZ int32, heightFn func(x, z numeric.Fixed) numeric.Fixed) numeric.Fixed {
 	if heightFn == nil {
-		return 0 // TODO(question): no world height source yet (phase 4 terrain not wired to cob)
+		return 0
 	}
-	// Height already in 16.16 from heightFn if it used world queries; shift
-	// is identity when the query returns Fixed. Spec says "shifted into
-	// 16.16" [04 §4.4] — if heightFn returns integer tile height, caller should
-	// shift; we preserve Fixed passthrough.
-	_ = packedXZ
-	return heightFn(packedXZ)
+	x, z := unpackXZ(packedXZ) // [R-COB-03 §3] high half X, low half Z
+	h := heightFn(numeric.Fixed(x), numeric.Fixed(z))
+	if h == groundHeightOffMapSentinel {
+		return GroundHeightOffMap // [04 §4.4] off-map read is −1.0, not zero
+	}
+	return h
+}
+
+// GroundHeightPortFunc adapts GroundHeight into a VM.BindPort handler for
+// port 16 [04 §4.4] C15. It follows the engine "get" opcode's argument
+// convention: the compiler always pushes the port id followed by four
+// argument slots, zero-filling the ones a given port does not use [fmt cob];
+// GROUND_HEIGHT uses exactly one, so args[1] is the packed X/Z and args[2..4]
+// (if present) are the compiler's zero fill. A call with fewer than two
+// elements (no argument pushed) reads coordinate (0,0), matching the same
+// zero-fill convention. heightFn is documented on GroundHeight; the
+// production caller is internal/session/composition.go's per-unit binding.
+func GroundHeightPortFunc(heightFn func(x, z numeric.Fixed) numeric.Fixed) func(args []int32) int32 {
+	return func(args []int32) int32 {
+		var packed int32
+		if len(args) > 1 {
+			packed = args[1]
+		}
+		return int32(GroundHeight(packed, heightFn))
+	}
 }
 
 // ---------------------------------------------------------------------------

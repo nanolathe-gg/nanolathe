@@ -353,7 +353,7 @@ func TestRS08_NaturalFireImpactDeath(t *testing.T) {
 	target.Y = numeric.FixedFromInt(int64(10))
 	attachTestCOB(shooter, cob.NewVM(&cob.Program{Pieces: []string{"base"}}))
 	// Weapon with high damage, direct, non-turret for simplicity (no Aim)
-	wdef := &content.WeaponDef{ID: 500, Range: 1000, WeaponVelocity: 200 * 65536 / 30, ReloadTime: 0, DamageDefault: 100, LineOfSight: true, Turret: false}
+	wdef := &content.WeaponDef{ID: 500, Range: 1000, WeaponVelocity: 200 * 65536 / 30, ReloadTime: 0, DamageDefault: 100, LineOfSight: true, Turret: false, Tolerance: wideDriftTolerance}
 	shooter.InstallWeapon(0, wdef)
 	slot := shooter.SlotAt(0)
 	slot.Target = units.Target{Kind: units.TargetUnit, Unit: targetH}

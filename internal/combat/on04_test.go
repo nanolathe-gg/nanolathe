@@ -61,6 +61,7 @@ func weaponNonTurret(id int32) *content.WeaponDef {
 		Range:       1000 * 65536,
 		Turret:      false,
 		LineOfSight: true,
+		Tolerance:   wideDriftTolerance,
 	}
 }
 
@@ -347,6 +348,7 @@ func TestON04_TwoSeededRuns_Identical(t *testing.T) {
 		weapon := &content.WeaponDef{
 			ID: 1, Range: 1000 * 65536, WeaponVelocity: int32(numeric.FixedFromInt(4)),
 			SprayAngle: 10, Burst: 0, LineOfSight: true, SoundStart: "seeded-start", StartSmoke: true,
+			Tolerance: wideDriftTolerance,
 		}
 		shooter.InstallWeapon(0, weapon)
 		slot := shooter.SlotAt(0)

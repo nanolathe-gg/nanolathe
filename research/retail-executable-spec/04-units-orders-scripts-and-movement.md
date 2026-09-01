@@ -480,7 +480,9 @@ The three general parameters are reused per order family. For an attack they
 are the weapon-slot or stance selection, an orbit substate, and the pursuit
 leash with zero meaning unlimited. For a build they are the unit-definition or
 template index and the remaining build count. For a guard the first is the
-standoff radius. For a mobile build the third is a blocked-area retry counter.
+standoff radius — written by the guard's own admit phase from the two
+footprints, never supplied by the issuer ([R-ORD-01 §8]). For a mobile build
+the third is a blocked-area retry counter.
 
 A unit keeps two queue segments: a front queue and a rear segment, each with
 its own anchor on the unit.
@@ -493,8 +495,13 @@ left open:
 * The **guard/fight anchor pair** is stored in **whole world units** — the high
   halves of a 16.16 X and Z — and every consumer sign-extends both terms as
   16-bit values before subtracting ([R-STANCE-01 §4]). It is written by the
-  auto-engage issuer's maneuver arm and by the guard's admit phase; no handler
-  writes it from a goal position.
+  auto-engage issuer's maneuver arm; no handler writes it from a goal
+  position. **Correction (2026-09-01, [R-ORD-01 §8]):** this bullet
+  previously added "and by the guard's admit phase". The guard's admit phase
+  writes the record's *goal triple* (as an offset from the ward) and its first
+  parameter; it never writes the anchor pair, which stays at the constructor's
+  zero for a guard record. The pair the issuer writes belongs to the attack
+  record the guard's combat-join leg spawns.
 * The **three general parameters** carry more roles than the sentence above
   lists. The first is also the product definition index for a mobile build, the
   stance value for the two standing-order writers, the timeout budget in ticks
@@ -3501,6 +3508,113 @@ targetModelHeight`: it will not repair a unit whose top is under water.
 **Correction to the "Missing and unknown" tail.** The bullet that carried the
 five twins as "no per-visit contract yet" is removed; the `0x100E8` /
 `0x10008` gates it cited are those of `VTOL_ReclaimUnit` above.
+
+### Closed — the ground guard's follow radius, goal shape, and cadence [R-ORD-01 §8] (2026-09-01)
+
+RWU-19-2 (PLAN 19 §3) asked which order-record field the ground guard reads
+as its follow distance, what it does when that field is zero, and whether it
+installs an annulus or a rectangle. **Established** by direct trace of the
+`Follow_Ground` body, the point-goal installer it calls, and the record
+constructor; `Guard_NoMove` and `Attack_Chase` were re-read for questions 3
+and 4. The "ground Guard row" is `Follow_Ground`: the command resolver's code
+7 (*guard*) selects it for a ground `canguard` unit and the air twin
+`VTOL_Follow` otherwise ([R-ORD-02 §1]); there is no third ground guard
+descriptor besides the stationary `Guard_NoMove` (§3.1).
+
+**1. The follow radius is computed by the handler, never read from the
+issuer.** The record constructor stores its three trailing arguments into
+p1, p2, p3 as given (§3.2), and whatever the issuer put there survives only
+until the guard's admit phase runs. Phase 0 unconditionally writes
+
+```
+s  = FootPrintX(me) + FootPrintX(ward) + 2      (signed 16-bit cell counts, whole cells)
+p1 = s · 16                                      (whole world units)
+```
+
+before any read of p1 exists in the handler, and the only reader of p1 is the
+follow-maintenance leg below. There is no zero test and no fallback: a guard
+record never carries a caller-supplied radius, so "the radius when p1 is
+zero" is not a case retail has. (Both footprint terms are the X word of the
+unit's copied footprint pair — the same word `Park` and the transport size
+gate read — so a Z-asymmetric footprint contributes only its X size.) The
+value is exactly the "(sum + 2) · 16" of [R-UNIT-06 §1]; that section's
+"about" is now "exactly", up to the sine-table rounding of the direction
+step.
+
+**2. The anchor offset lives in the record's goal triple.** With `r` the
+same `s · 16` promoted to 16.16 and `h = RNG(65536)` (one draw, phase 0
+only), the handler stores `(−sin(h)·r, 0, −cos(h)·r)` into the record's
+**goal triple** — the three 16.16 goal fields of §3.2 — as an *offset from
+the ward*, not a world position. The guard/fight **anchor pair** is not
+written by either guard handler; it stays at the constructor's zero for a
+guard record. **Correction to §3.2's "field roles" bullet**, which said the
+anchor pair "is written by the auto-engage issuer's maneuver arm and by the
+guard's admit phase": the guard's admit phase writes the goal triple, and the
+anchor pair the issuer writes belongs to the *attack* record it spawns in
+the guard's combat-join leg, not to the guard record. A reader of a guard
+record's goal (the order-line overlay, a save) sees the offset, not a
+position.
+
+**3. The goal is a point goal — neither an annulus nor a rectangle.** On
+every phase-1 visit that falls through legs 1–4 of [R-UNIT-06 §1], the
+follow maintenance forms `pos = wardPosition + storedOffset` on all three
+axes (the Y sum is formed and then ignored: the point installer takes X and
+Z only) and calls the **point** goal installer of §1 with
+
+```
+radius = p1 / 2 = (FootPrintX(me) + FootPrintX(ward) + 2) · 8   (whole world units)
+```
+
+The division is a signed integer division toward zero; p1 is even and
+positive, so it is exact. That radius is the goal handle's `radiusParam` of
+§8.3: arrival is the committed tile against the goal cell with threshold
+`floor(radius / 16)² = floor(s / 2)²` in squared cells. Two one-cell units
+therefore follow at an offset of 64 world units with a 32-unit radius (two
+cells), two two-cell units at 96 with 48 (three cells). The annulus installer
+and the rectangle installer are not called anywhere in either guard handler.
+
+**4. Cadence.** After the install the handler sets the deadline to `tick +
+30` through the shared setter (fixed — no draw; the setter ORs gate bit
+`0x01`), ORs `0x18` into the dynamic gate, and returns *hold* (2) with the
+phase left at 1. The gate on the way out is therefore `0x19`: the record
+wakes on deadline expiry or on pending `0x08`/`0x10`, and **not** on the
+arrival (`0x20`) or path-failure (`0x40`) bits — those are masked out by the
+pump's step 2 and wiped by the next install's pending clear. The follow goal
+is thus re-issued on a fixed 30-tick period whether or not the guard has
+arrived, each re-issue releasing the previous payload and starting a fresh
+path request (§1, [R-ORD-01 §0]), and a failed path never ends the guard.
+The direction is drawn once; maintenance draws nothing. Every spawning leg
+(1, 3, 4) sets the gate to zero before returning *wait*, so a guard that
+resumes after its spawned order completes re-enters phase 1 with an empty
+gate and installs immediately.
+
+**5. `Guard_NoMove` is a different order, not a follow variant.** Its
+contract in §3 stands unchanged; the re-read confirms it calls **no** goal
+installer of any kind, never moves the unit, and reads no radius parameter:
+p1 is its consecutive shot-attempt counter (reset by satisfied `0x4000`), p2
+its `RNG(3) + 3` attempt budget, and the record's goal triple is the
+*target's position* copied at bind and used only as the centre of the
+640-world-unit scan. §3.2's "for a guard the first parameter is the standoff
+radius" describes the `Follow_Ground` p1 of point 1 only.
+
+**6. The attack-chase radii have no constant of their own.** With `d` the
+slot's engagement distance — the weapon's authored `range` in whole world
+units ([06 R-WPN-05 §1]) — the maneuver arms of §3 pass, in order: point
+radius `d` (substate 0); point radius `d / 2` at the target on the
+vertical-separation jump and after substate 5's halving; point radius
+`trunc(d / 4)` at the strafe point (the truncation toward zero is written
+out explicitly in the arm); point radius 0 (substate 6); annulus outer `d`,
+inner `d / 2` (substate 7); annulus outer `2d`, inner `d` (substate 8). The
+only literal numbers in the maneuver phase are the 8-world-unit vertical
+threshold — compared strictly (`>`) against the absolute 16.16 difference —
+and the quarter-turn and half-circle terms of the strafe bearing. No
+32- or 64-unit radius and no per-substate table exists; a reimplementation
+carrying such values has invented them.
+
+**Consequence for §3.2.** The sentence "for a guard the first is the standoff
+radius" stays true as a description of what the field *holds* during phase 1;
+it must not be read as an input the issuer supplies. The correction to the
+anchor-pair bullet is recorded there.
 
 ### Closed — command resolution, exactly [R-ORD-02 §1] (2026-08-29)
 
@@ -11550,10 +11664,16 @@ state and page-flip availability, printed by the developer overlay, and have no
 relation to the route follower (doc 03 owns them; noted below for the
 orchestrator).
 
-- Order-layer identity of each goal-family call site: which order types
+- ~~Order-layer identity of each goal-family call site: which order types
   construct a point, annulus or rectangle goal, and with which radii · §7.2,
-  §7.4 · static trace. The three families' arithmetic is fully established
-  ([R-PATH-01 §9]); only the per-order census is open.
+  §7.4 · static trace.~~ **Closed 2026-09-01:** the two guard families and
+  the attack chase are settled in [R-ORD-01 §8] (the ground guard installs a
+  point goal of radius `(FootPrintX(me) + FootPrintX(ward) + 2) · 8`; the
+  stationary guard installs nothing; the chase's radii are the weapon range
+  and its halves, quarter, zero and double). Every other handler's installer
+  call and radius is stated in its own contract in [R-ORD-01 §2]–[R-ORD-01 §7]
+  and [R-ORD-02 §2]–[R-ORD-02 §3]; the three families' arithmetic remains
+  [R-PATH-01 §9].
 - Full static feature and yard-map interaction with the class layer's feature
   gate · §7.1 [R-DOC04-B] · static trace. (The "owner-mask" half of this bullet
   is deleted: that word is mapping memory, [R-PATH-01 §2].)

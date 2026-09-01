@@ -10,7 +10,7 @@ import (
 )
 
 func TestOrderWeaponPointFlowsThroughProjectileSpawner(t *testing.T) {
-	weapon := &content.WeaponDef{ID: 7, LineOfSight: true, WaterWeapon: true, Range: 100}
+	weapon := &content.WeaponDef{ID: 7, LineOfSight: true, WaterWeapon: true, Range: 100, Tolerance: wideDriftTolerance}
 	w, terrain, u, _ := newTestWorldAndUnits(t)
 	u.InstallWeapon(0, weapon)
 	u.SlotAt(0).OrderControl |= orderControlInhibit
@@ -68,7 +68,7 @@ func TestOrderWeaponPointFlowsThroughProjectileSpawner(t *testing.T) {
 // slot visit and shot-time admission consult no order control byte
 // [06 §1.2][06 §3.3].
 func TestControlByteBitFourDoesNotGateFiring(t *testing.T) {
-	weapon := &content.WeaponDef{ID: 11, LineOfSight: true, WaterWeapon: true, Range: 100}
+	weapon := &content.WeaponDef{ID: 11, LineOfSight: true, WaterWeapon: true, Range: 100, Tolerance: wideDriftTolerance}
 	w, terrain, u, _ := newTestWorldAndUnits(t)
 	u.InstallWeapon(0, weapon)
 

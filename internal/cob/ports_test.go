@@ -618,6 +618,82 @@ func TestPackHelpers(t *testing.T) {
 	}
 }
 
+// TestGroundHeightDecodesPackedCoordinateHighXLowZ locks the [R-COB-03 §3]
+// halves: PackXZ's high half is X and low half is Z, so GroundHeight must
+// hand heightFn the same (x, z) order, not (z, x).
+func TestGroundHeightDecodesPackedCoordinateHighXLowZ(t *testing.T) {
+	x := numeric.FixedFromInt(30)
+	z := numeric.FixedFromInt(-7)
+	packed := PackXZ(x, z)
+
+	var gotX, gotZ numeric.Fixed
+	stub := func(qx, qz numeric.Fixed) numeric.Fixed {
+		gotX, gotZ = qx, qz
+		return numeric.FixedFromInt(5) // arbitrary valid height
+	}
+	if got := GroundHeight(packed, stub); got != numeric.FixedFromInt(5) {
+		t.Fatalf("GroundHeight = %v want 5.0 (16.16 passthrough)", got)
+	}
+	if gotX != x || gotZ != z {
+		t.Fatalf("GroundHeight unpacked (x=%v z=%v) want (x=%v z=%v) [R-COB-03 §3] high half X, low half Z", gotX, gotZ, x, z)
+	}
+}
+
+// TestGroundHeightReshapesOffMapSentinel checks the one reshape [04 §4.4]
+// requires: the terrain query's raw, unshifted −1 marker becomes retail's
+// shifted off-map read −0x10000 (−1.0), never zero and never the raw −1.
+func TestGroundHeightReshapesOffMapSentinel(t *testing.T) {
+	offMap := func(numeric.Fixed, numeric.Fixed) numeric.Fixed { return numeric.Fixed(-1) }
+	if got := GroundHeight(0, offMap); got != GroundHeightOffMap {
+		t.Fatalf("GroundHeight off-map = %v want %v (−0x10000) [04 §4.4]", got, GroundHeightOffMap)
+	}
+	if GroundHeightOffMap != numeric.Fixed(-0x10000) {
+		t.Fatalf("GroundHeightOffMap = %v want -0x10000", GroundHeightOffMap)
+	}
+}
+
+// TestGroundHeightNilHeightFnReadsZero documents the no-terrain fallback: a
+// nil heightFn (only reachable from a bare VM fixture with nothing bound,
+// never from a production session) reads 0, not an invented sentinel. See
+// the TODO(question) on VM.readPortDefault.
+func TestGroundHeightNilHeightFnReadsZero(t *testing.T) {
+	if got := GroundHeight(PackXZ(numeric.FixedFromInt(1), numeric.FixedFromInt(1)), nil); got != 0 {
+		t.Fatalf("GroundHeight nil heightFn = %v want 0", got)
+	}
+}
+
+// TestGroundHeightPortFuncReadsArgOne locks the engine-read argument
+// convention this port shares with 7–16: the compiler always pushes the port
+// id then four zero-filled slots, so a bound handler's args[0] is the id and
+// args[1] is the packed coordinate [fmt cob]. A call with no argument slot
+// pushed reads coordinate (0,0), the same zero-fill convention.
+func TestGroundHeightPortFuncReadsArgOne(t *testing.T) {
+	x := numeric.FixedFromInt(2)
+	z := numeric.FixedFromInt(3)
+	packed := PackXZ(x, z)
+
+	var gotX, gotZ numeric.Fixed
+	fn := GroundHeightPortFunc(func(qx, qz numeric.Fixed) numeric.Fixed {
+		gotX, gotZ = qx, qz
+		return numeric.FixedFromInt(9)
+	})
+
+	// args[0]=port id (16), args[1]=packed XZ, args[2..4]=compiler zero-fill.
+	if got := fn([]int32{16, packed, 0, 0, 0}); got != int32(numeric.FixedFromInt(9)) {
+		t.Fatalf("GroundHeightPortFunc = %d want %d", got, int32(numeric.FixedFromInt(9)))
+	}
+	if gotX != x || gotZ != z {
+		t.Fatalf("GroundHeightPortFunc unpacked (x=%v z=%v) want (x=%v z=%v)", gotX, gotZ, x, z)
+	}
+
+	// No argument slot pushed: zero-fill convention reads (0,0).
+	gotX, gotZ = numeric.FixedFromInt(99), numeric.FixedFromInt(99) // sentinel to prove overwrite
+	fn([]int32{16})
+	if gotX != 0 || gotZ != 0 {
+		t.Fatalf("GroundHeightPortFunc with no arg slot = (x=%v z=%v) want (0,0)", gotX, gotZ)
+	}
+}
+
 func TestBearingPortsUseRetailAngleConversion(t *testing.T) {
 	// Port 12 is atan2(X,Z) followed by relative-heading subtraction; port 14
 	// evaluates its two arguments as atan2(first, second) [R-COB-03 §2].

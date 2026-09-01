@@ -3,8 +3,106 @@ package combat
 import (
 	"math"
 
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
+
+// The two zero-tolerance drift gates [06 R-WPN-03 §2]. A weapon that authors
+// no tolerance is gated on the shooter's movement tier instead: 150 angle
+// units (about 0.8 degrees) while the shooter is stationary, 2000 (about 11
+// degrees) while it is moving. Both are read from the image, not chosen.
+const (
+	DriftGateStationary int32 = 150
+	DriftGateMoving     int32 = 2000
+)
+
+// DriftGates returns the yaw and pitch halves of the angular-drift gate
+// [06 R-WPN-03 §2].
+//
+// The zero test is on `tolerance` alone. When it is nonzero the yaw gate is
+// `tolerance` and the pitch gate is `pitchtolerance` when that is nonzero,
+// otherwise `tolerance` again — the only place the two keys interact. When
+// `tolerance` is zero both gates take the movement-tier fallback and an
+// authored `pitchtolerance` is never consulted.
+//
+// Both keys are stored 16-bit and read **zero-extended** [06 R-WPN-03 §1], so
+// a negatively authored tolerance reads back as its two's complement: -1
+// becomes a gate of 65,535 that every error passes. Stock content never
+// authors one.
+func DriftGates(w *content.WeaponDef, stationary bool) (yawGate, pitchGate int32) {
+	var tol, pitchTol int32
+	if w != nil {
+		tol = int32(uint16(w.Tolerance))           // zero-extended [06 R-WPN-03 §1]
+		pitchTol = int32(uint16(w.PitchTolerance)) // zero-extended [06 R-WPN-03 §1]
+	}
+	if tol != 0 {
+		if pitchTol != 0 {
+			return tol, pitchTol
+		}
+		return tol, tol
+	}
+	if stationary {
+		return DriftGateStationary, DriftGateStationary
+	}
+	return DriftGateMoving, DriftGateMoving
+}
+
+// AngleError is the drift gate's error term: the absolute value of the signed
+// 16-bit difference of two angles [06 R-WPN-03 §2]. The difference is the
+// 16-bit wrap of stored minus wanted, sign-extended, so the largest possible
+// error is 32,768 — the wrap of 0x8000.
+func AngleError(stored, wanted uint16) int32 {
+	d := int16(stored - wanted)
+	if d < 0 {
+		return -int32(d)
+	}
+	return int32(d)
+}
+
+// DriftGatePass reports whether a slot's stored angles are close enough to the
+// wanted pair to fire [06 R-WPN-03 §2].
+//
+// Yaw is tested first and the test short-circuits: the pitch difference is not
+// computed when yaw fails. Both comparisons are inclusive, so an error of
+// exactly the gate passes.
+func DriftGatePass(w *content.WeaponDef, stationary bool, storedYaw, wantYaw, storedPitch, wantPitch uint16) bool {
+	yawGate, pitchGate := DriftGates(w, stationary)
+	if AngleError(storedYaw, wantYaw) > yawGate {
+		return false
+	}
+	return AngleError(storedPitch, wantPitch) <= pitchGate
+}
+
+// AccuracySpreadBound computes the turret executor's spread bound
+// [06 §4.4] [06 R-WPN-03 §4]. The bound is computed, never authored:
+//
+//	healthTerm = uint32(int32(int16(health)) << 11) / uint32(maxHealth)  ; unsigned divide, 2048 at full health
+//	raw        = uint16(accuracy) - uint16(healthTerm)                   ; 16-bit subtraction, wraps
+//	bound      = uint16(raw + 0x800)                                     ; carry out of bit 15 discarded
+//	div        = uint16(kills) / 12                                      ; exact integer quotient
+//	if div > 1 { bound = uint16(int32(bound) / int32(div)) }             ; signed 32-bit divide
+//
+// So the bound is `accuracy + 2048*(1 - health/maxHealth)` modulo 65,536: a
+// full-health shooter with `accuracy = 0` has bound 0 and fires exactly on its
+// solved angles, and twenty-four credited kills halve whatever bound it has.
+// The angle units are the uint16 angle-per-circle of the slot angles, so 182
+// units is about half a degree — `accuracy` is neither degrees nor a percent.
+//
+// Zero or negative maxHealth raises the processor divide fault in retail, the
+// same malformed-only case ComputeStoredReload reproduces; stock MaxDamage is
+// always positive.
+func AccuracySpreadBound(accuracy, health, maxHealth, kills int32) uint16 {
+	if maxHealth <= 0 {
+		panic("combat: zero or negative maxHealth divide fault in accuracy spread [06 R-WPN-03 §4]")
+	}
+	healthTerm := uint32(int32(int16(health))<<11) / uint32(maxHealth)
+	bound := uint16(accuracy) - uint16(healthTerm) + 0x800
+	div := uint32(uint16(kills)) / 12
+	if div > 1 {
+		bound = uint16(int32(bound) / int32(div))
+	}
+	return bound
+}
 
 // BallisticSolve computes the launch pitch for a ballistic projectile.
 //

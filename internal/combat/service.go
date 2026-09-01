@@ -341,12 +341,28 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		// of atan2q's operand order and the turret executor's relative-to-
 		// absolute conversion; until then the aim heading commanded to the COB
 		// turret and the drift gate that would read it stay untraced.
-		slot.DesiredYaw = desiredYaw
-		slot.DesiredPitch = desiredPitch
 		needLatch, needResult := aimRequirement(weapon)
 		suppress := weapon.Ballistic && desiredPitch == 0x8000
+		// The turret executor writes the solved angles into the slot only when
+		// it dispatches Aim, i.e. only while the Aim-request latch is clear
+		// [06 §3.3]. Those stored angles are what the drift gate later measures
+		// the freshly re-solved pair against, so it reads how far the target
+		// has moved in angle since the Aim request went out [06 R-WPN-03 §2] —
+		// rewriting them every visit would make the gate compare a value with
+		// itself and pass unconditionally. Every other executor writes the
+		// absolute angles at fire time instead, which the per-visit write here
+		// reproduces.
+		if !weapon.Turret || !slot.Aim.IssueBit {
+			slot.DesiredYaw = desiredYaw
+			slot.DesiredPitch = desiredPitch
+		}
 		preps[idx] = &slotPrep{weapon: weapon, tgtPos: tgtPos, tgtHandle: tgtHandle, desiredYaw: desiredYaw, desiredPitch: desiredPitch, ballisticOk: ballisticOk, pitch: ballisticPitch, needLatch: needLatch, needResult: needResult, suppressAim: suppress}
-		if needResult && !slot.Aim.Ready && !suppress {
+		// Aim dispatch is gated on the latch being clear and on nothing else
+		// [06 §3.3]. The aim-ready word is a separate latch that a nonzero
+		// completion sets: a drift-gate failure clears the request latch and
+		// leaves the ready word alone [06 R-WPN-03 §2], and the slot must
+		// re-dispatch on its next visit for that recovery to happen at all.
+		if needResult && !suppress {
 			if !slot.Aim.IssueBit {
 				weaponID := weapon.ID
 				if bridge == nil {
@@ -448,6 +464,53 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 				if p.Stock[economy.Energy] < eCost || p.Stock[economy.Metal] < mCost {
 					continue
 				}
+			}
+		}
+		// The angular-drift gate, in the unit phase at fire time and before the
+		// muzzle query [06 §3.3] [06 R-WPN-03 §1]. Which executor a weapon uses
+		// is decided by the first matching flag in the order turret, vlaunch,
+		// lineofsight-or-selfprop, dropped [06 §3.3], and only two of them gate:
+		//
+		//   turret — the slot's stored angles (written when Aim was dispatched)
+		//     against the pair just re-solved from current geometry, so the
+		//     error is the target's angular drift since the request went out;
+		//   line-of-sight/self-propelled — the just-solved absolute direction
+		//     against the unit's own heading and pitch, so a fixed-forward
+		//     weapon fires only when the target sits ahead within the gate.
+		//
+		// Vertical-launch and dropped do not call the gate at all.
+		//
+		// TODO(question): retail's turret pair is relative — stored yaw minus
+		// the heading at dispatch, re-solved yaw minus the heading now — so its
+		// error also carries however far the unit turned in between, while both
+		// halves here are absolute and the heading cancels. This build stores
+		// absolute yaw deliberately (see the convention marker in the aim-time
+		// solve above), and reproducing retail's term would need the heading at
+		// dispatch stored on a slot record this unit does not own. The two
+		// agree exactly while the shooter's heading is unchanged, which is the
+		// ordinary case. Settling it is the same trace the convention marker
+		// names [06 §3.3].
+		switch {
+		case weapon.Turret:
+			if !DriftGatePass(weapon, unitStationary(u), slot.DesiredYaw, pre.desiredYaw, slot.DesiredPitch, pre.desiredPitch) {
+				// Failure clears the Aim-issued latch and returns failure
+				// without touching the reload timer, the aim-ready word or the
+				// RNG, so the next slot visit re-solves and re-dispatches Aim
+				// [06 R-WPN-03 §2].
+				slot.Aim.IssueBit = false
+				slot.Flags &^= 0x01
+				if s.pendingAims != nil {
+					delete(s.pendingAims, pendingKey{Unit: u.Handle, Slot: idx})
+				}
+				continue
+			}
+		case weapon.VLaunch:
+			// no gate [06 §3.3]
+		case weapon.LineOfSight || weapon.SelfProp:
+			// This executor owns no latch: it simply returns failure, leaving
+			// the absolute angles it just wrote in the slot [06 R-WPN-03 §2].
+			if !DriftGatePass(weapon, unitStationary(u), pre.desiredYaw, u.Move.Heading, pre.desiredPitch, u.Move.Pitch) {
+				continue
 			}
 		}
 		if !tryFireForSlot(u, slot, idx, tick, terrain, simRNG, s, w) {
@@ -748,6 +811,30 @@ func muzzleWorldPosResolved(u *units.Unit, piece int32) (Vec3, bool) {
 	return Vec3{}, false
 }
 
+// unitStationary reports the shooter's movement tier being category 0, which
+// is the predicate the zero-tolerance drift gate selects on
+// [06 R-WPN-03 §2] [04 §5.2]. Category 0 covers a zero scalar speed, a
+// mover-inhibited unit and a unit attached to a carrier, so a transported unit
+// aims under the tight gate. There is no class or category-mask test here: the
+// tight gate applies to a stationary unit of any kind and the loose gate to any
+// unit whose tier is 1, 2 or 3.
+//
+// The movement integrator classifies with the scalar speed word as its only
+// nonzero magnitude, so the both-zero override reduces to a zero speed.
+// TODO(question): the mover-inhibit bit is not tracked anywhere in this build
+// (the movement integrator passes it as false too), so an inhibited but
+// nonzero-speed unit takes the loose gate here where retail takes the tight
+// one [04 §5.2].
+func unitStationary(u *units.Unit) bool {
+	if u == nil {
+		return true
+	}
+	if u.Attachment.Carrier != 0 {
+		return true
+	}
+	return u.Move.Speed == 0
+}
+
 func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terrain *world.Terrain, simRNG *rng.Simulation, svc *Service, w *units.World) bool {
 	if u == nil || slot == nil || slot.Weapon == nil || svc == nil {
 		return false
@@ -799,6 +886,11 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 		Events:      fireEvents,
 		RNG:         simRNG,
 		Spy:         nil,
+		// The three shooter terms of the turret spread's computed bound
+		// [06 §4.4] [06 R-WPN-03 §4].
+		ShooterHealth:    u.Health,
+		ShooterMaxHealth: u.MaxHealth,
+		ShooterKills:     u.Kills,
 	}
 	cSlot := Slot{
 		Weapon:       weapon,
@@ -812,6 +904,10 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 		Target:       tgt,
 	}
 	h, ok := TryFire(svc, &cSlot, idx, tgt, tick, ports)
+	// The spread's mutation of the slot's stored angles is retained whether or
+	// not the allocation succeeded [06 §4.4].
+	slot.DesiredYaw = cSlot.DesiredYaw
+	slot.DesiredPitch = cSlot.DesiredPitch
 	if ok {
 		slot.MuzzlePiece = cSlot.MuzzlePiece
 		slot.Aim = cSlot.Aim

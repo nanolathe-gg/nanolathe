@@ -153,9 +153,12 @@ type Session struct {
 	// CampaignSlot is the mission list slot for progress W/L [P1-01 §2.3] [P0-05].
 	CampaignSlot int
 	// campaignPlayerSide is the campaign player-table side ordinal consumed by
-	// canonical commander-trigger identity. The current constructor has no
-	// authoritative player-table source, so every row remains unknown unless a
-	// continuation/restore seam supplies it explicitly [08 R-TRIG-01 §3].
+	// canonical commander-trigger identity [08 R-TRIG-01 §3]. It has two
+	// writers, both authoritative: campaign construction stamps the new-game
+	// panel's two rows (applyCampaignPlayerTableSides, [08 R-CAMP-01 §3]) and a
+	// retail restore takes each slot's `Side` item from its `Player%i` account
+	// [08 "Player records"]. A row neither writer supplied stays unknown and the
+	// identity fails closed; it is never inferred.
 	campaignPlayerSide      [10]int8
 	campaignPlayerSideKnown [10]bool
 	// battleEntryTailDone prevents composition and fixture seams from invoking

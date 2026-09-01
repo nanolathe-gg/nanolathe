@@ -2012,6 +2012,15 @@ func (v *VM) runThread(idx int) {
 // readPortDefault is the default engine read when no port handler is bound.
 // It returns 0 for identifiers outside 1..20 [04 §4.4] C15, else 0 as stock
 // default.
+//
+// TODO(question): port 16 (GROUND_HEIGHT) has no zero-answer default in
+// retail — the engine always has terrain bound, so there is no "unbound"
+// case to compare against. A fixture VM built without a session (no
+// GroundHeightPortFunc bound via BindPort) falls through to this arm and
+// reads 0 for every coordinate, which is neither a real height nor retail's
+// off-map −0x10000 [04 §4.4]. Every production VM binds port 16 in
+// internal/session/composition.go; only VM fixtures built directly by tests
+// can observe this default.
 func (v *VM) readPortDefault(id int32, args []int32) int32 {
 	if id < 1 || id > 20 {
 		return 0 // [04 §4.4] outside range reads zero

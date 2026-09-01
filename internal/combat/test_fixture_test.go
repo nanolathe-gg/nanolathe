@@ -50,6 +50,18 @@ func combatFixtureCOB() []byte {
 	return buf
 }
 
+// wideDriftTolerance is an authored `tolerance` wide enough that the angular
+// drift gate of [06 R-WPN-03 §2] admits any bearing a fixture's geometry can
+// produce (the largest possible error is 32,768, the wrap of 0x8000).
+//
+// Fixtures whose subject is something other than aiming carry it so that the
+// shot they are about still happens. Before WU-19-2 nothing read `tolerance`
+// and every weapon fired regardless of alignment; a fixture that places its
+// target off the shooter's heading and authors no tolerance is now correctly
+// refused by the fixed-forward gate, which is retail behavior, not a
+// regression. The gate itself is locked by TestDriftGate* in aim_test.go.
+const wideDriftTolerance = 32767
+
 func newCombatFixtureWorld(maxDefs int, cat *content.Catalog) *units.World {
 	w := units.NewSliced(maxDefs, cat)
 	w.SetCOBSource(combatFixtureCOBFS{}, cob.NewCachedLoader())

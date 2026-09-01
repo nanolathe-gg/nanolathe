@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/model"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -615,4 +616,57 @@ func TestAssetGuardedRealCOB(t *testing.T) {
 
 // Ensure vm.Pieces adapter methods are used (C22)
 var _ = model.PieceState{}
+
+// TestVMGroundHeightPortRoundTrip runs a real script through the VM's "get"
+// engine-read opcode (0x10043000, the five-argument form: id then four
+// argument slots, zero-filled here beyond the one GROUND_HEIGHT uses
+// [fmt cob]) end to end, proving GroundHeightPortFunc is reachable from
+// compiled bytecode, not only as a pure function: BindPort(16, ...) → engine
+// read → GroundHeight → the injected height query, with the decoded
+// coordinate matching [R-COB-03 §3]'s high-half-X/low-half-Z convention and
+// the 16.16 result landing on the script's local exactly as the callback
+// arithmetic requires (WU-19-7).
+func TestVMGroundHeightPortRoundTrip(t *testing.T) {
+	x := numeric.FixedFromInt(12)
+	z := numeric.FixedFromInt(-3)
+	packed := PackXZ(x, z)
+
+	prog := synthProg([]uint32{
+		0x10021001, 16, // push port id 16 (GROUND_HEIGHT) [04 §4.4]
+		0x10021001, uint32(packed), // push packed X/Z [R-COB-03 §3]
+		0x10021001, 0, // compiler zero-fill slot [fmt cob]
+		0x10021001, 0, // compiler zero-fill slot
+		0x10021001, 0, // compiler zero-fill slot
+		0x10043000,    // five-argument engine read [fmt cob 0x10043000]
+		0x10023002, 1, // pop into local 1 (local 0 aliases Stack[0], which the
+		// sleep-duration push below would immediately overwrite — window word
+		// i is Stack[i] [04 §4.3], not a separate save slot)
+		0x10021001, 0, // push 0 for sleep duration
+		0x10013000, // sleep, yields so Drain(1) observes the local
+	}, []string{"base"}, 0, []int{0})
+
+	vm := newTestVM(prog)
+	var gotX, gotZ numeric.Fixed
+	calls := 0
+	vm.BindPort(Port(16), GroundHeightPortFunc(func(qx, qz numeric.Fixed) numeric.Fixed {
+		calls++
+		gotX, gotZ = qx, qz
+		return numeric.FixedFromInt(7) // arbitrary valid height, 16.16
+	}))
+	vm.Threads[0].Status = ThreadRunning
+	vm.Threads[0].PC = 0
+	vm.Drain(1)
+
+	if calls != 1 {
+		t.Fatalf("GROUND_HEIGHT height query called %d times want 1 (I4: exactly one query, no RNG involved)", calls)
+	}
+	if gotX != x || gotZ != z {
+		t.Fatalf("GROUND_HEIGHT decoded (x=%v z=%v) want (x=%v z=%v) [R-COB-03 §3] high half X, low half Z", gotX, gotZ, x, z)
+	}
+	want := int32(numeric.FixedFromInt(7))
+	if got := vm.Threads[0].Stack[1]; got != want {
+		t.Fatalf("GROUND_HEIGHT local1 = %d want %d (16.16 passthrough) [04 §4.4]", got, want)
+	}
+}
+
 var _ sort.Interface = sort.StringSlice{}

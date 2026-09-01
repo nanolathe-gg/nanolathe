@@ -9,6 +9,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/triggers"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -260,6 +261,113 @@ func TestSaveLoadPreservesCountdown(t *testing.T) {
 	}
 	if !restored.IsEnding() || !restored.IsWin() {
 		t.Fatal("restored latch should be win ending")
+	}
+}
+
+// TestCampaignCommanderDeathLatchesDefeatAtSixthDue is the tier-1 contract of
+// WU-19-3: with the campaign player table stamped at construction
+// [08 R-CAMP-01 §3], an authored `CommanderKilled` defeat resolves the local
+// commander through the *owner's own* side's commander name [08 R-TRIG-01 §3]
+// and latches defeat on the sixth consecutive true due — 150 ticks after the
+// first [08 R-TRIG-01 §6].
+func TestCampaignCommanderDeathLatchesDefeatAtSixthDue(t *testing.T) {
+	fs := fsFromMap(t, map[string]string{
+		"camps/Arm Test.tdf": "[HEADER]\n{\ncampaignside=ARM;\n}\n[MISSION0]\n{\nmissionname=First;\nmissionfile=Valid.ota;\n}\n",
+	})
+	s := newLoopTestSession(t, 2)
+	s.Mission.Type = mission.TypeCampaign
+	s.Mission.CampaignPath = "camps/arm test.tdf"
+	s.Mission.Units = []mission.UnitPlacement{{}} // a unit-less campaign never arms [08 R-TRIG-01 §6]
+	// An empty victory queue takes the injected DestroyAllUnits, which stays
+	// false while slot 1 has a live unit [08 R-TRIG-01 §6].
+	s.Mission.Victory = nil
+	s.Mission.Defeat = []*triggers.Trigger{triggers.New(triggers.KindCommanderKilled, "")}
+	s.publication = newPublicationState(frame.NewEventBuffer(frame.Limits{}))
+	s.Latch = NewEndLatch()
+	s.Econ.Players[0].WinLoseTime = 0
+
+	applyCampaignPlayerTableSides(s, fs, s.Mission)
+	if !s.campaignPlayerSideKnown[0] || s.campaignPlayerSide[0] != 0 {
+		t.Fatalf("campaign construction did not stamp the Arm row: side %d known %v", s.campaignPlayerSide[0], s.campaignPlayerSideKnown[0])
+	}
+
+	simBefore, crtBefore := rng.Global.Sim.Draws(), rng.Global.Crt.Draws()
+
+	// A due with the commander alive advances nothing.
+	s.pollMissionTriggers(0)
+	if s.DefeatDone || s.Latch.Countdown != -1 {
+		t.Fatalf("a live commander advanced the countdown: defeat=%v latch=%+v", s.DefeatDone, s.Latch)
+	}
+
+	var commander *units.Unit
+	for _, u := range s.Units.IterSliced() {
+		if u != nil && u.Owner == 0 {
+			commander = u
+			break
+		}
+	}
+	if commander == nil || commander.Def == nil {
+		t.Fatal("local commander missing from the fixture")
+	}
+	if !s.missionTriggerContext(0).IsCommander(commander) {
+		t.Fatal("stamped player-table side did not resolve the local commander [08 R-TRIG-01 §3]")
+	}
+	s.Units.Destroy(commander.Handle, units.DeathKilled)
+	s.Units.FinalizeDeath(commander.Handle, 0)
+	if !s.Mission.Defeat[0].Completed {
+		t.Fatal("commander removal did not satisfy CommanderKilled [08 R-TRIG-01 §4, §7]")
+	}
+
+	for _, tick := range []uint32{30, 60, 90, 120, 150} {
+		s.pollMissionTriggers(tick)
+		if s.Latch.IsEnding() {
+			t.Fatalf("latched before the sixth true due at tick %d [08 R-TRIG-01 §6]", tick)
+		}
+	}
+	if s.Latch.Countdown != 0 {
+		t.Fatalf("countdown after five true dues = %d, want 0 [08 R-TRIG-01 §6]", s.Latch.Countdown)
+	}
+	s.pollMissionTriggers(180)
+	if !s.Latch.IsEnding() || s.Latch.IsWin() || !s.DefeatDone {
+		t.Fatalf("sixth true due did not latch defeat: latch=%+v defeat=%v", s.Latch, s.DefeatDone)
+	}
+	if got := rng.Global.Sim.Draws() - simBefore; got != 0 {
+		t.Fatalf("the campaign trigger path drew %d simulation values, want 0 [I4]", got)
+	}
+	if got := rng.Global.Crt.Draws() - crtBefore; got != 0 {
+		t.Fatalf("the campaign trigger path drew %d CRT values, want 0 [I4]", got)
+	}
+	// Defeat conditions never celebrate [08 R-TRIG-01 §4].
+	if events := s.publication.events.Events(); len(events) != 0 {
+		t.Fatalf("defeat published a cue: %+v", events)
+	}
+}
+
+// TestCampaignPlayerTableStampKeepsPhaseOrder proves this unit's identity stamp
+// changes neither the twelve-phase order nor its membership [01 §4.4][I7].
+func TestCampaignPlayerTableStampKeepsPhaseOrder(t *testing.T) {
+	fs := fsFromMap(t, map[string]string{
+		"camps/Arm Test.tdf": "[HEADER]\n{\ncampaignside=ARM;\n}\n[MISSION0]\n{\nmissionname=First;\nmissionfile=Valid.ota;\n}\n",
+	})
+	s := newLoopTestSession(t, 2)
+	s.Mission.Type = mission.TypeCampaign
+	s.Mission.CampaignPath = "camps/arm test.tdf"
+	applyCampaignPlayerTableSides(s, fs, s.Mission)
+	s.EnablePhaseTrace()
+	s.stepAuthoritativePhases(1)
+	want := []string{
+		"phase1-network", "phase2-units", "phase3-projectiles", "phase4-effects",
+		"phase5-orders", "phase6-feature", "phase7-sequences", "phase8-wind",
+		"phase9-meteor", "phase10-shake", "phase11-objects", "phase12-cadence",
+	}
+	got := s.PhaseTrace()
+	if len(got) != len(want) {
+		t.Fatalf("tick sequence = %v, want %v [01 §4.4]", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("tick step %d = %q, want %q [01 §4.4]", i+1, got[i], want[i])
+		}
 	}
 }
 
