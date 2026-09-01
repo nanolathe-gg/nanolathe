@@ -4911,6 +4911,38 @@ unconditionally raises cue slot 16 with no text. What remains true is that
 capture immunity is the first reject and that the node is freed in every
 terminal.
 
+#### R-WORK-01 §10 — The "cloud of vapor" sentinel is the remaining-build fraction compared with literal zero [R-WORK-01] (2026-09-01)
+
+RWU-19-5 asked which victim field predicate 5 of [R-WORK-01 §6] compares, and
+against what, because the build tests `Remaining == 0` as a proxy for an
+"idle sentinel".
+
+**Established — the operand and the constant.** The predicate loads the
+target's remaining-build fraction — the single-precision field the
+construction step of [R-WORK-01 §1] drives from `1.0` toward `0.0`, seeded by
+the constructor with integer zero for a finished unit and `1.0` for a
+nanoframe — and compares it with a literal single-precision `0.0` held in the
+executable's constant data. The comparison is a floating-point compare whose
+only accepted outcome is *equal*: less, greater and unordered all take the
+reject branch (`That unit is a cloud of vapor and cannot be captured`, cue
+slot 7). Negative zero compares equal and is accepted; a NaN in the field
+would be rejected, but no writer produces one. There is no idleness sentinel,
+no order-state test and no health test in this predicate.
+
+**Established — `Remaining == 0` is equivalent, not a proxy.** A `float32`
+`== 0` has exactly this semantics — true for `+0` and `−0`, false for every
+other value including NaN — so the build's test is the retail test and its
+marker can be retired. Two other things the build's admission does are
+resolved by [R-WORK-01 §6] itself: the "victim immunity" it could not locate
+is predicate 4, the **target's** own `cancapture` definition bit; and the
+same-owner and dying-victim rejects it adds are not in the phase-0 ladder,
+which has exactly the five predicates listed there. **Unknown:** whether the
+order-side target validation doc 04 owns excludes a same-owner or
+death-latched capture target before the executor runs; the transfer path's
+own validation of old and new ownership ([05 "Capture"], "ownership
+transfer") is the only later refusal established here. *Decider:* static
+trace of the capture order's target admission in the order builder.
+
 ## Resurrection
 
 Resurrection is a distinct builder state. It resolves a wreck or feature back
@@ -6354,6 +6386,14 @@ and wasted accumulation" question that older plans list against this
 document is closed by [R-ECO-01 §6] (energy before metal, the four per-pass
 fields before the pool fold, waste only at the strictly-greater clamp) and
 has no bullet here.
+
+**Correction (2026-09-01, RWU-19-5).** No bullet is removed or added:
+the capture executor's "cloud of vapor" predicate was never listed here.
+[R-WORK-01 §10] states its operand (the remaining-build fraction) and its
+constant (literal single-precision zero), retiring the build's proxy marker,
+and records one narrower unknown inline — whether the order-side target
+validation excludes same-owner and death-latched capture targets before the
+executor's phase 0 runs.
 
 - Whether the build-assist approach radius's summand
   `footprintX × footprintX + footprintZ + footprintZ` is a retail defect or an

@@ -524,8 +524,16 @@ func TestBurstPoolFullConsumesAttemptNoRNGNoClone(t *testing.T) {
 
 func TestBurstMuzzleRequeryAndSprayOrder(t *testing.T) {
 	// Muzzle re-query when interval>4 or remaining odd [06 §4.3] C8; clone before spray [06 §4.3].
+	//
+	// Also locks the burst-side spray divergence closed by this unit: one
+	// simulation draw per successful clone (not two), and the parent's
+	// stored yaw/pitch are UNCHANGED afterward — the perturbed heading `a`
+	// is computed only to rebuild the parent's velocity X/Z and is then
+	// discarded, so every pellet scatters about the ORIGINAL aim rather than
+	// the previous pellet's drifted one [06 §4.3] correction.
 	var svc Service
 	w := weaponForFire(60, 10, 30, 2, 5, false, false, false, false, "", 0, 0) // spray nonzero, interval 5 >4
+	w.WeaponVelocity = int32(numeric.FixedFromInt(4))                          // magnitude the spray velocity rebuild uses [06 §4.3]
 	weapons := map[int32]*content.WeaponDef{w.ID: w}
 	slot := &Slot{Weapon: w}
 	r := rng.NewSimulation(123)
@@ -533,13 +541,14 @@ func TestBurstMuzzleRequeryAndSprayOrder(t *testing.T) {
 	if !ok {
 		t.Fatalf("fire")
 	}
-	// Set parent velocity to a known value. Speed is the authoritative scalar
-	// the spray recompute reads back [06 §6.7], so give it one consistent with
-	// the velocity rather than leaving it zero.
+	// Set parent velocity/aim to known values. Yaw/pitch are the ORIGINAL aim
+	// every pellet must keep scattering about [06 §4.3].
 	svc.Records[0].Velocity = Vec3{X: numeric.FixedFromInt(10)}
 	svc.Records[0].Speed = numeric.FixedFromInt(10)
-	svc.Records[0].Yaw = 0
+	svc.Records[0].Yaw = 1000
 	svc.Records[0].Pitch = 0
+	originalYaw := svc.Records[0].Yaw
+	originalPitch := svc.Records[0].Pitch
 	// Muzzle pos spy: returns distinct pos per piece.
 	muzzlePosCalls := 0
 	muzzlePos := func(shooter pool.Handle, piece int16) (Vec3, bool) {
@@ -547,7 +556,11 @@ func TestBurstMuzzleRequeryAndSprayOrder(t *testing.T) {
 		return Vec3{X: numeric.FixedFromInt(int64(100 + muzzlePosCalls)), Y: numeric.FixedFromInt(0), Z: numeric.FixedFromInt(200)}, true
 	}
 	// Interval 5 >4 so should re-query even though remaining 2 is even.
-	beforeDraws := r.Draws()
+	// beforeState is a value copy of the generator: since this weapon has no
+	// randomdecay and the muzzle refresh draws nothing, the spray draw is the
+	// very next Uint32n call on the stream, so replaying it on the copy
+	// reproduces the exact draw AdvanceBursts consumes [01 §7.1].
+	beforeState := r
 	n := svc.AdvanceBursts(5, &r, weapons, muzzlePos)
 	if n != 1 {
 		t.Fatalf("burst clone %d", n)
@@ -560,19 +573,56 @@ func TestBurstMuzzleRequeryAndSprayOrder(t *testing.T) {
 	if cloneVel := svc.Records[1].Velocity.X.Int(); cloneVel != 10 {
 		t.Fatalf("clone copied after spray [06 §4.3]: clone vel %d want 10", cloneVel)
 	}
-	// The parent's stored angles moved and its velocity was recomputed from
-	// them, rather than being nudged componentwise [06 §4.3].
-	if svc.Records[0].Yaw == 0 && svc.Records[0].Pitch == 0 {
-		t.Fatalf("spray did not perturb the parent's stored yaw/pitch")
+	// Exactly one draw per successful clone [06 §4.3] I4.
+	if got := r.Draws() - beforeState.Draws(); got != 1 {
+		t.Fatalf("successful spray should consume exactly 1 draw [06 §4.3], got %d", got)
 	}
-	wantVel := VelocityFromAngles(svc.Records[0].Yaw, svc.Records[0].Pitch, svc.Records[0].Speed)
-	if svc.Records[0].Velocity != wantVel {
-		t.Fatalf("parent velocity %v is not the recompute of its own angles %v",
-			svc.Records[0].Velocity, wantVel)
+	// The parent's stored yaw/pitch are UNCHANGED: `a` is computed into a
+	// scratch value and discarded, never written back [06 §4.3] correction.
+	if svc.Records[0].Yaw != originalYaw || svc.Records[0].Pitch != originalPitch {
+		t.Fatalf("spray must not rewrite the parent's stored yaw/pitch [06 §4.3]: got yaw %d pitch %d, want %d/%d",
+			svc.Records[0].Yaw, svc.Records[0].Pitch, originalYaw, originalPitch)
 	}
-	// RNG draws: successful spray consumes 2 draws
-	if r.Draws()-beforeDraws != 2 {
-		t.Fatalf("successful spray should consume 2 draws, got %d", r.Draws()-beforeDraws)
+	// The parent's velocity X/Z are rebuilt from the scratch heading `a`,
+	// centred on the ORIGINAL yaw, at magnitude weaponvelocity; pitch and
+	// velocity Y are untouched [06 §4.3].
+	draw := beforeState.Uint32n(uint32(w.SprayAngle))
+	a := numeric.Angle(uint16(int32(originalYaw) + recentred(draw, w.SprayAngle)))
+	h := numeric.MulRound(numeric.Cos(originalPitch), w.WeaponVelocity)
+	wantX := numeric.Fixed(int64(numeric.MulRound(numeric.Sin(a), h)))
+	wantZ := numeric.Fixed(int64(numeric.MulRound(numeric.Cos(a), h)))
+	if svc.Records[0].Velocity.X != wantX || svc.Records[0].Velocity.Z != wantZ {
+		t.Fatalf("parent velocity X/Z %v/%v want %v/%v (scatter about original aim) [06 §4.3]",
+			svc.Records[0].Velocity.X, svc.Records[0].Velocity.Z, wantX, wantZ)
+	}
+	if svc.Records[0].Velocity.Y.Int() != 0 {
+		t.Fatalf("spray must not touch velocity Y [06 §4.3], got %v", svc.Records[0].Velocity.Y)
+	}
+
+	// Second and final pellet, due at tick 10 (deadline 5 + burstRate 5).
+	// Its heading must ALSO derive from the ORIGINAL aim, not the first
+	// pellet's already-discarded scratch heading — the relationship the
+	// discard-instead-of-store correction exists to preserve [06 §4.3].
+	muzzlePosCalls = 0
+	beforeState2 := r
+	n2 := svc.AdvanceBursts(10, &r, weapons, muzzlePos)
+	if n2 != 1 {
+		t.Fatalf("second burst clone %d", n2)
+	}
+	if got := r.Draws() - beforeState2.Draws(); got != 1 {
+		t.Fatalf("second successful spray should consume exactly 1 draw [06 §4.3], got %d", got)
+	}
+	if svc.Records[0].Yaw != originalYaw || svc.Records[0].Pitch != originalPitch {
+		t.Fatalf("second spray rewrote the parent's stored yaw/pitch [06 §4.3]: got yaw %d pitch %d, want unchanged %d/%d",
+			svc.Records[0].Yaw, svc.Records[0].Pitch, originalYaw, originalPitch)
+	}
+	draw2 := beforeState2.Uint32n(uint32(w.SprayAngle))
+	a2 := numeric.Angle(uint16(int32(originalYaw) + recentred(draw2, w.SprayAngle)))
+	wantX2 := numeric.Fixed(int64(numeric.MulRound(numeric.Sin(a2), h)))
+	wantZ2 := numeric.Fixed(int64(numeric.MulRound(numeric.Cos(a2), h)))
+	if svc.Records[0].Velocity.X != wantX2 || svc.Records[0].Velocity.Z != wantZ2 {
+		t.Fatalf("second pellet's velocity X/Z %v/%v want %v/%v — must scatter about the ORIGINAL aim [06 §4.3]",
+			svc.Records[0].Velocity.X, svc.Records[0].Velocity.Z, wantX2, wantZ2)
 	}
 
 	// Test interval <=4 and even remaining → no re-query

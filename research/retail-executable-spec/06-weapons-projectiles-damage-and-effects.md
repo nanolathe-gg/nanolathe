@@ -2544,6 +2544,101 @@ The cached-cell suppression cancels only that feature's impact: the
 terrain/water ladder later in the SAME resolver call still runs and can select
 another impact.
 
+### Closed — the contact test has no radius: the occupancy word is the XY gate and the model top is the vertical band [R-DMG-01 §7] (2026-09-01)
+
+RWU-19-3 asked what replaces the planar radius the build uses for
+projectile–unit contact. The ladder above already states the test; this
+closure states the three things it left implicit — which cells hold a unit's
+identity, where the definition's Y bounds come from, and that no distance is
+computed anywhere in the contact path.
+
+**Established — there is no radius.** The contact scan reads exactly one plot
+cell, the one under the projectile's post-motion point (`X >> 20`, `Z >> 20`,
+arithmetic), and tests its two occupancy words. Nothing in the resolver
+computes a planar distance, a footprint rectangle, or a per-candidate radius,
+and no candidate list is built: a unit is a candidate iff its pool index is
+the value in one of the two words of that one cell. The planar 24-unit radius
+in the build is therefore not an approximation of a retail constant; retail
+has no constant to approximate.
+
+**Established — which cells carry a unit's identity.** The words are written by
+the occupancy stamper of `[04 R-COLL-01 §4]` and by nothing else, so the XY
+gate is the stamped footprint rectangle:
+
+```
+S      = 1 << 19                                 ; half a cell, 8 world units, in 16.16
+cellX  = (unit.X + S − footprintX·S) >> 20       ; arithmetic shift   [04 R-COLL-01 §1]
+cellZ  = (unit.Z + S − footprintZ·S) >> 20
+ground mover (mode 1):     ground word := self over [cellX, cellX+footprintX) × [cellZ, cellZ+footprintZ)
+airborne mover (mode 2):   air word    := self over the same rectangle
+building class:            ground word := self over the yard-selected cells of that rectangle
+modes 0 and 3, and an airborne mover whose rectangle leaves the map: no cell
+```
+
+`footprintX`/`footprintZ` are the unit's copy of the definition's footprint
+pair in cells (`[04 §6.3]`); the rectangle moves only when a commit changes
+the cell pair, since the same-cell fast path leaves the words alone. A
+projectile therefore contacts a ground unit when its point's cell lies inside
+the unit's committed footprint rectangle — up to `footprintX × footprintZ`
+cells, never a disc — and a flying unit when the cell lies inside the
+rectangle the airborne mover stamped at its last cross-cell commit. Cells of
+a building that its yard map leaves unselected (an open factory yard,
+`[04 R-COLL-01 §3]`) hold no identity, so a shell passing over them misses
+the building. Where two stamps overlap, the overlap protocol of
+`[04 R-COLL-01 §4]` decides whose index the word keeps, and the contact test
+sees only the survivor.
+
+**Established — the vertical band's source.** The `boundsMinY`/`boundsMaxY` of
+steps 3 and 4 are two 16.16 dwords of the unit definition that the
+unit-definition catalog loader writes after the FBI parse and the model load:
+
+```
+boundsMinY = 0                                   ; unconditionally
+boundsMaxY = modelTop(<objectname>.3do)          ; 16.16, the model-top walk below
+spanY      = boundsMaxY − boundsMinY
+```
+
+`modelTop` walks the model's piece tree — each piece and its siblings,
+recursing into children — taking the maximum over every vertex of
+`vertex.Y + (the Y translations of the piece and of each ancestor)`, from an
+accumulator that starts at zero; the result is the highest vertex above the
+model origin in the model's own 16.16 units (`[03 §2.4]`, `[fmt 3do]`),
+floored at zero. (The FBI parser separately writes the X/Z bounds as
+`±footprint × 8` world units — half the footprint each side of the origin,
+in 16.16 — and pre-computes the spans; the loader then overwrites the Y pair
+and recomputes only the Y span. Those X/Z bounds feed the visibility probe of
+§3.1, the Teleport box and the nano-box builders, not the contact test.) The
+build already computes this exact walk as the model-top helper it uses for
+the visibility eye height; the contact test wants the **full 16.16 dword**,
+not the whole-unit high word that the LOS builder reads.
+
+Substituting, the two slot tests of steps 3 and 4 read:
+
+```
+slot 0 (ground word):  point.Y <  unit.Y + modelTop                  ; strict, no floor
+slot 1 (air word):     unit.Y <= point.Y <= unit.Y + modelTop        ; both inclusive
+```
+
+all in 16.16, `unit.Y` the unit's current 16.16 height, signed 32-bit
+compares. A model with no vertex above its origin has `modelTop = 0`, so its
+ground-slot test admits only points strictly below the unit's base and its
+air-slot band degenerates to `point.Y == unit.Y`; no stock model is built that
+way, but the arithmetic is what it is.
+
+**Established — order and tie policy, restated for the implementer.** Per
+cell: the ground word first, the air word second; the first word whose unit
+passes the owner-differs test and its band impacts and returns. The owner test
+compares the unit's owner byte with the projectile's side byte — an allied
+unit on the cell is a valid contact; only units of the shooter's own side are
+exempt. Nothing prefers a nearer unit because no distance exists.
+
+**Correction.** The build's contact scan iterates every live unit with a
+±16-world-unit band and a 24-unit planar radius, keeping the nearest. Each of
+those three choices is non-retail: the band has no floor for the ground slot
+and its ceiling is the model top, not 16; the XY test is membership of the
+projectile's cell in a stamped rectangle, not a distance; and there is no
+nearest selection, only the fixed word order within one cell.
+
 ### 8.2 Ground bounce and water
 
 **Established fact:** Terrain contact is
@@ -3013,6 +3108,77 @@ different family: incremented by §12.1, saved and restored under the `Kills`
 key `[08 "Save-file organization"]`, and read by the score and statistics
 screens (doc 07); no
 simulation path reads them except the leaderboard rank of §12.1.
+
+### Closed — the armored bit's instance field, and the three control-byte gates in the damage intake [R-DMG-01 §8] (2026-09-01)
+
+RWU-19-5 asked which instance field the step-5 armor gate reads and where the
+"owning player's class" gates read from. Both were stated across
+`[R-DMG-01 §2]`, §9.1 and `[04 §9.2]`; this closure gathers them into one
+implementable statement and confirms each against the packet builder, the
+dispatcher and the per-player unit sweep.
+
+**Established — the armor gate reads one bit of one runtime byte.** The
+packet builder's step-5 test is bit 1 (mask `0x02`) of the unit's **first
+state byte** — the byte whose bit 0 is the `ACTIVATION` posture and whose
+bit 1 is the `ARMORED` posture. Its complete writer census is: the unit
+constructor (whole byte zeroed at spawn, `[04 §2]`), the shared activation
+edge machine through which COB port 1 (`ACTIVATION`, mask 1) and port 20
+(`ARMORED`, mask 2) are `set` (`[04 §4.4]`), and the save restore. The COB
+`get ARMORED` reads the same bit back. **No path copies the FBI
+`armoredstate` flag into it**: that key is parsed into the definition flag
+word and has no reader anywhere in the image (`[R-DMG-01 §2]`). The gate is
+therefore:
+
+```
+armored = (unit.stateByte0 & 0x02) != 0          ; runtime posture only
+if (kind != 10 && armored && amount < 30000)      ; strict, signed 32-bit
+    amount = (int32)(((int64)definition.damageModifier × amount) >> 16)
+```
+
+A build that ORs the definition's `armoredstate` into this test makes every
+unit authored `armoredstate=1` permanently armored, which retail never does;
+the authored key is inert.
+
+**Established — the "player class" is the player slot's control byte, and it
+gates three places.** The byte is the one `[05 R-SHARE-01 §1]` names: `1` a
+locally controlled human, `2` a computer player, `3` a remote peer; an
+unoccupied slot has no record. It is reached from the unit through the
+unit's owning-player record pointer; the unit's own owner byte is the slot
+number, not the class. Its readers in the damage path, in the order a hit
+meets them:
+
+1. *The damage gate of the central impact routine (§9.1)* — read on the
+   **projectile's** side: the slot named by the record's side byte must
+   exist and its control byte must not be `3`. Otherwise no damage is
+   routed at all (shake, sound and art still happen).
+2. *The death latch of the dispatcher (§9.1 step 6)* — read on the
+   **victim's** owner: on a non-positive signed health result, control byte
+   `1` or `2` sets the death latch and preserves the modular health;
+   anything else (no record, or `3`) clamps health to zero and continues,
+   and the unit does not die through this path. The paralyzer branch (§10)
+   tests the same two values on the victim's owner before queuing a stun.
+3. *The packet builder's publication (§9.1)* — read on the **victim's**
+   owner: control byte `3` sends the nine bytes to the attacker's peer for
+   every kind except 11. Networking is out of scope; the gate is stated so
+   that an implementation sees it is not a damage gate.
+
+**Established — the water-damage gate is the same byte, tested once per unit
+by the sweep.** The per-player unit sweep (`[04 R-MOV-03 §1]`) admits slots
+whose control byte is `1`, `2` or `3`, and inside each unit's visit gates one
+block — water damage, self-repair, the two order pumps, the mover tick and
+the post-move correction — on the **owner's** control byte being `1` or `2`.
+`[04 §9.2]`'s "only when the owning player's class is 1 or 2" is that test.
+In single player every occupied slot is `1` or `2`, so all three gates pass;
+an implementation must still read the byte rather than assume it, because a
+side byte naming a slot with no record fails gate 1.
+
+**Correction.** The build's water-damage sweep documents the class values as
+"0 empty, 1 human host, 2 human join, 3 computer/AI". That is wrong: `2` is
+the computer player and `3` the remote peer (`[05 R-SHARE-01 §1]`); under
+the build's reading a computer player's units would take no water damage and
+could never be death-latched. The build's damage path also skips the gate
+when no accessor is wired; the byte is the player slot's control state the
+session already assigns (`1` human, `2` computer), and the gate must read it.
 
 ### 9.3 Area damage
 
@@ -4615,6 +4781,14 @@ notice, and the identity of the recorded-attacker field doc 04's
 `[R-ORD-02 §6]` asked for (`[R-WPN-04 §2]`) — and the static feature reference
 point (`[R-WPN-04 §3]`). One narrower residual is added under "Collision and
 damage".
+
+**Correction (2026-09-01, RWU-19-3/RWU-19-5).** No bullet is removed: this
+tail never listed the contact test's XY gate, the armor gate's instance field
+or the control-byte gates, which the body stated without naming their
+sources. `[R-DMG-01 §7]` states that the contact test has no radius — the
+occupancy word of one cell is the XY gate and the model top the band — and
+`[R-DMG-01 §8]` names the armored bit's byte and the three control-byte
+gates. No bullet is added.
 
 ### Catalog and targeting
 

@@ -379,6 +379,11 @@ func recentred(draw uint32, bound int32) int32 {
 // On each due attempt refreshes position from live muzzle when interval>4 or remaining odd [06 §4.3],
 // decrements remaining, advances deadline, tries to append clone.
 // Clone copy happens before spray; spray prepares next [06 §4.3].
+// Spray is ONE simulation draw per successful clone, bounded by the authored
+// sprayangle; it perturbs a scratch heading used only to rebuild the parent's
+// velocity X/Z (magnitude weaponvelocity, pitch and velocity Y untouched) and
+// is then discarded, so the parent's stored yaw is unchanged for the whole
+// burst and every pellet scatters about the ORIGINAL aim [06 §4.3].
 // Pool-full clone consumes attempt with no spray and no RNG draw [06 §4.3] C8.
 // Anchor dies silently when remaining reaches 0 with no explosion/sound/shake/end smoke/damage [06 §4.3] C8.
 // Successful clones consume spray sample when spray configured, including final attempt; final sample written to soon-retired parent [06 §4.3].
@@ -415,8 +420,10 @@ func (s *Service) AdvanceBursts(tick uint32, simRNG *rng.Simulation, weapons map
 		var interval int32
 		var sprayAngle int32
 		var randomDecay int32
+		var wDef *content.WeaponDef
 		if weapons != nil {
 			if w, ok := weapons[p.WeaponID]; ok && w != nil {
+				wDef = w
 				interval = w.BurstRate // [02 "Weapon record"] burstRate *30
 				sprayAngle = w.SprayAngle
 				randomDecay = w.RandomDecay
@@ -489,25 +496,33 @@ func (s *Service) AdvanceBursts(tick uint32, simRNG *rng.Simulation, weapons map
 		// when spray is configured, including the final one, whose sample is
 		// written to the soon-retired parent and inherited by nobody
 		// [06 §4.3] C8.
-		if sprayAngle != 0 && simRNG != nil {
-			// Two draws bounded by the authored spray field, each re-centred by
-			// half its bound, applied to the stored yaw and pitch; the velocity
-			// components are then RECOMPUTED from those angles through the
-			// fixed-point angle helpers rather than nudged in Cartesian space
-			// [06 §4.3].
-			//
-			// TODO(question): [06 §4.3] names the second bound as the wobble
-			// field adjacent to sprayangle in the weapon record. No authored
-			// key in the compiled WeaponDef has been identified as that field,
-			// so both draws use sprayangle here. The draw COUNT is established
-			// and is what the shared simulation sequence depends on; the second
-			// bound is one line to correct once the key is identified.
-			bound := uint32(sprayAngle)
-			yawOff := recentred(simRNG.Uint32n(bound), sprayAngle)
-			pitchOff := recentred(simRNG.Uint32n(bound), sprayAngle)
-			p.Yaw = numeric.Angle(uint16(int32(p.Yaw) + yawOff))
-			p.Pitch = numeric.Angle(uint16(int32(p.Pitch) + pitchOff))
-			p.Velocity = VelocityFromAngles(p.Yaw, p.Pitch, p.Speed)
+		//
+		// [06 §4.3] correction: earlier text had this rewriting the parent's
+		// stored heading to heading-sprayAngle/2+draw over two draws (yaw and
+		// pitch). It does not: there is one draw, bounded by sprayangle, and
+		// the perturbed heading it feeds is computed into a scratch value and
+		// discarded — never written back to the parent's stored yaw. Pitch is
+		// never jittered. So every pellet scatters about the ORIGINAL aim,
+		// not about the previous pellet's heading, and the parent's stored
+		// yaw is unchanged for the whole burst.
+		if sprayAngle != 0 && simRNG != nil && wDef != nil {
+			// One draw bounded by the authored spray field, re-centred by
+			// half its bound: a = draw + (parentYaw - sprayAngle/2) [06 §4.3].
+			draw := simRNG.Uint32n(uint32(sprayAngle))
+			a := numeric.Angle(uint16(int32(p.Yaw) + recentred(draw, sprayAngle)))
+			// The parent/template velocity X and Z are rebuilt from `a` and
+			// the parent's UNCHANGED pitch, magnitude the weapon's authored
+			// weaponvelocity: H = cos(pitch, weaponvelocity),
+			// velocityX = -sin(a, H), velocityZ = -cos(a, H). Velocity Y is
+			// left alone [06 §4.3]. (This codebase's stored yaw is retail's
+			// muzzle-to-target atan2 argument order flipped — see
+			// VelocityFromAngles — so the retail negation cancels here the
+			// same way it does for every other creator's velocity build.)
+			h := numeric.MulRound(numeric.Cos(p.Pitch), wDef.WeaponVelocity)
+			p.Velocity.X = numeric.Fixed(int64(numeric.MulRound(numeric.Sin(a), h)))
+			p.Velocity.Z = numeric.Fixed(int64(numeric.MulRound(numeric.Cos(a), h)))
+			// p.Yaw, p.Pitch, and p.Velocity.Y are NOT written: `a` is
+			// discarded after building the velocity components [06 §4.3].
 		}
 		// Burst clones do not rerun Fire or RockUnit [06 §4.1] C2.
 		clones++
