@@ -852,6 +852,61 @@ firer's or the target's speed, or that slews a turret at an "aim rate", invents
 behavior; the turret's angular motion is entirely the COB script's, and the
 engine's only angular slew is the projectile guidance of §6.7.
 
+### Closed — the weapon-slot engagement distance, and the order-side shot-admission gate [R-WPN-05 §1] (2026-08-31)
+
+Two helpers the order handlers of `[04 R-ORD-01 §3]` call by name and defer to
+this document. Both are **Established (direct-static)**.
+
+**The engagement distance is the slot's authored `range`.** The weapon-slot
+engagement-distance helper takes a unit and a slot index, walks to that slot's
+resolved weapon record, and returns its `range` field — the same
+whole-world-unit integer §3.3's range test squares, and the same one the air
+loiter marker reads off slot 1 `[04 R-AIR-01 §4]`. There is no scaling, no
+clamp and no second field: the standoff **is** the weapon's range.
+
+This closes `[04 §3.9]`'s standing item, "the standoff value bound by the
+attack-chase orbit substates; it is produced by the weapon-slot
+engagement-distance helper and remains inference". It also fixes the scale of
+every radius in `Attack_Chase` phase 2 and of `Suppress`'s `p2`: a unit orbits
+at exactly the distance from which its own weapon can reach, closes to half
+and then to zero, and bands out to twice its range — all in world units.
+
+**The shot-admission gate.** `canSlotEngage(shooter, target, slot)` answers
+"may this slot be pointed at this target right now" and returns a plain
+admit/refuse. `Attack_Chase` phases 1 and 3 and `Guard_NoMove` phase 2 branch
+on it `[04 R-ORD-01 §3]`. Let `w` be the slot's weapon record and `sea` the
+map's sea-level byte. In order:
+
+1. **Water weapon** (`waterweapon`). The target must be in the water. Unless
+   the target's definition carries `floater` (word A bit 19), its whole-unit Y
+   word must not exceed `sea`; and when the target carries `canhover` (bit 12),
+   its whole-unit Y plus **half** its model top-height word must not exceed
+   `sea` either. Both compares are signed and reject on strictly greater. The
+   gate then goes straight to the range test — no shooter-side test, no air
+   test, no ballistic test.
+2. **Non-water weapon.** Both ends must be out of the water: `(int16)shooterY
+   + shooterModelTop > sea` and `(int16)targetY + targetModelTop > sea`, each
+   strictly greater, each rejecting when it fails. The shooter half is §3.3's
+   shot-time predicate; the target half belongs to this gate alone.
+3. `toairweapon` (flag bit 17): the target's committed mover mode — the low two
+   bits of its state word `[04 R-MOV-01 §8]` — must read exactly **2**,
+   airborne. **This closes the one inference in `toairweapon`'s reader census**
+   (`[02 R-KEYS-01 §2]`: "the exact operand of that airborne test is the
+   inference"): the operand is the committed mover mode, not a definition bit
+   and not an altitude.
+4. `ballistic` (flag bit 1): the ballistic solver is run on the source-to-target
+   delta with the weapon's `weaponvelocity` and `minbarrelangle`, and the gate
+   refuses when it returns the no-solution sentinel. Gravity is not among the
+   passed operands; the solver reads the world's.
+5. **Range.** `dx` and `dz` are the raw 16.16 planar deltas; the gate admits
+   when `((dx·dx) >> 32) + ((dz·dz) >> 32) <= range·range`, an inclusive signed
+   32-bit compare against the slot weapon's `range`. This is §3.3's arithmetic
+   exactly, including the square-then-shift order — the deltas are **not**
+   truncated to whole units before squaring.
+
+The gate performs no terrain, hill, visibility or sensor test, and consults
+neither reload nor ammunition nor cost.
+
 ### 3.4 The weapon-query path [R-P0-07]
 
 **Established fact:** The slot selects its pieces through four query jobs that

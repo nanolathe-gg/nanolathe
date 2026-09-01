@@ -128,3 +128,99 @@ func WeaponCanEngage(u *units.Unit, idx int, target *units.Unit) bool {
 	}
 	return WithinRange(u.X, u.Z, target.X, target.Z, s.Weapon.Range)
 }
+
+// CanEngageSlotTarget is the shot-admission gate the attack-order handlers ask
+// before they bind a weapon slot to a target [04 R-ORD-01 §7]. It answers "may
+// slot idx be pointed at this target right now", and it is the same predicate
+// `Attack_Chase` phases 1 and 3 and `Guard_NoMove` phase 2 branch on
+// [04 R-ORD-01 §3].
+//
+// The gate, in retail's order:
+//
+//   - A **water weapon** requires the target to be in the water. Unless the
+//     target's definition is a `floater`, its whole-unit Y must not be above
+//     the map's sea level; and when the target is `canhover`, its whole-unit Y
+//     plus half its model top height must not be above sea level either. A
+//     hovercraft rides high enough that half its height clears the surface, so
+//     the two tests together are "the hull is under water".
+//   - A **non-water** weapon requires BOTH ends to be out of the water: the
+//     shooter's whole-unit Y plus its model top height, and the target's,
+//     strictly greater than sea level. The shooter half is the same predicate
+//     the shot-time gate applies [06 §3.3]; the target half is this gate's own.
+//   - A `toairweapon` additionally requires the target's committed mover mode
+//     to read **2** (airborne) [04 R-MOV-01 §8].
+//   - A `ballistic` weapon additionally requires a ballistic solution that is
+//     not the no-solution sentinel.
+//   - Finally the ordinary planar range test of [06 §3.3] against the slot
+//     weapon's authored `range`.
+//
+// The gate performs no terrain, visibility or sensor test, and it does not
+// consult reload, ammunition or cost — those belong to the slot pipeline.
+func (s *Service) CanEngageSlotTarget(u *units.Unit, target *units.Unit, idx int, terrain *world.Terrain) bool {
+	slot := orderSlot(u, idx)
+	if slot == nil || slot.Weapon == nil || u == nil || u.Def == nil || target == nil || !target.Alive || target.Def == nil {
+		return false
+	}
+	w := slot.Weapon
+	sea := int32(0)
+	if terrain != nil {
+		sea = int32(terrain.SeaLevel)
+	}
+	if w.WaterWeapon {
+		if !target.Def.Floater && wholeY(target) > sea {
+			return false
+		}
+		if target.Def.CanHover && wholeY(target)+target.Def.ModelTop/2 > sea {
+			return false
+		}
+		return WithinRange(u.X, u.Z, target.X, target.Z, w.Range)
+	}
+	if wholeY(u)+u.Def.ModelTop <= sea {
+		return false
+	}
+	if wholeY(target)+target.Def.ModelTop <= sea {
+		return false
+	}
+	if w.ToAirWeapon && target.Move.Mode != airborneMoverMode {
+		return false
+	}
+	if w.Ballistic && !hasBallisticSolution(u, target, w, terrain) {
+		return false
+	}
+	return WithinRange(u.X, u.Z, target.X, target.Z, w.Range)
+}
+
+// airborneMoverMode is the committed mover-mode value the `toairweapon` gate
+// requires of its target [04 R-MOV-01 §8]: 2, airborne. It closes the operand
+// [02 R-KEYS-01 §2] recorded as the one inference in `toairweapon`'s otherwise
+// established reader census.
+const airborneMoverMode uint8 = 2
+
+// wholeY is the unit's world Y truncated to the whole-unit word the sea-level
+// comparisons use [06 §3.3].
+func wholeY(u *units.Unit) int32 { return int32(u.Y.Raw() >> 16) }
+
+// hasBallisticSolution reports whether the ballistic solver returns anything
+// other than its no-solution sentinel for this shooter/target pair; the gate
+// only asks whether a solution exists [04 R-ORD-01 §7].
+//
+// The gate hands the solver the source-to-target delta, the weapon's
+// `weaponvelocity` and its `minbarrelangle`, and takes gravity from the world
+// rather than from the weapon record — which is the same triple the slot
+// pipeline's own aim step supplies to BallisticSolve [06 §3.3][06 §6.4]. A
+// zero velocity has no solution, and the solver's own sentinel covers the rest.
+func hasBallisticSolution(u *units.Unit, target *units.Unit, w *content.WeaponDef, terrain *world.Terrain) bool {
+	vel := numeric.Fixed(int64(w.WeaponVelocity))
+	if vel.Raw() == 0 {
+		return false
+	}
+	var grav numeric.Fixed
+	if terrain != nil {
+		grav = terrain.Gravity
+	}
+	dx := target.X.Sub(u.X)
+	dy := target.Y.Sub(u.Y)
+	dz := target.Z.Sub(u.Z)
+	_, ok := BallisticSolve(dx, dy, dz, vel, grav, w.MinBarrelAngle)
+	return ok
+}

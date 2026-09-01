@@ -245,6 +245,28 @@ func vtolLandIfCanHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32)
 }
 
 // ---------------------------------------------------------------------------
+// VTOL_Landing [04 R-AIR-01 §6]
+// ---------------------------------------------------------------------------
+
+// vtolLandingHandler is the same arrangement for the pad-landing machine.
+//
+// `execVTOLLanding` in internal/movement is the seven-phase machine of
+// [04 R-AIR-01 §6] — takeoff preamble, loiter bearing, the pad query, the
+// approach and the descent — and the mover tick has always dispatched it off
+// the head record. It never ran, because a placeholder descriptor handler
+// completed the record on its first dispatch.
+//
+// That placeholder wrote the pad's X, Y and Z straight onto the aircraft and
+// returned *complete*: an aircraft ordered to land teleported onto the pad in
+// one tick, moving 320 world units against a MaxVelocity of 10, and never
+// attached to a pad piece. It predated the machine it was shadowing. Routing
+// the descriptor at the runner leaves one owner for the phase byte, and the
+// runner's answer reads the executor's outcome rather than re-running it.
+func vtolLandingHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
+	return airHandOff(u, n, satisfied, tick)
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -255,6 +277,7 @@ var vtolAirHandlers = []struct {
 	handler func(*units.Unit, *Node, uint32, uint32) Code
 }{
 	{"VTOL_LandIfCan", vtolLandIfCanHandler},
+	{"VTOL_Landing", vtolLandingHandler},
 	{"VTOL_Evade", vtolEvadeHandler},
 	{"VTOL_SeekAttack", vtolSeekHandler},
 	{"VTOL_SeekGuard", vtolSeekHandler},

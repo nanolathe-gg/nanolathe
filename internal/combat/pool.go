@@ -122,15 +122,28 @@ const (
 // Sound are authored identities; empty values remain empty rather than being
 // replaced with guessed assets [06 §13.2].
 type Event struct {
-	Kind      EventKind
-	Tick      uint32
-	Source    pool.Handle
-	Target    pool.Handle
-	Position  Vec3
-	Sound     string
+	Kind     EventKind
+	Tick     uint32
+	Source   pool.Handle
+	Target   pool.Handle
+	Position Vec3
+	Sound    string
+	// Graphic and Bank are the two halves of one authored art identity: the
+	// GAF entry name and the bank that holds it. A weapon's explosion art is
+	// `explosionart` inside `explosiongaf`, and BOTH keys must be present or
+	// the holder stays null and the impact draws no art [06 R-WFX-01 §1].
+	// Publishing one string for both was a defect: the two names come from
+	// different keys and neither substitutes for the other.
 	Graphic   string
+	Bank      string
 	Magnitude int32
 	Duration  int32
+
+	// HasCalculatedFlash and CalculatedTable carry the explosion pool's
+	// secondary cursor: the procedurally generated disc every impact draws
+	// under its art, whether or not it has any [06 R-WFX-01 §2].
+	HasCalculatedFlash bool
+	CalculatedTable    uint8
 
 	// Smoke carries the weapon's start-smoke flag on the explosion events:
 	// the land/water/lava impact effect variants each append a strip-9

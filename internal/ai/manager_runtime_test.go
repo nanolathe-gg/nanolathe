@@ -253,7 +253,12 @@ func TestWaveGatherEngageHysteresisAndNearestStableTie(t *testing.T) {
 	// creation derives from that byte, and without it the manager's move
 	// broadcasts resolve to the immobile-builder rally marker
 	// [04 R-ORD-02 §1][04 R-COLL-01 §2].
-	attackerDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "attacker"}, UnitName: "attacker", BMCode: true, CanMove: true, CanAttack: true, MaxDamage: 100}
+	// A resolved weapon slot is what gives the unit the armed state bit, and
+	// code 3's whole armed branch is gated on it [R-ORD-02 §1]: without one the
+	// resolver falls through to the kamikaze test and rejects, so a wave of
+	// `canattack` units with no weapon would queue nothing at all.
+	attackerWeapon := &content.WeaponDef{ID: 1, Name: "attackergun", Range: 180}
+	attackerDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "attacker"}, UnitName: "attacker", BMCode: true, CanMove: true, CanAttack: true, MaxDamage: 100, Weapon1: "attackergun", Weapon1Def: attackerWeapon}
 	baseDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "base"}, UnitName: "base", MaxDamage: 100}
 	enemyDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "enemy"}, UnitName: "enemy", BMCode: true, CanMove: true, MaxDamage: 100}
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{"attacker": attackerDef, "base": baseDef, "enemy": enemyDef}}

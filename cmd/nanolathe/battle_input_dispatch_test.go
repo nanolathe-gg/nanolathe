@@ -8,6 +8,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/visibility"
 )
 
@@ -48,6 +49,9 @@ func TestAttackGroundUsesResolverRejectSentinel(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(40, 40))
 	attacker := placeUnit(b, "armcons", numeric.Fixed(8*65536), numeric.Fixed(8*65536))
 	attacker.Def.CanAttack = true
+	// armcons resolves no weapon slot, so its state word has no armed bit and
+	// code 3 falls straight through the position-only arm to the kamikaze test
+	// and rejects [R-ORD-02 §1]. `canattack` alone is not enough.
 	replaceSelectionForTest(t, b, attacker)
 	b.orderSelected(3, 300, 300, false)
 	applyPendingBattleCommands(b)
@@ -100,6 +104,11 @@ func TestTypedOrderCommandResolvesTargetHandleAtApplication(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(40, 40))
 	attacker := placeUnit(b, "armcons", numeric.Fixed(8*65536), numeric.Fixed(8*65536))
 	attacker.Def.CanAttack = true
+	// Code 3's armed branch runs only when the unit's state word carries the
+	// armed bit, which the allocator sets from the definition's weapon links
+	// [R-ORD-02 §1]; armcons has none, so the fixture supplies it alongside the
+	// forced `canattack`.
+	attacker.Flags |= units.ArmedStatus
 	replaceSelectionForTest(t, b, attacker)
 	target := placeUnit(b, "armsolar", numeric.Fixed(16*65536), numeric.Fixed(16*65536))
 	target.Owner = 1

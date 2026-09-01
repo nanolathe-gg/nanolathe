@@ -799,7 +799,7 @@ func (w *World) attachCOB(u *Unit) error {
 	// Run the shared D+wake Create adapter so hide/show and other writes are
 	// visible before the first snapshot [04 §4.1][R-CB-01 §2]. The reload
 	// callback is a separate deferred start after Create [R-CB-01 §4].
-	bridge := cob.NewCallbackBridge(vm)
+	bridge := u.ScriptBridge()
 	bridge.Create()
 	initializeCreationCallbacks(u, bridge, maxReloadTicks(u.Def))
 	return nil

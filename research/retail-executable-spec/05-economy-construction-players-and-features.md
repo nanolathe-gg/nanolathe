@@ -5349,14 +5349,29 @@ and finds the census wrong on one row:
   returns without effect when the pool-disable byte is set (never, in
   retail — that byte has no writer), allocates one 52-byte object from the
   shared strip pool (exhaustion drops the steam silently), constructs it as
-  the flame-family class of [03 R-FX-01 §3] with its deadline seeded from
-  the current tick, calls the class's init virtual with the position and the
-  three literals `5`, `0`, `150`, evicts the oldest object of strip 4 when
-  the pre-insert count exceeds 400, and appends. **Unknown:** which of the
-  family's init parameters (segment hold, selector, lifetime) each of the
-  three literals binds to — the producer passes them positionally and this
-  unit did not read the class's init virtual; decider: static trace of that
-  virtual (lane 03, [03 R-FX-01 §3]).
+  the **smoke-puff** class of [03 R-FX-01 §3], calls the class's init virtual
+  with the position and the three literals `5`, `0`, `150`, evicts the oldest
+  object of strip 4 when the pre-insert count exceeds 400, and appends.
+
+  **Correction (2026-08-31).** This paragraph called the class "the
+  flame-family class". It is not: the producer constructs the smoke-puff
+  class, whose vtable is the one holding the three-argument init below. The
+  two families differ in what they blit and how their sub-records expire, so
+  the misattribution would have given a vent flame segments marching toward a
+  target point instead of puffs rising in place.
+
+  **Closed (2026-08-31) — the three literals.** The Unknown recorded here
+  asked which init parameter each literal binds to. Reading the class's init
+  virtual settles it: the first argument after the position is the **spawn
+  interval** (5 ticks), the second is the **animation frame hold** (0, which
+  the constructor defaults to 7, exactly as [R-STRIP-01 §1]'s tail note
+  says of the smoke family), and the third is the container **lifetime**
+  (150 ticks), stored as `deadline = currentTick + lifetime`. The init also
+  stores the bound entry's frame count less one, and spawns one puff of its
+  own before returning. A vent therefore produces thirty-one puffs over five
+  seconds — one from the constructor and one every fifth tick while the
+  next-spawn tick is still inside the window — and then stops. There is no
+  perpetual plume.
 - The producer is reached only from the feature stamp (step 8); a wreck or
   reload that re-stamps a geothermal definition produces a new steam object
   each time, and nothing removes the old one except its own lifetime, so a

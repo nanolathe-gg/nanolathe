@@ -327,3 +327,48 @@ func TestMalformedCustom(t *testing.T) {
 		t.Fatalf("missing successor should gracefully free to 0xFFFF [P1-10][P1-15]")
 	}
 }
+
+// TestGeothermalStampRunsTheSteamProducer locks the reach of the steam-strip
+// producer [05 R-ECO-02 §3]: it is called from the feature stamp, once, with
+// the footprint centre and the sampled height, and only for a definition
+// carrying the `geothermal` flag. That single call site is why a vent steams
+// when the map places it and not on any later tick.
+func TestGeothermalStampRunsTheSteamProducer(t *testing.T) {
+	terrain := newTestTerrainP1(16, 16)
+	terrain.ApplySchema(nil, 0)
+	plain := defP1("tree", 1, 1, "", "")
+	plain.CanonicalKey = content.CanonicalKey("tree")
+	plain.Damage = 10
+	vent := defP1("geovent", 1, 1, "", "")
+	vent.CanonicalKey = content.CanonicalKey("geovent")
+	vent.Geothermal = true
+	vent.Damage = 10
+	terrain.FeatureDefs = []*content.FeatureDef{plain, vent}
+	sim := rng.SimulationFromState(1)
+	svc := NewService(terrain, &sim, nil, nil)
+
+	type puff struct{ x, y, z numeric.Fixed }
+	var puffs []puff
+	svc.GeothermalSteam = func(x, y, z numeric.Fixed) {
+		puffs = append(puffs, puff{x, y, z})
+	}
+
+	if svc.PlaceAt(3, 3, plain) == nil {
+		t.Fatal("plain feature placement rejected")
+	}
+	if len(puffs) != 0 {
+		t.Fatalf("a non-geothermal stamp ran the steam producer %d times", len(puffs))
+	}
+
+	inst := svc.PlaceAt(6, 9, vent)
+	if inst == nil {
+		t.Fatal("vent placement rejected")
+	}
+	if len(puffs) != 1 {
+		t.Fatalf("the vent stamp ran the steam producer %d times, want exactly one", len(puffs))
+	}
+	if puffs[0].x != inst.X || puffs[0].y != inst.Y || puffs[0].z != inst.Z {
+		t.Fatalf("steam at (%v,%v,%v), want the stamped centre/height (%v,%v,%v)",
+			puffs[0].x, puffs[0].y, puffs[0].z, inst.X, inst.Y, inst.Z)
+	}
+}

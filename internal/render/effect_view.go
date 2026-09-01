@@ -9,22 +9,29 @@ import (
 // effect.  It intentionally retains the authored Kind/Graphic and frame
 // selectors; asset lookup belongs to the client presentation boundary.
 type EffectDraw struct {
-	ID                        uint32
-	EventSeq                  uint64
-	Kind                      string
-	Graphic                   string
-	FrameA                    int32
-	FrameB                    int32
-	X, Y, Z                   numeric.Fixed
-	Light                     bool
-	PaletteRow                int16
-	Shake                     int32
-	AssetID                   string
-	SequenceID                string
-	Strip                     int8
-	FlashRadius               int32
-	FlashLevel                int32
-	HasFlashDisc              bool
+	ID           uint32
+	EventSeq     uint64
+	Kind         string
+	Graphic      string
+	FrameA       int32
+	FrameB       int32
+	X, Y, Z      numeric.Fixed
+	Light        bool
+	PaletteRow   int16
+	Shake        int32
+	AssetID      string
+	SequenceID   string
+	Strip        int8
+	FlashRadius  int32
+	FlashLevel   int32
+	HasFlashDisc bool
+	// HasCalculatedFlash and CalculatedTable carry the secondary cursor's
+	// generated table to the draw pass [06 R-WFX-01 §2]; FrameB is its cursor.
+	HasCalculatedFlash bool
+	CalculatedTable    uint8
+	// StripFill is the two-by-two fill colour of a mirrored strip sub-record
+	// [03 R-STRIP-01 §2]; zero means the view is not a fill.
+	StripFill                 uint8
 	TargetX, TargetY, TargetZ numeric.Fixed
 	NanolatheIndex            int32
 	NanolatheCount            int32
@@ -44,25 +51,27 @@ func BuildEffectDraws(effects []frame.EffectView) []EffectDraw {
 	out := make([]EffectDraw, 0, len(effects))
 	for _, e := range effects {
 		out = append(out, EffectDraw{
-			ID:           e.ID,
-			EventSeq:     e.EventSeq,
-			Kind:         e.Kind,
-			Graphic:      e.Graphic,
-			FrameA:       e.SeqA,
-			FrameB:       e.SeqB,
-			X:            e.X,
-			Y:            e.Y,
-			Z:            e.Z,
-			Light:        e.Light,
-			PaletteRow:   e.PaletteRow,
-			Shake:        e.Shake,
-			AssetID:      e.AssetID,
-			SequenceID:   e.SequenceID,
-			Strip:        e.Strip,
-			FlashRadius:  e.FlashRadius,
-			FlashLevel:   e.FlashLevel,
-			HasFlashDisc: e.HasFlashDisc,
-			TargetX:      e.TargetX, TargetY: e.TargetY, TargetZ: e.TargetZ,
+			ID:                 e.ID,
+			EventSeq:           e.EventSeq,
+			Kind:               e.Kind,
+			Graphic:            e.Graphic,
+			FrameA:             e.SeqA,
+			FrameB:             e.SeqB,
+			X:                  e.X,
+			Y:                  e.Y,
+			Z:                  e.Z,
+			Light:              e.Light,
+			PaletteRow:         e.PaletteRow,
+			Shake:              e.Shake,
+			AssetID:            e.AssetID,
+			SequenceID:         e.SequenceID,
+			Strip:              e.Strip,
+			FlashRadius:        e.FlashRadius,
+			FlashLevel:         e.FlashLevel,
+			HasFlashDisc:       e.HasFlashDisc,
+			HasCalculatedFlash: e.HasCalculatedFlash, CalculatedTable: e.CalculatedTable,
+			StripFill: e.StripFill,
+			TargetX:   e.TargetX, TargetY: e.TargetY, TargetZ: e.TargetZ,
 			NanolatheIndex:         e.NanolatheIndex,
 			NanolatheCount:         e.NanolatheCount,
 			NanolatheGeometryKnown: e.NanolatheGeometryKnown,

@@ -2976,6 +2976,54 @@ attack at the head): the spawned order becomes the **front** record and the
 guard record waits behind it, resuming when it is gone. The "queued mode"
 wording for branch 1 describes the force flag, not a queued insertion.
 
+### Closed — the weapon-slot control byte, and the attack-chase slot pick [R-ORD-01 §7] (2026-08-31)
+
+**Established (direct-static).** `[R-ORDER-02 §2]` describes the weapon-target
+clear's guard as "the slot's control byte has bit 1 set (slot assigned) and bit
+4 clear", and `[R-ORD-01 §1]` gives *release slot k* and *inhibit slot k* one
+line each. Reading the two helpers settles what both bits are, what the guard
+covers, and how the chase's default slot is picked.
+
+**The two bits.** Bit 1 is *the slot is enabled* — it is set for the slots
+whose weapon link resolved, and it is the same bit the command resolver reads
+as "my slot 1 is enabled" in its code-3 water-weapon rejects `[R-ORD-02 §1]`.
+Bit 4 is the **inhibit latch**, and it belongs to the same byte, not to the
+`[06 §1.2]` armed / Aim-latch / tracking flags. A reader that took bit 1 from
+one field and bit 4 from another is reading one byte as two.
+
+**The two verbs, exactly.**
+
+* *Inhibit slot k*: the slot's bit 1 must be **set** and its bit 4 **clear**.
+  Bit 4 is then set. Only then, and only when the slot's target words are not
+  already the empty pair, are they reset and `TargetCleared` arranged with the
+  slot index.
+* *Release slot k*: bit 1 must be **set** and bit 4 **set**. Bit 4 is then
+  cleared, followed by the same conditional target reset and notification.
+* Both take `k = 3` to mean slots 0, 1, 2 in that order, implemented as a
+  recursion on 0 and 1 followed by a fall-through on 2.
+
+**This answers the question `[R-ORD-01 §1]` left open**, which was whether the
+target clear is guarded too or only the notification. It is guarded: a slot the
+control-byte test rejects is left **entirely** alone — no control-byte write, no
+target reset, no callback. Two consequences follow that a notification-only
+reading gets wrong. Releasing a slot that was never inhibited is a **no-op**, so
+a handler that releases slots on its way to binding one does not destroy targets
+the acquisition path put on the others; and inhibiting an already-inhibited slot
+is a no-op, so a handler that inhibits on every wake — `Suppress` phase 2,
+`Guard_NoMove` phase 0 — emits one `TargetCleared`, not one per wake.
+
+**The default slot pick.** `Attack_Chase` phase 0 takes it when the record's p1
+is 0. It returns slot 0 when slot 0 is enabled, else slot 1 when slot 1 is,
+else slot 2 when slot 2 is, else 0 — reading each slot's control-byte bit 1.
+The third arm returns the *bit value* 2, which doubles as the index, and 0 when
+the bit is clear, so "slot 0 is enabled" and "no slot is enabled" are the same
+answer by construction. In one sentence: **the lowest-indexed enabled slot, and
+0 when there is none.**
+
+**Unknown.** No runtime writer of bit 1 was found — only readers. Whether a
+slot can be *disabled* after load, which would separate this bit from "the
+weapon link resolved", is open; *decider:* a writer census on that byte's bit 1.
+
 ### Closed — the ground movement handlers [R-ORD-01 §4] (2026-08-29)
 
 **`Move_Ground`.** Phase 0: carried → cancel-all; caption clear; point goal
@@ -10407,6 +10455,102 @@ current tick plus 30, ORs `0x8` into the gate word, and returns 2. Phase 1
 emits status cue slot 10 `Unit repaired` and returns 5. This is one of the four
 `Unit repaired` producers the doc 05 caption sweep is looking for.
 
+### Closed — the landing-legality predicate [R-AIR-01 §6a] (2026-08-31)
+
+**What was open.** Section 6 says `VTOL_LandIfCan` phase 1 "asks the
+landing-legality test whether the unit's current position is landable" and
+names neither the predicate nor a citation for it. No other section defined it,
+so `landable` in this project stood as an explicit placeholder and the idle
+refill that depends on it stayed switched off. The predicate is traced here.
+
+**It is a dedicated routine — Established.** The test is not the mover's commit
+validator reused. It is its own routine with exactly two callers, both inside
+the ground-landing machine of this section. It takes the unit and a position,
+and it answers with no side effects. Its terrain arithmetic overlaps the commit
+validator's without being the same test: it applies one strict slope maximum
+and has no second water-slope tier, and it adds an occupancy rule and an
+aircraft-specific water rule that the commit validator does not carry.
+
+**The anchor and bounds — Established.** With the definition's footprint pair
+`(fx, fz)` and the sea-level byte, the position is quantised with the same
+anchor form the mover's position commit uses ([R-MOV-01 §7] "cell
+quantisation"), `S = 0x80000`:
+
+```text
+cellX = (posX + S − fx·S) >> 20            (arithmetic shift)
+cellZ = (posZ + S − fz·S) >> 20
+if (int16)cellX < 0 or (int16)cellZ < 0:            not landable
+if cellX + fx >= mapWidthCells:                     not landable
+if cellZ + fz >= mapHeightCells:                    not landable
+```
+
+**The coarse early accept — Established.** Before any per-cell work the test
+reads one 16-bit word from a **half-resolution** blocking map — one entry per
+2×2 cell block, indexed
+
+```text
+i = (cellX >> 1) + (fx >> 2) + ((cellZ >> 1) + (fx >> 2)) · (mapWidthCells >> 1)
+```
+
+and tests `1 << unitMovementClassShift` against it. **When that bit is clear the
+test returns landable immediately**, without examining features, occupancy,
+depth or slope. Note the index uses `fx >> 2` on *both* axes; the Z term does
+not use `fz`. That asymmetry is what the routine computes, not a transcription
+slip.
+
+**The per-cell walk — Established.** Only when the coarse bit is set does the
+test walk every cell of the footprint rectangle. The attribute cell record is
+13 bytes and the walk strides `13·(mapWidthCells − fx)` between rows. Per cell,
+in this order, any failure ending the whole test:
+
+1. **Features.** The cell's feature word is `0xFFFF` for empty. Values below
+   the feature count select a feature definition and the cell blocks exactly
+   when that definition carries `blocking` — the flag-word bit 6 already
+   established in `[05 "Bit 5"]`. `0xFFFE` marks a continuation cell: the
+   origin is reached by stepping back `13·(dz·mapWidthCells + dx)` bytes using
+   the two delta bytes the cell carries, and the origin's own word is read the
+   same way. `0xFFFB`, `0xFFFC` and `0xFFFD` block outright, as does a feature
+   index at or above the feature count.
+2. **Building yards.** The cell's flag-byte bit `0x2` blocks — the
+   completed-building yard mark that the building stamp writes on every yard
+   cell, already established in `[04 R-COLL-01 §4]`. An aircraft may not set
+   down inside a finished building's yard.
+3. **Occupancy.** The cell carries two 16-bit occupant slots. Each blocks when
+   it is non-zero **and** differs from the asking unit's own identifier — so a
+   unit's own cells never block its landing, which is what lets the phase-1
+   "is where I am landable" question succeed at all.
+4. **Depth and slope.** With `lo` and `hi` the cell's derived minimum and
+   maximum height bytes (section 6.1), and the definition's resolved movement
+   values:
+
+```text
+depthFloor = seaLevel − maxWaterDepth
+depthCeil  = seaLevel − minWaterDepth
+if depthFloor < seaLevel and definition has canfly and not amphibious:
+    depthFloor = seaLevel                  // the aircraft water rule
+if lo < depthFloor:            not landable
+if hi > depthCeil:             not landable
+if hi − lo > maxSlope:         not landable     // one tier, strict
+```
+
+**The aircraft water rule is the substantive finding.** `canfly` is definition
+bit 11 and `amphibious` is bit 21 ([R-MOV-01 §"mover tick"], section 9.2). For
+any can-fly definition that is not amphibious, the water floor is raised to sea
+level, so **every cell under the footprint must be at or above sea level**. A
+non-amphibious aircraft cannot set down on water however shallow, regardless of
+what its authored movement class allows. This is the rule the placeholder was
+missing entirely, and it is the one that governs where an idle aircraft may
+park.
+
+**Missing and unknown.** Nanolathe has no half-resolution class-blocking map,
+so the coarse early accept above cannot be applied and the full walk always
+runs. That makes our predicate **stricter** than retail: retail will accept a
+position on the coarse bit alone, including one another unit occupies, where we
+walk the cells and may refuse. The divergence is bounded — a refusal only makes
+the caller keep searching, and the ground-landing machine already has its
+repeated-failure fallback — but it is a divergence. What would settle it is the
+writer and layout of that half-resolution map.
+
 ### Closed — standby, the idle circle, and the seek states [R-AIR-01 §7] (2026-08-29)
 
 **Established — `VTOL_Standby` decides between parking and circling.** Phase 0
@@ -11271,13 +11415,16 @@ replacement bullet is needed because the ground path has no vertical term.
   semantics are closed and the producer must not be invented.
 - Where the interface and network layers replace or cancel the front order
   · §3.3, doc 07 · static trace. The queue pump itself never does it.
-- The standoff value bound by the attack-chase orbit substates; it is produced
-  by the weapon-slot engagement-distance helper and remains inference · §8.3,
-  doc 06 · static trace.
-- The writer of bit 16 in the unit capability word, and the semantic name of
-  the weapon-slot control byte's bit 4 · §3.3, [R-ORD-01 §6] · static trace
-  of the capability word's writers. (Pending bit `0x10`'s producer is closed:
-  [R-MOV-03 §7].)
+- ~~The standoff value bound by the attack-chase orbit substates.~~ **Closed
+  2026-08-31 by [06 R-WPN-05 §1]:** the weapon-slot engagement-distance helper
+  returns the slot's authored weapon `range`, so the standoff is the weapon's
+  own reach in whole world units.
+- The writer of bit 16 in the unit capability word · §3.3, [R-ORD-01 §6] ·
+  static trace of the capability word's writers. (Pending bit `0x10`'s producer
+  is closed: [R-MOV-03 §7]. **The weapon-slot control byte's bit 4 is closed by
+  [R-ORD-01 §7]:** it is the inhibit latch, and bit 1 of the same byte is *the
+  slot is enabled*. What remains open there is narrower — whether bit 1 has any
+  runtime writer, i.e. whether a slot can be disabled after load.)
 - Producer and phase-2 reading of `GetBuilt`'s wake bit `0x8000`
   · [R-ORD-01 §5], doc 05 · static trace of the work helper's callers.
   (Narrowed 2026-08-30: the half of this item that asked *whether* the 11-tick

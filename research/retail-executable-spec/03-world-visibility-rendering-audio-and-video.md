@@ -148,7 +148,25 @@ compared against both the object's window end and the global tick). The removal
 verdict is "the internal list is empty" (the container object dies once its
 last particle/segment expires; one family additionally requires its window to
 have passed). One family's sub-records also expire early when the terrain
-height beneath them falls below sea level — its marks die on water. The draw
+height beneath them falls below sea level — its marks die on water.
+
+**Correction, 2026-08-31 — the smoke puff's own draw and its end.** §3 below
+called the smoke family's per-spawn draw "the start frame". It is not: the
+spawn writes the puff's **last frame**, drawn as
+`crtRand·(limit − 2)/0x8000 + 2` against the emitter's frame-limit field —
+`min(frameCount − 1, frameCap)` when the producer caps it and `frameCount − 1`
+otherwise — and the puff's cursor starts at **0**. `[06 R-WFX-01 §5]` records
+the same correction from the producer side (RWU-03-10, 2026-08-29) together
+with the four producers' parameter rows; only this document's §3 row was left
+saying "start frame". The particle is removed when its frame index **reaches**
+its last frame. The puff dies when that cursor
+passes its own last frame, which is the animation-driven expiry this section
+otherwise leaves to "each carries its own expiry tick" — the smoke family's
+expiry is a frame cursor, not a tick deadline. Reading the draw as a start
+frame leaves a puff with no end at all: nothing retires it, and the strip
+fills to its 401-record bound with smoke that never fades. The staggered last
+frame is what makes a plume thin out instead of standing still, and it is why
+the container has to hold the entry's frame count from its init. The draw
 entry invoked by the composer's per-strip walk forwards each sub-record to a
 per-sub-record draw that applies the ordinary projection with the half-height
 shear, gates on the local player's mode-selected coverage at the projected
@@ -168,7 +186,7 @@ The phase-11 sweep consumes no draws at the dispatcher level, but its objects
 do, all from the CRT presentation stream — this quantifies doc 01 §7.2's
 "object-internal" census row for phase 11: the nano emitters spend thirty
 draws per spawning record per spawn tick (five particles × six coordinate
-draws); the smoke puffs spend one draw per spawned puff (start frame) plus one
+draws); the smoke puffs spend one draw per spawned puff plus one
 draw per animation-frame advance (the next frame's delay, drawn as half to
 full of the authored delay); the flame-stream segments spend one draw per
 segment (random start frame); the impact sprinkle spends three draws per spawn
@@ -4825,13 +4843,56 @@ index `0x6F` minus a jittered radial distance, a thin ring is exactly `0x6E`,
 and outside the disc the byte is `0xFF` transparent — then for each screen
 pixel where that texture is opaque the underlying indexed pixel `src` is
 replaced by `LHT[level * 256 + src]` at a level derived from the disc
-intensity. The halo is composited after the flat tile pass and before shadows,
-units, and fog; its whole-tick countdown cadence is shared with the explosion
+intensity. Its whole-tick countdown cadence is shared with the explosion
 animation, and the disc itself is seeded from the CRT presentation random
-stream (`*214013+2531011`), not the simulation stream. The effect is
+stream (`*214013+2531011`), not the simulation stream.
+
+**Correction, 2026-08-31 — where it composites, and the muzzle-flash half.**
+This sentence said the halo is "composited after the flat tile pass and before
+shadows, units, and fog". It is not. The disc is the explosion pool's
+**secondary** cursor, and that pool's draw entry — both of its walks, the
+secondary through the flash blitter and then the primary art — is invoked from
+the world-draw sequence between the projectile renderer and strip 7, which is
+stage 7 of §1's ten-stage order and therefore **after** every unit traversal.
+Read directly from the composer's own call sequence: strips 0–2, the feature
+pass, strips 3–4, the grounded unit pass, strip 5, strip 6, the projectile
+draw, the explosion pool, strip 7. `[06 R-WFX-01 §2]` already placed the pool
+draw there and cited §1 for it; only this sentence disagreed.
+
+The same sentence's "and around muzzle flashes" also wants qualifying:
+`[06 R-WFX-01 §4]` establishes that there is **no muzzle-time sprite producer
+in any weapon path** — the only muzzle-time presentation is the `startsmoke`
+puff, the `soundstart` sound, and whatever the unit's `Fire*` script emits. Any
+halo at a muzzle therefore arrives through one of those, not through a
+producer of its own.
+
+**Unknown — brightening or opaque colour.** The paragraph above describes the
+composite as an `LHT` brightening and gives the `discByte→level` mapping for
+it. The pool's first walk goes through a blitter distinct from the second's,
+and a search of that blitter and its span writers found no read of the `LHT`
+table. If it simply writes the disc's bytes, the disc is an opaque `0x4F..0x6E`
+ramp and every impact is far brighter than a brightening would make it.
+*Decider:* a trace of that blitter's span writer for an `LHT` lookup. The effect is
 presentation-only, not authoritative, not hashed, and not save/loaded.
 
-`LHT` never darkens; darkening is through `SHD` rows 0–14. The `discByte→level` mapping is established (direct-static for the byte thresholds — the flash-disc precompute was re-exported and verified in 2026-08-26): the disc canvas is filled per pixel with one CRT draw each, `R = trunc(CRT*10/0x8000)` in `0..9`, radial distance `sqrt(1.33*dx*dx + dy*dy)` (floating-point square root, the 1.33 ellipticity factor applied to the x-axis term), `q = trunc((R + sqrt)*32.0)`, then the stored byte is `0x6F − q` while `(0x20 − q) mod 256 < 0x20`, `0x6E` while that byte-compare lies in `0x20..0x21`, and `0xFF` from `0x22` up — the 0xFF band is what makes the disc's outer area transparent, the visible region being the band where `q mod 256` lies in `0..31`. The halo level is `clamp(discByte − 0x50, 0, 31) = 31 − q` bright centre to rim, and the disc is drawn to screen as radial spokes from angle `0x800` through `0x10000` in steps of `0x800` through the sin/cos helper pair (the same angular step as the minimap circle rasterizers). (This corrects the earlier parenthetical "0x6E ring for alpha==0, 0xFF for alpha>=33" and "q = trunc((R+sqrt)/cx*32)": the ring condition is the byte-compare window `0x20..0x21` on `(0x20−q) mod 256`, the 0xFF threshold is that compare at `0x22`, and the multiplier is ×32 with no division.) Multi-tick fading envelope remains presentation tuning; the 32-row/256-column layout, the near-identity row 0, the +51.51 bright end, and the exclusive flash binding are direct. The two brightening ramps overlap: `LHT` row 3 and `SHD` row 16
+`LHT` never darkens; darkening is through `SHD` rows 0–14. The `discByte→level` mapping is established (direct-static for the byte thresholds — the flash-disc precompute was re-exported and verified in 2026-08-26): the disc canvas is filled per pixel with one CRT draw each, `R = trunc(CRT*10/0x8000)` in `0..9`, radial distance `sqrt(dx*dx + 1.33*dy*dy)`, `q = trunc(((R + sqrt) / H) * 32.0)`, then the stored byte is `0x6F − q` while `(0x20 − q) mod 256 < 0x20`, `0x6E` while that byte-compare lies in `0x20..0x21`, and `0xFF` from `0x22` up — the 0xFF band is what makes the disc's outer area transparent, the visible region being the band where `q mod 256` lies in `0..31`. The halo level is `clamp(discByte − 0x50, 0, 31) = 31 − q` bright centre to rim, and the disc is drawn to screen as radial spokes from angle `0x800` through `0x10000` in steps of `0x800` through the sin/cos helper pair (the same angular step as the minimap circle rasterizers).
+
+**Correction, 2026-08-31 — the ellipticity axis and the division.** This
+paragraph previously put the 1.33 "applied to the x-axis term" and stated
+"the multiplier is ×32 with no division", retracting an earlier reading of
+`q = trunc((R+sqrt)/cx*32)`. Both halves of that were wrong, and the earlier
+retracted reading was closer to right than the retraction. The generator's own
+arithmetic ([06 R-WFX-01 §2], re-derived directly): the **row** term carries
+the factor — for row `y` and column `x` of an `n`-sided frame with `H = n/2`,
+`A = (H − y)² · 1.33` and the distance is `sqrt((H − x)² + A)` — and the sum
+**is** divided by `H` before the ×32. So the disc is an ellipse compressed
+**vertically** by `sqrt(1.33)`, reaching about 15% further horizontally than
+vertically, and the `/H` is what makes every frame of every table span the same
+number of ramp steps regardless of its side. Measured against a rendered
+impact: the brightened region is 49×43 pixels, a ratio of 1.140 against
+`sqrt(1.33) = 1.153`. Under the retracted reading the disc would have been
+taller than wide. The byte thresholds and the `discByte→level` mapping in the
+sentence above are unaffected and stand. Multi-tick fading envelope remains presentation tuning; the 32-row/256-column layout, the near-identity row 0, the +51.51 bright end, and the exclusive flash binding are direct. The two brightening ramps overlap: `LHT` row 3 and `SHD` row 16
 both lift mean luminance by +6.83, `LHT` row 5 and `SHD` row 17 both by +12.60,
 but the files are distinct and neither is synthesized from the other.
 
@@ -6387,6 +6448,7 @@ gate is only the pool itself. **Established (reference census).**
 | Strip | Family | Producer events and per-site parameters |
 |---|---|---|
 | 2 | impact sprinkle | COB `emit-sfx` types 2 and 3 (piece vertex 0 → vertex 1, spacing **16** / **8**, colour flag 1) and types 4 and 5 (vertex 1 → vertex 0, spacing 16 / 8, flag 1) [04 R-COB-03 §6] |
+| 4 | smoke puff | the geothermal steam producer of [05 R-ECO-02 §3]: init `(point, spawnInterval 5, frameHold 0 → 7, lifetime 150)` — added 2026-08-31; the row was missing because §1's strip-4 row had said "none" |
 | 5 | teleport flame segments; burning-feature smoke | [R-LAYER §4]; [R-STRIP-01 §1] |
 | 6 | nanolathe emitter | [R-P0-19-P] |
 | 7 | flame-stream trail; impact sprinkle | `emit-sfx` type 0 (VTOL: vertex 0 → vertex 1, lifetime **6**) and type 1 (thrust: lifetime **7**), both hold 1; `emit-sfx` type `0x103` (sub-bubble: sprinkle from the piece's point toward `(X, seaLevel << 16, Z)`, spacing 8, colour flag **0**) |
@@ -6401,6 +6463,33 @@ countdown of [06 R-WFX-01 §5]. It is the land-dust puff every above-sea
 explosion emits. The "calculated frame" wording of that section (a narrow
 window near `0x6f`) should be read as [06 R-WFX-01 §2]: the ramp `0x4f..0x6e`
 with transparency by radius.
+
+**Smoke-puff family** (strip 4's geothermal steam, strip 9's weapon puffs and
+the emit-sfx smoke points, strip 5's burning-feature smoke). Its 32-byte
+sub-record carries the bound entry, a position, an animation frame, a hold
+countdown, and nothing else — no velocity. The per-tick update is three adds
+against the **raw** 16.16 position words, and the scales are what keep a puff
+where it was made:
+
+```
+x += windX · 8          ; windX/windZ are the published wind words [R-WIND-01]
+z += windZ · 8
+y += authoredGravity · 16   ; the map's `gravity` key, before any per-tick conversion
+```
+
+All three are added to the raw fixed-point words, not to whole world units, so
+a wind word of forty moves a puff by `320/65536` of a world unit per tick and
+the gravity word of a stock map lifts it by `112·16/65536`. A puff drifts a
+world unit or two over its whole life and rises slowly; it does not travel.
+The vertical term's scale global is the same authored gravity word the
+projectile conversion divides by 900 (`[03 §2.2]` C4), read here unconverted.
+**Established (direct-static, 2026-08-31.)**
+
+The animation clock counts the hold down; on zero it advances the frame and
+redraws the next hold as half to full of the authored value, one CRT draw per
+advance ([R-STRIP-01 §3]). A puff's own life is `crtRand·(frameCount − 3)/0x8000
++ 2` frames of the bound entry, so it needs the entry's frame count, which the
+container stores at init.
 
 **Flame-stream trail family** (emit-sfx types 0/1 on strip 7; the debris fire
 particle on strip 9). Container: source `A`, target `B`, per-axis step
@@ -8651,10 +8740,14 @@ and unknown" without a resolution plan.
   removal-before-update strip lifecycle, oldest-first eviction past 400
   records (steady bound 401), and the separate 300-record effect pool with
   same-invocation compaction are established. The producer census is closed
-  for every strip ([R-STRIP-01 §1]): only strips 2, 5, 6, 7, and 9 ever
-  receive objects; strips 0, 1, 3, 4, and 8 have no producer anywhere in the
-  image and are always empty (the retired census's "crater/decal literal 4"
-  was a misreading — see §3.7). The strip objects are pooled container
+  for every strip ([R-STRIP-01 §1]): strips 2, 4, 5, 6, 7, and 9 receive
+  objects; strips 0, 1, 3, and 8 have no producer anywhere in the image and
+  are always empty. **Corrected 2026-08-31:** this sentence still carried the
+  retracted reading that strip 4 is empty. Strip 4 has exactly one producer,
+  the geothermal steam of [05 R-ECO-02 §3], and §1's own row was corrected to
+  say so on 2026-08-29 — the summary was not. (The separate retraction of the
+  retired census's "crater/decal literal 4" stands: that literal was this
+  site, not a crater.) The strip objects are pooled container
   records over internal fixed-stride particle/segment lists
   ([R-STRIP-01 §2]), and the phase-11 sweep's object-internal CRT draws are
   enumerated in [R-STRIP-01 §3]. The wind direction pair's axis assignment is

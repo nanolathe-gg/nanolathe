@@ -235,29 +235,43 @@ const (
 // [03 §1].  Effect lifecycle remains presentation-owned, but the renderer
 // consumes the tick-end result through this immutable value.
 type EffectView struct {
-	PresentationID          uint64
-	ID                      uint32
-	EventSeq                uint64
-	Source                  pool.Handle
-	Target                  pool.Handle
-	EffectID                uint32
-	Piece                   int32
-	SFXType                 int32
-	SFXClass                SFXClass
-	Mode                    uint8
-	StartTick               uint32
-	ExpiryTick              uint32
-	Lifetime                int32
-	X, Y, Z                 numeric.Fixed
-	TargetX                 numeric.Fixed
-	TargetY                 numeric.Fixed
-	TargetZ                 numeric.Fixed
-	VX, VY, VZ              numeric.Fixed
-	Gravity                 numeric.Fixed
-	Kind                    string
-	HasModel                bool
-	SeqA                    int32
-	SeqB                    int32
+	PresentationID uint64
+	ID             uint32
+	EventSeq       uint64
+	Source         pool.Handle
+	Target         pool.Handle
+	EffectID       uint32
+	Piece          int32
+	SFXType        int32
+	SFXClass       SFXClass
+	Mode           uint8
+	StartTick      uint32
+	ExpiryTick     uint32
+	Lifetime       int32
+	X, Y, Z        numeric.Fixed
+	TargetX        numeric.Fixed
+	TargetY        numeric.Fixed
+	TargetZ        numeric.Fixed
+	VX, VY, VZ     numeric.Fixed
+	Gravity        numeric.Fixed
+	Kind           string
+	HasModel       bool
+	SeqA           int32
+	SeqB           int32
+	// HasCalculatedFlash and CalculatedTable carry the explosion pool's
+	// SECONDARY cursor over a procedurally generated disc [06 R-WFX-01 §2].
+	// SeqB is that cursor's frame; the table index selects which of the three
+	// generated tables it indexes. The flag is separate so a zero value cannot
+	// read as table 0.
+	HasCalculatedFlash bool
+	CalculatedTable    uint8
+	// StripFill is a mirrored strip sub-record's fill colour. The per-sub-record
+	// draw of [03 R-STRIP-01 §2] blits "either a GAF frame or a two-by-two
+	// filled rectangle"; a view with a Graphic takes the first form and one with
+	// a nonzero StripFill takes the second. Zero is never one of the authored
+	// fill colours — the nano ramp 0xa1..0xa7 and the sprinkle pair 0x61/0x67 —
+	// so zero unambiguously means "not a fill".
+	StripFill               uint8
 	Graphic                 string
 	PaletteRow              int16
 	Light                   bool

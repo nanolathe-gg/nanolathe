@@ -46,24 +46,31 @@ func TestGoalFamiliesWiring(t *testing.T) {
 
 	goalCell := path.Cell{X: 10, Z: 10}
 
-	// Attack_Chase should be AnnulusGoal with placeholder radii [04 §3.5][04 §7.2][M-4]
+	// Attack_Chase installs its own payload through the record's goal
+	// installers [04 R-ORD-01 §3], so goalForOrder must return whatever the
+	// handler bound and must invent nothing when nothing is bound. A record
+	// with no payload therefore falls to the ordinary point goal, not to an
+	// annulus with a made-up radius.
 	nAttack := &orders.Node{ID: orders.Lookup("Attack_Chase"), Target: hTgt, Param2: 0}
-	gAttack := sys.goalForOrder(goalCell, nAttack)
-	if _, inner, outer, ok := path.IsAnnulusGoal(gAttack); !ok {
-		t.Fatalf("Attack_Chase want AnnulusGoal got %T", gAttack)
-	} else {
-		if inner != placeholderAttackInnerRaw || outer != placeholderAttackOuterRaw {
-			t.Fatalf("Attack annulus radii want %d/%d got %d/%d [M-4 placeholder]", placeholderAttackInnerRaw, placeholderAttackOuterRaw, inner, outer)
-		}
-		// Center should be target cell (10,10) not fallback goalCell
-		if c, _, _, _ := path.IsAnnulusGoal(gAttack); c != (path.Cell{X: 10, Z: 10}) {
-			// Check center via helper
-			cent, _, _, _ := path.IsAnnulusGoal(gAttack)
-			if cent.X != 10 || cent.Z != 10 {
-				t.Fatalf("Attack center want target 10,10 got %v", cent)
-			}
-		}
-		_ = uTgt
+	if _, _, _, ok := path.IsAnnulusGoal(sys.goalForOrder(goalCell, nAttack)); ok {
+		t.Fatalf("Attack_Chase with no bound payload must not fabricate an annulus goal")
+	}
+	// With a banded payload installed — substate 7's (outer d, inner d/2) —
+	// that payload is what comes back, centred on the target.
+	nAttack.Owner = hAtt
+	if !sys.InstallAnnulusGoal(orders.AnnulusGoalRequest{
+		Owner: hAtt, Node: nAttack,
+		X: uTgt.X, Y: uTgt.Y, Z: uTgt.Z,
+		OuterRadius: 180, InnerRadius: 90,
+	}) {
+		t.Fatal("InstallAnnulusGoal refused the chase payload")
+	}
+	if cent, inner, outer, ok := path.IsAnnulusGoal(sys.goalForOrder(goalCell, nAttack)); !ok {
+		t.Fatalf("Attack_Chase want the installed AnnulusGoal")
+	} else if inner != 90 || outer != 180 {
+		t.Fatalf("Attack annulus radii want 90/180 got %d/%d", inner, outer)
+	} else if cent.X != 10 || cent.Z != 10 {
+		t.Fatalf("Attack center want target 10,10 got %v", cent)
 	}
 
 	// Follow_Ground should be AnnulusGoal centered on ward with Param1 outer [04 §3.2][04 §3.5]
@@ -145,12 +152,11 @@ func TestActivateMoveWiresAnnulus(t *testing.T) {
 		t.Fatalf("no scheduler request after ActivateMove attack")
 	}
 	req := pending[0]
-	if _, inner, outer, ok := path.IsAnnulusGoal(req.Goal); !ok {
-		t.Fatalf("ActivateMove Attack_Chase should submit AnnulusGoal got %T", req.Goal)
-	} else {
-		if inner != placeholderAttackInnerRaw || outer != placeholderAttackOuterRaw {
-			t.Fatalf("pending annulus radii mismatch %d/%d", inner, outer)
-		}
+	// No payload was installed for this record, so the submitted goal is the
+	// ordinary point goal — the chase's own installers are what put a shaped
+	// payload on a record [04 R-ORD-01 §3].
+	if _, _, _, ok := path.IsAnnulusGoal(req.Goal); ok {
+		t.Fatalf("ActivateMove Attack_Chase fabricated an annulus goal with no payload bound")
 	}
 	// Verify RT search still succeeds (schedule tick publishes)
 	sys.Scheduler.Tick(1)
@@ -179,5 +185,77 @@ func TestActivateMoveWiresAnnulus(t *testing.T) {
 	}
 	if !foundMove {
 		t.Fatalf("move pending not found")
+	}
+}
+
+// TestInstallingASecondGoalResubmitsTheMover locks the installer contract of
+// [04 R-ORD-01 §1] at the seam that broke `Attack_Chase`: installing a goal for
+// a record REPLACES that record's goal, so the mover has to be re-aimed.
+//
+// ActivateMove admits exactly one submission per active order, which is right —
+// it is what stops a record re-pathing every tick. The consequence is that the
+// installer, not the activator, is what makes a second goal reach the mover.
+// Without that, a record whose goal moves (a `Move_Ground` re-arm, and every
+// `Attack_Chase` maneuver substate [04 R-ORD-01 §3]) keeps walking to the first
+// goal it ever had: an ordered attacker marched to the spot its target had been
+// standing on when the order was given, stopped there, and never followed.
+func TestInstallingASecondGoalResubmitsTheMover(t *testing.T) {
+	terrain := terrainForGoals()
+	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
+	sys := NewSystem(terrain, profile, NewOccupancyGrid())
+	w := newMovementFixtureWorld(10)
+	sys.BindWorld(w)
+
+	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500}
+	def.MaxDamage = 100
+	h, _ := w.Create(def, 0, world.CellToWorld(1), numeric.Fixed(0), world.CellToWorld(1))
+	u := w.Unit(h)
+	sys.EnsureUnit(u)
+
+	n := &orders.Node{ID: orders.Lookup("Attack_Chase"), Owner: h}
+	q := orders.QueueForUnit(u)
+	q.Push(n.ID, *n)
+	head := q.Head()
+	if head == nil {
+		t.Fatal("head nil")
+	}
+
+	if !sys.InstallPointGoal(orders.PointGoalRequest{
+		Owner: h, Node: head, X: world.CellToWorld(8), Z: world.CellToWorld(8), Radius: 180,
+	}) {
+		t.Fatal("first install refused")
+	}
+	if !sys.ActivateMove(u, head) {
+		t.Fatal("first ActivateMove refused")
+	}
+	pendingFirst := sys.pathProvider.allRequests()
+	if len(pendingFirst) != 1 {
+		t.Fatalf("first activation submitted %d requests, want 1", len(pendingFirst))
+	}
+	if c, r, ok := path.IsPointGoal(pendingFirst[0].Goal); !ok || r != 180 || c != (path.Cell{X: 8, Z: 8}) {
+		t.Fatalf("first request goal = %v radius %d ok=%v, want the cell (8,8) point goal of radius 180", c, r, ok)
+	}
+	// Re-activating without a new goal must NOT submit again: one submission
+	// per active order is the rule this test is careful not to break.
+	if sys.ActivateMove(u, head) {
+		t.Fatal("ActivateMove submitted twice for one unchanged active order")
+	}
+
+	// The record's goal moves. The installer must reopen the mover.
+	if !sys.InstallPointGoal(orders.PointGoalRequest{
+		Owner: h, Node: head, X: world.CellToWorld(2), Z: world.CellToWorld(9), Radius: 45,
+	}) {
+		t.Fatal("second install refused")
+	}
+	if !sys.ActivateMove(u, head) {
+		t.Fatal("a record that installed a second goal was not re-submitted to the mover")
+	}
+	pendingSecond := sys.pathProvider.allRequests()
+	if len(pendingSecond) != 1 {
+		t.Fatalf("after the second install %d requests are outstanding, want the one replacement", len(pendingSecond))
+	}
+	c, r, ok := path.IsPointGoal(pendingSecond[0].Goal)
+	if !ok || c != (path.Cell{X: 2, Z: 9}) || r != 45 {
+		t.Fatalf("the mover is still aimed at %v radius %d; the second install must re-aim it at cell (2,9) radius 45", c, r)
 	}
 }

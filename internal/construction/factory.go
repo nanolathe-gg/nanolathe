@@ -361,7 +361,11 @@ func (s *Service) NeedsWalk(builder *units.Unit, node *orders.Node) bool {
 	if builder == nil || node == nil || !isMobileBuilder(builder) {
 		return false
 	}
-	return s.needsApproach(builder, node)
+	// A builder standing inside its own site walks out of it, exactly as
+	// retail's phase-0 rectangle goal on the product footprint requires
+	// [R-ORD-01 §5][04 §7.2]. The commit does not share this term — see
+	// needsApproach and mustClearSite (approach.go).
+	return s.needsApproach(builder, node) || s.mustClearSite(builder, node)
 }
 
 // EnsureWalkPublic is the exported walk submission for session integration [04 §7.3].
@@ -1412,40 +1416,30 @@ func (s *Service) validatePlacement(self pool.Handle, rect world.FootprintRect, 
 	if s == nil || s.Terrain == nil {
 		return world.PlacementResult{}, fmt.Errorf("construction: placement terrain unavailable")
 	}
-	// The carried-position setter stamps the ordinary movement grid. State 2
-	// uses null self identity, so the first product's retained pad stamp blocks
-	// the next product until it crosses a cell boundary [04 R-FAC-02 §5-§6].
-	// The null identity stays: there is no producer/product exemption, and an
-	// "ignore the factory" arm here would also admit a product onto a closed
-	// yard. What makes a legal exit legal is the producer no longer holding the
-	// cells its open yard released — stampBuilding now follows the yard state in
-	// this layer too [04 R-FAC-02 §5][04 R-COLL-01 §4].
-	if def != nil && def.BMCode && s.Movement != nil && s.Movement.Grid != nil {
-		anchor := movement.Cell{X: rect.MinX(), Z: rect.MinZ()}
-		if !s.Movement.Grid.CanOccupy(anchor, int16(rect.Width()), int16(rect.Depth()), 0) {
-			return world.PlacementResult{}, fmt.Errorf("construction: footprint occupied in movement grid")
-		}
-	}
+	// One rule, one identity, both halves of Nanolathe's split ground word.
+	// Retail has a single occupancy word per cell, written by ground movers and
+	// by building-class units alike, and every one of the validator's placement
+	// callers passes a NULL self identity — the census finds no exemption for a
+	// producer, a builder, or a product [04 R-COLL-01 §2][04 R-COLL-01 §6]
+	// [04 R-FAC-02 §5]. What makes a legal factory exit legal is the producer no
+	// longer holding the cells its open yard released, not an identity
+	// exemption; and what stops a mobile builder stamping a nanoframe onto the
+	// cells it is itself standing on is that same null identity applied to the
+	// mover half of the word, which mobileOccupancy supplies (approach.go).
+	// The `self` argument is retained in the signature for callers and
+	// diagnostics; it is deliberately not an exemption.
 	rules, err := placementRules(s, def)
 	if err != nil {
 		return world.PlacementResult{}, err
-	}
-	plotSelf := self
-	if s.World != nil {
-		if producer := s.World.Unit(self); producer != nil && producer.Flags&units.BuildingClassStatus != 0 {
-			// Factory state 2 passes a null self identity. The producer's yard,
-			// not an identity exemption, makes its open pad legal
-			// [04 R-FAC-02 §5].
-			plotSelf = 0
-		}
 	}
 	return s.Terrain.CheckPlacement(world.PlacementQuery{
 		Rect:                  rect,
 		Yard:                  yard,
 		Rules:                 rules,
-		Self:                  uint16(plotSelf),
+		Self:                  0,
 		Mobile:                def != nil && def.BMCode,
 		SkipTerrainAggregates: skipAggregates,
+		MobileOccupancy:       s.mobileOccupancy(),
 	})
 }
 
@@ -2345,8 +2339,15 @@ func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tic
 			node.MoveState = orders.MoveEnRoute
 			return
 		}
-		s.clearWalk(builder)
-		node.MoveState = orders.MoveArrived
+		if !s.mustClearSite(builder, node) {
+			// Only stop moving once the builder's own footprint no longer
+			// covers the site; otherwise the walk installed above stays live
+			// while the validator below rejects on the builder's own
+			// occupancy and the blocked-area budget runs [R-ORDER-02 §1]
+			// [04 R-COLL-01 §2].
+			s.clearWalk(builder)
+			node.MoveState = orders.MoveArrived
+		}
 	}
 	def := s.getProductDefForNode(node)
 	footX, footZ := 1, 1

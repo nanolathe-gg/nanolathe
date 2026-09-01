@@ -109,6 +109,15 @@ type Service struct {
 	// something else clears it. Shipped finite lifetimes forced non-looping 46-282 visits [P1-10][P1-15].
 	BurnAnimationTicks func(*content.FeatureDef) int32
 
+	// GeothermalSteam is the steam-strip producer of [05 R-ECO-02 §3], reached
+	// from the feature stamp and nowhere else. The stamp calls it once, with the
+	// footprint centre and the sampled terrain height, for every successfully
+	// placed definition carrying the `geothermal` flag. The strip table it
+	// appends to is session state, so this is a seam rather than a call; a nil
+	// hook means no steam, which is what every fixture that does not compose a
+	// session gets.
+	GeothermalSteam func(x, y, z numeric.Fixed)
+
 	// pendingBurnReplacement is a bounded hand-off for burn.go's established
 	// clear-then-spawn sequence. It is consumed and cleared by the next spawn
 	// (including every failure path), so a failed successor cannot suppress a
@@ -636,6 +645,13 @@ func (s *Service) spawnFeatureAt(cx, cz int, def *content.FeatureDef) *Instance 
 			}
 		}
 	}
+	// The stamp's own tail: a `geothermal` definition runs the steam-strip
+	// producer with the footprint centre and the sampled height it just stored
+	// [05 R-ECO-02 §3]. This is the producer's only reach in the whole image,
+	// which is why the steam belongs to placement and not to the feature tick.
+	if def.Geothermal && s.GeothermalSteam != nil {
+		s.GeothermalSteam(inst.X, inst.Y, inst.Z)
+	}
 	return inst
 }
 
@@ -791,6 +807,15 @@ func (s *Service) PopulateFromTerrain() int {
 			inst.X = world.CellToWorld(int32(cx)).Add(numeric.Fixed(int64(footX) * 1048576 / 2))
 			inst.Z = world.CellToWorld(int32(cz)).Add(numeric.Fixed(int64(footZ) * 1048576 / 2))
 			s.instances[idx] = inst
+			// A map-authored vent reaches its instance here rather than through
+			// spawnFeatureAt, because the map loader writes the plot grid
+			// directly and this walk builds the animation side from it. Retail
+			// has one stamp for both cases, and the steam producer hangs off it
+			// [05 R-ECO-02 §3], so both of Nanolathe's halves have to call it or
+			// the vents a MAP places would be the ones that never steam.
+			if def.Geothermal && s.GeothermalSteam != nil {
+				s.GeothermalSteam(inst.X, inst.Y, inst.Z)
+			}
 			n++
 		}
 	}

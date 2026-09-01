@@ -9,7 +9,7 @@
 //
 //	Mode                 low 2 bits of mover mode word, mirrored into unit [04 §9.1]
 //	                     2 == active locomotion, 1 == stopped/parked, 0/3 preserved but no producer
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+//	X,Y,Z                world position 16.16; the Y high word is the signed height [04 §8.1]
 //	VX,VY,VZ             velocity components, 32-bit 16.16 words [04 §10.1] C27
 //	Speed                scalar speed word, 32-bit (full 3-D magnitude) [04 §10.1]
 //	Heading              uint16 heading 0..65535 per circle at +? [04 §5.1]
@@ -20,7 +20,7 @@
 //	BrakeRate            definition BrakeRate, fixed 16.16 [02 "Unit record"]
 //	TurnRate             definition TurnRate, integer [02 "Unit record"]
 //	TargetY              command altitude, 16.16 (targetY) [04 §10.1] C29
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+//	VerticalHoldSentinel the unit's vertical-hold word equals the global sentinel [04 §10.1] C29
 //	                     TODO(question): sentinel semantic name unknown, called verticalHoldSentinel per PLAN_07 Explicit unknowns.
 //	TargetX/Z            command XZ 16.16 [04 §10.1] horizontal accel
 //	TargetVX/VZ          command VXZ 16.16 [04 §10.1]
@@ -40,7 +40,7 @@ import (
 type FlightState struct {
 	Mode uint8 // low 2 bits; 2 == active [04 §9.1] C26
 
-	X, Y, Z    int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	X, Y, Z    int32 // position 16.16 [04 §2.3]; the Y high word is the signed height
 	VX, VY, VZ int32 // velocity 16.16 [04 §10.1] C27
 	Speed      int32 // scalar speed word [04 §10.1] C29
 
@@ -54,7 +54,20 @@ type FlightState struct {
 	TurnRate     int32 // integer [02 "Unit record"]
 
 	TargetY int32 // target altitude 16.16 [04 §10.1] C29
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// The sentinel is the unit's occupancy sector-list head compared against a
+	// global sector sentinel; when they are equal the vertical assignment is
+	// skipped entirely and vertical velocity keeps its damped value
+	// [04 §10.1] C29.
+	//
+	// This has no production writer, and that is correct rather than missing.
+	// Retail's only writers are on the footprint stamp — an out-of-bounds stamp
+	// writes the sentinel, any other stamp writes a real sector. An airborne
+	// mover holds no ground cells and performs no stamp (see the commit note in
+	// airorders.go), so it carries whatever its takeoff stamp wrote, and a
+	// takeoff always happens inside the map. The field is therefore false for
+	// every reachable case in this build, which is the value retail would also
+	// hold. Give it a writer only alongside an occupancy model that can stamp
+	// out of bounds; until then a writer would be inventing the transition.
 	// Semantic name unknown; called verticalHoldSentinel per PLAN_07 Explicit unknowns.
 	VerticalHoldSentinel bool
 
@@ -220,7 +233,7 @@ func IntegrateFlight(s *FlightState) {
 	}
 
 	// C29 — vertical control sentinel-gated [04 §10.1].
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// dy = unitY − targetY (both 16.16); if the vertical-hold word equals the global
 	// sentinel by full 32-bit compare, skip assignment and vy keeps damped
 	// value. Otherwise limit = 0x10000 when (speed & ~3) < 0x40000 else speed>>2,
 	// then dy<=-limit ⇒ vy=+limit; dy<limit ⇒ vy=-dy; else vy=-limit.

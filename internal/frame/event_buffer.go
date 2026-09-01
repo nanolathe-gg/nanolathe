@@ -62,7 +62,14 @@ type Event struct {
 	// Authored asset/timing metadata is value-only and copied into the
 	// frame.  A zero/empty value is an unresolved optional resource, never
 	// permission to choose fallback art [03 §5.4][03 §5.5][I9].
-	AssetID                string
+	AssetID string
+	// HasCalculatedFlash and CalculatedTable are the explosion pool's SECONDARY
+	// cursor [06 R-WFX-01 §2]: every impact allocates a record with a
+	// procedurally generated disc under its named art, and a weapon with no art
+	// holder still shows the disc. The table index is 0..2; the flag carries
+	// "there is one" so a zero value cannot read as table 0.
+	HasCalculatedFlash     bool
+	CalculatedTable        uint8
 	SequenceID             string
 	DurationsA             []int32
 	DurationsB             []int32

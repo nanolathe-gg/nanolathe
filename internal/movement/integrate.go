@@ -1859,6 +1859,19 @@ func (s *System) bindArrivalHandle(u *units.Unit, head *orders.Node) {
 	if payload, ok := s.workApproachGoal(u, path.Cell{X: goalX, Z: goalZ}, head, int32(footX), int32(footZ)); ok {
 		ah.payload = payload
 	}
+	// A payload the record INSTALLED for itself outranks both of the above, in
+	// the same precedence goalForOrderWithFootprint applies when it builds the
+	// search goal — that is what keeps the arrival predicate and the search
+	// goal the same object. `Attack_Chase` is the family that needs it: its
+	// phase 2 installs a point goal of the slot's engagement distance or a
+	// banded goal around the target [04 R-ORD-01 §3], and with the name-keyed
+	// radius above the handle tested for arrival on the exact goal cell
+	// instead. The mover then stopped inside its own standoff without ever
+	// raising `0x20`, so the record's phase 3 never learned the leg was over
+	// and never re-aimed at a target that had moved on.
+	if payload := s.moveGoalPayload(u.Handle, head); payload != nil {
+		ah.payload = payload
+	}
 	s.arrivalHandles[u.Handle] = ah
 	// [R-P0-01] initial gate must be 0 so phase 0 handler can arm 0xE0; otherwise static 0x402 would block.
 	if head.Phase == 0 && head.DynamicGate != 0 {

@@ -114,6 +114,21 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 	}
 	draws := render.BuildEffectDraws(effects)
 	stats.Admitted = len(draws)
+	// Two walks over the pool, in retail's order [06 R-WFX-01 §2]: every
+	// record's SECONDARY (calculated) frame first through the flash blitter,
+	// then every record's PRIMARY (named art) frame through the ordinary frame
+	// blitter — so the named art always composes over the calculated disc. One
+	// interleaved walk would let an early impact's art be brightened by a later
+	// impact's disc.
+	for _, d := range draws {
+		if !d.HasCalculatedFlash {
+			continue
+		}
+		x, y := c.cam.WorldToScreen(d.X, d.Y, d.Z)
+		if c.drawCalculatedFlash(int(d.CalculatedTable), d.FrameB, int(x-128), int(y-32), options.TerrainCoverage) {
+			stats.Halos++
+		}
+	}
 	for i, d := range draws {
 		view := effects[i]
 		if d.Kind == frame.EventKindNanolathe.String() && d.Strip == 6 {
@@ -145,6 +160,18 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 			x, y := c.cam.WorldToScreen(d.X, d.Y, d.Z)
 			c.drawLHTHalo(int(x-128), int(y-32), radius, level, options.TerrainCoverage)
 			stats.Halos++
+		}
+		if d.StripFill != 0 {
+			// A mirrored strip sub-record whose family fills rather than blits:
+			// a two-by-two rectangle in the family's palette colour, at the
+			// ordinary projection [03 R-STRIP-01 §2].
+			x, y := c.cam.WorldToScreen(d.X, d.Y, d.Z)
+			if c.fillStripParticle(int(x-128), int(y-32), d.StripFill) {
+				stats.Sprites++
+			} else {
+				stats.Skipped++
+			}
+			continue
 		}
 		if d.Graphic == "" || options.ResolveFrame == nil {
 			if !d.Light {
@@ -196,4 +223,34 @@ func (c *Client) drawLHTHalo(cx, cy, radius, level int, terrainCoverage func(x, 
 			c.indexed[idx] = c.pal.LightLookup(level, c.indexed[idx])
 		}
 	}
+}
+
+// fillStripParticle draws one strip sub-record of a filling family: the
+// two-by-two rectangle of [03 R-STRIP-01 §2], in the family's palette colour,
+// at the projected point.
+//
+// The nano ramp `0xa1..0xa7` and the impact-sprinkle pair `0x61`/`0x67` are the
+// only fill colours the census names, and the sub-record carries whichever step
+// of its own ramp it has walked to. Nothing is drawn off the framebuffer; a
+// rectangle straddling an edge draws the pixels that land inside it.
+func (c *Client) fillStripParticle(x, y int, color uint8) bool {
+	if c == nil || len(c.indexed) == 0 || color == 0 {
+		return false
+	}
+	drew := false
+	for dy := 0; dy < 2; dy++ {
+		py := y + dy
+		if py < 0 || py >= c.height {
+			continue
+		}
+		for dx := 0; dx < 2; dx++ {
+			px := x + dx
+			if px < 0 || px >= c.width {
+				continue
+			}
+			c.indexed[py*c.width+px] = color
+			drew = true
+		}
+	}
+	return drew
 }

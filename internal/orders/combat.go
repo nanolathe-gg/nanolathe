@@ -53,16 +53,14 @@ const slotAll = 3
 // with the slot index, under [R-ORDER-02 §2]'s guard that a slot whose target
 // words are ALREADY empty is skipped entirely.
 //
-// TODO(question): [R-ORDER-02 §2]'s guard has two halves — "the slot's control
-// byte has bit 1 set (slot assigned) and bit 4 clear — bit 4 is then set — AND
-// the slot's target words are not already empty". This build's units.Slot has
-// no control byte (its Flags word is the armed / aim-latch / tracking trio of
-// [06 §1.2]), and [04 §3.9]'s own missing list still records "the semantic name
-// of the weapon-slot control byte's bit 4" as unlocated, so the assigned and
-// inhibit bits have nowhere to live and neither half of the control-byte guard
-// can be evaluated. Only the empty test is reproduced here. A trace naming that
-// byte's two bits, plus a field for it on the slot, would settle it; stop.go's
-// unconditional entry carries the same question.
+// Corrected 2026-08-31 [04 R-ORD-01 §7]. This header used to say that
+// [R-ORDER-02 §2]'s control-byte halves — "bit 1 set (slot assigned) and bit 4
+// clear" — had "nowhere to live" in this build and could not be evaluated, so
+// release and inhibit both collapsed into an unconditional target clear. Both
+// bits are now traced: bit 1 is *the slot is enabled* and bit 4 is the inhibit
+// latch, and the guard lives on releaseSlot and inhibitSlot below. What stays
+// here is the third half — the already-empty test — which retail applies AFTER
+// the control-byte write, not instead of it.
 func clearSlotTarget(u *units.Unit, idx int) {
 	s := u.SlotAt(idx)
 	if s == nil || s.Target.Kind == units.TargetNone {
@@ -89,18 +87,76 @@ func eachSlot(u *units.Unit, k int, visit func(idx int)) {
 	}
 }
 
+// slotEnabled is the control byte's bit 1, "slot assigned" [R-ORDER-02 §2], as
+// [04 R-ORD-01 §7] renames it: the *slot is enabled* bit. It is the same bit
+// the command resolver reads as "my slot 1 is enabled" in its code-3
+// water-weapon rejects [R-ORD-02 §1], and it is set for exactly the slots whose
+// weapon link resolved. This build carries that condition on the resolved
+// definition pointer itself, so IsPopulated is the same predicate.
+//
+// TODO(question): [04 R-ORD-01 §7] traces the readers of bit 1 but not a
+// runtime writer, so whether anything ever *disables* an enabled slot after
+// load — which would separate this bit from "has a resolved weapon" — is
+// unknown. A writer census on the control byte's bit 1 would settle it.
+func slotEnabled(s *units.Slot) bool { return s.IsPopulated() }
+
 // releaseSlot is "*release slot k*: clears that bit and clears the target"
-// [04 R-ORD-01 §1]. The bit is the control byte's inhibit bit, which this build
-// does not model (see clearSlotTarget's question); what survives is the target
-// clear and its notification.
+// [04 R-ORD-01 §1], under the guard [04 R-ORD-01 §7] recovers: the slot's
+// control byte must have bit 1 set (the slot is enabled) AND bit 4 set (it is
+// currently inhibited). Bit 4 is then cleared, and only then is the target
+// cleared with its notification.
+//
+// Corrected 2026-08-31. This cleared the target of every selected slot
+// unconditionally. Retail releases only a slot it had previously inhibited, so
+// the unconditional form destroyed autonomously acquired targets on slots the
+// order never touched: `Attack_Chase` phase 1 releases slots 0 and 2 on its way
+// to binding one of them, and under the old form that silenced whichever of
+// those two the acquisition path had just armed.
 func releaseSlot(u *units.Unit, k int) {
-	eachSlot(u, k, func(idx int) { clearSlotTarget(u, idx) })
+	eachSlot(u, k, func(idx int) {
+		s := u.SlotAt(idx)
+		if s == nil || !slotEnabled(s) || s.OrderControl&units.OrderControlInhibit == 0 {
+			return
+		}
+		s.OrderControl &^= units.OrderControlInhibit
+		clearSlotTarget(u, idx)
+	})
 }
 
 // inhibitSlot is "*inhibit slot k*: sets the slot's control-byte bit 4 and
-// clears its target" [04 R-ORD-01 §1]. Same missing byte, same surviving half.
+// clears its target" [04 R-ORD-01 §1], under the mirrored guard: bit 1 set and
+// bit 4 **clear**. Inhibiting an already-inhibited slot is a no-op, which is
+// what makes a handler that inhibits on every wake — `Suppress` phase 2,
+// `Guard_NoMove` phase 0 — emit one TargetCleared rather than one per wake.
 func inhibitSlot(u *units.Unit, k int) {
-	eachSlot(u, k, func(idx int) { clearSlotTarget(u, idx) })
+	eachSlot(u, k, func(idx int) {
+		s := u.SlotAt(idx)
+		if s == nil || !slotEnabled(s) || s.OrderControl&units.OrderControlInhibit != 0 {
+			return
+		}
+		s.OrderControl |= units.OrderControlInhibit
+		clearSlotTarget(u, idx)
+	})
+}
+
+// defaultAttackSlot is the weapon-slot pick `Attack_Chase` phase 0 takes when
+// the record carries no slot yet [04 R-ORD-01 §3][04 R-ORD-01 §7]: the lowest
+// slot index whose control byte says the slot is enabled, and 0 when none is.
+//
+// Retail's helper returns 0 both for "slot 0 is enabled" and for "no slot is
+// enabled", because its third arm returns the *bit value* 2 — which doubles as
+// the index — and 0 when that bit is clear. The two cases are indistinguishable
+// by construction, so this reproduces them as one.
+func defaultAttackSlot(u *units.Unit) int {
+	if u == nil {
+		return 0
+	}
+	for idx := 0; idx < units.NumSlots; idx++ {
+		if s := u.SlotAt(idx); s != nil && slotEnabled(s) {
+			return idx
+		}
+	}
+	return 0
 }
 
 // bindSlotToUnit is "*bind slot k to unit*: stores the target's unit id word
@@ -137,17 +193,34 @@ func bindSlotToPosition(u *units.Unit, k int, x, z numeric.Fixed) {
 }
 
 // engagementDistance is the per-slot distance `Suppress` phase 0 stores in p2
-// and phase 2 draws a third of [04 R-ORD-01 §3].
+// and draws a third of, and the standoff `d` every `Attack_Chase` orbit
+// substate is built from [04 R-ORD-01 §3].
 //
-// TODO(question): [04 R-ORD-01 §3] defers this to doc 06, and doc 06 does not
-// define it; [04 §3.9]'s own missing list still carries "the standoff value
-// bound by the attack-chase orbit substates; it is produced by the weapon-slot
-// engagement-distance helper and remains inference", with a static trace of
-// that helper as its decider. No value is chosen here: the helper reports 0,
-// which drives `Suppress` phase 2 down its own established `p2 < 1` arm
-// (*re-arm*) instead of walking the unit closer by an invented fraction of an
-// invented range.
-func engagementDistance(_ *units.Unit, _ uint32) int32 { return 0 }
+// Closed 2026-08-31 by [06 R-WPN-05 §1]: the weapon-slot engagement-distance
+// helper reads the slot's resolved weapon record and returns its authored
+// `range` — the same whole-world-unit integer the shot-time range test squares
+// [06 §3.3]. The standoff is therefore the weapon's own range, so a unit orbits
+// at exactly the distance from which it can shoot.
+//
+// This replaces a placeholder that returned 0 for every slot. [04 §3.9]'s
+// missing list carried the value as "produced by the weapon-slot
+// engagement-distance helper and remains inference"; that item is now closed,
+// and the zero it stood in for was not neutral — it collapsed every chase
+// substate onto the target's own position and drove `Suppress` phase 2 down its
+// `p2 < 1` *re-arm* arm on the first wake.
+//
+// A slot with no resolved weapon has no range and reports 0, which is what the
+// caller's own guards already expect.
+func engagementDistance(u *units.Unit, slot uint32) int32 {
+	if u == nil || slot >= uint32(units.NumSlots) {
+		return 0
+	}
+	s := u.SlotAt(int(slot))
+	if s == nil || s.Weapon == nil {
+		return 0
+	}
+	return s.Weapon.Range
+}
 
 // captionClear is [04 R-ORD-01 §1]'s "caption clear": the one-shot helper that
 // clears the record's runtime caption-pending bit and emits status kind 5
@@ -200,6 +273,40 @@ func installPointGoal(u *units.Unit, n *Node, x, y, z numeric.Fixed, radius int3
 	n.Satisfied &^= 0x3E0 // clear pending 0x20..0x200 [04 R-ORD-01 §0][04 R-ORD-01 §1]
 	if canfly {
 		return // canfly: release only, no install [04 R-ORD-01 §1]
+	}
+	n.GoalX, n.GoalY, n.GoalZ = x, y, z
+}
+
+// installAnnulusGoal is the banded form of [04 R-ORD-01 §1]'s goal installers:
+// a **banded** goal at a position with an outer and an inner radius. It is the
+// installer `Attack_Chase` substates 7 and 8 reach [04 R-ORD-01 §3], carrying
+// the same three obligations as the point form — release the record's previous
+// payload, install, and clear pending `0x20`-`0x200` — and the same canfly
+// release-only arm, because both installers end in the one shared tail.
+//
+// The chase never reaches this on an aircraft (its phase 0 rejects `canfly`
+// outright), but the arm is written here rather than assumed away: an installer
+// that behaved differently on the two families would be a second contract.
+func installAnnulusGoal(u *units.Unit, n *Node, x, y, z numeric.Fixed, outer, inner int32) {
+	if n == nil {
+		return
+	}
+	canfly := u != nil && u.Def != nil && u.Def.CanFly
+	if b := bindingOfUnit(u); b != nil && b.Movement != nil {
+		if canfly {
+			if b.Movement.Release != nil {
+				b.Movement.Release(n)
+			}
+		} else if b.Movement.InstallAnnulus != nil {
+			b.Movement.InstallAnnulus(AnnulusGoalRequest{
+				Owner: n.Owner, Node: n, X: x, Y: y, Z: z,
+				OuterRadius: outer, InnerRadius: inner,
+			})
+		}
+	}
+	n.Satisfied &^= 0x3E0 // clear pending 0x20..0x200 [04 R-ORD-01 §0][04 R-ORD-01 §1]
+	if canfly {
+		return
 	}
 	n.GoalX, n.GoalY, n.GoalZ = x, y, z
 }

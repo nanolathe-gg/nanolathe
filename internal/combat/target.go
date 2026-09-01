@@ -59,15 +59,23 @@ func WithinRange(shooterX, shooterZ, candX, candZ numeric.Fixed, weaponRange int
 	if weaponRange < 0 {
 		return false // negative range admits none [06 §2.1] P0-10
 	}
-	dx := candX.Sub(shooterX) // [06 §3.3] P0-10 planar delta, Fixed 16.16
-	dz := candZ.Sub(shooterZ)
-	// Truncate toward zero to integer world units for range comparison [01 §8] I3 P0-10. Retail does (dx>>16) via SAR 0x10.
-	dxI := dx.Int()
-	dzI := dz.Int()
-	// Squared planar range test via __allmul 64-bit [06 §3.3] P0-10.
-	dist2 := int64(dxI)*int64(dxI) + int64(dzI)*int64(dzI)
+	dx := int64(candX.Sub(shooterX).Raw()) // [06 §3.3] planar delta, raw 16.16
+	dz := int64(candZ.Sub(shooterZ).Raw())
+	// [06 §3.3]: `a = (int32)(((int64)dx * dx) >> 32)`, and the same for dz —
+	// the raw deltas are squared FIRST in 64 bits and the product is then
+	// shifted down by a whole 32, which is the squared distance in whole world
+	// units with the fraction discarded from the SQUARE.
+	//
+	// Corrected 2026-08-31. This truncated each delta to whole world units
+	// first and squared the truncations, which is a different number: at a
+	// separation of 1.5 world units on one axis retail contributes 2 and the
+	// old form contributed 1. It shortened every weapon's effective reach by
+	// up to a world unit per axis and disagreed with the order-side
+	// shot-admission gate of [04 R-ORD-01 §7], which squares before shifting —
+	// so a chase could bind a slot the firing step then refused.
+	dist2 := ((dx * dx) >> 32) + ((dz * dz) >> 32)
 	r2 := int64(weaponRange) * int64(weaponRange)
-	return dist2 <= r2 // inclusive JLE [06 §3.3] P0-10
+	return dist2 <= r2 // inclusive JLE [06 §3.3]
 }
 
 // WithinCoverageSquare reports whether the candidate's stored aim point lies within the interceptor's coverage square [06 §11.2] P0-10.

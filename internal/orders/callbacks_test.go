@@ -12,6 +12,7 @@ package orders
 // code-9 completion flag stays write-only.
 
 import (
+	"github.com/nanolathe/nanolathe/internal/content"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/cob"
@@ -66,8 +67,13 @@ func startedArgs(vm *cob.VM) [][]int32 {
 	return out
 }
 
+// assignSlot seeds a weapon slot for the cleanup-walk fixtures. The control
+// byte's bit 1 — "the slot is enabled" [04 R-ORD-01 §7] — is carried in this
+// build by the resolved weapon definition itself, so a slot the walk is
+// expected to touch has to have one. `flags` remains the [06 §1.2] flags word.
 func assignSlot(u *units.Unit, idx int, flags uint8, target units.Target) {
 	if s := u.SlotAt(idx); s != nil {
+		s.Weapon = &content.WeaponDef{}
 		s.Flags = flags
 		s.Target = target
 	}

@@ -19,6 +19,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/visibility"
@@ -175,7 +176,13 @@ func (s *cobPresentationSink) emitSFXStripProducers(ev cob.PresentationEvent) {
 		// container whose constructor spawns its first puff immediately;
 		// the site's container window and GAF variant selection are
 		// unestablished (see appendStripSmokePuffer's TODO).
-		s.session.appendStripSmokePuffer(9, pos, 0, smokeDefaultFrameDelay)
+		// 0x101 white takes the trail puff's parameters on `smoke 1`; 0x102
+		// black takes the same shape on the second entry [06 R-WFX-01 §5].
+		init := SmokePuffTrail
+		if ev.SFXType == 0x102 {
+			init = SmokePuffBlack
+		}
+		s.session.appendStripSmokePuffer(9, pos, init)
 	case 0x103:
 		// Sub-bubbles: the spawn height is forced to the water line and the
 		// sprinkle variant lands on strip 7 with 8-tick spacing [04 §4.4]
@@ -677,6 +684,12 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 			Acquire: func(u *units.Unit, idx int, limit uint32) (pool.Handle, bool) {
 				return s.Combat.AcquireWeaponTarget(u, idx, limit, s.Units, s.Vis, s.World, s.Econ, s.Catalog, s.SimRNG())
 			},
+			CanEngage: func(u *units.Unit, target pool.Handle, idx int) bool {
+				if s.Combat == nil || s.Units == nil {
+					return false
+				}
+				return s.Combat.CanEngageSlotTarget(u, s.Units.Unit(target), idx, s.World)
+			},
 			Engaged: func(u *units.Unit, idx int) bool {
 				if u == nil || u.SlotAt(idx) == nil {
 					return false
@@ -968,11 +981,22 @@ func createAndBindServices(s *Session) error {
 		sim := s.SimRNG()
 		crt := s.CrtRNG()
 		s.Features = features.NewService(s.World, sim, crt, s.Wind)
+		// The steam-strip producer of [05 R-ECO-02 §3] is bound before the
+		// terrain's own features are populated, because the vents are placed by
+		// that populate call and the producer runs from the stamp itself.
+		s.Features.GeothermalSteam = func(x, y, z numeric.Fixed) {
+			s.appendStripGeothermalSteam([3]numeric.Fixed{x, y, z})
+		}
 		s.Features.PopulateFromTerrain()
 	} else if s.Features.Terrain != s.World {
 		return fmt.Errorf("session: Features.Terrain mismatch")
 	} else {
 		// Existing service but world may have been swapped (e.g. load); ensure terrain features are present
+		if s.Features.GeothermalSteam == nil {
+			s.Features.GeothermalSteam = func(x, y, z numeric.Fixed) {
+				s.appendStripGeothermalSteam([3]numeric.Fixed{x, y, z})
+			}
+		}
 		s.Features.PopulateFromTerrain()
 	}
 	// Visibility [03 §3] dimensions from terrain, mode respects SkirmishConfig
@@ -1109,7 +1133,10 @@ func createAndBindServices(s *Session) error {
 		pe := frame.Event{
 			Tick: ev.Tick, Source: ev.Source, Target: ev.Target,
 			X: ev.Position.X, Y: ev.Position.Y, Z: ev.Position.Z,
-			Graphic: ev.Graphic, Magnitude: ev.Magnitude,
+			Graphic: ev.Graphic, AssetID: ev.Bank, Magnitude: ev.Magnitude,
+			HasCalculatedFlash: ev.HasCalculatedFlash, CalculatedTable: ev.CalculatedTable,
+
+			DurationsB: render.FlashFrameDurations(int(ev.CalculatedTable)),
 		}
 		switch ev.Kind {
 		case combat.EventShake:
@@ -1139,14 +1166,18 @@ func createAndBindServices(s *Session) error {
 			// variants]: the start puff emits from the successful root
 			// creation path [06 §13.2], and the census places a strip-9
 			// smoke producer behind each of its two variant flags.
-			s.appendStripSmokePuffer(9, [3]numeric.Fixed{ev.Position.X, ev.Position.Y, ev.Position.Z}, 0, smokeDefaultFrameDelay)
+			// `startsmoke` at the muzzle point: four frames at hold 30, a slow
+			// puff that hangs where the shot left [06 R-WFX-01 §5].
+			s.appendStripSmokePuffer(9, [3]numeric.Fixed{ev.Position.X, ev.Position.Y, ev.Position.Z}, SmokePuffStart)
 		case combat.EventEndSmoke:
 			// Strip-9 smoke [R-STRIP-01 §1 strip 9, the authoritative
 			// impact dispatcher under a weapon-definition flag]: the end
 			// puff is land-branch-only in the central impact and replaces
 			// the explosion art [06 §13.2]; the dispatcher's smoke producer
 			// sits on that same weapon-flag branch.
-			s.appendStripSmokePuffer(9, [3]numeric.Fixed{ev.Position.X, ev.Position.Y, ev.Position.Z}, 0, smokeDefaultFrameDelay)
+			// `endsmoke` at impact takes the trail puff's parameters
+			// [06 R-WFX-01 §5].
+			s.appendStripSmokePuffer(9, [3]numeric.Fixed{ev.Position.X, ev.Position.Y, ev.Position.Z}, SmokePuffTrail)
 			s.publication.events.EmitSmokeEnd(pe)
 		case combat.EventTrailSmoke:
 			// Strip-9 smoke [R-STRIP-01 §1 strip 9, the projectile phase's
@@ -1154,7 +1185,7 @@ func createAndBindServices(s *Session) error {
 			// non-burn-blow expiry puff are the same trail-style smoke at
 			// the projectile's position [06 §13.2].
 			pe.EffectID = uint32(ev.Target)
-			s.appendStripSmokePuffer(9, [3]numeric.Fixed{ev.Position.X, ev.Position.Y, ev.Position.Z}, 0, smokeDefaultFrameDelay)
+			s.appendStripSmokePuffer(9, [3]numeric.Fixed{ev.Position.X, ev.Position.Y, ev.Position.Z}, SmokePuffTrail)
 			s.publication.events.EmitSmokeStart(pe)
 		case combat.EventExplosion, combat.EventWaterExplosion:
 			// Strip-9 smoke [R-STRIP-01 §1 strip 9, the land/water/lava
@@ -1163,7 +1194,9 @@ func createAndBindServices(s *Session) error {
 			// producer gated on the weapon's start-smoke flag, which the
 			// event carries as Smoke.
 			if ev.Smoke {
-				s.appendStripSmokePuffer(9, [3]numeric.Fixed{ev.Position.X, ev.Position.Y, ev.Position.Z}, 0, smokeDefaultFrameDelay)
+				// The land dust of an above-sea explosion: three particles,
+				// seven ticks apart [06 R-WFX-01 §5][06 R-WFX-01 §2 step 4].
+				s.appendStripSmokePuffer(9, [3]numeric.Fixed{ev.Position.X, ev.Position.Y, ev.Position.Z}, SmokePuffLandDust)
 			}
 			if ev.Kind == combat.EventExplosion {
 				s.publication.events.EmitExplosion(pe)

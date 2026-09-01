@@ -258,6 +258,27 @@ func vtolMoveHandler(u *units.Unit, n *Node, _ uint32, _ uint32) Code {
 		if !u.Alive || !hasMover(u) || u.Def == nil || !u.Def.CanFly {
 			return 7 // cancel-all
 		}
+		// Phase 0 IS the takeoff preamble, and the preamble ORs 0xE0 into the
+		// record's gate [04 R-ORD-02 §2][04 R-AIR-01 §6]. The preamble's
+		// flight-block half runs in movement's executor off this same record,
+		// but the gate is the record's half and has to be armed here.
+		//
+		// Without it the pump's advance re-dispatches from the head in the same
+		// visit (a code-1 advance sets cursor 0), so phase 1 armed the gate and
+		// phase 2 completed the order before the aircraft had left the ground —
+		// and the arrival that completed it was the preamble's own climb marker
+		// at the unit's own X/Z, cruisealt/2 up. A grounded aircraft therefore
+		// rose about 55 units, reported Arrived, and never flew anywhere. With
+		// the gate armed the walk stalls until the climb reports arrival, and
+		// phase 1 installs the destination marker on the next visit.
+		//
+		// The gate is armed only when the preamble will actually build that
+		// marker: its step 4 is grounded-only, and an already-airborne aircraft
+		// gets no climb marker and so must not wait for one. That asymmetry is
+		// why a second move issued in flight always worked.
+		if u.Move.Mode&0x3 == 1 {
+			n.DynamicGate |= gateMoveOutcomes
+		}
 		return 1 // advance
 	case 1:
 		workStatus(u, statusOK, "") // the caption clear, no text

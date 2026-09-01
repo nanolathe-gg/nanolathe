@@ -406,6 +406,15 @@ func TestTransportHeavyAndGates(t *testing.T) {
 }
 
 func TestTransportLanding(t *testing.T) {
+	// This test previously asserted the placeholder it was written against: that
+	// one pump visit put the aircraft at the pad's exact X/Z, set mode 1 and
+	// emptied the queue. That was the teleport, not a landing — the seven-phase
+	// machine of [04 R-AIR-01 §6] flies a loiter, queries the pad and descends,
+	// and it lives in internal/movement. The descriptor now hands off to the
+	// runner, so what this asserts is the hand-off contract: with no movement
+	// runner bound, one visit must NOT move the aircraft and must NOT free the
+	// record — it holds it on the one-tick deadline of [04 R-ORD-01 §1] so the
+	// order the player still owns survives to the next tick.
 	rng.SeedGlobal(2, 0)
 	w2 := newOrdersFixtureWorld(10, &content.Catalog{})
 	defVTOL := &content.UnitDef{UnitName: "vtol", CanFly: true, CanMove: true, MaxDamage: 100}
@@ -416,6 +425,7 @@ func TestTransportLanding(t *testing.T) {
 	uPad := w2.Unit(hPad)
 	uVTOL.Move.Mode = 2
 	uPad.Move.Mode = 1
+	startX, startY, startZ := uVTOL.X, uVTOL.Y, uVTOL.Z
 	qVTOL := QueueForUnit(uVTOL)
 	qVTOL.SetBinding(&QueueBinding{Lookup: func(h pool.Handle) *units.Unit { return w2.Unit(h) }})
 	idLand := Lookup("VTOL_Landing")
@@ -425,13 +435,18 @@ func TestTransportLanding(t *testing.T) {
 	qVTOL.Push(idLand, NewNodeForOrder(idLand, hPad, 0, 0, 0, 0, hVTOL, false))
 	pump := &Pump{World: w2}
 	pump.PumpUnit(hVTOL, 0)
-	if uVTOL.X != uPad.X || uVTOL.Z != uPad.Z {
-		t.Fatalf("VTOL should have landed on pad at %v,%v got %v,%v", uPad.X, uPad.Z, uVTOL.X, uVTOL.Z)
+
+	if uVTOL.X != startX || uVTOL.Y != startY || uVTOL.Z != startZ {
+		t.Fatalf("the descriptor moved the aircraft itself: %v,%v,%v -> %v,%v,%v; landing is flown by the movement executor",
+			startX, startY, startZ, uVTOL.X, uVTOL.Y, uVTOL.Z)
 	}
-	if uVTOL.Move.Mode != 1 {
-		t.Fatalf("VTOL after landing should be parked mode 1, got %d", uVTOL.Move.Mode)
+	if uVTOL.X == uPad.X && uVTOL.Z == uPad.Z {
+		t.Fatal("the aircraft was teleported onto the pad")
 	}
-	if len(qVTOL.Primary()) != 0 {
-		t.Fatalf("landing order should be done and removed")
+	if uVTOL.Move.Mode != 2 {
+		t.Fatalf("mover mode changed to %d without the descent ever running", uVTOL.Move.Mode)
+	}
+	if len(qVTOL.Primary()) != 1 {
+		t.Fatalf("landing record freed on its first visit; want it held for the machine, got %d records", len(qVTOL.Primary()))
 	}
 }

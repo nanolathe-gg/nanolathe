@@ -52,6 +52,16 @@ func mkUnit(handle pool.Handle, owner uint8, side string, health, max int32, ali
 		u.MaxHealth = 100
 		u.Health = 100
 	}
+	// These fixtures build units directly rather than through the allocator, so
+	// the runtime status word the resolver reads has to be seeded here.
+	// ArmedStatus is the allocator's "at least one weapon slot resolved" bit,
+	// and code 3's whole armed branch is gated on it [R-ORD-02 §1]; a fixture
+	// definition carries no weapon records, so CanAttack stands in for it. That
+	// is a fixture convenience, not a claim that retail derives one from the
+	// other.
+	if def.CanAttack {
+		u.Flags |= units.ArmedStatus
+	}
 	return u
 }
 
@@ -229,21 +239,43 @@ func TestResolveFullTable(t *testing.T) {
 	}
 	actorNoAttack = mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanAttack = false }))
 	assertRejectForActor(3, actorNoAttack, hostileTarget)
+	// Code 3's ground tail keys on the ACTOR, and the kamikaze arm is the
+	// fall-through an UNARMED unit reaches, not a test that precedes the mover
+	// tests [R-ORD-02 §1]. An armed kamikaze mover therefore chases; a
+	// weaponless one — which is what a stock suicide unit is — detonates.
+	targetGround := mkUnit(11, 1, "CORE", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanMove = true; d.CanFly = false }))
+	actorKamikazeArmed := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
+		d.CanAttack = true
+		d.Kamikaze = true
+		d.CanFly = false
+	}))
+	id = Resolve(3, actorKamikazeArmed, targetGround, nil)
+	if got := DescriptorFor(id).Name; got != "Attack_Chase" {
+		t.Fatalf("code3 armed kamikaze mover want Attack_Chase got %q", got)
+	}
 	actorKamikaze := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
 		d.CanAttack = true
 		d.Kamikaze = true
 		d.CanFly = false
 	}))
-	targetGround := mkUnit(11, 1, "CORE", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanMove = true; d.CanFly = false }))
+	actorKamikaze.Flags &^= units.ArmedStatus // no weapon slot resolved
 	id = Resolve(3, actorKamikaze, targetGround, nil)
 	if got := DescriptorFor(id).Name; got != "Attack_Kamikaze" {
-		t.Fatalf("code3 kamikaze want Attack_Kamikaze got %q", got)
+		t.Fatalf("code3 unarmed kamikaze want Attack_Kamikaze got %q", got)
 	}
 	actorNormal := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanAttack = true; d.CanFly = false; d.Kamikaze = false }))
+	// A mobile attacker chases a STRUCTURE too: the no-move variant is chosen
+	// by the actor's own state bit 29, never by the target's class.
 	structure := mkUnit(12, 1, "CORE", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanMove = false; d.CanFly = false }))
 	id = Resolve(3, actorNormal, structure, nil)
+	if got := DescriptorFor(id).Name; got != "Attack_Chase" {
+		t.Fatalf("code3 mobile attacker vs structure want Attack_Chase got %q", got)
+	}
+	immobileActor := mkUnit(14, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanAttack = true; d.CanFly = false }))
+	immobileActor.Flags |= units.BuildingClassStatus
+	id = Resolve(3, immobileActor, targetGround, nil)
 	if got := DescriptorFor(id).Name; got != "Attack_NoMove" {
-		t.Fatalf("code3 structure want Attack_NoMove got %q", got)
+		t.Fatalf("code3 immobile actor want Attack_NoMove got %q", got)
 	}
 	mobileTarget := mkUnit(13, 1, "CORE", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanMove = true }))
 	id = Resolve(3, actorNormal, mobileTarget, nil)
@@ -266,16 +298,22 @@ func TestResolveFullTable(t *testing.T) {
 	if got := DescriptorFor(id).Name; got != "AirToGround" {
 		t.Fatalf("code3 airtoground want AirToGround got %q", got)
 	}
+	// `Suppress` is code 3's POSITION-ONLY arm [R-ORD-02 §1]; a code-3 call
+	// carrying a target never reaches it. The retired form of this assertion
+	// keyed on a `suppress` entry in the definition's unparsed leftovers, which
+	// no asset authors.
 	actorSuppress := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
 		d.CanAttack = true
 		d.CanFly = false
-		d.Weapon1 = ""
-		d.Unknown = map[string]string{"suppress": "1"}
 	}))
+	id = Resolve(3, actorSuppress, nil, &ResolvePos{})
+	if got := DescriptorFor(id).Name; got != "Suppress" {
+		t.Fatalf("code3 position-only ground attack want Suppress got %q", got)
+	}
 	targetSuppress := mkUnit(17, 1, "CORE", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanFly = false; d.CanMove = true }))
 	id = Resolve(3, actorSuppress, targetSuppress, nil)
-	if got := DescriptorFor(id).Name; got != "Suppress" {
-		t.Fatalf("code3 suppress want Suppress got %q", got)
+	if got := DescriptorFor(id).Name; got != "Attack_Chase" {
+		t.Fatalf("code3 with a target must not resolve Suppress, got %q", got)
 	}
 
 	actorNoDGun := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanDGun = false }))
@@ -503,17 +541,24 @@ func TestResolveFullTable(t *testing.T) {
 	}
 }
 
+// TestAttackChaseOrbit locks `Attack_Chase` against [04 R-ORD-01 §3]: the
+// pre-check order, the phase-0 admission, and the substate cycle with its
+// standoff taken from the slot's weapon range [06 R-WPN-05 §1].
 func TestAttackChaseOrbit(t *testing.T) {
+	const weaponRange = int32(180)
+	weapon := &content.WeaponDef{Range: weaponRange}
 	actor := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
 		d.CanMove = true
 		d.CanFly = false
 		d.CanAttack = true
 	}))
-	actor.X = numeric.Fixed(0)
-	actor.Y = numeric.Fixed(0)
-	actor.Z = numeric.Fixed(0)
+	actor.Flags |= units.ArmedStatus
+	actor.SlotAt(0).Weapon = weapon
+	actor.X, actor.Y, actor.Z = 0, 0, 0
 	targetUnit := mkUnit(2, 1, "CORE", 100, 100, true, 0, mkDef(nil))
-	targetUnit.Y = numeric.Fixed(0)
+	targetUnit.X = numeric.Fixed(400 * 65536)
+	targetUnit.Y = 0
+	targetUnit.Z = 0
 	setTestLookup(actor, func(h pool.Handle) *units.Unit {
 		if h == 99 {
 			return targetUnit
@@ -522,85 +567,136 @@ func TestAttackChaseOrbit(t *testing.T) {
 	})
 	defer setTestLookup(actor, nil)
 
-	n := &Node{
-		ID:          Lookup("Attack_Chase"),
-		Phase:       2,
-		Param1:      0,
-		Param2:      0,
-		Param3:      0,
-		Target:      99,
-		GuardX:      0,
-		GuardY:      0,
-		Owner:       1,
-		DynamicGate: 0,
+	newChase := func(phase uint8, p2 uint32) *Node {
+		return &Node{ID: Lookup("Attack_Chase"), Phase: phase, Param2: p2, Target: 99, Owner: 1}
 	}
-	for expected := uint32(0); expected <= 8; expected++ {
-		if n.Param2 != expected {
-			t.Fatalf("orbit substate want %d got %d before handler", expected, n.Param2)
+
+	// Substate 0 installs a point goal at the target with radius d, and is the
+	// only arm that leaves p2 at 1.
+	n := newChase(2, 0)
+	if code := attackChaseHandler(actor, n, 0, 0); code != Code(1) {
+		t.Fatalf("substate 0 want advance Code(1) got %d", code)
+	}
+	if n.Param2 != 1 {
+		t.Fatalf("substate 0 should set p2 = 1, got %d", n.Param2)
+	}
+	if n.GoalX != targetUnit.X || n.GoalZ != targetUnit.Z {
+		t.Fatalf("substate 0 goal want the target position, got %v,%v", n.GoalX, n.GoalZ)
+	}
+
+	// The strafe arm (1-4) with the two units level does NOT advance p2: it is
+	// the repeating state, and the reachable cycle is 0 -> 1 -> 6 -> 7 -> 8 -> 0
+	// [04 R-ORD-01 §3]'s correction to §3.5.
+	for i := 0; i < 3; i++ {
+		if code := attackChaseHandler(actor, n, 0, 0); code != Code(1) {
+			t.Fatalf("strafe want advance Code(1) got %d", code)
 		}
-		code := attackChaseHandler(actor, n, 0, 0)
-		if code == Code(7) {
-			t.Fatalf("substate %d should not cancel", expected)
-		}
-		// The orbit cadence is unestablished (TODO(question) in the handler);
-		// it waits like its neighbours rather than returning Code(2), which
-		// would re-dispatch the same head forever.
-		if code != Code(3) {
-			t.Fatalf("orbit expected Code(3) got %d", code)
+		if n.Param2 != 1 {
+			t.Fatalf("strafe must leave p2 at 1, got %d after %d visits", n.Param2, i+1)
 		}
 	}
-	if n.Param2 != 0 {
-		t.Fatalf("after 0..8 walk, substate should wrap to 0 got %d", n.Param2)
+	// The strafe goal stands one standoff off the target, so it is never the
+	// target's own position.
+	if n.GoalX == targetUnit.X && n.GoalZ == targetUnit.Z {
+		t.Fatalf("strafe goal should be offset from the target")
 	}
-	if n.GoalX.Raw() == 0 && n.GoalZ.Raw() == 0 {
-		t.Fatalf("orbit should set goal")
+
+	// More than eight world units of vertical separation jumps to substate 6.
+	targetUnit.Y = numeric.Fixed(9 * 65536)
+	if code := attackChaseHandler(actor, n, 0, 0); code != Code(1) {
+		t.Fatalf("vertical jump want advance Code(1) got %d", code)
 	}
+	if n.Param2 != 6 {
+		t.Fatalf("vertical separation > 8 should jump to substate 6, got %d", n.Param2)
+	}
+	// Exactly eight is NOT more than eight: the compare is strict.
+	targetUnit.Y = numeric.Fixed(8 * 65536)
+	n.Param2 = 1
+	if code := attackChaseHandler(actor, n, 0, 0); code != Code(1) || n.Param2 != 1 {
+		t.Fatalf("vertical separation of exactly 8 must stay on the strafe arm, got code %d p2 %d", code, n.Param2)
+	}
+	targetUnit.Y = 0
+
+	// 6 -> 7 -> 8 -> 0 close the cycle.
+	for _, step := range []struct{ from, want uint32 }{{6, 7}, {7, 8}, {8, 0}} {
+		n.Param2 = step.from
+		if code := attackChaseHandler(actor, n, 0, 0); code != Code(1) {
+			t.Fatalf("substate %d want advance Code(1) got %d", step.from, code)
+		}
+		if n.Param2 != step.want {
+			t.Fatalf("substate %d should move to %d, got %d", step.from, step.want, n.Param2)
+		}
+	}
+
+	// p2 >= 9 and phase > 3 both cancel the whole queue.
 	n.Param2 = 9
-	code := attackChaseHandler(actor, n, 0, 0)
-	if code != Code(7) {
-		t.Fatalf("substate >=9 should cancel-all Code(7) got %d", code)
+	if code := attackChaseHandler(actor, n, 0, 0); code != Code(7) {
+		t.Fatalf("substate >= 9 want cancel-all Code(7) got %d", code)
 	}
-	n.Param2 = 0
-	n.Phase = 4
-	code = attackChaseHandler(actor, n, 0, 0)
-	if code != Code(7) {
-		t.Fatalf("phase >3 should cancel-all got %d", code)
+	if code := attackChaseHandler(actor, newChase(4, 0), 0, 0); code != Code(7) {
+		t.Fatalf("phase > 3 want cancel-all Code(7) got %d", code)
 	}
-	n2 := &Node{ID: Lookup("Attack_Chase"), Phase: 0, Target: 0}
-	code = attackChaseHandler(actor, n2, 0, 0)
-	if code != Code(5) {
-		t.Fatalf("missing target should abandon Code(5) got %d", code)
+
+	// Pre-checks, in [04 R-ORD-01 §3]'s order.
+	if code := attackChaseHandler(actor, newChase(2, 0), 0x800, 0); code != Code(5) {
+		t.Fatalf("pending 0x800 want complete Code(5) got %d", code)
 	}
-	n3 := &Node{ID: Lookup("Attack_Chase"), Phase: 0, Target: 99}
-	code = attackChaseHandler(actor, n3, chaseAbandonMask, 0)
-	if code != Code(5) {
-		t.Fatalf("abandon satisfied should return 5 got %d", code)
+	if code := attackChaseHandler(actor, &Node{ID: Lookup("Attack_Chase"), Target: 0}, 0, 0); code != Code(5) {
+		t.Fatalf("null target want complete Code(5) got %d", code)
 	}
-	n4 := &Node{
-		ID: Lookup("Attack_Chase"), Phase: 0, Target: 99, Param3: 10, GuardX: 0, GuardY: 0,
+	if code := attackChaseHandler(actor, newChase(2, 0), pendTargetRemoved, 0); code != Code(5) {
+		t.Fatalf("target removed want complete Code(5) got %d", code)
 	}
-	actorFar := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(nil))
-	actorFar.X = numeric.Fixed(100 * 65536)
-	actorFar.Z = numeric.Fixed(0)
-	code = attackChaseHandler(actorFar, n4, 0, 0)
-	if code != Code(5) {
-		t.Fatalf("leash exceeded should abandon got %d", code)
+	if code := attackChaseHandler(actor, newChase(2, 0), pendTargetCloaked, 0); code != Code(5) {
+		t.Fatalf("target cloaked want complete Code(5) got %d", code)
 	}
-	actorAir := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanFly = true }))
-	n5 := &Node{ID: Lookup("Attack_Chase"), Phase: 0, Target: 99}
-	code = attackChaseHandler(actorAir, n5, 0, 0)
-	if code != Code(5) {
-		t.Fatalf("admit requiring ground unit with CanFly should abandon got %d", code)
+	// A satisfied word carrying only the deadline bit is NOT a pre-check hit —
+	// the retired placeholder masks aliased exactly these bits.
+	if code := attackChaseHandler(actor, newChase(2, 0), 0x1, 0); code == Code(5) {
+		t.Fatalf("the deadline bit must not complete the chase")
 	}
-	actorGround := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanFly = false }))
-	n6 := &Node{ID: Lookup("Attack_Chase"), Phase: 0, Target: 99, Param1: 0}
-	n6.GoalX = numeric.Fixed(999)
-	code = attackChaseHandler(actorGround, n6, 0, 0)
-	if code != Code(1) || n6.Phase != 1 {
-		t.Fatalf("phase 0 admit should advance to 1 got code %d phase %d", code, n6.Phase)
+	if code := attackChaseHandler(actor, newChase(2, 0), 0x6, 0); code == Code(5) {
+		t.Fatalf("movement bits must not complete the chase")
 	}
-	if n6.GoalX.Raw() != actorGround.X.Raw() {
-		t.Fatalf("admit should reset goal to own position")
+
+	// The leash of [R-STANCE-01 §4], inclusive.
+	far := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(nil))
+	far.Flags |= units.ArmedStatus
+	far.X = numeric.Fixed(100 * 65536)
+	nLeash := &Node{ID: Lookup("Attack_Chase"), Phase: 2, Target: 99, Param3: 10}
+	if code := attackChaseHandler(far, nLeash, 0, 0); code != Code(5) {
+		t.Fatalf("leash exceeded want complete Code(5) got %d", code)
+	}
+
+	// Phase 0 admission: canfly, an unarmed unit, and a building all cancel;
+	// a live armed ground mover advances and seeds the goal and the slot.
+	air := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanFly = true }))
+	air.Flags |= units.ArmedStatus
+	if code := attackChaseHandler(air, newChase(0, 0), 0, 0); code != Code(7) {
+		t.Fatalf("canfly want cancel-all Code(7) got %d", code)
+	}
+	unarmed := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(nil))
+	unarmed.Flags &^= units.ArmedStatus
+	if code := attackChaseHandler(unarmed, newChase(0, 0), 0, 0); code != Code(7) {
+		t.Fatalf("unarmed want cancel-all Code(7) got %d", code)
+	}
+	building := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(nil))
+	building.Flags |= units.ArmedStatus | units.BuildingClassStatus
+	if code := attackChaseHandler(building, newChase(0, 0), 0, 0); code != Code(7) {
+		t.Fatalf("no mover reference want cancel-all Code(7) got %d", code)
+	}
+
+	admit := newChase(0, 5)
+	admit.GoalX = numeric.Fixed(999)
+	actor.X = numeric.Fixed(7 * 65536)
+	if code := attackChaseHandler(actor, admit, 0, 0); code != Code(1) {
+		t.Fatalf("phase 0 admit want advance Code(1) got %d", code)
+	}
+	if admit.GoalX != actor.X || admit.Param2 != 0 {
+		t.Fatalf("admit should seed goal from own position and reset p2, got %v p2=%d", admit.GoalX, admit.Param2)
+	}
+	if admit.Phase != 0 {
+		t.Fatalf("the handler must not advance its own phase; the pump does")
 	}
 }
 
@@ -837,6 +933,7 @@ func TestResolvePositionOnlyAttackUsesCanonicalCodeThreeArm(t *testing.T) {
 		d.CanAttack = true
 		d.CanFly = false
 	}))
+	unarmed.Flags &^= units.ArmedStatus
 	if got := Resolve(3, unarmed, nil, pos); got != 0 {
 		t.Fatalf("unarmed position attack id=%d, want reject sentinel", got)
 	}

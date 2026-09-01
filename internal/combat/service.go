@@ -1183,17 +1183,17 @@ func handleProjectileImpact(s *Service, h pool.Handle, p *Projectile, weapon *co
 	if weapon.EndSmoke && !isWaterTerrain {
 		s.emitEvent(Event{Kind: EventEndSmoke, Tick: tick, Source: p.Shooter, Position: p.Pos})
 	} else {
-		graphic := weapon.ExplosionGaf
 		isWaterExplosion := isWaterTerrain && !hasDirectTarget
-		if isWaterExplosion {
-			graphic = weapon.WaterExplosionGaf
-			if graphic == "" {
-				graphic = weapon.WaterExplosionArt
-			}
-		} else if graphic == "" {
-			graphic = weapon.ExplosionArt
-		}
-		if graphic != "" {
+		bank, graphic := impactArt(weapon, isWaterExplosion, terrain)
+		// The explosion-pool allocation does not depend on the art. Every
+		// impact allocates a record with calculated table 0 as its secondary
+		// cursor, and a weapon whose art holder is null — a misspelled
+		// `explodeas`, or weapon record 0 — still shows the disc
+		// [06 R-WFX-01 §2]. The observable retail result of a null holder on
+		// land is a 24-tick calculated flash plus a smoke puff: a presentation
+		// event, not nothing. Gating the event on the art meant an impact with
+		// no art produced nothing at all.
+		{
 			kind := EventExplosion
 			if isWaterExplosion {
 				kind = EventWaterExplosion
@@ -1201,7 +1201,14 @@ func handleProjectileImpact(s *Service, h pool.Handle, p *Projectile, weapon *co
 			// Smoke carries the weapon's start-smoke flag: the land/water
 			// impact effect variants each append a strip-9 smoke object
 			// under that second weapon flag [R-STRIP-01 §1 strip 9].
-			s.emitEvent(Event{Kind: kind, Tick: tick, Source: p.Shooter, Position: p.Pos, Graphic: graphic, Smoke: weapon.StartSmoke})
+			s.emitEvent(Event{
+				Kind: kind, Tick: tick, Source: p.Shooter, Position: p.Pos,
+				Graphic: graphic, Bank: bank, Smoke: weapon.StartSmoke,
+				// "the central impact passes (point, land or water holder, 0,
+				// waterCell) — so EVERY projectile impact, land or water, draws
+				// calculated table 0 under its art" [06 R-WFX-01 §2].
+				HasCalculatedFlash: true, CalculatedTable: impactFlashTable,
+			})
 		}
 	}
 	s.emitEvent(Event{Kind: EventProjectileImpact, Tick: tick, Source: p.Shooter, Target: p.TargetUnit, Position: p.Pos})
@@ -1403,4 +1410,55 @@ func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weap
 		}
 	}
 	_ = distance
+}
+
+// impactArt selects the explosion-art holder one impact draws from
+// [06 R-WFX-01 §1], returning the GAF bank name and the entry name inside it.
+// An empty entry means the holder is null and the impact draws no art.
+//
+// A weapon has two holders, not three. The land holder is
+// `explosiongaf`/`explosionart`. The single water-or-lava holder is filled
+// from `waterexplosiongaf`/`waterexplosionart` on an ordinary map and from
+// `lavaexplosiongaf`/`lavaexplosionart` on a `lavaworld` map — the other pair
+// is never consulted. There is no per-impact lava test: the water arm is the
+// same "below sea level" predicate everywhere, and a lava world shows lava art
+// because the holder was filled from the lava keys.
+//
+// **Both keys of a pair are required.** A pair with only one key present is
+// not an error and not a fallback: the holder stays null and the impact draws
+// nothing. Stock content authors a lava pair on most weapons but not all, so
+// on a lava world the weapons without one correctly show no splash at all.
+//
+// Divergence, deliberate and recorded: retail chooses which pair fills the
+// water-or-lava holder at CATALOG PARSE, from the session's `lavaworld` value,
+// and the parser binds a GAF entry pointer there and then. Nanolathe compiles
+// its weapon catalog without a map, so the same choice is made here, per
+// impact, from the terrain the impact happened on. The two are observationally
+// identical inside one battle — which is the scope over which retail's holder
+// is also fixed — and this form additionally survives the process compiling
+// one catalog for several maps, which retail's does not [06 R-WFX-01 §1].
+func impactArt(weapon *content.WeaponDef, water bool, terrain *world.Terrain) (bank, entry string) {
+	if weapon == nil {
+		return "", ""
+	}
+	if !water {
+		return completeArtPair(weapon.ExplosionGaf, weapon.ExplosionArt)
+	}
+	if terrain != nil && terrain.LavaWorld {
+		return completeArtPair(weapon.LavaExplosionGaf, weapon.LavaExplosionArt)
+	}
+	return completeArtPair(weapon.WaterExplosionGaf, weapon.WaterExplosionArt)
+}
+
+// impactFlashTable is the calculated table every central impact passes
+// [06 R-WFX-01 §2]. Table 1 is built and never drawn by any caller; table 2
+// belongs to the `explode` opcode's bitmap bits.
+const impactFlashTable uint8 = 0
+
+// completeArtPair applies the both-or-nothing rule of [06 R-WFX-01 §1].
+func completeArtPair(bank, entry string) (string, string) {
+	if bank == "" || entry == "" {
+		return "", ""
+	}
+	return bank, entry
 }

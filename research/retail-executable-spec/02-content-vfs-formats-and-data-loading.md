@@ -2144,8 +2144,10 @@ regenerate, so the table and the raw trail
   records whether the chosen slot's weapon is *not* to-air, which selects the
   resolver's return code) and the fire-order handler's weapon-slot pick,
   which skips a slot flagged to-air unless the target's airborne state bits
-  read 2. The exact operand of that airborne test is the inference.
-  Cross-doc: `[04 R-ORD-01 §3]` / `[06 §3.2]` should state the gate.
+  read 2. **Closed 2026-08-31 by `[06 R-WPN-05 §1]`:** the operand is the
+  target's *committed mover mode* — the low two bits of its state word,
+  `[04 R-MOV-01 §8]` — which must read exactly 2. The same gate is the order
+  side's shot-admission test, so the row is now Established throughout.
 * **`shellweapon` — inert (reader census: none).** Flag bit 2 is stored and
   never loaded, in any of the decompiler's renderings (dword mask,
   shift-and-and, byte-narrowed mask). Bounded by the export, like every
@@ -2357,7 +2359,7 @@ lobby, or a trace of every block copy into the session globals.
 | `unitsonly` | integer · flag bit 14 | 0 | `[06 §9.3]` | Established (cited) |
 | `groundbounce` | integer · flag bit 15 | 0 | `[06 §8.2]` | Established (cited) |
 | `waterweapon` | integer · flag bit 16 | 0 | `[06 §6.9]` | Established (cited) |
-| `toairweapon` | integer · flag bit 17 | 0 | `[02 R-KEYS-01 §2]` (attack resolver / fire-order weapon pick) | Supported inference |
+| `toairweapon` | integer · flag bit 17 | 0 | `[02 R-KEYS-01 §2]` (attack resolver / fire-order weapon pick), `[06 R-WPN-05 §1]` (shot-admission gate) | Established |
 | `smoketrail` | integer · flag bit 18 | 0 | `[06 §7.3]` | Established |
 | `turret` | integer · flag bit 19 | 0 | `[06 §4.4]`, `[06 §7.3]`, `[06 §3.3]` | Established (cited) |
 | `selfprop` | integer · flag bit 20 | 0 | `[06 §6.2]`, `[06 §3.3]`, `[06 R-WFX-01 §4]` | Established (cited) |
@@ -4286,9 +4288,9 @@ finding they recited remains in the body sections that own it.
   `mousespeed`, `gamespeed`, `unitchat`, `unitchattext`) · §5
   `[R-KEYS-01 §5]` · static trace of each stored global's readers (docs
   01/03/07 own the consumers; the loader side is closed).
-* The airborne-state operand of the `toairweapon` slot-skip in the
-  fire-order handler · §5 `[R-KEYS-01 §2]` · static trace (doc 04
-  `[R-ORD-01 §3]` / doc 06 `[§3.2]` to state the gate).
+* ~~The airborne-state operand of the `toairweapon` slot-skip.~~ **Closed
+  2026-08-31 by `[06 R-WPN-05 §1]`:** the target's committed mover mode must
+  read 2.
 * Whether any reader tests unit capability bit 9 (the derived copy of
   `canreclamate`) separately from bit 10 · §5 `[R-KEYS-01 §1]` · bit-9
   reader census.

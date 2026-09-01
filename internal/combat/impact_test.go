@@ -42,9 +42,9 @@ func runImpactPresentation(w *content.WeaponDef, directTarget, water bool) *reco
 		case EventEndSmoke:
 			sink.EmitEndSmoke(ev.Position)
 		case EventExplosion:
-			sink.EmitExplosion(ev.Graphic, "", false)
+			sink.EmitExplosion(ev.Bank+"/"+ev.Graphic, "", false)
 		case EventWaterExplosion:
-			sink.EmitExplosion(ev.Graphic, "", true)
+			sink.EmitExplosion(ev.Bank+"/"+ev.Graphic, "", true)
 		}
 	}
 	p := &Projectile{Pos: Vec3{}}
@@ -69,7 +69,7 @@ func TestImpactPresentationOrdering(t *testing.T) {
 	}
 	// Land direct-target case: should be shake, hit, then land GAF, no water GAF
 	sink := runImpactPresentation(w, true, false)
-	if len(sink.events) != 3 || sink.events[0] != "shake" || sink.events[1] != "hit:hitsound" || sink.events[2] != "landgaf:explo.gaf" {
+	if len(sink.events) != 3 || sink.events[0] != "shake" || sink.events[1] != "hit:hitsound" || sink.events[2] != "landgaf:explo.gaf/exploart" {
 		t.Fatalf("land direct ordering wrong [06 §13.2] C27: got %v", sink.events)
 	}
 	// Direct target forces hit even underwater [06 §13.2] C27
@@ -82,7 +82,7 @@ func TestImpactPresentationOrdering(t *testing.T) {
 	if len(sink.events) < 2 || sink.events[1] != "water:watersound" {
 		t.Fatalf("terrain-only water should use water sound [06 §13.2] C27: got %v", sink.events)
 	}
-	if sink.events[len(sink.events)-1] != "watergaf:wexplo.gaf" {
+	if sink.events[len(sink.events)-1] != "watergaf:wexplo.gaf/wexploart" {
 		t.Fatalf("water GAF not selected [06 §13.2] C27: got %v", sink.events)
 	}
 	// End smoke is land-branch-only and replaces GAF [06 §13.2] C27
@@ -90,6 +90,7 @@ func TestImpactPresentationOrdering(t *testing.T) {
 		ShakeMagnitude: 1,
 		SoundHit:       "hit",
 		ExplosionGaf:   "explo.gaf",
+		ExplosionArt:   "exploart",
 		EndSmoke:       true,
 	}
 	sink = runImpactPresentation(w2, false, false)
@@ -99,7 +100,7 @@ func TestImpactPresentationOrdering(t *testing.T) {
 		if e == "endsmoke" {
 			foundEnd = true
 		}
-		if e == "landgaf:explo.gaf" {
+		if e == "landgaf:explo.gaf/exploart" {
 			foundGaf = true
 		}
 	}
@@ -113,6 +114,7 @@ func TestImpactPresentationOrdering(t *testing.T) {
 	w3 := &content.WeaponDef{
 		SoundWater:        "water",
 		WaterExplosionGaf: "w.gaf",
+		WaterExplosionArt: "wart",
 		EndSmoke:          true,
 	}
 	sink = runImpactPresentation(w3, false, true)
@@ -123,7 +125,7 @@ func TestImpactPresentationOrdering(t *testing.T) {
 	}
 	foundWGaf := false
 	for _, e := range sink.events {
-		if e == "watergaf:w.gaf" {
+		if e == "watergaf:w.gaf/wart" {
 			foundWGaf = true
 		}
 	}
@@ -139,7 +141,7 @@ func TestImpactPresentationOrdering(t *testing.T) {
 			idxShake = i
 		case "hit:hitsound":
 			idxHit = i
-		case "landgaf:explo.gaf":
+		case "landgaf:explo.gaf/exploart":
 			idxGaf = i
 		}
 	}

@@ -49,7 +49,6 @@ var Baseline = map[string]int{
 	"internal/mission/placement.go":                 18,
 	"internal/mission/sparse_test.go":               1,
 	"internal/movement/collision.go":                13,
-	"internal/movement/flight.go":                   5,
 	"internal/movement/integrate.go":                9,
 	"internal/movement/locomotion_fidelity_test.go": 2,
 	"internal/movement/profile.go":                  9,

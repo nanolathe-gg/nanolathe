@@ -76,6 +76,27 @@ func (s *System) BindMoveGoal(h pool.Handle, head *orders.Node, x, z numeric.Fix
 	s.moveGoals[h] = &moveGoal{order: head, x: x, z: z, goal: goal}
 }
 
+// HasGroundGoal reports whether head currently owns this mover's ground goal
+// payload. It is the identity-checked form of "this record asked for the
+// mover": the four goal installers of [04 R-ORD-01 §1] bind the payload to the
+// record they install for, and Release drops it again, so a record that owns
+// one is by construction a record that is waiting on a movement outcome.
+//
+// The session's mover boundary uses it so that a family which installs a goal
+// does not have to be named in a list to be driven. `Attack_Chase` is the case
+// that exposed the gap: it installs a point or banded goal in phase 2 and then
+// waits behind gates `0x13808`/`0x148E8`/`0x100E8` for the outcome
+// [04 R-ORD-01 §3], exactly as the ground work family does, and being absent
+// from the name list meant its goal was installed and never activated — an
+// ordered attacker stood still forever.
+func (s *System) HasGroundGoal(h pool.Handle, head *orders.Node) bool {
+	if s == nil || s.moveGoals == nil || head == nil {
+		return false
+	}
+	g := s.moveGoals[h]
+	return g != nil && g.order == head
+}
+
 func (s *System) moveGoalPayload(h pool.Handle, head *orders.Node) path.Goal {
 	if s == nil || s.moveGoals == nil || head == nil {
 		return nil

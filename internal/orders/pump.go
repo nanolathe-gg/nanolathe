@@ -292,6 +292,12 @@ type WeaponAdapter struct {
 	StopFiring      func(*units.Unit, int) bool
 	Acquire         func(*units.Unit, int, uint32) (pool.Handle, bool)
 	Engaged         func(*units.Unit, int) bool
+	// CanEngage is the shot-admission gate of [04 R-ORD-01 §7]: given a
+	// shooter, a candidate target and a slot index, may that slot be bound to
+	// that target right now. `Attack_Chase` phases 1 and 3 branch on it
+	// [04 R-ORD-01 §3]. It is distinct from Engaged, which asks the same
+	// question about the target a slot has ALREADY been bound to.
+	CanEngage func(*units.Unit, pool.Handle, int) bool
 }
 
 // PresentationAdapter is the committed-frame event port. It carries semantic
@@ -614,7 +620,7 @@ func moveGroundHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code 
 // touched down, so it sat at the head of the queue for the rest of the unit'"'"'s
 // life. It now has a descriptor handler that hands off to the same air runner
 // the attack executors use, and that runner reports the executor'"'"'s outcome
-// instead of re-running it (vtolair.go, movement.reportLandIfCanOutcome).
+// instead of re-running it (vtolair.go, movement.reportAirMachineOutcome).
 //
 // For these the pump is not the driver, and a result code applied here would
 // overwrite the driver's own deadline — a factory record parked for 30 to 44
@@ -1338,27 +1344,22 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 	// No iteration cap here (ORD-02): a handler looping through the continue
 	// codes wedges exactly as retail's does [04 §3.3][I11].
 	if len(q.primary) == 0 {
-		// TODO(T25): the idle refill from `defaultmissiontype` belongs here —
-		// `q.refillIdle(u)` is written, exported through IdleRefillMission, and
-		// locked by TestIdleRefillMissionCondition; the CONTRACT is Established
-		// and re-verified against the executable on 2026-08-31 (see the doc-04
-		// §3.3 closure and its correction). It is not called yet because this
-		// build cannot survive its consequence: the refill hands every stock
-		// aircraft the `VTOL_Standby` record whose no-cargo arm pushes
-		// `VTOL_LandIfCan`, and that executor's landing-legality predicate is
-		// still an explicit placeholder ([04 R-AIR-01 §6] names the test but not
-		// its body; internal/movement/airorders.go `landable`). With the refill
-		// wired, a factory's first aircraft product lands immediately beside its
-		// own plant and the plant then stalls forever in its build-stance
-		// handshake — TestFactoryRepeatThroughDispatchRetail (internal/session)
-		// reproduces it exactly, and both the placeholder and the handshake live
-		// outside this package.
-		// Enabling is this one call plus its session-side half: a unit that has
-		// never carried an order has no queue for the pump to walk, so the
-		// per-unit visit must materialise one when IdleRefillMission would push
-		// (internal/session/step.go, beside the PumpUnit call), which is where
-		// the owner's controller state is readable.
-		return
+		// The idle refill from `defaultmissiontype` [04 §3.3]. A unit whose
+		// primary segment has emptied is handed its standing auto-op record —
+		// for every stock aircraft that is `VTOL_Standby`, whose no-cargo arm
+		// pushes `VTOL_LandIfCan`, which is how an idle aircraft comes home.
+		//
+		// This was written, exported and tested but deliberately not called,
+		// because the landing-legality predicate `VTOL_LandIfCan` depends on was
+		// a placeholder and a factory's first aircraft product landed on its own
+		// plant, stalling the plant's build-stance handshake forever. That
+		// predicate is now traced and implemented [04 R-AIR-01 §6a], and it
+		// refuses a finished building's yard cells, so the product no longer
+		// parks on the plant that made it.
+		q.refillIdle(u)
+		if len(q.primary) == 0 {
+			return
+		}
 	}
 	for cursor := 0; cursor < len(q.primary); {
 		n := q.primary[cursor]

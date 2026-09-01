@@ -853,15 +853,18 @@ const airNoPiece = 0xFF
 // when the pad owner is not itself carried and no unit in the pad owner's cargo
 // list records that same attach-piece index.
 //
-// TODO(T25): retail obtains the four candidate piece indices from a synchronous
-// `QueryLandingPad` on the TARGET's script, with all four outputs pre-seeded
-// −1, so a target whose script answers nothing offers no pad at all. This
-// package has no COB surface — internal/movement holds no script handle and
-// internal/cob is not reachable from here — so the candidates cannot be asked
-// for. Placeholder: the four indices are offered unconditionally by an
-// `isairbase` target, which is the arrangement that lets a pad be used at all;
-// the free-pad predicate itself is the established one. What would settle it is
-// a synchronous script-query seam reaching this package.
+// The candidate piece indices come from a synchronous `QueryLandingPad` on the
+// TARGET's script, with all four outputs pre-seeded −1, so a target whose script
+// answers nothing offers no pad at all [04 R-AIR-01 §6][04 §5.3]. A −1 cell is
+// skipped rather than treated as end-of-list.
+//
+// This previously offered all four indices unconditionally for any `isairbase`
+// target, on the stated grounds that internal/movement had no COB surface. That
+// was wrong twice over: this package already imports internal/cob, and the pad's
+// own VM is reachable through the unit record. The placeholder was strictly more
+// permissive than retail, so it could not deny a pad that retail grants — but it
+// granted pads retail denies, and it made the pad piece a fiction, since the
+// index it returned was a loop counter rather than anything the model authored.
 func (s *System) queryLandingPad(pad *units.Unit) (uint16, bool) {
 	if pad == nil || !pad.Alive || pad.Attachment.Carrier != 0 {
 		return 0, false
@@ -869,9 +872,20 @@ func (s *System) queryLandingPad(pad *units.Unit) (uint16, bool) {
 	if pad.Def == nil || !pad.Def.IsAirBase {
 		return 0, false
 	}
+	bridge := pad.ScriptBridge()
+	if bridge == nil {
+		// No script bound at all. The seed is what retail would be left holding,
+		// and every cell of it is −1, so there is no pad to offer.
+		return 0, false
+	}
+	result := bridge.QueryLandingPad()
 	for candidate := 0; candidate < airPadCandidates; candidate++ {
-		if s.padPieceFree(pad, uint16(candidate)) {
-			return uint16(candidate), true
+		piece := result.Values[candidate]
+		if piece < 0 {
+			continue
+		}
+		if s.padPieceFree(pad, uint16(piece)) {
+			return uint16(piece), true
 		}
 	}
 	return 0, false
@@ -1030,41 +1044,81 @@ func (s *System) installOffMapRecoveryMarker(u *units.Unit, head *orders.Node) b
 }
 
 // landable is the landing-legality test `VTOL_LandIfCan` phase 1 asks about a
-// candidate position.
+// candidate position [04 R-AIR-01 §6a].
 //
-// TODO(question): [04 R-AIR-01 §6] names the test — "ask the landing-legality
-// test whether the unit's current position is landable" — but gives neither its
-// predicate nor its citation, and no section in this unit's reading list
-// defines it. Placeholder: the predicate the mover's own occupancy commit
-// applies at that anchor — every footprint cell in bounds, passable for this
-// unit's movement profile, and unoccupied by another unit
-// [04 R-COLL-01 §4][04 §8.2]. What would settle it is a trace of that test's
-// body, which §6 calls but does not describe.
+// It is a dedicated routine, not the mover's commit validator reused: one
+// strict slope maximum with no second water-slope tier, plus an occupancy rule
+// and an aircraft water rule the commit validator does not carry.
+//
+// TODO(question): retail short-circuits to landable when the unit's movement
+// class bit is clear in a half-resolution blocking map, without looking at
+// features, yards, occupancy, depth or slope [04 R-AIR-01 §6a]. This build has
+// no such map, so the full walk always runs and this predicate is therefore
+// STRICTER than retail — retail accepts on the coarse bit alone, including on
+// a cell another unit occupies. The divergence is bounded: a refusal only makes
+// the caller keep searching. What would settle it is the writer and layout of
+// that half-resolution map.
 func (s *System) landable(u *units.Unit, x, z numeric.Fixed) bool {
-	if s == nil || u == nil {
+	if s == nil || u == nil || u.Def == nil || s.Terrain == nil {
 		return false
 	}
 	coll := s.Collisions[u.Handle]
-	if coll == nil || s.Terrain == nil {
+	if coll == nil {
 		return false
 	}
 	fx, fz := coll.FootPrintX, coll.FootPrintZ
 	anchorX, anchorZ := world.PlacementAnchor(x, z, int32(fx), int32(fz))
 	anchor := Cell{X: anchorX, Z: anchorZ}
-	if !commitRectInBounds(s.Terrain, anchor, fx, fz) {
+	if anchor.X < 0 || anchor.Z < 0 {
 		return false
 	}
+	if anchor.X+int32(fx) >= s.Terrain.CellW || anchor.Z+int32(fz) >= s.Terrain.CellH {
+		return false
+	}
+
 	profile := s.ProfileFor(u.Handle)
+	sea := int32(s.Terrain.SeaLevel)
+	depthFloor := sea - profile.MaxWaterDepth
+	depthCeil := sea - profile.MinWaterDepth
+	// The aircraft water rule: for a can-fly definition that is not amphibious
+	// the floor is raised to sea level, so every cell under the footprint must
+	// be at or above it. A non-amphibious aircraft cannot set down on water
+	// however shallow, whatever its authored movement class allows
+	// [04 R-AIR-01 §6a]. This is the rule that governs where an idle aircraft
+	// may park, and the placeholder predicate had nothing like it.
+	if depthFloor < sea && u.Def.CanFly && !u.Def.Amphibious {
+		depthFloor = sea
+	}
+
 	for dz := int16(0); dz < fz; dz++ {
 		for dx := int16(0); dx < fx; dx++ {
-			c := Cell{X: anchor.X + int32(dx), Z: anchor.Z + int32(dz)}
-			if !profile.IsPassableCommitCell(s.Terrain, c.X, c.Z) {
+			cx, cz := anchor.X+int32(dx), anchor.Z+int32(dz)
+			if isFeatureBlocked(s.Terrain, cx, cz) {
 				return false
 			}
+			cell := s.Terrain.PlotAt(cx, cz)
+			if cell == nil {
+				return false
+			}
+			// A finished building's yard is not landable ground
+			// [04 R-COLL-01 §4].
+			if cell.StructureYard() {
+				return false
+			}
+			// An occupant blocks only when it is somebody else: a unit's own
+			// cells must not block, or "is where I am landable" could never be
+			// answered yes [04 R-AIR-01 §6a].
 			if s.Grid != nil {
-				if occ, ok := s.Grid.OccupantAt(c); ok && occ != coll.ID {
+				if occ, ok := s.Grid.OccupantAt(Cell{X: cx, Z: cz}); ok && occ != coll.ID {
 					return false
 				}
+			}
+			lo, hi := int32(cell.MinHeight()), int32(cell.MaxHeight())
+			if lo < depthFloor || hi > depthCeil {
+				return false
+			}
+			if hi-lo > int32(profile.MaxSlope) {
+				return false
 			}
 		}
 	}
@@ -1278,8 +1332,8 @@ func (s *System) runAirOrderLeg(u *units.Unit, n *orders.Node, satisfied uint32,
 		return 0, false
 	}
 	switch orders.DescriptorFor(n.ID).Name {
-	case "VTOL_LandIfCan":
-		return s.reportLandIfCanOutcome(u, n, tick), true
+	case "VTOL_LandIfCan", "VTOL_Landing":
+		return s.reportAirMachineOutcome(u, n, tick), true
 	case "VTOL_Evade":
 		return s.legVTOLEvade(u, n, tick), true
 	case "VTOL_SeekAttack":
@@ -1298,7 +1352,8 @@ func (s *System) runAirOrderLeg(u *units.Unit, n *orders.Node, satisfied uint32,
 	return 0, false
 }
 
-// reportLandIfCanOutcome publishes the landing machine's outcome to the pump.
+// reportAirMachineOutcome publishes a mover-tick landing machine's outcome to
+// the pump. Both `VTOL_LandIfCan` and `VTOL_Landing` use it.
 //
 // `VTOL_LandIfCan` is not driven by the pump: its executor is `execVTOLLandIfCan`
 // below, which the mover tick runs off the head record because the landing
@@ -1322,7 +1377,7 @@ func (s *System) runAirOrderLeg(u *units.Unit, n *orders.Node, satisfied uint32,
 // The one-tick hold is what makes the hand-off safe in either dispatch order:
 // when the pump runs before the mover tick, a completion published this tick is
 // read on the next one.
-func (s *System) reportLandIfCanOutcome(u *units.Unit, n *orders.Node, tick uint32) orders.Code {
+func (s *System) reportAirMachineOutcome(u *units.Unit, n *orders.Node, tick uint32) orders.Code {
 	st := s.airOrders[u.Handle]
 	if st != nil && st.order == n && st.done {
 		return 5 // *complete* [04 R-ORD-01 §1]

@@ -79,6 +79,23 @@ func (s *System) installGroundPayload(owner pool.Handle, n *orders.Node, goal pa
 	}
 	n.Satisfied &^= goalPendingMask
 	s.moveGoals[owner] = &moveGoal{order: n, x: x, z: z, goal: goal}
+	// An install REPLACES the record's goal, so whatever route the mover is
+	// following is now aimed at the wrong place. Dropping the active-order
+	// binding is what makes the session's mover boundary re-submit against the
+	// payload just installed; ActivateMove admits exactly one submission per
+	// active order, so without this a record that installs a second goal — a
+	// `Move_Ground` re-arm, and every `Attack_Chase` maneuver substate
+	// [04 R-ORD-01 §3] — kept walking to its first one. An ordered attacker
+	// therefore reached the spot its target had been standing on when the order
+	// was given, stopped, and never followed [04 R-ORD-01 §1][04 R-PATH-01 §8].
+	// Detaching the binding from its record — rather than deleting it — is what
+	// routes the next activation down ActivateMove's own re-activation arm: it
+	// cancels the outstanding request and clears the path state before
+	// submitting, and it does not let the stale route be adopted as if it were
+	// still aimed at this goal.
+	if prior := s.activeOrders[owner]; prior != nil {
+		prior.order = nil
+	}
 	return true
 }
 
@@ -210,15 +227,6 @@ func (s *System) releaseAirGoalForNode(owner pool.Handle, n *orders.Node) {
 // as raw is the structure placeholder, not a recovered conversion.
 
 const (
-	// placeholderAttackOuterRaw is the outer stand-off radius for Attack_Chase
-	// orbit states 0/1/2/5/8 [04 §3.5] — stubStandoffWorld 64 world units [M-4]
-	// used as raw heuristic placeholder. TODO(question) [04 §3.5][04 §7.2][04 §7.4]
-	placeholderAttackOuterRaw int32 = 64
-	// placeholderAttackInnerRaw is half stand-off for the banded states 1/2/5
-	// etc. TODO(question) half/double band geometry not fully located beyond
-	// "two banded-goal states (inner/outer radii at standoff/half and
-	// double/half)" [04 §3.5][M-4]
-	placeholderAttackInnerRaw int32 = 32
 	// placeholderGuardDefaultRaw is the fallback guard standoff when Param1==0
 	// [04 §3.2] "For a guard the first is the standoff radius" [04 §3.5](e)
 	// TODO(question) guard standoff radius source for guard is Param1 fallback 20 world units [04 §3.2][04 §3.5][M-4]
@@ -351,18 +359,16 @@ func (s *System) goalForOrderWithFootprint(mover *units.Unit, goalCell path.Cell
 			})
 		}
 		return path.PointGoal(goalCell, 0)
-	case "Attack_Chase":
-		// TODO(question): standoff radii source not located; orbit cadence 30+RNG placeholder [04 §3.5][M-4][04 §7.2][04 §7.4]
-		// TODO(question): per-substate band variation (approach/halved/banded zero etc) is established as 8-state machine [04 §3.5] but per-substate radii remain TODO(question); wire single placeholder Annulus structure here, not per-substate radii.
-		center := goalCell
-		if n.Target != 0 && s != nil && s.world != nil {
-			if tgt := s.world.Unit(n.Target); tgt != nil {
-				center = path.Cell{X: goalCellForWorld(tgt.X, footX), Z: goalCellForWorld(tgt.Z, footZ)}
-			}
-		}
-		// Wire AnnulusGoal structure with placeholder inner/outer; orbit cadence (Code 3 30+RNG) and vertical halve (Param2 substate) remain TODO(question) [04 §3.5][M-4][04 §7.2][04 §7.4]
-		inner, outer := placeholderAttackInnerRaw, placeholderAttackOuterRaw
-		return path.AnnulusGoal(center, inner, outer)
+	// Retired 2026-08-31: an `Attack_Chase` case stood here forcing an
+	// AnnulusGoal centred on the target with the placeholder radii 32 and 64,
+	// under two TODO(question) markers saying the per-substate radii were not
+	// located. They are located — [04 R-ORD-01 §3] gives a point goal for five
+	// of the six live substates and an annulus for the other two, all sized
+	// from the slot's weapon range — and the handler now installs the right
+	// payload itself through the record's own installers. The bound payload is
+	// consulted above, so this case only ever overrode the handler's own
+	// choice; without it a chase record with no payload yet falls to the
+	// ordinary point goal.
 	case "Follow_Ground", "VTOL_Follow", "Guard_NoMove":
 		// TODO(question): guard standoff radius source is Param1 [04 §3.2] fallback 20 world units [04 §3.5][M-4]; unit conversion TODO [04 §7.4]
 		center := goalCell

@@ -36,9 +36,18 @@ type Terrain struct {
 	losWords      []uint16
 	losBuildCount int
 	Gravity       numeric.Fixed // per-tick gravity [03 §2.2] C4
-	WindMin       int32         // [03 §2.2] C3/C4
-	WindMax       int32         // [03 §2.2] C3/C4
-	Tidal         numeric.Fixed // [03 §2.2] C4
+	// AuthoredGravity is the map's gravity word as authored, before the
+	// per-tick projectile conversion above. The smoke-puff family reads the
+	// word itself — its sub-records rise by `word << 4` of raw 16.16 Y every
+	// tick [03 R-FX-01 §3] — so the two consumers need the two forms.
+	AuthoredGravity int32
+	// LavaWorld is the map's authored `lavaworld` flag. Besides the void flood
+	// below, it selects which of a weapon's two authored explosion-art pairs
+	// fills its single water-or-lava holder [06 R-WFX-01 §1].
+	LavaWorld bool
+	WindMin   int32         // [03 §2.2] C3/C4
+	WindMax   int32         // [03 §2.2] C3/C4
+	Tidal     numeric.Fixed // [03 §2.2] C4
 
 	// Playable insets derived at void-fixup time [P0-17]: PlayRight = Wpix-32, PlayBottom = Hpix-128.
 	PlayRight  int32 // Wpix-32 in map pixels, Wpix=CellW*16 [P0-17]
@@ -508,6 +517,7 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
 	// Resolve wind/gravity per C3/C4 [03 §2.2].
 	var windMin, windMax int32
 	var gravity numeric.Fixed
+	var authoredGravity int32
 	var tidal numeric.Fixed
 	// Tidal: OTA tidalstrength, fallback 0.5 [03 §2.2] C4.
 	// Presence matters: authored 0 vs missing.
@@ -530,7 +540,8 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
 		// keep even if 0.
 		windMin = int32(tnt.LegacyMinWind)
 		windMax = int32(tnt.LegacyMaxWind)
-		gravity = gravityFromAuthored(int32(tnt.LegacyGravity))
+		authoredGravity = int32(tnt.LegacyGravity)
+		gravity = gravityFromAuthored(authoredGravity)
 	} else {
 		// [03 §2.2] C3: canonical hard-codes gravity 0, wind 100/2000, and an
 		// authored non-negative OTA wind/gravity overrides the terrain value —
@@ -553,6 +564,7 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
 			}
 			if _, ok := g.RawValue("gravity"); ok {
 				if mh.Gravity >= 0 {
+					authoredGravity = mh.Gravity
 					gravity = gravityFromAuthored(mh.Gravity)
 					gravitySupplied = true
 				} else {
@@ -566,6 +578,7 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
 			// [03 §2.2] C4: when neither source supplies gravity fallback to 0x1FDB.
 			// 0x1FDB = 112*65536/900 = 8155 [fmt ota].
 			gravity = numeric.Fixed(0x1FDB)
+			authoredGravity = 112
 		}
 	}
 	// Plot expansion goes through the one path in plot.go [03 §2.2], [GAP T14].
@@ -585,19 +598,21 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
 	}
 
 	t := &Terrain{
-		CellW:        cellW,
-		CellH:        cellH,
-		Version:      ver,
-		TileIndices:  indices,
-		TileSet:      tileSet,
-		Plot:         plot,
-		SeaLevel:     sea,
-		Gravity:      gravity,
-		WindMin:      windMin,
-		WindMax:      windMax,
-		Tidal:        tidal,
-		FeatureNames: names,
-		FeatureDefs:  defs,
+		CellW:           cellW,
+		CellH:           cellH,
+		Version:         ver,
+		TileIndices:     indices,
+		TileSet:         tileSet,
+		Plot:            plot,
+		SeaLevel:        sea,
+		Gravity:         gravity,
+		AuthoredGravity: authoredGravity,
+		LavaWorld:       mh != nil && mh.LavaWorld != 0,
+		WindMin:         windMin,
+		WindMax:         windMax,
+		Tidal:           tidal,
+		FeatureNames:    names,
+		FeatureDefs:     defs,
 	}
 	// The terrain-ray height words are a load-time product. Build after the
 	// derived height pair exists, before feature and void post-processing, and

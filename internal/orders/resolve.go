@@ -136,10 +136,12 @@ func isLandingPad(t *units.Unit) bool {
 	// TODO(question): landing pad detection [04 §10.2] uses IsAirBase or pad query; stub checks IsAirBase [02 "Unit record"]
 	return t != nil && t.Def != nil && t.Def.IsAirBase
 }
-func isStructure(t *units.Unit) bool {
-	// TODO(question): structure detection for no-move attack variant – stub checks !CanMove [04 §2.2]
-	return t != nil && t.Def != nil && !t.Def.CanMove
-}
+
+// Retired 2026-08-31: `isStructure` stood here, a `!CanMove` stub carrying a
+// TODO(question) about "structure detection for the no-move attack variant".
+// Its only caller was code 3's ground tail, which [R-ORD-02 §1] settles as a
+// test on the ACTOR's mover reference and state bit 29, not on the target's
+// class. There is no structure-detection question left to answer.
 func isDamaged(u *units.Unit) bool {
 	if u == nil {
 		return false
@@ -494,15 +496,22 @@ func resolveAttackAt(actor *units.Unit, target *units.Unit, pos *ResolvePos) str
 		}
 		return ""
 	}
-	// suppression for the non-air special case [04 §3.4] code 3
-	// TODO(question): exact suppression predicate not located; stub treats non-flyer vs non-flyer with no weapon special as Suppress for test branch coverage
-	if actor.Def != nil && target.Def != nil && !actor.Def.CanFly && !target.Def.CanFly && actor.Def.Weapon1 == "" {
-		// Use Unknown key "suppress" as test hook: if actor.Def.Unknown contains "suppress" then return Suppress
-		if actor.Def.Unknown != nil {
-			if _, ok := actor.Def.Unknown["suppress"]; ok {
-				return "Suppress"
-			}
+	// "The armed branch runs only when my state word has bit 31 (the armed bit
+	// of [R-ORD-01 §3]); an unarmed unit falls straight to the kamikaze test"
+	// [R-ORD-02 §1]. That is what makes a weaponless suicide unit resolve
+	// `Attack_Kamikaze` while an armed mobile one resolves `Attack_Chase`.
+	//
+	// Retired 2026-08-31: a "suppression for the non-air special case" stub
+	// stood here, keyed on the actor having no authored primary weapon and on
+	// the presence of a literal `suppress` key in the definition's unparsed
+	// leftovers — a test hook, not a retail predicate, and one no asset
+	// authors. `Suppress` is the *position-only* arm of code 3 above; a code-3
+	// call with a target never reaches it [R-ORD-02 §1].
+	if actor.Flags&units.ArmedStatus == 0 {
+		if actor.Def != nil && actor.Def.Kamikaze {
+			return "Attack_Kamikaze"
 		}
+		return ""
 	}
 	// four air-attack variants chosen by weapon and target class [04 §3.4] code 3
 	// TODO(question): selection by weapon and target class not fully located; stub uses CanFly/CanHover
@@ -523,16 +532,28 @@ func resolveAttackAt(actor *units.Unit, target *units.Unit, pos *ResolvePos) str
 		}
 		return "AirToGround"
 	}
-	// TODO(question): [04 §3.4] says "the kamikaze variant for a unit flagged
-	// for it" without saying whether the flag is read off the attacker or the
-	// target; the attacker reading below is the working hypothesis.
+	// The ground tail of code 3 [R-ORD-02 §1]: "I am not `canfly` → a live
+	// mover → `Attack_Chase`; state bit 29 (immobile) → `Attack_NoMove`; else
+	// fall through", and the fall-through is "word A `kamikaze` →
+	// `Attack_Kamikaze`; else reject".
+	//
+	// Corrected 2026-08-31. This branched on `isStructure(target)` — a property
+	// of the THING BEING ATTACKED — so ordering a mobile unit to attack any
+	// building resolved `Attack_NoMove`, which never moves. The unit stood
+	// wherever it was told and, unless the building was already inside its
+	// range, never fired a shot. Every one of the three tests is on the ACTOR.
+	// The kamikaze arm also moved: it is the fall-through for a unit that is
+	// neither a mover nor immobile, not a test that precedes them.
+	if hasLiveMover(actor) {
+		return "Attack_Chase"
+	}
+	if actor.Flags&units.BuildingClassStatus != 0 {
+		return "Attack_NoMove"
+	}
 	if actor.Def != nil && actor.Def.Kamikaze {
 		return "Attack_Kamikaze"
 	}
-	if isStructure(target) {
-		return "Attack_NoMove"
-	}
-	return "Attack_Chase"
+	return ""
 }
 
 // Ensure content import is used.
@@ -542,12 +563,15 @@ var _ = (*content.UnitDef)(nil)
 // Attack-chase state machine [04 §3.5]
 // ---------------------------------------------------------------------------
 
-// attack chase handler constants [04 §3.5]
-const (
-	chaseAbandonMask   uint32 = 0x01 // TODO(question) satisfied bits indicating abandonment not located
-	chaseDisengageMask uint32 = 0x06 // TODO(question) disengage bit combination placeholder
-	stubStandoffWorld  int32  = 64   // TODO(question) standoff distance source not located; stub world units [04 §3.5]
-)
+// Retired 2026-08-31: `chaseAbandonMask` (0x01), `chaseDisengageMask` (0x06)
+// and `stubStandoffWorld` (64) stood here, each carrying a TODO(question)
+// saying its value was "not located". None of the three exists in retail.
+// [04 R-ORD-01 §3] gives the handler's real pre-checks — pending `0x800`, a
+// null target, pending `0x10008`, and the leash — and the standoff is the
+// slot's engagement distance, which [06 R-WPN-05 §1] closes as the weapon's
+// authored `range`. The invented masks additionally aliased real bits: `0x01`
+// is the deadline bit and `0x02`/`0x04` are movement bits, so an ordinary
+// deadline expiry or a path verdict completed the order outright.
 
 // Retired (WU-18-8): `leashExceeded` stood here. It was this package's second
 // pursuit-leash test, cited to the same contract as combat.go's `leashBroken`
@@ -571,36 +595,10 @@ const (
 // leash test — used by `Attack_Chase` (resolve.go), the ground `RepairUnit`
 // (work.go), the air executors, and `VTOL_RepairUnit` (vtolwork.go).
 
-func verticalSeparation(u *units.Unit, target *units.Unit) int64 {
-	if u == nil || target == nil {
-		return 0
-	}
-	dy := u.Y.Raw() - target.Y.Raw()
-	if dy < 0 {
-		dy = -dy
-	}
-	return dy >> 16 // world units
-}
-
-func setOrbitGoal(u *units.Unit, n *Node, standoff int32) {
-	// TODO(question) movement goal precise geometry not located; stub sets goal at standoff distance eastward [04 §3.5] Node has goal fields [04 §3.2]
-	off := numeric.Fixed(int64(standoff) * 65536)
-	n.GoalX = u.X + off
-	n.GoalZ = u.Z
-	n.GoalY = u.Y
-}
-
-func setBandedGoal(u *units.Unit, n *Node, inner, outer int32) {
-	// TODO(question) "two banded-goal states (inner/outer radii at standoff/half and double/half)" geometry not fully located [04 §3.5]
-	_ = outer
-	off := numeric.Fixed(int64(inner) * 65536)
-	n.GoalX = u.X + off
-	n.GoalZ = u.Z
-	n.GoalY = u.Y
-}
-
+// setBandedGoalAroundWard is the guard families' banded goal [04 §3.5](e). It
+// is unrelated to the chase, which installs its goals through the record's own
+// payload installers below.
 func setBandedGoalAroundWard(n *Node, ward *units.Unit, standoff int32) {
-	// Guard maintenance banded goal [04 §3.5] (e)
 	// TODO(question) banded-goal geometry not located beyond follow maintenance [04 §3.5]
 	off := numeric.Fixed(int64(standoff) * 65536)
 	n.GoalX = ward.X + off
@@ -608,97 +606,222 @@ func setBandedGoalAroundWard(n *Node, ward *units.Unit, standoff int32) {
 	n.GoalY = ward.Y
 }
 
-// attackChaseHandler implements Attack_Chase [04 §3.5] phases 0-3 and orbit substate 0..8.
-func attackChaseHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code {
-	if satisfied&chaseAbandonMask != 0 {
-		return Code(5) // TODO(question) abandon code value not established; using 5 unlink placeholder [04 §3.3]
+// chaseVerticalJump is the substate 1-4 test of [04 R-ORD-01 §3]: the strafe
+// arm jumps to substate 6 when the two units are separated by MORE than eight
+// world units on Y. The compare is on the raw 16.16 difference against eight
+// world units, so it is strict and exact, not a whole-unit truncation.
+const chaseVerticalJump int64 = 8 << 16
+
+// canEngageSlot is the shot-admission gate `Attack_Chase` phases 1 and 3 ask
+// before they bind a slot [04 R-ORD-01 §3]. It routes to the combat owner
+// through the queue binding; a queue with no weapon adapter, or an adapter that
+// does not supply the gate, refuses — which sends the handler down its own
+// established "gate failed" arm rather than binding a slot the weapon layer
+// would then refuse to fire.
+func canEngageSlot(u *units.Unit, target pool.Handle, slot int) bool {
+	b := bindingOfUnit(u)
+	if b == nil || b.Weapons == nil || b.Weapons.CanEngage == nil {
+		return false
+	}
+	return b.Weapons.CanEngage(u, target, slot)
+}
+
+// attackChaseHandler is the pursuing attack [04 R-ORD-01 §3].
+//
+//	Pre-checks, in order: satisfied 0x800 → complete; target null → complete;
+//	satisfied ∩ 0x10008 → complete; the leash of [R-STANCE-01 §4] → complete.
+//	Phase 0: requires a mover reference, no `canfly`, and state bit 31 (else
+//	cancel-all); caption clear; goal = own position; p2 = 0; if p1 is 0 take
+//	the default slot pick; advance. Phase 1: release the payload; satisfied ∩
+//	0x3000 → advance; the shot-admission gate for slot p1 fails → advance; else
+//	release slots 0 and 2, bind slot p1 to the target, gate = 0x13808; hold.
+//	Phase 2 (maneuver): see below. Phase 3: satisfied ∩ 0x40E0 → phase = 1,
+//	return 4; else if the shot gate passes: release slots 0 and 2, bind slot p1,
+//	gate = 0x148E8, deadline 30, hold; else inhibit all, gate = 0x100E8,
+//	deadline 30, hold. Other phase: cancel-all.
+//
+// Rewritten 2026-08-31. What stood here was written against [04 §3.5]'s prose
+// summary and three invented constants, and [04 R-ORD-01 §3] carries an
+// explicit correction to that summary. The differences that mattered in play:
+// the standoff was a fixed 64 world units rather than the weapon's range, so an
+// ordered unit orbited far outside its own reach and never fired; no phase ever
+// bound a weapon slot at all (phases 1 and 3 were bare TODO(question) advances);
+// the goals were written straight into the record's goal fields instead of
+// through the payload installers, so the mover was steered by whatever the
+// movement side's own per-order fallback invented; and the pre-check masks
+// aliased the deadline and movement bits, completing the order on an ordinary
+// path verdict.
+func attackChaseHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
+	// Pre-checks in the order [04 R-ORD-01 §3] fixes. 0x800 is the disengage
+	// bit; 0x10008 is the target-removed/target-cloaked pair of §6.
+	if satisfied&0x800 != 0 {
+		return Code(5) // *complete*
 	}
 	if n.Target == 0 {
-		return Code(5) // missing target [04 §3.5]
+		return Code(5) // *complete*
 	}
-	if satisfied&chaseDisengageMask == chaseDisengageMask {
-		return Code(5) // TODO(question) disengage combination [04 §3.5]
+	if satisfied&pendTargetGone != 0 {
+		return Code(5) // *complete*
 	}
 	// The leash is tested before the phase switch, on every dispatch, and only
 	// when it is non-zero — leashBroken carries that guard itself
-	// [R-STANCE-01 §4]. This is the handler the section states the test for.
+	// [R-STANCE-01 §4].
 	if leashBroken(u, n) {
-		return Code(5) // at or beyond the leash abandons; the compare is inclusive
-	}
-	if n.Phase > 3 {
-		return Code(7) // cancel-all [04 §3.5][04 §3.3]
-	}
-	if n.Param2 >= 9 {
-		return Code(7) // substate >=9 cancel-all [04 §3.5]
+		return Code(5) // at or beyond the leash completes; the compare is inclusive
 	}
 	switch n.Phase {
-	case 0: // admit: require ground unit, reset goal to own position, pick weapon slot if none stored [04 §3.5]
-		if u.Def != nil && u.Def.CanFly {
-			return Code(5) // require ground unit [04 §3.5]
+	case 0:
+		// "requires a mover reference, no canfly, and state-word bit 31".
+		// hasLiveMover is this package's mover-reference test; bit 31 is the
+		// armed bit, set when the definition resolved a weapon [R-ORD-01 §3].
+		if !hasLiveMover(u) || u == nil || (u.Def != nil && u.Def.CanFly) || u.Flags&units.ArmedStatus == 0 {
+			return Code(7) // *cancel-all*
 		}
-		n.GoalX = u.X
-		n.GoalY = u.Y
-		n.GoalZ = u.Z
+		captionClear(u)
+		n.GoalX, n.GoalY, n.GoalZ = u.X, u.Y, u.Z
+		n.Param2 = 0
 		if n.Param1 == 0 {
-			// TODO(question) weapon slot selection not located; placeholder picks 0 with TODO(WU-06-7) [04 §3.5][WU-06-7]
-			n.Param1 = 0 // TODO(question) WU-06-7 weapon binds
+			n.Param1 = uint32(defaultAttackSlot(u))
 		}
-		n.Phase = 1
-		return Code(1) // advance phase [04 §3.3]
-	case 1: // engage setup: range-gate, bind fire slots, single tick [04 §3.5]
-		// TODO(question) range-gate and fire slot binding need WU-06-7 [04 §3.5][WU-06-7]
-		n.Phase = 2
-		return Code(1)
-	case 2: // combat-maneuver orbit cycle [04 §3.5] eight-state substate 0..8
-		standoff := stubStandoffWorld
-		var tgt *units.Unit
-		// P0-I16: per-queue lookup, not package global
-		if u != nil {
-			if q := QueueForUnit(u); q != nil {
-				if binding := q.Binding(); binding != nil && binding.Lookup != nil {
-					tgt = binding.Lookup(n.Target)
-				}
-			}
+		return Code(1) // *advance*
+	case 1:
+		// "release the payload" is the installers' own release arm, reached
+		// here without an install [04 R-ORD-01 §1].
+		if b := bindingOfUnit(u); b != nil && b.Movement != nil && b.Movement.Release != nil {
+			b.Movement.Release(n)
 		}
-		sub := n.Param2
-		switch sub {
-		case 0:
-			setOrbitGoal(u, n, standoff)
-		case 1, 2:
-			if verticalSeparation(u, tgt) > 8 {
-				setOrbitGoal(u, n, standoff/2)
-			} else {
-				setOrbitGoal(u, n, standoff)
-			}
-		case 3:
-			setOrbitGoal(u, n, standoff/2)
-		case 4:
-			setOrbitGoal(u, n, 0)
-		case 5:
-			setBandedGoal(u, n, standoff, standoff/2)
-		case 6:
-			setBandedGoal(u, n, standoff/2, standoff/2)
-		case 7:
-			setBandedGoal(u, n, standoff*2, standoff/2)
-		case 8:
-			setOrbitGoal(u, n, standoff)
+		if satisfied&0x3000 != 0 {
+			return Code(1) // *advance*
 		}
-		n.Param2++
-		if n.Param2 > 8 {
-			n.Param2 = 0 // wrap to zero [04 §3.5]
+		if !canEngageSlot(u, n.Target, int(n.Param1)) {
+			return Code(1) // *advance* — out of reach, go maneuver
 		}
-		// TODO(question): the orbit cadence is not established — how long the
-		// handler stays on one orbit substate before advancing. Returning
-		// Code(2) re-dispatches the same head forever (the pump cascades until
-		// a waiting code appears), so the handler waits like its neighbours
-		// until a probe closes the question.
-		return Code(3) // wait 30+rand15 [04 §3.3]
-	case 3: // re-engage: rebind on range or release the fire slot, both waiting 30 ticks [04 §3.5]
-		// TODO(question) weapon rebinding needs WU-06-7 [WU-06-7]
-		return Code(3) // wait 30+rand15 [04 §3.3]
+		releaseSlot(u, 0)
+		releaseSlot(u, 2)
+		bindSlotToUnit(u, int(n.Param1), n.Target)
+		n.DynamicGate = 0x13808
+		return Code(2) // *hold*
+	case 2:
+		return chaseManeuver(u, n)
+	case 3:
+		if satisfied&0x40E0 != 0 {
+			n.Phase = 1
+			return Code(4) // *hold* with the phase already reset
+		}
+		if canEngageSlot(u, n.Target, int(n.Param1)) {
+			releaseSlot(u, 0)
+			releaseSlot(u, 2)
+			bindSlotToUnit(u, int(n.Param1), n.Target)
+			n.DynamicGate = 0x148E8
+			armDeadline(n, tick, 30)
+			return Code(2) // *hold*
+		}
+		inhibitSlot(u, slotAll)
+		n.DynamicGate = 0x100E8
+		armDeadline(n, tick, 30)
+		return Code(2) // *hold*
 	default:
-		return Code(7)
+		return Code(7) // *cancel-all*
 	}
+}
+
+// chaseManeuver is `Attack_Chase` phase 2, the orbit [04 R-ORD-01 §3].
+//
+// Let `d` be the slot's engagement distance — the weapon's authored range
+// [06 R-WPN-05 §1]. By p2: **0** → point goal at the target radius d, p2 = 1.
+// **1-4** → if |myY − targetY| > 8 world units: point goal radius d/2, p2 = 6;
+// else draw `a = bearing(me → target) − 0x4000 + RNG(0x8000)` and install a
+// point goal at `target − d·(sin a, 0, cos a)` with radius d/4 — **p2
+// unchanged**. **5** → point goal radius d/2, p2 = 6. **6** → point goal at
+// the target radius 0, p2 = 7. **7** → annulus (outer d, inner d/2), p2 = 8.
+// **8** → annulus (outer 2d, inner d), p2 = 0. **≥ 9** → cancel-all. Every arm
+// advances.
+//
+// [04 R-ORD-01 §3]'s correction to §3.5 applies here: because the strafe arm
+// never increments p2, the reachable cycle is 0 → 1 (repeated strafes) → 6 → 7
+// → 8 → 0, entered at 6 only through the vertical jump. Substates 2, 3, 4 and 5
+// are dead under this handler and are written out anyway, because p2 is a
+// record field a save can restore into any of them.
+func chaseManeuver(u *units.Unit, n *Node) Code {
+	if n.Param2 >= 9 {
+		return Code(7) // *cancel-all*
+	}
+	d := engagementDistance(u, n.Param1)
+	tgt := targetOf(u, n)
+	if tgt == nil {
+		// Every arm below reads the target's position; the pre-check only
+		// rejects a null handle, so an unresolvable one waits rather than
+		// installing a goal at the origin.
+		return Code(3)
+	}
+	switch n.Param2 {
+	case 0:
+		installPointGoal(u, n, tgt.X, tgt.Y, tgt.Z, d)
+		n.Param2++
+	case 1, 2, 3, 4:
+		if absFixed(u.Y.Raw()-tgt.Y.Raw()) > chaseVerticalJump {
+			installPointGoal(u, n, tgt.X, tgt.Y, tgt.Z, truncHalf(d))
+			n.Param2 = 6
+			break
+		}
+		sx, sy, sz, radius := chaseStrafePoint(u, tgt, d)
+		installPointGoal(u, n, sx, sy, sz, radius)
+		// p2 unchanged: the strafe arm is the one that repeats.
+	case 5:
+		installPointGoal(u, n, tgt.X, tgt.Y, tgt.Z, truncHalf(d))
+		n.Param2++
+	case 6:
+		installPointGoal(u, n, tgt.X, tgt.Y, tgt.Z, 0)
+		n.Param2++
+	case 7:
+		installAnnulusGoal(u, n, tgt.X, tgt.Y, tgt.Z, d, truncHalf(d))
+		n.Param2++
+	case 8:
+		installAnnulusGoal(u, n, tgt.X, tgt.Y, tgt.Z, 2*d, d)
+		n.Param2 = 0
+	}
+	return Code(1) // *advance*
+}
+
+// chaseStrafePoint is the strafe arm's goal: a point one standoff away from the
+// target along a bearing drawn from the half-circle centred on the line from
+// the target back toward me, with an arrival radius of a quarter standoff
+// [04 R-ORD-01 §3].
+//
+// The bearing is `atan2q(target.X − my.X, target.Z − my.Z)`, less a quarter
+// turn, plus one simulation draw below 0x8000 — a half turn — so the result
+// sweeps the semicircle from 90 degrees left of the line to 90 degrees right of
+// it, which is what makes the unit circle its target instead of walking at it.
+// The offset is subtracted from the target on X and Z and the target's own Y is
+// kept, so the goal stays in the target's horizontal plane.
+//
+// The scaled sine and cosine are numeric's shared table helpers. [06 §3.3]
+// states retail's index arithmetic as `((int16)angle + 32) >> 6` over even byte
+// offsets — a half-step rounding bias numeric.Sin and numeric.Cos do not apply,
+// since they index `angle >> 7` directly. Adding it belongs in numeric, where
+// it would move every trig consumer in the simulation at once; it is not made
+// inside this unit, and the difference here is at most one table entry of a
+// randomly drawn bearing.
+func chaseStrafePoint(u, tgt *units.Unit, d int32) (x, y, z numeric.Fixed, radius int32) {
+	bearing := numeric.AngleFromAtan2(int64(tgt.X.Raw()-u.X.Raw()), int64(tgt.Z.Raw()-u.Z.Raw()))
+	angle := numeric.Angle(uint16(bearing) - 0x4000 + uint16(drawBelow(u, 0x8000)))
+	magnitude := int32(d << 16)
+	offX := numeric.MulRound(numeric.Sin(angle), magnitude)
+	offZ := numeric.MulRound(numeric.Cos(angle), magnitude)
+	return tgt.X - numeric.Fixed(offX), tgt.Y, tgt.Z - numeric.Fixed(offZ), truncQuarter(d)
+}
+
+// truncHalf and truncQuarter divide toward zero, which is what retail's
+// `cltd; sub; sar` sequences do for the d/2 and d/4 radii [04 R-ORD-01 §3].
+// Go's `/` already truncates toward zero, so these only name the contract.
+func truncHalf(d int32) int32    { return d / 2 }
+func truncQuarter(d int32) int32 { return d / 4 }
+
+func absFixed(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 // ---------------------------------------------------------------------------

@@ -240,11 +240,28 @@ func (s *Session) stepUnitPhase(tick uint32) {
 					vm.Drain(1)
 				}
 			}
-			// order resolve/pump per unit (PumpUnit) [04 §3.3]. A unit with no
-			// order queue has no pump work; do not materialize an empty queue merely
-			// because the unit was visited. Producers bind queues when they create
-			// them, while existing queues are bound immediately before this first use.
+			// order resolve/pump per unit (PumpUnit) [04 §3.3]. Producers bind
+			// queues when they create them, while existing queues are bound
+			// immediately before this first use.
+			//
+			// A unit that has never carried an order has no queue at all, and
+			// the pump returns straight back out when it finds none. That used
+			// to be harmless, because an empty queue had no work. It is not
+			// harmless now: the idle refill of [04 §3.3] is precisely the work
+			// an empty queue owes, and a factory-fresh aircraft that has never
+			// been given an order is exactly the unit that needs its
+			// `defaultmissiontype` record in order to come home and land.
+			//
+			// The queue is materialised only when the definition authors a
+			// default mission, which is the same precondition IdleRefillMission
+			// tests first, so a unit that could never refill still never gets an
+			// empty queue built for it. The binding has to be in place before
+			// the pump runs: the refill reads the owner's controller state
+			// through it.
 			if ordersPump != nil {
+				if orders.QueueOfUnit(u) == nil && u != nil && u.Def != nil && u.Def.DefaultMissionType != "" {
+					orders.QueueForUnit(u)
+				}
 				if orders.QueueOfUnit(u) != nil {
 					s.bindExistingOrderQueue(u)
 				}
@@ -276,6 +293,25 @@ func (s *Session) stepUnitPhase(tick uint32) {
 					// never took a step and its approach gate was never
 					// satisfied by anything.
 					activeWork := activeName == "HelpBuild" || activeName == "RepairUnit" || activeName == "Capture" || activeName == "Reclaim" || activeName == "Resurrect"
+					// Beyond the two named families, ANY record that currently
+					// owns this mover's installed ground goal needs the mover.
+					// The four installers of [04 R-ORD-01 §1] bind the payload
+					// to the record they install for and Release drops it, so
+					// owning one is the record's own statement that it is
+					// waiting on a movement outcome — a stronger and narrower
+					// test than membership of a name list.
+					//
+					// `Attack_Chase` is why this is here. Its phase 2 installs a
+					// point or banded goal sized from the weapon's engagement
+					// distance and then waits behind gate `0x148E8`/`0x100E8`
+					// for the verdict [04 R-ORD-01 §3], the same shape as the
+					// work family above; being on neither list meant the goal
+					// was installed and never activated, and an explicitly
+					// ordered attacker never took a step toward its target.
+					// The goal-position rewrite below stays keyed on
+					// `activeMove`, because a chase goal is deliberately NOT the
+					// target's own position.
+					activeGoal := s.Movement.HasGroundGoal(h, active)
 					isWalk := false
 					if s.Build != nil && (activeName == "MobileBuild" || activeName == "VTOL_MobileBuild") && s.Build.NeedsWalk(u, active) {
 						isWalk = true
@@ -302,7 +338,7 @@ func (s *Session) stepUnitPhase(tick uint32) {
 							s.Build.EnsureWalkPublic(u, active)
 							active.MoveState = orders.MoveEnRoute
 						}
-					} else if activeMove || activeWork {
+					} else if activeMove || activeWork || activeGoal {
 						if activeMove && active.Target != 0 {
 							var target *units.Unit
 							if binding := qActive.Binding(); binding != nil && binding.Lookup != nil {

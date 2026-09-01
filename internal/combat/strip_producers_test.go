@@ -13,7 +13,7 @@ import (
 // land/water explosion events carry the weapon's start-smoke flag, which
 // gates the session-side smoke append.
 func TestExplosionEventCarriesStartSmokeFlag(t *testing.T) {
-	weapon := &content.WeaponDef{ExplosionGaf: "boom", StartSmoke: true}
+	weapon := &content.WeaponDef{ExplosionGaf: "boom", ExplosionArt: "boomart", StartSmoke: true}
 	var events []Event
 	svc := &Service{}
 	svc.Events = func(ev Event) { events = append(events, ev) }

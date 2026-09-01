@@ -324,7 +324,11 @@ func (u *Unit) AttachCOBBinding(binding *cob.Binding) error {
 	if u.GetScript() != nil {
 		return fmt.Errorf("nanolathe: COB attachment: unit already has a script")
 	}
-	u.ScriptState = &ScriptState{VM: binding.VM, Binding: binding}
+	// The binding already carries the bridge Create ran on, with every sink the
+	// composition installed. Reuse it rather than building a second one, so a
+	// synchronous script query made later through ScriptBridge sees the same
+	// sinks [04 §4.1][R-COB-01 §1].
+	u.ScriptState = &ScriptState{VM: binding.VM, Binding: binding, Bridge: binding.Callbacks}
 	u.Script = binding.VM
 	return nil
 }

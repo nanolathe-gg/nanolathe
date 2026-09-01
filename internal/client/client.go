@@ -146,6 +146,19 @@ type Client struct {
 	projectileGAFErr    error
 	projectileGAFLoaded bool
 
+	// effectBanks is the shared animation-bank cache the explosion-art
+	// resolver reads: a weapon names its bank by key (`explosiongaf`), and the
+	// bank is loaded from `anims/<name>.gaf` on the first miss and retained
+	// [06 R-WFX-01 §1]. Keys are lower-cased, which is this build's form of
+	// retail's case-insensitive scan of the loaded banks. A bank that fails to
+	// load is memoised as a nil entry — retail treats that as a fatal fault
+	// with a modal message box and exit; a presentation client draws nothing
+	// instead and lets the rest of the frame compose [I6].
+	effectBanks map[string]*formats.GAF
+
+	// flash holds the generated calculated-explosion tables [06 R-WFX-01 §2].
+	flash flashTables
+
 	// Fog overlay — anims/fog.gaf handles, presentation-only [03 §3.3].
 	fogGAF      *formats.GAF
 	fogGray     [4]*formats.GAFEntry // Gray1-4 variant family [03 §3.3]
@@ -349,6 +362,8 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 	c.projectileGAF = nil
 	c.projectileGAFErr = nil
 	c.projectileGAFLoaded = false
+	c.effectBanks = nil
+	c.flash = flashTables{}
 	c.fogGAF = nil
 	c.fogLoaded = false
 	c.fogLoadErr = nil

@@ -180,13 +180,135 @@ func (c *Client) resolveProjectileGAF(req render.ProjectileGAFRequest) (*formats
 	return frame, true
 }
 
-// effectDrawOptions keeps LHT admission terrain-bounded.  Authored LHT row,
-// radius, and effect GAF sequence remain unresolved until the effect producer
-// publishes them; DrawEffectViews therefore emits no fabricated effect.
+// defaultEffectBank is the bank an effect event names when it publishes an
+// entry with no bank of its own. The engine's own fixed effect-slot table is
+// bound from `fx` at startup [06 R-WFX-01 §1], and the smoke-puff entry the
+// strip families blit is one of its rows, so an entry published without a bank
+// is by construction one of those.
+const defaultEffectBank = "fx"
+
+// EffectBank resolves one animation bank by authored name, loading
+// `anims/<name>.gaf` on the first miss and retaining it for this client
+// [06 R-WFX-01 §1]. The lookup is case-insensitive, as retail's scan of the
+// loaded banks is. A bank that will not load is memoised as a nil entry so a
+// broken name costs one VFS attempt, not one per frame.
+//
+// Retail treats a missing bank as fatal — a modal message box naming the
+// constructed path, then exit. A presentation client cannot do that to a
+// running battle, so an unresolvable bank simply draws nothing; the identity
+// stays published and unresolved rather than substituting a stand-in [I9].
+func (c *Client) EffectBank(name string) *formats.GAF {
+	if c == nil {
+		return nil
+	}
+	key := strings.ToLower(strings.TrimSpace(name))
+	if key == "" {
+		key = defaultEffectBank
+	}
+	if c.effectBanks == nil {
+		c.effectBanks = map[string]*formats.GAF{}
+	}
+	if bank, ok := c.effectBanks[key]; ok {
+		return bank
+	}
+	var bank *formats.GAF
+	if c.modelFS != nil {
+		if loaded, err := formats.LoadGAFFile(c.modelFS, "anims/"+key+".gaf"); err == nil {
+			bank = loaded
+		}
+	}
+	c.effectBanks[key] = bank
+	return bank
+}
+
+// EffectFrameTiming reports one effect entry's authored per-frame holds and
+// loop flag, for the presentation pool's animation player [06 R-WFX-01 §1].
+//
+// Every GAF entry in every retail file carries 1 in its loop word, so a
+// sequence loops by default; the weapon parser CLEARS that byte for explosion
+// art, which is what makes an impact play once and retire instead of flashing
+// forever. This resolver reports `loop = false` for that reason: it serves the
+// art holders, whose loop byte retail clears at bind time. The per-frame holds
+// are the entry's own — the stock effect entries hold 2 or 3 ticks a frame —
+// and a frame with hold h is shown for max(h, 1) advances.
+func (c *Client) EffectFrameTiming(bankName, entryName string) (render.FrameTiming, bool) {
+	entry, ok := c.effectEntry(bankName, entryName)
+	if !ok {
+		return render.FrameTiming{}, false
+	}
+	durations := make([]int32, 0, len(entry.Frames))
+	for i := range entry.Frames {
+		// The frame reference's second word is the per-frame display duration
+		// in whole simulation ticks [fmt gaf].
+		hold := int32(entry.Frames[i].Value)
+		if hold < 1 {
+			hold = 1 // "a frame with hold h is shown for max(h, 1) advances"
+		}
+		durations = append(durations, hold)
+	}
+	if len(durations) == 0 {
+		return render.FrameTiming{}, false
+	}
+	return render.FrameTiming{Durations: durations, Loop: false}, true
+}
+
+// effectEntry finds one entry by name in one bank, both resolved by authored
+// identity [06 R-WFX-01 §1].
+func (c *Client) effectEntry(bankName, entryName string) (*formats.GAFEntry, bool) {
+	if c == nil || strings.TrimSpace(entryName) == "" {
+		return nil, false
+	}
+	bank := c.EffectBank(bankName)
+	if bank == nil {
+		return nil, false
+	}
+	entry, ok := bank.Find(entryName)
+	if !ok || entry == nil || len(entry.Frames) == 0 {
+		return nil, false
+	}
+	return entry, true
+}
+
+// effectDrawOptions keeps LHT admission terrain-bounded and resolves an
+// effect's authored art.
+//
+// Authored LHT row and radius remain unresolved until the effect producer
+// publishes them, and DrawEffectViews still emits no fabricated effect: an
+// event that publishes no entry name, or one whose bank or entry does not
+// resolve, draws nothing at all.
 func (c *Client) effectDrawOptions() EffectDrawOptions {
 	return EffectDrawOptions{
 		TerrainCoverage: c.terrainScreenCoverage,
+		ResolveFrame:    c.resolveEffectFrame,
 	}
+}
+
+// resolveEffectFrame resolves an effect view's published art identity to the
+// frame its animation cursor is on [06 R-WFX-01 §1].
+//
+// The identity is a PAIR: the entry name in Graphic and the bank that holds it
+// in AssetID. A weapon authors them as `explosionart` inside `explosiongaf`,
+// and both keys are required — a half-authored pair leaves retail's holder
+// null and draws nothing, which is reproduced by the producer publishing no
+// entry at all. An entry published without a bank comes from the engine's own
+// fixed effect-slot table, which is bound from `fx`.
+//
+// The frame index is the pool's animation cursor, already advanced against the
+// authored holds this client supplied through EffectFrameTiming. It is clamped
+// into the entry rather than rejected, because a cursor that has run past the
+// end belongs to a sequence the pool is about to retire.
+func (c *Client) resolveEffectFrame(view frame.EffectView, frameIndex int32) (*formats.GAFFrame, bool) {
+	entry, ok := c.effectEntry(view.AssetID, view.Graphic)
+	if !ok {
+		return nil, false
+	}
+	if frameIndex < 0 {
+		frameIndex = 0
+	}
+	if int(frameIndex) >= len(entry.Frames) {
+		frameIndex = int32(len(entry.Frames) - 1)
+	}
+	return entry.Frames[frameIndex].Frame, entry.Frames[frameIndex].Frame != nil
 }
 
 // terrainScreenCoverage identifies pixels that map to the loaded terrain
@@ -202,4 +324,16 @@ func (c *Client) terrainScreenCoverage(x, y int) bool {
 	mapX := int64(x) + int64(c.cam.X)
 	mapZ := int64(y) + int64(c.cam.Z)
 	return mapX >= 0 && mapZ >= 0 && mapX < int64(c.terrain.CellW)*16 && mapZ < int64(c.terrain.CellH)*16
+}
+
+// EffectEntryFrameCount reports how many frames one effect entry holds. The
+// strip families need it to draw a smoke puff's own last frame
+// [03 R-STRIP-01 §2]; it comes from the same bank cache the draw pass resolves
+// frames through, so the two can never disagree about an entry's length.
+func (c *Client) EffectEntryFrameCount(bank, entry string) (int, bool) {
+	e, ok := c.effectEntry(bank, entry)
+	if !ok {
+		return 0, false
+	}
+	return len(e.Frames), true
 }

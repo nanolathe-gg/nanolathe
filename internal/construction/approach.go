@@ -3,6 +3,7 @@ package construction
 import (
 	"sort"
 
+	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -23,14 +24,26 @@ import (
 //
 // Handing the centre straight to path search walks the builder into its own
 // site, which is not what [04 §7.4] describes and not where a builder stands
-// in retail. A correction to this file's own first version: that behaviour was
-// attributed here to the null-self commit check
-// [05 "Silent blocked revalidation before allocation"] rejecting the builder's
-// occupancy. Measurement disproved it — construction is the only writer of
-// plot occupancy, so a mobile builder parked on its footprint is invisible to
-// the placement check. Candidates still clear the site, because "perimeter
-// candidates around a footprint" [04 §7.4] means around it, but the reason is
-// the contract, not a self-blocking commit.
+// in retail.
+//
+// Correction (PT5), superseding this file's second version. That version read:
+// "construction is the only writer of plot occupancy, so a mobile builder
+// parked on its footprint is invisible to the placement check", and concluded
+// that the null-self commit check could not reject the builder's own
+// occupancy. The observation was right and the conclusion was the wrong way
+// round: the builder being invisible to the placement check is the DEFECT, not
+// the contract. Retail keeps one ground word per cell, written by ground
+// movers and by building-class units alike, and the validator rejects "any
+// nonzero occupant other than the passed self identity" with a null self
+// identity at the mobile-build site [04 R-COLL-01 §2][04 R-COLL-01 §4]
+// [04 R-COLL-01 §6][05 "control-byte bit roles in the footprint validator"].
+// A builder standing on its own site therefore blocks it in retail, and the
+// order takes the blocked-area budget of [R-ORDER-02 §1] rather than stamping
+// a nanoframe over the builder. Nanolathe splits that one word into the
+// terrain plot cell and the mover occupancy lattice; mobileOccupancy below is
+// the second half, handed to the canonical validator so both halves are tested
+// by one rule against one identity. Without it a queued field of solar
+// collectors eventually entombed the commander that was building it.
 //
 // What research establishes and this file implements: perimeter enumeration
 // around the footprint, a build-distance filter, a placement-validation
@@ -160,29 +173,51 @@ func rectsOverlap(aMinX, aMinZ, aMaxX, aMaxZ, bMinX, bMinZ, bMaxX, bMaxZ int32) 
 // walk submission and the state-2 handler share, and it is the established
 // nanolathe-reach test.
 //
-// Measured, not assumed: standing on the site is NOT a second reason. Only
-// construction stamps plot occupancy (reservePlacement is the sole writer of
-// the layer-A occupant), so a mobile builder parked on its own footprint is
-// invisible to the placement check and cannot reject its own site. An earlier
-// reading of the armlab stall — including this unit's own first commit and the
-// registry entry it wrote — attributed the rejection to the builder's
-// occupancy. Direct measurement disproved it: the commit validator accepted
-// the site every time, and the reservation refused it over an ALREADY BUILT
-// armsolar occupying an armlab corner whose yard byte does not test occupancy
-// (see reservePlacement).
+// Standing on the site is a separate question, and it is NOT answered here.
+// It is answered by mustClearSite below, for one specific reason: the state-2
+// handler treats a true result from this predicate as "return now, validate
+// nothing", and a builder that halts inside the local steering threshold
+// [04 §3.5] can snap to an anchor one cell off the candidate it was sent to.
+// With the overlap folded in here, that snap reported overlap forever and the
+// order never left state 2 — a hang with no caption and no budget. The
+// overlap therefore drives the WALK, which is what retail installs once in
+// the order's phase 0: a rectangle goal on the product footprint, whose
+// "enumerated goal cells are exactly the rectangle border ... and arrival
+// requires lying on that border" [R-ORD-01 §5][04 §7.2]. The commit keeps
+// falling through to the validator, whose rejection runs the bounded
+// blocked-area budget of [R-ORDER-02 §1]. Both outcomes are then retail's:
+// the builder steps off its own site and builds, or eleven 30-tick waits pass
+// and the order is abandoned with `Target area was blocked`.
 //
-// Gating overlap here was also measured and rejected on its own terms: with
-// the term on, a builder that halts inside the local steering threshold
-// [04 §3.5] can snap to an anchor one cell off the candidate it was sent to,
-// so the runtime overlap test reports overlap forever and the order never
-// leaves state 2. The approach point still keeps the builder off its own site
-// by construction — every candidate clears it — which is what [04 §7.4]
-// describes; no runtime overlap gate is needed to achieve that.
+// The superseded reading, kept so the reversal is auditable: this comment used
+// to say "standing on the site is NOT a second reason ... a mobile builder
+// parked on its own footprint is invisible to the placement check and cannot
+// reject its own site". The invisibility was real and is now fixed (see the
+// header's correction and Service.mobileOccupancy); it was the defect, not the
+// contract.
 func (s *Service) needsApproach(builder *units.Unit, node *orders.Node) bool {
 	if s == nil || s.Movement == nil || builder == nil || node == nil {
 		return false
 	}
 	if builder.Def == nil || builder.Def.BuildDistance == 0 {
+		return false
+	}
+	// A construction aircraft has no approach term at all. [04 R-ORD-02 §2]
+	// closes the VTOL_MobileBuild work body with "there is no nanolathe-active
+	// stamp and no reach test after arrival: an aircraft that reached its
+	// builddistance marker builds from wherever the 150-tick orbit leaves it."
+	// Arrival is the air leg's own marker, installed in the order's phase 1 at
+	// radius builddistance; the orbit of [04 §10.3] then keeps moving the
+	// aircraft, and every station it flies to is a legal place to build from.
+	//
+	// Applying the ground reach test here answered yes on nearly every visit —
+	// the orbit sits AT builddistance and swings beyond it between stations, and
+	// the builder is a cruise altitude above the site besides. State 2 treats a
+	// true result as "return now, validate nothing", so the record parked at
+	// phase 2, never created its product, and was abandoned by the blocked-area
+	// budget about 400 ticks later. It also called ensureWalk, submitting a
+	// GROUND path request for an aircraft.
+	if builder.Def.CanFly {
 		return false
 	}
 	px, pz, ok := s.siteRangePoint(node, builder.X, builder.Z)
@@ -388,10 +423,16 @@ func (s *Service) builderCanStandAt(builder *units.Unit, x, z numeric.Fixed) boo
 		return false
 	}
 	_, err = s.Terrain.CheckPlacement(world.PlacementQuery{
-		Rect:   rect,
-		Rules:  rules,
-		Self:   uint16(builder.Handle),
-		Mobile: true,
+		Rect:  rect,
+		Rules: rules,
+		// The builder's OWN footprint, so this one query does carry the
+		// builder's identity: the cells it already holds are not an obstacle to
+		// it standing there. Every other placement query passes a null self
+		// identity [04 R-COLL-01 §6]; this is a candidate-clearance filter, not
+		// a placement.
+		Self:            uint16(builder.Handle),
+		Mobile:          true,
+		MobileOccupancy: s.mobileOccupancy(),
 	})
 	return err == nil
 }
@@ -402,4 +443,75 @@ func planarDistSq(ax, az, bx, bz numeric.Fixed) int64 {
 	dx := int64(ax) - int64(bx)
 	dz := int64(az) - int64(bz)
 	return dx*dx + dz*dz
+}
+
+// gridOccupancy adapts the mover occupancy lattice to the placement
+// validator's occupant test. Retail reads one ground word; this is the half of
+// it that ground movers write [04 R-COLL-01 §4].
+type gridOccupancy struct{ grid *movement.OccupancyGrid }
+
+// CellOccupant returns the identity holding the cell, or 0 when it is free.
+func (g gridOccupancy) CellOccupant(cellX, cellZ int32) uint16 {
+	id, held := g.grid.OccupantAt(movement.Cell{X: cellX, Z: cellZ})
+	if !held || id == 0 {
+		return 0
+	}
+	if id < 0 || id > int(^uint16(0)) {
+		// An identity that does not fit the occupancy word is still an
+		// occupant; reporting it free would admit a placement over a live
+		// unit. The placement identity range is bounded well below this
+		// elsewhere (reservePlacement refuses a wider handle), so this is a
+		// bounds guard, not a behavior [I11].
+		return ^uint16(0)
+	}
+	return uint16(id)
+}
+
+// mobileOccupancy hands the mover plane to the canonical placement validator.
+// It is nil when no movement system is bound, which is the fixture case: the
+// validator then tests the plot half alone, exactly as before.
+func (s *Service) mobileOccupancy() world.MobileOccupancy {
+	if s == nil || s.Movement == nil || s.Movement.Grid == nil {
+		return nil
+	}
+	return gridOccupancy{grid: s.Movement.Grid}
+}
+
+// mustClearSite reports whether the builder's own footprint still covers any
+// cell of the site rectangle.
+//
+// Retail's MobileBuild phase 0 installs a rectangle goal on the product
+// footprint, and for a rectangle-perimeter goal the "enumerated goal cells are
+// exactly the rectangle border, where h is 0, and arrival requires lying on
+// that border", with a unit inside the rectangle measuring
+// `16 · min(distance to each edge)` back out [R-ORD-01 §5][04 §7.2]. A builder
+// standing inside its own site is therefore not arrived, and is steered out of
+// it before the order's validation can accept anything. Nanolathe drives that
+// same outcome through the perimeter candidate of [R-P0-19] rather than
+// through a goal object, so this predicate is what keeps that walk installed
+// and stops the state-2 handler cancelling it.
+//
+// It deliberately does not gate the commit: see needsApproach for why the
+// commit must keep reaching the validator, and [R-ORDER-02 §1] for the budget
+// that bounds it there.
+func (s *Service) mustClearSite(builder *units.Unit, node *orders.Node) bool {
+	if s == nil || builder == nil || builder.Def == nil || node == nil {
+		return false
+	}
+	anchorX, anchorZ, footX, footZ, ok := s.siteAnchorCell(node)
+	if !ok {
+		return false
+	}
+	bx, bz := world.FootprintForUnit(s.Catalog, builder.Def)
+	cellX, cellZ, ok := s.builderFootprintAnchor(builder, builder.X, builder.Z)
+	if !ok {
+		return false
+	}
+	return rectsOverlap(cellX, cellZ, cellX+bx, cellZ+bz, anchorX, anchorZ, anchorX+footX, anchorZ+footZ)
+}
+
+// MustClearSitePublic exposes mustClearSite for the walk-predicate regression
+// test and for session diagnostics [04 §7.2][R-ORD-01 §5].
+func (s *Service) MustClearSitePublic(builder *units.Unit, node *orders.Node) bool {
+	return s.mustClearSite(builder, node)
 }

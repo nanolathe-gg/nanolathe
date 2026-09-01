@@ -13,15 +13,18 @@ import (
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
-// Weapon-slot control-byte bits [R-ORDER-02 §2]. Bit 1 marks the slot as
-// assigned in the represented slot flags; bit 4 is the separate order-control
-// clear latch this package's walk sets and the mid-life clear variant clears.
-// TODO(T25): bit 4's semantic name is an open research item; only the
-// set/clear behavior is established.
+// Weapon-slot control-byte bits [R-ORDER-02 §2].
+//
+// Corrected 2026-08-31 [04 R-ORD-01 §7]. `slotControlAssigned` stood here as
+// `1 << 1` read off the slot's **Flags** word, with a TODO(T25) saying bit 4's
+// semantic name was open. Both are now traced: bits 1 and 4 are two bits of one
+// control byte — bit 1 is *the slot is enabled* and bit 4 is the inhibit latch
+// — so reading bit 1 from Flags and bit 4 from OrderControl was reading one
+// retail byte as two. Bit 1 has no runtime writer in this build and none was
+// found in retail, so the single reading of it is combat.go's `slotEnabled`.
 const (
-	slotControlAssigned uint8 = 1 << 1
-	slotOrderInhibit    uint8 = units.OrderControlInhibit
-	slotTracking        uint8 = 1 << 4 // Flags' autonomous-tracking bit [06 §1.2]
+	slotOrderInhibit uint8 = units.OrderControlInhibit
+	slotTracking     uint8 = 1 << 4 // Flags' autonomous-tracking bit [06 §1.2]
 )
 
 // callbackBridgeFor returns the strict production callback bridge attached to
@@ -64,22 +67,11 @@ func clearWeaponBuildTargets(u *units.Unit) {
 	if u == nil {
 		return
 	}
-	bridge := callbackBridgeFor(u)
-	for slot := 0; slot < units.NumSlots; slot++ {
-		s := u.SlotAt(slot)
-		if s == nil {
-			continue
-		}
-		if s.Flags&slotControlAssigned == 0 || s.OrderControl&slotOrderInhibit != 0 {
-			continue
-		}
-		s.OrderControl |= slotOrderInhibit
-		if s.Target.Kind == units.TargetNone {
-			continue // target words already empty: reset and signal are skipped
-		}
-		s.Target = units.Target{Kind: units.TargetNone}
-		arrangeDeferred(bridge, "TargetCleared", []int32{int32(slot)})
-	}
+	// This walk is *inhibit slot 3* [04 R-ORD-01 §1] and nothing else: the same
+	// guard, the same control-byte write, the same conditional target clear and
+	// notification, over slots 0, 1, 2 in order. It is expressed as that one
+	// helper so the two can never drift apart.
+	inhibitSlot(u, slotAll)
 }
 
 // emitStopBuilding is the cleanup-side StopBuilding emission [R-ORDER-02 §2]:

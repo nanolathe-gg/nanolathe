@@ -401,47 +401,6 @@ func unloadHandler(carrier *units.Unit, n *Node, satisfied uint32, _ uint32) Cod
 	}
 }
 
-// landingHandler implements VTOL_Landing per [04 §10.2] landing pads.
-// QueryLandingPad is synchronous four-output query on target script; candidates tried order 0..3 and first free wins [04 §10.2].
-// With no pad the loiter/spiral heading step is used; no free pad keeps order alive for next-tick retry or 30+rand(15) delayed retry [04 §10.2].
-func landingHandler(carrier *units.Unit, n *Node, satisfied uint32, _ uint32) Code {
-	_ = satisfied
-	if carrier == nil || n == nil {
-		return 7
-	}
-	if carrier.Def == nil || !carrier.Def.CanFly {
-		return 7
-	}
-	// If no target pad, try to find any pad? For now, require target.
-	if n.Target == 0 {
-		// No pad target: loiter/spiral heading step – placeholder keep alive with wait 30+rand15 [04 §10.2] TODO(question)
-		// Return 3 to set wait via pump (30+rand15)
-		return 3
-	}
-	pad := lookupTarget(carrier, n.Target)
-	if pad == nil || pad.Def == nil || !pad.Def.IsAirBase {
-		// Invalid pad
-		return 3
-	}
-	if pad.Attachment.Carrier != 0 {
-		// Pad is carried – not available [04 §10.2] "not carried"
-		return 3
-	}
-	// Check not already assigned to another unit (any unit whose attach-piece field equals candidate) [04 §10.2]
-	// For landing pads, assignment is any unit whose attach-piece equals candidate? Our pad model is one unit = one candidate.
-	// Placeholder: check if any other air unit is near pad (occupied)
-	// For determinism, check if pad has any cargo? Not applicable.
-	// Assume pad is free if not carried.
-	// Land: set VTOL position to pad, mode to parked (1) [04 §9.1] 1 stopped/parked, Y to terrain height (landed).
-	carrier.X = pad.X
-	carrier.Z = pad.Z
-	carrier.Y = pad.Y
-	carrier.Move.Mode = 1
-	// TODO(question): pad assignment tracking, loiter/spiral heading step, retry cadence 30+rand15 vs next-tick retry not fully modeled [04 §10.2].
-	// TODO(question): QueryLandingPad synchronous four-output query with pre-seed -1 and validity/availability checks not modeled beyond IsAirBase.
-	return 5
-}
-
 // beCarriedHandler implements BeCarried (Being transported) per [04 §3.1] 0x24.
 // It keeps the cargo's order alive while attached, and completes when detached.
 //
@@ -500,7 +459,6 @@ func ensureTransportHandlers() {
 		{"VTOL_Pickup", pickupHandler},
 		{"Ground_Unload", unloadHandler},
 		{"VTOL_Unload", unloadHandler},
-		{"VTOL_Landing", landingHandler},
 		{"BeCarried", beCarriedHandler},
 	}
 	for _, m := range mappings {

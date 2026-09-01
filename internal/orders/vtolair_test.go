@@ -157,7 +157,7 @@ func TestVTOLAirFamilyOwnsTheFourAirAttackRows(t *testing.T) {
 // the head of the queue jamming every order behind it.
 //
 // The runner stands in for internal/movement here — this package cannot import
-// it — and answers exactly as `reportLandIfCanOutcome` does: hold while the
+// it — and answers exactly as `reportAirMachineOutcome` does: hold while the
 // machine is working, complete once it has finished.
 func TestLandIfCanCompletesOnTouchdown(t *testing.T) {
 	id := Lookup("VTOL_LandIfCan")

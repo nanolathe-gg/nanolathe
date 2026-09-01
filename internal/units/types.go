@@ -33,6 +33,13 @@ import (
 type ScriptState struct {
 	VM      *cob.VM
 	Binding *cob.Binding // strict production binding; nil for synthetic fixtures [04 §4.1]
+	// Bridge is the unit's one callback bridge, built with the VM and retained
+	// for its life. It is retained rather than constructed per call because a
+	// fresh bridge carries none of the sinks a caller may have installed — SFX,
+	// presentation, lifecycle, the simulation RNG — so a script that emitted
+	// during a callback run on a throwaway bridge would have its output
+	// silently dropped [04 §4.1][R-COB-01 §1].
+	Bridge *cob.CallbackBridge
 }
 
 // Pieces returns the current piece transforms for snapshot or nil [03 §2.4] C21.
@@ -195,8 +202,19 @@ func (u *Unit) SetScript(vm *cob.VM) {
 		u.Script = nil
 		return
 	}
-	u.ScriptState = &ScriptState{VM: vm}
+	u.ScriptState = &ScriptState{VM: vm, Bridge: cob.NewCallbackBridge(vm)}
 	u.Script = vm // typed field [P1-I01]
+}
+
+// ScriptBridge returns the unit's retained callback bridge, or nil when no
+// script is bound. Callers that need a synchronous script query — the landing
+// pad query of [04 R-AIR-01 §6] among them — go through this rather than
+// building a bridge of their own.
+func (u *Unit) ScriptBridge() *cob.CallbackBridge {
+	if u == nil || u.ScriptState == nil {
+		return nil
+	}
+	return u.ScriptState.Bridge
 }
 
 // GetScript returns the unit's VM or nil. It prefers ScriptState then falls back to typed Script field.

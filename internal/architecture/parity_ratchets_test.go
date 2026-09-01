@@ -434,7 +434,18 @@ var debtMarkerTotals = map[string]int{
 	// control-byte/save questions, less the retired combat placeholder. B2
 	// then closes one result question while adding two exact Unknown sites
 	// for commander save keys and cargo provenance: net 342.
-	"todo(question)": 341,
+	// The VTOL_Landing placeholder removal then retired three at once, all in
+	// internal/orders/transport.go: the handler that carried them wrote the pad
+	// position straight onto the aircraft and completed the record on its first
+	// dispatch, shadowing the seven-phase machine of [04 R-AIR-01 §6]. Its
+	// deferrals went with it. 341 - 3 = 338.
+	// The vertical-hold sentinel's deferral then retired one in
+	// internal/movement/flight.go: 338 - 1 = 337.
+	// 337 -> 320: PT6 answers seventeen — thirteen in internal/orders/resolve.go
+	// with the rewritten `Attack_Chase` and code-3 tail, three in
+	// internal/movement/goals.go with the retired chase radii, and one in
+	// internal/orders/combat.go with the engagement distance.
+	"todo(question)": 320,
 }
 
 var debtMarkerFileCounts = map[string]map[string]int{
@@ -584,7 +595,13 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		// rotation's sign convention, and the command block's flags byte, whose
 		// reader, clearing site and initial value the section does not name. Both
 		// are honest gaps written at their site per I9.
-		"internal/movement/flight.go":        4,
+		// Lowered 4 -> 3: the vertical-hold sentinel's deferral is retired. Its
+		// question was "what writes this", and [04 §10.1] answers it — the only
+		// writers are on the footprint stamp, which an airborne mover never
+		// performs, so the field is false for every reachable case in this build
+		// and a writer would be inventing the transition. The reasoning is at the
+		// field rather than deferred.
+		"internal/movement/flight.go":        3,
 		"internal/movement/flightcommand.go": 1,
 		// airorders.go 0 -> 4: WU-17-3 records the four gaps the air sections
 		// leave open at the sites that depend on them. (a) [04 R-AIR-01 §4] says
@@ -629,7 +646,12 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		// one is unchanged because the marker it already had was this same
 		// question in its older, wider form ("exact band thresholds untraced").
 		"internal/movement/airorders.go": 9,
-		"internal/movement/goals.go":     16,
+		// goals.go 16 -> 13: PT6 retires the `Attack_Chase` case and its two
+		// placeholder radii. [04 R-ORD-01 §3] gives the chase's per-substate
+		// goals — five point goals and two annuli, all sized from the slot's
+		// weapon range — and the handler installs them through the record's own
+		// payload installers, so the file no longer has to guess a shape.
+		"internal/movement/goals.go":     13,
 		"internal/movement/integrate.go": 4,
 		"internal/movement/landing.go":   1,
 		"internal/movement/movegoal.go":  1,
@@ -669,7 +691,12 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		// the four air executors and omits `AirToAir`, whose mask therefore
 		// remains unstated. All five are written at their site with the question
 		// and its decider, per I9.
-		"internal/orders/combat.go": 4,
+		// 4 -> 3: PT6 closes (b). [06 R-WPN-05 §1] traces the weapon-slot
+		// engagement-distance helper: it returns the slot weapon's authored
+		// `range`. (a) also folded away — [04 R-ORD-01 §7] names both control
+		// byte bits — but it is replaced there by one narrower question about
+		// bit 1's runtime writer, so the count moves by one, not two.
+		"internal/orders/combat.go": 3,
 		// patrol.go 0 -> 1 and resolve.go 36 -> 34: WU-18-8. The one new
 		// question is the successor test the patrol cycle turns on —
 		// [04 R-ORD-01 §4] words it "a next patrol record exists" and
@@ -683,8 +710,14 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		// world units on both sides, distance truncated toward zero before an
 		// inclusive compare — so that helper folded into combat.go's
 		// `leashBroken` and its questions were answered, not moved.
-		"internal/orders/patrol.go":  1,
-		"internal/orders/resolve.go": 34,
+		"internal/orders/patrol.go": 1,
+		// 34 -> 21: PT6 rewrites `Attack_Chase` against [04 R-ORD-01 §3] and
+		// code 3's ground tail against [R-ORD-02 §1]. Thirteen questions go
+		// with the retired placeholders: the three invented chase masks, the
+		// stub standoff, the orbit-goal and banded-goal geometry stubs, the
+		// weapon-slot binding markers of phases 0/1/3, the orbit cadence, the
+		// `isStructure` no-move test, and the `suppress` definition-key hook.
+		"internal/orders/resolve.go": 21,
 		// selfdestruct.go 0 -> 1 and standing.go 0 -> 2: WU-18-1 implements the
 		// trivial, standing, wait, cloak and standby handlers of
 		// [04 R-ORD-01 §2] plus the self-destruct pair, and records the three
@@ -705,7 +738,14 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/orders/standing.go":     2,
 		"internal/orders/stop.go":         1,
 		"internal/orders/table.go":        1,
-		"internal/orders/transport.go":    24,
+		// Lowered 24 -> 21 with the removal of the VTOL_Landing placeholder
+		// handler, which carried three of these markers. The landing machine it
+		// shadowed is execVTOLLanding in internal/movement [04 R-AIR-01 §6]; the
+		// descriptor now hands off to the runner, so the questions the placeholder
+		// deferred (pad assignment tracking, the loiter/spiral step, the retry
+		// cadence, the QueryLandingPad pre-seed) are answered there or tracked on
+		// that machine instead of here.
+		"internal/orders/transport.go": 21,
 		// WU-18-2, the work handlers: three questions research does not settle,
 		// each written at its site with its decider (I9). (1) `SelfRepair`'s
 		// phase-0 admission — [04 R-ORD-01 §2] puts "complete and activated" on

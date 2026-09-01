@@ -41,6 +41,7 @@ func TestImpactEventOrderAndKilledDedup(t *testing.T) {
 		ShakeDuration:  2,
 		SoundHit:       "hit",
 		ExplosionGaf:   "boom",
+		ExplosionArt:   "boomart",
 		DamageDefault:  100,
 	}
 	p := &Projectile{Shooter: shooter.Handle, TargetUnit: target.Handle, Pos: Vec3{X: target.X, Y: target.Y, Z: target.Z}}

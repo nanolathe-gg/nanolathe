@@ -3,6 +3,8 @@ package session
 import (
 	"math"
 
+	"github.com/nanolathe/nanolathe/internal/frame"
+
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -12,9 +14,14 @@ import (
 // §4.4.1] [03 "Strip storage and lifecycle"]. The table holds ten vector
 // descriptors, allocated at battle entry and freed at battle exit with every
 // object destroyed [R-CORE-01 §4.4.1]. Producers append at the vector end
-// chosen by a literal strip index; only strips 2, 5, 6, 7, and 9 have
-// producers anywhere in retail, and strips 0/1/3/4/8 have no writer at all
-// [R-STRIP-01 §1].
+// chosen by a literal strip index. Strips 2, 5, 6, 7, 9 and 4 have producers;
+// strips 0, 1, 3 and 8 have no writer anywhere in retail [R-STRIP-01 §1].
+//
+// Corrected 2026-08-31: this said "only strips 2, 5, 6, 7, and 9 have
+// producers, and strips 0/1/3/4/8 have no writer at all". Strip 4 has exactly
+// one — the geothermal steam producer of [05 R-ECO-02 §3], reached from the
+// feature stamp — and doc 03's own census row for strip 4 was corrected to say
+// so on 2026-08-29. Nothing wrote strip 4 here, so a vent produced no steam.
 //
 // Every strip object is a container record holding a dynamic vector of
 // sub-records (particles or segments) [R-STRIP-01 §2]. The per-tick sweep
@@ -119,6 +126,11 @@ type stripParticle struct {
 	// §3].
 	frame      int32
 	frameDelay int32
+	// lastFrame is the smoke puff's own final animation frame. Retail's puff
+	// record carries it and the puff dies when its cursor passes it, which is
+	// what gives a smoke plume its staggered fade [03 R-STRIP-01 §2].
+	// Zero means the family does not use one.
+	lastFrame int32
 
 	// color is the palette byte: the nano ramp 0xa1..0xa7 or the sprinkle
 	// pair 0x61/0x67 [R-STRIP-01 §2].
@@ -174,6 +186,19 @@ type stripObject struct {
 	// §3]. Zero (unknown) leaves the animation clock idle and consumes no
 	// draws.
 	frameDelayParam int32
+
+	// frameCountBase is the bound GAF entry's frame count less one, which the
+	// smoke family's spawn draws its puff's last frame from. Retail's container
+	// stores it at init; this build receives it through the session's
+	// entry-frame-count seam, because the entry is presentation asset data the
+	// simulation does not otherwise carry [03 R-STRIP-01 §2][03 R-FX-01 §3].
+	// Zero leaves the puff without a last frame, which is the pre-seam
+	// behaviour and keeps a session with no resolver running.
+	frameCountBase int32
+
+	// smokeSelector picks which of the two bound smoke entries the family
+	// blits: 0 is `smoke 1` and 1 is `smoke 2` [06 R-WFX-01 §1][06 R-WFX-01 §5].
+	smokeSelector uint8
 
 	particles []stripParticle
 }
@@ -240,12 +265,16 @@ func (t *stripTable) sweep(tick uint32, s *Session) {
 		return
 	}
 	crt := s.CrtRNG()
+	gravityWord := int32(0)
+	if s.World != nil {
+		gravityWord = s.World.AuthoredGravity
+	}
 	for strip := 0; strip < stripCount; strip++ {
-		t.sweepStrip(strip, tick, crt, s.Wind)
+		t.sweepStrip(strip, tick, crt, s.Wind, gravityWord)
 	}
 }
 
-func (t *stripTable) sweepStrip(strip int, tick uint32, crt *rng.CRT, wind *world.Wind) {
+func (t *stripTable) sweepStrip(strip int, tick uint32, crt *rng.CRT, wind *world.Wind, gravityWord int32) {
 	objs := t.strips[strip]
 	write := 0
 	for read := range objs {
@@ -256,7 +285,7 @@ func (t *stripTable) sweepStrip(strip int, tick uint32, crt *rng.CRT, wind *worl
 			// [R-CORE-01 §4.4.1][03 "Strip storage and lifecycle"].
 			continue
 		}
-		o.update(tick, crt, wind)
+		o.update(tick, crt, wind, gravityWord)
 		objs[write] = o
 		write++
 	}
@@ -284,15 +313,15 @@ func (o *stripObject) removalVerdict(tick uint32) bool {
 // advance the animation state, remove expired sub-records with stable
 // in-place compaction, then run the spawn gate. Object-internal CRT draws
 // happen in the animation and spawn steps [R-STRIP-01 §3].
-func (o *stripObject) update(tick uint32, crt *rng.CRT, wind *world.Wind) {
-	o.advanceParticles(tick, crt, wind)
+func (o *stripObject) update(tick uint32, crt *rng.CRT, wind *world.Wind, gravityWord int32) {
+	o.advanceParticles(tick, crt, wind, gravityWord)
 	o.expireParticles(tick)
 	o.spawnGate(tick, crt)
 }
 
 // advanceParticles advances positions and animation state per family
 // [R-STRIP-01 §2].
-func (o *stripObject) advanceParticles(tick uint32, crt *rng.CRT, wind *world.Wind) {
+func (o *stripObject) advanceParticles(tick uint32, crt *rng.CRT, wind *world.Wind, gravityWord int32) {
 	switch o.family {
 	case stripFamilyNano:
 		// Position advances by velocity; the colour nibble advances one
@@ -311,19 +340,26 @@ func (o *stripObject) advanceParticles(tick uint32, crt *rng.CRT, wind *world.Wi
 			p.color = 0xa0 | n
 		}
 	case stripFamilySmoke:
-		// The smoke family carries no velocity: each tick applies the
-		// published wind words multiplied by 8 — the first word to the
-		// world-X term, the second to the world-Z term [R-WIND-01].
+		// The smoke family carries no velocity: each tick adds the published
+		// wind words multiplied by 8 to the RAW 16.16 X and Z words — the
+		// first word to X, the second to Z [R-WIND-01] — and the map's
+		// authored gravity word multiplied by 16 to the raw Y word, which is
+		// what makes a puff rise [03 R-FX-01 §3].
+		//
+		// Corrected 2026-08-31, twice over. The drift was added in WHOLE world
+		// units, sixty-five thousand times too far: with a wind word of forty a
+		// puff crossed twenty cells a tick and left the map inside a second.
+		// And the vertical term was a TODO(question) saying the scale was "a
+		// game gravity global whose value is untraced" and kept at zero; the
+		// global is the map's authored `gravity` key, the same word the
+		// projectile conversion divides by 900, and the shift is four.
 		for i := range o.particles {
 			p := &o.particles[i]
 			if wind != nil {
-				p.x = p.x.Add(numeric.FixedFromInt(int64(wind.DirX) * 8))
-				p.z = p.z.Add(numeric.FixedFromInt(int64(wind.DirZ) * 8))
+				p.x = numeric.Fixed(p.x.Raw() + int64(wind.DirX)*8)
+				p.z = numeric.Fixed(p.z.Raw() + int64(wind.DirZ)*8)
 			}
-			// TODO(question): the smoke family's vertical drift term is
-			// scaled by a game gravity global whose value is untraced;
-			// placeholder keeps vertical drift at zero. A read of the
-			// gravity constant would settle it.
+			p.y = numeric.Fixed(p.y.Raw() + int64(gravityWord)*16)
 			// Animation clock: countdown to zero advances the frame and
 			// redraws the next delay as half to full of the authored
 			// delay — one CRT draw per advance [R-STRIP-01 §3]. An
@@ -333,6 +369,16 @@ func (o *stripObject) advanceParticles(tick uint32, crt *rng.CRT, wind *world.Wi
 				if p.frameDelay == 0 && o.frameDelayParam > 0 {
 					p.frame++
 					p.frameDelay = halfToFullDelay(o.frameDelayParam, crt)
+					// "it is removed when its frame index REACHES its last
+					// frame" [06 R-WFX-01 §5]. expiry is the tick-deadline form
+					// the other families use; setting it to the tick just
+					// passed retires this puff on the same compaction pass.
+					if p.lastFrame > 0 && p.frame >= p.lastFrame {
+						p.expiry = 1
+						if tick > 1 {
+							p.expiry = tick - 1
+						}
+					}
 				}
 			}
 		}
@@ -445,12 +491,26 @@ func (o *stripObject) spawnOnce(tick uint32, crt *rng.CRT) {
 			o.particles = append(o.particles, p)
 		}
 	case stripFamilySmoke:
-		// One puff per spawn; exactly one CRT draw for the start frame
-		// [R-STRIP-01 §3].
+		// One puff per spawn; exactly one CRT draw [R-STRIP-01 §3].
+		//
+		// Corrected 2026-08-31: that draw is the puff's LAST FRAME, not a
+		// random start frame — `crtRand·(frameCount − 1 − 2)/0x8000 + 2` — and
+		// the cursor starts at 0. Reading it as a start frame left every puff
+		// without an end: the cursor had nothing to run past, so nothing
+		// retired it, and a strip filled to its 401-record bound with immortal
+		// smoke. The staggered last frame is what makes a plume thin out
+		// instead of standing still.
 		p := stripParticle{
 			x: o.src[0], y: o.src[1], z: o.src[2],
-			frame:      int32(crt.Rand()),
+			frame:      0,
 			frameDelay: o.frameDelayParam,
+		}
+		if o.frameCountBase > 2 {
+			p.lastFrame = int32(int64(crt.Rand())*int64(o.frameCountBase-2)/0x8000) + 2
+		} else {
+			// No frame count bound yet: the draw is still spent, because the
+			// producer spends it whether or not the entry resolved.
+			_ = crt.Rand()
 		}
 		if o.particleLife > 0 {
 			p.expiry = tick + uint32(o.particleLife)
@@ -612,27 +672,60 @@ func (s *Session) appendStripNanoEmitterBox(srcPoint, dstMin, dstMax [3]numeric.
 	s.strips.append(6, o)
 }
 
-// appendStripSmokePuffer creates a strips-5/9 smoke-puff container. It backs
-// the researched smoke sites (impact smoke, the weapon-fire start smoke, the
-// burning-feature smoke, the sinking-wreck 900-tick smoke column [R-STRIP-01
-// §1 strips 5/9]). The family's constructor spawns its first puff immediately
-// [R-STRIP-01 §2], spending exactly one CRT draw (the start frame)
-// [R-STRIP-01 §3]; the phase-11 gate fires further spawns only when the
-// caller arms nextSpawn. life <= 0 means the site's window is not established
-// and the container never passes its window.
-// TODO(question): the per-site container windows and the smoke variant
-// selection (the family blits one of two smoke GAF entries by an init flag
-// [R-STRIP-01 §2]) for the impact/start-fire smoke sites — the init
-// arguments live in stack residue at those sites; a frame-layout trace would
-// settle them. The sinking-wreck column's parameters are established
-// (15-tick interval, 900-tick window) but its trigger — the wreck-sinking
-// start — is outside the strip-producer unit's file ownership.
-// TODO(question): the smoke puff's animation-driven expiry (the family's
-// sub-records die when their frame cursor reaches the bound GAF entry's
-// frame count) — the frame count is presentation asset data the sim side
-// does not carry, so a container whose puff carries no tick deadline
-// persists until the 401-record eviction bound [R-STRIP-01 §2].
-func (s *Session) appendStripSmokePuffer(strip int, pos [3]numeric.Fixed, life, frameDelay int32) {
+// SmokePuffInit is the smoke emitter's researched init, exactly as
+// [06 R-WFX-01 §5] gives it: `(point, frameCap, spawnInterval, frameHold,
+// lifetime, smokeSelector)`. Naming the arguments is what keeps the four
+// producers' parameter rows readable at their call sites, where the older
+// signature took only a window and a delay and every site passed the same
+// two values.
+type SmokePuffInit struct {
+	// FrameCap bounds the emitter's frame-limit field: the limit is
+	// `min(frameCount − 1, FrameCap)` when FrameCap is nonzero and
+	// `frameCount − 1` otherwise. `startsmoke` is the one producer that caps
+	// it, at 3, which is what makes its puff a four-frame one.
+	FrameCap int32
+	// SpawnInterval is the gate's period in ticks.
+	SpawnInterval int32
+	// FrameHold is the particle's per-frame countdown; 0 means 7.
+	FrameHold int32
+	// Lifetime bounds the emitter's spawn window. Zero closes the window
+	// immediately, so the container spawns once and dies with its particle.
+	Lifetime int32
+	// Selector picks the bound smoke entry: 0 is `smoke 1` and 1 is `smoke 2`
+	// [06 R-WFX-01 §1].
+	Selector uint8
+}
+
+// The four researched weapon-side smoke producers [06 R-WFX-01 §5]. Every one
+// of them goes to strip 9, and the parameters are what make them look
+// different from each other: the trail puff plays all twelve frames at hold 7
+// and dies, `startsmoke` plays four frames at hold 30 — a slow puff hanging at
+// the muzzle — and the land dust of an above-sea explosion spawns three
+// particles seven ticks apart.
+var (
+	// SmokePuffTrail backs the trail puff, the timer-expiry puff, `endsmoke`
+	// at impact, and COB emit-sfx 0x102's white twin.
+	SmokePuffTrail = SmokePuffInit{FrameCap: 0, SpawnInterval: 1, FrameHold: 0, Lifetime: 0}
+	// SmokePuffStart is `startsmoke` at the muzzle point.
+	SmokePuffStart = SmokePuffInit{FrameCap: 3, SpawnInterval: 1, FrameHold: 30, Lifetime: 0}
+	// SmokePuffLandDust is the dust every above-sea explosion raises.
+	SmokePuffLandDust = SmokePuffInit{FrameCap: 0, SpawnInterval: 7, FrameHold: 0, Lifetime: 15}
+	// SmokePuffBlack is emit-sfx 0x102, the same shape as the trail puff on
+	// the second smoke entry.
+	SmokePuffBlack = SmokePuffInit{FrameCap: 0, SpawnInterval: 1, FrameHold: 0, Lifetime: 0, Selector: 1}
+)
+
+// appendStripSmokePuffer creates a smoke-puff container on one strip
+// [R-STRIP-01 §1 strips 5/9][06 R-WFX-01 §5]. The family's constructor spawns
+// its first puff immediately [R-STRIP-01 §2], spending exactly one CRT draw —
+// the particle's LAST frame, not a start frame [R-STRIP-01 §3 as corrected].
+//
+// Corrected 2026-08-31: every call site used to pass the same `(life 0,
+// frameDelay 7)` pair, because the older signature had nowhere to put the
+// other three arguments and [R-STRIP-01 §1] carried the per-site parameters as
+// an open question. [06 R-WFX-01 §5] itemises all four producers, so the sites
+// now differ from each other the way retail's do.
+func (s *Session) appendStripSmokePuffer(strip int, pos [3]numeric.Fixed, init SmokePuffInit) {
 	if s == nil || s.strips == nil {
 		return
 	}
@@ -640,21 +733,39 @@ func (s *Session) appendStripSmokePuffer(strip int, pos [3]numeric.Fixed, life, 
 	if s.Clock != nil {
 		tick = s.Clock.GlobalTick
 	}
+	hold := init.FrameHold
+	if hold == 0 {
+		hold = smokeDefaultFrameDelay // "frameHold 0 means 7"
+	}
 	o := stripObject{
 		family:          stripFamilySmoke,
 		src:             pos,
-		frameDelayParam: frameDelay,
+		frameDelayParam: hold,
+		frameCountBase:  s.smokeFrameLimit(init),
+		smokeSelector:   init.Selector,
 	}
-	if life > 0 {
-		o.windowEnd = tick + uint32(life)
+	if init.Lifetime > 0 {
+		o.windowEnd = tick + uint32(init.Lifetime)
 	}
-	// The window participates in this family's removal verdict
-	// [R-STRIP-01 §2]; spawn pacing beyond the constructor's immediate
-	// first puff is armed only by callers with an established interval.
+	if init.SpawnInterval > 0 {
+		o.spawnInterval = init.SpawnInterval
+		o.nextSpawn = tick + uint32(init.SpawnInterval)
+	}
 	if crt := s.CrtRNG(); crt != nil {
 		o.spawnOnce(tick, crt)
 	}
 	s.strips.append(strip, o)
+}
+
+// smokeFrameLimit is the emitter's frame-limit field: `min(frameCount − 1,
+// FrameCap)` when FrameCap is nonzero, `frameCount − 1` otherwise
+// [06 R-WFX-01 §5]. Each particle's last frame is drawn against it.
+func (s *Session) smokeFrameLimit(init SmokePuffInit) int32 {
+	base := s.smokeEntryFrameCountBase(init.Selector)
+	if init.FrameCap > 0 && (base == 0 || init.FrameCap < base) {
+		return init.FrameCap
+	}
+	return base
 }
 
 // smokeDefaultFrameDelay is the smoke family's animation frame delay when a
@@ -698,4 +809,233 @@ func (s *Session) appendStripSprinkle(strip int, pos [3]numeric.Fixed, spacing i
 		o.spawnOnce(tick, crt)
 	}
 	s.strips.append(strip, o)
+}
+
+// The geothermal steam producer [05 R-ECO-02 §3][R-STRIP-01 §1 strip 4].
+//
+// A geothermal vent's whole visible product is this emitter. The vent itself
+// has no artwork: `geotherm.gaf` holds one entry of one frame, one pixel by one
+// pixel [05 "Feature catalog and placement"], so the definition is a placement
+// marker for the geothermal-plant build test and the steam is what a player
+// actually sees.
+//
+// Established parameters, all three closed 2026-08-31 (they were recorded as
+// "which of the family's init parameters each of the three literals binds to"
+// is Unknown, and the family was recorded as the flame class; it is the
+// smoke-puff class):
+//
+//   - spawn interval 5 ticks,
+//   - animation frame hold 0, which the family constructor defaults to 7,
+//   - container lifetime 150 ticks.
+//
+// The container spawns one puff from its own constructor and then one every
+// fifth tick while the next-spawn tick is still within the window, so a vent
+// produces thirty-one puffs over five seconds and then stops. It is reached
+// only from the feature stamp, so a vent steams when the map places it (and
+// again if a save reload or a successor re-stamps it) and not otherwise —
+// there is no perpetual plume in retail. Nothing removes an earlier object but
+// its own lifetime, so repeated stamps accumulate up to the 401-record bound.
+func (s *Session) appendStripGeothermalSteam(pos [3]numeric.Fixed) {
+	if s == nil || s.strips == nil {
+		return
+	}
+	tick := uint32(0)
+	if s.Clock != nil {
+		tick = s.Clock.GlobalTick
+	}
+	o := stripObject{
+		family:          stripFamilySmoke,
+		src:             pos,
+		frameDelayParam: smokeDefaultFrameDelay,
+		frameCountBase:  s.smokeEntryFrameCountBase(0),
+		windowEnd:       tick + geothermalSteamLifetime,
+		spawnInterval:   geothermalSteamInterval,
+		nextSpawn:       tick + uint32(geothermalSteamInterval),
+	}
+	if crt := s.CrtRNG(); crt != nil {
+		o.spawnOnce(tick, crt) // the constructor's own first puff
+	}
+	s.strips.append(stripGeothermalSteam, o)
+}
+
+const (
+	// stripGeothermalSteam is the literal strip index the producer passes
+	// [05 R-ECO-02 §3][R-STRIP-01 §1 strip 4].
+	stripGeothermalSteam = 4
+
+	// geothermalSteamInterval and geothermalSteamLifetime are the producer's
+	// first and third init literals [05 R-ECO-02 §3].
+	geothermalSteamInterval int32  = 5
+	geothermalSteamLifetime uint32 = 150
+)
+
+// appendStripParticleViews mirrors every live strip sub-record into the
+// committed frame, one view per particle, rebuilt from scratch at every
+// publication.
+//
+// Strip objects are authoritative simulation state with no committed-frame
+// representation of their own, and they cannot reach the frame through the
+// presentation event buffer: the strip sweep is phase 11, the effect pool is
+// advanced in phase 4, and the buffer is reset at publication — so an event
+// emitted from the sweep is wiped before any effect phase reads it. A per-frame
+// copy at the publication boundary is the shape that fits: it samples committed
+// state, mutates nothing, and needs no lifetime bookkeeping of its own because
+// the strip object already owns each sub-record's life [I6].
+//
+// The per-sub-record draw of [03 R-STRIP-01 §2] blits "either a GAF frame or a
+// two-by-two filled rectangle", so each view carries one or the other: the
+// flame families name the flame-stream entry, the smoke family names one of the
+// two smoke entries, and the sprinkle and nano families carry a fill colour.
+//
+// Strip 6 is deliberately NOT mirrored. The nanolathe spray already has a
+// presentation path of its own — the strip-6 stroke gate the composer runs on
+// published nanolathe events — and mirroring the particles beside it would draw
+// the same spray twice. Folding the two into one is the remaining half of this
+// seam and wants the event path retired first.
+func (s *Session) appendStripParticleViews(out []frame.EffectView, tick uint32) []frame.EffectView {
+	if s == nil || s.strips == nil {
+		return out
+	}
+	id := stripViewIDBase
+	for strip := 0; strip < stripCount; strip++ {
+		if strip == stripNanolathe {
+			continue
+		}
+		for _, o := range s.strips.strips[strip] {
+			graphic, fill := o.drawIdentity()
+			if graphic == "" && fill == 0 {
+				continue
+			}
+			for i := range o.particles {
+				p := &o.particles[i]
+				view := frame.EffectView{
+					ID:        id,
+					Kind:      frame.KindSmokeStart.String(),
+					Strip:     int8(strip),
+					StartTick: tick,
+					X:         p.x,
+					Y:         p.y,
+					Z:         p.z,
+				}
+				if graphic != "" {
+					view.Graphic = graphic
+					view.SeqA = p.frame
+				} else {
+					// The sprinkle family's own colour walks its ramp as the
+					// puff ages [R-STRIP-01 §1 strips 2/7]; the family default
+					// stands in only for a sub-record that carries none.
+					view.StripFill = fill
+					if p.color != 0 {
+						view.StripFill = p.color
+					}
+				}
+				out = append(out, view)
+				id++
+			}
+		}
+	}
+	return out
+}
+
+// drawIdentity is one family's per-sub-record draw form [03 R-STRIP-01 §2]:
+// either the GAF entry it blits, or the fill colour of its two-by-two
+// rectangle. A family with neither is not mirrored.
+func (o *stripObject) drawIdentity() (graphic string, fill uint8) {
+	switch o.family {
+	case stripFamilySmoke:
+		// "the smoke family blits one of two smoke GAF entries selected by an
+		// init flag" [03 R-STRIP-01 §2][06 R-WFX-01 §1].
+		return smokeEntryForSelector(o.smokeSelector), 0
+	case stripFamilyFlame, stripFamilyFlameTrail:
+		// "the flame families blit the flame-stream GAF entry".
+		return flameStreamEntry, 0
+	case stripFamilySprinkle:
+		// The sprinkle fills rectangles rather than blitting its carried entry:
+		// [R-FX-01 §3] records the puff's `smoke 1` entry as "carried, NEVER
+		// drawn — this family fills rectangles".
+		return "", sprinkleDefaultColor
+	case stripFamilyNano:
+		return "", nanoRampBase
+	}
+	return "", 0
+}
+
+const (
+	// stripNanolathe is the strip whose spray already has its own presentation
+	// path; see appendStripParticleViews.
+	stripNanolathe = 6
+
+	// flameStreamEntry is the shared effect bank entry both flame families blit
+	// [03 R-FX-01 §3].
+	flameStreamEntry = "flamestream"
+
+	// sprinkleDefaultColor is the sprinkle pair's zero-selector colour
+	// [R-STRIP-01 §1 strips 2/7]; a live sub-record carries its own walked
+	// value and overrides it.
+	sprinkleDefaultColor uint8 = 0x67
+
+	// nanoRampBase is the first entry of the nano ramp 0xa1..0xa7
+	// [R-STRIP-01 §2].
+	nanoRampBase uint8 = 0xa1
+)
+
+// stripViewIDBase keeps the mirrored views' synthetic identities clear of the
+// effect pool's own allocator, which counts up from one. These views are
+// rebuilt every frame and are never matched by identity across frames.
+const stripViewIDBase uint32 = 1 << 24
+
+// smokeEntryForSelector maps the init flag to the bound entry
+// [06 R-WFX-01 §1]: selector 0 is `smoke 1` and selector 1 is `smoke 2`.
+//
+// TODO(question): the stock shared bank holds no `smoke 2` entry, so selector
+// 1 binds nothing there and the engine's startup slot binder has whatever a
+// failed entry lookup leaves it. Which of the two the black emit-sfx puff
+// actually draws in a stock install is unresolved; a trace of the startup
+// binder's miss path would settle it, and until then a selector-1 emitter
+// resolves no frame count and its particles fall back to the unbounded form.
+func smokeEntryForSelector(selector uint8) string {
+	if selector == 1 {
+		return smokeBlackEntry
+	}
+	return smokePuffEntry
+}
+
+// smokeBlackEntry is the family's second bound entry [06 R-WFX-01 §1].
+const smokeBlackEntry = "smoke 2"
+
+// smokePuffEntry is the shared effect bank entry the smoke-puff family blits
+// [R-FX-01 §3]. The bank holds a separate `steam` entry, which this producer
+// does NOT select: the geothermal container's init reads the same default
+// smoke entry pointer every other three-argument smoke producer reads.
+const smokePuffEntry = "smoke 1"
+
+// smokeEntryFrameCountBase is the selected smoke entry's frame count less one
+// [03 R-STRIP-01 §2][06 R-WFX-01 §5].
+//
+// Retail's container reads it from the entry pointer it was initialised with;
+// the entry is presentation asset data, so this build receives it through a
+// seam the composer fills. A session with no resolver — every headless run —
+// gets zero, and its puffs then carry no last frame, which is exactly the
+// behaviour that stood before the seam existed.
+func (s *Session) smokeEntryFrameCountBase(selector uint8) int32 {
+	if s == nil || s.effectFrameCount == nil {
+		return 0
+	}
+	n, ok := s.effectFrameCount("", smokeEntryForSelector(selector))
+	if !ok || n <= 0 {
+		return 0
+	}
+	return int32(n - 1)
+}
+
+// SetEffectEntryFrameCount installs the resolver the strip families ask for an
+// effect entry's frame count. It is the same shape as the effect-timing
+// resolver next door and is filled by the same composer, from the same bank
+// cache, so the frame count a puff's last frame is drawn against and the frames
+// the draw pass can actually blit can never come apart.
+func (s *Session) SetEffectEntryFrameCount(resolve func(bank, entry string) (int, bool)) {
+	if s == nil {
+		return
+	}
+	s.effectFrameCount = resolve
 }

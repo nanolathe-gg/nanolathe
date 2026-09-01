@@ -120,6 +120,11 @@ type EffectRecord struct {
 	AnimA EffectAnimPlayer
 	AnimB EffectAnimPlayer
 
+	// HasCalculatedFlash and CalculatedTable select the procedurally generated
+	// table the secondary cursor indexes [06 R-WFX-01 §2].
+	HasCalculatedFlash bool
+	CalculatedTable    uint8
+
 	// HasModel indicates a model-bearing record; the integrator can clear the
 	// model pointer on terrain/water contact as the alternative to bouncing [03 §1] C5.
 	HasModel                bool
@@ -152,6 +157,7 @@ func (p *FixedEffectPool) AppendView(v frame.EffectView) bool {
 		TargetX: v.TargetX, TargetY: v.TargetY, TargetZ: v.TargetZ,
 		VX: v.VX, VY: v.VY, VZ: v.VZ,
 		Gravity: v.Gravity, ExpiryTick: v.ExpiryTick,
+		HasCalculatedFlash: v.HasCalculatedFlash, CalculatedTable: v.CalculatedTable,
 		AnimA:    EffectAnimPlayer{Idx: v.SeqA, Active: validDurations(v.DurationsA), Frames: len(v.DurationsA), Durations: append([]int32(nil), v.DurationsA...), Loop: v.LoopA},
 		AnimB:    EffectAnimPlayer{Idx: v.SeqB, Active: validDurations(v.DurationsB), Frames: len(v.DurationsB), Durations: append([]int32(nil), v.DurationsB...), Loop: v.LoopB},
 		HasModel: v.HasModel, NanolatheGeometryKnown: v.NanolatheGeometryKnown,
@@ -198,6 +204,7 @@ func (p *FixedEffectPool) SnapshotViewsInto(out []frame.EffectView) []frame.Effe
 			Mode: r.Mode, StartTick: r.StartTick,
 			Kind: r.Kind, Graphic: r.Graphic, AssetID: r.AssetID, SequenceID: r.SequenceID,
 			SeqA: r.AnimA.Idx, SeqB: r.AnimB.Idx,
+			HasCalculatedFlash: r.HasCalculatedFlash, CalculatedTable: r.CalculatedTable,
 			DurationsA: append(a[:0], r.AnimA.Durations...), DurationsB: append(b[:0], r.AnimB.Durations...),
 			LoopA: r.AnimA.Loop, LoopB: r.AnimB.Loop,
 			Strip: r.Strip,

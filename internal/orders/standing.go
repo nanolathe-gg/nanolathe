@@ -83,73 +83,26 @@ func drawBelow(u *units.Unit, bound uint32) uint32 {
 	return sim.Uint32n(bound)
 }
 
-// releaseWeaponSlot is *release slot k* of [04 R-ORD-01 §1]: it clears the
-// slot's control-byte bit 4 and clears its target, and fires `TargetCleared`
-// under the guard of [R-ORDER-02 §2] — the mid-life mirror form, which
-// notifies only while bit 4 was set and only when the target words were not
-// already empty. The script event carries the slot index as its first argument.
+// releaseWeaponSlot, inhibitWeaponSlot and their `k = 3` forms are *release
+// slot k* and *inhibit slot k* of [04 R-ORD-01 §1]. They are thin names over
+// combat.go's pair, which is this package's single implementation.
 //
-// TODO(question): [04 R-ORD-01 §1] gives *release* and *inhibit* as one line
-// each ("clears that bit and clears the target", "sets the slot's control-byte
-// bit 4 and clears its target") and puts only the notification "under the
-// guard of [R-ORDER-02 §2]", so whether the target clear itself is also guarded
-// — skipped on a slot the guard rejects — is not established. Both helpers here
-// write the control byte and the target unconditionally and guard only the
-// notification, which is the reading that keeps the two verbs meaning what
-// they say. A trace of the two entry points' writes to the slot's target words
-// on a guard-rejected slot would settle it.
-//
-// These two write the control byte through the constants callbacks.go already
-// declares on the slot's flags word (bit 1 assigned, bit 4 the clear latch),
-// which is what the cleanup-side walk of [R-ORDER-02 §2] uses. WU-18-4's
-// combat.go reads the same field as [06 §1.2]'s armed / aim-latch / tracking
-// trio instead and so reproduces only the target clear in its own releaseSlot
-// and inhibitSlot. The two readings of one byte should be settled and the two
-// helper pairs folded into one; neither is observable today, because nothing
-// outside internal/combat's own slot type reads bit 4.
-func releaseWeaponSlot(u *units.Unit, slot int) {
-	s := slotAt(u, slot)
-	if s == nil {
-		return
-	}
-	notify := s.OrderControl&slotOrderInhibit != 0 && s.Target.Kind != units.TargetNone
-	s.OrderControl &^= slotOrderInhibit
-	s.Target = units.Target{Kind: units.TargetNone}
-	if notify {
-		arrangeDeferred(callbackBridgeFor(u), "TargetCleared", []int32{int32(slot)})
-	}
-}
+// Corrected 2026-08-31 [04 R-ORD-01 §7]. These were a second, divergent
+// implementation: they wrote the control byte and cleared the target
+// unconditionally and guarded only the *notification*, carrying a
+// TODO(question) that said whether the target clear is also guarded "is not
+// established", and reading the assigned bit off the slot's Flags word while
+// reading the inhibit bit off OrderControl. The trace settles all three points
+// at once — the guard is evaluated first and a rejected slot is left entirely
+// alone, both bits belong to one byte, and bit 1 means *the slot is enabled* —
+// so the two helper pairs the old comment asked to fold are now one.
+func releaseWeaponSlot(u *units.Unit, slot int) { releaseSlot(u, slot) }
 
-// inhibitWeaponSlot is *inhibit slot k* of [04 R-ORD-01 §1]: it sets the
-// slot's control-byte bit 4 and clears its target, notifying under the same
-// guard as the release above ([R-ORDER-02 §2]: the slot is assigned, bit 4 was
-// clear, and the target words were not already empty).
-func inhibitWeaponSlot(u *units.Unit, slot int) {
-	s := slotAt(u, slot)
-	if s == nil {
-		return
-	}
-	notify := s.Flags&slotControlAssigned != 0 && s.OrderControl&slotOrderInhibit == 0 && s.Target.Kind != units.TargetNone
-	s.OrderControl |= slotOrderInhibit
-	s.Target = units.Target{Kind: units.TargetNone}
-	if notify {
-		arrangeDeferred(callbackBridgeFor(u), "TargetCleared", []int32{int32(slot)})
-	}
-}
+func inhibitWeaponSlot(u *units.Unit, slot int) { inhibitSlot(u, slot) }
 
-// releaseAllWeaponSlots and inhibitAllWeaponSlots are the `k = 3` form: all
-// three slots in order 0, 1, 2 [04 R-ORD-01 §1].
-func releaseAllWeaponSlots(u *units.Unit) {
-	for slot := 0; slot < units.NumSlots; slot++ {
-		releaseWeaponSlot(u, slot)
-	}
-}
+func releaseAllWeaponSlots(u *units.Unit) { releaseSlot(u, slotAll) }
 
-func inhibitAllWeaponSlots(u *units.Unit) {
-	for slot := 0; slot < units.NumSlots; slot++ {
-		inhibitWeaponSlot(u, slot)
-	}
-}
+func inhibitAllWeaponSlots(u *units.Unit) { inhibitSlot(u, slotAll) }
 
 func slotAt(u *units.Unit, slot int) *units.Slot {
 	if u == nil {

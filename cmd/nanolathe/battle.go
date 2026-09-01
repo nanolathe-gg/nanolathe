@@ -269,6 +269,20 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	cl.SetFNT(b.hud.console)
 	applyDamageBarsSetting(loadedSettings())
 	cl.SetUIStage(battleHUDUIStage{hud: b.hud, battle: b})
+	// The presentation effect pool needs each admitted effect's authored
+	// per-frame holds, which live in the GAF entry the event names — an asset
+	// the client owns and the session does not [06 R-WFX-01 §1][03 §1]. This
+	// is the shell filling that seam with the same bank cache the draw pass
+	// resolves frames through, so the cursor the pool advances and the frame
+	// the composer blits can never come from two different readings of one
+	// entry.
+	b.sess.SetEffectTimingResolver(func(e render.Event) (render.FrameTiming, bool) {
+		return cl.EffectFrameTiming(e.AssetID, e.Graphic)
+	})
+	// The strip families draw each smoke puff up to its own last frame, which
+	// is drawn against the bound entry's frame count [03 R-STRIP-01 §2] — the
+	// same asset the timing resolver above reads, through the same bank cache.
+	b.sess.SetEffectEntryFrameCount(cl.EffectEntryFrameCount)
 	attachBattleAudio(cl, b.sess, b.fs)
 }
 

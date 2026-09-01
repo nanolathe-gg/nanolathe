@@ -511,6 +511,16 @@ func FootprintForUnit(cat *content.Catalog, def *content.UnitDef) (footX, footZ 
 	return footX, footZ
 }
 
+// MobileOccupancy answers which unit identity holds a cell in the
+// mover-written half of retail's ground word [04 R-COLL-01 §4]. Zero means
+// free. It is read-only and is consulted on exactly the cells whose control
+// byte carries the occupancy bits, so a yard byte that does not test
+// occupancy is not affected by it [05 "control-byte bit roles in the
+// footprint validator"].
+type MobileOccupancy interface {
+	CellOccupant(cellX, cellZ int32) uint16
+}
+
 // PlacementQuery is the immutable input to the canonical placement legality
 // predicate. A non-nil Yard describes a building yard map. Mobile products set
 // Mobile and leave Yard nil; their footprint terrain and occupancy checks apply
@@ -521,6 +531,16 @@ type PlacementQuery struct {
 	Rules  PlacementRules
 	Self   uint16
 	Mobile bool
+	// MobileOccupancy is the mover-written half of retail's single ground
+	// word. Retail has ONE occupancy word per cell, written by ground movers
+	// and by building-class units alike, and the footprint validator's
+	// occupant test reads exactly that word [04 R-COLL-01 §2][04 R-COLL-01 §4].
+	// Nanolathe splits the plane in two — the plot cell below and the mover
+	// occupancy lattice — so a query that does not supply the second half
+	// cannot see a unit standing on the rectangle at all. Callers that hold
+	// the mover plane pass it here; the two halves are then tested by one
+	// rule, against one identity, on the same cells.
+	MobileOccupancy MobileOccupancy
 	// SkipTerrainAggregates marks a query from a caller outside the inline
 	// terrain-check mode (mode value 1) [04 §6.4]: the bounds, unit-occupancy
 	// and blocking-feature gates still apply, but the slope/height/water
@@ -594,6 +614,18 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 				for _, occ := range [2]int16{cell.OccupantA(), cell.OccupantB()} {
 					if occ != 0 && uint16(occ) != q.Self {
 						return PlacementResult{}, fmt.Errorf("world: cell %d,%d occupied [04 §6.2]", cx, cz)
+					}
+				}
+				// The same test on the other half of the split ground word.
+				// "Bits 1-2 reject any nonzero occupant other than the passed
+				// self identity" [05 "control-byte bit roles in the footprint
+				// validator"], and every placement caller passes a null self
+				// identity, so a unit standing on the rectangle rejects it —
+				// the builder that issued the order included
+				// [04 R-COLL-01 §2][04 R-COLL-01 §6].
+				if q.MobileOccupancy != nil {
+					if occ := q.MobileOccupancy.CellOccupant(cx, cz); occ != 0 && occ != q.Self {
+						return PlacementResult{}, fmt.Errorf("world: cell %d,%d occupied by a mover [04 R-COLL-01 §2]", cx, cz)
 					}
 				}
 			}

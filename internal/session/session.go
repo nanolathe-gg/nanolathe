@@ -67,6 +67,10 @@ type publicationState struct {
 // boundary. The session invokes it once per runnable sub-tick; the callback
 // advances only model-texture metadata and never returns authoritative state
 // [01 §4.4][R-CRD-005 §1][I6].
+// effectFrameCountResolver is the seam the strip families read an effect
+// entry's frame count through; see SetEffectEntryFrameCount.
+type effectFrameCountResolver func(bank, entry string) (int, bool)
+
 type Phase7Service interface {
 	StepPhase7()
 }
@@ -103,6 +107,10 @@ func (s *Session) ensurePublicationState() *publicationState {
 type Session struct {
 	State         State
 	pendingBattle bool
+
+	// effectFrameCount resolves an effect entry's frame count for the strip
+	// families; see SetEffectEntryFrameCount.
+	effectFrameCount effectFrameCountResolver
 
 	Clock    *clock.State
 	Catalog  *content.Catalog
@@ -1038,8 +1046,18 @@ func (s *Session) RegisterAll() {
 						}
 						s.Combat.ExplodeWeaponAt(s.Units, s.World, weapon, impact, h, tick) // [06 §9.3][06 §12.1] shared splash
 						if s.publication != nil && s.publication.events != nil {
-							pe := frame.Event{Tick: tick, Source: h, X: u.X, Y: u.Y, Z: u.Z, Graphic: weapon.ExplosionGaf}
-							if weapon.ExplosionGaf != "" || weapon.ExplosionArt != "" {
+							// The death explosion draws the weapon's LAND art:
+							// both keys or nothing, the bank and the entry
+							// carried separately [06 R-WFX-01 §1]. This used to
+							// publish the bank name as the whole identity and
+							// admit an event whenever EITHER key was authored,
+							// so the view named a GAF file where a composer
+							// expects an entry and could resolve nothing.
+							if weapon.ExplosionGaf != "" && weapon.ExplosionArt != "" {
+								pe := frame.Event{
+									Tick: tick, Source: h, X: u.X, Y: u.Y, Z: u.Z,
+									Graphic: weapon.ExplosionArt, AssetID: weapon.ExplosionGaf,
+								}
 								s.publication.events.EmitExplosion(pe) // [06 §13.2] C27
 							}
 						}
