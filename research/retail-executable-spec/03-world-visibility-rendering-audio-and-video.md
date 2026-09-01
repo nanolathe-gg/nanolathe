@@ -4121,8 +4121,11 @@ Retail holds four indexed surfaces for the minimap rather than one framebuffer r
   where unexplored and fogged terrain appears on the minimap. Rebuilt only when
   its dirty bit is set.
 - **Radar final** — the composited minimap the player sees: mapped wiped onto
-  final as the background, then unit blips, feature dots, sensor circles, and
-  the viewport marker. Rebuilt every tick from mapped.
+  final as the background, then unit blips, feature dots and sensor circles.
+  Rebuilt every tick from mapped. (**Corrected 2026-08-31:** this list ended
+  "…sensor circles, and the viewport marker". The viewport rectangle exists but
+  is not on FINAL — the HUD composer strokes it onto its own destination surface
+  after copying FINAL there, `[R-MM-01 §1]`.)
 - **Radar temp** — a transient 2× supersampled buffer used only while
   generating the picture, freed immediately afterwards.
 
@@ -4471,8 +4474,9 @@ the "callback tables rasterize" reading and named this section as the last
 place that repeated it. The radii, the palette split (outer circle in the
 radar index, both jam circles in the jammer index), the `RadarW / PlayRight`
 scaling and the wipe-per-tick statement survive unchanged; only the producer
-was wrong. What remains open is the numeric identity of the two palette
-indices (tail, §3.9/§3.10).
+was wrong. The numeric identity of the two palette indices was recorded here as
+still open; it is closed in `[R-MM-01 §2]` — colour-map entry 10 for the radar
+and sonar outer circles, entry 12 for both jam circles.
 
 ### 3.11 Lens: minimap ↔ world mapping
 
@@ -4604,8 +4608,105 @@ Nanolathe keeps the byte as an explicit authoritative session input
 (`Session.DebugDisplayMode`) with the two established producers — a reset to
 zero and the `0..4` cycle — and publishes it unchanged through the frame. It
 implements neither developer nor film mode, so nothing calls the cycle and the
-value is zero throughout, which is what retail does too. The minimap draw takes
-no marker argument.
+value is zero throughout, which is what retail does too. The debug crosshair of
+this section takes no minimap argument; the minimap's own viewport rectangle is
+a different figure with a different producer — see `[R-MM-01 §1]` immediately
+below, which corrects this section's closing claim.
+
+### Closed — the minimap viewport rectangle, and the two sensor-circle colours [R-MM-01] (2026-08-31)
+
+#### R-MM-01 §1 — the minimap *does* carry a viewport rectangle
+
+**Correction (2026-08-31).** §3.12's correction of the same date is right that
+the five-pixel crosshair belongs to the **world** composer and is a film-mode
+diagnostic. It then overreached. Its bullet said, in these words: "Retail's
+minimap carries its radar picture and its contacts, and no camera or viewport
+indicator of any kind", and its closing paragraph said "A player who remembers a
+camera indicator on TA's minimap is not remembering this figure; retail has no
+such indicator." **Both sentences are wrong.** Retail draws a camera viewport
+rectangle on the minimap in every ordinary battle frame. The error was one of
+scope: that pass traced the crosshair, found it in the world composer, and
+concluded from the crosshair's absence that no minimap indicator existed —
+without looking at the routine that puts the radar picture on the panel. The
+two figures are unrelated. §3.6's layer list ("…sensor circles, and the viewport
+marker" under *Radar final*) and `[07 §10]`'s "the *final* surface … draws start
+positions plus the viewport rectangle" were right that the rectangle exists and
+wrong only about which surface carries it; see the layering note below.
+
+**Established — the producer.** The rectangle is not drawn by the contacts pass
+and is not part of the FINAL surface. The battle HUD composer, once per host
+frame, calls a small minimap-presentation routine that does exactly two things
+when the FINAL-dirty bit is set (clearing it first): it copies the FINAL radar
+surface onto the HUD's own destination surface at the canvas letterbox origin
+`(padX, padY)`, and then strokes the camera-to-radar rectangle's outline onto
+that same destination. So the rectangle lives on the destination surface, above
+a FINAL that never contains it — which is why it survives the per-tick FINAL
+wipe and why a save-restored FINAL carries no marker. Corollary for §3.6: FINAL
+is *mapped wipe → blips → commander markers → sensor circles → weapon rings →
+projectile/feature dots*, and nothing else; strike "the viewport marker" from
+that list and read it here instead.
+
+**Established — the rectangle.** The rectangle is the **camera-to-radar
+rectangle**, a four-integer inclusive record recomputed by the per-axis camera
+clamp — the same clamp `[07 R-CAM-01 §10]` and `[07 §10]` describe, which runs
+after every camera write. It is the world→radar projection of the *game
+viewport*, in canvas coordinates (the letterbox origin is already folded in):
+
+```
+left   = padX + trunc(RadarW · cameraX  / PlayRight)
+top    = padY + trunc(RadarH · cameraZ  / PlayBottom)
+right  = left - 1 + trunc(RadarW · viewWidth  / PlayRight)
+bottom = top  - 1 + trunc(RadarH · viewHeight / PlayBottom)
+```
+
+where `cameraX`/`cameraZ` are the camera origin in map pixels (retail's origin
+is the world point at the game viewport's **top-left**, `[03 §4.1]`),
+`viewWidth`/`viewHeight` are the game viewport's extents in map pixels — held
+as a cell count and shifted left by 4, and numerically the `W-128 × H-64` of
+`[03 §4.1]` — and `PlayRight`/`PlayBottom` are the play-area extents of
+`[03 §3.4]`. Every division is a signed truncating divide. There is **no**
+half-height shear on `top`: this is a camera origin, not a unit position.
+
+**Established — the stroke and the colour.** The figure is a one-pixel
+**outline**, never a fill: four clipped one-pixel Bresenham segments joining the
+four inclusive corners, through the same rectangle-outline primitive the rest of
+the interface uses. Clipping is to the destination surface, not to the radar
+rect; in the ordinary domain the clamped camera keeps the rectangle inside the
+radar rect anyway, because `cameraX ≤ PlayRight − viewWidth`. The colour is
+**colour-map entry 14** — logical entry 14 of the logical→physical map of
+`[03 §4.3]`, whose GUIPAL source is `(255,255,85)` and which resolves in the
+stock install to physical index 194, `(247,227,103)`. That is the pale yellow a
+retail screen shot shows around the visible area, and it is a different entry
+from the crosshair's entry 15 (white) and from the drag rectangle's 6/4/15
+family `[07 §6]`. The `TODO(question)` that stood on this colour is closed.
+
+Note that entry 14 is shared with the minimap's 1×1 projectile dot (§3.9 layer
+6); the two figures simply use the same colour-map slot.
+
+#### R-MM-01 §2 — the sensor-circle colours are entries 10 and 12
+
+**Established (was Unknown).** §3.10's tail recorded "What remains open is the
+numeric identity of the two palette indices", and `[07 §10]`'s Unknown list
+carries the matching row ("Mapping of the three sensor callback tables to the
+radar versus jammer palette entries"). Both are closed. The contacts pass reads
+the same colour-map block as everything else in §3.9/§3.10 and takes:
+
+| Circle | Colour-map entry | GUIPAL source | Stock physical |
+|---|---|---|---|
+| radar outer | 10 | `(85,255,85)` | 233 `(83,223,79)` |
+| sonar outer | 10 | as above | as above |
+| radar jam | 12 | `(255,85,85)` | 211 `(255,71,0)` |
+| sonar jam | 12 | as above | as above |
+| weapon / interceptor ring | 15 | `(255,255,255)` | 255 white |
+
+So the bright green ring a retail screen shot shows around a radar-carrying
+unit's revealed area is the **radar coverage circle** of §3.10, not an outline
+of the LOS-revealed region: nothing in retail traces the revealed region's
+boundary. The radar and sonar outer circles are two separate circles at the two
+authored distances, both in entry 10 — §3.10's "the outer circle radius is
+`max(radardistance, sonardistance)`" describes one circle where the pass emits
+one per nonzero distance; the visible result is identical whenever one distance
+dominates, which is the stock case.
 
 ## 4. Indexed renderer, palettes, and asset layers
 
@@ -5079,12 +5180,20 @@ driver compares it to decide whether a widget's cursor request changed.
 
 **The minimap repaint pre-pass** the composer runs right before it sets the
 viewport clip: when bit 1 of the minimap dirty word is set, clear it, copy the
-minimap picture (an unclipped image-to-image copy, no key) to the panel
-position held in engine state, then draw the panel frame rectangle outline
-(four clipped lines, [R-COMP-01 §2]) in logical entry 14 of the
-logical-to-physical map. The composer-time viewport marker of [03 §3.12] is
-separate and runs every frame. Which events set bit 1 is [03 §3.6]'s
+FINAL radar surface (an unclipped image-to-image copy, no key) to the canvas
+letterbox origin held in engine state, then draw the **camera-to-radar
+rectangle**'s outline (four clipped one-pixel lines, [R-COMP-01 §2]) in logical
+entry 14 of the logical-to-physical map. The film-mode crosshair of [03 §3.12]
+is a separate world-composer figure. Which events set bit 1 is [03 §3.6]'s
 lifecycle; the pre-pass itself is only the consumer.
+
+**Correction (2026-08-31).** The paragraph above called the copied surface "the
+minimap picture" and the outline "the panel frame rectangle outline". The
+surface is FINAL, not PICTURE — PICTURE carries neither fog nor contacts — and
+the outline is not chrome: its four inclusive corners are the camera origin and
+the game viewport's extents projected through the radar lens, recomputed by the
+per-axis camera clamp. It is the minimap's viewport indicator, and this pre-pass
+is its only producer. `[R-MM-01 §1]` is the owning statement.
 
 ### Closed — the two standalone unshaded-renderer entries: debris pieces and effect/projectile models [R-COMP-02 §6] (2026-08-29)
 
@@ -8571,9 +8680,12 @@ and unknown" without a resolution plan.
   ordinary-mobile silhouette, and structure-rerasterization model branches;
   their option and `noshadow` gates; the model branches' index-0 `ALP` blend,
   five-pixel offset, terrain-height shear, and shadow-before-body order. Model
-  shadows use no stencil, dither, or `SHD` row. The minimap viewport marker is
-  a five-pixel cross of two 1-pixel Bresenham lines at +128/+32 from the
-  sheared camera centre in the ring palette index.
+  shadows use no stencil, dither, or `SHD` row. (**Corrected 2026-08-31:** this
+  entry ended "The minimap viewport marker is a five-pixel cross of two 1-pixel
+  Bresenham lines at +128/+32 from the sheared camera centre in the ring palette
+  index." That figure is the world composer's film-mode crosshair, §3.12; the
+  minimap's viewport marker is a one-pixel rectangle outline in colour-map
+  entry 14, `[R-MM-01 §1]`.)
 - Piece transforms compose as ordered in-place rotate-then-translate passes in
   Z, X, Y chronological order using floating-point trigonometry, with
   bank/heading/pitch injected into the root piece’s Z/Y/X slots; there is no
@@ -8708,10 +8820,11 @@ by the sharper question it turned into.
   side; nothing in the recovered visibility or sensor path consumes an
   incoming share · doc 05 "Sensor sharing", doc 08 · static trace of the
   command's receive handler.
-- The numeric identity of the radar and jammer palette indices the minimap
-  sensor circles use · §3.9, §3.10 · static trace of the root-state writer.
-  (Where they are drawn is closed: the contacts pass, `[R-TERR-01]`'s §3.10
-  restatement.)
+- ~~The numeric identity of the radar and jammer palette indices the minimap
+  sensor circles use~~ · **closed 2026-08-31**, `[R-MM-01 §2]`: colour-map
+  entry 10 for the radar and sonar outer circles, entry 12 for both jam
+  circles. (Where they are drawn was already closed: the contacts pass,
+  `[R-TERR-01]`'s §3.10 restatement.)
 - Legacy terrain header slot 12 and attribute bytes 1, 3, 4, 5, 7: no reader
   in the loader · §2.2 `[R-TERR-01 §1]` · static trace over the unrecovered
   regions; inert until one is found.

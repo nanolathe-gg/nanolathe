@@ -377,11 +377,12 @@ func stampHumanBuild(u *units.Unit, product string, tick uint32, queued bool, go
 	tail.Owner = u.Handle
 	tail.CreationTick = tick
 	tail.GoalY = goalY
-	if queued {
-		tail.Flags |= orders.FlagPurgeSurvivor
-	} else {
-		tail.Flags &^= orders.FlagPurgeSurvivor
-	}
+	// The queue modifier is applied by the caller (purge or not before the
+	// insert); it is not stamped onto the record. Purge survivorship is the
+	// descriptor's static gate bit 2 and the insertion path already wrote it
+	// [04 §3.3][04 R-MOV-03 §6] — rewriting it here is what let a plain move
+	// order purge a factory's BuildingBuild node and stop production.
+	_ = queued
 }
 
 // queuedPointTolerance is the duplicate test's per-axis window: one map cell,

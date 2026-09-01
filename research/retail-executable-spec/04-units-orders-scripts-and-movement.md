@@ -3581,6 +3581,27 @@ player is capturable by this code. **Code 14 — mobile build.** The
 definition's build list is non-empty and a live mover exists →
 `MobileBuild` or air twin; else reject.
 
+**Correction to §3.4's rows 2 and 9 — the queued-move/queued-patrol
+condition.** §3.4's summary table says code 2 turns "a dead unit target" into
+a queued move and code 9 turns "a patrol with no target" into the queued
+patrol. Neither is the resolver's condition, and both readings are wrong in a
+way that removes the factory rally point from the game. The traced condition
+for both is the **live-mover** test stated above: `QMove` and `QPatrol` are
+what an actor with **no mover** gets after its capability gate, whatever the
+target. A dead target is not a queued-move case at all — a target that exists
+without the alive bit rejects every code before the switch — and a mobile
+unit with no target resolves an ordinary `Patrol`, not `QPatrol`.
+
+This matters because the pairing that reaches the arm is a factory: stock
+factory definitions author `CanMove=1` on a `BMcode=0` (building-class)
+definition — ARMLAB, ARMVP, ARMAAP and their CORE counterparts, in the asset
+census of [03 R-RND-02A] — so a factory passes the can-move gate and fails the
+mover test. That is the whole mechanism of the rally point: the factory takes
+a `QMove` record it never executes (a 60-tick delayed tail rotate binding no
+goal, §3.3), and its `GetBuilt` copies it onto each finished product
+(§3.8, [R-FAC-02 §4]). Read §3.4's rows as outcome names only; this block is
+the condition.
+
 **The post-capture byte (Unknown).** Code 1's default variant reads a unit
 byte that the ownership transfer of doc 05 writes `150` into on a
 human-to-computer capture; its decrement site, and therefore what a nonzero
@@ -8557,6 +8578,89 @@ three-component lean accumulator only on the can-fly mover, including its
 zero-delta mode-transition call. Serialization and deterministic hashing need
 the shared unit pose and the flight accumulator; they do not need a second
 ground attitude state.
+
+### Closed — the hover bob does cross a band threshold [R-MOV-01 §5b] (2026-08-31)
+
+**What was open.** The hover-bob paragraph of `[R-MOV-01 §5]` closed the read
+and the write chain as Established but left the *consequence* as a Supported
+inference: "whether the ±2 perturbation can ever cross one of those three
+thresholds in practice, which a retail observation or a bounded numeric
+argument would settle". Document 01 §7.4 carries the same item. This section
+settles it by the bounded numeric argument, over this install's content. The
+answer is **yes**, and the mechanism is not the one the ±2 amplitude suggests.
+
+**Two of the three consumers cannot see it — Established.** The three readers
+named in §5 are not equally exposed:
+
+* the below-water half-speed branch of `[R-MOV-01 §4]` is skipped whenever
+  `canhover` or `floater` is set — the `0x81000` mask of `[R-MOV-01 §8a]` — so
+  no hovering unit ever reaches it;
+* section 9.2's water damage excludes `canhover` explicitly.
+
+Only the medium-band classifier of section 9.1 reads the perturbed word for a
+`canhover` unit. The exposure is therefore one consumer, not three.
+
+**The rocking cancels; the rounding does not — Established by enumeration.**
+The four corner angles are `((r + 8*i) << 11) + bobPhase`, and `8 << 11` is
+exactly a quarter circle, so corners 0/2 and 1/3 are antipodal pairs. With the
+§4 trig table (`table[i + 256] = -table[i]`) every antipodal component pair
+sums to exactly zero, over all phases and all three amplitudes. The average is
+nevertheless not phase-free, because §5 averages **pairwise and truncating
+toward zero** — `A = (h0 + h1)/2`, `B = (h2 + h3)/2`, then `(A + B)/2` — and
+the averaging pairs `(0,1)` and `(2,3)` are *not* the antipodal pairs. The
+truncation of a negative intermediate is what survives.
+
+Over open water all four corners clamp to the same sea-level floor, so the
+committed integer height is exactly `seaLevel` or `seaLevel − 1`. Enumerating
+every state — amplitude 0..2 × all 32 counter phases × all 65,536 `bobPhase`
+values, 2,097,152 states per amplitude:
+
+| amplitude | offset 0 | offset −1 |
+|---|---|---|
+| 0 | all 2,097,152 | none |
+| 1 | 704,512 | 1,392,640 |
+| 2 | 851,968 | 1,245,184 |
+
+The offset is never positive and never below −1. At amplitude 0 it is
+identically zero, so a hovering unit that is parked (age ≥ 60 ticks, §5's
+linear fade) or moving at or above half `MaxVelocity` has a phase-independent
+height. The exposed window is a hovering unit **below half speed within 60
+ticks of its last proposal** — that is, every departure and every arrival.
+
+**The threshold it crosses is the band-2 equality — Established.** Section
+9.1's tests against sea level are `wy > wt` for band 4 and `wy − wt > −5` for
+band 1; a one-unit dip from `seaLevel` to `seaLevel − 1` changes neither. Band
+2 is an **equality**, `waterline + wy == wt`, and an equality against a word
+that wobbles by one is exactly the fragile case. With `waterline` 0 the test
+is `wy == wt`: satisfied at offset 0, failed at offset −1, where the unit falls
+back to band 1.
+
+Measured over this install: of the 13 definitions that set `canhover`, **10
+carry `waterline` 0** (`armah`, `armanac`, `armch`, `armmh`, `armsh`, `corah`,
+`corch`, `cormh`, `corsh`, `corsnap`), two carry 4 (`armthovr`, `corthovr`)
+and one carries 9 (`armamph`, the only `upright` one, which takes §5's second
+branch and never reaches the conform at all). So for ten of the thirteen — the
+whole hovercraft line of both sides — the medium band alternates between 2 and
+1 as a function of elapsed real time whenever the unit is accelerating or
+slowing over water. Section 9.1's classifier is edge-triggered, so the
+alternation is not merely a stored value: it re-fires the occupancy callback on
+the unit's script.
+
+**Consequence for this project.** The inference is resolved affirmative, so the
+wall clock is not a harmless presentation input that happens to be read in a
+simulation path — it changes a script-visible classification for most of the
+hovercraft in the game. Nanolathe therefore does **not** clone the wall-clock
+counter into the mover. It derives the animation counter from the simulation
+tick instead, keeping the rest of §5 exact. The divergence is confined to which
+of `{0, −1}` a hovering unit's height offset takes on a given tick, and it is
+deliberate: see `[R-MOV-01 §5c]`.
+
+**Still Unknown, and unchanged by this section.** The writer and configured
+value of the rate field that scales the counter (doc 01 §7.4), and the writer
+of the per-unit `bobPhase` word. Neither affects this closure — the enumeration
+above ranges over *all* counter phases and *all* `bobPhase` values, so the
+crossing holds whatever those two turn out to be.
+
 
 ### Closed — the movement-rate tiers [R-MOV-01 §6] (2026-08-28)
 

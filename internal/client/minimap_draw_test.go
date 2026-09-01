@@ -9,126 +9,110 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-func applyMinimapIntentForTest(cam *camera.Camera, layout camera.Minimap, dst hud.Rect, playW, playH, mouseX, mouseY int32, inside bool, drag *bool) bool {
+// applyMinimapIntentForTest is the production wiring in miniature: the lens
+// produces the clicked world point and the canonical camera writer recenters
+// on it [07 R-CAM-01 §11].
+func applyMinimapIntentForTest(cam *camera.Camera, layout camera.Minimap, dst hud.Rect, playW, playH, mouseX, mouseY int32) bool {
 	if cam == nil {
 		return false
 	}
-	viewport := hud.Rect{X1: camera.OriginX, Y1: camera.OriginY, X2: camera.OriginX + cam.ViewW - 1, Y2: camera.OriginY + cam.ViewH - 1}
-	dragging := drag != nil && *drag
-	intent, ok := MinimapCameraIntent(cam.X, cam.Z, layout, dst, viewport, playW, playH, mouseX, mouseY, inside, dragging)
+	intent, ok := MinimapCameraIntent(layout, dst, playW, playH, mouseX, mouseY)
 	if ok {
-		cam.X, cam.Z = intent.X, intent.Z
-		cam.Clamp()
+		cam.JumpToBattleViewCenter(intent.X, intent.Z)
 	}
 	return ok
 }
 
-func TestMinimapCameraIntentInsideAndDrag(t *testing.T) { // [07 §10] two-branch lens
-	playW, playH := int32(608), int32(352)
-	m := camera.LayoutMinimap(640, 480)
-	hudRect := hud.Rect{X1: 0, Y1: 0, X2: 126, Y2: 126}
-	cam := &camera.Camera{X: 100, Z: 50, ViewW: 64, ViewH: 64, MapW: playW, MapH: playH}
-	// Inside branch: click at center of minimap
-	isInside := true
-	var drag bool
-	mouseX := int32(60)
-	mouseY := int32(60)
-	ok := applyMinimapIntentForTest(cam, m, hudRect, playW, playH, mouseX, mouseY, isInside, &drag)
-	if !ok {
-		t.Fatalf("applyMinimapIntentForTest inside should be consumed")
+// TestMinimapCameraIntentRecentersOnTheClick locks the correction of
+// [07 R-CAM-01 §11]: the clicked map point becomes the view *centre*, not the
+// camera origin. The superseded reading — "the lens writes the projected world
+// point directly as the camera origin" — is the pointer's world position, and
+// implementing it as the camera write put the click at the view's top-left.
+func TestMinimapCameraIntentRecentersOnTheClick(t *testing.T) {
+	playW, playH := int32(992), int32(896)
+	m := camera.LayoutMinimap(playW, playH)
+	dst := hud.Rect{X1: 0, Y1: 0, X2: 125, Y2: 125}
+	cam := &camera.Camera{X: 0, Z: 0, ViewW: 640, ViewH: 480, MapW: playW, MapH: playH}
+
+	mouseX, mouseY := int32(60), int32(60)
+	if !applyMinimapIntentForTest(cam, m, dst, playW, playH, mouseX, mouseY) {
+		t.Fatal("a click inside the radar rectangle must be consumed")
 	}
-	// After inside click, camera origin is the world point corresponding to the
-	// display point's converted canvas coordinate, then clamped [03 §3.11].
-	canvasX, canvasY, ok := m.DisplayToCanvas(mouseX, mouseY, hudRect.X1, hudRect.Y1, hudRect.X2-hudRect.X1+1, hudRect.Y2-hudRect.Y1+1)
-	if !ok {
-		t.Fatal("inside lens display point did not convert to canvas")
+	wx, wz := m.ToWorldPlay(mouseX, mouseY, playW, playH)
+	viewW, viewH := cam.BattleView()
+	wantX, wantZ := wx-camera.OriginX-viewW/2, wz-camera.OriginY-viewH/2
+	want := &camera.Camera{X: wantX, Z: wantZ, ViewW: 640, ViewH: 480, MapW: playW, MapH: playH}
+	want.Clamp()
+	if cam.X != want.X || cam.Z != want.Z {
+		t.Fatalf("recentred camera = %d,%d, want %d,%d (world point %d,%d)", cam.X, cam.Z, want.X, want.Z, wx, wz)
 	}
-	wx, wz := m.ToWorldPlay(canvasX, canvasY, playW, playH)
-	wantX := wx
-	// Need to recompute expected with clampAxis order [07 §10]
-	// clampAxis: maximum = mapSize - viewSize; if camera<0->0 else if >maximum->maximum
-	maxX := playW - 64
-	if wantX < 0 {
-		wantX = 0
-	} else if wantX > maxX {
-		wantX = maxX
-	}
-	maxZ := playH - 64
-	wantZ := wz
-	if wantZ < 0 {
-		wantZ = 0
-	} else if wantZ > maxZ {
-		wantZ = maxZ
-	}
-	if cam.X != wantX || cam.Z != wantZ {
-		t.Fatalf("inside lens camera want %d,%d got %d,%d wx,wz %d,%d", wantX, wantZ, cam.X, cam.Z, wx, wz)
-	}
-	// Drag branch: outside-or-drag-latch => cam + (mouse - viewport origin)
-	// clamp [07 §10]. The viewport origin is (128,32), so this pointer is
-	// clamped to that origin and the camera target remains its direct origin.
-	cam2 := &camera.Camera{X: 10, Z: 20, ViewW: 64, ViewH: 64, MapW: playW, MapH: playH}
-	drag = true // latch set
-	isInside = false
-	mouseX = 20
-	mouseY = 30
-	ok = applyMinimapIntentForTest(cam2, m, hudRect, playW, playH, mouseX, mouseY, isInside, &drag)
-	if !ok {
-		t.Fatalf("drag latch should be consumed even when outside")
-	}
-	wantX2 := int32(10)
-	wantZ2 := int32(20)
-	// clamp per [07 §10] C3
-	if wantX2 < 0 {
-		wantX2 = 0
-	} else if wantX2 > maxX {
-		wantX2 = maxX
-	}
-	if wantZ2 < 0 {
-		wantZ2 = 0
-	} else if wantZ2 > maxZ {
-		wantZ2 = maxZ
-	}
-	if cam2.X != wantX2 || cam2.Z != wantZ2 {
-		t.Fatalf("drag branch camera want %d,%d got %d,%d", wantX2, wantZ2, cam2.X, cam2.Z)
-	}
-	// Outside without drag should not be consumed
-	cam3 := &camera.Camera{X: 0, Z: 0, ViewW: 64, ViewH: 64, MapW: playW, MapH: playH}
-	drag = false
-	ok = applyMinimapIntentForTest(cam3, m, hudRect, playW, playH, 5, 5, false, &drag)
-	if ok {
-		t.Fatalf("outside without drag should not be consumed")
-	}
-	if cam3.X != 0 || cam3.Z != 0 {
-		t.Fatalf("outside without drag should not move camera")
+	// The recenter must be a real subtraction: the direct-origin reading would
+	// have landed the camera on the world point itself.
+	if cam.X == wx && cam.Z == wz {
+		t.Fatal("camera origin equals the clicked world point: the half-viewport recenter is missing")
 	}
 }
 
-func TestMinimapCameraIntentClampOrder(t *testing.T) { // [07 §10] C3 clampAxis order
-	playW, playH := int32(100), int32(100)
-	m := camera.Minimap{W: 126, H: 126, PadX: 0, PadY: 0}
-	hudRect := hud.Rect{X1: 0, Y1: 0, X2: 126, Y2: 126}
-	// view larger than map -> maximum = map - view negative; the established
-	// ordered clamp returns the negative maximum for a nonnegative target.
-	cam := &camera.Camera{X: 0, Z: 0, ViewW: 200, ViewH: 200, MapW: playW, MapH: playH}
-	// inside click at 0,0 => wx 0; the ordered clamp sees target 0 above the
-	// negative maximum and returns that maximum.
-	ok := applyMinimapIntentForTest(cam, m, hudRect, playW, playH, 0, 0, true, nil)
+// TestMinimapPointerWorldIsTheLensConversion locks step 1 of the frame: the
+// pointer's world position over the minimap has no half-viewport term
+// [07 R-CAM-01 §11]. It is the point an order lands on.
+func TestMinimapPointerWorldIsTheLensConversion(t *testing.T) {
+	playW, playH := int32(992), int32(896)
+	m := camera.LayoutMinimap(playW, playH)
+	dst := hud.Rect{X1: 200, Y1: 100, X2: 325, Y2: 225}
+	mouseX, mouseY := int32(260), int32(160)
+	wx, wz, ok := MinimapPointerWorld(m, dst, playW, playH, mouseX, mouseY)
 	if !ok {
-		t.Fatalf("inside should be consumed")
+		t.Fatal("pointer inside the radar rectangle was not classified")
 	}
-	if cam.X != -100 || cam.Z != -100 {
-		t.Fatalf("clamp order negative-maximum: camera -100,-100 want -100,-100 got %d,%d", cam.X, cam.Z)
+	cx, cy, _ := m.DisplayToCanvas(mouseX, mouseY, dst.X1, dst.Y1, 126, 126)
+	wantX, wantZ := m.ToWorldPlay(cx, cy, playW, playH)
+	if wx != wantX || wz != wantZ {
+		t.Fatalf("lens conversion = %d,%d, want %d,%d", wx, wz, wantX, wantZ)
 	}
-	// Click far edge with large view: newCam positive but > maximum (negative maximum) -> clamp to maximum negative
-	cam2 := &camera.Camera{X: 0, Z: 0, ViewW: 200, ViewH: 200, MapW: playW, MapH: playH}
-	dragClamp := true
-	if !applyMinimapIntentForTest(cam2, m, hudRect, playW, playH, 126, 126, false, &dragClamp) {
-		t.Fatalf("drag clamp case should be consumed")
+	// Outside the destination rectangle there is no minimap pointer at all.
+	if _, _, ok := MinimapPointerWorld(m, dst, playW, playH, dst.X1-1, mouseY); ok {
+		t.Fatal("a pointer outside the destination must not classify as minimap")
 	}
-	// maximum = 100-200 = -100, camera computed maybe > -100? For click at 126 -> wx ~100, newCam = 0? Let's just ensure clamp doesn't panic and stays within 0..maximum logic: if camera positive > maximum negative, it should clamp to maximum (-100) per clampAxis? But first check camera<0 ->0, else if >maximum. Since maximum negative, a positive camera (e.g., 50) is > maximum (-100), so it clamps to -100. That's the ordered form.
-	// Our impl does that.
-	if cam2.X != -100 || cam2.Z != -100 {
-		t.Fatalf("positive target must clamp to negative maximum: got %d,%d want -100,-100", cam2.X, cam2.Z)
+	// The letterbox bars are inside the canvas but outside the fitted radar
+	// rectangle, and only the fitted rectangle selects the lens [07 §10].
+	tall := camera.LayoutMinimap(400, 1000)
+	if tall.PadX <= 0 {
+		t.Fatalf("expected a letterboxed layout, got %+v", tall)
+	}
+	if _, _, ok := MinimapPointerWorld(tall, dst, playW, playH, dst.X1, dst.Y1+60); ok {
+		t.Fatal("a pointer on the letterbox bar must not classify as minimap")
+	}
+}
+
+// TestDrawMinimapViewportRectStrokesOneRectangleOutline locks [03 R-MM-01 §1]:
+// the viewport marker is a one-pixel outline, never a fill, clipped to the
+// destination.
+func TestDrawMinimapViewportRectStrokesOneRectangleOutline(t *testing.T) {
+	c := &Client{width: 64, height: 64, indexed: make([]uint8, 64*64)}
+	dst := hud.Rect{X1: 0, Y1: 0, X2: 31, Y2: 31}
+	c.DrawMinimapViewportRect(dst, hud.Rect{X1: 4, Y1: 6, X2: 12, Y2: 14}, 9)
+	for y := int32(0); y < 64; y++ {
+		for x := int32(0); x < 64; x++ {
+			onEdge := (x >= 4 && x <= 12 && (y == 6 || y == 14)) || (y >= 6 && y <= 14 && (x == 4 || x == 12))
+			got := c.indexed[int(y)*c.width+int(x)]
+			if onEdge && got != 9 {
+				t.Fatalf("edge pixel %d,%d = %d, want 9", x, y, got)
+			}
+			if !onEdge && got != 0 {
+				t.Fatalf("pixel %d,%d = %d: the rectangle must be an outline, not a fill", x, y, got)
+			}
+		}
+	}
+	// Clipping is to the destination, not to the framebuffer.
+	c2 := &Client{width: 64, height: 64, indexed: make([]uint8, 64*64)}
+	c2.DrawMinimapViewportRect(dst, hud.Rect{X1: -10, Y1: -10, X2: 40, Y2: 40}, 9)
+	for y := int32(0); y < 64; y++ {
+		for x := int32(0); x < 64; x++ {
+			if c2.indexed[int(y)*c2.width+int(x)] != 0 {
+				t.Fatalf("a rectangle straddling the destination wrote outside it at %d,%d", x, y)
+			}
+		}
 	}
 }
 
@@ -145,14 +129,15 @@ func TestMinimapDisplayDrawClickRelationship(t *testing.T) {
 	if !ok || !layout.HitTest(clickX, clickY) {
 		t.Fatalf("draw/click transform left canonical radar rectangle: %d,%d", clickX, clickY)
 	}
-	cam := &camera.Camera{ViewW: 64, ViewH: 64, MapW: playW, MapH: playH}
-	if !applyMinimapIntentForTest(cam, layout, dst, playW, playH, displayX, displayY, true, nil) {
+	cam := &camera.Camera{ViewW: 640, ViewH: 480, MapW: playW, MapH: playH}
+	if !applyMinimapIntentForTest(cam, layout, dst, playW, playH, displayX, displayY) {
 		t.Fatal("canonical minimap click was not consumed")
 	}
-	wantX, wantZ := layout.ToWorldPlay(clickX, clickY, playW, playH)
-	cam.Clamp()
-	if cam.X != wantX || cam.Z != wantZ {
-		t.Fatalf("click camera mismatch: got %d,%d want %d,%d", cam.X, cam.Z, wantX, wantZ)
+	wx, wz := layout.ToWorldPlay(clickX, clickY, playW, playH)
+	want := &camera.Camera{ViewW: 640, ViewH: 480, MapW: playW, MapH: playH}
+	want.JumpToBattleViewCenter(wx, wz)
+	if cam.X != want.X || cam.Z != want.Z {
+		t.Fatalf("click camera mismatch: got %d,%d want %d,%d", cam.X, cam.Z, want.X, want.Z)
 	}
 }
 

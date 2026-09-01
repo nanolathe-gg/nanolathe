@@ -951,11 +951,19 @@ func (h *retailBattleHUD) drawMinimap(c *client.Client, b *battleSession, cur *f
 		return
 	}
 	// Drawing and input receive the same layout and destination rectangle.
-	// Retail's minimap carries contacts and nothing else: no camera marker, no
-	// viewport rectangle. The five-pixel cross that used to be passed here is a
-	// film-mode diagnostic the **world** composer draws over the game viewport
-	// [03 §3.12].
 	c.DrawMinimapLayout(surf, dst, layout)
+	// Then the viewport rectangle, exactly as retail's minimap repaint pre-pass
+	// strokes the camera-to-radar rectangle over the copied radar surface
+	// [03 R-MM-01 §1][03 R-COMP-02 §5]. The five-pixel cross that used to be
+	// drawn here instead is a film-mode diagnostic the **world** composer draws
+	// over the game viewport [03 §3.12] — a different figure.
+	playW, playH, ok := b.sess.PlayArea()
+	if !ok {
+		return
+	}
+	if marker, ok := hud.MinimapViewportRect(b.cam, layout, playW, playH, dst); ok {
+		c.DrawMinimapViewportRect(dst, marker, h.paletteIndex(hud.ViewportMarkerLogicalColor))
+	}
 }
 
 func (h *retailBattleHUD) drawPausedTitle(c *client.Client) {

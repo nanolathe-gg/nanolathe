@@ -35,12 +35,28 @@ func TestNewNodeForOrderPayload(t *testing.T) {
 	if n.Owner != owner {
 		t.Fatalf("owner %d want %d", n.Owner, owner)
 	}
-	if n.Flags&FlagPurgeSurvivor == 0 {
-		t.Fatalf("queued should set FlagPurgeSurvivor")
+	// The queue modifier writes nothing onto the record: purge survivorship is
+	// the descriptor's static gate bit 2, applied at insertion
+	// [04 §3.3][04 R-MOV-03 §6]. This test used to assert the opposite — that
+	// `queued` set the flag and non-queued cleared it — which protected
+	// shift-queued moves that retail purges and left a factory's
+	// `BuildingBuild` (a bit-2 descriptor) purgeable by any plain order.
+	if n.Flags&FlagPurgeSurvivor != 0 {
+		t.Fatalf("the queue modifier must not write purge survivorship onto the record")
 	}
-	n2 := NewNodeForOrder(id, 0, gx, 0, gz, tick, owner, false)
-	if n2.Flags&FlagPurgeSurvivor != 0 {
-		t.Fatalf("non-queued should not set FlagPurgeSurvivor")
+	q := &Queue{}
+	q.Push(id, NewNodeForOrder(id, 0, gx, 0, gz, tick, owner, true))
+	if q.Head().Flags&FlagPurgeSurvivor != 0 {
+		t.Fatalf("Move_Ground (static gate %#x) is not a purge survivor", DescriptorFor(id).StaticGate)
+	}
+	buildID := Lookup("BuildingBuild")
+	if buildID == 0 {
+		t.Fatal("BuildingBuild descriptor missing")
+	}
+	qb := &Queue{}
+	qb.Push(buildID, NewNodeForOrder(buildID, 0, 0, 0, 0, tick, owner, false))
+	if qb.Head().Flags&FlagPurgeSurvivor == 0 {
+		t.Fatalf("BuildingBuild carries static gate bit 2 and must survive a Replace purge")
 	}
 }
 

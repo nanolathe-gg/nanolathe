@@ -4577,6 +4577,26 @@ damage".
   Aim callback and the drift gate that would read it are both untraced, and the
   §3.3 drift gate above therefore has no implementation. Marked in code as
   `TODO(question)` at the aim-angle site.
+- **Whether the order side's "slot control byte" is the persisted slot-flag
+  byte** (2026-08-31, play-test PT5) · §1.2, §3.2 · static trace of the two
+  order-side weapon-slot helpers' and the cleanup walk's stores against the
+  byte the save writer serializes. `[04 R-ORDER-02 §2]` has the cleanup walk
+  test "the slot's control byte" bit 1 (slot assigned) and bit 4, emit
+  `TargetCleared`, and set bit 4; `[04 R-ORD-01 §1]` has *inhibit slot k* set
+  bit 4 and clear the target and *release slot k* clear bit 4 and clear the
+  target. `[08 R-SAVE-WEAPON-01]` independently establishes the persisted
+  slot-flag byte as bit 0 aim latch, bit 1 armed/has-target, bit 4 tracking. If
+  those are one byte, the two order-side verbs are writing §3.2's
+  autonomous-tracking bit — the "release" verb disabling autonomous targeting
+  and the "inhibit" verb restoring it, which is the reading under which the
+  cleanup walk, `Paralyze`'s "release all slots" and `Attack_Chase` phase 3's
+  "inhibit all" all mean something. Nanolathe currently models them as two
+  fields and nothing in this doc's slot visit reads bit 4. **Nothing in §§1.2,
+  3.2 or 3.3 makes bit 4 a firing or acquisition gate**: a build that read it
+  as one had every unit's weapons silenced permanently by its owner's first
+  order, because the cleanup walk sets the bit on every order-record removal
+  and no established path clears it. Marked in code as `TODO(question)` at the
+  slot-visit site.
 - Boundary between the general muzzle query and the per-family dropped/meteor
   muzzle paths, and the side effects of the shared muzzle fallback on
   malformed piece indices · §3.4 [R-P0-07] · static trace. Medium confidence

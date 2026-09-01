@@ -56,23 +56,85 @@ const (
 	DirectionSouth = DirectionDown
 )
 
-// clampAxis implements the per-axis retail clamp order [07 §10]:
+// clampAxis implements the per-axis retail camera clamp [07 §10], expressed in
+// this build's frame of reference.
 //
-//	maximum = mapSize - viewSize
+// Retail's clamp is
+//
+//	maximum = mapSize - viewportSpan
 //	if camera < 0 → 0 else if camera > maximum → maximum
 //
-// The ordered form controls the negative-maximum (viewSize > mapSize) domain:
-// a negative camera is forced to 0 before the maximum is considered, so a
-// positive camera in that domain clamps to the negative maximum.
-func clampAxis(camera, mapSize, viewSize int32) int32 { // [07 §10]
-	maximum := mapSize - viewSize
-	if camera < 0 {
-		return 0
+// where a retail camera origin is the world point drawn at the *battle
+// viewport's* top-left corner and viewportSpan is that subrect's own size —
+// 512x416 inside a 640x480 display, the rectangle (128,32)..(W-1,H-33) of
+// [03 §4.1]. This build's origin is instead the world point drawn at the
+// framebuffer's top-left corner (the world is composed across the whole
+// framebuffer and the chrome painted over it; every draw site takes
+// WorldToScreen minus OriginX/Y, and picking re-adds them), so the two origins
+// differ by the viewport's leading inset. Substituting
+// `retailCamera = camera + leading` into retail's two bounds gives
+//
+//	minimum = -leading
+//	maximum = mapSize - viewportSpan - leading
+//
+// The viewportSpan passed in is BattleView's, so there is one definition of the
+// visible span in this package. The insets are the subrect's: leading 128 /
+// trailing 0 on X, leading 32 / trailing 32 on Z. On X the maximum is
+// numerically unchanged (mapSize - viewSize, since the trailing inset is zero);
+// on Z it gains the bottom inset, and both floors go negative. That is what makes the whole
+// playable area reachable: at the minimum the world's column/row 0 sits exactly
+// at the viewport's leading edge, and at the maximum its last playable
+// column/row sits exactly at the trailing edge.
+//
+// Until 2026-08-31 this function took retail's bounds unconverted, so the
+// visible world started 128 map pixels in from the west edge and 32 from the
+// north, and stopped 32 short of the south — a map's westmost features could
+// not be brought on screen at all (defect PT5-01; on Great Divide the map's
+// only geothermal vent, anchored at map pixel 104, was unreachable).
+// Commit "Place the battle-start camera from the map's start position" made the
+// same conversion for JumpToBattleViewCenter and did not carry it into the
+// clamp.
+//
+// The ordered form is preserved exactly: the floor test runs before the maximum
+// test, which is the only established behavior in the view-larger-than-map
+// domain (a negative maximum), and [07 §10]'s "Unknown" list still carries that
+// domain as an open question. Nothing here closes it.
+func clampAxis(camera, mapSize, viewportSpan, leading int32) int32 { // [07 §10][03 §4.1]
+	minimum := -leading
+	// TODO(question): the floor is Established — a retail capture on Great
+	// Divide scrolled hard west shows the map's column 0 on the viewport's left
+	// edge [07 R-CAM-01 §13]. Which extent the *maximum* subtracts is a
+	// Supported inference: the viewport subrect's span, not the negotiated
+	// display's. A static trace of the clamp's maximum operand would settle it;
+	// the display reading would leave the last 128 playable columns and 64 rows
+	// permanently off screen [07 R-CAM-01 §13].
+	maximum := mapSize - viewportSpan - leading
+	if camera < minimum {
+		return minimum
 	}
 	if camera > maximum {
 		return maximum
 	}
 	return camera
+}
+
+// clampInsets returns the battle viewport's leading and trailing insets on each
+// axis, measured in world pixels [03 §4.1]. At native scale they are the
+// OriginX/OriginY constants: the chrome covers the framebuffer's leftmost 128
+// columns and its top and bottom 32 rows, and nothing at the right edge.
+//
+// Presentation zoom is not a retail concept [F-P1-008]. The chrome is drawn in
+// framebuffer pixels, so a zoomed camera sees fewer (or more) world pixels
+// behind the same chrome and the insets divide by the effective scale, exactly
+// as EffectiveView does — which keeps "every playable pixel is reachable" true
+// at any zoom.
+func (c *Camera) clampInsets() (leadX, trailX, leadZ, trailZ int32) { // [03 §4.1]
+	s := c.scale()
+	if s == 1 {
+		return OriginX, 0, OriginY, OriginY
+	}
+	insetY := int32(float32(OriginY) / s)
+	return int32(float32(OriginX) / s), 0, insetY, insetY
 }
 
 // scale returns effective presentation scale (1 when zero) [F-P1-008].
@@ -121,8 +183,9 @@ func (c *Camera) BattleView() (int32, int32) { // [03 §4.1]
 		return 0, 0
 	}
 	viewW, viewH := c.EffectiveView()
-	w := viewW - OriginX   // left inset only; the viewport runs to the framebuffer edge
-	h := viewH - 2*OriginY // equal top and bottom insets [03 §4.1]
+	leadX, trailX, leadZ, trailZ := c.clampInsets()
+	w := viewW - leadX - trailX // left inset only; the viewport runs to the framebuffer edge
+	h := viewH - leadZ - trailZ // equal top and bottom insets [03 §4.1]
 	if w < 0 {
 		w = 0
 	}
@@ -144,42 +207,47 @@ func (c *Camera) JumpTo(x, z int32) { // [07 R-CAM-01 §12]
 	c.Clamp()
 }
 
+// BattleViewCenterOrigin converts a map-pixel point to the camera origin that
+// shows that point at the centre of the battle viewport, in this build's frame
+// of reference [07 R-CAM-01 §12][03 §4.1].
+//
+// Retail's contract is `origin = point - viewportSpan/2`, because a retail
+// camera origin is the world point drawn at the viewport's top-left corner.
+// This build's origin is the world point drawn at the framebuffer's top-left
+// corner, so the leading inset comes off as well:
+//
+//	origin = point - leadingInset - viewportSpan/2
+//
+// At 640x480 that is point - 384 on X and point - 240 on Z. Halving the
+// framebuffer instead — point - 320, point - 240 — is right only by accident on
+// Z, where the insets are symmetric; on X it lands the target 64 pixels right of
+// centre. Both halvings are truncating integer divides, as retail's are.
+func (c *Camera) BattleViewCenterOrigin(x, z int32) (int32, int32) { // [07 R-CAM-01 §12]
+	if c == nil {
+		return x, z
+	}
+	viewW, viewH := c.BattleView()
+	leadX, _, leadZ, _ := c.clampInsets()
+	return x - leadX - viewW/2, z - leadZ - viewH/2
+}
+
 // JumpToBattleViewCenter jumps so that the map-pixel point (x, z) is seen at
 // the centre of the battle viewport [07 R-CAM-01 §12][03 §4.1]. It is the
 // battle-start placement writer for both the campaign start-position special
-// and the skirmish commander.
-//
-// Retail's contract is `origin = point - viewport/2`, because a retail camera
-// origin is the world point drawn at the viewport's top-left corner. This
-// build's origin is instead the world point drawn at the *framebuffer's*
-// top-left corner: the world is composed across the whole framebuffer and the
-// chrome painted over it, and the projection subtracts OriginX/OriginY back out
-// of the beam offset for exactly that reason (internal/client world draw). The
-// two origins therefore differ by the viewport's top-left inset, and this frame
-// of reference is what the clamp already assumes (the maximum is
-// mapSize - framebuffer, not mapSize - viewport).
-//
-// Converting retail's formula into it once, here, keeps every caller honest:
-//
-//	origin = (point - OriginX - viewportW/2, point - OriginY - viewportH/2)
-//
-// At 640x480 that is point - 384 and point - 240. Halving the framebuffer
-// instead — point - 320, point - 240 — is right only by accident on the Z axis,
-// where the 32-pixel insets are symmetric; on X it lands the target 64 pixels
-// right of centre. Both halvings are truncating integer divides, as retail's
-// are.
+// and the skirmish commander. The conversion into this build's frame of
+// reference is BattleViewCenterOrigin's.
 func (c *Camera) JumpToBattleViewCenter(x, z int32) { // [07 R-CAM-01 §12]
 	if c == nil {
 		return
 	}
-	viewW, viewH := c.BattleView()
-	c.JumpTo(x-OriginX-viewW/2, z-OriginY-viewH/2)
+	c.JumpTo(c.BattleViewCenterOrigin(x, z))
 }
 
 // Pan applies dx,dz to the camera and then clamps per [07 §10] C3.
 // When terrain is available, MapW/MapH are the playable extents PlayRight/PlayBottom
 // (Wpix-32/Hpix-128) set at void-fixup time [P1-15], not the raw Wpix/Hpix;
-// the clamp maximum is mapSize - viewSize, so the max origin is PlayRight-ViewW etc.
+// the clamp bounds are clampAxis's, so the max origin is PlayRight-ViewW on X
+// and PlayBottom-ViewH+OriginY on Z, and the floors are -OriginX and -OriginY.
 // With zoom, clamp uses effective world view size View/Scale [F-P1-008].
 func (c *Camera) Pan(dx, dz int32) { // [07 §10]
 	if c == nil {
@@ -198,9 +266,10 @@ func (c *Camera) Clamp() {
 	if c == nil {
 		return
 	}
-	eW, eH := c.EffectiveView()
-	c.X = clampAxis(c.X, c.MapW, eW)
-	c.Z = clampAxis(c.Z, c.MapH, eH)
+	spanW, spanH := c.BattleView()
+	leadX, _, leadZ, _ := c.clampInsets()
+	c.X = clampAxis(c.X, c.MapW, spanW, leadX)
+	c.Z = clampAxis(c.Z, c.MapH, spanH, leadZ)
 }
 
 // Drag pans by screen-pixel delta via middle-drag, scaled by zoom [F-P1-008][07 §10].
@@ -255,15 +324,13 @@ func (c *Camera) AddZoom(delta float32, mx, my int32) {
 	c.X = int32(wx - (float32(mx)-ox)/newS)
 	c.Z = int32(wz - (float32(my)-oy)/newS)
 	c.Scale = newS
-	eW, eH := c.EffectiveView()
-	c.X = clampAxis(c.X, c.MapW, eW)
-	c.Z = clampAxis(c.Z, c.MapH, eH)
+	c.Clamp()
 }
 
 // NewFromTerrain creates a camera whose map extents are the playable insets [P1-15].
 // PlayRight = Wpix-32, PlayBottom = Hpix-128 are the max extents set at void-fixup time [P1-15];
-// they are the clamp maxima, so MapW/MapH are set to PlayRight/PlayBottom when non-zero
-// (else fallback to raw terrainWpix/Hpix). The per-axis maximum is then MapW-ViewW / MapH-ViewH [07 §10].
+// they are the clamp's map size, so MapW/MapH are set to PlayRight/PlayBottom when non-zero
+// (else fallback to raw terrainWpix/Hpix). The per-axis bounds are then clampAxis's [07 §10].
 func NewFromTerrain(terrainWpix, terrainHpix, playRight, playBottom, viewW, viewH int32) *Camera {
 	// Use PlayRight/PlayBottom as the effective map size for clamp [P1-15].
 	mapW := terrainWpix

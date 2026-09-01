@@ -664,7 +664,7 @@ const unitTransformDirty uint32 = 1 << 16
 // bank. Its four-corner path follows the root selection primitive, while the
 // upright and floater paths deliberately leave the angle words unchanged
 // [04 R-MOV-01 §5a].
-func applyGroundPostMove(t *world.Terrain, u *units.Unit, dirty bool, mode uint8) {
+func applyGroundPostMove(t *world.Terrain, u *units.Unit, dirty bool, mode uint8, bob *hoverBob) {
 	if t == nil || u == nil || u.Def == nil {
 		return
 	}
@@ -689,22 +689,105 @@ func applyGroundPostMove(t *world.Terrain, u *units.Unit, dirty bool, mode uint8
 		u.Y = numeric.Fixed((int64(t.SeaLevel) - int64(u.Def.Waterline)) << 16)
 		return
 	}
-	if u.Def.CanHover {
-		// TODO(question): the established hover conform requires the
-		// presentation-shared wall-clock animation counter, configured rate,
-		// per-unit bob phase, and mover last-commit tick [04 R-MOV-01 §5a].
-		// This movement System currently exposes none of those inputs. Do not
-		// substitute the ordinary terrain plate path until that clock boundary
-		// is wired by the session owner.
-		return
+	// A canhover definition that is neither upright nor floater takes the
+	// fourth branch like any other ground mover; its medium changes only the
+	// per-corner floor and bob inside the conform [04 R-MOV-01 §8a]. This
+	// previously returned here, which left every hovercraft with no post-move
+	// Y write at all.
+	applyGroundConform(t, u, bob)
+}
+
+// hoverAnimationRate is the animation counter's advance per simulation tick.
+//
+// Retail forms that counter as GetTickCount() scaled by a configured rate and
+// divided by 1000 — a wall clock shared with the presentation layer [01 §7.4].
+// Nanolathe deliberately does not clone it. [04 R-MOV-01 §5b] settles what the
+// leak costs: the pairwise truncating average leaves a one-unit residue that
+// the antipodal corner pairs do not cancel, and because section 9.1's band-2
+// test is an equality against sea level, the ten stock canhover definitions
+// that author waterline 0 alternate between bands 2 and 1 on elapsed real
+// time. That classifier is edge-triggered, so a wall clock here would re-fire
+// an occupancy callback on the unit's script at a wall-clock cadence. The
+// counter is therefore derived from the tick, which keeps the rest of §5 exact
+// and confines the divergence to which of {0, -1} the offset takes.
+//
+// TODO(question): two inputs to the bob's phase are untraced and share this
+// deferral. First, the rate field's own value is Unknown [01 §7.4 "Missing and
+// unknown"], so one step per tick is a placeholder — the minimal assumption.
+// Second, retail adds a per-unit signed 16-bit bob phase word [04 R-MOV-01 §5]
+// whose writer is untraced, so there is no value to carry and no point storing
+// an always-zero field on the unit; a zero phase makes every hovercraft rock in
+// lockstep. Neither affects the ±1 residue that [R-MOV-01 §5b] bounds, since
+// that closure ranges over every counter phase and every phase word. What would
+// settle them is the writer of the rate field and the writer of that word.
+const hoverAnimationRate = 1
+
+// hoverBob carries the canhover inputs of the four-corner conform's per-corner
+// height [04 R-MOV-01 §5]. A nil *hoverBob selects the ordinary terrain plate,
+// which is what every non-hovering ground mover gets.
+type hoverBob struct {
+	counter int32 // the animation counter; only its low five bits are read
+	amp     int32 // 0, 1 or 2 after the speed term and the age fade
+}
+
+// newHoverBob builds the bob inputs, or returns nil when this unit does not
+// take the hover branch [04 R-MOV-01 §5].
+func newHoverBob(u *units.Unit, speed int32, tick, lastProposal uint32) *hoverBob {
+	if u == nil || u.Def == nil || !u.Def.CanHover || !u.Alive || u.Dying {
+		return nil
 	}
-	applyGroundConform(t, u)
+	// The sea-level floor and the bob are one branch, gated together on the
+	// definition and the live/death bits [04 R-MOV-01 §5][04 R-MOV-01 §8a]. A
+	// faded or speed-cancelled amplitude still takes the floor, so this returns
+	// a zero-amplitude bob rather than nil — nil means "not a hovering unit"
+	// and selects the ordinary terrain plate.
+	bob := &hoverBob{counter: int32(tick) * hoverAnimationRate}
+	half := u.Def.MaxVelocity / 2
+	if half <= 0 {
+		// MaxVelocity/2 is an unguarded divisor in retail: a canhover
+		// definition below 2 faults there [04 R-MOV-01 §5]. Declining to fault
+		// cannot diverge on authored content — the slowest canhover definition
+		// in this install authors 98304 [04 R-MOV-01 §5b].
+		return bob
+	}
+	v := speed
+	if v > half {
+		v = half
+	}
+	// amp = 2 - (((v << 16) / half) * 2 >> 16), so 2 at rest and 0 at half
+	// MaxVelocity, then faded linearly to zero over the 60 ticks after the
+	// mover last proposed a position [04 R-MOV-01 §5].
+	amp := 2 - int32(((int64(v)<<16)/int64(half))*2>>16)
+	age := tick - lastProposal // unsigned delta, as the age is read
+	if age > 60 {
+		age = 60
+	}
+	amp -= amp * int32(age) / 60
+	if amp < 0 {
+		amp = 0
+	}
+	bob.amp = amp
+	return bob
+}
+
+// component is the per-corner offset for corner i. The four corners sit a
+// quarter circle apart, so the unit rocks rather than heaves [04 R-MOV-01 §5].
+func (b *hoverBob) component(i int32) int32 {
+	// The per-unit phase word retail adds here is one of the two untraced
+	// inputs deferred on hoverAnimationRate above; zero until its writer is
+	// found [04 R-MOV-01 §5].
+	const bobPhase = 0
+	angle := int16(((b.counter&0x1f + 8*i) << 11) + bobPhase)
+	// The shared table biases the angle by 0x20 before selecting one of its 512
+	// entries, and the product rounds to nearest at the table's 8192 scale
+	// [04 R-MOV-01 §4][04 R-MOV-01 §5].
+	return numeric.MulRound(numeric.Sin(numeric.Angle(uint16(angle))+0x20), b.amp)
 }
 
 // applyGroundConform samples the four vertices of the root selection plate.
 // Invalid geometry and any out-of-map corner abandon the complete correction,
 // preserving the previous Y and orientation [04 R-MOV-01 §5a].
-func applyGroundConform(t *world.Terrain, u *units.Unit) {
+func applyGroundConform(t *world.Terrain, u *units.Unit, bob *hoverBob) {
 	binding := u.COBBinding()
 	if binding == nil || binding.Model == nil {
 		return
@@ -740,6 +823,15 @@ func applyGroundConform(t *world.Terrain, u *units.Unit) {
 			return
 		}
 		height[i] = conformHeight(t, worldX[i], worldZ[i])
+		if bob != nil {
+			// canhover raises the conform's floor to sea level, so a hovercraft
+			// rides the surface over water and the terrain over land in one
+			// expression [04 R-MOV-01 §8a].
+			if sea := int32(t.SeaLevel); height[i] <= sea {
+				height[i] = sea
+			}
+			height[i] += bob.component(int32(i))
+		}
 	}
 
 	a := (height[0] + height[1]) / 2
@@ -2552,7 +2644,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		s.emitMovementCallbacks(u, callbackSpeed)
 		// This follows the complete mover tick, including its callbacks, and is
 		// the only ordinary ground pose writer [04 R-MOV-01 §5a].
-		applyGroundPostMove(s.Terrain, u, groundDirty, coll.Mode)
+		applyGroundPostMove(s.Terrain, u, groundDirty, coll.Mode, newHoverBob(u, coll.Speed, s.tick, coll.LastProposalTick))
 		if groundDirty {
 			u.Flags &^= unitTransformDirty
 			steer.Dirty = false

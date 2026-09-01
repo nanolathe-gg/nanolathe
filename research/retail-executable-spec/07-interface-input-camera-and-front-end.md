@@ -3170,15 +3170,26 @@ passes: terrain tiles → features/wrecks → soft units → hard units → shad
 numbers (medium confidence on the projectile/explosion order — a swap would
 still match the observed call count). The squad-number pass draws `'0' +
 squadId` digits when a squad-overlay bit is set or the squad id is nonzero.
-The minimap viewport indicator is not a thick rectangle: in minimap mode the
-composer draws two one-pixel Bresenham lines crossing at the camera point plus
-the `(128,32)` view origin — a five-pixel horizontal run at the projected row
-and a five-pixel vertical run at the projected column — in color-map entry 15
-[03 §3.12]. The "thickness varies between 6 and 4 pixels with latch-flag bit
-`0x40`" reading of an earlier revision was a mis-transcription: the 6/4 values
-are the drag-selection rectangle's outer color-map entries chosen by that same
-latch bit while the armed latch is MOBILEBUILD (outer entry 6 when the bit is
-set, 4 when clear, else entry 15; inner entry 0), not a viewport thickness.
+The composer's five-pixel crosshair — two one-pixel Bresenham lines crossing at
+a projected point plus the `(128,32)` view origin, in color-map entry 15 — is a
+**world** figure and a film-mode diagnostic, not the minimap's viewport
+indicator [03 §3.12]. The "thickness varies between 6 and 4 pixels with
+latch-flag bit `0x40`" reading of an earlier revision was a mis-transcription:
+the 6/4 values are the drag-selection rectangle's outer color-map entries chosen
+by that same latch bit while the armed latch is MOBILEBUILD (outer entry 6 when
+the bit is set, 4 when clear, else entry 15; inner entry 0), not a viewport
+thickness.
+
+**Correction (2026-08-31).** This paragraph previously opened "The minimap
+viewport indicator is not a thick rectangle: in minimap mode the composer draws
+two one-pixel Bresenham lines crossing at the camera point…", which read the
+crosshair as the minimap's viewport indicator and so denied the minimap any
+rectangle. The two are separate figures with separate producers. The minimap's
+viewport indicator **is** a rectangle outline — one pixel wide, in color-map
+entry 14, stroked by the HUD's minimap-presentation routine onto the
+destination surface after the radar picture is copied there. `[03 R-MM-01 §1]`
+is the owning statement; only the crosshair's own description above survives
+here.
 
 ### Closed — the ordinary footer: sources, priority, redraw and clearing [R-HUD-03 §1] (2026-08-29)
 
@@ -6007,7 +6018,10 @@ baked terrain image exists — each supersample output maps back through floor
 division to a source tile pixel. Four named surfaces participate: the generated
 or baked *picture*, a temporary supersample buffer, the *mapped* composite that
 carries contacts, and the *final* surface that merges mapped state with the
-picture and draws start positions plus the viewport rectangle. Radar/sonar
+picture and draws start positions. (**Corrected 2026-08-31:** this sentence
+ended "…start positions plus the viewport rectangle". The rectangle is real, but
+it is not on FINAL: the HUD composer strokes it onto its own destination surface
+after copying FINAL there, `[03 R-MM-01 §1]`.) Radar/sonar
 contact blips use dedicated palette entries distinct from terrain colors, and
 the radar surface is wiped and rebuilt each tick while the picture persists.
 
@@ -6016,7 +6030,11 @@ Per-axis camera clamp order is:
 giving inclusive `[0, mapSize-viewSize]` in the normal `viewSize <= mapSize`
 domain; ordered form controls negative-maximum domains. The clamp refreshes the
 camera-to-radar rectangle. Camera persistence uses `Camera` `X_Position` /
-`Z_Position` and reapplies the clamp on load.
+`Z_Position` and reapplies the clamp on load. **`viewSize` here is the battle
+viewport subrect's span and the bounds are in retail's own camera frame, whose
+origin is the world point at that subrect's top-left corner — see
+[R-CAM-01 §13] below, which is what a reimplementation with a different origin
+frame has to convert.**
 
 Radar layout fits the map aspect inside a 126×126 square with signed integer
 division and centers the shorter dimension:
@@ -6329,6 +6347,79 @@ the slot unconditionally (the valid byte has no reader in the recall path —
 its only reader is the save/restore census, doc 08), jump, clamp, and clear
 the follow triple. Bookmarks are not in the `Camera` save account.
 
+### Closed — the clamp's frame of reference: what "camera 0" and `viewSize` mean [R-CAM-01 §13] (2026-08-31)
+
+**Established — a retail camera origin is the world point at the battle
+viewport's top-left corner, not at the display's.** [R-CAM-01 §11]'s pointer
+classification gives the world position of a pointer outside the minimap as
+`camera + (clampedPointer − viewOrigin)` per axis, where `viewOrigin` is the
+battle viewport subrect's origin — `(128, 32)` at every mode [03 §4.1]. A
+pointer resting exactly on that origin therefore reads the camera's own
+coordinates, which is the definition of the frame: the camera origin is drawn
+at framebuffer pixel `(128, 32)`, and the 128 columns of command panel and the
+32 rows of resource bar above it are *not* part of what the origin measures.
+Every camera arithmetic in this section is expressed in that frame: the clamp's
+`0` floor, the clamp's `mapSize - viewSize` maximum, the half-viewport
+recenters of [R-CAM-01 §11] and [R-CAM-01 §12], and phase 10's desired origin
+([R-CRD-006 §1], which names the same quantity `viewportExtent`).
+
+*What the floor means, concretely.* At `camera = 0` the map's column and row 0
+sit exactly on the viewport's leading edges, so the whole playable area west and
+north of the start position is reachable. A capture of the retail build on
+*Great Divide* scrolled hard west confirms it: the map's only geothermal vent,
+anchored at map pixel `(104, 152)`, appears at framebuffer x ≈ 232 — that is
+`104 + 128`, the vent's map pixel plus the viewport's left inset, with the
+camera at its floor of 0.
+
+**Supported inference — the maximum's extent operand is the same subrect
+span.** The two bounds are symmetric if `viewSize` is the subrect span
+(`512 × 416` at 640×480, `W-128 × H-64` generally [03 §4.1]): the floor puts the
+playable area's first pixel on the viewport's leading edge and the maximum puts
+its last pixel on the trailing edge. That reading is what [R-CRD-006 §1]'s
+wording ("subtracting half the viewport span", `mapPixelExtent −
+viewportExtent`) says, and it is the only reading under which the playable
+extents `PlayRight = Width·16 − 32` / `PlayBottom = Height·16 − 128` [03 §1] are
+fully visible. It is **not** separately traced here: the alternative — the
+clamp reading the negotiated display width and height instead — would leave the
+map's last 128 playable columns and last 64 rows permanently off screen.
+*Decider:* a static trace of which extent pair the clamp's maximum reads.
+
+**Nanolathe impact (defect PT5-01, fixed 2026-08-31).** This build's camera
+origin is the world point drawn at the *framebuffer's* top-left corner, not the
+viewport's: the world is composed across the whole framebuffer and the chrome
+is painted over it, so every draw site takes the projection of [03 §2.5] and
+subtracts `(128, 32)` back out, and picking re-adds them. Retail's bounds
+therefore have to be converted, by substituting `retailCamera = camera +
+leadingInset`:
+
+```
+minimum = -leadingInset
+maximum = mapSize - viewportSpan - leadingInset
+```
+
+with the subrect's insets — leading 128 / trailing 0 on X, leading 32 /
+trailing 32 on Z [03 §4.1]. On X the maximum is numerically unchanged
+(`mapSize - framebufferWidth`, because the trailing inset is zero) and on Z it
+gains the bottom inset.
+
+The shipped clamp used retail's bounds unconverted. The previous text of this
+section did not say which frame `viewSize` was measured in, and "the
+presentation width `W` and height `H`" of the scroll predicates above — which
+*are* display extents — reads as an invitation to use the display size here
+too. The consequence was that the westmost 128 map pixels and northmost 32 of
+every map could never be brought on screen, and the southmost 32 could not
+either; on *Great Divide* the vent above was unreachable, which is how the
+defect was found. The commit "Place the battle-start camera from the map's
+start position" had already made this conversion for the battle-start jump
+([R-CAM-01 §12]) and did not carry it into the clamp or into the phase-10
+desired origin; both now share one conversion.
+
+The **ordered** form is unchanged by any of this — the floor test still runs
+before the maximum test — and the Unknown below still stands: converting the
+frame does not close the viewport-larger-than-map domain, it only moves the
+degenerate condition from `viewSize > mapSize` to `viewportSpan > mapSize`,
+which is the same condition correctly transposed.
+
 ### Supported inference
 
 Camera and minimap conversion should remain an explicit compatibility
@@ -6343,8 +6434,17 @@ Unit, commander, feature, and projectile art sources and their direct
 direct-radar conversion, the drag/current-camera branch, the click-versus-drag
 gate, the terrain-height projection, and the radar/visibility update cadence
 are established above, as is minimap generation (126-pixel canvas, 2x
-supersample, picture/temp/mapped/final surfaces; the lens indicator is two
-one-pixel lines in map entry 15, §6).
+supersample, picture/temp/mapped/final surfaces; the minimap's viewport
+indicator is a one-pixel rectangle **outline** in colour-map entry 14, stroked
+onto the HUD destination surface after the radar picture is copied there,
+`[03 R-MM-01 §1]`).
+
+**Correction (2026-08-31).** The bullet above ended "…the lens indicator is two
+one-pixel lines in map entry 15, §6". That described the world composer's
+film-mode crosshair, not the minimap: it is the wrong figure, the wrong
+producer, the wrong shape and the wrong colour entry. `[03 R-MM-01 §1]` carries
+the rectangle's geometry, its clamp-time recomputation and its colour; §3.12 of
+doc 03 keeps the crosshair.
 
 ### Unknown
 
@@ -6353,8 +6453,19 @@ Open items only; the decider follows each.
 - Camera clamp behavior in unusual domains — a map whose view size exceeds the
   map size on an axis, where the ordered clamp form is the only established
   behavior · static trace.
-- Mapping of the three sensor callback tables to the radar versus jammer
-  palette entries · doc 03 §3.3 · static trace.
+- Which extent pair the clamp's maximum reads — the battle viewport subrect's
+  span or the negotiated display's — where only the subrect reading makes the
+  whole playable area reachable ([R-CAM-01 §13]) · static trace of the clamp's
+  maximum. Corroborated meanwhile from the other side: `[03 R-MM-01 §1]`, traced
+  independently for the minimap repaint pre-pass, states that the clamped camera
+  keeps the viewport rectangle inside the radar rect "because
+  `cameraX <= PlayRight - viewWidth`" — which is the subrect reading of this
+  maximum. Two traces agreeing is not the trace; the item stays open.
+- ~~Mapping of the three sensor callback tables to the radar versus jammer
+  palette entries~~ · **closed 2026-08-31**: the circles come from the contacts
+  pass, not the callback tables (`[03 §3.10]` correction), and their colours are
+  colour-map entry 10 (radar and sonar outer) and entry 12 (both jam circles),
+  `[03 R-MM-01 §2]`.
 - Whether any transient follow-target or shake state is reconstructed from a
   non-`Camera` save account · doc 08 · static trace.
 - Start-position marker art and placement · doc 03 · static trace.

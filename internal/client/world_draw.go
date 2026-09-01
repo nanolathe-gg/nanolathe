@@ -4,6 +4,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/hud"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
@@ -75,6 +76,17 @@ type worldWindow struct {
 //
 // Presentation zoom is not a retail concept: the effective view is used so
 // that zooming out cannot clip a visible unit out of the window [F-P1-008].
+//
+// The camera origin is negative at the map's west and north edges — the clamp's
+// floor is minus the viewport's leading inset, so that world column 0 can reach
+// the viewport's left edge [07 §10] — and both cell conversions below are
+// written for it. Go's `/` truncates toward zero, which is exactly what
+// [03 R-RAST-01 §6-A] establishes for retail's own camera-to-cell divisions
+// ("the dividend is biased by fifteen when negative before the arithmetic
+// shift"), so a negative origin needs no floorDiv here and must not be given
+// one: floor division would move the window origin one cell further out than
+// retail's. clipWindowAxis then takes the below-zero part off the count, which
+// is the same clip the positive case uses.
 func (c *Client) worldWindow() worldWindow {
 	var w worldWindow
 	if c == nil || c.cam == nil {
@@ -134,6 +146,9 @@ func (w worldWindow) admitsPassARow(row int32) bool {
 // half-height shear, so a climbing aircraft keeps the row of the ground it is
 // over instead of sorting into an earlier row and painting under the structure
 // it just left [03 R-RAST-01 §7].
+//
+// The division truncates toward zero for a negative camera origin, matching the
+// biased shift of [03 R-RAST-01 §6-A].
 func unitBucketRow(z numeric.Fixed, camZ int32) int32 {
 	return (int32(int64(z)>>16)-camZ)/cellPixels + 16
 }
@@ -155,10 +170,24 @@ type worldBucket struct {
 
 // worldBuckets is a reusable row-indexed slice. It deliberately avoids maps in
 // the frame path and retains bucket/item capacity between frames [03 §1][I1].
+//
+// It also carries this frame's carrier-to-children index, because the per-unit
+// present of [03 R-RAST-01 §7] runs for the unit "and then each attached child
+// that is not carried piece-less" and both unit passes need the same lists.
 type worldBuckets struct {
 	items        []worldDrawable
 	bucket       []worldBucket
 	orderedItems []worldDrawable
+
+	// units is the frame's unit slice the child indices point into.
+	units []frame.UnitView
+	// childHead is indexed by carrier slot and holds the first child's index
+	// plus one, so zero means "no children"; childNext is the same encoding
+	// indexed by child. touched lists the carrier slots written this frame so
+	// the reset costs the number of carriers rather than the slot space.
+	childHead    []int32
+	childNext    []int32
+	childTouched []int32
 }
 
 func (b *worldBuckets) reset() {
@@ -168,6 +197,79 @@ func (b *worldBuckets) reset() {
 	b.bucket = b.bucket[:0]
 	b.items = b.items[:0]
 	b.orderedItems = b.orderedItems[:0]
+	for _, slot := range b.childTouched {
+		b.childHead[slot] = 0
+	}
+	b.childTouched = b.childTouched[:0]
+	b.childNext = b.childNext[:0]
+	b.units = nil
+}
+
+// indexChildren builds the carrier-to-children lists for one committed frame.
+// A child links to the front of its carrier's list, so walking the list yields
+// the most recently attached child first — retail's cargo list is that LIFO
+// order [04 R-UNIT-06 §3]. Units are enumerated in ascending slot, so the
+// order this reproduces is descending slot, which is the attach order for the
+// dominant case of one carrier and one product.
+//
+// A piece-less carry (a negative hang piece) is excluded: the per-unit present
+// draws only children that follow a real piece [03 R-RAST-01 §7]
+// [04 R-UNIT-06 §3].
+func (b *worldBuckets) indexChildren(units []frame.UnitView) {
+	b.units = units
+	if len(units) == 0 {
+		return
+	}
+	if cap(b.childNext) < len(units) {
+		b.childNext = make([]int32, len(units))
+	}
+	b.childNext = b.childNext[:len(units)]
+	for i := range b.childNext {
+		b.childNext[i] = 0
+	}
+	maxSlot := 0
+	for i := range units {
+		if s := int(units[i].Slot); s > maxSlot {
+			maxSlot = s
+		}
+	}
+	if len(b.childHead) < maxSlot+1 {
+		grown := make([]int32, maxSlot+1)
+		copy(grown, b.childHead)
+		b.childHead = grown
+	}
+	for i := range units {
+		u := &units[i]
+		if u.Carrier == 0 || u.Carrier == u.Slot || u.CarriedPiece < 0 {
+			continue
+		}
+		carrier := int(u.Carrier)
+		if carrier >= len(b.childHead) {
+			continue
+		}
+		if b.childHead[carrier] == 0 {
+			b.childTouched = append(b.childTouched, int32(carrier))
+		}
+		b.childNext[i] = b.childHead[carrier]
+		b.childHead[carrier] = int32(i) + 1
+	}
+}
+
+// firstChild returns the index of a carrier's first attached child, or -1.
+func (b *worldBuckets) firstChild(carrier pool.Handle) int {
+	slot := int(carrier)
+	if slot <= 0 || slot >= len(b.childHead) {
+		return -1
+	}
+	return int(b.childHead[slot]) - 1
+}
+
+// nextChild returns the index of the next child in a carrier's list, or -1.
+func (b *worldBuckets) nextChild(child int) int {
+	if child < 0 || child >= len(b.childNext) {
+		return -1
+	}
+	return int(b.childNext[child]) - 1
 }
 
 func (b *worldBuckets) add(v worldDrawable) {
@@ -371,6 +473,11 @@ func (c *Client) drawWorldPass(cur *frame.Frame, ok bool) {
 	win := c.worldWindow()
 	camZ := c.cam.Z
 	viewer := cur.Selection.LocalPlayer
+	// The carrier lists are built over every published unit, not only the
+	// bucketed ones: a child rides its carrier's admission and is presented
+	// with it even when its own row falls outside the window
+	// [03 R-RAST-01 §7].
+	b.indexChildren(cur.Units)
 	// The bucket build walks the units the viewer may see, in slot order, and
 	// appends each to its row. Appends are stable, so in-row draw order is
 	// ascending unit slot in both passes [03 R-RAST-01 §7].
@@ -460,9 +567,10 @@ func (c *Client) drawWorldPassB(cur *frame.Frame, ok bool) {
 // [04 R-MOV-01 §8][03 R-RAST-01 §7].
 const moverModeGrounded uint8 = 1
 
-// presentUnit runs the two per-unit steps both passes share, in order: the
-// selected-unit footprint quad when the unit's selected bit is set, then the
-// model present when the unit has a draw record [03 R-RAST-01 §7].
+// presentUnit runs the per-unit steps both passes share, in order: the
+// selected-unit footprint quad when the unit's selected bit is set, the model
+// present when the unit has a draw record, and then the present of each
+// attached child [03 R-RAST-01 §7].
 func (c *Client) presentUnit(d worldDrawable) {
 	u := *d.unit
 	// The selected-unit footprint quad occupies this unit's own depth slot and
@@ -472,11 +580,46 @@ func (c *Client) presentUnit(d worldDrawable) {
 	if u.Flags&hud.SelectionFlag != 0 {
 		c.drawSelectionQuad(u)
 	}
-	if u.Model == "" {
-		return
-	}
-	if c.drawUnitModel(u, d.screenX, d.screenY) {
+	if u.Model != "" && c.drawUnitModel(u, d.screenX, d.screenY) {
 		c.selectionChrome = append(c.selectionChrome, selectionChrome{view: u, screenX: d.screenX, screenY: d.screenY})
+	}
+	c.presentAttachedChildren(u.Slot)
+}
+
+// presentAttachedChildren runs the children step of the per-unit present: after
+// a unit's own body and live pieces, each attached child that follows a real
+// carrier piece is presented too [03 R-RAST-01 §7][04 R-UNIT-06 §3].
+//
+// This is what puts a factory's nanoframe on its build plate. A product hangs
+// from the QueryBuildInfo piece [04 R-FAC-02 §2] and keeps the grounded mode
+// mirror [04 R-FAC-02 §1], so it is bucketed in pass A on its own world-Z row
+// — and the plate sits a few world units in front of or behind the factory's
+// own origin, which is often a different 16-pixel row. On a stock Kbot Lab it
+// is one row earlier, so the product was painted first and the factory body
+// then painted straight over it: the play-test report of a nanoframe sitting
+// under the build plate. Its own bucket entry is left alone; this is the
+// second, later present retail also performs.
+//
+// TODO(question): retail composites a child into the carrier's staging image
+// with the per-pixel key test, offset by the child's world-height difference
+// [03 R-REN-03A §4]. Nanolathe has no cross-unit key plane — each unit
+// composes and blits its own image — so a child is blitted whole over the
+// carrier instead of resolving against it per pixel. That is visible only
+// where carrier geometry should occlude part of a child; settling it means
+// giving the model path a staging image, which is a composition change and not
+// a draw-order one.
+func (c *Client) presentAttachedChildren(carrier pool.Handle) {
+	b := &c.worldBuckets
+	for i := b.firstChild(carrier); i >= 0; i = b.nextChild(i) {
+		if i >= len(b.units) {
+			break
+		}
+		child := b.units[i]
+		if child.Model == "" || c.cam == nil {
+			continue
+		}
+		sx, sy := c.cam.WorldToScreen(child.X, child.Y, child.Z)
+		c.drawUnitModel(child, sx-camera.OriginX, sy-camera.OriginY)
 	}
 }
 

@@ -55,77 +55,104 @@ func (h *MinimapHUD) MinimapToWorld(rx, ry int32, playW, playH int32, m camera.M
 	return m.RadarToWorld(rx, ry, playW, playH)
 }
 
-// ViewportRect returns the camera viewport rect projected onto the inclusive
-// minimap canvas for the one-pixel viewport marker [03 §3.12][07 §10]. It is
-// clipped to the HUD rect and not filled. TODO(question): the exact authored
-// viewport-marker palette color remains unknown; callers supply the placeholder.
-func (h *MinimapHUD) ViewportRect(cam *camera.Camera, m camera.Minimap, playW, playH int32) Rect {
-	if h == nil || cam == nil || m.W <= 0 || m.H <= 0 || playW <= 0 || playH <= 0 {
-		if h != nil {
-			return h.Rect
-		}
-		return Rect{}
+// ViewportMarkerLogicalColor is the logical palette entry the minimap's
+// viewport rectangle is stroked in: entry 14 of the logical→physical map,
+// whose GUIPAL source is (255,255,85) and which resolves to physical 194 in
+// the stock install [03 R-MM-01 §1][03 §4.3].
+//
+// It is the same entry the minimap's 1×1 projectile dot uses [03 §3.9]; the
+// two figures share one colour-map slot. It is NOT entry 15 — that is the
+// world composer's film-mode crosshair and the weapon/interceptor rings.
+const ViewportMarkerLogicalColor byte = 14
+
+// ViewportRect returns the camera-to-radar rectangle: the game viewport
+// projected through the radar lens, in inclusive display coordinates, ready
+// for the one-pixel outline [03 R-MM-01 §1].
+//
+// Retail recomputes this record inside the per-axis camera clamp, so it always
+// matches the origin the world was drawn from, and the HUD's minimap repaint
+// pre-pass strokes it onto the destination surface after the FINAL radar
+// surface is copied there. Canvas-space arithmetic is
+//
+//	left   = padX + trunc(RadarW · cameraX  / PlayRight)
+//	top    = padY + trunc(RadarH · cameraZ  / PlayBottom)
+//	right  = left - 1 + trunc(RadarW · viewWidth  / PlayRight)
+//	bottom = top  - 1 + trunc(RadarH · viewHeight / PlayBottom)
+//
+// with no half-height shear: this is a camera origin, not a unit position
+// [03 R-MM-01 §1].
+//
+// Two frames of reference meet here. Retail's camera origin is the world point
+// at the *game viewport's* top-left; this build's Camera.X/Z is the world point
+// at the *framebuffer's* top-left, because the world is composed across the
+// whole framebuffer and the chrome painted over it (see Camera.BattleView and
+// Camera.JumpToBattleViewCenter). Adding OriginX/OriginY converts one into the
+// other, and Camera.BattleView supplies the matching viewport extents. Doing
+// the conversion here — rather than halving the framebuffer — is what keeps
+// the rectangle over the terrain the player is actually looking at, and it
+// stays correct once a camera origin is allowed to go negative.
+//
+// The second return reports whether a rectangle exists at all; a caller with no
+// camera, no lens or no play area draws nothing rather than a placeholder.
+func (h *MinimapHUD) ViewportRect(cam *camera.Camera, m camera.Minimap, playW, playH int32) (Rect, bool) {
+	if h == nil {
+		return Rect{}, false
 	}
-	eW, eH := cam.ViewW, cam.ViewH
-	if cam.Scale != 0 {
-		eW, eH = cam.EffectiveView()
+	return MinimapViewportRect(cam, m, playW, playH, h.Rect)
+}
+
+// MinimapViewportRect is ViewportRect against an explicit destination
+// rectangle, for composers that hold the drawn destination directly rather
+// than a MinimapHUD record. It is the whole of the arithmetic; the method
+// above only supplies its own rect.
+func MinimapViewportRect(cam *camera.Camera, m camera.Minimap, playW, playH int32, dst Rect) (Rect, bool) {
+	if cam == nil || m.W <= 0 || m.H <= 0 || playW <= 0 || playH <= 0 {
+		return Rect{}, false
 	}
-	if eW < 1 {
-		eW = 1
+	viewW, viewH := cam.BattleView()
+	if viewW <= 0 || viewH <= 0 {
+		return Rect{}, false
 	}
-	if eH < 1 {
-		eH = 1
-	}
-	// Project top-left and bottom-right inclusive with the minimap shear [03 §3.9].
-	rx0, ry0 := m.WorldToRadar(cam.X, cam.Z, playW, playH)
-	rx1, ry1 := m.WorldToRadar(cam.X+eW-1, cam.Z+eH-1, playW, playH)
-	left, right := rx0, rx1
-	if left > right {
-		left, right = right, left
-	}
-	top, bottom := ry0, ry1
-	if top > bottom {
-		top, bottom = bottom, top
-	}
-	// The projection is canvas-local. Convert both endpoints through the
-	// destination rectangle before clipping; the HUD rect is display-space and
-	// may have a nonzero origin or a negotiated scale [07 §10][03 §3.6].
-	hl, ht, hr, hb := h.Rect.Ordered()
+	// Retail's camera origin, from this build's framebuffer-origin camera
+	// [03 §4.1][03 R-MM-01 §1].
+	camX := cam.X + camera.OriginX
+	camZ := cam.Z + camera.OriginY
+
+	// Signed truncating divides throughout, as retail's are [03 R-MM-01 §1].
+	left := m.PadX + int32(int64(camX)*int64(m.W)/int64(playW))
+	top := m.PadY + int32(int64(camZ)*int64(m.H)/int64(playH))
+	right := left - 1 + int32(int64(viewW)*int64(m.W)/int64(playW))
+	bottom := top - 1 + int32(int64(viewH)*int64(m.H)/int64(playH))
+
+	// The projection is canvas-local. Scale both endpoints into the
+	// destination rectangle, which may have a nonzero origin or a negotiated
+	// size [07 §10][03 §3.6]. CanvasToDisplay rejects out-of-canvas points, so
+	// scale the endpoints directly and let the destination clip decide.
+	hl, ht, hr, hb := dst.Ordered()
 	dw, dh := hr-hl+1, hb-ht+1
-	dx0, dy0, ok0 := m.CanvasToDisplay(left, top, hl, ht, dw, dh)
-	dx1, dy1, ok1 := m.CanvasToDisplay(right, bottom, hl, ht, dw, dh)
-	if !ok0 || !ok1 {
-		return h.Rect
+	if dw <= 0 || dh <= 0 {
+		return Rect{}, false
 	}
-	r := Rect{X1: dx0, Y1: dy0, X2: dx1, Y2: dy1}
+	r := Rect{
+		X1: hl + left*dw/camera.MinimapLongSide,
+		Y1: ht + top*dh/camera.MinimapLongSide,
+		X2: hl + right*dw/camera.MinimapLongSide,
+		Y2: ht + bottom*dh/camera.MinimapLongSide,
+	}
 	if r.X1 > r.X2 {
 		r.X1, r.X2 = r.X2, r.X1
 	}
 	if r.Y1 > r.Y2 {
 		r.Y1, r.Y2 = r.Y2, r.Y1
 	}
-	// Clip to HUD rect inclusive [07 §10][03 §3.6].
-	if r.X1 < hl {
-		r.X1 = hl
+	// Retail clips the four segments to the destination surface, not to the
+	// radar rect; in the ordinary domain the clamped camera keeps the rectangle
+	// inside the radar rect anyway [03 R-MM-01 §1]. Reject only a rectangle
+	// that misses the destination entirely — the stroke itself clips.
+	if r.X2 < hl || r.X1 > hr || r.Y2 < ht || r.Y1 > hb {
+		return Rect{}, false
 	}
-	if r.Y1 < ht {
-		r.Y1 = ht
-	}
-	if r.X2 > hr {
-		r.X2 = hr
-	}
-	if r.Y2 > hb {
-		r.Y2 = hb
-	}
-	if r.X1 > r.X2 || r.Y1 > r.Y2 {
-		// Degenerate clipped away; return clamped single pixel at centre of HUD intersection
-		// Keep 1-pixel minimum [07 §6] lens 1-pixel Bresenham.
-		r.X1 = hl
-		r.Y1 = ht
-		r.X2 = hl
-		r.Y2 = ht
-	}
-	return r
+	return r, true
 }
 
 // PlaySizeForMinimap returns PlayRight = Wpix-32, PlayBottom = Hpix-128 in map pixels [03 §3.4].

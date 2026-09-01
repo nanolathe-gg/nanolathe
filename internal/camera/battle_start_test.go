@@ -50,23 +50,85 @@ func TestJumpToBattleViewCenterUsesTheViewportNotTheFramebuffer(t *testing.T) {
 
 // A jump writes the origin outright and then clamps, exactly like every other
 // origin writer [07 R-CAM-01 §12][07 §10].
+//
+// The bounds are the battle viewport's, in this build's origin frame: the floor
+// is minus the viewport's leading inset and the maximum is
+// mapSize - viewportSpan - leadingInset [07 §10][03 §4.1]. This test previously
+// asserted a floor of 0 and a Z maximum of mapSize - framebuffer; both were the
+// unconverted retail bounds and made the map's west, north and south margins
+// unreachable (defect PT5-01).
 func TestJumpClampsLikeEveryOtherOriginWriter(t *testing.T) {
 	c := &Camera{ViewW: 640, ViewH: 480, MapW: 1024, MapH: 1024}
 	c.JumpTo(-50, 5000)
-	if c.X != 0 {
-		t.Errorf("X = %d, want 0 (below-zero arm of the ordered clamp)", c.X)
+	// -50 is above the floor of -128, so it survives the clamp: the world's
+	// column 0 sits 50 pixels right of the viewport's left edge.
+	if c.X != -50 {
+		t.Errorf("X = %d, want -50 (inside the [-128, ...] range)", c.X)
 	}
-	if c.Z != 1024-480 {
-		t.Errorf("Z = %d, want %d (mapSize - framebuffer)", c.Z, 1024-480)
+	if c.Z != 1024-480+OriginY {
+		t.Errorf("Z = %d, want %d (mapSize - viewportSpan - top inset)", c.Z, 1024-480+OriginY)
+	}
+	// At that Z maximum the map's last row is the viewport's last visible row.
+	if last := c.Z + OriginY + 416 - 1; last != 1024-1 {
+		t.Errorf("last visible row = %d, want %d", last, 1024-1)
 	}
 
-	// A target near the map edge clamps rather than centring, and the clamp
-	// maximum is measured against the framebuffer because the origin is the
-	// framebuffer's top-left corner.
+	// Below the floor clamps to the floor, and at the floor the map's first
+	// column and row sit exactly on the viewport's leading edges.
+	c = &Camera{ViewW: 640, ViewH: 480, MapW: 1024, MapH: 1024}
+	c.JumpTo(-1000, -1000)
+	if c.X != -OriginX || c.Z != -OriginY {
+		t.Fatalf("origin = (%d,%d), want (%d,%d)", c.X, c.Z, -OriginX, -OriginY)
+	}
+	if first := c.X + OriginX; first != 0 {
+		t.Errorf("first visible column = %d, want 0", first)
+	}
+
+	// A target near the map edge clamps rather than centring.
 	c = &Camera{ViewW: 640, ViewH: 480, MapW: 1024, MapH: 1024}
 	c.JumpToBattleViewCenter(1000, 1000)
-	if c.X != 1024-640 || c.Z != 1024-480 {
-		t.Fatalf("origin = (%d,%d), want (%d,%d)", c.X, c.Z, 1024-640, 1024-480)
+	if c.X != 1024-512-OriginX || c.Z != 1024-416-OriginY {
+		t.Fatalf("origin = (%d,%d), want (%d,%d)", c.X, c.Z, 1024-512-OriginX, 1024-416-OriginY)
+	}
+}
+
+// Every map pixel of the playable area is reachable: at the clamp's floor the
+// playable origin (0,0) is the viewport's first visible pixel, and at the clamp's
+// maximum the playable extent's last pixel is its last visible pixel
+// [07 §10][03 §4.1]. Great Divide's extents are the regression case: its only
+// geothermal vent is anchored at map pixel (104,152), which the pre-2026-08-31
+// floor of 0 could never bring on screen (defect PT5-01).
+func TestEveryPlayablePixelIsReachable(t *testing.T) {
+	// Great Divide: 160x256 cells, so 2560x4096 map pixels and playable
+	// extents PlayRight = 2528, PlayBottom = 3968 [03 §3.4].
+	playW, playH := PlaySizeFromCells(160, 256)
+	if playW != 2528 || playH != 3968 {
+		t.Fatalf("play extents = %dx%d, want 2528x3968", playW, playH)
+	}
+	c := NewFromTerrain(2560, 4096, playW, playH, 640, 480)
+
+	c.JumpTo(-100000, -100000)
+	if first := c.X + OriginX; first != 0 {
+		t.Errorf("hard west: first visible column = %d, want 0", first)
+	}
+	if first := c.Z + OriginY; first != 0 {
+		t.Errorf("hard north: first visible row = %d, want 0", first)
+	}
+	// The vent at map pixel (104,152) is inside the visible 512x416 rectangle
+	// at the hard-west, hard-north origin.
+	if vx := 104 - c.X; vx < OriginX || vx > 639 {
+		t.Errorf("vent screen X = %d, want within [%d,639]", vx, OriginX)
+	}
+	if vz := 152 - c.Z; vz < OriginY || vz > 447 {
+		t.Errorf("vent screen Z = %d, want within [%d,447]", vz, OriginY)
+	}
+
+	c.JumpTo(100000, 100000)
+	if last := c.X + 639; last != playW-1 {
+		t.Errorf("hard east: last visible column = %d, want %d", last, playW-1)
+	}
+	if last := c.Z + 447; last != playH-1 {
+		t.Errorf("hard south: last visible row = %d, want %d", last, playH-1)
 	}
 }
 

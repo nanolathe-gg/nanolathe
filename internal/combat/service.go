@@ -178,7 +178,7 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		// The slot visit's first step: decrement a nonzero reload countdown.
 		// It happens for every populated slot, before the target is resolved
 		// and before any later gate can skip the visit, so a weapon that is
-		// out of range, inhibited or waiting on Aim still recovers its shot
+		// out of range or waiting on Aim still recovers its shot
 		// [06 §1.2][06 §4.1]. Only after the decrement can the reload-zero
 		// fire-time pipeline below admit the visit, which is why a one-tick
 		// reloadtime fires on the tick after the decrement, never the same
@@ -186,12 +186,37 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		if slot.Reload > 0 {
 			slot.Reload--
 		}
-		// Inhibit is an order-side stop latch, distinct from autonomous
-		// tracking. It suppresses both reacquisition and the retained-target
-		// firing path until the order side releases it [04 R-ORD-01 §1].
-		if slot.IsOrderInhibited() {
-			continue
-		}
+		// Correction (play-test PT5): this visit used to `continue` here when
+		// the slot's order control byte carried bit 4, on the claim that the
+		// bit is "an order-side stop latch [that] suppresses both reacquisition
+		// and the retained-target firing path until the order side releases it
+		// [04 R-ORD-01 §1]". No section establishes that gate. [04 R-ORD-01 §1]
+		// says only which of the two order-side helpers writes bit 4 — *inhibit
+		// slot k* sets it and clears the slot's target, *release slot k* clears
+		// it and clears the target — and the bit's only traced readers are the
+		// TargetCleared notification guards of [R-ORDER-02 §2]: the cleanup
+		// walk emits the callback while bit 4 is clear and then sets it, and
+		// the mirror-guarded mid-life clear emits while it is set and then
+		// clears it. Doc 06's slot visit and shot-time admission never consult
+		// an order control byte at all [06 §1.2][06 §3.3][06 §3.2].
+		//
+		// The regression was total. That cleanup walk runs on EVERY order-record
+		// removal [R-ORDER-02 §2] — including the purge a player's own
+		// non-queued right-click performs — and nothing on the ordinary path
+		// ever cleared bit 4 again, so one order from the player silenced every
+		// weapon that unit owned for the rest of the battle. Inhibiting a slot
+		// already suppresses its retained-target shot by clearing the target;
+		// that is the whole of the established effect.
+		//
+		// TODO(question): whether [R-ORDER-02 §2]'s "slot control byte" is the
+		// same byte as [08 R-SAVE-WEAPON-01]'s persisted slot-flag byte is not
+		// established. If it is, bit 1 there is armed/has-target and bit 4 is
+		// the tracking flag, so *release*/*inhibit* would be clearing/setting
+		// the autonomous-tracking bit [06 §3.2] rather than a latch of their
+		// own, and this build's separate OrderControl field would be modelling
+		// one retail byte as two. Settling it needs a trace of the two order-
+		// side helpers' and the cleanup walk's stores against the byte the save
+		// writer serializes. Until then nothing here reads bit 4.
 		if slot.Target.Kind == units.TargetUnit && slot.Target.Unit != 0 {
 			tu := w.Unit(slot.Target.Unit)
 			if tu == nil || !tu.Alive || tu.Dying {

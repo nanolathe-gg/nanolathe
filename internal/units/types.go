@@ -143,15 +143,22 @@ func (s *Slot) CanFire() bool {
 // NumSlots is the retail slot count [06 §1.2].
 const NumSlots = 3 // [06 §1.2] primary, secondary, tertiary
 
-// OrderControlInhibit is the order-side slot inhibit latch. It is separate
-// from Flags' autonomous-tracking bit, and is read by the normal combat slot
-// pipeline before acquisition or firing [04 R-ORD-01 §1][06 §3.3].
+// OrderControlInhibit is bit 4 of a weapon slot's order control byte. Its
+// writers are established — *inhibit slot k* sets it and clears the slot's
+// target, *release slot k* clears it and clears the target [04 R-ORD-01 §1] —
+// and its only established reader is the TargetCleared de-duplication guard of
+// the removal cleanup walk [04 R-ORDER-02 §2].
+//
+// It is NOT a firing or acquisition gate. This comment previously said the bit
+// "is read by the normal combat slot pipeline before acquisition or firing
+// [04 R-ORD-01 §1][06 §3.3]"; neither section says so, and the accessor that
+// served that reading is gone with the gate it fed. The cleanup walk sets the
+// bit on every assigned slot on every order-record removal — the purge a
+// player's own non-queued order performs included — and no established path
+// clears it again, so reading it as a gate silenced each unit's weapons
+// permanently from its owner's first order. See the correction and the open
+// TODO(question) at the slot visit in internal/combat/service.go.
 const OrderControlInhibit uint8 = 1 << 4
-
-// IsOrderInhibited reports whether an order has inhibited this weapon slot.
-func (s *Slot) IsOrderInhibited() bool {
-	return s != nil && s.OrderControl&OrderControlInhibit != 0
-}
 
 // MoveState is the mover status shared with movement.System [04 §8.1][04 §9.1][GAP T15].
 // The mover reads this field after the unit-phase preserves it for the movement

@@ -184,7 +184,8 @@ func TestRadarToWorldIsDirectCameraOrigin(t *testing.T) { // [03 §3.11]
 	}
 	cam := &Camera{X: wx, Z: wz, ViewW: viewW, ViewH: viewH, MapW: playW, MapH: playH}
 	cam.Clamp()
-	if cam.X != clampAxis(wx, playW, viewW) || cam.Z != clampAxis(wz, playH, viewH) {
+	spanW, spanH := cam.BattleView()
+	if cam.X != clampAxis(wx, playW, spanW, OriginX) || cam.Z != clampAxis(wz, playH, spanH, OriginY) {
 		t.Fatalf("direct-origin clamp got %d,%d", cam.X, cam.Z)
 	}
 }

@@ -118,7 +118,9 @@ func TestHumanCommandKindsQueueAndApplyAtBoundary(t *testing.T) {
 
 func TestSelectionThenImplicitOrderAndStopUsesCurrentSelection(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
-	def := &content.UnitDef{UnitName: "scout", CanMove: true, MaxDamage: 100}
+	// A mobile unit authors bmcode 1; the resolver's live-mover test reads the
+	// building-class status bit that creation derives from it [04 R-ORD-02 §1].
+	def := &content.UnitDef{UnitName: "scout", BMCode: true, CanMove: true, MaxDamage: 100}
 	def.CanonicalKey = "scout"
 	cat.Units[def.CanonicalKey] = def
 	w := newSessionFixtureWorld(8, cat)
@@ -157,8 +159,13 @@ func TestHumanBuildMetadataIsStampedAtInputBoundary(t *testing.T) {
 	_ = s.EnqueueHumanCommand(HumanCommand{Kind: HumanMobileBuild, MobileBuild: HumanMobileBuildCommand{Builder: hb, Product: "product", WX: 2 << 16, WY: 7 << 16, WZ: 3 << 16, Queued: true}})
 	_ = s.EnqueueHumanCommand(HumanCommand{Kind: HumanFactoryBuild, FactoryBuild: HumanFactoryBuildCommand{Builder: hf, Product: "product", Queued: true}})
 	s.applyHumanCommands(42)
-	// Mobile build is queued → survivor flag set [04 §3.3]; factory products are
-	// counted nodes and are no-purge per [R-P0-11][SC17] even when Queued true.
+	// Purge survivorship is the descriptor's static gate bit 2, not the queue
+	// modifier [04 §3.3][04 R-MOV-03 §6]. MobileBuild does not carry it;
+	// BuildingBuild does, which is what keeps a factory producing across a
+	// player order that purges. These two assertions used to read the other
+	// way round — the queued mobile build was expected to be protected and the
+	// factory's counted node was expected to be purgeable, conflating "this
+	// command does not purge" with "this record survives a purge".
 	qm := orders.QueueForUnit(w.Unit(hb))
 	if qm == nil || qm.LenPrimary() == 0 {
 		t.Fatalf("no build node for %d", hb)
@@ -167,7 +174,7 @@ func TestHumanBuildMetadataIsStampedAtInputBoundary(t *testing.T) {
 		t.Fatal("queued mobile build did not retain the session queue binding")
 	}
 	nm := qm.Head()
-	if nm.Owner != hb || nm.CreationTick != 42 || nm.GoalY != 7<<16 || nm.Flags&orders.FlagPurgeSurvivor == 0 {
+	if nm.Owner != hb || nm.CreationTick != 42 || nm.GoalY != 7<<16 || nm.Flags&orders.FlagPurgeSurvivor != 0 {
 		t.Fatalf("mobile build metadata for %d: owner=%d tick=%d goalY=%d flags=%x", hb, nm.Owner, nm.CreationTick, nm.GoalY, nm.Flags)
 	}
 	qf := orders.QueueForUnit(w.Unit(hf))
@@ -178,8 +185,8 @@ func TestHumanBuildMetadataIsStampedAtInputBoundary(t *testing.T) {
 	if nf.Owner != hf || nf.CreationTick != 42 {
 		t.Fatalf("factory build metadata for %d: owner=%d tick=%d flags=%x", hf, nf.Owner, nf.CreationTick, nf.Flags)
 	}
-	if nf.Flags&orders.FlagPurgeSurvivor != 0 {
-		t.Fatalf("factory counted node should be no-purge even when Queued true, got flags %x [R-P0-11]", nf.Flags)
+	if nf.Flags&orders.FlagPurgeSurvivor == 0 {
+		t.Fatalf("BuildingBuild carries static gate bit 2 and must survive a Replace purge, got flags %x [04 R-MOV-03 §6]", nf.Flags)
 	}
 }
 

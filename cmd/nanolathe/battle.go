@@ -721,6 +721,116 @@ func (b *battleSession) isOnRadar(x, y int32) bool {
 	return m.HitTest(cx, cy)
 }
 
+// minimapPointerWorld is the minimap branch of step 1's pointer
+// classification: the lens conversion of [07 R-CAM-01 §11], with no
+// half-viewport term. It yields map pixels, which the ground resolver then
+// turns into a world point exactly as it does for the view branch [03 §3.11].
+//
+// The branch is taken only when the pointer is inside the minimap rectangle
+// **and no drag rectangle is active**, so a selection drag begun in the view
+// keeps resolving against the view even as the pointer crosses the rail
+// [07 R-CAM-01 §11].
+func (b *battleSession) minimapPointerWorld(x, y int32) (int32, int32, bool) {
+	if b == nil || b.sess == nil || b.battleState().Input.DragActive {
+		return 0, 0, false
+	}
+	m, dst, ok := b.minimapLayout()
+	if !ok {
+		return 0, 0, false
+	}
+	playW, playH, ok := b.sess.PlayArea()
+	if !ok {
+		return 0, 0, false
+	}
+	return client.MinimapPointerWorld(m, dst, playW, playH, x, y)
+}
+
+// minimapCameraLatch is the retail minimap latch. Under the default
+// `Interface Type 0` polarity the **right** button sets it over the minimap,
+// and while it is held every host frame writes the camera origin from the
+// pointer, so a right-drag pans continuously; right up releases it
+// [07 R-CAM-01 §5][07 R-CAM-01 §11]. The clicked map point becomes the view
+// *centre*, and Camera.JumpToBattleViewCenter owns that recenter for this
+// build's framebuffer-origin camera.
+//
+// It reports whether it consumed the pointer for this frame. Presentation
+// only; no sim state is written [I6].
+func (b *battleSession) minimapCameraLatch(mx, my int32, mouse *input.MouseState) bool {
+	if b == nil || b.cam == nil || mouse == nil {
+		return false
+	}
+	if !mouse.Pressed(input.MouseButtonRight) && !mouse.Held(input.MouseButtonRight) {
+		return false
+	}
+	m, dst, ok := b.minimapLayout()
+	if !ok {
+		return false
+	}
+	playW, playH, ok := b.sess.PlayArea()
+	if !ok {
+		return false
+	}
+	intent, consumed := client.MinimapCameraIntent(m, dst, playW, playH, mx, my)
+	if !consumed {
+		return false
+	}
+	b.cam.JumpToBattleViewCenter(intent.X, intent.Z)
+	return true
+}
+
+// minimapClickOrder issues the armed order, or the contextual world click, at
+// the minimap's world point — retail's left-button path over the minimap under
+// `Interface Type 0` [07 R-CAM-01 §5].
+//
+// It routes through orderSelected, the single order producer. Nothing else is
+// special-cased: pickTarget and cursorWorld already take the minimap branch of
+// the pointer classification for a pointer over the radar rectangle, so the
+// world view and the minimap differ only in how the pointer's world point and
+// unit word are resolved [07 R-CAM-01 §11][07 R-HUD-03 §1].
+func (b *battleSession) minimapClickOrder(mx, my int32, additive bool) {
+	if b == nil || !b.isOnRadar(mx, my) {
+		return
+	}
+	// TODO(question): what a left click over the minimap does while a build
+	// product is armed is untraced. [07 R-CAM-01 §5] says only "issues the
+	// armed order / world click", and the placement path of [07 R-P0-11 §1]
+	// resolves a *view* pixel to a build site. Rather than site a building from
+	// the radar lens, the click is ignored while placement is armed; tracing
+	// the world-click handler's MOBILEBUILD branch under region bit 0 settles
+	// it.
+	if b.battleState().Input.BuildDef != "" {
+		return
+	}
+	if b.battleState().Input.Latch != input.LatchNormal {
+		code := hud.LatchToCode(b.battleState().Input.Latch)
+		if code != 0 {
+			b.orderSelected(code, mx, my, additive)
+		}
+		// The latch retires after dispatch unless Shift keeps it, as it does
+		// for a world click [07 §9][P0-I14].
+		if additive {
+			b.battleState().Input.ShiftLatchSticky = true
+		} else {
+			b.battleState().Input.Latch = input.LatchNormal
+			b.battleState().Input.ShiftLatchSticky = false
+		}
+		return
+	}
+	// Idle latch: the contextual order, which orders.Resolve specialises from
+	// the target and the point [04 §3.4][07 §9].
+	//
+	// TODO(question): the world-click handler's own-unit *select* branch is not
+	// reproduced here. Retail's pointer unit word over the minimap is the dot
+	// winner within squared pixel distance 4 [07 R-HUD-03 §1], so the branch
+	// plausibly runs, but [07 R-CAM-01 §5] records only "the armed order /
+	// world click" and the handler's branch order under region bit 0 has not
+	// been traced. Selecting a unit by clicking its minimap blip is therefore
+	// not implemented.
+	if b.hasSelection() {
+		b.orderSelected(1, mx, my, additive)
+	}
+}
+
 // handleInput processes selection, orders, and build placement.
 // It converts input into complete canonical commands with target/position and
 // queue modifiers (shift-queued) via one picking routine that respects fog,
@@ -741,28 +851,24 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 		b.battleState().Input.ShiftLatchSticky = false
 	}
 
-	// Minimap click-to-jump [C-6][07 §10] uses the same layout adapter as draw.
-	// This is presentation-only and never writes sim [I6].
+	// Minimap input, under the default `Interface Type 0` polarity
+	// [07 R-CAM-01 §5]: right down over the minimap sets the minimap latch, and
+	// while it is held every host frame jumps the camera from the pointer, so a
+	// right-drag pans continuously [07 R-CAM-01 §11]; left down over the minimap
+	// issues the armed order or the world click at the minimap's world point.
+	//
+	// This used to be inverted — left jumped the camera, and no button issued an
+	// order at all.
 	if b.isOverMinimap(mx, my) {
-		if mouse.Pressed(input.MouseButtonLeft) && b.cam != nil {
-			m, dst, ok := b.minimapLayout()
-			if !ok {
-				return
-			}
-			view := hud.Rect{X1: camera.OriginX, Y1: camera.OriginY, X2: camera.OriginX + b.cam.ViewW - 1, Y2: camera.OriginY + b.cam.ViewH - 1}
-			playW, playH, ok := b.sess.PlayArea()
-			if !ok {
-				return
-			}
-			intent, consumed := client.MinimapCameraIntent(b.cam.X, b.cam.Z, m, dst, view, playW, playH, mx, my, b.isOnRadar(mx, my), false)
-			if consumed {
-				b.cam.X, b.cam.Z = intent.X, intent.Z
-				b.cam.Clamp()
-			}
+		if b.minimapCameraLatch(mx, my, mouse) {
 			return
 		}
-		// While over minimap, suppress world drag/selection [07 §10] minimap interaction region.
-		if mouse.Pressed(input.MouseButtonLeft) || mouse.Held(input.MouseButtonLeft) {
+		if mouse.Pressed(input.MouseButtonLeft) {
+			b.minimapClickOrder(mx, my, kbd.HasShift())
+			return
+		}
+		// While over the minimap, suppress world drag/selection [07 §10].
+		if mouse.Held(input.MouseButtonLeft) {
 			return
 		}
 	}
@@ -1360,6 +1466,19 @@ func (b *battleSession) cursorWorld(sx, sy int32) (wx, wy, wz numeric.Fixed) {
 	if b.cam == nil {
 		return 0, 0, 0
 	}
+	// Step 1 of the host frame classifies the pointer before any ground
+	// resolution. A pointer inside the minimap rectangle takes the lens
+	// conversion, not the view's cursor-to-world projection — the two paths do
+	// not share a routine in retail either — and the resulting map pixels then
+	// go through the same ground resolver [07 R-CAM-01 §11][03 §3.11].
+	if mpx, mpz, ok := b.minimapPointerWorld(sx, sy); ok {
+		if b.sess != nil {
+			if wx, wy, wz, ok := b.sess.CursorToWorld(mpx, mpz); ok {
+				return wx, wy, wz
+			}
+		}
+		return numeric.Fixed(mpx) << 16, 0, numeric.Fixed(mpz) << 16
+	}
 	// Clamp pointer into the battle viewport before ground resolution [07 §8] step 1 [C-2].
 	clampedX := sx
 	clampedY := sy
@@ -1631,6 +1750,35 @@ func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *ord
 	// Presentation picking reads only the immutable committed frame. The
 	// returned unit is a short-lived copy for cursor semantics, never a live
 	// world pointer [07 §8][07 §9][I6].
+	//
+	// Over the minimap the pointer's unit word is not the view's hot-units
+	// winner but the unit whose minimap dot lies within squared pixel distance
+	// 4 of the pointer, nearest first [07 R-HUD-03 §1]. cursorWorld above has
+	// already taken the lens branch for the position, so only the unit word
+	// differs — and both take it under the same condition, an armed drag
+	// rectangle keeping the pointer in the view branch [07 R-CAM-01 §11].
+	if b.isOverMinimap(sx, sy) && !b.battleState().Input.DragActive {
+		f, ok := b.currentSnapshot()
+		if !ok {
+			return 0, nil, pos
+		}
+		handle := b.minimapHoverUnit(f, sx, sy)
+		if handle == 0 {
+			return 0, nil, pos
+		}
+		for i := range f.Units {
+			view := f.Units[i]
+			if view.Slot != handle {
+				continue
+			}
+			hit := &units.Unit{Handle: handle, Owner: view.Owner, X: view.X, Y: view.Y, Z: view.Z, Flags: view.Flags, Health: view.Health, MaxHealth: view.MaxHealth, Alive: true}
+			if b.cat != nil && view.DefName != "" {
+				hit.Def, _ = b.cat.Unit(view.DefName)
+			}
+			return handle, hit, pos
+		}
+		return 0, nil, pos
+	}
 	if f, ok := b.currentSnapshot(); ok {
 		if bh, view, hit := client.PickSnapshotUnit(f, sx, sy, b.cam, b.sess.LocalOwner); hit {
 			copy := &units.Unit{Handle: bh, Owner: view.Owner, X: view.X, Y: view.Y, Z: view.Z, Flags: view.Flags, Health: view.Health, MaxHealth: view.MaxHealth, Alive: true}

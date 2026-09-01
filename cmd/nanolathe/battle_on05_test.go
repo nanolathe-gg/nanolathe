@@ -22,7 +22,12 @@ import (
 // Shared authored fixture catalog for battle-input tests. The definitions are
 // deliberately local test data, not a second content source.
 func testCatalogON05() *content.Catalog {
-	b1 := &content.UnitDef{UnitName: "armcons", ObjectName: "armcons", Builder: true, CanMove: true, FootprintX: 2, FootprintZ: 2, YardMap: "oooo", MaxDamage: 100}
+	// armcons is a construction vehicle: authored BMcode 1, like every stock
+	// mobile unit. The order resolver's live-mover test reads the
+	// building-class status bit creation derives from that byte, so a mobile
+	// fixture must author it or it resolves as an immobile builder
+	// [04 R-ORD-02 §1][04 R-COLL-01 §2].
+	b1 := &content.UnitDef{UnitName: "armcons", ObjectName: "armcons", Builder: true, BMCode: true, CanMove: true, FootprintX: 2, FootprintZ: 2, YardMap: "oooo", MaxDamage: 100}
 	b1.CanonicalKey = content.CanonicalKey(b1.UnitName)
 	b1.DefinitionHeader.CanonicalKey = b1.CanonicalKey
 	p1 := &content.UnitDef{UnitName: "armsolar", ObjectName: "armsolar", FootprintX: 2, FootprintZ: 2, YardMap: "oooo", MaxDamage: 100}

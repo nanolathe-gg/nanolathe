@@ -663,8 +663,10 @@ func TestRallyInheritanceOrdering(t *testing.T) {
 	// Directly call rallyInheritance to test ordering
 	hp, _ := w.Create(prodDef, 0, world.CellToWorld(10), 0, world.CellToWorld(10))
 	prod := w.Unit(hp)
-	target := &units.Unit{Handle: 900}
-	hostile := &units.Unit{Handle: 901}
+	// Both stand-ins must carry the alive bit: a target that exists without it
+	// rejects every command code before the resolver's switch [04 R-ORD-02 §1].
+	target := &units.Unit{Handle: 900, Alive: true}
+	hostile := &units.Unit{Handle: 901, Alive: true}
 	sim := rng.NewSimulation(77)
 	orderBinding := &orders.QueueBinding{
 		Economy: svc.Economy,

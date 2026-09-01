@@ -179,9 +179,12 @@ func TestBattleCommandsPublishQueueAndShiftOverlay(t *testing.T) {
 
 func queueFixtureCatalog() (*content.Catalog, *content.UnitDef, *content.UnitDef, string) {
 	weapon := &content.WeaponDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "stockpile"}, ID: 1, Stockpile: true, ReloadTime: 60}
-	builder := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "builder"}, UnitName: "builder", ObjectName: "builder", Builder: true, CanMove: true, CanAttack: true, FootprintX: 2, FootprintZ: 2, MaxDamage: 100, Weapon1Def: weapon}
+	// Mobile fixtures author BMcode 1 like every stock mobile unit: the order
+	// resolver's live-mover test reads the building-class status bit that
+	// creation derives from that byte [04 R-ORD-02 §1][04 R-COLL-01 §2].
+	builder := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "builder"}, UnitName: "builder", ObjectName: "builder", Builder: true, BMCode: true, CanMove: true, CanAttack: true, FootprintX: 2, FootprintZ: 2, MaxDamage: 100, Weapon1Def: weapon}
 	product := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "product"}, UnitName: "product", ObjectName: "product", FootprintX: 3, FootprintZ: 2, YardMap: "oooooo", MaxDamage: 100}
-	target := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "target"}, UnitName: "target", ObjectName: "target", CanMove: true, FootprintX: 2, FootprintZ: 2, MaxDamage: 100}
+	target := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "target"}, UnitName: "target", ObjectName: "target", BMCode: true, CanMove: true, FootprintX: 2, FootprintZ: 2, MaxDamage: 100}
 	authorTestUnitScripts(builder, product, target)
 	// Picking is a hull test over the candidate's root-piece bounds
 	// [07 R-REV-01], so the fixture units need a resolvable model.

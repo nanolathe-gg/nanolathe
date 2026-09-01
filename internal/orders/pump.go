@@ -729,12 +729,30 @@ func (q *Queue) ensureSingleActive() {
 // pump visit with an empty satisfied set" [04 R-ORD-01 §1]. A record waits only
 // for what a handler asks it to wait for; the copy of the static mask is kept,
 // because [04 §3.2] gives the record a static-mask copy field of its own.
+// staticPurgeSurvivor is bit 2 of a descriptor's static gate mask. It is the
+// purge-survivor bit: the keep-survivors purge a non-queued (Replace) issue
+// runs removes every front-segment record whose static-mask copy lacks it
+// [04 §3.3][04 R-MOV-03 §6]. The nine descriptors that carry it are
+// `MakeSelectable`, `Wait`, `AttackUType`, `WaitForAttack`, `GetBuilt`,
+// `BeCarried`, `Paralyze`, `SelfRepair` and `BuildingBuild` [04 §3.1].
+const staticPurgeSurvivor uint32 = 0x4
+
 func newNode(id ID, n Node) *Node {
 	desc := DescriptorFor(id)
 	nn := n
 	nn.ID = id
 	if nn.StaticGate == 0 {
 		nn.StaticGate = desc.StaticGate
+	}
+	// Survivorship is a property of the record's descriptor, not of the queue
+	// modifier that inserted it. This used to be set from the caller's
+	// queued/non-queued flag instead, which had the two halves of [04 §3.3]
+	// backwards: a shift-queued `Move_Ground` survived a later Replace it
+	// should not have, and a factory's `BuildingBuild` — which carries bit 2
+	// — was purged by the first plain move order the player gave the factory,
+	// which is what stopped a factory with a rally point from producing.
+	if nn.StaticGate&staticPurgeSurvivor != 0 {
+		nn.Flags |= FlagPurgeSurvivor
 	}
 	if nn.Deadline == 0 {
 		nn.Deadline = -1

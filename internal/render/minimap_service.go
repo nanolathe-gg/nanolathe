@@ -122,13 +122,13 @@ func (s *MinimapService) RebuildMapped(word []uint16, current []uint8) bool {
 //
 // radarColor and jammerColor are the two circle indices of [03 §3.10] — the
 // outer radar/sonar circle and both jam circles respectively — resolved by the
-// caller from the active palette.
+// caller from the active palette, and ringColor is the weapon/interceptor ring.
 //
-// TODO(question): [03 §3.10] records the numeric identity of those two palette
-// indices as still open ("What remains open is the numeric identity of the two
-// palette indices"). They are parameters here precisely so no index is invented
-// at this layer; the caller's current choice is a placeholder until a trace
-// names them.
+// Their numeric identity was an open question in [03 §3.10] and is now closed
+// by [03 R-MM-01 §2]: logical entry 10 for the radar and sonar outer circles,
+// entry 12 for both jam circles, entry 15 for the rings. They stay parameters
+// so the palette lookup remains the caller's, which is where the
+// logical→physical map lives.
 func (s *MinimapService) RebuildFinal(m camera.Minimap, playW, playH int32, contacts []MinimapContact, blit MinimapContactBlitter, radarColor, jammerColor, ringColor byte) bool {
 	if s == nil || s.mapped == nil {
 		return false

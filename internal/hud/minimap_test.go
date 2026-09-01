@@ -101,48 +101,99 @@ func TestMinimapHUDWorldToMinimapRoundTrip(t *testing.T) { // TODO(question): Hi
 	}
 }
 
-func TestMinimapHUDViewportRect(t *testing.T) { // inclusive and clipped to HUD rect, 1-pixel not filled, hiColor DDA placeholder [07 §10][03 §3.9]
-	h := NewMinimapHUD(Anchors{}, Rect{X1: 0, Y1: 0, X2: 126, Y2: 126})
-	playW, playH := int32(608), int32(352) // 640,480 raw -> play [03 §3.4]
-	m := camera.LayoutMinimap(640, 480)    // wide: W126 H94 PadY 16
-	cam := &camera.Camera{X: 0, Z: 0, ViewW: 128, ViewH: 128, MapW: playW, MapH: playH}
-	r := h.ViewportRect(cam, m, playW, playH)
-	// Viewport rect must be inclusive and within HUD rect
-	hl, ht, hr, hb := h.Rect.Ordered()
-	if r.X1 < hl || r.Y1 < ht || r.X2 > hr || r.Y2 > hb {
-		t.Fatalf("ViewportRect not clipped to HUD rect: got %+v hud %+v", r, h.Rect)
+// TestMinimapHUDViewportRect locks the traced camera-to-radar rectangle of
+// [03 R-MM-01 §1]. The arithmetic is written out here rather than recomputed
+// from the function under test, because a constant or a division order is
+// exactly what regresses silently.
+func TestMinimapHUDViewportRect(t *testing.T) {
+	// A 64x64-cell map: PlayRight = 64*16-32, PlayBottom = 64*16-128 [03 §3.4].
+	playW, playH := int32(992), int32(896)
+	m := camera.LayoutMinimap(playW, playH)
+	if m.W != 126 || m.H != 113 || m.PadX != 0 || m.PadY != 6 {
+		t.Fatalf("layout = %+v, want W126 H113 PadX0 PadY6", m)
 	}
-	if r.X1 > r.X2 || r.Y1 > r.Y2 {
-		t.Fatalf("ViewportRect degenerate inclusive: %+v", r)
+	h := NewMinimapHUD(Anchors{}, Rect{X1: 0, Y1: 0, X2: 125, Y2: 125})
+	cam := &camera.Camera{X: 0, Z: 0, ViewW: 640, ViewH: 480, MapW: playW, MapH: playH}
+
+	// cameraX = 0 + OriginX = 128, cameraZ = 0 + OriginY = 32; the game
+	// viewport is 512x416 map pixels [03 §4.1].
+	//   left   = 0 + 128*126/992  = 16
+	//   top    = 6 +  32*113/896  = 6 + 4 = 10
+	//   right  = 16 - 1 + 512*126/992 = 15 + 65 = 80
+	//   bottom = 10 - 1 + 416*113/896 = 9 + 52 = 61
+	got, ok := h.ViewportRect(cam, m, playW, playH)
+	if !ok {
+		t.Fatal("viewport rectangle must exist for a valid camera and lens")
 	}
-	// 1-pixel thickness: should not be filled (test by checking area vs perimeter not needed, just ensure inclusive)
-	// Check that rect width/height correspond to scaled view / play
-	// For cam 0,0 with view 128, expect left ~ Pad, top ~ PadY
-	// World 0 -> rx = Pad, world 127 -> rx ~ Pad + 127*W/play
-	// Just ensure clipped and not filled via client draw test
-	// Test clipping: camera at far edge should clip to HUD rect
-	cam2 := &camera.Camera{X: playW - 10, Z: playH - 10, ViewW: 128, ViewH: 128, MapW: playW, MapH: playH}
-	r2 := h.ViewportRect(cam2, m, playW, playH)
-	if r2.X2 > hr || r2.Y2 > hb {
-		t.Fatalf("ViewportRect edge not clipped: got %+v hud %+v", r2, h.Rect)
+	if want := (Rect{X1: 16, Y1: 10, X2: 80, Y2: 61}); got != want {
+		t.Fatalf("ViewportRect = %+v, want %+v", got, want)
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// ViewportRect itself is presentation-only; palette index not stored here, but ensure rect is 1-pixel
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// The caller supplies the palette and draws the one-pixel outline.
+
+	// The rectangle tracks the camera, and its extents do not change with it.
+	moved := &camera.Camera{X: 200, Z: 100, ViewW: 640, ViewH: 480, MapW: playW, MapH: playH}
+	got2, ok := h.ViewportRect(moved, m, playW, playH)
+	if !ok {
+		t.Fatal("moved camera produced no rectangle")
+	}
+	if got2.X2-got2.X1 != got.X2-got.X1 || got2.Y2-got2.Y1 != got.Y2-got.Y1 {
+		t.Fatalf("rectangle size changed with the camera: %+v then %+v", got, got2)
+	}
+	if got2.X1 <= got.X1 || got2.Y1 <= got.Y1 {
+		t.Fatalf("rectangle did not follow the camera: %+v then %+v", got, got2)
+	}
+
+	// A camera origin of -OriginX/-OriginY is the map's own corner, and the
+	// signed truncating divides must land the rectangle exactly on the
+	// letterbox origin rather than wrapping [03 R-MM-01 §1].
+	corner := &camera.Camera{X: -camera.OriginX, Z: -camera.OriginY, ViewW: 640, ViewH: 480, MapW: playW, MapH: playH}
+	got3, ok := h.ViewportRect(corner, m, playW, playH)
+	if !ok {
+		t.Fatal("map-corner camera produced no rectangle")
+	}
+	if got3.X1 != m.PadX || got3.Y1 != m.PadY {
+		t.Fatalf("map-corner rectangle = %+v, want its top-left at the letterbox origin %d,%d", got3, m.PadX, m.PadY)
+	}
+
+	// No camera, no lens, no play area: nothing is drawn rather than a
+	// placeholder rectangle.
+	if _, ok := h.ViewportRect(nil, m, playW, playH); ok {
+		t.Fatal("a nil camera must not produce a rectangle")
+	}
+	if _, ok := h.ViewportRect(cam, camera.Minimap{}, playW, playH); ok {
+		t.Fatal("an empty lens must not produce a rectangle")
+	}
 }
 
 func TestMinimapHUDViewportRectUsesDisplayDestination(t *testing.T) {
 	// A real presentation destination is not necessarily the 126-pixel canvas:
-	// this catches returning canvas coordinates when the HUD is offset and scaled.
+	// this catches returning canvas coordinates when the HUD is offset and
+	// scaled. A 252-pixel destination is exactly 2x the canvas.
+	playW, playH := int32(992), int32(896)
+	m := camera.LayoutMinimap(playW, playH)
 	h := NewMinimapHUD(Anchors{}, Rect{X1: 200, Y1: 100, X2: 451, Y2: 351})
-	playW, playH := int32(608), int32(352)
-	m := camera.LayoutMinimap(640, 480)
-	cam := &camera.Camera{X: 64, Z: 32, ViewW: 64, ViewH: 64}
-	r := h.ViewportRect(cam, m, playW, playH)
-	want := Rect{X1: 226, Y1: 148, X2: 252, Y2: 182}
-	if r != want {
-		t.Fatalf("ViewportRect display conversion want %+v got %+v", want, r)
+	cam := &camera.Camera{X: 0, Z: 0, ViewW: 640, ViewH: 480, MapW: playW, MapH: playH}
+	got, ok := h.ViewportRect(cam, m, playW, playH)
+	if !ok {
+		t.Fatal("scaled destination produced no rectangle")
+	}
+	// Canvas (16,10)-(80,61) at 2x from origin (200,100).
+	if want := (Rect{X1: 232, Y1: 120, X2: 360, Y2: 222}); got != want {
+		t.Fatalf("ViewportRect = %+v, want %+v", got, want)
+	}
+}
+
+// TestMinimapViewportRectMatchesTheMethod keeps the destination-explicit entry
+// point and the MinimapHUD method on one implementation.
+func TestMinimapViewportRectMatchesTheMethod(t *testing.T) {
+	playW, playH := int32(992), int32(896)
+	m := camera.LayoutMinimap(playW, playH)
+	dst := Rect{X1: 3, Y1: 7, X2: 128, Y2: 132}
+	h := NewMinimapHUD(Anchors{}, dst)
+	cam := &camera.Camera{X: 64, Z: 96, ViewW: 640, ViewH: 480, MapW: playW, MapH: playH}
+	a, okA := h.ViewportRect(cam, m, playW, playH)
+	b, okB := MinimapViewportRect(cam, m, playW, playH, dst)
+	if okA != okB || a != b {
+		t.Fatalf("method %+v/%v and function %+v/%v disagree", a, okA, b, okB)
 	}
 }
 

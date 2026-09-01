@@ -106,6 +106,15 @@ type UnitView struct {
 	// them in pass B read this word as the mover object's mode rather than the
 	// record's own mirror and was retracted on 2026-08-30.
 	MoverMode uint8
+	// Carrier is the slot of the unit this one is attached to, or 0 when it is
+	// not carried, and CarriedPiece is the carrier piece it hangs from with a
+	// negative value for the piece-less carry of [04 R-UNIT-06 §3].  The unit
+	// painter needs the link because retail's per-unit present runs "for the
+	// unit and then each attached child that is not carried piece-less"
+	// [03 R-RAST-01 §7]: a factory's nanoframe is painted with the factory, not
+	// only as its own entry in its own Z row.
+	Carrier      pool.Handle
+	CarriedPiece int16
 	// Group is the unit's one stored control-group value [07 §9].  The
 	// health-bar pass draws the digit '0'+Group beside the bar of a unit whose
 	// group number is nonzero [03 R-FX-01 §6].

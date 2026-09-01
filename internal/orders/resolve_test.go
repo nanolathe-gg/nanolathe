@@ -175,10 +175,13 @@ func TestResolveFullTable(t *testing.T) {
 		}
 	}
 	assertRejectForActor(2, actorNoMove, nil)
+	// A target that exists but lacks the alive bit rejects every code before
+	// the switch [04 R-ORD-02 §1]. This used to assert QMove, reading §3.4's
+	// summary row ("a dead unit target becomes a queued move") as the
+	// condition; the queued-move arm is the live-mover test, exercised below.
 	dead := mkUnit(6, 1, "CORE", 0, 100, false, 0, mkDef(nil))
-	id = Resolve(2, actor, dead, nil)
-	if got := DescriptorFor(id).Name; got != "QMove" {
-		t.Fatalf("code2 dead want QMove got %q", got)
+	if id = Resolve(2, actor, dead, nil); id != 0 {
+		t.Fatalf("code2 dead target should reject, got %q", DescriptorFor(id).Name)
 	}
 	actorCapture := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
 		d.CanMove = true
@@ -369,25 +372,46 @@ func TestResolveFullTable(t *testing.T) {
 	if id := Resolve(9, actorNoPatrol, nil, nil); id != 0 {
 		t.Fatalf("code9 no patrol should reject")
 	}
-	id = Resolve(9, actor, nil, nil)
-	if got := DescriptorFor(id).Name; got != "QPatrol" {
-		t.Fatalf("code9 no target want QPatrol got %q", got)
+	// Code 9's queued arm is the live-mover test, not "no target", and the
+	// repair-patrol gate is the definition parser's `canreclamate` mirror, not
+	// the Builder flag [04 R-ORD-02 §1][04 R-ORD-01 §7]. Both assertions here
+	// used to encode the older readings.
+	id = Resolve(9, actor, nil, nil) // mobile + canreclamate
+	if got := DescriptorFor(id).Name; got != "RepairPatrol" {
+		t.Fatalf("code9 mobile reclaimer want RepairPatrol got %q", got)
 	}
 	id = Resolve(9, actor, friendly, nil)
 	if got := DescriptorFor(id).Name; got != "RepairPatrol" {
 		t.Fatalf("code9 builder repair patrol want RepairPatrol got %q", got)
 	}
-	actorPatrolNonBuilder := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanPatrol = true; d.Builder = false; d.CanFly = false }))
+	actorPatrolImmobile := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanPatrol = true }))
+	actorPatrolImmobile.Flags |= units.BuildingClassStatus
+	if got := DescriptorFor(Resolve(9, actorPatrolImmobile, nil, nil)).Name; got != "QPatrol" {
+		t.Fatalf("code9 immobile want QPatrol got %q", got)
+	}
+	actorPatrolNonBuilder := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
+		d.CanPatrol = true
+		d.CanReclamate = false
+		d.CanFly = false
+	}))
 	id = Resolve(9, actorPatrolNonBuilder, friendly, nil)
 	if got := DescriptorFor(id).Name; got != "Patrol" {
 		t.Fatalf("code9 patrol want Patrol got %q", got)
 	}
-	actorPatrolVTOL := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanPatrol = true; d.Builder = false; d.CanFly = true }))
+	actorPatrolVTOL := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
+		d.CanPatrol = true
+		d.CanReclamate = false
+		d.CanFly = true
+	}))
 	id = Resolve(9, actorPatrolVTOL, friendly, nil)
 	if got := DescriptorFor(id).Name; got != "VTOL_Patrol" {
 		t.Fatalf("code9 vtol patrol want VTOL_Patrol got %q", got)
 	}
-	actorPatrolBuilderVTOL := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanPatrol = true; d.Builder = true; d.CanFly = true }))
+	actorPatrolBuilderVTOL := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
+		d.CanPatrol = true
+		d.CanReclamate = true
+		d.CanFly = true
+	}))
 	id = Resolve(9, actorPatrolBuilderVTOL, friendly, nil)
 	if got := DescriptorFor(id).Name; got != "VTOL_RepairPatrol" {
 		t.Fatalf("code9 vtol repair patrol want VTOL_RepairPatrol got %q", got)

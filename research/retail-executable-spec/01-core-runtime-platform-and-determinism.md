@@ -1666,9 +1666,19 @@ non-reproducible in any way the two streams already bound — it makes a hoverin
 unit's committed height a function of elapsed real time.
 
 **Unknown.** The writer and configured value of the rate field that scales
-`GetTickCount()` here · §7.4, `[04 §9.1]` · static trace. Whether the two-unit
-perturbation can carry a hovering unit's height across one of the three
-thresholds that read it is document 04's open item ([04 §9.1] tail).
+`GetTickCount()` here · §7.4, `[04 §9.1]` · static trace.
+
+**Closed (2026-08-31).** Whether the two-unit perturbation can carry a hovering
+unit's height across one of the three thresholds that read it was this
+section's and document 04's open item. It can: `[04 R-MOV-01 §5b]` settles it
+by exhaustive enumeration. Two of the three readers named above — the
+below-water half-speed branch and the water damage — turn out to exempt
+`canhover` outright, so the exposure is the medium-band classifier alone; but
+that classifier's band-2 test is an equality against sea level, and 10 of the
+13 `canhover` definitions in this install author `waterline` 0, which puts them
+exactly on it. The perturbed word therefore alternates those units between
+bands 2 and 1 with elapsed real time. The leak is real and script-visible, not
+merely theoretical.
 
 ### 7.5 Closed — the per-phase random draw table [R-DET-01 §4] (2026-08-29)
 
@@ -2437,7 +2447,10 @@ document.
 - Writer and configured value of the rate field scaling the `GetTickCount()`
   animation counter that reaches the authoritative height word of `canhover`
   units · §7.4, doc 04 §9.1 · static trace. The read itself and its write path
-  into authoritative state are established ([R-MOV-01 §5]).
+  into authoritative state are established ([R-MOV-01 §5]), and the
+  consequence is now closed too ([R-MOV-01 §5b]): the leak does change a
+  script-visible band for most stock hovercraft. Only the rate value itself
+  remains open, and no closure depends on it.
 
 ### Memory and queues
 

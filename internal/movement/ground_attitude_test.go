@@ -39,7 +39,7 @@ func TestGroundConformFeedsNextTickCapAndPersists(t *testing.T) {
 	}
 	steer := &SteerState{MaxVelocity: 100000}
 	initialCap := steer.SpeedCapForPitch(int16(u.Move.Pitch))
-	applyGroundPostMove(terrain, u, true, 1)
+	applyGroundPostMove(terrain, u, true, 1, nil)
 	if u.Move.Pitch == 0 {
 		t.Fatal("terrain conform left pitch at zero")
 	}
@@ -55,7 +55,7 @@ func TestGroundConformFeedsNextTickCapAndPersists(t *testing.T) {
 	}
 
 	pitch, bank, y := u.Move.Pitch, u.Move.Bank, u.Y
-	applyGroundPostMove(terrain, u, false, 1)
+	applyGroundPostMove(terrain, u, false, 1, nil)
 	if u.Move.Pitch != pitch || u.Move.Bank != bank || u.Y != y {
 		t.Fatalf("clean next tick rewrote persisted ground pose: y=%v/%v pitch=%d/%d bank=%d/%d", u.Y, y, u.Move.Pitch, pitch, u.Move.Bank, bank)
 	}
@@ -98,7 +98,7 @@ func TestGroundConformRollOnRingOrderedPlate(t *testing.T) {
 		X:   numeric.FixedFromInt(64), Z: numeric.FixedFromInt(64),
 		ScriptState: &units.ScriptState{Binding: &cob.Binding{Model: plate}},
 	}
-	applyGroundPostMove(terrain, u, true, 1)
+	applyGroundPostMove(terrain, u, true, 1, nil)
 
 	if u.Move.Pitch != 0 {
 		t.Fatalf("cross-slope only: pitch=%d, want 0", u.Move.Pitch)

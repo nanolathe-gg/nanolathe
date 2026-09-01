@@ -248,7 +248,12 @@ func TestDispatchPrecedesStrategicRefresh(t *testing.T) {
 }
 
 func TestWaveGatherEngageHysteresisAndNearestStableTie(t *testing.T) {
-	attackerDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "attacker"}, UnitName: "attacker", CanMove: true, CanAttack: true, MaxDamage: 100}
+	// A mobile fixture authors BMcode 1, as every stock mobile unit does: the
+	// order resolver's live-mover test reads the building-class status bit
+	// creation derives from that byte, and without it the manager's move
+	// broadcasts resolve to the immobile-builder rally marker
+	// [04 R-ORD-02 §1][04 R-COLL-01 §2].
+	attackerDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "attacker"}, UnitName: "attacker", BMCode: true, CanMove: true, CanAttack: true, MaxDamage: 100}
 	baseDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "base"}, UnitName: "base", MaxDamage: 100}
 	enemyDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "enemy"}, UnitName: "enemy", BMCode: true, CanMove: true, MaxDamage: 100}
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{"attacker": attackerDef, "base": baseDef, "enemy": enemyDef}}
@@ -376,7 +381,7 @@ func TestNearestHostileAndRallyScoreUseSignedPositionWordDeltas(t *testing.T) {
 }
 
 func TestExploreMovePatrolSequenceAndEdgeDraws(t *testing.T) {
-	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "scout"}, UnitName: "scout", CanMove: true, CanPatrol: true, MaxDamage: 100}
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "scout"}, UnitName: "scout", BMCode: true, CanMove: true, CanPatrol: true, MaxDamage: 100}
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{"scout": def}}
 	terrain := &world.Terrain{CellW: 31, CellH: 25}
 	w := newAIFixtureWorld(8, cat)
@@ -418,7 +423,12 @@ func TestExploreMovePatrolSequenceAndEdgeDraws(t *testing.T) {
 			t.Fatalf("scout %d route length=%d, want %d", h, len(nodes), legs)
 		}
 		for i, node := range nodes {
-			wantID := orders.Lookup("QPatrol")
+			// The manager submits intent 9 and the ordinary resolver picks the
+			// descriptor: a mobile scout with `canpatrol` and no `canreclamate`
+			// mirror bit resolves `Patrol` [04 R-ORD-02 §1]. These assertions
+			// used to expect `QPatrol`, which the resolver only produces for an
+			// actor with no live mover.
+			wantID := orders.Lookup("Patrol")
 			if i == 0 {
 				wantID = orders.Lookup("Move_Ground")
 			}
@@ -453,7 +463,7 @@ func TestExploreMovePatrolSequenceAndEdgeDraws(t *testing.T) {
 		t.Fatalf("edge explore draws/state=%d/%d, want 3/%d", r.Draws(), r.State, probe.State)
 	}
 	nodes := orders.QueueOfUnit(w.Unit(group[0])).Primary()
-	if len(nodes) != 1 || nodes[0].ID != orders.Lookup("QPatrol") || nodes[0].GoalX != numeric.FixedFromInt(int64(edgeX)) || nodes[0].GoalZ != numeric.FixedFromInt(int64(edgeZ)) {
+	if len(nodes) != 1 || nodes[0].ID != orders.Lookup("Patrol") || nodes[0].GoalX != numeric.FixedFromInt(int64(edgeX)) || nodes[0].GoalZ != numeric.FixedFromInt(int64(edgeZ)) {
 		t.Fatalf("edge patrol=%v, want (%d,%d)", nodes, edgeX, edgeZ)
 	}
 }

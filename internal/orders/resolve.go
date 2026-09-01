@@ -86,6 +86,28 @@ func canCapture(u *units.Unit) bool {
 	}
 	return u.Def.CanCapture
 }
+
+// hasLiveMover is retail's "live mover" test — the first thing the move and
+// patrol resolutions ask after their capability gate [04 R-ORD-02 §1].
+//
+// The mover is the locomotion controller a unit owns; a building-class unit
+// owns none. The two are the same test in the resolver's own terms: the
+// code-3 arm picks `Attack_Chase` "when the unit has a mover" and
+// `Attack_NoMove` "when state bit 29 is set" [04 R-SPEC-01 §1], and
+// `GetBuilt` calls the case it skips "a product without a mover (a
+// building-class product)" [04 R-FAC-02 §4]. Status bit 29 is written at
+// creation from the definition's authored `bmcode` being zero
+// [04 R-COLL-01 §2], which units.initialStatusFlags already does.
+//
+// This is why a factory can be given a move order at all: stock factories
+// author `CanMove=1` on a `BMcode=0` definition (ARMLAB, ARMVP, ARMAAP and
+// their CORE counterparts, [03 R-RND-02A] asset census), so they pass the
+// can-move gate and then fail this one — which is exactly the `QMove` rally
+// arm below.
+func hasLiveMover(u *units.Unit) bool {
+	return u != nil && u.Flags&units.BuildingClassStatus == 0
+}
+
 func canPatrol(u *units.Unit) bool {
 	if u == nil || u.Def == nil {
 		return false
@@ -197,6 +219,14 @@ func resolveName(code int, actor *units.Unit, target *units.Unit, pos *ResolvePo
 	if actor == nil {
 		return ""
 	}
+	// A target that exists but lacks the alive bit rejects every code before
+	// the switch [04 R-ORD-02 §1]. §3.4's summary row for code 2 ("a dead unit
+	// target becomes a queued move") reads the queued-move arm onto the wrong
+	// condition; the traced resolver never reaches the switch with a dead
+	// target, and its queued-move arm is the live-mover test below.
+	if target != nil && !target.Alive {
+		return ""
+	}
 	switch code {
 	case 1:
 		return resolveContextual(actor, target, pos)
@@ -255,12 +285,22 @@ func resolveName(code int, actor *units.Unit, target *units.Unit, pos *ResolvePo
 		if !canPatrol(actor) {
 			return ""
 		}
-		if target == nil {
-			return "QPatrol" // queued patrol [04 §3.4]
+		// The patrol rally marker. An immobile builder records the patrol
+		// instead of executing it: `QPatrol` is a 60-tick delayed tail rotate
+		// with no goal binding, and the factory's `GetBuilt` copies it onto
+		// each finished product as a patrol [04 R-ORD-02 §1][04 §3.8].
+		//
+		// The old test here was "no target → QPatrol", which is not the
+		// resolver's condition and left a mobile unit unable to patrol at all:
+		// a patrol is issued against a ground point with no target, so every
+		// patrol resolved to the queued marker.
+		if !hasLiveMover(actor) {
+			return "QPatrol"
 		}
-		// builder with repair-patrol capability becomes RepairPatrol
-		// TODO(question): repair-patrol capability not located; stub uses Builder flag [04 §2.2]
-		if isBuilder(actor) {
+		// Mirror bit 9 is the second copy the definition parser makes of
+		// `canreclamate`; set selects the repair patrol [04 R-ORD-02 §1]
+		// [04 R-ORD-01 §7]. This used to stub the gate with the Builder flag.
+		if canReclaim(actor) {
 			if actor.Def != nil && actor.Def.CanFly {
 				return "VTOL_RepairPatrol"
 			}
@@ -361,7 +401,12 @@ func resolveContextual(actor *units.Unit, target *units.Unit, pos *ResolvePos) s
 		}
 		return "Reclaim"
 	}
-	if !canMove(actor) {
+	// Both interface variants of the contextual code end at the same move arm:
+	// `canmove` **and a live mover**, else reject [04 R-ORD-02 §1]. There is no
+	// queued-move arm in code 1, so a contextual click with an immobile builder
+	// selected resolves to nothing — a factory rally is set with the explicit
+	// move command (code 2), not contextually.
+	if !canMove(actor) || !hasLiveMover(actor) {
 		return ""
 	}
 	if actor.Def != nil && actor.Def.CanFly {
@@ -374,10 +419,16 @@ func resolveMove(actor *units.Unit, target *units.Unit) string {
 	if !canMove(actor) {
 		return ""
 	}
+	// The rally marker. `QMove` is resolved before any target test: an
+	// immobile builder records the move instead of executing it
+	// [04 R-ORD-02 §1]. The record is a 60-tick delayed tail rotate that binds
+	// no goal, so the factory never moves; its `GetBuilt` walks the factory's
+	// primary queue at completion and re-issues each `QMove` against the
+	// product [04 §3.8][04 R-FAC-02 §4].
+	if !hasLiveMover(actor) {
+		return "QMove"
+	}
 	if target != nil {
-		if !target.Alive {
-			return "QMove" // dead unit target becomes queued move [04 §3.4]
-		}
 		if isHostile(actor, target) && (canCapture(actor) || canReclaim(actor)) {
 			if canCapture(actor) {
 				return "Capture"

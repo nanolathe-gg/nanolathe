@@ -19,9 +19,11 @@ import (
 //   - queued: queue modifier — true is Append/Shift-queue (insert after active without purge),
 //     false is Replace (purge unprotected + drop leading auto before insert) [04 §3.3][P0-08].
 //
-// The returned Node carries Flags=FlagPurgeSurvivor when queued so future Replace purges
-// correctly preserve it [04 §3.3]. StaticGate/DynamicGate/Deadline are filled later by newNode
-// from the descriptor; caller may set Param1..3 for command-specific fields before Push.
+// The queued flag selects what the CALLER does to the queue before inserting; it writes
+// nothing onto the record. Purge survivorship is the descriptor's static gate bit 2, and
+// newNode applies it at insertion [04 §3.3][04 R-MOV-03 §6].
+// StaticGate/DynamicGate/Deadline are filled later by newNode from the descriptor;
+// caller may set Param1..3 for command-specific fields before Push.
 func NewNodeForOrder(id ID, target pool.Handle, goalX, goalY, goalZ numeric.Fixed, tick uint32, owner pool.Handle, queued bool) Node {
 	n := Node{
 		ID:           id,
@@ -32,9 +34,7 @@ func NewNodeForOrder(id ID, target pool.Handle, goalX, goalY, goalZ numeric.Fixe
 		CreationTick: tick,
 		Owner:        owner,
 	}
-	if queued {
-		n.Flags |= FlagPurgeSurvivor // survive future Replace purge [04 §3.3]
-	}
+	_ = queued // the modifier is the caller's; survivorship is the descriptor's [04 R-MOV-03 §6]
 	return n
 }
 

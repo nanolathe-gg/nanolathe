@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -119,6 +120,11 @@ func (s *Session) publishSnapshot(tick uint32) {
 				// bits of the mover mode word, never a screen coordinate
 				// [03 R-RAST-01 §7][04 R-MOV-01 §8].
 				MoverMode: publishedMoverMode(u),
+				// The carrier link the unit painter's per-unit present needs:
+				// a carried child is drawn with its carrier, not only as its
+				// own bucket entry [03 R-RAST-01 §7][04 R-UNIT-06 §3].
+				Carrier:      u.Attachment.Carrier,
+				CarriedPiece: publishedCarriedPiece(u.Attachment.AttachPiece),
 				// The health-bar pass draws '0'+Group beside the bar of a unit
 				// whose group number is nonzero [03 R-FX-01 §6][07 §9].
 				Group: u.Group,
@@ -868,6 +874,19 @@ func publishVisibilityView(vis *visibility.Service, local uint8, out *frame.Visi
 // defect PT3-01. See the 2026-08-30 correction under [03 R-RAST-01 §7], which
 // retracts that section's "structures (no mover, mode `0`) … This is the
 // retail order; it is not a bug to fix".
+// publishedCarriedPiece narrows the carrier hang piece to the committed copy.
+// Retail stores it as one byte and reads it back signed, so the reserved
+// no-piece index is a negative value on the read side [04 R-FAC-02 §1]; the
+// composer only needs "is there a real piece", which is the sign
+// [03 R-RAST-01 §7]. Anything outside the signed 16-bit range is published as
+// the no-piece sentinel rather than wrapping into a valid-looking index.
+func publishedCarriedPiece(piece int) int16 {
+	if piece < 0 || piece > math.MaxInt16 {
+		return -1
+	}
+	return int16(piece)
+}
+
 func publishedMoverMode(u *units.Unit) uint8 {
 	if u == nil {
 		return 0

@@ -108,13 +108,17 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 	// maps through the canonical camera adapter and remains bounded.
 	mx := dst.X1 + (dst.X2-dst.X1)/2
 	my := dst.Y1 + (dst.Y2-dst.Y1)/2
-	viewport := hud.Rect{X1: camera.OriginX, Y1: camera.OriginY, X2: camera.OriginX + b.cam.ViewW - 1, Y2: camera.OriginY + b.cam.ViewH - 1}
-	intent, ok := client.MinimapCameraIntent(b.cam.X, b.cam.Z, layout, dst, viewport, sess.World.PlayRight, sess.World.PlayBottom, mx, my, true, false)
+	intent, ok := client.MinimapCameraIntent(layout, dst, sess.World.PlayRight, sess.World.PlayBottom, mx, my)
 	if !ok {
 		t.Fatal("production minimap center input was not consumed")
 	}
-	b.cam.X, b.cam.Z = intent.X, intent.Z
-	b.cam.Clamp()
+	// The clicked map point becomes the view centre [07 R-CAM-01 §11].
+	b.cam.JumpToBattleViewCenter(intent.X, intent.Z)
+	// The same destination and layout drive the viewport rectangle the player
+	// sees, so a click and the marker cannot disagree [03 R-MM-01 §1].
+	if _, ok := hud.MinimapViewportRect(b.cam, layout, sess.World.PlayRight, sess.World.PlayBottom, dst); !ok {
+		t.Fatal("production minimap published no viewport rectangle")
+	}
 	if got := b.hud.exitWin.Rect; got.X != 309 || got.Y != 162 || got.W != 150 || got.H != 155 {
 		t.Fatalf("retail EXITMENU runtime rect = %+v, want (309,162,150,155)", got)
 	}
