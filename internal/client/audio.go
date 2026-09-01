@@ -2,7 +2,6 @@ package client
 
 import (
 	"github.com/nanolathe/nanolathe/internal/audio"
-	"github.com/nanolathe/nanolathe/internal/audiobackend"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
@@ -45,33 +44,14 @@ func (c *Client) SetAudioService(a *audio.Service) {
 			c.messages.Append(line, 1, unit, 10, c.messageEventsTick)
 		})
 	}
-	c.ensureAudioBackend()
 }
 
-// SetAudioBackend installs the PCM backend directly [03 §8.3] [I6].
-func (c *Client) SetAudioBackend(b *audiobackend.Backend) {
-	if c == nil {
-		return
-	}
-	audio.SetGlobalOutput(b)
-}
-
-// AudioBackend returns the installed PCM backend (presentation-only) [I6].
-func (c *Client) AudioBackend() *audiobackend.Backend {
-	b, _ := audio.GlobalOutput().(*audiobackend.Backend)
-	return b
-}
-
-func (c *Client) ensureAudioBackend() {
-	if c == nil {
-		return
-	}
-	if audio.GlobalOutput() != nil {
-		return
-	}
-	b := audiobackend.New()
-	audio.SetGlobalOutput(b)
-}
+// stereoOutput is the one capability the positional-pan viewport reads from
+// the installed playback boundary. Declaring it here keeps the client on
+// audio.Output and off the concrete device package: the platform adapter
+// installs the device, and an output without stereo support simply reports
+// none [03 §8.3][I6].
+type stereoOutput interface{ StereoCapable() bool }
 
 // SetAudioViewport sets the presentation viewport for positional pan and
 // attenuation [03 §8.3]. Stereo pan is dx = px-((w/2)<<4)-left and
@@ -103,7 +83,6 @@ func (c *Client) TickAudio() {
 	if c == nil {
 		return
 	}
-	c.ensureAudioBackend()
 	var committedTick uint32
 	var events []frame.EventView
 	if c.buffer != nil {
@@ -204,8 +183,8 @@ func (c *Client) UpdateAudioViewportFromCamera() {
 		MapW:   mapW,
 		MapH:   mapH,
 	}
-	if be := c.AudioBackend(); be != nil {
-		v.StereoCapable = be.Capabilities().Stereo
+	if out, ok := audio.GlobalOutput().(stereoOutput); ok {
+		v.StereoCapable = out.StereoCapable()
 	}
 	if c.audioService != nil {
 		c.audioService.SetViewport(v)

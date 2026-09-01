@@ -6,37 +6,63 @@ import (
 	"github.com/nanolathe/nanolathe/internal/frame"
 )
 
-func advanceToEndMission(c *PostBattleController, withGlamour bool) {
-	c.Step(0, false) // entry → fade setup
-	c.Step(1, false) // fade setup → fade
-	for now := uint32(2); now < 20; now++ {
+// stepUntil advances one presentation unit at a time until the controller
+// reaches want, and returns the unit index the caller should use next.
+//
+// Driving by state rather than by a fixed tick count is deliberate. The fade
+// of [08 R-CAMP-01 §6] state 3 draws a step only when `now > deadline` and
+// then sets the deadline to `now + 1`, so ten fade steps span twenty
+// presentation units, not ten. Hard-coding the arrival tick of a later state
+// encodes that cadence as a constant and silently mis-times every assertion
+// after it.
+func stepUntil(t *testing.T, c *PostBattleController, now uint32, want PostBattleState) uint32 {
+	t.Helper()
+	for range 200 {
+		if c.State() == want {
+			return now
+		}
 		c.Step(now, false)
-		if c.State() == PostBattleCDCheck {
-			break
-		}
+		now++
 	}
-	c.Step(20, false) // CD check → outcome
-	if withGlamour {
-		c.Step(21, false) // outcome → glamour
-		// Six requests model a palette whose slowest byte differs by six. The
-		// table divisor is five, but completion is equality-driven.
-		for now := uint32(22); now < 28; now++ {
-			c.Step(now, false)
-		}
-		if c.AdmitControl(PostBattleControlKey) {
-			panic("glamour input admitted before explicit fade completion")
-		}
-		c.GlamourFadeDone(28)
-		c.Step(58, false) // strict hold boundary: due is 58, so no sound yet
-		if c.Handle(PostBattleControlKey, 58) {
-			panic("glamour input admitted at the hold deadline")
-		}
-		c.Step(59, false) // after hold; sound request is emitted once
-		if !c.Handle(PostBattleControlKey, 59) {
-			panic("glamour input was not admitted after the hold deadline")
-		}
-	} else {
-		c.Step(21, false) // outcome → ENDMSN (or router for final win)
+	t.Fatalf("controller never reached state %d: stuck at %d, order %v", want, c.State(), c.StateOrder())
+	return now
+}
+
+func advanceToEndMission(t *testing.T, c *PostBattleController, withGlamour bool) {
+	t.Helper()
+	now := stepUntil(t, c, 0, PostBattleOutcome)
+	// The outcome action routes to the shell, opens the glamour fade, or
+	// populates ENDMSN [08 R-CAMP-01 §6] state 5.
+	c.Step(now, false)
+	now++
+	if !withGlamour {
+		return
+	}
+	// State 6 applies exactly one fade step per unit until the palette equals
+	// its target. Six units model a palette whose slowest byte differs by six:
+	// the fade table's divisor is five, but completion is equality-driven, so
+	// the controller cannot infer it from a step count [08 R-CAMP-01 §6].
+	const glamourUnits = 6
+	for range glamourUnits {
+		c.Step(now, false)
+		now++
+	}
+	if c.AdmitControl(PostBattleControlKey) {
+		t.Fatal("glamour input admitted before explicit fade completion")
+	}
+	if !c.GlamourFadeDone(now) {
+		t.Fatal("glamour fade completion refused")
+	}
+	// "the glamour deadline is now + rate (one second)", and the comparison is
+	// strict: at the deadline itself nothing is due yet [08 R-CAMP-01 §6].
+	due := now + 30
+	c.Step(due, false)
+	if c.Handle(PostBattleControlKey, due) {
+		t.Fatal("glamour input admitted at the hold deadline")
+	}
+	c.Step(due+1, false)
+	if !c.Handle(PostBattleControlKey, due+1) {
+		t.Fatal("glamour input was not admitted after the hold deadline")
 	}
 }
 
@@ -51,7 +77,7 @@ func TestPostBattleCampaignWinSequenceAndProgressOnce(t *testing.T) {
 	})
 	progress.ApplyCampaignResult(2, true) // authoritative score-teardown writer
 	beforeProgress := *progress
-	advanceToEndMission(c, true)
+	advanceToEndMission(t, c, true)
 	if c.State() != PostBattleEndMission {
 		t.Fatalf("campaign win should reach ENDMSN, got state %d order %v", c.State(), c.StateOrder())
 	}
@@ -95,7 +121,7 @@ func TestPostBattleSkirmishDoesNotWriteCampaignProgress(t *testing.T) {
 		Kind: PostBattleSkirmish, MissionIndex: 1, HasNext: true,
 		CampaignCDOK: true, Progress: progress,
 	})
-	advanceToEndMission(c, false)
+	advanceToEndMission(t, c, false)
 	if c.State() != PostBattleEndMission {
 		t.Fatalf("skirmish should reach ENDMSN, got state %d", c.State())
 	}
@@ -123,7 +149,7 @@ func TestPostBattleFinalWinSkipsUnavailableEndingMedia(t *testing.T) {
 		Kind: PostBattleCampaign, MissionIndex: 24, CampaignCDOK: true,
 		EndingMedia: false, Nomovie: false,
 	})
-	advanceToEndMission(c, false)
+	advanceToEndMission(t, c, false)
 	if c.State() != PostBattleOutcome || !c.Routed() {
 		t.Fatalf("final win without ending media should route to router, got %d order %v", c.State(), c.StateOrder())
 	}
@@ -150,7 +176,7 @@ func TestPostBattleFinalWinEndingMovieSideMapping(t *testing.T) {
 			Kind: PostBattleCampaign, MissionIndex: 24, CampaignCDOK: true,
 			EndingMedia: true, LocalSide: tc.side,
 		})
-		advanceToEndMission(c, false)
+		advanceToEndMission(t, c, false)
 		if !c.Routed() || c.State() != PostBattleOutcome {
 			t.Fatalf("side %d final win state=%d routed=%v", tc.side, c.State(), c.Routed())
 		}

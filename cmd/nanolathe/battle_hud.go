@@ -1939,6 +1939,23 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 			b.toggleOnOffSelected(b.battleState().Input.ShiftHeld)
 			return true
 		}
+		// The two stance gadgets are resolved by the same longest-suffix table
+		// the stage and grey pass uses, so ARMMOVEORD reaches the stance arm
+		// and never the MOVE substring arm below [04 R-STANCE-01 §2].
+		switch commandButtonName(gad.Name) {
+		case "MOVEORD":
+			if rightClick {
+				return true
+			}
+			b.cycleStance(false)
+			return true
+		case "FIREORD":
+			if rightClick {
+				return true
+			}
+			b.cycleStance(true)
+			return true
+		}
 		if strings.Contains(upper, "MOVE") ||
 			strings.Contains(upper, "ATTACK") || strings.Contains(upper, "BLAST") ||
 			strings.Contains(upper, "DEFEND") || strings.Contains(upper, "REPAIR") ||

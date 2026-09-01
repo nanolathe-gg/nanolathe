@@ -31,6 +31,27 @@ type Terrain struct {
 	Plot         []PlotCell   // CellW x CellH row-major [03 §2.2] C6
 	SeaLevel     uint8        // header byte [03 §2.2] C9
 
+	// Movers is the mover-written half of retail's single ground-occupancy
+	// word, bound once when the movement system is built.
+	//
+	// Retail has ONE occupancy word per cell, written by ground movers and by
+	// building-class units alike, and the footprint validator's occupant test
+	// reads exactly that word [04 R-COLL-01 §2][04 R-COLL-01 §4]. Nanolathe
+	// stores the two halves separately — the plot cell above and the mover
+	// lattice here — so a placement check that consults only the plot half
+	// cannot see a unit standing on the rectangle at all.
+	//
+	// It lives on the terrain, not on PlacementQuery, because which halves to
+	// test is not a per-call decision. While each caller supplied its own, the
+	// build-placement preview, AI siting and the commander-death check all
+	// omitted it and silently skipped the mover test — the preview drew a site
+	// legal with a unit parked on it. Every caller now reaches the same two
+	// halves through CheckPlacement.
+	//
+	// Nil means no mover plane exists yet, which is the pre-movement and
+	// terrain-only-fixture case, not a caller's choice.
+	Movers MobileOccupancy
+
 	// losWords is built once during map load and remains immutable for the
 	// battle, including across terrain deformation [03 §3.5][R-P0-18-B §4].
 	losWords      []uint16

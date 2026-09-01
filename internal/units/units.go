@@ -58,6 +58,17 @@ const (
 
 const classifierSelectableClear uint32 = 0x00008000
 
+// The two standing-order fields live in the status word as two-bit pairs: the
+// move stance at bits 18-19, the fire stance at bits 20-21 [04 R-STANCE-01 §2].
+// They are seeded here at creation from one packed definition byte the FBI
+// reader fills from `standingmoveorder` and `standingfireorder`, each with a
+// parsed default of 2 [04 R-STANCE-01 §6].
+const (
+	StandingMoveShift = 18
+	StandingFireShift = 20
+	StandingFieldMask = uint32(3)
+)
+
 // initialStatusFlags is the status word the allocator initializer produces for
 // a freshly created unit [08 "Classifier eligibility, destinations, and
 // order"].
@@ -76,6 +87,20 @@ func initialStatusFlags(def *content.UnitDef) uint32 {
 	if !content.IsWeaponInactive(def.Weapon1Def) || !content.IsWeaponInactive(def.Weapon2Def) || !content.IsWeaponInactive(def.Weapon3Def) {
 		flags |= ArmedStatus
 	}
+	// The two standing-order fields, seeded from the definition's packed
+	// standing byte [04 R-STANCE-01 §6]. Both parse with default 2, so a
+	// definition authoring neither key starts its units at fire at will and
+	// roam; the stock content census authors move 1 (maneuver) and fire 2 on
+	// nearly every mobile definition, so a stock unit starts maneuver + fire at
+	// will and engages on its own.
+	//
+	// Nothing seeded these before, so every unit in every battle was created at
+	// move 0 (hold position) and fire 0 (hold fire): the auto-engage issuer of
+	// [04 R-STANCE-01 §3] refuses on either zero, so no unit ever acquired a
+	// target on its own, and the side panel's MOVEORD/FIREORD buttons both
+	// staged at their hold value with nothing able to change them.
+	flags |= (uint32(def.StandingMoveOrder) & StandingFieldMask) << StandingMoveShift
+	flags |= (uint32(def.StandingFireOrder) & StandingFieldMask) << StandingFireShift
 	return flags
 }
 
@@ -232,7 +257,7 @@ type Unit struct {
 	BuildingState   bool  // persisted state-byte bit 3 [08 R-SAVE-02 §6]
 	Group           uint8 // one stored control-group value 0..9 [07 §9]
 	RestoredAIGroup int32 // saved owner-group index, -1 means none [08 R-SAVE-02 §6]
-	HasMover        bool  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	HasMover        bool  // has-mover flag as stored in the unit save image [08 R-SAVE-02 §6]
 	// RestoredMoveMode marks the packed unit-side mover mirror as authoritative
 	// during the restore bootstrap. EnsureUnit normally initializes this mirror
 	// for newly created units, but must preserve the saved value while the

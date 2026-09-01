@@ -361,7 +361,25 @@ func (s *Service) NeedsWalk(builder *units.Unit, node *orders.Node) bool {
 	if builder == nil || node == nil || !isMobileBuilder(builder) {
 		return false
 	}
-	// A builder standing inside its own site walks out of it, exactly as
+	// A construction aircraft has neither term. `VTOL_MobileBuild` phase 1
+	// installs a POINT marker at the site with horizontal arrival radius
+	// `builddistance` and the work body then orbits; the row ends "there is no
+	// nanolathe-active stamp and no reach test after arrival: an aircraft that
+	// reached its builddistance marker builds from wherever the 150-tick orbit
+	// leaves it" [04 R-ORD-02 §2]. Both the reach term and the clear-the-site
+	// term belong to the ground twin's phase-0 RECTANGLE goal on the product
+	// footprint [04 R-ORD-01 §5], and an aircraft installs no such goal.
+	//
+	// needsApproach already returned false for `canfly`, but mustClearSite did
+	// not, so an aircraft hovering over the site it was told to build — which is
+	// exactly where its own arrival marker puts it, a cruise altitude above the
+	// footprint — answered yes here. The session's walk arm then emitted status
+	// 7 `I can't reach the construction site` and abandoned the record, which is
+	// why a construction aircraft could not build on open flat ground.
+	if builder.Def != nil && builder.Def.CanFly {
+		return false
+	}
+	// A ground builder standing inside its own site walks out of it, exactly as
 	// retail's phase-0 rectangle goal on the product footprint requires
 	// [R-ORD-01 §5][04 §7.2]. The commit does not share this term — see
 	// needsApproach and mustClearSite (approach.go).
@@ -1439,7 +1457,6 @@ func (s *Service) validatePlacement(self pool.Handle, rect world.FootprintRect, 
 		Self:                  0,
 		Mobile:                def != nil && def.BMCode,
 		SkipTerrainAggregates: skipAggregates,
-		MobileOccupancy:       s.mobileOccupancy(),
 	})
 }
 

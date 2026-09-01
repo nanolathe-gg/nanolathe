@@ -18,8 +18,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/hajimehoshi/ebiten/v2"
-
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/audio"
 	"github.com/nanolathe/nanolathe/internal/camera"
@@ -60,12 +58,21 @@ type Client struct {
 	exitRequested bool
 	focused       bool
 
+	// stripBuckets holds the committed effects of one composed frame sorted by
+	// strip barrier, with stripUnstripped holding the fixed pool. They are
+	// filled once per frame by classifyEffectStrips and keep their capacity
+	// between frames; the committed frame itself is never mutated [I6].
+	stripBuckets    [effectStripCount][]frame.EffectView
+	stripUnstripped []frame.EffectView
+	stripsFrame     *frame.Frame
+	stripsTick      uint32
+	stripsValid     bool
+
 	buffer *frame.Buffer
 
 	width, height int
 	indexed       []uint8
 	rgba          []byte
-	img           *ebiten.Image // backend-presented frame; lazily sized
 
 	// Runtime is presentation-only bookkeeping for backend frame cadence.
 	runtime float64
@@ -308,6 +315,48 @@ func (c *Client) SetFocused(focused bool) {
 	if c != nil {
 		c.focused = focused
 	}
+}
+
+// The four methods below are the surface a platform adapter presents through.
+// They exist so the adapter can own the window, the device and the uploaded
+// image while the client owns only pixels and presentation state; no client
+// code reaches a device [I6].
+
+// Title is the window title the adapter should install, or "" for none.
+func (c *Client) Title() string {
+	if c == nil {
+		return ""
+	}
+	return c.opts.Title
+}
+
+// HasCursors reports whether the retail software cursor has been installed.
+// A windowed adapter requires it before it hides the system pointer [07 §8].
+func (c *Client) HasCursors() bool { return c != nil && c.cursors != nil }
+
+// Step advances presentation runtime by one host frame and runs the injected
+// owner of clock, sub-ticks and snapshot publication (C9). Delta is the
+// adapter's fixed host period; wall-clock time never enters the sim [I6].
+func (c *Client) Step(delta float64) {
+	if c == nil {
+		return
+	}
+	c.runtime += delta
+	if c.opts.Step != nil {
+		c.opts.Step(delta)
+	}
+}
+
+// Present composes one frame and returns the expanded RGBA framebuffer for the
+// adapter to upload. The slice is owned by the client and is overwritten by
+// the next Present; the adapter must copy it into its own image rather than
+// retain it.
+func (c *Client) Present() []byte {
+	if c == nil {
+		return nil
+	}
+	c.Frame()
+	return c.rgba
 }
 
 // Buffer exposes the presentation snapshot source (diagnostics publish into

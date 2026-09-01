@@ -310,11 +310,13 @@ type PresentationAdapter struct {
 	NanolatheFeature func(*units.Unit, *Node, FeatureView, uint32) bool
 }
 
-// ValidateSinglePlayerBinding checks the O0-required composition seam. It is
-// intentionally separate from Queue.Pump so fixture queues can exercise pump
-// result tables without constructing a complete battle [P0-00 A.3]. Later
-// family-specific effects validate their own operation callback before use.
-func (b *QueueBinding) ValidateSinglePlayerBinding() error {
+// Validate reports whether the binding is complete enough to run a battle.
+//
+// It runs once, when the session composes the binding, and not per pump: by
+// the time a record is dispatched the services it needs are either all present
+// or the session never started. Family-specific effects still check their own
+// operation callback before use.
+func (b *QueueBinding) Validate() error {
 	if b == nil {
 		return fmt.Errorf("orders: missing queue binding")
 	}
@@ -599,47 +601,6 @@ func moveGroundHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code 
 		return 5
 	}
 	return 9 // [R-P0-01] drop when further records else 30+RNG30 wait
-}
-
-// handlerlessButDriven reports whether a record with no descriptor handler is
-// nevertheless being run — by a subsystem that dispatches on the head record's
-// descriptor name from its own per-unit step, and that reads and writes the
-// record's phase, dynamic gate and deadline as its state machine:
-//
-//   - the factory and mobile-build lifecycle, in internal/construction
-//     ([05 "Factory production lifecycle"][04 R-FAC-02 §4]);
-//   - the unit-reclaim state machine, in internal/construction
-//     ([05 "Unit reclaim"]);
-//   - the air executors, in internal/movement ([04 R-AIR-01 §6, §7]) — the
-//     other air heads, `VTOL_Move`, `Park` and `VTOL_LandIfCan`, reach a
-//     handler above.
-//
-// `VTOL_LandIfCan` left this list on 2026-08-31. Being driven is only half the
-// story for a machine that finishes: the pump wrote none of its fields, which
-// is right while it runs, but nothing then freed the record when the aircraft
-// touched down, so it sat at the head of the queue for the rest of the unit'"'"'s
-// life. It now has a descriptor handler that hands off to the same air runner
-// the attack executors use, and that runner reports the executor'"'"'s outcome
-// instead of re-running it (vtolair.go, movement.reportAirMachineOutcome).
-//
-// For these the pump is not the driver, and a result code applied here would
-// overwrite the driver's own deadline — a factory record parked for 30 to 44
-// ticks in the middle of its build states is precisely the "the plant will not
-// build another" stall of PLAN 17 §0 row 3. They are therefore left untouched
-// and are not diagnosed: a driven record is not a missing handler.
-//
-// TODO(T25): the durable shape is the one `GetBuilt` already uses — the owning
-// subsystem registers its handler on the queue (Queue.SetGetBuiltHandler), so
-// the pump stays the sole dispatcher and this list disappears. Doing that for
-// the other six is a cross-package change no single unit here owns.
-func handlerlessButDriven(name string) bool {
-	switch name {
-	case "BuildingBuild", "MobileBuild", "VTOL_MobileBuild",
-		"ReclaimUnit", "VTOL_ReclaimUnit",
-		"VTOL_Standby":
-		return true
-	}
-	return false
 }
 
 // ensureMoveHandlers installs moveGroundHandler on the one descriptor whose row
@@ -1367,13 +1328,6 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 			n.Deadline = -1
 			n.Satisfied |= 1 // ordinary deadline expiry raises only bit 0 [04 R-ORD-01 §0]
 		}
-		installHandlers()
-		// The descriptor is read AFTER the installers run. Descriptor is a
-		// value, so a copy taken before them carries whatever Handler the entry
-		// held at that moment: taking it first made the first record of the
-		// first pump see a nil handler for a family that had just been
-		// installed, and park itself for 30..44 ticks with a "no handler for
-		// Stop" diagnostic that was not true by the time it was written.
 		desc := DescriptorFor(n.ID)
 		// Removed (WU-18-0): a phase-0 pre-dispatch clear used to stand here.
 		// When the record was at phase 0 and its dynamic gate still equalled
@@ -1402,24 +1356,23 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 		n.DynamicGate = 0
 		handler := desc.Handler
 		if (desc.Name != "GetBuilt" && handler == nil) || (desc.Name == "GetBuilt" && q.getBuiltHandler == nil) {
-			// [P0-I03] path-backed move orders have no dedicated handler yet; the
-			// movement scheduler owns the route lifecycle [04 §7]. Synthesize a
-			// wait so the pump does not spin and the handler is re-dispatched
-			// after 30+rand15 [04 §3.3] C3, while the loop's path-submit and
-			// movement-integrate drive the route [P0-I03].
-			name := DescriptorFor(n.ID).Name
-			if name == "Move_Ground" || name == "VTOL_Move" || name == "QMove" || name == "Patrol" || name == "QPatrol" || name == "VTOL_Patrol" || name == "RepairPatrol" || name == "VTOL_RepairPatrol" {
+			// What advances a handler-less record is the descriptor's own
+			// Driver field, not its spelling.
+			switch desc.Driver {
+			case DriverMovementRoute:
+				// The movement scheduler owns the route lifecycle [04 §7].
+				// Synthesize a wait so the pump does not spin and the record is
+				// re-dispatched after 30+rand15 [04 §3.3] C3, while the loop's
+				// path-submit and movement-integrate drive the route.
 				n.DynamicGate = 1
 				n.Deadline = int32(tick + 30 + q.randBelow15()) // [04 §3.3][I4]
 				n.MoveState = MoveEnRoute
 				return
-			}
-			if handlerlessButDriven(name) {
-				// The record has no descriptor handler because another
-				// subsystem runs it from its own per-unit step and owns its
-				// phase, gate and deadline. The pump must leave every one of
-				// those fields alone: writing a result code over them is
-				// writing over a live state machine.
+			case DriverExternalMachine:
+				// Another subsystem runs this record from its own per-unit step
+				// and owns its phase, gate and deadline. The pump must leave
+				// every one of those fields alone: writing a result code over
+				// them is writing over a live state machine.
 				return
 			}
 			// TODO(T25): this descriptor has no handler and nothing else runs
@@ -1435,7 +1388,7 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 			// the head and spin (0 and 1 corrupting the phase on the way), and
 			// 5, 7, 8 and 9 free it, turning a missing handler into a silently
 			// dropped order.
-			q.recordDiagnostic(fmt.Sprintf("orders: no handler for %s, parked for 30..44 ticks", name))
+			q.recordDiagnostic(fmt.Sprintf("orders: no handler for %s, parked for 30..44 ticks", desc.Name))
 			q.applyPrimaryResultCode(n, 3, tick)
 			return
 		}

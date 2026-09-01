@@ -56,8 +56,10 @@ func TestMobileOccupancyRejectsAForeignOccupant(t *testing.T) {
 		t.Fatalf("free rectangle must validate, got %v", err)
 	}
 
+	// The mover plane is bound to the terrain for the whole battle, not
+	// elected per query, so every check below sees it.
+	terrain.Movers = stubOccupancy{x: 2, z: 2, id: 7}
 	held := free
-	held.MobileOccupancy = stubOccupancy{x: 2, z: 2, id: 7}
 	if _, err := terrain.CheckPlacement(held); err == nil {
 		t.Fatal("a covered cell held by a mover must reject the placement [04 R-COLL-01 §2]")
 	}
@@ -82,5 +84,35 @@ func TestMobileOccupancyRejectsAForeignOccupant(t *testing.T) {
 	}
 	if _, err := terrain.CheckPlacement(yard); err != nil {
 		t.Fatalf("a yard byte that does not test occupancy must ignore the mover, got %v", err)
+	}
+}
+
+// TestMoverPlaneIsNotAPerQueryChoice locks the ownership that the split-word
+// bug came from: the mover half belongs to the terrain, so a caller cannot
+// reach CheckPlacement while consulting only the plot half.
+//
+// While each caller supplied its own plane, six production placement queries
+// existed and four passed nothing: the build-placement preview published to
+// the player, AI siting, and the commander-death check. Those three silently
+// skipped the mover test, so the preview drew a site legal with a unit parked
+// on it and the AI would site a building there [04 R-COLL-01 §2].
+func TestMoverPlaneIsNotAPerQueryChoice(t *testing.T) {
+	rect := mobileOccupancyRect(t, 1, 1, 3, 3)
+	rules := PlacementRules{MaxSlope: 255, MaxWaterSlope: 255, MaxWaterDepth: 10000, MinWaterDepth: -10000}
+	query := PlacementQuery{Rect: rect, Rules: rules, Mobile: true}
+
+	// A caller that knows nothing about movement still gets the mover test,
+	// because the terrain it was handed carries the plane.
+	terrain := mobileOccupancyTerrain()
+	terrain.Movers = stubOccupancy{x: 2, z: 2, id: 7}
+	if _, err := terrain.CheckPlacement(query); err == nil {
+		t.Fatal("a terrain-bound mover must reject the placement for every caller")
+	}
+
+	// And the same query on a terrain with no mover plane at all is legal:
+	// nil means no plane exists yet, not that this caller opted out.
+	bare := mobileOccupancyTerrain()
+	if _, err := bare.CheckPlacement(query); err != nil {
+		t.Fatalf("terrain with no mover plane must validate, got %v", err)
 	}
 }

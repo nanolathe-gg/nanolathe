@@ -31,9 +31,10 @@ func TestDescriptorTable(t *testing.T) {
 			t.Fatalf("DescriptorFor Lookup %q got %q", name, DescriptorFor(id).Name)
 		}
 	}
-	// Verify sorted case-sensitive byte comparison.
+	// The table is sorted with the C runtime's case-insensitive compare, the
+	// same comparator Lookup searches with [04 R-STANCE-01 §9].
 	for i := 1; i < len(tbl); i++ {
-		if tbl[i-1].Name >= tbl[i].Name {
+		if foldCompare(tbl[i-1].Name, tbl[i].Name) >= 0 {
 			t.Fatalf("table not sorted at %d: %q >= %q", i-1, tbl[i-1].Name, tbl[i].Name)
 		}
 	}
@@ -60,6 +61,14 @@ type wantRow struct {
 // order: the empty sentinel at index 0, then the 67 named commands exactly as
 // tabulated [04 §3.1]. The presentation identities follow the [R-DOC04-C]
 // audit resolution of the four helper identities per record.
+//
+// Seven rows sit where [04 R-STANCE-01 §9] places them rather than where
+// §3.1's own table does: identities 6-10 are Attack_Chase, Attack_Kamikaze,
+// Attack_NoMove, AttackSpecial, AttackUType and 12-13 are BuildingBuild,
+// BuildWeapon. §3.1 recomputed its order from a case-sensitive byte sort; the
+// registration routine was later traced sorting with the case-insensitive
+// compare, under which the underscore sorts below every letter. Per-row
+// payloads are untouched — only the order of those seven names moved.
 var researchRows = []wantRow{
 	{"", "", 0x00, 0, 0x0000000, HelperNone},
 	{"Activate", "Activate", 0x00, 19, 0x10060, HelperNone},
@@ -67,14 +76,14 @@ var researchRows = []wantRow{
 	{"AirToAir", "Engaging target", 0x08, 1, 0x200, HelperGoalResolveAck},
 	{"AirToGround", "Engaging target", 0x08, 1, 0x200, HelperGoalResolveAck},
 	{"AirToGroundHover", "Engaging target", 0x08, 1, 0x200, HelperGoalResolveAck},
-	{"AttackSpecial", "Annihilating", 0x08, 1, 0x680, HelperGoalResolveAck},
-	{"AttackUType", "Attacking", 0x00, 19, 0x4, HelperNone},
 	{"Attack_Chase", "Attacking", 0x08, 1, 0x280, HelperGoalResolveAck},
 	{"Attack_Kamikaze", "Attacking", 0x08, 1, 0x600, HelperGoalResolveAck},
 	{"Attack_NoMove", "Attacking", 0x08, 1, 0x280, HelperGoalResolveAck},
+	{"AttackSpecial", "Annihilating", 0x08, 1, 0x680, HelperGoalResolveAck},
+	{"AttackUType", "Attacking", 0x00, 19, 0x4, HelperNone},
 	{"BeCarried", "Being transported", 0x00, 19, 0x24, HelperNone},
-	{"BuildWeapon", "Nanolathing", 0x00, 19, 0xc0140, HelperNone},
 	{"BuildingBuild", "Nanolathing", 0x00, 19, 0x10010c, HelperNone},
+	{"BuildWeapon", "Nanolathing", 0x00, 19, 0xc0140, HelperNone},
 	{"Capture", "Capturing", 0x08, 4, 0x200, HelperGoalResolveAck},
 	{"Cloak_Off", "Decloaking", 0x00, 19, 0x10060, HelperNone},
 	{"Cloak_On", "Cloaking", 0x00, 19, 0x10060, HelperNone},
@@ -252,5 +261,68 @@ func TestMakeSelectableHandler(t *testing.T) {
 	}
 	if u.Flags != units.ClassifierEligibleStatus {
 		t.Fatalf("MakeSelectable flags %08x, want %08x", u.Flags, units.ClassifierEligibleStatus)
+	}
+}
+
+// TestLookupIsCaseInsensitive locks the search contract of
+// [04 R-STANCE-01 §9]: callers need not match the table's spelling. The
+// interface transmits STANDING_FIREORDER and STANDING_MOVEORDER in upper case
+// and they must resolve to the descriptors named Standing_FireOrder and
+// Standing_MoveOrder.
+//
+// This also covers the regression the ordering correction fixed. While the
+// table was sorted case-sensitively, a case-insensitive lower_bound could not
+// find Attack_Chase at all — the chase attack of [04 §3.5] resolved to the
+// reject sentinel.
+func TestLookupIsCaseInsensitive(t *testing.T) {
+	for _, tc := range []struct{ query, want string }{
+		{"STANDING_FIREORDER", "Standing_FireOrder"},
+		{"STANDING_MOVEORDER", "Standing_MoveOrder"},
+		{"attack_chase", "Attack_Chase"},
+		{"ATTACK_CHASE", "Attack_Chase"},
+		{"Attack_Chase", "Attack_Chase"},
+		{"attackspecial", "AttackSpecial"},
+		{"BUILDINGBUILD", "BuildingBuild"},
+		{"buildweapon", "BuildWeapon"},
+		{"move_ground", "Move_Ground"},
+	} {
+		id := Lookup(tc.query)
+		if id == 0 {
+			t.Errorf("Lookup(%q) returned the reject sentinel", tc.query)
+			continue
+		}
+		if got := DescriptorFor(id).Name; got != tc.want {
+			t.Errorf("Lookup(%q) resolved to %q, want %q", tc.query, got, tc.want)
+		}
+	}
+	// A name in no batch still rejects, and the empty name is the sentinel.
+	if id := Lookup("NotACommand"); id != 0 {
+		t.Errorf("Lookup of an unknown name returned %d, want the reject sentinel", id)
+	}
+	if id := Lookup(""); id != 0 {
+		t.Errorf("Lookup(\"\") returned %d, want index 0", id)
+	}
+}
+
+// TestCorrectedDescriptorIdentities pins the seven identities that moved when
+// the sort comparator was corrected [04 R-STANCE-01 §9], and the two anchors
+// the correction states do not move.
+func TestCorrectedDescriptorIdentities(t *testing.T) {
+	for id, want := range map[ID]string{
+		6:  "Attack_Chase",
+		7:  "Attack_Kamikaze",
+		8:  "Attack_NoMove",
+		9:  "AttackSpecial",
+		10: "AttackUType",
+		12: "BuildingBuild",
+		13: "BuildWeapon",
+		// Unmoved anchors: the empty name stays the reject sentinel and
+		// GetBuilt stays at 0x13 under either order.
+		0:    "",
+		0x13: "GetBuilt",
+	} {
+		if got := DescriptorFor(id).Name; got != want {
+			t.Errorf("identity %d is %q, want %q", id, got, want)
+		}
 	}
 }

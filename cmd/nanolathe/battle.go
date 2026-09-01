@@ -17,6 +17,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/palette"
+	"github.com/nanolathe/nanolathe/internal/platform/ebitenapp"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/save"
@@ -162,7 +163,7 @@ func runBattleView(opts Options, cs *contentSet) error {
 	}
 	cl.SetCursors(cursors)
 	fmt.Fprintln(os.Stderr, "nanolathe: battle view — drag=select left-click=action right-click=deselect/cancel M=move A=attack P=patrol R=repair E=reclaim C=capture G=guard D=blast B=build X=cancel O=on/off N=stockpile Esc=cancel 1..9=buildpage Shift=queue")
-	return client.RunGame(cl)
+	return ebitenapp.Run(cl)
 }
 
 // composeBattleEntry is the single presentation composition for every
@@ -1344,6 +1345,47 @@ func (b *battleSession) toggleOnOffSelected(queued bool) {
 			Unit: u.Handle, Activate: !u.Activated, Queued: queued,
 		})
 	}
+}
+
+// cycleStance is one press of the side panel's MOVEORD or FIREORD gadget, in
+// the order [04 R-STANCE-01 §2] gives it: read the published three-bit panel
+// field, compute the next value with that section's cycle, transmit the
+// standing order through the selection broadcast, and play the cue. Step 3 —
+// the local write-back into the panel word — is display only and has no place
+// here: this build recomputes the aggregate from the selection at every
+// publication boundary [I6], which is the same refresh retail's step 3 is
+// overwritten by.
+//
+// A field reading 4 is not applicable to this selection; the gadget is greyed
+// and matches no arm of the cycle, so the press does nothing at all.
+func (b *battleSession) cycleStance(fire bool) {
+	f, ok := b.currentSnapshot()
+	if !ok {
+		return
+	}
+	current := f.CommandPage.MoveStance
+	cue := "setmoveorders"
+	if fire {
+		current = f.CommandPage.FireStance
+		cue = "setfireorders"
+	}
+	var next int32
+	switch current {
+	case 0:
+		next = 1
+	case 1:
+		next = 2
+	case 2, 3: // the mixed sentinel cycles to hold [04 R-STANCE-01 §2]
+		next = 0
+	default:
+		return // 4: not applicable, the gadget is grey
+	}
+	if err := b.enqueueHumanCommand(session.HumanCommand{
+		Kind: session.HumanStance, Stance: session.HumanStanceCommand{Fire: fire, Value: next},
+	}); err != nil {
+		return
+	}
+	b.playUICue(nil, cue)
 }
 
 // stockpileSelected queues one BuildWeapon round for stockpile weapons [06 §11.1].

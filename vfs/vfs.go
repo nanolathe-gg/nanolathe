@@ -211,7 +211,7 @@ var _ FSOps = (*FS)(nil)
 
 // MountCount reports how many mounts are ordered (0 = the winner).
 func (f *FS) MountCount() int {
-	return len(f.orderedMounts())
+	return len(f.mounts)
 }
 
 // OpenMount opens a logical file from the index-th mount in precedence
@@ -339,8 +339,7 @@ func (f *FS) MountDirectory(root string, priority int) error {
 	if err != nil {
 		return err
 	}
-	f.mounts = append(f.mounts, mountedProvider{provider: p, priority: priority, order: f.nextOrder})
-	f.nextOrder++
+	f.insertMount(mountedProvider{provider: p, priority: priority, order: f.nextOrder})
 	return nil
 }
 
@@ -356,8 +355,7 @@ func (f *FS) MountArchive(filename string, priority int) (*Archive, error) {
 		return nil, err
 	}
 	a.setMountInfo(priority, f.nextOrder)
-	f.mounts = append(f.mounts, mountedProvider{provider: a, priority: priority, order: f.nextOrder})
-	f.nextOrder++
+	f.insertMount(mountedProvider{provider: a, priority: priority, order: f.nextOrder})
 	return a, nil
 }
 
@@ -369,8 +367,7 @@ func (f *FS) MountArchiveReader(name string, reader io.ReaderAt, size int64, pri
 		return nil, err
 	}
 	a.setMountInfo(priority, f.nextOrder)
-	f.mounts = append(f.mounts, mountedProvider{provider: a, priority: priority, order: f.nextOrder})
-	f.nextOrder++
+	f.insertMount(mountedProvider{provider: a, priority: priority, order: f.nextOrder})
 	return a, nil
 }
 
@@ -470,16 +467,35 @@ func (f *FS) MountGameDirectoryWithPlan(root string, plan MountPlan) error {
 	return f.MountDirectory(root, int(plan.Loose)*10)
 }
 
-func (f *FS) orderedMounts() []mountedProvider {
-	result := append([]mountedProvider(nil), f.mounts...)
-	sort.SliceStable(result, func(i, j int) bool {
-		if result[i].priority != result[j].priority {
-			return result[i].priority > result[j].priority
+// insertMount places one mount in final lookup order and takes the next order
+// number.
+//
+// f.mounts is kept in search order at all times — priority descending, then
+// mount order descending — so a lookup iterates it directly. Every ordinary
+// Open, Stat, ReadDir and provider report used to copy the whole slice and
+// sort it first; content loading performs thousands of logical opens against a
+// read-mostly structure, so that was a copy and a sort per open.
+//
+// A new mount always carries the highest order number, so among equal
+// priorities it belongs first: the insertion point is the first mount whose
+// priority is not greater than this one's. Precedence itself is unchanged.
+func (f *FS) insertMount(m mountedProvider) {
+	at := len(f.mounts)
+	for i := range f.mounts {
+		if f.mounts[i].priority <= m.priority {
+			at = i
+			break
 		}
-		return result[i].order > result[j].order
-	})
-	return result
+	}
+	f.mounts = append(f.mounts, mountedProvider{})
+	copy(f.mounts[at+1:], f.mounts[at:])
+	f.mounts[at] = m
+	f.nextOrder++
 }
+
+// orderedMounts returns the mounts in search order. The slice is already in
+// that order; it is not copied, so callers must only read it.
+func (f *FS) orderedMounts() []mountedProvider { return f.mounts }
 
 func (f *FS) Open(name string) (File, error) {
 	logical, err := cleanPath(name)

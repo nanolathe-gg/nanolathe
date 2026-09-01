@@ -116,9 +116,16 @@ func TestAttachBattleAudio_CueReachesBackend(t *testing.T) {
 	}
 }
 
-// TestDetachBattleAudio_ReleasesDevice locks that leaving the battle stops
-// music and drops the process-global backend.
-func TestDetachBattleAudio_ReleasesDevice(t *testing.T) {
+// TestDetachBattleAudio_StopsBattleAudioAndKeepsTheDevice locks that leaving
+// the battle stops this battle's music and voices while the process-wide PCM
+// device stays installed.
+//
+// Detach used to uninstall the device, which is why the client re-created one
+// lazily the next time audio was bound — the path that pulled the concrete
+// device package into a client that otherwise touches no hardware. The device
+// is installed once by the platform adapter and outlives any one battle
+// [03 §8.1][I6].
+func TestDetachBattleAudio_StopsBattleAudioAndKeepsTheDevice(t *testing.T) {
 	prev := audio.GlobalOutput()
 	t.Cleanup(func() { audio.SetGlobalOutput(prev) })
 	audio.SetGlobalOutput(&compositionAudioSpy{})
@@ -133,8 +140,8 @@ func TestDetachBattleAudio_ReleasesDevice(t *testing.T) {
 
 	detachBattleAudio(cl, b.sess)
 
-	if audio.GlobalOutput() != nil {
-		t.Errorf("detach left the global audio backend installed")
+	if audio.GlobalOutput() == nil {
+		t.Errorf("detach uninstalled the process-wide audio device")
 	}
 	if b.sess.Audio.Music.IsPlaying() {
 		t.Errorf("detach left music playing")

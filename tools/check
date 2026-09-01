@@ -2,7 +2,11 @@
 # Pre-dispatch and pre-merge gate. See AGENTS.md §"Dispatching and reviewing sub-agents".
 set -e
 echo "==> gofmt"
-unformatted=$(gofmt -l . || true)
+# Tracked files only. `gofmt -l .` walks the whole directory, which in a
+# checkout that hosts agent worktrees under .worktrees/ reports files that
+# belong to somebody else's branch and are not tracked here — the gate then
+# fails for a reason the caller cannot act on. content/ is generated.
+unformatted=$(gofmt -l $(git ls-files '*.go') | grep -v '^content/' || true)
 if [ -n "$unformatted" ]; then
 	echo "not gofmt-clean:"
 	echo "$unformatted"

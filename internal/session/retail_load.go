@@ -127,7 +127,7 @@ func LoadRetailSavePath(path string, deps RetailLoadDeps) (RetailLoadResult, err
 // LoadRetailSaveBytes is the equivalent production entrypoint for callers
 // that already own the file bytes (for example, a platform file dialog).
 func LoadRetailSaveBytes(data []byte, deps RetailLoadDeps) (RetailLoadResult, error) {
-	bank, err := save.OpenBytes(data, save.RetailTag)
+	bank, err := save.OpenBytes(data)
 	if err != nil {
 		return RetailLoadResult{}, fmt.Errorf("session: open retail save bytes: %w", err)
 	}

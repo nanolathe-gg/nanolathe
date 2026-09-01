@@ -45,11 +45,11 @@ func TestProjectRetailSessionContinuationDoesNotNeedClock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("continuation projection: %v", err)
 	}
-	data, err := p.RetailBytes()
+	data, err := p.Bytes()
 	if err != nil {
-		t.Fatalf("continuation RetailBytes: %v", err)
+		t.Fatalf("continuation Bytes: %v", err)
 	}
-	bank, err := save.OpenBytes(data, save.RetailTag)
+	bank, err := save.OpenBytes(data)
 	if err != nil {
 		t.Fatalf("continuation OpenBytes: %v", err)
 	}

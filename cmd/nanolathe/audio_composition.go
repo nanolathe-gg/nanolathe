@@ -34,8 +34,13 @@ func attachBattleAudio(cl *client.Client, sess *session.Session, fs vfs.FSOps) {
 	cl.UpdateAudioViewportFromCamera()
 }
 
-// detachBattleAudio releases the device and stops music when the battle view
+// detachBattleAudio stops the battle's voices and music when the battle view
 // closes. The queue, cache and controller stay owned by the audio service.
+//
+// The PCM device itself is not uninstalled. It is a process resource that the
+// platform adapter installs once; tearing it down here is what previously
+// forced the client to re-create one lazily on the next battle. Backend.Close
+// stops every live voice and leaves the backend reusable.
 func detachBattleAudio(cl *client.Client, sess *session.Session) {
 	if sess != nil && sess.Audio != nil {
 		sess.Audio.Close()
@@ -43,10 +48,7 @@ func detachBattleAudio(cl *client.Client, sess *session.Session) {
 	if cl == nil {
 		return
 	}
-	if output := audio.GlobalOutput(); output != nil {
-		if be, ok := output.(*audiobackend.Backend); ok {
-			be.Close()
-		}
-		audio.SetGlobalOutput(nil)
+	if be, ok := audio.GlobalOutput().(*audiobackend.Backend); ok {
+		be.Close()
 	}
 }

@@ -146,7 +146,6 @@ func (cs *Cursors) Frame() *formats.GAFFrame {
 // pointer as their only pointer once it has been installed [07 §8].
 func (c *Client) SetCursors(cs *Cursors) {
 	c.cursors = cs
-	c.applyCursorMode()
 }
 
 // Cursors returns the installed software cursor, or nil.

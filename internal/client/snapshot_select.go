@@ -18,7 +18,18 @@ func SnapshotVisible(f *frame.Frame, v frame.UnitView, viewer uint8) bool {
 	if v.Owner == viewer {
 		return true
 	}
-	if v.Flags&0x4 != 0 && v.Flags&0x1000 == 0 {
+	// Step 2 of the gate [03 §3.2]: a cloaked unit is hidden from a non-owner
+	// unless its decloak timer is running [03 §3.4].
+	//
+	// This used to read the instance flag word directly, as `Flags&0x4` with
+	// `Flags&0x1000` for the timer. Neither bit means that there: 0x4 is the
+	// construction layer's start-building edge and 0x1000 is the order pump's
+	// active-record marker. So every enemy builder vanished the moment it began
+	// building — a play-test report of aircraft plants disappearing behind
+	// their own nanoframe and spray — and a genuinely cloaked unit was never
+	// hidden at all. The committed frame carries the two real inputs; nothing
+	// is reconstructed from presentation bits [03 §3.2][R-VIS-01 §4].
+	if v.Cloaked && !v.Decloaking {
 		return false
 	}
 	m := f.Visibility

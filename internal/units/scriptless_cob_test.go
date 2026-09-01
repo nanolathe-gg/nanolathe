@@ -95,11 +95,11 @@ func compileFixtureCatalog(t *testing.T) *content.Catalog {
 	write("scripts/armtest.cob", string(minimalCOB(t)))
 	write("scripts/armless.cob", string(minimalCOB(t)))
 	write("scripts/armnone.cob", string(minimalCOB(t)))
-	fs := vfs.New()
-	if err := fs.MountDirectory(root, 10); err != nil {
+	mounted := vfs.New()
+	if err := mounted.MountDirectory(root, 10); err != nil {
 		t.Fatalf("MountDirectory: %v", err)
 	}
-	cat, err := content.Compile(fs)
+	cat, err := content.Compile(archivedFixtureFS{mounted})
 	if err != nil {
 		t.Fatalf("content.Compile: %v", err)
 	}
@@ -213,4 +213,34 @@ func testVismaskGAF() []byte {
 		out[frameDataOffset+i] = 7 // one compressed run
 	}
 	return out
+}
+
+// archivedFixtureFS presents a loose fixture tree as archive content.
+//
+// Retail enumerates loose `units\*.FBI` and `weapons\*.tdf`, parses them, and
+// then always drops them: a definition record survives only when its file came
+// from a mounted archive on an installed build [02 R-CAT-01 §4 "The loose-file
+// gate"]. The content compiler implements that gate, so a fixture that writes
+// authored files into a plain directory compiles to an empty catalog.
+//
+// Packing a real HPI here would test the archive reader, not the strict COB
+// boundary these fixtures exist for, so the wrapper instead states the
+// provenance the gate reads — the seam discoverArchiveContent documents for
+// exactly this case. It deliberately does not implement the overlay's mount
+// surface: there is no loose winner shadowing an archive entry to recover.
+type archivedFixtureFS struct{ vfs.FSOps }
+
+func (f archivedFixtureFS) ReadDir(name string) ([]vfs.EntryInfo, error) {
+	entries, err := f.FSOps.ReadDir(name)
+	if err != nil {
+		return nil, err
+	}
+	for i := range entries {
+		if entries[i].IsDir {
+			continue
+		}
+		entries[i].Source.ProviderType = "hpi"
+		entries[i].Source.SourcePath = "fixture.hpi"
+	}
+	return entries, nil
 }

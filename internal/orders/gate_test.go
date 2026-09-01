@@ -239,29 +239,32 @@ func TestDrivenRecordsKeepTheirOwnersScheduling(t *testing.T) {
 	}
 }
 
-// TestHandlerInstallersRunBeforeTheDescriptorIsRead locks the ordering the
-// registration seam depends on. Descriptor is a value: a copy taken before the
-// installers run carries the Handler the entry held at that moment, so reading
-// it first made the first record of the first pump see a nil handler for a
-// family that had just been installed and park itself for 30..44 ticks with a
-// diagnostic that was already untrue. Every family this phase adds installs
-// through the same list, so the ordering is theirs too.
-func TestHandlerInstallersRunBeforeTheDescriptorIsRead(t *testing.T) {
-	id := Lookup("Stop")
-	if id == 0 {
-		t.Fatal("Stop is not in the descriptor table")
-	}
-	table[int(id)].Handler = nil // as a fixture that swapped a handler out leaves it
-	defer func() { table[int(id)].Handler = stopHandler }()
-
-	q, u := gateFixture()
-	q.Push(id, Node{Owner: u.Handle})
-	q.Pump(u, 40)
-
-	if q.LenPrimary() != 0 {
-		t.Fatalf("primary length = %d, want Stop dispatched and completed on its first visit [04 R-ORD-01 §2]", q.LenPrimary())
-	}
-	if diags := q.Diagnostics(); len(diags) != 0 {
-		t.Fatalf("diagnostics = %v, want none: the installer runs before the descriptor is read", diags)
+// TestHandlersAreInstalledBeforeTheFirstPump locks the registration seam: the
+// package's init builds the table and runs every family installer, so all 68
+// descriptors carry their handler before any pump runs [04 §3.1].
+//
+// This replaces a test that nil'd a handler in the global table "as a fixture
+// that swapped a handler out leaves it" and asserted the pump put it back. The
+// pump re-ran all twelve installers for every primary record of every pump to
+// make that true. That was production work existing for fixtures, and it hid
+// the real contract, which is that the table is complete before play begins —
+// retail compiles the handler into each static descriptor.
+func TestHandlersAreInstalledBeforeTheFirstPump(t *testing.T) {
+	for id, desc := range Table() {
+		switch {
+		case desc.Name == "":
+			continue // the reject sentinel has no handler
+		case desc.Name == "GetBuilt":
+			// The construction service binds this one per queue
+			// [04 R-FAC-02 §4].
+			continue
+		case desc.Driver != DriverPump:
+			// Another subsystem advances the record from its own per-unit
+			// step; see the Driver field.
+			continue
+		}
+		if desc.Handler == nil {
+			t.Errorf("descriptor %d %q has no handler and no other driver", id, desc.Name)
+		}
 	}
 }

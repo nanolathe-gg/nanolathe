@@ -19,11 +19,11 @@ func retailLoadBank(t *testing.T, summary save.Summary, includeSummary bool) *sa
 	if summary.BetweenMissions == 0 {
 		summary.IsBattle = true
 	}
-	b := save.NewBuilder(save.RetailTag)
+	b := save.NewBuilder()
 	if includeSummary {
 		save.WriteSummary(b, summary)
 	}
-	bank, err := save.OpenBytes(b.Bytes(), save.RetailTag)
+	bank, err := save.OpenBytes(b.Bytes())
 	if err != nil {
 		t.Fatalf("open authored bank: %v", err)
 	}
@@ -140,12 +140,12 @@ func TestLoadRetailSaveWithDepsMapsContinuationIdentityAndThumbs(t *testing.T) {
 	fs := retailContinuationFS(t)
 	defer fs.Close()
 	thumbs := "ABCDEFGHIJKLMNOPQRSTUVWXY"
-	b := save.NewBuilder(save.RetailTag)
+	b := save.NewBuilder()
 	save.WriteSummary(b, save.Summary{
 		Campaign: "camps/c.tdf", Mission: "sEcOnD", Gametype: GametypeCampaign,
 		BetweenMissions: 1, Difficulty: 2, Side: 1, Thumbs: thumbs,
 	})
-	bank, err := save.OpenBytes(b.Bytes(), save.RetailTag)
+	bank, err := save.OpenBytes(b.Bytes())
 	if err != nil {
 		t.Fatal(err)
 	}

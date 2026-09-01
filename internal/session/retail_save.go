@@ -287,7 +287,7 @@ func (s *Session) WriteRetailSave(path string, in RetailSaveInputs) error {
 	if err != nil {
 		return err
 	}
-	data, err := p.RetailBytes()
+	data, err := p.Bytes()
 	if err != nil {
 		return err
 	}

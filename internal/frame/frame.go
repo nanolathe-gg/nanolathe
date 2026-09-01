@@ -92,6 +92,18 @@ type UnitView struct {
 	// Activated is the committed on/off state used by UI command dispatch.
 	// Presentation must not rehydrate a selected unit from the live pool [I6].
 	Activated bool
+	// Cloaked and Decloaking are step 2 of the visibility gate [03 §3.2],
+	// published so presentation can evaluate it without reconstructing cloak
+	// state from the instance flag word.  Cloaked is the INSTANCE cloak bit
+	// [R-VIS-01 §4]; Decloaking is runtime status bit 12, the decloak timer of
+	// [03 §3.4].  A cloaked unit is hidden from a non-owner unless the timer is
+	// running.
+	//
+	// Definition `stealth` is deliberately NOT folded in: it is the contact
+	// callback's third reject, so it suppresses radar and sonar detection but
+	// never line of sight [R-VIS-01 §5].
+	Cloaked    bool
+	Decloaking bool
 	// Kills is the credited-kill counter the footer's kills line reads
 	// [07 R-HUD-03 §2].
 	Kills int32

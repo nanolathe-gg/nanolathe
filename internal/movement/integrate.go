@@ -463,6 +463,12 @@ func NewSystem(terrain *world.Terrain, fallback Profile, grid *OccupancyGrid) *S
 		PathPlayers:   1,
 		PathUnitLimit: 1,
 	}
+	// The terrain owns the mover half of retail's single ground-occupancy word
+	// for the rest of the battle, so every placement check reaches both halves
+	// without its caller electing to pass one [04 R-COLL-01 §2].
+	if terrain != nil {
+		terrain.Movers = gridOccupancy{grid: grid}
+	}
 	sched := path.NewScheduler(s.searchFunc, s.publishFunc)
 	s.pathProvider = &pathProvider{players: s.PathPlayers, limit: s.PathUnitLimit}
 	sched.SetCandidateProvider(s.pathProvider)
@@ -2723,4 +2729,29 @@ func IntegrateFlightForUnit(u *units.Unit, w *world.Terrain) {
 	u.X = numeric.Fixed(int64(f.X))
 	u.Y = numeric.Fixed(int64(f.Y))
 	u.Z = numeric.Fixed(int64(f.Z))
+}
+
+// gridOccupancy adapts the mover occupancy lattice to the placement
+// validator's occupant test. Retail reads one ground word; this is the half of
+// it that ground movers write [04 R-COLL-01 §4].
+type gridOccupancy struct{ grid *OccupancyGrid }
+
+// CellOccupant returns the identity holding the cell, or 0 when it is free.
+func (g gridOccupancy) CellOccupant(cellX, cellZ int32) uint16 {
+	if g.grid == nil {
+		return 0
+	}
+	id, held := g.grid.OccupantAt(Cell{X: cellX, Z: cellZ})
+	if !held || id == 0 {
+		return 0
+	}
+	if id < 0 || id > int(^uint16(0)) {
+		// An identity that does not fit the occupancy word is still an
+		// occupant; reporting it free would admit a placement over a live
+		// unit. The placement identity range is bounded well below this
+		// elsewhere (reservePlacement refuses a wider handle), so this is a
+		// bounds guard, not a behavior [I11].
+		return ^uint16(0)
+	}
+	return uint16(id)
 }

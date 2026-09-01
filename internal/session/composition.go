@@ -1083,7 +1083,7 @@ func createAndBindServices(s *Session) error {
 	if queueBinding == nil {
 		return fmt.Errorf("session: failed to compose order binding")
 	}
-	if err := queueBinding.ValidateSinglePlayerBinding(); err != nil {
+	if err := queueBinding.Validate(); err != nil {
 		return fmt.Errorf("session: %w", err)
 	}
 	// Construction [05]

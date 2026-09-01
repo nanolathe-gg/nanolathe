@@ -60,7 +60,53 @@ type Descriptor struct {
 	// Presentation is the descriptor's goal-resolution presentation-helper
 	// identity, one of the four PresentationHelper values [04 §3.1][R-DOC04-C].
 	Presentation PresentationHelper
+	// Driver names what advances a record of this descriptor when Handler is
+	// nil. Retail compiles a handler into every static descriptor, so this
+	// field describes Nanolathe's build, not retail: it is how a record whose
+	// machine lives in another package is distinguished from one that is
+	// simply unimplemented.
+	//
+	// It replaces two by-name string lists in the pump — a move-family switch
+	// and a handlerlessButDriven whitelist — that decided the same thing from
+	// the descriptor's spelling. The routing fact belongs on the descriptor,
+	// beside the handler it stands in for.
+	Driver Driver
 }
+
+// Driver identifies what advances an order record that carries no descriptor
+// handler.
+type Driver uint8
+
+const (
+	// DriverPump is the ordinary case: the descriptor's own Handler runs the
+	// record, and a nil Handler means the order is unimplemented in this
+	// build.
+	DriverPump Driver = iota
+	// DriverMovementRoute marks the path-backed move family. The movement
+	// scheduler owns the route lifecycle [04 §7], so the pump parks the record
+	// with the contract's wait and is re-dispatched after 30+rand15
+	// [04 §3.3] C3 while path-submit and movement-integrate drive the route.
+	DriverMovementRoute
+	// DriverExternalMachine marks a record another subsystem runs from its own
+	// per-unit step, reading and writing the record's phase, dynamic gate and
+	// deadline as its state machine: the factory and mobile-build lifecycle
+	// and the unit-reclaim machine in internal/construction
+	// ([05 "Factory production lifecycle"][04 R-FAC-02 §4][05 "Unit reclaim"]),
+	// and the air executors in internal/movement ([04 R-AIR-01 §6, §7]).
+	//
+	// The pump must leave every one of those fields alone: a result code
+	// applied here overwrites the driver's own deadline, and a factory record
+	// parked for 30 to 44 ticks mid-build is precisely the "the plant will not
+	// build another" stall of PLAN 17 §0 row 3. Such a record is also not
+	// diagnosed — a driven record is not a missing handler.
+	//
+	// TODO(T25): the durable shape is the one GetBuilt already uses — the
+	// owning subsystem registers its handler on the queue
+	// (Queue.SetGetBuiltHandler), so the pump stays the sole dispatcher and
+	// this value disappears. Doing that for the remaining six is a
+	// cross-package change no single unit here owns.
+	DriverExternalMachine
+)
 
 // StaticGate census [04 §3.1][R-DOC04-C]. Named readers: bit 9 (0x200) is
 // cleared when the order is constructed without a target unit; bit 10 (0x400)
@@ -89,7 +135,7 @@ var batch1 = []Descriptor{
 	{Name: "Cloak_Off", StateLabel: "Decloaking", Class: 0x00, AckGroup: 19, StaticGate: 0x10060, Presentation: HelperNone},
 	{Name: "Standing_MoveOrder", StateLabel: "Acknowledged", Class: 0x00, AckGroup: 19, StaticGate: 0x10060, Presentation: HelperNone},
 	{Name: "Standing_FireOrder", StateLabel: "Acknowledged", Class: 0x00, AckGroup: 19, StaticGate: 0x10060, Presentation: HelperNone},
-	{Name: "BuildingBuild", StateLabel: "Nanolathing", Class: 0x00, AckGroup: 19, StaticGate: 0x10010c, Presentation: HelperNone},
+	{Name: "BuildingBuild", StateLabel: "Nanolathing", Class: 0x00, AckGroup: 19, StaticGate: 0x10010c, Presentation: HelperNone, Driver: DriverExternalMachine},
 	{Name: "BuildWeapon", StateLabel: "Nanolathing", Class: 0x00, AckGroup: 19, StaticGate: 0xc0140, Presentation: HelperNone},
 	{Name: "SelfDestruct", StateLabel: "SELF DESTRUCT ENGAGED", Class: 0x00, AckGroup: 19, StaticGate: 0x40040, Presentation: HelperNone},
 	{Name: "SelfDestructFG", StateLabel: "SELF DESTRUCT ENGAGED", Class: 0x00, AckGroup: 19, StaticGate: 0x0, Presentation: HelperNone},
@@ -102,55 +148,55 @@ var batch1 = []Descriptor{
 	{Name: "AttackUType", StateLabel: "Attacking", Class: 0x00, AckGroup: 19, StaticGate: 0x4, Presentation: HelperNone},
 	{Name: "Guard_NoMove", StateLabel: "Ready", Class: 0x00, AckGroup: 19, StaticGate: 0x20, Presentation: HelperNone},
 	{Name: "SelfRepair", StateLabel: "Repairing", Class: 0x00, AckGroup: 19, StaticGate: 0x1000204, Presentation: HelperNone},
-	{Name: "QMove", StateLabel: "Ready with orders", Class: 0x02, AckGroup: 14, StaticGate: 0x400, Presentation: HelperGoalResolveAckPathMarkers},
-	{Name: "QPatrol", StateLabel: "Ready with orders", Class: 0x02, AckGroup: 7, StaticGate: 0x400, Presentation: HelperGoalResolveAckPathMarkers},
+	{Name: "QMove", StateLabel: "Ready with orders", Class: 0x02, AckGroup: 14, StaticGate: 0x400, Presentation: HelperGoalResolveAckPathMarkers, Driver: DriverMovementRoute},
+	{Name: "QPatrol", StateLabel: "Ready with orders", Class: 0x02, AckGroup: 7, StaticGate: 0x400, Presentation: HelperGoalResolveAckPathMarkers, Driver: DriverMovementRoute},
 }
 
 // batch2 is registration batch 2: 22 records [R-DOC04-C].
 var batch2 = []Descriptor{
 	{Name: "Standby", StateLabel: "Standby", Class: 0x10, AckGroup: 15, StaticGate: 0x20000, Presentation: HelperNone},
 	{Name: "Standby_Mine", StateLabel: "Standby", Class: 0x10, AckGroup: 15, StaticGate: 0x1020000, Presentation: HelperNone},
-	{Name: "Move_Ground", StateLabel: "Moving", Class: 0x12, AckGroup: 14, StaticGate: 0x402, Presentation: HelperGoalResolveAckPathMarkers},
+	{Name: "Move_Ground", StateLabel: "Moving", Class: 0x12, AckGroup: 14, StaticGate: 0x402, Presentation: HelperGoalResolveAckPathMarkers, Driver: DriverMovementRoute},
 	{Name: "Follow_Ground", StateLabel: "Guarding", Class: 0x12, AckGroup: 5, StaticGate: 0x200, Presentation: HelperGoalResolveAckPathMarkers},
 	{Name: "Suppress", StateLabel: "Suppressing fire", Class: 0x08, AckGroup: 1, StaticGate: 0x410, Presentation: HelperGoalResolveAck},
 	{Name: "Attack_Chase", StateLabel: "Attacking", Class: 0x08, AckGroup: 1, StaticGate: 0x280, Presentation: HelperGoalResolveAck},
 	{Name: "Attack_Kamikaze", StateLabel: "Attacking", Class: 0x08, AckGroup: 1, StaticGate: 0x600, Presentation: HelperGoalResolveAck},
 	{Name: "AttackSpecial", StateLabel: "Annihilating", Class: 0x08, AckGroup: 1, StaticGate: 0x680, Presentation: HelperGoalResolveAck},
 	{Name: "Park", StateLabel: "Parking", Class: 0x00, AckGroup: 14, StaticGate: 0x0, Presentation: HelperNone},
-	{Name: "Patrol", StateLabel: "Patrolling", Class: 0x12, AckGroup: 7, StaticGate: 0x412, Presentation: HelperGoalResolveAckPathMarkers},
+	{Name: "Patrol", StateLabel: "Patrolling", Class: 0x12, AckGroup: 7, StaticGate: 0x412, Presentation: HelperGoalResolveAckPathMarkers, Driver: DriverMovementRoute},
 	{Name: "Ground_Pickup", StateLabel: "Loading", Class: 0x08, AckGroup: 12, StaticGate: 0x200, Presentation: HelperGoalResolveAck},
 	{Name: "Ground_Unload", StateLabel: "Unloading", Class: 0x08, AckGroup: 13, StaticGate: 0x400, Presentation: HelperGoalResolveAck},
 	{Name: "Teleport", StateLabel: "Teleporting", Class: 0x08, AckGroup: 9, StaticGate: 0x600, Presentation: HelperGoalResolveAck},
-	{Name: "MobileBuild", StateLabel: "Nanolathing", Class: 0x13, AckGroup: 0, StaticGate: 0x100508, Presentation: HelperBuildFootprint},
+	{Name: "MobileBuild", StateLabel: "Nanolathing", Class: 0x13, AckGroup: 0, StaticGate: 0x100508, Presentation: HelperBuildFootprint, Driver: DriverExternalMachine},
 	{Name: "HelpBuild", StateLabel: "Nanolathing", Class: 0x18, AckGroup: 6, StaticGate: 0x100208, Presentation: HelperGoalResolveAck},
-	{Name: "RepairPatrol", StateLabel: "Repair patrol", Class: 0x12, AckGroup: 7, StaticGate: 0x412, Presentation: HelperGoalResolveAckPathMarkers},
+	{Name: "RepairPatrol", StateLabel: "Repair patrol", Class: 0x12, AckGroup: 7, StaticGate: 0x412, Presentation: HelperGoalResolveAckPathMarkers, Driver: DriverMovementRoute},
 	{Name: "RepairUnit", StateLabel: "Repairing", Class: 0x12, AckGroup: 6, StaticGate: 0x100200, Presentation: HelperGoalResolveAckPathMarkers},
 	{Name: "Capture", StateLabel: "Capturing", Class: 0x08, AckGroup: 4, StaticGate: 0x200, Presentation: HelperGoalResolveAck},
 	{Name: "Resurrect", StateLabel: "Resurrecting", Class: 0x12, AckGroup: 11, StaticGate: 0x200, Presentation: HelperGoalResolveAckPathMarkers},
 	{Name: "Reclaim", StateLabel: "Reclaiming", Class: 0x12, AckGroup: 11, StaticGate: 0x100800, Presentation: HelperGoalResolveAckPathMarkers},
-	{Name: "ReclaimUnit", StateLabel: "Reclaiming", Class: 0x12, AckGroup: 11, StaticGate: 0x100200, Presentation: HelperGoalResolveAckPathMarkers},
+	{Name: "ReclaimUnit", StateLabel: "Reclaiming", Class: 0x12, AckGroup: 11, StaticGate: 0x100200, Presentation: HelperGoalResolveAckPathMarkers, Driver: DriverExternalMachine},
 	{Name: "RepairUnitNoMove", StateLabel: "Repairing", Class: 0x18, AckGroup: 6, StaticGate: 0x200, Presentation: HelperGoalResolveAck},
 }
 
 // batch3 is registration batch 3: 22 records [R-DOC04-C].
 var batch3 = []Descriptor{
-	{Name: "VTOL_Standby", StateLabel: "Standby", Class: 0x00, AckGroup: 15, StaticGate: 0x20000, Presentation: HelperNone},
-	{Name: "VTOL_Move", StateLabel: "Moving", Class: 0x02, AckGroup: 14, StaticGate: 0x402, Presentation: HelperGoalResolveAckPathMarkers},
+	{Name: "VTOL_Standby", StateLabel: "Standby", Class: 0x00, AckGroup: 15, StaticGate: 0x20000, Presentation: HelperNone, Driver: DriverExternalMachine},
+	{Name: "VTOL_Move", StateLabel: "Moving", Class: 0x02, AckGroup: 14, StaticGate: 0x402, Presentation: HelperGoalResolveAckPathMarkers, Driver: DriverMovementRoute},
 	{Name: "VTOL_Landing", StateLabel: "Landing", Class: 0x08, AckGroup: 14, StaticGate: 0x600, Presentation: HelperGoalResolveAck},
 	{Name: "VTOL_Pickup", StateLabel: "Loading", Class: 0x08, AckGroup: 8, StaticGate: 0x200, Presentation: HelperGoalResolveAck},
 	{Name: "VTOL_Unload", StateLabel: "Unloading", Class: 0x08, AckGroup: 9, StaticGate: 0x400, Presentation: HelperGoalResolveAck},
 	{Name: "VTOL_Follow", StateLabel: "Guarding", Class: 0x02, AckGroup: 5, StaticGate: 0x200, Presentation: HelperGoalResolveAckPathMarkers},
-	{Name: "VTOL_Patrol", StateLabel: "Patrolling", Class: 0x02, AckGroup: 7, StaticGate: 0x412, Presentation: HelperGoalResolveAckPathMarkers},
+	{Name: "VTOL_Patrol", StateLabel: "Patrolling", Class: 0x02, AckGroup: 7, StaticGate: 0x412, Presentation: HelperGoalResolveAckPathMarkers, Driver: DriverMovementRoute},
 	{Name: "AirStrike", StateLabel: "Airstrike", Class: 0x08, AckGroup: 2, StaticGate: 0x600, Presentation: HelperGoalResolveAck},
 	{Name: "AirToAir", StateLabel: "Engaging target", Class: 0x08, AckGroup: 1, StaticGate: 0x200, Presentation: HelperGoalResolveAck},
 	{Name: "AirToGround", StateLabel: "Engaging target", Class: 0x08, AckGroup: 1, StaticGate: 0x200, Presentation: HelperGoalResolveAck},
 	{Name: "AirToGroundHover", StateLabel: "Engaging target", Class: 0x08, AckGroup: 1, StaticGate: 0x200, Presentation: HelperGoalResolveAck},
-	{Name: "VTOL_MobileBuild", StateLabel: "Nanolathing", Class: 0x03, AckGroup: 0, StaticGate: 0x100508, Presentation: HelperBuildFootprint},
+	{Name: "VTOL_MobileBuild", StateLabel: "Nanolathing", Class: 0x03, AckGroup: 0, StaticGate: 0x100508, Presentation: HelperBuildFootprint, Driver: DriverExternalMachine},
 	{Name: "VTOL_HelpBuild", StateLabel: "Nanolathing", Class: 0x08, AckGroup: 6, StaticGate: 0x100208, Presentation: HelperGoalResolveAck},
-	{Name: "VTOL_RepairPatrol", StateLabel: "Repair patrol", Class: 0x02, AckGroup: 7, StaticGate: 0x412, Presentation: HelperGoalResolveAckPathMarkers},
+	{Name: "VTOL_RepairPatrol", StateLabel: "Repair patrol", Class: 0x02, AckGroup: 7, StaticGate: 0x412, Presentation: HelperGoalResolveAckPathMarkers, Driver: DriverMovementRoute},
 	{Name: "VTOL_RepairUnit", StateLabel: "Repairing", Class: 0x02, AckGroup: 6, StaticGate: 0x100200, Presentation: HelperGoalResolveAckPathMarkers},
 	{Name: "VTOL_Reclaim", StateLabel: "Reclaiming", Class: 0x02, AckGroup: 11, StaticGate: 0x100800, Presentation: HelperGoalResolveAckPathMarkers},
-	{Name: "VTOL_ReclaimUnit", StateLabel: "Reclaiming", Class: 0x02, AckGroup: 11, StaticGate: 0x100200, Presentation: HelperGoalResolveAckPathMarkers},
+	{Name: "VTOL_ReclaimUnit", StateLabel: "Reclaiming", Class: 0x02, AckGroup: 11, StaticGate: 0x100200, Presentation: HelperGoalResolveAckPathMarkers, Driver: DriverExternalMachine},
 	{Name: "VTOL_Evade", StateLabel: "Evading", Class: 0x00, AckGroup: 19, StaticGate: 0x0, Presentation: HelperNone},
 	{Name: "VTOL_SeekAttack", StateLabel: "Seeking to attack", Class: 0x00, AckGroup: 19, StaticGate: 0x600, Presentation: HelperNone},
 	{Name: "VTOL_SeekGuard", StateLabel: "Seeking to guard", Class: 0x00, AckGroup: 19, StaticGate: 0x600, Presentation: HelperNone},
@@ -168,26 +214,67 @@ var batch4 = []Descriptor{
 }
 
 var table []Descriptor
-var byName map[string]ID
 
 func init() { buildTable() }
 
+// foldCompare orders two canonical command names the way the C runtime's
+// case-insensitive string compare does: byte by byte over the lowercased
+// bytes, shorter string first on a common prefix. The names are ASCII, so
+// folding only A-Z is exact.
+//
+// The distinction that matters is the underscore. Lowercasing maps A-Z into
+// the a-z range, which puts `_` (0x5f) *below* every letter instead of between
+// the upper- and lower-case ranges — that is the whole of the ordering
+// difference against a raw byte compare [04 R-STANCE-01 §9].
+func foldCompare(a, b string) int {
+	fold := func(c byte) byte {
+		if c >= 'A' && c <= 'Z' {
+			return c + ('a' - 'A')
+		}
+		return c
+	}
+	for i := 0; i < len(a) && i < len(b); i++ {
+		x, y := fold(a[i]), fold(b[i])
+		if x != y {
+			if x < y {
+				return -1
+			}
+			return 1
+		}
+	}
+	switch {
+	case len(a) < len(b):
+		return -1
+	case len(a) > len(b):
+		return 1
+	}
+	return 0
+}
+
 // buildTable builds the 68-entry table from the four static batches of 23,
 // 22, 22, and 1 records [R-DOC04-C]; after every batch the whole table
-// re-sorts ascending by canonical name using a case-sensitive byte comparison
-// [04 §3.1] C4. The final sorted order is the 67 named commands plus the
-// empty sentinel at index 0.
+// re-sorts ascending by canonical name. The final sorted order is the 67
+// named commands plus the empty sentinel at index 0.
+//
+// The comparator is case-insensitive. §3.1 used to say the sort was a
+// case-sensitive byte comparison and this code implemented that, which put
+// seven rows in the wrong order: identities 6-10 held AttackSpecial,
+// AttackUType, Attack_Chase, Attack_Kamikaze, Attack_NoMove and 12-13 held
+// BuildWeapon, BuildingBuild. The registration routine sorts with the same
+// C-runtime case-insensitive compare the lookup below uses, so the Attack*
+// and Build* clusters invert: 6-10 are Attack_Chase, Attack_Kamikaze,
+// Attack_NoMove, AttackSpecial, AttackUType and 12-13 are BuildingBuild,
+// BuildWeapon [04 R-STANCE-01 §9]. A case-sensitive sort under a
+// case-insensitive search is not merely inconsistent — the search cannot
+// find Attack_Chase at all, which disables the chase attack of §3.5. No
+// other identity moves; GetBuilt keeps index 0x13 under either order.
 func buildTable() {
 	all := make([]Descriptor, 0, 68)
 	for _, batch := range [][]Descriptor{batch1, batch2, batch3, batch4} {
 		all = append(all, batch...)
-		sort.Slice(all, func(i, j int) bool { return all[i].Name < all[j].Name }) // case-sensitive byte compare [04 §3.1] C4
+		sort.Slice(all, func(i, j int) bool { return foldCompare(all[i].Name, all[j].Name) < 0 })
 	}
 	table = all
-	byName = make(map[string]ID, len(table))
-	for i, d := range table {
-		byName[d.Name] = ID(i)
-	}
 	installHandlers() // the table is not finished until its handlers are on it
 }
 
@@ -241,15 +328,19 @@ func installHandlers() {
 // Table returns the 68-entry descriptor table, index 0 is "" sentinel [04 §3.1] C4.
 func Table() []Descriptor { return table }
 
-// Lookup returns the ID for name via binary search; miss returns 0 sentinel [04 §3.1] C4.
-// Search is case-sensitive byte compare as retail sorts [04 §3.1].
+// Lookup returns the ID for name, or the reject sentinel 0 on a miss.
+//
+// This is retail's ordinary lower_bound over the sorted table using the same
+// case-insensitive comparator the sort used, so callers need not match the
+// table's spelling: the interface transmits STANDING_FIREORDER and it resolves
+// to the descriptor named Standing_FireOrder [04 R-STANCE-01 §9].
+//
+// There is no name map beside this search. An exact-case map answered before
+// the search and so silently reintroduced case-sensitive lookup for every name
+// spelled as the table spells it, leaving the fold to act only as a fallback.
 func Lookup(name string) ID {
-	if id, ok := byName[name]; ok {
-		return id
-	}
-	// Binary search over sorted table for canonical match.
-	i := sort.Search(len(table), func(i int) bool { return table[i].Name >= name })
-	if i < len(table) && table[i].Name == name {
+	i := sort.Search(len(table), func(i int) bool { return foldCompare(table[i].Name, name) >= 0 })
+	if i < len(table) && foldCompare(table[i].Name, name) == 0 {
 		return ID(i)
 	}
 	return 0

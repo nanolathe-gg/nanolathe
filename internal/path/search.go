@@ -50,9 +50,23 @@ func InBounds(c Cell, bounds Rect) bool {
 	return c.X >= bounds.Min.X && c.X <= bounds.Max.X && c.Z >= bounds.Min.Z && c.Z <= bounds.Max.Z
 }
 
-// NeighborsForDir emits the centered fan. The first fan has nine entries,
-// with the reverse direction repeated at both ends [04 §7.1].
-func NeighborsForDir(cur Cell, dir uint8, first bool) ([]Cell, []uint8) {
+// Fan is one centered neighbour fan: the first Len entries of Cells and Dirs
+// are the neighbours in expansion order. It is a value so that expanding a
+// node costs no allocation; nine is the widest fan [04 §7.1].
+type Fan struct {
+	Cells [9]Cell
+	Dirs  [9]uint8
+	Len   int
+}
+
+// NeighborsForDir fills the centered fan. The first fan has nine entries, with
+// the reverse direction repeated at both ends; later fans have five
+// [04 §7.1].
+//
+// It returns the fan by value rather than two slices because it is called once
+// per expanded node, and two heap allocations per node dominated a search.
+// Order is unchanged: off runs from -width to +width about dir.
+func NeighborsForDir(cur Cell, dir uint8, first bool) Fan {
 	width := 2
 	if first {
 		width = 4
@@ -60,14 +74,14 @@ func NeighborsForDir(cur Cell, dir uint8, first bool) ([]Cell, []uint8) {
 			dir = DirN
 		}
 	}
-	cells := make([]Cell, 0, width*2+1)
-	dirs := make([]uint8, 0, width*2+1)
+	var fan Fan
 	for off := -width; off <= width; off++ {
 		d := uint8((int(dir) + off + 8) & 7)
-		cells = append(cells, Cell{cur.X + dirDelta[d].X, cur.Z + dirDelta[d].Z})
-		dirs = append(dirs, d)
+		fan.Cells[fan.Len] = Cell{cur.X + dirDelta[d].X, cur.Z + dirDelta[d].Z}
+		fan.Dirs[fan.Len] = d
+		fan.Len++
 	}
-	return cells, dirs
+	return fan
 }
 
 type rayResult struct {
@@ -414,10 +428,10 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 			s.finish(reconstructRoute(s.cfg.Start, n.Cell, s.ns, routeFootPrint(s.cfg)))
 			return s.resultPoints, s.resultStatus, true
 		}
-		cells, dirs := NeighborsForDir(n.Cell, n.Dir, !s.expanded)
+		fan := NeighborsForDir(n.Cell, n.Dir, !s.expanded)
 		s.expanded = true
-		for i, c := range cells {
-			d := dirs[i]
+		for i := 0; i < fan.Len; i++ {
+			c, d := fan.Cells[i], fan.Dirs[i]
 			e := s.entries[c]
 			value := s.passValue(c)
 			state := e.status & 3

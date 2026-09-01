@@ -12,7 +12,7 @@ import (
 // TestRetailBankHeaderCorpus locks the 34-byte HAPIBANK header and its
 // independently authored field values [08 "Save-file organization"].
 func TestRetailBankHeaderCorpus(t *testing.T) {
-	b := NewBuilder(RetailTag)
+	b := NewBuilder()
 	b.Add(SummaryAccount).SetInt("maxunits", 250)
 	data := b.Bytes()
 	if len(data) < BankHeaderSize {
@@ -41,7 +41,7 @@ func TestRetailBankHeaderCorpus(t *testing.T) {
 	if !bytes.Equal(data[0x19:BankHeaderSize], make([]byte, BankHeaderSize-0x19)) {
 		t.Fatalf("reserved header bytes are not zero: %x", data[0x19:BankHeaderSize])
 	}
-	bank, err := OpenBytes(data, RetailTag)
+	bank, err := OpenBytes(data)
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestRetailBankHeaderCorpus(t *testing.T) {
 // integer/double/string/box group order, and 16-byte box descriptor [08
 // "Save-file organization"].
 func TestRetailAccountGroupsCorpus(t *testing.T) {
-	b := NewBuilder(RetailTag)
+	b := NewBuilder()
 	ac := b.Add("Corpus")
 	ac.SetInt("I", -7)
 	ac.SetDouble("D", math.Pi)
@@ -124,7 +124,7 @@ func TestRetailAccountGroupsCorpus(t *testing.T) {
 		t.Fatalf("box length %d want 3", got)
 	}
 
-	bank, err := OpenBytes(data, RetailTag)
+	bank, err := OpenBytes(data)
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestRetailAccountGroupsCorpus(t *testing.T) {
 // TestRetailSummaryDefaultsAndOrder locks the established Summary defaults,
 // typed item grouping, and multiplayer-only defaults [08 "Summary"].
 func TestRetailSummaryDefaultsAndOrder(t *testing.T) {
-	b := NewBuilder(RetailTag)
+	b := NewBuilder()
 	ac := b.Add(SummaryAccount)
 	ac.SetInt("BUILD DATE:fixture", 0)
 	ac.SetInt("BUILD TIME:fixture", 0)
@@ -148,7 +148,7 @@ func TestRetailSummaryDefaultsAndOrder(t *testing.T) {
 	ac.SetString("Difficulty", "wrong wire type")
 	ac.SetInt("Gametype", 2)
 	data := b.Bytes()
-	bank, err := OpenBytes(data, RetailTag)
+	bank, err := OpenBytes(data)
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}
@@ -183,9 +183,9 @@ func TestRetailSummaryDefaultsAndOrder(t *testing.T) {
 }
 
 func TestRetailCameraMissingFieldDefaultsZero(t *testing.T) {
-	b := NewBuilder(RetailTag)
+	b := NewBuilder()
 	b.Add(CameraAccount).SetInt("X Position", 12)
-	bank, err := OpenBytes(b.Bytes(), RetailTag)
+	bank, err := OpenBytes(b.Bytes())
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}
@@ -197,11 +197,11 @@ func TestRetailCameraMissingFieldDefaultsZero(t *testing.T) {
 
 func TestRetailGameTimeAndPlayerGate(t *testing.T) {
 	clk := &clock.State{Requested: 10, Active: 10, GlobalTick: 1234}
-	b := NewBuilder(RetailTag)
+	b := NewBuilder()
 	WriteGameTime(b, clk)
 	p := b.Add("Player0")
 	p.SetInt("Controller", 2)
-	bank, err := OpenBytes(b.Bytes(), RetailTag)
+	bank, err := OpenBytes(b.Bytes())
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}
@@ -212,10 +212,10 @@ func TestRetailGameTimeAndPlayerGate(t *testing.T) {
 		t.Fatalf("player gate result = %+v", got)
 	}
 
-	short := NewBuilder(RetailTag)
+	short := NewBuilder()
 	short.Add(PlayersAccount).AppendBox(GameTimeBoxName, 0, []byte{1, 2, 3})
 	short.Add("Player0").SetInt("Controller", 2)
-	shortBank, err := OpenBytes(short.Bytes(), RetailTag)
+	shortBank, err := OpenBytes(short.Bytes())
 	if err != nil {
 		t.Fatalf("OpenBytes short: %v", err)
 	}
@@ -225,11 +225,11 @@ func TestRetailGameTimeAndPlayerGate(t *testing.T) {
 }
 
 func TestRetailAlliancesExactSizeAndSelfByte(t *testing.T) {
-	b := NewBuilder(RetailTag)
+	b := NewBuilder()
 	data := bytes.Repeat([]byte{0}, 11)
 	data[4] = 1
 	b.Add(PlayersAccount).AppendBox(AlliancesBoxName, 0, data)
-	bank, err := OpenBytes(b.Bytes(), RetailTag)
+	bank, err := OpenBytes(b.Bytes())
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}
@@ -237,9 +237,9 @@ func TestRetailAlliancesExactSizeAndSelfByte(t *testing.T) {
 	if !ok || len(got) != 11 || got[2] != 1 || got[4] != 1 {
 		t.Fatalf("alliances = %v, ok=%v", got, ok)
 	}
-	wrong := NewBuilder(RetailTag)
+	wrong := NewBuilder()
 	wrong.Add(PlayersAccount).AppendBox(AlliancesBoxName, 0, bytes.Repeat([]byte{1}, 12))
-	wrongBank, err := OpenBytes(wrong.Bytes(), RetailTag)
+	wrongBank, err := OpenBytes(wrong.Bytes())
 	if err != nil {
 		t.Fatalf("OpenBytes wrong length: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestRetailAlliancesExactSizeAndSelfByte(t *testing.T) {
 // behavior [08 "Save-file organization"].
 func TestRetailDuplicateAccountMerge(t *testing.T) {
 	data := duplicateAccountFixture()
-	bank, err := OpenBytes(data, RetailTag)
+	bank, err := OpenBytes(data)
 	if err != nil {
 		t.Fatalf("OpenBytes duplicate account fixture: %v", err)
 	}

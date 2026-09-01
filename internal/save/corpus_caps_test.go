@@ -106,7 +106,7 @@ func TestCorpusSaveCaps_Retail(t *testing.T) {
 	// HAPIBANK header bounds: C13 bounds checks reject out-of-range offsets;
 	// stock saves have valid headers (poolFileOffset, firstAccount) and must not
 	// be rejected. We test that a synthetic bank round-trips.
-	b := NewBuilder(RetailTag)
+	b := NewBuilder()
 	b.Add("Summary").SetInt("maxunits", 100)
 	ac := b.Add("Players")
 	ac.SetInt("Human Player", 0)
@@ -115,7 +115,7 @@ func TestCorpusSaveCaps_Retail(t *testing.T) {
 	// that the bank bytes are parseable.
 	_ = cat
 	data := b.Bytes()
-	bank, err := OpenBytes(data, RetailTag)
+	bank, err := OpenBytes(data)
 	if err != nil {
 		t.Fatalf("synthetic bank parse failed: %v", err)
 	}

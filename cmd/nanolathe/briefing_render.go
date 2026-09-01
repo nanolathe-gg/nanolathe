@@ -34,7 +34,7 @@ func (g *gameShell) openCampaignBriefing() {
 	}
 	missionIndex := stub.Index
 	_, crtSeed := seedsFor(g.opts)
-	crt := rng.NewCRT(crtSeed)
+	crt := session.NewFrontEndCRT(crtSeed)
 	request := func() (freshBattleRequest, error) {
 		g.saveSettings()
 		identity := fmt.Sprintf("%s:MISSION%d", campaign.Path, missionIndex)

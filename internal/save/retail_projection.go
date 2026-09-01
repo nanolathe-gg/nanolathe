@@ -83,7 +83,7 @@ func (p RetailProjection) Clone() RetailProjection {
 // Features, Metal, PlayerFeatures, Mapping, Units, Meteor, then trigger accounts;
 // this is the writer's stable live-battle order [08 "Save-file organization"].
 func (p RetailProjection) Build() (*Builder, error) {
-	b := NewBuilder(RetailTag)
+	b := NewBuilder()
 	summary := p.Summary
 	if summary.BetweenMissions != 0 && summary.BetweenMissions != 1 {
 		return nil, fmt.Errorf("nanolathe: retail projection: invalid BetweenMissions value %d: logical path save/Summary, providers searched [projection], expected integer 0 or 1", summary.BetweenMissions)
@@ -129,17 +129,17 @@ func (p RetailProjection) Build() (*Builder, error) {
 	return b, nil
 }
 
-// RetailBytes returns the exact HAPIBANK image for p.
-func (p RetailProjection) RetailBytes() ([]byte, error) {
+// Bytes returns the exact HAPIBANK image for p.
+func (p RetailProjection) Bytes() ([]byte, error) {
 	b, err := p.Build()
 	if err != nil {
 		return nil, err
 	}
-	return b.RetailBytes(), nil
+	return b.Bytes(), nil
 }
 
 // WriteRetailProjection is the package-level writer entry point.
-func WriteRetailProjection(p RetailProjection) ([]byte, error) { return p.RetailBytes() }
+func WriteRetailProjection(p RetailProjection) ([]byte, error) { return p.Bytes() }
 
 func writeUnitImage(b *Builder, image UnitImage) error {
 	ac := builderAccount(b, UnitsAccount)

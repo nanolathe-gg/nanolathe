@@ -33,6 +33,22 @@ var Patterns = []struct {
 	{"structure-offset", regexp.MustCompile(`\+0x[0-9A-Fa-f]{2,4}\b`), simulationSource},
 }
 
+// saveImageCodecs are the files that read or write the retail save image
+// record by record. Their `base+0xNN` expressions are offsets into an authored
+// *file*, exactly like the ones formats/ owns, so the executable-layout rule
+// does not govern them — `research/formats` and [08 R-SAVE-02] do. The list is
+// explicit rather than a name pattern so that broadening it stays a reviewed
+// change; ordinary engine source that merely mentions a save field must state
+// the field, not its offset.
+var saveImageCodecs = map[string]bool{
+	"internal/cob/retail_restore.go":        true,
+	"internal/cob/retail_restore_test.go":   true,
+	"internal/cob/retail_save.go":           true,
+	"internal/save/writer_test.go":          true,
+	"internal/units/retail_restore.go":      true,
+	"internal/units/retail_restore_test.go": true,
+}
+
 // simulationSource reports whether rel is engine source governed by the
 // executable-layout rule, as opposed to a file-format owner.
 func simulationSource(rel string) bool {
@@ -40,6 +56,9 @@ func simulationSource(rel string) bool {
 		return false
 	}
 	if strings.HasPrefix(rel, "formats/") || strings.HasPrefix(rel, "research/") {
+		return false
+	}
+	if saveImageCodecs[rel] {
 		return false
 	}
 	return strings.HasPrefix(rel, "internal/") || strings.HasPrefix(rel, "cmd/")

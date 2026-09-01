@@ -9,7 +9,7 @@ import (
 )
 
 func sampleBank() []byte {
-	b := NewBuilder("")
+	b := NewBuilder()
 	summary := b.Add("Summary")
 	summary.SetInt("BUILD DATE:Aug 23 2026", 0)
 	summary.SetInt("maxunits", 500)
@@ -44,7 +44,7 @@ func TestBankRoundTrip(t *testing.T) {
 			t.Fatalf("reserved byte 0x%x = %d want 0", i, payload[i])
 		}
 	}
-	bank, err := OpenBytes(payload, RetailTag)
+	bank, err := OpenBytes(payload)
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestBankRoundTrip(t *testing.T) {
 		t.Fatalf("accounts=%d want 4", bank.Count())
 	}
 	// Verify pool tag is case-insensitive: open with lower case.
-	if _, err := OpenBytes(payload, "total annihilation 3.0"); err != nil {
+	if _, err := openBytesWithTag(payload, "total annihilation 3.0"); err != nil {
 		t.Fatalf("case-insensitive tag: %v", err)
 	}
 	summary, ok := bank.Account("Summary")
@@ -99,40 +99,40 @@ func TestBankRoundTrip(t *testing.T) {
 
 func TestBankRejectsWrongMagicVersionAndTag(t *testing.T) {
 	payload := sampleBank()
-	if _, err := OpenBytes([]byte("NOPE"), RetailTag); err != ErrMagic {
+	if _, err := OpenBytes([]byte("NOPE")); err != ErrMagic {
 		t.Fatalf("wrong magic err=%v want ErrMagic", err)
 	}
 	// Wrong magic case-sensitive: hapibank lower should fail.
 	corrupt := append([]byte(nil), payload...)
 	copy(corrupt[:8], []byte("hapibank"))
-	if _, err := OpenBytes(corrupt, RetailTag); err != ErrMagic {
+	if _, err := OpenBytes(corrupt); err != ErrMagic {
 		t.Fatalf("case-sensitive magic err=%v want ErrMagic", err)
 	}
 	corrupt = append([]byte(nil), payload...)
 	corrupt[0x14] = 2
 	binary.LittleEndian.PutUint32(corrupt[0x14:], 2)
-	if _, err := OpenBytes(corrupt, RetailTag); err != ErrVersion {
+	if _, err := OpenBytes(corrupt); err != ErrVersion {
 		t.Fatalf("wrong version err=%v want ErrVersion", err)
 	}
-	if _, err := OpenBytes(payload, "Some other tag"); err != ErrTag {
+	if _, err := openBytesWithTag(payload, "Some other tag"); err != ErrTag {
 		t.Fatalf("wrong tag err=%v want ErrTag", err)
 	}
 	// Zero-return semantics: on wrong magic/version/tag, the bank is not returned (nil) and count is zero.
-	if b, err := OpenBytes(corrupt, RetailTag); err == nil || b != nil {
+	if b, err := OpenBytes(corrupt); err == nil || b != nil {
 		// We return nil bank on error, which is zero accounts.
 	}
-	if _, err := OpenBytes(payload, ""); err != nil {
+	if _, err := openBytesWithTag(payload, ""); err != nil {
 		t.Fatalf("empty expectation should accept any tag with RetailTag default: %v", err)
 	}
 	// Verify that bank with wrong tag would have zero accounts if we ignore error (simulating retail zero return).
-	if b, _ := OpenBytes(payload, "Some other tag"); b != nil && b.Count() != 0 {
+	if b, _ := openBytesWithTag(payload, "Some other tag"); b != nil && b.Count() != 0 {
 		t.Fatalf("wrong tag bank should be zero accounts, got %d", b.Count())
 	}
 }
 
 func TestBankDecompressionFailureContinuesParsing(t *testing.T) {
 	// Build a bank with three accounts; middle one will be marked compressed to trigger diagnostic.
-	b := NewBuilder("")
+	b := NewBuilder()
 	a1 := b.Add("Summary")
 	a1.SetInt("maxunits", 100)
 	a2 := b.Add("Players")
@@ -155,7 +155,7 @@ func TestBankDecompressionFailureContinuesParsing(t *testing.T) {
 	if secondOff+AccountHeaderSize < len(payload) {
 		payload[secondOff+AccountHeaderSize] ^= 0xFF
 	}
-	bank, err := OpenBytes(payload, RetailTag)
+	bank, err := OpenBytes(payload)
 	if err != nil {
 		t.Fatalf("OpenBytes with compressed middle account: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestBankDecompressionFailureContinuesParsing(t *testing.T) {
 		t.Fatalf("expected diagnostic %q in warnings %v", diagAccountDecompress, bank.Warnings())
 	}
 	// Also test pool decompression failure continues.
-	b2 := NewBuilder("")
+	b2 := NewBuilder()
 	s := b2.Add("Summary")
 	s.SetInt("maxunits", 1)
 	p2 := b2.Bytes()
@@ -196,7 +196,7 @@ func TestBankDecompressionFailureContinuesParsing(t *testing.T) {
 			p2[i] = 0xFF
 		}
 	}
-	bank2, err := OpenBytes(p2, RetailTag)
+	bank2, err := OpenBytes(p2)
 	if err != ErrTag && err != ErrFormat {
 		// Pool decompression fails, but parsing continues; however tag check will likely fail because pool is garbage.
 		// We expect either ErrTag (if tag not found) or success with raw pool and warnings.
@@ -222,7 +222,7 @@ func TestBankDecompressionFailureContinuesParsing(t *testing.T) {
 }
 
 func TestBankAccountSpanWalk(t *testing.T) {
-	b := NewBuilder("")
+	b := NewBuilder()
 	for i := 0; i < 5; i++ {
 		ac := b.Add(accountName(i))
 		ac.SetInt("Index", int32(i))
@@ -246,7 +246,7 @@ func TestBankAccountSpanWalk(t *testing.T) {
 	if len(offsets) != 5 {
 		t.Fatalf("span walk found %d accounts want 5", len(offsets))
 	}
-	bank, err := OpenBytes(payload, RetailTag)
+	bank, err := OpenBytes(payload)
 	if err != nil {
 		t.Fatalf("OpenBytes span walk: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestBankAccountSpanWalk(t *testing.T) {
 	// Craft a minimal bank where first account's span is 10 (<32) and second account follows immediately after the 32-byte header.
 	// This mimics retail's "cursor after header instead of start+span" path.
 	{
-		b2 := NewBuilder("")
+		b2 := NewBuilder()
 		// We will manually craft the file to test quirk without builder misalignment.
 		// Build pool manually.
 		poolStrings := []string{RetailTag, "A", "B", "v"}
@@ -308,7 +308,7 @@ func TestBankAccountSpanWalk(t *testing.T) {
 		binary.LittleEndian.PutUint32(data[0x10:], BankHeaderSize)
 		binary.LittleEndian.PutUint32(data[0x14:], 1)
 		data[0x18] = 0
-		bank2, err := OpenBytes(data, RetailTag)
+		bank2, err := OpenBytes(data)
 		if err != nil {
 			t.Fatalf("quirk span <=32: %v", err)
 		}
@@ -332,38 +332,38 @@ func TestBankOffsetBoundRejection(t *testing.T) {
 	// Pool offset beyond file.
 	corrupt := append([]byte(nil), payload...)
 	binary.LittleEndian.PutUint32(corrupt[0x0C:], uint32(len(corrupt)+100))
-	if _, err := OpenBytes(corrupt, RetailTag); err != ErrFormat {
+	if _, err := OpenBytes(corrupt); err != ErrFormat {
 		t.Fatalf("pool offset beyond file should be ErrFormat, got %v", err)
 	}
 	// First account offset beyond pool offset.
 	corrupt = append([]byte(nil), payload...)
 	poolOff := binary.LittleEndian.Uint32(corrupt[0x0C:])
 	binary.LittleEndian.PutUint32(corrupt[0x10:], poolOff+10)
-	if _, err := OpenBytes(corrupt, RetailTag); err != ErrFormat {
+	if _, err := OpenBytes(corrupt); err != ErrFormat {
 		t.Fatalf("firstAccount beyond pool should be ErrFormat, got %v", err)
 	}
 	// First account offset before header.
 	corrupt = append([]byte(nil), payload...)
 	binary.LittleEndian.PutUint32(corrupt[0x10:], 10)
-	if _, err := OpenBytes(corrupt, RetailTag); err != ErrFormat {
+	if _, err := OpenBytes(corrupt); err != ErrFormat {
 		t.Fatalf("firstAccount before header should be ErrFormat, got %v", err)
 	}
 	// Tag offset beyond pool.
 	corrupt = append([]byte(nil), payload...)
 	// Set tag offset to large value.
 	binary.LittleEndian.PutUint32(corrupt[0x08:], 9999)
-	if _, err := OpenBytes(corrupt, RetailTag); err != ErrFormat {
+	if _, err := OpenBytes(corrupt); err != ErrFormat {
 		t.Fatalf("tag offset beyond pool should be ErrFormat, got %v", err)
 	}
 	// Account span overruns pool.
-	b2 := NewBuilder("")
+	b2 := NewBuilder()
 	ac := b2.Add("Summary")
 	ac.SetInt("maxunits", 1)
 	p2 := b2.Bytes()
 	off := int(binary.LittleEndian.Uint32(p2[0x10:]))
 	// Make span huge to overrun pool.
 	binary.LittleEndian.PutUint32(p2[off:], 9999)
-	bank, err := OpenBytes(p2, RetailTag)
+	bank, err := OpenBytes(p2)
 	if err != nil {
 		// Opening may succeed but with warning and zero accounts due to span overrun handling.
 		t.Logf("overrun span open err %v", err)
@@ -379,13 +379,13 @@ func TestBankOffsetBoundRejection(t *testing.T) {
 }
 
 func TestBankEmptyAccountsNotEmitted(t *testing.T) {
-	b := NewBuilder("")
+	b := NewBuilder()
 	b.Add("Empty") // no items
 	alsoEmpty := b.Add("AlsoEmpty")
 	alsoEmpty.SetInt("dummy", 1)
 	// Remove dummy to make it empty again? Keep one with data, one empty.
 	payload := b.Bytes()
-	bank, err := OpenBytes(payload, RetailTag)
+	bank, err := OpenBytes(payload)
 	if err != nil {
 		t.Fatalf("empty account: %v", err)
 	}
@@ -416,7 +416,7 @@ func TestBankEmptyAccountsNotEmitted(t *testing.T) {
 func TestBankCompressedPoolValid(t *testing.T) {
 	// Valid compressed pool: wrap a zlib payload in the established SQSH
 	// framing and set the bank compression flag.
-	b := NewBuilder("")
+	b := NewBuilder()
 	ac := b.Add("Summary")
 	ac.SetInt("maxunits", 42)
 	payload := b.Bytes()
@@ -442,7 +442,7 @@ func TestBankCompressedPoolValid(t *testing.T) {
 	// Update header compression flag and keep pool offset same (since accounts unchanged, pool offset stays same)
 	newPayload[0x18] = 1
 	// Pool length changed, but pool offset is still start of pool, which is correct.
-	bank, err := OpenBytes(newPayload, RetailTag)
+	bank, err := OpenBytes(newPayload)
 	if err != nil {
 		t.Fatalf("valid compressed pool: %v", err)
 	}
@@ -457,7 +457,7 @@ func TestBankCompressedPoolValid(t *testing.T) {
 }
 
 func TestBankBoxPayloadBounds(t *testing.T) {
-	b := NewBuilder("")
+	b := NewBuilder()
 	ac := b.Add("Test")
 	ac.AppendBox("Blob", 0, []byte{1, 2, 3})
 	payload := b.Bytes()
@@ -474,7 +474,7 @@ func TestBankBoxPayloadBounds(t *testing.T) {
 	}
 	// Overwrite payload offset to huge value.
 	binary.LittleEndian.PutUint32(payload[descrOff+8:], 0xFFFFFF)
-	bank, err := OpenBytes(payload, RetailTag)
+	bank, err := OpenBytes(payload)
 	if err != nil {
 		t.Fatalf("box payload bounds: %v", err)
 	}

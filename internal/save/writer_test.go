@@ -8,7 +8,7 @@ import (
 )
 
 func TestRetailBankWriterLayoutAndOrder(t *testing.T) {
-	b := NewBuilder("")
+	b := NewBuilder()
 	b.Add("empty")
 	first := b.Add("first")
 	first.SetInt("i", 7)
@@ -20,7 +20,7 @@ func TestRetailBankWriterLayoutAndOrder(t *testing.T) {
 	second := b.Add("second")
 	second.SetInt("j", -1)
 
-	data := b.RetailBytes()
+	data := b.Bytes()
 	if got := string(data[:8]); got != "HAPIBANK" {
 		t.Fatalf("magic %q", got)
 	}
@@ -35,7 +35,7 @@ func TestRetailBankWriterLayoutAndOrder(t *testing.T) {
 		t.Fatalf("pool tag %q", got)
 	}
 
-	bank, err := OpenBytes(data, RetailTag)
+	bank, err := OpenBytes(data)
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}
@@ -83,12 +83,12 @@ func TestRetailBankWriterLayoutAndOrder(t *testing.T) {
 }
 
 func TestRetailBankWriterDuplicateAccountsAndPoolEncounterOrder(t *testing.T) {
-	b := NewBuilder("")
+	b := NewBuilder()
 	one := b.Add("dup")
 	one.SetInt("first", 1)
 	two := b.Add("dup")
 	two.SetInt("second", 2)
-	data := b.RetailBytes()
+	data := b.Bytes()
 	first := int(binary.LittleEndian.Uint32(data[0x10:]))
 	span := int(binary.LittleEndian.Uint32(data[first:]))
 	second := first + span
@@ -101,7 +101,7 @@ func TestRetailBankWriterDuplicateAccountsAndPoolEncounterOrder(t *testing.T) {
 	if !bytes.Equal(pool, want) {
 		t.Fatalf("pool %q, want %q", pool, want)
 	}
-	bank, err := OpenBytes(data, RetailTag)
+	bank, err := OpenBytes(data)
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}
@@ -118,12 +118,12 @@ func TestRetailBankWriterDuplicateAccountsAndPoolEncounterOrder(t *testing.T) {
 }
 
 func TestRetailBankWriterCompressionAndStrictShorter(t *testing.T) {
-	b := NewBuilder("")
+	b := NewBuilder()
 	large := b.Add("large")
 	large.AppendBox("blob", 0, bytes.Repeat([]byte("ABCD"), 5000))
 	small := b.Add("small")
 	small.SetInt("n", 1)
-	data := b.RetailBytes()
+	data := b.Bytes()
 	first := int(binary.LittleEndian.Uint32(data[0x10:]))
 	firstSpan := int(binary.LittleEndian.Uint32(data[first:]))
 	if flag := binary.LittleEndian.Uint32(data[first+0x18:]); flag != 1 {
@@ -136,7 +136,7 @@ func TestRetailBankWriterCompressionAndStrictShorter(t *testing.T) {
 	if poolFlag := data[0x18]; poolFlag != 0 {
 		t.Fatalf("pool compression flag %d for small pool, want 0", poolFlag)
 	}
-	bank, err := OpenBytes(data, RetailTag)
+	bank, err := OpenBytes(data)
 	if err != nil {
 		t.Fatalf("OpenBytes compressed bank: %v", err)
 	}
@@ -154,16 +154,16 @@ func TestRetailBankWriterCompressionAndStrictShorter(t *testing.T) {
 }
 
 func TestRetailBankWriterCompressesPool(t *testing.T) {
-	b := NewBuilder("")
+	b := NewBuilder()
 	account := b.Add("pool")
 	for i := 0; i < 300; i++ {
 		account.SetString(fmt.Sprintf("key%03d", i), "repeated pool value")
 	}
-	data := b.RetailBytes()
+	data := b.Bytes()
 	if data[0x18] != 1 {
 		t.Fatal("compressible string pool was not packed")
 	}
-	bank, err := OpenBytes(data, RetailTag)
+	bank, err := OpenBytes(data)
 	if err != nil {
 		t.Fatalf("OpenBytes compressed pool: %v", err)
 	}

@@ -30,6 +30,7 @@ const (
 	HumanBuildPage
 	HumanGroupAssign
 	HumanGroupRecall
+	HumanStance
 )
 
 type HumanSelectionCommand struct{ Handles []pool.Handle }
@@ -59,6 +60,19 @@ type HumanFactoryBuildCommand struct {
 	// Queued remains for old callers that only supplied the pre-count command.
 	Queued bool
 }
+
+// HumanStanceCommand is one press of the side panel's MOVEORD or FIREORD
+// gadget [04 R-STANCE-01 §2]. Presentation computes the next value from the
+// published three-bit panel field with that section's cycle (0→1, 1→2, 2→0,
+// 3→0; 4 matches no arm and presses nothing) and transmits it here; this
+// boundary owns the broadcast and the definition gate.
+type HumanStanceCommand struct {
+	// Fire selects `Standing_FireOrder`; otherwise `Standing_MoveOrder`.
+	Fire bool
+	// Value is the new stance, 0..2 as the panel sends it.
+	Value int32
+}
+
 type HumanCancelProductionCommand struct{ Unit pool.Handle }
 type HumanStockpileCommand struct {
 	Unit   pool.Handle
@@ -104,6 +118,7 @@ type HumanCommand struct {
 	Stockpile        HumanStockpileCommand
 	BuildPage        HumanBuildPageCommand
 	Group            HumanGroupCommand
+	Stance           HumanStanceCommand
 }
 
 func cloneHumanHandles(in []pool.Handle) []pool.Handle {
@@ -513,6 +528,46 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 				q.DropLeadingAutoOps()
 			}
 			q.Push(id, orders.NewNodeForOrder(id, 0, 0, 0, 0, tick, u.Handle, c.Activation.Queued))
+		}
+	case HumanStance:
+		// The selection broadcast of [04 R-STANCE-01 §5]: walk the local
+		// player's units in ascending pool order, submit to every one carrying
+		// the selection bit, and skip a unit whose definition lacks the
+		// matching accept flag. Neither the leader exclusion nor the centroid
+		// arm is active for a standing order — both standing descriptors carry
+		// static mask 0x10060, which has no target-required bit, and a standing
+		// order carries no ground position.
+		name := "Standing_MoveOrder"
+		if c.Stance.Fire {
+			name = "Standing_FireOrder"
+		}
+		id := orders.Lookup(name)
+		if id == 0 {
+			return
+		}
+		for _, h := range s.selectedHumanHandles() {
+			u := s.humanUnit(h)
+			if u == nil || u.Def == nil {
+				continue
+			}
+			if c.Stance.Fire && !u.Def.FireStandOrders {
+				continue
+			}
+			if !c.Stance.Fire && !u.Def.MobileStandOrders {
+				continue
+			}
+			s.bindOrderQueue(u)
+			q := orders.QueueForUnit(u)
+			if q == nil {
+				continue
+			}
+			// The handler completes on its single visit and returns code 5, so
+			// the record is consumed the tick it runs and the displaced head
+			// resumes behind it [04 R-STANCE-01 §2]. A stance change is not a
+			// new mission: it must not purge the queue the way Stop does.
+			node := orders.NewNodeForOrder(id, 0, 0, 0, 0, tick, u.Handle, false)
+			node.Param1 = uint32(c.Stance.Value)
+			q.PushHead(id, node)
 		}
 	case HumanMobileBuild:
 		u := s.humanUnit(c.MobileBuild.Builder)

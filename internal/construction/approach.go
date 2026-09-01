@@ -3,7 +3,6 @@ package construction
 import (
 	"sort"
 
-	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -430,9 +429,8 @@ func (s *Service) builderCanStandAt(builder *units.Unit, x, z numeric.Fixed) boo
 		// it standing there. Every other placement query passes a null self
 		// identity [04 R-COLL-01 §6]; this is a candidate-clearance filter, not
 		// a placement.
-		Self:            uint16(builder.Handle),
-		Mobile:          true,
-		MobileOccupancy: s.mobileOccupancy(),
+		Self:   uint16(builder.Handle),
+		Mobile: true,
 	})
 	return err == nil
 }
@@ -443,38 +441,6 @@ func planarDistSq(ax, az, bx, bz numeric.Fixed) int64 {
 	dx := int64(ax) - int64(bx)
 	dz := int64(az) - int64(bz)
 	return dx*dx + dz*dz
-}
-
-// gridOccupancy adapts the mover occupancy lattice to the placement
-// validator's occupant test. Retail reads one ground word; this is the half of
-// it that ground movers write [04 R-COLL-01 §4].
-type gridOccupancy struct{ grid *movement.OccupancyGrid }
-
-// CellOccupant returns the identity holding the cell, or 0 when it is free.
-func (g gridOccupancy) CellOccupant(cellX, cellZ int32) uint16 {
-	id, held := g.grid.OccupantAt(movement.Cell{X: cellX, Z: cellZ})
-	if !held || id == 0 {
-		return 0
-	}
-	if id < 0 || id > int(^uint16(0)) {
-		// An identity that does not fit the occupancy word is still an
-		// occupant; reporting it free would admit a placement over a live
-		// unit. The placement identity range is bounded well below this
-		// elsewhere (reservePlacement refuses a wider handle), so this is a
-		// bounds guard, not a behavior [I11].
-		return ^uint16(0)
-	}
-	return uint16(id)
-}
-
-// mobileOccupancy hands the mover plane to the canonical placement validator.
-// It is nil when no movement system is bound, which is the fixture case: the
-// validator then tests the plot half alone, exactly as before.
-func (s *Service) mobileOccupancy() world.MobileOccupancy {
-	if s == nil || s.Movement == nil || s.Movement.Grid == nil {
-		return nil
-	}
-	return gridOccupancy{grid: s.Movement.Grid}
 }
 
 // mustClearSite reports whether the builder's own footprint still covers any

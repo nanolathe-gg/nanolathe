@@ -32,49 +32,63 @@ type EffectDrawStats struct {
 	Strokes  int
 }
 
-// effectViewsForStrip selects one committed strip without changing source
-// order. The composer calls this at each retail barrier so effects cannot
-// drift into a single after-the-world pass [03 §1][03 R-STRIP-01 §1–§3].
-func effectViewsForStrip(effects []frame.EffectView, strip int8) []frame.EffectView {
-	count := 0
-	for i := range effects {
-		if effects[i].Strip == strip {
-			count++
+// effectStripCount is the number of established strip barriers, 0..9
+// [03 R-STRIP-01 §1–§3].
+const effectStripCount = 10
+
+// classifyEffectStrips sorts the committed effect slice into the client's
+// reusable per-strip buckets, once per composed frame.
+//
+// The composer visits ten barriers plus the fixed pool, and each used to scan
+// the whole effect slice twice and allocate a fresh slice for its matches —
+// eleven filtered allocations and twenty-two scans every frame. One pass fills
+// all eleven buckets instead, and the buckets keep their capacity between
+// frames.
+//
+// Source order within a bucket is the committed order, which is what the
+// barrier contract requires: effects must not drift into a single
+// after-the-world pass, and within a strip they draw in producer admission
+// order [03 §1][03 R-STRIP-01 §1–§3]. The committed frame is never mutated
+// [I6]; the buckets hold copies of the views.
+func (c *Client) classifyEffectStrips(cur *frame.Frame) {
+	if c.stripsFrame == cur && c.stripsTick == cur.Tick && c.stripsValid {
+		return
+	}
+	for i := range c.stripBuckets {
+		c.stripBuckets[i] = c.stripBuckets[i][:0]
+	}
+	c.stripUnstripped = c.stripUnstripped[:0]
+	for i := range cur.Effects {
+		strip := cur.Effects[i].Strip
+		switch {
+		case strip < 0 || int(strip) >= effectStripCount:
+			// A negative strip is the published unresolved/unstripped
+			// sentinel, distinct from every barrier and drawn at the
+			// fixed-pool position [03 R-STRIP-01 §3].
+			c.stripUnstripped = append(c.stripUnstripped, cur.Effects[i])
+		default:
+			c.stripBuckets[strip] = append(c.stripBuckets[strip], cur.Effects[i])
 		}
 	}
-	if count == 0 {
-		return nil
-	}
-	selected := make([]frame.EffectView, 0, count)
-	for i := range effects {
-		if effects[i].Strip == strip {
-			selected = append(selected, effects[i])
-		}
-	}
-	return selected
+	c.stripsFrame, c.stripsTick, c.stripsValid = cur, cur.Tick, true
 }
 
-// unstrippedEffectViews selects fixed-pool records. A negative strip is the
-// published unresolved/unstripped sentinel; it is distinct from every one of
-// the ten strip barriers and is drawn at the fixed-pool position [03 §1]
-// [03 R-STRIP-01 §3].
-func unstrippedEffectViews(effects []frame.EffectView) []frame.EffectView {
-	count := 0
-	for i := range effects {
-		if effects[i].Strip < 0 {
-			count++
-		}
-	}
-	if count == 0 {
+// effectViewsForStrip returns one committed strip without changing source
+// order. The composer calls this at each retail barrier so effects cannot
+// drift into a single after-the-world pass [03 §1][03 R-STRIP-01 §1–§3].
+func (c *Client) effectViewsForStrip(cur *frame.Frame, strip int8) []frame.EffectView {
+	if strip < 0 || int(strip) >= effectStripCount {
 		return nil
 	}
-	selected := make([]frame.EffectView, 0, count)
-	for i := range effects {
-		if effects[i].Strip < 0 {
-			selected = append(selected, effects[i])
-		}
-	}
-	return selected
+	c.classifyEffectStrips(cur)
+	return c.stripBuckets[strip]
+}
+
+// unstrippedEffectViews returns the fixed-pool records [03 §1]
+// [03 R-STRIP-01 §3].
+func (c *Client) unstrippedEffectViews(cur *frame.Frame) []frame.EffectView {
+	c.classifyEffectStrips(cur)
+	return c.stripUnstripped
 }
 
 // drawEffectStrip consumes the immutable records assigned to one established
@@ -83,7 +97,7 @@ func (c *Client) drawEffectStrip(cur *frame.Frame, strip int8) {
 	if c == nil || cur == nil || c.cam == nil {
 		return
 	}
-	effects := effectViewsForStrip(cur.Effects, strip)
+	effects := c.effectViewsForStrip(cur, strip)
 	if len(effects) == 0 {
 		return
 	}
@@ -97,7 +111,7 @@ func (c *Client) drawFixedEffects(cur *frame.Frame) {
 	if c == nil || cur == nil || c.cam == nil {
 		return
 	}
-	effects := unstrippedEffectViews(cur.Effects)
+	effects := c.unstrippedEffectViews(cur)
 	if len(effects) == 0 {
 		return
 	}

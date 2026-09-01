@@ -251,51 +251,43 @@ func TestExpansions(t *testing.T) {
 	cur := Cell{5, 5}
 	// First expansion nine entries: the centered loop around startFanDir
 	// (north) with width 4 [04 §7.1] C2; dir numbering is 0=N counterclockwise.
-	cells, dirs := NeighborsForDir(cur, DirNone, true)
-	if len(cells) != 9 {
-		t.Fatalf("first expansion want 9 got %d [04 §7.1] C2", len(cells))
-	}
-	if len(dirs) != 9 {
-		t.Fatalf("dirs len 9")
+	fan := NeighborsForDir(cur, DirNone, true)
+	if fan.Len != 9 {
+		t.Fatalf("first expansion want 9 got %d [04 §7.1] C2", fan.Len)
 	}
 	// Centered on N with ±4: S,SE,E,NE,N,NW,W,SW,S — the ninth duplicates S.
 	wantOrder := []uint8{DirS, DirSE, DirE, DirNE, DirN, DirNW, DirW, DirSW, DirS}
 	for i := 0; i < 9; i++ {
-		if dirs[i] != wantOrder[i] {
-			t.Fatalf("first expansion order [%d] want %d got %d [04 §7.1] C2", i, wantOrder[i], dirs[i])
+		if fan.Dirs[i] != wantOrder[i] {
+			t.Fatalf("first expansion order [%d] want %d got %d [04 §7.1] C2", i, wantOrder[i], fan.Dirs[i])
 		}
 	}
-	if cells[0] != (Cell{5, 6}) { // S
-		t.Fatalf("first cell S want (5,6) got %v", cells[0])
+	if fan.Cells[0] != (Cell{5, 6}) { // S
+		t.Fatalf("first cell S want (5,6) got %v", fan.Cells[0])
 	}
-	if cells[8] != cells[0] {
-		t.Fatalf("duplicate ninth should equal first N: got %v vs %v", cells[8], cells[0])
+	if fan.Cells[8] != fan.Cells[0] {
+		t.Fatalf("duplicate ninth should equal first N: got %v vs %v", fan.Cells[8], fan.Cells[0])
 	}
-	// Later expansions five-entry fan centered on parent dir [04 §7.1] C2
-	// For DirN, fan should be NE,E? Wait DirN=0, fan -2..+2 => DirNE(7), DirN(0), DirNW(1), DirW(2)?? Actually -2 mod8 for 0 =>6 (E), -1=>7(NE),0=>0(N),1=>1(NW),2=>2(W)
-	// So fan for N: E, NE, N, NW, W (wrapping). Check centered.
-	cells2, dirs2 := NeighborsForDir(cur, DirN, false)
-	if len(cells2) != 5 {
-		t.Fatalf("fan for N want 5 got %d [04 §7.1] C2", len(cells2))
+	// Later expansions five-entry fan centered on parent dir [04 §7.1] C2.
+	// For DirN (0) the offsets -2..+2 wrap to E, NE, N, NW, W.
+	fanN := NeighborsForDir(cur, DirN, false)
+	if fanN.Len != 5 {
+		t.Fatalf("fan for N want 5 got %d [04 §7.1] C2", fanN.Len)
 	}
-	// Expected fan: DirE(6), DirNE(7), DirN(0), DirNW(1), DirW(2)
 	wantFanN := []uint8{DirE, DirNE, DirN, DirNW, DirW}
 	for i, want := range wantFanN {
-		if dirs2[i] != want {
-			t.Fatalf("fan N [%d] want %d got %d", i, want, dirs2[i])
+		if fanN.Dirs[i] != want {
+			t.Fatalf("fan N [%d] want %d got %d", i, want, fanN.Dirs[i])
 		}
 	}
 	// For DirE (6), fan => DirS(4), DirSE(5), DirE(6), DirNE(7), DirN(0)
-	cells3, dirs3 := NeighborsForDir(cur, DirE, false)
+	fanE := NeighborsForDir(cur, DirE, false)
 	wantFanE := []uint8{DirS, DirSE, DirE, DirNE, DirN}
 	for i, want := range wantFanE {
-		if dirs3[i] != want {
-			t.Fatalf("fan E [%d] want %d got %d", i, want, dirs3[i])
+		if fanE.Dirs[i] != want {
+			t.Fatalf("fan E [%d] want %d got %d", i, want, fanE.Dirs[i])
 		}
 	}
-	_ = cells2
-	_ = cells3
-	_ = cells
 }
 
 // TestDiagonalDestinationOnly verifies C3 diagonal checks ONLY destination [04 §7.1] C3.

@@ -5,10 +5,9 @@
 // Retail keeps exactly this set in the registry under
 // HKEY_CURRENT_USER\Software\Cavedog Entertainment\Total Annihilation, with the
 // per-slot Player%dController/Side/Color/AllyGroup/Metal/Energy values in the
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// the whole block once during startup and installs a default for every value
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// nested "Total Annihilation\Skirmish" key. The startup reader loads the whole
+// block once and installs a default for every value it does not find; the
+// writer rewrites the whole block [02 "Settings"][07 §10].
 //
 // Nanolathe keeps the value set, the defaults, and the read-once/write-whole
 // shape, and swaps the registry for one JSON file. Only the preferences retail
@@ -39,7 +38,7 @@ const EnvPath = "NANOLATHE_SETTINGS"
 // to and from, so the save file cannot drag simulation types into its schema.
 const MaxPlayers = 10
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Retail's missing-value defaults [02 "Settings"][07 §10].
 const (
 	DefaultDifficulty     = 1    // Medium
 	DefaultNumPlayers     = 4    // NumSkirmishPlayers
@@ -132,7 +131,8 @@ func StoreDamageBars(on bool) error {
 	return loadErr
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Defaults returns the block the startup reader installs when nothing is
+// stored [02 "Settings"][07 §10].
 //
 // The six skirmish rule scalars are set here rather than in Normalize because
 // zero is a legitimate stored choice for every one of them — Easy, randomized
@@ -153,9 +153,9 @@ func Defaults() Settings {
 	return s
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Player%d* values are stored: open row, colour the slot index, side slot&1,
-// ally group 5, 1000 metal and 1000 energy.
+// DefaultPlayer is the row installed for slot i when none of its Player%d*
+// values are stored: open row, colour the slot index, side slot&1, ally group
+// 5, 1000 metal and 1000 energy [02 "Settings"].
 func DefaultPlayer(i int) Player {
 	return Player{
 		Controller: 0,
@@ -169,8 +169,8 @@ func DefaultPlayer(i int) Player {
 
 // Normalize fills absent values with retail's defaults and clamps the slot
 // count, so a hand-edited or truncated file still yields a usable setup. It
-// mirrors the per-value "if the read failed, install the default" arms of
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// mirrors the reader's per-value "if the read failed, install the default"
+// arms rather than rejecting the file [02 "Settings"].
 //
 // A slot that is present in the file is taken verbatim, including zeros: the
 // writer always emits all ten rows, so a zero is a stored choice — an ally
@@ -255,12 +255,37 @@ func LoadFrom(path string) (Settings, error) {
 		}
 		return Defaults(), fmt.Errorf("settings: read %s: %w", path, err)
 	}
-	var s Settings
-	if err := json.Unmarshal(data, &s); err != nil {
+	// The version is read on its own, because the decode below starts from the
+	// defaults and would otherwise supply a valid version to a file that
+	// carries none.
+	var wire struct {
+		Version *int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
 		return Defaults(), fmt.Errorf("settings: parse %s: %w", path, err)
 	}
-	if s.Version != FileVersion {
-		return Defaults(), fmt.Errorf("settings: %s: unsupported version %d", path, s.Version)
+	if wire.Version == nil || *wire.Version != FileVersion {
+		stored := 0
+		if wire.Version != nil {
+			stored = *wire.Version
+		}
+		return Defaults(), fmt.Errorf("settings: %s: unsupported version %d", path, stored)
+	}
+
+	// Decode over the defaults rather than over a zero value. Several stored
+	// values are legitimately zero — LOS off, mapping off, commander death
+	// off, ally group 0 — so Normalize cannot tell an absent field from a
+	// stored zero and must leave both alone. Starting from the defaults makes
+	// the distinction for it: a field the file omits keeps its retail default,
+	// and a field the file stores as 0 overwrites that default with 0.
+	//
+	// Without this, a truncated or hand-edited file silently turned five
+	// skirmish rules whose default is 1 — commander death, mapping, line of
+	// sight, LOS type, start locations — into 0
+	// [02 "Settings"][07 §10].
+	s := Defaults()
+	if err := json.Unmarshal(data, &s); err != nil {
+		return Defaults(), fmt.Errorf("settings: parse %s: %w", path, err)
 	}
 	s.Normalize()
 	return s, nil
@@ -275,7 +300,7 @@ func (s Settings) Save() error {
 	return s.SaveTo(path)
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// SaveTo writes the whole block, the way the retail writer rewrites every value
 // rather than tracking which one changed. The write goes to a sibling temp
 // file and is renamed over the target, so an interrupted save cannot leave a
 // half-written file where the next start expects settings.

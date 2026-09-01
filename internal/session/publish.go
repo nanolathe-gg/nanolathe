@@ -122,6 +122,10 @@ func (s *Session) publishSnapshot(tick uint32) {
 				// bits of the mover mode word, never a screen coordinate
 				// [03 R-RAST-01 §7][04 R-MOV-01 §8].
 				MoverMode: publishedMoverMode(u),
+				// Step 2 of the visibility gate [03 §3.2], published as its two
+				// inputs so presentation never has to guess at cloak state.
+				Cloaked:    u.IsCloaked,
+				Decloaking: s.visStatus != nil && s.visStatus[int(u.Handle)]&visibility.DecloakBit != 0,
 				// The carrier link the unit painter's per-unit present needs:
 				// a carried child is drawn with its carrier, not only as its
 				// own bucket entry [03 R-RAST-01 §7][04 R-UNIT-06 §3].

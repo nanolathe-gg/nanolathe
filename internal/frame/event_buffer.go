@@ -118,6 +118,11 @@ type EventBuffer struct {
 	dropped      uint64
 	overflow     bool
 	exhausted    bool
+	// effects counts the admitted non-status events in this window. It is
+	// maintained as events are admitted and cleared by Reset, so the effect
+	// bound costs O(1) per admission. Recounting the window on every Admit
+	// made a tick with n events do O(n^2) classification work.
+	effects int
 }
 
 func NewEventBuffer(limits Limits) *EventBuffer {
@@ -151,7 +156,7 @@ func (c *EventBuffer) Admit(e Event) bool {
 		c.noteDrop(true)
 		return false
 	}
-	if c.countEffects() >= c.limits.MaxEffectEvents {
+	if !isStatusKind(e.Kind) && c.effects >= c.limits.MaxEffectEvents {
 		c.noteDrop(true)
 		return false
 	}
@@ -171,6 +176,9 @@ func (c *EventBuffer) Admit(e Event) bool {
 		c.nextSequence = 0
 	} else {
 		c.nextSequence++
+	}
+	if !isStatusKind(e.Kind) {
+		c.effects++
 	}
 	c.events = append(c.events, e)
 	return true
@@ -201,6 +209,7 @@ func (c *EventBuffer) Reset() {
 		return
 	}
 	c.events = c.events[:0]
+	c.effects = 0
 	c.dropped = 0
 	c.overflow = false
 }
@@ -322,15 +331,9 @@ func (c *EventBuffer) SnapshotEventsInto(dst []EventView) []EventView {
 	return dst
 }
 
-func (c *EventBuffer) countEffects() int {
-	count := 0
-	for _, e := range c.events {
-		if e.Kind != KindStatus {
-			count++
-		}
-	}
-	return count
-}
+// isStatusKind reports whether a kind is excluded from the effect bound. The
+// bound counts every admitted event that is not a status record.
+func isStatusKind(k Kind) bool { return k == KindStatus }
 
 func validKind(k Kind) bool { return k >= KindCOBSFX && k <= KindStatus }
 

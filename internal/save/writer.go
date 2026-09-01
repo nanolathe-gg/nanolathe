@@ -6,8 +6,8 @@ import (
 	"math"
 )
 
-// retailPool is local to RetailBytes so that a raw Builder.Bytes call cannot
-// change the encounter order of the retail image's logical string pool.
+// retailPool is the writer's own string pool, so that the encounter order of
+// the image's logical pool is decided by the layout below and nothing else.
 type retailPool struct {
 	data    []byte
 	offsets map[string]uint32
@@ -41,13 +41,11 @@ type retailAccountImage struct {
 	boxes   []*Box
 }
 
-// RetailBytes lays out the Builder as a retail HAPIBANK image. It is kept
-// separate from Bytes because Bytes is the package's raw fixture layout and
-// intentionally includes its existing behavior. The retail writer emits
-// accounts in creation order, with nonempty boxes retaining their order, and
-// uses the established 34-byte bank/32-byte account headers [08 "Location and
-// representation"] [08 R-ENTRY-02 §3].
-func (b *Builder) RetailBytes() []byte {
+// Bytes lays out the Builder as a retail HAPIBANK image: accounts in creation
+// order, nonempty boxes retaining their order, and the established 34-byte
+// bank / 32-byte account headers [08 "Location and representation"]
+// [08 R-ENTRY-02 §3].
+func (b *Builder) Bytes() []byte {
 	if b == nil {
 		return nil
 	}

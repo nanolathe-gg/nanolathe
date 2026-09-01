@@ -10,7 +10,7 @@ import (
 // TestSummaryRoundTrip locks the Summary writer table order and field defaults
 // [08 "Summary"].
 func TestSummaryRoundTrip(t *testing.T) {
-	b := NewBuilder("")
+	b := NewBuilder()
 	s := Summary{
 		BuildDateKey:    "BUILD DATE:Aug 23 2026",
 		BuildTimeKey:    "BUILD TIME:12:00:00",
@@ -40,7 +40,7 @@ func TestSummaryRoundTrip(t *testing.T) {
 	// Also write other established boxes so opaque test doesn't interfere.
 	WriteCamera(b, Camera{XPosition: 123, ZPosition: 456})
 	payload := b.Bytes()
-	bank, err := OpenBytes(payload, RetailTag)
+	bank, err := OpenBytes(payload)
 	if err != nil {
 		t.Fatalf("OpenBytes summary: %v", err)
 	}
@@ -69,11 +69,11 @@ func TestSummaryRoundTrip(t *testing.T) {
 
 // TestCameraRoundTrip locks Camera X Position / Z Position [08 "Account inventory"].
 func TestCameraRoundTrip(t *testing.T) {
-	b := NewBuilder("")
+	b := NewBuilder()
 	c := Camera{XPosition: 320, ZPosition: -100}
 	WriteCamera(b, c)
 	payload := b.Bytes()
-	bank, err := OpenBytes(payload, RetailTag)
+	bank, err := OpenBytes(payload)
 	if err != nil {
 		t.Fatalf("OpenBytes camera: %v", err)
 	}
@@ -87,10 +87,10 @@ func TestCameraRoundTrip(t *testing.T) {
 }
 
 func TestRetailIntegerCameraAndThumbString(t *testing.T) {
-	b := NewBuilder("")
+	b := NewBuilder()
 	WriteCamera(b, Camera{XPosition: 320, ZPosition: -100})
 	WriteSummary(b, Summary{Gametype: 1, Thumbs: "thumbs-identity", IsBattle: true})
-	bank, err := OpenBytes(b.Bytes(), RetailTag)
+	bank, err := OpenBytes(b.Bytes())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,11 +111,11 @@ func TestRetailIntegerCameraAndThumbString(t *testing.T) {
 func TestGameTimeBoxRoundTrip(t *testing.T) {
 	clk := &clock.State{Requested: 7, Active: 4, GlobalTick: 4242}
 	clk.AdvanceSP(9)
-	b := NewBuilder("")
+	b := NewBuilder()
 	WriteGameTime(b, clk)
 	// Also test that larger box trailing bytes are ignored.
 	payload := b.Bytes()
-	bank, err := OpenBytes(payload, RetailTag)
+	bank, err := OpenBytes(payload)
 	if err != nil {
 		t.Fatalf("OpenBytes gametime: %v", err)
 	}
@@ -127,11 +127,11 @@ func TestGameTimeBoxRoundTrip(t *testing.T) {
 		t.Fatalf("gametime mismatch got %+v want %+v", restored, clk)
 	}
 	// Short box should fail without partial application.
-	b2 := NewBuilder("")
+	b2 := NewBuilder()
 	ac := b2.Add(PlayersAccount)
 	ac.AppendBox(GameTimeBoxName, 0, []byte{1, 2, 3}) // 3 bytes, not 28
 	payload2 := b2.Bytes()
-	bank2, err := OpenBytes(payload2, RetailTag)
+	bank2, err := OpenBytes(payload2)
 	if err != nil {
 		t.Fatalf("OpenBytes short gametime: %v", err)
 	}
@@ -139,13 +139,13 @@ func TestGameTimeBoxRoundTrip(t *testing.T) {
 		t.Fatalf("short GameTime should fail")
 	}
 	// Larger box: append extra trailing bytes, should still succeed and ignore remainder.
-	b3 := NewBuilder("")
+	b3 := NewBuilder()
 	ac3 := b3.Add(PlayersAccount)
 	box := clk.SaveBox()
 	extended := append(append([]byte(nil), box[:]...), []byte{9, 9, 9, 9}...)
 	ac3.AppendBox(GameTimeBoxName, 0, extended)
 	payload3 := b3.Bytes()
-	bank3, err := OpenBytes(payload3, RetailTag)
+	bank3, err := OpenBytes(payload3)
 	if err != nil {
 		t.Fatalf("OpenBytes extended: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestGameTimeBoxRoundTrip(t *testing.T) {
 
 // TestAlliancesBoxRoundTrip locks C16: exactly 11 bytes with forced self-alliance 1 [08 "Player records"] [GAP T9].
 func TestAlliancesBoxRoundTrip(t *testing.T) {
-	b := NewBuilder("")
+	b := NewBuilder()
 	var alliances [11]byte
 	for i := range alliances {
 		alliances[i] = 0
@@ -171,7 +171,7 @@ func TestAlliancesBoxRoundTrip(t *testing.T) {
 	alliances[2] = 0
 	WriteAlliances(b, 2, alliances)
 	payload := b.Bytes()
-	bank, err := OpenBytes(payload, RetailTag)
+	bank, err := OpenBytes(payload)
 	if err != nil {
 		t.Fatalf("OpenBytes alliances: %v", err)
 	}
@@ -190,11 +190,11 @@ func TestAlliancesBoxRoundTrip(t *testing.T) {
 		t.Fatalf("alliances len %d want 11", len(got))
 	}
 	// Wrong size should be rejected (not 11 bytes) [08 "Player records"] C16.
-	b2 := NewBuilder("")
+	b2 := NewBuilder()
 	ac2 := b2.Add(PlayersAccount)
 	ac2.AppendBox(AlliancesBoxName, 0, []byte{1, 2, 3}) // 3 bytes, not 11
 	payload2 := b2.Bytes()
-	bank2, err := OpenBytes(payload2, RetailTag)
+	bank2, err := OpenBytes(payload2)
 	if err != nil {
 		t.Fatalf("OpenBytes alliances wrong size: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestPlayerSlotRoundTrip(t *testing.T) {
 	// Need GameTime present for gating [08 "Player records"].
 	clk := &clock.State{Requested: 10, Active: 10, GlobalTick: 100}
 	clk.AdvanceSP(1)
-	b := NewBuilder("")
+	b := NewBuilder()
 	// Players meta to ensure GameTime gate passes.
 	WritePlayersMeta(b, PlayersMeta{HumanPlayer: 0}, clk)
 	p := PlayerSlot{
@@ -246,7 +246,7 @@ func TestPlayerSlotRoundTrip(t *testing.T) {
 	p2 := PlayerSlot{Index: 0, Energy: 10, Metal: 20, Controller: 1, UpdateTime: 9999}
 	WritePlayerSlot(b, p2)
 	payload := b.Bytes()
-	bank, err := OpenBytes(payload, RetailTag)
+	bank, err := OpenBytes(payload)
 	if err != nil {
 		t.Fatalf("OpenBytes player: %v", err)
 	}
@@ -265,11 +265,11 @@ func TestPlayerSlotRoundTrip(t *testing.T) {
 		t.Fatalf("player controller/side/kills mismatch got %+v want %+v", got, p)
 	}
 	// Gating: without GameTime, ReadAllPlayerSlots should return nil.
-	b3 := NewBuilder("")
+	b3 := NewBuilder()
 	// Write Player0 without GameTime
 	WritePlayerSlot(b3, p2)
 	payload3 := b3.Bytes()
-	bank3, err := OpenBytes(payload3, RetailTag)
+	bank3, err := OpenBytes(payload3)
 	if err != nil {
 		t.Fatalf("OpenBytes no gametime: %v", err)
 	}
@@ -281,14 +281,14 @@ func TestPlayerSlotRoundTrip(t *testing.T) {
 		t.Fatalf("ReadAllPlayerSlots with GameTime got %d want 2", len(slots))
 	}
 	// Missing fields default 0 [08 "Player records"].
-	b4 := NewBuilder("")
+	b4 := NewBuilder()
 	clk2 := &clock.State{Requested: 10, Active: 10}
 	WritePlayersMeta(b4, PlayersMeta{HumanPlayer: 1}, clk2)
 	// Add Player1 with only Controller, others missing.
 	ac := b4.Add(playerAccountName(1))
 	ac.SetInt("Controller", 2)
 	payload4 := b4.Bytes()
-	bank4, err := OpenBytes(payload4, RetailTag)
+	bank4, err := OpenBytes(payload4)
 	if err != nil {
 		t.Fatalf("OpenBytes missing fields: %v", err)
 	}

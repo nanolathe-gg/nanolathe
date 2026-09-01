@@ -7,7 +7,7 @@ import (
 )
 
 func minimalBattleBuilder() *Builder {
-	b := NewBuilder("")
+	b := NewBuilder()
 	WriteSummary(b, Summary{Campaign: "c", Mission: "m", MapName: "map", Players: 1, Gametype: 1, IsBattle: true})
 	WriteCamera(b, Camera{XPosition: 1, ZPosition: 2})
 	players := builderAccount(b, PlayersAccount)
@@ -27,7 +27,7 @@ func minimalBattleBuilder() *Builder {
 
 func openImageBank(t *testing.T, b *Builder) *Bank {
 	t.Helper()
-	bank, err := OpenBytes(b.Bytes(), RetailTag)
+	bank, err := OpenBytes(b.Bytes())
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}

@@ -1200,3 +1200,15 @@ func (s *Session) CycleDebugDisplayMode() {
 		s.DebugDisplayMode = 0
 	}
 }
+
+// NewFrontEndCRT returns the pre-battle CRT stream the front end draws from
+// before a battle exists — the briefing's wind and countdown values and the
+// menu-side audio owner [08 R-CAMP-01 §2][01 §7.2].
+//
+// It lives here, beside SeedSessionRNG, because the session package is the one
+// owner of retail stream construction: the front end must not stand up a
+// substitute stream of its own [INVARIANTS I4][DET-01]. The stream this
+// returns is the same CRT the battle continues from; battle entry reseeds it
+// through SeedSessionRNG, which wipes every draw made before that point
+// [R-CORE-02].
+func NewFrontEndCRT(seed uint32) rng.CRT { return rng.NewCRT(seed) }

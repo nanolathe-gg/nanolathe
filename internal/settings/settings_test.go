@@ -3,10 +3,13 @@ package settings
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"testing"
 )
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TestDefaultsMatchRetail locks the missing-value block the startup reader
+// installs [02 "Settings"][07 §10].
 func TestDefaultsMatchRetail(t *testing.T) {
 	s := Defaults()
 	if s.Difficulty != 1 {
@@ -132,4 +135,107 @@ func TestPathHonoursOverrideAndXDG(t *testing.T) {
 	if got, err := Path(); err != nil || got != want {
 		t.Fatalf("Path() = %q, %v; want %q", got, err, want)
 	}
+}
+
+// TestLoadFromDistinguishesAbsentFromZero locks the decode contract: a field
+// the file omits keeps its retail default, and a field the file stores as zero
+// stays zero.
+//
+// Several skirmish rules default to 1 while 0 is an equally valid stored
+// choice, so Normalize cannot separate the two cases. LoadFrom decodes over
+// Defaults() to make the separation before Normalize runs; decoding over a
+// zero value silently turned every omitted rule off [02 "Settings"][07 §10].
+func TestLoadFromDistinguishesAbsentFromZero(t *testing.T) {
+	write := func(t *testing.T, body string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "settings.json")
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		return path
+	}
+
+	t.Run("absent fields keep retail defaults", func(t *testing.T) {
+		got, err := LoadFrom(write(t, `{"version":`+strconv.Itoa(FileVersion)+`}`))
+		if err != nil {
+			t.Fatalf("LoadFrom: %v", err)
+		}
+		for _, tc := range []struct {
+			name string
+			got  int
+			want int
+		}{
+			{"CommanderDeath", got.Skirmish.CommanderDeath, DefaultCommanderDeath},
+			{"Mapping", got.Skirmish.Mapping, DefaultMapping},
+			{"LineOfSight", got.Skirmish.LineOfSight, DefaultLineOfSight},
+			{"LOSType", got.Skirmish.LOSType, DefaultLOSType},
+			{"Location", got.Skirmish.Location, DefaultLocation},
+			{"Difficulty", got.Difficulty, DefaultDifficulty},
+			{"NumPlayers", got.Skirmish.NumPlayers, DefaultNumPlayers},
+			{"ScrollSpeed", got.ScrollSpeed, DefaultScrollSpeed},
+		} {
+			if tc.got != tc.want {
+				t.Errorf("absent %s = %d, want the default %d", tc.name, tc.got, tc.want)
+			}
+		}
+	})
+
+	t.Run("explicit zero is retained", func(t *testing.T) {
+		body := `{"version":` + strconv.Itoa(FileVersion) + `,"skirmish":{` +
+			`"commanderDeath":0,"mapping":0,"lineOfSight":0,"losType":0,"location":0}}`
+		got, err := LoadFrom(write(t, body))
+		if err != nil {
+			t.Fatalf("LoadFrom: %v", err)
+		}
+		for _, tc := range []struct {
+			name string
+			got  int
+		}{
+			{"CommanderDeath", got.Skirmish.CommanderDeath},
+			{"Mapping", got.Skirmish.Mapping},
+			{"LineOfSight", got.Skirmish.LineOfSight},
+			{"LOSType", got.Skirmish.LOSType},
+			{"Location", got.Skirmish.Location},
+		} {
+			if tc.got != 0 {
+				t.Errorf("stored %s = %d, want the stored 0", tc.name, tc.got)
+			}
+		}
+	})
+
+	t.Run("missing player rows get per-slot defaults", func(t *testing.T) {
+		body := `{"version":` + strconv.Itoa(FileVersion) +
+			`,"skirmish":{"players":[{"controller":1,"allyGroup":0}]}}`
+		got, err := LoadFrom(write(t, body))
+		if err != nil {
+			t.Fatalf("LoadFrom: %v", err)
+		}
+		if len(got.Skirmish.Players) != MaxPlayers {
+			t.Fatalf("player rows = %d, want %d", len(got.Skirmish.Players), MaxPlayers)
+		}
+		// The stored row keeps its explicit zero ally group and inherits the
+		// per-value defaults it omitted.
+		if got.Skirmish.Players[0].AllyGroup != 0 {
+			t.Errorf("stored ally group = %d, want the stored 0", got.Skirmish.Players[0].AllyGroup)
+		}
+		if got.Skirmish.Players[0].Metal != DefaultMetal {
+			t.Errorf("omitted metal = %d, want %d", got.Skirmish.Players[0].Metal, DefaultMetal)
+		}
+		// Rows past the end of the stored array are the default rows.
+		if got.Skirmish.Players[7] != DefaultPlayer(7) {
+			t.Errorf("row 7 = %+v, want %+v", got.Skirmish.Players[7], DefaultPlayer(7))
+		}
+	})
+
+	t.Run("unsupported version yields defaults and an error", func(t *testing.T) {
+		for _, body := range []string{`{"version":99}`, `{}`} {
+			got, err := LoadFrom(write(t, body))
+			if err == nil {
+				t.Errorf("%s: expected an error", body)
+			}
+			if !reflect.DeepEqual(got, Defaults()) {
+				t.Errorf("%s: settings = %+v, want Defaults()", body, got)
+			}
+		}
+	})
 }

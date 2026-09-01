@@ -183,7 +183,7 @@ func TestQueueBindingValidationRejectsMissingProductionAdapters(t *testing.T) {
 		Lookup:    func(pool.Handle) *units.Unit { return nil },
 		Hostility: func(*units.Unit, *units.Unit) bool { return false },
 	}
-	if err := b.ValidateSinglePlayerBinding(); err == nil {
+	if err := b.Validate(); err == nil {
 		t.Fatal("missing single-player adapters accepted by composition seam")
 	}
 }

@@ -59,16 +59,40 @@ func TestCommittedUnitVisibilityRejectsInvalidViewerAndMasks(t *testing.T) {
 	}
 }
 
+// TestCommittedUnitVisibilityHonorsForeignCloakAndDecloak locks step 2 of the
+// gate [03 §3.2][03 §3.4] against the committed cloak inputs.
+//
+// Corrected. This test used to set `Flags: 0x4` for "cloaked" and OR in
+// `0x1000` for "decloaking", because that is what the gate read. Neither bit
+// carries that meaning in the instance flag word: 0x4 is the construction
+// layer's start-building edge and 0x1000 is the order pump's active-record
+// marker. So the test passed while asserting the opposite of the contract — a
+// genuinely cloaked unit was never hidden, and every enemy builder that raised
+// the start-building edge disappeared. The gate now reads the two published
+// inputs, and the final case is the defect the play test found.
 func TestCommittedUnitVisibilityHonorsForeignCloakAndDecloak(t *testing.T) {
 	f := &frame.Frame{Visibility: frame.VisibilityView{Valid: true, W: 1, H: 1, CoverageBytes: true, Visible: []uint8{1}}}
-	cloaked := frame.UnitView{Slot: 1, Owner: 1, Flags: 0x4, X: 0, Z: 0}
+	cloaked := frame.UnitView{Slot: 1, Owner: 1, Cloaked: true, X: 0, Z: 0}
 	if SnapshotVisible(f, cloaked, 0) {
 		t.Fatal("foreign cloaked unit bypassed the committed visibility gate")
 	}
 	decloaked := cloaked
-	decloaked.Flags |= 0x1000
+	decloaked.Decloaking = true
 	if !SnapshotVisible(f, decloaked, 0) {
 		t.Fatal("foreign decloaked unit was rejected despite published visible coverage")
+	}
+	// The play-test defect: a foreign factory that has begun building carries
+	// the start-building edge, which is instance flag bit 2. It is not a cloak
+	// input and must not hide the factory behind its own nanoframe and spray.
+	building := frame.UnitView{Slot: 2, Owner: 1, Flags: 1 << 2, X: 0, Z: 0}
+	if !SnapshotVisible(f, building, 0) {
+		t.Fatal("a foreign builder vanished the moment it raised the start-building edge")
+	}
+	// The order pump's active-record marker is likewise not a decloak.
+	stillCloaked := cloaked
+	stillCloaked.Flags |= 0x1000
+	if SnapshotVisible(f, stillCloaked, 0) {
+		t.Fatal("the order pump's active marker was read as a decloak timer")
 	}
 }
 

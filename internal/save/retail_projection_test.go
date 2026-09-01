@@ -20,11 +20,11 @@ func TestRetailProjectionLiveAccountOrderAndDecode(t *testing.T) {
 		Mapping:        []byte{4},
 		Players:        []PlayerSlot{{Index: 0, Energy: 12.5, Metal: 7.25, Controller: 1}},
 	}
-	data, err := p.RetailBytes()
+	data, err := p.Bytes()
 	if err != nil {
-		t.Fatalf("RetailBytes: %v", err)
+		t.Fatalf("Bytes: %v", err)
 	}
-	bank, err := OpenBytes(data, RetailTag)
+	bank, err := OpenBytes(data)
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}
@@ -53,11 +53,11 @@ func TestRetailProjectionLiveAccountOrderAndDecode(t *testing.T) {
 
 func TestRetailProjectionContinuationWritesSummaryOnly(t *testing.T) {
 	p := RetailProjection{Summary: Summary{Campaign: "campaign", Mission: "mission", Gametype: 1, BetweenMissions: 1, IsBattle: false}, Metal: []byte{9}}
-	data, err := p.RetailBytes()
+	data, err := p.Bytes()
 	if err != nil {
-		t.Fatalf("RetailBytes: %v", err)
+		t.Fatalf("Bytes: %v", err)
 	}
-	bank, err := OpenBytes(data, RetailTag)
+	bank, err := OpenBytes(data)
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}
@@ -159,7 +159,7 @@ func validSingleUnitProjection() RetailProjection {
 func TestRetailProjectionUnitsRejectsMissingScript(t *testing.T) {
 	p := validSingleUnitProjection()
 	p.Units.Scripts = nil
-	if _, err := p.RetailBytes(); err == nil {
+	if _, err := p.Bytes(); err == nil {
 		t.Fatal("missing Script0 unexpectedly accepted")
 	}
 }
@@ -196,7 +196,7 @@ func TestRetailProjectionUnitsRejectsUnmatchedReferencesDeterministically(t *tes
 		t.Run(tc.name, func(t *testing.T) {
 			p := validSingleUnitProjection()
 			tc.edit(&p)
-			_, err := p.RetailBytes()
+			_, err := p.Bytes()
 			if err == nil || !bytes.Contains([]byte(err.Error()), []byte(tc.want)) {
 				t.Fatalf("error = %v, want substring %q", err, tc.want)
 			}
@@ -232,7 +232,7 @@ func TestRetailProjectionUnitsRejectsInconsistentOrderSideData(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := validSingleUnitProjection()
 			tc.edit(&p)
-			if _, err := p.RetailBytes(); err == nil {
+			if _, err := p.Bytes(); err == nil {
 				t.Fatal("inconsistent order side data unexpectedly accepted")
 			}
 		})
@@ -241,7 +241,7 @@ func TestRetailProjectionUnitsRejectsInconsistentOrderSideData(t *testing.T) {
 
 func TestRetailProjectionUnitsRejectsSideDataWithoutRecords(t *testing.T) {
 	p := RetailProjection{Units: UnitImage{TypeNames: []StringItem{{Name: "UTYPENAME0", Value: "unit"}}}}
-	if _, err := p.RetailBytes(); err == nil {
+	if _, err := p.Bytes(); err == nil {
 		t.Fatal("empty Units image with type names unexpectedly accepted")
 	}
 }

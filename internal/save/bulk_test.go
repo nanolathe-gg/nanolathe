@@ -10,7 +10,7 @@ import (
 
 // TestBulkUnitBoxRoundTrip locks 0xB8 byte-exact layout [P1-13 §2.2].
 func TestBulkUnitBoxRoundTrip(t *testing.T) {
-	b := NewBuilder("")
+	b := NewBuilder()
 	payload := make([]byte, UnitBoxSize)
 	// Fill header name 32 bytes, stableID at 0x21, leak bits at 0xB4.
 	copy(payload[0x00:], []byte("armcom"))
@@ -23,7 +23,7 @@ func TestBulkUnitBoxRoundTrip(t *testing.T) {
 		t.Fatalf("WriteUnitBox: %v", err)
 	}
 	data := b.Bytes()
-	bank, err := OpenBytes(data, RetailTag)
+	bank, err := OpenBytes(data)
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestBulkUnitBoxRoundTrip(t *testing.T) {
 		t.Fatalf("WriteOrderBox: %v", err)
 	}
 	payload2 := b.Bytes()
-	bank2, err := OpenBytes(payload2, RetailTag)
+	bank2, err := OpenBytes(payload2)
 	if err != nil {
 		t.Fatalf("OpenBytes2: %v", err)
 	}
@@ -66,13 +66,13 @@ func TestBulkUnitBoxRoundTrip(t *testing.T) {
 
 // TestBulkVersionGate validates Version!=0x11 skips Units non-transactionally [P1-13 §3.4][P1-13 §7].
 func TestBulkVersionGate(t *testing.T) {
-	b := NewBuilder("")
+	b := NewBuilder()
 	ac := b.Add(UnitsAccount)
 	ac.SetInt("Version", 0x10) // not 0x11
 	ac.SetInt("Number of Units", 1)
 	ac.AppendBox("", 0, make([]byte, UnitBoxSize))
 	data := b.Bytes()
-	bank, err := OpenBytes(data, RetailTag)
+	bank, err := OpenBytes(data)
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestBulkVersionGate(t *testing.T) {
 	}
 	// Also test non-transactional: Players still loadable even when Units skipped.
 	// Build bank with Players and bad Units.
-	b2 := NewBuilder("")
+	b2 := NewBuilder()
 	clk := &clock.State{Requested: 10, Active: 10, GlobalTick: 100}
 	WriteGameTime(b2, clk)
 	ac2 := b2.Add(UnitsAccount)
@@ -89,7 +89,7 @@ func TestBulkVersionGate(t *testing.T) {
 	ac2.SetInt("Number of Units", 1)
 	ac2.AppendBox("", 0, make([]byte, UnitBoxSize))
 	payload2 := b2.Bytes()
-	bank2, _ := OpenBytes(payload2, RetailTag)
+	bank2, _ := OpenBytes(payload2)
 	if _, ok := ReadGameTime(bank2); !ok {
 		t.Fatalf("GameTime should still be readable when Units Version wrong [P1-13 §7]")
 	}
@@ -102,10 +102,10 @@ func TestBulkVersionGate(t *testing.T) {
 func TestBulkSchedulerPersistence(t *testing.T) {
 	clk := &clock.State{Requested: 10, Active: 10, GlobalTick: 4242}
 	clk.AdvanceSP(3)
-	b := NewBuilder("")
+	b := NewBuilder()
 	WriteGameTime(b, clk)
 	payload := b.Bytes()
-	bank, _ := OpenBytes(payload, RetailTag)
+	bank, _ := OpenBytes(payload)
 	restored, ok := ReadGameTime(bank)
 	if !ok {
 		t.Fatalf("ReadGameTime missing")
@@ -114,10 +114,10 @@ func TestBulkSchedulerPersistence(t *testing.T) {
 		t.Fatalf("scheduler GlobalTick %d want %d [P1-13 §4]", restored.GlobalTick, clk.GlobalTick)
 	}
 	// Short box <28 should fail and gate Player%i [P1-13 §7].
-	b2 := NewBuilder("")
+	b2 := NewBuilder()
 	ac := b2.Add(PlayersAccount)
 	ac.AppendBox(GameTimeBoxName, 0, []byte{1, 2, 3})
-	bank2, _ := OpenBytes(b2.Bytes(), RetailTag)
+	bank2, _ := OpenBytes(b2.Bytes())
 	if _, ok := ReadGameTime(bank2); ok {
 		t.Fatalf("short GameTime should fail [P1-13 §7]")
 	}
@@ -129,7 +129,7 @@ func TestBulkSchedulerPersistence(t *testing.T) {
 // TestBulkPartialLoadNonTransactional validates non-transactional partial load
 // where one account fails but others succeed [P1-13 §7].
 func TestBulkPartialLoadNonTransactional(t *testing.T) {
-	b := NewBuilder("")
+	b := NewBuilder()
 	WriteSummary(b, Summary{MaxUnits: 100, Campaign: "c", Mission: "m", Gametype: 1})
 	WriteCamera(b, Camera{XPosition: 10, ZPosition: 20})
 	// Add Features with correct size.
@@ -137,7 +137,7 @@ func TestBulkPartialLoadNonTransactional(t *testing.T) {
 		t.Fatalf("WriteFeatureTypeNames: %v", err)
 	}
 	payload := b.Bytes()
-	bank, err := OpenBytes(payload, RetailTag)
+	bank, err := OpenBytes(payload)
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}
@@ -151,13 +151,13 @@ func TestBulkPartialLoadNonTransactional(t *testing.T) {
 
 // TestBulkHAPIBANKBounds validates header offset bounds [P1-13 §2.1][I13].
 func TestBulkHAPIBANKBounds(t *testing.T) {
-	b := NewBuilder("")
+	b := NewBuilder()
 	WriteSummary(b, Summary{MaxUnits: 1})
 	payload := b.Bytes()
 	// Corrupt pool offset beyond file -> ErrFormat [P1-13 §2.1][bank C13].
 	corrupt := append([]byte(nil), payload...)
 	binary.LittleEndian.PutUint32(corrupt[0x0C:], uint32(len(corrupt)+100))
-	if _, err := OpenBytes(corrupt, RetailTag); err != ErrFormat {
+	if _, err := OpenBytes(corrupt); err != ErrFormat {
 		t.Fatalf("pool offset beyond file should be ErrFormat, got %v", err)
 	}
 }
@@ -185,9 +185,9 @@ func TestMeteorScalarsOrderAndPresence(t *testing.T) {
 		TargetX:        8,
 		TargetZ:        9,
 	}
-	b := NewBuilder("")
+	b := NewBuilder()
 	WriteMeteorScalars(b, want)
-	bank, err := OpenBytes(b.Bytes(), RetailTag)
+	bank, err := OpenBytes(b.Bytes())
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}
@@ -203,9 +203,9 @@ func TestMeteorScalarsOrderAndPresence(t *testing.T) {
 	if got, ok := ReadMeteorScalars(bank); !ok || got != want {
 		t.Fatalf("ReadMeteorScalars = (%+v,%v), want (%+v,true)", got, ok, want)
 	}
-	partial := NewBuilder("")
+	partial := NewBuilder()
 	partial.Add(MeteorAccount).SetInt("Enabled", 1)
-	partialBank, err := OpenBytes(partial.Bytes(), RetailTag)
+	partialBank, err := OpenBytes(partial.Bytes())
 	if err != nil {
 		t.Fatalf("OpenBytes partial: %v", err)
 	}
