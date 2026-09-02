@@ -151,11 +151,28 @@ func TestDensePackOverAnIndestructibleFeatureVetoesTheStamp(t *testing.T) {
 	}
 }
 
-func TestFeatureStampEmptySourceDoesNotCreateFringe(t *testing.T) {
+// TestFeatureStampWritesFringeOverAuthoredEmptyCells locks [05 R-FEAT-01 §17]:
+// the stamp's fringe write is unconditional, so every covered non-anchor cell
+// becomes fringe whatever the TNT authored there. Retail's plot never holds the
+// authored feature word — the grid is allocated empty and the loader stamps
+// from the attribute array — so an authored `0xFFFF` under a footprint is
+// indistinguishable from an authored `0xFFFE`.
+//
+// This test previously asserted the opposite (that an authored-empty covered
+// cell stays empty), which §17 identifies as a non-retail premise: on such a
+// map those cells would be neither blocked, reclaimable, nor cleared with their
+// feature by any reader that hops a fringe back to its anchor.
+func TestFeatureStampWritesFringeOverAuthoredEmptyCells(t *testing.T) {
 	attrs := []formats.TNTAttribute{{Height: 1, Feature: 0}, {Height: 1, Feature: PlotFeatureNone}, {Height: 1, Feature: PlotFeatureNone}, {Height: 1, Feature: PlotFeatureNone}}
 	terrain := &Terrain{CellW: 2, CellH: 2, Plot: ExpandPlot(attrs, 2, 2), FeatureDefs: []*content.FeatureDef{{FootprintX: 2, FootprintZ: 2}}}
 	terrain.stampFeatureAnchors()
-	if got := terrain.PlotAt(1, 0).Feature(); got != PlotFeatureNone {
-		t.Fatalf("empty source was synthesized as %#x", got)
+	for _, c := range [][2]int32{{1, 0}, {0, 1}, {1, 1}} {
+		if got := terrain.PlotAt(c[0], c[1]).Feature(); got != PlotFeatureFringe {
+			t.Fatalf("covered cell (%d,%d) = %#x, want fringe %#x [05 R-FEAT-01 §17]", c[0], c[1], got, PlotFeatureFringe)
+		}
+	}
+	// Every synthesized fringe still resolves back to the one anchor.
+	if got, ok := ResolveFeature(terrain.Plot, 2, 2, 1, 1); !ok || got != 0 {
+		t.Fatalf("synthesized fringe resolved to %d/%v, want feature 0", got, ok)
 	}
 }

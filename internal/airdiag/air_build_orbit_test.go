@@ -50,7 +50,10 @@ func TestAirBuilderOrbitsWhileBuilding(t *testing.T) {
 	if com == nil {
 		t.Skip("the ARM commander was not placed on this map")
 	}
-	siteX := com.X.Add(world.CellToWorld(6))
+	// Seven cells east: six landed the 5x5 solar footprint on the fringe of a
+	// real 2x2 feature at the commander's side, which retail refuses too now
+	// that bootstrap writes fringe over every covered cell [05 R-FEAT-01 §17].
+	siteX := com.X.Add(world.CellToWorld(7))
 	siteZ := com.Z
 	if err := mobileBuild(h, u, siteX, siteZ); err != nil {
 		t.Fatalf("mobile build: %v", err)

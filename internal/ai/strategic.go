@@ -308,12 +308,18 @@ func (s *Strategic) Init(types []string) {
 	s.recomputeClassVectors()
 }
 
-// InitClassVectors writes the initialization-only vector [P0-01]. The
-// unresolved category test is deliberately not substituted; an authored build
-// menu contributes 20.
-// The category flag has no recovered FBI key or semantic name. It is
-// intentionally left as an explicit unknown; BMCode is not a substitute
-// [P0-01 §2.2] [R-P0-05] [I9].
+// InitClassVectors writes the initialization-only vector [P0-01]: zero, plus
+// 40 when the definition's authored `bmcode` byte is zero (the building class)
+// and plus 20 when its compiled build-option list is non-empty
+// [08 R-P0-05 §5][08 R-P0-05 §9]. The refresh never rewrites it.
+//
+// The earlier caution here — that the category flag had no recovered key and
+// that BMCode must not be substituted for it — is withdrawn by [08 R-P0-05 §9]:
+// it is that byte, the same one the placement validator dispatches on.
+//
+// These weights are live, not inert: they are the per-unit weight the strategic
+// centre applies in refreshCountsAndCenter [08 R-P0-05 §10].
+//
 // Build-option list non-empty is checked only via the compiled catalog's
 // authored BuildMenus entry [P0-01 §2.2] [R-P0-05].
 func (s *Strategic) InitClassVectors() {
@@ -426,12 +432,20 @@ func (s *Strategic) refreshCountsAndCenter(player uint8, w *units.World) {
 	if w != nil {
 		s.liveUnitCount = uint16(w.LiveCountForPlayer(int(player)))
 	}
-	var sumX, sumY, sumZ int64
-	var n int64
+	// The strategic centre is the WEIGHTED centroid of [08 R-P0-05 §10], not an
+	// unweighted mean: the initialization-only per-type byte is the per-unit
+	// weight, and it has no other reader in retail [08 R-AI-01 §16]. All four
+	// accumulators are 32-bit floats and each coordinate term is the raw 16.16
+	// word times the weight times the single-precision reciprocal of one, so a
+	// term is the coordinate in whole world units times the weight.
+	var weight, accX, accY, accZ float32
 	if w != nil {
 		// Stable iteration: units.World.Iter is pool asc; we additionally filter by player asc already handled by Iter order (I1).
 		for _, u := range w.Iter() {
-			if u == nil || !u.Alive {
+			// The walk visits units that are alive and NOT DYING
+			// [08 R-P0-05 §10]; a latched death mark is separate from Alive,
+			// which the phase-2 finalizer clears later [04 §2.3][04 §2.4].
+			if u == nil || !u.Alive || u.Dying {
 				continue
 			}
 			if u.Owner != player {
@@ -483,22 +497,50 @@ func (s *Strategic) refreshCountsAndCenter(player uint8, w *units.World) {
 				// per-player gate input [08 R-AI-01 §3].
 				s.BuildCapable++
 			}
-			sumX += int64(u.X)
-			sumY += int64(u.Y)
-			sumZ += int64(u.Z)
-			n++
+			// One map READ per unit, never an iteration: the key is already
+			// canonical here, so this is not a sim-visible map range (I1).
+			// The byte is 40 for a building, 60 for a building with a build
+			// list, 20 for a mobile builder and 0 for every other mobile unit
+			// [08 R-P0-05 §9]. There is no comparison on it, no clamp and no
+			// per-definition gate: a zero weight contributes nothing, but the
+			// unit is still walked and still counted above [08 R-P0-05 §10].
+			cw := float32(s.InitVectors[ck])
+			weight += cw
+			accX += float32(u.X) * cw * invFixedOne
+			accY += float32(u.Y) * cw * invFixedOne
+			accZ += float32(u.Z) * cw * invFixedOne
 		}
 	}
-	if n > 0 {
-		// Average with truncation toward zero for Fixed average [I3]; world coordinates are Fixed 16.16 [I2].
-		s.CenterX = numeric.Fixed(sumX / n)
-		s.CenterY = numeric.Fixed(sumY / n)
-		s.CenterZ = numeric.Fixed(sumZ / n)
-	} else {
-		s.CenterX = 0
-		s.CenterY = 0
-		s.CenterZ = 0
+	// Only when the weight sum is non-zero is each axis divided by it; the axis
+	// is then scaled back to 16.16 and truncated toward zero into the centre
+	// word [08 R-P0-05 §10][08 R-AI-01 §16][I3]. A zero weight sum leaves the
+	// accumulators as they are — which is zero, because the initialization byte
+	// is never negative — so the centre words are the truncation of zero,
+	// the "centre unset" state the explore task tests [08 R-AI-01 §6]. That is
+	// also what this function produced before for an empty walk, so the empty
+	// case is unchanged.
+	if weight != 0 {
+		accX /= weight
+		accY /= weight
+		accZ /= weight
 	}
+	s.CenterX = centreWord(accX)
+	s.CenterY = centreWord(accY)
+	s.CenterZ = centreWord(accZ)
+}
+
+// invFixedOne is the single-precision reciprocal of one 16.16 unit that scales
+// a raw coordinate word to whole world units inside the centre accumulation
+// [08 R-P0-05 §10]. It is exact in binary.
+const invFixedOne = 1 / float32(1<<16)
+
+// centreWord finishes one axis of the strategic centre: retail multiplies the
+// float accumulator by the double constant 65536.0 and truncates toward zero
+// through the shared float-to-integer conversion [08 R-P0-05 §10][I3]. The
+// scale is a power of two, so the product is exact and forming it in single
+// precision yields the identical integer; no float64 is introduced for it.
+func centreWord(acc float32) numeric.Fixed {
+	return numeric.Fixed(int64(acc * (1 << 16)))
 }
 
 // lookupDef returns the UnitDef for canonical key ck via s.Catalog if available [P0-I16].

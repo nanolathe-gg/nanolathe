@@ -121,12 +121,27 @@ func (s *cobPresentationSink) SetCOBPieceMap(pieceMap []int) {
 	s.pieceMap = append(s.pieceMap[:0], pieceMap...)
 }
 
-// pieceWorldPos resolves the world position of one COB piece of the sink's
-// source unit — the same unit-origin-plus-composed-piece path the weapon
-// muzzle uses [06 §4.1]. The emit-sfx producers spawn at the piece's world
-// position [R-STRIP-01 §1 strips 2/7/9][04 §4.4]. Unresolvable pieces
-// (dangling unit, unresolved binding) report false and the caller drops the
-// strip append rather than inventing a position [I9].
+// effectWorldPoint turns one composed model-space triple into the world point
+// the effect opcode passes to its constructors: the unit's position plus the
+// triple, with the THIRD component subtracted rather than added — the
+// model-Z-versus-world-Z inversion the piece transform applies
+// [04 R-COB-03 §6]. Both clauses of that section use it: the vector types on
+// each transformed vertex, the point types on the piece's cached offset.
+//
+// This is the effect opcode's own traced rule, not model.go's standing
+// ComposePiece question. The other consumers of a composed offset (weapon
+// muzzles, cargo attach, the factory build plate) still add Z unnegated and
+// stay on that open probe; nothing here changes them.
+func effectWorldPoint(u *units.Unit, v [3]numeric.Fixed) [3]numeric.Fixed {
+	return [3]numeric.Fixed{u.X.Add(v[0]), u.Y.Add(v[1]), u.Z.Sub(v[2])}
+}
+
+// pieceWorldPos resolves the world point one COB piece of the sink's source
+// unit contributes to the emit-sfx POINT types — the piece's composed offset
+// carried into world space by effectWorldPoint [04 R-COB-03 §6]
+// [R-STRIP-01 §1 strips 2/7/9][04 §4.4]. Unresolvable pieces (dangling unit,
+// unresolved binding) report false and the caller drops the strip append
+// rather than inventing a position [I9].
 func (s *cobPresentationSink) pieceWorldPos(cobPiece int) ([3]numeric.Fixed, bool) {
 	var zero [3]numeric.Fixed
 	if s == nil || s.session == nil || s.session.Units == nil {
@@ -140,29 +155,161 @@ func (s *cobPresentationSink) pieceWorldPos(cobPiece int) ([3]numeric.Fixed, boo
 	if !ok {
 		return zero, false
 	}
-	return [3]numeric.Fixed{u.X.Add(origin[0]), u.Y.Add(origin[1]), u.Z.Add(origin[2])}, true
+	return effectWorldPoint(u, origin), true
+}
+
+// pieceEffectPoints resolves the two world points the emit-sfx VECTOR types
+// (0..5) pass to their constructors. Retail reads the piece's transformed
+// vertex list and takes vertices zero and one, turning each into a world point
+// the same way [04 R-COB-03 §6]; the transform it reads is the unit's cached
+// render transform, which this build recomposes from the VM's live piece
+// states exactly as ComposePiece does [03 §2.4] C21.
+//
+// A piece with fewer than two vertices has no second point: retail would read
+// past its own list, so this build drops the strip append instead of inventing
+// a target [I9][I11 — the bounds check is ours, not retail's].
+func (s *cobPresentationSink) pieceEffectPoints(cobPiece int) (a, b [3]numeric.Fixed, ok bool) {
+	var zero [3]numeric.Fixed
+	if s == nil || s.session == nil || s.session.Units == nil {
+		return zero, zero, false
+	}
+	u := s.session.Units.Unit(s.source)
+	if u == nil {
+		return zero, zero, false
+	}
+	binding := u.COBBinding()
+	if binding == nil || binding.Model == nil || binding.VM == nil {
+		return zero, zero, false
+	}
+	if cobPiece < 0 || cobPiece >= len(binding.PieceMap) {
+		return zero, zero, false
+	}
+	modelPiece := binding.PieceMap[cobPiece]
+	if modelPiece < 0 || modelPiece >= len(binding.Model.Pieces) {
+		return zero, zero, false
+	}
+	vertices := binding.Model.Pieces[modelPiece].Vertices
+	if len(vertices) < 2 {
+		return zero, zero, false
+	}
+	// The same VM→model piece-state remap and root-angle fold ComposePiece
+	// performs; only the product differs, because the vector types need the
+	// whole transform rather than the origin alone [03 §2.4] C21 [04 §4.1].
+	states := make([]model.PieceState, len(binding.Model.Pieces))
+	for cobIndex, modelIndex := range binding.PieceMap {
+		if cobIndex < len(binding.VM.Pieces) && modelIndex >= 0 && modelIndex < len(states) {
+			states[modelIndex] = binding.VM.Pieces[cobIndex]
+		}
+	}
+	model.FoldRootAngles(states, binding.Model.Root, u.Move.Heading, u.Move.Pitch, u.Move.Bank)
+	xf := model.Compose(binding.Model, states, modelPiece)
+	return effectWorldPoint(u, xf.Apply(vertices[0])), effectWorldPoint(u, xf.Apply(vertices[1])), true
+}
+
+// appendStripSprinkleVector is the two-point form of appendStripSprinkle: the
+// container's second point B is the emit-sfx producer's own, not a copy of the
+// spawn point. It is what the sprinkle's per-tick velocity is built from —
+// `step = ((B − A) · trunc(0x80000000 / len)) >> 16`, half a world unit per
+// tick along A→B [03 R-FX-01 §3][03 R-FX-02 §6]. Everything else — the
+// one-tick window, the two puffs, the three CRT jitter draws per spawn, the
+// `spacing × 6` puff deadline and the palette selector — is the same family
+// [R-STRIP-01 §1 strips 2/7][R-STRIP-01 §3].
+//
+// A == B is retail's integer-divide fault; sprinkleStep yields a zero step
+// here instead, which is the same bounds-check divergence the one-point form
+// already carries.
+func (s *Session) appendStripSprinkleVector(strip int, a, b [3]numeric.Fixed, spacing int32, colorSel uint8) {
+	if s == nil || s.strips == nil {
+		return
+	}
+	if s.strips.poolFull() {
+		// The three jitter draws sit inside the family's spawn, so a dropped
+		// container spends none of them [03 R-FX-02 §4].
+		return
+	}
+	tick := uint32(0)
+	if s.Clock != nil {
+		tick = s.Clock.GlobalTick
+	}
+	o := stripObject{
+		family:        stripFamilySprinkle,
+		windowEnd:     tick + 1,
+		nextSpawn:     tick + 1,
+		spawnInterval: 1,
+		particleLife:  spacing * 6,
+		phaseModulus:  spacing,
+		colorSel:      colorSel,
+		src:           a,
+		dst:           b,
+	}
+	if crt := s.CrtRNG(); crt != nil {
+		o.spawnOnce(tick, crt)
+	}
+	s.strips.append(strip, o)
+}
+
+// appendStripFlameTrail creates a strip-7 flame-stream trail container: the
+// emit-sfx wake pair's effect [03 R-FX-01 §3][03 R-FX-02 §1]. Its init lays
+// one segment immediately and one per tick while `nextSpawn ≤ deadline`, so
+// `lifetime + 1` segments in all, each flying from a fresh copy of A toward B
+// at `((B − A) · trunc(65536 / lifetime)) >> 16` per tick and expiring with
+// the container's deadline. The family spends no random draws at all
+// [R-STRIP-01 §3].
+func (s *Session) appendStripFlameTrail(strip int, a, b [3]numeric.Fixed, hold, lifetime int32) {
+	if s == nil || s.strips == nil {
+		return
+	}
+	if s.strips.poolFull() {
+		return
+	}
+	tick := uint32(0)
+	if s.Clock != nil {
+		tick = s.Clock.GlobalTick
+	}
+	o := stripObject{
+		family:        stripFamilyFlameTrail,
+		windowEnd:     tick + uint32(lifetime),
+		nextSpawn:     tick + 1,
+		spawnInterval: 1,
+		particleLife:  lifetime,
+		phaseModulus:  hold,
+		src:           a,
+		dst:           b,
+	}
+	// The trail family draws nothing, so the init spawn runs whether or not a
+	// CRT stream is bound [R-STRIP-01 §3].
+	o.spawnOnce(tick, s.CrtRNG())
+	s.strips.append(strip, o)
 }
 
 // emitSFXStripProducers is the session edge of retail's emit-sfx type switch
-// [R-STRIP-01 §1 strips 2/7/9][04 §4.4]. The switch dispatches on the
-// emit-sfx type word: vector types 0–5 are piece-direction effects (0/1 the
-// wake pair → strip-7 flame-stream trail; 2/3 the thrust pair → strip-2
-// sprinkle at 16- then 8-tick puff spacing; 4/5 the same pair with the two
-// piece points swapped), and the point types use the piece world position
-// (0x101 white smoke and 0x102 black smoke → strip-9 smoke; 0x103 spawns at
-// the water line and lands a strip-7 sprinkle). Every case is gated on local
-// visibility upstream of this sink, exactly as retail gates the whole switch
-// [04 §4.4]; the appended strip objects are authoritative sim state swept in
-// phase 11 [R-STRIP-01 §2].
+// [04 R-COB-03 §6][R-STRIP-01 §1 strips 2/7/9][04 §4.4].
 //
-// TODO(question): the piece's second effect vertex — the direction-vertex
-// point that vector types pass beside the piece origin. Its derivation from
-// the piece's model geometry is untraced, so the wake pair (0/1, whose trail
-// flies from the origin to that vertex) and the swapped thrust pair (4/5,
-// which spawns at the vertex) are left unwired rather than given an invented
-// target; a trace of the piece record's second vertex would settle both.
+// The two geometry clauses are what the switch dispatches over. VECTOR types
+// (0..5) take the piece's transformed vertices zero and one; POINT types
+// (0x101..0x103) take the piece's composed offset once. Both become world
+// points through effectWorldPoint [04 R-COB-03 §6].
+//
+// Then the six-way switch over 0..5: types 0 and 1 build the strip-7
+// flame-stream trail (`vertex 0 → vertex 1`, hold 1, lifetime 6 and 7); types
+// 2 and 3 build the strip-2 sprinkle (`vertex 0 → vertex 1`, spacing 16 and 8,
+// colour flag 1); types 4 and 5 build the same sprinkle with THE TWO POINTS
+// EXCHANGED and the same two spacings [03 R-FX-01 §3][03 R-FX-02 §1]. White
+// and black smoke land a strip-9 smoke puffer at the point; the sub-bubble
+// type overwrites its second point with the first's X and Z and the map's
+// sea-level height before landing a strip-7 sprinkle. Vector types from 6 up
+// match no case and are ignored, exactly as retail's switch is.
+//
+// Every case is gated on local visibility upstream of this sink, exactly as
+// retail gates the whole opcode [04 R-COB-03 §6][04 §4.4]; the appended strip
+// objects are authoritative sim state swept in phase 11 [R-STRIP-01 §2].
 func (s *cobPresentationSink) emitSFXStripProducers(ev cob.PresentationEvent) {
 	if s == nil || s.session == nil || s.session.strips == nil {
+		return
+	}
+	switch ev.SFXType {
+	case 0, 1, 2, 3, 4, 5:
+		s.emitSFXVectorProducer(ev)
 		return
 	}
 	pos, ok := s.pieceWorldPos(ev.Piece)
@@ -184,26 +331,55 @@ func (s *cobPresentationSink) emitSFXStripProducers(ev cob.PresentationEvent) {
 		}
 		s.session.appendStripSmokePuffer(9, pos, init)
 	case 0x103:
-		// Sub-bubbles: the spawn height is forced to the water line and the
-		// sprinkle variant lands on strip 7 with 8-tick spacing [04 §4.4]
-		// [R-STRIP-01 §1 strip 7].
+		// Sub-bubbles. The type does NOT move its spawn point to the water
+		// line: it overwrites the SECOND point with the first point's X and Z
+		// and a height taken from the map's sea-level byte shifted into 16.16,
+		// then lands a strip-7 sprinkle with 8-tick spacing and colour flag 0
+		// [04 R-COB-03 §6][03 R-FX-01 §3 strip 7]. The bubbles therefore rise
+		// from the piece toward the surface; before this the whole container
+		// sat at sea level with A == B and a zero step.
+		toSurface := pos
 		if s.session.World != nil {
-			pos[1] = s.session.World.SeaLevelWorld()
+			toSurface[1] = s.session.World.SeaLevelWorld()
 		}
-		s.session.appendStripSprinkle(7, pos, 8, 0)
-	case 2, 3:
-		// The thrust pair: strip-2 sprinkle, 16-tick spacing for type 2 and
-		// 8-tick for type 3 [R-STRIP-01 §1 strip 2].
+		s.session.appendStripSprinkleVector(7, pos, toSurface, 8, 0)
+	}
+}
+
+// emitSFXVectorProducer runs the emit-sfx six-way switch over vector types
+// 0..5 [04 R-COB-03 §6]. Every one of them takes the piece's transformed
+// vertices zero and one; 0/1 build the strip-7 flame-stream trail and 2..5 the
+// strip-2 impact sprinkle, with 4/5 passing the two points exchanged
+// [03 R-FX-01 §3][03 R-FX-02 §1].
+func (s *cobPresentationSink) emitSFXVectorProducer(ev cob.PresentationEvent) {
+	a, b, ok := s.pieceEffectPoints(ev.Piece)
+	if !ok {
+		return
+	}
+	switch ev.SFXType {
+	case 0, 1:
+		// The VTOL/thrust wake pair: one trail per opcode, hold 1 at both
+		// sites, lifetime 6 for type 0 and 7 for type 1 — the selector that is
+		// the only difference between the two constructor calls
+		// [03 R-FX-01 §3 strip 7][03 R-FX-02 §1].
+		lifetime := int32(6)
+		if ev.SFXType == 1 {
+			lifetime = 7
+		}
+		s.session.appendStripFlameTrail(7, a, b, 1, lifetime)
+	case 2, 3, 4, 5:
+		// The wake pair proper: strip-2 sprinkle, spacing 16 for the even
+		// types and 8 for the odd ones, colour flag 1 at all four sites. Types
+		// 4 and 5 are 2 and 3 with the two points exchanged — vertex 1 → vertex
+		// 0 [03 R-FX-01 §3 strip 2][03 R-FX-02 §1][04 R-COB-03 §6].
 		spacing := int32(16)
-		if ev.SFXType == 3 {
+		if ev.SFXType == 3 || ev.SFXType == 5 {
 			spacing = 8
 		}
-		s.session.appendStripSprinkle(2, pos, spacing, 1)
-	case 0, 1, 4, 5:
-		// Unwired pending the second effect vertex (see the TODO above):
-		// 0/1 lay a strip-7 trail from the piece origin to the vertex, and
-		// 4/5 spawn the strip-2 sprinkle at the swapped point
-		// [R-STRIP-01 §1 strips 2/7].
+		if ev.SFXType >= 4 {
+			a, b = b, a
+		}
+		s.session.appendStripSprinkleVector(2, a, b, spacing, 1)
 	}
 }
 
@@ -1051,21 +1227,33 @@ func createAndBindServices(s *Session) error {
 		}
 		return u.CloakCost() // [05 "Cloak debit"] stationary vs moving [P1-I04]
 	}
-	// The cloak gate's first term. The cloak-REQUESTED status bit is set by the
-	// `Cloak_On` order handler and cleared by `Cloak_Off`, each behind the
-	// definition's cloak capability [05 R-ECO-01 §9]; in this build that bit is
-	// the unit's cloak request, whose one writer is SetCloaked (I13). The
-	// gate's second term is a status bit with no writer anywhere in the image —
-	// inert, always satisfied — so nothing is asked of it here.
+	// The cloak gate, all three terms [05 R-ECO-01 §9][03 R-VIS-01 §6].
 	//
-	// TODO(question): the gate's third term, the unit's per-unit cloak payment
-	// deadline, has no producer yet; its nine writers are work handlers in
-	// internal/orders (see economy.Service.CloakDue). A never-written deadline
-	// reads as permanently due, which is exactly right for the idle cloaked
-	// unit [05 "Cloak debit"] and charges a working one the few passes retail
-	// would have skipped.
+	// Term 1 is the cloak-REQUESTED status bit, set by the `Cloak_On` order
+	// handler and cleared by `Cloak_Off`, each behind the definition's cloak
+	// capability; in this build that bit is the unit's cloak request, whose one
+	// writer is SetCloaked (I13). It is NOT seeded from `init_cloaked`, whose
+	// consumer is the initial-posture path instead.
+	//
+	// Term 2 is a status bit with no writer anywhere in the image — inert,
+	// always satisfied — so nothing is asked of it here.
+	//
+	// Term 3 is the per-unit deadline: `currentTick >= unit.RevealDeadline`,
+	// inclusive [03 R-VIS-01 §6]. That field is shared with the sensor phase's
+	// proximity breach and the work handlers' nanolathe stamps — one field, a
+	// later write always winning outright, retail taking no maximum
+	// [03 R-VIS-01 §6][04 R-ORD-01 §1] (I13). A unit no handler has stamped carries
+	// zero and is therefore due from its first pass, which is exactly the idle
+	// cloaked unit's behavior.
 	s.Econ.CloakDue = func(u *units.Unit) bool {
-		return u != nil && u.IsCloaked
+		if u == nil || !u.IsCloaked {
+			return false
+		}
+		tick := uint32(0)
+		if s.Clock != nil {
+			tick = s.Clock.GlobalTick
+		}
+		return tick >= u.RevealDeadline
 	}
 	// The ledger's production discount for a computer player selects on the
 	// battle's difficulty word [05 R-ECO-01 §3]; it is the same word the AI

@@ -51,6 +51,7 @@ Allowed floating point, exhaustively:
 | Model piece rotation trig in the draw path | `float64`, round-to-nearest | `[03 §2.4]` |
 | Nanolathe particle travel distance (`sqrt`, truncated to the tick count) and the nanoframe reveal's barycentric interpolants | `float64` presentation temporaries, never stored | `[03 §5.5]`, `[03 §5.2]` |
 | Strip-object span `sqrt` — the sprinkle's `len` and the flame segment's span, over raw 16.16 deltas, truncated before the fixed-point step is formed | `float64` transient, never stored | `[03 R-FX-01 §3]`, `[03 R-FX-02 §2]` |
+| AI strategic-centre weighted accumulators and per-unit weight (weighted centroid of complete own units, truncated into three 16.16 words) | `float32` transients, never stored | `[08 R-P0-05 §10]`, `[08 R-AI-01 §16]` |
 
 Everything else is integer. Simulation velocity integration uses the fixed-point
 trig tables, **not** the float path `[03 §2.4]`.

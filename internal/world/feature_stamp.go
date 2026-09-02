@@ -32,7 +32,7 @@ func (t *Terrain) StampFeatureRect(anchorX, anchorZ int32, feature uint16, footX
 	if !validFootprint(t.CellW, t.CellH, anchorX, anchorZ, footX, footZ) {
 		return fmt.Errorf("world: feature footprint out of bounds at (%d,%d), size %dx%d", anchorX, anchorZ, footX, footZ)
 	}
-	if !t.writeFeatureRect(anchorX, anchorZ, feature, footX, footZ, nil, nil) {
+	if !t.writeFeatureRect(anchorX, anchorZ, feature, footX, footZ, nil) {
 		return fmt.Errorf("world: feature footprint at (%d,%d) covers an indestructible feature; the stamp is vetoed with the cells torn so far left torn [05 R-FEAT-01 §3-A]", anchorX, anchorZ)
 	}
 	return nil
@@ -49,10 +49,21 @@ func validFootprint(cellW, cellH, anchorX, anchorZ, footX, footZ int32) bool {
 // reports whether the stamp completed; false is the dense-pack veto of
 // [05 R-FEAT-01 §3 step 3], which leaves the cells torn so far torn.
 //
-// authoredFringe/owned are non-nil only during map bootstrap: they prevent an
-// authored empty cell from becoming a synthetic fringe and let bootstrap turn
-// uncovered raw fringe into empty after all source-order stamps.
-func (t *Terrain) writeFeatureRect(anchorX, anchorZ int32, feature uint16, footX, footZ int32, authoredFringe, owned []bool) bool {
+// The fringe write is UNCONDITIONAL [05 R-FEAT-01 §17]: after the dense-pack
+// loop and the anchor write, retail walks the footprint and writes fringe into
+// every cell except the anchor, reading nothing from the cell first — neither
+// its current feature word nor anything the source authored. The per-cell rule
+// is exactly "covered and not the anchor → fringe, always". The bootstrap gate
+// this writer used to carry, which left an authored-empty covered cell empty,
+// encoded a non-retail premise: the plot never holds the authored TNT word in
+// retail, so an authored `0xFFFF` under a footprint is indistinguishable from
+// an authored `0xFFFE` and both become fringe.
+//
+// owned is non-nil only during map bootstrap, where it records which cells a
+// stamp covered so the pass can turn UNCOVERED authored fringe into empty
+// afterwards — the same outcome retail reaches by never writing such a cell at
+// all [05 R-FEAT-01 §17 consequence 2].
+func (t *Terrain) writeFeatureRect(anchorX, anchorZ int32, feature uint16, footX, footZ int32, owned []bool) bool {
 	if t == nil || !validFootprint(t.CellW, t.CellH, anchorX, anchorZ, footX, footZ) {
 		return false
 	}
@@ -65,11 +76,6 @@ func (t *Terrain) writeFeatureRect(anchorX, anchorZ int32, feature uint16, footX
 			idx := int(cz*t.CellW + cx)
 			if idx < 0 || idx >= len(t.Plot) {
 				continue
-			}
-			if dx != 0 || dz != 0 {
-				if authoredFringe != nil && (idx >= len(authoredFringe) || !authoredFringe[idx]) {
-					continue
-				}
 			}
 			if dx == 0 && dz == 0 {
 				t.Plot[idx].SetFeature(feature)
@@ -199,9 +205,23 @@ func (t *Terrain) stampableAnchor(cx, cz int32, feature uint16) bool {
 }
 
 // stampFeatureAnchors derives fringe ownership in authored map order. The raw
-// feature words are retained as a source snapshot: only authored fringe cells
-// can be stamped, and every uncovered authored fringe becomes empty after the
-// pass.
+// feature words are retained as a source snapshot; fringe is then derived
+// entirely from the anchors' footprints, and every uncovered authored fringe
+// becomes empty after the pass.
+//
+// Fringe is written over EVERY covered non-anchor cell, whatever the source
+// authored there [05 R-FEAT-01 §17]. Retail's loader allocates the plot with
+// every feature word empty and never copies the TNT feature word into it; its
+// second attribute pass reads ordinals from the attribute array and calls the
+// stamp, whose fringe loop reads nothing from the cell. So a covered cell
+// authored `0xFFFF` is stamped `0xFFFE` exactly like one authored `0xFFFE` —
+// the authored fringe words are redundant data. Leaving an authored-empty
+// covered cell empty diverges in every reader that hops a fringe to its anchor:
+// the passability classifier [R-DOC04-B], the reclaim scan [05 R-FEAT-01 §6],
+// the damage entry [05 R-FEAT-01 §8] and the teardown [05 R-FEAT-01 §4] would
+// all treat those cells as neither blocked, reclaimable nor cleared with their
+// feature. An authored fringe that no footprint covers is never written by
+// retail and stays empty, which is what the post-pass below reproduces.
 //
 // The snapshot is taken and the cells this pass will re-stamp are cleared out
 // of the plot BEFORE the first stamp, because retail's loader stamps into a
@@ -243,7 +263,7 @@ func (t *Terrain) stampFeatureAnchors() {
 			// far torn, which is retail's outcome for a footprint overlapping
 			// an indestructible feature [05 R-FEAT-01 §3-A]; the loader has no
 			// other recourse and continues with the next source cell.
-			_ = t.writeFeatureRect(cx, cz, authored[idx], def.FootprintX, def.FootprintZ, authoredFringe, owned)
+			_ = t.writeFeatureRect(cx, cz, authored[idx], def.FootprintX, def.FootprintZ, owned)
 		}
 	}
 	for i := range t.Plot {

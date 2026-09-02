@@ -442,6 +442,10 @@ func vtolReclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 		if work <= 0 {
 			return 1 // advance
 		}
+		// "p1 > 0 → stamp `tick + 300`" — the air feature-reclaim twin keeps
+		// the ground row's nanolathe-active stamp, unlike `VTOL_RepairUnit`
+		// and `VTOL_ReclaimUnit`, which emit none [04 R-ORD-01 §7].
+		stampNanolatheActive(u, tick, nanolatheStampBuild)
 		// work > 30 draws the spray twice, where the ground row's gate is 15.
 		return code
 	case 4:

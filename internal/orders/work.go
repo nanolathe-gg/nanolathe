@@ -117,6 +117,41 @@ func emitFeatureNanolathe(u *units.Unit, n *Node, feature FeatureView, tick uint
 	}
 }
 
+// The nanolathe-active stamp. A work handler that does work writes the acting
+// unit's shared reveal/cloak deadline outright — no maximum is taken and a
+// later write always wins [03 R-VIS-01 §6]. Three values, by family
+// [04 R-ORD-01 §1]:
+//
+//   - 150, the repair pair (`RepairUnit` phase 3, `RepairUnitNoMove` phase 1
+//     and `SelfRepair` phase 1, the last on the patient running the order)
+//     [04 R-ORD-01 §2][04 R-ORD-01 §5][05 R-WORK-01 §3];
+//   - 300, the build and feature families (`HelpBuild` phase 3, `Reclaim`
+//     phases 3/4, `Resurrect` phase 4, `VTOL_Reclaim` phase 3)
+//     [04 R-ORD-01 §5][04 R-ORD-01 §7][05 R-WORK-01 §5][05 R-WORK-01 §7];
+//   - 900, `Capture` phase 4 and `ReclaimUnit` phase 5
+//     [04 R-ORD-01 §5][05 R-WORK-01 §4][05 R-WORK-01 §6].
+//
+// Its economy consumer is the cloak-payment gate, which pays only once the
+// global tick has reached the deadline [05 R-ECO-01 §9] — so a unit that is
+// nanolathing something skips the cloak debit for the stamped span. The
+// aircraft twins that emit no stamp at all (`VTOL_RepairUnit`,
+// `VTOL_ReclaimUnit`, `VTOL_HelpBuild`) are stamp-free on purpose
+// [04 R-ORD-01 §7].
+const (
+	nanolatheStampRepair  uint32 = 150
+	nanolatheStampBuild   uint32 = 300
+	nanolatheStampCapture uint32 = 900
+)
+
+// stampNanolatheActive writes the acting unit's reveal/cloak deadline. Writes
+// are unconditional overwrites, never a maximum [03 R-VIS-01 §6].
+func stampNanolatheActive(u *units.Unit, tick, ticks uint32) {
+	if u == nil {
+		return
+	}
+	u.RevealDeadline = tick + ticks
+}
+
 // hasMover reports whether the unit owns a mover reference — the "mover
 // required" clause every work phase 0 opens with. The allocator constructs a
 // mover only for a bmcode-1 definition [04 R-FAC-02 §5], which is the same
@@ -494,6 +529,10 @@ func selfRepairHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
 		if u.Def != nil && uint32(u.Health) >= uint32(u.Def.MaxDamage) {
 			return 1 // advance
 		}
+		// The stamp precedes the repair step and lands on the PATIENT — the
+		// unit running this order — not on the repairer [04 R-ORD-01 §2]
+		// ("stamp nanolathe-active `tick + 150` on itself")[05 R-WORK-01 §3].
+		stampNanolatheActive(u, tick, nanolatheStampRepair)
 		if _, bound := boundRepair(QueueForUnit(u), repairer, u, n, tick); !bound {
 			return 7
 			// The bound service owns admission; the order still re-arms exactly
@@ -589,6 +628,11 @@ func repairUnitHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Co
 		// 3 of that word would settle what they mirror; until then this arm —
 		// StopBuilding, deadline 15, restart — is left unreachable rather than
 		// invented.
+		//
+		// The stamp precedes the helper call: "otherwise it pushes the
+		// builder's cloak deadline to `tick + 150`, calls the helper"
+		// [05 R-WORK-01 §3][04 R-ORD-01 §5].
+		stampNanolatheActive(u, tick, nanolatheStampRepair)
 		if _, bound := boundRepair(QueueForUnit(u), u, target, n, tick); !bound {
 			return 7
 		}
@@ -638,6 +682,11 @@ func repairUnitNoMoveHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code
 		}
 		// The bits 2-3 arm of this row advances rather than restarting; it is
 		// unreachable for the reason given in repairUnitHandler.
+		//
+		// "`RepairUnitNoMove` 36 is the same work visit with no approach phases
+		// and with only the null-target entry guard" — stamp included
+		// [05 R-WORK-01 §3][04 R-ORD-01 §5].
+		stampNanolatheActive(u, tick, nanolatheStampRepair)
 		if _, bound := boundRepair(QueueForUnit(u), u, target, n, tick); !bound {
 			return 7
 		}
@@ -739,6 +788,9 @@ func helpBuildHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Cod
 		if _, bound := boundAssist(QueueForUnit(u), u, n, tick); !bound {
 			return 7
 		}
+		// "Phase 3: work step, spray, stamp `tick + 300`" — the stamp follows
+		// the work step and is not gated on the spray [04 R-ORD-01 §5].
+		stampNanolatheActive(u, tick, nanolatheStampBuild)
 		if target.Remaining != 0 {
 			n.DynamicGate |= gateCancelCurrent | pendTargetRemoved
 			return deadlineHold(n, tick, 1)
@@ -865,7 +917,12 @@ func captureHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 		if int32(n.Param1) < int32(n.Param2) {
 			// The completion test precedes the increment, so the number of
 			// qualifying visits is ceil(timer/2) [05 R-WORK-01 §6].
+			//
+			// "p1 < p2 → spray, stamp `tick + 900`, `p1 += 2`" — the stamp sits
+			// between the spray and the increment [04 R-ORD-01 §5]
+			// [05 R-WORK-01 §6].
 			emitNanolathe(u, n, tick)
+			stampNanolatheActive(u, tick, nanolatheStampCapture)
 			n.Param1 += 2
 			return deadlineHold(n, tick, 2)
 		}
@@ -1141,6 +1198,10 @@ func reclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 		if work <= 0 {
 			return 1 // advance
 		}
+		// "p1 > 0 → stamp `tick + 300`" — inside the same `work > 0` arm that
+		// keeps the record in the countdown, and before the two-segment guard
+		// [04 R-ORD-01 §5][05 R-WORK-01 §5].
+		stampNanolatheActive(u, tick, nanolatheStampBuild)
 		// "p1 > 15 -> draw the spray twice to the feature box"
 		// [04 R-ORD-01 §5][05 R-WORK-01 §5]. Feature reclaim is the engine's
 		// only two-segment producer, and the `> 15` guard is why the last eight
@@ -1355,6 +1416,9 @@ func resurrectHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Cod
 		if feature, ok := featureViewAtGoal(u, n); ok {
 			emitFeatureNanolathe(u, n, feature, tick)
 		}
+		// "when it was nonzero: spray to the feature box, stamp `tick + 300`,
+		// deadline 1, hold" [04 R-ORD-01 §5][05 R-WORK-01 §7].
+		stampNanolatheActive(u, tick, nanolatheStampBuild)
 		return deadlineHold(n, tick, 1)
 	case 5:
 		// "Phase 5 allocates a unit of the resolved definition at the feature's

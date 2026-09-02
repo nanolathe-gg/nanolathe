@@ -155,9 +155,10 @@ func TestClassRecomputeCadence(t *testing.T) {
 	expected := &Strategic{}
 	expected.Init(types)
 
-	// The authored category flag is unresolved and must not be guessed from
-	// BMCode. Only authored build-list membership contributes in this fixture
-	// [P0-01 §2.2] [R-P0-05].
+	// The category flag is the authored `bmcode` byte [08 R-P0-05 §9], read
+	// through the catalog. This fixture binds no catalog, so no definition
+	// resolves and neither the building's 40 nor a build list's 20 can be
+	// added; the byte stays 0 [P0-01 §2.2] [R-P0-05].
 	for _, ck := range types {
 		canon := content.CanonicalKey(ck)
 		if v := s.InitVectors[canon]; v != 0 {
@@ -359,6 +360,11 @@ func TestCenterComputation(t *testing.T) {
 	s := &Strategic{}
 	types := []string{"armfav"}
 	s.Init(types)
+	// The centre is weighted by the initialization-only byte [08 R-P0-05 §10];
+	// with one equal weight for every unit it is still the arithmetic mean,
+	// which is what the cases below check. Without a catalog Init leaves the
+	// byte at 0, so give the type a plain building's 40 [08 R-P0-05 §9].
+	s.InitVectors[content.CanonicalKey("armfav")] = 40
 
 	w := newAIFixtureWorld(10, nil)
 	defA := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armfav")}, UnitName: "armfav", MaxDamage: 100}
@@ -409,6 +415,7 @@ func TestCenterComputation(t *testing.T) {
 	}
 	s3 := &Strategic{}
 	s3.Init([]string{"armfav"})
+	s3.InitVectors[content.CanonicalKey("armfav")] = 40
 	w3 := newAIFixtureWorld(10, nil)
 	if _, err := w3.Create(defA, 1, numeric.FixedFromInt(-100), numeric.Fixed(0), numeric.FixedFromInt(-50)); err != nil {
 		t.Fatalf("create neg: %v", err)
@@ -428,6 +435,7 @@ func TestCenterComputation(t *testing.T) {
 func TestCenterComputationIncludesY(t *testing.T) {
 	s := &Strategic{}
 	s.Init([]string{"armfav"})
+	s.InitVectors[content.CanonicalKey("armfav")] = 40
 	w := newAIFixtureWorld(10, nil)
 	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armfav"}, UnitName: "armfav", MaxDamage: 100}
 	if _, err := w.Create(def, 1, 0, numeric.FixedFromInt(100), 0); err != nil {
@@ -442,5 +450,62 @@ func TestCenterComputationIncludesY(t *testing.T) {
 	}
 	if s.CenterY != numeric.FixedFromInt(200) {
 		t.Fatalf("center Y=%d, want %d", s.CenterY, numeric.FixedFromInt(200))
+	}
+}
+
+// TestCenterIsWeightedByTheInitializationByte locks [08 R-P0-05 §10]: the
+// initialization-only per-type byte is the per-unit WEIGHT of the strategic
+// centre, not an inert vector, and the centre is therefore the weighted
+// centroid of the player's structures. A field army of plain mobile units —
+// whose byte is 0 — never moves it, and when nothing weighted is owned the
+// division is skipped and the centre words are the truncation of zero, the
+// "centre unset" state the explore task tests [08 R-AI-01 §6][08 R-AI-01 §16].
+func TestCenterIsWeightedByTheInitializationByte(t *testing.T) {
+	const heavy, light = "armsolar", "armpw"
+	s := &Strategic{}
+	s.Init([]string{heavy, light})
+	// A plain building weighs 40; every mobile unit that is not a builder
+	// weighs 0 [08 R-P0-05 §9].
+	s.InitVectors[content.CanonicalKey(heavy)] = 40
+	s.InitVectors[content.CanonicalKey(light)] = 0
+
+	w := newAIFixtureWorld(10, nil)
+	defHeavy := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey(heavy)}, UnitName: heavy, MaxDamage: 100}
+	defLight := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey(light)}, UnitName: light, MaxDamage: 100}
+	if _, err := w.Create(defHeavy, 1, numeric.FixedFromInt(300), numeric.FixedFromInt(20), numeric.FixedFromInt(500)); err != nil {
+		t.Fatalf("create weighted: %v", err)
+	}
+	if _, err := w.Create(defLight, 1, numeric.FixedFromInt(4000), numeric.FixedFromInt(900), numeric.FixedFromInt(4000)); err != nil {
+		t.Fatalf("create unweighted: %v", err)
+	}
+	r := rng.NewSimulation(1)
+	if !s.MaybeRefresh(30, &r, 1, w) {
+		t.Fatal("refresh was not due")
+	}
+	if s.CenterX != numeric.FixedFromInt(300) || s.CenterY != numeric.FixedFromInt(20) || s.CenterZ != numeric.FixedFromInt(500) {
+		t.Fatalf("centre = (%d,%d,%d), want the weighted unit's own position (%d,%d,%d)",
+			s.CenterX, s.CenterY, s.CenterZ,
+			numeric.FixedFromInt(300), numeric.FixedFromInt(20), numeric.FixedFromInt(500))
+	}
+	// The zero-weight unit is still walked and still counted.
+	if c := s.Counts[content.CanonicalKey(light)]; c != 1 {
+		t.Fatalf("zero-weight unit counted %d times, want 1", c)
+	}
+
+	// Nothing weighted: the weight sum is exactly 0.0, the division is skipped,
+	// and the centre stays at the origin however far away the units stand.
+	s2 := &Strategic{}
+	s2.Init([]string{light})
+	s2.InitVectors[content.CanonicalKey(light)] = 0
+	w2 := newAIFixtureWorld(10, nil)
+	if _, err := w2.Create(defLight, 1, numeric.FixedFromInt(4000), numeric.FixedFromInt(900), numeric.FixedFromInt(4000)); err != nil {
+		t.Fatalf("create unweighted: %v", err)
+	}
+	r2 := rng.NewSimulation(1)
+	if !s2.MaybeRefresh(30, &r2, 1, w2) {
+		t.Fatal("refresh was not due")
+	}
+	if s2.CenterX != 0 || s2.CenterY != 0 || s2.CenterZ != 0 {
+		t.Fatalf("zero total weight left centre (%d,%d,%d), want (0,0,0)", s2.CenterX, s2.CenterY, s2.CenterZ)
 	}
 }

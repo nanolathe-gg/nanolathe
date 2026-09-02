@@ -404,13 +404,27 @@ type Unit struct {
 	// Save-restored unit words whose consumers are owned by later phases. The
 	// names stay neutral where the retail census remains Unknown [08
 	// R-SAVE-02 §6].
-	RelationDomainByte   uint8
-	CachedOccupancyX     int16
-	CachedOccupancyZ     int16
-	SightCellX           int16
-	SightCellZ           int16
-	FootprintSizeX       int16
-	FootprintSizeZ       int16
+	RelationDomainByte uint8
+	CachedOccupancyX   int16
+	CachedOccupancyZ   int16
+	SightCellX         int16
+	SightCellZ         int16
+	FootprintSizeX     int16
+	FootprintSizeZ     int16
+	// RevealDeadline is the ONE shared reveal/cloak-suppression deadline tick.
+	// Retail has a single field here and every producer writes it outright — a
+	// later write always wins and no maximum is taken [03 R-VIS-01 §6]:
+	//
+	//   - the sensor phase's minimum-cloak proximity breach writes `tick + 90`
+	//     [03 R-VIS-01 §4 pass 4];
+	//   - the work handlers' nanolathe-active stamp writes `tick + 150`
+	//     (repair), `tick + 300` (build, feature reclaim, resurrection) or
+	//     `tick + 900` (capture, unit reclaim) [04 R-ORD-01 §1].
+	//
+	// Its consumers are the economy's cloak-payment gate, which pays only when
+	// `currentTick >= RevealDeadline` (inclusive) [05 R-ECO-01 §9]
+	// [03 R-VIS-01 §6], and presentation's work highlight. Per I13 the two
+	// clean-room contracts that name it resolve to this one Go field.
 	RevealDeadline       uint32
 	UnknownByteAC        uint8
 	UnknownByteAD        uint8
@@ -663,8 +677,22 @@ func (u *Unit) CloakCost() float32 {
 	return float32(u.Def.CloakCost)
 }
 
-// InitEconomyState initializes the engine-state activation bit and IsCloaked
-// from the definition per [02 "Unit record"] InitCloaked [P1-I04].
+// InitEconomyState clears the engine-state activation bit and the
+// cloak-requested bit at spawn [05 R-ECO-01 §9][P1-I04]. Neither is a
+// creation-time copy of a definition flag.
+//
+// Correction: this seeded `IsCloaked = Def.InitCloaked`. The cloak-requested
+// status bit is cleared at spawn along with its neighbours and has exactly two
+// runtime togglers — the `Cloak_On` and `Cloak_Off` order handlers, each
+// behind the definition's derived can-cloak capability [05 R-ECO-01 §9]
+// [05 R-PROD-01 §7]. `init_cloaked` is a separate definition flag whose
+// consumer is the INITIAL-POSTURE path: the build-completion transition's
+// capability arm, which writes the initial-posture byte and the unit's
+// init-cloak flag [04 §3.8], and the visibility predicate, which reads
+// `Def.InitCloaked` off the immutable definition directly and so is unaffected
+// by this change [03 R-VIS-01 §4 pass 5][03 R-VIS-01 §6]. Seeding the request
+// bit from it made every init-cloaked unit pay cloak upkeep from its first
+// settlement pass with no player ever asking for cloak.
 //
 // EVERY unit is created INACTIVE, with no definition key consulted. Neither
 // `onoffable` nor `activatewhenbuilt` is a creation-time copy of the bit:
@@ -693,7 +721,7 @@ func (u *Unit) InitEconomyState() {
 		return
 	}
 	u.Activated = false
-	u.IsCloaked = u.Def.InitCloaked
+	u.IsCloaked = false
 }
 
 // DeathHook is invoked exactly once per unit when the phase-2 slot finalizer

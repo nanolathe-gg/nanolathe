@@ -64,9 +64,7 @@ func (s *Session) PreviewPlacement(cx, cz int32, def *content.UnitDef, footX, fo
 // the local viewing slot cannot currently see is rejected outright, and the
 // mapping option then decides whether the occupancy rejections apply.
 //
-// The battle adapter's cursor path is the intended caller; until it moves over
-// (its file belongs to another unit this cycle) the ghost keeps the null-player
-// form above, which differs only in refusing to reject an unseen site.
+// The battle adapter's build ghost is the caller.
 func (s *Session) PreviewPlacementForCursor(cx, cz int32, def *content.UnitDef, footX, footZ int32, self pool.Handle) (world.PlacementResult, error) {
 	if s == nil || s.Vis == nil {
 		return world.PlacementResult{}, fmt.Errorf("session: placement visibility unavailable")
