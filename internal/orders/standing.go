@@ -456,7 +456,7 @@ func standbyHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
 		armDeadline(n, tick, 1)
 		return Code(1) // *advance*
 	case 1:
-		if target := opportunityScan(u); target != nil && autoEngage(u, target) {
+		if target := opportunityScan(u); target != nil && autoEngage(u, target, false) {
 			return Code(5) // *complete* — the scan issued an order; no draw [04 R-STANCE-01 §7]
 		}
 		n.DynamicGate |= gateSlotClear
@@ -512,24 +512,35 @@ func standbyMineHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
 	}
 }
 
-// autoEngage is the shared auto-engage issuer of [04 R-STANCE-01 §3], called
-// here with `force = 0`. Its admission, in order: the unit is not its own
-// target; the standing MOVE field is nonzero; the standing FIRE field is
-// nonzero; and command code 3 (attack a unit) resolves to a non-empty name
-// through the resolver of [04 §3.4]. On success the resolved record is inserted
-// through the head insert of [04 R-ORD-01 §1].
+// autoEngage is the shared auto-engage issuer of [04 R-STANCE-01 §3], taking
+// `(unit, target, force)`. Its admission, in order:
 //
-// Hold position refuses autonomous engagement exactly as hold fire does: either
-// zero is enough to stop the unit acting on its own.
-func autoEngage(u *units.Unit, target *units.Unit) bool {
+//  1. the unit is not its own target;
+//  2. the standing MOVE field is nonzero and `force` is clear;
+//  3. the standing FIRE field is nonzero and `force` is clear;
+//  4. command code 3 (attack a unit) resolves to a non-empty name through the
+//     resolver of [04 §3.4].
+//
+// On success the resolved record is inserted through the head insert of
+// [04 R-ORD-01 §1].
+//
+// With `force` clear, hold position refuses autonomous engagement exactly as
+// hold fire does: either zero is enough to stop the unit acting on its own.
+// `force` bypasses both stance gates and is passed by exactly one caller
+// family — the two guard handlers' combat join ([04 R-UNIT-06 §1] branch 1) —
+// which is what "the queued-mode attack bypasses the standing-order gates"
+// means in that section. Every other caller passes false.
+func autoEngage(u *units.Unit, target *units.Unit, force bool) bool {
 	if u == nil || target == nil || u == target {
 		return false
 	}
-	if u.Flags>>stanceMoveShift&stanceFieldMask == 0 {
-		return false
-	}
-	if u.Flags>>stanceFireShift&stanceFieldMask == 0 {
-		return false
+	if !force {
+		if u.Flags>>stanceMoveShift&stanceFieldMask == 0 {
+			return false
+		}
+		if u.Flags>>stanceFireShift&stanceFieldMask == 0 {
+			return false
+		}
 	}
 	id := Resolve(3, u, target, nil)
 	if id == 0 {
@@ -567,7 +578,7 @@ func autoEngage(u *units.Unit, target *units.Unit) bool {
 // fire (every stock bomber does) still acquires nothing.
 func AutonomousAcquire(u *units.Unit) bool {
 	target := opportunityScan(u)
-	return target != nil && autoEngage(u, target)
+	return target != nil && autoEngage(u, target, false)
 }
 
 // ---------------------------------------------------------------------------

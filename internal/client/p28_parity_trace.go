@@ -50,7 +50,11 @@ const (
 	RendererReasonOutlineOnly
 	RendererReasonNanoframeErase
 	RendererReasonHeightRejected
-	RendererReasonTransparentTexel
+	// RendererReasonOutsideTexture is a sample whose interpolated texel
+	// coordinates fell outside the texture's own pixels. It is NOT a
+	// transparency rejection: no span writer tests the texel against a
+	// transparent or colour-key index [R-REN-03A §5].
+	RendererReasonOutsideTexture
 	RendererReasonDisplacedByLaterCandidate
 	RendererReasonDisplacedByEqualHeightCandidate
 )
@@ -207,7 +211,7 @@ func (t *modelTarget) traceRejected(event int, reason RendererWinnerReason, deta
 	t.trace.events[event].RejectReason = detail
 }
 
-func rendererTexture(t *screenTri, texelX, texelY int, texel uint8, state RendererValueState, transparent bool) RendererTextureSample {
+func rendererTexture(t *faceIdentity, texelX, texelY int, texel uint8, state RendererValueState, transparent bool) RendererTextureSample {
 	if t == nil {
 		return RendererTextureSample{}
 	}
@@ -224,7 +228,7 @@ func rendererTexture(t *screenTri, texelX, texelY int, texel uint8, state Render
 	return s
 }
 
-func rendererCandidate(t *screenTri, tick uint32, id uint64, px, py int32, incoming, stored, color uint8, shade int, sample RendererTextureSample) RendererCandidate {
+func rendererCandidate(t *faceIdentity, tick uint32, id uint64, px, py int32, incoming, stored, color uint8, shade int, sample RendererTextureSample) RendererCandidate {
 	v := RendererCandidate{
 		Tick: tick, Scope: RendererScopeSubjectComposition, OutsideScope: RendererOutsideAll,
 		Unit: id, Piece: t.piece, Primitive: t.primitive, CandidateOrder: t.candidate,

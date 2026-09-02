@@ -109,10 +109,15 @@ func TestShadowIsFilledWithPaletteIndexZero(t *testing.T) {
 	}
 }
 
-// TestCollectShadowTrisIgnoresTexturesAndTheSelectionPlate locks that the
+// TestCollectShadowPolysIgnoresTexturesAndTheSelectionPlate locks that the
 // shadow pass fills every face flat, at any arity, and skips the load-time
 // selection primitive exactly as the body pass does [R-REN-03D §2].
-func TestCollectShadowTrisIgnoresTexturesAndTheSelectionPlate(t *testing.T) {
+//
+// The faces are whole authored primitives, not fan triangles: the shadow now
+// goes through the same two-chain edge walk as the body, so an n-gon stays an
+// n-gon and a face's authored index order still decides its two chains
+// [R-RAST-01 §1].
+func TestCollectShadowPolysIgnoresTexturesAndTheSelectionPlate(t *testing.T) {
 	c := compositionClient(t)
 	f := func(v int64) numeric.Fixed { return numeric.Fixed(v << 16) }
 	// Authored front-facing for the shadow's own quarter-shear projection: a
@@ -130,17 +135,27 @@ func TestCollectShadowTrisIgnoresTexturesAndTheSelectionPlate(t *testing.T) {
 			},
 		}},
 	}
-	tris := c.collectShadowTris(draw)
-	// Primitive 0 is skipped; primitive 1 fans to 1 triangle; primitive 2 to 3.
-	if len(tris) != 4 {
-		t.Fatalf("shadow tris = %d, want 4 (plate skipped, 1 + 3 fan triangles)", len(tris))
+	polys := c.collectShadowPolys(draw)
+	// Primitive 0 is the selection plate and is skipped; primitives 1 and 2
+	// each stay one face, the triangle and the 5-gon.
+	if len(polys) != 2 {
+		t.Fatalf("shadow faces = %d, want 2 (plate skipped, one triangle and one 5-gon)", len(polys))
 	}
-	for i := range tris {
-		if tris[i].color != shadowColorIndex {
-			t.Fatalf("shadow triangle %d filled with %d, want %d", i, tris[i].color, shadowColorIndex)
+	if got := len(polys[0].x); got != 3 {
+		t.Fatalf("first shadow face has %d corners, want the authored 3", got)
+	}
+	if got := len(polys[1].x); got != 5 {
+		t.Fatalf("second shadow face has %d corners, want the authored 5 — the walk takes n-gons whole", got)
+	}
+	for i := range polys {
+		if polys[i].color != shadowColorIndex {
+			t.Fatalf("shadow face %d filled with %d, want %d", i, polys[i].color, shadowColorIndex)
 		}
-		if tris[i].frame != nil {
-			t.Fatalf("shadow triangle %d carries a texture; the shadow pass never samples one", i)
+		if polys[i].frame != nil {
+			t.Fatalf("shadow face %d carries a texture; the shadow pass never samples one", i)
+		}
+		if polys[i].useSHD {
+			t.Fatalf("shadow face %d carries an SHD row; the shadow pass computes none [R-REN-03D §2]", i)
 		}
 	}
 }

@@ -11,17 +11,8 @@ func heightPlaneClient() *Client {
 	return &Client{width: 8, height: 8, indexed: make([]uint8, 64)}
 }
 
-// heightPlaneTri is the triangle the shadow rasterization's filler still
-// consumes; heightPlaneFace is the same geometry as the n-corner face the body
-// raster takes through the two-chain walk [R-RAST-01 §1].
-func heightPlaneTri(key uint8) screenTri {
-	return screenTri{
-		x:   [3]int32{0, 6, 0},
-		y:   [3]int32{0, 0, 6},
-		key: [3]float64{float64(key), float64(key), float64(key)},
-	}
-}
-
+// heightPlaneFace is one flat face at a constant height key, as the two-chain
+// walk consumes it [R-RAST-01 §1].
 func heightPlaneFace(key uint8) screenPoly {
 	k := int32(key)
 	return walkPoly([][2]int32{{0, 0}, {6, 0}, {0, 6}}, []int32{k, k, k})
@@ -93,27 +84,55 @@ func TestModelHeightPlaneSharedByFlatAndTexturedFaces(t *testing.T) {
 	}
 }
 
-func TestModelHeightPlaneTransparentTextureDoesNotAdmit(t *testing.T) {
+// TestModelTexelKeyIndexIsWrittenLikeAnyOther locks [R-REN-03A §5]'s
+// bounded-negative: no span writer tests the sampled texel against a
+// transparent or colour-key index. Inside the model raster path a texture is
+// fully opaque, and transparency is expressed only by the composition image's
+// own background index, which is what the final blit keys against.
+//
+// This test previously asserted the opposite — that a texel the GAF marks
+// transparent neither writes colour nor moves the height key. That was the
+// client's own behaviour, not retail's: it punched holes through any face
+// whose authored texture uses the key index, and it is the reading
+// [R-REN-03A §5] corrects in [03 §5.2].
+func TestModelTexelKeyIndexIsWrittenLikeAnyOther(t *testing.T) {
 	c := heightPlaneClient()
 	face := heightPlaneFace(70)
-	frame := &formats.GAFFrame{Width: 1, Height: 1, Pixels: []byte{9}, Transparent: []bool{true}}
+	// Index 9 is the colour key of every retail raw frame [fmt gaf]; inside the
+	// model path it is a colour like any other.
+	frame := &formats.GAFFrame{Width: 1, Height: 1, ColorKey: 9, Pixels: []byte{9}, Transparent: []bool{true}}
 	target := newModelTarget(c.width, c.height)
 	c.blitTexturedPolyTarget(target, &face, frame, nil)
-	if got := target.height[1*c.width+1]; got != 0 {
-		t.Fatalf("transparent texel changed height key to %d", got)
-	}
-	if got := target.color[1*c.width+1]; got != transparentModelIndex {
-		t.Fatalf("transparent texel changed composition colour to %d, want the background index %d", got, transparentModelIndex)
-	}
-
-	frame.Transparent[0] = false
-	c.blitTexturedPolyTarget(target, &face, frame, nil)
 	if got := target.height[1*c.width+1]; got != 70 {
-		t.Fatalf("opaque texel key=%d, want 70", got)
+		t.Fatalf("key-coloured texel left the height key at %d, want the face's own 70", got)
+	}
+	if got := target.color[1*c.width+1]; got != 9 {
+		t.Fatalf("key-coloured texel composed %d, want the sampled index 9", got)
 	}
 	target.commit(c.indexed, c.width, c.height)
 	if got := c.indexed[1*c.width+1]; got != 9 {
-		t.Fatalf("opaque texel committed color=%d, want 9", got)
+		t.Fatalf("committed colour=%d, want 9", got)
+	}
+}
+
+// TestModelTexelOutsideTextureWritesNothing locks the one test that remains in
+// the textured writer, which is a bounds guard and not a transparency test: a
+// sample whose interpolated coordinates fall outside the texture's own pixels
+// has no byte to write. Retail's default corner UVs keep the interpolation
+// inside the texture, so this is unreachable on well-formed art
+// [R-RAST-01 §1][R-REN-03A §5].
+func TestModelTexelOutsideTextureWritesNothing(t *testing.T) {
+	c := heightPlaneClient()
+	face := heightPlaneFace(70)
+	// A zero-sized frame puts every sample outside the texture.
+	frame := &formats.GAFFrame{Width: 0, Height: 0}
+	target := newModelTarget(c.width, c.height)
+	c.blitTexturedPolyTarget(target, &face, frame, nil)
+	if got := target.height[1*c.width+1]; got != 0 {
+		t.Fatalf("out-of-texture sample moved the height key to %d", got)
+	}
+	if got := target.color[1*c.width+1]; got != transparentModelIndex {
+		t.Fatalf("out-of-texture sample composed %d, want the background index %d", got, transparentModelIndex)
 	}
 }
 
@@ -179,19 +198,6 @@ func TestConstructionUsesTheSameHeightPlaneAdmission(t *testing.T) {
 	target.commit(c.indexed, c.width, c.height)
 	if got := c.indexed[1*c.width+1]; got != 22 {
 		t.Fatalf("construction pixel=%d, want higher face 22", got)
-	}
-}
-
-func TestScanlineHeightKeyUsesFixedPointStageTruncation(t *testing.T) {
-	// This interior sample is a rounding boundary: direct float barycentrics
-	// yield 232, while the two 16.16 scanline stages yield 231.
-	tri := screenTri{
-		x:   [3]int32{0, 35, 35},
-		y:   [3]int32{0, 16, 12},
-		key: [3]float64{290, -12, 186},
-	}
-	if got := scanlineHeightKey(&tri, 10, 4); got != 231 {
-		t.Fatalf("fixed scanline key=%d, want 231", got)
 	}
 }
 

@@ -243,7 +243,19 @@ most common retail value is 75.
   the minimap and the OTA start positions but heights/features should be
   validated visually when implementing.
 - Whether height 255 scaling interacts with anything besides SeaLevel
-  (e.g. camera) is engine behavior, not format.
+  (e.g. camera) is engine behavior, not format. **What rides on it
+  (2026-09-01, WU-19-41).** Whether the attribute cell's height byte reaches
+  the derived floor pair verbatim, or passes through a transform first, decides
+  ground passability outright and by a very small margin. The derived pair and
+  its footprint aggregation are Established (`[02 R-CONTENT-01]`,
+  `[04 §6.1 R-DOC04-B]` step 6), so `slope = hmax − hmin` over a class's
+  footprint rectangle is the only free variable left. Measured on `ashap
+  plateau`: the start plateaus' rims classify at slope 17 while the stock
+  vehicle classes author `MaxSlope=15`, and that two-byte gap pens every
+  vehicle in a 2735-cell pocket out of 68112 — raising the limit to 17 opens
+  45339. A trace of the height byte's path from the TNT read to the derived
+  pair settles it; the reproducer is
+  `internal/session/ai_terrain_pocket_probe_test.go`.
 
 ## Sources
 

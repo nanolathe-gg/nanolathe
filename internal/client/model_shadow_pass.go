@@ -65,15 +65,21 @@ func shadowLocalVertex(v, origin [3]numeric.Fixed) (sx, sy, ry int32) {
 	return rx + q, zn - q, ry
 }
 
-// collectShadowTris walks the model exactly as the body pass does — pieces
-// last to first, the selection primitive skipped, fan-triangulated — but every
-// face is a flat fill, textures are never consulted, and the projection is the
-// shadow shear [R-REN-03D §2].
-func (c *Client) collectShadowTris(draw *presentationrender.UnitDraw) []screenTri {
+// collectShadowPolys walks the model exactly as the body pass does — pieces
+// last to first, the selection primitive skipped — but every primitive goes to
+// the flat polygon filler at any vertex count, textures are never consulted, no
+// SHD row is computed, and the projection is the shadow shear [R-REN-03D §2].
+//
+// It emits the same screenPoly the body pass does, so the shadow is scan
+// converted by the one two-chain edge walk of [R-RAST-01 §1] rather than by a
+// second, fan-triangulated filler. Two rasterizers for one contract is one
+// rasterizer too many: the fan walk admitted its own set of edge pixels, so a
+// structure's shadow had a silhouette its body could never have.
+func (c *Client) collectShadowPolys(draw *presentationrender.UnitDraw) []screenPoly {
 	if c == nil || draw == nil || draw.Model == nil {
 		return nil
 	}
-	var tris []screenTri
+	var polys []screenPoly
 	for pi := len(draw.Pieces) - 1; pi >= 0; pi-- {
 		if pi >= len(draw.Model.Pieces) {
 			continue
@@ -105,21 +111,22 @@ func (c *Client) collectShadowTris(draw *presentationrender.UnitDraw) []screenTr
 				// body's: two projections of one face can wind differently.
 				continue
 			}
-			for k := 1; k+1 < n; k++ {
-				indices := [3]int{int(pr.VertexIndices[0]), int(pr.VertexIndices[k]), int(pr.VertexIndices[k+1])}
-				var tri screenTri
-				tri.color, tri.piece, tri.primitive = shadowColorIndex, pi, pri
-				for corner, vi := range indices {
-					sx, sy, ry := shadowLocalVertex(piece.WorldVertices[vi], draw.WorldPos)
-					sx, sy = c.scaleModelLocal(sx, sy)
-					tri.x[corner], tri.y[corner] = sx, sy
-					tri.key[corner] = float64(ry + shadowKeyBias)
-				}
-				tris = append(tris, tri)
+			poly := newScreenPoly(n)
+			// Every shadow face is the literal palette index 0 and carries no
+			// SHD row, so the flat writer puts that byte down raw
+			// [R-REN-03D §2].
+			poly.color, poly.useSHD = shadowColorIndex, false
+			poly.candidate, poly.piece, poly.primitive = uint32(len(polys)), pi, pri
+			for corner, vi := range pr.VertexIndices {
+				sx, sy, ry := shadowLocalVertex(piece.WorldVertices[vi], draw.WorldPos)
+				sx, sy = c.scaleModelLocal(sx, sy)
+				poly.x[corner], poly.y[corner] = sx, sy
+				poly.attr[spanKey][corner] = ry + shadowKeyBias
 			}
+			polys = append(polys, poly)
 		}
 	}
-	return tris
+	return polys
 }
 
 // drawModelShadow composes and blits one model shadow. It runs before the body
@@ -130,16 +137,19 @@ func (c *Client) drawModelShadow(draw *presentationrender.UnitDraw, body *modelT
 	if c == nil || draw == nil || !draw.CastsShadow || c.pal == nil {
 		return
 	}
-	tris := c.collectShadowTris(draw)
-	if len(tris) == 0 {
+	polys := c.collectShadowPolys(draw)
+	if len(polys) == 0 {
 		return
 	}
-	width, height, originX, originY := modelExtent(tris)
+	width, height, originX, originY := modelExtent(polys)
 	anchorX, anchorY := c.shadowAnchor(draw)
-	placeTris(tris, originX, originY, 1)
+	// The shadow image is never supersampled: [R-REN-03A §6]'s gate is about
+	// the body composition, and §2 measures and allocates the shadow image
+	// exactly as the body image is measured at 1x.
+	placeFaces(polys, originX, originY, 1)
 	img := newModelImage(width, height, originX, originY, anchorX, anchorY, true, 1)
-	for i := range tris {
-		c.fillTriTarget(img, &tris[i], shadowColorIndex)
+	for i := range polys {
+		c.fillPolyTarget(img, &polys[i], shadowColorIndex, nil)
 	}
 	img.punchOut(body)
 	img.tintedCommit(c.indexed, c.width, c.height, &c.pal.Alpha)

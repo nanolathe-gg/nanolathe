@@ -49,10 +49,25 @@ func newGuardLegsFixture(t *testing.T) *guardLegsFixture {
 		}
 		return nil
 	}
+	// Leg 1's diplomacy term reads the ATTACKER's row toward the guard
+	// [04 R-UNIT-06 §1 as corrected by RWU-19-13], so the fixture answers by
+	// owner: the ward (owner 0) is the guard's own, the attacker (owner 1) is
+	// not. The base fixture's blanket "nothing is hostile" would decline leg 1.
+	b.Hostility = func(a, t *units.Unit) bool { return a != nil && t != nil && a.Owner != t.Owner }
 	QueueForUnit(f.guard).SetBinding(b)
 	QueueForUnit(f.enemy).SetBinding(&QueueBinding{})
+	// The ward's recorded-attacker link: the unit that last damaged it
+	// [04 R-UNIT-06 §5 part 1].
 	f.ward.EngagementTarget = f.enemy.Handle
 	return f
+}
+
+// armSlotAutonomous puts a slot in the state the guard's own admit phase leaves
+// it in: enabled, and bit 4 of the control byte SET, which [04 R-UNIT-06 §5
+// part 3] establishes means "this slot belongs to autonomous acquisition".
+func armSlotAutonomous(u *units.Unit, idx int, w *content.WeaponDef) {
+	u.InstallWeapon(idx, w)
+	u.Slots[idx].OrderControl |= units.OrderControlInhibit
 }
 
 func (f *guardLegsFixture) queueNames() []string {
@@ -67,10 +82,9 @@ func (f *guardLegsFixture) queueNames() []string {
 // the ward's engagement-target link, the diplomacy term, the satisfied word
 // carrying the guard's re-arm bit `0x10`, and the no-chase array.
 //
-// The re-arm bit's PRODUCERS are Unknown [04 R-UNIT-06 §1] — the census found no
-// writer of `0x08` or `0x10` — so the bit is supplied here directly, the way the
-// pump would deliver it. The consumer semantics are what the section calls
-// Established, and they are what this test pins.
+// The re-arm bit is "my target took damage", raised on every record observing
+// the victim [04 R-UNIT-06 §5 part 2]; it is supplied here directly, the way the
+// pump delivers it out of the owner's pending word.
 func TestGuardCombatJoinNeedsTheRearmBit(t *testing.T) {
 	f := newGuardLegsFixture(t)
 	n := guardNode(f.guardFixture)
@@ -111,19 +125,28 @@ func TestGuardCombatJoinRespectsDiplomacyAndNoChase(t *testing.T) {
 	n.Phase = 1
 	q := QueueForUnit(f.guard)
 
-	// A hostile ward is not joined. The literal wording of [04 R-UNIT-06 §1] is
-	// "reads zero (allied)"; the ALLIED sense is implemented, per the
-	// TODO(question) at wardIsAllied — [05 R-SHARE-01 §1] and [04 R-ORD-02 §1]
-	// both make non-zero the allied value.
+	// An attacker that HAS declared alliance toward the guard is not joined:
+	// the traced byte is `attackerOwner.A[guardOwner] == 0`, so a non-zero
+	// declaration closes the leg [04 R-UNIT-06 §1 as corrected by RWU-19-13].
+	// The ward's own rows are never consulted.
 	b := q.Binding()
-	b.Hostility = func(_, _ *units.Unit) bool { return true }
+	b.Hostility = func(_, _ *units.Unit) bool { return false }
 	q.SetBinding(b)
 	q.primary = nil
 	if code := guardHandler(f.guard, n, 0x10, 100); code != Code(2) || len(q.primary) != 0 {
-		t.Fatalf("a hostile ward must not be joined: code %d queue %v", code, f.queueNames())
+		t.Fatalf("an attacker allied to the guard must not be joined: code %d queue %v", code, f.queueNames())
 	}
-	b.Hostility = func(_, _ *units.Unit) bool { return false }
+	b.Hostility = func(a, t *units.Unit) bool { return a.Owner != t.Owner }
 	q.SetBinding(b)
+
+	// A hostile WARD is irrelevant either way — only the attacker's row is
+	// read — so the leg still fires when the ward itself is an enemy's unit.
+	f.ward.Owner = 2
+	q.primary = nil
+	if code := guardHandler(f.guard, n, 0x10, 100); code != Code(3) {
+		t.Fatalf("the ward's own alliance must not gate leg 1, got %d", code)
+	}
+	f.ward.Owner = 0
 
 	// A target in the guard's no-chase array is not joined either.
 	f.enemy.Def.UnitMask.Words[0] = 1 << 5
@@ -147,7 +170,7 @@ func TestGuardSlotRetargetGatesOnTheFireFieldAlone(t *testing.T) {
 	f := newGuardLegsFixture(t)
 	n := guardNode(f.guardFixture)
 	n.Phase = 1
-	f.guard.InstallWeapon(0, &content.WeaponDef{Name: "gun", Range: 1000})
+	armSlotAutonomous(f.guard, 0, &content.WeaponDef{Name: "gun", Range: 1000})
 
 	// Hold fire with hold position: no rebind.
 	f.guard.Flags &^= (stanceFieldMask << stanceFireShift) | (stanceFieldMask << stanceMoveShift)
@@ -191,9 +214,9 @@ func TestGuardSlotRetargetRebindConditions(t *testing.T) {
 	}
 	QueueForUnit(f.guard).SetBinding(b)
 
-	f.guard.InstallWeapon(0, &content.WeaponDef{Name: "long", Range: 1000})
-	f.guard.InstallWeapon(1, &content.WeaponDef{Name: "short", Range: 1})
-	f.guard.InstallWeapon(2, &content.WeaponDef{Name: "dgun", Range: 1000, CommandFire: true})
+	armSlotAutonomous(f.guard, 0, &content.WeaponDef{Name: "long", Range: 1000})
+	armSlotAutonomous(f.guard, 1, &content.WeaponDef{Name: "short", Range: 1})
+	armSlotAutonomous(f.guard, 2, &content.WeaponDef{Name: "dgun", Range: 1000, CommandFire: true})
 
 	held := units.Target{Kind: units.TargetUnit, Unit: near.Handle}
 	f.guard.Slots[0].Target = held
@@ -215,6 +238,17 @@ func TestGuardSlotRetargetRebindConditions(t *testing.T) {
 	if f.guard.Slots[2].Target != held {
 		t.Fatalf("a command-fire slot must be skipped, got %+v", f.guard.Slots[2].Target)
 	}
+
+	// A slot an attack order currently holds — control-byte bit 4 CLEAR — is
+	// left alone whatever its target, because it does not belong to autonomous
+	// acquisition [04 R-UNIT-06 §5 part 3]. This is the term WU-19-35 skipped.
+	f.guard.Slots[1].Target = held
+	f.guard.Slots[1].OrderControl &^= units.OrderControlInhibit
+	guardHandler(f.guard, n, 0, 100)
+	if f.guard.Slots[1].Target != held {
+		t.Fatalf("a slot held by an order must be skipped, got %+v", f.guard.Slots[1].Target)
+	}
+	f.guard.Slots[1].OrderControl |= units.OrderControlInhibit
 
 	// The per-slot bad-target array is the third rebind condition.
 	f.guard.Slots[0].Target = held
@@ -250,7 +284,8 @@ func TestGuardKeepsNoLatchAcrossTicks(t *testing.T) {
 		}
 	}
 
-	if f.guard.GuardLatches != (units.GuardLatches{}) {
-		t.Fatalf("the retired guard latch arrays must stay zero, got %+v", f.guard.GuardLatches)
-	}
+	// The per-unit dedup arrays this build used to keep are gone from
+	// units.Unit entirely, so there is no latch state left to assert on: the
+	// loop above IS the contract. If a latch is ever reintroduced, the second
+	// iteration fails.
 }

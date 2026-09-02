@@ -140,7 +140,7 @@ func RetaliationOrder(victim, attacker *units.Unit) bool {
 	if !categoryAdmitsChase(victim.Def, attacker.Def) {
 		return false
 	}
-	return autoEngage(victim, attacker)
+	return autoEngage(victim, attacker, false) // the retaliation site passes force = 0 [04 R-STANCE-01 §3]
 }
 
 // categoryAdmitsChase is the second half of the order branch's admission: the

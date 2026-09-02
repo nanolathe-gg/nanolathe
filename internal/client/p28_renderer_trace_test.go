@@ -16,15 +16,15 @@ func traceFace(key int32, color uint8) screenPoly {
 	return p
 }
 
-func traceTriangle(key float64, color uint8) screenTri {
-	return screenTri{
-		x: [3]int32{0, 4, 0}, y: [3]int32{0, 0, 4},
-		key: [3]float64{key, key, key}, color: color,
-		candidate: uint32(color), piece: 2, primitive: 7, texture: "trace-texture",
-	}
+func traceTriangle(key float64, color uint8) screenPoly {
+	k := int32(key)
+	p := walkPoly([][2]int32{{0, 0}, {4, 0}, {0, 4}}, []int32{k, k, k})
+	p.color = color
+	p.candidate, p.piece, p.primitive, p.texture = uint32(color), 2, 7, "trace-texture"
+	return p
 }
 
-func renderTracedTriangles(t *testing.T, triangles ...screenTri) ([]uint8, []RendererCandidate) {
+func renderTracedTriangles(t *testing.T, triangles ...screenPoly) ([]uint8, []RendererCandidate) {
 	t.Helper()
 	const width, height = 6, 6
 	c := &Client{width: width, height: height, indexed: make([]uint8, width*height)}
@@ -37,8 +37,8 @@ func renderTracedTriangles(t *testing.T, triangles ...screenTri) ([]uint8, []Ren
 	target.trace = newRendererTrace(width * height)
 	target.winner = target.trace.winner
 	target.trace.width, target.trace.height = width, height
-	for _, tri := range triangles {
-		c.fillTriTarget(target, &tri, tri.color, 77)
+	for i := range triangles {
+		c.fillPolyTarget(target, &triangles[i], triangles[i].color, nil, 77)
 	}
 	target.commit(c.indexed, c.width, c.height)
 	target.trace.resolve(target, c.indexed, width, height)
@@ -259,7 +259,7 @@ func TestP28RendererTraceOutlineOnlyAndOverwrite(t *testing.T) {
 	target.trace.width, target.trace.height = 6, 6
 	c := &Client{width: 6, height: 6, indexed: make([]uint8, 36)}
 	tri := traceTriangle(5, 20)
-	c.fillTriTarget(target, &tri, tri.color, 91)
+	c.fillPolyTarget(target, &tri, tri.color, nil, 91)
 	traceOutlineLine(target.trace, 1, 1, 1, 1, 200, 3, 4)
 	traceOutlineLine(target.trace, 4, 4, 4, 4, 201, 5, 6)
 	target.commit(c.indexed, c.width, c.height)
@@ -298,15 +298,15 @@ func TestP28RendererTraceOutlineOnlyAndOverwrite(t *testing.T) {
 }
 
 func TestP28RendererTraceNilSinkPreservesPixels(t *testing.T) {
-	triangles := []screenTri{traceTriangle(2, 11), traceTriangle(5, 22)}
+	triangles := []screenPoly{traceTriangle(2, 11), traceTriangle(5, 22)}
 	want, _ := renderTracedTriangles(t, triangles...)
 	c := &Client{width: 6, height: 6, indexed: make([]uint8, 36)}
 	for i := range c.indexed {
 		c.indexed[i] = 99
 	}
 	target := newModelTarget(6, 6)
-	for _, tri := range triangles {
-		c.fillTriTarget(target, &tri, tri.color, 77)
+	for i := range triangles {
+		c.fillPolyTarget(target, &triangles[i], triangles[i].color, nil, 77)
 	}
 	target.commit(c.indexed, c.width, c.height)
 	if !reflect.DeepEqual(c.indexed, want) {
@@ -315,7 +315,7 @@ func TestP28RendererTraceNilSinkPreservesPixels(t *testing.T) {
 }
 
 func TestP28RendererTraceCapPreservesPixels(t *testing.T) {
-	triangles := make([]screenTri, rendererTraceEventCap+1)
+	triangles := make([]screenPoly, rendererTraceEventCap+1)
 	for i := range triangles {
 		triangles[i] = traceTriangle(2, uint8(i))
 	}
@@ -325,8 +325,8 @@ func TestP28RendererTraceCapPreservesPixels(t *testing.T) {
 		c.indexed[i] = 99
 	}
 	target := newModelTarget(c.width, c.height)
-	for _, tri := range triangles {
-		c.fillTriTarget(target, &tri, tri.color, 77)
+	for i := range triangles {
+		c.fillPolyTarget(target, &triangles[i], triangles[i].color, nil, 77)
 	}
 	target.commit(c.indexed, c.width, c.height)
 	if !reflect.DeepEqual(c.indexed, traced) {

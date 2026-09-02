@@ -162,3 +162,33 @@ func TestHullGateOwnerAndCloakPrecedeDepth(t *testing.T) {
 		t.Fatal("a decloaking unit did not fall through to the samples")
 	}
 }
+
+// TestHullGateNorthUsesWholeHeightWord locks that the north samples subtract
+// the whole published height word and not half of it [03 §3.2] step 5. The
+// numbered list's "half-height subtracted from the height" is corrected by the
+// sample table's `Y - ey` and by the paragraph naming `ey` a definition field
+// that is "neither ... half of the unit's height".
+//
+// The unit stands 64 world units up, one visibility tile of shear. With the
+// whole word the north samples land back on row 0; with half of it they land
+// half a tile short and the lit cell never admits.
+func TestHullGateNorthUsesWholeHeightWord(t *testing.T) {
+	f := hullGateFrame(4, 4)
+	lightCell(f, 0, 0)
+	unit := frame.UnitView{
+		Slot:        1,
+		Owner:       1,
+		X:           numeric.Fixed(4 << 16),
+		Y:           numeric.Fixed(64 << 16),
+		Z:           numeric.Fixed(4 << 16),
+		HullYExtent: numeric.Fixed(64 << 16),
+	}
+	if !SnapshotVisible(f, unit, 0) {
+		t.Fatal("the whole height word did not bring the north samples back to row 0")
+	}
+	halved := unit
+	halved.HullYExtent /= 2
+	if SnapshotVisible(f, halved, 0) {
+		t.Fatal("half the height word admitted; the gate must subtract the whole definition field")
+	}
+}

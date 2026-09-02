@@ -201,14 +201,40 @@ func TestFactoryNanoframeIsPresentedWithItsFactory(t *testing.T) {
 	if silhouette == 0 {
 		t.Fatal("the nanoframe composed no pixels of its own")
 	}
-	if fullSurvivors <= cutSurvivors {
-		t.Fatalf("the nanoframe is not presented with its factory: %d/%d of its pixels stand with the carrier link, %d/%d without it [03 R-RAST-01 §7]",
-			fullSurvivors, silhouette, cutSurvivors, silhouette)
+	// The staging composite must be a SUPERSET of the painter path: a child
+	// pixel the carrier's own image leaves alone still stands, and a pixel the
+	// carrier covers can now be won on the key test instead of being
+	// overwritten unconditionally [R-REN-03A §4].
+	onlyFull, onlyCut := 0, 0
+	for i := range alone {
+		if alone[i] == 0 {
+			continue
+		}
+		f, cu := full[i] == alone[i], cut[i] == alone[i]
+		if f && !cu {
+			onlyFull++
+		}
+		if cu && !f {
+			onlyCut++
+		}
+	}
+	if onlyCut != 0 {
+		t.Fatalf("%d child pixels survive with the carrier link cut but not with it; the staging composite must not lose a pixel the painter path keeps [R-REN-03A §4]", onlyCut)
+	}
+	if onlyFull == 0 {
+		t.Fatal("the carrier link saved no child pixel at all; the child is not being presented with its carrier [03 R-RAST-01 §7]")
 	}
 
+	// The pictures are written before the assertion, so a failure leaves the
+	// evidence behind rather than aborting ahead of it.
 	if dir := os.Getenv("NANOLATHE_SHOT_DIR"); dir != "" {
 		writeIndexedPNG(t, c, cut, dir+"/nanoframe-before.png")
 		writeIndexedPNG(t, c, full, dir+"/nanoframe-after.png")
+		writeIndexedPNG(t, c, alone, dir+"/nanoframe-alone.png")
+	}
+	if fullSurvivors <= cutSurvivors {
+		t.Fatalf("the nanoframe is not presented with its factory: %d/%d of its pixels stand with the carrier link, %d/%d without it [03 R-RAST-01 §7]",
+			fullSurvivors, silhouette, cutSurvivors, silhouette)
 	}
 }
 

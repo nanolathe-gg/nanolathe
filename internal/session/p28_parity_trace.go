@@ -19,6 +19,17 @@ import (
 
 // ParityUnit is the session-owned, value-only unit diagnostic. It is not a
 // presentation snapshot and never aliases a live unit.
+//
+// A `Guards GuardTrace` member stood here, mirroring four per-unit dedup
+// arrays, and writeParityUnit hashed all 56 of their handles as `guard-build`,
+// `guard-repair`, `guard-help` and `guard-fire` rows. [04 R-UNIT-06 §1]
+// establishes that retail keeps "no dedup array and no latch in either guard
+// handler", so WU-19-35 retired the arrays' readers and writers and this
+// follow-up deleted the state itself. Both the member and its four hash rows
+// are gone with it: the digest covered 56 permanently-zero handles per unit.
+// Removing them changes the authoritative parity DIGEST — no golden value pins
+// it, and no simulation quantity moves — while leaving every other row's
+// format untouched.
 type ParityUnit struct {
 	Slot                                              pool.Handle
 	DefinitionKey                                     string
@@ -40,7 +51,6 @@ type ParityUnit struct {
 	ParalyzeExpire                                    uint32
 	Stunned                                           bool
 	CurrentSample, PriorSample                        uint8
-	Guards                                            GuardTrace
 	Slots                                             [3]SlotTrace
 	Orders                                            []OrderTrace
 	Threads                                           [8]ThreadTrace
@@ -61,13 +71,6 @@ type AttachmentTrace struct {
 	Carrier     pool.Handle
 	AttachPiece int
 	Cargo       []pool.Handle
-}
-
-type GuardTrace struct {
-	BuildAssist [units.GuardLatchSize]pool.Handle
-	AutoFire    [3][units.GuardLatchSize]pool.Handle
-	Repair      [units.GuardLatchSize]pool.Handle
-	HelpBuild   [units.GuardLatchSize]pool.Handle
 }
 
 type SlotTrace struct {
@@ -283,7 +286,6 @@ func (s *Session) parityUnit(u *units.Unit) ParityUnit {
 		Group: u.Group, SpotMetal: u.SpotMetal, OrderGuard: u.OrderGuard, Activated: u.Activated,
 		IsCloaked: u.IsCloaked, Kills: u.Kills, ParalyzeExpire: u.ParalyzeExpire, Stunned: u.Stunned,
 		CurrentSample: u.CurrentSample, PriorSample: u.PriorSample}
-	pu.Guards = GuardTrace{BuildAssist: u.GuardLatches.BuildAssist, AutoFire: u.GuardLatches.AutoFire, Repair: u.GuardLatches.Repair, HelpBuild: u.GuardLatches.HelpBuild}
 	if u.Def != nil {
 		pu.DefinitionKey = u.Def.CanonicalKey
 		if pu.DefinitionKey == "" {
@@ -506,20 +508,6 @@ func writeParityUnit(w func(string, ...interface{}), u ParityUnit) {
 	w("move:%d:%d:%d:%d:%d:%d:%d:%d:%d|", u.Move.Mode, u.Move.Heading, u.Move.Pitch, u.Move.Bank, u.Move.Speed, u.Move.PendingHeading, u.Move.PendingSpeed, u.Attachment.Carrier, u.Attachment.AttachPiece)
 	for _, c := range u.Attachment.Cargo {
 		w("cargo:%d:%d|", u.Slot, c)
-	}
-	for i, guard := range u.Guards.BuildAssist {
-		w("guard-build:%d:%d:%d|", u.Slot, i, guard)
-	}
-	for i, guard := range u.Guards.Repair {
-		w("guard-repair:%d:%d:%d|", u.Slot, i, guard)
-	}
-	for i, guard := range u.Guards.HelpBuild {
-		w("guard-help:%d:%d:%d|", u.Slot, i, guard)
-	}
-	for weapon := range u.Guards.AutoFire {
-		for i, guard := range u.Guards.AutoFire[weapon] {
-			w("guard-fire:%d:%d:%d:%d|", u.Slot, weapon, i, guard)
-		}
 	}
 	for i, thread := range u.Threads {
 		w("thread:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d|", u.Slot, i, thread.Status, thread.PC, thread.SP, thread.Sleep, thread.WaitPiece, thread.WaitAxis, thread.WaitThread, thread.SignalMask)

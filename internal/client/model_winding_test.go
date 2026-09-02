@@ -76,8 +76,8 @@ func TestTheWindingCullIsTheSpanComparison(t *testing.T) {
 		if len(polys) != 1 {
 			t.Fatalf("indices %v emitted %d faces, want 1: the cull is the span comparison, not a face filter", indices, len(polys))
 		}
-		w, h, ox, oy := modelExtentPolys(polys)
-		placePolys(polys, ox, oy, 1)
+		w, h, ox, oy := modelExtent(polys)
+		placeFaces(polys, ox, oy, 1)
 		target := newModelImage(w, h, ox, oy, 0, 0, true, 1)
 		c.fillPolyTarget(target, &polys[0], polys[0].color, nil)
 		n := 0
@@ -141,8 +141,8 @@ func TestRetailFlapKeepsItsOuterSkin(t *testing.T) {
 	if len(polys) == 0 {
 		t.Fatal("ARMCK composed no faces")
 	}
-	width, height, originX, originY := modelExtentPolys(polys)
-	placePolys(polys, originX, originY, 1)
+	width, height, originX, originY := modelExtent(polys)
+	placeFaces(polys, originX, originY, 1)
 	target := newModelImage(width, height, originX, originY, 0, 0, true, 1)
 
 	owner := make([]int, width*height)

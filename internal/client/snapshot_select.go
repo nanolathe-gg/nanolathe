@@ -52,6 +52,16 @@ func SnapshotVisible(f *frame.Frame, v frame.UnitView, viewer uint8) bool {
 	// it, which is why the last step subtracts the X extent "again". The figure
 	// is a rectangle in projected space, not a diamond about the base point.
 	// Any admitted sample returns visible.
+	//
+	// The north step subtracts the WHOLE published height word, not half of it.
+	// [03 §3.2]'s numbered list says "half-height subtracted from the height",
+	// but its own sample table writes `Y - ey` and the paragraph under that
+	// table settles what `ey` is: "its own definition field, distinct from the
+	// Z extent `ez`; the two are not the same value and neither is half of the
+	// unit's height". The list's phrase is the loose one — the projection's own
+	// half-height shear leaking into a sentence about sample offsets — and the
+	// table with its correction is the later, specific text. Halving here would
+	// admit a strictly smaller rectangle than the gate does.
 	x, y, z := v.X, v.Y, v.Z
 	if SnapshotPointVisible(m, x, y, z, viewer) { // 0: centre
 		return true

@@ -36,8 +36,8 @@ func compositionClient(t *testing.T) *Client {
 // the extrema are seeded at the model origin and a two-pixel margin is added on
 // every side [R-REN-03A §1].
 func TestCompositionImageMeasuresExtentWithMargin(t *testing.T) {
-	tris := []screenTri{{x: [3]int32{3, 9, 3}, y: [3]int32{4, 4, 10}}}
-	w, h, ox, oy := modelExtent(tris)
+	polys := []screenPoly{walkPoly([][2]int32{{3, 4}, {9, 4}, {3, 10}}, nil)}
+	w, h, ox, oy := modelExtent(polys)
 	// min is 0 on both axes because the extrema start at the model origin.
 	if w != 9+2*int(modelTargetMargin) || h != 10+2*int(modelTargetMargin) {
 		t.Fatalf("extent = %dx%d, want %dx%d", w, h, 9+2*int(modelTargetMargin), 10+2*int(modelTargetMargin))
@@ -48,8 +48,8 @@ func TestCompositionImageMeasuresExtentWithMargin(t *testing.T) {
 
 	// A model reaching left of its own origin pushes the origin right by
 	// exactly that overhang plus the margin.
-	tris = []screenTri{{x: [3]int32{-5, 2, -5}, y: [3]int32{0, 0, 3}}}
-	w, _, ox, _ = modelExtent(tris)
+	polys = []screenPoly{walkPoly([][2]int32{{-5, 0}, {2, 0}, {-5, 3}}, nil)}
+	w, _, ox, _ = modelExtent(polys)
 	if w != 7+2*int(modelTargetMargin) || ox != 5+modelTargetMargin {
 		t.Fatalf("negative overhang: width=%d origin=%d, want %d and %d", w, ox, 7+2*int(modelTargetMargin), 5+modelTargetMargin)
 	}
@@ -79,19 +79,19 @@ func TestCompositionImageBackgroundIsPaletteIndexOne(t *testing.T) {
 // with a null key plane [R-REN-03A §2].
 func TestAbsentKeyPlaneIsPainterOrder(t *testing.T) {
 	c := compositionClient(t)
-	high := screenTri{x: [3]int32{0, 6, 0}, y: [3]int32{0, 0, 6}, key: [3]float64{200, 200, 200}}
-	low := screenTri{x: [3]int32{0, 6, 0}, y: [3]int32{0, 0, 6}, key: [3]float64{10, 10, 10}}
+	high := heightPlaneFace(200)
+	low := heightPlaneFace(10)
 
 	withKey := newModelImage(8, 8, 0, 0, 0, 0, true, 1)
-	c.fillTriTarget(withKey, &high, 40)
-	c.fillTriTarget(withKey, &low, 41)
+	c.fillPolyTarget(withKey, &high, 40, nil)
+	c.fillPolyTarget(withKey, &low, 41, nil)
 	if got := withKey.color[1*8+1]; got != 40 {
 		t.Fatalf("with a key plane the lower face won: %d, want 40", got)
 	}
 
 	noKey := newModelImage(8, 8, 0, 0, 0, 0, false, 1)
-	c.fillTriTarget(noKey, &high, 40)
-	c.fillTriTarget(noKey, &low, 41)
+	c.fillPolyTarget(noKey, &high, 40, nil)
+	c.fillPolyTarget(noKey, &low, 41, nil)
 	if got := noKey.color[1*8+1]; got != 41 {
 		t.Fatalf("without a key plane the later face must win: %d, want 41", got)
 	}
@@ -194,26 +194,33 @@ func TestSupersampleGateIsStructureAndOption(t *testing.T) {
 	}
 }
 
-// TestPlaceTrisDoublesAroundTheImageOrigin locks the supersampled placement,
+// TestPlacePolysDoublesAroundTheImageOrigin locks the supersampled placement,
 // including the one-pixel shear term for an odd model-relative height
 // [R-REN-03A §6].
-func TestPlaceTrisDoublesAroundTheImageOrigin(t *testing.T) {
-	base := screenTri{x: [3]int32{1, 2, 3}, y: [3]int32{4, 5, 6}, oddHeight: [3]bool{false, true, false}}
-
-	plain := []screenTri{base}
-	placeTris(plain, 10, 20, 1)
-	if plain[0].x != [3]int32{11, 12, 13} || plain[0].y != [3]int32{24, 25, 26} {
-		t.Fatalf("1x placement = %v %v", plain[0].x, plain[0].y)
+func TestPlacePolysDoublesAroundTheImageOrigin(t *testing.T) {
+	base := func() []screenPoly {
+		p := walkPoly([][2]int32{{1, 4}, {2, 5}, {3, 6}}, nil)
+		p.oddHeight[1] = true
+		return []screenPoly{p}
 	}
 
-	doubled := []screenTri{base}
-	placeTris(doubled, 10, 20, 2)
-	if doubled[0].x != [3]int32{22, 24, 26} {
-		t.Fatalf("2x x = %v, want twice (local+origin)", doubled[0].x)
+	plain := base()
+	placeFaces(plain, 10, 20, 1)
+	if got := plain[0].x; got[0] != 11 || got[1] != 12 || got[2] != 13 {
+		t.Fatalf("1x x = %v", got)
+	}
+	if got := plain[0].y; got[0] != 24 || got[1] != 25 || got[2] != 26 {
+		t.Fatalf("1x y = %v", got)
+	}
+
+	doubled := base()
+	placeFaces(doubled, 10, 20, 2)
+	if got := doubled[0].x; got[0] != 22 || got[1] != 24 || got[2] != 26 {
+		t.Fatalf("2x x = %v, want twice (local+origin)", got)
 	}
 	// Corner 1 has an odd height, so its shear is one pixel above 2*(local+origin).
-	if doubled[0].y != [3]int32{48, 49, 52} {
-		t.Fatalf("2x y = %v, want {48,49,52}", doubled[0].y)
+	if got := doubled[0].y; got[0] != 48 || got[1] != 49 || got[2] != 52 {
+		t.Fatalf("2x y = %v, want {48,49,52}", got)
 	}
 }
 

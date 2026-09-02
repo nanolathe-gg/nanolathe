@@ -371,7 +371,7 @@ func vtolPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Co
 				}
 			}
 		}
-		if target := opportunityScan(u); target != nil && autoEngage(u, target) {
+		if target := opportunityScan(u); target != nil && autoEngage(u, target, false) {
 			n.DynamicGate = 0
 			return 3 // the spawned attack runs at the head
 		}

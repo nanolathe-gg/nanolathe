@@ -31,6 +31,19 @@ func composeStockModel(t *testing.T, pal *palette.Tables, fs *vfs.FS, name strin
 	}
 	draw := presentationrender.BuildUnitDrawSimple(m, nil, 0, 0, 0, [3]numeric.Fixed{0, 0, 0})
 	draw.Structure, draw.KeyPlane = structure, true
+	// Compose through the UNSHADED renderer. BuildUnitDrawSimple always emits
+	// per-corner SHD rows, and the shaded flat writer of [R-REN-03A §5] would
+	// then resolve this fixture's one authored colour into a spread of tones —
+	// correct for a structure, but it is the downscale this test is measuring,
+	// not the shading. Clearing the rows selects the unshaded pair of writers,
+	// which is what a mobile subject gets, and keeps the silhouette one index
+	// so the fringe stays countable.
+	for pi := range draw.Pieces {
+		for pri := range draw.Pieces[pi].Primitives {
+			draw.Pieces[pi].Primitives[pri].ShadeRow = presentationrender.NoShadeRow
+			draw.Pieces[pi].Primitives[pri].ShadeRows = nil
+		}
+	}
 	if !c.drawModel(draw, 0, 1, modelCursorUnit, nil, 0) {
 		t.Fatalf("%s composed no geometry", name)
 	}

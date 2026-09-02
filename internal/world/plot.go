@@ -44,8 +44,9 @@ func (p PlotCell) Height() uint8 { return p[4] }
 // MinHeight returns the derived floor minimum at byte 0x06. Byte order is the
 // runtime field convention: byte 0x05 carries the max and byte 0x06 the min
 // (notes/terrain/01_attribute_cells.md §3.2 rows 5/6; slope gates read byte 5 as
-// the max). TODO(question): the low two bits of hmin are masked off on init
-// (&0xFC) in the writer model — reservation purpose unknown.
+// the max). The low two bits of hmin are cleared at allocation, before the
+// first recompute, so the mask is not observable in a loaded map
+// [02 "Map files" row 0x06].
 func (p PlotCell) MinHeight() uint8 { return p[6] }
 
 // MaxHeight returns the derived floor maximum at byte 0x05 [GAP T14][02 "Terrain file"].
@@ -349,14 +350,25 @@ func ExpandPlot(attrs []formats.TNTAttribute, cellW, cellH int) []PlotCell {
 // deriveFloorPair fills the derived local minimum and maximum, bytes 0x05/0x06,
 // whose average is the sampled floor height [02 "Terrain file"], [03 §2.3].
 //
-// TODO(question): research establishes that the pair exists, that it is
-// derived at load, and that CoarseHeightAt averages it — but not the
-// derivation rule. The reading used here follows from the source format: a
-// TNT height byte is "the height *of the cell's corner*" [fmt tnt], so the
-// cell's floor spans its four corners, and its local minimum and maximum are
-// the min and max of those four samples. That makes the average track the
-// bilinear query of [03 §2.3], which is what "their average is the sampled
-// floor height" implies. Corners past the last row/column clamp inward.
+// The derivation rule is Established and is the one implemented here: the pair
+// is "the minimum and maximum of up to four height bytes (cell, east, south,
+// southeast, with edge guards)" [02 R-CONTENT-01 "Slope is derived from a 2×2
+// height neighbourhood"]. That agrees with the source format — a TNT height
+// byte is "the height *of the cell's corner*" [fmt tnt], so the cell's floor
+// spans its four corners — and it makes the average track the bilinear query
+// of [03 §2.3]. Corners past the last row/column clamp inward, which is the
+// same sample the "x+1 < W / z+1 < H" edge guard selects. The previous text
+// here called the rule unknown; it is not, and the TODO(question) is retired.
+//
+// This pair is load-bearing far beyond the coarse height query: the movement
+// classifier's slope is `hmax − hmin` aggregated as min-of-mins/max-of-maxes
+// over the class footprint rectangle [04 §6.1 R-DOC04-B step 6], so a 2×2
+// footprint is judged on the height range across a 3×3 corner grid. On stock
+// content that window is what decides whether a movement class can leave a
+// plateau at all — see the WU-19-41 note in
+// internal/session/ai_e2e_retail_test.go for a measured case where two height
+// bytes separate "vehicles roam the map" from "vehicles are penned in their
+// start pocket".
 func deriveFloorPair(plot []PlotCell, cellW, cellH int) {
 	at := func(x, z int) uint8 {
 		if x >= cellW {

@@ -1071,14 +1071,19 @@ func absFixed(v int64) int64 {
 // both; the combat join consumes the higher one out of the record's satisfied
 // word.
 //
-// [04 R-UNIT-06 §1] records the PRODUCERS of these two bits as Unknown: the
-// bounded census of node-pending writers found the three goal installers (which
-// clear bits 5-9 only), the satisfied-bit raiser's nine call sites (`0x20`,
-// `0x40`, `0x80`, `0x100`, `0x200` only), the constructor's zero and the
-// deadline expiry's bit 0 — and no writer of `0x08` or `0x10` anywhere. The
-// consumer semantics are Established, so the join is written to that contract;
-// nothing in this build raises the join bit either, so it stands ready and does
-// not fire.
+// [04 R-UNIT-06 §5] closes both producers, superseding §1's "Unknown" paragraph:
+// `0x08` is *target removed* [04 R-ORD-01 §6] and `0x10` is *my target took
+// damage* — raised by part 1 of the damage reaction on every order record
+// observing the victim, whoever owns it [04 R-MOV-03 §7][06 R-WPN-04 §2]. The
+// guard's `0x18` therefore reads, exactly: wake when the ward is destroyed or
+// when the ward takes damage, plus the 30-tick deadline.
+//
+// This build raises the join bit: ObserverNotice in react.go ORs it into the
+// owning unit's pending word for every record whose target is the victim and
+// whose descriptor carries the observer bit `0x200` — which both guard rows do.
+// A pending bit the gate does not admit persists, so a guard waiting behind its
+// spawned attack (gate 0) banks the hits its ward took and re-joins one visit
+// after that attack ends [04 R-UNIT-06 §5 part 2].
 const (
 	guardRearmBits     uint32 = 0x18
 	guardCombatJoinBit uint32 = 0x10
@@ -1117,24 +1122,43 @@ func getLookupForWard(n *Node, u *units.Unit) *units.Unit {
 	return nil
 }
 
-// wardIsAllied is leg 1's diplomacy term [04 R-UNIT-06 §1]. It is the same
-// alliance question every other simulation consumer asks, and this build asks
-// it through the one seam that carries the session's alliance rows
-// [05 R-SHARE-01 §1].
+// attackerHostileToGuard is leg 1's diplomacy term as RWU-19-13 corrects it
+// inline in [04 R-UNIT-06 §1]. The byte is row A of the ENGAGEMENT TARGET's
+// owner — the recorded attacker's own alliance declaration — indexed by the
+// GUARD's owner slot, and the leg proceeds when it reads zero: the attacker has
+// not declared alliance toward the guard's side, so it is hostile to the guard.
+// `attackerOwner.A[guardOwner] == 0`, the same shape as the retaliation site's
+// "attacker not allied" test [04 R-STANCE-01 §3].
 //
-// TODO(question): [04 R-UNIT-06 §1] writes the term as "the ward's owner's
-// diplomacy byte toward the guard's side reads **zero** (allied)". The gloss
-// and the value disagree with two Established statements about the same rows:
-// [05 R-SHARE-01 §1] traces row A as "non-zero = allied" and gives the
-// per-consumer predicates as `X.A[Y] != 0`, and [04 R-ORD-02 §1] states the
-// resolver's byte as "0 is hostile, any other value friendly". Two sections
-// against one, and both readings agree with the gloss "(allied)", so the
-// ALLIED sense is implemented here and the literal "reads zero" is treated as a
-// transcription slip. What would settle it: a re-trace of the guard handler's
-// diplomacy load showing which row it indexes and the sense of the branch that
-// follows it.
-func wardIsAllied(actor, ward *units.Unit) bool {
-	return actor != nil && ward != nil && !isHostile(actor, ward)
+// Corrected 2026-09-01. WU-19-35 read this as "the WARD is allied to the
+// guard", following §1's pre-correction sentence and its "(allied)" gloss. Both
+// halves were wrong: the row belongs to the attacker, not the ward, and the
+// sense is hostile, not allied. The old form joined the ward's fight whenever
+// the ward was friendly — including against a target allied to the guard — and
+// refused it whenever the ward was an enemy's unit, neither of which is the
+// traced gate. The ward's owner's rows are never read here at all.
+//
+// The hostility function is taken off the GUARD's binding (which a live guard
+// always has) and applied to the (attacker, guard) pair, so the argument order
+// carries the traced direction.
+//
+// TODO(T25): the session's injected predicate is symmetric — it answers "either
+// side has declared alliance" [05 R-SHARE-01 §1] through economy's isAllied —
+// where the traced byte is the attacker's row alone. The difference is visible
+// only in a one-sided declaration: §1's correction notes that a guard whose own
+// side has declared alliance to the attacker, unreciprocated, still joins,
+// where this build declines. Closing it needs a one-directional row read on the
+// queue binding, which internal/session owns.
+func attackerHostileToGuard(guard, attacker *units.Unit) bool {
+	if guard == nil || attacker == nil {
+		return false
+	}
+	if fn := getHostility(guard); fn != nil {
+		return fn(attacker, guard)
+	}
+	// No rows to read: slot initialization leaves each player allied only to
+	// itself [05 R-SHARE-01 §1], so a different owner is hostile.
+	return attacker.Owner != guard.Owner
 }
 
 // guardWillChase is leg 1's no-chase term [04 R-UNIT-06 §1]: the ward's
@@ -1159,27 +1183,9 @@ func guardWillChase(guard, target *units.Unit) bool {
 // wording is corrected there.
 //
 // The two guard handlers are the only caller family that sets force
-// [04 R-STANCE-01 §3], which is why this arm is here rather than folded into
-// standing.go's force-free autoEngage.
+// [04 R-STANCE-01 §3]. This is the one site that passes true.
 func guardCombatJoin(u *units.Unit, target *units.Unit) bool {
-	if u == nil || target == nil || u == target {
-		return false
-	}
-	id := Resolve(3, u, target, nil)
-	if id == 0 {
-		return false
-	}
-	q := QueueOfUnit(u)
-	if q == nil {
-		return false
-	}
-	node := Node{Owner: u.Handle, Target: target.Handle, GoalX: target.X, GoalY: target.Y, GoalZ: target.Z}
-	if isSecondary(id) {
-		q.PushSecondary(id, node)
-		return true
-	}
-	q.PushHead(id, node)
-	return true
+	return autoEngage(u, target, true)
 }
 
 // guardSlotBadTargetMask is the per-slot bad-target category array leg 2 tests
@@ -1243,14 +1249,24 @@ func guardSlotKeepsTarget(u *units.Unit, s *units.Slot, idx int) bool {
 // standing-MOVE field is not read anywhere in either guard handler, which is
 // [04 R-STANCE-01 §3]'s correction to §1's own wording.
 //
-// TODO(question): §1 requires each slot's TRACKING bit as well as its enabled
-// bit. Nothing in this build sets the tracking bit — the only writer is the
-// manual target path, which clears it — so testing it would make this whole leg
-// dead code. The same gap is recorded, with the same treatment, beside the
-// retaliation offer's per-slot walk in internal/combat/damage.go, whose
-// [06 R-WPN-04 §2] admission carries the same term; both sites skip the test
-// and would gain it together. What would settle it: a writer census of the slot
-// flag byte's bit 4 (the question [06 §1.2]'s slotTrackingFlag already records).
+// The slot's own admission is "enabled AND autonomous". [04 R-UNIT-06 §5 part
+// 3] closes §1's "tracking bit": it is bit 4 of the SAME control byte whose bit
+// 1 is *slot enabled*, [04 R-ORD-01 §7]'s "inhibit latch" and [06 §1.2]'s
+// "tracking flag" are one bit, and its only writers are that section's two slot
+// verbs — whose names read inverted against their effect. Bit 4 SET means the
+// slot belongs to autonomous acquisition; *release* takes the slot for an
+// order's own target (clearing it) and *inhibit* hands it back (setting it).
+//
+// So the test is load bearing, not dead code: a slot an attack order currently
+// holds must be left alone here, and becomes eligible again when the record
+// destructor returns it. The guard's own admit phase runs the return verb on
+// all three slots [04 R-UNIT-06 §1], so leg 2 is live from the first phase-1
+// visit.
+//
+// WU-19-35 skipped this test, following the same reasoning the retaliation
+// offer in internal/combat/damage.go still carries — that nothing sets the bit,
+// so testing it would kill the leg. §5 supersedes that: our admit phase already
+// sets it through clearWeaponBuildTargets, which is inhibitSlot over all three.
 func guardRetargetSlots(u *units.Unit, wardTarget *units.Unit) {
 	if u == nil || u.Def == nil || wardTarget == nil {
 		return
@@ -1262,6 +1278,9 @@ func guardRetargetSlots(u *units.Unit, wardTarget *units.Unit) {
 		s := u.SlotAt(idx)
 		if s == nil || !slotEnabled(s) {
 			continue // the slot-enabled bit [04 R-ORD-01 §7]
+		}
+		if s.OrderControl&units.OrderControlInhibit == 0 {
+			continue // the slot is held by an order, not autonomous [04 R-UNIT-06 §5]
 		}
 		if s.Weapon.CommandFire {
 			continue // "a weapon whose command-fire-only definition bit is clear"
@@ -1341,20 +1360,30 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	if u.Handle == 0 {
 		return guardFollowMaintenance(u, n, ward, tick)
 	}
-	// The ward's engagement-target reference, resolved once: legs 1 and 2 share
-	// it [04 R-UNIT-06 §1]. It is the plain unit link the unit save block
-	// carries beside the carrier link and the per-unit tick refresh clears
-	// [08 R-SAVE-02 §6]. **Unknown** in that section: which producer sets it
-	// during ordinary play — the bounded census found only the initializer's
-	// zero, the save pair, and the tick clear — so in this build it resolves to
-	// nothing and both legs decline. That is the section's own gap, not a
-	// stand-in: nothing is invented to fill it.
+	// The ward's recorded-attacker link, resolved once: legs 1 and 2 share it
+	// [04 R-UNIT-06 §1]. RWU-19-13 closes what §1 recorded as Unknown and
+	// inverts its Supported inference: the link is not the ward's combat target
+	// but the unit that LAST DAMAGED the ward — the damage dispatcher's recorded
+	// attacker [06 R-WPN-04 §2] — written after the reaction routine on every
+	// non-heal packet with a nonzero attacker, and cleared only at spawn, death
+	// and console kill. Nothing clears it per tick, and nothing clears it when
+	// the attacker dies, so a reader must tolerate a dead or reused slot: the
+	// unit lookup below and the command resolver's own tests are that guard
+	// [04 R-UNIT-06 §5 part 1]. In one line: the guard attacks, and points its
+	// free slots at, whatever last hurt its ward.
+	//
+	// TODO(T25): this build has no writer for the link. The damage dispatcher in
+	// internal/combat/damage.go already stores the attacker-side snapshot beside
+	// it (units.Unit.LastDamageSide); the attacker pointer itself is the missing
+	// half, and that file is outside this unit. Until it lands the lookup yields
+	// nothing and both legs decline — a missing producer, not a stand-in.
 	wardTarget := unitByHandle(u, ward.EngagementTarget)
 
 	// Leg 1 — the combat join [04 R-UNIT-06 §1]. Four terms, in order: the
-	// ward's engagement-target reference is set; the diplomacy term (allied);
-	// the satisfied bits carry the guard's re-arm bit `0x10`; and the ward
-	// target's definition is not in the guard's no-chase array. On a successful
+	// ward's recorded-attacker link is set; the diplomacy term (that attacker is
+	// hostile to the guard); the satisfied bits carry the guard's re-arm bit
+	// `0x10`; and the attacker's definition is not in the guard's no-chase
+	// array. On a successful
 	// enqueue the record's dynamic gate CLEARS and the handler returns the wait
 	// code, so a guard that resumes after its spawned attack re-enters phase 1
 	// with an empty gate and installs immediately [04 R-ORD-01 §8 point 4].
@@ -1365,7 +1394,7 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	// because command code 8 forks to help-build while the ward is unfinished
 	// and to repair otherwise [04 R-ORD-02 §1].
 	if wardTarget != nil &&
-		wardIsAllied(u, ward) &&
+		attackerHostileToGuard(u, wardTarget) &&
 		satisfied&guardCombatJoinBit != 0 &&
 		guardWillChase(u, wardTarget) &&
 		guardCombatJoin(u, wardTarget) {

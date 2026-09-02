@@ -110,12 +110,63 @@ func aiE2ESkirmishAt(t *testing.T, mapName string, seed uint32, difficulty int) 
 // hard tables. Pinning Hard keeps the measured contract intact while the word
 // becomes real everywhere else.
 //
-// On the lobby default, Medium, the computer player on this seed builds and
-// attacks — first attack-family order at tick 20400 — but does not finish the
-// idle commander: 156 units, zero kills and zero losses by tick 90000. Whether
-// that is retail's own Medium behavior or a weakness in our wave engagement
-// that the hard tables were masking is an open question for the owner of
-// [08 R-AI-01 §4]; RWU-19-1's timed retail capture is the bar, not this number.
+// WU-19-41 settled why the lobby default, Medium, does not finish the idle
+// commander on this map, and the answer is not in the computer player. It is
+// terrain, and the difficulty word only decides which movement class the wave
+// is made of.
+//
+// What the instrumented Medium run shows. The wave forms and engages: at tick
+// 20400 wave A holds seven members, the engage arm of [08 R-AI-01 §4] latches
+// (min 3 < n, max 6 <= n), the nearest-hostile helper picks the idle commander,
+// and every member is issued `Attack_Chase` at it and turns to the correct
+// bearing at full speed. None of them moves. Their path requests come back
+// rejected — the ray of [04 R-PATH-01 §5] returns an acceptance threshold equal
+// to the start's own scaled heuristic, so [04 R-PATH-01 §4] step 9 publishes
+// empty and never seeds the A* — and they stand at the same coordinates from
+// tick 20700 to tick 60000 with the order still current.
+//
+// The rejection is correct. The Medium tables build level-1/2 ground vehicles,
+// whose stock movement class is TANKSH2/TANKSH3: 2×2 or 3×3 footprint, authored
+// MaxSlope 15 [fmt tdf "MOVEINFO.TDF"]. On `ashap plateau` the computer
+// player's start plateau is a closed 2735-cell pocket for that class — a flood
+// over the classifier of [04 §6.1 R-DOC04-B] escapes nowhere, and every rim
+// cell is blocked by the slope gate, none by water or features. The Hard tables
+// build Thuds, whose class is KBOTSS2 at MaxSlope 32; that class reaches 53483
+// cells including the human start, which is the whole of why Hard wins here.
+// The one kbot the Medium wave does contain can cross, but the wave merge's
+// farthest-member rule transfers it back to regroup A as soon as it is roughly
+// 350 world units from the wave centroid (threshold 20000 × member count,
+// [08 R-P0-04 §3] step 4) and the regroup task then walks it home to the wave's
+// centroid [08 R-AI-01 §5] — so the single mobile member is recalled rather
+// than arriving. Zero losses follows: nothing of the computer player's ever
+// comes within the idle commander's reach.
+//
+// The same Medium battle on `acid foursome`, a map whose start pocket is the
+// whole of its vehicle-passable area, ends in the human's defeat at tick 53709.
+// So the computer player at the lobby default builds, forms, engages and kills;
+// this map's rim is what it cannot climb.
+//
+// Why this test still pins Hard rather than running Medium. Medium cannot win
+// on `ashap plateau` at all, and the maps where it does win are neither cheap
+// nor comfortably inside the thirty-minute bound — of the three open maps
+// measured, only `acid foursome` finished, 291 ticks under the cap, while
+// `aqua verdigris` and `brilliant cut lake` were still running at 54000. A
+// Medium case would therefore be a cherry-picked map on a 0.5% margin, which is
+// a flaky gate rather than a stronger one. The wave-formation test below
+// already covers the Medium path up to engagement.
+//
+// TODO(question): does retail's Medium computer player take `ashap plateau`?
+// Everything above follows from rules the research marks Established — the
+// derived floor pair [02 R-CONTENT-01], its min-of-mins/max-of-maxes footprint
+// aggregation and the slope tier [04 §6.1 R-DOC04-B step 6] — but the outcome
+// is two height bytes wide: the plateau rim classifies at slope 17 against the
+// class's authored 15, and raising the limit to 17 opens the pocket from 2735
+// cells to 45339. A trace must settle whether retail applies any transform to
+// the attribute cell's height byte between the TNT read and the derived pair
+// (research/formats/tnt.md still lists height scaling as open), because nothing
+// short of that changes the answer. TestAIVehiclePocketProbe and
+// TestAIVehicleSlopeSensitivityProbe in ai_terrain_pocket_probe_test.go are the
+// reproducers.
 func TestComputerPlayerEliminatesIdleHumanRetail(t *testing.T) {
 	sess := aiE2ESkirmishAt(t, "ashap plateau", aiE2ESeed, 2)
 

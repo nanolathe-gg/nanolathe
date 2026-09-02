@@ -571,9 +571,9 @@ func (c *Client) drawWorldPassB(cur *frame.Frame, ok bool) {
 const moverModeGrounded uint8 = 1
 
 // presentUnit runs the per-unit steps both passes share, in order: the
-// selected-unit footprint quad when the unit's selected bit is set, the model
-// present when the unit has a draw record, and then the present of each
-// attached child [03 R-RAST-01 §7].
+// selected-unit footprint quad when the unit's selected bit is set, and then
+// the model present, which carries the unit's attached children with it
+// [03 R-RAST-01 §7].
 func (c *Client) presentUnit(d worldDrawable) {
 	u := *d.unit
 	// The selected-unit footprint quad occupies this unit's own depth slot and
@@ -583,14 +583,20 @@ func (c *Client) presentUnit(d worldDrawable) {
 	if u.Flags&hud.SelectionFlag != 0 {
 		c.drawSelectionQuad(u)
 	}
-	if u.Model != "" && c.drawUnitModel(u, d.screenX, d.screenY) {
+	if u.Model == "" {
+		// A carrier with no model of its own still presents its children.
+		for _, child := range c.attachedChildren(u.Slot) {
+			c.drawChildModel(child)
+		}
+		return
+	}
+	if c.composeCarrier(u, d.screenX, d.screenY, c.attachedChildren(u.Slot)) {
 		c.selectionChrome = append(c.selectionChrome, selectionChrome{view: u, screenX: d.screenX, screenY: d.screenY})
 	}
-	c.presentAttachedChildren(u.Slot)
 }
 
-// presentAttachedChildren runs the children step of the per-unit present: after
-// a unit's own body and live pieces, each attached child that follows a real
+// attachedChildren collects the children step of the per-unit present: after a
+// unit's own body and live pieces, each attached child that follows a real
 // carrier piece is presented too [03 R-RAST-01 §7][04 R-UNIT-06 §3].
 //
 // This is what puts a factory's nanoframe on its build plate. A product hangs
@@ -603,41 +609,27 @@ func (c *Client) presentUnit(d worldDrawable) {
 // under the build plate. Its own bucket entry is left alone; this is the
 // second, later present retail also performs.
 //
-// Unimplemented: [03 R-REN-03A §4] establishes that retail composites a child
-// into the CARRIER's staging image with the per-pixel key test, offset by the
-// child's world-height difference. Nanolathe has no cross-unit key plane — each
-// unit composes and blits its own image — so a child is blitted whole over the
-// carrier instead of resolving against it per pixel. Visible only where carrier
-// geometry should occlude part of a child; the fix is a staging image on the
-// model path, a composition change rather than a draw-order one.
-// See PLAN 19 §2.4.
-//
-// The section leaves nothing open — it gives the staging box (the union of the
-// carrier's own box with each child's, offset by the child's world position
-// relative to the carrier), the pass order (cached body copied in, then live
-// pieces with the key test, then each child composited with the key test at
-// its pixel offset and with its world-height difference added to every key it
-// contributes, then the waterline and digger passes, then one blit), and the
-// per-pixel admission `stagingKey <= childKey + heightDelta` for a child pixel
-// that is not the child image's transparent index. What blocks it here is
-// structural, not evidential: the composition entry composes one unit and
-// blits it in the same call, so a carrier's finished image is never available
-// to composite a child into. Closing this means giving that entry a staging
-// target, which is a change to the model composition path, not to this
-// per-unit present.
-func (c *Client) presentAttachedChildren(carrier pool.Handle) {
+// The children are returned rather than drawn because the carrier composites
+// them into its own staging image when it has a key plane [R-REN-03A §4]; see
+// composeCarrier. A child with no model is dropped here, as it was when this
+// function drew them itself.
+func (c *Client) attachedChildren(carrier pool.Handle) []frame.UnitView {
+	if c == nil {
+		return nil
+	}
 	b := &c.worldBuckets
+	var out []frame.UnitView
 	for i := b.firstChild(carrier); i >= 0; i = b.nextChild(i) {
 		if i >= len(b.units) {
 			break
 		}
 		child := b.units[i]
-		if child.Model == "" || c.cam == nil {
+		if child.Model == "" {
 			continue
 		}
-		sx, sy := c.cam.WorldToScreen(child.X, child.Y, child.Z)
-		c.drawUnitModel(child, sx-camera.OriginX, sy-camera.OriginY)
+		out = append(out, child)
 	}
+	return out
 }
 
 func (c *Client) drawFeature(f *frame.FeatureView) {
