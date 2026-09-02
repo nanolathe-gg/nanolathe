@@ -203,9 +203,13 @@ func (s *Session) stepSensorPhase(tick uint32) {
 		dp := new(uint32)
 		*dp = dlVal
 		holders = append(holders, holder{statusPtr: sp, deadPtr: dp, handle: h})
-		// Hidden is the INSTANCE cloak bit — the seen probe's only gate
-		// besides the seen bit itself — seeded at construction from the
-		// definition's init_cloaked flag [R-VIS-01 §4] pass 5, [R-VIS-01 §6].
+		// Hidden is the INSTANCE cloak bit — the seen probe's only gate besides
+		// the seen bit itself [R-VIS-01 §4] pass 5, [R-VIS-01 §6]. It used to
+		// OR in the definition's init_cloaked flag as well; that flag is
+		// consumed once, by the constructor, which seeds the cloak-REQUESTED
+		// bit from it, and the instance bit read here is set only when the
+		// settlement's transition service pays the cloak debit
+		// [03 R-VIS-01 §6][05 R-ECO-01 §9] (RWU-19-26).
 		// Definition stealth is a different input entirely: it is the contact
 		// callback's third reject, so it suppresses radar and sonar detection
 		// outright but never line of sight [R-VIS-01 §5]. The two must not be
@@ -217,7 +221,6 @@ func (s *Session) stepSensorPhase(tick uint32) {
 		onOffable := false
 		if u.Def != nil {
 			stealth = u.Def.Stealth
-			hidden = hidden || u.Def.InitCloaked
 			onOffable = u.Def.OnOffable
 			rd = u.Def.RadarDistance
 			sd = u.Def.SonarDistance

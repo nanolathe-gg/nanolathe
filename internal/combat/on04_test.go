@@ -78,7 +78,12 @@ func newTestWorldAndUnits(t *testing.T) (*units.World, *world.Terrain, *units.Un
 	// Initialize minimal terrain plot to avoid nil.
 	terrain.Plot = make([]world.PlotCell, 100*100)
 	// SeaLevel default 0, so Y>0 passes water check
-	def := &content.UnitDef{UnitName: "combatfixture", MaxDamage: 100, Limit: -1}
+	// `standingfireorder` parses with a default of 2 — FIRE AT WILL — and unit
+	// creation seeds the two-bit status field from it [04 R-STANCE-01 §6]
+	// [04 R-STANCE-01 §1]. The autonomous scan visits a unit only at that value
+	// [06 §3.2], so a fixture built from a literal definition (field zero, HOLD
+	// FIRE) would never scan.
+	def := &content.UnitDef{UnitName: "combatfixture", MaxDamage: 100, Limit: -1, StandingFireOrder: 2}
 	shooterH, err := w.Create(def, 0, numeric.FixedFromInt(10), numeric.FixedFromInt(10), numeric.FixedFromInt(10))
 	if err != nil {
 		t.Fatalf("create shooter: %v", err)

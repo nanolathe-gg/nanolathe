@@ -1853,21 +1853,50 @@ func (s *System) bindArrivalHandle(u *units.Unit, head *orders.Node) {
 	if s.arrivalHandles == nil {
 		s.arrivalHandles = make(map[pool.Handle]*arrivalHandle)
 	}
-	// Only bind for Move_Ground-family orders [R-P0-01]; other orders not arrival-tracked.
+	// The names below are the rows whose arrival this handle serves even when
+	// the record's own goal payload is the implicit one derived from its stored
+	// position [R-P0-01]. Park joins the family: its phase 1 completes on the
+	// arrival bit this handle sets [04 R-ORD-01 §2][04 R-FAC-02 §4]. The ground
+	// work rows join it for the same reason: they install a movement goal in
+	// phase 0 or 1 and then wait behind 0xE0/0xE8 for the follower's verdict
+	// [04 R-ORD-01 §5], so without a handle their approach gate had no producer
+	// at all and the record parked at the head of its queue for the rest of the
+	// game.
 	name := orders.DescriptorFor(head.ID).Name
 	switch name {
-	// Park joins the family: its phase 1 completes on the arrival bit this
-	// handle sets [04 R-ORD-01 §2][04 R-FAC-02 §4]. The ground work rows join it
-	// for the same reason: they install a movement goal in phase 0 or 1 and then
-	// wait behind 0xE0/0xE8 for the follower's verdict [04 R-ORD-01 §5], so
-	// without a handle their approach gate had no producer at all and the record
-	// parked at the head of its queue for the rest of the game.
 	case "Move_Ground", "VTOL_Move", "QMove", "Patrol", "QPatrol", "VTOL_Patrol", "RepairPatrol", "VTOL_RepairPatrol", "Park",
 		"HelpBuild", "RepairUnit", "Capture", "Reclaim", "Resurrect":
 	default:
-		// Not a ground-move family order: ensure no stale handle remains.
-		delete(s.arrivalHandles, u.Handle)
-		return
+		// The name list is not the retail condition, and cannot be. The
+		// follower's per-tick service runs its first step "with a payload
+		// installed": it asks THAT payload whether the unit has arrived and, on
+		// arrival, raises pending `0x20` on the record the payload belongs to
+		// [04 R-MOV-03 §1 "The follower's per-tick service"][04 R-ORD-01 §0].
+		// Owning an installed payload is the record's own statement that it is
+		// waiting on a movement outcome — the same test the session's mover
+		// boundary already uses to decide who drives the mover, and a narrower
+		// one than membership of a list of names.
+		//
+		// `Attack_Chase` is the row that needed it. Its phase 2 installs a
+		// point goal at the target with the slot's engagement distance as the
+		// radius and advances to phase 3, which returns to phase 1 only on
+		// satisfied ∩ `0x40E0` [04 R-ORD-01 §3]. When the mover is already
+		// inside that radius when the next request is admitted, the search's
+		// start predicate answers yes, so request setup notifies `0x100`,
+		// publishes empty and returns [04 R-PATH-01 §4 step 6]; the empty
+		// publication asks the goal "is the unit already at the goal", gets yes,
+		// and therefore does NOT raise `0x40` [04 R-PATH-01 §7]. `0x100` is
+		// masked out of every satisfied set [04 R-ORD-01 §0], so the follower's
+		// arrival `0x20` is the only outcome the composition leaves — and with
+		// no handle bound there was no producer for it. Phase 3 then re-armed
+		// its thirty-tick deadline forever and the chase never re-aimed at a
+		// target that had moved on (WU-19-87's PT6 stall).
+		if !s.HasGroundGoal(u.Handle, head) {
+			// No installed payload: no arrival question to ask, and any handle
+			// left from a previous record must not signal.
+			delete(s.arrivalHandles, u.Handle)
+			return
+		}
 	}
 	profile := s.ProfileFor(u.Handle)
 	footX := profile.FootPrintX

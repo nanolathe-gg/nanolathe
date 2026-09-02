@@ -43,11 +43,16 @@ func TestNonWaterWeaponRequiresBothHeightsAboveSeaLevel(t *testing.T) {
 	}
 }
 
+// The `toairweapon` clause reads the target's COMMITTED MOVER MODE and admits
+// only the value 2 [06 R-WPN-05 §1] clause 3 — not the definition's `canfly`,
+// which a landed aircraft still carries. [02 R-KEYS-01 §2] recorded that
+// operand as the one inference in the flag's reader census.
 func TestToAirClassIsEnforcedOnlyWhenRequested(t *testing.T) {
 	r := rng.NewSimulation(1)
 	ground := hostileAt(1, 10, 9)
+	ground.MoverMode = 1 // grounded/surface
 	air := hostileAt(2, 10, 9)
-	air.AirTarget = true
+	air.MoverMode = airborneMoverMode
 
 	a := base(&r)
 	if _, ok := AcquireTarget([]Candidate{ground}, a); !ok {
@@ -125,17 +130,107 @@ func TestMissingVisibilityRejectsHostileCandidate(t *testing.T) {
 	}
 }
 
-func TestWaterWeaponSkipsTheSeaLevelHeightGate(t *testing.T) {
+// The water branch tests the TARGET alone: no shooter height, no air class, no
+// ballistic solution [06 §3.1][06 R-WPN-05 §1] clause 1. Its two clauses are
+// the definition's `floater` and `canhover`, and they are part of the gate
+// proper — they used to reach it only through an optional closure nothing
+// installed, so every water weapon admitted every candidate at any height.
+func TestWaterWeaponTestsFloaterAndCanHover(t *testing.T) {
 	r := rng.NewSimulation(1)
-	sub := hostileAt(1, 10, 1) // below sea level
 	a := base(&r)
 	a.WaterWeapon = true
+	a.ShooterY = fixed(1) // the water branch never looks at the shooter
+
+	sub := hostileAt(1, 10, 1) // hull under the waterline
 	if _, ok := AcquireTarget([]Candidate{sub}, a); !ok {
 		t.Fatalf("a water weapon could not acquire a submerged candidate")
 	}
-	a.WaterAdmit = func(Candidate) bool { return false }
-	if _, ok := AcquireTarget([]Candidate{sub}, a); ok {
-		t.Fatalf("the water depth/type predicate did not reject")
+
+	// A candidate above sea level is refused unless it is a `floater`.
+	surface := hostileAt(2, 10, 9)
+	if _, ok := AcquireTarget([]Candidate{surface}, a); ok {
+		t.Fatalf("a water weapon acquired a candidate out of the water")
+	}
+	floater := surface
+	floater.Floater = true
+	if _, ok := AcquireTarget([]Candidate{floater}, a); !ok {
+		t.Fatalf("a water weapon refused a floater riding the surface")
+	}
+
+	// `canhover` adds the second clause: Y plus HALF the model top must not pass
+	// sea level either. A hovercraft at the waterline whose hull is tall enough
+	// rides clear of it.
+	hover := hostileAt(3, 10, 5)
+	hover.Floater = true
+	hover.CanHover = true
+	hover.ModelTop = 2 // 5 + 1 > 5
+	if _, ok := AcquireTarget([]Candidate{hover}, a); ok {
+		t.Fatalf("a water weapon acquired a hovercraft riding above the surface")
+	}
+	hover.ModelTop = 0 // 5 + 0 is not above 5
+	if _, ok := AcquireTarget([]Candidate{hover}, a); !ok {
+		t.Fatalf("a water weapon refused a hovercraft sitting at the waterline")
+	}
+}
+
+// The height clauses are whole-unit words PLUS the definition's model top word,
+// compared against the sea-level byte [06 §3.1][06 R-WPN-05 §1] clause 2 — not
+// the bare 16.16 position compare that stood here. A hull at or under the
+// waterline whose model reaches above it is admitted.
+func TestHeightClausesAddTheModelTopWord(t *testing.T) {
+	r := rng.NewSimulation(1)
+	a := base(&r)
+
+	awash := hostileAt(1, 10, 5) // Y equals sea level: the bare compare refused it
+	awash.ModelTop = 4
+	if _, ok := AcquireTarget([]Candidate{awash}, a); !ok {
+		t.Fatalf("a candidate whose model top clears sea level was refused")
+	}
+	sunk := awash
+	sunk.ModelTop = 0
+	if _, ok := AcquireTarget([]Candidate{sunk}, a); ok {
+		t.Fatalf("a candidate whose top sits at sea level was admitted (the compare is strict)")
+	}
+
+	// The shooter half carries the same addend.
+	low := a
+	low.ShooterY = fixed(3)
+	low.ShooterModelTop = 0
+	if _, ok := AcquireTarget([]Candidate{awash}, low); ok {
+		t.Fatalf("a submerged shooter acquired a target")
+	}
+	low.ShooterModelTop = 9
+	if _, ok := AcquireTarget([]Candidate{awash}, low); !ok {
+		t.Fatalf("a shooter whose model top clears sea level was refused")
+	}
+}
+
+// Range is the gate's LAST clause [06 §3.1][06 R-WPN-05 §1]. Two observations
+// lock the order: the pre-range body rejects an out-of-range candidate for its
+// HEIGHT, and the ballistic solver — the clause immediately before range — is
+// still consulted for a candidate range would refuse.
+func TestRangeIsTheLastClause(t *testing.T) {
+	// Height reason: the candidate is both far out of range and under water.
+	shooter := unitGateEnd{Y: 10}
+	sunk := unitGateEnd{Y: 2}
+	if unitToUnitAdmitsBeforeRange(shooter, sunk, 5, false, false) {
+		t.Fatalf("the height clause did not reject a submerged candidate")
+	}
+	if !unitToUnitAdmitsBeforeRange(shooter, unitGateEnd{Y: 9}, 5, false, false) {
+		t.Fatalf("the pre-range body refused an admissible pair")
+	}
+
+	r := rng.NewSimulation(1)
+	a := base(&r)
+	a.Range = 1 // far inside the candidate's distance
+	a.Ballistic = true
+	consulted := 0
+	a.BallisticFeasible = func(Candidate) bool { consulted++; return true }
+	if _, ok := AcquireTarget([]Candidate{hostileAt(1, 900, 9)}, a); ok {
+		t.Fatalf("an out-of-range candidate was acquired")
+	}
+	if consulted != 1 {
+		t.Fatalf("the ballistic clause ran %d times for an out-of-range candidate, want 1 (range is last)", consulted)
 	}
 }
 

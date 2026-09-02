@@ -554,7 +554,10 @@ func (s *Session) publishSnapshot(tick uint32) {
 			stealth := false
 			if u.Def != nil {
 				stealth = u.Def.Stealth
-				hidden = hidden || u.Def.Stealth || u.Def.InitCloaked
+				// The cloak input is the INSTANCE cloaked bit; `init_cloaked`
+				// is consumed once, by the constructor, and no longer feeds
+				// this predicate [03 R-VIS-01 §6][05 R-ECO-01 §9] (RWU-19-26).
+				hidden = hidden || u.Def.Stealth
 				onOffable = u.Def.OnOffable
 			}
 			if si := radarSensorInput(sensorInputs, uint16(u.Handle), sensorIndex); si != nil {

@@ -568,6 +568,9 @@ func TestCancelCurrentRunsCompletionPostureBeforeCause9(t *testing.T) {
 	facDef := newFactoryDef("armfac", 1, 1, 30)
 	prodDef := newProductDef("armflash", 1, 1, 1, 100)
 	prodDef.ActivateWhenBuilt = true
+	// `init_cloaked` is deliberately authored here to lock the negative half of
+	// the completion transition's contract: the transition never reads it and
+	// writes neither cloak bit [04 R-SPEC-01 §12][05 R-ECO-01 §9] (RWU-19-26).
 	prodDef.InitCloaked = true
 	cat.Units[facDef.CanonicalKey] = facDef
 	cat.Units[prodDef.CanonicalKey] = prodDef
@@ -597,8 +600,14 @@ func TestCancelCurrentRunsCompletionPostureBeforeCause9(t *testing.T) {
 	svc.SetBuilderLink(ph, fh)
 	svc.getBuiltLinks[ph] = fh
 	svc.handleCancelCurrent(factory, node, 4)
-	if product.Remaining != 0 || product.Health != product.MaxHealth || product.Flags&FlagCompleted == 0 || product.Flags&FlagInitCloak == 0 || !product.IsCloaked {
-		t.Fatalf("cancel completion posture missing: remaining=%v health=%d flags=%x cloaked=%t", product.Remaining, product.Health, product.Flags, product.IsCloaked)
+	if product.Remaining != 0 || product.Health != product.MaxHealth || product.Flags&FlagCompleted == 0 {
+		t.Fatalf("cancel completion posture missing: remaining=%v health=%d flags=%x", product.Remaining, product.Health, product.Flags)
+	}
+	// The transition must not raise bit 14 of the instance flag word: the old
+	// FlagInitCloak wrote the death latch under a cloak name
+	// [04 R-SPEC-01 §12] (RWU-19-26).
+	if product.Flags&0x00004000 != 0 {
+		t.Fatalf("completion raised instance flag bit 14 on a non-isfeature product: flags=%x", product.Flags)
 	}
 	if factory.Activated || factory.Flags&FlagStartBuilding != 0 || product.Alive {
 		t.Fatalf("cancel edges/death ordering wrong: factory activated=%t flags=%x alive=%t", factory.Activated, factory.Flags, product.Alive)

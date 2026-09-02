@@ -190,6 +190,15 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 	// economy settlement, cloak/upkeep ... are outside the blocked task
 	// runner").
 	bridge := s.callbackBridgeForUnit(u)
+	// The autonomous target scan's PER-UNIT admission [06 §3.2]. It is a
+	// separate pass in retail — one per player per tick, run from that player's
+	// manager immediately after its AI task dispatch — and this build folds it
+	// into the unit's weapon visit, so its preconditions are read here and
+	// carried into the two halves of the scan below (the retention drops and
+	// the re-acquisition). It gates NOTHING else: the reload decrement, the Aim
+	// handshake, the shot-time gates and the firing of a target an order
+	// installed all run for a unit the scan does not visit this tick.
+	scanning := s.autonomousScanVisitsUnit(u, tick, w)
 	// --- Phase: pre-drain callback scheduling (TargetCleared + Aim) in slot order 0..2 [GAP T15] ---
 	type slotPrep struct {
 		needLatch    bool
@@ -235,7 +244,13 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		// removal cleanup walk sets the bit on every assigned slot on EVERY
 		// removal [04 R-ORDER-02 §2] — a player's own non-queued right-click
 		// included — so one order silenced every weapon that unit owned.
-		autonomous := slot.Flags&units.SlotFlagAutonomous != 0
+		//
+		// `scanning` is the per-unit half of the same admission [06 §3.2]: a
+		// unit the round-robin cursor does not reach this tick, or that is not
+		// fully built, or whose standing-fire field is not fire-at-will, runs
+		// neither half of the scan. Retention is inside the scan ("the scan
+		// first tries to retain"), so it waits for the unit's next visit too.
+		autonomous := scanning && slot.Flags&units.SlotFlagAutonomous != 0
 		if slot.Target.Kind == units.TargetUnit && slot.Target.Unit != 0 {
 			tu := w.Unit(slot.Target.Unit)
 			// Stale/dead resolution belongs to the slot pipeline's own target
@@ -716,6 +731,138 @@ func (s *Service) TickWeapons(tick uint32, w *units.World, vis *visibility.Servi
 	}
 }
 
+// ---------------------------------------------------------------------------
+// The autonomous scan's per-unit preconditions and round-robin cadence
+// [06 §3.2]
+// ---------------------------------------------------------------------------
+
+// stanceFireAtWill is the value a unit's two-bit standing-fire field must read
+// for the autonomous scan to act on it [06 §3.2][04 R-STANCE-01 §1]: 2, the
+// FIRE AT WILL frame of the side panel's stance button. 0 is HOLD FIRE and 1 is
+// RETURN FIRE — value 1 retaliates through the damage-intake offer of
+// [06 R-WPN-04 §2] but never hunts, and only 2 opens this scan.
+const stanceFireAtWill uint32 = 2
+
+// autonomousScanDivisor is the divisor of the scan's per-call unit budget
+// [06 §3.2]: it visits `(uint16)globalLiveUnitCount / 30 + 1` units per player
+// per tick. The count is the GLOBAL live unit count, not the scanning player's,
+// so the per-unit revisit period is roughly thirty ticks only while the player
+// owns a typical share of the world's units.
+const autonomousScanDivisor = 30
+
+// combatPlayerSlots is the session's ten player slots [05 "Player slot"]. The
+// cursor is indexed over that fixed range, never a map (I1).
+const combatPlayerSlots = 10
+
+// autonomousScanCursor is the persistent per-player cursor of [06 §3.2]: the
+// scan "advanc[es] a persistent cursor through the owning player's unit vector
+// and wrap[s] to its beginning at the end". Retail runs one pass per player per
+// tick from the player's manager; this build reaches each unit through the
+// session's single unit sweep instead, so the cursor is reconstructed from the
+// order units arrive in: a unit's position in its owner's pass is its index in
+// that vector, and the pass admits the `span` consecutive indices starting at
+// the player's cursor.
+//
+// The vector's length is only known once a pass has walked it, so `count` is
+// the length the PREVIOUS pass measured — which is also the length retail's
+// cursor was last wrapped against. Before a player's first measured pass the
+// length is unknown and every unit is admitted; the pass that measures it
+// installs the window from the next tick.
+type autonomousScanCursor struct {
+	tick   uint32
+	primed bool
+	span   int // this tick's budget, `(uint16)globalLive/30 + 1`
+	cursor [combatPlayerSlots]int
+	seen   [combatPlayerSlots]int
+	count  [combatPlayerSlots]int
+}
+
+// beginTick rolls every player's cursor forward onto a new tick, wrapping it
+// against the vector length the pass that just finished measured [06 §3.2].
+func (c *autonomousScanCursor) beginTick(tick uint32, globalLive int) {
+	if c.primed && c.tick == tick {
+		return
+	}
+	if c.primed {
+		for p := range c.cursor {
+			c.count[p] = c.seen[p]
+			if c.count[p] > 0 {
+				c.cursor[p] = (c.cursor[p] + c.span) % c.count[p]
+			} else {
+				c.cursor[p] = 0
+			}
+		}
+	}
+	for p := range c.seen {
+		c.seen[p] = 0
+	}
+	if globalLive < 0 {
+		globalLive = 0
+	}
+	// `(uint16)globalLiveUnitCount / 30 + 1` [06 §3.2] — the count is truncated
+	// to sixteen bits before the divide, which is retail's storage width for it
+	// [08 "Counters"].
+	c.span = int(uint16(globalLive))/autonomousScanDivisor + 1
+	c.tick = tick
+	c.primed = true
+}
+
+// visits consumes one entry of the owner's vector and reports whether this
+// tick's window covers it [06 §3.2]. It is called once for every unit the
+// weapon phase steps, whether or not that unit passes the scan's other
+// preconditions, because retail's cursor advances over vector entries and only
+// then tests the entry it landed on.
+func (c *autonomousScanCursor) visits(owner uint8) bool {
+	p := int(owner)
+	if p < 0 || p >= combatPlayerSlots {
+		return false
+	}
+	i := c.seen[p]
+	c.seen[p]++
+	count := c.count[p]
+	if count <= 0 || c.span >= count {
+		// Length not yet measured, or the budget covers the whole vector: every
+		// entry is visited, which is what a small player owns anyway.
+		return true
+	}
+	rel := i - c.cursor[p]
+	if rel < 0 {
+		rel += count // the window wraps to the beginning of the vector
+	}
+	return rel < c.span
+}
+
+// autonomousScanVisitsUnit is the autonomous scan's per-unit admission
+// [06 §3.2]: "The visited unit must have a nonzero definition index, a
+// remaining-build-fraction of exactly zero, one high status bit set, and its
+// two-bit stance field equal to the fire-at-will value."
+//
+// The cursor is consumed first and unconditionally, because the budget is spent
+// on vector entries rather than on units that pass.
+func (s *Service) autonomousScanVisitsUnit(u *units.Unit, tick uint32, w *units.World) bool {
+	if s == nil || u == nil {
+		return false
+	}
+	s.scanCursor.beginTick(tick, w.Used())
+	if !s.scanCursor.visits(u.Owner) {
+		return false
+	}
+	if u.Def == nil {
+		return false // "a nonzero definition index"
+	}
+	if u.Remaining != 0 {
+		return false // "a remaining-build-fraction of exactly zero"
+	}
+	// TODO(question): [06 §3.2]'s third clause, "one high status bit set", does
+	// not name the bit, and no other section identifies a status bit this scan
+	// reads. It is not modelled here rather than guessed at; the clause can only
+	// narrow the visited set, so omitting it scans a superset. Decider: a static
+	// trace of the scan's own status-word test against the unit status-word
+	// census of [08 "Classifier eligibility, destinations, and order"], which
+	// names two high status bits set once at creation from the definition.
+	return u.Flags>>units.StandingFireShift&units.StandingFieldMask == stanceFireAtWill
+}
+
 func acquireTargetForSlot(u *units.Unit, slot *units.Slot, idx int, w *units.World, vis *visibility.Service, terrain *world.Terrain, simRNG *rng.Simulation, econ *economy.Service, catalogs ...*content.Catalog) (pool.Handle, bool) {
 	return acquireTargetForSlotRange(u, slot, idx, w, vis, terrain, simRNG, econ, -1, catalogs...)
 }
@@ -759,6 +906,7 @@ func acquisitionCandidate(u *units.Unit, cand *units.Unit, seaLevel numeric.Fixe
 	if cand.Def != nil {
 		catMask = cand.Def.DefinitionMask()
 	}
+	candGate := gateEndForUnit(cand)
 	return Candidate{
 		Handle:               cand.Handle,
 		X:                    cand.X,
@@ -771,7 +919,16 @@ func acquisitionCandidate(u *units.Unit, cand *units.Unit, seaLevel numeric.Fixe
 		Cloaked:              isCloakedUnit(cand),
 		Underwater:           isUnderwaterUnit(cand, seaLevel),
 		UnderwaterSeen:       isAllied(u.Owner, cand.Owner, econ),
-		AirTarget:            cand.Def != nil && cand.Def.CanFly,
+		// The gate's target-side operands [06 §3.1][06 R-WPN-05 §1]: the model
+		// top-height word the height clause adds, the committed mover mode the
+		// `toairweapon` clause requires to read exactly 2, and the water
+		// branch's `floater`/`canhover` pair. The `AirTarget` field that stood
+		// here carried the definition's `canfly`, which admits a landed
+		// aircraft an anti-air weapon cannot engage.
+		ModelTop:  candGate.ModelTop,
+		MoverMode: candGate.MoverMode,
+		Floater:   candGate.Floater,
+		CanHover:  candGate.CanHover,
 		// The stunned mark travels with the candidate; only a paralyzer slot
 		// reads it [06 §3.2] check 5 [06 R-DMG-01 §11].
 		Stunned: cand.Stunned,
@@ -787,16 +944,19 @@ func slotAcquisition(u *units.Unit, slot *units.Slot, idx int, w *units.World, v
 		queryRange = rangeLimit
 	}
 	acq := Acquisition{
-		ShooterX:      u.X,
-		ShooterZ:      u.Z,
-		ShooterY:      u.Y,
-		SeaLevel:      seaLevel,
-		Range:         queryRange,
-		BadTargetMask: badMaskForSlot(u.Def, idx),
-		MaskResolved:  catalog != nil && u.Def != nil,
-		WaterWeapon:   weapon.WaterWeapon,
-		ToAir:         weapon.ToAirWeapon,
-		Ballistic:     weapon.Ballistic,
+		ShooterX: u.X,
+		ShooterZ: u.Z,
+		ShooterY: u.Y,
+		// The shooter half of the non-water height clause carries the model
+		// top-height word too [06 §3.1][06 R-WPN-05 §1] clause 2.
+		ShooterModelTop: modelTop(u),
+		SeaLevel:        seaLevel,
+		Range:           queryRange,
+		BadTargetMask:   badMaskForSlot(u.Def, idx),
+		MaskResolved:    catalog != nil && u.Def != nil,
+		WaterWeapon:     weapon.WaterWeapon,
+		ToAir:           weapon.ToAirWeapon,
+		Ballistic:       weapon.Ballistic,
 		// A paralyzer slot rejects candidates that already carry the stunned
 		// mark [06 §3.2] check 5; every other weapon ignores it.
 		Paralyzer: weapon.Paralyzer,

@@ -74,20 +74,9 @@ func TestPT5_OrderedUnitsStillFire(t *testing.T) {
 		t.Skip("mission composed without both sides present")
 	}
 
-	if err := sess.EnqueueHumanCommand(session.HumanCommand{
-		Kind: session.HumanOrder,
-		Order: session.HumanOrderCommand{
-			Handles:  handles,
-			Code:     int(input.LatchAttack),
-			Target:   victim.Handle,
-			Position: orders.ResolvePos{X: victim.X, Y: victim.Y, Z: victim.Z},
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
 	step(30)
 
-	// Park a handful of the ordered shooters on the target, which is the
+	// Park a handful of the shooters on the target, which is the
 	// geometry the screenshot shows; the chase geometry that would walk them
 	// there is an open question in the order layer, not this package's.
 	//
@@ -101,10 +90,12 @@ func TestPT5_OrderedUnitsStillFire(t *testing.T) {
 	// collision and steer positions too makes the geometry this test names
 	// actually hold.
 	parked := 0
+	var parkedHandles []pool.Handle
 	for _, u := range sess.Units.IterSliced() {
 		if u == nil || !u.Alive || u.Owner != 0 || parked >= 6 || !u.SlotAt(0).IsPopulated() {
 			continue
 		}
+		parkedHandles = append(parkedHandles, u.Handle)
 		offset := numeric.FixedFromInt(int64(24 + 16*parked))
 		u.X = victim.X.Add(offset)
 		u.Z = victim.Z.Add(offset)
@@ -123,13 +114,49 @@ func TestPT5_OrderedUnitsStillFire(t *testing.T) {
 		t.Skip("no armed player unit to park")
 	}
 
+	// The order is issued AFTER the park, so it is the ORDERED path that is
+	// under test. `Attack_Chase` phase 1 runs the shot-admission gate of
+	// [06 §3.1] at the parked separation, and on success releases slots 0 and 2
+	// and binds slot p1 to the target [04 R-ORD-01 §3]. A slot an order holds
+	// has its autonomy bit clear [04 R-UNIT-06 §5 part 3], so nothing below
+	// depends on the autonomous scan of [06 §3.2] — neither on its per-unit
+	// round-robin cursor nor on which candidate its RNG scoring happens to
+	// pick. Issuing the order before the park, as this test did until WU-19-87,
+	// left the shooters hundreds of world units out: phase 1's gate refused,
+	// the record went to the maneuver and the kill came from whatever the
+	// autonomous scan picked instead, which is not what this test names.
+	if err := sess.EnqueueHumanCommand(session.HumanCommand{
+		Kind: session.HumanOrder,
+		Order: session.HumanOrderCommand{
+			Handles:  parkedHandles,
+			Code:     int(input.LatchAttack),
+			Target:   victim.Handle,
+			Position: orders.ResolvePos{X: victim.X, Y: victim.Y, Z: victim.Z},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	before := victim.Health
 	if before <= 0 {
 		t.Fatalf("target starts with no health")
 	}
+	orderBound := false
 	for i := 0; i < 600 && victim.Alive && victim.Health > 0; i++ {
 		scaled += 5
 		sess.Step(scaled)
+		if !orderBound {
+			orderBound = someSlotHoldsTargetUnderOrder(sess.Units.Unit(parkedHandles[0]), victim.Handle)
+			for _, h := range parkedHandles[1:] {
+				orderBound = orderBound || someSlotHoldsTargetUnderOrder(sess.Units.Unit(h), victim.Handle)
+			}
+		}
+	}
+	// The order must be what armed the shot. Without this the test passes on a
+	// build where the ordered binding never happens and a bystander's
+	// autonomously acquired shot kills the target instead.
+	if !orderBound {
+		t.Fatalf("%d parked shooters were ordered onto the target and no slot was bound to it under the order [04 R-ORD-01 §3]", parked)
 	}
 	if victim.Health >= before {
 		t.Fatalf("%d armed units adjacent to a hostile for 600 ticks took it from %d health to %d: nothing fired",
@@ -138,4 +165,28 @@ func TestPT5_OrderedUnitsStillFire(t *testing.T) {
 	if victim.Alive && !victim.Dying {
 		t.Fatalf("target survived at %d of %d health after 600 adjacent ticks", victim.Health, before)
 	}
+}
+
+// someSlotHoldsTargetUnderOrder reports whether any of the unit's three slots
+// holds `target` with its autonomy bit CLEAR — that is, bound by an order
+// rather than by the autonomous scan. The release verb clears the bit as the
+// attack handler binds the slot, and the scan requires it set
+// [04 R-UNIT-06 §5 part 3][06 §3.2][06 R-WPN-05 §3].
+func someSlotHoldsTargetUnderOrder(u *units.Unit, target pool.Handle) bool {
+	if u == nil {
+		return false
+	}
+	for i := 0; i < units.NumSlots; i++ {
+		s := u.SlotAt(i)
+		if s == nil || !s.IsPopulated() {
+			continue
+		}
+		if s.Flags&units.SlotFlagAutonomous != 0 {
+			continue // the scan owns this slot, not an order
+		}
+		if s.Target.Kind == units.TargetUnit && s.Target.Unit == target {
+			return true
+		}
+	}
+	return false
 }

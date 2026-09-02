@@ -98,8 +98,13 @@ const (
 	// through a single edge machine [04 R-UNIT-06 §2], which nanolathe models
 	// as units.Unit.Activated with units.Unit.SetActivationEdge as its one
 	// writer — the same bit the economy branch gate reads [05 R-PROD-01 §2].
+	// There is no init-cloak flag here either. A FlagInitCloak naming bit 14 of
+	// the instance flag word was raised by the completion transition on an
+	// `init_cloaked` product, from doc 04 §3.8's earlier mislabel of the
+	// transition's capability-bit-24 arm. Bit 24 is `isfeature` and bit 14 is
+	// the death latch, not a cloak posture [04 R-SPEC-01 §12][03 R-VIS-01 §6];
+	// the constant and its write are gone (RWU-19-26).
 	FlagCompleted     uint32 = 0x00002000 // completion marker in the instance flag word [R-P0-09]
-	FlagInitCloak     uint32 = 0x00004000 // init-cloak posture in the instance flag word [R-P0-09]
 	FlagStartBuilding uint32 = 1 << 2     // start-building edge [05]
 )
 
@@ -2119,9 +2124,27 @@ func (s *Service) applyCompletionPosture(product *units.Unit) {
 	if product.Def != nil && product.Def.ActivateWhenBuilt {
 		s.activate(product)
 	}
-	if product.Def != nil && product.Def.InitCloaked {
-		product.Flags |= FlagInitCloak
-		product.IsCloaked = true
+	// Capability bit 24 is `isfeature`, and its completion arm marks the product
+	// a feature stand-in: a DIRECT store of death-cause byte 7 plus the death
+	// latch, not a damage packet [04 R-SPEC-01 §12][06 §12.1]. It runs here,
+	// immediately after the `activatewhenbuilt` edge, which is where §12 places
+	// it in the completion order.
+	//
+	// Correction (RWU-19-26): this arm read `init_cloaked` and wrote
+	// `FlagInitCloak` plus the cloak-requested bit, on doc 04 §3.8's earlier
+	// mislabel of bit 24 as "the cloak/initial-posture handling". Bit 24 is
+	// `isfeature`; §3.8 is corrected in place. The completion transition never
+	// reads `init_cloaked` and never writes either cloak bit — `init_cloaked` is
+	// consumed once, by the unit constructor, which seeds the cloak-requested
+	// bit [05 R-ECO-01 §9][03 R-VIS-01 §6][units.Unit.InitEconomyState].
+	//
+	// Cause 7's credit branch is none and its attacker is not a packet field, so
+	// nothing writes LastDamageSide here; the finalizer's credit path does not
+	// read it for this cause [06 §12.1]. Severity is forced zero and the corpse
+	// nibble forced one, so the product becomes its authored Corpse.
+	if product.Def != nil && product.Def.IsFeature && s.World != nil {
+		product.LastDamageCause = uint8(combat.CauseFeatureConversion)
+		s.World.Destroy(product.Handle, units.DeathKilled) // direct latch, null attacker [06 §12.1]
 	}
 	product.Health = product.MaxHealth
 	// Completion releases mobile products but retains building-class products

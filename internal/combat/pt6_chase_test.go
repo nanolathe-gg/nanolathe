@@ -123,6 +123,22 @@ func TestPT6_OrderedAttackClosesAndKills(t *testing.T) {
 		t.Skip("lead shooter has no ranged primary")
 	}
 	if closest > reach {
+		// WU-19-90 closed the stall this arm used to skip on, so it fails now.
+		// That stall was: the goal phase 2 installs is one the mover already
+		// stands inside, so the search reports start-satisfied and raises only
+		// `0x100` — a bit every satisfied set masks out — and the empty
+		// publication that follows does not raise `0x40` either, because the
+		// goal answers "already there" [04 R-PATH-01 §4 step 6][04 R-PATH-01 §7].
+		// The `0x20` phase 3's `0x40E0` consumes is the follower's, and no
+		// arrival handle was bound for a chase, so it had no producer at all
+		// [04 R-MOV-03 §1][04 R-ORD-01 §0]. Report the phase and the satisfied
+		// word, because that is what separates a regression of that fix from a
+		// chase that is merely slow.
+		if n := chaseHeadOf(lead); n != nil {
+			t.Fatalf("ordered attackers never closed: nearest approach %d world units against a weapon range of %d "+
+				"(they started %d away); `Attack_Chase` sits in phase %d with satisfied=%#x against the 0x40E0 "+
+				"re-arm mask [04 R-ORD-01 §3]", closest, reach, startGap, n.Phase, n.Satisfied)
+		}
 		t.Fatalf("ordered attackers never closed: nearest approach %d world units against a weapon range of %d (they started %d away)",
 			closest, reach, startGap)
 	}
@@ -130,6 +146,20 @@ func TestPT6_OrderedAttackClosesAndKills(t *testing.T) {
 		t.Fatalf("ordered attackers closed to %d of %d range but never fired: target still at %d of %d health",
 			closest, reach, victim.Health, before)
 	}
+}
+
+// chaseHeadOf returns the unit's primary head record when it is an
+// `Attack_Chase`, and nil otherwise.
+func chaseHeadOf(u *units.Unit) *orders.Node {
+	q := orders.QueueForUnit(u)
+	if q == nil || q.LenPrimary() == 0 {
+		return nil
+	}
+	n := q.Primary()[0]
+	if n == nil || orders.DescriptorFor(n.ID).Name != "Attack_Chase" {
+		return nil
+	}
+	return n
 }
 
 // planarGap is the whole-world-unit planar separation, or -1 when either unit

@@ -180,6 +180,11 @@ type Service struct {
 	pendingAims   map[pendingKey]pendingAim // Aim dispatch tracking ON-04 [06 §3.3]
 	deathNotified map[pool.Handle]*units.Unit
 
+	// scanCursor is the autonomous target scan's persistent per-player
+	// round-robin cursor [06 §3.2]; service.go owns it. It is per-session state
+	// like the two maps above, not configuration.
+	scanCursor autonomousScanCursor
+
 	// Visibility is the per-session LOS predicate [03 §3.2] C8 [RS-P0-018].
 	// Moved from package-global combat.VisibilityHook to per-Service field for session isolation [INVARIANTS I1][I6][RS-P0-018].
 	Visibility func(viewer visibility.PlayerID, target visibility.Target) bool `json:"-"`

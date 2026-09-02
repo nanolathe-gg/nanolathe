@@ -114,7 +114,7 @@ func WithinCoverageSquare(shooterX, shooterZ, candX, candZ numeric.Fixed, covera
 type Candidate struct {
 	Handle   pool.Handle   // pool slot index, 0 null sentinel; iteration order is slot asc [06 §1.2] P0-10 (I1) [01 §6.1]
 	X, Z     numeric.Fixed // current world X/Z [06 §3.2] P0-10
-	Y        numeric.Fixed // reference/top height, compared against sea level via Y>sea<<16 [06 §3.1] P0-10 (I13)
+	Y        numeric.Fixed // current world Y; the height clauses take its whole-unit word plus ModelTop [06 §3.1] P0-10 (I13)
 	Category uint32        // decoded category bitset for this candidate [06 §3.1] P0-10
 	// CategoryMask is the compiled unit-ID membership mask. It is authoritative
 	// whenever CategoryMaskResolved is true; Category is retained only for old
@@ -134,9 +134,20 @@ type Candidate struct {
 	// [06 §3.1] P0-10. The bit is the sensor phase's 0x200 underwater-exempt marking (FriendlyMask alias).
 	Underwater     bool
 	UnderwaterSeen bool // 0x200 alias [06 §3.1] P0-10 [03 §3.4] P0-11
-	// AirTarget is the to-air target-status class, enforced when the slot
-	// requests it [06 §3.1] P0-10.
-	AirTarget bool
+	// ModelTop is the candidate definition's model total-height whole-unit
+	// word, the addend of the target height clause [06 §3.1][03 R-P0-18-A §1].
+	ModelTop int32
+	// MoverMode is the candidate's committed mover mode, the operand of the
+	// `toairweapon` clause: it must read exactly 2 [06 R-WPN-05 §1] clause 3
+	// [04 R-MOV-01 §8]. The `AirTarget` field that stood here carried the
+	// definition's `canfly` instead, which is a different question — a landed
+	// aircraft still carries `canfly` — and [02 R-KEYS-01 §2] recorded the
+	// operand as the one inference of `toairweapon`'s reader census until
+	// [06 R-WPN-05 §1] closed it on the mover mode.
+	MoverMode uint8
+	// Floater and CanHover are the candidate definition's capability-word A
+	// bits 19 and 12, read only by the water branch [04 R-SPEC-01 §0][06 §3.1].
+	Floater, CanHover bool
 	// Stunned carries the candidate's stunned mark. Exactly one gate reads it —
 	// a paralyzer weapon rejects a candidate already carrying it, check 5 of the
 	// picked-candidate order [06 §3.2] — and nothing else does: the mark is a
@@ -210,10 +221,15 @@ func selectPreferredWinner(bucket []Candidate, shooterX, shooterZ numeric.Fixed,
 // Shot-gate never tests radar/cloak/jammer per P0-10 NEGATIVE-BOUNDED.
 type Acquisition struct {
 	ShooterX, ShooterZ numeric.Fixed
-	// ShooterY is the shooter's top/reference height, tested against sea level
-	// on the non-water branch via Y > sea<<16 [06 §3.1] P0-10 [06 §3.3] P0-10.
+	// ShooterY is the shooter's world Y. The non-water branch tests its
+	// whole-unit word plus ShooterModelTop against the sea-level byte, strictly
+	// greater [06 §3.1] [06 R-WPN-05 §1].
 	ShooterY numeric.Fixed
-	// SeaLevel is the map's sea level in world units [03 §2.2] P0-10.
+	// ShooterModelTop is the shooter definition's model total-height whole-unit
+	// word, the addend of that clause [03 R-P0-18-A §1].
+	ShooterModelTop int32
+	// SeaLevel is the map's sea level in world units [03 §2.2] P0-10; the gate
+	// compares against its whole-unit byte.
 	SeaLevel numeric.Fixed
 	// Range is the weapon's ordinary fire range. Coverage is a SEPARATE scalar
 	// for projectile-target/interceptor behavior and is not this radius
@@ -230,24 +246,25 @@ type Acquisition struct {
 	// [06 R-DMG-01 §11].
 	Paralyzer bool
 
-	// WaterWeapon takes the water branch: the depth/type predicates and planar
-	// range, with no sea-level height requirement [06 §3.1] P0-10.
-	WaterWeapon bool
-	// WaterAdmit is the water branch's two candidate depth/type predicates.
-	// Water weapons skip height test and instead apply two candidate depth and
-	// type predicates via bands (wy/wt/wl/mb) per [04 §9.1] P0-10 P0-11.
+	// WaterWeapon takes the water branch: the target's `floater`/`canhover`
+	// pair and planar range, with no shooter-side, air or ballistic clause
+	// [06 §3.1] [06 R-WPN-05 §1] clause 1.
+	//
 	// The selecting bit is settled [06 R-WPN-05 §7]: BOTH admission gates —
 	// this acquisition-time one and the shot-time one of [06 §3.3] — branch on
 	// bit 16 of the weapon definition's flag word, the bit the parser writes
 	// for the authored key `waterweapon` [02 R-KEYS-01]. `noautorange` (bit 27)
 	// is read only by the expiry rule [06 §6.3][06 §7.3] and plays no part in
-	// admission. The candidate-side tests inside the branch read the UNIT
-	// definition's capability word A: `floater` (bit 19) and `canhover`
-	// (bit 12) [04 R-SPEC-01 §0].
-	WaterAdmit func(c Candidate) bool
+	// admission.
+	//
+	// The pair used to reach this gate only through an optional `WaterAdmit`
+	// closure, which nothing installed: every water weapon therefore admitted
+	// every candidate at any depth. The clauses are part of the gate proper now
+	// and read the candidate's own Floater/CanHover fields.
+	WaterWeapon bool
 
-	// ToAir requests the to-air target-status class [06 §3.1] P0-10: only candidates
-	// carrying that class are admitted.
+	// ToAir is the weapon's `toairweapon` flag [06 §3.1] P0-10: the candidate's
+	// committed mover mode must read exactly 2 [06 R-WPN-05 §1] clause 3.
 	ToAir bool
 
 	// Ballistic makes a ballistic solution a requirement of admission
@@ -304,31 +321,49 @@ func (a *Acquisition) directlyVisible(c Candidate) bool {
 	return a.Visible(c) // 4-point hull sampling [03 §3.2] P0-11
 }
 
-// admits runs acquisition-time physical admission in the established order
-// [06 §3.1] P0-10: heights against sea level via Y>sea<<16, the to-air class, the ballistic
-// solution via disc vs 0 exactly, then planar range inclusive dist²<=range².
+// admits runs acquisition-time physical admission — the unit-to-unit gate of
+// [06 §3.1], which [06 R-WPN-05 §1] and [06 R-WPN-05 §9] give as one routine
+// with these clauses in this order: the water branch's `floater`/`canhover`
+// pair, or the non-water branch's two whole-unit height clauses and the
+// `toairweapon` mover-mode test; then the ballistic solution; then planar range
+// LAST, inclusive dist² <= range².
+//
+// The height clauses used to be bare 16.16 compares of the raw positions
+// against sea level (`a.ShooterY <= a.SeaLevel || c.Y <= a.SeaLevel`). That is
+// a different predicate: retail truncates each end to its whole-unit word and
+// adds the definition's model top-height word before comparing against the
+// sea-level BYTE, so a hull sitting at or under the waterline is still admitted
+// whenever its model reaches above it, and a unit whose Y is one fraction above
+// sea level but whose model top is zero is not.
+//
+// unitToUnitAdmitsBeforeRange is shared with CanEngageSlotTarget so the gate
+// has exactly one body [06 R-WPN-05 §9].
 func (a *Acquisition) admits(c Candidate) bool {
-	if a.WaterWeapon {
-		// The water branch skips the sea-level height requirement entirely [06 §3.1] P0-10 P0-11.
-		if a.WaterAdmit != nil && !a.WaterAdmit(c) {
-			return false // two depth/type predicates via bands [04 §9.1] P0-11
-		}
-		return WithinRange(a.ShooterX, a.ShooterZ, c.X, c.Z, a.Range) // planar range inclusive P0-10
+	shooter := unitGateEnd{Y: wholeYWord(a.ShooterY), ModelTop: a.ShooterModelTop}
+	target := unitGateEnd{
+		Y:         wholeYWord(c.Y),
+		ModelTop:  c.ModelTop,
+		MoverMode: c.MoverMode,
+		Floater:   c.Floater,
+		CanHover:  c.CanHover,
 	}
-	// Non-water: both reference heights must be strictly above sea level Y > sea<<16 [06 §3.1] P0-10 [06 §3.3] P0-10.
-	if a.ShooterY <= a.SeaLevel || c.Y <= a.SeaLevel {
+	if !unitToUnitAdmitsBeforeRange(shooter, target, wholeYWord(a.SeaLevel), a.WaterWeapon, a.ToAir) {
 		return false
 	}
-	if a.ToAir && !c.AirTarget {
-		return false // to-air target-status class enforced when requested [06 §3.1] P0-10
-	}
-	if a.Ballistic {
+	if !a.WaterWeapon && a.Ballistic {
+		// The water branch tests no ballistic feasibility [06 §3.1].
 		if a.BallisticFeasible == nil || !a.BallisticFeasible(c) {
 			return false // discriminant vs 0 exactly, pi/4, trunc per [06 §3.3] P0-10
 		}
 	}
-	return WithinRange(a.ShooterX, a.ShooterZ, c.X, c.Z, a.Range) // [06 §3.3] P0-10 inclusive
+	return WithinRange(a.ShooterX, a.ShooterZ, c.X, c.Z, a.Range) // LAST clause [06 §3.1] P0-10 inclusive
 }
+
+// wholeYWord is retail's `(int16)(Y >> 16)` on a 16.16 world value — the same
+// truncation wholeY applies to a unit, for the operands this gate carries as
+// plain Fixed values [06 §3.1]. The map's sea level is stored as a byte and
+// reaches here as byte<<16, so the same conversion recovers it exactly.
+func wholeYWord(v numeric.Fixed) int32 { return int32(int16(v.Raw() >> 16)) }
 
 // rejectsStunned is check 5 of the picked-candidate order [06 §3.2]: "a
 // paralyzer weapon rejects a candidate already carrying the stunned bit". It is

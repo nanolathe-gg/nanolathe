@@ -160,28 +160,94 @@ func (s *Service) CanEngageSlotTarget(u *units.Unit, target *units.Unit, idx int
 	if terrain != nil {
 		sea = int32(terrain.SeaLevel)
 	}
-	if w.WaterWeapon {
-		if !target.Def.Floater && wholeY(target) > sea {
-			return false
-		}
-		if target.Def.CanHover && wholeY(target)+target.Def.ModelTop/2 > sea {
-			return false
-		}
-		return WithinRange(u.X, u.Z, target.X, target.Z, w.Range)
-	}
-	if wholeY(u)+u.Def.ModelTop <= sea {
+	if !unitToUnitAdmitsBeforeRange(gateEndForUnit(u), gateEndForUnit(target), sea, w.WaterWeapon, w.ToAirWeapon) {
 		return false
 	}
-	if wholeY(target)+target.Def.ModelTop <= sea {
-		return false
-	}
-	if w.ToAirWeapon && target.Move.Mode != airborneMoverMode {
-		return false
-	}
-	if w.Ballistic && !hasBallisticSolution(u, target, w, terrain) {
+	if !w.WaterWeapon && w.Ballistic && !hasBallisticSolution(u, target, w, terrain) {
 		return false
 	}
 	return WithinRange(u.X, u.Z, target.X, target.Z, w.Range)
+}
+
+// unitGateEnd carries one end's operands for the unit-to-unit acquisition and
+// order-installation gate [06 §3.1][06 R-WPN-05 §1]. Both ends contribute a
+// whole-unit Y word and a model top-height word; only the target end's medium
+// flags and committed mover mode are read.
+type unitGateEnd struct {
+	// Y is the whole-unit height word `(int16)(Y >> 16)` both height clauses
+	// compare, sign-truncated exactly as retail's 16.16 position word is
+	// [06 §3.1][06 R-WPN-05 §9].
+	Y int32
+	// ModelTop is the definition's model total-height whole-unit word — the
+	// word §3.1 calls `referenceHeight` and §1 `ModelTop` [03 R-P0-18-A §1].
+	ModelTop int32
+	// MoverMode is the committed mover mode, the operand of the `toairweapon`
+	// clause [04 R-MOV-01 §8][06 R-WPN-05 §1] clause 3.
+	MoverMode uint8
+	// Floater and CanHover are the unit definition's capability-word A bits 19
+	// and 12, the water branch's pair [04 R-SPEC-01 §0][06 §3.1].
+	Floater, CanHover bool
+}
+
+// gateEndForUnit reads one end's operands off a live unit. A unit with no
+// resolved definition contributes a zero model top and no medium flags, which
+// is a fixture case: retail units always have a definition.
+func gateEndForUnit(u *units.Unit) unitGateEnd {
+	if u == nil {
+		return unitGateEnd{}
+	}
+	end := unitGateEnd{Y: wholeY(u), MoverMode: u.Move.Mode}
+	if u.Def != nil {
+		end.ModelTop = u.Def.ModelTop
+		end.Floater = u.Def.Floater
+		end.CanHover = u.Def.CanHover
+	}
+	return end
+}
+
+// unitToUnitAdmitsBeforeRange is the ONE body of the unit-to-unit gate's
+// clauses that precede the ballistic solve — the gate [06 R-WPN-05 §9] names as
+// a single routine whose callers are the autonomous acquisition's per-candidate
+// test, the attack/guard order handlers and the cursor-shape chooser. Its
+// clauses, in [06 §3.1] / [06 R-WPN-05 §1] order:
+//
+//   - a **water weapon** tests the target alone: unless the target's definition
+//     carries `floater`, its whole-unit Y must not exceed the sea-level byte;
+//     and when it carries `canhover`, its whole-unit Y plus HALF its model top
+//     word must not exceed it either. Both compares are signed and reject on
+//     strictly greater. The branch then goes straight to range — no shooter
+//     test, no air test, no ballistic test;
+//   - a **non-water weapon** requires both ends out of the water:
+//     `(int16)Y + ModelTop > sea` on the shooter and on the target, each
+//     strictly greater;
+//   - a `toairweapon` additionally requires the target's committed mover mode
+//     to read exactly 2 [06 R-WPN-05 §1] clause 3.
+//
+// Range is NOT here: it is the gate's LAST clause and the callers apply it
+// after their own ballistic step, which is the order both sections give.
+func unitToUnitAdmitsBeforeRange(shooter, target unitGateEnd, sea int32, waterWeapon, toAir bool) bool {
+	if waterWeapon {
+		if !target.Floater && target.Y > sea {
+			return false
+		}
+		// `referenceHeight >> 1` — an arithmetic shift, not a truncating
+		// divide; the two agree for the non-negative model tops the model walk
+		// produces and the shift is what [06 §3.1] writes.
+		if target.CanHover && target.Y+(target.ModelTop>>1) > sea {
+			return false
+		}
+		return true
+	}
+	if shooter.Y+shooter.ModelTop <= sea {
+		return false
+	}
+	if target.Y+target.ModelTop <= sea {
+		return false
+	}
+	if toAir && target.MoverMode != airborneMoverMode {
+		return false
+	}
+	return true
 }
 
 // ShotTimeAdmitsPoint is the shot-time physical gate of [06 §3.3] asked against
@@ -266,8 +332,12 @@ func modelTop(u *units.Unit) int32 {
 const airborneMoverMode uint8 = 2
 
 // wholeY is the unit's world Y truncated to the whole-unit word the sea-level
-// comparisons use [06 §3.3].
-func wholeY(u *units.Unit) int32 { return int32(u.Y.Raw() >> 16) }
+// comparisons use — retail's `(int16)(Y >> 16)`, the signed high half of the
+// 16.16 position word [06 §3.1][06 R-WPN-05 §9]. Our Fixed is wider than
+// retail's 32 bits, so the int16 step is written out rather than implied by the
+// storage; it changes nothing inside a map's height range and keeps the compare
+// exact at the extremes.
+func wholeY(u *units.Unit) int32 { return int32(int16(u.Y.Raw() >> 16)) }
 
 // hasBallisticSolution reports whether the ballistic solver returns anything
 // other than its no-solution sentinel for this shooter/target pair; the gate

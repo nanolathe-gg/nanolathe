@@ -677,22 +677,32 @@ func (u *Unit) CloakCost() float32 {
 	return float32(u.Def.CloakCost)
 }
 
-// InitEconomyState clears the engine-state activation bit and the
-// cloak-requested bit at spawn [05 R-ECO-01 §9][P1-I04]. Neither is a
-// creation-time copy of a definition flag.
+// InitEconomyState clears the engine-state activation bit at spawn and seeds
+// the cloak-requested bit from the definition's `init_cloaked`
+// [05 R-ECO-01 §9][03 R-VIS-01 §6][P1-I04].
 //
-// Correction: this seeded `IsCloaked = Def.InitCloaked`. The cloak-requested
-// status bit is cleared at spawn along with its neighbours and has exactly two
-// runtime togglers — the `Cloak_On` and `Cloak_Off` order handlers, each
-// behind the definition's derived can-cloak capability [05 R-ECO-01 §9]
-// [05 R-PROD-01 §7]. `init_cloaked` is a separate definition flag whose
-// consumer is the INITIAL-POSTURE path: the build-completion transition's
-// capability arm, which writes the initial-posture byte and the unit's
-// init-cloak flag [04 §3.8], and the visibility predicate, which reads
-// `Def.InitCloaked` off the immutable definition directly and so is unaffected
-// by this change [03 R-VIS-01 §4 pass 5][03 R-VIS-01 §6]. Seeding the request
-// bit from it made every init-cloaked unit pay cloak upkeep from its first
-// settlement pass with no player ever asking for cloak.
+// Correction (RWU-19-26): this cleared the cloak-requested bit unconditionally,
+// on a reading of doc 05 that said the bit "is cleared at spawn along with its
+// neighbours" and that `init_cloaked`'s consumer was "the INITIAL-POSTURE path:
+// the build-completion transition's capability arm". Both halves were wrong and
+// both doc sentences have since been corrected in place. The constructor clears
+// the bit in an early masked store and then, in the same masked store that
+// copies the definition's two standing-order fields, ORs `init_cloaked` back
+// into it: an `init_cloaked` definition is cloak-requested from the tick it is
+// placed — as a nanoframe, with no player order, because the cloak debit block
+// sits outside the settlement's completion test and charges an unfinished unit
+// exactly like a finished one [05 R-ECO-01 §9]. There is no initial-posture
+// path; the completion transition's capability arm is `isfeature`
+// [04 R-SPEC-01 §12], and the only writers of the request bit besides this one
+// are the `Cloak_On` / `Cloak_Off` handlers and the save-game restore.
+//
+// Seam (pre-existing, deliberately not split here): retail carries two distinct
+// bits — the cloak-REQUESTED status bit this seeds, which is the debit gate's
+// first term [05 R-ECO-01 §9], and the INSTANCE cloaked bit that the
+// settlement's transition service sets only on a pass the owner actually paid
+// for, which is what the visibility predicate reads [03 R-VIS-01 §6][03 §3.2].
+// This build folds both onto Unit.IsCloaked, so a requested-but-unpaid cloak
+// reads as hidden here where retail would still show the unit.
 //
 // EVERY unit is created INACTIVE, with no definition key consulted. Neither
 // `onoffable` nor `activatewhenbuilt` is a creation-time copy of the bit:
@@ -721,7 +731,7 @@ func (u *Unit) InitEconomyState() {
 		return
 	}
 	u.Activated = false
-	u.IsCloaked = false
+	u.IsCloaked = u.Def.InitCloaked
 }
 
 // DeathHook is invoked exactly once per unit when the phase-2 slot finalizer
