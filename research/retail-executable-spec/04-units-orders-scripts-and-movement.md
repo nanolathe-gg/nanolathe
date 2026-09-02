@@ -636,6 +636,9 @@ raises over one AC01 mission run and a whole-army maximum displacement of 20
 world units, against 1,759 with the raise confined to the installing record.
 
 **Unknown — whether two records on one mover hold live payloads at once.**
+*(Closed 2026-09-02 in [R-ORD-01 §9], which also corrects the paragraph
+above: the controller holds one bound object and a rebind raises `0x80` on
+the displaced object's own record, whichever record that is.)*
 Because the payload is a record field, nothing in the traced material stops a
 stalled record and the record behind it from each holding one, while the mover
 itself has a single goal handle [04 §8.3]. Which payload then drives the mover,
@@ -3305,7 +3308,9 @@ waypoint); in every case set bit 15 on this record. Deadline 1; advance.
 Phase 1: clear the three slot targets; point goal at the goal with radius 0;
 deadline 15; gate = `0xE0`; advance. Phase 2: satisfied ∩ `0xE0` → phase = 1,
 *rotate*; a next patrol record exists → gate = 0, phase = 1, *wait*; else
-deadline `30 + RNG(30)`, phase = 1, return 4. Other: cancel-all. Bit 15 of
+deadline `30 + RNG(30)`, phase = 1, return 4. Other: cancel-all. *(The
+"next patrol record" arm is corrected in [R-ORD-01 §9]: it is the
+standing-fire scan and auto-engage issuer, not a successor test.)* Bit 15 of
 the static-mask copy is therefore the runtime *patrol-chain member* flag,
 set only here and read only by this setup.
 
@@ -3875,6 +3880,87 @@ carrying such values has invented them.
 radius" stays true as a description of what the field *holds* during phase 1;
 it must not be read as an input the issuer supplies. The correction to the
 anchor-pair bullet is recorded there.
+
+### Closed — one bound payload per mover, and where a rebind's `0x80` lands [R-ORD-01 §9] (2026-09-02)
+
+[R-ORD-01 §0] left one Unknown: "whether two records on one mover hold live
+payloads at once", which payload then drives the mover, and whether the
+handover is the `0x80` producer the outcome table calls "goal-handle detach
+or rebind". RWU-19-20 traced the record-level install/release helper of
+[R-ORD-01 §1] (the 2026-09-02 clarification there), both movement
+controllers' payload slots, and the bit-raise helper they call. **Established**
+throughout.
+
+**Two levels, one binding.** Every order record has its own payload field
+and owns the object in it; the unit's movement controller (the ground route
+follower, or the flight block) has **one** payload slot. Installing for a
+record does two things in order: (1) if the record's own field holds an
+object, hand the controller a null goal, then delete the record's object and
+clear the field; (2) if a new object was built, clear the record's pending
+bits `0x20`–`0x200`, hand the controller the new object, and store it in the
+record's field. Handing the controller any goal — null or new — makes the
+controller raise `0x80` on **the record that owns the object currently in
+its slot**, and replace the slot. The raise goes through the object: each
+goal object carries a reference to the record that created it, and the bit
+is ORed into *that* record's pending word.
+
+**So the answer is: two records can each hold a payload object, but only
+one is bound.** The controller's slot holds the object most recently
+installed by *any* record of that unit. The bound object alone is asked for
+arrival (the follower's per-tick service raises `0x20` on its owner,
+[R-MOV-03 §2]), alone arms the repath bit, and alone is the search's goal
+([R-PATH-01 §4] binds the working set's goal to the controller's slot). An
+object that has been displaced from the slot stays allocated and referenced
+by its record's field but is **inert**: no arrival, no route, no bits. It is
+deleted when its own record next installs or releases (step 1 above), and
+that step displaces whatever the controller holds *then* — raising `0x80` on
+that object's owner in turn.
+
+**The rebind is the "goal-handle detach or rebind" producer.** When record
+A installs while the controller holds record B's object, B's pending word
+receives `0x80` and A's own closing clear does not touch it; B observes the
+bit through whatever gate B is holding when the pump next reaches it. When A
+installs while the controller holds A's own previous object, the same raise
+lands on A and is cancelled by A's closing clear — that is the
+"never observable from an installer" case of [R-ORD-01 §0].
+
+**Correction — the 2026-08-31 paragraph of [R-ORD-01 §0].** That paragraph
+reads: "an installer writes `0x80` into the record it is installing for,
+and into no other record's pending word", and supports it with "a different
+record's payload field is not something installing for this record can
+reach". The second sentence is the error: the installer does not reach the
+other record's *field*, it reaches the *controller's slot*, and the raise
+follows the object in the slot to its owner — which is the other record
+whenever the other record installed last. The paragraph's behavioural
+argument does not hold either: it has "the pump walk[ing] on to the record
+behind" a record "stalled at gate `0xE0`", but §3.3 step 3 stops the walk at
+a gated record with nothing satisfied, so the record behind a stalled leg is
+never pumped and never installs. The measurement it cites (37,196 raises,
+20 world units of travel) was made on the reimplementation and describes the
+reimplementation's pump, not retail's. What that paragraph got right — the
+self-raise is cancelled by the closing clear, and `0x80` becomes visible
+through a detach from outside the record — stands. The reimplementation rule
+is the retail one: a single controller slot, and an install that displaces
+another record's object **must raise `0x80` on that record**
+(`internal/movement/goals.go`'s "deliberately raises no bit" is the
+divergence), with the pump stopping at a gated unsatisfied record as §3.3
+step 3 says.
+
+**Correction — the Patrol phase-2 arm of [R-ORD-01 §4] is the standing-fire
+scan, not a successor test.** That section's `Patrol` row reads: "a next
+patrol record exists → gate = 0, phase = 1, *wait*". The handler body has no
+read of the record chain at that point. The arm is: run the idle-arm target
+scan of [R-STANCE-01 §3] — which searches only when the standing **fire**
+field reads exactly 2 (fire at will), over `sightdistance` — and, when it
+returns a target, hand it to the auto-engage issuer of [R-STANCE-01 §4] with
+`force = 0` (the two-record maneuver form when the standing move field is 1,
+otherwise the single attack record; both head-inserted); when the issuer
+accepts, gate = 0, phase = 1, *wait* (code 3). The scan-and-engage is the
+"idle/loiter arm of `Patrol`" that [R-STANCE-01 §3] already lists among the
+scan's callers; [R-ORD-01 §4]'s label for it was wrong. The rest of the row
+— rotate on `0xE0`, otherwise the `30 + RNG(30)` re-arm with *hold* (4) —
+re-verifies. `internal/orders/patrol.go`'s successor test is the
+divergence; the engage arm belongs there.
 
 ### Closed — command resolution, exactly [R-ORD-02 §1] (2026-08-29)
 
@@ -7419,6 +7505,46 @@ aggregate; the fix is to classify each covered cell on its own pair and take the
 minimum tier (with the ring demotion of §3 item 1), leaving the per-cell commit
 validator as it is.
 
+### Closed — slope in the movement cost: the layer tier, and nothing else [R-SLOPE-01 §5] (2026-09-02)
+
+`internal/movement/profile.go` asked, separately from passability, how slope
+is sampled for movement **cost** — per cell or as a footprint aggregate, over
+which height pair, and what the cost formula takes as input. **Established
+by composition** of §2–§3 above with [R-PATH-01 §3], [R-MOV-01 §4] and
+[R-MOV-01 §5]; no new trace was needed.
+
+* **There is one sampling, and cost reads its result.** The search's only
+  slope-dependent term is [R-PATH-01 §3]'s `terrainTerm = (passability > 1)
+  ? 0 : 30`, and `passability` is the class layer's 2-bit value at the
+  candidate **anchor** cell. That value is §3 item 1's: the **minimum of the
+  per-cell tiers** over the `fx × fz` footprint, demoted from 3 to 1 when any
+  cell of the one-cell ring is below 3. The per-cell tier is §2's, computed
+  on **each cell's own derived pair** — `slope = hmax − hmin` as an 8-bit
+  subtraction of the cell's derived maximum and minimum bytes; medium split
+  `hmin < seaLevel` → the water pair (`BadWaterSlope`, `MaxWaterSlope`), else
+  the land pair (`BadSlope`, `MaxSlope`); `slope <= Bad` → 3, `slope > Max` →
+  0, otherwise 1. There is no separate cost sampling, no aggregate of heights
+  for cost, and no "max cardinal neighbour difference" anywhere.
+* **The cost formula's inputs** are therefore the tier alone: a step onto an
+  anchor whose stamped value is 1 (steep) costs 30 more than one onto 3
+  (clear) or 2 (unexplored); a stamped 0 is costed only when the cell carries
+  the ray-visited bit and then also pays the 30. The slope magnitude never
+  reaches the cost — a slope one above `Bad` and one equal to `Max` cost the
+  same 30. The "BadSlope tier is penalized but still passable" reading in the
+  marker is right: tier 1 is passable and costs 30.
+* **No slope term in the mover.** The speed update takes no terrain slope
+  input; what [R-MOV-01 §5] calls "slope speed penalties" is the pitch cap of
+  [R-MOV-01 §4], fed by the four-corner conform's pitch, and it applies to
+  non-`upright`, non-`floater` ground movers only.
+
+**Reimplementation rule.** Stamp the class layer per §3 item 1 (per-cell
+tiers on each cell's own pair, window minimum, ring demotion) and let the
+search read the anchor's stamped tier; the 30 is keyed on that tier. The
+per-cell helper in `internal/movement/profile.go` that takes the maximum
+cardinal neighbour difference, and the footprint aggregate behind it, are the
+sites to replace — they are the §4 divergence, now for cost as well as for
+passability.
+
 ### 6.2 Footprints and yard maps
 
 **Established fact:** Footprint dimensions are baked into profile terrain stamps. The path search validates the unit's center cell; it does not sweep a footprint at each path edge. Placement validation separately uses the unit yard map and footprint rectangle.
@@ -8730,6 +8856,29 @@ is a separate class whose repath poll returns zero unconditionally and whose
 has-waypoint answer is simply "a target object is installed". Its remaining
 slots mirror the ground follower's. Flight steering consumes the goal point
 directly (§10) and no A\* runs for it.
+
+### Closed — the point fill at zero count reads the follower's owner reference [R-PATH-01 §13] (2026-09-02)
+
+§7.3's last paragraph says the route export helper "performs no active-bit
+check, and a zero count selects index −1, reading adjacent non-point fields".
+`internal/movement/route.go` asked which field, and what value the read
+produces. **Established:**
+
+* The helper is the ground follower's *point fill*: for each of the `n`
+  triples requested it clamps the index to `count − 1`, and emits
+  `(X = point.x << 16, Y = 0, Z = point.z << 16)` from the packed 16-bit pair
+  at that index.
+* The follower's layout, in order: the controller's method table, the bound
+  goal payload ([R-ORD-01 §9]), the **owning unit's reference**, the twenty
+  packed 4-byte points, then the count and the flag bits of [R-MOV-01 §3].
+  Index −1 therefore lands on the owning-unit reference: X becomes its low
+  16 bits shifted into 16.16, Z its high 16 bits, Y zero.
+* That reference is a heap address. The value is not reproducible between
+  runs, so there is **no contract** to clone; and the read is unreachable
+  from the one reader this document names, because ground steering asks the
+  follower for a waypoint first and the has-waypoint bit is cleared below
+  two points ([R-MOV-01 §3]). A reimplementation returning a fixed zero
+  triple at zero count is not a divergence from anything observable.
 
 ### 7.4 Goals, build sites, and revalidation
 
@@ -10082,6 +10231,38 @@ Therefore:
 * The emergent deadlock timing is a Supported inference (§7); decider: the
   retail observation specified there.
 
+### Closed — the collision markers: yard-byte labels, the class byte's dispatch, and the clamp's form [R-COLL-01 §10] (2026-09-02)
+
+`internal/movement/collision.go` carried three `TODO(question)` markers from
+the P0-12 era. None needs a new trace; each is answered by a closure that
+landed after the marker was written, and this section names the answer so
+the markers can retire. **Established** throughout, by the sections cited.
+
+1. **Yard-byte labels.** The compiled yard byte's meaningful bits are the
+   three of [R-COLL-01 §4]: **bit 0** — the *structure-yard mark*, copied
+   into the cell's flag byte on stamp and cleared on clear, read by the
+   placement validator's bit-0 test ([R-P0-08]); **bit 1** — *selected while
+   the yard is open*; **bit 2** — *selected while the yard is closed*. Against
+   the yard-map letters: `o`, `f`, `w`, `G` carry both selection bits, `c`/`C`
+   only the closed bit, `O` only the open bit, `Y`/`y`/`.` neither. The "0x20 /
+   0x40" the marker asked about are not yard-byte values; nothing in the stamp
+   or the validator masks the yard byte with them.
+2. **The "mode gate" byte** is the definition's `bmcode` — the FBI key, stored
+   as a byte, that also selects the yard-map parse and sets flags bit 29 at
+   creation. Its dispatch in the shared validator is [R-COLL-01 §2]'s: `bmcode`
+   zero → the building class, validated by the yard-map placement validator
+   whatever the mode; otherwise a mode other than 1 returns legal without
+   scanning a cell; mode 1 runs the per-cell scan. There is no other reader of
+   the byte on the commit path.
+3. **The blocked clamp** is a per-axis **bound**, not a mask merge. With
+   `c = (f + 2·cachedCell) << 19` and `H = 0x7FFFF` ([R-COLL-01 §1]):
+   `X = min(max(proposedX, c.x − H), c.x + H)`, the same for Z, Y untouched —
+   two signed compares and two conditional loads per axis. The
+   "`(base & ~H) | (proposed & H)`" alternative the marker offered was never
+   the code's shape; the constant is a distance, half a cell minus one 16.16
+   unit, and the openta-go centre±band form the reimplementation chose is the
+   retail form.
+
 ### 8.3 Final-order arrival and the satisfied-bit handshake [R-P0-01]
 
 **Established fact [R-P0-01]:** Retail keeps three notions that must not be
@@ -10936,7 +11117,7 @@ until it re-enters.
 **Established fact:** Transport service lifecycle is exact for admission, carry,
 unload, pads, and death:
 
-*Admission.* `carrier, candidate` is admitted only if, in this order, none of these nine rejects fires: 1) candidate `cantbetransported` set; 2) carrier lacks `canload`; 3) carried-count (entries in the carrier cargo list whose parent equals the carrier) reaches carrier `transportcapacity` (count, not summed sizes; unauthored `0` therefore blocks loading); 4) carrier `transportsize` below candidate `FootPrintX` (signed compare, FootPrintX is the movement class footprint width); 5) candidate has no mover; 6) candidate committed mover mode is `2`, which is AIRBORNE, not "moving" — an airborne candidate is rejected (corrected below); 7) ground carrier (`canfly` clear) with candidate `MinWaterDepth >= 0`; 8) candidate `Y + modelTop` at or below `sea level × 65536` (submerged); 9) candidate landed-float field not exactly `0.0` (still under construction). Missing `transportcapacity` and `transportsize` default to `0`. The effective boarding range is the first enabled weapon slot's `range` (scanned via the weapon-slot enabled flag); shipped unarmed fallback is weapon record `0` (`NOWEAPON`, Range 16), so shipped unarmed pickup range is `16`. Ownership or alliance is not tested in this predicate, and the two command resolvers contain no alliance gate either (bounded-negative within them), so whether allied cross-owner commands are permitted remains an upstream command-layer question left open (`TODO(question)`).
+*Admission.* `carrier, candidate` is admitted only if, in this order, none of these nine rejects fires: 1) candidate `cantbetransported` set; 2) carrier lacks `canload`; 3) carried-count (entries in the carrier cargo list whose parent equals the carrier) reaches carrier `transportcapacity` (count, not summed sizes; unauthored `0` therefore blocks loading); 4) carrier `transportsize` below candidate `FootPrintX` (signed compare, FootPrintX is the movement class footprint width); 5) candidate has no mover; 6) candidate committed mover mode is `2`, which is AIRBORNE, not "moving" — an airborne candidate is rejected (corrected below); 7) ground carrier (`canfly` clear) with candidate `MinWaterDepth >= 0`; 8) candidate `Y + modelTop` at or below `sea level × 65536` (submerged); 9) candidate landed-float field not exactly `0.0` (still under construction). Missing `transportcapacity` and `transportsize` default to `0`. The effective boarding range is the first enabled weapon slot's `range` (scanned via the weapon-slot enabled flag); shipped unarmed fallback is weapon record `0` (`NOWEAPON`, Range 16), so shipped unarmed pickup range is `16`. Ownership or alliance is not tested in this predicate, and the two command resolvers contain no alliance gate either (bounded-negative within them), so whether allied cross-owner commands are permitted remains an upstream command-layer question left open (`TODO(question)`). *Closed 2026-09-02 — [R-AIR-01 §12]: no owner or alliance test exists anywhere on the load path; gate 7's word and its signed `>= 0` compare are stated there.*
 
 **Correction — reject 6 is "airborne", not "moving" [R-MOV-01 §8]
 (2026-08-28).** The earlier wording read "candidate committed mover mode is
@@ -11014,6 +11195,9 @@ altitude `cruisealt` — release order is exactly callback → detach →
 climb-away construction. Phase 3 emits event code 13 with no text payload and
 finishes. The placement validator therefore runs once before the final
 lowering command and again immediately before detach (double validation).
+*The empty-list exit is the executor's first statement and reads the
+cargo-list head, so a single-cargo unload completes through it on the visit
+after the release and never reaches phase 3 — [R-AIR-01 §13].*
 
 *Landing pads.* `QueryLandingPad` is a synchronous four-output query on the target script; candidates are tried strictly in order `0` through `3` and the first piece that is not carried and not already assigned to another unit (any unit whose attach-piece field equals the candidate) wins. With no pad the loiter/spiral heading step is used; no free pad among those tried keeps the order alive for a next-tick retry or the `30+rand(15)` delayed retry, while the established `Landing aborted - all pads are occupied` and `Landing failed` branches are distinct.
 
@@ -11807,8 +11991,8 @@ is removed from the list.
 
 **Unknown — nothing new.** All six questions closed. What remains open on
 the transport family is unchanged: the allied cross-owner command gate of
-§10.2's admission paragraph, and the carrier collision item of the Hover and
-VTOL list.
+§10.2's admission paragraph (closed 2026-09-02, [R-AIR-01 §12]), and the
+carrier collision item of the Hover and VTOL list.
 
 ### Closed — the damaged-aircraft base list [R-AIR-01 §11] (2026-09-02)
 
@@ -11860,6 +12044,94 @@ gathered by a sector-bucket visitor like the guard and repair candidates is
 withdrawn — no visitor runs, no bucket is walked, and allied players' pads
 are included only insofar as the registry of the owner's ally-group index
 files them as friendly.
+
+### Closed — the admission predicate re-read: no owner test anywhere on the load path, and gate 7's word [R-AIR-01 §12] (2026-09-02)
+
+RWU-19-20 re-read the nine-reject admission predicate of §10.2 statement by
+statement to settle the two `TODO(question)` markers on it. Everything here
+is **Established** by direct trace of the predicate body and of the
+definition loader's class-copy step, composed with [R-ORD-02 §1] and
+[07 R-CAM-01 §5]'s cursor rules where the text says so.
+
+**The predicate's inputs are exactly:** the candidate definition
+(`cantbetransported`, `FootPrintX`, the `MinWaterDepth` copy, the model
+total-height dword), the carrier definition (`canload`, `canfly`,
+`transportcapacity`, `transportsize`), the carrier's cargo list (a count of
+entries whose parent is the carrier), the candidate's mover pointer, the
+candidate's flags-word mode mirror, the candidate's Y, the map's sea-level
+byte, and the candidate's landed float. **No player, owner, side or
+diplomacy word is read** — the earlier "Ownership or alliance is not tested
+in this predicate" is re-verified against the whole body, and the nine
+rejects stand in the order §10.2 lists them, with reject 6 reading the
+flags-word mirror (the committed mode, [R-MOV-01 §8]) rather than the
+mover's own state byte.
+
+**Gate 7's word.** The value compared is the definition's own 16-bit signed
+copy of the movement class's `MinWaterDepth` — the same copy the mobile
+footprint validator's shallow gate reads ([R-COLL-01 §2]) and the same word
+`Park` tests for its `+3` ([R-FAC-02 §4]). The loader writes that copy from
+the resolved class record after the template pre-fill of [R-DOC04-A]; when
+the FBI names no resolvable class the copy comes from the scratch record the
+loader fills by parsing the FBI section's own movement keys on top of the
+template ([02 "Movement class record"]). The `minwaterdepth` key has no
+reader but that class parser, so there is no separate FBI-level override.
+The compare is **signed `>= 0`** — the predicate rejects when the word is
+not negative — so an authored `MinWaterDepth=0` is rejected by a ground
+carrier exactly as an authored 3 or 15 is, and only the template's −10000
+(or an authored negative value) passes. §10.2's "`MinWaterDepth >= 0`" was
+the right reading; the Nanolathe placeholder `> 0` is the divergence
+(`internal/movement/admission.go`).
+
+**The upstream question closes: alliance is not a gate on the load path.**
+[R-ORD-02 §1] resolves a pickup from the *carriable* arm of codes 1 and 2 —
+"carriable → `VTOL_Pickup` or `Ground_Pickup`" — and that arm carries no
+*hostile*/*friendly* qualifier, unlike the attack, reclaim, capture, assist,
+landing and follow arms around it. A hostile target reaches it whenever the
+hostile arms ahead of it do not claim the click (an unarmed transport that is
+neither `canreclamate` nor `cancapture`), and the interface's PICKUP latch
+"requires a carriable target" and nothing more ([07 R-CAM-01 §5]). Composed:
+**an allied or enemy unit that passes the nine rejects is loadable**; the
+only thing that keeps an enemy out of an armed transport's hold is that the
+attack arm resolves first. The `TODO(question)` in §10.2's admission
+paragraph and [R-AIR-01 §10]'s tail item are closed by this; what remains is
+whether the computer player's issuers ever build a pickup against a
+non-owned target, which is doc 08's and is not a gate.
+
+### Closed — the unload's empty-list exit is the first statement, so a single-cargo unload never reaches phase 3 [R-AIR-01 §13] (2026-09-02)
+
+`internal/movement/transport.go` carried a `TODO(question)` because §10.2's
+unload paragraph and [R-AIR-01 §10] item 4 seemed to contradict each other
+for a carrier holding one cargo: if the "cargo list already empty → done"
+exit precedes the phase switch unconditionally, the phase-2 release empties
+the list and phase 3 — the row that emits event code 13 — can never run.
+**Established, by re-reading the executor:** both texts are right about the
+code, and the consequence is retail's behaviour, not a contradiction to
+resolve in favour of one of them.
+
+* The exit is the executor's **first statement**, before the phase switch:
+  it tests the carrier's **cargo-list head pointer** — not a phase, not the
+  record's target reference, not a scratch "started" word — and returns
+  *complete* (5) when the head is null.
+* Phase 2 detaches the list head and returns *advance* (1). On the next
+  visit the list of a single-cargo carrier is empty, the exit fires, and the
+  record completes **without** event 13.
+* Phase 3 runs only when the list is still non-empty after the release —
+  a carrier that was holding two or more units. It emits event 13 and
+  completes. One `VTOL_Unload` record therefore releases exactly **one**
+  cargo — the list head, i.e. the most recently loaded unit ([R-UNIT-06 §3]
+  LIFO) — and ends; further cargo needs further unload records. Event 13 on
+  the air path is thus observable only on a multi-cargo carrier.
+
+The ground pair is different and unchanged: `Ground_Unload` phase 2 emits
+event 13 as soon as the cargo's carrier reference is no longer this carrier
+([R-AIR-01 §9]), so a single-cargo ground unload does fire it.
+
+**Correction to the reimplementation, not to the spec.** The Nanolathe
+placeholder guarded the exit with "the record's cargo reference is unset" so
+that phase 3 stayed reachable; retail has no such guard. The exit reads the
+list head on every visit; the record's target reference (bound in phase 0)
+is never consulted by it. `internal/movement/transport.go`'s marker is
+closed by deleting the guard.
 
 ### 10.3 Patrol and air construction orbit
 

@@ -3,6 +3,8 @@ package movement
 import (
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/combat"
+
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -30,7 +32,13 @@ func airBasePadDef(key string) *content.UnitDef {
 // aircraft and returns it.
 func spawnAirBasePad(t *testing.T, w *units.World, ter *world.Terrain, key string, x, z numeric.Fixed) *units.Unit {
 	t.Helper()
-	h, err := w.Create(airBasePadDef(key), 0, x, ter.HeightAt(x, z), z)
+	return spawnAirBasePadFor(t, w, ter, key, 0, x, z)
+}
+
+// spawnAirBasePadFor is spawnAirBasePad for a named owner slot.
+func spawnAirBasePadFor(t *testing.T, w *units.World, ter *world.Terrain, key string, owner uint8, x, z numeric.Fixed) *units.Unit {
+	t.Helper()
+	h, err := w.Create(airBasePadDef(key), owner, x, ter.HeightAt(x, z), z)
 	if err != nil {
 		t.Fatalf("create pad %s: %v", key, err)
 	}
@@ -48,6 +56,14 @@ func airBaseSeekFixture(t *testing.T) (*System, *units.World, *units.Unit, *rng.
 	sim := rng.NewSimulation(0x2f6b1c05)
 	orders.QueueForUnit(u).SetBinding(&orders.QueueBinding{SimRNG: &sim, Lookup: w.Unit})
 	return sys, w, u, &sim
+}
+
+// rebuildAirBases runs the registry's 30-tick rebuild once, which is the only
+// thing that refills the third list [06 §3.1][04 R-AIR-01 §11]. Tests call it
+// after arranging the world and NOT after mutating it, when the point is that
+// the snapshot went stale.
+func rebuildAirBases(sys *System, tick uint32) {
+	sys.BeginTick(tick - tick%combat.AirBaseRegistryPeriod)
 }
 
 // headIsLanding reports whether the queue head is a VTOL_Landing record — the
@@ -112,6 +128,7 @@ func TestAirBaseSeekRadiusAndListOrder(t *testing.T) {
 	near := spawnAirBasePad(t, w, sys.Terrain, "padnear", u.X+numeric.Fixed(200<<16), u.Z)
 	onEdge := spawnAirBasePad(t, w, sys.Terrain, "padedge", u.X+numeric.Fixed(r<<16), u.Z)
 	spawnAirBasePad(t, w, sys.Terrain, "padfar", u.X+numeric.Fixed((r+1)<<16), u.Z)
+	rebuildAirBases(sys, 30)
 
 	got := sys.airBaseCandidates(u)
 	want := []uint16{uint16(near.Handle), uint16(onEdge.Handle)}
@@ -152,6 +169,7 @@ func TestAirBaseSeekDrawsOncePerSuccessfulScan(t *testing.T) {
 		// RNG(1) has bound < 2 and returns 0 without a step [01 §7.1].
 		sys, w, u, sim := airBaseSeekFixture(t)
 		only := spawnAirBasePad(t, w, sys.Terrain, "padsingle", u.X+numeric.Fixed(300<<16), u.Z)
+		rebuildAirBases(sys, 30)
 		n := &orders.Node{Owner: u.Handle, DynamicGate: 0xE1}
 		before := sim.Draws()
 		if !sys.airFindBaseAndLand(u, n, sim, 1) {
@@ -175,6 +193,7 @@ func TestAirBaseSeekDrawsOncePerSuccessfulScan(t *testing.T) {
 		sys, w, u, sim := airBaseSeekFixture(t)
 		a := spawnAirBasePad(t, w, sys.Terrain, "padA", u.X+numeric.Fixed(300<<16), u.Z)
 		b := spawnAirBasePad(t, w, sys.Terrain, "padB", u.X+numeric.Fixed(600<<16), u.Z)
+		rebuildAirBases(sys, 30)
 		n := &orders.Node{Owner: u.Handle}
 		before := sim.Draws()
 		if !sys.airFindBaseAndLand(u, n, sim, 1) {
@@ -198,6 +217,7 @@ func TestAirToGroundRunsTheScanAndDiscardsIt(t *testing.T) {
 	sys, w, u, sim := airBaseSeekFixture(t)
 	spawnAirBasePad(t, w, sys.Terrain, "padclose", u.X+numeric.Fixed(300<<16), u.Z)
 	spawnAirBasePad(t, w, sys.Terrain, "padclose2", u.X+numeric.Fixed(600<<16), u.Z)
+	rebuildAirBases(sys, 30)
 
 	// The scan itself would offer both: this is a discard, not an empty list.
 	if got := sys.airBaseCandidates(u); len(got) != 2 {
@@ -219,5 +239,135 @@ func TestAirToGroundRunsTheScanAndDiscardsIt(t *testing.T) {
 	}
 	if headIsLanding(u) {
 		t.Fatal("AirToGround must not land a damaged attacker [04 R-AIR-01 §11]")
+	}
+}
+
+// TestAirBaseRegistryIsStaleBetweenRebuilds locks the cadence and the two
+// staleness consequences it buys [06 §3.1][04 R-AIR-01 §11].
+//
+// The third list is cleared and refilled only when the tick satisfies the
+// registry's 30-tick throttle. Between rebuilds the scan reads the snapshot,
+// and because it re-tests the three admission flags but never liveness:
+//
+//   - a pad that died inside the window is still offered — the landing order's
+//     own pad query is what rejects it later [04 R-AIR-01 §6];
+//   - a pad that finished building inside the window is not offered until the
+//     next rebuild.
+func TestAirBaseRegistryIsStaleBetweenRebuilds(t *testing.T) {
+	t.Run("a pad that died inside the window is still offered", func(t *testing.T) {
+		sys, w, u, _ := airBaseSeekFixture(t)
+		pad := spawnAirBasePad(t, w, sys.Terrain, "paddoomed", u.X+numeric.Fixed(300<<16), u.Z)
+		sys.BeginTick(30)
+		if got := sys.airBaseCandidates(u); len(got) != 1 || got[0] != pad.Handle {
+			t.Fatalf("after the rebuild the scan offers %v, want the one pad", got)
+		}
+
+		// The pad takes a lethal hit: its death latch is set. No rebuild runs,
+		// so its handle stays on the list, and the scan re-tests the three
+		// admission flags but not the latch [04 R-AIR-01 §11].
+		pad.Dying = true
+		for tick := uint32(31); tick < 60; tick++ {
+			sys.BeginTick(tick)
+		}
+		if got := sys.airBaseCandidates(u); len(got) != 1 || got[0] != pad.Handle {
+			t.Fatalf("inside the window the scan offers %v, want the dead pad still offered [04 R-AIR-01 §11]", got)
+		}
+
+		// The next rebuild drops it: membership at rebuild DOES test the alive
+		// bit and the death latch [06 §3.1].
+		sys.BeginTick(60)
+		if got := sys.airBaseCandidates(u); len(got) != 0 {
+			t.Fatalf("after the next rebuild the scan offers %v, want nothing [06 §3.1]", got)
+		}
+	})
+
+	t.Run("a pad completed inside the window is not offered yet", func(t *testing.T) {
+		sys, w, u, _ := airBaseSeekFixture(t)
+		pad := spawnAirBasePad(t, w, sys.Terrain, "padlate", u.X+numeric.Fixed(300<<16), u.Z)
+		pad.Remaining = 0.5 // still a nanoframe at the rebuild
+		sys.BeginTick(30)
+		if got := sys.airBaseCandidates(u); len(got) != 0 {
+			t.Fatalf("an unfinished pad is offered %v, want nothing [06 §3.1]", got)
+		}
+
+		pad.Remaining = 0 // finishes inside the window
+		for tick := uint32(31); tick < 60; tick++ {
+			sys.BeginTick(tick)
+		}
+		if got := sys.airBaseCandidates(u); len(got) != 0 {
+			t.Fatalf("a pad completed inside the window is offered %v, want nothing until the next rebuild [04 R-AIR-01 §11]", got)
+		}
+
+		sys.BeginTick(60)
+		if got := sys.airBaseCandidates(u); len(got) != 1 || got[0] != pad.Handle {
+			t.Fatalf("after the next rebuild the scan offers %v, want the finished pad", got)
+		}
+	})
+}
+
+// TestAirBaseRegistryFilesAlliedPads locks the rebuild's friendly test: the
+// candidate owner's one-directional alliance row toward the registry's ally
+// group [05 R-SHARE-01 §1][06 §3.1]. An ally's pad is a candidate; a pad whose
+// owner has not declared toward this group is not, even when this group has
+// declared toward it.
+func TestAirBaseRegistryFilesAlliedPads(t *testing.T) {
+	sys, w, u, sim := airBaseSeekFixture(t)
+	ally := spawnAirBasePadFor(t, w, sys.Terrain, "padally", 1, u.X+numeric.Fixed(300<<16), u.Z)
+	oneWay := spawnAirBasePadFor(t, w, sys.Terrain, "padoneway", 2, u.X+numeric.Fixed(600<<16), u.Z)
+
+	// Row A of `from` indexed by `toward`: only player 1 declares toward the
+	// aircraft's group 0.
+	orders.QueueForUnit(u).SetBinding(&orders.QueueBinding{
+		SimRNG: sim,
+		Lookup: w.Unit,
+		World: &orders.WorldQueryAdapter{
+			DeclaresAlliance: func(from, toward uint8) bool { return from == 1 && toward == 0 },
+		},
+	})
+	sys.BeginTick(30)
+
+	got := sys.airBaseCandidates(u)
+	if len(got) != 1 || got[0] != ally.Handle {
+		t.Fatalf("scan offers %v, want just the allied pad %d — the row read is the candidate owner's [05 R-SHARE-01 §1]", got, ally.Handle)
+	}
+	_ = oneWay
+}
+
+// TestStalePadIsOfferedThenRejectedByTheLandingOrder is the pair the staleness
+// exists to produce [04 R-AIR-01 §11]: the scan offers a pad whose death latch
+// was set inside the window, because it re-tests the three admission flags and
+// not the latch, and the landing order's own pad query is what refuses it
+// [04 R-AIR-01 §6] — the seek does not need to know the pad is gone.
+func TestStalePadIsOfferedThenRejectedByTheLandingOrder(t *testing.T) {
+	sys, w, u, sim := airBaseSeekFixture(t)
+	px, pz := world.CellToWorld(18), world.CellToWorld(8)
+	pad := spawnAirBasePad(t, w, sys.Terrain, "padstale", px, pz)
+	sys.EnsureUnit(pad)
+	sys.BeginTick(30)
+
+	// The pad dies. The list is not refilled, so the scan still offers it.
+	pad.Dying = true
+	offered := sys.airBaseCandidates(u)
+	if len(offered) != 1 || offered[0] != pad.Handle {
+		t.Fatalf("the scan offers %v, want the death-latched pad still offered [04 R-AIR-01 §11]", offered)
+	}
+
+	n := &orders.Node{Owner: u.Handle}
+	if !sys.airFindBaseAndLand(u, n, sim, 31) {
+		t.Fatal("the land branch must take a stale candidate [04 R-AIR-01 §11]")
+	}
+	head := orders.QueueForUnit(u).Primary()[0]
+	if head.Target != pad.Handle {
+		t.Fatalf("the landing record targets %d, want the stale pad %d", head.Target, pad.Handle)
+	}
+
+	// The death finalizer clears the slot. The landing order's entry guard is
+	// what aborts: the aircraft never parks on a pad that is gone.
+	pad.Alive = false
+	for tick := uint32(31); tick <= 400; tick++ {
+		runMovementTick(sys, tick, w)
+	}
+	if u.Attachment.Carrier == pad.Handle {
+		t.Fatal("the aircraft parked on a destroyed pad: the landing order's pad query did not refuse it [04 R-AIR-01 §6]")
 	}
 }

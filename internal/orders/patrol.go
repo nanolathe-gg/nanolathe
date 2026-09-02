@@ -58,6 +58,7 @@ package orders
 // whatsoever.
 
 import (
+	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
@@ -67,20 +68,17 @@ import (
 const statusArrived uint8 = 6
 
 // hasSuccessor reports whether a record has another record behind it in the
-// front segment. Two rows ask it: `Patrol` phase 2's "a next patrol record
-// exists" and `VTOL_Move` phase 2's "when this record has no successor"
-// [04 R-ORD-01 §4][04 R-ORD-02 §2]. The walk is over the ordered segment
-// slice, never a map (I1).
+// front segment. ONE row asks it: `VTOL_Move` phase 2's "when this record has
+// no successor", which decides whether the air move captions `Arrived`
+// [04 R-ORD-02 §2]. The walk is over the ordered segment slice, never a map
+// (I1).
 //
-// TODO(question): [04 R-ORD-01 §4] words `Patrol`'s test as "a next patrol
-// record exists" while [04 R-ORD-02 §2] words the air move's as "no
-// successor". Whether the patrol test additionally requires the successor to
-// carry the chain-member bit — or to share the descriptor — is not stated, and
-// the two readings differ only for a patrol with an unrelated order queued
-// behind it. The successor test is used for both, because it is the one the
-// record's own next link supports. A trace of the patrol phase-2 arm's read
-// (the record's next pointer alone, or a walk filtered by the mask bit) would
-// settle it [04 R-ORD-01 §4].
+// The marker that stood here asked whether `Patrol` phase 2's arm — worded in
+// [04 R-ORD-01 §4] as "a next patrol record exists" — needed the successor to
+// carry the chain-member bit. [04 R-ORD-01 §9] retires the question by
+// retiring the caller: the handler body has no read of the record chain at
+// that point at all, and the arm is the standing-fire scan (see patrolHandler
+// below). §4's label for it was wrong. The air move's wording is unaffected.
 func hasSuccessor(u *units.Unit, n *Node) bool {
 	q := QueueOfUnit(u)
 	if q == nil || n == nil {
@@ -126,8 +124,21 @@ func queuedMoveHandler(_ *units.Unit, n *Node, _ uint32, tick uint32) Code {
 // Row: phase 0: dead -> cancel-all; the patrol-chain setup; deadline 1;
 // advance. Phase 1: clear the three slot targets; point goal at the goal with
 // radius 0; deadline 15; gate = 0xE0; advance. Phase 2: satisfied ∩ 0xE0 ->
-// phase = 1, rotate; a next patrol record exists -> gate = 0, phase = 1, wait;
-// else deadline 30 + RNG(30), phase = 1, return 4. Other: cancel-all.
+// phase = 1, rotate; the standing-fire scan finds a target the auto-engage
+// issuer accepts -> gate = 0, phase = 1, wait; else deadline 30 + RNG(30),
+// phase = 1, return 4. Other: cancel-all.
+//
+// Corrected by [04 R-ORD-01 §9] (WU-19-68). [04 R-ORD-01 §4]'s row worded the
+// middle arm as "a next patrol record exists -> gate = 0, phase = 1, wait",
+// and this handler implemented it as a successor test. The handler body has no
+// read of the record chain at that point: the arm is the idle-arm target scan
+// of [04 R-STANCE-01 §3] — which searches only when the standing FIRE field
+// reads exactly 2, fire at will, over `sightdistance` — handed to the
+// auto-engage issuer of [04 R-STANCE-01 §4] with `force = 0`, and the wait is
+// taken only when the issuer ACCEPTS. That scan-and-engage is the "idle/loiter
+// arm of `Patrol`" §3 already lists among the scan's callers; §4's label for
+// it was wrong. `VTOL_Patrol` phase 2 already ran the same pair in the same
+// position, which is what the ground row was missing.
 //
 // The cycle is the rotate: an arrived record goes to the segment tail with its
 // phase set back to 1, so the record behind it — the next waypoint, or the
@@ -157,10 +168,17 @@ func patrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 			n.Phase = 1 // the next visit re-arms this waypoint's leg
 			return 6    // *rotate*: the record behind takes the head
 		}
-		if hasSuccessor(u, n) {
+		// The standing-fire scan and its issuer, in the section's own order and
+		// with the issuer's own acceptance as the condition [04 R-ORD-01 §9]
+		// [04 R-STANCE-01 §3][04 R-STANCE-01 §4]. Both gates live inside the
+		// pair: opportunityScan returns nothing unless the standing fire field
+		// is exactly 2, and autoEngage with force = 0 refuses a hold-fire or
+		// hold-position stance and refuses a target the resolver will not turn
+		// into an attack.
+		if target := opportunityScan(u); target != nil && autoEngage(u, target, false) {
 			n.DynamicGate = 0
 			n.Phase = 1
-			return 3 // *wait*: the pump arms bit 0 and its own 30..44 deadline
+			return 3 // *wait*: the spawned attack runs at the head
 		}
 		armDeadline(n, tick, 30+drawBelow(u, 30)) // the row's one draw (I4)
 		n.Phase = 1
@@ -356,14 +374,14 @@ func vtolPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Co
 		n.DynamicGate |= gateMoveOutcomes
 		// The low-health pad seek, in the section's own order: it runs after
 		// the leg's marker is armed and before the opportunity scan
-		// [04 R-ORD-02 §2]. The health test is the unsigned
-		// `health < (maxdamage >> 2) * 3` of [04 R-AIR-01 §7], the radius the
-		// same 0xF00 whole-unit square, and the draw is one RNG(count) over the
-		// candidate list — taken only when that list is non-empty, so an
-		// aircraft with no pad on its side consumes no random state
+		// [04 R-ORD-02 §2]. The health test is the one expression of
+		// [04 R-AIR-01 §11], the candidate set is the target registry's third
+		// list at its last rebuild, and the draw is one RNG(count) over the
+		// admitted vector — taken only when that vector is non-empty, so an
+		// aircraft with no pad in reach consumes no random state
 		// [04 R-ORD-01 §1][I4].
-		if u.Def != nil && u.Def.MaxDamage > 0 && health16(u) < uint32((u.Def.MaxDamage>>2)*3) {
-			if pads := scanAirBasePads(u, airBaseSeekRadius); len(pads) > 0 {
+		if combat.AirBelowThreeQuarters(u) {
+			if pads := airBasePads(u); len(pads) > 0 {
 				releaseGoalPayload(u, n)
 				if pad := pickCandidate(u, pads); pad != nil && spawnPatrolLanding(u, pad, tick) {
 					n.DynamicGate = 0
@@ -390,12 +408,6 @@ const (
 	airPatrolSetback       = 320
 	airPatrolArrivalRadius = 0x150
 )
-
-// airBaseSeekRadius is the 0xF00 whole-world-unit radius both low-health pad
-// seeks collect their candidates within — `VTOL_SeekAttack`'s and
-// `VTOL_Patrol`'s [04 R-AIR-01 §7][04 R-ORD-02 §2]. The comparison is on whole
-// unit squares, which on a stock map reaches any pad the side owns.
-const airBaseSeekRadius = 0xF00
 
 // installAirPatrolMarker builds `VTOL_Patrol`'s point marker and installs it
 // through the air seam.

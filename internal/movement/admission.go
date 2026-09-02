@@ -31,7 +31,17 @@ type AdmissionResult struct {
 //  9. candidate landed-float field not exactly 0.0 (still under construction)
 //
 // Missing transportcapacity and transportsize default to 0 [04 §10.2].
-// Ownership or alliance is not tested in this predicate [04 §10.2] TODO(question).
+//
+// No player, owner, side or diplomacy word is read anywhere on the load path
+// [04 R-AIR-01 §12]: the predicate's inputs are the candidate definition, the
+// carrier definition, the carrier's cargo list, the candidate's mover pointer,
+// its flags-word mode mirror, its Y, the map's sea-level byte and its landed
+// float — and nothing else. The command resolvers ahead of it carry no
+// alliance qualifier on the carriable arm either, so an allied OR enemy unit
+// that passes the nine rejects is loadable; what keeps an enemy out of an
+// armed transport's hold is that the attack arm of the resolver claims the
+// click first. The marker that stood here asked whether an upstream command
+// layer gated on alliance; it does not.
 func (s *System) CanTransport(carrierHandle, candidateHandle pool.Handle, w *units.World) AdmissionResult {
 	if s == nil || w == nil {
 		return AdmissionResult{Allowed: false, Reason: "nil system/world"}
@@ -125,17 +135,24 @@ func (s *System) CanTransport(carrierHandle, candidateHandle pool.Handle, w *uni
 		// If flight is active (mode 2), treat as moving.
 		return AdmissionResult{Allowed: false, Reason: "moving"}
 	}
-	// 7) ground carrier (canfly clear) with candidate MinWaterDepth >=0 [04 §10.2]
-	// A ground carrier cannot load a candidate whose movement record asks for
-	// standing water. Ship classes author MinWaterDepth 3/15 and are rejected;
-	// land classes carry the template MinWaterDepth −10000 [04 §6.1 R-DOC04-A]
-	// and pass. The spec words the gate as >=0, which would also reject the
-	// template's negative values' neighbours; the effective discriminator is
-	// the positive authored value.
-	// TODO(question): exact MinWaterDepth field interpretation for gate 7 [04 §10.2].
+	// 7) ground carrier (canfly clear) with candidate MinWaterDepth >= 0 [04 §10.2]
+	// The word compared is the definition's own signed 16-bit copy of the
+	// movement class's MinWaterDepth — the same copy the mobile footprint
+	// validator's shallow gate reads and the same word Park tests for its +3
+	// [04 R-AIR-01 §12]. Profile.MinWaterDepth is that copy: the compiler
+	// narrows it through storeInt16 from the resolved class record, or from the
+	// scratch record parsed on top of the template when the FBI names no
+	// resolvable class, and `minwaterdepth` has no reader but that parser.
+	//
+	// The compare is signed >= 0: the predicate rejects when the word is NOT
+	// negative, so an authored MinWaterDepth of 0 is rejected by a ground
+	// carrier exactly as an authored 3 or 15 is, and only the template's
+	// −10000 (or another authored negative) admits. The `> 0` that stood here
+	// was the placeholder reading, chosen when the marker beside it doubted
+	// the boundary; [04 R-AIR-01 §12] settles it as Established.
 	if !carrier.Def.CanFly {
 		prof := s.ProfileFor(candidateHandle)
-		if prof.MinWaterDepth > 0 {
+		if prof.MinWaterDepth >= 0 {
 			return AdmissionResult{Allowed: false, Reason: "ground carrier cannot load ship"}
 		}
 	}

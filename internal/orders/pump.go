@@ -264,6 +264,17 @@ type MovementGoalAdapter struct {
 	// RunAir is the queue-local air executor. Keeping it on the binding avoids
 	// a process-global runner when more than one session exists [04 §3.3].
 	RunAir AirLegRunner
+
+	// AirBases returns the ally group's row of the per-side target registry's
+	// third list — the damaged-aircraft base candidates of
+	// [06 §3.1 "the third list"] and [04 R-AIR-01 §11]. internal/movement holds
+	// the list and refills it on the registry's own 30-tick cadence; the two
+	// patrol rows that seek a pad ask the owner for it rather than keeping a
+	// second enumeration that could disagree, for the reason
+	// TransportAdmission gives above. The returned slice is the holder's
+	// storage and is read-only to this package; callers filter it with
+	// combat.ScanAirBaseList.
+	AirBases func(allyGroup uint8) []pool.Handle
 }
 
 // FeatureView is the value-only feature identity exposed to order scans. It
@@ -1564,7 +1575,13 @@ func (q *Queue) unlinkPrimary(n *Node) {
 // tail-yield or cancel-all). Primary specifics here: code 6 rotates to the
 // segment tail, code 7 is the exclusive whole-queue cancel, code 9's
 // last-record arm re-arms with RNG(30) [R-P0-01].
-// Returns false when the walk stops for this pump.
+//
+// Returns false when the walk stops for this pump. Note that §3.3 names exactly
+// one stop — step 3's gate test, applied to a record the walk reaches — and the
+// codes below that return false do so because the section's consequence list
+// says the pass ends there (code 7 returns, above-9 returns, code 9's
+// last-record arm and code 3 arm a wait). Code 3's is the one the section does
+// not settle; see the marker on that arm.
 func (q *Queue) applyPrimaryResultCode(n *Node, code Code, tick uint32) bool {
 	switch code {
 	case 0:
@@ -1576,6 +1593,32 @@ func (q *Queue) applyPrimaryResultCode(n *Node, code Code, tick uint32) bool {
 	case 3:
 		n.DynamicGate = 1                               // [04 §3.3] lowest gate bit
 		n.Deadline = int32(tick + 30 + q.randBelow15()) // [04 §3.3][I4] wait 30..44; the only arm drawing RNG(15)
+		// TODO(question): where does code 3's "continue" resume? [04 §3.3]'s
+		// table row reads "set the lowest gate bit, set the deadline to the
+		// current tick plus 30 plus a random value below 15, and continue —
+		// range 30 to 44", while the same section's step 3 reads "If the record
+		// has a nonzero gate mask and nothing in it is satisfied, the walk stops
+		// for this tick." The section never says which record the walk resumes
+		// at, and the two sentences compose differently depending on the answer:
+		//
+		//   - resuming at the SAME record, the gate this arm just armed has
+		//     nothing satisfied (the deadline is 30+ ticks out), so step 3 ends
+		//     the pass. That is the outcome this `return false` produces, and it
+		//     is what §3.3's own consequence list describes — "one pump call can
+		//     cascade a record through several phases in the same tick until a
+		//     waiting or blocked code appears", code 3 being the waiting code.
+		//     [04 R-FAC-02 §4] singles out code 2 as the code that "does NOT
+		//     stop the walk — the next record is visited in the same pass",
+		//     which would be unremarkable if code 3 behaved the same way.
+		//   - resuming at the NEXT record, the walk runs the record behind this
+		//     one in the same pass and only stalls on the following tick.
+		//
+		// The two differ for one tick per wait, and the difference is visible
+		// wherever a record behind a waiting one would install a goal or take a
+		// draw. Nothing is invented here: the outcome-preserving reading is kept
+		// and the divergence, if it is one, is bounded to that tick.
+		// What would settle it: whether the executable's pump loop reloads the
+		// list head or advances a cursor after this arm's shared draw epilogue.
 		return false
 	case 5, 8:
 		q.unlinkPrimary(n) // [04 §3.3][05 "Queue subtraction"]

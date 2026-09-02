@@ -11,6 +11,45 @@ import (
 
 const goalPendingMask uint32 = 0x20 | 0x40 | 0x80 | 0x100 | 0x200
 
+// raiseEvictedGoalRelease is the controller-slot half of an install
+// [04 R-ORD-01 §9]: handing the movement controller a goal — null or new —
+// makes it raise `0x80` on the record that owns the object the slot held, and
+// the raise follows the OBJECT to its owner, which need not be the record being
+// installed for.
+//
+// Both maps model the one slot: moveGoals for the ground route follower,
+// airOrders for the flight block, and each installer clears the other. An
+// installer calls this BEFORE its own closing clear of `0x20`-`0x200`, so a
+// record that displaces its own previous object has the self-raise cancelled
+// and a record that displaces another's leaves the bit standing on that other
+// record — the "goal-handle detach or rebind" producer of the movement
+// families' outcome table.
+//
+// One guard: a NULL owner handle names no controller. Records queued by the
+// mission-script interpreter of [04 §3.6] are constructed without their owner
+// field (`internal/mission/initial_mission.go` builds `orders.Node{}` with only
+// the goal triple), so every such record across every unit collides on the
+// single map entry at handle 0 — a Nanolathe representation artifact, not a
+// mover. Raising `0x80` there would carry the bit BETWEEN UNITS, which is not
+// what §9 describes: measured on AC01 it fired 4,963 times in 740 ticks and
+// retired 4,857 patrol legs that had not moved. The null key is skipped, and
+// the missing owner is a defect for the mission issuer to fix, not something
+// this raise should paper over.
+func (s *System) raiseEvictedGoalRelease(owner pool.Handle) {
+	if s == nil || owner == 0 {
+		return
+	}
+	// Unconditional, as §9 states it: the raise lands on the owner of whatever
+	// object the slot held, whether or not that is the installing record, and
+	// the installer's own closing clear of `0x20`-`0x200` cancels the self case.
+	if g := s.moveGoals[owner]; g != nil && g.order != nil {
+		g.order.Satisfied |= goalReleasedPending
+	}
+	if st := s.airOrders[owner]; st != nil && st.order != nil {
+		st.order.Satisfied |= goalReleasedPending
+	}
+}
+
 func (s *System) releaseGoalNode(n *orders.Node) {
 	if s == nil || n == nil {
 		return
@@ -37,40 +76,47 @@ func (s *System) ReleaseGoal(n *orders.Node) bool {
 
 // installGroundPayload publishes n's new goal payload [04 R-ORD-01 §1].
 //
-// The pending `0x80` an installer raises belongs to the record it is installing
-// FOR, never to another record. [R-ORD-01 §1] describes the goal payload as a
-// field of the record ("it reads and writes the record fields of §3.2: ... and
-// the goal payload"), and the four installers "first release the previous
-// payload (raising pending `0x80`) ... and finish by clearing pending bits
-// `0x20`-`0x200`" — so the self-raise is cancelled by the installer's own
-// closing clear and is never observable. A record OTHER than n keeps its own
-// payload field; nothing about installing for n detaches it [04 R-ORD-01 §0].
+// TWO LEVELS, ONE BINDING [04 R-ORD-01 §9]. Every order record has its own
+// payload field and owns the object in it, but the unit's movement controller —
+// the ground route follower here, the flight block on the air side — has ONE
+// payload slot. Installing for a record hands the controller a goal, and
+// handing the controller any goal, null or new, makes it raise `0x80` on THE
+// RECORD THAT OWNS THE OBJECT CURRENTLY IN ITS SLOT, then replace the slot. The
+// raise goes through the object: each goal object carries a reference to the
+// record that created it, and the bit is ORed into that record's pending word.
 //
-// Corrected 2026-08-31 (ground movement was frozen game-wide). This raised
-// `0x80` on the record that happened to hold the single per-mover payload slot
-// when it was not n. A patrol chain is several `Patrol` records on one mover:
-// the record ahead sits at phase 2 behind gate `0xE0` waiting for its leg's
-// verdict while the pump walks on to the record behind it, whose phase 1
-// installs its own point goal. The stolen-slot `0x80` then satisfied that
-// `0xE0` outright, and doc 04's path-outcome mapping for the movement families
-// maps a `Patrol` record's stale bit to code 6 — rotate to the tail with phase
-// reset to 1. Every leg therefore "arrived" on the tick it was armed and the
-// chain spun in place: over an AC01 run the raise fired 37,196 times and the
-// whole army's largest displacement was 20 world units. Retail patrols travel,
-// so the cross-record raise is disproved by the outcome table it feeds.
+// So two records on one mover can each hold a payload object, but only one is
+// BOUND. The bound object alone is asked for arrival, alone arms the repath
+// bit, and alone is the search's goal; a displaced object stays allocated and
+// referenced by its record's field but is inert. When record A installs while
+// the controller holds record B's object, B's pending word receives `0x80`;
+// when A installs over its own previous object, the same raise lands on A and
+// is cancelled by the closing clear below — which is why the bit is never
+// observable from an installer acting on itself.
 //
-// TODO(question): retail's payload is a record field, so two records on one
-// mover can each hold one; this build keeps a single per-mover slot, so
-// installing for n evicts another record's payload outright. That eviction is a
-// representation artifact of the single slot and deliberately raises no bit —
-// the evicted record reinstalls when its own phase 1 next runs. Whether retail
-// lets a non-head record's payload stay live alongside the head's, and what
-// drives the mover if so, is untraced [04 §8.3][04 R-ORD-01 §1]. A trace of the
-// goal-handle bind at the mover would settle it.
+// Corrected by [04 R-ORD-01 §9] (WU-19-68). The comment that stood here said
+// an installer "writes `0x80` into the record it is installing for, and into no
+// other record's pending word", on the argument that the payload is a field OF
+// the record and a different record's field is out of reach. The installer does
+// not reach the other record's field: it reaches the CONTROLLER'S SLOT, and the
+// raise follows the object in that slot to its owner. The behavioural argument
+// that comment offered — that a patrol chain would retire every leg on the tick
+// it was armed, because the pump walks past a record stalled at gate `0xE0` to
+// the records behind it — does not hold either: [04 §3.3] step 3 stops the walk
+// AT a gated record with nothing satisfied, so the record behind a stalled leg
+// is never pumped and never installs. The 37,196 raises measured on 2026-08-31
+// were measured on this reimplementation's pump, not retail's.
+//
+// The moveGoals and airOrders maps together are that single controller slot: a
+// unit is ground or air, and each installer clears the other side.
 func (s *System) installGroundPayload(owner pool.Handle, n *orders.Node, goal path.Goal, x, z numeric.Fixed) bool {
 	if s == nil || n == nil {
 		return false
 	}
+	// Handing the controller a goal raises `0x80` on the record that owns what
+	// the slot held [04 R-ORD-01 §9]. When that is n itself the closing clear
+	// below cancels it, which is the "never observable from an installer" case.
+	s.raiseEvictedGoalRelease(owner)
 	delete(s.moveGoals, owner)
 	if prior := s.airOrders[owner]; prior != nil {
 		s.releaseAirGoalForNode(owner, prior.order)
@@ -189,13 +235,11 @@ func worldCellCenter(c int32) numeric.Fixed { return numeric.Fixed(int64(c) << 2
 // flags supplied by the order seam; the constructor still establishes the
 // required point/follow family bits before optional flags are added.
 //
-// It carries the same rule as installGroundPayload above: the `0x80` an
-// installer raises belongs to the record being installed for, so evicting
-// another record from this build's single per-mover slot raises nothing
-// [04 R-ORD-01 §0][04 R-ORD-01 §1]. `VTOL_Patrol` is a record chain exactly as
-// `Patrol` is, and the outcome table gives it the same phase-per-satisfied-visit
-// advance, so the cross-record raise cycled an air patrol's waypoints without
-// flying them.
+// It carries the same rule as installGroundPayload above: the flight block is
+// the air controller and holds ONE payload slot, so installing displaces
+// whatever object the slot held and raises `0x80` on THAT object's own record
+// [04 R-ORD-01 §9]. When the displaced object is this record's own the closing
+// clear cancels the raise.
 func (s *System) InstallAirGoal(req orders.AirGoalRequest) bool {
 	if s == nil || req.Node == nil {
 		return false
@@ -207,6 +251,12 @@ func (s *System) InstallAirGoal(req orders.AirGoalRequest) bool {
 	if s.Flights[req.Owner] == nil {
 		return false
 	}
+	// The slot's current object is displaced, so its OWN record takes the
+	// `0x80` [04 R-ORD-01 §9]. installAirGoal's own raise is the self-raise —
+	// it writes the bit onto the installing record and then clears it — and
+	// cannot reach the other record, because the object it releases is reached
+	// through the flight block, not through a record field.
+	s.raiseEvictedGoalRelease(req.Owner)
 	if prior := s.airOrders[req.Owner]; prior != nil {
 		s.releaseAirGoalForNode(req.Owner, prior.order)
 	}
@@ -247,10 +297,11 @@ func (s *System) releaseAirGoalForNode(owner pool.Handle, n *orders.Node) {
 // Four families share the path.Goal interface [04 §7.2] C8:
 //   PointGoal, AnnulusGoal (stand-off), RectPerimeterGoal, and air-only goals.
 // Before this unit Annulus/Rect had zero callers; orbit/stand-off
-// degraded to PointGoal(0) [M-4]. This file wires the STRUCTURE with
-// placeholder values clearly marked where research does NOT establish a
-// constant; it does NOT invent constants. See citations and TODO(question)
-// markers below.
+// degraded to PointGoal(0) [M-4]. This file wires the STRUCTURE and invents no
+// constants: every radius it does not compute is the handler's own, installed
+// through the record's payload installers. The placeholder radii this paragraph
+// used to point at were deleted by WU-19-6 (see the note below), and no open
+// marker remains in this file.
 
 // Retired 2026-09-01 (WU-19-6): a placeholder-radius block stood here, holding
 // `placeholderGuardDefaultRaw = 20` (the guard standoff when p1 was zero) and

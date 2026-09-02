@@ -140,13 +140,20 @@ func simPtr(s *rng.Simulation) *rng.Simulation { return s }
 // latch set from the visitor's own answer — so a scan that reads the answer the
 // other way round is caught here rather than in a battle, where it truncated
 // every scan to the pool's first live slot.
+//
+// The whole-pool half used to be the air-base pad scan. WU-19-66 moved that one
+// off the enumerator — its candidates are the target registry's third list, not
+// a live-unit walk [04 R-AIR-01 §11] — so the repair-candidate scan, which
+// still walks every slot, stands in its place.
 func TestLiveUnitEnumeratorAnswersTheStopQuestion(t *testing.T) {
-	pad := &content.UnitDef{MaxDamage: 100, Builder: true, IsAirBase: true}
 	plain := &content.UnitDef{MaxDamage: 100}
 	actor := &units.Unit{Handle: 1, Owner: 0, Def: plain, Alive: true}
-	first := &units.Unit{Handle: 2, Owner: 0, Def: plain, Alive: true, X: numeric.Fixed(10 << 16)}
-	second := &units.Unit{Handle: 3, Owner: 0, Def: plain, Alive: true, X: numeric.Fixed(20 << 16)}
-	last := &units.Unit{Handle: 4, Owner: 0, Def: pad, Alive: true, X: numeric.Fixed(30 << 16), Activated: true}
+	first := &units.Unit{Handle: 2, Owner: 0, Def: plain, Alive: true, X: numeric.Fixed(10 << 16), Health: 50}
+	second := &units.Unit{Handle: 3, Owner: 0, Def: plain, Alive: true, X: numeric.Fixed(20 << 16), Health: 50}
+	last := &units.Unit{Handle: 4, Owner: 0, Def: plain, Alive: true, X: numeric.Fixed(30 << 16), Health: 50}
+	for _, u := range []*units.Unit{first, second, last} {
+		u.Move.Mode = 1 // the repair filter's committed mover mode [04 R-ORD-02 §4]
+	}
 	pool4 := []*units.Unit{actor, first, second, last}
 
 	var visited int
@@ -170,12 +177,12 @@ func TestLiveUnitEnumeratorAnswersTheStopQuestion(t *testing.T) {
 	BindQueue(actor, q)
 
 	visited = 0
-	pads := scanAirBasePads(actor, 0xF00)
-	if len(pads) != 1 || pads[0] != last {
-		t.Fatalf("pad scan = %v, want the pad in the last slot", pads)
+	damaged := scanRepairCandidates(actor, 0xF00)
+	if len(damaged) != 3 || damaged[2] != last {
+		t.Fatalf("repair scan = %v, want all three damaged movers with the last slot last", damaged)
 	}
 	if visited != len(pool4) {
-		t.Fatalf("pad scan visited %d slots, want the whole pool (%d)", visited, len(pool4))
+		t.Fatalf("repair scan visited %d slots, want the whole pool (%d)", visited, len(pool4))
 	}
 
 	visited = 0
@@ -187,5 +194,58 @@ func TestLiveUnitEnumeratorAnswersTheStopQuestion(t *testing.T) {
 	}
 	if got := sim.Draws(); got != 0 {
 		t.Fatalf("enumerator draws = %d, want none: neither scan draws", got)
+	}
+}
+
+// TestPatrolPadSeekOffersAlliedPads locks the correction WU-19-66 made to both
+// patrol rows' pad seek. The candidate set is the target registry's third list,
+// which the registry files by ALLY GROUP — a pad an ally owns is on this
+// aircraft's row whenever the pad owner's alliance declaration toward this
+// group is set [05 R-SHARE-01 §1][06 §3.1] — and the filter re-tests the three
+// admission flags but not liveness [04 R-AIR-01 §11]. The old walk over live
+// units with `candidate.Owner != u.Owner` could express neither.
+func TestPatrolPadSeekOffersAlliedPads(t *testing.T) {
+	padDef := &content.UnitDef{MaxDamage: 100, Builder: true, IsAirBase: true}
+	flierDef := &content.UnitDef{MaxDamage: 100, CanFly: true, BMCode: true}
+	flier := &units.Unit{Handle: 1, Owner: 0, Def: flierDef, Alive: true, Health: 50}
+
+	own := &units.Unit{Handle: 5, Owner: 0, Def: padDef, Alive: true, Activated: true}
+	ally := &units.Unit{Handle: 6, Owner: 1, Def: padDef, Alive: true, Activated: true}
+	// Death-latched since the last rebuild: still on the row, still offered.
+	dead := &units.Unit{Handle: 7, Owner: 1, Def: padDef, Alive: true, Dying: true, Activated: true}
+	// Deactivated since the last rebuild: the flags ARE re-tested, so it goes.
+	off := &units.Unit{Handle: 8, Owner: 1, Def: padDef, Alive: true, Activated: false}
+
+	slots := map[pool.Handle]*units.Unit{5: own, 6: ally, 7: dead, 8: off}
+	q := &Queue{binding: &QueueBinding{
+		Lookup: func(h pool.Handle) *units.Unit { return slots[h] },
+		Movement: &MovementGoalAdapter{
+			// The row the registry filed for ally group 0, in unit-array order.
+			AirBases: func(group uint8) []pool.Handle {
+				if group != 0 {
+					return nil
+				}
+				return []pool.Handle{5, 6, 7, 8}
+			},
+		},
+	}}
+	BindQueue(flier, q)
+
+	pads := airBasePads(flier)
+	want := []*units.Unit{own, ally, dead}
+	if len(pads) != len(want) {
+		t.Fatalf("pad seek offered %d pads, want %d (own, allied, death-latched) [04 R-AIR-01 §11]", len(pads), len(want))
+	}
+	for i := range want {
+		if pads[i] != want[i] {
+			t.Fatalf("pad seek offered %v, want own/allied/death-latched in list order [04 R-AIR-01 §11]", pads)
+		}
+	}
+
+	// No port composed: the seek offers nothing rather than re-deriving a
+	// second enumeration.
+	q.binding.Movement = nil
+	if got := airBasePads(flier); got != nil {
+		t.Fatalf("with no movement port the seek offered %v, want nothing", got)
 	}
 }

@@ -73,14 +73,16 @@ func TestBoundGoalShapesReplaceAndReleaseByNode(t *testing.T) {
 	if !s.InstallRectangleGoal(orders.RectangleGoalRequest{Owner: 1, Node: n2, CellX: 2, CellZ: 3, Width: 2, Depth: 2}) {
 		t.Fatal("rectangle payload was rejected")
 	}
-	// Corrected 2026-08-31: this asserted the opposite — that installing for n2
-	// raised the release bit on n1. An installer's `0x80` never leaves the record
-	// it is installing for [04 R-ORD-01 §0][04 R-ORD-01 §1]; the cross-record
-	// raise this locked froze every ground mover in the game, because a patrol
-	// leg's `0xE0` gate is satisfied by `0x80` outright (see installGroundPayload
-	// and TestInstallerPendingBitStaysOnTheInstallingRecord).
-	if n1.Satisfied&0x80 != 0 {
-		t.Fatal("another record's installer raised the release bit on the record it replaced")
+	// Corrected by WU-19-68 to [04 R-ORD-01 §9]: the controller holds ONE
+	// payload slot and installing for n2 displaces n1's object from it, so the
+	// `0x80` lands on n1 — the object's own record. (The 2026-08-31 text here
+	// asserted the reverse, on a reading of [R-ORD-01 §0] §9 corrects: the
+	// installer reaches the controller's slot, not another record's field.
+	// What keeps a patrol chain travelling is [04 §3.3] step 3, which stops the
+	// pump's walk AT the stalled leg so the record behind never installs —
+	// TestPatrollingGroundUnitsTravel is the standing proof.)
+	if n1.Satisfied&0x80 == 0 {
+		t.Fatal("the displaced record did not receive the rebind bit [04 R-ORD-01 §9]")
 	}
 	if s.ReleaseGoal(n1) != true || s.moveGoalPayload(1, n2) == nil {
 		t.Fatal("stale release detached successor payload")
@@ -110,11 +112,10 @@ func TestAirGoalUsesExistingFlightPayloadAndReleasesOnce(t *testing.T) {
 	if !s.InstallAirGoal(orders.AirGoalRequest{Owner: h, Node: n2, X: 4 << 16, Y: 5 << 16, Z: 6 << 16}) {
 		t.Fatal("replacement air payload was rejected")
 	}
-	// Corrected 2026-08-31 for the same reason as the ground case above: the air
-	// installer's `0x80` stays on the record it installs for
-	// [04 R-ORD-01 §0][04 R-ORD-01 §1].
-	if n1.Satisfied&0x80 != 0 {
-		t.Fatal("another record's air installer raised the release bit on the record it replaced")
+	// The flight block is the air controller and holds the same single slot, so
+	// the displaced record takes the same `0x80` [04 R-ORD-01 §9].
+	if n1.Satisfied&0x80 == 0 {
+		t.Fatal("the displaced record did not receive the rebind bit from the air installer [04 R-ORD-01 §9]")
 	}
 	if !s.ReleaseGoal(n1) || s.Flights[h].Command.Payload == nil {
 		t.Fatal("stale air release detached successor payload")

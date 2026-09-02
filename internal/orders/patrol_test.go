@@ -225,10 +225,11 @@ func TestAirPatrolInstallsItsMarker(t *testing.T) {
 
 // TestVTOLPatrolSeeksAPadOnlyWhenHurt locks `VTOL_Patrol` phase 2's low-health
 // pad seek [04 R-ORD-02 §2], whose candidate rule is the one [04 R-AIR-01 §7]
-// gives `VTOL_SeekAttack`: below three quarters of `maxdamage`
-// (`health < (maxdamage >> 2) * 3`, unsigned) the row collects this side's
-// activated air bases within 0xF00, releases the payload, draws one RNG(count)
-// and spawns `VTOL_Landing` at that pad at the head, gate 0, *restart*.
+// gives `VTOL_SeekAttack` and [04 R-AIR-01 §11] settles: below three quarters
+// of `maxdamage` ((uint)(int16)health < (maxdamage >> 2) * 3) the row filters
+// the target registry's third list to the activated air bases within 0xF00,
+// releases the payload, draws one RNG(count) and spawns `VTOL_Landing` at that
+// pad at the head, gate 0, *restart*.
 //
 // Both halves are asserted, because the draw is the half that moves every later
 // simulation draw if it is taken on the wrong visit (I4): a healthy aircraft
@@ -247,14 +248,13 @@ func TestVTOLPatrolSeeksAPadOnlyWhenHurt(t *testing.T) {
 		Handle: 8, Owner: flier.Owner, Def: padDef, Alive: true, Activated: true,
 		X: flier.X, Y: flier.Y, Z: flier.Z,
 	}
-	q.binding.World = &WorldQueryAdapter{
-		ForEachUnit: func(visit func(pool.Handle, *units.Unit) bool) {
-			for _, pad := range []*units.Unit{padA, padB} {
-				if visit(pad.Handle, pad) {
-					return
-				}
-			}
-		},
+	// The candidate set is the target registry's third list, which the movement
+	// system holds and refills on its own cadence, so the fixture supplies the
+	// list through the port rather than an enumerator [04 R-AIR-01 §11].
+	pads := map[pool.Handle]*units.Unit{padA.Handle: padA, padB.Handle: padB}
+	q.binding.Lookup = func(h pool.Handle) *units.Unit { return pads[h] }
+	q.binding.Movement = &MovementGoalAdapter{
+		AirBases: func(uint8) []pool.Handle { return []pool.Handle{padA.Handle, padB.Handle} },
 	}
 	landingID := Lookup("VTOL_Landing")
 	if landingID == 0 {
@@ -298,5 +298,99 @@ func TestVTOLPatrolSeeksAPadOnlyWhenHurt(t *testing.T) {
 	}
 	if got := q.Primary()[0].Target; got != padA.Handle && got != padB.Handle {
 		t.Fatalf("landing target = %d, want one of the two pads", got)
+	}
+}
+
+// TestPatrolPhaseTwoArmIsTheStandingFireScan locks the middle arm of ground
+// `Patrol`'s phase 2 as [04 R-ORD-01 §9] corrects it: the idle-arm target scan
+// of [04 R-STANCE-01 §3] handed to the auto-engage issuer of §4 with
+// `force = 0`, and the *wait* taken only when the issuer accepts.
+//
+// [04 R-ORD-01 §4]'s row worded this as "a next patrol record exists", and the
+// handler implemented a successor test. The handler body has no read of the
+// record chain at that point; §4's label was wrong.
+//
+// The scan's own gate is what the two cases contrast: it searches ONLY when the
+// standing fire field reads exactly 2, fire at will [04 R-STANCE-01 §3]. A
+// hold-fire patroller with the same enemy at the same distance never scans, so
+// it takes the row's other arm — the `30 + RNG(30)` re-arm with *hold* — and
+// spawns nothing. Nothing here asserts a successor either way: both cases run
+// with a second record queued behind, which under the retired reading would
+// have decided the outcome by itself.
+func TestPatrolPhaseTwoArmIsTheStandingFireScan(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		fireField uint32
+		wantCode  Code
+		wantSpawn bool
+	}{
+		{"fire at will engages", 2, 3, true},
+		{"hold fire does not", 0, 4, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			def := &content.UnitDef{BMCode: true, CanAttack: true, CanPatrol: true, SightDistance: 400, MaxDamage: 3000}
+			q, u := standingFixture(def)
+			u.Flags |= units.ArmedStatus
+			// Standing move field 2 and the fire field under test. autoEngage
+			// with force = 0 refuses a zero move field, so the move stance is
+			// held constant across both cases [04 R-STANCE-01 §4].
+			u.Flags = (u.Flags &^ (stanceFieldMask << stanceMoveShift)) | (2 << stanceMoveShift)
+			u.Flags = (u.Flags &^ (stanceFieldMask << stanceFireShift)) | (tc.fireField << stanceFireShift)
+
+			enemy := &units.Unit{
+				Handle: 2, Def: &content.UnitDef{BMCode: true, MaxDamage: 100}, Alive: true,
+				X: numeric.Fixed(120 << 16), Z: numeric.Fixed(90 << 16), Health: 100, MaxHealth: 100,
+			}
+			q.binding.Lookup = func(h pool.Handle) *units.Unit {
+				if h == enemy.Handle {
+					return enemy
+				}
+				return nil
+			}
+			q.binding.Weapons = &WeaponAdapter{
+				Acquire: func(_ *units.Unit, slot int, limit uint32) (pool.Handle, bool) {
+					if slot != 0 {
+						return 0, false
+					}
+					if limit != uint32(def.SightDistance) {
+						t.Fatalf("scan range limit %d, want the definition's sightdistance %d [04 R-STANCE-01 §3]", limit, def.SightDistance)
+					}
+					return enemy.Handle, true
+				},
+			}
+
+			// A leg at phase 2 with a second record behind it: under the retired
+			// successor reading the successor alone decided this.
+			patrol := Lookup("Patrol")
+			leg := q.PushHead(patrol, Node{Owner: u.Handle, Phase: 2, Deadline: -1})
+			q.Push(patrol, Node{Owner: u.Handle, Deadline: -1})
+			before := q.LenPrimary()
+
+			code := patrolHandler(u, leg, 0, 100)
+			if code != tc.wantCode {
+				t.Fatalf("phase 2 returned %d, want %d [04 R-ORD-01 §9]", code, tc.wantCode)
+			}
+			if leg.Phase != 1 {
+				t.Fatalf("phase 2 left the record at phase %d, want 1 — both arms reset it [04 R-ORD-01 §4]", leg.Phase)
+			}
+			spawned := q.LenPrimary() > before
+			if spawned != tc.wantSpawn {
+				t.Fatalf("queue length %d -> %d, want a spawned attack record: %v", before, q.LenPrimary(), tc.wantSpawn)
+			}
+			if tc.wantSpawn {
+				if leg.DynamicGate != 0 {
+					t.Fatalf("the accepted issue left gate %#x, want it cleared [04 R-ORD-01 §9]", leg.DynamicGate)
+				}
+				head := q.Primary()[0]
+				if head == leg {
+					t.Fatal("the spawned attack was not head-inserted [04 R-STANCE-01 §4]")
+				}
+				if head.Target != enemy.Handle {
+					t.Fatalf("the spawned record targets %d, want the scanned enemy %d", head.Target, enemy.Handle)
+				}
+			} else if leg.Deadline == -1 {
+				t.Fatal("the no-target arm did not arm its 30 + RNG(30) deadline [04 R-ORD-01 §4]")
+			}
+		})
 	}
 }

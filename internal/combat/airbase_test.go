@@ -136,3 +136,79 @@ func TestScanAirBaseListOrderFlagsAndLiveness(t *testing.T) {
 		}
 	}
 }
+
+// TestAirBaseRegistryRebuildCadence locks the holder's throttle: the third list
+// is cleared and refilled only on ticks satisfying
+// `tick % AirBaseRegistryPeriod == 0` [06 §3.1], which is what makes a scan
+// between rebuilds read a stale snapshot [04 R-AIR-01 §11].
+func TestAirBaseRegistryRebuildCadence(t *testing.T) {
+	var reg AirBaseRegistry
+	first := pad(1, 0, 0, 0)
+
+	// Before any rebuild the row is empty, as retail's registry is until its
+	// first walk.
+	if got := reg.List(0); len(got) != 0 {
+		t.Fatalf("row 0 before the first rebuild is %v, want empty [06 §3.1]", got)
+	}
+
+	// An off-cadence tick does nothing at all.
+	reg.Rebuild(29, []*units.Unit{first}, nil)
+	if got := reg.List(0); len(got) != 0 {
+		t.Fatalf("tick 29 refilled the row (%v); the throttle is tick %% %d == 0 [06 §3.1]", got, AirBaseRegistryPeriod)
+	}
+
+	reg.Rebuild(30, []*units.Unit{first}, nil)
+	if got := reg.List(0); len(got) != 1 || got[0] != first.Handle {
+		t.Fatalf("row 0 after the rebuild is %v, want [1]", got)
+	}
+
+	// The member leaves the world; every tick short of the next multiple keeps
+	// the stale row.
+	first.Dying = true
+	for tick := uint32(31); tick < 60; tick++ {
+		reg.Rebuild(tick, []*units.Unit{first}, nil)
+	}
+	if got := reg.List(0); len(got) != 1 {
+		t.Fatalf("row 0 inside the window is %v, want the stale entry kept [04 R-AIR-01 §11]", got)
+	}
+	reg.Rebuild(60, []*units.Unit{first}, nil)
+	if got := reg.List(0); len(got) != 0 {
+		t.Fatalf("row 0 after the next rebuild is %v, want empty: the death latch is tested at rebuild [06 §3.1]", got)
+	}
+
+	// An out-of-range ally group is nil, not a panic.
+	if got := reg.List(99); got != nil {
+		t.Fatalf("row 99 is %v, want nil", got)
+	}
+}
+
+// TestAirBelowThreeQuartersIsOneExpression locks the shared health test
+// [04 R-AIR-01 §11]. It is the single spelling the six air legs and the two
+// patrol rows use, so its boundary lives with it.
+func TestAirBelowThreeQuartersIsOneExpression(t *testing.T) {
+	u := &units.Unit{Def: &content.UnitDef{MaxDamage: 100}} // (100 >> 2) * 3 == 75
+	u.Health = 75
+	if AirBelowThreeQuarters(u) {
+		t.Fatal("the compare is strict [04 R-AIR-01 §11]")
+	}
+	u.Health = 74
+	if !AirBelowThreeQuarters(u) {
+		t.Fatal("one below three quarters is below three quarters [04 R-AIR-01 §11]")
+	}
+	// The quarter is a truncating shift taken before the multiply: (102>>2)*3
+	// is 75, where 102*3/4 would be 76.
+	u.Def = &content.UnitDef{MaxDamage: 102}
+	u.Health = 75
+	if AirBelowThreeQuarters(u) {
+		t.Fatal("the quarter is a truncating shift of MaxDamage [04 R-AIR-01 §11]")
+	}
+	// Sign-extended, then unsigned: an overkilled unit is not below anything.
+	u.Def = &content.UnitDef{MaxDamage: 100}
+	u.Health = -1
+	if AirBelowThreeQuarters(u) {
+		t.Fatal("negative health sign-extends and compares unsigned [04 R-AIR-01 §11]")
+	}
+	if AirBelowThreeQuarters(&units.Unit{Health: 0}) {
+		t.Fatal("with no MaxDamage there is no threshold [04 R-AIR-01 §11]")
+	}
+}

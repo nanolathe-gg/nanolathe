@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/cob"
+	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/model"
 
@@ -89,6 +90,15 @@ type System struct {
 	tickStarted bool
 	tick        uint32
 	tickCarried map[pool.Handle]struct{}
+
+	// airBases is the per-side target registry's third list — the
+	// damaged-aircraft base candidates of [06 §3.1 "the third list"] and
+	// [04 R-AIR-01 §11]. Unlike tickCarried it is NOT per-tick: it is refilled
+	// on the registry's own 30-tick cadence and deliberately read stale in
+	// between, which is the behavior. BeginTick drives the rebuild so the
+	// snapshot is taken at a tick boundary rather than at whichever aircraft
+	// happens to scan first.
+	airBases combat.AirBaseRegistry
 
 	// pathFailures is a publication diagnostic only. It never gates, counts, or
 	// schedules recovery; WantsRepath/LastRequestTick on Route own that state
@@ -2377,6 +2387,43 @@ func (s *System) BeginTick(tick uint32) {
 			}
 		}
 	}
+	// The target registry's third list, on its own cadence — the call is made
+	// every tick and Rebuild itself applies the 30-tick throttle, so the
+	// snapshot lands on a tick boundary [06 §3.1][04 R-AIR-01 §11].
+	if w != nil {
+		s.airBases.Rebuild(tick, w.Iter(), s.diplomacyRows())
+	}
+}
+
+// diplomacyRows is the one-directional alliance row read the registry rebuild
+// needs [05 R-SHARE-01 §1]. A session composes exactly one order binding and
+// installs it on every unit's queue, so the first queue that carries one is the
+// session's; the movement system holds no economy handle of its own. Nil when
+// no binding is composed yet, in which case the rebuild treats only the ally
+// group's own units as friendly.
+func (s *System) diplomacyRows() func(from, toward uint8) bool {
+	if s == nil || s.world == nil {
+		return nil
+	}
+	for _, u := range s.world.Iter() {
+		b := airBinding(u)
+		if b == nil || b.World == nil || b.World.DeclaresAlliance == nil {
+			continue
+		}
+		return b.World.DeclaresAlliance
+	}
+	return nil
+}
+
+// AirBaseList is the read side of the third list, for the ally group's own
+// index [06 §3.1][04 R-AIR-01 §11]. internal/orders reaches it through the
+// movement goal port rather than keeping a second enumeration that could
+// disagree with this one — the same reason TransportAdmission is a port.
+func (s *System) AirBaseList(allyGroup uint8) []pool.Handle {
+	if s == nil {
+		return nil
+	}
+	return s.airBases.List(allyGroup)
 }
 
 // EndTick clears per-tick shared indexing and performs post-sweep work that

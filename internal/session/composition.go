@@ -617,6 +617,9 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 	if s.Movement != nil {
 		movementGoals.Ready = func() bool { return s.Movement != nil }
 		movementGoals.RunAir = s.Movement.AirLegRunner()
+		// The target registry's third list, held and rebuilt by the movement
+		// system [06 §3.1][04 R-AIR-01 §11].
+		movementGoals.AirBases = s.Movement.AirBaseList
 		movementGoals.InstallPoint = func(req orders.PointGoalRequest) bool {
 			if req.Node == nil {
 				return false

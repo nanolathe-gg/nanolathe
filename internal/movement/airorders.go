@@ -1566,90 +1566,46 @@ func airPlanarDistance(ax, az, bx, bz numeric.Fixed) int64 {
 }
 
 // airBelowThreeQuarters is the health test the six base-seeking air legs share
-// [04 R-AIR-01 §7][04 R-AIR-01 §8][04 R-ORD-02 §3], written out exactly by
-// [04 R-AIR-01 §11] as
-//
-//	(uint)(int16)health < (MaxDamage >> 2) * 3
-//
-// — the 16-bit health field sign-extended and compared unsigned against three
-// quarters of the definition's `MaxDamage`, the quarter formed by a truncating
-// shift, strict.
-//
-// Corrected 2026-09-02 (WU-19-60). The previous form clamped a negative health
-// to zero before the unsigned compare, so an overkilled aircraft read as fully
-// damaged and sought a pad; retail's sign extension makes it read as a very
-// large unsigned value and *not* seek one. It also fell back to the instance's
-// MaxHealth when the definition word was absent, which is not the operand
-// [04 R-AIR-01 §11] names; with no definition word there is no threshold and
-// the leg does not take the branch.
-func airBelowThreeQuarters(u *units.Unit) bool {
-	if u == nil || u.Def == nil || u.Def.MaxDamage <= 0 {
-		return false
-	}
-	return uint32(int32(int16(u.Health))) < uint32((u.Def.MaxDamage>>2)*3)
-}
+// [04 R-AIR-01 §7][04 R-AIR-01 §8][04 R-ORD-02 §3]. The expression itself lives
+// in internal/combat beside the list it gates, so the air legs and the two
+// patrol rows of [04 R-ORD-02 §2] and [04 R-ORD-01 §7] share one spelling of it
+// [04 R-AIR-01 §11].
+func airBelowThreeQuarters(u *units.Unit) bool { return combat.AirBelowThreeQuarters(u) }
 
 // airBaseCandidates is the "collect the base candidates within `0xF00` for my
 // side" scan of [04 R-AIR-01 §11], which `VTOL_SeekAttack` phase 1,
-// `VTOL_SeekGuard` phase 1, `AirStrike` phase 6, `AirToGroundHover` phase 3 and
-// `VTOL_RepairPatrol` phase 1 run when the aircraft is below three quarters
-// health, and whose non-empty result pushes a `VTOL_Landing` order at one
-// candidate drawn from it. `AirToGround` runs the same scan and frees the
-// result unused.
+// `VTOL_SeekGuard` phase 1, `AirStrike` phase 6, `AirToGroundHover` phase 3,
+// `VTOL_Patrol` phase 2 and `VTOL_RepairPatrol` phase 1 run when the aircraft
+// is below three quarters health, and whose non-empty result pushes a
+// `VTOL_Landing` order at one candidate drawn from it. `AirToGround` runs the
+// same scan and frees the result unused.
 //
 // It is not a sector visitor: the candidate set is the per-side target
-// registry's **third list** [06 §3.1 "the third list"], and this is its filter.
-// The list holds every fully built friendly unit whose definition carries both
-// `builder` and `isairbase` and whose activation bit is set, in unit-array
-// order; the filter re-tests those three flags, admits at planar
-// `(dx² >> 32) + (dz² >> 32) <= 0xF00²` inclusive, and pushes in list order.
-// Both halves live in internal/combat next to the registry they belong to.
+// registry's **third list** [06 §3.1 "the third list"], held on this system and
+// refilled on the registry's 30-tick cadence by BeginTick. This is its filter —
+// re-test the three admission flags but not liveness, admit at planar
+// `(dx² >> 32) + (dz² >> 32) <= 0xF00²` inclusive, push in list order.
 //
-// TODO(T25): retail refills the third list once every
-// combat.AirBaseRegistryPeriod ticks, so a real scan reads a list up to thirty
-// ticks stale — it can still offer a pad that has since died (the landing
-// order's own pad query rejects it, [04 R-AIR-01 §6]) and cannot yet offer one
-// completed inside the window. Holding that list across ticks needs a field on
-// the movement System, and internal/movement/integrate.go is owned by another
-// work unit this session; until it can take one, the list is rebuilt at the
-// instant of the scan, which is the same set with zero staleness. The scan
-// filter, the draw and the callers are unaffected.
+// Reading the snapshot rather than the live world is the behavior, not a
+// shortcut: a pad that died inside the window is still offered here and is
+// rejected by the landing order's own pad query [04 R-AIR-01 §6], and a pad
+// that finished building inside the window is not offered until the next
+// rebuild.
 func (s *System) airBaseCandidates(u *units.Unit) []pool.Handle {
 	if s == nil || u == nil {
 		return nil
 	}
-	list := combat.RebuildAirBaseList(s.airUnitArray(u), u.Owner, s.airDeclaresAlliance(u))
+	list := s.airBases.List(u.Owner)
 	if len(list) == 0 {
 		return nil
 	}
 	return combat.ScanAirBaseList(u.X, u.Z, list, s.airUnitLookup(u))
 }
 
-// airUnitArray returns the live unit array in slot-ascending order — the order
-// the registry rebuild walks it in [06 §3.1] (I1). The bound units world is the
-// direct source; a System driven only through the order binding (which is how
-// the order-facing tests compose one) falls back to the binding's own
-// pool-ordered enumerator.
-func (s *System) airUnitArray(u *units.Unit) []*units.Unit {
-	if s != nil && s.world != nil {
-		return s.world.Iter()
-	}
-	b := airBinding(u)
-	if b == nil {
-		return nil
-	}
-	var out []*units.Unit
-	b.ForEachUnit(func(_ pool.Handle, cand *units.Unit) bool {
-		if cand != nil {
-			out = append(out, cand)
-		}
-		return false
-	})
-	return out
-}
-
 // airUnitLookup resolves a third-list handle back to its unit for the scan's
-// flag and distance re-tests.
+// flag and distance re-tests. The bound units world is the direct source; a
+// system driven only through the order binding falls back to the binding's own
+// lookup.
 func (s *System) airUnitLookup(u *units.Unit) func(pool.Handle) *units.Unit {
 	if s != nil && s.world != nil {
 		return s.world.Unit
@@ -1659,20 +1615,6 @@ func (s *System) airUnitLookup(u *units.Unit) func(pool.Handle) *units.Unit {
 		return nil
 	}
 	return b.Lookup
-}
-
-// airDeclaresAlliance is the registry's friendly test: the one-directional row
-// A of the candidate's owner indexed by the registry's ally group
-// [05 R-SHARE-01 §1][06 §3.1]. It is deliberately not the symmetric hostility
-// predicate the command resolver uses — the rebuild reads exactly one row, in
-// this direction. With no row source composed the caller keeps its own-owner
-// fallback.
-func (s *System) airDeclaresAlliance(u *units.Unit) func(from, toward uint8) bool {
-	b := airBinding(u)
-	if b == nil || b.World == nil {
-		return nil
-	}
-	return b.World.DeclaresAlliance
 }
 
 // airBinding is the session-owned order binding for this aircraft, the same

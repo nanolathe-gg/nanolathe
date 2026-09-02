@@ -45,7 +45,27 @@
 //	has no second-unit write, no mass read, no blockedTicks counter, no repath
 //	call. Repath is via path scheduler elsewhere.
 //
-// TODO(question): yard bit semantic labels 0x20/0x40 etc and factory BMCode 0x22F mode gate name remain [P0-12].
+// Closed by [04 R-COLL-01 §10], which retires the P0-12 markers that stood
+// here: the yard-byte labels and the name of the "mode gate" byte.
+//
+// The compiled yard byte's meaningful bits are three. Bit 0 is the
+// STRUCTURE-YARD MARK, copied into the cell's flag byte on stamp and cleared
+// on clear, and read by the placement validator's bit-0 test. Bit 1 is
+// SELECTED WHILE THE YARD IS OPEN, bit 2 SELECTED WHILE THE YARD IS CLOSED.
+// Against the yard-map letters: `o`, `f`, `w` and `G` carry both selection
+// bits; `c`/`C` only the closed bit; `O` only the open bit; `Y`, `y` and `.`
+// neither. The 0x20/0x40 the retired marker asked about are not yard-byte
+// values at all — nothing in the stamp or the validator masks the yard byte
+// with them.
+//
+// The "mode gate" byte is the definition's `bmcode`: the FBI key, stored as a
+// byte, that also selects the yard-map parse and raises status-word bit 29 at
+// creation. Its dispatch in the shared validator is `bmcode` zero -> the
+// building class, validated by the yard-map placement validator whatever the
+// mode; otherwise a mode other than 1 returns legal without scanning a cell,
+// and mode 1 runs the per-cell scan. There is no other reader of the byte on
+// the commit path. That dispatch lives at the placement caller — this package
+// reaches it through world.Terrain.CheckPlacement's Mobile arm — not here.
 //
 // Mapping to retail [04 §8.2][04 §9.1][02 "Movement class record"][03 §2.1] (I13: offsets are identity, not layout):
 //
@@ -78,12 +98,18 @@ const worldUnitsPerCell int64 = 16 * 65536 // 1048576 [03 §2.1]
 
 // blockedBand is the literal ±0x7FFFF clamp the blocked branch applies around
 // the old footprint span centre for every footprint size [04 §8.2] C24,
-// [GAP 04-P1-GROUND]. The span centre is oldAnchor*cell + halfSpan. The mask
-// name comes from the 0x7FFFF constant retail masks X and Z with [04 §8.2] C24.
+// [GAP 04-P1-GROUND]. The span centre is oldAnchor*cell + halfSpan.
 //
-// TODO(question): exact masking semantics — whether retail does
-// (base & ~0x7FFFF)|(proposed & 0x7FFFF) or literal centre±band clamp.
-// We implement centre±band as in openta-go [GAP 04-P1-GROUND] and cite the constant.
+// [04 R-COLL-01 §10] closes the masking marker that stood here. The clamp is a
+// per-axis BOUND, not a mask merge: with `c = (f + 2·cachedCell) << 19` and
+// `H = 0x7FFFF`, it is `X = min(max(proposedX, c.x − H), c.x + H)`, the same
+// for Z, Y untouched — two signed compares and two conditional loads per axis.
+// The `(base & ^H) | (proposed & H)` alternative the marker offered was never
+// the code's shape; the constant is a DISTANCE, half a cell minus one 16.16
+// unit, and the centre±band form below is the retail form. `c` is this
+// expression: OldAnchor tracks the committed anchor (CommitSuccess writes both
+// from the same proposal), and `oldAnchor*cell + f*cell/2` is
+// `(f + 2·oldAnchor) << 19` exactly.
 //
 // Post-merge unification may replace worldUnitsPerCell with world.CellToWorld
 // helpers once movement imports world; the constant stays until then.

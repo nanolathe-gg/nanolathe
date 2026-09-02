@@ -555,8 +555,8 @@ func IsAirBaseListMember(u *units.Unit) bool {
 // friendly, which is what a session with no player rows composes.
 //
 // The result is the list as of this instant. Retail refills it once every
-// AirBaseRegistryPeriod ticks; see the caller for the staleness that cadence
-// buys.
+// AirBaseRegistryPeriod ticks; AirBaseRegistry is the holder that applies that
+// cadence.
 func RebuildAirBaseList(list []*units.Unit, allyGroup uint8, declares func(from, toward uint8) bool) []pool.Handle {
 	var out []pool.Handle
 	for _, u := range list {
@@ -582,11 +582,21 @@ func RebuildAirBaseList(list []*units.Unit, allyGroup uint8, declares func(from,
 // from (x, z) is at or below AirBaseSeekRadius squared — inclusive, on the
 // truncated whole-world-unit metric of [06 §3.1].
 //
-// The three admission flags are re-tested; **liveness is not**. A pad destroyed
-// since the rebuild is still offered, and the landing order's own pad query
-// rejects it later [04 R-AIR-01 §6][04 R-AIR-01 §11]. Nothing is scored or
-// sorted; entries are pushed in list order, and the caller's single RNG draw
-// over the count is what picks one.
+// The three admission flags are re-tested; **liveness is not**. A pad whose
+// death latch was set since the rebuild is still offered, and the landing
+// order's own pad query rejects it later [04 R-AIR-01 §6][04 R-AIR-01 §11].
+// Nothing is scored or sorted; entries are pushed in list order, and the
+// caller's single RNG draw over the count is what picks one.
+//
+// TODO(question): retail dereferences the list entry straight out of the unit
+// array, so a pad whose slot has been finalized and reused is still read — and
+// what is read is whatever now occupies the slot, the aliasing [06 §5.1] and I5
+// describe. `lookup` here is the world's ordinary unit accessor, which resolves
+// a death-latched unit but not a freed slot, so the first half of that window
+// is reproduced and the second is not. Settling it needs a raw slot accessor on
+// internal/units, and whether the alias is observable at all depends on how
+// often a pad slot is reused inside one 30-tick window; neither is invented
+// here.
 func ScanAirBaseList(x, z numeric.Fixed, list []pool.Handle, lookup func(pool.Handle) *units.Unit) []pool.Handle {
 	if lookup == nil {
 		return nil
@@ -606,4 +616,89 @@ func ScanAirBaseList(x, z numeric.Fixed, list []pool.Handle, lookup func(pool.Ha
 		out = append(out, h)
 	}
 	return out
+}
+
+// AirBaseRegistry holds the third list per ally group across ticks, so that a
+// scan between rebuilds reads the snapshot the last rebuild left
+// [06 §3.1][04 R-AIR-01 §11].
+//
+// Staleness is the point, not an artefact. Because the list is cleared and
+// refilled only on the cadence, and because the scan re-tests the three
+// admission flags but never liveness:
+//
+//   - a pad that died inside the window is still offered, and the landing
+//     order's own pad query rejects it later [04 R-AIR-01 §6];
+//   - a pad that finished building inside the window is not offered until the
+//     next rebuild.
+//
+// The rows are indexed by ally group, and a session has ten player slots
+// [05 "Player slot"], so ten rows cover every group. Iteration is over that
+// fixed index range, never a map (I1).
+type AirBaseRegistry struct {
+	lists [10][]pool.Handle
+}
+
+// Rebuild refills every ally group's list from the unit array, but only on the
+// registry's cadence: `globalTick % AirBaseRegistryPeriod == 0` [06 §3.1], the
+// same throttle expression the severity sampler uses for the same period
+// [04 §9.2]. On every other tick it does nothing, which is what leaves the
+// snapshot stale. Before the first rebuild every list is empty, as retail's
+// registry is until its first walk.
+//
+// One rebuild walks the array once, in slot order, and files each member into
+// every ally group whose row admits it (I1) — the row read is the candidate
+// owner's, indexed by the group [05 R-SHARE-01 §1].
+func (r *AirBaseRegistry) Rebuild(tick uint32, list []*units.Unit, declares func(from, toward uint8) bool) {
+	if r == nil || tick%AirBaseRegistryPeriod != 0 {
+		return
+	}
+	for group := range r.lists {
+		r.lists[group] = r.lists[group][:0] // cleared with the other two lists [06 §3.1]
+	}
+	for _, u := range list {
+		if !IsAirBaseListMember(u) {
+			continue
+		}
+		for group := range r.lists {
+			friendly := int(u.Owner) == group
+			if !friendly && declares != nil {
+				friendly = declares(u.Owner, uint8(group))
+			}
+			if friendly {
+				r.lists[group] = append(r.lists[group], u.Handle) // unit-array order [06 §3.1]
+			}
+		}
+	}
+}
+
+// List returns one ally group's third list as the last rebuild left it. The
+// slice is the registry's own storage; callers filter it into a fresh vector
+// with ScanAirBaseList and never write through it.
+func (r *AirBaseRegistry) List(allyGroup uint8) []pool.Handle {
+	if r == nil || int(allyGroup) >= len(r.lists) {
+		return nil
+	}
+	return r.lists[allyGroup]
+}
+
+// AirBelowThreeQuarters is the health test every damaged-aircraft base seek
+// shares, written out by [04 R-AIR-01 §11] as
+//
+//	(uint)(int16)health < (MaxDamage >> 2) * 3
+//
+// — the 16-bit health field sign-extended and compared unsigned against three
+// quarters of the definition's `MaxDamage`, the quarter formed by a truncating
+// shift, strict. It lives here beside the list it gates so the six air legs and
+// the two patrol rows share one expression rather than three spellings of it
+// [04 R-AIR-01 §7][04 R-AIR-01 §8][04 R-ORD-01 §7][04 R-ORD-02 §2]
+// [04 R-ORD-02 §3].
+//
+// An overkilled aircraft's negative health sign-extends to a very large
+// unsigned value and is therefore NOT below three quarters. With no definition
+// word there is no threshold.
+func AirBelowThreeQuarters(u *units.Unit) bool {
+	if u == nil || u.Def == nil || u.Def.MaxDamage <= 0 {
+		return false
+	}
+	return uint32(int32(int16(u.Health))) < uint32((u.Def.MaxDamage>>2)*3)
 }

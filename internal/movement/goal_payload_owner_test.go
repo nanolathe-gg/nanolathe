@@ -9,19 +9,27 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// TestInstallerPendingBitStaysOnTheInstallingRecord locks [04 R-ORD-01 §0]
-// "Established — whose pending word an installer's `0x80` lands in": a goal
-// installer writes `0x80` into the record it is installing for and into no
-// other record's pending word, and its closing clear of `0x20`–`0x200` cancels
-// that self-raise.
+// TestInstallRaisesTheReleaseBitOnTheEvictedRecord locks [04 R-ORD-01 §9]:
+// every order record has its own payload field, but the unit's movement
+// controller has ONE payload slot, and handing that controller a goal raises
+// `0x80` on the record that owns the object the slot HELD — which need not be
+// the record being installed for. Two records on one mover can each hold an
+// object; only the one in the slot is bound, and a rebind is the "goal-handle
+// detach or rebind" producer of the movement families' outcome table.
 //
-// The regression this locks was game-wide: a patrol chain is several `Patrol`
-// records on one mover, and the record behind installing its own leg raised
-// `0x80` on the record ahead, which was stalled at gate `0xE0`. Per the
-// path-outcome table for the movement families that bit rotates a `Patrol`
-// record to the tail with phase reset to 1, so every leg retired on the tick it
-// was armed and no ground unit travelled.
-func TestInstallerPendingBitStaysOnTheInstallingRecord(t *testing.T) {
+// Corrected by WU-19-68. This test read
+// TestInstallerPendingBitStaysOnTheInstallingRecord and asserted the opposite:
+// that an installer "writes `0x80` into the record it is installing for and
+// into no other record's pending word". §9 shows the installer does not reach
+// the other record's FIELD, it reaches the controller's SLOT, and the raise
+// follows the object in that slot to its owner.
+//
+// The liveness the old assertion was protecting is real and still holds, by a
+// different mechanism: [04 §3.3] step 3 stops the pump's walk AT a gated record
+// with nothing satisfied, so the record behind a stalled patrol leg is never
+// pumped and never installs. TestPatrollingGroundUnitsTravel is the standing
+// proof of that end of it.
+func TestInstallRaisesTheReleaseBitOnTheEvictedRecord(t *testing.T) {
 	terrain := terrainForGoals()
 	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
 	sys := NewSystem(terrain, profile, NewOccupancyGrid())
@@ -43,13 +51,16 @@ func TestInstallerPendingBitStaysOnTheInstallingRecord(t *testing.T) {
 	if !sys.InstallPointGoal(orders.PointGoalRequest{Owner: handle, Node: ahead, X: world.CellToWorld(6), Z: world.CellToWorld(6)}) {
 		t.Fatal("install for the leading record was refused")
 	}
-	// The record behind takes the mover's single payload slot from the record
-	// ahead. That eviction is our representation, not a retail event.
+	// The record behind takes the controller's single payload slot from the
+	// record ahead. The displaced object's OWN record takes the `0x80`.
 	if !sys.InstallPointGoal(orders.PointGoalRequest{Owner: handle, Node: behind, X: world.CellToWorld(9), Z: world.CellToWorld(9), Radius: 16}) {
 		t.Fatal("install for the following record was refused")
 	}
-	if ahead.Satisfied&0xE0 != 0 {
-		t.Fatalf("leading record's pending word = %#x, want no movement outcome from another record's installer", ahead.Satisfied)
+	if ahead.Satisfied&0x80 == 0 {
+		t.Fatalf("evicted record's pending word = %#x, want `0x80` from the rebind [04 R-ORD-01 §9]", ahead.Satisfied)
+	}
+	if ahead.Satisfied&0x60 != 0 {
+		t.Fatalf("evicted record's pending word = %#x, want the rebind bit ALONE — no arrival, no route-released", ahead.Satisfied)
 	}
 	if behind.Satisfied&0x3E0 != 0 {
 		t.Fatalf("installing record's pending word = %#x, want 0x20-0x200 cleared by its own installer", behind.Satisfied)

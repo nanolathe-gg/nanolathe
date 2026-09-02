@@ -6,6 +6,7 @@ package orders
 // broad target predicate [04 R-ORD-01 §3, §4, §7][04 R-ORD-02 §4].
 
 import (
+	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -166,25 +167,35 @@ func scanRadiusTarget(u *units.Unit, radius int32, hostileOnly bool) *units.Unit
 	return found
 }
 
-func scanAirBasePads(u *units.Unit, radius int32) []*units.Unit {
+// airBasePads is the damaged-aircraft base seek both patrol rows run —
+// `VTOL_Patrol` phase 2 [04 R-ORD-02 §2] and `VTOL_RepairPatrol` phase 1
+// [04 R-ORD-01 §7]. It is not a visitor: the candidate set is the per-side
+// target registry's third list [06 §3.1 "the third list"], which
+// internal/movement holds and refills on the registry's own 30-tick cadence,
+// and combat.ScanAirBaseList is its filter [04 R-AIR-01 §11].
+//
+// Corrected (WU-19-66). This walked the binding's live-unit enumerator with
+// `candidate.Owner != u.Owner` and an `Alive` test, which was wrong twice: an
+// ALLIED pad is a candidate whenever the pad owner's alliance row toward this
+// aircraft's ally group is set [05 R-SHARE-01 §1], and the scan re-tests the
+// three admission flags but deliberately NOT liveness — a pad that died since
+// the last rebuild is still offered and is rejected by the landing order's own
+// pad query [04 R-AIR-01 §6]. Walking live units could reproduce neither.
+func airBasePads(u *units.Unit) []*units.Unit {
 	b := bindingFor(u)
-	if b == nil || u == nil {
+	if b == nil || u == nil || b.Movement == nil || b.Movement.AirBases == nil || b.Lookup == nil {
 		return nil
 	}
-	var pads []*units.Unit
-	b.ForEachUnit(func(h pool.Handle, candidate *units.Unit) bool {
-		if h == 0 || candidate == nil || !candidate.Alive || candidate == u || candidate.Owner != u.Owner || candidate.Def == nil {
-			return scanNext
+	admitted := combat.ScanAirBaseList(u.X, u.Z, b.Movement.AirBases(u.Owner), b.Lookup)
+	if len(admitted) == 0 {
+		return nil
+	}
+	pads := make([]*units.Unit, 0, len(admitted))
+	for _, h := range admitted {
+		if pad := b.Lookup(h); pad != nil {
+			pads = append(pads, pad) // list order, nothing scored or sorted [04 R-AIR-01 §11]
 		}
-		if !candidate.Def.Builder || !candidate.Def.IsAirBase || !candidate.Activated {
-			return scanNext
-		}
-		if !withinPlanarRadius(u, candidate.X, candidate.Z, radius) {
-			return scanNext
-		}
-		pads = append(pads, candidate)
-		return scanNext
-	})
+	}
 	return pads
 }
 

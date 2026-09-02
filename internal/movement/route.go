@@ -113,19 +113,28 @@ func (r *Route) Prune(pos Point) { // [04 §7.3] C15
 // index −1, reading adjacent non-point fields rather than yielding an empty
 // result. Callers must gate on the active bit themselves.
 //
-// Go cannot read adjacent struct memory without unsafe; at zero count we return
-// a deterministic zero Point and document the divergence:
-// TODO(question): retail reads adjacent non-point fields at zero count (index
-// −1); what is the adjacent field layout for Route and what value does that
-// reinterpreted read produce on each compiler? We return Point{} deterministically
-// because callers gate on Active and the read is unobserved in normal use.
+// [04 R-PATH-01 §13] closes the marker that stood here, which asked which
+// adjacent field index −1 lands on and what value the read produces. The
+// helper is the ground follower's point fill, and the follower's layout is, in
+// order: the controller's method table, the bound goal payload, the OWNING
+// UNIT'S REFERENCE, the twenty packed 4-byte points, then the count and the
+// flag bits. Index −1 therefore lands on the owning-unit reference — X becomes
+// its low 16 bits shifted into 16.16, Z its high 16 bits, Y zero.
+//
+// That reference is a heap address. The value is not reproducible between runs,
+// so there is NO CONTRACT to clone; and the read is unreachable from the one
+// reader the document names, because ground steering asks the follower for a
+// waypoint first and the has-waypoint bit is cleared below two points
+// [04 R-MOV-01 §3]. Returning a fixed zero triple at zero count is not a
+// divergence from anything observable, so Point{} stays.
 func (r *Route) At(index int) Point { // [04 §7.3] C17
 	if r == nil {
 		return Point{}
 	}
 	if r.Count == 0 {
-		// Retail reads adjacent fields at index -1 [04 §7.3] C17.
-		// See the open-question marker above; return zero value deterministically.
+		// Index −1 reads the owning-unit reference in retail: a heap address,
+		// no contract, and unreachable from the follower's own reader
+		// [04 R-PATH-01 §13].
 		return Point{}
 	}
 	if index < int(r.Count) {

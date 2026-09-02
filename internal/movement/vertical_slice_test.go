@@ -815,3 +815,69 @@ func TestTransportAdmissionSubmergedGateReadsModelTop(t *testing.T) {
 		t.Fatalf("positive model top at sea level must clear gate 8, got %q", res.Reason)
 	}
 }
+
+// TestTransportAdmissionGroundCarrierDepthGateBoundary locks gate 7 of the
+// transport admission ladder at its boundary [04 R-AIR-01 §12].
+//
+// The word compared is the definition's signed 16-bit MinWaterDepth copy —
+// Profile.MinWaterDepth — and the compare is signed `>= 0`: the gate rejects
+// when the word is NOT negative. So an authored 0 is rejected by a ground
+// carrier exactly as an authored 3 or 15 is, and only a negative value (the
+// startup template's −10000, or an authored negative) admits. The placeholder
+// this replaces used `> 0`, which admitted an authored 0.
+//
+// The assertion is the relationship across the boundary, not a census: −1
+// admits, 0 rejects, and the only thing that changes between the two runs is
+// that one word.
+func TestTransportAdmissionGroundCarrierDepthGateBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		minWaterDepth int32
+		wantAllowed   bool
+	}{
+		{"negative one admits", -1, true},
+		{"authored zero rejects", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ter := syntheticFlat(32, 32)
+			grid := NewOccupancyGrid()
+			fallback := Profile{FootPrintX: 2, FootPrintZ: 2, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 255, BadWaterSlope: 127}
+			sys := NewSystem(ter, fallback, grid)
+			mc := &content.MovementClass{
+				FootprintX: 2, FootprintZ: 2,
+				MaxWaterDepth: 12, MinWaterDepth: tc.minWaterDepth,
+				MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 255, BadWaterSlope: 127,
+			}
+			sys.SetClasses(map[string]*content.MovementClass{content.CanonicalKey("kbot2x2"): mc})
+			w := newMovementFixtureWorld(100)
+
+			// A GROUND carrier: gate 7 runs only when the carrier's canfly is
+			// clear [04 §10.2].
+			carrierDef := defForTransport("arm_ground_carrier")
+			carrierDef.CanFly = false
+			cargoDef := defForCargo("armflea", 1)
+			cargoDef.MovementClass = "kbot2x2"
+
+			cx, cz := world.CellToWorld(5), world.CellToWorld(5)
+			gx, gz := world.CellToWorld(7), world.CellToWorld(5)
+			th, _ := w.Create(carrierDef, 0, cx, ter.HeightAt(cx, cz), cz)
+			ch, _ := w.Create(cargoDef, 0, gx, ter.HeightAt(gx, gz), gz)
+			sys.EnsureUnit(w.Unit(th))
+			sys.EnsureUnit(w.Unit(ch))
+			w.Unit(th).Remaining = 0
+			w.Unit(ch).Remaining = 0
+
+			if got := sys.ProfileFor(ch).MinWaterDepth; got != tc.minWaterDepth {
+				t.Fatalf("fixture did not bind the class copy: MinWaterDepth = %d, want %d", got, tc.minWaterDepth)
+			}
+			res := sys.CanTransport(th, ch, w)
+			if res.Allowed != tc.wantAllowed {
+				t.Fatalf("MinWaterDepth %d: allowed = %v (%q), want %v [04 R-AIR-01 §12]",
+					tc.minWaterDepth, res.Allowed, res.Reason, tc.wantAllowed)
+			}
+			if !tc.wantAllowed && res.Reason != "ground carrier cannot load ship" {
+				t.Fatalf("reject reason %q, want gate 7's [04 §10.2]", res.Reason)
+			}
+		})
+	}
+}

@@ -317,8 +317,9 @@ func (s *System) transportHangOffset(u *units.Unit, piece int32) int16 {
 }
 
 // legVTOLUnload is `VTOL_Unload`, the canonical air unload executor of
-// [04 §10.2]. It returns done immediately when the cargo list is already
-// empty, then dispatches on the phase byte:
+// [04 §10.2]. Its first statement, on EVERY visit and ahead of the phase
+// switch, returns done when the carrier's cargo-list head is null
+// [04 R-AIR-01 §13]; otherwise it dispatches on the phase byte:
 //
 //	0  live `canfly` carrier mover (else 7); caption `Unloading`; record the
 //	   cargo reference; a point command toward the stored drop point with
@@ -337,33 +338,37 @@ func (s *System) transportHangOffset(u *units.Unit, piece int32) int16 {
 //	   at the CARRIER's current X/Z with altitude `cruisealt` — release order
 //	   is exactly callback → detach → climb-away.                          -> 1
 //	3  emit event code 13 with no text payload and finish.                 -> 5
+//	   Reached only when the list is STILL non-empty after phase 2's release,
+//	   i.e. on a carrier that was holding two or more units [04 R-AIR-01 §13].
 //
 // The placement validator therefore runs once before the final lowering
 // command and again immediately before the detach: double validation.
 func (s *System) legVTOLUnload(u *units.Unit, n *orders.Node, satisfied uint32, tick uint32) orders.Code {
 	_ = tick
-	// "The canonical unload executor returns done (result 5) immediately when
-	// the cargo list is ALREADY empty, then dispatches on the order's phase
-	// byte" [04 §10.2]. The word is load-bearing: the phase-2 release detaches
-	// the cargo, so a check that ran on every visit would fire before phase 3
-	// and §10.2's "phase 3 emits event code 13" would be unreachable in every
-	// successful unload. The check is therefore the entry condition it is
-	// written as — nothing was ever aboard — and phase 0's recorded cargo
-	// reference is what says the executor has started.
-	// TODO(question): [04 R-AIR-01 §10] item 4 reads the empty-list exit as
-	// preceding the phase switch unconditionally — "a carrier whose cargo has
-	// gone finishes at any phase" — while §10.2's phase-3 row has that same
-	// executor emit event 13 after the phase-2 release. For a carrier holding
-	// one cargo the two cannot both hold: the strict exit makes phase 3
-	// unreachable and event 13 never fires. Placeholder: the `Param1` guard
-	// below, which takes the exit as the entry condition it is written as
-	// (nothing was ever aboard) and keeps §10.2's phase-3 row reachable, since
-	// that row is the only Established statement about where event 13 comes
-	// from. What would settle it: whether the executor's empty-list test reads
-	// the cargo list or a phase-0 scratch word, and whether event 13 is
-	// observable on a single-cargo retail unload.
-	if n.Param1 == 0 && len(u.Attachment.Cargo) == 0 {
-		return 5 // *complete*: nothing to unload [04 §10.2]
+	// The executor's FIRST statement, ahead of the phase switch: it tests the
+	// carrier's cargo-list HEAD — not a phase, not the record's target
+	// reference, not a scratch "started" word — and completes when the head is
+	// null [04 R-AIR-01 §13].
+	//
+	// The marker that stood here read §10.2's phase-3 row and [R-AIR-01 §10]
+	// item 4 as contradicting each other for a single-cargo carrier, and
+	// guarded the exit with "the record's cargo reference is unset" so phase 3
+	// stayed reachable. §13 re-read the executor: both texts are right, and the
+	// consequence is retail's behaviour rather than a contradiction to resolve.
+	// Phase 2 detaches the list head and advances; on the next visit a
+	// single-cargo carrier's list is empty, this exit fires, and the record
+	// completes WITHOUT event 13. Phase 3 runs only when the list is still
+	// non-empty after the release — a carrier that was holding two or more
+	// units. One `VTOL_Unload` record therefore releases exactly one cargo, the
+	// list head (the most recently loaded unit, [04 R-UNIT-06 §3] LIFO), and
+	// ends; further cargo needs further unload records, and event 13 on the air
+	// path is observable only on a multi-cargo carrier.
+	//
+	// The ground pair is different and unchanged: `Ground_Unload` phase 2 emits
+	// event 13 as soon as the cargo's carrier reference is no longer this
+	// carrier [04 R-AIR-01 §9], so a single-cargo ground unload does fire it.
+	if len(u.Attachment.Cargo) == 0 {
+		return 5 // *complete*: the cargo-list head is null [04 R-AIR-01 §13]
 	}
 	// The drop point is the record's GOAL TRIPLE, filled when the record was
 	// constructed and never rewritten. [04 R-AIR-01 §10] item 1: both unload

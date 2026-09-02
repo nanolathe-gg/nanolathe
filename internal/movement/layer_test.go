@@ -615,3 +615,68 @@ func TestNewProfileDepthWordWidth(t *testing.T) {
 		t.Fatalf("MinWaterDepth must narrow through the 16-bit field, got %d", p.MinWaterDepth)
 	}
 }
+
+// TestSlopeCostReadsTheTierNotTheFootprintAggregate locks [04 R-SLOPE-01 §5]:
+// slope reaches the movement COST through the class layer's stamped 2-bit tier
+// at the anchor and nothing else, and that tier is per-cell — each covered cell
+// on its own derived pair, minimum over the footprint, ring demotion. There is
+// no footprint aggregate of heights behind the cost.
+//
+// The geometry is the one that separates the two rules. Every cell of the 2×2
+// footprint has its own span of 10, comfortably under KBOTSS2's BadSlope 16, so
+// the per-cell rule stamps CLEAR. The footprint's min-of-mins/max-of-maxes span
+// is 30 — above BadSlope 16 and under MaxSlope 32 — so the aggregate rule this
+// replaced would have stamped STEEP and charged the search's flat 30 for every
+// step onto the anchor.
+//
+// The assertion is the relationship, not a census: the aggregate span must
+// exceed the class's BadSlope (otherwise the case proves nothing), every
+// covered cell must classify clear, and the stamped tier must be above the
+// value the search's terrain term keys on (internal/path applies SteepCost iff
+// the anchor's stamped value is <= 1).
+func TestSlopeCostReadsTheTierNotTheFootprintAggregate(t *testing.T) {
+	tr := layerTerrain(16, 16, 20)
+	// A staircase under the 2×2 footprint at (4,4): each cell rises 10 within
+	// itself and each starts 10 above the previous.
+	setDerived(tr, 4, 4, 30, 40)
+	setDerived(tr, 5, 4, 40, 50)
+	setDerived(tr, 4, 5, 40, 50)
+	setDerived(tr, 5, 5, 50, 60)
+
+	const (
+		anchorX, anchorZ = int32(4), int32(4)
+		aggregateLow     = 30 // min of the four hmin values
+		aggregateHigh    = 60 // max of the four hmax values
+	)
+	if aggregateHigh-aggregateLow <= int32(kbotsSS2.BadSlope) {
+		t.Fatalf("fixture is not a discriminating case: aggregate span %d does not exceed BadSlope %d",
+			aggregateHigh-aggregateLow, kbotsSS2.BadSlope)
+	}
+
+	for _, c := range [][2]int32{{4, 4}, {5, 4}, {4, 5}, {5, 5}} {
+		if got := kbotsSS2.classifyCell(tr, c[0], c[1]); got != ClassClear {
+			t.Fatalf("cell (%d,%d) on its own derived pair: got %v, want ClassClear [04 R-SLOPE-01 §2]", c[0], c[1], got)
+		}
+	}
+	if got := kbotsSS2.ClassifyFootprint(tr, anchorX, anchorZ); got != ClassClear {
+		t.Fatalf("footprint anchor: got %v, want ClassClear [04 R-SLOPE-01 §3]", got)
+	}
+
+	l := NewClassLayer(kbotsSS2, tr, nil)
+	value := l.Value(anchorX, anchorZ)
+	if value != LayerClear {
+		t.Fatalf("stamped tier at the anchor = %d, want %d (clear) [04 R-SLOPE-01 §3]", value, LayerClear)
+	}
+	// The search's only slope-dependent term: 30 iff the anchor's stamped tier
+	// is at or below 1 [04 R-SLOPE-01 §5][04 R-PATH-01 §3].
+	if value <= 1 {
+		t.Fatalf("tier %d would charge the search's %d; a per-cell-clear footprint owes nothing [04 R-SLOPE-01 §5]",
+			value, path.SteepCost)
+	}
+	// A genuinely steep cell still owes it, so the term is not simply dead.
+	setDerived(tr, 4, 4, 30, 60) // this cell's OWN span is 30: above Bad 16, under Max 32
+	steepLayer := NewClassLayer(kbotsSS2, tr, nil)
+	if got := steepLayer.Value(anchorX, anchorZ); got > 1 {
+		t.Fatalf("a per-cell steep anchor stamped %d; want a tier the search charges %d for", got, path.SteepCost)
+	}
+}

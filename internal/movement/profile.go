@@ -265,81 +265,59 @@ func isFeatureBlocked(t *world.Terrain, cx, cz int32) bool {
 	return true
 }
 
-// slopeAt returns the local slope at cell (cx,cz) in height units (0-255)
-// [04 §6.1][02 "Movement class record"][P1-03 §2.3-2.5].
-// Retail sampling is via the derived min/max recompute over an inclusive
-// 2×2 neighbourhood — PlotCell's MaxHeight()/MinHeight() pair
-// [P1-03 §2.3][fmt tnt], handling edges via x+1<W and y<Height-1 guards,
-// then footprint aggregation bMin=min(hmin) bMax=max(hmax) bPeak=max(hmax)
-// where yard mask includes respective bits, slope=bMax-bMin unsigned byte
-// diff, pass when slope < limit (< not <=, equality passes) [P1-03 §2.5],
-// water vs land via SeaLevel <= bMin branch (entirely above water => land
-// slope else water slope) [P1-03 §2.4], BadSlope tier is penalized but
-// still passable (HOT cost, not validator block) TODO(question) [P1-03].
-// This per-cell helper approximates via max cardinal neighbor diff as fallback;
-// footprint aggregate form (CanOccupy/ValidateFootprint) is the one to replace
-// if probe shows DerivedFootprintRange mismatch [openta-go].
+// Slope reaches the movement COST through one value and one only: the class
+// layer's stamped 2-bit tier at the candidate anchor [04 R-SLOPE-01 §5].
 //
-// TODO(question): exact slope sampling for per-cell vs footprint aggregate
-// remains open; research establishes thresholds [04 §6.1] but footprint
-// aggregate is min(hmin) vs max(hmax) per P1-03, not max corner diff. We use
-// max cardinal neighbor height difference here as minimal non-inventing choice
-// and apply water slopes when cell itself is water (depth>0) else land slopes.
-func (p Profile) slopeAt(t *world.Terrain, cx, cz int32) uint8 {
-	if t == nil {
-		return 0
-	}
-	cell := t.PlotAt(cx, cz)
-	if cell == nil {
-		return 255
-	}
-	h := int32(cell.Height()) // [fmt tnt] +0
-	// HeightAt/CoarseHeightAt are exercised in depthAt; slope itself uses the
-	// integer height byte differences with trunc-toward-zero semantics [01 §8] I3
-	// would apply to Fixed narrowing, but here diff is pure integer.
-	maxDiff := int32(0)
-	for _, d := range [4][2]int32{{1, 0}, {-1, 0}, {0, 1}, {0, -1}} {
-		ncx, ncz := cx+d[0], cz+d[1]
-		nc := t.PlotAt(ncx, ncz)
-		if nc == nil {
-			continue
-		}
-		nh := int32(nc.Height())
-		// Alternative via Fixed world heights:
-		// _ = t.HeightAt(world.CellToWorld(ncx), world.CellToWorld(ncz))
-		diff := h - nh
-		if diff < 0 {
-			diff = -diff
-		}
-		if diff > maxDiff {
-			maxDiff = diff
-		}
-	}
-	if maxDiff < 0 {
-		maxDiff = 0
-	}
-	if maxDiff > 255 {
-		maxDiff = 255
-	}
-	return uint8(maxDiff)
-}
+// The search's single slope-dependent term is `terrainTerm = (passability > 1)
+// ? 0 : 30`, read off the stamped layer — see internal/path.SteepCost and the
+// layer binding in integrate.go. That stamped value is the per-cell tier of
+// classifyCell (each cell on its OWN derived maximum/minimum pair, medium
+// split on `hmin < seaLevel`, `slope <= Bad` -> 3, `slope > Max` -> 0, else 1)
+// taken as the MINIMUM over the footprint and demoted from 3 to 1 when any
+// cell of the one-cell ring is below 3 — ClassifyFootprint and
+// ClassLayer.classify in profile_footprint.go and layer.go.
+//
+// There is no separate cost sampling, no footprint aggregate of heights for
+// cost, and no "max cardinal neighbour difference" anywhere. The magnitude
+// never reaches the cost: a slope one above `Bad` and a slope equal to `Max`
+// both cost the same 30. Tier 1 is passable and costs 30; tiers 3 and 2 cost
+// nothing extra; a stamped 0 is costed only when the cell carries the
+// ray-visited bit, and then also pays the 30.
+//
+// Nor is there a slope term in the mover: the speed update takes no terrain
+// slope input, and what [04 R-MOV-01 §5] calls a slope speed penalty is the
+// pitch cap of [R-MOV-01 §4], fed by the four-corner conform's pitch, on
+// non-`upright`, non-`floater` ground movers only.
+//
+// Retired here (WU-19-68): a `slopeAt` helper that returned the maximum
+// cardinal neighbour height difference, kept as "the minimal non-inventing
+// choice" while the sampling was open, together with the two markers asking
+// which sampling cost used. It had no caller — the layer had already taken
+// over — and §5 names it as the site to replace, not to keep.
 
-// Classify implements the three-state classifier [04 §6.1][P1-03 §2.4-2.5].
+// Classify implements the three-state classifier [04 §6.1][04 R-SLOPE-01 §2].
 //
-// Returns ClassBlocked when the cell is outside the map, carries a blocking
-// feature or void sentinel [04 §6.2][fmt tnt], violates the water-depth
-// thresholds (MinWaterDepth lower bound and MaxWaterDepth upper bound, where a
-// zero threshold means no limit [02 "Movement class record"] as in
-// openta-go retailLegalCell), or exceeds the slope hard limit (MaxSlope over
-// land, MaxWaterSlope over water [P1-03 §2.4][research/formats/tdf.md]).
-// Water-depth/slope interaction is SeaLevel <= bMin selects land slope else
-// water slope per the placement validator [P1-03 §2.4]; per-footprint slope is
-// bMax-bMin unsigned byte diff, equality passes (< not <=) [P1-03 §2.5].
+// It is ClassifyFootprint under another name, so the rule is that function's:
+// each covered cell on its OWN derived maximum/minimum pair, the minimum tier
+// over the footprint, and a clear result demoted to steep unless the one-cell
+// ring is clear too. Blocked comes from a cell outside the map, a blocking
+// feature or void sentinel [04 §6.2][fmt tnt], a depth outside the record's
+// band (`hmin < seaLevel − MaxWaterDepth` or `hmax > seaLevel − MinWaterDepth`,
+// the startup template's ±10000 standing in for an omitted key), or a slope
+// above the hard limit. The medium split is per cell, `hmin >= seaLevel`
+// selecting the land pair and otherwise the water pair.
 //
-// Returns ClassSteep when slope exceeds the soft BadSlope/BadWaterSlope but not
-// the hard Max, otherwise ClassClear. Both Steep and Clear are passable to the
-// search expansion [04 §6.1]; BadSlope tier is HOT cost not blocker
-// TODO(question) [P1-03]. Only Blocked rejects.
+// Returns ClassSteep when the slope exceeds the soft BadSlope/BadWaterSlope but
+// not the hard Max, otherwise ClassClear. Both are passable; only Blocked
+// rejects.
+//
+// The marker retired here (WU-19-68) asked whether the BadSlope tier was a
+// cost or a blocker. [04 R-SLOPE-01 §5] answers it: tier 1 is passable and
+// costs the search's flat 30, and that 30 is the whole of slope's contribution
+// to cost — the magnitude never reaches it. The two sentences this comment
+// used to carry about a per-footprint `bMax−bMin` aggregate and a `<`-not-`<=`
+// comparison described the structure placement validator's yard-map walk, not
+// this classifier, and are withdrawn.
 func (p Profile) Classify(t *world.Terrain, cx, cz int32) CellClass {
 	return p.ClassifyFootprint(t, cx, cz)
 }

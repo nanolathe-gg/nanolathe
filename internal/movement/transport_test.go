@@ -111,6 +111,17 @@ func transportHeadPhase(q *orders.Queue) int {
 	return int(q.Primary()[0].Phase)
 }
 
+// transportHeadIsUnload reports whether the queue's front record is still a
+// `VTOL_Unload`. The unload's completion is what [04 R-AIR-01 §13]'s
+// single-cargo case is about, so the loops that wait for it watch the record
+// rather than an event that no longer fires.
+func transportHeadIsUnload(q *orders.Queue) bool {
+	if q == nil || q.LenPrimary() == 0 {
+		return false
+	}
+	return orders.DescriptorFor(q.Primary()[0].ID).Name == "VTOL_Unload"
+}
+
 // TestAtlasLoadsCarriesAndUnloadsAPeewee is this unit's end-to-end proof, and
 // it locks the relationships §10.2 states rather than a census of the run:
 //
@@ -130,7 +141,8 @@ func transportHeadPhase(q *orders.Queue) int {
 //     visit pass, with NO order of its own [04 R-MOV-03 §1] step 9 — commits at
 //     that actual X/Z, stamps the ground word there, and lets [04 R-MOV-01 §5]'s
 //     `upright`-without-`canhover` branch write `terrainHeight(XZ) << 16`;
-//   - notification event 13 is published exactly once;
+//   - the single-cargo unload ends at the empty-list exit, so notification
+//     event 13 — phase 3's — never fires [04 R-AIR-01 §13];
 //   - neither executor draws from the simulation stream: §10.2's two phase
 //     tables name no random value anywhere (I4).
 func TestAtlasLoadsCarriesAndUnloadsAPeewee(t *testing.T) {
@@ -252,14 +264,25 @@ func TestAtlasLoadsCarriesAndUnloadsAPeewee(t *testing.T) {
 	if got, present := sys.Grid.OccupantAtPlane(PlaneGround, coll.CachedAnchor); !present || got != coll.ID {
 		t.Fatalf("released cargo ground occupancy = (%d,%t), want its own id %d [04 R-COLL-01 §4]", got, present, coll.ID)
 	}
-	// Phase 3's event follows the phase-2 release once the climb-away marker
-	// the release constructs has been reached.
-	for ; tick <= 3200 && transportCountKind(*kinds, TransportEventDetach) == 0; tick++ {
+	// The record now ends WITHOUT phase 3. The empty-list exit is the
+	// executor's first statement on every visit [04 R-AIR-01 §13]: phase 2 took
+	// the single cargo off the list head, so the next visit finds a null head,
+	// returns complete, and event 13 — phase 3's — never fires. Phase 3 is
+	// reachable only on a carrier that was holding two or more units; the
+	// multi-cargo case is TestMultiCargoUnloadReleasesOneAndEmitsEventThirteen.
+	//
+	// This assertion was inverted before WU-19-68: the executor carried a
+	// `Param1` guard on the exit so that phase 3 stayed reachable on a
+	// single-cargo unload, and this test asserted the event fired exactly once.
+	for ; tick <= 3200 && transportHeadIsUnload(q); tick++ {
 		q.Pump(carrier, tick)
 		runMovementTick(sys, tick, w)
 	}
-	if got := transportCountKind(*kinds, TransportEventDetach); got != 1 {
-		t.Fatalf("notification event 13 published %d times, want exactly one [04 §10.2]", got)
+	if transportHeadIsUnload(q) {
+		t.Fatalf("the unload record never completed; phase %d [04 R-AIR-01 §13]", transportHeadPhase(q))
+	}
+	if got := transportCountKind(*kinds, TransportEventDetach); got != 0 {
+		t.Fatalf("notification event 13 published %d times on a SINGLE-cargo unload, want none: the empty-list exit fires before phase 3 [04 R-AIR-01 §13]", got)
 	}
 	if sim.Draws() != 0 {
 		t.Fatalf("the transport executors drew %d simulation values; §10.2's phase tables name none (I4)", sim.Draws())
@@ -547,5 +570,82 @@ func TestFactoryProductLinkPassesRequestModeOne(t *testing.T) {
 	}
 	if cargo.Move.Mode&0x3 != 1 {
 		t.Fatalf("product mover mode %d after the builder link, want the grounded 1 [04 R-FAC-02 §1]", cargo.Move.Mode)
+	}
+}
+
+// TestMultiCargoUnloadReleasesOneAndEmitsEventThirteen is the other half of
+// [04 R-AIR-01 §13]: phase 3 — the row that emits event code 13 — is reachable
+// only when the carrier's cargo list is STILL non-empty after phase 2's
+// release, which means a carrier that was holding two or more units.
+//
+// The contrast is the assertion. Run the same phase-2 release twice from the
+// same fixture: once with two units aboard, where the next visit finds a
+// non-empty head, dispatches phase 3 and publishes the event; and once with
+// one, where the next visit finds a null head and completes at the executor's
+// first statement with no event at all. One `VTOL_Unload` record releases
+// exactly one cargo either way.
+func TestMultiCargoUnloadReleasesOneAndEmitsEventThirteen(t *testing.T) {
+	dropX, dropZ := world.CellToWorld(44), world.CellToWorld(20)
+
+	for _, tc := range []struct {
+		name      string
+		aboard    int
+		wantEvent int
+	}{
+		{"two aboard reaches phase 3", 2, 1},
+		{"one aboard exits before phase 3", 1, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sys, w, carrier, cargo, _, kinds := transportFixture(t)
+			aboard := []*units.Unit{cargo}
+			for i := 1; i < tc.aboard; i++ {
+				px, pz := world.CellToWorld(int32(32+i)), world.CellToWorld(8)
+				h, err := w.Create(cargo.Def, 0, px, sys.Terrain.HeightAt(px, pz), pz)
+				if err != nil {
+					t.Fatalf("create extra cargo: %v", err)
+				}
+				extra := w.Unit(h)
+				sys.EnsureUnit(extra)
+				aboard = append(aboard, extra)
+			}
+			for _, c := range aboard {
+				if !AttachCargoMode(w, carrier.Handle, c.Handle, -1, 0) {
+					t.Fatalf("fixture attach of %d failed", c.Handle)
+				}
+			}
+			if got := len(carrier.Attachment.Cargo); got != tc.aboard {
+				t.Fatalf("fixture put %d units aboard, want %d", got, tc.aboard)
+			}
+			carrier.Move.Mode = 2
+			if fl := sys.Flights[carrier.Handle]; fl != nil {
+				fl.Mode = 2
+			}
+
+			n := &orders.Node{Owner: carrier.Handle, Phase: 2, GoalX: dropX, GoalY: carrier.Y, GoalZ: dropZ, Deadline: -1}
+			*kinds = (*kinds)[:0]
+			if code := sys.legVTOLUnload(carrier, n, 0, 1); code != 1 {
+				t.Fatalf("phase 2 gave result %d, want 1 (release then advance) [04 §10.2]", code)
+			}
+			if got := len(carrier.Attachment.Cargo); got != tc.aboard-1 {
+				t.Fatalf("phase 2 left %d aboard, want %d: one record releases exactly one cargo [04 R-AIR-01 §13]", got, tc.aboard-1)
+			}
+			if got := transportCountKind(*kinds, TransportEventDetach); got != 0 {
+				t.Fatalf("phase 2 itself published event 13 %d times; the event is phase 3's [04 §10.2]", got)
+			}
+
+			// The visit after the release. The executor is called directly here,
+			// so the pump's own code-1 advance is applied by hand.
+			n.Phase++
+			if code := sys.legVTOLUnload(carrier, n, 0, 2); code != 5 {
+				t.Fatalf("the visit after the release gave result %d, want 5 (complete) [04 R-AIR-01 §13]", code)
+			}
+			if got := len(carrier.Attachment.Cargo); got != tc.aboard-1 {
+				t.Fatalf("the completing visit left %d aboard, want %d: one record releases exactly one cargo [04 R-AIR-01 §13]", got, tc.aboard-1)
+			}
+			if got := transportCountKind(*kinds, TransportEventDetach); got != tc.wantEvent {
+				t.Fatalf("with %d aboard at the release, event 13 published %d times, want %d [04 R-AIR-01 §13]",
+					tc.aboard, got, tc.wantEvent)
+			}
+		})
 	}
 }

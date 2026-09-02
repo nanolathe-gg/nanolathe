@@ -35,6 +35,7 @@
 package orders
 
 import (
+	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -535,8 +536,11 @@ func vtolRepairPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint
 		}
 		armDeadline(n, tick, 45)
 		n.DynamicGate |= gateMoveOutcomes
-		if u.Def.MaxDamage > 0 && health16(u) < uint32((u.Def.MaxDamage>>2)*3) {
-			pads := scanAirBasePads(u, airBaseSeekRadius)
+		// The low-health pad seek [04 R-ORD-01 §7]: the one health expression
+		// of [04 R-AIR-01 §11] over the target registry's third list at its
+		// last rebuild, filtered by combat.ScanAirBaseList.
+		if combat.AirBelowThreeQuarters(u) {
+			pads := airBasePads(u)
 			if pad := pickCandidate(u, pads); pad != nil {
 				releaseGoalPayload(u, n)
 				if spawnPatrolLanding(u, pad, tick) {
