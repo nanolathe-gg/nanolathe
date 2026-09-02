@@ -1092,28 +1092,31 @@ func (h *retailBattleHUD) drawScorePanel(c *client.Client, b *battleSession, cur
 	lossesHeading := "Losses"
 	h.drawScoreText(c, lossesHeading, int(rect.X1)-retailGAFTextWidth(h.modalFont, lossesHeading)-2, hud.ScorePanelTop, 0)
 
-	// TODO(question): [07 R-HUD-04 §1] emits rows in rank order and filters
-	// them on the slot's controller/side/watcher bytes, its live-unit count
-	// and the auxiliary word doc 08 leaves unnamed. The committed frame
-	// carries none of those: `frame.ResultScore` has no rank byte, and the
-	// session publishes the score rows only once the result latches (see
-	// internal/session/result.go's collectScores), so a live battle publishes
-	// an empty set and this panel draws a heading with no rows. The arithmetic
-	// the section does establish is implemented and tested in
-	// internal/hud/scorepanel.go (ScoreRowOrder, ScoreSlot.Qualifies); what is
-	// missing is a per-tick publication of the ten player slots with their
-	// kill/loss counters, name, logo, controller, side, watcher bit,
-	// live-unit count, auxiliary word and rank byte. One writer owns a frame
-	// field, and internal/session is not this unit's to change. The rank
-	// byte's own initial assignment at battle entry is additionally recorded
-	// as a Supported inference in [07 R-HUD-04 §1] and is untraced.
-	// Until then the published rows are drawn in the order the frame carries
-	// them; no ordering is invented here.
-	drawn := 0
-	for i := range cur.Result.Scores {
-		row := cur.Result.Scores[i]
-		h.drawScoreRow(c, b, cur, rect, drawn, row)
-		drawn++
+	// Rows are emitted in rank order over the ten player slots the committed
+	// frame publishes every tick, filtered on the row filter's six terms
+	// [07 R-HUD-04 §1]. Both the filter and the rank scan with its vacated-rank
+	// compaction live in internal/hud; this loop only paints what they return.
+	// The compacted rank bytes are dropped: retail writes them back to the slot
+	// records, and presentation may not write simulation state [I6]. With the
+	// ranks published in slot order and the kill-lead maintenance of
+	// [08 R-CAMP-01 §9] not implemented (the marker is on the publisher), no
+	// frame presents a vacated rank to write back.
+	slots := make([]hud.ScoreSlot, frame.PlayerRowSlots)
+	for i := range cur.Players {
+		row := cur.Players[i]
+		slots[i] = hud.ScoreSlot{
+			Present:    row.Present,
+			Controller: row.Controller,
+			Side:       row.Side,
+			LiveUnits:  row.LiveUnits,
+			Auxiliary:  row.Auxiliary,
+			Watcher:    row.Watcher,
+			Rank:       row.Rank,
+		}
+	}
+	order, _ := hud.ScoreRowOrder(slots, len(cur.Economy))
+	for drawn, slot := range order {
+		h.drawScoreRow(c, b, cur, rect, drawn, slot, cur.Players[slot])
 	}
 }
 
@@ -1133,9 +1136,9 @@ func (h *retailBattleHUD) stepScoreFlash(cur *frame.Frame) {
 // drawScoreRow paints one player's row: the local player's two lightening
 // passes, the player name, and the kill and loss counts with their flash
 // brightness [07 R-HUD-04 §1].
-func (h *retailBattleHUD) drawScoreRow(c *client.Client, b *battleSession, cur *frame.Frame, rect hud.ScorePanelRect, drawn int, row frame.ResultScore) {
+func (h *retailBattleHUD) drawScoreRow(c *client.Client, b *battleSession, cur *frame.Frame, rect hud.ScorePanelRect, drawn, slot int, row frame.PlayerRow) {
 	y := hud.ScoreRowTop(drawn)
-	if row.Player >= 0 && row.Player < hud.ScorePanelSlots && uint8(row.Player) == cur.Selection.LocalPlayer {
+	if slot >= 0 && slot < hud.ScorePanelSlots && uint8(slot) == cur.Selection.LocalPlayer {
 		// (x0+4, y-1)-(x1-4, y+38), lightened at 31 then 20.
 		x, w := int(rect.X0)+4, int(rect.X1-rect.X0)-8
 		top, height := int(y)-1, 40
@@ -1156,9 +1159,9 @@ func (h *retailBattleHUD) drawScoreRow(c *client.Client, b *battleSession, cur *
 	killText := fmt.Sprintf("%d", kills)
 	lossText := fmt.Sprintf("%d", losses)
 	killShade, lossShade := 0, 0
-	if row.Player >= 0 && row.Player < hud.ScorePanelSlots {
-		killShade = int(h.scoreFlash.Kills[row.Player])
-		lossShade = int(h.scoreFlash.Losses[row.Player])
+	if slot >= 0 && slot < hud.ScorePanelSlots {
+		killShade = int(h.scoreFlash.Kills[slot])
+		lossShade = int(h.scoreFlash.Losses[slot])
 	}
 	h.drawScoreText(c, killText, int(rect.X0)+9, int(y)+21, killShade)
 	h.drawScoreText(c, lossText, int(rect.X0)+119-retailGAFTextWidth(h.modalFont, lossText)-2, int(y)+21, lossShade)

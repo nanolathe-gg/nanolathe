@@ -187,6 +187,11 @@ type Service struct {
 	// authoritative player record; ControlByteAbsent means the slot named has
 	// no record. Read it through PlayerControlByteFor, never directly.
 	ControlByte func(owner uint8) uint8 `json:"-"`
+
+	// Reaction binds the damage-intake reaction routine's seams [06 §9.1] step
+	// 4. The session installs it at composition; with none installed the
+	// routine's four parts are no-ops. See ReactionSeams in damage.go.
+	Reaction *ReactionSeams `json:"-"`
 }
 
 // Reserve appends a projectile record at the active-span tail [06 §5.1], [01 §6.1].

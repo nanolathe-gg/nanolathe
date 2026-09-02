@@ -289,7 +289,11 @@ func (f *ScoreFlash) Reset() {
 // ScoreCounters selects the pair the panel prints: the ordinary kill and loss
 // counters, or the commander-kill and commander-loss counters when the
 // commander-death option word is 2 (Deathmatch) [07 R-HUD-04 §1][07 R-FE-01 §7].
-func ScoreCounters(row frame.ResultScore, commanderDeathOption int) (kills, losses int) {
+//
+// It reads the per-tick player row, not the latched result row: the panel is
+// drawn throughout a live battle, while the result rows of [08 R-CAMP-01 §7]
+// exist only once the result is collected.
+func ScoreCounters(row frame.PlayerRow, commanderDeathOption int) (kills, losses int) {
 	if commanderDeathOption == ScoreDeathmatchOption {
 		return row.CommandersKilled, row.CommandersLost
 	}

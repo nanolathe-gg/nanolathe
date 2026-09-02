@@ -928,23 +928,17 @@ func (s *Session) RegisterAll() {
 					s.pendingCommanderDeaths[u.Owner] = true
 				}
 			}
-			// A computer player's unit loss arms that manager's retry throttle at
-			// the authoritative death boundary. The manager owns the draw and
-			// fails closed if setup did not bind a session stream. Human-owned
-			// manager records never execute this controller-2-only hook
-			// [08 R-AI-01 §11].
-			// Residual: retail arms this throttle from damage to a CanCapture unit,
-			// not death finalization; moving the hook awaits the later combat-
-			// reaction unit that owns that damage boundary [08 R-AI-01 §11].
-			if s.Clock != nil && s.Econ != nil && u != nil &&
-				int(u.Owner) < len(s.AI) && int(u.Owner) < len(s.Econ.Players) {
-				p := &s.Econ.Players[u.Owner]
-				if p.Exists && !p.IsObserver && p.ControllerState == 2 {
-					if mgr := s.AI[u.Owner]; mgr != nil {
-						mgr.RecordUnitLoss(s.Clock.GlobalTick)
-					}
-				}
-			}
+			// Relocated (WU-19-26): the computer player's construction throttle
+			// used to be armed from here, at death finalization. [08 R-AI-01
+			// §11] arms it from DAMAGE to a `cancapture` unit — one reaction
+			// site reached from the damage-application path, which also stops
+			// the damaged unit where it stands — and that site now exists as
+			// the reaction routine of [06 §9.1] step 4 (internal/combat/
+			// damage.go, bound at bindDamageReaction). Death is a different
+			// event with a different cadence: a commander taking fire suspends
+			// commander-led construction for one to eleven seconds, re-armed by
+			// every further hit, whether or not anything dies.
+			//
 			// A dying unit leaves its stored AI group record here, through the
 			// direct writer's remove-sentinel form: swap-delete from the record
 			// only, no destination, no RNG draw. This is the death-teardown
@@ -1087,27 +1081,17 @@ func (s *Session) RegisterAll() {
 						// exercises, so shooter 0 alone reproduces the
 						// observable contract here.
 						//
-						// TODO(question): with shooter 0, combat/service.go's
-						// applyDamageToUnit (internal/combat/service.go, not
-						// owned by this unit) stamps victim.LastDamageSide
-						// and victim.LastDamageCause together inside one
-						// `if shooter != nil` block. Retail's §9.1 step 4
-						// records the packet's kind byte on the victim
-						// UNCONDITIONALLY and stores the attacker pointer/side
-						// snapshot only "when the attacker is nonzero" — two
-						// separate clauses. Because our single Go gate ties
-						// both to shooter presence, a unit killed outright by
-						// a null-shooter blast (a death explosion or a
-						// meteor) never gets LastDamageCause stamped, so
-						// internal/session/stats.go's
-						// recordFinalizedDeathStatistics sees cause 0 and
-						// skips even the victim-loss credit, not just kill
-						// credit. Splitting the two stamps needs a
-						// combat/service.go change outside this unit's file
-						// ownership (internal/session/session.go,
-						// internal/session/ai_e2e_retail_test.go,
-						// internal/session/*_test.go, internal/combat/target.go,
-						// internal/combat/damage.go).
+						// Retired (WU-19-26): this carried a TODO(question)
+						// saying applyDamageToUnit stamped LastDamageSide and
+						// LastDamageCause together inside one shooter-presence
+						// gate, so a unit killed outright by a null-shooter
+						// blast reached the death finalizer with cause 0 and
+						// was filed as neither a kill nor a loss. §9.1 step 4's
+						// two clauses are now separate there: the kind byte is
+						// recorded unconditionally, and the side snapshot takes
+						// the record's neutral side byte 10 when there is no
+						// attacker, so cause 1's full path files the victim's
+						// loss and credits nobody [06 §12.1].
 						s.Combat.ExplodeWeaponAt(s.Units, s.World, weapon, impact, 0, tick) // [06 R-WPN-02 §5][06 R-DMG-01 §9] null-shooter record, shared splash path [06 §9.3]
 						if s.publication != nil && s.publication.events != nil {
 							// The death explosion draws the weapon's LAND art:

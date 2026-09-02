@@ -2487,8 +2487,8 @@ lobby, or a trace of every block copy into the session globals.
 | `nosealeveltrigger` | integer · 32-bit | 0 | `[06 §8.2]`, `[04 R-COB-04 §2]` | Established |
 | `waterdoesdamage` | integer · 32-bit | 0 | `[04 §9.2]` | Established |
 | `waterdamage` | integer · 32-bit | 0 | `[04 §9.2]` | Established |
-| `killmul` | floating · single float | 0.0 | inert (reader census: none) — `[02 R-MAP-01 §3]` | Established |
-| `timemul` | floating · single float | 0.0 | inert (reader census: none) — `[02 R-MAP-01 §3]` | Established |
+| `killmul` | floating · single float | 0.0 | read by the end-of-battle score helper `[08 R-CAMP-01 §7]` (correction, `[08 R-CAMP-01 §11]`: this row previously read "inert (reader census: none) — `[02 R-MAP-01 §3]`"; that census missed the score helper, which multiplies by both keys) | Established |
+| `timemul` | floating · single float | 0.0 | read by the end-of-battle score helper `[08 R-CAMP-01 §7]` (correction, `[08 R-CAMP-01 §11]`: this row previously read "inert (reader census: none) — `[02 R-MAP-01 §3]`"; that census missed the score helper, which multiplies by both keys) | Established |
 | `HumanMetal` | integer · single float | 0 | `[08 R-SKIR-01 §5]` | Established |
 | `HumanEnergy` | integer · single float | 0 | `[08 R-SKIR-01 §5]` | Established |
 | `ComputerMetal` | integer · single float | 0 | `[08 R-SKIR-01 §5]` | Established |

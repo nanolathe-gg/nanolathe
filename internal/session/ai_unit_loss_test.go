@@ -5,17 +5,25 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/clock"
+	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 )
 
-// TestPhase2ComputerDeathUsesConstructedManagerRNG verifies that a computer
-// unit finalized by the phase-2 sweep can arm the manager's unit-loss retry
-// throttle before phase-5 dispatch. The draw is from the session stream that
-// was bound at manager construction [08 "Strategy manager and its task graph"].
-func TestPhase2ComputerDeathUsesConstructedManagerRNG(t *testing.T) {
+// TestReactionThrottleUsesConstructedManagerRNG verifies that the construction
+// throttle's draw comes from the session stream bound at manager construction
+// [08 "Strategy manager and its task graph"].
+//
+// Rewritten by WU-19-26: this test used to drive the throttle from the phase-2
+// death sweep, because that is where this build armed it. [08 R-AI-01 §11] arms
+// it from damage to a `cancapture` unit, through the damage-intake reaction
+// routine of [06 §9.1] step 4, so the draw is exercised there instead. The
+// deadline is tick + 30 + RNG(300).
+func TestReactionThrottleUsesConstructedManagerRNG(t *testing.T) {
 	cat := minimalCatalogForStrict()
+	cat.Units["armcom"].CanCapture = true
 	w, err := newSlicedWorld(cat)
 	if err != nil {
 		t.Fatal(err)
@@ -26,9 +34,17 @@ func TestPhase2ComputerDeathUsesConstructedManagerRNG(t *testing.T) {
 		Units:   w,
 		Econ:    &economy.Service{},
 		Clock:   &clock.State{GlobalTick: 1},
+		Combat:  &combat.Service{},
 	}
 	s.Econ.Players[1].Exists = true
 	s.Econ.Players[1].ControllerState = 2
+	s.Combat.ControlByte = func(owner uint8) uint8 {
+		if int(owner) >= len(s.Econ.Players) || !s.Econ.Players[owner].Exists {
+			return combat.ControlByteAbsent
+		}
+		return s.Econ.Players[owner].ControllerState
+	}
+	s.bindDamageReaction()
 	s.SeedSessionRNG(123, 456)
 	mgr := &ai.Manager{Player: 1, RNG: s.SimRNG()}
 	s.AI[1] = mgr
@@ -43,27 +59,33 @@ func TestPhase2ComputerDeathUsesConstructedManagerRNG(t *testing.T) {
 	if u == nil {
 		t.Fatal("created computer unit is missing")
 	}
-	// The phase-2 sweep receives this already-latched death from the preceding
-	// unit/combat work. Setting the latch directly avoids firing the hook before
-	// the phase under test.
-	u.Dying = true
-	u.DeathCause = 1
+	attackerH, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	probe := rng.NewSimulation(123)
 	wantOffset := probe.Uint32n(300)
 	before := s.SimRNG().Draws()
-	s.phaseUnits(1)
-	if got := s.SimRNG().Draws(); got != before+1 {
-		t.Fatalf("phase-2 death draws=%d, want one unit-loss draw", got-before)
-	}
 	// SeedSessionRNG is the battle-entry boundary and resets the authoritative
-	// clock to tick zero [01 §7.1][R-CORE-02]. The phase receives tick one,
-	// but the death hook reads the reset session clock, so the throttle's
-	// deadline is based on zero rather than the caller's phase argument. The
-	// previous expectation incorrectly used one here.
-	wantDeadline := uint32(30 + wantOffset)
+	// clock to tick zero [01 §7.1][R-CORE-02]; the reaction reads the tick it is
+	// given, which is that reset clock's.
+	s.Combat.ReactToDamage(w, u, w.Unit(attackerH), s.Clock.GlobalTick)
+	if got := s.SimRNG().Draws(); got != before+1 {
+		t.Fatalf("reaction draws=%d, want one construction-throttle draw", got-before)
+	}
+	wantDeadline := s.Clock.GlobalTick + 30 + wantOffset
 	if got := mgr.UnitLossDeadline(); got != wantDeadline {
 		t.Fatalf("unit-loss deadline=%d, want %d", got, wantDeadline)
+	}
+	// The same hit stops the damaged unit where it stands, through the ordinary
+	// stop path [08 R-AI-01 §11].
+	q := orders.QueueForUnit(u)
+	if q == nil || len(q.Primary()) == 0 {
+		t.Fatal("the throttle did not issue the stop the reaction site names [08 R-AI-01 §11]")
+	}
+	if got := orders.DescriptorFor(q.Primary()[0].ID).Name; got != "Stop" {
+		t.Fatalf("front primary order after the throttle = %q, want \"Stop\"", got)
 	}
 }
 

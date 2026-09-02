@@ -596,6 +596,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 	} else {
 		published.Economy = published.Economy[:0]
 	}
+	publishPlayerRows(s, published)
 	// Shake offset produced at phase 10 [03 §5.6][01 §4.4] DET-04.
 	published.ShakeOffsetX = s.shakeOffsetX
 	published.ShakeOffsetY = s.shakeOffsetY
@@ -643,6 +644,92 @@ func (s *Session) publishSnapshot(tick uint32) {
 	}
 	if s.publication != nil && s.publication.events != nil {
 		s.publication.events.Reset()
+	}
+}
+
+// publishPlayerRows publishes the ten player slots' live rows once per tick,
+// inside the same publication boundary every other committed field is written
+// in. It is the only writer of frame.Frame.Players.
+//
+// The Space-held score panel's row filter reads six terms per slot — the
+// record is present; the controller byte is 1, 2 or 3; the side byte is not
+// the neutral 10; the live-unit count is nonzero or the slot's auxiliary word
+// is zero; and the lobby record's watcher bit is clear — emits the rows in
+// rank order, and prints either the kill/loss pair or the commander pair
+// [07 R-HUD-04 §1]. Every one of those is copied out of authoritative state
+// here: nothing is mutated, no RNG is drawn, and no live pointer crosses the
+// boundary [I6].
+//
+// Slots are visited 0..9 ascending, never through a map [I1].
+func publishPlayerRows(s *Session, published *frame.Frame) {
+	published.Players = [frame.PlayerRowSlots]frame.PlayerRow{}
+	if s == nil || s.Econ == nil {
+		return
+	}
+	for i := 0; i < frame.PlayerRowSlots; i++ {
+		p := s.Econ.Players[i]
+		row := frame.PlayerRow{
+			Present: p.Exists,
+			Name:    p.Name,
+			Logo:    p.Logo,
+			// The four counters are the per-slot words the death-credit switch
+			// writes at the death site, not a rescan of the live pool
+			// [06 §12.1][08 R-CAMP-01 §7].
+			Kills:            int(p.Kills),
+			Losses:           int(p.Losses),
+			CommandersKilled: int(p.CommanderKills),
+			CommandersLost:   int(p.CommanderLosses),
+			Controller:       p.ControllerState,
+			Side:             p.Side,
+			// TODO(question): the lobby record's watcher bit (0x40) of
+			// [07 R-HUD-04 §1] has no session-side writer — economy.Player.Watcher
+			// is its declared owner and nothing sets it. The observer byte of
+			// [05 "Authoritative settlement order"] is what skirmish setup does
+			// write for an observer slot, and the result-row gate of
+			// [08 R-CAMP-01 §7] already spends it as the same exclusion, so it is
+			// ORed in here rather than publishing a term that is always clear.
+			// Whether retail's watcher bit and its observer byte are one word is
+			// not established; a static trace of the lobby record's writers would
+			// settle it.
+			Watcher: p.Watcher || p.IsObserver,
+			// TODO(question): the auxiliary word is Unknown in both sections that
+			// read it ([07 R-HUD-04 §1], [08 R-CAMP-01 §7] name it only as "the
+			// word doc 08 leaves unnamed") and nothing in the session writes
+			// economy.Player.ResultAuxiliary, so it publishes zero. With it zero
+			// the filter's second term is always satisfied, so a slot keeps its
+			// row after losing its last unit. Decider: a static trace of that
+			// word's writers.
+			Auxiliary: p.ResultAuxiliary,
+			// TODO(question): the rank byte's battle-entry initialisation is a
+			// Supported inference in [07 R-HUD-04 §1], whose named decider
+			// [08 R-ENTRY-01 §2] does not mention the byte, and the kill-lead
+			// maintenance of [08 R-CAMP-01 §9] is not implemented, so the session
+			// holds no rank state to publish. Placeholder: the slot index. It is
+			// the ascending slot order every other per-player walk uses [I1], and
+			// it is the only assignment that keeps the ranks distinct, which the
+			// same section's Established row-count sentence requires — "the row
+			// count on screen equals the number of qualifying slots". A single
+			// repeated rank (zero for every slot) would collapse the panel to one
+			// row, contradicting that sentence. Decider: a static trace of the
+			// per-player reset the battle-entry path runs.
+			Rank: uint8(i),
+		}
+		if s.Units != nil {
+			row.LiveUnits = s.Units.LiveCountForPlayer(i)
+		}
+		// The name and the logo byte live on the lobby record; the same
+		// fallback the result rows use applies here, so the panel and the
+		// report screen name a player identically [08 R-CAMP-01 §7].
+		if s.Skirmish.NumPlayers > 0 && i < len(s.Skirmish.Players) {
+			sp := s.Skirmish.Players[i]
+			if row.Name == "" {
+				row.Name = sp.Nickname
+			}
+			if row.Logo == 0 && sp.Color >= 0 && sp.Color < 256 {
+				row.Logo = uint8(sp.Color)
+			}
+		}
+		published.Players[i] = row
 	}
 }
 

@@ -223,7 +223,7 @@ func TestScoreFlashArmsAtThirtyAndDecaysByTwo(t *testing.T) {
 }
 
 func TestScoreCountersSelectCommanderPairInDeathmatch(t *testing.T) {
-	row := frame.ResultScore{Kills: 7, Losses: 3, CommandersKilled: 2, CommandersLost: 1}
+	row := frame.PlayerRow{Kills: 7, Losses: 3, CommandersKilled: 2, CommandersLost: 1}
 	if k, l := ScoreCounters(row, 0); k != 7 || l != 3 {
 		t.Errorf("ordinary counters = %d/%d, want 7/3", k, l)
 	}

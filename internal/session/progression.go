@@ -177,17 +177,25 @@ func (l *EndLatch) IsWin() bool { return l.Bits&LatchBitWin1 != 0 }
 // IsLose reports lose [P1-01].
 func (l *EndLatch) IsLose() bool { return l.Bits&LatchBitLose != 0 }
 
-// Score computes retail score: int(kills*killmul) + int(ticks/1800.0*timemul) clamp>=0 [P0-05][P1-01 §2.3][P1-01 §4].
-// killmul and timemul are authored score multipliers; ticks is GlobalTick,
-// incremented per subtick [P1-01 §4].
-// Retail does float multiplies via FLD then FTOL trunc toward zero, sum then clamp via TEST/JGE; XOR.
-// Kills and losses are player counters incremented by the combat/death path
-// [P1-01 §2.3].
-// TODO(question): default killmul/timemul when absent (0 vs 1.0) not proven [P1-01 §8].
+// Score computes retail's end-of-battle score:
+// __ftol(float(int64(globalTick/60 unsigned)) × timemul) +
+// __ftol(float(Kills) × killmul), each product truncated toward zero
+// SEPARATELY before the two are summed, then clamped at zero
+// [08 R-CAMP-01 §7] [08 R-CAMP-01 §11 point 3]. killmul and timemul are the
+// mission's [GlobalHeader] floats, default 0.0 when absent (stock missions
+// author killmul=50; timemul=0;); ticks is the 32-bit global tick counter of
+// [01 §2], divided by 60 as an UNSIGNED integer (not 1800, and not a
+// floating-point division) before the timemul multiply. Kills is the
+// player's 16-bit kill counter, sign-extended.
+//
+// Correction (2026-09-01, [08 R-CAMP-01 §11]): the divisor was 1800 here;
+// retail divides ticks by 60. [02 R-MAP-01 §3] and [fmt ota] previously
+// marked killmul/timemul "inert (reader census: none)" — that census missed
+// this helper, which multiplies by both; both docs are corrected in place.
 func Score(kills int, killmul float32, ticks uint32, timemul float32) int {
+	timePart := float64(int64(ticks/60)) * float64(timemul)
 	killPart := float64(kills) * float64(killmul)
-	timePart := float64(ticks) / 1800.0 * float64(timemul)
-	s := int(math.Trunc(killPart)) + int(math.Trunc(timePart))
+	s := int(math.Trunc(timePart)) + int(math.Trunc(killPart))
 	if s < 0 {
 		s = 0
 	}

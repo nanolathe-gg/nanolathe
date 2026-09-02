@@ -677,6 +677,58 @@ type ResultView struct {
 	ColumnMaxima [7]int
 }
 
+// PlayerRowSlots is the number of player slots published every tick. Retail
+// scans the same ten slots in slot order for the score panel's rows and for
+// the result rows [07 R-HUD-04 §1][08 R-CAMP-01 §7][I1].
+const PlayerRowSlots = 10
+
+// PlayerRow is one player slot's live per-tick state, published every tick so
+// the Space-held Kills/Losses panel has the row filter's six terms, the two
+// counter pairs and the rank byte without reaching into the session
+// [07 R-HUD-04 §1][I6].
+//
+// It is deliberately separate from ResultScore: ResultScore is the latched
+// end-of-battle statistic row of [08 R-CAMP-01 §7] (economy totals, score,
+// win/lose kind) and exists only once the result is collected, while this row
+// exists on every tick of a live battle and carries only what the panel's scan
+// reads.
+type PlayerRow struct {
+	// Present is the record-exists term of the row filter.
+	Present bool
+	// Name is the player name written at (x0+9, y+6).
+	Name string
+	// Logo is the lobby record's logo byte, the frame number of the side-logo
+	// GAF entry the row's logo is drawn from.
+	Logo uint8
+	// Kills and Losses are the slot's two 16-bit counters, widened. They are
+	// the same words the result rows and the kill-lead line read
+	// [08 R-CAMP-01 §7][08 R-CAMP-01 §9].
+	Kills  int
+	Losses int
+	// CommandersKilled and CommandersLost are the pair the panel prints
+	// instead when the commander-death option word is 2 (Deathmatch)
+	// [07 R-HUD-04 §1][07 R-FE-01 §7].
+	CommandersKilled int
+	CommandersLost   int
+	// Controller is the slot's controller byte; the row filter admits 1, 2
+	// and 3 (human, local, remote — [08 R-SKIR-01 §1]).
+	Controller uint8
+	// Side is the slot's side byte; the neutral side 10 is excluded.
+	Side uint8
+	// Watcher is the lobby record's watcher bit (0x40); a watcher gets no row.
+	Watcher bool
+	// LiveUnits is the slot's live-unit count. The filter admits the slot when
+	// this is nonzero or the auxiliary word is zero.
+	LiveUnits int
+	// Auxiliary is the per-slot word doc 08 leaves unnamed, the second half of
+	// the live-unit term [07 R-HUD-04 §1][08 R-CAMP-01 §7].
+	Auxiliary uint32
+	// Rank is the slot's rank byte: the panel emits rows in rank order and
+	// compacts a vacated rank in the same frame [07 R-HUD-04 §1], and a
+	// credited kill moves the rank up the ladder [08 R-CAMP-01 §9].
+	Rank uint8
+}
+
 // FogView is the committed two-channel fog cache [03 §3.3].
 type FogView struct {
 	W, H             int32
@@ -709,6 +761,10 @@ type Frame struct {
 	Events      []EventView
 	Fog         FogView
 	Result      ResultView
+	// Players is the ten player slots' live per-tick rows, indexed by slot,
+	// slot 0..9 ascending [07 R-HUD-04 §1][I1]. Every slot is written every
+	// tick; an absent record publishes its zero value with Present false.
+	Players [PlayerRowSlots]PlayerRow
 	// Shake is the authoritative camera jitter offset produced at phase 10
 	// [03 §5.6][01 §4.4]. The session advances the shake driver with CRT draws
 	// and publishes the cumulative offset; presentation only applies it.
@@ -832,6 +888,7 @@ func (f *Frame) Reset() {
 	f.Radar = RadarView{Contacts: f.Radar.Contacts}
 	f.Fog = FogView{Ch0: f.Fog.Ch0, Ch1: f.Fog.Ch1}
 	f.Result = ResultView{Winners: f.Result.Winners, Losers: f.Result.Losers, Scores: f.Result.Scores, ColumnMaxima: f.Result.ColumnMaxima}
+	f.Players = [PlayerRowSlots]PlayerRow{}
 }
 
 func resetOrders(s []OrderView) {

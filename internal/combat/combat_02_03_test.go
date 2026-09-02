@@ -47,7 +47,10 @@ func TestImpactEventOrderAndKilledDedup(t *testing.T) {
 	}
 	p := &Projectile{Shooter: shooter.Handle, TargetUnit: target.Handle, Pos: Vec3{X: target.X, Y: target.Y, Z: target.Z}}
 	handleProjectileImpact(&svc, 1, p, weapon, w, terrain, nil, nil, nil, 4, Vec3{}, nil, false)
-	wantPrefix := []EventKind{EventShake, EventHitSound, EventExplosion, EventProjectileImpact, EventUnitKilled}
+	// The damage flash sits between the impact event and the lethal
+	// notification: [06 §9.1] step 4 writes it for every accepted non-heal
+	// packet, before the reaction step [06 R-WPN-04 §2].
+	wantPrefix := []EventKind{EventShake, EventHitSound, EventExplosion, EventProjectileImpact, EventDamageFlash, EventUnitKilled}
 	if len(got) != len(wantPrefix) {
 		t.Fatalf("events = %#v, want %#v", got, wantPrefix)
 	}

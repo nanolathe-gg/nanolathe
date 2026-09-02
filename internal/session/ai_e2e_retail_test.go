@@ -17,15 +17,21 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
-// aiE2ETickCap bounds the battle. The retail bound for this proof is thirty
-// minutes of authoritative time, 54000 ticks. On Ashap Plateau the computer
-// player eliminates the idle human at tick 36939 on seed 7 and at tick 41378 on
-// seed 1; the test runs the faster of the two and caps at 48000, comfortably
-// inside the real bound and cheap enough (about fifteen seconds of wall clock)
-// to stay in the ordinary package run. The displayless runner covers the other
-// seed. RWU-19-1's timed retail capture, not any of these numbers, is the bar
-// for how soon retail's own computer player attacks [08 R-AI-01 §4].
-const aiE2ETickCap = uint32(48000)
+// aiE2ETickCap bounds the battle at the retail bound for this proof: thirty
+// minutes of authoritative time, 54000 ticks.
+//
+// Raised from 48000 by WU-19-26. That value was a cheapness margin around a
+// seed-7 elimination at tick 36939, taken when the idle human never shot back:
+// [06 §9.1] step 4's reaction routine did not exist, so a commander under fire
+// answered nothing. With the routine in place its laser is offered its
+// attacker on every hit — the per-slot offer of [06 R-WPN-04 §2 part 3], whose
+// only weapon-side clause is that the weapon is not `commandfire`, which the
+// D-gun is and the laser is not — so the idle human kills two of the wave and
+// survives to tick 48791 on this seed. That is inside the real bound and
+// outside the old margin, so the margin goes rather than the contract.
+// RWU-19-1's timed retail capture, not any of these numbers, is the bar for how
+// soon retail's own computer player attacks [08 R-AI-01 §4].
+const aiE2ETickCap = uint32(54000)
 
 // aiE2ESeed is the seed both this test and the displayless runs use.
 const aiE2ESeed = uint32(7)

@@ -643,45 +643,54 @@ func acquireTargetForSlotRange(u *units.Unit, slot *units.Slot, idx int, w *unit
 	if len(catalogs) != 0 {
 		catalog = catalogs[0]
 	}
-	weapon := slot.Weapon
-	var candidates []Candidate
 	var seaLevel numeric.Fixed
 	if terrain != nil {
 		seaLevel = terrain.SeaLevelWorld()
 	}
+	var candidates []Candidate
 	for _, cand := range w.Iter() {
 		if cand == nil || cand.Handle == u.Handle || !cand.Alive || cand.Dying {
 			continue
 		}
-		hostile := isHostile(u, cand, econ)
-		if !hostile {
+		if !isHostile(u, cand, econ) {
 			continue
 		}
-		ownSide := u.Owner == cand.Owner
-		cloaked := isCloakedUnit(cand)
-		underwater := isUnderwaterUnit(cand, seaLevel)
-		underwaterSeen := isAllied(u.Owner, cand.Owner, econ)
-		var catMask content.CategoryMask
-		maskResolved := catalog != nil && cand.Def != nil
-		if cand.Def != nil {
-			catMask = cand.Def.DefinitionMask()
-		}
-		c := Candidate{
-			Handle:               cand.Handle,
-			X:                    cand.X,
-			Z:                    cand.Z,
-			Y:                    cand.Y,
-			CategoryMask:         catMask,
-			CategoryMaskResolved: maskResolved,
-			Hostile:              true,
-			OwnSide:              ownSide,
-			Cloaked:              cloaked,
-			Underwater:           underwater,
-			UnderwaterSeen:       underwaterSeen,
-			AirTarget:            cand.Def != nil && cand.Def.CanFly,
-		}
-		candidates = append(candidates, c)
+		candidates = append(candidates, acquisitionCandidate(u, cand, seaLevel, econ, catalog))
 	}
+	acq := slotAcquisition(u, slot, idx, w, vis, terrain, simRNG, catalog, seaLevel, rangeLimit)
+	h, ok := AcquireTarget(candidates, acq)
+	return h, ok
+}
+
+// acquisitionCandidate builds the §3.1 candidate record for one unit as seen by
+// one shooter. Factored out of acquireTargetForSlotRange so the reaction
+// routine's per-slot offer tests exactly the same predicate the autonomous scan
+// does [06 §3.1][06 R-WPN-04 §2 part 3].
+func acquisitionCandidate(u *units.Unit, cand *units.Unit, seaLevel numeric.Fixed, econ *economy.Service, catalog *content.Catalog) Candidate {
+	var catMask content.CategoryMask
+	if cand.Def != nil {
+		catMask = cand.Def.DefinitionMask()
+	}
+	return Candidate{
+		Handle:               cand.Handle,
+		X:                    cand.X,
+		Z:                    cand.Z,
+		Y:                    cand.Y,
+		CategoryMask:         catMask,
+		CategoryMaskResolved: catalog != nil && cand.Def != nil,
+		Hostile:              true,
+		OwnSide:              u.Owner == cand.Owner,
+		Cloaked:              isCloakedUnit(cand),
+		Underwater:           isUnderwaterUnit(cand, seaLevel),
+		UnderwaterSeen:       isAllied(u.Owner, cand.Owner, econ),
+		AirTarget:            cand.Def != nil && cand.Def.CanFly,
+	}
+}
+
+// slotAcquisition builds one weapon slot's acquisition-time gate set. A
+// nonnegative rangeLimit overrides only the query's range operand [06 §3.1].
+func slotAcquisition(u *units.Unit, slot *units.Slot, idx int, w *units.World, vis *visibility.Service, terrain *world.Terrain, simRNG *rng.Simulation, catalog *content.Catalog, seaLevel numeric.Fixed, rangeLimit int32) Acquisition {
+	weapon := slot.Weapon
 	queryRange := weapon.Range
 	if rangeLimit >= 0 {
 		queryRange = rangeLimit
@@ -748,8 +757,39 @@ func acquireTargetForSlotRange(u *units.Unit, slot *units.Slot, idx int, w *unit
 			return ok
 		}
 	}
-	h, ok := AcquireTarget(candidates, acq)
-	return h, ok
+	return acq
+}
+
+// SlotAcquisitionAdmits reports whether one candidate passes the §3.1
+// acquisition physical gate for one of a unit's weapon slots — the admission
+// the reaction routine's per-slot offer names [06 R-WPN-04 §2 part 3].
+//
+// It is exported because the damage path does not carry the visibility,
+// terrain, ledger and catalog operands the gate needs; the session binds it
+// into ReactionSeams.SlotAcquisitionAdmits with those in hand. It draws no RNG:
+// the gate is the primary-list hostility and visibility predicates plus the
+// physical admission, never the scoring pass (I4).
+func SlotAcquisitionAdmits(u *units.Unit, idx int, cand *units.Unit, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service, catalog *content.Catalog) bool {
+	if u == nil || cand == nil || w == nil {
+		return false
+	}
+	slot := u.SlotAt(idx)
+	if slot == nil || slot.Weapon == nil {
+		return false
+	}
+	if cand.Handle == u.Handle || !cand.Alive || cand.Dying {
+		return false
+	}
+	if !isHostile(u, cand, econ) {
+		return false
+	}
+	var seaLevel numeric.Fixed
+	if terrain != nil {
+		seaLevel = terrain.SeaLevelWorld()
+	}
+	c := acquisitionCandidate(u, cand, seaLevel, econ, catalog)
+	acq := slotAcquisition(u, slot, idx, w, vis, terrain, nil, catalog, seaLevel, -1)
+	return IsValidAcquisitionCandidate(c, acq)
 }
 
 func checkAdmission(u *units.Unit, slot *units.Slot, weapon *content.WeaponDef, tgtPos Vec3, tgtHandle pool.Handle, w *units.World, vis *visibility.Service, terrain *world.Terrain, ballisticOk bool, ballisticPitch uint16) bool {
@@ -1010,7 +1050,16 @@ const (
 	EventStartSound EventKind = 10 // [06 §4.1] C2 [06 §13.2]
 	EventStartSmoke EventKind = 11 // [06 §4.1] C2 [06 §13.2]
 	EventTrailSmoke EventKind = 12 // [06 §13.2][R-STRIP-01 §1 strip 9]
+	// EventDamageFlash is the minimap blink of [06 R-WPN-04 §2]: every accepted
+	// non-heal packet writes the victim's flash byte before the reaction step,
+	// and while it is nonzero the minimap does not draw that unit's dot.
+	EventDamageFlash EventKind = 13
 )
+
+// DamageFlashTicks is the flash's life in unit visits. The byte is written to
+// 240 and decremented as a SIGNED byte once per visit while it is nonzero —
+// 240 reads as -16 — so it reaches zero after sixteen visits [06 R-WPN-04 §2].
+const DamageFlashTicks int32 = 16
 
 func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Terrain, windState *world.Wind, featSvc *features.Service, vis *visibility.Service, econ *economy.Service, catalog *content.Catalog, simRNG *rng.Simulation, crtRNG *rng.CRT) {
 	if s == nil {
@@ -1559,27 +1608,55 @@ func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weap
 		return
 	}
 	shooter := w.Unit(p.Shooter)
+	// [06 §9.1] step 4 runs three things in this order for every accepted
+	// non-heal packet: the damage flash, then the reaction routine, then the
+	// kind byte and the attacker fields. Keeping that order is what lets the
+	// reaction's parts 3 and 4 read the PREVIOUS packet's provenance
+	// [06 R-WPN-04 §2].
+	//
+	// The flash is one byte of the unit record written to 240, decremented as a
+	// signed byte once per unit visit, whose only reader is the minimap
+	// unit-dot pass: the dot is not drawn while it is nonzero, so a unit under
+	// fire vanishes from the minimap for sixteen ticks after each hit
+	// [06 R-WPN-04 §2]. It is presentation only, so it leaves here as an
+	// ordered event on the combat sink rather than as authoritative state.
+	service.emitEvent(Event{Kind: EventDamageFlash, Tick: tick, Source: p.Shooter, Target: victim.Handle, Position: Vec3{X: victim.X, Y: victim.Y, Z: victim.Z}, Duration: DamageFlashTicks})
+	service.ReactToDamage(w, victim, shooter, tick)
+	// The provenance stamp of [06 §9.1] step 4 and [06 §12.1). The kind byte is
+	// recorded on the victim UNCONDITIONALLY — "record the kind byte on the
+	// victim; WHEN THE ATTACKER IS NONZERO store the attacker pointer and its
+	// side snapshot" is two clauses, not one. Tying both to shooter presence
+	// meant a unit killed outright by a null-shooter blast (a death explosion,
+	// a meteor) reached the death finalizer with cause 0, so the credit switch
+	// of [06 §12.1] filed neither the kill it must not file NOR the victim loss
+	// it must.
+	//
+	// The credited side is always the damage-time snapshot — what the death
+	// packet's attacker-side field and the session's kill credit read back
+	// [06 §12.1]. For a real shooter it is the attacker unit's own owner byte,
+	// not the record's side byte: the side byte is the damage gate's operand
+	// and the friendly/enemy sum classifier [06 §9.1][06 §9.3].
+	//
+	// A shooter never stamps ITSELF here, because [06 §9.3] excludes the
+	// record's shooter from its own blast enumeration before this site is
+	// reached. Any later known weapon intake clears a stale reclaim bite
+	// marker, including paralyzer packets that do not reduce health [06 §9.1].
+	victim.LastDamageCause = uint8(CauseOrdinary)
 	if shooter != nil {
-		// The provenance stamp of [06 §9.1] step 4 and [06 §12.1]: on accepted
-		// non-heal damage the victim stores the attacker plus a SNAPSHOT OF THE
-		// ATTACKER'S SIDE taken at damage time, and the packet kind is recorded
-		// before health mutation. The credited side is always that damage-time
-		// snapshot — it is what the death packet's attacker-side field and the
-		// session's kill credit read back [06 §12.1].
-		//
-		// The snapshot is the attacker unit's own owner byte, not the record's
-		// side byte: the side byte is the damage gate's operand and the
-		// friendly/enemy sum classifier [06 §9.1][06 §9.3], while the credited
-		// side comes from the attacker. A null attacker stamps nothing, which is
-		// why a meteor or a death explosion credits nobody [06 R-DMG-01 §9].
-		//
-		// A shooter never stamps ITSELF here, because [06 §9.3] excludes the
-		// record's shooter from its own blast enumeration before this site is
-		// reached. Any later known weapon intake clears a stale reclaim bite
-		// marker, including paralyzer packets that do not reduce health
-		// [06 §9.1].
 		victim.LastDamageSide = shooter.Owner
-		victim.LastDamageCause = uint8(CauseOrdinary)
+	} else {
+		// A null-shooter record's side byte IS the neutral value 10 — the
+		// never-occupied eleventh row [06 §9.1][06 §6.5] — and cause 1's full
+		// credit path then files the victim's loss and credits nobody, because
+		// every kill clause of [06 §12.1] requires an attacker side that is not
+		// 10. Retail reaches the same state by leaving the field alone and
+		// relying on the spawn seed of neutral 10 [06 R-WPN-04 §2]; this build's
+		// unit records seed it to zero (internal/units, outside this unit's
+		// files), which would credit player 0 for every meteor kill, so the
+		// record's own side byte is written here instead. The two differ only
+		// for a victim that had already taken a real hit before the
+		// null-shooter one, where retail keeps the stale snapshot.
+		victim.LastDamageSide = NeutralSide
 	}
 	if weapon.Paralyzer {
 		if victim.Def != nil && victim.Def.ImmuneToParalyzer {

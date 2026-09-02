@@ -168,9 +168,13 @@ func TestNewMissionWithFSKeepsCampaignLoadStrict(t *testing.T) {
 		t.Fatal("strict campaign load must fail when the requested mission is absent")
 	}
 	// Type 1 names the requested file and does not substitute Available.ota;
-	// this preserves the established no-fuzzy-fallback contract [08].
-	if got := err.Error(); !strings.Contains(got, "The requested mission file, Missing.ota, does not exist.") {
-		t.Fatalf("strict campaign diagnostic = %q, want the Type 1 missing-file diagnostic", got)
+	// this preserves the established no-translated-name-retry contract
+	// [08 R-CAMP-01 §11 point 1]. An unopenable/unparsable kind-1 OTA raises
+	// the "no mission defintion" box (sic), naming the requested file, not
+	// the "does not exist" box (that one is reserved for a missing MISSION%d
+	// block) [02 "Mission-file diagnostics"].
+	if got := err.Error(); !strings.Contains(got, "Hey, joker!  There is no mission defintion for this mission: Missing.ota") {
+		t.Fatalf("strict campaign diagnostic = %q, want the Type 1 no-mission-defintion diagnostic", got)
 	}
 }
 

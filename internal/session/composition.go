@@ -1234,6 +1234,10 @@ func createAndBindServices(s *Session) error {
 			} else {
 				s.publication.events.EmitWaterImpact(pe)
 			}
+		case combat.EventDamageFlash:
+			// The flash's only reader is the minimap unit-dot pass, which doc
+			// 07 owns [06 R-WPN-04 §2]. No frame emitter carries it yet, so the
+			// event stops here rather than being published as some other kind.
 		case combat.EventProjectileImpact:
 			s.publication.events.EmitImpact(pe)
 		case combat.EventUnitKilled, combat.EventCorpse:
@@ -1244,6 +1248,7 @@ func createAndBindServices(s *Session) error {
 			}
 		}
 	}
+	s.bindDamageReaction()
 	// Still-unwired strip producer rows [R-STRIP-01 §1], left for the units
 	// that own their trigger sites rather than invented here:
 	//   - strip 5, the flame-weapon area scan: the weapon-class dispatch
@@ -1499,4 +1504,75 @@ func (s *Session) resurrectStep(builder *units.Unit, n *orders.Node, lookupFeatu
 		return true
 	}
 	return false
+}
+
+// bindDamageReaction installs the damage-intake reaction routine's seams
+// [06 §9.1] step 4, closed at [06 R-WPN-04 §2]. The routine itself lives in
+// internal/combat; everything bound here is a mechanism that package cannot
+// reach — internal/orders (which imports it), the computer player's manager,
+// the alliance rows, and the interface message queue.
+func (s *Session) bindDamageReaction() {
+	if s == nil || s.Combat == nil {
+		return
+	}
+	s.Combat.Reaction = &combat.ReactionSeams{
+		// Part 1: pending bit 0x10 on every order record observing the victim
+		// [06 R-WPN-04 §2 part 1][04 R-MOV-03 §7].
+		ObserverNotice: func(victim *units.Unit) {
+			orders.ObserverNotice(s.Units, victim)
+		},
+		// "the attacker is not allied" [08 R-AI-01 §11]. Same-owner counts as
+		// allied; the two directed rows are read the way the combat scan reads
+		// them [05 R-SHARE-01 §1].
+		Allied: func(a, b uint8) bool {
+			if a == b {
+				return true
+			}
+			if s.Econ == nil || int(a) >= len(s.Econ.Players) || int(b) >= len(s.Econ.Players) {
+				return false
+			}
+			return s.Econ.Players[a].Allies[b] || s.Econ.Players[b].Allies[a]
+		},
+		// The construction throttle's draw and deadline are the manager's own
+		// [08 R-AI-01 §11]; the combat side has already tested `cancapture` and
+		// the control byte, which is where retail's own test lives.
+		ArmConstructionThrottle: func(owner uint8, tick uint32) {
+			if int(owner) >= len(s.AI) {
+				return
+			}
+			if mgr := s.AI[owner]; mgr != nil {
+				mgr.RecordUnitLoss(tick)
+			}
+		},
+		StopCurrentOrder: func(victim *units.Unit, tick uint32) {
+			s.bindOrderQueue(victim)
+			orders.StopCurrentOrder(victim, tick)
+		},
+		RetaliationOrder: func(victim, attacker *units.Unit) bool {
+			s.bindOrderQueue(victim)
+			return orders.RetaliationOrder(victim, attacker)
+		},
+		// The §3.1 acquisition physical gate, bound to the operands the damage
+		// path does not carry [06 §3.1][06 R-WPN-04 §2 part 3].
+		SlotAcquisitionAdmits: func(victim *units.Unit, idx int, cand *units.Unit) bool {
+			return combat.SlotAcquisitionAdmits(victim, idx, cand, s.Units, s.Vis, s.World, s.Econ, s.Catalog)
+		},
+		UnderAttackSilenced: orders.UnderAttackSilenced,
+		// The message helper posts the kind-2 message only when the victim is
+		// NOT in the current selection, is owned by the local player, is alive
+		// and is not death-latched [06 R-WPN-04 §2 part 4]. Bit 4 of the status
+		// word is the selection bit the local selection commands write.
+		UnderAttackNotice: func(victim *units.Unit) {
+			if victim == nil || victim.Owner != s.LocalOwner {
+				return
+			}
+			if !victim.Alive || victim.Dying {
+				return
+			}
+			if victim.Flags&0x10 != 0 {
+				return
+			}
+			s.EmitUnderAttack(victim.Handle)
+		},
+	}
 }

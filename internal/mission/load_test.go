@@ -28,51 +28,83 @@ func fsFromMapLoad(t *testing.T, files map[string]string) *vfs.FS {
 	return fs
 }
 
+// TestLoadVerbatimDiagnostics exercises the six-string catalog of
+// [02 "Mission-file diagnostics"], corrected in place by [08 R-CAMP-01 §11]:
+// "does not exist" (kind 1, missing MISSION%d block), "campaign does not
+// exist" (kind 1, camps/<name>.tdf itself fails to open or parse), "no
+// mission defintion" (kind 1, an unopenable/unparsable missionfile OTA),
+// "corrupt" (kind 1, a parsed missionfile OTA with no [GlobalHeader]), "Old
+// TED" (kind 1, missionfile key absent — see TestOldTEDAbsentVsEmptyValue for
+// the absent/empty distinction), and "No GlobalHeader" (kinds 2/3 only, a
+// distinct message from kind 1's "corrupt"). Kinds 2/3's own read/parse
+// failure is silent and is exercised separately below.
 func TestLoadVerbatimDiagnostics(t *testing.T) {
-	// does not exist: missing OTA via TypeSkirmish with no fuzzy candidate
 	t.Run("does not exist", func(t *testing.T) {
-		fs := fsFromMapLoad(t, map[string]string{})
-		_, err := LoadWithType(fs, TypeSkirmish, "Missing.ota", 0, 0, nil)
+		fs := fsFromMapLoad(t, map[string]string{
+			"camps/Empty.tdf": "[HEADER]\n{\n}\n",
+		})
+		_, err := LoadCampaignWithSink(fs, "camps/Empty.tdf", 0, 0, 1, nil)
 		if err == nil {
 			t.Fatalf("want does not exist error")
 		}
 		got := err.Error()
-		want := "The requested mission file, Missing.ota, does not exist."
+		want := "The requested mission file, MISSION0, does not exist."
 		if got != want {
 			t.Fatalf("does not exist verbatim: got %q want %q", got, want)
 		}
-		if !strings.Contains(got, "does not exist") {
-			t.Fatalf("substring does not exist not found in %q", got)
+	})
+	t.Run("campaign does not exist", func(t *testing.T) {
+		fs := fsFromMapLoad(t, map[string]string{})
+		_, err := LoadCampaignWithSink(fs, "camps/Missing.tdf", 0, 0, 1, nil)
+		if err == nil {
+			t.Fatalf("want campaign does not exist error")
+		}
+		got := err.Error()
+		want := "The requested campaign file, camps/Missing.tdf, does not exist."
+		if got != want {
+			t.Fatalf("campaign does not exist verbatim: got %q want %q", got, want)
 		}
 	})
-	// corrupt (no header found)
+	t.Run("no mission defintion", func(t *testing.T) {
+		fs := fsFromMapLoad(t, map[string]string{
+			"camps/NoOTA.tdf": "[HEADER]\n{\n}\n[MISSION0]\n{\n    missionfile=Missing.ota;\n    missionname=First;\n}\n",
+		})
+		_, err := LoadCampaignWithSink(fs, "camps/NoOTA.tdf", 0, 0, 1, nil)
+		if err == nil {
+			t.Fatalf("want no mission defintion error")
+		}
+		got := err.Error()
+		want := "Hey, joker!  There is no mission defintion for this mission: Missing.ota"
+		if got != want {
+			t.Fatalf("no mission defintion verbatim: got %q want %q", got, want)
+		}
+		if !strings.Contains(got, "joker!  There") {
+			t.Fatalf("two spaces after joker! not preserved in %q", got)
+		}
+	})
 	t.Run("corrupt", func(t *testing.T) {
 		fs := fsFromMapLoad(t, map[string]string{
-			"maps/Corrupt.ota": "this is not a TDF header ::: [[[",
+			"camps/Corrupt.tdf": "[HEADER]\n{\n}\n[MISSION0]\n{\n    missionfile=NoHeader.ota;\n    missionname=First;\n}\n",
+			"maps/NoHeader.ota": "[Header]\n{\n}\n",
 		})
-		_, err := LoadWithType(fs, TypeSkirmish, "Corrupt.ota", 0, 0, nil)
+		_, err := LoadCampaignWithSink(fs, "camps/Corrupt.tdf", 0, 0, 1, nil)
 		if err == nil {
 			t.Fatalf("want corrupt error")
 		}
 		got := err.Error()
-		want := "Hey, joker!  Mission file Corrupt.ota is corrupt (no header found)."
+		want := "Hey, joker!  Mission file NoHeader.ota is corrupt (no header found)."
 		if got != want {
 			t.Fatalf("corrupt verbatim: got %q want %q", got, want)
 		}
-		if !strings.Contains(got, "corrupt (no header found)") {
-			t.Fatalf("substring corrupt not found")
-		}
-		// check two spaces after joker!
 		if !strings.Contains(got, "joker!  Mission") {
 			t.Fatalf("two spaces after joker! not preserved in %q", got)
 		}
 	})
-	// Old TED format
 	t.Run("old TED", func(t *testing.T) {
 		fs := fsFromMapLoad(t, map[string]string{
-			"maps/Old.ota": "TED 1.0\n[GlobalHeader]\n{\n}\n",
+			"camps/Old.tdf": "[HEADER]\n{\n}\n[MISSION0]\n{\n    missionname=First;\n}\n",
 		})
-		_, err := LoadWithType(fs, TypeSkirmish, "Old.ota", 0, 0, nil)
+		_, err := LoadCampaignWithSink(fs, "camps/Old.tdf", 0, 0, 1, nil)
 		if err == nil {
 			t.Fatalf("want Old TED error")
 		}
@@ -82,13 +114,12 @@ func TestLoadVerbatimDiagnostics(t *testing.T) {
 			t.Fatalf("Old TED verbatim: got %q want %q", got, want)
 		}
 	})
-	// No GlobalHeader block
+	// No GlobalHeader block: kinds 2/3 only — a distinct message from kind 1's
+	// "corrupt" above for the same underlying condition (a parsed OTA missing
+	// [GlobalHeader]) [02 "Mission-file diagnostics"].
 	t.Run("no GlobalHeader", func(t *testing.T) {
 		fs := fsFromMapLoad(t, map[string]string{
 			"maps/NoGlobal.ota": "[Header]\n{\n}\n",
-			// Provide a valid OTA for fuzzy fallback so this case is NOT fuzzy-resolved to the valid one.
-			// To isolate No GlobalHeader, ensure maps contains only this file (no fallback candidate better? but fuzzy would still pick itself).
-			// Our implementation will try fuzzy fallback on missing GlobalHeader and could fallback to itself? No, fallback searches other files; with only one file, closest is itself, but we exclude self? Our code checks closest != wanted but with only one file wanted == candidate, so no fallback.
 		})
 		_, err := LoadWithType(fs, TypeSkirmish, "NoGlobal.ota", 0, 0, nil)
 		if err == nil {
@@ -99,8 +130,63 @@ func TestLoadVerbatimDiagnostics(t *testing.T) {
 		if got != want {
 			t.Fatalf("No GlobalHeader verbatim: got %q want %q", got, want)
 		}
-		if !strings.Contains(got, "No GlobalHeader block") {
-			t.Fatalf("substring No GlobalHeader not found")
+	})
+	// Kinds 2/3's own read/parse failure emits no message box at all: the
+	// loader "retries through the alias probe and returns silently"
+	// [02 "Mission-file diagnostics"] [08 R-CAMP-01 §11 point 1]. It still
+	// returns a Go error for control flow, but neither the error text nor the
+	// sink carries any of the six verbatim strings; the skirmish Start
+	// preflight is what tells the player "The terrain for the selected map
+	// does not exist."
+	t.Run("skirmish miss is silent", func(t *testing.T) {
+		fs := fsFromMapLoad(t, map[string]string{})
+		sink := &CollectSink{}
+		_, err := LoadWithType(fs, TypeSkirmish, "Missing.ota", 0, 0, sink)
+		if err == nil {
+			t.Fatalf("want a Go error even though it is not a message box")
+		}
+		for _, verbatim := range []string{
+			verbatimDoesNotExist, verbatimCorrupt, verbatimOldTED,
+			verbatimNoGlobalHeader, verbatimNoMissionDefintion,
+		} {
+			if strings.Contains(err.Error(), verbatim) {
+				t.Fatalf("silent miss leaked a verbatim diagnostic: %q contains %q", err.Error(), verbatim)
+			}
+		}
+		if len(sink.Messages) != 0 {
+			t.Fatalf("silent miss must not report to the sink: %v", sink.Messages)
+		}
+	})
+}
+
+// TestOldTEDAbsentVsEmptyValue is the WU-19-14 regression: Old TED fires only
+// when the missionfile key is absent from the MISSION%d block; an authored
+// empty value is present and instead builds Maps\.OTA, which fails to open
+// and raises "no mission defintion" [08 R-CAMP-01 §11 point 2].
+func TestOldTEDAbsentVsEmptyValue(t *testing.T) {
+	t.Run("absent key", func(t *testing.T) {
+		fs := fsFromMapLoad(t, map[string]string{
+			"camps/Absent.tdf": "[HEADER]\n{\n}\n[MISSION0]\n{\n    missionname=First;\n}\n",
+		})
+		_, err := LoadCampaignWithSink(fs, "camps/Absent.tdf", 0, 0, 1, nil)
+		if err == nil || err.Error() != verbatimOldTED {
+			t.Fatalf("want Old TED for an absent missionfile key, got %v", err)
+		}
+	})
+	t.Run("empty value", func(t *testing.T) {
+		fs := fsFromMapLoad(t, map[string]string{
+			"camps/Empty.tdf": "[HEADER]\n{\n}\n[MISSION0]\n{\n    missionfile=;\n    missionname=First;\n}\n",
+		})
+		_, err := LoadCampaignWithSink(fs, "camps/Empty.tdf", 0, 0, 1, nil)
+		if err == nil {
+			t.Fatalf("want an error for an unresolvable empty missionfile")
+		}
+		if err.Error() == verbatimOldTED {
+			t.Fatalf("an empty missionfile value must not raise Old TED, got %v", err)
+		}
+		want := "Hey, joker!  There is no mission defintion for this mission: "
+		if err.Error() != want {
+			t.Fatalf("empty missionfile: got %q want %q", err.Error(), want)
 		}
 	})
 }
@@ -196,8 +282,18 @@ func TestTypeDispatchMatrix(t *testing.T) {
 	})
 }
 
-func TestFuzzySearchFallback(t *testing.T) {
-	// Fixture: two valid OTAs; request a typo that should fuzzy to the closest.
+// TestTranslatedNameFallback exercises kinds 2/3's only fallback
+// [08 R-CAMP-01 §11 point 1]: on a read/parse miss, the requested name is
+// looked up once as a translated map display name in the translation table
+// (case-insensitive equality on the translated text, first entry in
+// source-sorted order); a hit retries with the source string as both display
+// name and file name; no table, no entry, or a second miss fails silently.
+// There is no directory scan and no edit-distance metric — the deleted
+// Levenshtein search was invented. resolveOTAWithFallback is exercised
+// directly (rather than through LoadWithType) because no production caller
+// in this codebase yet plumbs a non-English "current language" this far —
+// see the defaultLanguage comment in load.go.
+func TestTranslatedNameFallback(t *testing.T) {
 	alphaOTA := `
 [GlobalHeader]
 {
@@ -205,31 +301,51 @@ func TestFuzzySearchFallback(t *testing.T) {
     [Schema 0] { Type=Network 1; [specials] { [special0] { specialwhat=StartPos1; } } }
 }
 `
-	betaOTA := `
-[GlobalHeader]
-{
-    missionname=Beta;
-    [Schema 0] { Type=Network 1; [specials] { [special0] { specialwhat=StartPos1; } } }
-}
-`
-	fs := fsFromMapLoad(t, map[string]string{
-		"maps/Alpha.ota": alphaOTA,
-		"maps/Beta.ota":  betaOTA,
+	t.Run("hit retries with the source name", func(t *testing.T) {
+		fs := fsFromMapLoad(t, map[string]string{
+			"maps/Alpha.ota":         alphaOTA,
+			"gamedata/translate.tdf": "[Alpha]\n{\n    German=Anfang;\n}\n",
+		})
+		ota, terrKey, err := resolveOTAWithFallback(fs, "German", "Anfang", nil)
+		if err != nil {
+			t.Fatalf("translated-name retry: %v", err)
+		}
+		if !strings.EqualFold(terrKey, "Alpha") {
+			t.Fatalf("want terrain key Alpha, got %q", terrKey)
+		}
+		if ota == nil || !strings.EqualFold(ota.MissionName, "Alpha") {
+			t.Fatalf("want OTA Alpha, got %+v", ota)
+		}
 	})
-	// Request Alpa.ota (missing 'h') – closest is Alpha.ota (distance 1 vs distance to Beta larger)
-	m, err := LoadWithType(fs, TypeSkirmish, "Alpa.ota", 0, 1, nil)
-	if err != nil {
-		t.Fatalf("fuzzy fallback: %v", err)
-	}
-	if !strings.EqualFold(m.TerrainKey, "Alpha") {
-		t.Fatalf("fuzzy fallback expected Alpha terrain key, got %q", m.TerrainKey)
-	}
-	if m.OTA == nil || !strings.EqualFold(m.OTA.MissionName, "Alpha") {
-		t.Fatalf("fuzzy fallback OTA not Alpha: %+v", m.OTA)
-	}
-	// Also test that fuzzy fallback is attempted when parsing misses due to corrupt?
-	// Create a corrupt file for the requested name, but valid fallback exists – should still fallback to closest valid?
-	// Our implementation tries fuzzy on corrupt/no header as well.
+	t.Run("no table loaded fails silently", func(t *testing.T) {
+		fs := fsFromMapLoad(t, map[string]string{
+			"maps/Alpha.ota": alphaOTA,
+			// gamedata/translate.tdf is absent: "no table loaded" per §11.
+		})
+		sink := &CollectSink{}
+		_, _, err := resolveOTAWithFallback(fs, "German", "Anfang", sink)
+		if err == nil {
+			t.Fatalf("want failure with no translation table")
+		}
+		if len(sink.Messages) != 0 {
+			t.Fatalf("silent failure must not report to the sink: %v", sink.Messages)
+		}
+	})
+	t.Run("second miss fails silently", func(t *testing.T) {
+		fs := fsFromMapLoad(t, map[string]string{
+			"gamedata/translate.tdf": "[Alpha]\n{\n    German=Anfang;\n}\n",
+			// maps/Alpha.ota is deliberately absent: the retried source name
+			// misses too, so nothing further is tried.
+		})
+		sink := &CollectSink{}
+		_, _, err := resolveOTAWithFallback(fs, "German", "Anfang", sink)
+		if err == nil {
+			t.Fatalf("want failure on a second miss")
+		}
+		if len(sink.Messages) != 0 {
+			t.Fatalf("silent failure must not report to the sink: %v", sink.Messages)
+		}
+	})
 }
 
 func TestOrderingSchemaBeforePlacement(t *testing.T) {

@@ -53,19 +53,33 @@ func scorePanelTables() *palette.Tables {
 	return t
 }
 
+// scorePanelPlayers is the two-slot fixture: both records present with live
+// units, ranks in slot order, the local player in slot 1.
+func scorePanelPlayers() [frame.PlayerRowSlots]frame.PlayerRow {
+	var rows [frame.PlayerRowSlots]frame.PlayerRow
+	rows[0] = frame.PlayerRow{Present: true, Name: "Enemy", Controller: 2, LiveUnits: 4, Kills: 3, Losses: 1, Rank: 0}
+	rows[1] = frame.PlayerRow{Present: true, Name: "Local", Controller: 1, LiveUnits: 6, Kills: 5, Losses: 2, Rank: 1}
+	return rows
+}
+
 func scorePanelFixture(t *testing.T, campaign bool) (*client.Client, *retailBattleHUD, *battleSession) {
+	t.Helper()
+	return scorePanelFixtureWith(t, campaign, scorePanelPlayers(), 1, 2)
+}
+
+// scorePanelFixtureWith publishes one committed frame carrying the given
+// per-tick player rows, local player and player-count word (one economy row
+// per occupied slot, which is what the panel's geometry counts).
+func scorePanelFixtureWith(t *testing.T, campaign bool, players [frame.PlayerRowSlots]frame.PlayerRow, local uint8, playerCount int) (*client.Client, *retailBattleHUD, *battleSession) {
 	t.Helper()
 	buf := frame.NewBuffer()
 	w := buf.BeginWrite()
-	w.Economy = append(w.Economy[:0],
-		frame.EconomyView{Player: 0, Active: true},
-		frame.EconomyView{Player: 1, Active: true},
-	)
-	w.Selection.LocalPlayer = 1
-	w.Result.Scores = append(w.Result.Scores[:0],
-		frame.ResultScore{Player: 0, Name: "Enemy", Kills: 3, Losses: 1},
-		frame.ResultScore{Player: 1, Name: "Local", Kills: 5, Losses: 2},
-	)
+	w.Economy = w.Economy[:0]
+	for i := 0; i < playerCount; i++ {
+		w.Economy = append(w.Economy, frame.EconomyView{Player: uint8(i), Active: true})
+	}
+	w.Selection.LocalPlayer = local
+	w.Players = players
 	if err := buf.Publish(1); err != nil {
 		t.Fatal(err)
 	}
@@ -165,6 +179,65 @@ func TestScorePanelLightensOnlyTheLocalPlayersRow(t *testing.T) {
 	}
 	if got := img.RGBAAt(519, 90); got != gray(42) {
 		t.Fatalf("highlight left edge = %#v, want the lightened row", got)
+	}
+}
+
+// One row is drawn per qualifying slot, in rank order, and a vacated rank is
+// compacted in the same frame [07 R-HUD-04 §1]. Five slots are published:
+// slot 1 carries the neutral side 10 and slot 4 is a watcher, so neither
+// qualifies; the three that do collapse onto ranks 0, 1, 2 and are drawn at
+// 47, 87 and 127. The local player is slot 3, whose row is the third drawn —
+// which is only true if the two rejected slots consumed no row.
+func TestScorePanelDrawsOneRowPerQualifyingSlotInRankOrder(t *testing.T) {
+	var rows [frame.PlayerRowSlots]frame.PlayerRow
+	rows[0] = frame.PlayerRow{Present: true, Name: "A", Controller: 1, LiveUnits: 1, Rank: 0}
+	rows[1] = frame.PlayerRow{Present: true, Name: "Neutral", Controller: 1, LiveUnits: 1, Side: hud.ScoreSideExcluded, Rank: 1}
+	rows[2] = frame.PlayerRow{Present: true, Name: "B", Controller: 2, LiveUnits: 1, Rank: 2}
+	rows[3] = frame.PlayerRow{Present: true, Name: "Local", Controller: 1, LiveUnits: 1, Rank: 3}
+	rows[4] = frame.PlayerRow{Present: true, Name: "Watcher", Controller: 1, LiveUnits: 1, Watcher: true, Rank: 4}
+	c, h, b := scorePanelFixtureWith(t, false, rows, 3, 5)
+	b.panelHoldFlag = true
+	for i := 0; i < 24 && h.score != hud.ScorePanelWidth; i++ {
+		c.ComposeFrame()
+	}
+	img := c.ComposeFrame()
+	if h.score != hud.ScorePanelWidth {
+		t.Fatalf("slide word = %d, want the open detent 125", h.score)
+	}
+	// Drawn rows 0 and 1 (tops 47 and 87) are slots 0 and 2, neither local.
+	if got := img.RGBAAt(600, 50); got != gray(40) {
+		t.Fatalf("first drawn row = %#v, want the shaded body only", got)
+	}
+	if got := img.RGBAAt(600, 90); got != gray(40) {
+		t.Fatalf("second drawn row = %#v, want the shaded body only", got)
+	}
+	// Drawn row 2 (top 127) is slot 3, the local player.
+	if got := img.RGBAAt(600, 130); got != gray(42) {
+		t.Fatalf("third drawn row = %#v, want the local player's lightening", got)
+	}
+	// There is no fourth row: the two rejected slots drew nothing, so the
+	// remaining panel body is unlit.
+	if got := img.RGBAAt(600, 170); got != gray(40) {
+		t.Fatalf("fourth row band = %#v, want the shaded body only", got)
+	}
+}
+
+// A present slot whose controller byte is outside 1..3 fails the row filter,
+// so the panel draws its body and headings with no rows at all
+// [07 R-HUD-04 §1].
+func TestScorePanelDrawsNoRowWhenNoSlotQualifies(t *testing.T) {
+	var rows [frame.PlayerRowSlots]frame.PlayerRow
+	// Present, but the controller byte is outside 1..3.
+	rows[0] = frame.PlayerRow{Present: true, Name: "Idle", Controller: 0, LiveUnits: 1, Rank: 0}
+	c, h, b := scorePanelFixtureWith(t, false, rows, 0, 1)
+	b.panelHoldFlag = true
+	for i := 0; i < 24 && h.score != hud.ScorePanelWidth; i++ {
+		c.ComposeFrame()
+	}
+	img := c.ComposeFrame()
+	// The body is still darkened; no row is lightened.
+	if got := img.RGBAAt(600, 50); got != gray(40) {
+		t.Fatalf("unqualified slot drew a row: %#v", got)
 	}
 }
 

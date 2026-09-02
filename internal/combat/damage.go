@@ -405,44 +405,245 @@ func ValidatePacketKind(kind uint8) bool {
 	return IsDamagePacketKind(kind) // [P1-07 §2.6] 1,2,10,11
 }
 
-// The damage-intake reaction routine [06 §9.1] step 4 "reaction/wake/retarget"
-// — closed at [06 R-WPN-04 §2] — is Established but has NO implementation
-// anywhere in this package or its neighbors. It runs for every accepted
-// non-heal packet whose kind is not 11, in four parts: (1) an observer notice
-// walked off the victim's order-task list; (2) attacker validation (a freed
-// slot counts as no attacker); (3) the construction throttle and the
-// retaliation offer, cited as exactly [08 R-AI-01 §11]; (4) the "Under Attack"
-// interface notice.
+// ReactionSeams binds the parts of the damage-intake reaction routine of
+// [06 §9.1] step 4 that internal/combat cannot reach from inside itself. The
+// order-side parts live in internal/orders, which imports this package, so they
+// arrive as function values the session installs at composition; the alliance
+// row, the computer player's manager and the interface message queue are
+// session-owned for the same reason. A nil seam, or a nil member, makes that
+// part a no-op — the routine's ORDER and GATES stay here regardless.
+type ReactionSeams struct {
+	// ObserverNotice is part 1: deliver event code 16 to every order record
+	// observing the victim [06 R-WPN-04 §2 part 1][04 R-MOV-03 §7].
+	ObserverNotice func(victim *units.Unit)
+	// Allied reports the alliance relation the retaliation gate tests
+	// ("the attacker is not allied") [08 R-AI-01 §11].
+	Allied func(a, b uint8) bool
+	// ArmConstructionThrottle writes the owning player's manager throttle
+	// deadline — the one simulation draw of bound 300 in the whole damage-intake
+	// path — for a computer player [08 R-AI-01 §11].
+	ArmConstructionThrottle func(owner uint8, tick uint32)
+	// StopCurrentOrder clears the damaged unit's current order through the
+	// ordinary stop path, the throttle's second half [08 R-AI-01 §11].
+	StopCurrentOrder func(victim *units.Unit, tick uint32)
+	// RetaliationOrder is the retaliation's order branch: the shared auto-engage
+	// issuer with force = 0, behind the front-order and category admissions
+	// [08 R-AI-01 §11][04 R-STANCE-01 §3]. It reports whether a record was
+	// inserted; the per-slot offer runs only when it was not.
+	RetaliationOrder func(victim, attacker *units.Unit) bool
+	// SlotAcquisitionAdmits is the §3.1 acquisition physical gate for one of the
+	// victim's weapon slots against one candidate. The damage path does not
+	// carry the visibility, terrain, ledger and catalog operands that gate
+	// needs, so the session supplies it bound to them [06 §3.1].
+	SlotAcquisitionAdmits func(victim *units.Unit, slotIdx int, candidate *units.Unit) bool
+	// UnderAttackSilenced reads bit 7 of the gate-mask word of the victim's
+	// front primary order [06 R-WPN-04 §2 part 4].
+	UnderAttackSilenced func(victim *units.Unit) bool
+	// UnderAttackNotice requests the interface message of kind 2. The helper
+	// applies its own selection/ownership/liveness gates [06 R-WPN-04 §2 part 4].
+	UnderAttackNotice func(victim *units.Unit)
+}
+
+// slotTrackingFlag is bit 4 of a weapon slot's flag byte — the tracking flag of
+// the two persisted slot flags [06 §1.2][08 R-SAVE-WEAPON-01].
 //
-// TODO(question): part 3's retaliation offer — including its `commandfire`
-// admission, the finding this unit was dispatched to close — cannot be added
-// from this file alone. [08 R-AI-01 §11] states it needs, all at the same
-// reaction site: the victim's live weapon Slots and standing-fire field
-// (content.UnitDef.StandingFireOrder / the runtime StandingFireShift bits of
-// [internal/units/units.go], neither read anywhere in internal/combat today);
-// the §3.1 acquisition physical gate this package already exposes
-// (IsValidAcquisitionCandidate, AutonomousScanAdmitsSlot's siblings); and, for
-// the "no current order, or an interruptible one" branch, an order-issuing
-// seam into internal/orders, which internal/combat does not import. The
-// construction throttle half of the same reaction site already exists, but
-// misplaced at the death-finalization boundary in internal/session/session.go
-// (see the comment beside its `Units.OnDeath` throttle call, "Residual:
-// retail arms this throttle from damage to a CanCapture unit, not death
-// finalization; moving the hook awaits the later combat-reaction unit that
-// owns that damage boundary [08 R-AI-01 §11]") — this unit is that later
-// combat-reaction unit, and moving the throttle is part of the same
-// undone seam.
+// TODO(question): nothing in this build SETS it (the only writer is the manual
+// target path, which clears it), so the autonomous scan of [06 §3.2] does not
+// test it either and neither does the offer below; both would otherwise be dead
+// code. The unresolved question is the one already recorded beside the
+// autonomous scan in service.go — whether [R-ORDER-02 §2]'s "slot control byte"
+// and [08 R-SAVE-WEAPON-01]'s persisted slot-flag byte are one byte, which
+// would make *release*/*inhibit* the writers of this bit. Decider: a trace of
+// the two order-side helpers' stores against the byte the save writer
+// serializes.
+const slotTrackingFlag uint8 = 0x10
+
+// ReactToDamage is the damage-intake reaction routine of [06 §9.1] step 4,
+// closed at [06 R-WPN-04 §2]. It runs for every accepted non-heal packet whose
+// kind is not 11, AFTER the damage flash and BEFORE the kind byte and attacker
+// fields are rewritten — which is why parts 3 and 4 still read the PREVIOUS
+// packet's kind and attacker-side snapshot.
 //
-// None of this can be wired from internal/combat/damage.go (or
-// internal/combat/target.go) without either reaching into internal/session
-// and internal/orders from internal/combat (a cross-package refactor no
-// single-unit dispatch should make unilaterally) or inventing a call site
-// that does not exist yet. Per AGENTS.md's dispatch discipline this is left
-// as a named gap for a follow-up unit scoped to internal/combat/service.go
-// (the packet dispatcher that would host the reaction call) together with
-// internal/session/session.go (to relocate the throttle) and, for the
-// auto-engage order branch, internal/orders. Decider: a work unit whose
-// Public API names the reaction site's seam into internal/orders.
+// Its four parts run in this order and no other:
+//
+//  1. the observer notice;
+//  2. attacker validation — an attacker whose definition index is zero (a
+//     freed slot) counts as no attacker for the rest of the routine;
+//  3. the construction throttle, then the retaliation offer, exactly
+//     [08 R-AI-01 §11];
+//  4. the under-attack notice.
+func (s *Service) ReactToDamage(w *units.World, victim, attacker *units.Unit, tick uint32) {
+	if s == nil || victim == nil {
+		return
+	}
+	r := s.Reaction
+	if r != nil && r.ObserverNotice != nil {
+		r.ObserverNotice(victim) // part 1 [06 R-WPN-04 §2]
+	}
+	if attacker != nil && attacker.Def == nil {
+		attacker = nil // part 2: a freed slot is no attacker [06 R-WPN-04 §2]
+	}
+	s.reactionThrottle(victim, tick)           // part 3, first half [08 R-AI-01 §11]
+	s.reactionRetaliation(w, victim, attacker) // part 3, second half
+	s.reactionUnderAttackNotice(victim)        // part 4
+}
+
+// reactionThrottle is the construction throttle of [08 R-AI-01 §11]: when the
+// damaged unit's definition has the authored `cancapture` flag, its owning
+// player record exists and that player's control byte is 2, the engine draws
+// RNG(300) and writes the owning player's manager throttle deadline to
+// tick + 30 + draw, then clears the damaged unit's current order through the
+// ordinary stop path. It is computer-players-only, and the draw is the only
+// simulation draw anywhere in the damage-intake path.
+//
+// Retail arms it from DAMAGE to a `cancapture` unit. Before this routine
+// existed the session armed it from death finalization instead, which is a
+// different event with a different cadence.
+func (s *Service) reactionThrottle(victim *units.Unit, tick uint32) {
+	if s == nil || victim == nil || victim.Def == nil || !victim.Def.CanCapture {
+		return
+	}
+	if s.PlayerControlByteFor(victim.Owner) != ControlByteComputer {
+		return
+	}
+	r := s.Reaction
+	if r == nil {
+		return
+	}
+	if r.ArmConstructionThrottle != nil {
+		r.ArmConstructionThrottle(victim.Owner, tick)
+	}
+	if r.StopCurrentOrder != nil {
+		r.StopCurrentOrder(victim, tick)
+	}
+}
+
+// reactionRetaliation is the return-fire half of [08 R-AI-01 §11], which is not
+// computer-player-specific: it is the engine's return fire and applies to a
+// human player's units too.
+//
+// Its outer admission, all required: the attacker is known; the victim's owner
+// has control byte 1 or 2; the victim's definition is ARMED (its derived flag,
+// set unless all three resolved weapon slots are empty) or carries `kamikaze`;
+// the victim is fully built; and the attacker is not allied.
+//
+// Then the order branch runs first ([04 R-STANCE-01 §3] restates it in stance
+// terms), and only when it issued nothing does the per-slot offer run, gated on
+// the victim's standing-fire field being non-zero.
+func (s *Service) reactionRetaliation(w *units.World, victim, attacker *units.Unit) {
+	if s == nil || victim == nil || attacker == nil || victim == attacker {
+		return
+	}
+	// "a controller of type 1 or 2" — the same two values the death latch
+	// admits [06 R-DMG-01 §8][08 R-AI-01 §11].
+	if !s.DeathLatchAdmitted(victim.Owner) {
+		return
+	}
+	armed := victim.Flags&units.ArmedStatus != 0 || (victim.Def != nil && victim.Def.Kamikaze)
+	if !armed {
+		return
+	}
+	if victim.Remaining != 0 {
+		return // fully built only [08 R-AI-01 §11]
+	}
+	r := s.Reaction
+	if r == nil {
+		return
+	}
+	if r.Allied == nil || r.Allied(victim.Owner, attacker.Owner) {
+		return // "the attacker is not allied"; with no alliance row, fail closed
+	}
+	if r.RetaliationOrder != nil && r.RetaliationOrder(victim, attacker) {
+		return // an order was issued; the offer does not also run [08 R-AI-01 §11]
+	}
+	if victim.Flags>>units.StandingFireShift&units.StandingFieldMask == 0 {
+		return // the offer needs a non-zero standing-fire field [08 R-AI-01 §11]
+	}
+	s.offerAttackerToSlots(w, victim, attacker)
+}
+
+// offerAttackerToSlots is the per-slot offer, whose admission [06 R-WPN-04 §2
+// part 3] states exactly: for each slot whose armed and tracking bits are set,
+// the §3.1 acquisition physical gate accepts the attacker for that slot AND the
+// weapon is not `commandfire`; the attacker is then installed through the
+// unit-target setter (which preserves the Aim latch, [06 §3.2]) unless the
+// slot's present target exists, passes the same gate, and is clear of the
+// slot's bad-target set.
+//
+// The `commandfire` clause is why a human commander's disintegrator is never
+// offered its attacker while its laser is: the same contract the autonomous
+// scan carries at [06 §3.2].
+func (s *Service) offerAttackerToSlots(w *units.World, victim, attacker *units.Unit) {
+	r := s.Reaction
+	if r == nil || r.SlotAcquisitionAdmits == nil {
+		return
+	}
+	for idx := 0; idx < units.NumSlots; idx++ { // numeric slot order [06 §3.2]
+		slot := victim.SlotAt(idx)
+		if slot == nil || !slot.IsPopulated() {
+			continue
+		}
+		// The tracking half of the two persisted slot flags has no producer in
+		// this build; see slotTrackingFlag's TODO(question).
+		if slot.Weapon.CommandFire {
+			continue // "and the weapon is not `commandfire`" [06 R-WPN-04 §2]
+		}
+		if !r.SlotAcquisitionAdmits(victim, idx, attacker) {
+			continue
+		}
+		if s.slotKeepsPresentTarget(w, victim, slot, idx) {
+			continue
+		}
+		// The unit-target setter preserves the Aim latch and the asynchronous
+		// Aim result [06 §3.2]; only the target pair and the armed/has-target
+		// bit are written.
+		slot.Target = units.Target{Kind: units.TargetUnit, Unit: attacker.Handle}
+		slot.Flags |= 0x02
+	}
+}
+
+// slotKeepsPresentTarget is the offer's "unless" clause: the slot's present
+// target exists, passes the same acquisition gate, and is clear of the slot's
+// bad-target set [06 R-WPN-04 §2 part 3].
+func (s *Service) slotKeepsPresentTarget(w *units.World, victim *units.Unit, slot *units.Slot, idx int) bool {
+	if w == nil || slot.Target.Kind != units.TargetUnit || slot.Target.Unit == 0 {
+		return false
+	}
+	cur := w.Unit(slot.Target.Unit)
+	if cur == nil || !cur.Alive || cur.Dying {
+		return false
+	}
+	r := s.Reaction
+	if r == nil || r.SlotAcquisitionAdmits == nil || !r.SlotAcquisitionAdmits(victim, idx, cur) {
+		return false
+	}
+	return IsPreferredCategoryMask(cur.Def.DefinitionMask(), badMaskForSlot(victim.Def, idx))
+}
+
+// reactionUnderAttackNotice is part 4 [06 R-WPN-04 §2]: read the gate-mask word
+// of the victim's front primary order (zero when it has none); when its bit 7
+// is clear AND either the stored attacker-side snapshot differs from the
+// victim's owner byte or the stored last damage kind is 1, request the
+// interface message of kind 2 (`Under Attack`) for the victim.
+//
+// Because the routine runs before the field rewrite, the two stored values are
+// the PREVIOUS packet's. The first hit on a fresh unit therefore always
+// qualifies (its snapshot is seeded to the neutral value 10 at spawn), while
+// the hit that follows an own-side non-weapon packet — a reclaim pulse, a cargo
+// cascade — is silent once.
+func (s *Service) reactionUnderAttackNotice(victim *units.Unit) {
+	r := s.Reaction
+	if r == nil || r.UnderAttackNotice == nil {
+		return
+	}
+	if r.UnderAttackSilenced != nil && r.UnderAttackSilenced(victim) {
+		return // bit 7 set: already attacking, or an aircraft in follow/guard
+	}
+	if victim.LastDamageSide == victim.Owner && victim.LastDamageCause != uint8(CauseOrdinary) {
+		return
+	}
+	r.UnderAttackNotice(victim)
+}
 
 // ApplyHealing performs the early healing path [06 §9.1]: adds packet's
 // unsigned 16-bit amount to signed current health in 32-bit arithmetic,

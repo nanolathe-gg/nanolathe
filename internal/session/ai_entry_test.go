@@ -8,6 +8,7 @@ import (
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/clock"
+	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/mission"
@@ -134,8 +135,16 @@ func TestCampaignSecondGrantOverwritesStocksOnly(t *testing.T) {
 	}
 }
 
+// TestUnitLossThrottleIsControllerTwoOnly locks the construction throttle of
+// [08 R-AI-01 §11] at the boundary that owns it. Relocated by WU-19-26: the
+// throttle is armed from DAMAGE to a `cancapture` unit whose owning player's
+// control byte is 2 — one of the four parts of the damage-intake reaction
+// routine of [06 §9.1] step 4 — and NOT from death finalization, where this
+// build used to arm it. Death is a different event with a different cadence.
 func TestUnitLossThrottleIsControllerTwoOnly(t *testing.T) {
 	cat := minimalCatalogForStrict()
+	// `cancapture` is the throttle's definition gate [08 R-AI-01 §11].
+	cat.Units["armcom"].CanCapture = true
 	w, err := newSlicedWorld(cat)
 	if err != nil {
 		t.Fatal(err)
@@ -146,12 +155,20 @@ func TestUnitLossThrottleIsControllerTwoOnly(t *testing.T) {
 		Units:   w,
 		Econ:    &economy.Service{},
 		Clock:   &clock.State{},
+		Combat:  &combat.Service{},
 	}
 	for owner, controller := range []uint8{1, 2} {
 		p := &s.Econ.Players[owner]
 		p.Exists = true
 		p.ControllerState = controller
 	}
+	s.Combat.ControlByte = func(owner uint8) uint8 {
+		if int(owner) >= len(s.Econ.Players) || !s.Econ.Players[owner].Exists {
+			return combat.ControlByteAbsent
+		}
+		return s.Econ.Players[owner].ControllerState
+	}
+	s.bindDamageReaction()
 	s.SeedSessionRNG(123, 456)
 	s.Clock.GlobalTick = 17
 	humanManager := &ai.Manager{Player: 0, RNG: s.SimRNG()}
@@ -165,32 +182,42 @@ func TestUnitLossThrottleIsControllerTwoOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	human := w.Unit(humanHandle)
-	human.Dying = true
-	human.DeathCause = 1
-	before := s.SimRNG().Draws()
-	s.phaseUnits(1)
-	if got := s.SimRNG().Draws(); got != before {
-		t.Fatalf("human manager death consumed %d draws, want zero [08 R-AI-01 §11]", got-before)
-	}
-	if got := humanManager.UnitLossDeadline(); got != 0 {
-		t.Fatalf("human manager armed unit-loss deadline %d, want zero", got)
-	}
-
 	computerHandle, err := w.Create(def, 1, 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	computer := w.Unit(computerHandle)
-	computer.Dying = true
-	computer.DeathCause = 1
+
+	// Damage to a human-owned `cancapture` unit arms nothing: the throttle is
+	// the computer player's alone [08 R-AI-01 §11].
+	before := s.SimRNG().Draws()
+	s.Combat.ReactToDamage(w, human, computer, s.Clock.GlobalTick)
+	if got := s.SimRNG().Draws(); got != before {
+		t.Fatalf("human reaction consumed %d draws, want zero [08 R-AI-01 §11]", got-before)
+	}
+	if got := humanManager.UnitLossDeadline(); got != 0 {
+		t.Fatalf("human manager armed unit-loss deadline %d, want zero", got)
+	}
+
+	// Damage to the computer's own `cancapture` unit draws once, bound 300, and
+	// writes tick + 30 + draw [08 R-AI-01 §11].
 	probe := rng.NewSimulation(123)
 	wantDeadline := uint32(17 + 30 + probe.Uint32n(300))
-	s.phaseUnits(2)
+	s.Combat.ReactToDamage(w, computer, human, s.Clock.GlobalTick)
 	if got := s.SimRNG().Draws(); got != before+1 {
-		t.Fatalf("computer manager death consumed %d draws, want one", got-before)
+		t.Fatalf("computer reaction consumed %d draws, want one", got-before)
 	}
 	if got := computerManager.UnitLossDeadline(); got != wantDeadline {
 		t.Fatalf("computer unit-loss deadline = %d, want %d", got, wantDeadline)
+	}
+
+	// Death finalization no longer arms it, and draws nothing.
+	before = s.SimRNG().Draws()
+	computer.Dying = true
+	computer.DeathCause = 1
+	s.phaseUnits(2)
+	if got := s.SimRNG().Draws(); got != before {
+		t.Fatalf("death finalization consumed %d draws, want zero: the throttle moved to the damage boundary [08 R-AI-01 §11]", got-before)
 	}
 }
 
