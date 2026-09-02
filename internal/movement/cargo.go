@@ -379,14 +379,10 @@ func cargoCascadeCause(carrier *units.Unit) combat.Cause {
 // [06 §12.1], which is the value retail's own cascade reads, so this reads it
 // there and the ambiguous byte is gone.
 //
-// TODO(T25): nothing in production calls this — the movement tests are its only
-// callers. Retail runs the cascade inside the central death handler, between
-// the victim's own carrier detach and the replay-mode `Killed` dispatch
-// [06 §12.1]; this build's equivalent boundary is the unit finalizer's death
-// hook, which internal/session installs and which owns no movement System.
-// Placeholder behavior: a dying carrier's cargo is left attached and undamaged
-// until that hook calls this. Wiring it is a session change, not a movement
-// one.
+// The caller is the unit finalizer's death hook (internal/session), which is
+// this build's equivalent of the position [06 §12.1] gives the cascade inside
+// the central death handler: after the fixed teardown helpers and before the
+// death explosion and corpse placement.
 func (s *System) HandleDeath(w *units.World, dyingHandle pool.Handle, killerHandle pool.Handle) {
 	if s == nil || w == nil {
 		return
@@ -411,8 +407,10 @@ func (s *System) HandleDeath(w *units.World, dyingHandle pool.Handle, killerHand
 		// builder"): the attacker unit's own owner byte, or the neutral side
 		// 10 when the packet has no attacker at all [06 R-WPN-04 §2].
 		attackerSide := units.NeutralAttackerSide
+		attackerKills := int32(0)
 		if killer := w.Unit(killerHandle); killer != nil {
 			attackerSide = killer.Owner
+			attackerKills = killer.Kills
 		}
 		// Copy list for deterministic iteration (slot asc already)
 		cargos := append([]pool.Handle(nil), dying.Attachment.Cargo...)
@@ -424,10 +422,29 @@ func (s *System) HandleDeath(w *units.World, dyingHandle pool.Handle, killerHand
 			if cargo == nil {
 				continue
 			}
-			dmg := int32(30000)
-			// Apply through funnel: for now subtract health and mark.
-			// In combat, would go through death funnel with armor/veterancy [06 §9.1]; keep direct.
 			if cargo.Health > 0 {
+				// [06 §12.1]: "Each cargo unit receives a 30,000 damage packet
+				// through the ordinary builder — so it is scaled by defender
+				// veterancy but not by the armored-state modifier, whose gate
+				// is a strict `< 30,000`". The ordinary builder is the C20
+				// step order of [06 §9.2], so the armor gate is handed the
+				// real posture operand and closes itself on the amount, rather
+				// than being skipped here.
+				//
+				// TODO(question): [06 §12.1] names defender veterancy and the
+				// armor gate explicitly but is silent on step 3, the ATTACKER
+				// veterancy multiplier, which the ordinary builder applies from
+				// the packet's attacker — here the carrier's killer. Passing
+				// its kills is the builder taken as written; if a probe shows
+				// the cascade bypasses step 3, this argument becomes 0 and
+				// nothing else changes. Either way the amount stays at or above
+				// 30000, so the strict armor gate is closed on both readings.
+				damageModifier := int32(65536)
+				if cargo.Def != nil {
+					damageModifier = cargo.Def.DamageModifier
+				}
+				amount := combat.ComputeScaledAmount(30000, 1, attackerKills, cargo.Kills,
+					combat.UnitArmored(cargo), damageModifier, false, false, false)
 				// The packet's provenance pair, written where the ordinary
 				// intake writes it — on the application, before the health arm
 				// [06 §9.1] step 4. The kind byte is what the death handler's
@@ -436,7 +453,9 @@ func (s *System) HandleDeath(w *units.World, dyingHandle pool.Handle, killerHand
 				// loss-only path.
 				cargo.LastDamageCause = uint8(cascadeCause)
 				cargo.LastDamageSide = attackerSide
-				cargo.Health -= dmg
+				// The health arm is the ordinary one: modular 16-bit
+				// subtraction read back as signed [06 §9.1].
+				cargo.Health = combat.ApplyDamage(cargo.Health, amount)
 				if cargo.Health <= 0 {
 					cargo.Health = 0
 					// The recorded-attacker link takes the same attacker

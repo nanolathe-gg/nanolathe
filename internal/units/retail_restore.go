@@ -36,8 +36,16 @@ func RetailUnitBase(u *Unit, data []byte) error {
 	u.Pending = uint32(binary.LittleEndian.Uint16(data[0xAE:]))
 	u.Remaining = math.Float32frombits(binary.LittleEndian.Uint32(data[0xA7:]))
 	u.HasMover = binary.LittleEndian.Uint32(data[0x27:]) != 0
+	// The saved byte is retail's death-cause byte, "the cause code recorded by
+	// the last damage packet" [08 R-SAVE-02 §6] — a damage-kind value in the
+	// sixteen-value enumeration of [06 §12.1]. It restores verbatim into the
+	// field that holds that enumeration; the coarse label is DERIVED from it,
+	// because the two do not share a numbering. Casting the byte straight into
+	// DeathCause (as this did) filed a restored reclaim victim, kind 5, as an
+	// enum value with no member at all, and made retail's paralyze kind 2 read
+	// back as DeathReclaimed.
 	u.LastDamageCause = data[0xAB]
-	u.DeathCause = DeathCause(data[0xAB])
+	u.DeathCause = DeathCauseFromKind(data[0xAB])
 	u.RelationDomainByte = data[0x8E]
 	u.CachedOccupancyX = int16(binary.LittleEndian.Uint16(data[0x93:]))
 	u.CachedOccupancyZ = int16(binary.LittleEndian.Uint16(data[0x95:]))

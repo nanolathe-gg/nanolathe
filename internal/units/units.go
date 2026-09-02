@@ -25,6 +25,47 @@ const (
 	DeathSelfDestruct
 )
 
+// Retail damage-kind bytes this package has to name. The full sixteen-value
+// enumeration and its producers live in internal/combat, which imports this
+// package and so cannot be imported back; these three are repeated here
+// because the save boundary and the coarse-label derivation below both need
+// them. Kind 3 is the self-destruct countdown and kind 5 the reclaim /
+// build-complete pulse [06 §12.1]; kind 0 is the scenario/load removal that
+// carries no packet at all.
+const (
+	damageKindNone         uint8 = 0
+	damageKindSelfDestruct uint8 = 3
+	damageKindReclaim      uint8 = 5
+)
+
+// DeathCauseFromKind derives the coarse label from retail's damage-kind byte.
+//
+// Retail keeps ONE value: the cause code recorded by the last damage packet,
+// which is what the death packet's high nibble carries [06 §12.1] and what the
+// save record's death-cause byte holds [08 R-SAVE-02 §6]. DeathCause is this
+// build's label for the same event, not a second reading of it, so anything
+// that recovers a kind byte — save restore above all — derives the label here
+// rather than casting the byte into an enum whose members do not share its
+// numbering. Kind 2 is retail's paralyze packet, for instance, while
+// DeathCause(2) is DeathReclaimed; the raw cast made those the same value.
+//
+// The three labelled kinds map to their members and every remaining kind that
+// can be a death cause maps to DeathKilled, which is the label the finalizer
+// treats as "a packet killed it" — the recorded kind byte, not this label, is
+// what selects the credit path and the death explosion [06 §12.1].
+func DeathCauseFromKind(kind uint8) DeathCause {
+	switch kind {
+	case damageKindNone:
+		return DeathUnknown
+	case damageKindSelfDestruct:
+		return DeathSelfDestruct
+	case damageKindReclaim:
+		return DeathReclaimed
+	default:
+		return DeathKilled
+	}
+}
+
 // ClassifierEligibleStatus is the runtime unit-status bit consumed by the
 // retail manager classifier. It is initialized by the common allocator
 // initializer, rather than copied from UnitDef/FBI data, and is cleared by

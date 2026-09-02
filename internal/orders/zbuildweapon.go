@@ -9,9 +9,9 @@
 //
 // Queue encoding on Node (86-byte retail identity [04 §3.2] I13, [06 §11.1]):
 //
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+//	Param1 = SlotIdx (0..2), Param2 = remainingCount, Param3 = progress [06 §11.1].
 //
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// The slot's Ammo byte holds completed rounds [06 §11.1].
 // BuildTime is Weapon.ReloadTime [06 §11.1] (compile-time reload*30).
 //
 // Determinism: stable iteration, no map iteration (I1), fixed-point 16.16 (I2),
@@ -64,7 +64,7 @@ func StockpileSlotAcceptsBuildWeapon(u *units.Unit, slotIdx int) bool {
 //
 // Encoding: Param1 SlotIdx, Param2 remainingCount, Param3 progress.
 // Progress is per-node 0..BuildTime step 5 capped [06 §11.1]. Ammo is the
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// slot's byte-sized completed-round remainder [06 §1.2] [06 §11.1].
 //
 // Launch-before-production is preserved by phase order: weapon firing
 // (PhaseUnitsScripts) runs before the orders pump (PhaseOrdersPathEconomy),
@@ -193,7 +193,7 @@ func StockpileCounts(u *units.Unit) ([units.NumSlots]int32, [units.NumSlots]int3
 	}
 	for i := 0; i < units.NumSlots; i++ {
 		if s := u.SlotAt(i); s != nil {
-			ammo[i] = s.Ammo // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			ammo[i] = s.Ammo // slot's byte-sized completed-round remainder [06 §1.2] [06 §11.1]
 		}
 	}
 	q := QueueForUnit(u)

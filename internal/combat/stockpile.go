@@ -44,17 +44,22 @@ const StockpileMaxAmmo = 200 // [06 §11.1]
 // decrements reduce or unlink [06 §11.1] (orders.Queue.CoalesceTail).
 // Two distinct values are kept: the linked node's signed requested count and
 // the slot's byte-sized completed-round remainder [06 §11.1].
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// [P1-09 §2.1] — save preserves these plus the three slot bytes per unit
-// [P1-09 §2.2][06 §11.1]. Slot→node map is weaponId→slotIdx via scan of
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// object and is treated as no weapon / wait [P1-09 §2.3].
+// The node carries the fields [06 §11.1] establishes: a signed requested
+// count, an integer progress value, and a slot index that is the
+// caller-supplied build-type argument stored verbatim — there is no
+// weapon-id-to-slot translation anywhere in the queue path [06 §11.1]. That
+// slot index selects the unit's weapon slot directly, and the handler tests
+// neither that the slot's weapon carries `stockpile` nor that it is a real
+// weapon [06 R-WPN-05 §2]. Save restoration preserves these node fields plus
+// the three per-unit slot bytes [06 §11.1] [08 "Save-file organization"]. A
+// malformed slot index outside 0..2 aliases past the unit object in retail;
+// this implementation treats it as no weapon / wait instead [06 §11.1]
+// [06 R-WPN-05 §2].
 type StockpileEntry struct {
 	Weapon   *content.WeaponDef // selected weapon; BuildTime is Weapon.ReloadTime [06 §11.1]
-	Count    int32              // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	Progress int32              // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	SlotIdx  int32              // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Count    int32              // signed requested count [06 §11.1]
+	Progress int32              // per-node progress 0..BuildTime, step 5 capped [06 §11.1]
+	SlotIdx  int32              // slot index selecting the unit's weapon slot directly, stored verbatim [06 §11.1]
 }
 
 // StockpileNodeSize is the retail queue node size 0x56=86 bytes [P1-09 §2.1].

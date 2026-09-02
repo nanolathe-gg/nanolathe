@@ -6,24 +6,24 @@ package cleanroom
 // line that still has to be rewritten as clean-room prose, with its
 // address-level trail moved to /tmp/ta-decompile/notes/.
 //
-// Total at baseline: 19 occurrences across 5 files.
+// Total at baseline: 4 occurrences across 3 files.
 //
 // A file absent from this map must have zero occurrences. Counts may only
 // go down, and going down requires updating this file in the same change.
 //
-// Three of the five remaining entries are not clean-room debt at all — they
-// are literal hex constants in real arithmetic that happen to match the
-// structure-offset pattern's shape, not prose describing executable layout:
-// hud/selection_test.go's `PagePagedBit` test literal, movement/integrate.go's
-// sine-table rounding bias, and world/picking.go's cell-alignment constant in
-// CursorToWorld. None can be reworded without touching code, which is outside
-// comment-only scope; a future pass may narrow the pattern instead. The
-// remaining two (combat/stockpile.go, orders/zbuildweapon.go) were owned by a
-// concurrent WU-19-51 pass at the time of writing.
+// All three remaining entries are not clean-room debt at all — they are
+// literal hex constants in real arithmetic that happen to match the
+// structure-offset or executable-address patterns' shape, not prose
+// describing executable layout: hud/selection_test.go's `PagePagedBit` test
+// literal, movement/integrate.go's sine-table rounding bias, and
+// world/picking.go's cell-alignment constant in CursorToWorld. None can be
+// reworded without touching code, which is outside comment-only scope; a
+// future pass may narrow the patterns instead. WU-19-56 rewrote the previous
+// two genuine entries (combat/stockpile.go, orders/zbuildweapon.go) as
+// clean-room prose citing [06 R-WPN-05 §2] and [06 §11.1] and removed them
+// from this map.
 var Baseline = map[string]int{
-	"internal/combat/stockpile.go":    9,
-	"internal/hud/selection_test.go":  2,
-	"internal/movement/integrate.go":  1,
-	"internal/orders/zbuildweapon.go": 6,
-	"internal/world/picking.go":       1,
+	"internal/hud/selection_test.go": 2,
+	"internal/movement/integrate.go": 1,
+	"internal/world/picking.go":      1,
 }

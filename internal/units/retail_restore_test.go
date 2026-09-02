@@ -24,7 +24,11 @@ func TestRetailUnitBaseRestoresEstablishedFields(t *testing.T) {
 	binary.LittleEndian.PutUint32(data[0x27:], 0xa5a55a5a)
 	binary.LittleEndian.PutUint32(data[0x9F:], 0xffffffff)
 	data[0xA7] = 0x7f
-	data[0xAB] = byte(DeathReclaimed)
+	// The death-cause byte holds retail's damage-kind value, not this build's
+	// coarse label: 5 is the reclaim / build-complete pulse [06 §12.1]
+	// [08 R-SAVE-02 §6]. The fixture used to write byte(DeathReclaimed) here,
+	// which is retail's paralyze kind.
+	data[0xAB] = 5
 	data[0xB2] = 0x07
 	binary.LittleEndian.PutUint32(data[0xB4:], 1|(1<<20))
 	if err := RetailUnitBase(u, data); err != nil {
@@ -32,6 +36,39 @@ func TestRetailUnitBaseRestoresEstablishedFields(t *testing.T) {
 	}
 	if u.X != 3<<16 || u.Move.Heading != 0x1234 || u.Health != -7 || u.SpotMetal != 4.5 || !u.HasMover || u.RestoredAIGroup != -1 || u.Dying || u.DeathCause != DeathReclaimed || !u.InBuildStance || u.Flags&0x4000 == 0 || u.Flags&(1<<12|0xc0000000) != (1<<12|0xc0000000) {
 		t.Fatalf("restored fields: x=%v heading=%x health=%d metal=%v dying=%v cause=%v stance=%v", u.X, u.Move.Heading, u.Health, u.SpotMetal, u.Dying, u.DeathCause, u.InBuildStance)
+	}
+	// The kind byte itself restores verbatim; the label above is derived from
+	// it [08 R-SAVE-02 §6][06 §12.1].
+	if u.LastDamageCause != 5 {
+		t.Fatalf("restored damage-kind byte = %d, want the saved 5 [08 R-SAVE-02 §6]", u.LastDamageCause)
+	}
+}
+
+// TestDeathCauseFromKind locks the derivation of the coarse label from retail's
+// damage-kind enumeration [06 §12.1]. The two numberings coincide only at 3;
+// every other coincidence the raw cast produced was an accident.
+func TestDeathCauseFromKind(t *testing.T) {
+	cases := []struct {
+		kind uint8
+		want DeathCause
+	}{
+		{0, DeathUnknown},      // scenario/load removal: no packet at all
+		{1, DeathKilled},       // ordinary weapon damage
+		{2, DeathKilled},       // paralyze packet — NOT DeathReclaimed
+		{3, DeathSelfDestruct}, // self-destruct countdown
+		{4, DeathKilled},       // capture/owner replacement
+		{5, DeathReclaimed},    // reclaim/build-complete pulse
+		{6, DeathKilled},       // cargo cascade
+		{7, DeathKilled},       // feature conversion
+		{8, DeathKilled},       // teardown sweep
+		{9, DeathKilled},       // deconstruction refund
+		{11, DeathKilled},      // mission water damage
+		{15, DeathKilled},      // no local producer; network or save only
+	}
+	for _, tc := range cases {
+		if got := DeathCauseFromKind(tc.kind); got != tc.want {
+			t.Errorf("DeathCauseFromKind(%d) = %v, want %v [06 §12.1]", tc.kind, got, tc.want)
+		}
 	}
 }
 

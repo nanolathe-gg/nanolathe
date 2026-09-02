@@ -986,6 +986,23 @@ func (s *Session) RegisterAll() {
 				ctx := s.missionTriggerContext(s.Clock.GlobalTick)
 				triggers.NotifyAll(s.Mission.Victory, s.Mission.Defeat, ctx, triggers.NotifyUnitDied, u)
 			}
+			// The carrier/cargo half of the central death handler, in the
+			// position [06 §12.1] gives it: after the fixed teardown helpers
+			// and before the death explosion and the corpse. It "detaches the
+			// victim from its carrier when it has one" and then walks the
+			// victim's own cargo list, applying 30000 per cargo unit with the
+			// attacker set to the victim's own killer — the recorded-attacker
+			// link this handler wrote at death [04 R-UNIT-06 §5], which is what
+			// the cascade's kill credit reads. The cargo's cause is 3 when the
+			// carrier's kind nibble is 3 and 6 otherwise, so a dying transport
+			// takes its passengers with it and a dying factory never leaves a
+			// free-standing nanoframe on its pad [04 R-FAC-02 §3].
+			//
+			// Each cargo is only MARKED here; its own finalizer runs on the
+			// next slot sweep, so this hook does not re-enter [04 §2.3].
+			if s.Movement != nil && s.Units != nil && u != nil {
+				s.Movement.HandleDeath(s.Units, h, u.EngagementTarget)
+			}
 			// Audio: death does not map to a queued voice directly, but an
 			// under-attack cue for nearby allies could be queued elsewhere.
 			// For now, no death voice; weapon hit already queues via impact sink.
@@ -994,22 +1011,9 @@ func (s *Session) RegisterAll() {
 			// chain depth + death-explosion weapon trigger (DoExplosion) per
 			// [06 §12.1] C22–C25. Deterministic, no wall-clock, no map iteration (I1, I4, I6).
 			if s.Features != nil && u != nil && u.Def != nil && s.World != nil {
-				// Map units death cause to combat cause [06 §12.1] for the shared path.
-				var c combat.Cause
-				switch cause {
-				case units.DeathKilled:
-					c = combat.CauseOrdinary // 1 [06 §12.1]
-				case units.DeathSelfDestruct:
-					c = combat.CauseSelfDestruct // 3 [06 §12.1]
-				case units.DeathReclaimed:
-					c = combat.CauseReclaim // 5 [06 §12.1] C24 bypass
-				default:
-					if u.Health <= 0 {
-						c = combat.CauseOrdinary
-					} else {
-						c = combat.CauseReclaim
-					}
-				}
+				// The cause is the recorded damage-kind byte, not a re-derivation
+				// from the coarse label [06 §12.1]; see deathCauseForResolution.
+				c := deathCauseForResolution(cause, u)
 				// IsFeature direct conversion cause 7 handling: when def isfeature,
 				// retail writes cause 7 DIRECT store not via packet builder [06 §12.1].
 				// We treat isfeature kills as FeatureConversion when cause is killed and isfeature true and corpse exists?
