@@ -139,7 +139,14 @@ func TestResult_RetryResetsAuthoritativeState(t *testing.T) {
 	}
 }
 
-// TestResult_SimultaneousFinalCommanders ensures simultaneous kill is draw [RS-05][RR-04].
+// TestResult_SimultaneousFinalCommanders drives the same tie through the full
+// Session.Step path rather than direct evaluator calls. The predicate order of
+// [08 R-TRIG-01 §6] makes it a local defeat: the defeat predicate is evaluated
+// first for session kinds 2/3 and takes the lost path.
+//
+// **Correction.** It previously asserted a draw, citing an "RR-04" rule that no
+// research section carries; retail's kind-2 end has no draw outcome. See
+// TestResult_MutualDestructionIsALocalDefeat for the evaluator-level form.
 func TestResult_SimultaneousFinalCommanders(t *testing.T) {
 	rng.SeedGlobal(102, 202)
 	cat := minimalCatalogForStrict()
@@ -163,8 +170,11 @@ func TestResult_SimultaneousFinalCommanders(t *testing.T) {
 		}
 	}
 	res := s.GetResult()
-	if !res.Ended || !res.Draw {
-		t.Fatalf("simultaneous should be draw, got %+v", res)
+	if !res.Ended || res.Draw || res.Kind != "defeat" {
+		t.Fatalf("simultaneous should latch the local defeat, got %+v", res)
+	}
+	if !s.Latch.IsLose() {
+		t.Fatalf("simultaneous should take the lost path, latch %+v", s.Latch)
 	}
 }
 

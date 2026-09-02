@@ -499,6 +499,8 @@ func (g *gameShell) updateHoverHelp(x, y int32) {
 		return
 	}
 	help := ""
+	// The hover test skips only hidden gadgets, so a greyed button still feeds
+	// HELPTEXT its help line [07 R-WGT-01 §1 step 6][07 R-WGT-01 §13].
 	if idx := p.HitTest(x, y); idx >= 0 {
 		if gad, ok := g.currentGadget(idx); ok {
 			help = p.HelpOf(gad.Name)
@@ -742,7 +744,7 @@ func (g *gameShell) drawRetailWindow(c *client.Client, mode shellMode, p *ui.Pan
 		r := p.Window.PlacedRect(i)
 		switch gad.Kind {
 		case gui.KindButton:
-			g.drawRetailButton(c, p, gad, r)
+			g.drawRetailButton(c, p, i, gad, r)
 		case gui.KindListBox:
 			g.drawRetailList(c, p, gad, r)
 		case gui.KindScrollBar:
@@ -751,10 +753,10 @@ func (g *gameShell) drawRetailWindow(c *client.Client, mode shellMode, p *ui.Pan
 			g.drawRetailSurface(c, p, gad, r)
 		case gui.KindLabel, gui.KindPicture:
 			g.drawRetailArt(c, p, gad, r)
-			g.drawRetailText(c, p, gad, r)
+			g.drawRetailText(c, p, i, gad, r)
 		default:
 			g.drawRetailArt(c, p, gad, r)
-			g.drawRetailText(c, p, gad, r)
+			g.drawRetailText(c, p, i, gad, r)
 		}
 	}
 }
@@ -785,9 +787,9 @@ func (g *gameShell) drawRetailModal(c *client.Client) {
 			if frame := g.retailButtonFrame(gad, m.StatusOf(gad.Name), pressed); frame != nil {
 				blitRetailFrame(c, frame, int(r.X), int(r.Y))
 			}
-			g.drawRetailTextState(c, m, gad, r)
+			g.drawRetailTextState(c, m, i, gad, r)
 		case gui.KindLabel:
-			g.drawRetailTextState(c, m, gad, r)
+			g.drawRetailTextState(c, m, i, gad, r)
 		}
 	}
 }
@@ -1036,7 +1038,7 @@ func (g *gameShell) drawRetailArt(c *client.Client, p *ui.Panel, gad gui.Gadget,
 	}
 }
 
-func (g *gameShell) drawRetailButton(c *client.Client, p *ui.Panel, gad gui.Gadget, r gui.Rect) {
+func (g *gameShell) drawRetailButton(c *client.Client, p *ui.Panel, index int, gad gui.Gadget, r gui.Rect) {
 	if p == nil {
 		return
 	}
@@ -1048,7 +1050,7 @@ func (g *gameShell) drawRetailButton(c *client.Client, p *ui.Panel, gad gui.Gadg
 	} else if frame := g.retailButtonFrame(gad, status, pressed); frame != nil {
 		blitRetailFrame(c, frame, int(r.X), int(r.Y))
 	}
-	g.drawRetailText(c, p, gad, r)
+	g.drawRetailText(c, p, index, gad, r)
 }
 
 // gadgetButtonArt applies the pressed state that the retail button pump
@@ -1145,8 +1147,8 @@ func (g *gameShell) retailButtonFrame(gad gui.Gadget, status int, pressed bool) 
 	return e.Frames[idx].Frame
 }
 
-func (g *gameShell) drawRetailText(c *client.Client, p *ui.Panel, gad gui.Gadget, r gui.Rect) {
-	g.drawRetailTextState(c, p, gad, r)
+func (g *gameShell) drawRetailText(c *client.Client, p *ui.Panel, index int, gad gui.Gadget, r gui.Rect) {
+	g.drawRetailTextState(c, p, index, gad, r)
 }
 
 // guiColor resolves a GUI file's semantic color field through the retail
@@ -1160,7 +1162,7 @@ func (g *gameShell) guiColor(source byte) byte {
 	return source
 }
 
-func (g *gameShell) drawRetailTextState(c *client.Client, p *ui.Panel, gad gui.Gadget, r gui.Rect) {
+func (g *gameShell) drawRetailTextState(c *client.Client, p *ui.Panel, index int, gad gui.Gadget, r gui.Rect) {
 	if p == nil {
 		return
 	}
@@ -1196,7 +1198,7 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *ui.Panel, gad gui.G
 		x += boolInt(gad.Attribs&1 != 0 || gad.Attribs&2 != 0)
 	}
 	y := retailTextPenY(gad, r, g.retailTextHeight())
-	color := g.guiColor(byte(gad.ColorF & 0xff))
+	color, shade := g.retailTextPen(p, index, gad)
 	maxWidth := int(r.W)
 	if maxWidth <= 0 {
 		width, _ := c.Size()
@@ -1216,11 +1218,47 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *ui.Panel, gad gui.G
 			top = int(r.Y)
 		}
 		for i, line := range lines {
-			g.drawRetailString(c, line, x, top+i*lineStep, maxWidth, color)
+			g.drawRetailStringLit(c, line, x, top+i*lineStep, maxWidth, color, shade)
 		}
 		return
 	}
-	g.drawRetailString(c, text, x, y, maxWidth, color)
+	g.drawRetailStringLit(c, text, x, y, maxWidth, color, shade)
+}
+
+// retailTextPen resolves the two things a gadget's text pen needs: the
+// light-table row the keyed GAF blitter remaps every glyph byte through, and
+// the colour the FNT fallback fills a glyph mask with.
+//
+// `colorf` is not a palette index for a button, a label or a picture box. The
+// GAF pen's `mode` argument is a light-table row, the label painter passes the
+// gadget's `colorf` word as that row, and the button painter always passes 0
+// [03 R-FONT-01 §6]. The builder zeroes the word for all three kinds at open
+// and the service pass decays whatever a screen sets, so the row lives on the
+// Panel instance [07 R-WGT-01 §1][07 R-WGT-01 §12]. Row 0 is the plain frame
+// blitter: the glyph's own opaque bytes are copied with no remap, which is why
+// a menu caption's colour comes from the `hattfont` art and not from a colour
+// field at all.
+//
+// Every other kind keeps `colorf` as a colour: a listbox draws its rows in
+// "the window colour-table entry the gadget's `colorf` selects"
+// [07 R-WGT-01 §4], and focusing a text input "sets the drawing colour from
+// the gadget's `colorf`" [07 R-WGT-01 §8].
+func (g *gameShell) retailTextPen(p *ui.Panel, index int, gad gui.Gadget) (color byte, shade int) {
+	if gad.Kind == gui.KindLabel {
+		shade = int(p.FlashRow(index))
+	}
+	// TODO(question): which foreground byte the FNT fallback path draws a
+	// button or label caption in is unrecorded. [03 R-FONT-01 §6] fixes the GAF
+	// pen's mode at 0 for a button and at the flash row for a label, and
+	// [03 R-FONT-01 §4] says the FNT rasterizer takes the display context's
+	// foreground/background/skip bytes — but no section says which foreground
+	// the GUI text pass installs before calling it, and the field the builder
+	// would have to install is the one it has just zeroed. A static trace of
+	// the colour setter the GUI draw routine calls ahead of the FNT drawer
+	// would settle it. Until then the authored field is kept for the fallback
+	// alone; the shipping GAF path ignores this byte entirely, so nothing the
+	// player sees is coloured from it.
+	return g.guiColor(byte(gad.ColorF & 0xff)), shade
 }
 
 // retailWrapLines breaks a label at spaces so it fits maxWidth, keeping each
@@ -1919,7 +1957,10 @@ func (g *gameShell) menuInput(cl *client.Client) {
 	g.updateRetailScrollbarDrag(mouse)
 	if mouse.Held(input.MouseButtonLeft) && !leftPressed && !p.ScrollDragging() && p.PressedIndex() >= 0 {
 		x, y := int32(mouse.X), int32(mouse.Y)
-		if idx := p.HitTest(x, y); idx >= 0 {
+		// The captured gadget keeps receiving the pass while a button is held,
+		// so this is the press-time predicate, not the hover one
+		// [07 R-WGT-01 §1 "Capture"].
+		if idx := p.PressTest(x, y); idx >= 0 {
 			if idx == p.PressedIndex() {
 				gad, ok := g.currentGadget(idx)
 				if !ok || gad.Kind != gui.KindScrollBar {
@@ -1948,7 +1989,9 @@ noRetailArrowRepeat:
 	if leftPressed {
 		p.SetPressed(-1)
 		x, y := int32(mouse.X), int32(mouse.Y)
-		idx := p.HitTest(x, y)
+		// A press takes the capture; a greyed gadget returns before its own hit
+		// test and never captures [07 R-WGT-01 §13].
+		idx := p.PressTest(x, y)
 		if idx >= 0 {
 			// Retail's GUI pump gives the clicked gadget focus before running
 			// its callback, so a following Return/Space activates that same
@@ -1988,7 +2031,7 @@ noRetailArrowRepeat:
 		p.SetRightPressed(-1)
 		if g.frontend.Mode == modeMenuSkirmish {
 			x, y := int32(mouse.X), int32(mouse.Y)
-			if idx := p.HitTest(x, y); idx >= 0 {
+			if idx := p.PressTest(x, y); idx >= 0 {
 				if gad, ok := g.currentGadget(idx); ok {
 					key := menuKey(gad.Name)
 					if strings.HasPrefix(key, "metal") || strings.HasPrefix(key, "energy") || strings.HasPrefix(key, "color") {
@@ -2003,7 +2046,7 @@ noRetailArrowRepeat:
 		p.SetRightPressed(-1)
 		if g.frontend.Mode == modeMenuSkirmish && pending >= 0 {
 			x, y := int32(mouse.X), int32(mouse.Y)
-			if idx := p.HitTest(x, y); idx == pending {
+			if idx := p.PressTest(x, y); idx == pending {
 				if gad, ok := g.currentGadget(idx); ok {
 					key := menuKey(gad.Name)
 					if strings.HasPrefix(key, "metal") || strings.HasPrefix(key, "energy") || strings.HasPrefix(key, "color") {

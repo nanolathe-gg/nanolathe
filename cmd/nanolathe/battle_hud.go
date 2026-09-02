@@ -1827,6 +1827,19 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, offse
 				text = productQueueCountLabel(f, gad.Name)
 			}
 			if text != "" {
+				// TODO(question): `colorf` is not a palette index on a button.
+				// The GAF pen takes it as a light-table row and the button
+				// painter always passes 0, and the window builder zeroes the
+				// word for every button at open, so no button caption is
+				// coloured from the authored field [03 R-FONT-01 §6]
+				// [07 R-WGT-01 §1][07 R-WGT-01 §12]. This side page draws
+				// through the FNT rasterizer, which does need a foreground
+				// byte [03 R-FONT-01 §4], and no section records which one the
+				// window text pass installs for a caption — [07 R-P0-11 §2]
+				// says only "the window's font handle and foreground/background
+				// GUI color fields". A static trace of that colour setter would
+				// settle it; the authored field is kept meanwhile so the count
+				// label does not change colour on a guess.
 				c.UITextWidth(h.guiFont, text, int(r.X)+3, int(r.Y)+(int(r.H)-int(h.guiFont.Height))/2, int(r.W), h.guiColor(byte(gad.ColorF)))
 			}
 		}

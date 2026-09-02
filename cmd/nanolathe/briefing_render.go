@@ -233,7 +233,9 @@ func (g *gameShell) briefingInput(cl *client.Client) {
 		return
 	}
 	if in.Mouse.Pressed(input.MouseButtonLeft) && g.briefingPanel != nil && g.briefingPanel.Window != nil {
-		if idx := g.briefingPanel.HitTest(int32(in.Mouse.X), int32(in.Mouse.Y)); idx >= 0 {
+		// A press takes the capture, and a greyed gadget never captures
+		// [07 R-WGT-01 §1 "Capture"][07 R-WGT-01 §13].
+		if idx := g.briefingPanel.PressTest(int32(in.Mouse.X), int32(in.Mouse.Y)); idx >= 0 {
 			name := g.briefingPanel.Window.Gadgets[idx].Name
 			switch menuKey(name) {
 			case "start":
@@ -309,7 +311,7 @@ func (g *gameShell) drawBriefing(c *client.Client) {
 		case "textregion":
 			g.drawBriefingText(c, b, r)
 		default:
-			g.drawBriefingGadget(c, panel, gad, r)
+			g.drawBriefingGadget(c, panel, i, gad, r)
 		}
 	}
 }
@@ -341,7 +343,7 @@ func briefingFrame(gaf *formats.GAF, name string, idx int) *formats.GAFFrame {
 	return e.Frames[idx].Frame
 }
 
-func (g *gameShell) drawBriefingGadget(c *client.Client, p *ui.Panel, gad gui.Gadget, r gui.Rect) {
+func (g *gameShell) drawBriefingGadget(c *client.Client, p *ui.Panel, index int, gad gui.Gadget, r gui.Rect) {
 	if g == nil || g.briefing == nil || g.assets == nil || g.assets.briefing == nil {
 		return
 	}
@@ -350,7 +352,7 @@ func (g *gameShell) drawBriefingGadget(c *client.Client, p *ui.Panel, gad gui.Ga
 	} else if f := g.retailButtonFrame(gad, p.StatusOf(gad.Name), false); f != nil && gad.Kind == gui.KindButton {
 		blitRetailFrame(c, f, int(r.X), int(r.Y))
 	}
-	g.drawRetailTextState(c, p, gad, r)
+	g.drawRetailTextState(c, p, index, gad, r)
 }
 
 func (g *gameShell) drawBriefingPanorama(c *client.Client, b *campaignBriefingController, r gui.Rect) {

@@ -23,11 +23,11 @@ const ReasonAllUnits = "all_units"
 // EndLatch countdown/bits per [P1-01 §2.2] already implemented in progression.go —
 // reuse, do not bypass. Result is owned by Session (RS-05 RS-P0-012) not a
 // package global; one terminal point is latch visible (Ended) and one stop point
-// is State != Battle. The value-zero alliance corner remains deliberately
-// narrow: research establishes the live-unit predicate but does not settle
-// how a non-local alliance aggregate is reduced. Keep that question at this
-// owner/team boundary until the deciding retail trace is available [08
-// R-SKIR-01 §3][08 R-TRIG-01 §6].
+// is State != Battle. The end predicates themselves no longer have an open
+// alliance corner: [08 R-TRIG-01 §6] settles the victory sweep's ally skip as
+// the local player's first alliance row, and victorySweep applies it. What
+// stays open is only the team identity the post-battle screen prints, at
+// teamForOwner below [08 R-SKIR-01 §3][08 R-TRIG-01 §6].
 type Result struct {
 	Ended        bool                `json:"ended"`
 	Draw         bool                `json:"draw"`
@@ -53,8 +53,9 @@ func (s *Session) TeamForOwner(owner int) int { return s.teamForOwner(owner) }
 // [GAP T14]; when it appears we treat each owner as its own hostile team
 // (100+owner) so that default skirmishes are FFA. Explicit non-sentinel
 // groups share a team. TODO(question): the retail trace names the local
-// player's first alliance row for the value-zero alliance aggregate, but does
-// not establish how a non-local aggregate is reduced; retain this narrow
+// player's first alliance row, which the end predicates now read directly
+// (victorySweep), but it does not establish how a non-local aggregate is
+// reduced to the one team name a result row prints; retain this narrow
 // unresolved corner rather than generalizing it [08 R-TRIG-01 §6].
 func (s *Session) teamForOwner(owner int) int {
 	if owner < 0 || owner >= 10 {
@@ -256,20 +257,93 @@ func resultColumnMaxima(rows []frame.ResultScore) [7]int {
 	return max
 }
 
-// EvaluateResult is the alliance-aware victory evaluator [08][RS-05][RR-04].
-// The authoritative tick invokes it after death finalization each tick. It
-// computes active teams from live units each evaluation. Both non-deathmatch
+// resultWinnersFor is the presentation winner list. A draw and a defeat with
+// no surviving opponent both name nobody, so the list stays empty rather than
+// carrying the -1 sentinel into the frame [08 R-TRIG-01 §6].
+func resultWinnersFor(winner int, draw bool) []int {
+	if draw || winner < 0 {
+		return nil
+	}
+	return []int{winner}
+}
+
+// localDefeated is the defeat predicate of [08 R-SKIR-01 §3] "Defeat
+// detection" for session kinds 2 and 3: the local player's live unit count is
+// zero. It is not a team aggregate — an allied peer that is still fighting
+// does not keep the local player in the game.
+//
+// The one guard beyond the counter is the ever-created term of the derived
+// elimination predicate. Retail's live count is decremented by the kill-record
+// handler, so a slot can only reach zero by having held a unit; our evaluator
+// runs from the first sub-tick, before which a fixture that has allocated
+// nothing would read zero and latch. The term is unobservable in every state
+// retail can reach [08 R-SKIR-01 §3] "Counters".
+func (s *Session) localDefeated() bool {
+	if s == nil || s.Units == nil {
+		return false
+	}
+	local := int(s.LocalOwner)
+	if local < 0 || local >= 10 || !s.resultOwnerEligible(local) {
+		return false
+	}
+	return s.ownerEliminated(local)
+}
+
+// victorySweep is the kind-2 elimination sweep of [08 R-TRIG-01 §6] "The
+// kind-2 victory sweep": walk slots 0–9; skip the local slot; skip any slot
+// whose byte in the local player's first alliance row is non-zero (an ally);
+// skip any slot with a zero live-unit count; if any slot survives the skips
+// there is no victory; after all ten, victory.
+//
+// There is no shared-victory bit, no controller or elimination test and no
+// rule-word test: those belong to the kind-3 sweep that [08 R-SKIR-01 §3]
+// "Victory detection" describes, and that section's closing "allies included"
+// sentence is explicitly wrong for kind 2 — allied players are excluded by the
+// first alliance row, which battle entry fills from the setup screen's team
+// groups [08 R-SKIR-01 §2].
+func (s *Session) victorySweep() bool {
+	if s == nil || s.Units == nil {
+		return false
+	}
+	local := int(s.LocalOwner)
+	for owner := 0; owner < 10; owner++ {
+		if owner == local {
+			continue
+		}
+		if s.Econ != nil && s.Econ.DeclaresAlliance(uint8(local), uint8(owner)) {
+			continue
+		}
+		if s.Units.LiveCountForPlayer(owner) == 0 {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// EvaluateResult is the skirmish end-condition block. The authoritative tick
+// invokes it after death finalization each tick. Both non-deathmatch rule
 // values use owner live-unit counts; rule 1's commander transition first
-// sweeps the owner's remaining units. When <=1 hostile team
-// remains it latches the result (draw on mutual destruction), preserving the
-// researched EndLatch countdown via Arm/AdvanceWin/AdvanceLose with once-per-
-// 30-tick cadence [08 "Evaluation"][RR-04] (4 → -1 over five invocations,
-// ~150 ticks) before declaring the terminal result visible, and latches
-// exactly once. Returns true only on the tick where the latch becomes visible.
-// The latch bits (0x04,0x10|0x20,0x40) are set when Countdown crosses below
-// zero; victory is evaluated first so simultaneous resolves as victory
-// [08 "Evaluation"][RR-04]. Simultaneous final commanders (mutual destruction)
-// produce a draw even if a winner was pending (upgrade) [RR-04].
+// sweeps the owner's remaining units.
+//
+// It runs retail's two separate predicates in retail's order for session kinds
+// 2/3 [08 R-TRIG-01 §6]: the defeat predicate — the local player's live unit
+// count is zero [08 R-SKIR-01 §3] — is evaluated first and takes the lost
+// path; only when it is false does the victory sweep run and take the won
+// path. Defeat wins a tie, so a wipe that leaves nobody standing is a local
+// defeat and not a draw.
+//
+// **Correction.** The previous implementation folded both predicates into one
+// count of surviving sides and latched when at most one remained. That fold
+// could not see two of retail's outcomes: a local elimination while two other
+// players were still fighting never latched at all, and an allied peer's
+// survival blocked a victory the alliance-row skip excludes.
+//
+// A true predicate arms the shared EndLatch and steps it once per 30-tick due
+// via Arm/AdvanceWin/AdvanceLose (4 → -1 over five dues, ~150 ticks) before
+// the terminal result becomes visible, and latches exactly once. Returns true
+// only on the tick where the latch becomes visible; the latch bits are set
+// when Countdown crosses below zero [08 R-TRIG-01 §6] "Countdown and latch".
 func (s *Session) EvaluateResult(tick uint32) bool {
 	if s == nil || s.Units == nil {
 		return false
@@ -297,7 +371,25 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 	// Both non-deathmatch values use owner live-unit accounting. Rule 1's
 	// owner sweep drives that count to zero; it is not a commander-only scan
 	// [08 R-SKIR-01 §3].
-	// Compute allTeams from SkirmishConfig players (fallback per-owner).
+	//
+	// The two predicates run in the order [08 R-TRIG-01 §6] establishes for
+	// session kinds 2/3: the defeat predicate first and, if true, the lost
+	// path; otherwise the victory sweep and, if true, the won path. Defeat
+	// therefore wins a tie and at most one predicate advances the shared
+	// countdown per due.
+	localDefeated := s.localDefeated()
+	victory := false
+	if !localDefeated {
+		victory = s.victorySweep()
+	}
+	if !localDefeated && !victory {
+		return false
+	}
+	// The team lists are presentation identity only: retail's kind-2 end
+	// writes the shared countdown and the latch bits and names no winner
+	// [08 R-TRIG-01 §6]. Nanolathe's post-battle screen labels the winning and
+	// losing teams, so they are derived here from the same eligibility the
+	// score rows use.
 	var allTeams [10]int
 	allTeamCount := 0
 	addTeam := func(team int) {
@@ -320,14 +412,6 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 			if !s.resultOwnerEligible(i) {
 				continue
 			}
-			// A participating slot that has not created any unit is not an
-			// eliminated opponent; victory waits for its first allocation
-			// [08 R-SKIR-01 §3] "Victory detection". "Not eliminated with
-			// nothing alive" is the counters' way of saying "ever created is
-			// zero" — the predicate's second term.
-			if !s.ownerEliminated(i) && s.Units.LiveCountForPlayer(i) == 0 && !s.resultPending {
-				return false
-			}
 			addTeam(s.teamForOwner(i))
 		}
 	} else {
@@ -340,9 +424,6 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 		if s.Econ != nil {
 			for i := 0; i < 10; i++ {
 				if s.resultOwnerEligible(i) {
-					if !s.ownerEliminated(i) && s.Units.LiveCountForPlayer(i) == 0 && !s.resultPending {
-						return false
-					}
 					addTeam(s.teamForOwner(i))
 				}
 			}
@@ -353,82 +434,45 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 			}
 		}
 	}
-	// Active owners are derived from the authoritative live counters. A death
-	// remains live until phase-2 finalization, so a same-tick commander sweep
-	// cannot arm victory merely because a unit has been marked Dying
-	// [08 R-SKIR-01 §3]. In skirmish, each participating player's counter is
-	// tested independently; AllyGroup affects result presentation only and does
-	// not collapse allied players into one surviving side. A zero live count is
-	// the whole test here: by the loop above, every eligible slot has created a
-	// unit, so a zero count is exactly ownerEliminated — the sweep's "skip the
-	// eliminated slot" leg [08 R-SKIR-01 §3] "Victory detection".
-	var active [10]int
-	activeCount := 0
-	addActive := func(team int) {
-		for i := 0; i < activeCount; i++ {
-			if active[i] == team {
-				return
-			}
-		}
-		if activeCount < len(active) {
-			active[activeCount] = team
-			activeCount++
-		}
-	}
-	activeOwner := -1
-	if s.Skirmish.NumPlayers > 0 {
-		n := s.Skirmish.NumPlayers
-		if n > len(active) {
-			n = len(active)
-		}
-		for owner := 0; owner < n; owner++ {
-			if !s.resultOwnerEligible(owner) || s.Units.LiveCountForPlayer(owner) == 0 {
-				continue
-			}
-			activeOwner = owner
-			addActive(owner)
-		}
-	} else {
-		for owner := 0; owner < len(active); owner++ {
-			if s.resultOwnerEligible(owner) && s.Units.LiveCountForPlayer(owner) != 0 {
-				activeOwner = owner
-				addActive(s.teamForOwner(owner))
-			}
-		}
-	}
-	if activeCount > 1 {
-		return false
-	}
-	var winner int
 	var losers []int
 	var winners []int
-	var draw bool
+	// Retail's kind-2 end has no draw: the lost path is taken whenever the
+	// local live count is zero, whether or not anything else survives
+	// [08 R-TRIG-01 §6]. The flag is kept on Result for the presentation view
+	// and is never set here.
+	const draw = false
 	reason := ReasonAllUnits
 	if rule != CommanderDeathContinues {
 		reason = ReasonCommanderDeath
 	}
-	if activeCount == 0 {
-		draw = true
-		winner = -1
-		for i := 0; i < allTeamCount; i++ {
-			losers = append(losers, allTeams[i])
-		}
-		sort.Ints(losers)
+	winner := -1
+	if victory {
+		winner = s.teamForOwner(int(s.LocalOwner))
 	} else {
-		if activeOwner >= 0 {
-			winner = s.teamForOwner(activeOwner)
-		} else {
-			winner = active[0]
-		}
-		winners = []int{winner}
-		for i := 0; i < allTeamCount; i++ {
-			t := allTeams[i]
-			if t != winner {
-				losers = append(losers, t)
+		// Local defeat names the lowest-numbered surviving opponent's team so
+		// the post-battle screen has a winner to print. When nothing survives
+		// there is no team to name and the result stays a local defeat with no
+		// winner — retail writes only the latch bits there [08 R-TRIG-01 §6].
+		for owner := 0; owner < 10; owner++ {
+			if owner == int(s.LocalOwner) || !s.resultOwnerEligible(owner) {
+				continue
 			}
+			if s.Units.LiveCountForPlayer(owner) == 0 {
+				continue
+			}
+			winner = s.teamForOwner(owner)
+			break
 		}
-		sort.Ints(losers)
 	}
+	if winner >= 0 {
+		winners = []int{winner}
+	}
+	for i := 0; i < allTeamCount; i++ {
+		if t := allTeams[i]; t != winner {
+			losers = append(losers, t)
+		}
+	}
+	sort.Ints(losers)
 	kind := s.resultKindFor(draw, winner)
 	// If not yet pending, arm the latch.
 	if !s.resultPending {
@@ -439,20 +483,14 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 		s.resultPendingDraw = draw
 		s.resultArmedTick = tick
 		s.resultNextDue = tick + 30
-		// Preserve copy for Winners
-		if draw {
-			s.Latch.Arm()
-			s.Latch.Pending = 0
+		// The shared countdown is armed on the won path only when the victory
+		// sweep is what fired; the defeat predicate always takes the lost path
+		// [08 R-TRIG-01 §6].
+		s.Latch.Arm()
+		if victory {
+			s.Latch.Pending = 1
 		} else {
-			localTeam := s.teamForOwner(int(s.LocalOwner))
-			isLocalWin := (winner == localTeam)
-			if isLocalWin {
-				s.Latch.Arm()
-				s.Latch.Pending = 1
-			} else {
-				s.Latch.Arm()
-				s.Latch.Pending = 2
-			}
+			s.Latch.Pending = 2
 		}
 		if s.Econ != nil {
 			for i := 0; i < 10; i++ {
@@ -486,10 +524,7 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 			scores2 := s.collectScores(s.resultPendingWinner, s.resultPendingDraw)
 			kind2 := s.resultKindFor(s.resultPendingDraw, s.resultPendingWinner)
 			w2 := s.resultPendingWinner
-			var winners2 []int
-			if !s.resultPendingDraw {
-				winners2 = []int{w2}
-			}
+			winners2 := resultWinnersFor(w2, s.resultPendingDraw)
 			s.result = Result{
 				Ended:        true,
 				Draw:         s.resultPendingDraw,
@@ -511,25 +546,13 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 		}
 		return false
 	}
-	// Already pending: maybe upgrade win→draw if mutual destruction happened before latch completed [RR-04].
-	if draw && !s.resultPendingDraw {
-		s.resultPendingDraw = true
-		s.resultPendingWinner = -1
-		s.resultPendingLosers = append([]int(nil), losers...)
-		s.resultPendingReason = reason
-		s.Latch.Pending = 0
-		// Keep countdown as is, just upgrade kind.
-	}
-	// Advance countdown only when due (once per 30 ticks) [08][RR-04].
+	// Advance countdown only when due (once per 30 ticks) [08 R-TRIG-01 §6].
 	isDue := tick >= s.resultNextDue
 	if !isDue {
 		// Update pending view countdown without advancing.
 		scores := s.collectScores(s.resultPendingWinner, s.resultPendingDraw)
 		kind2 := s.resultKindFor(s.resultPendingDraw, s.resultPendingWinner)
-		var winners2 []int
-		if !s.resultPendingDraw {
-			winners2 = []int{s.resultPendingWinner}
-		}
+		winners2 := resultWinnersFor(s.resultPendingWinner, s.resultPendingDraw)
 		s.result = Result{
 			Ended:        false,
 			Draw:         s.resultPendingDraw,
@@ -584,10 +607,7 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 	if latched && s.Latch.IsEnding() {
 		scores := s.collectScores(s.resultPendingWinner, s.resultPendingDraw)
 		kind2 := s.resultKindFor(s.resultPendingDraw, s.resultPendingWinner)
-		var winners2 []int
-		if !s.resultPendingDraw {
-			winners2 = []int{s.resultPendingWinner}
-		}
+		winners2 := resultWinnersFor(s.resultPendingWinner, s.resultPendingDraw)
 		s.result = Result{
 			Ended:        true,
 			Draw:         s.resultPendingDraw,
@@ -610,10 +630,7 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 	// Not yet latched: update pending view and publish countdown.
 	scores := s.collectScores(s.resultPendingWinner, s.resultPendingDraw)
 	kind2 := s.resultKindFor(s.resultPendingDraw, s.resultPendingWinner)
-	var winners2 []int
-	if !s.resultPendingDraw {
-		winners2 = []int{s.resultPendingWinner}
-	}
+	winners2 := resultWinnersFor(s.resultPendingWinner, s.resultPendingDraw)
 	s.result = Result{
 		Ended:        false,
 		Draw:         s.resultPendingDraw,

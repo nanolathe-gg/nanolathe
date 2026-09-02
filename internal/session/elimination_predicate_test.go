@@ -94,11 +94,19 @@ func TestPlayerGateHasNoEliminationTerm(t *testing.T) {
 	}
 }
 
-// TestVictorySweepMatchesTheEliminationPredicate drives the elimination sweep
-// of [08 R-SKIR-01 §3] "Victory detection" through its two legs: a
-// participating slot that has created no unit yields no victory, and the same
-// slot once eliminated (live zero, ever-created nonzero) no longer blocks it.
-func TestVictorySweepMatchesTheEliminationPredicate(t *testing.T) {
+// TestKind2VictorySweepSkipsZeroLiveCountSlots drives the elimination sweep of
+// [08 R-TRIG-01 §6] "The kind-2 victory sweep": walk slots 0-9, skip the local
+// slot, skip allies of the local player, skip any slot with a zero live-unit
+// count; any survivor means no victory, otherwise victory.
+//
+// **Correction.** This test was TestVictorySweepMatchesTheEliminationPredicate
+// and asserted that a participating slot which had created no unit blocks
+// victory — the "ever created is zero" term of the elimination predicate. That
+// term belongs to the kind-3 sweep of [08 R-SKIR-01 §3] "Victory detection";
+// [08 R-TRIG-01 §6] states the kind-2 sweep has "no shared-victory bit, no
+// controller or elimination test, and no rule-word test". A slot with nothing
+// alive is skipped whether or not it ever held a unit.
+func TestKind2VictorySweepSkipsZeroLiveCountSlots(t *testing.T) {
 	w, def := eliminationFixtureWorld(t)
 	cfg := SkirmishConfig{MapName: "test", NumPlayers: 2}
 	cfg.ApplyDefaults()
@@ -107,25 +115,17 @@ func TestVictorySweepMatchesTheEliminationPredicate(t *testing.T) {
 	if _, err := w.Create(def, 0, 0, 0, 0); err != nil {
 		t.Fatalf("create for owner 0: %v", err)
 	}
-	// Leg one: owner 1 has created nothing, so the sweep answers "no victory"
-	// and nothing is armed.
-	if s.EvaluateResult(0) {
-		t.Fatalf("victory must not latch while a slot has created no unit")
-	}
-	if s.resultPending {
-		t.Fatalf("no result may be armed while a slot has created no unit")
-	}
-
 	h, err := w.Create(def, 1, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("create for owner 1: %v", err)
 	}
+	// A live opponent blocks the sweep and arms nothing.
 	if s.EvaluateResult(1) || s.resultPending {
 		t.Fatalf("two live owners must not arm a result")
 	}
 
-	// Leg two: owner 1's last unit dies. Live zero with ever-created nonzero is
-	// the elimination predicate, and the sweep arms on the next evaluation.
+	// Owner 1's last unit dies. A zero live count is the whole skip, so the
+	// sweep passes on the next evaluation.
 	w.Unit(h).Dying = true
 	if res := w.FinalizeDeath(h, 2); !res.Freed {
 		t.Fatalf("owner 1's unit was not finalized")
@@ -134,12 +134,74 @@ func TestVictorySweepMatchesTheEliminationPredicate(t *testing.T) {
 		t.Fatalf("owner 1 must satisfy the elimination predicate")
 	}
 	if s.EvaluateResult(2) {
-		t.Fatalf("the latch is not visible on the arming tick [08 \"Evaluation\"]")
+		t.Fatalf("the latch is not visible on the arming tick [08 R-TRIG-01 §6]")
 	}
 	if !s.resultPending {
-		t.Fatalf("the sweep must arm once the only opponent is eliminated")
+		t.Fatalf("the sweep must arm once the only opponent has nothing alive")
 	}
 	if want := s.teamForOwner(0); s.resultPendingWinner != want {
-		t.Fatalf("pending winner = %d, want owner 0's team %d", s.resultPendingWinner, want)
+		t.Fatalf("pending winner = %d, want the local player's team %d", s.resultPendingWinner, want)
+	}
+}
+
+// TestLocalDefeatDoesNotWaitForTheLastOpponent is the defeat predicate of
+// [08 R-SKIR-01 §3] "Defeat detection" in the shape the old single-count fold
+// could not express: the local player is eliminated while two other players
+// are still fighting each other. Defeat is the local live count reaching zero,
+// not "one side left standing", so it arms on the spot.
+func TestLocalDefeatDoesNotWaitForTheLastOpponent(t *testing.T) {
+	w, def := eliminationFixtureWorld(t)
+	cfg := SkirmishConfig{MapName: "test", NumPlayers: 3}
+	cfg.ApplyDefaults()
+	s := &Session{Units: w, Skirmish: cfg, State: StateBattle, LocalOwner: 0}
+
+	var local pool.Handle
+	for owner := uint8(0); owner < 3; owner++ {
+		h, err := w.Create(def, owner, 0, 0, 0)
+		if err != nil {
+			t.Fatalf("create for owner %d: %v", owner, err)
+		}
+		if owner == 0 {
+			local = h
+		}
+	}
+	if s.EvaluateResult(1) || s.resultPending {
+		t.Fatalf("three live owners must not arm a result")
+	}
+
+	w.Unit(local).Dying = true
+	if res := w.FinalizeDeath(local, 2); !res.Freed {
+		t.Fatalf("the local unit was not finalized")
+	}
+	if s.EvaluateResult(3) {
+		t.Fatalf("the latch is not visible on the arming tick")
+	}
+	if !s.resultPending {
+		t.Fatalf("local elimination must arm the defeat immediately, with two opponents still alive")
+	}
+	if s.Latch.Pending != 2 {
+		t.Fatalf("latch pending = %d, want the lost path [08 R-TRIG-01 §6]", s.Latch.Pending)
+	}
+	if s.resultPendingWinner != s.teamForOwner(1) {
+		t.Fatalf("pending winner = %d, want the lowest surviving opponent's team %d", s.resultPendingWinner, s.teamForOwner(1))
+	}
+	// Five 30-tick dues later the latch is visible and it carries the lost bit.
+	var latched bool
+	for tick := uint32(4); tick <= 3+150; tick++ {
+		if s.EvaluateResult(tick) {
+			latched = true
+			break
+		}
+	}
+	if !latched {
+		t.Fatalf("defeat did not latch within five dues, latch %+v", s.Latch)
+	}
+	if !s.Latch.IsLose() || s.GetResult().Kind != "defeat" {
+		t.Fatalf("latched result = %+v, latch %+v, want a local defeat", s.GetResult(), s.Latch)
+	}
+	// Both opponents are still alive: the defeat did not depend on one of them
+	// winning first.
+	if w.LiveCountForPlayer(1) == 0 || w.LiveCountForPlayer(2) == 0 {
+		t.Fatalf("both opponents must still be alive at the defeat latch")
 	}
 }

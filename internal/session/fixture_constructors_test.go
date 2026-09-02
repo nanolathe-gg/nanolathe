@@ -398,12 +398,18 @@ func NewSyntheticSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 		p.GameEnded = false
 		p.EndGameCountdown = -1
 	}
-	// Apply alliances: AllyGroup equality => allied [GAP T14][08 "Skirmish configuration"]
+	// Apply the skirmish first alliance row through the same predicate battle
+	// entry uses, so a fixture session's rows say what a real session's rows
+	// say. The fixture used to test raw AllyGroup equality, which allied every
+	// row of a default setup because they all carry the unassigned sentinel 5;
+	// group 5 is not a team and allies no two distinct players
+	// [08 R-SKIR-01 §2]. Nothing read the fixture's rows for a result before
+	// the victory sweep of [08 R-TRIG-01 §6] did, which is why the divergence
+	// went unnoticed.
 	for i := 0; i < nPlayers && i < 10; i++ {
 		for j := 0; j < nPlayers && j < 10; j++ {
-			s.Econ.Players[i].Allies[j] = cfg.Players[i].AllyGroup == cfg.Players[j].AllyGroup
+			s.Econ.Players[i].Allies[j] = skirmishPlayersAllied(cfg, i, j)
 		}
-		s.Econ.Players[i].Allies[i] = true
 	}
 	// Validate hostile for fixture as well (allow sentinel all 5) [08 "Skirmish configuration"].
 	hostile := false

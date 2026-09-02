@@ -21,8 +21,100 @@ func TestPanelUsesAuthoredInclusiveHitAndRuntimeRejection(t *testing.T) {
 	if got := p.HitTest(14, 23); got != 1 {
 		t.Fatalf("inclusive right/bottom hit = %d, want 1", got)
 	}
-	if p.HitTest(50, 20) != -1 || p.HitTest(60, 20) != -1 {
-		t.Fatal("hidden or grayed gadget was accepted")
+	// A hidden gadget is skipped before the hit test; a greyed one is not —
+	// the grey bit is a press/fire test [07 R-WGT-01 §1][07 R-WGT-01 §13].
+	if p.HitTest(50, 20) != -1 {
+		t.Fatal("hidden gadget was hovered")
+	}
+	if got := p.HitTest(60, 20); got != 4 {
+		t.Fatalf("greyed gadget hover = %d, want 4 so HELPTEXT can show its help", got)
+	}
+	if got := p.PressTest(60, 20); got != -1 {
+		t.Fatalf("greyed gadget took the capture at index %d", got)
+	}
+}
+
+// The pass visits gadgets in index order and every hit replaces the hovered
+// gadget, so overlapping rectangles hover the last hit; the capture goes the
+// other way, to the first gadget that accepts the press
+// [07 R-WGT-01 §1 step 5][07 R-WGT-01 §1 "Capture"].
+func TestPanelHoverIsLastHitAndCaptureIsFirstHit(t *testing.T) {
+	w := &gui.Window{Gadgets: []gui.Gadget{
+		{Kind: gui.KindPanel, Name: "PANEL", Active: 1},
+		{Kind: gui.KindButton, Name: "UNDER", Active: 1, Rect: gui.Rect{X: 0, Y: 0, W: 40, H: 20}},
+		{Kind: gui.KindButton, Name: "OVER", Active: 1, Rect: gui.Rect{X: 10, Y: 5, W: 40, H: 20}},
+	}}
+	p := NewPanel(w)
+	if got := p.HitTest(15, 10); got != 2 {
+		t.Fatalf("hover over two overlapping gadgets = %d, want the last hit 2", got)
+	}
+	if got := p.PressTest(15, 10); got != 1 {
+		t.Fatalf("capture over two overlapping gadgets = %d, want the first hit 1", got)
+	}
+}
+
+// Hovering a greyed gadget yields its help text; pressing and releasing on it
+// fires nothing [07 R-WGT-01 §13].
+func TestPanelGreyedGadgetIsHoveredButNeverFires(t *testing.T) {
+	p := NewPanel(testWindow())
+	p.SetHelp("GRAY", "cannot do that yet")
+	idx := p.HitTest(62, 21)
+	if idx != 4 {
+		t.Fatalf("greyed hover = %d, want 4", idx)
+	}
+	if got := p.HelpOf(p.Window.Gadgets[idx].Name); got != "cannot do that yet" {
+		t.Fatalf("hover help for a greyed gadget = %q", got)
+	}
+	if p.Fires(idx) {
+		t.Fatal("a greyed gadget reported that it fires")
+	}
+	if got := p.Press(62, 21); got != -1 || p.PressedIndex() != -1 {
+		t.Fatalf("press on a greyed gadget captured index %d", got)
+	}
+	if _, ok := p.Release(62, 21); ok {
+		t.Fatal("release on a greyed gadget fired")
+	}
+	if act := p.Activate(idx); act.Kind != ActionNone {
+		t.Fatalf("keyboard activation of a greyed gadget produced %+v", act)
+	}
+}
+
+// `colorf` is a light-table row, not a colour, and the builder zeroes it for
+// every button, label and picture box at open; every other kind keeps the
+// authored word [07 R-WGT-01 §1][07 R-WGT-01 §12][03 R-FONT-01 §6].
+func TestPanelZeroesFlashRowForButtonsLabelsAndPictures(t *testing.T) {
+	w := &gui.Window{Gadgets: []gui.Gadget{
+		{Kind: gui.KindPanel, Name: "PANEL", Active: 1},
+		{Kind: gui.KindButton, Name: "B", Active: 1, ColorF: 15},
+		{Kind: gui.KindLabel, Name: "L", Active: 1, ColorF: 15},
+		{Kind: gui.KindPicture, Name: "P", Active: 1, ColorF: 15},
+		{Kind: gui.KindListBox, Name: "LB", Active: 1, ColorF: 15},
+	}}
+	p := NewPanel(w)
+	for _, i := range []int{1, 2, 3} {
+		if got := p.FlashRow(i); got != 0 {
+			t.Fatalf("gadget %d kept flash row %d, want 0 at open", i, got)
+		}
+	}
+	if got := p.FlashRow(4); got != 15 {
+		t.Fatalf("listbox colorf = %d, want the authored 15 kept as a colour-table entry", got)
+	}
+	p.SetFlashRow(1, 5)
+	p.SetFlashRow(3, 5)
+	p.DecayFlash()
+	if got := p.FlashRow(1); got != 3 {
+		t.Fatalf("button flash decayed to %d, want 3 (2 per timer tick)", got)
+	}
+	if got := p.FlashRow(3); got != 4 {
+		t.Fatalf("picture-box flash decayed to %d, want 4 (1 per timer tick)", got)
+	}
+	p.SetFlashRow(1, 1)
+	p.DecayFlash()
+	if got := p.FlashRow(1); got != 0 {
+		t.Fatalf("button flash decay clamped to %d, want 0", got)
+	}
+	if got := p.FlashRow(4); got != 15 {
+		t.Fatalf("listbox colorf decayed to %d; no other kind decays", got)
 	}
 }
 

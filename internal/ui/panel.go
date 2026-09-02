@@ -88,6 +88,14 @@ type Panel struct {
 	rightPressed int
 	drag         scrollDrag
 	message      string
+
+	// flash is the per-gadget `colorf` word held as runtime state, indexed by
+	// authored gadget index. `colorf` is not a colour for a button, a label or
+	// a picture box: the painter passes it as the light-table row of the keyed
+	// blitter and the service pass decays it, so it is flash state belonging to
+	// the instance rather than to the compiled definition
+	// [07 R-WGT-01 §1][07 R-WGT-01 §12][03 R-FONT-01 §6].
+	flash []uint16
 }
 
 // ActionKind identifies the presentation event emitted by an authored panel.
@@ -243,6 +251,19 @@ func NewPanel(window *gui.Window) *Panel {
 	if window.Focus >= 0 && window.Focus < len(window.Gadgets) {
 		p.focus = window.Focus
 	}
+	// The window builder zeroes `colorf` for every button, label and picture
+	// box at open; every other kind keeps the authored word, which for a
+	// listbox and a text input really is a colour-table entry
+	// [07 R-WGT-01 §1][07 R-WGT-01 §12][07 R-WGT-01 §4].
+	p.flash = make([]uint16, len(window.Gadgets))
+	for i, gadget := range window.Gadgets {
+		switch gadget.Kind {
+		case gui.KindButton, gui.KindLabel, gui.KindPicture:
+			p.flash[i] = 0
+		default:
+			p.flash[i] = gadget.ColorF
+		}
+	}
 	for _, gadget := range window.Gadgets {
 		key := Key(gadget.Name)
 		if key == "" {
@@ -319,18 +340,15 @@ func (p *Panel) ReleaseAction(x, y int32) Action {
 	return Action{Kind: ActionActivate, Gadget: p.Window.Gadgets[idx].Name, Index: idx}
 }
 
-// Activate returns a semantic action for a focused authored gadget. It is
-// used by keyboard activation and applies the same visibility/grayed checks
-// as pointer hit testing [07 §3].
+// Activate returns a semantic action for a focused authored gadget. It is used
+// by keyboard activation, and Enter's `crdefault` and Space both refuse a
+// greyed button, so it applies the same fire-time predicate as a press
+// [07 R-WGT-01 §2][07 R-WGT-01 §13].
 func (p *Panel) Activate(index int) Action {
-	if p == nil || p.Window == nil || index < 0 || index >= len(p.Window.Gadgets) {
+	if !p.Fires(index) {
 		return Action{Kind: ActionNone, Index: -1}
 	}
-	g := p.Window.Gadgets[index]
-	if g.Kind == gui.KindPanel || !p.ActiveOf(g.Name) || g.GrayedOut != 0 {
-		return Action{Kind: ActionNone, Index: -1}
-	}
-	return Action{Kind: ActionActivate, Gadget: g.Name, Index: index}
+	return Action{Kind: ActionActivate, Gadget: p.Window.Gadgets[index].Name, Index: index}
 }
 
 // BeginScrollDrag captures a scrollbar thumb. The associated list is found
@@ -457,13 +475,108 @@ func (p *Panel) HelpOf(name string) string {
 	return p.Help[Key(name)]
 }
 
-// HitTest is inclusive on both edges and rejects hidden/grayed gadgets.
+// FlashRow returns the gadget's light-table row — the runtime `colorf` word.
+// It is zero for a button, a label and a picture box until a screen sets one,
+// because the builder zeroes those three at open [07 R-WGT-01 §1].
+func (p *Panel) FlashRow(index int) uint16 {
+	if p == nil || index < 0 || index >= len(p.flash) {
+		return 0
+	}
+	return p.flash[index]
+}
+
+// SetFlashRow is the gadget-colour setter screens use to make a control flash
+// and fade. The value is a light-table row, not a palette index
+// [07 R-WGT-01 §1][03 R-FONT-01 §6].
+func (p *Panel) SetFlashRow(index int, row uint16) {
+	if p != nil && index >= 0 && index < len(p.flash) {
+		p.flash[index] = row
+	}
+}
+
+// DecayFlash is the service pass's once-per-timer-tick flash decay: 2 per tick
+// for a button, 1 for a picture box, both clamped at zero. No other kind
+// decays [07 R-WGT-01 §1].
+func (p *Panel) DecayFlash() {
+	if p == nil || p.Window == nil {
+		return
+	}
+	for i := range p.flash {
+		if i >= len(p.Window.Gadgets) {
+			break
+		}
+		var step uint16
+		switch p.Window.Gadgets[i].Kind {
+		case gui.KindButton:
+			step = 2
+		case gui.KindPicture:
+			step = 1
+		default:
+			continue
+		}
+		if p.flash[i] <= step {
+			p.flash[i] = 0
+			continue
+		}
+		p.flash[i] -= step
+	}
+}
+
+// HitTest is the service pass's hover test. Gadgets are visited in index
+// order, index 0 being the window's own header record the pass never visits;
+// hidden gadgets are skipped before the inclusive rectangle test and every
+// later hit replaces the earlier one, so where rectangles overlap the hovered
+// gadget is the **last** hit [07 R-WGT-01 §1 step 5].
+//
+// A greyed gadget is still hovered: the grey bit is tested at press/fire time,
+// not here, which is how HELPTEXT shows help for a greyed button
+// [07 R-WGT-01 §13]. Use Fires or PressTest for the press-time answer.
 func (p *Panel) HitTest(x, y int32) int {
 	if p == nil || p.Window == nil {
 		return -1
 	}
+	hovered := -1
 	for i, gadget := range p.Window.Gadgets {
-		if gadget.Kind == gui.KindPanel || !p.ActiveOf(gadget.Name) || gadget.GrayedOut != 0 {
+		if i == 0 || gadget.Kind == gui.KindPanel || !p.ActiveOf(gadget.Name) {
+			continue
+		}
+		r := p.Window.PlacedRect(i)
+		if r.W <= 0 || r.H <= 0 || x < r.X || y < r.Y || x > r.X+r.W-1 || y > r.Y+r.H-1 {
+			continue
+		}
+		hovered = i
+	}
+	return hovered
+}
+
+// Fires reports whether a press or a quickkey on the gadget may capture and
+// fire. "Greyed" is bit 0 of a per-gadget word that is not `attribs`; the
+// button handler returns on it as its first statement, before its own hit
+// test, so a greyed gadget neither captures nor fires
+// [07 R-WGT-01 §13][07 R-WGT-01 §3]. Active is the panel's runtime visibility,
+// which screens change after the window was compiled.
+func (p *Panel) Fires(index int) bool {
+	if p == nil || p.Window == nil || index <= 0 || index >= len(p.Window.Gadgets) {
+		return false
+	}
+	g := p.Window.Gadgets[index]
+	return g.Kind != gui.KindPanel && p.ActiveOf(g.Name) && g.GrayedOut == 0
+}
+
+// PressTest returns the gadget that takes the pointer capture, or -1.
+//
+// Exactly one gadget can hold the capture and a take is refused while another
+// non-text gadget holds it, so within one pass the capture goes to the
+// **first** gadget in index order whose handler accepts the press — greyed
+// gadgets return before their own hit test and so are passed over
+// [07 R-WGT-01 §1 "Capture"][07 R-WGT-01 §13]. That is the opposite end of the
+// index order from HitTest's hover answer.
+func (p *Panel) PressTest(x, y int32) int {
+	if p == nil || p.Window == nil {
+		return -1
+	}
+	for i := range p.Window.Gadgets {
+		if i == 0 || !p.Fires(i) {
 			continue
 		}
 		r := p.Window.PlacedRect(i)
@@ -476,12 +589,13 @@ func (p *Panel) HitTest(x, y int32) int {
 }
 
 // Press begins the release-inside gesture and updates focus. It returns the
-// authored gadget index or -1 when the press is outside an active control.
+// authored gadget index or -1 when the press is outside a control that can
+// take the capture.
 func (p *Panel) Press(x, y int32) int {
 	if p == nil {
 		return -1
 	}
-	p.pressed = p.HitTest(x, y)
+	p.pressed = p.PressTest(x, y)
 	if p.pressed >= 0 {
 		p.focus = p.pressed
 	}
@@ -496,7 +610,7 @@ func (p *Panel) Release(x, y int32) (int, bool) {
 	}
 	pressed := p.pressed
 	p.pressed = -1
-	if pressed < 0 || p.HitTest(x, y) != pressed || pressed >= len(p.Window.Gadgets) {
+	if pressed < 0 || p.PressTest(x, y) != pressed || pressed >= len(p.Window.Gadgets) {
 		return -1, false
 	}
 	return pressed, true

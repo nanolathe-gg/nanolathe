@@ -191,6 +191,18 @@ func TestResult_ThreePlayerFFA(t *testing.T) {
 	}
 }
 
+// TestResult_AlliedPairVsEnemy pins the ally skip of the kind-2 victory sweep
+// [08 R-TRIG-01 §6] "The kind-2 victory sweep": the walk skips any slot whose
+// byte in the LOCAL player's first alliance row is non-zero, so an allied
+// peer's survival is not a reason to keep playing. Killing the only
+// non-allied player wins the battle there and then.
+//
+// **Correction.** This test previously asserted the opposite — that the enemy's
+// death "must not end while allied peer lives", and that victory came only
+// once the ally was killed too. That followed [08 R-SKIR-01 §3] "Victory
+// detection", which describes the kind-3 sweep and closes with "allies
+// included"; [08 R-TRIG-01 §6] states that sentence is wrong for kind 2 and
+// gives the alliance-row skip instead.
 func TestResult_AlliedPairVsEnemy(t *testing.T) {
 	rng.SeedGlobal(3, 3)
 	cat := minimalCatalogForStrict()
@@ -225,22 +237,13 @@ func TestResult_AlliedPairVsEnemy(t *testing.T) {
 			break
 		}
 	}
-	if latched || s.GetResult().Ended {
-		t.Fatalf("allied pair vs enemy: enemy death must not end while allied peer lives, got %+v latch %+v", s.GetResult(), s.Latch)
-	}
-	peer := poolHandle(commanderHandles(s)[1][0])
-	s.Units.Destroy(peer, units.DeathKilled)
-	if result := s.Units.FinalizeDeath(peer, 200); !result.Freed {
-		t.Fatal("allied peer commander was not finalized")
-	}
-	for tick := uint32(200); tick < 400; tick++ {
-		if s.EvaluateResult(tick) {
-			latched = true
-			break
-		}
-	}
 	if !latched {
-		t.Fatalf("allied pair vs enemy: final allied peer death should latch victory, got %+v latch %+v", s.GetResult(), s.Latch)
+		t.Fatalf("allied pair vs enemy: the only non-allied player's death must latch victory, got %+v latch %+v", s.GetResult(), s.Latch)
+	}
+	// The ally is still alive and still owns a commander: victory did not wait
+	// for it [08 R-TRIG-01 §6].
+	if s.Units.LiveCountForPlayer(1) == 0 {
+		t.Fatalf("the allied peer must still be alive when victory latches")
 	}
 	res := s.GetResult()
 	// Winner should be team 1 (the surviving local owner's allied group).
@@ -296,7 +299,19 @@ func TestResult_LocalDefeat(t *testing.T) {
 	}
 }
 
-func TestResult_MutualDestructionDraw(t *testing.T) {
+// TestResult_MutualDestructionIsALocalDefeat pins the predicate order of
+// [08 R-TRIG-01 §6]: for session kinds 2/3 the defeat predicate is evaluated
+// FIRST and, if true, steps the countdown on the lost path; only when it is
+// false does the victory sweep run. Defeat therefore wins a tie, and a wipe
+// that leaves nobody standing latches the local defeat.
+//
+// **Correction.** This test previously asserted a draw with WinnerTeam -1,
+// citing an "RR-04" mutual-destruction rule that no research section carries.
+// Retail's kind-2 end has no draw outcome at all: the lost path is taken
+// whenever the local live count is zero, whatever else survives. The -1 winner
+// remains, because there is no surviving opponent whose team could be named,
+// but the kind is a defeat and the latch carries the lost bit.
+func TestResult_MutualDestructionIsALocalDefeat(t *testing.T) {
 	rng.SeedGlobal(5, 5)
 	cat := minimalCatalogForStrict()
 	for _, u := range cat.Units {
@@ -331,14 +346,20 @@ func TestResult_MutualDestructionDraw(t *testing.T) {
 		}
 	}
 	if !latched {
-		t.Fatalf("mutual destruction should latch draw")
+		t.Fatalf("mutual destruction should latch the local defeat")
 	}
 	res := s.GetResult()
-	if !res.Draw {
-		t.Fatalf("expected draw on mutual destruction, got %+v", res)
+	if res.Draw {
+		t.Fatalf("kind 2 has no draw outcome, got %+v", res)
 	}
-	if res.WinnerTeam != -1 {
-		t.Fatalf("draw winner should be -1, got %d", res.WinnerTeam)
+	if res.Kind != "defeat" {
+		t.Fatalf("mutual destruction kind = %q, want defeat", res.Kind)
+	}
+	if res.WinnerTeam != -1 || len(res.Winners) != 0 {
+		t.Fatalf("no opponent survives, so no winner may be named: winner=%d winners=%v", res.WinnerTeam, res.Winners)
+	}
+	if !s.Latch.IsLose() {
+		t.Fatalf("mutual destruction must take the lost path, latch %+v", s.Latch)
 	}
 }
 
