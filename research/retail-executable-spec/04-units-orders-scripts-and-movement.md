@@ -678,6 +678,16 @@ Unknown:** what writes bit 16 into the *unit capability word* that the pump
 intersects with. *Decider:* static trace of the writers of that word; the
 bounded census of [R-UNIT-06 §1] found none, and it must not be invented.
 
+**Correction (2026-09-02, RWU-19-19).** Nothing can: the unit-side word the
+pump merges is a 16-bit field, loaded zero-extended, so bit 16 of the
+satisfied set can only come from the record's own pending word. The census
+found no writer because there is no bit to write. The same word carries the
+weapon layer's bits `0x400`/`0x800` (fired) and `0x1000` (could not fire),
+whose producers and the pump's clearing rule are `[06 R-WPN-05 §6]`; the
+`0x1000` that `Attack_NoMove` phase 2 waits on is raised by the slot pipeline
+when a zero-reload shot fails its shot-time admission gate, and by the turret
+executor when its aim geometry has no solution.
+
 **Supported inference and Unknown — queue waits and producer assignment
 [P0-07][P0-08]:** The bodies for interrupt wake bits 2 (cancel-current) and 8
 (Construction stopped) are known — for the first, a metal refund of
@@ -3271,6 +3281,13 @@ answer by construction. In one sentence: **the lowest-indexed enabled slot, and
 **Unknown.** No runtime writer of bit 1 was found — only readers. Whether a
 slot can be *disabled* after load, which would separate this bit from "the
 weapon link resolved", is open; *decider:* a writer census on that byte's bit 1.
+
+**Correction (2026-09-02, RWU-19-19).** The writer exists: the weapon-slot
+initializer that unit construction runs writes the whole byte for each slot —
+bit 1 from the resolved weapon definition's active byte, bits 2–3 the slot's
+own index, bit 4 set, bit 0 clear — and it is the only writer of bit 1 in the
+decompiled set. A slot is therefore never disabled during play; only save
+load can change the bit. The full layout is `[06 R-WPN-05 §3]`.
 
 ### Closed — the ground movement handlers [R-ORD-01 §4] (2026-08-29)
 

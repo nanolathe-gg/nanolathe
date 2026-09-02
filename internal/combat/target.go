@@ -14,6 +14,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 // TargetKind distinguishes how a slot's target is encoded [06 §3.2] P0-10 (I13).
@@ -504,4 +505,105 @@ func IsValidAcquisitionCandidate(c Candidate, a Acquisition) bool {
 		return false
 	}
 	return a.admits(c)
+}
+
+// ---------------------------------------------------------------------------
+// The per-side target registry's third list — air bases
+// [06 §3.1 "the third list"] [04 R-AIR-01 §11]
+// ---------------------------------------------------------------------------
+
+// AirBaseSeekRadius is the whole-world-unit radius the damaged-aircraft base
+// seek admits candidates within, inclusive [04 R-AIR-01 §11]. It is compared as
+// a square against the same truncated planar metric every other combat distance
+// uses [06 §3.1].
+const AirBaseSeekRadius int32 = 0xF00
+
+// AirBaseRegistryPeriod is the target registry's rebuild cadence in ticks
+// [06 §3.1]. The third list is cleared and refilled with the primary and
+// secondary lists, so a scan can read a list up to this many ticks stale and
+// can hold a unit that has since died or deactivated [04 R-AIR-01 §11].
+const AirBaseRegistryPeriod uint32 = 30
+
+// IsAirBaseListMember is the third list's membership test at rebuild
+// [06 §3.1 "the third list"] [04 R-AIR-01 §11]: a fully built unit whose
+// definition carries **both** `builder` **and** `isairbase` and whose
+// activation bit is set. The rebuild classifies only units whose alive bit is
+// set and whose death latch is clear [06 §3.1].
+//
+// Alliance is deliberately not part of this predicate: the registry's friendly
+// branch reads the *candidate owner's* alliance row toward the registry's ally
+// group, which is a one-directional read the caller owns
+// [05 R-SHARE-01 §1][06 §3.1].
+func IsAirBaseListMember(u *units.Unit) bool {
+	if u == nil || u.Def == nil {
+		return false
+	}
+	if !u.Alive || u.Dying {
+		return false // alive bit set, death latch clear [06 §3.1]
+	}
+	if u.Remaining != 0 {
+		return false // the friendly branch classifies fully built units only [06 §3.1]
+	}
+	return u.Def.Builder && u.Def.IsAirBase && u.Activated
+}
+
+// RebuildAirBaseList fills one ally group's third list from a unit array walked
+// in slot order [06 §3.1] [04 R-AIR-01 §11] (I1). `declares` is the
+// one-directional alliance row read of [05 R-SHARE-01 §1] — row A of the
+// candidate's owner indexed by the registry's ally group — and is the friendly
+// branch's own test; with none supplied only the ally group's own units are
+// friendly, which is what a session with no player rows composes.
+//
+// The result is the list as of this instant. Retail refills it once every
+// AirBaseRegistryPeriod ticks; see the caller for the staleness that cadence
+// buys.
+func RebuildAirBaseList(list []*units.Unit, allyGroup uint8, declares func(from, toward uint8) bool) []pool.Handle {
+	var out []pool.Handle
+	for _, u := range list {
+		if !IsAirBaseListMember(u) {
+			continue
+		}
+		friendly := u.Owner == allyGroup
+		if !friendly && declares != nil {
+			friendly = declares(u.Owner, allyGroup)
+		}
+		if !friendly {
+			continue
+		}
+		out = append(out, u.Handle) // appended in unit-array order [06 §3.1]
+	}
+	return out
+}
+
+// ScanAirBaseList is the damaged-aircraft base seek's filter over one ally
+// group's third list [04 R-AIR-01 §11]. It walks the list once, in list order,
+// admitting an entry when its definition still carries `builder` and
+// `isairbase`, its activation bit is still set, and the planar squared distance
+// from (x, z) is at or below AirBaseSeekRadius squared — inclusive, on the
+// truncated whole-world-unit metric of [06 §3.1].
+//
+// The three admission flags are re-tested; **liveness is not**. A pad destroyed
+// since the rebuild is still offered, and the landing order's own pad query
+// rejects it later [04 R-AIR-01 §6][04 R-AIR-01 §11]. Nothing is scored or
+// sorted; entries are pushed in list order, and the caller's single RNG draw
+// over the count is what picks one.
+func ScanAirBaseList(x, z numeric.Fixed, list []pool.Handle, lookup func(pool.Handle) *units.Unit) []pool.Handle {
+	if lookup == nil {
+		return nil
+	}
+	var out []pool.Handle
+	for _, h := range list {
+		u := lookup(h)
+		if u == nil || u.Def == nil {
+			continue
+		}
+		if !u.Def.Builder || !u.Def.IsAirBase || !u.Activated {
+			continue // the three flags are re-tested, liveness is not [04 R-AIR-01 §11]
+		}
+		if !WithinRange(x, z, u.X, u.Z, AirBaseSeekRadius) {
+			continue // (dx² >> 32) + (dz² >> 32) <= 0xF00², inclusive [04 R-AIR-01 §11]
+		}
+		out = append(out, h)
+	}
+	return out
 }

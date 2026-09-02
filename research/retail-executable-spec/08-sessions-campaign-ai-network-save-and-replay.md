@@ -4807,6 +4807,16 @@ wire map, not a prescription for Nanolathe's in-memory layout. [Established;
 | `0x16` | `u8` | Stockpile remainder (completed rounds). Restore the byte exactly; launch decrements this value and does not change reload. For non-stockpile weapons the serialized byte is still part of the fixed record and must not be repurposed. [Established; [06 §11]] |
 | `0x17` | `u8` | Only bits 0..4 are meaningful persisted slot flags. Bit 0 is the Aim-request/result latch, bit 1 is armed/has-target, and bit 4 is tracking; bits 2 and 3 retain their slot-flag positions but their semantic names are not closed. The writer and reader discard/overwrite the upper three bits; their observed high-bit values are stack residue, not state. [Established bit behavior; Unknown names for bits 2/3; [06 §3.3]] |
 
+**Correction (2026-09-02, RWU-19-19, `[06 R-WPN-05 §3]`).** The `0x17` row
+above says "bits 2 and 3 retain their slot-flag positions but their semantic
+names are not closed". They are closed: bits 2–3 hold the **slot's own index**
+(0, 1, 2), written once by the slot initializer at unit construction and read
+by the muzzle queries, the projectile creators (to pick `Fire*` and the slot's
+recoil yaw) and the fire packet. A reader that restores the byte wholesale
+restores them correctly; a reader that rebuilds the byte must put the record's
+position `n` into those two bits. Bits 5–7 are inert in the executable as well
+as discarded on the wire.
+
 The active-definition byte at `0x08..0x0B` is the important identity
 boundary. Two different weapon definitions with the same active gate produce
 the same byte, so a loader must never interpret this field as a catalog index.

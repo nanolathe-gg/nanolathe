@@ -12,6 +12,7 @@ package movement
 import (
 	"math"
 
+	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -1564,50 +1565,125 @@ func airPlanarDistance(ax, az, bx, bz numeric.Fixed) int64 {
 	return int64(isqrt(uint64(dx*dx + dz*dz)))
 }
 
-// airBelowThreeQuarters is the health test five air legs share: health strictly
-// below `(MaxDamage >> 2) · 3`, computed unsigned [04 R-AIR-01 §7]
-// [04 R-AIR-01 §8][04 R-ORD-02 §3].
+// airBelowThreeQuarters is the health test the six base-seeking air legs share
+// [04 R-AIR-01 §7][04 R-AIR-01 §8][04 R-ORD-02 §3], written out exactly by
+// [04 R-AIR-01 §11] as
+//
+//	(uint)(int16)health < (MaxDamage >> 2) * 3
+//
+// — the 16-bit health field sign-extended and compared unsigned against three
+// quarters of the definition's `MaxDamage`, the quarter formed by a truncating
+// shift, strict.
+//
+// Corrected 2026-09-02 (WU-19-60). The previous form clamped a negative health
+// to zero before the unsigned compare, so an overkilled aircraft read as fully
+// damaged and sought a pad; retail's sign extension makes it read as a very
+// large unsigned value and *not* seek one. It also fell back to the instance's
+// MaxHealth when the definition word was absent, which is not the operand
+// [04 R-AIR-01 §11] names; with no definition word there is no threshold and
+// the leg does not take the branch.
 func airBelowThreeQuarters(u *units.Unit) bool {
-	if u == nil {
+	if u == nil || u.Def == nil || u.Def.MaxDamage <= 0 {
 		return false
 	}
-	max := int32(0)
-	if u.Def != nil {
-		max = u.Def.MaxDamage
-	}
-	if max <= 0 {
-		max = u.MaxHealth
-	}
-	if max <= 0 {
-		return false
-	}
-	health := u.Health
-	if health < 0 {
-		health = 0
-	}
-	return uint32(health) < uint32(max>>2)*3
+	return uint32(int32(int16(u.Health))) < uint32((u.Def.MaxDamage>>2)*3)
 }
 
 // airBaseCandidates is the "collect the base candidates within `0xF00` for my
-// side" scan that `VTOL_SeekAttack` phase 1, `VTOL_SeekGuard` phase 1,
-// `AirStrike` phase 6 and `AirToGround` phase 4 all run when the aircraft is
-// below three quarters health, and whose non-empty result pushes a
-// `VTOL_Landing` order at a randomly drawn candidate.
+// side" scan of [04 R-AIR-01 §11], which `VTOL_SeekAttack` phase 1,
+// `VTOL_SeekGuard` phase 1, `AirStrike` phase 6, `AirToGroundHover` phase 3 and
+// `VTOL_RepairPatrol` phase 1 run when the aircraft is below three quarters
+// health, and whose non-empty result pushes a `VTOL_Landing` order at one
+// candidate drawn from it. `AirToGround` runs the same scan and frees the
+// result unused.
 //
-// TODO(question): the scan's admission predicate is not established. Four
-// sections name the list — [04 R-AIR-01 §7], [04 R-AIR-01 §8] and
-// [04 R-ORD-02 §3] all say "the base candidates within `0xF00`" or "the
-// nearby-unit candidate list within `0xF00` for the unit's ally group" — but
-// [04 R-ORD-02 §4], which is the section that enumerates the scan visitors,
-// defines only the repair-candidate filter and the guard-candidate visitor and
-// does not define this one. Whether a candidate is any allied unit, any unit
-// with the `isairbase` capability, or any unit with a free pad is therefore
-// unstated, and so is what "for my side" means against the diplomacy byte.
-// Choosing one would decide where damaged aircraft go to land, so nothing is
-// chosen: the list is reported empty, and every caller falls through to its own
-// "no candidates" arm, which each of the four sections states. A trace of that
-// visitor's admission test settles it.
-func (s *System) airBaseCandidates(_ *units.Unit) []pool.Handle { return nil }
+// It is not a sector visitor: the candidate set is the per-side target
+// registry's **third list** [06 §3.1 "the third list"], and this is its filter.
+// The list holds every fully built friendly unit whose definition carries both
+// `builder` and `isairbase` and whose activation bit is set, in unit-array
+// order; the filter re-tests those three flags, admits at planar
+// `(dx² >> 32) + (dz² >> 32) <= 0xF00²` inclusive, and pushes in list order.
+// Both halves live in internal/combat next to the registry they belong to.
+//
+// TODO(T25): retail refills the third list once every
+// combat.AirBaseRegistryPeriod ticks, so a real scan reads a list up to thirty
+// ticks stale — it can still offer a pad that has since died (the landing
+// order's own pad query rejects it, [04 R-AIR-01 §6]) and cannot yet offer one
+// completed inside the window. Holding that list across ticks needs a field on
+// the movement System, and internal/movement/integrate.go is owned by another
+// work unit this session; until it can take one, the list is rebuilt at the
+// instant of the scan, which is the same set with zero staleness. The scan
+// filter, the draw and the callers are unaffected.
+func (s *System) airBaseCandidates(u *units.Unit) []pool.Handle {
+	if s == nil || u == nil {
+		return nil
+	}
+	list := combat.RebuildAirBaseList(s.airUnitArray(u), u.Owner, s.airDeclaresAlliance(u))
+	if len(list) == 0 {
+		return nil
+	}
+	return combat.ScanAirBaseList(u.X, u.Z, list, s.airUnitLookup(u))
+}
+
+// airUnitArray returns the live unit array in slot-ascending order — the order
+// the registry rebuild walks it in [06 §3.1] (I1). The bound units world is the
+// direct source; a System driven only through the order binding (which is how
+// the order-facing tests compose one) falls back to the binding's own
+// pool-ordered enumerator.
+func (s *System) airUnitArray(u *units.Unit) []*units.Unit {
+	if s != nil && s.world != nil {
+		return s.world.Iter()
+	}
+	b := airBinding(u)
+	if b == nil {
+		return nil
+	}
+	var out []*units.Unit
+	b.ForEachUnit(func(_ pool.Handle, cand *units.Unit) bool {
+		if cand != nil {
+			out = append(out, cand)
+		}
+		return false
+	})
+	return out
+}
+
+// airUnitLookup resolves a third-list handle back to its unit for the scan's
+// flag and distance re-tests.
+func (s *System) airUnitLookup(u *units.Unit) func(pool.Handle) *units.Unit {
+	if s != nil && s.world != nil {
+		return s.world.Unit
+	}
+	b := airBinding(u)
+	if b == nil || b.Lookup == nil {
+		return nil
+	}
+	return b.Lookup
+}
+
+// airDeclaresAlliance is the registry's friendly test: the one-directional row
+// A of the candidate's owner indexed by the registry's ally group
+// [05 R-SHARE-01 §1][06 §3.1]. It is deliberately not the symmetric hostility
+// predicate the command resolver uses — the rebuild reads exactly one row, in
+// this direction. With no row source composed the caller keeps its own-owner
+// fallback.
+func (s *System) airDeclaresAlliance(u *units.Unit) func(from, toward uint8) bool {
+	b := airBinding(u)
+	if b == nil || b.World == nil {
+		return nil
+	}
+	return b.World.DeclaresAlliance
+}
+
+// airBinding is the session-owned order binding for this aircraft, the same
+// seam orderWeapons and simRNG reach through.
+func airBinding(u *units.Unit) *orders.QueueBinding {
+	q := orders.QueueOfUnit(u)
+	if q == nil {
+		return nil
+	}
+	return q.Binding()
+}
 
 // airSpawnAtHead inserts a freshly allocated record at the front of the unit's
 // primary segment, which is the head insert of [04 R-ORD-01 §1].
@@ -1752,14 +1828,8 @@ func (s *System) legVTOLSeekAttack(u *units.Unit, n *orders.Node, satisfied uint
 		// acquisition branches, in slot order [04 R-AIR-01 §7]. A zero target
 		// disables autonomous tracking without inventing a target.
 		setManualTarget(u, n.Target)
-		if airBelowThreeQuarters(u) {
-			if bases := s.airBaseCandidates(u); len(bases) > 0 {
-				s.releaseAirGoal(u)
-				pick := bases[sim.Uint32n(uint32(len(bases)))]
-				airSpawnAtHead(u, "VTOL_Landing", pick, Vec3{}, tick)
-				n.DynamicGate = 0
-				return 0 // *restart*
-			}
+		if airBelowThreeQuarters(u) && s.airFindBaseAndLand(u, n, sim, tick) {
+			return 0 // *restart* [04 R-AIR-01 §7][04 R-AIR-01 §11]
 		}
 		if target, ok := acquireWeaponTarget(u, 0, uint32(firstWeaponRange(u))); ok {
 			n.Target = target
@@ -1843,14 +1913,8 @@ func (s *System) legVTOLSeekGuard(u *units.Unit, n *orders.Node, satisfied uint3
 		if sim == nil {
 			return airLegUnbound(n, tick)
 		}
-		if airBelowThreeQuarters(u) {
-			if bases := s.airBaseCandidates(u); len(bases) > 0 {
-				s.releaseAirGoal(u)
-				pick := bases[sim.Uint32n(uint32(len(bases)))]
-				airSpawnAtHead(u, "VTOL_Landing", pick, Vec3{}, tick)
-				n.DynamicGate = 0
-				return 0 // *restart*
-			}
+		if airBelowThreeQuarters(u) && s.airFindBaseAndLand(u, n, sim, tick) {
+			return 0 // *restart* [04 R-ORD-02 §3][04 R-AIR-01 §11]
 		}
 		// The guard-candidate enumeration is the open question recorded above;
 		// with an
@@ -2011,15 +2075,8 @@ func (s *System) legAirStrike(u *units.Unit, n *orders.Node, satisfied uint32, t
 			n.Phase = 3
 			return 2 // fly another run
 		}
-		if sim != nil {
-			if bases := s.airBaseCandidates(u); len(bases) > 0 {
-				s.releaseAirGoal(u)
-				pick := bases[sim.Uint32n(uint32(len(bases)))]
-				airSpawnAtHead(u, "VTOL_Landing", pick, Vec3{}, tick)
-				n.DynamicGate = 0
-			}
-		}
-		return 0 // *restart*, with or without candidates
+		s.airFindBaseAndLand(u, n, sim, tick)
+		return 0 // *restart*, with or without candidates [04 R-AIR-01 §8][04 R-AIR-01 §11]
 	default:
 		return 7 // *cancel-all* [04 R-ORD-02 §3]
 	}
@@ -2027,12 +2084,22 @@ func (s *System) legAirStrike(u *units.Unit, n *orders.Node, satisfied uint32, t
 
 // --- AirToGround and AirToGroundHover [04 R-AIR-01 §8] ---
 
-// airFindBaseAndLand is the "find a base and land" branch `AirStrike` phase 6
-// states and `AirToGround` phase 4, `AirToGroundHover` phase 3,
-// `VTOL_SeekAttack` phase 1 and `VTOL_SeekGuard` phase 1 all reuse: collect the
-// candidates within 0xF00, and if any exist clear the payload, draw one random
-// index, push a `VTOL_Landing` order at that candidate and clear the gate word.
-// It reports whether it took the branch.
+// airFindBaseAndLand is the "find a base and land" branch `AirStrike` phase 6,
+// `AirToGroundHover` phase 3, `VTOL_SeekAttack` phase 1 and `VTOL_SeekGuard`
+// phase 1 share: collect the third-list candidates within 0xF00, and if any
+// exist clear the goal payload, draw one random index, push a `VTOL_Landing`
+// order at that candidate and clear the gate word. It reports whether it took
+// the branch [04 R-AIR-01 §11].
+//
+// The draw is one simulation `RNG(count)` and is taken **only** on a non-empty
+// list, so an aircraft with no pad in reach advances no random state; a count
+// of one draws nothing at all [01 §7.1][I4]. `AirToGround` deliberately does
+// not come through here — it runs the scan and frees the result.
+//
+// The payload clear is the record-level release helper of [04 R-ORD-01 §1],
+// ReleaseGoalPayload — the seam WU-19-62 landed — so the release runs the
+// identity test and raises pending `0x80` on the record that owned the payload,
+// exactly as the arrival and teardown releases do.
 func (s *System) airFindBaseAndLand(u *units.Unit, n *orders.Node, sim *rng.Simulation, tick uint32) bool {
 	if sim == nil {
 		return false
@@ -2041,7 +2108,7 @@ func (s *System) airFindBaseAndLand(u *units.Unit, n *orders.Node, sim *rng.Simu
 	if len(bases) == 0 {
 		return false
 	}
-	s.releaseAirGoal(u)
+	s.ReleaseGoalPayload(n)
 	pick := bases[sim.Uint32n(uint32(len(bases)))]
 	airSpawnAtHead(u, "VTOL_Landing", pick, Vec3{}, tick)
 	n.DynamicGate = 0
@@ -2130,7 +2197,15 @@ func (s *System) legAirToGround(u *units.Unit, n *orders.Node, tick uint32) orde
 			return airLegUnbound(n, tick)
 		}
 		if airBelowThreeQuarters(u) {
-			s.airFindBaseAndLand(u, n, sim, tick)
+			// `AirToGround` runs the base scan under the same health test and
+			// **frees the result unused** — it never lands a damaged attacker,
+			// and the sections implying it does are corrected by
+			// [04 R-AIR-01 §11]. The walk is kept because it is the behavior;
+			// only the pick is absent, and the pick is the sole step that draws
+			// (I4), so a damaged strafer consumes no random state here.
+			//
+			// Corrected 2026-09-02 (WU-19-60): this called the land branch.
+			_ = s.airBaseCandidates(u)
 			return 0 // *restart*, with or without candidates [04 R-AIR-01 §8]
 		}
 		turn := uint16(0x4000)

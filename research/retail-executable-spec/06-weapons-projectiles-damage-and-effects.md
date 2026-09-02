@@ -313,7 +313,9 @@ The water branch tests neither shooter height, nor to-air status, nor
 ballistic feasibility; the non-water branch tests no candidate medium beyond
 the sea-level floor. Both height tests are whole-world-unit tests on the high
 word plus the definition's reference height word. Some definition and
-controller branches can bypass this gate entirely (§3.2).
+controller branches can bypass this gate entirely (§3.2). The branch is
+selected by the weapon's `waterweapon` flag, bit 16 of the weapon flag word;
+the shot-time gate of §3.3 selects on the same bit (`[R-WPN-05 §7]`).
 
 **Established fact:** Retained-target checks do not rerun visibility, sensor,
 range, medium, aircraft, or ballistic acquisition tests. Shot-time admission
@@ -914,6 +916,210 @@ map's sea-level byte. In order:
 
 The gate performs no terrain, hill, visibility or sensor test, and consults
 neither reload nor ammunition nor cost.
+
+### Closed — the slot control byte: bits 0–4 named, bits 5–7 inert, and its two writers [R-WPN-05 §3] (2026-09-02)
+
+**Established (direct-static).** §1.2 lists "an armed/has-target flag, an
+Aim-request latch, a tracking flag" among the slot record's fields;
+`[04 R-ORD-01 §7]` names a "slot control byte" whose bits 1 and 4 the order
+verbs test and toggle; `[08 R-SAVE-WEAPON-01]` persists a slot flag byte whose
+bits 0, 1 and 4 it names and whose bits 2 and 3 it leaves unnamed. Reading
+every access to the byte in the decompiled set settles that these are **one
+byte**, and names the rest of it:
+
+| Bit | Meaning | Writers | Readers |
+|---:|---|---|---|
+| 0 | **Aim-request latch** | set by the slot pipeline when it dispatches `Aim*`; cleared by the pipeline on target loss, by the turret executor on no-solution, on drift-gate failure and on a successful shot, and by the vertical-launch executor on a successful shot (§3.3) | the pipeline's dispatch gate; the turret executor's ready gate |
+| 1 | **slot enabled** — the slot's weapon definition is active (the definition-side active byte of `[08 R-SAVE-WEAPON-01]` is nonzero) | the **slot initializer**, run once from unit construction; save load restores it wholesale | the pipeline's slot visit, the target resolver, the enabled-slot tests of `[04 R-ORD-01 §7]` and the HUD/AI readers |
+| 2–3 | **the slot's own index** (0, 1, 2) | the slot initializer | every muzzle query made through a slot record (the index is the query's slot argument), the three creators (to select `FirePrimary`/`FireSecondary`/`FireTertiary` and to read *that slot's* stored yaw for `RockUnit`), the line-of-sight executor, and the fire packet |
+| 4 | **autonomy** (doc 06's "tracking flag", `[04 R-ORD-01 §7]`'s "inhibit latch") | the slot initializer **sets** it, so every slot starts autonomous; thereafter only the two order verbs | the autonomous scan (§3.2), the retaliation offer, the guards, the fire-stance handler (`[04 §5.4]`) |
+| 5–7 | inert | the initializer preserves whatever the record held; no other writer in the decompiled set; the save writer and reader discard them | none found (bounded) |
+
+The byte is therefore self-describing — a slot record carries its own index —
+which is why the creators and the muzzle queries take a slot pointer alone.
+The initializer also zeroes the slot's reload word and stockpile byte, links
+the weapon definition from the unit definition's ordered `weapon1..3` list,
+and stores an initial value into the slot's distance word — the word the
+ballistic creator divides (§6.4) — derived from the two muzzle-query points
+(its exact expression was not traced here: **Unknown**, decider a trace of the
+initializer's arithmetic); it ends by dispatching `SetMaxReloadTime` with the largest of
+the three `reloadtime` values scaled to milliseconds (`ticks × 1000 / 30`,
+truncated).
+
+**Correction to `[04 R-ORD-01 §7]`'s Unknown.** That block says "No runtime
+writer of bit 1 was found — only readers. Whether a slot can be *disabled*
+after load … is open." The writer is the slot initializer above; it is the
+only one, and it runs at construction, so a slot's enabled bit never changes
+during play except through save load.
+
+**Consequence for an implementation.** The order verbs and the weapon layer
+read one byte, not two: *release slot k* / *inhibit slot k* clear and set the
+same autonomy bit the autonomous scan requires. Modelling an order-side
+control byte separately from the slot's tracking flag models one retail byte
+as two, and an implementation that keeps the two in step is equivalent only
+while nothing writes one without the other.
+
+### Closed — the aim yaw handed to the script is relative, and the drift pair is relative on both sides [R-WPN-05 §4] (2026-09-02)
+
+**Established (direct-static).** Three facts fix the sign convention of every
+yaw in this document, and they are consistent with each other:
+
+1. **Angle to direction.** A yaw `a` denotes the planar direction
+   `(−sin a, −cos a)` in world `(X, Z)`: the ordinary and ballistic creators
+   build `velocityX = −sin(yaw, H)` and `velocityZ = −cos(yaw, H)` (§6.3,
+   §6.4), and the mover builds its own velocity as `−sin(heading)·speed`,
+   `−cos(heading)·speed` (`[04 R-MOV-01 §4]`); the dropped creator gives a
+   bomb the dropping unit's motion along `(−sin heading, −cos heading)`
+   (§6.4). Yaw and unit heading share **one** convention, so heading 0 faces
+   −Z and a quarter turn (`0x4000`) faces −X.
+2. **The absolute bearing** is `atan2q(m.X − t.X, m.Z − t.Z)` — muzzle minus
+   target, exactly as §3.3 and §6.3 write it. Under fact 1 this is the bearing
+   *from* the muzzle *toward* the target (the negations in the velocity build
+   undo the operand order), so the two are one expression, not two
+   conventions in tension.
+3. **The value handed to `Aim*`** is `(bearing − unitHeading) mod 65536` as
+   the first argument and the absolute pitch as the second, both passed as
+   16-bit unsigned words; the same pair is stored in the slot as the desired
+   yaw and pitch and is what the save persists (`[08 R-SAVE-WEAPON-01]`,
+   bytes `0x12..0x15`). Zero means *dead ahead*; a positive relative yaw lies
+   on the unit's left when facing −Z (toward −X), i.e. counter-clockwise
+   seen from above with X east and Z south.
+
+**The turret drift pair.** At fire time the turret executor re-solves the
+**relative** yaw from the current muzzle, target and heading, and the drift
+gate of `[R-WPN-03 §2]` compares it with the stored relative yaw from the
+dispatch tick. With the target still, a unit that turned by Δ since the
+dispatch reads a yaw error of −Δ, so a turret whose script has already
+finished turning must re-aim when its hull turns further than `tolerance`.
+Only after the gate passes does the executor add the *current* heading to the
+stored yaw (relative → absolute), apply the spread of §4.4, and call the
+creator. Both halves of the comparison are relative; an implementation that
+stores the absolute bearing and compares absolute against absolute loses the
+hull-turn term and differs whenever the shooter turned while its Aim was
+outstanding.
+
+**Implementation note.** An engine whose own bearing helper is written over
+target-minus-muzzle deltas and whose velocity build uses positive sine and
+cosine obtains an absolute yaw exactly half a turn from retail's
+(`atan2(−x, −z) = atan2(x, z) + 0x8000`). Its projectiles fly correctly
+because the two sign flips cancel — but the value it hands to `Aim*` must
+still be retail's: `(ownYaw + 0x8000 − heading) mod 65536`. Handing the
+un-shifted absolute yaw is correct only for a unit whose heading is `0x8000`
+(facing +Z), and subtracting the heading from the un-shifted yaw is wrong for
+every heading; the authored scripts assume a relative argument with zero
+meaning straight ahead.
+
+### Closed — the accuracy spread reaches only ballistic trajectories; the ordinary creator re-solves from the aim point [R-WPN-05 §5] (2026-09-02)
+
+**Established (direct-static).** The turret executor hands both creators the
+**same** muzzle point and the **same** target point it received from the slot
+pipeline — the resolved, lead-adjusted point of §3.4 — and never derives an
+aim point from the slot's stored angles. What each creator does with the slot
+angles after the spread of §4.4 has been added to them:
+
+* the **ordinary creator** (`lineofsight` or `selfprop`) recomputes yaw and
+  pitch from the muzzle and the target point (§6.3) and stores the target
+  point as the record's aim point. It reads the slot's stored yaw once, for
+  `RockUnit`'s recoil direction (`slotYaw − heading`), and never reads the
+  stored pitch;
+* the **ballistic creator** copies the slot's stored yaw and pitch into the
+  record (§6.4).
+
+So for a turret weapon authored `lineofsight` or `selfprop`, `accuracy`, the
+health term and the kill divisor change the recoil direction and **nothing
+else**: the shot leaves exactly toward the aim point, at full health or near
+death. Only `ballistic` turret weapons scatter. Burst clones inherit the
+root's velocity, so a burst of an ordinary weapon is unjittered too until its
+own spray (§4.3).
+
+**Correction to `[R-WPN-03 §4]`.** Its "shape of the bound" paragraph says a
+full-health, `accuracy = 0` shooter "fires exactly on its solved angles"; true,
+but the implication that a nonzero bound steers the shot holds for ballistic
+weapons only. Its "retention after a full pool" paragraph says the executor
+"adds the heading and a second spread to the already-rewritten angles and
+fires off-axis by that much": the angles are rewritten as described, and a
+ballistic shot does fire off-axis by that much; an ordinary shot's trajectory
+is unaffected, only its recoil direction carries the accumulated error.
+§4.4's "mutated firing geometry" is likewise the slot's angles, not an
+ordinary shot's path.
+
+### Closed — the "could not fire" bit is bit 12 of the unit's order-event word [R-WPN-05 §6] (2026-09-02)
+
+**Established (direct-static).** §3.3 says a failed shot-time gate "sets the
+shooter's *could not fire* status bit", and §4.2 says a successful shot sets
+`0x400` or `0x800` in the unit's "fired this tick" status word. They are the
+same 16-bit word — the unit's **order-event word**, the one the order pump
+merges with each record's pending word (`[04 R-ORD-01 §0]`) — and the bits
+are:
+
+| Bit | Producer (this document unless cited) |
+|---:|---|
+| `0x400` | a successful non-`commandfire` shot (§4.2) |
+| `0x800` | a successful `commandfire` shot (§4.2) |
+| `0x1000` | **could not fire**: the slot pipeline when the shot-time physical gate of §3.3 fails (reload was zero, so a shot was attempted), and the turret executor when its aim geometry yields no solution (the latter also clears the Aim latch) |
+| `0x2000`, `0x4000` | the damage-reaction site's feedback bits (`[R-WPN-04 §2]`) |
+| `0x8000` | the under-construction wait (`[04 R-ORD-01 §0]`) |
+
+**Who clears it.** Three sites, and nothing else:
+
+1. **The order pump**, once per record it visits: it forms
+   `satisfied = (recordPending | unitEventWord) & recordGate`; when the gate is
+   nonzero and `satisfied` is empty it stops at that record and the unit word
+   is left as it was; otherwise it clears the satisfied bits from **both** the
+   unit word and the record's pending word, zeroes the gate, and hands
+   `satisfied` to the handler. The bit is therefore consumed by the first
+   record whose gate names it, and survives across ticks until one does.
+2. **The slot target setters** of §3.2 (bind slot to unit, bind slot to
+   point), which clear bits 10–14 of the word (`[04 R-ORD-01 §7]` already
+   records this as "clear bits 10–14 of the owner's capability word").
+3. Unit construction, which zeroes the word.
+
+**Who reads it.** Only the pump's merge. Handlers see the bit inside their
+satisfied set: `Attack_NoMove` phase 2 is reached only when it arrives and
+answers by inhibiting all slots and re-arming; `Attack_Chase`'s masks carry
+it too (`[04 R-ORD-01 §3]`). The weapon layer never reads it, so its absence
+changes no firing decision — it is the attack handlers' *disengage* signal:
+"my weapon tried and could not", raised at most once per slot visit and
+latched until an order consumes it or a new target is bound.
+
+**A width fact for `[04 R-ORD-01 §0]`.** The unit word is loaded as a
+zero-extended 16-bit value when merged, so gate bit `0x10000` can be
+satisfied only from the record's own pending word; the standing question
+there — "what writes bit 16 into the unit capability word" — has the answer
+*nothing can*.
+
+### Closed — the water branch is `waterweapon`; the targeting-upgrade gate is capability word A bit 10 [R-WPN-05 §7] (2026-09-02)
+
+**Established (direct-static).** Both admission gates — the acquisition-time
+gate of §3.1 and the shot-time gate of §3.3 — choose their water branch on
+**bit 16 of the weapon definition's flag word**, the bit the weapon parser
+writes for the authored key `waterweapon` (`[02 R-KEYS-01]`). `noautorange`
+(bit 27) is read only by the expiry rule (§6.3, §7.3) and plays no part in
+admission. The candidate-side tests inside the water branch read the
+*unit* definition's capability word A: `floater` (bit 19) and `canhover`
+(bit 12), as `[04 R-SPEC-01 §0]` has them.
+
+The registry's secondary-list gate of §3.1 reads **word A** bit 10 of the
+unit definition's two capability words (`[04 R-SPEC-01 §0]`), the storage of
+`istargetingupgrade`; word B is not consulted there.
+
+### Closed — the wind words are raw −2·speed·trig integers added to 16.16 positions [R-WPN-05 §8] (2026-09-02)
+
+**Established (direct-static).** The three wind globals the ballistic and
+dropped integrators add to a record's position (§6.4) are the words the wind
+change of `[01 §7.3]` publishes: the X word is `−2 × sin(heading, speed)` and
+the Z word `−2 × cos(heading, speed)` using the §3.3 scaled trigonometry with
+the **integer wind speed** as the magnitude (so each lies in
+`[−2·speed, +2·speed]`), and the Y word has **no writer** in the decompiled
+set — it is the zero the battle started with. `[03 R-WIND-01]` names the axes
+from the consumer side; this states the scale on the projectile side: the
+words are added to the 16.16 position words **as they are**, with no shift, so
+a shell drifts by `windX / 65536` world units per tick along X — at the
+largest stock `maxwindspeed` of 5,000 that is at most `10,000 / 65,536 ≈ 0.15`
+world units per tick, about 4.6 world units per second. The `× 8` of the
+smoke family and the `× 2` of the feature fire probe belong to those
+contracts (`[03 R-WIND-01]`), not to projectiles. An implementation that
+stores the published words as raw 16.16 velocity increments is exact.
 
 ### 3.4 The weapon-query path [R-P0-07]
 
@@ -1832,7 +2038,10 @@ integrate:
 ```
 
 The three wind globals are added **to the position**, not to the velocity, and
-all three are applied including the vertical one.
+all three are applied including the vertical one. They are the raw
+`−2 × trig(heading, speed)` integers of `[01 §7.3]`, added with no shift — one
+unit of the word is one 65,536th of a world unit per tick — and the vertical
+word has no writer (`[R-WPN-05 §8]`).
 
 **Established fact:** On ballistic timer expiry without burn-blow the record
 emits its expiry puff — the same effect emitter the smoke trail uses — and
@@ -5078,8 +5287,9 @@ gates. No bullet is added.
   over the root expression.
 - Target replacement during an outstanding Aim, and malformed-state
   interactions around the closed family readiness gates · §3.4 · static trace.
-- **The bearing's operand order and the relative-to-absolute yaw conversion,
-  taken together** (2026-08-31, play-test PT4) · §3.3 · static trace of
+- **Closed (2026-09-02, `[R-WPN-05 §4]`): the bearing's operand order and
+  the relative-to-absolute yaw conversion, taken together** (2026-08-31,
+  play-test PT4) · §3.3 · static trace of
   `atan2q`'s operand order and of the turret executor's conversion. §3.3 writes
   the aim bearing as `atan2q(p.X - t.X, p.Z - t.Z)` — muzzle minus target, which
   is the reverse of the direction of fire — and separately says the turret's
@@ -5094,8 +5304,9 @@ gates. No bullet is added.
   Aim callback and the drift gate that would read it are both untraced, and the
   §3.3 drift gate above therefore has no implementation. Marked in code as
   `TODO(question)` at the aim-angle site.
-- **Whether the order side's "slot control byte" is the persisted slot-flag
-  byte** (2026-08-31, play-test PT5) · §1.2, §3.2 · static trace of the two
+- **Closed (2026-09-02, `[R-WPN-05 §3]`): whether the order side's "slot
+  control byte" is the persisted slot-flag byte** — it is, one byte
+  (2026-08-31, play-test PT5) · §1.2, §3.2 · static trace of the two
   order-side weapon-slot helpers' and the cleanup walk's stores against the
   byte the save writer serializes. `[04 R-ORDER-02 §2]` has the cleanup walk
   test "the slot's control byte" bit 1 (slot assigned) and bit 4, emit
