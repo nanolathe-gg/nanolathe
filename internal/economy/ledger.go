@@ -90,10 +90,20 @@ type Player struct {
 	GameEnded bool // game-ended flag bit clear required [05 "Authoritative settlement order"]
 	// EndGameCountdown must be negative for settlement; initialized -1
 	// [05 "Authoritative settlement order"].
-	// TODO(question): the two arm/decrement sites that latch GameEnded and
-	// drive this countdown were not dispatched to a phase yet — the victory/
-	// defeat transition (phase 14 session) owns them. Until then the gate is
-	// permanently satisfied, which matches an in-progress game.
+	//
+	// Both arm/decrement sites are placed, and this ledger needs nothing more
+	// from them [05 R-ECO-01 §12]. Retail arms the pair from the LOCAL slot's
+	// 30-tick due: session kind 1 evaluates the victory predicate and otherwise
+	// the defeat predicate, kinds 2 and 3 evaluate the defeat predicate behind
+	// the inactive-or-not-watching test, and a session with no human
+	// participant arms from the post-loop site [08 R-SKIR-01 §3] "Defeat
+	// detection". Nanolathe's session does exactly that — the campaign trigger
+	// poll runs on the local record's WinLoseTime due and the skirmish result
+	// evaluation on its own 30-tick due, and each mirrors the latch's ending
+	// flag and countdown onto all ten records — so an unarmed session leaves
+	// the gate permanently satisfied, which is what an in-progress game is.
+	// The semantic names of the retail flag bits beyond `0x04` stay open as
+	// doc 08 items; nothing here reads them.
 	EndGameCountdown     int32
 	Helper1Deadline      uint32   // private 30-tick counter for auxiliary player-level object update [05 "Authoritative settlement order"]
 	Helper2Deadline      uint32   // second helper private 30-tick gate [05 "Authoritative settlement order"]
@@ -111,11 +121,9 @@ type Player struct {
 	// is added to the player's storage capacity during the ledger's capacity
 	// sum. The fields keep float32 with integer values truncated toward zero
 	// per I3, matching the retail int->float stores.
-	StorageBonusEnabled    bool       // bonus applied to capacity when set [05 "Storage capacity"] [OX P1]
-	StorageBonus           [2]float32 // [Metal]=max(startMetal,200), [Energy]=max(startEnergy,200) [05 "Storage capacity"] [OX P1]
-	aiAggregatesPrepared   bool       // composed settlement populated AI fields before post-commit [R-P0-05]
-	settlementStatusFirst  int16
-	settlementStatusSecond int32
+	StorageBonusEnabled  bool       // bonus applied to capacity when set [05 "Storage capacity"] [OX P1]
+	StorageBonus         [2]float32 // [Metal]=max(startMetal,200), [Energy]=max(startEnergy,200) [05 "Storage capacity"] [OX P1]
+	aiAggregatesPrepared bool       // composed settlement populated AI fields before post-commit [R-P0-05]
 }
 
 // Service is the economy service skeleton per plan public API.
@@ -135,11 +143,34 @@ type Service struct {
 	// skips the debit entirely, which is what a session with no cloaking units
 	// would observe anyway.
 	CloakCost func(*units.Unit) float32
-	// CloakDue is the narrow seam for the runtime cloak-requested/status/deadline
-	// predicate. Until units expose those producer-owned bits, nil is inert;
-	// economy must not infer a cloak request from authored cost alone.
-	// TODO(question): provider must expose the established bit-set/bit-clear and
-	// per-unit deadline gate [R-ECO-01 §9].
+	// CloakDue is the narrow seam for the runtime cloak gate. The full traced
+	// predicate is a conjunction of three terms — the cloak-REQUESTED status
+	// bit is set, a second status bit is clear, and the unit's per-unit cloak
+	// payment deadline is due [05 "Cloak debit"][R-ECO-01 §9] — and economy
+	// owns none of the three producers, so it asks rather than infers. A cloak
+	// request is never inferred from authored cost alone: `cloakcost > 0` is
+	// the capability that lets the order handlers write the bit, not the bit.
+	//
+	// Term 1 has runtime togglers: the `Cloak_On` handler sets the bit and
+	// `Cloak_Off` clears it, each behind the definition's cloak capability
+	// [R-ECO-01 §9]. It is NOT seeded from `init_cloaked`, whose consumer is
+	// the initial-posture path. Term 2 is inert — a bounded negative scan
+	// found no writer for that bit and the spawn initialiser preserves rather
+	// than sets it, so the term is always satisfied and a provider has nothing
+	// to report for it. Term 3 is written by nine work handlers as the global
+	// tick plus 150, 300 or 900, so an idle cloaked unit pays from the first
+	// pass.
+	//
+	// TODO(question): no producer writes the per-unit cloak payment deadline of
+	// term 3 yet — the nine handler sites (repair 150; build/get-built/
+	// resurrection 300; capture/reclaim 900) live in internal/orders, which
+	// this unit does not own. A never-written deadline is permanently due,
+	// which is right for an idle cloaked unit and charges a working one a few
+	// passes retail would have skipped. What would settle it is the deadline
+	// field landing on the unit record with those nine writers.
+	//
+	// A nil hook is inert: no unit is cloak-due, which is what a fixture that
+	// composes no session observes.
 	CloakDue func(*units.Unit) bool
 
 	// Wind holds the authoritative wind holder for wind generation scalar [01 §7.3]
@@ -154,24 +185,6 @@ type Service struct {
 type UnitEconomy struct {
 	Buckets  [2]Bucket
 	Archived [2]ArchivedBucket
-}
-
-// SetSettlementStatusPair stores the unresolved literal gate inputs without
-// assigning semantic names to either producer-owned value.
-func (p *Player) SetSettlementStatusPair(first int16, second int32) {
-	if p == nil {
-		return
-	}
-	p.settlementStatusFirst = first
-	p.settlementStatusSecond = second
-}
-
-// SettlementStatusPair returns the unresolved literal gate inputs.
-func (p *Player) SettlementStatusPair() (first int16, second int32) {
-	if p == nil {
-		return 0, 0
-	}
-	return p.settlementStatusFirst, p.settlementStatusSecond
 }
 
 // ensureUnitBuckets grows the per-unit bucket slice to cover handle.
@@ -271,12 +284,15 @@ func (s *Service) RestoreUnitEconomy(handle pool.Handle, buckets [2]Bucket, arch
 // and the kill-record handler as the only writers, and nothing in the
 // ownership-transfer contract touches them.
 //
-// TODO(question): neither counter appears in the established `Player%i` save
-// table [08 "Player records"], and restoring a battle re-allocates units
-// through the forced-slot allocator, which rebuilds "ever created" as the live
-// count. A slot that lost its last unit before the save therefore reloads as
-// "never created" instead of "eliminated". What would settle it is a save
-// writer trace showing whether retail persists the two counters at all.
+// Neither counter is persisted, and that is retail behaviour rather than a
+// Nanolathe omission [05 R-ECO-01 §12]. The save writer's per-player block
+// enumerates its keys — the two stocks, the six cumulative totals, the two
+// storage values and the storage-bonus flag, kills, losses, the three
+// deadlines and the alliance block — and neither counter is among them. The
+// restore path rebuilds both through the forced-slot allocator, one increment
+// of each per restored unit, so a slot that had lost its last unit at save
+// time reloads with both counters zero, reads as "never created" rather than
+// "eliminated", and resumes settling.
 func PlayerEliminated(w *units.World, player int) bool {
 	if w == nil || player < 0 || player >= 10 {
 		return false
@@ -528,8 +544,6 @@ func InitPlayer(p *Player) {
 		p.PassConsumed[r] = 0
 	}
 	p.aiAggregatesPrepared = false
-	p.settlementStatusFirst = 0
-	p.settlementStatusSecond = 0
 	// Stock, Capacity, Waste, totals are zeroed by caller as needed; no float constants here.
 	// Initialize control countdown to -1 so gate starts satisfied per [05 "Authoritative settlement order"].
 	p.EndGameCountdown = -1

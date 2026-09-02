@@ -36,7 +36,6 @@ func TestSessionBootPopulatesCommanders(t *testing.T) {
 		p := &s.Econ.Players[i]
 		p.Exists = true
 		p.ControllerState = uint8(i + 1)
-		p.SetSettlementStatusPair(1, 0)
 		p.EndGameCountdown = -1
 	}
 	s.Econ.SeedDeadlines(0)

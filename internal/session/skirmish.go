@@ -534,7 +534,6 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 			p.IsObserver = false
 		}
 		p.ControllerState = ctrlState
-		p.SetSettlementStatusPair(1, 0)
 		p.GameEnded = false
 		p.EndGameCountdown = -1
 	}

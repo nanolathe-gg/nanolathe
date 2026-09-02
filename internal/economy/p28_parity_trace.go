@@ -23,38 +23,42 @@ type UnitTrace struct {
 // and settlement gates. Float payloads are retained exactly by the caller's
 // hash or encoder [05 "Player slot"] [05 "Authoritative settlement order"].
 type PlayerTrace struct {
-	Slot                   int
-	Stock                  [2]float32
-	Capacity               [2]float32
-	Mirror                 [2]Bucket
-	ArchivedMirror         [2]ArchivedBucket
-	AIProduction           [2]float32
-	AIConsumption          [2]float32
-	PassProduced           [2]float32
-	PassConsumed           [2]float32
-	Waste                  [2]float64
-	TotalProduced          [2]float64
-	TotalConsumed          [2]float64
-	UpdateTime             uint32
-	WinLoseTime            uint32
-	DisplayTimer           uint32
-	Exists                 bool
-	ControllerState        uint8
-	IsObserver             bool
-	SettlementStatusFirst  int16
-	SettlementStatusSecond int32
-	GameEnded              bool
-	EndGameCountdown       int32
-	Helper1Deadline        uint32
-	Helper2Deadline        uint32
-	Allies                 [10]bool
-	AutoShareMetal         bool
-	AutoShareEnergy        bool
-	AutoShareSensor        bool
-	MetalShareThreshold    float32
-	EnergyShareThreshold   float32
-	StorageBonusEnabled    bool
-	StorageBonus           [2]float32
+	Slot            int
+	Stock           [2]float32
+	Capacity        [2]float32
+	Mirror          [2]Bucket
+	ArchivedMirror  [2]ArchivedBucket
+	AIProduction    [2]float32
+	AIConsumption   [2]float32
+	PassProduced    [2]float32
+	PassConsumed    [2]float32
+	Waste           [2]float64
+	TotalProduced   [2]float64
+	TotalConsumed   [2]float64
+	UpdateTime      uint32
+	WinLoseTime     uint32
+	DisplayTimer    uint32
+	Exists          bool
+	ControllerState uint8
+	IsObserver      bool
+	// The settlement gate's two inputs are the player record's live unit count
+	// and units-ever-created count, not a separate status pair
+	// [05 R-ECO-01 §12]. They are traced under their own names, read from the
+	// world the snapshot is given; a nil world traces the zero pair.
+	LiveUnitCount        int16
+	UnitsEverCreated     uint32
+	GameEnded            bool
+	EndGameCountdown     int32
+	Helper1Deadline      uint32
+	Helper2Deadline      uint32
+	Allies               [10]bool
+	AutoShareMetal       bool
+	AutoShareEnergy      bool
+	AutoShareSensor      bool
+	MetalShareThreshold  float32
+	EnergyShareThreshold float32
+	StorageBonusEnabled  bool
+	StorageBonus         [2]float32
 }
 
 type TraceSnapshot struct {
@@ -72,7 +76,12 @@ func (s *Service) ParitySnapshot(w *units.World) TraceSnapshot {
 	}
 	for i := range s.Players {
 		p := s.Players[i]
-		statusFirst, statusSecond := p.SettlementStatusPair()
+		var live int16
+		var created uint32
+		if w != nil {
+			live = int16(w.LiveCountForPlayer(i))
+			created = w.CreatedCountForPlayer(i)
+		}
 		out.Players[i] = PlayerTrace{
 			Slot: i, Stock: p.Stock, Capacity: p.Capacity, Mirror: p.Mirror,
 			ArchivedMirror: p.ArchivedMirror, AIProduction: p.AIProduction,
@@ -82,7 +91,7 @@ func (s *Service) ParitySnapshot(w *units.World) TraceSnapshot {
 			UpdateTime: p.UpdateTime, WinLoseTime: p.WinLoseTime,
 			DisplayTimer: p.DisplayTimer, Exists: p.Exists,
 			ControllerState: p.ControllerState, IsObserver: p.IsObserver,
-			SettlementStatusFirst: statusFirst, SettlementStatusSecond: statusSecond,
+			LiveUnitCount: live, UnitsEverCreated: created,
 			GameEnded: p.GameEnded, EndGameCountdown: p.EndGameCountdown,
 			Helper1Deadline: p.Helper1Deadline, Helper2Deadline: p.Helper2Deadline,
 			Allies: p.Allies, AutoShareMetal: p.AutoShareMetal,

@@ -11,7 +11,6 @@ func activePlayer(p *Player) {
 	p.Exists = true
 	p.ControllerState = 1 // settling state 1 ∈ both active and settling sets
 	p.IsObserver = false
-	p.SetSettlementStatusPair(1, 0) // nonzero first value passes the literal gate
 	p.GameEnded = false
 	p.EndGameCountdown = -1
 	p.Helper1Deadline = 0
@@ -253,13 +252,18 @@ func TestGateChainIndependentlyBlocks(t *testing.T) {
 	cases := []struct {
 		name   string
 		mutate func(*Player)
+		// world overrides the shared empty world for the one case whose gate
+		// term lives on the world's counters rather than on the record.
+		world func(*testing.T) *units.World
 	}{
 		{
-			name: "statusPair false",
-			mutate: func(p *Player) {
-				activePlayer(p)
-				p.SetSettlementStatusPair(0, 1) // both literal terms fail
-			},
+			// The settlement gate's first term is the elimination test, read
+			// from the world's two counters [05 R-ECO-01 §12]: a slot with a
+			// zero live count and a non-zero ever-created count is eliminated
+			// and never settles, while its deadline still advances.
+			name:   "eliminated slot",
+			mutate: activePlayer,
+			world:  eliminatedWorldForPlayerZero,
 		},
 		{
 			name: "settlingState third active but not settling (3)",
@@ -295,6 +299,10 @@ func TestGateChainIndependentlyBlocks(t *testing.T) {
 			var svc Service
 			p := &svc.Players[0]
 			tc.mutate(p)
+			w := w
+			if tc.world != nil {
+				w = tc.world(t)
+			}
 			p.Mirror[Metal].Production = 4
 			// Ensure deadline due
 			p.UpdateTime = 100

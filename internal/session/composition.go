@@ -1051,6 +1051,30 @@ func createAndBindServices(s *Session) error {
 		}
 		return u.CloakCost() // [05 "Cloak debit"] stationary vs moving [P1-I04]
 	}
+	// The cloak gate's first term. The cloak-REQUESTED status bit is set by the
+	// `Cloak_On` order handler and cleared by `Cloak_Off`, each behind the
+	// definition's cloak capability [05 R-ECO-01 §9]; in this build that bit is
+	// the unit's cloak request, whose one writer is SetCloaked (I13). The
+	// gate's second term is a status bit with no writer anywhere in the image —
+	// inert, always satisfied — so nothing is asked of it here.
+	//
+	// TODO(question): the gate's third term, the unit's per-unit cloak payment
+	// deadline, has no producer yet; its nine writers are work handlers in
+	// internal/orders (see economy.Service.CloakDue). A never-written deadline
+	// reads as permanently due, which is exactly right for the idle cloaked
+	// unit [05 "Cloak debit"] and charges a working one the few passes retail
+	// would have skipped.
+	s.Econ.CloakDue = func(u *units.Unit) bool {
+		return u != nil && u.IsCloaked
+	}
+	// The ledger's production discount for a computer player selects on the
+	// battle's difficulty word [05 R-ECO-01 §3]; it is the same word the AI
+	// plan gate reads, through the same accessor. A word outside 0..2 leaves
+	// the selector unset, which the ledger already treats as the undiscounted
+	// (hard) path rather than guessing a value.
+	if word, ok := sessionDifficultyWord(s); ok {
+		s.Econ.SetEconomySelector(word)
+	}
 	// Features [05] with terrain, sim, crt, wind — DET-01 injected from session.
 	if s.Features == nil {
 		sim := s.SimRNG()
@@ -1416,24 +1440,39 @@ func sessionPathUnitLimit(s *Session) int32 {
 // [08 "Skirmish configuration"]. A word outside the vocabulary is reported
 // absent rather than guessed.
 func sessionAIDifficulty(s *Session) (ai.Difficulty, bool) {
-	if s == nil {
+	word, ok := sessionDifficultyWord(s)
+	if !ok {
 		return "", false
-	}
-	word := s.Skirmish.Difficulty
-	if s.Mission != nil && s.Mission.Type == mission.TypeCampaign {
-		// Difficulty is -1 on a mission that is not a campaign load.
-		word = s.Mission.Difficulty
 	}
 	switch word {
 	case 0:
 		return ai.DifficultyEasy, true
 	case 1:
 		return ai.DifficultyMedium, true
-	case 2:
-		return ai.DifficultyHard, true
 	default:
-		return "", false
+		return ai.DifficultyHard, true
 	}
+}
+
+// sessionDifficultyWord is the battle's difficulty word itself — 0 easy, 1
+// medium, 2 hard. It has two consumers, and they must read the same word: the
+// AI profile's plan gate [08 R-AI-01 §12] and the ledger's production discount
+// for a computer player, whose "global mode selector" is established as this
+// same difficulty word [05 R-ECO-01 §3]. One reader, so there is one copy.
+// A word outside the vocabulary is reported absent rather than guessed.
+func sessionDifficultyWord(s *Session) (int, bool) {
+	if s == nil {
+		return 0, false
+	}
+	word := s.Skirmish.Difficulty
+	if s.Mission != nil && s.Mission.Type == mission.TypeCampaign {
+		// Difficulty is -1 on a mission that is not a campaign load.
+		word = s.Mission.Difficulty
+	}
+	if word < 0 || word > 2 {
+		return 0, false
+	}
+	return word, true
 }
 
 // visibilityModeForSession computes the LOS mode word from SkirmishConfig [08 "Skirmish configuration"][03 §3.1] C2.

@@ -634,8 +634,17 @@ func TestFlameTrailSweepSpendsNoDraws(t *testing.T) {
 	}
 	particles := s.strips.strips[7][0].particles
 	p := particles[len(particles)-1] // the spawned segment, after the creation marker
-	if p.vx != numeric.FixedFromInt(2) {
-		t.Fatalf("trail velocity %d wu/tick, want 2 (12 wu over the 6-tick flight)", p.vx.Int())
+	// The step is `((B − A) · trunc(65536 / lifetime)) >> 16`, NOT the exact
+	// quotient: the truncated reciprocal (10922/65536 at lifetime 6) lands the
+	// segment slightly short of its target [03 R-FX-01 §3]. The assertion is a
+	// pair — the exact value, and the relationship that says why it is not the
+	// round 2 world units this test used to demand.
+	wantStep := numeric.Fixed((numeric.FixedFromInt(12).Raw() * (65536 / 6)) >> 16)
+	if p.vx != wantStep {
+		t.Fatalf("trail velocity %d raw, want %d (truncated reciprocal over the 6-tick flight)", p.vx.Raw(), wantStep.Raw())
+	}
+	if p.vx >= numeric.FixedFromInt(2) {
+		t.Fatalf("trail velocity %d raw reached the exact quotient; the truncated reciprocal must land short", p.vx.Raw())
 	}
 	if p.expiry != 36 {
 		t.Fatalf("trail expiry %d, want the window end 36", p.expiry)
@@ -803,7 +812,7 @@ func TestSmokeDriftIsRawFixedPoint(t *testing.T) {
 	wind := &world.Wind{DirX: windX, DirZ: windZ}
 	o := &s.strips.strips[stripGeothermalSteam][0]
 	before := o.particles[0]
-	o.advanceParticles(1, s.CrtRNG(), wind, gravity)
+	o.advanceParticles(1, s.CrtRNG(), wind, gravity, nil)
 	after := o.particles[0]
 
 	if got := after.x.Raw() - before.x.Raw(); got != int64(windX)*8 {
@@ -1106,7 +1115,7 @@ func TestPuffFamiliesRiseAtDifferentRates(t *testing.T) {
 		o.particles = []stripParticle{{lastFrame: 0, frameDelay: 0}}
 		s.strips.append(strip, o)
 		before := s.strips.strips[strip][0].particles[0].y
-		s.strips.sweepStrip(strip, 1, s.CrtRNG(), nil, gravity)
+		s.strips.sweepStrip(strip, 1, s.CrtRNG(), nil, gravity, nil)
 		return s.strips.strips[strip][0].particles[0].y.Raw() - before.Raw()
 	}
 
@@ -1171,5 +1180,319 @@ func TestStripViewsArePublishedEveryTickAndAreByteStable(t *testing.T) {
 		if first[i] != second[i] {
 			t.Fatalf("tick %d differs between two identical runs:\n%s\n%s", i+1, first[i], second[i])
 		}
+	}
+}
+
+// TestFlameSegmentStartFrameIsScaled locks the strip-5 flame segment's start
+// frame [03 R-FX-02 §2][03 R-FX-02 §6]: `crtRand × (frameCount − 1) / 0x8000`,
+// an index into `flamestream`, in 0 … frameCount − 2.
+//
+// The spawn used to store the raw CRT draw here, on the belief that the
+// mapping from a drawn word to a GAF frame index was untraced. There is no
+// mapping step: the word IS the index, and a raw draw is a five-digit frame
+// number in a twenty-frame entry — a cursor no wrap can ever bring back into
+// range.
+func TestFlameSegmentStartFrameIsScaled(t *testing.T) {
+	const frameCountBase = 19 // stock `flamestream` holds twenty frames
+
+	_, crt := newStripTestSession(30, 30)
+	ref := rng.NewCRT(30)
+	draw := ref.Rand()
+
+	o := &stripObject{
+		family:         stripFamilyFlame,
+		frameCountBase: frameCountBase,
+		dst:            [3]numeric.Fixed{numeric.FixedFromInt(100), 0, 0},
+	}
+	o.spawnOnce(7, crt)
+
+	p := o.particles[0]
+	want := int32(int64(draw) * frameCountBase / 0x8000)
+	if p.frame != want {
+		t.Fatalf("start frame %d, want %d (crtRand × (frameCount − 1) / 0x8000)", p.frame, want)
+	}
+	if p.frame == draw {
+		t.Fatalf("start frame is the raw CRT draw %d; it must be scaled into the entry", draw)
+	}
+	if p.frame < 0 || p.frame > frameCountBase-1 {
+		t.Fatalf("start frame %d is outside 0…frameCount−2", p.frame)
+	}
+}
+
+// TestFlameSegmentWrapsBelowLastFrame locks the two flame families' frame wrap
+// [03 R-FX-02 §2][03 R-FX-01 §3]: `frame = (frame + 1) mod (frameCount − 1)`,
+// every tick for the strip-5 segment, so the entry's LAST frame is never shown
+// and the cursor returns to where it started after frameCount − 1 ticks.
+func TestFlameSegmentWrapsBelowLastFrame(t *testing.T) {
+	const frameCountBase = 19
+
+	o := &stripObject{
+		family:         stripFamilyFlame,
+		frameCountBase: frameCountBase,
+		particles:      []stripParticle{{frame: frameCountBase - 1, expiry: 0xFFFFFFFF}},
+	}
+	start := o.particles[0].frame
+	for tick := uint32(1); tick <= frameCountBase; tick++ {
+		o.advanceParticles(tick, nil, nil, 0, nil)
+		if got := o.particles[0].frame; got < 0 || got >= frameCountBase {
+			t.Fatalf("tick %d left the cursor at %d; the last frame (%d) is never shown", tick, got, frameCountBase)
+		}
+	}
+	if got := o.particles[0].frame; got != start {
+		t.Fatalf("cursor at %d after a full %d-tick cycle, want the start %d", got, frameCountBase, start)
+	}
+}
+
+// TestFlameSegmentTravelAndLife locks the strip-5 segment's span arithmetic
+// [03 R-FX-02 §2]: `segLife = floor(spanUnits / 5)` ticks and `step =
+// (B − A) / segLife` per axis, so a segment crosses its whole span at five
+// world units per tick.
+func TestFlameSegmentTravelAndLife(t *testing.T) {
+	_, crt := newStripTestSession(33, 33)
+
+	o := &stripObject{
+		family: stripFamilyFlame,
+		dst:    [3]numeric.Fixed{numeric.FixedFromInt(100), 0, 0},
+	}
+	o.spawnOnce(40, crt)
+
+	p := o.particles[0]
+	if p.expiry != 40+20 {
+		t.Fatalf("segment expiry %d, want %d (a 100-unit span / 5 = 20 ticks)", p.expiry, 40+20)
+	}
+	if p.vx != numeric.FixedFromInt(5) {
+		t.Fatalf("segment step %d raw, want five world units a tick", p.vx.Raw())
+	}
+	// The relationship that makes the two halves one rule: step × segLife is
+	// the span the producer asked for.
+	if got := p.vx.Raw() * 20; got != numeric.FixedFromInt(100).Raw() {
+		t.Fatalf("step × segLife = %d raw, want the 100-unit span", got)
+	}
+}
+
+// TestStripPoolCapIsGlobalAndPrecedesTheStripCap locks [03 R-FX-02 §4]: one
+// live-container count across all TEN strips, capped at 1000, tested BEFORE the
+// per-strip 401 rule; a producer at the cap drops its object silently, spending
+// none of the draws that sit inside the family init.
+//
+// The ordering is the half that is easy to get backwards: a strip already at
+// its own 401 bound must NOT evict its oldest object to make room when the
+// shared pool is what is full. Retail's take runs first and returns null, and
+// the producer then constructs nothing at all.
+func TestStripPoolCapIsGlobalAndPrecedesTheStripCap(t *testing.T) {
+	s, crt := newStripTestSession(34, 34)
+	s.Clock.GlobalTick = 3
+
+	marker := func(i int) [3]numeric.Fixed {
+		return [3]numeric.Fixed{numeric.FixedFromInt(int64(i)), 0, 0}
+	}
+	// Saturate two smoke strips at their own 401 bound and part-fill a third,
+	// which is 1000 live containers across the table.
+	n := 0
+	for i := 0; i < stripSteadyCap+1; i++ {
+		s.appendStripSmokePuffer(9, marker(n), SmokePuffTrail)
+		n++
+	}
+	for i := 0; i < stripSteadyCap+1; i++ {
+		s.appendStripSmokePuffer(5, marker(n), SmokePuffTrail)
+		n++
+	}
+	for s.strips.live < stripPoolCapacity {
+		s.appendStripSprinkle(2, marker(n), 16, 1)
+		n++
+	}
+
+	if s.strips.live != stripPoolCapacity {
+		t.Fatalf("pool holds %d live containers, want the capacity %d", s.strips.live, stripPoolCapacity)
+	}
+	if got := len(s.strips.strips[9]); got != stripSteadyCap+1 {
+		t.Fatalf("strip 9 holds %d objects, want the per-strip bound %d", got, stripSteadyCap+1)
+	}
+
+	// A producer aimed at the saturated strip 9 must now drop: no draw, no
+	// append, and — the ordering assertion — no eviction of the oldest object,
+	// which a 401-first implementation would have performed.
+	oldest := s.strips.strips[9][0].src[0]
+	draws0 := crt.Draws()
+	s.appendStripSmokePuffer(9, marker(n), SmokePuffTrail)
+	if got := crt.Draws() - draws0; got != 0 {
+		t.Fatalf("a dropped container spent %d draws; the puff's draw lives inside the init the producer never calls", got)
+	}
+	if got := len(s.strips.strips[9]); got != stripSteadyCap+1 {
+		t.Fatalf("strip 9 holds %d objects after a dropped producer, want %d", got, stripSteadyCap+1)
+	}
+	if s.strips.strips[9][0].src[0] != oldest {
+		t.Fatalf("the full pool evicted strip 9's oldest object; the 1000-container test runs BEFORE the 401 rule")
+	}
+	// A producer aimed at an unsaturated strip is dropped just the same: the
+	// count is one pool across all ten strips, not a per-strip budget.
+	before7 := len(s.strips.strips[7])
+	s.appendStripSprinkle(7, marker(n), 8, 0)
+	if got := len(s.strips.strips[7]); got != before7 {
+		t.Fatalf("strip 7 accepted an object at the global cap (%d → %d)", before7, got)
+	}
+
+	// Every destruction path returns its slot. Emptying one strip through the
+	// sweep must free exactly that many.
+	freed := len(s.strips.strips[9])
+	for i := range s.strips.strips[9] {
+		s.strips.strips[9][i].particles = nil
+		s.strips.strips[9][i].windowEnd = 0
+	}
+	s.phaseObjectSweeps(100)
+	if got := len(s.strips.strips[9]); got != 0 {
+		t.Fatalf("strip 9 still holds %d objects after a terminal sweep", got)
+	}
+	if got := s.strips.live; got != stripPoolCapacity-freed {
+		t.Fatalf("pool holds %d live after freeing %d, want %d", got, freed, stripPoolCapacity-freed)
+	}
+	// Battle exit returns every slot [03 R-FX-02 §4].
+	s.strips.release()
+	if s.strips.live != 0 {
+		t.Fatalf("battle exit left %d slots out", s.strips.live)
+	}
+}
+
+// TestSprinkleWakeDiesOnLand locks [03 R-WATER-01 §1]: a sprinkle puff survives
+// only while its tick deadline holds AND the bilinear terrain height under it
+// is strictly below the sea-level byte. The family is a WAKE — it lives on
+// water and dies on the shore.
+//
+// The sense is the whole point: [03 R-FX-01 §3] had the branch inverted, and a
+// clone that keeps the inverted rule draws wakes on land and never on water.
+// The test asserts both halves against the same terrain, moving only the sea
+// level, so a build that keeps neither test nor a reversed one can pass.
+func TestSprinkleWakeDiesOnLand(t *testing.T) {
+	s, _ := newStripTestSession(35, 35)
+	ter := minimalTerrain() // a uniform terrain of height 10
+	ter.SeaLevel = 20       // …entirely under water
+	s.World = ter
+	s.Clock.GlobalTick = 5
+
+	pos := [3]numeric.Fixed{numeric.FixedFromInt(80), numeric.FixedFromInt(0), numeric.FixedFromInt(80)}
+	s.appendStripSprinkle(2, pos, 16, 1)
+
+	// Over water the puffs outlive the container's spawn window; their only
+	// remaining exit is the spacing×6 deadline, which is 96 ticks away.
+	for tick := uint32(5); tick <= 12; tick++ {
+		s.phaseObjectSweeps(tick)
+	}
+	if len(s.strips.strips[2]) != 1 {
+		t.Fatalf("the wake container died over water (%d objects)", len(s.strips.strips[2]))
+	}
+	if got := len(s.strips.strips[2][0].particles); got != 2 {
+		t.Fatalf("%d puffs alive over water, want the container's two", got)
+	}
+
+	// The shore: the same ground now reads at or above sea level.
+	ter.SeaLevel = 5
+	live := s.strips.live
+	s.phaseObjectSweeps(13)
+	if got := len(s.strips.strips[2][0].particles); got != 0 {
+		t.Fatalf("%d puffs survived the tick the terrain reached sea level", got)
+	}
+	// The emptied container is terminal, so the next sweep's verdict removes it
+	// and returns its slot.
+	s.phaseObjectSweeps(14)
+	if got := len(s.strips.strips[2]); got != 0 {
+		t.Fatalf("%d wake containers survived their last puff", got)
+	}
+	if got := s.strips.live; got != live-1 {
+		t.Fatalf("pool holds %d live after the sweep removed one container, want %d", got, live-1)
+	}
+}
+
+// TestSprinkleColourWalksItsRamp locks the sprinkle's animation counter
+// [03 R-FX-01 §3][03 R-FX-02 §6]: `phase = (phase + 1) mod spacing` and, on the
+// wrap, `colour += dir` over the seven-entry ramp 0x61..0x67 — flag 1 climbing
+// from the bottom, flag 0 descending from the top, each wrapping to the other
+// end.
+func TestSprinkleColourWalksItsRamp(t *testing.T) {
+	const spacing = 4
+
+	step := func(colorSel uint8, ticks int) uint8 {
+		o := &stripObject{
+			family:       stripFamilySprinkle,
+			phaseModulus: spacing,
+			colorSel:     colorSel,
+			particles:    []stripParticle{{color: sprinkleRampTop, expiry: 0xFFFFFFFF}},
+		}
+		if colorSel != 0 {
+			o.particles[0].color = sprinkleRampBottom
+		}
+		for tick := 1; tick <= ticks; tick++ {
+			o.advanceParticles(uint32(tick), nil, nil, 0, nil)
+		}
+		return o.particles[0].color
+	}
+
+	// One step per `spacing` ticks, in opposite directions.
+	if got := step(1, spacing); got != sprinkleRampBottom+1 {
+		t.Fatalf("flag-1 colour %#x after one wrap, want %#x", got, sprinkleRampBottom+1)
+	}
+	if got := step(0, spacing); got != sprinkleRampTop-1 {
+		t.Fatalf("flag-0 colour %#x after one wrap, want %#x", got, sprinkleRampTop-1)
+	}
+	// Short of the wrap nothing moves.
+	if got := step(1, spacing-1); got != sprinkleRampBottom {
+		t.Fatalf("flag-1 colour %#x before the wrap, want %#x", got, sprinkleRampBottom)
+	}
+	// Six wraps carry each end past the other and back onto the ramp.
+	for _, sel := range []uint8{0, 1} {
+		for wraps := 1; wraps <= 8; wraps++ {
+			got := step(sel, spacing*wraps)
+			if got < sprinkleRampBottom || got > sprinkleRampTop {
+				t.Fatalf("flag-%d colour %#x after %d wraps left the ramp 0x61..0x67", sel, got, wraps)
+			}
+		}
+	}
+	// The wrap point itself: flag 1 climbs off the top back to the bottom.
+	if got := step(1, spacing*7); got != sprinkleRampBottom {
+		t.Fatalf("flag-1 colour %#x after seven wraps, want the ramp bottom %#x", got, sprinkleRampBottom)
+	}
+	if got := step(0, spacing*7); got != sprinkleRampTop {
+		t.Fatalf("flag-0 colour %#x after seven wraps, want the ramp top %#x", got, sprinkleRampTop)
+	}
+}
+
+// TestSprinkleStepIsHalfAWorldUnit locks the sprinkle's per-tick velocity
+// [03 R-FX-01 §3][03 R-FX-02 §6]: `len = trunc(sqrt(Σd²))` over the raw 16.16
+// deltas and `step = ((B − A) · trunc(0x80000000 / len)) >> 16` per axis — half
+// a world unit per tick along A→B, whatever the span.
+func TestSprinkleStepIsHalfAWorldUnit(t *testing.T) {
+	half := numeric.FixedFromInt(1).Raw() / 2
+
+	// The step is the SAME half-unit whatever the span — this family crosses
+	// no fixed number of ticks. A span that divides the reciprocal exactly
+	// gives half on the nose; every other span lands a hair under it, because
+	// the reciprocal is truncated before it multiplies. Never over.
+	for _, span := range []int64{1, 2, 17, 400} {
+		a := [3]numeric.Fixed{}
+		b := [3]numeric.Fixed{numeric.FixedFromInt(span), 0, 0}
+		sx, sy, sz := sprinkleStep(a, b)
+		if sy != 0 || sz != 0 {
+			t.Fatalf("span %d moved off its axis (%d,%d)", span, sy.Raw(), sz.Raw())
+		}
+		if sx.Raw() <= 0 || sx.Raw() > half {
+			t.Fatalf("span %d stepped %d raw, want (0, half a world unit = %d]", span, sx.Raw(), half)
+		}
+		if (span == 1 || span == 2) && sx.Raw() != half {
+			t.Fatalf("span %d stepped %d raw; a span that divides the reciprocal exactly must give half (%d)", span, sx.Raw(), half)
+		}
+	}
+
+	// Direction, not distance: a 3–4 span splits the same half unit between the
+	// two axes in the span's own ratio.
+	sx, _, sz := sprinkleStep([3]numeric.Fixed{}, [3]numeric.Fixed{numeric.FixedFromInt(3), 0, numeric.FixedFromInt(4)})
+	if sx.Raw()*4 != sz.Raw()*3 {
+		t.Fatalf("a 3–4 span stepped (%d,%d), which is not in the span's ratio", sx.Raw(), sz.Raw())
+	}
+	if sx.Raw() >= sz.Raw() || sz.Raw() > half {
+		t.Fatalf("a 3–4 span stepped (%d,%d); the longer axis must move further and stay within half a unit", sx.Raw(), sz.Raw())
+	}
+	// A degenerate pair is retail's divide fault; Nanolathe yields a zero step
+	// rather than crashing the battle (see sprinkleStep).
+	if sx, sy, sz := sprinkleStep([3]numeric.Fixed{}, [3]numeric.Fixed{}); sx|sy|sz != 0 {
+		t.Fatalf("a degenerate pair produced a step (%d,%d,%d)", sx.Raw(), sy.Raw(), sz.Raw())
 	}
 }

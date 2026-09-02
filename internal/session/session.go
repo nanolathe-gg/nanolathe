@@ -809,7 +809,6 @@ func handleLocalPreload(s *Session) {
 				p.ControllerState = 2
 			}
 			p.IsObserver = false
-			p.SetSettlementStatusPair(1, 0)
 			p.GameEnded = false
 			p.EndGameCountdown = -1
 		}

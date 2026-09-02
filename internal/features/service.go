@@ -514,9 +514,17 @@ func (s *Service) Reclaim(u *units.Unit, f *Instance, tick uint32) (metal, energ
 	// Also check indestructible via def flag; if set, no reclaim.
 	metal = float32(def.Metal)   // I2 allowlist: resource pools as float32 [05 "Feature reclaim"]
 	energy = float32(def.Energy) // same
-	// Apply special-player scaling where required TODO(T25) — no established
-	// consumer for the builder's player mode in this phase; placeholder keeps
-	// ordinary addition.
+	// The two pools are returned RAW. The special-player scaling of
+	// [05 R-WORK-01 §5] step 4 is applied where retail applies it — at the
+	// credit, separately to each of the two additions, gated on the BUILDER's
+	// player record (the record exists and its control byte is 2, the computer
+	// player) and selected by the difficulty word [05 R-ECO-01 §3]
+	// [05 R-ECO-01 §11]. The ledger owns both the records and the selector, so
+	// the ladder lives in economy.CreditFeatureReclaim and this package never
+	// sees a scaled pool. Scaling here as well would apply the discount twice,
+	// and scaling here INSTEAD would narrow to single before the credit's
+	// subtraction, which §3 says rounds differently.
+	//
 	// The payout is settled above; the cell itself goes through the transition
 	// of [05 R-FEAT-01 §5], which plays `seqnamereclamate` when the definition
 	// names one and replaces immediately when it does not.

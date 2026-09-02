@@ -121,7 +121,6 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 			p.ControllerState = 2
 		}
 		p.IsObserver = false
-		p.SetSettlementStatusPair(1, 0)
 		p.GameEnded = false
 		p.EndGameCountdown = -1
 		p.Allies[i] = true

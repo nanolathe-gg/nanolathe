@@ -42,7 +42,6 @@ func TestFeatureLifecycleBurnSinkAndReclaim(t *testing.T) {
 	s.Econ = strictEconomyForTest()
 	s.Econ.Players[0].Exists = true
 	s.Econ.Players[0].ControllerState = 1
-	s.Econ.Players[0].SetSettlementStatusPair(1, 0)
 	s.Econ.SeedDeadlines(0)
 	s.InitBattleWindForSession()
 	if err := createAndBindServicesForTest(t, s); err != nil {

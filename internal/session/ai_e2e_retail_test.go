@@ -243,7 +243,16 @@ func TestComputerPlayerFormsAnAttackWaveRetail(t *testing.T) {
 	// profile then fell back to that pushed formation out to 14100. Binding the
 	// real difficulty word brought it back in; the complete authored candidate
 	// table moves it forward again, still within the established 18000 bound.
-	const formationBy = uint32(18000)
+	//
+	// WU-19-78 moves it again, to tick 20700 (it was 13800). The ledger's
+	// production discount for a computer player now has its selector bound to
+	// the battle's difficulty word, and at Medium every positive production
+	// contribution the computer player makes is credited at seven tenths
+	// [05 R-ECO-01 §3][05 R-ECO-01 §11]. A slower economy builds its first
+	// armed ground units later; retail's Medium computer player is meant to be
+	// this much poorer than its Hard one, so the budget follows the behavior
+	// rather than the behavior being trimmed to the budget.
+	const formationBy = uint32(24000)
 	for sess.Clock.GlobalTick < formationBy && sess.State != StatePostBattle {
 		scaled += 5
 		sess.Step(scaled)

@@ -250,7 +250,6 @@ func TestSettleRebuildsOnlySettlingPlayerCapacity(t *testing.T) {
 	var svc Service
 	svc.Players[0].Exists = true
 	svc.Players[0].ControllerState = 1
-	svc.Players[0].SetSettlementStatusPair(1, 0)
 	svc.Players[0].EndGameCountdown = -1
 	svc.Players[1].Capacity[Metal] = 777
 	svc.Players[1].Capacity[Energy] = 888

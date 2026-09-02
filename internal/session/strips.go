@@ -35,14 +35,18 @@ import (
 // invocation.
 //
 // Storage shape: retail allocates strip objects from one shared fixed pool
-// whose exhaustion silently drops the object [R-STRIP-01 §1]. The pool's
-// capacity is not established, so Nanolathe stores per-strip insertion-order
-// slices bounded by the researched eviction rule instead; the observable
-// bound (at most 401 records per strip) is identical.
-// TODO(question): the shared strip-object pool's capacity — a traced pool
-// size would let Nanolathe reproduce exhaustion-driven silent drops.
-// Decider: static trace of the pool allocator [R-STRIP-01 §1] names the
-// allocator but not its element count.
+// whose exhaustion silently drops the object [R-STRIP-01 §1]. The pool holds
+// 1000 slots for the whole life of the process — it is built once by a static
+// constructor, its growth routine has a single caller (that constructor), and
+// the take entry has no growth path, so 1000 is a hard capacity and not an
+// initial size [03 R-FX-02 §4]. Nanolathe keeps one global live-container
+// count across all ten strips and stores the per-strip insertion-order slices
+// beneath it; the two observable bounds — 1000 containers overall and at most
+// 401 records per strip — are retail's, and the per-strip bound is tested
+// after, and independently of, the pool test.
+//
+// Closed 2026-09-02 [03 R-FX-02 §4]. This carried an open-question marker saying the
+// pool's capacity was untraced and that exhaustion was therefore not modelled.
 //
 // Presentation: these objects are authoritative simulation state swept in
 // phase 11, so presentation never reads them. Every live sub-record is copied
@@ -62,6 +66,14 @@ const (
 	// oldest object is destroyed first, so steady state holds at most 401
 	// records per strip.
 	stripSteadyCap = 400
+
+	// stripPoolCapacity is the shared slot pool's hard capacity: 1000
+	// containers live across all ten strips together, for the whole life of
+	// the process [03 R-FX-02 §4]. A producer that finds the pool full
+	// constructs nothing, runs no family init and appends nothing — the
+	// "silently drops the object" of [R-STRIP-01 §1]. The ten per-strip bounds
+	// sum to 4010, so this test is the binding one first.
+	stripPoolCapacity = 1000
 
 	// Strip 6 nano emitters spawn five particles per spawn tick, each
 	// costing six CRT draws (three for the source box point, three for the
@@ -103,7 +115,10 @@ const (
 
 	// stripFamilyFlame is the strip-5 flame-stream object that lays one
 	// animated segment every 10 ticks over a 30-tick window [R-STRIP-01
-	// §1 strip 5].
+	// §1 strip 5] — four segments per container, at ticks 0, 10, 20 and 30
+	// [03 R-FX-02 §2]. Its one producer is the teleport order handler, which
+	// this build does not reach yet; the family's arithmetic below is complete
+	// so that producer has nothing left to decide.
 	stripFamilyFlame
 
 	// stripFamilyFlameTrail is the strip-7 flame-stream trail: one animated
@@ -130,13 +145,24 @@ type stripParticle struct {
 	// today: every wired family sets one).
 	expiry uint32
 
-	// Animation state. The start-frame value is retained as drawn; its
-	// reduction against the bound GAF entry's frame count is not
-	// established. TODO(question): the start-frame mapping to a GAF entry
-	// frame index — the committed contract is the draw itself [R-STRIP-01
-	// §3]. Decider: static trace of the strip draw's frame selection.
+	// Animation state. There is no reduction step between a family's frame
+	// word and the bound entry: the word IS an index into that entry
+	// [03 R-FX-02 §6]. The smoke puff starts at 0 of `smoke 1`/`smoke 2`
+	// [03 R-FX-02 §3], the strip-5 flame segment at
+	// `crtRand × (frameCount − 1) / 0x8000` of `flamestream` [03 R-FX-02 §2],
+	// the trail segment at 0 of the same entry [03 R-FX-01 §3], and the nano
+	// particle and sprinkle puff carry no frame at all — they fill rectangles.
+	//
+	// Closed 2026-09-02: this carried an open-question marker asking for the mapping,
+	// and the flame spawn stored a raw CRT draw here as if one existed.
 	frame      int32
 	frameDelay int32
+	// phase is the modulo animation counter the two families that do not use a
+	// countdown share: the sprinkle's colour walk (`phase = (phase + 1) mod
+	// spacing`) and the trail segment's frame walk (`mod hold`)
+	// [03 R-FX-01 §3][03 R-FX-01 §4]. Per I13 one Go field carries both; the
+	// two retail records are laid out differently and neither layout is ours.
+	phase int32
 	// lastFrame is the smoke puff's own final animation frame. Retail's puff
 	// record carries it and the puff dies when its cursor passes it, which is
 	// what gives a smoke plume its staggered fade [03 R-STRIP-01 §2].
@@ -201,15 +227,32 @@ type stripObject struct {
 	// nonzero selects 0x61, zero selects 0x67.
 	colorSel uint8
 
-	// particleLife is the producer-supplied sub-record lifetime in ticks
-	// for families whose per-site constant is not established (sprinkle,
-	// smoke, flame).
-	// TODO(question): the per-site lifetimes of the sprinkle, smoke, and
-	// flame-stream producers [R-STRIP-01 §1 names the sites but not the
-	// constants]; the sinking-wreck smoke column's 900-tick life is the one
-	// established value. Decider: static trace of each named producer's
-	// container constructor.
+	// particleLife is the sub-record's tick deadline in ticks from its spawn,
+	// for the two families that have one [03 R-FX-02 §6]:
+	//
+	//   - the sprinkle puff's `spacing × 6` (96 at spacing 16, 48 at 8)
+	//     [03 R-FX-01 §3] — which is only one of its two exits; it also dies
+	//     the tick the terrain under it reaches sea level, see
+	//     advanceParticles [03 R-WATER-01 §1];
+	//   - the trail segment's flight length, 6 or 7 [03 R-FX-01 §3].
+	//
+	// The two puff classes have NO tick deadline at all: a puff retires when
+	// its own frame cursor reaches its own drawn last frame, and the container's
+	// lifetime is the producer's literal, stored in windowEnd
+	// [06 R-WFX-01 §5][03 R-FX-01 §3 addendum §B]. The strip-5 flame segment's
+	// deadline is neither: it is `floor(spanUnits / 5)` derived from the
+	// container's own two points, see flameSegLife [03 R-FX-02 §2].
+	//
+	// Closed 2026-09-02: this carried an open-question marker saying the per-site
+	// lifetimes were untraced.
 	particleLife int32
+
+	// phaseModulus is the modulus of the per-sub-record phase counter for the
+	// two families that use one: the sprinkle's `spacing` and the trail
+	// segment's `hold` (1 at every researched site) [03 R-FX-01 §3]
+	// [03 R-FX-01 §4]. Zero means the producer set none, which leaves the
+	// counter idle — retail's own modulo would fault on it.
+	phaseModulus int32
 
 	// frameDelayParam is the authored animation frame delay for the smoke
 	// family: each animation-frame advance redraws the next frame's delay
@@ -218,13 +261,24 @@ type stripObject struct {
 	// draws.
 	frameDelayParam int32
 
-	// frameCountBase is the bound GAF entry's frame count less one, which the
-	// smoke family's spawn draws its puff's last frame from. Retail's container
-	// stores it at init; this build receives it through the session's
-	// entry-frame-count seam, because the entry is presentation asset data the
-	// simulation does not otherwise carry [03 R-STRIP-01 §2][03 R-FX-01 §3].
-	// Zero leaves the puff without a last frame, which is the pre-seam
-	// behaviour and keeps a session with no resolver running.
+	// frameCountBase is the bound GAF entry's frame count less one. Three
+	// families need it and all three mean the same quantity:
+	//
+	//   - the smoke families draw each puff's last frame against it
+	//     [06 R-WFX-01 §5];
+	//   - the strip-5 flame segment draws its START frame as
+	//     `crtRand × frameCountBase / 0x8000` and then advances
+	//     `mod frameCountBase`, so the entry's last frame is never shown
+	//     [03 R-FX-02 §2];
+	//   - the trail segment's `lastFrame` IS frameCountBase and its wrap is the
+	//     same modulus [03 R-FX-01 §3].
+	//
+	// Retail's container stores it at init; this build receives it through the
+	// session's entry-frame-count seam, because the entry is presentation asset
+	// data the simulation does not otherwise carry [03 R-STRIP-01 §2]
+	// [03 R-FX-01 §3]. Zero leaves the puff without a last frame and the flame
+	// families without a wrap point, which is the pre-seam behaviour and keeps
+	// a session with no resolver running.
 	frameCountBase int32
 
 	// smokeSelector picks which of the two bound smoke entries the family
@@ -246,6 +300,13 @@ func (f stripFamily) isPuffFamily() bool {
 // stripTable is the ten-descriptor table [R-CORE-01 §4.4.1].
 type stripTable struct {
 	strips [stripCount][]stripObject
+
+	// live is the shared slot pool's occupancy: one count across all ten
+	// strips, capped at stripPoolCapacity [03 R-FX-02 §4]. Retail's pool is a
+	// LIFO free list of fixed slots [03 R-FX-02 §1]; nothing here depends on
+	// WHICH slot a container got, only on how many are out, so the count is
+	// the whole of the pool Nanolathe needs.
+	live int
 }
 
 // newStripTable allocates the empty table. Battle entry calls this; battle
@@ -264,6 +325,10 @@ func (t *stripTable) release() {
 	for i := range t.strips {
 		t.strips[i] = nil
 	}
+	// Battle exit walks all ten strips and destroys every object with the
+	// slot-returning flag, so a new battle always starts with all 1000 slots
+	// free; nothing leaks across battles [03 R-FX-02 §4].
+	t.live = 0
 }
 
 func (t *stripTable) anyObjects() bool {
@@ -278,10 +343,24 @@ func (t *stripTable) anyObjects() bool {
 	return false
 }
 
+// poolFull is the shared pool's take entry seen from the producer: it reports
+// whether all 1000 slots are out [03 R-FX-02 §4]. A producer must consult it
+// BEFORE it runs the family init, because that is where retail's take sits —
+// the draws inside an init or a spawn are not spent by a dropped object, while
+// the draws a call site makes before calling the producer are spent regardless
+// (the burning-feature emission's two jitter draws, the debris fire particle's
+// four) [03 R-FX-02 §4][05 R-FEAT-01 §16][03 R-FX-01 §3].
+func (t *stripTable) poolFull() bool {
+	return t == nil || t.live >= stripPoolCapacity
+}
+
 // append inserts one object at the vector end of the given strip, destroying
 // the oldest object first when the pre-insert count exceeds the steady cap
-// [03 "Strip storage and lifecycle"][R-STRIP-01 §1]. Out-of-range strip
-// indices cannot occur: every call site uses a literal strip index.
+// [03 "Strip storage and lifecycle"][R-STRIP-01 §1]. The 401-record eviction
+// is tested after, and independently of, the pool test above [03 R-FX-02 §4];
+// the evicted object is destroyed with the slot-returning flag, so it gives
+// its slot back. Out-of-range strip indices cannot occur: every call site uses
+// a literal strip index.
 func (t *stripTable) append(strip int, o stripObject) {
 	if t == nil || strip < 0 || strip >= stripCount {
 		return
@@ -290,8 +369,19 @@ func (t *stripTable) append(strip int, o stripObject) {
 		// Destroy the oldest object and slide the survivors left; same-strip
 		// order among survivors equals insertion order [R-STRIP-01 §1].
 		t.strips[strip] = t.strips[strip][1:]
+		t.releaseSlot()
 	}
 	t.strips[strip] = append(t.strips[strip], o)
+	t.live++
+}
+
+// releaseSlot is the pool's return entry: every path that destroys a strip
+// object — the phase-11 sweep's removal, the 401-cap eviction, and the
+// battle-exit teardown — returns its slot [03 R-FX-02 §4].
+func (t *stripTable) releaseSlot() {
+	if t != nil && t.live > 0 {
+		t.live--
+	}
 }
 
 // sweep is the phase-11 dispatcher: strips in ascending index, objects in
@@ -310,11 +400,11 @@ func (t *stripTable) sweep(tick uint32, s *Session) {
 		gravityWord = s.World.AuthoredGravity
 	}
 	for strip := 0; strip < stripCount; strip++ {
-		t.sweepStrip(strip, tick, crt, s.Wind, gravityWord)
+		t.sweepStrip(strip, tick, crt, s.Wind, gravityWord, s.World)
 	}
 }
 
-func (t *stripTable) sweepStrip(strip int, tick uint32, crt *rng.CRT, wind *world.Wind, gravityWord int32) {
+func (t *stripTable) sweepStrip(strip int, tick uint32, crt *rng.CRT, wind *world.Wind, gravityWord int32, ter *world.Terrain) {
 	objs := t.strips[strip]
 	write := 0
 	for read := range objs {
@@ -322,10 +412,13 @@ func (t *stripTable) sweepStrip(strip int, tick uint32, crt *rng.CRT, wind *worl
 		if o.removalVerdict(tick) {
 			// Positive verdict: destroy (destructor argument 1) and remove
 			// with stable left compaction; the survivor order is unchanged
-			// [R-CORE-01 §4.4.1][03 "Strip storage and lifecycle"].
+			// [R-CORE-01 §4.4.1][03 "Strip storage and lifecycle"]. The
+			// destructor's flag returns the slot to the shared pool
+			// [03 R-FX-02 §4].
+			t.releaseSlot()
 			continue
 		}
-		o.update(tick, crt, wind, gravityWord)
+		o.update(tick, crt, wind, gravityWord, ter)
 		objs[write] = o
 		write++
 	}
@@ -376,15 +469,15 @@ func (o *stripObject) removalVerdict(tick uint32) bool {
 // advance the animation state, remove expired sub-records with stable
 // in-place compaction, then run the spawn gate. Object-internal CRT draws
 // happen in the animation and spawn steps [R-STRIP-01 §3].
-func (o *stripObject) update(tick uint32, crt *rng.CRT, wind *world.Wind, gravityWord int32) {
-	o.advanceParticles(tick, crt, wind, gravityWord)
+func (o *stripObject) update(tick uint32, crt *rng.CRT, wind *world.Wind, gravityWord int32, ter *world.Terrain) {
+	o.advanceParticles(tick, crt, wind, gravityWord, ter)
 	o.expireParticles(tick)
 	o.spawnGate(tick, crt)
 }
 
 // advanceParticles advances positions and animation state per family
 // [R-STRIP-01 §2].
-func (o *stripObject) advanceParticles(tick uint32, crt *rng.CRT, wind *world.Wind, gravityWord int32) {
+func (o *stripObject) advanceParticles(tick uint32, crt *rng.CRT, wind *world.Wind, gravityWord int32, ter *world.Terrain) {
 	switch o.family {
 	case stripFamilyNano:
 		// Position advances by velocity; the colour nibble advances one
@@ -459,47 +552,114 @@ func (o *stripObject) advanceParticles(tick uint32, crt *rng.CRT, wind *world.Wi
 			// decidable yet" rather than "retire now" — see
 			// resolveSmokeFrameCounts.
 			if p.lastFrame > 0 && p.frame >= p.lastFrame {
-				p.expiry = 1
-				if tick > 1 {
-					p.expiry = tick - 1
-				}
+				p.expiry = expiredAt(tick)
 			}
 		}
 	case stripFamilySprinkle:
-		// Position advances by velocity (zero until traced — see the spawn
-		// note below).
+		// `pos += step`, then the colour walk: `phase = (phase + 1) mod
+		// spacing` and, when it wraps, `colour += dir` with the seven-entry
+		// ramp 0x61..0x67 wrapping at both ends — 0x61 climbing past 0x67 and
+		// 0x67 descending past 0x61. No draws [03 R-FX-01 §3].
+		//
+		// Closed 2026-09-02: this carried an open-question marker calling the counter
+		// arithmetic untraced, and the family had no walk at all.
+		dir := int32(-1) // colour flag 0 (the strip-7 sub-bubble) descends
+		if o.colorSel != 0 {
+			dir = 1 // flag 1 (the strip-2 emit-sfx wakes) climbs
+		}
 		for i := range o.particles {
 			p := &o.particles[i]
 			p.x = p.x.Add(p.vx)
 			p.y = p.y.Add(p.vy)
 			p.z = p.z.Add(p.vz)
+			if o.phaseModulus > 0 {
+				p.phase = (p.phase + 1) % o.phaseModulus
+				if p.phase == 0 {
+					p.color = sprinkleRampStep(p.color, dir)
+				}
+			}
+			// The sprinkle is a WAKE: a puff survives only while its tick
+			// deadline holds AND the bilinear terrain height under it is
+			// strictly below the sea-level byte; it dies the tick it drifts
+			// onto land at or above the water plane, and off-map (the −1
+			// sentinel) counts as water [03 R-WATER-01 §1][R-TERR-01 §4].
+			// Both exits return the same "erase" verdict, so this is written
+			// as the same tick deadline the compaction pass already reads.
+			//
+			// The keep/erase sense here is the one thing [03 R-WATER-01 §1]
+			// exists to correct: [03 R-FX-01 §3] had it inverted, and a clone
+			// that keeps the inverted rule draws wakes on land and never on
+			// water. A session with no terrain (headless fixtures) cannot make
+			// the test and leaves the tick deadline as the only exit.
+			if ter != nil && ter.HeightAt(p.x, p.z) >= ter.SeaLevelWorld() {
+				p.expiry = expiredAt(tick)
+			}
 		}
-		// TODO(question): the sprinkle's animation-frame walk (its spawn
-		// and expiry are established; the frame advance consumes no draws
-		// [R-STRIP-01 §3] but its counter arithmetic is untraced).
-		// Decider: static trace of the strips-2/7 update body.
 	case stripFamilyFlame:
 		for i := range o.particles {
 			p := &o.particles[i]
 			p.x = p.x.Add(p.vx)
 			p.y = p.y.Add(p.vy)
 			p.z = p.z.Add(p.vz)
-			p.frame++
-			// TODO(question): the flame segment's frame-cursor wrap point
-			// against the flame-stream GAF entry's frame count.
-			// Decider: static trace of the strip-5 update body.
+			// `frame = (frame + 1) mod (frameCount − 1)`, every tick: the
+			// entry's last frame is never shown [03 R-FX-02 §2]. An unresolved
+			// entry (frameCountBase 0) has no modulus — retail's own modulo
+			// would divide by zero — so the cursor stands still.
+			//
+			// Closed 2026-09-02: this carried an open-question marker and advanced the
+			// cursor without any wrap at all.
+			if o.frameCountBase > 0 {
+				p.frame = (p.frame + 1) % o.frameCountBase
+			}
 		}
 	case stripFamilyFlameTrail:
+		// `pos += step`; `phase = (phase + 1) mod hold`; when the phase wraps,
+		// `frame = (frame + 1) mod (frameCount − 1)` — the entry's last frame
+		// is never shown, and with the hold of 1 that every researched site
+		// passes the frame advances every tick. This family spends no draws
+		// [03 R-FX-01 §3][R-STRIP-01 §3].
+		//
+		// Closed 2026-09-02: this carried an open-question marker calling the counter
+		// untraced, and the segments never animated.
 		for i := range o.particles {
 			p := &o.particles[i]
 			p.x = p.x.Add(p.vx)
 			p.y = p.y.Add(p.vy)
 			p.z = p.z.Add(p.vz)
+			if o.phaseModulus <= 0 {
+				continue
+			}
+			p.phase = (p.phase + 1) % o.phaseModulus
+			if p.phase == 0 && o.frameCountBase > 0 {
+				p.frame = (p.frame + 1) % o.frameCountBase
+			}
 		}
-		// TODO(question): the trail segment's animation counter (it draws
-		// no start-frame RNG; its per-tick frame advance is untraced)
-		// [R-STRIP-01 §3]. Decider: static trace of the strip-9 update body.
 	}
+}
+
+// sprinkleRampStep walks one sprinkle puff's palette byte one step along the
+// seven-entry ramp 0x61..0x67, wrapping past either end [03 R-FX-01 §3]:
+// `colour += dir`, then `> 0x67 → 0x61` and `< 0x61 → 0x67`.
+func sprinkleRampStep(color uint8, dir int32) uint8 {
+	next := int32(color) + dir
+	if next > int32(sprinkleRampTop) {
+		next = int32(sprinkleRampBottom)
+	}
+	if next < int32(sprinkleRampBottom) {
+		next = int32(sprinkleRampTop)
+	}
+	return uint8(next)
+}
+
+// expiredAt returns a deadline the current compaction pass already treats as
+// passed, which is how the two animation-driven retirements (the puff's frame
+// cursor, the sprinkle's shoreline) reach expireParticles' `tick > expiry`
+// test without a second removal path.
+func expiredAt(tick uint32) uint32 {
+	if tick > 1 {
+		return tick - 1
+	}
+	return 1
 }
 
 // expireParticles removes sub-records whose expiry tick has passed, with
@@ -621,22 +781,27 @@ func (o *stripObject) spawnOnce(tick uint32, crt *rng.CRT) {
 		// from a second one.
 		p.lastFrameDraw, p.lastFrameDrawn = crt.Rand(), true
 		p.lastFrame = smokeLastFrame(o.frameCountBase, p.lastFrameDraw)
-		if o.particleLife > 0 {
-			p.expiry = tick + uint32(o.particleLife)
-		}
+		// No tick deadline: a puff's only exit is its frame cursor reaching its
+		// own drawn last frame [06 R-WFX-01 §5][03 R-FX-02 §6]. The container's
+		// lifetime — the producer's literal — lives in windowEnd and bounds the
+		// container, not the puff.
 		o.particles = append(o.particles, p)
 	case stripFamilySprinkle:
 		// One jittered puff per spawn; exactly three CRT draws of
 		// rand×7/0x8000 − 3 per axis [R-STRIP-01 §1 strip 2][R-STRIP-01
-		// §3]. The palette pair is 0x61/0x67, selected by the producer's
-		// init flag: nonzero selects 0x61, zero selects 0x67 [R-STRIP-01
-		// §1 strips 2/7]. TODO(question): the drawn byte's offset inside
-		// the sprinkle sub-record — the pair-plus-selection reading is
-		// supported inference, not yet a committed field map.
-		// Decider: static trace of the strips-2/7 sub-record writer.
-		color := uint8(0x67)
+		// §3]. The puff carries both ramp ends (0x61, 0x67), the current
+		// colour — `flag ? 0x61 : 0x67` at spawn — and the direction word; the
+		// draw writes that current colour RAW into a two-by-two rectangle, and
+		// the `smoke 1` entry the puff also carries is never drawn
+		// [03 R-FX-01 §3][03 R-FX-02 §6]. The two ramp ends are constants
+		// (sprinkleRampBottom/Top) and the direction follows colorSel, so the
+		// only per-puff word is the current colour.
+		//
+		// Closed 2026-09-02: this carried an open-question marker calling the drawn
+		// byte's place in the sub-record unestablished.
+		color := sprinkleRampTop
 		if o.colorSel != 0 {
-			color = 0x61
+			color = sprinkleRampBottom
 		}
 		p := stripParticle{
 			x:     o.src[0].Add(numeric.FixedFromInt(crtJitter7(crt))),
@@ -647,38 +812,53 @@ func (o *stripObject) spawnOnce(tick uint32, crt *rng.CRT) {
 		if o.particleLife > 0 {
 			p.expiry = tick + uint32(o.particleLife)
 		}
-		// TODO(question): the sprinkle puff's per-tick velocity — retail's
-		// sub-record advances by a vector derived from the producer's two
-		// points (the piece origin and its second effect vertex); the
-		// second vertex's derivation is untraced, so the placeholder keeps
-		// velocity at zero. Decider: static trace of the strips-2/7
-		// container constructor's second-point argument.
+		// Half a world unit per tick along A→B, the reciprocal truncated
+		// [03 R-FX-01 §3]. The step is the container's, taken from the two
+		// unjittered points, and every puff copies it.
+		p.vx, p.vy, p.vz = sprinkleStep(o.src, o.dst)
 		o.particles = append(o.particles, p)
 	case stripFamilyFlame:
-		// One animated segment per spawn; exactly one CRT draw for the
-		// random start frame [R-STRIP-01 §1 strip 5][R-STRIP-01 §3].
-		// TODO(question): the flame segment's travel law between the
-		// source and target points is untraced; the placeholder keeps
-		// velocity at zero. Decider: static trace of the strip-5 spawn and
-		// update bodies.
+		// One animated segment per spawn; exactly one CRT draw for the random
+		// start frame [R-STRIP-01 §1 strip 5][R-STRIP-01 §3]. The segment
+		// starts at a fresh copy of A, targets B, and crosses the whole span in
+		// segLife ticks at five world units per tick [03 R-FX-02 §2].
+		//
+		// Closed 2026-09-02, two markers. The start frame stored the raw CRT
+		// draw as if the frame word needed no reduction; it is
+		// `crtRand × (frameCount − 1) / 0x8000`, an index into `flamestream`
+		// [03 R-FX-02 §2][03 R-FX-02 §6]. And the travel law is not untraced:
+		// it is `(B − A) / segLife` per axis, signed truncating.
+		segLife := flameSegLife(o.src, o.dst)
 		p := stripParticle{
 			x: o.src[0], y: o.src[1], z: o.src[2],
-			frame: int32(crt.Rand()),
+			frame: flameStartFrame(o.frameCountBase, crt.Rand()),
+			vx:    divByTicks(o.dst[0].Sub(o.src[0]), segLife),
+			vy:    divByTicks(o.dst[1].Sub(o.src[1]), segLife),
+			vz:    divByTicks(o.dst[2].Sub(o.src[2]), segLife),
 		}
-		if o.particleLife > 0 {
-			p.expiry = tick + uint32(o.particleLife)
+		if segLife > 0 {
+			p.expiry = tick + uint32(segLife)
 		}
 		o.particles = append(o.particles, p)
 	case stripFamilyFlameTrail:
 		// One animated segment per tick; the strip-7 trail spends no draws
 		// [R-STRIP-01 §1 strip 7][R-STRIP-01 §3]. The segment flies from
 		// source to target over the flight length.
+		// Every segment starts at a fresh copy of the source, not at the
+		// previous segment, and expires with the container's deadline
+		// [03 R-FX-01 §3].
 		p := stripParticle{x: o.src[0], y: o.src[1], z: o.src[2]}
 		if o.particleLife > 0 {
 			p.expiry = o.windowEnd
-			p.vx = divByTicks(o.dst[0].Sub(o.src[0]), o.particleLife)
-			p.vy = divByTicks(o.dst[1].Sub(o.src[1]), o.particleLife)
-			p.vz = divByTicks(o.dst[2].Sub(o.src[2]), o.particleLife)
+			// `step = ((B − A) · trunc(65536 / lifetime)) >> 16` — a truncated
+			// reciprocal times the span, which lands slightly SHORT of
+			// `(B − A) / lifetime`: the factor is 10922/65536 at lifetime 6 and
+			// 9362/65536 at 7, not 1/6 and 1/7 [03 R-FX-01 §3]. Corrected
+			// 2026-09-02; this used the exact quotient and overshot the target
+			// by a fraction of a unit per tick.
+			p.vx = trailStep(o.dst[0].Sub(o.src[0]), o.particleLife)
+			p.vy = trailStep(o.dst[1].Sub(o.src[1]), o.particleLife)
+			p.vz = trailStep(o.dst[2].Sub(o.src[2]), o.particleLife)
 		}
 		o.particles = append(o.particles, p)
 	}
@@ -715,6 +895,82 @@ func nanoLifetimeTicks(ax, ay, az, bx, by, bz numeric.Fixed) int32 {
 	dz := float64(bz.Raw()-az.Raw()) / fractionOne
 	dist := math.Sqrt(dx*dx + dy*dy + dz*dz)
 	return int32(int64(dist) / 4) // truncate toward zero twice: __ftol then the integer divide [I3]
+}
+
+// sprinkleStep is the sprinkle family's per-tick step, one half world unit
+// along A→B [03 R-FX-01 §3][03 R-FX-02 §6]:
+//
+//	len  = trunc(sqrt(dx² + dy² + dz²))          over the RAW 16.16 deltas
+//	step = ((B − A) · trunc(0x80000000 / len)) >> 16   per axis
+//
+// so len is the span expressed in 16.16 units and the reciprocal is truncated
+// before it multiplies. The sqrt is retail's own floating-point one, taken over
+// raw deltas and narrowed immediately; nothing float is stored [I2].
+//
+// Retail's edge case is a fault: `A == B` gives len 0 and an integer divide
+// exception (the sub-bubble type reaches it when the piece sits exactly at sea
+// level, a piece whose vertices 0 and 1 coincide reaches it for types 2–5).
+// Nanolathe cannot crash the battle there, so a degenerate pair yields a zero
+// step — the one divergence in this family, and the state every wired site is
+// in today, because the emit-sfx sink has no second effect vertex to pass yet
+// (its own open second-vertex question in composition.go).
+func sprinkleStep(a, b [3]numeric.Fixed) (sx, sy, sz numeric.Fixed) {
+	dx := b[0].Raw() - a[0].Raw()
+	dy := b[1].Raw() - a[1].Raw()
+	dz := b[2].Raw() - a[2].Raw()
+	length := int64(math.Sqrt(float64(dx)*float64(dx) + float64(dy)*float64(dy) + float64(dz)*float64(dz)))
+	if length <= 0 {
+		return 0, 0, 0
+	}
+	recip := int64(0x80000000) / length // truncating [I3]
+	step := func(d int64) numeric.Fixed {
+		return numeric.Fixed((d * recip) >> 16) // arithmetic shift, as retail's [I3]
+	}
+	return step(dx), step(dy), step(dz)
+}
+
+// flameSegLife is the strip-5 flame segment's life in ticks [03 R-FX-02 §2]:
+//
+//	n       = trunc(sqrt(dx² + dy² + dz²))   over the RAW 16.16 deltas
+//	segLife = floor(n / (5 × 65536))         whole world units of span, / 5
+//
+// so a segment crosses the whole span in segLife ticks at five world units per
+// tick. The sqrt is the same allowlisted float transient as sprinkleStep's.
+//
+// Retail's edge case is again a fault: a span shorter than five world units
+// gives segLife 0 and the per-axis division raises an integer divide exception
+// (teleport destinations closer than that to a unit reach it). Nanolathe
+// returns 0 and divByTicks yields a zero step rather than crashing.
+func flameSegLife(a, b [3]numeric.Fixed) int32 {
+	dx := b[0].Raw() - a[0].Raw()
+	dy := b[1].Raw() - a[1].Raw()
+	dz := b[2].Raw() - a[2].Raw()
+	n := int64(math.Sqrt(float64(dx)*float64(dx) + float64(dy)*float64(dy) + float64(dz)*float64(dz)))
+	return int32(n / (5 * 65536)) // n is non-negative, so the divide floors [I3]
+}
+
+// flameStartFrame folds one CRT draw into the flame segment's start frame:
+// `crtRand × (frameCount − 1) / 0x8000`, in 0 … frameCount − 2 of the bound
+// `flamestream` entry [03 R-FX-02 §2][03 R-FX-02 §6]. There is no reduction
+// step beyond this one — the word IS the entry's frame index. A container whose
+// entry has not resolved (frameCountBase 0) starts at frame 0 and still spends
+// the draw, exactly as the producer does.
+func flameStartFrame(frameCountBase int32, draw int32) int32 {
+	if frameCountBase <= 0 {
+		return 0
+	}
+	return int32(int64(draw) * int64(frameCountBase) / 0x8000)
+}
+
+// trailStep is the flame-stream trail's per-axis step,
+// `((B − A) · trunc(65536 / lifetime)) >> 16` [03 R-FX-01 §3]. The truncated
+// reciprocal is what makes it fall slightly short of the exact quotient.
+func trailStep(delta numeric.Fixed, lifetime int32) numeric.Fixed {
+	if lifetime <= 0 {
+		return 0
+	}
+	recip := int64(65536) / int64(lifetime) // truncating [I3]
+	return numeric.Fixed((delta.Raw() * recip) >> 16)
 }
 
 // narrowBox narrows one producer box per axis to the span between its 4/11
@@ -757,6 +1013,11 @@ func (s *Session) appendStripNanoEmitter(srcPoint, dstPoint [3]numeric.Fixed) {
 // above until their model-box adapter supplies extents [05 R-WORK-01 §8].
 func (s *Session) appendStripNanoEmitterBox(srcPoint, dstMin, dstMax [3]numeric.Fixed) {
 	if s == nil || s.strips == nil {
+		return
+	}
+	if s.strips.poolFull() {
+		// A full pool drops the object before the family init runs, so the
+		// emitter's thirty spawn draws are NOT spent [03 R-FX-02 §4].
 		return
 	}
 	crt := s.CrtRNG()
@@ -849,6 +1110,11 @@ func (s *Session) appendStripSmokePuffer(strip int, pos [3]numeric.Fixed, init S
 	if s == nil || s.strips == nil {
 		return
 	}
+	if s.strips.poolFull() {
+		// The puff's one spawn draw lives inside the init the producer never
+		// calls, so a dropped container spends nothing [03 R-FX-02 §4].
+		return
+	}
 	tick := uint32(0)
 	if s.Clock != nil {
 		tick = s.Clock.GlobalTick
@@ -892,13 +1158,15 @@ func (s *Session) smokeFrameLimit(init SmokePuffInit) int32 {
 	return base
 }
 
-// smokeDefaultFrameDelay is the smoke family's animation frame delay when a
-// site passes zero: the family constructor defaults the authored delay to 7.
+// smokeDefaultFrameDelay is the smoke family's animation frame hold when a site
+// passes zero: "hold, or 7 when 0" in the family's three-argument init
+// [03 R-FX-02 §3], stated the same way by the census — "the smoke family's
+// animation delay defaults to 7 when a producer passes zero"
+// [R-STRIP-01 §1] — and indexed as the rule for this site [03 R-FX-02 §6].
 // Each animation-frame advance consumes one CRT draw [R-STRIP-01 §3].
-// TODO(question): promote the constructor's default-delay value into the
-// committed family contract — it is read off the family constructor directly
-// and is not yet stated in the research doc. Decider: write the traced default
-// up under [03 R-STRIP-01 §3], which owns the family's draw budget.
+//
+// Closed 2026-09-02: this carried an open-question marker asking for the default to be
+// written up in the research docs, which it now is.
 const smokeDefaultFrameDelay = 7
 
 // appendStripSprinkle creates a strips-2/7 smoke-sprinkle container
@@ -914,6 +1182,11 @@ func (s *Session) appendStripSprinkle(strip int, pos [3]numeric.Fixed, spacing i
 	if s == nil || s.strips == nil {
 		return
 	}
+	if s.strips.poolFull() {
+		// The three jitter draws sit inside the family's spawn, so a dropped
+		// container spends none of them [03 R-FX-02 §4].
+		return
+	}
 	tick := uint32(0)
 	if s.Clock != nil {
 		tick = s.Clock.GlobalTick
@@ -924,11 +1197,16 @@ func (s *Session) appendStripSprinkle(strip int, pos [3]numeric.Fixed, spacing i
 		nextSpawn:     tick + 1,
 		spawnInterval: 1,
 		particleLife:  spacing * 6,
+		phaseModulus:  spacing,
 		colorSel:      colorSel,
 		src:           pos,
-		// dst stays at the spawn point: the container's second point (the
-		// piece's second effect vertex) is untraced — see the spawn marker
-		// on the sprinkle family above.
+		// dst stays at the spawn point. The container's second point is the
+		// emitting piece's transformed vertex 1 (vertex 0 for the swapped
+		// types 4/5) [03 R-FX-02 §6][04 R-COB-03 §6], and the emit-sfx sink
+		// has no piece-vertex transform to hand it one yet — its own
+		// open second-vertex question in composition.go. Until it does, A == B and
+		// the step
+		// is zero; retail would fault there instead (see sprinkleStep).
 	}
 	if crt := s.CrtRNG(); crt != nil {
 		o.spawnOnce(tick, crt)
@@ -974,6 +1252,11 @@ func (s *Session) appendStripGeothermalSteam(pos [3]numeric.Fixed) {
 	if s == nil || s.strips == nil {
 		return
 	}
+	if s.strips.poolFull() {
+		// The vent's own first puff is spawned by the init, so its draw is not
+		// spent when the pool drops the container [03 R-FX-02 §4].
+		return
+	}
 	tick := uint32(0)
 	if s.Clock != nil {
 		tick = s.Clock.GlobalTick
@@ -1004,6 +1287,20 @@ const (
 	// reservation; it is not a lifetime [03 R-FX-01 §3 addendum].
 	geothermalSteamInterval        int32  = 5
 	geothermalSteamCapacityHorizon uint32 = 150
+
+	// The strip-5 flame container's two site literals: the teleport handler
+	// builds a 30-tick container that lays one segment every 10 ticks — four
+	// segments in all [03 R-FX-02 §2][03 R-FX-02 §6]. The segment life is not a
+	// literal: it is floor(spanUnits/5), see flameSegLife. No producer reaches
+	// this family yet (the teleport order handler is unwired), so these name
+	// the site's parameters for the one that will.
+	flameContainerLifetime int32 = 30
+	flameSegmentInterval   int32 = 10
+
+	// trailSegmentHold is the flame-stream trail's phase modulus. Every
+	// researched site passes 1, so the frame advances every tick
+	// [03 R-FX-01 §3][03 R-FX-02 §6].
+	trailSegmentHold int32 = 1
 )
 
 // appendStripViews mirrors every live strip sub-record into the committed
@@ -1129,10 +1426,17 @@ const (
 	// [03 R-FX-01 §3].
 	flameStreamEntry = "flamestream"
 
+	// sprinkleRampBottom and sprinkleRampTop are the seven-entry palette ramp
+	// the sprinkle puff walks, 0x61..0x67 [03 R-FX-01 §3]. Colour flag 1 spawns
+	// at the bottom and climbs, flag 0 spawns at the top and descends; either
+	// wraps to the other end.
+	sprinkleRampBottom uint8 = 0x61
+	sprinkleRampTop    uint8 = 0x67
+
 	// sprinkleDefaultColor is the sprinkle pair's zero-selector colour
 	// [R-STRIP-01 §1 strips 2/7]; a live sub-record carries its own walked
 	// value and overrides it.
-	sprinkleDefaultColor uint8 = 0x67
+	sprinkleDefaultColor = sprinkleRampTop
 
 	// nanoRampBase is the first entry of the nano ramp 0xa1..0xa7
 	// [R-STRIP-01 §2].
@@ -1175,10 +1479,18 @@ const smokePuffEntry = "smoke 1"
 // gets zero, and its puffs then carry no last frame, which is exactly the
 // behaviour that stood before the seam existed.
 func (s *Session) smokeEntryFrameCountBase(selector uint8) int32 {
+	return s.effectEntryFrameCountBase(smokeEntryForSelector(selector))
+}
+
+// effectEntryFrameCountBase is the same seam for any effect-bank entry: the two
+// flame families need `flamestream`'s frame count less one for their start
+// frame and their wrap modulus [03 R-FX-02 §2][03 R-FX-01 §3], which is the
+// same quantity the smoke families draw their last frame against.
+func (s *Session) effectEntryFrameCountBase(entry string) int32 {
 	if s == nil || s.effectFrameCount == nil {
 		return 0
 	}
-	n, ok := s.effectFrameCount("", smokeEntryForSelector(selector))
+	n, ok := s.effectFrameCount("", entry)
 	if !ok || n <= 0 {
 		return 0
 	}

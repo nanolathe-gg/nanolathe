@@ -340,7 +340,18 @@ func (c *Client) drawCommittedFrame(cur *frame.Frame, ok bool) {
 	c.drawTerrainPrep()
 	// Strips 0 and 1 are unconditional but producerless; strip 2 is the first
 	// published effect barrier [03 §1][03 R-STRIP-01 §2].
-	// TODO(T23): strip slots 0-1 have no published live producer.
+	//
+	// Closed 2026-09-02 [03 R-FX-02 §5]. These barriers carried T23
+	// platform-residual markers waiting on a manual retail observation. The closure is static and
+	// exhaustive instead — every code reference to each of the thirteen producer
+	// routines was enumerated with the strip literal read from each call site's
+	// own argument pushes, and independently every instruction that touches the
+	// strip-table root word — and it agrees with the earlier census by a
+	// different method: strips 0, 1, 3 and 8 have NO producer anywhere in the
+	// image and hold no object in any retail session. The composer's walk over
+	// them is a no-op in retail, so these calls are kept as empty passes to hold
+	// the barrier order of [03 §1]. What must never happen is attaching a
+	// producer to any of the four.
 	c.drawStripSlot(cur, 0)
 	c.drawStripSlot(cur, 1)
 	c.drawStripSlot(cur, 2)
@@ -348,7 +359,8 @@ func (c *Client) drawCommittedFrame(cur *frame.Frame, ok bool) {
 	// The first feature traversal owns the never-seen admission. Features with
 	// height >= 10 are deferred to pass A [03 R-RAST-01 §6].
 	c.drawFeaturePass(cur, ok)
-	// TODO(T23): strip slot 3 has no published live producer.
+	// Strip 3 is the second of the four producerless barriers; see the note at
+	// strips 0/1 [03 R-FX-02 §5].
 	c.drawStripSlot(cur, 3)
 	c.drawStripSlot(cur, 4)
 
@@ -372,8 +384,8 @@ func (c *Client) drawCommittedFrame(cur *frame.Frame, ok bool) {
 	c.drawWorldPassB(cur, ok)
 	// Auxiliary unit traversal has no published auxiliary draw records yet;
 	// leave this established slot empty rather than inventing a route [03 §1].
-	// Strip slot 8 is unconditional; no published producer exists [03 §1].
-	// TODO(T23): strip slot 8 has no published live producer.
+	// Strip slot 8 is unconditional and is the last of the four producerless
+	// barriers; see the note at strips 0/1 [03 §1][03 R-FX-02 §5].
 	c.drawStripSlot(cur, 8)
 
 	// The key-controlled overlay has no concrete authored client route yet.

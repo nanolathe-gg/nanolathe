@@ -142,6 +142,19 @@ const (
 	buildPageMultiPage   = 2
 )
 
+// CargoSelectableStatus is bit 30 of the runtime status word, a static
+// mirror of the definition's `isairbase` flag: written once by the unit
+// initializer and never touched again [04 R-UNIT-06 §3]. It is not itself a
+// selectability bit on the unit that carries it — it is what the
+// selection-eligibility predicate's carrier clause reads off a *carrier's*
+// status word: a unit with a carrier is eligible only when the carrier has
+// this bit set, so cargo aboard an ordinary transport is not selectable
+// while cargo attached to an airbase (a landed pad guest, or a factory
+// product whose factory definition is itself an airbase) is. internal/units
+// owns the write; internal/triggers spells the carrier clause out against
+// the carrier's Flags word.
+const CargoSelectableStatus uint32 = 0x40000000
+
 // initialStatusFlags is the status word the allocator initializer produces for
 // a freshly created unit [08 "Classifier eligibility, destinations, and
 // order"].
@@ -159,6 +172,14 @@ func initialStatusFlags(def *content.UnitDef) uint32 {
 	// sentinel a missed link resolves to is not a weapon [02 §5 R-CONTENT-02].
 	if !content.IsWeaponInactive(def.Weapon1Def) || !content.IsWeaponInactive(def.Weapon2Def) || !content.IsWeaponInactive(def.Weapon3Def) {
 		flags |= ArmedStatus
+	}
+	// The cargo-selectable mirror is set exactly when the definition is an
+	// airbase, and only here — no later write ever touches it
+	// [04 R-UNIT-06 §3]. A unit's own copy of this bit is meaningless to its
+	// own selectability; it matters only when this unit is read as someone
+	// else's carrier.
+	if def.IsAirBase {
+		flags |= CargoSelectableStatus
 	}
 	// The two standing-order fields, seeded from the definition's packed
 	// standing byte [04 R-STANCE-01 §6]. Both parse with default 2, so a
@@ -519,9 +540,9 @@ func (u *Unit) ClearClassifierEligibility() {
 // selectable, cargo attached to an airbase is". Applying it needs the carrier
 // handle resolved through the world, which a method on the unit record cannot
 // do, so it belongs to the callers that own a world — `internal/triggers` spells
-// the clause out against the carrier's status word. Nothing writes that mirror
-// bit yet; seeding it from `isairbase` at creation is a separate change,
-// because it moves the status word of every airbase definition.
+// the clause out against the carrier's status word. `initialStatusFlags` seeds
+// the mirror bit (`CargoSelectableStatus`) from `isairbase` at creation
+// (WU-19-81); nothing writes it afterward.
 func (u *Unit) Eligible() bool {
 	if u == nil || !u.Alive || u.Dying {
 		return false

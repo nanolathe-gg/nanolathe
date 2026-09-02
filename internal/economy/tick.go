@@ -30,14 +30,6 @@ func isSettlingState(s uint8) bool {
 	return s == 1 || s == 2
 }
 
-// statusPairPredicate preserves the unresolved literal status-pair gate
-// [05 "Authoritative settlement order"] C4.
-func statusPairPredicate(half int16, word int32) bool {
-	// TODO(question): no located writer for either status member; keep the
-	// predicate literal until the producer boundary is resolved.
-	return half != 0 || word == 0
-}
-
 // Tick runs the per-player deadline block for all ten slots in ascending order per C3 and I1.
 // It delegates to TickPlayer with a nil beforeDeadline hook; callers that need the AI dispatch
 // hook (phase 14) should call TickPlayer directly with the desired callback per C3.
@@ -139,8 +131,23 @@ func (s *Service) TickPlayer(player int, tick uint32, w *units.World, beforeDead
 	if p.IsObserver {
 		return
 	}
-	statusFirst, statusSecond := p.SettlementStatusPair()
-	if !statusPairPredicate(statusFirst, statusSecond) {
+	// The gate that stood here as an unresolved "status pair" is the
+	// elimination test [05 R-ECO-01 §12]: the halfword is the player record's
+	// live unit count and the word is its units-ever-created count, so
+	// "halfword non-zero OR word zero" reads *the slot still has a live unit,
+	// or never had one* — the exact negation of the elimination predicate.
+	// There is no separate status to carry, and the counters are read from the
+	// world rather than mirrored, because the phase-2 sweep decrements the live
+	// count inside the same pass this gate runs in (see PlayerEliminated).
+	//
+	// The deadline advance above is deliberately ahead of this test: an
+	// eliminated slot keeps advancing its settlement deadline and simply never
+	// settles, which is the traced order [05 R-ECO-01 §12].
+	//
+	// This is the same skip the three other player walks make — both automatic
+	// share walks below and the session's result sweep — so all four share one
+	// helper.
+	if PlayerEliminated(w, player) {
 		return
 	}
 	if !isSettlingState(p.ControllerState) {

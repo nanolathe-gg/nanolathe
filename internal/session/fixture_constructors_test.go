@@ -200,7 +200,6 @@ func NewSyntheticMissionForTest(fs vfs.FSOps, cat *content.Catalog, path string,
 		p.Exists = true
 		p.ControllerState = 1
 		p.IsObserver = false
-		p.SetSettlementStatusPair(1, 0)
 		p.GameEnded = false
 		p.EndGameCountdown = -1
 	}
@@ -396,7 +395,6 @@ func NewSyntheticSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 			p.IsObserver = false
 		}
 		p.ControllerState = ctrlState
-		p.SetSettlementStatusPair(1, 0)
 		p.GameEnded = false
 		p.EndGameCountdown = -1
 	}

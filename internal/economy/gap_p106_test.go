@@ -38,7 +38,6 @@ func TestMakerStall(t *testing.T) {
 	svc := &Service{}
 	svc.Players[0].Exists = true
 	svc.Players[0].ControllerState = 1
-	svc.Players[0].SetSettlementStatusPair(1, 0)
 	svc.Players[0].EndGameCountdown = -1
 	// Both generator fixtures author `activatewhenbuilt`, as every stock maker
 	// and extractor in the reference install does. That is what activates them:
@@ -201,7 +200,6 @@ func TestRefillMinGap(t *testing.T) {
 	svc.Networked = true
 	svc.Players[0].Exists = true
 	svc.Players[0].ControllerState = 1
-	svc.Players[0].SetSettlementStatusPair(1, 0)
 	svc.Players[0].EndGameCountdown = -1
 	svc.Players[0].AutoShareMetal = true
 	svc.Players[0].AutoShareEnergy = true
@@ -215,7 +213,6 @@ func TestRefillMinGap(t *testing.T) {
 	svc.Players[1].Exists = true
 	svc.Players[1].ControllerState = 3
 	svc.Players[1].OptionKind = 1
-	svc.Players[1].SetSettlementStatusPair(1, 0)
 	svc.Players[1].EndGameCountdown = -1
 	svc.Players[1].Capacity[Metal] = 1000
 	svc.Players[1].Capacity[Energy] = 1000
@@ -255,7 +252,6 @@ func TestLastWinsAlliances(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		svc.Players[i].Exists = true
 		svc.Players[i].ControllerState = 1
-		svc.Players[i].SetSettlementStatusPair(1, 0)
 		svc.Players[i].EndGameCountdown = -1
 		svc.Players[i].Capacity[Metal] = 1000
 		svc.Players[i].Stock[Metal] = 500
@@ -284,22 +280,70 @@ func TestLastWinsAlliances(t *testing.T) {
 	}
 }
 
-// TestStatusPairPredicate locks the literal status-pair predicate [05 "Authoritative settlement order"].
-func TestStatusPairPredicate(t *testing.T) {
-	if !statusPairPredicate(1, 0) {
-		t.Fatalf("1,0 should pass")
+// eliminatedWorldForPlayerZero returns a world in which player 0 has created
+// one unit and lost it, so its live count is zero and its ever-created count is
+// one — the elimination state of [08 R-SKIR-01 §3] "Counters".
+func eliminatedWorldForPlayerZero(t *testing.T) *units.World {
+	t.Helper()
+	w := units.NewSliced(10, &content.Catalog{})
+	def := economyFixtureDef(&content.UnitDef{UnitName: "armcom", BuildTime: 100, MaxDamage: 100})
+	def.CanonicalKey = content.CanonicalKey("armcom")
+	h, err := w.Create(def, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
+	if err != nil {
+		t.Fatalf("create: %v", err)
 	}
-	if !statusPairPredicate(1, 1234) {
-		t.Fatalf("1,nonzero should pass via half")
+	w.Unit(h).Dying = true
+	if res := w.FinalizeDeath(h, 30); !res.Freed {
+		t.Fatalf("FinalizeDeath did not free the slot")
 	}
-	if !statusPairPredicate(0, 0) {
-		t.Fatalf("0,0 should pass via word zero")
+	if w.LiveCountForPlayer(0) != 0 || w.CreatedCountForPlayer(0) == 0 {
+		t.Fatalf("fixture is not the eliminated state: live=%d created=%d",
+			w.LiveCountForPlayer(0), w.CreatedCountForPlayer(0))
 	}
-	if statusPairPredicate(0, 1) {
-		t.Fatalf("0,1 should fail")
+	return w
+}
+
+// TestSettlementGateIsTheEliminationTest locks the correction of
+// [05 R-ECO-01 §12]: what stood as an unresolved literal "status pair" is the
+// elimination test on the player record's two unit counters. An eliminated slot
+// does not settle; a slot that has never created a unit does, which is what
+// keeps a participating row alive through battle entry.
+func TestSettlementGateIsTheEliminationTest(t *testing.T) {
+	// Never created a unit: the second term holds, so the slot settles.
+	fresh := units.NewSliced(10, &content.Catalog{})
+	var svc Service
+	p := &svc.Players[0]
+	activePlayer(p)
+	p.UpdateTime = 100
+	p.Helper1Deadline = 200
+	p.Helper2Deadline = 200
+	p.Mirror[Metal].Production = 4
+	svc.TickPlayer(0, 100, fresh, nil)
+	if p.UpdateTime != 130 {
+		t.Fatalf("deadline must advance to 130, got %d", p.UpdateTime)
 	}
-	if !statusPairPredicate(-1, 999) {
-		t.Fatalf("-1 nonzero should pass")
+	if p.Mirror[Metal].Production != 0 || p.PassProduced[Metal] != 4 {
+		t.Fatalf("never-created slot must settle, live=%v pass=%v",
+			p.Mirror[Metal].Production, p.PassProduced[Metal])
+	}
+
+	// Live count zero with a non-zero ever-created count: eliminated. The
+	// deadline still advances because the advance precedes the gate chain.
+	dead := eliminatedWorldForPlayerZero(t)
+	var svc2 Service
+	q := &svc2.Players[0]
+	activePlayer(q)
+	q.UpdateTime = 100
+	q.Helper1Deadline = 200
+	q.Helper2Deadline = 200
+	q.Mirror[Metal].Production = 4
+	svc2.TickPlayer(0, 100, dead, nil)
+	if q.UpdateTime != 130 {
+		t.Fatalf("eliminated slot must still advance its deadline, got %d", q.UpdateTime)
+	}
+	if q.Mirror[Metal].Production != 4 || q.PassProduced[Metal] != 0 {
+		t.Fatalf("eliminated slot must not settle, live=%v pass=%v",
+			q.Mirror[Metal].Production, q.PassProduced[Metal])
 	}
 }
 
@@ -308,14 +352,12 @@ func TestPacketOverwriteSync(t *testing.T) {
 	var svc Service
 	svc.Players[0].Exists = true
 	svc.Players[0].ControllerState = 1
-	svc.Players[0].SetSettlementStatusPair(1, 0)
 	svc.Players[0].EndGameCountdown = -1
 	svc.Players[0].Capacity[Metal] = 1000
 	svc.Players[0].Stock[Metal] = 500
 	svc.Players[1].Exists = true
 	svc.Players[1].ControllerState = 3
 	svc.Players[1].OptionKind = 1
-	svc.Players[1].SetSettlementStatusPair(1, 0)
 	svc.Players[1].EndGameCountdown = -1
 	svc.Players[1].Capacity[Metal] = 1000
 	svc.Players[1].Stock[Metal] = 500
@@ -360,7 +402,6 @@ func TestPreGameSpawnOutsideLedger(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		svc.Players[i].Exists = true
 		svc.Players[i].ControllerState = 1
-		svc.Players[i].SetSettlementStatusPair(1, 0)
 		svc.Players[i].EndGameCountdown = -1
 	}
 	svc.Players[0].Mirror[Metal].Production = 2
@@ -389,7 +430,6 @@ func TestPreGameSpawnOutsideLedger(t *testing.T) {
 	svc2 := Service{}
 	svc2.Players[0].Exists = true
 	svc2.Players[0].ControllerState = 1
-	svc2.Players[0].SetSettlementStatusPair(1, 0)
 	svc2.Players[0].EndGameCountdown = -1
 	svc2.Players[0].UpdateTime = 0
 	svc2.Players[0].Helper1Deadline = 1 << 31

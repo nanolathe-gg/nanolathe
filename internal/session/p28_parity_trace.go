@@ -414,7 +414,7 @@ func (s *Session) ParityAuthoritativeHash() (string, error) {
 		}
 		for i := range e.Players {
 			p := e.Players[i]
-			w("player:%d:%t:%d:%d:%d:%d:%08x:%08x|", i, p.Exists, p.ControllerState, p.SettlementStatusFirst, p.SettlementStatusSecond, p.EndGameCountdown, math.Float32bits(p.Stock[0]), math.Float32bits(p.Stock[1]))
+			w("player:%d:%t:%d:%d:%d:%d:%08x:%08x|", i, p.Exists, p.ControllerState, p.LiveUnitCount, p.UnitsEverCreated, p.EndGameCountdown, math.Float32bits(p.Stock[0]), math.Float32bits(p.Stock[1]))
 			w("cap:%08x:%08x:pass:%08x:%08x:%08x:%08x:ai:%08x:%08x:%08x:%08x|", math.Float32bits(p.Capacity[0]), math.Float32bits(p.Capacity[1]), math.Float32bits(p.PassProduced[0]), math.Float32bits(p.PassProduced[1]), math.Float32bits(p.PassConsumed[0]), math.Float32bits(p.PassConsumed[1]), math.Float32bits(p.AIProduction[0]), math.Float32bits(p.AIProduction[1]), math.Float32bits(p.AIConsumption[0]), math.Float32bits(p.AIConsumption[1]))
 			for r := 0; r < 2; r++ {
 				writeBucket(w, "mirror", i, r, p.Mirror[r])

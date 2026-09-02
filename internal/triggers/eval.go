@@ -49,6 +49,10 @@ const (
 	NotifyUnitCreated
 )
 
+// cargoSelectableStatus is bit 30 of the unit status word, a static mirror of
+// the carrier definition's `isairbase` flag: internal/units seeds it at unit
+// creation and nothing writes it afterward [04 R-UNIT-06 §3]. The carrier
+// clause below reads it off the carrier's own Flags word, never the cargo's.
 const cargoSelectableStatus uint32 = 0x40000000
 
 func forEachOccupied(w *units.World, fn func(*units.Unit) bool) {
