@@ -9,7 +9,7 @@
 //
 // This file previously held `TransportState`/`TransportUnloadState`, a pair of
 // isolated phase counters with no world, no marker and no callbacks: every
-// phase advanced and its side effects were left under a `TODO(question)`
+// phase advanced and its side effects were left under an open-question marker
 // reading "not simulated beyond phase advance". Nothing outside their own test
 // constructed one, so a transport order reached a machine that could not fly,
 // attach or release. They are replaced here rather than kept beside the real

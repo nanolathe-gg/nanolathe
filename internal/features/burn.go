@@ -29,10 +29,16 @@ func (s *Service) burnTick(tick uint32) {
 			continue
 		}
 		if !inst.IsBurning {
-			// TODO(question): The complete interpretation of AnimationState and
-			// its binding to the death/reclaim animation sequences is unknown;
-			// tracing that animation-state/sequence binding would settle how
-			// selectors 1/2 advance and when they complete.
+			// Unimplemented: [05 R-FEAT-01 §10] pass 3 establishes this branch.
+			// A sprite instance with the burning bit clear is a die or reclaim
+			// animation: advance the main cursor, then the shadow cursor when
+			// present, and when the main cursor's sequence pointer goes null
+			// run §5 step 6's replace at the anchor — which promotes the
+			// successor to `featurereclamate` whenever the instance's
+			// reclaim-animation bit is set, regardless of the argument. The
+			// same section closes what "complete" means: the animation ends on
+			// the visit whose cursor advance clears the sequence pointer.
+			// See PLAN 19 §2.4.
 			continue
 		}
 		if smoke {
@@ -44,13 +50,22 @@ func (s *Service) burnTick(tick uint32) {
 			// tick, with exactly two CRT jitter draws at the call site — the
 			// draws below are those two, and the puff would append a strip-5
 			// smoke container via the session's appendStripSmokePuffer.
-			// TODO(question): the two draws' jitter law and the puff's spawn
-			// offset are untraced. The append itself is blocked on file
-			// ownership, not research: features has no session-side port to
-			// the strip table, and adding one means a new field on
-			// features.Service (outside the strip-producer unit's ownership).
-			// The session-side helper (Session.appendStripSmokePuffer(5, …))
-			// is ready for that port.
+			// Unimplemented: [05 R-FEAT-01 §10] pass 3 now gives the jitter
+			// law in full — the puff sits at the footprint centre at terrain
+			// height and each draw is scaled by the CURRENT BURN FRAME's width
+			// and height:
+			//
+			//	x += (draw·(w/2))/32768 - frame.xoff + w/4
+			//	y += 2·(frame.yoff - (draw·(h/2))/32768) - 2·(h/4)
+			//
+			// taking integer parts with 16-bit truncation. Two things are
+			// missing here and neither is research: the burn cursor's current
+			// GAF frame geometry does not reach this service, and features has
+			// no session-side port to the strip table, so the puff cannot be
+			// appended (the session helper Session.appendStripSmokePuffer(5, …)
+			// is ready for that port). The two draws below are the right two
+			// draws in the right place, so the CRT stream stays correct while
+			// the puff is missing. See PLAN 19 §2.4.
 			if crt := s.crt(); crt != nil {
 				_ = crt.Rand()
 				_ = crt.Rand()
@@ -147,71 +162,68 @@ func (s *Service) fireBurnEvent(inst *Instance, idx int) {
 			s.igniteAt(tx, tz, def)
 		}
 	}
-	// 2. Wind embers exactly five steps [05 "Feature burning"].
-	// Probe walks in 16.16 tile space from origin adding twice each wind component
-	// per step, tests tile each step with same legality chain and draw rule.
-	// Zero wind collapses all five probes onto origin where they are skipped,
-	// so no draws happen at all [05 ...].
+	// 2. Wind embers, exactly five probes [05 R-FEAT-01 §11 step 2]:
+	//
+	//	pos := (x << 16, z << 16)
+	//	five times: pos += 2·wind per axis; tile := (pos.x >> 16, pos.z >> 16)
+	//	            if tile == previous: skip
+	//	            else previous := tile; apply step 1's legality chain and draw
+	//
+	// The coordinate is the anchor CELL shifted left 16, not a halved tile
+	// coordinate, and the wind vector is the global 16.16 one doubled in 64-bit
+	// [R-WIND-01]. The shift back is arithmetic, so it floors west and north of
+	// the origin rather than truncating (I3).
+	//
+	// The skip rule is "same tile as the PREVIOUS probe, the origin for the
+	// first" — §11's correction to the earlier "zero wind collapses all five
+	// probes onto the origin tile, where they are skipped". That earlier
+	// reading gave the right draw count only at still air; the general rule
+	// makes the five probes draw between zero and five times depending on wind
+	// speed, and a wind fast enough to jump a tile never tests the skipped one.
+	// An off-map probe still counts as visited: §11 puts the rejection in the
+	// cell lookup, after the same-tile test.
 	if s.Wind != nil && sim != nil {
 		dx := s.Wind.DirX
 		dz := s.Wind.DirZ
-		if dx != 0 || dz != 0 {
-			// The probe walks in 16.16 TILE space from the origin, adding twice
-			// each wind component per step, and tests the tile it lands on with
-			// the same legality chain and draw rule as the neighbourhood pass
-			// [05 "Feature burning"]. A tile is two cells on a side [03 §2.1],
-			// so the origin in tile space is the cell index halved.
-			//
-			// Zero wind collapses all five probes onto the origin tile, where
-			// they are skipped and no draws happen at all; the guard above
-			// keeps that exact by not walking.
-			//
-			// TODO(question): [05 "Feature burning"] describes both spread
-			// passes in tiles, while the 7x7 neighbourhood above is implemented
-			// over cells. Whether the legality chain reads one cell per tile or
-			// all four is not established; this tests the tile's origin cell.
-			// The step addition below also assumes the wind components are
-			// already in 16.16 tile units — if retail scales them differently
-			// the trajectory bends, though the draw count (five probes, zero
-			// at still air) does not change.
-			tileFX := int64(cx) * 65536 / 2
-			tileFZ := int64(cz) * 65536 / 2
-			for step := 0; step < 5; step++ {
-				tileFX += int64(dx) * 2
-				tileFZ += int64(dz) * 2
-				// Tile space back to a cell index: floor the 16.16 tile
-				// coordinate, then scale by two. Flooring, not truncation —
-				// the two disagree west and north of the origin (I3).
-				px := int(floorShift16(tileFX)) * 2
-				pz := int(floorShift16(tileFZ)) * 2
-				if px < 0 || px >= w || pz < 0 || pz >= h {
-					continue
-				}
-				tIdx := pz*w + px
-				cell := s.Terrain.Plot[tIdx]
-				if cell.IsEmpty() {
-					continue
-				}
-				if cell.Occupied() {
-					continue
-				}
-				if _, ok := s.instances[tIdx]; ok {
-					continue
-				}
-				feat := cell.Feature()
-				if feat >= 0xFFFB {
-					continue
-				}
-				def, ok := s.Terrain.FeatureDefAt(feat)
-				if !ok || def == nil || !def.Flamable {
-					continue
-				}
-				roll := sim.Uint32n(100)
-				if int32(roll) >= def.SpreadChance {
-					continue
-				}
-				s.igniteAt(px, pz, def)
+		posX := int64(cx) << 16
+		posZ := int64(cz) << 16
+		prevX, prevZ := int64(cx), int64(cz)
+		for step := 0; step < 5; step++ {
+			posX += int64(dx) * 2
+			posZ += int64(dz) * 2
+			px := floorShift16(posX)
+			pz := floorShift16(posZ)
+			if px == prevX && pz == prevZ {
+				continue // same tile as the previous probe [05 R-FEAT-01 §11]
 			}
+			prevX, prevZ = px, pz
+			if px < 0 || int(px) >= w || pz < 0 || int(pz) >= h {
+				continue // the cell lookup rejects an off-map probe [05 R-FEAT-01 §11]
+			}
+			tIdx := int(pz)*w + int(px)
+			cell := s.Terrain.Plot[tIdx]
+			if cell.IsEmpty() {
+				continue
+			}
+			if cell.Occupied() {
+				continue
+			}
+			if _, ok := s.instances[tIdx]; ok {
+				continue
+			}
+			feat := cell.Feature()
+			if feat >= 0xFFFB {
+				continue
+			}
+			def, ok := s.Terrain.FeatureDefAt(feat)
+			if !ok || def == nil || !def.Flamable {
+				continue
+			}
+			roll := sim.Uint32n(100)
+			if int32(roll) >= def.SpreadChance {
+				continue
+			}
+			s.igniteAt(int(px), int(pz), def)
 		}
 	}
 	// 3. Burn weapon after both spread passes regardless of results, if definition

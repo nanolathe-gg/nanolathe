@@ -5,9 +5,9 @@
 // after world drawing but before selection/interface [03 §1] step 10 C1 C2.
 // Visibility culling is binary and hard-edged on 32-pixel tiles [03 §3.3]; there
 // is no ALP blend at the LOS edge and no intermediate opacity. Palette lookup
-// uses the 256-byte logical→physical table at present time (C7) [03 §4.3]; SHD
-// darkening is noted as TODO(question) where the row selection is not
-// established.
+// uses the 256-byte logical→physical table at present time (C7) [03 §4.3]. The
+// SHD row selection this file once flagged is established: the default is the
+// DONT_SHADE pin, row 15 [03 R-RAST-01 §5], and no marker remains here.
 package render
 
 import (

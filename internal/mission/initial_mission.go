@@ -31,11 +31,13 @@ type attachPair struct {
 // pump consumes queued orders [04 §3.6] C9. Unit existence and building-vs-
 // mobile classification are resolved exclusively through cat, matching the
 // catalog-backed runtime path [04 §3.6].
-// TODO(question): InitialMission does not create extractors itself, but units placed
-// via session reconstructUnits / save restore World.Create bypass SpotMetal sampling
-// unless the session hook samples Σ(cell+1)*extractsMetal once into the unit's
-// extraction state [P1-10][P1-15]; verify coverage for any direct World.Create
-// outside session.
+//
+// Unimplemented: [05 R-PROD-01 §6] establishes that the extraction rate is
+// sampled by the unit CREATOR — "the settlement never reads `extractsmetal`,
+// it reads the rate the creator sampled" [05 R-PROD-01 §1]. This
+// interpreter creates nothing, but the sampling lives at four separate
+// placement call sites rather than in `units.World.Create`, so a caller that
+// creates a unit directly gets no rate — see PLAN 19 §2.4.
 func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Catalog) {
 	if m == nil || w == nil {
 		return
@@ -46,9 +48,10 @@ func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Cata
 		return
 	}
 	// P0-04/P0-06: two-pass spawner with sparse created[] array [P0-04][P0-06].
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// We reconstruct sparse by placement index stored on the unit.
+	// Pass one calls the unit creator once per placement and stores the result,
+	// leaving a null hole where the pool or the per-player limit refused it;
+	// pass two walks that sparse array and skips the holes [P0-06].
+	// We reconstruct the sparse array by the placement index stored on the unit.
 	createdSparse := make([]*units.Unit, len(m.Units))
 	// Build index from world units by PlacementIdx.
 	mapped := 0
@@ -106,7 +109,9 @@ func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Cata
 	// application order deterministic without ranging a map (I1).
 	attachPairs := make([]attachPair, 0)
 
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Pass two interprets the placement's InitialMission text for every entry
+	// whose record carries a mission string and whose pass-one creation
+	// succeeded [P0-06].
 	for idx, placement := range m.Units {
 		u := createdSparse[idx]
 		if u == nil {
@@ -347,11 +352,16 @@ func typeExists(ctx *interpCtx, name string) bool {
 }
 
 func isBuildingType(ctx *interpCtx, name string) bool {
-	// `b` builds BuildingBuild when the found catalog entry's unit-name field
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): the phase-2 compiler falls back UnitName to the base
-	// name when the FBI omits `unitname`, which masks authored-empty entries;
-	// the fallback site needs a raw-presence flag for this to be exact.
+	// `b` builds BuildingBuild when the found catalog entry's unit-name field is
+	// empty and MobileBuild otherwise [04 §3.6]; the discriminant is the
+	// definition record's own name field, read directly.
+	//
+	// TODO(question): our FBI compiler falls back UnitName to the file's base
+	// name when the record omits `unitname`, so a record that authors the key
+	// EMPTY is indistinguishable here from one that omits it — and only the
+	// first is retail's building case. Decider: give the compiler a
+	// raw-presence flag for `unitname` (the string accessor already reports
+	// found-versus-defaulted [02 §4 "Accessor table"]) and read that instead.
 	if ctx != nil && ctx.catalog != nil {
 		if def, ok := ctx.catalog.Unit(content.CanonicalKey(name)); ok && def != nil {
 			return def.UnitName == ""
@@ -498,7 +508,7 @@ func handleA(token string, ctx *interpCtx) {
 	if id == 0 {
 		return
 	}
-	// Retired (WU-19-4): this carried a TODO(question) saying `AttackUType` had
+	// Retired (WU-19-4): this carried an open-question marker saying `AttackUType` had
 	// no runtime consumer, so an authored attack-by-type order was admitted and
 	// never executed, and that the acquisition rule was unknown. Both halves
 	// are closed: [04 R-ORD-01 §3] gives the row (phase 0 `deadline RNG(90)+1`,
@@ -739,11 +749,21 @@ func handleO(token string, ctx *interpCtx) {
 			d2 = int64(fv)
 		}
 	}
-	// Writes two 2-bit fields of the unit flag word: bits 18-19 ← d1 &3 and
-	// bits 20-21 ← d2 &3 per mask 0xffc3ffff [04 §3.6] [P0-06].
-	// TODO(question): o-verb bits 17-20 vs 18-21 conflict; using 18-21 per mask 0xffc3ffff
-	ctx.unit.Flags &^= (0x3 << 18) | (0x3 << 20)         // mask 0xffc3ffff => bits 18-21
-	ctx.unit.Flags |= uint32(((d2&3)<<2)|(d1&3)) << 0x12 // shift 0x12 = 18 [P0-06]
+	// Writes the two standing-order fields of the unit state word: the standing
+	// move field takes d1&3 and the standing fire field takes d2&3 [04 §3.6]
+	// [P0-06]. Those two fields are bits 18-19 and 20-21 everywhere else in doc
+	// 04 — the COB port table [04 §"Port table" port 2], the classifier's
+	// rewrite [08 R-AI-01 §10] and the factory's copy onto a product — so this
+	// site writes there and the fields the mission verb sets are the fields the
+	// rest of the engine reads.
+	//
+	// TODO(question): doc 04's mission-verb row for `o d1,d2` alone says bits
+	// 17-18 and 19-20, one lower than every other reader of the same two
+	// fields. One of the two readings is off by one. Decider: a static trace of
+	// the `o` handler's clear mask against the port-2 read, with the correction
+	// written into whichever of the two doc 04 sites is wrong.
+	ctx.unit.Flags &^= (0x3 << 18) | (0x3 << 20)
+	ctx.unit.Flags |= uint32(((d2&3)<<2)|(d1&3)) << 18
 	// No order queued and no issued marker [04 §3.6] C10.
 }
 

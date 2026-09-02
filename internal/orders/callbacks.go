@@ -16,7 +16,7 @@ import (
 // Weapon-slot control-byte bits [R-ORDER-02 §2].
 //
 // Corrected 2026-08-31 [04 R-ORD-01 §7]. `slotControlAssigned` stood here as
-// `1 << 1` read off the slot's **Flags** word, with a TODO(T25) saying bit 4's
+// `1 << 1` read off the slot's **Flags** word, with an accepted-blocked marker saying bit 4's
 // semantic name was open. Both are now traced: bits 1 and 4 are two bits of one
 // control byte — bit 1 is *the slot is enabled* and bit 4 is the inhibit latch
 // — so reading bit 1 from Flags and bit 4 from OrderControl was reading one

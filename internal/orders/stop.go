@@ -39,7 +39,7 @@ func stopHandler(u *units.Unit, _ *Node, _ uint32, tick uint32) Code {
 // ("gate = 0", "gate |= 0xE0") [04 R-ORD-01 §1][04 §3.2]. `Stop`'s row states
 // none, so the record is dispatchable on its next visit.
 //
-// Retired (WU-19-4): this carried a TODO(T25) saying the spawned record was
+// Retired (WU-19-4): this carried an accepted-blocked marker saying the spawned record was
 // never freed, because `VTOL_LandIfCan`'s executor lives in internal/movement
 // ([04 R-AIR-01 §6]) and its touchdown was not published back to the pump, so
 // the record parked at the head until some non-queued order purged it. The

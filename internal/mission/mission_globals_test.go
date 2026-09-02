@@ -311,3 +311,31 @@ func TestFallbackCensusEnsuresPresent(t *testing.T) {
 		}
 	}
 }
+
+// TestMissionDescriptionAuthoredEmptyStaysEmpty locks the one accessor
+// asymmetry [02 §4 "Accessor table"] names explicitly: the string accessor
+// copies the caller's default only when the key is ABSENT and does a bounded
+// copy of the stored text when it is PRESENT, reporting which path it took, so
+// "a string field can distinguish an authored zero from an absent key". The
+// relationship under test is therefore between the two cases, not the literal:
+// an absent key yields the fallback, an authored-empty one does not.
+func TestMissionDescriptionAuthoredEmptyStaysEmpty(t *testing.T) {
+	absent := DecodeMissionGlobals(mustParseGlobalsTDF(t, `[GlobalHeader]
+{
+}
+`))
+	authoredEmpty := DecodeMissionGlobals(mustParseGlobalsTDF(t, `[GlobalHeader]
+{
+ missiondescription=;
+}
+`))
+	if absent.MissionDescription != "No description available" {
+		t.Fatalf("absent key must take the caller default [02 §4]; got %q", absent.MissionDescription)
+	}
+	if authoredEmpty.MissionDescription == absent.MissionDescription {
+		t.Fatalf("an authored-empty missiondescription took the missing-key default: the two accessor paths must differ [02 §4]")
+	}
+	if authoredEmpty.MissionDescription != "" {
+		t.Fatalf("a present key is a bounded copy of the stored text [02 §4]; got %q", authoredEmpty.MissionDescription)
+	}
+}

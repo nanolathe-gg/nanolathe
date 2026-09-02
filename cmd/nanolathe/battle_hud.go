@@ -687,12 +687,13 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	if b != nil {
 		b.drawBuildGhost(c)
 		if frameOK && cur != nil {
-			// TODO(question): retail's third full-mask source is the pointer-hover
-			// unit id, the same word the footer's first hover source reads
-			// [R-P0-11 §3][R-HUD-03 §1]. The committed frame does not publish it
-			// yet (WU-16-6 owns that publication), so the authoritative focus
-			// handle stands in; do not consult the live unit pool or the pointer
-			// picker from here.
+			// Unimplemented: retail's third full-mask source is the
+			// pointer-hover unit id, the same word the footer's first hover
+			// source reads [R-P0-11 §3][R-HUD-03 §1]. The committed frame does
+			// not publish it (WU-16-6 owns that publication), so the
+			// authoritative focus handle stands in. Do not consult the live unit
+			// pool or the pointer picker from here — that would breach I6.
+			// See PLAN 19 §2.4.
 			drawQueueOverlay(c, b, cur, cur.Tick, b.battleState().Input.ShiftHeld, cur.Selection.LocalPlayer, cur.Selection.Primary)
 		}
 	}

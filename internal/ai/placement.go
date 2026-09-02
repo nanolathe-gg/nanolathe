@@ -97,9 +97,11 @@ func stepTowardCenter(originX, originZ, centerX, centerZ, radius numeric.Fixed) 
 
 // extractorHelperA is retained as a fixture adapter. Production supplies the
 // exact root origin directly to retailExtractorHelperA [08 R-AI-03 §3].
-// TODO(question): retail omits the exhaustive candidate row-sign test. A
-// static trace of its negative-row address or a top-row retail probe decides
-// whether it rejects, reads preceding storage, or faults [08 R-AI-03 §6].
+// TODO(question): retail omits the exhaustive candidate row-sign test. Decider:
+// a static trace of the helper's negative-row branch, or a top-row retail
+// probe, settling whether it rejects, reads preceding storage, or faults. The
+// placement geometry residual is still listed open in [08 R-P0-05 §8]; the
+// finding belongs in [08 R-AI-03 §6].
 func extractorHelperA(m *Manager, defKey string, surfaceMetal int32, terrain *world.Terrain) PlacementResult {
 	_ = surfaceMetal
 	pd, failure := resolveRetailPlacementDef(m, defKey)

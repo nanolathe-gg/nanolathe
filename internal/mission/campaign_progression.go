@@ -11,9 +11,10 @@ import (
 // contiguous MISSION0..N walk until first gap [08 "Campaign discovery"] is
 // the source of truth, with provenance preserved from the VFS. The check is
 // presentation-safe and never invents a mission.
-// Progression is linear next = cur+1 [07 §11] [08 "Progression"]; any
-// branching, side-specific, or registry-gated unlock beyond that is not
-// established and is TODO(question).
+// Progression is linear: retail's advance helper "succeeds only when
+// `count > index + 1`, then increments the index" and neither it nor the
+// has-mission helper tests the W/L marks [08 R-CAMP-01 §1 "Index helpers"].
+// `next < len(c.Missions)` is that same comparison.
 // Returns (nextIdx, true) when next exists, (0,false) when campaign complete
 // or on error. Caller should treat false as campaign-complete and return to menu.
 func NextCampaignMission(fs vfs.FSOps, campaignPath string, curIdx int) (int, bool, error) {
@@ -61,8 +62,18 @@ func CampaignMissionCount(fs vfs.FSOps, campaignPath string) (int, error) {
 	return len(c.Missions), nil
 }
 
-// TODO(question): retail behavior beyond linear index+1 advance not established.
-// Covers: branching progression, side-gated campaigns, AllMissions registry bit
-// unlock gating, and whether losing Continue re-presents briefing or remains at
-// map screen [08 "Progression"] [P0-05] [07 §11]. For now losing Continue
-// retains main-menu return; see frontend.go // TODO(question) losing path.
+// There is no branching, side-gated, or registry-gated advance to add here.
+// [08 R-CAMP-01 §1 "Index helpers"] is exhaustive for the campaign record:
+// advance is `count > index + 1` and the W/L marks are not consulted, so
+// "progression by outcome is decided by the end-mission screen, not by the
+// record". The mission-list build counts every mission and neither the
+// new-game panel nor the end-mission screen filters it by the `AllMissions`
+// registry bit [08 "Progression"]. The results screen's route is the authored
+// `Start` control when progression has a next mission and `MainMenu`
+// otherwise — the same route after a win and after a loss; only the outcome
+// copy differs [08 R-CAMP-01 §6][07 §11].
+//
+// The one residual of the all-missions bit is the `AnyMsn` toggle's listbox
+// selection effect, which is a front-end listbox question decided by manual
+// retail observation, not a progression rule [08 "Missing and unknown" §"Sessions
+// and campaign"].

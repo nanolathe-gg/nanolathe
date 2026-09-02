@@ -117,10 +117,12 @@ func cursorForBuildSite(valid bool) int {
 // and the contextual branch [07 §8]: the unit belongs to the viewer and has
 // finished building.
 //
-// TODO(question): retail also requires the runtime active-state bit `0x20` and
-// an empty current-task field [07 §8][07 §9]. The active-state bit is distinct
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// the runtime flag word is reconciled with [07 §9].
+// Unimplemented: [07 §8]/[07 §9] establish two further gates — the runtime
+// active-state bit `0x20` and an empty current-task field. That active-state
+// bit is a bit of the runtime status word, distinct from the script-owned
+// INBUILDSTANCE byte the COB port writes, and this build's unit record does not
+// separate the two. Both gates land together once the runtime flag word is
+// reconciled with [07 §9]. See PLAN 19 §2.4.
 func isInspectable(t *units.Unit, viewer uint8) bool {
 	if t == nil || !t.Alive {
 		return false

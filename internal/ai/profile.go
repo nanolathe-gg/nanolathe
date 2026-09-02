@@ -13,8 +13,9 @@ import (
 )
 
 // Difficulty selects the plan gate [08 "Established AI-facing data and rooted planner"] [PLAN 11 C4].
-// Valid values are any/easy/medium/hard; the profile grammar treats any
-// unknown plan name as resetting the gate (TODO(question) in content/ai_profile.go).
+// Valid values are any/easy/medium/hard. A `plan` directive clears the gate
+// first and sets it only on a match, so an unknown plan name leaves the gate
+// clear and disables every directive after it [08 R-AI-01 §12].
 type Difficulty string
 
 const (
@@ -60,11 +61,18 @@ type Profile struct {
 // into the active profile tables used by selection. Each weight directive is
 // applied in source order as int32(float32(current)*factor), then clamped to
 // [0,100]; embedded limit directives are registered in the active per-type
-// limit table. Their precedence relative to profile-file limit directives is
-// unresolved: TODO(question): trace the combined profile/unit load path to
-// establish which source wins. ai_limit is intentionally not read: research
-// bounds it as having no semantic runtime reader [08 "Established AI-facing
-// data and rooted planner"].
+// limit table.
+//
+// Unimplemented: [08 R-AI-01 §12] establishes the precedence — the profile file
+// wins whenever its `weight`/`limit` named a type exactly, because the exact
+// naming sets that type's weight lock or limit lock and the two per-definition
+// passes skip locked types. A category name locks nothing, so per-definition
+// text still applies there. Both lock vectors, the exact-versus-category name
+// matcher, and the `downloadable` gate on the per-definition passes are
+// missing here — see PLAN 19 §2.4.
+//
+// `ai_limit` is intentionally not read: the limit pass re-reads `ai_weight`, a
+// retail defect that leaves `ai_limit` with no reader at all [08 R-AI-01 §12].
 func (p *Profile) ApplyUnitDefinitions(catalog *content.Catalog) {
 	if p == nil || catalog == nil || p.appliedCatalog == catalog {
 		return
@@ -380,8 +388,10 @@ func LoadProfile(fs vfs.FSOps, name string) (*Profile, error) {
 }
 
 // lastValidPlan scans raw profile text for the last valid `plan` directive.
-// It mirrors the gate logic of content.ParseAIProfile where unknown plan names
-// reset the gate (TODO(question) in content/ai_profile.go) [PLAN 11 C4].
+// A `plan` clears the gate and sets it only on a match, so an unknown name
+// leaves the gate clear [08 R-AI-01 §12]; this helper reports the last name
+// that would have opened it, which is a different question from the gate state
+// and is why an unknown name does not clear `last` [PLAN 11 C4].
 func lastValidPlan(data []byte) Difficulty {
 	text := string(data)
 	lines := strings.Split(text, "\n")
@@ -410,17 +420,10 @@ func lastValidPlan(data []byte) Difficulty {
 		cand := Difficulty(strings.ToLower(strings.TrimSpace(fields[1])))
 		if isValidDifficulty(cand) {
 			last = cand
-		} else {
-			// Unknown plan resets gate per content/ai_profile.go TODO(question):
-			// does the executable reset the current gate or retain last valid?
-			// Content resets to "" (no plan) and we mirror that by clearing last?
-			// However for active selection we want last *valid* plan, not reset.
-			// So we keep last valid unchanged; gate reset is handled by parser
-			// not needing to clear last.
-			// To preserve per-plan isolation test where unknown weight is ignored
-			// but later hard still valid, we keep last valid separately.
-			// Do not update last on unknown.
 		}
+		// An unknown name leaves the gate clear in the parser [08 R-AI-01 §12];
+		// here it leaves `last` alone, because this helper answers "which plan
+		// tables did the file ever open", not "is the gate open now".
 	}
 	return last
 }

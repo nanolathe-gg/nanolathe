@@ -22,8 +22,12 @@ type MinimapHUD struct {
 // no synthetic canvas-sized rectangle is installed [07 §6][07 §10].
 func NewMinimapHUD(anchors Anchors, fallback Rect) *MinimapHUD {
 	_ = anchors
-	// TODO(question): identify the authored rail minimap anchor in the GUI
-	// surface; the 30 side anchors contain no minimap record [07 §6].
+	// TODO(question): where is the minimap's rectangle authored? An asset
+	// census of the 30 side anchors finds no minimap record [07 §6], so either
+	// it is authored on a different surface or retail places it from a
+	// compiled-in rectangle. Decider: a static trace of the minimap draw's
+	// rectangle source. The caller's fallback rectangle stands meanwhile, and
+	// the anchors argument is deliberately unread rather than matched loosely.
 	r := fallback
 	return &MinimapHUD{
 		Rect:           r,

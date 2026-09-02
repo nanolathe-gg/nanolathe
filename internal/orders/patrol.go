@@ -50,7 +50,7 @@ package orders
 // through that seam; the takeoff preamble it needs is `airWorkPreamble`, which
 // this package already owns.
 //
-// Corrected 2026-08-31: this header carried a TODO(T25) saying `VTOL_Patrol`
+// Corrected 2026-08-31: this header carried an accepted-blocked marker saying `VTOL_Patrol`
 // "has no executor there yet" and left the marker geometry unbuilt, so an air
 // patrol installed no payload at all — it armed gate 0xE0 and waited for an
 // arrival bit that nothing could raise. Since the point installer now takes the
@@ -323,7 +323,7 @@ func vtolMoveHandler(u *units.Unit, n *Node, _ uint32, _ uint32) Code {
 // through the corner rather than braking into it. Waypoints closer together
 // than about 336 units still rotate every visit.
 //
-// Corrected (WU-19-4): this header carried a TODO(T25) saying the low-health
+// Corrected (WU-19-4): this header carried an accepted-blocked marker saying the low-health
 // pad seek "is not implemented here", because its candidate list was thought to
 // be an air-base enumeration internal/movement owns and its draw had to travel
 // with that list. The list is the binding's own live-unit enumerator walked

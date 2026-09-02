@@ -763,6 +763,12 @@ against a plausible-looking default. Status (2026-09-01): closed-unreachable-on-
 negative) stock map, so retail's cancel-all bound cannot be observed on
 shipped content; the Decision above still stands as the clone-retail
 contract for any future or modded map that does author `gravity = 0`.
+WU-19-16 (2026-09-01) removed the last thing standing between such a map and
+that contract: `internal/world/terrain.go` tested key PRESENCE, so an OMITTED
+`gravity` took the 0x1FDB fallback — reading an omission like a negative, where
+[03 §2.2] C4's correction against [02 R-MAP-01] says an omitted key gets the OTA
+parser's integer default `0`, which passes the `>= 0` test. Wind and
+`tidalstrength` had the same inversion and were corrected with it.
 
 ## SC24 — Retail never compiles loose `units\*.FBI` or parses loose `weapons\*.tdf`
 

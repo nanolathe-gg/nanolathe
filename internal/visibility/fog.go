@@ -148,7 +148,10 @@ func (f *FogCache) SetChannel(x, y int32, c0, c1 uint8) {
 // when viewport extends beyond map [03 §3.3]. Corner→bit 1=NW,2=NE,4=SW,8=SE remains supported inference pending asymmetric probe [03 §3.3].
 // Camera residues/offX are used for viewport-sized cache alignment; for Nanolathe's map-sized cache we generate for the whole map and
 // let BuildFogOps handle viewport clipping via hard 32 edges [03 §3.3] C13 — viewport edge forcing is therefore a render-time concern
-// and the cache remains map-aligned for simplicity (divergence documented as TODO(question) for exact viewport-sized residue alignment).
+// and the cache remains map-aligned. That is a deliberate layout divergence, not
+// an open retail question: [03 §3.3] establishes the residues and the hard-32
+// edge forcing, and BuildFogOps applies both at viewport clip time, so a
+// map-aligned cache produces the same ops a viewport-aligned one would.
 func (s *Service) RebuildFog(cameraX, cameraY int32) {
 	if s == nil || s.fog.ch0 == nil || s.mode.FogCacheValid() {
 		return

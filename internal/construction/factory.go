@@ -1474,8 +1474,12 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, r
 		return nil, fmt.Errorf("construction: nil product def")
 	}
 	// Enforce per-def limit ONLY at allocation [05 C23][05 "Unit creation and limits"].
-	// Per-def limit -1 sentinel means unlimited [P0-15][P0-16]; 0 from Go zero-value also treated as unlimited for fixtures.
-	// TODO(question): Genuine limit 0 (no units allowed) vs Go zero-value unlimited not distinguished; fixtures use explicit -1 where needed.
+	// Per-def limit -1 is the unlimited sentinel [P0-15][P0-16]; a 0 is treated
+	// as unlimited too, because in a single-player build it can only be Go's
+	// zero value — [05 R-SHARE-01 §9] establishes the definition parser writes
+	// -1 into every definition and that the one writer of 0 is the multiplayer
+	// restriction apply step, which a skirmish or campaign battle never runs.
+	// See perDefLimit for the unimplemented half.
 	if lim, limited := perDefLimit(def); limited && lim > 0 {
 		cnt := 0
 		if s.World != nil {

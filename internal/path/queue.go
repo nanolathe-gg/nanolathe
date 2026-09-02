@@ -203,8 +203,13 @@ func DescribeGoal(goal Goal) GoalTrace {
 		// Unknown external Goal implementations are retained as an explicit
 		// residual; no pointer formatting or guessed parameters enter a
 		// diagnostic hash.
-		// TODO(question): external Goal parameter encoding is not owned by path;
-		// the typed residual remains Unknown until its owner supplies an adapter.
+		// This is not a retail unknown: the three A*-facing goal families are
+		// closed and exhaustive [04 R-PATH-01 §9], and all three are typed
+		// above. A Goal implemented outside this package has no parameter
+		// encoding path knows, so it hashes as an explicit typed residual
+		// rather than through pointer formatting or guessed parameters. An
+		// external implementer that wants a stable trace supplies its own
+		// adapter.
 		return GoalTrace{Unknown: true}
 	}
 }

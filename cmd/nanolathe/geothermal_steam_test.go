@@ -66,7 +66,9 @@ func TestGeothermalVentSteamsOnGreatDivide(t *testing.T) {
 		if f == nil {
 			continue
 		}
-		for _, e := range f.Effects {
+		// The vent's puffs reach presentation on the committed frame's own
+		// strip channel, in the composer's walk order [03 §1][03 R-STRIP-01 §2].
+		for _, e := range f.Strips {
 			if e.Strip != 4 {
 				continue
 			}
@@ -84,8 +86,8 @@ func TestGeothermalVentSteamsOnGreatDivide(t *testing.T) {
 			if dx > 16 || dz > 16 {
 				t.Fatalf("a steam puff is %d,%d world units from its vent at (%d,%d); the drift scale is wrong again", dx, dz, ventX, ventZ)
 			}
-			if e.Graphic == "" {
-				t.Fatalf("the mirrored puff carries no graphic identity, so no composer can resolve it")
+			if e.Entry == "" || e.Bank == "" {
+				t.Fatalf("the mirrored puff carries no (bank, entry) identity pair, so no composer can resolve it [06 R-WFX-01 §1]")
 			}
 		}
 	}
@@ -107,7 +109,7 @@ func TestGeothermalVentSteamsOnGreatDivide(t *testing.T) {
 	}
 	late, farthest := 0, int64(0)
 	if f := sess.Snapshot.Current(); f != nil {
-		for _, e := range f.Effects {
+		for _, e := range f.Strips {
 			if e.Strip != 4 {
 				continue
 			}

@@ -160,7 +160,7 @@ func MinimapPointerWorld(layout camera.Minimap, dst hud.Rect, playW, playH int32
 // hands it to the canonical camera writer — there is one recenter, in one
 // place, and it stays right when the clamp's floor changes.
 //
-// The former drag arm is gone with its TODO(question). [07 R-CAM-01 §11]
+// The former drag arm and its marker are gone. [07 R-CAM-01 §11]
 // establishes that the minimap has no drag branch of its own: while the latch
 // is held every host frame re-runs this same jump from the pointer record, so
 // dragging across the minimap pans continuously. The "alternate drag branch"

@@ -390,3 +390,67 @@ func TestLegacyTerrainLoads(t *testing.T) {
 		t.Fatalf("ApplySchema overwrote legacy per-cell metal %d -> %d", before, got)
 	}
 }
+
+// TestCanonicalGlobalsTreatOmissionAsTheParserDefault locks [03 §2.2] C3/C4 as
+// its 2026-08-29 correction against [02 R-MAP-01] states it: an OMITTED OTA key
+// is not "unparsed". Once a `[GlobalHeader]` has been parsed, the OTA parser
+// stores the key's own default — integer 0, float 0.0 — and that default passes
+// the `>= 0` test like any authored value. The 100/2000 wind pair, the 0x1FDB
+// gravity and the 0.5 tidal stand only for a NEGATIVE authored value or for no
+// parsed `[GlobalHeader]` at all.
+//
+// The relationship, not a census: an omission and a negative must NOT resolve
+// alike, and the absent case must agree with an explicit authored zero.
+func TestCanonicalGlobalsTreatOmissionAsTheParserDefault(t *testing.T) {
+	parsed := func(mutate func(*content.MapHeader)) *content.MapHeader {
+		mh := &content.MapHeader{RawOTA: &formats.OTA{Global: &formats.Section{}}}
+		if mutate != nil {
+			mutate(mh)
+		}
+		return mh
+	}
+
+	// Omitted keys: content.MapHeader compiles each to the parser's default 0.
+	omitted := parsed(nil)
+	wMin, wMax, grav, authored := canonicalWindAndGravity(omitted)
+	if wMin != 0 || wMax != 0 {
+		t.Fatalf("omitted wind = %d/%d, want 0/0 (parser default passes >= 0) [03 §2.2 C3]", wMin, wMax)
+	}
+	if grav != 0 || authored != 0 {
+		t.Fatalf("omitted gravity = %d (authored %d), want 0/0 [03 §2.2 C4]", grav, authored)
+	}
+	if got := canonicalTidal(omitted); got != 0 {
+		t.Fatalf("omitted tidalstrength = %d, want 0 [03 §2.2 C4]", got)
+	}
+
+	// A negative authored value is the case the fallbacks are for, and it must
+	// differ from the omission above.
+	negative := parsed(func(mh *content.MapHeader) {
+		mh.MinWindSpeed, mh.MaxWindSpeed, mh.Gravity, mh.TidalStrength = -1, -1, -1, -1
+	})
+	wMin, wMax, grav, authored = canonicalWindAndGravity(negative)
+	if wMin != 100 || wMax != 2000 {
+		t.Fatalf("negative wind = %d/%d, want 100/2000 [03 §2.2 C3]", wMin, wMax)
+	}
+	if grav != numeric.Fixed(0x1FDB) || authored != 112 {
+		t.Fatalf("negative gravity = %d (authored %d), want 0x1FDB/112 [03 §2.2 C4]", grav, authored)
+	}
+	if got := canonicalTidal(negative); got != numeric.Fixed(32768) {
+		t.Fatalf("negative tidalstrength = %d, want 32768 (0.5) [03 §2.2 C4]", got)
+	}
+
+	// No `[GlobalHeader]` parsed at all takes the same fallbacks as a negative.
+	wMin, wMax, grav, authored = canonicalWindAndGravity(nil)
+	if wMin != 100 || wMax != 2000 || grav != numeric.Fixed(0x1FDB) || authored != 112 {
+		t.Fatalf("unparsed header = %d/%d g=%d a=%d, want 100/2000/0x1FDB/112 [03 §2.2]", wMin, wMax, grav, authored)
+	}
+	if got := canonicalTidal(nil); got != numeric.Fixed(32768) {
+		t.Fatalf("unparsed tidalstrength = %d, want 32768 [03 §2.2 C4]", got)
+	}
+
+	// A stock authored value still converts by *65536/900 [fmt ota].
+	stock := parsed(func(mh *content.MapHeader) { mh.Gravity = 112 })
+	if _, _, g, a := canonicalWindAndGravity(stock); g != numeric.Fixed(112*65536/900) || a != 112 {
+		t.Fatalf("authored 112 gave %d (authored %d)", g, a)
+	}
+}

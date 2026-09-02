@@ -450,9 +450,12 @@ func BuildUnitDraw(m *model.Model, base []model.PieceState, heading, pitch, bank
 	worldPos := [3]numeric.Fixed{current.X, current.Y, current.Z}
 	// BuildPieceDraws is the one traversal. Derive the public transform view from
 	// its records so a frame cannot apply the hierarchy twice [03 §2.4] C21.
-	// TODO(question): OrientationCache is presentation bookkeeping only; the
-	// published draw result is not retained across frames, so every draw still
-	// composes from pristine model data despite the cache threshold [03 §5.2].
+	// OrientationCache is presentation bookkeeping only, and deliberately so:
+	// the published draw result is not retained across frames, so every draw
+	// composes from pristine model data whatever the cache threshold says
+	// [03 §5.2]. That is a cost choice on our side, not an open question about
+	// retail — retail's own cached half is the composition image of [03 §5.4],
+	// which this renderer does not keep.
 	// BMcode=0 selects the shaded piece renderer only while the global
 	// display option is enabled; all other units take the no-SHD path
 	// [R-RND-02A].

@@ -15,9 +15,10 @@ import (
 // occurs only when gate != 0; otherwise the latch is forced to normal (1)
 // [07 §9]. Default when no predicate matches is MOVE (2) [07 §9].
 //
-// TODO(question) latch 0xB (TELEPORT) and 0xE (MOBILEBUILD) can be armed by
-// paths other than the button chain [07 §9]; only the button path is wired
-// here, so this parser never produces those values.
+// Latches 0xB (TELEPORT) and 0xE (MOBILEBUILD) are armed by paths other than
+// the button chain [07 §9] — MOBILEBUILD by the battle-HUD build-button handler
+// — so this parser correctly never produces them. That is the section's own
+// division of labour, not a gap in this function.
 func ParseButtonLatch(name string, gate uint32) input.Latch {
 	// Gate zero forces normal/idle [07 §9].
 	if gate == 0 {

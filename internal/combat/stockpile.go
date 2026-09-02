@@ -87,11 +87,19 @@ func IsValidStockpileSlotIdx(slotIdx int32) bool {
 	return slotIdx >= 0 && slotIdx < NumSlots // 0..2 [P1-09 §2.3]
 }
 
-// QueueProducers enumerates the BUILDWEAPON queue producers per [P1-09 §2.1]:
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// plus fractional carry on cancel (progress retained in economy buckets,
-// not refunded) [P1-09 §5].
-var QueueProducers = []string{"[analysis omitted] HUD MAKENUKE/MAKEANTI", "[analysis omitted] Bw parser", "0x12 build", "0x2C completion"} // [P1-09 §2.1]
+// QueueProducers names the four producers that push a BUILDWEAPON entry onto a
+// unit's secondary production queue [06 §11.1][P1-09 §2.1]. Cancelling a
+// partially built round unlinks the node and leaves its fractional carry in the
+// economy buckets rather than refunding it [P1-09 §5].
+//
+// The names are the producers, not their addresses: the first two literals used
+// to carry executable addresses.
+var QueueProducers = []string{
+	"HUD MAKENUKE/MAKEANTI order alias", // [06 §11.1] the two order aliases
+	"initial-mission Bw verb parser",    // [P1-09 §2.1]
+	"network build decoder 0x12",        // [P1-09 §2.1]
+	"network completion decoder 0x2C",   // [P1-09 §2.1]
+}
 
 // StockpileCostDelta computes the admitted delta for one resource for this visit
 // per [06 §11.1] [P1-09 §2.4]:

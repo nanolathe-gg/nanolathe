@@ -469,6 +469,62 @@ func gravityFromAuthored(authored int32) numeric.Fixed {
 	return numeric.Fixed(int64(authored) * 65536 / 900)
 }
 
+// The canonical map's wind, gravity and tidal rules [03 §2.2] C3/C4.
+//
+// Corrected 2026-09-01 (WU-19-16). [03 §2.2]'s correction against
+// [02 R-MAP-01] settles what "absent" means, and this build had it inverted:
+// an OMITTED key is not "unparsed". When a `[GlobalHeader]` was parsed at all,
+// the OTA parser stores the key's own default — integer 0, float 0.0 — and
+// that default then passes the `>= 0` test exactly like an authored value.
+// The "default when absent" column applies only to a NEGATIVE authored value,
+// to legacy terrain, or to a session with no parsed `[GlobalHeader]` (the
+// loader prologue seeds -1 there). This build tested key PRESENCE, so an
+// omitted key took the fallback — reading an omission like a negative. A
+// canonical map that omits `gravity` therefore runs at gravity 0, not 112,
+// which is what makes `AirStrike` cancel there ([04 R-AIR-01 §8], SC23).
+//
+// content.MapHeader already compiles each absent key to the parser's own
+// default ([02 "Map files"]), so no presence probe is needed. All 275 stock
+// OTAs author all four keys [RWU-19-8 census], so this is unreachable on stock
+// content.
+func canonicalGlobals(mh *content.MapHeader) *content.MapHeader {
+	if mh == nil || mh.RawOTA == nil || mh.RawOTA.Global == nil {
+		return nil
+	}
+	return mh
+}
+
+// canonicalTidal is the mission's `tidalstrength` unless it is < 0.0 (strict),
+// else 0.5 [03 §2.2] C4.
+func canonicalTidal(mh *content.MapHeader) numeric.Fixed {
+	g := canonicalGlobals(mh)
+	if g == nil || g.TidalStrength < 0 {
+		return numeric.Fixed(32768) // 0.5 * 65536
+	}
+	return tidalFromFloat(g.TidalStrength)
+}
+
+// canonicalWindAndGravity resolves the canonical map's wind pair and gravity.
+// The hard-coded 100/2000 and the 0x1FDB gravity fallback stand only for a
+// negative authored value or an unparsed `[GlobalHeader]` [03 §2.2] C3/C4.
+// 0x1FDB = 112*65536/900 = 8155 [fmt ota].
+func canonicalWindAndGravity(mh *content.MapHeader) (windMin, windMax int32, gravity numeric.Fixed, authoredGravity int32) {
+	windMin, windMax = 100, 2000
+	g := canonicalGlobals(mh)
+	if g != nil {
+		if g.MinWindSpeed >= 0 {
+			windMin = g.MinWindSpeed
+		}
+		if g.MaxWindSpeed >= 0 {
+			windMax = g.MaxWindSpeed
+		}
+		if g.Gravity >= 0 {
+			return windMin, windMax, gravityFromAuthored(g.Gravity), g.Gravity
+		}
+	}
+	return windMin, windMax, numeric.Fixed(0x1FDB), 112
+}
+
 // tidalFromFloat converts authored tidalstrength float to Fixed 16.16
 // via *65536 truncated toward zero [03 §2.2].
 func tidalFromFloat(v float64) numeric.Fixed {
@@ -539,19 +595,7 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
 	var windMin, windMax int32
 	var gravity numeric.Fixed
 	var authoredGravity int32
-	var tidal numeric.Fixed
-	// Tidal: OTA tidalstrength, fallback 0.5 [03 §2.2] C4.
-	// Presence matters: authored 0 vs missing.
-	if mh != nil && mh.RawOTA != nil && mh.RawOTA.Global != nil {
-		if _, ok := mh.RawOTA.Global.RawValue("tidalstrength"); ok {
-			// Authored value present; 0 is valid explicit 0.
-			tidal = tidalFromFloat(mh.TidalStrength)
-		} else {
-			tidal = numeric.Fixed(32768) // 0.5 *65536 [03 §2.2] C4
-		}
-	} else {
-		tidal = numeric.Fixed(32768) // fallback when no catalog/OTA [03 §2.2] C4
-	}
+	tidal := canonicalTidal(mh)
 	if ver == VersionLegacy {
 		// Legacy (0x1020) carries minimum wind, maximum wind and gravity in
 		// its own header and always uses those values — the OTA overrides do
@@ -567,40 +611,7 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
 		// [03 §2.2] C3: canonical hard-codes gravity 0, wind 100/2000, and an
 		// authored non-negative OTA wind/gravity overrides the terrain value —
 		// for canonical maps only.
-		windMin = 100
-		windMax = 2000
-		gravity = numeric.Fixed(0)
-		gravitySupplied := false
-		if mh != nil && mh.RawOTA != nil && mh.RawOTA.Global != nil {
-			g := mh.RawOTA.Global
-			if _, ok := g.RawValue("minwindspeed"); ok {
-				if mh.MinWindSpeed >= 0 {
-					windMin = mh.MinWindSpeed
-				}
-			}
-			if _, ok := g.RawValue("maxwindspeed"); ok {
-				if mh.MaxWindSpeed >= 0 {
-					windMax = mh.MaxWindSpeed
-				}
-			}
-			if _, ok := g.RawValue("gravity"); ok {
-				if mh.Gravity >= 0 {
-					authoredGravity = mh.Gravity
-					gravity = gravityFromAuthored(mh.Gravity)
-					gravitySupplied = true
-				} else {
-					gravitySupplied = false
-				}
-			} else {
-				gravitySupplied = false
-			}
-		}
-		if !gravitySupplied {
-			// [03 §2.2] C4: when neither source supplies gravity fallback to 0x1FDB.
-			// 0x1FDB = 112*65536/900 = 8155 [fmt ota].
-			gravity = numeric.Fixed(0x1FDB)
-			authoredGravity = 112
-		}
+		windMin, windMax, gravity, authoredGravity = canonicalWindAndGravity(mh)
 	}
 	// Plot expansion goes through the one path in plot.go [03 §2.2], [GAP T14].
 	plot := ExpandPlot(tnt.Attributes, int(cellW), int(cellH))

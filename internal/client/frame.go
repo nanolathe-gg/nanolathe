@@ -51,7 +51,11 @@ func projectileVisible(v frame.VisibilityView, localPlayer uint8) func(frame.Pro
 // content cannot be exposed by an incomplete publication.
 func fogUnexploredUnit(fog frame.FogView, u frame.UnitView) bool {
 	if !fog.Valid {
-		// TODO(question): whether retail emits a pre-first-frame fog view is not established; fail closed until a committed cache exists [03 §3.3].
+		// Retail has no pre-first-frame state to ask about: battle entry builds
+		// the world, and with it the fog cache, before anything is presented
+		// [03 §3.3]. An invalid view here is our own composition ordering, and
+		// treating it as unexplored fails closed rather than revealing units the
+		// local player has not seen.
 		return true
 	}
 	if _, ok := visibilityGridSize(fog.W, fog.H, len(fog.Ch0)); !ok {
@@ -70,7 +74,11 @@ func fogUnexploredUnit(fog frame.FogView, u frame.UnitView) bool {
 // Feature CX/CZ are cell coordinates; fog is per visibility tile (2x2 cells) so tile = cell>>1 [03 §2.1][03 §3.1]. Invalid fog is treated as unexplored so an incomplete publication cannot expose content.
 func fogUnexploredFeature(fog frame.FogView, f frame.FeatureView) bool {
 	if !fog.Valid {
-		// TODO(question): whether retail emits a pre-first-frame fog view is not established; fail closed until a committed cache exists [03 §3.3].
+		// Retail has no pre-first-frame state to ask about: battle entry builds
+		// the world, and with it the fog cache, before anything is presented
+		// [03 §3.3]. An invalid view here is our own composition ordering, and
+		// treating it as unexplored fails closed rather than revealing units the
+		// local player has not seen.
 		return true
 	}
 	if _, ok := visibilityGridSize(fog.W, fog.H, len(fog.Ch0)); !ok {

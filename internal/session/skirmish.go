@@ -17,6 +17,15 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
+// Start-position jitter geometry, in whole map cells [08 "Placement and battle
+// entry"][P0-04]: the random span is the map dimension less startJitterMargin,
+// and the drawn value is inset by startJitterInset (half the margin) so the
+// spawn is never within that many cells of an edge.
+const (
+	startJitterMargin int32 = 160
+	startJitterInset  int32 = 80
+)
+
 // C8 defaults per [02 §3], [GAP T14] and [08 "Skirmish configuration"].
 const (
 	SkirmishMinPlayers            = 2  // [GAP T14] validated 2..10
@@ -737,13 +746,16 @@ func skirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission) err
 	// Wire cargo from i-verb if any scenario units carry attachments (reuses mission helper)
 	wireMissionCargo(s, m)
 	skirmishGrantResourcesDirect(s, cfg)
-	// Initialize sharing thresholds once from rebuilt capacity after units exist [P1-06] [P1-I04].
-	// Note: thresholds are bonus-inclusive because RebuildCapacity includes the
-	// per-player storage bonus.
-	// Retail order is setup pass (0x497C10) before spawn credits/bonus (0x465E30→0x496E90), so
-	// thresholds from capacity BEFORE bonus would be stale (0). We keep bonus-inclusive and emit
-	// TODO(question): confirm whether retail writes thresholds before or after
-	// the storage bonus is applied [02_ledger_exact.md §4.1].
+	// Zero the two sharing thresholds once, after units exist [P1-06] [P1-I04].
+	//
+	// Closed 2026-09-01 (WU-19-16). This carried an open question asking
+	// whether retail writes the thresholds before or after the storage bonus is
+	// applied, and answered it by writing bonus-inclusive values. The question
+	// is moot: [05 R-SHARE-01 §3] establishes both threshold fields are "zeroed
+	// at battle setup and never written again in the reachable image", so
+	// nothing derived from capacity ever reaches them and the ordering cannot
+	// matter. economy.InitShareThresholds already applies the zero writes; this
+	// call site only needs the rebuilt capacity for the settlement that follows.
 	s.InitShareThresholds()
 	return nil
 }
@@ -912,7 +924,10 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 		if commanderErr != nil {
 			return commanderErr
 		}
-		// Sim jitter with degenerate no-advance [P0-04]
+		// Sim jitter with degenerate no-advance [P0-04]. The two literals are
+		// map-cell counts, not record offsets: the draw spans the map minus a
+		// 160-cell margin and is then inset by 80 cells, so a start position
+		// lands at least 80 cells inside each edge.
 		var jx, jz numeric.Fixed
 		// Map dimensions are measured in cells. Non-positive bounds consume no
 		// random value, as required by the random helper contract.
@@ -921,8 +936,8 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 			mapW = s.World.CellW
 			mapH = s.World.CellH
 		}
-		boundW := mapW - 0xA0
-		boundH := mapH - 0xA0
+		boundW := mapW - startJitterMargin
+		boundH := mapH - startJitterMargin
 		var rndW, rndH int32
 		if boundW > 0 && sim != nil {
 			rndW = int32(sim.Uint32n(uint32(boundW)))
@@ -934,8 +949,8 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 		} else {
 			rndH = 0
 		}
-		jx = numeric.Fixed(int32(rndW+0x50) * 65536)
-		jz = numeric.Fixed(int32(rndH+0x50) * 65536)
+		jx = numeric.Fixed((rndW + startJitterInset) * 65536)
+		jz = numeric.Fixed((rndH + startJitterInset) * 65536)
 		x, z := jx, jz
 		y := numeric.Fixed(0)
 		// Try StartPos overwrite if mapping exists [P0-04]
@@ -1068,7 +1083,7 @@ func skirmishGrantResourcesDirect(s *Session, cfg SkirmishConfig) {
 		if !s.Econ.Players[p].Exists {
 			continue
 		}
-		// [05 "Storage capacity"] [02_ledger_exact.md §4.1] [OX P1] per-player storage bonus.
+		// [05 "Storage capacity"] [05 R-ECO-01 §4] [OX P1] per-player storage bonus.
 		// Retail enables the per-player storage bonus and applies a minimum
 		// capacity of 0xC8 (200) to each resource, storing the integer bonus
 		// as a float (truncation toward zero, I3).
@@ -1076,11 +1091,12 @@ func skirmishGrantResourcesDirect(s *Session, cfg SkirmishConfig) {
 		// so that CommitPostSettlement's bonus-inclusive capacity clamp preserves opening 1000/1000
 		// past tick 30/60 [OX P1]. ARM and CORE both get correct values derived from their own startMetal/Energy.
 		s.Econ.Players[p].InstallStorageBonus(cfg.Players[p].Metal, cfg.Players[p].Energy)
-		// Ensure bonus is visible to capacity before first settlement. RebuildCapacity will include it
-		// on next Settle; we also rebuild now so InitShareThresholds after this sees bonus-inclusive capacity.
-		// Threshold ordering remains TODO(question): retail setup pass (0x497C10) precedes spawn credits (0x465E30),
-		// so thresholds written from capacity BEFORE bonus would be stale (0). We choose bonus-inclusive
-		// thresholds (capacity with bonus) and leave TODO if retail writes before bonus [02_ledger_exact.md §4.1].
+		// Ensure bonus is visible to capacity before first settlement.
+		// RebuildCapacity will include it on next Settle; we also rebuild now so
+		// the settlement that follows sees bonus-inclusive capacity. The
+		// threshold-ordering question that stood here is closed: the two
+		// sharing thresholds are zeroed at battle setup and never written again
+		// [05 R-SHARE-01 §3], so the bonus install cannot make them stale.
 		metal := float32(cfg.Players[p].Metal)
 		energy := float32(cfg.Players[p].Energy)
 		if metal != 0 {

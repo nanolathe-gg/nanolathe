@@ -1695,7 +1695,10 @@ func (b *battleSession) toggleDamageBars() {
 // except when a modal menu is active which already suppresses edge separately.
 // This preserves retail's distinction: TALK suppresses arrow but not edge.
 func (b *battleSession) isTalkGUIActive() bool { // [07 §10]
-	// TODO(question): wire real TALK.GUI detection when chat is implemented; for now return false
+	// Chat is out of scope for this build — it is `TALK.GUI` with its own
+	// dialog, focus and recipient rows [07 §5 "Chat"], and a single-player
+	// session drops the packet unsent — so no TALK.GUI is ever active and the
+	// suppression this predicate gates never fires. Not an open question.
 	return false
 }
 
@@ -2523,12 +2526,12 @@ func (b *battleSession) currentTick() uint32 {
 // selection of [07 §9] and the trigger system's eligible-unit test
 // [08 R-TRIG-01 §3] use.
 //
-// TODO(question): two clauses of that predicate are not in the committed frame
-// — the post-capture grace counter, and the "carrier is itself marked a visible
-// carrier" relaxation of the carrier clause. Publishing them is the frame
-// owner's call; until then a carried unit is never selectable and a
-// just-captured one always is. Which frame fields carry the grace counter and
-// the carrier's visible bit would settle it.
+// Unimplemented: two clauses of [08 R-TRIG-01 §3]'s predicate do not cross the
+// frame boundary — the post-capture grace counter, and the "carrier is itself
+// marked a visible carrier" relaxation of the carrier clause. So a carried unit
+// is never selectable here and a just-captured one always is. Publishing the
+// grace counter and the carrier's visible bit is the frame owner's call.
+// See PLAN 19 §2.4.
 func (b *battleSession) ownSelectableUnit(v frame.UnitView) bool {
 	if b == nil || b.sess == nil || v.Slot == 0 {
 		return false

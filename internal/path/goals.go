@@ -20,8 +20,10 @@ package path
 // The annulus radius-unit mismatch (raw authored radii in the heuristic
 // clamp vs >>4-quantized squared radii in arrival) is REAL and reproduced,
 // not fixed. Both sides are documented here with citations.
-// TODO(question): annulus radius-unit mismatch [04 §7.4] — heuristic
-// compares raw radii, arrival compares quantized radii; unresolved.
+// The mismatch is not an open question: [04 §7.4] records it as "real and
+// established as a dual-unit contract ... two unit systems coexist in one
+// family and must be reproduced as-is, not 'fixed'". Reproducing it is the
+// contract, so the sites below carry the citation and no marker.
 
 // octInflated returns the inflated octile 18*max+7*min [04 §7.2] C8.
 // a and b are non-negative distances (|dx|, |dz|).
@@ -90,8 +92,10 @@ func (g *pointGoal) Enumerate(out []Cell) []Cell {
 
 func (g *pointGoal) StartSatisfied(start Cell) bool {
 	// Arrival is a squared-distance test against >>4-quantized radius [04 §7.2].
-	// TODO(question): radius-unit mismatch note — point arrival quantizes,
-	// while point h clamps against raw radius [04 §7.2], [04 §7.4].
+	// Point arrival is "a squared-distance test against a separately stored
+	// quantized radius" while the heuristic clamps against the raw authored
+	// radius [04 §7.2 "Point/radius goals"][04 §7.4]. The two units are the
+	// established contract, not a defect.
 	q := g.radius >> 4 // [04 §7.2] >>4 quantization
 	if q < 0 {
 		q = 0
@@ -115,7 +119,8 @@ type annulusGoal struct {
 // [inner,outer] raw radii: h is zero inside, rises as oct-outer outward
 // and inner-oct inward. Arrival uses >>4-quantized squared radii [04 §7.4].
 // The radius-unit mismatch is reproduced, not fixed.
-// TODO(question): annulus radius-unit mismatch (raw in h, quantized in arrival) [04 §7.4].
+// The raw-in-h, quantized-in-arrival split is the established dual-unit
+// contract of [04 §7.4], reproduced deliberately.
 func AnnulusGoal(center Cell, inner, outer int32) Goal {
 	return &annulusGoal{center: center, inner: inner, outer: outer}
 }
@@ -151,7 +156,8 @@ func (g *annulusGoal) Enumerate(out []Cell) []Cell {
 
 func (g *annulusGoal) StartSatisfied(start Cell) bool {
 	// Arrival predicate uses >>4-quantized squared radii [04 §7.4].
-	// Mismatch: h clamp above uses raw radii, this test uses quantized [04 §7.4] TODO(question).
+	// The h clamp above uses raw radii and this test uses quantized ones: the
+	// dual-unit contract [04 §7.4] requires exactly that.
 	qInner := g.inner >> 4
 	qOuter := g.outer >> 4
 	if qInner < 0 {

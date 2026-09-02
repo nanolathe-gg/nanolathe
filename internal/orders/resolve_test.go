@@ -209,10 +209,22 @@ func TestResolveFullTable(t *testing.T) {
 	if got := DescriptorFor(id).Name; got != "HelpBuild" {
 		t.Fatalf("code2 friendly build want HelpBuild got %q", got)
 	}
+	// "I am `canfly`, friendly, target `isairbase` → `VTOL_Landing`"
+	// [04 R-ORD-02 §1] code 2: all three terms are required. A ground actor on
+	// the same pad falls through to the pickup arm below it.
 	padTarget := mkUnit(8, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.IsAirBase = true }))
-	id = Resolve(2, actor, padTarget, nil)
+	padFlyer := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
+		d.CanMove = true
+		d.CanFly = true
+	}))
+	setTestHostility(padFlyer, func(a, b *units.Unit) bool { return false })
+	id = Resolve(2, padFlyer, padTarget, nil)
 	if got := DescriptorFor(id).Name; got != "VTOL_Landing" {
 		t.Fatalf("code2 pad want VTOL_Landing got %q", got)
+	}
+	id = Resolve(2, actor, padTarget, nil)
+	if got := DescriptorFor(id).Name; got == "VTOL_Landing" {
+		t.Fatalf("code2 ground actor must not land on a pad [04 R-ORD-02 §1]")
 	}
 	setTestHostility(actor, func(a, b *units.Unit) bool { return false })
 	carriableUnfinishedFalse := mkUnit(9, 1, "CORE", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CantBeTransported = false; d.IsAirBase = false }))
@@ -288,10 +300,21 @@ func TestResolveFullTable(t *testing.T) {
 	if got := DescriptorFor(id).Name; got != "AirToAir" {
 		t.Fatalf("code3 airtoair want AirToAir got %q", got)
 	}
+	// The hover fork is the ACTOR's `hoverattack` [04 R-ORD-02 §1]; the
+	// target's `canhover` selects nothing.
+	actorHoverAttack := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
+		d.CanAttack = true
+		d.CanFly = true
+		d.HoverAttack = true
+	}))
 	targetHover := mkUnit(15, 1, "CORE", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanFly = false; d.CanHover = true }))
-	id = Resolve(3, actorAir, targetHover, nil)
+	id = Resolve(3, actorHoverAttack, targetHover, nil)
 	if got := DescriptorFor(id).Name; got != "AirToGroundHover" {
 		t.Fatalf("code3 hover want AirToGroundHover got %q", got)
+	}
+	id = Resolve(3, actorAir, targetHover, nil)
+	if got := DescriptorFor(id).Name; got != "AirToGround" {
+		t.Fatalf("code3 canhover target without hoverattack actor want AirToGround got %q", got)
 	}
 	targetGroundAir := mkUnit(16, 1, "CORE", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanFly = false; d.CanHover = false }))
 	id = Resolve(3, actorAir, targetGroundAir, nil)
@@ -499,9 +522,12 @@ func TestResolveFullTable(t *testing.T) {
 	if id := Resolve(13, actorNoCapture, hostileTarget, nil); id != 0 {
 		t.Fatalf("code13 no capture should reject")
 	}
+	// "hostility is **not** tested — an allied unit of another player is
+	// capturable by this code", correcting §3.4's row 13 [04 R-ORD-02 §1]. Only
+	// the owner-differs term rejects.
 	setTestHostility(actor, func(a, b *units.Unit) bool { return false })
-	if id := Resolve(13, actor, hostileTarget, nil); id != 0 {
-		t.Fatalf("code13 friendly should reject")
+	if id := Resolve(13, actor, hostileTarget, nil); DescriptorFor(id).Name != "Capture" {
+		t.Fatalf("code13 friendly differently-owned want Capture got %q", DescriptorFor(id).Name)
 	}
 	setTestHostility(actor, func(a, b *units.Unit) bool { return true })
 	friendlySameOwner := mkUnit(24, 0, "CORE", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.Side = "CORE" }))
@@ -893,27 +919,57 @@ func TestResolveHandlerRegistration(t *testing.T) {
 	}
 }
 
-// TestResolveAttackSkipsInactiveSentinelWeapon locks the air-attack-variant
-// gate against the record-0 inactive sentinel [02 §5 R-CONTENT-02]: a flyer
-// whose primary link resolved to the [noweapon] record is not an air-attack
-// platform, so the variant falls through to AirToGround even though the link
-// is non-nil. An active ToAirWeapon link is unchanged.
-func TestResolveAttackSkipsInactiveSentinelWeapon(t *testing.T) {
-	sentinel := &content.WeaponDef{ID: 0, ToAirWeapon: true}
-	sentinel.CanonicalKey = "noweapon"
-	active := &content.WeaponDef{ID: 3, ToAirWeapon: true}
-	active.CanonicalKey = "armthunder"
-	flyer := mkDef(func(d *content.UnitDef) { d.CanFly = true; d.Builder = false })
-	target := mkUnit(2, 1, "CORE", 100, 0, true, 0, mkDef(nil))
+// TestResolveAirAttackVariants locks the four air variants of code 3 against
+// [04 R-ORD-02 §1]: the only weapon term is the primary's `dropped` flag, the
+// only target term is its `canfly`, and the hover fork is the ACTOR's
+// `hoverattack`. It also locks the record-0 inactive sentinel
+// [02 §5 R-CONTENT-02]: a flyer whose primary link resolved to the [noweapon]
+// record is not a bomber even though the link is non-nil.
+func TestResolveAirAttackVariants(t *testing.T) {
+	sentinelDropped := &content.WeaponDef{ID: 0, Dropped: true}
+	sentinelDropped.CanonicalKey = "noweapon"
+	bomb := &content.WeaponDef{ID: 3, Dropped: true}
+	bomb.CanonicalKey = "armthunder_bomb"
+	gun := &content.WeaponDef{ID: 4}
+	gun.CanonicalKey = "armfig_gun"
 
-	flyer.Weapon1Def = sentinel
-	if got := resolveAttack(mkUnit(1, 0, "ARM", 100, 0, true, 0, flyer), target); got != "AirToGround" {
-		t.Fatalf("sentinel weapon1 gave %q, want AirToGround [02 §5 R-CONTENT-02]", got)
+	ground := mkUnit(2, 1, "CORE", 100, 0, true, 0, mkDef(nil))
+	flying := mkUnit(3, 1, "CORE", 100, 0, true, 0, mkDef(func(d *content.UnitDef) { d.CanFly = true }))
+
+	mkFlyer := func(w *content.WeaponDef, hoverAttack bool) *units.Unit {
+		d := mkDef(func(d *content.UnitDef) {
+			d.CanFly = true
+			d.Builder = false
+			d.HoverAttack = hoverAttack
+		})
+		d.Weapon1Def = w
+		return mkUnit(1, 0, "ARM", 100, 0, true, 0, d)
 	}
 
-	flyer.Weapon1Def = active
-	if got := resolveAttack(mkUnit(1, 0, "ARM", 100, 0, true, 0, flyer), target); got != "AirToAir" {
-		t.Fatalf("active ToAirWeapon changed behavior: got %q, want AirToAir", got)
+	// A dropped primary is the AirStrike fork; against a flying target the same
+	// primary rejects outright ("a `dropped` *W1* against a flying target →
+	// reject").
+	if got := resolveAttack(mkFlyer(bomb, false), ground); got != "AirStrike" {
+		t.Fatalf("dropped vs ground gave %q, want AirStrike [04 R-ORD-02 §1]", got)
+	}
+	if got := resolveAttack(mkFlyer(bomb, false), flying); got != "" {
+		t.Fatalf("dropped vs flying gave %q, want reject [04 R-ORD-02 §1]", got)
+	}
+	// A non-dropped primary against a flyer is AirToAir; against ground the
+	// hover fork is the ACTOR's hoverattack, not any property of the target.
+	if got := resolveAttack(mkFlyer(gun, false), flying); got != "AirToAir" {
+		t.Fatalf("gun vs flying gave %q, want AirToAir [04 R-ORD-02 §1]", got)
+	}
+	if got := resolveAttack(mkFlyer(gun, false), ground); got != "AirToGround" {
+		t.Fatalf("gun vs ground gave %q, want AirToGround [04 R-ORD-02 §1]", got)
+	}
+	if got := resolveAttack(mkFlyer(gun, true), ground); got != "AirToGroundHover" {
+		t.Fatalf("hoverattack vs ground gave %q, want AirToGroundHover [04 R-ORD-02 §1]", got)
+	}
+	// The inactive sentinel is not a dropped weapon, so it takes the ordinary
+	// ground run rather than the bombing run.
+	if got := resolveAttack(mkFlyer(sentinelDropped, false), ground); got != "AirToGround" {
+		t.Fatalf("sentinel weapon1 gave %q, want AirToGround [02 §5 R-CONTENT-02]", got)
 	}
 }
 

@@ -7,16 +7,25 @@ import (
 // settleInterval is the per-player settlement deadline advance per [05 "Authoritative settlement order"] C2 and [GAP T1].
 const settleInterval uint32 = 30
 
-// isActiveState reports whether controller/state byte is one of the three active states
-// per [05 "Authoritative settlement order"] step 1. While not active, nothing advances including deadline (C3).
-// TODO(question): semantic names of the three values unknown; literal set 1,2,3 preserved.
+// isActiveState reports whether the controller/state byte is one of the three
+// active states per [05 "Authoritative settlement order"] step 1. While not
+// active, nothing advances including the deadline (C3).
+//
+// The three values are named: `1` is a locally controlled human, `2` a computer
+// player, `3` a remote peer [05 R-SHARE-01 §1]. The marker that stood here said
+// the names were unknown. internal/combat declares them as ControlByteHuman /
+// ControlByteComputer / ControlByteRemote; this package cannot import combat, so
+// the literals stay, with the identities stated.
 func isActiveState(s uint8) bool {
 	return s == 1 || s == 2 || s == 3
 }
 
-// isSettlingState reports whether state is one of the two settling states
-// per [05 "Authoritative settlement order"] step 4 narrowed predicate. The third active state traverses but never settles (C4).
-// TODO(question): semantic names unknown; literal set 1,2 preserved.
+// isSettlingState reports whether the state is one of the two settling states
+// per [05 "Authoritative settlement order"] step 4's narrowed predicate: the
+// local human (`1`) and the computer player (`2`) settle, and the remote peer
+// (`3`) traverses but never settles (C4) [05 R-SHARE-01 §1]. That is the same
+// split the packet sender applies — it "refuses to emit unless the source's
+// control byte is `1` or `2` and the destination's is `3`".
 func isSettlingState(s uint8) bool {
 	return s == 1 || s == 2
 }

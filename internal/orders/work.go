@@ -1080,7 +1080,7 @@ func reclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 		// (`0x40`) or a payload release (`0x80`). The gate IS the wait; phase 1
 		// is not re-entered until one of those three producers fires.
 		//
-		// Closed 2026-09-01 (WU-19-24). A `TODO(question)` stood here asking why
+		// Closed 2026-09-01 (WU-19-24). An open-question marker stood here asking why
 		// a BLOCKING one-cell feature — every stock tree and rock — abandoned:
 		// the rectangle's only admissible cell was the feature's own, which the
 		// ground search cannot enter, so the request published an empty route,
@@ -1096,7 +1096,7 @@ func reclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 		// (grownGoalRect), and the same growth answers `RepairUnit`'s and
 		// `Capture`'s rectangles on a live target's occupied footprint.
 		//
-		// Correction (WU-19-5). A `TODO(T25)` placeholder stood here holding at
+		// Correction (WU-19-5). An accepted-blocked placeholder stood here holding at
 		// phase 0 behind a plain thirty-tick re-poll, on the reading that
 		// "nothing in this build approaches for a work descriptor". Both halves
 		// of that premise are false now and one was false when it was written:

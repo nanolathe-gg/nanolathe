@@ -113,7 +113,7 @@ func transportSizeByte(carrier *units.Unit) int32 {
 // internal/movement, for the reason the package comment gives.
 //
 // This replaces a pair of handlers that ran the phase tables here with every
-// side effect stubbed: each phase advanced and left a `TODO(question)` reading
+// side effect stubbed: each phase advanced and left an open-question marker reading
 // "not simulated beyond phase advance", so an ordered Atlas attached its cargo
 // on the spot without ever flying to it, and an unload dropped a unit wherever
 // the record's goal said with no validator and no descent. What made that

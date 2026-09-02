@@ -775,3 +775,43 @@ func TestDeterminism_TransportSlice(t *testing.T) {
 		t.Fatalf("determinism failed: (%d,%d,%d) vs (%d,%d,%d) [I1] player 0..9 slot asc", x1, z1, cx1, x2, z2, cx2)
 	}
 }
+
+// TestTransportAdmissionSubmergedGateReadsModelTop locks gate 8 of the transport
+// admission ladder [04 §10.2]: the submerged test is `candidate Y + modelTop`
+// against sea level, not the cargo's anchor Y alone. modelTop is the definition
+// loader's upper-Y-bound dword in full 16.16 [06 R-DMG-01 §7], which the
+// catalog compiles as ModelTopFixed.
+//
+// The relationship, not a census: with the cargo's origin exactly at sea level,
+// a zero model top is submerged and any positive one is not.
+func TestTransportAdmissionSubmergedGateReadsModelTop(t *testing.T) {
+	ter := syntheticFlat(32, 32)
+	grid := NewOccupancyGrid()
+	fallback := Profile{FootPrintX: 2, FootPrintZ: 2, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 255, BadWaterSlope: 127}
+	sys := NewSystem(ter, fallback, grid)
+	w := newMovementFixtureWorld(100)
+	transDef := defForTransport("arm_atlas")
+	cargoDef := defForCargo("armflea", 1)
+
+	transPosX, transPosZ := world.CellToWorld(5), world.CellToWorld(5)
+	cargoPosX, cargoPosZ := world.CellToWorld(7), world.CellToWorld(5)
+	th, _ := w.Create(transDef, 0, transPosX, ter.HeightAt(transPosX, transPosZ), transPosZ)
+	ch, _ := w.Create(cargoDef, 0, cargoPosX, ter.HeightAt(cargoPosX, cargoPosZ), cargoPosZ)
+	sys.EnsureUnit(w.Unit(th))
+	sys.EnsureUnit(w.Unit(ch))
+	w.Unit(th).Remaining = 0
+	w.Unit(ch).Remaining = 0
+
+	// Put the cargo's origin exactly at sea level so the gate's compare turns on
+	// the model-top term alone (the test is `sum <= seaLevel`).
+	w.Unit(ch).Y = numeric.Fixed(int32(ter.SeaLevel) << 16)
+
+	cargoDef.ModelTopFixed = 0
+	if res := sys.CanTransport(th, ch, w); res.Allowed {
+		t.Fatalf("zero model top at sea level must read submerged [04 §10.2 gate 8]")
+	}
+	cargoDef.ModelTopFixed = 1 << 16 // one whole world unit of hull above the origin
+	if res := sys.CanTransport(th, ch, w); !res.Allowed {
+		t.Fatalf("positive model top at sea level must clear gate 8, got %q", res.Reason)
+	}
+}

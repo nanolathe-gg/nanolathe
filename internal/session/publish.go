@@ -95,7 +95,10 @@ func (s *Session) publishSnapshot(tick uint32) {
 	} else {
 		published.Effects = published.Effects[:0]
 	}
-	published.Effects = s.appendStripParticleViews(published.Effects, tick)
+	// Every live strip sub-record, in the composer's walk order [03 §1]. This
+	// is the one writer of the committed strip channel, and it runs once per
+	// tick inside the publication boundary [I6].
+	published.Strips = s.appendStripViews(published.Strips[:0])
 	if s.Units != nil {
 		views := published.Units[:0]
 		orderQueues := published.OrderQueues[:0]

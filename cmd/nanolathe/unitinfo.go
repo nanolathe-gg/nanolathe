@@ -109,13 +109,12 @@ func closeUnitInfo() bool {
 // and passes the visibility predicate, otherwise nothing opens
 // [07 R-HUD-03 §8][07 §2].
 //
-// TODO(question): retail never needs F1 to close the screen — the active GUI
-// consumes the token before the battle hotkey dispatcher runs ([07 §3]), and
-// `DONE` is the file's `escdefault`/`crdefault`, so Escape and Enter close it.
-// This shell has no keyboard-ownership seam for a battle child window yet
-// (the battle key dispatcher owns Escape unconditionally), so F1 is also the
-// close here. Wiring [07 R-WGT-01 §2]'s Enter/Escape matrix into the battle
-// shell would retire this.
+// Unimplemented: retail never needs F1 to close this screen. The active GUI
+// consumes the token before the battle hotkey dispatcher runs [07 §3], and
+// `DONE` is the file's `escdefault`/`crdefault`, so Escape and Enter close it
+// through [07 R-WGT-01 §2]'s matrix. This shell has no keyboard-ownership seam
+// for a battle child window — the battle key dispatcher owns Escape
+// unconditionally — so F1 doubles as the close here. See PLAN 19 §2.4.
 func (b *battleSession) toggleUnitInfo() {
 	if closeUnitInfo() {
 		return

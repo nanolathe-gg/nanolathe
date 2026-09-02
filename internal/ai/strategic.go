@@ -596,7 +596,10 @@ func (s *Strategic) recomputeClassVectors() {
 		if def != nil && def.RadarDistance != 0 { // [P0-01 §2.2; R-P0-05]
 			acc1 += 5
 		}
-		// TODO(question): the unresolved energy-make sentinel path [P0-01 §3].
+		// The eight addends above are the whole other-mix accumulator:
+		// [08 R-P0-05 §5] enumerates it exhaustively and lists the routine's
+		// definition inputs, and neither carries an energy-make term. The
+		// earlier "unresolved energy-make sentinel path" marker is retired.
 		tmp := acc1
 		val := tmp // ftol via FILD
 		if count == 0 {
@@ -609,9 +612,13 @@ func (s *Strategic) recomputeClassVectors() {
 		if def != nil && def.MinWaterDepth >= 0 {
 			val = val * 3
 		}
-		// TODO(question): the unresolved half-capacity comparison may add half of
-		// the single coefficient [P0-01 §3]. The state writer/meaning is
-		// stock state leaves this global comparison false [R-P0-05].
+		// Unimplemented: [08 R-AI-01 §13] establishes the half-capacity addend
+		// — when the session's per-player unit limit shifted right one is
+		// unsigned-less-than the owning player's live unit count, half the
+		// single coefficient (signed byte, truncating) is added here. It is
+		// ordinary late-game state, not an unreachable branch: the previous
+		// "stock state leaves this false" reading is retracted there. Strategic
+		// carries neither counter — see PLAN 19 §2.4.
 		// Zero-izing branches
 		if def != nil && def.CanLoad { // [P0-01 §2.2; R-P0-05]
 			val = 0
@@ -619,9 +626,16 @@ func (s *Strategic) recomputeClassVectors() {
 		if def != nil && def.IsFeature { // [P0-01 §2.2; R-P0-05]
 			val = 0
 		}
-		// TODO(question): the wind-generator/global-wind comparison
-		// includes unresolved strategic state. Stock state keeps this
-		// branch false, so no proxy field is consulted [R-P0-05].
+		// [08 R-P0-05 §5] establishes that a third zeroing branch exists —
+		// "the wind-generator/global-wind comparison is true" — and that the
+		// definition's `windgenerator` word is one of the routine's recovered
+		// inputs [05 R-PROD-01 §1]. What it is compared against
+		// and in which direction is not written down.
+		// TODO(question): what is the class routine's wind-generator zeroing
+		// test — which global (the session's current wind scalar, or a wind
+		// min/max word) and which comparison? Decider: a static trace of that
+		// branch, recorded in [08 R-P0-05 §5]. Until then no proxy field is
+		// consulted and the branch is not taken.
 		val = clamp100(val) // clamp to 100 max, negative kept [P0-01 §3]
 		// store to C0
 		cv := s.ClassVectors[ck]

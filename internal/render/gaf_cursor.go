@@ -190,7 +190,11 @@ func (c *Cursor) Bind(entry *formats.GAFEntry, startIdx int, loop bool) {
 	c.Idx = startIdx
 	dur := int32(entry.Frames[c.Idx].Value)
 	if dur == 0 {
-		dur = 1 // TODO(question): zero duration not observed; treat as 1 tick
+		// The authored duration is 1-10 across all retail data and the cursor
+		// loads it as a whole-tick countdown [fmt gaf "Frame entry"]; a zero is
+		// never authored. Treating one as a single tick is a bounds check, the
+		// INVARIANTS I11 exception, not a traced behavior.
+		dur = 1
 	}
 	c.Countdown = dur
 }

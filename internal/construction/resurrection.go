@@ -73,7 +73,11 @@ func (s *Service) Resurrect(builder *units.Unit, featureCell *world.PlotCell, de
 				spread = fd.ResurrectSpread
 			}
 		} else if idx == world.PlotFeatureFringe && s.Terrain.CellW > 0 && s.Terrain.CellH > 0 {
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// TODO(T25): the fringe-anchored jitter spread is not fully located.
+			// It needs the anchor resolution the plot cell's anchor word pair
+			// carries [03 §2.2]; this build walks the plot for the anchor
+			// instead. Decider: static trace of the resurrect spawn's anchor
+			// read.
 			anchorIdx := -1
 			for i := range s.Terrain.Plot {
 				if &s.Terrain.Plot[i] == featureCell {
@@ -103,10 +107,15 @@ func (s *Service) Resurrect(builder *units.Unit, featureCell *world.PlotCell, de
 		}
 	}
 	_ = ResurrectionJitter(sim, spread)
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// we clear that cell and, when terrain dimensions known, any fringe cells that anchor to it.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Feature removal runs BEFORE the new unit's alive word is written: the
+	// resurrection state's fifth step calls the feature-removal helper first
+	// [P0-15]. The helper clears the terrain plot's filler and anchor words.
+	// The caller supplies a featureCell pointer into Terrain.Plot; we clear that
+	// cell and, when the terrain dimensions are known, any fringe cells that
+	// anchor to it.
+	// TODO(T25): the multi-cell footprint sweep is not fully located beyond the
+	// single anchor plus its fringe; the removal helper's own footprint handling
+	// remains open. Decider: static trace of that helper's cell walk.
 	if featureCell != nil {
 		// Single-cell clear: feature → none, anchor → 0, filler cleared.
 		featureCell.SetFeature(world.PlotFeatureNone)

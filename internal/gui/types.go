@@ -5,22 +5,27 @@ package gui
 type Kind uint8
 
 const (
-	KindPanel     Kind = 0  // background/panel with -1 centering and BackTile fallback [07 §4]
-	KindButton    Kind = 1  // button with staged frames and | labels [07 §4]
-	KindListBox   Kind = 2  // listbox [07 §4][02 §6]
-	KindTextBox   Kind = 3  // text input, name capped at 127 bytes [07 §4]
-	KindScrollBar Kind = 4  // scrollbar [07 §4][02 §6]
-	KindLabel     Kind = 5  // label [02 §6]
-	KindSurface   Kind = 6  // blank surface [02 §6]
-	KindFont      Kind = 7  // font selector [02 §6]
-	KindSlider    Kind = 8  // slider synthesizing two scrollbar children [07 §4] TODO(question): exact numeric id not enumerated in accessible spec; 8 chosen as first free id
-	KindText      Kind = 9  // text case [07 §4] TODO(question)
-	KindZero      Kind = 10 // unnamed zeroing case [07 §4] TODO(question)
-	KindEmbedded1 Kind = 11 // embedded-file case [07 §4] TODO(question)
+	KindPanel     Kind = 0 // background/panel with -1 centering and BackTile fallback [07 §4]
+	KindButton    Kind = 1 // button with staged frames and | labels [07 §4]
+	KindListBox   Kind = 2 // listbox [07 §4][02 §6]
+	KindTextBox   Kind = 3 // text input, name capped at 127 bytes [07 §4]
+	KindScrollBar Kind = 4 // scrollbar [07 §4][02 §6]
+	KindLabel     Kind = 5 // label [02 §6]
+	KindSurface   Kind = 6 // blank surface [02 §6]
+	KindFont      Kind = 7 // font selector [02 §6]
+	// Ids 8-11 and 14-15 are OUR assignment, not retail's: [07 §4] closes the
+	// twelve cases the control-kind byte selects among but not which byte
+	// selects each of the seven beyond the authored corpus {0..7,12}
+	// [fmt gui]. The open question and its decider live at the switch in
+	// load.go; these are the first free ids in corpus order.
+	KindSlider    Kind = 8  // slider synthesizing two scrollbar children [07 §4]
+	KindText      Kind = 9  // text case [07 §4]
+	KindZero      Kind = 10 // unnamed zeroing case [07 §4]
+	KindEmbedded1 Kind = 11 // embedded-file case [07 §4]
 	KindPicture   Kind = 12 // picture-box style control [02 §6][07 §4]
 	KindRepeat    Kind = 13 // repeating/decrementing runtime family 12/13 mapped [07 §4] — also covers second embedded-file / single-purpose slot
-	KindSingle1   Kind = 14 // single-purpose placeholder [07 §4] TODO(question)
-	KindSingle2   Kind = 15 // single-purpose placeholder [07 §4] TODO(question)
+	KindSingle1   Kind = 14 // single-purpose placeholder [07 §4]
+	KindSingle2   Kind = 15 // single-purpose placeholder [07 §4]
 )
 
 // RuntimeFamily maps a stored Kind to its runtime dispatch family [07 §4].
@@ -51,7 +56,10 @@ func (k Kind) RuntimeFamily() uint8 {
 // Rect is a logical-space rectangle [02 §6][07 §1].
 // xpos,ypos,width,height are stored as int16 [02 §6]; we keep int32 per I13.
 // -1 centres on axis, -2 anchors to far edge [02 §6][07 §4]; resolution uses 640×480 [02 §1][07 §1].
-// TODO(question): no general display-scale conversion contract is established [07 §4]; HUD is laid out at logical size and scaled at present.
+// [07 §1] fixes the authored resolution at 640x480 and [07 §4] gives no
+// display-scale conversion, because retail has none to give: the interface is
+// authored at that one size. Laying the HUD out at logical size and scaling at
+// present is our own choice for other window sizes, not a gap.
 type Rect struct {
 	X, Y int32 // placed position after sentinel resolution
 	W, H int32 // stored widths honored [PLAN_12] — verbatim authored width/height
@@ -75,7 +83,7 @@ type Gadget struct {
 	Active        uint8  // byte, 0 hidden [02 §6][07 §3]
 	CommonAttribs uint8  // byte [02 §6]
 	Help          string // help string [02 §6]
-	GAFFile       int16  // gaffile stored as 16-bit [02 §6] TODO(question): not parsed by formats fillCommon, read from common.gaffile manually
+	GAFFile       int16  // gaffile stored as 16-bit [02 §6]; read from common.gaffile here because formats' fillCommon does not cover it
 
 	// Type-specific fields, read per control kind [02 §6][07 §4].
 	// Not every kind uses every field; unused stays zero/empty.
@@ -94,7 +102,11 @@ type Gadget struct {
 	Link     string // label link [02 §6]
 	FileName string // font filename [02 §6]
 	HotOrNot int32  // blank surface hotornot [02 §6]
-	Nuttin   int32  // compound control [02 §6] TODO(question): semantics unknown, retained
+	// TODO(question): what does the compound control's `nuttin` key mean?
+	// [02 §6] gives its accessor and width and no consumer, and no reader has
+	// been traced. Decider: a static trace of the compound control's use of the
+	// field. Parsed and retained losslessly meanwhile.
+	Nuttin int32 // compound control [02 §6]
 
 	ItemHeight int16 // listbox itemheight rare [02 §6][fmt gui]
 	MaxChars   int16 // textbox maxchars stored as 16-bit capped at 128 [07 §4]
@@ -102,7 +114,7 @@ type Gadget struct {
 	// Art resolution order: own named GAF entry first, then side-specific interface GAF, then built-in fallback [07 §4][02 §6].
 	// Own entry is Name; Fallback is BackTile chain for panel [07 §4].
 	Art         string // primary art name (Name) [02 §6]
-	FallbackArt string // TODO(question): full BackTile fallback chain order not established [07 §4]
+	FallbackArt string // built-in fallback, last link of [07 §4]'s own-entry -> side GAF -> built-in chain
 
 	// Provenance
 	SourceName string // original TDF section name like GADGET0
@@ -157,8 +169,10 @@ func (g *Gadget) ArtSources() []string {
 	if g.Art != "" {
 		srcs = append(srcs, g.Art)
 	}
-	// TODO(question): side-specific interface GAF name not known at load time; placeholder for side GAF lookup.
-	// Side GAF would be resolved via content.SideDef.IntGAF per side [02 §6].
+	// Unimplemented: [07 §4]'s middle link. The side-specific interface GAF
+	// belongs between the gadget's own entry and the built-in fallback, and is
+	// resolved through content.SideDef.IntGAF per side [02 §6] — a handle this
+	// loader does not carry. See PLAN 19 §2.4.
 	if g.FallbackArt != "" {
 		srcs = append(srcs, g.FallbackArt)
 	}

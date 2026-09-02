@@ -194,11 +194,19 @@ func (a *AIPlan) LimitKeysSorted() []string {
 	return keys
 }
 
-// ParseAIProfile parses a single AI profile text into an AIProfile [08 "Computer-controlled players"] [PLAN 11 C4].
-// The input is the raw file bytes. It implements the plan gate exactly: weight and limit lines
-// before the first plan do not apply [PLAN 11 C4]. Weight lines multiply the stored weight
-// clamped [0,100] and mark the entry; limit lines store the limit and mark the entry;
-// defaults are weight 100 and limit -1 [08 "Computer-controlled players"].
+// ParseAIProfile parses a single AI profile text into an AIProfile
+// [08 R-AI-01 §12] [PLAN 11 C4].
+// The input is the raw file bytes. It implements the plan gate: weight and
+// limit lines before the first plan do not apply [PLAN 11 C4]. Weight lines
+// multiply the stored per-type weight and clamp to [0,100]; limit lines store
+// the limit; the defaults are weight 100 and limit -1 [08 R-AI-01 §12].
+//
+// Unimplemented: [08 R-AI-01 §12] establishes four further parts of the
+// grammar — a multi-argument `plan` (with `any` honoured only in the first
+// argument position, a retail quirk), the exact-versus-category name matcher
+// over the catalog's `unitname` sort key, the separate weight and limit lock
+// vectors, and `limit` applying only to slots whose control byte is 2 — see
+// PLAN 19 §2.4.
 func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, error) {
 	text := string(data)
 	// Keep raw for diagnostics; not part of hash directly (hash uses canonical bytes).
@@ -238,10 +246,10 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 			}
 			diff := strings.ToLower(strings.TrimSpace(parts[1]))
 			if _, ok := aiPlanNames[diff]; !ok {
-				// Unknown plan difficulty — TODO(question): does the
-				// executable reset the current gate or retain the last valid
-				// one when `plan <unknown>` appears? Resetting is a guess;
-				// stock profiles only author any/easy/medium/hard.
+				// A `plan` clears the gate first and sets it only when an
+				// argument matches `any` or the active difficulty's keyword,
+				// so an unknown name leaves the gate clear and disables every
+				// directive after it until the next `plan` [08 R-AI-01 §12].
 				currentPlan = ""
 				continue
 			}
@@ -261,11 +269,14 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 			}
 			typeName := parts[1]
 			factorStr := parts[2]
-			// TODO(question): retail converts the weight factor through the
-			// CRT decimal floating conversion, which differs from
-			// strconv.ParseFloat on trailing junk and hex forms. Stock
-			// profiles author plain decimals so both agree today; revisit if
-			// a mod profile ever disagrees.
+			// [08 R-AI-01 §12] establishes that the second argument is a
+			// float defaulting to 0.0, but not which conversion reads it.
+			// TODO(question): does the profile parser convert the weight
+			// factor through the CRT decimal converter, whose handling of
+			// trailing junk and hex forms differs from strconv.ParseFloat?
+			// Decider: a static trace of the `weight` directive's conversion
+			// call, recorded in [08 R-AI-01 §12]. Stock profiles author plain
+			// decimals, so both agree on stock content.
 			factor, ok := parseAIWeightFactor(factorStr)
 			if !ok {
 				continue
@@ -280,7 +291,8 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 			if v, ok := pl.Weights[ck]; ok {
 				cur = v
 			}
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// [08 R-AI-01 §12]: the directive multiplies the running per-type
+			// weight and clamps the product to [0,100].
 			newWeight := int32(float64(cur) * factor) // trunc toward zero [INVARIANTS I3]
 			if newWeight < 0 {
 				newWeight = 0

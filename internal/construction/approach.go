@@ -250,7 +250,7 @@ func (s *Service) needsApproach(builder *units.Unit, node *orders.Node) bool {
 // DISTANCE ORIGIN, and the one part of this file that changes an existing
 // reading rather than adding to it. isWithinNanoRange measured to the site's
 // CENTRE, and nanoReach and isWithinNanoRange both already carried
-// TODO(question) markers saying the reach origin and "whether retail measures
+// open-question markers saying the reach origin and "whether retail measures
 // to the footprint center, edge, or bounds" were unrecovered [R-P0-06]
 // [fmt fbi]. Centre measurement is disproved by the authored data: ARMCOM
 // authors builddistance 60 and ARMLAB is 6x6, whose half-extent alone is 48
@@ -404,7 +404,7 @@ func (s *Service) selectBuildApproach(builder *units.Unit, node *orders.Node) (p
 	// turn rather than leaving the builder with no approach.
 	list := inRangeAndValid
 	if len(list) == 0 {
-		list = valid // range dropped; see the nanoReach TODO(question) above
+		list = valid // range dropped; see the nanoReach marker above
 	}
 	if len(list) == 0 {
 		list = clearing // placement validation dropped as well

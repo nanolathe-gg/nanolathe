@@ -55,3 +55,32 @@ func TestParseAIWeightMalformedLinesIgnored(t *testing.T) {
 		t.Fatalf("malformed limits = %#v, want none", directives.Limits)
 	}
 }
+
+// TestUnknownPlanNameLeavesTheGateClear locks [08 R-AI-01 §12]: a `plan`
+// directive clears the gate before walking its arguments and sets it only on a
+// match, so a name outside any/easy/medium/hard disables every directive after
+// it until the next `plan`. The relationship under test is that the weight
+// authored under the unknown plan is absent while the identical weight
+// authored under a valid plan is present.
+func TestUnknownPlanNameLeavesTheGateClear(t *testing.T) {
+	profile, err := ParseAIProfile([]byte(
+		"plan hard\n"+
+			"weight ARMFLAK 0.5\n"+
+			"plan nonsense\n"+
+			"weight ARMCK 0.5\n"), "ai/default.txt", Provenance{})
+	if err != nil {
+		t.Fatalf("ParseAIProfile: %v", err)
+	}
+	hard := profile.Plans["hard"]
+	if hard == nil {
+		t.Fatalf("plan hard produced no table")
+	}
+	if _, ok := hard.Weights[CanonicalKey("ARMFLAK")]; !ok {
+		t.Fatalf("weight under an open gate was dropped")
+	}
+	for name, pl := range profile.Plans {
+		if _, ok := pl.Weights[CanonicalKey("ARMCK")]; ok {
+			t.Fatalf("weight after `plan nonsense` reached plan %q: the gate did not clear", name)
+		}
+	}
+}

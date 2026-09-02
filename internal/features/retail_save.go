@@ -86,9 +86,12 @@ func (s *Service) RetailFeatureImage() (RetailFeatureImage, error) {
 				family = 1
 			}
 			if family != 0 && inst == nil {
-				// TODO(question): the live animation/3D side is not recoverable
-				// from Terrain.Plot alone; a save must not fill its words with
-				// zeros. Resolve by binding the runtime instance side first.
+				// Not a retail unknown: [08 R-SESS-01 §4] states what the
+				// record carries, and the live animation/3D side simply is not
+				// recoverable from Terrain.Plot alone. Refusing is the only
+				// honest answer — a save must not fill those words with zeros.
+				// The fix is to bind the runtime instance side to this writer,
+				// which is a composition change, not a tracing one.
 				return RetailFeatureImage{}, fmt.Errorf("features: retail save: feature (%d,%d) family %d has no live instance state", cx, cz, family)
 			}
 			if family == 1 && inst.AnimationSelector > 2 {

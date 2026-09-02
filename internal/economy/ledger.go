@@ -71,12 +71,32 @@ type Player struct {
 	PassConsumed    [2]float32
 	ArchivedMirror  [2]ArchivedBucket
 	// Control fields for deadline block and gate chain per [05 "Authoritative settlement order"].
-	Exists          bool  // whether slot exists and participates [05 "Player slot"]
-	ControllerState uint8 // controller/state byte; three values allow traversal, two allow settlement [05 "Authoritative settlement order"] TODO(question): semantic names unknown
+	Exists bool // whether slot exists and participates [05 "Player slot"]
+	// ControllerState is the slot's control byte: 1 a locally controlled human,
+	// 2 a computer player, 3 a remote peer [05 R-SHARE-01 §1]. All three
+	// traverse; only 1 and 2 settle [05 "Authoritative settlement order"].
+	ControllerState uint8
 	IsObserver      bool  // observer byte excludes observers [05 "Authoritative settlement order"]
 	OptionKind      uint8 // lobby option kind used by network sharing [R-SHARE-01 §3]
-	Eliminated      bool  // explicit elimination state for sharing candidate gates
-	GameEnded       bool  // game-ended flag bit clear required [05 "Authoritative settlement order"]
+	// Eliminated is Nanolathe's own field, and it has no writer. Retail keeps
+	// no elimination flag: elimination is DERIVED from the player record's live
+	// unit count, which is "incremented at unit creation, decremented in unit
+	// teardown, and reaching zero is the player-elimination trigger; it is also
+	// the 'player still alive' predicate the sharing and endgame paths use"
+	// [08 R-SKIR-01 §3][05 "Player slot"]. The automatic dispatcher spells the
+	// test out as "the slot is not eliminated (`live unit count != 0` or `total
+	// units ever created == 0`)" [05 R-SHARE-01 §3] — a player who has never
+	// created a unit is not eliminated, which is what keeps a slot alive during
+	// battle entry.
+	//
+	// Unimplemented: the three readers below should call that derived predicate
+	// instead of this flag, which means the ledger needs both counters (or the
+	// session needs to supply them) and the flag goes away. That is a real
+	// change across economy, session and visibility — see PLAN 19 §2.3. Until
+	// then the flag is false for every row, so every gate that reads it is
+	// permanently open, which matches an in-progress game.
+	Eliminated bool
+	GameEnded  bool // game-ended flag bit clear required [05 "Authoritative settlement order"]
 	// EndGameCountdown must be negative for settlement; initialized -1
 	// [05 "Authoritative settlement order"].
 	// TODO(question): the two arm/decrement sites that latch GameEnded and

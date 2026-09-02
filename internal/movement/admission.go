@@ -140,12 +140,19 @@ func (s *System) CanTransport(carrierHandle, candidateHandle pool.Handle, w *uni
 		}
 	}
 	// 8) candidate Y + modelTop at or below sea level ×65536 (submerged) [04 §10.2]
-	// modelTop is definition's 32-bit model-top field mirrored through network forwarder [04 §10.2].
-	// TODO(question): UnitDef lacks modelTop field; placeholder uses 0 [04 §10.2]. Cargo submerged check will use Y alone.
 	// SeaLevel is terrain header byte <<16 [04 §10.2] gate 3.
 	candidateY := int32(candidate.Y.Raw()) // 16.16 [04 §8.1]
-	// TODO(question): modelTop placeholder 0; if retail has non-zero for some units, submerged check will be off.
+	// modelTop is the dword the definition loader writes as the unit's upper Y
+	// bound after the model load, floored at zero [06 R-DMG-01 §7] — the same
+	// full 16.16 value the projectile contact band reads [06 §8.1], which is
+	// content.UnitDef.ModelTopFixed. The marker that stood here said UnitDef had
+	// no such field and pinned the term to 0, so the gate tested the cargo's
+	// anchor Y alone and called every unit whose ORIGIN sat at or below sea
+	// level submerged.
 	modelTop := int32(0)
+	if candidate.Def != nil {
+		modelTop = candidate.Def.ModelTopFixed
+	}
 	// SeaLevel shift: byte <<16 into 16.16 [04 §10.2]
 	seaLevelFixed := int32(0)
 	if s.Terrain != nil {

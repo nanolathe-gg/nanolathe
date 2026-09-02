@@ -125,7 +125,7 @@ func (r *Route) At(index int) Point { // [04 §7.3] C17
 	}
 	if r.Count == 0 {
 		// Retail reads adjacent fields at index -1 [04 §7.3] C17.
-		// See TODO(question) above; return zero value deterministically.
+		// See the open-question marker above; return zero value deterministically.
 		return Point{}
 	}
 	if index < int(r.Count) {

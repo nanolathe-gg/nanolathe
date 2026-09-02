@@ -34,11 +34,12 @@ type EffectAnimPlayer struct {
 // Step single-steps the player by one simulation tick [03 §1] C5.
 // Countdown <2 advances to the next frame, wraps to 0 for looping sequences
 // or clears the entry pointer for non-looping sequences and loads the new
-// frame's duration [03 §4.4]. Retail durations are whole ticks [03 §4.4]; this
-// pool uses 1 tick per frame as the minimal established duration (A24).
-// TODO(question): authored per-frame durations for fixed effects are not
-// established in [03 §1]; this uses 1 tick per frame. If probes show a
-// different cadence, replace the constant (A24).
+// frame's duration [03 §4.4]. The authored duration is established: the GAF
+// frame-reference word is "the per-frame display duration in whole simulation
+// ticks" — the playback cursor loads it as the countdown and steps in whole
+// ticks, and the loader leaves it untouched [fmt gaf "Frame entry"]. Durations
+// carries those values; the one-tick answer below is only the fixture path for
+// a record whose timing has not been published.
 func (a *EffectAnimPlayer) Step() {
 	if a == nil || !a.Active {
 		return

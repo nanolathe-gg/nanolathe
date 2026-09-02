@@ -218,8 +218,10 @@ func (c *Client) animatedGAFFrame(key string, id uint64, entry *formats.GAFEntry
 		return nil
 	}
 	if id == 0 {
-		// TODO(question): FeatureView lacks a published stable identity for this
-		// animated sequence; suppress it rather than sharing cursor zero.
+		// Not a retail question: FeatureView carries no published stable
+		// identity for this animated sequence, so every feature would share
+		// cursor zero and step in lockstep. Suppressing is the honest answer
+		// until the publication boundary carries an identity.
 		return nil
 	}
 	ref := texRef{kind: texAnimated, key: key, entry: entry, frame: entry.Frames[0].Frame}
@@ -710,14 +712,13 @@ func modelStatesForCompiled(m *compiledmodel.Model, pieces []frame.PieceView) []
 // exactly the quantity retail's chains compare. The shadow pass passes its own
 // quarter-shear projection for the same reason.
 //
-// TODO(question): retail's cull is per scanline, so a primitive whose
-// projection folds — a concave n-gon or a bow-tie quad — paints in retail
-// exactly the rows where the right chain is still right of the left chain,
-// while this whole-polygon test drops it outright. Settling it means
-// implementing the two-chain edge walk of [R-RAST-01 §1] in place of the
-// barycentric filler, which would also replace the fan triangulation; no
-// stock face is known to fold, and this filler already mis-fills a concave
-// polygon.
+// Unimplemented: [03 R-RAST-01 §1] establishes the two-chain edge walk, whose
+// cull is per SCANLINE — a primitive whose projection folds (a concave n-gon or
+// a bow-tie quad) paints exactly the rows where the right chain is still right
+// of the left chain, while this whole-polygon test drops it outright.
+// Implementing it replaces the barycentric filler and the fan triangulation
+// together. No stock face is known to fold, and this filler already mis-fills a
+// concave polygon. See PLAN 19 §2.4.
 func modelFacePaints(vertices [][3]numeric.Fixed, indices []uint16, origin [3]numeric.Fixed) bool {
 	return facePaints(vertices, indices, origin, modelLocalVertex)
 }
@@ -786,9 +787,10 @@ func (c *Client) collectDrawTris(draw *presentationrender.UnitDraw, owner uint8,
 				switch ref.kind {
 				case texAnimated:
 					if kind == modelCursorFeature && id == 0 {
-						// TODO(question): FeatureView lacks a published stable
-						// identity for animated model textures; suppress this
-						// sequence rather than sharing cursor zero.
+						// Same publication gap as the sprite path above:
+						// FeatureView carries no stable identity, so an
+						// animated model texture would share cursor zero
+						// across every feature. Suppressed, not shared.
 						continue
 					}
 					texFrame = c.modelAnimatedFrameAt(ref, kind, id, pi, pri)
@@ -1129,9 +1131,9 @@ func (c *Client) unitNanoframeReveal(v frame.UnitView) (*presentationrender.Nano
 	if v.BuildRemaining <= 0 {
 		return nil, 0
 	}
-	// TODO(question): retail keys the pulse off the unit's own sixteen-bit
-	// identifier; Nanolathe uses the pool slot index, which is the equivalent
-	// stable per-unit number in this build.
+	// Retail keys the pulse off the unit's own sixteen-bit identifier. The pool
+	// slot index is that number in this build — a stable per-unit value in the
+	// same range — so this is a naming difference, not an open question.
 	band, outline := presentationrender.NanoframePulse(uint16(v.Slot), c.frameTick)
 	reveal := presentationrender.BuildNanoframeReveal(v.BuildRemaining, band, outline)
 	return &reveal, outline
@@ -1246,11 +1248,11 @@ func (c *Client) scaleModelLocal(lx, ly int32) (int32, int32) {
 // through __ftol, so I3's truncate-toward-zero rule does not apply here
 // [R-REN-03A §2].
 //
-// TODO(R-REN-03A §8): a definition authoring the FBI Digger key adds a further
-// +75 here and then erases the image wherever the key is at or below 125. The
-// erase pass is not implemented, and adding the offset alone would only shift
-// every key uniformly, so both are deferred together. Three stock units are
-// affected: ARMAMB, CORTOAST, CORVIPE.
+// Unimplemented: [03 R-REN-03A §8] establishes that a definition authoring the
+// FBI Digger key adds a further +75 here and then erases the image wherever the
+// key is at or below 125. Adding the offset alone would only shift every key
+// uniformly, so the two go together. Three stock units are affected: ARMAMB,
+// CORTOAST, CORVIPE. See PLAN 19 §2.4.
 func modelHeightKey(relativeY numeric.Fixed) int32 {
 	return int32(relativeY.Floor()) + presentationrender.NanoframeHeightBias
 }

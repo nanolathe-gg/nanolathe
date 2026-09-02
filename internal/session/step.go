@@ -223,10 +223,11 @@ func (s *Session) finalizePhase2Death(h pool.Handle, tick uint32) {
 // which is exactly what [06 R-DMG-01 §8] requires of an implementation.
 //
 // A row past the ten records, or one that does not exist, is not swept at all.
-// The elimination test has no writer in this build yet — nothing sets the
-// economy record's Eliminated flag during a battle — so it is satisfied for
-// every row today; it is stated here because the gate is the section's, not
-// the current composition's.
+// The elimination term reads `economy.Player.Eliminated`, which has no writer:
+// retail keeps no such flag and derives elimination from the row's live unit
+// count [08 R-SKIR-01 §3][05 R-SHARE-01 §3]. See the field's own comment. The
+// term is therefore satisfied for every row today; it is stated here because
+// the gate is the section's, not the current composition's.
 //
 // A session with no economy service at all has no player table to read, which
 // is not a state retail can be in: the battle block allocates the table before

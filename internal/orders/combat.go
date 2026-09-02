@@ -242,7 +242,7 @@ func captionClear(u *units.Unit) { workStatus(u, statusOK, "") }
 // which is the only record an installer touches [04 R-ORD-01 §0]
 // [04 R-ORD-01 §1] — is cleared again by its own installer.
 //
-// Corrected 2026-08-31 (first correction): this carried a TODO(T25) saying the
+// Corrected 2026-08-31 (first correction): this carried an accepted-blocked marker saying the
 // radius had nowhere to go and the previous payload could not be found, so the
 // radius was dropped (`_ = radius`) and no release ran at all. Both seams are
 // in this package already — `PointGoalRequest.Radius` and

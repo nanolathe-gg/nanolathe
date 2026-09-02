@@ -751,6 +751,12 @@ type Frame struct {
 	Projectiles []ProjectileView
 	Features    []FeatureView
 	Effects     []EffectView
+	// Strips is every live strip-object sub-record, in the composer's walk
+	// order: strips ascending, objects in insertion order, sub-records in
+	// vector order [03 §1][03 R-STRIP-01 §2]. Strip objects are authoritative
+	// simulation state swept in phase 11, so presentation cannot read them
+	// directly; this is the committed copy it draws from [I6].
+	Strips      []StripView
 	OrderQueues []OrderQueueView
 	Economy     []EconomyView
 	Selection   SelectionView
@@ -860,10 +866,12 @@ func (f *Frame) Reset() {
 	clear(f.Features)
 	clear(f.Economy)
 	clear(f.Builds)
+	clear(f.Strips)
 	f.Units = f.Units[:0]
 	f.Projectiles = f.Projectiles[:0]
 	f.Features = f.Features[:0]
 	f.Effects = f.Effects[:0]
+	f.Strips = f.Strips[:0]
 	f.OrderQueues = f.OrderQueues[:0]
 	f.Economy = f.Economy[:0]
 	f.Builds = f.Builds[:0]

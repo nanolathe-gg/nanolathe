@@ -558,9 +558,13 @@ func (v *VM) Start(script int, args []int32) bool {
 		// otherwise restrict script ids, but engine starters reject unknown
 		// names/ids [04 §4.3] "start-script with no free slot, or a bad script
 		// id, does not pop its arguments" — we return false.
-		// TODO(question): whether retail's valid-entry set is the Scripts map
-		// values or the raw ScriptCodeIndexArray; we treat any word index that
-		// is a mapped script start as valid.
+		// TODO(question): is the interpreter's valid-entry set the script
+		// entry offsets it resolved by name, or the raw `ScriptCodeIndexArray`
+		// [fmt cob] indexed by slot? [04 §4.3] settles the adapters — "invalid
+		// identity (name lookup -1 or slot out of range) and a full eight-slot
+		// pool are the same allocation failure" — but not this opcode's own
+		// admission. Decider: a static trace of the start-script opcode's
+		// bounds test against the array it indexes.
 		return false
 	}
 	idx, ok := v.allocThread()
@@ -1550,8 +1554,13 @@ func (v *VM) runThread(idx int) {
 			// divisor 0 or INT_MIN/-1 with no guard. Nanolathe keeps malformed
 			// as explicit fallback, not crash: kill the thread and diagnostic,
 			// do not push — matches kill-path stack-leak semantics (no push).
-			// TODO(question): whether retail would have pushed indefinite
-			// 0x80000000 vs killed immediately remains open.
+			// The question of what retail pushes is closed: it pushes nothing.
+			// "A divide by zero or integer overflow raises the processor divide
+			// fault and kills the retail process outright — document this as
+			// policy rather than silently repairing it" [04 §4.3]. Killing the
+			// host process is not a behavior we can host, so this is a named
+			// divergence (INVARIANTS I11's bounds-check exception): the thread
+			// dies and a diagnostic is recorded, nothing is pushed.
 			if b == 0 || (a == -2147483648 && b == -1) {
 				v.diagnostics = append(v.diagnostics, "cob: divide by zero or overflow") // [P2-03] fallback diagnostic
 				v.killThread(idx)
@@ -1610,7 +1619,21 @@ func (v *VM) runThread(idx int) {
 			}
 			t.stackPush(res)
 			t.PC += 1
-		case 0x10042000: // engine read 1-arg [04 §4.3]
+		case 0x10042000: // engine read, no arguments [04 §4.3][04 §4.4]
+			// [04 §4.4]: "the zero-argument read opcode pops the identifier and
+			// calls the port reader with four zero argument slots", so retail's
+			// reader sees the identifier followed by four zeros — the same
+			// shape the five-argument form builds.
+			//
+			// We pass the identifier alone, deliberately. The port-handler
+			// convention in internal/units uses the argument COUNT to tell a
+			// read from a write on the dual-purpose ports (1 activation, 18
+			// yard state): two or more elements means "write args[1]", one
+			// means "read". Zero-filling to five here turns every read of those
+			// ports into a write of zero. Making the shape exact requires the
+			// binding contract to carry read-versus-write explicitly first;
+			// until then the observable answer is identical, because no port
+			// handler reads an argument slot the authored script did not push.
 			id, _ := t.stackPop()
 			var out int32
 			if fn, ok := v.portFuncs[Port(id)]; ok && fn != nil {
@@ -1645,37 +1668,42 @@ func (v *VM) runThread(idx int) {
 			}
 			t.stackPush(out)
 			t.PC += 1
-		case 0x10044000: // engine read single-arg port [04 §4.3]
-			id, _ := t.stackPop()
-			var out int32
-			if fn, ok := v.portFuncs[Port(id)]; ok && fn != nil {
-				out = fn([]int32{id})
-			} else {
-				out = v.readPortDefault(id, []int32{id})
-			}
+		case 0x10044000: // cargo-membership query [04 §4.4][R-COB-03 §5]
+			// Not an engine port read. [fmt cob] and [04 R-COB-03 §5] settle
+			// it: the one-argument query walks THIS unit's cargo list comparing
+			// each entry's sixteen-bit identifier against the popped value,
+			// pushing 1 on the first match and 0 if the list is empty or
+			// exhausted. The popped word is a unit identifier, never a port
+			// number, so the earlier port-table route was wrong.
+			//
+			// Unimplemented: the cargo list itself. Our transport linkage lives
+			// on the mover, not on the script's unit record, so the VM has no
+			// list to walk and every query answers 0 — which is the established
+			// answer for an empty list, not an invented one. Neither this
+			// opcode nor 0x10045000 appears in any of the 841 retail COBs
+			// (asset census, [fmt cob]), so no shipped script observes the
+			// difference. See PLAN 19 §2.4.
+			_, _ = t.stackPop() // the cargo identifier
 			if t.SP >= 10 {
 				v.killThread(idx)
 				return
 			}
-			t.stackPush(out)
+			t.stackPush(0)
 			t.PC += 1
-		case 0x10045000: // engine read no-arg [04 §4.3] +1
-			// Ports 11 (unit height) and 17 (build percent left) are reads
-			// whose stack form carries no id [04 §4.4]; how the opcode names
-			// the port is unestablished.
-			// TODO(question): where does the no-arg engine read's port selector
-			// live? Hypothesis under test: the instruction's low byte, tried
-			// against the same hook the argument forms use; with no matching
-			// binding the read yields 0.
-			var out int32
-			if fn, ok := v.portFuncs[Port(word&0xFF)]; ok && fn != nil {
-				out = fn(nil)
-			}
+		case 0x10045000: // carrier-identity query [04 §4.4][R-COB-03 §5] +1
+			// Also not a port read, and it carries no selector anywhere: it
+			// pops nothing and pushes one value — this unit's carrier
+			// back-pointer's identifier, or 0 when the unit is not being
+			// carried [04 R-COB-03 §5]. The earlier reading, that the port
+			// selector lived in the instruction's low byte, is retracted; §4.4
+			// corrected its own "pushes the first cargo identifier" text at the
+			// same time. Unimplemented as above — an unbound VM is not carried,
+			// so 0 is the established answer. See PLAN 19 §2.4.
 			if t.SP >= 10 {
 				v.killThread(idx)
 				return
 			}
-			t.stackPush(out)
+			t.stackPush(0)
 			t.PC += 1
 		case 0x10051000: // less-than signed [04 §4.3]
 			b, _ := t.stackPop()
@@ -2032,13 +2060,13 @@ func (v *VM) runThread(idx int) {
 // It returns 0 for identifiers outside 1..20 [04 §4.4] C15, else 0 as stock
 // default.
 //
-// TODO(question): port 16 (GROUND_HEIGHT) has no zero-answer default in
-// retail — the engine always has terrain bound, so there is no "unbound"
-// case to compare against. A fixture VM built without a session (no
-// GroundHeightPortFunc bound via BindPort) falls through to this arm and
-// reads 0 for every coordinate, which is neither a real height nor retail's
-// off-map −0x10000 [04 §4.4]. Every production VM binds port 16 in
-// internal/session/composition.go; only VM fixtures built directly by tests
+// Port 16 (GROUND_HEIGHT) has no zero-answer default in retail — the engine
+// always has terrain bound, so there is no "unbound" case to compare against
+// and no retail behavior this arm could be wrong about. A fixture VM built
+// without a session (no GroundHeightPortFunc bound via BindPort) falls through
+// here and reads 0 for every coordinate, which is neither a real height nor
+// retail's off-map −0x10000 [04 §4.4]. Every production VM binds port 16 in
+// internal/session/composition.go, so only VM fixtures built directly by tests
 // can observe this default.
 func (v *VM) readPortDefault(id int32, args []int32) int32 {
 	if id < 1 || id > 20 {

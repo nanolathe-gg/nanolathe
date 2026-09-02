@@ -462,7 +462,7 @@ func (s *System) goalForOrderWithFootprint(mover *units.Unit, goalCell path.Cell
 		return path.PointGoal(goalCell, 0)
 	// Retired 2026-08-31: an `Attack_Chase` case stood here forcing an
 	// AnnulusGoal centred on the target with the placeholder radii 32 and 64,
-	// under two TODO(question) markers saying the per-substate radii were not
+	// under two open-question markers saying the per-substate radii were not
 	// located. They are located — [04 R-ORD-01 §3] gives a point goal for five
 	// of the six live substates and an annulus for the other two, all sized
 	// from the slot's weapon range — and the handler now installs the right

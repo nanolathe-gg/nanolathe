@@ -200,10 +200,18 @@ func (u *Unit) InitRenderPieceFlags(mdl *model.Model) {
 	u.RenderPieceFlags = BuildRenderPieceFlags(mdl)
 }
 
-// TODO(question): [04 §3.5] establishes the per-unit dedup array but not its capacity.
+// Unimplemented: there is no dedup array to size. [04 R-UNIT-06 §1] supersedes
+// §3.5's "guard assistance triggers [P0-08]" paragraph and states it outright —
+// "there is **no** dedup array and no latch in either guard handler"; re-enqueue
+// discipline comes from the pump's deadline cadence and the satisfied-bit gates,
+// and the branches these arrays gate are a combat join and a slot re-target
+// rather than the acquire-and-latch shape they were written for. Removing them
+// is the same change as guard legs 1-2 in internal/orders/resolve.go — see
+// PLAN 19 §2.3. The capacity below is ours, not retail's.
 const GuardLatchSize = 8
 
-// GuardLatches holds the per-unit dedup arrays for guard assistance triggers [04 §3.5].
+// GuardLatches holds the per-unit dedup arrays this build's guard handler still
+// uses. See the note above: retail keeps none.
 // Four classes × fixed-size arrays of pool.Handle; auto-fire per weapon slot.
 type GuardLatches struct {
 	BuildAssist [GuardLatchSize]pool.Handle

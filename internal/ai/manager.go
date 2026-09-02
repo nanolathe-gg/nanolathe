@@ -135,8 +135,11 @@ type Manager struct {
 	// owns the retail split between units with a locomotion object and immobile
 	// units that need the ordinary order-admission predicate. Nanolathe does not
 	// yet expose that object identity directly, so a nil binding fails closed.
-	// TODO(question): map the retail locomotion-object presence and shared
-	// order-admission predicate onto session-owned runtime state [08 R-AI-01 §7].
+	// TODO(question): which runtime record does [08 R-AI-01 §7]'s
+	// "hasNoLocomotion" test read, and which shared predicate answers
+	// "orderWouldBeAccepted" for such a unit? Decider: a static trace from the
+	// rally task's member loop into the locomotion allocation site and the
+	// order-admission helper it calls; the finding belongs in [08 R-AI-01 §7].
 	RallyOrderAdmitted func(unit *units.Unit, x, y, z numeric.Fixed) bool `json:"-"`
 
 	// RS-06: per-session isolated RNG [I4][RS-P0-018]. A nil stream is an
@@ -336,7 +339,11 @@ func (m *Manager) hasBuildOptionsForDef(def *content.UnitDef) bool {
 // Retail iterates ten players 0..9, and for controller ∈ {1,2,3} and index !=10
 // calls through the player's manager pointer.
 // The Player==10 check is literal retail guard [08]; it never fires for 0..9 but is kept for fidelity.
-// TODO(question): semantic names of controller values 1,2,3 unknown; literal set preserved [05 "Authoritative settlement order"].
+// The control byte's values are named: 0 an open slot, 1 a locally controlled
+// human, 2 a computer player, 3 a remote peer [05 R-SHARE-01 §1]
+// [08 "The setup record"]. All three of 1/2/3 pass the gate — a human slot
+// carries a manager because the profile grammar's weight pass writes through
+// every slot that has one, not only the computer slots [08 R-AI-01 §12].
 func isOuterEligible(player uint8, ctrl uint8, hasCtrl bool) bool {
 	if player == 10 { // [08] player index !=10 [PLAN_11 C1]
 		return false
@@ -1052,8 +1059,14 @@ func (m *Manager) broadcastGroupOrder(w *units.World, group uint8, intent int, m
 	// recovered contract establishes the values passed (160 for wave gather,
 	// zero elsewhere), but no per-member coordinate transform; canonical order
 	// nodes therefore retain the supplied centroid/target unchanged.
-	// TODO(question): recover the spacing-to-member position transform by
-	// tracing the shared group-broadcast formation helper [08 R-AI-01 §4, §9].
+	// [08 R-AI-01 §9]'s body walk resolves the intent and submits at the
+	// supplied point for every matching member and describes no per-member
+	// transform, but it does not state that the argument is unread the way the
+	// same section does for the nearest-hostile helper's vertical coordinate,
+	// so the absence is not yet proof.
+	// TODO(question): does the shared group-broadcast helper read the spacing
+	// argument at all? Decider: a static trace of the helper's parameter
+	// against its body, recorded in [08 R-AI-01 §9].
 	_ = spacing
 	for _, u := range w.IterSliced() {
 		if u == nil || !u.Alive || u.Owner != m.Player || u.Def == nil || u.Group != group {
@@ -1334,8 +1347,11 @@ func (m *Manager) doRally(tick uint32, w *units.World, econ *economy.Service) {
 		return
 	}
 	if !m.rallyInitialized {
-		// TODO(question): SP-REV-03 must call InitializeBattleState at the
-		// established battle-entry point before rally can execute [08 R-AI-02 §1].
+		// Battle entry binds the three rally vectors through
+		// InitializeBattleState [08 R-AI-02 §1]; session composition calls it
+		// for every manager it builds. An unbound manager is a fixture that
+		// skipped composition, and it must stay inert rather than rally from
+		// zeroed vectors.
 		return
 	}
 	if r.Uint32n(10) == 0 {

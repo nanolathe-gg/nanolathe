@@ -7,9 +7,14 @@ import (
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
-// TODO(question): AI resource-score expressions (energyRaw/metalRaw) are float32 temporaries per I2
-// with exact x87 spill retention unknown; this file evaluates the named energyRaw and metalRaw
-// expressions in float32 and narrows at the shown truncations per [08 "Established AI-facing data and rooted planner"] [PLAN 11 C6] [INVARIANTS I2].
+// TODO(T23): the AI resource-score expressions (energyRaw/metalRaw) are
+// float32 temporaries per I2. Doc 08 bounds the residual as platform class:
+// narrowing to float32 at every helper invocation boundary is established, and
+// only the control-word edge beyond those points is unknown
+// [08 "What remains not established"]. This file therefore evaluates the named
+// energyRaw and metalRaw expressions in float32 and narrows at the shown
+// truncations [08 "Established AI-facing data and rooted planner"]
+// [PLAN 11 C6] [INVARIANTS I2].
 
 // Candidate is the selected build target [PLAN 11 Public API].
 type Candidate struct {
@@ -88,7 +93,8 @@ func ScoreInputsFromEconomy(econ *economy.Service, player uint8) ScoreInputs {
 }
 
 // energyRaw computes the energyRaw term exactly as written [PLAN 11 C6] [08 "Established AI-facing data and rooted planner"].
-// Evaluate in float32, trunc toward zero [01 §8] [INVARIANTS I3]; TODO(question) on x87 spill retention.
+// Evaluate in float32, trunc toward zero [01 §8] [INVARIANTS I3]; the x87
+// control-word residual is the file-level TODO(T23).
 func energyRaw(in ScoreInputs) int32 {
 	capped := in.CapEnergy
 	if capped > 1000 {
@@ -163,7 +169,9 @@ func ComputeMix(in ScoreInputs) (metalMix, energyMix, otherMix int32) {
 }
 
 // ComputeScore computes the C6 score exactly as the plan block quotes [PLAN 11 C6] [08] with truncation as written.
-// Resource inputs are float32 temporaries with TODO(question) on x87 spills [INVARIANTS I2]; final trunc is integer division trunc toward zero [01 §8] [INVARIANTS I3].
+// Resource inputs are float32 temporaries carrying the file-level TODO(T23)
+// x87 residual [INVARIANTS I2]; the final trunc is integer division truncating
+// toward zero [01 §8] [INVARIANTS I3].
 func ComputeScore(in ScoreInputs, cv ClassVector, weight int32) int32 {
 	// Clamp weight [0,100] per [08] [PLAN 11 C4]
 	if weight < 0 {
@@ -242,9 +250,11 @@ func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service
 	// weights and embedded limit directives are registered before the first
 	// score is read, so direct Manager fixtures and NewManager follow the same
 	// profile state [08 "Established AI-facing data and rooted planner"]. The
-	// precedence of an embedded limit versus a profile-file limit remains the
-	// TODO(question) documented at ApplyUnitDefinitions; ai_limit remains inert
-	// because research found no runtime reader for that definition field.
+	// precedence of an embedded directive versus a profile-file one is settled
+	// by [08 R-AI-01 §12]'s two lock vectors and is Unimplemented here — see
+	// the note on ApplyUnitDefinitions and PLAN 19 §2.4. `ai_limit` remains
+	// inert because the limit pass re-reads `ai_weight`, so that field has no
+	// reader at all [08 R-AI-01 §12].
 	if bindings, ok := m.(selectorBindings); ok && bindings != nil {
 		profile.ApplyUnitDefinitions(bindings.GetCatalog())
 	}

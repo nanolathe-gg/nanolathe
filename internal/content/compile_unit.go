@@ -811,10 +811,12 @@ func CompileUnitsSorted(fs vfs.FSOps) ([]*UnitDef, error) {
 // [02 §5 R-CONTENT-02].
 //
 // An empty name stays unresolved (nil).
-// TODO(question): does the FBI compiler even run the record scan for an
-// absent/empty weapon key? Research does not establish it; if it does, an
-// empty name would first match whichever record still holds an empty
-// catalog name.
+// TODO(question): does the FBI compiler run the record scan at all for an
+// absent or empty weapon key? [02 §5 R-CONTENT-02] establishes the miss policy
+// but not the entry test; if the scan does run, an empty name would first match
+// whichever record still holds an empty catalog name. Decider: a static trace
+// of the compiler's per-slot weapon resolution entry, recorded in
+// [02 §5 R-CONTENT-02].
 func LinkUnitWeapons(units map[string]*UnitDef, weapons map[string]*WeaponDef) {
 	if units == nil || weapons == nil {
 		return

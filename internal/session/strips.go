@@ -41,16 +41,16 @@ import (
 // bound (at most 401 records per strip) is identical.
 // TODO(question): the shared strip-object pool's capacity — a traced pool
 // size would let Nanolathe reproduce exhaustion-driven silent drops.
+// Decider: static trace of the pool allocator [R-STRIP-01 §1] names the
+// allocator but not its element count.
 //
 // Presentation: these objects are authoritative simulation state swept in
-// phase 11. The committed frame boundary for presentation remains the
-// render.EffectService admission path fed by frame events; strip objects are
-// not yet mirrored into the committed frame.
-// TODO(question): strip objects' committed-frame publication — the researched
-// families map onto per-sub-record draws (GAF frames or two-by-two fills with
-// the nano ramp 0xa1..0xa7 and sprinkle colors 0x61/0x67 [R-STRIP-01 §2]);
-// publishing them requires a frame view of the strip table, which the frame
-// package does not carry yet.
+// phase 11, so presentation never reads them. Every live sub-record is copied
+// into the committed frame's own strip channel once per tick, at the
+// publication boundary and nowhere else — appendStripViews below is the single
+// writer [I6]. The client draws each family at its strip's barrier in the
+// staged order of [03 §1]; the per-family rules are [R-FX-01 §3],
+// [R-FX-02 §2] and [R-FX-02 §3].
 
 const (
 	// stripCount is the fixed table size: ten strips, swept in ascending
@@ -134,7 +134,7 @@ type stripParticle struct {
 	// reduction against the bound GAF entry's frame count is not
 	// established. TODO(question): the start-frame mapping to a GAF entry
 	// frame index — the committed contract is the draw itself [R-STRIP-01
-	// §3].
+	// §3]. Decider: static trace of the strip draw's frame selection.
 	frame      int32
 	frameDelay int32
 	// lastFrame is the smoke puff's own final animation frame. Retail's puff
@@ -207,7 +207,8 @@ type stripObject struct {
 	// TODO(question): the per-site lifetimes of the sprinkle, smoke, and
 	// flame-stream producers [R-STRIP-01 §1 names the sites but not the
 	// constants]; the sinking-wreck smoke column's 900-tick life is the one
-	// established value.
+	// established value. Decider: static trace of each named producer's
+	// container constructor.
 	particleLife int32
 
 	// frameDelayParam is the authored animation frame delay for the smoke
@@ -411,8 +412,8 @@ func (o *stripObject) advanceParticles(tick uint32, crt *rng.CRT, wind *world.Wi
 		// Corrected 2026-08-31, twice over. The drift was added in WHOLE world
 		// units, sixty-five thousand times too far: with a wind word of forty a
 		// puff crossed twenty cells a tick and left the map inside a second.
-		// And the vertical term was a TODO(question) saying the scale was "a
-		// game gravity global whose value is untraced" and kept at zero; the
+		// And the vertical term carried an open-question marker saying the scale
+		// was "a game gravity global whose value is untraced" and kept at zero; the
 		// global is the map's authored `gravity` key, the same word the
 		// projectile conversion divides by 900.
 		//
@@ -476,6 +477,7 @@ func (o *stripObject) advanceParticles(tick uint32, crt *rng.CRT, wind *world.Wi
 		// TODO(question): the sprinkle's animation-frame walk (its spawn
 		// and expiry are established; the frame advance consumes no draws
 		// [R-STRIP-01 §3] but its counter arithmetic is untraced).
+		// Decider: static trace of the strips-2/7 update body.
 	case stripFamilyFlame:
 		for i := range o.particles {
 			p := &o.particles[i]
@@ -485,6 +487,7 @@ func (o *stripObject) advanceParticles(tick uint32, crt *rng.CRT, wind *world.Wi
 			p.frame++
 			// TODO(question): the flame segment's frame-cursor wrap point
 			// against the flame-stream GAF entry's frame count.
+			// Decider: static trace of the strip-5 update body.
 		}
 	case stripFamilyFlameTrail:
 		for i := range o.particles {
@@ -495,7 +498,7 @@ func (o *stripObject) advanceParticles(tick uint32, crt *rng.CRT, wind *world.Wi
 		}
 		// TODO(question): the trail segment's animation counter (it draws
 		// no start-frame RNG; its per-tick frame advance is untraced)
-		// [R-STRIP-01 §3].
+		// [R-STRIP-01 §3]. Decider: static trace of the strip-9 update body.
 	}
 }
 
@@ -630,6 +633,7 @@ func (o *stripObject) spawnOnce(tick uint32, crt *rng.CRT) {
 		// §1 strips 2/7]. TODO(question): the drawn byte's offset inside
 		// the sprinkle sub-record — the pair-plus-selection reading is
 		// supported inference, not yet a committed field map.
+		// Decider: static trace of the strips-2/7 sub-record writer.
 		color := uint8(0x67)
 		if o.colorSel != 0 {
 			color = 0x61
@@ -647,14 +651,16 @@ func (o *stripObject) spawnOnce(tick uint32, crt *rng.CRT) {
 		// sub-record advances by a vector derived from the producer's two
 		// points (the piece origin and its second effect vertex); the
 		// second vertex's derivation is untraced, so the placeholder keeps
-		// velocity at zero.
+		// velocity at zero. Decider: static trace of the strips-2/7
+		// container constructor's second-point argument.
 		o.particles = append(o.particles, p)
 	case stripFamilyFlame:
 		// One animated segment per spawn; exactly one CRT draw for the
 		// random start frame [R-STRIP-01 §1 strip 5][R-STRIP-01 §3].
 		// TODO(question): the flame segment's travel law between the
 		// source and target points is untraced; the placeholder keeps
-		// velocity at zero.
+		// velocity at zero. Decider: static trace of the strip-5 spawn and
+		// update bodies.
 		p := stripParticle{
 			x: o.src[0], y: o.src[1], z: o.src[2],
 			frame: int32(crt.Rand()),
@@ -891,7 +897,8 @@ func (s *Session) smokeFrameLimit(init SmokePuffInit) int32 {
 // Each animation-frame advance consumes one CRT draw [R-STRIP-01 §3].
 // TODO(question): promote the constructor's default-delay value into the
 // committed family contract — it is read off the family constructor directly
-// and is not yet stated in the research doc.
+// and is not yet stated in the research doc. Decider: write the traced default
+// up under [03 R-STRIP-01 §3], which owns the family's draw budget.
 const smokeDefaultFrameDelay = 7
 
 // appendStripSprinkle creates a strips-2/7 smoke-sprinkle container
@@ -920,8 +927,8 @@ func (s *Session) appendStripSprinkle(strip int, pos [3]numeric.Fixed, spacing i
 		colorSel:      colorSel,
 		src:           pos,
 		// dst stays at the spawn point: the container's second point (the
-		// piece's second effect vertex) is untraced — see the spawn
-		// TODO(question) on the sprinkle family above.
+		// piece's second effect vertex) is untraced — see the spawn marker
+		// on the sprinkle family above.
 	}
 	if crt := s.CrtRNG(); crt != nil {
 		o.spawnOnce(tick, crt)
@@ -999,9 +1006,8 @@ const (
 	geothermalSteamCapacityHorizon uint32 = 150
 )
 
-// appendStripParticleViews mirrors every live strip sub-record into the
-// committed frame, one view per particle, rebuilt from scratch at every
-// publication.
+// appendStripViews mirrors every live strip sub-record into the committed
+// frame, one view per sub-record, rebuilt from scratch at every publication.
 //
 // Strip objects are authoritative simulation state with no committed-frame
 // representation of their own, and they cannot reach the frame through the
@@ -1012,55 +1018,65 @@ const (
 // state, mutates nothing, and needs no lifetime bookkeeping of its own because
 // the strip object already owns each sub-record's life [I6].
 //
-// The per-sub-record draw of [03 R-STRIP-01 §2] blits "either a GAF frame or a
-// two-by-two filled rectangle", so each view carries one or the other: the
-// flame families name the flame-stream entry, the smoke family names one of the
-// two smoke entries, and the sprinkle and nano families carry a fill colour.
+// The walk order IS the composer's: strips ascending 0..9, objects in insertion
+// order, sub-records in vector order [03 §1][R-FX-02 §1][I1]. The client
+// consumes one contiguous run per barrier, so this order is a contract and not
+// an implementation detail.
+//
+// Each view carries its family, its art identity as a (bank, entry) pair, its
+// own animation cursor and — for the one family that fills rather than blits —
+// its own palette byte. The per-family draw rules are the client's; nothing
+// here decides how a record is painted [03 R-FX-01 §3].
+//
+// Corrected: these records used to be mirrored as frame.EffectView values on
+// the committed Effects slice, with an entry name and no bank, no family, and
+// no way for the draw to tell one family from another. Half of [R-FX-01 §3]'s
+// per-family contract cannot be expressed that way — the two puff classes blit
+// with NO coverage gate while the flame and sprinkle families gate, and the
+// sprinkle's colour byte must reach the framebuffer unremapped — so the mirror
+// has its own committed channel and its own draw.
 //
 // Strip 6 is deliberately NOT mirrored. The nanolathe spray already has a
 // presentation path of its own — the strip-6 stroke gate the composer runs on
 // published nanolathe events — and mirroring the particles beside it would draw
 // the same spray twice. Folding the two into one is the remaining half of this
 // seam and wants the event path retired first.
-func (s *Session) appendStripParticleViews(out []frame.EffectView, tick uint32) []frame.EffectView {
+func (s *Session) appendStripViews(out []frame.StripView) []frame.StripView {
 	if s == nil || s.strips == nil {
 		return out
 	}
-	id := stripViewIDBase
 	for strip := 0; strip < stripCount; strip++ {
 		if strip == stripNanolathe {
 			continue
 		}
 		for _, o := range s.strips.strips[strip] {
-			graphic, fill := o.drawIdentity()
-			if graphic == "" && fill == 0 {
+			family, bank, entry, fill := o.drawIdentity()
+			if entry == "" && fill == 0 {
 				continue
 			}
 			for i := range o.particles {
 				p := &o.particles[i]
-				view := frame.EffectView{
-					ID:        id,
-					Kind:      frame.KindSmokeStart.String(),
-					Strip:     int8(strip),
-					StartTick: tick,
-					X:         p.x,
-					Y:         p.y,
-					Z:         p.z,
+				view := frame.StripView{
+					Strip:  int8(strip),
+					Family: family,
+					Bank:   bank,
+					Entry:  entry,
+					Frame:  p.frame,
+					X:      p.x,
+					Y:      p.y,
+					Z:      p.z,
 				}
-				if graphic != "" {
-					view.Graphic = graphic
-					view.SeqA = p.frame
-				} else {
+				if entry == "" {
 					// The sprinkle family's own colour walks its ramp as the
-					// puff ages [R-STRIP-01 §1 strips 2/7]; the family default
-					// stands in only for a sub-record that carries none.
-					view.StripFill = fill
+					// puff ages [R-STRIP-01 §1 strips 2/7][R-FX-01 §3]; the
+					// family default stands in only for a sub-record that
+					// carries none.
+					view.Fill = fill
 					if p.color != 0 {
-						view.StripFill = p.color
+						view.Fill = p.color
 					}
 				}
 				out = append(out, view)
-				id++
 			}
 		}
 	}
@@ -1068,36 +1084,46 @@ func (s *Session) appendStripParticleViews(out []frame.EffectView, tick uint32) 
 }
 
 // drawIdentity is one family's per-sub-record draw form [03 R-STRIP-01 §2]:
-// either the GAF entry it blits, or the fill colour of its two-by-two
-// rectangle. A family with neither is not mirrored.
-func (o *stripObject) drawIdentity() (graphic string, fill uint8) {
+// the frame family that selects the draw, the (bank, entry) pair it blits, and
+// the fill colour of its two-by-two rectangle when it fills instead. A family
+// with neither an entry nor a fill is not mirrored.
+func (o *stripObject) drawIdentity() (family frame.StripFamily, bank, entry string, fill uint8) {
 	switch o.family {
 	case stripFamilySmoke:
 		// "the smoke family blits one of two smoke GAF entries selected by an
 		// init flag" [03 R-STRIP-01 §2][06 R-WFX-01 §1].
-		return smokeEntryForSelector(o.smokeSelector), 0
+		return frame.StripFamilySmokePuff, effectBank, smokeEntryForSelector(o.smokeSelector), 0
 	case stripFamilyVentSteam:
 		// The vent's class takes no selector: its init binds the first smoke
 		// entry directly [03 R-FX-01 §3 addendum].
-		return smokePuffEntry, 0
-	case stripFamilyFlame, stripFamilyFlameTrail:
+		return frame.StripFamilyVentSteam, effectBank, smokePuffEntry, 0
+	case stripFamilyFlame:
 		// "the flame families blit the flame-stream GAF entry".
-		return flameStreamEntry, 0
+		return frame.StripFamilyFlame, effectBank, flameStreamEntry, 0
+	case stripFamilyFlameTrail:
+		return frame.StripFamilyFlameTrail, effectBank, flameStreamEntry, 0
 	case stripFamilySprinkle:
 		// The sprinkle fills rectangles rather than blitting its carried entry:
 		// [R-FX-01 §3] records the puff's `smoke 1` entry as "carried, NEVER
 		// drawn — this family fills rectangles".
-		return "", sprinkleDefaultColor
+		return frame.StripFamilySprinkle, "", "", sprinkleDefaultColor
 	case stripFamilyNano:
-		return "", nanoRampBase
+		return frame.StripFamilyNano, "", "", nanoRampBase
 	}
-	return "", 0
+	return frame.StripFamilyNone, "", "", 0
 }
 
 const (
 	// stripNanolathe is the strip whose spray already has its own presentation
-	// path; see appendStripParticleViews.
+	// path; see appendStripViews.
 	stripNanolathe = 6
+
+	// effectBank is the bank half of every strip family's identity pair. The
+	// entries the strip families blit are rows of the engine's own fixed
+	// effect-slot table, which is bound from `fx` at startup [06 R-WFX-01 §1]
+	// [03 R-FX-01 §3]; the reference install's `anims/fx.gaf` holds all of
+	// them (I14).
+	effectBank = "fx"
 
 	// flameStreamEntry is the shared effect bank entry both flame families blit
 	// [03 R-FX-01 §3].
@@ -1113,15 +1139,10 @@ const (
 	nanoRampBase uint8 = 0xa1
 )
 
-// stripViewIDBase keeps the mirrored views' synthetic identities clear of the
-// effect pool's own allocator, which counts up from one. These views are
-// rebuilt every frame and are never matched by identity across frames.
-const stripViewIDBase uint32 = 1 << 24
-
 // smokeEntryForSelector maps the init flag to the bound entry
 // [06 R-WFX-01 §1]: selector 0 is `smoke 1` and selector 1 is `smoke 2`.
 //
-// Corrected: this carried a TODO(question) saying "the stock shared bank holds
+// Corrected: this carried an open-question marker saying "the stock shared bank holds
 // no `smoke 2` entry, so selector 1 binds nothing there", and asked which entry
 // the black emit-sfx puff actually draws. The premise is wrong on both the
 // research and the assets. [03 R-FX-01 §2]'s bank census lists `smoke 2` among

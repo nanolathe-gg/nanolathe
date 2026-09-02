@@ -268,8 +268,8 @@ const localSteeringThresholdSquared uint64 = uint64(2*65536) * uint64(2*65536)
 
 // [R-P0-01] Move_Ground arrival handshake constants.
 const (
-	arrivalSatisfiedBit uint32 = 0x20 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	arrivalGateMask     uint32 = 0xE0 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	arrivalSatisfiedBit uint32 = 0x20 // ORed into node.satisfied by the arrival-bit setter [R-P0-01]
+	arrivalGateMask     uint32 = 0xE0 // gate mask armed by the handler's phase-0 gate arm [R-P0-01]
 )
 
 type PathFailure struct {
@@ -997,7 +997,8 @@ func (s *System) distToGoal(u *units.Unit) numeric.Fixed {
 // finalGoalReached implements the recovered Move_Ground arrival predicate [R-P0-01].
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // cell in the cell domain, planar only, inclusive: dx*dx+dz*dz <= threshold².
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// On success it ORs 0x20 into node.satisfied through the arrival-bit setter
+// [R-P0-01]. No y, heading,
 // speed or blocked term participates. Route pruning (<=25 whole units) is separate [R-P0-01].
 // onRectBorder reports whether cell (x, z) lies on rect's border — the exact
 // enumeration a rectangle-perimeter goal admits, with h of 0 [04 §7.2]. Min and
@@ -1061,7 +1062,7 @@ func (s *System) finalGoalReached(u *units.Unit, hadRoute bool) bool {
 	dz := int64(tileZ) - int64(ah.goalZ)
 	// Signed 32-bit squares, pure planar inclusive compare [R-P0-01] setle.
 	if dx*dx+dz*dz <= int64(ah.threshSq) {
-		ah.order.Satisfied |= arrivalSatisfiedBit // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		ah.order.Satisfied |= arrivalSatisfiedBit // [R-P0-01] the arrival-bit setter's OR of 0x20
 		// Also reflect hadRoute gating for diagnostic Arrived flag: only report
 		// Arrived when we had a route at entry, preserving prior contract that
 		// EmptyRoute paths do not count as arrived [R-P0-01][task].
@@ -1079,12 +1080,19 @@ func (s *System) finalGoalReached(u *units.Unit, hadRoute bool) bool {
 	return false
 }
 
-// TODO(question): How does the compact ground controller class (0x1c alloc, vt 0x4fd488,
-// selected for owner type byte 3) signal ground-order arrival, given its vt+8 hook is a
-// plain ret? And what advances the VTOL_MOVE handler phase 1→2? Both remain
-// unrecovered; do not guess them. [R-P0-01] Related: whether a direct arrival
-// without a published route should complete the order — the bit is kept set
-// with the diagnostic false in finalGoalReached above.
+// TODO(question): how does the compact ground locomotion controller — the small
+// controller class the runtime picks for owner-type byte 3 — signal ground-order
+// arrival, when its arrival-notify virtual slot is a plain return? Related, and
+// the same gap: whether a direct arrival with no published route should complete
+// the order. The bit is kept set with the diagnostic false in finalGoalReached
+// above. Decider: static trace of that controller class's notify slot and of its
+// callers. [R-P0-01]
+//
+// Closed 2026-09-01 (WU-19-16): this marker also asked what advances the
+// `VTOL_Move` handler from phase 1 to phase 2. [04 R-ORD-02 §2] answers it —
+// phase 1 installs the destination marker, sets the gate to `0xE0` and advances
+// unconditionally; phase 2 is dispatched on any of the three arrival bits — and
+// internal/orders/patrol.go's vtolMoveHandler implements exactly that.
 
 // resolveProfile derives a unit's movement profile from its definition's
 // movement class [02 "Unit record"] [04 §6.1]. Resolved names use the catalog
@@ -1880,12 +1888,13 @@ func (s *System) bindArrivalHandle(u *units.Unit, head *orders.Node) {
 	// The work rows' payload is the object the search is aimed at, built once
 	// here so steering target, search goal and arrival test can never disagree
 	// [04 R-ORD-01 §5][04 R-MOV-03 §2].
-	// TODO(question): `Reclaim` and `Resurrect` want the same rectangle on the
-	// FEATURE's footprint and this layer cannot read a feature record, so their
-	// records fall back to the point goal and arrive only on the feature's own
-	// anchor cell. Decider: a feature-footprint accessor reachable from the
-	// movement layer — this is plumbing, not an untraced contract
-	// [04 R-ORD-01 §5].
+	// `Reclaim` and `Resurrect` install the same rectangle on the FEATURE's
+	// footprint as `RepairUnit` and `Capture` do on a unit's [04 R-ORD-01 §5].
+	// The marker that stood here said this layer could not read a feature record
+	// so the two rows fell back to a point goal; WU-19-5 landed the accessor —
+	// goals.go's featureRectForGoal resolves the anchor and authored footprint
+	// through the queue binding's world adapter — and workApproachGoal builds
+	// the grown rectangle for both rows.
 	if payload, ok := s.workApproachGoal(u, path.Cell{X: goalX, Z: goalZ}, head, int32(footX), int32(footZ)); ok {
 		ah.payload = payload
 	}
@@ -2239,7 +2248,8 @@ func (s *System) publishFunc(r path.Request, points []path.Point, status path.St
 }
 
 // emitMovementCallbacks emits StartMoving/StopMoving/MoveRateN and setSFXoccupy per [04 §5.2][GAP T15] C17 C18.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// It is the per-unit movement-window immediate-start emission (I) through the
+// movement-window immediate-start emitter, with the delta-0 barrier [GAP T15] C18.
 // Must be called after steering/flight integration but before the next slot's clear/commit so the VM sees the walk loops [04 §1.1][01 §4.4].
 // Retail classification: category 0 when blocked/inhibited/attached/both mags
 // zero, else 1..3 via signed definition thresholds [04 R-COLL-01 §5][04 §5.2].

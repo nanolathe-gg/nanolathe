@@ -73,8 +73,10 @@ var retailLoadBars = [retailLoadStages]struct {
 // stands in for 3D data, and weapons and features stand in for explosions.
 // Textures carries the interface data the client presents. Re-attribute this
 // when the renderer grows real texture and animation load steps.
-// TODO(question): retail's own per-loader percentages are not recoverable
-// from the six progress bytes alone.
+// TODO(question): what percentage does each retail loader step report? The six
+// progress bytes record the stage boundaries but not the within-stage
+// percentages. Decider: a static trace of each loader's progress write, or a
+// timed retail observation of the loading bar.
 var retailLoadStageOf = map[string]int{
 	content.FamilySides:        0,
 	content.FamilySounds:       0,

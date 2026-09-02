@@ -1375,7 +1375,7 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 				// them is writing over a live state machine.
 				return
 			}
-			// Retired (WU-19-4): this arm carried a TODO(T25) for descriptors
+			// Retired (WU-19-4): this arm carried an accepted-blocked marker for descriptors
 			// that had no handler and no driver. The census is now zero —
 			// TestHandlersAreInstalledBeforeTheFirstPump walks the whole table
 			// and fails on any named descriptor that is neither `GetBuilt`

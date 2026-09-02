@@ -1,9 +1,11 @@
 package session
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/clock"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -727,28 +729,49 @@ func TestEveryStripFamilyMirrorsItsOwnDrawForm(t *testing.T) {
 		[3]numeric.Fixed{numeric.FixedFromInt(40), 0, numeric.FixedFromInt(40)},
 	)
 
-	views := s.appendStripParticleViews(nil, 0)
+	views := s.appendStripViews(nil)
 	if len(views) == 0 {
 		t.Fatal("no strip particle reached the committed frame")
 	}
 	byStrip := map[int8]int{}
+	last := int8(-1)
 	for _, v := range views {
-		byStrip[v.Strip]++
-		if v.Graphic != "" && v.StripFill != 0 {
-			t.Fatalf("strip %d view carries both a GAF entry (%q) and a fill colour (%#x); a family does one or the other", v.Strip, v.Graphic, v.StripFill)
+		// The committed order is the composer's walk order: strips ascending
+		// [03 §1]. The client finds one barrier's run by a boundary search and
+		// would silently miss records published out of order.
+		if v.Strip < last {
+			t.Fatalf("strip %d was published after strip %d; the committed order is strips ascending [03 §1]", v.Strip, last)
 		}
-		if v.Graphic == "" && v.StripFill == 0 {
+		last = v.Strip
+		byStrip[v.Strip]++
+		if v.Entry != "" && v.Fill != 0 {
+			t.Fatalf("strip %d view carries both a GAF entry (%q) and a fill colour (%#x); a family does one or the other", v.Strip, v.Entry, v.Fill)
+		}
+		if v.Entry == "" && v.Fill == 0 {
 			t.Fatalf("strip %d view carries neither an entry nor a fill colour, so nothing can draw it", v.Strip)
+		}
+		if v.Entry != "" && v.Bank == "" {
+			t.Fatalf("strip %d view names entry %q with no bank; the identity is a pair [06 R-WFX-01 §1]", v.Strip, v.Entry)
 		}
 		switch v.Strip {
 		case 4, 9:
-			if v.Graphic != smokePuffEntry {
-				t.Fatalf("strip %d smoke view names %q, want the smoke-puff entry", v.Strip, v.Graphic)
+			if v.Entry != smokePuffEntry {
+				t.Fatalf("strip %d smoke view names %q, want the smoke-puff entry", v.Strip, v.Entry)
+			}
+			want := frame.StripFamilySmokePuff
+			if v.Strip == 4 {
+				want = frame.StripFamilyVentSteam
+			}
+			if v.Family != want {
+				t.Fatalf("strip %d smoke view carries family %d, want %d; the family selects the draw [03 R-FX-01 §3]", v.Strip, v.Family, want)
 			}
 		case 2, 7:
 			// The sprinkle pair is 0x61/0x67 [R-STRIP-01 §1 strips 2/7].
-			if v.StripFill != 0x61 && v.StripFill != 0x67 {
-				t.Fatalf("strip %d sprinkle fill %#x is off the authored pair", v.Strip, v.StripFill)
+			if v.Fill != 0x61 && v.Fill != 0x67 {
+				t.Fatalf("strip %d sprinkle fill %#x is off the authored pair", v.Strip, v.Fill)
+			}
+			if v.Family != frame.StripFamilySprinkle {
+				t.Fatalf("strip %d sprinkle view carries family %d", v.Strip, v.Family)
 			}
 		default:
 			t.Fatalf("strip %d was mirrored unexpectedly", v.Strip)
@@ -1092,5 +1115,61 @@ func TestPuffFamiliesRiseAtDifferentRates(t *testing.T) {
 	}
 	if got := rise(stripFamilyVentSteam, 4); got != gravity*16 {
 		t.Fatalf("a vent puff rose by %d raw words a tick, want the gravity word times 16", got)
+	}
+}
+
+// TestStripViewsArePublishedEveryTickAndAreByteStable locks the publication
+// boundary itself [I6]: the committed strip channel is rebuilt from the live
+// table at every publication, and two identical sessions publish identical
+// bytes at every tick.
+//
+// Both halves matter. A channel published only when it changes would leave a
+// stale frame's records on screen after the sweep retired them; a channel that
+// differed between two identical runs would mean the walk order or the mirror
+// itself had picked up a nondeterministic source [I1].
+func TestStripViewsArePublishedEveryTickAndAreByteStable(t *testing.T) {
+	const ticks = 12
+
+	run := func() []string {
+		s, _ := newStripTestSession(31, 31)
+		s.Snapshot = frame.NewBuffer()
+		s.Clock.GlobalTick = 0
+		// One producer of each mirrored family, on four different strips.
+		s.appendStripGeothermalSteam([3]numeric.Fixed{numeric.FixedFromInt(104), 0, numeric.FixedFromInt(152)})
+		s.appendStripSmokePuffer(9, [3]numeric.Fixed{numeric.FixedFromInt(40), 0, numeric.FixedFromInt(40)}, SmokePuffLandDust)
+		s.appendStripSprinkle(2, [3]numeric.Fixed{numeric.FixedFromInt(8), 0, numeric.FixedFromInt(8)}, 8, 0)
+		s.appendStripSprinkle(7, [3]numeric.Fixed{numeric.FixedFromInt(9), 0, numeric.FixedFromInt(9)}, 16, 1)
+
+		out := make([]string, 0, ticks)
+		for tick := uint32(1); tick <= ticks; tick++ {
+			s.Clock.GlobalTick = tick
+			s.strips.sweep(tick, s)
+			s.publishSnapshot(tick)
+			published := s.Snapshot.Current()
+			if published == nil {
+				t.Fatalf("tick %d published no frame", tick)
+			}
+			if len(published.Strips) == 0 {
+				t.Fatalf("tick %d published no strip records while the table held live objects", tick)
+			}
+			line := ""
+			for _, v := range published.Strips {
+				line += fmt.Sprintf("%d/%d/%s/%s/%d/%02x/%d,%d,%d|",
+					v.Strip, v.Family, v.Bank, v.Entry, v.Frame, v.Fill,
+					v.X.Raw(), v.Y.Raw(), v.Z.Raw())
+			}
+			out = append(out, line)
+		}
+		return out
+	}
+
+	first, second := run(), run()
+	if len(first) != ticks || len(second) != ticks {
+		t.Fatalf("runs published %d and %d ticks", len(first), len(second))
+	}
+	for i := range first {
+		if first[i] != second[i] {
+			t.Fatalf("tick %d differs between two identical runs:\n%s\n%s", i+1, first[i], second[i])
+		}
 	}
 }

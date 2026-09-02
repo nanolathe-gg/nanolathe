@@ -106,7 +106,9 @@ var MissionGlobalCensus = []CensusEntry{
 	// Inert — parsed but no tick reader [P1-02 §2.1] bounded negative.
 	{Key: "memory", VA: "", Offset: "fixed-size string slot", Type: "string", Default: "empty", Clamp: "menu-only, no tick read", Consumer: "menu display only [P1-02 §2.1]", Class: GlobalInert, Fatal: FatalKindNotFatal},
 	{Key: "nomovie", VA: "", Offset: "bool", Type: "int", Default: "0", Clamp: "suppresses briefing movie", Consumer: "presentation only [P1-02 §2.1]", Class: GlobalInert, Fatal: FatalKindNotFatal},
-	// Timers/display — sibling deadlines [P1-02 §2.1] TODO(question) consumers.
+	// Timers/display — sibling deadlines [P1-02 §2.1]. Every consumer below is
+	// now named: the settlement deadline, the persisted-only WinLoseTime, the
+	// HUD refresh deadline and the scheduler's globalTick [08 "Player records"].
 	{Key: "UpdateTime", VA: "save key UpdateTime", Offset: "per-player Players-box slot [08 save]", Type: "int32 tick", Default: "0 (decode); battle init seeds the current tick [08 player records]", Clamp: "absolute tick, advanced by 30 when due", Consumer: "economy settlement deadline vs the global tick [05 settlement]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "WinLoseTime", VA: "save key WinLoseTime", Offset: "per-player Players-box slot", Type: "int32", Default: "0 (decode); battle init seeds the current tick [08 player records]", Clamp: "—", Consumer: "persisted verbatim; no other reader (closed) [08 save]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "DisplayTimer", VA: "save key DisplayTimer", Offset: "per-player Players-box slot", Type: "int32", Default: "0 (decode); battle init seeds the current tick [08 player records]", Clamp: "—", Consumer: "HUD resource-rate refresh deadline [08 save]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
@@ -211,7 +213,7 @@ type MissionGlobals struct {
 	MissionDescription string  // menu description, fallback "No description available" [02 map-global keys]
 	Mapping            int32   // mapping LOS mode, default 0 [02 map-global keys]
 	LineOfSight        int32   // lineofsight, default 0 [02 map-global keys]
-	LOSType            int32   // LOSType enum, default 0; see TODO(question) at the decode site
+	LOSType            int32   // authored LOSType/SingleLOSType if the OTA carries one; inert — retail's source is the registry triple [03 §3.1]
 	MeteorWeapon       string  // MeteorWeapon empty disables [P1-02 §2.1]
 	MeteorRadius       int32   // MeteorRadius, default 0 [02 map-global keys]
 	MeteorDensity      float64 // MeteorDensity, default 0.0 [02 map-global keys]
@@ -265,14 +267,14 @@ func DecodeMissionGlobals(global *formats.Section) *MissionGlobals {
 	mg.TimeMul = global.FloatValue("timemul", 0) // 0.0 [02 map-global keys][08 mission globals]
 	mg.Memory, _ = global.StringValue("memory", "")
 	mg.NoMovie = global.IntValue("nomovie", 0) // inert [P1-02 §2.1]
+	// The string accessor copies the caller's default only on an ABSENT key and
+	// does a bounded copy of the stored text on a PRESENT one, reporting which
+	// path it took [02 §4 "Accessor table"] — a string field is exactly the one
+	// kind that distinguishes an authored empty value from a missing key. So an
+	// authored-empty `missiondescription` stays empty and does not fall back to
+	// the literal, which is the missing-key default alone
+	// [02 R-MAP-01 §3 row 13].
 	mg.MissionDescription, _ = global.StringValue("missiondescription", "No description available")
-	if strings.TrimSpace(mg.MissionDescription) == "" {
-		// TODO(question): retail's behavior for an authored-empty description is
-		// not stated by research — the map-global table gives the literal only as
-		// the missing-key default [02 map-global keys]. What would settle it: the
-		// menu description consumer's empty-string handling in doc 07.
-		mg.MissionDescription = "No description available"
-	}
 	mg.Mapping = global.IntValue("mapping", 0)         // 0 [02 map-global keys]; lobby/registry LOS defaults are a separate mechanism [08 mission globals]
 	mg.LineOfSight = global.IntValue("lineofsight", 0) // 0 [02 map-global keys]
 	mg.LOSType, _ = func() (int32, bool) {             // SingleLOSType/MultiLOSType enum
@@ -284,11 +286,14 @@ func DecodeMissionGlobals(global *formats.Section) *MissionGlobals {
 		}
 		return 0, false
 	}()
-	// TODO(question): the map-global key table has no LOSType row, and only the
-	// save Summary carries LineOfSightType [08 Summary]; whether the OTA global
-	// section is ever probed for SingleLOSType/LOSType is unestablished. Default
-	// 0 kept as placeholder. What would settle it: a key-string census of the
-	// map-load path for the Single* vocabulary.
+	// The map-global key table carries no LOSType row because the value is not a
+	// map key at all: for a campaign/mission session, visibility mode bit 2 is
+	// copied at battle entry from the single-player LOSType global, which the
+	// loader reads from the registry triple `SingleMapping`/`SingleLineOfSight`/
+	// `SingleLOSType` — each defaulting to 1 and stored back on a miss
+	// [03 §3.1]. `internal/settings` holds that source. This decode is a
+	// lossless carry of an authored key for diagnostics only; the field has no
+	// session reader, and the mode word must not be built from it.
 	// No commanderDeath decode: there is no mission-level key — the rule is a
 	// lobby value, and no defeat trigger is injected for it [08 mission globals].
 	mg.MeteorWeapon, _ = global.StringValue("MeteorWeapon", "") // empty disables [02 meteor merge]

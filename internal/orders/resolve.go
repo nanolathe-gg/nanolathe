@@ -8,9 +8,13 @@ import (
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
-// TODO(question): per-side diplomacy byte on acting unit's definition indexed by target side [04 §3.4].
-// Retail stores a per-side diplomacy byte on the definition; content.UnitDef lacks such a field.
-// Modeling as an unexported resolver input preserves the call site without inventing catalog surface.
+// Hostility is settled. [04 R-ORD-02 §1] corrects §3.4's wording: the byte is
+// the acting **player's** diplomacy byte toward the target's side, not a
+// per-side byte on the acting unit's definition, and it is read once at
+// resolver entry — a value of 0 is hostile, any other value friendly; with no
+// target both hostile and friendly are false. That is exactly the session's
+// alliance row, which composition injects as Queue.Binding().Hostility.
+//
 // P0-I16: hostility and target lookup moved onto Queue.Hostility/Lookup; package globals removed.
 
 func getHostility(actor *units.Unit) func(*units.Unit, *units.Unit) bool {
@@ -32,20 +36,28 @@ func isHostile(actor, target *units.Unit) bool {
 		return false
 	}
 	if actor.Def != nil && target.Def != nil && actor.Def.Side != "" && target.Def.Side != "" {
-		return actor.Def.Side != target.Def.Side // fallback side equality [04 §2.2] TODO(question) diplomacy byte
+		// Unbound queue (tests and tools only): with no alliance row to read,
+		// side inequality stands in for the diplomacy byte [04 §2.2].
+		return actor.Def.Side != target.Def.Side
 	}
 	return actor.Owner != target.Owner
 }
 
-// Capability gates map to definition flags [04 §2.2]/[04 §2.4] with TODO(T25) opaque handling.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-const opaqueDefBit5 = 1 << 5 // TODO(T25)
+// Capability gates map to the definition's two capability words
+// [04 R-SPEC-01 §0]: word A carries `builder`, `isairbase`, `canfly`,
+// `canhover`, `hoverattack` and `kamikaze`; word B carries `canattack`,
+// `canguard`, `canpatrol`, `canmove`, `canload`, the `canreclamate` mirror,
+// `canreclamate`, `canresurrect`, `cancapture` and `candgun` [02 R-KEYS-01].
+// Each is one authored key, so each gate below is one compiled flag.
+//
+// Retired 2026-09-01 (WU-19-16): an `opaqueDefBit5` constant stood here under an
+// accepted-blocked marker calling word B's bit 5 unknown. It is `canguard`,
+// which canGuard already gates, and the constant had no reader.
 
 func canMove(u *units.Unit) bool {
 	if u == nil || u.Def == nil {
 		return false
 	}
-	_ = opaqueDefBit5 // TODO(T25) opaque gate already established in units.go Flags; preserve but do not yet gate resolution
 	return u.Def.CanMove
 }
 func canAttack(u *units.Unit) bool {
@@ -58,14 +70,19 @@ func canDGun(u *units.Unit) bool { // special-attack capability [04 §3.4] code 
 	if u == nil || u.Def == nil {
 		return false
 	}
-	// TODO(question): mapping special-attack capability to CanDGun [04 §2.2] – CanDGun flag corresponds to D-Gun weapon
+	// "Code 4 — special attack. `candgun` → `AttackSpecial`; else reject"
+	// [04 R-ORD-02 §1]. The special-attack capability is the authored `candgun`
+	// key and nothing else.
 	return u.Def.CanDGun
 }
 func canUnload(u *units.Unit) bool { // can-unload [04 §3.4] code 5
 	if u == nil || u.Def == nil {
 		return false
 	}
-	// TODO(question): UnitDef has CanLoad but no CanUnload; treat as CanLoad for now [04 §10.2]
+	// There is no can-unload capability: "Code 5 — unload. `canload`, `canfly`,
+	// a target, and target `isairbase` → `VTOL_Landing`; else `canload` →
+	// `VTOL_Unload` or `Ground_Unload`; else reject" [04 R-ORD-02 §1]. Both
+	// directions of transport are gated by the one authored `canload` key.
 	return u.Def.CanLoad
 }
 func canGuard(u *units.Unit) bool {
@@ -118,28 +135,44 @@ func isBuilder(u *units.Unit) bool { // build list non-empty [04 §3.4] code 14
 	if u == nil || u.Def == nil {
 		return false
 	}
-	// TODO(question): full build list lives in content.Catalog.BuildMenus; Builder bool approximates non-empty list [02 "Unit record"]
+	// Unimplemented: [04 R-ORD-02 §1] establishes that code 14's gate is "the
+	// definition's build list is non-empty", not the authored `builder` key.
+	// The compiled build list is content.Catalog.BuildMenus, which the resolver
+	// has no handle to; wiring one is a package-API change — see PLAN 19 §2.3.
+	// `Builder` stands in until then: every stock definition with a CANBUILD
+	// page also authors `builder=1`, so the two disagree only on modded data.
 	return u.Def.Builder
 }
 func isTransportable(t *units.Unit) bool { // carriable test [04 §10.2]
 	if t == nil || t.Def == nil {
 		return false
 	}
-	// TODO(question): full admission includes size, capacity, mover etc [04 §10.2]; stub uses CantBeTransported
+	// Unimplemented: "Carriable is the nine-reject transport admission of
+	// §10.2" [04 R-ORD-02 §1] — size against `transportsize`, remaining
+	// capacity, the carrier's own mover mode and the rest of §10.2's ladder.
+	// Only the authored `cantbetransported` reject is applied here; the other
+	// eight need the carrier's runtime cargo state — see PLAN 19 §2.3.
 	return !t.Def.CantBeTransported
 }
+
+// isFollowable is the alive gate and nothing else. [04 R-ORD-02 §1] settles
+// what §3.4's "followable target" means: there is no per-target followable
+// predicate. Code 7 and the follow arms of codes 1 and 2 gate on the ACTOR's
+// `canguard` and on the target being friendly; separately, "a target that
+// exists but lacks the alive bit 28 rejects **every** code before the switch".
 func isFollowable(t *units.Unit) bool {
-	// TODO(question): followable test not located; stub treats any alive unit as followable [04 §3.4]
 	return t != nil && t.Alive
 }
+
+// isLandingPad is the authored `isairbase` key — word A bit 9 of
+// [04 R-SPEC-01 §0], the only pad test the resolver makes [04 R-ORD-02 §1].
 func isLandingPad(t *units.Unit) bool {
-	// TODO(question): landing pad detection [04 §10.2] uses IsAirBase or pad query; stub checks IsAirBase [02 "Unit record"]
 	return t != nil && t.Def != nil && t.Def.IsAirBase
 }
 
-// Retired 2026-08-31: `isStructure` stood here, a `!CanMove` stub carrying a
-// TODO(question) about "structure detection for the no-move attack variant".
-// Its only caller was code 3's ground tail, which [R-ORD-02 §1] settles as a
+// Retired 2026-08-31: `isStructure` stood here, a `!CanMove` stub carrying an
+// open-question marker about "structure detection for the no-move attack
+// variant". Its only caller was code 3's ground tail, which [R-ORD-02 §1] settles as a
 // test on the ACTOR's mover reference and state bit 29, not on the target's
 // class. There is no structure-detection question left to answer.
 func isDamaged(u *units.Unit) bool {
@@ -245,7 +278,11 @@ func resolveName(code int, actor *units.Unit, target *units.Unit, pos *ResolvePo
 		if !canUnload(actor) {
 			return ""
 		}
-		if target != nil && isLandingPad(target) {
+		// "`canload`, `canfly`, a target, and target `isairbase` →
+		// `VTOL_Landing`" [04 R-ORD-02 §1] code 5; the canfly term was missing,
+		// so a ground transport ordered to unload onto an air base resolved the
+		// air-only landing executor.
+		if actor.Def != nil && actor.Def.CanFly && target != nil && isLandingPad(target) {
 			return "VTOL_Landing"
 		}
 		if actor.Def != nil && actor.Def.CanFly {
@@ -272,7 +309,13 @@ func resolveName(code int, actor *units.Unit, target *units.Unit, pos *ResolvePo
 		if target == nil || !isBuilder(actor) {
 			return ""
 		}
-		// TODO(question): reachable by nanolathe not located; stub assumes reachable [04 §3.4]
+		// Unimplemented: [04 R-ORD-02 §1] names code 8's gate "nano-reach", the
+		// repair admission of [04 R-ORD-01 §7] — the `canreclamate` mirror bit
+		// on me, the target's health differing from `maxdamage`, the target not
+		// airborne, and the water clause — and "no health test here either" on
+		// the resolved name. `isBuilder` stands in for the mirror bit and the
+		// remaining three terms are unapplied; the admission is shared with
+		// codes 1 and 2, so it belongs in one helper — see PLAN 19 §2.3.
 		if isUnfinished(target) {
 			if actor.Def != nil && actor.Def.CanFly {
 				return "VTOL_HelpBuild"
@@ -313,7 +356,11 @@ func resolveName(code int, actor *units.Unit, target *units.Unit, pos *ResolvePo
 		}
 		return "Patrol"
 	case 10:
-		// TODO(question): internal command whose label is not established [04 §3.4]
+		// There is no code-10 arm to establish: "neither resolver has a code-10
+		// arm; both fall to their defaults — the identity-form resolver returns
+		// the `GetBuilt`-shaped identity 0x13, the name-form resolver writes an
+		// empty name (reject) — and no caller inside the bounded census emits
+		// code 10" [04 §3.4 row 10]. This is the name-form resolver.
 		return ""
 	case 11:
 		return "Teleport"
@@ -341,7 +388,12 @@ func resolveName(code int, actor *units.Unit, target *units.Unit, pos *ResolvePo
 		}
 		return "Reclaim"
 	case 13:
-		if !canCapture(actor) || target == nil || !isHostile(actor, target) {
+		// "Code 13 — capture. `cancapture`, a target, and the target's owner
+		// differing from mine → `Capture`. **Correction to §3.4's row 13:** it
+		// says 'target hostile and differently owned'; hostility is **not**
+		// tested — an allied unit of another player is capturable by this code"
+		// [04 R-ORD-02 §1].
+		if !canCapture(actor) || target == nil {
 			return ""
 		}
 		if actor.Owner == target.Owner {
@@ -388,7 +440,10 @@ func resolveContextual(actor *units.Unit, target *units.Unit, pos *ResolvePos) s
 		}
 		return "Ground_Pickup"
 	}
-	if target != nil && isFollowable(target) {
+	// "`canguard` and friendly → `VTOL_Follow` or `Follow_Ground`" — the follow
+	// arm is gated on the ACTOR's canguard and on the target being friendly,
+	// never on a property of the target [04 R-ORD-02 §1] code 1 step 6.
+	if target != nil && isFollowable(target) && canGuard(actor) && !isHostile(actor, target) {
 		if actor.Def != nil && actor.Def.CanFly {
 			return "VTOL_Follow"
 		}
@@ -446,7 +501,10 @@ func resolveMove(actor *units.Unit, target *units.Unit) string {
 			}
 			return "HelpBuild"
 		}
-		if isLandingPad(target) {
+		// "I am `canfly`, friendly, target `isairbase` → `VTOL_Landing`"
+		// [04 R-ORD-02 §1] code 2. A ground unit ordered onto a pad is not
+		// landing on it, and a hostile pad is not a landing site.
+		if actor.Def != nil && actor.Def.CanFly && !isHostile(actor, target) && isLandingPad(target) {
 			return "VTOL_Landing"
 		}
 		if isTransportable(target) {
@@ -455,7 +513,8 @@ func resolveMove(actor *units.Unit, target *units.Unit) string {
 			}
 			return "Ground_Pickup"
 		}
-		if isFollowable(target) {
+		// "`canguard` and friendly → follow or air twin" [04 R-ORD-02 §1] code 2.
+		if isFollowable(target) && canGuard(actor) && !isHostile(actor, target) {
 			if actor.Def != nil && actor.Def.CanFly {
 				return "VTOL_Follow"
 			}
@@ -513,24 +572,38 @@ func resolveAttackAt(actor *units.Unit, target *units.Unit, pos *ResolvePos) str
 		}
 		return ""
 	}
-	// four air-attack variants chosen by weapon and target class [04 §3.4] code 3
-	// TODO(question): selection by weapon and target class not fully located; stub uses CanFly/CanHover
+	// The four air variants, exactly as [04 R-ORD-02 §1] gives them for code 3:
+	// with *W1* my definition's first-weapon definition and `dropped` doc 06's
+	// flag — "*W1* `dropped` and target not `canfly` → `AirStrike`; *W1* not
+	// `dropped` and target `canfly` → `AirToAir`; target not `canfly` and I
+	// lack `hoverattack` → `AirToGround`; target not `canfly` and `hoverattack`
+	// → `AirToGroundHover`; a `dropped` *W1* against a flying target → reject".
+	//
+	// Corrected 2026-09-01 (WU-19-16). The stub selected `AirToGroundHover` on
+	// the TARGET's `canhover` — a property of the thing being attacked — where
+	// every term of the real rule is on the actor except the target's `canfly`;
+	// it also invented an `AirToAir` arm keyed on my own `toairweapon` and an
+	// `AirStrike` arm keyed on the target being an air base, neither of which
+	// exists. A `dropped` bomber against an aircraft now rejects rather than
+	// resolving a run it cannot fly.
 	if actor.Def != nil && actor.Def.CanFly {
-		if target.Def != nil && target.Def.CanFly {
-			return "AirToAir"
-		}
-		if target.Def != nil && target.Def.CanHover {
-			return "AirToGroundHover"
-		}
-		// A sentinel primary (a missed link) is inactive, not an air-attack
-		// weapon [02 §5 R-CONTENT-02].
-		if !content.IsWeaponInactive(actor.Def.Weapon1Def) && actor.Def.Weapon1Def.ToAirWeapon {
-			return "AirToAir"
-		}
-		if target.Def != nil && target.Def.IsAirBase {
+		// A sentinel primary (a missed link) is inactive, so it is not a
+		// dropped weapon [02 §5 R-CONTENT-02].
+		w1 := actor.Def.Weapon1Def
+		dropped := !content.IsWeaponInactive(w1) && w1.Dropped
+		targetFlies := target.Def != nil && target.Def.CanFly
+		switch {
+		case dropped && !targetFlies:
 			return "AirStrike"
+		case dropped: // a dropped primary against a flying target
+			return ""
+		case targetFlies:
+			return "AirToAir"
+		case actor.Def.HoverAttack:
+			return "AirToGroundHover"
+		default:
+			return "AirToGround"
 		}
-		return "AirToGround"
 	}
 	// The ground tail of code 3 [R-ORD-02 §1]: "I am not `canfly` → a live
 	// mover → `Attack_Chase`; state bit 29 (immobile) → `Attack_NoMove`; else
@@ -564,7 +637,7 @@ var _ = (*content.UnitDef)(nil)
 // ---------------------------------------------------------------------------
 
 // Retired 2026-08-31: `chaseAbandonMask` (0x01), `chaseDisengageMask` (0x06)
-// and `stubStandoffWorld` (64) stood here, each carrying a TODO(question)
+// and `stubStandoffWorld` (64) stood here, each carrying an open-question marker
 // saying its value was "not located". None of the three exists in retail.
 // [04 R-ORD-01 §3] gives the handler's real pre-checks — pending `0x800`, a
 // null target, pending `0x10008`, and the leash — and the standoff is the
@@ -598,7 +671,7 @@ var _ = (*content.UnitDef)(nil)
 // Retired 2026-09-01 (WU-19-6): `setBandedGoalAroundWard` stood here. It wrote
 // the record's goal to `ward + (standoff, 0, 0)` — a due-east point at a
 // standoff its two callers took from p1 with a fallback of 20 world units —
-// under a TODO(question) saying the banded geometry was not located. It is
+// under an open-question marker saying the banded geometry was not located. It is
 // located. [04 R-ORD-01 §8] gives the whole closure: the radius is computed by
 // the handler from the two footprints and never read from the issuer, the
 // direction is one RNG draw taken once at admit, the record's goal triple
@@ -687,7 +760,7 @@ func canEngageSlot(u *units.Unit, target pool.Handle, slot int) bool {
 // explicit correction to that summary. The differences that mattered in play:
 // the standoff was a fixed 64 world units rather than the weapon's range, so an
 // ordered unit orbited far outside its own reach and never fired; no phase ever
-// bound a weapon slot at all (phases 1 and 3 were bare TODO(question) advances);
+// bound a weapon slot at all (phases 1 and 3 were bare open-question advances);
 // the goals were written straight into the record's goal fields instead of
 // through the payload installers, so the mover was steered by whatever the
 // movement side's own per-order fallback invented; and the pre-check masks
@@ -910,8 +983,12 @@ func isFriendlyConstruction(actor, ward *units.Unit) bool {
 	return !isHostile(actor, ward)
 }
 func canRepairGuard(actor *units.Unit) bool {
-	// TODO(question): can repair mapping not located; stub uses Builder or CanReclamate [04 §2.2]
-	return actor != nil && actor.Def != nil && (actor.Def.Builder || actor.Def.CanReclamate)
+	// Leg 3 of [04 R-UNIT-06 §1]: "when the ward's health (signed word) compares
+	// below its definition's maximum-damage word **and the guard's definition
+	// has the builder bit**". It is the authored `builder` key alone; the
+	// `canreclamate` disjunct that stood here admitted reclaimers with no
+	// nanolathe to the repair leg.
+	return actor != nil && actor.Def != nil && actor.Def.Builder
 }
 func wardIsDamaged(ward *units.Unit) bool {
 	return ward != nil && ward.Health < ward.MaxHealth
@@ -925,7 +1002,9 @@ func wardHasBuildOrder(ward *units.Unit) bool {
 		return false
 	}
 	head := q.primary[0]
-	return head.StaticGate&0x100000 != 0 // 0x100000 marks nanolathe/build-site class [04 §3.1] TODO(question)
+	// "0x100000 marks the nanolathe/build-site class, tested by the guard-assist
+	// branch" — a named bit of the descriptor gate mask, Established [04 §3.1].
+	return head.StaticGate&0x100000 != 0
 }
 
 // guardHandler is the follow guard: `Follow_Ground` and its air twin
@@ -992,19 +1071,27 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 				q.Push(helpID, Node{Target: n.Target, GoalX: ward.X, GoalY: ward.Y, GoalZ: ward.Z})
 			}
 			pushDedupArr(arr, wardH)
-			// TODO(question) 30-tick cadence behind dedup latch; Code 3 wait covers retry delay [04 §3.3]
-			// The retry deadline is set by result code 3, so the handler needs no tick [04 §3.3].
+			// The retry deadline is set by result code 3, so the handler needs no
+			// tick [04 §3.3]. Unimplemented: [04 R-UNIT-06 §1] corrects the
+			// dedup array away — "there is **no** dedup array and no latch in
+			// either guard handler", re-enqueue discipline coming from the pump's
+			// deadline cadence and the satisfied-bit gates — and makes this leg
+			// the ward's-order join of item 4, not a bare help-build. Retiring
+			// the latches is the same change as legs 1 and 2 below; see
+			// PLAN 19 §2.3.
 			return Code(3)
 		}
 	}
-	// (b) auto-fire while holding position — for each weapon slot with auto-target enabled whose weapon is not command-fire-only [04 §3.5]
-	// TODO(question): weapon auto-target and command-fire-only not located; stub returns false pending WU-06-7
-	// No candidate acquisition until WU-06-7; dedup structure retained for future.
-	for slot := 0; slot < 3; slot++ {
-		// Stub: no auto-fire candidate without WU-06-7; keep loop for shape but never fires.
-		// If a future probe shows auto-fire should be expressible via state, enable here.
-		_ = slot
-	}
+	// Unimplemented: leg 2 of [04 R-UNIT-06 §1] is not an acquisition at all.
+	// Gated on the guard's standing-fire field alone ([04 R-STANCE-01 §3]
+	// corrects §1's mention of the standing-move field), it walks slots 0..2
+	// requiring the slot's assigned bit, its tracking bit, and a weapon whose
+	// `commandfire` definition bit is clear, and REBINDS a slot with no target,
+	// an out-of-range target, or a target in the slot's bad-target category
+	// array onto the ward's engagement target. Slots already holding a legal
+	// in-range target are untouched. It shares the ward's engagement-target
+	// reference with leg 1, so it lands with the TODO(T25) below; the empty
+	// three-slot loop that stood here is gone — see PLAN 19 §2.3.
 	// (c) repair assist — when ward is damaged and guard can repair [04 §3.5]
 	if wardIsDamaged(ward) && canRepairGuard(u) {
 		wardH := ward.Handle

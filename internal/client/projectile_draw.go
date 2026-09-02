@@ -111,9 +111,11 @@ func (c *Client) DrawProjectileViews(current []frame.ProjectileView, now uint32,
 // publishes the cached average floor height required by the shared `shadow`
 // entry. Using projectile Y here would make the ground sprite float with the
 // projectile and would invent the missing route arithmetic [03 §5.4][I9].
-// TODO(question): publish the projectile's cached average floor height (the
-// same value used by simulation's projectile terrain sampling), then project
-// the shadow at (X-viewX+128, (Z-floor/2)-viewZ+32).
+// Unimplemented: [03 §5.4] establishes the projection — the shadow goes at
+// (X-viewX+128, (Z-floor/2)-viewZ+32) against the projectile's cached average
+// floor height, the same value simulation's projectile terrain sampling uses.
+// What is missing is the publication: that height does not cross the frame
+// boundary. See PLAN 19 §2.4.
 func (c *Client) drawProjectileShadow(shadow *formats.GAFFrame, _ frame.ProjectileView) bool {
 	return false
 }

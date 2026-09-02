@@ -69,14 +69,22 @@ func Load(data []byte) (*Program, error) {
 	offScriptNameOffsetArray := readU32(0x1C) // OffsetToScriptNameOffsetArray [fmt cob]
 	offPieceNameOffsetArray := readU32(0x20)  // OffsetToPieceNameOffsetArray [fmt cob]
 	offScriptCode := readU32(0x24)            // OffsetToScriptCode [fmt cob]
-	offFirstScriptName := readU32(0x28)       // OffsetToFirstScriptName [fmt cob] — TODO(question): no known runtime purpose [fmt cob]
+	// OffsetToFirstScriptName equals ScriptNameOffsetArray[0] in every observed
+	// file — effectively the start of the string pool — and has no separate
+	// runtime purpose [fmt cob "Header"]. Read for the header round-trip only.
+	offFirstScriptName := readU32(0x28)
 
 	if version != 4 {
 		// [fmt cob] "4 for TA. (Kingdoms uses other versions; not covered here.)"
 		// TAK header is 52 bytes / 13 words when VersionSignature == 6 [fmt cob] "TAK-only opcodes".
 		return nil, fmt.Errorf("cob: unsupported version %d want 4", version)
 	}
-	// TODO(question): retail's behavior on non-zero Always_0 at 0x14 is untraced and all observed files are zero [fmt cob]; strict error kept per orchestrator guidance.
+	// The reserved header word is zero in every observed file [fmt cob
+	// "Header"], but what retail does with a non-zero one is untraced.
+	// TODO(question): does retail test the reserved header word at all, or
+	// ignore it? Decider: a static trace of the COB loader's header validation.
+	// Rejecting is a bounds check that refuses data retail may well accept —
+	// the INVARIANTS I11 exception — and is kept deliberately.
 	if always0 != 0 {
 		return nil, fmt.Errorf("cob: reserved header word at 0x14 non-zero %d", always0)
 	}

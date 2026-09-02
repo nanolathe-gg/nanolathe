@@ -278,11 +278,17 @@ func decodeDIGI(alias string, data []byte) (*Sample, error) {
 	}, nil
 }
 
-// SampleCache is the bounded alias→Sample cache [03 §8.2] C20 [GAP T14].
-// Capacity is 255 entries per [02 "Sound aliases"] alias cap; eviction
-// is deterministic FIFO oldest-first. Size/eviction are not fully established
-// beyond the alias cap, so FIFO is a deterministic placeholder.
-// TODO(question): is sample cache cap exactly 255 and is eviction FIFO/LRU?
+// SampleCache is the alias→Sample cache [03 §8.2] C20.
+//
+// Retail has no eviction at all: "samples are cached at the alias level: one
+// decoded PCM blob per alias, retained for the life of the session, with no
+// eviction beyond the alias cap of §8.3", and the same paragraph names the
+// FIFO-255 cache below as "a documented divergence, not retail
+// secondary-buffer eviction" [03 §8.2 "Caching"]. So the retained session
+// cache is the retail behavior and the bounded FIFO one exists only for
+// explicitly bounded test caches; the 255 comes from the [02 "Sound aliases"]
+// alias cap, not from a cache size retail authors.
+
 type SampleCache struct {
 	fs  vfs.FSOps
 	cap int

@@ -38,9 +38,10 @@ func SnapshotVisible(f *frame.Frame, v frame.UnitView, viewer uint8) bool {
 	// gameplay predicate. Keep the exact projected one-point gate at this
 	// boundary; extending it with footprint-derived guesses would change the
 	// established hull semantics [03 §3.2].
-	// TODO(question): publish unit X/Y/Z hull extents and the sea-level value in
-	// frame data so presentation can reproduce the full four-point gate without
-	// reading live definitions or terrain.
+	// Unimplemented: [03 §3.2] establishes the four-point hull gate. Presentation
+	// cannot reproduce it because the unit's X/Y/Z hull extents and the
+	// sea-level value do not cross the frame boundary, and reading live
+	// definitions or terrain from here would breach I6. See PLAN 19 §2.4.
 	return SnapshotPointVisible(m, v.X, v.Y, v.Z, viewer)
 }
 

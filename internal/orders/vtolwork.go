@@ -189,7 +189,7 @@ func emitStartBuildingAbsolute(u *units.Unit, n *Node, target *units.Unit) {
 // model total-height word — the same positive max-Y dword `BeginTransport`
 // carries [04 R-AIR-01 §9] — which this build stores as `ModelTop`.
 //
-// Corrected 2026-08-31: this carried a TODO(T25) claiming "the queue binding
+// Corrected 2026-08-31: this carried an accepted-blocked marker claiming "the queue binding
 // carries no terrain or world reference" and passed the clause unconditionally,
 // admitting the submerged target retail refuses. `WorldQueryAdapter.SeaLevel`
 // is required of every composed binding and has been since the world adapter

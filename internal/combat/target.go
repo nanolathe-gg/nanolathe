@@ -219,7 +219,11 @@ type Acquisition struct {
 	// WaterAdmit is the water branch's two candidate depth/type predicates.
 	// Water weapons skip height test and instead apply two candidate depth and
 	// type predicates via bands (wy/wt/wl/mb) per [04 §9.1] P0-10 P0-11.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): the water branch is selected off one bit of the weapon
+	// definition's flag word, and whether that bit is `noautorange` or
+	// `waterweapon` is not proved — the gate keeps a neutral name until it is.
+	// Decider: static trace of the flag word's writer against [02 R-KEYS-01]'s
+	// authored-key mapping. P0-10/P0-11.
 	WaterAdmit func(c Candidate) bool
 
 	// ToAir requests the to-air target-status class [06 §3.1] P0-10: only candidates
@@ -243,9 +247,12 @@ type Acquisition struct {
 	RNG *rng.Simulation
 
 	// Secondary candidates for radar-like list consulted only when primary filtered empty && upgrade !=0 [06 §3.1] P0-11.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): the targeting-upgrade aggregate is read off the unit
+	// definition's second capability word (word B of [04 R-SPEC-01 §0]), but
+	// which bit of it is not proved; the aggregate keeps a neutral name.
+	// Decider: static trace of that word's writer against [02 R-KEYS-01]. P0-11.
 	Secondary  []Candidate
-	HasUpgrade bool // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	HasUpgrade bool // targetingUpgradeAggregate != 0 [06 §3.1] P0-11; see the marker above
 }
 
 // directlyVisible is the primary list's direct-visibility predicate

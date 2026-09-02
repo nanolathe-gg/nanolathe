@@ -62,8 +62,10 @@ func minimapFloorDiv(a, b int64) int64 {
 // baked == nil or len==0 uses 2× supersampled tile sampling and ALP 2×2→1 blending [03 §3.7][fmt tnt][fmt pal].
 // When baked != nil, it is rescaled through the established picture path [03 §3.7].
 // The ALP table is mandatory: there is no nearest-neighbor compatibility path.
-// TODO(question): letterbox bar fill is outside the exact w×h picture surface
-// and remains unresolved [03 §3.7].
+// TODO(question): what fills the letterbox bars outside the exact w x h picture
+// surface? [03 §3.7] specifies the picture and stops there. Decider: manual
+// retail observation — this is the "bar fill" probe of probes/ that RWU-19-9
+// runs in one retail session.
 func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, baked []byte, bakedW, bakedH int, tables *palette.Tables) *RadarSurface {
 	if m.W <= 0 || m.H <= 0 || tables == nil {
 		return nil

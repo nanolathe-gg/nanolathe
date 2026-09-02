@@ -15,8 +15,16 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// IsLandingPad reports whether u is a landing pad via IsAirBase [02 "Unit record"][04 §10.2].
-// TODO(question): full pad detection via QueryLandingPad script query [04 §10.2]; IsAirBase is stub.
+// IsLandingPad reports whether u is a landing pad. The test is the authored
+// `isairbase` key and nothing else — word A bit 9 of [04 R-SPEC-01 §0], the
+// only pad test the command resolver makes [04 R-ORD-02 §1], and the same key
+// `VTOL_Landing` phase 6 reads on the pad owner [04 R-AIR-01 §7].
+//
+// The marker retired here called this a stub for "full pad detection via the
+// QueryLandingPad script query". The two are different questions: `isairbase`
+// says whether a unit is a pad at all, while the script query names WHICH of a
+// pad's four pieces a lander attaches to. The piece question is still open, and
+// is marked at FindFreePad below where it belongs.
 func IsLandingPad(u *units.Unit) bool {
 	if u == nil || u.Def == nil {
 		return false
@@ -25,6 +33,13 @@ func IsLandingPad(u *units.Unit) bool {
 }
 
 // FindFreePad finds a free landing pad for seeker [04 §10.2].
+//
+// TODO(question): the four-output `QueryLandingPad` script query, whose outputs
+// are the pad pieces tried in order 0..3, has no caller in this build; a pad is
+// treated as one landing site rather than four pieces, and "already assigned"
+// is approximated instead of read off the attach-piece field. Decider: static
+// trace of the query's caller and of the attach-piece writer that marks a piece
+// taken [04 §10.2][04 R-AIR-01 §7].
 // Tries candidates in order 0..3 conceptually, but in world terms scans all IsAirBase units in deterministic order [I1]
 // and returns first that is not carried and not already assigned to another unit (any unit whose attach-piece equals candidate) [04 §10.2].
 // For simplified world where each pad is a unit (one piece), we treat pad unit handle as candidate index and check if any other unit's AttachPiece equals that handle's slot? Since AttachPiece is per-cargo piece index on carrier, not pad assignment.

@@ -1081,7 +1081,7 @@ func (s *Session) RegisterAll() {
 						// exercises, so shooter 0 alone reproduces the
 						// observable contract here.
 						//
-						// Retired (WU-19-26): this carried a TODO(question)
+						// Retired (WU-19-26): this carried an open-question marker
 						// saying applyDamageToUnit stamped LastDamageSide and
 						// LastDamageCause together inside one shooter-presence
 						// gate, so a unit killed outright by a null-shooter

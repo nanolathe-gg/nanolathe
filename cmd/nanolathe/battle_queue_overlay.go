@@ -111,11 +111,12 @@ func drawQueueOverlay(c *client.Client, b *battleSession, f *frame.Frame, tick u
 				drawQueueLine(c, op.A, op.B, c.GUIColor(op.Color))
 			}
 		case hud.QueuePrimitiveIcon:
-			// TODO(question): the per-order queued-order icon indexes the cursor
-			// handle array with the order descriptor's icon byte, which the
-			// immutable frame does not carry (the frame publishes the order kind
-			// as text, not its descriptor). Publishing the descriptor icon byte
-			// on OrderView would settle it [R-P0-11 §3].
+			// Unimplemented: [R-P0-11 §3] establishes that the queued-order icon
+			// indexes the cursor handle array with the order DESCRIPTOR's icon
+			// byte. The committed frame publishes the order kind as text, not
+			// its descriptor, so the byte does not cross the boundary and no
+			// icon can be drawn without inventing one. Publishing it on
+			// OrderView is the fix. See PLAN 19 §2.4.
 		}
 	}
 }

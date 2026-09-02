@@ -341,28 +341,31 @@ func (c *Client) drawCommittedFrame(cur *frame.Frame, ok bool) {
 	// Strips 0 and 1 are unconditional but producerless; strip 2 is the first
 	// published effect barrier [03 §1][03 R-STRIP-01 §2].
 	// TODO(T23): strip slots 0-1 have no published live producer.
-	c.drawEffectStrip(cur, 0)
-	c.drawEffectStrip(cur, 1)
-	c.drawEffectStrip(cur, 2)
+	c.drawStripSlot(cur, 0)
+	c.drawStripSlot(cur, 1)
+	c.drawStripSlot(cur, 2)
 
 	// The first feature traversal owns the never-seen admission. Features with
 	// height >= 10 are deferred to pass A [03 R-RAST-01 §6].
 	c.drawFeaturePass(cur, ok)
 	// TODO(T23): strip slot 3 has no published live producer.
-	c.drawEffectStrip(cur, 3)
-	c.drawEffectStrip(cur, 4)
+	c.drawStripSlot(cur, 3)
+	c.drawStripSlot(cur, 4)
 
 	// Pass A: the grounded units of each window row, interleaved with that
 	// row's deferred tall features [03 R-RAST-01 §7].
 	c.drawWorldPass(cur, ok)
-	c.drawEffectStrip(cur, 5)
+	c.drawStripSlot(cur, 5)
 
 	// Strip 6 advances and paints nanolathe once, then consumes its committed
-	// effect records at the same barrier [03 §1][03 R-STRIP-01 §2].
+	// effect records at the same barrier [03 §1][03 R-STRIP-01 §2]. The
+	// strip-6 objects themselves are the spray drawNanolathe paints, so the
+	// publication leaves them out of the committed strip channel and this
+	// barrier has no strip-object pass of its own.
 	c.drawEffects(cur)
 	c.drawProjectiles(cur)
 	c.drawFixedEffects(cur)
-	c.drawEffectStrip(cur, 7)
+	c.drawStripSlot(cur, 7)
 	// Pass B: the units whose mode mirror is not 1 — airborne aircraft,
 	// attached/parked cargo, save-installed — at the end of strip 7, after the
 	// projectile pool and the fixed effect pool [03 R-RAST-01 §7][03 §1].
@@ -371,14 +374,14 @@ func (c *Client) drawCommittedFrame(cur *frame.Frame, ok bool) {
 	// leave this established slot empty rather than inventing a route [03 §1].
 	// Strip slot 8 is unconditional; no published producer exists [03 §1].
 	// TODO(T23): strip slot 8 has no published live producer.
-	c.drawEffectStrip(cur, 8)
+	c.drawStripSlot(cur, 8)
 
 	// The key-controlled overlay has no concrete authored client route yet.
 	// The unit labels follow it and precede strip 9: the health bar and the
 	// control-group digit, each gated on the option byte and on the labelled
 	// owner equalling the local player slot [03 §1][03 R-FX-01 §6].
 	c.drawUnitLabels(cur, ok)
-	c.drawEffectStrip(cur, 9)
+	c.drawStripSlot(cur, 9)
 	c.drawFog(cur)
 	c.drawSelectionStage()
 	c.drawInterface(cur)
@@ -600,14 +603,14 @@ func (c *Client) presentUnit(d worldDrawable) {
 // under the build plate. Its own bucket entry is left alone; this is the
 // second, later present retail also performs.
 //
-// TODO(question): retail composites a child into the carrier's staging image
-// with the per-pixel key test, offset by the child's world-height difference
-// [03 R-REN-03A §4]. Nanolathe has no cross-unit key plane — each unit
-// composes and blits its own image — so a child is blitted whole over the
-// carrier instead of resolving against it per pixel. That is visible only
-// where carrier geometry should occlude part of a child; settling it means
-// giving the model path a staging image, which is a composition change and not
-// a draw-order one.
+// Unimplemented: [03 R-REN-03A §4] establishes that retail composites a child
+// into the CARRIER's staging image with the per-pixel key test, offset by the
+// child's world-height difference. Nanolathe has no cross-unit key plane — each
+// unit composes and blits its own image — so a child is blitted whole over the
+// carrier instead of resolving against it per pixel. Visible only where carrier
+// geometry should occlude part of a child; the fix is a staging image on the
+// model path, a composition change rather than a draw-order one.
+// See PLAN 19 §2.4.
 func (c *Client) presentAttachedChildren(carrier pool.Handle) {
 	b := &c.worldBuckets
 	for i := b.firstChild(carrier); i >= 0; i = b.nextChild(i) {

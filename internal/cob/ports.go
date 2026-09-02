@@ -134,22 +134,28 @@ func HitByWeaponArgs(dirByte uint8) (int32, int32) {
 //	severity = ((-health*100)/maxHealth + prior) / 2 // unsigned divide
 //	clamp(severity, 1, 100)
 //
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// 30-tick window (the tick samples clamp(health*100/maxHealth,0,100) into
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// where prior is the PREVIOUS 30-tick window's health percentage. The unit
+// record keeps two adjacent sample bytes: each 30-tick sample writes
+// clamp(health*100/maxHealth, 0, 100) into the current one after shifting the
+// current one into the prior one [04 §5.1]. Division is
 // unsigned; for the positive domain it coincides with signed trunc toward zero
 // [01 §8] I3. The caller must only invoke this when the query is actually taken
 // (cause overrides bypass it with forced 0) [04 §5.1].
 func KilledSeverity(health, maxHealth int32, priorSample uint8) int32 {
 	if maxHealth <= 0 {
-		return 1 // TODO(question): maxHealth zero guard is untraced; clamp to minimum rather than fault.
+		// Retail divides by the definition's maximum-damage field with no
+		// guard, so an authored zero raises the processor divide fault and
+		// kills the process — "document this as policy rather than silently
+		// repairing it" [04 §4.3]. We cannot host that, so this clamp is a
+		// named divergence under the INVARIANTS I11 bounds-check exception.
+		return 1
 	}
 	negHealth := -health // health <=0 on normal lethal path; -health >=0
 	if negHealth < 0 {
 		negHealth = 0 // positive health would give negative severity; caller should have bypassed, but clamp path keeps it.
 	}
 	tmp := (negHealth * 100) / maxHealth // unsigned divide for positive domain [04 §5.1]
-	tmp += int32(priorSample)            // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	tmp += int32(priorSample)            // the prior-window sample byte [04 §5.1]
 	tmp /= 2
 	if tmp < 1 {
 		tmp = 1
@@ -166,7 +172,10 @@ func KilledSeverity(health, maxHealth int32, priorSample uint8) int32 {
 // TakeDamage argument after health subtraction [04 §5.1] C26.
 func HealthPercent(health, maxHealth int32) int32 {
 	if maxHealth <= 0 {
-		return 0 // TODO(question): zero max guard untraced.
+		// The same unguarded divide as KilledSeverity above: an authored zero
+		// maximum-damage faults retail outright [04 §4.3]. Clamping is the
+		// INVARIANTS I11 divergence, not a traced behavior.
+		return 0
 	}
 	// Unsigned division note [04 §4.4] port 4 and [04 §5.1] TakeDamage.
 	// For the positive health path this is signed trunc toward zero [01 §8] I3.
@@ -381,7 +390,8 @@ func StartDeferredWake(vm *VM, scriptName string, args []int32) bool {
 // MoveRateCategory classifies the movement tier [GAP T15] C18 [04 §5.2].
 // Category 0 overrides when the inhibit bit is set, the unit is attached to a
 // carrier (carrier dword nonzero), or both magnitude words are zero. Otherwise
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// 1 up to the definition's first move-rate threshold, 2 up to its second, 3
+// above both (MoveRate1 and MoveRate2 below). All comparisons are signed
 // 32-bit [04 §5.2]. On change: into 0 from nonzero issues StopMoving; into
 // nonzero from 0 issues StartMoving FIRST then MoveRateN with a wake=1
 // delta-zero barrier; other nonzero-to-nonzero issues only MoveRateN [GAP T15] C18.
@@ -534,7 +544,8 @@ const (
 // C26 damage funnel without importing internal/units (WU-06-7 may not add
 // fields to units.Unit; the orchestrator decides the final placement, so this
 // package defines its own test-only victim shape, and the units-owner mirrors
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// these names) [04 §5.1] C26 (I13: the definition's armor word is not modeled
+// here).
 type VictimState struct {
 	Health      int32 // current health, signed
 	MaxHealth   int32 // definition maximum damage, >0
@@ -756,7 +767,7 @@ const GroundHeightOffMap = numeric.Fixed(-0x10000)
 // marker or an invented zero [04 §4.4].
 //
 // A nil heightFn returns 0 — no production caller may bind with one; see the
-// TODO(question) on readPortDefault below for the fixture/no-terrain case.
+// note on readPortDefault in vm.go for the fixture/no-terrain case.
 func GroundHeight(packedXZ int32, heightFn func(x, z numeric.Fixed) numeric.Fixed) numeric.Fixed {
 	if heightFn == nil {
 		return 0
@@ -790,8 +801,8 @@ func GroundHeightPortFunc(heightFn func(x, z numeric.Fixed) numeric.Fixed) func(
 
 // ---------------------------------------------------------------------------
 // Unit definition thresholds identity (I13) — MoveRate mapping note for
-// WU-06-1 units-owner. The two retails offsets 0x1AE and 0x1B2 correspond to
-// content.UnitDef.MoveRate1 and MoveRate2 respectively (both default to twice
+// WU-06-1 units-owner. The unit record's two move-rate threshold words are
+// content.UnitDef.MoveRate1 and MoveRate2 (both defaulting to twice
 // MaxVelocity) [02 "Unit record"] [04 §5.2]. They are compiled thresholds for
 // the inclusive tier classification described in MoveRateCategory above.
 // ---------------------------------------------------------------------------

@@ -127,7 +127,17 @@ func perDefLimit(def *content.UnitDef) (int32, bool) {
 			return -1, false
 		}
 		if def.Limit <= 0 {
-			return -1, false // TODO(question): genuine 0 vs fixture 0 unlimited
+			// Unimplemented: [05 R-SHARE-01 §9] settles what 0 means. The unit
+			// definition parser stores -1 (unlimited) into EVERY definition's
+			// limit field; the only other writer is the multiplayer lobby's
+			// restriction apply step, which writes 0 for a definition with no
+			// node — and that step "runs only under the front end's
+			// multiplayer-lobby flag, so a skirmish or campaign battle never
+			// executes it". A genuine 0 is therefore unreachable in this
+			// single-player build, and 0 here is always Go's zero value.
+			// Distinguishing them means compiling the parser's -1 default in
+			// internal/content, which is a catalog change — see PLAN 19 §2.3.
+			return -1, false
 		}
 		return def.Limit, true
 	}

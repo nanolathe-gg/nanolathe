@@ -89,9 +89,9 @@ func drawBelow(u *units.Unit, bound uint32) uint32 {
 //
 // Corrected 2026-08-31 [04 R-ORD-01 §7]. These were a second, divergent
 // implementation: they wrote the control byte and cleared the target
-// unconditionally and guarded only the *notification*, carrying a
-// TODO(question) that said whether the target clear is also guarded "is not
-// established", and reading the assigned bit off the slot's Flags word while
+// unconditionally and guarded only the *notification*, carrying an
+// open-question marker that said whether the target clear is also guarded "is
+// not established", and reading the assigned bit off the slot's Flags word while
 // reading the inhibit bit off OrderControl. The trace settles all three points
 // at once — the guard is evaluated first and a rejected slot is left entirely
 // alone, both bits belong to one byte, and bit 1 means *the slot is enabled* —

@@ -65,7 +65,15 @@ func Load(fs vfs.FSOps, name string) (*Window, error) {
 		// text case, zeroing, two embedded-file, three single-purpose.
 		// Known retail corpus uses ids {0,1,2,3,4,5,6,7,12} [fmt gui]; remaining three free ids 8,9,10
 		// are mapped to slider/text/zeroing here. Unknown ids >15 are treated as unhandled and skipped.
-		// TODO(question): exact numeric mapping for slider/text/zeroing/embedded/single-purpose not enumerated in accessible spec.
+		// [07 §4] closes WHICH twelve cases the control-kind byte selects among
+		// — panel, button, listbox, text input, slider, a text case, an unnamed
+		// zeroing case, two embedded-file cases and three single-purpose ones —
+		// but not which byte value selects which of the last seven. The retail
+		// corpus authors only {0,1,2,3,4,5,6,7,12} [fmt gui].
+		// TODO(question): what byte value does the parser's control-kind switch
+		// give each of the seven cases beyond the authored corpus? Decider: a
+		// static trace of that switch's case table; the finding belongs in
+		// [07 §4].
 		isHandled := false
 		switch kind {
 		case KindPanel, KindButton, KindListBox, KindTextBox, KindScrollBar, KindLabel, KindSurface, KindFont, KindSlider, KindText, KindZero, KindPicture:
@@ -164,13 +172,19 @@ func Load(fs vfs.FSOps, name string) (*Window, error) {
 			if g.Art == "" {
 				g.Art = w.Header.Panel
 			}
-			g.FallbackArt = "BackTile" // fallback chain [07 §4] TODO(question): full order unknown execution
+			// The chain is closed: "each kind resolves its art from its own
+			// named GAF entry first, then the side-specific interface GAF,
+			// then the built-in fallback" [07 §4]. BackTile is that built-in
+			// fallback for a panel.
+			g.FallbackArt = "BackTile"
 		} else if g.Art == "" {
 			// For non-panel, fallback is empty; built-in may provide default art per type/size.
 			// We keep FallbackArt empty and let ArtSources add BackTile only for panel.
 		} else {
 			// For non-panel with own art, set fallback to empty; side GAF will be tried at draw time.
-			// TODO(question): BackTile fallback chain full order not established.
+			// A non-panel with its own art has no built-in fallback; the side
+			// GAF is the only remaining link of [07 §4]'s chain and is tried at
+			// draw time.
 			g.FallbackArt = ""
 		}
 
@@ -231,7 +245,10 @@ func Load(fs vfs.FSOps, name string) (*Window, error) {
 
 		// Unnamed zeroing case [07 §4]: zero out fields? Research says a text case and an unnamed zeroing case.
 		if kind == KindZero {
-			// Zeroing: clear text/link/filename and attribs? TODO(question): exact zeroed fields not enumerated.
+			// TODO(question): which fields does the unnamed zeroing case clear?
+			// [07 §4] names the case among the twelve and says nothing about its
+			// body. Decider: a static trace of that case arm. Clearing the four
+			// text-bearing fields and retaining the rect is the placeholder.
 			g.Text = ""
 			g.Labels = nil
 			g.Link = ""
@@ -239,18 +256,21 @@ func Load(fs vfs.FSOps, name string) (*Window, error) {
 			// Keep rect/attribs as authored? The name implies zeroing, but we retain minimal.
 		}
 
-		// Embedded-file cases [07 §4]: would load embedded GAF/font? Not established.
-		// TODO(question): embedded-file handling not established, retain as generic.
-
-		// Three single-purpose cases [07 §4]: no special handling established.
-		// TODO(question): single-purpose cases semantics unknown.
+		// TODO(question): what do the two embedded-file cases and the three
+		// single-purpose cases do? [07 §4] names all five among the twelve and
+		// describes none. Decider: a static trace of those five case arms.
+		// Retained as generic gadgets meanwhile.
 
 		gadgets = append(gadgets, g)
 
 		// Slider synthesizes two scrollbar child gadgets with derived knob travel [07 §4].
 		if kind == KindSlider {
-			// TODO(question): exact derived knob travel and child placement not established.
-			// Placeholder: create two children sharing assoc, split width, knob sizes halved.
+			// TODO(question): how does the slider derive its two scrollbar
+			// children's knob travel and placement? [07 §4] establishes that it
+			// "synthesizes two scrollbar child gadgets with derived knob
+			// travel" and stops there. Decider: a static trace of the slider
+			// case arm's child construction. Placeholder: two children sharing
+			// assoc, split width, knob sizes halved.
 			childW := rawW / 2
 			if childW < 1 {
 				childW = rawW
@@ -344,8 +364,13 @@ func (w *Window) HitTest(x, y int32) int {
 		if g.GrayedOut != 0 {
 			continue // grayed rejects [07 §3]
 		}
-		// Also attribs grayed bit? Retail tests grayed attribute bit before activation [07 §3].
-		// Our GrayedOut covers it; additional attribs bit check is TODO(question).
+		// Retail tests the grayed attribute bit before activation [07 §3]; the
+		// GrayedOut field above carries it, and [07 §4] lists disabled/hidden
+		// among the observed attributes without giving the attribs bit its own
+		// number.
+		// TODO(question): which attribs bit is the grayed bit, and is it tested
+		// in addition to the grayedout key? Decider: a static trace of the
+		// activation gate's attribute test [07 §3].
 		// Inclusive bounds: gx <= x <= gx+w-1 && gy <= y <= gy+h-1 [07 §3].
 		r := w.PlacedRect(i)
 		if r.W <= 0 || r.H <= 0 {
