@@ -97,13 +97,21 @@ func AdvanceCaptureProgress(cs *CaptureState) {
 //
 // The same-owner and dying-victim rejects this function used to add are NOT in
 // the ladder — [05 R-WORK-01 §10] states it has exactly these five — so they
-// are gone.
+// are gone. [05 R-WORK-01 §11] says where each one does live, and the answer is
+// two different layers:
 //
-// TODO(question): whether the order-side target validation doc 04 owns excludes
-// a same-owner or death-latched capture target before the executor runs is
-// Unknown [05 R-WORK-01 §10]; the transfer path's own validation of old and new
-// ownership is the only later refusal established. A static trace of the
-// capture order's target admission in the order builder would settle it.
+//   - the SAME-OWNER exclusion is the command resolver's code 13, whose whole
+//     test is "the actor's `cancapture`, a target, and the target's owner
+//     record differing from the actor's — a same-owner target never becomes a
+//     `Capture` order" [05 R-WORK-01 §11][04 R-ORD-02 §1]. It is implemented
+//     there, in internal/orders/resolve.go's code-13 arm;
+//   - the DEATH LATCH is the ownership transfer's own entry gate, and only
+//     there. The resolver rejects a target lacking the alive bit but "does not
+//     read the death latch", and neither does the issue helper that queues the
+//     resolved order, so a target killed this tick — latch set, alive bit still
+//     set until the next sweep's finalizer — passes both and passes this
+//     five-predicate ladder, which tests none of owner, latch or health. It is
+//     refused at TransferOwnership below, silently.
 func CaptureEligible(builder *units.Unit, victim *units.Unit) bool {
 	if victim == nil { // 1: the target handle is non-null
 		return false
@@ -123,9 +131,8 @@ func CaptureEligible(builder *units.Unit, victim *units.Unit) bool {
 }
 
 // TransferOwnership performs the central narrow ownership transfer
-// [05 "Capture", "Established fact — ownership transfer"].
-// Copies health/remaining/cargo conditionally but NOT alliances/orders/XP.
-// perDefLimit returns effective limit and whether limited.
+// [05 R-WORK-01 §11]. Its exact copy list is in that section; perDefLimit below
+// returns the effective per-definition limit and whether one applies.
 func perDefLimit(def *content.UnitDef) (int32, bool) {
 	if def == nil {
 		return -1, false
@@ -152,11 +159,37 @@ func perDefLimit(def *content.UnitDef) (int32, bool) {
 	return def.UnitLimit, true
 }
 
+// TransferOwnership is the local branch of the central ownership transfer
+// [05 R-WORK-01 §11]. Its ENTRY GATE is three tests — `owner ≠ new owner`, the
+// alive bit set, and the DEATH LATCH CLEAR — and "a refusal there is silent
+// (the executor still raises cue slot 16 with no text)". The latch test is the
+// one that has no counterpart anywhere earlier: neither the command resolver
+// nor the issue helper reads it, so a victim killed this tick reaches here with
+// its latch set and its alive bit still standing, and this is where it is
+// turned away. Nanolathe's Dying flag IS that latch — Destroy sets it and the
+// phase-2 slot finalizer clears the slot [04 §2.3][04 §2.4].
+//
 // The per-definition limit is the -1 unlimited sentinel for every definition a
 // single-player battle sees; a written 0 admits no unit of that definition at
 // all [05 R-SHARE-01 §9].
 func (s *Service) TransferOwnership(victim *units.Unit, newOwner uint8) (*units.Unit, bool) {
 	if s == nil || s.World == nil || victim == nil || victim.Def == nil {
+		return nil, false
+	}
+	// The entry gate of [05 R-WORK-01 §11], in its order. Every refusal here is
+	// silent: no caption, no diagnostic.
+	if victim.Owner == newOwner {
+		return nil, false
+	}
+	if !victim.Alive {
+		return nil, false
+	}
+	if victim.Dying {
+		// The death latch. This is also the first-lethal rule for multiple
+		// captors: each captor runs its own node and timer, and the first to
+		// reach lethal progress transfers; the second arrives to find the latch
+		// its own kill packet set and is refused here
+		// [05 "Capture", "Established fact — ownership transfer"].
 		return nil, false
 	}
 	if lim, ok := perDefLimit(victim.Def); ok {
@@ -179,41 +212,66 @@ func (s *Service) TransferOwnership(victim *units.Unit, newOwner uint8) (*units.
 	if repl == nil {
 		return nil, false
 	}
-	// Narrow table copy: health, remaining fraction, veteran experience and
-	// visual fields are copied; cargo is copied conditionally, weapon slots
-	// etc. [05 "Capture", "Established fact — ownership transfer"].
-	// Alliances/orders/groups/XP are NOT copied (queues leak on capture, same
-	// as on death) [05 "Factory product heading"].
+	// THE COPY LIST, in [05 R-WORK-01 §11]'s order and nothing beyond it: the
+	// 16-bit health, the remaining fraction, the orientation triple (bank,
+	// heading, pitch), and — per weapon slot, only where the REPLACEMENT's slot
+	// control byte carries its enabled bit — that slot's stockpiled-round byte.
+	// "Nothing else is copied."
 	repl.Health = victim.Health
 	repl.Remaining = victim.Remaining
 	repl.MaxHealth = victim.MaxHealth
-	repl.Kills = victim.Kills
-	// cargo conditionally: if victim had cargo (TODO(question) which cargo
-	// predicate retail tests) copy. For now copy SpotMetal if victim had cargo flag?
-	// The retail cargo predicate is unresolved (see TODO(question) above); we
-	// copy SpotMetal as a placeholder proxy.
-	repl.SpotMetal = victim.SpotMetal
-	// Do NOT copy alliances/orders/XP — leave repl Orders nil, Alliances not stored on unit.
-	// Kill old victim via cause 4 (capture/owner replacement), 30000 damage [06 §12.1].
-	// First-lethal gate: only mark the old victim dying if it is not already
-	// dying, so a second captor's node cannot re-trigger the kill — multiple
-	// captors race independently and the first to reach lethal progress wins
-	// the transfer [05 "Capture", "Established fact — ownership transfer"].
-	if !victim.Dying {
-		// The kind byte the death finalizer reads is 4, and the packet's
-		// attacker is null: [06 §12.1] gives cause 4 as "capture/owner
-		// replacement: packet builder invoked with a NULL attacker at both of
-		// its call sites. Credit branch: none." The intake's side snapshot for
-		// a null-attacker packet is the neutral side, never the captor's
-		// [06 §9.1] step 4 — a captured record must not read back as a kill
-		// for the capturing player. Cause 4 is also one of the three that skip
-		// the Killed query, so the old record vanishes without a wreck or an
-		// explosion [04 §5.1]; stamping it DeathKilled alone left it exploding
-		// as ordinary weapon damage.
-		victim.LastDamageCause = uint8(CaptureDeathCause)
-		victim.LastDamageSide = units.NeutralAttackerSide
-		s.World.Destroy(victim.Handle, units.DeathKilled) // null attacker [06 §12.1]
+	repl.Move.Bank = victim.Move.Bank
+	repl.Move.Heading = victim.Move.Heading
+	repl.Move.Pitch = victim.Move.Pitch
+	// CORRECTION (WU-19-94), on two counts.
+	//
+	// The kill count is NOT carried. The line here read `repl.Kills =
+	// victim.Kills`, on [05 "Capture"]'s "health, remaining fraction, veteran
+	// experience, and visual piece and facing fields are carried".
+	// [05 R-WORK-01 §11] corrects that paragraph in place: "The kill count is
+	// not — the replacement is a fresh record with zero kills, so 'veteran
+	// experience' is not carried and the next capture's kills factor restarts
+	// from zero". CaptureTimer's killsFactor term therefore reads 0 for a
+	// freshly captured unit, which makes recapturing one cheaper, not dearer.
+	//
+	// The conditional copy is the STOCKPILE, not the metal spot. The line below
+	// read `repl.SpotMetal = victim.SpotMetal` under a TODO(question) asking
+	// "which cargo predicate retail tests", with SpotMetal named in the comment
+	// as "a placeholder proxy". The gated per-slot stockpiled-round byte "is the
+	// whole of the 'cargo copied conditionally'" [05 R-WORK-01 §11], so the
+	// marker is retired and the placeholder is gone. SpotMetal is not copied:
+	// the replacement is made by the ordinary creator, which samples the
+	// placement-time metal sum for itself at the same position
+	// [05 R-PROD-01 §6].
+	//
+	// The gate is the REPLACEMENT's control byte, not the victim's — a slot the
+	// new record does not have enabled receives nothing. Slot.Ammo is retail's
+	// completed-ammunition byte of [05 "Stockpile production"].
+	for i := range repl.Slots {
+		if !repl.Slots[i].IsEnabled() {
+			continue
+		}
+		repl.Slots[i].Ammo = victim.Slots[i].Ammo
 	}
+	// The transported-cargo list, alliances, orders and groups are not carried
+	// either [05 R-WORK-01 §11]; the victim's queues leak on capture exactly as
+	// they do on death [05 "Factory product heading"].
+	//
+	// The old unit is then killed with a cause-4 packet and a null attacker:
+	// [06 §12.1] gives cause 4 as "capture/owner replacement: packet builder
+	// invoked with a NULL attacker at both of its call sites. Credit branch:
+	// none." The intake's side snapshot for a null-attacker packet is the
+	// neutral side, never the captor's [06 §9.1] step 4 — a captured record must
+	// not read back as a kill for the capturing player. Cause 4 is also one of
+	// the three that skip the Killed query, so the old record vanishes without a
+	// wreck or an explosion [04 §5.1]; stamping it DeathKilled alone left it
+	// exploding as ordinary weapon damage.
+	//
+	// The kill is unconditional here because the entry gate above already
+	// refused a latched victim, which is where the first-lethal rule now lives.
+	victim.LastDamageCause = uint8(CaptureDeathCause)
+	victim.LastDamageSide = units.NeutralAttackerSide
+	s.World.Destroy(victim.Handle, units.DeathKilled) // null attacker [06 §12.1]
 	// New unit's building flag etc already via Create; remaining already copied.
 	// Note: victim's queues leak on capture, same as on death [05 "Factory
 	// product heading", "Established fact — link lifetime and completion
@@ -226,9 +284,10 @@ func (s *Service) TransferOwnership(victim *units.Unit, newOwner uint8) (*units.
 const CaptureTickRate = 2
 
 // IsCaptureComplete tests the first-lethal gate: has the victim already been
-// marked dying? Retail latches this on the ownership-transfer kill so a
-// second captor's node cannot re-trigger it; we use the Dying flag as that
-// latch [05 "Capture", "Established fact — ownership transfer"].
+// marked dying? Retail latches this on the ownership-transfer kill so a second
+// captor's node cannot re-trigger it, and the transfer's own entry gate reads
+// the same latch [05 R-WORK-01 §11]; Dying is that latch here
+// [05 "Capture", "Established fact — ownership transfer"].
 func IsCaptureComplete(victim *units.Unit) bool {
 	return victim != nil && victim.Dying
 }

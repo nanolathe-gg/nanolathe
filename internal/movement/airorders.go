@@ -1092,15 +1092,14 @@ func (s *System) installOffMapRecoveryMarker(u *units.Unit, head *orders.Node) b
 // owner's slot bit, not a class shift. An aircraft sent over ground its owner
 // has never had sight of therefore lands blind.
 //
-// TODO(T25): internal/movement has no binding to that grid. It is the
-// visibility service's word grid, which this package cannot reach: neither
-// System nor the order queue binding carries a mapping query, and this unit
-// owns neither file. landingMappingWord below is the port; with nothing bound
-// it answers "no grid" and the full walk always runs, which is STRICTER than
-// retail — retail accepts on the coarse bit alone, including on a cell another
-// unit occupies. The divergence is bounded: a refusal only makes the caller
-// keep searching, and the ground-landing machine has its repeated-failure
-// fallback. Wiring is one provider away; see landingMappingWord.
+// The grid is bound as of WU-19-100 — the order queue binding's world adapter
+// carries the visibility service's word grid as MappingWord, and
+// landingMappingWord below reads it. A unit whose queue carries no binding, or
+// a composition with no visibility service, still answers "no grid" and runs
+// the full walk; that fallback is stricter than retail (retail accepts on the
+// coarse bit alone, including on a cell another unit occupies) and bounded — a
+// refusal only makes the caller keep searching, and the ground-landing machine
+// has its repeated-failure fallback.
 func (s *System) landable(u *units.Unit, x, z numeric.Fixed) bool {
 	if s == nil || u == nil || u.Def == nil || s.Terrain == nil {
 		return false
@@ -1120,7 +1119,7 @@ func (s *System) landable(u *units.Unit, x, z numeric.Fixed) bool {
 	}
 	// The coarse early accept, before any per-cell work
 	// [04 R-AIR-01 §6a][04 R-AIR-01 §14.2].
-	if word, ok := s.landingMappingWord(anchor.X, anchor.Z, fx); ok && !airMappingBitSet(word, u.Owner) {
+	if word, ok := s.landingMappingWord(u, anchor.X, anchor.Z, fx); ok && !airMappingBitSet(word, u.Owner) {
 		return true
 	}
 
@@ -1185,50 +1184,50 @@ func airMappingBitSet(word uint16, owner uint8) bool {
 	return word&(1<<owner) != 0
 }
 
-// airMappingIndex is the landing test's index into the mapping word grid
-// [04 R-AIR-01 §6a]:
+// airMappingTile is the tile the landing test's index arithmetic names in the
+// mapping word grid [04 R-AIR-01 §6a]:
 //
 //	i = (cellX >> 1) + (fx >> 2) + ((cellZ >> 1) + (fx >> 2)) · stride
 //
-// with stride the grid's tile width. Note that BOTH terms add `fx >> 2`: the Z
-// term does not use `fz`. That asymmetry is what the routine computes, not a
-// transcription slip [04 R-AIR-01 §6a].
-func airMappingIndex(cellX, cellZ int32, fx int16, stride int32) int32 {
+// with stride the grid's tile width, so the tile pair is
+// `((cellX >> 1) + (fx >> 2), (cellZ >> 1) + (fx >> 2))`. Note that BOTH terms
+// add `fx >> 2`: the Z term does not use `fz`. That asymmetry is what the
+// routine computes, not a transcription slip [04 R-AIR-01 §6a].
+//
+// The stride multiply belongs to whoever holds the grid, so the pair is what
+// crosses the port; the holder forms the same flat index, which keeps retail's
+// row wrap for a tile column past the stride.
+func airMappingTile(cellX, cellZ int32, fx int16) (tileX, tileZ int32) {
 	q := int32(fx >> 2)
-	return (cellX>>1 + q) + (cellZ>>1+q)*stride
+	return cellX>>1 + q, cellZ>>1 + q
 }
 
-// landingMappingWord is the mapping-word-grid port the coarse early accept of
-// [04 R-AIR-01 §6a] reads, at the index airMappingIndex gives.
+// landingMappingWord is the mapping-word-grid read the coarse early accept of
+// [04 R-AIR-01 §6a] performs, at the tile airMappingTile gives.
 //
-// TODO(T25): no provider is bound. The grid is the visibility service's
-// per-player mapping word grid ([03 R-LAYER §1]; [04 R-AIR-01 §14.2] identifies
-// it as the one the landing test reads), and internal/movement has no route to
-// it — System's fields and the order queue binding's world adapter both belong
-// to files this unit does not own. Until a provider is bound the port answers
-// "no grid" and landable runs the full per-cell walk, which is the stricter,
-// bounded divergence recorded on landable itself. Nothing here guesses at the
-// grid's contents: the alternative in-package word array, the class layer's
-// owner/building mask, has no production writer at all (see the occupancy
-// commit's own marker), so reading it would early-accept everywhere and let an
+// The grid is the visibility service's per-player mapping word grid
+// ([03 R-LAYER §1]; [04 R-AIR-01 §14.2] identifies it as the one the landing
+// test reads). internal/movement holds no visibility handle, so it reads the
+// grid through the order queue binding's world adapter — the same route
+// diplomacyRows takes to the alliance rows. It is deliberately NOT the class
+// layer's owner/building mask: that in-package word array has no production
+// writer at all, so reading it would early-accept everywhere and let an
 // aircraft park on water — the exact rule [04 R-AIR-01 §6a] calls its
 // substantive finding.
-func (s *System) landingMappingWord(cellX, cellZ int32, fx int16) (uint16, bool) {
-	grid, stride := s.landingMappingGrid()
-	if len(grid) == 0 || stride <= 0 {
+//
+// "No grid" — a unit whose queue carries no binding, or a composition with no
+// visibility service — makes landable run its full per-cell walk, the stricter
+// and bounded fallback recorded on landable itself.
+func (s *System) landingMappingWord(u *units.Unit, cellX, cellZ int32, fx int16) (uint16, bool) {
+	if s == nil || u == nil {
 		return 0, false
 	}
-	idx := airMappingIndex(cellX, cellZ, fx, stride)
-	if idx < 0 || int(idx) >= len(grid) {
+	b := airBinding(u)
+	if b == nil || b.World == nil || b.World.MappingWord == nil {
 		return 0, false
 	}
-	return grid[idx], true
-}
-
-// landingMappingGrid resolves the mapping word grid and its tile stride. See
-// landingMappingWord's TODO(T25): there is no provider yet.
-func (s *System) landingMappingGrid() ([]uint16, int32) {
-	return nil, 0
+	tileX, tileZ := airMappingTile(cellX, cellZ, fx)
+	return b.World.MappingWord(tileX, tileZ)
 }
 
 // terrainAndSea returns the terrain height byte at a position and the map's sea

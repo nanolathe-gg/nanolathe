@@ -64,6 +64,54 @@ func TestParkPhase0InstallsRectangleGoal(t *testing.T) {
 	}
 }
 
+// TestParkPhase0RoutesThroughTheRectangleInstaller locks the record-level half
+// of the row's "install a rectangle goal with origin (cellX − 4s, cellZ − 3s)
+// and size (8s, 6s)" [04 R-ORD-01 §2]: the geometry goes to the SHARED
+// rectangle installer — the seam whose movement side performs the `0x80`
+// rebind raise of [04 R-ORD-01 §9] — and the helper finishes by clearing
+// pending `0x20`-`0x200` [04 R-ORD-01 §1].
+//
+// Before WU-19-100 phase 0 wrote the rectangle to the parameter words and
+// called no installer at all, so a parking product's movement controller held
+// no payload and neither the raise nor the clear ever happened.
+func TestParkPhase0RoutesThroughTheRectangleInstaller(t *testing.T) {
+	ensureParkHandler()
+	_, u := parkTestUnit(t, 2, -10000, false)
+	var rects []RectangleGoalRequest
+	q := QueueForUnit(u)
+	q.SetBinding(&QueueBinding{
+		Movement: &MovementGoalAdapter{
+			InstallRectangle: func(req RectangleGoalRequest) bool { rects = append(rects, req); return true },
+			Release:          func(*Node) bool { return true },
+		},
+	})
+	n := &Node{ID: Lookup("Park"), Owner: u.Handle, Deadline: -1, Satisfied: 0x3E0}
+
+	if code := parkHandler(u, n, 0, 100); code != 1 {
+		t.Fatalf("phase 0 code=%d, want advance (1)", code)
+	}
+	if len(rects) != 1 {
+		t.Fatalf("%d rectangle installs, want exactly 1", len(rects))
+	}
+	// s = 2: origin (10-8, 20-6) = (2, 14), size (8s, 6s) = (16, 12).
+	got := rects[0]
+	if got.Node != n || got.Owner != u.Handle {
+		t.Fatalf("install request identifies (%v, %v), want the Park record and its owner", got.Node, got.Owner)
+	}
+	if got.CellX != 2 || got.CellZ != 14 || got.Width != 16 || got.Depth != 12 {
+		t.Fatalf("install request=(%d,%d) %dx%d, want (2,14) 16x12", got.CellX, got.CellZ, got.Width, got.Depth)
+	}
+	if n.Satisfied&0x3E0 != 0 {
+		t.Fatalf("pending word %#x, want 0x20-0x200 cleared [04 R-ORD-01 §1]", n.Satisfied)
+	}
+	// The read-back seam still reports the same rectangle for the movement
+	// layer's fallback path.
+	if minX, minZ, maxX, maxZ, ok := ParkGoalRect(n); !ok || minX != got.CellX || minZ != got.CellZ ||
+		maxX != got.CellX+got.Width-1 || maxZ != got.CellZ+got.Depth-1 {
+		t.Fatalf("ParkGoalRect=(%d,%d)-(%d,%d) ok=%v, want the installed rectangle", minX, minZ, maxX, maxZ, ok)
+	}
+}
+
 // TestParkAddsThreeOnNonNegativeMinWaterDepth locks the corrected +3 term: the
 // word read is the movement class's MinWaterDepth, not a yard-map width
 // [04 R-FAC-02 §4][04 R-FAC-02 §7].

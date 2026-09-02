@@ -66,25 +66,24 @@ func TestWalkToSite(t *testing.T) {
 		sys.BeginTick(tick)
 		res := sys.StepUnit(builder.Handle, tick)
 		sys.EndTick(tick)
-		// Build range is measured to the nearest point of the site's footprint
-		// rectangle, not to its centre: measuring to the centre would require a
-		// stock commander to stand inside a 6x6 lab's own footprint to build it
-		// (see Service.siteRangePoint) [R-P0-06][fmt fbi].
-		rx, rz, okRange := svc.SiteRangePointPublic(node, builder.X, builder.Z)
+		// Build range is centre to centre with both half-footprint diagonals
+		// subtracted, compared inclusively against `builddistance`
+		// [05 R-WORK-01 §2][05 R-WORK-01 §12].
+		cx, cz, fx0, fz0, okRange := svc.SiteCentrePublic(node)
 		if !okRange {
-			rx, rz = siteX, siteZ
+			cx, cz, fx0, fz0 = siteX, siteZ, 1, 1
 		}
-		dist2 := (int64(rx)-int64(builder.X))*(int64(rx)-int64(builder.X)) + (int64(rz)-int64(builder.Z))*(int64(rz)-int64(builder.Z))
-		reach := int64(builder.Def.BuildDistance) * 65536
-		t.Logf("tick %d builder %d %d dist2 %d reach2 %d moved %v hasRoute %v phase %d target %d", tick, builder.X.Raw(), builder.Z.Raw(), dist2, reach*reach, res.Moved, res.HasRoute, node.Phase, node.Target)
+		inRange := svc.IsWithinNanoRangePublic(builder, cx, cz, fx0, fz0)
+		t.Logf("tick %d builder %d %d inRange %v moved %v hasRoute %v phase %d target %d", tick, builder.X.Raw(), builder.Z.Raw(), inRange, res.Moved, res.HasRoute, node.Phase, node.Target)
 		if node.Target != 0 {
 			t.Logf("allocated at tick %d", tick)
-			if dist2 > reach*reach {
-				t.Fatalf("allocated while out of range dist2 %d reach2 %d", dist2, reach*reach)
+			if !inRange {
+				t.Fatalf("allocated while out of build range [05 R-WORK-01 §2]")
 			}
 			// The builder must stand OUTSIDE the product footprint: the walk
-			// targets a build-site perimeter candidate, never the site centre
-			// [04 §7.4], so the builder never parks under its own building.
+			// targets the rectangle goal's border, whose interior is exactly
+			// the product's own cells [04 R-PATH-01 §12][04 R-PATH-01 §13], so
+			// the builder never parks under its own building.
 			if ax, az, fx, fz, okFoot := svc.siteAnchorCell(node); okFoot {
 				cx, cz := world.WorldToCell(builder.X), world.WorldToCell(builder.Z)
 				if cx >= ax && cx < ax+fx && cz >= az && cz < az+fz {

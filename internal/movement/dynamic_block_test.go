@@ -46,8 +46,13 @@ func TestStepUnitBlockedCommitKeepsOrderAndRequest(t *testing.T) {
 		t.Fatal("Move_Ground order is unavailable")
 	}
 	queue := orders.QueueForUnit(w.Unit(moverHandle))
-	queue.Push(moveID, orders.Node{GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(0)})
+	queue.Push(moveID, orders.Node{Owner: moverHandle, GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(0)})
 	head := queue.Head()
+	// `Move_Ground` phase 0 installs a point goal [04 R-ORD-01 §4]; the
+	// follower's repath arm runs only "with a payload installed"
+	// [04 R-MOV-03 §2 step 3], and the install detaches any active binding, so
+	// it runs before the binding is planted below.
+	system.InstallPointGoal(orders.PointGoalRequest{Owner: head.Owner, Node: head, X: head.GoalX, Z: head.GoalZ, Radius: 4})
 	system.Routes[moverHandle].PublishAtRevision([]Point{{X: 0, Z: 0}, {X: 48, Z: 0}}, system.staticObstacleRevision())
 	system.activeOrders[moverHandle] = &activeMove{order: head, token: 41}
 	system.nextActivation = 41
@@ -117,6 +122,10 @@ func TestStepUnitBlockedCommitKeepsOrderAndRequest(t *testing.T) {
 	// zero cell. Preserve the follower's existing no-goal return while sharing
 	// MobileBuild's order-aware cell selection [04 R-MOV-01 §7].
 	system.pathProvider.Cancel(moverHandle)
+	// "Without a derived or stored goal" now means the payload is gone too: a
+	// bound point payload IS a derived goal, and the follower steers by it
+	// rather than by the record's triple [04 R-ORD-01 §9][04 R-MOV-03 §2].
+	system.ReleaseGoal(head)
 	head.GoalX, head.GoalZ = 0, 0
 	route.LastRequestTick = 61
 	route.WantsRepath = true

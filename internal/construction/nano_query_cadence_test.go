@@ -56,7 +56,7 @@ func TestReachTestDoesNotConsumeNanoQuery(t *testing.T) {
 	}
 	// A reach test between two emissions must leave the script's rotation
 	// exactly where the first emission left it.
-	svc.IsWithinNanoRangePublic(u, u.X, u.Z)
+	svc.IsWithinNanoRangePublic(u, u.X, u.Z, 1, 1)
 	second, _, ok := svc.QueryNanoPiece(u)
 	if !ok {
 		t.Fatalf("second nano query refused")

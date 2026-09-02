@@ -470,20 +470,21 @@ func DebitCloak(p *Player, cost float32) bool {
 //   - gate due and unaffordable — no partial payment, CLEAR bit 2, so a
 //     stalled owner's cloaked units show again on that pass ([05 "Cloak
 //     debit"] step 6);
-//   - gate not due at all — CLEAR bit 2. Supported inference, not a traced
-//     arm: TODO(question): whether the settlement clears the instance bit
-//     on a not-due pass, or leaves it and the reveal happens elsewhere —
-//     decider: a trace of the debit block's exit paths. §9's sketch shows only the two arms
-//     inside the gate, but the not-due arm is fixed by the consequence
-//     [04 R-ORD-01 §5] states for the reveal stamp: a working builder "that
-//     has cloak requested stays visible for five, ten or thirty seconds after
-//     its last stroke". It can only stay visible if a pass whose deadline term
-//     fails clears the bit, and the same arm is what makes `Cloak_Off` — which
-//     clears the request bit and nothing else [04 R-ORD-01 §2] — decloak the
-//     unit on its next pass.
+//   - gate not due at all — CLEAR bit 2. Established: every exit of the cloak
+//     block, success and failure alike, ends at the same transition call with
+//     bit 2 as the mask, and no exit leaves the bit alone [05 R-ECO-01 §9
+//     "every exit"]. This was recorded here as a Supported inference with a
+//     TODO(question) asking whether a not-due pass clears the bit or leaves it;
+//     the decider it named — a trace of the debit block's exit paths — has been
+//     met, and the inference is confirmed. The consequences the earlier note
+//     reasoned to are the traced ones: a working builder that has cloak
+//     requested stays visible after its last stroke [04 R-ORD-01 §5], and
+//     `Cloak_Off`, which clears the request bit and nothing else
+//     [04 R-ORD-01 §2], decloaks the unit on its next pass.
 //
-// The transition write itself is unconditional and only its (unimplemented)
-// cue notifications are edge-gated, so an already-clear bit costs nothing.
+// The transition write itself is unconditional and only its cue notifications
+// are edge-gated, so an already-clear bit costs nothing and raises nothing
+// [05 R-ECO-01 §8][03 R-AUD-01 §7].
 //
 // onSuccess / onFailure remain the caller's own seam for anything beyond bit 2
 // and are unrelated to it; economy cannot import cob, so they arrive as seams.

@@ -8,7 +8,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 type mobileApproachObservation struct {
@@ -33,8 +32,8 @@ type mobileApproachObservation struct {
 // not an input to MobileBuild's approach, reach, or nanoframe transition. The
 // order remains in its approach phase without a product while out of range,
 // then admits at the same inclusive range gate for a human and a computer
-// owner [04 R-ORD-01 §5][05 R-WORK-01 §2]. The approach geometry remains the
-// explicitly documented placeholder of [04 §7.4 R-P0-19].
+// owner [04 R-ORD-01 §5][05 R-WORK-01 §2]. The approach geometry is the
+// rectangle goal of [04 R-PATH-01 §12], installed by [04 R-PATH-01 §13].
 func TestMobileBuilderApproachIsControllerNeutral(t *testing.T) {
 	human := runMobileApproachControllerCase(t, 1)
 	computer := runMobileApproachControllerCase(t, 2)
@@ -74,9 +73,12 @@ func runMobileApproachControllerCase(t *testing.T, controller uint8) mobileAppro
 		if request.Unit != builder.Handle {
 			continue
 		}
+		// The goal is the rectangle border, not a chosen point
+		// [04 R-PATH-01 §13]; its first enumerated cell is a stable identity for
+		// the controller-parity comparison [04 R-MOV-03 §9].
 		cells := request.Goal.Enumerate(nil)
-		if len(cells) != 1 {
-			t.Fatalf("controller %d approach goal has %d cells, want one selected perimeter point", controller, len(cells))
+		if len(cells) < 2 {
+			t.Fatalf("controller %d approach goal has %d cells, want the rectangle border", controller, len(cells))
 		}
 		requestGoal, requestFound = cells[0], true
 		break
@@ -127,11 +129,11 @@ func runMobileApproachControllerCase(t *testing.T, controller uint8) mobileAppro
 		}
 
 		if node.Target == 0 {
-			rx, rz, ok := svc.siteRangePoint(node, builder.X, builder.Z)
+			cx, cz, fx, fz, ok := svc.SiteCentrePublic(node)
 			if !ok {
 				t.Fatalf("controller %d lost the queued site footprint during traversal", controller)
 			}
-			if reachedTick < 0 && svc.IsWithinNanoRangePublic(builder, rx, rz) {
+			if reachedTick < 0 && svc.IsWithinNanoRangePublic(builder, cx, cz, fx, fz) {
 				reachedTick = int32(tick)
 			}
 		}
@@ -181,24 +183,26 @@ func runMobileApproachControllerCase(t *testing.T, controller uint8) mobileAppro
 	}
 }
 
-// TestMobileBuilderInclusiveRangeGate keeps the comparison boundary narrow:
-// the current approach point is admitted at equality for both controllers.
-// The perimeter geometry is still the documented placeholder and is not
-// selected by this unit [04 §7.4 R-P0-19][05 R-WORK-01 §2].
+// TestMobileBuilderInclusiveRangeGate keeps the comparison boundary narrow: a
+// builder at exactly the reach limit is admitted for both controllers. The
+// limit is centre-to-centre minus both half-footprint diagonals, compared
+// inclusively [05 R-WORK-01 §2][05 R-WORK-01 §12].
 func TestMobileBuilderInclusiveRangeGate(t *testing.T) {
 	for _, controller := range []uint8{1, 2} {
 		svc, builder, node := approachFixture(t, 10, 10)
 		econ := &economy.Service{}
 		econ.Players[builder.Owner].ControllerState = controller
 		svc.Economy = econ
-		anchorX, anchorZ, _, footZ, ok := svc.siteAnchorCell(node)
+		cx, cz, fx, fz, ok := svc.SiteCentrePublic(node)
 		if !ok {
 			t.Fatal("queued MobileBuild site has no footprint anchor")
 		}
-		builder.X = world.CellToWorld(anchorX) - nanoReach(builder)
-		builder.Z = world.CellToWorld(anchorZ + footZ/2)
-		rx, rz, ok := svc.siteRangePoint(node, builder.X, builder.Z)
-		if !ok || !svc.IsWithinNanoRangePublic(builder, rx, rz) {
+		// builddistance + builderPad + productPad whole world units of centre
+		// separation is the last admitted position [05 R-WORK-01 §2].
+		limit := int64(builder.Def.BuildDistance) + int64(nanoFootprintPad(builder.Def.FootprintX, builder.Def.FootprintZ)) + int64(nanoFootprintPad(fx, fz))
+		builder.X = cx - numeric.Fixed(limit<<16)
+		builder.Z = cz
+		if !svc.IsWithinNanoRangePublic(builder, cx, cz, fx, fz) {
 			t.Fatalf("controller %d equality fixture was outside the inclusive range gate", controller)
 		}
 		svc.Pump(builder, 0)
@@ -218,12 +222,17 @@ func TestComputerMobileBuilderObstructionKeepsRetry(t *testing.T) {
 	econ.Players[builder.Owner].ControllerState = 2
 	svc.Economy = econ
 
-	anchorX, anchorZ, _, footZ, ok := svc.siteAnchorCell(node)
+	anchorX, anchorZ, _, _, ok := svc.siteAnchorCell(node)
 	if !ok {
 		t.Fatal("queued MobileBuild site has no footprint anchor")
 	}
-	builder.X = world.CellToWorld(anchorX) - nanoReach(builder)
-	builder.Z = world.CellToWorld(anchorZ + footZ/2)
+	cx, cz, fx, fz, ok := svc.SiteCentrePublic(node)
+	if !ok {
+		t.Fatal("queued MobileBuild site has no footprint centre")
+	}
+	limit := int64(builder.Def.BuildDistance) + int64(nanoFootprintPad(builder.Def.FootprintX, builder.Def.FootprintZ)) + int64(nanoFootprintPad(fx, fz))
+	builder.X = cx - numeric.Fixed(limit<<16)
+	builder.Z = cz
 	blocked := &svc.Terrain.Plot[int(anchorZ)*int(svc.Terrain.CellW)+int(anchorX)]
 	blocked.SetOccupantA(9)
 

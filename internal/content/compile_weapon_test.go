@@ -1,6 +1,7 @@
 package content
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -380,5 +381,38 @@ func TestWeaponNameScanAndLinkSentinel(t *testing.T) {
 	bare.RebuildWeaponIndex()
 	if w, active := bare.WeaponLink("medium_unitex"); active || w != nil {
 		t.Fatalf("WeaponLink miss without record 0 = (%v, %v), want nil, inactive", w, active)
+	}
+}
+
+// TestWeaponFirestarterTruncatesToByte locks [06 R-WPN-05 §10]: the loader
+// stores only the low 8 bits of the authored `firestarter` integer
+// ([02 "Weapon record"] lists the field as 8-bit), so an authored value of
+// 256 compiles to 0 and 257 compiles to 1 — every reader of
+// WeaponDef.Firestarter already sees the byte retail would test, with no
+// truncation left for a caller to apply.
+func TestWeaponFirestarterTruncatesToByte(t *testing.T) {
+	cases := []struct {
+		authored int
+		want     int32
+	}{
+		{authored: 0, want: 0},
+		{authored: 70, want: 70},
+		{authored: 255, want: 255},
+		{authored: 256, want: 0},
+		{authored: 257, want: 1},
+	}
+	for _, tc := range cases {
+		body := `[FIRETEST]
+{
+	ID=1;
+	firestarter=` + fmt.Sprintf("%d", tc.authored) + `;
+}
+`
+		doc := mustParseTDF(t, body)
+		sec := doc.Root.Sections()[0]
+		wd := compileWeaponSection(sec, "FIRETEST", Provenance{})
+		if wd.Firestarter != tc.want {
+			t.Fatalf("firestarter=%d compiled to %d, want %d", tc.authored, wd.Firestarter, tc.want)
+		}
 	}
 }

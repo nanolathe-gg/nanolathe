@@ -734,3 +734,37 @@ func TestSparkCountdownHalvesTheCompiledTicks(t *testing.T) {
 		}
 	}
 }
+
+// TestIgniteRespectsTheCompiledFirestarterByte locks the live ignite path
+// against the loader's low-byte storage of `firestarter`
+// [06 R-WPN-05 §10] [02 "Weapon record"]. WeaponDef.Firestarter is truncated
+// to that byte at compile time (TestWeaponFirestarterTruncatesToByte in
+// internal/content pins the compiler side of the contract: an authored 256
+// compiles to 0). This test pins the caller side: Ignite, given the byte a
+// weapon authored with firestarter=256 actually compiles to, does not ignite
+// a flammable feature — it falls through to the ordinary damage-accumulation
+// branch of [05 R-FEAT-01 §8] step 6 instead, exactly as a firestarter=0
+// weapon would.
+func TestIgniteRespectsTheCompiledFirestarterByte(t *testing.T) {
+	authored := 256                                // not a constant expression, to dodge the uint8-overflow compile error
+	compiledFromOverflow := int32(uint8(authored)) // what compile_weapon.go now stores for firestarter=256
+	if compiledFromOverflow != 0 {
+		t.Fatalf("test setup: int32(uint8(256)) = %d, want 0", compiledFromOverflow)
+	}
+
+	terrain := newEmptyTerrain(4, 4)
+	def := featureDef("torchtree", 0, 0, 10)
+	def.Flamable = true
+	def.SeqNameBurn = "burn"
+	svc := NewService(terrain, nil, nil, nil)
+	if svc.spawnFeatureAt(1, 1, def) == nil {
+		t.Fatal("spawn rejected")
+	}
+
+	if svc.Ignite(1, 1, compiledFromOverflow, 5) {
+		t.Fatal("ignited on a byte-truncated-zero firestarter, want no ignition")
+	}
+	if inst := svc.InstanceAt(1, 1); inst == nil || inst.IsBurning {
+		t.Fatal("instance burning after a firestarter=0-equivalent hit, want not burning")
+	}
+}

@@ -954,7 +954,17 @@ func (s *Session) RegisterAll() {
 				}
 			}
 		}
+		// The status-cue seam is installed on every unit that already exists;
+		// the creation hook below installs it on every later one
+		// [03 R-AUD-01 §7]. Edges raised earlier in battle entry — before any
+		// unit had a sink — are silent, which is the battle-start clear-all §7
+		// lists among the queue's readers, not a dropped cue.
+		s.bindStatusCueSinks()
 		s.Units.OnDeath = func(h pool.Handle, cause units.DeathCause, u *units.Unit) {
+			// The unit-teardown purge of [03 R-AUD-01 §7]: the removed unit's
+			// queued cue entries are dropped before the record goes away. This
+			// hook is the slot-end finalizer, which is that removal.
+			s.purgeStatusCues(h)
 			// Statistics are filed at the same FinalizeDeath callback boundary as
 			// the other victim teardown records [06 §12.1]. Packet-aware combat
 			// paths may call RecordDeathStatistics with the stored attacker side.
@@ -1198,6 +1208,12 @@ func (s *Session) RegisterAll() {
 			}
 		}
 		s.Units.OnCreate = func(h pool.Handle, u *units.Unit) {
+			// The status-cue seam, installed at the one creation funnel so a
+			// factory product's activation edge reaches the same sink as a
+			// placed unit's [03 R-AUD-01 §7].
+			if u != nil {
+				u.SetStatusCueSink(s.raiseStatusCue)
+			}
 			// Do not publish visibility at allocator return. A phase-2 factory
 			// product is attached to its authored build piece later in the same
 			// construction visit; phase 5 then stamps the owning slice from that

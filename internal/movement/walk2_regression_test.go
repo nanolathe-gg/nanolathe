@@ -47,8 +47,13 @@ func TestFollowerRequestsContinuationAtSixtyTicks(t *testing.T) {
 	system.BindWorld(w)
 	system.EnsureUnit(w.Unit(h))
 	q := orders.QueueForUnit(w.Unit(h))
-	q.Push(orders.Lookup("Move_Ground"), orders.Node{GoalX: world.CellToWorld(20), GoalZ: world.CellToWorld(22)})
+	q.Push(orders.Lookup("Move_Ground"), orders.Node{Owner: h, GoalX: world.CellToWorld(20), GoalZ: world.CellToWorld(22)})
 	head := q.Head()
+	// `Move_Ground` phase 0 installs its point goal [04 R-ORD-01 §4], and the
+	// follower's repath arm runs only "with a payload installed"
+	// [04 R-MOV-03 §2 step 3]. The install detaches the active binding, so it
+	// runs before the binding is planted here.
+	system.InstallPointGoal(orders.PointGoalRequest{Owner: head.Owner, Node: head, X: head.GoalX, Z: head.GoalZ, Radius: 4})
 	system.activeOrders[h] = &activeMove{order: head, token: 9}
 	route := system.Routes[h]
 	route.Active = true

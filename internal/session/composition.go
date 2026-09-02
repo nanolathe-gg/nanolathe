@@ -643,6 +643,31 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 		DeclaresAlliance: func(from, toward uint8) bool {
 			return s.Econ.DeclaresAlliance(from, toward)
 		},
+		// The per-player mapping word grid [03 R-LAYER §1]. The visibility
+		// service owns it — its width is the map's cell width halved, one word
+		// per 2x2-cell tile — and the sole simulation reader reaching it
+		// through the order binding is the aircraft landing test's coarse
+		// early accept [04 R-AIR-01 §6a][04 R-AIR-01 §14.2]. The caller hands
+		// tile coordinates that already carry its own index offset; the flat
+		// index is formed here with the grid's own stride, so a tile column
+		// past the stride wraps into the next row as the flat index does.
+		// Only a genuine past-the-end index is refused, and refusing makes the
+		// caller run its full test rather than invent a word.
+		MappingWord: func(tileX, tileZ int32) (uint16, bool) {
+			if s.Vis == nil || tileX < 0 || tileZ < 0 {
+				return 0, false
+			}
+			w, _ := s.Vis.GridDimensions()
+			if w <= 0 {
+				return 0, false
+			}
+			grid := s.Vis.WordMask()
+			idx := tileZ*w + tileX
+			if idx < 0 || int(idx) >= len(grid) {
+				return 0, false
+			}
+			return grid[idx], true
+		},
 		Hostile: func(actor, target *units.Unit) bool {
 			if actor == nil || target == nil {
 				return false
@@ -1205,8 +1230,19 @@ func createAndBindServices(s *Session) error {
 	// [03 R-VIS-01 §4 pass 4][03 R-VIS-01 §6]. This build keeps that sensor
 	// status word beside the unit rather than in it, so the term is read from
 	// there. It cannot be observed apart from term 3 — the breach writes the
-	// `tick + 90` deadline on the same visit — which is why [05 R-ECO-01 §9]
-	// records the same bit as inert with its meaning Unknown.
+	// `tick + 90` deadline on the same visit — so an implementation that
+	// carried the breach as the deadline alone would diverge by nothing; the
+	// term is still real and is kept.
+	//
+	// Correction (WU-19-99): this said the term was read from the sensor status
+	// word "which is why [05 R-ECO-01 §9] records the same bit as inert with its
+	// meaning Unknown". §9 no longer records it that way and has been corrected
+	// in place: the bounded-negative search that found no writer predated the
+	// sensor-phase trace. The bit is the decloak-forced latch — the sensor
+	// phase's first pass clears it on every live unit every tick and the
+	// proximity-breach pass sets it again on the same visit that stamps the
+	// deadline — and its meaning is Established, not Unknown
+	// [05 R-ECO-01 §9][03 R-VIS-01 §4 pass 4][03 R-VIS-01 §6].
 	//
 	// Term 3 is the per-unit deadline: `currentTick >= unit.RevealDeadline`,
 	// inclusive [03 R-VIS-01 §6]. That field is shared with the sensor phase's

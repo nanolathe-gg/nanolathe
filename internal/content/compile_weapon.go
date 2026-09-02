@@ -51,7 +51,7 @@ type WeaponDef struct {
 	Tolerance         int32   // tolerance integer default 0 inert [02 "Weapon record"], [06 §4.1]
 	PitchTolerance    int32   // pitchtolerance integer default 0 inert [02 "Weapon record"], [06 §4.1]
 	ShakeMagnitude    int32   // shakemagnitude integer default 0 [02 "Weapon record"]
-	Firestarter       int32   // firestarter integer default 0 [02 "Weapon record"]
+	Firestarter       int32   // firestarter integer default 0, truncated to the loader's low byte at compile time [02 "Weapon record"] [06 R-WPN-05 §10]
 	RenderType        int32   // rendertype integer default 0 [02 "Weapon record"]
 	Color             int32   // color integer default 0 [02 "Weapon record"]
 	Color2            int32   // color2 integer default 0 [02 "Weapon record"]
@@ -214,7 +214,15 @@ func compileWeaponSection(section *formats.Section, sectionName string, prov Pro
 	tolerance := section.IntValue("tolerance", 0)
 	pitchTolerance := section.IntValue("pitchtolerance", 0)
 	shakeMagnitude := section.IntValue("shakemagnitude", 0)
-	fireStarter := section.IntValue("firestarter", 0)
+	// firestarter is stored as the loader's low byte, not the full authored
+	// integer: the loader stores only the low 8 bits of the authored value
+	// ([02 "Weapon record"] lists the field as 8-bit), and the sole reader is
+	// a byte-width nonzero test in the feature-damage helper of the area
+	// sweep's feature phase [06 R-WPN-05 §10]. Truncating here means every
+	// reader of WeaponDef.Firestarter — combat's feature-ignite call included
+	// — already sees the byte retail would test, with no truncation left for
+	// callers to remember. The field keeps its int32 type to avoid churn.
+	fireStarter := int32(uint8(section.IntValue("firestarter", 0)))
 	renderType := section.IntValue("rendertype", 0)
 	color := section.IntValue("color", 0)
 	color2 := section.IntValue("color2", 0)

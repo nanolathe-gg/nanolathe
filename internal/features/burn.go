@@ -538,6 +538,11 @@ func (s *Service) igniteAt(cx, cz int, def *content.FeatureDef) bool {
 // weaponDamage is a parameter because the alternative is fabricating one. The
 // non-ignition branch used to compute a literal 10 and discard it, so feature
 // health was never reduced by any weapon that does not start fires.
+//
+// weaponFirestarter is tested here with a plain nonzero compare, not a byte
+// mask: content.WeaponDef.Firestarter is already truncated to the loader's
+// low byte at compile time, so every caller — this one included — already
+// sees the byte retail would test [06 R-WPN-05 §10].
 func (s *Service) Ignite(cx, cz int, weaponFirestarter, weaponDamage int32) bool {
 	if s.Terrain == nil {
 		return false

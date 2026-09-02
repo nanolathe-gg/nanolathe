@@ -32,21 +32,70 @@ func TestLandingCoarseAcceptIsTheOwnerSlotBit(t *testing.T) {
 		t.Fatal("slot 10 has no bit in the mapping word")
 	}
 
-	// i = (cellX>>1 + fx>>2) + (cellZ>>1 + fx>>2)·stride, with fx on BOTH axes.
-	if got, want := airMappingIndex(9, 5, 4, 16), int32(5+3*16); got != want {
-		t.Fatalf("mapping index = %d, want %d", got, want)
+	// tile = (cellX>>1 + fx>>2, cellZ>>1 + fx>>2), with fx on BOTH axes.
+	if tx, tz := airMappingTile(9, 5, 4); tx != 5 || tz != 3 {
+		t.Fatalf("mapping tile = (%d,%d), want (5,3)", tx, tz)
 	}
 	// A wider footprint shifts both terms by the same quarter, which is the
 	// asymmetry: fz never enters.
-	if got, want := airMappingIndex(0, 0, 8, 16), int32(2+2*16); got != want {
-		t.Fatalf("mapping index with fx=8 = %d, want %d", got, want)
+	if tx, tz := airMappingTile(0, 0, 8); tx != 2 || tz != 2 {
+		t.Fatalf("mapping tile with fx=8 = (%d,%d), want (2,2)", tx, tz)
 	}
 
-	// The port has no provider in this build (see landingMappingWord's
-	// TODO(T25)), so landable falls through to the full per-cell walk rather
-	// than early-accepting on an all-zero word.
-	if _, ok := (*System)(nil).landingMappingWord(0, 0, 1); ok {
+	// With no binding there is no grid, and landable falls through to the full
+	// per-cell walk rather than early-accepting on an invented word.
+	if _, ok := (*System)(nil).landingMappingWord(nil, 0, 0, 1); ok {
 		t.Fatal("landingMappingWord reported a grid; none is bound")
+	}
+}
+
+// TestLandingCoarseAcceptShortCircuitsTheWalk exercises the bound port end to
+// end: a position the per-cell walk REFUSES (water under a non-amphibious
+// aircraft, the substantive rule of [04 R-AIR-01 §6a]) is landable anyway when
+// the tile under the anchor is not mapped for the aircraft's owner, and is
+// refused again once that owner's bit is present [04 R-AIR-01 §14.2].
+func TestLandingCoarseAcceptShortCircuitsTheWalk(t *testing.T) {
+	sys, _, u := airFixture(t)
+	if u.Def.Amphibious {
+		t.Fatal("fixture aircraft is amphibious; the water rule would not apply")
+	}
+	// Sink one cell below sea level so the walk's depth test refuses it.
+	const cell int32 = 12
+	x, z := world.CellToWorld(cell), world.CellToWorld(cell)
+	anchorX, anchorZ := world.PlacementAnchor(x, z, 1, 1)
+	idx := anchorZ*sys.Terrain.CellW + anchorX
+	sys.Terrain.Plot[idx].SetHeight(0)
+	sys.Terrain.Plot[idx].SetMinHeight(0)
+	sys.Terrain.Plot[idx].SetMaxHeight(0)
+
+	if sys.landable(u, x, z) {
+		t.Fatal("water cell is landable with no mapping grid; the walk should refuse it")
+	}
+
+	wantX, wantZ := airMappingTile(anchorX, anchorZ, 1)
+	var word uint16
+	var sawX, sawZ int32
+	orders.QueueOfUnit(u).Binding().World = &orders.WorldQueryAdapter{
+		MappingWord: func(tileX, tileZ int32) (uint16, bool) {
+			sawX, sawZ = tileX, tileZ
+			return word, true
+		},
+	}
+
+	// Unmapped for owner 0: landable outright, with no feature, yard,
+	// occupancy, depth or slope test at all.
+	word = 0x03FE // every slot but 0
+	if !sys.landable(u, x, z) {
+		t.Fatal("an unmapped tile must be landable without the walk [04 R-AIR-01 §14.2]")
+	}
+	if sawX != wantX || sawZ != wantZ {
+		t.Fatalf("read tile (%d,%d), want (%d,%d)", sawX, sawZ, wantX, wantZ)
+	}
+
+	// Mapped for owner 0: the walk runs, and the water rule refuses.
+	word = 0x0001
+	if sys.landable(u, x, z) {
+		t.Fatal("a mapped tile must run the walk, which refuses water under a non-amphibious aircraft")
 	}
 }
 

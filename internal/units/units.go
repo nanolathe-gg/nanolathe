@@ -524,6 +524,12 @@ type Unit struct {
 	// save records [04 §4.7 port 18].
 	yardTransaction YardOpenTransaction
 
+	// statusCue is the engine status-cue seam installed by composition, the
+	// sink the activation and instance-cloak edges raise codes 3/4 and 14/15
+	// into [03 R-AUD-01 §7]. Like yardTransaction it is runtime topology and is
+	// deliberately absent from authoritative snapshots and save records.
+	statusCue StatusCueSink
+
 	// MoveTier is the movement-rate classifier's CACHED category — the two bits
 	// the classifier writes as its final act on every run, which retail keeps in
 	// bits 2–3 of the movement-mode word [04 §5.2][04 R-MOV-01 §6]. It is 0 when
@@ -646,15 +652,27 @@ func (u *Unit) setActivationEdge(on bool, vm *cob.VM) {
 		return
 	}
 	u.Activated = on
-	// TODO(question): the edge emits engine notification code 3 (rising) or 4
-	// (falling) [04 R-UNIT-06 §2] and this build has nowhere to put them, so
-	// they are dropped. What is unknown is the consumer, not the emission: which
-	// engine subsystem receives a notification code, what it does with the unit
-	// and code pair, and whether anything simulation-visible depends on it. What
-	// would settle it: a trace of the notification dispatcher's sink and its
-	// per-code handlers, written up in doc 03 (audio/effect cues) or doc 07
-	// (interface cues) — neither names one today. Until then, do not invent a
-	// sink or a per-code effect here.
+	// Retired (WU-19-99): this carried a TODO(question) saying the notification
+	// codes were dropped because "this build has nowhere to put them" and that
+	// the consumer was unknown. [03 R-AUD-01 §7] names the consumer: the codes
+	// ARE the §8.3 status-cue slot indices, and every producer reaches one raise
+	// helper. Codes 3/4 are slots 3 `activate` and 4 `deactivate`, whose static
+	// default caption is empty.
+	//
+	// The COB callback runs BEFORE the cue on both edges [05 R-ECO-01 §8]
+	// [03 R-AUD-01 §7].
+	u.runActivationCallback(on, vm)
+	if on {
+		u.raiseStatusCue(StatusCueActivate)
+		return
+	}
+	u.raiseStatusCue(StatusCueDeactivate)
+}
+
+// runActivationCallback starts the COB `Activate` / `Deactivate` callback for
+// one activation edge. It is the first half of the edge machine's work; the
+// status cue follows it [05 R-ECO-01 §8][03 R-AUD-01 §7].
+func (u *Unit) runActivationCallback(on bool, vm *cob.VM) {
 	if binding := u.COBBinding(); binding != nil && binding.Callbacks != nil {
 		if on {
 			binding.Callbacks.Activate()
@@ -711,16 +729,65 @@ func (u *Unit) SetCloaked(on bool) {
 // decision [05 R-ECO-01 §8][05 R-ECO-01 §9]. The write happens unconditionally
 // and only the notifications are edge-gated, so the change test lives here.
 //
-// §8's bit-2 edges also raise status cue slots 14 (newly set) and 15 (newly
-// cleared), with no caption text and no COB callback. This build has no sink
-// for engine cue codes — the same gap SetActivationEdge records for codes 3
-// and 4 — so the edge is silent here; nothing simulation-visible depends on
-// the cue.
+// Retired (WU-19-99): this said "This build has no sink for engine cue codes …
+// so the edge is silent here; nothing simulation-visible depends on the cue."
+// Both halves are now wrong. [03 R-AUD-01 §7] identifies the sink — the codes
+// are the §8.3 slot indices, 14 `cloak` and 15 `uncloak`, whose static default
+// captions are `Cloaked` and `Visible` — and the rising edge additionally
+// raises pending bit `0x10000` ("target cloaked") on every order record
+// observing this unit, which IS simulation-visible [04 R-ORD-01 §6]. Both reach
+// the session through the one sink installed here; the sink applies §7's gate
+// and owns the observer walk, because this package cannot see order records.
 func (u *Unit) SetCloakedInstance(on bool) {
 	if u == nil || u.Hidden == on {
 		return
 	}
 	u.Hidden = on
+	if on {
+		u.raiseStatusCue(StatusCueCloak)
+		return
+	}
+	u.raiseStatusCue(StatusCueUncloak)
+}
+
+// Engine status-cue codes. The integer the edge machine passes as a "status
+// code" IS the index into the static slot table of [03 §8.3]; there is no
+// translation table between the two numberings [03 R-AUD-01 §7].
+const (
+	StatusCueActivate   uint8 = 3
+	StatusCueDeactivate uint8 = 4
+	StatusCueCloak      uint8 = 14
+	StatusCueUncloak    uint8 = 15
+)
+
+// StatusCueSink is the engine status-cue raise seam [03 R-AUD-01 §7]. The one
+// implementation is the session's raise helper, which applies the §7 gate (the
+// unit's owner slot is the view slot, its alive bit is set and its death latch
+// is clear), resolves the caption, inserts against the global tick, and owns
+// the sim-visible observer notice the cloak rising edge carries
+// [04 R-ORD-01 §6]. It draws from neither RNG stream: the only draw in the cue
+// path is the CRT variant pick at resolve time, once per pop, on the
+// presentation side [03 §8.3][I4].
+type StatusCueSink func(u *Unit, code uint8)
+
+// SetStatusCueSink installs the status-cue seam. Session composition installs
+// it on every unit; a nil sink leaves the edges silent, which is what small
+// unit-package fixtures want [03 R-AUD-01 §7].
+func (u *Unit) SetStatusCueSink(sink StatusCueSink) {
+	if u != nil {
+		u.statusCue = sink
+	}
+}
+
+// raiseStatusCue hands one (code, unit) raise to the installed sink. Every gate
+// lives in the sink, not here: retail's edge machine calls the raise helper
+// unconditionally and the helper returns having touched nothing when the gate
+// fails [03 R-AUD-01 §7].
+func (u *Unit) raiseStatusCue(code uint8) {
+	if u == nil || u.statusCue == nil {
+		return
+	}
+	u.statusCue(u, code)
 }
 
 // CloakCost returns the per-pass cloak cost, choosing stationary vs moving

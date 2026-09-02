@@ -350,9 +350,14 @@ func goalRadiusParamFor(def *content.UnitDef, head *orders.Node) int32 {
 			rp = def.KamikazeDistance
 		}
 		return rp
-	case "Move_Ground":
-		// Signed 16-bit read of the argument word, then +4 [04 R-ORD-01 §4].
-		return int32(int16(uint16(head.Param1))) + 4
+	}
+	if radius, ok := orders.MoveGroundGoalRadius(head); ok {
+		// Signed 16-bit read of the argument word, then +4 [04 R-ORD-01 §4],
+		// read back from the handler that binds it rather than restated here.
+		// Since WU-19-97 that handler installs the point goal itself, so this
+		// is only the fallback handle built before its phase 0 has run — a
+		// bound payload outranks the radius at the end of bindArrivalHandle.
+		return radius
 	}
 	if radius, ok := orders.PatrolGoalRadius(head); ok {
 		return radius // [04 R-ORD-01 §4], authored beside the handler that binds it
@@ -1832,6 +1837,20 @@ func (s *System) ReplanMove(u *units.Unit, head *orders.Node) bool {
 	return true
 }
 
+// hasControllerGoal reports whether the ground route follower's single payload
+// slot holds an object for this mover [04 R-ORD-01 §9]. It is the "with a
+// payload installed" condition of the follower's per-tick service
+// [04 R-MOV-03 §2], and it asks about the SLOT, not about which record owns
+// what is in it: HasGroundGoal next door is the identity-checked question a
+// caller asks when it needs to know that one particular record is the bound
+// one.
+func (s *System) hasControllerGoal(h pool.Handle) bool {
+	if s == nil || s.moveGoals == nil {
+		return false
+	}
+	return s.moveGoals[h] != nil
+}
+
 // serviceGroundFollower runs the route follower's movement-tick service before
 // steering. It consumes at most one reached waypoint, arms a repath when the
 // previous commit was blocked or no waypoint remains, and submits at most once
@@ -1849,7 +1868,24 @@ func (s *System) serviceGroundFollower(u *units.Unit, head *orders.Node, route *
 	if coll := s.Collisions[u.Handle]; coll != nil {
 		blocked = coll.Blocked
 	}
-	if blocked || !route.Active || route.Count < 2 {
+	// Step 3 of the per-tick service, with the condition the section opens it
+	// with: "**With a payload installed**, when the mover's blocked bit is set
+	// **or** fewer than two points remain, arm the repath bit"
+	// [04 R-MOV-03 §2 "The follower's per-tick service"][04 R-MOV-01 §7].
+	//
+	// "A payload installed" is the CONTROLLER's slot, not the record's field:
+	// the controller holds one object, the object most recently installed by
+	// any record of this unit, and only that bound object arms the repath bit
+	// [04 R-ORD-01 §9]. A record whose object has been displaced from the slot
+	// is inert — no arrival, no route, no bits — so the test is slot occupancy,
+	// never record identity.
+	//
+	// WU-19-91 left this arm unconditional and said why: the one row that could
+	// not satisfy the condition was the ordinary ground move, whose handler
+	// installed no payload at all in this build. WU-19-97 gave `Move_Ground`
+	// phase 0 its point-goal install, so the condition is now true exactly
+	// where retail's is and the gate can be written as the section writes it.
+	if s.hasControllerGoal(u.Handle) && (blocked || !route.Active || route.Count < 2) {
 		route.WantsRepath = true
 	}
 	// The follower owns both the wants-repath arm and the exact inclusive

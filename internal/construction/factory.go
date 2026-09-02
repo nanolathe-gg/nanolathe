@@ -298,60 +298,97 @@ func isMobileBuilder(u *units.Unit) bool {
 	return u.Flags&units.BuildingClassStatus == 0
 }
 
-// nanoReach returns the builder's nanolathe reach in world Fixed units [fmt fbi] Builddistance reach in pixels.
-// TODO(question): exact nano reach constant — using BuildDistance*65536 fixed as reach; whether retail adds footprint radius term, uses piece-height, or measures from piece world pos to site footprint edge vs center remains unknown [04 §3.4][05][R-P0-06][fmt fbi].
-func nanoReach(builder *units.Unit) numeric.Fixed {
-	if builder == nil || builder.Def == nil || builder.Def.BuildDistance == 0 {
+// nanoIsqrt is the floor of the square root of a non-negative value. Retail
+// forms the three magnitudes of [05 R-WORK-01 §2] on the double-precision stack
+// and truncates each toward zero; for an exact integer radicand the two agree,
+// and the integer form keeps authoritative state out of floating point (I2).
+func nanoIsqrt(v int64) int64 {
+	if v <= 0 {
 		return 0
 	}
-	return numeric.Fixed(int64(builder.Def.BuildDistance) * 65536)
+	r := int64(1)
+	for r*r <= v {
+		r <<= 1
+	}
+	x := int64(0)
+	for b := r; b > 0; b >>= 1 {
+		t := x + b
+		if t*t <= v {
+			x = t
+		}
+	}
+	return x
 }
 
-// isWithinNanoRange reports whether the builder is within nanolathe range of
-// the site [04 §3.4][05][R-P0-06][fmt fbi].
-// The reach is nanoReach above; distance is planar X/Z only, as the reclaim
-// range check is planar [05 "Unit reclaim"]. The site point is supplied by the
-// caller: needsApproach and build-site selection both pass the nearest point of
-// the site's footprint rectangle, not its centre — see Service.siteRangePoint
-// for why the centre reading is disproved by the authored data, and for the
-// TODO(question) that remains on retail's own comparison [R-P0-06].
+// nanoFootprintPad is one end's half-footprint diagonal in whole world units:
+// `trunc(8 · hypot(footX, footZ))` [05 R-WORK-01 §2]. Eight is half of the
+// sixteen world units a footprint cell spans, and `8·sqrt(n)` is `sqrt(64n)`.
+// Both ends' pads subtract, because retail forms the target's with a NEGATIVE
+// eight and then adds it.
+func nanoFootprintPad(footX, footZ int32) int32 {
+	r := int64(footX)*int64(footX) + int64(footZ)*int64(footZ)
+	return int32(nanoIsqrt(64 * r))
+}
+
+// isWithinNanoRange is the build-distance reach test of [05 R-WORK-01 §2],
+// exactly:
 //
-// Correction. This measured from the result of a speculative `QueryNanoPiece`,
-// falling back to the builder's own position. Two things were wrong with that.
-// The reach tests of the work rows measure `dx² + dz²` from the acting unit
-// against `builddistance` (with the target's model radius added where the row
-// says so) and never resolve a nano piece [04 R-ORD-01 §5]; and the query is
-// forbidden outside an accepted work step — "a rejected work step emits none
-// and must not call QueryNanoPiece merely to draw a speculative spray"
-// [R-P0-06 §4], with the query ordered strictly after admission [R-P0-06 §6].
-// The second point is what the player saw: session step calls NeedsWalk for
-// every MobileBuild head on every tick, so an actively building construction
-// kbot spent two script calls per tick where the emitter spends one. The stock
-// two-emitter scripts alternate their piece per call, so the parity never
-// moved and only one of ARMACK's two nano guns ever sprayed.
-func (s *Service) isWithinNanoRange(builder *units.Unit, siteX, siteZ numeric.Fixed) bool {
+//	distWorld  = (int16)(trunc(hypot(dx, dz)) >> 16)   // the signed high word
+//	builderPad = trunc( 8 · hypot(builderFootX, builderFootZ))
+//	targetPad  = trunc(-8 · hypot(targetFootX,  targetFootZ))
+//	inRange    = (distWorld - builderPad + targetPad) <= (uint16)builddistance
+//
+// It is two-dimensional in X and Z and ignores Y entirely; the distance is
+// CENTRE to CENTRE — the builder's origin to the site's snapped footprint
+// centre — with each end's half-footprint diagonal taken off. The target end's
+// footprint pair is passed by value so a construction SITE can substitute the
+// PRODUCT definition's footprint, which is what §2 says the mobile builder's
+// approach does. The comparison is inclusive and SIGNED [05 R-WORK-01 §12]
+// point 1: a builder standing inside the target's half-diagonal makes the left
+// side negative and passes.
+//
+// CORRECTION (WU-19-94). This used to compare `builddistance` in 16.16 against
+// the squared planar distance to the NEAREST POINT of the site's footprint
+// rectangle, under a TODO(question) that asked whether retail measured to the
+// centre, the edge or the bounds, and whether it added a footprint radius term.
+// [05 R-WORK-01 §12] retires both markers: "this retires a reach of
+// `builddistance` in 16.16 compared against the nearest point of the site's
+// footprint rectangle: retail's test is centre-to-centre with both
+// half-diagonals subtracted". Point 3 of the same section retires the rest of
+// the old marker's list — there is no nano piece, no piece height, no Y term
+// and no model radius; the `(Xextent + Zextent)/3` radius belongs to unit
+// reclaim's squared form alone.
+//
+// Kept from the previous correction, because it is still the contract: the
+// reach never resolves a nano piece. `QueryNanoPiece` is presentation-side and
+// runs strictly AFTER admitted work [R-P0-06 §2][R-P0-06 §4][R-P0-06 §6];
+// calling it from this predicate spent two script calls per tick where the
+// emitter spends one, and the stock two-emitter scripts alternate their piece
+// per call, so only one of ARMACK's two nano guns ever sprayed.
+//
+// Where this runs is recorded at Service.needsApproach: §12 point 2 establishes
+// that retail consults the expression only on the approach phase's
+// arrival-failure wake.
+func (s *Service) isWithinNanoRange(builder *units.Unit, siteX, siteZ numeric.Fixed, siteFootX, siteFootZ int32) bool {
 	if builder == nil || builder.Def == nil {
 		return true
 	}
 	if builder.Def.BuildDistance == 0 {
-		return true // unlimited reach
+		return true // no authored reach term; the approach gate is not armed
 	}
 	if s == nil || s.Movement == nil {
 		return true // no walk driver bound in this context; skip range gate for unit tests
 	}
-	reach := nanoReach(builder)
-	if reach == 0 {
-		return true
-	}
-	srcX, srcZ := builder.X, builder.Z
-	// Callers now pass the point of the site's footprint rectangle nearest the
-	// builder rather than the site centre; see Service.siteRangePoint for the
-	// evidence and for what is still untraced [R-P0-06].
-	dx := int64(siteX) - int64(srcX)
-	dz := int64(siteZ) - int64(srcZ)
-	dist2 := dx*dx + dz*dz
-	reach2 := int64(reach) * int64(reach)
-	return dist2 <= reach2
+	dx := int64(builder.X) - int64(siteX)
+	dz := int64(builder.Z) - int64(siteZ)
+	distFixed := nanoIsqrt(dx*dx + dz*dz)
+	// The high word is read as a signed 16-bit quantity out of a 32-bit
+	// register, not as a shift of the whole value: a separation of 32768 world
+	// units or more reads negative [05 R-WORK-01 §2].
+	distWorld := int32(int16(uint32(distFixed) >> 16))
+	builderPad := nanoFootprintPad(builder.Def.FootprintX, builder.Def.FootprintZ)
+	targetPad := nanoFootprintPad(siteFootX, siteFootZ)
+	return distWorld-builderPad-targetPad <= int32(uint16(builder.Def.BuildDistance))
 }
 
 // ensureWalk activates a walk toward the site through movement's current-head
@@ -359,23 +396,23 @@ func (s *Service) isWithinNanoRange(builder *units.Unit, siteX, siteZ numeric.Fi
 // submission and restored-route adoption; repeated visits for the same node do
 // not resubmit, preserving determinism I1 and RNG call order I4.
 //
-// The goal handed to path search is a build-site perimeter candidate, never
-// the footprint centre [07 §9][04 §7.4]: the order's stored position stays the
-// centre, but routing the builder there parks it inside its own site, where
+// The goal handed to path search is the RECTANGLE goal on the product
+// footprint, never the footprint centre and never a hand-picked perimeter
+// point [04 R-PATH-01 §13][04 R-PATH-01 §12]: the order's stored position stays
+// the centre, but routing the builder there parks it inside its own site, where
 // the null-self commit check can never accept the placement
-// [05 "Silent blocked revalidation before allocation"]. See approach.go.
+// [05 "Silent blocked revalidation before allocation"]. The rectangle's border
+// is the candidate set and the search picks from it. See approach.go.
 func (s *Service) ensureWalk(builder *units.Unit, node *orders.Node) {
 	if s == nil || s.Movement == nil || s.Movement.Scheduler == nil || builder == nil || node == nil {
 		return
 	}
-	// Bind the movement goal BEFORE the idempotency guards below. The binding
-	// is derived state that no save box carries, so the first tick after a
-	// restore must re-establish it even when the restored route is still
-	// active — otherwise the mover would spend that route steering at the
-	// order's stored position and walk into the site [04 §8.3][04 §7.4].
-	if _, standX, standZ, ok := s.selectBuildApproach(builder, node); ok {
-		s.Movement.BindMoveGoal(builder.Handle, node, standX, standZ)
-	}
+	// Install the goal BEFORE the idempotency guards below. The payload is
+	// derived state that no save box carries, so the first tick after a restore
+	// must re-establish it even when the restored route is still active —
+	// otherwise the mover would spend that route steering at the order's stored
+	// position and walk into the site [04 §8.3][04 R-PATH-01 §13].
+	s.installApproachGoal(builder, node)
 	s.Movement.EnsureUnit(builder)
 	s.Movement.ActivateMove(builder, node)
 }
@@ -429,8 +466,10 @@ func (s *Service) EnsureWalkPublic(builder *units.Unit, node *orders.Node) {
 }
 
 // IsWithinNanoRangePublic is the exported range check for session integration.
-func (s *Service) IsWithinNanoRangePublic(builder *units.Unit, siteX, siteZ numeric.Fixed) bool {
-	return s.isWithinNanoRange(builder, siteX, siteZ)
+// The site's own footprint pair is part of the test [05 R-WORK-01 §2], so
+// callers pass it alongside the centre.
+func (s *Service) IsWithinNanoRangePublic(builder *units.Unit, siteX, siteZ numeric.Fixed, siteFootX, siteFootZ int32) bool {
+	return s.isWithinNanoRange(builder, siteX, siteZ, siteFootX, siteFootZ)
 }
 
 // KillInfo is the most recent kind-9 termination packet [05 C21].

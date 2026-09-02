@@ -317,6 +317,23 @@ type WorldQueryAdapter struct {
 	// [04 R-UNIT-06 §1]. Nil when the binding has no player rows, in which case
 	// the caller falls back.
 	DeclaresAlliance func(from, toward uint8) bool
+
+	// MappingWord reads one word of the per-player mapping word grid
+	// [03 R-LAYER §1]: one 16-bit word per 2x2-cell tile, bits 0..9 one per
+	// player slot, ORed by the phase-5 LOS stamp sweep and never decremented.
+	// The arguments are TILE coordinates, already carrying whatever offset the
+	// reader's own index arithmetic adds; the binding forms the grid's flat
+	// index with its own stride, so a tile column past the stride wraps into
+	// the next row exactly as retail's flat index does. ok is false only when
+	// no grid is bound or the flat index falls outside the allocation.
+	//
+	// The one simulation reader in this tree is the aircraft landing test's
+	// coarse early accept [04 R-AIR-01 §6a] as corrected by
+	// [04 R-AIR-01 §14.2]. internal/movement reaches it through this port
+	// because the grid belongs to the visibility service, which neither that
+	// package nor this one holds a handle to. Nil when the composition has no
+	// visibility service, in which case the caller runs its full test.
+	MappingWord func(tileX, tileZ int32) (uint16, bool)
 }
 
 // WorkAdapter is the construction/repair/ownership port. The result is kept
@@ -639,6 +656,30 @@ func (q *Queue) randBelow30() uint32 {
 	return q.simForJitter().Uint32n(30) // [R-P0-01] code 9's last re-arm draws RNG(30), a distinct draw site from code 3's RNG(15)
 }
 
+// moveGroundGoalRadius is the arrival radius `Move_Ground` phase 0 binds with
+// its point goal: "radius `(int16)payloadType + 4`" [04 R-ORD-01 §4], the
+// record's first general parameter word read as a SIGNED 16-bit value.
+//
+// MoveGroundGoalRadius below is the read-back seam for the movement layer, the
+// same shape PatrolGoalRadius and ParkGoalRect already give it: the handler
+// authors the geometry and the movement layer reads it back rather than
+// restating the arithmetic beside a descriptor name it does not own.
+func moveGroundGoalRadius(n *Node) int32 {
+	if n == nil {
+		return 4
+	}
+	return int32(int16(uint16(n.Param1))) + 4
+}
+
+// MoveGroundGoalRadius reports the arrival radius `Move_Ground` binds, and
+// whether n is that row [04 R-ORD-01 §4].
+func MoveGroundGoalRadius(n *Node) (int32, bool) {
+	if n == nil || DescriptorFor(n.ID).Name != "Move_Ground" {
+		return 0, false
+	}
+	return moveGroundGoalRadius(n), true
+}
+
 // moveGroundHandler is `Move_Ground`, and since WU-18-8 that descriptor alone
 // (see ensureMoveHandlers below for what else used to run this body and why it
 // was wrong).
@@ -650,13 +691,40 @@ func (q *Queue) randBelow30() uint32 {
 // 30..59 ticks. Other phase: cancel-all — a phase byte outside the machine
 // cancels the whole queue [R-ORDER-02 §1].
 //
-// The goal's arrival radius is internal/movement's: it binds the arrival handle
-// for this family and already applies the row's `+ 4` [R-P0-01 corrected].
+// Corrected 2026-09-02 (WU-19-97). Phase 0 armed the gate and nothing else: it
+// ran neither the row's caption clear nor its point-goal install, so the ONE
+// row of the whole table that is the ordinary move was the one row that owned
+// no goal payload. Everything downstream had to work around that. The
+// controller's slot stayed empty for an ordinary move, so the follower's
+// arrival step had no payload to ask [04 R-MOV-03 §2 step 1] and the arrival
+// bit `0x20` this handler's phase 1 waits on had to be produced from a
+// name-keyed handle instead; the follower's repath arm ([04 R-MOV-03 §2] step
+// 3, "with a payload installed") could not be gated as the section writes it,
+// because gating it would have stopped every ordinary move from re-pathing;
+// and an install by any OTHER record could not displace this record's object
+// from the slot, because there was none, so the `0x80` rebind raise of
+// [04 R-ORD-01 §9] never reached a `Move_Ground` record.
+//
+// The install is the same helper every combat and work row already reaches —
+// installPointGoal (combat.go) — so this row now clears pending `0x20`-`0x200`,
+// releases its own previous object and binds the new one exactly as they do.
+//
+// The radius is the row's own: `(int16)payloadType + 4`, the record's first
+// general parameter word read as a SIGNED 16-bit value [04 R-ORD-01 §4]. It is
+// 0 for interface- and most AI-issued moves (radius 4, handle threshold
+// floor(4/16)² = 0 — arrival on the exact goal cell) and 160 for the AI wave
+// task's gather broadcast [08 R-AI-01 §19]. internal/movement's
+// goalRadiusParamFor reads the same word for the fallback handle it builds
+// before this handler has run.
 func moveGroundHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code {
 	if u != nil && u.Attachment.Carrier != 0 {
 		return 7 // reject while attached [R-P0-01]
 	}
 	if n.Phase == 0 {
+		captionClear(u) // [04 R-ORD-01 §4] "caption clear" [04 R-ORD-01 §1]
+		// "point goal at the record's goal with radius `(int16)payloadType + 4`"
+		// [04 R-ORD-01 §4].
+		installPointGoal(u, n, n.GoalX, n.GoalY, n.GoalZ, moveGroundGoalRadius(n))
 		n.DynamicGate = 0xE0 // [R-P0-01] phase 0 arms gate 0xE0
 		return 1
 	}

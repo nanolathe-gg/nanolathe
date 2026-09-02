@@ -36,9 +36,17 @@ func TestPathFailureRecoveryRearmsEverySixtyTicks(t *testing.T) {
 		t.Fatal("Move_Ground order is unavailable")
 	}
 	q := orders.QueueForUnit(u)
-	q.Push(moveID, orders.Node{GoalX: world.CellToWorld(8), GoalZ: world.CellToWorld(1)})
+	q.Push(moveID, orders.Node{Owner: h, GoalX: world.CellToWorld(8), GoalZ: world.CellToWorld(1)})
 	head := q.Head()
-	if head == nil || !system.ActivateMove(u, head) {
+	if head == nil {
+		t.Fatal("no head")
+	}
+	// `Move_Ground` phase 0 installs a point goal of radius `(int16)p1 + 4`
+	// [04 R-ORD-01 §4]; the follower's repath arm runs only "with a payload
+	// installed" [04 R-MOV-03 §2 step 3], so the fixture installs one as the
+	// handler would.
+	system.InstallPointGoal(orders.PointGoalRequest{Owner: head.Owner, Node: head, X: head.GoalX, Z: head.GoalZ, Radius: 4})
+	if !system.ActivateMove(u, head) {
 		t.Fatal("activate move")
 	}
 	first := system.PathRequestsSnapshot()
@@ -95,7 +103,7 @@ func TestPathFailureRecoveryRearmsEverySixtyTicks(t *testing.T) {
 	oldToken := system.activeOrders[h].token
 	system.CancelPathRequest(h)
 	q.RemoveHead()
-	q.Push(moveID, orders.Node{GoalX: world.CellToWorld(9), GoalZ: world.CellToWorld(1)})
+	q.Push(moveID, orders.Node{Owner: h, GoalX: world.CellToWorld(9), GoalZ: world.CellToWorld(1)})
 	newHead := q.Head()
 	if newHead == nil || !system.ActivateMove(u, newHead) {
 		t.Fatal("activate replacement")
