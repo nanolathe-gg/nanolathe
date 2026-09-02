@@ -131,8 +131,8 @@ func TestExploreAndRallyBodyDraws(t *testing.T) {
 		RNG: &sim, GroupRally: []pool.Handle{attacker},
 	}
 	if !m.InitializeBattleState(terrain, RallyBattleBindings{
-		ProbeKnown:    func(uint8, numeric.Fixed, numeric.Fixed, numeric.Fixed) bool { return true },
-		OrderAdmitted: func(*units.Unit, numeric.Fixed, numeric.Fixed, numeric.Fixed) bool { return true },
+		ProbeKnown:     func(uint8, numeric.Fixed, numeric.Fixed, numeric.Fixed) bool { return true },
+		ShotTimeAdmits: func(*units.Unit, numeric.Fixed, numeric.Fixed, numeric.Fixed) bool { return true },
 	}) {
 		t.Fatal("explicit rally battle initialization failed")
 	}

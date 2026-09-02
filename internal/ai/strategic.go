@@ -90,6 +90,15 @@ type Strategic struct {
 	unitLimit      uint16
 	unitLimitBound bool
 
+	// maxWind is the map's maximum wind word — the session's authored
+	// `maxwindspeed`, with the canonical 2000 fallback a map that authors none
+	// gets [05 R-PROD-01 §3]. The class routine's wind-generator zeroing branch
+	// is its only reader here [08 R-P0-05 §9]. maxWindBound distinguishes an
+	// unbound fixture from an authored zero: an unbound one must not zero every
+	// wind generator, so the branch does not fire without a session word.
+	maxWind      int32
+	maxWindBound bool
+
 	// liveUnitCount mirrors the owning player record's live unit count, the
 	// 16-bit field the class routine reaches through the strategic state's
 	// back-pointer. It is incremented at unit creation and decremented in unit
@@ -139,6 +148,47 @@ func (s *Strategic) SetUnitLimit(limit int32) {
 	s.unitLimit = uint16(limit)
 	s.unitLimitBound = true
 }
+
+// SetMaxWind supplies the map's maximum wind word, the second operand of the
+// class routine's wind-generator zeroing branch [08 R-P0-05 §9]. It is the
+// session's authored `maxwindspeed` (canonical maps that author none get 2000,
+// [05 R-PROD-01 §3]); a session binds it once, before the construction-time
+// class computation, because that computation already consults it. A negative
+// argument is a setup error and leaves the word unbound.
+func (s *Strategic) SetMaxWind(maxWind int32) {
+	if s == nil || maxWind < 0 {
+		return
+	}
+	s.maxWind, s.maxWindBound = maxWind, true
+}
+
+// MaxWind reports the bound maximum wind word and whether a session supplied
+// one [08 R-P0-05 §9].
+func (s *Strategic) MaxWind() (int32, bool) {
+	if s == nil {
+		return 0, false
+	}
+	return s.maxWind, s.maxWindBound
+}
+
+// windGeneratorSuppressed is the class routine's third zeroing branch: zero the
+// first coefficient when the definition's `windgenerator` compares not equal to
+// floating zero AND the map's maximum wind word is strictly less than the wind
+// divisor divided by two — a signed integer divide of the compiled-in 5000
+// [05 R-PROD-01 §3], so the threshold is 2500. The comparison is strict and
+// integer [08 R-P0-05 §9]. On a map whose maximum wind is below 2500 every wind
+// generator's class coefficient is zero, which suppresses the definition in the
+// construction selection.
+func (s *Strategic) windGeneratorSuppressed(def *content.UnitDef) bool {
+	if s == nil || def == nil || !s.maxWindBound {
+		return false
+	}
+	return def.WindGenerator != 0 && s.maxWind < windGeneratorMinimumMaxWind
+}
+
+// windGeneratorMinimumMaxWind is 5000/2 with the signed integer divide retail
+// takes [08 R-P0-05 §9][05 R-PROD-01 §3].
+const windGeneratorMinimumMaxWind = int32(5000 / 2)
 
 // UnitLimit reports the bound per-player unit limit and whether a session
 // supplied one [08 R-AI-01 §13].
@@ -291,11 +341,16 @@ func (s *Strategic) InitClassVectors() {
 	sort.Strings(keys)
 	for _, ck := range keys {
 		c := int32(0)
-		// TODO(question): the authored/runtime field that populates the category
-		// flag
-		// is unresolved. Do not substitute BMCode or another similarly named
-		// FBI flag; until the field is mapped, this initialization addend is
-		// intentionally absent [P0-01 §2.2] [R-P0-05] [I9].
+		// The category flag IS `bmcode`: the initialization pass adds 40 when
+		// the definition's authored `bmcode` byte is zero — the building class,
+		// the same byte the placement validator dispatches on [08 R-P0-05 §9]
+		// [08 R-AI-03 §7.4]. The earlier caution here against substituting
+		// BMCode is withdrawn by that section. So a plain building initializes
+		// to 40, a factory or construction building to 60, a mobile unit to 0
+		// or 20 (a mobile builder).
+		if def := s.lookupDef(ck); def != nil && !def.BMCode {
+			c += 40
+		}
 		// A non-empty authored build menu contributes 20 [P0-01].
 		hasBuild := s.hasBuildOptions(ck)
 		if hasBuild {
@@ -618,10 +673,14 @@ func (s *Strategic) recomputeClassVectors() {
 					// resolves to — not a weapon [02 §5 R-CONTENT-02].
 					continue
 				}
-				// TODO(question): the runtime weapon-slot active bit is
-				// not represented by the immutable weapon definition. A resolved
-				// weapon link is the only available slot identity here; do not
-				// infer activity from unrelated unit flags [R-P0-05].
+				// "Slot active" is the record-0 sentinel test and nothing more.
+				// The class routine reads one byte of the linked weapon catalog
+				// record; the catalog loader's prologue stamps every record
+				// with its own index before any TDF is parsed, so record 0 —
+				// what an unresolved authored name links to — reads 0 and every
+				// real weapon reads its non-zero index. There is no separate
+				// runtime bit, and skipping nil and sentinel links (above) is
+				// already exactly retail's test [08 R-P0-05 §9].
 				// The class routine reads the damage word (the weapon parser's
 				// DAMAGE/default key) divided by 40 and the range word (the range
 				// key) divided by 100; reloadtime is stored elsewhere (scaled by
@@ -695,16 +754,12 @@ func (s *Strategic) recomputeClassVectors() {
 		if def != nil && def.IsFeature { // [P0-01 §2.2; R-P0-05]
 			val = 0
 		}
-		// [08 R-P0-05 §5] establishes that a third zeroing branch exists —
-		// "the wind-generator/global-wind comparison is true" — and that the
-		// definition's `windgenerator` word is one of the routine's recovered
-		// inputs [05 R-PROD-01 §1]. What it is compared against
-		// and in which direction is not written down.
-		// TODO(question): what is the class routine's wind-generator zeroing
-		// test — which global (the session's current wind scalar, or a wind
-		// min/max word) and which comparison? Decider: a static trace of that
-		// branch, recorded in [08 R-P0-05 §5]. Until then no proxy field is
-		// consulted and the branch is not taken.
+		// The third zeroing branch, closed by [08 R-P0-05 §9]: the operand is
+		// the map's MAXIMUM wind word, not the live wind scalar, and the test
+		// is strict and integer against 2500.
+		if s.windGeneratorSuppressed(def) {
+			val = 0
+		}
 		val = clamp100(val) // clamp to 100 max, negative kept [P0-01 §3]
 		// store to C0
 		cv := s.ClassVectors[ck]

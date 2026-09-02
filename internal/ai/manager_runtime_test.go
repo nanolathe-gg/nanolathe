@@ -544,15 +544,21 @@ func TestExploreTargetsRemainSignedPositionWords(t *testing.T) {
 	}
 }
 
+// The member gate of [08 R-AI-01 §19]: the rally task reads the member's mover
+// pointer, which the creator allocates only for `bmcode == 1`, so a MOBILE
+// member is never gated and a BUILDING faces the slot-1 shot-time physical
+// gate. The binding here refuses every building, so the mobile member is the
+// only one that submits.
 func TestRallyConstructorOffMapProbeAndPerMemberAdmission(t *testing.T) {
-	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "attacker"}, UnitName: "attacker", CanAttack: true, CanMove: true, MaxDamage: 100}
-	cat := &content.Catalog{Units: map[string]*content.UnitDef{"attacker": def}}
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "attacker"}, UnitName: "attacker", CanAttack: true, CanMove: true, BMCode: true, MaxDamage: 100}
+	building := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "turret"}, UnitName: "turret", CanAttack: true, MaxDamage: 100}
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{"attacker": def, "turret": building}}
 	w := newAIFixtureWorld(4, cat)
 	mobile, err := w.Create(def, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	immobile, err := w.Create(def, 0, 0, 0, 0)
+	immobile, err := w.Create(building, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -577,7 +583,7 @@ func TestRallyConstructorOffMapProbeAndPerMemberAdmission(t *testing.T) {
 			seenX, seenZ = x, z
 			return false
 		},
-		OrderAdmitted: func(u *units.Unit, _, _, _ numeric.Fixed) bool { return u.Handle == mobile },
+		ShotTimeAdmits: func(*units.Unit, numeric.Fixed, numeric.Fixed, numeric.Fixed) bool { return false },
 	}) {
 		t.Fatal("explicit rally battle initialization failed")
 	}
@@ -594,7 +600,7 @@ func TestRallyConstructorOffMapProbeAndPerMemberAdmission(t *testing.T) {
 		t.Fatalf("unknown-ground rally drew %d body values, want only RNG(10)", r.Draws())
 	}
 	if q := orders.QueueOfUnit(w.Unit(immobile)); q != nil && len(q.Primary()) != 0 {
-		t.Fatalf("no-locomotion member bypassed ordinary admission: %v", q.Primary())
+		t.Fatalf("mover-less member bypassed the slot-1 shot-time gate: %v", q.Primary())
 	}
 	nodes := orders.QueueOfUnit(w.Unit(mobile)).Primary()
 	if len(nodes) != 1 || nodes[0].ID != orders.Lookup("Suppress") || nodes[0].GoalX != centreX || nodes[0].GoalZ != centreZ {
@@ -627,7 +633,7 @@ func TestRallyConstructorAndProbeAdditionWrapPositionWords(t *testing.T) {
 			seen = append(seen, x)
 			return false
 		},
-		OrderAdmitted: func(*units.Unit, numeric.Fixed, numeric.Fixed, numeric.Fixed) bool { return false },
+		ShotTimeAdmits: func(*units.Unit, numeric.Fixed, numeric.Fixed, numeric.Fixed) bool { return false },
 	}) {
 		t.Fatal("explicit rally battle initialization failed")
 	}

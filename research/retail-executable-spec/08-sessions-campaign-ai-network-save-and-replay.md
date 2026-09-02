@@ -2934,6 +2934,69 @@ side; this is its home. On a map whose maximum wind is below 2500 the
 computer player's class coefficient for every wind generator is zero, which
 suppresses the definition in the construction selection of §3–§4.
 
+#### R-P0-05 §10 — The initialization-only byte vector has exactly one reader: it is the weight of the strategic centre — Established [R-P0-05]
+
+Traced RWU-19-25 (static: every access to the strategic state's vector
+pointer field was enumerated across the whole recovered function set and each
+hit classified by the object it addresses — the strategic state, the player
+record, and two unrelated objects that happen to keep a field at the same
+displacement; the class routine, the candidate score and cumulative selection
+of §3–§4, the build-request pump, the placement search, every task body and
+the save writer were then confirmed absent from the hit list). §5 and §9
+record the vector's writer; this section closes its reader.
+
+**Established — the reader.** The vector is read in exactly one place: the
+30-tick strategic refresh, where it supplies the per-unit **weight** of the
+centre computation that [R-AI-01 §16] describes. It never enters the score or
+selection arithmetic of §4 — not as an addend, a factor, a gate or a compare
+— and no other routine reads it. The bounded-absence statement is exact for
+the recovered set: an implementation whose class routine, selection and build
+pump ignore the vector matches retail; one whose centre ignores it does not.
+
+**Established — the arithmetic, exactly.** During the refresh's walk of the
+unit array, for every unit that is alive and not dying, owned by the state's
+own side, and complete (build-remaining float exactly zero):
+
+```text
+w        = float32( int( signedByte( vector[unit.definitionIndex] ) ) )
+weight  += w
+accX    += float32(unit.X) * w * (1 / 65536)      ; unit.X is the raw 16.16 word
+accY    += float32(unit.Y) * w * (1 / 65536)
+accZ    += float32(unit.Z) * w * (1 / 65536)
+```
+
+All four accumulators are 32-bit floats; the reciprocal is the single-precision
+constant, so each term is the coordinate in whole world units times the
+weight. After the walk: **only when `weight != 0.0`** each axis is divided by
+`weight`; each axis is then multiplied by the double constant `65536.0` and
+truncated toward zero through the shared conversion into the three 16.16
+centre words. There is no comparison on the byte, no clamp, and no
+per-definition gate: a zero weight simply contributes nothing (the unit is
+still walked and still counted in the per-type census).
+
+**Consequences, all Established.** By §9 the byte is 40 for a building, 60
+for a building with a build list, 20 for a mobile builder and **0 for every
+other mobile unit**. The strategic centre is therefore the weighted centroid
+of the player's *structures* (factories and construction buildings weighing
+half again as much as plain buildings, mobile builders a third), and a
+field army of combat units — however large, wherever it stands — never moves
+it. When the player owns nothing weighted the sum is zero, the division is
+skipped, and the centre words are the truncation of zero: `(0, 0, 0)`, the
+"centre unset" state the explore task tests ([R-AI-01 §6]).
+
+**The centre's own readers**, so the vector's whole downstream effect is
+listed: the construction task's placement search origin — the builder-to-
+centre delta, scaled down to the state's growing search radius when it
+exceeds it ([R-AI-03]) — the construction task's own read of the centre
+triple through the centre getter, and the explore task's read of the same
+getter. A fourth helper that forms "map extent minus centre" on X and Z with
+Y zero exists but has no located caller in the recovered set (Supported
+inference: dead).
+
+For the implementation: `Strategic.InitVectors` is not inert; it is the
+weight `refreshCountsAndCenter` must apply in place of its current
+unweighted mean, and the +40/+20 of §5 are live in retail.
+
 #### R-P0-05 §6 — Cadence and same-tick ordering — Established [R-P0-05]
 
 The established per-player sequence is:

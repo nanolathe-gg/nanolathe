@@ -1121,6 +1121,57 @@ smoke family and the `× 2` of the feature fire probe belong to those
 contracts (`[03 R-WIND-01]`), not to projectiles. An implementation that
 stores the published words as raw 16.16 velocity increments is exact.
 
+### Closed — the two admission gates are two routines, and the per-slot fire gate has no target-side clause [R-WPN-05 §9] (2026-09-02)
+
+**Established (direct-static, RWU-19-25).** §3.1's acquisition-time
+admission, §3.3's shot-time gate and `[R-WPN-05 §1]`'s order-side gate were
+re-read against the executable. All three sections are exact as written;
+nothing is corrected. What no section says in one place, and what an
+implementation that merged them got wrong, is this:
+
+**They are two distinct routines.** The unit-to-unit gate of §3.1 and of
+§1 is *one* routine (it takes the shooter unit, the target unit and the slot;
+its clauses are §1's list, with the range test last). Its callers are the
+autonomous acquisition's per-candidate test, the order handlers
+(`Attack_Chase` and `Guard` among them) and the cursor-shape chooser: it runs
+when a target is **installed** on a slot, never per shot. The shot-time gate of §3.3 is a *different* routine taking the
+shooter, the shooter's position triple, the resolved target **point** and the
+slot. Its clauses, in the order they are evaluated:
+
+1. **range** — `((dx·dx) >> 32) + ((dz·dz) >> 32) <= range·range`, inclusive,
+   signed 32-bit, on the raw 16.16 deltas from the shooter's position to the
+   target point; evaluated **first**, for water and non-water weapons alike;
+2. **non-water weapon only**: `(int16)(shooter.Y >> 16) + shooterModelTop >
+   sea`, strictly greater, else refuse — the top-height term is the unit
+   definition's model total-height whole-unit word (`[03 R-P0-18-A §1]`; the
+   same word §3.1 calls `referenceHeight` and §1 `ModelTop`), and it sits
+   **here, on the shooter side only**;
+3. **non-water and `ballistic` only**: refuse when the solver, given the
+   shooter-minus-target deltas on all three axes, returns the no-solution
+   sentinel.
+
+A water weapon runs clause 1 and admits. There is **no target-side clause of
+any kind**: no target height or model top, no `floater`/`canhover` medium
+test, no `toairweapon` mover-mode test, no alliance, no category. The target
+contributes only its point — X and Z to clause 1, all three axes to clause 3.
+The two routines also order the range test differently (last in the
+unit-to-unit gate, first here); both orders are as traced and neither has a
+side effect, so only which clause fails first differs.
+
+**One fire path, both target kinds.** The slot pipeline (§3.3) is the only
+site that fires, and it does not know whether the slot's target was installed
+by an order or by autonomous acquisition: both are resolved to a point by the
+same helper, and once the slot's reload counter is zero the pipeline runs the
+shot-time gate, then the cost precheck, then the executor. The shot-time
+gate's other callers are the computer player's rally admission
+(`[08 R-AI-01 §7]`) and a presentation-side cursor-shape chooser; neither
+adds a clause.
+
+For the implementation: the shot-time site must carry exactly clauses 1–3
+above — with the model-top addend and the whole-unit compare, not a bare
+16.16 compare against sea level — and the target-side clauses of §3.1/§1
+belong to the acquisition and order-installation gate only.
+
 ### 3.4 The weapon-query path [R-P0-07]
 
 **Established fact:** The slot selects its pieces through four query jobs that

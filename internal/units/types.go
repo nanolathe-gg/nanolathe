@@ -205,8 +205,16 @@ const NumSlots = 3 // [06 §1.2] primary, secondary, tertiary
 // The mover reads this field after the unit-phase preserves it for the movement
 // window; integration via movement.System.Tick runs in phase 5 [01 §4.4] [GAP T15].
 // Stored directly on Unit; movement imports units so it can read/write this.
-// TODO(question): exact layout of mover mode bits and velocity domain remains
-// open; kept minimal for P0-I02/P0-I15 wiring.
+//
+// Both halves of this record's former open question are settled. The mode is
+// the low two bits of the flags-word mode mirror, and its values are grounded
+// (1) and airborne (2), not stopped and moving: the mover constructor writes 1
+// for every unit, the only runtime writer is the two-valued setter the air
+// executors call with 2 on takeoff and 1 on landing, and 0 and 3 reach a unit
+// only through a save file [04 R-MOV-01 §8]. The velocity domain is the world's:
+// coordinates and velocities are signed 16.16 fixed point, one world unit =
+// 65536, with angles unsigned 16-bit at 65536 per circle [04 §8.1]
+// [04 R-MOV-01 §4] (I2).
 type MoveState struct {
 	Mode    uint8         // low two bits of the flags-word mode mirror: 1 grounded/surface (every structure too), 2 airborne, 0 attached/parked, 3 save-installed [04 R-MOV-01 §8]; seeded to 1 at creation. The older "0 none, 1 stopped/parked, 2 active locomotion" reading is retracted [03 R-RAST-01 §7 correction].
 	Heading uint16        // 0..65535 per circle [04 §5.1] C25 (I2) [03 §2.4] C24 bank→Z heading→Y pitch→X

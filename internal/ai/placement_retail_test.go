@@ -138,7 +138,14 @@ func TestScatterLatticeNarrowsToSignedWord(t *testing.T) {
 	}
 }
 
-func TestPlacementHelpersUseDistinctCanonicalValidatorModes(t *testing.T) {
+// TestPlacementValidatorDispatchesOnBMCodeInBothModes locks the corrected
+// dispatch of [08 R-AI-03 §4]: both helpers send a `bmcode == 0` definition
+// (every building) to the yard-map blocker and a `bmcode != 0` definition
+// (mobile) to the plain footprint walk. The two class labels in that section
+// were inverted when first written; the previous form of this test asserted
+// that the scatter helper never read the authored yard, which was the inverted
+// reading [08 R-AI-03 §4 correction][08 R-AI-03 §7.4].
+func TestPlacementValidatorDispatchesOnBMCodeInBothModes(t *testing.T) {
 	cat := placementCatalog("armgeo", "GGGG", 0)
 	terrain := placementTerrain(16, 16, 0)
 	m := makePlacementManager(cat, terrain, 0)
@@ -147,11 +154,28 @@ func TestPlacementHelpersUseDistinctCanonicalValidatorModes(t *testing.T) {
 		t.Fatal(failure.Proof)
 	}
 
-	if _, _, reason, err := validateRetailAICandidate(terrain, pd, 2, 2, true); err == nil || reason != ReasonBlocked {
-		t.Fatalf("exhaustive yard-map mode accepted missing geothermal: reason=%v err=%v", reason, err)
+	// A building: the geothermal requirement of the authored yard bites in
+	// both modes, because both run the yard blocker.
+	for _, exhaustive := range []bool{true, false} {
+		if _, _, reason, err := validateRetailAICandidate(terrain, pd, 2, 2, exhaustive); err == nil || reason != ReasonBlocked {
+			t.Fatalf("exhaustive=%v accepted missing geothermal: reason=%v err=%v", exhaustive, reason, err)
+		}
 	}
-	if _, _, reason, err := validateRetailAICandidate(terrain, pd, 2, 2, false); err != nil || reason != ReasonSuccess {
-		t.Fatalf("scatter plain-footprint mode read authored yard: reason=%v err=%v", reason, err)
+
+	// A mobile definition walks the plain footprint in both modes: no yard
+	// bytes, so the same site is legal.
+	mobileCat := placementCatalog("armpw", "GGGG", 0)
+	mobileCat.Units["armpw"].BMCode = true
+	mobileCat.Units["armpw"].CanFly = true // any compiled mobility domain; the yard is what is under test
+	mm := makePlacementManager(mobileCat, terrain, 0)
+	mpd, mfailure := resolveRetailPlacementDef(mm, "armpw")
+	if mfailure.Proof != nil {
+		t.Fatal(mfailure.Proof)
+	}
+	for _, exhaustive := range []bool{true, false} {
+		if _, _, reason, err := validateRetailAICandidate(terrain, mpd, 2, 2, exhaustive); err != nil || reason != ReasonSuccess {
+			t.Fatalf("mobile exhaustive=%v read authored yard: reason=%v err=%v", exhaustive, reason, err)
+		}
 	}
 
 	occupied := placementTerrain(16, 16, 0)
@@ -160,25 +184,58 @@ func TestPlacementHelpersUseDistinctCanonicalValidatorModes(t *testing.T) {
 		t.Fatalf("scatter accepted occupied cell: reason=%v err=%v", reason, err)
 	}
 
+	// Yard bit 5 is the blocking-feature test; 'G' does not carry it, so the
+	// blocking rejection is asserted through a yard that does ('o' = 0x2f).
+	blockedCat := placementCatalog("armsolar", "oooo", 0)
+	bm := makePlacementManager(blockedCat, terrain, 0)
+	bpd, bfailure := resolveRetailPlacementDef(bm, "armsolar")
+	if bfailure.Proof != nil {
+		t.Fatal(bfailure.Proof)
+	}
 	blocked := placementTerrain(16, 16, 0)
 	blocked.FeatureDefs = []*content.FeatureDef{{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "rock"}, Blocking: true}}
 	blocked.PlotAt(2, 2).SetFeature(0)
-	if _, _, reason, err := validateRetailAICandidate(blocked, pd, 2, 2, false); err == nil || reason != ReasonBlocked {
+	if _, _, reason, err := validateRetailAICandidate(blocked, bpd, 2, 2, false); err == nil || reason != ReasonBlocked {
 		t.Fatalf("scatter accepted blocking feature: reason=%v err=%v", reason, err)
 	}
 
 	depth := placementTerrain(16, 16, 0)
 	depth.SeaLevel = 10
-	pd.rules.MaxWaterDepth = 5
-	if _, _, reason, err := validateRetailAICandidate(depth, pd, 2, 2, false); err == nil || reason != ReasonBlocked {
+	bpd.rules.MaxWaterDepth = 5
+	if _, _, reason, err := validateRetailAICandidate(depth, bpd, 2, 2, false); err == nil || reason != ReasonBlocked {
 		t.Fatalf("scatter accepted excessive depth: reason=%v err=%v", reason, err)
 	}
 
 	slope := placementTerrain(16, 16, 0)
 	slope.PlotAt(2, 2)[5], slope.PlotAt(2, 2)[6] = 10, 0
-	pd.rules.MaxWaterDepth = 0
-	if _, _, reason, err := validateRetailAICandidate(slope, pd, 2, 2, false); err == nil || reason != ReasonBlocked {
+	bpd.rules.MaxWaterDepth = 0
+	if _, _, reason, err := validateRetailAICandidate(slope, bpd, 2, 2, false); err == nil || reason != ReasonBlocked {
 		t.Fatalf("scatter accepted excessive slope: reason=%v err=%v", reason, err)
+	}
+}
+
+// TestExhaustiveCandidateRejectsRowZeroLikeColumnZero locks [08 R-AI-03 §7.1]:
+// the blocker's row test rejects row 0 exactly as its column test rejects
+// column 0, and Nanolathe additionally rejects a negative row as its own
+// deterministic choice (retail reads before the grid there; Unknown whether
+// that faults).
+func TestExhaustiveCandidateRejectsRowZeroLikeColumnZero(t *testing.T) {
+	cat := placementCatalog("armsolar", "oooo", 0)
+	terrain := placementTerrain(16, 16, 0)
+	m := makePlacementManager(cat, terrain, 0)
+	pd, failure := resolveRetailPlacementDef(m, "armsolar")
+	if failure.Proof != nil {
+		t.Fatal(failure.Proof)
+	}
+	for _, tt := range []struct{ x, z int32 }{{2, 0}, {0, 2}, {2, -1}} {
+		if _, _, reason, err := validateRetailAICandidate(terrain, pd, tt.x, tt.z, true); err == nil || reason != ReasonOutOfBounds {
+			t.Fatalf("exhaustive accepted candidate %d,%d: reason=%v err=%v", tt.x, tt.z, reason, err)
+		}
+	}
+	// Row 0 is rejected only by the exhaustive blocker's entry test; the
+	// scatter helper's bounds test admits it.
+	if _, _, reason, err := validateRetailAICandidate(terrain, pd, 2, 0, false); err != nil || reason != ReasonSuccess {
+		t.Fatalf("scatter rejected row 0: reason=%v err=%v", reason, err)
 	}
 }
 
@@ -198,7 +255,7 @@ func TestScatterEnforcesMinWaterDepthZeroUpperBand(t *testing.T) {
 	}
 }
 
-func TestScatterScoreDivergenceIsSessionLocalAndInclusive(t *testing.T) {
+func TestScatterScoreIsTheTrialFootprintSumAndInclusive(t *testing.T) {
 	cat := placementCatalog("armsolar", "o", 0)
 	terrain := placementTerrain(64, 64, 1)
 	run := func(seed uint32) PlacementResult {
@@ -208,10 +265,10 @@ func TestScatterScoreDivergenceIsSessionLocalAndInclusive(t *testing.T) {
 		return PlaceWithResult(m, "armsolar", terrain)
 	}
 	first := run(44)
-	// A prior process-global score would couple this run to unrelated players
-	// or sessions. The sanctioned divergence uses the valid trial's own sum,
-	// intentionally has no such writer, and exposes no selectable alternate
-	// [08 R-AI-03 §4].
+	// The limit test compares the valid trial's own footprint metal-byte sum,
+	// which the yard blocker leaves in the accumulator on entry — retail's
+	// test, not a divergence from it [08 R-AI-03 §4 correction]. There is no
+	// process-global writer that could couple this run to another player.
 	second := run(44)
 	if !first.Valid || !second.Valid || first.Score != 4 || second.Score != 4 || first.CellX != second.CellX || first.CellZ != second.CellZ {
 		t.Fatalf("session-local inclusive score differs: first=%+v second=%+v", first, second)

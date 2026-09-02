@@ -425,9 +425,19 @@ type Unit struct {
 	Kills     int32 // kill count for capture timer [P0-15]
 	// Paralyze state per [06 §10] paralyzer status effects [P0-I04].
 	ParalyzeExpire uint32 // absolute tick when stun ends; 0 means not paralyzed [06 §10]
-	Stunned        bool   // TODO(question): GAI slow vs binary stun remains open [06 §10]
-	CurrentSample  uint8  // current 30-tick-window health sample [04 §5.1]
-	PriorSample    uint8  // previous 30-tick-window health sample for death severity [04 §5.1]
+	// Stunned is a candidate mark, not a mechanism. The stun is binary — fully
+	// stopped and silent for exactly the credited ticks, with no speed scaling,
+	// no movement-class change and no per-tick decrement [06 R-DMG-01 §11]. What
+	// stops the unit is the head wait task plus the release verb on all three
+	// weapon slots and the unconditional target clear on each of them, which the
+	// Paralyze order row performs [04 R-ORD-01 §2]; the flag disables nothing on
+	// its bearer. Retail's only two readers both test a *candidate*: the shared
+	// autonomous target search and the computer player's target picker reject a
+	// marked candidate when the searching weapon is a paralyzer, and no other
+	// site reads it [06 R-DMG-01 §11].
+	Stunned       bool
+	CurrentSample uint8 // current 30-tick-window health sample [04 §5.1]
+	PriorSample   uint8 // previous 30-tick-window health sample for death severity [04 §5.1]
 	// Placement linkage for P0-04/P0-06 sparse created[] semantics [P0-04][P0-06].
 	// Retail maintains created[placementIdx] sparse array and scans it in
 	// placement order 0..count-1 skipping NULL gaps for Ident→Unitname first-
@@ -498,13 +508,20 @@ func (u *Unit) ClearClassifierEligibility() {
 // authored `defaultmissiontype` standing record [04 §3.3], so every idle stock
 // mobile unit read as ineligible.
 //
-// TODO(question): the predicate's last two clauses have no counterpart here —
-// the post-capture grace counter (armed only by a capture whose new owner is a
-// remote controller, so always zero in single-player [08 R-TRIG-01 §3]) and
-// "no carrier, or a carrier whose status bit 30 (cargo-selectable) is set".
-// The carrier clause needs the transport flag set closed; the shell's own
-// selection predicate already approximates it from the carrier definition's
-// `isairbase` mirror [04 R-UNIT-06 §3].
+// The predicate's last two clauses are both settled and neither adds a term to
+// this receiver-only test. The post-capture grace counter is armed only by a
+// capture whose new owner is a remote controller, so it is always zero in
+// single-player [08 R-TRIG-01 §3]. The carrier clause — "no carrier, or a
+// carrier whose cargo-selectable status bit is set" — is closed by
+// [04 R-UNIT-06 §3]: that bit is a static mirror of the carrier definition's
+// `isairbase` flag, written once by the unit initializer and never touched
+// again, so the clause reads "cargo aboard an ordinary transport is not
+// selectable, cargo attached to an airbase is". Applying it needs the carrier
+// handle resolved through the world, which a method on the unit record cannot
+// do, so it belongs to the callers that own a world — `internal/triggers` spells
+// the clause out against the carrier's status word. Nothing writes that mirror
+// bit yet; seeding it from `isairbase` at creation is a separate change,
+// because it moves the status word of every airbase definition.
 func (u *Unit) Eligible() bool {
 	if u == nil || !u.Alive || u.Dying {
 		return false
@@ -558,10 +575,14 @@ func (u *Unit) setActivationEdge(on bool, vm *cob.VM) {
 	}
 	u.Activated = on
 	// TODO(question): the edge emits engine notification code 3 (rising) or 4
-	// (falling) [04 R-UNIT-06 §2] and the unit record has no status-cue sink to
-	// carry them. What would settle it: the presentation channel that drains
-	// engine notification codes, which doc 03/07 has not yet named. Do not
-	// invent a sink here.
+	// (falling) [04 R-UNIT-06 §2] and this build has nowhere to put them, so
+	// they are dropped. What is unknown is the consumer, not the emission: which
+	// engine subsystem receives a notification code, what it does with the unit
+	// and code pair, and whether anything simulation-visible depends on it. What
+	// would settle it: a trace of the notification dispatcher's sink and its
+	// per-code handlers, written up in doc 03 (audio/effect cues) or doc 07
+	// (interface cues) — neither names one today. Until then, do not invent a
+	// sink or a per-code effect here.
 	if binding := u.COBBinding(); binding != nil && binding.Callbacks != nil {
 		if on {
 			binding.Callbacks.Activate()
@@ -1031,11 +1052,19 @@ func (w *World) attachCOB(u *Unit) error {
 		return nil // already has VM [P1-I01]
 	}
 	if w.cobBinder != nil {
-		// TODO(question): two attachment failure boundaries remain open. Nanolathe's
-		// strict binder can return an error after allocation, but retail establishes
-		// RNG order only for successful initialization and pre-initializer refusal; a
-		// traced retail post-allocation failure would settle whether either draw is
-		// retained. Do not roll back or reorder the successful path.
+		// Retail has exactly one failure boundary here, and it is taken before
+		// anything is allocated: "the definition carries no compiled script",
+		// which yields a live unit with a null VM, a model-only piece map and no
+		// `Create` [04 R-COB-01 §3]. Nothing refuses after allocation — there is
+		// no bind-time validation of the program against the model, no
+		// "attachment failed" state and no rollback — so a strict binder that
+		// fails after allocation is a Nanolathe diagnostic with no retail
+		// analog: surface it as an error and let the caller decide, never as a
+		// simulation state. Every draw the allocator already took is retained on
+		// both branches, the creation path's `buildangle` heading draw in
+		// particular, because both branches are reached only after it: see
+		// initializeAllocationHeading at the two call sites below. Do not unwind
+		// a draw and do not reorder the successful path around this error.
 		if err := w.cobBinder(u); err != nil {
 			return err
 		}
@@ -1052,6 +1081,11 @@ func (w *World) attachCOB(u *Unit) error {
 		}
 	}
 	if prog == nil || len(prog.Code) == 0 {
+		// Retail's own scriptless branch keeps the unit alive with a null VM
+		// [04 R-COB-01 §3], but the weapon-slot initializer that runs
+		// immediately afterwards dereferences the VM with no null test, so a
+		// scriptless unit faults retail during creation [04 R-COB-04 §8]. The
+		// sanctioned divergence is to refuse instead of creating one.
 		return fmt.Errorf("nanolathe: COB attachment: unit %q has no COB program", u.Def.UnitName)
 	}
 	vm := cob.NewVM(prog)
@@ -1124,14 +1158,16 @@ func (w *World) SlotIndex(h pool.Handle) uint16 {
 // catalog, and a definition that is not the catalog's own record is rejected
 // with an error and no allocation.
 //
-// TODO(question): the research establishes that the pool slices and the
-// per-def limit gate both derive from the definition catalog's size/position
-// [P0-16 §3.2][01 §6.1], but not the exact encoding retail stores in the
-// unit record's definition-identity field (a 0-based catalog ordinal, this
-// 1-based index, or another form). Nanolathe stores the 1-based catalog
-// index, which lands the catalog position in the pool's "0 = free" uint16
-// identity space. Re-derive by tracing the per-def limit scan's comparison
-// operand and the allocator's identity write in the retail pool.
+// The encoding is settled: retail stores the **catalog table index** in the
+// unit record's definition-identity halfword and uses it directly — the
+// forced-slot allocator writes the record's definition index there and indexes
+// the definition table with the same unchanged value, while the per-player unit
+// visit and the commander-death sweep read a non-zero halfword as "slot
+// occupied" and zero as free. That works because the catalog's record 0 is the
+// reserved `None` sentinel [02 "Unit record"], so every real definition has
+// index 1 or higher and 0 doubles as the free mark. Nanolathe's stable 1-based
+// catalog index in the pool's "0 = free" uint16 identity space is the same
+// encoding [04 R-UNIT-06 §6][P0-16 §3.2][01 §6.1].
 //
 // Fixture worlds built with a nil catalog have no catalog position to store;
 // a definition carrying a stamped UnitDefID stores it, and a synthetic
@@ -1402,11 +1438,18 @@ func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed,
 // unit's slots would never be offered a target by the retaliation walk or
 // rebound by a guard's leg 2 until some order had run its return verb.
 //
-// TODO(question): the initializer also stores an initial value into the slot's
-// distance word — the word the ballistic creator divides [06 §6.4] — derived
-// from the two muzzle-query points, and that expression is Unknown
-// [06 R-WPN-05 §3]. Decider: a trace of the initializer's arithmetic. This
-// build has no such word yet, so nothing here stands in for it.
+// TODO(question): the initializer also zeroes the slot's reload word and
+// stockpile byte and stores an initial value into the slot's **distance
+// word** — the word the ballistic creator divides [06 §6.4] — derived from the
+// two muzzle-query points. What is unknown is only that expression: which two
+// query points (aim-from and muzzle piece, or the two ends of one query), in
+// which order, and whether the stored value is their separation, its square, or
+// a reciprocal-shaped term the divide expects [06 R-WPN-05 §3]. What would
+// settle it: a trace of the initializer's arithmetic between the weapon-link
+// store and the SetMaxReloadTime dispatch, read together with the divide in the
+// ballistic creator that consumes it. This build carries no such word, so
+// nothing here stands in for it and no ballistic term reads one; adding a
+// placeholder would change projectile arithmetic on a guess.
 func installWeapons(u *Unit, def *content.UnitDef) {
 	if u == nil || def == nil {
 		return

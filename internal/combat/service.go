@@ -170,6 +170,14 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		u.Stunned = false
 		u.ParalyzeExpire = 0
 	}
+	// This early return is an over-approximation, not the mechanism. Retail's
+	// weapon phase does not read the stunned bit at all: a paralyzed unit is
+	// silent because the Paralyze row already ran the release verb on all three
+	// slots and cleared their targets unconditionally, and because the head wait
+	// blocks the list runner so no order can hand it a new target
+	// [06 R-DMG-01 §11]. Skipping the pipeline here is harmless only while that
+	// stays true, and must never be relied on as the reason a stunned unit does
+	// not fire.
 	if u.Stunned {
 		return sum
 	}

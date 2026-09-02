@@ -80,8 +80,14 @@ func TestInitializeBattleAIPrecedesUnitDraws(t *testing.T) {
 	if mgr.RallyVisible == nil {
 		t.Fatal("ordinary rally visibility binding is nil")
 	}
-	if mgr.RallyProbeKnown != nil || mgr.RallyOrderAdmitted != nil {
-		t.Fatal("unknown rally option/locomotion identities must fail closed")
+	if mgr.RallyProbeKnown != nil {
+		t.Fatal("the unknown rally explored/current option identity must fail closed")
+	}
+	// The rally member gate is bound now that [08 R-AI-01 §19] names it: the
+	// slot-1 shot-time physical gate of [06 §3.3], taken from the combat
+	// service rather than re-implemented in the planner.
+	if mgr.RallyShotTimeAdmits == nil {
+		t.Fatal("the rally slot-1 shot-time gate binding is nil")
 	}
 	if mgr.InitializeBattleState(terrain, ai.RallyBattleBindings{}) {
 		t.Fatal("battle state initialized more than once")

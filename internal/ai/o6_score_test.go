@@ -114,8 +114,10 @@ func TestClassVectorOldProxiesCannotAffectChoice(t *testing.T) {
 	a := o6Def("a")
 	b := o6Def("b")
 	// These fields were used as proxies by the pre-O6 implementation. They
-	// must not affect the recovered class result.
-	b.BMCode = true
+	// must not affect the recovered class result. `bmcode` is no longer among
+	// them: [08 R-P0-05 §9] names it as the category flag itself, so it is
+	// asserted separately below and both definitions keep the building value
+	// here.
 	b.CanMove = true
 	b.MaxVelocity = 99
 	b.CanPatrol = true
@@ -129,9 +131,42 @@ func TestClassVectorOldProxiesCannotAffectChoice(t *testing.T) {
 	s.InitClassVectors()
 	s.recomputeClassVectors()
 	if s.InitVectors["a"] != s.InitVectors["b"] {
-		t.Fatalf("the unnamed category flag [08 R-P0-05 §5] leaked into init vectors: a=%d b=%d", s.InitVectors["a"], s.InitVectors["b"])
+		t.Fatalf("a non-category proxy leaked into init vectors: a=%d b=%d", s.InitVectors["a"], s.InitVectors["b"])
 	}
 	if s.ClassVectors["a"] != s.ClassVectors["b"] || s.SingleVectors["a"] != s.SingleVectors["b"] {
 		t.Fatalf("old proxy fields changed class choice: a=%+v/%d b=%+v/%d", s.ClassVectors["a"], s.SingleVectors["a"], s.ClassVectors["b"], s.SingleVectors["b"])
+	}
+}
+
+// TestInitVectorCategoryFlagIsBMCode locks [08 R-P0-05 §9]: the initialization
+// pass adds 40 when the authored `bmcode` byte is zero — the building class,
+// the same byte the placement validator dispatches on [08 R-AI-03 §7.4] — and
+// 20 for a non-empty build list. A plain building is 40, a factory or
+// construction building 60, a mobile unit 0 or 20.
+func TestInitVectorCategoryFlagIsBMCode(t *testing.T) {
+	building := o6Def("building")
+	factory := o6Def("factory")
+	mobile := o6Def("mobile")
+	mobile.BMCode = true
+	mobileBuilder := o6Def("mobilebuilder")
+	mobileBuilder.BMCode = true
+	cat := &content.Catalog{
+		Units: map[string]*content.UnitDef{
+			"building": building, "factory": factory, "mobile": mobile, "mobilebuilder": mobileBuilder,
+		},
+		BuildMenus: map[string]*content.BuildMenuPage{
+			"factory":       {Buttons: []string{"mobile"}},
+			"mobilebuilder": {Buttons: []string{"building"}},
+		},
+	}
+	s := &Strategic{Catalog: cat}
+	s.Init([]string{"building", "factory", "mobile", "mobilebuilder"})
+	for _, tt := range []struct {
+		key  string
+		want int8
+	}{{"building", 40}, {"factory", 60}, {"mobile", 0}, {"mobilebuilder", 20}} {
+		if got := s.InitVectors[tt.key]; got != tt.want {
+			t.Fatalf("init vector %q = %d, want %d [08 R-P0-05 §9]", tt.key, got, tt.want)
+		}
 	}
 }

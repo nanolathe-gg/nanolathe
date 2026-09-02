@@ -534,6 +534,18 @@ type PlacementQuery struct {
 	Rules  PlacementRules
 	Self   uint16
 	Mobile bool
+	// Viewer is the blocker's fourth argument: the player record the human
+	// build-cursor preview passes [04 R-P0-08-B §1]. A nil value is retail's
+	// NULL player, which every other caller passes — the computer player's
+	// exhaustive metal-spot helper and the placement validator's own
+	// delegation — and under which the two occupancy rejections (the
+	// structure-yard mark of yard bit 0, and the ground occupant of bits 1–2)
+	// apply unconditionally. A non-nil value runs the known-site gate: the
+	// footprint centre is projected onto the 32-world-unit LOS grid with the
+	// height shear, an off-grid or currently unseen site is rejected outright,
+	// and only then does the mapping option decide whether the two occupancy
+	// rejections apply at all.
+	Viewer PlacementViewer
 	// SkipTerrainAggregates marks a query from a caller outside the inline
 	// terrain-check mode (mode value 1) [04 §6.4]: the bounds, unit-occupancy
 	// and blocking-feature gates still apply, but the slope/height/water
@@ -541,6 +553,30 @@ type PlacementQuery struct {
 	// mode other than 1 — the factory exit included [04 R-FAC-02 §4] — so
 	// this is only for callers that already skip aggregates by domain.
 	SkipTerrainAggregates bool
+}
+
+// PlacementViewer is the player record the build-cursor preview hands the
+// footprint blocker [04 R-P0-08-B §1]. It is an interface because the grids it
+// reads belong to the visibility service, which is built on top of this
+// package; the world side owns only the projection.
+//
+// The alias is always the LOCAL viewing slot's bit — no other player's
+// visibility is ever consulted — and the computer player's placement never
+// enters this gate.
+type PlacementViewer interface {
+	// ExploredExtent is the player's explored-grid width and height in LOS
+	// cells. A projected cell at or beyond either rejects the footprint.
+	ExploredExtent() (w, h int32)
+	// LocallyVisible reports whether the global per-cell visibility word at
+	// (vx,vz) carries the local viewing slot's bit.
+	LocallyVisible(vx, vz int32) bool
+	// Explored reports whether this player's explored-grid byte at (vx,vz) is
+	// non-zero.
+	Explored(vx, vz int32) bool
+	// MappingOption is the LOS-mode word's bit 1, the mapping/fog option. Under
+	// it the occupancy rejections are gated on Explored; without it they are
+	// gated on the visibility bit already required, so they always apply.
+	MappingOption() bool
 }
 
 // PlacementResult contains the only derived value placement consumers need
@@ -580,6 +616,18 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 		return PlacementResult{}, fmt.Errorf("world: yard length %d != rectangle %dx%d=%d", len(q.Yard), q.Rect.Width(), q.Rect.Depth(), area)
 	}
 
+	// The known-site gate of [04 R-P0-08-B §1]. With retail's null player it is
+	// not entered at all and the two occupancy rejections apply
+	// unconditionally; with a player record it runs once for the whole
+	// footprint, before the cell walk, and can reject outright.
+	occupancyApplies := true
+	if q.Viewer != nil {
+		var ok bool
+		if occupancyApplies, ok = t.knownSiteGate(q); !ok {
+			return PlacementResult{}, fmt.Errorf("world: placement site is not currently visible to the local viewer [04 R-P0-08-B §1]")
+		}
+	}
+
 	minLow, maxHigh, bit4Max := int32(255), int32(0), int32(0)
 	geothermalNeeded, geothermalFound := false, false
 	for dz := int32(0); dz < q.Rect.Depth(); dz++ {
@@ -600,10 +648,20 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 			}
 			class, def := t.classifyCell(cx, cz)
 
-			// TODO(question): yard bit 0's exact player/visibility alias and
-			// mode matrix remain unresolved [R-P0-08][03 §3.2]. Keep the
-			// authoritative visibility gate named but do not guess a player.
-			if yard&0x06 != 0 {
+			// Yard bit 0 is the STRUCTURE-YARD mark, not a visibility or
+			// minimap lookup: for a covered cell whose yard byte carries it,
+			// the blocker rejects when the cell's flag-byte bit 1 is set. The
+			// building stamp sets that bit on every cell whose own yard byte
+			// has bit 0 and the building clear resets it [04 R-COLL-01 §4], so
+			// the mark reads "a completed or stamped building's yard already
+			// covers this cell". It is a building-versus-building test and
+			// reads no occupant identity, no LOS word and no fog surface
+			// [04 R-P0-08-B §1]. The visibility half of the old description is
+			// the blocker's known-site gate, applied once above.
+			if occupancyApplies && yard&0x01 != 0 && cell.StructureYard() {
+				return PlacementResult{}, fmt.Errorf("world: cell %d,%d already lies under a building yard [04 R-P0-08-B §1]", cx, cz)
+			}
+			if occupancyApplies && yard&0x06 != 0 {
 				// The occupancy test reads the cell's GROUND word only:
 				// "Only the ground word is read; the air word is never
 				// consulted, so a landed or hovering airborne unit never blocks
@@ -715,6 +773,51 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 		return PlacementResult{}, fmt.Errorf("world: placement is deeper than minimum water depth %d [05 %q]", q.Rules.MinWaterDepth, "Geothermal requirement")
 	}
 	return PlacementResult{Rect: q.Rect, SiteHeight: siteHeight}, nil
+}
+
+// knownSiteGate is the build-cursor preview's half of the footprint blocker
+// [04 R-P0-08-B §1], exactly:
+//
+//  1. take the footprint centre in world units — `(footX + 2·cellX) × 8`,
+//     `(footZ + 2·cellZ) × 8` — and sample its terrain height; the visibility
+//     cell is `vx = worldX >> 5`, `vz = (worldZ − (height >> 1)) >> 5`, the
+//     32-world-unit LOS grid with the height shear of [03 §2.1];
+//  2. `vx` at or beyond the player's explored-grid width, or `vz` at or beyond
+//     its height, REJECTS the footprint;
+//  3. the global per-cell visibility word at (vx,vz) must carry the local
+//     viewing slot's bit, or the footprint is REJECTED — a site the local
+//     viewer cannot currently see is unplaceable from the cursor;
+//  4. the gate for the two occupancy rejections is then: under the mapping
+//     option, the passed player's explored-grid byte at (vx,vz) is non-zero;
+//     without that option it is the visibility bit already tested in step 3, so
+//     the rejections always apply.
+//
+// The only case in which a visible cursor site skips the occupancy rejections
+// is the mapping option over a site the local player has never explored, which
+// cannot be visible at step 3 in ordinary play — so in practice the preview
+// applies both rejections whenever it reaches them.
+//
+// The second result is false when steps 2 or 3 reject; the first is the step-4
+// gate for the caller's cell walk.
+func (t *Terrain) knownSiteGate(q PlacementQuery) (occupancyApplies, ok bool) {
+	worldX := (q.Rect.Width() + 2*q.Rect.MinX()) * 8
+	worldZ := (q.Rect.Depth() + 2*q.Rect.MinZ()) * 8
+	height := int32(t.HeightAt(numeric.FixedFromInt(int64(worldX)), numeric.FixedFromInt(int64(worldZ))).Raw() >> 16)
+	vx := worldX >> 5
+	vz := (worldZ - (height >> 1)) >> 5
+	gw, gh := q.Viewer.ExploredExtent()
+	// Unsigned bounds, so a negative projection wraps high and rejects rather
+	// than indexing backwards — the same shape the visibility sampler uses.
+	if uint32(vx) >= uint32(gw) || uint32(vz) >= uint32(gh) {
+		return false, false
+	}
+	if !q.Viewer.LocallyVisible(vx, vz) {
+		return false, false
+	}
+	if q.Viewer.MappingOption() {
+		return q.Viewer.Explored(vx, vz), true
+	}
+	return true, true
 }
 
 // classifyCell resolves the feature reference covering (cx,cz) [04 §6.2]:
@@ -833,12 +936,18 @@ func (t *Terrain) SiteHeight(cx, cz int32, yard []YardCell, footX, footZ int, wa
 // The metal field must have been seeded by ApplySchema first; sampling before
 // that is an error rather than a plausible wrong number.
 //
-// TODO(question): retail "performs the intermediate sum with fixed-point-shaped
-// integer arithmetic and then converts it to a single-precision value", and
-// notes that an exact compatibility mode must preserve that conversion and
-// rounding order [05 "Terrain metal extraction"]. The algebraic result is the
-// clean-room contract and is what this computes; the exact intermediate shape
-// is not recovered.
+// The intermediate's shape is settled [05 R-PROD-01 §6-A]: the accumulator is
+// sixteen bits of Σ(metalByte + 1) over the in-bounds footprint cells, and the
+// rate is `float32( ((float)(int32)(accumulator << 16)) × extractsmetal × 2⁻¹⁶ )`
+// evaluated left to right with the only narrowing at the store. Because
+// `accumulator << 16` is exact as a floating value and `extractsmetal` is a
+// single, that rounds once at the store to the same single as
+// `float32(accumulator) × extractsmetal` for every accumulator below 0x8000 —
+// which is what this computes. There is no other rounding to preserve. The one
+// corner is the sign: at 0x8000 and above the shifted word loads as a negative
+// 32-bit integer and retail's rate goes negative, where a wider or unsigned
+// accumulator diverges; no shipped footprint reaches it, and the wrap is
+// visible in SampleMetalWithFootprintSum's second return value below.
 func (t *Terrain) SampleMetal(cx, cz int32, footX, footZ int, extractsMetal float32) (float32, error) {
 	rate, _, err := t.SampleMetalWithFootprintSum(cx, cz, footX, footZ, extractsMetal)
 	return rate, err
@@ -859,8 +968,9 @@ func (t *Terrain) SampleMetal(cx, cz int32, footX, footZ int, extractsMetal floa
 // a wide accumulator, so the modulo-65536 wrap retail's sixteen-bit
 // accumulator would take is visible in the second return value only. Reaching
 // it needs Σ(byte+1) ≥ 65536, which no shipped footprint approaches
-// [05 R-PROD-01 §6]; the rate-side divergence is the open question recorded
-// above and is deliberately not resolved here.
+// [05 R-PROD-01 §6]; the rate-side sign corner is the one named above, and
+// [05 R-PROD-01 §6-A] states that it is the only divergence a wider
+// accumulator produces.
 //
 // The rectangle may leave the map. The walk resolves each coordinate through a
 // per-cell bounds test — 0 ≤ x < cell width and 0 ≤ z < cell height, else no

@@ -167,27 +167,37 @@ func retailPlacementScore(terrain *world.Terrain, rect world.FootprintRect) (int
 }
 
 func validateRetailAICandidate(terrain *world.Terrain, pd retailPlacementDef, x, z int32, exhaustive bool) (world.FootprintRect, int32, ReasonCode, error) {
-	if x+pd.footX >= terrain.CellW || z+pd.footZ >= terrain.CellH || (!exhaustive && (x < 0 || z < 0)) || (exhaustive && x <= 0) {
+	// The blocker's entry test is "column > 0" on the signed column word AND
+	// "the packed cell word, read as an unsigned 32-bit value, exceeds 0xffff",
+	// which holds exactly when the row's sixteen-bit pattern is non-zero. Row 0
+	// is therefore rejected the same way column 0 is [08 R-AI-03 §7.1].
+	if x+pd.footX >= terrain.CellW || z+pd.footZ >= terrain.CellH || (!exhaustive && (x < 0 || z < 0)) || (exhaustive && (x <= 0 || z == 0)) {
 		return world.FootprintRect{}, 0, ReasonOutOfBounds, fmt.Errorf("candidate %d,%d outside strict AI bounds", x, z)
 	}
 	if exhaustive && z < 0 {
-		// The retail negative-row result is Unknown; the local TODO and decider
-		// live on extractorHelperA. Nanolathe rejects before calling its checked
-		// world service [08 R-AI-03 §6].
-		return world.FootprintRect{}, 0, ReasonOutOfBounds, fmt.Errorf("negative exhaustive row %d is unresolved", z)
+		// A negative row passes retail's row test and the signed height test,
+		// and the walk then addresses cells before the plot grid's first cell —
+		// one row of storage per unit of negative row — with no guard. Whether
+		// that storage is mapped, so the walk returns a garbage verdict rather
+		// than faulting, depends on where the process allocator placed the grid
+		// and is Unknown; nothing in the executable decides it [08 R-AI-03
+		// §7.1]. Rejecting is Nanolathe's deterministic choice, recorded as
+		// that choice and not as retail's behavior.
+		return world.FootprintRect{}, 0, ReasonOutOfBounds, fmt.Errorf("negative exhaustive row %d has no retail verdict; Nanolathe rejects deterministically", z)
 	}
 	rect, err := world.NewFootprintRect(world.NewFootprintAnchor(x, z), pd.extent)
 	if err != nil {
 		return world.FootprintRect{}, 0, ReasonOutOfBounds, err
 	}
+	// Both helpers dispatch on the same byte: a `bmcode == 0` definition (every
+	// building) goes to the yard-map blocker, which reads the authored yard
+	// bytes and writes the footprint accumulator; a `bmcode != 0` definition
+	// (mobile) walks the footprint with the plain rule set. The scatter helper
+	// is no exception — [08 R-AI-03 §4]'s two class labels were inverted when
+	// first written and were corrected 2026-09-02, and [08 R-AI-03 §7.4] lists
+	// the four readers that agree. Mobile=true selects the plain branch of the
+	// repository's one canonical world validator.
 	yard, plainFootprint := pd.yard, pd.def.BMCode
-	if !exhaustive {
-		// Scatter mode 1 walks the plain footprint for buildings too: it does
-		// not read authored yard bytes and does not write retail's footprint
-		// accumulator [08 R-AI-03 §4]. Mobile=true selects that plain branch
-		// of the repository's one canonical world validator.
-		yard, plainFootprint = nil, true
-	}
 	_, err = terrain.CheckPlacement(world.PlacementQuery{Rect: rect, Yard: yard, Rules: pd.rules, Self: 0, Mobile: plainFootprint})
 	if err != nil {
 		return rect, 0, ReasonBlocked, err
@@ -349,10 +359,14 @@ func retailExtractorHelperB(m *Manager, pd retailPlacementDef, origin retailPlac
 			res.TrialReasons = append(res.TrialReasons, reason)
 			continue
 		}
-		// Divergence (session isolation): retail buildings read a process-global
-		// stale accumulator. Nanolathe compares this valid trial's own footprint
-		// sum, the sanctioned sane-test alternative [08 R-AI-03 §4]. This is the
-		// only behavior: there is no selectable alternate or cross-session state.
+		// The trial footprint's own metal-byte sum IS retail's test. The
+		// building branch runs the yard-map blocker, which clears the
+		// accumulator on entry and adds every footprint cell's metal byte, so a
+		// trial that passes leaves exactly this sum there; a rejected trial is
+		// skipped before the comparison. The earlier note here — that retail
+		// read a stale process-global accumulator and that comparing the
+		// trial's own sum was a sanctioned divergence — followed from the
+		// inverted class labels and is withdrawn [08 R-AI-03 §4 correction].
 		if score > limit { // inclusive acceptance: accumulator <= limit
 			res.TrialReasons = append(res.TrialReasons, ReasonMetalScoreExceeded)
 			continue

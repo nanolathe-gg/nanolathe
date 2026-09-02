@@ -3,6 +3,7 @@ package combat
 import (
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 )
 
@@ -416,5 +417,92 @@ func TestDeathExplosionSkipsInactiveSentinelLink(t *testing.T) {
 	def = &content.UnitDef{ExplodeAsDef: active}
 	if w := SelectDeathExplosionWeapon(def, CauseOrdinary); w != active {
 		t.Fatalf("active explodeas changed behavior, got %v want %v", w, active)
+	}
+}
+
+// TestAbsentKilledBodyIsOneConstant locks the implementation rule of
+// [04 R-CB-01 §9]: "no VM", "no `Killed` body", "thread pool full" and "a body
+// that ignores its second parameter" are one case with one substitute constant
+// for the variant nibble, and the substitute still yields to the remaining-work
+// gate. It asserts the four sub-cases agree with each other, not the value.
+func TestAbsentKilledBodyIsOneConstant(t *testing.T) {
+	// A `Killed` body that returns without assigning its second parameter, so
+	// the seeded variant cell round-trips unchanged [04 R-CB-01 §9].
+	ignoringBody := func() *cob.Program {
+		return &cob.Program{
+			Code:        []uint32{0x10065000},
+			Scripts:     map[string]int{"Killed": 0},
+			ScriptsByID: []int{0},
+			Pieces:      []string{"base"},
+		}
+	}
+
+	// Sub-case 1: no VM at all — the query is never reached.
+	noVM, ok := KilledVariantFromVM(nil, 50)
+	if ok {
+		t.Fatalf("nil VM reported a started query [04 R-CB-01 §9]")
+	}
+	// Sub-case 2: the program has no `Killed` entry — the name misses.
+	bodyless := cob.NewVM(&cob.Program{Code: []uint32{0x10065000}, Scripts: map[string]int{}, Pieces: []string{"base"}})
+	noBody, ok := KilledVariantFromVM(bodyless, 50)
+	if ok {
+		t.Fatalf("absent Killed body reported a started query [04 R-CB-01 §9]")
+	}
+	// Sub-case 3: every thread slot busy — the allocator refuses before seeding.
+	full := cob.NewVM(ignoringBody())
+	for i := range full.Threads {
+		full.Threads[i].Status = cob.ThreadSleeping
+		full.Threads[i].Sleep = 100
+	}
+	poolFull, ok := KilledVariantFromVM(full, 50)
+	if ok {
+		t.Fatalf("full thread pool reported a started query [04 R-CB-01 §9][04 §4.3]")
+	}
+	// Sub-case 4: the body runs and ignores its second parameter.
+	ignoring, ok := KilledVariantFromVM(cob.NewVM(ignoringBody()), 50)
+	if !ok {
+		t.Fatalf("a present Killed body must start [04 §5.1]")
+	}
+
+	if noVM != noBody || noBody != poolFull || poolFull != ignoring {
+		t.Fatalf("absent-Killed sub-cases disagree: noVM %d noBody %d poolFull %d ignoring %d — [04 R-CB-01 §9] requires one constant", noVM, noBody, poolFull, ignoring)
+	}
+	if noVM != UnassignedKilledVariant {
+		t.Fatalf("substitute %d is not the recorded constant %d [04 R-CB-01 §9]", noVM, UnassignedKilledVariant)
+	}
+
+	// The same agreement must survive ResolveDeath, whose nil-syncKilled arm is
+	// the no-VM case and whose ok=false arm is the other three.
+	unit := makeUnitDef("wreck1")
+	feats := makeFeatureChain([]string{"wreck1", "wreck2"})
+	ctx := DeathContext{Health: -50, MaxHealth: 100, PriorSample: 80, Cause: CauseOrdinary, RemainingFraction: 0, UnitDef: unit}
+	viaNil := ResolveDeath(ctx, feats, nil)
+	viaNotStarted := ResolveDeath(ctx, feats, func(int32) (int32, bool) { return UnassignedKilledVariant, false })
+	viaIgnoringBody := ResolveDeath(ctx, feats, func(sev int32) (int32, bool) {
+		return KilledVariantFromVM(cob.NewVM(ignoringBody()), sev)
+	})
+	if viaNil.Variant != viaNotStarted.Variant || viaNotStarted.Variant != viaIgnoringBody.Variant {
+		t.Fatalf("ResolveDeath arms disagree: nil %d not-started %d ignoring-body %d [04 R-CB-01 §9]", viaNil.Variant, viaNotStarted.Variant, viaIgnoringBody.Variant)
+	}
+	if int32(viaNil.Variant) != UnassignedKilledVariant || !viaNil.DoCorpse {
+		t.Fatalf("absent Killed body must pack the substitute and place its authored corpse: %+v [04 R-CB-01 §9][06 §12.1] C23", viaNil)
+	}
+
+	// The remaining-work gate outranks the substitute on every arm: a non-zero
+	// remaining build fraction forces zero after any query [04 R-CB-01 §9].
+	midBuild := ctx
+	midBuild.RemainingFraction = 0.5
+	gated := []struct {
+		name string
+		res  DeathResolution
+	}{
+		{"nil", ResolveDeath(midBuild, feats, nil)},
+		{"not-started", ResolveDeath(midBuild, feats, func(int32) (int32, bool) { return UnassignedKilledVariant, false })},
+		{"ignoring-body", ResolveDeath(midBuild, feats, func(sev int32) (int32, bool) { return KilledVariantFromVM(cob.NewVM(ignoringBody()), sev) })},
+	}
+	for _, g := range gated {
+		if g.res.Variant != 0 || g.res.DoCorpse || g.res.Corpse != nil {
+			t.Fatalf("%s arm ignored the remaining-work gate: %+v [04 R-CB-01 §9][06 §12.1] C24", g.name, g.res)
+		}
 	}
 }

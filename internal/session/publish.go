@@ -46,7 +46,69 @@ func (s *Session) PlayArea() (int32, int32, bool) {
 // terrain validator as construction. On rejection it still returns the site
 // height derived by the same footprint scan so the ghost has no second rule
 // set for its drawn height [04 §6.2][07 §9][I6].
+// It passes retail's NULL player, under which the blocker's two occupancy
+// rejections — the structure-yard mark of yard bit 0, and the ground occupant
+// of bits 1–2 — apply unconditionally [04 R-P0-08-B §1]. That is the right
+// answer for every caller except the human build cursor, which passes the
+// local player's record and runs the known-site gate; PreviewPlacementForCursor
+// below is that form.
 func (s *Session) PreviewPlacement(cx, cz int32, def *content.UnitDef, footX, footZ int32, self pool.Handle) (world.PlacementResult, error) {
+	return s.previewPlacement(cx, cz, def, footX, footZ, self, nil)
+}
+
+// PreviewPlacementForCursor is PreviewPlacement with the blocker's fourth
+// argument bound to the LOCAL player's record — the one caller in the whole
+// executable that passes a player rather than null [04 R-P0-08-B §1]. It runs
+// the known-site gate: the footprint centre is projected onto the
+// 32-world-unit LOS grid with the height shear, a site off that grid or one
+// the local viewing slot cannot currently see is rejected outright, and the
+// mapping option then decides whether the occupancy rejections apply.
+//
+// The battle adapter's cursor path is the intended caller; until it moves over
+// (its file belongs to another unit this cycle) the ghost keeps the null-player
+// form above, which differs only in refusing to reject an unseen site.
+func (s *Session) PreviewPlacementForCursor(cx, cz int32, def *content.UnitDef, footX, footZ int32, self pool.Handle) (world.PlacementResult, error) {
+	if s == nil || s.Vis == nil {
+		return world.PlacementResult{}, fmt.Errorf("session: placement visibility unavailable")
+	}
+	local := uint8(localPlayerForSession(s))
+	return s.previewPlacement(cx, cz, def, footX, footZ, self, &sessionPlacementViewer{vis: s.Vis, local: local, player: local})
+}
+
+// sessionPlacementViewer is the world package's PlacementViewer over the
+// battle's visibility grids. The alias it tests is always the LOCAL viewing
+// slot's bit; `player` is the record whose explored-grid byte the mapping
+// option's gate reads [04 R-P0-08-B §1].
+type sessionPlacementViewer struct {
+	vis    *visibility.Service
+	local  uint8
+	player uint8
+}
+
+func (v *sessionPlacementViewer) ExploredExtent() (int32, int32) { return v.vis.W, v.vis.H }
+
+func (v *sessionPlacementViewer) LocallyVisible(vx, vz int32) bool {
+	mask := v.vis.WordMask()
+	idx := int(vz*v.vis.W + vx)
+	if idx < 0 || idx >= len(mask) {
+		return false
+	}
+	return mask[idx]&(1<<v.local) != 0
+}
+
+func (v *sessionPlacementViewer) Explored(vx, vz int32) bool {
+	grid := v.vis.ByteGrid(visibility.PlayerID(v.player))
+	idx := int(vz*v.vis.W + vx)
+	if grid == nil || idx < 0 || idx >= len(grid) {
+		return false
+	}
+	return grid[idx] != 0
+}
+
+// MappingOption is the LOS-mode word's bit 1 [03 §3.1].
+func (v *sessionPlacementViewer) MappingOption() bool { return v.vis.CurrentEnabled() }
+
+func (s *Session) previewPlacement(cx, cz int32, def *content.UnitDef, footX, footZ int32, self pool.Handle, viewer world.PlacementViewer) (world.PlacementResult, error) {
 	if s == nil || s.World == nil {
 		return world.PlacementResult{}, fmt.Errorf("session: placement world unavailable")
 	}
@@ -72,7 +134,7 @@ func (s *Session) PreviewPlacement(cx, cz int32, def *content.UnitDef, footX, fo
 			return world.PlacementResult{}, err
 		}
 	}
-	result, err := s.World.CheckPlacement(world.PlacementQuery{Rect: rect, Yard: yard, Rules: rules, Self: uint16(self), Mobile: def.BMCode})
+	result, err := s.World.CheckPlacement(world.PlacementQuery{Rect: rect, Yard: yard, Rules: rules, Self: uint16(self), Mobile: def.BMCode, Viewer: viewer})
 	if err != nil {
 		result = world.PlacementResult{Rect: rect, SiteHeight: s.World.SiteHeight(cx, cz, yard, int(footX), int(footZ), def.Waterline)}
 	}

@@ -184,6 +184,46 @@ func (s *Service) CanEngageSlotTarget(u *units.Unit, target *units.Unit, idx int
 	return WithinRange(u.X, u.Z, target.X, target.Z, w.Range)
 }
 
+// ShotTimeAdmitsPoint is the shot-time physical gate of [06 §3.3] asked against
+// a world POINT instead of a unit: the planar range test, and for a non-water
+// weapon the shooter-side sea-level clause and, when the weapon is `ballistic`,
+// a trajectory solution that is not the no-solution sentinel. It is the shooter
+// half alone — the target-side clauses belong to the acquisition gate of
+// [06 §3.1] (CanEngageSlotTarget) and have no point form. It performs no
+// terrain, hill, visibility or sensor test, and consults neither reload nor
+// ammunition nor cost.
+//
+// It is exported for the same reason SlotAcquisitionAdmits is: a caller outside
+// this package needs the gate but does not carry its operands. The computer
+// player's rally task is that caller — a member with no mover is admitted only
+// when its first weapon slot can reach the rally point [08 R-AI-01 §19] — and
+// session composition binds it there rather than letting the planner carry a
+// second copy of the gate. It draws no RNG.
+func (s *Service) ShotTimeAdmitsPoint(u *units.Unit, idx int, x, y, z numeric.Fixed, terrain *world.Terrain) bool {
+	slot := orderSlot(u, idx)
+	if slot == nil || slot.Weapon == nil || u == nil || u.Def == nil {
+		return false
+	}
+	w := slot.Weapon
+	if !WithinRange(u.X, u.Z, x, z, w.Range) {
+		return false
+	}
+	if w.WaterWeapon {
+		return true
+	}
+	sea := int32(0)
+	if terrain != nil {
+		sea = int32(terrain.SeaLevel)
+	}
+	if wholeY(u)+u.Def.ModelTop <= sea {
+		return false
+	}
+	if w.Ballistic && !hasBallisticSolutionToPoint(u, x, y, z, w, terrain) {
+		return false
+	}
+	return true
+}
+
 // airborneMoverMode is the committed mover-mode value the `toairweapon` gate
 // requires of its target [04 R-MOV-01 §8]: 2, airborne. It closes the operand
 // [02 R-KEYS-01 §2] recorded as the one inference in `toairweapon`'s otherwise
@@ -204,6 +244,13 @@ func wholeY(u *units.Unit) int32 { return int32(u.Y.Raw() >> 16) }
 // pipeline's own aim step supplies to BallisticSolve [06 §3.3][06 §6.4]. A
 // zero velocity has no solution, and the solver's own sentinel covers the rest.
 func hasBallisticSolution(u *units.Unit, target *units.Unit, w *content.WeaponDef, terrain *world.Terrain) bool {
+	return hasBallisticSolutionToPoint(u, target.X, target.Y, target.Z, w, terrain)
+}
+
+// hasBallisticSolutionToPoint is the same query against a world point, which is
+// the form the point gate above needs. The unit form delegates to it so the
+// solver's operands are written down once.
+func hasBallisticSolutionToPoint(u *units.Unit, x, y, z numeric.Fixed, w *content.WeaponDef, terrain *world.Terrain) bool {
 	vel := numeric.Fixed(int64(w.WeaponVelocity))
 	if vel.Raw() == 0 {
 		return false
@@ -212,9 +259,9 @@ func hasBallisticSolution(u *units.Unit, target *units.Unit, w *content.WeaponDe
 	if terrain != nil {
 		grav = terrain.Gravity
 	}
-	dx := target.X.Sub(u.X)
-	dy := target.Y.Sub(u.Y)
-	dz := target.Z.Sub(u.Z)
+	dx := x.Sub(u.X)
+	dy := y.Sub(u.Y)
+	dz := z.Sub(u.Z)
 	_, ok := BallisticSolve(dx, dy, dz, vel, grav, w.MinBarrelAngle)
 	return ok
 }

@@ -183,16 +183,26 @@ func queueExactResult(m *Manager, defKey string, res PlacementResult) error {
 // score and helper path, and queues exactly that site via the ordinary
 // construction queue. The origin movement and radius growth follow the fixed-
 // point 16.16 interpolation and 160-world-unit growth [08 R-AI-03 §2].
-// TODO(question): mode-2 off-map acceptance needs a trace of doc 04's callers;
-// the corrected MinWaterDepth class-field label still needs a whole-reader
-// census to determine whether any other reader is affected [08 R-AI-03 §6].
+//
+// The validator's mode argument is the caller's movement mode, not a placement
+// policy, and its off-map acceptance is the mode-2 (active locomotion) branch.
+// No computer-player path can observe it: the scatter helper, the mobile-build
+// site check, the skirmish spawn scan and the remaining order-handler site
+// checks all pass the literal 1, and only the mover commit step can pass 2
+// [08 R-AI-03 §7.2]. Nothing here needs a mode-2 arm.
 func PlaceWithResult(m *Manager, defKey string, w *world.Terrain) PlacementResult {
 	res := PlaceCandidate(m, defKey, w)
 	if !res.Valid {
 		return res
 	}
-	// TODO(question): retail writes only X/Z; submitted Y is stack residue.
-	// Static tracing of MobileBuild decides whether Y is read [08 R-AI-03 §6].
+	// The submitted request carries X and Z only. Retail's construction task
+	// submits a stack-residue Y that nothing reads: the order node stores the
+	// triple verbatim, the MobileBuild handler copies Y into a local it never
+	// uses, and immediately before the nanoframe is created it rewrites
+	// `y := siteHeight(def, cell) << 16` from the same height-under-footprint
+	// query the blocker's tail computes [08 R-AI-03 §7.3]. Our handler already
+	// derives the height that way (internal/construction/factory.go's mobile
+	// build step takes result.SiteHeight), so there is no residue to carry.
 	if err := queueExactResult(m, defKey, res); err != nil {
 		res.Valid = false
 		res.Reason = ReasonQueueFailed

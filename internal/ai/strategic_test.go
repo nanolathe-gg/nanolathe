@@ -264,22 +264,24 @@ func TestClassVectors_RetailVectors(t *testing.T) {
 	types := []string{"armcom", "corcom", "armex", "armsolar", "armlab", "armvp"}
 	s := &Strategic{Catalog: cat}
 	s.Init(types)
-	// Check InitVectors: only authored build-list membership is established;
-	// the opaque category flag does not use BMCode as a proxy [R-P0-05].
-	if v := s.InitVectors[content.CanonicalKey("armlab")]; v != 20 {
-		t.Fatalf("armlab init %d want 20 (build list only) [P0-01]", v)
+	// Check InitVectors: 40 for the building class (`bmcode == 0`, which every
+	// definition in this fixture authors) plus 20 for a non-empty build list
+	// [08 R-P0-05 §9]. The earlier form of these assertions expected the
+	// category addend to be absent, which that section withdrew.
+	if v := s.InitVectors[content.CanonicalKey("armlab")]; v != 60 {
+		t.Fatalf("armlab init %d want 60 (building 40 + build list 20) [08 R-P0-05 §9]", v)
 	}
-	if v := s.InitVectors[content.CanonicalKey("armvp")]; v != 20 {
-		t.Fatalf("armvp init %d want 20", v)
+	if v := s.InitVectors[content.CanonicalKey("armvp")]; v != 60 {
+		t.Fatalf("armvp init %d want 60", v)
 	}
-	if v := s.InitVectors[content.CanonicalKey("armcom")]; v != 20 {
-		t.Fatalf("armcom init %d want 20", v)
+	if v := s.InitVectors[content.CanonicalKey("armcom")]; v != 60 {
+		t.Fatalf("armcom init %d want 60", v)
 	}
-	if v := s.InitVectors[content.CanonicalKey("armex")]; v != 0 {
-		t.Fatalf("armex init %d want 0 (no build list)", v)
+	if v := s.InitVectors[content.CanonicalKey("armex")]; v != 40 {
+		t.Fatalf("armex init %d want 40 (building, no build list)", v)
 	}
-	if v := s.InitVectors[content.CanonicalKey("armsolar")]; v != 0 {
-		t.Fatalf("armsolar init %d want 0", v)
+	if v := s.InitVectors[content.CanonicalKey("armsolar")]; v != 40 {
+		t.Fatalf("armsolar init %d want 40", v)
 	}
 	// Check triples are within clamp and not all equal (retail varies per type) [P0-01 §6]
 	seen := make(map[ClassVector]bool)

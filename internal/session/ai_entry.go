@@ -8,6 +8,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
@@ -48,6 +49,14 @@ func initializeBattleAI(s *Session, player uint8, profile *ai.Profile) error {
 	// whole battle [08 R-AI-01 §13]. It binds before Strategic.Init, whose
 	// construction-time class computation already consults it.
 	mgr.SetUnitLimit(sessionUnitLimit(s))
+	// The map's maximum wind word is the second operand of the class routine's
+	// wind-generator zeroing branch [08 R-P0-05 §9]. World load already resolved
+	// it through [03 §2.2] C3 — a legacy header's own word, or the authored
+	// `maxwindspeed` over the canonical 2000 fallback [05 R-PROD-01 §3] — so
+	// this binds the resolved battle word rather than re-deriving one. Like the
+	// unit limit it binds before Strategic.Init, whose construction-time class
+	// computation already consults it.
+	mgr.Strategic.SetMaxWind(s.World.WindMax)
 	// The plan gate compares each profile directive's arguments against the
 	// battle's difficulty word [08 R-AI-01 §12]. One profile record is shared
 	// by every slot, so this settles on the first slot and the rest are no-ops;
@@ -80,13 +89,22 @@ func initializeBattleAI(s *Session, player uint8, profile *ai.Profile) error {
 			}
 			return s.IsUnitVisible(int(viewer), target)
 		},
-		// Unknown: bind ProbeKnown and OrderAdmitted only after the
-		// session option bit selecting explored/current knowledge and the
-		// locomotion-object/admission identity are traced; those two writer/reader
-		// pairs are the deciders [08 R-AI-01 §7, §17]. Both nil values must
-		// remain fail-closed.
-		ProbeKnown:    nil,
-		OrderAdmitted: nil,
+		// Unknown: bind ProbeKnown only after the session option bit selecting
+		// explored/current knowledge is traced; that writer/reader pair is the
+		// decider [08 R-AI-01 §7, §17]. A nil value must remain fail-closed.
+		ProbeKnown: nil,
+		// [08 R-AI-01 §19]: the rally task's member gate for a unit with no
+		// mover is the slot-1 shot-time PHYSICAL gate of [06 §3.3] from the
+		// member's own position to the rally point — range², the shooter-side
+		// sea-level clause, and a ballistic solution when the weapon is
+		// ballistic. It is not an order-admission predicate. Binding the combat
+		// service's own gate keeps the planner from carrying a second copy.
+		ShotTimeAdmits: func(unit *units.Unit, x, y, z numeric.Fixed) bool {
+			if s.Combat == nil {
+				return false
+			}
+			return s.Combat.ShotTimeAdmitsPoint(unit, 0, x, y, z, s.World)
+		},
 	}) {
 		return fmt.Errorf("session: AI battle state initialization failed for player %d", player)
 	}

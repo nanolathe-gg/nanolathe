@@ -131,16 +131,20 @@ type Manager struct {
 	// Unknown, so manager code consumes the selected predicate and does not
 	// invent an option mapping [08 R-AI-01 §7, §17].
 	RallyProbeKnown func(owner uint8, x, y, z numeric.Fixed) bool `json:"-"`
-	// RallyOrderAdmitted supplies the shared rally-member admission result. It
-	// owns the retail split between units with a locomotion object and immobile
-	// units that need the ordinary order-admission predicate. Nanolathe does not
-	// yet expose that object identity directly, so a nil binding fails closed.
-	// TODO(question): which runtime record does [08 R-AI-01 §7]'s
-	// "hasNoLocomotion" test read, and which shared predicate answers
-	// "orderWouldBeAccepted" for such a unit? Decider: a static trace from the
-	// rally task's member loop into the locomotion allocation site and the
-	// order-admission helper it calls; the finding belongs in [08 R-AI-01 §7].
-	RallyOrderAdmitted func(unit *units.Unit, x, y, z numeric.Fixed) bool `json:"-"`
+	// RallyShotTimeAdmits is the gate the rally task applies to a member with
+	// no mover. [08 R-AI-01 §19] settles both halves of what used to be an open
+	// question here: the member test reads the unit record's mover pointer, and
+	// the creator allocates a mover only for `bmcode == 1`, so "no locomotion"
+	// is "the member is a building"; and the predicate such a member faces is
+	// the slot-1 shot-time PHYSICAL gate of [06 §3.3] against the rally point —
+	// no order-admission predicate is involved, which is why this field is no
+	// longer called RallyOrderAdmitted. A mobile member is never gated.
+	//
+	// Session composition binds it to the combat service's own gate so the
+	// planner carries no second copy. A nil binding fails closed: an unbound
+	// fixture skips buildings rather than rallying them from an invented
+	// predicate.
+	RallyShotTimeAdmits func(unit *units.Unit, x, y, z numeric.Fixed) bool `json:"-"`
 
 	// RS-06: per-session isolated RNG [I4][RS-P0-018]. A nil stream is an
 	// unbound setup and must not fall back to process-global randomness.
@@ -721,8 +725,8 @@ func (m *Manager) constructionRepositionPass(tick uint32, w *units.World, centre
 				tx = numeric.Fixed(2*int32(centreX) - int32(u.X))
 				tz = numeric.Fixed(2*int32(centreZ) - int32(u.Z))
 			}
-			m.submitResolvedOrder(u, resolveAIIntent(2, u, nil, tx, u.Y, tz), nil, tx, u.Y, tz, tick, 0)
-			m.submitResolvedOrder(u, resolveAIIntent(9, u, nil, centreX, u.Y, centreZ), nil, centreX, u.Y, centreZ, tick, 1)
+			m.submitResolvedOrder(u, resolveAIIntent(2, u, nil, tx, u.Y, tz), nil, tx, u.Y, tz, tick, 0, 0)
+			m.submitResolvedOrder(u, resolveAIIntent(9, u, nil, centreX, u.Y, centreZ), nil, centreX, u.Y, centreZ, tick, 1, 0)
 			continue
 		}
 		dx := int64(fixedWordDelta(centreX, u.X))
@@ -751,7 +755,7 @@ func (m *Manager) constructionRepositionPass(tick uint32, w *units.World, centre
 			ty = numeric.Fixed(int32(u.Y) + int32((dy*scale)>>16))
 			tz = numeric.Fixed(int32(u.Z) + int32((dz*scale)>>16))
 		}
-		m.submitResolvedOrder(u, resolveAIIntent(9, u, nil, tx, ty, tz), nil, tx, ty, tz, tick, 0)
+		m.submitResolvedOrder(u, resolveAIIntent(9, u, nil, tx, ty, tz), nil, tx, ty, tz, tick, 0, 0)
 	}
 }
 
@@ -1068,25 +1072,23 @@ func (m *Manager) broadcastGroupOrder(w *units.World, group uint8, intent int, m
 	if m == nil || w == nil {
 		return
 	}
-	// The spacing argument belongs to the retail formation helper. The
-	// recovered contract establishes the values passed (160 for wave gather,
-	// zero elsewhere), but no per-member coordinate transform; canonical order
-	// nodes therefore retain the supplied centroid/target unchanged.
-	// [08 R-AI-01 §9]'s body walk resolves the intent and submits at the
-	// supplied point for every matching member and describes no per-member
-	// transform, but it does not state that the argument is unread the way the
-	// same section does for the nearest-hostile helper's vertical coordinate,
-	// so the absence is not yet proof.
-	// TODO(question): does the shared group-broadcast helper read the spacing
-	// argument at all? Decider: a static trace of the helper's parameter
-	// against its body, recorded in [08 R-AI-01 §9].
-	_ = spacing
+	// The helper itself does not read the trailing pair: each member's
+	// submission carries them into the order node's ARGUMENT word and its
+	// companion, the same slots the construction task fills with the product
+	// type index for a MobileBuild [08 R-AI-01 §19]. The wave task's gather
+	// broadcast passes 160 there and the regroup and explore broadcasts pass 0;
+	// the ground move handler reads that word as its phase-0 arrival radius,
+	// `argument + 4` [04 R-ORD-01 §4], so a wave gather is a move with a
+	// 164-world-unit arrival radius and a regroup or explore move one with
+	// radius 4. That is the whole effect of "spacing": no formation, no
+	// per-member offset, so the submitted point stays the supplied
+	// centroid/target for every member.
 	for _, u := range w.IterSliced() {
 		if u == nil || !u.Alive || u.Owner != m.Player || u.Def == nil || u.Group != group {
 			continue
 		}
 		id := resolveAIIntent(intent, u, target, x, y, z)
-		m.submitResolvedOrder(u, id, target, x, y, z, tick, modifier)
+		m.submitResolvedOrder(u, id, target, x, y, z, tick, modifier, spacing)
 	}
 }
 
@@ -1098,7 +1100,13 @@ func resolveAIIntent(intent int, actor, target *units.Unit, x, y, z numeric.Fixe
 	return orders.Resolve(intent, actor, target, pos)
 }
 
-func (m *Manager) submitResolvedOrder(u *units.Unit, id orders.ID, target *units.Unit, x, y, z numeric.Fixed, tick uint32, modifier uint8) {
+// submitResolvedOrder pushes one resolved record. `argument` is the word the
+// broadcast helper's trailing pair reaches the node through — the same slot the
+// construction task fills with the product type index for a MobileBuild — and
+// the ground move handler reads it as `argument + 4`, its phase-0 arrival
+// radius [08 R-AI-01 §19][04 R-ORD-01 §4]. Every task that submits directly
+// passes 0, which is the radius-4 default.
+func (m *Manager) submitResolvedOrder(u *units.Unit, id orders.ID, target *units.Unit, x, y, z numeric.Fixed, tick uint32, modifier uint8, argument int32) {
 	if m == nil || u == nil || id == 0 {
 		return
 	}
@@ -1108,6 +1116,7 @@ func (m *Manager) submitResolvedOrder(u *units.Unit, id orders.ID, target *units
 	}
 	queued := modifier != 0
 	node := orders.NewNodeForOrder(id, targetHandle, x, y, z, tick, u.Handle, queued)
+	node.Param1 = uint32(argument)
 	q := orders.BindQueueBinding(u, m.OrderBinding)
 	if q == nil {
 		return
@@ -1184,9 +1193,12 @@ func (m *Manager) nearestHostileUnit(w *units.World, econ *economy.Service, x, y
 // task. Keeping them explicit prevents an unbound manager from gaining
 // omniscient visibility or inventing a locomotion/admission approximation.
 type RallyBattleBindings struct {
-	Visible       func(viewer uint8, target *units.Unit) bool
-	ProbeKnown    func(owner uint8, x, y, z numeric.Fixed) bool
-	OrderAdmitted func(unit *units.Unit, x, y, z numeric.Fixed) bool
+	Visible    func(viewer uint8, target *units.Unit) bool
+	ProbeKnown func(owner uint8, x, y, z numeric.Fixed) bool
+	// ShotTimeAdmits is the slot-1 shot-time physical gate of [06 §3.3] asked
+	// against a point; the rally task applies it to a member with no mover
+	// [08 R-AI-01 §19].
+	ShotTimeAdmits func(unit *units.Unit, x, y, z numeric.Fixed) bool
 }
 
 // InitializeBattleState binds the terrain-dependent manager state at battle
@@ -1201,7 +1213,7 @@ func (m *Manager) InitializeBattleState(terrain *world.Terrain, bindings RallyBa
 	m.Terrain = terrain
 	m.RallyVisible = bindings.Visible
 	m.RallyProbeKnown = bindings.ProbeKnown
-	m.RallyOrderAdmitted = bindings.OrderAdmitted
+	m.RallyShotTimeAdmits = bindings.ShotTimeAdmits
 	halfX := (terrain.CellW * 16) / 2
 	halfZ := (terrain.CellH * 16) / 2
 	x := fixedWordFromUnits(halfX)
@@ -1390,11 +1402,20 @@ func (m *Manager) doRally(tick uint32, w *units.World, econ *economy.Service) {
 		if u == nil || !u.Alive || u.Def == nil || !u.Def.CanAttack {
 			continue
 		}
-		if m.RallyOrderAdmitted == nil || !m.RallyOrderAdmitted(u, m.rallyBestX, m.rallyBestY, m.rallyBestZ) {
-			continue
+		// Only a member with no mover is gated, and the gate is the slot-1
+		// shot-time physical check against `best` [08 R-AI-01 §19]. The creator
+		// allocates a mover for `bmcode == 1` alone, so "no mover" is "this
+		// member is a building"; a mobile member is never gated. A building
+		// whose first slot cannot reach `best` is skipped without resolving
+		// anything, and one with no weapon in slot 1 reads the sentinel
+		// record's zero range and is likewise skipped.
+		if !u.Def.BMCode {
+			if m.RallyShotTimeAdmits == nil || !m.RallyShotTimeAdmits(u, m.rallyBestX, m.rallyBestY, m.rallyBestZ) {
+				continue
+			}
 		}
 		id := resolveAIIntent(3, u, nil, m.rallyBestX, m.rallyBestY, m.rallyBestZ)
-		m.submitResolvedOrder(u, id, nil, m.rallyBestX, m.rallyBestY, m.rallyBestZ, tick, 0)
+		m.submitResolvedOrder(u, id, nil, m.rallyBestX, m.rallyBestY, m.rallyBestZ, tick, 0, 0)
 	}
 }
 

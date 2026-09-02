@@ -6680,3 +6680,63 @@ executor's phase 0 runs.
   stores in a global for the script layer (it is the whole flag word; which
   bits the consumer reads is a doc 04 COB question) · [R-FEAT-01 §1]
   `blocking` census · static trace of that global's script-port consumer.
+
+#### R-FEAT-01 §17 — Bootstrap fringe synthesis: every covered cell becomes fringe, whatever the TNT word says [R-FEAT-01] (2026-09-02)
+
+§3 step 7 says every covered cell other than the anchor receives the fringe
+mark `0xFFFE`. A repository test encoded the opposite for map bootstrap — that
+a covered cell whose authored TNT word is `0xFFFF` (empty) stays empty and
+only cells the TNT itself marks `0xFFFE` become fringe. Traced RWU-19-25
+(static: the terrain loader's plot allocation and its two attribute passes;
+the stamp's fringe loop). Everything below is **Established**.
+
+**The loader never copies the TNT feature word into the plot.** The plot
+grid is allocated with every cell's feature word set to `0xFFFF`, its slot
+word zero and its metal byte seeded. Pass 1, row-major over the TNT attribute
+array: the cell's height byte is copied; the control byte's bits are set to
+the loader's constant; and when the authored word is the void value the void
+marker is stamped (§3 step 1). Pass 2, row-major again and **skipped when a
+save file is open** (the reload path stamps from the save instead,
+[R-SAVE-FEATURE-01]): when the authored word is **strictly below the format's
+reserved band** — `0xFFFB` for the word-attribute TNT layout, `0xFC` for the
+byte-attribute layout — the stamp is called with that ordinal, a null
+position and nibble 10. Then the mission-file list (§3). The authored words
+`0xFFFE`, `0xFFFF` and the rest of the reserved band are never examined.
+
+*Correction to §3 "map-load placement".* Previous text: "any ordinal below
+the table count → stamp with a null position". The bound is the reserved
+band, not the compiled table count; a word below `0xFFFB` (or `0xFC`) but at
+or above the count is handed to the stamp unchecked. What the stamp does
+with such a word is outside this trace (Unknown; no stock map was checked
+for one).
+
+**The stamp's fringe write is unconditional.** After the dense-pack loop
+(§3 step 3) and the anchor write (steps 4–6), the stamp walks the footprint
+`dz` outer, `dx` inner, and for every cell except `(0, 0)` writes: feature
+word `:= 0xFFFE`, offset bytes `:= (dz, dx)`, instance bit cleared. It reads
+nothing from the cell first — neither its current feature word nor anything
+authored. The per-cell rule is exactly: *covered and not the anchor → fringe,
+always.*
+
+**Consequences at bootstrap.**
+
+1. Because the grid starts all-empty and the TNT word is never copied, a
+   covered cell authored `0xFFFF` is stamped `0xFFFE` exactly like one
+   authored `0xFFFE`. The authored fringe words are redundant data; retail
+   derives fringe entirely from the anchors' footprints.
+2. An authored `0xFFFE` that no stamped footprint covers is never written and
+   stays `0xFFFF` — the same outcome an implementation reaches by clearing
+   uncovered raw fringe after the pass.
+3. A covered cell whose authored word is itself an ordinal is a second
+   anchor, stamped later in row-major order from the attribute array (not
+   from the grid, which by then holds the first feature's fringe); its
+   dense-pack loop tears the first feature down (§3-A). The later anchor
+   wins, as §3 says.
+
+An implementation that leaves an authored-empty covered cell empty diverges
+from retail in every reader that hops a fringe to its anchor — the
+passability classifier `[R-DOC04-B]`, the reclaim scan (§6), the damage
+entry (§8) and the teardown (§4): on such a map those cells are neither
+blocked, reclaimable nor cleared with their feature. The repository test
+that asserts the empty outcome encodes a non-retail premise and its
+bootstrap must write fringe over every covered cell.

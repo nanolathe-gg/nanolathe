@@ -205,39 +205,76 @@ func SelectDeathExplosionWeapon(def *content.UnitDef, cause Cause) *content.Weap
 	return nil // link inactive or unresolved [02 §5 R-CONTENT-02]
 }
 
+// UnassignedKilledVariant is Nanolathe's single bounded substitute for the
+// variant nibble retail leaves unspecified, and it is a **sanctioned
+// divergence** [04 R-CB-01 §9][04 R-CB-01 §7].
+//
+// Retail keeps the variant in a local of the death handler that is written only
+// by the two bypass paths; the synchronous `Killed` query seeds the script
+// window from that local and copies the window back afterwards, so whenever the
+// script does not assign its second parameter the local round-trips unchanged.
+// Four sub-cases share that one path and one outcome — the unit has no VM, the
+// program has no `Killed` body, the thread pool is full, and a `Killed` body
+// that ignores its second parameter: the query writes nothing and the packed
+// byte carries `(cause << 4) | (residue & 0xF)`, an unspecified four-bit
+// residue that is deterministic within one retail process but bears no relation
+// to the unit, the cause or the script and is not reproducible.
+//
+// [04 R-CB-01 §9] requires an implementation to pick one constant for all four
+// sub-cases and record the choice. Nanolathe picks `1` — the value retail's own
+// cause-7 bypass writes, and the depth that selects the definition's authored
+// corpse [06 §12.1] C23 — so a stock wall or commander dying without a `Killed`
+// body still leaves its authored wreck. The constant still yields to the
+// remaining-work gate in ResolveDeath: a non-zero remaining-build fraction
+// forces the variant to zero after any query.
+const UnassignedKilledVariant int32 = 1
+
 // KilledVariantFromVM performs the synchronous 4-cell Killed query deterministically [04 §5.1] C23 C25.
 // It drains the unit's script threads inline with delta 0 (no piece pass) and
 // returns the low-four-bit corpse-chain depth. No map iteration, no wall-clock,
 // no global RNG beyond the VM's own deterministic state (I1, I4, I6).
-// If the VM or Killed script is absent, ok=false and the variant cell keeps
-// its caller-indeterminate value which we keep as 0 deterministically
-// TODO(question): absent Killed body indeterminate stack history not traced [04 §5.1].
+//
+// The query is attempted at most once. All three retail sub-cases in which the
+// query writes nothing — no VM, no `Killed` body, thread pool full — return
+// UnassignedKilledVariant with ok=false; the fourth, a body that ignores its
+// second parameter, reaches the same value because the variant cell is *seeded*
+// with the substitute and round-trips unchanged, exactly as retail's frame
+// residue does [04 R-CB-01 §9].
 func KilledVariantFromVM(vm *cob.VM, severity int32) (int32, bool) {
 	if vm == nil || vm.Program() == nil {
-		return 0, false // [04 §5.1] no VM => absent body
+		// A definition with no compiled script is a live unit with a null VM
+		// that never reaches the query [04 R-COB-01 §3][04 R-CB-01 §9].
+		return UnassignedKilledVariant, false
 	}
 	prog := vm.Program()
 	pc, ok := prog.Scripts["Killed"]
 	if !ok {
-		return 0, false // [04 §5.1] absent Killed body
+		// The name misses the program's script table, so the thread allocator
+		// refuses before any window word is seeded [04 R-CB-01 §9].
+		return UnassignedKilledVariant, false
 	}
-	// Four-cell query: cell0=severity, cell1=variant initial, cells 2/3=0 [04 §5.1].
-	// Variant is the low nibble of the mutable corpse-chain depth [06 §12.1] C23.
-	args := []int32{severity, 0, 0, 0}
+	// Four-cell query: cell0=severity, cell1=variant, cells 2/3=0 [04 §5.1].
+	// Cell 1 is seeded with the substitute so a body that ignores its second
+	// parameter copies it back unchanged [04 R-CB-01 §9]; a body that assigns
+	// it yields the low nibble of the corpse-chain depth [06 §12.1] C23.
+	args := []int32{severity, UnassignedKilledVariant, 0, 0}
 	started, _ := vm.CallQuery(pc, args) // [04 §4.2] Q mode: drains one slot inline, no piece pass
 	if !started {
-		return 0, false // pool full etc => absent [04 §4.3]
+		// Full eight-slot thread pool: the allocator refuses before seeding, so
+		// nothing is copied back [04 R-CB-01 §9][04 §4.3].
+		return UnassignedKilledVariant, false
 	}
-	variant := args[1] & 0x0F // [06 §12.1] C23 low four bits are depth; indet. kept 0
+	variant := args[1] & 0x0F // [06 §12.1] C23 low four bits are depth
 	return variant, true
 }
 
 // ResolveDeath implements the shared authoritative death path for C22-C25 [06 §12.1][04 §5.1][GAP T21].
 // It is the helper that cause-9 deconstruction and capture/reclaim call sites use [PLAN_09 C24].
 // syncKilled, when non-nil, is the synchronous four-cell Killed query that drains script threads inline [04 §5.1][06 §12.1] C23 C25.
-// It receives severity and returns the low-four-bit variant (depth). If the script is absent, syncKilled should return ok=false;
-// the variant cell then keeps its caller-indeterminate value except where remainingFraction forces zero [04 §5.1].
-// TODO(question): absent Killed body indeterminate value kept as 0 for determinism; validate stack history serialization.
+// It receives severity and returns the low-four-bit variant (depth). When the query writes nothing — no VM, no `Killed`
+// body, or a full thread pool — syncKilled reports ok=false and the variant becomes UnassignedKilledVariant, the one
+// sanctioned substitute for retail's unspecified four-bit residue [04 R-CB-01 §9]; the remaining-work gate below still
+// forces zero afterwards. A nil syncKilled is the same case: the unit has no VM and the query is never attempted.
 // Local authoritative death does NOT issue a second Killed callback after the synchronous query [06 §12.1] C25 — this function calls syncKilled at most once and never schedules an async second call.
 func ResolveDeath(ctx DeathContext, features map[string]*content.FeatureDef, syncKilled func(severity int32) (variant int32, ok bool)) DeathResolution {
 	var res DeathResolution
@@ -278,29 +315,21 @@ func ResolveDeath(ctx DeathContext, features map[string]*content.FeatureDef, syn
 	res.Severity = uint8(sev)
 	res.Queried = true
 	var variant int32
-	hasScript := false
 	if syncKilled != nil {
 		v, ok := syncKilled(int32(sev)) // synchronous query drains script threads inline [04 §5.1] C25
 		res.KilledCalls = 1             // local authoritative issues exactly one Killed after severity [06 §12.1] C25
 		if ok {
 			variant = v & 0x0F // low four bits are corpse-chain depth [06 §12.1] C23
-			hasScript = true
 		} else {
-			// Absent Killed body: variant cell keeps caller-indeterminate value except where build-fraction forces zero [04 §5.1].
-			// TODO(question): indeterminate stack history; using 1 as deterministic placeholder so an ordinary
-			// lethal death without a Killed script still places its authored Corpse (depth 1) and satisfies G4,
-			// matching the constant-switch it replaces. Validate exact indeterminate against retail [04 §5.1].
-			variant = 1 // deterministic placeholder depth 1 [06 §12.1] C23; TODO(question) on true indeterminate
-			hasScript = false
+			// The query wrote nothing: no `Killed` body or a full thread pool.
+			// One substitute serves every such sub-case [04 R-CB-01 §9].
+			variant = UnassignedKilledVariant
 		}
-		_ = hasScript
 	} else {
-		// No VM or no Killed script => treat as absent body [04 §5.1].
-		// TODO(question): same indeterminate placeholder depth 1 for determinism as above.
-		variant = 1         // deterministic placeholder depth 1 [06 §12.1] C23; TODO(question)
-		res.KilledCalls = 1 // still counts as queried attempt; caller provided no function means variant 1 but queried true per full pipeline
-		// For test determinism, if caller explicitly passed nil to indicate no query capability, keep KilledCalls 1 to show query path taken but script absent.
-		// If caller wants to indicate no VM, they can pass nil and handle.
+		// No VM at all: retail never reaches the query, and the packed byte
+		// carries the same unassigned residue [04 R-COB-01 §3][04 R-CB-01 §9].
+		variant = UnassignedKilledVariant
+		res.KilledCalls = 0 // no synchronous Killed was invoked [06 §12.1] C25
 	}
 	// After any query, nonzero remaining-build-fraction forces variant 0 [06 §12.1] C24 [GAP T21].
 	// The same float gates death explosion [06 §12.1].
