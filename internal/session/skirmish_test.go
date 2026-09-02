@@ -301,3 +301,58 @@ func TestSkirmishWindSinglePath(t *testing.T) {
 	_ = fsMission
 	_ = fsSkirmish
 }
+
+// TestAllyGroupZeroSurvivesRepeatedDefaulting pins ally group 0 as a real
+// group. [08 R-SKIR-01 §1] "The setup record" gives the field's range as
+// `0..4, or the unassigned sentinel 5`, [08 R-SKIR-01 §2] allies rows with the
+// same group `and group ≠ 5`, and the registry mirror installs 5 only when
+// `Player%dAllyGroup` is ABSENT. So 0 means "team 0", not "no value".
+//
+// **Correction (WU-19-116).** ApplyDefaults and Normalize rewrote every stored
+// 0 to the sentinel on every call, not only on the first. internal/settings
+// writes all ten rows with no `omitempty`, so a stored `allyGroup: 0` is a
+// choice; the second ApplyDefaults inside the shell's skirmishConfigForStart
+// then promoted a player's group 0 to "allied with nobody" behind their back.
+func TestAllyGroupZeroSurvivesRepeatedDefaulting(t *testing.T) {
+	cfg := SkirmishConfig{MapName: "test", NumPlayers: 4}
+	cfg.ApplyDefaults()
+	// Absent rows take the miss default on the first application, and every row
+	// takes it, so raising the row count later cannot reintroduce a bare zero.
+	for i := 0; i < SkirmishMaxPlayers; i++ {
+		if got := cfg.Players[i].AllyGroup; got != SkirmishDefaultAllyGroup {
+			t.Fatalf("row %d ally group = %d after the first ApplyDefaults, want the miss default %d", i, got, SkirmishDefaultAllyGroup)
+		}
+	}
+
+	// The stored choices the lobby's Allies gadget can produce, 0..5.
+	cfg.Players[0].AllyGroup = 0
+	cfg.Players[1].AllyGroup = 0
+	cfg.Players[2].AllyGroup = 4
+	cfg.Players[3].AllyGroup = 5
+	cfg.ApplyDefaults()
+	cfg.ApplyDefaults()
+	if err := cfg.Normalize(); err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	for i, want := range []int{0, 0, 4, 5} {
+		if got := cfg.Players[i].AllyGroup; got != want {
+			t.Fatalf("row %d ally group = %d after re-defaulting, want the stored %d", i, got, want)
+		}
+	}
+
+	// The alliance predicate is what the rewrite corrupted: two group-0 rows are
+	// allies, and neither is allied with group 4 or with the sentinel row
+	// [08 R-SKIR-01 §2].
+	for i := 0; i < 4; i++ {
+		cfg.Players[i].Controller = SkirmishControllerHuman
+	}
+	if !skirmishPlayersAllied(cfg, 0, 1) || !skirmishPlayersAllied(cfg, 1, 0) {
+		t.Fatal("two rows stored in group 0 must be allies [08 R-SKIR-01 §2]")
+	}
+	if skirmishPlayersAllied(cfg, 0, 2) || skirmishPlayersAllied(cfg, 0, 3) {
+		t.Fatal("group 0 must not ally with group 4 or with the unassigned sentinel")
+	}
+	if skirmishPlayersAllied(cfg, 3, 0) || !skirmishPlayersAllied(cfg, 3, 3) {
+		t.Fatal("a group-5 row is allied with nobody but itself [08 R-SKIR-01 §2]")
+	}
+}

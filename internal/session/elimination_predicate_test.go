@@ -110,7 +110,10 @@ func TestKind2VictorySweepSkipsZeroLiveCountSlots(t *testing.T) {
 	w, def := eliminationFixtureWorld(t)
 	cfg := SkirmishConfig{MapName: "test", NumPlayers: 2}
 	cfg.ApplyDefaults()
-	s := &Session{Units: w, Skirmish: cfg, State: StateBattle}
+	// The latch starts from its retail initial state: countdown -1, "unarmed"
+	// [P1-01 §2.2]. A zero-valued EndLatch would read as already armed at 0, so
+	// the first true due would latch instead of arming [08 R-TRIG-01 §6].
+	s := &Session{Units: w, Skirmish: cfg, State: StateBattle, Latch: NewEndLatch()}
 
 	if _, err := w.Create(def, 0, 0, 0, 0); err != nil {
 		t.Fatalf("create for owner 0: %v", err)
@@ -153,7 +156,7 @@ func TestLocalDefeatDoesNotWaitForTheLastOpponent(t *testing.T) {
 	w, def := eliminationFixtureWorld(t)
 	cfg := SkirmishConfig{MapName: "test", NumPlayers: 3}
 	cfg.ApplyDefaults()
-	s := &Session{Units: w, Skirmish: cfg, State: StateBattle, LocalOwner: 0}
+	s := &Session{Units: w, Skirmish: cfg, State: StateBattle, LocalOwner: 0, Latch: NewEndLatch()}
 
 	var local pool.Handle
 	for owner := uint8(0); owner < 3; owner++ {

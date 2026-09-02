@@ -55,15 +55,19 @@ func (s *Session) processPendingCommanderDeaths(tick uint32) {
 		if rule == CommanderDeathContinues {
 			continue
 		}
-		// Rule 2 uses the same owner sweep as rule 1 before arming the local
-		// respawn countdown [08 R-SKIR-01 §3].
+		// Rule 2 runs the same owner sweep as rule 1 [08 R-SKIR-01 §3]. It arms
+		// nothing here: the respawn rides the one shared countdown, which the
+		// defeat predicate arms on the local slot's settlement due once the
+		// sweep has driven the live count to zero. The rule word is read again
+		// at the due that takes that countdown below zero, and that is where it
+		// selects respawn over the end latch [08 R-SKIR-01 §3] "Defeat
+		// detection"[08 R-TRIG-01 §6] "Countdown and latch".
+		//
+		// **Correction.** A private deathmatch countdown used to be armed here,
+		// from the commander's death tick rather than from a settlement due,
+		// and decremented on a second private deadline. Retail has one
+		// countdown and one deadline for every path.
 		s.sweepOwnerAfterCommanderDeath(owner, tick)
-		if rule == CommanderDeathDeathmatch && owner == int(s.LocalOwner) && !s.result.Ended {
-			s.deathmatchCountdown = 4
-			s.deathmatchNextDue = tick + 30
-			s.deathmatchActive = true
-			s.deathmatchAttempts = 0
-		}
 	}
 }
 
@@ -108,30 +112,6 @@ func (s *Session) sweepOwnerAfterCommanderDeath(owner int, tick uint32) {
 			s.Combat.ApplySelfDestructDamage(s.Units, u.Handle, tick)
 		}
 	}
-}
-
-// advanceDeathmatch performs one shared countdown step. It returns true only
-// when the countdown has crossed below zero and candidate search was run.
-func (s *Session) advanceDeathmatch(tick uint32) bool {
-	if s == nil || !s.deathmatchActive || tick < s.deathmatchNextDue {
-		return false
-	}
-	s.deathmatchNextDue += 30
-	s.deathmatchCountdown--
-	if s.deathmatchCountdown >= 0 {
-		return false
-	}
-	s.deathmatchActive = false
-	if s.respawnLocalCommander() {
-		return true
-	}
-	// TODO(question): the retail post-9999 exhaustion transition is not traced;
-	// the deciding probe is the rule-2 defeat branch after its candidate loop.
-	// Keep the bounded-search result deterministic while that branch remains
-	// unresolved: the local owner stays eliminated and the normal defeat latch
-	// may settle [08 R-SKIR-01 §3].
-	s.deathmatchExhausted = true
-	return true
 }
 
 func (s *Session) respawnLocalCommander() bool {
@@ -256,11 +236,13 @@ func (s *Session) respawnRejectsSubmerged() bool {
 
 // DeathmatchStatus is a compact diagnostic view used by tests and future
 // front-end consumers; presentation does not own or mutate this state [I6].
+// The countdown it reports is the one shared countdown of [08 R-TRIG-01 §6];
+// deathmatch owns no second one.
 func (s *Session) DeathmatchStatus() (active bool, countdown int16, attempts uint16, exhausted bool) {
 	if s == nil {
 		return false, 0, 0, false
 	}
-	return s.deathmatchActive, s.deathmatchCountdown, s.deathmatchAttempts, s.deathmatchExhausted
+	return s.deathmatchActive, s.Latch.Countdown, s.deathmatchAttempts, s.deathmatchExhausted
 }
 
 // NotifyDeathFinalized lets non-pump composition seams deliver the same

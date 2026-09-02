@@ -6,6 +6,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -62,19 +63,23 @@ func TestStepSeparatesPhasesPublicationAndPostLoopTail(t *testing.T) {
 }
 
 func TestStepPublishesCompletedSubTickBeforeCatchUpExit(t *testing.T) {
+	// The end-condition block rides the local slot's settlement deadline, so the
+	// fixture needs a due player record for the block to reach the predicates
+	// at all [08 R-TRIG-01 §6][05 R-ECO-01 §1]. Slot 0 is the local human, due
+	// at tick 0; with one participating player the kind-2 victory sweep finds no
+	// unskipped slot and answers true on that due.
 	s := &Session{
-		State:               StateBattle,
-		Clock:               &clock.State{Requested: 10, Active: 10},
-		Snapshot:            frame.NewBuffer(),
-		Units:               units.NewSliced(1, &content.Catalog{}),
-		Mission:             &mission.Mission{Type: mission.TypeSkirmish},
-		Skirmish:            SkirmishConfig{NumPlayers: 1},
-		resultPending:       true,
-		resultPendingDraw:   true,
-		resultPendingWinner: -1,
-		resultNextDue:       0,
-		resultPendingReason: "test",
+		State:    StateBattle,
+		Clock:    &clock.State{Requested: 10, Active: 10},
+		Snapshot: frame.NewBuffer(),
+		Units:    units.NewSliced(1, &content.Catalog{}),
+		Mission:  &mission.Mission{Type: mission.TypeSkirmish},
+		Skirmish: SkirmishConfig{NumPlayers: 1},
+		Econ:     &economy.Service{},
 	}
+	s.Econ.Players[0].Exists = true
+	s.Econ.Players[0].ControllerState = 1
+	// Countdown 0 is one step from the crossing, so the tick-5 due is terminal.
 	s.Latch.Countdown = 0
 	s.EnablePhaseTrace()
 

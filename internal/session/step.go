@@ -589,20 +589,29 @@ func (s *Session) stepSharingPhase(tick uint32) {
 	}
 }
 
-// stepResultPhase runs configured skirmish result evaluation once per
-// completed authoritative sub-tick. Gameplay unit retirement is intentionally
-// absent here: phase-2 slot visitation owns that decision [01 §4.4].
+// stepResultPhase is the per-sub-tick tail of the skirmish result path. It
+// settles commander-death transitions that a composition seam filed outside
+// phase-2 finalization, and nothing else: the end predicates, the shared
+// countdown and the end latch all belong to the local slot's settlement due and
+// run from endConditionBlock [08 R-TRIG-01 §6] "The due tick is the settlement
+// deadline".
+//
+// The owner sweep stays per sub-tick because retail runs it from the
+// kill-record handler, at the death, not at the next due [08 R-SKIR-01 §3]
+// "Trigger site". finalizePhase2Death is the ordinary caller and the pending
+// flag makes this one idempotent. No presentation mirror is needed here: every
+// Result field presentation reads — Ended, Countdown, the score rows — is
+// written on a due, so a per-sub-tick refresh would copy unchanged values.
+// Gameplay unit retirement is intentionally absent: phase-2 slot visitation
+// owns that decision [01 §4.4].
 func (s *Session) stepResultPhase(tick uint32) {
 	// TODO(question): the fast no-human countdown site is multiplayer-only in
 	// retail, but this single-player Session has no established multiplayer
 	// mission-type mapping. Keep it out of all current mission types until the
 	// session dispatcher and its authoritative gate are identified [08
 	// "Evaluation"].
-	// Configured lobby skirmish result. Commander death transitions are filed
-	// at the post-accounting boundary and the evaluator owns the terminal latch
-	// [08 R-SKIR-01 §3][08 R-TRIG-01 §6].
 	if s.Mission != nil && s.Mission.Type == mission.TypeSkirmish && s.Skirmish.NumPlayers > 0 {
-		s.EvaluateResult(tick)
+		s.processPendingCommanderDeaths(tick)
 	}
 }
 
@@ -841,6 +850,11 @@ func (s *Session) tickPlayers(tick uint32) {
 // the settlement deadline block of every due slot, and forwards the local
 // slot's due to the end-condition poll [08 R-TRIG-01 §6]. The local-slot test
 // lives here because the ledger has no notion of which slot is local.
+//
+// Both session kinds hang off this one due, in retail's order: kind 1 polls the
+// authored or injected victory/defeat queues, kinds 2/3 run the two predicates.
+// The two calls are mutually exclusive on the mission type, so the block does
+// exactly one of them per due [08 R-TRIG-01 §6].
 func (s *Session) endConditionBlock(player int, tick uint32) {
 	if s == nil {
 		return
@@ -849,6 +863,9 @@ func (s *Session) endConditionBlock(player int, tick uint32) {
 		return
 	}
 	s.pollMissionTriggers(tick)
+	if s.Mission != nil && s.Mission.Type == mission.TypeSkirmish && s.Skirmish.NumPlayers > 0 {
+		s.EvaluateResult(tick)
+	}
 }
 
 // pollMissionTriggers is the local player's end-condition block [08

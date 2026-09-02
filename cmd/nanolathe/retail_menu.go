@@ -1166,6 +1166,12 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *ui.Panel, index int
 	if p == nil {
 		return
 	}
+	if gad.Kind == gui.KindPicture {
+		// The picture-box painter blits frame 0 and darkens the rectangle; it
+		// installs no colour and draws no text at all. A caption on a picture
+		// box has no retail counterpart [03 R-FONT-01 §6].
+		return
+	}
 	text := p.TextFor(gad)
 	if len(gad.Labels) != 0 {
 		idx := clampMenuStage(p.StatusOf(gad.Name), len(gad.Labels))
@@ -1227,38 +1233,43 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *ui.Panel, index int
 
 // retailTextPen resolves the two things a gadget's text pen needs: the
 // light-table row the keyed GAF blitter remaps every glyph byte through, and
-// the colour the FNT fallback fills a glyph mask with.
+// the foreground byte the FNT fallback installs ahead of its glyph mask.
 //
-// `colorf` is not a palette index for a button, a label or a picture box. The
-// GAF pen's `mode` argument is a light-table row, the label painter passes the
-// gadget's `colorf` word as that row, and the button painter always passes 0
-// [03 R-FONT-01 §6]. The builder zeroes the word for all three kinds at open
-// and the service pass decays whatever a screen sets, so the row lives on the
-// Panel instance [07 R-WGT-01 §1][07 R-WGT-01 §12]. Row 0 is the plain frame
-// blitter: the glyph's own opaque bytes are copied with no remap, which is why
-// a menu caption's colour comes from the `hattfont` art and not from a colour
-// field at all.
+// Neither is the authored `colorf` field read directly. `colorf` is a
+// light-table row that lives on the Panel instance as the gadget's live
+// flash word (`Panel.FlashRow`): the builder zeroes it for buttons and
+// labels at open, and the service pass decays whatever a screen sets
+// [07 R-WGT-01 §1][07 R-WGT-01 §12]. The FNT painter each kind installs
+// ahead of its text call is closed by "The FNT foreground each painter
+// installs" [03 R-FONT-01 §6]:
 //
-// Every other kind keeps `colorf` as a colour: a listbox draws its rows in
-// "the window colour-table entry the gadget's `colorf` selects"
-// [07 R-WGT-01 §4], and focusing a text input "sets the drawing colour from
-// the gadget's `colorf`" [07 R-WGT-01 §8].
+//   - Button (kind 1): foreground = GUIPAL map entry `row` (the live flash
+//     word) when `stages == 0`, map entry 0 when `stages != 0` — the
+//     authored `colorf` is never read. The GAF pen's `mode` is always 0 for
+//     a button, whatever the flash row, so `shade` stays 0 here.
+//   - Label (kind 5): foreground = the live flash word RAW, as a physical
+//     palette index — no GUIPAL lookup. The GAF pen's `mode` is the same
+//     word, so `shade` still carries it for the GAF path.
+//   - Picture box (kind 12): draws no caption at all; drawRetailTextState
+//     returns before reaching here, so this function is never called for one.
+//
+// Every other kind keeps `colorf` as a colour read through the GUIPAL map: a
+// listbox draws its rows in "the window colour-table entry the gadget's
+// `colorf` selects" [07 R-WGT-01 §4], and focusing a text input "sets the
+// drawing colour from the gadget's `colorf`" [07 R-WGT-01 §8].
 func (g *gameShell) retailTextPen(p *ui.Panel, index int, gad gui.Gadget) (color byte, shade int) {
-	if gad.Kind == gui.KindLabel {
-		shade = int(p.FlashRow(index))
+	row := p.FlashRow(index)
+	switch gad.Kind {
+	case gui.KindButton:
+		if gad.Stages != 0 {
+			return g.guiColor(0), 0
+		}
+		return g.guiColor(byte(row & 0xff)), 0
+	case gui.KindLabel:
+		return byte(row & 0xff), int(row)
+	default:
+		return g.guiColor(byte(gad.ColorF & 0xff)), shade
 	}
-	// TODO(question): which foreground byte the FNT fallback path draws a
-	// button or label caption in is unrecorded. [03 R-FONT-01 §6] fixes the GAF
-	// pen's mode at 0 for a button and at the flash row for a label, and
-	// [03 R-FONT-01 §4] says the FNT rasterizer takes the display context's
-	// foreground/background/skip bytes — but no section says which foreground
-	// the GUI text pass installs before calling it, and the field the builder
-	// would have to install is the one it has just zeroed. A static trace of
-	// the colour setter the GUI draw routine calls ahead of the FNT drawer
-	// would settle it. Until then the authored field is kept for the fallback
-	// alone; the shipping GAF path ignores this byte entirely, so nothing the
-	// player sees is coloured from it.
-	return g.guiColor(byte(gad.ColorF & 0xff)), shade
 }
 
 // retailWrapLines breaks a label at spaces so it fits maxWidth, keeping each

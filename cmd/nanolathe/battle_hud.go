@@ -1827,20 +1827,18 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, offse
 				text = productQueueCountLabel(f, gad.Name)
 			}
 			if text != "" {
-				// TODO(question): `colorf` is not a palette index on a button.
-				// The GAF pen takes it as a light-table row and the button
-				// painter always passes 0, and the window builder zeroes the
-				// word for every button at open, so no button caption is
-				// coloured from the authored field [03 R-FONT-01 §6]
-				// [07 R-WGT-01 §1][07 R-WGT-01 §12]. This side page draws
-				// through the FNT rasterizer, which does need a foreground
-				// byte [03 R-FONT-01 §4], and no section records which one the
-				// window text pass installs for a caption — [07 R-P0-11 §2]
-				// says only "the window's font handle and foreground/background
-				// GUI color fields". A static trace of that colour setter would
-				// settle it; the authored field is kept meanwhile so the count
-				// label does not change colour on a guess.
-				c.UITextWidth(h.guiFont, text, int(r.X)+3, int(r.Y)+(int(r.H)-int(h.guiFont.Height))/2, int(r.W), h.guiColor(byte(gad.ColorF)))
+				// This is a button caption, so it takes the button rule of
+				// "The FNT foreground each painter installs"
+				// [03 R-FONT-01 §6]: foreground = GUIPAL map entry 0 when
+				// `stages != 0`, else map entry `row`, the gadget's live
+				// flash word ("colorf") — never the authored `colorf` field
+				// read raw. The side page keeps no ui.Panel (WU-19-117's
+				// flash-row tracker, `Panel.FlashRow`/`SetFlashRow`) for this
+				// window, so nothing ever writes that word for these
+				// gadgets; it is always 0 — "the word is 0 whenever nothing
+				// is flashing" — so both branches resolve to map entry 0
+				// here regardless of `stages`.
+				c.UITextWidth(h.guiFont, text, int(r.X)+3, int(r.Y)+(int(r.H)-int(h.guiFont.Height))/2, int(r.W), h.guiColor(0))
 			}
 		}
 	}

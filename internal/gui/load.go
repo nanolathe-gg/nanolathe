@@ -264,17 +264,22 @@ func Load(fs vfs.FSOps, name string) (*Window, error) {
 		// naming halves are above and in ArtSources, and the frame lookup
 		// itself belongs to the presentation layer.
 		//
-		// `colorf` is deliberately not zeroed here. It is not a colour: the
-		// button painter passes it as the light-table row of the keyed blitter,
-		// the service pass decays it (by 2 per timer tick for a button, by 1
-		// for a picture box), and the builder zeroes it for every button, label
-		// and picture box at open [07 R-WGT-01 §1][07 R-WGT-01 §12]
-		// [03 R-FONT-01 §6]. That makes it runtime flash state rather than part
-		// of the authored record, so the zeroing belongs to the panel instance,
-		// not to this compiled definition. Presentation currently reads ColorF
-		// as a palette index — which [03 R-FONT-01 §6] says it is not — so
-		// zeroing it here would recolour every menu and HUD string; the fix
-		// belongs with those painters, outside this package.
+		// `colorf` is deliberately not zeroed here. It is not one colour with
+		// one meaning: on the GAF path it is always a light-table row (the
+		// keyed blitter's `mode`); on the FNT fallback path it is a GUIPAL map
+		// index for a button and a raw physical palette index for a label —
+		// never a palette index for a button, and never a map index for a
+		// label. The service pass decays it (by 2 per timer tick for a
+		// button, by 1 for a picture box), and the builder zeroes it for
+		// every button, label and picture box at open
+		// [07 R-WGT-01 §1][07 R-WGT-01 §12] [03 R-FONT-01 §6]. That makes it
+		// runtime flash state rather than part of the authored record, so the
+		// zeroing belongs to the panel instance, not to this compiled
+		// definition. The authored ColorF this loader parses is therefore
+		// dead on arrival for kinds 1 (button), 5 (label) and 12 (picture
+		// box) either way — the picture-box painter draws no caption and
+		// installs no colour at all — and presentation now reads it that
+		// way ([03 R-FONT-01 §6] "The FNT foreground each painter installs").
 		switch kind {
 		case KindScrollBar:
 			// The slider arm is BuildSlider below. It needs the SLIDERS entry —

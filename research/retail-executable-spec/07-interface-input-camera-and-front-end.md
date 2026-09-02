@@ -960,6 +960,19 @@ before the key in the gadget colour, the key character in window colour
 entry 10, the remainder in the gadget colour — so the accelerator letter is
 highlighted. A greyed button draws no highlight.
 
+**Correction (RWU-19-34, 2026-09-02).** The paragraph above gives the
+centred and build-attribute branches the same treatment; they differ. Only
+the **build-attribute** (`0x20`) branch draws the key character in window
+colour entry 10, and it does so whether or not the button is greyed. The
+**centred** (attribute 2) branch draws all three runs in the gadget colour
+and **underlines** the key instead: a one-pixel line on row
+`penY + metric − 1` spanning the key character's width, in window colour
+entry 2 (entry 0 when `stages` is non-zero); it is this branch that a greyed
+button skips (the whole caption is then drawn as one run). The "gadget
+colour" of both branches is the window colour-table entry the button's
+`colorf` selects when `stages` is zero, and entry 0 when it is not
+([03 R-FONT-01 §6]).
+
 **Established — quickkey assignment.** The builder clears the authored key
 and assigns the **first non-space character of the label whose lowercase
 form is not already the quickkey of any button or linked label in the

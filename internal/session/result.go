@@ -295,14 +295,23 @@ func (s *Session) localDefeated() bool {
 // skip any slot with a zero live-unit count; if any slot survives the skips
 // there is no victory; after all ten, victory.
 //
-// There is no shared-victory bit, no controller or elimination test and no
-// rule-word test: those belong to the kind-3 sweep that [08 R-SKIR-01 §3]
+// The one test before the walk is the rule word: [08 R-SKIR-01 §3] "Victory
+// detection" opens with "the elimination sweep run from the same due returns
+// false immediately when the rule word is 2" — deathmatch never ends by
+// elimination, because the local player's own elimination is what arms the
+// respawn.
+//
+// Inside the walk there is no shared-victory bit and no controller or
+// elimination test: those belong to the kind-3 sweep that [08 R-SKIR-01 §3]
 // "Victory detection" describes, and that section's closing "allies included"
 // sentence is explicitly wrong for kind 2 — allied players are excluded by the
 // first alliance row, which battle entry fills from the setup screen's team
 // groups [08 R-SKIR-01 §2].
 func (s *Session) victorySweep() bool {
 	if s == nil || s.Units == nil {
+		return false
+	}
+	if CommanderDeathMode(s.Skirmish.CommanderDeath) == CommanderDeathDeathmatch {
 		return false
 	}
 	local := int(s.LocalOwner)
@@ -321,29 +330,34 @@ func (s *Session) victorySweep() bool {
 	return true
 }
 
-// EvaluateResult is the skirmish end-condition block. The authoritative tick
-// invokes it after death finalization each tick. Both non-deathmatch rule
-// values use owner live-unit counts; rule 1's commander transition first
-// sweeps the owner's remaining units.
+// EvaluateResult is the skirmish end-condition block for session kinds 2 and
+// 3. It is NOT a per-sub-tick evaluator: [08 R-TRIG-01 §6] "The due tick is the
+// settlement deadline" places this block inside the LOCAL slot's settlement
+// deadline block, after that slot's UpdateTime has advanced by 30 and before
+// its settlement gate chain, so it runs exactly once per settlement due and a
+// load resumes it on the saved UpdateTime phase. Session.endConditionBlock is
+// the seam that forwards that due here; nothing else may call it on an
+// arbitrary tick.
 //
-// It runs retail's two separate predicates in retail's order for session kinds
-// 2/3 [08 R-TRIG-01 §6]: the defeat predicate — the local player's live unit
-// count is zero [08 R-SKIR-01 §3] — is evaluated first and takes the lost
-// path; only when it is false does the victory sweep run and take the won
-// path. Defeat wins a tie, so a wipe that leaves nobody standing is a local
-// defeat and not a draw.
+// **Correction.** The previous implementation was called every sub-tick and
+// kept two private deadlines of its own — one for the result poll and one for
+// the deathmatch respawn — arming them from whatever tick the predicate first
+// became true. [05 R-ECO-01 §1] and [08 R-TRIG-01 §6] establish that retail
+// carries one deadline word per slot and that the end-condition block rides it;
+// a private deadline evaluates the predicates between dues and diverges after a
+// load, because a retail save carries only the settlement deadline.
 //
-// **Correction.** The previous implementation folded both predicates into one
-// count of surviving sides and latched when at most one remained. That fold
-// could not see two of retail's outcomes: a local elimination while two other
-// players were still fighting never latched at all, and an allied peer's
-// survival blocked a victory the alliance-row skip excludes.
+// It runs retail's two predicates in retail's order [08 R-TRIG-01 §6]: the
+// defeat predicate — the local player's live unit count is zero
+// [08 R-SKIR-01 §3] — is evaluated first and takes the lost path; only when it
+// is false does the victory sweep run and take the won path. Defeat wins a tie,
+// so a wipe that leaves nobody standing is a local defeat and not a draw.
 //
-// A true predicate arms the shared EndLatch and steps it once per 30-tick due
-// via Arm/AdvanceWin/AdvanceLose (4 → -1 over five dues, ~150 ticks) before
-// the terminal result becomes visible, and latches exactly once. Returns true
-// only on the tick where the latch becomes visible; the latch bits are set
-// when Countdown crosses below zero [08 R-TRIG-01 §6] "Countdown and latch".
+// A true predicate steps the one shared countdown (Latch.Countdown); a false
+// due neither resets nor advances it. On the due that takes the countdown below
+// zero the rule word selects: 2 respawns the local commander, anything else
+// writes the end latch [08 R-SKIR-01 §3] "Defeat detection". Returns true only
+// on the due where the latch becomes visible.
 func (s *Session) EvaluateResult(tick uint32) bool {
 	if s == nil || s.Units == nil {
 		return false
@@ -351,45 +365,152 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 	if s.result.Ended {
 		return false
 	}
-	// Finalization normally calls this before the evaluator. Keeping the call
-	// here also covers direct composition seams that invoke EvaluateResult after
-	// filing a death through the unit world [08 R-SKIR-01 §3].
+	// Finalization normally runs the owner sweep at the death boundary. Keeping
+	// the call here also covers direct composition seams that reach this block
+	// after filing a death through the unit world [08 R-SKIR-01 §3].
 	s.processPendingCommanderDeaths(tick)
 	rule := CommanderDeathMode(s.Skirmish.CommanderDeath)
-	if rule == CommanderDeathDeathmatch {
-		if s.deathmatchActive {
-			_ = s.advanceDeathmatch(tick)
-			return false
-		}
-		if !s.deathmatchExhausted {
-			// Deathmatch does not end through elimination while respawn remains
-			// applicable; a commander loss is the only defeat trigger here [08
-			// R-SKIR-01 §3].
-			return false
-		}
-	}
-	// Both non-deathmatch values use owner live-unit accounting. Rule 1's
-	// owner sweep drives that count to zero; it is not a commander-only scan
-	// [08 R-SKIR-01 §3].
-	//
-	// The two predicates run in the order [08 R-TRIG-01 §6] establishes for
+
+	// The two predicates, in the order [08 R-TRIG-01 §6] establishes for
 	// session kinds 2/3: the defeat predicate first and, if true, the lost
-	// path; otherwise the victory sweep and, if true, the won path. Defeat
-	// therefore wins a tie and at most one predicate advances the shared
-	// countdown per due.
+	// path; otherwise the victory sweep and, if true, the won path. At most one
+	// predicate steps the shared countdown per due. victorySweep already
+	// answers false under rule 2, where deathmatch never ends by elimination
+	// [08 R-SKIR-01 §3] "Victory detection".
 	localDefeated := s.localDefeated()
 	victory := false
 	if !localDefeated {
 		victory = s.victorySweep()
 	}
 	if !localDefeated && !victory {
+		// "A false due neither resets nor advances the countdown"
+		// [08 R-TRIG-01 §6] "Countdown and latch".
 		return false
 	}
-	// The team lists are presentation identity only: retail's kind-2 end
+
+	// The pending metadata is presentation identity only: retail's kind-2 end
 	// writes the shared countdown and the latch bits and names no winner
-	// [08 R-TRIG-01 §6]. Nanolathe's post-battle screen labels the winning and
-	// losing teams, so they are derived here from the same eligibility the
-	// score rows use.
+	// [08 R-TRIG-01 §6]. It is rebuilt on every true due so the view — and the
+	// terminal due's own commit — describe the predicate that fired on that
+	// due, not the one that armed the countdown.
+	if !s.resultPending {
+		s.resultPending = true
+		s.resultArmedTick = tick
+	}
+	s.resultPendingDraw = false
+	s.resultPendingReason = ReasonAllUnits
+	if rule != CommanderDeathContinues {
+		s.resultPendingReason = ReasonCommanderDeath
+	}
+	s.resultPendingWinner, s.resultPendingLosers = s.resultTeams(victory)
+	s.deathmatchActive = rule == CommanderDeathDeathmatch
+
+	terminal := s.advanceSharedCountdown(victory)
+	s.publishEndCountdown()
+	if !terminal {
+		s.result = s.pendingResultView()
+		return false
+	}
+	if rule == CommanderDeathDeathmatch && !s.deathmatchExhausted {
+		s.deathmatchActive = false
+		s.settleDeathmatchRespawn()
+		return false
+	}
+	s.deathmatchActive = false
+	// The terminal due's path selects the latch bits: ending plus, on the won
+	// path, the two win bits, or, on the lost path, the lose bit with the first
+	// win bit cleared [08 R-TRIG-01 §6] "Countdown and latch".
+	s.Latch.Bits |= LatchBitEnding
+	if victory {
+		s.Latch.Win()
+	} else {
+		s.Latch.Lose()
+	}
+	s.Latch.Pending = 0
+	s.publishEndCountdown()
+	s.result = s.endedResultView(tick)
+	if s.State == StateBattle {
+		_ = s.TransitionTo(StatePostBattle)
+	}
+	return true
+}
+
+// advanceSharedCountdown is the one signed 16-bit countdown of
+// [08 R-TRIG-01 §6] "Countdown and latch", shared by every path: a true
+// predicate finds it negative and sets it to 4; each later true due decrements
+// it; the due whose decrement takes it below zero is the terminal one — the
+// sixth consecutive true due, 150 ticks after the first. Only true dues reach
+// here.
+//
+// It returns true on the terminal due and writes no latch bits, because the
+// rule word decides there between the deathmatch respawn and the end latch
+// [08 R-SKIR-01 §3] "Defeat detection".
+func (s *Session) advanceSharedCountdown(won bool) bool {
+	if won {
+		s.Latch.Pending = 1
+	} else {
+		s.Latch.Pending = 2
+	}
+	if s.Latch.Countdown < 0 {
+		s.Latch.Arm()
+		return false
+	}
+	s.Latch.Countdown--
+	return s.Latch.Countdown < 0
+}
+
+// settleDeathmatchRespawn is the rule-2 arm of the terminal due: the countdown
+// has crossed below zero and the rule word selects the respawn rather than the
+// end latch [08 R-SKIR-01 §3] "Defeat detection". A successful respawn leaves
+// the countdown at its unarmed -1, which is where the decrement already put it,
+// and drops the pending result so the next elimination arms a fresh countdown.
+func (s *Session) settleDeathmatchRespawn() {
+	s.Latch.Pending = 0
+	s.deathmatchAttempts = 0
+	if s.respawnLocalCommander() {
+		s.clearPendingResult()
+		return
+	}
+	// TODO(question): the retail post-9999 exhaustion transition is not traced;
+	// the deciding probe is the rule-2 defeat branch after its candidate loop.
+	// Keep the bounded-search result deterministic while that branch remains
+	// unresolved: the local owner stays eliminated, the pending result is
+	// dropped, and the next due re-arms the shared countdown so the normal
+	// defeat latch may settle [08 R-SKIR-01 §3].
+	s.deathmatchExhausted = true
+	s.clearPendingResult()
+}
+
+func (s *Session) clearPendingResult() {
+	s.resultPending = false
+	s.resultPendingWinner = 0
+	s.resultPendingLosers = nil
+	s.resultPendingReason = ""
+	s.resultPendingDraw = false
+	s.resultArmedTick = 0
+	s.result = Result{}
+}
+
+// publishEndCountdown mirrors the shared countdown and the ending bit onto every
+// player record. Retail keeps both as globals that each slot's settlement gate
+// chain reads ([05 R-ECO-01 §1] steps 6 and 7); writing them from inside the
+// local slot's block is what makes a lower-numbered slot settle this tick on the
+// pre-write value and a higher-numbered slot on the new one.
+func (s *Session) publishEndCountdown() {
+	if s == nil || s.Econ == nil {
+		return
+	}
+	for i := 0; i < 10; i++ {
+		s.Econ.Players[i].GameEnded = s.Latch.IsEnding()
+		s.Econ.Players[i].EndGameCountdown = int32(s.Latch.Countdown)
+	}
+}
+
+// resultTeams derives the winning team and the losing team list the post-battle
+// screen prints. Retail names neither: its kind-2 end writes only the shared
+// countdown and the latch bits [08 R-TRIG-01 §6]. Both lists come from the same
+// row eligibility the score rows use.
+func (s *Session) resultTeams(victory bool) (int, []int) {
 	var allTeams [10]int
 	allTeamCount := 0
 	addTeam := func(team int) {
@@ -434,17 +555,6 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 			}
 		}
 	}
-	var losers []int
-	var winners []int
-	// Retail's kind-2 end has no draw: the lost path is taken whenever the
-	// local live count is zero, whether or not anything else survives
-	// [08 R-TRIG-01 §6]. The flag is kept on Result for the presentation view
-	// and is never set here.
-	const draw = false
-	reason := ReasonAllUnits
-	if rule != CommanderDeathContinues {
-		reason = ReasonCommanderDeath
-	}
 	winner := -1
 	if victory {
 		winner = s.teamForOwner(int(s.LocalOwner))
@@ -464,179 +574,26 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 			break
 		}
 	}
-	if winner >= 0 {
-		winners = []int{winner}
-	}
+	var losers []int
 	for i := 0; i < allTeamCount; i++ {
 		if t := allTeams[i]; t != winner {
 			losers = append(losers, t)
 		}
 	}
 	sort.Ints(losers)
-	kind := s.resultKindFor(draw, winner)
-	// If not yet pending, arm the latch.
-	if !s.resultPending {
-		s.resultPending = true
-		s.resultPendingWinner = winner
-		s.resultPendingLosers = append([]int(nil), losers...)
-		s.resultPendingReason = reason
-		s.resultPendingDraw = draw
-		s.resultArmedTick = tick
-		s.resultNextDue = tick + 30
-		// The shared countdown is armed on the won path only when the victory
-		// sweep is what fired; the defeat predicate always takes the lost path
-		// [08 R-TRIG-01 §6].
-		s.Latch.Arm()
-		if victory {
-			s.Latch.Pending = 1
-		} else {
-			s.Latch.Pending = 2
-		}
-		if s.Econ != nil {
-			for i := 0; i < 10; i++ {
-				s.Econ.Players[i].GameEnded = s.Latch.IsEnding()
-				s.Econ.Players[i].EndGameCountdown = int32(s.Latch.Countdown)
-			}
-		}
-		// Store pending result metadata for the next committed frame (countdown
-		// 4, not yet Ended).
-		scores := s.collectScores(winner, draw)
-		pending := Result{
-			Ended:        false,
-			Draw:         draw,
-			Kind:         kind,
-			WinnerTeam:   winner,
-			Winners:      append([]int(nil), winners...),
-			Losers:       append([]int(nil), losers...),
-			Reason:       reason,
-			Tick:         0,
-			ArmedTick:    tick,
-			Countdown:    s.Latch.Countdown,
-			Scores:       scores,
-			ColumnMaxima: resultColumnMaxima(scores),
-		}
-		// Hold pending result for snapshot? We store in result but Ended false means not terminal.
-		// Keep result.Ended false until latch visible; but store pending for later commit.
-		s.result = pending
-		// Check immediate latch edge (Countdown already <0) — rare
-		if s.Latch.IsEnding() {
-			// commit now
-			scores2 := s.collectScores(s.resultPendingWinner, s.resultPendingDraw)
-			kind2 := s.resultKindFor(s.resultPendingDraw, s.resultPendingWinner)
-			w2 := s.resultPendingWinner
-			winners2 := resultWinnersFor(w2, s.resultPendingDraw)
-			s.result = Result{
-				Ended:        true,
-				Draw:         s.resultPendingDraw,
-				Kind:         kind2,
-				WinnerTeam:   w2,
-				Winners:      winners2,
-				Losers:       append([]int(nil), s.resultPendingLosers...),
-				Reason:       s.resultPendingReason,
-				Tick:         tick,
-				ArmedTick:    s.resultArmedTick,
-				Countdown:    s.Latch.Countdown,
-				Scores:       scores2,
-				ColumnMaxima: resultColumnMaxima(scores2),
-			}
-			if s.State == StateBattle {
-				_ = s.TransitionTo(StatePostBattle)
-			}
-			return true
-		}
-		return false
-	}
-	// Advance countdown only when due (once per 30 ticks) [08 R-TRIG-01 §6].
-	isDue := tick >= s.resultNextDue
-	if !isDue {
-		// Update pending view countdown without advancing.
-		scores := s.collectScores(s.resultPendingWinner, s.resultPendingDraw)
-		kind2 := s.resultKindFor(s.resultPendingDraw, s.resultPendingWinner)
-		winners2 := resultWinnersFor(s.resultPendingWinner, s.resultPendingDraw)
-		s.result = Result{
-			Ended:        false,
-			Draw:         s.resultPendingDraw,
-			Kind:         kind2,
-			WinnerTeam:   s.resultPendingWinner,
-			Winners:      winners2,
-			Losers:       append([]int(nil), s.resultPendingLosers...),
-			Reason:       s.resultPendingReason,
-			Tick:         0,
-			ArmedTick:    s.resultArmedTick,
-			Countdown:    s.Latch.Countdown,
-			Scores:       scores,
-			ColumnMaxima: resultColumnMaxima(scores),
-		}
-		if s.Econ != nil {
-			for i := 0; i < 10; i++ {
-				s.Econ.Players[i].GameEnded = s.Latch.IsEnding()
-				s.Econ.Players[i].EndGameCountdown = int32(s.Latch.Countdown)
-			}
-		}
-		return false
-	}
-	// Due: consume one countdown step.
-	s.resultNextDue += 30
-	var latched bool
-	if s.resultPendingDraw {
-		if s.Latch.Countdown >= 0 {
-			s.Latch.Countdown--
-			if s.Latch.Countdown < 0 {
-				s.Latch.Bits |= LatchBitEnding
-				latched = true
-			}
-		} else if !s.Latch.IsEnding() {
-			s.Latch.Bits |= LatchBitEnding
-			latched = true
-		}
-	} else {
-		localTeam := s.teamForOwner(int(s.LocalOwner))
-		isLocalWin := (s.resultPendingWinner == localTeam)
-		if isLocalWin {
-			latched = s.Latch.AdvanceWin(true)
-		} else {
-			latched = s.Latch.AdvanceLose(true)
-		}
-	}
-	if s.Econ != nil {
-		for i := 0; i < 10; i++ {
-			s.Econ.Players[i].GameEnded = s.Latch.IsEnding()
-			s.Econ.Players[i].EndGameCountdown = int32(s.Latch.Countdown)
-		}
-	}
-	if latched && s.Latch.IsEnding() {
-		scores := s.collectScores(s.resultPendingWinner, s.resultPendingDraw)
-		kind2 := s.resultKindFor(s.resultPendingDraw, s.resultPendingWinner)
-		winners2 := resultWinnersFor(s.resultPendingWinner, s.resultPendingDraw)
-		s.result = Result{
-			Ended:        true,
-			Draw:         s.resultPendingDraw,
-			Kind:         kind2,
-			WinnerTeam:   s.resultPendingWinner,
-			Winners:      winners2,
-			Losers:       append([]int(nil), s.resultPendingLosers...),
-			Reason:       s.resultPendingReason,
-			Tick:         tick,
-			ArmedTick:    s.resultArmedTick,
-			Countdown:    s.Latch.Countdown,
-			Scores:       scores,
-			ColumnMaxima: resultColumnMaxima(scores),
-		}
-		if s.State == StateBattle {
-			_ = s.TransitionTo(StatePostBattle)
-		}
-		return true
-	}
-	// Not yet latched: update pending view and publish countdown.
+	return winner, losers
+}
+
+// pendingResultView is the armed-but-not-latched view: the countdown is
+// visible, Ended is not. Tick stays zero because no terminal tick exists yet.
+func (s *Session) pendingResultView() Result {
 	scores := s.collectScores(s.resultPendingWinner, s.resultPendingDraw)
-	kind2 := s.resultKindFor(s.resultPendingDraw, s.resultPendingWinner)
-	winners2 := resultWinnersFor(s.resultPendingWinner, s.resultPendingDraw)
-	s.result = Result{
+	return Result{
 		Ended:        false,
 		Draw:         s.resultPendingDraw,
-		Kind:         kind2,
+		Kind:         s.resultKindFor(s.resultPendingDraw, s.resultPendingWinner),
 		WinnerTeam:   s.resultPendingWinner,
-		Winners:      winners2,
+		Winners:      resultWinnersFor(s.resultPendingWinner, s.resultPendingDraw),
 		Losers:       append([]int(nil), s.resultPendingLosers...),
 		Reason:       s.resultPendingReason,
 		Tick:         0,
@@ -645,7 +602,26 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 		Scores:       scores,
 		ColumnMaxima: resultColumnMaxima(scores),
 	}
-	return false
+}
+
+// endedResultView is the terminal view committed on the due that writes the
+// latch.
+func (s *Session) endedResultView(tick uint32) Result {
+	scores := s.collectScores(s.resultPendingWinner, s.resultPendingDraw)
+	return Result{
+		Ended:        true,
+		Draw:         s.resultPendingDraw,
+		Kind:         s.resultKindFor(s.resultPendingDraw, s.resultPendingWinner),
+		WinnerTeam:   s.resultPendingWinner,
+		Winners:      resultWinnersFor(s.resultPendingWinner, s.resultPendingDraw),
+		Losers:       append([]int(nil), s.resultPendingLosers...),
+		Reason:       s.resultPendingReason,
+		Tick:         tick,
+		ArmedTick:    s.resultArmedTick,
+		Countdown:    s.Latch.Countdown,
+		Scores:       scores,
+		ColumnMaxima: resultColumnMaxima(scores),
+	}
 }
 
 // ownerEliminated is the elimination predicate the victory sweep, the phase-2
@@ -690,17 +666,8 @@ func (s *Session) ResetResultForRetry() {
 	if s == nil {
 		return
 	}
-	s.result = Result{}
-	s.resultPending = false
-	s.resultPendingWinner = 0
-	s.resultPendingLosers = nil
-	s.resultPendingReason = ""
-	s.resultPendingDraw = false
-	s.resultArmedTick = 0
-	s.resultNextDue = 0
+	s.clearPendingResult()
 	s.pendingCommanderDeaths = [10]bool{}
-	s.deathmatchCountdown = 0
-	s.deathmatchNextDue = 0
 	s.deathmatchActive = false
 	s.deathmatchAttempts = 0
 	s.deathmatchExhausted = false

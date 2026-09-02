@@ -220,6 +220,10 @@ type Session struct {
 	// the sole writer; presentation receives a copy through the committed frame.
 	// One point where result becomes terminal is when latch becomes visible
 	// (Ended) and Result.Ended is set; simulation stops after State leaves Battle.
+	// The end-condition block owns no deadline of its own: it rides the local
+	// slot's UpdateTime settlement deadline, so there is no result-poll due
+	// word here [08 R-TRIG-01 §6] "The due tick is the settlement deadline"
+	// [05 R-ECO-01 §1].
 	result              Result
 	resultPending       bool
 	resultPendingWinner int
@@ -227,7 +231,6 @@ type Session struct {
 	resultPendingReason string
 	resultPendingDraw   bool
 	resultArmedTick     uint32
-	resultNextDue       uint32
 
 	// Commander death is observed by the unit finalizer, then settled once at
 	// the owner boundary after the live counter has been decremented. Keeping
@@ -235,11 +238,12 @@ type Session struct {
 	// recursively changing the owner while it is still being accounted
 	// [08 R-SKIR-01 §3].
 	pendingCommanderDeaths [10]bool
-	// Deathmatch's shared five-due countdown is separate from the terminal
-	// result latch: crossing below zero invokes respawn and does not end the
-	// match [08 R-SKIR-01 §3][R-TRIG-01 §6].
-	deathmatchCountdown int16
-	deathmatchNextDue   uint32
+	// Deathmatch carries no countdown or deadline of its own. One signed 16-bit
+	// countdown — Latch.Countdown — is shared by every path, and the rule word
+	// is read at the due that takes it below zero to select respawn over the
+	// end latch [08 R-TRIG-01 §6] "Countdown and latch"[08 R-SKIR-01 §3]
+	// "Defeat detection". These two are bookkeeping for the bounded candidate
+	// search only.
 	deathmatchActive    bool
 	deathmatchAttempts  uint16
 	deathmatchExhausted bool

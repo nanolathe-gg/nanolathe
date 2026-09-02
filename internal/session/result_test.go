@@ -520,9 +520,17 @@ func TestSkirmishDeathmatchRespawnDrawsXThenZ(t *testing.T) {
 		t.Fatal("commander was not finalized")
 	}
 	s.NotifyDeathFinalized(0, 0)
-	active, countdown, _, exhausted := s.DeathmatchStatus()
-	if !active || countdown != 4 || exhausted {
-		t.Fatalf("deathmatch did not arm: active=%v countdown=%d exhausted=%v", active, countdown, exhausted)
+	// **Correction (WU-19-116).** This used to assert that the commander's death
+	// armed a deathmatch countdown of 4 on the spot. It does not: rule 2 runs
+	// the same owner sweep as rule 1 and arms nothing. The respawn rides the one
+	// shared countdown, which the local slot's first settlement due arms once
+	// the sweep has driven the live count to zero, and the rule word is read
+	// again at the due that takes that countdown below zero
+	// [08 R-SKIR-01 §3] "Defeat detection"[08 R-TRIG-01 §6] "Countdown and
+	// latch". Nothing is armed until the first due, so the sixth due — 150 ticks
+	// after the first, not 120 — is the one that respawns.
+	if active, countdown, _, exhausted := s.DeathmatchStatus(); active || countdown != -1 || exhausted {
+		t.Fatalf("commander death armed a countdown of its own: active=%v countdown=%d exhausted=%v", active, countdown, exhausted)
 	}
 	// Predict the first candidate from a copy of the stream. The candidate
 	// rectangle is W/D minus one tenth on each side, with X sampled before Z
@@ -535,7 +543,10 @@ func TestSkirmishDeathmatchRespawnDrawsXThenZ(t *testing.T) {
 	rz := predict.Uint32n(mapH - 2*insetH)
 	wantX := numeric.Fixed(int64(insetW+rx) << 16)
 	wantZ := numeric.Fixed(int64(insetH+rz) << 16)
-	for tick := uint32(30); tick <= 150; tick += 30 {
+	// Six dues: the first arms the shared countdown to 4, the next five step it
+	// to -1, and that sixth due is where the rule word selects the respawn
+	// [08 R-TRIG-01 §6] "Countdown and latch".
+	for tick := uint32(30); tick <= 180; tick += 30 {
 		s.EvaluateResult(tick)
 	}
 	var commander *units.Unit

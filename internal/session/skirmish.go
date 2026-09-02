@@ -165,6 +165,25 @@ func (c *SkirmishConfig) ApplyDefaults() {
 		c.Mapping = SkirmishDefaultMapping
 		c.LineOfSight = SkirmishDefaultLineOfSight
 		c.LOSType = SkirmishDefaultLOSType
+		// The ally group belongs with the scalars above, not with the per-slot
+		// rewrites below: its range is `0..4` with `5` the unassigned sentinel
+		// [08 R-SKIR-01 §2][08 R-SKIR-01 §1] "The setup record", so `0` is a
+		// real group a player can pick — the lobby's Allies gadget cycles
+		// 0..5 — and only an ABSENT `Player%dAllyGroup` takes the miss default
+		// 5 [08 R-SKIR-01 §1] "Registry mirror". Every row is defaulted here,
+		// not just the first NumPlayers, so raising the row count later cannot
+		// reintroduce a bare zero for a row the settings block never described.
+		//
+		// **Correction.** This rewrote every stored `0` to the sentinel on every
+		// call. internal/settings emits all ten rows with no `omitempty`, so a
+		// stored `allyGroup: 0` is a choice and not an absent value; the second
+		// ApplyDefaults inside skirmishConfigForStart then silently promoted the
+		// player's group 0 to "allied with nobody".
+		for i := range c.Players {
+			if c.Players[i].AllyGroup == 0 {
+				c.Players[i].AllyGroup = SkirmishDefaultAllyGroup
+			}
+		}
 		c.rulesDefaultsApplied = true
 	}
 	c.MapName = strings.TrimSpace(c.MapName)
@@ -177,9 +196,6 @@ func (c *SkirmishConfig) ApplyDefaults() {
 	}
 	for i := 0; i < n; i++ {
 		p := &c.Players[i]
-		if p.AllyGroup == 0 {
-			p.AllyGroup = SkirmishDefaultAllyGroup
-		}
 		if p.Metal == 0 {
 			p.Metal = SkirmishDefaultMetal
 		}
@@ -256,13 +272,20 @@ func (c *SkirmishConfig) Normalize() error {
 		c.Mapping = SkirmishDefaultMapping
 		c.LineOfSight = SkirmishDefaultLineOfSight
 		c.LOSType = SkirmishDefaultLOSType
+		// Ally group 0 is a real group; only an absent value takes the
+		// unassigned sentinel 5, and only on the first application. See the
+		// same block in ApplyDefaults [08 R-SKIR-01 §1][08 R-SKIR-01 §2]. Rows
+		// past NumPlayers were just cleared on purpose above, so this loop
+		// stops at n rather than covering all ten.
+		for i := 0; i < n; i++ {
+			if c.Players[i].AllyGroup == 0 {
+				c.Players[i].AllyGroup = SkirmishDefaultAllyGroup
+			}
+		}
 		c.rulesDefaultsApplied = true
 	}
 	for i := 0; i < n; i++ {
 		p := &c.Players[i]
-		if p.AllyGroup == 0 {
-			p.AllyGroup = SkirmishDefaultAllyGroup
-		}
 		if p.Metal == 0 {
 			p.Metal = SkirmishDefaultMetal
 		}

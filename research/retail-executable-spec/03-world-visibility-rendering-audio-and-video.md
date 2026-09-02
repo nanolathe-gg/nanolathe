@@ -8005,9 +8005,83 @@ gadget's `stages` field is non-zero, else 0:
 The pressed/held state never moves the pen — only `stages` does — which is
 what doc 07 §5 states.
 
-**Build-card count (Established).** The count label switches to slot 1 and
-draws the decimal count at `(gx + trunc(w/2) − trunc(tw/2), gy + trunc(h/2)
-− trunc(metric/2))` with no width limit.
+**The FNT foreground each painter installs (Established, RWU-19-34,
+2026-09-02).** The FNT drawer of §3 draws in the display context's
+foreground/background/skip bytes (§4), and nothing installs them on the
+painter's behalf: each gadget painter runs the pair setter itself, directly
+ahead of its text call, reading the skip colour back as the background (so
+clear bits stay transparent) and choosing the foreground per kind. The GAF
+path runs the very same setter call and then never reads the result — the
+GAF pen colours from the frame bytes or the `mode` row — so the two paths
+differ only in what consumes the installed byte, never in what is installed.
+"Map entry *n*" below means entry *n* of the window's GUIPAL-to-display map,
+the 256-byte nearest-colour lookup of [07 "Retail palette contract"] and
+[03 §4.3]; "raw" means the byte is written as a physical palette index
+without that lookup.
+
+* **Button (kind 1).** Foreground = map entry `colorf` when `stages` is
+  zero, map entry **0** when `stages` is non-zero; installed once before the
+  caption and again before each run of a split caption (the quickkey runs,
+  [07 R-WGT-01 §3]; the accelerator run of the build-attribute branch uses
+  map entry 10 between them). The builder zeroes `colorf` at open and the
+  flash decay returns it to 0 ([07 R-WGT-01 §1][07 R-WGT-01 §12]), so a
+  button that is not mid-flash draws an FNT caption in map entry 0 whatever
+  the file authored (stock content authors 15 on most buttons and 0 on the
+  rest; the authored value is never read). A flashing stage-less button
+  draws its FNT caption in map entry `colorf` for as long as the word is
+  non-zero — a different entry each tick as it decays — where the GAF path
+  lightens the glyphs through light-table row `colorf` instead; this is the
+  one place the two paths visibly diverge.
+* **Label (kind 5).** Foreground = the gadget's `colorf` word **raw** — a
+  physical palette index, not a map entry. The shadow pass (attribute bit
+  8, FNT path only) is drawn first in map entry 0. A label reaches the FNT
+  drawer two ways — directly when its `fontnumber` matches a kind-7 gadget,
+  and through the GAF pen's null-slot fallback when no kind-7 gadget matches
+  and the window holds no GAF font — and the same raw `colorf` is installed
+  ahead of both. Because the builder zeroes the word, an authored label
+  whose window draws with an FNT and whose screen never sets its colour is
+  drawn in palette index 0; the screens that build labels at run time (the
+  message box, the briefing pager) write the word themselves
+  ([07 R-FE-02 §5]). Two further label facts: a non-zero `colorb` first
+  fills the label rectangle with map entry `colorb` (every stock label
+  authors 0), and a label with a quickkey draws that letter's underline —
+  the one-pixel row `penY + metric − 1` under the letter — in map entry 2.
+* **Picture box (kind 12).** Draws no text at all and installs no colour:
+  the painter blits frame 0 (plain when `colorf < 1`, keyed through
+  light-table row `colorf` otherwise) and darkens the rectangle by 28 steps
+  when its grey bit is set. A caption on a picture box has no retail
+  counterpart.
+* **Text input and listbox** (for contrast): map entry `colorf`, installed
+  when the input takes focus ([07 R-WGT-01 §6]) and per row by the list
+  painter ([07 R-WGT-01 §4]).
+* **Side-page build count.** The count the count-label writer stores in a
+  product button's own text slot ([07 R-P0-11 §2]) is drawn by the button
+  painter above, so it takes the button rule: product buttons are kind 1 and
+  almost all author `stages = 0` (587 of the 614 build-attribute buttons in
+  the reference install; the rest are the stockpile and paged toys), so the
+  number is drawn in map entry `colorf`, which is map entry 0 unless the
+  button is mid-flash.
+
+**Correction (RWU-19-34) to two sentences above.** (1) The build-attribute
+bullet of the button painter said it "draws a second string after the first
+in the window's colour-table entry 10; doc 07 … owns what that second
+string is". There is no second string: the caption is cut at its quickkey
+letter and drawn as three runs — the prefix in the button colour, the single
+letter in map entry 10, the remainder in the button colour again, each
+placed after the measured width of the previous run — as [07 R-WGT-01 §3]
+records. (2) The paragraph that followed, headed "Build-card count", said
+"the count label switches to slot 1 and draws the decimal count at
+`(gx + trunc(w/2) − trunc(tw/2), gy + trunc(h/2) − trunc(metric/2))` with
+no width limit". The pen arithmetic is right but the subject is wrong: that
+routine is the **kind-13 score-bar painter** of [07 R-HUD-03 §11] (the
+end-of-mission bars), not anything on a build card, and it does **not**
+switch the window's GAF slot — it measures and draws with whatever slot the
+window already holds. It also installs no foreground: the decimal is drawn
+with the context bytes exactly as the previously painted gadget left them.
+Its two fills take the gadget's `colorb` (inner background) and `colorf`
+(progress) bytes raw, and its bevel is the map-entry 0/17/20 frame of
+[07 R-FE-02 §4]. The side-page build count is a button caption (above) and
+never passes through this routine.
 
 ### Code page and character mapping [R-FONT-01 §7] (2026-08-29)
 

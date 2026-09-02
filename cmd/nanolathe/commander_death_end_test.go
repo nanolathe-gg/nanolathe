@@ -149,7 +149,7 @@ func TestCommanderDeathSettingRoundTripsToTheSessionRuleWord(t *testing.T) {
 // TestCommanderKillReachesThePostBattleScreen is the whole reported path, end
 // to end through the presentation seam: a skirmish composed the way the
 // skirmish screen composes one, the enemy commander killed, and the post-battle
-// screen up within the five 30-tick dues plus one frame.
+// screen up within the six 30-tick settlement dues plus one frame.
 //
 // It exercises the two things a session-level test cannot: that the latching
 // sub-tick's publication is what the client samples — Buffer.Current is the
@@ -217,9 +217,19 @@ func TestCommanderKillReachesThePostBattleScreen(t *testing.T) {
 	}
 	sess.Units.Destroy(commander, units.DeathKilled)
 
-	// Five dues plus the frame the latch publishes on, with one frame of slack
-	// for the tick the kill is finalized on [08 R-TRIG-01 §6].
-	const bound = 30*5 + 2
+	// The kill lands on an arbitrary tick; the end-condition block only runs on
+	// the local slot's 30-tick settlement due, so the first true due is up to
+	// one due away. From there the shared countdown arms and then takes five
+	// more true dues to cross below zero — "the sixth consecutive true due, 150
+	// ticks after the first" [08 R-TRIG-01 §6] "Countdown and latch". Six dues
+	// plus the frame the latch publishes on, with one frame of slack for the
+	// tick the kill is finalized on.
+	//
+	// **Correction (WU-19-116).** This was 30*5+2, which held only while the
+	// evaluator ran every sub-tick and armed its own private deadline from the
+	// kill tick. The poll rides UpdateTime now [05 R-ECO-01 §1], and the wait
+	// to the first due is real.
+	const bound = 30*6 + 2
 	killTick := sess.Clock.GlobalTick
 	visibleAt := uint32(0)
 	for i := 0; i < bound; i++ {
