@@ -32,12 +32,10 @@ type attachPair struct {
 // mobile classification are resolved exclusively through cat, matching the
 // catalog-backed runtime path [04 §3.6].
 //
-// Unimplemented: [05 R-PROD-01 §6] establishes that the extraction rate is
-// sampled by the unit CREATOR — "the settlement never reads `extractsmetal`,
-// it reads the rate the creator sampled" [05 R-PROD-01 §1]. This
-// interpreter creates nothing, but the sampling lives at four separate
-// placement call sites rather than in `units.World.Create`, so a caller that
-// creates a unit directly gets no rate — see PLAN 19 §2.4.
+// The extraction rate this interpreter's units carry is not its concern: the
+// sample is the CREATOR's, run inside units.World.Create for every unit it
+// makes [05 R-PROD-01 §6], and the settlement reads that stored rate rather
+// than `extractsmetal` [05 R-PROD-01 §1].
 func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Catalog) {
 	if m == nil || w == nil {
 		return

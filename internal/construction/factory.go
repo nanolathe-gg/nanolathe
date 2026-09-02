@@ -1514,17 +1514,6 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, r
 			}
 		}
 		initializeNanoframe(prod, def)
-		// Extractor yield is sampled once at placement and stored on the product
-		// [P1-10][P1-15]: Σ(cellMetal+1)*extractsMetal, never resampled.
-		if prod != nil && def.ExtractsMetal != 0 && s.Terrain != nil {
-			if v, sum, err := s.Terrain.SampleMetalWithFootprintSum(rect.MinX(), rect.MinZ(), int(def.FootprintX), int(def.FootprintZ), float32(def.ExtractsMetal)); err == nil {
-				prod.SpotMetal = v // once, never resampled [P1-10]
-				// The creator then hands the raw footprint accumulator to the
-				// script so the extractor can size its animation
-				// [05 R-PROD-01 §6][04 R-COB-04 §9].
-				prod.NotifyExtractorFootprint(sum)
-			}
-		}
 		if prod != nil {
 			if err := s.reservePlacement(prod.Handle, def, rect); err != nil {
 				prod.Alive = false
@@ -1555,15 +1544,6 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, r
 	}
 	s.recordPlacement(prod.Handle, def, rect)
 	initializeNanoframe(prod, def)
-	// Extractor yield is sampled once at placement and stored on the product
-	// [P1-10][P1-15]: Σ(cellMetal+1)*extractsMetal, never resampled.
-	if def.ExtractsMetal != 0 && s.Terrain != nil {
-		if v, sum, err := s.Terrain.SampleMetalWithFootprintSum(rect.MinX(), rect.MinZ(), int(def.FootprintX), int(def.FootprintZ), float32(def.ExtractsMetal)); err == nil {
-			prod.SpotMetal = v // once, never resampled [P1-10]
-			// Footprint accumulator to the script [05 R-PROD-01 §6][04 R-COB-04 §9].
-			prod.NotifyExtractorFootprint(sum)
-		}
-	}
 	return prod, nil
 }
 

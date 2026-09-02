@@ -7,8 +7,10 @@ package client
 
 import (
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/render"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
 // ProjectileDrawStats reports what the adapter actually rendered.  A
@@ -64,10 +66,8 @@ func (c *Client) DrawProjectileViews(current []frame.ProjectileView, now uint32,
 				continue
 			}
 			// The common frame is the ground shadow, not a projectile-body
-			// sprite. Its Y anchor uses the record's cached average floor height
-			// [03 §5.4][06 R-WFX-01 §4]. That publication field is not present in
-			// ProjectileView, so keep the exact frame route resolved while
-			// suppressing this pixel write until the owner publishes it.
+			// sprite. Its Y anchor is the record's cached average floor height
+			// [03 §5.4][06 R-WFX-01 §4].
 			if c.drawProjectileShadow(d.BaseFrame, view) {
 				stats.Sprites++
 			}
@@ -107,17 +107,30 @@ func (c *Client) DrawProjectileViews(current []frame.ProjectileView, now uint32,
 	return stats
 }
 
-// drawProjectileShadow is intentionally dormant until the committed frame
-// publishes the cached average floor height required by the shared `shadow`
-// entry. Using projectile Y here would make the ground sprite float with the
-// projectile and would invent the missing route arithmetic [03 §5.4][I9].
-// Unimplemented: [03 §5.4] establishes the projection — the shadow goes at
-// (X-viewX+128, (Z-floor/2)-viewZ+32) against the projectile's cached average
-// floor height, the same value simulation's projectile terrain sampling uses.
-// What is missing is the publication: that height does not cross the frame
-// boundary. See PLAN 19 §2.4.
-func (c *Client) drawProjectileShadow(shadow *formats.GAFFrame, _ frame.ProjectileView) bool {
-	return false
+// drawProjectileShadow blits frame 0 of the shared `shadow` entry as the
+// record's ground shadow. Render types 1, 3, 4 and 6 all draw it, all the same
+// way [03 §5.4].
+//
+// The projection is the ordinary orthographic one with the record's cached
+// average floor height standing in for the projectile's own height:
+// `(X − viewX + 128, (Z − floor/2) − viewZ + 32)`. Passing the floor as the
+// height argument is exactly that — the shear term is `height >> 1` and the
+// cached floor is a non-negative average of two height bytes, so the shift and
+// the halving agree [03 §2.5][06 §8.1]. Using the projectile's own Y instead
+// would float the ground sprite up with the shot, which is the defect this
+// replaces.
+//
+// A record whose point resolved to no plot cell has no cached floor and draws
+// no shadow; that is the off-map case the collision gate retires without
+// sampling terrain [06 §8.1].
+func (c *Client) drawProjectileShadow(shadow *formats.GAFFrame, v frame.ProjectileView) bool {
+	if c == nil || c.cam == nil || shadow == nil || !v.FloorHeightValid {
+		return false
+	}
+	floor := numeric.Fixed(int64(v.FloorHeight) << 16)
+	sx, sy := c.cam.WorldToScreen(v.X, floor, v.Z)
+	c.UIBlitAnchor(shadow, int(sx-camera.OriginX), int(sy-camera.OriginY))
+	return true
 }
 
 func projectileViewByHandle(views []frame.ProjectileView, handle uint16) frame.ProjectileView {

@@ -483,29 +483,6 @@ func reconstructUnits(s *Session, m *mission.Mission) error {
 			if up.IsImmune() {
 				u.Flags |= 1 << 15
 			}
-			// Extractor yield is sampled once at placement [P1-10][P1-15]:
-			// Σ(cell+1)*extractsMetal, never resampled.
-			// Factory nanoframes sample in construction.allocateNanoframe; mission-placed extractors must sample here.
-			// Direct World.Create paths (e.g., save restore) remain TODO(question) if terrain not available at that site [P1-10][P1-15].
-			if def.ExtractsMetal != 0 && s.World != nil {
-				cx := world.WorldToCell(numeric.Fixed(int64(up.X)))
-				cz := world.WorldToCell(numeric.Fixed(int64(up.Z)))
-				footX := int(def.FootprintX)
-				footZ := int(def.FootprintZ)
-				if footX <= 0 {
-					footX = 1
-				}
-				if footZ <= 0 {
-					footZ = 1
-				}
-				cx -= int32(footX / 2)
-				cz -= int32(footZ / 2)
-				if v, sum, err := s.World.SampleMetalWithFootprintSum(cx, cz, footX, footZ, float32(def.ExtractsMetal)); err == nil {
-					u.SpotMetal = v // once, never resampled [P1-10]
-					// Footprint accumulator to the script [05 R-PROD-01 §6][04 R-COB-04 §9].
-					u.NotifyExtractorFootprint(sum)
-				}
-			}
 			// Publish visibility synchronously before loader returns — no empty-coverage frame [03 §3.3] C10.
 			publishOne(s, u)
 			if s.Movement != nil && s.Movement.Routes != nil {

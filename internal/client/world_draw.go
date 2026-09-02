@@ -611,6 +611,20 @@ func (c *Client) presentUnit(d worldDrawable) {
 // geometry should occlude part of a child; the fix is a staging image on the
 // model path, a composition change rather than a draw-order one.
 // See PLAN 19 §2.4.
+//
+// The section leaves nothing open — it gives the staging box (the union of the
+// carrier's own box with each child's, offset by the child's world position
+// relative to the carrier), the pass order (cached body copied in, then live
+// pieces with the key test, then each child composited with the key test at
+// its pixel offset and with its world-height difference added to every key it
+// contributes, then the waterline and digger passes, then one blit), and the
+// per-pixel admission `stagingKey <= childKey + heightDelta` for a child pixel
+// that is not the child image's transparent index. What blocks it here is
+// structural, not evidential: the composition entry composes one unit and
+// blits it in the same call, so a carrier's finished image is never available
+// to composite a child into. Closing this means giving that entry a staging
+// target, which is a change to the model composition path, not to this
+// per-unit present.
 func (c *Client) presentAttachedChildren(carrier pool.Handle) {
 	b := &c.worldBuckets
 	for i := b.firstChild(carrier); i >= 0; i = b.nextChild(i) {

@@ -970,6 +970,11 @@ func createAndBindServices(s *Session) error {
 	// commander, or factory allocation reaches the common unit initializer
 	// [01 §7.1][R-P28-ANG-01R §2].
 	s.Units.SetSimulationRNG(s.SimRNG())
+	// The extraction rate is sampled by the unit CREATOR, once per created unit
+	// and never recomputed [05 R-PROD-01 §6], so the plot it reads is bound
+	// here — before the first mission, commander, factory or restore allocation
+	// — rather than at each placement call site.
+	s.Units.SetExtractionSampler(s.World)
 	cobFS, cobLoader := s.Units.COBSource()
 	if (cobFS == nil) != (cobLoader == nil) {
 		return fmt.Errorf("session: incomplete COB source for service wiring [04 §4.1]")
@@ -1302,7 +1307,12 @@ func createAndBindServices(s *Session) error {
 	return nil
 }
 
-func sessionPathUnitLimit(s *Session) int32 {
+// sessionUnitLimit is the session's per-player unit limit: the `Max Units`
+// lobby option for a skirmish, or the mission's unit-count key for a campaign,
+// which retail copies once into a session word when the world is built
+// [08 R-AI-01 §13][02 "unit limit"]. Both the path scheduler's service tiering
+// and the computer player's half-capacity scoring term read that one word.
+func sessionUnitLimit(s *Session) int32 {
 	// Skirmish copies the clamped Preferences UnitLimit, whose established
 	// missing-value default is 250 [08 R-SKIR-01 §6].
 	limit := int32(250)
@@ -1313,6 +1323,39 @@ func sessionPathUnitLimit(s *Session) int32 {
 	// save Summary word on Session; until then skirmish/save composition can
 	// only supply the established missing-preference default above.
 	return limit
+}
+
+func sessionPathUnitLimit(s *Session) int32 {
+	return sessionUnitLimit(s)
+}
+
+// sessionAIDifficulty is the difficulty word the AI profile's plan gate
+// compares each directive's arguments against: 0 easy, 1 medium, 2 hard,
+// written from the registry/lobby setting and from the campaign difficulty
+// control [08 R-AI-01 §12]. A campaign takes the difficulty the mission was
+// loaded with (the same word that selected its schema); a skirmish takes the
+// lobby value, whose established missing-value default is 1, Medium
+// [08 "Skirmish configuration"]. A word outside the vocabulary is reported
+// absent rather than guessed.
+func sessionAIDifficulty(s *Session) (ai.Difficulty, bool) {
+	if s == nil {
+		return "", false
+	}
+	word := s.Skirmish.Difficulty
+	if s.Mission != nil && s.Mission.Type == mission.TypeCampaign {
+		// Difficulty is -1 on a mission that is not a campaign load.
+		word = s.Mission.Difficulty
+	}
+	switch word {
+	case 0:
+		return ai.DifficultyEasy, true
+	case 1:
+		return ai.DifficultyMedium, true
+	case 2:
+		return ai.DifficultyHard, true
+	default:
+		return "", false
+	}
 }
 
 // visibilityModeForSession computes the LOS mode word from SkirmishConfig [08 "Skirmish configuration"][03 §3.1] C2.

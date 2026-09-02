@@ -53,7 +53,18 @@ func aiE2ERetailRoot(t *testing.T) string {
 // aiE2ESkirmish composes the ordinary two-slot direct skirmish the displayless
 // runner composes: slot 0 human, slot 1 computer, hostile alliance groups
 // [08 R-SKIR-01 §2]. The human slot receives no command for the whole battle.
+// The difficulty is the lobby's missing-value default, 1 Medium
+// [08 "Skirmish configuration"].
 func aiE2ESkirmish(t *testing.T, mapName string, seed uint32) *Session {
+	t.Helper()
+	return aiE2ESkirmishAt(t, mapName, seed, SkirmishDefaultDifficulty)
+}
+
+// aiE2ESkirmishAt is aiE2ESkirmish with an explicit difficulty word. The word
+// selects the AI profile's plan gate [08 R-AI-01 §12], so a test that depends
+// on how strong the computer player is has to say which difficulty it means
+// rather than inheriting the default.
+func aiE2ESkirmishAt(t *testing.T, mapName string, seed uint32, difficulty int) *Session {
 	t.Helper()
 	root := aiE2ERetailRoot(t)
 	fs := vfs.New()
@@ -63,6 +74,7 @@ func aiE2ESkirmish(t *testing.T, mapName string, seed uint32) *Session {
 	t.Cleanup(func() { _ = fs.Close() })
 	cfg := DirectSkirmishConfig(mapName)
 	cfg.ApplyDefaults()
+	cfg.Difficulty = difficulty
 	cfg.RNGSimSeed = seed
 	cfg.RNGCrtSeed = seed
 	sess, err := NewSkirmishWithProgress(fs, nil, cfg, nil)
@@ -89,8 +101,23 @@ func aiE2ESkirmish(t *testing.T, mapName string, seed uint32) *Session {
 // from regroup A; wave A stayed empty for the whole battle while wave B — whose
 // merge leash is 50,000 rather than 20,000 — never held the six members its
 // engage threshold needs [08 R-P0-04 §3][08 R-AI-01 §4].
+//
+// The difficulty is pinned to Hard, and that is a statement of what this gate
+// currently proves rather than a knob. Until WU-19-32 bound the session's
+// difficulty word, ai.Profile picked its plan gate with a "last plan the file
+// names" fallback, which is `hard` in all ten stock profiles — so every number
+// this test has ever been tuned against was measured against ai/default.txt's
+// hard tables. Pinning Hard keeps the measured contract intact while the word
+// becomes real everywhere else.
+//
+// On the lobby default, Medium, the computer player on this seed builds and
+// attacks — first attack-family order at tick 20400 — but does not finish the
+// idle commander: 156 units, zero kills and zero losses by tick 90000. Whether
+// that is retail's own Medium behavior or a weakness in our wave engagement
+// that the hard tables were masking is an open question for the owner of
+// [08 R-AI-01 §4]; RWU-19-1's timed retail capture is the bar, not this number.
 func TestComputerPlayerEliminatesIdleHumanRetail(t *testing.T) {
-	sess := aiE2ESkirmish(t, "ashap plateau", aiE2ESeed)
+	sess := aiE2ESkirmishAt(t, "ashap plateau", aiE2ESeed, 2)
 
 	if local := int(sess.LocalOwner); local != 0 {
 		t.Fatalf("direct skirmish resolved local owner %d, want the human slot 0", local)
@@ -171,15 +198,15 @@ func TestComputerPlayerFormsAnAttackWaveRetail(t *testing.T) {
 		t.Fatal("the computer slot composed without a manager")
 	}
 	scaled := sess.Clock.ScaledAnchor
-	// The budget was 12000 while the profile grammar's category names were
-	// inert, so every type scored at the unmodulated default weight of 100.
-	// With the exact-versus-category matcher of [08 R-AI-01 §12] in place,
+	// This test runs at the lobby default difficulty, Medium, and the wave
+	// forms on this seed at tick 10500. The budget was briefly 18000 during
+	// WU-19-32: the exact-versus-category matcher of [08 R-AI-01 §12] made
 	// ai/default.txt's `Weight ARM 0.2` / `Weight CORE 0.2` reach every member
-	// of those categories and the whole candidate table scores five times lower
-	// before the exact overrides multiply back up, which pushes the first wave
-	// on this seed from just under 12000 to 14100. This budget is the pacing
-	// the profile now produces, not a slack allowance.
-	const formationBy = uint32(18000)
+	// of those categories for the first time, and against the hard tables the
+	// profile then fell back to that pushed formation out to 14100. Binding the
+	// real difficulty word brought it back in, so the budget returns to what it
+	// was rather than keeping the margin.
+	const formationBy = uint32(12000)
 	for sess.Clock.GlobalTick < formationBy && sess.State != StatePostBattle {
 		scaled += 5
 		sess.Step(scaled)

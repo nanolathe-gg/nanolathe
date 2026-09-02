@@ -11,6 +11,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -315,9 +316,12 @@ type Unit struct {
 	Move             MoveState       // movement status shared with movement.System [04 §8.1][04 §9.1] (movement imports units)
 	Attachment       AttachmentState // carrier/cargo linkage [04 §4.4] attach-unit
 	EngagementTarget pool.Handle     // saved plain engagement link; no attachment side effect [08 R-SAVE-02 §6]
-	// SpotMetal is the extractor yield sampled once at placement: Σ(cellMetal+1)*extractsMetal [05 "Terrain metal extraction"] C14 [P1-10][P1-15].
-	// Stored on the instance once at creation via SampleMetal, never resampled even if terrain metal changes.
-	SpotMetal float32 // [P1-10] once Σ(byte+1)*extractsMetal, [P1-15] uniform char write
+	// SpotMetal is the extractor yield the CREATOR samples once, for every unit
+	// it makes: Σ(cell metal byte + 1) over the stamped footprint, times the
+	// definition's `extractsmetal` [05 R-PROD-01 §6]. It is never resampled, so
+	// later terrain or feature changes do not move it, and the settlement reads
+	// this rate rather than `extractsmetal` [05 R-PROD-01 §1].
+	SpotMetal float32
 	// OrderGuard is the per-unit order-guard float of the shared eligibility
 	// predicate [07 §8/§9]: zero at unit creation and at order completion,
 	// nonzero (a clamped 0..1 ratio) while an order is being processed.
@@ -326,10 +330,6 @@ type Unit struct {
 	// float". Written by the orders pump; the exact ratio source is
 	// unattested — only the 0/nonzero distinction is established TODO(question).
 	OrderGuard float32
-	// TODO(question): direct World.Create bypasses extractor sampling; session reconstructUnits and
-	// construction.allocateNanoframe sample via Terrain.SampleMetal once at placement [P1-10][P1-15],
-	// but save-restore forced-slot and any other direct Create caller must also sample via the same hook
-	// or via Terrain.ApplySchema post-load; verify universal coverage.
 	// Economy state bound to the one ledger per [05] — activation/on-off, cloak, storage, extraction, wind/tidal, makers [P1-I04].
 	Activated bool  // operational/activated bit for on/offable units [05 "Unit instance economy state"] [P1-I04]; true when the unit is turned on; for non-OnOffable units always true when complete
 	IsCloaked bool  // whether cloak upkeep is due this pass [05 "Cloak debit"] [P1-I04]
@@ -600,6 +600,12 @@ type World struct {
 	// and save reconstruction, so every production unit follows one path.
 	cobBinder COBBinder
 
+	// extraction is the plot the creator samples for a definition that
+	// extracts metal [05 R-PROD-01 §6]. It is bound once at battle entry;
+	// a nil sampler means no map is mounted (unit-package fixtures), and the
+	// creator then leaves the rate at its zero value rather than inventing one.
+	extraction ExtractionSampler
+
 	// simulationRNG is the session-owned, battle-wide Park-Miller stream. It is
 	// bound by session composition before the first production allocation; nil
 	// is retained only for small unit-package fixtures, which receive the
@@ -680,6 +686,101 @@ func (w *World) SetCOBBinder(binder COBBinder) {
 
 // HasCOBBinder reports whether strict composition owns future allocations.
 func (w *World) HasCOBBinder() bool { return w != nil && w.cobBinder != nil }
+
+// ExtractionSampler is the map plot the creator reads when a definition
+// extracts metal. It is the one input the creation-time extraction sample of
+// [05 R-PROD-01 §6] needs beyond the definition and the unit's own position;
+// internal/world.Terrain satisfies it.
+type ExtractionSampler interface {
+	SampleMetalWithFootprintSum(cx, cz int32, footX, footZ int, extractsMetal float32) (float32, uint16, error)
+}
+
+// SetExtractionSampler binds the battle's plot to the creator. It must be
+// installed before the first allocation of a battle, because the extraction
+// rate is sampled once at creation and never recomputed [05 R-PROD-01 §6].
+func (w *World) SetExtractionSampler(s ExtractionSampler) {
+	if w == nil {
+		return
+	}
+	w.extraction = s
+}
+
+// sampleExtraction is the creation-time extraction sample of
+// [05 R-PROD-01 §6], run by the CREATOR for every unit it makes — not by the
+// callers that place units, which is why a direct Create (resurrection, an
+// initial-mission spawn, a restore that creates) now yields the same rate as a
+// unit placed through the session's own battle entry.
+//
+// The gate is the definition's `extractsmetal` strictly greater than zero.
+// The walk covers the unit's stamped footprint rectangle starting at its
+// stamped cell, and every covered cell contributes its plot metal byte plus
+// one, so a metal-free cell still contributes one; the rate stored on the unit
+// is that sum times `extractsmetal`. The settlement reads this stored rate and
+// never `extractsmetal` itself [05 R-PROD-01 §1].
+//
+// Immediately after storing the rate, and only when the unit has a script, the
+// creator hands the raw footprint accumulator to the script as a deferred
+// `SetSpeed` so a stock extractor can size its animation [04 R-COB-04 §9];
+// NotifyExtractorFootprint owns that contract.
+func (w *World) sampleExtraction(u *Unit, def *content.UnitDef) {
+	if w == nil || u == nil || def == nil || w.extraction == nil {
+		return
+	}
+	if !(def.ExtractsMetal > 0) { // strictly greater than zero [05 R-PROD-01 §6]
+		return
+	}
+	footX := int(def.FootprintX)
+	footZ := int(def.FootprintZ)
+	if footX <= 0 {
+		footX = 1
+	}
+	if footZ <= 0 {
+		footZ = 1
+	}
+	// The stamped rectangle's minimum corner: the unit's own cell less half the
+	// footprint in each axis, the same corner the occupancy stamp uses.
+	cx := world.WorldToCell(u.X) - int32(footX/2)
+	cz := world.WorldToCell(u.Z) - int32(footZ/2)
+	rate, footprintSum, err := w.extraction.SampleMetalWithFootprintSum(cx, cz, footX, footZ, float32(def.ExtractsMetal))
+	if err != nil {
+		// An unseeded or out-of-range plot is a placement question, not a rate
+		// to invent: leave the zero the record was created with.
+		return
+	}
+	u.SpotMetal = rate
+	u.NotifyExtractorFootprint(footprintSum)
+}
+
+// bindTransportQueries wires the two COB transport query opcodes to this
+// unit's own cargo linkage [04 §4.4][04 R-COB-03 §5]. The membership query
+// walks the unit's cargo list — head first, the order new cargo is pushed —
+// comparing each entry's sixteen-bit identifier; the identity query follows the
+// unit's carrier back-pointer. Both read the live linkage at call time, so an
+// attach or drop is visible to the next query without rebinding
+// [04 R-AIR-01 §9]. Neither opcode appears in shipped content, so this binding
+// changes no stock script's behavior; it exists so an authored script that does
+// use them gets the established answer instead of a hard-coded zero.
+func bindTransportQueries(u *Unit) {
+	if u == nil {
+		return
+	}
+	vm := u.GetScript()
+	if vm == nil {
+		return
+	}
+	vm.BindTransportQueries(
+		func(id int32) bool {
+			// A slice walk in link order, never a map range (I1).
+			for i := range u.Attachment.Cargo {
+				if int32(uint16(u.Attachment.Cargo[i])) == id {
+					return true
+				}
+			}
+			return false
+		},
+		func() int32 { return int32(uint16(u.Attachment.Carrier)) },
+	)
+}
 
 // hasLoadableCOB verifies the program that the production path will bind
 // before the allocator consumes a slot. Definitions from a catalog normally
@@ -806,7 +907,11 @@ func (w *World) attachCOB(u *Unit) error {
 		// RNG order only for successful initialization and pre-initializer refusal; a
 		// traced retail post-allocation failure would settle whether either draw is
 		// retained. Do not roll back or reorder the successful path.
-		return w.cobBinder(u)
+		if err := w.cobBinder(u); err != nil {
+			return err
+		}
+		bindTransportQueries(u)
+		return nil
 	}
 	prog := u.Def.Script
 	if (prog == nil || len(prog.Code) == 0) && w.cobLoader != nil && w.cobFS != nil {
@@ -838,6 +943,7 @@ func (w *World) attachCOB(u *Unit) error {
 		}
 	}
 	u.SetScript(vm)
+	bindTransportQueries(u)
 	// Run the shared D+wake Create adapter so hide/show and other writes are
 	// visible before the first snapshot [04 §4.1][R-CB-01 §2]. The reload
 	// callback is a separate deferred start after Create [R-CB-01 §4].
@@ -1145,6 +1251,11 @@ func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed,
 	if w.OnCreate != nil {
 		w.OnCreate(h, u)
 	}
+	// The creator samples the extraction rate for every unit it makes
+	// [05 R-PROD-01 §6]. It runs last so the deferred `SetSpeed` it may start
+	// follows `Create` and the `activatewhenbuilt` `Activate` raise above, the
+	// order the placement call sites this replaces produced.
+	w.sampleExtraction(u, def)
 	return h, nil
 }
 
@@ -1268,6 +1379,10 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 	if w.OnCreate != nil {
 		w.OnCreate(h, u)
 	}
+	// Same creation-time sample as the ordinary allocator [05 R-PROD-01 §6].
+	// The restore adapter that follows this call overwrites the rate with the
+	// saved one where the save image carries it, which is what retail restores.
+	w.sampleExtraction(u, def)
 	return h, nil
 }
 

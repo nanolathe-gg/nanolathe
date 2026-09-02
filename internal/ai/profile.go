@@ -481,13 +481,9 @@ func (p *Profile) Difficulties() []Difficulty {
 // lobby setting or the campaign difficulty control [08 R-AI-01 §12]. It clears
 // the applied-catalog memo so the next ApplyUnitDefinitions replays the whole
 // directive stream under the new gate. A word outside the vocabulary is
-// ignored.
-//
-// Unimplemented: nothing supplies this yet. The session carries the word —
-// SkirmishConfig.Difficulty, whose default is 1 (medium), and the campaign
-// difficulty — but it never reaches the profile, so LoadProfile falls back to
-// the last plan the file names, which is `hard` in all ten stock profiles.
-// Binding it is a session-side change; see PLAN 19 §2.4.
+// ignored, leaving LoadProfile's fallback — the last plan the file names — in
+// place. Session composition supplies the word at battle entry, before any
+// directive is applied.
 func (p *Profile) SetDifficulty(d Difficulty) {
 	if p == nil || !isValidDifficulty(d) {
 		return

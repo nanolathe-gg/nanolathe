@@ -43,6 +43,19 @@ func initializeBattleAI(s *Session, player uint8, profile *ai.Profile) error {
 	mgr.Strategic.BindEnergyEnvironment(func() (windScalar, tidalStrength float32) {
 		return s.Econ.WindScalar(), s.Econ.TidalScalar()
 	})
+	// The session's per-player unit limit is the only global the class
+	// routine's half-capacity comparison reads, and it is one word for the
+	// whole battle [08 R-AI-01 §13]. It binds before Strategic.Init, whose
+	// construction-time class computation already consults it.
+	mgr.SetUnitLimit(sessionUnitLimit(s))
+	// The plan gate compares each profile directive's arguments against the
+	// battle's difficulty word [08 R-AI-01 §12]. One profile record is shared
+	// by every slot, so this settles on the first slot and the rest are no-ops;
+	// a word outside the vocabulary leaves the profile's own fallback in place
+	// rather than inventing one.
+	if difficulty, ok := sessionAIDifficulty(s); ok {
+		profile.SetDifficulty(difficulty)
+	}
 	if !mgr.Strategic.InitializeRandomState(s.SimRNG()) {
 		return fmt.Errorf("session: AI strategic state initialization failed for player %d", player)
 	}

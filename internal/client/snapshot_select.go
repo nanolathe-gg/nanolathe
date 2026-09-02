@@ -7,10 +7,15 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
-// SnapshotVisible reports whether a published unit may be interacted with by
-// viewer. Friendly units bypass fog; foreign units require the mode-selected
-// committed coverage cell. A cloaked flag remains hidden unless the published
-// decloak status is present, as in the gameplay predicate.
+// SnapshotVisible is the gameplay visibility gate evaluated over the committed
+// frame [03 §3.2]. Its five steps run in the researched order: owner-identity
+// bypass, cloak early-out, below-sea-level rejection with the runtime
+// exemption, then the four accumulating hull samples against the mode-selected
+// committed coverage.
+//
+// Every input is published. The hull extent triple and the exemption bit ride
+// the unit view and the scaled sea level rides the visibility view, so nothing
+// here reads a live definition or the mutable terrain [I6].
 func SnapshotVisible(f *frame.Frame, v frame.UnitView, viewer uint8) bool {
 	if f == nil || viewer >= 10 {
 		return false
@@ -33,16 +38,35 @@ func SnapshotVisible(f *frame.Frame, v frame.UnitView, viewer uint8) bool {
 		return false
 	}
 	m := f.Visibility
-	// UnitView carries the committed anchor and footprint, but not the
-	// definition hull deltas or terrain sea level used by the full four-point
-	// gameplay predicate. Keep the exact projected one-point gate at this
-	// boundary; extending it with footprint-derived guesses would change the
-	// established hull semantics [03 §3.2].
-	// Unimplemented: [03 §3.2] establishes the four-point hull gate. Presentation
-	// cannot reproduce it because the unit's X/Y/Z hull extents and the
-	// sea-level value do not cross the frame boundary, and reading live
-	// definitions or terrain from here would breach I6. See PLAN 19 §2.4.
-	return SnapshotPointVisible(m, v.X, v.Y, v.Z, viewer)
+	// Step 3 of the gate [03 §3.2]: a base height below sea level is not
+	// visible unless the runtime underwater-exemption bit is set. Sea level is
+	// the map header byte scaled to world units — the comparison is against
+	// that scaled byte and never against zero [03 §2.2] — and the sensor phase
+	// sets the exemption on owned and allied units [03 §3.4], which is why
+	// those are never rejected for depth.
+	if !v.UnderwaterExempt && v.Y < m.SeaLevel {
+		return false
+	}
+	// Steps 4-5, the four hull samples [03 §3.2]. They ACCUMULATE: one
+	// coordinate triple is carried through all four tests and each step mutates
+	// it, which is why the last step subtracts the X extent "again". The figure
+	// is a rectangle in projected space, not a diamond about the base point.
+	// Any admitted sample returns visible.
+	x, y, z := v.X, v.Y, v.Z
+	if SnapshotPointVisible(m, x, y, z, viewer) { // 0: centre
+		return true
+	}
+	x += v.HullXExtent
+	if SnapshotPointVisible(m, x, y, z, viewer) { // 1: east
+		return true
+	}
+	y -= v.HullYExtent
+	z += v.HullZExtent
+	if SnapshotPointVisible(m, x, y, z, viewer) { // 2: north, still east-shifted
+		return true
+	}
+	x -= v.HullXExtent
+	return SnapshotPointVisible(m, x, y, z, viewer) // 3: west, still north-shifted
 }
 
 // snapshotPointVisible applies the committed visibility representation to one

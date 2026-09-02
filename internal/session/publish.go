@@ -193,6 +193,9 @@ func (s *Session) publishSnapshot(tick uint32) {
 			}
 			views = appendUnitView(views, v)
 			vp := &views[len(views)-1]
+			// The hull extents and the underwater-exemption bit of the
+			// four-point visibility gate [03 §3.2] steps 3 and 5.
+			publishHullGateInputs(vp, u, s)
 			if vm := u.GetScript(); vm != nil {
 				if vmPieces := vm.Pieces; len(vmPieces) > 0 {
 					flags := vm.SnapshotFlags()
@@ -304,6 +307,9 @@ func (s *Session) publishSnapshot(tick uint32) {
 	// zero rather than inventing one [I9].
 	if s.Vis != nil {
 		publishVisibilityView(s.Vis, s.LocalOwner, &published.Visibility)
+		// Step 3 of the gate compares against the scaled sea-level byte, never
+		// against zero [03 §3.2][03 §2.2].
+		published.Visibility.SeaLevel = publishedSeaLevel(s.World)
 		s.Vis.RebuildFog(0, 0)
 		if fc := s.Vis.Fog(); fc != nil {
 			w, h := fc.Dimensions()
@@ -424,6 +430,9 @@ func (s *Session) publishSnapshot(tick uint32) {
 					pv.Lifetime = w.WeaponTimer
 				}
 			}
+			// The cached average floor height the ground shadow is anchored
+			// against [06 §8.1][03 §5.4].
+			publishProjectileFloorHeight(&pv, s.World)
 			published.Projectiles = append(published.Projectiles, pv)
 		}
 	}
@@ -1021,4 +1030,73 @@ func (s *Session) SetEffectTimingResolver(resolver render.TimingResolver) {
 		return
 	}
 	pub.effects.SetTimingResolver(resolver)
+}
+
+// publishHullGateInputs copies the three inputs the committed four-point
+// visibility gate needs that nothing else on the unit view carries: the
+// definition's hull extent triple and the runtime underwater-exemption bit
+// [03 §3.2] steps 3 and 5.
+//
+// The extents are the compiled definition's own extent words, whose writers
+// are traced in [07 R-REV-01 §7]: the unit-record compiler writes
+// `xExtent = footprintX << 20` and `zExtent = footprintZ << 20` — a footprint
+// cell is sixteen world units and `<< 20` is that sixteen expressed in 16.16 —
+// and the catalog loader then rewrites the vertical word as the model's total
+// height, the same zero-seeded model-top walk the compiled catalog already
+// resolves once per definition at load.
+//
+// Presentation cannot derive the vertical word: it comes from the 3DO, not
+// from the FBI record, and reading either from the far side of the frame
+// boundary is what [I6] forbids.
+func publishHullGateInputs(vp *frame.UnitView, u *units.Unit, s *Session) {
+	if vp == nil || u == nil {
+		return
+	}
+	if u.Def != nil {
+		vp.HullXExtent = numeric.Fixed(int64(u.Def.FootprintX) << 20)
+		vp.HullZExtent = numeric.Fixed(int64(u.Def.FootprintZ) << 20)
+		vp.HullYExtent = numeric.Fixed(u.Def.ModelTopFixed)
+	}
+	if s != nil && s.visStatus != nil {
+		vp.UnderwaterExempt = s.visStatus[int(u.Handle)]&visibility.SonarBit != 0
+	}
+}
+
+// publishedSeaLevel is the map header's sea-level byte in 16.16 world units,
+// the value the visibility gate's step 3 compares a base height against
+// [03 §3.2][03 §2.2]. A session with no terrain publishes zero, which is what
+// the gate's own fixture path uses.
+func publishedSeaLevel(ter *world.Terrain) numeric.Fixed {
+	if ter == nil {
+		return 0
+	}
+	return ter.SeaLevelWorld()
+}
+
+// publishProjectileFloorHeight fills the committed copy of the projectile
+// record's cached average floor height [06 §8.1] step 2: over the plot cell of
+// the record's post-motion point, `(cell.maxHeight + cell.minHeight) / 2` as an
+// unsigned division of two height bytes. The projectile draw pass is its only
+// reader — it anchors the shared ground `shadow` sprite at half this height
+// instead of the projectile's own Y [03 §5.4].
+//
+// TODO(T25): retail's writer is the collision gate, which caches the value on
+// the record on every in-map tick. The record type carries that scratch but
+// nothing in internal/combat writes it yet, and that package is not this unit's
+// to change. The publisher therefore evaluates the gate's own arithmetic at the
+// same post-motion point over the same plot cell, so the two agree for every
+// in-map record; once the gate writes the scratch this should copy it rather
+// than recompute it.
+func publishProjectileFloorHeight(pv *frame.ProjectileView, ter *world.Terrain) {
+	if pv == nil || ter == nil {
+		return
+	}
+	cell := ter.PlotAt(world.WorldToCell(pv.X), world.WorldToCell(pv.Z))
+	if cell == nil {
+		// Off-map: the gate retires the record without sampling a cell, so no
+		// floor is cached and the draw pass has no shadow anchor.
+		return
+	}
+	pv.FloorHeight = int16((uint16(cell.MaxHeight()) + uint16(cell.MinHeight())) / 2)
+	pv.FloorHeightValid = true
 }

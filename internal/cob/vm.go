@@ -90,6 +90,14 @@ type VM struct {
 	sfxVisible  func(piece int, sfxType int32) bool // visibility gate for emit-sfx [GAP T15] C19; nil fails closed
 	diagnostics []string                            // [P2-03] fallback diagnostics (divide, overflow, corrupt) not fatal
 
+	// The two transport query opcodes read the owning unit's cargo linkage
+	// [04 §4.4][04 R-COB-03 §5]. They are not engine ports and carry no port
+	// identifier, so they get their own binding rather than a portFuncs entry.
+	// An unbound VM owns no unit, and its answers are the established
+	// empty-list and not-carried ones.
+	cargoContains   func(id int32) bool // membership in this unit's own cargo list
+	carrierIdentity func() int32        // this unit's carrier identifier, 0 when not carried
+
 	lastStarted     int      // last thread allocated by Start/StartByName, -1 if none [06 §3.3] ON-04 Aim dispatch
 	lastQueryThread int      // last thread allocated by CallQuery, -1 if none [04 §4.2]
 	lastReturnValue [8]int32 // last explicit return value per thread [04 §5.3] ON-04
@@ -347,6 +355,21 @@ func (v *VM) BindPort(p Port, fn func(args []int32) int32) {
 		v.portFuncs = make(map[Port]func(args []int32) int32)
 	}
 	v.portFuncs[p] = fn
+}
+
+// BindTransportQueries attaches the owning unit's cargo linkage to the two
+// transport query opcodes [04 §4.4][04 R-COB-03 §5]. inCargo answers whether a
+// unit identifier is in this unit's own cargo list; carrier returns the
+// identifier of the unit carrying this one, or zero when it is not carried.
+// Both are read at query time, so an attach or drop between queries is visible
+// without rebinding. Either may be nil, in which case the corresponding query
+// keeps the established empty-list / not-carried answer.
+func (v *VM) BindTransportQueries(inCargo func(id int32) bool, carrier func() int32) {
+	if v == nil {
+		return
+	}
+	v.cargoContains = inCargo
+	v.carrierIdentity = carrier
 }
 
 // BindRenderFlags attaches the unit-owned render-piece record [04 §"Piece flag polarity"].
@@ -1676,19 +1699,21 @@ func (v *VM) runThread(idx int) {
 			// exhausted. The popped word is a unit identifier, never a port
 			// number, so the earlier port-table route was wrong.
 			//
-			// Unimplemented: the cargo list itself. Our transport linkage lives
-			// on the mover, not on the script's unit record, so the VM has no
-			// list to walk and every query answers 0 — which is the established
-			// answer for an empty list, not an invented one. Neither this
-			// opcode nor 0x10045000 appears in any of the 841 retail COBs
-			// (asset census, [fmt cob]), so no shipped script observes the
-			// difference. See PLAN 19 §2.4.
-			_, _ = t.stackPop() // the cargo identifier
+			// The list is the owning unit's own cargo linkage, bound by
+			// BindTransportQueries; a VM with no owner keeps the established
+			// empty-list answer. Neither this opcode nor 0x10045000 appears in
+			// any of the 841 retail COBs (asset census, [fmt cob]), so no
+			// shipped script observes the difference.
+			cargoID, _ := t.stackPop() // the cargo identifier
+			var carried int32
+			if v.cargoContains != nil && v.cargoContains(cargoID) {
+				carried = 1
+			}
 			if t.SP >= 10 {
 				v.killThread(idx)
 				return
 			}
-			t.stackPush(0)
+			t.stackPush(carried)
 			t.PC += 1
 		case 0x10045000: // carrier-identity query [04 §4.4][R-COB-03 §5] +1
 			// Also not a port read, and it carries no selector anywhere: it
@@ -1697,13 +1722,18 @@ func (v *VM) runThread(idx int) {
 			// carried [04 R-COB-03 §5]. The earlier reading, that the port
 			// selector lived in the instruction's low byte, is retracted; §4.4
 			// corrected its own "pushes the first cargo identifier" text at the
-			// same time. Unimplemented as above — an unbound VM is not carried,
-			// so 0 is the established answer. See PLAN 19 §2.4.
+			// same time. The back-pointer is the owning unit's own, bound by
+			// BindTransportQueries; a VM with no owner is not carried, so 0
+			// remains the established answer there.
+			var carrier int32
+			if v.carrierIdentity != nil {
+				carrier = v.carrierIdentity()
+			}
 			if t.SP >= 10 {
 				v.killThread(idx)
 				return
 			}
-			t.stackPush(0)
+			t.stackPush(carrier)
 			t.PC += 1
 		case 0x10051000: // less-than signed [04 §4.3]
 			b, _ := t.stackPop()

@@ -146,6 +146,28 @@ type UnitView struct {
 	ArchivedEnergyMake float32
 	ArchivedMetalUse   float32
 	ArchivedEnergyUse  float32
+	// HullXExtent, HullYExtent and HullZExtent are the compiled definition's
+	// three extent words in 16.16 world units — the sample offsets of the
+	// gameplay visibility gate's four-point hull [03 §3.2] step 5.  They are
+	// three separate definition words: the height decrement is neither the Z
+	// extent nor half the unit's height.  Their writers are traced in
+	// [07 R-REV-01 §7] — the unit-record compiler writes the horizontal pair
+	// from the authored footprint keys and the catalog loader rewrites the
+	// vertical one as the model's total height once the 3DO is loaded.
+	//
+	// They are published because presentation may not read a live definition
+	// [I6], and because the gate is not reproducible from FootX/FootZ alone:
+	// the vertical word comes from the model, not from the FBI record.
+	HullXExtent numeric.Fixed
+	HullYExtent numeric.Fixed
+	HullZExtent numeric.Fixed
+	// UnderwaterExempt is the runtime status bit that exempts a unit from the
+	// gate's below-sea-level rejection [03 §3.2] step 3.  The sensor phase
+	// sets it on owned and allied units [03 §3.4], which is why those are
+	// never rejected for depth.  It is published for the same reason Cloaked
+	// is: presentation must not reconstruct sensor state from the instance
+	// flag word [R-VIS-01 §4].
+	UnderwaterExempt bool
 }
 
 // ProjectileView is the committed copy of one projectile draw record
@@ -193,6 +215,19 @@ type ProjectileView struct {
 	HasDirectOrientation      bool
 	SecondaryModel            string
 	SecondaryModelUntil       uint32
+	// FloorHeight is the record's cached average floor height in whole world
+	// units: over the plot cell of the record's post-motion point,
+	// `(cell.maxHeight + cell.minHeight) / 2` as an unsigned division of two
+	// height bytes [06 §8.1] step 2.  The collision gate writes it on every
+	// in-map tick and no gameplay test reads it — the projectile draw pass is
+	// its only consumer, and the shared ground `shadow` sprite of render types
+	// 1, 3, 4 and 6 is anchored against half of it rather than against the
+	// projectile's own Y [03 §5.4].
+	//
+	// FloorHeightValid is false when the point resolved to no plot cell, which
+	// is the off-map case the gate retires without sampling terrain.
+	FloorHeight      int16
+	FloorHeightValid bool
 }
 
 // FeatureView is the committed copy of one live feature [05 "Feature
@@ -476,6 +511,13 @@ type VisibilityView struct {
 	WordVisible   []uint16
 	CoverageBytes bool
 	Valid         bool
+	// SeaLevel is the map header's sea-level byte scaled to 16.16 world units,
+	// which is the value the gameplay visibility gate's step 3 compares a
+	// unit's base height against — the comparison is against that scaled byte
+	// and never against zero [03 §3.2][03 §2.2].  It rides the visibility
+	// channel because it is only ever read beside the masks; presentation must
+	// not reach into the mutable terrain for it [I6].
+	SeaLevel numeric.Fixed
 }
 
 // RadarContactKind identifies the source record represented by a minimap

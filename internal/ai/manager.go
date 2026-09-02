@@ -210,8 +210,8 @@ func (m *Manager) SetCatalog(cat *content.Catalog) {
 // strategic state. It is the only global the class routine's half-capacity
 // comparison reads, and it is one word for the whole battle, so a session binds
 // it once — before Strategic.Init, whose construction-time class computation
-// already consults it [08 R-AI-01 §13]. Until a session binds it the comparison
-// never fires; see PLAN 19 §2.4.
+// already consults it [08 R-AI-01 §13]. An unbound manager — a package fixture
+// — leaves the comparison false rather than reading the zero value as a cap.
 func (m *Manager) SetUnitLimit(limit int32) {
 	if m == nil {
 		return
