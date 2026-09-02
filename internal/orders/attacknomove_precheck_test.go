@@ -77,3 +77,59 @@ func TestAttackNoMovePhaseZeroReturnsNoSlots(t *testing.T) {
 		t.Fatalf("slot 2 target = %+v after phases 0 and 1, want the earlier bind untouched [04 R-ORD-01 §3]", got)
 	}
 }
+
+// TestCouldNotFireBitFlowsFromTheUnitWordToPhaseTwo locks the consumer half of
+// [06 R-WPN-05 §6]. The weapon layer raises `0x1000` on the UNIT's order-event
+// word, not on a record's own pending word; the pump merges the two, hands the
+// bit to the first record whose gate names it, and clears it from both. That
+// record is `Attack_NoMove` phase 2 — the disengage arm — and until one
+// consumes it the bit survives across ticks.
+func TestCouldNotFireBitFlowsFromTheUnitWordToPhaseTwo(t *testing.T) {
+	id := Lookup("Attack_NoMove")
+	q, u := gateFixture()
+	q.Push(id, Node{Owner: u.Handle, Target: pool.Handle(7)})
+	q.Pump(u, 40)
+	if q.LenPrimary() != 1 || q.Primary()[0].Phase != 2 {
+		t.Fatal("fixture did not reach the waiting phase [04 R-ORD-01 §3]")
+	}
+
+	// The weapon layer's raise. It lands on the unit, latched.
+	u.Pending |= units.PendingCouldNotFire
+	q.Pump(u, 41)
+
+	if q.LenPrimary() != 1 || q.Primary()[0].Phase != 0 {
+		t.Fatalf("phase 2's re-arm did not run: len %d", q.LenPrimary())
+	}
+	if u.Pending&units.PendingCouldNotFire != 0 {
+		t.Fatal("the pump clears the satisfied bit from the unit word once a record's gate names it [06 R-WPN-05 §6]")
+	}
+	if got := u.SlotAt(0).Target.Kind; got != units.TargetNone {
+		t.Fatalf("phase 2 inhibits all slots, slot 0 target kind %v", got)
+	}
+}
+
+// TestSlotTargetSettersClearTheCouldNotFireBit locks the second of the bit's
+// three clearing sites [06 R-WPN-05 §6] [04 R-ORD-01 §7]: both slot target
+// setters clear bits 10-14 of the owner's order-event word, so binding a new
+// target discards a disengage raised against the previous one. (The third site
+// is unit construction, which zeroes the whole word.)
+func TestSlotTargetSettersClearTheCouldNotFireBit(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		bind func(u *units.Unit)
+	}{
+		{"bind slot to unit", func(u *units.Unit) { bindSlotToUnit(u, 0, 9) }},
+		{"bind slot to point", func(u *units.Unit) { bindSlotToPosition(u, 0, 1<<16, 2<<16) }},
+	} {
+		_, u := gateFixture()
+		// Bits 10-14 set, plus one bit outside the span that must survive.
+		u.Pending = units.PendingSlotSetterClear | pendTargetRemoved
+		tc.bind(u)
+		if u.Pending&units.PendingSlotSetterClear != 0 {
+			t.Fatalf("%s: bits 10-14 = %#x, want cleared [04 R-ORD-01 §7]", tc.name, u.Pending&units.PendingSlotSetterClear)
+		}
+		if u.Pending&pendTargetRemoved == 0 {
+			t.Fatalf("%s: the setter must clear bits 10-14 and nothing else", tc.name)
+		}
+	}
+}

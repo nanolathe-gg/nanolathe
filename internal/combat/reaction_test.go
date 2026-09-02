@@ -72,7 +72,7 @@ func installSlotWeapon(u *units.Unit, idx int, weapon *content.WeaponDef) {
 	s := u.SlotAt(idx)
 	s.Weapon = weapon
 	s.Flags |= 0x02
-	s.OrderControl |= units.OrderControlInhibit
+	s.Flags |= units.SlotFlagAutonomous
 }
 
 // TestReactionOffersTheAttackerToAnIdleSlot locks the per-slot offer of
@@ -333,7 +333,7 @@ func TestSlotAutonomyBitPreconditions(t *testing.T) {
 	slot := f.victim.SlotAt(0)
 
 	// Spawn leaves the slot autonomous, so the offer takes it.
-	if slot.OrderControl&units.OrderControlInhibit == 0 {
+	if slot.Flags&units.SlotFlagAutonomous == 0 {
 		t.Fatal("a slot whose weapon link resolved must be autonomous [04 R-UNIT-06 §5]")
 	}
 	f.svc.ReactToDamage(f.w, f.victim, f.attacker, 5)
@@ -346,7 +346,7 @@ func TestSlotAutonomyBitPreconditions(t *testing.T) {
 	g := newReactionFixture(t)
 	installSlotWeapon(g.victim, 0, &content.WeaponDef{ID: 1, Range: 400})
 	held := g.victim.SlotAt(0)
-	held.OrderControl &^= units.OrderControlInhibit
+	held.Flags &^= units.SlotFlagAutonomous
 	held.Target = units.Target{}
 	g.svc.ReactToDamage(g.w, g.victim, g.attacker, 5)
 	if held.Target.Kind != units.TargetNone {

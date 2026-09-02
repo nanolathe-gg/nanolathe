@@ -23,7 +23,7 @@ import (
 // retail byte as two. Bit 1 has no runtime writer in this build and none was
 // found in retail, so the single reading of it is combat.go's `slotEnabled`.
 const (
-	slotOrderInhibit uint8 = units.OrderControlInhibit
+	slotOrderInhibit uint8 = units.SlotFlagAutonomous
 	slotTracking     uint8 = 1 << 4 // Flags' autonomous-tracking bit [06 §1.2]
 )
 

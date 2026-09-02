@@ -267,6 +267,40 @@ func (u *Unit) InitRenderPieceFlags(mdl *model.Model) {
 // [04 §4.7 port 18][04 R-COLL-01 §4].
 type YardOpenTransaction func(requested bool)
 
+// The order-event word's bits the weapon layer owns [06 R-WPN-05 §6]. The word
+// is the one Unit.Pending holds; §4.2's "fired this tick" status word and
+// §3.3's "could not fire" status bit are the same word.
+//
+//	0x400   a successful non-`commandfire` shot
+//	0x800   a successful `commandfire` shot
+//	0x1000  could not fire
+//	0x2000, 0x4000  the damage-reaction site's feedback bits [06 R-WPN-04 §2]
+//	0x8000  the under-construction wait [04 R-ORD-01 §0]
+const (
+	// PendingCouldNotFire is raised by the slot pipeline when the shot-time
+	// physical gate of [06 §3.3] fails (reload was already zero, so a shot was
+	// attempted) and by the turret executor when its aim geometry yields no
+	// solution — the latter also clearing the Aim latch [06 R-WPN-05 §6].
+	//
+	// It is raised at most once per slot visit and latched until an order
+	// consumes it. Three sites clear it and nothing else: the order pump, once
+	// per record it visits, for the bits that record's gate names; the slot
+	// target setters, which clear bits 10-14 (PendingSlotSetterClear); and
+	// unit construction, which zeroes the whole word.
+	//
+	// The weapon layer never READS it, so its presence changes no firing
+	// decision. It is the attack handlers' disengage signal — "my weapon tried
+	// and could not" — and `Attack_NoMove` phase 2 is reached only when it
+	// arrives.
+	PendingCouldNotFire uint32 = 0x1000
+
+	// PendingSlotSetterClear is bits 10-14 of the order-event word, which the
+	// two slot target setters — bind slot to unit, bind slot to point — clear
+	// when they install a target [04 R-ORD-01 §7] [06 R-WPN-05 §6]. Binding a
+	// new target therefore discards a stale "could not fire".
+	PendingSlotSetterClear uint32 = 0x7C00
+)
+
 // Unit is a live unit instance [04 §2.3] C1.
 // Retail unit records have a 280-byte identity [P0-16] [01 §6.1]; Nanolathe
 // uses named Go fields in a slot-indexed array parallel to pool.Units and
@@ -315,7 +349,17 @@ type Unit struct {
 	// for newly created units, but must preserve the saved value while the
 	// mover-side record is applied [08 R-SAVE-02 §6].
 	RestoredMoveMode bool
-	Pending          uint32 // capability/pending word for gate intersection [04 §3.3] C6
+	// Pending is the unit's ORDER-EVENT WORD: the 16-bit word the order pump
+	// merges with each record's own pending word before intersecting the
+	// record's gate [04 §3.3] C6 [04 R-ORD-01 §0]. Its producers are the
+	// damage-reaction site, the weapon layer and the under-construction wait;
+	// see PendingCouldNotFire below. Construction leaves it zero.
+	//
+	// Retail loads it as a ZERO-EXTENDED 16-bit value when merging
+	// [06 R-WPN-05 §6], so gate bit 0x10000 can be satisfied only from a
+	// record's own pending word — which answers [04 R-ORD-01 §0]'s standing
+	// "what writes bit 16 into the unit capability word": nothing can.
+	Pending uint32
 	// Save-restored unit words whose consumers are owned by later phases. The
 	// names stay neutral where the retail census remains Unknown [08
 	// R-SAVE-02 §6].
@@ -1324,19 +1368,25 @@ func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed,
 	return h, nil
 }
 
-// installWeapons copies Weapon1/2/3 definitions from UnitDef into Units.Slots [06 §1.2] C1 [P0-I04].
-// It is the sole wiring of weapon definitions to per-unit slots; no other site fabricates them.
-// The autonomy bit goes on with the weapon. [04 R-UNIT-06 §5 part 3]: "spawn
-// runs the return verb on all three slots after writing the empty pair, so a
-// new unit's slots are autonomous from its first tick **provided the enabled
-// bit is already set**". In this build the enabled bit IS the resolved weapon
-// pointer, so the two land together here rather than in two passes; the effect
-// is §5's, and a slot with no weapon stays both disabled and non-autonomous,
-// which every reader tests as one condition anyway.
+// installWeapons is the weapon-slot initializer unit construction runs
+// [06 R-WPN-05 §3]. It links each slot's weapon definition from the
+// definition's ordered weapon1..3 list and writes the slot's whole control
+// byte: bit 1 from the resolved definition's active byte, bits 2-3 the slot's
+// own index, bit 4 set, bit 0 clear. It is the ONLY writer of the enabled bit
+// in retail, which is why a slot is never disabled during play and why
+// [04 R-ORD-01 §7]'s "no runtime writer of bit 1 was found" is closed.
 //
-// Without this a freshly built unit's slots would never be offered a target by
-// the retaliation walk or rebound by a guard's leg 2 until some order had run
-// its return verb over them.
+// Setting bit 4 here is what [04 R-UNIT-06 §5 part 3] describes as "spawn runs
+// the return verb on all three slots after writing the empty pair, so a new
+// unit's slots are autonomous from its first tick": without it a freshly built
+// unit's slots would never be offered a target by the retaliation walk or
+// rebound by a guard's leg 2 until some order had run its return verb.
+//
+// TODO(question): the initializer also stores an initial value into the slot's
+// distance word — the word the ballistic creator divides [06 §6.4] — derived
+// from the two muzzle-query points, and that expression is Unknown
+// [06 R-WPN-05 §3]. Decider: a trace of the initializer's arithmetic. This
+// build has no such word yet, so nothing here stands in for it.
 func installWeapons(u *Unit, def *content.UnitDef) {
 	if u == nil || def == nil {
 		return
@@ -1350,21 +1400,20 @@ func installWeapons(u *Unit, def *content.UnitDef) {
 	}
 	// Only active links populate a slot [06 §1.2] P0-10: the record-0
 	// inactive sentinel a missed link resolves to is not a weapon [02 §5
-	// R-CONTENT-02], so it must not arm the slot.
-	if !content.IsWeaponInactive(def.Weapon1Def) {
-		u.Slots[0].Weapon = def.Weapon1Def
-		u.Slots[0].Flags |= 0x02 // armed/hasTarget when populated [06 §1.2] P0-10
-		u.Slots[0].OrderControl |= OrderControlInhibit
-	}
-	if !content.IsWeaponInactive(def.Weapon2Def) {
-		u.Slots[1].Weapon = def.Weapon2Def
-		u.Slots[1].Flags |= 0x02
-		u.Slots[1].OrderControl |= OrderControlInhibit
-	}
-	if !content.IsWeaponInactive(def.Weapon3Def) {
-		u.Slots[2].Weapon = def.Weapon3Def
-		u.Slots[2].Flags |= 0x02
-		u.Slots[2].OrderControl |= OrderControlInhibit
+	// R-CONTENT-02], so it must not enable the slot.
+	defs := [NumSlots]*content.WeaponDef{def.Weapon1Def, def.Weapon2Def, def.Weapon3Def}
+	for i := 0; i < NumSlots; i++ {
+		s := &u.Slots[i]
+		// Bits 2-3 are the slot's own index and go on whether or not the link
+		// resolved: the record is self-describing [06 R-WPN-05 §3]. Bits 5-7
+		// keep whatever the record held; the initializer preserves them.
+		s.Flags = (s.Flags &^ (SlotFlagAimLatch | SlotFlagEnabled | SlotFlagIndexMask | SlotFlagAutonomous)) |
+			(uint8(i)<<SlotFlagIndexShift)&SlotFlagIndexMask
+		if content.IsWeaponInactive(defs[i]) {
+			continue
+		}
+		s.Weapon = defs[i]
+		s.Flags |= SlotFlagEnabled | SlotFlagAutonomous
 	}
 }
 

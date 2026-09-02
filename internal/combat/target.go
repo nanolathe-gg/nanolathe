@@ -223,11 +223,14 @@ type Acquisition struct {
 	// WaterAdmit is the water branch's two candidate depth/type predicates.
 	// Water weapons skip height test and instead apply two candidate depth and
 	// type predicates via bands (wy/wt/wl/mb) per [04 §9.1] P0-10 P0-11.
-	// TODO(question): the water branch is selected off one bit of the weapon
-	// definition's flag word, and whether that bit is `noautorange` or
-	// `waterweapon` is not proved — the gate keeps a neutral name until it is.
-	// Decider: static trace of the flag word's writer against [02 R-KEYS-01]'s
-	// authored-key mapping. P0-10/P0-11.
+	// The selecting bit is settled [06 R-WPN-05 §7]: BOTH admission gates —
+	// this acquisition-time one and the shot-time one of [06 §3.3] — branch on
+	// bit 16 of the weapon definition's flag word, the bit the parser writes
+	// for the authored key `waterweapon` [02 R-KEYS-01]. `noautorange` (bit 27)
+	// is read only by the expiry rule [06 §6.3][06 §7.3] and plays no part in
+	// admission. The candidate-side tests inside the branch read the UNIT
+	// definition's capability word A: `floater` (bit 19) and `canhover`
+	// (bit 12) [04 R-SPEC-01 §0].
 	WaterAdmit func(c Candidate) bool
 
 	// ToAir requests the to-air target-status class [06 §3.1] P0-10: only candidates
@@ -250,13 +253,22 @@ type Acquisition struct {
 
 	RNG *rng.Simulation
 
-	// Secondary candidates for radar-like list consulted only when primary filtered empty && upgrade !=0 [06 §3.1] P0-11.
-	// TODO(question): the targeting-upgrade aggregate is read off the unit
-	// definition's second capability word (word B of [04 R-SPEC-01 §0]), but
-	// which bit of it is not proved; the aggregate keeps a neutral name.
-	// Decider: static trace of that word's writer against [02 R-KEYS-01]. P0-11.
-	Secondary  []Candidate
-	HasUpgrade bool // targetingUpgradeAggregate != 0 [06 §3.1] P0-11; see the marker above
+	// Secondary candidates for the radar-like list, consulted only when the
+	// primary list filtered empty and the upgrade aggregate is nonzero
+	// [06 §3.1].
+	//
+	// The gate's bit is settled [06 R-WPN-05 §7]: word **A** bit 10 of the
+	// unit definition's two capability words [04 R-SPEC-01 §0], the storage of
+	// `istargetingupgrade` (content.UnitDef.IsTargetingUpgrade). Word B is not
+	// consulted; the marker that stood here named word B and was wrong.
+	Secondary []Candidate
+	// TODO(question): which definitions the aggregate sums — the shooter's own
+	// or every unit the scanning player owns — is not established, so nothing
+	// in production writes this yet and the secondary list is never consulted.
+	// [06 §3.1] names the aggregate without saying who contributes to it.
+	// Decider: a trace of the registry's own accumulator. The BIT is no longer
+	// the open part.
+	HasUpgrade bool
 }
 
 // directlyVisible is the primary list's direct-visibility predicate

@@ -72,7 +72,7 @@ func newGuardLegsFixture(t *testing.T) *guardLegsFixture {
 // part 3] establishes means "this slot belongs to autonomous acquisition".
 func armSlotAutonomous(u *units.Unit, idx int, w *content.WeaponDef) {
 	u.InstallWeapon(idx, w)
-	u.Slots[idx].OrderControl |= units.OrderControlInhibit
+	u.Slots[idx].Flags |= units.SlotFlagAutonomous
 }
 
 func (f *guardLegsFixture) queueNames() []string {
@@ -260,12 +260,12 @@ func TestGuardSlotRetargetRebindConditions(t *testing.T) {
 	// left alone whatever its target, because it does not belong to autonomous
 	// acquisition [04 R-UNIT-06 §5 part 3]. This is the term WU-19-35 skipped.
 	f.guard.Slots[1].Target = held
-	f.guard.Slots[1].OrderControl &^= units.OrderControlInhibit
+	f.guard.Slots[1].Flags &^= units.SlotFlagAutonomous
 	guardHandler(f.guard, n, 0, 100)
 	if f.guard.Slots[1].Target != held {
 		t.Fatalf("a slot held by an order must be skipped, got %+v", f.guard.Slots[1].Target)
 	}
-	f.guard.Slots[1].OrderControl |= units.OrderControlInhibit
+	f.guard.Slots[1].Flags |= units.SlotFlagAutonomous
 
 	// The per-slot bad-target array is the third rebind condition.
 	f.guard.Slots[0].Target = held

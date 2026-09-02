@@ -3284,6 +3284,14 @@ three translated strings are drawn onto it: `Game Time:` as `hh:mm:ss`,
 when the requested speed differs from the active speed and the localized
 normal-speed word at value 10.
 
+**Text placement (Established, 2026-09-02 — [R-HUD-04 §4]).** "y" above is
+the composer surface rectangle's **bottom** edge and the offset runs `−31..0`
+(the strip rises out of the bottom edge; at `0` it is off screen and not
+drawn). With `x` the rectangle's left edge, the three strings are written on
+one line at `yBottom + offset + 10`: `Game Time:` at `x + 25`, `Total Units:`
+at `x + 190`, `Game Speed:` at `x + 380`, through the panel text writer with
+the default font and light-table row 0.
+
 **Frame composition passes.** The master battle frame runs ten ordered layer
 passes: terrain tiles → features/wrecks → soft units → hard units → shadows
 → selection brackets/health → projectiles → explosions → UI gadgets → squad
@@ -3501,6 +3509,13 @@ mutually exclusive uses, decided after the caption:
 This closes the "which pair is primary" question: `UNITNAME`/`DAMAGEBAR` are
 always the hovered unit; the `2` pair is its stockpile or its order target.
 
+**Closure (2026-09-02) — which entry the logo frame belongs to.** The GAF
+handle the `LOGO2` draw indexes by the owner's lobby colour byte is the entry
+named `32xlogos` of `textures/logos.gaf`, bound during battle-data
+initialization; the score panel of [R-HUD-04 §1] reads the same handle. Rule:
+`frame = logos.gaf["32xlogos"].Frames[lobbyColour]`. **Established.**
+[R-HUD-04 §4]
+
 ### Closed — feature and build-card readouts: `NAME` and `DESCRIPTION` [R-HUD-03 §3] (2026-08-29)
 
 **Established — feature hover.** With no hovered unit and a hovered feature,
@@ -3706,6 +3721,26 @@ gadget's attribute bit `0x100` is set) and the rectangle is darkened by 20
 palette steps afterwards. So a stance button's art is authored as
 `status + stage` for the live frames and `status + stage + 2` for the greyed
 frames; the painter never reads the label for a staged button.
+
+**Correction and closure (2026-09-02 — [R-HUD-04 §4]).** (a) The
+`TODO(question)` above is closed: the writer that puts a builder on its first
+build page is **unit creation**. The unit initializer seeds the status word
+with page field `1` and the paged bit set (bits 22–23 both set) for every
+definition whose page-count byte is `2` or more, and leaves the field and the
+bit clear otherwise. The `BUILD` and `ORDERS` clicks only set or clear the
+paged bit through [R-P0-11 §1]'s deferred bits; no click writes the field,
+and the only field writers are the `.`/`,` keys, the `NEXT`/`PREV` gadgets and
+the digit keys in the table above. So a `BUILD` click always re-shows the
+remembered page, which is `1` until the unit pages, and "the paged bit set
+over a zero field" is unreachable for a builder that has pages. (b) The
+painter paragraph above — "not greyed → `status + stage` … greyed →
+`status + min(stage + 2, frames − 1)`" — is superseded by [R-WGT-01 §3]: the
+authored `status` is the **down-state word**, the frame base comes from art
+resolution, and the greyed frame is `base + min(downState + 2, frames − 1)`.
+"Darkened by 20 palette steps" is the rectangle shader of [03 R-COMP-02 §5]
+called at level `−20`: PALETTE.SHD **darken row 12** (`−20 + 32`) applied to
+the gadget rectangle after the frame blit, skipped when the button carries
+attribute `0x80`. **Established.**
 
 ### Closed — the `damagebars` option is the "label every unit" bit [R-HUD-03 §7] (2026-08-29)
 
@@ -6575,6 +6610,152 @@ frame does not close the viewport-larger-than-map domain, it only moves the
 degenerate condition from `viewSize > mapSize` to `viewportSpan > mapSize`,
 which is the same condition correctly transposed.
 
+### Closed — the battle-screen marker cluster: reset origin, saved-camera load, the start jump, the key-token producer, `n`/`N`, F3's two bits, F4's flash, and the minimap click paths [R-CAM-01 §14] (2026-09-02)
+
+Static trace of the frame handler, the world-click handler, the key
+translator and the camera writers (RWU-19-21). The pump question dispatched
+with this unit is [04 R-ORD-01 §10]; the HUD items are [R-HUD-04 §4].
+
+**Established — the camera-block reset leaves both origins at (0, 0).** The
+reset the world rebuild runs ([08 R-ENTRY-01 §3] step 12) zeroes
+twenty-three consecutive 32-bit words of the camera block and writes the
+scroll-setting byte back. The block spans the tracked-object and
+followed-projectile references, the four bookmark origins with their valid
+bytes, the **current origin**, the **desired origin**, and the hold count
+with its anchor — so after the reset `current = desired = (0, 0)`. The
+camera-flags byte (view-dirty bit 1) and the render-flags word lie outside
+the block. §10's list ("tracked object, follow target, bookmarks and hold
+state") was incomplete: add the current and desired origins. A campaign
+without a start-position special therefore keeps `(0, 0)` as both origins
+([08 "Campaign camera"]).
+
+**Established — a saved-camera load is a jump; the "state bits" are two.**
+The load reads `X Position` / `Z Position` of the `Camera` account with the
+current origin as each default, writes them to the current origin, sets the
+view-dirty bit, clamps, copies current to desired, and clears the terrain
+cache-valid bit. No glide is set up: desired equals current after a load.
+The two bits every camera writer touches are the camera-flags byte's bit 1
+(view-dirty — the composer redraws the view) and the render-flags word's bit
+3 (terrain view cache valid — its only reader is the terrain view builder,
+which rebuilds its per-view cache when the bit is clear and then sets it;
+every camera writer clears it). Neither is authored or saved; a
+reimplementation that rebuilds the view every frame needs nothing beyond
+`desired := current`.
+
+**Established — the battle-start jump has no height shear.** Both
+battle-start writers (the skirmish spawn and the world-rebuild tail) call
+the jump with `x = stampX − trunc(viewWidth / 2)`,
+`z = stampZ − trunc(viewHeight / 2)`, where `stampX`/`stampZ` are the
+whole-pixel halves of the commander stamp's 16.16 X and Z; the Y word is not
+read. The `(z − y/2)` shear of §12 belongs to the unit-position glide
+conversion only. For a watcher slot (the player-record bit §2 names for the
+watching player) the world-rebuild tail instead jumps to
+`(trunc(viewWidth / 2), trunc(viewHeight / 2))` and clears render-flags bits
+0 and 1 — the mapping and LOS masks ([03 R-MM-01 §3]) — so a watcher's view is
+unmasked from its first frame.
+
+**Established — the key-token producer, and why Shift+digit never recalls
+a group.** The window procedure feeds the key ring from three messages. A
+*character* message pushes the translated character verbatim: Escape is
+`0x1B`, `1` is `0x31`, Shift+1 is `!` (`0x21`) on the US layout the retail
+install assumes, `n` is `0x6E`, `N` is `0x4E`. A *key-down* message goes
+through the translator: with Ctrl held (asynchronous key state) a letter
+pushes `0xAA + (letter − 'A')`, a digit `0xC4 + digit`, F1..F12
+`0xCE..0xD9`; without Ctrl an ordinary key pushes **nothing** from the
+key-down message (its character message carries it), while F1..F12 push
+`0xE2..0xED`, Home/End/Page/arrow keys `0xF0..0xF7`, Insert/Delete
+`0xEE`/`0xEF` and Pause `0xF8` regardless of Ctrl. A *system key-down*
+message (Alt held) pushes a letter as its lowercase character and a digit as
+the **raw virtual-key value `0x31..0x39`** — the same token as the
+unshifted digit character; Alt produces no character message, so Alt+digit
+is exactly one token. Consequences:
+
+1. The digit case of §2 is reached by an unshifted digit character or by
+   Alt+digit. The Shift argument it passes to group recall is live only for
+   **Shift+Alt+digit**. Under the default `SwitchAlt = 0` (§4: Alt+digit
+   recalls) additive recall is therefore Shift+Alt+digit. With
+   `SwitchAlt = 1` a plain digit recalls, but Shift+digit yields the shifted
+   character instead — `!` `#` `*` toggle the label bit, the other six
+   shifted digits have no case — so additive recall is unreachable from the
+   keyboard in that setting.
+2. `!` `#` `*` are ordinary reachable tokens (Shift+1, Shift+3, Shift+8);
+   the label toggle is the only thing they do, and the two rules the digit
+   row seemed to contradict never meet.
+3. `N` (`0x4E`) has no case: Shift+n does nothing at the dispatcher. A
+   stockpile round is enqueued only by the palette's `MAKENUKE`/`MAKEANTI`
+   gadgets ([07 §6]).
+
+The character values are those of the US layout; on another layout the
+character message decides the token — *Supported inference* for non-US
+keyboards.
+
+**Established — F3's leading clear is a different bit from the visited
+bit.** Each message-ring record carries a flag byte. The F3 case first
+clears **bit `0x20`** of every record, then scans from the display index
+toward the producer index (wrapping at 30 — oldest displayed message first)
+for a record whose source unit id is non-zero, whose **bit `0x10`** is
+clear, and whose unit is alive; on a hit it sets both bits (`|= 0x30`) and
+glides to the unit's map-pixel X/Z minus half the viewport (no shear). If
+the scan finds nothing it clears bit `0x10` on every record and scans once
+more. §2's row read the two writes as the same bit; they are not, so "not
+yet visited" is a real test and the retry runs once every live-source
+message has been visited. Bit `0x20` marks the record most recently jumped
+to; its reader is not traced here (**Unknown** — a composer highlight is the
+natural candidate; decider: the readers of that bit).
+
+**Established — F4 pins the score panel open and arms the kill/loss
+flash.** Interface-flags bit `0x80` has exactly two readers: the score
+panel's showing test ([R-HUD-04 §1] — the panel shows while the bit is set
+as if Space were held), and the kill-credit finalize, which sets the
+crediting slot's kill flash and the victim slot's loss flash to 30 **only
+while the bit is set**. With F4 on, every kill draws the killer's Kills
+number and the victim's Losses number bright, fading to row 0 over half a
+second on the pinned panel; with F4 off the flash arrays are never armed
+and Space shows a panel with steady numbers. The bit's user-facing name
+remains **Unknown** — no string in the image names it.
+
+**Established — the world-click handler is region-agnostic, and its branch
+order.** Under `Interface Type 0` the frame handler routes a left-down to
+the world-click handler whenever the armed-order latch is not idle, whatever
+the region. With the latch idle, a left-down over the **minimap** (region
+bit 0) goes to the handler at once — no box drag starts on the minimap —
+while over the view it starts a box drag whose release counts as a click
+when it arrives within 25 scaled-timer units of the press and moved under
+32 pixels on both axes. (Under `Interface Type 1` an idle-latch left-down
+over the minimap sets the minimap latch of §11 instead.) The handler then
+tests, in this order:
+
+1. **Latch `MOBILEBUILD`.** If the pointer-flags byte's **site-valid bit
+   (bit 6)** is clear → `notoktobuild` cue, nothing else. If set → issue
+   the build: for every selected own unit whose definition has the builder
+   bit, resolve `MOBILEBUILD` (`VTOL_MOBILEBUILD` for a flyer) against the
+   armed product and the pointer's world point snapped to the product's
+   footprint grid, queued when Shift is held; `oktobuild` cue; Shift keeps
+   the latch (sticky bit), otherwise the latch returns to idle. The
+   site-valid bit has **one** writer — the in-view placement preview, which
+   the frame handler runs only when region bit 1 (view) is set and the latch
+   is `MOBILEBUILD` — and is cleared by the world rebuild. Over the minimap
+   the preview does not run, so the bit holds the verdict of the last
+   in-view hover: a minimap click while placement is armed **sites the
+   building at the minimap-resolved world point** if the last view position
+   was valid, and plays `notoktobuild` if it was not. This bit is also the
+   "special latch flag" that picks the drag-box colour in §9.
+2. **Cursor kind `0x0F`** — the resolver's "select" answer: latch idle and
+   the hovered unit is an own selectable unit (own slot, selectable bit,
+   remaining-build fraction `0.0`, post-capture grace zero, carrier null or
+   itself a visible carrier) → the select branch. With Shift: toggle the
+   unit's selected bit, acknowledge if it is now selected, clear the current
+   build-menu unit, mark the HUD dirty, done. Without: clear the selected
+   and both visited bits on every unit, run the selection refresh, mark
+   every on-screen own unit visited, set the unit's selected bit,
+   acknowledge, mark the HUD dirty. The hovered unit over the minimap is the
+   blip-dot winner within squared distance 4 ([R-HUD-03 §1]), so **clicking
+   a blip selects that unit**.
+3. **Cursor kind below `0x11`** → issue the resolved order (the latch code,
+   or the contextual code with the latch idle) for the selection at the
+   pointer's world point; Shift keeps the latch as in 1.
+4. Otherwise, under `Interface Type 1` with the latch idle → deselect all.
+
 ### Supported inference
 
 Camera and minimap conversion should remain an explicit compatibility
@@ -6929,6 +7110,14 @@ Battle entry zeroes both arrays.
 therefore whatever the entry path wrote — decider: the per-player reset row
 of [08 R-ENTRY-01 §2] (static trace).
 
+**Correction (2026-09-02).** "the kill-record finalize … sets the crediting
+slot's kill flash and the victim slot's loss flash to **30**" holds **only
+while the F4 interface bit is set**; with it clear the finalize skips the arm
+and both arrays stay zero, so a Space-held panel shows steady numbers. The
+flash is the F4 bit's second visible effect ([R-CAM-01 §14]). The side-logo
+GAF entry is `32xlogos` of `textures/logos.gaf` ([R-HUD-04 §4]).
+**Established.**
+
 ### The in-battle options window unfold [R-HUD-04 §2]
 
 **Established.** Opening the options root in battle (`PREFS.GUI`,
@@ -7011,6 +7200,38 @@ the window redraw word is set. The status word is the button's authored
 every button of the order palette's radio group to its up frame. The
 group-reset helper takes any gadget index and is shared with the other
 latch writers.
+
+### Closed — HUD marker closures: the logo entry, the slide strip's text offsets, the greyed-button darken row, the first-page seed, and the F4 flash gate [R-HUD-04 §4] (2026-09-02)
+
+Static trace (RWU-19-21); each item is also recorded inline at the section
+it completes or corrects.
+
+* **Side logo (Established).** Both logo draws — the footer's `LOGO2`
+  ([R-HUD-03 §2]) and the score panel's row logo (§1) — read one GAF handle:
+  entry `32xlogos` of `textures/logos.gaf`, bound during battle-data
+  initialization; the frame index is the owner's lobby colour byte. Rule:
+  `frame = logos.gaf["32xlogos"].Frames[lobbyColour]`.
+* **Slide strip text (Established).** [07 §6]'s strip: with `x` the composer
+  surface rectangle's left edge, `yBottom` its bottom edge and `off` the
+  slide offset (`−31..0`, drawn only while non-zero), the strip art is
+  blitted at `(x, yBottom + off)` and the three strings on one line at
+  `yBottom + off + 10`: `Game Time:` at `x + 25`, `Total Units:` at
+  `x + 190`, `Game Speed:` at `x + 380`; default font, light-table row 0.
+* **Greyed art buttons (Established).** After the frame blit the gadget
+  rectangle goes through the rectangle shader ([03 R-COMP-02 §5]) at level
+  `−20` — darken row `12` — unless the button carries attribute `0x80`.
+  Frame choice is [R-WGT-01 §3]; the authored `status` is the down-state
+  word, not a frame base.
+* **First build page (Established).** Unit creation seeds page field `1`
+  with the paged bit set when the definition's page-count byte is `≥ 2`,
+  else clears both; no click writes the field ([R-HUD-03 §6]).
+* **F4 (Established).** The kill/loss flash arms only while interface-flags
+  bit `0x80` is set (§1, [R-CAM-01 §14]).
+
+`campaignside = ALL` needs no retail contract beyond [R-FE-01 §4]: the side a
+campaign battle uses when the campaign names none is the local player's side
+record, written from the registry `side` word before the campaign was chosen;
+carrying that word into battle entry is plumbing, not an open question.
 
 ## R-WGT-02 — the bitmap cache, window-record words, gadget appenders and small gadget contracts (2026-08-29)
 

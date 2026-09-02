@@ -13,14 +13,14 @@ func TestOrderWeaponPointFlowsThroughProjectileSpawner(t *testing.T) {
 	weapon := &content.WeaponDef{ID: 7, LineOfSight: true, WaterWeapon: true, Range: 100, Tolerance: wideDriftTolerance}
 	w, terrain, u, _ := newTestWorldAndUnits(t)
 	u.InstallWeapon(0, weapon)
-	u.SlotAt(0).OrderControl |= orderControlInhibit
+	u.SlotAt(0).Flags |= units.SlotFlagAutonomous
 	u.SlotAt(0).Target = units.Target{Kind: units.TargetUnit, Unit: 9}
-	if !ReleaseWeaponSlot(u, 0) || u.SlotAt(0).OrderControl&orderControlInhibit != 0 || u.SlotAt(0).Target.Kind != units.TargetNone {
+	if !ReleaseWeaponSlot(u, 0) || u.SlotAt(0).Flags&units.SlotFlagAutonomous != 0 || u.SlotAt(0).Target.Kind != units.TargetNone {
 		t.Fatalf("release did not clear the represented latch and target: %+v", u.SlotAt(0))
 	}
-	u.SlotAt(0).OrderControl &^= orderControlInhibit
+	u.SlotAt(0).Flags &^= units.SlotFlagAutonomous
 	u.SlotAt(0).Target = units.Target{Kind: units.TargetUnit, Unit: 9}
-	if !InhibitWeaponSlot(u, 0) || u.SlotAt(0).OrderControl&orderControlInhibit == 0 || u.SlotAt(0).Target.Kind != units.TargetNone {
+	if !InhibitWeaponSlot(u, 0) || u.SlotAt(0).Flags&units.SlotFlagAutonomous == 0 || u.SlotAt(0).Target.Kind != units.TargetNone {
 		t.Fatalf("inhibit did not set the represented latch and clear target: %+v", u.SlotAt(0))
 	}
 	// Point fire is an explicit order after the stop latch; release the slot
@@ -77,7 +77,7 @@ func TestControlByteBitFourDoesNotGateFiring(t *testing.T) {
 	if !FireWeaponPoint(u, 0, numeric.FixedFromInt(12), numeric.FixedFromInt(4), 9) {
 		t.Fatal("order point fire was not accepted")
 	}
-	u.SlotAt(0).OrderControl |= orderControlInhibit
+	u.SlotAt(0).Flags |= units.SlotFlagAutonomous
 
 	var svc Service
 	sim := rng.NewSimulation(1)
@@ -85,7 +85,7 @@ func TestControlByteBitFourDoesNotGateFiring(t *testing.T) {
 	if sum.Fired != 1 || svc.Count() != 1 {
 		t.Fatalf("slot carrying control-byte bit 4 fired=%d count=%d, want the ordinary shot [06 §1.2][06 §3.3]", sum.Fired, svc.Count())
 	}
-	if u.SlotAt(0).OrderControl&orderControlInhibit == 0 {
+	if u.SlotAt(0).Flags&units.SlotFlagAutonomous == 0 {
 		t.Fatal("the weapon visit must not write the order control byte [04 R-ORD-01 §1]")
 	}
 }

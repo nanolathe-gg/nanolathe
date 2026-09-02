@@ -83,10 +83,12 @@ func RetailUnitBase(u *Unit, data []byte) error {
 		s.DesiredYaw = binary.LittleEndian.Uint16(data[off+0x12:])
 		s.DesiredPitch = binary.LittleEndian.Uint16(data[off+0x14:])
 		s.Ammo = int32(data[off+0x16])
-		// Bit 4 of the persisted byte is the control byte's autonomy bit, not a
-		// Flags bit [04 R-UNIT-06 §5 part 3]; the other four stay on Flags.
-		s.Flags = (s.Flags &^ 0x1f) | (data[off+0x17] & 0x0f)
-		s.OrderControl = (s.OrderControl &^ OrderControlInhibit) | (data[off+0x17] & OrderControlInhibit)
+		// The persisted byte restores the whole control byte, bits 0-4 — aim
+		// latch, enabled, the slot's index, autonomy — over one field
+		// [08 R-SAVE-WEAPON-01] [06 R-WPN-05 §3]. Save load is the only thing
+		// that can change the enabled bit after construction. Bits 5-7 are
+		// inert and the reader discards them, as the writer does.
+		s.Flags = (s.Flags &^ SlotFlagPersisted) | (data[off+0x17] & SlotFlagPersisted)
 		s.SavedTargetLow = binary.LittleEndian.Uint16(data[off:])
 		s.SavedTargetHigh = binary.LittleEndian.Uint16(data[off+2:])
 		s.SavedActiveByte = data[off+0x08]

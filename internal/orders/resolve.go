@@ -1349,7 +1349,7 @@ func guardRetargetSlots(u *units.Unit, wardTarget *units.Unit) {
 		if s == nil || !slotEnabled(s) {
 			continue // the slot-enabled bit [04 R-ORD-01 §7]
 		}
-		if s.OrderControl&units.OrderControlInhibit == 0 {
+		if s.Flags&units.SlotFlagAutonomous == 0 {
 			continue // the slot is held by an order, not autonomous [04 R-UNIT-06 §5]
 		}
 		if s.Weapon.CommandFire {

@@ -21,11 +21,11 @@ func gateFixture() (*Queue, *units.Unit) {
 		Y:      numeric.Fixed(40 << 16),
 		Z:      numeric.Fixed(90 << 16),
 	}
-	// The three slots carry a resolved weapon, which is this build's form of
-	// the control byte's "slot is enabled" bit — the guard release and inhibit
-	// both require [04 R-ORD-01 §7].
+	// The three slots go through the initializer, which is what writes the
+	// control byte's "slot is enabled" bit that release and inhibit both
+	// require [04 R-ORD-01 §7] [06 R-WPN-05 §3].
 	for idx := 0; idx < units.NumSlots; idx++ {
-		u.SlotAt(idx).Weapon = &content.WeaponDef{Range: 180}
+		u.InstallWeapon(idx, &content.WeaponDef{Range: 180})
 	}
 	q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	BindQueue(u, q)

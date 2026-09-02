@@ -105,7 +105,7 @@ func TestStopClearsEveryWeaponSlotTarget(t *testing.T) {
 	q, u := stopFixture(false, 1)
 	u.Slots[0].Target = units.Target{Kind: units.TargetUnit, Unit: 7}
 	u.Slots[1].Target = units.Target{Kind: units.TargetUnit, Unit: 8}
-	u.Slots[1].OrderControl |= slotOrderInhibit // already latched: the guarded form would skip it
+	u.Slots[1].Flags |= slotOrderInhibit // already latched: the guarded form would skip it
 	u.Slots[2].Target = units.Target{Kind: units.TargetGround, X: 1 << 16, Z: 2 << 16}
 	q.Push(Lookup("Stop"), Node{Owner: u.Handle})
 	clearGates(q)

@@ -93,15 +93,16 @@ func eachSlot(u *units.Unit, k int, visit func(idx int)) {
 // slotEnabled is the control byte's bit 1, "slot assigned" [R-ORDER-02 §2], as
 // [04 R-ORD-01 §7] renames it: the *slot is enabled* bit. It is the same bit
 // the command resolver reads as "my slot 1 is enabled" in its code-3
-// water-weapon rejects [R-ORD-02 §1], and it is set for exactly the slots whose
-// weapon link resolved. This build carries that condition on the resolved
-// definition pointer itself, so IsPopulated is the same predicate.
+// water-weapon rejects [R-ORD-02 §1].
 //
-// TODO(question): [04 R-ORD-01 §7] traces the readers of bit 1 but not a
-// runtime writer, so whether anything ever *disables* an enabled slot after
-// load — which would separate this bit from "has a resolved weapon" — is
-// unknown. A writer census on the control byte's bit 1 would settle it.
-func slotEnabled(s *units.Slot) bool { return s.IsPopulated() }
+// Its writer is settled [06 R-WPN-05 §3]: the weapon-slot initializer unit
+// construction runs, and nothing else, so a slot is never disabled during play
+// and the bit stands for exactly "the weapon link resolved". Save load restores
+// it wholesale, which is the one path that can part it from the resolved
+// pointer — so the byte, not the pointer, is what this reads. That closes
+// [04 R-ORD-01 §7]'s "no runtime writer of bit 1 was found ... whether a slot
+// can be disabled after load is open".
+func slotEnabled(s *units.Slot) bool { return s.IsEnabled() }
 
 // releaseSlot is "*release slot k*: clears that bit and clears the target"
 // [04 R-ORD-01 §1], under the guard [04 R-ORD-01 §7] recovers: the slot's
@@ -118,10 +119,10 @@ func slotEnabled(s *units.Slot) bool { return s.IsPopulated() }
 func releaseSlot(u *units.Unit, k int) {
 	eachSlot(u, k, func(idx int) {
 		s := u.SlotAt(idx)
-		if s == nil || !slotEnabled(s) || s.OrderControl&units.OrderControlInhibit == 0 {
+		if s == nil || !slotEnabled(s) || s.Flags&units.SlotFlagAutonomous == 0 {
 			return
 		}
-		s.OrderControl &^= units.OrderControlInhibit
+		s.Flags &^= units.SlotFlagAutonomous
 		clearSlotTarget(u, idx)
 	})
 }
@@ -134,10 +135,10 @@ func releaseSlot(u *units.Unit, k int) {
 func inhibitSlot(u *units.Unit, k int) {
 	eachSlot(u, k, func(idx int) {
 		s := u.SlotAt(idx)
-		if s == nil || !slotEnabled(s) || s.OrderControl&units.OrderControlInhibit != 0 {
+		if s == nil || !slotEnabled(s) || s.Flags&units.SlotFlagAutonomous != 0 {
 			return
 		}
-		s.OrderControl |= units.OrderControlInhibit
+		s.Flags |= units.SlotFlagAutonomous
 		clearSlotTarget(u, idx)
 	})
 }
@@ -167,11 +168,23 @@ func defaultAttackSlot(u *units.Unit) int {
 // units.TargetUnit kind, which is what "read slot k target yields the unit only
 // while the companion carries the unit marker and the id is nonzero" tests.
 func bindSlotToUnit(u *units.Unit, k int, target pool.Handle) {
+	clearSlotSetterBits(u)
 	eachSlot(u, k, func(idx int) {
 		if s := u.SlotAt(idx); s != nil {
 			s.Target = units.Target{Kind: units.TargetUnit, Unit: target}
 		}
 	})
+}
+
+// clearSlotSetterBits is the half of both slot target setters that touches the
+// owner rather than the slot: they clear bits 10-14 of the order-event word
+// [04 R-ORD-01 §7] [06 R-WPN-05 §6]. Binding a new target therefore discards a
+// stale "could not fire" (0x1000), which is what stops a disengage raised
+// against the previous target from completing the order that just replaced it.
+func clearSlotSetterBits(u *units.Unit) {
+	if u != nil {
+		u.Pending &^= units.PendingSlotSetterClear
+	}
 }
 
 // bindSlotToPosition is "*bind slot k to position*: stores the whole-unit X and
@@ -184,6 +197,7 @@ func bindSlotToPosition(u *units.Unit, k int, x, z numeric.Fixed) {
 	if wz == -32768 {
 		wz = -32767 // cannot read as the empty companion sentinel [04 R-ORD-01 §1]
 	}
+	clearSlotSetterBits(u)
 	eachSlot(u, k, func(idx int) {
 		if s := u.SlotAt(idx); s != nil {
 			s.Target = units.Target{
@@ -399,6 +413,13 @@ func leashBroken(u *units.Unit, n *Node) bool {
 // (corrected 2026-09-02, [04 R-ORD-01 §3]): `0x800` completes the order here
 // exactly as it does in `Attack_Chase`'s first pre-check, so of the four bits
 // the gate waits on, only `0x1000` ever reaches phase 2.
+//
+// `0x1000` is the "could not fire" bit [06 R-WPN-05 §6]: the weapon layer
+// raises it when a shot-time gate fails or a turret's aim geometry yields no
+// solution, and the pump hands it to the first record whose gate names it.
+// Phase 2 is this handler's DISENGAGE arm — "my weapon tried and could not" —
+// and it is the only place in the build that consumes the bit. The weapon
+// layer never reads it back, so it gates no firing decision.
 func attackNoMoveHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code {
 	if n.Target == 0 || satisfied&(pendTargetGone|pendDisengage) != 0 {
 		return Code(5) // *complete* [04 R-ORD-01 §3]

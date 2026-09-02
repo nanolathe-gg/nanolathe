@@ -579,6 +579,23 @@ the pump — and an arrival bit set during a unit's movement integration is
 observed by that unit's NEXT pump visit, not the current one (one-tick
 latency; sections 1.1, 8.3).
 
+**Correction (2026-09-02) — where the walk resumes.** The text above says
+the pump "walks the queue from the front head … for each record" and, for
+code 3, "and continue"; read against step 3 that left open whether
+"continue" resumes at the same record or at the next one. Neither: after
+every non-returning code the primary pump **reloads the front head** and
+applies steps 1–4 to it. The walk therefore only ever runs the record at
+the head; a record behind it is reached in a pass only when the head is
+unlinked (codes 5, 8, 9-not-last, the above-9 helper), rotated to the tail
+(code 6), or replaced by a handler's head insert ([R-ORD-01 §1]). Code 3
+arms the head's own gate with a future deadline, so the reload finds it
+blocked and the pass ends — "continue" and "stops" agree, and the `TODO`
+in the pump's code-3 arm is closed with the outcome it already produced. A
+code-2 hold has the same shape: every code-2 handler arms a gate or changes
+the head first (a bare code 2 on an ungated head would loop forever), and
+the record visited next is the *new head*, never the next record.
+[R-ORD-01 §10] has the loop in full and the secondary pump's different rule.
+
 ### Correction — the pending word's bits, and who arms them [R-ORD-01 §0] (2026-08-29)
 
 **What the earlier text said.** This section called the record's accumulated
@@ -2576,6 +2593,22 @@ the `BeCarried` alignment. This composition is Established from the two
 traces; the observable pad dwell it predicts is the natural retail
 confirmation and is listed in §8.
 
+**Correction (2026-09-02) — the walk while carried.** "a *hold* (code 2)
+does **not** stop the walk — the next record is visited in the same pass",
+and the latency composition built on it, are wrong: the primary pump reloads
+the **head** after every code ([R-ORD-01 §10]). `BeCarried`'s phase-1 arm
+sets a 10-tick deadline and returns 2 on every visit, so the reload finds the
+head gated and the pass ends there; `GetBuilt` is **never visited while the
+product is carried**. Its first visit is the pass in which `BeCarried`
+completes (carrier null → code 5 → unlink → head reload), and when the
+remaining fraction is already `0.0` on that visit it appends the rally or
+`Park` at once, which the same pass dispatches. The "stands complete on the
+pad until `t0 + 301`" dwell therefore does not occur; `GetBuilt`'s phase
+deadlines count from release, and "phase-2 decay visits every 20 ticks from
+`t0 + 351`" for a carried product is retracted with them. What stands:
+`GetBuilt` is woken only by its own deadline; `BeCarried` expiries fall on
+`t0 + 1 + 10k`; and the release-target paragraph below.
+
 **Correction (2026-08-30).** This paragraph used to close by answering the
 [R-ORD-01 §5] question "what suppresses this decay while a builder is working"
 with "nothing — the nanoframe decays by `11 / buildcostenergy` of its remaining
@@ -3961,6 +3994,54 @@ scan's callers; [R-ORD-01 §4]'s label for it was wrong. The rest of the row
 — rotate on `0xE0`, otherwise the `30 + RNG(30)` re-arm with *hold* (4) —
 re-verifies. `internal/orders/patrol.go`'s successor test is the
 divergence; the engage arm belongs there.
+
+### Closed — the primary pump reloads the head after every code; the secondary skips gated records [R-ORD-01 §10] (2026-09-02)
+
+Static trace of the two per-unit pump loops (RWU-19-21), settling the
+`TODO(question)` on the code-3 arm of §3.3.
+
+**Established — the primary loop, exactly.** With `rec` the front-segment
+head:
+
+```
+loop:
+  if rec is null: (auto-order spawn for an idle mover, §3.4a) return
+  if rec.deadline <= tick: rec.deadline = −1; rec.pending |= 1
+  sat = (rec.pending | unit.pendingWord) & rec.gate
+  if rec.gate != 0 and sat == 0: return          -- §3.3 step 3
+  unit.pendingWord &= ~sat; rec.gate = 0; rec.pending &= ~sat
+  if sat & 0x10000: clear weapon targets of slots 0..2
+  code = handler(owner, rec, sat)
+  apply §3.3's code table (7 and above-9 return)
+  rec = front-segment head                        -- always the HEAD
+```
+
+So "continue walking" in §3.3's table means *reload the head and apply the
+gate test to it*. Consequences: codes 0 and 1 re-run the **same** record
+with its new phase in the same tick (the cascade); code 3 re-gates the head
+so the reload ends the pass (the outcome the pump's `return false` already
+produced); codes 5, 8, 9-not-last and the above-9 helper hand the pass to
+the record that was behind; code 6 hands it to the record behind and the
+rotated record is visited again only when the walk reaches the tail; a
+handler that head-inserts a record ([R-ORD-01 §1]) hands the pass to the
+inserted record — that, and only that, is the sense in which "the next record
+is visited in the same pass". A record behind an ungated head is never
+reached by walking past it. **Nothing** resumes at the *next* record.
+
+**Established — the secondary loop differs on both counts.** The rear
+segment's pump tests `rec.gate == 0 || rec.deadline <= tick` (no satisfied
+set, no pending word — [R-ORD-01 §0]'s bits are never delivered there);
+a record failing that test is **skipped** (`rec = rec.next`) rather than
+stopping the pass, and after a handled record the loop reloads the rear
+head. Its code table is §3.3's secondary column; every unlink there sets the
+tombstone ([R-ORDER-02 §2]) because a rear record is never the front head.
+
+**Established — the invariant a reimplementation must keep.** Every handler
+that returns 2 (hold) or 4 has, before returning, either armed a gate on the
+record (the deadline setter or an event mask) or changed the segment head;
+otherwise the primary loop would never terminate. `BeCarried`'s phase 1 is
+the canonical example: deadline 10, code 2, every visit
+([R-FAC-02 §4]'s correction).
 
 ### Closed — command resolution, exactly [R-ORD-02 §1] (2026-08-29)
 

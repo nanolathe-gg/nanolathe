@@ -269,7 +269,11 @@ func TestFixedForwardGateUsesTheUnitHeading(t *testing.T) {
 	if !ok {
 		t.Fatal("fixture muzzle did not resolve")
 	}
-	bearing := uint16(YawFromDelta(target.X.Sub(muzzle.X), target.Z.Sub(muzzle.Z)))
+	// The heading and the bearing must be compared in ONE convention, and the
+	// heading's is retail's: a yaw `a` faces `(-sin a, -cos a)` [04 R-MOV-01 §4]
+	// [06 R-WPN-05 §4]. This build's solved yaw is half a turn from that, so the
+	// facing that points AT the target is the shifted bearing, not the raw one.
+	bearing := retailYawFromGo(uint16(YawFromDelta(target.X.Sub(muzzle.X), target.Z.Sub(muzzle.Z))))
 	shooter.Move.Heading = bearing + 8192 // a quarter turn off
 	shooter.Move.Pitch = 0
 	var svc Service
@@ -308,7 +312,11 @@ func TestFixedForwardGateWidensWhileMoving(t *testing.T) {
 	if !ok {
 		t.Fatal("fixture muzzle did not resolve")
 	}
-	bearing := uint16(YawFromDelta(target.X.Sub(muzzle.X), target.Z.Sub(muzzle.Z)))
+	// The heading and the bearing must be compared in ONE convention, and the
+	// heading's is retail's: a yaw `a` faces `(-sin a, -cos a)` [04 R-MOV-01 §4]
+	// [06 R-WPN-05 §4]. This build's solved yaw is half a turn from that, so the
+	// facing that points AT the target is the shifted bearing, not the raw one.
+	bearing := retailYawFromGo(uint16(YawFromDelta(target.X.Sub(muzzle.X), target.Z.Sub(muzzle.Z))))
 	// Between the two gates: outside 150, inside 2000.
 	shooter.Move.Heading = bearing + 1000
 	shooter.Move.Pitch = 0

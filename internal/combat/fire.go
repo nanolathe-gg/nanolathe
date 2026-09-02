@@ -290,18 +290,28 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 	// velocity components from the perturbed angles through the fixed-point
 	// helpers rather than nudging them in Cartesian space.
 	//
-	// The ballistic creator consumes the slot's stored yaw and pitch directly
-	// [06 §6.4], so the draw reaches its trajectory by construction.
-	// TODO(question): [06 §6.3] writes the ordinary creator's own arithmetic
-	// as re-deriving yaw and pitch from the muzzle and the aim point, which
-	// does not by itself show how the slot's spread reaches an ordinary shot's
-	// trajectory — yet [06 R-WPN-03 §4] states the effect in firing terms ("a
-	// full-health shooter with accuracy = 0 ... fires exactly on its solved
-	// angles"), which is only true if the draw does steer the shot. The
-	// owning section is followed here and the offset is applied to both
-	// families. Settling it needs a trace of the aim point the turret executor
-	// hands the ordinary creator.
-	if yawSpread != 0 || pitchSpread != 0 {
+	// BALLISTIC ONLY [06 R-WPN-05 §5]. The turret executor hands both creators
+	// the same muzzle point and the same resolved, lead-adjusted target point
+	// it received from the pipeline, and never derives an aim point from the
+	// slot's stored angles. The ballistic creator copies the slot's stored yaw
+	// and pitch into the record [06 §6.4], so the draw reaches its trajectory;
+	// the ordinary creator (`lineofsight` or `selfprop`) recomputes yaw and
+	// pitch from the muzzle and the target point [06 §6.3] and reads the
+	// slot's stored yaw once, for RockUnit's recoil direction alone. So for a
+	// turret weapon of the ordinary family, `accuracy`, the health term and
+	// the kill divisor change the recoil and NOTHING else: the shot leaves
+	// exactly toward the aim point, at full health or near death. Only
+	// `ballistic` turret weapons scatter, and burst clones inherit the root's
+	// velocity, so a burst of an ordinary weapon is unjittered too until its
+	// own spray [06 §4.3].
+	//
+	// This corrects [06 R-WPN-03 §4], whose "shape of the bound" paragraph
+	// states the effect in firing terms ("fires exactly on its solved
+	// angles") and was transcribed here as a nudge to both families. The
+	// draws themselves are unchanged: they are still taken at the same site
+	// for every turret weapon, so the shared simulation stream is untouched
+	// [I4], and the mutation of the slot's stored angles is still retained.
+	if fam == CreationBallistic && (yawSpread != 0 || pitchSpread != 0) {
 		p.Yaw = numeric.Angle(uint16(int32(p.Yaw) + yawSpread))
 		p.Pitch = numeric.Angle(uint16(int32(p.Pitch) + pitchSpread))
 		p.Velocity = VelocityFromAngles(p.Yaw, p.Pitch, p.Speed)
@@ -393,11 +403,10 @@ func recentred(draw uint32, bound int32) int32 {
 // muzzlePos re-runs the piece-to-world conversion for the anchor's own shooter
 // with the record's *stored* firing piece; it makes no COB call [06 §4.3]
 // [R-P0-07]. It reports false when that conversion cannot be made, in which
-// case the anchor keeps the position it already holds.
-// TODO(question): retail anchors always belong to a live shooter — a shooter's
-// death sweeps its anchors dead [06 §4.3] — so retail has no path where the
-// conversion fails. Holding the last position is our fail-safe, not a traced
-// behavior; implementing that death sweep would settle it.
+// case the anchor keeps the position it already holds. Retail reaches no such
+// state: every anchor belongs to a live shooter, because a shooter's death runs
+// SweepBurstAnchorsForShooter below [06 §4.3] [06 §5.2]. The branch stands for
+// fixtures that drive this without a muzzle port at all.
 func (s *Service) AdvanceBursts(tick uint32, simRNG *rng.Simulation, weapons map[int32]*content.WeaponDef, muzzlePos func(shooter pool.Handle, piece int16) (Vec3, bool)) int {
 	if s == nil {
 		return 0
@@ -474,16 +483,12 @@ func (s *Service) AdvanceBursts(tick uint32, simRNG *rng.Simulation, weapons map
 		// Random decay changes the successful clone's expiry [06 §4.3] C8.
 		if randomDecay != 0 && simRNG != nil {
 			// One draw bounded by the authored field, re-centred by half its
-			// bound — the same sampling shape as the spray [06 §4.3].
-			//
-			// TODO(question): [06 §4.3] establishes that random decay adds "a
-			// second RNG-derived timing or velocity perturbation" and that the
-			// draw is consumed on every successful attempt, but not whether it
-			// is re-centred or one-sided, nor whether it lands on the expiry
-			// tick or on the velocity. Timing is chosen because the authored
-			// field is a tick count (randomdecay, *30 truncated
-			// [02 "Weapon record"]). The draw itself is what determinism
-			// depends on and that part is settled.
+			// bound. [06 §4.3] states the whole expression: the CLONE's expiry
+			// becomes `expiry + draw - (randomdecay >> 1)` — a centred expiry
+			// jitter on the clone only, with the halving an unsigned 16-bit
+			// shift. It lands on the expiry tick, not the velocity, and it is
+			// centred, not one-sided; the marker that recorded both as open is
+			// retired. The draw is taken first, before the spray.
 			d := recentred(simRNG.Uint32n(uint32(randomDecay)), randomDecay)
 			if clone.ExpiryTick != 0 {
 				clone.ExpiryTick = uint32(int64(clone.ExpiryTick) + int64(d))
@@ -533,4 +538,64 @@ func (s *Service) AdvanceBursts(tick uint32, simRNG *rng.Simulation, weapons map
 		// At most one emission attempt per phase per projectile [06 §4.3] C8; no catch-up loop.
 	}
 	return clones
+}
+
+// SweepBurstAnchorsForShooter is the unit-death burst-anchor sweep
+// [06 §4.3] [06 §5.2]. It runs from the central death handler, last of the
+// fixed teardown helpers [06 §12.1].
+//
+// A forward scan over the ACTIVE POOL. For every record whose remaining burst
+// count is nonzero and whose shooter reference is the dying unit, it takes the
+// follow-camera snap, sets the dead bit, and runs the compaction pass of
+// [06 §5.2] INSIDE the loop — so the pool is compacted once per anchor found
+// while the same ascending walk continues over the moved records. A unit that
+// dies with two anchors alive therefore compacts twice.
+//
+// Three details of the match and the walk are contract, not tidiness:
+//
+//   - the dead bit is NOT consulted by the match test [06 §5.2], so an anchor
+//     already retired this tick and not yet compacted away still matches and
+//     is re-marked, rather than being skipped;
+//   - this is NOT a general removal of the dying unit's projectiles
+//     [06 §5.2]. Only anchors match — a clone has had its own remaining count
+//     cleared — so pellets already in flight keep flying and still credit
+//     their dead shooter;
+//   - after a match the scan ADVANCES rather than revisiting the record moved
+//     into the vacated slot [06 §5.2]. Two matching anchors that are adjacent
+//     therefore leave the second one alive. [06 §5.2] files whether ordinary
+//     firing can reach that adjacency as a Supported inference; reproducing
+//     the skip costs nothing, and replacing it with a re-visit would not be
+//     free.
+//
+// "Killed" here is the silent retirement of [06 §4.3]: the dead flag set
+// directly with NO removal dispatch — no explosion, no sound, no shake, no end
+// smoke, no damage — and the anchor's still-pending clones simply never come
+// into existence, because the scheduler that would have emitted them is gone
+// before the next projectile phase.
+//
+// The follow-camera snap has no representation in this build: nothing holds a
+// followed-projectile pointer, and the projectile phase's own tail compaction
+// passes nil for the same reason [06 §5.2]. The compaction call here is
+// identical to that one.
+//
+// Returns the number of anchors killed.
+func (s *Service) SweepBurstAnchorsForShooter(shooter pool.Handle) int {
+	if s == nil || shooter == 0 {
+		return 0
+	}
+	killed := 0
+	// s.Count() is re-read every step on purpose: the compaction below shrinks
+	// the active span under the walk, and the walk is defined over the span as
+	// it stands, not over a captured entry count [06 §5.2].
+	for i := 0; i < s.Count(); i++ {
+		p := &s.Records[i]
+		if p.BurstRemaining == 0 || p.Shooter != shooter {
+			continue
+		}
+		s.MarkDead(pool.Handle(i + 1))
+		s.Compact(nil)
+		killed++
+		// No `i--`: the record shifted into the vacated slot is skipped.
+	}
+	return killed
 }

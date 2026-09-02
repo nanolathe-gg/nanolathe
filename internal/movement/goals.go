@@ -25,16 +25,23 @@ const goalPendingMask uint32 = 0x20 | 0x40 | 0x80 | 0x100 | 0x200
 // record — the "goal-handle detach or rebind" producer of the movement
 // families' outcome table.
 //
-// One guard: a NULL owner handle names no controller. Records queued by the
-// mission-script interpreter of [04 §3.6] are constructed without their owner
-// field (`internal/mission/initial_mission.go` builds `orders.Node{}` with only
-// the goal triple), so every such record across every unit collides on the
-// single map entry at handle 0 — a Nanolathe representation artifact, not a
-// mover. Raising `0x80` there would carry the bit BETWEEN UNITS, which is not
-// what §9 describes: measured on AC01 it fired 4,963 times in 740 ticks and
-// retired 4,857 patrol legs that had not moved. The null key is skipped, and
-// the missing owner is a defect for the mission issuer to fix, not something
-// this raise should paper over.
+// One guard: a NULL owner handle names no controller. A record whose owner
+// field was never filled collides with every other such record on the single
+// map entry at handle 0 — a Nanolathe representation artifact, not a mover.
+// Raising `0x80` there would carry the bit BETWEEN UNITS, which is not what §9
+// describes. The null key is skipped, and a missing owner stays a defect for
+// the record's issuer to fix, not something this raise papers over.
+//
+// The producer this guard was written for was the mission-script interpreter of
+// [04 §3.6], which built its records with only a goal triple; WU-19-69 gave
+// them their owners, and on MISSION0 (AC01) that took the interpreter's share
+// of null-key installs from 61 in 740 ticks to zero and separated 23 records
+// across 20 distinct controller keys. The guard stays because one producer
+// still queues ownerless records: `internal/construction`'s rally inheritance
+// copies a factory's queued `QMove`/`QPatrol` records onto a product as
+// `Move_Ground`/`Patrol` without an owner, and `Park`, `GetBuilt` and
+// `BeCarried` are pushed the same way [05 "Rally inheritance"]. Those are
+// movement-goal-installing descriptors, so the null bucket is still reachable.
 func (s *System) raiseEvictedGoalRelease(owner pool.Handle) {
 	if s == nil || owner == 0 {
 		return

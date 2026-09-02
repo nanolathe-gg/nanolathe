@@ -11,56 +11,52 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// orderControlInhibit is the established control-byte bit written by the
-// order release/inhibit helpers. It is deliberately separate from the slot's
-// Flags tracking bit; the source control byte's remaining fields are not yet
-// represented [04 R-ORD-01 §1][R-ORDER-02 §2].
-const orderControlInhibit = units.OrderControlInhibit
-
-// ReleaseWeaponSlot clears the slot's dedicated control-byte latch and target.
-// The semantic name of the underlying control byte remains an open research
-// item. Projectile creation remains in StepWeaponsForUnit's normal unit phase
-// [04 R-ORD-01 §1][R-ORDER-02 §2][06 §3.3].
+// ReleaseWeaponSlot clears the slot control byte's autonomy bit and the slot's
+// target [04 R-ORD-01 §1][04 R-ORD-01 §7]. The byte is one byte, not two
+// [06 R-WPN-05 §3]. Projectile creation remains in StepWeaponsForUnit's normal
+// unit phase [06 §3.3].
 func ReleaseWeaponSlot(u *units.Unit, idx int) bool {
 	s := orderSlot(u, idx)
 	if s == nil {
 		return false
 	}
-	s.OrderControl &^= orderControlInhibit
+	s.Flags &^= units.SlotFlagAutonomous
 	s.Target = units.Target{Kind: units.TargetNone}
 	return true
 }
 
-// InhibitWeaponSlot sets the dedicated control-byte latch and drops the
-// target. Release and inhibit therefore remain distinct writes even though the
-// unit model does not yet expose the source control byte by name
-// [04 R-ORD-01 §1][R-ORDER-02 §2]. TODO(question): trace the omitted control
-// byte and settle its exact assignment/notification stores.
+// InhibitWeaponSlot sets the slot control byte's autonomy bit and drops the
+// target [04 R-ORD-01 §1][04 R-ORD-01 §7]. Release and inhibit write the same
+// bit in opposite directions, and it is the bit the autonomous scan requires
+// [06 R-WPN-05 §3].
 func InhibitWeaponSlot(u *units.Unit, idx int) bool {
 	s := orderSlot(u, idx)
 	if s == nil {
 		return false
 	}
-	s.OrderControl |= orderControlInhibit
+	s.Flags |= units.SlotFlagAutonomous
 	s.Target = units.Target{Kind: units.TargetNone}
 	return true
 }
 
-// SetManualWeaponTarget disables autonomous tracking and, when target is
-// nonzero, installs the target while preserving the asynchronous Aim latch.
-// A zero target is the order-side manual-mode latch without a target.
+// SetManualWeaponTarget installs a target on one slot, when target is nonzero,
+// while preserving the asynchronous Aim latch. A zero target is the order-side
+// manual-mode latch without a target.
+//
+// It does NOT touch the control byte. Bit 4's only writers are the slot
+// initializer and the two order verbs, and bit 1's only writer is the
+// initializer [06 R-WPN-05 §3]; this used to clear 0x10 and set 0x02, which
+// was inert only for as long as the order side kept its own copy of bit 4.
 func SetManualWeaponTarget(u *units.Unit, idx int, target pool.Handle) bool {
 	s := orderSlot(u, idx)
 	if s == nil {
 		return false
 	}
-	s.Flags &^= 0x10 // manual target disables automatic tracking [06 §1.2]
 	if s.Weapon == nil {
 		return true // the three-slot latch walk includes inactive slots
 	}
 	if target != 0 {
 		s.Target = units.Target{Kind: units.TargetUnit, Unit: target}
-		s.Flags |= 0x02
 	}
 	return true
 }
@@ -81,14 +77,12 @@ func FireWeaponPoint(u *units.Unit, idx int, x, z numeric.Fixed, _ uint32) bool 
 	if s == nil || s.Weapon == nil {
 		return false
 	}
-	s.Flags &^= 0x10
 	wx := int32(x.Raw() >> 16)
 	wz := int32(z.Raw() >> 16)
 	if wz == -32768 {
 		wz = -32767
 	}
 	s.Target = units.Target{Kind: units.TargetGround, X: numeric.Fixed(int64(wx) << 16), Z: numeric.Fixed(int64(wz) << 16)}
-	s.Flags |= 0x02
 	return true
 }
 

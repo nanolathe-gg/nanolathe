@@ -992,6 +992,16 @@ func (s *Session) RegisterAll() {
 				ctx := s.missionTriggerContext(s.Clock.GlobalTick)
 				triggers.NotifyAll(s.Mission.Victory, s.Mission.Defeat, ctx, triggers.NotifyUnitDied, u)
 			}
+			// The last of the fixed teardown helpers [06 §12.1]: the
+			// burst-anchor sweep of [06 §4.3] / [06 §5.2]. Every pool record
+			// that is still a burst scheduler owned by the victim is retired
+			// silently and compacted away inside the sweep's own walk, so the
+			// pellets it had not yet emitted never launch. Pellets already in
+			// flight are untouched — the sweep is not a general removal of the
+			// victim's projectiles.
+			if s.Combat != nil {
+				s.Combat.SweepBurstAnchorsForShooter(h)
+			}
 			// The carrier/cargo half of the central death handler, in the
 			// position [06 §12.1] gives it: after the fixed teardown helpers
 			// and before the death explosion and the corpse. It "detaches the

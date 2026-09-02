@@ -447,7 +447,7 @@ type ReactionSeams struct {
 	UnderAttackNotice func(victim *units.Unit)
 }
 
-// The slot autonomy bit is units.OrderControlInhibit. [04 R-UNIT-06 §5 part 3]
+// The slot autonomy bit is units.SlotFlagAutonomous. [04 R-UNIT-06 §5 part 3]
 // answers what this file's `slotTrackingFlag` constant recorded as unknown:
 // [R-ORDER-02 §2]'s "slot control byte" and [08 R-SAVE-WEAPON-01]'s persisted
 // slot-flag byte ARE one byte, whose bit 1 is *slot enabled* and whose bit 4 is
@@ -592,7 +592,7 @@ func (s *Service) offerAttackerToSlots(w *units.World, victim, attacker *units.U
 		// not be handed the attacker, and becomes eligible again the moment the
 		// record destructor returns it. It was skipped while §1 left the bit's
 		// writers open; §5 closes them.
-		if slot.OrderControl&units.OrderControlInhibit == 0 {
+		if slot.Flags&units.SlotFlagAutonomous == 0 {
 			continue
 		}
 		if slot.Weapon.CommandFire {

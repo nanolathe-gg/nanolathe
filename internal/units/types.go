@@ -77,13 +77,14 @@ type Target struct {
 type Slot struct {
 	Weapon *content.WeaponDef // resolved weapon definition [06 §1.2] [P0-10]
 	Reload int32              // signed reload countdown [06 §1.2] [P0-10]
-	Flags  uint8              // 0x02 armed, 0x01 Aim-latch, 0x10 tracking [06 §1.2] [P0-10]
-	// OrderControl is the opaque order-side control byte retained separately
-	// from Flags. Its inhibit latch is written by release/inhibit operations;
-	// the byte's remaining assignment and callback semantics are not yet
-	// represented. TODO(question): add this field to the parity/save codecs when
-	// their weapon-slot state contract is traced [04 R-ORD-01 §1].
-	OrderControl   uint8
+	// Flags is THE slot control byte; see the SlotFlag* constants below.
+	//
+	// Corrected 2026-09-02 [06 R-WPN-05 §3]: this build carried an
+	// `OrderControl` byte beside it, holding the order verbs' bit 4 while
+	// `Flags` held doc 06's "tracking flag". Reading every access to the byte
+	// settles that these are ONE byte, so the pair modelled one retail byte as
+	// two — equivalent only for as long as nothing wrote one without the other.
+	Flags          uint8
 	DesiredYaw     uint16 // commanded yaw [06 §1.2] [P0-10]
 	DesiredPitch   uint16 // commanded pitch [06 §1.2] [P0-10]
 	Ammo           int32  // remaining stockpile [06 §1.2] [P0-10]
@@ -109,11 +110,61 @@ type Slot struct {
 	SavedPayloadWord1 uint32
 }
 
+// The slot control byte, bit by bit [06 R-WPN-05 §3]. One byte, five live
+// bits; the initializer preserves 5-7 and nothing else writes them.
+//
+//	0    Aim-request latch: set by the slot pipeline when it dispatches Aim*;
+//	     cleared on target loss, on no-solution, on drift-gate failure and on
+//	     a successful shot.
+//	1    slot enabled — the slot's weapon definition is active. Its ONE writer
+//	     is the slot initializer that unit construction runs, so a slot is
+//	     never disabled during play; save load restores it wholesale. This
+//	     closes [04 R-ORD-01 §7]'s "no runtime writer of bit 1 was found".
+//	2-3  the slot's own INDEX (0, 1, 2). The record is self-describing, which
+//	     is why the creators and the muzzle queries take a slot pointer alone.
+//	4    autonomy — doc 06's "tracking flag" and [04 R-ORD-01 §7]'s "inhibit
+//	     latch" are the same bit. The initializer SETS it, so every slot
+//	     starts autonomous; thereafter only the two order verbs write it
+//	     (*inhibit slot k* sets it, *release slot k* clears it), and the
+//	     autonomous scan, the retaliation offer, the guards and the
+//	     fire-stance handler read it.
+//
+// Bit 4 is NOT a firing gate. A comment here once said it "is read by the
+// normal combat slot pipeline before acquisition or firing"; the removal
+// cleanup walk sets the bit on every assigned slot on every order-record
+// removal [04 R-ORDER-02 §2] — the purge a player's own non-queued order
+// performs included — so reading it as a *suppression* gate silenced each
+// unit's weapons permanently from its owner's first order.
+const (
+	SlotFlagAimLatch   uint8 = 1 << 0
+	SlotFlagEnabled    uint8 = 1 << 1
+	SlotFlagIndexMask  uint8 = 3 << 2
+	SlotFlagIndexShift uint8 = 2
+	SlotFlagAutonomous uint8 = 1 << 4
+	// SlotFlagPersisted is the span the save writer serializes and the reader
+	// restores; bits 5-7 are discarded on both sides [08 R-SAVE-WEAPON-01].
+	SlotFlagPersisted uint8 = 0x1F
+)
+
 // IsPopulated reports whether the slot has a resolved weapon [06 §1.2] C1.
 func (s *Slot) IsPopulated() bool { return s != nil && s.Weapon != nil }
 
-// IsArmed reports the armed/hasTarget flag 0x02 [06 §1.2] P0-10.
-func (s *Slot) IsArmed() bool { return s != nil && s.Flags&0x02 != 0 }
+// IsEnabled reports the control byte's bit 1 [06 R-WPN-05 §3]. It is set by the
+// slot initializer for exactly the slots whose weapon link resolved, so for a
+// unit built in this process it agrees with IsPopulated; after a save load the
+// byte is authoritative on its own.
+func (s *Slot) IsEnabled() bool { return s != nil && s.Flags&SlotFlagEnabled != 0 }
+
+// SlotIndex reads the slot's own index out of bits 2-3 [06 R-WPN-05 §3].
+func (s *Slot) SlotIndex() int {
+	if s == nil {
+		return 0
+	}
+	return int((s.Flags & SlotFlagIndexMask) >> SlotFlagIndexShift)
+}
+
+// IsAutonomous reports the control byte's bit 4 [06 R-WPN-05 §3].
+func (s *Slot) IsAutonomous() bool { return s != nil && s.Flags&SlotFlagAutonomous != 0 }
 
 // IsAimReady reports whether the slot is aim-ready per [GAP T15] C16 [06 §3.3].
 // Aim-ready is granted only on a nonzero Aim* return via cob.AimSlot [GAP T15] C16.
@@ -149,23 +200,6 @@ func (s *Slot) CanFire() bool {
 
 // NumSlots is the retail slot count [06 §1.2].
 const NumSlots = 3 // [06 §1.2] primary, secondary, tertiary
-
-// OrderControlInhibit is bit 4 of a weapon slot's order control byte. Its
-// writers are established — *inhibit slot k* sets it and clears the slot's
-// target, *release slot k* clears it and clears the target [04 R-ORD-01 §1] —
-// and its only established reader is the TargetCleared de-duplication guard of
-// the removal cleanup walk [04 R-ORDER-02 §2].
-//
-// It is NOT a firing or acquisition gate. This comment previously said the bit
-// "is read by the normal combat slot pipeline before acquisition or firing
-// [04 R-ORD-01 §1][06 §3.3]"; neither section says so, and the accessor that
-// served that reading is gone with the gate it fed. The cleanup walk sets the
-// bit on every assigned slot on every order-record removal — the purge a
-// player's own non-queued order performs included — and no established path
-// clears it again, so reading it as a gate silenced each unit's weapons
-// permanently from its owner's first order. See the correction and the open
-// TODO(question) at the slot visit in internal/combat/service.go.
-const OrderControlInhibit uint8 = 1 << 4
 
 // MoveState is the mover status shared with movement.System [04 §8.1][04 §9.1][GAP T15].
 // The mover reads this field after the unit-phase preserves it for the movement
@@ -238,12 +272,18 @@ func (u *Unit) SlotAt(idx int) *Slot {
 
 // InstallWeapon binds a weapon definition to a slot [06 §1.2] C1.
 // The definition must be compiled via content [02 "Weapon record"].
+//
+// It writes the same control byte the slot initializer does
+// [06 R-WPN-05 §3]: the slot's own index into bits 2-3, and enabled plus
+// autonomy when the link resolved.
 func (u *Unit) InstallWeapon(idx int, w *content.WeaponDef) {
 	if u == nil || idx < 0 || idx >= NumSlots {
 		return
 	}
-	u.Slots[idx].Weapon = w
+	s := &u.Slots[idx]
+	s.Weapon = w
+	s.Flags = (s.Flags &^ SlotFlagIndexMask) | (uint8(idx)<<SlotFlagIndexShift)&SlotFlagIndexMask
 	if w != nil {
-		u.Slots[idx].Flags |= 0x02 // armed/hasTarget when populated [06 §1.2] P0-10
+		s.Flags |= SlotFlagEnabled | SlotFlagAutonomous
 	}
 }

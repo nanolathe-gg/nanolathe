@@ -157,7 +157,11 @@ func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Cata
 				id := orders.Lookup("MakeSelectable") // [04 §3.6] C12 zero aux args
 				if id != 0 {
 					q := orders.QueueForUnit(u)
-					q.Push(id, orders.Node{}) // zero auxiliary arguments [04 §3.6]
+					// The tail record carries no auxiliary arguments [04 §3.6],
+					// but it is still this unit's record. It goes through
+					// ctx.record rather than ctx.push because it must not raise
+					// the issued count the enclosing condition has just read.
+					q.Push(id, ctx.record(orders.Node{}))
 				}
 			}
 		}
@@ -193,6 +197,66 @@ type interpCtx struct {
 	queued        int
 	suppressTail  bool
 	placementIdx  int
+}
+
+// missionEntryTick is the creation-tick snapshot every record this interpreter
+// queues carries. The interpreter runs ONCE at battle entry, on the loading
+// worker, after all mission units exist and before the first simulation tick is
+// stepped [04 §3.6][08 R-ENTRY-01 §6], so the tick current at issue is zero.
+const missionEntryTick uint32 = 0
+
+// record stamps the two order-record fields that every ordinary issuer writes
+// and that a bare `orders.Node{}` literal leaves at zero. [04 §3.6] states that
+// from the next tick "the ordinary order pump consumes the pre-loaded queue
+// exactly as if a player had issued the orders", so a mission-script record has
+// to be the same shape of record as an interface- or AI-issued one; the queue's
+// insertion path fills only the descriptor identity and the gate mask, not
+// these.
+//
+//   - Owner is the acting unit's handle. The owning unit is one of the order
+//     record's own fields [04 §3.2], a handler body is handed it alongside the
+//     record [04 R-ORD-01 §1], and the movement controller's single goal slot is
+//     addressed BY it [04 R-ORD-01 §9]. Leaving it null made every
+//     mission-issued record, on every unit in the mission, name the same
+//     controller slot at handle 0 — measured on MISSION0 (AC01): 23 records at
+//     battle entry sharing one bucket, and 24 of 61 installs over 740 ticks
+//     evicting a record belonging to a different unit (WU-19-68, WU-19-69). It
+//     also left `Queue.ownerUnit` unable to resolve the record's unit at all,
+//     which made every owner-side callback a no-op and made the air installer —
+//     which refuses an install whose resolved unit does not carry `canfly` —
+//     reject every mission-issued VTOL goal outright.
+//   - CreationTick is the creation-tick snapshot [04 §3.2], missionEntryTick
+//     above.
+//
+// It writes nothing else: the goal triple, the target smart-reference and the
+// three general parameters are the verb handler's [04 §3.6][04 §3.2].
+func (ctx *interpCtx) record(n orders.Node) orders.Node {
+	if ctx == nil || ctx.unit == nil {
+		return n
+	}
+	n.Owner = ctx.unit.Handle
+	n.CreationTick = missionEntryTick
+	return n
+}
+
+// push queues one front-segment mission-script record on the acting unit's own
+// queue and marks the script as having issued, which is what the postlude's
+// bit-5 clear and tail `MakeSelectable` test [04 §3.6] C12.
+func (ctx *interpCtx) push(id orders.ID, n orders.Node) {
+	if ctx == nil || ctx.unit == nil {
+		return
+	}
+	orders.QueueForUnit(ctx.unit).Push(id, ctx.record(n))
+	ctx.queued++
+}
+
+// pushSecondary is push for a rear-segment descriptor [04 §3.3].
+func (ctx *interpCtx) pushSecondary(id orders.ID, n orders.Node) {
+	if ctx == nil || ctx.unit == nil {
+		return
+	}
+	orders.QueueForUnit(ctx.unit).PushSecondary(id, ctx.record(n))
+	ctx.queued++
 }
 
 // tokenizeScript splits the script into verb tokens on EVERY comma — the
@@ -440,9 +504,7 @@ func handleM(token string, ctx *interpCtx) {
 		GoalZ: floatToFixed(fy),
 		GoalY: ctx.unit.Y,
 	}
-	q := orders.QueueForUnit(ctx.unit)
-	q.Push(id, node)
-	ctx.queued++
+	ctx.push(id, node)
 }
 
 func handleA(token string, ctx *interpCtx) {
@@ -487,9 +549,7 @@ func handleA(token string, ctx *interpCtx) {
 			GoalZ: floatToFixed(fy),
 			GoalY: ctx.unit.Y,
 		}
-		q := orders.QueueForUnit(ctx.unit)
-		q.Push(id, node)
-		ctx.queued++
+		ctx.push(id, node)
 		ctx.suppressTail = true // numeric-form a suppresses [04 §3.6] C12
 		return
 	}
@@ -522,9 +582,7 @@ func handleA(token string, ctx *interpCtx) {
 		BuildDefKey: ck,  // canonical product identity [04 §3.2][02 §5]
 		Param1:      idx, // catalog index fallback [04 §3.2]
 	}
-	q := orders.QueueForUnit(ctx.unit)
-	q.Push(id, node)
-	ctx.queued++
+	ctx.push(id, node)
 	// By-type a does NOT suppress tail [04 §3.6] C12.
 }
 
@@ -590,9 +648,7 @@ func handleB(token string, ctx *interpCtx) {
 		GoalZ:       floatToFixed(fy),
 		GoalY:       ctx.unit.Y,
 	}
-	q := orders.QueueForUnit(ctx.unit)
-	q.Push(id, node)
-	ctx.queued++
+	ctx.push(id, node)
 }
 
 func handleBW(token string, ctx *interpCtx) {
@@ -644,9 +700,7 @@ func handleBW(token string, ctx *interpCtx) {
 		Param1: bwSlot,    // slot 0 [06 §11.1]
 		Param2: uint32(n), // count n [04 §3.6] bw n
 	}
-	q := orders.QueueForUnit(ctx.unit)
-	q.PushSecondary(id, node) // secondary [04 §3.3]
-	ctx.queued++
+	ctx.pushSecondary(id, node) // secondary [04 §3.3]
 }
 
 func handleD(token string, ctx *interpCtx) {
@@ -658,9 +712,7 @@ func handleD(token string, ctx *interpCtx) {
 	if id == 0 {
 		return
 	}
-	q := orders.QueueForUnit(ctx.unit)
-	q.Push(id, orders.Node{})
-	ctx.queued++
+	ctx.push(id, orders.Node{})
 	ctx.suppressTail = true // d suppresses [04 §3.6] C12
 }
 
@@ -705,9 +757,7 @@ func handleG(token string, ctx *interpCtx) {
 	node := orders.Node{
 		Target: target.Handle,
 	}
-	q := orders.QueueForUnit(ctx.unit)
-	q.Push(id, node)
-	ctx.queued++
+	ctx.push(id, node)
 }
 
 func handleI(token string, ctx *interpCtx) {
@@ -823,9 +873,7 @@ func handleP(token string, ctx *interpCtx) {
 		GoalY:  ctx.unit.Y,
 		Param1: uint32(ticks), // timeout ticks [04 §3.6] C10
 	}
-	q := orders.QueueForUnit(ctx.unit)
-	q.Push(id, node)
-	ctx.queued++
+	ctx.push(id, node)
 	ctx.suppressTail = true // p suppresses [04 §3.6] C12
 }
 
@@ -835,10 +883,8 @@ func handleS(token string, ctx *interpCtx) {
 	if id == 0 {
 		return
 	}
-	q := orders.QueueForUnit(ctx.unit)
-	q.Push(id, orders.Node{}) // zero auxiliary args [04 §3.6] C10
-	ctx.queued++
-	ctx.suppressTail = true // s suppresses [04 §3.6] C12
+	ctx.push(id, orders.Node{}) // zero auxiliary args [04 §3.6] C10
+	ctx.suppressTail = true     // s suppresses [04 §3.6] C12
 }
 
 func handleU(token string, ctx *interpCtx) {
@@ -878,9 +924,7 @@ func handleU(token string, ctx *interpCtx) {
 		GoalZ: floatToFixed(fy),
 		GoalY: ctx.unit.Y,
 	}
-	q := orders.QueueForUnit(ctx.unit)
-	q.Push(id, node)
-	ctx.queued++
+	ctx.push(id, node)
 }
 
 func handleW(token string, ctx *interpCtx) {
@@ -915,9 +959,7 @@ func handleW(token string, ctx *interpCtx) {
 		Param1: uint32(ticks),    // secs×30 [04 §3.6] C10
 		Param2: uint32(trailing), // trailing n [04 §3.6] w secs[,n]
 	}
-	q := orders.QueueForUnit(ctx.unit)
-	q.Push(id, node)
-	ctx.queued++
+	ctx.push(id, node)
 }
 
 func handleWA(token string, ctx *interpCtx) {
@@ -958,7 +1000,5 @@ func handleWA(token string, ctx *interpCtx) {
 	node := orders.Node{
 		Target: pool.Handle(targetHandle),
 	}
-	q := orders.QueueForUnit(ctx.unit)
-	q.Push(id, node)
-	ctx.queued++
+	ctx.push(id, node)
 }

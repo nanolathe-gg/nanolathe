@@ -4315,6 +4315,19 @@ Surface descriptors hold width, height, and a pointer to the w×h pixel block;
 the pixel pitch is (w+3) & ~3 (DWORD-aligned), while allocation is w×h rather
 than pitch×h. Drawing clips against the descriptor bounds.
 
+**The letterbox bars and the sampling domain (Established, 2026-09-02 —
+[R-MM-01 §3]).** No radar surface covers the bars. The picture, mapped and
+final surfaces are all allocated at exactly the fitted `RadarW × RadarH`,
+the radar rectangle words are `(padX, padY)–(padX + RadarW − 1,
+padY + RadarH − 1)`, and the presenter blits FINAL at `(padX, padY)` into
+the composer's frame and paints no fill. What shows in the bars is whatever
+the frame holds there; which pixels those are (the side-panel shell's own
+art versus a cleared frame) is **Unknown** — decider: the bar-fill probe of
+RWU-19-9, one retail session on a non-square map. The generated picture's
+loop never leaves the tile map: `worldX = PlayRight · x / (2·RadarW)` with
+`x < 2·RadarW` lies in `[0, PlayRight)`, likewise Z, so there is no
+out-of-domain sample to define; the tile-index guard above is the only one.
+
 ### 3.8 Mapped composite: fog and unexplored on the minimap
 
 Gate: mapped dirty bit clear means return; otherwise clear the bit and rebuild:
@@ -4392,6 +4405,14 @@ recolored through `GUIPAL.PAL` or a separate blit color argument. **Established.
 set, the minimap mode word's low two bits are zero, the unit carries the
 friendly-contact status bits (mask 0x300), or the unit's owner is the local
 player.
+
+*Named (2026-09-02, [R-MM-01 §3]):* the "global options word bit 9" is the
+full-radar bit of the mode-flags word that the `+Radar` cheat toggles
+([07 R-CAM-01 §6]) and the world rebuild clears; the "minimap mode word's
+low two bits" are the render-flags word's mapping and LOS mask bits (the
+`+Mapping`/`+LOS` toggles of the same section, both cleared for a watcher at
+battle start [07 R-CAM-01 §14]). The weapon/interceptor rings of layer 5 sit
+inside the selected-unit branch — see that anchor.
 
 **Projection.** Each unit's 16.16 world position is first narrowed to its
 signed 16-bit map-pixel components (the same narrowing contract as section
@@ -4741,6 +4762,35 @@ authored distances, both in entry 10 — §3.10's "the outer circle radius is
 `max(radardistance, sonardistance)`" describes one circle where the pass emits
 one per nonzero distance; the visible result is identical whenever one distance
 dominates, which is the stock case.
+
+#### R-MM-01 §3 — the blip gate's two words, the ring gate, the bars, and the picture's domain (2026-09-02)
+
+**Established — the two gate words.** In the contacts pass (§3.9) a live
+unit is admitted when any of: the mode-flags word's **full-radar bit** (bit
+9 — the `+Radar` cheat of [07 R-CAM-01 §6], cleared by the world rebuild
+[08 R-ENTRY-01 §3]); the render-flags word's **mapping and LOS mask bits
+both clear** (the `+Mapping`/`+LOS` toggles; the world-rebuild tail clears
+both for a watcher slot [07 R-CAM-01 §14]); the unit's status word has
+either friendly-contact bit (`0x300`); or the unit's owner is the viewing
+slot. There is no separate per-unit "visible" term — visibility enters only
+through those bits. Rule:
+`admit = radarCheat || (!mappingMask && !losMask) || status & 0x300 != 0 || owner == viewer`.
+Until a `+` command vocabulary exists the first term reads false and the
+masks read true, so the gate reduces to the last two terms.
+
+**Established — rings are gated on selection.** Within one unit's
+iteration: blip; commander/hover marker; then, **only if the unit's
+selected bit (status bit 4) is set**: the four sensor circles when the
+instance is active or the definition lacks `onoffable` (the "circle gate
+correction" of §3.9), and then — independently of that inner test but still
+under the selected bit — the weapon/interceptor ring loop when definition
+word A bit 29 is set. A detected enemy is never ringed; §3.9's layer 5 is
+the *selected* unit's rings.
+
+**Established — the bars and the domain.** See the closure at the end of
+§3.7: the three radar surfaces are `RadarW × RadarH`, the presenter paints
+no bar fill, and the generated-picture loop samples only inside the play
+area. Bar content: **Unknown** (probe).
 
 ## 4. Indexed renderer, palettes, and asset layers
 

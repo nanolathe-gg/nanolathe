@@ -129,6 +129,25 @@ type UnitStepSummary struct {
 	Fired            int   // projectiles created via TryFire this visit [06 §4]
 }
 
+// retailYawFromGo converts this build's absolute yaw into retail's.
+//
+// A retail yaw `a` denotes the planar direction `(-sin a, -cos a)`, and the
+// bearing it solves is `atan2q(muzzle - target)`; this build solves
+// `atan2(target - muzzle)` and builds velocity from `+sin`/`+cos`
+// [06 R-WPN-05 §4]. Both flips cancel for a projectile, so the two numberings
+// differ by exactly half a turn: `atan2(-x, -z) = atan2(x, z) + 0x8000`.
+// Anything that leaves the projectile arithmetic — a value handed to an
+// authored script, or one compared against a unit heading, which this build
+// already carries in retail's convention [04 R-MOV-01 §4] — must carry the
+// shift. Adding 0x8000 is its own inverse, so this converts both ways.
+func retailYawFromGo(goYaw uint16) uint16 { return goYaw + 0x8000 }
+
+// aimYawForScript is the first argument of an Aim* dispatch: the bearing minus
+// the unit's heading, modulo the circle, so zero means *dead ahead* and a
+// positive value lies on the unit's left [06 R-WPN-05 §4]. The second argument
+// is the absolute pitch, unshifted.
+func aimYawForScript(goYaw, heading uint16) uint16 { return retailYawFromGo(goYaw) - heading }
+
 // StepWeaponsForUnit runs the per-unit weapon pipeline for one unit visit ON-04 [06 §3.3][06 §4][04 §5.3][GAP T15].
 // It is the authoritative per-unit step; the session owns the deterministic
 // pool-order loop and invokes this method directly [06 §1.2] C1 (I1).
@@ -186,37 +205,22 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		if slot.Reload > 0 {
 			slot.Reload--
 		}
-		// Correction (play-test PT5): this visit used to `continue` here when
-		// the slot's order control byte carried bit 4, on the claim that the
-		// bit is "an order-side stop latch [that] suppresses both reacquisition
-		// and the retained-target firing path until the order side releases it
-		// [04 R-ORD-01 §1]". No section establishes that gate. [04 R-ORD-01 §1]
-		// says only which of the two order-side helpers writes bit 4 — *inhibit
-		// slot k* sets it and clears the slot's target, *release slot k* clears
-		// it and clears the target — and the bit's only traced readers are the
-		// TargetCleared notification guards of [R-ORDER-02 §2]: the cleanup
-		// walk emits the callback while bit 4 is clear and then sets it, and
-		// the mirror-guarded mid-life clear emits while it is set and then
-		// clears it. Doc 06's slot visit and shot-time admission never consult
-		// an order control byte at all [06 §1.2][06 §3.3][06 §3.2].
+		// The slot visit does not gate on the control byte's bit 4. It used to
+		// `continue` here when the bit was set, on the claim that it is "an
+		// order-side stop latch [that] suppresses both reacquisition and the
+		// retained-target firing path". The regression was total: the removal
+		// cleanup walk sets the bit on every assigned slot on EVERY
+		// order-record removal [R-ORDER-02 §2] — the purge a player's own
+		// non-queued right-click performs included — so one order silenced
+		// every weapon that unit owned for the rest of the battle.
 		//
-		// The regression was total. That cleanup walk runs on EVERY order-record
-		// removal [R-ORDER-02 §2] — including the purge a player's own
-		// non-queued right-click performs — and nothing on the ordinary path
-		// ever cleared bit 4 again, so one order from the player silenced every
-		// weapon that unit owned for the rest of the battle. Inhibiting a slot
-		// already suppresses its retained-target shot by clearing the target;
-		// that is the whole of the established effect.
-		//
-		// TODO(question): whether [R-ORDER-02 §2]'s "slot control byte" is the
-		// same byte as [08 R-SAVE-WEAPON-01]'s persisted slot-flag byte is not
-		// established. If it is, bit 1 there is armed/has-target and bit 4 is
-		// the tracking flag, so *release*/*inhibit* would be clearing/setting
-		// the autonomous-tracking bit [06 §3.2] rather than a latch of their
-		// own, and this build's separate OrderControl field would be modelling
-		// one retail byte as two. Settling it needs a trace of the two order-
-		// side helpers' and the cleanup walk's stores against the byte the save
-		// writer serializes. Until then nothing here reads bit 4.
+		// [06 R-WPN-05 §3] now names the bit: it is autonomy, doc 06's
+		// "tracking flag", and it gates the AUTONOMOUS SCAN below, never a
+		// retained target's shot. Inhibiting a slot already suppresses that
+		// shot by clearing the target; that is the whole of the effect. The
+		// TODO(question) that stood here — whether the order side's byte and
+		// the persisted slot-flag byte are one — is closed: they are, and this
+		// build's separate OrderControl field is gone with the question.
 		if slot.Target.Kind == units.TargetUnit && slot.Target.Unit != 0 {
 			tu := w.Unit(slot.Target.Unit)
 			if tu == nil || !tu.Alive || tu.Dying {
@@ -233,7 +237,10 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 					bridge.TargetCleared(int32(idx))
 					queuedTargetCleared = true
 				}
-				slot.Flags &^= 0x02
+				// Bit 1 is the slot's ENABLED bit, whose one writer is the
+				// slot initializer [06 R-WPN-05 §3]; a lost target does not
+				// disable the slot. This used to clear it here, reading it as
+				// an armed/has-target flag.
 				continue
 			}
 		}
@@ -252,7 +259,10 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		// to the ordinary shot-time gates below, because forced/manual
 		// installation bypasses the autonomous lists and nothing else
 		// [06 §3.2].
-		if slot.Target.Kind == units.TargetNone || slot.Flags&0x02 == 0 {
+		// The trigger is target absence alone. It used to read `|| bit 1
+		// clear` as "not armed"; bit 1 is the enabled bit and is set for the
+		// whole life of every populated slot [06 R-WPN-05 §3].
+		if slot.Target.Kind == units.TargetNone {
 			if !AutonomousScanAdmitsSlot(slot.Weapon, s.PlayerControlByteFor(u.Owner)) {
 				if slot.Target.Kind == units.TargetNone {
 					continue // nothing installed and nothing to acquire [06 §3.2]
@@ -264,7 +274,6 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 				savedReady := slot.Aim.Ready
 				savedFlags := slot.Flags & 0x01
 				slot.Target = units.Target{Kind: units.TargetUnit, Unit: acquired}
-				slot.Flags |= 0x02
 				slot.DesiredYaw = savedYaw
 				slot.DesiredPitch = savedPitch
 				slot.Aim.IssueBit = savedIssue
@@ -347,21 +356,31 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 			desiredYaw = uint16(YawFromDelta(dx, dz))
 			desiredPitch = uint16(PitchFromDelta(dx, dy, dz))
 		}
-		// TODO(question): [06 §3.3] states the aim-time yaw is relative — the
-		// bearing minus the unit heading — and that the fire-time executor
-		// converts it back to absolute, while the same section writes the
-		// bearing as atan2q(muzzle - target) where every caller here supplies
-		// target - muzzle. The two cannot both be transcribed literally: our
-		// absolute target-minus-muzzle bearing is the one that demonstrably
-		// puts projectiles on their targets, so it is kept. Subtracting the
-		// unit heading here on top of it lengthened the COB turn and lowered
-		// the shot count in the Arm campaign mission-0 run, which is evidence
-		// the two conventions are not independent. Settling this needs a trace
-		// of atan2q's operand order and the turret executor's relative-to-
-		// absolute conversion; until then the aim heading commanded to the COB
-		// turret and the drift gate that would read it stay untraced.
+		// The convention marker that used to stand here is retired by
+		// [06 R-WPN-05 §4], which settles both halves it could not reconcile.
+		// Retail's bearing IS atan2q(muzzle - target), and retail's yaw
+		// denotes the direction (-sin a, -cos a), so the two negations cancel
+		// and the bearing points from the muzzle toward the target — the same
+		// direction our target-minus-muzzle solve produces. What differs is
+		// only the numbering: this build builds velocity from +sin/+cos, so
+		// its absolute yaw is exactly half a turn from retail's
+		// (atan2(-x, -z) = atan2(x, z) + 0x8000). Projectiles fly correctly
+		// because both sign flips cancel; every value shared with a
+		// retail-authored script, or compared against a unit heading (which
+		// this build already carries in retail's convention, -sin/-cos
+		// [04 R-MOV-01 §4]), must carry the shift. See retailYawFromGo and
+		// aimYawForScript below.
 		needLatch, needResult := aimRequirement(weapon)
 		suppress := weapon.Ballistic && desiredPitch == 0x8000
+		if suppress && weapon.Turret {
+			// The turret executor's aim geometry yielded no solution: raise
+			// "could not fire" and clear the Aim latch [06 R-WPN-05 §6].
+			// Nothing here reads the bit back — it is the attack handlers'
+			// disengage trigger.
+			u.Pending |= units.PendingCouldNotFire
+			slot.Aim.IssueBit = false
+			slot.Flags &^= units.SlotFlagAimLatch
+		}
 		// The turret executor writes the solved angles into the slot only when
 		// it dispatches Aim, i.e. only while the Aim-request latch is clear
 		// [06 §3.3]. Those stored angles are what the drift gate later measures
@@ -371,8 +390,21 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		// itself and pass unconditionally. Every other executor writes the
 		// absolute angles at fire time instead, which the per-visit write here
 		// reproduces.
+		//
+		// What is stored is the RELATIVE yaw — the same value handed to Aim* —
+		// and the ABSOLUTE pitch, which is what the save persists
+		// [06 R-WPN-05 §4] [08 R-SAVE-WEAPON-01]. Both halves of the drift
+		// comparison are then relative, so its error carries however far the
+		// hull turned while the Aim was outstanding; storing the absolute
+		// bearing and comparing absolute against absolute loses that term.
+		// Every other executor writes absolute angles at fire time, so they
+		// keep this build's own absolute yaw.
+		storedYaw := desiredYaw
+		if weapon.Turret {
+			storedYaw = aimYawForScript(desiredYaw, u.Move.Heading)
+		}
 		if !weapon.Turret || !slot.Aim.IssueBit {
-			slot.DesiredYaw = desiredYaw
+			slot.DesiredYaw = storedYaw
 			slot.DesiredPitch = desiredPitch
 		}
 		preps[idx] = &slotPrep{weapon: weapon, tgtPos: tgtPos, tgtHandle: tgtHandle, desiredYaw: desiredYaw, desiredPitch: desiredPitch, ballisticOk: ballisticOk, pitch: ballisticPitch, needLatch: needLatch, needResult: needResult, suppressAim: suppress}
@@ -390,7 +422,13 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 					key := pendingKey{Unit: u.Handle, Slot: idx}
 					if _, present := bridge.VM.ScriptPC(aimNameForSlot(idx)); !present {
 					}
-					result := bridge.Aim(cob.WeaponSlot(idx), desiredYaw, desiredPitch, func(ret cob.CallbackReturn) {
+					// The first argument of Aim* is the RELATIVE yaw —
+					// (bearing - heading) mod 65536, zero meaning dead ahead —
+					// and the second is the absolute pitch
+					// [06 R-WPN-05 §4]. The authored scripts assume that;
+					// handing them the un-shifted absolute yaw is right only
+					// for a unit whose heading is 0x8000.
+					result := bridge.Aim(cob.WeaponSlot(idx), aimYawForScript(desiredYaw, u.Move.Heading), desiredPitch, func(ret cob.CallbackReturn) {
 						if s.pendingAims != nil {
 							delete(s.pendingAims, key)
 						}
@@ -465,10 +503,12 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 			// moving target stepped briefly out of range, so the turret had
 			// to re-run the whole Aim* turn before it could shoot again and
 			// in practice never caught up with a mover.
-			// TODO(question): the "could not fire" status bit itself has no
-			// home on units.Slot yet and no consumer in this build; adding it
-			// means a field on a package this unit does not own. Nothing here
-			// reads it, so its absence changes no firing decision [06 §3.3].
+			//
+			// The status bit is bit 12 of the unit's order-event word
+			// [06 R-WPN-05 §6]. The reload was already zero above, so a shot
+			// really was attempted. The weapon layer never reads the bit back;
+			// it is the attack handlers' disengage signal.
+			u.Pending |= units.PendingCouldNotFire
 			continue
 		}
 		if weapon.Stockpile {
@@ -499,19 +539,19 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		//
 		// Vertical-launch and dropped do not call the gate at all.
 		//
-		// TODO(question): retail's turret pair is relative — stored yaw minus
-		// the heading at dispatch, re-solved yaw minus the heading now — so its
-		// error also carries however far the unit turned in between, while both
-		// halves here are absolute and the heading cancels. This build stores
-		// absolute yaw deliberately (see the convention marker in the aim-time
-		// solve above), and reproducing retail's term would need the heading at
-		// dispatch stored on a slot record this unit does not own. The two
-		// agree exactly while the shooter's heading is unchanged, which is the
-		// ordinary case. Settling it is the same trace the convention marker
-		// names [06 §3.3].
+		// The turret pair is RELATIVE on both sides [06 R-WPN-05 §4]: the
+		// stored yaw is the relative one written when Aim was dispatched, and
+		// the executor re-solves the relative yaw from the CURRENT muzzle,
+		// target and heading. With the target still, a unit that turned by d
+		// since the dispatch reads a yaw error of -d, so a turret whose script
+		// has already finished turning must re-aim when its hull turns further
+		// than the tolerance. Only after the gate passes does the executor add
+		// the current heading back (relative -> absolute) for the spread and
+		// the creator.
 		switch {
 		case weapon.Turret:
-			if !DriftGatePass(weapon, unitStationary(u), slot.DesiredYaw, pre.desiredYaw, slot.DesiredPitch, pre.desiredPitch) {
+			wantRelYaw := aimYawForScript(pre.desiredYaw, u.Move.Heading)
+			if !DriftGatePass(weapon, unitStationary(u), slot.DesiredYaw, wantRelYaw, slot.DesiredPitch, pre.desiredPitch) {
 				// Failure clears the Aim-issued latch and returns failure
 				// without touching the reload timer, the aim-ready word or the
 				// RNG, so the next slot visit re-solves and re-dispatches Aim
@@ -523,12 +563,24 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 				}
 				continue
 			}
+			// Relative -> absolute, before the spread of [06 §4.4] and the
+			// creator [06 R-WPN-05 §4]. The result is this build's own
+			// absolute convention, which is what the projectile arithmetic and
+			// the ballistic creator consume.
+			slot.DesiredYaw = retailYawFromGo(slot.DesiredYaw + u.Move.Heading)
 		case weapon.VLaunch:
 			// no gate [06 §3.3]
 		case weapon.LineOfSight || weapon.SelfProp:
 			// This executor owns no latch: it simply returns failure, leaving
 			// the absolute angles it just wrote in the slot [06 R-WPN-03 §2].
-			if !DriftGatePass(weapon, unitStationary(u), pre.desiredYaw, u.Move.Heading, pre.desiredPitch, u.Move.Pitch) {
+			//
+			// The solved yaw is compared against the unit's own HEADING, so it
+			// has to be expressed in the heading's convention — retail's
+			// [06 R-WPN-05 §4]. The un-shifted comparison this used to make
+			// was half a turn out and could never come inside a gate of 150,
+			// 2,000, or an authored `tolerance`, so a fixed-forward weapon
+			// only ever passed with its target behind it.
+			if !DriftGatePass(weapon, unitStationary(u), retailYawFromGo(pre.desiredYaw), u.Move.Heading, pre.desiredPitch, u.Move.Pitch) {
 				continue
 			}
 		}
@@ -1015,7 +1067,11 @@ func (a *fireScriptAdapter) RockUnit(slotIdx int) {
 	if slot == nil {
 		return
 	}
-	rel := int16(slot.DesiredYaw - u.Move.Heading)
+	// RockUnit's recoil direction is the slot's stored yaw minus the heading,
+	// in retail's convention [06 R-WPN-05 §3][06 R-WPN-05 §5]. By this point
+	// the stored yaw is absolute and carries the accuracy draw — which for an
+	// ordinary-family weapon is the ONLY thing the draw reaches.
+	rel := int16(retailYawFromGo(slot.DesiredYaw) - u.Move.Heading)
 	a.bridge.RockUnit(rel)
 }
 
@@ -1123,8 +1179,18 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 		seaLevel = terrain.SeaLevelWorld()
 	}
 	if windState != nil {
-		// [06 §6.4] wind vectors recomputed via MulRound; scalar capped at 1.0 [01 §7.3]
-		// TODO(question): DirX/DirZ scaling as Fixed raw vs world units unresolved; treat Dir as Fixed raw
+		// The published wind words go in AS THEY ARE [06 R-WPN-05 §8]: the X
+		// word is `-2 x sin(heading, speed)` and the Z word `-2 x cos(heading,
+		// speed)` over the integer wind speed [01 §7.3], and the ballistic and
+		// dropped integrators add them to the 16.16 position words with no
+		// shift. So a shell drifts by `windX / 65536` world units per tick —
+		// at the largest stock `maxwindspeed` of 5,000, about 0.15 world units
+		// per tick. Storing them as raw 16.16 velocity increments, which is
+		// what this does, is exact; the marker asking whether the scale was
+		// raw or world units is retired. The x8 of the smoke family and the x2
+		// of the feature fire probe belong to those contracts [03 R-WIND-01],
+		// not here. The Y word has no writer and is the zero the battle
+		// started with.
 		windVec = Vec3{
 			X: numeric.Fixed(int64(windState.DirX)),
 			Y: numeric.Fixed(0),
