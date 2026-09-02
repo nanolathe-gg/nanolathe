@@ -76,10 +76,14 @@ func LoadCursors(fs vfs.FSOps) (*Cursors, error) {
 		e, ok := render.ResolveCursorEntry(gaf, idx)
 		if !ok || e == nil || len(e.Frames) == 0 {
 			name := render.CursorName(idx)
-			// TODO(question): retail behavior for a missing or zero-frame named
-			// cursor entry is not established; settle it with an executable trace
-			// and a deliberately malformed cursor GAF fixture before relaxing this
-			// mandatory validation.
+			// Retail has no behaviour here to clone. A name the bank lookup
+			// does not find leaves a null handle slot, and the sequence binder
+			// reads the entry's frame count before it tests the pointer, so
+			// selecting that index faults; an entry with no frames binds frame
+			// 0 and reads a hold word past the end of its empty frame table.
+			// Both are undefined in retail, which is why this validation is
+			// mandatory rather than a relaxation waiting on a trace
+			// [03 R-FX-01 §5][03 §4.4].
 			cause := errors.New("cursor entry is missing or has no frames")
 			return nil, fmt.Errorf("nanolathe: load retail cursor entry: logical path %s, providers searched [%s], expected cursor GAF entry %q: %w", CursorGAFPath, cursorProviders(fs), name, cause)
 		}
@@ -106,10 +110,15 @@ func (cs *Cursors) SetIndex(idx int) {
 		return
 	}
 	if !render.IsValidCursorIndex(idx) || cs.entries[idx] == nil {
-		// TODO(question): retail handling of an out-of-range or slot-zero
-		// cursor index is not established; settle it with an executable trace.
-		// Placeholder: ignore the write because all authored indices are validated
-		// during LoadCursors and no alternate shape is established here.
+		// Retail's setter has no range check: it stores the byte and binds
+		// whatever word sits at that offset of the handle array. Slot 0 is
+		// the zero word before the first handle, so index 0 binds a null
+		// sequence and faults in the binder; an index past 21 binds the
+		// neighbouring globals as if they were sequences. No producer yields
+		// either — the shape chooser starts at `cursornormal` and takes
+		// minima over 1..20, the hourglass and reset sites force 20 and 19 —
+		// so ignoring the write reproduces every reachable retail outcome
+		// without the undefined ones [03 R-FX-01 §5][07 §8].
 		return
 	}
 	cs.idx = idx

@@ -260,8 +260,8 @@ func TestP28RendererTraceOutlineOnlyAndOverwrite(t *testing.T) {
 	c := &Client{width: 6, height: 6, indexed: make([]uint8, 36)}
 	tri := traceTriangle(5, 20)
 	c.fillPolyTarget(target, &tri, tri.color, nil, 91)
-	traceOutlineLine(target.trace, 1, 1, 1, 1, 200, 3, 4)
-	traceOutlineLine(target.trace, 4, 4, 4, 4, 201, 5, 6)
+	target.trace.composite(1, 1, 200, 3, 4)
+	target.trace.composite(4, 4, 201, 5, 6)
 	target.commit(c.indexed, c.width, c.height)
 	c.indexed[1*6+1] = 200
 	c.indexed[4*6+4] = 201

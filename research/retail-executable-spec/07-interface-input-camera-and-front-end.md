@@ -3780,12 +3780,9 @@ remembered per unit from then on and the default fires only once. A builder
 whose page-count byte is below 2 has no build page to open and stays on the
 orders state.
 
-```text
-TODO(question): which retail writer puts a builder on its first build page.
-The page bits are established (§9) and the observation above is direct, but no
-traced site sets the page-shown bit at unit creation. Decider: a static trace
-of the writers of unit status bit 22.
-```
+(The `TODO(question)` that stood here — "which retail writer puts a builder
+on its first build page" — is closed by the correction below and
+[R-HUD-04 §4]: the writer is unit creation. Removed 2026-09-02, RWU-19-42.)
 
 The page-cycle keys and buttons ([R-CAM-01 §2]) move as follows, every
 change setting battle-interface dirty bit `0x10` and playing `nextbuildmenu`:
@@ -4395,8 +4392,10 @@ init from named entries: index 1 `cursorattack`, 2 `cursorairstrike`,
 7 `cursorpatrol`, 8 `cursorpickup`, 9 `cursorteleport`, 10 `cursorrevive`,
 11 `cursorreclamate`, 12 `cursorload`, 13 `cursorunload`, 14 `cursormove`,
 15 `cursorselect`, 16 `cursorfindsite`, 17 `cursorred`, 18 `cursorgrn`,
-19 `cursornormal`, 20 `cursorhourglass`, 21 `pathicon`; slot 0 is unused/gray
-overflow. Slot 10 is filled last by the init sequence, out of the otherwise
+19 `cursornormal`, 20 `cursorhourglass`, 21 `pathicon`; slot 0 is the zero
+word before the first handle, which no producer selects and which would fault
+if bound ([03 R-FX-01 §5], correction of 2026-09-02; this previously read
+"unused/gray overflow"). Slot 10 is filled last by the init sequence, out of the otherwise
 ascending order — a revision of this document that transcribed the sequence
 rather than the slot offsets dropped it and shifted every later index by one
 (see `docs/SPEC_CONFLICTS.md`). Index 19 is the idle default the pointer
@@ -7247,6 +7246,36 @@ Battle entry zeroes both arrays.
 (before any kill) is not traced here; the row order before the first kill is
 therefore whatever the entry path wrote — decider: the per-player reset row
 of [08 R-ENTRY-01 §2] (static trace).
+
+**Closed (2026-09-02, RWU-19-42) — the rank byte's initial value, and the
+watcher bit's writers.** The inference above is upgraded. *Rank:* the
+per-slot registration helper — the "registers the slot as human / computer /
+inactive" step of [08 R-SKIR-01 §2]'s row-to-player conversion, also run by
+the campaign entry for its two seats and by the multiplayer player creation
+— writes the slot's **rank byte = the slot index** (and two neighbouring
+slot-index bytes) beside the controller byte. Battle entry itself never
+touches the byte, and its only other writer is the kill-lead shift of
+[08 R-CAMP-01 §9]. So before the first credited kill the ranks are
+`0..9` in slot order, distinct, and the panel's rank walk draws the
+qualifying slots in ascending slot order with vacated ranks compacted.
+**Established.** *Watcher:* the lobby record's watcher bit (`0x40`) has
+exactly two setters, both multiplayer-only: the battleroom's `SIDE%d`
+control, which turns a human slot into a watcher when the side is cycled
+past the last side (and back when clicked again), and the kind-3 branch of
+the elimination handler (`You're out!  Continue Watching?`), which sets the
+eliminated slot's bit so the player stays in the session as a spectator.
+The skirmish elimination branch, the registration helper and battle entry
+never set it (registration and the lobby screens only clear neighbouring
+bits or clear this one). In every single-player session the bit is
+therefore constantly clear, and it is **not** derived from the settlement
+gate's observer byte ([05 "Authoritative settlement order"]), which is a
+different field. What reads it: this panel's row gate, the score helper's
+row gate and the statistics rows' flag bit 3 ([08 R-CAMP-01 §7, §10]), the
+kill-lead scan's "non-watcher" filter ([08 R-CAMP-01 §9]), the elimination
+and participant filters, the multiplayer camera placement at battle start
+([08 R-ENTRY-01 §5] "when the local player is watching") and the lobby's
+`Watching:` label. **Established** (bounded census of the bit's writers over
+the recovered function set).
 
 **Correction (2026-09-02).** "the kill-record finalize … sets the crediting
 slot's kill flash and the victim slot's loss flash to **30**" holds **only

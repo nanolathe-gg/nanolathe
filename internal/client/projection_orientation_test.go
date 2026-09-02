@@ -183,69 +183,100 @@ func TestShadowAnchorIsTheBodyAnchorPlusTheDocumentedOffset(t *testing.T) {
 // Both assertions fail if the outline goes back to projecting the composed
 // vertices as world coordinates: the wireframe then mirrors in Z about the
 // anchor, so the vertex pixels are empty and the drawn extent flips.
-func TestNanoframeOutlineLiesOnTheBodyItOutlines(t *testing.T) {
+func TestNanoframeOutlineIsTheBodysRowExtremes(t *testing.T) {
 	c := orientationClient()
 	for _, heading := range orientationHeadings {
 		draw := orientationDraw(heading)
-		anchorX, anchorY := c.modelAnchor(draw)
+		body, ok := c.composeModel(draw, 0, 1, modelCursorUnit, nil, 0)
+		if !ok || body.image == nil {
+			t.Fatalf("heading %d: the body did not compose", heading)
+		}
+		img := body.image
+		// An empty image over the same box and origin receives only the
+		// outline, so its pixels can be read against the body's row by row.
+		wire := newModelImage(img.width, img.heightPx, img.originX, img.originY, img.anchorX, img.anchorY, false, 1)
+		c.outlineModelInto(wire, nil, draw, orientationOutlineColor)
 
-		// Where the body composition puts each vertex on the framebuffer.
-		var wantMinX, wantMinY, wantMaxX, wantMaxY int32
-		type point struct{ x, y int32 }
-		var want []point
-		for pi := range draw.Pieces {
-			for _, v := range draw.Pieces[pi].WorldVertices {
-				lx, ly, _ := modelLocalVertex(v, draw.WorldPos)
-				lx, ly = c.scaleModelLocal(lx, ly)
-				p := point{anchorX + lx, anchorY + ly}
-				if len(want) == 0 {
-					wantMinX, wantMaxX, wantMinY, wantMaxY = p.x, p.x, p.y, p.y
+		rows := 0
+		for y := 0; y < img.heightPx; y++ {
+			left, right := -1, -1
+			var got []int
+			for x := 0; x < img.width; x++ {
+				i := y*img.width + x
+				if img.covered[i] {
+					if left < 0 {
+						left = x
+					}
+					right = x
 				}
-				want = append(want, p)
-				if p.x < wantMinX {
-					wantMinX = p.x
-				}
-				if p.x > wantMaxX {
-					wantMaxX = p.x
-				}
-				if p.y < wantMinY {
-					wantMinY = p.y
-				}
-				if p.y > wantMaxY {
-					wantMaxY = p.y
+				if wire.covered[i] {
+					if wire.color[i] != orientationOutlineColor {
+						t.Fatalf("heading %d: outline pixel (%d,%d) holds %d", heading, x, y, wire.color[i])
+					}
+					got = append(got, x)
 				}
 			}
-		}
-		if len(want) == 0 {
-			t.Fatalf("heading %d: the pose produced no outline vertices", heading)
-		}
-
-		clearIndexed(c)
-		c.drawModelOutline(draw, orientationOutlineColor, nil)
-
-		// Every vertex is an endpoint of two drawn edges, and the line walker
-		// writes its endpoints, so each must carry the outline colour.
-		for i, p := range want {
-			if p.x < 0 || p.x >= int32(c.width) || p.y < 0 || p.y >= int32(c.height) {
-				t.Fatalf("heading %d: vertex %d projects off the test framebuffer at (%d,%d)", heading, i, p.x, p.y)
+			if left < 0 {
+				// A row the body's chains do not open — the top corner's own
+				// row, or one the winding cull closes — gets no outline either.
+				if len(got) != 0 {
+					t.Fatalf("heading %d: row %d has outline pixels %v but no body", heading, y, got)
+				}
+				continue
 			}
-			if got := c.indexed[p.y*int32(c.width)+p.x]; got != orientationOutlineColor {
-				t.Fatalf("heading %d: no outline pixel where the body puts vertex %d, at (%d,%d): found index %d",
-					heading, i, p.x, p.y, got)
+			rows++
+			// The body covers [xl, xr) on this row and the outline writes xl
+			// and xr: the row's left extreme and one past its right extreme,
+			// from the same two chains [R-COMP-01 §3]. A mirrored projection
+			// at either site puts the two on different columns.
+			if len(got) != 2 || got[0] != left || got[1] != right+1 {
+				t.Fatalf("heading %d: row %d outline at %v, want [%d %d] from body columns %d..%d",
+					heading, y, got, left, right+1, left, right)
 			}
 		}
+		if rows == 0 {
+			t.Fatalf("heading %d: the body composed no rows", heading)
+		}
+	}
+}
 
-		// The drawn extent is the extent of those endpoints: a Bresenham edge
-		// never leaves the box its two ends span. Comparing extents rather than
-		// counting pixels keeps this a relationship assertion.
-		gotMinX, gotMinY, gotMaxX, gotMaxY, found := outlineExtent(c)
-		if !found {
-			t.Fatalf("heading %d: the outline drew nothing", heading)
+// TestNanoframeOutlineIsKeyTested locks the admission of [R-COMP-01 §3]: with a
+// key plane an endpoint is written only where the stored key is at or below the
+// edge's own, so the wireframe of a face hidden under a higher face fails and
+// the outline of the top face passes by equality.
+func TestNanoframeOutlineIsKeyTested(t *testing.T) {
+	target := newModelTarget(8, 8)
+	for i := range target.height {
+		target.height[i] = 60 // a body higher than the low face, lower than the high one
+	}
+	low := []int32{20, 20, 20, 20}
+	high := []int32{90, 90, 90, 90}
+	xs := []int32{1, 6, 1, 1}
+	ys := []int32{1, 1, 6, 1}
+	target.outlinePolygon(xs, ys, low, 200, nil, 1, 0, 0)
+	for i := range target.covered {
+		if target.covered[i] {
+			t.Fatalf("a face keyed 20 outlined over a body keyed 60 at pixel %d", i)
 		}
-		if gotMinX != wantMinX || gotMaxX != wantMaxX || gotMinY != wantMinY || gotMaxY != wantMaxY {
-			t.Fatalf("heading %d: outline extent x[%d,%d] y[%d,%d], want x[%d,%d] y[%d,%d]",
-				heading, gotMinX, gotMaxX, gotMinY, gotMaxY, wantMinX, wantMaxX, wantMinY, wantMaxY)
+	}
+	target.outlinePolygon(xs, ys, high, 201, nil, 1, 0, 0)
+	wrote := 0
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 8; x++ {
+			i := y*8 + x
+			if !target.covered[i] {
+				continue
+			}
+			wrote++
+			if target.height[i] != 90 {
+				t.Fatalf("outline pixel (%d,%d) stored key %d, want its own 90", x, y, target.height[i])
+			}
 		}
+	}
+	// A flat-topped triangle over rows 1..5: two pixels on each, the row of
+	// the bottom corner being exclusive.
+	if wrote != 10 {
+		t.Fatalf("outline wrote %d pixels, want two per open row", wrote)
 	}
 }
 
@@ -294,34 +325,4 @@ func absInt32(v int32) int32 {
 		return -v
 	}
 	return v
-}
-
-// outlineExtent reports the bounding box of the outline colour in the
-// framebuffer.
-func outlineExtent(c *Client) (minX, minY, maxX, maxY int32, found bool) {
-	for y := 0; y < c.height; y++ {
-		for x := 0; x < c.width; x++ {
-			if c.indexed[y*c.width+x] != orientationOutlineColor {
-				continue
-			}
-			ix, iy := int32(x), int32(y)
-			if !found {
-				minX, maxX, minY, maxY, found = ix, ix, iy, iy, true
-				continue
-			}
-			if ix < minX {
-				minX = ix
-			}
-			if ix > maxX {
-				maxX = ix
-			}
-			if iy < minY {
-				minY = iy
-			}
-			if iy > maxY {
-				maxY = iy
-			}
-		}
-	}
-	return
 }

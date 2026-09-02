@@ -894,10 +894,23 @@ func (s *Service) YardOpenTransaction(u *units.Unit, requested bool) bool {
 	}
 	record, ok := s.placements[u.Handle]
 	if !ok {
-		// TODO(question): if a port-18 write can precede the unit-creation
-		// placement record, establish whether retail preserves the requested
-		// bit for its later initial stamp. Decider: trace creation's cached-pair
-		// write versus synchronous COB Create. Fail closed meanwhile [04 §4.7].
+		// Retail's admission reads only the unit's cached footprint-origin pair,
+		// its footprint words, the map bounds and the ground cells; the pair is
+		// written by unit state initialization BEFORE bind-and-Create and before
+		// the creation stamp, so a `Create`-time port-18 write is admitted on
+		// the ordinary test and its bit survives into the initial stamp
+		// [04 §4.7 "a Create-time yard write is admitted and kept"][04 R-CB-01
+		// §4]. Nanolathe's equivalent of that pair is the placement record,
+		// which RegisterBuildingPlacement writes before strict COB Create for
+		// every building, so a building never reaches this branch. A unit with
+		// no record here is a mobile (`bmcode`) unit, for which construction
+		// keeps no yard geometry.
+		//
+		// TODO(question): a mobile unit's port-18 write. Retail evaluates the
+		// same admission over the mover's cached pair and, on a pass, sets the
+		// yard bit and restamps; whether the mover restamp honours the yard bit
+		// is untraced. Decider: the mover stamp's class selection against the
+		// yard bit [04 R-COLL-01 §4]. Fail closed meanwhile.
 		return false
 	}
 	yard, err := buildingYard(record.def, record.rect)
@@ -1928,22 +1941,22 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 
 // startBuilding/stopBuilding are edge helpers. The bridge owns callback mode
 // and argument shape; construction only changes the cached edge bit [04 §5.3].
-// startBuilding issues the slot-form heading variant: the construction-command
-// producer, which carries the PRODUCER'S OWN current heading as the script's
-// first argument [04 §2.3b] rather than the relative bearing to a work target
-// that the order-record emitter passes [04 R-CB-01 §3]. Those are two
-// different arguments and this site keeps its own.
+// The factory's production start is the building-bit edge machine and nothing
+// else: a rising edge starts the argument-less deferred StartBuilding, a
+// falling edge StopBuilding. It never enters the order-record emission helper
+// of the nine mobile work handlers, never writes the StopBuilding-pending
+// flag, and its production record has no such flag to carry — so the
+// removal-time StopBuilding emission of [R-ORDER-02 §2] never fires for a
+// factory record and the factory's StopBuilding is the falling edge alone
+// [04 §3.8 correction 2026-09-02][04 R-CB-01 §3 scope note]. The collapse of
+// "slot form" and "emission helper" into one function in [04 R-CB-01 §3]
+// correction 2 concerns only the argument-carrying start; it does not reach
+// this producer. (Settled 2026-09-02, RWU-19-40: this comment used to ask
+// whether a construction-command start should route through an order record
+// and set the pending flag. It should not.)
 //
-// The order-record emitter orders.EmitStartBuilding stays the only writer of
-// the StopBuilding-pending flag here [R-ORDER-02 §2]. Note that
-// [04 R-CB-01 §3] correction 2 withdrew the reading that made the slot form a
-// separate function from the emission helper — retail's producer census finds
-// one function, and its last act is to OR the pending flag into the order
-// record. This helper has no order record to flag, so it cannot mirror that
-// half yet.
-// TODO(question): whether a Nanolathe construction-command start should route
-// through the order record and set the pending flag, given [04 R-CB-01 §3]
-// correction 2 collapses the two variants into one retail function.
+// orders.EmitStartBuilding, the order-record emitter, stays the only writer of
+// the StopBuilding-pending flag [R-ORDER-02 §2].
 func (s *Service) startBuilding(u *units.Unit) {
 	if u == nil || u.Flags&FlagStartBuilding != 0 {
 		return

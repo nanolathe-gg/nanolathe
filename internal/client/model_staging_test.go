@@ -136,16 +136,30 @@ func TestCompositeChildSkipsTheChildBackground(t *testing.T) {
 	}
 }
 
-// TestClampKeyByteHoldsTheStoreWidth locks the byte store's edges. See the
-// TODO(question) on compositeChild: the clamp is this client's choice at a
-// boundary stock content does not reach.
-func TestClampKeyByteHoldsTheStoreWidth(t *testing.T) {
+// TestCompositeChildKeyStoreWraps locks the store width of [R-REN-03A §4]: the
+// comparison is made at full width, so a child lifted past the byte range still
+// wins against the carrier, but the plane stores only the low byte of the
+// shifted key — a wrap, not a saturation. The stored 44 is what a later child
+// or the digger and waterline passes then see.
+func TestCompositeChildKeyStoreWraps(t *testing.T) {
+	body := stagingBody(2, 2, 100, 100, 10, 100)
+	child := stagingBody(2, 2, 100, 100, 20, 200)
+	staging := newStagingImage(body, []stagingChild{{model: composedModel{image: child}}})
+	staging.compositeChild(child, 100) // shifted key 300: admitted over 100, stored as 300 mod 256
+
+	i := int(staging.imageY(100))*staging.width + int(staging.imageX(100))
+	if staging.color[i] != 20 {
+		t.Fatalf("colour = %d, want the child's 20: a full-width comparison admits 300 over 100", staging.color[i])
+	}
+	if staging.height[i] != 44 {
+		t.Fatalf("key = %d, want 44: the store keeps the low byte of 300", staging.height[i])
+	}
 	for _, tc := range []struct {
 		in   int32
 		want uint8
-	}{{-1, 0}, {0, 0}, {255, 255}, {256, 255}, {1000, 255}} {
-		if got := clampKeyByte(tc.in); got != tc.want {
-			t.Fatalf("clampKeyByte(%d) = %d, want %d", tc.in, got, tc.want)
+	}{{-1, 255}, {0, 0}, {255, 255}, {256, 0}, {300, 44}} {
+		if got := wrapKeyByte(tc.in); got != tc.want {
+			t.Fatalf("wrapKeyByte(%d) = %d, want %d", tc.in, got, tc.want)
 		}
 	}
 }

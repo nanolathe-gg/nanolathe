@@ -471,15 +471,20 @@ func (s *Session) publishSnapshot(tick uint32) {
 			p := s.Combat.Records[i]
 			owner, ownerKnown := projectileOwnerFromRecord(s, p.Shooter, p.ShooterSide)
 			pv := frame.ProjectileView{
-				Handle:         h,
-				Owner:          owner,
-				OwnerKnown:     ownerKnown,
-				X:              p.Pos.X,
-				Y:              p.Pos.Y,
-				Z:              p.Pos.Z,
-				WeaponID:       p.WeaponID,
-				Shooter:        p.Shooter,
-				Yaw:            uint16(p.Yaw),
+				Handle:     h,
+				Owner:      owner,
+				OwnerKnown: ownerKnown,
+				X:          p.Pos.X,
+				Y:          p.Pos.Y,
+				Z:          p.Pos.Z,
+				WeaponID:   p.WeaponID,
+				Shooter:    p.Shooter,
+				// The frame carries retail's yaw word: combat's own stored
+				// yaw is half a turn from it (a documented transform,
+				// [06 R-WPN-05 §11]) and the renderer's projectile angle
+				// block is written over retail's [03 §5.2]. Pitch shares
+				// retail's numbering already.
+				Yaw:            combat.RetailYaw(p.Yaw),
 				Pitch:          uint16(p.Pitch),
 				StartX:         p.StartPos.X,
 				StartY:         p.StartPos.Y,
@@ -808,16 +813,20 @@ func publishPlayerRows(s *Session, published *frame.Frame) {
 			CommandersLost:   int(p.CommanderLosses),
 			Controller:       p.ControllerState,
 			Side:             p.Side,
-			// TODO(question): the lobby record's watcher bit (0x40) of
-			// [07 R-HUD-04 §1] has no session-side writer — economy.Player.Watcher
-			// is its declared owner and nothing sets it. The observer byte of
-			// [05 "Authoritative settlement order"] is what skirmish setup does
-			// write for an observer slot, and the result-row gate of
-			// [08 R-CAMP-01 §7] already spends it as the same exclusion, so it is
-			// ORed in here rather than publishing a term that is always clear.
-			// Whether retail's watcher bit and its observer byte are one word is
-			// not established; a static trace of the lobby record's writers would
-			// settle it.
+			// Established: the lobby record's watcher bit (0x40) has exactly two
+			// retail writers and both are multiplayer-only — the battleroom's
+			// SIDE control cycled past the last side, and the kind-3 branch of
+			// the elimination handler ("Continue Watching?"). Skirmish
+			// elimination, slot registration and battle entry never set it, so in
+			// every single-player session it is constantly clear and
+			// economy.Player.Watcher correctly has no session-side writer. The
+			// panel reads it purely as a row exclusion, and it is NOT retail's
+			// observer byte, which is a different field [07 R-HUD-04 §1 "the
+			// watcher bit's writers"]. IsObserver is this build's own observer
+			// controller kind, not a retail skirmish slot; it is ORed in so that
+			// such a slot is excluded the way a retail watcher would be, matching
+			// the result-row gate and the local-watcher test that already spend
+			// it as the same exclusion.
 			Watcher: p.Watcher || p.IsObserver,
 			// Established: the auxiliary word has no writer. The static trace this
 			// site named as its decider has been run — the word is read at ten
@@ -833,18 +842,17 @@ func publishPlayerRows(s *Session, published *frame.Frame) {
 			// deleted because it is the field both readers name — see its
 			// declaration.
 			Auxiliary: p.ResultAuxiliary,
-			// TODO(question): the rank byte's battle-entry initialisation is a
-			// Supported inference in [07 R-HUD-04 §1], whose named decider
-			// [08 R-ENTRY-01 §2] does not mention the byte, and the kill-lead
-			// maintenance of [08 R-CAMP-01 §9] is not implemented, so the session
-			// holds no rank state to publish. Placeholder: the slot index. It is
-			// the ascending slot order every other per-player walk uses [I1], and
-			// it is the only assignment that keeps the ranks distinct, which the
-			// same section's Established row-count sentence requires — "the row
-			// count on screen equals the number of qualifying slots". A single
-			// repeated rank (zero for every slot) would collapse the panel to one
-			// row, contradicting that sentence. Decider: a static trace of the
-			// per-player reset the battle-entry path runs.
+			// Established: the rank byte's initial value is the SLOT INDEX —
+			// the per-slot registration helper (row→player conversion, campaign
+			// seat setup, multiplayer player creation) writes it beside the
+			// controller byte, and battle entry never touches it, so before the
+			// first credited kill the ranks are 0..9 in slot order [07 R-HUD-04
+			// §1 "the rank byte's initial value"][08 R-SKIR-01 §2]. Its only
+			// other writer is the kill-lead shift of [08 R-CAMP-01 §9], which
+			// this build does not yet run (it needs rank state on the player
+			// record and the status-line poster for `%s has taken the lead with
+			// %d kills`); until it does, the published rank is the registration
+			// value for every slot.
 			Rank: uint8(i),
 		}
 		if s.Units != nil {

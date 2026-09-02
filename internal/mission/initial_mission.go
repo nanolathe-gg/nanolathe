@@ -413,24 +413,18 @@ func typeExists(ctx *interpCtx, name string) bool {
 	return false
 }
 
-func isBuildingType(ctx *interpCtx, name string) bool {
-	// `b` builds BuildingBuild when the found catalog entry's unit-name field is
-	// empty and MobileBuild otherwise [04 §3.6]; the discriminant is the
-	// definition record's own name field, read directly.
-	//
-	// TODO(question): our FBI compiler falls back UnitName to the file's base
-	// name when the record omits `unitname`, so a record that authors the key
-	// EMPTY is indistinguishable here from one that omits it — and only the
-	// first is retail's building case. Decider: give the compiler a
-	// raw-presence flag for `unitname` (the string accessor already reports
-	// found-versus-defaulted [02 §4 "Accessor table"]) and read that instead.
-	if ctx != nil && ctx.catalog != nil {
-		if def, ok := ctx.catalog.Unit(content.CanonicalKey(name)); ok && def != nil {
-			return def.UnitName == ""
-		}
+// actingUnitIsBuilding is the `b` verb's discriminant. Retail chooses
+// BuildingBuild when the ACTING unit's movement record is null and MobileBuild
+// at x,y when it has one [04 §3.6 correction 2026-09-02]; the record exists
+// exactly for a definition whose `bmcode` is 1 [04 R-COLL-01 §1]. The product
+// definition's own name field plays no part (corrected 2026-09-02: this used
+// to test the product's UnitName for emptiness, which a catalog hit can never
+// satisfy because that name is the catalog key).
+func actingUnitIsBuilding(ctx *interpCtx) bool {
+	if ctx == nil || ctx.unit == nil || ctx.unit.Def == nil {
 		return false
 	}
-	return false
+	return !ctx.unit.Def.BMCode
 }
 
 func (ctx *interpCtx) lookupIdentOrUnitName(name string) int {
@@ -619,22 +613,14 @@ func handleB(token string, ctx *interpCtx) {
 	if len(fields) >= 4 {
 		fy, _ = strconv.ParseFloat(fields[3], 64)
 	}
-	// Building build when catalog type has empty unit name, mobile build at x,y otherwise [04 §3.6] C10.
+	// BuildingBuild when the acting unit has no mover (a structure), MobileBuild
+	// at x,y when it has one [04 §3.6 correction 2026-09-02] C10. The presence
+	// of coordinates plays no part in the choice.
 	var id orders.ID
-	if isBuildingType(ctx, name) {
+	if actingUnitIsBuilding(ctx) {
 		id = orders.Lookup("BuildingBuild")
-		if id == 0 {
-			id = orders.Lookup("MobileBuild")
-		}
 	} else {
-		// Default to mobile build when coordinates present or not building type.
-		// If fields indicate no coordinates, still mobile? Spec uses presence of building flag, not coords.
-		// Fallback to MobileBuild then BuildingBuild.
 		id = orders.Lookup("MobileBuild")
-		if id == 0 {
-			id = orders.Lookup("BuildingBuild")
-		}
-		// If isBuildingType false but no coords, we still choose MobileBuild? Keep per spec.
 	}
 	if id == 0 {
 		return
@@ -798,12 +784,18 @@ func handleO(token string, ctx *interpCtx) {
 	}
 	rest = strings.TrimSpace(rest)
 	fields := splitArgs(rest)
-	var d1, d2 int64
+	// Retail seeds the scan's two destination cells with the fields' current
+	// values before the `%d,%d` scan, so a missing or malformed operand keeps
+	// the field it had [04 §3.6 correction 2026-09-02]; the verb never tests
+	// its conversion count.
+	const fieldMask = int64(units.StandingFieldMask)
+	d1 := int64(ctx.unit.Flags>>units.StandingMoveShift) & fieldMask
+	d2 := int64(ctx.unit.Flags>>units.StandingFireShift) & fieldMask
 	if len(fields) >= 1 {
 		if v, err := strconv.ParseInt(fields[0], 10, 32); err == nil {
 			d1 = v
 		} else if fv, err2 := strconv.ParseFloat(fields[0], 64); err2 == nil {
-			d1 = int64(fv) // [04 §3.6] flag tokens don't test conversion counts
+			d1 = int64(fv)
 		}
 	}
 	if len(fields) >= 2 {
@@ -814,20 +806,14 @@ func handleO(token string, ctx *interpCtx) {
 		}
 	}
 	// Writes the two standing-order fields of the unit state word: the standing
-	// move field takes d1&3 and the standing fire field takes d2&3 [04 §3.6]
-	// [P0-06]. Those two fields are bits 18-19 and 20-21 everywhere else in doc
-	// 04 — the COB port table [04 §"Port table" port 2], the classifier's
-	// rewrite [08 R-AI-01 §10] and the factory's copy onto a product — so this
-	// site writes there and the fields the mission verb sets are the fields the
-	// rest of the engine reads.
-	//
-	// TODO(question): doc 04's mission-verb row for `o d1,d2` alone says bits
-	// 17-18 and 19-20, one lower than every other reader of the same two
-	// fields. One of the two readings is off by one. Decider: a static trace of
-	// the `o` handler's clear mask against the port-2 read, with the correction
-	// written into whichever of the two doc 04 sites is wrong.
-	ctx.unit.Flags &^= (0x3 << 18) | (0x3 << 20)
-	ctx.unit.Flags |= uint32(((d2&3)<<2)|(d1&3)) << 18
+	// move field (bits 18-19) takes d1&3 and the standing fire field (bits
+	// 20-21) takes d2&3 [04 §3.6 correction 2026-09-02][P0-06] — the same bits
+	// the COB ports 2 and 3 read [04 §4.4] and the factory copies onto a
+	// product [04 §3.8]. (The §3.6 table row used to say 17-18 / 19-20; the
+	// handler's clear mask settled it as off by one.)
+	ctx.unit.Flags &^= (units.StandingFieldMask << units.StandingMoveShift) | (units.StandingFieldMask << units.StandingFireShift)
+	ctx.unit.Flags |= (uint32(d1) & units.StandingFieldMask) << units.StandingMoveShift
+	ctx.unit.Flags |= (uint32(d2) & units.StandingFieldMask) << units.StandingFireShift
 	// No order queued and no issued marker [04 §3.6] C10.
 }
 

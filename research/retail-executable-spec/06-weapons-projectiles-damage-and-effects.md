@@ -1131,6 +1131,70 @@ un-shifted absolute yaw is correct only for a unit whose heading is `0x8000`
 every heading; the authored scripts assume a relative argument with zero
 meaning straight ahead.
 
+### Closed — which angle each velocity build negates, and the two further crossings of the half-turn numbering [R-WPN-05 §11] (2026-09-02)
+
+RWU-19-41 re-read the three velocity builds side by side to settle which
+angle the `−sin`/`−cos` of §4 fact 1 is taken of, because an implementation
+whose bearing helper runs over target-minus-muzzle deltas (the note above)
+needs to know exactly where retail's numbering and its own part company.
+
+**Established (direct-static).** Every velocity build negates the scaled
+sine and cosine of an **absolute** angle, and each reads exactly one:
+
+| build | angle read | source of the angle |
+|---|---|---|
+| ordinary creator (§6.3) | the yaw it has just solved | `atan2q(m.X − t.X, m.Z − t.Z)` over the muzzle and aim points it was handed; stored on the record as it was solved |
+| ballistic creator (§6.4) | the slot's stored yaw | the relative aim yaw of §4 fact 3 **after** the turret executor added the unit's current heading back (§4 "The turret drift pair"); copied to the record unchanged |
+| ground mover (`[04 R-MOV-01 §4]`) | the unit's heading word | the mover's own heading; the position step is `−sin(heading)·speed`, `−cos(heading)·speed` |
+
+The relative aim yaw is never negated and never enters a velocity: it is
+made absolute by adding the heading, and only that absolute value meets the
+sign. The self-propelled per-tick rebuild (§6.7) and the burst spray (§4.3)
+negate the record's stored absolute yaw the same way. So there is one sign
+convention, applied to one kind of angle, and §4 fact 1 stands as written:
+yaw and heading share a numbering in which `a` names `(−sin a, −cos a)`.
+
+**Consequence for the half-turn implementation (Established, from the
+above).** An engine that solves `atan2(t − m)` and builds `+sin`/`+cos`
+carries every *projectile* yaw at `retail + 0x8000` and every *unit* heading
+at retail's own value (its mover negates as retail does). Its projectiles fly
+correctly and its hulls face their motion; the numbering differs only where a
+projectile angle is compared with, added to, or handed to something outside
+the projectile arithmetic. §4's note named the `Aim*` argument; the same
+shift is owed by `RockUnit`'s recoil direction (§4 fact 3, `slotYaw −
+heading`), by the fixed-forward drift compare against the heading
+(`[R-WPN-03 §2]`), and by two more places this unit found unshifted:
+
+1. **The damage packet's direction byte (§9.1).** Byte 7 is the high byte of
+   `atan2q(record.X − victim.X, record.Z − victim.Z) − victim.heading`,
+   solved afresh at delivery from the record's **current** point (the packet
+   builder receives the 16-bit word as its fifth argument and keeps its high
+   byte; the caller that delivers projectile damage forms it, and the bearing
+   helper's result is used for nothing else). It is *not* the projectile's
+   stored yaw: a splash recipient off the line of flight reads the direction
+   from the burst point toward itself, and a direct hit reads the bearing
+   from the record's point at impact. The number is retail's — no
+   engine-side yaw is involved, so an implementation must compute it from
+   positions and its heading word and never substitute its stored yaw. With
+   the victim facing −Z, a record dead ahead (at −Z) yields `0x80`, one
+   behind `0x00`, one at +X `0x40`; the same three values hold at every
+   heading for the same relative placement.
+2. **The projectile angle block the renderer folds** (`[03 §5.2]`, rendertype
+   1 and the model cases). The block handed to the shared vertex rotator is
+   `{roll, yaw − 0x8000, pitch − 0x8000}` taken from the record's own
+   stored words — retail's yaw — while the unit composition folds the hull's
+   bank, heading and pitch with no offset through the same rotator. An
+   implementation that stores the half-turn yaw and applies the block's
+   `− 0x8000` to it draws every 3DO projectile rotated half a turn about the
+   vertical from retail's, i.e. facing away from its motion; the shift
+   belongs at the point where the record's yaw is published to
+   presentation.
+
+**Unknown.** Whether the self-destruct and water-damage callers of the packet
+builder pass a direction word at all, or zero (the projectile caller above is
+the only one traced). *Decider:* the fifth argument at each of the builder's
+other call sites.
+
 ### Closed — the accuracy spread reaches only ballistic trajectories; the ordinary creator re-solves from the aim point [R-WPN-05 §5] (2026-09-02)
 
 **Established (direct-static).** The turret executor hands both creators the

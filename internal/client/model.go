@@ -394,10 +394,16 @@ type faceIdentity struct {
 
 // spanEdge is one row of a chain's edge table: the pixel X the chain reaches on
 // that row, and the attributes still in 16.16 [R-RAST-01 §1] step 3.
+//
+// The table carries no "written" mark and is never cleared between faces,
+// exactly as retail's is not. Each chain is an index path from the top corner
+// to the bottom corner, so every row level between the two is crossed by at
+// least one descending edge of each chain, and the fill reads only those rows;
+// a row a folded chain crosses twice holds the later edge's values. That is
+// why retail's tables can be uninitialised scratch [R-RAST-01 §1] step 3.
 type spanEdge struct {
-	x   int32
-	a   [spanAttrs]int64
-	set bool
+	x int32
+	a [spanAttrs]int64
 }
 
 // screenPoly is one authored primitive as retail's scan converter consumes it:
@@ -646,9 +652,6 @@ func (t *modelTarget) polyScan(p *screenPoly, span func(row, xl, xr int32, a, da
 		t.scanRight = make([]spanEdge, rows)
 	}
 	leftTab, rightTab := t.scanLeft[:rows], t.scanRight[:rows]
-	for i := 0; i < rows; i++ {
-		leftTab[i].set, rightTab[i].set = false, false
-	}
 
 	// Steps 3 and 4. One walk serves both chains; only the index direction
 	// differs. An edge contributes only when it descends — horizontal edges and
@@ -693,7 +696,7 @@ func (t *modelTarget) polyScan(p *screenPoly, span func(row, xl, xr int32, a, da
 				}
 				for ; row < stop; row++ {
 					if i := int(row - yStart); i >= 0 && i < rows {
-						tab[i].x, tab[i].a, tab[i].set = int32(x>>16), a, true
+						tab[i].x, tab[i].a = int32(x>>16), a
 					}
 					x += xStep
 					for k := range a {
@@ -716,16 +719,6 @@ func (t *modelTarget) polyScan(p *screenPoly, span func(row, xl, xr int32, a, da
 	for r := yStart; r < yEnd; r++ {
 		i := int(r - yStart)
 		l, rt := &leftTab[i], &rightTab[i]
-		if !l.set || !rt.set {
-			// TODO(question): a chain that folds back on itself leaves some
-			// rows of its edge table unwritten, and [R-RAST-01 §1] does not say
-			// what retail's table holds there — its buffer is not documented as
-			// initialised, so the row would take stale contents from an earlier
-			// face. Treating an unwritten row as an empty span is the
-			// conservative reading; tracing the edge tables' allocation and any
-			// per-face clear would settle it.
-			continue
-		}
 		if rt.x <= l.x {
 			continue // step 7's cull, evaluated per scanline
 		}
@@ -1205,7 +1198,7 @@ type composedModel struct {
 // staging path copies the cached image into a staging image, composites each
 // child there with the key test, and blits once at the end. A composer that
 // blitted as it finished could never be a staging source.
-func (c *Client) composeModel(draw *presentationrender.UnitDraw, owner uint8, id uint64, kind uint8, reveal *presentationrender.NanoframeReveal) (composedModel, bool) {
+func (c *Client) composeModel(draw *presentationrender.UnitDraw, owner uint8, id uint64, kind uint8, reveal *presentationrender.NanoframeReveal, outline uint8) (composedModel, bool) {
 	polys := c.collectDrawPolys(draw, owner, id, kind)
 	if len(polys) == 0 {
 		return composedModel{}, false
@@ -1240,6 +1233,18 @@ func (c *Client) composeModel(draw *presentationrender.UnitDraw, owner uint8, id
 	if scale == 2 {
 		raster.resolveSupersample(target, &c.pal.Alpha)
 	}
+	if reveal != nil {
+		// The nanoframe outline is a pass over the composition image, not an
+		// overdraw on the framebuffer: retail runs the reveal and the outline
+		// over the image it is about to composite from — the unit's own image
+		// after the cached body is copied in, a carried child's own image
+		// before it is composited into the carrier's staging image — so the
+		// outline is key-tested there and the digger erase, the waterline
+		// pass and a carrier's geometry all act on it like any other pixel
+		// [R-COMP-01 §3]. It follows the anti-alias resolve because that is
+		// the image the reveal reads, at 1x.
+		c.outlineModelInto(target, raster, draw, outline)
+	}
 	if draw.DiggerClip {
 		// A Digger definition raises every key by 75; erasing at or below 125
 		// therefore removes exactly the geometry at or below the model origin,
@@ -1250,12 +1255,13 @@ func (c *Client) composeModel(draw *presentationrender.UnitDraw, owner uint8, id
 }
 
 // finishModel is everything that happens once a composed image is final: the
-// shadow, the one blit, the nanoframe outline, and the trace emit.
+// shadow, the one blit, and the trace emit. The nanoframe outline is not here:
+// it is part of the composed image [R-COMP-01 §3].
 //
 // blit is the image actually put on screen. It is the composed image for an
 // ordinary unit and the staging image for a carrier, which is the one place
 // the two differ [R-REN-03A §4].
-func (c *Client) finishModel(m composedModel, blit *modelTarget, reveal *presentationrender.NanoframeReveal, outline uint8) {
+func (c *Client) finishModel(m composedModel, blit *modelTarget) {
 	if m.image == nil {
 		return
 	}
@@ -1270,9 +1276,6 @@ func (c *Client) finishModel(m composedModel, blit *modelTarget, reveal *present
 	// own silhouette.
 	c.drawModelShadow(m.draw, m.image)
 	blit.commit(c.indexed, c.width, c.height)
-	if reveal != nil {
-		c.drawModelOutline(m.draw, outline, m.raster)
-	}
 	if m.raster != nil && m.raster.trace != nil {
 		m.raster.trace.resolve(m.raster, c.indexed, c.width, c.height)
 		m.raster.trace.emit(c.rendererTraceSink, c.rendererTraceFilter)
@@ -1283,11 +1286,11 @@ func (c *Client) finishModel(m composedModel, blit *modelTarget, reveal *present
 // by finishModel with no staging image, which is every subject that carries
 // nothing [03 §2.4][R-REN-03A §1].
 func (c *Client) drawModel(draw *presentationrender.UnitDraw, owner uint8, id uint64, kind uint8, reveal *presentationrender.NanoframeReveal, outline uint8) bool {
-	m, ok := c.composeModel(draw, owner, id, kind, reveal)
+	m, ok := c.composeModel(draw, owner, id, kind, reveal, outline)
 	if !ok {
 		return false
 	}
-	c.finishModel(m, nil, reveal, outline)
+	c.finishModel(m, nil)
 	return true
 }
 
@@ -1317,37 +1320,43 @@ func (c *Client) attachModelTrace(t *modelTarget, id uint64) {
 	t.tick = c.frameTick
 }
 
-// drawModelOutline overdraws every primitive of every visible piece as a
-// closed polyline. The selection plate is the one primitive the outline pass
-// skips, exactly as the raster pass does [03 §5.2][03 §2.4.1].
-// The trace target, when present, is the image the model was rasterized into,
-// so outline points are converted back into its coordinate space before they
-// are recorded; the visible line itself is drawn in framebuffer space.
+// outlineModelInto overdraws the nanoframe wireframe into a composition image
+// [R-COMP-01 §3]. It is not a polyline and not a framebuffer pass:
 //
-// The outline projects each vertex through exactly the body's own path:
-// [R-COMP-01 §3] gives the outline vertex as `sx = hi16(x) + originX`,
-// `sy = hi16(-z) - (hi16(y) >> 1) + originY` — the composition image's own
-// projection and origin pair — and the image is then blitted at the unit
-// anchor, so a screen point is modelLocalVertex plus modelAnchor.
+//   - pieces are walked last to first, primitives from index 1 when the piece
+//     declares a selection primitive and from 0 otherwise, the same exclusion
+//     the raster applies;
+//   - each primitive's corners, closed with a copy of the first, go through the
+//     [R-RAST-01 §1] edge walk with the composition image's own projection and
+//     origin pair, and on every row where `xr − xl > 0` strictly exactly two
+//     pixels are written, at `xl` and at `xr`: the polygon's per-scanline
+//     extremes;
+//   - with a key plane each endpoint is admitted only when the stored key is
+//     at or below the edge's own interpolated key, and the key is stored — the
+//     span writers' admission — so the wireframe shows through the body only
+//     where the body was erased, and a carrier's geometry occludes it in the
+//     staging composite like any other pixel. Without a key plane both writes
+//     are unconditional.
 //
-// This previously passed the composed vertices straight to the camera's
-// world-space projection. Those vertices are the model-space piece chain with
-// the unit position added componentwise ([03 §2.4]), not world coordinates:
-// the camera adds screen Y from +Z, so the wireframe came out mirrored against
-// the body it outlines by the handedness flip of [R-RAST-01 §2], and it
-// composed the unit's own height into the model's half-height shear instead of
-// leaving it to the anchor. A nanoframe's outline therefore drifted off its
-// body and turned the wrong way as the unit turned.
-func (c *Client) drawModelOutline(draw *presentationrender.UnitDraw, color uint8, target *modelTarget) {
-	if c == nil || c.cam == nil || draw == nil || draw.Model == nil {
+// The image is the 1x composition image, which is what retail's reveal reads
+// after the anti-alias resolve. raster is the image the parity trace is
+// attached to, so outline writes are recorded in its coordinate space.
+//
+// This replaces a framebuffer overdraw of every primitive as a closed
+// Bresenham polyline, drawn after the blit and never depth-tested, which
+// [R-P0-19-N] once described and [R-COMP-01 §3] corrected.
+func (c *Client) outlineModelInto(target, raster *modelTarget, draw *presentationrender.UnitDraw, color uint8) {
+	if c == nil || target == nil || draw == nil || draw.Model == nil || target.width <= 0 || target.heightPx <= 0 {
 		return
 	}
 	var trace *rendererTrace
-	if target != nil {
-		trace = target.trace
+	traceScale := int32(1)
+	if raster != nil && raster.trace != nil {
+		trace, traceScale = raster.trace, raster.scale
 	}
-	anchorX, anchorY := c.modelAnchor(draw)
-	for pi, piece := range draw.Pieces {
+	var xs, ys, ks []int32
+	for pi := len(draw.Pieces) - 1; pi >= 0; pi-- {
+		piece := draw.Pieces[pi]
 		if pi >= len(draw.Model.Pieces) {
 			continue
 		}
@@ -1357,41 +1366,126 @@ func (c *Client) drawModelOutline(draw *presentationrender.UnitDraw, color uint8
 			}
 			n := len(pr.VertexIndices)
 			if n < 2 {
+				// One corner closed with itself has no row span and draws
+				// nothing; an empty primitive has no corners at all.
 				continue
 			}
-			if !modelFacePaints(piece.WorldVertices, pr.VertexIndices, draw.WorldPos) {
-				// The outline is the same edge walk as the body, so the
-				// winding cull removes the same faces from it [R-COMP-01 §3].
-				continue
-			}
-			var px, py int32
-			for k := 0; k <= n; k++ {
-				vi := int(pr.VertexIndices[k%n])
-				if vi >= len(piece.WorldVertices) {
+			valid := true
+			for _, vi := range pr.VertexIndices {
+				if int(vi) >= len(piece.WorldVertices) {
+					valid = false
 					break
 				}
-				lx, ly, _ := modelLocalVertex(piece.WorldVertices[vi], draw.WorldPos)
-				lx, ly = c.scaleModelLocal(lx, ly)
-				sx, sy := anchorX+lx, anchorY+ly
-				if k > 0 && !c.segmentOffscreen(px, py, sx, sy) {
-					c.drawIndexedLine(px, py, sx, sy, color)
-					if trace != nil {
-						ix0, iy0 := target.imageX(px), target.imageY(py)
-						ix1, iy1 := target.imageX(sx), target.imageY(sy)
-						traceOutlineLine(trace, ix0, iy0, ix1, iy1, color, pi, pri)
-					}
-				}
-				px, py = sx, sy
 			}
+			if !valid {
+				continue // malformed primitive suppresses the whole face [fmt 3do]
+			}
+			xs, ys, ks = xs[:0], ys[:0], ks[:0]
+			for k := 0; k <= n; k++ {
+				v := piece.WorldVertices[pr.VertexIndices[k%n]]
+				lx, ly, _ := modelLocalVertex(v, draw.WorldPos)
+				lx, ly = c.scaleModelLocal(lx, ly)
+				xs = append(xs, lx+target.originX)
+				ys = append(ys, ly+target.originY)
+				ks = append(ks, modelHeightKey(v[1].Sub(draw.WorldPos[1]), draw.DiggerClip))
+			}
+			target.outlinePolygon(xs, ys, ks, color, trace, traceScale, pi, pri)
 		}
 	}
 }
 
-// segmentOffscreen trivially rejects a wireframe edge that cannot cross the
-// framebuffer, so an off-screen nanoframe costs no Bresenham steps.
-func (c *Client) segmentOffscreen(x0, y0, x1, y1 int32) bool {
-	w, h := int32(c.width), int32(c.height)
-	return (x0 < 0 && x1 < 0) || (y0 < 0 && y1 < 0) || (x0 >= w && x1 >= w) || (y0 >= h && y1 >= h)
+// outlinePolygon is the outline pass's edge walk over one closed corner list
+// in image space [R-COMP-01 §3]: extrema, the left chain toward the previous
+// index and the right chain toward the next, `x = x0 × 65536 + 0xFFFF` and
+// `key = k0 × 65536` stepped by `(Δ × 65536) / (y1 − y0)` truncating, over rows
+// `[minY, maxY)`, then two pixels per row where `xr − xl > 0`.
+//
+// Retail's walk has no clip: the composition box is measured from the same
+// vertices with a two-pixel margin, so every corner is inside it. The image
+// bounds are checked here per pixel only so a corner the box does not hold —
+// a primitive the raster dispatch dropped — cannot write outside the planes.
+func (t *modelTarget) outlinePolygon(xs, ys, ks []int32, color uint8, trace *rendererTrace, traceScale int32, piece, primitive int) {
+	n := len(xs)
+	if n < 2 {
+		return
+	}
+	minY, maxY, topIdx, botIdx := ys[0], ys[0], 0, 0
+	for i := 1; i < n; i++ {
+		if ys[i] < minY {
+			minY, topIdx = ys[i], i
+		}
+		if ys[i] > maxY {
+			maxY, botIdx = ys[i], i
+		}
+	}
+	if maxY == minY {
+		return
+	}
+	rows := int(maxY - minY)
+	if cap(t.scanLeft) < rows || cap(t.scanRight) < rows {
+		t.scanLeft = make([]spanEdge, rows)
+		t.scanRight = make([]spanEdge, rows)
+	}
+	leftTab, rightTab := t.scanLeft[:rows], t.scanRight[:rows]
+	walk := func(step int, tab []spanEdge) {
+		cur := topIdx
+		for guard := 0; guard <= n; guard++ {
+			next := cur + step
+			if next < 0 {
+				next = n - 1
+			} else if next >= n {
+				next = 0
+			}
+			if ys[next] > ys[cur] {
+				dy := int64(ys[next] - ys[cur])
+				x := int64(xs[cur])<<16 + spanEdgeBias
+				xStep := (int64(xs[next]-xs[cur]) << 16) / dy
+				k := int64(ks[cur]) << 16
+				kStep := (int64(ks[next]-ks[cur]) << 16) / dy
+				for row := ys[cur]; row < ys[next]; row++ {
+					i := int(row - minY)
+					tab[i].x, tab[i].a[spanKey] = int32(x>>16), k
+					x += xStep
+					k += kStep
+				}
+			}
+			if next == botIdx {
+				return
+			}
+			cur = next
+		}
+	}
+	walk(-1, leftTab)
+	walk(+1, rightTab)
+	for r := minY; r < maxY; r++ {
+		i := int(r - minY)
+		xl, xr := leftTab[i].x, rightTab[i].x
+		if xr-xl <= 0 {
+			continue
+		}
+		t.outlinePixel(xl, r, uint8(leftTab[i].a[spanKey]>>16), color, trace, traceScale, piece, primitive)
+		t.outlinePixel(xr, r, uint8(rightTab[i].a[spanKey]>>16), color, trace, traceScale, piece, primitive)
+	}
+}
+
+// outlinePixel writes one outline endpoint under the span writers' admission:
+// unconditionally without a key plane, else only when `storedKey <= key`, and
+// then the key is stored too [R-COMP-01 §3][R-REN-03A §2].
+func (t *modelTarget) outlinePixel(x, y int32, key, color uint8, trace *rendererTrace, traceScale int32, piece, primitive int) {
+	if x < 0 || y < 0 || x >= int32(t.width) || y >= int32(t.heightPx) {
+		return
+	}
+	i := int(y)*t.width + int(x)
+	if t.height != nil {
+		if t.height[i] > key {
+			return
+		}
+		t.height[i] = key
+	}
+	t.color[i], t.covered[i] = color, color != t.transparent
+	if trace != nil {
+		trace.composite(x*traceScale, y*traceScale, color, piece, primitive)
+	}
 }
 
 // unitNanoframeReveal builds the reveal for an unfinished unit, or nil when
@@ -1446,12 +1540,15 @@ func (c *Client) drawProjectileModel(p frame.ProjectileView) bool {
 		return false
 	}
 	draw := presentationrender.BuildProjectileDraw(m.compiled, nil, p.Yaw, p.Pitch, [3]numeric.Fixed{p.X, p.Y, p.Z})
-	// A projectile is not a unit instance and carries no class or ZBuffer
-	// bit. It composes with the height plane so its own pieces resolve, and
-	// without the structure supersample.
-	// TODO(question): whether retail's projectile model records allocate a key
-	// plane, and whether they can reach the anti-alias gate at all.
-	draw.KeyPlane = true
+	// A projectile is not a unit instance: retail draws its model through the
+	// standalone effect/projectile renderer entry, which rotates and projects
+	// the piece's vertices and hands each primitive to the FRAMEBUFFER
+	// variants of the flat filler and quad mapper. Those have no key plane, so
+	// the model is pure painter order, and the anti-alias supersample lives
+	// only in the unit composition path this entry never enters
+	// [R-COMP-02 §6][R-RAST-01 §1]. Composing into a one-plane image and
+	// blitting it is the same painter order at the same pixels.
+	draw.KeyPlane, draw.Structure = false, false
 	return c.drawModel(draw, 0, projectilePresentationID(p), modelCursorProjectile, nil, 0)
 }
 

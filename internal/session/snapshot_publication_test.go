@@ -527,7 +527,9 @@ func TestSnapshotContainsProjectileRenderState(t *testing.T) {
 	if got.StartX != p.StartPos.X || got.TailZ != p.StartPos.Z || got.TargetY != p.TargetPos.Y || got.VZ != p.Velocity.Z {
 		t.Fatalf("endpoints/velocity = %+v", got)
 	}
-	if got.Yaw != uint16(p.Yaw) || got.Pitch != uint16(p.Pitch) || got.CreationTick != p.CreationTick || got.ExpiryTick != p.ExpiryTick || got.MuzzlePiece != int32(p.MuzzlePiece) {
+	// The frame carries retail's yaw word — combat's stored yaw plus half a
+	// turn [06 R-WPN-05 §11] — and the pitch unchanged.
+	if got.Yaw != combat.RetailYaw(p.Yaw) || got.Yaw == uint16(p.Yaw) || got.Pitch != uint16(p.Pitch) || got.CreationTick != p.CreationTick || got.ExpiryTick != p.ExpiryTick || got.MuzzlePiece != int32(p.MuzzlePiece) {
 		t.Fatalf("orientation/timing = %+v", got)
 	}
 	// Lifetime carried a zero "explicitly unknown" marker until [06 R-WFX-01 §4]

@@ -45,9 +45,18 @@ func TestResurrectionDelay_Sole03(t *testing.T) {
 	if got := ResurrectionDelay(3000, 30); got != 900 {
 		t.Fatalf("resur delay 3000/30 => %d want 900", got)
 	}
-	// work <30 => floor 0 => overflow sentinel 0x80000000
-	if got := ResurrectionDelay(3000, 20); got != -2147483648 {
-		t.Fatalf("resur delay work20 => %d want -2147483648 overflow", got)
+	// work <30 => q 0 => infinity => indefinite integer, low 32 bits zero =>
+	// delay 0, immediate completion [05 R-WORK-01 §7 "the width of the stored
+	// delay"]. Zero buildtime with q 0 (a NaN) lands on the same zero.
+	if got := ResurrectionDelay(3000, 20); got != 0 {
+		t.Fatalf("resur delay work20 => %d want 0", got)
+	}
+	if got := ResurrectionDelay(0, 20); got != 0 {
+		t.Fatalf("resur delay 0/20 => %d want 0", got)
+	}
+	// A negative buildtime gives a negative delay, never zero.
+	if got := ResurrectionDelay(-3000, 30); got != -900 {
+		t.Fatalf("resur delay -3000/30 => %d want -900", got)
 	}
 	// Check '_' truncation sole use: FeatureNameToDef via '_' truncation
 	if got := FeatureNameToDefName("ARMCK_DEAD"); got != "ARMCK" {

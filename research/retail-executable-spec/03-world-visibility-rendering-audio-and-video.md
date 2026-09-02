@@ -1300,6 +1300,20 @@ or re-blitted into it, both planes. Then:
 3. the waterline and digger passes of §7 run over the staging image;
 4. the staging image is blitted once.
 
+**Store width of the shifted key (Established, direct-static, 2026-09-02,
+RWU-19-43).** In step 2 the comparison is made at full register width — both
+stored key bytes widened, the signed height delta added to the child's — but
+the store narrows: the staging plane receives the **low byte** of
+`childKey + heightDelta`, a wrapping byte add, not a saturation. A child
+lifted far enough above its carrier for the sum to pass 255 therefore wins the
+comparison and then records a small key that later children and the waterline
+and digger erases see as low. Stock cargo and factory products stay within a
+few tens of world units of their carrier, so the wrap is unreachable with
+stock content; it is recorded because Nanolathe had guessed a saturating clamp
+there. The composite also has no clip of its own: it is skipped entirely when
+the child's pixel offset into the staging image is negative on either axis,
+and otherwise writes the child's whole box, which the union box always holds.
+
 This closes the `TODO(question)` recorded in [R-RND-02A] about "the unit
 placement path's second, separate invocation of the unshaded piece renderer,
 targeting a different image record than the dispatcher's". It is the live-piece
@@ -2171,6 +2185,20 @@ rejected.
 to `0`) until the next index equals `m`, writing `right[r]` and `rightA[r]`.
 Both chains index the edge table from row `yStart`; an edge clipped at `T`
 lands on the same table row as an unclipped one would have.
+
+**Edge table rows are always written (Established, 2026-09-02, RWU-19-43).**
+The two tables are uninitialised scratch — stack arrays the filler only
+probes for — and there is no per-face clear, yet no row the fill reads is ever
+stale. Each chain is an index path that starts at the corner holding `minY`
+and ends at the corner holding `maxY`, so for every row `r` in
+`[minY, maxY)` the path has a last corner with `y ≤ r` whose successor has
+`y > r`: a descending edge, and it writes row `r`. A chain that folds back on
+itself writes some rows more than once, and such a row keeps the **later**
+edge's values. Clipping does not change this: the fill's `[yStart, yEnd)` lies
+inside `[minY, maxY)`, and an edge clipped at `T` still writes every row of its
+own range at or below `T`. An implementation needs neither a "written" mark nor
+a clear; a row it would consider unwritten cannot occur. (Nanolathe had carried
+a `TODO(question)` treating such a row as an empty span; there is no such row.)
 
 **5. The fill.** For `r` in `[yStart, yEnd)`, with `xl = left[r]` and
 `xr = right[r]`:
@@ -4981,7 +5009,13 @@ pixel where that texture is opaque the underlying indexed pixel `src` is
 replaced by `LHT[level * 256 + src]` at a level derived from the disc
 intensity. Its whole-tick countdown cadence is shared with the explosion
 animation, and the disc itself is seeded from the CRT presentation random
-stream (`*214013+2531011`), not the simulation stream.
+stream (`*214013+2531011`), not the simulation stream. The state it draws
+from is the **loading thread's own** CRT block, created fresh for battle entry
+and seeded from the time of day before the world rebuild ([08 R-ENTRY-01 §2],
+[01 R-PLAT-01 §4]), so the noise pattern differs between two retail battles by
+design and follows from no authored datum; a clone's choice of seed is
+presentation-only, and the shape — the ramp, the ellipse, the up-to-nine
+thirty-seconds jitter — is the whole contract (Established, 2026-09-02).
 
 **Correction, 2026-08-31 — where it composites, and the muzzle-flash half.**
 This sentence said the halo is "composited after the flat tile pass and before
@@ -5002,16 +5036,24 @@ puff, the `soundstart` sound, and whatever the unit's `Fire*` script emits. Any
 halo at a muzzle therefore arrives through one of those, not through a
 producer of its own.
 
-**Unknown — brightening or opaque colour.** The paragraph above describes the
-composite as an `LHT` brightening and gives the `discByte→level` mapping for
-it. The pool's first walk goes through a blitter distinct from the second's,
-and a search of that blitter and its span writers found no read of the `LHT`
-table. If it simply writes the disc's bytes, the disc is an opaque `0x4F..0x6E`
-ramp and every impact is far brighter than a brightening would make it.
-*Decider:* a trace of that blitter's span writer for an `LHT` lookup. The effect is
+**Correction, 2026-09-02 (RWU-19-43) — brightening, established; and the row
+is `src − 0x4F`.** This paragraph previously stood as an Unknown: "the pool's
+first walk goes through a blitter distinct from the second's, and a search of
+that blitter and its span writers found no read of the `LHT` table; if it
+simply writes the disc's bytes, the disc is an opaque `0x4F..0x6E` ramp". The
+search was wrong. The first-walk blitter is its own routine, gated on the
+display's light-table-loaded bit, and **both** of its span writers — the raw
+one and the run-length one — replace each destination byte under an opaque
+source byte with `LHT[(src − 0x4F)·256 + dst]`, exactly as [R-FX-01 §4]
+states. The disc is a brightening of what is under it; with no light table
+loaded the blitter draws nothing, not an opaque disc. The mapping sentence
+below previously read `level = clamp(discByte − 0x50, 0, 31) = 31 − q`; the
+traced row is `discByte − 0x4F = 32 − q` for the ramp bytes `q = 1..32` and
+`31` for the ring byte — one row brighter at every byte, and needing no clamp
+because the ramp `0x4F..0x6E` is exactly rows `0..31`. The effect remains
 presentation-only, not authoritative, not hashed, and not save/loaded.
 
-`LHT` never darkens; darkening is through `SHD` rows 0–14. The `discByte→level` mapping is established (direct-static for the byte thresholds — the flash-disc precompute was re-exported and verified in 2026-08-26): the disc canvas is filled per pixel with one CRT draw each, `R = trunc(CRT*10/0x8000)` in `0..9`, radial distance `sqrt(dx*dx + 1.33*dy*dy)`, `q = trunc(((R + sqrt) / H) * 32.0)`, then the stored byte is `0x6F − q` while `(0x20 − q) mod 256 < 0x20`, `0x6E` while that byte-compare lies in `0x20..0x21`, and `0xFF` from `0x22` up — the 0xFF band is what makes the disc's outer area transparent, the visible region being the band where `q mod 256` lies in `0..31`. The halo level is `clamp(discByte − 0x50, 0, 31) = 31 − q` bright centre to rim, and the disc is drawn to screen as radial spokes from angle `0x800` through `0x10000` in steps of `0x800` through the sin/cos helper pair (the same angular step as the minimap circle rasterizers).
+`LHT` never darkens; darkening is through `SHD` rows 0–14. The `discByte→level` mapping is established (direct-static for the byte thresholds — the flash-disc precompute was re-exported and verified in 2026-08-26): the disc canvas is filled per pixel with one CRT draw each, `R = trunc(CRT*10/0x8000)` in `0..9`, radial distance `sqrt(dx*dx + 1.33*dy*dy)`, `q = trunc(((R + sqrt) / H) * 32.0)`, then the stored byte is `0x6F − q` while `(0x20 − q) mod 256 < 0x20`, `0x6E` while that byte-compare lies in `0x20..0x21`, and `0xFF` from `0x22` up — the 0xFF band is what makes the disc's outer area transparent, the visible region being the band where `q mod 256` lies in `0..31`. The halo level is `discByte − 0x4F = 32 − q` (`31` for the ring byte; corrected 2026-09-02 above from `clamp(discByte − 0x50, 0, 31) = 31 − q`) bright centre to rim, and the disc is drawn to screen as radial spokes from angle `0x800` through `0x10000` in steps of `0x800` through the sin/cos helper pair (the same angular step as the minimap circle rasterizers).
 
 **Correction, 2026-08-31 — the ellipticity axis and the division.** This
 paragraph previously put the 1.33 "applied to the x-axis term" and stated
@@ -5422,6 +5464,23 @@ gated on the projected origin lying inside the viewport rectangle
 (inclusive point-in-rectangle test); the fixed-effect draw pass applies the
 same test before calling the effect entry. Neither entry reads `SHD`, the height key, or the
 composition image; both write straight to the target image.
+
+**Consequently a projectile or effect model has no key plane and never reaches
+the structure anti-alias gate (Established, direct-static, 2026-09-02,
+RWU-19-43).** The fillers these entries call are the **framebuffer** variants
+of [R-RAST-01 §1], which carry no key plane and resolve overlapping primitives
+in painter order — the primitives' stored order within the piece — and the
+supersampled vertex path of [R-REN-03A §6] is reachable only from the unit
+composition renderer, which neither entry is or calls. A clone that composes a
+projectile model into a one-plane image and blits it produces the same painter
+order at the same pixels. Each call also draws **one piece**: render type 1 of
+§5.4 passes the definition's model and, under its flag and deadline, a second
+piece taken from the model header's child slot as the "secondary model"
+(**Supported inference** that the slot is the first child piece: the in-place
+relocation of [fmt 3do] leaves the header's child link at that position).
+Whether any stock projectile model carries pieces retail therefore never draws
+is `TODO(question)`: an asset census of the projectile 3DOs' piece trees would
+settle it.
 
 ### Closed — the composition memory cache and its composite surface, the strip pool's growth, and the container `finished` query [R-COMP-02 §7] (2026-08-29)
 
@@ -6048,8 +6107,9 @@ primitive the one exclusion — the same primitive the raster pass skips. The
 outline is not depth-tested, so the whole wireframe shows through the body. This
 is why a nanoframe reads as a pulsing wireframe at the start of construction:
 the body is entirely erased and only the outline remains. (Superseded in
-detail by [R-COMP-01 §3]: the overdraw is two pixels per polygon scanline, and
-it is key-tested whenever the image has a key plane.)
+detail by [R-COMP-01 §3]: the overdraw is two pixels per polygon scanline, it
+is key-tested whenever the image has a key plane, and it is a pass over the
+composition image — never the framebuffer.)
 
 **Not the reveal.** The construction fraction also forces the mobile image-cache
 path and suppresses one shadow branch. Neither changes the soft/hard draw
@@ -6089,6 +6149,28 @@ depth-tested whenever the image has a key plane. **Established
   the outline shows through the body only where the body was erased.
 - The colour is `pulse B`, unchanged; the recolour verdicts of [R-P0-19-N]
   are as stated there (pixels equal to the transparent index are skipped).
+
+**The target image, and where the pass sits (Established, direct-static,
+2026-09-02, RWU-19-43).** The reveal and the outline are one pass over a
+**composition image**, never over the framebuffer, and which image depends on
+whose nanoframe it is:
+
+- a unit drawn on its own — a structure under construction — runs it over the
+  **staging image** of [R-REN-03A §4], immediately after the cached body is
+  copied in and before the live-piece pass, the attached-child composites, and
+  the waterline and digger erases, so those erases remove outline pixels
+  below their thresholds exactly as they remove body pixels;
+- an attached child — a factory's product on its plate, carried cargo — runs
+  it over the child's **own two-plane image**, after the child is composed and
+  before that image is composited into the carrier's staging image under the
+  key test of [R-REN-03A §4] step 2. A carrier's geometry therefore occludes
+  the product's wireframe wherever it occludes the product's body, and a child
+  composited later covers the carrier's own outline where its keys win.
+
+An outline pixel stores its key beside its colour, which is what lets every
+later key test see it. This retires the question Nanolathe carried on whether
+the outline was a framebuffer overdraw a carrier could never occlude: it had
+been implemented as one.
 
 ### Closed — unit draw order: the Z-row buckets, the two unit passes, and where shadows and tints happen [R-RAST-01 §7] (2026-08-29)
 
@@ -7154,6 +7236,28 @@ never writes and the session-block clear leaves zero: a selector that yields 0
 binds a null sequence (no cursor art). The stock file's twenty-second entry,
 `cursorprotect` (8 frames), is bound by nothing. **Established.**
 
+**Correction (2026-09-02, RWU-19-43) — index 0, a missing name and a frameless
+entry are undefined, not "no cursor art".** The sentence above says a selector
+yielding 0 "binds a null sequence (no cursor art)". The binding happens; the
+outcome is not a blank pointer. The sequence binder of §4.4 reads the entry's
+frame count — for its start-index clamp — **before** it tests the entry
+pointer, and its null arm then reads the loop byte through the same null
+pointer, so binding a null sequence faults on the first read. The same holds
+for a named entry the bank lookup does not find: the lookup returns null on a
+miss and the slot stays null. An entry that exists with **zero frames** binds
+frame 0 (the clamp sends every start index to 0 when the count is not greater
+than it) and reads its hold word from beyond the empty frame table. The index
+setter has no range check either: it stores the byte and binds the word at
+that offset of the handle array, so an index above 21 would bind the globals
+that follow the array as if they were sequences. None of this is reachable
+with stock content and stock producers — the shape chooser starts at 19 and
+takes minima over 1..20, the hourglass sites force 20 and the reset forces 19
+— so retail defines **no** behaviour for a missing, frameless or out-of-range
+cursor. A clone that validates every named entry at load, or ignores such an
+index write, is choosing, not cloning; both choices are outside anything
+retail can show. **Established (direct-static; the read-before-test order
+verified in the instruction stream).**
+
 **Selection data path (Established; the state machine itself is doc 07's).**
 The battle interface keeps one byte, *the current cursor index*, and a
 setter that is a no-op when the requested index equals it; on a change it
@@ -7282,6 +7386,27 @@ handler toggles **bit 4 of the session preference word**, which is exactly the
 §5.6's "which authored setting drives that bit is not established" closes:
 no authored setting drives it; it is a per-session typed toggle, off at
 battle start (the word is cleared with the session block) and not persisted.
+
+**Correction (2026-09-02, RWU-19-42) — where the bit is cleared.** The
+previous paragraph said the toggle is "off at battle start (the word is
+cleared with the session block)". That is wrong about the clearing site:
+the preference word is the same word that holds the persisted `clock` bit
+and the other registry-backed display preferences, and it survives battle
+entry — the battle-entry orchestrator ([08 R-ENTRY-01]) never touches it.
+The bit's writers, exhaustively over the recovered function set, are two:
+the `NoShake` handler (toggle) and the **registry preference loader**, which
+clears bit 4 unconditionally every time it runs — at process start and
+again when the `SINGLE` screen's `Skirmish` button reloads the preferences
+([07 R-FE-01 §1] phase 7 substate 0xb). It reads no registry key for the
+bit, and the settings writer persists nothing for it. So the toggle is off
+when the process starts and whenever a skirmish is set up from the menu,
+but a toggle made in one battle is still in force in a later battle of the
+same process that did not pass through that reload (a campaign mission
+entered from the briefing chain). The impact dispatcher's request helper
+tests the bit and returns with every accumulator untouched when it is set;
+a second, direct-store request form carrying the same test has no caller.
+**Established** (direct static; bounded negative over the word's writer
+census).
 
 **The named presentation scratch surfaces (lane question).** The three
 mouse save-under rectangles are the old-background, fresh-background and

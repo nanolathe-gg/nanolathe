@@ -768,6 +768,12 @@ func (s *Service) ApplySelfDestructDamage(w *units.World, target pool.Handle, ti
 		return true
 	}
 	if bridge := s.callbackBridgeForUnit(victim); bridge != nil {
+		// TODO(question): the direction word the self-destruct caller hands
+		// the packet builder is untraced — only the projectile caller's
+		// (a fresh victim-relative bearing, [06 §9.1], hitDirectionByte) is
+		// Established [06 R-WPN-05 §11]. `packet` here is a synthetic record
+		// with a zero yaw, so this is a direction byte of zero; settle it at
+		// the builder's self-destruct call site before relying on it.
 		bridge.HitByWeapon(uint8(packet.Yaw.Raw() >> 8))
 		bridge.TakeDamage(cob.HealthPercent(victim.Health, victim.MaxHealth))
 	}

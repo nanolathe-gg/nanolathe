@@ -133,6 +133,26 @@ func InitCommon(p *Projectile, now uint32, muzzle, target Vec3, targetUnit pool.
 // index, ((angle + 32) >> 7) & 511 [06 §3.3][04 §5.1]. The "64-unit step"
 // reading was a documentation error corrected in [06 R-WPN-01 §4]; the only
 // real drift was numeric.Sin/Cos omitting the +32 pre-add, fixed with it.
+//
+// Sign convention (settled by [06 R-WPN-05 §11], RWU-19-41). Retail writes
+// every creator's horizontal build as `velocityX = -sin(yaw, H)`,
+// `velocityZ = -cos(yaw, H)` [06 §6.3][06 §6.4], and the mover's as
+// `-sin(heading)·speed`, `-cos(heading)·speed` [04 R-MOV-01 §4]: a retail
+// yaw `a` names the direction `(-sin a, -cos a)`, and its bearing helper is
+// written over muzzle-minus-target deltas. This build solves every
+// projectile yaw over target-minus-muzzle deltas (YawFromDelta) and builds
+// velocity here from +sin/+cos. Both flips cancel — the projectile leaves
+// toward the aim point exactly as retail's does — so the two numberings
+// differ by exactly half a turn: `p.Yaw == retailYaw + 0x8000` for every
+// projectile record, while a unit's heading is retail's own number
+// (movement negates, as retail does). This is a consistent, documented
+// transform, not a defect: the arithmetic below must stay +sin/+cos as long
+// as YawFromDelta is target-minus-muzzle. What must carry the shift is every
+// value that leaves the projectile arithmetic — the Aim*/RockUnit arguments
+// (aimYawForScript), the fixed-forward drift compare, the published yaw the
+// renderer folds (RetailYaw), and the damage packet's direction byte, which
+// retail derives from a fresh victim-relative bearing, never from the yaw
+// (hitDirectionByte).
 func VelocityFromAngles(yaw, pitch numeric.Angle, speed numeric.Fixed) Vec3 {
 	// [06 §6.7] recomputes all velocity components from scalar speed, yaw, pitch
 	cosPitch := numeric.Cos(pitch) // [04 §5.1] table scaled 8192

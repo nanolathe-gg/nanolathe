@@ -59,7 +59,8 @@ type Descriptor struct {
 	// pinning test live in internal/hud (queueoverlay.go).
 	//
 	// This retires the `TODO(question)` [P0-07] that stood here, which recorded
-	// that a bounded census over function boundaries had found no reader.
+	// that a bounded census over function boundaries had found no reader;
+	// [04 §3.1] records the same answer in place since 2026-09-02.
 	Class uint8 // order-queue overlay draw mask [04 §3.1][07 R-P0-11 §3]
 	// AckGroup is [04 §3.1]'s "acknowledgement group index" and the same byte
 	// [07 R-P0-11 §3] calls the descriptor's **icon byte**: the overlay's bit-8

@@ -953,7 +953,10 @@ accumulators are cleared; the new duration is
 `trunc((requested + current) / 2)` blended with any current duration, the
 remaining counter is set to it, the amplitudes accumulate, and the active
 flag is set when the duration is positive. An options bit can make requests
-return untouched. Each sub-tick with an active shake and a positive counter
+return untouched — closed 2026-09-02 (RWU-19-42): the bit is bit 4 of the
+session preference word, whose only toggle is the typed `NoShake` command
+([03 R-FX-01 §7], [07 §11 "Mask 1"]); no `.ini`/registry key and no
+option-panel control drives it. Each sub-tick with an active shake and a positive counter
 consumes **exactly two CRT draws** (one per axis) and steps the camera
 origin by
 

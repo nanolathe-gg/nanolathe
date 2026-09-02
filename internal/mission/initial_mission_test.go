@@ -22,9 +22,12 @@ func giveStockpileSlot(u *units.Unit) *units.Unit {
 	return u
 }
 
+// testDef is a mobile builder: BMCode set means the unit has a mover, which is
+// the `b` verb's discriminant [04 §3.6 correction 2026-09-02].
 func testDef(name string) *content.UnitDef {
 	return &content.UnitDef{
 		UnitName:   name,
+		BMCode:     true,
 		CanMove:    true,
 		CanAttack:  true,
 		CanGuard:   true,
@@ -36,6 +39,14 @@ func testDef(name string) *content.UnitDef {
 	}
 }
 
+// testBuildingDef is a mover-less builder (a factory): BMCode clear.
+func testBuildingDef(name string) *content.UnitDef {
+	d := testDef(name)
+	d.BMCode = false
+	d.CanMove = false
+	return d
+}
+
 func testFlyerDef(name string) *content.UnitDef {
 	d := testDef(name)
 	d.CanFly = true
@@ -43,13 +54,14 @@ func testFlyerDef(name string) *content.UnitDef {
 }
 
 // initialMissionCatalog contains every authored product name used by these
-// fixtures. Building classification follows the catalog field consumed by the
-// interpreter: an empty UnitName is a building record.
+// fixtures. The `b` verb's building-versus-mobile choice is a property of the
+// ACTING unit (mover or not), not of the product record [04 §3.6 correction
+// 2026-09-02], so the product entries carry nothing but their names.
 func initialMissionCatalog(includeUnknown bool) *content.Catalog {
 	units := map[string]*content.UnitDef{
 		content.CanonicalKey("ARMCOM"): {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("ARMCOM")}, UnitName: "ARMCOM"},
 		content.CanonicalKey("ARMCK"):  {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("ARMCK")}, UnitName: "ARMCK"},
-		content.CanonicalKey("ARMFAB"): {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("ARMFAB")}},
+		content.CanonicalKey("ARMFAB"): {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("ARMFAB")}, UnitName: "ARMFAB"},
 	}
 	if includeUnknown {
 		units[content.CanonicalKey("unknown_type")] = &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("unknown_type")}, UnitName: "unknown_type"}
@@ -211,34 +223,39 @@ func TestInitialMissionVerbs(t *testing.T) {
 			t.Fatalf("unknown a should not queue, but also no postlude because queued==0, got %d", queueLen(u2))
 		}
 	}
-	// b building vs mobile
+	// b: the acting unit's mover decides, not the product [04 §3.6 correction
+	// 2026-09-02]. A mobile builder queues MobileBuild at x,y even for a
+	// structure product; a mover-less builder queues BuildingBuild even for a
+	// mobile product.
 	{
 		w1 := newMissionFixtureWorld(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
-		// catalog building type ARMFAB triggers BuildingBuild
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "b ARMFAB 2 500 600"}}}
 		RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
-		if !hasOrder(u, "BuildingBuild") {
-			t.Fatalf("b ARMFAB should queue BuildingBuild, got %v", primaryNodes(u))
+		if !hasOrder(u, "MobileBuild") {
+			t.Fatalf("b ARMFAB from a mobile builder should queue MobileBuild, got %v", primaryNodes(u))
 		}
-		n := findNode(u, "BuildingBuild")
+		n := findNode(u, "MobileBuild")
 		if n.Param2 != 2 {
 			t.Fatalf("b count wrong: got %d want 2", n.Param2)
 		}
 		if n.GoalX != 500*65536 || n.GoalZ != 600*65536 {
 			t.Fatalf("b coordinates wrong")
 		}
-		// mobile type ARMCK
+		// A mover-less acting unit (a factory) queues BuildingBuild.
 		w2 := newMissionFixtureWorld(5, nil)
-		h2, _ := w2.Create(testDef("ARMCOM"), 0, 0, 0, 0)
+		h2, _ := w2.Create(testBuildingDef("ARMFAB"), 0, 0, 0, 0)
 		u2 := w2.Unit(h2)
 		u2.Flags |= 1 << 5
-		m2 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "b ARMCK 3 700 800"}}}
+		m2 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMFAB", InitialMission: "b ARMCK 3 700 800"}}}
 		RunInitialMissionsWithCatalog(m2, w2, testInitialCatalog)
-		if !hasOrder(u2, "MobileBuild") {
-			t.Fatalf("b ARMCK should queue MobileBuild")
+		if !hasOrder(u2, "BuildingBuild") {
+			t.Fatalf("b ARMCK from a mover-less builder should queue BuildingBuild, got %v", primaryNodes(u2))
+		}
+		if n2 := findNode(u2, "BuildingBuild"); n2.Param2 != 3 {
+			t.Fatalf("b count wrong: got %d want 3", n2.Param2)
 		}
 	}
 	// bw
@@ -899,8 +916,9 @@ func TestNonCampaignNoOp(t *testing.T) {
 }
 
 func TestMissionOFlagBits(t *testing.T) {
-	// o d1,d2 writes bits 18-19 and 20-21 [C10] per mask 0xffc3ffff [P0-06].
-	// TODO(question): o-verb bits 17-20 vs 18-21 conflict; using 18-21 per mask 0xffc3ffff
+	// o d1,d2 writes bits 18-19 and 20-21 [C10][P0-06] — the standing move and
+	// fire fields the COB ports 2 and 3 read; the §3.6 row that said 17-20 was
+	// off by one [04 §3.6 correction 2026-09-02].
 	cases := []struct {
 		d1, d2 int
 		want   uint32
@@ -942,7 +960,7 @@ func TestInitialBuildCarriesResolvableProductIdentity(t *testing.T) {
 	u.Flags |= 1 << 5
 	m := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "b ARMFAB 2 500 600"}}}
 	RunInitialMissionsWithCatalog(m, w, testInitialCatalog)
-	n := findNode(u, "BuildingBuild")
+	n := findNode(u, "MobileBuild") // a mobile builder's `b` is MobileBuild [04 §3.6]
 	if n == nil {
 		t.Fatalf("b ARMFAB queued nothing: %v", primaryNodes(u))
 	}
@@ -1043,5 +1061,26 @@ func TestBwRefusesAUnitWithNoStockpileSlot(t *testing.T) {
 		if n := findNode(u, "BuildWeapon"); n == nil || n.Param1 != 0 {
 			t.Fatalf("%s: admitted node's slot = %v, want 0 [06 §11.1]", tc.name, n)
 		}
+	}
+}
+
+// TestMissionOFlagPreseed locks the operand pre-seed of the `o` verb: retail
+// scans into cells seeded with the fields' current values, so `o 1` alone
+// rewrites the standing move field and leaves the standing fire field as it
+// was [04 §3.6 correction 2026-09-02].
+func TestMissionOFlagPreseed(t *testing.T) {
+	w1 := newMissionFixtureWorld(5, nil)
+	h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
+	u := w1.Unit(h)
+	u.Flags = (2 << units.StandingMoveShift) | (3 << units.StandingFireShift)
+	m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "o 1"}}}
+	RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
+	want := uint32((1 << units.StandingMoveShift) | (3 << units.StandingFireShift))
+	mask := uint32((3 << units.StandingMoveShift) | (3 << units.StandingFireShift))
+	if got := u.Flags & mask; got != want {
+		t.Fatalf("o 1: got %x want %x", got, want)
+	}
+	if queueLen(u) != 0 {
+		t.Fatalf("o should not queue order")
 	}
 }

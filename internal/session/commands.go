@@ -330,63 +330,15 @@ func (s *Session) applyHumanGroup(c HumanGroupCommand, assign bool) {
 	}
 }
 
-func (s *Session) normalizeSelectedBuilderPages() {
-	if s == nil || s.Units == nil || s.Catalog == nil {
-		return
-	}
-	var u *units.Unit
-	for _, candidate := range s.Units.Iter() {
-		if candidate == nil || !candidate.Alive || candidate.Owner != s.LocalOwner || candidate.Flags&0x10 == 0 {
-			continue
-		}
-		if u != nil {
-			return // mixed/multiple selection has no single page owner [07 §9]
-		}
-		u = candidate
-	}
-	if u == nil || u.Def == nil || !u.Def.Builder {
-		return
-	}
-	menu := s.Catalog.BuildMenus[content.CanonicalKey(u.Def.CanonicalKey)]
-	if menu == nil || len(menu.Buttons) == 0 {
-		return
-	}
-	defID, ok := s.Catalog.UnitDefIndex(u.Def.CanonicalKey)
-	if !ok || defID == 0 || defID > 0xffff {
-		return
-	}
-	view := hud.SelectUnit{Flags: u.Flags, DefID: uint16(defID)}
-	page := 0
-	switch {
-	case hud.IsPaged(view.Flags):
-		// The unit is on a build page: keep it there.
-		page = hud.DecodePage(view.Flags)
-	case hud.RememberedPage(view.Flags) == 0:
-		// The unit has never had a page selected — neither the page-shown bit
-		// nor the remembered page field of [07 §9] has ever been written — so
-		// this is its first selection. A builder opens on its first build page
-		// rather than on the orders state.
-		//
-		// Established by manual retail observation (2026-08-30 playtest report,
-		// recorded under [07 R-HUD-03 §6]): selecting a builder in retail shows
-		// its build menu, not its order palette. The page state itself is
-		// per-unit and persistent, so this fires once: selecting ORDERS clears
-		// the page-shown bit but leaves the page field alone, which is exactly
-		// what keeps that choice from being undone by the next selection.
-		page = 1
-	}
-	// SetBuildPage clamps against the page-count byte, so a builder whose
-	// definition authors no page window stays on the orders state [07 §9].
-	hud.SetBuildPage(&view, page, hud.BuilderPageCount(u.Def), nil)
-	u.Flags = view.Flags
-}
-
-// TODO(question): which retail writer puts a builder on its first build page.
-// The behaviour is observed and the page bits are established [07 §9], but no
-// traced site sets the page-shown bit at unit creation, so the default is
-// applied here, at the selection boundary that already normalizes the page,
-// and keyed on "never paged" so it cannot overwrite a remembered choice.
-// Decider: a static trace of the writers of unit status bit 22.
+// Selection does not touch a builder's page state. The writer that puts a
+// builder on its first build page is UNIT CREATION: the unit initializer seeds
+// page field 1 with the paged bit set for every definition whose page-count
+// byte is 2 or more, and clears both otherwise (internal/units' initial status
+// flags builder). A
+// selection only reads the bits; the BUILD/ORDERS clicks set or clear the
+// paged bit, and the page field is written only by the page keys and gadgets
+// [07 §9][07 R-HUD-04 §4 "First build page"]. The selection-time default that
+// used to stand here re-applied the same seed and is gone.
 
 func stampHumanBuild(u *units.Unit, product string, tick uint32, queued bool, goalY numeric.Fixed) {
 	if u == nil {
@@ -487,14 +439,12 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 				u.Flags |= 0x10
 			}
 		}
-		s.normalizeSelectedBuilderPages()
 	case HumanSelectionToggle:
 		for _, h := range c.Selection.Handles {
 			if u := s.humanUnit(h); u != nil {
 				u.Flags ^= 0x10
 			}
 		}
-		s.normalizeSelectedBuilderPages()
 	case HumanSelectionClear:
 		for _, u := range s.Units.Iter() {
 			if u != nil && u.Alive && u.Owner == s.LocalOwner {

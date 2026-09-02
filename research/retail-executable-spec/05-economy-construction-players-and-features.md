@@ -570,6 +570,17 @@ covered cells use filler sentinels that point conceptually to the same
 footprint. A live record carries animation, damage, burning, sinking, and
 presentation state as applicable.
 
+**Established (2026-09-02, RWU-19-42) — the live record's orientation
+triple.** Every live feature record also carries three 16-bit angle words —
+bank, heading and pitch, in the unit's own angle units (65536 per circle)
+and in the same order as the unit record's triple. The placement routine
+takes an optional pointer to a source triple: the death path's corpse
+placement passes the dying unit's own bank/heading/pitch, so a wreck keeps
+the orientation the unit died in, and every other placement (map-authored
+features, successor replacements, mission and network placements) passes
+none, which stores three zeros. The resurrection transplant copies the
+triple back into the new unit ([R-WORK-01 §7]).
+
 Feature placement and removal must update all covered cells as one operation.
 The system also notifies derived occupancy and coverage systems after the
 footprint changes.
@@ -2859,6 +2870,38 @@ limit`; the computer player's construction scorer compares
 helpers divides by the limit (doc 08); and two option-block bulk copies carry it
 with its neighbours. No consumer compares the limit against anything the
 allocator does not already enforce through the slice size.
+
+**Established (2026-09-02, RWU-19-42) — there is no clamp at the sizing
+site, and what a zero or negative limit does.** The OTA loader stores the
+`maxunits` integer into the 16-bit session limit word by plain truncation,
+and the sizing routine reads that word back with no range test of any kind
+(the 20..500 clamp of [08 R-SKIR-01 §6] belongs to the skirmish/lobby copy
+alone). The arithmetic is all 16-bit: the record count is the **signed**
+16-bit product `limit × 10 + 1` truncated to 16 bits, then read
+**unsigned** for the allocation size, the zero-fill and the index-stamping
+loop; the two hot lists are sized from the limit read unsigned; and slot
+`i`'s slice runs from record `limit × i + 1` to record `limit × (i + 1)`
+with the limit read unsigned, the per-record owner stamp looping only while
+the slice's first record lies at or before its last. Consequently:
+
+* **`maxunits = 0`** allocates a **one-record pool** — the null record
+  alone — and gives every slot an *empty* slice whose first record lies
+  past its last (the slice head's index word is read from one record past
+  the allocation). Every later creation is refused by the allocator gate
+  ([R-SHARE-01 §8]) with no diagnostic from the mission spawner ([08
+  R-ENTRY-01 §6] stores a null and continues), so a campaign mission
+  authored with `maxunits=0` starts with no units at all; the computer
+  player's cadence helper then divides by the zero limit. Nothing prevents
+  the session from being entered.
+* **`maxunits < 0`** wraps: the limit word becomes a large unsigned value
+  (`-1` → 65535 per slot) while the signed count truncates to a smaller
+  one (`-1` → 65527 records), so slot 0's slice alone extends past the
+  allocated block and the owner-stamp loop writes beyond it — undefined
+  behaviour in retail, not a contract.
+
+Nanolathe refuses both cases at battle entry with a diagnostic rather than
+reproducing an empty pool or an overrun; that is a deliberate divergence
+for malformed content, recorded at the sizing call.
 
 #### R-SHARE-01 §8 — The allocator gate, exactly [R-SHARE-01] (2026-08-29)
 
@@ -5501,6 +5544,19 @@ resurrection completes immediately with no nano emitted at all. A negative
 authored `buildtime` gives a negative delay, which never equals zero, so the
 wait state repeats forever, emitting one segment per tick.
 
+**Established — the width of the stored delay (2026-09-02, RWU-19-40).**
+"Zero low word" above means the low **32-bit half** of the helper's 64-bit
+result, not a 16-bit word: the truncating helper performs one signed 64-bit
+integer store ([01 R-DET-01 §1]), and the resurrection state keeps its low
+32 bits as a plain signed 32-bit integer in the order record's delay field —
+the same 32-bit field phase 4 decrements and tests against zero. An infinity
+(positive `buildtime`, zero quantum) and a NaN (zero `buildtime` and zero
+quantum) both produce the indefinite integer, whose low 32 bits are zero, so
+the stored delay is exactly `0` in both cases; there is no saturation and no
+negative sentinel. An implementation must return `0` on this edge — a
+minimum-integer sentinel is wrong in both value and sign and would make the
+wait state repeat forever instead of completing at once.
+
 **Established — the transplant.** Phase 5 allocates a unit of the resolved
 definition at the feature's recorded position and owner byte. If allocation
 fails — slot pool or per-definition limit — it prints
@@ -5512,6 +5568,21 @@ unit, removes the feature, emits the deterministic multiplayer state command
 when the session requires one, and then sets the new unit's remaining fraction
 to `0` and its health to `1`. The unit is therefore *finished* but at one hit
 point; nothing repairs it as part of the order.
+
+**Correction (2026-09-02, RWU-19-42) — the two copied fields.** The
+paragraph above says phase 5 "copies two fields of the live feature record
+(a position word and a facing word)". Neither is a position. The two copies
+are one 32-bit store and one 16-bit store, and together they move the
+feature record's **orientation triple** — bank and heading as the 32-bit
+pair, pitch as the 16-bit word — into the new unit's bank, heading and
+pitch words, overwriting whatever the allocator seeded. No position is
+copied: the unit was allocated at the feature's recorded position two steps
+earlier. The triple is the one the corpse placement stored from the dying
+unit ("Feature instance and terrain cell"), so a resurrected unit stands
+exactly as its predecessor fell — heading included — while a resurrection
+of a map-authored or successor feature (whose triple is zero) faces heading
+0 with no bank or pitch. [04 R-ORD-01 §5]'s "stored heading pair" is
+corrected to the same triple. **Established.**
 
 **Established — the caption ordering.** `Resurrection complete` is raised in
 phase 6, i.e. **after** phase 5 has already allocated the replacement unit and

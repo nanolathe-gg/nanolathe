@@ -162,6 +162,33 @@ func retailYawFromGo(goYaw uint16) uint16 { return goYaw + 0x8000 }
 // is the absolute pitch, unshifted.
 func aimYawForScript(goYaw, heading uint16) uint16 { return retailYawFromGo(goYaw) - heading }
 
+// RetailYaw is a projectile's stored yaw in retail's numbering, the one every
+// research sentence and every consumer outside this package's own velocity
+// arithmetic is written for [06 R-WPN-05 §11]. The publication boundary hands
+// the renderer this value: the projectile angle block folds `yaw - 0x8000`
+// from retail's yaw word [03 §5.2], so handing it this build's word — which
+// is already half a turn from retail's — drew every 3DO projectile facing
+// away from its own motion.
+func RetailYaw(goYaw numeric.Angle) uint16 { return retailYawFromGo(uint16(goYaw)) }
+
+// hitDirectionByte is byte 7 of the damage packet, the argument HitByWeapon's
+// two 400-radius trig components are built from [06 §9.1]: the high byte of
+//
+//	atan2q(record.X - victim.X, record.Z - victim.Z) - victim.heading
+//
+// — a fresh bearing from the record's CURRENT point, in retail's own
+// numbering (the bearing helper's raw result, no half-turn involved), minus
+// the victim's heading so that a shot arriving from dead ahead reads 0x80 at
+// every heading. It is not derived from the projectile's yaw: a splash hit
+// off the record's line of flight reads the direction of the burst, not of
+// the shot. Correction: this build used to hand over `p.Yaw >> 8`, which
+// dropped the heading term and carried this build's half-turn numbering, so
+// the script's hit direction was wrong for every heading but one.
+func hitDirectionByte(p *Projectile, victim *units.Unit) uint8 {
+	bearing := numeric.AngleFromAtan2(p.Pos.X.Raw()-victim.X.Raw(), p.Pos.Z.Raw()-victim.Z.Raw())
+	return uint8((uint16(bearing) - victim.Move.Heading) >> 8)
+}
+
 // StepWeaponsForUnit runs the per-unit weapon pipeline for one unit visit ON-04 [06 §3.3][06 §4][04 §5.3][GAP T15].
 // It is the authoritative per-unit step; the session owns the deterministic
 // pool-order loop and invokes this method directly [06 §1.2] C1 (I1).
@@ -2524,7 +2551,7 @@ func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weap
 			// [06 §9.1 step 6][06 R-DMG-01 §8].
 			victim.Health = 0
 		}
-		dir := uint8(p.Yaw.Raw() >> 8)
+		dir := hitDirectionByte(p, victim)
 		takeArg := cob.HealthPercent(victim.Health, victim.MaxHealth)
 		if bridge := service.callbackBridgeForUnit(victim); bridge != nil {
 			// The two damage callbacks are independent deferred starts and retain

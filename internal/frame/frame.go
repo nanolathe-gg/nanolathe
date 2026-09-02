@@ -182,7 +182,7 @@ type ProjectileView struct {
 	WeaponID                  int32
 	Shooter                   pool.Handle
 	Model                     string
-	Yaw                       uint16
+	Yaw                       uint16 // retail's yaw word, (-sin a, -cos a) names the direction [06 R-WPN-05 §11]
 	Pitch                     uint16
 	Flags                     uint32
 	Family                    int32

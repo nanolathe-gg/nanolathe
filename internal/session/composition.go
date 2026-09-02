@@ -616,14 +616,17 @@ func newBattleSlicedWorldWithCOBSized(cat *content.Catalog, fs vfs.FSOps, mode i
 		return nil, fmt.Errorf("session: catalog has no unit definitions [02 §5]")
 	}
 	if perPlayerRecords < 1 {
-		// A limit of zero would leave every slice empty and the pool unsliced,
-		// so the allocator could never place a commander. Retail's own clamp
-		// only covers the configured skirmish value (20..500); a campaign
-		// `maxunits` of zero is not covered by any traced clamp.
-		// TODO(question): what does retail do with an OTA whose `maxunits` is
-		// 0 or negative — does the world rebuild allocate a one-record pool
-		// and fail every placement? Decider: a trace of the sizing site's
-		// argument handling for a zero limit [05 R-SHARE-01 §7].
+		// Retail applies NO clamp at the sizing site: the OTA `maxunits`
+		// integer is truncated into a 16-bit word and the record count is the
+		// signed 16-bit `limit × 10 + 1` read back unsigned. A zero limit
+		// therefore builds a one-record pool (the null record) with every slice
+		// empty, so every creation — the mission spawner's included — is
+		// refused silently and the session starts with no units; a negative
+		// limit wraps the slice bounds past the allocation and overruns the
+		// heap, which is undefined behaviour, not a contract [05 R-SHARE-01 §7].
+		// The 20..500 clamp covers only the skirmish/lobby copy [08 R-SKIR-01
+		// §6]. Nanolathe deliberately refuses both cases at entry with a
+		// diagnostic instead of reproducing an empty pool or an overrun.
 		return nil, fmt.Errorf("nanolathe: unit pool sizing failed: logical path <battle entry>, providers searched [session unit limit], expected a per-player unit limit of at least 1, got %d", perPlayerRecords)
 	}
 	order := pool.PlayerPermutationForMode(mode, sortKeys)
@@ -1929,13 +1932,21 @@ func (s *Session) resurrectStep(builder *units.Unit, n *orders.Node, lookupFeatu
 		// the way any completed product does: movement state and a visibility
 		// publish [01 §6.1][03 §3].
 		s.CompleteUnit(product.Handle)
-		// TODO(question): [05 R-WORK-01 §7] has phase 5 copy "two fields of the
-		// live feature record (a position word and a facing word)" into the new
-		// unit, and [04 R-ORD-01 §5] names the second as the corpse's stored
-		// heading pair. This build's feature instance carries no heading, so the
-		// resurrected unit keeps the allocator's own facing. Decider: the
-		// feature record's heading words in [05 R-FEAT-01 §1]'s field census
-		// against the transplant's two copied offsets.
+		// Settled (2026-09-02): the two fields phase 5 copies are the live
+		// feature record's ORIENTATION triple — bank and heading as one 32-bit
+		// copy, pitch as a 16-bit copy — written into the new unit's bank,
+		// heading and pitch words; no position is copied. The corpse placement
+		// stores that triple from the dying unit, and every other placement
+		// stores zeros [05 R-WORK-01 §7 "the two copied fields"][05 "Feature
+		// instance and terrain cell"][04 R-ORD-01 §5].
+		//
+		// TODO: not yet implemented here — features.Instance carries no
+		// orientation, so PlaceCorpse (internal/features) has nowhere to keep
+		// the dying unit's Bank/Heading/Pitch and this transplant has nothing to
+		// copy; the resurrected unit keeps the allocator's own facing. The
+		// follow-up is: add the triple to features.Instance (zero for every
+		// non-corpse placement), have the death path hand PlaceCorpse the
+		// unit's triple, and copy it onto `product` here after CompleteUnit.
 		return true
 	}
 	return false

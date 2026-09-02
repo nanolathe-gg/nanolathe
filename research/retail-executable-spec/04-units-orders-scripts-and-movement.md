@@ -304,9 +304,9 @@ A descriptor is 25 bytes and carries:
 - an optional **presentation helper** run during goal resolution: none, goal
   resolve with acknowledgement text and rings, the same plus moving path
   markers, or a build-footprint marker;
-- a small **class parameter** — bounded census over 3901 function boundaries
-  found no reader, so store it opaque and do not branch on it
-  `TODO(question)` [P0-07];
+- a small **class parameter** — the order-queue overlay's five-bit **draw-mask
+  word**, read by the Shift-gated overlay walker ([07 R-P0-11 §3]; see the
+  correction below);
 - an **acknowledgement group** index; two of the groups additionally draw the
   weapon area-of-effect, coverage radius, and attack-length rings when a global
   display option is set;
@@ -317,6 +317,26 @@ A descriptor is 25 bytes and carries:
 One record carries the empty canonical name. It sorts to index zero, which is
 also the identity the command resolver returns when a command is rejected, so
 index zero is the reject sentinel.
+
+**Correction (2026-09-02, RWU-19-43) — the class parameter has a reader.** The
+list above previously said of the class parameter that "a bounded census over
+3901 function boundaries found no reader, so store it opaque and do not branch
+on it", and carried `TODO(question)` [P0-07]. The reader lay outside that
+census: it is the order-queue overlay walker of [07 R-P0-11 §3], which forms
+`descriptor.class & callerMask` per order node and dispatches five helpers off
+the result — bit 1 the build-site marker, 2 the travelling-dash chain, 4 the
+circle, 8 the queued-order icon, 16 the range rings. That is why every observed
+value (0x00, 0x02, 0x03, 0x08, 0x10, 0x12, 0x13, 0x18) lies inside 0x1F, and
+why `MobileBuild`'s 0x13 is exactly the marker, dashes and rings retail draws
+at a queued build site. The **acknowledgement group index** of the next item is
+the byte [07 R-P0-11 §3] calls the descriptor's **icon byte**: the bit-8 helper
+indexes the cursor handle array with it ([03 R-FX-01 §5]), and the "two of the
+groups" that add the weapon rings are icon bytes 1 and 2, `cursorattack` and
+`cursorairstrike`. [07 R-P0-11 §3]'s independent transcription of the
+ground-state and VTOL static tables agrees with the table below on all
+forty-four shared rows. The [P0-07] marker is retired; there is no separate
+"runtime descriptor mask writer" — the runtime table is built from the three
+static record tables.
 
 The remaining 67 records, in sorted order, are:
 
@@ -454,7 +474,8 @@ repair-patrol, follow, repair-unit, reclaim-unit, and resurrect families); and a
 build-footprint marker, carried by `MobileBuild` and `VTOL_MobileBuild` only. Acknowledgement
 groups observed: 0, 1, 2, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, and 19 (groups 3, 10, and 16
 through 18 are unused by the templates). Class parameter values observed: 0x00, 0x02, 0x03,
-0x08, 0x10, 0x12, 0x13, 0x18 (the class parameter stays opaque `TODO(question)` [P0-07]).
+0x08, 0x10, 0x12, 0x13, 0x18 (the class parameter is the overlay draw mask of [07 R-P0-11 §3];
+see the correction under "A descriptor is 25 bytes and carries").
 
 Per-record resolution of those family names (same 2026-08-27 audit dump): the attack family
 is the eight orders `Attack_NoMove`, `Attack_Chase`, `Attack_Kamikaze`, `AttackSpecial`,
@@ -2139,12 +2160,12 @@ variants from capabilities. Numeric coordinates parse as floats scaled by
 | `m x,y` | move to x,y |
 | `a x,y` | attack ground position (numeric form; suppresses the tail MakeSelectable) |
 | `a name` | attack-by-unit-type against the named catalog type; unknown types queue nothing |
-| `b name n x,y` | building build when the catalog type has an empty unit name, mobile build at x,y otherwise; count n |
+| `b name n x,y` | building build when the **acting unit has no mover** (its definition's `bmcode` is not 1 — a building), mobile build at x,y when it has one; count n; the product type must resolve in the catalog or nothing queues (corrected 2026-09-02, see below) |
 | `bw n` | BuildWeapon stockpile count n |
 | `d` | self-destruct via the `SelfDestructFG` front-gate descriptor |
 | `g name` | guard the named spawned unit (Ident match first, then Unitname, case-insensitive); unresolved names queue nothing |
 | `i name` | board/attach self into the named carrier via the immediate internal attach message — not a queued order |
-| `o d1,d2` | writes two 2-bit fields of the unit flag word: bits 17–18 ← `d1 & 3`, bits 19–20 ← `d2 & 3`; no order queued and no issued marker |
+| `o d1,d2` | writes the two standing-order fields of the unit state word: bits 18–19 (standing move) ← `d1 & 3`, bits 20–21 (standing fire) ← `d2 & 3`; both operands are pre-seeded from the fields' current values before the scan, so a missing or malformed operand keeps the field it had; no order queued and no issued marker (corrected 2026-09-02, see below) |
 | `p x,y,t` | patrol to x,y with t scaled by 30 as timeout ticks (suppresses the tail) |
 | `s` | MakeSelectable (suppresses the tail) |
 | `u x,y` | unload/transport-drop at x,y |
@@ -2155,6 +2176,34 @@ One dispatch quirk is part of the contract: an uppercase-led `W…` token
 enters the BUILD block (its second character `w` selects BuildWeapon), so an
 uppercase-led token can never be a plain Wait, and wait-for-attack must be
 written lowercase-led as `wa`.
+
+**Correction (2026-09-02, RWU-19-40) — two rows of the table above were
+wrong.** The `o` row said "bits 17–18" and "bits 19–20". The handler clears
+bits 18–21 of the unit state word with one mask and writes
+`((d2 & 3) << 2 | (d1 & 3)) << 18` into the cleared span, i.e. bits 18–19 and
+20–21 — the same word and the same bits the COB port reads for ports 2 and 3
+(§4.4 port table), §3.4a, the factory's copy onto a product (§3.8) and the AI
+classifier's rewrite ([08 R-AI-01 §10]) all use; the row was off by one and
+every other reader was right. **Established.** Two further details of the
+same handler: the scan's two destination cells are seeded with the fields'
+current values before the `%d,%d` scan runs, so `o 1` alone rewrites the move
+field and leaves the fire field untouched (the "malformed numbers convert
+whatever the destination cells already held" sentence below applies with
+those seeds); and the write is to the *state* word that carries the standing
+fields, not to a separate flag word. **Established.** The `b` row said the
+choice between building and mobile build is "when the catalog type has an
+empty unit name". It is not a property of the product at all: after the
+product name resolves in the catalog (a miss queues nothing), the handler
+tests whether the **acting unit's movement record is null** — the record the
+creator allocates only for a definition whose `bmcode` is exactly 1
+([R-COLL-01 §1] "a building has no mover") — and queues `BuildingBuild`
+for a mover-less unit (a factory or other structure) and `MobileBuild` at
+`x,y` for a unit that has one. The "empty unit name" reading could never
+have fired: the catalog is keyed by that name, so a resolved product always
+has a non-empty one. **Established.** A Nanolathe implementation must key
+the choice on the acting unit's `bmcode`, not on the product's name field
+(the FBI compiler's base-name fallback for an unauthored `unitname` is
+therefore irrelevant to this verb).
 
 **Established fact:** Postlude: when at least one order was queued, bit 5 of
 the unit's class/state word clears; and unless the script contained
@@ -3711,8 +3760,10 @@ found → status 7 `Ressurection failed` (retail's spelling), abandon. Phase 4:
 deadline 1, hold; else advance. Phase 5: create the unit (definition p1 at
 the goal, owner = mine) and bind it as the target; null → status 7 `Unable
 to create any more units`, deadline 300, hold. Re-read the feature at the
-goal; gone → abandon. Copy the corpse feature's stored heading pair into the
-new unit's heading fields, remove the feature from the grid, and (in the
+goal; gone → abandon. Copy the corpse feature's stored orientation triple
+(bank, heading, pitch — corrected 2026-09-02 from "heading pair", see
+[05 R-WORK-01 §7 "the transplant"]) into the new unit's bank, heading and
+pitch words, remove the feature from the grid, and (in the
 networked session mode) send the feature-removal message; set the new unit's
 remaining fraction to **0.0** and health to **1**; refresh the interface;
 advance. Phase 6: status 8 with `Resurrection complete`; resolve command
@@ -6347,6 +6398,30 @@ occupancy-dirty bit of the state word, recomputes occupancy and refreshes the
 footprint words. This is exactly the level that `OpenYard`/`CloseYard` poll and
 retry against (§4.7's stock choreography).
 
+**Established — what the admission reads, and a `Create`-time yard write is
+admitted and kept (2026-09-02, RWU-19-40).** The admission predicate reads
+nothing that the unit-creation stamp produces. Its inputs are the unit's
+cached footprint-origin cell pair (both halves must be strictly positive),
+its footprint width and height words (origin plus extent must stay strictly
+below the map's cell width and height), and the ground cells under that
+rectangle — the same test [R-COLL-01 §2] and [R-FAC-02 §5] describe. Those
+words are written by the unit **state initialization** step of the creation
+sequence ([R-CB-01 §4] step 2: the footprint pair is copied from the
+definition and the origin pair derived from the position by the
+`(pos − extent·2^19 + 2^19) >> 20` rule of §6.3), which runs **before** the
+bind-and-`Create` step (step 3) and before the creation stamp, which runs
+after `Create` has drained. The same initialization clears the yard bit (the
+"creation defaults" paragraph above). So a port-18 write issued from inside
+`Create` — or from any synchronous query that runs during creation — sees a
+valid pair, passes or fails the ordinary admission on the ground cells
+alone, and on a pass commits the yard bit and runs the restamp; the
+creation stamp that follows does not touch the state byte and reads the
+yard bit to choose the `c`/`C`-versus-`O` stamp class ([R-COLL-01 §4]), so
+the requested level is preserved into the initial stamp rather than
+overwritten. There is no "before the placement record" window in retail:
+the pair exists from state initialization onward for every unit, mobile or
+building.
+
 **Established — creation defaults.** Unit initialization clears the first state
 byte and the low nibble of the second, so ports 1, 5, 6, 18, 19 and 20 all read
 0 on a newly created unit, before the activation edge machine or any script
@@ -7324,6 +7399,16 @@ emission helper, and that helper's last act is to OR the pending flag into the
 order record. The two "variants" are one function. The 2026-08-28 correction
 is therefore withdrawn; [R-ORDER-02 §2]'s "exactly one writer of that flag"
 finding stands and is that same function.
+
+*Scope note (2026-09-02, RWU-19-40).* This collapse concerns the
+**argument-carrying** start only. The factory's production start is a
+different producer altogether — the cached building-bit edge machine, which
+starts the argument-less deferred `StartBuilding` on a rising edge and
+`StopBuilding` on a falling one — and it never enters the emission helper,
+never writes the StopBuilding-pending flag, and has no order record to flag
+(§3.8, correction of 2026-09-02). A construction-command start therefore
+does **not** route through an order record: the pending flag is set only
+for the nine mobile work handlers' records. **Established.**
 
 **Correction 3 — `SweetSpot` is queried on the target unit, not the shooter.**
 Section 5.3's table groups `SweetSpot` with `Query*` and `AimFrom*` under

@@ -282,6 +282,14 @@ type Session struct {
 	shakeAmpY      int32
 	shakeOffsetX   int32
 	shakeOffsetY   int32
+	// noShake is retail's shake-suppression bit: bit 4 of the session
+	// preference word, whose only toggle is the typed `NoShake` command and
+	// which no `.ini`/registry key or options-panel control drives
+	// [03 R-FX-01 §7][07 §11 "Mask 1"]. It is a per-process toggle — the
+	// registry preference loader clears it at process start and at the
+	// SINGLE→Skirmish preference reload, and battle entry leaves it alone — so
+	// a fresh session starts with it clear, which is what a zero value is.
+	noShake bool
 
 	// Visibility stamp dirty-check keys per unit handle [R-CORE-01 §4.4.1]
 	// DET-06: last-published stamp cell and sight range. Keyed access only,
@@ -484,13 +492,12 @@ func (s *Session) recordPhase(name string, tick uint32) {
 // duration taken from the impacting weapon's definition. The earlier
 // distinct-axes request form had no retail source and is removed.
 //
-// An options bit can make requests return untouched; which authored setting
-// drives that bit has no established nanolathe mapping, so requests are
-// always admitted for now.
-// TODO(question): map the shake options bit (request gate) to a nanolathe
-// setting; until traced, the gate defaults to enabled.
+// The request gate is the `NoShake` bit (see Session.noShake): while it is
+// set the request returns with every accumulator untouched — no duration
+// blend, no amplitude add, no active flag [R-CORE-01 §4.4.1][03 R-FX-01 §7].
+// It is not an authored setting; ToggleNoShake is the typed command's seam.
 func (s *Session) RequestShake(magnitude, duration int32) {
-	if s == nil {
+	if s == nil || s.noShake {
 		return
 	}
 	// If no shake is active the two amplitude accumulators are cleared
@@ -508,6 +515,25 @@ func (s *Session) RequestShake(magnitude, duration int32) {
 	s.shakeAmpX += magnitude
 	s.shakeAmpY += magnitude
 	s.shakeActive = s.shakeDuration > 0
+}
+
+// ToggleNoShake flips the shake-suppression bit the way retail's typed
+// `NoShake` command does — a toggle, not a set — and reports the new state
+// [03 R-FX-01 §7][07 §11 "Mask 1"]. An active shake is not cancelled: the bit
+// gates only new requests, and phase 10 keeps consuming a shake already in
+// flight. It is the only writer besides the process-start clear, which a new
+// Session's zero value already is.
+func (s *Session) ToggleNoShake() bool {
+	if s == nil {
+		return false
+	}
+	s.noShake = !s.noShake
+	return s.noShake
+}
+
+// NoShake reports the shake-suppression bit [03 R-FX-01 §7].
+func (s *Session) NoShake() bool {
+	return s != nil && s.noShake
 }
 
 // ShakeOffset returns the cumulative camera jitter offset produced by phase 10
@@ -1062,10 +1088,15 @@ func (s *Session) RegisterAll() {
 				// The cause is the recorded damage-kind byte, and only that
 				// [06 §12.1]; see deathCauseForResolution.
 				c := s.deathCauseForResolution(u)
-				// IsFeature direct conversion cause 7 handling: when def isfeature,
-				// retail writes cause 7 DIRECT store not via packet builder [06 §12.1].
-				// We treat isfeature kills as FeatureConversion when cause is killed and isfeature true and corpse exists?
-				// Keep ordinary for now; TODO(question) on isfeature cause-7 producer gating [06 §12.1].
+				// Cause 7 (immediate feature conversion) is NOT re-derived here
+				// from the definition's `isfeature` bit. It has exactly two
+				// producers, both gated on that bit alone and both direct stores of
+				// the kind byte: a finished `isfeature` creation and the
+				// build-completion transition (internal/construction writes the
+				// latter). An ordinary kill of an `isfeature` unit keeps its
+				// recorded kind — there is no "isfeature death becomes cause 7"
+				// rule, and no other gate (health, corpse flag, corpse resolution)
+				// exists [06 R-DMG-01 §12][06 §12.1].
 				ctx := combat.DeathContext{
 					Health:            u.Health,
 					MaxHealth:         u.MaxHealth,

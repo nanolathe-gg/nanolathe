@@ -22,22 +22,22 @@ const resurrectionCoeff = 0.3 // [05 R-WORK-01 §7 "Established — the delay"]
 // ResurrectionDelay computes delay ticks [05 R-WORK-01 §7 "Established — the
 // delay"] (resurrection's wait phase).
 //
-//	delay = trunc(buildTime*0.3 / floor(workTime/30))
+//	q     = uint16(workTime) / 30            // integer division
+//	delay = trunc(buildTime*0.3 / q)         // toward zero [I3]
 //
-// trunc toward zero [I3].
-//
-// TODO(question): retail's sub-thirty workertime edge computes delay=0 (the
-// floating divide by zero produces +Inf, whose out-of-range integer
-// conversion yields a zero low word — the only word the caller consumes)
-// [05 R-WORK-01 §7 "Established — the sub-thirty workertime edge"]. This
-// implementation instead returns the int32 minimum as a sentinel; needs
-// reconciling with that established fact.
+// The sub-thirty `workertime` edge is a zero delay, not a sentinel: q is
+// zero, the x87 divide yields an infinity (or a NaN when buildTime is zero
+// too), and the truncating helper's 64-bit indefinite result has a zero low
+// 32-bit half, which is the whole of what the state stores in its 32-bit
+// delay field [05 R-WORK-01 §7 "Established — the width of the stored
+// delay"][01 R-DET-01 §1]. Phase 4's zero test then fires on the first visit
+// and the resurrection completes at once. (Settled 2026-09-02, RWU-19-40:
+// this used to return the int32 minimum, which never equals zero and would
+// have made the wait state repeat forever.)
 func ResurrectionDelay(buildTime int32, workerTime int32) int32 {
-	worker := workerTime / 30 // floor, trunc toward zero for positive [I3]
+	worker := int32(uint16(workerTime)) / 30 // retail zero-extends the 16-bit field
 	if worker == 0 {
-		// Sentinel pending reconciliation with the established zero-delay
-		// edge case — see the TODO(question) above.
-		return -2147483648 // int32 minimum
+		return 0
 	}
 	f := float64(buildTime) * resurrectionCoeff / float64(worker)
 	return int32(math.Trunc(f)) // trunc toward zero [01 §8] I3

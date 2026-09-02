@@ -116,11 +116,14 @@ type flashTables struct {
 // dedicated CRT rather than the session's, which is what keeps a
 // presentation-side texture out of authoritative determinism.
 //
-// TODO(question): the worker's seed. Retail's disc noise comes from whatever
-// state that thread's CRT held during the rebuild, which the trace does not
-// name; the per-pixel draw only jitters the disc edge by up to nine
-// thirty-seconds of a radius, so the shape is established and the exact noise
-// is not. A trace of the loading worker's CRT seeding would settle it.
+// The worker's seed is wall-clock: battle entry seeds the loading thread's
+// freshly created CRT block from the time-of-day helper before the world
+// rebuild draws from it [08 R-ENTRY-01 §2][01 R-PLAT-01 §4], and the block
+// dies with the thread. The disc noise therefore differs between two retail
+// battles by design; the per-pixel draw only jitters the disc edge by up to
+// nine thirty-seconds of a radius, so the shape is the contract and no seed
+// is more faithful than another. This build uses a fixed seed so a --shot
+// capture is reproducible — a choice inside that contract, not a divergence.
 func (c *Client) ensureFlashTables() *flashTables {
 	if c == nil {
 		return nil
@@ -136,8 +139,9 @@ func (c *Client) ensureFlashTables() *flashTables {
 	return &c.flash
 }
 
-// flashTableSeed is this build's dedicated seed for the disc noise; see
-// ensureFlashTables' open question.
+// flashTableSeed is this build's dedicated seed for the disc noise. Retail's
+// is the time of day at battle entry [08 R-ENTRY-01 §2]; a fixed value keeps
+// captures reproducible (see ensureFlashTables).
 const flashTableSeed uint32 = 1
 
 // flashRand is the disc builder's own generator. It is the CRT recurrence of
@@ -192,7 +196,8 @@ func (c *Client) flashFrame(table int, frameIndex int32) *flashDisc {
 //
 // The disc is not blitted as colour. Its bytes encode intensity, and each
 // opaque byte brightens the pixel already under it through the `LHT` table:
-// `level = clamp(discByte − 0x50, 0, 31)`, then `dst = LHT[level][dst]`. That
+// `level = discByte − 0x4F`, then `dst = LHT[level][dst]`. The ramp
+// 0x4F..0x6E is exactly rows 0..31, the ring 0x6E the brightest. That
 // is the same lit-ground halo the section describes around explosions and
 // muzzle flashes, driven by the traced texture rather than by a flat radius.
 //
@@ -206,16 +211,17 @@ func (c *Client) flashFrame(table int, frameIndex int32) *flashDisc {
 // is corrected; a previous version of this comment recorded our placement as a
 // divergence, and it was not one.
 //
-// TODO(question): whether the disc composites as a BRIGHTENING or as opaque
-// colour. [03 §4.3.1] states the first in detail — each opaque byte replaces
-// the pixel under it with `LHT[level·256 + src]`, and gives the
-// `discByte→level` mapping used here — but the explosion pool's first walk
-// goes through a blitter distinct from the second's, and no read of the LHT
-// table was found inside it. If that blitter simply writes the disc's bytes,
-// the disc is an opaque 0x4F..0x6E ramp rather than a brightening, and every
-// impact is far brighter than it is here. A trace of that blitter's span
-// writer settles it; the LHT reading is kept meanwhile because it is the one
-// the research states outright.
+// The disc composites as a BRIGHTENING, not as opaque colour. The explosion
+// pool's first walk hands the calculated frame to its own blitter, and both of
+// that blitter's span writers — the raw one and the run-length one — replace
+// each destination byte under an opaque source byte with
+// `LHT[(src − 0x4F)·256 + dst]`, the light table's row for the disc byte
+// applied to the pixel already on screen [03 R-FX-01 §4][03 §4.3.1]. The
+// blitter is gated on the light table having been loaded at all, so a
+// display with no LHT draws no disc rather than an opaque one. The
+// level is the traced `src − 0x4F`. This previously took `discByte − 0x50`
+// from [03 §4.3.1]'s mapping, which put every byte one row low and the ring
+// on row 30; that section is corrected and the halo is one row brighter.
 func (c *Client) drawCalculatedFlash(table int, frameIndex int32, cx, cy int, coverage func(x, y int) bool) bool {
 	if c == nil || c.pal == nil || coverage == nil {
 		return false
@@ -243,12 +249,9 @@ func (c *Client) drawCalculatedFlash(table int, frameIndex int32, cx, cy int, co
 			if !coverage(px, py) {
 				continue
 			}
-			level := int(b) - 0x50
-			if level < 0 {
-				level = 0
-			} else if level > 31 {
-				level = 31
-			}
+			// b is in 0x4F..0x6E, so the row is 0..31 without a clamp; the
+			// lookup's own clamp is the only guard, as retail has none.
+			level := int(b) - 0x4F
 			idx := py*c.width + px
 			c.indexed[idx] = c.pal.LightLookup(level, c.indexed[idx])
 			drew = true

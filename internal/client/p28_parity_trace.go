@@ -352,9 +352,10 @@ func classifyDisplacement(loser, replacer *RendererCandidate) {
 	}
 }
 
-// composite records a known later compositor without pretending it was a
-// depth-tested model face. It is used only by the nanoframe outline path,
-// whose writes are visibly after body composition [03 §5.2].
+// composite records a nanoframe outline write without pretending it was a
+// depth-tested model face. The outline pass writes into the composition image
+// after the body, under the same key admission [R-COMP-01 §3]; the trace keeps
+// it as its own writer so an outline pixel is never mistaken for a face.
 func (r *rendererTrace) composite(x, y int32, color uint8, piece, primitive int) {
 	if r == nil {
 		return
@@ -511,47 +512,6 @@ func (r *rendererTrace) emit(sink RendererTraceSink, filter RendererTraceFilter)
 	for i := range r.events {
 		if filter == nil || filter(r.events[i]) {
 			sink(r.events[i])
-		}
-	}
-}
-
-// traceOutlineLine follows the existing integer line writer without touching
-// the framebuffer. It records only the known later nanoframe compositor; the
-// drawIndexedLine implementation remains the pixel authority.
-func traceOutlineLine(r *rendererTrace, x0, y0, x1, y1 int32, color uint8, piece, primitive int) {
-	if r == nil {
-		return
-	}
-	dx := x1 - x0
-	if dx < 0 {
-		dx = -dx
-	}
-	sx := int32(1)
-	if x0 > x1 {
-		sx = -1
-	}
-	dy := y1 - y0
-	if dy < 0 {
-		dy = -dy
-	}
-	sy := int32(1)
-	if y0 > y1 {
-		sy = -1
-	}
-	err := dx - dy
-	for {
-		r.composite(x0, y0, color, piece, primitive)
-		if x0 == x1 && y0 == y1 {
-			return
-		}
-		e2 := 2 * err
-		if e2 > -dy {
-			err -= dy
-			x0 += sx
-		}
-		if e2 < dx {
-			err += dx
-			y0 += sy
 		}
 	}
 }

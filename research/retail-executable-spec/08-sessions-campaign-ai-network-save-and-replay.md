@@ -2281,7 +2281,10 @@ local player (both local-player indices = `i`; the last `Player` row wins);
 controller `2` copies colour and side and registers the slot as computer;
 controller `0` registers it as inactive. Registration resets the slot's
 two alliance rows to zero, sets `allied[i][i] = 1` in both, stores the
-controller byte, and (skirmish only) names the slot `Player` for a human or
+controller byte, writes the slot's score-panel **rank byte to the slot
+index** (its initial value; only the kill-lead shift of [R-CAMP-01 §9]
+changes it afterwards — closed 2026-09-02, [07 R-HUD-04 §1]), and (skirmish
+only) names the slot `Player` for a human or
 `Arm`/`Core` for a computer by side (`side == 0` → `Arm`). Then, for a live
 row `i`, every row `j` (`j < NumSkirmishPlayers`) with the **same ally
 group, a non-zero controller, and group ≠ 5** — or `j == i` — sets

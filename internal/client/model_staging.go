@@ -31,14 +31,12 @@ import (
 // against one height plane rather than by draw order.
 
 // stagingChild is one attached child ready to be composited: its finished
-// composition, the key offset that puts its heights on the carrier's scale, and
-// the nanoframe overdraw that still has to reach the framebuffer after the
-// staging image is blitted.
+// composition — reveal and nanoframe outline already applied to its own image
+// [R-COMP-01 §3] — and the key offset that puts its heights on the carrier's
+// scale.
 type stagingChild struct {
 	model    composedModel
 	keyDelta int32
-	reveal   *presentationrender.NanoframeReveal
-	outline  uint8
 }
 
 // composeCarrier presents one unit together with its attached children.
@@ -62,12 +60,11 @@ func (c *Client) composeCarrier(v frame.UnitView, sx, sy int32, children []frame
 		}
 		return false
 	}
-	reveal, outline := c.unitNanoframeReveal(v)
 	if carrier.image.height == nil {
 		// No key plane: the cached image is blitted and each child is
 		// rasterized straight to the framebuffer after it, in painter order
 		// [R-REN-03A §4].
-		c.finishModel(carrier, nil, reveal, outline)
+		c.finishModel(carrier, nil)
 		for i := range children {
 			c.drawChildModel(children[i])
 		}
@@ -81,11 +78,8 @@ func (c *Client) composeCarrier(v frame.UnitView, sx, sy int32, children []frame
 		if !ok {
 			continue
 		}
-		reveal, outline := c.unitNanoframeReveal(children[i])
 		staged = append(staged, stagingChild{
-			model:   child,
-			reveal:  reveal,
-			outline: outline,
+			model: child,
 			// "the child's world-height difference added to every key it
 			// contributes": a child's keys are relative to its own origin, and
 			// this is what puts them on the carrier's scale. Both images carry
@@ -95,42 +89,35 @@ func (c *Client) composeCarrier(v frame.UnitView, sx, sy int32, children []frame
 		})
 	}
 	if len(staged) == 0 {
-		c.finishModel(carrier, nil, reveal, outline)
+		c.finishModel(carrier, nil)
 		return true
 	}
 	staging := newStagingImage(carrier.image, staged)
 	for i := range staged {
 		staging.compositeChild(staged[i].model.image, staged[i].keyDelta)
 	}
-	c.finishModel(carrier, staging, reveal, outline)
-	// A child's nanoframe outline is an overdraw on the framebuffer, not part
-	// of its composition image [03 §5.2], so it has to follow the staging blit
-	// that would otherwise cover it. Its trace is resolved here for the same
-	// reason: the pixels it describes are only final now.
+	c.finishModel(carrier, staging)
+	// A child's parity trace is resolved only now: the pixels it describes are
+	// final once the staging image is on the framebuffer.
 	for i := range staged {
 		c.finishStagedChild(staged[i])
 	}
 	return true
 }
 
-// finishStagedChild runs the parts of a child's presentation that belong after
-// the staging image reaches the framebuffer: the nanoframe outline overdraw and
-// the parity trace resolve.
+// finishStagedChild resolves and emits a composited child's parity trace after
+// the staging image reaches the framebuffer.
 //
-// TODO(question): whether retail's nanoframe outline is an overdraw on the
-// framebuffer or a pass over the composition image. It decides whether a
-// carrier's geometry can occlude the wireframe of the product on its plate.
-// This client draws the outline in framebuffer space [03 §5.2], so under the
-// staging path it must follow the blit or be covered by it — which is what
-// this does. If the outline turns out to belong to the composition image, it
-// moves inside composeModel and the key test occludes it like any other pixel.
-// The decider is a writer trace of the outline pass's target image.
+// Nothing of the child is drawn here. Retail composes a carried child into its
+// own two-plane image, runs the nanoframe reveal AND the outline over that
+// image, and only then composites it into the carrier's staging image under
+// the key test — so the carrier's geometry occludes the wireframe of a product
+// on its plate wherever it occludes the product's body [R-COMP-01 §3]. The
+// outline therefore lives in composeModel, and an overdraw here after the blit
+// would put it in front of geometry retail puts it behind.
 func (c *Client) finishStagedChild(child stagingChild) {
 	if c == nil || child.model.image == nil {
 		return
-	}
-	if child.reveal != nil {
-		c.drawModelOutline(child.model.draw, child.outline, child.model.raster)
 	}
 	if child.model.raster != nil && child.model.raster.trace != nil {
 		child.model.raster.trace.resolve(child.model.raster, c.indexed, c.width, c.height)
@@ -145,8 +132,8 @@ func (c *Client) composeUnitModel(v frame.UnitView) (composedModel, bool) {
 	if !ok {
 		return composedModel{}, false
 	}
-	reveal, _ := c.unitNanoframeReveal(v)
-	return c.composeModel(draw, v.Owner, unitPresentationID(v), modelCursorUnit, reveal)
+	reveal, outline := c.unitNanoframeReveal(v)
+	return c.composeModel(draw, v.Owner, unitPresentationID(v), modelCursorUnit, reveal, outline)
 }
 
 // composeChildModel composes one attached child for the staging path.
@@ -164,8 +151,8 @@ func (c *Client) composeChildModel(v frame.UnitView) (composedModel, bool) {
 		return composedModel{}, false
 	}
 	draw.KeyPlane = true
-	reveal, _ := c.unitNanoframeReveal(v)
-	m, ok := c.composeModel(draw, v.Owner, unitPresentationID(v), modelCursorUnit, reveal)
+	reveal, outline := c.unitNanoframeReveal(v)
+	m, ok := c.composeModel(draw, v.Owner, unitPresentationID(v), modelCursorUnit, reveal, outline)
 	if !ok {
 		return composedModel{}, false
 	}
@@ -269,13 +256,15 @@ func (t *modelTarget) copyFrom(src *modelTarget) {
 // admission and not a second rule: what makes it a cross-unit test is the
 // height delta, which puts the child's keys on the carrier's scale.
 //
-// TODO(question): whether retail's key plane wraps or saturates when a child's
-// shifted key leaves the byte range. The comparison here is made in int32 and
-// only the stored byte is clamped, so a child far above its carrier stays in
-// front rather than wrapping behind it. Stock cargo and factory products sit
-// within a few tens of world units of their carrier, so no reachable
-// configuration distinguishes the two; the decider is the plane's own store
-// width in the composition path.
+// The comparison is made at full width — both stored bytes widened, the
+// signed height delta added to the child's — and only the STORE narrows: the
+// staging plane keeps the low byte of `childKey + heightDelta`, wrapping
+// modulo 256 rather than saturating. Retail's composite forms the sum in a
+// register and stores a byte add [R-REN-03A §4]. A child far enough above its
+// carrier to leave the byte range therefore wins the comparison and then
+// stores a small key, so later children and the digger/waterline passes see
+// it as low; stock cargo and factory products sit within a few tens of world
+// units of their carrier and never reach the boundary.
 func (t *modelTarget) compositeChild(child *modelTarget, keyDelta int32) {
 	if t == nil || child == nil {
 		return
@@ -308,22 +297,17 @@ func (t *modelTarget) compositeChild(child *modelTarget, keyDelta int32) {
 			if int32(t.height[di]) > shifted {
 				continue
 			}
-			t.height[di] = clampKeyByte(shifted)
+			t.height[di] = wrapKeyByte(shifted)
 			t.color[di], t.covered[di] = child.color[ci], true
 		}
 	}
 }
 
-// clampKeyByte narrows a shifted key to the plane's byte store. See the
-// TODO(question) on compositeChild: the clamp is this client's choice at a
-// boundary stock content does not reach, not a traced retail behaviour.
-func clampKeyByte(v int32) uint8 {
-	if v < 0 {
-		return 0
-	}
-	if v > 255 {
-		return 255
-	}
+// wrapKeyByte narrows a shifted key to the plane's byte store the way retail's
+// byte add does: the low eight bits, wrapping [R-REN-03A §4]. This replaces a
+// saturating clamp that was this client's own choice before the store width
+// was traced.
+func wrapKeyByte(v int32) uint8 {
 	return uint8(v)
 }
 

@@ -292,16 +292,14 @@ type queueDescriptor struct {
 // overlay bytes, transcribed from [04 §3.1]'s sixty-seven-record table (the
 // reject sentinel's empty name excluded).
 //
-// [04 §3.1] names them "a small class parameter" — with a `TODO(question)`
-// recording that a bounded census over 3901 function boundaries found no
-// reader — and "an acknowledgement group index". [R-P0-11 §3] identifies both
-// readers: the class parameter is the overlay's **draw-mask word** and the
-// acknowledgement group is the **icon byte** that indexes the cursor handle
-// array. Its independent transcription of the ground-state and VTOL static
-// tables agrees with [04 §3.1] on all forty-four shared rows, which is what
-// closes the identification. The `TODO(question)` in [04 §3.1] and on
-// `orders.Descriptor.Class` therefore has an answer and belongs to that
-// section's owner to retire.
+// [04 §3.1] names them "a small class parameter" and "an acknowledgement
+// group index"; [R-P0-11 §3] identifies both readers: the class parameter is
+// the overlay's **draw-mask word** and the acknowledgement group is the
+// **icon byte** that indexes the cursor handle array. Its independent
+// transcription of the ground-state and VTOL static tables agrees with
+// [04 §3.1] on all forty-four shared rows, which is what closes the
+// identification; [04 §3.1] now records it in place, and
+// `orders.Descriptor.Class` cites the same section.
 //
 // This replaces a five-row table whose default carried its own
 // `TODO(question)` about the "runtime descriptor mask writer": there is no
