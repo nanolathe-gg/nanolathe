@@ -152,12 +152,19 @@ func (p PlotCell) IsVoid() bool {
 func (p PlotCell) IsEmpty() bool { return p.Feature() == PlotFeatureNone }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// LE. Load zeroes it; unit stomp/unstomp stamp and clear it
-// (notes/terrain/01_attribute_cells.md §3.2 rows +0/+2). Yard-map bits 1-2
-// compare against it [04 §6.2].
+// LE — the GROUND plane. Load zeroes it; the occupancy stamper writes the
+// holder's pool index there for every mode-1 mover and for the yard-selected
+// cells of a building-class unit, and clears it on the way out
+// [03 §2.2][04 R-COLL-01 §4]. Yard-map bits 1-2 compare against it [04 §6.2],
+// and the mobile footprint validator reads this word and no other
+// [04 R-COLL-01 §2].
 func (p PlotCell) OccupantA() int16 { return int16(uint16(p[0]) | uint16(p[1])<<8) }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// plane, written by mode-2 (airborne) movers only [03 §2.2][04 R-COLL-01 §4].
+// The projectile contact test reads the ground word then this one
+// [06 R-DMG-01 §7]; the occupancy/placement tests do not read it at all
+// [04 R-COLL-01 §2].
 func (p PlotCell) OccupantB() int16 { return int16(uint16(p[2]) | uint16(p[3])<<8) }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -175,7 +182,10 @@ func (p *PlotCell) SetOccupantB(v int16) {
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// [03 §2.2]. They are stored raw and never interpreted.
+// occupancy word, not an unknown pair — [03 §2.2] types the first four bytes as
+// "two uint16 mobile planes" and [04 R-COLL-01 §4] names their writers. Read
+// them through OccupantB; this accessor stays for callers that want the raw
+// pair and must not be used to zero the word.
 func (p PlotCell) RawUnknown() [2]byte { return [2]byte{p[2], p[3]} }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.

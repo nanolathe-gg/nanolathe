@@ -370,13 +370,22 @@ func waitHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
 // which re-registers occupancy when the footprint cell changes. Then complete.
 // The teleporter itself never moves.
 //
-// TODO(T25): the row's enumeration has no surface in this package. A handler
-// receives the owning unit and its record; the queue's binding resolves a
-// single handle and offers no walk over live units, and the position setter
-// with its occupancy re-registration lives in the world/movement layer, which
-// the orders package must not reach into. Placeholder: nothing is moved and the
-// record completes on its single visit, which is also what retail does when the
-// bounding box contains no other unit.
+// Narrowed (WU-19-4): this marker used to give two reasons, and the first is
+// no longer true — the queue binding does offer a walk over live units
+// (QueueBinding.ForEachUnit, the enumerator the typed-attack and patrol scans
+// use), so the enumeration half of this row is reachable from here.
+//
+// TODO(T25): what is still missing is the move itself. The row places each
+// enclosed unit "through the position setter (re-registers occupancy when the
+// footprint cell changes)" [04 R-ORD-01 §2], and this package has no seam for
+// that: writing X/Y/Z on a unit without the occupancy restamp would leave the
+// ground words of its old footprint claimed forever, which is the failure the
+// class-layer restamp family exists to prevent [04 R-MOV-03 §3]. The teleport
+// effect (kind 5, duration 30) has no order-facing emitter either. Retiring
+// this needs a position-setter entry point on the movement or world adapter,
+// which is a cross-package addition no single unit here owns. Placeholder:
+// nothing is moved and the record completes on its single visit, which is also
+// what retail does when the bounding box contains no other unit.
 func teleportHandler(_ *units.Unit, _ *Node, _ uint32, _ uint32) Code {
 	return Code(5) // *complete* — single visit [04 R-ORD-01 §2]
 }

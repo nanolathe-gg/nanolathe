@@ -1083,6 +1083,24 @@ func createAndBindServices(s *Session) error {
 	}
 	s.Build.Combat = s.Combat
 	s.Build.World = s.Units
+	// The damage funnel's three control-byte gates read the player slot's
+	// control byte, never the unit's own owner byte [06 R-DMG-01 §8]. The byte
+	// is the economy player record's ControllerState the session already writes
+	// (1 for the local human seat, 2 for a computer seat) [05 R-SHARE-01 §1];
+	// an unoccupied row, and any index past the ten records — the eleventh row
+	// a null-shooter record's neutral side byte selects — reads as
+	// ControlByteAbsent, which PASSES gate 1 and rejects gate 2
+	// [06 R-DMG-01 §9].
+	s.Combat.ControlByte = func(owner uint8) uint8 {
+		if s.Econ == nil || int(owner) >= len(s.Econ.Players) {
+			return combat.ControlByteAbsent
+		}
+		p := &s.Econ.Players[owner]
+		if !p.Exists {
+			return combat.ControlByteAbsent
+		}
+		return p.ControllerState
+	}
 	// Every newly-created queue receives this one session-owned binding. It
 	// carries the economy admission service, target lookup, hostility predicate,
 	// deterministic world traversal, and simulation RNG together so producer

@@ -57,8 +57,8 @@ func TestVacatedReuseSameSweep(t *testing.T) { // [04 §8.2] C22
 		t.Fatal("seed B")
 	}
 	// Simulate sweep order: A moves first.
-	a := &CollisionState{ID: 1, X: 0, Z: 0, VX: int32(1 * worldUnitsPerCell), VZ: 0, FootPrintX: 1, FootPrintZ: 1, Mode: 2, CachedAnchor: Cell{0, 0}, CachedMode: 2, OldAnchor: Cell{0, 0}, MaxVelocity: 65536}
-	b := &CollisionState{ID: 2, X: int32(2 * worldUnitsPerCell), Z: 0, VX: int32(-2 * worldUnitsPerCell), VZ: 0, FootPrintX: 1, FootPrintZ: 1, Mode: 2, CachedAnchor: Cell{2, 0}, CachedMode: 2, OldAnchor: Cell{2, 0}, MaxVelocity: 65536}
+	a := &CollisionState{ID: 1, X: 0, Z: 0, VX: int32(1 * worldUnitsPerCell), VZ: 0, FootPrintX: 1, FootPrintZ: 1, Mode: 1, CachedAnchor: Cell{0, 0}, CachedMode: 1, OldAnchor: Cell{0, 0}, MaxVelocity: 65536}
+	b := &CollisionState{ID: 2, X: int32(2 * worldUnitsPerCell), Z: 0, VX: int32(-2 * worldUnitsPerCell), VZ: 0, FootPrintX: 1, FootPrintZ: 1, Mode: 1, CachedAnchor: Cell{2, 0}, CachedMode: 1, OldAnchor: Cell{2, 0}, MaxVelocity: 65536}
 	states := []*CollisionState{a, b}
 	// perCell checks occupancy excluding self's old (CommitOne will handle self ignore via grid.FootprintOccupied logic? But our perCell factory will use grid.IsOccupied check excluding id.)
 	perCellFactory := func(s *CollisionState) func(Cell) bool {
@@ -92,8 +92,8 @@ func TestHeadOnSwapBlocks(t *testing.T) { // [04 §8.2] C22 head-on swaps block
 	if !grid.Stamp(Cell{1, 0}, 1, 1, 2) {
 		t.Fatal("seed B")
 	}
-	a := &CollisionState{ID: 1, X: 0, Z: 0, VX: int32(1 * worldUnitsPerCell), VZ: 0, FootPrintX: 1, FootPrintZ: 1, Mode: 2, CachedAnchor: Cell{0, 0}, CachedMode: 2, OldAnchor: Cell{0, 0}, MaxVelocity: 65536}
-	b := &CollisionState{ID: 2, X: int32(1 * worldUnitsPerCell), Z: 0, VX: int32(-1 * worldUnitsPerCell), VZ: 0, FootPrintX: 1, FootPrintZ: 1, Mode: 2, CachedAnchor: Cell{1, 0}, CachedMode: 2, OldAnchor: Cell{1, 0}, MaxVelocity: 65536}
+	a := &CollisionState{ID: 1, X: 0, Z: 0, VX: int32(1 * worldUnitsPerCell), VZ: 0, FootPrintX: 1, FootPrintZ: 1, Mode: 1, CachedAnchor: Cell{0, 0}, CachedMode: 1, OldAnchor: Cell{0, 0}, MaxVelocity: 65536}
+	b := &CollisionState{ID: 2, X: int32(1 * worldUnitsPerCell), Z: 0, VX: int32(-1 * worldUnitsPerCell), VZ: 0, FootPrintX: 1, FootPrintZ: 1, Mode: 1, CachedAnchor: Cell{1, 0}, CachedMode: 1, OldAnchor: Cell{1, 0}, MaxVelocity: 65536}
 	states := []*CollisionState{a, b}
 	perCellFactory := func(s *CollisionState) func(Cell) bool {
 		return func(c Cell) bool {
@@ -134,9 +134,9 @@ func TestSameCellFastPathSkipsValidator(t *testing.T) { // [04 §8.2] C23
 		VZ:           int32(-500),
 		FootPrintX:   1,
 		FootPrintZ:   1,
-		Mode:         2,
+		Mode:         1,
 		CachedAnchor: Cell{5, 3},
-		CachedMode:   2,
+		CachedMode:   1,
 		OldAnchor:    Cell{5, 3},
 		MaxVelocity:  65536,
 	}
@@ -187,6 +187,9 @@ func TestSameCellFastPathSkipsValidator(t *testing.T) { // [04 §8.2] C23
 }
 
 func TestFastPathRequiresModeEquality(t *testing.T) { // [04 §8.2] C23
+	// The committed mode is 2 (airborne) and the proposal below is mode 1
+	// (grounded): the cell pair matches but the mode does not, so the fast
+	// path is refused [04 R-COLL-01 §1][04 R-AIR-01 §3].
 	s := &CollisionState{
 		ID:           1,
 		X:            0,
@@ -237,9 +240,9 @@ func TestBlockedNoFallback(t *testing.T) { // [04 §8.2] C24 no X-only/Z-only fa
 		MaxVelocity:  65536,
 		FootPrintX:   1,
 		FootPrintZ:   1,
-		Mode:         2,
+		Mode:         1,
 		CachedAnchor: Cell{0, 0},
-		CachedMode:   2,
+		CachedMode:   1,
 		OldAnchor:    Cell{0, 0},
 	}
 	calls := 0
@@ -278,9 +281,9 @@ func TestBlockedSpeedCapOnlyWhenHigher(t *testing.T) { // [04 §8.2] C24 cap at 
 		MaxVelocity:  80000,  // half =40000
 		FootPrintX:   1,
 		FootPrintZ:   1,
-		Mode:         2,
+		Mode:         1,
 		CachedAnchor: Cell{0, 0},
-		CachedMode:   2,
+		CachedMode:   1,
 		OldAnchor:    Cell{0, 0},
 	}
 	s1.ApplyBlocked()
@@ -297,9 +300,9 @@ func TestBlockedSpeedCapOnlyWhenHigher(t *testing.T) { // [04 §8.2] C24 cap at 
 		MaxVelocity:  80000,
 		FootPrintX:   1,
 		FootPrintZ:   1,
-		Mode:         2,
+		Mode:         1,
 		CachedAnchor: Cell{0, 0},
-		CachedMode:   2,
+		CachedMode:   1,
 		OldAnchor:    Cell{0, 0},
 	}
 	before := s2.Speed
@@ -317,9 +320,9 @@ func TestBlockedSpeedCapOnlyWhenHigher(t *testing.T) { // [04 §8.2] C24 cap at 
 		MaxVelocity:  80000,
 		FootPrintX:   1,
 		FootPrintZ:   1,
-		Mode:         2,
+		Mode:         1,
 		CachedAnchor: Cell{0, 0},
-		CachedMode:   2,
+		CachedMode:   1,
 		OldAnchor:    Cell{0, 0},
 	}
 	s3.ApplyBlocked()
@@ -357,9 +360,9 @@ func TestBlockedClampAndDirtyWithoutOccupancy(t *testing.T) { // [04 §8.2] C24 
 		MaxVelocity:  80000,
 		FootPrintX:   2,
 		FootPrintZ:   2,
-		Mode:         2,
+		Mode:         1,
 		CachedAnchor: Cell{5, 5},
-		CachedMode:   2,
+		CachedMode:   1,
 		OldAnchor:    Cell{5, 5},
 		Dirty:        false,
 	}
@@ -521,9 +524,9 @@ func TestRevisionBumpOnDynamicBlock(t *testing.T) { // [04 §7.4] C18
 func TestSweepOrderIsDeterministic(t *testing.T) { // [I1][04 §8.2] C22
 	grid := NewOccupancyGrid()
 	// Create states out of order
-	s3 := &CollisionState{ID: 3, X: 0, Z: 0, VX: 0, VZ: 0, FootPrintX: 1, FootPrintZ: 1, Mode: 2, CachedAnchor: Cell{3, 0}, CachedMode: 2, OldAnchor: Cell{3, 0}, MaxVelocity: 65536}
-	s1 := &CollisionState{ID: 1, X: 0, Z: 0, VX: 0, VZ: 0, FootPrintX: 1, FootPrintZ: 1, Mode: 2, CachedAnchor: Cell{1, 0}, CachedMode: 2, OldAnchor: Cell{1, 0}, MaxVelocity: 65536}
-	s2 := &CollisionState{ID: 2, X: 0, Z: 0, VX: 0, VZ: 0, FootPrintX: 1, FootPrintZ: 1, Mode: 2, CachedAnchor: Cell{2, 0}, CachedMode: 2, OldAnchor: Cell{2, 0}, MaxVelocity: 65536}
+	s3 := &CollisionState{ID: 3, X: 0, Z: 0, VX: 0, VZ: 0, FootPrintX: 1, FootPrintZ: 1, Mode: 1, CachedAnchor: Cell{3, 0}, CachedMode: 1, OldAnchor: Cell{3, 0}, MaxVelocity: 65536}
+	s1 := &CollisionState{ID: 1, X: 0, Z: 0, VX: 0, VZ: 0, FootPrintX: 1, FootPrintZ: 1, Mode: 1, CachedAnchor: Cell{1, 0}, CachedMode: 1, OldAnchor: Cell{1, 0}, MaxVelocity: 65536}
+	s2 := &CollisionState{ID: 2, X: 0, Z: 0, VX: 0, VZ: 0, FootPrintX: 1, FootPrintZ: 1, Mode: 1, CachedAnchor: Cell{2, 0}, CachedMode: 1, OldAnchor: Cell{2, 0}, MaxVelocity: 65536}
 	states := []*CollisionState{s3, s1, s2}
 	// perCell that records order of commit attempts
 	order := []int{}

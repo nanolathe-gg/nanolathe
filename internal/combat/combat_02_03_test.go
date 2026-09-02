@@ -27,6 +27,7 @@ func TestCompiledCategoryMasksUseUnitMembership(t *testing.T) {
 
 func TestImpactEventOrderAndKilledDedup(t *testing.T) {
 	var svc Service
+	bindFixtureControlBytes(&svc) // [06 R-DMG-01 §8] gate 1 needs a player record
 	var got []EventKind
 	svc.Events = func(ev Event) { got = append(got, ev.Kind) }
 	w, terrain, shooter, target := newTestWorldAndUnits(t)

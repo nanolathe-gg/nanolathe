@@ -1,5 +1,33 @@
 // Package movement — collision and occupancy [04 §8.2] C18 C22–C25 [P0-12].
 //
+// # The occupancy authority [04 R-COLL-01 §4][03 §2.2]
+//
+// Retail keeps mobile occupancy in the plot cell itself: the 13-byte attribute
+// cell's first two `uint16` words are the ground plane (mode-1 movers and the
+// building class) and the air plane (mode-2 movers) [03 §2.2][04 R-COLL-01 §4].
+// Nanolathe reached this unit with those words written for buildings only:
+// movers lived in this file's `OccupancyGrid`, a private single-plane map that
+// nothing mirrored into `world.PlotCell`, so every reader the research names
+// for those words — the projectile contact test [06 R-DMG-01 §7], the placement
+// validator and the extractor sampler — read an empty plane for movers.
+//
+// The choice made here is (b) of WU-19-20: `OccupancyGrid` stays the store the
+// search-time consumers of `docs/SPEC_CONFLICTS.md` SC22 already bind to (the
+// request-initialization restamp and the occupant-age gate read
+// `OccupantAt`/`FootprintOccupied` on the ground plane, and the commit
+// validator reads the same predicate), and it grows a second plane plus a
+// reference to the plot so that **every** stamp and clear writes the plot word
+// of the same plane in the same call. There is one write path, so the two
+// cannot disagree; option (a) — making the plot words the store and the grid a
+// view — would have moved construction's pre-creation mobile *reservation*
+// (`reservePlacement` writes the plot word for a product that has no unit yet)
+// into the mover search/commit predicate, which is a change to SC22's
+// search-time rules that this unit is required not to make.
+//
+// The plane a mover writes is its committed mover mode: 1 ground, 2 air, 0 and
+// 3 nothing [04 R-COLL-01 §4]. `Stamp`/`Clear` without a plane are the ground
+// plane, which is what the building class and every pre-existing caller mean.
+//
 // CollisionState and OccupancyGrid are the explicit synchronous-commit surfaces
 // that retail scatters across the unit/mover/terrain records. The orchestrator
 // will unify these with units.Unit / world.Terrain once those types grow the
@@ -99,13 +127,139 @@ type Cell struct {
 // search implicitly consumes the bump by re-evaluating static passability on
 // every expansion after a commit-stage occupancy change [04 §7.4].
 type OccupancyGrid struct {
-	cells map[Cell]int // cell → occupant ID (pool slot), single occupant per cell [04 §8.2] C22
+	cells map[Cell]int // ground plane: cell → occupant ID (pool slot) [04 §8.2] C22 [04 R-COLL-01 §4]
+	air   map[Cell]int // air plane: mode-2 movers only [04 R-COLL-01 §4]
 	rev   uint64       // profile revision [04 §7.4] C18 OW-3-O retained, lazy revalidation via search isPassable
+	// plot is the terrain whose 13-byte cells carry the same two planes as
+	// their first two words [03 §2.2]. Every stamp and clear writes it in the
+	// same call, so the map and the words are one store [04 R-COLL-01 §4].
+	// Fixtures that never bind terrain leave it nil and keep the maps alone.
+	plot *world.Terrain
+}
+
+// Plane selects one of the plot cell's two occupancy words [03 §2.2].
+// Mode 1 movers and the building class write the ground plane; mode 2 movers
+// write the air plane; modes 0 and 3 write neither [04 R-COLL-01 §4].
+type Plane uint8
+
+const (
+	// PlaneGround is the cell's first occupancy word [03 §2.2][04 R-COLL-01 §4].
+	PlaneGround Plane = 0
+	// PlaneAir is the cell's second occupancy word [03 §2.2][04 R-COLL-01 §4].
+	PlaneAir Plane = 1
+)
+
+// planeForMode maps a committed mover mode to the plane it stamps. The second
+// result is false for modes 0 (attached/carried) and 3, which "stamp and clear
+// nothing" [04 R-COLL-01 §4].
+func planeForMode(mode uint8) (Plane, bool) {
+	switch mode & 0x3 {
+	case 1:
+		return PlaneGround, true
+	case 2:
+		return PlaneAir, true
+	default:
+		return PlaneGround, false
+	}
 }
 
 // NewOccupancyGrid returns an empty occupancy grid.
 func NewOccupancyGrid() *OccupancyGrid {
-	return &OccupancyGrid{cells: make(map[Cell]int)}
+	return &OccupancyGrid{cells: make(map[Cell]int), air: make(map[Cell]int)}
+}
+
+// AttachPlot binds the terrain whose plot cells carry the two occupancy words
+// [03 §2.2]. NewSystem calls it once at map load; a grid with no terrain keeps
+// its maps and writes no words.
+func (g *OccupancyGrid) AttachPlot(t *world.Terrain) {
+	if g == nil {
+		return
+	}
+	g.plot = t
+}
+
+// planeCells returns the map backing one plane, allocating on demand.
+func (g *OccupancyGrid) planeCells(plane Plane) map[Cell]int {
+	if plane == PlaneAir {
+		if g.air == nil {
+			g.air = make(map[Cell]int)
+		}
+		return g.air
+	}
+	if g.cells == nil {
+		g.cells = make(map[Cell]int)
+	}
+	return g.cells
+}
+
+// plotWord returns the cell's occupancy word for the plane, or (0,false) when
+// no terrain is bound or the cell is off the map [03 §2.2].
+func (g *OccupancyGrid) plotWord(plane Plane, c Cell) (int16, bool) {
+	if g == nil || g.plot == nil {
+		return 0, false
+	}
+	cell := g.plot.PlotAt(c.X, c.Z)
+	if cell == nil {
+		return 0, false
+	}
+	if plane == PlaneAir {
+		return cell.OccupantB(), true
+	}
+	return cell.OccupantA(), true
+}
+
+// setPlotWord writes the cell's occupancy word for the plane [03 §2.2].
+func (g *OccupancyGrid) setPlotWord(plane Plane, c Cell, v int16) {
+	if g == nil || g.plot == nil {
+		return
+	}
+	cell := g.plot.PlotAt(c.X, c.Z)
+	if cell == nil {
+		return
+	}
+	if plane == PlaneAir {
+		cell.SetOccupantB(v)
+		return
+	}
+	cell.SetOccupantA(v)
+}
+
+// occupancyWord narrows a pool slot to the identity the plot word carries.
+// The word is 16 bits wide, so an identity past that range cannot be filed;
+// the caller keeps it out of both halves rather than aliasing another unit
+// [I13][04 R-COLL-01 §4].
+func occupancyWord(id int) (int16, bool) {
+	if id <= 0 || id > int(^uint16(0)>>1) {
+		return 0, false
+	}
+	return int16(id), true
+}
+
+// RectOnMap applies the stamp's bounds test — the validator's steps 1–4 on the
+// cached pair — to a footprint rectangle [04 R-COLL-01 §2][04 R-COLL-01 §4].
+// An out-of-map rectangle files the unit in the off-map bucket and writes no
+// cell at all, which is how an airborne mover leaves the map without occupying
+// anything. With no terrain bound (fixtures) every rectangle is on the map.
+func (g *OccupancyGrid) RectOnMap(anchor Cell, fx, fz int16) bool {
+	if g == nil || g.plot == nil {
+		return true
+	}
+	if fx <= 0 {
+		fx = 1
+	}
+	if fz <= 0 {
+		fz = 1
+	}
+	// Steps 1–4 are `cellX < 0`, `cellZ < 0`, `cellX + fx >= width`,
+	// `cellZ + fz >= height`: the last column and row are never enterable
+	// [04 R-COLL-01 §2].
+	if anchor.X < 0 || anchor.Z < 0 {
+		return false
+	}
+	if anchor.X+int32(fx) >= g.plot.CellW || anchor.Z+int32(fz) >= g.plot.CellH {
+		return false
+	}
+	return true
 }
 
 // Revision returns the current profile revision [04 §7.4] C18 OW-3-O.
@@ -131,7 +285,7 @@ func (g *OccupancyGrid) Bump() {
 // Revision()/bump naming from the plan [04 §7.4] C18 OW-3-O.
 func (g *OccupancyGrid) BumpRevision() { g.Bump() }
 
-// IsOccupied reports whether cell is occupied [04 §8.2] C22.
+// IsOccupied reports whether cell is occupied in the ground plane [04 §8.2] C22.
 func (g *OccupancyGrid) IsOccupied(c Cell) bool {
 	if g == nil || g.cells == nil {
 		return false
@@ -140,12 +294,36 @@ func (g *OccupancyGrid) IsOccupied(c Cell) bool {
 	return ok
 }
 
-// OccupantAt returns the occupant ID at cell, if any [04 §8.2] C22.
+// OccupantAt returns the ground-plane occupant ID at cell, if any
+// [04 §8.2] C22. The commit validator and the class layer's occupant-age gate
+// read this predicate and only this one: "Only the ground word is read; the air
+// word is never consulted, so a landed or hovering airborne unit never blocks a
+// ground mover through this test" [04 R-COLL-01 §2].
 func (g *OccupancyGrid) OccupantAt(c Cell) (int, bool) {
 	if g == nil || g.cells == nil {
 		return 0, false
 	}
 	id, ok := g.cells[c]
+	return id, ok
+}
+
+// OccupantAtPlane returns the occupant ID at cell in one plane
+// [04 R-COLL-01 §4]. Diagnostics and tests read the air plane through it; the
+// simulation's blocking predicate stays OccupantAt.
+func (g *OccupancyGrid) OccupantAtPlane(plane Plane, c Cell) (int, bool) {
+	if g == nil {
+		return 0, false
+	}
+	var m map[Cell]int
+	if plane == PlaneAir {
+		m = g.air
+	} else {
+		m = g.cells
+	}
+	if m == nil {
+		return 0, false
+	}
+	id, ok := m[c]
 	return id, ok
 }
 
@@ -181,17 +359,36 @@ func (g *OccupancyGrid) CanOccupy(anchor Cell, fx, fz int16, id int) bool {
 	return !g.FootprintOccupied(anchor, fx, fz, id)
 }
 
-// Stamp claims the footprint anchored at anchor for id [04 §8.2] C22.
-// It first validates that no cell is occupied by another id (row-major
-// immediate reject is done by CanOccupy externally); Stamp rechecks and
-// returns false without mutating if occupied. On success it bumps the
-// revision [04 §7.4] C18. Deterministic: caller iterates slots ascending [I1].
+// Stamp claims the ground plane's footprint anchored at anchor for id
+// [04 §8.2] C22 [04 R-COLL-01 §4]. It is StampPlane on PlaneGround, which is
+// what the building class and every mode-1 mover write.
 func (g *OccupancyGrid) Stamp(anchor Cell, fx, fz int16, id int) bool {
+	return g.StampPlane(PlaneGround, anchor, fx, fz, id)
+}
+
+// StampPlane writes id over the rectangle in one plane, in both the plane's
+// map and the plot cell's word for that plane, and reports whether every cell
+// of the rectangle now holds id [04 R-COLL-01 §4][03 §2.2].
+//
+// Order is the section's: the bounds test of [04 R-COLL-01 §2] steps 1–4 on
+// the pair first — an out-of-map rectangle writes **no cell** — then the
+// per-cell overlap protocol. A free cell takes the identity; a cell that
+// already holds a different identity keeps its occupant and the stamp does not
+// fail. Retail also records the host/intruder bits on the two units' flag
+// words and lets a stamp displace an occupant whose owner is in player state 3.
+//
+// TODO(T25): the host/intruder flag bits (26/27), the state-3 displacement and
+// the sector-bucket overlap scan of [04 R-COLL-01 §4] need unit flag words and
+// player state inside the occupancy layer, which it does not have. Placeholder:
+// the occupant keeps the cell in every overlap, which is the branch retail
+// takes for every owner that is not in state 3. Same gap, same placeholder as
+// construction's building stamp.
+//
+// On a mutation the revision bumps [04 §7.4] C18. Deterministic: the caller
+// iterates slots ascending and the scan is row-major [I1][04 §8.2] C25.
+func (g *OccupancyGrid) StampPlane(plane Plane, anchor Cell, fx, fz int16, id int) bool {
 	if g == nil {
 		return false
-	}
-	if g.cells == nil {
-		g.cells = make(map[Cell]int)
 	}
 	if fx <= 0 {
 		fx = 1
@@ -199,37 +396,70 @@ func (g *OccupancyGrid) Stamp(anchor Cell, fx, fz int16, id int) bool {
 	if fz <= 0 {
 		fz = 1
 	}
-	// Validate first — no partial stamp [04 §8.2] C22.
-	for dz := int32(0); dz < int32(fz); dz++ {
-		for dx := int32(0); dx < int32(fx); dx++ {
-			c := Cell{X: anchor.X + dx, Z: anchor.Z + dz}
-			if occ, ok := g.cells[c]; ok && occ != id {
-				return false
-			}
-		}
+	if !g.RectOnMap(anchor, fx, fz) {
+		return false // off-map bucket: no cell is written [04 R-COLL-01 §4]
 	}
+	cells := g.planeCells(plane)
+	word, wordFits := occupancyWord(id)
 	changed := false
+	held := true
 	for dz := int32(0); dz < int32(fz); dz++ {
 		for dx := int32(0); dx < int32(fx); dx++ {
 			c := Cell{X: anchor.X + dx, Z: anchor.Z + dz}
-			if occ, ok := g.cells[c]; ok && occ == id {
-				continue
+			if occ, ok := cells[c]; ok {
+				if occ != id {
+					held = false // the cell keeps its occupant [04 R-COLL-01 §4]
+					continue
+				}
+			} else {
+				cells[c] = id
+				changed = true
 			}
-			g.cells[c] = id
-			changed = true
+			if wordFits {
+				if cur, ok := g.plotWord(plane, c); ok && (cur == 0 || cur == word) {
+					g.setPlotWord(plane, c, word)
+				}
+			}
 		}
 	}
 	if changed {
 		g.rev++ // [04 §7.4] C18 dynamic blockers bump revision
 	}
-	return true
+	return held
 }
 
 // Clear vacates the footprint anchored at anchor for id [04 §8.2] C22.
-// Only cells occupied by id are cleared. On change it bumps the revision
+// Only cells this identity holds are cleared, in both planes: an identity is
+// stamped in exactly one plane at a time [04 R-COLL-01 §4], so a self-owned
+// clear over the rectangle is plane-independent and every teardown caller —
+// death, load reset, yard close — releases an airborne mover's air word as
+// well as a ground mover's ground word. On change it bumps the revision
 // [04 §7.4] C18.
 func (g *OccupancyGrid) Clear(anchor Cell, fx, fz int16, id int) bool {
-	if g == nil || g.cells == nil {
+	if g == nil {
+		return false
+	}
+	cleared := g.ClearPlane(PlaneGround, anchor, fx, fz, id)
+	if g.ClearPlane(PlaneAir, anchor, fx, fz, id) {
+		cleared = true
+	}
+	return cleared
+}
+
+// ClearPlane vacates the rectangle in one plane for id, in both the plane's map
+// and the plot cell's word [04 R-COLL-01 §4][03 §2.2]. "mode 1 — ground word
+// equal to self → 0; mode 2 — air word equal to self → 0."
+func (g *OccupancyGrid) ClearPlane(plane Plane, anchor Cell, fx, fz int16, id int) bool {
+	if g == nil {
+		return false
+	}
+	var cells map[Cell]int
+	if plane == PlaneAir {
+		cells = g.air
+	} else {
+		cells = g.cells
+	}
+	if cells == nil {
 		return false
 	}
 	if fx <= 0 {
@@ -238,13 +468,19 @@ func (g *OccupancyGrid) Clear(anchor Cell, fx, fz int16, id int) bool {
 	if fz <= 0 {
 		fz = 1
 	}
+	word, wordFits := occupancyWord(id)
 	changed := false
 	for dz := int32(0); dz < int32(fz); dz++ {
 		for dx := int32(0); dx < int32(fx); dx++ {
 			c := Cell{X: anchor.X + dx, Z: anchor.Z + dz}
-			if occ, ok := g.cells[c]; ok && occ == id {
-				delete(g.cells, c)
+			if occ, ok := cells[c]; ok && occ == id {
+				delete(cells, c)
 				changed = true
+			}
+			if wordFits {
+				if cur, ok := g.plotWord(plane, c); ok && cur == word {
+					g.setPlotWord(plane, c, 0)
+				}
 			}
 		}
 	}
@@ -345,12 +581,26 @@ type CollisionState struct {
 	FootPrintX int16 // footprint X [02 "Movement class record"] [04 §8.2] C25
 	FootPrintZ int16 // footprint Z [02 "Movement class record"] [04 §8.2] C25
 
-	Mode uint8 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Mode is the mover's low two mode bits, mirrored into the unit's flags
+	// word [04 §9.1] C23. It is the occupancy PLANE, not a moving/stopped
+	// flag: 1 grounded, 2 airborne, 0 attached/carried [04 R-AIR-01 §3]
+	// [04 R-COLL-01 §4]. An earlier comment here read "1 stopped, 2 active",
+	// which is the vocabulary [04 R-AIR-01 §3] corrected.
+	Mode uint8
 
 	CachedAnchor Cell  // committed cached anchor pair [04 §8.2] C23
 	CachedMode   uint8 // committed mode [04 §8.2] C23
 
 	OldAnchor Cell // old footprint anchor for clamp reference [04 §8.2] C24 centre±0x7FFFF
+
+	// StampedAnchor/StampedPlane/HasStamp describe where this identity's
+	// occupancy currently is. Retail clears at the cached pair because every
+	// writer stamps there [04 R-COLL-01 §4]; the airborne commit rewrites the
+	// cached pair before the stamp is reconciled, so the rectangle that was
+	// added is remembered here and the clear subtracts exactly it.
+	StampedAnchor Cell
+	StampedPlane  Plane
+	HasStamp      bool
 
 	Blocked        bool  // mover blocked bit 2 at mover+? [04 §8.2] C23 C24 — rewritten by validator result
 	SavedStateByte uint8 // complete saved state byte; only low mode/blocked groups are consumed [08 R-SAVE-02 §8]
@@ -564,10 +814,24 @@ func (s *CollisionState) CommitSuccess(proposedAnchor Cell, proposedMode uint8, 
 		return
 	}
 	// clear old footprint, stamp new — one unit's clear/commit/stamp finishes
-	// before next slot so later units observe earlier mutations [04 §8.2] C22
+	// before next slot so later units observe earlier mutations [04 §8.2] C22.
+	// The plane is the committed mode's: ground for mode 1, air for mode 2,
+	// neither for modes 0 and 3 [04 R-COLL-01 §4]. The clear runs at the
+	// rectangle that was actually stamped and the stamp at the new pair, which
+	// is steps (1) and (4) of the success branch [04 R-COLL-01 §1].
 	if grid != nil {
-		grid.Clear(s.OldAnchor, s.FootPrintX, s.FootPrintZ, s.ID)
-		grid.Stamp(proposedAnchor, s.FootPrintX, s.FootPrintZ, s.ID)
+		if s.HasStamp {
+			grid.ClearPlane(s.StampedPlane, s.StampedAnchor, s.FootPrintX, s.FootPrintZ, s.ID)
+			s.HasStamp = false
+		} else {
+			grid.Clear(s.OldAnchor, s.FootPrintX, s.FootPrintZ, s.ID)
+		}
+		if plane, stamps := planeForMode(proposedMode); stamps {
+			grid.StampPlane(plane, proposedAnchor, s.FootPrintX, s.FootPrintZ, s.ID)
+			s.StampedAnchor = proposedAnchor
+			s.StampedPlane = plane
+			s.HasStamp = grid.RectOnMap(proposedAnchor, s.FootPrintX, s.FootPrintZ)
+		}
 	}
 	s.X = proposedX
 	s.Y = proposedY

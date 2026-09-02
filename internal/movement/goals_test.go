@@ -73,24 +73,51 @@ func TestGoalFamiliesWiring(t *testing.T) {
 		t.Fatalf("Attack center want target 10,10 got %v", cent)
 	}
 
-	// Follow_Ground should be AnnulusGoal centered on ward with Param1 outer [04 §3.2][04 §3.5]
-	nGuard := &orders.Node{ID: orders.Lookup("Follow_Ground"), Target: hTgt, Param1: 40}
+	// `Follow_Ground` is a POINT goal at the ward's position plus the record's
+	// stored anchor offset, arrival radius p1/2 [04 R-ORD-01 §8 point 3].
+	// Changed 2026-09-01 (WU-19-6): this asserted an annulus of (p1, p1/2)
+	// around the ward, plus a second case pinning the fallback radius 20 when
+	// p1 was zero. Neither guard handler calls the annulus installer, and a
+	// guard record never carries a caller-supplied radius, so both assertions
+	// encoded invented values.
+	offset := numeric.Fixed(64 << 16)
+	nGuard := &orders.Node{ID: orders.Lookup("Follow_Ground"), Target: hTgt, Param1: 64, GoalX: offset, GoalZ: -offset}
 	gGuard := sys.goalForOrder(goalCell, nGuard)
-	if _, inner, outer, ok := path.IsAnnulusGoal(gGuard); !ok {
-		t.Fatalf("Follow_Ground want AnnulusGoal got %T", gGuard)
+	if _, _, _, ok := path.IsAnnulusGoal(gGuard); ok {
+		t.Fatalf("Follow_Ground must not be an annulus goal [04 R-ORD-01 §8]")
+	}
+	if cent, radius, ok := path.IsPointGoal(gGuard); !ok {
+		t.Fatalf("Follow_Ground want PointGoal got %T", gGuard)
 	} else {
-		if outer != 40 || inner != 20 {
-			t.Fatalf("Guard annulus want inner 20 outer 40 got inner %d outer %d", inner, outer)
+		wantX := goalCellForWorld(uTgt.X+offset, 1)
+		wantZ := goalCellForWorld(uTgt.Z-offset, 1)
+		if cent.X != wantX || cent.Z != wantZ {
+			t.Fatalf("guard point centre want ward+offset %d,%d got %v", wantX, wantZ, cent)
+		}
+		if radius != 32 {
+			t.Fatalf("guard arrival radius want p1/2 = 32 got %d", radius)
 		}
 	}
-	// Guard fallback when Param1==0 => placeholderGuardDefaultRaw
-	nGuard2 := &orders.Node{ID: orders.Lookup("Follow_Ground"), Target: hTgt, Param1: 0}
+	// With no resolvable ward the offset has nothing to be added to: the goal
+	// is the ordinary point goal, never a fabricated radius.
+	nGuard2 := &orders.Node{ID: orders.Lookup("Follow_Ground"), Target: 0, Param1: 64, GoalX: offset}
 	gGuard2 := sys.goalForOrder(goalCell, nGuard2)
-	if _, inner, outer, ok := path.IsAnnulusGoal(gGuard2); !ok {
-		t.Fatalf("Guard fallback want Annulus got %T", gGuard2)
-	} else {
-		if outer != placeholderGuardDefaultRaw || inner != placeholderGuardDefaultRaw/2 {
-			t.Fatalf("Guard fallback want %d/%d got %d/%d", placeholderGuardDefaultRaw/2, placeholderGuardDefaultRaw, inner, outer)
+	if cent, radius, ok := path.IsPointGoal(gGuard2); !ok {
+		t.Fatalf("wardless guard want PointGoal got %T", gGuard2)
+	} else if radius != 0 || cent != goalCell {
+		t.Fatalf("wardless guard want PointGoal(goalCell, 0) got %v/%d", cent, radius)
+	}
+	// The stationary guard installs no goal of any kind and the air twin
+	// circles in airspace; neither takes the ground follow's arm
+	// [04 R-ORD-01 §8 point 5][04 R-UNIT-06 §1].
+	for _, name := range []string{"Guard_NoMove", "VTOL_Follow"} {
+		nOther := &orders.Node{ID: orders.Lookup(name), Target: hTgt, Param1: 64, GoalX: offset}
+		gOther := sys.goalForOrder(goalCell, nOther)
+		if _, _, _, ok := path.IsAnnulusGoal(gOther); ok {
+			t.Fatalf("%s must not produce an annulus goal", name)
+		}
+		if cent, radius, ok := path.IsPointGoal(gOther); !ok || radius != 0 || cent != goalCell {
+			t.Fatalf("%s want the default PointGoal(goalCell, 0) got %T %v/%d", name, gOther, cent, radius)
 		}
 	}
 

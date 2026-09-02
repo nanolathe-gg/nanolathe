@@ -1316,6 +1316,18 @@ func applyProjectileDamage(service *Service, p *Projectile, weapon *content.Weap
 	if w == nil || weapon == nil {
 		return
 	}
+	// Gate 1 of the central impact routine [06 §9.1][06 R-DMG-01 §9]: the
+	// damage gate is a property of the PROJECTILE's own side, not of the
+	// victim, and it skips damage ONLY for an occupied row whose control byte
+	// is 3. An unoccupied row passes — including the never-occupied eleventh
+	// row that a null-shooter record's neutral side byte selects, which is why
+	// a meteor or a death explosion damages every side and credits nobody.
+	// When it does skip, the camera shake, the impact sound and the impact art
+	// of [06 §9.1] steps 4 and 5 have already been emitted by the caller and
+	// are unaffected.
+	if !service.DamageRoutingAdmitted(p.ShooterSide) {
+		return
+	}
 	if hasDirectTarget && weapon.AreaOfEffect <= 16 && p.TargetUnit != 0 {
 		victim := w.Unit(p.TargetUnit)
 		if victim != nil {
@@ -1453,6 +1465,12 @@ func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weap
 		if victim.Def != nil && victim.Def.ImmuneToParalyzer {
 			return
 		}
+		// The paralyzer branch tests the victim owner's control byte before
+		// queuing a stun, the same two values the death latch admits
+		// [06 R-DMG-01 §8][06 §10].
+		if !service.DeathLatchAdmitted(victim.Owner) {
+			return
+		}
 		base := SelectBaseDamage(weapon, victim.Def.UnitName)
 		attackerKills := int32(0)
 		if shooter != nil {
@@ -1472,10 +1490,11 @@ func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weap
 	if shooter := w.Unit(p.Shooter); shooter != nil {
 		attackerKills = shooter.Kills
 	}
-	isArmored := false
-	if victim.Def != nil {
-		isArmored = victim.Def.ArmoredState
-	}
+	// The armor gate reads bit 1 of the victim's first runtime state byte — the
+	// COB `set ARMORED` posture — and nothing else [06 R-DMG-01 §8]. The FBI
+	// `armoredstate` key is parsed into a definition flag that retail never
+	// reads; ORing it in here armored every unit that authored it.
+	isArmored := UnitArmored(victim)
 	damageMod := int32(65536)
 	if victim.Def != nil {
 		damageMod = victim.Def.DamageModifier
@@ -1483,7 +1502,10 @@ func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weap
 	amt := ComputeScaledAmount(base, falloff, attackerKills, victim.Kills, isArmored, damageMod, false, false, false)
 	newHealth := ApplyDamage(victim.Health, amt)
 	victim.Health = newHealth
-	if newHealth <= 0 {
+	if newHealth <= 0 && service.DeathLatchAdmitted(victim.Owner) {
+		// Gate 2 [06 §9.1 step 6][06 R-DMG-01 §8]: only a victim owned by a
+		// control byte of 1 or 2 latches death, and the modular health value
+		// is PRESERVED, not clamped.
 		w.Destroy(victim.Handle, units.DeathKilled)
 		if service != nil {
 			if service.deathNotified == nil {
@@ -1495,6 +1517,12 @@ func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weap
 			}
 		}
 	} else {
+		if newHealth <= 0 {
+			// No record, or a remote peer: health clamps to zero, the unit does
+			// NOT die through this path, and the callbacks still run
+			// [06 §9.1 step 6][06 R-DMG-01 §8].
+			victim.Health = 0
+		}
 		dir := uint8(p.Yaw.Raw() >> 8)
 		takeArg := cob.HealthPercent(victim.Health, victim.MaxHealth)
 		if bridge := service.callbackBridgeForUnit(victim); bridge != nil {

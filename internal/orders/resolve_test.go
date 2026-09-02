@@ -730,10 +730,15 @@ func TestGuardAssistOrdering(t *testing.T) {
 	setTestHostility(actor, func(a, b *units.Unit) bool { return false })
 	defer setTestHostility(actor, nil)
 
+	// Phase 1 is the assist evaluation; phase 0 is the admit that computes the
+	// follow radius and draws the anchor direction [04 R-ORD-01 §8], so the
+	// leg ordering below runs from phase 1 (WU-19-6: these calls used to reach
+	// the legs at phase 0, which now admits instead).
 	n := &Node{
 		ID:     Lookup("Follow_Ground"),
 		Target: 20,
-		Param1: 30,
+		Param1: 64,
+		Phase:  1,
 		Owner:  10,
 	}
 
@@ -786,19 +791,29 @@ func TestGuardAssistOrdering(t *testing.T) {
 			return s
 		}())
 	}
-	// Fourth: (a)(c)(d) deduped => (e) follow maintenance => sets banded goal and waits
+	// Fourth: the assist legs all decline => the follow maintenance of
+	// [04 R-ORD-01 §8 points 3 and 4]: a point goal at ward+offset, deadline
+	// tick+30 fixed, gate 0x19 on the way out, hold — and the record's goal
+	// triple still holds the OFFSET it was given, not the installed position.
 	q.primary = nil
-	n.GoalX = numeric.Fixed(0)
-	n.GoalZ = numeric.Fixed(0)
-	code = guardHandler(actor, n, 0, 0)
-	if code != Code(3) {
-		t.Fatalf("(e) fallback should return 3 got %d", code)
+	offset := numeric.Fixed(48 << 16)
+	n.GoalX, n.GoalY, n.GoalZ = offset, 0, -offset
+	n.DynamicGate = 0
+	code = guardHandler(actor, n, 0, 700)
+	if code != Code(2) {
+		t.Fatalf("maintenance should *hold* (2) got %d", code)
 	}
-	if n.GoalX.Raw() == 0 && n.GoalZ.Raw() == 0 {
-		t.Fatalf("(e) should refresh banded goal")
+	if n.GoalX != offset || n.GoalZ != -offset {
+		t.Fatalf("maintenance must keep the stored offset, got %v/%v", n.GoalX, n.GoalZ)
+	}
+	if n.Deadline != 730 || n.DynamicGate != 0x19 {
+		t.Fatalf("maintenance want deadline 730 gate 0x19 got %d/%#x", n.Deadline, n.DynamicGate)
+	}
+	if n.Phase != 1 {
+		t.Fatalf("maintenance must leave the phase at 1 got %d", n.Phase)
 	}
 	if len(q.primary) != 0 {
-		t.Fatalf("(e) should not enqueue new order, got %d", len(q.primary))
+		t.Fatalf("maintenance should not enqueue new order, got %d", len(q.primary))
 	}
 
 	// Verify top-down order: if (a) not deduped, it wins even when lower conditions also true
@@ -809,7 +824,8 @@ func TestGuardAssistOrdering(t *testing.T) {
 		t.Fatalf("top-down: (a) should win when not deduped")
 	}
 
-	// Handle 0 early return: slot 0 is null [01 §6.1], no assist paths fire, only (e) maintenance
+	// Handle 0 early return: slot 0 is null [01 §6.1], no assist paths fire,
+	// only the follow maintenance.
 	actorZero := mkUnit(0, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
 		d.Builder = true
 		d.CanFly = false
@@ -823,16 +839,15 @@ func TestGuardAssistOrdering(t *testing.T) {
 		return nil
 	})
 	// ward still 20, unfinished/damaged so (a) and (c) would be true, but Handle 0 should skip them
-	n2 := &Node{ID: Lookup("Follow_Ground"), Target: 20, Param1: 30, Owner: 0}
-	n2.GoalX = numeric.Fixed(0)
+	n2 := &Node{ID: Lookup("Follow_Ground"), Target: 20, Param1: 64, Phase: 1, Owner: 0}
 	q2 := QueueForUnit(actorZero)
 	q2.primary = nil
 	code = guardHandler(actorZero, n2, 0, 0)
-	if code != Code(3) {
-		t.Fatalf("Handle 0 should still return Code(3) via (e) got %d", code)
+	if code != Code(2) {
+		t.Fatalf("Handle 0 should still *hold* via the maintenance leg got %d", code)
 	}
-	if n2.GoalX.Raw() == 0 {
-		t.Fatalf("Handle 0 should still refresh banded goal via (e)")
+	if n2.DynamicGate != 0x19 {
+		t.Fatalf("Handle 0 maintenance want gate 0x19 got %#x", n2.DynamicGate)
 	}
 	if len(q2.primary) != 0 {
 		t.Fatalf("Handle 0 should not enqueue assist, only maintenance")

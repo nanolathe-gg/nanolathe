@@ -41,7 +41,12 @@ func TestPatrolScansKeepSlotOrderAndDrawOnlyAfterGates(t *testing.T) {
 				case dead.Handle:
 					candidate = dead
 				}
-				if !visit(h, candidate) {
+				// The binding's enumerator stops when a visitor returns TRUE
+				// (QueueBinding.ForEachUnit, and the session adapter that
+				// composes it): this fake must answer the same question the
+				// production one does, or a scan that walks the whole pool in
+				// the test truncates to its first slot in a battle.
+				if visit(h, candidate) {
 					break
 				}
 			}
@@ -127,3 +132,60 @@ func TestRepairFeaturePairingUsesLatticeOrderAndTournaments(t *testing.T) {
 }
 
 func simPtr(s *rng.Simulation) *rng.Simulation { return s }
+
+// TestLiveUnitEnumeratorAnswersTheStopQuestion locks the enumerator's visitor
+// contract (I1). QueueBinding.ForEachUnit ends the walk when a visitor returns
+// TRUE and takes the next slot when it returns false; the session composes it
+// that way. The adapter below is written in the production shape — a `stopped`
+// latch set from the visitor's own answer — so a scan that reads the answer the
+// other way round is caught here rather than in a battle, where it truncated
+// every scan to the pool's first live slot.
+func TestLiveUnitEnumeratorAnswersTheStopQuestion(t *testing.T) {
+	pad := &content.UnitDef{MaxDamage: 100, Builder: true, IsAirBase: true}
+	plain := &content.UnitDef{MaxDamage: 100}
+	actor := &units.Unit{Handle: 1, Owner: 0, Def: plain, Alive: true}
+	first := &units.Unit{Handle: 2, Owner: 0, Def: plain, Alive: true, X: numeric.Fixed(10 << 16)}
+	second := &units.Unit{Handle: 3, Owner: 0, Def: plain, Alive: true, X: numeric.Fixed(20 << 16)}
+	last := &units.Unit{Handle: 4, Owner: 0, Def: pad, Alive: true, X: numeric.Fixed(30 << 16), Activated: true}
+	pool4 := []*units.Unit{actor, first, second, last}
+
+	var visited int
+	sim := rng.SimulationFromState(1)
+	q := &Queue{binding: &QueueBinding{
+		SimRNG:    &sim,
+		Hostility: func(_, _ *units.Unit) bool { return false },
+		World: &WorldQueryAdapter{ForEachUnit: func(visit func(pool.Handle, *units.Unit) bool) {
+			stopped := false
+			for _, candidate := range pool4 {
+				if stopped {
+					return
+				}
+				visited++
+				if visit(candidate.Handle, candidate) {
+					stopped = true
+				}
+			}
+		}},
+	}}
+	BindQueue(actor, q)
+
+	visited = 0
+	pads := scanAirBasePads(actor, 0xF00)
+	if len(pads) != 1 || pads[0] != last {
+		t.Fatalf("pad scan = %v, want the pad in the last slot", pads)
+	}
+	if visited != len(pool4) {
+		t.Fatalf("pad scan visited %d slots, want the whole pool (%d)", visited, len(pool4))
+	}
+
+	visited = 0
+	if got := scanRadiusTarget(actor, 15, false); got != first {
+		t.Fatalf("radius scan = %v, want the first in-range candidate", got)
+	}
+	if visited != 2 {
+		t.Fatalf("radius scan visited %d slots, want it to stop on its hit (2)", visited)
+	}
+	if got := sim.Draws(); got != 0 {
+		t.Fatalf("enumerator draws = %d, want none: neither scan draws", got)
+	}
+}

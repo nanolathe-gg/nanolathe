@@ -464,11 +464,17 @@ func handleA(token string, ctx *interpCtx) {
 	if id == 0 {
 		return
 	}
-	// TODO(question): AttackUType is registered in the order table but has no
-	// runtime consumer, so an authored attack-by-type order is admitted and
-	// never executed. What is unknown is the retail handler's target
-	// acquisition rule for a type-targeted attack; tracing the AttackUType
-	// verb site would settle it.
+	// Retired (WU-19-4): this carried a TODO(question) saying `AttackUType` had
+	// no runtime consumer, so an authored attack-by-type order was admitted and
+	// never executed, and that the acquisition rule was unknown. Both halves
+	// are closed: [04 R-ORD-01 §3] gives the row (phase 0 `deadline RNG(90)+1`,
+	// phase 1 scans every live unit from the second slot on whose definition
+	// index equals p1 and whose owner is hostile, scores each `d² − RNG(d²/2)`,
+	// keeps the lowest with later slots winning ties, and spawns the resolved
+	// code-3 attack at the head), and the scan now runs over the queue
+	// binding's live-unit enumerator. p1 below is the catalog index that scan
+	// compares against, so the authored name reaches the handler as an
+	// identity, not as text.
 	ck, idx := productIdentity(ctx.catalog, name)
 	node := orders.Node{
 		BuildDefKey: ck,  // canonical product identity [04 §3.2][02 §5]

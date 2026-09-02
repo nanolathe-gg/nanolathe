@@ -208,38 +208,26 @@ func (s *System) releaseAirGoalForNode(owner pool.Handle, n *orders.Node) {
 // constant; it does NOT invent constants. See citations and TODO(question)
 // markers below.
 
-// Placeholder standoff radii [04 §3.5][04 §7.2][04 §7.4] TODO(question).
-//
-// Retail establishes the annulus V-shaped heuristic (raw radii in H, quantized
-// radii in arrival [04 §7.4]) but the per-order radius source and the world-
-// to-raw conversion remain unknown. The handler stubs in
-// internal/orders/resolve.go use 64 world units with half/double banding and
-// a 30+rand cadence [04 §3.5] as honest placeholders; we reuse those
-// placeholders here for the Goal-structure wiring and keep the TODO(question)
-// markers so the values are not mistaken for recovered constants. The orbit
-// cadence (Code 3 wait 30+RNG) is also TODO(question) per M-4 (~473,502-526,606)
-// and is not closed here.
-//
-// Units TODO(question): Goal radii are raw heuristic units compared to
-// oct = 18*max+7*min [04 §7.2]; world units (Fixed 16.16, 1 cell = 16 world
-// units = 0x100000) vs raw vs quantized >>4 radii mismatch [04 §7.4] is REAL
-// and reproduced in path/goals.go, not fixed. Using world-derived 64 directly
-// as raw is the structure placeholder, not a recovered conversion.
-
-const (
-	// placeholderGuardDefaultRaw is the fallback guard standoff when Param1==0
-	// [04 §3.2] "For a guard the first is the standoff radius" [04 §3.5](e)
-	// TODO(question) guard standoff radius source for guard is Param1 fallback 20 world units [04 §3.2][04 §3.5][M-4]
-	placeholderGuardDefaultRaw int32 = 20
-)
+// Retired 2026-09-01 (WU-19-6): a placeholder-radius block stood here, holding
+// `placeholderGuardDefaultRaw = 20` (the guard standoff when p1 was zero) and
+// describing the chase's per-substate radii as the invented 32/64 pair. None
+// of the three has a retail counterpart. [04 R-ORD-01 §8] gives the guard's
+// radius as `(FootPrintX(me) + FootPrintX(ward) + 2) · 16` computed by the
+// handler, halved for the goal's arrival radius, with no issuer input and no
+// zero case; the chase's radii are `d`, `d/2`, `trunc(d/4)`, `0`, annulus
+// `(d, d/2)` and annulus `(2d, d)` with `d` the weapon's authored `range`
+// [06 R-WPN-05 §1], and the handler installs them itself through the record's
+// own payload installers. The literals are deleted, not replaced.
 
 // goalForOrder selects the path.Goal family for an order [04 §7.2][04 §7.4].
 //
 // Wired families [OW-3-P]:
 //
-//	Attack_Chase (orbit/stand-off) => AnnulusGoal with placeholder inner/outer
-//	  per substate Param2 [04 §3.5] orbit cycle 0..8, using the placeholder
-//	  radii above. Structure wired, constants remain TODO(question) [M-4].
+//	Attack_Chase (orbit/stand-off) => whatever its own maneuver phase installed:
+//	  a point goal for five of the six live substates and an annulus for the
+//	  other two, every radius sized from the slot's weapon range
+//	  [04 R-ORD-01 §3][06 R-WPN-05 §1]. The bound payload is consulted first, so
+//	  this file supplies no chase goal of its own.
 //	Park (a no-rally factory product's terminal record) => RectPerimeterGoal on
 //	  the rectangle the handler installed. [04 R-FAC-02 §4] closes the producer
 //	  this file previously recorded as missing: Park's phase 0 installs a
@@ -247,11 +235,11 @@ const (
 //	  search treats it as a perimeter goal whose admissible cells are exactly
 //	  the border [04 §7.2]. The arithmetic lives in orders.ParkGoalRect; this
 //	  case only reads it back.
-//	Follow_Ground / VTOL_Follow / Guard_NoMove (guard stand-off) => AnnulusGoal
-//	  centered on the ward (Target) when available, with Param1 as outer
-//	  (fallback placeholderGuardDefaultRaw) and half as inner [04 §3.2][04 §3.5].
-//	  Standoff radius Param1 is established [04 §3.2]; its unit conversion is
-//	  still TODO(question) [M-4][04 §7.4].
+//	Follow_Ground (the ground guard's follow) => PointGoal at the ward's
+//	  position plus the record's stored anchor offset, arrival radius p1 / 2
+//	  [04 R-ORD-01 §8]. `VTOL_Follow` and `Guard_NoMove` are not this family:
+//	  the stationary guard installs nothing and the air twin circles in
+//	  airspace [04 R-UNIT-06 §1].
 //
 // Unwired families [OW-3-P] with citation why:
 //
@@ -369,28 +357,35 @@ func (s *System) goalForOrderWithFootprint(mover *units.Unit, goalCell path.Cell
 	// consulted above, so this case only ever overrode the handler's own
 	// choice; without it a chase record with no payload yet falls to the
 	// ordinary point goal.
-	case "Follow_Ground", "VTOL_Follow", "Guard_NoMove":
-		// TODO(question): guard standoff radius source is Param1 [04 §3.2] fallback 20 world units [04 §3.5][M-4]; unit conversion TODO [04 §7.4]
-		center := goalCell
+	case "Follow_Ground":
+		// The ground guard's payload is a POINT goal at the ward's position
+		// plus the record's stored anchor offset, with arrival radius
+		// `p1 / 2` [04 R-ORD-01 §8 point 3] — "the annulus installer and the
+		// rectangle installer are not called anywhere in either guard
+		// handler". `Follow_Ground`'s own maintenance leg installs exactly
+		// this every 30 ticks, and the bound payload is consulted above, so
+		// this arm is only reached for a record that has not run its phase 1
+		// yet. It must still be the same goal: the record's goal triple is an
+		// OFFSET from the ward, not a position [04 R-ORD-01 §8 point 2], so
+		// falling through to the default point goal would aim the search at a
+		// cell near the world origin.
+		//
+		// `VTOL_Follow` and `Guard_NoMove` used to share this arm. Neither
+		// belongs to it: the stationary guard installs no goal of any kind
+		// [04 R-ORD-01 §8 point 5], and the air twin's maintenance is the air
+		// marker family's airspace circling, not a ground goal
+		// [04 R-UNIT-06 §1].
 		if n.Target != 0 && s != nil && s.world != nil {
 			if ward := s.world.Unit(n.Target); ward != nil {
-				center = path.Cell{X: goalCellForWorld(ward.X, footX), Z: goalCellForWorld(ward.Z, footZ)}
+				x, _, z, radius := orders.GuardFollowPoint(n, ward.X, ward.Y, ward.Z)
+				center := path.Cell{X: goalCellForWorld(x, footX), Z: goalCellForWorld(z, footZ)}
+				return path.PointGoal(center, radius)
 			}
-		} else if n.Target != 0 {
-			// Target not yet resolvable; keep goalCell as center placeholder.
 		}
-		outer := placeholderGuardDefaultRaw
-		if n.Param1 != 0 {
-			outer = int32(n.Param1) // TODO(question): using Param1 raw as placeholder raw radii; world-vs-raw mismatch [04 §7.2][04 §7.4]
-		}
-		inner := outer / 2 // TODO(question): banded-goal inner at half [04 §3.5] placeholder band
-		if inner < 0 {
-			inner = 0
-		}
-		if inner > outer {
-			inner = outer
-		}
-		return path.AnnulusGoal(center, inner, outer)
+		// No resolvable ward: the offset has nothing to be added to, so there
+		// is no point to aim at. The ordinary point goal on the passed cell is
+		// what every other unresolved family gets.
+		return path.PointGoal(goalCell, 0)
 	default:
 		// Explicitly unwired families:
 		// - RectPerimeterGoal: no established producer [04 §7.2][04 §7.4] — leave as Point instead of inventing a patrol-rect order.

@@ -111,26 +111,30 @@ func TestPumpResultCodes(t *testing.T) {
 		}
 	})
 	t.Run("code2", func(t *testing.T) {
+		// [04 R-FAC-02 §4]: "a *hold* (code 2) does NOT stop the walk — the
+		// next record is visited in the same pass." The held record itself is
+		// dispatched once and left unchanged.
 		rng.SeedGlobal(3, 0)
 		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
-		calls := 0
+		var seen []uint32
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
-			calls++
-			if calls == 1 {
+			seen = append(seen, n.Param1)
+			if n.Param1 == 1 {
 				return Code(2)
 			}
 			return Code(3)
 		})
 		defer restore()
-		q.Push(moveID, Node{Phase: 7})
+		q.Push(moveID, Node{Phase: 7, Param1: 1})
+		q.Push(moveID, Node{Param1: 2})
 		clearGates(q)
 		q.Pump(u, 10)
 		if q.primary[0].Phase != 7 {
 			t.Fatalf("code2 phase changed")
 		}
-		if calls != 2 {
-			t.Fatalf("code2 calls %d", calls)
+		if len(seen) != 2 || seen[0] != 1 || seen[1] != 2 {
+			t.Fatalf("code2 dispatch order %v, want the held record then its follower", seen)
 		}
 	})
 	t.Run("code3", func(t *testing.T) {
@@ -154,26 +158,29 @@ func TestPumpResultCodes(t *testing.T) {
 		}
 	})
 	t.Run("code4", func(t *testing.T) {
+		// Code 4 shares code 2's row in [04 §3.3] and therefore its walk
+		// effect: the next record is visited in the same pass.
 		rng.SeedGlobal(4, 0)
 		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
-		calls := 0
+		var seen []uint32
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
-			calls++
-			if calls == 1 {
+			seen = append(seen, n.Param1)
+			if n.Param1 == 1 {
 				return Code(4)
 			}
 			return Code(3)
 		})
 		defer restore()
-		q.Push(moveID, Node{Phase: 1})
+		q.Push(moveID, Node{Phase: 1, Param1: 1})
+		q.Push(moveID, Node{Param1: 2})
 		clearGates(q)
 		q.Pump(u, 10)
 		if q.primary[0].Phase != 1 {
 			t.Fatalf("code4 phase")
 		}
-		if calls != 2 {
-			t.Fatalf("code4 calls")
+		if len(seen) != 2 || seen[0] != 1 || seen[1] != 2 {
+			t.Fatalf("code4 dispatch order %v, want the held record then its follower", seen)
 		}
 	})
 	t.Run("code5", func(t *testing.T) {
@@ -437,13 +444,10 @@ func TestDeadline(t *testing.T) {
 	calls := 0
 	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 		calls++
-		if calls == 1 {
-			if s&1 == 0 {
-				t.Fatalf("deadline satisfied bit not set s %x", s)
-			}
-			return Code(2)
+		if s&1 == 0 {
+			t.Fatalf("deadline satisfied bit not set s %x", s)
 		}
-		return Code(3)
+		return Code(2)
 	})
 	defer restore()
 	q.Pump(u, 19)
@@ -454,14 +458,18 @@ func TestDeadline(t *testing.T) {
 		t.Fatalf("deadline cleared early")
 	}
 	q.Pump(u, 20)
-	if calls == 0 {
-		t.Fatalf("deadline arrived but handler not called")
+	// [04 §3.3] step 1 clears the deadline and raises bit 0; step 4 consumes
+	// the satisfied bits and clears the dynamic gate before the handler runs.
+	// The hold neither restores the gate nor re-dispatches the record: with no
+	// record behind it the walk simply runs out [04 R-FAC-02 §4].
+	if calls != 1 {
+		t.Fatalf("deadline dispatches %d, want exactly one", calls)
 	}
 	if q.primary[0].Deadline == 20 {
 		t.Fatalf("deadline not cleared after arrival")
 	}
-	if q.primary[0].DynamicGate != 1 {
-		t.Fatalf("cascade should end waiting gate 1")
+	if q.primary[0].DynamicGate != 0 {
+		t.Fatalf("gate %x after a hold, want the pump's step-4 clear to stand", q.primary[0].DynamicGate)
 	}
 }
 

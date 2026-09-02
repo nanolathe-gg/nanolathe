@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
@@ -219,4 +221,82 @@ func TestAirPatrolInstallsItsMarker(t *testing.T) {
 	// No air seam bound: nothing installs and nothing panics.
 	loose := &units.Unit{Def: u.Def, Alive: true}
 	installAirPatrolMarker(loose, &Node{Owner: loose.Handle})
+}
+
+// TestVTOLPatrolSeeksAPadOnlyWhenHurt locks `VTOL_Patrol` phase 2's low-health
+// pad seek [04 R-ORD-02 §2], whose candidate rule is the one [04 R-AIR-01 §7]
+// gives `VTOL_SeekAttack`: below three quarters of `maxdamage`
+// (`health < (maxdamage >> 2) * 3`, unsigned) the row collects this side's
+// activated air bases within 0xF00, releases the payload, draws one RNG(count)
+// and spawns `VTOL_Landing` at that pad at the head, gate 0, *restart*.
+//
+// Both halves are asserted, because the draw is the half that moves every later
+// simulation draw if it is taken on the wrong visit (I4): a healthy aircraft
+// takes none at all.
+func TestVTOLPatrolSeeksAPadOnlyWhenHurt(t *testing.T) {
+	q, flier, _ := vtolWorkFixture()
+	padDef := &content.UnitDef{MaxDamage: 100, Builder: true, IsAirBase: true}
+	// Two pads, so the bounded pick actually draws: the draw helper returns 0
+	// WITHOUT advancing the stream for a count below 2 [04 R-ORD-01 §1], so a
+	// one-pad fixture would prove nothing about the draw.
+	padA := &units.Unit{
+		Handle: 7, Owner: flier.Owner, Def: padDef, Alive: true, Activated: true,
+		X: flier.X, Y: flier.Y, Z: flier.Z,
+	}
+	padB := &units.Unit{
+		Handle: 8, Owner: flier.Owner, Def: padDef, Alive: true, Activated: true,
+		X: flier.X, Y: flier.Y, Z: flier.Z,
+	}
+	q.binding.World = &WorldQueryAdapter{
+		ForEachUnit: func(visit func(pool.Handle, *units.Unit) bool) {
+			for _, pad := range []*units.Unit{padA, padB} {
+				if visit(pad.Handle, pad) {
+					return
+				}
+			}
+		},
+	}
+	landingID := Lookup("VTOL_Landing")
+	if landingID == 0 {
+		t.Fatal("VTOL_Landing has no descriptor")
+	}
+
+	id := Lookup("VTOL_Patrol")
+	q.Push(id, Node{Owner: flier.Handle, Deadline: -1,
+		GoalX: numeric.Fixed(400 << 16), GoalZ: numeric.Fixed(400 << 16)})
+	n := q.Primary()[0]
+	n.Phase = 2
+
+	// Full health: no seek, no draw, the leg holds on its own 30-tick deadline.
+	before := rng.Global.Sim.Draws()
+	if code := vtolPatrolHandler(flier, n, 0, 100); code != 2 {
+		t.Fatalf("a healthy patrol leg returned %d, want hold (2)", code)
+	}
+	if got := rng.Global.Sim.Draws() - before; got != 0 {
+		t.Fatalf("healthy patrol leg drew %d times, want none [I4]", got)
+	}
+	if q.LenPrimary() != 1 {
+		t.Fatalf("primary length %d, want 1: a healthy aircraft spawns no landing", q.LenPrimary())
+	}
+
+	// Below three quarters of maxdamage: the seek runs, takes exactly one draw
+	// over the candidate list and puts the landing record at the head.
+	flier.Health = 50 // (100 >> 2) * 3 = 75
+	n.Phase = 2
+	before = rng.Global.Sim.Draws()
+	if code := vtolPatrolHandler(flier, n, 0, 100); code != 0 {
+		t.Fatalf("a hurt patrol leg returned %d, want restart (0) with the landing at the head", code)
+	}
+	if got := rng.Global.Sim.Draws() - before; got != 1 {
+		t.Fatalf("pad seek drew %d times, want exactly one RNG(count) [04 R-AIR-01 §7][I4]", got)
+	}
+	if n.DynamicGate != 0 {
+		t.Fatalf("gate %#x after the seek, want 0 [04 R-ORD-02 §2]", n.DynamicGate)
+	}
+	if q.LenPrimary() != 2 || q.Primary()[0].ID != landingID {
+		t.Fatalf("head is %q, want the spawned VTOL_Landing", DescriptorFor(q.Primary()[0].ID).Name)
+	}
+	if got := q.Primary()[0].Target; got != padA.Handle && got != padB.Handle {
+		t.Fatalf("landing target = %d, want one of the two pads", got)
+	}
 }

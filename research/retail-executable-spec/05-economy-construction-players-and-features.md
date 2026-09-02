@@ -51,7 +51,9 @@ resource bars are consumers of it; they do not define its arithmetic.
 
 ### Player slot
 
-A battle has ten fixed player slots. A player slot contains at least:
+A battle has ten fixed player slots, stored as the first ten rows of a player
+table that is constructed with **eleven** rows (see below). A player slot
+contains at least:
 
 - whether the slot exists and participates in the battle;
 - a stable slot number and network identity;
@@ -70,6 +72,32 @@ A battle has ten fixed player slots. A player slot contains at least:
   hold no reservation;
 - optional mission-provided storage bonuses;
 - side, team, and status information used when ownership changes.
+
+**Established — the player table has an eleventh, never-occupied row
+(2026-09-01, RWU-19-11).** When the battle-state block is allocated it is
+zero-filled and the player-row constructor is then run **eleven** times over
+contiguous rows of one fixed record size. The constructor writes: the
+occupancy word to zero, the control byte to zero, four further words (the
+LOS byte-grid pointer and its width and height among them) to zero, the
+ally-group byte to `10` (the "no group" value every ally-group test
+excludes), and allocates a zeroed side-definition record for the row. Rows
+`0..9` are the ten slots above. Row `10` is reachable only by direct index —
+it is the row a projectile's neutral side byte `10` selects
+(`[06 R-DMG-01 §9]`) — and **nothing ever occupies it**: every walk of the
+table during setup, battle, join and save restore covers ten rows (the row-10
+base serves two loops as their end sentinel); the network join's free-slot
+search scans rows `0..9` and, finding none, uses `10` as its "no free slot"
+result and refuses rather than writing row 10; the seat-setup writer is only
+called with lobby seat indices and with `0`/`1` for the two-seat mission
+setup; the save restore's `Player%i` loop covers ten rows. So for the whole
+of a battle row 10 holds occupancy `0`, control `0`, ally group `10`. An
+implementation may represent it as an always-unoccupied eleventh row or as a
+bound check that treats index `10` as "no player"; the two are
+indistinguishable to every reader in the image. (`[06 §12.1]`'s `attacker
+side != 10` guard before indexing the kill counters, and doc 08's lead-change
+status line "attributed to slot 10", are consumers of the same convention.)
+The tail item on which runtime row owns the eleven-byte `Players/Alliances`
+save box (doc 08) is unaffected: that box is alliance bytes, not this row.
 
 The current resource stocks retain fractional values. Older decompiler output
 misidentified them as integers because the player record was viewed through an

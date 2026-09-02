@@ -128,26 +128,35 @@ func TestPumpResultCodeTables(t *testing.T) {
 				t.Fatalf("code1: draw delta %d, want 0", d)
 			}
 		})
-		t.Run("code2 continues unchanged and consumes satisfied bits", func(t *testing.T) {
+		t.Run("code2 continues to the next record and consumes satisfied bits", func(t *testing.T) {
+			// [04 R-FAC-02 §4] states the walk effect for a hold without
+			// naming a descriptor: "a *hold* (code 2) does NOT stop the walk —
+			// the next record is visited in the same pass". The held record is
+			// dispatched once, keeps its phase, and its satisfied bits were
+			// consumed by step 4 before the handler ran.
 			sim := injectTestSim(t)
 			q, u := &Queue{binding: &QueueBinding{SimRNG: sim}}, newTestUnit()
 			p := newProbe()
 			p.install(t, moveID, func(n *Node) Code { return 2 }) // [04 §3.3] continue walking unchanged
 			q.Push(moveID, Node{Phase: 7, Param1: 1})
+			q.Push(moveID, Node{Param1: 2})
 			clearGates(q)
 			q.primary[0].Satisfied = 0x2
 			q.primary[0].DynamicGate = 0x2
 			before := sim.Draws()
 			q.Pump(u, probeTick)
 			n := q.primary[0]
-			if len(q.primary) != 1 || n.Phase != 7 {
-				t.Fatalf("code2: len %d phase %d, want record kept, phase unchanged 7", len(q.primary), n.Phase)
+			if len(q.primary) != 2 || n.Phase != 7 {
+				t.Fatalf("code2: len %d phase %d, want both records kept, phase unchanged 7", len(q.primary), n.Phase)
 			}
 			if n.Satisfied != 0 {
 				t.Fatalf("code2: satisfied %x, want consumed bits cleared", n.Satisfied)
 			}
-			if p.callsFor(1) != 2 {
-				t.Fatalf("code2: calls %d, want 2", p.callsFor(1))
+			if p.callsFor(1) != 1 {
+				t.Fatalf("code2: held-record calls %d, want 1", p.callsFor(1))
+			}
+			if p.callsFor(2) == 0 {
+				t.Fatalf("code2: the record behind the hold was never visited")
 			}
 			if d := sim.Draws() - before; d != 0 {
 				t.Fatalf("code2: draw delta %d, want 0", d)
@@ -180,20 +189,26 @@ func TestPumpResultCodeTables(t *testing.T) {
 				t.Fatalf("code3: draw delta %d, want exactly 1", d)
 			}
 		})
-		t.Run("code4 continues unchanged", func(t *testing.T) {
+		t.Run("code4 continues to the next record unchanged", func(t *testing.T) {
+			// Code 4 shares code 2's row in [04 §3.3] and therefore its walk
+			// effect [04 R-FAC-02 §4].
 			sim := injectTestSim(t)
 			q, u := &Queue{binding: &QueueBinding{SimRNG: sim}}, newTestUnit()
 			p := newProbe()
 			p.install(t, moveID, func(n *Node) Code { return 4 }) // [04 §3.3] continue walking unchanged
 			q.Push(moveID, Node{Phase: 7, Param1: 1})
+			q.Push(moveID, Node{Param1: 2})
 			clearGates(q)
 			before := sim.Draws()
 			q.Pump(u, probeTick)
-			if len(q.primary) != 1 || q.primary[0].Phase != 7 {
+			if len(q.primary) != 2 || q.primary[0].Phase != 7 {
 				t.Fatalf("code4: len %d phase %d, want unchanged", len(q.primary), q.primary[0].Phase)
 			}
-			if p.callsFor(1) != 2 {
-				t.Fatalf("code4: calls %d, want 2", p.callsFor(1))
+			if p.callsFor(1) != 1 {
+				t.Fatalf("code4: held-record calls %d, want 1", p.callsFor(1))
+			}
+			if p.callsFor(2) == 0 {
+				t.Fatalf("code4: the record behind the hold was never visited")
 			}
 			if d := sim.Draws() - before; d != 0 {
 				t.Fatalf("code4: draw delta %d, want 0", d)

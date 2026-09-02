@@ -604,10 +604,18 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 			// mode matrix remain unresolved [R-P0-08][03 §3.2]. Keep the
 			// authoritative visibility gate named but do not guess a player.
 			if yard&0x06 != 0 {
-				for _, occ := range [2]int16{cell.OccupantA(), cell.OccupantB()} {
-					if occ != 0 && uint16(occ) != q.Self {
-						return PlacementResult{}, fmt.Errorf("world: cell %d,%d occupied [04 §6.2]", cx, cz)
-					}
+				// The occupancy test reads the cell's GROUND word only:
+				// "Only the ground word is read; the air word is never
+				// consulted, so a landed or hovering airborne unit never blocks
+				// a ground mover through this test" [04 R-COLL-01 §2]. Reading
+				// both words was invisible while nothing wrote the air one;
+				// WU-19-20 gave mode-2 movers that word [04 R-COLL-01 §4], and
+				// reading it here jams a stock aircraft plant — its own hovering
+				// products hold the air word over the exit rectangle and every
+				// later product's placement is refused (construction's
+				// four-aircraft liveness run stalls at two).
+				if occ := cell.OccupantA(); occ != 0 && uint16(occ) != q.Self {
+					return PlacementResult{}, fmt.Errorf("world: cell %d,%d occupied [04 §6.2]", cx, cz)
 				}
 				// The same test on the other half of the split ground word.
 				// "Bits 1-2 reject any nonzero occupant other than the passed

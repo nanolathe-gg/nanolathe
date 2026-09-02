@@ -64,30 +64,55 @@ func AdvanceCaptureProgress(cs *CaptureState) {
 	}
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Gates: builder canCapture, victim not immune, victim idle not cloud, different owner, not already dying.
-// TODO(T25): exact UI producer for mask 0x10008 still unknown; gate preserved but producer not located.
+// CaptureEligible is the capture executor's phase-0 admission ladder
+// [05 R-WORK-01 §6]. It has exactly five predicates, tested in this order and
+// stopping at the first failure:
+//
+//  1. the order's target handle is non-null — `Capture failed`;
+//  2. the builder is still linked — a silent terminal;
+//  3. the BUILDER's definition carries `cancapture` — a silent terminal;
+//  4. the TARGET's definition does NOT carry `cancapture` —
+//     `That unit cannot be captured`. The same bit gates both ends, so
+//     anything that can capture cannot be captured;
+//  5. the target's remaining construction fraction compares equal to zero —
+//     `That unit is a cloud of vapor and cannot be captured`.
+//
+// Predicate 5 is a float32 compare against a literal zero whose only accepted
+// outcome is equal [05 R-WORK-01 §10]: negative zero is accepted, every other
+// value including NaN is rejected. Go's `== 0` on a float32 has exactly those
+// semantics, so `Remaining == 0` is the retail test itself, not a proxy for an
+// idleness sentinel — there is no idleness, health or order-state test here,
+// and a moving or firing finished unit is captured normally.
+//
+// Predicate 4 is what an earlier reading of this function could not locate and
+// called "victim immunity": it is the target's own `cancapture` bit
+// [05 R-WORK-01 §10]. The same bit also blocks reclaim [05 R-WORK-01 §4].
+//
+// The same-owner and dying-victim rejects this function used to add are NOT in
+// the ladder — [05 R-WORK-01 §10] states it has exactly these five — so they
+// are gone.
+//
+// TODO(question): whether the order-side target validation doc 04 owns excludes
+// a same-owner or death-latched capture target before the executor runs is
+// Unknown [05 R-WORK-01 §10]; the transfer path's own validation of old and new
+// ownership is the only later refusal established. A static trace of the
+// capture order's target admission in the order builder would settle it.
 func CaptureEligible(builder *units.Unit, victim *units.Unit) bool {
-	if builder == nil || victim == nil || builder.Def == nil || victim.Def == nil {
+	if victim == nil { // 1: the target handle is non-null
 		return false
 	}
-	if !builder.Def.CanCapture {
+	if builder == nil || builder.Def == nil { // 2: the builder is still linked
 		return false
 	}
-	// Victim capture immunity bit? Def.CanCapture immunity? Use NoRestrict? For now use CanCapture immunity inverse?
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// Keep victim immunity as not located TODO(question).
-	if builder.Owner == victim.Owner {
+	if !builder.Def.CanCapture { // 3: the builder can capture
 		return false
 	}
-	if victim.Dying || !victim.Alive {
+	if victim.Def == nil || victim.Def.CanCapture { // 4: the target cannot
 		return false
 	}
-	if victim.Remaining != 0 {
-		// cloud of vapor check: victim idle sentinel _DAT_004FCC920; use Remaining==0 as idle proxy TODO(question): exact sentinel not verified, Remaining==0 is proxy
-		return false
-	}
-	return true
+	// 5: the remaining-build fraction compares equal to literal zero
+	// [05 R-WORK-01 §10]. A nanoframe carries 1.0 and is rejected.
+	return victim.Remaining == 0
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.

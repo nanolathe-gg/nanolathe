@@ -136,8 +136,8 @@ func TestDynamicBlockCommitScenarios(t *testing.T) {
 		}
 		mover := &CollisionState{
 			ID: 1, X: 0, Z: 0, VX: int32(worldUnitsPerCell), FootPrintX: 1,
-			FootPrintZ: 1, Mode: 2, CachedAnchor: Cell{0, 0},
-			CachedMode: 2, OldAnchor: Cell{0, 0}, MaxVelocity: 65536,
+			FootPrintZ: 1, Mode: 1, CachedAnchor: Cell{0, 0},
+			CachedMode: 1, OldAnchor: Cell{0, 0}, MaxVelocity: 65536,
 		}
 		CommitSweep([]*CollisionState{mover}, grid, occupancyValidator(grid), nil)
 		if !mover.Blocked {
@@ -184,8 +184,8 @@ func TestDynamicBlockCommitScenarios(t *testing.T) {
 func dynamicMover(id int, anchor Cell, vx int32) *CollisionState {
 	return &CollisionState{
 		ID: id, X: int32(anchor.X) * int32(worldUnitsPerCell), Z: int32(anchor.Z) * int32(worldUnitsPerCell),
-		VX: vx, FootPrintX: 1, FootPrintZ: 1, Mode: 2,
-		CachedAnchor: anchor, CachedMode: 2, OldAnchor: anchor, MaxVelocity: 65536,
+		VX: vx, FootPrintX: 1, FootPrintZ: 1, Mode: 1,
+		CachedAnchor: anchor, CachedMode: 1, OldAnchor: anchor, MaxVelocity: 65536,
 	}
 }
 

@@ -76,6 +76,95 @@ func UnmarshalBytes(b []byte) (Packet, bool) {
 	return UnmarshalPacket(arr), true
 }
 
+// Player-slot control-byte identities [05 R-SHARE-01 §1]. The byte lives on the
+// player slot record, not on the unit: a unit's own owner byte is the slot
+// number, and the class is reached through that slot [06 R-DMG-01 §8].
+//
+// An UNOCCUPIED row is a distinct fourth reading, which is what
+// ControlByteAbsent is: not a retail control-byte value, but the accessor's way
+// of saying the row the side byte names is not occupied. Gate 1 PASSES an
+// unoccupied row; gate 2 rejects it [06 R-DMG-01 §9].
+const (
+	ControlByteAbsent   uint8 = 0 // the row is not occupied [06 R-DMG-01 §9]
+	ControlByteHuman    uint8 = 1 // locally controlled human [05 R-SHARE-01 §1]
+	ControlByteComputer uint8 = 2 // computer player [05 R-SHARE-01 §1]
+	ControlByteRemote   uint8 = 3 // remote peer [05 R-SHARE-01 §1]
+)
+
+// PlayerControlByteFor is the damage funnel's reader of the player row's
+// control byte [06 R-DMG-01 §8]. The session binds it to the authoritative
+// player record; it returns ControlByteAbsent for any row that is not occupied.
+//
+// Representation of the eleventh row. Retail's player table has ELEVEN rows:
+// the battle-block allocator constructs row 10 — the row a null-shooter
+// record's neutral side byte selects — and no writer ever occupies it, so the
+// gate's occupancy read is the whole test for side 10 [06 R-DMG-01 §9]. That
+// section states a bound check and a real never-occupied eleventh row are
+// indistinguishable. This build takes the BOUND CHECK: the session's accessor
+// returns ControlByteAbsent for any index past its ten player records, which is
+// exactly what a constructed-but-never-occupied row 10 reads as.
+//
+// A nil accessor reads every row as unoccupied. That passes gate 1 (as retail's
+// unoccupied row does) and rejects gate 2 (as retail's does), so it is not
+// "assume eligible" in either direction.
+func (s *Service) PlayerControlByteFor(owner uint8) uint8 {
+	if s == nil || s.ControlByte == nil {
+		return ControlByteAbsent
+	}
+	return s.ControlByte(owner)
+}
+
+// DamageRoutingAdmitted is gate 1 of [06 R-DMG-01 §8] item 1 as
+// [06 R-DMG-01 §9] corrected it, read on the PROJECTILE's side byte. Retail is
+// two reads on the selected row, entering the routing on the first success:
+//
+//	if row.occupied == 0 -> route damage    ; an unoccupied row PASSES
+//	if row.control != 3  -> route damage    ; occupied, not a remote peer
+//	otherwise            -> skip            ; an occupied remote-peer row only
+//
+// so `skip = side < 10 && slot[side].occupied && slot[side].control == 3`. The
+// two reads collapse into one comparison here because the accessor already
+// reports an unoccupied row as ControlByteAbsent, which is never
+// ControlByteRemote.
+//
+// The absent-row branch is the one an earlier reading inverted ("the row must
+// exist"). Under that reading every meteor, death explosion and routed burn
+// weapon — records that carry the neutral side byte or a zeroed one and no
+// shooter — would have been harmless, contradicting §12.1's "the explosion
+// damages every side alike" [06 R-DMG-01 §9]. Such a record damages, and can
+// kill, every unit of every side within its radius, and credits nobody.
+//
+// When it does skip, no damage is routed at all — the shake, the sound and the
+// art of [06 §9.1] steps 4 and 5 have already happened.
+func (s *Service) DamageRoutingAdmitted(shooterSide uint8) bool {
+	return s.PlayerControlByteFor(shooterSide) != ControlByteRemote
+}
+
+// DeathLatchAdmitted is gate 2 of [06 R-DMG-01 §8], read on the VICTIM's owner
+// byte: only control bytes 1 and 2 latch death on a non-positive health result
+// (preserving the modular health value) and only they admit the paralyzer
+// branch. Anything else — no record, or 3 — clamps health to zero and
+// continues to the callbacks without dying through this path.
+//
+// It is the same test the per-player unit sweep applies to its water-damage,
+// self-repair, order-pump and mover block [04 R-MOV-03 §1][04 §9.2].
+func (s *Service) DeathLatchAdmitted(owner uint8) bool {
+	b := s.PlayerControlByteFor(owner)
+	return b == ControlByteHuman || b == ControlByteComputer
+}
+
+// UnitArmored is the packet builder's armor gate operand [06 R-DMG-01 §8]:
+// bit 1 of the unit's first runtime state byte — the COB `set ARMORED` posture
+// of port 20 [04 §4.4], zero at creation and written by nothing else.
+//
+// The FBI `armoredstate` key is a DIFFERENT thing that shares the name: it is
+// parsed into a definition flag bit that has no reader anywhere in retail
+// [R-DMG-01 §2]. ORing it in here would make every unit authored
+// `armoredstate=1` permanently armored, which retail never does.
+func UnitArmored(u *units.Unit) bool {
+	return u != nil && u.Armored
+}
+
 // Kind constants [06 §9.1], [06 §12.1].
 const (
 	KindOrdinary   uint8 = 1  // ordinary weapon damage [06 §9.1]
@@ -366,10 +455,13 @@ func (s *Service) ApplySelfDestructDamage(w *units.World, target pool.Handle, ti
 	if victim == nil || !victim.Alive || victim.Dying {
 		return false
 	}
-	armored := victim.Armored
+	// The armor gate reads the runtime posture only [06 R-DMG-01 §8]; the FBI
+	// `armoredstate` flag has no reader in retail. (At 30000 the strict
+	// `amount < 30000` guard closes the gate anyway, but the operand must
+	// still be the right one.)
+	armored := UnitArmored(victim)
 	damageModifier := int32(65536)
 	if victim.Def != nil {
-		armored = armored || victim.Def.ArmoredState
 		damageModifier = victim.Def.DamageModifier
 	}
 	amount := ComputeScaledAmount(30000, 1, victim.Kills, victim.Kills, armored, damageModifier, false, false, false)
@@ -485,7 +577,9 @@ func IsWaterDamageEligible(u *units.Unit, terrain *world.Terrain) bool {
 // victim per [04 §9.2][06 §9.2] C20.
 // It is ComputeScaledAmount with falloff 1.0 (non-AOE multiplier [04 §9.2]),
 // attacker 0 (null), and non-heal path so armor/veteran (defender) reductions apply.
-// isArmored is victim's armor state (instance armor byte mask 0x02 or definition ArmoredState [06 §9.2] step 5); damageModifier is def.DamageModifier 16.16; defenderKills is victim's credited-kill counter.
+// isArmored is the victim's runtime armored posture — bit 1 of its first state
+// byte, nothing else [06 R-DMG-01 §8]; damageModifier is def.DamageModifier
+// 16.16; defenderKills is the victim's credited-kill counter.
 func ComputeWaterDamageScaledAmount(baseDamage int32, defenderKills int32, isArmored bool, damageModifier int32) uint16 {
 	return ComputeScaledAmount(baseDamage, float32(1), 0, defenderKills, isArmored, damageModifier, false, false, false) // [04 §9.2] multiplier 1.0 for non-AOE, [06 §9.2] steps 5-6 defender vet reduction
 }
@@ -508,10 +602,20 @@ func WaterDamagePacketForTest(victim pool.Handle, baseDamage int32, defenderKill
 // Deterministic iteration: players 0..9 ascending, slots ascending within each player's slice (I1) [01 §4.4][04 §9.2].
 // No map range, no float64 outside I2 allowlist, no time.Now, no per-entity RNG (I1,I2,I4).
 // Returns the number of units damaged this tick.
-// getPlayerClass is an optional accessor for the owning player's class byte [07 §?.?][04 §9.2] 0x00 empty,0x01 human host,0x02 human join,0x03 computer/AI.
-// If nil, the player-class gate is skipped with a TODO placeholder (assume eligible). When provided, only classes 1 or 2 are eligible [04 §9.2].
-// TODO(question): player class accessor not wired to a concrete store; placeholder skips gate when nil for testability. Wire to the authoritative player slot class byte (economy/session store) and remove TODO when the accessor is settled.
-func TickWaterDamage(tick uint32, w *units.World, terrain *world.Terrain, waterDoesDamage, waterDamage int32, getPlayerClass func(owner uint8) uint8) int {
+// getControlByte reads the owning player slot's control byte [05 R-SHARE-01 §1]:
+// 1 a locally controlled human, 2 a computer player, 3 a remote peer, and
+// ControlByteAbsent (0) for a slot with no record. The sweep's block runs only
+// for 1 or 2 [04 R-MOV-03 §1][04 §9.2].
+//
+// Correction (2026-09-01, [06 R-DMG-01 §8]): this parameter was documented as
+// "0 empty, 1 human host, 2 human join, 3 computer/AI" and the gate was skipped
+// entirely when the accessor was nil. Both were wrong. 2 is the computer player
+// and 3 the remote peer, so the old table exempted every computer-owned unit
+// from water damage; and a nil accessor now fails closed — an unoccupied row is
+// not "eligible". (Unlike gate 1, which an unoccupied row PASSES
+// [06 R-DMG-01 §9], this gate admits only 1 and 2, so the sweep's block is the
+// one place where "no record" and "remote peer" behave the same.)
+func TickWaterDamage(tick uint32, w *units.World, terrain *world.Terrain, waterDoesDamage, waterDamage int32, getControlByte func(owner uint8) uint8) int {
 	if !IsWaterDamageTick(tick) { // [04 §9.2] cadence
 		return 0
 	}
@@ -531,29 +635,28 @@ func TickWaterDamage(tick uint32, w *units.World, terrain *world.Terrain, waterD
 		if u == nil {
 			return
 		}
-		// Player class gate [04 §9.2] — only when owning player's class is 1 or 2.
-		// TODO(question): owning player's class source unresolved; placeholder gates only when accessor supplied. Until wired, nil accessor means assume eligible (no invent, but testable). Replace with authoritative slot-class byte when located.
-		if getPlayerClass != nil {
-			class := getPlayerClass(u.Owner)
-			if class != 1 && class != 2 {
-				return // [04 §9.2] player class 1 or 2 only
-			}
+		// Control-byte gate [04 R-MOV-03 §1][04 §9.2][06 R-DMG-01 §8] — the
+		// sweep's block runs only for an owner whose control byte is 1 or 2.
+		// An absent accessor reads every slot as having no record, which
+		// rejects: the byte must be read, never assumed.
+		ctrl := ControlByteAbsent
+		if getControlByte != nil {
+			ctrl = getControlByte(u.Owner)
+		}
+		if ctrl != ControlByteHuman && ctrl != ControlByteComputer {
+			return // [04 §9.2] control byte 1 or 2 only
 		}
 		if !IsWaterDamageEligible(u, terrain) { // [04 §9.2] canhover exclusion and Y <= seaLevel
 			return
 		}
 		// Funnel arithmetic per [04 §9.2][06 §9.2] C20 via ComputeScaledAmount with falloff 1.0 [04 §9.2] non-AOE multiplier.
-		isArmored := false
+		// The armor gate is bit 1 of the victim's first runtime state byte —
+		// the COB port 20 posture — and nothing else [06 R-DMG-01 §8]. The
+		// definition's `armoredstate` flag has no reader in retail.
+		isArmored := UnitArmored(u)
 		damageMod := int32(65536) // 1.0 [02 "Unit record"] default
 		if u.Def != nil {
-			// TODO(question): armor gate is bit 1 of victim's instance armor byte (mask 0x02) [04 §9.2][06 §9.2] step5. Which instance field that is remains open (definition ArmoredState vs unit Armored port 20). Using definition ArmoredState as placeholder to keep damage path single and consistent with projectile path which also reads Def.ArmoredState. Instance byte remains TODO.
-			isArmored = u.Def.ArmoredState
 			damageMod = u.Def.DamageModifier
-			if u.Armored {
-				isArmored = true // also consider instance port 20 [04 §4.4] if set
-			}
-		} else if u.Armored {
-			isArmored = true
 		}
 		scaled := ComputeWaterDamageScaledAmount(waterDamage, u.Kills, isArmored, damageMod) // [04 §9.2][06 §9.2] veteran victim REDUCED
 		// Apply through standard damage funnel without callbacks [04 §9.2] type 0xB skips HitByWeapon/TakeDamage and feature effects.

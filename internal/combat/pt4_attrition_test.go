@@ -48,6 +48,7 @@ func TestPT4_ReloadCountdownRecoversAndTargetDies(t *testing.T) {
 	cat.RebuildWeaponIndex()
 
 	var svc Service
+	bindFixtureControlBytes(&svc) // [06 R-DMG-01 §8] gate 1 needs a player record
 	startHealth := target.Health
 	if startHealth <= 0 {
 		t.Fatalf("fixture target starts with no health")

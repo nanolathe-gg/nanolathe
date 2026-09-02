@@ -262,11 +262,18 @@ func TestOccupancyRespectsSelf(t *testing.T) {
 	if err := ter.ValidatePlacement(1, 1, yard, 2, 2, 42); err != nil {
 		t.Fatalf("a cell occupied by self was rejected: %v", err)
 	}
-	// Layer B rejects too.
+	// The air word does NOT reject. This assertion used to read the other way
+	// round; it was written while nothing in the tree ever wrote the air word,
+	// so it locked an untested reading. [04 R-COLL-01 §2] is explicit for the
+	// occupancy test: "Only the ground word is read; the air word is never
+	// consulted, so a landed or hovering airborne unit never blocks a ground
+	// mover through this test." WU-19-20 gave mode-2 movers that word
+	// [04 R-COLL-01 §4], and rejecting on it jams a stock aircraft plant on its
+	// own hovering products.
 	ter.Plot[1*6+1].SetOccupantA(0)
 	ter.Plot[1*6+1].SetOccupantB(7)
-	if err := ter.ValidatePlacement(1, 1, yard, 2, 2, 0); err == nil {
-		t.Fatal("a layer-B occupant was accepted")
+	if err := ter.ValidatePlacement(1, 1, yard, 2, 2, 0); err != nil {
+		t.Fatalf("an airborne occupant rejected a placement [04 R-COLL-01 §2]: %v", err)
 	}
 }
 

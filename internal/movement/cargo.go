@@ -251,15 +251,15 @@ func (s *System) SyncCarriedMotion(w *units.World) {
 			collCargo.Dirty = true
 			newAnchor := collCargo.ProposedAnchor(cargo.Move.Mode)
 			if newAnchor != collCargo.OldAnchor || collCargo.Mode != cargo.Move.Mode {
-				// Carried motion bypasses validation, but the carried-position setter
-				// still clears and stamps on a cell/mode change
-				// [04 R-FAC-02 §2][04 R-COLL-01 §4].
-				if s.Grid != nil {
-					s.Grid.Clear(collCargo.OldAnchor, collCargo.FootPrintX, collCargo.FootPrintZ, collCargo.ID)
-					s.Grid.Stamp(newAnchor, collCargo.FootPrintX, collCargo.FootPrintZ, collCargo.ID)
-				}
+				// Carried motion bypasses validation, but the carried-position
+				// setter still clears and stamps on a cell/mode change, in the
+				// plane its mode names: a mode-1 nanoframe holds the ground word
+				// of its pad for the whole build, and an attached mover in mode 0
+				// writes nothing [04 R-FAC-02 §2][04 R-COLL-01 §4].
 				collCargo.OldAnchor = newAnchor
 				collCargo.CachedAnchor = newAnchor
+				collCargo.Mode = cargo.Move.Mode
+				s.syncMoverStamp(cargo)
 			}
 			collCargo.Mode = cargo.Move.Mode
 		}
@@ -468,10 +468,9 @@ func (s *System) TryUnload(w *units.World, carrierHandle, cargoHandle pool.Handl
 		newAnchor := coll.ProposedAnchor(coll.Mode)
 		coll.CachedAnchor = newAnchor
 		coll.OldAnchor = newAnchor
-		// Stamp new footprint
-		if s.Grid != nil {
-			s.Grid.Stamp(newAnchor, coll.FootPrintX, coll.FootPrintZ, coll.ID)
-		}
+		// The unload's release is a stamp that bypasses the validator, in the
+		// plane the released mover's mode names [04 R-COLL-01 §4].
+		s.syncMoverStamp(cargo)
 	}
 	// Trigger cargo's own movement reset? Keep mode active.
 	return true, ""

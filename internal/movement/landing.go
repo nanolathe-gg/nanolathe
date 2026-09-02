@@ -142,17 +142,16 @@ func (s *System) Land(w *units.World, vtolHandle pool.Handle, pad *units.Unit) b
 	// Touchdown goes through the one mover-mode setter: mode 1 is grounded, so
 	// the setter zeroes the velocity components and the scalar speed and lowers
 	// the activation edge (`Deactivate`, the landing script hook)
-	// [04 R-AIR-01 §3], and re-stamps the ground plane the airborne mover
-	// released on takeoff [04 R-COLL-01 §4].
+	// [04 R-AIR-01 §3], and moves the stamp from the air word back to the
+	// ground word of the touchdown rectangle [04 R-COLL-01 §4].
 	// Any outstanding goal payload is superseded: the touchdown is the end of
 	// the leg that produced it [04 R-AIR-01 §1] step 6.
 	s.releaseAirGoal(vtol)
-	if !s.SetMoverMode(vtol, 1) && s.Grid != nil {
-		// Already grounded: the mode write is a no-op, so stamp the new pad
-		// cells directly.
-		if coll, ok := s.Collisions[vtolHandle]; ok {
-			s.Grid.Stamp(coll.CachedAnchor, coll.FootPrintX, coll.FootPrintZ, coll.ID)
-		}
+	if !s.SetMoverMode(vtol, 1) {
+		// Already grounded: the mode write is a no-op, so reconcile the stamp
+		// against the new pad rectangle directly — the clear runs at the
+		// rectangle that was stamped, not at the pad [04 R-COLL-01 §4].
+		s.syncMoverStamp(vtol)
 	}
 	if fl, ok := s.Flights[vtolHandle]; ok {
 		fl.Mode = 1

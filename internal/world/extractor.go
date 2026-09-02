@@ -32,7 +32,13 @@ func (t *Terrain) CheckExtractorOverlap(cx, cz int32, footX, footZ int, extracts
 			if cell == nil {
 				continue
 			}
-			if cell.OccupantA() != 0 || cell.OccupantB() != 0 {
+			// Ground word only, as the occupancy test of [04 R-COLL-01 §2]
+			// reads it: the air word is never consulted, so an aircraft
+			// crossing a metal patch does not make the patch overlap. The air
+			// word had no writer at all until WU-19-20 gave mode-2 movers one
+			// [04 R-COLL-01 §4], so this is the reading this check has always
+			// had in practice.
+			if cell.OccupantA() != 0 {
 				overlaps = true
 			}
 		}

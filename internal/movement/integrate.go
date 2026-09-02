@@ -468,6 +468,12 @@ func NewSystem(terrain *world.Terrain, fallback Profile, grid *OccupancyGrid) *S
 	// without its caller electing to pass one [04 R-COLL-01 §2].
 	if terrain != nil {
 		terrain.Movers = gridOccupancy{grid: grid}
+		// Retail's mobile occupancy IS the plot cell's first two words
+		// [03 §2.2][04 R-COLL-01 §4]; binding them here makes every grid stamp
+		// and clear write the word of the same plane in the same call, so the
+		// grid and the words are one store (the authority note at the head of
+		// collision.go).
+		grid.AttachPlot(terrain)
 	}
 	sched := path.NewScheduler(s.searchFunc, s.publishFunc)
 	s.pathProvider = &pathProvider{players: s.PathPlayers, limit: s.PathUnitLimit}
@@ -1378,7 +1384,16 @@ func (s *System) EnsureUnit(u *units.Unit) {
 		if coll.Building {
 			stamped = s.stampBuildingGrid(anchor, footX, footZ, coll.Yard, coll.YardOpen, coll.ID)
 		} else {
-			stamped = s.Grid.Stamp(anchor, footX, footZ, coll.ID)
+			// Creation is one of the stamp's writers and it stamps the plane of
+			// the mover's mode — 1 here, so the ground word of every cell of the
+			// rectangle [04 §2.3][04 R-COLL-01 §4].
+			plane, stamps := planeForMode(coll.Mode)
+			if stamps {
+				stamped = s.Grid.StampPlane(plane, anchor, footX, footZ, coll.ID)
+				coll.StampedAnchor = anchor
+				coll.StampedPlane = plane
+				coll.HasStamp = s.Grid.RectOnMap(anchor, footX, footZ)
+			}
 		}
 		if stamped {
 			s.noteOccupancyCommit(h, s.tick)
@@ -2405,7 +2420,14 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	// an aircraft takes this path whatever its queue holds, and an aircraft with
 	// a released payload continues on its last command.
 	if u.Def != nil && u.Def.CanFly {
-		return s.stepAir(u, tick)
+		res := s.stepAir(u, tick)
+		// The flight commit writes the new cached cell pair; the stamp follows
+		// it, so an airborne mover holds the air word of the rectangle it is
+		// actually over and a landed one holds the ground word
+		// [04 R-COLL-01 §1] step (4) [04 R-COLL-01 §4]. A rectangle that left
+		// the map writes no cell.
+		s.syncMoverStamp(u)
+		return res
 	}
 	// Keep orders queue as authority: only follow route if primary order is Move_Ground-class [task]
 	q := orders.QueueForUnit(u)

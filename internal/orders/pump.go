@@ -1375,19 +1375,26 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 				// them is writing over a live state machine.
 				return
 			}
-			// TODO(T25): this descriptor has no handler and nothing else runs
-			// it, so the order is unimplemented in this build. Retail has a
-			// handler for every named descriptor, so there is no retail
+			// Retired (WU-19-4): this arm carried a TODO(T25) for descriptors
+			// that had no handler and no driver. The census is now zero —
+			// TestHandlersAreInstalledBeforeTheFirstPump walks the whole table
+			// and fails on any named descriptor that is neither `GetBuilt`
+			// (bound per queue by the construction service, [04 R-FAC-02 §4])
+			// nor driven by another subsystem — so this is a guard against a
+			// table that regresses, not a placeholder for behavior we owe.
+			//
+			// It stays because the alternative to a guard is a jam. Retail has
+			// a handler for every named descriptor, so there is no retail
 			// behavior to clone here; what the pump owes is an outcome that is
-			// bounded and visible rather than a jam. The record is parked with
-			// the contract's own wait, code 3 — lowest gate bit, deadline
-			// `tick + 30 + random below 15` [04 §3.3] — which stops the walk,
-			// keeps the record the player still owns, and re-diagnoses once
-			// per wait instead of once per tick. The alternatives are all
-			// worse: codes 0, 1, 2, 4 and 6 re-dispatch the same record from
-			// the head and spin (0 and 1 corrupting the phase on the way), and
-			// 5, 7, 8 and 9 free it, turning a missing handler into a silently
-			// dropped order.
+			// bounded and visible. The record is parked with the contract's own
+			// wait, code 3 — lowest gate bit, deadline `tick + 30 + random
+			// below 15` [04 §3.3] — which stops the walk, keeps the record the
+			// player still owns, and re-diagnoses once per wait instead of once
+			// per tick. The alternatives are all worse: codes 0 and 1
+			// re-dispatch the record from the head and spin, corrupting the
+			// phase on the way; 2, 4 and 6 walk past it every tick with no
+			// diagnostic; and 5, 7, 8 and 9 free it, turning a missing handler
+			// into a silently dropped order.
 			q.recordDiagnostic(fmt.Sprintf("orders: no handler for %s, parked for 30..44 ticks", desc.Name))
 			q.applyPrimaryResultCode(n, 3, tick)
 			return
@@ -1411,12 +1418,24 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 			// needs the tick to form one.
 			code = handler(u, n, satisfied, tick)
 		}
-		// A primary code-2 hold continues to the following record in the same
-		// ordered pass. This is observable for the factory composition: the
-		// carried record's ten-tick expiry is the only opportunity to visit the
-		// following GetBuilt record [04 R-FAC-02 §4]. GetBuilt itself stops this
-		// pass after arming its next deadline.
-		if (code == 2 || code == 4) && desc.Name == "BeCarried" {
+		// [04 §3.3] codes 2 and 4 "continue walking unchanged", and
+		// [04 R-FAC-02 §4] states what continuing means for them without
+		// naming a descriptor: "The primary pump stops its walk at the first
+		// record whose gate is non-zero and whose satisfied set is empty; a
+		// *hold* (code 2) does NOT stop the walk — the next record is visited
+		// in the same pass." So a hold advances the cursor for EVERY row.
+		//
+		// Removed (WU-19-4): this branch used to require `desc.Name ==
+		// "BeCarried"`, which is the general rule wearing one descriptor's
+		// name. It was written for the factory composition — the carried
+		// record's ten-tick expiry is the only opportunity to visit the
+		// GetBuilt record behind it — and every other row that returned a hold
+		// took the restart-from-head arm below instead, which re-tests the
+		// head's freshly armed gate and ends the pass. That is the same
+		// observable outcome for a row whose hold arms a gate or a deadline
+		// (both do, through the deadline setter's gate bit 0
+		// [04 R-ORD-01 §1]), and the wrong one for any record queued behind it.
+		if code == 2 || code == 4 {
 			cursor++
 			continue
 		}
@@ -1577,11 +1596,12 @@ func (q *Queue) pumpSecondary(u *units.Unit, tick uint32) {
 		q.secondaryTick = tick
 		handler := DescriptorFor(n.ID).Handler
 		if handler == nil {
-			// TODO(T25): the same missing-handler park as the primary walk
-			// above, through the secondary table's code 3 — which parks this
-			// record for 30..44 ticks and, unlike the primary, continues the
-			// walk, so one unimplemented rear-segment record does not hide the
-			// records behind it [04 §3.3].
+			// The same missing-handler guard as the primary walk above (whose
+			// comment carries the reasoning and the census), through the
+			// secondary table's code 3 — which parks this record for 30..44
+			// ticks and, unlike the primary, continues the walk, so one
+			// unrunnable rear-segment record does not hide the records behind
+			// it [04 §3.3].
 			q.recordDiagnostic(fmt.Sprintf("orders: nil handler for secondary %s, parked for 30..44 ticks", DescriptorFor(n.ID).Name))
 			advance, walking := q.applySecondaryResultCode(n, 3, tick)
 			if !walking {

@@ -323,14 +323,13 @@ func vtolMoveHandler(u *units.Unit, n *Node, _ uint32, _ uint32) Code {
 // through the corner rather than braking into it. Waypoints closer together
 // than about 336 units still rotate every visit.
 //
-// TODO(T25): the low-health pad seek — health < (maxdamage >> 2) * 3 collects
-// this side's base candidates within 0xF00, releases the payload, draws
-// RNG(count) and spawns `VTOL_Landing` at that candidate [04 R-ORD-02 §2]
-// [04 R-AIR-01 §7] — is not implemented here. Its candidate list is the
-// air-base enumeration the seek states build in internal/movement, which owns
-// the pad predicate, and its draw belongs with that list; taking the draw here
-// against a differently ordered list would diverge the stream (I4). Placeholder:
-// the row proceeds to the opportunity scan, which is the next step in order.
+// Corrected (WU-19-4): this header carried a TODO(T25) saying the low-health
+// pad seek "is not implemented here", because its candidate list was thought to
+// be an air-base enumeration internal/movement owns and its draw had to travel
+// with that list. The list is the binding's own live-unit enumerator walked
+// through the shared pad filter of [04 R-AIR-01 §7] — the same one
+// `VTOL_RepairPatrol` step 3 already uses — so the row can take its own draw in
+// the enumerator's pool order without diverging the stream (I4).
 func vtolPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	if u == nil || n == nil {
 		return 7 // cancel-all
@@ -355,6 +354,23 @@ func vtolPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Co
 		}
 		installAirPatrolMarker(u, n)
 		n.DynamicGate |= gateMoveOutcomes
+		// The low-health pad seek, in the section's own order: it runs after
+		// the leg's marker is armed and before the opportunity scan
+		// [04 R-ORD-02 §2]. The health test is the unsigned
+		// `health < (maxdamage >> 2) * 3` of [04 R-AIR-01 §7], the radius the
+		// same 0xF00 whole-unit square, and the draw is one RNG(count) over the
+		// candidate list — taken only when that list is non-empty, so an
+		// aircraft with no pad on its side consumes no random state
+		// [04 R-ORD-01 §1][I4].
+		if u.Def != nil && u.Def.MaxDamage > 0 && health16(u) < uint32((u.Def.MaxDamage>>2)*3) {
+			if pads := scanAirBasePads(u, airBaseSeekRadius); len(pads) > 0 {
+				releaseGoalPayload(n)
+				if pad := pickCandidate(u, pads); pad != nil && spawnPatrolLanding(u, pad, tick) {
+					n.DynamicGate = 0
+					return 0 // *restart*: the landing record now holds the head
+				}
+			}
+		}
 		if target := opportunityScan(u); target != nil && autoEngage(u, target) {
 			n.DynamicGate = 0
 			return 3 // the spawned attack runs at the head
@@ -374,6 +390,12 @@ const (
 	airPatrolSetback       = 320
 	airPatrolArrivalRadius = 0x150
 )
+
+// airBaseSeekRadius is the 0xF00 whole-world-unit radius both low-health pad
+// seeks collect their candidates within — `VTOL_SeekAttack`'s and
+// `VTOL_Patrol`'s [04 R-AIR-01 §7][04 R-ORD-02 §2]. The comparison is on whole
+// unit squares, which on a stock map reaches any pad the side owns.
+const airBaseSeekRadius = 0xF00
 
 // installAirPatrolMarker builds `VTOL_Patrol`'s point marker and installs it
 // through the air seam.

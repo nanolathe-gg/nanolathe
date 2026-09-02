@@ -595,15 +595,57 @@ var _ = (*content.UnitDef)(nil)
 // leash test — used by `Attack_Chase` (resolve.go), the ground `RepairUnit`
 // (work.go), the air executors, and `VTOL_RepairUnit` (vtolwork.go).
 
-// setBandedGoalAroundWard is the guard families' banded goal [04 §3.5](e). It
-// is unrelated to the chase, which installs its goals through the record's own
-// payload installers below.
-func setBandedGoalAroundWard(n *Node, ward *units.Unit, standoff int32) {
-	// TODO(question) banded-goal geometry not located beyond follow maintenance [04 §3.5]
-	off := numeric.Fixed(int64(standoff) * 65536)
-	n.GoalX = ward.X + off
-	n.GoalZ = ward.Z
-	n.GoalY = ward.Y
+// Retired 2026-09-01 (WU-19-6): `setBandedGoalAroundWard` stood here. It wrote
+// the record's goal to `ward + (standoff, 0, 0)` — a due-east point at a
+// standoff its two callers took from p1 with a fallback of 20 world units —
+// under a TODO(question) saying the banded geometry was not located. It is
+// located. [04 R-ORD-01 §8] gives the whole closure: the radius is computed by
+// the handler from the two footprints and never read from the issuer, the
+// direction is one RNG draw taken once at admit, the record's goal triple
+// holds an OFFSET rather than a position, and the payload is a point goal —
+// never an annulus and never a rectangle. The fallback 20 has no retail
+// counterpart at all: "a guard record never carries a caller-supplied radius,
+// so 'the radius when p1 is zero' is not a case retail has". Both callers are
+// below; nothing replaces the literal.
+
+// guardFollowRadius is `p1` of [04 R-ORD-01 §8 point 1], in whole world units:
+//
+//	s  = FootPrintX(me) + FootPrintX(ward) + 2      (whole cells)
+//	p1 = s · 16                                     (whole world units)
+//
+// Both terms are the X word of the unit's copied footprint SIZE pair — the
+// same word `Park` and the transport size gate read [04 R-ORD-01 §1] — so a
+// Z-asymmetric footprint contributes only its X size. The handler writes p1
+// unconditionally at admit; there is no issuer input and no zero case.
+func guardFollowRadius(me, ward *units.Unit) int32 {
+	return (footprintXOf(me) + footprintXOf(ward) + 2) * 16
+}
+
+func footprintXOf(u *units.Unit) int32 {
+	if u == nil || u.Def == nil {
+		return 0
+	}
+	return u.Def.FootprintX
+}
+
+// GuardFollowPoint is the world point and arrival radius a `Follow_Ground`
+// record's follow-maintenance leg installs [04 R-ORD-01 §8 point 3]: the
+// ward's position plus the record's stored anchor offset, with
+//
+//	radius = p1 / 2 = (FootPrintX(me) + FootPrintX(ward) + 2) · 8
+//
+// The division is signed and toward zero (I3); p1 is 16·s and therefore even
+// and positive, so it is exact. The Y sum is formed here and ignored by the
+// installer, which takes X and Z only.
+//
+// It is exported because the movement side derives the same goal for a record
+// whose payload is not currently bound (internal/movement/goals.go), and the
+// two must not carry separate arithmetic.
+func GuardFollowPoint(n *Node, wardX, wardY, wardZ numeric.Fixed) (x, y, z numeric.Fixed, radius int32) {
+	if n == nil {
+		return wardX, wardY, wardZ, 0
+	}
+	return wardX + n.GoalX, wardY + n.GoalY, wardZ + n.GoalZ, int32(n.Param1) / 2
 }
 
 // chaseVerticalJump is the substate 1-4 test of [04 R-ORD-01 §3]: the strafe
@@ -857,13 +899,6 @@ func getLookupForWard(n *Node, u *units.Unit) *units.Unit {
 	return nil
 }
 
-func guardWard(n *Node) *units.Unit {
-	if n.Target == 0 {
-		return nil
-	}
-	return nil
-}
-
 func wardHasConstruction(ward *units.Unit) bool {
 	// An unfinished ward, on the same "not zero" reading isUnfinished carries
 	// [04 §2.3][05 R-WORK-01 §1]; a ward whose fraction is still exactly 1 is a
@@ -893,28 +928,49 @@ func wardHasBuildOrder(ward *units.Unit) bool {
 	return head.StaticGate&0x100000 != 0 // 0x100000 marks nanolathe/build-site class [04 §3.1] TODO(question)
 }
 
-// guardHandler implements Follow_Ground / VTOL_Follow / Guard_NoMove [04 §3.5] top-down (a)-(e).
-func guardHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code {
+// guardHandler is the follow guard: `Follow_Ground` and its air twin
+// `VTOL_Follow` [04 R-ORD-01 §8][04 R-UNIT-06 §1]. `Guard_NoMove` no longer
+// shares it — it is a different order, not a follow variant, and its body is
+// guardNoMoveHandler in combat.go [04 R-ORD-01 §8 point 5].
+//
+// Entry gates, in order [04 R-UNIT-06 §1]: a missing ward completes the order
+// (code 5); a guard that is itself carried cancels its whole queue (code 7); a
+// ward whose definition can fly removes the order (code 8 — a ground guard
+// follows only ground wards); a phase byte beyond 1 cancels all (code 7).
+//
+// Phase 0 is the admit of [04 R-ORD-01 §8 points 1 and 2]; phase 1 is the
+// assist evaluation of [04 R-UNIT-06 §1], whose fall-through is the follow
+// maintenance of [04 R-ORD-01 §8 points 3 and 4].
+func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	_ = satisfied
-	if n.Target == 0 {
-		return Code(5) // no ward
+	if n == nil || n.Target == 0 {
+		return Code(5) // no ward → *complete* [04 R-UNIT-06 §1]
 	}
 	ward := getLookupForWard(n, u)
 	if ward == nil {
-		// Fallback to legacy guardWard without unit
-		ward = guardWard(n)
-		if ward == nil {
-			return Code(5)
-		}
+		return Code(5)
 	}
-	// slot 0 is null [01 §6.1] — live unit never has Handle 0; no assist paths fire, fall through to maintenance
+	if u != nil && u.Attachment.Carrier != 0 {
+		return Code(7) // a carried guard cancels its whole queue [04 R-UNIT-06 §1]
+	}
+	// The flying-ward gate is stated for the GROUND guard ("a ground guard
+	// follows only ground wards"); [04 R-UNIT-06 §1]'s air paragraph lists the
+	// air twin's additions and does not repeat it, so it is applied on the same
+	// canfly fork the command resolver uses to pick between the two names
+	// [04 R-ORD-02 §1] rather than to both.
+	if !unitCanFly(u) && unitCanFly(ward) {
+		return Code(8) // *abandon* — the order is removed [04 R-UNIT-06 §1]
+	}
+	if n.Phase > 1 {
+		return Code(7) // *cancel-all* [04 R-UNIT-06 §1]
+	}
+	if n.Phase == 0 {
+		return guardAdmit(u, n, ward)
+	}
+	// slot 0 is null [01 §6.1] — a live unit never has Handle 0; the assist
+	// legs cannot address such a guard, so it falls straight to maintenance.
 	if u.Handle == 0 {
-		standoff := int32(20) // TODO(question) standoff radius source for guard is Param1 [04 §3.2] fallback 20
-		if n.Param1 != 0 {
-			standoff = int32(n.Param1)
-		}
-		setBandedGoalAroundWard(n, ward, standoff)
-		return Code(3)
+		return guardFollowMaintenance(u, n, ward, tick)
 	}
 	// (a) build assist — if ward has active construction op that is friendly per diplomacy byte and not already latched [04 §3.5]
 	if wardHasConstruction(ward) && isFriendlyConstruction(u, ward) {
@@ -999,14 +1055,82 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code {
 			return Code(3)
 		}
 	}
-	// (e) otherwise follow maintenance — refresh a banded goal around the ward and wait 30 ticks [04 §3.5]
-	standoff := int32(20) // TODO(question) standoff radius source for guard is Param1 [04 §3.2] fallback 20
-	if n.Param1 != 0 {
-		standoff = int32(n.Param1)
-	}
-	setBandedGoalAroundWard(n, ward, standoff)
+	// Leg 5, the follow maintenance, on every visit that falls through the
+	// legs above [04 R-UNIT-06 §1][04 R-ORD-01 §8 point 3].
+	return guardFollowMaintenance(u, n, ward, tick)
+}
 
-	return Code(3) // wait 30 ticks [04 §3.3]
+// guardAdmit is the ground guard's phase 0 [04 R-ORD-01 §8 points 1 and 2],
+// which is [04 R-UNIT-06 §1]'s admit phase:
+//
+//	Clear all three weapon-slot build targets (the weapon-clear walk with its
+//	TargetCleared signals); write p1 = (FootPrintX(me) + FootPrintX(ward) + 2)
+//	· 16; draw ONE RNG(65536) for the anchor direction and store
+//	(−sin(h)·r, 0, −cos(h)·r) in the record's goal triple as an offset from the
+//	ward, with r the same radius promoted to 16.16; advance.
+//
+// The draw is the unit's own queue-bound simulation stream and happens exactly
+// once per guard record: the maintenance leg draws nothing (I4). p1 is
+// overwritten unconditionally — whatever the issuer stored in it survives only
+// until this phase runs, and there is no zero case to fall back from.
+//
+// The stored triple is an OFFSET, not a position. Every reader of a guard
+// record's goal — the order-line overlay, a save, the movement side's own goal
+// derivation — sees the offset and must add the ward's position to it
+// [04 R-ORD-01 §8 point 2]; GuardFollowPoint is that sum.
+func guardAdmit(u *units.Unit, n *Node, ward *units.Unit) Code {
+	clearWeaponBuildTargets(u)
+	radius := guardFollowRadius(u, ward)
+	n.Param1 = uint32(radius)
+	h := numeric.Angle(uint16(drawBelow(u, 0x10000)))
+	r := int32(radius) << 16 // the radius promoted to 16.16 for the multiply
+	n.GoalX = -numeric.Fixed(numeric.MulRound(numeric.Sin(h), r))
+	n.GoalY = 0
+	n.GoalZ = -numeric.Fixed(numeric.MulRound(numeric.Cos(h), r))
+	return Code(1) // *advance* — the same pump cascade re-enters phase 1
+}
+
+// guardFollowMaintenance is leg 5 of [04 R-UNIT-06 §1] as closed by
+// [04 R-ORD-01 §8 points 3 and 4]:
+//
+//	Install a POINT goal at `ward + storedOffset` with radius p1 / 2; set the
+//	deadline to tick + 30 (fixed, no draw) through the shared setter, which
+//	also ORs gate bit 0x01; OR 0x18 into the dynamic gate; return hold (2) with
+//	the phase left at 1.
+//
+// The gate on the way out is 0x19 — the pump wipes the gate before dispatch,
+// so the OR always lands on an empty word. Arrival (`0x20`) and path failure
+// (`0x40`) are deliberately NOT gated: the follow goal is re-issued on a fixed
+// 30-tick period whether or not the guard has arrived, each re-issue releasing
+// the previous payload and starting a fresh path request, and a failed path
+// never ends the guard.
+//
+// TODO(T25): [04 R-UNIT-06 §1]'s legs 1 and 2 — the combat join and the
+// per-slot re-target onto the ward's engagement target — are not implemented,
+// because the ward's engagement-target link has no located producer (that
+// section records the link's writer as Unknown), so the condition both legs
+// open on cannot be evaluated. The legs above are this build's earlier
+// approximation of legs 3 and 4 and predate the section's correction; WU-19-6
+// owns the radius, the goal shape and the cadence only. Every visit that falls
+// through reaches this leg.
+func guardFollowMaintenance(u *units.Unit, n *Node, ward *units.Unit, tick uint32) Code {
+	x, y, z, radius := GuardFollowPoint(n, ward.X, ward.Y, ward.Z)
+	// The payload form is used rather than installPointGoal so the record's
+	// goal triple keeps the offset [04 R-ORD-01 §8 point 2]. An air guard takes
+	// the installer's canfly arm, which is release-only.
+	//
+	// TODO(T25): the air twin's own maintenance is airspace circling with a
+	// `0x80` arrival radius [04 R-UNIT-06 §1]; that marker family belongs to
+	// internal/movement's air goals and is outside this unit, so a `VTOL_Follow`
+	// record installs nothing here and keeps only its cadence.
+	installPointGoalPayload(u, n, x, y, z, radius)
+	armDeadline(n, tick, 30) // fixed 30, no draw; the setter ORs gate bit 0x01
+	n.DynamicGate |= 0x18    // the two re-arm bits [04 R-ORD-01 §8 point 4]
+	return Code(2)           // *hold*, phase left at 1
+}
+
+func unitCanFly(u *units.Unit) bool {
+	return u != nil && u.Def != nil && u.Def.CanFly
 }
 
 // ---------------------------------------------------------------------------
@@ -1038,7 +1162,7 @@ func registerChaseGuardHandlers() {
 	if id := Lookup("VTOL_Follow"); id != 0 {
 		table[int(id)].Handler = guardHandler
 	}
-	if id := Lookup("Guard_NoMove"); id != 0 {
-		table[int(id)].Handler = guardHandler
-	}
+	// `Guard_NoMove` used to be assigned guardHandler here. It is a different
+	// order, not a follow variant: it installs no goal and never moves
+	// [04 R-ORD-01 §8 point 5]. combat.go's installer owns it now.
 }

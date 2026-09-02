@@ -33,11 +33,13 @@ const climbArrivalWindow = 0x10001
 //
 // The occupancy consequence is [04 R-COLL-01 §4]: the ground word is written by
 // mode-1 movers and by the building class, the air word by mode-2 movers, and
-// modes 0 and 3 stamp nothing. Nanolathe models only the ground plane — nothing
-// reads an air word — so leaving mode 1 releases the mover's ground cells and
-// entering mode 1 re-stamps them. That release is the event [04 R-FAC-02 §6]
-// names for an aircraft product clearing its factory's exit, and the same cells
-// are what the yard-close admission gate of [04 R-FAC-02 §5] tests.
+// modes 0 and 3 stamp nothing. Leaving mode 1 therefore *moves* the mover's
+// stamp from the ground word to the air word rather than dropping it, and
+// landing moves it back. Releasing the ground cells is the event
+// [04 R-FAC-02 §6] names for an aircraft product clearing its factory's exit,
+// and the same cells are what the yard-close admission gate of
+// [04 R-FAC-02 §5] tests; the air word the mover takes instead is what the
+// projectile contact test of [06 R-DMG-01 §7] reads to hit an aircraft.
 func (s *System) SetMoverMode(u *units.Unit, mode uint8) bool {
 	if s == nil || u == nil {
 		return false
@@ -70,10 +72,10 @@ func (s *System) SetMoverMode(u *units.Unit, mode uint8) bool {
 	return true
 }
 
-// applyOccupancyPlane moves a mover between Nanolathe's single (ground)
-// occupancy plane and no plane at all, per the mode rule of [04 R-COLL-01 §4].
-// A building-class unit is selected by its class, not by its mode, and is never
-// touched here.
+// applyOccupancyPlane moves a mover between the two occupancy planes on a mode
+// change, per the mode rule of [04 R-COLL-01 §4]: mode 1 the ground word, mode 2
+// the air word, modes 0 and 3 neither. A building-class unit is selected by its
+// class, not by its mode, and is never touched here.
 func (s *System) applyOccupancyPlane(u *units.Unit, prev, mode uint8) {
 	if s == nil || s.Grid == nil || u == nil {
 		return
@@ -82,18 +84,49 @@ func (s *System) applyOccupancyPlane(u *units.Unit, prev, mode uint8) {
 	if coll == nil {
 		return
 	}
-	switch {
-	case prev == 1 && mode != 1:
-		if s.Grid.Clear(coll.CachedAnchor, coll.FootPrintX, coll.FootPrintZ, coll.ID) {
-			s.noteOccupancyCommit(u.Handle, s.tick)
-		}
-	case prev != 1 && mode == 1:
-		if s.Grid.Stamp(coll.CachedAnchor, coll.FootPrintX, coll.FootPrintZ, coll.ID) {
-			s.noteOccupancyCommit(u.Handle, s.tick)
-		}
-	}
 	coll.Mode = mode
 	coll.CachedMode = mode
+	s.syncMoverStamp(u)
+}
+
+// syncMoverStamp reconciles a mover's occupancy with its committed cached pair
+// and mode. The identity holds exactly one plane's cells — ground for mode 1,
+// air for mode 2, none for modes 0 and 3 — at exactly the cached pair, because
+// "every writer stamps at the unit's cached pair" [04 R-COLL-01 §4]. When the
+// pair or the plane has changed it clears the rectangle that was actually
+// stamped and stamps the new one, which is the clear-then-stamp order of the
+// commit's success branch [04 R-COLL-01 §1].
+//
+// The occupant-age clock ([04 §6.1 R-DOC04-B]) is written only when the ground
+// plane moves: the class layer's gate reads the ground plane alone
+// [04 R-COLL-01 §2], so an airborne restamp has nothing to age.
+func (s *System) syncMoverStamp(u *units.Unit) {
+	if s == nil || s.Grid == nil || u == nil {
+		return
+	}
+	coll := s.Collisions[u.Handle]
+	if coll == nil || coll.Building {
+		return
+	}
+	plane, stamps := planeForMode(u.Move.Mode)
+	touchedGround := false
+	if coll.HasStamp && (!stamps || coll.StampedPlane != plane || coll.StampedAnchor != coll.CachedAnchor) {
+		if s.Grid.ClearPlane(coll.StampedPlane, coll.StampedAnchor, coll.FootPrintX, coll.FootPrintZ, coll.ID) {
+			touchedGround = touchedGround || coll.StampedPlane == PlaneGround
+		}
+		coll.HasStamp = false
+	}
+	if stamps && !coll.HasStamp {
+		if s.Grid.StampPlane(plane, coll.CachedAnchor, coll.FootPrintX, coll.FootPrintZ, coll.ID) {
+			touchedGround = touchedGround || plane == PlaneGround
+		}
+		coll.StampedAnchor = coll.CachedAnchor
+		coll.StampedPlane = plane
+		coll.HasStamp = s.Grid.RectOnMap(coll.CachedAnchor, coll.FootPrintX, coll.FootPrintZ)
+	}
+	if touchedGround {
+		s.noteOccupancyCommit(u.Handle, s.tick)
+	}
 }
 
 // takeoffPreamble is the five-step routine every air executor that must get the

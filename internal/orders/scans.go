@@ -51,6 +51,17 @@ func withinPlanarRadius(a *units.Unit, x, z numeric.Fixed, radius int32) bool {
 	return dx*dx+dz*dz <= r*r
 }
 
+// The live-unit enumerator answers a stop question, not a continue one:
+// QueueBinding.ForEachUnit ends the walk as soon as a visitor returns true and
+// asks for the next slot when it returns false. Every visitor below is written
+// in these two names rather than in bare booleans, because the two readings are
+// indistinguishable at a glance and the wrong one silently truncates a scan to
+// its first slot.
+const (
+	scanNext = false // this slot is not the answer; visit the next one
+	scanStop = true  // end the walk here
+)
+
 // scanAttackUType visits the live unit pool in its supplied slot order. Every
 // gate precedes the score draw: a rejected unit cannot consume simulation RNG.
 // The score is d² - RNG(d²/2); equal scores replace the prior winner so later
@@ -65,21 +76,33 @@ func scanAttackUType(u *units.Unit, definition uint32) *units.Unit {
 	forDraw := false
 	b.ForEachUnit(func(h pool.Handle, candidate *units.Unit) bool {
 		if h == 0 || candidate == nil || !candidate.Alive || candidate == u {
-			return true
+			return scanNext
 		}
 		if candidate.Def == nil || candidate.Def.UnitDefID != definition {
-			return true
+			return scanNext
 		}
 		if !scanHostile(b, u, candidate) {
-			return true
+			return scanNext
 		}
+		// `d²` is the whole-unit squared planar distance, formed at 64 bits
+		// [04 R-ORD-01 §3], and the score is `d² − RNG(d²/2)` — subject to the
+		// bound-below-2 rule, so a candidate on top of the scanner draws
+		// nothing [04 R-ORD-01 §1].
+		//
+		// TODO(question): the section gives d²'s width (64-bit squares) but not
+		// the width the draw's bound is passed at, and the simulation draw
+		// helper takes 32 bits. The narrowing below is only reachable for
+		// `d²/2` above 2^32, i.e. a separation past 92681 world units — beyond
+		// the diagonal of any map the reference install ships — so no stock
+		// scenario distinguishes the two. A trace of the bound's argument width
+		// at this site would settle it.
 		d2 := wholePlanarDistanceSquared(u, candidate)
 		bound := uint32(d2 / 2)
 		score := d2 - int64(drawBelow(u, bound))
 		if !forDraw || score <= bestScore {
 			best, bestScore, forDraw = candidate, score, true
 		}
-		return true
+		return scanNext
 	})
 	return best
 }
@@ -95,28 +118,28 @@ func scanRepairCandidates(u *units.Unit, radius int32) []*units.Unit {
 	var out []*units.Unit
 	b.ForEachUnit(func(h pool.Handle, candidate *units.Unit) bool {
 		if h == 0 || candidate == nil || !candidate.Alive || candidate == u {
-			return true
+			return scanNext
 		}
 		if scanHostile(b, u, candidate) {
-			return true
+			return scanNext
 		}
 		if candidate.Def == nil {
-			return true
+			return scanNext
 		}
 		if moverMode(candidate) != 1 {
-			return true
+			return scanNext
 		}
 		if health16(candidate) >= uint32(candidate.Def.MaxDamage) && candidate.Remaining == 0 {
-			return true
+			return scanNext
 		}
 		if candidate.LastDamageSide == u.Owner && candidate.LastDamageCause == 5 {
-			return true
+			return scanNext
 		}
 		if !withinPlanarRadius(u, candidate.X, candidate.Z, radius) {
-			return true
+			return scanNext
 		}
 		out = append(out, candidate)
-		return true
+		return scanNext
 	})
 	return out
 }
@@ -129,16 +152,16 @@ func scanRadiusTarget(u *units.Unit, radius int32, hostileOnly bool) *units.Unit
 	var found *units.Unit
 	b.ForEachUnit(func(h pool.Handle, candidate *units.Unit) bool {
 		if h == 0 || candidate == nil || !candidate.Alive || candidate == u || candidate.Def == nil {
-			return true
+			return scanNext
 		}
 		if hostileOnly && !scanHostile(b, u, candidate) {
-			return true
+			return scanNext
 		}
 		if withinPlanarRadius(u, candidate.X, candidate.Z, radius) {
 			found = candidate
-			return false
+			return scanStop
 		}
-		return true
+		return scanNext
 	})
 	return found
 }
@@ -151,16 +174,16 @@ func scanAirBasePads(u *units.Unit, radius int32) []*units.Unit {
 	var pads []*units.Unit
 	b.ForEachUnit(func(h pool.Handle, candidate *units.Unit) bool {
 		if h == 0 || candidate == nil || !candidate.Alive || candidate == u || candidate.Owner != u.Owner || candidate.Def == nil {
-			return true
+			return scanNext
 		}
 		if !candidate.Def.Builder || !candidate.Def.IsAirBase || !candidate.Activated {
-			return true
+			return scanNext
 		}
 		if !withinPlanarRadius(u, candidate.X, candidate.Z, radius) {
-			return true
+			return scanNext
 		}
 		pads = append(pads, candidate)
-		return true
+		return scanNext
 	})
 	return pads
 }

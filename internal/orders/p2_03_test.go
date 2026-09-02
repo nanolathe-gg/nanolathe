@@ -77,10 +77,16 @@ func TestQueueOverflowCap_Secondary(t *testing.T) {
 }
 
 // TestPumpWedgeIsNotRescued locks ORD-02: there is NO pump iteration guard.
-// Retail has none [04 §3.3][P2-03], and a handler looping through the
-// continue codes (2/4) wedges the walk forever — reproducing that wedge is
-// the contract, because a defensive cap would alter queue state, RNG use,
-// and later updates. The wedging case therefore runs in a SUBPROCESS (this
+// Retail has none [04 §3.3][P2-03], and a handler that keeps returning a
+// same-record continue code wedges the walk forever — reproducing that wedge
+// is the contract, because a defensive cap would alter queue state, RNG use,
+// and later updates.
+//
+// The wedging code is 0 ("reset the phase to zero and continue walking",
+// [04 §3.3]), which re-dispatches the record the walk is standing on — the
+// same arm that lets one pump call cascade a record through several phases in
+// a tick. It is NOT 2 or 4: those advance to the next record in the same pass
+// ([04 R-FAC-02 §4]), so a queue of holds runs out instead of spinning. The wedging case therefore runs in a SUBPROCESS (this
 // test binary re-exec'd with -test.run and a short -test.timeout) so the
 // suite waits seconds, not forever; the child only exits cleanly if some cap
 // rescued the walk, which is a failure. Skipped in -short mode.
@@ -96,9 +102,10 @@ func TestPumpWedgeIsNotRescued(t *testing.T) {
 		if id == 0 {
 			t.Fatal("lookup")
 		}
-		// Handler that always returns 2 (continue) forces an endless cascade
-		// over the same head [04 §3.3] — retail wedges here, so must we.
-		restore := setHandler(id, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return Code(2) })
+		// Handler that always returns 0 (reset the phase and continue walking)
+		// forces an endless cascade over the same head [04 §3.3] — retail
+		// wedges here, so must we.
+		restore := setHandler(id, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { return Code(0) })
 		defer restore()
 		q.Push(id, Node{})
 		clearGates(q)

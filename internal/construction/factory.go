@@ -621,8 +621,13 @@ func (s *Service) reservePlacement(product pool.Handle, def *content.UnitDef, re
 			if building && !yard[int((z-rect.MinZ())*rect.Width()+(x-rect.MinX()))].TestsOccupancy() {
 				continue // [04 §6.2] C10: bits 1-2 clear, no occupant test
 			}
-			if (cell.OccupantA() != 0 && cell.OccupantA() != id) ||
-				(cell.OccupantB() != 0 && cell.OccupantB() != id) {
+			// Ground word only [04 R-COLL-01 §2]: "the air word is never
+			// consulted, so a landed or hovering airborne unit never blocks a
+			// ground mover through this test". WU-19-20 gave mode-2 movers the
+			// air word [04 R-COLL-01 §4]; testing it here would let an
+			// aircraft parked over its own plant's exit refuse every later
+			// product.
+			if cell.OccupantA() != 0 && cell.OccupantA() != id {
 				return fmt.Errorf("construction: placement cell %d,%d occupied", x, z)
 			}
 		}

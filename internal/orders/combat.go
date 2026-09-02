@@ -257,8 +257,27 @@ func captionClear(u *units.Unit) { workStatus(u, statusOK, "") }
 // root-cause note is on `installGroundPayload` in internal/movement/goals.go.
 // An installer's `0x80` never leaves the record it is installing for.
 func installPointGoal(u *units.Unit, n *Node, x, y, z numeric.Fixed, radius int32) {
+	if installPointGoalPayload(u, n, x, y, z, radius) {
+		n.GoalX, n.GoalY, n.GoalZ = x, y, z
+	}
+}
+
+// installPointGoalPayload is the whole of the point installer's contract —
+// release the record's previous payload, install (unless the owner has
+// `canfly`, which is release only), clear pending `0x20`-`0x200`
+// [04 R-ORD-01 §1] — WITHOUT mirroring the installed position into the
+// record's goal triple. It reports whether an install happened, which is the
+// only condition under which installPointGoal writes that mirror.
+//
+// The split exists for `Follow_Ground`, whose goal triple holds the anchor
+// OFFSET from the ward rather than a position [04 R-ORD-01 §8 point 2]: its
+// maintenance leg installs at `ward + offset` every 30 ticks, and mirroring
+// that sum into the triple would overwrite the offset it is computed from,
+// which is also the value a reader of the guard record's goal is supposed to
+// see. Every other caller keeps the mirror.
+func installPointGoalPayload(u *units.Unit, n *Node, x, y, z numeric.Fixed, radius int32) bool {
 	if n == nil {
-		return
+		return false
 	}
 	canfly := u != nil && u.Def != nil && u.Def.CanFly
 	if b := bindingOfUnit(u); b != nil && b.Movement != nil {
@@ -271,10 +290,7 @@ func installPointGoal(u *units.Unit, n *Node, x, y, z numeric.Fixed, radius int3
 		}
 	}
 	n.Satisfied &^= 0x3E0 // clear pending 0x20..0x200 [04 R-ORD-01 §0][04 R-ORD-01 §1]
-	if canfly {
-		return // canfly: release only, no install [04 R-ORD-01 §1]
-	}
-	n.GoalX, n.GoalY, n.GoalZ = x, y, z
+	return !canfly        // canfly: release only, no install [04 R-ORD-01 §1]
 }
 
 // installAnnulusGoal is the banded form of [04 R-ORD-01 §1]'s goal installers:
@@ -663,6 +679,156 @@ func suppressHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code {
 }
 
 // ---------------------------------------------------------------------------
+// Guard_NoMove [04 R-ORD-01 §3]
+// ---------------------------------------------------------------------------
+
+// guardNoMoveHandler is the stationary guard: scan, bind, count shot attempts,
+// re-scan. It installs no goal of any kind and never moves the unit.
+//
+//	Pre-check: satisfied ∩ 0x10008 → phase = 3, hold (jump to the scan).
+//	Phase 0: inhibit all; deadline 30; advance. Phase 1: read slot 0's target as
+//	a unit and bind the record's smart-reference to it; if it exists and carries
+//	bit 28: goal = its position, release slot 0, bind slot 0 to it, p1 = 0,
+//	p2 = RNG(3) + 3; advance. Else deadline 30; hold. Phase 2:
+//	`p1 = satisfied has 0x4000 ? 0 : p1 + 1`; if `p1 ≤ p2` and the shot gate
+//	admits the target: gate |= 0x7008, hold; else draw RNG(100): below 80 →
+//	p1 = 0, advance (to the scan); else restart. Phase 3: enumerate the target
+//	registry within 640 world units of the record's goal for my side; a hit →
+//	pick index RNG(count), bind the smart-reference and slot 0 to it, phase = 1,
+//	hold; none → restart. Other: cancel-all.
+//
+// Written 2026-09-01 (WU-19-6). Until now `Guard_NoMove` shared the follow
+// handler in resolve.go, so a stationary guard ran the ground guard's assist
+// legs and had a movement goal written around its ward — the opposite of its
+// contract. [04 R-ORD-01 §8 point 5] states the separation outright: the
+// stationary guard "calls **no** goal installer of any kind, never moves the
+// unit, and reads no radius parameter", and its p1/p2 are the shot-attempt
+// counter and its budget rather than a standoff.
+//
+// The record's goal triple here IS a position — the bound target's, copied at
+// bind — which is why the 640-unit scan is centred on it and not on the unit.
+func guardNoMoveHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
+	if n == nil {
+		return Code(7) // *cancel-all* [04 R-ORD-01 §3]
+	}
+	if satisfied&pendTargetGone != 0 {
+		n.Phase = 3
+		return Code(2) // *hold* at the scan phase [04 R-ORD-01 §3]
+	}
+	switch n.Phase {
+	case 0:
+		inhibitSlot(u, slotAll)
+		armDeadline(n, tick, 30)
+		return Code(1) // *advance* [04 R-ORD-01 §3]
+	case 1:
+		tgt := slotTargetUnit(u, 0)
+		n.Target = 0
+		if tgt != nil {
+			n.Target = tgt.Handle
+		}
+		// "if it exists and carries bit 28": [04 R-ORD-01 §1] names bit 28 of
+		// the status word "the alive/building-class bit". This build splits
+		// those two halves — aliveness is the unit's own live flag, and the
+		// definition-derived building class is a separate status bit — and the
+		// half a guard's bound target must satisfy is aliveness.
+		//
+		// TODO(question): which half bit 28 is at this site is not stated;
+		// a guard that could only hold a BUILDING would never return fire at a
+		// mobile attacker, which is why the live half is the one read here. A
+		// writer census of status bit 28 settles it.
+		if tgt != nil && tgt.Alive {
+			n.GoalX, n.GoalY, n.GoalZ = tgt.X, tgt.Y, tgt.Z
+			releaseSlot(u, 0)
+			bindSlotToUnit(u, 0, n.Target)
+			n.Param1 = 0
+			n.Param2 = drawBelow(u, 3) + 3 // p2 = RNG(3) + 3 [04 R-ORD-01 §3]
+			return Code(1)                 // *advance*
+		}
+		armDeadline(n, tick, 30)
+		return Code(2) // *hold*
+	case 2:
+		// 0x4000 is the satisfied bit that resets the consecutive shot-attempt
+		// counter [04 R-ORD-01 §3][04 R-ORD-01 §8 point 5].
+		if satisfied&0x4000 != 0 {
+			n.Param1 = 0
+		} else {
+			n.Param1++
+		}
+		if n.Param1 <= n.Param2 && canEngageSlot(u, n.Target, 0) {
+			n.DynamicGate |= 0x7008
+			return Code(2) // *hold*
+		}
+		if drawBelow(u, 100) < 80 {
+			n.Param1 = 0
+			return Code(1) // *advance* to the scan
+		}
+		return Code(0) // *restart*
+	case 3:
+		list := scanRegistryAroundPoint(u, n.GoalX, n.GoalZ, guardNoMoveScanRadius)
+		if len(list) == 0 {
+			return Code(0) // *restart*
+		}
+		pick := list[int(drawBelow(u, uint32(len(list))))]
+		n.Target = pick.Handle
+		bindSlotToUnit(u, 0, pick.Handle)
+		n.Phase = 1
+		return Code(2) // *hold* with the phase already set [04 R-ORD-01 §3]
+	default:
+		return Code(7) // *cancel-all* [04 R-ORD-01 §3]
+	}
+}
+
+// guardNoMoveScanRadius is the stationary guard's scan radius in whole world
+// units [04 R-ORD-01 §3]: "enumerate the target registry within 640 world
+// units of the record's goal for my side".
+const guardNoMoveScanRadius int32 = 640
+
+// slotTargetUnit is "*read slot k target*": the unit only while the companion
+// carries the unit marker and the id is nonzero [04 R-ORD-01 §1]. The id is
+// resolved through the queue binding, this package's smart-reference reader.
+func slotTargetUnit(u *units.Unit, k int) *units.Unit {
+	if u == nil {
+		return nil
+	}
+	s := u.SlotAt(k)
+	if s == nil || s.Target.Kind != units.TargetUnit || s.Target.Unit == 0 {
+		return nil
+	}
+	b := bindingOfUnit(u)
+	if b == nil || b.Lookup == nil {
+		return nil
+	}
+	return b.Lookup(s.Target.Unit)
+}
+
+// scanRegistryAroundPoint is the stationary guard's phase-3 enumeration: the
+// live units hostile to `u` whose whole-unit planar distance from (x, z) is
+// within radius, in pool-slot order (I1). "For my side" is the same reading
+// `Wait`'s registry test takes [04 R-ORD-01 §2] — the registry a side scans is
+// the one holding its enemies.
+func scanRegistryAroundPoint(u *units.Unit, x, z numeric.Fixed, radius int32) []*units.Unit {
+	b := bindingFor(u)
+	if b == nil {
+		return nil
+	}
+	var out []*units.Unit
+	b.ForEachUnit(func(h pool.Handle, candidate *units.Unit) bool {
+		if h == 0 || candidate == nil || !candidate.Alive || candidate == u {
+			return scanNext
+		}
+		if !scanHostile(b, u, candidate) {
+			return scanNext
+		}
+		if !withinPlanarRadius(candidate, x, z, radius) {
+			return scanNext
+		}
+		out = append(out, candidate)
+		return scanNext
+	})
+	return out
+}
+
+// ---------------------------------------------------------------------------
 // AirStrike, AirToAir, AirToGround, AirToGroundHover — the shared entry
 // sequence of [04 R-AIR-01 §8]
 // ---------------------------------------------------------------------------
@@ -736,6 +902,7 @@ var combatHandlers = []struct {
 	{"AttackSpecial", attackSpecialHandler},
 	{"AttackUType", attackUTypeHandler},
 	{"Suppress", suppressHandler},
+	{"Guard_NoMove", guardNoMoveHandler},
 }
 
 // ensureCombatHandlers installs this family onto the descriptor table. It is

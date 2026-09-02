@@ -361,6 +361,7 @@ func TestRS08_NaturalFireImpactDeath(t *testing.T) {
 	cat := &content.Catalog{Weapons: map[string]*content.WeaponDef{"w": wdef}}
 	cat.RebuildWeaponIndex()
 	var svc Service
+	bindFixtureControlBytes(&svc) // [06 R-DMG-01 §8] gate 1 needs a player record
 	rSim := rng.NewSimulation(123)
 	// Supply an explicit valid visibility service; this test is about natural
 	// projectile impact, not an absent LOS dependency.

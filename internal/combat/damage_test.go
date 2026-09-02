@@ -6,9 +6,20 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
+
+// bindFixtureControlBytes gives a fixture Service the control-byte accessor the
+// session binds in production [06 R-DMG-01 §8]. Without it every row reads as
+// unoccupied, which passes gate 1 but rejects gate 2 — so a fixture that
+// expects a victim to DIE must bind it, the same way wideDriftTolerance exists
+// so a fixture whose subject is not aiming still fires. Every row here reads as
+// a locally controlled human [05 R-SHARE-01 §1].
+func bindFixtureControlBytes(s *Service) {
+	s.ControlByte = func(uint8) uint8 { return ControlByteHuman }
+}
 
 func TestPacketRoundTrip(t *testing.T) {
 	// C18: packet is nine bytes with u16 ids where 0=null, no generation tags [06 §9.1] C18 (I5)
@@ -389,3 +400,186 @@ func TestPacketKindFields(t *testing.T) {
 }
 
 func numericFromInt(v int64) numeric.Fixed { return numeric.Fixed(v * 65536) }
+
+// --- WU-19-13: the armored bit and the control-byte gates [06 R-DMG-01 §8] ---
+
+// wu1913Weapon is a direct-hit weapon whose one shot is survivable, so a test
+// can read the health the funnel left behind.
+func wu1913Weapon(damage int32) *content.WeaponDef {
+	return &content.WeaponDef{
+		ID: 1, LineOfSight: true, Range: 100,
+		WeaponVelocity: int32(numeric.FixedFromInt(1)),
+		AreaOfEffect:   8, // direct-target shortcut, no splash [06 §9.1]
+		DamageDefault:  damage,
+	}
+}
+
+// TestArmorGateReadsRuntimeBitOnly locks the operand of the packet builder's
+// armor scale [06 R-DMG-01 §8]: bit 1 of the unit's first runtime state byte,
+// which only the COB `set ARMORED` posture writes. The FBI `armoredstate` key
+// is a definition flag with NO reader in retail [R-DMG-01 §2], so a unit that
+// merely authors it takes full damage. The build used to OR the two, which
+// made every unit authored `armoredstate=1` permanently armored.
+func TestArmorGateReadsRuntimeBitOnly(t *testing.T) {
+	// damagemodifier 0.5 in 16.16, so an armored victim takes half.
+	const halfModifier = 32768
+	run := func(t *testing.T, runtimeArmored, authoredArmoredState bool) int32 {
+		t.Helper()
+		var svc Service
+		bindFixtureControlBytes(&svc)
+		w, terrain, shooter, target := newTestWorldAndUnits(t)
+		target.Def = &content.UnitDef{
+			UnitName: "armortest", MaxDamage: 100, Limit: -1,
+			DamageModifier: halfModifier, ArmoredState: authoredArmoredState,
+		}
+		target.Health = 100
+		target.MaxHealth = 100
+		target.Armored = runtimeArmored
+		p := &Projectile{Shooter: shooter.Handle, ShooterSide: shooter.Owner,
+			TargetUnit: target.Handle, Pos: Vec3{X: target.X, Y: target.Y, Z: target.Z}}
+		handleProjectileImpact(&svc, 1, p, wu1913Weapon(40), w, terrain, nil, nil, nil, 4, Vec3{}, nil, false)
+		return target.Health
+	}
+	if got := run(t, false, false); got != 60 {
+		t.Fatalf("plain victim health = %d, want 60 (40 damage, no scale) [06 §9.2]", got)
+	}
+	if got := run(t, true, false); got != 80 {
+		t.Fatalf("runtime-armored victim health = %d, want 80 (40 halved by the 16.16 modifier) [06 R-DMG-01 §8]", got)
+	}
+	if got := run(t, false, true); got != 60 {
+		t.Fatalf("victim authoring only `armoredstate` health = %d, want 60: the FBI key has no reader [R-DMG-01 §2]", got)
+	}
+}
+
+// TestDamageGateOnProjectileSide locks gate 1 [06 §9.1][06 R-DMG-01 §9]: the
+// gate is a property of the PROJECTILE's own side, not of the victim, and it
+// skips damage ONLY for an occupied row whose control byte is 3.
+//
+// An UNOCCUPIED row passes, and so does the never-occupied eleventh row that a
+// null-shooter record's neutral side byte 10 selects — so a meteor or a death
+// explosion damages every side and credits nobody. This replaces an assertion
+// that a no-record side routed nothing, which came from the inverted reading
+// [06 R-DMG-01 §8] item 1 carried before [06 R-DMG-01 §9] traced the two-read
+// gate.
+func TestDamageGateOnProjectileSide(t *testing.T) {
+	// The accessor a real session binds: ten player rows, ControlByteAbsent for
+	// anything past them, which is what retail's constructed-but-never-occupied
+	// row 10 reads as [06 R-DMG-01 §9].
+	table := func(rows ...uint8) func(uint8) uint8 {
+		return func(owner uint8) uint8 {
+			if int(owner) >= len(rows) {
+				return ControlByteAbsent
+			}
+			return rows[owner]
+		}
+	}
+	cases := []struct {
+		name        string
+		shooterSide uint8
+		nullShooter bool
+		rows        []uint8
+		wantHealth  int32
+	}{
+		{"occupied local human routes", 0, false, []uint8{ControlByteHuman, ControlByteHuman}, 60},
+		{"occupied computer player routes", 0, false, []uint8{ControlByteComputer, ControlByteHuman}, 60},
+		{"occupied remote peer is the only skip", 0, false, []uint8{ControlByteRemote, ControlByteHuman}, 100},
+		{"unoccupied row routes", 0, false, []uint8{ControlByteAbsent, ControlByteHuman}, 60},
+		// The neutral side byte of every null-shooter record [06 §6.1][06 §6.5].
+		{"side 10 (null shooter) routes", 10, true, []uint8{ControlByteHuman, ControlByteHuman}, 60},
+		{"unbound accessor routes", 0, false, nil, 60},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var svc Service
+			if tc.rows != nil {
+				svc.ControlByte = table(tc.rows...)
+			}
+			w, terrain, shooter, target := newTestWorldAndUnits(t)
+			target.Health = 100
+			target.MaxHealth = 100
+			var kinds []EventKind
+			svc.Events = func(ev Event) { kinds = append(kinds, ev.Kind) }
+			weapon := wu1913Weapon(40)
+			weapon.ShakeMagnitude = 4
+			weapon.ShakeDuration = 2
+			weapon.SoundHit = "hit"
+			p := &Projectile{Shooter: shooter.Handle, ShooterSide: tc.shooterSide,
+				TargetUnit: target.Handle, Pos: Vec3{X: target.X, Y: target.Y, Z: target.Z}}
+			if tc.nullShooter {
+				p.Shooter = 0 // a meteor keeps a null shooter reference [06 §6.5]
+			}
+			handleProjectileImpact(&svc, 1, p, weapon, w, terrain, nil, nil, nil, 4, Vec3{}, nil, false)
+			if target.Health != tc.wantHealth {
+				t.Fatalf("health = %d, want %d [06 R-DMG-01 §9] gate 1", target.Health, tc.wantHealth)
+			}
+			// Shake and sound precede the damage gate, so they happen either way
+			// [06 §9.1] steps 4 and 5.
+			if len(kinds) == 0 || kinds[0] != EventShake {
+				t.Fatalf("events = %v: the shake precedes the damage gate [06 §9.1]", kinds)
+			}
+		})
+	}
+}
+
+// TestDeathLatchOnVictimControlByte locks gate 2 [06 §9.1 step 6][06 R-DMG-01 §8]:
+// only a victim whose owning slot's control byte is 1 or 2 latches death. A
+// computer player's units die exactly like a human's — the build's old table
+// called 3 the computer, which would have exempted them.
+func TestDeathLatchOnVictimControlByte(t *testing.T) {
+	cases := []struct {
+		name      string
+		control   uint8
+		wantDying bool
+	}{
+		{"human victim latches", ControlByteHuman, true},
+		{"computer victim latches", ControlByteComputer, true},
+		{"remote victim clamps without latching", ControlByteRemote, false},
+		{"victim with no record clamps without latching", ControlByteAbsent, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var svc Service
+			svc.ControlByte = func(owner uint8) uint8 {
+				if owner == 0 { // the shooter's slot must pass gate 1
+					return ControlByteHuman
+				}
+				return tc.control
+			}
+			w, terrain, shooter, target := newTestWorldAndUnits(t)
+			target.Health = 10
+			target.MaxHealth = 10
+			p := &Projectile{Shooter: shooter.Handle, ShooterSide: shooter.Owner,
+				TargetUnit: target.Handle, Pos: Vec3{X: target.X, Y: target.Y, Z: target.Z}}
+			handleProjectileImpact(&svc, 1, p, wu1913Weapon(100), w, terrain, nil, nil, nil, 4, Vec3{}, nil, false)
+			if target.Dying != tc.wantDying {
+				t.Fatalf("dying = %v, want %v [06 R-DMG-01 §8] gate 2", target.Dying, tc.wantDying)
+			}
+			if !tc.wantDying && target.Health != 0 {
+				t.Fatalf("health = %d, want 0: a rejected latch clamps to zero and continues [06 §9.1 step 6]", target.Health)
+			}
+		})
+	}
+}
+
+// TestDamageIntakeDrawsNoRandomness locks I4 for the gates this unit added: the
+// only simulation draw anywhere in the damage-intake path is the retaliation
+// throttle of [08 R-AI-01 §11], which none of these fixtures reaches.
+func TestDamageIntakeDrawsNoRandomness(t *testing.T) {
+	var svc Service
+	bindFixtureControlBytes(&svc)
+	w, terrain, shooter, target := newTestWorldAndUnits(t)
+	target.Health = 100
+	target.MaxHealth = 100
+	sim := rng.NewSimulation(1)
+	crt := rng.NewCRT(1)
+	before, beforeCRT := sim.Draws(), crt.Draws()
+	p := &Projectile{Shooter: shooter.Handle, ShooterSide: shooter.Owner,
+		TargetUnit: target.Handle, Pos: Vec3{X: target.X, Y: target.Y, Z: target.Z}}
+	handleProjectileImpact(&svc, 1, p, wu1913Weapon(40), w, terrain, nil, nil, nil, 4, Vec3{}, &sim, false)
+	if sim.Draws() != before || crt.Draws() != beforeCRT {
+		t.Fatalf("draws sim %d->%d crt %d->%d, want none (I4)", before, sim.Draws(), beforeCRT, crt.Draws())
+	}
+	if target.Health != 60 {
+		t.Fatalf("fixture did not actually damage: health = %d", target.Health)
+	}
+}

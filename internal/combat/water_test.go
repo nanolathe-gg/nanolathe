@@ -24,6 +24,13 @@ func mkWaterWorldDef(name string, canHover bool, armored bool, dmgMod int32) *co
 	}
 }
 
+// fixtureHumanSlot is the control-byte accessor the sweep's gate reads
+// [04 R-MOV-03 §1][04 §9.2][06 R-DMG-01 §8]. Every fixture unit here is owned
+// by slot 0; 1 is a locally controlled human [05 R-SHARE-01 §1]. A fixture that
+// passes no accessor sees every row as unoccupied, which this gate rejects (it
+// admits only 1 and 2) — the byte must be read, never assumed.
+func fixtureHumanSlot(uint8) uint8 { return ControlByteHuman }
+
 func mkWaterWorld() (*units.World, *world.Terrain) {
 	w := newCombatFixtureWorld(4, nil)
 	ter := &world.Terrain{CellW: 10, CellH: 10, SeaLevel: 10}
@@ -41,14 +48,14 @@ func TestWaterDamage_TickGate(t *testing.T) {
 	u.Health = 100
 	u.MaxHealth = 100
 	// Tick not multiple of 30 should do nothing even though in water [04 §9.2]
-	if got := TickWaterDamage(31, w, ter, 1, 10, nil); got != 0 {
+	if got := TickWaterDamage(31, w, ter, 1, 10, fixtureHumanSlot); got != 0 {
 		t.Fatalf("tick 31 should do nothing [04 §9.2] cadence, got %d", got)
 	}
 	if u.Health != 100 {
 		t.Fatalf("health changed on non-damage tick [04 §9.2] got %d want 100", u.Health)
 	}
 	// Tick 30 should apply
-	if got := TickWaterDamage(30, w, ter, 1, 10, nil); got != 1 {
+	if got := TickWaterDamage(30, w, ter, 1, 10, fixtureHumanSlot); got != 1 {
 		t.Fatalf("tick 30 should apply to one unit [04 §9.2], got %d", got)
 	}
 	if u.Health == 100 {
@@ -64,7 +71,7 @@ func TestWaterDamage_LandTakesNothing(t *testing.T) {
 	u.Health = 100
 	u.MaxHealth = 100
 	// Y=20 > sea 10 => land [04 §9.2] at or below sea-level
-	if got := TickWaterDamage(30, w, ter, 1, 10, nil); got != 0 {
+	if got := TickWaterDamage(30, w, ter, 1, 10, fixtureHumanSlot); got != 0 {
 		t.Fatalf("land unit should take nothing [04 §9.2] isInWater, got applied %d", got)
 	}
 	if u.Health != 100 {
@@ -104,7 +111,7 @@ func TestWaterDamage_NonHoverInWaterTakesDamage(t *testing.T) {
 	if pkt.Amount != expected {
 		t.Fatalf("packet amount mismatch [04 §9.2][06 §9.2] got %d want %d", pkt.Amount, expected)
 	}
-	if got := TickWaterDamage(30, w, ter, 1, 10, nil); got != 1 {
+	if got := TickWaterDamage(30, w, ter, 1, 10, fixtureHumanSlot); got != 1 {
 		t.Fatalf("non-hover in water should take damage [04 §9.2] got %d", got)
 	}
 	if u.Health == 100 {
@@ -128,7 +135,7 @@ func TestWaterDamage_CanHoverInWaterTakesNothing(t *testing.T) {
 	if IsWaterDamageEligible(u, ter) {
 		t.Fatalf("canhover unit should be excluded [04 §9.2] canhover is bit 12 excludes")
 	}
-	if got := TickWaterDamage(30, w, ter, 1, 10, nil); got != 0 {
+	if got := TickWaterDamage(30, w, ter, 1, 10, fixtureHumanSlot); got != 0 {
 		t.Fatalf("canhover in water should take nothing [04 §9.2] got %d", got)
 	}
 	if u.Health != 100 {
@@ -148,7 +155,7 @@ func TestWaterDamage_VeteranReduction(t *testing.T) {
 	u1.Health = 100
 	u1.MaxHealth = 100
 	u1.Kills = 0
-	TickWaterDamage(30, w1, ter, 1, 20, nil)
+	TickWaterDamage(30, w1, ter, 1, 20, fixtureHumanSlot)
 	dmgNovice := 100 - int(u1.Health)
 
 	w2, _ := mkWaterWorld()
@@ -158,7 +165,7 @@ func TestWaterDamage_VeteranReduction(t *testing.T) {
 	u2.Health = 100
 	u2.MaxHealth = 100
 	u2.Kills = 10 // tier 2 => factor (25-2)*4/100=92% => damage 18 (trunc)
-	TickWaterDamage(30, w2, ter, 1, 20, nil)
+	TickWaterDamage(30, w2, ter, 1, 20, fixtureHumanSlot)
 	dmgVet := 100 - int(u2.Health)
 
 	if dmgVet >= dmgNovice {
@@ -181,38 +188,47 @@ func TestWaterDamage_VeteranReduction(t *testing.T) {
 	}
 }
 
-func TestWaterDamage_PlayerClassGate(t *testing.T) {
-	w, ter := mkWaterWorld()
-	def := mkWaterWorldDef("classgate", false, false, 65536)
-	h, _ := w.Create(def, 0, numeric.FixedFromInt(0), numeric.FixedFromInt(5), numeric.FixedFromInt(0))
-	u := w.Unit(h)
-	u.Health = 100
-	u.MaxHealth = 100
-	// accessor returns class 3 (computer/AI) => should be excluded [04 §9.2] only 1 or 2 eligible
-	getClass := func(owner uint8) uint8 { return 3 }
-	if got := TickWaterDamage(30, w, ter, 1, 10, getClass); got != 0 {
-		t.Fatalf("player class 3 should exclude [04 §9.2] got %d", got)
+// TestWaterDamage_ControlByteGate locks the sweep's control-byte admission
+// [04 R-MOV-03 §1][04 §9.2][06 R-DMG-01 §8]: the block runs for 1 and 2 and for
+// nothing else. It replaces a test that read the byte through the build's old
+// table ("3 = computer/AI") and that asserted a nil accessor was a permissive
+// placeholder. Both were wrong: 2 IS the computer player, so the old reading
+// exempted every computer-owned unit from water damage, and an unoccupied row
+// is a rejection here, not an assumption of eligibility. (This gate is the one
+// that admits only 1 and 2; the impact routine's gate 1 instead PASSES an
+// unoccupied row [06 R-DMG-01 §9]. They are different tests on the same byte.)
+func TestWaterDamage_ControlByteGate(t *testing.T) {
+	byteFor := func(v uint8) func(uint8) uint8 { return func(uint8) uint8 { return v } }
+	cases := []struct {
+		name     string
+		accessor func(uint8) uint8
+		want     int
+	}{
+		{"human", byteFor(ControlByteHuman), 1},
+		// The one that matters: a computer player's units take water damage.
+		{"computer", byteFor(ControlByteComputer), 1},
+		{"remote peer", byteFor(ControlByteRemote), 0},
+		{"no record", byteFor(ControlByteAbsent), 0},
+		{"unbound accessor fails closed", nil, 0},
 	}
-	if u.Health != 100 {
-		t.Fatalf("class 3 unit should not take damage [04 §9.2] got %d", u.Health)
-	}
-	// class 1 should be eligible
-	u.Health = 100
-	getClass1 := func(owner uint8) uint8 { return 1 }
-	if got := TickWaterDamage(60, w, ter, 1, 10, getClass1); got != 1 {
-		t.Fatalf("player class 1 should be eligible [04 §9.2] got %d", got)
-	}
-	if u.Health == 100 {
-		t.Fatalf("class 1 unit should take damage [04 §9.2]")
-	}
-	// nil accessor placeholder assumes eligible (TODO) — ensures existing callers without class store still damage
-	w3, ter3 := mkWaterWorld()
-	h3, _ := w3.Create(mkWaterWorldDef("nilgate", false, false, 65536), 0, numeric.FixedFromInt(0), numeric.FixedFromInt(5), numeric.FixedFromInt(0))
-	u3 := w3.Unit(h3)
-	u3.Health = 100
-	u3.MaxHealth = 100
-	if got := TickWaterDamage(30, w3, ter3, 1, 10, nil); got != 1 {
-		t.Fatalf("nil class accessor should be permissive placeholder [04 §9.2] TODO got %d", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w, ter := mkWaterWorld()
+			h, _ := w.Create(mkWaterWorldDef("classgate", false, false, 65536), 0,
+				numeric.FixedFromInt(0), numeric.FixedFromInt(5), numeric.FixedFromInt(0))
+			u := w.Unit(h)
+			u.Health = 100
+			u.MaxHealth = 100
+			if got := TickWaterDamage(30, w, ter, 1, 10, tc.accessor); got != tc.want {
+				t.Fatalf("applied = %d, want %d [04 §9.2][06 R-DMG-01 §8]", got, tc.want)
+			}
+			if tc.want == 0 && u.Health != 100 {
+				t.Fatalf("health = %d, want 100: the gate rejected but damage landed", u.Health)
+			}
+			if tc.want == 1 && u.Health != 90 {
+				t.Fatalf("health = %d, want 90 [04 §9.2][06 §9.2]", u.Health)
+			}
+		})
 	}
 }
 
@@ -224,14 +240,14 @@ func TestWaterDamage_MissionGates(t *testing.T) {
 	u.Health = 100
 	u.MaxHealth = 100
 	// waterdoesdamage 0 => no damage
-	if got := TickWaterDamage(30, w, ter, 0, 10, nil); got != 0 {
+	if got := TickWaterDamage(30, w, ter, 0, 10, fixtureHumanSlot); got != 0 {
 		t.Fatalf("waterdoesdamage 0 should block [04 §9.2] got %d", got)
 	}
 	if u.Health != 100 {
 		t.Fatalf("should not damage when waterdoesdamage 0 [04 §9.2]")
 	}
 	// waterdamage 0 => no damage
-	if got := TickWaterDamage(60, w, ter, 1, 0, nil); got != 0 {
+	if got := TickWaterDamage(60, w, ter, 1, 0, fixtureHumanSlot); got != 0 {
 		t.Fatalf("waterdamage 0 should block [04 §9.2] got %d", got)
 	}
 	if u.Health != 100 {

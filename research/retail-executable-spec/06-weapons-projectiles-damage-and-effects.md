@@ -2704,13 +2704,21 @@ one central impact routine, which runs this fixed order:
 6. the damage gate and routing below.
 
 **Established fact:** The damage gate is a property of the **projectile's own
-side**, not of the victim: damage is skipped entirely unless the player record
-named by the record's side byte exists and its controller type is not 3. Type 3
-is the remotely simulated controller (`[08 "Lobby behavior"]` maps the lobby's
+side**, not of the victim: damage is skipped **only** when the player row
+named by the record's side byte is occupied **and** its control byte is 3.
+An unoccupied row — including the eleventh, never-occupied row that the
+neutral side byte 10 selects — passes the gate. Type 3 is the remotely
+simulated controller (`[08 "Lobby behavior"]` maps the lobby's
 Open/Player/Computer rows onto the runtime controller types); the peer that
 owns the shot resolves its damage and sends the packet. In single player only
-types 1 and 2 occur, so the gate always passes. An earlier reading of this
-value as an unnamed "controller type value three" is now named.
+types 1 and 2 occur, so the gate always passes — for real shooters and for
+null-shooter records alike. An earlier reading of this value as an unnamed
+"controller type value three" is now named. **Correction (2026-09-01):**
+this paragraph previously read "damage is skipped entirely unless the player
+record named by the record's side byte exists and its controller type is not
+3", which made an absent row a *failing* case; the two-branch test is
+spelled out, with the row count that makes side 10 an ordinary lookup, in
+`[R-DMG-01 §9]`.
 
 **Established fact:** Routing is a two-way choice, tested in this order:
 
@@ -3148,9 +3156,14 @@ number, not the class. Its readers in the damage path, in the order a hit
 meets them:
 
 1. *The damage gate of the central impact routine (§9.1)* — read on the
-   **projectile's** side: the slot named by the record's side byte must
-   exist and its control byte must not be `3`. Otherwise no damage is
-   routed at all (shake, sound and art still happen).
+   **projectile's** side: damage is skipped only when the row named by the
+   record's side byte is **occupied and** its control byte is `3`; an
+   unoccupied row passes. (Shake, sound and art happen either way.)
+   **Correction (2026-09-01):** this item previously read "the slot named by
+   the record's side byte must exist and its control byte must not be `3`.
+   Otherwise no damage is routed at all", which inverted the absent-row case
+   and would have made every null-shooter record (side 10) harmless; see
+   `[R-DMG-01 §9]`.
 2. *The death latch of the dispatcher (§9.1 step 6)* — read on the
    **victim's** owner: on a non-positive signed health result, control byte
    `1` or `2` sets the death latch and preserves the modular health;
@@ -3169,8 +3182,10 @@ block — water damage, self-repair, the two order pumps, the mover tick and
 the post-move correction — on the **owner's** control byte being `1` or `2`.
 `[04 §9.2]`'s "only when the owning player's class is 1 or 2" is that test.
 In single player every occupied slot is `1` or `2`, so all three gates pass;
-an implementation must still read the byte rather than assume it, because a
-side byte naming a slot with no record fails gate 1.
+an implementation must still read the byte rather than assume it. **Correction
+(2026-09-01):** this sentence previously ended "because a side byte naming a
+slot with no record fails gate 1" — the reverse is true; an unoccupied row
+passes gate 1 (`[R-DMG-01 §9]`).
 
 **Correction.** The build's water-damage sweep documents the class values as
 "0 empty, 1 human host, 2 human join, 3 computer/AI". That is wrong: `2` is
@@ -3179,6 +3194,98 @@ the build's reading a computer player's units would take no water damage and
 could never be death-latched. The build's damage path also skips the gate
 when no accessor is wired; the byte is the player slot's control state the
 session already assigns (`1` human, `2` computer), and the gate must read it.
+
+### Closed — the side-10 (null-shooter) record passes the damage gate: the gate's polarity and the eleventh player row [R-DMG-01 §9] (2026-09-01)
+
+RWU-19-11 asked whether a projectile carrying the neutral side byte 10 — a
+meteor, a death explosion, or any null-shooter record — routes damage through
+the central impact routine's side-slot gate, given that `[R-DMG-01 §8]` item 1
+stated the gate as "the slot must exist and its control byte must not be 3"
+while §12.1's death-credit path plainly expects side-10 attackers to reach the
+death pipeline. The answer is that the gate was misstated: an absent row
+*passes*. All four findings below are **Established** by static trace of the
+central impact routine, the battle-block allocator, the player-row
+constructor, every writer of the occupancy word and control byte, the meteor
+creator, the common projectile initializer and the per-tick projectile loop.
+
+**Established — how the side byte is resolved.** The central impact routine
+reads the record's side byte, multiplies it by the player-row size and adds
+the table base; there is no bound test on the byte. The table it indexes is
+constructed with **eleven** rows, not ten: the battle-block allocator
+zero-fills the block and then runs the row constructor eleven times over
+contiguous rows (`[05 "Player slot"]`). Index 10 is therefore a real,
+constructed row — occupancy word `0`, control byte `0`, ally group `10` —
+and, because every table walk in the image covers ten rows and every writer
+of the occupancy word or control byte is reached only with a seat index below
+ten, **row 10 is never occupied at any point of a battle**. (The network
+join's free-slot search returns 10 to mean "no free slot" and refuses; it does
+not write the row.)
+
+**Established — what the gate tests.** Two reads on the selected row, in this
+order, with the routing entered on the first success:
+
+```
+row = playerTable[record.side]              ; eleven rows, no bound check
+if (row.occupied == 0)  -> route damage     ; unoccupied row PASSES
+if (row.control != 3)   -> route damage     ; occupied, not a remote peer: PASSES
+otherwise               -> return           ; occupied remote-peer row: no damage
+```
+
+The only case that skips damage is an **occupied** row whose control byte is
+`3` — a remote peer, whose machine resolves the hit and sends the packet.
+For side 10 the first read is the whole test: row 10's occupancy word is
+`0`, so a null-shooter record always enters the routing (`areaofeffect <=
+16` with a direct unit → per-recipient damage on that unit, shooter feedback
+skipped because the shooter is null; otherwise the area enumeration of §9.3).
+In single player every occupied row is `1` or `2`, so the gate passes for
+every record, real-shooter or neutral; a build that never assigns control
+byte `3` may satisfy it trivially, but it must not encode "row must exist".
+
+**Correction.** `[R-DMG-01 §8]` item 1 read: "the slot named by the record's
+side byte must exist and its control byte must not be `3`. Otherwise no
+damage is routed at all", and its closing sentence said "a side byte naming a
+slot with no record fails gate 1"; §9.1's gate paragraph read "damage is
+skipped entirely unless the player record named by the record's side byte
+exists and its controller type is not 3". All three collapsed a two-branch
+test — *unoccupied → pass; occupied and not remote → pass; occupied and
+remote → skip* — into "exists and not 3 → pass", which inverts the absent-row
+branch. Under the wrong reading every meteor, every death explosion and every
+routed burn weapon would have been harmless to units, contradicting §12.1
+("the explosion damages every side alike") and `[R-WPN-02 §5]` (the death
+explosion record carries no shooter). The three sentences are corrected in
+place and point here.
+
+**Established — the meteor path does not bypass the central routine.** The
+meteor creator takes the next record from the common projectile pool (cap
+300; a full pool drops the meteor, §6.5), clears its dead bit and target link,
+runs the **common** initializer with a null shooter — which writes side 10,
+a null shooter reference and clears the per-record word the per-tick loop
+tests before any motion — and then stores the scheduler's velocity vector.
+From its first tick a meteor is an ordinary live record of its weapon
+definition: it is moved, expired and contact-tested by the same loop as any
+shot, and every impact site that loop or the contact test reaches enters the
+central impact routine. There is no meteor-specific impact or retirement
+path.
+
+**Established — therefore a meteor damages units.** Downstream of the gate
+nothing tests the attacker: the area enumeration excludes only the record's
+shooter (null never matches a unit) and uses the side byte solely to sort
+the damage sums into "friendly" and "enemy" (side 10 equals no owner byte, so
+all of it counts as enemy); the per-recipient routine skips only the
+veterancy scaling that needs a shooter; the packet builder accepts a null
+attacker (attacker id 0 in the packet); the dispatcher subtracts health and
+death-latches on the **victim's** owner (§9.1 step 6). A meteor blast
+therefore damages, and can kill, every unit of every side within its radius —
+the local player's included — and credits nobody, exactly as §12.1 already
+pinned. The interceptor sweep's unguarded shooter dereference (§9.3, missing
+list) is reachable only for a weapon carrying the interceptor flag, which the
+stock meteor weapon does not.
+
+**Implementation rule for gate 1.** `skip = table[side].occupied &&
+table[side].control == 3`, where `table` has eleven rows and row 10 is never
+occupied — equivalently `side < 10 && slot[side].occupied && slot[side].control
+== 3`. Side 10 never skips. Nothing else about the routing changes with the
+side byte.
 
 ### 9.3 Area damage
 

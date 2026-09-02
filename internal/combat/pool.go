@@ -181,6 +181,12 @@ type Service struct {
 	// Visibility is the per-session LOS predicate [03 §3.2] C8 [RS-P0-018].
 	// Moved from package-global combat.VisibilityHook to per-Service field for session isolation [INVARIANTS I1][I6][RS-P0-018].
 	Visibility func(viewer visibility.PlayerID, target visibility.Target) bool `json:"-"`
+
+	// ControlByte reads the player slot's control byte, the operand of the
+	// damage-intake gates of [06 R-DMG-01 §8]. The session binds it to the
+	// authoritative player record; ControlByteAbsent means the slot named has
+	// no record. Read it through PlayerControlByteFor, never directly.
+	ControlByte func(owner uint8) uint8 `json:"-"`
 }
 
 // Reserve appends a projectile record at the active-span tail [06 §5.1], [01 §6.1].

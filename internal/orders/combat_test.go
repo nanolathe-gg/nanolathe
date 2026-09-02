@@ -325,3 +325,153 @@ func TestInstallPointGoalRoutesRadius(t *testing.T) {
 		t.Fatalf("canfly owner must not write the goal triple")
 	}
 }
+
+// TestKamikazeDeadlineIsFormedFromThePumpTick locks `Attack_Kamikaze`'s
+// "deadline 60" [04 R-ORD-01 §3] against the failure mode WU-18-4 named when it
+// declined to fabricate a tick base for a handler that had none.
+//
+// The row's phase-1 else-arm is `phase = 0`, *hold*. Its watchdog is the
+// deadline the deadline setter stores as `current tick + 60`, plus the gate bit
+// 0 the setter ORs in [04 R-ORD-01 §1]. Formed from the real tick, the deadline
+// lies in the future, so the record blocks on gate 0xE1 and the walk ends
+// ([04 §3.3] step 3). Formed from a fabricated base — 0, or a per-queue counter
+// that has not moved — the deadline is already in the past, step 1 hands the
+// record bit 0 back on the very next look, phase 1 resets it to phase 0, and
+// phase 0 re-arms the same expired deadline: the pump spins inside one visit.
+//
+// The property that separates the two is asserted directly: the deadline is
+// strictly ahead of the tick the record ran on.
+func TestKamikazeDeadlineIsFormedFromThePumpTick(t *testing.T) {
+	const tick uint32 = 1000 // well past 60: a fabricated base of 0 is already expired here
+	id := Lookup("Attack_Kamikaze")
+	q, u := gateFixture()
+	q.Push(id, Node{Owner: u.Handle, Target: 7})
+	q.Pump(u, tick)
+
+	n := q.Primary()[0]
+	if n.Phase != 1 {
+		t.Fatalf("phase = %d after the first pump, want 1: phase 0 advances [04 R-ORD-01 §3]", n.Phase)
+	}
+	if n.Deadline != int32(tick+60) {
+		t.Fatalf("deadline = %d, want exactly tick+60 = %d [04 R-ORD-01 §3][04 R-ORD-01 §1]", n.Deadline, tick+60)
+	}
+	if n.Deadline <= int32(tick) {
+		t.Fatalf("deadline %d is not ahead of the tick %d — a fabricated base spins the pump", n.Deadline, tick)
+	}
+	if n.DynamicGate != 0xE1 {
+		t.Fatalf("gate = %#x, want 0xE1: the three movement bits plus the deadline setter's bit 0", n.DynamicGate)
+	}
+
+	// The walk is blocked, not held: a second pump on the same tick changes
+	// nothing and cannot reach the handler [04 §3.3] step 3.
+	q.Pump(u, tick)
+	if n.Phase != 1 || n.Deadline != int32(tick+60) || n.DynamicGate != 0xE1 {
+		t.Fatalf("a blocked head was re-dispatched: phase %d deadline %d gate %#x", n.Phase, n.Deadline, n.DynamicGate)
+	}
+
+	// The watchdog fires: the movement layer reported nothing, so phase 1 takes
+	// its else-arm, resets to phase 0 and holds. One dispatch, no spin.
+	q.Pump(u, tick+60)
+	if n.Phase != 0 {
+		t.Fatalf("phase = %d after the deadline expired, want 0: the row re-issues its goal [04 R-ORD-01 §3]", n.Phase)
+	}
+}
+
+// TestAttackUTypeAcquiresTheAuthoredType is the fixture for the mission `a
+// <typename>` verb of [04 §3.6]. `internal/mission`'s handleA queues an
+// `AttackUType` record whose p1 is the catalog index of the authored type and
+// whose target is empty; [04 R-ORD-01 §3] then makes phase 1 "scan every live
+// unit from the second slot on whose definition index equals p1 and whose owner
+// is hostile to mine", score each `d² − RNG(d²/2)`, keep the lowest (ties → the
+// later unit), resolve command code 3 against it and spawn the resolved attack
+// at the head.
+//
+// The identity the verb depends on is asserted first, because it is the half
+// that fails silently: the mission verb stores Catalog.UnitDefIndex(key) and the
+// scan compares UnitDef.UnitDefID. Both are the 1-based position of the
+// canonical key in sorted order, so they must agree for any compiled catalog —
+// and if they ever stop agreeing, an authored `a ARMPW` acquires nothing at all.
+//
+// The test lives in this package because internal/mission's own test files are
+// not this unit's to write; the record it pushes is the one handleA builds.
+func TestAttackUTypeAcquiresTheAuthoredType(t *testing.T) {
+	hunter := &content.UnitDef{UnitName: "hunter", MaxDamage: 100, CanAttack: true}
+	prey := &content.UnitDef{UnitName: "prey", MaxDamage: 100}
+	other := &content.UnitDef{UnitName: "other", MaxDamage: 100}
+	catalogUnits := map[string]*content.UnitDef{
+		content.CanonicalKey("hunter"): hunter,
+		content.CanonicalKey("prey"):   prey,
+		content.CanonicalKey("other"):  other,
+	}
+	registry, err := content.CompileCategories(catalogUnits)
+	if err != nil {
+		t.Fatalf("compile categories: %v", err)
+	}
+	cat := &content.Catalog{Units: catalogUnits, Categories: registry}
+
+	// productIdentity's arithmetic, verbatim from internal/mission.
+	idx, ok := cat.UnitDefIndex(content.CanonicalKey("prey"))
+	if !ok {
+		t.Fatal("the authored type is not in the catalog")
+	}
+	if idx != prey.UnitDefID {
+		t.Fatalf("Catalog.UnitDefIndex = %d but UnitDef.UnitDefID = %d: the mission verb and the scan would name different definitions [04 §3.6][04 R-ORD-01 §3]", idx, prey.UnitDefID)
+	}
+
+	q, u := gateFixture()
+	u.Def = hunter
+	u.Owner = 0
+	u.Alive = true
+	u.Flags |= units.ArmedStatus // the armed branch of code 3 [R-ORD-02 §1]
+
+	friendlyPrey := &units.Unit{Handle: 2, Owner: 0, Def: prey, Alive: true, X: numeric.Fixed(80 << 16), Z: numeric.Fixed(90 << 16)}
+	hostileOther := &units.Unit{Handle: 3, Owner: 1, Def: other, Alive: true, X: numeric.Fixed(90 << 16), Z: numeric.Fixed(90 << 16)}
+	hostilePrey := &units.Unit{Handle: 4, Owner: 1, Def: prey, Alive: true, X: numeric.Fixed(300 << 16), Z: numeric.Fixed(90 << 16)}
+	livePool := []*units.Unit{u, friendlyPrey, hostileOther, hostilePrey}
+
+	q.binding.Hostility = func(actor, candidate *units.Unit) bool { return actor.Owner != candidate.Owner }
+	q.binding.Lookup = func(h pool.Handle) *units.Unit {
+		for _, candidate := range livePool {
+			if candidate.Handle == h {
+				return candidate
+			}
+		}
+		return nil
+	}
+	q.binding.World = &WorldQueryAdapter{
+		ForEachUnit: func(visit func(pool.Handle, *units.Unit) bool) {
+			for _, candidate := range livePool {
+				if visit(candidate.Handle, candidate) {
+					return
+				}
+			}
+		},
+	}
+
+	id := Lookup("AttackUType")
+	q.Push(id, Node{Owner: u.Handle, BuildDefKey: content.CanonicalKey("prey"), Param1: idx})
+	hunt := q.Primary()[0]
+
+	// Phase 0 arms `deadline RNG(90) + 1` and blocks on its gate bit 0.
+	const tick uint32 = 500
+	q.Pump(u, tick)
+	if hunt.Phase != 1 || hunt.DynamicGate != 1 {
+		t.Fatalf("after phase 0: phase %d gate %#x, want phase 1 waiting on gate bit 0 [04 R-ORD-01 §3]", hunt.Phase, hunt.DynamicGate)
+	}
+	if hunt.Deadline < int32(tick+1) || hunt.Deadline > int32(tick+90) {
+		t.Fatalf("deadline %d outside tick+1..tick+90 [04 R-ORD-01 §3]", hunt.Deadline)
+	}
+
+	// The deadline expires and phase 1 scans.
+	q.Pump(u, uint32(hunt.Deadline))
+	head := q.Primary()[0]
+	if head == hunt {
+		t.Fatalf("phase 1 spawned nothing: the hunt is still the head record")
+	}
+	if head.Target != hostilePrey.Handle {
+		t.Fatalf("spawned attack targets %d, want the hostile unit of the authored type (%d)", head.Target, hostilePrey.Handle)
+	}
+	if name := DescriptorFor(head.ID).Name; name != "Attack_Chase" {
+		t.Fatalf("spawned descriptor %q, want the resolver's answer for command code 3 against a unit", name)
+	}
+}

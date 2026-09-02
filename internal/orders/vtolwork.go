@@ -596,7 +596,7 @@ func vtolRepairPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint
 		armDeadline(n, tick, 45)
 		n.DynamicGate |= gateMoveOutcomes
 		if u.Def.MaxDamage > 0 && health16(u) < uint32((u.Def.MaxDamage>>2)*3) {
-			pads := scanAirBasePads(u, 0xF00)
+			pads := scanAirBasePads(u, airBaseSeekRadius)
 			if pad := pickCandidate(u, pads); pad != nil {
 				releaseGoalPayload(n)
 				if spawnPatrolLanding(u, pad, tick) {
