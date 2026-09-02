@@ -269,9 +269,9 @@ func TestArtResolutionOrder(t *testing.T) {
 	foundOwn := false
 	for _, g := range w.Gadgets {
 		if g.Name == "OwnArtButton" {
-			srcs := g.ArtSources()
-			if len(srcs) == 0 || srcs[0] != "OwnArtButton" {
-				t.Fatalf("OwnArtButton art sources = %v want first OwnArtButton per [07 §4]", srcs)
+			srcs := g.ArtSources("")
+			if len(srcs) == 0 || srcs[0] != (ArtSource{Name: "OwnArtButton"}) {
+				t.Fatalf("OwnArtButton art sources = %+v want first {Name: OwnArtButton} per [07 §4]", srcs)
 			}
 			foundOwn = true
 		}
@@ -287,17 +287,29 @@ func TestArtResolutionOrder(t *testing.T) {
 	// Check that panel gadget has BackTile in sources
 	for _, g := range w.Gadgets {
 		if g.Kind == KindPanel {
-			srcs := g.ArtSources()
+			srcs := g.ArtSources("")
 			hasBackTile := false
 			for _, s := range srcs {
-				if s == "BackTile" {
+				if s.Name == "BackTile" {
 					hasBackTile = true
 					break
 				}
 			}
 			// Panel should have BackTile as fallback if not already present; but header panel is MyHeaderPanel, still should include BackTile as ultimate fallback
 			if !hasBackTile {
-				t.Fatalf("panel art sources missing BackTile fallback per [07 §4]: %v", srcs)
+				t.Fatalf("panel art sources missing BackTile fallback per [07 §4]: %+v", srcs)
+			}
+		}
+	}
+	// The side-specific interface GAF is the middle link between a gadget's
+	// own entry and the built-in fallback [07 §4], mirroring the file order
+	// cmd/nanolathe's gadgetArtEntry/modalGadgetFrame walk (page -> side
+	// intGAF -> common). Passing a side handle inserts it in that slot.
+	for _, g := range w.Gadgets {
+		if g.Name == "OwnArtButton" {
+			srcs := g.ArtSources("ARMINT")
+			if len(srcs) < 2 || srcs[1] != (ArtSource{GAF: "ARMINT", Name: "OwnArtButton"}) {
+				t.Fatalf("OwnArtButton art sources with side = %+v want second {GAF: ARMINT, Name: OwnArtButton} per [07 §4]", srcs)
 			}
 		}
 	}

@@ -3071,12 +3071,26 @@ counts runs only for the local player when that player's settlement deadline is
 due, so the victory poll can see a just-completed product on the same tick only
 when the deadline is due — otherwise it lags up to a full settlement period.
 
-**Established fact — interrupt producers.** The bodies of the two construction
-interrupts are established — cancel-current computes its refund and issues the
-cause-9 kill while construction-stopped decrements count and stays — but the
-upstream producers of interrupt masks 2 and 8 sit in the UI and network command
-layers and remain unidentified. Their effects must be preserved behind those
-masks without inventing a producer.
+**Correction (2026-09-02, RWU-19-18) — interrupt producers, both located.**
+This paragraph previously read: "The bodies of the two construction interrupts
+are established — cancel-current computes its refund and issues the cause-9
+kill while construction-stopped decrements count and stays — but the upstream
+producers of interrupt masks 2 and 8 sit in the UI and network command layers
+and remain unidentified. Their effects must be preserved behind those masks
+without inventing a producer." The bodies stand; the producers are not in the
+UI or network layers at all. **Mask 2 (cancel-current)** is never raised into
+the pending word: it is the cleanup notice of [04 R-ORDER-02 §2], delivered by
+every record-removal path (the counted cancel, the non-queued purge, the pump's
+own removals, death teardown) to a record whose *dynamic* gate still holds bit
+1 at removal — which is why the factory's static mask carries no bit 1 and the
+handler arms it dynamically while a product is attached. **Mask 8
+(construction stopped)** is the *target removed* notice of [04 R-ORD-01 §6]:
+the factory record binds its product as the record's target reference when
+the product is created (the `Starting construction` visit) and releases the
+reference at completion or cancel, so the notice fires — once, through the
+pump, since the static mask does carry bit 3 — exactly when the product under
+construction is destroyed. No other raiser of the pending word carries bit 3
+([04 R-ORD-01 §0], [04 §3.3]). Established.
 
 ### OTA-FAC-01B targeted release-boundary pass [R-FAC-01B] (2026-08-28)
 
@@ -3627,8 +3641,9 @@ attached:
    remaining count**.
 
 With no product attached the same epilogue runs and the node still drops.
-The producers of interrupt masks 2 and 8 sit upstream in the UI/network
-command layer and remain unidentified.
+The producers of interrupt masks 2 and 8 are the record-removal cleanup notice
+and the product's destruction respectively — see the correction under
+"interrupt producers" above (2026-09-02).
 
 The other interrupt (**mask bit 3, "Construction stopped"**) prints its
 message, decrements the node count **once**, refreshes the interface, and

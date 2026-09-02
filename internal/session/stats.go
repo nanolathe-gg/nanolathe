@@ -42,33 +42,41 @@ func (s *Session) RecordDeathStatistics(in combat.DeathCreditInput) {
 // water-damage dispatch's cause 11, and the deconstruction refund's cause 9,
 // which alone decides whether the query runs at all.
 //
-// So the recorded kind wins whenever there is one. The label is the fallback
-// for a death that retained no packet — kind 0 — which in this build means the
-// producers that latch a death without emitting one: the factory's cancelled
-// product, the capture victim's old record, and the commander-death sweep.
-// Retail stamps a kind byte on all three (causes 9, 4 and 3 respectively per
-// [06 §12.1]'s producer list) and this build does not yet, so the fallback
-// keeps those paths at the reading they already had rather than silently
-// moving them; wiring their producers is what retires it.
-func deathCauseForResolution(label units.DeathCause, u *units.Unit) combat.Cause {
-	if u != nil {
-		if c := combat.Cause(u.LastDamageCause); c != 0 {
-			return c // the recorded damage-kind byte [06 §12.1]
-		}
+// The recorded kind is now the whole answer. The coarse label was a fallback
+// for the three producers that latched a death without stamping a kind byte —
+// the factory's cancelled product, the capture victim's old record, and the
+// commander-death sweep's silent branch. [06 §12.1]'s producer list gives them
+// causes 9, 4 and 3, all three now stamped at their own sites, so the fallback
+// is gone and with it the possibility of the label and the kind disagreeing.
+//
+// A death that still arrives with kind 0 is a producer this build has not
+// wired, not a state retail can reach: retail's handler reads the packet byte
+// unconditionally. Rather than guess a cause for it, the finalizer counts it —
+// deathsWithNoRecordedCause, drained by tests and diagnostics, never by the
+// simulation — and passes the 0 through. Cause 0 reaches [06 §12.1] C24's
+// positive-health arm for every such case in this build (they are all rollback
+// frees of a product that never took damage), which yields severity 0 and no
+// explosion or corpse, so the count is a signal rather than a visible defect.
+func (s *Session) deathCauseForResolution(u *units.Unit) combat.Cause {
+	if u == nil {
+		return 0
 	}
-	switch label {
-	case units.DeathKilled:
-		return combat.CauseOrdinary // 1 [06 §12.1]
-	case units.DeathSelfDestruct:
-		return combat.CauseSelfDestruct // 3 [06 §12.1]
-	case units.DeathReclaimed:
-		return combat.CauseReclaim // 5 [06 §12.1] C24 bypass
-	default:
-		if u != nil && u.Health > 0 {
-			return combat.CauseReclaim
-		}
-		return combat.CauseOrdinary
+	c := combat.Cause(u.LastDamageCause) // the recorded damage-kind byte [06 §12.1]
+	if c == 0 && s != nil {
+		s.deathsWithNoRecordedCause++
 	}
+	return c
+}
+
+// DeathsWithNoRecordedCause reports how many deaths reached the finalizer with
+// no damage-kind byte. It is zero for every producer [06 §12.1] names; a
+// nonzero value names an unwired one. Diagnostics only — nothing in the
+// simulation reads it.
+func (s *Session) DeathsWithNoRecordedCause() int {
+	if s == nil {
+		return 0
+	}
+	return s.deathsWithNoRecordedCause
 }
 
 // recordFinalizedDeathStatistics is the session's unit-finalizer bridge. The

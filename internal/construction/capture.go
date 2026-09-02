@@ -10,6 +10,12 @@ import (
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
+// CaptureDeathCause is the damage-kind byte the ownership transfer's kill
+// packet carries [06 §12.1]: "cause 4 — capture/owner replacement". Its credit
+// branch is none, and the finalizer's corpse/explosion path skips the Killed
+// query for it [04 §5.1].
+const CaptureDeathCause uint8 = 4
+
 // Capture timer constants [05 R-WORK-01 §6].
 // Base 150 +0.015*energyCost +0.2142857142857*metalCost, clamp 0..1800,
 // truncated toward zero.
@@ -194,9 +200,19 @@ func (s *Service) TransferOwnership(victim *units.Unit, newOwner uint8) (*units.
 	// captors race independently and the first to reach lethal progress wins
 	// the transfer [05 "Capture", "Established fact — ownership transfer"].
 	if !victim.Dying {
-		s.World.Destroy(victim.Handle, units.DeathKilled) // cause 4 mapped to Killed for test; retail cause 4 is distinct but reaches the same dying latch
-		// Retail's ownership transfer kills the old victim with a 30000-damage
-		// cause-4 packet, then syncs; here we mark Dying directly.
+		// The kind byte the death finalizer reads is 4, and the packet's
+		// attacker is null: [06 §12.1] gives cause 4 as "capture/owner
+		// replacement: packet builder invoked with a NULL attacker at both of
+		// its call sites. Credit branch: none." The intake's side snapshot for
+		// a null-attacker packet is the neutral side, never the captor's
+		// [06 §9.1] step 4 — a captured record must not read back as a kill
+		// for the capturing player. Cause 4 is also one of the three that skip
+		// the Killed query, so the old record vanishes without a wreck or an
+		// explosion [04 §5.1]; stamping it DeathKilled alone left it exploding
+		// as ordinary weapon damage.
+		victim.LastDamageCause = uint8(CaptureDeathCause)
+		victim.LastDamageSide = units.NeutralAttackerSide
+		s.World.Destroy(victim.Handle, units.DeathKilled) // null attacker [06 §12.1]
 	}
 	// New unit's building flag etc already via Create; remaining already copied.
 	// Note: victim's queues leak on capture, same as on death [05 "Factory

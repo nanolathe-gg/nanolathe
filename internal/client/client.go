@@ -233,12 +233,10 @@ func New(opts Options) (*Client, error) {
 	c := &Client{
 		opts:   opts,
 		buffer: buf,
-		// TODO(question): the shipped default of the Anti_Alias option is not
-		// established in the executable — the option word is populated from
-		// settings and no compiled-in default write was found. Retail's
-		// observed appearance has it on (smoothed building edges, and the
-		// red/purple silhouette fringe that follows from it), so start it on
-		// [R-REN-03A §6].
+		// The settings reader looks Anti_Alias up under the registry key
+		// Anti-Alias alongside Shadows/VehicleShadows/FeatureShadows; on a
+		// miss it sets the bit and writes the default back, so anti-aliasing
+		// is on by default. Established (direct-static) [R-RAST-01 §4].
 		antiAlias: true,
 		// Restore-defaults sets the Shading bit, so shading is on unless the
 		// player turns it off [R-RND-02A]; the bulk shadow key sets its three

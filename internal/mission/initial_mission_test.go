@@ -12,6 +12,16 @@ import (
 )
 
 // helper to create a ground-capable def.
+// giveStockpileSlot installs a `stockpile` weapon in slot 0, the way a silo
+// definition does. The `bw` verb names no slot, so its node's build-type
+// argument is zero and the enqueue guard refuses a unit whose slot 0 holds
+// weapon record 0 [06 R-WPN-05 §2][04 §3.6] — a `bw` fixture has to be a unit
+// the verb is authored for.
+func giveStockpileSlot(u *units.Unit) *units.Unit {
+	u.SlotAt(0).Weapon = &content.WeaponDef{ID: 1, ReloadTime: 30, Stockpile: true}
+	return u
+}
+
 func testDef(name string) *content.UnitDef {
 	return &content.UnitDef{
 		UnitName:   name,
@@ -237,6 +247,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
+		giveStockpileSlot(u)
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "bw 5"}}}
 		RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
 		if !hasOrder(u, "BuildWeapon") {
@@ -549,6 +560,7 @@ func TestUppercaseWQuirk(t *testing.T) {
 	h5, _ := w5.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 	u5 := w5.Unit(h5)
 	u5.Flags |= 1 << 5
+	giveStockpileSlot(u5)
 	m5 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "Ww 4"}}}
 	RunInitialMissionsWithCatalog(m5, w5, testInitialCatalog)
 	if !hasOrder(u5, "BuildWeapon") {
@@ -559,6 +571,7 @@ func TestUppercaseWQuirk(t *testing.T) {
 	h6, _ := w6.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 	u6 := w6.Unit(h6)
 	u6.Flags |= 1 << 5
+	giveStockpileSlot(u6)
 	m6 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "bw 4"}}}
 	RunInitialMissionsWithCatalog(m6, w6, testInitialCatalog)
 	if !hasOrder(u6, "BuildWeapon") {
@@ -988,5 +1001,47 @@ func TestInitialMissionAttachOrderMatchesVerbOrder(t *testing.T) {
 	}
 	if uOne.Attachment.AttachPiece != -1 || uTwo.Attachment.AttachPiece != -1 {
 		t.Fatalf("piece should be -1 for both (no piece named): one=%d two=%d", uOne.Attachment.AttachPiece, uTwo.Attachment.AttachPiece)
+	}
+}
+
+// TestBwRefusesAUnitWithNoStockpileSlot locks the enqueue guard on the mission
+// verb [06 R-WPN-05 §2]: `bw` names no slot, so its node's build-type argument
+// is zero, and a definition whose slot 0 holds weapon record 0 or an ordinary
+// weapon queues nothing rather than a node whose rounds complete free and whose
+// build page divides by zero. Shipped missions author `bw` only for a silo, so
+// no authored script reaches the refusal.
+func TestBwRefusesAUnitWithNoStockpileSlot(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		arm    func(*units.Unit)
+		queued bool
+	}{
+		{"weapon record 0 in slot 0", func(*units.Unit) {}, false},
+		{"slot 0 armed without stockpile", func(u *units.Unit) {
+			u.SlotAt(0).Weapon = &content.WeaponDef{ID: 2, ReloadTime: 30}
+		}, false},
+		{"stockpile weapon in a later slot only", func(u *units.Unit) {
+			u.SlotAt(1).Weapon = &content.WeaponDef{ID: 3, ReloadTime: 30, Stockpile: true}
+		}, false},
+		{"stockpile weapon in slot 0", func(u *units.Unit) { giveStockpileSlot(u) }, true},
+	} {
+		w := newMissionFixtureWorld(5, nil)
+		h, _ := w.Create(testDef("ARMCOM"), 0, 0, 0, 0)
+		u := w.Unit(h)
+		u.Flags |= 1 << 5
+		tc.arm(u)
+		m := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "bw 5"}}}
+		RunInitialMissionsWithCatalog(m, w, testInitialCatalog)
+		if got := hasOrder(u, "BuildWeapon"); got != tc.queued {
+			t.Fatalf("%s: queued = %v, want %v [06 R-WPN-05 §2]", tc.name, got, tc.queued)
+		}
+		if !tc.queued {
+			continue
+		}
+		// The admitted node names slot 0 explicitly, which is what the handler
+		// selects verbatim [06 §11.1].
+		if n := findNode(u, "BuildWeapon"); n == nil || n.Param1 != 0 {
+			t.Fatalf("%s: admitted node's slot = %v, want 0 [06 §11.1]", tc.name, n)
+		}
 	}
 }

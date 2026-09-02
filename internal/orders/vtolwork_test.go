@@ -315,6 +315,8 @@ func TestVTOLRepairPatrolHoldsOnItsOwnDeadline(t *testing.T) {
 
 // TestRepairWaterClause locks both halves of the air-repair water clause of
 // [04 R-ORD-01 §7], which was passed unconditionally while its TODO(T25) stood.
+// It drives the single admission `nanoReach`, which the copy that used to live
+// in this file (`repairAdmission`) was collapsed into [04 R-ORD-02 §7].
 func TestRepairWaterClause(t *testing.T) {
 	const sea = 40
 	bind := &QueueBinding{World: &WorldQueryAdapter{SeaLevel: func() uint8 { return sea }}}
@@ -338,22 +340,22 @@ func TestRepairWaterClause(t *testing.T) {
 	}
 
 	// Target top at 36+6 = 42, above sea level 40: an aircraft repairs it.
-	if !repairAdmission(mk(air, 60), hurt(36)) {
+	if !nanoReach(mk(air, 60), hurt(36)) {
 		t.Fatalf("aircraft should repair a target whose top is above water")
 	}
 	// Target top at 30+6 = 36, under sea level 40: retail refuses.
-	if repairAdmission(mk(air, 60), hurt(30)) {
+	if nanoReach(mk(air, 60), hurt(30)) {
 		t.Fatalf("aircraft must refuse a target whose top is under water")
 	}
 	// The amphibious disjunct rescues the air half.
-	if !repairAdmission(mk(amphibAir, 60), hurt(30)) {
+	if !nanoReach(mk(amphibAir, 60), hurt(30)) {
 		t.Fatalf("amphibious aircraft should repair a submerged target")
 	}
 	// A walker wades to its own MaxWaterDepth: sea-10 = 30 <= top.
-	if !repairAdmission(mk(walker, 38), hurt(30)) {
+	if !nanoReach(mk(walker, 38), hurt(30)) {
 		t.Fatalf("walker should repair a target within its wading depth")
 	}
-	if repairAdmission(mk(walker, 38), hurt(20)) {
+	if nanoReach(mk(walker, 38), hurt(20)) {
 		t.Fatalf("walker must refuse a target below its wading depth")
 	}
 
@@ -361,7 +363,7 @@ func TestRepairWaterClause(t *testing.T) {
 	loose := &units.Unit{Def: air}
 	tgt := &units.Unit{Def: targetDef, Health: 50}
 	tgt.Move.Mode = 1
-	if !repairAdmission(loose, tgt) {
+	if !nanoReach(loose, tgt) {
 		t.Fatalf("unbound queue should not fail the water clause")
 	}
 }

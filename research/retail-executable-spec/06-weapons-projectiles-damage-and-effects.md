@@ -195,6 +195,14 @@ clear:
   registry's **secondary-list gate** when its definition carries one particular
   flag bit and the unit is active.
 
+**Addendum (2026-09-02, RWU-19-18) — the third list.** The same friendly
+branch also fills a **third list**, cleared with the other two at every
+rebuild: every fully built friendly unit whose definition carries both
+`builder` and `isairbase` and whose activation bit is set, in unit-array
+order. It is the candidate set of the damaged-aircraft base seek — the
+"base candidates within `0xF00`" of [04 R-AIR-01 §7] — and its filter, pick
+and callers are [04 R-AIR-01 §11]. No weapon or acquisition path reads it.
+
 **Established fact:** The per-attempt filter is much thinner than the rebuild.
 Given a centre point and a radius it walks the primary list, keeps every entry
 whose **planar** squared distance is at or below the squared radius and whose

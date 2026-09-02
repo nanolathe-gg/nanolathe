@@ -220,6 +220,23 @@ func buildOptionsForBuilder(m Selector, builder *units.Unit) []string {
 	return nil
 }
 
+// computerPlayerCount is the number of player slots whose record exists and
+// whose control byte is 2 [08 R-AI-01 §12], which is how many times the profile
+// grammar's per-definition pass pair runs [08 R-AI-01 §18]. The rows are walked
+// by index, never ranged (I1).
+func computerPlayerCount(econ *economy.Service) int {
+	if econ == nil {
+		return 0
+	}
+	n := 0
+	for i := 0; i < len(econ.Players); i++ {
+		if econ.Players[i].Exists && econ.Players[i].ControllerState == controlByteComputer {
+			n++
+		}
+	}
+	return n
+}
+
 // SelectWithCandidates is the testable core of candidate selection with explicit candidate list.
 // It implements C5 gates, C6 scoring, C7 reservoir (single RNG(cumulative) draw), C9 bound census [PLAN 11].
 func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service, candidates []string) (Candidate, bool) {
@@ -252,8 +269,17 @@ func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service
 	// therefore follow the same profile state. Profile-file precedence over a
 	// per-definition `ai_weight` fragment is the lock vectors' job, and
 	// `ai_limit` stays inert because the limit pass re-reads `ai_weight`.
+	//
+	// The two per-definition passes run once PER COMPUTER PLAYER and every run
+	// writes every manager [08 R-AI-01 §18], so the count comes from the
+	// authoritative player rows this function already reads — the same rows
+	// whose control byte gates `limit` below. With k of them a category-naming
+	// fragment multiplies its members' weights 2·k times; an exact naming
+	// applies once and locks. The applier memoises on the catalog, so only the
+	// first manager to score does the work and every later manager sees the
+	// same table.
 	if bindings, ok := m.(selectorBindings); ok && bindings != nil {
-		profile.ApplyUnitDefinitions(bindings.GetCatalog())
+		profile.ApplyUnitDefinitionsForPlayers(bindings.GetCatalog(), computerPlayerCount(econ))
 	}
 	// `limit` applies only to slots whose control byte is 2 [08 R-AI-01 §12];
 	// the weight table applies to every slot that has a manager.

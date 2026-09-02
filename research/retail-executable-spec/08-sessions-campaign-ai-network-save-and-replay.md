@@ -6073,6 +6073,24 @@ mission's `[GlobalHeader]` floats (default 0.0; stock missions author
 [01 §2] and the division unsigned. A negative sum is stored as 0. Each column
 maximum is raised to the row's value when the value is larger (strict).
 
+**Closed (2026-09-02, RWU-19-18) — the auxiliary word has no writer.** The
+row condition above says "or when the slot's auxiliary word is non-zero
+(Unknown meaning; decider: static trace of that word's writers)". The trace:
+the word is a 32-bit field of the battle player record, read at ten sites in
+the image — this helper (row when non-zero), the Space score panel and the
+elimination/participant filters of [07 R-HUD-04 §1] and [R-SKIR-01], the
+per-player economy pass's gate, and the multiplayer alliance-vote routine —
+every one as a bare zero test, nine of them as the pair "live-unit count ≠ 0
+**or** word == 0", and **written nowhere**: no store to the field exists
+outside the record's bulk initialisation, and no per-player reset row of
+[R-ENTRY-01 §3] touches it, so it is zero from the session block's
+allocation onward. In every single-player session it is constantly zero: this
+helper's OR-term never fires, the score panel's term is always satisfied (a
+slot keeps its row after losing its last unit), and a reimplementation
+publishes zero. Established. **Unknown, out of scope:** whether the
+multiplayer participant-state message (§"Network", record `0x28`) lands a
+field there — the only path that could make it non-zero.
+
 **Where the counters are written.** Kills, losses, commander kills and
 losses are the per-slot counters incremented by the death-credit switch of
 [06 §12.1] inside the tick, at the death site. `TotalEnergyProduced`,

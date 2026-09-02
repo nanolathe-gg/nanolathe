@@ -106,7 +106,39 @@ const (
 // Damage constants [05 "Cancel-current and stop interrupts"] C21.
 const (
 	Kind9Damage int32 = 30000 // unscaled, scaling requires damage <30000 [05 C21]
+	// Kind9Cause is the damage-kind byte the two refund paths' packet carries
+	// [06 §12.1]: "cause 9 — construction-fraction deconstruction/refund:
+	// packet builder invoked with 30000 from the two refund paths. Credit
+	// branch: none." The death finalizer reads this byte, not the coarse
+	// death label, to select the corpse chain and the explosion — and cause 9
+	// is one of the three that skip the Killed query outright, so a frame
+	// stamped with anything else vanishes with a wreck it should not leave
+	// [04 §5.1][05 C21].
+	Kind9Cause uint8 = 9
 )
+
+// stampKind9SelfKill writes the provenance pair the cause-9 packet carries,
+// on both refund paths [06 §12.1].
+//
+// The one traced form of this packet is the reverse arm's last line,
+// `selfKill(target, target, 30000, kind 9)` [05 R-WORK-01 §1] — the product is
+// both victim and attacker — so the attacker-side snapshot the ordinary intake
+// stores beside the kind byte is the product's own owner [06 §9.1] step 4.
+//
+// TODO(question): cancel-current's step 4 is given only as "send the ordinary
+// kill packet — kind-9 damage of exactly 30000 through the normal death flow"
+// [05 "Cancellation boundaries"], without naming its attacker. Self is taken
+// from the reverse arm's traced call, which killDecayedNanoframe's own
+// contract calls "the same packet cancel-current sends"; nothing observable
+// turns on it, since cause 9's credit branch is none, but the recorded-attacker
+// link does end up holding the frame's own handle.
+func stampKind9SelfKill(product *units.Unit) {
+	if product == nil {
+		return
+	}
+	product.LastDamageCause = Kind9Cause
+	product.LastDamageSide = product.Owner
+}
 
 // The mode selector and the special-second-state predicate were package-level
 // vars; they are per-session configuration, so they live on Service
@@ -1903,10 +1935,11 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 	s.lastKill = KillInfo{Damage: Kind9Damage, Severity: 0, NoCorpse: true} // severity zero [05 C21]
 	if product != nil {
 		// Apply death: Alive false, but no corpse/explosion.
-		// In world pool, mark dead but not via Destroy which would set cleanup? For test, just set Alive false.
 		if s.World != nil {
-			s.World.Destroy(product.Handle, units.DeathKilled)
-			// Override corpse handling: mark that cause-9 has severity zero, no corpse.
+			stampKind9SelfKill(product)
+			// The packet's attacker is the product itself, so the death row
+			// records the product as its own killer [04 R-UNIT-06 §5].
+			s.World.DestroyBy(product.Handle, units.DeathKilled, product.Handle)
 		}
 		// Release after the cause-9 death mark. Completion posture intentionally
 		// precedes the kill, so releasing before Destroy would look like a live
@@ -2836,7 +2869,8 @@ func (s *Service) killDecayedNanoframe(product *units.Unit) {
 	}
 	s.lastKill = KillInfo{Damage: Kind9Damage, Severity: 0, NoCorpse: true}
 	if s.World != nil && s.World.Unit(product.Handle) != nil {
-		s.World.Destroy(product.Handle, units.DeathKilled)
+		stampKind9SelfKill(product)
+		s.World.DestroyBy(product.Handle, units.DeathKilled, product.Handle)
 	}
 	product.Alive = false
 	s.ReleasePlacement(product.Handle)

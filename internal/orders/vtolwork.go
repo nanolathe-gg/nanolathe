@@ -165,72 +165,12 @@ func emitStartBuildingAbsolute(u *units.Unit, n *Node, target *units.Unit) {
 	n.Flags |= FlagStopBuildingPending
 }
 
-// repairAdmission is the repair admission test shared by `VTOL_RepairUnit`'s
-// phase 0 and the repair-patrol scan [04 R-ORD-01 §7]:
-//
-//	the target exists; my definition carries the `canreclamate` mirror bit; the
-//	target's 16-bit health differs from its `maxdamage`; the target's mover mode
-//	is not airborne; and a water clause.
-//
-// The mirror bit is word B bit 9, which the FBI parser writes from the same
-// `canreclamate` key as bit 10 [04 R-ORD-02 §1], so this build's single
-// CanReclamate bool is both.
-//
-// The water clause is
-//
-//	(not canfly or amphibious or seaLevel <= targetTop) and
-//	(canfly       or seaLevel - myMaxWaterDepth <= targetTop)
-//
-// where `targetTop` is the target's signed height word plus its model total
-// height in whole world units. For an aircraft this reduces to "will not repair
-// a unit whose top is under water"; for a ground repairer it is "the target's
-// top must not be deeper than my own wading depth". Sea level comes from the
-// queue binding's world adapter, and the model height is the definition's
-// model total-height word — the same positive max-Y dword `BeginTransport`
-// carries [04 R-AIR-01 §9] — which this build stores as `ModelTop`.
-//
-// Corrected 2026-08-31: this carried an accepted-blocked marker claiming "the queue binding
-// carries no terrain or world reference" and passed the clause unconditionally,
-// admitting the submerged target retail refuses. `WorldQueryAdapter.SeaLevel`
-// is required of every composed binding and has been since the world adapter
-// landed.
-//
-// A binding with no world adapter still passes the clause rather than failing
-// it: an unbound queue is a test or bootstrap arrangement, not a submerged
-// target, and failing there would abandon repairs retail completes.
-func repairAdmission(me, target *units.Unit) bool {
-	if me == nil || me.Def == nil || target == nil || target.Def == nil {
-		return false
-	}
-	if !me.Def.CanReclamate {
-		return false
-	}
-	if health16(target) == uint32(target.Def.MaxDamage) {
-		return false
-	}
-	if moverMode(target) == 2 {
-		return false
-	}
-	return repairWaterClause(me, target)
-}
-
-// repairWaterClause is the water half of repairAdmission, split out so the
-// unbound-binding arm is visible at its own site.
-func repairWaterClause(me, target *units.Unit) bool {
-	b := bindingOfUnit(me)
-	if b == nil || b.World == nil || b.World.SeaLevel == nil {
-		return true // no world adapter: see the note on repairAdmission
-	}
-	sea := int32(b.World.SeaLevel())
-	// The target's top: signed height word [04 §8.1] plus the model total
-	// height in whole world units.
-	top := int32(target.Y.Raw()>>16) + target.Def.ModelTop
-	// Both halves written literally: the disjuncts are not exclusive and
-	// collapsing them by case has already gone wrong once.
-	airHalf := !me.Def.CanFly || me.Def.Amphibious || sea <= top
-	wadeHalf := me.Def.CanFly || sea-me.Def.MaxWaterDepth <= top
-	return airHalf && wadeHalf
-}
+// The repair admission `VTOL_RepairUnit` phase 0 and the repair-patrol scan
+// share is `nanoReach` in resolve.go. [04 R-ORD-02 §7] establishes that it is
+// ONE function — the command resolver's codes 1, 2 and 8 call the same one —
+// so the copy that stood here (`repairAdmission` plus `repairWaterClause`) is
+// gone rather than kept in step by hand. Its terms, the water clause and the
+// unbound-binding arm are all documented at that function.
 
 // ---------------------------------------------------------------------------
 // VTOL_HelpBuild [04 R-ORD-01 §7]
@@ -379,7 +319,7 @@ func vtolRepairUnitHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32
 		if !hasMover(u) || u.Def == nil || !u.Def.CanFly {
 			return 7 // cancel-all
 		}
-		if !repairAdmission(u, target) {
+		if !nanoReach(u, target) {
 			workStatus(u, statusCant, "Repair mission failed")
 			return 8 // abandon
 		}

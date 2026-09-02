@@ -197,10 +197,15 @@ func isCarriable(carrier, candidate *units.Unit) bool {
 // signed inequality and become a very large value under code 2's unsigned
 // compare.
 //
-// `health16` in vtolwork.go is the same field ZERO-extended, which is what that
-// section's other quotation of the compare says; the two agree for every
-// authored `maxdamage` (both put a negative health far above it), so the two
-// admissions are left where their owners put them.
+// `health16` in vtolwork.go is the same field ZERO-extended. The two readings
+// separate only where `maxdamage` itself is 0x8000 or more: below that, a
+// health whose 16-bit pattern has the high bit set reads as a large value under
+// either, and every other value reads identically. `maxdamage` is a 32-bit
+// authored word [02 "Unit record"], so nothing in the format forbids such a
+// definition — but none exists in the reference install (the largest is 29918),
+// so the two readings agree on all of it. §7's wording is the sign-extended
+// one, so that is what this admission uses; `health16` stays for the other
+// sites that quote their own compare as unsigned.
 func signExtendedHealth(u *units.Unit) int32 {
 	return int32(int16(u.Health))
 }
@@ -220,9 +225,15 @@ func repairAdmitsCode2(actor, target *units.Unit) bool {
 	return uint32(signExtendedHealth(target)) < uint32(target.Def.MaxDamage)
 }
 
-// nanoReach is the repair admission of [04 R-ORD-01 §7], which
-// [04 R-ORD-02 §1] names *nano-reach* and shares between command codes 1, 2
-// and 8. Its terms, in the order that section gives them:
+// nanoReach is THE repair admission of [04 R-ORD-01 §7] — the one function
+// [04 R-ORD-02 §7] establishes the command resolver's codes 1, 2 and 8,
+// `VTOL_RepairUnit` phase 0 and the repair-patrol scan all call. It was two
+// copies here (this one and `repairAdmission` in vtolwork.go) until they were
+// collapsed; the copies differed only in reading the health field zero- rather
+// than sign-extended, which no authored `maxdamage` can tell apart.
+//
+// [04 R-ORD-02 §1] names it *nano-reach*. Its terms, in the order that section
+// gives them:
 //
 //	the target exists; my definition carries the `canreclamate` mirror bit
 //	(word B bit 9, the parser's second copy of `canreclamate`); the target's
@@ -266,33 +277,37 @@ func nanoReach(actor, target *units.Unit) bool {
 	if signExtendedHealth(target) == target.Def.MaxDamage {
 		return false
 	}
-	if target.Move.Mode == 2 { // airborne [04 R-MOV-01 §8]
+	if moverMode(target) == 2 { // airborne [04 R-MOV-01 §8]
 		return false
 	}
-	targetTop := int32(target.Y.Floor()) + target.Def.ModelTop
-	sea := seaLevelWholeUnits(actor)
-	if actor.Def.CanFly {
-		// (canfly and not amphibious) leaves the first conjunct as the sea
-		// test; the second is satisfied by `canfly`.
-		return actor.Def.Amphibious || sea <= targetTop
-	}
-	// A ground actor satisfies the first conjunct outright and keeps the
-	// second: its own movement class's maximum water depth is how far below
-	// the surface it can still reach.
-	return sea-actor.Def.MaxWaterDepth <= targetTop
+	return nanoReachWaterClause(actor, target)
 }
 
-// seaLevelWholeUnits reads the map's sea level through the queue's world
-// adapter. The terrain header's sea level is a byte in whole world units
-// [04 §10.2]; a queue with no world adapter reports 0, which is the height of
-// a map with no water and makes nano-reach's water clause vacuous rather than
-// inventing a level.
-func seaLevelWholeUnits(u *units.Unit) int32 {
-	b := bindingOfUnit(u)
+// nanoReachWaterClause is the water half of nano-reach, split out so the
+// unbound-binding arm is visible at its own site:
+//
+//	(not canfly(me) or amphibious(me) or seaLevel <= targetTop) and
+//	(canfly(me)     or seaLevel − MaxWaterDepth(me) <= targetTop)
+//
+// Both halves are written literally, because the disjuncts are not exclusive
+// and collapsing them by case has already gone wrong once.
+//
+// A binding with no world adapter passes the clause rather than failing it: an
+// unbound queue is a test or bootstrap arrangement, not a submerged target, and
+// failing there would abandon repairs retail completes. (Reading the missing
+// level as 0 instead would refuse a target whose top is below zero, which is a
+// different invention.)
+func nanoReachWaterClause(actor, target *units.Unit) bool {
+	b := bindingOfUnit(actor)
 	if b == nil || b.World == nil || b.World.SeaLevel == nil {
-		return 0
+		return true
 	}
-	return int32(b.World.SeaLevel())
+	// The terrain header's sea level is a byte in whole world units [04 §10.2].
+	sea := int32(b.World.SeaLevel())
+	targetTop := int32(target.Y.Floor()) + target.Def.ModelTop
+	airHalf := !actor.Def.CanFly || actor.Def.Amphibious || sea <= targetTop
+	wadeHalf := actor.Def.CanFly || sea-actor.Def.MaxWaterDepth <= targetTop
+	return airHalf && wadeHalf
 }
 
 // isFollowable is the alive gate and nothing else. [04 R-ORD-02 §1] settles

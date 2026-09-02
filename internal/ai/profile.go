@@ -99,12 +99,13 @@ func (p *Profile) ApplyUnitDefinitions(catalog *content.Catalog) {
 }
 
 // ApplyUnitDefinitionsForPlayers is ApplyUnitDefinitions with the number of
-// slots whose control byte is 2. The pass PAIR runs once per computer player
-// and every run writes every manager [08 R-AI-01 §18]: with k of them a
-// category-naming fragment — which locks nothing — multiplies its members'
-// weights 2·k times, while an exact-naming fragment applies once and is then
-// refused by the per-type lock it set. A count below 1 is treated as 1; these
-// tables are only ever read where a computer player exists.
+// slots whose record exists and whose control byte is 2. The pass PAIR runs
+// once per computer player and every run writes every manager [08 R-AI-01 §18]:
+// with k of them a category-naming fragment — which locks nothing — multiplies
+// its members' weights 2·k times, while an exact-naming fragment applies once
+// and is then refused by the per-type lock it set. A count below 1 is treated
+// as 1; these tables are only ever read where a computer player exists, and a
+// fixture that never filled its player rows is one manager, not none.
 func (p *Profile) ApplyUnitDefinitionsForPlayers(catalog *content.Catalog, computerPlayers int) {
 	if p == nil || catalog == nil || p.appliedCatalog == catalog {
 		return
@@ -751,6 +752,9 @@ func NewManager(player uint8, fs vfs.FSOps, profileName string, r *rng.Simulatio
 		IsAlliance:   isAlliance,
 		RNG:          r,
 	}
+	// One manager, one computer player. A session's managers share one profile
+	// record and reach the counted entry through the scoring seam instead
+	// [08 R-AI-01 §18].
 	prof.ApplyUnitDefinitions(catalog)
 	m.Strategic.Catalog = catalog
 	return m, nil

@@ -243,6 +243,12 @@ type Session struct {
 	deathmatchActive    bool
 	deathmatchAttempts  uint16
 	deathmatchExhausted bool
+	// deathsWithNoRecordedCause counts deaths that reached the finalizer with
+	// no damage-kind byte. Retail's handler always has one [06 §12.1], so a
+	// nonzero value names a producer this build has not wired. Diagnostics
+	// only: written at the death boundary, read by DeathsWithNoRecordedCause,
+	// never by the simulation.
+	deathsWithNoRecordedCause int
 
 	Wind *world.Wind
 
@@ -1011,9 +1017,9 @@ func (s *Session) RegisterAll() {
 			// chain depth + death-explosion weapon trigger (DoExplosion) per
 			// [06 §12.1] C22–C25. Deterministic, no wall-clock, no map iteration (I1, I4, I6).
 			if s.Features != nil && u != nil && u.Def != nil && s.World != nil {
-				// The cause is the recorded damage-kind byte, not a re-derivation
-				// from the coarse label [06 §12.1]; see deathCauseForResolution.
-				c := deathCauseForResolution(cause, u)
+				// The cause is the recorded damage-kind byte, and only that
+				// [06 §12.1]; see deathCauseForResolution.
+				c := s.deathCauseForResolution(u)
 				// IsFeature direct conversion cause 7 handling: when def isfeature,
 				// retail writes cause 7 DIRECT store not via packet builder [06 §12.1].
 				// We treat isfeature kills as FeatureConversion when cause is killed and isfeature true and corpse exists?

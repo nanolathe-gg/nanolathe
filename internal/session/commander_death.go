@@ -3,6 +3,7 @@ package session
 import (
 	"strings"
 
+	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/movement"
@@ -85,6 +86,18 @@ func (s *Session) sweepOwnerAfterCommanderDeath(owner int, tick uint32) {
 			continue
 		}
 		if !controlled {
+			// [08 R-SKIR-01 §3] splits the sweep by the owner record: a unit
+			// whose owner is inactive or not human/computer "is destroyed
+			// silently (death kind 3, dying bit set, kill record filed)",
+			// where the controlled branch below instead "receives 30000
+			// damage from itself with damage kind 3". Both ends carry kind 3;
+			// only this one carries no packet, so it writes the kind byte
+			// directly and leaves the attacker-side snapshot alone — the
+			// snapshot is the damage intake's, and no damage is applied here.
+			// The finalizer reads the kind byte for the credit switch, where
+			// cause 3 is the loss-only partial path [06 §12.1]; before this
+			// the silent branch reached it with no cause at all.
+			u.LastDamageCause = uint8(combat.CauseSelfDestruct)
 			s.Units.Destroy(u.Handle, units.DeathSelfDestruct)
 			continue
 		}

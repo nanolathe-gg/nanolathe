@@ -657,19 +657,27 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		if id == 0 {
 			return
 		}
-		slot := -1
-		for i := 0; i < units.NumSlots; i++ {
-			if sl := u.SlotAt(i); sl != nil && sl.Weapon != nil && sl.Weapon.Stockpile {
-				slot = i
-				break
-			}
-		}
-		if slot < 0 {
+		// The UI alias path always supplies zero, which is where shipped
+		// stockpile weapons live [06 §11.1]; the node constructor then stores
+		// that build-type argument verbatim, and the handler selects the slot
+		// with it and no search [06 R-WPN-05 §2]. The slot hunt that used to
+		// stand here — "find the first slot carrying a `stockpile` weapon" —
+		// named a slot the alias never names.
+		//
+		// The refusal is the enqueue guard's: a node whose named slot holds
+		// weapon record 0 or a weapon without `stockpile` would complete every
+		// queued round free in one visit and, if it outlived the visit, fault
+		// the build page's percentage on a divide by zero [06 R-WPN-05 §2]. No
+		// shipped click reaches it — a MAKENUKE/MAKEANTI button is authored
+		// only where slot 0 holds a stockpile weapon — so refusing is both safe
+		// and indistinguishable from retail here.
+		const stockpileAliasSlot = 0 // [06 §11.1] the alias's build-type argument
+		if !orders.StockpileSlotAcceptsBuildWeapon(u, stockpileAliasSlot) {
 			return
 		}
 		s.bindOrderQueue(u)
 		n := orders.NewNodeForOrder(id, 0, 0, 0, 0, tick, u.Handle, c.Stockpile.Queued)
-		n.Param1, n.Param2 = uint32(slot), 1
+		n.Param1, n.Param2 = uint32(stockpileAliasSlot), 1
 		if q := orders.QueueForUnit(u); q != nil {
 			q.CoalesceTail(id, n)
 		}

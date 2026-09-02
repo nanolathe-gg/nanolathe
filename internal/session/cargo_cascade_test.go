@@ -109,35 +109,103 @@ func TestCarrierDeathCascadeRunsAtTheFinalizer(t *testing.T) {
 	})
 }
 
-// TestDeathCauseForResolutionPrefersTheRecordedKind locks the finalizer's cause
+// TestDeathCauseForResolutionIsTheRecordedKind locks the finalizer's cause
 // selection: retail keeps one cause, the damage-kind byte recorded at damage
 // time, and every branch of the death handler reads it [06 §12.1]. The coarse
-// label is only the fallback for a death that retained no packet.
-func TestDeathCauseForResolutionPrefersTheRecordedKind(t *testing.T) {
+// label is no longer consulted at all.
+func TestDeathCauseForResolutionIsTheRecordedKind(t *testing.T) {
 	cases := []struct {
-		name  string
-		label units.DeathCause
-		kind  uint8
-		want  combat.Cause
+		name string
+		kind uint8
+		want combat.Cause
 	}{
-		// The cases the old label-only mapping collapsed to cause 1.
-		{"CargoCascade", units.DeathKilled, uint8(combat.CauseCargo), combat.CauseCargo},
-		{"WaterDamage", units.DeathKilled, uint8(combat.CauseWaterDamage), combat.CauseWaterDamage},
-		{"Deconstruction", units.DeathKilled, uint8(combat.CauseDeconstruction), combat.CauseDeconstruction},
-		{"FeatureConversion", units.DeathKilled, uint8(combat.CauseFeatureConversion), combat.CauseFeatureConversion},
-		// The kind byte wins over a disagreeing label.
-		{"KindOverridesLabel", units.DeathKilled, uint8(combat.CauseReclaim), combat.CauseReclaim},
-		// No packet: the label is the fallback.
-		{"PacketlessKilled", units.DeathKilled, 0, combat.CauseOrdinary},
-		{"PacketlessSelfDestruct", units.DeathSelfDestruct, 0, combat.CauseSelfDestruct},
-		{"PacketlessReclaim", units.DeathReclaimed, 0, combat.CauseReclaim},
+		// The causes the old label-only mapping collapsed to cause 1.
+		{"CargoCascade", uint8(combat.CauseCargo), combat.CauseCargo},
+		{"WaterDamage", uint8(combat.CauseWaterDamage), combat.CauseWaterDamage},
+		{"Deconstruction", uint8(combat.CauseDeconstruction), combat.CauseDeconstruction},
+		{"FeatureConversion", uint8(combat.CauseFeatureConversion), combat.CauseFeatureConversion},
+		{"Capture", uint8(combat.CauseCapture), combat.CauseCapture},
+		{"Reclaim", uint8(combat.CauseReclaim), combat.CauseReclaim},
+		{"SelfDestruct", uint8(combat.CauseSelfDestruct), combat.CauseSelfDestruct},
+		{"Ordinary", uint8(combat.CauseOrdinary), combat.CauseOrdinary},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			s := &Session{}
 			u := &units.Unit{LastDamageCause: tc.kind}
-			if got := deathCauseForResolution(tc.label, u); got != tc.want {
+			if got := s.deathCauseForResolution(u); got != tc.want {
 				t.Fatalf("cause = %d, want %d [06 §12.1]", got, tc.want)
 			}
+			if s.DeathsWithNoRecordedCause() != 0 {
+				t.Fatalf("a stamped death was counted as unstamped")
+			}
 		})
+	}
+
+	// A death with no kind byte is a producer this build has not wired: the
+	// finalizer passes the 0 through and counts it rather than guessing.
+	t.Run("UnstampedIsCountedNotGuessed", func(t *testing.T) {
+		s := &Session{}
+		if got := s.deathCauseForResolution(&units.Unit{}); got != 0 {
+			t.Fatalf("cause = %d, want 0 for a death with no recorded kind", got)
+		}
+		if s.DeathsWithNoRecordedCause() != 1 {
+			t.Fatalf("unstamped deaths counted = %d, want 1", s.DeathsWithNoRecordedCause())
+		}
+	})
+}
+
+// TestCommanderSweepSilentBranchStampsCauseThree locks the producer half of
+// [08 R-SKIR-01 §3]'s owner sweep: a unit whose owner record is inactive or
+// not human/computer "is destroyed silently (death kind 3, dying bit set,
+// kill record filed)". Both ends of the sweep carry kind 3; this one carries
+// no packet, so it writes the kind byte and leaves the attacker-side snapshot
+// — the damage intake's field — untouched.
+func TestCommanderSweepSilentBranchStampsCauseThree(t *testing.T) {
+	s := newLoopTestSession(t, 2)
+	victim := s.Units.IterSliced()[0]
+	owner := int(victim.Owner)
+	// An owner with no active controller takes the silent branch.
+	s.Econ.Players[owner].Exists = false
+	before := victim.LastDamageSide
+
+	s.sweepOwnerAfterCommanderDeath(owner, 1)
+
+	if !victim.Dying {
+		t.Fatal("the owner sweep did not mark the unit dying [08 R-SKIR-01 §3]")
+	}
+	if got := combat.Cause(victim.LastDamageCause); got != combat.CauseSelfDestruct {
+		t.Fatalf("silent sweep death cause = %d, want 3 [08 R-SKIR-01 §3][06 §12.1]", got)
+	}
+	if victim.DeathCause != units.DeathSelfDestruct {
+		t.Fatalf("silent sweep death label = %v, want DeathSelfDestruct", victim.DeathCause)
+	}
+	if victim.LastDamageSide != before {
+		t.Fatalf("the silent branch wrote an attacker-side snapshot (%d → %d); it applies no damage [06 §9.1]",
+			before, victim.LastDamageSide)
+	}
+}
+
+// TestEveryBattleDeathCarriesARecordedCauseRetail is the fail-loud signal made
+// into a contract. Retail's death handler reads the packet's cause nibble
+// unconditionally [06 §12.1]; a death that reaches this build's finalizer with
+// no damage-kind byte is a producer nobody wired, and the finalizer can only
+// count it. Running a whole battle and asserting the count is zero is what
+// keeps a new death site from quietly joining the three this unit stamped.
+//
+// Hard only: the Medium run of the same battle is twice as long and proves
+// nothing extra here.
+func TestEveryBattleDeathCarriesARecordedCauseRetail(t *testing.T) {
+	sess := aiE2ESkirmishAt(t, "ashap plateau", aiE2ESeed, 2)
+	scaled := sess.Clock.ScaledAnchor
+	for sess.State != StatePostBattle && sess.Clock.GlobalTick < aiE2ETickCap {
+		scaled += 5
+		sess.Step(scaled)
+	}
+	if !sess.GetResult().Ended {
+		t.Fatalf("battle did not end by tick %d", sess.Clock.GlobalTick)
+	}
+	if n := sess.DeathsWithNoRecordedCause(); n != 0 {
+		t.Fatalf("%d deaths reached the finalizer with no damage-kind byte; every producer must stamp one [06 §12.1]", n)
 	}
 }

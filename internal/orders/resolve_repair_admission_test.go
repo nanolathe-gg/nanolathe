@@ -116,3 +116,68 @@ func TestCode2RepairArmFollowsTheAssistArm(t *testing.T) {
 		t.Fatalf("code 2 on an unfinished friendly = %q, want HelpBuild [04 R-ORD-02 §1]", got)
 	}
 }
+
+// TestTheTwoHealthReadingsAgreeOnEveryAuthoredMaxDamage is the collapse's
+// evidence [04 R-ORD-02 §7]. The admission used to exist twice — this one
+// sign-extending the 16-bit health field and vtolwork.go's copy zero-extending
+// it — and the two agree everywhere a definition can put them:
+//
+//   - for a `maxdamage` below 0x8000 (every definition in the reference
+//     install: the largest authored word is 29918) the two readings admit and
+//     refuse exactly the same targets, whatever the health;
+//   - they separate only when `maxdamage` is 0x8000 or more AND the health's
+//     16-bit pattern has its high bit set, where the zero-extended reading can
+//     call a target "full" that the sign-extended one does not. §7's wording is
+//     the sign-extended one, so nano-reach follows it.
+func TestTheTwoHealthReadingsAgreeOnEveryAuthoredMaxDamage(t *testing.T) {
+	signExtended := func(h int32) int32 { return int32(int16(h)) }
+	zeroExtended := func(h int32) uint32 { return uint32(uint16(h)) }
+
+	// The health values that exercise every 16-bit case: full, damaged,
+	// over-full, the latch at zero and below, the sign boundary, and a value
+	// wider than the field.
+	healths := []int32{0, -1, -5, 1, 50, 100, 0x7FFF, 0x8000, 0x8001, 0xFFFF, 40000, 0x10064}
+	// Every `maxdamage` a definition in the reference install can carry, plus
+	// the boundary itself.
+	for _, maxDamage := range []int32{0, 1, 100, 1000, 29918, 0x7FFF} {
+		for _, h := range healths {
+			mine := signExtended(h) == maxDamage
+			theirs := zeroExtended(h) == uint32(maxDamage)
+			if mine != theirs {
+				t.Fatalf("maxdamage %d health %d: sign-extended says full = %v, zero-extended says %v — the two must agree below 0x8000 [04 R-ORD-02 §7]",
+					maxDamage, h, mine, theirs)
+			}
+		}
+	}
+
+	// And the one place they part, which is why the collapse had to pick a
+	// reading rather than either: a definition with `maxdamage` 40000 at
+	// exactly that health.
+	const wide = int32(40000)
+	if signExtended(wide) == wide {
+		t.Fatal("sign-extended reading must not call a 0x9C40 health equal to maxdamage 40000")
+	}
+	if zeroExtended(wide) != uint32(wide) {
+		t.Fatal("zero-extended reading must call a 0x9C40 health equal to maxdamage 40000")
+	}
+}
+
+// TestNanoReachIsTheOnlyRepairAdmission drives the collapsed function from the
+// air side as well as the resolver's: `VTOL_RepairUnit`'s admission and code
+// 8's are the same call, so one fixture answers for both [04 R-ORD-02 §7].
+func TestNanoReachIsTheOnlyRepairAdmission(t *testing.T) {
+	actor, target := repairAdmissionPair(t, 50)
+	if !nanoReach(actor, target) {
+		t.Fatal("a damaged friendly in reach must pass the admission [04 R-ORD-01 §7]")
+	}
+	// The airborne term, which the collapsed function reads through moverMode's
+	// low two bits [04 R-MOV-01 §8].
+	target.Move.Mode = 2
+	if nanoReach(actor, target) {
+		t.Fatal("an airborne target must fail the admission [04 R-ORD-01 §7]")
+	}
+	target.Move.Mode = 0x06 // mode 2 with a high bit set: still airborne
+	if nanoReach(actor, target) {
+		t.Fatal("the airborne test reads the mover mode's low two bits [04 R-MOV-01 §8]")
+	}
+}

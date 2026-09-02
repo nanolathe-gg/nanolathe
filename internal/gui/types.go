@@ -163,31 +163,55 @@ func (w *Window) PlacedRect(index int) Rect {
 	return r
 }
 
-// ArtSources returns the art resolution order for a gadget: own entry, side GAF, fallback [07 §4].
-func (g *Gadget) ArtSources() []string {
-	srcs := []string{}
-	if g.Art != "" {
-		srcs = append(srcs, g.Art)
+// ArtSource is one (GAF, entry name) hop in a gadget's art resolution chain
+// [07 §4]. GAF is a hint for which GAF this hop searches, not a resolved
+// file handle: "" means the window's own page/panel art GAF — the same
+// default root a caller already holds — and any other value names the
+// specific support GAF that hop searches instead.
+type ArtSource struct {
+	GAF  string
+	Name string
+}
+
+// ArtSources returns the art resolution order for a gadget: its own named
+// entry in the window's own art GAF, then that same entry in the
+// side-specific interface GAF, then the built-in fallback [07 §4]. This is
+// the same three-link chain — page, then side intGAF, then common — that
+// cmd/nanolathe/battle_hud.go's gadgetArtEntry and modalGadgetFrame walk in
+// production (landed under WU-19-37); this function mirrors their file
+// order for callers that want it without a battle-HUD instance.
+//
+// sideIntGAF is the side's interface GAF handle, the same
+// content.SideDef.IntGAF [02 §6] the three battle panel frames
+// (PANELTOP/PANELSIDE/PANELBOT) are drawn from. Pass "" when no side is
+// known; the middle link is then skipped, matching production's nil-GAF
+// skip in the same search loop.
+func (g *Gadget) ArtSources(sideIntGAF string) []ArtSource {
+	var srcs []ArtSource
+	name := g.Art
+	if name == "" {
+		name = g.Name
 	}
-	// Unimplemented: [07 §4]'s middle link. The side-specific interface GAF
-	// belongs between the gadget's own entry and the built-in fallback, and is
-	// resolved through content.SideDef.IntGAF per side [02 §6] — a handle this
-	// loader does not carry. See PLAN 19 §2.4.
+	if name != "" {
+		srcs = append(srcs, ArtSource{Name: name})
+		if sideIntGAF != "" {
+			srcs = append(srcs, ArtSource{GAF: sideIntGAF, Name: name})
+		}
+	}
 	if g.FallbackArt != "" {
-		srcs = append(srcs, g.FallbackArt)
+		srcs = append(srcs, ArtSource{Name: g.FallbackArt})
 	}
 	// Built-in fallback chain always ends with BackTile for panel [07 §4].
-	if g.Kind == KindPanel && g.FallbackArt != "BackTile" {
-		// Ensure BackTile is last fallback if not already present.
+	if g.Kind == KindPanel {
 		found := false
 		for _, s := range srcs {
-			if s == "BackTile" {
+			if s.Name == "BackTile" {
 				found = true
 				break
 			}
 		}
 		if !found {
-			srcs = append(srcs, "BackTile")
+			srcs = append(srcs, ArtSource{Name: "BackTile"})
 		}
 	}
 	return srcs

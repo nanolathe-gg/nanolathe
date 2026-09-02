@@ -2986,6 +2986,28 @@ arrival with the owner's committed anchor on the border of the grown
 rectangle, i.e. flush against the target, never on the target's own cells
 ([R-PATH-01 §12]).
 
+**Clarification (2026-09-02, RWU-19-18) — what the install/release helper
+does, exactly.** The record-level helper behind all four installers takes the
+record and an optional new payload object and runs entirely through the
+owner's mover: **a unit without a mover (a building) is a no-op** — nothing is
+released, nothing installed, and a handle the installer already built is
+simply abandoned. Otherwise, in order: (1) if the record holds a payload,
+hand the mover's controller a **null goal** — for the ground follower that is
+steps 1–4 of the route-acceptance rule of [R-PATH-01 §8] (cancel the
+in-flight search, OR `0x80` into the pending word of the record that owned
+the previous payload, clear has-waypoint, clear wants-repath); for a flight
+block it is the `0x80` raise and the null store — then virtually delete the
+payload object and clear the record's payload field; (2) if a new object was
+given, clear pending bits `0x20`–`0x200`, hand the controller the new object
+(the full acceptance rule for a ground follower, which sets wants-repath and
+may adopt, accept or synthesise a route from the points it still holds), and
+store it. The helper clears *before* it adopts; that is observationally the
+"finish by clearing" of the paragraph above because the adopt raises nothing
+on a record whose previous payload was just released. The release form
+(no new object) is step (1) alone, which is why it leaves `0x80` visible. The
+arrival release of [R-MOV-03 §2] and the queue teardown of [R-MOV-03 §9] reach
+the same helper through the record. Established.
+
 **The footprint snap.** A unit's committed footprint cell for an axis is
 `(pos − foot·2^19 + 2^19) >> 20` (arithmetic shift) where `foot` is the
 definition's footprint size in cells for that axis (`FootPrintX`,
@@ -6197,6 +6219,25 @@ nonzero category from 0 issues `StartMoving` FIRST (I) and then the matching
 immediate wake-flag starts via the zero-argument name-form adapter (wake 1), so the `StartMoving` drain — all eight slots at
 delta 0 plus one piece pass — forms a barrier between it and the `MoveRateN`
 that follows; the cache update (the two-bit category shifted left by two into its field) is the final write.
+
+**Clarification (2026-09-02, RWU-19-18) — the "mover inhibit bit" is the
+blocked flag.** The bit the paragraph above calls *the mover inhibit bit (bit 2
+of the mover's state byte)* and the bit [R-COLL-01 §5] calls the **blocked
+flag** are one bit: the mover's state byte carries the mover mode in bits 0–1
+and the blocked flag in bit 2 — the same byte the mover box saves — and
+[R-MOV-01 §6] already says the classifier "forces tier 0 when the blocked flag
+is set". There is no separate inhibit latch anywhere on the record. The tier-0
+override is therefore the validator's last verdict, with the stale-by-
+construction semantics of [R-COLL-01 §5]: its three writers are the commit's
+validation gate, the follower stream reader and the mover-box loader; its
+readers are the follower's repath arm, this classifier, the commit's own
+blocked branch and the follower stream writer, and nothing else. The weapon
+aim gate of [06 R-WPN-03 §2] does not read the bit — it reads the **cached
+tier** this classifier writes (bits 2–3 of the movement-mode word), so a unit
+that was rejected on its last cross-cell proposal aims under the tight gate
+until its next cross-cell proposal replaces the verdict, whatever its speed
+word says. Established (re-read of the classifier against the commit's writer;
+the mover constructor seeds the byte with mode 1 and the flag clear).
 
 **Established fact:** `setSFXoccupy` is a five-value classifier (run after the rate classifier inside the movement integration, mode I, arity 1, spelling exact with lower-case `s`). Occupancy is `0` when the current movement mode (the low two bits of the movement-mode word) is not `1` or `2`. In those modes the classifier compares signed Y (the signed high word of the unit's 16.16 Y), the map water level (`wt`), the definition's waterline byte (`wl`) and the definition's model-bottom signed word (`mb`), yielding `4` if `wy > wt`; otherwise starting from the cached band it can yield `1` when `wy - wt > -5`, `2` when `wl + wy == wt`, and `3` when `mb + wy < wt`, with later tests overriding earlier ones (`1→2→3`). The value is cached and emitted via the argument-carrying name-form adapter only on change (cell 0 = band `0..4`).
 
@@ -9856,6 +9897,20 @@ otherwise clear, write XYZ and the new pair and mode, stamp, LOS wrapper;
 dirty in both cases. Every writer stamps at the unit's cached pair; there is
 no reservation stamp for a proposed position anywhere.
 
+**Established — reader census of the overlap bits (2026-09-02, RWU-19-18).**
+Flags bits 26 (*host*) and 27 (*intruder*) are consulted by exactly three
+routines: the clear above (bit 27 cleared; bit 26 set → both cleared and the
+overlap scan run), the restamp above (gated on bit 27), and the two writers
+that raise bit 27 to *request* a restamp — the yard-open port write and the
+save loader's post-load pass. No aim, damage, order, path, visibility or
+presentation code reads either bit; they are bookkeeping for the overlap scan
+and nothing more. An implementation therefore needs the two bits only inside
+the occupancy layer, plus two facts it does not have today: the stamping
+unit's owner state (for the state-3 displacement) and a per-unit flag word it
+can write. The order the displacement rule runs in is the plane loop's — one
+cell at a time, row-major over the rectangle, each cell arbitrated as it is
+visited — so a rectangle can end half displaced when the occupants differ.
+
 ### Closed — the blocked flag: writers, readers, persistence, and the save bit [R-COLL-01 §5] (2026-08-29)
 
 **Established — three writers.** (1) The commit's validation gate (§1) on
@@ -10110,6 +10165,24 @@ acknowledgement notification and returns result 5 — the pump unlinks and frees
 the record, ORDER COMPLETE; otherwise it returns 9 — dropped while further
 records follow, else the record resets its phase and waits `30 + RNG(30)`
 ticks (range 30 to 59).
+
+**Clarification (2026-09-02, RWU-19-18) — the acknowledgement is voice-cue
+slot 6.** The "move-complete acknowledgement notification" above is the unit
+voice-cue producer of [03 R-AUD-01 §3] raised with **slot 6, `arrived`**
+([03 §8.3]'s static slot table: priority 3, cooldown 4 × 30 frames, default
+caption `Arrived`) and no override caption. Everything after that is doc 03's
+and doc 07's: the producer gate (the unit's owner is the local viewing player,
+its alive bit set, its silenced bit clear), the eight-entry priority queue,
+the per-frame drain, the variant draw on the CRT stream, and the two
+level-scaled thresholds that decide whether the voice plays and whether the
+`%s: %s` text line posts ([07 §11] `unitchat`). It is presentation only — no
+network event, no record bit, no COB callback — and it is not the order
+descriptor's *acknowledgement group* byte of §3.1, which the resolver's
+presentation helper reads at issue time. The same slot-6 raise, also with a
+null caption, is made by `Attack_Kamikaze` phase 1 on the arrival bit `0x20`
+(before it pushes its `SelfDestruct`) and by `VTOL_Move` phase 2 when the
+record is the last on its segment ([R-ORD-02 §2]); no other handler raises
+slot 6. Established.
 
 **Closed — VTOL_MOVE phase trigger and C5 mechanism split (2026-08-26):** the
 VTOL_MOVE handler is a THREE-phase machine, not a two-phase one: phase 0
@@ -11720,6 +11793,57 @@ the transport family is unchanged: the allied cross-owner command gate of
 §10.2's admission paragraph, and the carrier collision item of the Hover and
 VTOL list.
 
+### Closed — the damaged-aircraft base list [R-AIR-01 §11] (2026-09-02)
+
+Four sections ([R-AIR-01 §7], [R-AIR-01 §8], [R-ORD-02 §2], [R-ORD-02 §3])
+say a damaged aircraft "collects the base candidates within `0xF00`" and lands
+on one drawn at random, and [R-ORD-02 §4] — which names the scan visitors —
+did not define this one. It is not a visitor at all; it is a filter over a
+list the target registry already keeps.
+
+**Established — the list.** The per-side target registry of [06 §3.1] holds a
+**third list** beside the primary and secondary candidate lists: at every
+30-tick rebuild, in the friendly branch (candidate owner's alliance row
+toward the registry's ally group nonzero, unit fully built), a unit whose
+definition carries **both** `builder` **and** `isairbase` **and** whose
+activation bit (port 1 of [§4.7]) is set is appended, in unit-array order.
+Like the other two lists it is cleared at the start of each rebuild, so it is
+up to 30 ticks stale and can hold a unit that has since died or deactivated.
+In stock content the members are the air repair pads and the aircraft plants
+while their scripts hold them activated.
+
+**Established — the scan.** The scan takes the aircraft's owner's ally-group
+byte and walks that registry's third list once, in list order, admitting an
+entry when (1) its definition still has `builder` and `isairbase`, (2) its
+activation bit is still set, and (3) the planar squared distance from the
+aircraft to the entry — `(dx² >> 32) + (dz² >> 32)` on the 16.16 positions,
+i.e. whole world units squared — is **at or below** `0xF00²` (3840 world
+units, inclusive). It re-tests the three admission flags but **not**
+liveness: a pad destroyed since the rebuild is still offered, and the landing
+order's own pad query rejects it later ([R-AIR-01 §6]). Admitted entries are
+pushed to a fresh vector in list order; nothing is scored or sorted.
+
+**Established — the pick and the callers.** A non-empty vector is consumed
+as one simulation draw over its count (`RNG(count)`; a count of one draws
+nothing, [01 §8]); the caller clears its record's goal payload and pushes a
+`VTOL_Landing` record at the drawn unit onto the head of its queue. The
+health threshold at every caller is `(uint)(int16)health < (MaxDamage >> 2)
+* 3` — the 16-bit health sign-extended and compared unsigned against three
+quarters of `MaxDamage` computed with a truncating shift, strict. The scan
+runs at: `VTOL_SeekAttack` phase 1 and `VTOL_SeekGuard` phase 1 ([§7],
+[R-ORD-02 §3]); `VTOL_Patrol` phase 2 ([R-ORD-02 §2]); `AirStrike` phase 6
+and `AirToGroundHover` phase 3 ([§8]); `VTOL_RepairPatrol` phase 1
+([R-ORD-01 §7]). `AirToGround`'s phase-3/4 body also runs the scan under the
+same health test but **frees the result unused** — it never lands a damaged
+attacker; the sections that say it does are corrected by this one.
+
+**Correction.** [§7]'s "for the unit's ally group" and [R-ORD-02 §3]'s
+"nearby-unit candidate list" stand; the earlier implication that the list is
+gathered by a sector-bucket visitor like the guard and repair candidates is
+withdrawn — no visitor runs, no bucket is walked, and allied players' pads
+are included only insofar as the registry of the owner's ally-group index
+files them as friendly.
+
 ### 10.3 Patrol and air construction orbit
 
 **Established fact:** Air construction orbit is an exact geometric recurrence,
@@ -12302,9 +12426,12 @@ replacement bullet is needed because the ground path has no vertical term.
   trace. Marked `TODO(question)` at both sites; store the bytes opaque.
 - Reader for the acknowledgement-group byte · §3.1 · static trace. Marked
   `TODO(question)`.
-- Upstream producers of production-node wake mask 8 (Construction stopped)
+- ~~Upstream producers of production-node wake mask 8 (Construction stopped)
   · §3.3, [R-FAC-01B] · static trace. Marked `TODO(T25)`; the handler
-  semantics are closed and the producer must not be invented.
+  semantics are closed and the producer must not be invented.~~ **Closed
+  (2026-09-02, RWU-19-18):** it is the target-removed notice of [R-ORD-01 §6]
+  on the product the factory record binds; see the interrupt-producers correction
+  under [05 "Build request and factory queue behavior"].
 - Where the interface and network layers replace or cancel the front order
   · §3.3, doc 07 · static trace. The queue pump itself never does it.
 - ~~The standoff value bound by the attack-chase orbit substates.~~ **Closed

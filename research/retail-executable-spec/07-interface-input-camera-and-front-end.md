@@ -6877,7 +6877,7 @@ Rows start at `y = 47` and advance by 40 per row drawn.
 `r = 0 .. playerCount − 1`. For each rank the ten player slots are scanned
 in slot order for the first that qualifies: record present; controller byte
 1, 2 or 3; side byte ≠ 10; live-unit count ≠ 0 **or** the slot's auxiliary
-word == 0 (the word doc 08 leaves unnamed); the lobby record's watcher bit
+word == 0 (the word doc 08 leaves unnamed — closed 2026-09-02: it has no writer and reads zero, [08 R-CAMP-01 §7]); the lobby record's watcher bit
 (`0x40`) clear; and the slot's **rank byte equals `r`** (the rank byte and
 its maintenance on every credited kill are [08 R-CAMP-01 §9]). The first
 match draws the row and the scan stops; if **no** slot holds rank `r`, every

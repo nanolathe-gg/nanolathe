@@ -625,7 +625,23 @@ func handleBW(token string, ctx *interpCtx) {
 	if id == 0 {
 		return
 	}
+	// `bw n` carries a count and no slot [04 §3.6], so the node's build-type
+	// argument is zero — slot 0, where shipped stockpile weapons live
+	// [06 §11.1] — and the handler selects that slot verbatim, testing neither
+	// that its weapon carries `stockpile` nor that it is a real weapon
+	// [06 R-WPN-05 §2]. On a definition whose slot 0 holds weapon record 0 the
+	// queue runs away: every round completes free in a single visit, and a
+	// node that outlives the visit faults the build page's percentage on a
+	// divide by zero. Refusing to enqueue is the one behavior both safe and
+	// indistinguishable from retail on shipped content, where a mission
+	// authors `bw` only for a silo. An unqueued verb is the same outcome the
+	// table already gives an unresolved `a name` or `g name`.
+	const bwSlot = 0 // [04 §3.6] the verb names no slot; the node's is zero
+	if !orders.StockpileSlotAcceptsBuildWeapon(ctx.unit, bwSlot) {
+		return
+	}
 	node := orders.Node{
+		Param1: bwSlot,    // slot 0 [06 §11.1]
 		Param2: uint32(n), // count n [04 §3.6] bw n
 	}
 	q := orders.QueueForUnit(ctx.unit)
