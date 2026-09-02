@@ -90,19 +90,28 @@ func TestRepairAdmissionHealthTermBoundaries(t *testing.T) {
 	}
 }
 
-// TestCode1AddsNoHealthTestOfItsOwn is §7's other half: the contextual code's
-// friendly arm calls the shared admission and nothing more, so a full-health
-// friendly is NOT a repair — the click falls through to the later arms, which
-// for a plain mover is the move — while a death-latched one, which code 2
-// refuses, still resolves a repair here.
+// TestCode1AddsNoHealthTestOfItsOwn is §7's other half. The contextual code's
+// friendly arm calls the shared admission and nothing more, and in the DEFAULT
+// interface variant that arm assists only an unfinished target: "a full-health
+// friendly therefore does not resolve to a repair ... in the default variant it
+// reaches the own-unit reject and then the feature and move tests"
+// [04 R-ORD-02 §7]. Neither the full-health target nor the death-latched one is
+// unfinished, so both clicks are moves — the health term is code 8's and code
+// 2's to distinguish, and TestRepairAdmissionHealthTermBoundaries above holds
+// that contract. The unfinished target is the one this variant assists.
 func TestCode1AddsNoHealthTestOfItsOwn(t *testing.T) {
 	full, fullTarget := repairAdmissionPair(t, 100)
 	if got := DescriptorFor(Resolve(1, full, fullTarget, nil)).Name; got != "Move_Ground" {
 		t.Fatalf("contextual click on a full-health friendly = %q, want Move_Ground [04 R-ORD-02 §7]", got)
 	}
 	latched, latchedTarget := repairAdmissionPair(t, -5)
-	if got := DescriptorFor(Resolve(1, latched, latchedTarget, nil)).Name; got != "RepairUnit" {
-		t.Fatalf("contextual click on a death-latched friendly = %q, want RepairUnit [04 R-ORD-02 §7]", got)
+	if got := DescriptorFor(Resolve(1, latched, latchedTarget, nil)).Name; got != "Move_Ground" {
+		t.Fatalf("contextual click on a death-latched complete friendly = %q, want Move_Ground [04 R-ORD-02 §1]", got)
+	}
+	frame, frameTarget := repairAdmissionPair(t, 50)
+	frameTarget.Remaining = 0.5
+	if got := DescriptorFor(Resolve(1, frame, frameTarget, nil)).Name; got != "HelpBuild" {
+		t.Fatalf("contextual click on an unfinished friendly = %q, want HelpBuild [04 R-ORD-02 §1]", got)
 	}
 }
 

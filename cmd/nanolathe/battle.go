@@ -88,6 +88,14 @@ type battleSession struct {
 	scrollDelta     int32
 	scrollAnchorSet bool
 
+	// scrollSpeedByte caches the persisted scrollspeed byte [02 "Settings"]
+	// [07 §10] C2. It is read once — at battle entry, by primeScrollSetting —
+	// rather than from disk on every host frame [WU-19-114]; scrollSetting
+	// falls back to loading it lazily so a battleSession built without going
+	// through the composition root (tests) still resolves a real value. Valid
+	// bytes are 1..255, so 0 doubles as "not primed yet".
+	scrollSpeedByte byte
+
 	// The footer's pointer record [07 R-HUD-03 §1]. Both words are
 	// presentation-only: the simulation neither writes nor reads them [I6].
 	// footerHoverUnit is rewritten only while the pointer is inside the view
@@ -257,6 +265,9 @@ func composeBattleEntryDetached(sess *session.Session, cat *content.Catalog, cs 
 		millisSource: newMonotonicMillisSource(), battleUI: ui.NewProductionBattleState(),
 		watcherSlot: sessionLocalIsWatcher(sess),
 	}
+	// Prime the scroll-speed cache once here, at battle entry, instead of
+	// leaving the first camera-pan frame to fault it in lazily [WU-19-114].
+	b.primeScrollSetting()
 	// Rail detent cues are emitted by canonical UI state; this callback only
 	// adapts the authored cue to the session audio sink [07 §6][I6].
 	b.battleUI.SetPanelCue(func(name string) {
@@ -1777,13 +1788,60 @@ func (b *battleSession) stockpileSelected(queued bool) {
 
 // scrollSetting returns the persisted scroll speed byte [02 "Settings"] [07 §10] C2.
 // It is presentation-only and never touches sim [I6].
+//
+// The value is cached on b.scrollSpeedByte rather than re-read from disk on
+// every call: the camera pan block in the per-frame input path (~handleInput)
+// calls this once per host frame, and settings.Load is a full file open plus
+// JSON parse [WU-19-114, reported by WU-19-109's profile: 8.8% of the frame
+// loop]. primeScrollSetting fills the cache once at battle entry the way
+// applyDamageBarsSetting(loadedSettings()) already primes the damage-bars bit;
+// the lazy fallback here only fires for a battleSession built without going
+// through that entry path (unit tests construct battleSession{} directly).
 func (b *battleSession) scrollSetting() byte { // [07 §10] [02 "Settings"]
-	s, _ := settings.Load()
-	ss := s.ScrollSpeed
+	if b == nil {
+		return byte(settings.DefaultScrollSpeed)
+	}
+	if b.scrollSpeedByte == 0 {
+		b.scrollSpeedByte = b.readScrollSetting()
+	}
+	return b.scrollSpeedByte
+}
+
+// readScrollSetting resolves the scrollspeed byte without caching. A battle
+// composed with a frontend shell attached reads the shell's own copy —
+// attachSettings already loaded it once at process startup [02 "Settings"],
+// so this costs no I/O at all — and a shell-less battle (tests, --shot) falls
+// back to a direct settings.Load, matching the one-read-per-battle behaviour
+// the entry-point priming gives the windowed path.
+func (b *battleSession) readScrollSetting() byte {
+	var ss int
+	if b != nil && b.shell != nil {
+		ss = b.shell.scrollSpeed
+	} else {
+		s, _ := settings.Load()
+		ss = s.ScrollSpeed
+	}
 	if ss <= 0 || ss > 255 {
 		ss = settings.DefaultScrollSpeed
 	}
 	return byte(ss)
+}
+
+// primeScrollSetting caches the scrollspeed byte once at battle entry
+// [WU-19-114]. Retail's in-battle ARMOPT modal chain (options -> exit ->
+// confirm [07 "Tab options menu and manual exit"]) has no live settings
+// editor — it only routes to save/load/main-menu/exit — so nothing inside a
+// running battle can change the persisted scrollspeed; the frontend's own
+// settings screens are reachable only before a battle exists (or after one
+// ends, since returning to the main menu ends the battleSession), and each
+// new battle re-primes the cache from composeBattleEntryDetached. Callable
+// more than once if that ever changes; it always re-reads rather than
+// trusting the existing cache.
+func (b *battleSession) primeScrollSetting() {
+	if b == nil {
+		return
+	}
+	b.scrollSpeedByte = b.readScrollSetting()
 }
 
 // refreshScrollDelta advances the scroll pass's clock and returns this host

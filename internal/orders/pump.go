@@ -22,7 +22,21 @@ const (
 	FlagAutoOp uint32 = 1 << iota // existence established [04 §3.3][05 "Queue subtraction"]; numeric values not established
 	FlagPurgeSurvivor
 	FlagTombstone
-	FlagRetryMark // [04 §3.3][R-ORDER-02 §2] code-9 completion flag; write-only state — no pump, cleanup, or handler may read it
+	// FlagRetryMark is the pump's code-9 completion flag
+	// [04 §3.3][R-ORDER-02 §2]. Nothing in this package reads it: no pump,
+	// cleanup or handler arm branches on it.
+	//
+	// Corrected 2026-09-02 (WU-19-107). This comment used to end "write-only
+	// state — no reader may be invented"; that is now wrong, and it stood
+	// against the reader research has since located. [04 R-PATH-01 §8] step 5.3
+	// gates the ground goal installer's synthetic straight-line fallback on
+	// "the unit has a current order record and that record's retiring flag is
+	// clear", and [05 R-EGRESS-02] names that flag as exactly this one — the
+	// fallback is suppressed for records the pump has already declared
+	// complete. That is what leaves a re-armed move standing still against a
+	// goal it cannot occupy instead of lurching at it once per re-arm. The
+	// reader belongs to internal/movement's goal installer, not to this file.
+	FlagRetryMark
 	// FlagStopBuildingPending marks a record whose StartBuilding emitter ran
 	// (EmitStartBuilding, the flag's only writer [R-ORDER-02 §2]); cleanup
 	// emits the StopBuilding counterpart on every removal path.
@@ -1754,7 +1768,7 @@ func (q *Queue) applyPrimaryResultCode(n *Node, code Code, tick uint32) bool {
 		q.cancelAll() // [04 §3.3] free every record on both segments and return; whole-queue cancel is exclusively primary code 7
 		return false
 	case 9:
-		n.Flags |= FlagRetryMark // [04 §3.3][R-ORDER-02 §2] completion flag; write-only — no reader may be invented
+		n.Flags |= FlagRetryMark // [04 §3.3][R-ORDER-02 §2] completion flag; its reader is the goal installer of [04 R-PATH-01 §8] step 5.3
 		// "Last" is having no record after it in the segment, which is not the
 		// same as being the only record: a handler that head-inserts a spawned
 		// record [04 R-ORD-01 §1] leaves itself behind that record and can
@@ -1881,7 +1895,7 @@ func (q *Queue) applySecondaryResultCode(n *Node, code Code, tick uint32) (advan
 		q.removeSecondaryRecord(n) // [04 §3.3] C8 remove the single record and return; no cancel-all
 		return 0, false
 	case 9:
-		n.Flags |= FlagRetryMark // [04 §3.3][R-ORDER-02 §2] completion flag; write-only — no reader may be invented
+		n.Flags |= FlagRetryMark // [04 §3.3][R-ORDER-02 §2] completion flag; its reader is the goal installer of [04 R-PATH-01 §8] step 5.3
 		// [04 §3.3] plain unlink+free — no re-arm, no draw, regardless of
 		// last/first position (the primary-only last-record re-arm [R-P0-01]
 		// does not apply to the secondary pump).

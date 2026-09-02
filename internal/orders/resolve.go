@@ -579,13 +579,219 @@ func resolveName(code int, actor *units.Unit, target *units.Unit, pos *ResolvePo
 	}
 }
 
+// Interface-type constants for the contextual code's two traced variants.
+//
+// Retail keeps one dword for this. The interface options page's `LEFTCLICK`
+// two-stage button (`Left Click|Right Click`) writes it, the chat command
+// `+IFace n` writes it, and it is persisted as the registry value
+// `Interface Type` whose absence reads `0`; the same word gates the frame
+// handler's click dispatch and the world-click cursor resolver
+// [07 R-CAM-01 §5][07 §8]. It is therefore a settable single-player option,
+// not a build-time constant — which is why the `1` variant below stays.
+const (
+	// InterfaceTypeLeftClick is retail's default (`Left Click`): the left
+	// button issues every world order and the contextual code runs the default
+	// variant of [04 R-ORD-02 §1] code 1.
+	InterfaceTypeLeftClick = 0
+	// InterfaceTypeRightClick is the `Right Click` polarity, under which the
+	// right button issues orders and the contextual code runs the `1` variant.
+	InterfaceTypeRightClick = 1
+)
+
+// interfaceType is the live value of that option. It starts at the registry
+// default and nothing in this build writes it yet: `internal/settings` carries
+// no `Interface Type` field, so the option page cannot produce the other value.
+//
+// TODO(T23): bind this to the interface options page when that page exists. The
+// researched source is the registry word named above — it must not become a
+// build flag or a per-call parameter, because retail reads one word for both
+// the click dispatch and the cursor resolver [07 R-CAM-01 §5].
+var interfaceType = InterfaceTypeLeftClick
+
+// InterfaceType reports the current value of the option [07 R-CAM-01 §5].
+func InterfaceType() int { return interfaceType }
+
+// SetInterfaceType writes the option. Values other than the two traced ones are
+// ignored: retail's loaders clamp the registry word to 0/1 [07 §8].
+func SetInterfaceType(v int) {
+	if v == InterfaceTypeLeftClick || v == InterfaceTypeRightClick {
+		interfaceType = v
+	}
+}
+
+// resolveContextual is command code 1. It has two traced variants selected by
+// the `Interface Type` option [04 R-ORD-02 §1][07 R-CAM-01 §5]; retail's
+// default, and this build's only reachable value, is `0`.
 func resolveContextual(actor *units.Unit, target *units.Unit, pos *ResolvePos) string {
+	if interfaceType == InterfaceTypeRightClick {
+		return resolveContextualRightClick(actor, target, pos)
+	}
+	return resolveContextualLeftClick(actor, target, pos)
+}
+
+// resolveContextualLeftClick is the `Interface Type = 0` variant — the default,
+// and the one a stock single-player session runs [04 R-ORD-02 §1] code 1:
+//
+//	(1) `canattack` and hostile → code 3
+//	(2) `canreclamate` and hostile → code 12
+//	(3) with a target: nano-reach and unfinished → code 8; then the own-unit
+//	    reject below
+//	(4) `canresurrect` + position + feature → Resurrect
+//	(5) `canreclamate` + position + feature → Reclaim or air twin
+//	(6) `canmove` and a live mover → move or air twin; else reject
+//
+// "The default variant therefore never turns a click on a damaged friendly into
+// a repair (only an unfinished one into assistance) and never resolves pickup,
+// follow, or landing contextually; those need the explicit codes." §7 states the
+// same path from the other side: a full-health friendly fails nano-reach and
+// "in the default variant it reaches the own-unit reject and then the feature
+// and move tests" [04 R-ORD-02 §7].
+func resolveContextualLeftClick(actor *units.Unit, target *units.Unit, pos *ResolvePos) string {
+	if target != nil && isHostile(actor, target) && canAttack(actor) {
+		if name := resolveAttackAt(actor, target, pos); name != "" {
+			return name
+		}
+	}
+	// Step 2 resolves the WHOLE of code 12, not a bare `ReclaimUnit`: "resolve
+	// as **code 12** (so the feature tests below run first and a hostile unit is
+	// reclaimed only when no feature is at the position)" [04 R-ORD-02 §1].
+	if target != nil && isHostile(actor, target) && canReclaim(actor) {
+		if name := resolveName(12, actor, target, pos); name != "" {
+			return name
+		}
+	}
+	if target != nil {
+		// Step 3's first half is code 8 restricted to the unfinished target:
+		// "nano-reach passes and the target is unfinished → resolve as code 8".
+		// Unlike the `1` variant, step 3 as traced carries no separate friendly
+		// term — and it needs none, because nano-reach demands the actor's
+		// canreclamate mirror bit, which is exactly step 2's gate, so a hostile
+		// target has already been consumed by step 2 before this line is
+		// reached.
+		if nanoReach(actor, target) && isUnfinished(target) {
+			if name := resolveName(8, actor, target, pos); name != "" {
+				return name
+			}
+		}
+		if rejectsOwnSelectableTarget(actor, target) {
+			return ""
+		}
+	}
+	// Steps 4 and 5. The reclaim arm carries its own `canreclamate` gate in both
+	// variants ([04 R-ORD-02 §1] code 1 steps 5 and 8); it was missing here, so
+	// a unit with no nanolathe at all answered a click on a tree with `Reclaim`.
+	if pos != nil && pos.HasFeature {
+		if pos.IsWreck && canResurrect(actor) && pos.FeatureResurrectable {
+			return "Resurrect"
+		}
+		if canReclaim(actor) {
+			if actor.Def != nil && actor.Def.CanFly {
+				return "VTOL_Reclaim"
+			}
+			return "Reclaim"
+		}
+	}
+	return contextualMoveArm(actor)
+}
+
+// rejectsOwnSelectableTarget is the default variant's own-unit reject
+// [04 R-ORD-02 §1] code 1 step 3: "when the target is **my own** (its owner slot
+// byte equals the local slot), selectable (state bit 5), complete, its
+// post-capture byte is 0, and it is either not carried or its carrier has state
+// bit 30 → **reject** (a click on one's own idle unit is a selection, not an
+// order)". The first four terms are the shared eligibility predicate `E(u)` of
+// [07 R-WGT-01 §9][07 R-WGT-01 §10], which is why the click path's cursor
+// answers `cursorselect` over exactly this target [07 R-CAM-01 §14 step 2].
+//
+// Two of the clauses need a word about how they are read here.
+//
+// *The owner term.* The traced word is the **local player's** slot byte, not the
+// acting unit's owner. This package has no local-slot source — the order queue's
+// binding carries the diplomacy row, not the viewing slot — and every code-1
+// issuer in this build acts for the slot that issued it: the battle click path
+// issues code 1 only for the local human's own selection, and the skirmish
+// planner issues codes 2, 3 and 9, never 1 [08 R-AI-01 §7]. So the actor's owner
+// slot IS the local slot at every reachable call site, and the two readings
+// cannot be told apart here. TODO(T23): if a second local-slot notion ever
+// appears — a spectator view, or a code-1 issuer acting for another slot — the
+// order package needs the session's local slot on the queue binding rather than
+// this equivalence.
+//
+// *The post-capture byte.* [04 R-ORD-02 §1] records its decrement site as
+// **Unknown** and directs that "until then a reimplementation treats it as
+// always 0"; [08 R-TRIG-01 §3] adds that the counter is armed only by a capture
+// whose new owner is a remote controller, so in single-player it is always zero.
+// There is no field to read and no term to write.
+func rejectsOwnSelectableTarget(actor, target *units.Unit) bool {
+	if actor == nil || target == nil {
+		return false
+	}
+	if target.Owner != actor.Owner {
+		return false
+	}
+	// Selectable (state bit 5) and complete — `E(u)`'s first two clauses.
+	if target.Flags&units.ClassifierEligibleStatus == 0 || target.Remaining != 0 {
+		return false
+	}
+	// "either not carried or its carrier has state bit 30". The bit is a static
+	// mirror of the carrier definition's `isairbase` flag [04 R-UNIT-06 §3], so
+	// cargo aboard an ordinary transport is not a selection and the click stays
+	// an order; cargo attached to an airbase is.
+	if target.Attachment.Carrier != 0 {
+		carrier := lookupUnitFor(actor, target.Attachment.Carrier)
+		if carrier == nil || carrier.Flags&units.CargoSelectableStatus == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// lookupUnitFor resolves a handle through the acting unit's queue binding, the
+// package's only unit-table access [P0-I16].
+func lookupUnitFor(actor *units.Unit, h pool.Handle) *units.Unit {
+	b := bindingOfUnit(actor)
+	if b == nil || b.Lookup == nil {
+		return nil
+	}
+	return b.Lookup(h)
+}
+
+// contextualMoveArm is the tail both variants share: "`canmove` **and a live
+// mover**, else reject" [04 R-ORD-02 §1]. There is no queued-move arm in code 1,
+// so a contextual click with an immobile builder selected resolves to nothing —
+// a factory rally is set with the explicit move command (code 2), not
+// contextually.
+func contextualMoveArm(actor *units.Unit) string {
+	if !canMove(actor) || !hasLiveMover(actor) {
+		return ""
+	}
+	if actor.Def != nil && actor.Def.CanFly {
+		return "VTOL_Move"
+	}
+	return "Move_Ground"
+}
+
+// resolveContextualRightClick is the `Interface Type = 1` variant
+// [04 R-ORD-02 §1] code 1. It is unreachable until the interface options page
+// can write the option (see interfaceType), but it is a traced retail path a
+// single-player session can select, so it is kept rather than deleted.
+func resolveContextualRightClick(actor *units.Unit, target *units.Unit, pos *ResolvePos) string {
 	// Hostile and able to attack becomes an attack order [04 §3.4] code 1
 	if target != nil && isHostile(actor, target) && canAttack(actor) {
 		name := resolveAttackAt(actor, target, pos)
 		if name != "" {
 			return name
 		}
+	}
+	// "`canreclamate` and hostile → `ReclaimUnit` or air twin" — step 2 of this
+	// variant is the unit reclaim itself, not a re-entry into code 12: the
+	// feature tests come after, which is the whole difference the default
+	// variant's "resolve as code 12" note points at [04 R-ORD-02 §1].
+	if target != nil && isHostile(actor, target) && canReclaim(actor) {
+		if actor.Def != nil && actor.Def.CanFly {
+			return "VTOL_ReclaimUnit"
+		}
+		return "ReclaimUnit"
 	}
 	// "friendly and nano-reach passes: target unfinished → `HelpBuild` or air
 	// twin, else `RepairUnit` or air twin" [04 R-ORD-02 §1] code 1 step 3. The
@@ -608,6 +814,13 @@ func resolveContextual(actor *units.Unit, target *units.Unit, pos *ResolvePos) s
 		}
 		return "RepairUnit"
 	}
+	// "(4) I am `canfly`, friendly, and the target has `isairbase` →
+	// `VTOL_Landing`" [04 R-ORD-02 §1]. The arm was missing, so a flyer's
+	// contextual click on its own pad was picked up or followed instead of
+	// landed.
+	if target != nil && actor.Def != nil && actor.Def.CanFly && !isHostile(actor, target) && isLandingPad(target) {
+		return "VTOL_Landing"
+	}
 	if target != nil && isCarriable(actor, target) {
 		if actor.Def != nil && actor.Def.CanFly {
 			return "VTOL_Pickup"
@@ -623,27 +836,19 @@ func resolveContextual(actor *units.Unit, target *units.Unit, pos *ResolvePos) s
 		}
 		return "Follow_Ground"
 	}
+	// Steps 7 and 8, each carrying its own capability gate [04 R-ORD-02 §1].
 	if pos != nil && pos.HasFeature {
 		if pos.IsWreck && canResurrect(actor) && pos.FeatureResurrectable {
 			return "Resurrect"
 		}
-		if actor.Def != nil && actor.Def.CanFly {
-			return "VTOL_Reclaim"
+		if canReclaim(actor) {
+			if actor.Def != nil && actor.Def.CanFly {
+				return "VTOL_Reclaim"
+			}
+			return "Reclaim"
 		}
-		return "Reclaim"
 	}
-	// Both interface variants of the contextual code end at the same move arm:
-	// `canmove` **and a live mover**, else reject [04 R-ORD-02 §1]. There is no
-	// queued-move arm in code 1, so a contextual click with an immobile builder
-	// selected resolves to nothing — a factory rally is set with the explicit
-	// move command (code 2), not contextually.
-	if !canMove(actor) || !hasLiveMover(actor) {
-		return ""
-	}
-	if actor.Def != nil && actor.Def.CanFly {
-		return "VTOL_Move"
-	}
-	return "Move_Ground"
+	return contextualMoveArm(actor)
 }
 
 func resolveMove(actor *units.Unit, target *units.Unit) string {

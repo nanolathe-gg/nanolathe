@@ -88,6 +88,14 @@ func newProductDef(name string, footX, footZ int32, metalCost int32, buildTime i
 		BuildTime:        buildTime,
 		MaxDamage:        200,
 		YardMap:          "o",
+		// A factory product is mobile content, and every stock mobile
+		// definition authors `CanMove`/`CanPatrol`. The fixture authors them
+		// too: since WU-19-107 the rally walk resolves command 2 and command 9
+		// against the PRODUCT [04 R-FAC-02 §4], and both codes reject on those
+		// definition gates before anything else [04 R-ORD-02 §1], so a product
+		// def missing them inherits `Park` instead of a rally record.
+		CanMove:   true,
+		CanPatrol: true,
 	}
 }
 
@@ -632,6 +640,11 @@ func TestRallyInheritanceOrdering(t *testing.T) {
 	facDef := newFactoryDef("armfac", 2, 2, 300)
 	cat.Units[content.CanonicalKey("armfac")] = facDef
 	prodDef := newProductDef("armflash", 2, 2, 100, 100)
+	// The allocator constructs a mover only for bmcode 1, and the rally walk
+	// runs only for a product that has one [04 R-FAC-02 §4][04 R-FAC-02 §5];
+	// a bmcode-0 product is building-class and its command-2 resolution is the
+	// queued marker, not a move [04 R-ORD-02 §1].
+	prodDef.BMCode = true
 	cat.Units[content.CanonicalKey("armflash")] = prodDef
 	w := newTestWorld(20)
 	h, _ := w.Create(facDef, 0, 0, 0, 0)

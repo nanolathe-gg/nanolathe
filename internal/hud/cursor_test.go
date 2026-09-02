@@ -71,6 +71,9 @@ func TestChooseCursorHoverTable(t *testing.T) {
 	enemy := unit(1, soldier)
 	hurtFriend := unit(0, soldier)
 	hurtFriend.Health = 40
+	hurtFrame := unit(0, soldier)
+	hurtFrame.Health = 40
+	hurtFrame.Remaining = 0.5
 
 	sel := func(us ...*units.Unit) CursorSelection {
 		return CursorSelection{Viewer: 0, Units: us}
@@ -95,7 +98,17 @@ func TestChooseCursorHoverTable(t *testing.T) {
 			CursorHover{OverWorld: true, Target: enemy}, render.CursorAttack},
 		{"idle bomber over enemy shows airstrike", input.LatchNormal, sel(unit(0, bomber)),
 			CursorHover{OverWorld: true, Target: enemy}, render.CursorAirstrike},
-		{"idle builder over damaged friend repairs", input.LatchNormal, sel(unit(0, builder)),
+		// The default interface type never turns a click on a damaged COMPLETE
+		// friendly into a repair [04 R-ORD-02 §1]; the click reaches the
+		// own-unit reject, and the shape that reject shows is `cursorselect`
+		// [07 §8][07 R-CAM-01 §14].
+		{"idle builder over damaged complete friend inspects", input.LatchNormal, sel(unit(0, builder)),
+			CursorHover{OverWorld: true, Target: hurtFriend}, render.CursorSelect},
+		{"idle builder over damaged UNFINISHED friend repairs", input.LatchNormal, sel(unit(0, builder)),
+			CursorHover{OverWorld: true, Target: hurtFrame}, render.CursorRepair},
+		// The MOVE latch is code 2, which does repair a damaged complete
+		// friendly [04 R-ORD-02 §1] — the one row `needsWork` still serves.
+		{"armed move over damaged complete friend repairs", input.LatchMove, sel(unit(0, builder)),
 			CursorHover{OverWorld: true, Target: hurtFriend}, render.CursorRepair},
 		{"idle builder over wreck reclaims", input.LatchNormal, sel(unit(0, builder)),
 			CursorHover{OverWorld: true, Feature: wreck}, render.CursorReclamate},
@@ -194,7 +207,9 @@ func TestIdleUnitWithAStandingRecordIsInspectable(t *testing.T) {
 // fraction is nonzero yields `cursorrepair`, not `cursorselect`. It is the same
 // word the inspect gate reads, in the opposite sense.
 func TestIdleLatchRepairsAnUnfinishedFriendly(t *testing.T) {
-	builderDef := &content.UnitDef{UnitName: "ARMCV", CanMove: true, Builder: true}
+	// A construction vehicle authors both `builder` and `canreclamate`; the
+	// resolver's assistance admission reads the second [04 R-ORD-01 §7].
+	builderDef := &content.UnitDef{UnitName: "ARMCV", CanMove: true, Builder: true, CanReclamate: true}
 	builder := unit(0, builderDef)
 
 	target := unit(0, &content.UnitDef{UnitName: "ARMSOLAR"})
@@ -211,5 +226,66 @@ func TestIdleLatchRepairsAnUnfinishedFriendly(t *testing.T) {
 	target.Remaining = 0
 	if got := ChooseCursor(input.LatchNormal, sel, h); got != render.CursorSelect {
 		t.Fatalf("a finished own unit must give cursorselect, got %v [07 §8]", got)
+	}
+}
+
+// TestIdleCursorMatchesTheDefaultResolverRows is the cursor half of the
+// contextual code's default variant [04 R-ORD-02 §1] code 1: the idle-latch
+// shape must promise what the resolver would issue, which is [07 §8]'s "gated on
+// the same authored capability flags the order predicate reads". Each row names
+// the resolver step it mirrors.
+func TestIdleCursorMatchesTheDefaultResolverRows(t *testing.T) {
+	builderDef := &content.UnitDef{UnitName: "ARMCV", CanMove: true, Builder: true,
+		CanReclamate: true, CanGuard: true}
+	// A factory: the authored `builder` key without the `canreclamate` mirror
+	// bit the assistance admission reads [04 R-ORD-01 §7].
+	factoryDef := &content.UnitDef{UnitName: "ARMVP", CanMove: true, Builder: true}
+	enemyDef := &content.UnitDef{UnitName: "CORAK", CanMove: true, CanAttack: true}
+
+	builder := unit(0, builderDef)
+	factory := unit(0, factoryDef)
+
+	frame := unit(0, &content.UnitDef{UnitName: "ARMSOLAR"})
+	frame.Remaining = 0.5
+	damagedComplete := unit(0, &content.UnitDef{UnitName: "ARMSOLAR"})
+	damagedComplete.Health = 40
+	enemy := unit(1, enemyDef)
+
+	sel := func(us ...*units.Unit) CursorSelection {
+		return CursorSelection{Viewer: 0, Units: us,
+			Hostile: func(_, target *units.Unit) bool { return target.Owner != 0 }}
+	}
+	cases := []struct {
+		name  string
+		sel   CursorSelection
+		hover CursorHover
+		want  int
+	}{
+		// Step 1: hostile and `canattack`.
+		{"hostile unit, attacker", sel(unit(0, enemyDef)),
+			CursorHover{OverWorld: true, Target: enemy}, render.CursorAttack},
+		// Step 2: hostile and `canreclamate`, no attack capability.
+		{"hostile unit, reclaimer", sel(builder),
+			CursorHover{OverWorld: true, Target: enemy}, render.CursorReclamate},
+		// Step 3 first half: an unfinished friendly is the only repair-shaped row.
+		{"unfinished friendly, reclaimer", sel(builder),
+			CursorHover{OverWorld: true, Target: frame}, render.CursorRepair},
+		// ... and only for an actor carrying the flag the admission reads.
+		{"unfinished friendly, factory without the mirror bit", sel(factory),
+			CursorHover{OverWorld: true, Target: frame}, render.CursorMove},
+		// Step 3 second half: the own-unit reject shows the select shape.
+		{"damaged complete own unit", sel(builder),
+			CursorHover{OverWorld: true, Target: damagedComplete}, render.CursorSelect},
+		// Step 5 and step 6.
+		{"reclaimable feature", sel(builder),
+			CursorHover{OverWorld: true, Feature: &content.FeatureDef{Reclaimable: true}},
+			render.CursorReclamate},
+		{"open ground", sel(builder), CursorHover{OverWorld: true}, render.CursorMove},
+	}
+	for _, tc := range cases {
+		if got := ChooseCursor(input.LatchNormal, tc.sel, tc.hover); got != tc.want {
+			t.Errorf("%s: got %d (%s) want %d (%s) [07 §8][04 R-ORD-02 §1]",
+				tc.name, got, render.CursorName(got), tc.want, render.CursorName(tc.want))
+		}
 	}
 }

@@ -153,9 +153,17 @@ func TestResolveFullTable(t *testing.T) {
 	}))
 	setTestHostility(actor, func(a, b *units.Unit) bool { return a.Def.Side != b.Def.Side })
 	assertResolve(1, hostileTarget, nil, "Attack_Chase")
+	// The default interface type "never turns a click on a damaged friendly
+	// into a repair (only an unfinished one into assistance)"
+	// [04 R-ORD-02 §1]: a damaged COMPLETE friendly falls past step 3's
+	// assistance half, past the own-unit reject (this fixture carries no
+	// selectable bit — see TestContextualDefaultVariantRows for the reject
+	// itself), past the feature tests, and out at the move.
 	friendlyDamaged := mkUnit(3, 0, "ARM", 50, 100, true, 0, mkDef(nil))
 	setTestHostility(actor, func(a, b *units.Unit) bool { return false })
-	assertResolve(1, friendlyDamaged, nil, "RepairUnit")
+	assertResolve(1, friendlyDamaged, nil, "Move_Ground")
+	friendlyFrame := mkUnit(30, 0, "ARM", 50, 100, true, 0.5, mkDef(nil))
+	assertResolve(1, friendlyFrame, nil, "HelpBuild")
 	transportable := mkUnit(4, 1, "CORE", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
 		d.CantBeTransported = false
 	}))
@@ -171,9 +179,17 @@ func TestResolveFullTable(t *testing.T) {
 	setTestAdmission(actorNoAttack, func(_, candidate *units.Unit) bool {
 		return candidate != nil && candidate.Def != nil && !candidate.Def.CantBeTransported
 	})
+	// The default variant "never resolves pickup, follow, or landing
+	// contextually; those need the explicit codes" [04 R-ORD-02 §1]. This
+	// fixture's hostility predicate answers true, and the actor authors
+	// `canreclamate`, so the click is consumed by step 2 — code 12 with a
+	// target and no feature at the position. Code 6 still picks it up.
 	id := Resolve(1, actorNoAttack, transportable, nil)
-	if got := DescriptorFor(id).Name; got != "Ground_Pickup" {
-		t.Fatalf("code1 transportable want Ground_Pickup got %q", got)
+	if got := DescriptorFor(id).Name; got != "ReclaimUnit" {
+		t.Fatalf("code1 hostile carriable want ReclaimUnit got %q", got)
+	}
+	if got := DescriptorFor(Resolve(6, actorNoAttack, transportable, nil)).Name; got != "Ground_Pickup" {
+		t.Fatalf("code6 transportable want Ground_Pickup got %q", got)
 	}
 	actorCanResurrect := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
 		d.CanMove = true
@@ -1096,5 +1112,144 @@ func TestResolvePositionOnlyAttackUsesCanonicalCodeThreeArm(t *testing.T) {
 	unarmed.Flags &^= units.ArmedStatus
 	if got := Resolve(3, unarmed, nil, pos); got != 0 {
 		t.Fatalf("unarmed position attack id=%d, want reject sentinel", got)
+	}
+}
+
+// TestContextualDefaultVariantRows walks the `Interface Type = 0` variant's six
+// steps in order [04 R-ORD-02 §1] code 1. This is retail's default and the only
+// value this build runs (see interfaceType); the rows it locks are the ones the
+// `1` variant would answer differently, so a silent slip back to that variant
+// fails here.
+func TestContextualDefaultVariantRows(t *testing.T) {
+	if InterfaceType() != InterfaceTypeLeftClick {
+		t.Fatalf("interface type = %d, want the registry default %d [07 R-CAM-01 §5]",
+			InterfaceType(), InterfaceTypeLeftClick)
+	}
+	newActor := func(handle pool.Handle) *units.Unit {
+		a := mkUnit(handle, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
+			d.CanAttack = true
+			d.CanReclamate = true
+			d.CanMove = true
+			d.CanGuard = true // the `1` variant would follow; this one must not
+			d.CanLoad = true  // ... nor pick up
+			d.CanFly = false
+			d.MaxWaterDepth = 255
+		}))
+		setTestHostility(a, func(_, target *units.Unit) bool { return target.Owner != a.Owner })
+		setTestAdmission(a, func(_, candidate *units.Unit) bool { return candidate != nil })
+		return a
+	}
+	name := func(a, target *units.Unit, pos *ResolvePos) string {
+		return DescriptorFor(Resolve(1, a, target, pos)).Name
+	}
+
+	// Step 3, first half: an unfinished friendly is assistance, resolved as
+	// code 8 — the one repair-family answer the default variant gives.
+	frame := mkUnit(10, 0, "ARM", 30, 100, true, 0.5, mkDef(nil))
+	if got := name(newActor(1), frame, nil); got != "HelpBuild" {
+		t.Fatalf("unfinished friendly = %q, want HelpBuild [04 R-ORD-02 §1] code 1 step 3", got)
+	}
+
+	// Step 3, second half — the own-unit reject. A complete, selectable unit of
+	// my own slot is a selection, not an order, so the click resolves NOTHING,
+	// even though the actor could move, guard and carry it.
+	own := mkUnit(11, 0, "ARM", 40, 100, true, 0, mkDef(nil))
+	own.Flags |= units.ClassifierEligibleStatus
+	if id := Resolve(1, newActor(2), own, nil); id != 0 {
+		t.Fatalf("own complete selectable target resolved %q, want the reject identity"+
+			" [04 R-ORD-02 §1] code 1 step 3", DescriptorFor(id).Name)
+	}
+	// Each clause of the reject in turn: drop one and the click falls through to
+	// the move arm [07 R-WGT-01 §9].
+	notSelectable := mkUnit(12, 0, "ARM", 40, 100, true, 0, mkDef(nil))
+	if got := name(newActor(3), notSelectable, nil); got != "Move_Ground" {
+		t.Fatalf("target without the selectable bit = %q, want Move_Ground", got)
+	}
+	otherSlot := mkUnit(13, 2, "ARM", 40, 100, true, 0, mkDef(nil))
+	otherSlot.Flags |= units.ClassifierEligibleStatus
+	actorAllied := newActor(4)
+	setTestHostility(actorAllied, func(_, _ *units.Unit) bool { return false })
+	if got := name(actorAllied, otherSlot, nil); got != "Move_Ground" {
+		t.Fatalf("another slot's unit = %q, want Move_Ground (the reject is own-slot only)", got)
+	}
+
+	// The carrier clause: cargo aboard an ordinary transport is not a selection,
+	// cargo attached to a carrier carrying the cargo-selectable bit is
+	// [04 R-UNIT-06 §3][07 R-WGT-01 §9].
+	plainCarrier := mkUnit(20, 0, "ARM", 100, 100, true, 0, mkDef(nil))
+	padCarrier := mkUnit(21, 0, "ARM", 100, 100, true, 0, mkDef(nil))
+	padCarrier.Flags |= units.CargoSelectableStatus
+	carried := mkUnit(22, 0, "ARM", 40, 100, true, 0, mkDef(nil))
+	carried.Flags |= units.ClassifierEligibleStatus
+	carried.Attachment.Carrier = plainCarrier.Handle
+	actorCarry := newActor(5)
+	setTestLookup(actorCarry, func(h pool.Handle) *units.Unit {
+		switch h {
+		case plainCarrier.Handle:
+			return plainCarrier
+		case padCarrier.Handle:
+			return padCarrier
+		}
+		return nil
+	})
+	if got := name(actorCarry, carried, nil); got != "Move_Ground" {
+		t.Fatalf("cargo aboard an ordinary transport = %q, want Move_Ground", got)
+	}
+	carried.Attachment.Carrier = padCarrier.Handle
+	if id := Resolve(1, actorCarry, carried, nil); id != 0 {
+		t.Fatalf("cargo on a cargo-selectable carrier resolved %q, want the reject identity",
+			DescriptorFor(id).Name)
+	}
+
+	// Step 1: a hostile unit an actor can attack.
+	enemy := mkUnit(30, 1, "CORE", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
+		d.Side = "CORE"
+		d.CanMove = true
+	}))
+	enemy.Move.Mode = 1
+	if got := name(newActor(6), enemy, nil); got != "Attack_Chase" {
+		t.Fatalf("hostile target = %q, want Attack_Chase [04 R-ORD-02 §1] code 1 step 1", got)
+	}
+
+	// Step 2: with no attack capability, a `canreclamate` actor strips the same
+	// hostile target — resolved as code 12, so the feature at the position wins
+	// over the unit when there is one.
+	stripper := newActor(7)
+	stripper.Def.CanAttack = false
+	stripper.Flags &^= units.ArmedStatus
+	if got := name(stripper, enemy, nil); got != "ReclaimUnit" {
+		t.Fatalf("hostile target, no attack = %q, want ReclaimUnit [04 R-ORD-02 §1] code 1 step 2", got)
+	}
+	feature := &ResolvePos{HasFeature: true}
+	if got := name(stripper, enemy, feature); got != "Reclaim" {
+		t.Fatalf("hostile target over a feature = %q, want Reclaim — code 12 resolves the"+
+			" feature first [04 R-ORD-02 §1] code 1 step 2", got)
+	}
+
+	// Steps 4, 5 and 6 with no target.
+	reviver := newActor(8)
+	reviver.Def.CanResurrect = true
+	wreck := &ResolvePos{HasFeature: true, IsWreck: true, FeatureResurrectable: true}
+	if got := name(reviver, nil, wreck); got != "Resurrect" {
+		t.Fatalf("resurrectable wreck = %q, want Resurrect [04 R-ORD-02 §1] code 1 step 4", got)
+	}
+	if got := name(newActor(9), nil, feature); got != "Reclaim" {
+		t.Fatalf("feature = %q, want Reclaim [04 R-ORD-02 §1] code 1 step 5", got)
+	}
+	// Step 5 carries its own `canreclamate` gate: a unit with no nanolathe does
+	// not answer a click on a tree with a reclaim.
+	bare := mkUnit(40, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
+		d.CanAttack = false
+		d.CanReclamate = false
+		d.CanMove = true
+	}))
+	bare.Flags &^= units.ArmedStatus
+	setTestHostility(bare, func(_, _ *units.Unit) bool { return false })
+	if got := name(bare, nil, feature); got != "Move_Ground" {
+		t.Fatalf("feature, actor without canreclamate = %q, want Move_Ground"+
+			" [04 R-ORD-02 §1] code 1 step 5", got)
+	}
+	if got := name(newActor(10), nil, nil); got != "Move_Ground" {
+		t.Fatalf("open ground = %q, want Move_Ground [04 R-ORD-02 §1] code 1 step 6", got)
 	}
 }

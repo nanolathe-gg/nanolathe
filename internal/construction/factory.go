@@ -2104,9 +2104,32 @@ func (s *Service) rallyInheritance(factory *units.Unit, product *units.Unit, tic
 	prim := fq.Primary()
 	qMoveID := orders.Lookup("QMove")
 	qPatrolID := orders.Lookup("QPatrol")
-	moveID := orders.Lookup("Move_Ground")
-	patrolID := orders.Lookup("Patrol")
 	parkID := orders.Lookup("Park")
+	// [04 R-FAC-02 §4]: "a record whose name is `QMove` is RESOLVED AS COMMAND
+	// 2 (move) and one named `QPatrol` as command 9 (patrol) AGAINST THE
+	// PRODUCT with the record's goal triple". The descriptor a rally record
+	// becomes is therefore the product's own resolution, not a constant.
+	//
+	// Corrected 2026-09-02 (WU-19-107, playtest report 4: "planes are not
+	// moving off the factory properly and are piling up, making it impossible
+	// to build more until manually moving them"). This walk used to hard-code
+	// `Move_Ground` and `Patrol`, so an aircraft product of a factory carrying
+	// a rally point received the GROUND move handler. Nothing recovers from
+	// that: an aircraft is never admitted to the ground path scheduler
+	// ([04 R-PATH-01 §9]), so no movement bit ever satisfies the record's
+	// `0xE0` gate and it stalls at the head forever; and because the record is
+	// not an air one it never runs the takeoff preamble, so the product's mover
+	// mode stays 1 and its stamp stays on the GROUND plane — which is exactly
+	// the occupancy the next product's state-2 test and the yard-close
+	// admission gate wait on ([04 R-AIR-02] step 3, [04 R-FAC-02 §5],
+	// [04 R-FAC-02 §6]). The plant stops after its first product until the
+	// player moves the aircraft by hand, which issues the same command 2 and
+	// resolves the air executor the rally should have.
+	//
+	// Codes 2 and 9 read no position and no target ([04 R-ORD-02 §1]), so the
+	// goal triple rides on the record rather than through the resolver.
+	moveID := orders.Resolve(2, product, nil, nil)
+	patrolID := orders.Resolve(9, product, nil, nil)
 
 	inherited := 0
 	pq := orders.BindQueueBinding(product, s.OrderBinding)

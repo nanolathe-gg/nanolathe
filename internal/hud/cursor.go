@@ -303,7 +303,28 @@ func contextualCursor(u *units.Unit, h CursorHover, sel CursorSelection, hostile
 		return cursorForActor(input.LatchReclaim, u, h, sel)
 	}
 	if t != nil {
-		if canAssist(def) && allied && needsWork(t) {
+		// "`cursorrepair` over a friendly target needing assistance,
+		// `cursorselect` over an own finished unit" [07 §8], in that order — the
+		// same order as the resolver's step 3, whose assistance half runs before
+		// its own-unit reject [04 R-ORD-02 §1].
+		//
+		// "Needing assistance" is *unfinished*, not *damaged*. The default
+		// interface type is the only one this build runs, and its contextual
+		// code "never turns a click on a damaged friendly into a repair (only an
+		// unfinished one into assistance)" [04 R-ORD-02 §1]; a damaged complete
+		// friendly reaches the own-unit reject instead [04 R-ORD-02 §7]. This row
+		// used to read `needsWork`, which is damaged-or-unfinished — code 2's
+		// condition, correct under the MOVE latch above and nowhere else — so the
+		// cursor promised a repair the click then refused.
+		//
+		// The capability gate is the actor's `canreclamate` mirror bit, because
+		// that is the flag the resolver reads: the assistance arm's whole
+		// admission is nano-reach, whose first term is the mirror bit
+		// [04 R-ORD-01 §7][04 R-ORD-02 §1]. §8 requires the shape to be "gated on
+		// the same authored capability flags the order predicate reads", and the
+		// authored `builder` key is a different key — a factory carries it
+		// without a nanolathe.
+		if allied && def.CanReclamate && underConstruction(t) {
 			return render.CursorRepair
 		}
 		if isInspectable(t, sel.Viewer) {
@@ -343,13 +364,25 @@ func reclaimableFeature(h CursorHover) bool {
 // [04 §3.4].
 func canAssist(def *content.UnitDef) bool { return def.Builder }
 
-// needsWork reports a target assistance would act on: still under construction,
-// or damaged [04 §3.4].
+// needsWork reports a target the MOVE latch's repair arm would act on: still
+// under construction, or damaged. Both are code 2's condition — "the target is
+// unfinished → `HelpBuild`; the target's 16-bit health is below its `maxdamage`
+// → `RepairUnit`" [04 R-ORD-02 §1] — and code 2 is the one arm that adds a
+// health test of its own [04 R-ORD-02 §7]. It is deliberately NOT the idle
+// latch's condition: see contextualCursor.
 func needsWork(t *units.Unit) bool {
 	if t == nil {
 		return false
 	}
 	return t.Remaining != 0 || t.Health < t.MaxHealth
+}
+
+// underConstruction is the idle latch's assistance condition: the contextual
+// code's default variant assists only an unfinished target [04 R-ORD-02 §1].
+// "Unfinished" is remaining-build fraction not zero, with no upper bound — the
+// same comparison every eligibility site makes [07 R-WGT-01 §10][04 §2.3].
+func underConstruction(t *units.Unit) bool {
+	return t != nil && t.Remaining != 0
 }
 
 // canCarry is the transport admission gate for the shape only; the full

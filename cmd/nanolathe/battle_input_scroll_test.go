@@ -1,11 +1,13 @@
 package main
 
 import (
+	"os"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe/nanolathe/internal/settings"
 )
 
 // fakeMillisSource is a deterministic stand-in for the host millisecond
@@ -231,4 +233,68 @@ func TestScrollAcrossPauseUsesFrozenDelta(t *testing.T) {
 			t.Fatalf("the frame after unpause scrolled %d map pixels, want %d", got, setting)
 		}
 	})
+}
+
+// TestScrollSettingReadsSettingsFileOnceNotPerFrame locks WU-19-114: the
+// camera-pan block must not open and parse the settings file on every host
+// frame. scrollSetting caches the byte on first read (primeScrollSetting does
+// the same thing explicitly at battle entry [composeBattleEntryDetached]);
+// this asserts the cache, not a call-count seam, because settings.Load has no
+// injectable hook and adding one only for a test would be its own scope
+// creep — the cache is the observable contract.
+func TestScrollSettingReadsSettingsFileOnceNotPerFrame(t *testing.T) {
+	path := t.TempDir() + "/settings.json"
+	t.Setenv(settings.EnvPath, path)
+
+	write := func(scrollSpeed int) {
+		blob := settings.Defaults()
+		blob.ScrollSpeed = scrollSpeed
+		if err := blob.Save(); err != nil {
+			t.Fatalf("Save: %v", err)
+		}
+	}
+
+	write(99)
+	b := &battleSession{}
+	if got := b.scrollSetting(); got != 99 {
+		t.Fatalf("first read = %d, want 99", got)
+	}
+
+	// Change the file underneath the cached battle. A camera-pan frame that
+	// still called settings.Load per frame would pick this up immediately;
+	// the cached path must not.
+	write(50)
+	for i := 0; i < 5; i++ {
+		if got := b.scrollSetting(); got != 99 {
+			t.Fatalf("cached read after file change = %d, want the cached 99 (no per-frame file I/O)", got)
+		}
+	}
+
+	// The refresh hook — primeScrollSetting, called again — is how a settings
+	// change is meant to reach a live battle (at battle entry today; nothing
+	// inside a running battle currently writes settings, since ARMOPT's modal
+	// chain has no live settings editor [07 "Tab options menu and manual
+	// exit"], so this exercises the mechanism the entry point already uses).
+	b.primeScrollSetting()
+	if got := b.scrollSetting(); got != 50 {
+		t.Fatalf("after primeScrollSetting = %d, want the refreshed 50", got)
+	}
+}
+
+// TestScrollSettingUsesAttachedShellWithoutDisk confirms a battle composed
+// with a frontend shell attached reads the shell's already-loaded scroll
+// speed [gameShell.scrollSpeed, populated once at process startup by
+// attachSettings] rather than hitting the settings file a second time.
+func TestScrollSettingUsesAttachedShellWithoutDisk(t *testing.T) {
+	// Point NANOLATHE_SETTINGS at a path that does not exist. If
+	// readScrollSetting ever fell through to settings.Load with a shell
+	// attached, it would silently read defaults instead of the shell's value
+	// and this test would fail on the mismatch below.
+	t.Setenv(settings.EnvPath, os.DevNull+"-does-not-exist")
+
+	shell := &gameShell{scrollSpeed: 77}
+	b := &battleSession{shell: shell}
+	if got := b.scrollSetting(); got != 77 {
+		t.Fatalf("scrollSetting with an attached shell = %d, want the shell's 77", got)
+	}
 }
