@@ -45,7 +45,10 @@ func testBuilder(defKey string) *units.Unit {
 
 func testEcon(player uint8, curEnergy, capEnergy, curMetal, capMetal float32, prodE, prodM, consE, consM float32) *economy.Service {
 	var svc economy.Service
-	// Ensure player slot exists
+	// Ensure player slot exists. The slot is a computer player: the profile
+	// grammar's `limit` directive applies only to a slot whose control byte is
+	// 2 [08 R-AI-01 §12] [05 R-SHARE-01 §1].
+	svc.Players[player].ControllerState = 2
 	svc.Players[player].Stock[economy.Energy] = curEnergy
 	svc.Players[player].Capacity[economy.Energy] = capEnergy
 	svc.Players[player].Stock[economy.Metal] = curMetal

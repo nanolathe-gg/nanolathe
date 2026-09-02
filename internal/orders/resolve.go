@@ -2,6 +2,7 @@
 package orders
 
 import (
+	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -1065,17 +1066,39 @@ func absFixed(v int64) int64 {
 // Guard assistance triggers [04 §3.5] Follow_Ground / VTOL_Follow / Guard_NoMove
 // ---------------------------------------------------------------------------
 
-func isInDedupArr(arr *[units.GuardLatchSize]pool.Handle, h pool.Handle) bool {
-	for i := 0; i < units.GuardLatchSize; i++ {
-		if arr[i] == h {
-			return true
-		}
+// The guard's two gate bit values, named rather than spelled as literals
+// [04 R-UNIT-06 §1][04 R-ORD-01 §8 point 4]. The follow-maintenance leg arms
+// both; the combat join consumes the higher one out of the record's satisfied
+// word.
+//
+// [04 R-UNIT-06 §1] records the PRODUCERS of these two bits as Unknown: the
+// bounded census of node-pending writers found the three goal installers (which
+// clear bits 5-9 only), the satisfied-bit raiser's nine call sites (`0x20`,
+// `0x40`, `0x80`, `0x100`, `0x200` only), the constructor's zero and the
+// deadline expiry's bit 0 — and no writer of `0x08` or `0x10` anywhere. The
+// consumer semantics are Established, so the join is written to that contract;
+// nothing in this build raises the join bit either, so it stands ready and does
+// not fire.
+const (
+	guardRearmBits     uint32 = 0x18
+	guardCombatJoinBit uint32 = 0x10
+)
+
+// unitByHandle resolves a pool handle through the acting unit's queue binding,
+// the same seam targetOf reads a record's target through [P0-I16].
+func unitByHandle(actor *units.Unit, h pool.Handle) *units.Unit {
+	if actor == nil || h == 0 {
+		return nil
 	}
-	return false
-}
-func pushDedupArr(arr *[units.GuardLatchSize]pool.Handle, h pool.Handle) {
-	copy(arr[0:], arr[1:])
-	arr[units.GuardLatchSize-1] = h
+	q := QueueForUnit(actor)
+	if q == nil {
+		return nil
+	}
+	binding := q.Binding()
+	if binding == nil || binding.Lookup == nil {
+		return nil
+	}
+	return binding.Lookup(h)
 }
 
 func getLookupForWard(n *Node, u *units.Unit) *units.Unit {
@@ -1094,16 +1117,162 @@ func getLookupForWard(n *Node, u *units.Unit) *units.Unit {
 	return nil
 }
 
-func wardHasConstruction(ward *units.Unit) bool {
-	// An unfinished ward, on the same "not zero" reading isUnfinished carries
-	// [04 §2.3][05 R-WORK-01 §1]; a ward whose fraction is still exactly 1 is a
-	// nanoframe nobody has worked yet, which is the case a guard is most likely
-	// to be pointed at (PT3-04).
-	return isUnfinished(ward)
+// wardIsAllied is leg 1's diplomacy term [04 R-UNIT-06 §1]. It is the same
+// alliance question every other simulation consumer asks, and this build asks
+// it through the one seam that carries the session's alliance rows
+// [05 R-SHARE-01 §1].
+//
+// TODO(question): [04 R-UNIT-06 §1] writes the term as "the ward's owner's
+// diplomacy byte toward the guard's side reads **zero** (allied)". The gloss
+// and the value disagree with two Established statements about the same rows:
+// [05 R-SHARE-01 §1] traces row A as "non-zero = allied" and gives the
+// per-consumer predicates as `X.A[Y] != 0`, and [04 R-ORD-02 §1] states the
+// resolver's byte as "0 is hostile, any other value friendly". Two sections
+// against one, and both readings agree with the gloss "(allied)", so the
+// ALLIED sense is implemented here and the literal "reads zero" is treated as a
+// transcription slip. What would settle it: a re-trace of the guard handler's
+// diplomacy load showing which row it indexes and the sense of the branch that
+// follows it.
+func wardIsAllied(actor, ward *units.Unit) bool {
+	return actor != nil && ward != nil && !isHostile(actor, ward)
 }
-func isFriendlyConstruction(actor, ward *units.Unit) bool {
-	return !isHostile(actor, ward)
+
+// guardWillChase is leg 1's no-chase term [04 R-UNIT-06 §1]: the ward's
+// engagement target's definition must be absent from the GUARD's
+// `nochasecategory` bit array. The same array the retaliation branch tests
+// [08 R-AI-01 §11], read here off the guard rather than the victim.
+func guardWillChase(guard, target *units.Unit) bool {
+	if guard == nil || guard.Def == nil || target == nil || target.Def == nil {
+		return false
+	}
+	return !target.Def.DefinitionMask().Intersects(guard.Def.NoChaseCategoryMask)
 }
+
+// guardCombatJoin is leg 1's issue [04 R-UNIT-06 §1] as corrected by
+// [04 §3.3 "Follow_Ground"]: the shared auto-engage issuer of
+// [04 R-STANCE-01 §3] entered with its FORCE flag set. Force bypasses that
+// issuer's two stance gates — "the queued-mode attack bypasses the
+// standing-order gates" is exactly this flag — leaving admission steps 1 and 4:
+// the unit is not its own target, and command code 3 resolves to a name. The
+// resolved record goes in through the head insert, so the guard record waits
+// behind the attack and resumes when it is gone; the "queue tail" of §1's own
+// wording is corrected there.
+//
+// The two guard handlers are the only caller family that sets force
+// [04 R-STANCE-01 §3], which is why this arm is here rather than folded into
+// standing.go's force-free autoEngage.
+func guardCombatJoin(u *units.Unit, target *units.Unit) bool {
+	if u == nil || target == nil || u == target {
+		return false
+	}
+	id := Resolve(3, u, target, nil)
+	if id == 0 {
+		return false
+	}
+	q := QueueOfUnit(u)
+	if q == nil {
+		return false
+	}
+	node := Node{Owner: u.Handle, Target: target.Handle, GoalX: target.X, GoalY: target.Y, GoalZ: target.Z}
+	if isSecondary(id) {
+		q.PushSecondary(id, node)
+		return true
+	}
+	q.PushHead(id, node)
+	return true
+}
+
+// guardSlotBadTargetMask is the per-slot bad-target category array leg 2 tests
+// against: the three authored `wpri_`/`wsec_`/`wspe_badTargetCategory` keys in
+// slot order [02 "Unit record"][06 §3.2].
+func guardSlotBadTargetMask(def *content.UnitDef, idx int) content.CategoryMask {
+	if def == nil {
+		return content.CategoryMask{}
+	}
+	switch idx {
+	case 0:
+		return def.BadTargetCategoryWPRIMask
+	case 1:
+		return def.BadTargetCategoryWSECMask
+	case 2:
+		return def.BadTargetCategoryWSPEMask
+	}
+	return content.CategoryMask{}
+}
+
+// guardSlotKeepsTarget is leg 2's "slots already holding a legal in-range
+// target are left alone" [04 R-UNIT-06 §1]. A slot keeps its target when all
+// three of the rebind conditions fail: it HAS a target that resolves to a unit,
+// that unit is in range, and that unit's definition is absent from this slot's
+// bad-target array.
+//
+// "Resolve the slot's stored target" is the read of [04 R-ORD-01 §1], which
+// "yields the unit only while the companion carries the unit marker and the id
+// is nonzero" — so a slot bound to a ground point resolves to nothing and reads
+// as "no target".
+func guardSlotKeepsTarget(u *units.Unit, s *units.Slot, idx int) bool {
+	if u == nil || s == nil || s.Weapon == nil {
+		return false
+	}
+	if s.Target.Kind != units.TargetUnit || s.Target.Unit == 0 {
+		return false // "the slot has no target"
+	}
+	held := unitByHandle(u, s.Target.Unit)
+	if held == nil || held.Def == nil {
+		return false
+	}
+	// The ordinary planar range test of [06 §3.3], inclusive, against the
+	// slot's own weapon range — the same helper every other range gate uses.
+	if !combat.WithinRange(u.X, u.Z, held.X, held.Z, s.Weapon.Range) {
+		return false // "that target is out of range"
+	}
+	// "the target's definition **is** in the guard's per-slot
+	// bad-target-category bit array".
+	return !held.Def.DefinitionMask().Intersects(guardSlotBadTargetMask(u.Def, idx))
+}
+
+// guardRetargetSlots is leg 2 of [04 R-UNIT-06 §1] — "auto-fire support" — as
+// corrected by [04 R-STANCE-01 §3].
+//
+// It is NOT an acquisition and it keeps no latch: it walks slots 0..2 in
+// numeric order and rebinds onto the ward's engagement target exactly those
+// slots whose own target is missing, out of range, or bad-target-categorised.
+// It returns no result code; the handler falls through to legs 3, 4 and 5.
+//
+// The step is "skipped when the guard's standing fire field is zero" — the
+// standing-MOVE field is not read anywhere in either guard handler, which is
+// [04 R-STANCE-01 §3]'s correction to §1's own wording.
+//
+// TODO(question): §1 requires each slot's TRACKING bit as well as its enabled
+// bit. Nothing in this build sets the tracking bit — the only writer is the
+// manual target path, which clears it — so testing it would make this whole leg
+// dead code. The same gap is recorded, with the same treatment, beside the
+// retaliation offer's per-slot walk in internal/combat/damage.go, whose
+// [06 R-WPN-04 §2] admission carries the same term; both sites skip the test
+// and would gain it together. What would settle it: a writer census of the slot
+// flag byte's bit 4 (the question [06 §1.2]'s slotTrackingFlag already records).
+func guardRetargetSlots(u *units.Unit, wardTarget *units.Unit) {
+	if u == nil || u.Def == nil || wardTarget == nil {
+		return
+	}
+	if u.Flags>>stanceFireShift&stanceFieldMask == 0 {
+		return
+	}
+	for idx := 0; idx < units.NumSlots; idx++ {
+		s := u.SlotAt(idx)
+		if s == nil || !slotEnabled(s) {
+			continue // the slot-enabled bit [04 R-ORD-01 §7]
+		}
+		if s.Weapon.CommandFire {
+			continue // "a weapon whose command-fire-only definition bit is clear"
+		}
+		if guardSlotKeepsTarget(u, s, idx) {
+			continue
+		}
+		bindSlotToUnit(u, idx, wardTarget.Handle)
+	}
+}
+
 func canRepairGuard(actor *units.Unit) bool {
 	// Leg 3 of [04 R-UNIT-06 §1]: "when the ward's health (signed word) compares
 	// below its definition's maximum-damage word **and the guard's definition
@@ -1143,7 +1312,6 @@ func wardHasBuildOrder(ward *units.Unit) bool {
 // assist evaluation of [04 R-UNIT-06 §1], whose fall-through is the follow
 // maintenance of [04 R-ORD-01 §8 points 3 and 4].
 func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
-	_ = satisfied
 	if n == nil || n.Target == 0 {
 		return Code(5) // no ward → *complete* [04 R-UNIT-06 §1]
 	}
@@ -1173,95 +1341,109 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	if u.Handle == 0 {
 		return guardFollowMaintenance(u, n, ward, tick)
 	}
-	// (a) build assist — if ward has active construction op that is friendly per diplomacy byte and not already latched [04 §3.5]
-	if wardHasConstruction(ward) && isFriendlyConstruction(u, ward) {
-		wardH := ward.Handle
-		if wardH == 0 {
-			wardH = n.Target
-		}
-		arr := &u.GuardLatches.BuildAssist
-		if !isInDedupArr(arr, wardH) {
-			q := QueueForUnit(u)
-			helpID := Lookup("HelpBuild")
-			if u.Def != nil && u.Def.CanFly {
-				helpID = Lookup("VTOL_HelpBuild")
-				if helpID == 0 {
-					helpID = Lookup("HelpBuild")
-				}
-			}
-			if helpID != 0 {
-				q.Push(helpID, Node{Target: n.Target, GoalX: ward.X, GoalY: ward.Y, GoalZ: ward.Z})
-			}
-			pushDedupArr(arr, wardH)
-			// The retry deadline is set by result code 3, so the handler needs no
-			// tick [04 §3.3]. Unimplemented: [04 R-UNIT-06 §1] corrects the
-			// dedup array away — "there is **no** dedup array and no latch in
-			// either guard handler", re-enqueue discipline coming from the pump's
-			// deadline cadence and the satisfied-bit gates — and makes this leg
-			// the ward's-order join of item 4, not a bare help-build. Retiring
-			// the latches is the same change as legs 1 and 2 below; see
-			// PLAN 19 §2.3.
-			return Code(3)
-		}
+	// The ward's engagement-target reference, resolved once: legs 1 and 2 share
+	// it [04 R-UNIT-06 §1]. It is the plain unit link the unit save block
+	// carries beside the carrier link and the per-unit tick refresh clears
+	// [08 R-SAVE-02 §6]. **Unknown** in that section: which producer sets it
+	// during ordinary play — the bounded census found only the initializer's
+	// zero, the save pair, and the tick clear — so in this build it resolves to
+	// nothing and both legs decline. That is the section's own gap, not a
+	// stand-in: nothing is invented to fill it.
+	wardTarget := unitByHandle(u, ward.EngagementTarget)
+
+	// Leg 1 — the combat join [04 R-UNIT-06 §1]. Four terms, in order: the
+	// ward's engagement-target reference is set; the diplomacy term (allied);
+	// the satisfied bits carry the guard's re-arm bit `0x10`; and the ward
+	// target's definition is not in the guard's no-chase array. On a successful
+	// enqueue the record's dynamic gate CLEARS and the handler returns the wait
+	// code, so a guard that resumes after its spawned attack re-enters phase 1
+	// with an empty gate and installs immediately [04 R-ORD-01 §8 point 4].
+	//
+	// This leg replaces the build-assist branch that stood here. §1's correction
+	// is explicit that the old branch (a) was mis-read: there is no build assist
+	// at the top of the guard's phase 1 — an unfinished ward is leg 3's business,
+	// because command code 8 forks to help-build while the ward is unfinished
+	// and to repair otherwise [04 R-ORD-02 §1].
+	if wardTarget != nil &&
+		wardIsAllied(u, ward) &&
+		satisfied&guardCombatJoinBit != 0 &&
+		guardWillChase(u, wardTarget) &&
+		guardCombatJoin(u, wardTarget) {
+		n.DynamicGate = 0
+		return Code(3) // *wait* [04 §3.3]
 	}
-	// Unimplemented: leg 2 of [04 R-UNIT-06 §1] is not an acquisition at all.
-	// Gated on the guard's standing-fire field alone ([04 R-STANCE-01 §3]
-	// corrects §1's mention of the standing-move field), it walks slots 0..2
-	// requiring the slot's assigned bit, its tracking bit, and a weapon whose
-	// `commandfire` definition bit is clear, and REBINDS a slot with no target,
-	// an out-of-range target, or a target in the slot's bad-target category
-	// array onto the ward's engagement target. Slots already holding a legal
-	// in-range target are untouched. It shares the ward's engagement-target
-	// reference with leg 1, so it lands with the TODO(T25) below; the empty
-	// three-slot loop that stood here is gone — see PLAN 19 §2.3.
-	// (c) repair assist — when ward is damaged and guard can repair [04 §3.5]
+
+	// Leg 2 — the slot re-target. No result code: it falls through.
+	guardRetargetSlots(u, wardTarget)
+
+	// Leg 3 — repair/assist the ward [04 R-UNIT-06 §1]: "when the ward's health
+	// compares below its definition's maximum-damage word and the guard's
+	// definition has the builder bit, resolve command code 8 (assist-or-repair:
+	// help-build while unfinished, the repair order otherwise) through the
+	// canfly-forking resolver against the ward itself".
+	//
+	// The by-name `RepairUnit` lookup that stood here is gone: it could never
+	// reach code 8's unfinished arm, and with the build-assist branch above
+	// retired it would have left a guard unable to assist a nanoframe at all.
+	// Code 8 carries its own nano-reach admission [04 R-ORD-02 §1], so a guard
+	// with no nanolathe resolves no name and falls through to leg 4.
 	if wardIsDamaged(ward) && canRepairGuard(u) {
-		wardH := ward.Handle
-		if wardH == 0 {
-			wardH = n.Target
-		}
-		arr := &u.GuardLatches.Repair
-		if !isInDedupArr(arr, wardH) {
+		if repID := Resolve(8, u, ward, nil); repID != 0 {
 			q := QueueForUnit(u)
-			repName := "RepairUnit"
-			if u.Def != nil && u.Def.CanFly {
-				repName = "VTOL_RepairUnit"
-			}
-			repID := Lookup(repName)
-			if repID != 0 {
-				q.Push(repID, Node{Target: n.Target, GoalX: ward.X, GoalY: ward.Y, GoalZ: ward.Z})
-			}
-			pushDedupArr(arr, wardH)
-
-			return Code(3)
+			// "clear the record's goal payload" before the insert, then head
+			// insert [04 §3.3 "Follow_Ground"]. The payload is the movement-side
+			// installation, NOT the record's goal triple: that triple holds the
+			// anchor OFFSET the admit phase drew and the maintenance leg reads
+			// [04 R-ORD-01 §8 point 2], so zeroing it would destroy the guard's
+			// own follow position.
+			releaseGoalPayload(n)
+			q.PushHead(repID, Node{Owner: u.Handle, Target: n.Target, GoalX: ward.X, GoalY: ward.Y, GoalZ: ward.Z})
+			n.DynamicGate = 0
+			return Code(3) // *wait* [04 §3.3]
 		}
 	}
-	// (d) join the ward's build — when ward's own front order is a nanolathe-class build elsewhere [04 §3.5]
-	if wardHasBuildOrder(ward) {
-		wardH := ward.Handle
-		if wardH == 0 {
-			wardH = n.Target
+
+	// Leg 4 — join the ward's order [04 R-UNIT-06 §1]: "when the ward's front
+	// order exists with a nonzero descriptor, BOTH guard and ward definitions
+	// have the builder bit, the front order carries flag `0x100000`, and its
+	// target is not the guard itself".
+	//
+	// The two definition bits and the self-target exclusion were missing while a
+	// latch hid how often this leg fires; with the latch gone they are load
+	// bearing — without the exclusion a guard whose ward is building the guard
+	// enqueues help-build against itself, once per resume.
+	if wardHasBuildOrder(ward) && canRepairGuard(u) && canRepairGuard(ward) {
+		var tgt pool.Handle
+		var goalX, goalY, goalZ numeric.Fixed
+		if wq := QueueForUnit(ward); wq != nil && len(wq.primary) > 0 {
+			head := wq.primary[0]
+			tgt = head.Target
+			goalX, goalY, goalZ = head.GoalX, head.GoalY, head.GoalZ
 		}
-		arr := &u.GuardLatches.HelpBuild
-		if !isInDedupArr(arr, wardH) {
-			q := QueueForUnit(u)
-			var tgt pool.Handle
-			if wq := QueueForUnit(ward); wq != nil && len(wq.primary) > 0 {
-				tgt = wq.primary[0].Target
-			}
+		if tgt != u.Handle {
+			// TODO(question): §1 splits this leg's issue in two — help-build
+			// "when the front order's descriptor is the guard-resolved
+			// mobile-build or factory-build descriptor", and a COPY of the ward's
+			// record (same descriptor, same target, same goal) "when it is
+			// instead a payload-carrying queued order". Which of this build's
+			// descriptor names stand in each class, and what marks a record as
+			// payload-carrying, are not stated; the help-build arm alone is
+			// issued, which is what the leg did before. What would settle it: the
+			// descriptor identities the guard's leg-4 comparison loads, and the
+			// record field its second arm tests.
 			helpID := Lookup("HelpBuild")
 			if u.Def != nil && u.Def.CanFly {
-				helpID = Lookup("VTOL_HelpBuild")
-				if helpID == 0 {
-					helpID = Lookup("HelpBuild")
+				if vtol := Lookup("VTOL_HelpBuild"); vtol != 0 {
+					helpID = vtol
 				}
 			}
 			if helpID != 0 {
-				q.Push(helpID, Node{Target: tgt, GoalX: ward.X, GoalY: ward.Y, GoalZ: ward.Z})
+				q := QueueForUnit(u)
+				releaseGoalPayload(n)
+				q.PushHead(helpID, Node{Owner: u.Handle, Target: tgt, GoalX: goalX, GoalY: goalY, GoalZ: goalZ})
+				n.DynamicGate = 0
+				return Code(3) // *wait* [04 §3.3]
 			}
-			pushDedupArr(arr, wardH)
-
-			return Code(3)
 		}
 	}
 	// Leg 5, the follow maintenance, on every visit that falls through the
@@ -1314,14 +1496,8 @@ func guardAdmit(u *units.Unit, n *Node, ward *units.Unit) Code {
 // the previous payload and starting a fresh path request, and a failed path
 // never ends the guard.
 //
-// TODO(T25): [04 R-UNIT-06 §1]'s legs 1 and 2 — the combat join and the
-// per-slot re-target onto the ward's engagement target — are not implemented,
-// because the ward's engagement-target link has no located producer (that
-// section records the link's writer as Unknown), so the condition both legs
-// open on cannot be evaluated. The legs above are this build's earlier
-// approximation of legs 3 and 4 and predate the section's correction; WU-19-6
-// owns the radius, the goal shape and the cadence only. Every visit that falls
-// through reaches this leg.
+// Legs 1 and 2 are above and no longer approximations; every phase-1 visit that
+// falls through legs 1-4 reaches this one [04 R-ORD-01 §8 point 3].
 func guardFollowMaintenance(u *units.Unit, n *Node, ward *units.Unit, tick uint32) Code {
 	x, y, z, radius := GuardFollowPoint(n, ward.X, ward.Y, ward.Z)
 	// The payload form is used rather than installPointGoal so the record's
@@ -1333,9 +1509,9 @@ func guardFollowMaintenance(u *units.Unit, n *Node, ward *units.Unit, tick uint3
 	// internal/movement's air goals and is outside this unit, so a `VTOL_Follow`
 	// record installs nothing here and keeps only its cadence.
 	installPointGoalPayload(u, n, x, y, z, radius)
-	armDeadline(n, tick, 30) // fixed 30, no draw; the setter ORs gate bit 0x01
-	n.DynamicGate |= 0x18    // the two re-arm bits [04 R-ORD-01 §8 point 4]
-	return Code(2)           // *hold*, phase left at 1
+	armDeadline(n, tick, 30)        // fixed 30, no draw; the setter ORs gate bit 0x01
+	n.DynamicGate |= guardRearmBits // the two re-arm bits [04 R-ORD-01 §8 point 4]
+	return Code(2)                  // *hold*, phase left at 1
 }
 
 func unitCanFly(u *units.Unit) bool {

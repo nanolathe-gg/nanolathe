@@ -206,6 +206,19 @@ func (m *Manager) SetCatalog(cat *content.Catalog) {
 	m.Strategic.Catalog = cat
 }
 
+// SetUnitLimit binds the session's per-player unit limit onto this manager's
+// strategic state. It is the only global the class routine's half-capacity
+// comparison reads, and it is one word for the whole battle, so a session binds
+// it once — before Strategic.Init, whose construction-time class computation
+// already consults it [08 R-AI-01 §13]. Until a session binds it the comparison
+// never fires; see PLAN 19 §2.4.
+func (m *Manager) SetUnitLimit(limit int32) {
+	if m == nil {
+		return
+	}
+	m.Strategic.SetUnitLimit(limit)
+}
+
 // RecordUnitLoss writes the unit-loss retry deadline. The draw is consumed
 // only with a bound simulation stream; an unbound manager leaves its state
 // unchanged, which is the fail-closed setup behavior [08 RNG inventory].

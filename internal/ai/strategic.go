@@ -81,6 +81,22 @@ type Strategic struct {
 	// Catalog is the content catalog for definition lookups [P0-I16].
 	Catalog *content.Catalog
 
+	// unitLimit is the session's per-player unit limit — the Max Units lobby
+	// option, or the mission's unit-count key — copied once into a 16-bit
+	// session word when the world is built [08 R-AI-01 §13]. unitLimitBound
+	// records that a session actually supplied it: an unbound fixture must not
+	// read the zero value as a real cap, because (0 >> 1) sits below every
+	// non-zero live count and would fire the half-capacity addend everywhere.
+	unitLimit      uint16
+	unitLimitBound bool
+
+	// liveUnitCount mirrors the owning player record's live unit count, the
+	// 16-bit field the class routine reaches through the strategic state's
+	// back-pointer. It is incremented at unit creation and decremented in unit
+	// teardown, so the refresh samples it from the live pool rather than
+	// deriving it from the completed counts [08 R-AI-01 §13].
+	liveUnitCount uint16
+
 	// energyEnvironment reads the live wind scalar and immutable map tidal
 	// strength used by the computer player's signed net-energy query. It is a
 	// session binding rather than copied strategic state so a gated 30-tick
@@ -108,6 +124,50 @@ func (s *Strategic) BindEnergyEnvironment(read func() (windScalar, tidalStrength
 		return
 	}
 	s.energyEnvironment = read
+}
+
+// SetUnitLimit supplies the session's per-player unit limit, the only global
+// the class routine's half-capacity comparison reads [08 R-AI-01 §13]. It is
+// one word for the whole battle, written when the world is built, so a session
+// binds it once before the construction-time class computation. The value is
+// held in the record's 16-bit width; a negative argument is a setup error and
+// leaves the limit unbound.
+func (s *Strategic) SetUnitLimit(limit int32) {
+	if s == nil || limit < 0 {
+		return
+	}
+	s.unitLimit = uint16(limit)
+	s.unitLimitBound = true
+}
+
+// UnitLimit reports the bound per-player unit limit and whether a session
+// supplied one [08 R-AI-01 §13].
+func (s *Strategic) UnitLimit() (uint16, bool) {
+	if s == nil {
+		return 0, false
+	}
+	return s.unitLimit, s.unitLimitBound
+}
+
+// LiveUnitCount reports the owning player record's live unit count as the last
+// refresh sampled it [08 R-AI-01 §13].
+func (s *Strategic) LiveUnitCount() uint16 {
+	if s == nil {
+		return 0
+	}
+	return s.liveUnitCount
+}
+
+// halfCapacity reports the class routine's half-capacity comparison: the
+// session's per-player unit limit shifted right one, compared unsigned against
+// the owning player's live unit count [08 R-AI-01 §13]. It fires for any player
+// that owns more than half its unit cap, which is ordinary late-game state. An
+// unbound limit is a setup gap, not a zero cap, so it never fires.
+func (s *Strategic) halfCapacity() bool {
+	if s == nil || !s.unitLimitBound {
+		return false
+	}
+	return (s.unitLimit >> 1) < s.liveUnitCount
 }
 
 // InitializeRandomState consumes the strategic-constructor draws once. The
@@ -303,6 +363,14 @@ func (s *Strategic) refreshCountsAndCenter(player uint8, w *units.World) {
 	// The refresh clears the build-capable count before its live-pool scan
 	// [08 R-AI-01 §3][08 R-P0-05 §5].
 	s.BuildCapable = 0
+	// The class routine's half-capacity comparison reads the owning player
+	// record's live unit count, which counts every allocated unit and not only
+	// the completed ones the loop below recounts [08 R-AI-01 §13]. The record's
+	// field is 16 bits wide.
+	s.liveUnitCount = 0
+	if w != nil {
+		s.liveUnitCount = uint16(w.LiveCountForPlayer(int(player)))
+	}
 	var sumX, sumY, sumZ int64
 	var n int64
 	if w != nil {
@@ -612,13 +680,14 @@ func (s *Strategic) recomputeClassVectors() {
 		if def != nil && def.MinWaterDepth >= 0 {
 			val = val * 3
 		}
-		// Unimplemented: [08 R-AI-01 §13] establishes the half-capacity addend
-		// — when the session's per-player unit limit shifted right one is
-		// unsigned-less-than the owning player's live unit count, half the
-		// single coefficient (signed byte, truncating) is added here. It is
-		// ordinary late-game state, not an unreachable branch: the previous
-		// "stock state leaves this false" reading is retracted there. Strategic
-		// carries neither counter — see PLAN 19 §2.4.
+		// The half-capacity addend: when the session's per-player unit limit
+		// shifted right one is unsigned-less-than the owning player's live unit
+		// count, half of the single coefficient — the signed byte divided by
+		// two, truncating toward zero — is added [08 R-AI-01 §13][I3]. It is
+		// ordinary late-game state, not an unreachable branch.
+		if s.halfCapacity() {
+			val += int32(int8(acc0Final)) / 2
+		}
 		// Zero-izing branches
 		if def != nil && def.CanLoad { // [P0-01 §2.2; R-P0-05]
 			val = 0

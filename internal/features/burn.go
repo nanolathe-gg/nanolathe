@@ -10,6 +10,28 @@ import (
 // signed value is already floor, which is the point.
 func floorShift16(v int64) int64 { return v >> 16 }
 
+// The animating selectors of the battle-save feature family: 0 burn, 1 death,
+// 2 reclaim [R-SAVE-FEATURE-01]. Selector 2 is the record whose
+// reclaim-animation bit is set, which is what promotes the successor in
+// [05 R-FEAT-01 §5] step 6.
+const (
+	featureAnimSelectorBurn    uint8 = 0
+	featureAnimSelectorDie     uint8 = 1
+	featureAnimSelectorReclaim uint8 = 2
+)
+
+// featureAnimEnd records one attached sprite animation that completed on this
+// visit. Completions are applied after the walk so the instance map is not
+// mutated mid-iteration; the walk order (sorted keys, I1) is carried over, so
+// burn ends and die/reclaim ends still settle in one deterministic order.
+type featureAnimEnd struct {
+	idx int
+	// burn distinguishes [05 R-FEAT-01 §10] pass 3c (teardown plus a bare
+	// `featureburnt` stamp, explicitly NOT the replacement routine) from the
+	// die/reclaim branch's §5 step 6 replacement.
+	burn bool
+}
+
 // burnTick implements the feature burning phase [05 "Feature burning"] [06 §13.1].
 // Smoke emission gated on tick%3==0, animation and countdown every tick,
 // animation-driven burn completion, one-shot spread+burnweapon event.
@@ -21,24 +43,51 @@ func (s *Service) burnTick(tick uint32) {
 
 	// Iterate deterministically (I1) over sorted keys.
 	keys := s.sortedInstanceKeys()
-	// Collect finished burns to clear after iteration to avoid map mutation during loop.
-	var finished []int
+	// Collect finished animations to settle after iteration to avoid map
+	// mutation during the loop.
+	var finished []featureAnimEnd
 	for _, idx := range keys {
 		inst := s.instances[idx]
 		if inst == nil {
 			continue
 		}
 		if !inst.IsBurning {
-			// Unimplemented: [05 R-FEAT-01 §10] pass 3 establishes this branch.
-			// A sprite instance with the burning bit clear is a die or reclaim
-			// animation: advance the main cursor, then the shadow cursor when
-			// present, and when the main cursor's sequence pointer goes null
-			// run §5 step 6's replace at the anchor — which promotes the
-			// successor to `featurereclamate` whenever the instance's
-			// reclaim-animation bit is set, regardless of the argument. The
-			// same section closes what "complete" means: the animation ends on
-			// the visit whose cursor advance clears the sequence pointer.
-			// See PLAN 19 §2.4.
+			// [05 R-FEAT-01 §10] pass 3, the "sprite instance, burning bit
+			// clear" branch: such an attached record is a die or reclaim
+			// animation. One visit advances the main cursor and then the
+			// shadow cursor when present; the animation is complete on the
+			// visit whose advance clears the main cursor's sequence pointer,
+			// and its lifetime in visits is the sum over the sequence's frames
+			// of max(delay, 1). No sprite animation consumes a draw on any
+			// stream — only the burning branch's smoke does [01 §7.5].
+			//
+			// Retail attaches an active-list slot only for an EVENT animation:
+			// a sprite feature at rest is driven by its catalog record's rest
+			// cursor (pass 1 of the same section), which has no instance.
+			// Nanolathe attaches an Instance to every stamped anchor, so the
+			// resting majority has to be told apart here. The discriminator is
+			// the animation-record flag, set only for the animating save
+			// selectors; a resting feature never carries it.
+			if !inst.IsAnimating {
+				continue
+			}
+			// The visit counter and the animation's length in visits are the
+			// same two words the burn cursor uses below, because retail
+			// advances every sprite cursor with one routine.
+			//
+			// Unimplemented seam, not research: nothing attaches a die or
+			// reclaim animation at runtime yet. §5 steps 4-5 (a transition
+			// with a named `seqnamedie`/`seqnamereclamate` attaches an
+			// instance instead of replacing at once) lives in the transition
+			// entry in service.go, and the sequence-length source for those
+			// two sequences has no seam the way the burn sequence has
+			// Service.BurnAnimationTicks. Until both land, only a save-restored
+			// selector-1/2 record reaches this branch and it retires only when
+			// a length is known. See PLAN 19 §2.4.
+			inst.BurnTicks++
+			if inst.BurnDuration > 0 && inst.BurnTicks >= inst.BurnDuration {
+				finished = append(finished, featureAnimEnd{idx: idx})
+			}
 			continue
 		}
 		if smoke {
@@ -50,22 +99,40 @@ func (s *Service) burnTick(tick uint32) {
 			// tick, with exactly two CRT jitter draws at the call site — the
 			// draws below are those two, and the puff would append a strip-5
 			// smoke container via the session's appendStripSmokePuffer.
-			// Unimplemented: [05 R-FEAT-01 §10] pass 3 now gives the jitter
-			// law in full — the puff sits at the footprint centre at terrain
-			// height and each draw is scaled by the CURRENT BURN FRAME's width
-			// and height:
+			// [05 R-FEAT-01 §10] pass 3a gives the jitter law in full. The
+			// puff sits at the footprint centre at terrain height, and the two
+			// draws — first the horizontal one, then the vertical one, in that
+			// order — are each scaled by the CURRENT BURN FRAME's width and
+			// height, with the frame's own offsets recentring the result:
 			//
 			//	x += (draw·(w/2))/32768 - frame.xoff + w/4
 			//	y += 2·(frame.yoff - (draw·(h/2))/32768) - 2·(h/4)
 			//
-			// taking integer parts with 16-bit truncation. Two things are
-			// missing here and neither is research: the burn cursor's current
-			// GAF frame geometry does not reach this service, and features has
-			// no session-side port to the strip table, so the puff cannot be
-			// appended (the session helper Session.appendStripSmokePuffer(5, …)
-			// is ready for that port). The two draws below are the right two
-			// draws in the right place, so the CRT stream stays correct while
-			// the puff is missing. See PLAN 19 §2.4.
+			// taking integer parts with 16-bit truncation. burnSmokeJitter
+			// below returns exactly those two addends; the site cannot call it
+			// with real geometry yet, because two things it needs are absent
+			// and neither of them is research. The burn cursor's current GAF
+			// frame geometry does not reach this service
+			// (there is no seam for it the way Service.BurnAnimationTicks is a
+			// seam for the sequence length), and features has no session-side
+			// port to the strip table, so the container cannot be appended —
+			// the session helper Session.appendStripSmokePuffer(5, …) is ready
+			// for that port and only the Service field and its wiring are
+			// missing. See PLAN 19 §2.4.
+			//
+			// TODO(question): the strip-5 burning-feature puff's own
+			// parameters — the smoke variant and the particle life passed to
+			// the container's constructor — are still an open item on doc 03's
+			// own list ("The strip-5 burning-feature smoke producer's puff
+			// parameters (variant, life)", [03 §5.5][R-STRIP-01 §1]). Decider:
+			// a static trace of the phase-6 producer site, which would name
+			// both arguments and settle whether the jittered pair above is the
+			// container's world position or a sprite-space offset applied to
+			// it — §10 pass 3a states the arithmetic but not its space.
+			//
+			// The two draws below are the right two draws in the right place,
+			// so the CRT stream stays correct while the puff is missing
+			// [01 §7.5 "6 features | CRT | 2 per fire-effect emission"].
 			if crt := s.crt(); crt != nil {
 				_ = crt.Rand()
 				_ = crt.Rand()
@@ -76,7 +143,7 @@ func (s *Service) burnTick(tick uint32) {
 		// If burn animation finished, clear cell — releases instance and
 		// animations — and spawn featureburnt successor when linked [05 ...].
 		if inst.BurnDuration > 0 && inst.BurnTicks >= inst.BurnDuration {
-			finished = append(finished, idx)
+			finished = append(finished, featureAnimEnd{idx: idx, burn: true})
 			continue
 		}
 		// Otherwise if countdown nonzero and not remote-suppressed decrement,
@@ -88,21 +155,67 @@ func (s *Service) burnTick(tick uint32) {
 			}
 		}
 	}
-	// Process finished burn animations through the established burnt successor
-	// path. Restored death/reclaim selectors remain attached records: their
-	// animation-state/sequence consumer is not established here.
-	for _, idx := range finished {
-		inst := s.instances[idx]
+	// Settle the animations that ended on this visit, in walk order.
+	for _, end := range finished {
+		inst := s.instances[end.idx]
 		if inst == nil {
 			continue
 		}
 		cx, cz := inst.CX, inst.CZ
+		if !end.burn {
+			// [05 R-FEAT-01 §10] pass 3's die/reclaim completion runs §5
+			// step 6's replacement at the anchor with argument 0. Step 6
+			// takes `featuredead` for that argument, EXCEPT that an instance
+			// whose reclaim-animation bit is set promotes the successor to
+			// `featurereclamate` regardless of the argument — which is the
+			// whole point of carrying the bit. Selector 2 is that record.
+			// A successor word of 0xFFFF makes the stamp a no-op, i.e. final
+			// removal, which the replacement path already models as a nil
+			// successor definition.
+			cause := CauseDead
+			if inst.AnimationSelector == featureAnimSelectorReclaim {
+				cause = CauseReclaim
+			}
+			s.RemoveFeatureAt(cx, cz, cause)
+			continue
+		}
+		// Burn completion is pass 3c and is deliberately NOT the replacement
+		// routine: teardown at the anchor, then a bare `featureburnt` stamp at
+		// the snapped footprint centre carrying no position or orientation.
 		def := inst.Def
 		s.clearFootprint(cx, cz, def)
 		if def != nil && def.FeatureBurntDef != nil {
 			s.spawnFeatureAt(cx, cz, def.FeatureBurntDef)
 		}
 	}
+}
+
+// burnFrameGeometry is the geometry of the burn animation's CURRENT frame,
+// which is what [05 R-FEAT-01 §10] pass 3a scales the smoke jitter by: the
+// frame's width and height and its two authored offsets. The names are the
+// GAF frame fields [fmt gaf]; the values reach this package through a seam
+// that does not exist yet (see the smoke site in burnTick).
+type burnFrameGeometry struct {
+	W, H       int32
+	XOff, YOff int32
+}
+
+// burnSmokeJitter returns the two addends [05 R-FEAT-01 §10] pass 3a applies
+// to the burning feature's smoke position, given the two CRT draws in the
+// order the site consumes them — horizontal first, vertical second, each in
+// 0..32767 [01 §7.2]:
+//
+//	x += (draw·(w/2))/32768 - frame.xoff + w/4
+//	y += 2·(frame.yoff - (draw·(h/2))/32768) - 2·(h/4)
+//
+// Every division is an integer part and the result is truncated to 16 bits, as
+// the section states. The addends are returned rather than applied because the
+// space the base position lives in is the open question recorded at the call
+// site; the addends themselves are pure frame geometry and are unambiguous.
+func burnSmokeJitter(frame burnFrameGeometry, drawX, drawY int32) (dx, dy int32) {
+	dx = int32(int16(drawX*(frame.W/2)/32768 - frame.XOff + frame.W/4))
+	dy = int32(int16(2*(frame.YOff-drawY*(frame.H/2)/32768) - 2*(frame.H/4)))
+	return dx, dy
 }
 
 // fireBurnEvent runs the three passes in order [05 "Feature burning"].

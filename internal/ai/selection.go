@@ -246,18 +246,18 @@ func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service
 		return Candidate{}, false
 	}
 	missionMode := mission.GetMissionGateFlag()
-	// Definition directives are compiled content inputs: authored ai_weight
-	// weights and embedded limit directives are registered before the first
-	// score is read, so direct Manager fixtures and NewManager follow the same
-	// profile state [08 "Established AI-facing data and rooted planner"]. The
-	// precedence of an embedded directive versus a profile-file one is settled
-	// by [08 R-AI-01 §12]'s two lock vectors and is Unimplemented here — see
-	// the note on ApplyUnitDefinitions and PLAN 19 §2.4. `ai_limit` remains
-	// inert because the limit pass re-reads `ai_weight`, so that field has no
-	// reader at all [08 R-AI-01 §12].
+	// The profile grammar needs the definition catalog for its name matcher and
+	// its two lock vectors, so the whole of [08 R-AI-01 §12] is applied here,
+	// before the first score is read; direct Manager fixtures and NewManager
+	// therefore follow the same profile state. Profile-file precedence over a
+	// per-definition `ai_weight` fragment is the lock vectors' job, and
+	// `ai_limit` stays inert because the limit pass re-reads `ai_weight`.
 	if bindings, ok := m.(selectorBindings); ok && bindings != nil {
 		profile.ApplyUnitDefinitions(bindings.GetCatalog())
 	}
+	// `limit` applies only to slots whose control byte is 2 [08 R-AI-01 §12];
+	// the weight table applies to every slot that has a manager.
+	controlByte := econ.Players[player].ControllerState
 	// The caller supplies the authored order; never rebuild it through a map.
 	cands := candidates
 
@@ -291,7 +291,7 @@ func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service
 			continue
 		}
 		// C5: profile limit (count < limit or -1) [08] [PLAN 11 C5]
-		limit := profile.LimitFor(ck)
+		limit := profile.LimitForControl(controlByte, ck)
 		var count int32
 		if strat != nil && strat.Counts != nil {
 			count = strat.Counts[ck]

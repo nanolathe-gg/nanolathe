@@ -246,9 +246,15 @@ type UnitDef struct {
 	CantBeTransported  bool  // cantbetransported [02 "Unit record"]
 	Wacky              bool  // wacky [02 "Unit record"] — parsed into bit 16 of same packed flag word as norestrict, no reader but preserved [02 "Unit record"]
 
-	// These fields remain source-compatible with downstream construction tests,
-	// but are not populated from FBI content: retail has no per-definition limit
-	// reader [02 "Unit record"]. They are deliberately excluded from identity.
+	// Limit is the per-definition unit limit. It is not an FBI key: the
+	// definition parser writes -1 (unlimited) into this field of every
+	// definition it parses, and the only other writer is the multiplayer
+	// lobby's restriction apply step, which a skirmish or campaign battle never
+	// runs [05 R-SHARE-01 §9]. LimitEnabled records that the field was written,
+	// which is what separates the parser's -1 from a hand-built fixture's Go
+	// zero value; a written 0 means the definition may not be created at all.
+	// UnitLimit is the older fixture-only spelling and stays source-compatible.
+	// All three are deliberately excluded from identity.
 	UnitLimit    int32
 	LimitEnabled bool
 	Limit        int32
@@ -552,28 +558,36 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 			CanonicalKey: canonical,
 			Provenance:   prov,
 		},
-		UnitName:                     unitName,
-		Name:                         displayName,
-		Description:                  description,
-		Side:                         side,
-		ObjectName:                   objectName,
-		Category:                     category,
-		SoundCategory:                soundCategory,
-		Corpse:                       corpse,
-		MovementClass:                movementClass,
-		MobilityDomain:               mobilityDomain,
-		Weapon1:                      weapon1,
-		Weapon2:                      weapon2,
-		Weapon3:                      weapon3,
-		ExplodeAs:                    explodeAs,
-		SelfDestructAs:               selfDestructAs,
-		YardMap:                      yardMap,
-		DefaultMissionType:           defaultMissionType,
-		BadTargetCategoryWPRI:        wpri,
-		BadTargetCategoryWSEC:        wsec,
-		BadTargetCategoryWSPE:        wspe,
-		NoChaseCategory:              noChase,
-		AIWeight:                     aiWeight,
+		UnitName:              unitName,
+		Name:                  displayName,
+		Description:           description,
+		Side:                  side,
+		ObjectName:            objectName,
+		Category:              category,
+		SoundCategory:         soundCategory,
+		Corpse:                corpse,
+		MovementClass:         movementClass,
+		MobilityDomain:        mobilityDomain,
+		Weapon1:               weapon1,
+		Weapon2:               weapon2,
+		Weapon3:               weapon3,
+		ExplodeAs:             explodeAs,
+		SelfDestructAs:        selfDestructAs,
+		YardMap:               yardMap,
+		DefaultMissionType:    defaultMissionType,
+		BadTargetCategoryWPRI: wpri,
+		BadTargetCategoryWSEC: wsec,
+		BadTargetCategoryWSPE: wspe,
+		NoChaseCategory:       noChase,
+		AIWeight:              aiWeight,
+		// The definition parser stores -1 (unlimited) into the per-definition
+		// limit field of every definition it parses; in every single-player
+		// session that stays the final value, and a 0 can only come from the
+		// multiplayer restriction apply step [05 R-SHARE-01 §9]. Marking the
+		// field written is what lets a reader tell that authored 0 from an
+		// unwritten Go zero.
+		LimitEnabled:                 true,
+		Limit:                        -1,
 		BuildCostEnergy:              buildCostEnergy,
 		BuildCostMetal:               buildCostMetal,
 		EnergyMake:                   energyMake,

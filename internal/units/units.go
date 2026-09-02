@@ -200,19 +200,25 @@ func (u *Unit) InitRenderPieceFlags(mdl *model.Model) {
 	u.RenderPieceFlags = BuildRenderPieceFlags(mdl)
 }
 
-// Unimplemented: there is no dedup array to size. [04 R-UNIT-06 §1] supersedes
-// §3.5's "guard assistance triggers [P0-08]" paragraph and states it outright —
-// "there is **no** dedup array and no latch in either guard handler"; re-enqueue
-// discipline comes from the pump's deadline cadence and the satisfied-bit gates,
-// and the branches these arrays gate are a combat join and a slot re-target
-// rather than the acquire-and-latch shape they were written for. Removing them
-// is the same change as guard legs 1-2 in internal/orders/resolve.go — see
-// PLAN 19 §2.3. The capacity below is ours, not retail's.
+// GuardLatchSize sized a dedup array retail does not have. [04 R-UNIT-06 §1]
+// supersedes §3.5's "guard assistance triggers [P0-08]" paragraph and states it
+// outright — "there is **no** dedup array and no latch in either guard handler";
+// re-enqueue discipline comes from the pump's deadline cadence and the
+// satisfied-bit gates, and the branches these arrays gated are a combat join
+// and a slot re-target rather than the acquire-and-latch shape they were
+// written for.
+//
+// WU-19-35 retired every read and write of the arrays below: no guard leg
+// consults them and none appends to them, so the field on Unit stays
+// permanently zero. The type survives only because internal/session's parity
+// trace mirrors its four members into a GuardTrace, which is a file this unit
+// does not own; deleting the type is a one-line follow-up in that file. The
+// capacity is ours, not retail's, and now sizes nothing.
 const GuardLatchSize = 8
 
-// GuardLatches holds the per-unit dedup arrays this build's guard handler still
-// uses. See the note above: retail keeps none.
-// Four classes × fixed-size arrays of pool.Handle; auto-fire per weapon slot.
+// GuardLatches is the retired per-unit dedup array — see the note above. It is
+// carried, always zero, so the session parity trace's GuardTrace still
+// compiles; nothing writes it.
 type GuardLatches struct {
 	BuildAssist [GuardLatchSize]pool.Handle
 	AutoFire    [3][GuardLatchSize]pool.Handle
@@ -292,7 +298,7 @@ type Unit struct {
 	UnknownCountdownByte uint8
 	Orders               any          // [04 §3.2] front/rear segment anchors on the unit (stored as *orders.Queue via opaque to avoid import cycle)
 	Script               *cob.VM      // typed COB VM per-unit [04 §4.2][P1-I01] — not any, typed per acceptance
-	GuardLatches         GuardLatches // per-unit dedup array for guard assistance [04 §3.5]
+	GuardLatches         GuardLatches // retired: retail keeps no guard latch [04 R-UNIT-06 §1]; always zero
 	// RenderPieceFlags is the per-unit render-piece record [04 §"Piece flag polarity"] [R-COB-01 §1].
 	// One flags byte per piece in a separate array from the script's piece-animation state.
 	// Allocation is zero-filled then the fill pass sets bit 1 (0x02 cache) and bit 2 (0x04 shade)

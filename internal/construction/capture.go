@@ -123,20 +123,14 @@ func perDefLimit(def *content.UnitDef) (int32, bool) {
 		return -1, false
 	}
 	if def.LimitEnabled {
-		if def.Limit == -1 {
-			return -1, false
-		}
-		if def.Limit <= 0 {
-			// Unimplemented: [05 R-SHARE-01 §9] settles what 0 means. The unit
-			// definition parser stores -1 (unlimited) into EVERY definition's
-			// limit field; the only other writer is the multiplayer lobby's
-			// restriction apply step, which writes 0 for a definition with no
-			// node — and that step "runs only under the front end's
-			// multiplayer-lobby flag, so a skirmish or campaign battle never
-			// executes it". A genuine 0 is therefore unreachable in this
-			// single-player build, and 0 here is always Go's zero value.
-			// Distinguishing them means compiling the parser's -1 default in
-			// internal/content, which is a catalog change — see PLAN 19 §2.3.
+		// [05 R-SHARE-01 §9]: the definition parser writes -1 into every
+		// definition's limit field, so a written field is authoritative. Any
+		// negative value is the unlimited sentinel; a written 0 is a genuine
+		// zero allowance — the multiplayer restriction apply step is its only
+		// writer, and it means the definition may not be created at all. The
+		// compiled catalog now carries the parser's -1 default, so a written 0
+		// is no longer indistinguishable from a fixture's Go zero value.
+		if def.Limit < 0 {
 			return -1, false
 		}
 		return def.Limit, true
@@ -150,12 +144,14 @@ func perDefLimit(def *content.UnitDef) (int32, bool) {
 	return def.UnitLimit, true
 }
 
-// Per-def limit -1 sentinel means unlimited [P0-15][P0-16]; 0 treated as unlimited for fixtures.
+// The per-definition limit is the -1 unlimited sentinel for every definition a
+// single-player battle sees; a written 0 admits no unit of that definition at
+// all [05 R-SHARE-01 §9].
 func (s *Service) TransferOwnership(victim *units.Unit, newOwner uint8) (*units.Unit, bool) {
 	if s == nil || s.World == nil || victim == nil || victim.Def == nil {
 		return nil, false
 	}
-	if lim, ok := perDefLimit(victim.Def); ok && lim > 0 {
+	if lim, ok := perDefLimit(victim.Def); ok {
 		cnt := 0
 		for _, u := range s.World.Iter() {
 			if u != nil && u.Alive && u.Def != nil && u.Def.UnitName == victim.Def.UnitName && u.Owner == newOwner {

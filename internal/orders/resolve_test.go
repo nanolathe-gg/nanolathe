@@ -798,6 +798,13 @@ func TestAttackChaseOrbit(t *testing.T) {
 	}
 }
 
+// TestGuardAssistOrdering locks the phase-1 leg order of [04 R-UNIT-06 §1] as
+// that section corrects it, and the absence of any latch between visits.
+//
+// The build-assist branch that used to sit above leg 3 is gone: §1's correction
+// says the top of phase 1 is a combat join, and an unfinished ward is leg 3's
+// business because command code 8 forks to help-build while unfinished and to
+// repair otherwise [04 R-ORD-02 §1].
 func TestGuardAssistOrdering(t *testing.T) {
 	actor := mkUnit(10, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
 		d.CanFly = false
@@ -812,10 +819,10 @@ func TestGuardAssistOrdering(t *testing.T) {
 	ward.Z = numeric.Fixed(100 * 65536)
 	ward.Handle = 20
 	actor.Handle = 10
-	actor.GuardLatches = units.GuardLatches{}
 	BindQueue(actor, &Queue{})
 	BindQueue(ward, &Queue{})
-	// Ward has build order for (d): push HelpBuild onto ward
+	// The ward's own front order is a nanolathe-class build elsewhere, which is
+	// leg 4's precondition.
 	wardQ := QueueForUnit(ward)
 	wardQ.Push(Lookup("HelpBuild"), Node{Target: 99, GoalX: ward.X, GoalY: ward.Y, GoalZ: ward.Z})
 	setTestLookup(actor, func(h pool.Handle) *units.Unit {
@@ -829,9 +836,7 @@ func TestGuardAssistOrdering(t *testing.T) {
 	defer setTestHostility(actor, nil)
 
 	// Phase 1 is the assist evaluation; phase 0 is the admit that computes the
-	// follow radius and draws the anchor direction [04 R-ORD-01 §8], so the
-	// leg ordering below runs from phase 1 (WU-19-6: these calls used to reach
-	// the legs at phase 0, which now admits instead).
+	// follow radius and draws the anchor direction [04 R-ORD-01 §8].
 	n := &Node{
 		ID:     Lookup("Follow_Ground"),
 		Target: 20,
@@ -841,58 +846,78 @@ func TestGuardAssistOrdering(t *testing.T) {
 	}
 
 	q := QueueForUnit(actor)
+	names := func() []string {
+		var s []string
+		for _, nn := range q.primary {
+			s = append(s, DescriptorFor(nn.ID).Name)
+		}
+		return s
+	}
+
+	// Leg 3 wins: the ward is damaged and the guard has the builder bit, so
+	// command code 8 resolves. The ward is unfinished, so code 8's fork gives
+	// HelpBuild — the leg the retired build-assist branch used to serve.
 	q.primary = nil
 	q.secondary = nil
-	// First call should pick (a) build assist – top priority (ward unfinished, friendly)
+	n.DynamicGate = 0x19
 	code := guardHandler(actor, n, 0, 0)
 	if code != Code(3) {
-		t.Fatalf("(a) first call should return Code(3) wait got %d", code)
+		t.Fatalf("leg 3 should return the wait code 3, got %d", code)
 	}
 	if len(q.primary) == 0 || DescriptorFor(q.primary[0].ID).Name != "HelpBuild" {
-		t.Fatalf("(a) should enqueue HelpBuild got %v", func() []string {
-			var s []string
-			for _, nn := range q.primary {
-				s = append(s, DescriptorFor(nn.ID).Name)
-			}
-			return s
-		}())
+		t.Fatalf("leg 3 on an unfinished ward should enqueue HelpBuild, got %v", names())
 	}
-	// Second call: (a) is deduped (same ward 20), (b) is stub false pending WU-06-7, so should fall to (c) repair assist
-	// TODO(question): auto-fire (b) pending WU-06-7; stub returns false, so ordering skips (b)
+	// "clear the dynamic gate ... so a guard that resumes re-enters phase 1
+	// with an empty gate" [04 R-ORD-01 §8 point 4].
+	if n.DynamicGate != 0 {
+		t.Fatalf("a spawning leg must clear the record gate, got %#x", n.DynamicGate)
+	}
+
+	// No latch: the very next visit takes leg 3 again. Retail keeps "no dedup
+	// array and no latch in either guard handler" [04 R-UNIT-06 §1]; re-enqueue
+	// discipline is the pump's deadline cadence, not a per-ward memory.
 	q.primary = nil
 	q.secondary = nil
-	code = guardHandler(actor, n, 0, 0)
-	if code != Code(3) {
-		t.Fatalf("(c) after (a) dedup should return Code(3) got %d", code)
-	}
-	if len(q.primary) == 0 || DescriptorFor(q.primary[0].ID).Name != "RepairUnit" {
-		t.Fatalf("(c) should enqueue RepairUnit got %v", func() []string {
-			var s []string
-			for _, nn := range q.primary {
-				s = append(s, DescriptorFor(nn.ID).Name)
-			}
-			return s
-		}())
-	}
-	// Third: (a) deduped, (c) deduped, should fall to (d) join ward's build
-	q.primary = nil
-	code = guardHandler(actor, n, 0, 0)
-	if code != Code(3) {
-		t.Fatalf("(d) after (a)(c) dedup should return 3 got %d", code)
+	if code = guardHandler(actor, n, 0, 0); code != Code(3) {
+		t.Fatalf("no latch: the second visit must take leg 3 again, got %d", code)
 	}
 	if len(q.primary) == 0 || DescriptorFor(q.primary[0].ID).Name != "HelpBuild" {
-		t.Fatalf("(d) should enqueue HelpBuild for join ward build got %v", func() []string {
-			var s []string
-			for _, nn := range q.primary {
-				s = append(s, DescriptorFor(nn.ID).Name)
-			}
-			return s
-		}())
+		t.Fatalf("no latch: second visit should enqueue HelpBuild again, got %v", names())
 	}
-	// Fourth: the assist legs all decline => the follow maintenance of
-	// [04 R-ORD-01 §8 points 3 and 4]: a point goal at ward+offset, deadline
-	// tick+30 fixed, gate 0x19 on the way out, hold — and the record's goal
-	// triple still holds the OFFSET it was given, not the installed position.
+
+	// Leg 4 is reached only when leg 3 declines. A full-health finished ward
+	// declines it (health equal to maximum-damage), and both definitions carry
+	// the builder bit, so the guard joins the ward's own build.
+	ward.Health, ward.MaxHealth = 100, 100
+	ward.Remaining = 0
+	q.primary = nil
+	if code = guardHandler(actor, n, 0, 0); code != Code(3) {
+		t.Fatalf("leg 4 should return the wait code 3, got %d", code)
+	}
+	if len(q.primary) == 0 || DescriptorFor(q.primary[0].ID).Name != "HelpBuild" {
+		t.Fatalf("leg 4 should enqueue HelpBuild toward the ward's build, got %v", names())
+	}
+	// "toward the front order's target with the front order's goal position"
+	// [04 R-UNIT-06 §1] leg 4 — not toward the ward.
+	if q.primary[0].Target != 99 {
+		t.Fatalf("leg 4 must target the ward's front-order target 99, got %d", q.primary[0].Target)
+	}
+
+	// Leg 4's self-target exclusion: "its target is not the guard itself".
+	wardQ.primary[0].Target = actor.Handle
+	q.primary = nil
+	if code = guardHandler(actor, n, 0, 700); code != Code(2) {
+		t.Fatalf("a ward building the guard must not spawn a self help-build; want hold 2, got %d", code)
+	}
+	if len(q.primary) != 0 {
+		t.Fatalf("leg 4 self-target exclusion enqueued %v", names())
+	}
+	wardQ.primary[0].Target = 99
+
+	// Leg 5, the follow maintenance, on the visit that falls through: a point
+	// goal at ward+offset, deadline tick+30 fixed, gate 0x19 on the way out,
+	// hold — and the record's goal triple still holds the OFFSET.
+	ward.Def.Builder = false // leg 4 needs the WARD's builder bit too
 	q.primary = nil
 	offset := numeric.Fixed(48 << 16)
 	n.GoalX, n.GoalY, n.GoalZ = offset, 0, -offset
@@ -913,14 +938,7 @@ func TestGuardAssistOrdering(t *testing.T) {
 	if len(q.primary) != 0 {
 		t.Fatalf("maintenance should not enqueue new order, got %d", len(q.primary))
 	}
-
-	// Verify top-down order: if (a) not deduped, it wins even when lower conditions also true
-	actor.GuardLatches.BuildAssist = [units.GuardLatchSize]pool.Handle{}
-	q.primary = nil
-	code = guardHandler(actor, n, 0, 0)
-	if code != Code(3) || len(q.primary) == 0 || DescriptorFor(q.primary[0].ID).Name != "HelpBuild" {
-		t.Fatalf("top-down: (a) should win when not deduped")
-	}
+	ward.Def.Builder = true
 
 	// Handle 0 early return: slot 0 is null [01 §6.1], no assist paths fire,
 	// only the follow maintenance.
@@ -936,7 +954,6 @@ func TestGuardAssistOrdering(t *testing.T) {
 		}
 		return nil
 	})
-	// ward still 20, unfinished/damaged so (a) and (c) would be true, but Handle 0 should skip them
 	n2 := &Node{ID: Lookup("Follow_Ground"), Target: 20, Param1: 64, Phase: 1, Owner: 0}
 	q2 := QueueForUnit(actorZero)
 	q2.primary = nil

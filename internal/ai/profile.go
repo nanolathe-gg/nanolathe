@@ -52,24 +52,37 @@ type Profile struct {
 	allWeights map[Difficulty]map[string]int32
 	allLimits  map[Difficulty]map[string]int32
 
+	// directives is the profile file's directive stream in authored order. The
+	// catalog-aware applier of [08 R-AI-01 §12] replays it against the active
+	// difficulty, because the name matcher and the two lock vectors need the
+	// definition catalog that a bare parse does not have. A hand-built fixture
+	// profile carries none; textLoaded separates "the file authored no
+	// directive" from "this profile was never parsed from text", so applying a
+	// catalog to a fixture keeps the tables the fixture set.
+	directives []content.AIDirective
+	textLoaded bool
+
 	// appliedCatalog prevents applying immutable authored unit directives more
 	// than once when a manager is rebound to the same catalog.
 	appliedCatalog *content.Catalog
 }
 
-// ApplyUnitDefinitions folds each definition's authored ai_weight directives
-// into the active profile tables used by selection. Each weight directive is
-// applied in source order as int32(float32(current)*factor), then clamped to
-// [0,100]; embedded limit directives are registered in the active per-type
-// limit table.
+// controlByteComputer is the player slot control byte of a computer player
+// [05 R-SHARE-01 §1].
+const controlByteComputer uint8 = 2
+
+// ApplyUnitDefinitions runs the whole profile grammar against a definition
+// catalog [08 R-AI-01 §12]: the directive stream replays under the plan gate,
+// each `weight`/`limit` name is expanded by the exact-versus-category matcher,
+// the two lock vectors record every exact naming, and the two per-definition
+// passes then fold each downloadable definition's authored `ai_weight` fragment
+// into the types the file did not lock.
 //
-// Unimplemented: [08 R-AI-01 §12] establishes the precedence — the profile file
-// wins whenever its `weight`/`limit` named a type exactly, because the exact
-// naming sets that type's weight lock or limit lock and the two per-definition
-// passes skip locked types. A category name locks nothing, so per-definition
-// text still applies there. Both lock vectors, the exact-versus-category name
-// matcher, and the `downloadable` gate on the per-definition passes are
-// missing here — see PLAN 19 §2.4.
+// The resulting tables are the same for every player slot, because retail parses
+// the profile text once and applies it to every slot that has a manager. The one
+// per-slot distinction is the control byte: `limit` applies only to slots whose
+// control byte is 2, so p.Limit is the control-byte-2 table and the read site
+// gates it — see LimitForControl.
 //
 // `ai_limit` is intentionally not read: the limit pass re-reads `ai_weight`, a
 // retail defect that leaves `ai_limit` with no reader at all [08 R-AI-01 §12].
@@ -78,56 +91,252 @@ func (p *Profile) ApplyUnitDefinitions(catalog *content.Catalog) {
 		return
 	}
 	p.appliedCatalog = catalog
-	keys := make([]string, 0, len(catalog.Units))
-	for key := range catalog.Units {
+	state := &profileApply{
+		catalog: catalog,
+		// The catalog's canonical key order is its authored `unitname` sort
+		// key, which is what the matcher binary-searches [08 R-AI-01 §12] (I1).
+		keys:       catalog.SortedUnitKeys(),
+		difficulty: p.Plan,
+		weightLock: make(map[string]bool),
+		limitLock:  make(map[string]bool),
+	}
+	if p.textLoaded {
+		// Every per-type weight starts at the default 100 and every limit at
+		// -1; absent map entries are those defaults, so the replay starts from
+		// empty tables [08 R-AI-01 §12].
+		state.weights = make(map[string]int32, len(state.keys))
+		state.limits = make(map[string]int32, len(state.keys))
+		state.run(p.directives, false, applyWeights|applyLimits)
+	} else {
+		// A hand-built fixture profile has no directive stream; its authored
+		// tables stand and only the per-definition passes run over them.
+		state.weights = cloneWeightTable(p.Weight)
+		state.limits = cloneWeightTable(p.Limit)
+	}
+	state.perDefinitionPass(applyWeights)
+	state.perDefinitionPass(applyLimits)
+	p.Weight = state.weights
+	p.Limit = state.limits
+}
+
+// cloneWeightTable copies a per-type table without ranging the source map (I1).
+func cloneWeightTable(src map[string]int32) map[string]int32 {
+	out := make(map[string]int32, len(src))
+	if len(src) == 0 {
+		return out
+	}
+	keys := make([]string, 0, len(src))
+	for key := range src {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	for _, key := range keys {
+		out[key] = src[key]
+	}
+	return out
+}
 
-	if p.Weight == nil {
-		p.Weight = make(map[string]int32)
+// The two directive kinds a replay is allowed to execute. The profile file's
+// own stream executes both; each per-definition pass executes only its own,
+// because [08 R-AI-01 §12] names them "the weight pass" and "the limit pass"
+// and gates them on different lock vectors.
+const (
+	applyWeights = 1 << iota
+	applyLimits
+)
+
+// profileApply is the per-catalog state of the profile grammar: the two
+// per-type tables and the two separate lock vectors [08 R-AI-01 §12].
+type profileApply struct {
+	catalog    *content.Catalog
+	keys       []string // catalog canonical keys ascending — the `unitname` sort key
+	difficulty Difficulty
+	weights    map[string]int32
+	limits     map[string]int32
+	weightLock map[string]bool
+	limitLock  map[string]bool
+}
+
+// planGateOpen evaluates a `plan` directive against the active difficulty
+// [08 R-AI-01 §12]. The directive clears the gate, then walks its arguments
+// from the first to the last; for each argument it compares THE FIRST argument
+// against `any` and THE CURRENT argument against the active difficulty's
+// keyword, setting the gate on either match. Comparing `any` at a literal
+// position rather than the loop position is a retail quirk: `any` is honoured
+// only in the first argument position and repeating it later has no effect;
+// reproduce it. A `plan` with no arguments runs no iterations and therefore
+// leaves the gate clear, disabling every directive after it until the next
+// `plan`.
+func planGateOpen(args []string, active Difficulty) bool {
+	open := false
+	for i := range args {
+		if strings.EqualFold(args[0], string(DifficultyAny)) {
+			open = true
+		}
+		if strings.EqualFold(args[i], string(active)) {
+			open = true
+		}
 	}
-	if p.Limit == nil {
-		p.Limit = make(map[string]int32)
+	return open
+}
+
+// match expands the name argument of a `weight` or `limit` directive and
+// reports whether the naming was exact [08 R-AI-01 §12]. The name is first
+// binary-searched against the definition catalog by authored `unitname`, which
+// is the catalog's sort key: a hit names exactly that one type and is an exact
+// naming; a miss instead expands to the whole category bitset registered for
+// that name and is not exact, so it locks nothing. A name that is neither a
+// definition nor a registered category expands to nothing.
+func (a *profileApply) match(name string) ([]string, bool) {
+	ck := content.CanonicalKey(name)
+	if ck == "" || a.catalog == nil {
+		return nil, false
 	}
-	for _, unitKey := range keys {
-		applyUnitWeight(catalog.Units[unitKey], p.Weight, p.Limit)
+	if i := sort.SearchStrings(a.keys, ck); i < len(a.keys) && a.keys[i] == ck {
+		return a.keys[i : i+1], true
+	}
+	mask, ok := a.catalog.Category(name)
+	if !ok || mask.IsZero() {
+		return nil, false
+	}
+	// Walk the sort key, not the membership words, so the expansion order is
+	// the catalog's own ascending order (I1).
+	out := make([]string, 0, 8)
+	for _, key := range a.keys {
+		def := a.catalog.Units[key]
+		if def == nil || def.UnitDefID == 0 {
+			continue
+		}
+		if mask.Contains(def.UnitDefID) {
+			out = append(out, key)
+		}
+	}
+	return out, false
+}
+
+// run replays a directive stream under the plan gate. gate is the gate's
+// initial state: closed for a profile file, pre-set open for a per-definition
+// `ai_weight` fragment so a fragment that omits `plan` still applies
+// [08 R-AI-01 §12].
+func (a *profileApply) run(directives []content.AIDirective, gate bool, allow int) {
+	for _, directive := range directives {
+		switch directive.Keyword {
+		case content.AIDirectivePlan:
+			gate = planGateOpen(directive.Args, a.difficulty)
+		case content.AIDirectiveWeight:
+			if gate && allow&applyWeights != 0 {
+				a.applyWeight(directive.Args)
+			}
+		case content.AIDirectiveLimit:
+			if gate && allow&applyLimits != 0 {
+				a.applyLimit(directive.Args)
+			}
+		}
 	}
 }
 
-func applyUnitWeight(def *content.UnitDef, weights, limits map[string]int32) {
-	if def == nil || def.AIWeight == "" {
+// applyWeight multiplies the running per-type weight of every unlocked type in
+// the name's bitset and clamps the product; an exact naming then locks those
+// types against any later per-definition text [08 R-AI-01 §12].
+func (a *profileApply) applyWeight(args []string) {
+	if len(args) == 0 {
 		return
 	}
-	directives := content.ParseAIWeight([]byte(def.AIWeight))
-	for _, directive := range directives.Weights {
-		if weights == nil {
+	// The second argument is a float defaulting to 0.0 [08 R-AI-01 §12].
+	value := float32(0)
+	if len(args) > 1 {
+		parsed, ok := content.ParseAIWeightFactor(args[1])
+		if !ok {
+			return
+		}
+		value = float32(parsed)
+	}
+	types, exact := a.match(args[0])
+	for _, ck := range types {
+		if a.weightLock[ck] {
 			continue
 		}
 		current := int32(100)
-		if prior, ok := weights[directive.Type]; ok {
+		if prior, ok := a.weights[ck]; ok {
 			current = prior
 		}
-		// Retail narrows the running product to float32 before __ftol-style
-		// truncation; do not clamp or quantize the authored factor first [08
-		// "Established AI-facing data and rooted planner"].
-		updated := int32(float32(current) * directive.Factor)
+		// The running product narrows to float32 before the __ftol-style
+		// truncation toward zero, and the clamp is "at or below zero becomes
+		// zero, at or above 100 becomes 100" [08 R-AI-01 §12] [I2 AI rows] [I3].
+		updated := int32(float32(current) * value)
 		if updated < 0 {
 			updated = 0
 		} else if updated > 100 {
 			updated = 100
 		}
-		weights[directive.Type] = updated
+		a.weights[ck] = updated
 	}
-	limitKeys := make([]string, 0, len(directives.Limits))
-	for key := range directives.Limits {
-		limitKeys = append(limitKeys, key)
-	}
-	sort.Strings(limitKeys)
-	for _, key := range limitKeys {
-		if limits != nil {
-			limits[key] = directives.Limits[key]
+	if exact {
+		for _, ck := range types {
+			a.weightLock[ck] = true
 		}
+	}
+}
+
+// applyLimit assigns the per-type limit of every unlocked type in the name's
+// bitset; an exact naming then sets the limit lock. -1 means unlimited
+// [08 R-AI-01 §12].
+func (a *profileApply) applyLimit(args []string) {
+	if len(args) == 0 {
+		return
+	}
+	// The second argument is an integer defaulting to 0 [08 R-AI-01 §12].
+	value := int32(0)
+	if len(args) > 1 {
+		value = content.ParseAILimitValue(args[1])
+	}
+	types, exact := a.match(args[0])
+	for _, ck := range types {
+		if a.limitLock[ck] {
+			continue
+		}
+		a.limits[ck] = value
+	}
+	if exact {
+		for _, ck := range types {
+			a.limitLock[ck] = true
+		}
+	}
+}
+
+// perDefinitionPass walks the definition catalog in ascending type order and,
+// for every definition carrying the authored `downloadable` flag whose
+// corresponding lock is clear — the weight lock in the first pass, the limit
+// lock in the second — replays that definition's authored `ai_weight` text as a
+// fragment of the same grammar with the plan gate pre-set open
+// [08 R-AI-01 §12]. Both passes read `ai_weight`; `ai_limit` is parsed by the
+// definition loader and read by nothing, which is the retail defect that
+// section names.
+//
+// TODO(question): does each pass execute only its own directive kind, or does
+// it run the shared handler over the whole fragment — which would apply a
+// fragment's `weight` multiply twice, once per pass? [08 R-AI-01 §12] names the
+// passes "the weight pass" and "the limit pass" and gives them different lock
+// gates, which is why only the pass's own kind is executed here. Decider: a
+// static trace of the second pass's directive dispatch, recorded in
+// [08 R-AI-01 §12]. Stock content authors seven `ai_weight` fields, all of them
+// a single `weight` directive, so the two readings differ on stock content.
+func (a *profileApply) perDefinitionPass(allow int) {
+	for _, ck := range a.keys {
+		def := a.catalog.Units[ck]
+		if def == nil || !def.Downloadable {
+			continue
+		}
+		if allow&applyWeights != 0 && a.weightLock[ck] {
+			continue
+		}
+		if allow&applyLimits != 0 && a.limitLock[ck] {
+			continue
+		}
+		if strings.TrimSpace(def.AIWeight) == "" {
+			continue
+		}
+		a.run(content.ParseAIDirectives([]byte(def.AIWeight)), true, allow)
 	}
 }
 
@@ -149,7 +358,20 @@ func (p *Profile) WeightFor(typeName string) int32 {
 	return 100
 }
 
+// LimitForControl returns the per-type limit a slot with the given control byte
+// sees. The profile grammar's `limit` directive applies only to slots whose
+// control byte is 2, so every other slot — a locally controlled human at 1, a
+// remote peer at 3 — sees the unlimited default even though it has a manager
+// and shares the profile's weight table [08 R-AI-01 §12] [05 R-SHARE-01 §1].
+func (p *Profile) LimitForControl(controlByte uint8, typeName string) int32 {
+	if controlByte != controlByteComputer {
+		return -1
+	}
+	return p.LimitFor(typeName)
+}
+
 // LimitFor returns the limit for typeName, default -1 unlimited [PLAN 11 C4].
+// It is the control-byte-2 table; LimitForControl owns the slot gate.
 func (p *Profile) LimitFor(typeName string) int32 {
 	if p == nil {
 		return -1
@@ -254,6 +476,29 @@ func (p *Profile) Difficulties() []Difficulty {
 	return out
 }
 
+// SetDifficulty selects the difficulty word the plan gate compares each
+// directive's arguments against — 0 easy, 1 medium, 2 hard, written from the
+// lobby setting or the campaign difficulty control [08 R-AI-01 §12]. It clears
+// the applied-catalog memo so the next ApplyUnitDefinitions replays the whole
+// directive stream under the new gate. A word outside the vocabulary is
+// ignored.
+//
+// Unimplemented: nothing supplies this yet. The session carries the word —
+// SkirmishConfig.Difficulty, whose default is 1 (medium), and the campaign
+// difficulty — but it never reaches the profile, so LoadProfile falls back to
+// the last plan the file names, which is `hard` in all ten stock profiles.
+// Binding it is a session-side change; see PLAN 19 §2.4.
+func (p *Profile) SetDifficulty(d Difficulty) {
+	if p == nil || !isValidDifficulty(d) {
+		return
+	}
+	if p.Plan == d {
+		return
+	}
+	p.Plan = d
+	p.appliedCatalog = nil
+}
+
 // Name returns the profile basename (without extension) as loaded.
 func (p *Profile) Name() string {
 	if p == nil {
@@ -319,6 +564,11 @@ func LoadProfile(fs vfs.FSOps, name string) (*Profile, error) {
 		name:       usedName,
 		allWeights: make(map[Difficulty]map[string]int32),
 		allLimits:  make(map[Difficulty]map[string]int32),
+		// The authored directive stream is retained because the grammar's name
+		// matcher and lock vectors need the definition catalog, which arrives
+		// later than the parse [08 R-AI-01 §12].
+		directives: content.ParseAIDirectives(data),
+		textLoaded: true,
 	}
 
 	for k, v := range cprof.Plans {

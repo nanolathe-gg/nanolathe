@@ -41,6 +41,74 @@ type AIWeightDirective struct {
 	Factor float32
 }
 
+// AIDirective is one directive of the profile grammar in source order. The
+// keyword table is exactly `plan`, `weight` and `limit`; every other token is
+// ignored [08 R-AI-01 §12]. Args holds the arguments after the keyword with
+// their authored order and spelling intact, because the grammar's gate rule
+// distinguishes argument positions.
+type AIDirective struct {
+	Keyword string
+	Args    []string
+}
+
+// Directive keywords of the profile grammar [08 R-AI-01 §12].
+const (
+	AIDirectivePlan   = "plan"
+	AIDirectiveWeight = "weight"
+	AIDirectiveLimit  = "limit"
+)
+
+// ParseAIDirectives tokenizes profile text — a whole ai/*.txt file or the
+// fragment authored in a definition's ai_weight field — into the ordered
+// directive stream of the three-keyword table [08 R-AI-01 §12]. Order is
+// preserved because `weight` multiplies the running per-type value, so two
+// directives naming one type do not commute. Unknown keywords and lines with no
+// arguments are dropped; the applier owns the gate, the name matcher and the
+// lock vectors.
+func ParseAIDirectives(data []byte) []AIDirective {
+	var out []AIDirective
+	for _, rawLine := range strings.Split(string(data), "\n") {
+		line := strings.TrimRight(rawLine, "\r")
+		if idx := strings.Index(line, "//"); idx >= 0 {
+			line = line[:idx]
+		}
+		line = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(line), ";"))
+		if line == "" {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) == 0 {
+			continue
+		}
+		keyword := strings.ToLower(parts[0])
+		switch keyword {
+		case AIDirectivePlan, AIDirectiveWeight, AIDirectiveLimit:
+		default:
+			continue
+		}
+		args := make([]string, len(parts)-1)
+		copy(args, parts[1:])
+		out = append(out, AIDirective{Keyword: keyword, Args: args})
+	}
+	return out
+}
+
+// ParseAIWeightFactor reads a `weight` directive's second argument. The
+// established default when the argument is absent is 0.0 [08 R-AI-01 §12];
+// this reports ok=false for text that is not a float at all, leaving the
+// caller's tolerant "ignore the line" behavior in place.
+func ParseAIWeightFactor(value string) (float64, bool) {
+	return parseAIWeightFactor(value)
+}
+
+// ParseAILimitValue reads a `limit` directive's second argument through the
+// integer accessor, which takes a decimal integer and ignores trailing junk
+// [02 §4]. The established default when the argument is absent is 0
+// [08 R-AI-01 §12]; -1 means unlimited.
+func ParseAILimitValue(value string) int32 {
+	return formats.ParseTDFInteger(value)
+}
+
 // AIWeightPlan contains the directives authored in a unit's ai_weight field.
 // Weights is a slice because repeated directives apply in source order;
 // Limits remain a map because a limit is an assignment rather than an
@@ -115,12 +183,52 @@ func parseAIWeightFactor(value string) (float64, bool) {
 	return factor, true
 }
 
-// planNames is the vocabulary for the plan gate [08 "Computer-controlled players"] [PLAN 11 C4].
+// aiPlanNames is the difficulty vocabulary of the plan gate [08 R-AI-01 §12].
 var aiPlanNames = map[string]struct{}{
 	"any":    {},
 	"easy":   {},
 	"medium": {},
 	"hard":   {},
+}
+
+// aiPlanTableNames returns the per-difficulty table names a `plan` directive
+// opens, given its arguments.
+//
+// [08 R-AI-01 §12] establishes the gate itself: the directive clears the gate,
+// walks its arguments from the first to the last, and for each argument
+// compares the FIRST argument against `any` and the CURRENT argument against
+// the active difficulty's keyword. `any` in a later position is therefore
+// inert. A directive with no arguments runs no iterations and leaves the gate
+// clear, disabling every directive after it until the next `plan`.
+//
+// The per-difficulty tables of AIProfile are Nanolathe's lookup index over one
+// parse, not a retail structure: retail knows the active difficulty while it
+// parses. This helper indexes a multi-argument directive under each difficulty
+// it names, and keeps `any` as its own table entry only in the first argument
+// position, so the position quirk is visible here too. The authoritative gate
+// evaluation against a chosen difficulty lives with the profile applier.
+func aiPlanTableNames(args []string) []string {
+	var names []string
+	for i, arg := range args {
+		name := strings.ToLower(strings.TrimSpace(arg))
+		if _, ok := aiPlanNames[name]; !ok {
+			continue
+		}
+		if name == "any" && i != 0 {
+			continue
+		}
+		duplicate := false
+		for _, have := range names {
+			if have == name {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // Weight returns the weight for a type under a plan, or the default 100 when absent
@@ -201,12 +309,14 @@ func (a *AIPlan) LimitKeysSorted() []string {
 // multiply the stored per-type weight and clamp to [0,100]; limit lines store
 // the limit; the defaults are weight 100 and limit -1 [08 R-AI-01 §12].
 //
-// Unimplemented: [08 R-AI-01 §12] establishes four further parts of the
-// grammar — a multi-argument `plan` (with `any` honoured only in the first
-// argument position, a retail quirk), the exact-versus-category name matcher
-// over the catalog's `unitname` sort key, the separate weight and limit lock
-// vectors, and `limit` applying only to slots whose control byte is 2 — see
-// PLAN 19 §2.4.
+// A `plan` may carry several arguments; aiPlanTableNames owns that rule and
+// the first-position `any` quirk [08 R-AI-01 §12].
+//
+// The per-plan tables this builds are a lookup index over one parse, keyed by
+// the difficulty vocabulary. They do not carry the grammar's name matcher or
+// its two lock vectors, both of which need the definition catalog: the
+// catalog-aware applier that owns them consumes ParseAIDirectives instead
+// (internal/ai, [08 R-AI-01 §12]).
 func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, error) {
 	text := string(data)
 	// Keep raw for diagnostics; not part of hash directly (hash uses canonical bytes).
@@ -219,7 +329,10 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 		Plans: make(map[string]*AIPlan),
 		Raw:   text,
 	}
-	currentPlan := "" // empty means no plan yet — lines before first plan are ignored [PLAN 11 C4]
+	// currentPlans is empty until a `plan` opens the gate; lines before the
+	// first `plan`, and lines after a `plan` that names nothing, do not apply
+	// [08 R-AI-01 §12] [PLAN 11 C4].
+	var currentPlans []string
 	lines := strings.Split(text, "\n")
 	for _, rawLine := range lines {
 		// Strip carriage return from Windows line endings.
@@ -241,27 +354,22 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 		cmd := strings.ToLower(parts[0])
 		switch cmd {
 		case "plan":
-			if len(parts) < 2 {
-				continue
-			}
-			diff := strings.ToLower(strings.TrimSpace(parts[1]))
-			if _, ok := aiPlanNames[diff]; !ok {
-				// A `plan` clears the gate first and sets it only when an
-				// argument matches `any` or the active difficulty's keyword,
-				// so an unknown name leaves the gate clear and disables every
-				// directive after it until the next `plan` [08 R-AI-01 §12].
-				currentPlan = ""
-				continue
-			}
-			currentPlan = diff
-			if _, ok := profile.Plans[currentPlan]; !ok {
-				profile.Plans[currentPlan] = &AIPlan{
-					Weights: make(map[string]int32),
-					Limits:  make(map[string]int32),
+			// A `plan` clears the gate first and sets it only when an argument
+			// matches `any` (first position only) or the active difficulty's
+			// keyword, so a directive naming nothing leaves the gate clear and
+			// disables every directive after it until the next `plan`
+			// [08 R-AI-01 §12].
+			currentPlans = aiPlanTableNames(parts[1:])
+			for _, name := range currentPlans {
+				if _, ok := profile.Plans[name]; !ok {
+					profile.Plans[name] = &AIPlan{
+						Weights: make(map[string]int32),
+						Limits:  make(map[string]int32),
+					}
 				}
 			}
 		case "weight":
-			if currentPlan == "" {
+			if len(currentPlans) == 0 {
 				continue // gate: weight lines before plan do not apply [PLAN 11 C4]
 			}
 			if len(parts) < 3 {
@@ -281,27 +389,29 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 			if !ok {
 				continue
 			}
-			pl := profile.Plans[currentPlan]
-			if pl == nil {
-				pl = &AIPlan{Weights: make(map[string]int32), Limits: make(map[string]int32)}
-				profile.Plans[currentPlan] = pl
-			}
 			ck := CanonicalKey(typeName)
-			cur := int32(100)
-			if v, ok := pl.Weights[ck]; ok {
-				cur = v
+			for _, name := range currentPlans {
+				pl := profile.Plans[name]
+				if pl == nil {
+					pl = &AIPlan{Weights: make(map[string]int32), Limits: make(map[string]int32)}
+					profile.Plans[name] = pl
+				}
+				cur := int32(100)
+				if v, ok := pl.Weights[ck]; ok {
+					cur = v
+				}
+				// [08 R-AI-01 §12]: the directive multiplies the running per-type
+				// weight and clamps the product to [0,100].
+				newWeight := int32(float64(cur) * factor) // trunc toward zero [INVARIANTS I3]
+				if newWeight < 0 {
+					newWeight = 0
+				} else if newWeight > 100 {
+					newWeight = 100
+				}
+				pl.Weights[ck] = newWeight
 			}
-			// [08 R-AI-01 §12]: the directive multiplies the running per-type
-			// weight and clamps the product to [0,100].
-			newWeight := int32(float64(cur) * factor) // trunc toward zero [INVARIANTS I3]
-			if newWeight < 0 {
-				newWeight = 0
-			} else if newWeight > 100 {
-				newWeight = 100
-			}
-			pl.Weights[ck] = newWeight
 		case "limit":
-			if currentPlan == "" {
+			if len(currentPlans) == 0 {
 				continue // gate [PLAN 11 C4]
 			}
 			if len(parts) < 3 {
@@ -312,13 +422,15 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 			// Limit uses integer accessor style: decimal integer, trailing junk ignored [02 §4].
 			// Use ParseTDFInteger for retail faithfulness.
 			val := formats.ParseTDFInteger(valueStr)
-			pl := profile.Plans[currentPlan]
-			if pl == nil {
-				pl = &AIPlan{Weights: make(map[string]int32), Limits: make(map[string]int32)}
-				profile.Plans[currentPlan] = pl
-			}
 			ck := CanonicalKey(typeName)
-			pl.Limits[ck] = val
+			for _, name := range currentPlans {
+				pl := profile.Plans[name]
+				if pl == nil {
+					pl = &AIPlan{Weights: make(map[string]int32), Limits: make(map[string]int32)}
+					profile.Plans[name] = pl
+				}
+				pl.Limits[ck] = val
+			}
 		default:
 			// Unknown token — ignore per being plain text profile with only these three verbs [08].
 			continue

@@ -171,7 +171,15 @@ func TestComputerPlayerFormsAnAttackWaveRetail(t *testing.T) {
 		t.Fatal("the computer slot composed without a manager")
 	}
 	scaled := sess.Clock.ScaledAnchor
-	const formationBy = uint32(12000)
+	// The budget was 12000 while the profile grammar's category names were
+	// inert, so every type scored at the unmodulated default weight of 100.
+	// With the exact-versus-category matcher of [08 R-AI-01 §12] in place,
+	// ai/default.txt's `Weight ARM 0.2` / `Weight CORE 0.2` reach every member
+	// of those categories and the whole candidate table scores five times lower
+	// before the exact overrides multiply back up, which pushes the first wave
+	// on this seed from just under 12000 to 14100. This budget is the pacing
+	// the profile now produces, not a slack allowance.
+	const formationBy = uint32(18000)
 	for sess.Clock.GlobalTick < formationBy && sess.State != StatePostBattle {
 		scaled += 5
 		sess.Step(scaled)

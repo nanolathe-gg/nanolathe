@@ -13,6 +13,9 @@ func TestSelectionUsesAuthoredAIWeightAndEmbeddedLimit(t *testing.T) {
 		DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armflak")},
 		UnitName:         "armflak",
 		AIWeight:         "weight ARMFLAK 0.5",
+		// Only a definition carrying the authored downloadable flag is visited
+		// by the two per-definition passes [08 R-AI-01 §12].
+		Downloadable: true,
 	}
 	catalog := &content.Catalog{Units: map[string]*content.UnitDef{
 		"armcom":  builder.Def,
@@ -75,6 +78,7 @@ func TestAuthoredAIWeightPreservesFactorAndNarrowsEachDirective(t *testing.T) {
 	def := &content.UnitDef{
 		DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armflak")},
 		AIWeight:         "weight ARMFLAK 0.299",
+		Downloadable:     true,
 	}
 	catalog := &content.Catalog{Units: map[string]*content.UnitDef{"armflak": def}}
 	profile := &Profile{Weight: map[string]int32{"armflak": 99}, Limit: map[string]int32{}}
@@ -83,11 +87,15 @@ func TestAuthoredAIWeightPreservesFactorAndNarrowsEachDirective(t *testing.T) {
 		t.Fatalf("99 * .299 weight = %d, want 29", got)
 	}
 
+	// An exact naming sets that type's weight lock as soon as the directive is
+	// applied, and the handler skips every locked type, so a second directive
+	// naming the same type exactly is inert: 99 * 1.5 truncates to 148 and
+	// clamps to 100, and the *.299 that follows never runs [08 R-AI-01 §12].
 	def.AIWeight = "weight ARMFLAK 1.5\nweight ARMFLAK 0.299"
 	profile = &Profile{Weight: map[string]int32{"armflak": 99}, Limit: map[string]int32{}}
 	profile.ApplyUnitDefinitions(catalog)
-	if got := profile.WeightFor("armflak"); got != 29 {
-		t.Fatalf("sequential 99 * 1.5 clamp then *.299 weight = %d, want 29", got)
+	if got := profile.WeightFor("armflak"); got != 100 {
+		t.Fatalf("exact naming locks the type: weight = %d, want 100", got)
 	}
 }
 
