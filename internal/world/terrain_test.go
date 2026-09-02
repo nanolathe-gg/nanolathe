@@ -203,10 +203,17 @@ func TestHeightAtBilinear(t *testing.T) {
 	}
 }
 
-// TestVoidEdgeRules locks the four engine-derived void rules of
-// [02 "Terrain file"]: right columns void only where empty/fringe (live
-// features survive), the north strip z*16 < height>>1, the south strip
-// (Height-1-z)*16 + (height>>1) < 112, and the lava flood on hmin.
+// TestVoidEdgeRules locks the conversion gate the four engine-derived rules of
+// [03 R-TERR-01 §2] share: only an empty or fringe cell is converted, so a live
+// feature standing in a strip survives it. Which rows each walk reaches, and
+// which cell it writes, is locked cell by cell against an authored map in
+// void_strip_test.go.
+//
+// Row expectations corrected by WU-19-48. On this 12x12 map at height 10 the
+// north walk voids row 0 and stops at row 1 (16 - 5 is not negative), and the
+// south walk runs from row 11 up to row 5 (PlayBottom is 64 and 5*16 - 5 = 75
+// is the last value above it), voiding the row ABOVE each tested row — rows 4
+// through 10, the bottom row not among them.
 func TestVoidEdgeRules(t *testing.T) {
 	// 12x12 flat map at height 10; put a live feature in the rightmost
 	// column and one on the north edge so their survival is asserted.
@@ -233,24 +240,30 @@ func TestVoidEdgeRules(t *testing.T) {
 	if got := ter.PlotAt(3, 0).Feature(); got != 2 {
 		t.Fatalf("north edge feature = %d, want 2 (must survive)", got)
 	}
-	// Rows 1..4 are never voided by either strip on this map: north needs
-	// z*16 < height>>1 (row 0 only at height 10) and south needs
-	// (12-1-z)*16+5 < 112 (rows 5..11 only).
+	// Rows 1..3 are reached by neither walk on this map.
 	if got := ter.PlotAt(5, 3).Feature(); got != PlotFeatureNone {
 		t.Fatalf("mid row cell = %#x, want %#x", got, PlotFeatureNone)
 	}
-	// South strip: last row z=11 gives (0)*16 + 5 = 5 < 112, voided.
-	if got := ter.PlotAt(5, 11).Feature(); got != PlotFeatureVoid {
+	// South strip: the deepest row it voids here is 10, the row above the
+	// bottom row it tests first.
+	if got := ter.PlotAt(5, 10).Feature(); got != PlotFeatureVoid {
 		t.Fatalf("south strip cell = %#x, want %#x", got, PlotFeatureVoid)
 	}
-	// ... but a tall south cell (height 240, half 120) survives: 5+120 >= 112.
-	// (recheck on a fresh map)
+	// ... and the bottom row itself is never voided by the south rule.
+	if got := ter.PlotAt(5, 11).Feature(); got != PlotFeatureNone {
+		t.Fatalf("bottom row cell = %#x, want %#x (rule 4 voids the row above)", got, PlotFeatureNone)
+	}
+	// A tall bottom row (240, half 120) stops the walk at once: 11*16 - 120 =
+	// 56 is at or below PlayBottom 64, so that column loses no row at all —
+	// including row 10, which the flat map above did lose.
 	attrs2 := flat(12, 12, 10)
 	attrs2[11*12+5] = formats.TNTAttribute{Height: 240, Feature: PlotFeatureNone}
 	ter2 := synth(t, 12, 12, attrs2, nil)
 	ter2.applyVoidFixup(nil)
-	if got := ter2.PlotAt(5, 11).Feature(); got != PlotFeatureNone {
-		t.Fatalf("tall south cell = %#x, want %#x", got, PlotFeatureNone)
+	for _, cz := range []int32{10, 11} {
+		if got := ter2.PlotAt(5, cz).Feature(); got != PlotFeatureNone {
+			t.Fatalf("tall south column cell (5,%d) = %#x, want %#x", cz, got, PlotFeatureNone)
+		}
 	}
 }
 
@@ -355,7 +368,8 @@ func TestLegacyTerrainLoads(t *testing.T) {
 		t.Fatalf("gravity = %d, want %d (header gravity via *65536/900)", ter.Gravity, want)
 	}
 	// Per-cell metal from attribute byte 6; interior cell (5,5) stays clean
-	// (rows 1..8 clear of both strips, columns 0..13 clear of the right edge).
+	// (rows 1..7 clear of both strips — the south walk on this flat 16-row map
+	// reaches row 8 — and columns 0..13 clear of the right edge).
 	if got := ter.PlotAt(5, 5).Metal(); got != byte(1+(5*16+5)%9) {
 		t.Fatalf("legacy per-cell metal at (5,5) = %d", got)
 	}

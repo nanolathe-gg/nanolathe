@@ -105,7 +105,7 @@ argument at every call site. The complete strip → producer/event map:
 | 2 | COB emit-sfx vector types 2–5 (the "impact-effect switch" — see the re-verification note below): one jittered smoke puff (three CRT draws of `rand×7/0x8000 − 3` per axis) per spawn, spawn interval 1 tick with the per-site spacing parameter (16 or 8) scaling puff lifetime; palette colors `0x61`/`0x67` | 4 |
 | 3 | none | always empty |
 | 4 | the geothermal steam producer of [05 R-ECO-02 §3]: a flame-class object appended with init literals `(5, 0, 150)` under the pool gate and the 400-cap eviction (corrected 2026-08-29 — this row previously read "none … always empty"; the retired "crater/decal literal 4" retraction of §3.7 stands) | 1 |
-| 5 | teleport order effect (1 site — see [R-LAYER §4]; an earlier reading called this a "flame-weapon area scan" plus an "ignition callback", both retracted: the producer is the Teleport order-state handler and the second call is the unit position commit): for every other unit inside the ordering unit's definition-relative world box, a 30-tick flame-stream object that lays one animated segment every 10 ticks with a random start frame while the handler commits that unit to its displaced position; burning-feature smoke (1 site, phase 6 of doc 01 §4.4): one wind-drifted smoke puff every 3rd tick with two CRT jitter draws at the call site | 2 |
+| 5 | teleport order effect (1 site — see [R-LAYER §4]; an earlier reading called this a "flame-weapon area scan" plus an "ignition callback", both retracted: the producer is the Teleport order-state handler and the second call is the unit position commit): for every other unit inside the ordering unit's definition-relative world box, a 30-tick flame-stream object that lays one animated segment every 10 ticks with a random start frame while the handler commits that unit to its displaced position; burning-feature smoke (1 site, phase 6 of doc 01 §4.4): one wind-drifted smoke puff every 3rd tick with two CRT jitter draws at the call site and a third, the puff's last frame, inside the producer; init row `(0, 1, 0, 0, 0)` — `smoke 1`, lifetime 0, a one-shot container ([05 R-FEAT-01 §16]) | 2 |
 | 6 | construction/reclaim nanolathe emitters: a source point and a target box, five particles per spawn tick over a two-tick spawn window (six CRT draws per particle) | 16 |
 | 7 | flame-stream trail (2 sites): one animated flame segment per tick over a 6–7 tick flight from source to target; smoke sprinkle variant (1 site): the strip-2 family with 8-tick spacing and a 7-tick life | 3 |
 | 8 | none (the composer still draws the strip, unconditionally) | always empty |
@@ -6505,7 +6505,9 @@ The animation clock counts the hold down; on zero it advances the frame and
 redraws the next hold as half to full of the authored value, one CRT draw per
 advance ([R-STRIP-01 §3]). A puff's own life is `crtRand·(frameCount − 3)/0x8000
 + 2` frames of the bound entry, so it needs the entry's frame count, which the
-container stores at init.
+container stores at init. The strip-5 burning-feature producer's jitter is
+applied to the container's world X and world height before this update sees
+the puff; Z is the footprint centre ([05 R-FEAT-01 §16]).
 
 **Flame-stream trail family** (emit-sfx types 0/1 on strip 7; the debris fire
 particle on strip 9). Container: source `A`, target `B`, per-axis step
@@ -9164,8 +9166,10 @@ by the sharper question it turned into.
 - Missile target invalidation and reacquisition · §5.4 · static trace (doc
   06 owns the homing contract). Strip lifetimes and colour cycles are closed
   in [R-FX-01 §3].
-- The strip-5 burning-feature smoke producer's puff parameters (variant,
-  life) · §5.5, [R-STRIP-01 §1] · static trace of the phase-6 site.
+- (Closed 2026-09-02 by [05 R-FEAT-01 §16]: `smoke 1`, no frame cap, hold 7,
+  lifetime 0, three phase-6 CRT draws.) ~~The strip-5 burning-feature smoke
+  producer's puff parameters (variant, life) · §5.5, [R-STRIP-01 §1] · static
+  trace of the phase-6 site.~~
 
 ### Audio and music
 

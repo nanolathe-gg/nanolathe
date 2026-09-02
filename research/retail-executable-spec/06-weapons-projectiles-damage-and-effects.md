@@ -3566,10 +3566,101 @@ always supplies zero (slot 0), which is where shipped stockpile weapons live.
 A malformed build-type of three or greater indexes past the unit record with
 no bounds check.
 
-**Unknown:** Byte overflow or wrap for malformed preexisting slot values,
-cancellation interaction with admitted carry, repeat requeue, and save and
-load reconstruction beyond the established queue count, progress, and
-slot-byte persistence remain open.
+**Unknown:** cancellation interaction with admitted carry, repeat requeue,
+and save and load reconstruction beyond the established queue count,
+progress, and slot-byte persistence remain open. (The "byte overflow or
+wrap for malformed preexisting slot values" item that stood here is closed
+in [R-WPN-05 §2]: the byte can neither underflow nor pass 200 through the
+engine's own paths.)
+
+### Closed — the stockpile queue's malformed arms: the unarmed slot, the empty stockpile, and the byte's readers and writers [R-WPN-05 §2] (2026-09-02)
+
+§11.1 established the ordinary production visit. RWU-19-16 re-read the
+production handler, the secondary pump that drives it, the slot pipeline's
+launch gate, the slot initializer and the interface percentage to settle the
+corner cases an implementation had left as placeholders.
+
+**Established — the production handler is a three-phase order body.** The
+node's slot index is used verbatim to select the weapon slot; the handler
+tests neither that the slot's weapon carries `stockpile` nor that it is a
+real weapon. Phase 0: requested count below 1 → *complete* (code 5, the
+node is unlinked); slot byte above 199 → deadline 300, *hold*; else
+progress := 0, *advance*. Phase 1: `next := min(progress + 5, reloadtime)`;
+the two deltas of §11.1, each `trunc(next·cost/reloadtime) −
+trunc(old·cost/reloadtime)` formed in floating point with the multiply
+before the divide; the two-resource admission refused → deadline 10,
+*hold*; accepted → progress := next; `next < reloadtime` → deadline 5,
+*hold*; else *advance*. Phase 2: slot byte += 1 (no cap, no wrap test),
+count −= 1, request the selected-unit refresh, *restart* (phase 0). Any
+other phase → *cancel-all*. The codes are [04 §3.3]'s.
+
+**Established — the secondary pump re-dispatches the head after every
+result that leaves the record in place.** After a *restart*, *advance*,
+*hold* or *complete* the secondary pump reloads the queue **head** and tests
+it again in the same visit; only a record whose gate is armed and whose
+deadline has not expired is passed over for its successor. So a round whose
+`reloadtime` is at most 5 runs phase 0 → 1 → 2 → 0 → … within one visit,
+and the chain stops only when the count reaches 0 (*complete*), the
+admission refuses (*hold* 10), or the slot byte passes 199 (*hold* 300).
+This is the mechanism behind §11.1's "assets whose build time is at most
+five can complete multiple queued rounds in one visit", now traced. Every
+*hold* in the handler arms a deadline first; a *hold* returned with a clear
+gate would spin the pump on the head for the rest of the visit.
+
+**Established — an unarmed slot points at weapon record 0, and the order
+completes for free.** The slot initializer copies the definition's three
+weapon references into the slots unconditionally and zeroes each slot's
+byte; a definition with no weapon in a slot holds a reference to weapon
+record 0, the `[noweapon]` sentinel of [R-DMG-01 §5] (`reloadtime` 0, both
+per-shot costs 0), never a null. A `BUILDWEAPON` node on such a unit — the
+HUD alias issues one only where the unit's build page authors a
+`MAKENUKE`/`MAKEANTI` button; the mission `Bw` verb and the two network
+decoders are the other producers (§11.1) — therefore does not fault. In
+phase 1 `next = min(5, 0) = 0`, both quotients are `0·0/0`, an invalid
+operation whose truncation is the same indefinite integer on both sides, so
+both deltas are exactly 0; the admission accepts a zero request unless the
+unit's buckets already carry debt; `0 < 0` is false, so the round *advances*
+and phase 2 completes it. The pump then restarts the head in the same visit:
+**every queued round completes at once, at no cost**, into that slot's
+byte, until the count is 0 or the byte passes 199. Nothing reads the byte
+for a weapon without `stockpile` (below), so the only visible trace is the
+interface refresh — and, if the node outlives the visit (a count large
+enough to hit the 199 gate), the build-page percentage of §11.1,
+`progress·100 / reloadtime`, is an integer divide by zero with no guard: a
+hovered unit in that state faults. An implementation should refuse to
+enqueue a stockpile node against a slot whose weapon is record 0 or lacks
+`stockpile`; that is the one behavior that is both safe and
+indistinguishable from retail in every shipped case.
+
+**Established — the empty-stockpile fire order.** The slot pipeline's fire
+gate for a `stockpile` weapon is "slot byte nonzero" in place of the
+per-shot cost test; when it fails, the executor is not run, no reload is
+written, no state or firing flag changes, and no order-side text or
+cancellation follows — the attack order keeps its target and the slot
+re-tests every tick. The vertical-launch aim dispatch is gated the same way
+(`not stockpile, or byte nonzero`), so an empty launcher never even aims.
+On a successful launch the byte is decremented **after** the nonzero test,
+so it cannot underflow; the ordinary reload write and the per-shot debit
+are skipped for the stockpile arm (§11.1).
+
+**Established — every reader and writer of the slot byte.** Writers: the
+slot initializer (0 at unit creation), the production handler's phase 2
+(+1), the successful stockpile launch (−1), and save restoration
+([08 "Save-file organization"]). Readers: the handler's phase-0 gate
+(`> 199`), the vertical-launch aim gate, the fire gate, and the interceptor
+aim scan and fire-time rescan (`≠ 0`, §11.2). Bounded census over the slot
+pipeline, the production handler, the slot initializer and the interceptor
+scan.
+
+**Correction to §11.1's closing Unknown.** It listed "byte overflow or wrap
+for malformed preexisting slot values". Closed: the byte is unsigned, the
+launch path cannot take it below zero, and the handler cannot take it past
+200 — a value of 200..255 can arrive only from a save, and then blocks every
+new round forever (phase 0's `> 199` hold, re-armed every 300 ticks), never
+wrapping. The remaining items of that paragraph stand. The three
+`TODO(question)` markers at the stockpile helpers (zero build time with a
+nonzero cost, the zero-build-time visit, and launch underflow) are retired
+by the arms above.
 
 ### 11.2 Interceptors
 
@@ -4188,6 +4279,49 @@ the `Killed` script's depth nibble, as however deep the script chose to walk
 the `featuredead` chain; land versus water is the bilinear-height test above,
 and lava has no rule of its own at this site (the feature-side sinking and
 lava behaviors are doc 05's).
+
+### Closed — the death blast runs before the corpse is stamped, and nothing else spares the wreck [R-DMG-01 §10] (2026-09-02)
+
+The timeline of [R-DMG-01 §3] step 3 puts "the death explosion (§12.2)"
+before "the corpse (§12.2)". RWU-19-16 re-read the central handler for what
+that order protects and whether anything else does.
+
+**Established — the order, and its immediacy.** The explosion call and the
+corpse call are adjacent in the handler: the explosion gate (`severity > 0`
+and build fraction exactly zero) is tested, the death weapon is pushed
+through the central impact, and the very next statement is the corpse gate
+(variant nibble nonzero) and the corpse walk. No teardown, no queue drain
+and no feature-phase work intervenes. The blast is fully resolved before the
+corpse cell is written: with a null direct unit the central impact always
+takes the area path (§9.1); the area path's feature phase damages features
+synchronously through the feature damage entry — the weapon's default
+damage word accumulates into the cell and the death transition runs inline
+when the capacity is reached ([05 R-FEAT-01 §8] steps 6–7) — and only then
+does the handler return to stamp the wreck.
+
+**Established — there is no guard on the corpse cell.** The area path's
+feature phase enumerates every cell within the blast radius and tests each
+feature's reference point against the radius with no exclusion keyed on the
+dying unit, its footprint, or the corpse definition (§9.3; the shooter
+exclusion applies to units only, and the shooter is null here). The
+victim's own occupancy has already been unstamped by the teardown helpers
+earlier in the same handler ([R-DMG-01 §3] step 3), so the corpse stamper's
+footprint validation is not blocked by the victim either. A feature already
+at or around the victim's cell — an older wreck, a tree, a rock — takes the
+weapon's full default damage with no falloff and dies when that reaches its
+`damage` capacity; an older wreck destroyed this way frees its cells for the
+new corpse in the same instant.
+
+**Consequence.** Were the corpse stamped first it would sit at distance
+zero from the impact and die on the spot whenever the explode weapon's
+default damage word reaches the corpse definition's capacity
+([05 R-FEAT-01 §8] step 6). The wreck survives its own unit's blast **by
+order alone**. Whether the order was chosen for that reason is not a
+question the executable answers; that it is the only mechanism is
+Established. An implementation runs the blast to completion, feature
+deaths included, and stamps the corpse afterwards; it must not add a
+corpse-cell exemption to the blast, which would spare bystanding features
+retail destroys. The `TODO(question)` at the death finalizer is retired.
 
 ### Closed — `hitdensity` does not exist, and what is doc 05's [R-DMG-01 §6] (2026-08-29)
 

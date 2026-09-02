@@ -718,7 +718,14 @@ func (s *Service) ApplySelfDestructDamage(w *units.World, target pool.Handle, ti
 	victim.Health = ApplyDamage(victim.Health, amount)
 	packet := &Projectile{Shooter: target}
 	if victim.Health <= 0 {
-		w.Destroy(target, units.DeathSelfDestruct)
+		// The death packet here is the self-damage packet: cause 3 applies
+		// 30000 "to the unit itself ... through the standard damage funnel"
+		// [04 R-SPEC-01 §1][04 R-ORD-01 §2], so its attacker is the victim,
+		// which is the same identity `packet` above already carries. The death
+		// handler's row writes that attacker into the recorded-attacker link
+		// [04 R-UNIT-06 §5], which therefore ends as the unit's own handle and
+		// not as whoever shot it earlier.
+		w.DestroyBy(target, units.DeathSelfDestruct, target)
 		if s.deathNotified == nil {
 			s.deathNotified = make(map[pool.Handle]*units.Unit)
 		}
@@ -919,6 +926,11 @@ func TickWaterDamage(tick uint32, w *units.World, terrain *world.Terrain, waterD
 		if newHealth <= 0 {
 			// Lethal 0xB sets normal death-pending state [04 §9.2][06 §12.1] — same latch as ordinary, no callbacks.
 			// Use the generic DeathKilled cause for units layer (cause 11 maps to that latch in combat death.go CauseWaterDamage).
+			//
+			// Water has no attacking unit, so the death packet's attacker is
+			// null and the recorded-attacker link is written null here — the
+			// plain Destroy arm. A drowning unit therefore loses the link to
+			// whoever shot it before it walked into the sea [04 R-UNIT-06 §5].
 			w.Destroy(u.Handle, units.DeathKilled) // [04 §2.4] marks Dying, firing OnDeath exactly once; slot freed at FinalizeDeath
 		}
 		applied++

@@ -656,80 +656,115 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
 	return t, nil
 }
 
-// applyVoidFixup derives engine void edges after materialization [P0-17].
+// applyVoidFixup is the loader's edge/lava void sweep [03 R-TERR-01 §2].
 //
-// All four edge rules follow [02 "Terrain file"]: only cells whose feature
-// word is empty (0xFFFF) or fringe (0xFFFE) are converted — placed features
-// and anchors are never voided:
+// It runs once, after the derived floor pair exists (ExpandPlot's
+// deriveFloorPair — rule 5 reads the derived minimum) and after the feature
+// stamp, which is why Load calls it last. Void writes ONE thing and nothing
+// else: the feature word at bytes 0x08/0x09 becomes 0xFFFD. No height byte, no
+// derived pair, no occupancy word and no flag bit is touched, and the sweep
+// only ever converts cells whose feature word is empty (0xFFFF) or fringe
+// (0xFFFE) — a live index, an anchor and an already-void cell all survive
+// unchanged [03 R-TERR-01 §1 "Reader census"][03 R-TERR-01 §2].
 //
-//   - Right-edge: columns W-2,W-1 become 0xFFFD where empty/fringe (live
-//     features and anchors in those columns survive).
-//   - North-edge: an empty/fringe cell at row z becomes 0xFFFD when
-//     z*16 − (height >> 1) < 0 — the cell's half-height pokes above the
-//     north map edge. Row 0 voids any height ≥ 1, row 1 heights > 32, ...
-//     rows 8 and beyond never.
-//   - South-edge: walking rows upward from H-1, an empty/fringe cell at row z
-//     becomes 0xFFFD when (Height-1-z)*16 + (height >> 1) < 112 — low cells
-//     near the south edge whose surface would fall below the play area.
-//   - Lava-world flood: when lavaworld is set, any 0xFFFF/0xFFFE cell with
-//     hmin ≤ SeaLevel becomes 0xFFFD.
+// Four rules in this order, after rule 1's play insets:
 //
-// Playable insets PlayRight = Wpix-32 and PlayBottom = Hpix-128 are set at
-// void-fixup time. Map-authored void sentinels still load verbatim; only
-// engine-derived edges are added here. (The earlier copies of this function
-// voided the right columns unconditionally and carried the north/south
-// predicates as TODO(question); both superseded by the traced edge rules.)
+//  1. Play insets. PlayRight = Width*16 − 32, PlayBottom = Height*16 − 128,
+//     written here and read by the camera clamp and the minimap lens.
+//  2. Right columns. For every row z, cells (W−2, z) and (W−1, z).
+//  3. North strip. Per column, walk rows z = 0, 1, 2, … in order and STOP at
+//     the first row for which z*16 − (height >> 1) >= 0; every row before the
+//     stop is voided, and the tested and the voided cell are the same. Since
+//     height>>1 <= 127, row 7 is the deepest reachable (112 < 127) and row 8
+//     never is.
+//  4. South strip, one row ABOVE the tested row. Per column, walk rows
+//     z = H−1, H−2, … in order and STOP at the first row for which
+//     z*16 − (height >> 1) <= PlayBottom; for every row before the stop the
+//     cell voided is (x, z−1). Equivalently row z is tested with
+//     (H−1−z)*16 + (height >> 1) < 112. So the bottom row H−1 is never voided
+//     by this rule — only rule 2 can void it, in its two columns — row H−2 is
+//     voided when the bottom row's height is below 224, and the walk cannot
+//     reach past row H−8.
+//  5. Lava flood. When the mission's lavaworld is non-zero, every convertible
+//     cell whose derived MINIMUM byte is <= SeaLevel (unsigned byte compare).
+//
+// Rule order is immaterial to the result — every rule writes the same value and
+// none of the walks' stop tests read the feature word — but it is kept as the
+// spec states it so the two can be compared line by line.
+//
+// Corrected (WU-19-48). The previous implementation carried doc 02's earlier
+// summary of rules 3 and 4, which [03 R-TERR-01 §2] corrects: it applied both
+// height predicates to every row of every column independently, with no stop,
+// and at the south edge it voided the row it had tested. Both are wrong in the
+// same direction — they void cells retail leaves alone. Without the stop a high
+// cell anywhere in rows 1..7 (or in the bottom eight rows) voids its own row
+// even though the walk had already halted above it; and voiding the tested row
+// rather than the row above it voids one extra row at the south edge of every
+// map, including the bottom row, which retail never voids.
+//
+// Map-authored void sentinels (0xFFFC, stamped by the feature pass) still load
+// verbatim; only these engine-derived voids are added here.
 func (t *Terrain) applyVoidFixup(mh *content.MapHeader) {
 	if t == nil || t.Plot == nil || t.CellW <= 0 || t.CellH <= 0 {
 		return
 	}
-	// Playable insets [P0-17]: Wpix = CellW*16, Hpix = CellH*16.
+	// Rule 1, play insets [03 R-TERR-01 §2]: Wpix = CellW*16, Hpix = CellH*16.
 	t.PlayRight = t.CellW*16 - 32
 	t.PlayBottom = t.CellH*16 - 128
-	// Empty-or-fringe test shared by every edge rule [02 "Terrain file"].
-	convertible := func(f uint16) bool {
-		return f == PlotFeatureNone || f == PlotFeatureFringe
-	}
-	// Right-edge void: columns W-2,W-1 per row where empty/fringe [02 "Terrain file"].
-	if t.CellW >= 2 {
-		for cz := int32(0); cz < t.CellH; cz++ {
-			for _, cx := range []int32{t.CellW - 2, t.CellW - 1} {
-				idx := int(cz*t.CellW + cx)
-				if idx >= 0 && idx < len(t.Plot) && convertible(t.Plot[idx].Feature()) {
-					t.Plot[idx].SetFeature(PlotFeatureVoid)
-				}
-			}
+	// The sweep's one conversion gate, shared by all four rules
+	// [03 R-TERR-01 §2].
+	voidIfConvertible := func(cell *PlotCell) {
+		if f := cell.Feature(); f == PlotFeatureNone || f == PlotFeatureFringe {
+			cell.SetFeature(PlotFeatureVoid)
 		}
 	}
-	// North-edge void: z*16 − (height>>1) < 0 on the raw height byte [02 "Terrain file"].
+	// Rule 2, right columns: (W−2, z) and (W−1, z) for every row
+	// [03 R-TERR-01 §2].
 	for cz := int32(0); cz < t.CellH; cz++ {
-		row := int(cz * t.CellW)
-		for cx := int32(0); cx < t.CellW; cx++ {
-			cell := &t.Plot[row+int(cx)]
-			if convertible(cell.Feature()) && cz*16 < int32(cell.Height()>>1) {
-				cell.SetFeature(PlotFeatureVoid)
+		for cx := t.CellW - 2; cx < t.CellW; cx++ {
+			if cx < 0 {
+				continue
 			}
+			voidIfConvertible(&t.Plot[cz*t.CellW+cx])
 		}
 	}
-	// South-edge void: walking rows upward from Height-1, void when
-	// (Height-1-z)*16 + (height>>1) < 112 [02 "Terrain file"].
-	for cz := t.CellH - 1; cz >= 0; cz-- {
-		row := int(cz * t.CellW)
-		for cx := int32(0); cx < t.CellW; cx++ {
-			cell := &t.Plot[row+int(cx)]
-			if convertible(cell.Feature()) && (t.CellH-1-cz)*16+int32(cell.Height()>>1) < 112 {
-				cell.SetFeature(PlotFeatureVoid)
+	// Rule 3, north strip: per column, stop at the first row whose
+	// z*16 − (height>>1) is non-negative; void every row before it
+	// [03 R-TERR-01 §2].
+	for cx := int32(0); cx < t.CellW; cx++ {
+		for cz := int32(0); cz < t.CellH; cz++ {
+			cell := &t.Plot[cz*t.CellW+cx]
+			if cz*16-int32(cell.Height()>>1) >= 0 {
+				break
 			}
+			voidIfConvertible(cell)
 		}
 	}
-	// Lava-world bulk flood [P0-17]: when lavaworld !=0, any 0xFFFF/0xFFFE cell with hmin ≤ SeaLevel becomes void.
+	// Rule 4, south strip: per column, walk upward from the bottom row and stop
+	// at the first row whose z*16 − (height>>1) is at or below PlayBottom; while
+	// it does not stop, the cell voided is the row ABOVE the tested one
+	// [03 R-TERR-01 §2].
+	for cx := int32(0); cx < t.CellW; cx++ {
+		// The walk stops at or before row 0 on any map at least eight cells
+		// tall (at z = 0 continuing would need −(height>>1) > H*16 − 128 >= 0,
+		// which no height satisfies), so the z >= 1 bound never truncates a
+		// real map. It is ours, and it exists so an authored fixture shorter
+		// than that cannot walk off the front of the plot.
+		for cz := t.CellH - 1; cz >= 1; cz-- {
+			cell := &t.Plot[cz*t.CellW+cx]
+			if cz*16-int32(cell.Height()>>1) <= t.PlayBottom {
+				break
+			}
+			voidIfConvertible(&t.Plot[(cz-1)*t.CellW+cx])
+		}
+	}
+	// Rule 5, lava flood: derived minimum <= SeaLevel, unsigned byte compare
+	// [03 R-TERR-01 §2].
 	if mh != nil && mh.LavaWorld != 0 {
 		for i := range t.Plot {
-			if convertible(t.Plot[i].Feature()) {
-				// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-				if t.Plot[i].MinHeight() <= t.SeaLevel {
-					t.Plot[i].SetFeature(PlotFeatureVoid)
-				}
+			// hmin is the derived floor minimum at byte 0x06 [03 R-TERR-01 §1].
+			if t.Plot[i].MinHeight() <= t.SeaLevel {
+				voidIfConvertible(&t.Plot[i])
 			}
 		}
 	}

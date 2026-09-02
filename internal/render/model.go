@@ -615,11 +615,26 @@ func ShadeRGBA(tables *palette.Tables, idx byte, row int) (r, g, b, a uint8) { /
 }
 
 // PrimitiveRGBA resolves a primitive's color to RGBA, selecting shading per type [03 §4.3] C10.
-// Flat-colored primitives and unshaded textured primitives bypass SHD. Shaded
-// textured primitives resolve through their emitted row [R-RND-02A][03 §4.3].
+//
+// What selects SHD is the **renderer**, not the face kind. [03 R-REN-03A §5]
+// enumerates four span writers, one per (shaded, unshaded) × (textured, flat):
+// the unshaded pair write the sampled texel and the color byte raw, while the
+// shaded pair write `SHD[row*256 + texel]` and `SHD[row*256 + color]`. A flat
+// polygon under the shaded renderer therefore goes through SHD exactly as a
+// textured quad does; only the unshaded renderer bypasses it. The comment that
+// stood here — "flat-colored primitives ... bypass SHD" — read the authored
+// 3DO `IsColored` flat/textured discriminator as if it were the shading one.
+//
+// Divergence, recorded and not fixed by this unit (its scope is the comment):
+// the condition below still routes every flat primitive to the raw palette
+// whatever row it carries, so it implements the unshaded flat writer only.
+// `ShadeRow == NoShadeRow` is the one term of the three that matches §5's real
+// split. This helper is not on the production draw path — the client's model
+// draw interpolates PrimitiveDraw.ShadeRows itself, as ShadeRGBA above notes —
+// so the divergence is confined to this reusable primitive and its tests.
 func PrimitiveRGBA(tables *palette.Tables, prim PrimitiveDraw) (r, g, b, a uint8) { // [03 §4.3] C10
 	if prim.TextureName == "" || (prim.IsColored == 1 && prim.ColorIndex < 256) || prim.ShadeRow == NoShadeRow {
-		// Flat-colored bypasses SHD [03 §4.3]
+		// The unshaded span writers of [03 R-REN-03A §5] write the byte raw.
 		return PaletteRGBA(tables, byte(prim.ColorIndex&0xFF))
 	}
 	// Textured via the primitive's real SHD row [03 §4.3] [03 R-RAST-01 §5].

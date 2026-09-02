@@ -3533,6 +3533,12 @@ so a fragment that omits `plan` still applies. So a per-unit `ai_weight` string 
 carry `plan`/`weight`/`limit` directives, and it is honoured only for types the
 global profile did not lock.
 
+**Correction (2026-09-02).** The two passes are **not** kind-specific: each
+runs the whole fragment — all three directive kinds — through the same
+dispatcher as the profile file, the gate is opened once per pass rather than
+per fragment, and a fragment's `weight` writes every manager, not the pass's
+player alone. [R-AI-01 §18] has the exact pass and the consequences.
+
 **`ai_limit` has no reader — and now the mechanism is named.** Both passes read
 the `ai_weight` field. The `ai_limit` field is parsed into its own 64-byte slot
 by the definition loader and is never read by anything. The earlier statement
@@ -3696,6 +3702,63 @@ the explore task's "centre is unset" test detects (§6).
 * Whether the wave's `engaged` latch is serialized; the save path's task-record
   coverage was not re-read by this unit · doc 08 "Save-file organization" ·
   static trace (RWU-08-4).
+
+#### R-AI-01 §18 — The two per-definition passes run the whole fragment, kinds unfiltered — Established [R-AI-01]
+
+**What §12 left ambiguous.** §12 names "the weight pass" and "the limit
+pass" and gives them different lock gates, which invited the reading that
+each pass executes only its own directive kind over a definition's
+`ai_weight` fragment. Traced (RWU-19-16): the two passes are one body
+duplicated with a single difference — the lock vector consulted (weight
+locks in the first, limit locks in the second) — and each hands the whole
+fragment to the **same** line-splitting dispatcher the global profile file
+goes through, with every keyword admitted. Nothing filters `plan`, `weight`
+or `limit` by pass.
+
+**Established — one pass, exactly.** For the computer player slot being set
+up:
+
+1. Open the `plan` gate (the global gate byte is written 1) **once**, at the
+   start of the pass — not once per definition.
+2. Walk definition types 1 .. count−1 in ascending order. For each: skip
+   unless the definition carries `downloadable`; skip when this player's
+   lock for the type — the weight lock in pass 1, the limit lock in pass 2 —
+   is set; skip when the `ai_weight` text is empty. Otherwise split the text
+   on newlines and dispatch every line through the profile grammar exactly
+   as a line of `ai\default.txt` is dispatched.
+3. Each directive then does what §12 says it does, with §12's own scope:
+   `weight` writes **every** slot that has a manager (human slots included),
+   gated per (slot, type) by that slot's weight lock; `limit` writes every
+   slot whose control byte is 2, gated per (slot, type) by that slot's limit
+   lock; `plan` rewrites the global gate.
+
+**Consequences an implementation must reproduce.**
+
+* A fragment's `weight` runs in **both** passes. The second application is
+  stopped only by the per-(slot, type) weight lock, which an *exact* naming
+  sets on the first application. A fragment naming a category (non-exact,
+  no lock) is applied on every run; a fragment naming a type exactly is
+  applied once per slot and then locked for that slot.
+* The passes run once **per computer player** (§12: for every player slot
+  whose record exists and whose control byte is 2), and every run writes
+  every manager. With *k* computer players a category-naming fragment
+  multiplies its members' weights 2·k times for every manager; an
+  exact-naming fragment multiplies once per manager and locks.
+* The gate is not reset between definitions. A fragment whose `plan` closes
+  the gate (a difficulty that does not match, or an argument-less `plan`)
+  leaves it closed for every later definition of the same pass until a later
+  fragment's own `plan` re-opens it. Catalog order (ascending type index) is
+  therefore load-bearing.
+* Pass 2 skips a definition only on the **limit** lock, so a definition whose
+  fragment locked its own weight in pass 1 is parsed again in pass 2 and its
+  `weight` is then refused by the handler's lock. The pass gate decides
+  whether the fragment runs; the handlers decide whether it has an effect.
+
+**Rule.** Two passes, each: open the gate once; for each `downloadable`
+definition not locked in that pass's vector, run the whole fragment through
+the shared handler set with all three kinds enabled. Do not filter kinds by
+pass; do not reset the gate per definition; do not scope `weight` to the
+pass's player. The `TODO(question)` at the per-definition pass is retired.
 
 ### What remains not established — Supported inference and unknown [P0-01] [P0-02] [P0-03]
 

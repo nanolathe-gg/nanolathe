@@ -135,11 +135,18 @@ func selfDestructHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 // top kill tier. The attacker term is not taken — the row's arithmetic is the
 // defender factor alone.
 //
-// The death latch is the two death fields the world's own destroy entry writes
-// [04 §2.3][04 §2.4]: the unit stays visible to later phases and is retired by
-// the next phase-2 slot finalizer, which fires the death hooks and resolves
-// `selfdestructas` for cause 3 [R-DMG-01 §5]. A handler cannot reach the world
-// to call that entry, and the entry writes nothing else.
+// The death latch is the three death fields the world's own destroy entry
+// writes [04 §2.3][04 §2.4][04 R-UNIT-06 §5]: the unit stays visible to later
+// phases and is retired by the next phase-2 slot finalizer, which fires the
+// death hooks and resolves `selfdestructas` for cause 3 [R-DMG-01 §5]. A
+// handler cannot reach the world to call that entry, so it calls that entry's
+// own field writer, `units.MarkDeath`; the two must not drift, and before
+// WU-19-49 this site latched two of the three fields.
+//
+// The third is the recorded-attacker link, whose death row takes the death
+// packet's attacker [04 R-UNIT-06 §5]. Cause 3 applies its damage "to the unit
+// itself", so that attacker is this unit and the link ends as its own handle —
+// not as whoever shot it before it was told to self-destruct.
 //
 // TODO(T25): the funnel's two global double/half gates [06 §9.2] step 4 are
 // session state with no surface here. Placeholder: the ungated case, which is
@@ -167,8 +174,7 @@ func applySelfDestructDamage(u *units.Unit) {
 	u.LastDamageCause = uint8(combat.CauseSelfDestruct)
 	u.Health = combat.ApplyDamage(u.Health, amount)
 	if u.Health <= 0 && !u.Dying {
-		u.Dying = true
-		u.DeathCause = units.DeathSelfDestruct // damage cause 3 [06 §12.1]
+		units.MarkDeath(u, units.DeathSelfDestruct, u.Handle) // damage cause 3 [06 §12.1]
 	}
 }
 

@@ -42,8 +42,35 @@ const (
 type Descriptor struct {
 	Name       string // canonical, the sort key and binary-search key [04 §3.1]
 	StateLabel string // state label the interface uses for a unit running this order [04 §3.1]
-	Class      uint8  // small class parameter [04 §3.1] TODO(question) [P0-07]: bounded census over function boundaries found no reader — stored opaque, never branched on
-	AckGroup   uint8  // acknowledgement group index [04 §3.1]
+	// Class is [04 §3.1]'s "small class parameter". Its reader is now known:
+	// it is the **order-queue overlay's draw mask** [07 R-P0-11 §3]. The
+	// Shift-gated overlay walker forms `descriptor.Class & callerMask` per
+	// order node and dispatches five helpers off the result — bit 1 the
+	// build-site marker, bit 2 the travelling-dash chain, bit 4 the
+	// sixteen-segment circle, bit 8 the queued-order icon, bit 16 the labeled
+	// range rings. That is why every observed value (0x00, 0x02, 0x03, 0x08,
+	// 0x10, 0x12, 0x13, 0x18) lies inside 0x1F, and why MobileBuild's 0x13 is
+	// exactly the marker, dash and rings retail draws at a queued build site.
+	//
+	// The field is left named Class and typed uint8 rather than renamed: the
+	// name is the citation key the research table is read by, and retail's
+	// 32-bit word never holds a value wider than the five-bit mask (I13 — Go
+	// layout is not retail layout). The presentation-side census and the
+	// pinning test live in internal/hud (queueoverlay.go).
+	//
+	// This retires the `TODO(question)` [P0-07] that stood here, which recorded
+	// that a bounded census over function boundaries had found no reader.
+	Class uint8 // order-queue overlay draw mask [04 §3.1][07 R-P0-11 §3]
+	// AckGroup is [04 §3.1]'s "acknowledgement group index" and the same byte
+	// [07 R-P0-11 §3] calls the descriptor's **icon byte**: the overlay's bit-8
+	// helper indexes the cursor handle array with it and animates the frame at
+	// `tick/(tpf*2) % nFrames`. The two descriptions are one field, which is
+	// what makes §3.1's "two of the groups additionally draw the weapon
+	// area-of-effect, coverage radius, and attack-length rings" the same rule
+	// as §3's "the attack icons (1/2) ... additionally draw the weapon
+	// AOE/coverage/attack-length rings". Icon 0 encodes "no icon", not cursor
+	// slot 0.
+	AckGroup   uint8  // acknowledgement group index / overlay icon byte [04 §3.1][07 R-P0-11 §3]
 	StaticGate uint32 // 32-bit static gate mask; see the census note below
 	// Handler is called with the owning unit, the order record, the bits
 	// satisfied this tick [04 §3.1], and the tick the pump is running.

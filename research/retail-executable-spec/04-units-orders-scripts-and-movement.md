@@ -1658,8 +1658,14 @@ hands it **back** with the target cleared. The names are kept for citation
 stability; implementers should read *release* as "take slot k for this
 order" and *inhibit* as "return slot k to autonomy".
 
-*Who takes and who returns.* Attack orders take: `Attack_NoMove` phase 0
-returns all three, takes slot 0, then binds the target; `Attack_Chase` takes
+*Who takes and who returns.* Attack orders take: `Attack_NoMove` phase 1
+takes slot 0 and binds the target, and its single return-all sits in phase
+2, after the `0x1000` gate bit arrives (**corrected 2026-09-02, RWU-19-16**:
+this sentence read "`Attack_NoMove` phase 0 returns all three, takes slot 0,
+then binds the target" — the handler's phase 0 is the caption clear alone,
+and the one inhibit-all-slots call it holds is the phase-2 arm's, exactly as
+[R-ORD-01 §3]'s row has it; the earlier summary had folded the phase-2 return
+into phase 0); `Attack_Chase` takes
 slots 0 and 2 before binding its picked slot ([R-ORD-01 §7]). The record
 destructor returns all three slots (with their targets cleared) for every
 removed record whose static-mask copy lacks bit 16, so a completed or purged
@@ -3076,12 +3082,23 @@ truncated toward zero.
 
 ### Closed — the combat handlers [R-ORD-01 §3] (2026-08-29)
 
-**`Attack_NoMove`.** Pre-check: target null, or satisfied ∩ `0x10008` (target
-lost, or target cloaked — §6 below) → complete. Phase 0: caption clear;
-advance. Phase 1: release slot 0, bind slot 0 to the target, gate =
-`0x11808`; advance. Phase 2 (reached when any of those bits arrive): inhibit
-all slots; *re-arm* (9). Other: cancel-all. The unit never moves; the weapon
-layer (doc 06) fires from the bound slot.
+**`Attack_NoMove`.** Pre-check: target null, or satisfied ∩ `0x10808` (target
+lost, target cloaked — §6 below — or the attack family's `0x800`, the same
+bit `Attack_Chase` and `Suppress` complete on) → complete. Phase 0: caption
+clear; advance. Phase 1: release slot 0, bind slot 0 to the target, gate =
+`0x11808`; advance. Phase 2 (reached only when `0x1000` arrives — the other
+three gate bits complete in the pre-check first): inhibit all slots; *re-arm*
+(9). Other: cancel-all. The unit never moves; the weapon layer (doc 06) fires
+from the bound slot.
+
+**Correction (2026-09-02, RWU-19-16).** This row used to read "satisfied ∩
+`0x10008`" and "Phase 2 (reached when any of those bits arrive)". The
+pre-check mask is `0x10808`: `0x800` completes the order the way it does in
+`Attack_Chase`'s first pre-check, so of the four gate bits only `0x1000` ever
+reaches phase 2. The slot verbs of this row are confirmed against the handler
+body: it holds exactly **one** inhibit-all-slots call, in the phase-2 arm,
+and phase 0 is the caption clear alone — [R-UNIT-06 §5] placed the
+return-all in phase 0 and is corrected there.
 
 **`Attack_Chase`.** Pre-checks, in order: satisfied `0x800` → complete;
 target null → complete; satisfied ∩ `0x10008` → complete; when p3 (the leash)
@@ -3862,8 +3879,8 @@ option ([07 R-CAM-01 §5]; the `LEFTCLICK` two-stage button).
 *`Interface Type = 1`*, in order: (1) `canattack` and hostile → resolve as
 code 3; (2) `canreclamate` and hostile → `ReclaimUnit` or air twin; (3)
 friendly and nano-reach passes: target unfinished → `HelpBuild` or air
-twin, else `RepairUnit` or air twin (**no health test** — a full-health
-friendly resolves to a repair); (4) I am `canfly`, friendly, and the target
+twin, else `RepairUnit` or air twin (no health test beyond nano-reach's own,
+which a full-health friendly **fails** — corrected in [R-ORD-02 §7]); (4) I am `canfly`, friendly, and the target
 has `isairbase` → `VTOL_Landing`; (5) carriable → `VTOL_Pickup` or
 `Ground_Pickup`; (6) `canguard` and friendly → `VTOL_Follow` or
 `Follow_Ground`; (7) `canresurrect`, a position, and a feature at it →
@@ -3932,7 +3949,8 @@ reject. **Code 6 — pick up.** A target that is carriable → pickup or air
 twin; else reject. **Code 7 — guard.** `canguard` and friendly → follow or
 air twin; else reject. **Code 8 — assist or repair.** Nano-reach must pass
 (else reject); target unfinished → `HelpBuild` or air twin, else
-`RepairUnit` or air twin — no health test here either. **Code 9 — patrol.**
+`RepairUnit` or air twin — again no health test beyond nano-reach's own
+([R-ORD-02 §7]). **Code 9 — patrol.**
 `canpatrol` required; no live mover → `QPatrol`; mirror bit 9 clear →
 `Patrol` or `VTOL_Patrol`; set → `RepairPatrol` or `VTOL_RepairPatrol`.
 **Code 10** writes the empty name (§3.4). **Code 11** → `Teleport`, no
@@ -4217,6 +4235,51 @@ only ground repeats it after the pick.
 - What the pump does with a spawned record of identity 0 (`VTOL_SeekGuard`
   spawns the code-7 result unchecked) · [R-ORD-02 §3], §3.1 · static read of
   descriptor 0's handler pointer.
+
+### Closed — code 1's friendly arm is the shared nano-reach, health term included [R-ORD-02 §7] (2026-09-02)
+
+**Correction to §1's code 1 and code 8.** §1's `Interface Type = 1` step 3
+used to read "friendly and nano-reach passes: target unfinished →
+`HelpBuild` or air twin, else `RepairUnit` or air twin (**no health test** —
+a full-health friendly resolves to a repair)", and code 8 ended "— no health
+test here either". Both parentheticals contradicted the nano-reach
+definition they sit beside, which carries "the target's 16-bit health
+differs from its `maxdamage`" ([R-ORD-01 §7]), and the contradiction was
+left for an implementer to resolve. It is resolved by trace (RWU-19-16):
+code 1's friendly arm, in both interface variants, and code 8 call the
+**shared** repair-admission helper — the one function `VTOL_RepairUnit`
+phase 0 and the repair-patrol scan also call — not an inlined copy, and the
+helper's health term is in force. What the parentheticals meant, and what is
+true, is that codes 1 and 8 add **no health test of their own** on top of
+nano-reach; code 2 is the one arm that does. §1's two sentences are
+reworded above to say exactly that.
+
+**Established — the three health tests, exactly.**
+
+* *Nano-reach* (shared): the target's 16-bit health, sign-extended to 32
+  bits, is **not equal** to the definition's 32-bit `maxdamage` word. A
+  full-health target fails. An over-full one (health above `maxdamage`) and
+  a death-latched one whose alive bit still stands (health zero or negative
+  between the lethal packet and its own slot visit, [06 R-DMG-01 §3] steps
+  1–2) both pass.
+* *Code 1, both variants, and code 8:* nano-reach alone. A full-health
+  friendly therefore does **not** resolve to a repair. In the `Interface
+  Type = 1` variant the click falls out of step 3 into the later steps — a
+  `canfly` actor lands on an `isairbase` target, a carriable target is picked
+  up, a `canguard` actor follows, and otherwise the click ends as a move or
+  a reject. In the default variant it reaches the own-unit reject and then
+  the feature and move tests. Code 8 rejects outright.
+* *Code 2:* nano-reach **and** a second, stricter compare: the same
+  sign-extended health, taken as unsigned, is **below** `maxdamage`
+  (unsigned). This excludes the over-full and latched targets nano-reach
+  admits, so a move-click on a latched friendly is a move, while a code-8
+  request on it is a repair order that the next slot visit finds dead.
+
+**Rule for an implementation.** One admission function carrying the health
+inequality; codes 1 and 8 call it and nothing more; code 2 calls it and then
+tests `uint32(int32(int16(health))) < uint32(maxdamage)`. The
+`TODO(question)` at the admission's health term is retired: the term was
+never in doubt in the executable, only in §1's prose.
 
 ### Closed — the special-behavior FBI keys: storage, reader census, contracts [R-SPEC-01 §0] (2026-08-29)
 
@@ -7211,13 +7274,50 @@ map) and `fx × fz` for the class footprint:
    classifier then demands all four one-cell ring strips be 3 to keep a 3. A
    rectangle whose extent reaches column `W−1` or row `H−1` is 0 outright, whereas
    the map-load window only zeroes anchors whose footprint *leaves* the map — a
-   last-column difference the void strips make unobservable.
+   difference at both the last column and the last row, of which only the column
+   half is unobservable (see the correction below).
 3. **Search probe** ([R-DOC04-B] "path-search consumption"): reads the layer at the
    anchor cell only; the footprint is already folded into the stamped value.
 4. **Commit validators**: the mobile footprint validator is per cell on the unit
    definition's own limits ([R-COLL-01 §2]); the unit-position variant used by the
    position fixup likewise compares each cell's `hmax − hmin` against the
    definition's `MaxSlope` alone.
+
+**Correction (2026-09-02, WU-19-48) — item 2's edge difference is a last-column
+AND last-row one, and only the column half is unobservable.** Item 2 previously
+ended: "A rectangle whose extent reaches column `W−1` or row `H−1` is 0 outright,
+whereas the map-load window only zeroes anchors whose footprint *leaves* the map —
+a last-column difference the void strips make unobservable." The predicate names
+both edges, so the difference it creates does too, and the void strips of
+[03 R-TERR-01 §2] do not cover them alike:
+
+- **Column.** Rule 2 of that sweep voids columns `W−2` and `W−1` at *every* row
+  outright, converting every cell of both that is empty or fringe. A rectangle
+  reaching column `W−1` therefore covers a cell that is void — hence tier 0 — on
+  any map whose two right columns are not solid authored features, and the
+  map-load window reaches the same 0 by a different road. Unobservable, as item 2
+  said.
+- **Row.** Rule 4 voids the row *above* the row it tests, so the bottom row
+  `H−1` is never voided by it: the strip it lays down runs from `H−2` upward,
+  and only where the bottom row's height byte is below 224. Row `H−1` is voided
+  only by rule 2, in its two columns; by rule 3 on a map short enough for the
+  north walk to reach it (never past row 7, so `H ≤ 8`); or by rule 5's lava
+  flood. On an ordinary map an interior anchor whose extent reaches row `H−1` is
+  0 under the rectangle restamp and need not be 0 under the map-load window, and
+  the two genuinely disagree there.
+
+Consequence for §4's census below: the anchor counts were measured through
+Nanolathe's loader while it still carried doc 02's pre-correction south rule —
+voiding the row it tested, including the bottom row, with no walk stop. With the
+sweep implemented as [03 R-TERR-01 §2] states it, the same census on `ashap
+plateau` reads **53 808** passable TANKSH2 anchors and **53 279** in the flood
+from the computer start (still reaching the human start), against the 53 901 and
+53 370 recorded below. The 93- and 91-anchor gaps are the south strip moving up
+one row, not a change in the classifier. **Unknown:** which of the two the retail
+executable's own layer would hold — the census has never been read out of retail
+itself, only computed over retail's map data by our loader, and settling it needs
+a re-derivation of the anchor totals against the corrected strips rather than a
+re-run of ours.
 
 Bounded census: every routine that reads the sea-level byte together with both
 slope bytes of a class record is one of the two per-cell classifier bodies (single

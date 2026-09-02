@@ -199,3 +199,25 @@ func TestSelfDestructRearRecordRunsOnTheSecondarySegment(t *testing.T) {
 		t.Fatalf("secondary dispatch recorded %v, want none", diags)
 	}
 }
+
+// TestSelfDestructLatchesTheRecordedAttackerAsItself locks the third field of
+// the death latch [04 R-UNIT-06 §5]: the death handler always writes the death
+// packet's attacker into the recorded-attacker link, and cause 3 applies its
+// 30000 "to the unit itself" [04 R-SPEC-01 §1], so a self-destructed unit ends
+// pointing at its own handle — not at whoever shot it before the order ran.
+//
+// The handler cannot reach the world's destroy entry, so it shares that entry's
+// field writer. This test is what catches the two drifting apart again.
+func TestSelfDestructLatchesTheRecordedAttackerAsItself(t *testing.T) {
+	def := &content.UnitDef{SelfDestructCountdown: "0", SelfDestructCountdownPresent: true}
+	q, u := standingFixture(def)
+	u.EngagementTarget = 77 // an earlier attacker, which the death row must overwrite
+	q.Push(Lookup("SelfDestructFG"), Node{Owner: u.Handle})
+	q.Pump(u, 0)
+	if !u.Dying || u.DeathCause != units.DeathSelfDestruct {
+		t.Fatalf("self destruct did not latch cause 3: dying=%t cause=%v", u.Dying, u.DeathCause)
+	}
+	if u.EngagementTarget != u.Handle {
+		t.Fatalf("recorded attacker = %d, want the unit's own handle %d [04 R-UNIT-06 §5]", u.EngagementTarget, u.Handle)
+	}
+}

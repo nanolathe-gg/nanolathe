@@ -353,3 +353,103 @@ func TestSlotAutonomyBitPreconditions(t *testing.T) {
 		t.Fatalf("a slot held by an order must be skipped, got %+v", held.Target)
 	}
 }
+
+// TestDeathWritesTheDeathPacketsAttacker locks the death row of
+// [04 R-UNIT-06 §5 part 1]'s writer table for the recorded-attacker link: on a
+// unit's death the death handler writes the death packet's attacker, and it
+// writes it ALWAYS — the row carries no condition, unlike the damage
+// dispatcher's row above it, which writes only for a non-heal packet with a
+// nonzero attacker id.
+//
+// "Always" is the half worth a test, because it is the only thing in retail
+// that can erase a link: §5 states there is no per-tick clear and no clear on
+// the attacker's death. A unit that was shot and then dies to something with no
+// attacker behind it must NOT keep the earlier shooter.
+func TestDeathWritesTheDeathPacketsAttacker(t *testing.T) {
+	weapon := &content.WeaponDef{ID: 1, Range: 400, DamageDefault: 10}
+
+	// 1. Killed by damage: the link is the killing packet's shooter.
+	t.Run("KilledByDamage", func(t *testing.T) {
+		f := newReactionFixture(t)
+		p := &Projectile{Pos: Vec3{X: f.victim.X, Y: f.victim.Y, Z: f.victim.Z}, Shooter: f.attacker.Handle}
+		lethal := &content.WeaponDef{ID: 1, Range: 400, DamageDefault: 9000}
+		applyDamageToUnit(f.svc, f.victim, p, lethal, 1, 0, f.w, 5)
+		if !f.victim.Dying {
+			t.Fatalf("the victim did not latch death: health %d", f.victim.Health)
+		}
+		if f.victim.EngagementTarget != f.attacker.Handle {
+			t.Fatalf("recorded attacker = %d, want the killing shooter %d [04 R-UNIT-06 §5]",
+				f.victim.EngagementTarget, f.attacker.Handle)
+		}
+	})
+
+	// 2. Shot first, then killed by a packet with no attacker: the death row
+	// overwrites the earlier link with the packet's null. The dispatcher's own
+	// row cannot express this — it skips a null attacker id entirely.
+	t.Run("KilledWithNoAttackerClearsTheEarlierLink", func(t *testing.T) {
+		f := newReactionFixture(t)
+		hit := &Projectile{Pos: Vec3{X: f.victim.X, Y: f.victim.Y, Z: f.victim.Z}, Shooter: f.attacker.Handle}
+		applyDamageToUnit(f.svc, f.victim, hit, weapon, 1, 0, f.w, 5)
+		if f.victim.EngagementTarget != f.attacker.Handle {
+			t.Fatalf("setup: the first hit did not record the attacker, got %d", f.victim.EngagementTarget)
+		}
+		lethal := &content.WeaponDef{ID: 1, Range: 400, DamageDefault: 9000}
+		applyDamageToUnit(f.svc, f.victim, &Projectile{Pos: hit.Pos}, lethal, 1, 0, f.w, 6)
+		if !f.victim.Dying {
+			t.Fatalf("the victim did not latch death: health %d", f.victim.Health)
+		}
+		if f.victim.EngagementTarget != 0 {
+			t.Fatalf("recorded attacker = %d after a shooterless death, want null: the death row writes the packet's attacker unconditionally [04 R-UNIT-06 §5]",
+				f.victim.EngagementTarget)
+		}
+	})
+
+	// 3. Self-destructed: cause 3 applies 30000 "to the unit itself" through
+	// the ordinary funnel [04 R-SPEC-01 §1], so the death packet's attacker is
+	// the unit, and the link ends as its own handle rather than as whoever had
+	// shot it earlier.
+	t.Run("SelfDestructed", func(t *testing.T) {
+		f := newReactionFixture(t)
+		hit := &Projectile{Pos: Vec3{X: f.victim.X, Y: f.victim.Y, Z: f.victim.Z}, Shooter: f.attacker.Handle}
+		applyDamageToUnit(f.svc, f.victim, hit, weapon, 1, 0, f.w, 5)
+		if f.victim.EngagementTarget != f.attacker.Handle {
+			t.Fatalf("setup: the first hit did not record the attacker, got %d", f.victim.EngagementTarget)
+		}
+		if !f.svc.ApplySelfDestructDamage(f.w, f.victim.Handle, 6) {
+			t.Fatal("self destruct did not apply")
+		}
+		if !f.victim.Dying || f.victim.DeathCause != units.DeathSelfDestruct {
+			t.Fatalf("self destruct did not latch cause 3: dying=%v cause=%v", f.victim.Dying, f.victim.DeathCause)
+		}
+		if f.victim.EngagementTarget != f.victim.Handle {
+			t.Fatalf("recorded attacker = %d after self destruct, want the unit itself %d [04 R-UNIT-06 §5]",
+				f.victim.EngagementTarget, f.victim.Handle)
+		}
+	})
+
+	// 4. A death that carries no packet at all — a reclaimed unit, a cancelled
+	// factory product — is the plain Destroy arm and writes the null.
+	t.Run("PacketlessDeath", func(t *testing.T) {
+		f := newReactionFixture(t)
+		hit := &Projectile{Pos: Vec3{X: f.victim.X, Y: f.victim.Y, Z: f.victim.Z}, Shooter: f.attacker.Handle}
+		applyDamageToUnit(f.svc, f.victim, hit, weapon, 1, 0, f.w, 5)
+		f.w.Destroy(f.victim.Handle, units.DeathReclaimed)
+		if f.victim.EngagementTarget != 0 {
+			t.Fatalf("recorded attacker = %d after a packetless death, want null [04 R-UNIT-06 §5]", f.victim.EngagementTarget)
+		}
+	})
+
+	// 5. The already-marked guard still short-circuits: a second Destroy on a
+	// dying unit writes nothing, so a death cannot be re-attributed.
+	t.Run("AlreadyMarkedIsNotRewritten", func(t *testing.T) {
+		f := newReactionFixture(t)
+		f.w.DestroyBy(f.victim.Handle, units.DeathKilled, f.attacker.Handle)
+		f.w.Destroy(f.victim.Handle, units.DeathReclaimed)
+		if f.victim.EngagementTarget != f.attacker.Handle {
+			t.Fatalf("a second death mark rewrote the link to %d", f.victim.EngagementTarget)
+		}
+		if f.victim.DeathCause != units.DeathKilled {
+			t.Fatalf("a second death mark rewrote the cause to %v", f.victim.DeathCause)
+		}
+	})
+}

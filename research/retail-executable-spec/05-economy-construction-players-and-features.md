@@ -5946,7 +5946,9 @@ in this order:
         **CRT-stream** draws `[01 §7.2]` scaled by the current burn frame's
         width and height: `x += (draw·(w/2))/32768 − frame.xoff + w/4`,
         `y += 2·(frame.yoff − (draw·(h/2))/32768) − 2·(h/4)` (integer parts,
-        16-bit truncation). Presentation-only; no simulation draw.
+        16-bit truncation). Presentation-only; no simulation draw. A third
+        CRT draw, the puff's last frame, is taken inside the producer at
+        this call — the puff's parameters and the draw order are §16.
      b. advance the burn cursor, then the shadow cursor if present;
      c. if the burn cursor's sequence pointer is now null: look up the
         anchor cell; `teardown(anchor, 0)`; if `featureburnt ≠ 0xFFFF`,
@@ -6196,6 +6198,52 @@ word the stamp does not write, whatever the slot's previous occupant left:
   its later death, be replaced by `featurereclamate` instead of
   `featuredead`. Established mechanism; the observable is a Supported
   inference with the same deciders.
+
+#### R-FEAT-01 §16 — The burning-feature smoke puff: its parameters, its three draws, and where the jitter lands [R-FEAT-01] (2026-09-02)
+
+§10 pass 3a gives the jitter arithmetic; this closes the three things it
+left open (RWU-19-16). Doc 03's open-list item "the strip-5 burning-feature
+smoke producer's puff parameters (variant, life)" is closed by it.
+
+**Established — the producer and its parameters.** The phase-6 site calls
+the strips-5/9 smoke-puff producer of `[03 R-STRIP-01 §1]` with the strip
+literal **5** and the init row `(frameCap 0, spawnInterval 1, frameHold 0,
+lifetime 0, selector 0)` — the same row `[06 R-WFX-01 §5]` gives the trail
+puff, the timer-expiry puff and the impact `endsmoke`. In words: the puff is
+`smoke 1` (selector 0); it may use every frame of that entry (no cap); its
+hold is the default 7; and the container's lifetime is 0, so the container
+is a one-shot — its constructor spawns exactly one puff, its spawn gate never
+fires again (`nextSpawn = tick + 1` is past the deadline `tick`), and the
+removal verdict retires the container as soon as that puff reaches its last
+frame `[03 R-STRIP-01 §2]`. Every third tick of a burn therefore adds one
+puff in one fresh container, never a container that keeps spawning.
+
+**Established — three CRT draws per emission, all in phase 6.** In order:
+the horizontal jitter draw, the vertical jitter draw (both at the call site,
+§10 pass 3a), then — inside the producer, because the family's init calls
+its spawn virtual — the puff's last-frame draw
+`crt · (frameCount − 2) / 0x8000 + 2` of `[03 R-STRIP-01 §2]`. The per-tick
+hold redraws that follow are phase-11 work and are counted there.
+**Correction to `[01 §7.5]`'s phase-6 CRT row**, which read "2 per
+fire-effect emission (position jitter)" and cited §12: the row counted the
+call site only and missed that the constructor's draw is taken at the call,
+not at the puff's first phase-11 visit; it now reads 3 and cites §10 and
+this section.
+
+**Established — the jitter moves the container's world X and world height.**
+The site builds the position triple (X, Y, Z) from the footprint centre
+`((footprintx + 2·anchorX)·8, (footprintz + 2·anchorZ)·8)` in whole units,
+takes Y from the bilinear terrain height at that centre (the same height
+helper the corpse stamper's land/water test uses, `[06 §12.2]`), then adds
+the first addend of §10 pass 3a to the **whole part of X** and rewrites
+**Y** as the 16-bit truncation of `terrainHeight + 2·(frame.yoff −
+draw₂·(frameHeight/2)/32768) − 2·(frameHeight/4)`; Z is passed through
+untouched. It is the container's world position that is jittered — the
+puff spawns there, and its own update then drifts it by the wind and gravity
+words `[03 §5.5]`. The reading recorded at the implementation site as
+*Supported inference* (X and Y are the two jittered words, Z stays at the
+centre, the factor of two on Y is the half-height projection shear) is
+confirmed and is now Established; the `TODO(question)` there is retired.
 
 ## Saving economy, construction, and features
 

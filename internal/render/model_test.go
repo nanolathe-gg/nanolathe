@@ -267,11 +267,15 @@ func TestPieceDrawOrder(t *testing.T) {
 	if rs != 21 || gs != 255-21 || bs != 10 {
 		t.Fatalf("ShadeRGBA: got %d %d %d want 21 %d 10", rs, gs, bs, 255-21)
 	}
-	// PrimitiveRGBA bypass vs shade [03 §4.3]
+	// PrimitiveRGBA's two arms [03 §4.3]. These pin the helper as written, not
+	// a retail contract: [03 R-REN-03A §5] gives four span writers and puts the
+	// SHD/no-SHD split on shaded-vs-unshaded, so a flat face under the shaded
+	// renderer writes SHD[row*256 + color] where this arm writes the raw byte.
+	// The divergence is described at PrimitiveRGBA.
 	primColored := PrimitiveDraw{ColorIndex: 5, IsColored: 1, ShadeRow: testRow, TextureName: "foo"}
 	rc, gc, bc, _ := PrimitiveRGBA(tables, primColored)
 	if rc != 5 {
-		t.Fatalf("flat-colored bypass SHD: got %d want 5", rc)
+		t.Fatalf("flat primitive takes the raw-palette arm: got %d want 5", rc)
 	}
 	_ = gc
 	_ = bc

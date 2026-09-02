@@ -1778,7 +1778,14 @@ func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weap
 		// Gate 2 [06 §9.1 step 6][06 R-DMG-01 §8]: only a victim owned by a
 		// control byte of 1 or 2 latches death, and the modular health value
 		// is PRESERVED, not clamped.
-		w.Destroy(victim.Handle, units.DeathKilled)
+		//
+		// The death handler's row in [04 R-UNIT-06 §5]'s writer table: the
+		// recorded-attacker link takes the DEATH packet's attacker, always.
+		// This packet is that packet, so the link ends as this shooter — and
+		// as null for a shooterless killing blow (a meteor, the water gate),
+		// which the dispatcher's own write above cannot express because its
+		// row is conditional on a nonzero attacker id.
+		w.DestroyBy(victim.Handle, units.DeathKilled, p.Shooter)
 		if service != nil {
 			if service.deathNotified == nil {
 				service.deathNotified = make(map[pool.Handle]*units.Unit)

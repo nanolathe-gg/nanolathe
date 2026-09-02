@@ -1407,7 +1407,33 @@ func (w *World) NotifyCapture(h pool.Handle, oldOwner, newOwner uint8) {
 // slot finalizer [04 §2.3][04 §2.4] C2. Death callbacks are deferred to that
 // finalizer so later phases can observe the marked unit without running
 // destruction side effects [01 §4.4][04 "unit sweep"].
+//
+// This is the arm for a death that carries no damage packet — a reclaimed
+// unit, a cancelled factory product, a captured victim's old record. The
+// recorded-attacker link is written null for those, which is what
+// [04 R-UNIT-06 §5]'s death row means by "may be null". A death that does
+// carry a packet goes through DestroyBy with that packet's attacker.
 func (w *World) Destroy(h pool.Handle, cause DeathCause) {
+	w.DestroyBy(h, cause, 0)
+}
+
+// DestroyBy is Destroy with the death packet's attacker. [04 R-UNIT-06 §5]'s
+// writer table for the recorded-attacker link has five rows, and unit death is
+// one of them: the death handler writes the death packet's attacker (which may
+// be null) **always** — there is no condition on it, unlike the damage
+// dispatcher's row, which writes only for a non-heal packet with a nonzero
+// attacker id.
+//
+// "Always" is the load-bearing half. A unit that had been shot, and then dies
+// with no attacker behind the killing blow — drowning, a meteor, a cancelled
+// build — does not keep the stale link from the earlier hit: the death handler
+// overwrites it with the packet's null. Retail has no clear anywhere else, so
+// this write is the only thing that can erase a link [04 R-UNIT-06 §5 part 1].
+//
+// The killer is stored as the pool slot the packet names, live or not; §5's
+// readers are required to tolerate a dead or reused slot, and the guard's
+// command resolver already does.
+func (w *World) DestroyBy(h pool.Handle, cause DeathCause, killer pool.Handle) {
 	if w == nil || w.pool == nil || !w.pool.Alive(h) {
 		return
 	}
@@ -1419,8 +1445,26 @@ func (w *World) Destroy(h pool.Handle, cause DeathCause) {
 	if u.Dying {
 		return // already marked
 	}
+	MarkDeath(u, cause, killer)
+}
+
+// MarkDeath writes the three fields a unit's death handler writes: the death
+// latch, the cause, and the recorded-attacker link taken from the death
+// packet's attacker [04 §2.3][04 §2.4][04 R-UNIT-06 §5].
+//
+// It exists because one production death path cannot reach the world to call
+// DestroyBy — the `SelfDestruct` order handler of [04 R-ORD-01 §2] applies its
+// own 30000 damage and latches the death inside `internal/orders` — and the
+// link must not be a field only one of the two paths remembers to write.
+// Callers that hold a handle should prefer DestroyBy, which also applies the
+// pool and already-marked guards.
+func MarkDeath(u *Unit, cause DeathCause, killer pool.Handle) {
+	if u == nil {
+		return
+	}
 	u.Dying = true
 	u.DeathCause = cause
+	u.EngagementTarget = killer // [04 R-UNIT-06 §5] death row: always written
 }
 
 // FreeImmediate performs the retail finalization free immediately within the
