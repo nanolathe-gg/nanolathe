@@ -26,6 +26,14 @@ type RetailLoadDeps struct {
 	Catalog *content.Catalog
 	SimSeed uint32
 	CRTSeed uint32
+	// UnitLimit is the configured `[Preferences] UnitLimit` as it stands when
+	// the load starts. A restored battle's pool is sized from the limit word
+	// as it was *before* the restore — the save's own Summary `maxunits` is
+	// written into the configured limit and only reaches the next battle
+	// [08 R-ENTRY-01 §6] — so this, not the save, is what sizes the pool of a
+	// non-campaign restore. Zero takes the missing-value default through the
+	// same clamp the setup record uses [08 R-SKIR-01 §6].
+	UnitLimit int
 }
 
 // RetailBattleStage is an unreachable, fully detached staging result. The
@@ -83,7 +91,20 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	if image.Summary.Gametype == GametypeMultiplayer {
 		sessionKind = sessionKindSkirmish
 	}
-	unitsWorld, err := newBattleSlicedWorldWithCOB(cat, deps.FS, sessionKind, [pool.PlayerCount]uint32{})
+	// The pool is `limit × 10 + 1` records, `limit` per slot
+	// [05 R-SHARE-01 §7]. The limit is the session word as it stands at the
+	// world rebuild, which is before the restoration dispatcher runs: a
+	// campaign restore therefore keeps the OTA `maxunits` the mission loader
+	// just decoded, and a non-campaign restore keeps the configured
+	// `[Preferences] UnitLimit` [08 R-SKIR-01 §6][08 R-ENTRY-01 §6]. The
+	// save's Summary `maxunits` is deliberately not read here: it is written
+	// into the configured limit and only reaches the *next* battle
+	// [08 R-ENTRY-01 §6].
+	poolRecords := int(campaignUnitLimit(m))
+	if sessionKind == sessionKindSkirmish {
+		poolRecords = ClampUnitLimit(deps.UnitLimit)
+	}
+	unitsWorld, err := newBattleSlicedWorldWithCOBSized(cat, deps.FS, sessionKind, [pool.PlayerCount]uint32{}, poolRecords)
 	if err != nil {
 		return nil, err
 	}
@@ -108,6 +129,11 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 			Difficulty: int(image.Summary.Difficulty), Mapping: int(image.Summary.Mapping),
 			LineOfSight: int(image.Summary.LineOfSight), LOSType: int(image.Summary.LineOfSightType),
 			CommanderDeath: int(image.Summary.CommanderDeath),
+			// The same word the pool was just sized from, so every later
+			// reader of the session limit — the AI's half-capacity term
+			// [08 R-AI-01 §13], the path scheduler — agrees with the slice it
+			// is describing [05 R-SHARE-01 §7].
+			UnitLimit: poolRecords,
 		},
 	}
 	s.SeedSessionRNG(deps.SimSeed, deps.CRTSeed)

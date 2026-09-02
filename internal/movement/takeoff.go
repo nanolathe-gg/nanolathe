@@ -110,9 +110,12 @@ func (s *System) syncMoverStamp(u *units.Unit) {
 	}
 	plane, stamps := planeForMode(u.Move.Mode)
 	touchedGround := false
+	clearedGround := false
+	clearedAnchor := coll.StampedAnchor
 	if coll.HasStamp && (!stamps || coll.StampedPlane != plane || coll.StampedAnchor != coll.CachedAnchor) {
 		if s.Grid.ClearPlane(coll.StampedPlane, coll.StampedAnchor, coll.FootPrintX, coll.FootPrintZ, coll.ID) {
 			touchedGround = touchedGround || coll.StampedPlane == PlaneGround
+			clearedGround = clearedGround || coll.StampedPlane == PlaneGround
 		}
 		coll.HasStamp = false
 	}
@@ -123,6 +126,17 @@ func (s *System) syncMoverStamp(u *units.Unit) {
 		coll.StampedAnchor = coll.CachedAnchor
 		coll.StampedPlane = plane
 		coll.HasStamp = s.Grid.RectOnMap(coll.CachedAnchor, coll.FootPrintX, coll.FootPrintZ)
+	}
+	if clearedGround {
+		// The clear's class-layer maintenance [04 R-COLL-01 §4], on the
+		// rectangle that was actually released. This is the takeoff, the
+		// transport pickup and the carried-position setter's move: each of them
+		// hands the ground plane back, and a layer that had baked the unit in
+		// through the occupant-age gate would otherwise keep the wall
+		// [04 R-PATH-01 §14]. Only a ground release is reclassified, because
+		// only the ground word is read by the gate [04 R-COLL-01 §2] — the same
+		// reason the clock below is a ground-only write.
+		s.noteFootprintClear(u.Handle, clearedAnchor, coll.FootPrintX, coll.FootPrintZ, true)
 	}
 	if touchedGround {
 		s.noteOccupancyCommit(u.Handle, s.tick)

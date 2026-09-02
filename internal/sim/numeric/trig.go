@@ -39,16 +39,29 @@ func init() {
 	}
 }
 
-// Sin is THE simulation sine. It reads the 512-entry table via the
-// Angle→index scaling Angle*512/65536, i.e. Angle>>7 [04 §5.1].
+// Sin is THE simulation sine. It reads the 512-entry table at
+// ((angle + 32) >> 7) & 511 [04 §5.1][06 §3.3]: retail adds 32 before its
+// shift-and-mask (the residue of masking a 64-unit index down to even
+// entries), so the entry boundaries sit a quarter step early — angle 96 reads
+// entry 1, angle 95 entry 0. The pre-add was missing here until 2026-09-02
+// (RWU-19-36); every velocity built through this table moved by up to one
+// entry for angles in the top quarter of each step.
 func Sin(a Angle) int32 {
-	return sineTable[(uint32(a)*512>>16)&511]
+	return sineTable[((uint32(a)+indexPreAdd)>>7)&511]
 }
 
+// indexPreAdd is the 32 angle units retail adds before the table index shift;
+// cosPreAdd is the same plus a quarter turn (0x4000) [04 §5.1][06 §3.3].
+const (
+	indexPreAdd uint32 = 32
+	cosPreAdd   uint32 = 0x4000 + indexPreAdd
+)
+
 // Cos is THE simulation cosine. It reads the same table a quarter turn
-// (128 entries) ahead of Sin [04 §5.1].
+// (128 entries) ahead of Sin — retail's helper adds the quarter turn to the
+// same pre-add before indexing [04 §5.1][06 §3.3].
 func Cos(a Angle) int32 {
-	return sineTable[((uint32(a)*512>>16)+128)&511]
+	return sineTable[((uint32(a)+cosPreAdd)>>7)&511]
 }
 
 // MulRound multiplies two scaled trig values and rounds to nearest before

@@ -38,14 +38,32 @@ import (
 // child already has rather than inventing one.
 const attachModeUnchanged = -1
 
+// attachModeOrdinary is the request mode of an ordinary attach:
+// "`0` on every ordinary attach (`VTOL_Pickup` phase 4 for the cargo,
+// `VTOL_Landing` phase 6 for the lander itself and for its cargo)", the
+// attached/parked mode that "is therefore reached in ordinary play by every
+// transported unit and by every aircraft parked on a pad"
+// [04 R-AIR-01 §9][04 R-AIR-01 §3].
+//
+// The mode is what keeps a carried unit out of the occupancy planes: modes 0
+// and 3 "stamp and clear nothing", so the carried-position setter's clear
+// releases the cells the cargo held on the ground and its stamp writes none
+// [04 R-COLL-01 §4][04 R-FAC-02 §2]. A cargo left in mode 1 keeps stamping the
+// ground word under a flying carrier and blocks its own unload site.
+const attachModeOrdinary = 0
+
 // AttachCargo attaches cargo to carrier on piece [04 §10.2] load phase 4.
 // It updates both sides: cargo.Carrier = carrier, carrier.Cargo appends cargo.
 // Piece -1 is root fallback [04 §5.3][04 §10.2]. Cargo must not already be carried.
 // Carrier must have live mover and canfly per gate [04 §10.2] but this helper does not re-check gates.
 //
-// This form carries no request mode; see AttachCargoMode.
+// This is the ordinary attach, so it carries request mode 0 [04 R-AIR-01 §9];
+// the two attaches research names a different mode for — the factory product's
+// builder link and the unload release — go through AttachFactoryProduct and
+// AttachCargoMode. There is no retail attach that leaves the child's committed
+// mode alone: every one of the helper's callers supplies a mode.
 func AttachCargo(w *units.World, carrierHandle, cargoHandle pool.Handle, piece int) bool {
-	return AttachCargoMode(w, carrierHandle, cargoHandle, piece, attachModeUnchanged)
+	return AttachCargoMode(w, carrierHandle, cargoHandle, piece, attachModeOrdinary)
 }
 
 // AttachCargoMode is AttachCargo with the request mode of [04 R-AIR-01 §9].

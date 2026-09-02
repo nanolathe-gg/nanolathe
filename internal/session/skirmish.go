@@ -45,6 +45,37 @@ const (
 	skirmishNickPayload           = 16 // usable chars (17 includes NUL) [02 §3]
 )
 
+// The per-player unit limit a skirmish carries into battle entry. Retail reads
+// it once at start-up from the profile file's `[Preferences]` `UnitLimit` — a
+// profile value, not a registry value — with a missing-value default of 250,
+// clamps it into 20..500, and keeps it as a sixteen-bit configured limit
+// [02 "Unit limit"][08 R-SKIR-01 §6]. Skirmish battle entry copies that
+// configured limit over the session's unit-limit word, so a skirmish never
+// sees a map's `maxunits`; only a campaign keeps the OTA value
+// [08 R-SKIR-01 §6][05 R-SHARE-01 §7].
+const (
+	SkirmishDefaultUnitLimit = 250 // missing `UnitLimit` [08 R-SKIR-01 §6]
+	SkirmishMinUnitLimit     = 20  // below 20 becomes 20 [08 R-SKIR-01 §6]
+	SkirmishMaxUnitLimit     = 500 // above 500 becomes 500 [08 R-SKIR-01 §6]
+)
+
+// ClampUnitLimit applies retail's start-up clamp to a configured unit limit.
+// Zero is the missing-value sentinel — the legal range starts at 20, so no
+// stored choice can collide with it — and installs the default 250
+// [08 R-SKIR-01 §6].
+func ClampUnitLimit(v int) int {
+	if v == 0 {
+		return SkirmishDefaultUnitLimit
+	}
+	if v < SkirmishMinUnitLimit {
+		return SkirmishMinUnitLimit
+	}
+	if v > SkirmishMaxUnitLimit {
+		return SkirmishMaxUnitLimit
+	}
+	return v
+}
+
 // CommanderDeathRule is the closed retail rule vocabulary.  The setup field
 // remains an int for save/menu source assignment; every gameplay consumer
 // passes it through CommanderDeathMode, so values outside this vocabulary can
@@ -128,6 +159,15 @@ type SkirmishConfig struct {
 	Mapping        int // 0 all terrain visible, 1 blacked out until explored [08 "Skirmish configuration"]
 	LineOfSight    int // 0 disables LOS, 1 enables it [08 "Skirmish configuration"]
 	LOSType        int // 0 elevations ignored, 1 elevations affect LOS [08 "Skirmish configuration"]
+	// UnitLimit is the configured per-player unit limit skirmish battle entry
+	// copies over the session's unit-limit word [08 R-SKIR-01 §6]. It sizes
+	// the unit pool — `limit × 10 + 1` records, exactly `limit` per slot
+	// [05 R-SHARE-01 §7] — and is read again by the AI's half-capacity term
+	// [08 R-AI-01 §13]. Zero means the value was absent; ApplyDefaults and
+	// Normalize install the default and the 20..500 clamp. No skirmish gadget
+	// edits it — it comes from the profile file, not the lobby screen
+	// [08 R-SKIR-01 §6].
+	UnitLimit int
 
 	// Explicit battle RNG seeds [R-CORE-02] DET-01. Retail derives the sim
 	// seed from the QPC sum XOR a fixed constant (forced odd) and the CRT seed
@@ -186,6 +226,11 @@ func (c *SkirmishConfig) ApplyDefaults() {
 		}
 		c.rulesDefaultsApplied = true
 	}
+	// The unit limit sits outside the rules-defaults guard on purpose: unlike
+	// the six scalars above, zero is not a choice a player can make — the
+	// legal range is 20..500 — so it is the missing-value sentinel on every
+	// call, and the clamp is idempotent [08 R-SKIR-01 §6].
+	c.UnitLimit = ClampUnitLimit(c.UnitLimit)
 	c.MapName = strings.TrimSpace(c.MapName)
 	n := c.NumPlayers
 	if n < 0 {
@@ -259,6 +304,9 @@ func (c *SkirmishConfig) Normalize() error {
 		n = 10
 	}
 	c.NumPlayers = n
+	// The configured unit limit and its 20..500 clamp; zero is the
+	// missing-value sentinel, never a choice [08 R-SKIR-01 §6].
+	c.UnitLimit = ClampUnitLimit(c.UnitLimit)
 	// Clear inactive rows beyond NumPlayers to ensure inactive cannot affect result [GAP T14].
 	for i := n; i < 10; i++ {
 		c.Players[i] = SkirmishPlayer{}
@@ -408,6 +456,10 @@ func (c SkirmishConfig) NormalizedBytes() []byte {
 		b = append(b, []byte(p.Nickname)...)
 		b = append(b, 0)
 	}
+	// The unit limit is part of the setup two configs must agree on: it sizes
+	// the pool [05 R-SHARE-01 §7]. Two bytes, little endian, appended after
+	// the rows so the existing prefix keeps its meaning.
+	b = append(b, byte(c.UnitLimit), byte(c.UnitLimit>>8))
 	return b
 }
 
@@ -481,7 +533,13 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 	// sort-key plumbing entirely: [08 R-SESS-01 §7 "Consequence for
 	// single-player"] establishes that an engine which never builds a
 	// kind-3 session needs none.
-	unitsWorld, err := newBattleSlicedWorldWithCOB(cat, fs, sessionKindSkirmish, [pool.PlayerCount]uint32{})
+	//
+	// The slice is `limit` records per slot, `limit × 10 + 1` in all
+	// [05 R-SHARE-01 §7]. A skirmish's limit is the configured
+	// `[Preferences] UnitLimit`, which battle entry copies over the session
+	// word — a skirmish never uses the map's `maxunits` [08 R-SKIR-01 §6].
+	// Normalize above applied the missing-value default and the 20..500 clamp.
+	unitsWorld, err := newBattleSlicedWorldWithCOBSized(cat, fs, sessionKindSkirmish, [pool.PlayerCount]uint32{}, cfg.UnitLimit)
 	if err != nil {
 		return nil, err
 	}

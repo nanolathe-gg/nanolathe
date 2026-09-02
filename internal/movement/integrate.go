@@ -1305,9 +1305,9 @@ func (s *System) classKeyFor(h pool.Handle) string {
 // allocated class layer [04 §6.1 R-DOC04-B]. The commit tick is one field of
 // the unit record, read by every class's per-cell classifier and request
 // revision pass; the frozen registry represents it as a per-layer map, so the
-// tick is noted on each. Names() is the deterministic allocation-order slice,
-// never a map range [I1]. A layer allocated later misses pre-allocation
-// ticks; the unit's next commit refreshes it.
+// tick is noted on each. The walk is the allocation-order slice, never a map
+// range [I1]. A layer allocated later misses pre-allocation ticks; the unit's
+// next commit refreshes it.
 func (s *System) noteOccupancyCommit(h pool.Handle, tick uint32) {
 	if s == nil || h == 0 {
 		return
@@ -1316,9 +1316,7 @@ func (s *System) noteOccupancyCommit(h pool.Handle, tick uint32) {
 	if reg == nil {
 		return
 	}
-	for _, name := range reg.Names() {
-		reg.For(name, Profile{}).NoteCommit(h, tick)
-	}
+	reg.forEachLayer(func(l *ClassLayer) { l.NoteCommit(h, tick) })
 }
 
 // ProfileFor returns the profile resolved for a unit handle. A handle with no
@@ -3020,6 +3018,22 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		if !isBlocked && !fastPath {
 			s.noteOccupancyCommit(handle, tick)
 		}
+		// TODO(T25): step (1) of the success branch is a footprint clear, so it
+		// owes the class-layer maintenance of [04 R-COLL-01 §4] on the
+		// rectangle it just released — the same maintenance noteFootprintClear
+		// runs for the teardown and carried clears. It is not wired here.
+		// Measured 2026-09-02 (WU-19-120): wiring it makes
+		// internal/session's TestRallyMoversSettleRetail fail — mover 6 of the
+		// five-unit rally moves on 2502 of 3000 settled ticks instead of
+		// stopping, because the phantom walls a stale mover leaves behind when
+		// it walks away are today what finally makes the crowded rally goal
+		// unreachable and publishes the empty route that retires the record
+		// ([04 R-EGRESS-01], [04 R-PATH-01 §8]). Retail settles that scenario
+		// through the route-acceptance rule instead, which is a different
+		// contract and a different file set. Placeholder: leave the vacated
+		// tail of a live mover's path stale, which is what this build has
+		// always done, and reclassify only where the unit leaves the ground
+		// plane for good — death or free, pickup and takeoff.
 		coll.BlockerID = blockerID
 		u.X = numeric.Fixed(int64(coll.X))
 		u.Z = numeric.Fixed(int64(coll.Z))

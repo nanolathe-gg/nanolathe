@@ -193,9 +193,9 @@ func maxDamageOf(u *units.Unit) uint32 {
 // sequence itself — the per-order interrupt mask, the per-visit cached-goal
 // refresh, and the inclusive whole-world-unit maneuver leash — is WU-18-4's
 // `airEntry`, reused rather than re-derived. Its step-1/step-2
-// `VTOL_SeekAttack` replacements were closed by [04 R-AIR-01 §16]; the one
-// open question it still carries is `AirToAir`'s unstated interrupt mask
-// (see `airInterruptMask` below).
+// `VTOL_SeekAttack` replacements were closed by [04 R-AIR-01 §16], and the
+// per-executor mask by the §8 addendum of 2026-09-02 (see `airInterruptMask`
+// below).
 func airAttackExecutorHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	if code, done := airEntry(u, n, satisfied, airInterruptMask(n.ID)); done {
 		return code
@@ -203,14 +203,19 @@ func airAttackExecutorHandler(u *units.Unit, n *Node, satisfied uint32, tick uin
 	return airHandOff(u, n, satisfied, tick)
 }
 
-// airInterruptMask is the shared-entry pending mask [04 R-AIR-01 §8].
-// TODO(question): §8 names 0x1000A for AirStrike/AirToGround and 0x10008 for
-// AirToGroundHover, but does not assign AirToAir. Keep the existing narrower
-// fallback until a direct trace settles whether AirToAir includes bit 0x2.
+// airInterruptMask is the shared-entry pending mask [04 R-AIR-01 §8], one
+// immediate per executor: the two run executors test `0x1000A`, the standoff
+// orbit and the dogfight test `0x10008`. `0x10008` is `pendTargetGone` — the
+// target-removed and target-cloaked bits; the run executors' extra `0x2` is
+// the cancel-current notification of [04 R-ORDER-02 §2], which only a record
+// freed with gate bit 1 armed ever receives — and only `AirStrike` (`0xE2`)
+// and `AirToGround` (`0x100EA`) arm that bit on their legs.
 func airInterruptMask(id ID) uint32 {
 	switch DescriptorFor(id).Name {
 	case "AirStrike", "AirToGround":
-		return 0x1000A
+		return pendTargetGone | gateCancelCurrent
+	case "AirToGroundHover", "AirToAir":
+		return pendTargetGone
 	default:
 		return pendTargetGone
 	}

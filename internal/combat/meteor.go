@@ -96,9 +96,14 @@ func EffectiveMeteorInterval(otaInterval float64, defaults *content.MeteorDefaul
 
 // ResolveMeteorWeapon implements shower resolution per [06 §6.5]:
 // an empty weapon name disables meteor scheduling; an unresolved name or a
-// resolved weapon lacking the meteor flag falls back to weapon index zero
-// instead of disabling. The fallback is the weapon with ID 0; if none exists
-// the smallest ID is used deterministically.
+// resolved weapon lacking the meteor flag falls back to weapon RECORD 0 of
+// the ID-indexed table — the definition authoring ID=0, stock [noweapon]
+// [06 R-DMG-01 §5] — instead of disabling (refinement of 2026-09-02). The
+// table is addressed by the authored ID, so there is no "smallest ID" or
+// "first loaded" rule; the smallest-ID fallback that stood here was never
+// retail. When the catalog has no ID-0 record retail addresses the
+// zero-filled slot, which has no counterpart here: the shower is then
+// disabled, the one divergence, unreachable from stock content.
 // Returns nil when disabled.
 func ResolveMeteorWeapon(name string, weapons map[string]*content.WeaponDef) *content.WeaponDef {
 	if strings.TrimSpace(name) == "" {
@@ -109,19 +114,9 @@ func ResolveMeteorWeapon(name string, weapons map[string]*content.WeaponDef) *co
 		return w
 	}
 	if w, ok := content.WeaponByID(weapons, 0); ok {
-		return w
+		return w // record 0 [06 §6.5]
 	}
-	var fallback *content.WeaponDef
-	var minID int32 = 1<<31 - 1
-	for _, w := range weapons {
-		if w.ID < minID {
-			minID = w.ID
-			fallback = w
-		}
-	}
-	// TODO(question): retail fallback is weapon index zero; if catalog lacks ID 0 the
-	// mapping to smallest ID is an inference. The exact fallback when ID 0 is absent is not proved.
-	return fallback
+	return nil
 }
 
 // IsMeteorEnabled reports whether meteor scheduling is enabled per [06 §6.5]:
@@ -222,17 +217,17 @@ func MeteorVelocity(targetX, originX, targetZ, originZ int32) (velX, velZ numeri
 	return numeric.Fixed(vx), numeric.Fixed(vz)
 }
 
-// MeteorAngularSteps returns per-tick visual orientation increments per [06 §6.5]:
-// yaw accum advances by (high16(velX)<<8) and pitch by (high16(velZ)<<8) wrapping
-// modulo 2^16. Rates are re-derived from velocity every tick and feed only
-// presentation rotation, never motion.
-// TODO(question): [GAP T21] flags a meteor orientation reconcile between stored
-// angular-rate shorts and per-tick derivation from the high halves of velX/velZ <<8.
-// This implements the established per-tick derivation; the stored-rate path is the alternative.
-func MeteorAngularSteps(velX, velZ numeric.Fixed) (yawStep, pitchStep uint16) {
-	yawStep = uint16(uint16(velX.Raw()>>16) << 8)
+// MeteorAngularSteps returns per-tick visual orientation increments per
+// [06 §6.5]: the record's ROLL word (the render block's first orientation
+// word) advances by (high16(velX)<<8) and its PITCH word by (high16(velZ)<<8),
+// wrapping modulo 2^16. The [GAP T21] reconcile is closed (2026-09-02): the
+// meteor tick reads the high halves of the velocity words themselves every
+// tick; there is no stored angular-rate field. Presentation only, never
+// motion.
+func MeteorAngularSteps(velX, velZ numeric.Fixed) (rollStep, pitchStep uint16) {
+	rollStep = uint16(uint16(velX.Raw()>>16) << 8)
 	pitchStep = uint16(uint16(velZ.Raw()>>16) << 8)
-	return yawStep, pitchStep
+	return rollStep, pitchStep
 }
 
 // SpawnMeteor appends one meteor projectile through the shared pool per [06 §6.5].

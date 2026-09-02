@@ -80,7 +80,12 @@ func defForTransport(name string) *content.UnitDef {
 
 func defForCargo(name string, footprint int32) *content.UnitDef {
 	return &content.UnitDef{
-		UnitName:      name,
+		UnitName: name,
+		// A mobile fixture must author `bmcode`: EnsureUnit reads its absence
+		// as the building class, and a building has no mover, so the cargo
+		// would neither be swept as a mover nor release its cells when a
+		// transport lifts it [04 R-COLL-01 §1][04 R-PATH-01 §14].
+		BMCode:        true,
 		CanMove:       true,
 		MovementClass: "kbot2x2",
 		FootprintX:    footprint,

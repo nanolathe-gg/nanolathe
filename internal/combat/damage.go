@@ -806,11 +806,14 @@ func IsWaterDamageTick(tick uint32) bool {
 	return tick%30 == 0 // [04 §9.2] once per tick when globalTick % 30 == 0
 }
 
-// IsInWaterForDamage reports whether Y is at or below sea-level byte [04 §9.2].
-// Signed integer height versus sea-level byte. Uses trunc towards zero via Fixed.Int() [01 §8] (I3).
-// TODO(question): signed integer height conversion uses trunc toward zero vs floor unresolved; using trunc via Int() as the __ftol path [01 §8]. Which integer width retail uses (high word of 16.16) matches trunc for positive heights and differs for negative fractions; not observable on stock maps with non-negative sea-level byte.
+// IsInWaterForDamage reports whether Y is at or below the sea-level byte
+// [04 §9.2] (refinement of 2026-09-02): the operand is the signed 16-bit HIGH
+// WORD of the 16.16 Y read in place — an arithmetic narrowing, so a negative
+// fraction floors (−0.5 reads −1), not the __ftol truncation — compared as a
+// signed 16-bit value against the zero-extended byte, inclusive. This used to
+// truncate through Fixed.Int(), which differs only for negative fractional Y.
 func IsInWaterForDamage(y numeric.Fixed, seaLevel uint8) bool {
-	return int32(y.Int()) <= int32(seaLevel) // [04 §9.2] signed integer height at or below sea-level byte
+	return int16(y.Raw()>>16) <= int16(seaLevel) // [04 §9.2] high word <= sea-level byte
 }
 
 // IsWaterDamageEligible reports per-unit eligibility ignoring global tick and
@@ -825,7 +828,9 @@ func IsWaterDamageEligible(u *units.Unit, terrain *world.Terrain) bool {
 	}
 	// floater and amphibious are NOT additional immunity [04 §9.2]
 	if terrain == nil {
-		// TODO(question): sea-level source when terrain unavailable. Placeholder: treat as not in water when terrain nil, so caller must supply terrain for water test. Deterministic, no map range.
+		// Retail reads one process-global byte loaded with the map [04 §9.2];
+		// there is no "no terrain" state to clone. A nil terrain is a
+		// build-side caller error, answered closed (not in water).
 		return false
 	}
 	return IsInWaterForDamage(u.Y, terrain.SeaLevel) // [04 §9.2] signed integer height at or below sea-level byte

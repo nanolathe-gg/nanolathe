@@ -11235,6 +11235,19 @@ veterancy tier factor `((25 − tier) · amount · 4) / 100` with
 a veteran victim takes REDUCED water damage — and each credited kill
 increments the killer's credited-kill counter.
 
+**Refinement (2026-09-02, RWU-19-36) — the "signed integer height" is the
+high word of the 16.16 Y, and the sea level is the map's global byte.
+Established.** The height operand is the **signed 16-bit high half of the
+unit's 16.16 world Y** read in place — an arithmetic narrowing, so for a
+negative fractional Y it is the floor, not a truncation toward zero (a Y of
+−0.5 reads −1). The sea-level operand is the map header's sea-level byte
+zero-extended to 16 bits, and the test is a signed 16-bit `height <=
+seaLevel`, i.e. `(int16)(Y >> 16) <= (int16)(uint8)seaLevelByte`. Because the
+byte is unsigned the right side is always `0..255`, so a unit at any negative
+whole height is always in water for this test. The byte is one process-global
+value loaded with the map — there is no per-unit, per-cell or "no terrain"
+source; a session without a loaded map has no units to test.
+
 **Supported inference:** The engine does not need a separate hard-coded wake
 renderer to reproduce the callback contract; wake effects and medium bands in
 shipped content are script-authored behavior gated on the bands above.
@@ -12258,7 +12271,7 @@ diverge completely.
 **Established — the shared entry sequence.** In this order:
 
 1. If the satisfied set intersects `0x1000A` (`AirStrike`, `AirToGround`) or
-   `0x10008` (`AirToGroundHover`, `VTOL_Evade`): when the record has no
+   `0x10008` (`AirToGroundHover`, `AirToAir`, `VTOL_Evade`): when the record has no
    successor marker **and** the unit's status word has either of bits
    `0x300000` set, replace the current order with a fresh `VTOL_SEEKATTACK`
    record carrying the same target and cached goal; return 5 either way.
@@ -12279,6 +12292,39 @@ diverge completely.
    word that [R-STANCE-01 §4] installs from `maneuverleashlength`; the compare
    is on **integer world units**, not 16.16, and is inclusive, so a leash of `0`
    is "no leash" rather than "never move".
+
+**Established — the per-executor interrupt mask, all four assigned, and what
+its bits are (2026-09-02, RWU-19-35).** Step 1 as first written listed three
+of the four attack executors and left `AirToAir` unassigned, so a
+reimplementation had to guess whether the dogfight carried the extra bit. The
+mask is an immediate in the first test of each executor's own body, not a
+table lookup, and reading each body settles it:
+
+| Executor | Mask |
+|---|---:|
+| `AirStrike` | `0x1000A` |
+| `AirToGround` | `0x1000A` |
+| `AirToGroundHover` | `0x10008` |
+| `AirToAir` | `0x10008` |
+| `VTOL_Evade` | `0x10008`, tested after its own null-target check |
+
+The bits are the pending word's ordinary ones. `0x8` is *target removed*,
+raised on every reference registered on a unit when that unit is destroyed,
+and `0x10000` is *target cloaked*, raised on every reference registered on a
+unit at its cloak's rising edge ([R-ORD-01 §6]); their union is the
+"no longer attackable" test every combat pre-check makes. `0x2` is the
+*cancel-current notification*: it has no bit writer at all and reaches a
+handler only when the record is freed while its dynamic gate still has bit 1
+armed, the removal path invoking the handler with a satisfied set of exactly
+`0x2` ([R-ORD-01 §0], [R-ORDER-02 §2]). That is also why the two run
+executors test it and the other two do not: `AirStrike` arms `0xE2` on its
+repositioning, overfly and break-off legs and `AirToGround` arms `0x100EA` on
+its fly-through and break legs, so either can be torn down while waiting on
+bit 1 and step 1 then runs under the notice; `AirToGroundHover` and
+`AirToAir` arm only `0x100E8` and `0x110E8`, never bit 1, so a `0x2` in their
+masks could never arrive. The five masks and the three bit producers are
+Established (direct trace of each entry); the gate correspondence is read
+off the gate words this section already records.
 
 **Established — `AirStrike`: the bombing run, with a ballistic release lead.**
 

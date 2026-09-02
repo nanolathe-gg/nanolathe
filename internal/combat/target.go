@@ -292,13 +292,37 @@ type Acquisition struct {
 	// `istargetingupgrade` (content.UnitDef.IsTargetingUpgrade). Word B is not
 	// consulted; the marker that stood here named word B and was wrong.
 	Secondary []Candidate
-	// TODO(question): which definitions the aggregate sums — the shooter's own
-	// or every unit the scanning player owns — is not established, so nothing
-	// in production writes this yet and the secondary list is never consulted.
-	// [06 §3.1] names the aggregate without saying who contributes to it.
-	// Decider: a trace of the registry's own accumulator. The BIT is no longer
-	// the open part.
+	// HasUpgrade is the registry's secondary-list gate [06 §3.1] (refinement
+	// of 2026-09-02) [04 R-SPEC-01 §8]. It is a BOOLEAN, not a sum: the
+	// rebuild writes 1 when any unit the scanning player itself owns — the
+	// same player slot, allies excluded — is alive, not dying, complete and
+	// activated and carries `istargetingupgrade`. The shooter's own definition
+	// plays no part. TargetingUpgradeGate computes it; production does not yet
+	// wire it (the secondary list is also unbuilt), which is a follow-up unit,
+	// not an open question.
 	HasUpgrade bool
+}
+
+// TargetingUpgradeGate computes the registry's secondary-list gate for the
+// player owning slot `owner` [06 §3.1] [04 R-SPEC-01 §8]: true when at least
+// one unit in `list` is alive, not dying, owned by that same player (allied
+// players' units do not count), complete (remaining build fraction exactly
+// zero) and activated (paralysis does not clear the bit), and whose
+// definition carries `istargetingupgrade`. Nothing is counted or summed.
+// Callers pass units in slot order; the result is order-independent (I1).
+func TargetingUpgradeGate(list []*units.Unit, owner uint8) bool {
+	for _, u := range list {
+		if u == nil || !u.Alive || u.Dying || u.Owner != owner {
+			continue
+		}
+		if u.Remaining != 0 || !u.Activated || u.Def == nil {
+			continue
+		}
+		if u.Def.IsTargetingUpgrade {
+			return true
+		}
+	}
+	return false
 }
 
 // directlyVisible is the primary list's direct-visibility predicate

@@ -33,6 +33,11 @@ func skirmishBattleRequest(opts Options, cs *contentSet, cfg session.SkirmishCon
 	if cfg.MapName == "" {
 		cfg.MapName = opts.Map
 	}
+	// ApplyDefaults installs every missing-value default, the configured
+	// per-player unit limit among them. That limit rides on the setup record
+	// from the persisted preferences through to battle entry, where it sizes
+	// the unit pool [05 R-SHARE-01 §7][08 R-SKIR-01 §6]; the direct `-map`
+	// path, which has no persisted block, takes the same default here.
 	cfg.ApplyDefaults()
 	seeds := BattleSeeds{Simulation: int32(cfg.RNGSimSeed), CRT: cfg.RNGCrtSeed}
 	if source != nil {

@@ -603,6 +603,64 @@ func (c *ClassLayers) Names() []string {
 	return append([]string(nil), c.names...)
 }
 
+// forEachLayer visits every allocated layer in allocation order [I1]. It is the
+// walk the per-unit occupancy bookkeeping uses; unlike Names it allocates
+// nothing, which matters because the footprint clear runs it per commit.
+func (c *ClassLayers) forEachLayer(fn func(*ClassLayer)) {
+	if c == nil || fn == nil {
+		return
+	}
+	for _, name := range c.names {
+		if l := c.byName[name]; l != nil {
+			fn(l)
+		}
+	}
+}
+
+// noteFootprintClear is the class-layer half of the footprint clear
+// [04 R-COLL-01 §4]: after the cell loop and the overlap step, "for a unit with
+// a mover, each of the sixteen class-layer records whose watermark exceeds the
+// mover's last-stamp tick reclassifies the rectangle ([R-PATH-01 §2]'s
+// footprint-aware classifier over the rectangle), and the last-stamp tick is
+// set to the current tick; for a unit without a mover every active layer
+// reclassifies it."
+//
+// The gate is the occupant-age gate's own comparison read from the other side:
+// a layer whose watermark has passed this mover's last-stamp tick is exactly a
+// layer that classified the unit's cells BLOCKED [04 R-PATH-01 §14], so the
+// cells it is now vacating are baked into that layer as a wall. Nothing else
+// rewrites them — the request revision pass walks live units only and visits an
+// occupant just once, at its current rectangle [04 R-MOV-03 §3] — so without
+// this step every place a unit parked long enough to be baked in and then left,
+// died in, or was picked up from, keeps blocking path search for the rest of
+// the battle.
+//
+// Callers pass the rectangle that was actually cleared (the cached pair, since
+// "every writer stamps at the unit's cached pair") and whether the unit has a
+// mover; the tick write is the mover's one last-stamp word, which this build
+// mirrors per layer, so it goes to every layer through noteOccupancyCommit.
+func (s *System) noteFootprintClear(h pool.Handle, anchor Cell, footX, footZ int16, hasMover bool) {
+	if s == nil || h == 0 || s.layerRegistry == nil {
+		return
+	}
+	s.layerRegistry.forEachLayer(func(l *ClassLayer) {
+		if hasMover {
+			commit, _ := l.CommitTick(h)
+			if l.Watermark() <= commit {
+				return // this layer never saw the occupant as stale
+			}
+			// The clear's tick write lands before the reclassification, so an
+			// anchor whose footprint still covers cells this unit holds
+			// elsewhere reads a fresh occupant rather than a stale one.
+			l.NoteCommit(h, s.tick)
+		}
+		l.restampOccupantRect(anchor, footX, footZ)
+	})
+	if hasMover {
+		s.noteOccupancyCommit(h, s.tick)
+	}
+}
+
 // mappingTile is the tile pair the search's coarse test reads in the mapping
 // word grid [04 R-PATH-01 §2 step 2]: bx = (x>>1) + (FootPrintX>>2),
 // bz = (z>>1) + (FootPrintZ>>2) — half-resolution coordinates offset by a

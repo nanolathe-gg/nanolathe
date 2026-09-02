@@ -104,13 +104,18 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 	// FBI files before every battle — so it is applied to a clone, never to
 	// the shared compiled catalog the caller handed in.
 	//
-	// The pool is sized before the restriction, from the unrestricted table:
-	// retail allocates the per-player slice from the session's unit limit,
+	// The pool's record count is read before the restriction is applied.
+	// Retail allocates the per-player slice from the session's unit limit,
 	// never from the definition count [05 R-SHARE-01 §7], so a mission whose
 	// restriction file names a dozen units must not end up with a dozen unit
-	// records per slot. This engine still stands the definition count in for
-	// that limit; wiring the OTA's `maxunits` is a separate unit.
-	poolRecords := len(cat.Units)
+	// records per slot. Now that the count comes from the limit the ordering
+	// no longer matters, but the read stays ahead of the filter so the two can
+	// never be re-coupled by accident.
+	//
+	// A campaign's limit is the OTA `maxunits` the mission loader decoded,
+	// whose missing-value default is 200; it is the one mode whose OTA value
+	// survives battle entry [08 R-SKIR-01 §6].
+	poolRecords := int(campaignUnitLimit(m))
 	cat, err = applyUseOnlyRestriction(fs, cat, m.UseOnlyPath)
 	if err != nil {
 		return nil, err

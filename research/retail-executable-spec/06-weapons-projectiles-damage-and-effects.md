@@ -263,6 +263,37 @@ one gate — and its earlier flagging as *unproven* is closed: the reader is the
 list builder, and the earlier bounded search missed it because the gate is read
 in the list builder rather than in the acquisition or the scan.
 
+**Refinement and correction (2026-09-02, RWU-19-36) — the gate is a boolean
+over the scanning player's own units, and nothing is summed. Established.**
+Three points the paragraphs above leave open or state loosely:
+
+1. *Nothing is aggregated.* The rebuild clears the gate word and then writes
+   the constant `1` into it for each qualifying unit; there is no counter and
+   no per-definition total. A clone that keeps a count and tests it for
+   nonzero is equivalent; one that reads the **shooter's** definition is not —
+   the shooter plays no part. The gate belongs to the registry, i.e. to the
+   scanning player, and is the same for every slot of every unit that player
+   owns.
+2. *"Friendly" in the counting branch means the same player, not the same ally
+   group.* The "friendly (same ally group)" wording above is wrong for the
+   census, the economy counter, the centroid, the third list and this gate:
+   the branch is entered only when the candidate's owner slot byte **equals
+   the registry owner's own slot byte**. A unit of an allied player is neither
+   hostile (its alliance-row entry is nonzero) nor own, and is skipped
+   entirely — so an ally's targeting-upgrade unit never opens this gate for
+   you. The hostile test is unchanged: the registry owner's alliance row,
+   indexed by the candidate's owner slot, reads zero.
+3. *The qualifying unit must be alive, not death-latched, complete (build
+   fraction exactly zero) and activated (state byte bit 0), with
+   `istargetingupgrade` on word A bit 10 of its definition.* Paralysis does
+   not clear the activation bit, so a stunned upgrade still counts.
+
+The per-attempt filter consults the secondary list exactly as stated above,
+and applies to it the **same** test as the primary walk — planar `d² ≤ r²`
+on the truncated whole-unit metric, alive bit set, death latch clear — with no
+visibility re-test: the secondary list was populated from the *seen* bit at
+rebuild, and that is the only sensor test it ever receives.
+
 **Established fact:** The direct-visibility predicate applied at rebuild time
 takes the observing player record and the candidate and answers in this order:
 
@@ -2009,6 +2040,30 @@ result reaches the ballistic creator as the slot's stored pitch; the slot's
 stored yaw is the relative aim angle already converted to absolute by the
 executor.
 
+**Closed (2026-09-02, RWU-19-36) — there is no separate ballistic pitch
+quantization. Established.** An implementation note once suggested the
+ballistic pitch was quantized "in 64-unit steps" by a helper of its own,
+distinct from the 128-step shared table. It is not. The solver of §3.3 works
+entirely in floating point and converts the chosen arc angle to the 16-bit
+pitch as
+
+```
+pitch = trunc(theta × 32768.0 × (1/π))      ; two double multiplies, in that order,
+                                            ; then the shared truncate-toward-zero
+```
+
+— no table, no rounding to any step; the full 65,536-per-circle resolution is
+stored. The ballistic creator then rebuilds velocity from that pitch and the
+slot yaw through the **same** scaled sine/cosine helpers every family uses
+(§3.3 "Shared trigonometry"), whose entry index is `((angle + 32) >> 7) & 511`
+— the `+32` is the residue of the table's even-offset masking and shifts the
+quantization boundaries by a quarter entry, so an angle of 96 reads entry 1
+while 95 reads entry 0. The only drift that existed was in a clone whose table
+index omitted that pre-add; the retail creator and the retail per-tick
+self-propelled rebuild (§6.7) are quantized identically, at 128 angle units per
+entry, and no per-tick accumulation of a quantization error occurs because the
+velocity is rebuilt from the stored angle, never from the previous velocity.
+
 **Established fact:** The ballistic creator initializes velocity as
 
 ```
@@ -2142,6 +2197,19 @@ the velocity components every tick and feed only presentation rotation, never
 motion, so any velocity change alters rotation immediately. An earlier reading
 that orientation advanced by dedicated stored angular-rate shorts is superseded.
 
+**Refinement (2026-09-02, RWU-19-36) — which words the accumulators are.
+Established.** The two accumulators are not meteor-private fields. The first
+is the record's **roll word** — the first of the three orientation words the
+renderer hands to the model draw (`[R-WFX-01 §4]` type 1), the one no creator
+and no common initializer writes. The second is the record's ordinary
+**pitch word**, the same word the ballistic and ordinary creators fill from
+the slot. The yaw word is untouched by the meteor tick. The increments are
+read each tick from the high 16 bits of the velocity X and Z words
+respectively (`hi16(velocityX) × 256` into roll, `hi16(velocityZ) × 256` into
+pitch), which re-confirms that no stored angular-rate field exists: the tick
+reads the velocity components themselves. Because the meteor creator writes
+neither word, both start at whatever the reused pool slot last held.
+
 **Established fact:** Storm parameters are installed once, from the mission's
 OTA keys or from `gamedata/meteor.tdf`:
 
@@ -2167,6 +2235,26 @@ loader emits the diagnostic `Hey, hoser!  The default meteor shower data was
 bogus!` and leaves the parameters as they were. An unresolved weapon name, or a
 resolved weapon lacking the meteor flag, still falls back to weapon index zero
 instead of disabling.
+
+**Refinement (2026-09-02, RWU-19-36) — "weapon index zero" is weapon record
+0 of the ID-indexed table. Established.** The weapon name is resolved once,
+by the storm reset that runs when a battle starts (the same routine clears the
+active flag and sets the first storm-start deadline to the per-hit spacing),
+through the ordinary case-insensitive name scan of the 256-record table. A miss,
+or a hit whose definition lacks the `meteor` flag, replaces the pointer with the
+record at **slot 0** — the record whose authored `ID` is `0`, which in the
+stock corpus is `[noweapon]`, the inactive sentinel of `[R-DMG-01 §5]`; when no
+definition authors `ID=0` it is the zero-filled slot the catalog loader
+pre-formats. There is no "smallest ID" or "first loaded" rule: the table is
+addressed by the authored `ID` key, so a catalog with no `ID=0` record has an
+empty slot there, not a renumbered one. The scheduler never re-tests the
+pointer; every hit attempt spawns through the meteor creator with that
+definition. **Supported inference (consequence for stock content):** a record
+carrying `[noweapon]` has no motion-family flag, so under the dispatch of §6.2
+(rule 6) it neither moves, collides nor expires; each such spawn permanently
+occupies a pool record until the pool's 300-record cap starves every weapon.
+*Decider:* a manual retail run of a mission authoring a misspelled
+`MeteorWeapon`, watching the projectile count.
 
 **Established fact:** The scheduler runs once per tick, **after** the projectile
 phase, so scheduler-created meteors first move on the next tick while unit-fired
@@ -2293,6 +2381,26 @@ is independent of guidance and is skipped entirely once the scalar speed reaches
 saturating add. Velocity is fully rebuilt from scalar speed and angles on every
 eligible tick, so a self-propelled projectile's velocity magnitude is never
 history-dependent.
+
+**Closed (2026-09-02, RWU-19-36) — malformed signs in the acceleration
+block. Established.** Both comparisons in the block are **unsigned 32-bit**
+compares of the scalar speed word against `weaponvelocity`; the addition is an
+ordinary wrapping 32-bit add. Three consequences follow, none reachable from
+stock data:
+
+* a **negative scalar speed** (a negatively authored `startvelocity`) reads as
+  a value above every positive `weaponvelocity`, so the block is skipped every
+  tick: the speed is never accelerated, and the velocity rebuild multiplies the
+  trig entries by the negative magnitude, sending the projectile backwards
+  along its aim for its whole life;
+* a **negative `weaponacceleration`** decrements the speed each tick while it
+  stays non-negative; on the tick the sum would cross below zero the wrapped
+  value exceeds `weaponvelocity`, the overshoot clamp snaps it **up to
+  `weaponvelocity`**, and from then on the gate reads equal and the block is
+  skipped — a slow-down, a jump to full speed, then constant speed;
+* there is no signed timer anywhere in this path: `weapontimer` is a 16-bit
+  unsigned store (§7.3) and the `currentTick < expiry` gate is unsigned, so a
+  "negative timer" is a wrapped large positive one.
 
 **Established fact:** A non-water weapon is always propulsion-eligible. A water
 weapon at or above sea level skips acceleration and guidance, falls under

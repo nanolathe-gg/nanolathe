@@ -125,7 +125,14 @@ func InitCommon(p *Projectile, now uint32, muzzle, target Vec3, targetUnit pool.
 // using the retail circular domain trig helpers per [06 §6.4] [04 §5.1] [06 §6.7].
 // Each helper has form (tableValue * magnitude + 4096) >>13 with 512-entry
 // round(8192*sin) table; products round to nearest [04 §5.1].
-// TODO(question): ballistic pitch helper quantizes in 64-unit steps vs generic 128-step table; drift TBD [06 §6.4].
+//
+// There is no separate ballistic pitch quantization [06 §6.4] (closed
+// 2026-09-02): the solver stores its pitch at full 16-bit resolution
+// (trunc(theta*32768/pi)) and the ballistic creator, the ordinary creator and
+// this per-tick rebuild all read the one 512-entry table through the same
+// index, ((angle + 32) >> 7) & 511 [06 §3.3][04 §5.1]. The "64-unit step"
+// reading was a documentation error corrected in [06 R-WPN-01 §4]; the only
+// real drift was numeric.Sin/Cos omitting the +32 pre-add, fixed with it.
 func VelocityFromAngles(yaw, pitch numeric.Angle, speed numeric.Fixed) Vec3 {
 	// [06 §6.7] recomputes all velocity components from scalar speed, yaw, pitch
 	cosPitch := numeric.Cos(pitch) // [04 §5.1] table scaled 8192
@@ -455,12 +462,15 @@ func AdvanceMeteor(p *Projectile, w *content.WeaponDef, tick uint32) AdvanceResu
 	_ = w
 	_ = tick
 	// [06 §6.5] Each meteor tick adds velocity to the current point and
-	// advances two visual orientation accumulators by (high16(velX)<<8) for
-	// yaw and (high16(velZ)<<8) for pitch, re-derived from velocity each
-	// tick; they feed only presentation rotation, never motion.
-	// A22 meteor orientation is derived high(vel)*256, not stored-rate shorts [P1-07][P1-08 §2.10] [06 §6.5].
-	yawStep, pitchStep := MeteorAngularSteps(p.Velocity.X, p.Velocity.Z)
-	p.PropellerYaw = numeric.Angle(uint16(int32(p.PropellerYaw) + int32(int16(yawStep))))
+	// advances two visual orientation accumulators by (high16(velX)<<8) into
+	// the record's ROLL word and (high16(velZ)<<8) into its PITCH word,
+	// re-derived from the velocity components each tick (no stored rate);
+	// they feed only presentation rotation, never motion. The roll word has
+	// no dedicated field here and is parked in PropellerYaw, which is the
+	// render block's first word for a non-propeller model [06 R-WFX-01 §4];
+	// no presentation path reads either yet.
+	rollStep, pitchStep := MeteorAngularSteps(p.Velocity.X, p.Velocity.Z)
+	p.PropellerYaw = numeric.Angle(uint16(int32(p.PropellerYaw) + int32(int16(rollStep))))
 	p.MeteorPitch = numeric.Angle(uint16(int32(p.MeteorPitch) + int32(int16(pitchStep))))
 	p.State69 = (p.State69 &^ 0x03) | 0x00 // keep dead/bim latch bits, orientation is presentation only [P1-08 §2.8]
 	// [06 §7.2] meteor adds velocity; [06 §6.5] does not apply wind/gravity/normal expiry
@@ -614,15 +624,22 @@ func AdvanceSelfProp(p *Projectile, w *content.WeaponDef, tick uint32, gravity n
 		return AdvanceAlive
 	}
 	{
-		accel := numeric.Fixed(int64(w.WeaponAcceleration)) // [02 "Weapon record"] *65536/900
-		newSpeed := p.Speed.Add(accel)                      // [06 §6.7] adds acceleration to scalar speed
-		limit := numeric.Fixed(int64(w.WeaponVelocity))     // [02] weaponvelocity*65536/30
-		// [06 §6.7] clamps overshoot to weapon velocity; acceleration independent of guidance
-		if newSpeed.Raw() > limit.Raw() {
-			newSpeed = limit // clamp [06 §6.7]
+		// [06 §6.7]: the gate and the overshoot clamp are UNSIGNED 32-bit
+		// compares of the scalar speed word against weaponvelocity, and the
+		// block is skipped entirely once speed has reached it (closed
+		// 2026-09-02). A negative scalar speed reads above every positive
+		// limit and is never accelerated; a negative weaponacceleration
+		// decrements until the sum would cross zero, whereupon the clamp snaps
+		// it up to weaponvelocity. No stock weapon authors either sign.
+		speed := uint32(int32(p.Speed.Raw()))
+		limit := uint32(w.WeaponVelocity) // [02] weaponvelocity*65536/30
+		if speed < limit {
+			speed += uint32(w.WeaponAcceleration) // [02 "Weapon record"] *65536/900, wrapping add
+			if speed > limit {
+				speed = limit // unsigned overshoot clamp [06 §6.7]
+			}
+			p.Speed = numeric.Fixed(int64(int32(speed)))
 		}
-		// TODO(question): negative speed? Malformed negative acceleration? TODO(question) [06 §7.3] negative timer unknown.
-		p.Speed = newSpeed
 	}
 	// [06 §6.7][06 §6.8] guidance pursues the stored target point; a lost unit
 	// target falls back to that stored point, so the pursuit point is always

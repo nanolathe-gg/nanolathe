@@ -9,6 +9,11 @@
 // block once and installs a default for every value it does not find; the
 // writer rewrites the whole block [02 "Settings"][07 §10].
 //
+// One value here is not a registry value: the per-player unit limit lives in
+// the profile file's `[Preferences]` section instead [02 "Unit limit"]. It is
+// persisted all the same, and the two stores collapse into the one JSON file
+// below.
+//
 // Nanolathe keeps the value set, the defaults, and the read-once/write-whole
 // shape, and swaps the registry for one JSON file. Only the preferences retail
 // actually persists are stored here — display mode, audio mixing, and the
@@ -54,6 +59,23 @@ const (
 	DefaultDamageBars     = 0    // damagebars absent: the bit is cleared [03 R-FX-01 §6]
 )
 
+// The configured per-player unit limit. Retail reads it once at start-up from
+// the profile file's `[Preferences]` `UnitLimit` — established as a profile
+// value and *not* a registry value, unlike everything else in this file — with
+// a missing-value default of 250, then clamps it into 20..500 and keeps it as
+// a sixteen-bit configured limit [02 "Unit limit"][08 R-SKIR-01 §6].
+//
+// It is stored at the top level rather than inside the Skirmish block for the
+// same reason ScrollSpeed is: the Skirmish block mirrors the values retail
+// keeps under its Skirmish key, and this is not one of them. Skirmish battle
+// entry is nonetheless its only consumer here, because a campaign's limit is
+// the map's `maxunits` instead [08 R-SKIR-01 §6].
+const (
+	DefaultUnitLimit = 250 // missing `UnitLimit` [08 R-SKIR-01 §6]
+	MinUnitLimit     = 20  // below 20 becomes 20 [08 R-SKIR-01 §6]
+	MaxUnitLimit     = 500 // above 500 becomes 500 [08 R-SKIR-01 §6]
+)
+
 // InterfaceFlagDamageBars is bit 0 of the interface-flags word — the "label
 // every unit" bit. The stored `damagebars` value and that bit are the same
 // thing: at settings load the bit takes the value's low bit, and the battle
@@ -97,8 +119,14 @@ type Settings struct {
 	ScrollSpeed int `json:"scrollSpeed"` // scrollspeed [02 "Settings"] [07 §10] C2
 	// DamageBars is the stored `damagebars` value. Only its low bit is read:
 	// it becomes bit 0 of the interface-flags word [03 R-FX-01 §6].
-	DamageBars int      `json:"damagebars"`
-	Skirmish   Skirmish `json:"skirmish"`
+	DamageBars int `json:"damagebars"`
+	// UnitLimit is the configured per-player unit limit, the profile file's
+	// `[Preferences] UnitLimit` [02 "Unit limit"][08 R-SKIR-01 §6]. It sizes
+	// the unit pool at skirmish battle entry [05 R-SHARE-01 §7]. No screen
+	// edits it — retail's skirmish lobby has no gadget for it — so it reaches
+	// the session unchanged from whatever the file holds.
+	UnitLimit int      `json:"unitLimit"`
+	Skirmish  Skirmish `json:"skirmish"`
 }
 
 // DamageBarsEnabled is the loader's rule for the value: present → bit 0 of the
@@ -139,7 +167,7 @@ func StoreDamageBars(on bool) error {
 // start positions, commander death continues, all terrain visible, LOS off,
 // elevation ignored — so a loader may not treat a zero as an absent value.
 func Defaults() Settings {
-	s := Settings{Version: FileVersion, Difficulty: DefaultDifficulty, ScrollSpeed: DefaultScrollSpeed, DamageBars: DefaultDamageBars}
+	s := Settings{Version: FileVersion, Difficulty: DefaultDifficulty, ScrollSpeed: DefaultScrollSpeed, DamageBars: DefaultDamageBars, UnitLimit: DefaultUnitLimit}
 	s.Skirmish = Skirmish{
 		NumPlayers:     DefaultNumPlayers,
 		Difficulty:     DefaultDifficulty,
@@ -212,6 +240,19 @@ func (s *Settings) Normalize() {
 	}
 	if s.ScrollSpeed == 0 {
 		s.ScrollSpeed = DefaultScrollSpeed
+	}
+	// The unit limit's clamp is retail's own start-up clamp, not a schema
+	// repair: an absent value installs 250, and a stored value outside
+	// 20..500 is pulled to the nearer bound [08 R-SKIR-01 §6]. Zero cannot be
+	// a stored choice because the legal range starts at 20.
+	if s.UnitLimit == 0 {
+		s.UnitLimit = DefaultUnitLimit
+	}
+	if s.UnitLimit < MinUnitLimit {
+		s.UnitLimit = MinUnitLimit
+	}
+	if s.UnitLimit > MaxUnitLimit {
+		s.UnitLimit = MaxUnitLimit
 	}
 	s.Skirmish.Normalize()
 }

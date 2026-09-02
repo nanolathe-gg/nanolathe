@@ -31,6 +31,14 @@ func (s *System) ForgetUnit(h pool.Handle) {
 		} else {
 			s.Grid.Clear(coll.CachedAnchor, coll.FootPrintX, coll.FootPrintZ, int(h))
 		}
+		// Unit finalisation at death or free is one of the footprint clear's
+		// callers, so it owes the clear's class-layer maintenance
+		// [04 R-COLL-01 §4]. Without it the layers keep the blocked value the
+		// occupant-age gate wrote for this unit: the occupant word is gone, the
+		// collision record is about to be, and the revision pass walks live
+		// units only, so the cells a unit died on would hard-block for the rest
+		// of the battle exactly as a building's do [04 R-PATH-01 §14].
+		s.noteFootprintClear(h, coll.CachedAnchor, coll.FootPrintX, coll.FootPrintZ, !coll.Building)
 	}
 	// Cancels the scheduler request and drops the active order binding.
 	s.DeactivateMove(h)

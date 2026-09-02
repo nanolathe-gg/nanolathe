@@ -41,6 +41,11 @@ func (g *gameShell) applySettings(s settings.Settings) {
 	// `damagebars` becomes bit 0 of the interface-flags word at settings load
 	// [07 R-HUD-03 §7][03 R-FX-01 §6].
 	applyDamageBarsSetting(s)
+	// The configured per-player unit limit rides on the setup record into
+	// battle entry, where it sizes the unit pool [05 R-SHARE-01 §7]. No
+	// screen edits it: retail reads it from the profile file, and the
+	// skirmish lobby has no gadget for it [08 R-SKIR-01 §6].
+	g.setup.UnitLimit = s.UnitLimit
 
 	sk := s.Skirmish
 	// ApplyDefaults has already run in newGameShell, so the six scalars below
@@ -126,6 +131,10 @@ func (g *gameShell) captureSettings() settings.Settings {
 		// The whole block is rewritten from live state, so the interface
 		// word's bit 0 is what the file records [07 R-HUD-03 §7].
 		DamageBars: damageBarsSettingValue(),
+		// Written back unchanged: nothing in the frontend edits it, so this
+		// preserves whatever the file held rather than inventing a value
+		// [08 R-SKIR-01 §6].
+		UnitLimit: g.setup.UnitLimit,
 	}
 	if s.ScrollSpeed == 0 {
 		s.ScrollSpeed = settings.DefaultScrollSpeed

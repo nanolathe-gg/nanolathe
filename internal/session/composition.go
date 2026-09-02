@@ -580,24 +580,31 @@ func newSlicedWorldWithCOB(cat *content.Catalog, fs vfs.FSOps) (*units.World, er
 // battle entry and injects it into the sliced pool. The sort-key array is an
 // explicit seam for the mode-3 player records; mode 0 is the identity wrapper
 // used by fixture-only construction [R-P0-16-A].
+//
+// It sizes the pool from the established missing-value unit limit. Every
+// battle-entry site that knows its own limit — a skirmish's configured
+// `UnitLimit`, a campaign's OTA `maxunits` — calls the Sized form instead.
 func newBattleSlicedWorldWithCOB(cat *content.Catalog, fs vfs.FSOps, mode int, sortKeys [pool.PlayerCount]uint32) (*units.World, error) {
 	if cat == nil {
 		return nil, fmt.Errorf("session: nil catalog for unit pool")
 	}
-	return newBattleSlicedWorldWithCOBSized(cat, fs, mode, sortKeys, len(cat.Units))
+	return newBattleSlicedWorldWithCOBSized(cat, fs, mode, sortKeys, SkirmishDefaultUnitLimit)
 }
 
 // newBattleSlicedWorldWithCOBSized is newBattleSlicedWorldWithCOB with the
-// per-player record count stated rather than taken from the definition table.
+// session's per-player unit limit stated explicitly.
 //
-// The pool's per-player slice is sized by the session's per-player unit limit
-// and is allocated independently of how many definitions the catalog holds
-// [05 R-SHARE-01 §7]; this engine still stands the definition count in for
-// that limit, which is why the count is a parameter here rather than a read of
-// `cat`. A caller that hands in a *restricted* catalog — the campaign
-// `UseOnlyUnits` filter of [08 R-ENTRY-01 §2 step 4], which can cut the table
-// to a dozen definitions — must pass the unrestricted count, or the
-// restriction would silently starve the pool and drop mission placements.
+// The pool is sized once at battle entry as `limit × 10 + 1` records, with
+// exactly `limit` records per player slot and record 0 the null identity — and
+// that is true regardless of how many slots participate or how many
+// definitions the catalog holds [05 R-SHARE-01 §7]. The limit comes from the
+// mission's `maxunits` in campaign mode and from the configured
+// `[Preferences] UnitLimit` in skirmish mode [08 R-SKIR-01 §6]; the caller
+// owns that choice, which is why it is a parameter rather than a read of
+// `cat`. It is also why a caller handing in a *restricted* catalog — the
+// campaign `UseOnlyUnits` filter of [08 R-ENTRY-01 §2 step 4], which can cut
+// the table to a dozen definitions — cannot starve the pool: the record count
+// never consults the table at all.
 func newBattleSlicedWorldWithCOBSized(cat *content.Catalog, fs vfs.FSOps, mode int, sortKeys [pool.PlayerCount]uint32, perPlayerRecords int) (*units.World, error) {
 	if fs == nil {
 		return nil, fmt.Errorf("session: missing filesystem for COB binding [04 §4.1]")
@@ -608,8 +615,16 @@ func newBattleSlicedWorldWithCOBSized(cat *content.Catalog, fs vfs.FSOps, mode i
 	if len(cat.Units) <= 0 {
 		return nil, fmt.Errorf("session: catalog has no unit definitions [02 §5]")
 	}
-	if perPlayerRecords < len(cat.Units) {
-		perPlayerRecords = len(cat.Units)
+	if perPlayerRecords < 1 {
+		// A limit of zero would leave every slice empty and the pool unsliced,
+		// so the allocator could never place a commander. Retail's own clamp
+		// only covers the configured skirmish value (20..500); a campaign
+		// `maxunits` of zero is not covered by any traced clamp.
+		// TODO(question): what does retail do with an OTA whose `maxunits` is
+		// 0 or negative — does the world rebuild allocate a one-record pool
+		// and fail every placement? Decider: a trace of the sizing site's
+		// argument handling for a zero limit [05 R-SHARE-01 §7].
+		return nil, fmt.Errorf("nanolathe: unit pool sizing failed: logical path <battle entry>, providers searched [session unit limit], expected a per-player unit limit of at least 1, got %d", perPlayerRecords)
 	}
 	order := pool.PlayerPermutationForMode(mode, sortKeys)
 	w, err := units.NewSlicedWithOrder(perPlayerRecords, cat, order)
@@ -1629,17 +1644,42 @@ func createAndBindServices(s *Session) error {
 // which retail copies once into a session word when the world is built
 // [08 R-AI-01 §13][02 "unit limit"]. Both the path scheduler's service tiering
 // and the computer player's half-capacity scoring term read that one word.
-func sessionUnitLimit(s *Session) int32 {
-	// Skirmish copies the clamped Preferences UnitLimit, whose established
-	// missing-value default is 250 [08 R-SKIR-01 §6].
-	limit := int32(250)
-	if s != nil && s.Mission != nil && s.Mission.Type == mission.TypeCampaign && s.Mission.OTA != nil {
-		limit = mission.DecodeMissionGlobals(s.Mission.OTA.Global).MaxUnits
+// campaignUnitLimit is the session unit-limit word a campaign battle entry
+// installs: the OTA loader writes it from the map's `maxunits` key whenever an
+// OTA is parsed, with a missing-key default of 200, and campaign is the one
+// mode whose OTA value survives battle entry [08 R-SKIR-01 §6][05 R-SHARE-01
+// §7]. A mission with no parsed OTA never reached that writer, so it takes the
+// same missing-value default.
+func campaignUnitLimit(m *mission.Mission) int32 {
+	if m == nil || m.OTA == nil {
+		// Decoding a nil section yields the accessor defaults, so the missing
+		// `maxunits` default is read from the one decoder rather than restated
+		// as a second constant here.
+		return mission.DecodeMissionGlobals(nil).MaxUnits
 	}
-	// TODO(question): surface the loaded Preferences UnitLimit and restored
-	// save Summary word on Session; until then skirmish/save composition can
-	// only supply the established missing-preference default above.
-	return limit
+	return mission.DecodeMissionGlobals(m.OTA.Global).MaxUnits
+}
+
+func sessionUnitLimit(s *Session) int32 {
+	if s != nil && s.Mission != nil && s.Mission.Type == mission.TypeCampaign {
+		return campaignUnitLimit(s.Mission)
+	}
+	// Skirmish battle entry copies the clamped configured `[Preferences]
+	// UnitLimit` over the session word [08 R-SKIR-01 §6]. It reaches the
+	// session on the setup record, whose Normalize applied the clamp; a
+	// session composed without one (a fixture) reads the missing-value
+	// default through the same clamp.
+	//
+	// TODO(question): a restored save writes its Summary `maxunits` into the
+	// configured limit, but the pool for the battle being loaded was already
+	// sized from the pre-restore value, so the restored word only reaches the
+	// *next* battle [08 R-ENTRY-01 §6]. Where retail keeps that carried-over
+	// word between battles — and therefore what a second load in one process
+	// should read here — is untraced, so this engine drops it.
+	if s == nil {
+		return int32(ClampUnitLimit(0))
+	}
+	return int32(ClampUnitLimit(s.Skirmish.UnitLimit))
 }
 
 func sessionPathUnitLimit(s *Session) int32 {
