@@ -66,17 +66,20 @@ func (p PlotCell) Metal() uint8 { return p[7] }
 func (p PlotCell) Feature() uint16 { return uint16(p[8]) | uint16(p[9])<<8 }
 
 // The two bytes at byte 0x0A carry three different meanings depending on what the
-// cell is, and research does not agree on the first of them:
+// cell is:
 //
-//   - At a FRINGE member, they locate the anchor cell. [02 "Terrain file"] reads
-//     them as "signed offsets locating their anchor cell", explicitly marked
-//     supported inference; [04 §6.2] instead says "the cell stores target-cell
-//     coordinates and the resolver re-reads that cell's feature identifier".
-//     Both readings are exposed below; the resolver uses the offset reading.
-//     TODO(question): which is it? An absolute-coordinate pair cannot fit two
-//     bytes on maps wider than 256 cells, which is most of the retail corpus,
-//     so the offset reading is the only one that can be literally true at this
-//     width — but that argument is ours, not research's.
+//   - At a FRINGE member, they locate the anchor cell as an OFFSET, never an
+//     absolute coordinate (settled by RWU-19-39, [02 "Terrain file"]
+//     Correction): retail's stamp writer stores the positive anchor→fringe
+//     deltas (`0..footX-1` at 0x0B, `0..footZ-1` at 0x0A) and every resolver
+//     reads them zero-extended and SUBTRACTS them from the fringe cell. This
+//     build keeps the mirror-image convention it has always used — the stamp
+//     writes the negated deltas as signed bytes and the resolvers ADD them —
+//     which reaches the same anchor for every footprint up to 127 cells (the
+//     stock maximum is far below that). The stored bytes therefore differ from
+//     retail's by sign; flipping the convention touches every resolver in
+//     internal/features, internal/movement and internal/construction as well as
+//     feature_stamp.go, so it is left as a follow-up rather than done here.
 //   - At an ANCHOR with a live instance attached, they are the instance slot
 //     index.
 //   - At an ANCHOR with no instance, they accumulate blast damage against hit

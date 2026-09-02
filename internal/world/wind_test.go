@@ -11,21 +11,57 @@ import (
 // [01 §7.3], so a map whose wind bounds are equal must still consume the speed
 // draw. [R-CORE-02]: these are front-end display values with no battle-side
 // reader — battle entry itself consumes NO wind draws; only the briefing
-// screen runs this path.
+// screen runs this path. The entry draws exactly twice (speed, countdown),
+// arms no deadline and writes no heading (RWU-19-39: the second draw is a
+// countdown, not a direction).
 func TestBriefingDisplayDraws(t *testing.T) {
 	for _, bounds := range [][2]int32{{100, 2000}, {500, 500}, {0, 0}} {
 		crt := rng.NewCRT(1)
 		w := NewWind(bounds[0], bounds[1])
 		w.SeedBriefing(&crt, 0)
-		if crt.Draws() != 3 {
-			t.Fatalf("bounds %v: briefing display consumed %d CRT draws, want 3", bounds, crt.Draws())
+		if crt.Draws() != 2 {
+			t.Fatalf("bounds %v: briefing entry consumed %d CRT draws, want 2", bounds, crt.Draws())
 		}
 		if w.Strength < bounds[0] || w.Strength > bounds[1] {
 			t.Fatalf("bounds %v: strength %d out of range", bounds, w.Strength)
 		}
-		if w.NextChange < 150 || w.NextChange > 420 {
-			t.Fatalf("bounds %v: first deadline %d outside 150..420 [01 §7.3]", bounds, w.NextChange)
+		if w.NextChange != 0 || w.Heading != 0 {
+			t.Fatalf("bounds %v: briefing entry armed a deadline (%d) or wrote a heading (%d) [01 §7.3]", bounds, w.NextChange, w.Heading)
 		}
+		if w.BriefingCountdown < 0 || w.BriefingCountdown > 63 {
+			t.Fatalf("bounds %v: countdown %d outside 0..63 [01 §7.3]", bounds, w.BriefingCountdown)
+		}
+	}
+}
+
+// TestBriefingUpdateJitter locks the per-update display routine of [01 §7.3]:
+// no draws while the countdown is at or above one, then on expiry exactly two
+// draws, a speed drift of at most two clamped to the bounds, and a re-armed
+// countdown in 0..62.
+func TestBriefingUpdateJitter(t *testing.T) {
+	crt := rng.NewCRT(3)
+	w := NewWind(100, 2000)
+	w.SeedBriefing(&crt, 0)
+	before := crt.Draws()
+	w.BriefingCountdown = 2
+	if w.BriefingUpdate(&crt, 1) || crt.Draws() != before {
+		t.Fatalf("update with countdown 2 redrew or drew (draws %d -> %d)", before, crt.Draws())
+	}
+	speed := w.Strength
+	if !w.BriefingUpdate(&crt, 2) || crt.Draws() != before+2 {
+		t.Fatalf("expiring update: redraw=%v draws %d -> %d, want redraw and 2 draws", w.BriefingCountdown < 1, before, crt.Draws())
+	}
+	if d := w.Strength - speed; d < -2 || d > 2 {
+		t.Fatalf("speed drift %d outside -2..2 [01 §7.3]", d)
+	}
+	if w.BriefingCountdown < 0 || w.BriefingCountdown > 62 {
+		t.Fatalf("re-armed countdown %d outside 0..62 [01 §7.3]", w.BriefingCountdown)
+	}
+	// Clamp: a speed at the floor cannot drift below it.
+	w.Strength, w.BriefingCountdown = w.Min, 0
+	w.BriefingUpdate(&crt, 3)
+	if w.Strength < w.Min || w.Strength > w.Max {
+		t.Fatalf("clamped speed %d outside [%d, %d]", w.Strength, w.Min, w.Max)
 	}
 }
 

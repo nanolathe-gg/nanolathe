@@ -1040,9 +1040,31 @@ which is why the creators and the muzzle queries take a slot pointer alone.
 The initializer also zeroes the slot's reload word and stockpile byte, links
 the weapon definition from the unit definition's ordered `weapon1..3` list,
 and stores an initial value into the slot's distance word — the word the
-ballistic creator divides (§6.4) — derived from the two muzzle-query points
-(its exact expression was not traced here: **Unknown**, decider a trace of the
-initializer's arithmetic); it ends by dispatching `SetMaxReloadTime` with the largest of
+ballistic creator divides (§6.4). **Established (2026-09-02, RWU-19-39) — the
+expression.** For each slot the initializer runs the slot's `Query*` callback
+(forced, not the fallback form) and then the `AimFrom*` callback with its
+`Query*` fallback, each transformed to a world-space point through the piece
+transform that includes the unit's orientation at that moment, and stores
+
+```
+slotDistance = trunc( 1.25 × (queryPoint.z − aimFromPoint.z) )
+```
+
+as a 32-bit integer — a **horizontal Z-axis** difference of two 16.16 world
+positions (the unit position cancels; only the rotated piece offsets
+differ), scaled by the double constant 1.25 and truncated toward zero. It is
+not a length, not a square, and involves neither X nor height. When the script
+answers neither query the two points coincide and the stored value is zero.
+The word has **no other writer** in the decompiled set (bounded over every
+slot-relative access in the weapon region; the fire-time turret executor and
+the ballistic solver do not store it; save load restores the record
+wholesale), so this creation-time value is what the ballistic creator divides
+for the whole life of the unit — see the correction under §6.4. **Unknown:**
+whether the unit's heading has already been drawn when the initializer runs
+(the three unit creators call it; the heading store and the initializer call
+sit in different routines), so whether the delta is taken at the spawn heading
+or at heading zero. *Decider:* order of the heading write and the
+slot-initializer call inside the common unit creator. It ends by dispatching `SetMaxReloadTime` with the largest of
 the three `reloadtime` values scaled to milliseconds (`ticks × 1000 / 30`,
 truncated).
 
@@ -2143,8 +2165,24 @@ velocityX = -sin(yaw, H)
 velocityZ = -cos(yaw, H)
 ```
 
-where `slotDistance` is the distance the slot recorded when it solved, and
-`gravity` is the map's per-tick gravity global in 16.16. The pre-decrement of
+where `gravity` is the map's per-tick gravity global in 16.16.
+
+**Correction (2026-09-02, RWU-19-39).** This paragraph said `slotDistance`
+"is the distance the slot recorded when it solved". It is not: the slot's
+distance word is written **once**, by the slot initializer at unit
+construction, as `trunc(1.25 × (queryPoint.z − aimFromPoint.z))` — the Z-axis
+difference of the slot's `Query*` and `AimFrom*` world points at that moment
+([R-WPN-05 §3]) — and no aim-time or fire-time path rewrites it (bounded: no
+other writer of the word exists among the slot-relative accesses in the weapon
+region; the turret executor solves into locals and the solver is pure). `T0`
+is therefore a per-unit constant, not a flight time to the current target:
+`(uint32)initialValue / weaponvelocity`, and because the divide is unsigned a
+negative initial value (muzzle behind the aim-from piece along world Z at
+initialization) yields a very large `T0`. Established for the arithmetic;
+**Unknown** whether stock units ever store a negative value (it depends on the
+orientation the piece transform sees at initialization, see [R-WPN-05 §3]).
+*Decider:* a manual retail observation of one ballistic unit's first shot at
+two spawn headings, or the creator-order trace named there. The pre-decrement of
 the vertical component by one flight-time's worth of gravity is part of the
 launch, not an integrator artefact, and must be reproduced. **Unknown:** the
 intended geometric meaning of that pre-decrement, and therefore whether an

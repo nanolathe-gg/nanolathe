@@ -117,7 +117,16 @@ const (
 	OverlapIntruderStatus uint32 = 0x08000000
 )
 
-const classifierSelectableClear uint32 = 0x00008000
+// ImmunityStatus is bit 15 (0x8000) of the 32-bit runtime unit status word —
+// the mission `Immunity` flag from the placement record [08 "Mission
+// placement record"], copied into the status word by the mission-unit
+// spawner and by the save loader's unit restore. It keeps an immune hostile
+// off the target registry's primary list and off the computer player's
+// nearest-hostile search, without affecting anything else — not damage, not
+// selection, not rendering [06 §3.1 "the primary-list exclusion bit is the
+// mission Immunity bit"]. `MakeSelectable` clears it while setting the
+// classifier/selection eligibility bit [04 R-ORD-01 §2].
+const ImmunityStatus uint32 = 0x00008000
 
 // CloakRequestedStatus is bit 11 of the runtime unit-status word: the
 // cloak-REQUESTED bit, which the constructor seeds from `init_cloaked` in the
@@ -558,15 +567,16 @@ type Unit struct {
 	MoveTier uint8
 }
 
-// MakeSelectable applies retail's make-selectable order: clear the transient status bit
-// 0x8000, then set the classifier/selection eligibility bit 0x20. The order
-// operates on the runtime status word (Flags here); it does not synthesize
-// COB INBUILDSTANCE, which is kept in InBuildStance.
+// MakeSelectable applies retail's make-selectable order: clear the Immunity
+// bit (ImmunityStatus, 0x8000), then set the classifier/selection eligibility
+// bit 0x20. The order operates on the runtime status word (Flags here); it
+// does not synthesize COB INBUILDSTANCE, which is kept in InBuildStance
+// [04 R-ORD-01 §2].
 func (u *Unit) MakeSelectable() {
 	if u == nil {
 		return
 	}
-	u.Flags = (u.Flags &^ classifierSelectableClear) | ClassifierEligibleStatus
+	u.Flags = (u.Flags &^ ImmunityStatus) | ClassifierEligibleStatus
 }
 
 // ClearClassifierEligibility clears the retail runtime eligibility bit.
@@ -1642,18 +1652,23 @@ func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed,
 // unit's slots would never be offered a target by the retaliation walk or
 // rebound by a guard's leg 2 until some order had run its return verb.
 //
-// TODO(question): the initializer also zeroes the slot's reload word and
-// stockpile byte and stores an initial value into the slot's **distance
-// word** — the word the ballistic creator divides [06 §6.4] — derived from the
-// two muzzle-query points. What is unknown is only that expression: which two
-// query points (aim-from and muzzle piece, or the two ends of one query), in
-// which order, and whether the stored value is their separation, its square, or
-// a reciprocal-shaped term the divide expects [06 R-WPN-05 §3]. What would
-// settle it: a trace of the initializer's arithmetic between the weapon-link
-// store and the SetMaxReloadTime dispatch, read together with the divide in the
-// ballistic creator that consumes it. This build carries no such word, so
-// nothing here stands in for it and no ballistic term reads one; adding a
-// placeholder would change projectile arithmetic on a guess.
+// The initializer also zeroes the slot's reload word and stockpile byte and
+// stores the slot's **distance word** — the word the ballistic creator divides
+// [06 §6.4] — as `trunc(1.25 × (queryPoint.z − aimFromPoint.z))`: the
+// horizontal Z-axis difference of the slot's `Query*` world point and its
+// `AimFrom*` (Query-fallback) world point at this moment, in 16.16, scaled by
+// 1.25 and truncated toward zero [06 R-WPN-05 §3] (RWU-19-39). No later path
+// rewrites that word, so it is the divisor operand of every ballistic shot
+// the unit ever fires, not a per-shot flight distance [06 §6.4 Correction].
+//
+// This build carries no such word: the ballistic creator (internal/combat)
+// has no operand for it and this package does not query pieces at
+// construction. Adding it is a two-package change — a per-slot field written
+// here from the two piece queries, and the creator's `T0` reading it instead
+// of a solved distance — and is left to a follow-up named in the RWU-19-39
+// report. TODO(question): whether the heading has been drawn when the
+// initializer runs (the delta is heading-dependent); decider in
+// [06 R-WPN-05 §3].
 func installWeapons(u *Unit, def *content.UnitDef) {
 	if u == nil || def == nil {
 		return

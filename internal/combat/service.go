@@ -1065,14 +1065,15 @@ func (s *Service) stepTargetRegistries(tick uint32, w *units.World, vis *visibil
 //     SECONDARY list when its runtime seen bit is set. "The two tests are
 //     independent, so a unit can be on both lists, either, or neither."
 //
-// TODO(question): [06 §3.1] also requires "a runtime exclusion status bit is
-// clear" for primary-list entry, and neither doc 06 nor [03 §3.2]'s status-word
-// census names that bit. What would settle it is a static trace of the list
-// builder's status-word test against the unit status-word census of
-// [08 "Classifier eligibility, destinations, and order"]. Until then the clause
-// is omitted rather than guessed at: an omitted clause admits candidates retail
-// would exclude, which a wrong bit would too, and this way nothing invents a
-// meaning for a bit.
+// The primary-list entry above also requires "a runtime exclusion status bit
+// is clear" [06 §3.1]. RWU-19-38 settled that bit by whole-image writer/reader
+// census: it is bit 15 (0x8000) of the status word, the mission `Immunity`
+// flag, named `units.ImmunityStatus` here — the same bit `Unit.MakeSelectable`
+// clears. It gates PRIMARY-list entry only; the secondary seen-bit list is
+// unaffected, so an immune unit the local observer can see still reaches the
+// secondary list and remains a fallback candidate when the registry's
+// secondary-list gate is open [06 §3.1 "the primary-list exclusion bit is the
+// mission Immunity bit"].
 //
 // It consumes NO random draw. [06 §3.1] gives the rebuild one simulation draw
 // of bound 30 whose zero outcome runs the strategic refresh, and this build
@@ -1127,7 +1128,7 @@ func (s *Service) rebuildTargetRegistry(tick uint32, owner uint8, w *units.World
 		if isAllied(owner, u.Owner, econ) {
 			continue // neither hostile nor own: skipped entirely [06 §3.1]
 		}
-		if directlyVisibleAtRebuild(owner, u, seaLevel, vis, econ) {
+		if u.Flags&units.ImmunityStatus == 0 && directlyVisibleAtRebuild(owner, u, seaLevel, vis, econ) {
 			pri = append(pri, u.Handle) // unit-array order [06 §3.1] (I1)
 		}
 		if r.seenBit(u.Handle) {

@@ -398,6 +398,21 @@ enqueue; 0x40000 marks a record that belongs in the rear queue segment;
 branch; and 0x200000 marks a valid cached target position, written by the
 goal-resolution helper. The remaining observed bits have no located consumer.
 
+**Established (2026-09-02, RWU-19-39) — 0x20000 (bit 17) is the standby
+interruptible bit.** It is the "interruptible bit" that [08 R-AI-01 §11] and
+[R-STANCE-01 §3] name without numbering. Exactly three descriptors carry it
+statically — `Standby`, `Standby_Mine` and `VTOL_Standby` (the table above) —
+and it has exactly one located reader: the damage-path reaction site, which
+tests it on the **static-mask copy carried by the victim's current (head)
+order record**, admitting the retaliation order branch when the victim has no
+head order *or* the head order's copy has bit 17 set. No writer other than the
+descriptor templates was found (bounded over the decompiled set), so the bit is
+a descriptor property, not a per-record state: "interruptible" means "the unit
+is standing by", and a unit running any other order — moving, patrolling,
+building, attacking — is never given a counter-order by the reaction site; it
+can only be offered the attacker slot by slot. The earlier text's "bit 17 has
+no located consumer" is superseded.
+
 **Audit note — descriptor table verified from the static templates [R-DOC04-C]
 (2026-08-27).** All four static template batches were located and every field of every
 static descriptor was read byte-exactly; the table above was re-verified against that dump
@@ -1890,9 +1905,13 @@ computer-player-specific:
   owner a controlled player, and the attacker known and not allied;
 * it first tries the auto-engage issuer with `force = 0` — so a hold-fire or
   hold-position victim gets no counter-order — and only when the victim has no
-  front order (or the front order's gate mask carries the interruptible bit)
-  and the attacker's type is in neither the no-chase nor the bad-target
-  category set [06 §3.2];
+  front order (or the front order's static gate-mask copy carries bit 17,
+  the standby interruptible bit of §3.1 — set only on `Standby`,
+  `Standby_Mine` and `VTOL_Standby`, RWU-19-39) and the attacker's type is in
+  neither the no-chase set nor the **primary slot's** bad-target set
+  (`wpri_badTargetCategory` — the other two slots' sets are not read here,
+  [08 R-AI-01 §11]) and the attacker passes the slot-0 admission predicate
+  [06 §3.1];
 * if no order was issued **and** the standing fire field is non-zero, each of
   the three weapon slots that is present and enabled is offered the attacker,
   subject to the slot's admission predicate.

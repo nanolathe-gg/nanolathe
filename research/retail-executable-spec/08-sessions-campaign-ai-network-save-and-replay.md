@@ -3655,11 +3655,22 @@ is **armed** (its derived flag, set unless all three resolved weapon slots are
 empty) **or** carries `kamikaze`, the victim is fully built, and the attacker is
 not allied, then:
 
-* if the victim has no current order — or its current order's gate mask carries
-  the interruptible bit — and the attacker's type is absent from **both** the
-  victim definition's no-chase and bad-target category bitsets [06 §3.2], the
-  victim is given an attack order against the attacker through the ordinary
-  order service;
+* if the victim has no current order — or its current order's static gate-mask
+  copy carries **bit 17 (0x20000)**, the standby interruptible bit, which only
+  the `Standby`, `Standby_Mine` and `VTOL_Standby` descriptors carry
+  [04 §3.1] — and the attacker's type is absent from **both** the victim
+  definition's no-chase bitset and its **primary-slot** bad-target bitset
+  (`wpri_badTargetCategory`; the secondary and special slots' bitsets are not
+  consulted by this branch) [06 §3.2], and the attacker passes the slot
+  admission predicate evaluated for **slot 0** [06 §3.1], the victim is given
+  an attack order against the attacker through the ordinary order service.
+  *Precision (2026-09-02, RWU-19-39):* this bullet previously left the bit
+  unnumbered, wrote "bad-target category bitsets" as if the definition had
+  one, and omitted the slot-0 admission call that precedes the issuer; all
+  three are now traced (Established). The per-slot offer below reads each
+  slot's **own** bad-target bitset, but only against the slot's *existing*
+  target (a present target in the slot's bad set is replaced), never against
+  the attacker;
 * otherwise, when the victim's standing-fire field is non-zero (which §10
   guarantees for computer-player units), each of the victim's three weapon
   slots that is present and enabled is offered the attacker as a target: the

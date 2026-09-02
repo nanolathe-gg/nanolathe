@@ -1563,6 +1563,18 @@ spans both streams and is fully recovered:
   only readers are the briefing/front-end region itself, and no battle-side
   reader exists in the recovered image. The battle's actual initial wind is
   drawn by the wind-change routine at tick 1 (see below).
+  **Correction (2026-09-02, RWU-19-39) — the second value is not a
+  direction.** Earlier revisions (and the census row below) called the
+  `& 0x3F` draw a "six-bit direction". It is an **update countdown**: the
+  briefing screen's per-update routine decrements it, and when it reaches
+  zero (`< 1`) it drifts the displayed speed by `−2 + rand() % 5` (−2..+2),
+  clamps the result to `[minWind, maxWind]`, and re-arms the countdown with
+  `rand() % 63` (0..62). Its only readers are the entry routine and that
+  per-update routine; nothing converts it to an angle, and the briefing
+  screen has **no wind heading at all** — the display is a speed alone. The
+  entry routine draws exactly twice; it arms no interval deadline. Established
+  (the cadence of the per-update routine — once per briefing-screen update
+  call — is what a screen redraw is; its frame rate is not traced).
 - In simulation, the wind change falls due when the global tick passes the
   wind deadline (a strict comparison); the next deadline advances by
   `((CRT draw * 10) / 0x8000 + 5) * 30` ticks — five through fourteen seconds
@@ -1628,7 +1640,7 @@ battle-entry seed.
 |---|---|---|---|
 | Process startup | CRT (main thread) | 0 (seed only) | main-thread TLS state ← time-of-day helper — the only seed that block ever receives |
 | Menu/front-end screens | CRT (main thread) | unbounded (variant paths) | UI/media random variants; not censused exhaustively; **these draws carry into the battle** (correction 2026-08-29, [R-PLAT-01 §4]) |
-| Briefing-screen entry | CRT | 2 | wind display: speed `% (max−min+1) + min`, then direction `& 0x3F` — front-end display globals, no battle-side reader |
+| Briefing-screen entry | CRT | 2 | wind display: speed `% (max−min+1) + min`, then the display-jitter countdown `& 0x3F` (not a direction — corrected 2026-09-02, §7.3) — front-end display globals, no battle-side reader; each later briefing update whose countdown expires draws 2 more (speed drift `% 5`, countdown `% 63`) |
 | Battle entry (loading thread) | both | 0 (reseeds only) | simulation ← QPC sum; **loading-thread** CRT ← time-of-day; global tick ← 0 |
 | Battle entry, skirmish setup | CRT (loading thread) | count−1 (Fisher-Yates swap draws), plus one 50/50 gate draw when fewer than three qualifying players | player-slot assignment shuffle (skirmish start positions; skipped entirely when a saved game is being loaded); consumed from the worker's block, which dies with the thread |
 | Battle entry, networked setup | sim | 2 per placed commander (one per axis of the start point) | commander start placement |

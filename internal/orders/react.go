@@ -115,34 +115,49 @@ func UnderAttackSilenced(u *units.Unit) bool {
 	return FrontPrimaryGateMask(u)&staticUnderAttackSilent != 0
 }
 
+// staticStandbyInterruptible is static gate-mask bit 17 (0x20000), the
+// "interruptible bit" of [08 R-AI-01 §11] and [04 R-STANCE-01 §3], numbered
+// by [04 §3.1] (RWU-19-39). Exactly three descriptors carry it — `Standby`,
+// `Standby_Mine` and `VTOL_Standby` — and its only reader is the reaction
+// site below, which tests it on the victim's head order's static-mask copy.
+// It is a descriptor property, not per-record state: "interruptible" means
+// "standing by".
+const staticStandbyInterruptible uint32 = 1 << 17
+
 // RetaliationOrder is part 3's ORDER branch — the first bullet of
 // [08 R-AI-01 §11], restated in stance terms at [04 R-STANCE-01 §3]: when the
-// victim has no current order (or its current order's gate mask carries the
-// interruptible bit) and the attacker's type is absent from both the victim
-// definition's no-chase and bad-target category bitsets [06 §3.2], the victim
-// is given an attack order against the attacker through the ordinary order
-// service. That service is the shared auto-engage issuer with `force = 0`, so
-// a hold-fire or hold-position victim gets no counter-order.
+// victim has no current order, or its current order's static gate-mask copy
+// carries bit 17 (the standby interruptible bit [04 §3.1]), and the attacker's
+// type is absent from both the victim definition's no-chase bitset and its
+// primary-slot bad-target bitset [06 §3.2], the victim is given an attack order
+// against the attacker through the ordinary order service. That service is the
+// shared auto-engage issuer with `force = 0`, so a hold-fire or hold-position
+// victim gets no counter-order.
+//
+// Retail evaluates one more admission between the category test and the
+// issuer: the slot admission predicate for slot 0 against the attacker
+// [08 R-AI-01 §11]. That predicate needs the world, visibility and terrain
+// services (combat.SlotAcquisitionAdmits) which this order-side seam does not
+// hold; the combat-side reaction routine that binds this function owns that
+// call and does not yet make it — see the RWU-19-39 report.
 //
 // It reports whether a record was inserted; the caller falls through to the
 // per-slot offer when it did not.
-//
-// TODO(question): the "interruptible bit" of [08 R-AI-01 §11] and
-// [04 R-STANCE-01 §3] is named in both sections but numbered in neither, and
-// [04 §3.1]'s static-mask census lists no bit with that meaning among the ones
-// it has located (bit 2 purge-survivor, bit 7 under-attack silence, 9 target,
-// 10 goal, 18 rear segment, 20 build-site class; bits 1, 3-6, 8, 11, 16, 17, 19
-// and 24 have no located consumer). Placeholder: only the "no current order"
-// arm admits, which never issues a counter-order the retail engine would not
-// also issue, and leaves the per-slot offer — the branch that produces return
-// fire for a unit sitting in `Standby` — as the reachable one. Decider: a trace
-// of the reaction site's gate-mask test naming which static bit it reads.
 func RetaliationOrder(victim, attacker *units.Unit) bool {
 	if victim == nil || attacker == nil || victim == attacker {
 		return false
 	}
-	if q := QueueOfUnit(victim); q == nil || len(q.Primary()) != 0 {
-		return false // no front order is the only admitted arm; see TODO above
+	q := QueueOfUnit(victim)
+	if q == nil {
+		return false
+	}
+	if primary := q.Primary(); len(primary) != 0 {
+		// The head order must be a standby to be interrupted [04 §3.1]; a
+		// unit moving, patrolling, building or attacking is only ever
+		// offered the attacker slot by slot.
+		if primary[0] == nil || primary[0].StaticGate&staticStandbyInterruptible == 0 {
+			return false
+		}
 	}
 	if !categoryAdmitsChase(victim.Def, attacker.Def) {
 		return false
@@ -151,16 +166,12 @@ func RetaliationOrder(victim, attacker *units.Unit) bool {
 }
 
 // categoryAdmitsChase is the second half of the order branch's admission: the
-// attacker's type must be absent from BOTH the victim definition's no-chase and
-// bad-target category bitsets [08 R-AI-01 §11][06 §3.2].
-//
-// TODO(question): [08 R-AI-01 §11] writes "bad-target category bitsets" in the
-// singular sense of one per definition, but [02 "Unit record"] authors three —
-// `wpri_`, `wsec_` and `wspe_badTargetCategory`, one per weapon slot — and no
-// unit-level key. Placeholder: the primary slot's mask, because the order
-// branch resolves command code 3, whose every weapon test reads weapon slot 0
-// [04 R-ORD-02 §1]. Decider: a trace of which of the three masks the reaction
-// site loads.
+// attacker's type must be absent from BOTH the victim definition's no-chase
+// bitset and its PRIMARY slot's bad-target bitset (`wpri_badTargetCategory`)
+// [08 R-AI-01 §11][06 §3.2]. Of the three per-slot bad-target bitsets the
+// definition authors, the order branch reads only slot 0's (RWU-19-39); the
+// per-slot offer reads each slot's own bitset, but only against the slot's
+// existing target, never against the attacker.
 func categoryAdmitsChase(victim, attacker *content.UnitDef) bool {
 	if victim == nil || attacker == nil {
 		return false

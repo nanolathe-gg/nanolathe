@@ -554,7 +554,7 @@ func reconstructUnits(s *Session, m *mission.Mission) error {
 				u.Health = int32(int64(u.MaxHealth) * int64(up.HealthPercentage) / 100)
 			}
 			if up.IsImmune() {
-				u.Flags |= 1 << 15
+				u.Flags |= units.ImmunityStatus
 			}
 			// Publish visibility synchronously before loader returns — no empty-coverage frame [03 §3.3] C10.
 			publishOne(s, u)

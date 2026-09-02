@@ -1183,6 +1183,16 @@ func fixedWordNeg(v int32) numeric.Fixed {
 // nearestHostileUnit keeps the first minimum in player-slot then pool order.
 // Distances are fixed-point products shifted to squared world units before a
 // strict comparison against the signed-32 initial maximum [08 R-AI-01 §9].
+//
+// **Correction (2026-09-02, RWU-19-38).** The third candidate test was
+// previously read off the death latch; [08 R-AI-01 §9]'s correction says the
+// helper tests status-word bit 15, the mission `Immunity` bit
+// (`units.ImmunityStatus`, the same bit the target registry's primary list
+// gates [06 §3.1]), not the death latch — a hostile that is dying but not
+// immune is still a candidate. The fourth test reads the runtime byte's
+// cloaked-INSTANCE bit, which this build carries as `Unit.Hidden`
+// (`SetCloakedInstance`'s bit, [03 R-VIS-01 §6]), not bit 2 of the 32-bit
+// status word.
 func (m *Manager) nearestHostileUnit(w *units.World, econ *economy.Service, x, y, z numeric.Fixed) *units.Unit {
 	if m == nil || w == nil || econ == nil {
 		return nil
@@ -1191,10 +1201,10 @@ func (m *Manager) nearestHostileUnit(w *units.World, econ *economy.Service, x, y
 	bestDistance := int64(1<<31 - 1)
 	var best *units.Unit
 	for _, u := range w.IterSliced() {
-		if u == nil || !u.Alive || u.Dying || u.Def == nil || !m.hostileOwner(u.Owner, econ) {
+		if u == nil || !u.Alive || u.Def == nil || !m.hostileOwner(u.Owner, econ) {
 			continue
 		}
-		if u.Flags&0x3 == 2 || u.Flags&0x4 != 0 {
+		if u.Flags&0x3 == 2 || u.Flags&units.ImmunityStatus != 0 || u.Hidden {
 			continue
 		}
 		dx := int64(fixedWordDelta(u.X, x))

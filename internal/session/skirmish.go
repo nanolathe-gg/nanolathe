@@ -13,6 +13,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -1098,7 +1099,7 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 						u.Health = int32(int64(u.MaxHealth) * int64(up.HealthPercentage) / 100)
 					}
 					if up.IsImmune() {
-						u.Flags |= 1 << 15
+						u.Flags |= units.ImmunityStatus
 					}
 					publishOne(s, u)
 					if s.Movement != nil && s.Movement.Routes != nil {

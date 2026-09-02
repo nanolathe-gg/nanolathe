@@ -6,9 +6,10 @@
 //
 // Retail wind draws [01 §7.3], [05 "Wind generation"], [GAP T13], [R-CORE-02]:
 //
-//   - The briefing-screen speed and direction draws (`rand() % (max-min+1)+min`,
-//     then `rand() & 0x3F`) are FRONT-END DISPLAY STATE only: their globals have
-//     no battle-side reader. Battle entry itself consumes NO wind draws — it
+//   - The briefing-screen speed and jitter-countdown draws (`rand() %
+//     (max-min+1)+min`, then `rand() & 0x3F` — a countdown, not a direction;
+//     the briefing has no heading) are FRONT-END DISPLAY STATE only: their
+//     globals have no battle-side reader. Battle entry itself consumes NO wind draws — it
 //     zeroes the deadline, and the strict gate (not due while tick < deadline)
 //     leaves the zeroed deadline unfired at tick 0. The first wind chain runs
 //     inside the first sub-tick (tick 1 > 0) [R-CORE-02].
@@ -56,6 +57,12 @@ type Wind struct {
 	DirX int32
 	DirZ int32
 
+	// BriefingCountdown is the briefing screen's display-jitter countdown —
+	// the `rand() & 0x3F` value drawn at briefing entry, decremented per
+	// briefing update and re-armed with `rand() % 63` when it expires
+	// [01 §7.3]. Front-end display state only; no battle-side reader.
+	BriefingCountdown int32
+
 	NextChange uint32 // tick the next redraw falls due [01 §7.3]
 	LastChange uint32 // tick of the last completed redraw
 	Changed    bool   // true for exactly one tick after a redraw (callback burst gate)
@@ -83,11 +90,16 @@ func boundFor(span int64) uint32 {
 	return uint32(span)
 }
 
-// SeedBriefing is the FRONT-END briefing-display draw helper [01 §7.3]
-// [R-CORE-02]. It renders the two briefing-screen display values — speed
-// `rand() % (max-min+1) + min`, then the six-bit direction `rand() & 0x3F` —
-// and arms the first deadline with one interval draw, exactly as the retail
-// briefing screen does when it enters.
+// SeedBriefing is the FRONT-END briefing-screen entry draw helper [01 §7.3]
+// [R-CORE-02]. It draws the two briefing-screen display values — the speed
+// `rand() % (max-min+1) + min`, then the display-jitter countdown
+// `rand() & 0x3F` — and nothing else: the entry draws exactly twice and arms
+// no deadline (the earlier third, interval draw here was not retail's).
+//
+// The second value is NOT a direction (RWU-19-39 corrected [01 §7.3], which
+// had called it a "six-bit direction"): the briefing screen has no wind
+// heading at all, only a speed, and the countdown gates BriefingUpdate's
+// speed drift. Heading stays untouched here.
 //
 // It must NEVER run at battle entry: retail's battle bootstrap performs no
 // wind draws (it only zeroes the deadline), and the briefing values are
@@ -95,26 +107,43 @@ func boundFor(span int64) uint32 {
 // briefing screen yet; no production caller exists. AUDIT(parity-spine):
 // retained as the clearly-labeled front-end presentation path for the future
 // briefing display.
-//
-// TODO(question): research gives the briefing direction as a six-bit value and
-// every later heading as a full 16-bit simRand(0x10000) [01 §7.3], but does
-// not state how the six-bit value is widened into the heading field. 64 steps
-// of 1024 is the arithmetically clean reading; it is not attested.
 func (w *Wind) SeedBriefing(crt *rng.CRT, tick uint32) {
 	if w == nil || crt == nil {
 		return
 	}
-	// 1. Initial speed: rand() % (max-min+1) + min [01 §7.3].
+	// 1. Displayed speed: rand() % (max-min+1) + min [01 §7.3].
 	w.Strength = int32(crt.Uint32n(boundFor(int64(w.Max)-int64(w.Min)+1))) + w.Min
 
-	// 2. Initial direction: rand() & 0x3F, six bits [01 §7.3].
-	dir6 := uint16(crt.Rand() & 0x3F)
-	w.Heading = dir6 << 10
+	// 2. Jitter countdown: rand() & 0x3F, 0..63 updates [01 §7.3].
+	w.BriefingCountdown = int32(crt.Rand() & 0x3F)
 
 	w.publish(tick)
+}
 
-	// 3. First next-change deadline [01 §7.3].
-	w.NextChange = tick + windInterval(crt)
+// BriefingUpdate is the briefing screen's per-update wind-display routine
+// [01 §7.3] (RWU-19-39): it decrements the countdown and, when the countdown
+// is below one, drifts the displayed speed by `−2 + rand() % 5` (−2..+2),
+// clamps it to the map bounds, and re-arms the countdown with `rand() % 63`
+// (0..62). Two CRT draws on an expiring update, none otherwise. Front-end
+// display state only; it reports whether the speed was redrawn.
+func (w *Wind) BriefingUpdate(crt *rng.CRT, tick uint32) bool {
+	if w == nil || crt == nil {
+		return false
+	}
+	w.BriefingCountdown--
+	if w.BriefingCountdown >= 1 {
+		return false
+	}
+	w.Strength += -2 + int32(crt.Rand()%5)
+	if w.Strength < w.Min {
+		w.Strength = w.Min
+	}
+	if w.Strength > w.Max {
+		w.Strength = w.Max
+	}
+	w.BriefingCountdown = int32(crt.Rand() % 63)
+	w.publish(tick)
+	return true
 }
 
 // Jitter is the phase-8 callback: the COMPLETE scheduled wind redraw
