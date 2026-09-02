@@ -1548,7 +1548,11 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, r
 		initializeNanoframe(prod, def)
 		if prod != nil {
 			if err := s.reservePlacement(prod.Handle, def, rect); err != nil {
-				prod.Alive = false
+				// Same never-existed unwind as the world path below
+				// [04 R-FAC-02 §3]. The bare `Alive = false` this replaces left
+				// the pool slot allocated and both counters bumped, so the
+				// product went on being counted by the per-definition census.
+				s.freeNeverExistedProduct(prod)
 				return nil, err
 			}
 			s.recordPlacement(prod.Handle, def, rect)
@@ -1571,12 +1575,51 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, r
 		return nil, fmt.Errorf("construction: failed to get product")
 	}
 	if err := s.reservePlacement(prod.Handle, def, rect); err != nil {
-		s.World.Destroy(prod.Handle, units.DeathKilled)
+		// The refused product never existed [04 R-FAC-02 §3]: it is freed, not
+		// killed. A Destroy here filed a death with no damage packet behind it —
+		// a kill record, a death cause and a decremented live count against a
+		// units-ever-created the allocation had already bumped.
+		s.freeNeverExistedProduct(prod)
 		return nil, err
 	}
 	s.recordPlacement(prod.Handle, def, rect)
 	initializeNanoframe(prod, def)
 	return prod, nil
+}
+
+// freeNeverExistedProduct unwinds a nanoframe allocation this service completed
+// but could not admit.
+//
+// [04 R-FAC-02 §3] lists the abnormal ends of factory production. Cancel-current
+// and a dying factory are real deaths — the first kills the product with damage
+// cause 9 ([05 R-WORK-01 §1]), the second kills every unit on the cargo list.
+// The third is not: "A product freed by pool exhaustion or limit never existed."
+// No death, no kill record, no death cause, no counters — the slot goes back to
+// the pool, because retail never got past the allocator's refusal at all
+// ([05 R-SHARE-01 §8] steps 1-4 return the null unit; only step 5 counts).
+//
+// The order is release then free: the ground words and yard marks this identity
+// stamped come off first, since the slot is lowest-free reusable in the same
+// tick and a stale stamp would be read against the next occupant
+// [04 R-COLL-01 §4][P0-16 §6.3]. units.FreeNeverCreated owns the counter half.
+func (s *Service) freeNeverExistedProduct(prod *units.Unit) {
+	if prod == nil {
+		return
+	}
+	handle := prod.Handle
+	s.ReleasePlacement(handle)
+	s.ClearBuilderLink(handle)
+	if s.getBuiltLinks != nil {
+		delete(s.getBuiltLinks, handle)
+	}
+	if s.World != nil && s.World.Unit(handle) == prod {
+		s.World.FreeNeverCreated(handle)
+		return
+	}
+	// A caller-supplied Allocator hook may hand back a record the world does not
+	// own (the package's synthetic fixtures do). There is no slot to return then;
+	// clearing the alive bit is the whole of the unwind.
+	prod.Alive = false
 }
 
 func initializeNanoframe(prod *units.Unit, def *content.UnitDef) {
@@ -2337,12 +2380,12 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 	}
 	// Success epilogue [05 C18].
 	if err := s.successEpilogue(factory, node, product, cell, buildPiece); err != nil {
-		s.ReleasePlacement(product.Handle)
-		if s.World != nil && s.World.Unit(product.Handle) != nil {
-			s.World.Destroy(product.Handle, units.DeathKilled)
-		} else {
-			product.Alive = false
-		}
+		// successEpilogue's own comment already calls its failure "an explicit
+		// rejected allocation" [04 R-FAC-02 §1]; a rejected allocation is a
+		// product that never existed [04 R-FAC-02 §3], so it is freed here, not
+		// killed. The Destroy this replaces filed a kill record and a death cause
+		// for a unit retail never created.
+		s.freeNeverExistedProduct(product)
 		s.rejectPermanent(factory, node, tick, err)
 	}
 }

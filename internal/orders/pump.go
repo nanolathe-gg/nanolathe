@@ -642,8 +642,16 @@ func moveGroundHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code 
 		return 7 // cancel-all: a phase outside the machine [R-ORDER-02 §1]
 	}
 	if satisfied&0x20 != 0 { // [R-P0-01] combined&0x20 -> ack + return 5
-		// TODO(question): acknowledgement emission (kind 6) is not yet wired to
-		// presentation; return 5 drives the pump unlink
+		// The acknowledgement is the row's "status 6 (`Arrived`)"
+		// [04 R-ORD-01 §4]: the shared status emitter, whose three-clause
+		// producer gate (owner is the local viewing player, alive bit set,
+		// silenced bit clear) and default-caption substitution live in the
+		// session-owned adapter behind workStatus [04 R-ORD-01 §1]
+		// [03 R-AUD-01 §3]. It reaches presentation as a committed status
+		// event, never as sim audio [I6]. This is the same call the two other
+		// kind-6 raisers make — `Attack_Kamikaze` phase 1 (combat.go) and
+		// `VTOL_Move` phase 2 (patrol.go).
+		workStatus(u, statusArrived, "Arrived")
 		return 5
 	}
 	return 9 // [R-P0-01] drop when further records else 30+RNG30 wait

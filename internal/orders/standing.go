@@ -112,23 +112,35 @@ func slotAt(u *units.Unit, slot int) *units.Slot {
 }
 
 // releaseGoalPayload is the fourth goal installer of [04 R-ORD-01 §1] — the
-// payload release. Every installer first releases the previous payload (which
-// raises pending 0x80) and finishes by clearing pending bits 0x20 through
-// 0x200, so the record cannot see a stale movement outcome; the release form
-// stops there. The net effect on the record is that all five movement bits are
-// clear [04 R-ORD-01 §0].
+// payload release. It is the record-level install/release helper called with no
+// new object, and it runs entirely through the owner's mover: a mover-less unit
+// is a no-op; otherwise the controller is handed a NULL goal (steps 1-4 of the
+// route-acceptance rule of [04 R-PATH-01 §8]: cancel the in-flight search, OR
+// `0x80` into the pending word of the record that owned the previous payload,
+// clear has-waypoint, clear wants-repath), the payload object is virtually
+// deleted and the record's payload field cleared.
 //
-// TODO(T25): this build has no goal-payload object for the orders package to
-// release — the movement layer owns the goal and reads the record's goal
-// triple — so only the record-side half of the release is represented here.
-// Placeholder: clear the five pending bits; the goal triple is left alone,
-// because the row that calls this does not write a new goal.
-func releaseGoalPayload(n *Node) {
+// Corrected 2026-09-02 (WU-19-62). This used to raise `0x80` and then clear
+// `0x20`-`0x200` on the record and stop, on the reading that "the net effect is
+// that all five movement bits are clear", with a marker saying this build had
+// no payload object for the order layer to release. Both halves were wrong.
+// There is a payload object and a seam to it — the movement adapter's release
+// port, which transport.go's releaseGoal already used — so the row's actual
+// effect (a cancelled search and a follower with no waypoint and no repath
+// armed) was simply absent. And the closing clear is not part of this form:
+// [04 R-ORD-01 §1] gives the clear to the branch that installs a NEW object and
+// says "the release form (no new object) is step (1) alone, which is why it
+// leaves `0x80` visible". A release that cancelled its own `0x80` was the one
+// case [04 R-ORD-01 §0] names as making the bit observable — a detach from
+// outside the record — and it hid it.
+//
+// The unit is the helper's own argument because the mover it runs through is
+// reached from the unit's queue binding; the record alone cannot name it.
+func releaseGoalPayload(u *units.Unit, n *Node) {
 	if n == nil {
 		return
 	}
-	n.Satisfied |= 0x80             // releasing the previous payload raises 0x80 [04 R-ORD-01 §0]
-	n.Satisfied &^= pendingMovement // ... and the installer clears 0x20..0x200 last
+	releaseGoal(u, n)
 }
 
 // ---------------------------------------------------------------------------
@@ -302,7 +314,7 @@ func paralyzeHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
 	}
 	releaseAllWeaponSlots(u)
 	clearWeaponTargetsUnconditional(u)
-	releaseGoalPayload(n)
+	releaseGoalPayload(u, n)
 	armDeadline(n, tick, n.Param1)
 	n.Param1 = 0
 	u.Stunned = true

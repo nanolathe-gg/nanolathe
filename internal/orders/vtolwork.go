@@ -538,7 +538,7 @@ func vtolRepairPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint
 		if u.Def.MaxDamage > 0 && health16(u) < uint32((u.Def.MaxDamage>>2)*3) {
 			pads := scanAirBasePads(u, airBaseSeekRadius)
 			if pad := pickCandidate(u, pads); pad != nil {
-				releaseGoalPayload(n)
+				releaseGoalPayload(u, n)
 				if spawnPatrolLanding(u, pad, tick) {
 					n.DynamicGate = 0
 					return 0 // restart with the landing record at the head

@@ -1546,6 +1546,91 @@ func (w *World) FreeImmediate(h pool.Handle) {
 	// itself is the catalog index not a generation.
 }
 
+// FreeNeverCreated releases a record the engine must treat as never having been
+// allocated at all: no death latch, no death cause, no kill record, no death
+// hook, and BOTH per-player counters restored to their pre-allocation values.
+// The slot returns to the pool and is lowest-free reusable the same tick
+// [P0-16 §3.4][P0-16 §6.3]. Zero RNG draws.
+//
+// Why both counters. [04 R-FAC-02 §3] closes the abnormal ends of factory
+// production and says of the third: a product freed by pool exhaustion or the
+// per-definition limit "never existed". Retail reaches that state inside the
+// allocator: [05 R-SHARE-01 §8] orders its tests so the null-definition,
+// creatable-bit, per-definition-limit and no-free-slot refusals all return the
+// null unit at steps 1-4, and only step 5's success path increments the owner's
+// sixteen-bit live count and its 32-bit units-ever-created counter. A refused
+// product was therefore never counted [08 R-SKIR-01 §3 "Counters"], and a
+// caller unwinding an allocation this build already completed has to put both
+// counters back for the outcome to match.
+//
+// FreeImmediate is the other free, and the two are not interchangeable: it is
+// the death finalizer's, for a unit that did exist and was counted, so it
+// decrements the live count only and leaves units-ever-created standing —
+// exactly what [08 R-SKIR-01 §3] says the kill-record handler does. Use it for
+// a unit that died; use this one only to unwind an allocation.
+func (w *World) FreeNeverCreated(h pool.Handle) {
+	if w == nil || w.pool == nil || h == 0 {
+		return
+	}
+	idx := int(h)
+	if idx <= 0 || idx >= len(w.units) {
+		w.pool.Free(h)
+		return
+	}
+	u := w.units[idx]
+	if u == nil || !w.pool.Alive(h) {
+		w.pool.Free(h)
+		return
+	}
+	// The slot is reusable in the same tick, so a handle left in a carrier's
+	// cargo list would alias whatever occupies the slot next [P0-16 §6.3]. The
+	// factory rollbacks that call this cannot reach an attached product — every
+	// attachment gate fails before the linkage is written — but the unwind must
+	// not depend on that.
+	w.unlinkAttachmentsForFree(u)
+	player := int(u.Owner)
+	u.Alive = false
+	u.Flags &^= ClassifierEligibleStatus
+	w.units[idx] = nil
+	w.pool.Free(h)
+	if player >= 0 && player < 10 {
+		if w.liveCounters[player] > 0 {
+			w.liveCounters[player]--
+		}
+		if w.createdCounters[player] > 0 {
+			w.createdCounters[player]--
+		}
+	}
+}
+
+// unlinkAttachmentsForFree drops a record out of the carried representation
+// without running any detach event: an allocation being unwound has no carried
+// state retail ever observed, so there is nothing to publish, only linkage to
+// drop before the slot is reusable [04 R-FAC-02 §3].
+func (w *World) unlinkAttachmentsForFree(u *Unit) {
+	if u == nil {
+		return
+	}
+	if carrier := w.Unit(u.Attachment.Carrier); carrier != nil {
+		kept := carrier.Attachment.Cargo[:0]
+		for _, h := range carrier.Attachment.Cargo {
+			if h != u.Handle {
+				kept = append(kept, h)
+			}
+		}
+		carrier.Attachment.Cargo = kept
+	}
+	u.Attachment.Carrier = 0
+	u.Attachment.AttachPiece = -1
+	for _, h := range u.Attachment.Cargo {
+		if child := w.Unit(h); child != nil {
+			child.Attachment.Carrier = 0
+			child.Attachment.AttachPiece = -1
+		}
+	}
+	u.Attachment.Cargo = nil
+}
+
 // ApplyDamage implements the damage packet 0x0B handler's stale validation:
 // a 16-bit slot target validates only slot nonzero and alive, then subtracts
 // health; if the slot was freed and

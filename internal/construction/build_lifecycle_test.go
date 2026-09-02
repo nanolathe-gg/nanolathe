@@ -522,9 +522,22 @@ func TestFactoryAttachGateFailureRollsBackAllocation(t *testing.T) {
 	svc.Allocator = func(uint8, *content.UnitDef, numeric.Fixed, numeric.Fixed, numeric.Fixed) (*units.Unit, error) {
 		return product, nil
 	}
+	liveBefore, createdBefore := w.LiveCountForPlayer(0), w.CreatedCountForPlayer(0)
 	svc.Pump(factory, 7)
-	if rejected := w.Unit(ph); rejected == nil || !rejected.Dying {
-		t.Fatalf("attach rejection left allocated product live: phase=%d target=%d admissions=%+v messages=%v", q.Primary()[0].Phase, q.Primary()[0].Target, svc.admissions, svc.messages)
+	// Corrected. This assertion used to require a death latch on the rejected
+	// product. [04 R-FAC-02 §3] lists three abnormal ends and only two of them
+	// are deaths: "a product freed by pool exhaustion or limit never existed",
+	// and successEpilogue's own contract calls its failure "an explicit rejected
+	// allocation" [04 R-FAC-02 §1]. Latching a death here filed a kill record and
+	// a death cause for a unit retail never created.
+	if w.Unit(ph) != nil {
+		t.Fatalf("attach rejection left the allocated slot occupied: phase=%d target=%d admissions=%+v messages=%v", q.Primary()[0].Phase, q.Primary()[0].Target, svc.admissions, svc.messages)
+	}
+	if product.Dying || product.DeathCause != 0 || product.LastDamageCause != 0 {
+		t.Fatalf("attach rejection killed the product (dying=%v cause=%d kind=%d); a never-existed product is freed [04 R-FAC-02 §3]", product.Dying, product.DeathCause, product.LastDamageCause)
+	}
+	if live, created := w.LiveCountForPlayer(0), w.CreatedCountForPlayer(0); live != liveBefore-1 || created != createdBefore-1 {
+		t.Fatalf("counters after the rollback live=%d created=%d, want the pre-allocation %d/%d [08 R-SKIR-01 §3][05 R-SHARE-01 §8]", live, created, liveBefore-1, createdBefore-1)
 	}
 	if q.Primary()[0].Target != 0 || State(q.Primary()[0].Phase) == State3 {
 		t.Fatalf("attach rejection published accepted factory state: %+v", q.Primary()[0])

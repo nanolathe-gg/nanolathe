@@ -1492,7 +1492,7 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 			// anchor OFFSET the admit phase drew and the maintenance leg reads
 			// [04 R-ORD-01 §8 point 2], so zeroing it would destroy the guard's
 			// own follow position.
-			releaseGoalPayload(n)
+			releaseGoalPayload(u, n)
 			q.PushHead(repID, Node{Owner: u.Handle, Target: n.Target, GoalX: ward.X, GoalY: ward.Y, GoalZ: ward.Z})
 			n.DynamicGate = 0
 			return Code(3) // *wait* [04 §3.3]
@@ -1535,7 +1535,7 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 			}
 			if helpID != 0 {
 				q := QueueForUnit(u)
-				releaseGoalPayload(n)
+				releaseGoalPayload(u, n)
 				q.PushHead(helpID, Node{Owner: u.Handle, Target: tgt, GoalX: goalX, GoalY: goalY, GoalZ: goalZ})
 				n.DynamicGate = 0
 				return Code(3) // *wait* [04 §3.3]

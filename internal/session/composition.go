@@ -623,11 +623,18 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 			}
 			return s.Movement.InstallPointGoal(req)
 		}
+		// The record-level payload release of [04 R-ORD-01 §1], in the form
+		// RWU-19-18 spells out: mover-less no-op, a NULL goal handed to the
+		// controller (cancel the in-flight search, `0x80` on the previous
+		// payload's record, clear has-waypoint and wants-repath), virtual
+		// delete, clear the field. The arrival release of [04 R-MOV-03 §2] and
+		// the queue teardown of [04 R-MOV-03 §9] reach the same helper through
+		// the record, so every caller of this port gets it.
 		movementGoals.Release = func(node *orders.Node) bool {
 			if node == nil {
 				return false
 			}
-			return s.Movement.ReleaseGoal(node)
+			return s.Movement.ReleaseGoalPayload(node)
 		}
 		movementGoals.InstallAnnulus = func(req orders.AnnulusGoalRequest) bool {
 			return s.Movement.InstallAnnulusGoal(req)

@@ -364,7 +364,7 @@ func vtolPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Co
 		// [04 R-ORD-01 §1][I4].
 		if u.Def != nil && u.Def.MaxDamage > 0 && health16(u) < uint32((u.Def.MaxDamage>>2)*3) {
 			if pads := scanAirBasePads(u, airBaseSeekRadius); len(pads) > 0 {
-				releaseGoalPayload(n)
+				releaseGoalPayload(u, n)
 				if pad := pickCandidate(u, pads); pad != nil && spawnPatrolLanding(u, pad, tick) {
 					n.DynamicGate = 0
 					return 0 // *restart*: the landing record now holds the head

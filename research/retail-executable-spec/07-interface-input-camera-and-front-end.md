@@ -550,14 +550,21 @@ inert for a watching player.
   at least `(seconds + 1)` seconds of game time, measured in simulation ticks
   — game speed changes stretch it.
 * **`unitchat` / `unitchattext` (UNITCHAT).** The unit acknowledgement path
-  (order acknowledgements, doc 04 [R-DET-01 §5]) plays the voice line only
+  (order acknowledgements, doc 04 [R-ORD-01 §1]) plays the voice line only
   when `10 - voiceLevel < ackPriority` (signed), a voice exists, the voice
   argument is set and the sound-flags byte has bit `0x40`; it posts the text
   line, kind 1 with the unit's id, only when `10 - textLevel < ackPriority`
   and the unit is alive. With the `Sing` toggle set the voice path
   substitutes one of two fixed sound names on `tick / 30 mod 8`. Levels are
   bytes: `Off` = `0` (only priorities above 10 pass — none in stock content),
-  `Medium` = `5`, `Full` = `10`.
+  `Medium` = `5`, `Full` = `10`. **Correction (2026-09-02, WU-19-61).** This
+  bullet named the acknowledgement producer "doc 04 [R-DET-01 §5]". That
+  anchor is wrong: `R-DET-01` is doc 01's determinism finding and heads
+  nothing in doc 04, so the pointer resolved to no contract at all. The
+  producer of an order acknowledgement is the **shared status emitter** of
+  [04 R-ORD-01 §1] — it owns the three-clause producer gate and the kind →
+  (sound name, default text) table of 23 kinds whose priorities these two
+  levels arbitrate. Established.
 * **`scrollspeed`** — [R-CAM-01 §10]. **`gamespeed`** — [01 §4.3].
 
 ### Closed — movie capture series [R-CAM-01 §8] (2026-08-29)
