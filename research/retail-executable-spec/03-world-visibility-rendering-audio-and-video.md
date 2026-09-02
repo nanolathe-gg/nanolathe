@@ -87,7 +87,11 @@ append invocation, and every call site of all twelve producer functions —
 replaces it; the producer table and per-strip events are [R-STRIP-01 §1]
 below. The strip-2 and strip-9 site counts of the old census were confirmed
 (4 and 12); strip 6 has sixteen literal sites in the reference graph (the old
-"seventeen" was not reproduced); strip 7 has three.
+"seventeen" was not reproduced); strip 7 has three. (Corrected 2026-09-02,
+[R-FX-02 §5]: the strip-6 count is **seventeen** call sites — the old census
+was right; the "sixteen" counted functions where two functions each hold two
+calls. The 0/1/3/8 "none" rows are re-verified there by two independent
+exhaustive enumerations.)
 
 #### R-STRIP-01 §1 — producer census and per-strip events
 
@@ -106,7 +110,7 @@ argument at every call site. The complete strip → producer/event map:
 | 3 | none | always empty |
 | 4 | the geothermal steam producer of [05 R-ECO-02 §3]: a flame-class object appended with init literals `(5, 0, 150)` under the pool gate and the 400-cap eviction (corrected 2026-08-29 — this row previously read "none … always empty"; the retired "crater/decal literal 4" retraction of §3.7 stands) | 1 |
 | 5 | teleport order effect (1 site — see [R-LAYER §4]; an earlier reading called this a "flame-weapon area scan" plus an "ignition callback", both retracted: the producer is the Teleport order-state handler and the second call is the unit position commit): for every other unit inside the ordering unit's definition-relative world box, a 30-tick flame-stream object that lays one animated segment every 10 ticks with a random start frame while the handler commits that unit to its displaced position; burning-feature smoke (1 site, phase 6 of doc 01 §4.4): one wind-drifted smoke puff every 3rd tick with two CRT jitter draws at the call site and a third, the puff's last frame, inside the producer; init row `(0, 1, 0, 0, 0)` — `smoke 1`, lifetime 0, a one-shot container ([05 R-FEAT-01 §16]) | 2 |
-| 6 | construction/reclaim nanolathe emitters: a source point and a target box, five particles per spawn tick over a two-tick spawn window (six CRT draws per particle) | 16 |
+| 6 | construction/reclaim nanolathe emitters: a source point and a target box, five particles per spawn tick over a two-tick spawn window (six CRT draws per particle) | 17 (corrected 2026-09-02 from 16, [R-FX-02 §5]) |
 | 7 | flame-stream trail (2 sites): one animated flame segment per tick over a 6–7 tick flight from source to target; smoke sprinkle variant (1 site): the strip-2 family with 8-tick spacing and a 7-tick life | 3 |
 | 8 | none (the composer still draws the strip, unconditionally) | always empty |
 | 9 | impact smoke: the authoritative impact dispatcher under a weapon-definition flag (1), the projectile phase's trail-window and impact branches (2), the land/water/lava impact effect variants under a second weapon flag (3), the emit-sfx smoke point cases — white `0x101` and black `0x102`, two sites (see the re-verification note below), the fixed-effect-pool append side effect when the effect lands above sea level (1), and the death-corpse finalizer's land-path long-lived (900-tick) smoke column (1 — an earlier reading labeled this the "sinking-wreck path"; see [R-LAYER §3]) | 12 |
@@ -114,7 +118,12 @@ argument at every call site. The complete strip → producer/event map:
 The old census's strip-2 count (4 sites) and strip-9 count (12 sites) are
 confirmed; strip 6's count is sixteen sites in the reference graph, one short
 of the old census's seventeen (the extra site was not reproduced and is not
-assumed to exist).
+assumed to exist). **Correction, 2026-09-02 ([R-FX-02 §5]):** the sentence
+before this one is withdrawn. Enumerating the code references to the two
+nanolathe producer routines by call-site address gives ten and seven —
+seventeen sites, every one pushing the literal 6. Two construction routines
+hold two calls each; the "sixteen" was a count that collapsed one of those
+pairs. The old census's seventeen was right.
 
 **Re-verification — the "impact-effect switch" is the COB emit-sfx type
 dispatch (2026-08-28, direct-static).** The strip-2 producer named above as
@@ -6671,7 +6680,10 @@ pass), returns the slot to the pool. The 400-object eviction of
 [R-STRIP-01 §1] destroys the **front** object of the strip (the oldest) with
 that flag and shifts the vector down. The pool's capacity is the vector
 grown by the pool's own allocator; its initial size is [R-STRIP-01 §1]'s
-concern and is not re-derived here.
+concern and is not re-derived here. (Corrected 2026-09-02, [R-FX-02 §4]: the
+capacity is **1000 slots of 76 bytes**, fixed for the life of the process —
+the growth routine has exactly one caller, the pool's constructor, so the
+"vector grown by the pool's own allocator" never grows again after start-up.)
 
 The sweep ([01 §4.4] phase 11) runs strips 0 … 9 in order and, per object in
 insertion order, the removal-verdict virtual before the update virtual; a
@@ -6881,6 +6893,138 @@ puffs for the rest of the battle — a carpet of smoke standing over every place
 a shot has ever landed. Retail shows nothing of the kind, which is the
 observation that should have been weighed against the vent capture from the
 start: both captures are real, and they are of different classes.
+
+### Closed — the strip pool's capacity, and what a dropped object costs [R-FX-02 §4] (2026-09-02)
+
+Status: **Established** (direct static: the pool's constructor, its single
+growth routine and that routine's single caller, the take and return entries,
+the family destructors, the battle-exit teardown, and the static-initialization
+table entry that runs the constructor). Closes the `TODO(question)` at the head
+of `internal/session/strips.go` and the "initial size … not re-derived here"
+gap of [R-FX-02 §1].
+
+**When and how the pool is built.** The slot pool of [R-FX-02 §1] is
+constructed **once per process**, by a routine registered in the executable's
+static-initialization table — it runs with the other C++ static constructors
+before the program's main body, and registers its own teardown on the C
+runtime's exit list. It is not rebuilt at battle entry: the ten-descriptor
+strip table is allocated at battle entry and freed at battle exit
+([R-CORE-01 §4.4.1]), but the slot pool outlives every battle. The
+constructor asks for **1000 slots of 76 bytes** — 76 is the largest container
+record (19 dwords, the count every producer zeroes after taking a slot,
+[R-FX-02 §1]). The pool's growth routine reallocates the free-pointer stack,
+allocates the new slots as one block and pushes them; it has exactly **one
+caller, the constructor**, and the *take* entry has no growth path — so 1000
+is the hard capacity for the whole process life, not an initial size.
+
+**Return.** Every path that destroys a strip object passes the delete flag
+whose bit 0 returns the slot: the phase-11 sweep's removal, the 400-cap
+eviction, and the battle-exit teardown that walks all ten strips. A new battle
+therefore always starts with all 1000 slots free; nothing leaks across
+battles.
+
+**Exhaustion.** *Take* returns null once 1000 containers are live across **all
+ten strips together** (the per-strip bound of 401 is a separate, later test).
+A producer that gets null constructs nothing, runs no family init, appends
+nothing and returns silently — the "silently drops the object" of
+[R-STRIP-01 §1]. What a dropped object costs in CRT draws depends on where
+the draws sit:
+
+* draws inside the family's init or spawn are **not** spent — the nano
+  emitter's thirty, the smoke puff's one, the sprinkle's three and the flame
+  segment's one ([R-STRIP-01 §3]) all live inside the init the producer never
+  calls;
+* draws taken at the call site **before** the producer are spent regardless:
+  the burning-feature emission's two jitter draws ([05 R-FEAT-01 §16]) and
+  the debris fire particle's four ([R-FX-01 §3], which already records that
+  its draws precede the pool).
+
+The strip-disable byte is tested before the pool is consulted; it is the dead
+constant zero of [R-FX-01 §3].
+
+**Reachability.** The ten per-strip bounds sum to 4010, so exhaustion is
+reachable in principle; the nanolathe family (seventeen sites, one container
+per emitter spawn) and the strip-9 smoke family are the likeliest drivers.
+Whether stock play reaches 1000 live containers is **Unknown** — no capture
+has been examined for it; decider: a strip-object count over a retail
+recording of a large late-game battle.
+
+**Implementation rule.** Keep one global live-container count across all ten
+strips, capped at 1000. A producer whose count is at the cap drops its object
+after spending only the draws its own call site makes; every destruction path
+(sweep removal, 401 eviction, battle exit) decrements the count. The
+per-strip 401 bound of [R-STRIP-01 §1] is applied after, and independently of,
+this test.
+
+### Closed — every producer call site by strip literal; strips 0, 1, 3 and 8 have no producer [R-FX-02 §5] (2026-09-02)
+
+Status: **Established** (direct static, exhaustive over two independent
+enumerations: every code reference to each of the thirteen producer routines
+— thirty-nine call sites — with the strip literal read from each site's own
+argument pushes; and every instruction in the image that reads or writes the
+strip-table root word — nineteen). This re-verifies [R-STRIP-01 §1]'s
+"none — no producer exists anywhere in the image" rows by a different method
+from the one that census used, and closes the `TODO(T23)` markers on the four
+barrier calls in `internal/client/world_draw.go`.
+
+| Strip | Live call sites | Producer routine(s) and event |
+|---|---|---|
+| 0 | **0** | — |
+| 1 | **0** | — |
+| 2 | 4 | the sprinkle producer with colour flag 1, from the four vector `emit-sfx` cases 2–5 ([R-FX-01 §3]) |
+| 3 | **0** | — |
+| 4 | 1 | the vent-steam producer, from the feature stamp's geothermal tail ([R-FX-02 §3]) |
+| 5 | 2 | the strip-5 flame producer from the teleport handler ([R-LAYER §4]); the white smoke-puff producer from the burning-feature walk ([05 R-FEAT-01 §16]) |
+| 6 | **17** | the two nanolathe producers — the one whose source is a single point, ten sites; the one whose target is a single point, seven — from the construction, repair and reclaim order handlers ([R-P0-19-P]) |
+| 7 | 3 | the trail producer from `emit-sfx` types 0 and 1 (two); the sprinkle producer with colour flag 0 from the sub-bubble type (one) |
+| 8 | **0** | — |
+| 9 | 12 | the parameterised smoke producer (land dust, wreck column: two); the white smoke-puff producer (five: the debris draw, the impact dispatcher, two projectile-phase sites, `emit-sfx` white); the black smoke-puff producer (`emit-sfx` black: one); the `startsmoke` producer (three weapon-fire sites); the debris fire-particle producer (one) |
+
+Every one of the thirty-nine sites pushes its strip index as a literal; no
+site computes one. The four producer routines that exist in the image but are
+never referenced — a nanolathe, a trail and a sprinkle variant that take the
+strip table as a hidden object argument, and a `smoke 2` puff variant with a
+parameterised interval and lifetime — have **no reference of any kind**, code
+or data, so they cannot be reached through a function pointer either. The
+nineteen readers of the root word are: the battle-entry allocator (its
+writer), the battle-exit teardown, the phase-11 sweep, the composer's draw
+dispatcher, one unreferenced routine (dead), and the thirteen producers
+(twelve live, plus the dead `smoke 2` variant). Nothing else touches the
+table.
+
+**Consequence.** Strips 0, 1, 3 and 8 hold no object in any retail session —
+skirmish, campaign or otherwise — and the composer's unconditional walk over
+them ([03 §1]) is a no-op in retail. This is a **static** closure: the manual
+retail observation that WU-19-18 was holding those four markers for
+(RWU-19-9's probe session) has nothing left to settle for the strips; the
+probe's remaining scope is the other items on its list. Nanolathe may keep the
+four barrier calls as empty passes or omit them; what it must never do is
+attach a producer to any of the four.
+
+### Closed by citation — the strip-object implementation questions, one rule each [R-FX-02 §6] (2026-09-02)
+
+`internal/session/strips.go` carries nine `TODO(question)` markers written
+before [R-FX-01 §3] and [R-FX-02 §2–§3] landed; every one but the pool
+capacity (now [R-FX-02 §4]) was already answered there. This section is the
+index that retires them — the rule in one line each, with the section that
+owns the arithmetic. **Established** unless marked; the strip-5 flame class's
+init, spawn and update were re-read for this pass and match [R-FX-02 §2] as
+written.
+
+| Question at the marker | Rule | Owner |
+|---|---|---|
+| shared pool capacity, behaviour when full | 1000 containers across all ten strips, process-lifetime; a full pool drops the object silently after only the call-site draws | [R-FX-02 §4] |
+| start-frame mapping to a GAF frame index | there is no reduction step — each family's frame word is already an index into its bound entry: the smoke puff starts at 0 in `smoke 1`/`smoke 2`; the strip-5 flame segment starts at `crtRand × (frameCount − 1) / 0x8000` (in `0 … frameCount − 2`) of `flamestream`; the trail segment starts at 0 of `flamestream`; the nano particle and the sprinkle puff draw no frame at all (filled rectangles) | [R-FX-02 §2], [R-FX-02 §3], [R-FX-01 §3] |
+| per-site lifetimes: sprinkle | container window closes one tick after creation (two puffs); each puff's tick deadline is `spacing × 6` (96 at spacing 16, 48 at 8), **and** it dies the tick the terrain under it is at or above sea level — a wake that lives only over water | [R-FX-01 §3], [R-WATER-01 §1] |
+| per-site lifetimes: smoke | the puff has **no tick deadline**: it retires when its frame cursor reaches its own drawn last frame; the container's lifetime is the producer's literal (0 for every weapon-side, burning-feature and `emit-sfx` site — one-shot; 15 for land dust; 900 for the wreck column; the vent is unbounded) | [06 R-WFX-01 §5], [05 R-FEAT-01 §16], [R-FX-01 §3 addendum §B] |
+| per-site lifetimes: flame stream | container 30 ticks (the teleport site); each segment lives `segLife = floor(spanUnits / 5)` ticks, laid every 10 ticks — four segments per container | [R-FX-02 §2] |
+| sprinkle animation walk | `phase = (phase + 1) mod spacing`; on wrap `colour += dir` (`dir = +1` for flag 1, `−1` for flag 0), wrapping `> 0x67 → 0x61` and `< 0x61 → 0x67`; no draws | [R-FX-01 §3] |
+| flame segment frame wrap | `frame = (frame + 1) mod (frameCount − 1)` every tick — the entry's last frame is never shown | [R-FX-02 §2] |
+| trail segment animation counter | `phase = (phase + 1) mod hold`; on wrap `frame = (frame + 1) mod (frameCount − 1)`; hold is 1 at every site, so the frame advances every tick; no draws | [R-FX-01 §3] |
+| sprinkle drawn byte / field map | the puff carries both ramp ends (`0x61`, `0x67`), the current colour (`flag ? 0x61 : 0x67` at spawn) and the direction word; the draw writes the current colour raw into a two-by-two rectangle; the `smoke 1` entry the puff also carries is never drawn | [R-FX-01 §3] |
+| sprinkle per-tick velocity | `len = trunc(sqrt(dx² + dy² + dz²))` in floating point over the raw 16.16 deltas, `step = ((B − A) · trunc(0x80000000 / len)) >> 16` per axis — half a world unit per tick along A→B; `A == B` faults. The second point is the piece's transformed vertex 1 (vertex 0 for the swapped types 4/5) | [R-FX-01 §3], [04 R-COB-03 §6] |
+| flame segment travel law | `step = (B − A) / segLife` per axis, signed truncating — five world units per tick; a span under five units faults | [R-FX-02 §2] |
+| smoke default frame hold | 7 when the producer passes 0 | [R-STRIP-01 §1], [R-FX-02 §3] |
 
 ### Closed — the flash and lens blitters, and which families do not use the countdown cursor [R-FX-01 §4] (2026-08-29)
 

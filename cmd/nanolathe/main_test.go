@@ -163,4 +163,17 @@ func TestShotFlagDefaults(t *testing.T) {
 	if opts.Shot != "a.png" || opts.ShotTicks != 5 {
 		t.Errorf("parsed Shot=%q ShotTicks=%d, want a.png/5", opts.Shot, opts.ShotTicks)
 	}
+	// --shot-select is off by default, so an ordinary capture composes the
+	// empty-selection battle screen the composer would show a player who has
+	// clicked nothing [07 §6][07 R-HUD-03 §1].
+	if opts.ShotSelect {
+		t.Error("default ShotSelect = true, want false")
+	}
+	opts, err = parseFlags([]string{"-shot", "a.png", "-shot-select"}, &out)
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if !opts.ShotSelect {
+		t.Error("-shot-select did not set ShotSelect")
+	}
 }

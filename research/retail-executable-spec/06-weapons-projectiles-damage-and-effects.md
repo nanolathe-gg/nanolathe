@@ -4540,6 +4540,47 @@ deaths included, and stamps the corpse afterwards; it must not add a
 corpse-cell exemption to the blast, which would spare bystanding features
 retail destroys. The `TODO(question)` at the death finalizer is retired.
 
+### Closed — what the stunned bit gates, and why the stun is binary [R-DMG-01 §11] (2026-09-02)
+
+The unit record's code marker asked whether a paralyzed unit is *slowed* or
+*stopped*, and what the stunned bit itself switches off.
+
+**Established (bounded: every reader of the activation-state byte in the
+decompiled set).** The stunned bit has exactly two readers besides its setter,
+and both test a **candidate**, not the reader: the shared autonomous target
+search rejects a candidate carrying the bit when the searching weapon is a
+paralyzer (§3.2), and the computer player's target picker applies the same
+paralyzer-only rejection. The per-unit weapon phase, the mover step, the
+height snap, the two order pumps, the settlement pass and the damage
+dispatcher do not read it. The bit is a mark *on* the victim for other
+units' benefit; it disables nothing on the victim directly.
+
+**Established — what the task does instead.** The stun task's first visit
+(§10) is, in order: the *release* verb on all three weapon slots — the slot
+verb of [04 R-UNIT-06 §5] part 3 that clears the autonomy bit and, for a
+non-empty target pair, resets it and posts `TargetCleared`; then the
+unconditional target clear on each slot (the target-pair reset and
+`TargetCleared`, with no control-byte change); then the release of the
+order node's goal payload — the object through which a node drives the mover,
+which is §10's "stop the unit's current motion": a payload release, not a
+speed write; then the wait arm. There is no speed scaling, no
+movement-class change and no per-tick decrement anywhere in the path. The
+unit is stopped because the wait at the head of its primary list blocks the
+list runner (no order can move it, retarget it or run a guard leg), and it
+does not fire because every autonomous reader — the autonomous scan, the
+retaliation offer, the guard legs — requires the autonomy bit the release verb
+just cleared, and the target pairs are empty. The stun is therefore
+**binary**: fully stopped and silent for exactly the credited ticks, then the
+next order in the list resumes (its own phase 0 returns the slots to
+autonomy in the ordinary way).
+
+**Implementation rule.** Model the stun as the head wait task plus the two
+slot operations above; keep the stunned flag as a candidate mark read only by
+paralyzer-weapon target selection. A weapon-phase early return keyed on the
+flag is redundant with the slot state and harmless only while nothing else
+can hand a stunned unit a target — which the blocked runner and the cleared
+autonomy bits guarantee — so it must not be relied on as the mechanism.
+
 ### Closed — `hitdensity` does not exist, and what is doc 05's [R-DMG-01 §6] (2026-08-29)
 
 **Established.** There is no `hitdensity` string in the image, in any case

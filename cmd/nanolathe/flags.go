@@ -26,6 +26,7 @@ type Options struct {
 	Remaster   string  // remaster override: a loose directory or HPI mounted above every retail tier
 	ShotZoom   float64 // presentation zoom applied before --shot captures (1 = native)
 	ShotFocus  string  // "x,y" screen point kept fixed while zooming; default the screen centre
+	ShotSelect bool    // run the Ctrl+A select-all before --shot captures, so the command page is open
 }
 
 // ErrHelp reports that usage was requested and printed.
@@ -60,6 +61,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.Remaster, "remaster", "", "remastered-art override: a loose directory or .hpi mounted above every retail archive")
 	set.Float64Var(&opts.ShotZoom, "shot-zoom", 1, "presentation zoom for --shot, 0.25..4 (1 = native)")
 	set.StringVar(&opts.ShotFocus, "shot-focus", "", "screen point \"x,y\" kept fixed by --shot-zoom (default the screen centre)")
+	set.BoolVar(&opts.ShotSelect, "shot-select", false, "select the viewing player's units before --shot captures, so the side rail's command page is open")
 	set.Usage = func() {
 		fmt.Fprintf(out, "nanolathe — a reimplementation of the Total Annihilation engine\n\n")
 		fmt.Fprintf(out, "usage: nanolathe [flags]\n\nflags:\n")

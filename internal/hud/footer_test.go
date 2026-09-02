@@ -5,6 +5,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/pool"
 )
 
 // footerCatalog is an authored-shaped fixture: the values stand in for FBI
@@ -171,5 +172,36 @@ func TestFooterFeatureLineSeparatorIsTwoSpaces(t *testing.T) {
 		if line.Color != (FooterColor{Value: FooterTextColor}) {
 			t.Errorf("feature %q colour = %+v, want raw index 83", tc.key, line.Color)
 		}
+	}
+}
+
+// The footer never reads the selection: with no hovered gadget, no hovered
+// world unit and no hovered feature it draws nothing but its backdrop, even
+// when the frame carries a full selection whose primary is a live own unit
+// [07 R-HUD-03 §1] ("The footer never reads the selection: neither the primary
+// selected unit nor the group is a footer source").
+//
+// This case exists because a `--shot` capture has no pointer, so it composes
+// exactly this state, and an empty bottom strip beside a selected commander
+// reads as a rendering regression rather than as the contract. It is not one:
+// only a hover fills the strip. If a future change makes a selected unit paint
+// the readout, that is the defect, and this test is where it is caught.
+func TestFooterIgnoresSelectionWithoutHover(t *testing.T) {
+	f := &frame.Frame{
+		Units: []frame.UnitView{{
+			Slot: 7, Owner: 2, DefName: "testsolar", Health: 100, MaxHealth: 100,
+		}},
+		Selection: frame.SelectionView{LocalPlayer: 2, Handles: []pool.Handle{7}, Primary: 7},
+	}
+	got := BuildFooter(f, footerCatalog(), 2, FooterHover{Gadget: NoGadget}, false)
+	if !got.Empty() {
+		t.Errorf("a selection with no hover drew %d texts, %d bars, %d logos; want the backdrop alone",
+			len(got.Texts), len(got.Bars), len(got.Logos))
+	}
+	// The same frame with the same unit hovered is the readout state, so the
+	// emptiness above is the missing hover and not a missing catalog or owner.
+	got = BuildFooter(f, footerCatalog(), 2, FooterHover{Gadget: NoGadget, Unit: 7}, false)
+	if name, ok := footerTextAt(got, AnchorUnitName); !ok || name.Text != "Test Collector" {
+		t.Errorf("hovered UNITNAME = %q/%v, want the definition's leading name", name.Text, ok)
 	}
 }

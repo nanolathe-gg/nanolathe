@@ -1295,7 +1295,7 @@ are established:
 | Live features | A 48-byte live record plus a 13-byte plot cell per map attribute cell | Plot cells point to feature anchors; removal returns the cell to the free sentinel and releases the live record. Map-row order is deterministic. |
 | COB threads | Eight 164-byte thread records per unit | Lowest clear thread-mask bit is selected. Ending/sleeping a thread clears its active bit; the scan is fixed order. |
 | Construction nodes | A 86-byte node; factories use separate tail/head links selected by a flag | Nodes append to a per-factory chain, coalesce matching build types where applicable, and are freed on cancellation/completion. |
-| Effect/sequence strips | Variable vectors of segment records, with a global cap of about 400 for the nanolathe/effect family | Append in event order; a compaction/drain pass moves/removes old entries. Exact ownership of every strip is not yet proven. |
+| Effect/sequence strips | Variable vectors of segment records, with a global cap of about 400 for the nanolathe/effect family | Append in event order; a compaction/drain pass moves/removes old entries. Exact ownership of every strip is not yet proven. **Corrected 2026-09-02:** the containers come from one process-lifetime pool of **1000 slots × 76 bytes**, built by a static constructor and never grown; each strip additionally evicts its oldest object when its pre-insert count exceeds 400. Ownership is proven: every producer call site is enumerated by strip literal in doc 03 [R-FX-02 §5] (strips 0, 1, 3 and 8 have none). |
 
 The unit maximum is the game value described above, not a universal
 500 constant. The 300-projectile capacity, packed record size, append

@@ -448,6 +448,47 @@ Other economy-relevant unit state includes:
 - footprint and occupancy state;
 - script object and pending callbacks.
 
+#### R-ECO-01 §12 — The settlement status pair is the elimination test, and it is not persisted [R-ECO-01] (2026-09-02)
+
+**Established, closing an open item; correction.** "Authoritative settlement
+order" step 4 and [R-ECO-01 §1] step 4 carry the gate as "the status-pair
+predicate holds (a nonzero halfword at one field **or** a zero word at its
+neighbor — preserved literally; … no writer was found in the bounded scan)",
+and the "Missing and unknown" list asks for "names of the two fields in the
+settlement status pair". Both fields are named. The halfword is the player's
+16-bit **live unit count** and the word is the 32-bit **units ever created**
+count of [08 R-SKIR-01 §3] "Counters" — the same two record fields, whose
+writers are the two unit allocators (both increment both) and the
+kill-record handler (decrements the live count). The predicate "halfword
+non-zero **or** word zero" therefore reads *the player still has a live unit,
+or never had one* — the exact negation of the elimination test in
+[08 R-SKIR-01 §3]. The settlement gate and the three other player walks that
+repeat the predicate all skip an **eliminated** player; the settlement
+deadline still advances for it (the advance precedes the gate chain). Nothing was
+wrong in the literal predicate; what was missing was that it is not a
+separate status at all. Nanolathe: evaluate "not eliminated" (live count
+non-zero, or ever-created zero) where the gate stands, from the same two
+counters the world already keeps, and carry no separate status pair.
+
+**Established — neither counter is persisted.** The save writer's per-player
+block enumerates its keys: the two stocks, the six cumulative totals
+(produced, consumed and wasted, per resource), the two storage values and the
+storage-bonus flag, kills, losses, the three deadlines (`UpdateTime`,
+`WinLoseTime`, `DisplayTimer`) and the alliance block. Neither counter is among
+them, and the restore path rebuilds both through the forced-slot allocator,
+one increment of each per restored unit. A slot that had lost its last unit
+at save time therefore reloads with both counters zero — "never created" —
+and resumes settling. That is retail behaviour, not a Nanolathe omission.
+
+**Established — the end-of-game arms are already placed.** The two
+arm/decrement sites of "end-of-game freeze" are the local slot's 30-tick
+deadline block (session kind 1: the victory predicate arms the win branch,
+otherwise the defeat predicate arms the lose branch; kinds 2 and 3: the defeat
+predicate behind the inactive-or-not-watching test) and the post-loop site for
+sessions with no human participant ([08 R-SKIR-01 §3] "Defeat detection",
+[08 R-TRIG-01]). The semantic names of the flag bits beyond `0x04` stay open
+as doc 08 items; the gate itself needs nothing more from this document.
+
 ### Construction target state
 
 An unfinished unit is a normal unit-pool entry in a nanoframe state. The
@@ -813,7 +854,9 @@ structure per slot index, ascending:
    observers; the status-pair predicate holds (a nonzero halfword at one
    field **or** a zero word at its neighbor — preserved literally; the same
    read-only predicate recurs at three other player walks and no writer was
-   found in the bounded scan, so it is carried verbatim); the state byte is
+   found in the bounded scan, so it is carried verbatim — the two fields are
+   the live-unit and units-ever-created counters, so the predicate is "not
+   eliminated", [R-ECO-01 §12]); the state byte is
    narrowed to one of the two settling states (the third traverses but never
    settles); the game-ended flag bit is clear; and the end-of-game countdown
    is negative.
@@ -915,7 +958,8 @@ gate chain that follows is, in evaluation order and all required:
 3. the observer byte is not the observer value;
 4. the status pair holds — *the halfword at the first field is non-zero* **or**
    *the word at the second field is zero* (still carried literally; no writer
-   of either field was found);
+   of either field was found — since named: the live-unit count and the
+   units-ever-created count, i.e. "not eliminated", [R-ECO-01 §12]);
 5. the control byte is **narrowed to 1 or 2** — control byte 3 traverses the
    deadline block, advances its deadline, and never settles;
 6. the game-ended flag word's `0x04` bit is clear;
@@ -6557,10 +6601,11 @@ executor's phase 0 runs.
 - Semantic meaning of the game-ended flag bits and of the two mission-end
   predicates behind the confirmation delay; the bit patterns and the
   freeze-on-settlement effect are established · doc 08 · static trace.
-- Names of the two fields in the settlement status pair, and the consumer of
-  the `WinLoseTime` sibling deadline beyond its save key; `DisplayTimer`'s
-  sole consumer is closed by [R-ECO-01 §6] · "Authoritative settlement order"
-  · static trace.
+- The consumer of the `WinLoseTime` sibling deadline beyond its save key;
+  `DisplayTimer`'s sole consumer is closed by [R-ECO-01 §6], and the two
+  settlement status-pair fields are named by [R-ECO-01 §12] (the live-unit and
+  units-ever-created counters) · "Authoritative settlement order" · static
+  trace.
 - Whether any reader of the per-unit archived economy snapshots exists outside
   the ledger's own redistribution; bounded-negative in the reviewed image
   · "Authoritative settlement order" · static trace over the unrecovered

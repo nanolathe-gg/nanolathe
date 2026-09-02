@@ -1722,6 +1722,25 @@ capability word's bit-16 writer ([R-ORD-01 §6]). Nothing in this section
 contradicts [05 R-SHARE-01 §1] or [R-ORD-02 §1]; the diplomacy correction is
 inline in [R-UNIT-06 §1] leg 1.
 
+### Closed — the unit record's definition identity is the catalog table index [R-UNIT-06 §6] (2026-09-02)
+
+The pool allocator's code marker asked which encoding retail stores in the
+unit record's definition-identity halfword: a 0-based catalog ordinal, a
+1-based index, or something else.
+
+**Established.** It is the **catalog table index**, used directly. The
+forced-slot allocator that restores a unit from its record stores the record's
+definition index into that halfword and, with the same value unchanged,
+indexes the definition table to reach the definition's movement class; the
+per-player unit visit and the commander-death sweep treat a non-zero halfword
+as "slot occupied" and a zero one as free. That works because the catalog's
+record 0 is the reserved `None` sentinel ([02 "Unit record"]): every real
+definition has index 1 or higher, and 0 doubles as the free mark. Nanolathe's
+stable 1-based catalog index in the pool's "0 = free" identity space is the
+same encoding. The per-definition limit scan's comparison operand was not
+traced (it can only compare this same halfword, but that is inference, not a
+trace).
+
 ### Closed — the standing-fire gates, site by site [R-STANCE-01 §3] (2026-08-29)
 
 **Established — the reader census, and its bound.** A whole-image scan of the
@@ -6253,6 +6272,38 @@ forty fixed names from the producers and states the bounded negative, and
 [R-CB-01 §2] gives one row per name. [R-CB-01 §3] lists five readings in 5.1
 and 5.3 that it withdraws — read it before implementing from those sections.
 
+### Closed — the unit initializer's single script boundary, and no post-allocation failure path [R-COB-01 §3] (2026-09-02)
+
+The COB attachment site asked whether retail has a failure boundary *after*
+the VM is allocated — a bind that refuses — and, if so, whether the random
+draws already taken for the unit are retained.
+
+**Established — one boundary, taken before anything is allocated.** The common
+unit initializer tests exactly one thing: whether the definition carries a
+compiled script. If it does, it allocates the VM instance, constructs it,
+stores it on the unit record, binds the program ([R-COB-01 §1]), builds the
+strict piece map from the model and the script, links the two, and starts
+`Create` once in immediate mode. If it does not, it stores a null VM, builds
+the model-only piece map, and starts nothing; every later VM use on the unit
+is null-checked (the visit's interpreter pass, the callbacks, the query
+adapters), so a scriptless unit is a first-class runtime state, not an error.
+
+**Established — nothing refuses after allocation.** The heap allocation of the
+VM instance is checked only to skip the constructor: a null result is stored
+and the bind is invoked on it regardless, so a failed allocation is a crash,
+not a handled path. There is no bind-time validation of the program against
+the model, no "attachment failed" state and no rollback. Every simulation
+draw the allocator took before the initializer ran — the `buildangle` heading
+draw of the creation path, in particular — is therefore kept on both branches,
+because both branches are reached only after it.
+
+**Implementation rule.** A strict binder that can fail after allocation is a
+Nanolathe diagnostic condition with no retail analog: surface it as an error
+(the caller decides whether to abort the session), never as a simulation
+state, and never unwind the allocator's draws or reorder the successful path
+around it. The only retail-shaped refusal is "definition has no compiled
+script", which yields a live unit with no VM.
+
 ### 5.1 Lifecycle and damage callbacks
 
 **Established fact:** Engine-driven callbacks include:
@@ -7201,6 +7252,94 @@ weapon-slot flag byte can make the creation-time hold helper raise a
 `TargetCleared` for the previous tenant ([R-CB-01 §4]). Nothing else in the
 forty-name table is inferred: every mode, cell vector and gate above is
 direct-static.
+
+### Closed — the absent `Killed` body is the same residue path, and where the residue comes from [R-CB-01 §9] (2026-09-02)
+
+§7 settled what the variant cell carries when a script that *has* a `Killed`
+body ignores its second parameter. The death resolver's code marker asked the
+neighbouring question: what the packet carries when the script table has no
+`Killed` entry at all, or the unit has no VM, and whether that value is
+deterministic in retail.
+
+**Established — an absent body writes nothing.** The synchronous four-cell
+query first resolves the name against the program's script table by a linear
+string compare; a miss yields the invalid identity. The thread allocator
+refuses an invalid identity — and a full eight-slot pool — *before* any window
+word is seeded, and the query returns "not started" without copying anything
+back. The caller's cells are untouched: the severity local keeps the engine's
+computed value (written before the call) and the variant local keeps its frame
+residue, exactly as in §7. "No `Killed` body", "pool full" and "body that
+ignores its parameter" are one path with one outcome, `(cause << 4) |
+(residue & 0xF)`. A unit with no VM at all (a definition with no compiled
+script, [R-COB-01 §3]) never reaches the query and packs the same residue.
+
+**Established — where the residue comes from on the authoritative path.** The
+death handler's variant local is the lowest dword of its own sixteen-byte
+local area; nothing the handler itself calls before packing can reach it
+(those callees' frames lie below its saved registers). Its content is whatever
+the *caller's* most recent call at the same stack depth left there. The
+single-player authoritative caller is the per-player unit visit, which in the
+same iteration, before the death call and for every unit of a locally
+simulated owner, runs: the secondary (build) queue pump, the primary order
+pump, and — only for a unit that has a mover — the mover step and the ground
+height snap. Their frames overlap the variant slot as follows:
+
+- the secondary-queue pump saves five registers on entry, and the fifth saved
+  register lands exactly on the variant slot; that register holds the visit's
+  **owning player record address**. Nothing else in the pump reaches that slot
+  (its two other frame stores hit its own first local and its argument slot;
+  its callees' frames lie below), so after it returns the slot holds the player
+  record address;
+- the primary order pump saves four registers and reaches the slot only when it
+  **dispatches** the head order this tick: the dispatch pushes the literal `0`
+  there (the handler's third argument); a handler answering the reschedule
+  code then overwrites it with the literal `15` (the bound of the reschedule
+  delay draw); a handler that retires the node overwrites it with the freed
+  node's heap address. An empty primary queue, or a head whose deadline has
+  not come, leaves the slot untouched;
+- for a unit with a mover, the mover step and the height snap run last; their
+  frames cover the slot and were not walked (**Unknown**; decider: the same
+  frame walk over those two helpers).
+
+So for a **structure** that dies with no `Killed` body and no dispatching
+order, the packed variant nibble is the low four bits of its owner's player
+record address — a value that advances by a fixed record-size residue per
+owner slot from the low nibble of the engine's global state block. That block
+comes from the process heap, so the nibble is a per-process constant fixed by
+the allocator's alignment granularity, not by any game datum (**Unknown**
+which nibble; the record-size residue itself is executable layout and is
+deliberately not recorded here — the point is that it is unspecified).
+
+**Established — determinism and reach.** Every writer above is simulation code
+driven by the tick, so the nibble is deterministic given identical session
+history within one process, but it is unspecified across processes and bears
+no relation to the unit, the cause or the script. Retail's contract remains
+"an unspecified four-bit value"; Nanolathe must not try to reproduce the
+heap-dependent nibble.
+
+**Established — stock reach (reference install).** All 278 stock definitions
+carry a COB; 22 lack a `Killed` body: the two commanders and two decoy
+commanders, the twelve mines, and the six walls (`ARMDRAG`/`CORDRAG`,
+`ARMFDRAG`/`CORFDRAG`, `ARMFORT`/`CORFORT`). Commanders and mines author no
+`corpse`, so their nibble reaches only the packed byte. The walls author a
+corpse and no default mission, so their primary queue is empty and their
+nibble is the player-record nibble above; the corpse chain of [06 §12.1] C23
+then selects by depth the wall wreck (1), its rubble successor (2), or the scar
+the rubble decays to (3 and above — the scar names itself as successor, so
+the chain never breaks) — and nothing at all for depth 0. The floating teeth
+have a one-deep chain: depth 1 is their wreck, any other depth is no corpse.
+What a retail wall leaves behind is therefore a function of its owner's slot
+index and the process's heap layout — genuinely unspecified.
+
+**Implementation rule.** Treat "no VM", "no `Killed` body", "pool full" and
+"body that ignores its parameter" as one case: the query is attempted at most
+once, writes nothing, and the variant is a **bounded substitute of
+Nanolathe's choosing**, recorded as a sanctioned divergence. §7 called zero
+"the natural" substitute; that was a preference, not a contract, and `1`
+(place the authored corpse) is equally sanctioned — it is also the value
+retail's own cause-7 bypass writes. Whichever is chosen must be one constant
+for all four sub-cases and must still yield to the remaining-work gate (a
+non-zero remaining-build fraction forces zero after any query).
 
 ### P28 construction-KBot initial-pose boundary [R-P28-COB-01R] (2026-08-28)
 

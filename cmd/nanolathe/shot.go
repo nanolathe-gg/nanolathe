@@ -82,6 +82,24 @@ func runShot(opts Options, cs *contentSet) error {
 		b.viewerStep(tickSeconds, cl)
 	}
 
+	// A capture has no pointer and no click history, so it composes the battle
+	// screen's empty-selection state: with the selected-unit count at zero the
+	// command-window switch closes down to the root and opens nothing, so the
+	// side rail shows only PANELSIDE's own near-black art [07 §6], and the
+	// footer — whose three sources are the hovered gadget, the hovered world
+	// unit and the hovered feature, and which never reads the selection —
+	// draws nothing but its backdrop [07 R-HUD-03 §1]. That is retail, but it
+	// makes a capture useless for reviewing the rail. `--shot-select` runs the
+	// ordinary Ctrl+A select-all through the human-command queue before the
+	// frame is captured [07 R-CAM-01 §2], so the command page composes; the
+	// extra viewer step publishes the selection the composer then reads [I6].
+	if opts.ShotSelect {
+		b.commitSelection(b.ownSelectableHandles(nil), true)
+		b.disarmPlacement()
+		millis.step = uint32(opts.ShotTicks) + 1
+		b.viewerStep(tickSeconds, cl)
+	}
+
 	// Zoom is presentation-only [F-P1-008]; it is applied after the ticks so
 	// the simulation is identical to an unzoomed capture of the same seed.
 	if opts.ShotZoom != 0 && opts.ShotZoom != 1 && b.cam != nil {
