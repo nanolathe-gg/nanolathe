@@ -312,3 +312,88 @@ func TestTransportLanding(t *testing.T) {
 		t.Fatalf("landing record freed on its first visit; want it held for the machine, got %d records", len(qVTOL.Primary()))
 	}
 }
+
+// TestGroundTransportShortMoveHoldsOnTheScriptsBusyLevel locks the shared
+// short-move helper [04 R-AIR-01 §10] item 5. §9 named the tested word only as
+// "the unit's movement-state byte"; §10 names it: the SECOND unit state byte,
+// the one COB ports 5, 6 and 19 write, whose bit `0x2` is the level port 6
+// (`BUSY`) sets from the low bit of its value. Set → gate `0x8 | 0x4` and
+// *hold*; clear → *advance*. It is the engine half of the sea/hover transport
+// handshake: the script raises `BUSY` while it animates the attach or the drop.
+func TestGroundTransportShortMoveHoldsOnTheScriptsBusyLevel(t *testing.T) {
+	carrierDef := &content.UnitDef{UnitName: "armmship", CanLoad: true, CanMove: true, TransportSize: 10, FootprintX: 3, FootprintZ: 3, MaxDamage: 100}
+	cargoDef := &content.UnitDef{UnitName: "armpw", CanMove: true, FootprintX: 1, FootprintZ: 1, MaxDamage: 50}
+	_, carrier, cargo, _ := transportFixture(t, carrierDef, cargoDef)
+
+	// `Ground_Pickup` phases 1 and 3 and `Ground_Unload` phase 1 are the
+	// helper's only callers [04 R-AIR-01 §10].
+	for _, phase := range []uint8{1, 3} {
+		n := &Node{Owner: carrier.Handle, Target: cargo.Handle, Phase: phase, Deadline: -1}
+		carrier.Busy = true
+		if code := groundPickupHandler(carrier, n, 0, 1); code != 2 {
+			t.Fatalf("Ground_Pickup phase %d with BUSY set gave %d, want the hold 2 [04 R-AIR-01 §10]", phase, code)
+		}
+		if n.DynamicGate != groundTransportBusyGate {
+			t.Fatalf("Ground_Pickup phase %d hold gate = %#x, want %#x [04 R-AIR-01 §10]", phase, n.DynamicGate, groundTransportBusyGate)
+		}
+		carrier.Busy = false
+		n.DynamicGate = 0
+		if code := groundPickupHandler(carrier, n, 0, 1); code != 1 {
+			t.Fatalf("Ground_Pickup phase %d with BUSY clear gave %d, want the advance 1 [04 R-AIR-01 §10]", phase, code)
+		}
+		if n.DynamicGate != 0 {
+			t.Fatalf("the advance arm wrote gate %#x, want none [04 R-AIR-01 §10]", n.DynamicGate)
+		}
+	}
+
+	cargo.Attachment.Carrier = carrier.Handle
+	carrier.Attachment.Cargo = []pool.Handle{cargo.Handle}
+	n := &Node{Owner: carrier.Handle, Target: cargo.Handle, Phase: 1, Deadline: -1}
+	carrier.Busy = true
+	if code := groundUnloadHandler(carrier, n, 0, 1); code != 2 {
+		t.Fatalf("Ground_Unload phase 1 with BUSY set gave %d, want the hold 2 [04 R-AIR-01 §10]", code)
+	}
+	// It is NOT the work handlers' `INBUILDSTANCE` wait, which tests port 5 and
+	// holds on the CLEAR level [04 R-ORD-01 §1].
+	carrier.Busy = false
+	carrier.InBuildStance = false
+	n.DynamicGate = 0
+	if code := groundUnloadHandler(carrier, n, 0, 1); code != 1 {
+		t.Fatalf("Ground_Unload phase 1 with BUSY clear gave %d, want the advance 1 [04 R-AIR-01 §10]", code)
+	}
+}
+
+// TestGroundUnloadHoverRadiusIsTwentyFourTimesFootprintZ locks
+// [04 R-AIR-01 §10] item 5's correction: the radius parameter is
+// `trunc(1.5 · zExtentInteger)` where the Z extent comes from the FOOTPRINT and
+// not the model — `FootprintZ << 20` in 16.16, integer half `16 · FootprintZ`
+// [02 R-CAT-01 §7] — so the radius is exactly `24 · FootprintZ` world units of
+// the CARRIER's definition, and 0 without `canhover`.
+func TestGroundUnloadHoverRadiusIsTwentyFourTimesFootprintZ(t *testing.T) {
+	hover := &units.Unit{Def: &content.UnitDef{UnitName: "armhover", CanHover: true, FootprintX: 3, FootprintZ: 4}}
+	if got := groundUnloadRadius(hover); got != 96 {
+		t.Fatalf("hover carrier radius = %d, want 24·4 = 96 [04 R-AIR-01 §10]", got)
+	}
+	// The carrier's own footprint, not the cargo's, and the Z axis, not X.
+	ship := &units.Unit{Def: &content.UnitDef{UnitName: "armmship", FootprintX: 3, FootprintZ: 4}}
+	if got := groundUnloadRadius(ship); got != 0 {
+		t.Fatalf("non-hover carrier radius = %d, want 0 [04 R-AIR-01 §10]", got)
+	}
+}
+
+// TestPackedDropPointAddsRatherThanOrs locks [04 R-AIR-01 §10] item 1's
+// expression for `TransportDrop`'s cell 1: `(goalX & 0xFFFF0000) + (goalZ >> 16)`
+// — an ADDITION, so a negative Z integer part borrows from the X half instead
+// of smearing into it the way an OR of truncated halves would.
+func TestPackedDropPointAddsRatherThanOrs(t *testing.T) {
+	n := &Node{GoalX: numeric.Fixed(300 * 65536), GoalZ: numeric.Fixed(72 * 65536)}
+	if got, want := packedDropPoint(n), int32(300<<16|72); got != want {
+		t.Fatalf("packed drop point = %#x, want %#x [04 R-UNIT-06 §3]", got, want)
+	}
+	// Z = -1 borrows: 300<<16 plus -1 is (299<<16 | 0xFFFF), which an OR of
+	// truncated halves would have written as 300<<16 | 0xFFFF.
+	n.GoalZ = numeric.Fixed(-1 * 65536)
+	if got, want := packedDropPoint(n), int32(300<<16)+int32(-1); got != want {
+		t.Fatalf("packed drop point with negative Z = %#x, want the borrow %#x [04 R-AIR-01 §10]", got, want)
+	}
+}

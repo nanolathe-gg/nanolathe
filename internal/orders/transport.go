@@ -66,6 +66,10 @@ const groundTransportAttempts = 3
 // outcomes plus the target-removed interrupt.
 const groundTransportApproachGate uint32 = 0xE8
 
+// groundTransportBusyGate is the `0x8 | 0x4` the shared short-move helper
+// writes while it holds on the script's `BUSY` level [04 R-AIR-01 §10] item 5.
+const groundTransportBusyGate uint32 = 0x8 | 0x4
+
 // lookupTarget resolves target handle via per-queue Lookup [P0-I16].
 func lookupTarget(carrier *units.Unit, target pool.Handle) *units.Unit {
 	if carrier == nil || target == 0 {
@@ -162,7 +166,7 @@ func groundPickupHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 		workStatus(u, statusOK, "Loading unit")
 		return 1
 	case 1, 3:
-		return groundTransportShortMove(n)
+		return groundTransportShortMove(u, n)
 	case 2:
 		// Arity 1, cell 0 = the cargo's stable unit identity (its pool slot
 		// id), fillers 0, wake flag set; the engine emits notification event 12
@@ -243,7 +247,7 @@ func groundUnloadHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 		n.DynamicGate |= gateDeadline
 		return 1
 	case 1:
-		return groundTransportShortMove(n)
+		return groundTransportShortMove(u, n)
 	case 2:
 		if cargo := lookupTarget(u, n.Target); cargo == nil || cargo.Attachment.Carrier != u.Handle {
 			workStatus(u, statusUnloadEvent, "")
@@ -252,6 +256,10 @@ func groundUnloadHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 		if n.Param2 >= groundTransportAttempts {
 			return 9
 		}
+		// The drop point is the record's goal triple, written once when the
+		// record was made and never rewritten by any phase of either unload
+		// executor [04 R-AIR-01 §10] item 1; phase 2 hands that triple to the
+		// ground goal-handle installer, which reads only the X and Z words.
 		installGroundGoal(u, n, n.GoalX, n.GoalY, n.GoalZ, groundUnloadRadius(u))
 		n.DynamicGate = groundTransportApproachGate
 		return 1
@@ -264,27 +272,34 @@ func groundUnloadHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 
 // packedDropPoint is `TransportDrop`'s cell 1 [04 R-UNIT-06 §3]: "the
 // destination X truncated to whole world units in the high half, destination Z
-// integer part in the low half". Both halves are the 16.16 goal's high word.
+// integer part in the low half".
+//
+// [04 R-AIR-01 §10] item 1 gives the expression exactly:
+// `(goalX & 0xFFFF0000) + (goalZ >> 16)` on the record's own 32-bit goal words,
+// an ADDITION rather than an OR — so a negative Z integer part borrows from the
+// X half rather than smearing into it. The Z shift is arithmetic, so a negative
+// Z arrives sign-extended before the add.
 func packedDropPoint(n *Node) int32 {
-	x := int32(int64(n.GoalX) >> 16)
-	z := int32(int64(n.GoalZ) >> 16)
-	return int32(uint32(uint16(x))<<16 | uint32(uint16(z)))
+	x := uint32(int32(n.GoalX)) & 0xFFFF0000
+	z := uint32(int32(n.GoalZ) >> 16)
+	return int32(x + z)
 }
 
-// groundUnloadRadius is phase 2's goal-handle radius parameter
-// [04 R-AIR-01 §9]: `trunc(carrierModelZExtentInteger · 1.5)` when the carrier
-// definition has `canhover` set, and 0 when it does not.
-//
-// TODO(question): the compiled definition carries the model's total height
-// (`ModelTop`, the max-Y dword's high half [04 R-UNIT-06 §3]) but no model Z
-// extent, and no format or spec section names one. Placeholder: 0 for every
-// carrier, which is the non-hover arm — a hovercraft therefore approaches its
-// own drop point exactly rather than standing off by one and a half hull
-// lengths. What would settle it: which model-bounds word the definition loader
-// stores beside the max-Y one, in `research/formats/3do.md` terms.
+// groundUnloadRadius is `Ground_Unload` phase 2's goal-handle radius parameter.
+// [04 R-AIR-01 §9] wrote it as `trunc(carrierModelZExtentInteger · 1.5)`;
+// [04 R-AIR-01 §10] item 5 corrects the provenance and closes the arithmetic:
+// the word is the definition's Z EXTENT, which the unit-record compiler derives
+// from the FOOTPRINT and not from the model — `±(FootprintZ << 20) / 2` in
+// 16.16, so the extent is `FootprintZ << 20` and its integer half is
+// `16 · FootprintZ` [02 R-CAT-01 §7]. The radius is therefore exactly
+// `24 · FootprintZ` world units of the CARRIER's definition (the product is an
+// integer, so the truncation never bites), and `0` when the carrier lacks
+// `canhover`.
 func groundUnloadRadius(u *units.Unit) int32 {
-	_ = u
-	return 0
+	if u == nil || u.Def == nil || !u.Def.CanHover {
+		return 0
+	}
+	return 24 * u.Def.FootprintZ
 }
 
 // groundTransportShortMove is the helper phases 1 and 3 of `Ground_Pickup` and
@@ -292,18 +307,21 @@ func groundUnloadRadius(u *units.Unit) int32 {
 // movement-state byte has bit 0x2 set, write gate 0x8 | 0x4 and return 2;
 // otherwise return 1".
 //
-// TODO(question): §9 names the tested word only as "the unit's movement-state
-// byte", and no section maps it onto a field this build has. `Node.MoveState`
-// is the movement scheduler's published enumeration (0 none, 1 en route, 2
-// arrived, 3 blocked [P0-I03]), not a bit field, so testing bit 0x2 on it would
-// answer a different question. Placeholder: take the "otherwise" arm, so the
-// phase advances and the machine reaches its callback rather than parking on a
-// gate whose raising condition is unknown. What would settle it: which of the
-// mover's state words that byte is, in the terms [04 R-MOV-01 §8] uses for the
-// committed mover-mode pair.
-func groundTransportShortMove(n *Node) Code {
-	_ = n
-	return 1
+// [04 R-AIR-01 §10] item 5 names the byte: it is the SECOND unit state byte —
+// the one COB ports 5, 6 and 19 write [04 R-COB-03 §4][04 §4.4] — and bit 0x2
+// is the level port 6, `BUSY`, sets from the low bit of its value. `Unit.Busy`
+// is that marker [R-P0-10]. It is NOT the work handlers' `INBUILDSTANCE` wait
+// of [04 R-ORD-01 §1], which tests port 5's bit and holds on the CLEAR level.
+//
+// This is the engine half of the sea/hover transport handshake: the script
+// raises `BUSY` in `TransportPickup`/`TransportDrop` while it animates the
+// attach or the drop, and the executor waits on it.
+func groundTransportShortMove(u *units.Unit, n *Node) Code {
+	if u == nil || !u.Busy {
+		return 1 // *advance* [04 R-AIR-01 §10]
+	}
+	n.DynamicGate = groundTransportBusyGate
+	return 2 // *hold* [04 R-AIR-01 §10]
 }
 
 // installGroundGoal installs one point payload through the session-owned

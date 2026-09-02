@@ -378,6 +378,66 @@ func TestRenderBatchVisibilityGate(t *testing.T) {
 	}
 }
 
+// TestRenderBatchSelectorDefaultsToColorByte verifies RenderBatch sources
+// case 4's selector from the weapon's authored `color` byte when no
+// selectors override map is supplied, matching the established wiring
+// [06 R-WFX-01 §4]. A previous version left the default selector at a
+// sentinel that never equaled -1, so an authored color=-1 (the stock
+// `earthquake` weapon's value) never suppressed as retail's case 4 does.
+func TestRenderBatchSelectorDefaultsToColorByte(t *testing.T) {
+	visible := func(combat.Vec3) bool { return true }
+	drawable := combat.Projectile{WeaponID: 1, CreationTick: 0, ExpiryTick: 100}
+	suppressed := combat.Projectile{WeaponID: 2, CreationTick: 0, ExpiryTick: 100}
+	weapons := map[int32]*content.WeaponDef{
+		1: {RenderType: RenderTypeSelectorGAF, Color: 1},  // plasmasm selector, should draw [06 R-WFX-01 §4]
+		2: {RenderType: RenderTypeSelectorGAF, Color: -1}, // earthquake's authored suppression [06 R-WFX-01 §4]
+	}
+	frameCounts := map[int32]int{1: 10, 2: 10}
+	specs, aborted := RenderBatch([]combat.Projectile{drawable, suppressed}, weapons, 10, frameCounts, nil, nil, visible, nil)
+	if aborted {
+		t.Fatalf("should not abort")
+	}
+	if len(specs) != 1 || specs[0].Kind != "selector-gaf" {
+		t.Fatalf("specs %+v want exactly one selector-gaf draw for color=1, suppressing color=-1 [06 R-WFX-01 §4]", specs)
+	}
+}
+
+// TestRenderBatchLifetimeDefaultsToWeaponTimerNotDuration verifies RenderBatch
+// sources case 5's lifetime from WeaponTimer alone, never falling back to
+// Duration [06 R-WFX-01 §4]: a zero WeaponTimer stays suppressed rather than
+// substituting Duration, and a nonzero WeaponTimer drives the frame even
+// while Duration authors an unrelated value.
+func TestRenderBatchLifetimeDefaultsToWeaponTimerNotDuration(t *testing.T) {
+	visible := func(combat.Vec3) bool { return true }
+
+	zeroTimer := combat.Projectile{WeaponID: 1, CreationTick: 0, ExpiryTick: 15}
+	weapons := map[int32]*content.WeaponDef{
+		1: {RenderType: RenderTypeLifetimeGAF, WeaponTimer: 0, Duration: 20},
+	}
+	frameCounts := map[int32]int{1: 20}
+	specs, aborted := RenderBatch([]combat.Projectile{zeroTimer}, weapons, 5, frameCounts, nil, nil, visible, nil)
+	if aborted {
+		t.Fatalf("should not abort")
+	}
+	if len(specs) != 0 {
+		t.Fatalf("zero WeaponTimer must not fall back to Duration, got %+v [06 R-WFX-01 §4]", specs)
+	}
+
+	// frame = frameCount - (remaining*frameCount)/lifetime = 20 - (10*20)/10 = 0.
+	nonzeroTimer := combat.Projectile{WeaponID: 2, CreationTick: 0, ExpiryTick: 15}
+	weapons2 := map[int32]*content.WeaponDef{
+		2: {RenderType: RenderTypeLifetimeGAF, WeaponTimer: 10, Duration: 999},
+	}
+	frameCounts2 := map[int32]int{2: 20}
+	specs2, aborted2 := RenderBatch([]combat.Projectile{nonzeroTimer}, weapons2, 5, frameCounts2, nil, nil, visible, nil)
+	if aborted2 {
+		t.Fatalf("should not abort")
+	}
+	if len(specs2) != 1 || specs2[0].Kind != "lifetime-gaf" || specs2[0].Frame != 0 {
+		t.Fatalf("specs %+v want one lifetime-gaf at frame 0 using WeaponTimer=10 (Duration=999 unused) [06 R-WFX-01 §4]", specs2)
+	}
+}
+
 // countingSink implements SmokeSink for tests.
 type countingSink struct {
 	count    int

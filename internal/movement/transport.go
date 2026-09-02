@@ -15,9 +15,11 @@
 // attach or release. They are replaced here rather than kept beside the real
 // executors, because two machines for one order is exactly what I11 forbids.
 //
-// What §10.2 leaves open is marked, not guessed: the unload gate words and the
-// unload interrupt bit are not quoted by any section, and the cargo's Y after
-// release is RWU-19-6's.
+// What §10.2 left open — the unload gate words, the unload interrupt bit, the
+// drop point's storage, the released cargo's height, the two climb-aways and
+// the `becarried` re-arm's purge — is closed by [04 R-AIR-01 §10], which also
+// corrects §10.2's load phase-4 row: that climb-away marker is built and never
+// installed.
 package movement
 
 import (
@@ -67,8 +69,10 @@ const (
 // executor flags word must hold none of mask 0x10048" [04 §10.2]. The mask
 // decomposes exactly into pending-word bits of [04 R-ORD-01 §0] — 0x10000 the
 // slot-clear/interrupt bit, 0x40 the empty-route "cannot get there" bit, and
-// 0x8 the target-removed interrupt — which is the word the handler is handed
-// as its satisfied set, so that is the word tested.
+// 0x8 the target-removed interrupt. [04 R-AIR-01 §10] item 4 confirms the
+// argument: "the load executor tests its `0x10048` entry mask and its `0x42`
+// phase-4 mask on the same argument" as the unload's interrupt bit, which is
+// the satisfied set the pump hands the handler (§3.3 step 2).
 const transportLoadEntryMask uint32 = 0x10048
 
 // transportLoadInterruptMask is phase 4's "interrupt-flag combination present
@@ -77,16 +81,20 @@ const transportLoadEntryMask uint32 = 0x10048
 const transportLoadInterruptMask uint32 = 0x42
 
 // transportUnloadInterruptMask is the unload phase-2 "unload interrupt flag"
-// that returns 9 before the second validation [04 §10.2].
-//
-// TODO(question): §10.2 names the load executor's two masks numerically
-// (0x10048 at entry, 0x42 at phase 4) but writes the unload one only as "an
-// unload interrupt flag", and no other section quotes it. Placeholder: the
-// target-removed/abandon bit 0x8, which is the bit the ground twin's entry
-// tests for the same "stop unloading" condition ([04 R-AIR-01 §9]
-// `Ground_Unload` entry). What would settle it: the unload executor's phase-2
-// mask constant read directly, the way §10.2's load masks were.
-const transportUnloadInterruptMask uint32 = 0x8
+// that returns 9 before the second validation [04 §10.2]. [04 R-AIR-01 §10]
+// item 4 names it: bit `0x40` of the satisfied set — the "cannot get there"
+// outcome of [04 R-ORD-01 §0] and [04 R-COLL-01 §6], i.e. an empty route
+// published while the carrier is not at its goal. An unload the carrier cannot
+// fly to abandons before it revalidates, rather than dropping the cargo short.
+const transportUnloadInterruptMask uint32 = 0x40
+
+// The unload executor's gate words, written by ASSIGNMENT, not OR
+// [04 R-AIR-01 §10] item 4: phase 0 `= 0xE8`, phase 1 `= 0xE8`, phase 2
+// `= 0xE0`. The `0xE0` half is the three movement outcomes of
+// [04 R-ORD-01 §0]; the extra `0x8` on the two approach legs is the
+// interrupt/abandon bit, which the climb-away leg drops because there is no
+// longer anything to abandon.
+const transportUnloadApproachGate uint32 = 0xE8
 
 // legVTOLPickup is `VTOL_Pickup`, the canonical air load executor of
 // [04 §10.2].
@@ -113,8 +121,9 @@ const transportUnloadInterruptMask uint32 = 0x8
 //	   integer part of the attach piece's model-frame Y; gate = 0x100EA.   -> 1
 //	4  interrupted (`flags & 0x42`): deferred `EndTransport`, no attach.    -> 8
 //	   success: attach on the queried piece with request mode 0; event 12;
-//	   the climb-away point marker on the carrier's own X/Z at `cruisealt`
-//	   with no radius; gate |= 0xE0.                                       -> 1
+//	   gate |= 0xE0. The climb-away marker §10.2's row describes is built and
+//	   NEVER installed [04 R-AIR-01 §10] item 3, so the record's payload stays
+//	   the phase-3 follow marker.                                          -> 1
 //	5  no work.                                                            -> 5
 //	   other.                                                              -> 7
 //
@@ -204,9 +213,15 @@ func (s *System) legVTOLPickup(u *units.Unit, n *orders.Node, satisfied uint32, 
 		AttachCargoMode(s.world, u.Handle, n.Target, int(int32(n.Param1)), 0)
 		s.armBeCarried(target, u.Handle)
 		orders.NotifyStatus(u, TransportEventAttach, "")
-		m := s.newPointMarker(u, Vec3{X: u.X, Y: u.Y, Z: u.Z})
-		m.setAltitudeOffset(int16(u.Def.CruiseAlt))
-		s.installAirGoal(u, n, m)
+		// No climb-away is installed here. [04 R-AIR-01 §10] item 3 corrects
+		// §10.2's phase-4 row: the phase allocates the climb-away marker, sets
+		// its altitude, ORs 0xE0 into the record's gate and returns advance —
+		// but "there is no payload install between the attach and the return,
+		// so the marker leaks and the record's payload stays the phase-3 follow
+		// marker on the cargo". A loaded transport climbs only when its NEXT
+		// order's takeoff or cruise leg commands it. Nanolathe does not build
+		// the leaked marker: nothing reads it, and allocating garbage to mimic
+		// a leak would be the retail expression rather than its behavior.
 		n.DynamicGate |= airLegGate
 		return 1
 	case 5:
@@ -335,19 +350,29 @@ func (s *System) legVTOLUnload(u *units.Unit, n *orders.Node, satisfied uint32, 
 	// successful unload. The check is therefore the entry condition it is
 	// written as — nothing was ever aboard — and phase 0's recorded cargo
 	// reference is what says the executor has started.
+	// TODO(question): [04 R-AIR-01 §10] item 4 reads the empty-list exit as
+	// preceding the phase switch unconditionally — "a carrier whose cargo has
+	// gone finishes at any phase" — while §10.2's phase-3 row has that same
+	// executor emit event 13 after the phase-2 release. For a carrier holding
+	// one cargo the two cannot both hold: the strict exit makes phase 3
+	// unreachable and event 13 never fires. Placeholder: the `Param1` guard
+	// below, which takes the exit as the entry condition it is written as
+	// (nothing was ever aboard) and keeps §10.2's phase-3 row reachable, since
+	// that row is the only Established statement about where event 13 comes
+	// from. What would settle it: whether the executor's empty-list test reads
+	// the cargo list or a phase-0 scratch word, and whether event 13 is
+	// observable on a single-cargo retail unload.
 	if n.Param1 == 0 && len(u.Attachment.Cargo) == 0 {
 		return 5 // *complete*: nothing to unload [04 §10.2]
 	}
-	// The drop point is the record's goal. [04 R-AIR-01 §9] settles the
-	// storage for the ground twin — `Ground_Unload`'s `TransportDrop` cell 1 is
-	// "the record's goal X truncated to whole world units in the high half, the
-	// goal Z integer part in the low half" — and the `u x,y` mission verb
-	// writes the same pair on the record it queues [04 §3.6].
-	//
-	// TODO(question): §10.2 writes the air executor's drop point only as "the
-	// stored drop point" and does not say the record's goal triple is where it
-	// is stored. What would settle it (RWU-19-6): the phase-0 marker
-	// constructor's source operand read directly.
+	// The drop point is the record's GOAL TRIPLE, filled when the record was
+	// constructed and never rewritten. [04 R-AIR-01 §10] item 1: both unload
+	// executors read the order record's goal position and "neither writes it";
+	// the issuer constructs the record from the resolved command's position
+	// [04 R-ORD-02 §1] and the `u x,y` mission verb of [04 §3.6] queues the
+	// same record. No phase, no validator and no marker constructor stores a
+	// drop point anywhere else — every phase re-derives what it needs from the
+	// raw goal.
 	dropX, dropZ := n.GoalX, n.GoalZ
 	cargoHandle := s.transportCargoHead(u, n)
 	cargo := s.unitFor(cargoHandle)
@@ -358,20 +383,15 @@ func (s *System) legVTOLUnload(u *units.Unit, n *orders.Node, satisfied uint32, 
 		}
 		orders.NotifyStatus(u, transportStatusCaption, "Unloading")
 		n.Param1 = uint32(cargoHandle)
+		// Phase 0 copies ALL THREE goal values into the point marker; the
+		// marker's altitude setter then recomputes the goal Y from the terrain
+		// under goal X/Z, so the record's own Y never reaches the flight
+		// [04 R-AIR-01 §10] item 1.
 		m := s.newPointMarker(u, Vec3{X: dropX, Y: n.GoalY, Z: dropZ})
 		m.setAltitudeOffset(int16(u.Def.CruiseAlt))
 		m.setArrivalRadius(0x140)
 		s.installAirGoal(u, n, m)
-		// TODO(question): §10.2 quotes a gate word for every row of the LOAD
-		// table (`|= 0xE0`, `= 0x100E8`, `= 0x100EA`) and none for any row of
-		// the unload table. Placeholder: the three movement outcomes `0xE0`,
-		// which is what [04 R-UNIT-06 §3] says these writes are for — "the
-		// record re-dispatches when the queued movement reports arrival" — and
-		// without which a horizontal arrival radius of 0x140 would decide
-		// nothing, because the next phase would run before the carrier arrived.
-		// What would settle it: the unload executor's per-phase gate writes read
-		// the way the load table's were.
-		n.DynamicGate |= airLegGate
+		n.DynamicGate = transportUnloadApproachGate
 		return 1
 	case 1:
 		if cargo == nil || !s.ValidateUnloadSite(s.world, cargoHandle, dropX, dropZ, s.Terrain) {
@@ -386,10 +406,13 @@ func (s *System) legVTOLUnload(u *units.Unit, n *orders.Node, satisfied uint32, 
 		// exactly the height at which cargo suspended below the carrier touches
 		// the ground [04 R-AIR-01 §9]. §10.2's earlier "model-bottom value"
 		// wording is superseded there: there is no authored model-bottom key.
+		// The lowering marker copies the goal triple again — a second
+		// re-derivation from the record, not a stored snapped point
+		// [04 R-AIR-01 §10] item 1.
 		m := s.newPointMarker(u, Vec3{X: dropX, Y: n.GoalY, Z: dropZ})
 		m.setAltitudeOffset(int16(cargo.Def.ModelTop))
 		s.installAirGoal(u, n, m)
-		n.DynamicGate |= airLegGate
+		n.DynamicGate = transportUnloadApproachGate
 		return 1
 	case 2:
 		if satisfied&transportUnloadInterruptMask != 0 {
@@ -403,10 +426,16 @@ func (s *System) legVTOLUnload(u *units.Unit, n *orders.Node, satisfied uint32, 
 			orders.NotifyStatus(u, transportStatusCant, UnableUnloadMessage)
 			return 9
 		}
+		// The climb-away is a point marker on the CARRIER's own current X/Y/Z —
+		// not the goal, which phase 2 does not use at all — with altitude
+		// offset the carrier definition's `cruisealt` as the full signed 16-bit
+		// word, undivided, and NO arrival radius. This one IS installed as the
+		// record's payload, and its gate is the assignment `= 0xE0`
+		// [04 R-AIR-01 §10] items 3 and 4.
 		m := s.newPointMarker(u, Vec3{X: u.X, Y: u.Y, Z: u.Z})
 		m.setAltitudeOffset(int16(u.Def.CruiseAlt))
 		s.installAirGoal(u, n, m)
-		n.DynamicGate |= airLegGate
+		n.DynamicGate = airLegGate
 		return 1
 	case 3:
 		orders.NotifyStatus(u, TransportEventDetach, "")
@@ -429,14 +458,32 @@ func (s *System) legVTOLUnload(u *units.Unit, n *orders.Node, satisfied uint32, 
 // the re-arm would give that product two. Moving it is an upstream change this
 // unit does not own.
 //
-// TODO(question): [04 R-UNIT-06 §3] says the re-arm "purges the carried unit's
-// queue through the ordinary cleanup" before the record exists. Placeholder:
-// head-insert `BeCarried` without purging, so an order the cargo already owns
-// survives the lift instead of being silently dropped. What would settle it:
-// which cleanup entry point the re-arm calls, and whether it spares protected
-// records the way `PurgeUnprotected` does.
+// [04 R-AIR-01 §10] item 6 closes what "purges the carried unit's queue through
+// the ordinary cleanup" meant. The re-arm walks the cargo's FRONT chain only
+// and, for every record whose static-mask copy lacks bit `0x4` — the
+// purge-survivor bit of [04 R-MOV-03 §6] — unlinks it, tombstones it unless it
+// is the front head, runs the ordinary record cleanup of [04 §3.3] and frees
+// it. That is the same keep-survivors purge a non-queued issue performs, so the
+// survivors are the same set: `BeCarried`, `GetBuilt`, `Wait`, `WaitForAttack`,
+// `MakeSelectable`, `AttackUType`, `Paralyze`, `SelfRepair` and `BuildingBuild`
+// outlive the lift; a `Move`, `Patrol`, guard or attack the cargo was executing
+// dies with its cancel notification. The rear chain is not touched. Only then
+// does it head-insert a fresh `BeCarried`, copying the displaced head's
+// auto-operation flag onto it — which is what `PushHead` already does
+// [04 R-ORD-01 §1]. The previous "head-insert without purging" placeholder kept
+// orders retail discards.
+//
+// The predicate [04 R-AIR-01 §9] gives is the child's player slot state byte
+// being 1 or 2 AND the parent's definition lacking `isairbase`. The state half
+// holds by construction here: those are the two states whose units are pumped
+// at all, and this call site is reached only from a pumped executor. The
+// `isairbase` half is tested, because that is what lets a landed aircraft keep
+// its orders on a pad.
 func (s *System) armBeCarried(cargo *units.Unit, carrier pool.Handle) {
 	if cargo == nil {
+		return
+	}
+	if parent := s.unitFor(carrier); parent != nil && parent.Def != nil && parent.Def.IsAirBase {
 		return
 	}
 	q := orders.QueueForUnit(cargo)
@@ -447,11 +494,7 @@ func (s *System) armBeCarried(cargo *units.Unit, carrier pool.Handle) {
 	if id == 0 {
 		return
 	}
-	for _, existing := range q.Primary() {
-		if existing.ID == id {
-			return
-		}
-	}
+	q.PurgeUnprotected()
 	q.PushHead(id, orders.Node{Owner: cargo.Handle, Target: carrier, Deadline: -1})
 }
 

@@ -24,19 +24,17 @@ import (
 // attachModeUnchanged is Nanolathe's "the request carried no mode" sentinel,
 // not a retail value. [04 R-AIR-01 §9] establishes that the attachment helper
 // overwrites the child's committed mover-mode pair with the request's mode on
-// both halves, and names the modes actually used: 0 on every ordinary attach,
-// 2 on the self-detach a carried carrier performs in the takeoff preamble, and
-// 1 on the `VTOL_Unload` phase-2 release. It does NOT name the request mode of
-// the factory-product link, which is the fourth caller of the same helper
-// [04 R-UNIT-06 §3], and a mode-0 write there would take a nanoframe out of the
-// ground plane it holds for the whole build [04 R-FAC-02 §2]. So the callers
-// that know their mode pass it, and the ones the research does not cover keep
-// the mode they have.
+// both halves, and names the modes used by three of its four callers: 0 on
+// every ordinary attach, 2 on the self-detach a carried carrier performs in the
+// takeoff preamble, and 1 on the `VTOL_Unload` phase-2 release.
+// [04 R-AIR-01 §10]'s closing aside supplies the fourth from the factory-egress
+// trace: the factory product's builder link passes request mode 1
+// ([04 R-FAC-02 §1] item 4), which is also the mode a nanoframe needs to hold
+// the ground plane for the whole build [04 R-FAC-02 §2].
 //
-// TODO(question): what request mode does the factory product's builder link
-// pass to the attachment helper? [04 R-AIR-01 §9] lists three of the four
-// callers' modes and omits this one. What would settle it: the factory link
-// site's mode argument read the way the other three were.
+// The sentinel therefore survives only for the detach callers no section names
+// — the carrier-death cascade and the orphan cleanup — which keep the mode the
+// child already has rather than inventing one.
 const attachModeUnchanged = -1
 
 // AttachCargo attaches cargo to carrier on piece [04 §10.2] load phase 4.
@@ -99,6 +97,13 @@ func writeRequestedMoverMode(child *units.Unit, mode int) {
 	child.Move.Mode = uint8(mode) & 0x3
 }
 
+// attachModeFactoryProduct is the factory product's builder-link request mode.
+// [04 R-AIR-01 §10]'s closing aside reads it off the factory-egress trace:
+// "the factory product's builder link — the fourth caller of the attachment
+// helper — passes request mode 1 ([04 R-FAC-02 §1] item 4)", which is the
+// grounded mode every product including an aircraft takes.
+const attachModeFactoryProduct = 1
+
 // AttachFactoryProduct applies the factory allocation gates before entering
 // the shared cargo representation: live non-building product carrying
 // nothing, and a live distinct carrier that is not itself carried
@@ -116,7 +121,7 @@ func AttachFactoryProduct(w *units.World, carrierHandle, productHandle pool.Hand
 	if carrier.Attachment.Carrier != 0 || product.Attachment.Carrier != 0 || len(product.Attachment.Cargo) != 0 {
 		return false
 	}
-	return AttachCargo(w, carrierHandle, productHandle, piece)
+	return AttachCargoMode(w, carrierHandle, productHandle, piece, attachModeFactoryProduct)
 }
 
 // DetachCargo detaches cargo from its carrier [04 §10.2] unload phase 2.
@@ -312,6 +317,13 @@ func (s *System) SyncCarriedMotion(w *units.World) {
 				collCargo.OldAnchor = newAnchor
 				collCargo.CachedAnchor = newAnchor
 				collCargo.Mode = cargo.Move.Mode
+				// The setter writes "XYZ, cell pair and MODE" on a change
+				// [04 R-FAC-02 §2], so the cached mode moves with the cached
+				// pair. Keeping it stale is what would let the released
+				// cargo's next commit take the same-cell fast path and skip
+				// the restamp [04 R-COLL-01 §1] — the commit
+				// [04 R-AIR-01 §10] item 2 requires to run.
+				collCargo.CachedMode = cargo.Move.Mode & 0x3
 				s.syncMoverStamp(cargo)
 			}
 			collCargo.Mode = cargo.Move.Mode
@@ -405,7 +417,11 @@ func (s *System) unloadFootprint(cargoHandle pool.Handle, cargo *units.Unit) (fx
 // `world.PlacementAnchor`, the same helper the ghost updater and the order
 // issuer use. It replaces a hand-rolled `cell − foot/2` that was neither the
 // snap nor a floor and that disagreed with the anchor every other placement
-// caller computes for the same point.
+// caller computes for the same point. [04 R-AIR-01 §10] item 1 confirms the
+// expression on this caller: "per axis `cell = (goal + 0x80000 − foot ·
+// 0x80000) >> 20`, an arithmetic shift on the 32-bit sum", re-derived from the
+// record's raw goal on every one of the two phases that needs it — nothing
+// stores a snapped drop point anywhere.
 //
 // Mode 1's contract, for a mobile definition (`bmcode == 0`), is
 // [08 R-AI-03 §4]: bounds first — `gx >= 0`, `gz >= 0`, `gx + footX <
@@ -416,11 +432,12 @@ func (s *System) unloadFootprint(cargoHandle pool.Handle, cargo *units.Unit) (fx
 // and it reads the mover-written half of the ground word through
 // `Terrain.Movers`, which this package installs [04 R-COLL-01 §2].
 //
-// Self identity: [08 R-AI-03 §4]'s mode-1 caller passes 0. The cargo is
-// attached in mode 0 while this runs and mode 0 writes no occupancy word
-// [04 R-COLL-01 §4], so passing the cargo's own identity cannot differ from
-// passing 0; it is passed so the second validation, which the phase-2 release
-// runs immediately before the detach, keeps the same answer.
+// Self identity: `0`, and mode `1`. [08 R-AI-03 §4]'s mode-1 caller passes 0
+// and [04 R-AIR-01 §10] item 1 reads the same pair off both unload phases —
+// "handed to the placement validator with self identity `0` and mode `1`". The
+// cargo is attached in mode 0 while this runs and mode 0 writes no occupancy
+// word [04 R-COLL-01 §4], so the two readings cannot disagree on live content;
+// the traced value is used because it is the traced value.
 func (s *System) ValidateUnloadSite(w *units.World, cargoHandle pool.Handle, dropX, dropZ numeric.Fixed, terrain *world.Terrain) bool {
 	if s == nil || w == nil || cargoHandle == 0 {
 		return false
@@ -469,7 +486,7 @@ func (s *System) ValidateUnloadSite(w *units.World, cargoHandle pool.Handle, dro
 	_, err = terrain.CheckPlacement(world.PlacementQuery{
 		Rect:   rect,
 		Rules:  rules,
-		Self:   uint16(cargoHandle),
+		Self:   0, // [04 R-AIR-01 §10] item 1
 		Mobile: true,
 	})
 	return err == nil
@@ -482,12 +499,13 @@ func (s *System) ValidateUnloadSite(w *units.World, cargoHandle pool.Handle, dro
 //	climb-away point command — release order is exactly callback → detach →
 //	climb-away.
 //
-// The climb-away marker is the caller's, so this helper owns the first two
-// steps and the released cargo's placement. The callback runs on the CARRIER's
-// script, like every transport callback [04 R-UNIT-06 §3], and the detach
-// passes request mode 1 — grounded — which is the mode [04 R-AIR-01 §9] names
-// for this release and which puts the cargo back into the ground occupancy
-// plane [04 R-COLL-01 §4].
+// The climb-away marker is the caller's, so this helper owns exactly the first
+// two steps — and nothing else: the release places nothing
+// [04 R-AIR-01 §10] item 2. The callback runs on the CARRIER's script, like
+// every transport callback [04 R-UNIT-06 §3], and the detach passes request
+// mode 1 — grounded — which is the mode [04 R-AIR-01 §9] names for this release
+// and which is what puts the cargo back into the ground occupancy plane when
+// its own next commit stamps it [04 R-COLL-01 §4].
 //
 // It still validates before releasing: the second of §10.2's two validator
 // calls is the caller's, and this repeats it so a direct caller cannot release
@@ -518,64 +536,52 @@ func (s *System) TryUnload(w *units.World, carrierHandle, cargoHandle pool.Handl
 		bridge.Deferred("EndTransport", nil, nil)
 	}
 	// Step 2: the detach, with the reserved no-piece index and request mode 1.
+	//
+	// That is the whole release. [04 R-AIR-01 §10] item 2: the detach's apply
+	// step "writes the linkage fields ... and the request's low two bits into
+	// the committed mover-mode pair — 1, grounded — and NOTHING else: it does
+	// not write X, Y or Z, does not write the unit flags word's mover-mode
+	// mirror, and does not touch velocity or speed". The cargo therefore keeps
+	// exactly what the carried branch of the occupancy commit last wrote
+	// [04 R-FAC-02 §2] — the hang position, the floater deck clamp if it is a
+	// `floater`, and the carrier's velocity, speed and orientation — and its
+	// own next mover tick owns everything else:
+	//
+	//   - the commit runs at the cargo's ACTUAL X/Z (the hang point, not the
+	//     footprint anchor this executor validated) with the mobile validator
+	//     in mode 1, and on success clears and restamps the GROUND words;
+	//   - the post-move correction [04 R-MOV-01 §5] then writes Y by exactly
+	//     its four branches, so an `upright` cargo lands on the terrain, a
+	//     `floater` on the deck line, and a cargo whose model root has no
+	//     selection primitive keeps its hang height.
+	//
+	// There is no model-bottom offset anywhere on this path: the definition's
+	// lower Y bound is zeroed at catalog time [02 R-CAT-01 §7] and no release
+	// code reads it. The build's snap-to-placement-centre-plus-terrain-height
+	// was a divergence and is gone; re-centring the cargo onto the validated
+	// anchor is precisely what retail does not do.
+	//
+	// TODO(T25): the released cargo's first free commit does not run in this
+	// build until something gives it an order. Retail's mover tick and its
+	// post-move correction run for every live unit — [04 R-MOV-01 §5]'s gate is
+	// transform-dirty or `canhover`, never an order — but `StepUnit` in
+	// internal/movement/integrate.go returns before the ground branch when the
+	// unit's primary queue is empty or its head is a goal-less record such as
+	// the `BeCarried` this release retires. Until that gate goes, a cargo
+	// released and left alone keeps its hang Y and holds no ground word; both
+	// appear on its first commit. Removing the gate is an upstream change
+	// WU-19-28 does not own (integrate.go is not in its file set).
 	DetachCargoMode(w, cargoHandle, 1)
-	// The released cargo stands on the footprint the validator just accepted:
-	// the same anchor snap of [04 R-ORD-01 §1], re-centred through its exact
-	// reverse `pos = (foot + 2·cell) · 2^19`.
-	fx, fz := s.unloadFootprint(cargoHandle, cargo)
-	cellX, cellZ := world.PlacementAnchor(dropX, dropZ, fx, fz)
-	worldX, worldZ := world.PlacementCenter(cellX, cellZ, fx, fz)
-	cargo.X = worldX
-	cargo.Z = worldZ
-	// TODO(question): §10.2 does not state the released cargo's Y. What it
-	// states is the LOWERING marker's altitude — the carrier is commanded to
-	// `max(seaLevel, terrainHeightAtDropPoint) + cargoModelHeight`, "exactly
-	// the height at which cargo suspended below the carrier touches the ground"
-	// [04 R-AIR-01 §9] — from which the cargo's own resting Y is a consequence
-	// of the carried-motion hang geometry rather than an assignment the
-	// executor makes. Placeholder: settle the cargo on the four-corner terrain
-	// height at its new centre, which is where that lowering leaves it and what
-	// makes it stand rather than hover. What would settle it (RWU-19-6): the
-	// release path's own Y write, if it makes one, and the model-bottom offset
-	// it would apply.
-	if s.Terrain != nil {
-		cargo.Y = s.Terrain.HeightAt(cargo.X, cargo.Z)
-		// Floater cargo over water gets floater clamp already handled elsewhere, but after unload ensure correct Y.
-		if cargo.Def.Floater {
-			sea := s.Terrain.SeaLevelWorld()
-			deck := numeric.Fixed(int64(cargo.Def.Waterline) * 65536)
-			// TODO(question): exact floater clamp vs upright [04 §9.2].
-			// Use max of terrain and sea+waterline? Simplified: if over water, use sea+waterline.
-			h := s.Terrain.HeightAt(cargo.X, cargo.Z)
-			if h != numeric.Fixed(-1) && int32(h.Raw()>>16) < int32(s.Terrain.SeaLevel) {
-				cargo.Y = sea + deck
-			}
-		}
-	}
-	// Update collision/steer positions
-	if st, ok := s.Steers[cargoHandle]; ok {
-		st.X = int32(cargo.X.Raw())
-		st.Z = int32(cargo.Z.Raw())
-	}
 	// The request mode the detach wrote is the committed pair; this package's
-	// per-unit motion records mirror it [04 §9.1].
+	// per-unit motion records carry this package's copy of that same pair
+	// [04 §9.1], and the commit reads it as its proposed mode. The MIRROR the
+	// commit rewrites on success is the cached mode, which stays at the carried
+	// value so the next tick cannot take the same-cell fast path.
 	if fl, ok := s.Flights[cargoHandle]; ok {
-		fl.X = int32(cargo.X.Raw())
-		fl.Y = int32(cargo.Y.Raw())
-		fl.Z = int32(cargo.Z.Raw())
 		fl.Mode = cargo.Move.Mode & 0x3
 	}
 	if coll, ok := s.Collisions[cargoHandle]; ok {
-		coll.X = int32(cargo.X.Raw())
-		coll.Z = int32(cargo.Z.Raw())
-		coll.Y = int32(cargo.Y.Raw())
 		coll.Mode = cargo.Move.Mode & 0x3
-		newAnchor := coll.ProposedAnchor(coll.Mode)
-		coll.CachedAnchor = newAnchor
-		coll.OldAnchor = newAnchor
-		// The unload's release is a stamp that bypasses the validator, in the
-		// plane the released mover's mode names [04 R-COLL-01 §4].
-		s.syncMoverStamp(cargo)
 	}
 	return true, ""
 }

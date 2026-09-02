@@ -9,22 +9,14 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 )
 
-// TestSHDMidRowPlaceholder locks A23: SHD row selection uses mid row 16 placeholder (presentation-only).
-func TestSHDMidRowPlaceholder(t *testing.T) {
+// TestShadeRowCountAndClamp locks the SHD row table size and the clamp helper
+// [03 §4.3]. The former placeholder-row lock (SHDMidRow/ModelShadeMidRow/
+// SelectShadeRow) was deleted 2026-09-01: no production draw path could reach
+// that constant, and the real formula is locked by
+// TestShadeRowFormulaEdgeCases in shade_test.go [03 R-RAST-01 §5].
+func TestShadeRowCountAndClamp(t *testing.T) {
 	if SHDRowCount != 32 {
 		t.Fatalf("SHDRowCount %d want 32 [03 §4.3]", SHDRowCount)
-	}
-	if SHDMidRow != 16 {
-		t.Fatalf("SHDMidRow %d want 16 A23 placeholder [03 §4.3]", SHDMidRow)
-	}
-	if ModelShadeMidRow != SHDMidRow {
-		t.Fatalf("ModelShadeMidRow %d != SHDMidRow %d A23", ModelShadeMidRow, SHDMidRow)
-	}
-	if got := SelectShadeRow(0); got != SHDMidRow {
-		t.Fatalf("SelectShadeRow %d want %d A23", got, SHDMidRow)
-	}
-	if got := SelectShadeRow(255); got != SHDMidRow {
-		t.Fatalf("SelectShadeRow(255) %d want %d A23", got, SHDMidRow)
 	}
 	if got := ClampShadeRow(-1); got != 0 {
 		t.Fatalf("Clamp -1 %d want 0", got)
@@ -35,8 +27,6 @@ func TestSHDMidRowPlaceholder(t *testing.T) {
 	if got := ClampShadeRow(15); got != 15 {
 		t.Fatalf("Clamp 15 %d want 15", got)
 	}
-	// ShadeRGBA with mid row should be used for textured primitives (presentation-only)
-	// Ensure ShadeRGBA respects clamping and logical→physical.
 }
 
 // TestGAFSubframeClipAndOverwrite locks A25: later subframes overwrite earlier where opaque, clipped to parent canvas [fmt gaf][03 §4.4].
@@ -321,13 +311,5 @@ func TestBeamSingleVsDualP2(t *testing.T) {
 	// ensure endpoint swap for outer
 	if dual[0].X0 != tail[0] || dual[1].X0 != head[0] {
 		t.Fatalf("dual endpoint swap failed")
-	}
-}
-
-// TestModelFlatBypassSHD ensures flat color bypass [03 §4.3].
-func TestModelFlatBypassSHDP2(t *testing.T) {
-	// This is already in model_test but lock placeholder row still 16
-	if SHDMidRow != 16 {
-		t.Fatalf("mid row")
 	}
 }

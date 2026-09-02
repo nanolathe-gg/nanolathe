@@ -203,11 +203,16 @@ const RendertypeCount = 8 // [03 §5.4] eight cases 0..7
 //	6 record-stored orientation
 //	7 randomized segmented lines with 0x50000 denominator
 //
-// TODO(question): selector wiring for case 4 is not typed in WeaponDef; caller
-// supplies it as explicit argument. The lifetime field for case 5 is taken as
-// the provided lifetime param (commonly WeaponTimer or Duration) pending trace
-// of the 16-bit definition field [03 §5.4].
-func DispatchRendertype(p combat.Projectile, w *content.WeaponDef, now uint32, frameCount int, selector int, lifetime int32, admitOK func() bool) RenderSpec { // [03 §5.4] C6 (I6)
+// Established [06 R-WFX-01 §4]: case 4's selector is the authored `color`
+// byte (WeaponDef.Color) — 0 cannonshell, 1/4 plasmasm, 2 plasmamd,
+// 3 ultrashell; 255 (-1) suppresses; 5..254 draw nothing. Case 5's lifetime
+// field is WeaponTimer alone, never Duration — a zero WeaponTimer divides by
+// zero in retail (an authored-data hazard on the one stock weapon that
+// authors this case, `flamethrower`), not a fallback to a different field.
+// The caller still supplies both as explicit arguments so this function
+// stays agnostic of WeaponDef field layout; RenderBatch below sources them
+// from Color/WeaponTimer directly.
+func DispatchRendertype(p combat.Projectile, w *content.WeaponDef, now uint32, frameCount int, selector int, lifetime int32, admitOK func() bool) RenderSpec { // [03 §5.4] C6 [06 R-WFX-01 §4] (I6)
 	rt := int32(0)
 	if w != nil {
 		rt = w.RenderType // [02 "Weapon record"] default 0
@@ -278,7 +283,9 @@ func DispatchRendertype(p combat.Projectile, w *content.WeaponDef, now uint32, f
 // Segment count derives from endpoint span divided by literal constant 327680 (0x50000),
 // skipped when zero [03 §5.4]. Span is Euclidean distance of head-tail in raw
 // Fixed units (16.16) so 327680 corresponds to 5 world units (5*65536) [03 §5.4].
-// TODO(question): calibration of whether span is map-space vs projected-space is open per [03 §5.4] missing; this uses world-space Fixed raw.
+// Established: the span is map-space (world units), not projected screen
+// space — [03 R-FX-01 §2] closes this explicitly ("whole world units per
+// segment, in map space"), matching the world-space Fixed raw math below.
 func SegmentCount(head, tail combat.Vec3) int { // [03 §5.4]
 	dx := float64(int64(head.X) - int64(tail.X)) // Fixed raw delta [I2]
 	dy := float64(int64(head.Y) - int64(tail.Y))
@@ -310,8 +317,10 @@ func SegmentedJitter(crt CRTRandomSource, x, y, z numeric.Fixed) (numeric.Fixed,
 	jx := int32(crt.Rand()*11/0x8000 - 5) // [03 §5.4]
 	jy := int32(crt.Rand()*11/0x8000 - 5)
 	jz := int32(crt.Rand()*11/0x8000 - 5)
-	// Jitter is integer map-pixel units per [03 §5.4]; convert to Fixed world units via *65536.
-	// TODO(question): pixel vs world unit scale for jitter is unresolved per missing; using 1 pixel = 65536 [03 §2.1].
+	// Established: the jitter is whole world units added to the point's high
+	// word [03 R-FX-01 §2][06 R-WFX-01 §4] — not a separate screen-pixel scale.
+	// A raw 16.16 Fixed value's high word is its integer part, so adding an
+	// integer to that word is exactly *65536 on the raw value.
 	xj := x + numeric.Fixed(int64(jx)*65536)
 	yj := y + numeric.Fixed(int64(jy)*65536)
 	zj := z + numeric.Fixed(int64(jz)*65536)
@@ -376,20 +385,21 @@ func RenderBatch(projectiles []combat.Projectile, weapons map[int32]*content.Wea
 			fc = frameCounts[p.WeaponID]
 		}
 		sel := -2 // sentinel != -1
+		if w != nil {
+			sel = int(w.Color) // [06 R-WFX-01 §4] case 4's selector is the authored `color` byte
+		}
 		if selectors != nil {
 			if v, ok := selectors[p.WeaponID]; ok {
 				sel = v
 			}
 		}
 		lt := int32(0)
+		if w != nil {
+			lt = w.WeaponTimer // [06 R-WFX-01 §4] case 5's lifetime field is WeaponTimer alone, never Duration
+		}
 		if lifetimes != nil {
-			lt = lifetimes[p.WeaponID]
-		} else if w != nil {
-			// Default lifetime wiring: WeaponTimer if nonzero else Duration pending trace [03 §5.4] TODO(question)
-			if w.WeaponTimer != 0 {
-				lt = w.WeaponTimer
-			} else {
-				lt = w.Duration
+			if v, ok := lifetimes[p.WeaponID]; ok {
+				lt = v
 			}
 		}
 		spec := DispatchRendertype(p, w, now, fc, sel, lt, admitOK) // [03 §5.4] C6

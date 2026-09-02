@@ -23,11 +23,6 @@ import (
 // ModelOrientationThreshold is the per-axis delta that triggers a rebuild [03 §5.2] C13.
 const ModelOrientationThreshold = 7 // [03 §5.2] C13
 
-// ModelShadeMidRow is the placeholder SHD row until the selection formula is traced [03 §4.3].
-// TODO(question): SHD row selection formula not traced [03 §4.3]; use identity mid row 16 [PLAN_13 Explicit unknowns] (A23).
-// Canonical definition lives in shade.go SHDMidRow; this alias preserves API.
-const ModelShadeMidRow = SHDMidRow // [03 §4.3] A23 alias
-
 // halfCircle is the authored model-facing offset for projectile models [03 §5.2].
 // Projectile yaw in Y and pitch in X each carry -32768 (-32768 == +32768 mod 65536 = 0x8000) [03 §5.2].
 const halfCircle = 0x8000 // 32768 [03 §5.2]
@@ -364,7 +359,12 @@ func buildPieceDraws(m *model.Model, states []model.PieceState, worldPos [3]nume
 				ShadeRow:      NoShadeRow,
 			}
 			if shaded {
-				pd.ShadeRow = ModelShadeMidRow
+				// Default to the DONT_SHADE pin (row 15) rather than an invented
+				// mid row: row 15 is the one retail value this field can hold
+				// before its real per-corner row is known below, and it is
+				// overwritten by the first corner's trunc(dot*5)&31 result
+				// whenever that corner is resolvable [03 R-RAST-01 §5].
+				pd.ShadeRow = SHDIdentityRow
 				pd.ShadeRows = make([]int, len(pr.VertexIndices))
 				for k, vi := range pr.VertexIndices {
 					if int(vi) >= len(rows) {
@@ -373,7 +373,7 @@ func buildPieceDraws(m *model.Model, states []model.PieceState, worldPos [3]nume
 					pd.ShadeRows[k] = rows[vi]
 				}
 				if len(pr.VertexIndices) > 0 && int(pr.VertexIndices[0]) < len(rows) {
-					pd.ShadeRow = rows[pr.VertexIndices[0]]
+					pd.ShadeRow = rows[pr.VertexIndices[0]] // [03 R-RAST-01 §5] real trunc(dot*5)&31 row
 				}
 			}
 			prims[pi] = pd
@@ -585,9 +585,15 @@ func PaletteRGBA(tables *palette.Tables, idx byte) (r, g, b, a uint8) { // [03 �
 	return tables.RGBA(idx) // PALETTE.PAL at present time [03 §4.3]
 }
 
-// ShadeRGBA resolves a palette index through an SHD row for model lighting [03 §4.3] C10.
-// TODO(question): exact SHD row selection not established [03 §4.3]; callers should pass ModelShadeMidRow (16) placeholder [PLAN_13 Explicit unknowns].
-func ShadeRGBA(tables *palette.Tables, idx byte, row int) (r, g, b, a uint8) { // [03 §4.3] C10
+// ShadeRGBA resolves a palette index through an SHD row for model lighting
+// [03 §4.3] C10. The row is the caller's real per-corner value — the shaded
+// piece renderer's SHD row is trunc(dot*5.0) & 0x1F with DONT_SHADE pinning
+// row 15, computed by ShadeRowForNormal [03 R-RAST-01 §5]. This helper never
+// invents a row of its own; the production draw path in
+// internal/client/model.go interpolates PrimitiveDraw.ShadeRows directly and
+// does not call through here, so this stays a reusable, tested primitive for
+// any other consumer of PrimitiveDraw.
+func ShadeRGBA(tables *palette.Tables, idx byte, row int) (r, g, b, a uint8) { // [03 §4.3] C10 [03 R-RAST-01 §5]
 	if tables == nil {
 		return 0, 0, 0, 255
 	}
@@ -613,7 +619,7 @@ func PrimitiveRGBA(tables *palette.Tables, prim PrimitiveDraw) (r, g, b, a uint8
 		// Flat-colored bypasses SHD [03 §4.3]
 		return PaletteRGBA(tables, byte(prim.ColorIndex&0xFF))
 	}
-	// Textured via SHD row placeholder [03 §4.3] TODO(question)
+	// Textured via the primitive's real SHD row [03 §4.3] [03 R-RAST-01 §5].
 	return ShadeRGBA(tables, byte(prim.ColorIndex&0xFF), prim.ShadeRow)
 }
 

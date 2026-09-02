@@ -54,6 +54,12 @@ func transportFixture(t *testing.T) (*System, *units.World, *units.Unit, *units.
 		ModelTop:         6,
 		ModelTopFixed:    6 * 65536,
 		MinWaterDepth:    -10000,
+		// `upright` with `canhover` clear selects the first of the four
+		// post-move Y branches, `Y = terrainHeight(unitXZ) << 16`
+		// [04 R-MOV-01 §5], so the released cargo's height has one settled
+		// value to assert rather than the four-corner conform's "writes
+		// nothing without a selection primitive" arm.
+		Upright: true,
 	}
 	cx, cz := world.CellToWorld(8), world.CellToWorld(8)
 	ch, err := w.Create(carrierDef, 0, cx, ter.HeightAt(cx, cz), cz)
@@ -116,8 +122,13 @@ func transportHeadPhase(q *orders.Queue) int {
 //     [04 R-COLL-01 §4], and the carried branch slaves the cargo to the carrier
 //     every tick;
 //   - notification event 12 is published exactly once [04 §10.2];
-//   - the unload validates the site, releases with request mode 1, and leaves
-//     the cargo standing on the terrain and stamped in the GROUND plane;
+//   - the unload validates the site and releases with request mode 1, and the
+//     release writes NO position: the cargo holds the hang point it had before
+//     the release tick, not the drop point's footprint centre, and is not yet
+//     in the ground plane [04 R-AIR-01 §10] item 2;
+//   - the cargo's OWN next mover tick commits at that actual X/Z, stamps the
+//     ground word there, and lets [04 R-MOV-01 §5]'s `upright`-without-
+//     `canhover` branch write `terrainHeight(XZ) << 16`;
 //   - notification event 13 is published exactly once;
 //   - neither executor draws from the simulation stream: §10.2's two phase
 //     tables name no random value anywhere (I4).
@@ -179,7 +190,12 @@ func TestAtlasLoadsCarriesAndUnloadsAPeewee(t *testing.T) {
 		t.Fatal("VTOL_Unload missing from the order table")
 	}
 	q.Push(unload, orders.Node{Owner: carrier.Handle, GoalX: dropX, GoalY: carrier.Y, GoalZ: dropZ, Deadline: -1})
+	// The hang point the cargo holds going INTO the tick that releases it. The
+	// carried branch slaves the cargo every tick while it is aboard, so this is
+	// what "the cargo keeps its hang position" has to mean at the release.
+	var hangX, hangZ, hangY numeric.Fixed
 	for ; tick <= 2400 && cargo.Attachment.Carrier != 0; tick++ {
+		hangX, hangY, hangZ = cargo.X, cargo.Y, cargo.Z
 		q.Pump(carrier, tick)
 		runMovementTick(sys, tick, w)
 	}
@@ -187,16 +203,19 @@ func TestAtlasLoadsCarriesAndUnloadsAPeewee(t *testing.T) {
 		t.Fatalf("the cargo was never released; record phase %d, carrier at %d,%d",
 			transportHeadPhase(q), carrier.X.Raw()>>16, carrier.Z.Raw()>>16)
 	}
-	// The released cargo stands on the footprint the validator accepted, at the
-	// terrain height, in the grounded mode the release requests.
-	anchorX, anchorZ := world.PlacementAnchor(dropX, dropZ, 1, 1)
-	wantX, wantZ := world.PlacementCenter(anchorX, anchorZ, 1, 1)
-	if cargo.X != wantX || cargo.Z != wantZ {
-		t.Fatalf("released cargo at %d,%d, want the drop point's footprint centre %d,%d [04 §10.2]",
-			cargo.X.Raw()>>16, cargo.Z.Raw()>>16, wantX.Raw()>>16, wantZ.Raw()>>16)
+	// The release writes NO position [04 R-AIR-01 §10] item 2: the detach's
+	// apply step writes linkage and the mover mode only.
+	if cargo.X != hangX || cargo.Z != hangZ || cargo.Y != hangY {
+		t.Fatalf("the release moved the cargo from its hang point %d,%d,%d to %d,%d,%d; the detach writes no X, Y or Z [04 R-AIR-01 §10]",
+			hangX.Raw()>>16, hangY.Raw()>>16, hangZ.Raw()>>16, cargo.X.Raw()>>16, cargo.Y.Raw()>>16, cargo.Z.Raw()>>16)
 	}
-	if want := sys.Terrain.HeightAt(cargo.X, cargo.Z); cargo.Y != want {
-		t.Fatalf("released cargo Y=%d, want the terrain height %d — it is hovering, not standing", cargo.Y.Raw()>>16, want.Raw()>>16)
+	// And specifically not the snap the build used to perform: the cargo is NOT
+	// re-centred onto the footprint anchor the executor validated.
+	anchorX, anchorZ := world.PlacementAnchor(dropX, dropZ, 1, 1)
+	centreX, centreZ := world.PlacementCenter(anchorX, anchorZ, 1, 1)
+	if cargo.X == centreX && cargo.Z == centreZ {
+		t.Fatalf("released cargo sits exactly on the validated footprint centre %d,%d; retail leaves it at its hang point [04 R-AIR-01 §10]",
+			centreX.Raw()>>16, centreZ.Raw()>>16)
 	}
 	if cargo.Move.Mode&0x3 != 1 {
 		t.Fatalf("released cargo mover mode %d, want the grounded 1 [04 R-AIR-01 §9]", cargo.Move.Mode)
@@ -204,6 +223,33 @@ func TestAtlasLoadsCarriesAndUnloadsAPeewee(t *testing.T) {
 	coll := sys.Collisions[cargo.Handle]
 	if coll == nil {
 		t.Fatal("released cargo has no collision record")
+	}
+	// Not yet in the ground plane: the ground words are cleared and restamped
+	// by the cargo's own next commit, not by the release [04 R-AIR-01 §10].
+	if _, present := sys.Grid.OccupantAtPlane(PlaneGround, coll.CachedAnchor); present {
+		t.Fatal("the release stamped the ground word itself; the cargo's next mover tick owns that [04 R-AIR-01 §10]")
+	}
+	// The cargo's OWN commit is what settles the rest: it runs at the cargo's
+	// actual X/Z — which is why the mover record still carries the hang point
+	// and not the validated anchor's centre — and [04 R-MOV-01 §5] writes Y.
+	if coll.X != int32(cargo.X.Raw()) || coll.Z != int32(cargo.Z.Raw()) {
+		t.Fatalf("mover record at %d,%d, unit at %d,%d: the commit must run at the cargo's actual position [04 R-AIR-01 §10]",
+			coll.X>>16, coll.Z>>16, cargo.X.Raw()>>16, cargo.Z.Raw()>>16)
+	}
+	cq := orders.QueueForUnit(cargo)
+	cq.Pump(cargo, tick) // the `BeCarried` the attach armed retires: its carrier link is null
+	// The move order is the T25 in `TryUnload`: this build's mover tick returns
+	// before the ground branch for a unit with no order, so an orderless cargo
+	// never reaches the commit retail runs unconditionally. The order only gets
+	// the tick to run; every value asserted below is the commit's.
+	move := orders.Lookup("Move_Ground")
+	cq.Push(move, orders.Node{Owner: cargo.Handle, GoalX: dropX, GoalY: cargo.Y, GoalZ: dropZ + world.CellToWorld(2), Deadline: -1})
+	cq.Pump(cargo, tick)
+	runMovementTick(sys, tick, w)
+	tick++
+	if want := sys.Terrain.HeightAt(cargo.X, cargo.Z); cargo.Y != want {
+		t.Fatalf("released cargo Y=%d after its first commit, want the `upright` branch's terrain height %d [04 R-MOV-01 §5]",
+			cargo.Y.Raw()>>16, want.Raw()>>16)
 	}
 	if got, present := sys.Grid.OccupantAtPlane(PlaneGround, coll.CachedAnchor); !present || got != coll.ID {
 		t.Fatalf("released cargo ground occupancy = (%d,%t), want its own id %d [04 R-COLL-01 §4]", got, present, coll.ID)
@@ -329,5 +375,179 @@ func TestLoadEntryGatesRejectInOrder(t *testing.T) {
 	}
 	if got := transportCountKind(*kinds, 7); got != 1 {
 		t.Fatalf("size gate raised %d `cant` cues, want one [04 §10.2]", got)
+	}
+}
+
+// TestUnloadGateWordsAndTheCannotGetThereInterrupt locks the three unload gate
+// assignments and the interrupt bit [04 R-AIR-01 §10] item 4: phase 0 `= 0xE8`,
+// phase 1 `= 0xE8`, phase 2 `= 0xE0` — written by assignment, not OR — and the
+// phase-2 interrupt is satisfied bit `0x40`, the "cannot get there" outcome of
+// [04 R-ORD-01 §0], tested BEFORE the second anchor recompute and validation.
+//
+// The ordering is what the interrupt case proves: the drop site is made
+// invalid, so a revalidation would emit `Unable to unload unit`. With `0x40`
+// set the executor returns 9 having raised no cue at all, which can only happen
+// if the bit was tested first.
+func TestUnloadGateWordsAndTheCannotGetThereInterrupt(t *testing.T) {
+	sys, w, carrier, cargo, _, _ := transportFixture(t)
+	if !AttachCargoMode(w, carrier.Handle, cargo.Handle, -1, 0) {
+		t.Fatal("fixture attach failed")
+	}
+	carrier.Move.Mode = 2
+	if fl := sys.Flights[carrier.Handle]; fl != nil {
+		fl.Mode = 2
+	}
+	dropX, dropZ := world.CellToWorld(44), world.CellToWorld(20)
+	n := &orders.Node{Owner: carrier.Handle, GoalX: dropX, GoalY: carrier.Y, GoalZ: dropZ, Deadline: -1}
+
+	for _, row := range []struct {
+		phase uint8
+		gate  uint32
+	}{{0, 0xE8}, {1, 0xE8}, {2, 0xE0}} {
+		n.Phase = row.phase
+		n.DynamicGate = 0x1 // a stale bit an assignment must drop and an OR would keep
+		if code := sys.legVTOLUnload(carrier, n, 0, 1); code != 1 {
+			t.Fatalf("unload phase %d gave result %d, want 1 [04 §10.2]", row.phase, code)
+		}
+		if n.DynamicGate != row.gate {
+			t.Fatalf("unload phase %d gate = %#x, want the assignment %#x [04 R-AIR-01 §10]", row.phase, n.DynamicGate, row.gate)
+		}
+	}
+	if cargo.Attachment.Carrier != 0 {
+		t.Fatal("phase 2 did not release the cargo")
+	}
+
+	// The interrupt, on a fresh record whose site the validator would refuse.
+	sys2, w2, carrier2, cargo2, _, kinds2 := transportFixture(t)
+	if !AttachCargoMode(w2, carrier2.Handle, cargo2.Handle, -1, 0) {
+		t.Fatal("fixture attach failed")
+	}
+	carrier2.Move.Mode = 2
+	cellX, cellZ := world.PlacementAnchor(dropX, dropZ, 1, 1)
+	cell := sys2.Terrain.PlotAt(cellX, cellZ)
+	if cell == nil {
+		t.Fatalf("drop cell %d,%d off the fixture map", cellX, cellZ)
+	}
+	cell.SetFeature(0xFFFB)
+	n2 := &orders.Node{Owner: carrier2.Handle, Phase: 2, Param1: uint32(cargo2.Handle), GoalX: dropX, GoalY: carrier2.Y, GoalZ: dropZ, Deadline: -1}
+	*kinds2 = (*kinds2)[:0]
+	if code := sys2.legVTOLUnload(carrier2, n2, transportUnloadInterruptMask, 1); code != 9 {
+		t.Fatalf("the `cannot get there` interrupt gave result %d, want 9 [04 R-AIR-01 §10]", code)
+	}
+	if len(*kinds2) != 0 {
+		t.Fatalf("the interrupt raised %d status cues; it returns 9 BEFORE the revalidation that would emit one [04 R-AIR-01 §10]", len(*kinds2))
+	}
+	if cargo2.Attachment.Carrier != carrier2.Handle {
+		t.Fatal("the interrupted unload released its cargo")
+	}
+	// Without the bit the same record reaches the revalidation and its message.
+	if code := sys2.legVTOLUnload(carrier2, n2, 0, 1); code != 9 {
+		t.Fatalf("the refused revalidation gave result %d, want 9 [04 §10.2]", code)
+	}
+	if transportCountKind(*kinds2, transportStatusCant) != 1 {
+		t.Fatalf("the refused revalidation raised %d `cant` cues, want one [04 §10.2]", transportCountKind(*kinds2, transportStatusCant))
+	}
+}
+
+// TestLoadPhaseFourInstallsNoClimbAway locks [04 R-AIR-01 §10] item 3's
+// correction to §10.2's phase-4 row: the phase builds a climb-away marker on
+// the carrier's own position and NEVER installs it, so the record's payload
+// stays the phase-3 follow marker on the cargo and a loaded transport climbs
+// only when its next order commands it. It still ORs `0xE0` into the gate.
+func TestLoadPhaseFourInstallsNoClimbAway(t *testing.T) {
+	sys, _, carrier, cargo, _, kinds := transportFixture(t)
+	carrier.Move.Mode = 2
+	if fl := sys.Flights[carrier.Handle]; fl != nil {
+		fl.Mode = 2
+	}
+	n := &orders.Node{Owner: carrier.Handle, Target: cargo.Handle, Phase: 3, Deadline: -1}
+	if code := sys.legVTOLPickup(carrier, n, 0, 1); code != 1 {
+		t.Fatalf("load phase 3 gave result %d, want 1 [04 §10.2]", code)
+	}
+	follow := sys.AirGoalPayload(carrier.Handle)
+	if follow == nil {
+		t.Fatal("load phase 3 installed no follow marker [04 §10.2]")
+	}
+
+	n.Phase = 4
+	n.DynamicGate = 0
+	if code := sys.legVTOLPickup(carrier, n, 0, 1); code != 1 {
+		t.Fatalf("load phase 4 gave result %d, want 1 [04 §10.2]", code)
+	}
+	if cargo.Attachment.Carrier != carrier.Handle {
+		t.Fatal("load phase 4 did not attach the cargo [04 §10.2]")
+	}
+	if transportCountKind(*kinds, TransportEventAttach) != 1 {
+		t.Fatalf("event 12 published %d times, want one [04 §10.2]", transportCountKind(*kinds, TransportEventAttach))
+	}
+	if got := sys.AirGoalPayload(carrier.Handle); got != follow {
+		t.Fatalf("load phase 4 replaced the record's payload; the climb-away it builds is never installed [04 R-AIR-01 §10]")
+	}
+	if n.DynamicGate != airLegGate {
+		t.Fatalf("load phase 4 gate = %#x, want |= 0xE0 [04 §10.2]", n.DynamicGate)
+	}
+}
+
+// TestBeCarriedReArmPurgesTheFrontChainInKeepSurvivorsMode locks
+// [04 R-AIR-01 §10] item 6: the re-arm purges the cargo's FRONT chain in
+// keep-survivors mode — every record whose static-mask copy lacks bit `0x4` is
+// unlinked, cleaned up and freed, while the nine bit-2 descriptors survive
+// [04 R-MOV-03 §6] — and only then head-inserts a `BeCarried`, copying the
+// displaced head's auto-operation flag onto it. The previous placeholder
+// head-inserted without purging and kept orders retail discards.
+func TestBeCarriedReArmPurgesTheFrontChainInKeepSurvivorsMode(t *testing.T) {
+	sys, _, carrier, cargo, _, _ := transportFixture(t)
+	q := orders.QueueForUnit(cargo)
+	move := orders.Lookup("Move_Ground")
+	survivor := orders.Lookup("BuildingBuild") // static gate bit 2 [04 §3.1]
+	if move == 0 || survivor == 0 {
+		t.Fatal("Move_Ground or BuildingBuild missing from the order table")
+	}
+	q.Push(survivor, orders.NewNodeForOrder(survivor, 0, 0, 0, 0, 0, cargo.Handle, false))
+	// Queued, so the insertion itself does not run the Replace purge that would
+	// remove the move before the re-arm gets to it [04 §3.3].
+	q.Push(move, orders.NewNodeForOrder(move, 0, 1<<16, 0, 1<<16, 0, cargo.Handle, true))
+	// The auto-operation flag goes on after both insertions: an insertion drops
+	// a LEADING auto record before it adds [04 §3.3].
+	q.Primary()[0].Flags |= orders.FlagAutoOp
+	if q.LenPrimary() != 2 {
+		t.Fatalf("fixture queue holds %d records, want 2", q.LenPrimary())
+	}
+
+	sys.armBeCarried(cargo, carrier.Handle)
+
+	primary := q.Primary()
+	if len(primary) != 2 {
+		t.Fatalf("after the re-arm the front chain holds %d records, want the survivor plus `BeCarried`", len(primary))
+	}
+	if primary[0].ID != orders.Lookup("BeCarried") {
+		t.Fatalf("front head is %q, want the head-inserted `BeCarried` [04 R-AIR-01 §10]", orders.DescriptorFor(primary[0].ID).Name)
+	}
+	if primary[0].Flags&orders.FlagAutoOp == 0 {
+		t.Fatal("`BeCarried` did not inherit the displaced head's auto-operation flag [04 R-AIR-01 §10]")
+	}
+	if primary[1].ID != survivor {
+		t.Fatalf("record behind the head is %q, want the surviving `BuildingBuild` [04 R-MOV-03 §6]", orders.DescriptorFor(primary[1].ID).Name)
+	}
+	for _, n := range primary {
+		if n.ID == move {
+			t.Fatal("the unprotected `Move_Ground` survived the keep-survivors purge [04 R-AIR-01 §10]")
+		}
+	}
+}
+
+// TestFactoryProductLinkPassesRequestModeOne locks [04 R-AIR-01 §10]'s closing
+// aside: the factory product's builder link — the attachment helper's fourth
+// caller — passes request mode 1, the grounded mode ([04 R-FAC-02 §1] item 4).
+// The write is direct, so a product that somehow held another mode is put back
+// on the ground plane by the link itself.
+func TestFactoryProductLinkPassesRequestModeOne(t *testing.T) {
+	_, w, carrier, cargo, _, _ := transportFixture(t)
+	cargo.Move.Mode = 2
+	if !AttachFactoryProduct(w, carrier.Handle, cargo.Handle, 0) {
+		t.Fatal("factory product attach failed")
+	}
+	if cargo.Move.Mode&0x3 != 1 {
+		t.Fatalf("product mover mode %d after the builder link, want the grounded 1 [04 R-FAC-02 §1]", cargo.Move.Mode)
 	}
 }

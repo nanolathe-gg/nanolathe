@@ -254,25 +254,28 @@ func TestPieceDrawOrder(t *testing.T) {
 	if a != 255 {
 		t.Fatalf("alpha")
 	}
-	// Shade row placeholder 16 [03 §4.3] TODO(question) — ensure ShadeRGBA uses Shade[16][idx]
+	// Exercise ShadeRGBA/PrimitiveRGBA at an arbitrary real row (16 here is
+	// just a test fixture, not the deleted presentation-fallback constant)
+	// [03 §4.3].
+	const testRow = 16
 	for row := 0; row < 32; row++ {
 		for col := 0; col < 256; col++ {
 			tables.Shade[row][col] = byte((col + row) % 256)
 		}
 	}
-	rs, gs, bs, _ := ShadeRGBA(tables, 5, ModelShadeMidRow) // idx 5 -> shade[16][5]=(5+16)%256=21 -> Base[21]
+	rs, gs, bs, _ := ShadeRGBA(tables, 5, testRow) // idx 5 -> shade[16][5]=(5+16)%256=21 -> Base[21]
 	if rs != 21 || gs != 255-21 || bs != 10 {
 		t.Fatalf("ShadeRGBA: got %d %d %d want 21 %d 10", rs, gs, bs, 255-21)
 	}
 	// PrimitiveRGBA bypass vs shade [03 §4.3]
-	primColored := PrimitiveDraw{ColorIndex: 5, IsColored: 1, ShadeRow: ModelShadeMidRow, TextureName: "foo"}
+	primColored := PrimitiveDraw{ColorIndex: 5, IsColored: 1, ShadeRow: testRow, TextureName: "foo"}
 	rc, gc, bc, _ := PrimitiveRGBA(tables, primColored)
 	if rc != 5 {
 		t.Fatalf("flat-colored bypass SHD: got %d want 5", rc)
 	}
 	_ = gc
 	_ = bc
-	primTex := PrimitiveDraw{ColorIndex: 5, IsColored: 0, ShadeRow: ModelShadeMidRow, TextureName: "tex"}
+	primTex := PrimitiveDraw{ColorIndex: 5, IsColored: 0, ShadeRow: testRow, TextureName: "tex"}
 	rt, gt, bt, _ := PrimitiveRGBA(tables, primTex)
 	if rt != 21 {
 		t.Fatalf("textured via SHD: got %d want 21", rt)
