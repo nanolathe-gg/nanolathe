@@ -76,6 +76,9 @@ func (b *battleSession) ensurePostBattleController() {
 			cfg.MissionIndex = b.sess.CampaignSlot
 		}
 		cfg.Difficulty = b.sess.Mission.Difficulty
+		// Players is the Summary count a between-missions save carries; the
+		// load screen renders `???` for a zero value [08 R-SAVE-02 §3].
+		cfg.Players = int(session.RetailPlayerCount(b.sess))
 		if cfg.Difficulty < 0 && b.shell != nil {
 			cfg.Difficulty = b.shell.missionDifficulty()
 		}
@@ -134,6 +137,11 @@ func (b *battleSession) stepPostBattle(delta float64, in *input.State, cl *clien
 	if b == nil || b.postBattle == nil {
 		return
 	}
+	if b.shell != nil && b.shell.saveLoadPanelActive() {
+		// The save/load dialog owns input while it is up [07 R-FE-01 §8].
+		b.shell.menuInput(cl)
+		return
+	}
 	if delta > 0 {
 		b.postBattleClock += delta * 30
 	}
@@ -159,8 +167,26 @@ func (b *battleSession) stepPostBattle(delta float64, in *input.State, cl *clien
 	if b.postBattle.State() != session.PostBattleEndMission || b.hud == nil {
 		return
 	}
-	if action := b.hud.handleResultInput(in); action != ui.ResultActionNone {
-		b.doResultAction(action, cl)
+	name, ok := b.hud.resultControlName(in)
+	if !ok {
+		return
+	}
+	switch ui.Key(name) {
+	case "savegame":
+		// ENDMSN's SaveGame opens the save dialog, and a save taken there is
+		// the between-missions bank that carries campaign progress across
+		// process runs [08 R-CAMP-01 §8] [07 R-FE-01 §10].
+		if b.shell != nil {
+			b.shell.openSaveLoadScreenReporting(saveScreenMode, saveLoadFromResults)
+		}
+	case "loadgame":
+		if b.shell != nil {
+			b.shell.openSaveLoadScreenReporting(loadScreenMode, saveLoadFromResults)
+		}
+	default:
+		if action := resultActionForControl(name); action != ui.ResultActionNone {
+			b.doResultAction(action, cl)
+		}
 	}
 }
 

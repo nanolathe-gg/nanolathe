@@ -5,7 +5,11 @@ package session
 // This file implements latch, scoring, and registry vs bank split [P0-05]
 // and the P1-01 end-of-mission countdown/teardown [P1-01].
 
-import "math"
+import (
+	"math"
+
+	"github.com/nanolathe/nanolathe/internal/save"
+)
 
 // Latch arms to 4 then decrements ~1/s before latch word bits [P0-05][P1-01].
 // Retail stores an int16 countdown starting at -1, then arms to 4 when <0
@@ -208,7 +212,13 @@ func (l *EndLatch) SettlementFrozen() bool {
 // via the installed software registry path [P0-05].
 // AllMissions uses bit 0, Games uses bit 1 under the DisplaymodeDepth guard,
 // and Difficulty stores the selected difficulty [P0-05].
-// TODO(P0-05): HAPIBANK persistence for Summary/BetweenMissions etc not yet wired; registry vs bank split noted here.
+//
+// The registry is *not* where campaign progress lives. The mission index, the
+// 25-byte Thumbs mark array and the difficulty word are three in-memory items;
+// they persist only through a save bank's Summary account, written by the
+// save screen reached from the results panel or from the in-battle options
+// menu [08 R-CAMP-01 §8 "Progress write"]. ContinuationSummary below is that
+// projection; WriteRetailContinuationSave in retail_save.go is the writer.
 // DisplaymodeDepth guard: Games bit1 only when DisplaymodeDepth==0x100 [P0-05].
 type Registry struct {
 	Difficulty         int // 0/1/2 else fail [P0-05]
@@ -269,6 +279,61 @@ func (b *BankProgress) ApplyCampaignResult(slot int, win bool) {
 	}
 	if slot < len(b.Thumbs) {
 		b.Thumbs[slot] = mark
+	}
+}
+
+// ContinuationSaveMetadata is the caller-owned half of a between-missions
+// save: the typed slot name, the wall-clock game identity and the session
+// counters the campaign identity does not carry. Both wall-clock values are
+// read in the presentation layer, never inside a session [I6]
+// [08 R-SAVE-02 §1].
+type ContinuationSaveMetadata struct {
+	// Description is the name typed into the save screen's GAMENAME edit;
+	// GameID is the wall-clock seconds at the moment of saving
+	// [08 R-SAVE-02 §1].
+	Description string
+	GameID      string
+	// Players is the session's live player count. The load screen renders
+	// `???` for a zero value, so a campaign save carries a nonzero count
+	// [08 R-SAVE-02 §3].
+	Players int32
+	// MaxUnits and GameTime are the Summary's remaining scalars; GameTime is
+	// the global simulation tick, presentation metadata only [08 "Summary"].
+	MaxUnits int32
+	GameTime int32
+}
+
+// ContinuationSummary projects a frozen campaign result into the Summary
+// account the retail writer emits outside a live battle.
+//
+// PostBattleSummary already carries the between-missions quirk: a save taken
+// from the results screen calls Advance before writing `Mission`/`Map`, so it
+// names the **next** mission whenever one exists — win or loss — and the
+// played mission only when it was the last [08 R-CAMP-01 §8
+// "Between-missions save quirk"]. `Map` carries the same string as `Mission`
+// on a campaign save [08 R-CAMP-01 §8 "Progress write"]. The item set and its
+// order are the writer's [08 "Summary"]; `BetweenMissions` = 1 is what routes
+// the load into campaign continuation rather than battle reconstruction
+// [08 "battle versus campaign continuations and timing"]. No `Radar Image`
+// box is written: that box is live-battle only [08 "Summary"].
+func ContinuationSummary(p PostBattleSummary, meta ContinuationSaveMetadata) save.Summary {
+	return save.Summary{
+		MaxUnits:   meta.MaxUnits,
+		Campaign:   p.Campaign,
+		Mission:    p.Mission,
+		MapName:    p.Mission,
+		Difficulty: int32(p.Difficulty),
+		Side:       int32(p.Side),
+		Players:    meta.Players,
+		// Load preflight accepts only campaign or multiplayer; a continuation
+		// is always the campaign type [08 "Summary"].
+		Gametype:        GametypeCampaign,
+		Thumbs:          string(p.Thumbs[:]),
+		BetweenMissions: 1,
+		Description:     meta.Description,
+		GameID:          meta.GameID,
+		GameTime:        meta.GameTime,
+		IsBattle:        false,
 	}
 }
 

@@ -1,0 +1,413 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/gui"
+	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe/nanolathe/internal/save"
+	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe/nanolathe/internal/ui"
+)
+
+// The save and load dialogs live on the frontend panel stack as one authored
+// window over whichever surface opened them [07 R-FE-01 §8]. The screen state
+// is a process singleton for the same reason the client pointer is: there is
+// exactly one shell, and the shell struct is owned by another unit's file.
+var (
+	saveLoadUI     *saveLoadScreen
+	saveLoadPanel  *ui.Panel
+	saveLoadAssets *retailPanelAssets
+)
+
+const (
+	// The two verbatim diagnostics the load screen raises, at the authored
+	// width 320 [08 R-SAVE-02 §2] [07 R-FE-01 §9].
+	retailNoSavedGamesMessage = "There are no saved games to choose from"
+	retailInvalidSaveMessage  = "Invalid savegame file"
+)
+
+// retailSaveLoadGUI is the one authored file both directions are built from
+// [08 R-SAVE-02 §1].
+const retailSaveLoadGUI = "guis/loadgame.gui"
+
+// saveLoadDir is the directory this shell's screens address.
+func (g *gameShell) saveLoadDir() string {
+	if g == nil {
+		return retailSaveDir("")
+	}
+	return retailSaveDir(g.opts.Root)
+}
+
+// openSaveLoadScreen builds the authored window in the requested direction and
+// pushes it over the current surface. The save direction creates `SAVEGAME\`
+// first; the load direction refuses an empty list with the authored message
+// and opens nothing [08 R-SAVE-02 §1] [08 R-SAVE-02 §2] [07 R-FE-01 §8].
+func (g *gameShell) openSaveLoadScreen(mode saveLoadMode, source saveLoadSource) error {
+	if g == nil || g.cs == nil {
+		return fmt.Errorf("nanolathe: save/load screen: no mounted content: logical path %s, providers searched [], expected the authored save dialog", retailSaveLoadGUI)
+	}
+	dir := g.saveLoadDir()
+	if mode == saveScreenMode {
+		// Retail creates the directory when the save screen opens
+		// [07 R-FE-01 §8]. A failure here is reported through the ordinary
+		// message box rather than silently producing an empty list.
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	screen := newSaveLoadScreen(mode, dir, source)
+	if mode == loadScreenMode && len(screen.Entries()) == 0 {
+		// The load screen is closed again and the message shown; the save
+		// screen shows no message for an empty list [08 R-SAVE-02 §2].
+		return g.showRetailMessage(retailNoSavedGamesMessage)
+	}
+	panel, err := g.loadSaveLoadPanel(mode)
+	if err != nil {
+		return err
+	}
+	saveLoadUI = screen
+	saveLoadPanel = panel
+	g.frontend.Panels.Push(panel)
+	g.refreshSaveLoadPanel()
+	return nil
+}
+
+// openSaveLoadScreenReporting is the caller-facing form: a construction
+// failure is surfaced through the ordinary message box rather than dropped.
+func (g *gameShell) openSaveLoadScreenReporting(mode saveLoadMode, source saveLoadSource) {
+	if err := g.openSaveLoadScreen(mode, source); err != nil {
+		reportRetailMessageError(g.showRetailMessage(err.Error()))
+	}
+}
+
+// loadSaveLoadPanel parses `LOADGAME.GUI` once and re-reads only the backdrop
+// when the direction changes [08 R-SAVE-02 §1].
+func (g *gameShell) loadSaveLoadPanel(mode saveLoadMode) (*ui.Panel, error) {
+	window, err := gui.Load(g.cs.fs, retailSaveLoadGUI)
+	if err != nil {
+		return nil, retailFrontendAssetError(g.cs, "retail save dialog GUI unavailable", retailSaveLoadGUI, "the authored save/load window", err)
+	}
+	background, err := formats.LoadPCXFile(g.cs.fs, mode.backdrop())
+	if err != nil {
+		return nil, retailFrontendAssetError(g.cs, "retail save dialog bitmap", mode.backdrop(), "the authored save/load backdrop", err)
+	}
+	saveLoadAssets = &retailPanelAssets{window: window, background: background}
+	panel := ui.NewPanel(window)
+	if panel == nil {
+		return nil, retailFrontendAssetError(g.cs, "retail save dialog GUI unavailable", retailSaveLoadGUI, "the authored save/load window", nil)
+	}
+	return panel, nil
+}
+
+// closeSaveLoadScreen pops the dialog and frees the name, description, side
+// name and radar buffers, which is what `CANCEL` does [08 R-SAVE-02 §1].
+func (g *gameShell) closeSaveLoadScreen() {
+	if g != nil && saveLoadPanel != nil && g.frontend.Panels.Top() == saveLoadPanel {
+		g.frontend.Panels.Pop()
+	}
+	saveLoadUI = nil
+	saveLoadPanel = nil
+	saveLoadAssets = nil
+}
+
+// saveLoadPanelActive reports whether the authored dialog is the active panel.
+func (g *gameShell) saveLoadPanelActive() bool {
+	return g != nil && saveLoadUI != nil && saveLoadPanel != nil && g.activePanel() == saveLoadPanel
+}
+
+// refreshSaveLoadPanel applies the hidden-gadget set, the slot list and the
+// summary panel to the authored window [08 R-SAVE-02 §1] [08 R-SAVE-02 §3].
+func (g *gameShell) refreshSaveLoadPanel() {
+	if saveLoadUI == nil || saveLoadPanel == nil {
+		return
+	}
+	panel := saveLoadPanel
+	for _, name := range []string{"GAMES", "LOAD", "CANCEL", "SLIDER", "GAMENAME", "DELETE", "SaveGame", "LoadGame", "TITLE"} {
+		panel.SetActive(name, true)
+	}
+	for _, name := range saveLoadUI.HiddenControls() {
+		panel.SetActive(name, false)
+	}
+	// The save screen's title is the literal `Save Game`; the stock authored
+	// file carries no `TITLE` gadget, so the write is inert there
+	// [08 R-SAVE-02 §1].
+	if saveLoadUI.Mode() == saveScreenMode {
+		panel.SetText("TITLE", "Save Game")
+	}
+	g.setListItems("GAMES", saveLoadUI.Descriptions(), saveLoadUI.Selected())
+	panel.SetText("GAMENAME", saveLoadUI.Name())
+	summary, ok := save.Summary{}, false
+	if entry, has := saveLoadUI.SelectedEntry(); has {
+		summary, ok = entry.Summary, true
+	}
+	for name, value := range retailSummaryPanelFields(summary, ok, g.retailSideNames()) {
+		panel.SetText(name, value)
+	}
+}
+
+// retailSideNames is the side-name table the `SIDE` field indexes; `???` is
+// what an absent table renders [08 R-SAVE-02 §3].
+//
+// The frontend compiles no catalog of its own — the side table is built at
+// battle entry — so the dialog has no table to index and every selection
+// renders `???`. Wiring the authored side names is a frontend-content task,
+// not a save-screen one; keeping the absent-table branch is the established
+// behavior for exactly this case.
+func (g *gameShell) retailSideNames() []string {
+	return nil
+}
+
+// retailSummaryPanelFields renders the summary panel from the selected file's
+// `Summary` account and nothing else. Every field defaults to the empty string
+// when no entry is selected [08 R-SAVE-02 §3].
+func retailSummaryPanelFields(summary save.Summary, selected bool, sideNames []string) map[string]string {
+	fields := map[string]string{"GAMETYPE": "", "CAMPAIGN": "", "CAMPTEXT": "", "MISSION": "", "TIME": "", "SIDE": "", "DIFF": ""}
+	if !selected {
+		return fields
+	}
+	switch {
+	case summary.Players == 0:
+		fields["GAMETYPE"] = "???"
+	case summary.Gametype == 1:
+		fields["GAMETYPE"] = "Single"
+	default:
+		fields["GAMETYPE"] = fmt.Sprintf("Skirmish (%d players)", summary.Players)
+	}
+	if summary.Gametype == 1 {
+		fields["CAMPAIGN"] = summary.Campaign
+		fields["CAMPTEXT"] = summary.Campaign
+		fields["MISSION"] = summary.Mission
+	} else {
+		fields["MISSION"] = summary.MapName
+	}
+	fields["TIME"] = retailSummaryTime(summary.GameTime)
+	if index := int(summary.Side); index >= 0 && index < len(sideNames) {
+		fields["SIDE"] = sideNames[index]
+	} else {
+		fields["SIDE"] = "???"
+	}
+	// An out-of-range Difficulty indexes past the three-entry table; the result
+	// is Unknown in retail, so nothing is rendered rather than a guessed label.
+	// TODO(question): what the `DIFF` field shows for a Difficulty outside
+	// 0..2 — decider: trace of the data adjacent to the three-entry table
+	// [08 R-SAVE-02 §3].
+	switch summary.Difficulty {
+	case 0:
+		fields["DIFF"] = "Easy"
+	case 1:
+		fields["DIFF"] = "Medium"
+	case 2:
+		fields["DIFF"] = "Hard"
+	}
+	return fields
+}
+
+// retailSummaryTime formats the `Game Time` tick count as `%02d:%02d:%02d`
+// with hours t/108000, minutes (t/1800) mod 60 and seconds (t/30) mod 60 —
+// signed divisions truncating toward zero [08 R-SAVE-02 §3] [I3].
+func retailSummaryTime(t int32) string {
+	return fmt.Sprintf("%02d:%02d:%02d", t/108000, (t/1800)%60, (t/30)%60)
+}
+
+// activateSaveLoadGadget applies one authored control of the dialog. It
+// reports whether the dialog consumed the name, so the shell's own screen
+// dispatch does not also see it.
+func (g *gameShell) activateSaveLoadGadget(name string) bool {
+	if !g.saveLoadPanelActive() {
+		return false
+	}
+	switch saveLoadUI.Activate(name) {
+	case saveLoadCommit:
+		g.commitSaveLoadScreen()
+	case saveLoadDelete:
+		saveLoadUI.deleteSelected()
+		g.refreshSaveLoadPanel()
+	case saveLoadCancel:
+		g.closeSaveLoadScreen()
+	case saveLoadToSave:
+		saveLoadUI.SetMode(saveScreenMode)
+		g.reopenSaveLoadPanel()
+	case saveLoadToLoad:
+		saveLoadUI.SetMode(loadScreenMode)
+		g.reopenSaveLoadPanel()
+	}
+	return true
+}
+
+// reopenSaveLoadPanel re-reads the backdrop for the other direction and
+// re-applies the control set to the same window [08 R-SAVE-02 §1].
+func (g *gameShell) reopenSaveLoadPanel() {
+	if saveLoadUI == nil || saveLoadAssets == nil {
+		return
+	}
+	if background, err := formats.LoadPCXFile(g.cs.fs, saveLoadUI.Mode().backdrop()); err == nil {
+		saveLoadAssets.background = background
+	}
+	g.refreshSaveLoadPanel()
+}
+
+// selectSaveLoadRow commits a `GAMES` list selection.
+func (g *gameShell) selectSaveLoadRow(index int) {
+	if !g.saveLoadPanelActive() {
+		return
+	}
+	saveLoadUI.Select(index)
+	g.refreshSaveLoadPanel()
+}
+
+// commitSaveLoadScreen runs the action button in the current direction.
+func (g *gameShell) commitSaveLoadScreen() {
+	if saveLoadUI == nil {
+		return
+	}
+	if saveLoadUI.Mode() == loadScreenMode {
+		g.commitSaveLoadLoad()
+		return
+	}
+	g.commitSaveLoadWrite()
+}
+
+// commitSaveLoadLoad applies the selected bank. Preflight failures are the
+// verbatim `Invalid savegame file` box and a return to the load screen —
+// nothing is aborted mid-restore, because no battle state has been touched
+// [08 R-SAVE-02 §2]. The CD gates have no backend in this build and are
+// skipped, as the post-battle machine already skips them.
+func (g *gameShell) commitSaveLoadLoad() {
+	entry, ok := saveLoadUI.SelectedEntry()
+	if !ok {
+		return
+	}
+	// The dialog is closed before the route runs: a continuation replaces the
+	// frontend surface and a battle restore replaces the client stage, so the
+	// dialog must not remain on the stack underneath either.
+	g.closeSaveLoadScreen()
+	if err := g.loadRetailSavePath(entry.Path); err != nil {
+		reportRetailMessageError(g.showRetailMessage(retailInvalidSaveMessage))
+	}
+}
+
+// commitSaveLoadWrite writes the bank the current surface owns: a
+// between-missions continuation from the results panel, a live-battle bank
+// from inside a battle [08 R-CAMP-01 §8] [08 "Summary"].
+//
+// TODO(question): whether the save action closes the dialog after writing is
+// not stated — the handler's only established effects are the write itself and
+// the silent truncate-overwrite of a selected slot [08 R-SAVE-02 §1].
+// Placeholder: the dialog stays open and the list is rebuilt, so the new slot
+// is visible without a second trip through the screen.
+func (g *gameShell) commitSaveLoadWrite() {
+	name := saveLoadUI.Name()
+	path := saveLoadUI.CommitPath()
+	if path == "" {
+		// An empty name does nothing: no file, no message [08 R-SAVE-02 §1].
+		return
+	}
+	var err error
+	switch saveLoadUI.Source() {
+	case saveLoadFromResults:
+		err = g.writeBetweenMissionsSave(path, name)
+	case saveLoadFromBattle:
+		err = g.writeBattleSave(path, name)
+	default:
+		// The front end has no game to save; retail only reaches the save
+		// direction from `ARMOPT` and `ENDMSN` [07 R-FE-01 §8].
+		return
+	}
+	if err != nil {
+		reportRetailMessageError(g.showRetailMessage(err.Error()))
+		return
+	}
+	saveLoadUI.Refresh()
+	g.refreshSaveLoadPanel()
+}
+
+// retailSaveGameID is the `Game ID` string: the C-library wall-clock time at
+// the moment of saving, seconds since the epoch [08 R-SAVE-02 §1]. It is read
+// here, in the presentation layer, and never inside a session [I6].
+func retailSaveGameID() string {
+	return fmt.Sprintf("%d", time.Now().Unix())
+}
+
+// writeBetweenMissionsSave writes the continuation bank the results screen's
+// `SaveGame` produces. The writer calls Advance before writing `Mission`/`Map`
+// and `BetweenMissions = 1`, so the bank names the **next** mission whenever
+// one exists — win or loss — and the played mission only when it was the last
+// [08 R-CAMP-01 §8 "Between-missions save quirk"].
+func (g *gameShell) writeBetweenMissionsSave(path, description string) error {
+	if g == nil || g.battle == nil || g.battle.sess == nil {
+		return fmt.Errorf("nanolathe: between-missions save: no results session: logical path save/Summary, providers searched [shell], expected the frozen campaign result")
+	}
+	if g.battle.postBattle == nil {
+		return fmt.Errorf("nanolathe: between-missions save: no results controller: logical path save/Summary, providers searched [shell], expected the installed post-battle controller")
+	}
+	projection := g.battle.postBattle.Summary()
+	if !projection.BetweenMissions {
+		return fmt.Errorf("nanolathe: between-missions save: result is not a campaign continuation: logical path save/Summary, providers searched [post-battle controller], expected a campaign result")
+	}
+	return session.WriteRetailContinuationSave(path, session.ContinuationSummary(projection, g.betweenMissionsMetadata(description)))
+}
+
+// betweenMissionsMetadata is the caller-owned half of the continuation save.
+// The campaign identity itself — including Advance's successor name — is the
+// post-battle controller's frozen projection [08 R-CAMP-01 §8].
+func (g *gameShell) betweenMissionsMetadata(description string) session.ContinuationSaveMetadata {
+	meta := session.ContinuationSaveMetadata{
+		Description: description,
+		GameID:      retailSaveGameID(),
+	}
+	if sess := g.battle.sess; sess != nil {
+		meta.Players = session.RetailPlayerCount(sess)
+		if sess.Clock != nil {
+			meta.GameTime = int32(sess.Clock.GlobalTick)
+		}
+	}
+	return meta
+}
+
+// writeBattleSave writes the live-battle bank through the existing projection
+// and writer. The bulk families are whatever that writer already supports; no
+// box is extended here [08 "Save-file organization"].
+func (g *gameShell) writeBattleSave(path, description string) error {
+	if g == nil || g.battle == nil || g.battle.sess == nil {
+		return fmt.Errorf("nanolathe: battle save: no live battle: logical path save, providers searched [shell], expected a composed battle")
+	}
+	sess := g.battle.sess
+	summary := session.RetailBattleSummary(sess, description, retailSaveGameID())
+	camera := save.Camera{}
+	if g.cam != nil {
+		camera.XPosition = g.cam.X
+		camera.ZPosition = g.cam.Z
+	}
+	in, err := sess.RetailBattleSaveInputs(summary, camera)
+	if err != nil {
+		return err
+	}
+	return sess.WriteRetailSave(path, in)
+}
+
+// resultControlName mirrors the authored ENDMSN release-inside gesture but
+// yields the control's name rather than a typed route. The two dialog buttons
+// of the ENDMSN control set — `SaveGame` and `LoadGame` — are not routes in
+// the ResultAction vocabulary, so the name is what the post-battle owner needs
+// [08 R-CAMP-01 §8] [07 §3] [07 §11].
+func (h *retailBattleHUD) resultControlName(in *input.State) (string, bool) {
+	if h == nil || h.resultPanel == nil || in == nil || in.Mouse == nil {
+		return "", false
+	}
+	mx, my := int32(in.Mouse.X), int32(in.Mouse.Y)
+	if in.Mouse.Pressed(input.MouseButtonLeft) {
+		h.resultPanel.Press(mx, my)
+	}
+	if !in.Mouse.Released(input.MouseButtonLeft) {
+		return "", false
+	}
+	action := h.resultPanel.ReleaseAction(mx, my)
+	if action.Kind != ui.ActionActivate {
+		return "", false
+	}
+	return action.Gadget, true
+}

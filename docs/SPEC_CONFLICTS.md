@@ -780,6 +780,23 @@ catalog loader keyed on the entry's provider kind, with fixtures packed.
 **Contract changed:** none; records why `CompileUnits` is more permissive
 than [02 R-CAT-01 §4].
 
+## SC25 — Stock `loadgame.gui` authors fewer gadgets than `[08 R-SAVE-02 §1]` lists
+
+**Spec** `[08 R-SAVE-02 §1]` names the save/load screen's gadget vocabulary
+including `TITLE`, `CAMPAIGN`, `CAMPTEXT` and `LoadGame`.
+
+**Observed** (WU-19-11, 2026-09-01): the reference install's `guis/loadgame.gui`
+(4130 bytes) authors `HEADER GAMES LOAD CANCEL SLIDER GAMENAME GAMETYPE MISSION
+TIME SIDE RADAR DIFF DELETE SaveGame` — none of the four above. The screen
+code sets those four by name, so the writes are inert rather than wrong.
+
+**Decision:** keep the writes (a mod or a later patch may author them); treat
+the four as optional gadgets. The section's list is a superset of stock
+content, not a contract that stock content satisfies.
+
+**Status:** open — a census of the other language/patch archives' copies
+would settle whether any stock variant authors them.
+
 ## How to add to this file
 
 One section per conflict: what the spec says, what was observed and how, the

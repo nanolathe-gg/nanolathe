@@ -3,10 +3,13 @@ package session
 import (
 	"encoding/binary"
 	"fmt"
+	"path/filepath"
+	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/features"
+	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
@@ -33,9 +36,10 @@ type RetailSaveInputs struct {
 	// transient writer state rather than retained Unit fields [08 R-SAVE-02 §6].
 	UnitWriterScratch map[pool.Handle]units.RetailUnitWriterScratch
 
-	// Mapping has no exact source in the current runtime. A non-nil value is
-	// therefore required for a live save and is copied as supplied [08
-	// R-SAVE-02 §12].
+	// Mapping is required for a live save and copied as supplied [08
+	// R-SAVE-02 §12]. RetailMappingImage below is the runtime source; a caller
+	// that owns its own image (a load round-trip, a fixture) may still supply
+	// one directly.
 	Mapping []byte
 
 	HasAlliances bool
@@ -88,8 +92,9 @@ func ProjectRetailSession(s *Session, in RetailSaveInputs) (save.RetailProjectio
 	}
 
 	// Terrain-owned save views are the sole source for both byte rasters. The
-	// Mapping box is different: the current runtime intentionally has no exact
-	// owner, so an omitted caller value is a hard error [08 R-SAVE-02 §12].
+	// Mapping box is different: its runtime owner is the visibility service,
+	// not the terrain, so an omitted caller value is a hard error rather than
+	// a silent empty grid [08 R-SAVE-02 §12].
 	if s.World != nil {
 		metal, err := s.World.RetailMetalImage()
 		if err != nil {
@@ -292,4 +297,220 @@ func (s *Session) WriteRetailSave(path string, in RetailSaveInputs) error {
 		return err
 	}
 	return save.WriteFile(path, data)
+}
+
+// RetailSaveDirName is the directory the save screen enumerates and writes
+// into, relative to the install root [08 R-SAVE-02 §1].
+const RetailSaveDirName = "savegame"
+
+// RetailSaveExt is the extension the path builder appends after the strip
+// [08 "File naming and write policy"].
+const RetailSaveExt = ".SAV"
+
+// RetailSavePath assembles `<dir>/<name>.SAV` under retail's normalization:
+// the assembled path is truncated at its **last** dot and the extension is
+// appended. The strip is deliberately not path-component aware, so a dot in a
+// directory name is hit too, and a typed name of `v1.2 final` saves as
+// `v1.SAV` [08 "File naming and write policy"] [08 R-SAVE-02 §1].
+//
+// An empty name yields an empty path: retail's save action does nothing at
+// all for an empty GAMENAME — no file and no message [08 R-SAVE-02 §1].
+func RetailSavePath(dir, name string) string {
+	if strings.TrimSpace(name) == "" {
+		return ""
+	}
+	assembled := name
+	if dir != "" {
+		assembled = filepath.Join(dir, name)
+	}
+	if dot := strings.LastIndex(assembled, "."); dot >= 0 {
+		assembled = assembled[:dot]
+	}
+	return assembled + RetailSaveExt
+}
+
+// WriteRetailContinuationSave writes a between-missions bank. A continuation
+// carries the Summary account and nothing else — there is no battle state in
+// it, which is exactly why the loader's BetweenMissions gate can route it to
+// the fresh mission spawner [08 "battle versus campaign continuations and
+// timing"] [08 R-CAMP-01 §8].
+func WriteRetailContinuationSave(path string, summary save.Summary) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("nanolathe: retail continuation save: empty path: logical path save/Summary, providers searched [caller], expected an assembled SAVEGAME path")
+	}
+	if summary.BetweenMissions != 1 {
+		return fmt.Errorf("nanolathe: retail continuation save: BetweenMissions is %d: logical path save/Summary, providers searched [caller], expected the continuation marker 1", summary.BetweenMissions)
+	}
+	data, err := save.RetailProjection{Summary: summary}.Bytes()
+	if err != nil {
+		return err
+	}
+	return save.WriteFile(path, data)
+}
+
+// RetailMappingImage returns the Mapping box bytes for a live battle.
+//
+// The Mapping box is "the mapping grid verbatim", one unnamed box of
+// `(width x height) >> 1` bytes [08 R-SAVE-02 §12]. That grid is the
+// explored-memory word grid of [03 §3.1] — the same grid the share screen's
+// merge walks, `(cell width x cell height) / 4` sixteen-bit words with ten
+// usable player bits [05 R-SHARE-01 §6] — which the visibility service owns.
+// The words are stored in their in-memory little-endian order.
+func RetailMappingImage(s *Session) ([]byte, error) {
+	if s == nil || s.Vis == nil || s.World == nil {
+		return nil, fmt.Errorf("nanolathe: retail save: Mapping source is unavailable: logical path session/save/Mapping, providers searched [Session.Vis], expected the explored-memory word grid")
+	}
+	words := s.Vis.WordMask()
+	cells := int64(s.World.CellW) * int64(s.World.CellH)
+	want := cells >> 2
+	if want <= 0 || int64(len(words)) != want {
+		return nil, fmt.Errorf("nanolathe: retail save: Mapping grid has %d words, expected %d: logical path session/save/Mapping, providers searched [Session.Vis], expected one word per four terrain cells", len(words), want)
+	}
+	out := make([]byte, len(words)*2)
+	for i, word := range words {
+		binary.LittleEndian.PutUint16(out[i*2:], word)
+	}
+	return out, nil
+}
+
+// RetailBattleSaveInputs assembles the caller-owned side of a live-battle
+// save from the session itself.
+//
+// StableIDs is the unit's pool slot: retail's save identities are "stable
+// identifiers rather than native pointers: unit slot zero is null and each
+// live unit's slot index is its stable identifier"
+// [08 "Account inventory"] [08 R-SAVE-02 §6].
+//
+// UnitWriterScratch stays zero. Word bits 17..19 of the packed status word are
+// "never written" by the retail writer — they carry whatever stack residue the
+// writer's frame held, and the reader does not consume them
+// [08 R-SAVE-02 §6 "the packed status word"]. Nanolathe has no such residue,
+// so the honest value is zero rather than an invented pattern.
+func (s *Session) RetailBattleSaveInputs(summary save.Summary, camera save.Camera) (RetailSaveInputs, error) {
+	if s == nil || s.Units == nil {
+		return RetailSaveInputs{}, fmt.Errorf("nanolathe: retail save inputs: no live battle: logical path session/save, providers searched [Session], expected a composed battle")
+	}
+	mapping, err := RetailMappingImage(s)
+	if err != nil {
+		return RetailSaveInputs{}, err
+	}
+	in := RetailSaveInputs{
+		Summary:           summary,
+		Camera:            camera,
+		StableIDs:         make(map[pool.Handle]uint16),
+		UnitWriterScratch: make(map[pool.Handle]units.RetailUnitWriterScratch),
+		Mapping:           mapping,
+		Meteor:            retailMeteorScalars(s.Meteor),
+	}
+	for slot := 1; slot < s.Units.TotalRecords(); slot++ {
+		h := pool.Handle(slot)
+		if s.Units.Unit(h) == nil {
+			continue
+		}
+		if slot > 0xffff {
+			return RetailSaveInputs{}, fmt.Errorf("nanolathe: retail save inputs: unit slot %d exceeds the 16-bit stable identifier: logical path save/Units, providers searched [Session.Units], expected a slot below 65536", slot)
+		}
+		in.StableIDs[h] = uint16(slot)
+		in.UnitWriterScratch[h] = units.RetailUnitWriterScratch{}
+	}
+	return in, nil
+}
+
+// retailMeteorScalars projects the live shower into the nine integer items of
+// the Meteor account. The first five globals round-trip whole; the four
+// coordinates are sixteen-bit globals the writer sign-extends to the item's
+// integer width [08 "Account inventory"].
+func retailMeteorScalars(m MeteorState) save.MeteorScalars {
+	boolean := func(v bool) int32 {
+		if v {
+			return 1
+		}
+		return 0
+	}
+	return save.MeteorScalars{
+		Enabled:        boolean(m.Enabled),
+		Active:         boolean(m.Active),
+		NextStrikeTime: int32(m.NextStrike),
+		TimeStrikeEnds: int32(m.StrikeEnds),
+		NextHitTime:    int32(m.NextHit),
+		OriginX:        int32(int16(m.OriginX)),
+		OriginZ:        int32(int16(m.OriginZ)),
+		TargetX:        int32(int16(m.TargetX)),
+		TargetZ:        int32(int16(m.TargetZ)),
+	}
+}
+
+// RetailBattleSummary projects a live battle into the Summary account the
+// retail writer emits from inside a battle: it names the **current** mission
+// and omits `BetweenMissions`, which is what routes its load through battle
+// restoration rather than campaign continuation [08 R-CAMP-01 §8
+// "Between-missions save quirk"] [08 "Summary"].
+//
+// `Description` is the name typed into the save screen and `Game ID` the
+// wall-clock seconds at the moment of saving, so both are caller-owned [08
+// R-SAVE-02 §1] [I6]. The multiplayer rule integers are emitted only for
+// game type 2 [08 "Summary"].
+func RetailBattleSummary(s *Session, description, gameID string) save.Summary {
+	if s == nil {
+		return save.Summary{}
+	}
+	summary := save.Summary{
+		// `maxunits` has no runtime owner in this build; the loader's default
+		// for a missing item is 0, which is what an omitted value means
+		// [08 "Summary"].
+		Description: description,
+		GameID:      gameID,
+		IsBattle:    true,
+	}
+	if s.Clock != nil {
+		summary.GameTime = int32(s.Clock.GlobalTick)
+	}
+	campaign := s.Mission != nil && s.Mission.Type == mission.TypeCampaign
+	if campaign {
+		summary.Gametype = GametypeCampaign
+		summary.Campaign = s.Mission.CampaignPath
+		summary.Mission = s.Mission.CampaignMissionName
+		summary.MapName = s.Mission.CampaignMissionName
+		summary.Difficulty = int32(s.Mission.Difficulty)
+		summary.Players = RetailPlayerCount(s)
+		summary.Thumbs = string(s.Progress.Thumbs[:])
+	} else {
+		// Skirmish is session kind 2, the same game type the summary panel
+		// renders as `Skirmish (%d players)` [08 R-SAVE-02 §3] [08 R-SAVE-02 §4].
+		summary.Gametype = GametypeMultiplayer
+		summary.IsMultiplayer = true
+		summary.MapName = s.Skirmish.MapName
+		summary.Mission = s.Skirmish.MapName
+		summary.Difficulty = int32(s.Skirmish.Difficulty)
+		summary.Players = int32(s.Skirmish.NumPlayers)
+		summary.CommanderDeath = int32(s.Skirmish.CommanderDeath)
+		summary.Location = int32(s.Skirmish.Location)
+		summary.Mapping = int32(s.Skirmish.Mapping)
+		summary.LineOfSight = int32(s.Skirmish.LineOfSight)
+		summary.LineOfSightType = int32(s.Skirmish.LOSType)
+	}
+	if int(s.LocalOwner) < len(s.Skirmish.Players) {
+		summary.Side = int32(s.Skirmish.Players[s.LocalOwner].Side)
+	}
+	// The `Radar Image` box is a presentation preview the load dispatcher never
+	// restores [08 "Account inventory"]. This build has no producer for it, so
+	// no box is written and the load screen simply shows no preview.
+	return summary
+}
+
+// RetailPlayerCount is the session's live player count, the value the Summary
+// `Players` item carries. The load screen's summary panel renders `???` for a
+// zero value, so a saved session reports the slots it actually has
+// [08 R-SAVE-02 §3].
+func RetailPlayerCount(s *Session) int32 {
+	if s == nil || s.Econ == nil {
+		return 0
+	}
+	count := int32(0)
+	for i := 0; i < len(s.Econ.Players); i++ {
+		if s.Econ.Players[i].Exists {
+			count++
+		}
+	}
+	return count
 }

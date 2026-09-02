@@ -1,0 +1,202 @@
+package main
+
+import (
+	"os"
+	"testing"
+
+	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe/nanolathe/internal/save"
+	"github.com/nanolathe/nanolathe/internal/session"
+)
+
+// resetSaveLoadScreenState clears the process-wide dialog singletons so one
+// test cannot leak a screen into the next.
+func resetSaveLoadScreenState(t *testing.T) {
+	t.Helper()
+	t.Cleanup(func() {
+		saveLoadUI = nil
+		saveLoadPanel = nil
+		saveLoadAssets = nil
+	})
+	saveLoadUI = nil
+	saveLoadPanel = nil
+	saveLoadAssets = nil
+}
+
+// retailShellForTest mounts the reference install and builds the frontend the
+// way the windowed entry does, then redirects SAVEGAME\ into a temporary
+// directory so no test ever writes into the retail install.
+func retailShellForTest(t *testing.T) (*gameShell, string) {
+	t.Helper()
+	root := os.Getenv("NANOLATHE_TA_ROOT")
+	if root == "" {
+		t.Skip("NANOLATHE_TA_ROOT is unset; skipping the asset-backed campaign walk")
+	}
+	cs, err := openContent(Options{Root: root})
+	if err != nil {
+		t.Skipf("retail content unavailable: %v", err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+	shell, err := newGameShell(Options{Root: root}, cs)
+	if err != nil {
+		t.Skipf("retail frontend assets unavailable: %v", err)
+	}
+	saveDir := t.TempDir()
+	shell.opts.Root = saveDir
+	return shell, retailSaveDir(saveDir)
+}
+
+// The whole campaign-persistence route, windowless: MAINMENU -> SINGLE ->
+// NEWGAME selects MISSION0; the results panel's SaveGame writes a
+// between-missions bank naming MISSION1; and the load screen resumes that bank
+// at MISSION1's briefing [08 R-CAMP-01 §8] [08 R-SAVE-02 §1] [07 R-FE-01 §8].
+func TestCampaignContinuationWalkWritesAndResumesABank(t *testing.T) {
+	resetSaveLoadScreenState(t)
+	shell, saveDir := retailShellForTest(t)
+
+	if shell.frontend.Mode != modeMenuMain {
+		t.Fatalf("shell opened on mode %d, want MAINMENU", shell.frontend.Mode)
+	}
+	shell.activateGadget("SINGLE")
+	if shell.frontend.Mode != modeMenuSingle {
+		t.Fatalf("SINGLE -> mode %d", shell.frontend.Mode)
+	}
+	shell.activateGadget("NewCamp")
+	if shell.frontend.Mode != modeMenuMission {
+		t.Fatalf("NewCamp -> mode %d, want NEWGAME", shell.frontend.Mode)
+	}
+	if shell.campaignIdx < 0 || shell.campaignIdx >= len(shell.campaignOptions) {
+		t.Skip("the reference install exposes no campaign on NEWGAME")
+	}
+	campaign := shell.campaignOptions[shell.campaignIdx]
+	if len(campaign.Missions) < 2 {
+		t.Skip("the selected campaign has no successor mission")
+	}
+	first, second := campaign.Missions[0], campaign.Missions[1]
+
+	// The results surface for a won MISSION0 with MISSION1 as its successor.
+	// The controller owns the Advance quirk; the shell only supplies identity.
+	shell.battle = &battleSession{
+		shell: shell,
+		sess: &session.Session{Mission: &mission.Mission{
+			Type:                mission.TypeCampaign,
+			CampaignPath:        campaign.Path,
+			CampaignIndex:       first.Index,
+			CampaignMissionName: first.Name,
+			Difficulty:          1,
+		}},
+		postBattle: session.NewPostBattleController(
+			frame.ResultView{Ended: true, Kind: "victory"},
+			session.PostBattleConfig{
+				Kind: session.PostBattleCampaign, CampaignCDOK: true, Windowed: true,
+				CampaignPath: campaign.Path, Campaign: campaign.Path,
+				Mission: first.Name, Map: first.Name, MissionIndex: first.Index,
+				HasNext: true, NextMission: second.Name,
+				Difficulty: 1, Players: 1,
+			}),
+	}
+
+	// ENDMSN's SaveGame opens the save dialog over the results panel.
+	if err := shell.openSaveLoadScreen(saveScreenMode, saveLoadFromResults); err != nil {
+		t.Fatalf("open save screen: %v", err)
+	}
+	if saveLoadUI == nil || saveLoadUI.Mode() != saveScreenMode {
+		t.Fatal("save screen did not open")
+	}
+	saveLoadUI.SetName("campaign slot")
+	shell.activateSaveLoadGadget("LOAD")
+
+	path := session.RetailSavePath(saveDir, "campaign slot")
+	bank, err := save.Open(path)
+	if err != nil {
+		t.Fatalf("the results save wrote no readable bank at %s: %v", path, err)
+	}
+	summary, ok := save.ReadSummary(bank)
+	if !ok {
+		t.Fatal("written bank carries no Summary account")
+	}
+	if summary.BetweenMissions != 1 {
+		t.Fatalf("BetweenMissions=%d, want 1", summary.BetweenMissions)
+	}
+	if summary.Mission != second.Name {
+		t.Fatalf("Summary Mission=%q, want the successor %q", summary.Mission, second.Name)
+	}
+	if summary.Gametype != 1 || summary.Description != "campaign slot" {
+		t.Fatalf("summary=%+v", summary)
+	}
+
+	// CANCEL returns to the surface underneath, and the battle is retired the
+	// way a real results-screen load would retire it.
+	shell.activateSaveLoadGadget("CANCEL")
+	shell.battle = nil
+
+	// The front end's LoadGame lists the bank and resumes it.
+	shell.activateGadget("PrevMenu")
+	if shell.frontend.Mode != modeMenuSingle {
+		t.Fatalf("PrevMenu -> mode %d, want SINGLE", shell.frontend.Mode)
+	}
+	shell.activateGadget("LoadGame")
+	if saveLoadUI == nil || saveLoadUI.Mode() != loadScreenMode {
+		t.Fatal("SINGLE LoadGame did not open the load screen")
+	}
+	if len(saveLoadUI.Entries()) != 1 || saveLoadUI.Entries()[0].Description != "campaign slot" {
+		t.Fatalf("load list=%+v, want the one written slot", saveLoadUI.Entries())
+	}
+	shell.selectSaveLoadRow(0)
+	shell.activateSaveLoadGadget("LOAD")
+
+	if shell.briefing == nil {
+		t.Fatal("loading the continuation did not open the campaign briefing")
+	}
+	if got := campaign.Missions[shell.missionIdx].Index; got != second.Index {
+		t.Fatalf("resumed at authored mission %d, want the successor %d", got, second.Index)
+	}
+	if saveLoadUI != nil {
+		t.Fatal("the load dialog stayed on the stack after routing into the briefing")
+	}
+}
+
+// An empty SAVEGAME directory closes the load screen again with the authored
+// message and opens nothing [08 R-SAVE-02 §2].
+func TestLoadScreenRefusesAnEmptyList(t *testing.T) {
+	resetSaveLoadScreenState(t)
+	shell, _ := retailShellForTest(t)
+	if err := shell.openSaveLoadScreen(loadScreenMode, saveLoadFromFrontend); err != nil {
+		t.Fatalf("open load screen: %v", err)
+	}
+	if saveLoadUI != nil {
+		t.Fatal("the load screen opened over an empty list")
+	}
+	if modal := shell.frontend.Panels.Modal(); modal == nil || modal.Message() != retailNoSavedGamesMessage {
+		t.Fatal("the empty list did not raise the authored refusal")
+	}
+}
+
+// The in-battle options menu reaches the same one dialog: ARMOPT's SAVEGAME
+// and LOADGAME open the two LOADGAME.GUI directions over the battle
+// [07 R-FE-01 §7] [07 R-FE-01 §8].
+func TestBattleOptionsMenuOpensTheSaveDialog(t *testing.T) {
+	resetSaveLoadScreenState(t)
+	shell, saveDir := retailShellForTest(t)
+	battle := &battleSession{shell: shell, sess: &session.Session{}}
+	shell.battle = battle
+
+	battle.battleState().OpenOptions()
+	battle.activateBattleMenuButton("SAVEGAME", nil)
+	if saveLoadUI == nil || saveLoadUI.Mode() != saveScreenMode || saveLoadUI.Source() != saveLoadFromBattle {
+		t.Fatalf("ARMOPT SAVEGAME did not open the save dialog from the battle: %+v", saveLoadUI)
+	}
+	if _, err := os.Stat(saveDir); err != nil {
+		t.Fatalf("the save screen did not create SAVEGAME\\: %v", err)
+	}
+	// The one window switches direction through its own route button.
+	shell.activateSaveLoadGadget("LoadGame")
+	if saveLoadUI.Mode() != loadScreenMode {
+		t.Fatal("the LoadGame route button did not switch the dialog direction")
+	}
+	shell.activateSaveLoadGadget("CANCEL")
+	if saveLoadUI != nil {
+		t.Fatal("CANCEL did not close the dialog")
+	}
+}

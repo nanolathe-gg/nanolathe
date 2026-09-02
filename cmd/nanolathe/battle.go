@@ -97,6 +97,22 @@ type battleSession struct {
 	// footerHoverFeature is recomputed every frame wherever the pointer is.
 	footerHoverUnit    pool.Handle
 	footerHoverFeature string
+
+	// The battle shell's message ring [07 R-HUD-03 §14.3]. F12 clears it, F3
+	// walks it, and the game-speed announcement posts into it.
+	messages *frame.MessageRing
+
+	// panelHoldFlag is interface-flags bit 0x80: the HUD side-panel slide
+	// treats it as "Space held" [07 R-CAM-01 §2][07 §6]. Presentation-only [I6].
+	panelHoldFlag bool
+
+	// visitedUnits and currentUnit are the `n` unit cycle's state
+	// [07 R-CAM-01 §2]. Retail keeps the visited bits in each unit's status
+	// word; presentation may not write simulation state, so the cycle keeps its
+	// own set here [I6]. The set is only looked up, never ranged, so it takes
+	// part in no order-producing iteration [I1].
+	visitedUnits map[pool.Handle]bool
+	currentUnit  pool.Handle
 }
 
 // factoryBuildDelta applies the retail signed button count: left click adds
@@ -492,7 +508,9 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	// Advance the canonical panel state during the host-frame update. Drawing
 	// must remain a pure read of this state so hit testing and raster placement
 	// use the same offset [07 §6][I6].
-	spaceHeld := in != nil && in.Kbd != nil && in.Kbd.KeyHeld(input.KeySpace)
+	// Interface-flags bit 0x80 reads to the panel slide exactly as Space held
+	// does, so the panel stays extended while it is set [07 R-CAM-01 §2][07 §6].
+	spaceHeld := b.panelHoldFlag || (in != nil && in.Kbd != nil && in.Kbd.KeyHeld(input.KeySpace))
 	editorFocused := b.hud != nil && b.hud.editorFocused()
 	b.battleState().AdvancePanelNow(spaceHeld, editorFocused)
 	// End-mission presentation takes ownership of the frame once the
@@ -517,12 +535,17 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	keyDown := func(key input.Key) bool {
 		return in != nil && in.Kbd != nil && in.Kbd.KeyDown(key)
 	}
+	shiftHeld := in != nil && in.Kbd != nil && in.Kbd.HasShift()
+	// F2 is the options window's own key, and Tab toggles it in battle mode;
+	// Escape only ever closes it. The "ESC bit" name survives because Escape is
+	// the bit's clearer, but token 0xE3 is F2, not Escape
+	// [07 R-CAM-01 §2 "Escape versus F2"].
 	if modalAtFrameStart {
 		// Tab is the authored root-modal toggle. Handle it before the modal
 		// dispatcher so the same edge cannot also activate a newly closed/opened
 		// window. Escape remains owned by the modal handler (which applies its
 		// back transition), but the whole frame is consumed either way.
-		if keyDown(input.KeyTab) && state.Modal() == ui.BattleModalOptions {
+		if (keyDown(input.KeyTab) || keyDown(input.KeyF2)) && state.Modal() == ui.BattleModalOptions {
 			b.closeBattleMenu()
 		} else {
 			b.handleBattleMenuInput(in, cl)
@@ -533,21 +556,23 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		cl.Cursors().SetIndex(render.CursorNormal)
 		return
 	}
-	// ESC-menu token path [07 §2]: ESC reuses Tab menu machinery; also disarms latch as today [07 §9].
-	if keyDown(input.KeyTab) {
+	if keyDown(input.KeyTab) || (keyDown(input.KeyF2) && !shiftHeld) {
 		b.openBattleMenu()
 		cl.Cursors().SetIndex(render.CursorNormal)
 		return
 	}
+	// Escape with the options window closed: an armed latch or placement
+	// returns to idle, and an idle latch deselects everything. It does not open
+	// the options window — that is F2's and Tab's row [07 R-CAM-01 §2].
 	if keyDown(input.KeyEscape) {
 		if b.battleState().Input.Latch == input.LatchNormal && b.battleState().Input.BuildDef == "" {
-			b.openBattleMenu()
-		} else {
-			b.disarmPlacement()
-			b.battleState().Input.Latch = input.LatchNormal
-			b.battleState().Input.HUDCaptured = false
-			b.battleState().Input.DragActive = false
+			_ = b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
 		}
+		b.disarmPlacement()
+		b.battleState().Input.Latch = input.LatchNormal
+		b.battleState().Input.ShiftLatchSticky = false
+		b.battleState().Input.HUDCaptured = false
+		b.battleState().Input.DragActive = false
 		cl.Cursors().SetIndex(render.CursorNormal)
 		return
 	}
@@ -562,6 +587,11 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// hotkey dispatch, so the frame that presses pause still refreshes the
 		// delta and it is that frame's value the pause freezes [07 §1][07 §10].
 		b.refreshScrollDelta()
+		// Phase 10's follow step runs inside the sub-tick loop, before the
+		// hotkey dispatch and the scroll pass [07 R-CAM-01 §1 steps 3-5]
+		// [07 R-CAM-01 §12]: a `t` or Ctrl+C pressed below therefore begins its
+		// glide on the following frame, as retail's does.
+		b.stepFollowCamera()
 		b.controller.Step(input.SampleFromState(in, delta), cl)
 		b.applyCommittedShake()
 	}
@@ -604,30 +634,36 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		talkActive := b.isTalkGUIActive()
 		overMinimap := b.isOverMinimap(effX, effY)
 		modalActive := state.Modal() != ui.BattleModalClosed
+		// Every scroll-pass write is a jump by delta, and a jump by the scroll
+		// pass cancels the follow triple [07 R-CAM-01 §12].
+		scroll := func(dir camera.Direction) {
+			b.cam.Scroll(scrollSetting, rawDelta, dir)
+			b.cam.ClearFollow()
+		}
 		// Held-arrow branches gated on TALK absence [07 §10]; edge branches gated on focus, modal, and minimap.
 		// Left: (Left held && !talk) OR (x==0 && y<H) [07 §10]
 		if kbd.KeyHeld(input.KeyLeft) && !talkActive {
-			b.cam.Scroll(scrollSetting, rawDelta, camera.DirLeft)
+			scroll(camera.DirLeft)
 		} else if focused && !modalActive && !overMinimap && effX == 0 && effY < hi {
-			b.cam.Scroll(scrollSetting, rawDelta, camera.DirLeft)
+			scroll(camera.DirLeft)
 		}
 		// Right: (Right held && !talk) OR x==W-1 [07 §10]
 		if kbd.KeyHeld(input.KeyRight) && !talkActive {
-			b.cam.Scroll(scrollSetting, rawDelta, camera.DirRight)
+			scroll(camera.DirRight)
 		} else if focused && !modalActive && !overMinimap && effX == wi-1 {
-			b.cam.Scroll(scrollSetting, rawDelta, camera.DirRight)
+			scroll(camera.DirRight)
 		}
 		// Up: (Up held && !talk) OR (y==0 && x<W) [07 §10]
 		if kbd.KeyHeld(input.KeyUp) && !talkActive {
-			b.cam.Scroll(scrollSetting, rawDelta, camera.DirUp)
+			scroll(camera.DirUp)
 		} else if focused && !modalActive && !overMinimap && effY == 0 && effX < wi {
-			b.cam.Scroll(scrollSetting, rawDelta, camera.DirUp)
+			scroll(camera.DirUp)
 		}
 		// Down: (Down held && !talk) OR y==H-1 [07 §10]
 		if kbd.KeyHeld(input.KeyDown) && !talkActive {
-			b.cam.Scroll(scrollSetting, rawDelta, camera.DirDown)
+			scroll(camera.DirDown)
 		} else if focused && !modalActive && !overMinimap && effY == hi-1 {
-			b.cam.Scroll(scrollSetting, rawDelta, camera.DirDown)
+			scroll(camera.DirDown)
 		}
 		// Middle-drag camera pan [F-P1-008]: presentation-only, uses mouse delta / scale.
 		if mouse.Held(input.MouseButtonMiddle) && mouse.Moved() {
@@ -789,6 +825,9 @@ func (b *battleSession) minimapCameraLatch(mx, my int32, mouse *input.MouseState
 	if !consumed {
 		return false
 	}
+	// The minimap latch jumps, and a minimap jump cancels the follow triple
+	// [07 R-CAM-01 §12].
+	b.cam.ClearFollow()
 	b.cam.JumpToBattleViewCenter(intent.X, intent.Z)
 	return true
 }
@@ -846,6 +885,55 @@ func (b *battleSession) minimapClickOrder(mx, my int32, additive bool) {
 	}
 }
 
+// The battle hotkey census — every row of [07 R-CAM-01 §2]'s token table
+// against what this dispatcher does, in table order. Retail folds Ctrl into
+// the token itself (`Ctrl+A..Z` -> 0xAA..0xC3, `Ctrl+0..9` -> 0xC4..0xCD,
+// `Ctrl+F1..F12` -> 0xCE..0xD9), so a Ctrl-composed token can never reach an
+// unmodified key's case; this key-based layer reproduces that by testing the
+// held Ctrl state on both arms.
+//
+//	token                  key            state
+//	0x09                   Tab            done — opens/closes the options window (viewerStep)
+//	0xE3                   F2             done — same window; Shift+F2's Unit Builder Probe is a developer overlay, out of scope
+//	0x0D                   Enter          out of scope — chat is `TALK.GUI` with its own dialog, focus and recipient rows [07 §5 "Chat"]; single player drops the packet unsent
+//	0x1B                   Escape         done — options close, latch cancel, else deselect all
+//	0x21 0x23 0x2A         ! # *          not bound — the three shifted-digit tokens; see the toggleDamageBars TODO(question) below
+//	0x60 0x7E              ` ~            done — "label every unit" bit
+//	0x2B 0x3D              + =            done — speed up, with the ring announcement
+//	0x2D 0x5F              - _            done — speed down, with the ring announcement
+//	0x2C                   ,              done — previous build page, `nextbuildmenu`
+//	0x2E                   .              done — next build page, `nextbuildmenu`
+//	0x31..0x39             1..9           done — SwitchAlt mux; group recall plays `SelectSquad`
+//	0x54 0x74              T t            done — follow camera, previous/next selected unit
+//	0x5C                   \              out of scope — developer mode only
+//	0x68                   h              out of scope — `SHARE.GUI` is multiplayer
+//	0x6E                   n              done — next unvisited own unit, camera glide, no selection change
+//	0xAA                   Ctrl+A         done — select every own selectable unit, additive
+//	0xAC                   Ctrl+C         done — `CTRL_C` category select, then follow the commander
+//	0xAD                   Ctrl+D         done — self-destruct the selection
+//	0xAB 0xAE..0xBB        Ctrl+B, E..R   done — `CTRL_%c` category select
+//	0xBD..0xC2             Ctrl+T..Y      done — `CTRL_%c` category select
+//	0xBC                   Ctrl+S         done — select the own selectable units on screen, replacing
+//	0xC3                   Ctrl+Z         done — select every own unit sharing a selected definition
+//	0xC5..0xCD             Ctrl+1..9      done — group assign, `CreateSquad`; Ctrl+0 has no case
+//	0xD2..0xD5             Ctrl+F5..F8    done — store bookmark 0..3, `SelectSquad`
+//	0xE6..0xE9             F5..F8         done — recall bookmark 0..3, `SelectSquad`
+//	0xD6                   Ctrl+F9        out of scope — screenshot; the battle shell has no in-battle capture writer
+//	0xD7                   Ctrl+F10       out of scope — developer mode only
+//	0xE2                   F1             stub — the key is bound and reports that `UNITINFOx.GUI` is not built yet (WU-19-10 owns the screen, [07 §6])
+//	0xE4                   F3             done — message-source glide
+//	0xE5                   F4             done — interface-flags bit 0x80
+//	0xEC                   F11            out of scope — developer mode only
+//	0xED                   F12            done — clear the message ring
+//	0xF8                   Pause          done — pause toggle
+//	0x20, 0xC4, 0xF0..0xF7 Space, arrows… no case — the arrows are the scroll pass's held-key queries, not ring tokens
+//
+// The order latches below (`m`, `a`, `p`, `r`, `e`, `c`, `g`, `d`, `x`, `o`)
+// have no row in that table at all: retail reaches them through the command
+// palette's authored gadget quick keys [07 §2 "GUI quick keys"], not through
+// the battle dispatcher. They are kept as direct bindings here because the
+// authored quick-key path belongs to the palette's owner.
+//
 // handleInput processes selection, orders, and build placement.
 // It converts input into complete canonical commands with target/position and
 // queue modifiers (shift-queued) via one picking routine that respects fog,
@@ -888,40 +976,59 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 		}
 	}
 
-	// Latch arming via hotkeys — retail latch byte IS dispatcher switch key [GAP T22][07 §9] C11.
-	// Preserve authored button order and pagination for build menu [02 "Build-menu catalog keys"].
-	if kbd.KeyDown(input.KeyM) {
-		b.battleState().Input.Latch = input.LatchMove
-	}
-	if kbd.KeyDown(input.KeyA) {
-		b.battleState().Input.Latch = input.LatchAttack
-	}
-	if kbd.KeyDown(input.KeyP) {
-		b.battleState().Input.Latch = input.LatchPatrol
-	}
-	if kbd.KeyDown(input.KeyR) {
-		b.battleState().Input.Latch = input.LatchRepair
-	}
-	if kbd.KeyDown(input.KeyE) {
-		b.battleState().Input.Latch = input.LatchReclaim
-	}
-	if kbd.KeyDown(input.KeyC) {
-		b.battleState().Input.Latch = input.LatchCapture
-	}
-	if kbd.KeyDown(input.KeyG) {
-		b.battleState().Input.Latch = input.LatchFollow
-	}
-	if kbd.KeyDown(input.KeyD) {
-		b.battleState().Input.Latch = input.LatchBlast
-	}
-	if kbd.KeyDown(input.KeyX) {
-		b.cancelSelectedProduction()
-	}
-	if kbd.KeyDown(input.KeyO) {
-		b.toggleOnOffSelected(kbd.HasShift())
-	}
-	if kbd.KeyDown(input.KeyN) {
-		b.stockpileSelected(kbd.HasShift())
+	// Ctrl is a held-key query made at dispatch time, and a Ctrl-composed token
+	// never reaches an unmodified key's case [07 R-CAM-01 §2]. Every unmodified
+	// arm below is therefore gated on Ctrl being clear, so Ctrl+A selects and
+	// does not also arm the attack latch.
+	ctrlHeld := kbd.KeyHeld(input.KeyCtrl)
+	if !ctrlHeld {
+		// Latch arming via hotkeys — retail latch byte IS dispatcher switch key [GAP T22][07 §9] C11.
+		// Preserve authored button order and pagination for build menu [02 "Build-menu catalog keys"].
+		if kbd.KeyDown(input.KeyM) {
+			b.battleState().Input.Latch = input.LatchMove
+		}
+		if kbd.KeyDown(input.KeyA) {
+			b.battleState().Input.Latch = input.LatchAttack
+		}
+		if kbd.KeyDown(input.KeyP) {
+			b.battleState().Input.Latch = input.LatchPatrol
+		}
+		if kbd.KeyDown(input.KeyR) {
+			b.battleState().Input.Latch = input.LatchRepair
+		}
+		if kbd.KeyDown(input.KeyE) {
+			b.battleState().Input.Latch = input.LatchReclaim
+		}
+		if kbd.KeyDown(input.KeyC) {
+			b.battleState().Input.Latch = input.LatchCapture
+		}
+		if kbd.KeyDown(input.KeyG) {
+			b.battleState().Input.Latch = input.LatchFollow
+		}
+		if kbd.KeyDown(input.KeyD) {
+			b.battleState().Input.Latch = input.LatchBlast
+		}
+		if kbd.KeyDown(input.KeyX) {
+			b.cancelSelectedProduction()
+		}
+		if kbd.KeyDown(input.KeyO) {
+			b.toggleOnOffSelected(kbd.HasShift())
+		}
+		if kbd.KeyDown(input.KeyN) {
+			if kbd.HasShift() {
+				// TODO(question): retail's table has a case for `n` (0x6E) and
+				// none for `N` (0x4E), and the stockpile round is enqueued from
+				// the palette's `MAKENUKE`/`MAKEANTI` gadgets, not from a
+				// hotkey [07 R-CAM-01 §2][07 §6]. Shift+N is kept as this
+				// build's stand-in for those gadgets until the palette owner
+				// wires them; which token, if any, retail accepts for a
+				// stockpile round would be settled by tracing the two gadgets'
+				// authored quick-key bytes.
+				b.stockpileSelected(true)
+			} else {
+				b.cycleNextUnvisitedUnit()
+			}
+		}
 	}
 	// The "label every unit" bit. Retail's dispatcher has a case for each of
 	// five character tokens — `!` `#` `*` `` ` `` `~` — and every one of them
@@ -952,9 +1059,10 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	if kbd.KeyDown(input.KeyMinus) || kbd.KeyDown(input.KeyNumpadSubtract) {
 		b.adjustGameSpeed(-1)
 	}
-	// Digit routing uses the established battle-mode/Alt gate. Ctrl+digit is
-	// assignment; the non-page branch is group recall with Shift as preserve /
-	// toggle [07 §9] C9-C10.
+	// Digit routing uses the established SwitchAlt gate [07 R-CAM-01 §4].
+	// Ctrl+digit is assignment and plays `CreateSquad`; the non-page branch is
+	// group recall with Shift as preserve / toggle and plays `SelectSquad`
+	// [07 R-CAM-01 §2][07 §9] C9-C10. Ctrl+0 has no case.
 	for d := 1; d <= 9; d++ {
 		var key input.Key
 		switch d {
@@ -978,21 +1086,89 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 			key = input.Key9
 		}
 		if kbd.KeyDown(key) {
-			if kbd.KeyHeld(input.KeyCtrl) {
-				_ = b.DispatchGroupAssign(d)
+			if ctrlHeld {
+				if b.DispatchGroupAssign(d) == nil {
+					b.playUICue(cl, "CreateSquad") // [07 R-CAM-01 §2]
+				}
 			} else {
-				b.routeDigit(d, kbd.KeyHeld(input.KeyAlt), kbd.HasShift())
+				b.routeDigit(d, kbd.KeyHeld(input.KeyAlt), kbd.HasShift(), cl)
 			}
 		}
 	}
 	// Page next/prev data-driven with guard [R-P0-03][07 §9] C10: no hardcoding.
+	// `,` is the previous page and `.` the next, both with the `nextbuildmenu`
+	// cue [07 R-CAM-01 §2]; PageUp/PageDown and the shifted arrows are this
+	// build's extra bindings and keep working.
 	if kbd.KeyDown(input.KeyPrior) || kbd.KeyDown(input.KeyRight) && kbd.HasShift() {
 		b.nextBuildPage()
 	}
 	if kbd.KeyDown(input.KeyNext) || kbd.KeyDown(input.KeyLeft) && kbd.HasShift() {
 		b.prevBuildPage()
 	}
+	if !ctrlHeld && kbd.KeyDown(input.KeyPeriod) {
+		b.nextBuildPage()
+		b.playUICue(cl, "nextbuildmenu") // [07 R-CAM-01 §2]
+	}
+	if !ctrlHeld && kbd.KeyDown(input.KeyComma) {
+		b.prevBuildPage()
+		b.playUICue(cl, "nextbuildmenu") // [07 R-CAM-01 §2]
+	}
+	// The follow camera. `t` tracks the next selected unit after the current
+	// tracked object in slot order and `T` (Shift held) the previous, wrapping
+	// within the local slot range; with nothing selected the tracked object
+	// becomes null. Neither moves the camera itself — the follow step does
+	// [07 R-CAM-01 §2][07 R-CAM-01 §12].
+	if !ctrlHeld && kbd.KeyDown(input.KeyT) {
+		b.cycleFollowTarget(kbd.HasShift())
+	}
+	if ctrlHeld {
+		b.dispatchCtrlLetters(kbd)
+	}
+	// Camera bookmarks: Ctrl+F5..F8 store the current origin into slot 0..3 and
+	// F5..F8 recall it, both with the `SelectSquad` cue [07 R-CAM-01 §2]
+	// [07 R-CAM-01 §12].
+	for slot, key := range [camera.BookmarkSlots]input.Key{input.KeyF5, input.KeyF6, input.KeyF7, input.KeyF8} {
+		if !kbd.KeyDown(key) {
+			continue
+		}
+		if ctrlHeld {
+			if b.cam.StoreBookmark(slot) {
+				b.playUICue(cl, "SelectSquad")
+			}
+			continue
+		}
+		if b.cam.RecallBookmark(slot) {
+			b.playUICue(cl, "SelectSquad")
+		}
+	}
+	if !ctrlHeld && kbd.KeyDown(input.KeyF1) {
+		b.openUnitInfo()
+	}
+	if !ctrlHeld && kbd.KeyDown(input.KeyF3) {
+		b.glideToMessageSource()
+	}
+	if !ctrlHeld && kbd.KeyDown(input.KeyF4) {
+		// Interface-flags bit 0x80. Its readers are presentation: the HUD side
+		// panel treats the bit as "Space held", and the kill announcement arms
+		// two 30-frame counters while it is set [07 R-CAM-01 §2][07 §6].
+		//
+		// TODO(question): the bit's user-facing name and the visible effect of
+		// those two counters are recorded Unknown in [07 R-CAM-01 §2]; only the
+		// panel-hold reader is implemented here. A static trace of the
+		// composer's kill-announcement pass, or a retail observation of what
+		// appears on a kill, would settle it.
+		b.panelHoldFlag = !b.panelHoldFlag
+	}
+	if !ctrlHeld && kbd.KeyDown(input.KeyF12) {
+		b.messageRing().Clear() // [07 R-CAM-01 §2]
+	}
+	// Escape: an armed latch or placement returns to idle; an idle latch
+	// deselects everything [07 R-CAM-01 §2]. viewerStep intercepts the same
+	// edge ahead of this dispatcher, so both copies apply the one arm.
 	if kbd.KeyDown(input.KeyEscape) {
+		if b.battleState().Input.Latch == input.LatchNormal && b.battleState().Input.BuildDef == "" {
+			_ = b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
+		}
 		b.disarmPlacement()
 		b.battleState().Input.Latch = input.LatchNormal
 		b.battleState().Input.ShiftLatchSticky = false
@@ -1203,17 +1379,22 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	// No right-button order path: right-click is deselect/cancel only, handled at the top [07 §9][04 §3.4].
 }
 
-func (b *battleSession) routeDigit(digit int, altHeld, shiftHeld bool) {
-	// The source of the digit-routing mode bit is not established in the
-	// current battle composition; preserve its existing zero-bit route behind
-	// an explicit TODO rather than conflating it with the panel-entry value
-	// [07 §9] C10.
-	const unresolvedDigitMode byte = 0
-	if hud.RoutesToPage(unresolvedDigitMode, altHeld) {
+func (b *battleSession) routeDigit(digit int, altHeld, shiftHeld bool, cl *client.Client) {
+	// The gate is `switchAlt == alt` [07 R-CAM-01 §4]: by default digits pick
+	// build pages and Alt+digit recalls groups; with the persistent `SwitchAlt`
+	// option set the two swap. The option is absent from this build's settings
+	// block, and its documented default when the registry value is absent is
+	// zero, which is the value passed here. Wiring the persisted option is the
+	// settings owner's; the gate itself is now the traced one, not the
+	// "battle-mode flag" the earlier text named [07 R-CAM-01 §4].
+	const switchAltDefault byte = 0
+	if hud.RoutesToPage(switchAltDefault, altHeld) {
 		b.switchBuildPage(digit)
 		return
 	}
-	_ = b.DispatchGroupRecall(digit, shiftHeld)
+	if b.DispatchGroupRecall(digit, shiftHeld) == nil {
+		b.playUICue(cl, "SelectSquad") // [07 R-CAM-01 §2]
+	}
 }
 
 func (b *battleSession) currentSnapshot() (*frame.Frame, bool) {
@@ -2288,18 +2469,18 @@ func (b *battleSession) setGameSpeed(delta int) {
 	if b == nil || b.sess == nil {
 		return
 	}
+	// The clamp is the setter's: 1..20 on signed compares, and the
+	// announcement is posted only when the clamped target actually changes
+	// [07 R-CAM-01 §3]. AdjustSpeed owns both.
 	newReq, changed := b.sess.AdjustSpeed(delta)
 	if !changed {
 		return
 	}
-	var msg string
-	if newReq == 10 {
-		msg = "Game Speed Normal" // [07 §2]
-	} else {
-		d := int(newReq - 10)
-		// Retail formats the localized speed label with two spaces and a signed delta [07 §2].
-		msg = fmt.Sprintf("Game Speed  %+d", d)
-	}
+	// The announcement goes to the message ring as kind 2, with no source unit
+	// and silent [07 R-CAM-01 §3]. It is also latched as the transient status
+	// line, which is what this build's HUD draws today.
+	msg := frame.SpeedAnnouncement(int(newReq))
+	b.messageRing().PostSilent(msg, frame.MessageClassSpeed, b.currentTick())
 	b.setStatusMessage(msg)
 }
 
@@ -2311,4 +2492,473 @@ func (b *battleSession) togglePause() {
 		return
 	}
 	b.applyBattleSchedule(ui.PauseIntent(!b.battleState().Paused()))
+}
+
+// messageRing is the battle shell's presentation message ring [07 R-HUD-03
+// §14.3]. The caption ring bound to the audio queue lives in internal/client
+// and is a second instance of the same value type; unifying the two is the
+// business of that package's owner, not of the hotkey dispatcher.
+func (b *battleSession) messageRing() *frame.MessageRing {
+	if b == nil {
+		return nil
+	}
+	if b.messages == nil {
+		b.messages = frame.NewMessageRing()
+	}
+	return b.messages
+}
+
+// currentTick is the committed tick used to stamp presentation ring lines.
+func (b *battleSession) currentTick() uint32 {
+	if f, ok := b.currentSnapshot(); ok {
+		return f.Tick
+	}
+	return 0
+}
+
+// ownSelectableUnit is the census's "own selectable unit" predicate: a unit in
+// the local player's slot range whose status word has the selection/classifier
+// eligibility bit set, whose build-progress fraction is 0.0, and whose carrier
+// reference is null [07 R-CAM-01 §2]. It is the same predicate the rectangle
+// selection of [07 §9] and the trigger system's eligible-unit test
+// [08 R-TRIG-01 §3] use.
+//
+// TODO(question): two clauses of that predicate are not in the committed frame
+// — the post-capture grace counter, and the "carrier is itself marked a visible
+// carrier" relaxation of the carrier clause. Publishing them is the frame
+// owner's call; until then a carried unit is never selectable and a
+// just-captured one always is. Which frame fields carry the grace counter and
+// the carrier's visible bit would settle it.
+func (b *battleSession) ownSelectableUnit(v frame.UnitView) bool {
+	if b == nil || b.sess == nil || v.Slot == 0 {
+		return false
+	}
+	if v.Owner != b.sess.LocalOwner {
+		return false
+	}
+	if v.Flags&units.ClassifierEligibleStatus == 0 {
+		return false
+	}
+	if v.BuildRemaining != 0 {
+		return false
+	}
+	return v.Carrier == 0
+}
+
+// ownSelectableHandles walks the committed frame in slot order and returns the
+// own selectable units, optionally filtered [07 R-CAM-01 §2]. Frame order is
+// pool-slot order, which is the order retail's selection walks [I1].
+func (b *battleSession) ownSelectableHandles(keep func(frame.UnitView) bool) []pool.Handle {
+	f, ok := b.currentSnapshot()
+	if !ok {
+		return nil
+	}
+	out := make([]pool.Handle, 0, len(f.Units))
+	for i := range f.Units {
+		v := f.Units[i]
+		if !b.ownSelectableUnit(v) {
+			continue
+		}
+		if keep != nil && !keep(v) {
+			continue
+		}
+		out = append(out, v.Slot)
+	}
+	return out
+}
+
+// selectedHandlesInSlotOrder returns the committed selection in slot order.
+func (b *battleSession) selectedHandlesInSlotOrder() []pool.Handle {
+	f, ok := b.currentSnapshot()
+	if !ok {
+		return nil
+	}
+	out := make([]pool.Handle, 0, len(f.Selection.Handles))
+	for i := range f.Units {
+		if containsHandle(f.Selection.Handles, f.Units[i].Slot) {
+			out = append(out, f.Units[i].Slot)
+		}
+	}
+	return out
+}
+
+func containsHandle(list []pool.Handle, h pool.Handle) bool {
+	for _, v := range list {
+		if v == h {
+			return true
+		}
+	}
+	return false
+}
+
+// commitSelection sends a selection to the session. Additive means "add to the
+// current selection" — the census's word for Ctrl+A and for a Shift-held
+// category select — which is a union followed by a replace, not the toggle a
+// Shift-click performs [07 R-CAM-01 §2][07 §9].
+func (b *battleSession) commitSelection(handles []pool.Handle, additive bool) {
+	if additive {
+		f, ok := b.currentSnapshot()
+		if ok {
+			merged := make([]pool.Handle, 0, len(handles)+len(f.Selection.Handles))
+			merged = append(merged, f.Selection.Handles...)
+			for _, h := range handles {
+				if !containsHandle(merged, h) {
+					merged = append(merged, h)
+				}
+			}
+			handles = merged
+		}
+	}
+	_ = b.enqueueHumanCommand(session.HumanCommand{
+		Kind:      session.HumanSelectionReplace,
+		Selection: session.HumanSelectionCommand{Handles: handles},
+	})
+}
+
+// categoryMask resolves an authored category token against the compiled
+// registry. Membership is catalog data; no hand-written unit list exists here
+// [02 §5][R-P0-03].
+func (b *battleSession) categoryMask(name string) (content.CategoryMask, bool) {
+	if b == nil || b.cat == nil {
+		return content.CategoryMask{}, false
+	}
+	return b.cat.Category(name)
+}
+
+// inCategory reports whether a frame unit's definition is in a membership set.
+func (b *battleSession) inCategory(v frame.UnitView, mask content.CategoryMask) bool {
+	if b == nil || b.cat == nil {
+		return false
+	}
+	def, ok := b.cat.Unit(v.DefName)
+	if !ok || def == nil {
+		return false
+	}
+	return mask.Contains(def.UnitDefID)
+}
+
+// dispatchCtrlLetters is the Ctrl+letter column of [07 R-CAM-01 §2]: Ctrl+A,
+// Ctrl+C, Ctrl+D, Ctrl+S, Ctrl+Z, and the `CTRL_%c` category selects on
+// Ctrl+B and Ctrl+E..R and Ctrl+T..Y. Ctrl+A..Z reach retail as tokens
+// 0xAA..0xC3, so exactly one arm runs per press.
+func (b *battleSession) dispatchCtrlLetters(kbd *input.KeyboardState) {
+	shift := kbd.HasShift()
+	switch {
+	case kbd.KeyDown(input.KeyA):
+		// Select every own selectable unit, additive over the current
+		// selection, and clear the current build-menu unit [07 R-CAM-01 §2].
+		// This build recomputes the command page's builder from the selection
+		// at every publication boundary, so clearing the build-menu unit here
+		// means dropping the armed placement.
+		b.commitSelection(b.ownSelectableHandles(nil), true)
+		b.disarmPlacement()
+		return
+	case kbd.KeyDown(input.KeyD):
+		b.selfDestructSelection()
+		return
+	case kbd.KeyDown(input.KeyS):
+		// The on-screen list, replacing the selection [07 R-CAM-01 §2][07 §8].
+		b.commitSelection(b.ownSelectableHandles(b.onScreenUnit), false)
+		return
+	case kbd.KeyDown(input.KeyZ):
+		// Every own selectable unit whose definition matches any currently
+		// selected unit's definition [07 R-CAM-01 §2].
+		f, ok := b.currentSnapshot()
+		if !ok {
+			return
+		}
+		var mask content.CategoryMask
+		for i := range f.Units {
+			v := f.Units[i]
+			if !containsHandle(f.Selection.Handles, v.Slot) {
+				continue
+			}
+			if def, found := b.cat.Unit(v.DefName); found && def != nil {
+				mask = mask.Or(def.UnitMask)
+			}
+		}
+		if mask.IsZero() {
+			return
+		}
+		b.commitSelection(b.ownSelectableHandles(func(v frame.UnitView) bool {
+			return b.inCategory(v, mask)
+		}), false)
+		return
+	}
+	// The category letters. Ctrl+C additionally sets the follow-camera tracked
+	// object to the last own unit in the `Commander` category set
+	// [07 R-CAM-01 §2][07 R-CAM-01 §12].
+	for _, letter := range ctrlCategoryLetters {
+		if !kbd.KeyDown(letter.key) {
+			continue
+		}
+		mask, ok := b.categoryMask("CTRL_" + string(letter.name))
+		if ok && !mask.IsZero() {
+			b.commitSelection(b.ownSelectableHandles(func(v frame.UnitView) bool {
+				return b.inCategory(v, mask)
+			}), shift)
+		}
+		if letter.name == 'C' {
+			b.followCommander()
+		}
+		return
+	}
+}
+
+// ctrlCategoryLetters is the census's `CTRL_%c` domain: Ctrl+B (0xAB),
+// Ctrl+C (0xAC), Ctrl+E..Ctrl+R (0xAE..0xBB) and Ctrl+T..Ctrl+Y (0xBD..0xC2).
+// Ctrl+A, Ctrl+D, Ctrl+S and Ctrl+Z have their own cases and are absent here
+// [07 R-CAM-01 §2]. Stock content authors CTRL_B, CTRL_C, CTRL_F, CTRL_M,
+// CTRL_P, CTRL_R, CTRL_V and CTRL_W; every other letter selects nothing, which
+// the catalog lookup produces on its own.
+var ctrlCategoryLetters = []struct {
+	key  input.Key
+	name byte
+}{
+	{input.KeyB, 'B'}, {input.KeyC, 'C'},
+	{input.KeyE, 'E'}, {input.KeyF, 'F'}, {input.KeyG, 'G'}, {input.KeyH, 'H'},
+	{input.KeyI, 'I'}, {input.KeyJ, 'J'}, {input.KeyK, 'K'}, {input.KeyL, 'L'},
+	{input.KeyM, 'M'}, {input.KeyN, 'N'}, {input.KeyO, 'O'}, {input.KeyP, 'P'},
+	{input.KeyQ, 'Q'}, {input.KeyR, 'R'},
+	{input.KeyT, 'T'}, {input.KeyU, 'U'}, {input.KeyV, 'V'}, {input.KeyW, 'W'},
+	{input.KeyX, 'X'}, {input.KeyY, 'Y'},
+}
+
+// followCommander latches the follow camera onto the last own unit in the
+// `Commander` category set [07 R-CAM-01 §2][07 R-CAM-01 §12].
+func (b *battleSession) followCommander() {
+	if b == nil || b.cam == nil {
+		return
+	}
+	mask, ok := b.categoryMask("Commander")
+	if !ok || mask.IsZero() {
+		return
+	}
+	f, found := b.currentSnapshot()
+	if !found {
+		return
+	}
+	var last pool.Handle
+	for i := range f.Units {
+		v := f.Units[i]
+		if b.sess == nil || v.Owner != b.sess.LocalOwner || v.Slot == 0 {
+			continue
+		}
+		if b.inCategory(v, mask) {
+			last = v.Slot
+		}
+	}
+	if last != 0 {
+		b.cam.SetTracked(last)
+	}
+}
+
+// selfDestructSelection is Ctrl+D. Retail resolves the SELFDESTRUCT order
+// descriptor, fires the button's script path for every selected unit that
+// carries that button, and otherwise issues the order through the order
+// dispatcher for the selection [07 R-CAM-01 §2]. The palette's button is not
+// wired here, so the order path runs for the whole selection; the descriptor
+// is the front-segment `SelfDestructFG`, which [04 R-ORD-01 §2] names as the
+// button's own.
+func (b *battleSession) selfDestructSelection() {
+	handles := b.selectedHandlesInSlotOrder()
+	if len(handles) == 0 {
+		return
+	}
+	_ = b.enqueueHumanCommand(session.HumanCommand{
+		Kind:         session.HumanSelfDestruct,
+		SelfDestruct: session.HumanSelfDestructCommand{Handles: handles},
+	})
+}
+
+// onScreenUnit reports whether a committed unit projects inside the battle
+// viewport — the on-screen list Ctrl+S selects from and the `n` cycle marks
+// visited [07 R-CAM-01 §2][07 §8].
+func (b *battleSession) onScreenUnit(v frame.UnitView) bool {
+	if b == nil || b.cam == nil {
+		return false
+	}
+	sx, sy := b.cam.WorldToScreen(v.X, v.Y, v.Z)
+	w, h := b.cam.BattleView()
+	sx -= camera.OriginX
+	sy -= camera.OriginY
+	return sx >= 0 && sy >= 0 && sx < w && sy < h
+}
+
+// cycleFollowTarget is `t` / `T`: the tracked object becomes the next (or, with
+// Shift, the previous) selected unit after the current tracked object in
+// unit-slot order, wrapping; with nothing selected it becomes null
+// [07 R-CAM-01 §2][07 R-CAM-01 §12].
+func (b *battleSession) cycleFollowTarget(previous bool) {
+	if b == nil || b.cam == nil {
+		return
+	}
+	sel := b.selectedHandlesInSlotOrder()
+	if len(sel) == 0 {
+		b.cam.SetTracked(0)
+		return
+	}
+	current := b.cam.Tracked()
+	idx := -1
+	for i, h := range sel {
+		if h == current {
+			idx = i
+			break
+		}
+	}
+	var next pool.Handle
+	switch {
+	case idx < 0 && previous:
+		next = sel[len(sel)-1]
+	case idx < 0:
+		next = sel[0]
+	case previous:
+		next = sel[(idx+len(sel)-1)%len(sel)]
+	default:
+		next = sel[(idx+1)%len(sel)]
+	}
+	b.cam.SetTracked(next)
+}
+
+// cycleNextUnvisitedUnit is `n`: find the next own unit this cycle has not
+// visited, glide the camera to it, record it as the current unit, and mark it
+// and every on-screen own unit visited. When every unit has been visited the
+// visited set is cleared and the cycle restarts. It does not change the
+// selection [07 R-CAM-01 §2][07 R-CAM-01 §12].
+func (b *battleSession) cycleNextUnvisitedUnit() {
+	f, ok := b.currentSnapshot()
+	if !ok || b.cam == nil || b.sess == nil {
+		return
+	}
+	pick, found := b.firstUnvisitedOwnUnit(f)
+	if !found {
+		b.visitedUnits = nil
+		pick, found = b.firstUnvisitedOwnUnit(f)
+	}
+	if !found {
+		return
+	}
+	b.glideToUnit(pick)
+	b.currentUnit = pick.Slot
+	b.markVisited(pick.Slot)
+	for i := range f.Units {
+		v := f.Units[i]
+		if v.Slot != 0 && v.Owner == b.sess.LocalOwner && b.onScreenUnit(v) {
+			b.markVisited(v.Slot)
+		}
+	}
+}
+
+func (b *battleSession) firstUnvisitedOwnUnit(f *frame.Frame) (frame.UnitView, bool) {
+	for i := range f.Units {
+		v := f.Units[i]
+		if v.Slot == 0 || b.sess == nil || v.Owner != b.sess.LocalOwner {
+			continue
+		}
+		if b.visitedUnits[v.Slot] {
+			continue
+		}
+		return v, true
+	}
+	return frame.UnitView{}, false
+}
+
+func (b *battleSession) markVisited(h pool.Handle) {
+	if b.visitedUnits == nil {
+		b.visitedUnits = make(map[pool.Handle]bool)
+	}
+	b.visitedUnits[h] = true
+}
+
+// glideToUnit writes the desired origin from a unit position through the one
+// conversion of [07 R-CAM-01 §12]: the map-pixel X and the height-sheared Z,
+// recentred on the battle viewport.
+func (b *battleSession) glideToUnit(v frame.UnitView) {
+	if b.cam == nil {
+		return
+	}
+	x := radarMapPixel(v.X)
+	y := radarMapPixel(v.Y)
+	z := radarMapPixel(v.Z)
+	ox, oz := b.cam.BattleViewCenterOrigin(x, z-y/2)
+	b.cam.GlideTo(ox, oz)
+}
+
+// glideToMessageSource is F3: clear the visited bit on all thirty message-ring
+// records, then glide to the first message whose source unit is alive and not
+// yet visited, marking it visited; if none, clear the visited bits and retry
+// once [07 R-CAM-01 §2]. The message-source glide reads the unit's map-pixel
+// X/Z words directly and subtracts the half viewport without the height shear
+// [07 R-CAM-01 §12].
+//
+// TODO(question): the leading clear makes the "not yet visited" test and the
+// retry arm unreachable — every record is unvisited when the scan starts. The
+// section is followed literally here. Whether the leading clear writes a
+// different bit than the scan tests would be settled by re-tracing the F3
+// case's two bit writes.
+func (b *battleSession) glideToMessageSource() {
+	ring := b.messageRing()
+	if ring == nil || b.cam == nil {
+		return
+	}
+	f, ok := b.currentSnapshot()
+	if !ok {
+		return
+	}
+	alive := func(h pool.Handle) bool {
+		v, found := snapshotUnitByHandle(f, h)
+		return found && v.Slot != 0
+	}
+	ring.ClearVisited()
+	src, found := ring.NextUnvisitedSource(alive)
+	if !found {
+		ring.ClearVisited()
+		src, found = ring.NextUnvisitedSource(alive)
+	}
+	if !found {
+		return
+	}
+	v, ok := snapshotUnitByHandle(f, src)
+	if !ok {
+		return
+	}
+	ox, oz := b.cam.BattleViewCenterOrigin(radarMapPixel(v.X), radarMapPixel(v.Z))
+	b.cam.GlideTo(ox, oz)
+}
+
+// openUnitInfo is F1. Retail opens `UNITINFOx.GUI` for the hovered unit, or
+// for a hovered build button's product [07 R-CAM-01 §2][07 §6].
+//
+// TODO(T25): the unit-info screen is WU-19-10's. The key is bound here so the
+// row is not silently absent from the dispatcher; it opens nothing.
+func (b *battleSession) openUnitInfo() {}
+
+// stepFollowCamera is the follow half of phase 10 [01 §4.4][07 R-CAM-01 §12]:
+// a live tracked object recomputes the desired origin every pass and the
+// current origin closes the gap; a tracked object that has died clears the
+// follow triple; with no tracked object a glide left by `n` or F3 continues.
+func (b *battleSession) stepFollowCamera() {
+	if b == nil || b.cam == nil {
+		return
+	}
+	tracked := b.cam.Tracked()
+	if tracked == 0 {
+		b.cam.StepGlide()
+		return
+	}
+	f, ok := b.currentSnapshot()
+	if !ok {
+		return
+	}
+	v, found := snapshotUnitByHandle(f, tracked)
+	if !found || v.Slot == 0 {
+		b.cam.ClearFollow()
+		return
+	}
+	b.cam.FollowTo(camera.TargetPoint{
+		X: radarMapPixel(v.X),
+		Y: radarMapPixel(v.Y),
+		Z: radarMapPixel(v.Z),
+	})
+	b.cam.Clamp()
 }

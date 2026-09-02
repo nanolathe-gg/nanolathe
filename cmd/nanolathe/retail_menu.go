@@ -716,7 +716,14 @@ func (g *gameShell) drawRetailWindow(c *client.Client, mode shellMode, p *ui.Pan
 	g.frontend.SetMode(mode)
 	defer func() { g.frontend.SetMode(savedMode) }()
 
-	if bg := g.panelBackground(); bg != nil {
+	background := g.panelBackground()
+	if saveLoadAssets != nil && p == saveLoadPanel {
+		// The save/load dialog is a child window with its own authored
+		// backdrop; it must not borrow the surface it was opened over
+		// [07 R-FE-01 §8].
+		background = saveLoadAssets.background
+	}
+	if bg := background; bg != nil {
 		// the retail implementation copies the window's background bitmap into the window's
 		// own surface at (0,0), and that surface is the window rectangle. The
 		// bitmap therefore lands at the window origin and anything past the
@@ -2182,6 +2189,12 @@ func (g *gameShell) clickList(gad gui.Gadget, r gui.Rect, x, y int32) {
 }
 
 func (g *gameShell) commitListSelection(name string, index int) {
+	if g.saveLoadPanelActive() && strings.EqualFold(name, "GAMES") {
+		// Selecting a row refreshes the summary panel and copies the entry's
+		// description into GAMENAME [08 R-SAVE-02 §1].
+		g.selectSaveLoadRow(index)
+		return
+	}
 	switch {
 	case g.frontend.Mode == modeMenuMap && strings.EqualFold(name, "MAPNAMES"):
 		g.mapIdx = index
@@ -2229,6 +2242,11 @@ func (g *gameShell) hasActiveGadget(name string) bool {
 
 func (g *gameShell) activateGadget(name string) {
 	key := menuKey(name)
+	// The save/load dialog is a child window over the screen that opened it,
+	// so its controls are resolved before the underlying screen's [07 R-FE-01 §8].
+	if g.activateSaveLoadGadget(name) {
+		return
+	}
 	if target, ok := g.frontend.Navigate(name); ok {
 		g.openMenu(target)
 		return
@@ -2251,6 +2269,10 @@ func (g *gameShell) activateGadget(name string) {
 			g.openMissionMenu(false)
 		case "anymsn":
 			g.openMissionMenu(true)
+		case "loadgame":
+			// SINGLE is one of the three surfaces the load dialog is reached
+			// from [07 R-FE-01 §8].
+			g.openSaveLoadScreenReporting(loadScreenMode, saveLoadFromFrontend)
 		}
 	case modeMenuMission:
 		switch key {

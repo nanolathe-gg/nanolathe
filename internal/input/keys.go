@@ -84,6 +84,12 @@ const (
 	// character tokens ` and ~, two of the five that toggle the "label every
 	// unit" bit [07 R-CAM-01 §2][07 R-HUD-03 §7].
 	KeyBackquote
+	// KeyComma and KeyPeriod are the `,` and `.` keys. Retail's translator
+	// writes the two OEM virtual keys through as the character tokens 0x2C and
+	// 0x2E, and the battle dispatcher pages the current build menu backwards
+	// and forwards with them [07 §2][07 R-CAM-01 §2].
+	KeyComma
+	KeyPeriod
 	KeyCount
 )
 

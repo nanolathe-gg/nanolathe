@@ -69,6 +69,12 @@ func (b *battleSession) menuWindow() *gui.Window {
 // handleBattleMenuInput owns all input while a retail modal is open. Buttons
 // activate once on release-inside the same authored gadget [07 §3].
 func (b *battleSession) handleBattleMenuInput(in *input.State, cl *client.Client) {
+	if b != nil && b.shell != nil && b.shell.saveLoadPanelActive() {
+		// The dialog is a child window of the frontend panel stack, so the
+		// frontend's own pump owns it while it is up [07 R-FE-01 §8].
+		b.shell.menuInput(cl)
+		return
+	}
 	state := b.battleState()
 	if b == nil || state == nil || in == nil || in.Kbd == nil || in.Mouse == nil || state.Modal() == ui.BattleModalClosed {
 		return
@@ -119,5 +125,23 @@ func (b *battleSession) activateBattleMenuButton(name string, cl *client.Client)
 		if cl != nil {
 			cl.RequestExit()
 		}
+	case ui.BattleModalActionSaveGame:
+		b.openBattleSaveLoadScreen(saveScreenMode)
+	case ui.BattleModalActionLoadGame:
+		b.openBattleSaveLoadScreen(loadScreenMode)
 	}
+}
+
+// openBattleSaveLoadScreen opens the one LOADGAME.GUI surface over the battle,
+// in the direction the ARMOPT button selected [07 R-FE-01 §7] [07 R-FE-01 §8].
+//
+// Presentation note: the shell paints frontend panels only while it is not in
+// a battle, so this dialog is currently driven but not painted over the battle
+// surface. The two lines that paint it belong in cmd/nanolathe/battle_hud.go's
+// drawBattleMenu, which this unit does not own.
+func (b *battleSession) openBattleSaveLoadScreen(mode saveLoadMode) {
+	if b == nil || b.shell == nil {
+		return
+	}
+	b.shell.openSaveLoadScreenReporting(mode, saveLoadFromBattle)
 }

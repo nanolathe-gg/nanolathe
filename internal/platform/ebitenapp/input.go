@@ -38,10 +38,21 @@ func pollInput(in *input.State) {
 	m.SetWheel(float32(wx), float32(wy))
 	for key := input.Key(1); key < input.KeyCount; key++ {
 		down := false
-		if key == input.KeyShift {
+		// Retail asks for one held state per modifier (`0xF9` Shift, `0xFA`
+		// Ctrl, `0xFB` Alt), so either physical key satisfies the query
+		// [07 §2]. Ctrl in particular now gates a whole column of the battle
+		// hotkey census [07 R-CAM-01 §2].
+		switch key {
+		case input.KeyShift:
 			down = ebiten.IsKeyPressed(ebiten.KeyShiftLeft) || ebiten.IsKeyPressed(ebiten.KeyShiftRight)
-		} else if ek, ok := ebitenKey(key); ok {
-			down = ebiten.IsKeyPressed(ek)
+		case input.KeyCtrl:
+			down = ebiten.IsKeyPressed(ebiten.KeyControlLeft) || ebiten.IsKeyPressed(ebiten.KeyControlRight)
+		case input.KeyAlt:
+			down = ebiten.IsKeyPressed(ebiten.KeyAltLeft) || ebiten.IsKeyPressed(ebiten.KeyAltRight)
+		default:
+			if ek, ok := ebitenKey(key); ok {
+				down = ebiten.IsKeyPressed(ek)
+			}
 		}
 		k.SetKey(key, down)
 	}
@@ -187,6 +198,10 @@ func ebitenKey(k input.Key) (ebiten.Key, bool) {
 		return ebiten.KeyNumpadSubtract, true
 	case input.KeyBackquote:
 		return ebiten.KeyBackquote, true
+	case input.KeyComma:
+		return ebiten.KeyComma, true
+	case input.KeyPeriod:
+		return ebiten.KeyPeriod, true
 	case input.KeyShift:
 		return ebiten.KeyShiftLeft, true
 	case input.KeyCtrl:

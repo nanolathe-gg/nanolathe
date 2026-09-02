@@ -31,9 +31,19 @@ const (
 	HumanGroupAssign
 	HumanGroupRecall
 	HumanStance
+	// HumanSelfDestruct is the Ctrl+D row of [07 R-CAM-01 §2]. It needs its own
+	// kind because that row's action is "resolve the SELFDESTRUCT order
+	// descriptor" by name, which HumanOrder cannot express: its 1..14 codes are
+	// the latch bytes of [07 §9] and none of them is self-destruct.
+	HumanSelfDestruct
 )
 
 type HumanSelectionCommand struct{ Handles []pool.Handle }
+
+// HumanSelfDestructCommand carries the selection Ctrl+D acts on. The descriptor
+// is the front-segment `SelfDestructFG`, which [04 R-ORD-01 §2] names as the
+// button's own; the rear-segment `SelfDestruct` is the kamikaze/mine spawn.
+type HumanSelfDestructCommand struct{ Handles []pool.Handle }
 type HumanOrderCommand struct {
 	Handles  []pool.Handle
 	Code     int
@@ -119,6 +129,7 @@ type HumanCommand struct {
 	BuildPage        HumanBuildPageCommand
 	Group            HumanGroupCommand
 	Stance           HumanStanceCommand
+	SelfDestruct     HumanSelfDestructCommand
 }
 
 func cloneHumanHandles(in []pool.Handle) []pool.Handle {
@@ -134,6 +145,7 @@ func cloneHumanCommand(c HumanCommand) HumanCommand {
 	c.Selection.Handles = cloneHumanHandles(c.Selection.Handles)
 	c.Order.Handles = cloneHumanHandles(c.Order.Handles)
 	c.Stop.Handles = cloneHumanHandles(c.Stop.Handles)
+	c.SelfDestruct.Handles = cloneHumanHandles(c.SelfDestruct.Handles)
 	return c
 }
 
@@ -667,6 +679,34 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		s.applyHumanGroup(c.Group, true)
 	case HumanGroupRecall:
 		s.applyHumanGroup(c.Group, false)
+	case HumanSelfDestruct:
+		// Ctrl+D resolves the SELFDESTRUCT descriptor and issues it for the
+		// selection [07 R-CAM-01 §2]. The front-segment descriptor is the
+		// button's [04 R-ORD-01 §2]; the record's own handler owns the
+		// countdown, the announcement and the 30000 self-damage.
+		id := orders.Lookup("SelfDestructFG")
+		if id == 0 {
+			id = orders.Lookup("SelfDestruct")
+		}
+		if id == 0 {
+			return
+		}
+		handles := c.SelfDestruct.Handles
+		if len(handles) == 0 {
+			handles = s.selectedHumanHandles()
+		}
+		for _, h := range handles {
+			u := s.humanUnit(h)
+			if u == nil {
+				continue
+			}
+			s.bindOrderQueue(u)
+			q := orders.QueueForUnit(u)
+			if q == nil {
+				continue
+			}
+			q.Push(id, orders.NewNodeForOrder(id, 0, u.X, u.Y, u.Z, tick, u.Handle, true))
+		}
 	case HumanOrder:
 		var target *units.Unit
 		if c.Order.Target != 0 {

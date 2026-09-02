@@ -40,6 +40,12 @@ const (
 	BattleModalActionNone BattleModalAction = iota
 	BattleModalActionMainMenu
 	BattleModalActionExitGame
+	// ARMOPT routes LOADGAME and SAVEGAME to the two LOADGAME.GUI modes. Both
+	// gadgets are available in a campaign (session kind 1) and a skirmish
+	// (kind 2); only network multiplayer greys them, and this build has no
+	// network session [07 R-FE-01 §7] [08 R-SAVE-02 §4].
+	BattleModalActionSaveGame
+	BattleModalActionLoadGame
 )
 
 // BattleScheduleIntent is a plain presentation value. Session applies it at
@@ -386,6 +392,12 @@ func (s *BattleState) Activate(name string) BattleModalAction {
 			s.CloseOptions()
 		case "exit":
 			s.ShowExit()
+		case "savegame":
+			// The dialog opens over ARMOPT, which stays on the modal chain
+			// [07 R-FE-01 §7] [07 R-FE-01 §8].
+			return BattleModalActionSaveGame
+		case "loadgame":
+			return BattleModalActionLoadGame
 		}
 	case BattleModalExit:
 		switch Key(name) {

@@ -25,6 +25,11 @@ type Camera struct {
 	ViewW, ViewH int32
 	MapW, MapH   int32
 	Scale        float32 // presentation zoom; 1 == native [F-P1-008]
+
+	// Follow is the rest of the retail camera block: the desired origin, the
+	// tracked object and the four bookmark slots [07 R-CAM-01 §12]. It is
+	// presentation state; no simulation phase reads it back [I6].
+	Follow FollowState
 }
 
 // Direction is a scroll direction [07 §10].
@@ -196,15 +201,17 @@ func (c *Camera) BattleView() (int32, int32) { // [03 §4.1]
 }
 
 // JumpTo is the retail camera *jump*: the current origin is written outright
-// and clamped, with no glide [07 R-CAM-01 §12]. Nanolathe's presentation holds
-// no separate desired-origin word, so copying the target into it — which retail
-// does — has no observable counterpart here.
+// and clamped, and the clamped result is copied into the desired origin so no
+// glide survives the jump [07 R-CAM-01 §12]. It does not clear the tracked
+// object — the writers that do are named in that section's table, and each
+// calls ClearFollow itself.
 func (c *Camera) JumpTo(x, z int32) { // [07 R-CAM-01 §12]
 	if c == nil {
 		return
 	}
 	c.X, c.Z = x, z
 	c.Clamp()
+	c.Follow.Desired = Origin{X: c.X, Z: c.Z}
 }
 
 // BattleViewCenterOrigin converts a map-pixel point to the camera origin that
