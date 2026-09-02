@@ -827,6 +827,24 @@ func (s *Session) tickPlayers(tick uint32) {
 		if mgr != nil && mgr.RNG == nil {
 			mgr.RNG = s.SimRNG()
 		}
+		// Bind the combat half of the one 30-tick routine [06 §3.1]. The
+		// per-side target registry rebuild and the strategic refresh are one
+		// retail routine on one object per player slot; this build splits them
+		// across internal/combat (the candidate lists and the secondary-list
+		// gate) and internal/ai (the census, the centroid and the single
+		// bound-30 draw) because neither package may import the other. The
+		// session is the only place that sees both, so it binds the seam here,
+		// beside the RNG binding, so a session a test constructs directly is
+		// wired the same way the composed one is.
+		//
+		// The result is retail's shape: one gate per slot, both halves rebuilt
+		// on the same tick, one draw per due, at the per-player phase position
+		// [06 §3.1 "Which slots draw"]. Before WU-19-126 the combat half ran
+		// from the weapons step on its own cadence word and the two clocks
+		// could drift apart by up to thirty ticks.
+		if mgr != nil && !mgr.Strategic.TargetRegistryRebuildBound() {
+			mgr.Strategic.BindTargetRegistryRebuild(s.rebuildTargetRegistryForSlot)
+		}
 		before := func() {
 			if mgr != nil {
 				mgr.Tick(tick, s.Units, s.Econ)
@@ -844,6 +862,21 @@ func (s *Session) tickPlayers(tick uint32) {
 			s.stepSensorPhase(tick)
 		}
 	}
+}
+
+// rebuildTargetRegistryForSlot is the session end of the seam bound onto every
+// manager's strategic state in tickPlayers. The strategic refresh's cadence
+// gate calls it on a due, before the census and before the bound-30 draw, so
+// the candidate lists and the counters of the one retail routine are rebuilt
+// on the same tick from the same gate [06 §3.1][08 R-AI-01 §16].
+//
+// It takes no random draw of its own; the routine's single draw stays where it
+// is, at the end of the refresh (I4).
+func (s *Session) rebuildTargetRegistryForSlot(tick uint32, player uint8) {
+	if s == nil || s.Combat == nil {
+		return
+	}
+	s.Combat.RebuildTargetRegistryIfDue(tick, player, s.Units, s.Vis, s.World, s.Econ)
 }
 
 // endConditionBlock is the economy ledger's EndCondition seam: it runs inside

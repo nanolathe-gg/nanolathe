@@ -233,6 +233,10 @@ func bindCOBWithPortsAndVisibility(fs vfs.FSOps, def *content.UnitDef, mdl *mode
 	// [R-CB-01 §4].
 	if binding.Callbacks != nil {
 		initializeCreationCallbacks(u, binding.Callbacks, maxReloadTicks(def))
+		// The two piece identities the slot's distance word is built from are
+		// the ones just resolved, so the word is written here — the only site
+		// in the build that answers both queries [06 R-WPN-05 §3].
+		WriteSlotDistanceWords(u, binding)
 	}
 	// On success, the pending handler has been consumed by the VM's SetProgram
 	// inside BindStrict, and Create has already run against the unit's model-ordered

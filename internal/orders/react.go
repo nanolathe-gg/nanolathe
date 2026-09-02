@@ -138,8 +138,10 @@ const staticStandbyInterruptible uint32 = 1 << 17
 // issuer: the slot admission predicate for slot 0 against the attacker
 // [08 R-AI-01 §11]. That predicate needs the world, visibility and terrain
 // services (combat.SlotAcquisitionAdmits) which this order-side seam does not
-// hold; the combat-side reaction routine that binds this function owns that
-// call and does not yet make it — see the RWU-19-39 report.
+// hold, so the combat-side reaction routine that binds this function owns it
+// and now applies it immediately before this call (WU-19-128). All three
+// admissions are pure predicates ANDed together, so evaluating that one first
+// is observationally identical to retail's order.
 //
 // It reports whether a record was inserted; the caller falls through to the
 // per-slot offer when it did not.

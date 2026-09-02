@@ -1661,14 +1661,10 @@ func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed,
 // rewrites that word, so it is the divisor operand of every ballistic shot
 // the unit ever fires, not a per-shot flight distance [06 §6.4 Correction].
 //
-// This build carries no such word: the ballistic creator (internal/combat)
-// has no operand for it and this package does not query pieces at
-// construction. Adding it is a two-package change — a per-slot field written
-// here from the two piece queries, and the creator's `T0` reading it instead
-// of a solved distance — and is left to a follow-up named in the RWU-19-39
-// report. TODO(question): whether the heading has been drawn when the
-// initializer runs (the delta is heading-dependent); decider in
-// [06 R-WPN-05 §3].
+// The word itself is written by WriteSlotDistanceWords below rather than here,
+// because this routine runs before the unit has a COB binding and therefore
+// before either piece query can be answered: the build resolves `Query*` and
+// `AimFrom*` in initializeCreationCallbacks, once the strict binding exists.
 func installWeapons(u *Unit, def *content.UnitDef) {
 	if u == nil || def == nil {
 		return
@@ -1697,6 +1693,72 @@ func installWeapons(u *Unit, def *content.UnitDef) {
 		s.Weapon = defs[i]
 		s.Flags |= SlotFlagEnabled | SlotFlagAutonomous
 	}
+}
+
+// WriteSlotDistanceWords stores each slot's distance word — the divisor the
+// ballistic creator's `T0` reads [06 §6.4]. For each slot the initializer runs
+// the forced `Query*` callback and then the `AimFrom*` callback with its
+// `Query*` fallback, transforms both piece identities to points through the
+// piece transform that includes the unit's orientation at that moment, and
+// stores
+//
+//	slotDistance = trunc(1.25 × (queryPoint.z − aimFromPoint.z))
+//
+// as a 32-bit integer: a horizontal Z-axis difference of two 16.16 positions —
+// the unit position cancels, so the composed piece offsets are the whole of it
+// — scaled by 1.25 and truncated toward zero [06 R-WPN-05 §3] (RWU-19-39). It
+// is not a length, not a square, and involves neither X nor height. When the
+// script answers neither query the two points coincide and the word is zero.
+//
+// The scale is applied as `(5 × delta) / 4` on the raw 16.16 integers rather
+// than through a float64 multiply: 1.25 is dyadic, so the two agree bit for
+// bit, and Go's integer divide truncates toward zero exactly as the shared
+// narrowing does (I3). Keeping it integral avoids a float64 term in
+// authoritative state (I2).
+//
+// TODO(question): retail's ordering of the heading write against the slot
+// initializer is Unknown — [06 R-WPN-05 §3] leaves open whether the delta is
+// taken at the spawn heading or at heading zero, with the decider "order of
+// the heading write and the slot-initializer call inside the common unit
+// creator". This build writes the word at the point it resolves the two pieces
+// (initializeCreationCallbacks, after the allocation heading is drawn), so it
+// takes the spawn heading; nothing here chooses that, the existing piece
+// resolution site does.
+func WriteSlotDistanceWords(u *Unit, binding *cob.Binding) {
+	if u == nil || binding == nil {
+		return
+	}
+	for i := 0; i < NumSlots; i++ {
+		s := &u.Slots[i]
+		queryZ, ok := composedPieceZ(u, binding, s.MuzzlePiece)
+		if !ok {
+			s.DistanceWord = 0
+			continue
+		}
+		aimZ, ok := composedPieceZ(u, binding, s.AimOriginPiece)
+		if !ok {
+			// The AimFrom* fallback already resolved to the Query* piece when
+			// the script declined it; an unresolvable point here means the
+			// two coincide, which is the zero the section names.
+			aimZ = queryZ
+		}
+		delta := int64(queryZ.Raw()) - int64(aimZ.Raw())
+		s.DistanceWord = int32(delta * 5 / 4) // trunc(1.25 × delta) [06 R-WPN-05 §3]
+	}
+}
+
+// composedPieceZ resolves one piece identity to the world Z of its composed
+// origin. A negative identity is the "script answered no piece" case
+// [04 §5.3], which the caller reads as a coincident point.
+func composedPieceZ(u *Unit, binding *cob.Binding, piece int32) (numeric.Fixed, bool) {
+	if piece < 0 {
+		return 0, false
+	}
+	origin, ok := binding.ComposePiece(int(piece), u.Move.Heading, u.Move.Pitch, u.Move.Bank)
+	if !ok {
+		return 0, false
+	}
+	return origin[2], true
 }
 
 // CreateWithForcedSlot allocates a unit at the exact forcedSlot for save

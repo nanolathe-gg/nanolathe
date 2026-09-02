@@ -90,6 +90,14 @@ type Slot struct {
 	Ammo           int32  // remaining stockpile [06 §1.2] [P0-10]
 	MuzzlePiece    int32  // Query* result retained as the weapon muzzle identity [06 §4.1] C3
 	AimOriginPiece int32  // AimFrom*/second-Query result retained for the later aim-origin consumer [R-CB-01 §4]
+	// DistanceWord is the slot's distance word — the divisor the ballistic
+	// creator's `T0` reads [06 §6.4]. It is written ONCE, by the slot
+	// initializer at unit construction, as
+	// `trunc(1.25 × (queryPoint.z − aimFromPoint.z))` over the two composed
+	// piece points in 16.16 world units, and it has no other writer
+	// [06 R-WPN-05 §3] (RWU-19-39). It is NOT a per-shot flight distance:
+	// every ballistic shot the unit ever fires divides by this one word.
+	DistanceWord int32
 
 	// Aim is the asynchronous Aim handshake [GAP T15] C16 [06 §3.3] [04 §5.3].
 	// IssueBit mirrors Flags&0x01 latch; Ready granted only on nonzero return [GAP T15] C16.

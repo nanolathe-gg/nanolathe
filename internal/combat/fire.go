@@ -318,7 +318,7 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 
 	// Family dispatch [06 §6.2] C15: this is what gives the record its
 	// position, yaw, pitch, scalar speed, velocity and family expiry.
-	InitProjectile(p, w, tick, muzzle, target, tgt.Unit, solvedYaw, solvedPitch, nil)
+	InitProjectile(p, w, tick, muzzle, target, tgt.Unit, solvedYaw, solvedPitch, nil, slot.DistanceWord, ports.Gravity)
 
 	// Apply the retained spread to the aimed trajectory, recomputing the
 	// velocity components from the perturbed angles through the fixed-point
@@ -348,7 +348,11 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 	if fam == CreationBallistic && (yawSpread != 0 || pitchSpread != 0) {
 		p.Yaw = numeric.Angle(uint16(int32(p.Yaw) + yawSpread))
 		p.Pitch = numeric.Angle(uint16(int32(p.Pitch) + pitchSpread))
-		p.Velocity = VelocityFromAngles(p.Yaw, p.Pitch, p.Speed)
+		// The rebuild goes through the ballistic launch build, not the bare
+		// angle helper: retail's spread mutates the SLOT's stored angles before
+		// the creator reads them, so the creator's `T0 × gravity` pre-decrement
+		// applies to the perturbed trajectory too [06 §6.4][06 R-WPN-03 §4].
+		p.Velocity = ballisticLaunchVelocity(p.Yaw, p.Pitch, p.Speed, slot.DistanceWord, ports.Gravity)
 	}
 
 	// Burst state copied from the weapon into the root [06 §4.3] C8.

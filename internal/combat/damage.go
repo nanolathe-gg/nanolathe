@@ -432,12 +432,19 @@ type ReactionSeams struct {
 	// RetaliationOrder is the retaliation's order branch: the shared auto-engage
 	// issuer with force = 0, behind the front-order and category admissions
 	// [08 R-AI-01 §11][04 R-STANCE-01 §3]. It reports whether a record was
-	// inserted; the per-slot offer runs only when it was not.
+	// inserted; the per-slot offer runs only when it was not. The branch's
+	// third admission — slot 0's acquisition predicate against the attacker —
+	// is applied on THIS side, before the call, because the order side does not
+	// hold that predicate's operands.
 	RetaliationOrder func(victim, attacker *units.Unit) bool
 	// SlotAcquisitionAdmits is the §3.1 acquisition physical gate for one of the
 	// victim's weapon slots against one candidate. The damage path does not
 	// carry the visibility, terrain, ledger and catalog operands that gate
 	// needs, so the session supplies it bound to them [06 §3.1].
+	//
+	// The reaction routine calls it at TWO sites: once for slot 0 against the
+	// attacker, ahead of the order branch's issuer [08 R-AI-01 §11], and once
+	// per slot inside the per-slot offer [06 R-WPN-04 §2 part 3].
 	SlotAcquisitionAdmits func(victim *units.Unit, slotIdx int, candidate *units.Unit) bool
 	// UnderAttackSilenced reads bit 7 of the gate-mask word of the victim's
 	// front primary order [06 R-WPN-04 §2 part 4].
@@ -556,8 +563,30 @@ func (s *Service) reactionRetaliation(w *units.World, victim, attacker *units.Un
 	if r.Allied == nil || r.Allied(victim.Owner, attacker.Owner) {
 		return // "the attacker is not allied"; with no alliance row, fail closed
 	}
-	if r.RetaliationOrder != nil && r.RetaliationOrder(victim, attacker) {
-		return // an order was issued; the offer does not also run [08 R-AI-01 §11]
+	// The order branch's last admission before the issuer: the slot admission
+	// predicate evaluated for SLOT 0 against the attacker [08 R-AI-01 §11]
+	// [06 §3.1] (RWU-19-39). It sits here rather than inside the order-side
+	// seam because the predicate needs the world, visibility, terrain, ledger
+	// and catalog operands internal/orders does not hold; the seam owns the
+	// front-order and category halves and this side owns this one.
+	//
+	// Retail evaluates it after those two halves. Hoisting it ahead of them is
+	// observationally identical: all three are pure predicates ANDed together,
+	// and this one draws no RNG (see SlotAcquisitionAdmits), so neither the
+	// outcome nor the simulation stream depends on the order (I4).
+	//
+	// A refusal skips ONLY the order branch. The "otherwise" arm of §11 still
+	// runs: the standing-fire gate below and then the per-slot offer, which
+	// re-tests each of the three slots on its own terms — so a victim whose
+	// slot 0 cannot admit the attacker can still swing slot 1 or 2 onto it.
+	//
+	// An unbound predicate fails closed, the way the alliance row above does:
+	// retail always evaluates it, so a build that cannot is not entitled to
+	// issue the order.
+	if r.SlotAcquisitionAdmits != nil && r.SlotAcquisitionAdmits(victim, 0, attacker) {
+		if r.RetaliationOrder != nil && r.RetaliationOrder(victim, attacker) {
+			return // an order was issued; the offer does not also run [08 R-AI-01 §11]
+		}
 	}
 	if victim.Flags>>units.StandingFireShift&units.StandingFieldMask == 0 {
 		return // the offer needs a non-zero standing-fire field [08 R-AI-01 §11]

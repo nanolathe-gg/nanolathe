@@ -284,7 +284,7 @@ func TestPrimaryListStalenessDelaysNewlyVisibleCandidate(t *testing.T) {
 	s := &Service{}
 	acquire := func(tick uint32) (pool.Handle, bool) {
 		f.sensorTick(tick)
-		s.stepTargetRegistries(tick, f.world, f.vis, f.terrain, f.econ)
+		rebuildEverySlot(s, tick, f.world, f.vis, f.terrain, f.econ)
 		return s.acquireTargetForSlot(f.shooter, f.shooter.SlotAt(0), 0, f.world, f.vis, f.terrain, nil, f.econ)
 	}
 
@@ -315,7 +315,7 @@ func TestPrimaryListEntryStaysAcquirableAfterItGoesDark(t *testing.T) {
 	f.sensorTick(1)
 
 	s := &Service{}
-	s.stepTargetRegistries(targetRegistryPeriod, f.world, f.vis, f.terrain, f.econ)
+	rebuildEverySlot(s, targetRegistryPeriod, f.world, f.vis, f.terrain, f.econ)
 	if _, ok := s.acquireTargetForSlot(f.shooter, f.shooter.SlotAt(0), 0, f.world, f.vis, f.terrain, nil, f.econ); !ok {
 		t.Fatal("fixture is wrong: a plainly visible hostile must be on the primary list")
 	}
@@ -324,15 +324,15 @@ func TestPrimaryListEntryStaysAcquirableAfterItGoesDark(t *testing.T) {
 		t.Fatal("a listed entry that cloaks mid-window is still acquirable until the next rebuild [06 §3.1]")
 	}
 	// The next rebuild drops it.
-	s.stepTargetRegistries(2*targetRegistryPeriod, f.world, f.vis, f.terrain, f.econ)
+	rebuildEverySlot(s, 2*targetRegistryPeriod, f.world, f.vis, f.terrain, f.econ)
 	if _, ok := s.acquireTargetForSlot(f.shooter, f.shooter.SlotAt(0), 0, f.world, f.vis, f.terrain, nil, f.econ); ok {
 		t.Fatal("the rebuild at tick 60 drops the now-cloaked hostile from the primary list")
 	}
 	// A dead entry is dropped by the per-attempt liveness re-test, without
 	// waiting for a rebuild [06 §3.1].
-	s.stepTargetRegistries(3*targetRegistryPeriod, f.world, f.vis, f.terrain, f.econ)
+	rebuildEverySlot(s, 3*targetRegistryPeriod, f.world, f.vis, f.terrain, f.econ)
 	f.enemy.Hidden = false
-	s.stepTargetRegistries(4*targetRegistryPeriod, f.world, f.vis, f.terrain, f.econ)
+	rebuildEverySlot(s, 4*targetRegistryPeriod, f.world, f.vis, f.terrain, f.econ)
 	if _, ok := s.acquireTargetForSlot(f.shooter, f.shooter.SlotAt(0), 0, f.world, f.vis, f.terrain, nil, f.econ); !ok {
 		t.Fatal("the decloaked hostile is back on the list")
 	}
@@ -344,24 +344,29 @@ func TestPrimaryListEntryStaysAcquirableAfterItGoesDark(t *testing.T) {
 
 // The cadence belongs to the ten player slots, not to the units that happen to
 // be stepped: the per-player phase "iterates the ten player slots in order"
-// [08 "Dispatch gates and order sinks"][06 §3.1]. A side that owns no live unit
-// therefore still has its registry rebuilt.
+// [08 "Dispatch gates and order sinks"][06 §3.1], and the gate is null-checked
+// on the slot's STRATEGIC STATE, "never controller-checked" — a state the
+// per-player reset constructs "for every slot whose controller is not 3
+// (remote), human slots included" [06 §3.1 "Which slots draw"]. A slot with
+// strategic state and no live unit of its own therefore still has its registry
+// rebuilt.
 func TestRegistrySweepRebuildsEverySide(t *testing.T) {
 	f := newRegistryFixture(t, false)
 	f.onProjectedGrid()
 	f.sensorTick(1)
 	s := &Service{}
-	s.stepTargetRegistries(targetRegistryPeriod, f.world, f.vis, f.terrain, f.econ)
+	rebuildEverySlot(s, targetRegistryPeriod, f.world, f.vis, f.terrain, f.econ)
 
 	// Player 3 owns nothing at all; the hostile pair is still classified for it.
 	if got := len(s.targets.primaryList(3)); got != 2 {
 		t.Fatalf("a unit-less side's primary list holds both hostiles, got %d", got)
 	}
-	// The sweep is idempotent within a tick, so a second stepped unit does not
-	// re-run a rebuild the first one performed.
+	// The mirror cadence word makes a duplicate call inside one window a no-op,
+	// so a second visit to the same slot does not re-run a rebuild the first
+	// one performed [06 §3.1].
 	f.enemy.Hidden = true
-	s.stepTargetRegistries(targetRegistryPeriod, f.world, f.vis, f.terrain, f.econ)
+	rebuildEverySlot(s, targetRegistryPeriod, f.world, f.vis, f.terrain, f.econ)
 	if got := len(s.targets.primaryList(3)); got != 2 {
-		t.Fatalf("the sweep ran twice inside one tick, got %d", got)
+		t.Fatalf("the rebuild ran twice inside one window, got %d", got)
 	}
 }

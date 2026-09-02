@@ -18,7 +18,7 @@ func TestImmuneHostileIsExcludedFromPrimaryListOnly(t *testing.T) {
 	f.sensorTick(1)
 
 	s := &Service{}
-	s.stepTargetRegistries(targetRegistryPeriod, f.world, f.vis, f.terrain, f.econ)
+	rebuildEverySlot(s, targetRegistryPeriod, f.world, f.vis, f.terrain, f.econ)
 
 	for _, h := range s.targets.primaryList(0) {
 		if h == f.enemy.Handle {
@@ -44,7 +44,7 @@ func TestImmuneHostileIsExcludedFromPrimaryListOnly(t *testing.T) {
 		}
 	}
 
-	s.stepTargetRegistries(2*targetRegistryPeriod, f.world, f.vis, f.terrain, f.econ)
+	rebuildEverySlot(s, 2*targetRegistryPeriod, f.world, f.vis, f.terrain, f.econ)
 	found := false
 	for _, h := range s.targets.primaryList(0) {
 		if h == f.enemy.Handle {

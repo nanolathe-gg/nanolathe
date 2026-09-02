@@ -72,7 +72,10 @@ func (s *Session) interceptorFireTick(tick uint32) {
 			muzzle := combat.Vec3{X: u.X, Y: u.Y, Z: u.Z}
 			interceptorPos := combat.Vec3{X: u.X, Y: u.Y, Z: u.Z}
 			// Translate units.Slot to combat.Slot for the helper's Ammo mutation.
-			cs := &combat.Slot{Weapon: w, Ammo: slot.Ammo, MuzzlePiece: slot.MuzzlePiece, Flags: slot.Flags, DesiredYaw: slot.DesiredYaw, DesiredPitch: slot.DesiredPitch, Reload: slot.Reload, Aim: slot.Aim, Target: combat.Target{}}
+			// DistanceWord travels with it: a weapon authored both `vertical`
+			// and `ballistic` reaches the ballistic creator, whose `T0` divides
+			// that word [06 §6.2][06 §6.4].
+			cs := &combat.Slot{Weapon: w, Ammo: slot.Ammo, MuzzlePiece: slot.MuzzlePiece, DistanceWord: slot.DistanceWord, Flags: slot.Flags, DesiredYaw: slot.DesiredYaw, DesiredPitch: slot.DesiredPitch, Reload: slot.Reload, Aim: slot.Aim, Target: combat.Target{}}
 			// Map units.Target to combat.Target for launch, though interceptor
 			// helpers use the coverage scan rather than ground target. Keep empty.
 			_, _, ok := combat.AcquireInterceptorTargetForSpawn(s.Combat, interceptorPos, uint8(u.Owner), cov, w, cs, muzzle, tick, weaponsByID)

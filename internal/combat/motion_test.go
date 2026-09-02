@@ -570,7 +570,7 @@ func TestInitProjectileDispatchSetsExpiry(t *testing.T) {
 	target := Vec3{X: fix(655360), Y: fix(0), Z: fix(0)} // 10 units
 	wOrd := &content.WeaponDef{ID: 1, LineOfSight: true, WeaponVelocity: 65536, WeaponTimer: 50, Range: 10}
 	var p Projectile
-	fam := InitProjectile(&p, wOrd, now, muzzle, target, 0, 0, 0, nil)
+	fam := InitProjectile(&p, wOrd, now, muzzle, target, 0, 0, 0, nil, 0, 0)
 	if fam != CreationOrdinary {
 		t.Fatalf("init ordinary fam got %v want ordinary", fam)
 	}
@@ -586,7 +586,7 @@ func TestInitProjectileDispatchSetsExpiry(t *testing.T) {
 
 	// ballistic init with burnBlow false uses timer
 	wBal := &content.WeaponDef{ID: 2, Ballistic: true, WeaponTimer: 30, BurnBlow: false, WeaponVelocity: 65536}
-	fam = InitProjectile(&p, wBal, now, muzzle, target, 0, numeric.Angle(0), numeric.Angle(0), nil)
+	fam = InitProjectile(&p, wBal, now, muzzle, target, 0, numeric.Angle(0), numeric.Angle(0), nil, 0, 0)
 	if fam != CreationBallistic {
 		t.Fatalf("ballistic fam")
 	}
@@ -596,7 +596,7 @@ func TestInitProjectileDispatchSetsExpiry(t *testing.T) {
 
 	// vertical
 	wV := &content.WeaponDef{ID: 3, VLaunch: true, WeaponVelocity: 65536, Range: 10, WeaponAcceleration: 0, StartVelocity: 0}
-	fam = InitProjectile(&p, wV, now, muzzle, target, 0, 0, 0, nil)
+	fam = InitProjectile(&p, wV, now, muzzle, target, 0, 0, 0, nil, 0, 0)
 	if fam != CreationVertical {
 		t.Fatalf("vertical fam")
 	}
@@ -610,7 +610,7 @@ func TestInitProjectileDispatchSetsExpiry(t *testing.T) {
 	// meteor
 	wMet := &content.WeaponDef{ID: 4, Meteor: true}
 	vel := Vec3{X: fix(1000), Y: fix(-983040), Z: fix(0)}
-	fam = InitProjectile(&p, wMet, now, muzzle, target, 0, 0, 0, &vel)
+	fam = InitProjectile(&p, wMet, now, muzzle, target, 0, 0, 0, &vel, 0, 0)
 	if fam != CreationMeteor {
 		t.Fatalf("meteor fam")
 	}
@@ -623,7 +623,7 @@ func TestInitProjectileDispatchSetsExpiry(t *testing.T) {
 
 	// dropped
 	wDrop := &content.WeaponDef{ID: 5, Dropped: true}
-	fam = InitProjectile(&p, wDrop, now, muzzle, target, 0, 0, 0, nil)
+	fam = InitProjectile(&p, wDrop, now, muzzle, target, 0, 0, 0, nil, 0, 0)
 	if fam != CreationDropped {
 		t.Fatalf("dropped fam")
 	}

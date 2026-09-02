@@ -260,9 +260,51 @@ func InitOrdinary(p *Projectile, w *content.WeaponDef, now uint32, muzzle, targe
 	// Burst state not handled here; fire.go owns it [06 §4.3]
 }
 
+// BallisticFlightTicks is the ballistic creator's `T0`: the firing slot's
+// stored distance word divided by the weapon velocity, an UNSIGNED divide of
+// the two raw words yielding whole ticks [06 §6.4].
+//
+// The distance word is the per-unit constant the slot initializer wrote at
+// construction, not a distance to this shot's target — RWU-19-39's correction
+// to [06 §6.4]. Because the divide is unsigned, a negative word (the muzzle
+// behind the aim-from piece along world Z at initialization) yields a very
+// large `T0` rather than a negative one. The arithmetic is Established; it is
+// **Unknown** whether stock units ever store a negative word, so this
+// reproduces the unsigned divide and does not defend against it (I11).
+//
+// A zero weapon velocity divides by zero here, which is exactly where retail
+// raises the processor divide exception — after the pool record is reserved,
+// so the live count is not rolled back [06 §6.4] I11.
+func BallisticFlightTicks(slotDistance int32, weaponVelocity int32) uint32 {
+	return uint32(slotDistance) / uint32(weaponVelocity)
+}
+
+// ballisticLaunchVelocity builds the ballistic creator's launch velocity
+// [06 §6.4]:
+//
+//	velocityY = sin(pitch, weaponvelocity) - T0 * gravity
+//	H         = cos(pitch, weaponvelocity)
+//	velocityX/Z from the yaw against H
+//
+// The pre-decrement of the vertical component by one flight-time's worth of
+// gravity is part of the launch, not an integrator artefact, and is reproduced
+// as written; the product is a 32-bit signed multiply. **Unknown:** the
+// pre-decrement's intended geometric meaning, and therefore whether an
+// implementation may simplify it [06 §6.4].
+func ballisticLaunchVelocity(yaw, pitch numeric.Angle, speed numeric.Fixed, slotDistance int32, gravity numeric.Fixed) Vec3 {
+	v := VelocityFromAngles(yaw, pitch, speed)
+	t0 := BallisticFlightTicks(slotDistance, int32(speed.Raw()))
+	drop := int32(t0) * int32(gravity.Raw()) // 32-bit signed multiply [06 §6.4]
+	v.Y = numeric.Fixed(int64(int32(v.Y.Raw()) - drop))
+	return v
+}
+
 // InitBallistic initializes a ballistic projectile per [06 §6.4].
 // solvedPitch must be the pitch from BallisticSolve [06 §3.3] [06 §6.4].
-func InitBallistic(p *Projectile, w *content.WeaponDef, now uint32, muzzle, target Vec3, targetUnit pool.Handle, solvedPitch numeric.Angle, yaw numeric.Angle) {
+// slotDistance is the firing slot's distance word — the `T0` divisor written
+// once at unit construction [06 R-WPN-05 §3] — and gravity is the map's
+// per-tick gravity global in 16.16.
+func InitBallistic(p *Projectile, w *content.WeaponDef, now uint32, muzzle, target Vec3, targetUnit pool.Handle, solvedPitch numeric.Angle, yaw numeric.Angle, slotDistance int32, gravity numeric.Fixed) {
 	if p == nil || w == nil {
 		return
 	}
@@ -271,7 +313,9 @@ func InitBallistic(p *Projectile, w *content.WeaponDef, now uint32, muzzle, targ
 	p.Pitch = solvedPitch
 	speed := numeric.Fixed(int64(w.WeaponVelocity))
 	p.Speed = speed
-	p.Velocity = VelocityFromAngles(yaw, solvedPitch, speed) // [06 §6.4] helper with (table*mag+4096)>>13
+	// [06 §6.4]: the shared (table*mag+4096)>>13 build, then the `T0 × gravity`
+	// pre-decrement of the vertical component.
+	p.Velocity = ballisticLaunchVelocity(yaw, solvedPitch, speed, slotDistance, gravity)
 	if w.BurnBlow {
 		p.ExpiryTick = BallisticBurnBlowExpiry(now, muzzle, target, solvedPitch, w.WeaponVelocity) // [06 §6.4]
 	} else {
@@ -333,7 +377,9 @@ func InitMeteor(p *Projectile, w *content.WeaponDef, now uint32, pos, vel Vec3) 
 
 // InitProjectile dispatches creation and initializes p per [06 §6.2] C15.
 // Returns the creation family used; nil weapon returns CreationNone.
-func InitProjectile(p *Projectile, w *content.WeaponDef, now uint32, muzzle, target Vec3, targetUnit pool.Handle, yaw, pitch numeric.Angle, meteorVel *Vec3) CreationFamily {
+// slotDistance and gravity are the ballistic creator's two extra operands and
+// are ignored by every other family [06 §6.4].
+func InitProjectile(p *Projectile, w *content.WeaponDef, now uint32, muzzle, target Vec3, targetUnit pool.Handle, yaw, pitch numeric.Angle, meteorVel *Vec3, slotDistance int32, gravity numeric.Fixed) CreationFamily {
 	fam := CreationFamilyForWeapon(w)
 	switch fam {
 	case CreationMeteor:
@@ -343,7 +389,7 @@ func InitProjectile(p *Projectile, w *content.WeaponDef, now uint32, muzzle, tar
 			InitMeteor(p, w, now, muzzle, Vec3{})
 		}
 	case CreationBallistic:
-		InitBallistic(p, w, now, muzzle, target, targetUnit, pitch, yaw)
+		InitBallistic(p, w, now, muzzle, target, targetUnit, pitch, yaw, slotDistance, gravity)
 	case CreationVertical:
 		InitVertical(p, w, now, muzzle, target, targetUnit)
 	case CreationOrdinary:

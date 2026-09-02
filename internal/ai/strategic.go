@@ -113,6 +113,25 @@ type Strategic struct {
 	// R-P0-05 §5–§6].
 	energyEnvironment func() (windScalar, tidalStrength float32)
 
+	// rebuildRegistry is the seam onto the OTHER half of this one retail
+	// routine: the per-side target registry's candidate lists and
+	// secondary-list gate, which live in internal/combat [06 §3.1].
+	//
+	// "The per-side target registry and the strategic state are one object per
+	// player slot, the registry rebuild and the strategic refresh are one
+	// routine, and the bound-30 draw here is the one draw [08 R-AI-01 §16]
+	// records" [06 §3.1]. This build keeps the two halves in two packages
+	// because internal/combat may not import internal/ai and internal/ai may
+	// not import internal/combat, so the session binds this callback and
+	// MaybeRefresh's gate below is the single clock for both. Before WU-19-126
+	// each half kept its own cadence word and the two could drift apart by up
+	// to thirty ticks.
+	//
+	// A nil callback means no session bound one (a bare fixture): the census
+	// half still refreshes on the gate, exactly as it did before the seam
+	// existed.
+	rebuildRegistry func(tick uint32, player uint8)
+
 	// setupDraws retains the eight construction-time values for draw-ledger
 	// verification; LandRegion and WaterRegion are their semantic products
 	// [08 R-AI-03 §4].
@@ -133,6 +152,24 @@ func (s *Strategic) BindEnergyEnvironment(read func() (windScalar, tidalStrength
 		return
 	}
 	s.energyEnvironment = read
+}
+
+// BindTargetRegistryRebuild supplies the combat-side half of the one 30-tick
+// routine [06 §3.1]. The session binds it; the gate in MaybeRefresh then drives
+// both halves from one clock, in retail's order — the candidate lists and the
+// secondary-list gate first, then the census and the centroid, then the single
+// bound-30 draw [06 §3.1][08 R-AI-01 §16].
+func (s *Strategic) BindTargetRegistryRebuild(rebuild func(tick uint32, player uint8)) {
+	if s == nil {
+		return
+	}
+	s.rebuildRegistry = rebuild
+}
+
+// TargetRegistryRebuildBound reports whether a session has bound the combat
+// half of the routine, so a caller can bind it exactly once.
+func (s *Strategic) TargetRegistryRebuildBound() bool {
+	return s != nil && s.rebuildRegistry != nil
 }
 
 // SetUnitLimit supplies the session's per-player unit limit, the only global
@@ -384,6 +421,19 @@ func (s *Strategic) InitClassVectors() {
 // per-type class vectors are recomputed ONLY when RNG(30)==0 at a refresh, plus once at init — never otherwise (I4).
 // Exactly one RNG(30) draw is consumed per refresh; any other bound in this file is a bug per C9 (I4).
 // Returns true iff a refresh was performed.
+//
+// This is also the per-side TARGET REGISTRY rebuild of [06 §3.1] — one routine
+// in retail, two packages here — so on a due it runs, in this order: the bound
+// combat-side rebuild of the candidate lists and the secondary-list gate, the
+// census and the weighted centroid, then the one bound-30 draw whose zero
+// outcome recomputes the class vectors [06 §3.1][08 R-AI-01 §16].
+//
+// The caller is the per-player phase, once per visited slot in ascending slot
+// order, after that slot's manager tick and before its per-unit visits, and
+// the gate is null-checked on the strategic state rather than
+// controller-checked: "the local human's slot draws on the same 30-tick
+// cadence as a computer slot and a one-human, one-computer game consumes two
+// draws per thirty ticks" [06 §3.1 "Which slots draw"][08 R-AI-01 §16].
 func (s *Strategic) MaybeRefresh(tick uint32, r *rng.Simulation, player uint8, w *units.World) bool {
 	if s == nil {
 		return false
@@ -397,6 +447,19 @@ func (s *Strategic) MaybeRefresh(tick uint32, r *rng.Simulation, player uint8, w
 	// wrap follows the simulation clock [08].
 	if tick-s.LastRefreshTick < refreshInterval {
 		return false
+	}
+	// This gate is the ONE gate of the one retail routine [06 §3.1]: the
+	// per-side target registry rebuild and this strategic refresh are the same
+	// body, and the bound-30 draw below is its single draw. The combat half —
+	// the primary and secondary candidate lists and the secondary-list gate —
+	// runs FIRST, before the census and the centroid, because the retail body
+	// classifies each unit into the lists and the counters in one walk and the
+	// draw is taken at the end of it [06 §3.1][08 R-AI-01 §16]. The two halves
+	// are two walks here and one walk there; the observable difference is
+	// nothing but the walk count, because neither half reads what the other
+	// writes.
+	if s.rebuildRegistry != nil {
+		s.rebuildRegistry(tick, player)
 	}
 	// Counts and strategic center are rebuilt at every due refresh [08].
 	s.refreshCountsAndCenter(player, w)

@@ -68,6 +68,11 @@ const visitsPerProbe = 40
 func runProbeVisits(svc *Service, shooter *units.Unit, w *units.World, terrain *world.Terrain, cat *content.Catalog, sim *rng.Simulation) (acquired bool) {
 	vis := allVisibleService(terrain)
 	for tick := uint32(1); tick <= visitsPerProbe; tick++ {
+		// The per-player phase runs before the slot's per-unit visits and owns
+		// the registry rebuild [06 §3.1 "Which slots draw"]; the weapons step
+		// stopped driving it in WU-19-126, so a probe that steps weapons
+		// directly must stand in for that phase or it acquires nothing.
+		rebuildEverySlot(svc, tick, w, vis, terrain, nil)
 		svc.StepWeaponsForUnit(shooter, tick, w, vis, terrain, nil, cat, sim, nil)
 		if shooter.SlotAt(0).Target.Kind == units.TargetUnit && shooter.SlotAt(0).Target.Unit != 0 {
 			acquired = true

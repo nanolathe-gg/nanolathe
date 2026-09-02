@@ -75,11 +75,23 @@ func newCombatFixtureWorld(maxDefs int, cat *content.Catalog) *units.World {
 // service, so a fixture that calls an acquisition directly reads the same
 // candidate lists a stepped battle would [06 §3.1].
 //
-// A battle reaches the rebuild from StepWeaponsForUnit's per-tick sweep, and
-// nothing is acquirable before the first rebuild is due — that is the cadence,
-// not a fixture accident — so a test that skips the sweep must run it itself.
-// The tick is the first at which `lastRebuild + 30 <= tick` holds from zero.
+// A battle reaches the rebuild once per visited slot from the per-player
+// phase, driven by that slot's strategic refresh gate, and nothing is
+// acquirable before the first rebuild is due — that is the cadence, not a
+// fixture accident — so a test that skips the phase must run it itself. The
+// tick is the first at which `lastRebuild + 30 <= tick` holds from zero.
 func primeTargetRegistry(s *Service, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service) *Service {
-	s.stepTargetRegistries(targetRegistryPeriod, w, vis, terrain, econ)
+	rebuildEverySlot(s, targetRegistryPeriod, w, vis, terrain, econ)
 	return s
+}
+
+// rebuildEverySlot stands in for the per-player phase's ascending slot walk:
+// one RebuildTargetRegistryIfDue per slot, slots 0..9 ascending [06 §3.1] (I1).
+// The session drives that walk from each slot's strategic refresh gate; a
+// combat-only fixture owns no strategic state, so it drives the same entry
+// point directly.
+func rebuildEverySlot(s *Service, tick uint32, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service) {
+	for slot := 0; slot < combatPlayerSlots; slot++ {
+		s.RebuildTargetRegistryIfDue(tick, uint8(slot), w, vis, terrain, econ)
+	}
 }

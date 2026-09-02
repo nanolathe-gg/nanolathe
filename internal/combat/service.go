@@ -213,12 +213,12 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 	// handshake, the shot-time gates and the firing of a target an order
 	// installed all run for a unit the scan does not visit this tick.
 	scanning := s.autonomousScanVisitsUnit(u, tick, w)
-	// The per-side target registry's rebuild [06 §3.1]. Retail runs it "once
-	// per side, from the per-player phase", so the cadence belongs to the ten
-	// player slots and not to the units that happen to be stepped: the sweep
-	// below runs every side's cadence once per tick, guarded so the first
-	// stepped unit of a tick runs it and every later one compares.
-	s.stepTargetRegistries(tick, w, vis, terrain, econ)
+	// The per-side target registry's rebuild used to be reached from here, and
+	// is not any more: RebuildTargetRegistryIfDue is called once per slot from
+	// the per-player phase, at the position [06 §3.1] gives it — after that
+	// slot's manager tick and before its per-unit visits — so that the lists,
+	// the census and the one bound-30 draw share the single cadence gate they
+	// share in retail. See RebuildTargetRegistryIfDue.
 	// --- Phase: pre-drain callback scheduling (TargetCleared + Aim) in slot order 0..2 [GAP T15] ---
 	type slotPrep struct {
 		needLatch    bool
@@ -917,6 +917,10 @@ const targetRegistryPeriod uint32 = 30
 // Rows are indexed by player slot over the fixed ten-slot range, never a map
 // (I1).
 type targetRegistry struct {
+	// lastRebuild is the MIRROR of the one cadence word [06 §3.1]. The gate
+	// that decides a slot's due is the strategic refresh's, in internal/ai;
+	// this row is stamped by the same call, so the two halves of the one retail
+	// routine cannot drift apart.
 	lastRebuild [combatPlayerSlots]uint32
 	gate        [combatPlayerSlots]bool
 	primary     [combatPlayerSlots][]pool.Handle
@@ -928,11 +932,6 @@ type targetRegistry struct {
 	seen       []bool
 	seenTick   uint32
 	seenPrimed bool
-
-	// sweptTick is the tick the per-tick registry sweep last ran on, so the
-	// sweep is idempotent within a tick however many units reach it.
-	sweptTick   uint32
-	sweptPrimed bool
 }
 
 // primaryList returns one side's primary list as the last rebuild left it.
@@ -1013,39 +1012,52 @@ func (s *Service) targetingUpgradeGateFor(owner uint8) bool {
 	return s.targets.gate[owner]
 }
 
-// stepTargetRegistries runs the registry cadence for every player slot, once
-// per tick, ascending [06 §3.1] (I1).
+// TargetRegistryRebuildTick reports the tick one slot's registry was last
+// rebuilt on — the mirror of the one cadence word [06 §3.1]. Zero means no
+// rebuild has run: the first is due at tick 30, because the state's constructor
+// seeds the word to zero and "the tick-0 priming finds `0 + 30 <= 0` false and
+// draws nothing" [06 §3.1 "Which slots draw"].
 //
-// Retail reaches the rebuild from the PER-PLAYER phase — "rebuilt ... at most
-// once per 30 ticks per side, from the per-player phase" [06 §3.1], and
-// [08 "Dispatch gates and order sinks"] gives that phase as a walk of the ten
-// player slots in order — so which sides rebuild does not depend on which units
-// exist. The cadence used to be reached through this package's unit sweep, at
-// the owner of each stepped unit, so a side with no live unit never rebuilt at
-// all and a side whose first unit appeared mid-battle rebuilt on that unit's
-// arrival rather than on the phase's own clock.
+// It exists so a caller can check that the two halves of the one routine agree.
+func (s *Service) TargetRegistryRebuildTick(slot uint8) uint32 {
+	if s == nil || int(slot) >= combatPlayerSlots {
+		return 0
+	}
+	return s.targets.lastRebuild[slot]
+}
+
+// RebuildTargetRegistryIfDue is this package's half of the ONE retail routine
+// of [06 §3.1] — the routine that is both "the per-side target registry
+// rebuild" of doc 06 and "the 30-tick strategic refresh" of
+// [08 R-AI-01 §16] — reached at the per-player phase for one slot.
 //
-// The sweep visits all ten rows rather than consulting the player table's
-// occupancy: an unoccupied side owns no unit, so it owns no shooter, and its
-// registry has no reader. Ten walks of the unit array every thirty ticks is the
-// whole cost of not needing a second occupancy predicate here.
+// Call it once per visited slot, in ascending slot order, AFTER that slot's
+// manager tick and BEFORE its per-unit visits: "For a visited slot, in order:
+// the manager tick ...; then the cadence gate runs when the slot's strategic
+// state exists — the gate is null-checked, never controller-checked; then the
+// slot's per-unit visits" [06 §3.1 "Which slots draw"]. Which sides rebuild
+// therefore does not depend on which units exist, and a slot whose strategic
+// state exists rebuilds even while it owns nothing.
 //
-// It is called from the unit sweep because that is where this package is
-// reached; the tick guard makes it idempotent, so the first stepped unit of a
-// tick runs it and every later one compares. See rebuildTargetRegistry for why
-// the rebuild's simulation draw is NOT taken here.
-func (s *Service) stepTargetRegistries(tick uint32, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service) {
-	if s == nil || w == nil {
-		return
+// The cadence is decided by the caller's single gate. The comparison repeated
+// below is a MIRROR of it, not a second clock: it makes a duplicate call inside
+// one window a no-op and keeps this package's own tests able to drive the
+// rebuild directly. Because the only production caller is the strategic
+// refresh's gate, and both stamp on the same tick from the same zero start,
+// the two words cannot disagree — which is the whole point of moving the call
+// here [06 §3.1].
+//
+// It reports whether it rebuilt. It consumes NO random draw; see
+// rebuildTargetRegistry.
+func (s *Service) RebuildTargetRegistryIfDue(tick uint32, slot uint8, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service) bool {
+	if s == nil || w == nil || int(slot) >= combatPlayerSlots {
+		return false
 	}
-	r := &s.targets
-	if r.sweptPrimed && r.sweptTick == tick {
-		return
+	if tick < s.targets.lastRebuild[slot]+targetRegistryPeriod {
+		return false
 	}
-	r.sweptPrimed, r.sweptTick = true, tick
-	for p := 0; p < combatPlayerSlots; p++ {
-		s.rebuildTargetRegistry(tick, uint8(p), w, vis, terrain, econ)
-	}
+	s.rebuildTargetRegistry(tick, slot, w, vis, terrain, econ)
+	return true
 }
 
 // rebuildTargetRegistry rebuilds one side's registry on the cadence of
@@ -1075,6 +1087,9 @@ func (s *Service) stepTargetRegistries(tick uint32, w *units.World, vis *visibil
 // secondary-list gate is open [06 §3.1 "the primary-list exclusion bit is the
 // mission Immunity bit"].
 //
+// It is reached only through RebuildTargetRegistryIfDue, from the per-player
+// phase, at the slot position [06 §3.1] gives it.
+//
 // It consumes NO random draw. [06 §3.1] gives the rebuild one simulation draw
 // of bound 30 whose zero outcome runs the strategic refresh, and this build
 // already takes exactly that draw — in internal/ai, at the per-player phase,
@@ -1092,11 +1107,14 @@ func (s *Service) stepTargetRegistries(tick uint32, w *units.World, vis *visibil
 // consume the same retail draw twice and desynchronize every later consumer of
 // the stream (I4).
 //
-// The residual is that this build splits one retail routine across two
-// packages, so the two halves keep separate cadence state and can drift apart
-// by up to thirty ticks; joining them means driving this sweep from the same
-// per-player call site as internal/ai's refresh, which is session wiring and
-// not this package's to change.
+// This build still splits one retail routine across two packages — the lists
+// and the gate here, the census, the centroid and the draw in internal/ai —
+// but the two halves no longer keep independent clocks. WU-19-126 joined them:
+// the strategic refresh's gate is the one gate, and on a due it calls
+// RebuildTargetRegistryIfDue for that slot before recomputing the census and
+// before taking the bound-30 draw, which is the retail order (lists, census
+// and centroid, then the draw whose zero outcome recomputes the class
+// vectors) [06 §3.1][08 R-AI-01 §16]. The word here is a mirror of that gate.
 func (s *Service) rebuildTargetRegistry(tick uint32, owner uint8, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service) {
 	if s == nil || w == nil || int(owner) >= combatPlayerSlots {
 		return
@@ -1594,6 +1612,10 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 		DesiredPitch: slot.DesiredPitch,
 		Ammo:         slot.Ammo,
 		MuzzlePiece:  slot.MuzzlePiece,
+		// The `T0` divisor the ballistic creator reads. It is copied, never
+		// written back: the word has exactly one writer, the slot initializer
+		// at unit construction [06 R-WPN-05 §3][06 §6.4].
+		DistanceWord: slot.DistanceWord,
 		Aim:          slot.Aim,
 		Target:       tgt,
 	}
