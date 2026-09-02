@@ -213,6 +213,12 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 	// handshake, the shot-time gates and the firing of a target an order
 	// installed all run for a unit the scan does not visit this tick.
 	scanning := s.autonomousScanVisitsUnit(u, tick, w)
+	// The per-side target registry's rebuild [06 §3.1]. Retail runs it "once
+	// per side, from the per-player phase", so the cadence belongs to the ten
+	// player slots and not to the units that happen to be stepped: the sweep
+	// below runs every side's cadence once per tick, guarded so the first
+	// stepped unit of a tick runs it and every later one compares.
+	s.stepTargetRegistries(tick, w, vis, terrain, econ)
 	// --- Phase: pre-drain callback scheduling (TargetCleared + Aim) in slot order 0..2 [GAP T15] ---
 	type slotPrep struct {
 		needLatch    bool
@@ -339,7 +345,7 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 				if slot.Target.Kind == units.TargetNone {
 					continue // nothing installed and nothing to acquire [06 §3.2]
 				}
-			} else if acquired, ok := acquireTargetForSlot(u, slot, idx, w, vis, terrain, simRNG, econ, catalog); ok {
+			} else if acquired, ok := s.acquireTargetForSlot(u, slot, idx, w, vis, terrain, simRNG, econ, catalog); ok {
 				savedYaw := slot.DesiredYaw
 				savedPitch := slot.DesiredPitch
 				savedIssue := slot.Aim.IssueBit
@@ -877,14 +883,321 @@ func (s *Service) autonomousScanVisitsUnit(u *units.Unit, tick uint32, w *units.
 	return u.Flags>>units.StandingFireShift&units.StandingFieldMask == stanceFireAtWill
 }
 
-func acquireTargetForSlot(u *units.Unit, slot *units.Slot, idx int, w *units.World, vis *visibility.Service, terrain *world.Terrain, simRNG *rng.Simulation, econ *economy.Service, catalogs ...*content.Catalog) (pool.Handle, bool) {
-	return acquireTargetForSlotRange(u, slot, idx, w, vis, terrain, simRNG, econ, -1, catalogs...)
+// ---------------------------------------------------------------------------
+// The per-side target registry: both candidate lists and the secondary-list
+// gate [06 §3.1]
+// ---------------------------------------------------------------------------
+
+// targetRegistryPeriod is the registry's rebuild cadence [06 §3.1]: a side's
+// registry is rebuilt from the whole unit array only when
+// `lastRebuild + 30 <= currentTick`, once per side, from the per-player phase.
+// An acquisition can therefore read a list up to thirty ticks stale, which is
+// why the per-attempt filter re-tests liveness.
+const targetRegistryPeriod uint32 = 30
+
+// targetRegistry is the per-side target registry of [06 §3.1] — "one object per
+// player slot, holding two candidate lists plus a per-definition census, a
+// weighted centroid and a gate flag".
+//
+// Three of those members are modelled here: the **primary** candidate list, the
+// **secondary** candidate list and the secondary-list **gate**. The census, the
+// centroid and the third list live elsewhere: the third list is
+// AirBaseRegistry, and internal/ai owns the census and the centroid
+// [08 R-AI-01 §16].
+//
+// The primary list is filed at the REBUILD, with the direct-visibility
+// predicate evaluated there and never again: "Automatic acquisition never scans
+// the unit array. It draws from a per-side target registry ... from which each
+// acquisition attempt filters a fresh array" [06 §3.1]. An attempt therefore
+// reads a list up to thirty ticks stale — including entries for units that died
+// or turned invisible in between, and excluding a unit that became visible
+// since — which is why the per-attempt filter re-tests liveness and nothing
+// else.
+//
+// Rows are indexed by player slot over the fixed ten-slot range, never a map
+// (I1).
+type targetRegistry struct {
+	lastRebuild [combatPlayerSlots]uint32
+	gate        [combatPlayerSlots]bool
+	primary     [combatPlayerSlots][]pool.Handle
+	secondary   [combatPlayerSlots][]pool.Handle
+
+	// seen is this tick's view of the sensor phase's seen bit, indexed by unit
+	// handle. It is refreshed at most once per tick and only on a tick that
+	// rebuilds at least one side's registry.
+	seen       []bool
+	seenTick   uint32
+	seenPrimed bool
+
+	// sweptTick is the tick the per-tick registry sweep last ran on, so the
+	// sweep is idempotent within a tick however many units reach it.
+	sweptTick   uint32
+	sweptPrimed bool
+}
+
+// primaryList returns one side's primary list as the last rebuild left it.
+// The slice is the registry's own storage; callers filter it into a fresh
+// vector and never write through it.
+func (r *targetRegistry) primaryList(owner uint8) []pool.Handle {
+	if r == nil || int(owner) >= combatPlayerSlots {
+		return nil
+	}
+	return r.primary[owner]
+}
+
+// secondaryList returns one side's secondary list as the last rebuild left it.
+// The slice is the registry's own storage; callers filter it into a fresh
+// vector and never write through it.
+func (r *targetRegistry) secondaryList(owner uint8) []pool.Handle {
+	if r == nil || int(owner) >= combatPlayerSlots {
+		return nil
+	}
+	return r.secondary[owner]
+}
+
+// refreshSeen rebuilds the per-handle seen-bit view from the sensor phase's
+// last completed pass [03 §3.4][R-VIS-01 §4].
+//
+// The bit is recomputed every tick from the LOCAL player's point of view only,
+// so every side's secondary list is built from the local observer's sensors —
+// "in single player that is the human's view, and a computer opponent's
+// fallback acquisition therefore inherits it" [06 §3.1]. Reading it here rather
+// than recomputing it keeps the four producers (own/allied, radar, sonar, line
+// of sight) and the two jam clears in the one phase that owns them.
+func (r *targetRegistry) refreshSeen(tick uint32, vis *visibility.Service) {
+	if r == nil {
+		return
+	}
+	if r.seenPrimed && r.seenTick == tick {
+		return
+	}
+	r.seenPrimed = true
+	r.seenTick = tick
+	for i := range r.seen {
+		r.seen[i] = false
+	}
+	if vis == nil {
+		return
+	}
+	for _, in := range vis.SensorInputs() { // a slice, in the sensor phase's order (I1)
+		if in.Status&visibility.SeenBit == 0 {
+			continue
+		}
+		h := int(in.ID)
+		if h < 0 {
+			continue
+		}
+		if h >= len(r.seen) {
+			grown := make([]bool, h+1)
+			copy(grown, r.seen)
+			r.seen = grown
+		}
+		r.seen[h] = true
+	}
+}
+
+// seenBit reports the last sensor pass's seen bit for one unit handle.
+func (r *targetRegistry) seenBit(h pool.Handle) bool {
+	if r == nil || int(h) < 0 || int(h) >= len(r.seen) {
+		return false
+	}
+	return r.seen[h]
+}
+
+// targetingUpgradeGateFor reads one side's secondary-list gate as the last
+// rebuild left it [06 §3.1].
+func (s *Service) targetingUpgradeGateFor(owner uint8) bool {
+	if s == nil || int(owner) >= combatPlayerSlots {
+		return false
+	}
+	return s.targets.gate[owner]
+}
+
+// stepTargetRegistries runs the registry cadence for every player slot, once
+// per tick, ascending [06 §3.1] (I1).
+//
+// Retail reaches the rebuild from the PER-PLAYER phase — "rebuilt ... at most
+// once per 30 ticks per side, from the per-player phase" [06 §3.1], and
+// [08 "Dispatch gates and order sinks"] gives that phase as a walk of the ten
+// player slots in order — so which sides rebuild does not depend on which units
+// exist. The cadence used to be reached through this package's unit sweep, at
+// the owner of each stepped unit, so a side with no live unit never rebuilt at
+// all and a side whose first unit appeared mid-battle rebuilt on that unit's
+// arrival rather than on the phase's own clock.
+//
+// The sweep visits all ten rows rather than consulting the player table's
+// occupancy: an unoccupied side owns no unit, so it owns no shooter, and its
+// registry has no reader. Ten walks of the unit array every thirty ticks is the
+// whole cost of not needing a second occupancy predicate here.
+//
+// It is called from the unit sweep because that is where this package is
+// reached; the tick guard makes it idempotent, so the first stepped unit of a
+// tick runs it and every later one compares. See rebuildTargetRegistry for why
+// the rebuild's simulation draw is NOT taken here.
+func (s *Service) stepTargetRegistries(tick uint32, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service) {
+	if s == nil || w == nil {
+		return
+	}
+	r := &s.targets
+	if r.sweptPrimed && r.sweptTick == tick {
+		return
+	}
+	r.sweptPrimed, r.sweptTick = true, tick
+	for p := 0; p < combatPlayerSlots; p++ {
+		s.rebuildTargetRegistry(tick, uint8(p), w, vis, terrain, econ)
+	}
+}
+
+// rebuildTargetRegistry rebuilds one side's registry on the cadence of
+// [06 §3.1] — `if (registry.lastRebuildTick + 30 <= currentTick)` — walking the
+// whole unit array once, in slot order, and classifying each unit whose alive
+// bit is set and whose death latch is clear:
+//
+//   - a unit of the registry owner's OWN player slot takes the counting branch,
+//     whose one member modelled here is the secondary-list gate: the rebuild
+//     writes the constant 1 when that unit is complete, activated and carries
+//     `istargetingupgrade`. Nothing is summed, and an ally's upgrade unit does
+//     not count — the branch is entered only on an exact owner-slot match
+//     (refinement of 2026-09-02, points 1 and 2);
+//   - a HOSTILE unit — the registry owner's alliance row, indexed by the
+//     candidate's owner, reads zero — joins the PRIMARY list when the
+//     direct-visibility predicate accepts it here, at rebuild time, and the
+//     SECONDARY list when its runtime seen bit is set. "The two tests are
+//     independent, so a unit can be on both lists, either, or neither."
+//
+// TODO(question): [06 §3.1] also requires "a runtime exclusion status bit is
+// clear" for primary-list entry, and neither doc 06 nor [03 §3.2]'s status-word
+// census names that bit. What would settle it is a static trace of the list
+// builder's status-word test against the unit status-word census of
+// [08 "Classifier eligibility, destinations, and order"]. Until then the clause
+// is omitted rather than guessed at: an omitted clause admits candidates retail
+// would exclude, which a wrong bit would too, and this way nothing invents a
+// meaning for a bit.
+//
+// It consumes NO random draw. [06 §3.1] gives the rebuild one simulation draw
+// of bound 30 whose zero outcome runs the strategic refresh, and this build
+// already takes exactly that draw — in internal/ai, at the per-player phase,
+// once per side per thirty ticks. The two are one retail routine seen from two
+// documents: [08 R-AI-01 §16] names the 30-tick strategic refresh's three
+// vectors as "non-allied live units that pass the ordinary visibility
+// predicate", "non-allied units carrying one further runtime status bit" and
+// "the player's own active units whose definition is both a builder and an air
+// base" — this section's primary, secondary and third lists — and names the
+// same refresh as the writer of the targeting-upgrade flag and of the census
+// and centroid [08 "Strategic state construction and refresh"]. The strategic
+// state IS the target registry, its 30-tick refresh IS this rebuild, and the
+// class-vector recomputation its zero outcome gates is §3.1's `refreshStrategy`
+// [08 "Class-vector recomputation loop and inputs"]. Drawing again here would
+// consume the same retail draw twice and desynchronize every later consumer of
+// the stream (I4).
+//
+// The residual is that this build splits one retail routine across two
+// packages, so the two halves keep separate cadence state and can drift apart
+// by up to thirty ticks; joining them means driving this sweep from the same
+// per-player call site as internal/ai's refresh, which is session wiring and
+// not this package's to change.
+func (s *Service) rebuildTargetRegistry(tick uint32, owner uint8, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service) {
+	if s == nil || w == nil || int(owner) >= combatPlayerSlots {
+		return
+	}
+	p := int(owner)
+	r := &s.targets
+	if tick < r.lastRebuild[p]+targetRegistryPeriod {
+		return // `lastRebuild + 30 <= currentTick` [06 §3.1]
+	}
+	r.lastRebuild[p] = tick
+	r.refreshSeen(tick, vis)
+	var seaLevel numeric.Fixed
+	if terrain != nil {
+		seaLevel = terrain.SeaLevelWorld()
+	}
+	gate := false
+	pri := r.primary[p][:0] // both lists are cleared at every rebuild [06 §3.1]
+	sec := r.secondary[p][:0]
+	for _, u := range w.Iter() {
+		if u == nil || !u.Alive || u.Dying {
+			continue // alive bit set, death latch clear [06 §3.1]
+		}
+		if u.Owner == owner {
+			if unitOpensTargetingUpgradeGate(u, owner) {
+				gate = true // the constant 1, not a count [06 §3.1]
+			}
+			continue // an own unit is never a candidate for its owner's lists
+		}
+		if isAllied(owner, u.Owner, econ) {
+			continue // neither hostile nor own: skipped entirely [06 §3.1]
+		}
+		if directlyVisibleAtRebuild(owner, u, seaLevel, vis, econ) {
+			pri = append(pri, u.Handle) // unit-array order [06 §3.1] (I1)
+		}
+		if r.seenBit(u.Handle) {
+			sec = append(sec, u.Handle) // the same order, independent test
+		}
+	}
+	r.gate[p] = gate
+	r.primary[p] = pri
+	r.secondary[p] = sec
+}
+
+// directlyVisibleAtRebuild is the primary list's direct-visibility predicate
+// [06 §3.1], evaluated for one OBSERVING PLAYER — the registry owner — and one
+// candidate, at the rebuild and nowhere else.
+//
+// It answers in the section's order: the candidate's owner is the observer,
+// accept; the cloak bit is set, reject; the sonar bit is clear and the probe is
+// below sea level, reject; otherwise sample the definition's footprint corners
+// against the observer's visibility state. Acquisition.directlyVisible is the
+// same predicate for a candidate record the caller has already built, and both
+// read the same three candidate fields, so the two cannot drift.
+//
+// The observer is a player slot, not a shooter: the registry is per side, and
+// "in word-mask mode every probe tests the local player's bit, not the
+// observer's" is the visibility service's own business [03 §3.2].
+func directlyVisibleAtRebuild(owner uint8, cand *units.Unit, seaLevel numeric.Fixed, vis *visibility.Service, econ *economy.Service) bool {
+	if cand == nil {
+		return false
+	}
+	if cand.Owner == owner {
+		return true // own units are never hidden from their owner [06 §3.1]
+	}
+	cloaked := isCloakedUnit(cand)
+	if cloaked {
+		return false // the cloak bit is set — reject [06 §3.1]
+	}
+	// The underwater exemption: an undetected submerged unit is invisible
+	// regardless of line of sight. The sonar status bit reaches this build as
+	// the 0x200 alias the candidate record carries [06 §3.1][03 §3.4].
+	sonar := isAllied(owner, cand.Owner, econ)
+	if !sonar && isUnderwaterUnit(cand, seaLevel) {
+		return false
+	}
+	if vis == nil {
+		// Hostile list entry is visibility-gated; with no service bound the
+		// predicate fails closed rather than filing every hostile unit.
+		return false
+	}
+	var status uint32
+	if sonar {
+		status |= 0x200
+	}
+	return vis.IsVisible(visibility.PlayerID(owner), visibility.Target{
+		Owner:  visibility.PlayerID(cand.Owner),
+		X:      cand.X,
+		Y:      cand.Y,
+		Z:      cand.Z,
+		Hidden: cloaked,
+		Status: status,
+	})
+}
+
+func (s *Service) acquireTargetForSlot(u *units.Unit, slot *units.Slot, idx int, w *units.World, vis *visibility.Service, terrain *world.Terrain, simRNG *rng.Simulation, econ *economy.Service, catalogs ...*content.Catalog) (pool.Handle, bool) {
+	return s.acquireTargetForSlotRange(u, slot, idx, w, vis, terrain, simRNG, econ, -1, catalogs...)
 }
 
 // acquireTargetForSlotRange is the non-mutating form used by order-facing
 // acquisition. A nonnegative range overrides only the query's range operand;
 // the compiled WeaponDef remains immutable [02 "Weapon record"][06 §3.2].
-func acquireTargetForSlotRange(u *units.Unit, slot *units.Slot, idx int, w *units.World, vis *visibility.Service, terrain *world.Terrain, simRNG *rng.Simulation, econ *economy.Service, rangeLimit int32, catalogs ...*content.Catalog) (pool.Handle, bool) {
+func (s *Service) acquireTargetForSlotRange(u *units.Unit, slot *units.Slot, idx int, w *units.World, vis *visibility.Service, terrain *world.Terrain, simRNG *rng.Simulation, econ *economy.Service, rangeLimit int32, catalogs ...*content.Catalog) (pool.Handle, bool) {
 	if u == nil || w == nil || slot == nil || slot.Weapon == nil {
 		return 0, false
 	}
@@ -896,19 +1209,96 @@ func acquireTargetForSlotRange(u *units.Unit, slot *units.Slot, idx int, w *unit
 	if terrain != nil {
 		seaLevel = terrain.SeaLevelWorld()
 	}
-	var candidates []Candidate
-	for _, cand := range w.Iter() {
-		if cand == nil || cand.Handle == u.Handle || !cand.Alive || cand.Dying {
+	candidates := s.primaryCandidates(u, w, seaLevel, econ, catalog)
+	acq := slotAcquisition(u, slot, idx, w, vis, terrain, simRNG, catalog, seaLevel, rangeLimit)
+	// The registry's secondary-list gate and its secondary list [06 §3.1].
+	// Both belong to the SCANNING PLAYER — the registry is per side and is the
+	// same for every slot of every unit that player owns — so they are read
+	// here, by owner, and never from the shooter's own definition.
+	acq.HasUpgrade = s.targetingUpgradeGateFor(u.Owner)
+	if acq.HasUpgrade {
+		acq.Secondary = s.secondaryCandidates(u, w, seaLevel, econ, catalog)
+	}
+	h, ok := AcquireTarget(candidates, acq)
+	return h, ok
+}
+
+// primaryCandidates materializes the scanning player's PRIMARY list into the
+// per-attempt filter's candidate array [06 §3.1].
+//
+// "Automatic acquisition never scans the unit array": the array walked here is
+// the registry's list, filed at the last rebuild with the direct-visibility
+// predicate applied there, and the filter over it is thin — "no visibility,
+// category, sensor, medium, alliance or range test happens at this point". This
+// build's filter is liveness plus hostility; the distance test, the physical
+// gate and the category split are AcquireTarget's, in that section's order.
+//
+// Hostility is re-tested rather than trusted from the rebuild because an
+// alliance declared since then would otherwise leave a now-allied unit
+// shootable for up to thirty ticks, and the alliance row is read live
+// everywhere else in this package. Liveness must be re-tested: the list is up
+// to thirty ticks stale and can name units that have died, and a handle the
+// pool has since reused names a different unit (I5).
+//
+// The one thing NOT re-tested is visibility. A unit that has become visible
+// since the rebuild is not on this list and cannot be acquired until the next
+// one — "an acquisition can therefore see a list up to thirty ticks stale" —
+// and a listed unit that has since gone dark stays acquirable for the rest of
+// the window.
+func (s *Service) primaryCandidates(u *units.Unit, w *units.World, seaLevel numeric.Fixed, econ *economy.Service, catalog *content.Catalog) []Candidate {
+	if s == nil || u == nil || w == nil {
+		return nil
+	}
+	list := s.targets.primaryList(u.Owner)
+	if len(list) == 0 {
+		return nil
+	}
+	out := make([]Candidate, 0, len(list))
+	for _, h := range list {
+		cand := w.Unit(h)
+		if cand == nil || cand.Handle == u.Handle {
 			continue
+		}
+		if !cand.Alive || cand.Dying {
+			continue // alive bit set, death latch clear [06 §3.1]
 		}
 		if !isHostile(u, cand, econ) {
 			continue
 		}
-		candidates = append(candidates, acquisitionCandidate(u, cand, seaLevel, econ, catalog))
+		out = append(out, acquisitionCandidate(u, cand, seaLevel, econ, catalog))
 	}
-	acq := slotAcquisition(u, slot, idx, w, vis, terrain, simRNG, catalog, seaLevel, rangeLimit)
-	h, ok := AcquireTarget(candidates, acq)
-	return h, ok
+	return out
+}
+
+// secondaryCandidates materializes the scanning player's secondary list into
+// the per-attempt filter's candidate array [06 §3.1].
+//
+// The list holds handles filed at the last registry rebuild, up to thirty ticks
+// ago, "including entries for units that died in between — which is why the
+// per-attempt filter re-tests liveness". Liveness is therefore re-tested here
+// and NOTHING else is: no visibility, category, sensor, medium or alliance test
+// touches the list again, and the distance test is the one AcquireTarget's
+// shared gate applies to both lists.
+func (s *Service) secondaryCandidates(u *units.Unit, w *units.World, seaLevel numeric.Fixed, econ *economy.Service, catalog *content.Catalog) []Candidate {
+	if s == nil || u == nil || w == nil {
+		return nil
+	}
+	list := s.targets.secondaryList(u.Owner)
+	if len(list) == 0 {
+		return nil
+	}
+	out := make([]Candidate, 0, len(list))
+	for _, h := range list {
+		cand := w.Unit(h)
+		if cand == nil || cand.Handle == u.Handle {
+			continue
+		}
+		if !cand.Alive || cand.Dying {
+			continue // alive bit set, death latch clear [06 §3.1]
+		}
+		out = append(out, acquisitionCandidate(u, cand, seaLevel, econ, catalog))
+	}
+	return out
 }
 
 // acquisitionCandidate builds the §3.1 candidate record for one unit as seen by

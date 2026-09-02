@@ -185,6 +185,12 @@ type Service struct {
 	// like the two maps above, not configuration.
 	scanCursor autonomousScanCursor
 
+	// targets is the per-side target registry of [06 §3.1] — its primary and
+	// secondary candidate lists and its secondary-list gate, rebuilt on the
+	// 30-tick cadence; service.go owns it. Per-session state, not
+	// configuration.
+	targets targetRegistry
+
 	// Visibility is the per-session LOS predicate [03 §3.2] C8 [RS-P0-018].
 	// Moved from package-global combat.VisibilityHook to per-Service field for session isolation [INVARIANTS I1][I6][RS-P0-018].
 	Visibility func(viewer visibility.PlayerID, target visibility.Target) bool `json:"-"`

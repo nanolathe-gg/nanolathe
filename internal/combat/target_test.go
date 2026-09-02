@@ -146,17 +146,28 @@ func TestAcquisitionPreferredOverFallback(t *testing.T) {
 	}
 }
 
-func TestAcquisitionVisibilityHostilityFiltering(t *testing.T) {
+// The per-attempt filter keeps hostility and drops the sensor clauses: "no
+// visibility, category, sensor, medium, alliance or range test happens at this
+// point — the visibility predicate ran at rebuild time" [06 §3.1]. A cloak bit
+// that arrived after the rebuild therefore does not protect a listed unit, and
+// a non-hostile entry is still refused.
+func TestAcquisitionFiltersHostilityAndNotVisibility(t *testing.T) {
 	shooterX, shooterZ := fixed(0), fixed(0)
 	weaponRange := int32(1000)
-	candidates := []Candidate{
-		{Handle: pool.Handle(1), X: fixed(10), Z: fixed(0), Category: 0, Hostile: false, Y: fixed(1)},               // not hostile
-		{Handle: pool.Handle(2), X: fixed(10), Z: fixed(0), Category: 0, Hostile: true, Y: fixed(1), Cloaked: true}, // not visible
-		{Handle: pool.Handle(3), X: fixed(10), Z: fixed(0), Category: 0, Hostile: true, Y: fixed(1)},                // valid
-	}
+	friendly := Candidate{Handle: pool.Handle(1), X: fixed(10), Z: fixed(0), Hostile: false, Y: fixed(1)}
+	cloakedSinceRebuild := Candidate{Handle: pool.Handle(2), X: fixed(10), Z: fixed(0), Hostile: true, Y: fixed(1), Cloaked: true}
+	plain := Candidate{Handle: pool.Handle(3), X: fixed(10), Z: fixed(0), Hostile: true, Y: fixed(1)}
+
 	r := rng.NewSimulation(1)
-	h, ok := AcquireTarget(candidates, acq(shooterX, shooterZ, weaponRange, 0, &r))
-	if !ok || h != pool.Handle(3) {
+	if _, ok := AcquireTarget([]Candidate{friendly}, acq(shooterX, shooterZ, weaponRange, 0, &r)); ok {
+		t.Fatalf("a non-hostile entry was acquired [06 §3.1]")
+	}
+	r2 := rng.NewSimulation(1)
+	if h, ok := AcquireTarget([]Candidate{cloakedSinceRebuild}, acq(shooterX, shooterZ, weaponRange, 0, &r2)); !ok || h != pool.Handle(2) {
+		t.Fatalf("a listed entry that cloaked since the rebuild stays acquirable, got %d ok %v", h, ok)
+	}
+	r3 := rng.NewSimulation(1)
+	if h, ok := AcquireTarget([]Candidate{plain}, acq(shooterX, shooterZ, weaponRange, 0, &r3)); !ok || h != pool.Handle(3) {
 		t.Fatalf("filtering failed, got %d ok %v want 3 [06 §3.1]", h, ok)
 	}
 }

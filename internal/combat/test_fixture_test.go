@@ -6,7 +6,10 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe/nanolathe/internal/visibility"
+	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -66,4 +69,17 @@ func newCombatFixtureWorld(maxDefs int, cat *content.Catalog) *units.World {
 	w := units.NewSliced(maxDefs, cat)
 	w.SetCOBSource(combatFixtureCOBFS{}, cob.NewCachedLoader())
 	return w
+}
+
+// primeTargetRegistry runs one registry rebuild for every side and returns the
+// service, so a fixture that calls an acquisition directly reads the same
+// candidate lists a stepped battle would [06 §3.1].
+//
+// A battle reaches the rebuild from StepWeaponsForUnit's per-tick sweep, and
+// nothing is acquirable before the first rebuild is due — that is the cadence,
+// not a fixture accident — so a test that skips the sweep must run it itself.
+// The tick is the first at which `lastRebuild + 30 <= tick` holds from zero.
+func primeTargetRegistry(s *Service, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service) *Service {
+	s.stepTargetRegistries(targetRegistryPeriod, w, vis, terrain, econ)
+	return s
 }

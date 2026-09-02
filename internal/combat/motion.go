@@ -472,7 +472,14 @@ func AdvanceMeteor(p *Projectile, w *content.WeaponDef, tick uint32) AdvanceResu
 	rollStep, pitchStep := MeteorAngularSteps(p.Velocity.X, p.Velocity.Z)
 	p.PropellerYaw = numeric.Angle(uint16(int32(p.PropellerYaw) + int32(int16(rollStep))))
 	p.MeteorPitch = numeric.Angle(uint16(int32(p.MeteorPitch) + int32(int16(pitchStep))))
-	p.State69 = (p.State69 &^ 0x03) | 0x00 // keep dead/bim latch bits, orientation is presentation only [P1-08 §2.8]
+	// The state byte is deliberately NOT written here. [06 §6.5] gives the
+	// meteor tick as exactly three things — add velocity to the current point,
+	// advance the two orientation accumulators, run ordinary current-point
+	// collision — and a state-byte write is not one of them. A line here used to
+	// clear bits 0 and 1 on every tick under a comment claiming it KEPT them;
+	// those two bits are the beam latch and the DEAD flag [06 §6.1], so the
+	// clear would have un-set the dead flag of a meteor that collision had
+	// already retired. Orientation is presentation and latches nothing.
 	// [06 §7.2] meteor adds velocity; [06 §6.5] does not apply wind/gravity/normal expiry
 	p.Pos.X = p.Pos.X.Add(p.Velocity.X)
 	p.Pos.Y = p.Pos.Y.Add(p.Velocity.Y)

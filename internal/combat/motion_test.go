@@ -694,3 +694,23 @@ func TestMalformedNegativeTimerPlaceholder(t *testing.T) {
 }
 
 func nowPlusTimer(now uint32, timer int32) uint32 { return now + uint32(timer) }
+
+// The meteor tick does not write the projectile state byte [06 §6.5]: its three
+// actions are the velocity add, the two orientation accumulators and ordinary
+// current-point collision. Bits 0 and 1 of that byte are the beam latch and the
+// dead flag [06 §6.1], and a clear that ran here every tick would revive a
+// record collision had already retired.
+func TestMeteorLeavesStateByteAlone(t *testing.T) {
+	w := &content.WeaponDef{Meteor: true}
+	p := Projectile{
+		Pos:      Vec3{X: fix(0), Y: fix(100 * 65536), Z: fix(0)},
+		Velocity: Vec3{X: fix(65536), Y: fix(-983040), Z: fix(65536)},
+		State69:  0x33, // both low bits set, plus the two-phase field
+	}
+	if res := AdvanceMeteor(&p, w, 0); res != AdvanceAlive {
+		t.Fatalf("meteor should be alive")
+	}
+	if p.State69 != 0x33 {
+		t.Fatalf("meteor tick must not touch the state byte, got %#x want 0x33", p.State69)
+	}
+}

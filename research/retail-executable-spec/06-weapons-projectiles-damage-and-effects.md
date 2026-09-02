@@ -178,6 +178,23 @@ independent per-tick round-robin **scan** throttle (§3.2). An acquisition can
 therefore see a list up to thirty ticks stale, including entries for units that
 died in between — which is why the per-attempt filter re-tests liveness.
 
+**Supported inference (2026-09-02, WU-19-122) — the rebuild draw is the
+strategic refresh's draw.** `[08 R-AI-01 §16]` names the 30-tick strategic
+refresh's three input vectors as non-allied live units passing the ordinary
+visibility predicate, non-allied units carrying one further runtime status
+bit, and own active builder-plus-air-base units — this section's primary,
+secondary and third lists — and names that refresh as the writer of the
+targeting-upgrade flag, the census and the centroid. The two descriptions
+are one routine: the per-side registry rebuild above *is* the strategic
+refresh, and the bound-30 draw here is the draw `[08 R-AI-01 §16]` records.
+An implementation that keeps the lists in a combat module and the census in
+an AI module must take that draw exactly once per side per rebuild.
+**Unknown:** whether a slot with no computer-player manager (the local human
+in single player) takes the draw in retail; the per-player phase runs for
+every occupied slot, but Nanolathe's draw is taken from the AI manager's
+tick. A trace of the per-player phase's strategic-refresh call site against
+the slot's controller byte would settle it.
+
 **Established fact:** One rebuild walks the entire unit array once, in slot
 order, and classifies each unit whose alive bit is set and death latch is
 clear:

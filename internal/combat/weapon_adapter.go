@@ -109,7 +109,7 @@ func (s *Service) AcquireWeaponTarget(u *units.Unit, idx int, rangeLimit uint32,
 	if rangeLimit != 0 {
 		limit = int32(rangeLimit)
 	}
-	return acquireTargetForSlotRange(u, u.SlotAt(idx), idx, w, vis, terrain, sim, econ, limit, catalog)
+	return s.acquireTargetForSlotRange(u, u.SlotAt(idx), idx, w, vis, terrain, sim, econ, limit, catalog)
 }
 
 // WeaponCanEngage answers the hover attack's engagement query using the same

@@ -238,7 +238,8 @@ func TestRS08_CandidateFacts(t *testing.T) {
 	_ = validUnit
 	// Use an explicit valid visibility service so this test exercises the
 	// hostility, cloak, underwater, and category filters independently of LOS.
-	h, ok := acquireTargetForSlot(shooter, shooter.SlotAt(0), 0, w, allVisibleService(terrain), terrain, nil, econ)
+	vis := allVisibleService(terrain)
+	h, ok := primeTargetRegistry(&Service{}, w, vis, terrain, econ).acquireTargetForSlot(shooter, shooter.SlotAt(0), 0, w, vis, terrain, nil, econ)
 	if !ok {
 		t.Fatalf("acquire should succeed with valid enemy, but got not ok")
 	}
@@ -270,7 +271,8 @@ func TestRS08_CandidateFacts(t *testing.T) {
 	prefH, _ := w2.Create(defPref, 2, numeric.FixedFromInt(int64(110)), numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(10)))
 	fallH, _ := w2.Create(defFall, 2, numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(10)))
 	// Need econ same
-	h2, ok2 := acquireTargetForSlot(sh2, sh2.SlotAt(0), 0, w2, allVisibleService(terrain2), terrain2, nil, econ)
+	vis2 := allVisibleService(terrain2)
+	h2, ok2 := primeTargetRegistry(&Service{}, w2, vis2, terrain2, econ).acquireTargetForSlot(sh2, sh2.SlotAt(0), 0, w2, vis2, terrain2, nil, econ)
 	if !ok2 {
 		t.Fatalf("category pref acquire failed")
 	}
@@ -428,7 +430,8 @@ func TestRS08_VisibilityCanonical(t *testing.T) {
 	}
 	// An explicit valid visibility service admits the nearby enemy; the later
 	// empty service verifies that acquisition still routes through LOS.
-	h, ok := acquireTargetForSlot(shooter, shooter.SlotAt(0), 0, w, allVisibleService(terrain), terrain, nil, econ)
+	allVis := allVisibleService(terrain)
+	h, ok := primeTargetRegistry(&Service{}, w, allVis, terrain, econ).acquireTargetForSlot(shooter, shooter.SlotAt(0), 0, w, allVis, terrain, nil, econ)
 	if !ok {
 		t.Fatalf("acquire with visible service should succeed via hostility/category, got not ok")
 	}
@@ -436,15 +439,16 @@ func TestRS08_VisibilityCanonical(t *testing.T) {
 		// Accept either valid enemy handle only when the explicit service admits it.
 	}
 	// Now with a vis service that has no coverage (worldMask zero, history enabled), visible check should fail and acquire should find no candidate, demonstrating vis routing
-	vis := visibility.New(terrain, visibility.ModeHistoryEnabled)
-	h2, ok2 := acquireTargetForSlot(shooter, shooter.SlotAt(0), 0, w, vis, terrain, nil, econ)
+	blindVis := visibility.New(terrain, visibility.ModeHistoryEnabled)
+	h2, ok2 := primeTargetRegistry(&Service{}, w, blindVis, terrain, econ).acquireTargetForSlot(shooter, shooter.SlotAt(0), 0, w, blindVis, terrain, nil, econ)
 	if ok2 {
-		// With no observer published, wordMask is zero, so sample returns false, so no candidate passes directlyVisible
+		// With no observer published, wordMask is zero, so the sample returns
+		// false and no candidate reaches the registry's primary list [06 §3.1].
 		t.Fatalf("with empty vis (no coverage) acquire should fail due to LOS, but got h %d", h2)
 	}
 	_ = h
 	// A nil visibility service cannot authorize a hostile acquisition.
-	if _, ok := acquireTargetForSlot(shooter, shooter.SlotAt(0), 0, w, nil, terrain, nil, econ); ok {
+	if _, ok := primeTargetRegistry(&Service{}, w, nil, terrain, econ).acquireTargetForSlot(shooter, shooter.SlotAt(0), 0, w, nil, terrain, nil, econ); ok {
 		t.Fatalf("acquire with nil visibility should fail closed")
 	}
 }

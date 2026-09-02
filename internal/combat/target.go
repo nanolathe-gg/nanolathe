@@ -110,7 +110,8 @@ func WithinCoverageSquare(shooterX, shooterZ, candX, candZ numeric.Fixed, covera
 // The input set for ordinary acquisition comes from per-player lists rebuilt on a cadence of at least 30 ticks,
 // primary list requires hostility and a direct-visibility predicate that accepts own-side units, rejects cloaked,
 // rejects underwater without dedicated status bit 0x200, and samples multiple target-bounds points [06 §3.1] P0-10.
-// Secondary status list is consulted only when primary in-radius set is empty and targeting-upgrade aggregate is active [06 §3.1] P0-10.
+// The secondary (seen-bit) list is consulted only when the primary walk produced nothing and the
+// registry's targeting-upgrade gate is set, and it receives no visibility re-test [06 §3.1] P0-10.
 type Candidate struct {
 	Handle   pool.Handle   // pool slot index, 0 null sentinel; iteration order is slot asc [06 §1.2] P0-10 (I1) [01 §6.1]
 	X, Z     numeric.Fixed // current world X/Z [06 §3.2] P0-10
@@ -279,27 +280,39 @@ type Acquisition struct {
 	// [06 §3.1] P0-10 — 4-point hull sampling per [03 §3.2] P0-11. The own-side, cloak and
 	// underwater parts of the predicate are decided here from the candidate's
 	// own fields; only the sampling needs the visibility service.
+	//
+	// AcquireTarget does not read it. The predicate belongs to the registry
+	// rebuild, which files the primary list up to thirty ticks before an
+	// acquisition filters it [06 §3.1]; this field serves the single-candidate
+	// question IsValidAcquisitionCandidate answers for the reaction offer.
 	Visible func(c Candidate) bool
 
 	RNG *rng.Simulation
 
-	// Secondary candidates for the radar-like list, consulted only when the
-	// primary list filtered empty and the upgrade aggregate is nonzero
-	// [06 §3.1].
+	// Secondary is the registry's SECONDARY candidate list, consulted only when
+	// the primary walk produced nothing and the gate below is set [06 §3.1].
 	//
-	// The gate's bit is settled [06 R-WPN-05 §7]: word **A** bit 10 of the
-	// unit definition's two capability words [04 R-SPEC-01 §0], the storage of
-	// `istargetingupgrade` (content.UnitDef.IsTargetingUpgrade). Word B is not
-	// consulted; the marker that stood here named word B and was wrong.
+	// It is the *seen*-bit list: the registry rebuild files a hostile candidate
+	// here when its runtime seen status bit is set, independently of whether the
+	// direct-visibility predicate put it on the primary list, so a unit can be
+	// on both lists, either, or neither [06 §3.1]. The seen bit is the sensor
+	// phase's, recomputed every tick from the LOCAL player's point of view
+	// [03 §3.2][R-VIS-01 §4], which is why a computer opponent's fallback
+	// acquisition inherits the human's sensors.
+	//
+	// The list receives NO visibility re-test at acquisition: "the secondary
+	// list was populated from the *seen* bit at rebuild, and that is the only
+	// sensor test it ever receives" [06 §3.1] (refinement of 2026-09-02).
+	// Service.acquireTargetForSlotRange fills it from the registry.
 	Secondary []Candidate
 	// HasUpgrade is the registry's secondary-list gate [06 §3.1] (refinement
 	// of 2026-09-02) [04 R-SPEC-01 §8]. It is a BOOLEAN, not a sum: the
 	// rebuild writes 1 when any unit the scanning player itself owns — the
 	// same player slot, allies excluded — is alive, not dying, complete and
 	// activated and carries `istargetingupgrade`. The shooter's own definition
-	// plays no part. TargetingUpgradeGate computes it; production does not yet
-	// wire it (the secondary list is also unbuilt), which is a follow-up unit,
-	// not an open question.
+	// plays no part. TargetingUpgradeGate computes it over a unit array;
+	// Service.rebuildTargetRegistry computes it on the registry's cadence and
+	// Service.acquireTargetForSlotRange hands it here.
 	HasUpgrade bool
 }
 
@@ -312,23 +325,40 @@ type Acquisition struct {
 // Callers pass units in slot order; the result is order-independent (I1).
 func TargetingUpgradeGate(list []*units.Unit, owner uint8) bool {
 	for _, u := range list {
-		if u == nil || !u.Alive || u.Dying || u.Owner != owner {
-			continue
-		}
-		if u.Remaining != 0 || !u.Activated || u.Def == nil {
-			continue
-		}
-		if u.Def.IsTargetingUpgrade {
+		if unitOpensTargetingUpgradeGate(u, owner) {
 			return true
 		}
 	}
 	return false
 }
 
+// unitOpensTargetingUpgradeGate is that predicate for one unit, so the
+// registry's single rebuild walk and the exported whole-array form share one
+// body [06 §3.1]. "Friendly" here means the SAME PLAYER, not the same ally
+// group: the rebuild's counting branch is entered only when the candidate's
+// owner slot equals the registry owner's, so an ally's targeting-upgrade unit
+// never opens this gate for you (refinement of 2026-09-02, point 2).
+func unitOpensTargetingUpgradeGate(u *units.Unit, owner uint8) bool {
+	if u == nil || !u.Alive || u.Dying || u.Owner != owner {
+		return false
+	}
+	if u.Remaining != 0 || !u.Activated || u.Def == nil {
+		return false // complete (build fraction exactly zero) and activated
+	}
+	return u.Def.IsTargetingUpgrade // word A bit 10 [04 R-SPEC-01 §0][06 R-WPN-05 §7]
+}
+
 // directlyVisible is the primary list's direct-visibility predicate
 // [06 §3.1] P0-10 [03 §3.2] P0-11. It accepts own-side units, rejects cloaked units, rejects
 // underwater units without their dedicated status bit 0x200, and samples multiple
 // target-bounds points via Visible (4-point hull) [03 §3.2] P0-11.
+//
+// Acquisition does NOT call it: the registry rebuild owns this predicate now
+// (directlyVisibleAtRebuild in service.go is the same three clauses plus the
+// same probe, for an observing player rather than a built candidate record).
+// The one caller left is IsValidAcquisitionCandidate, which the damage path's
+// reaction offer asks about a single candidate it did not get from a list
+// [06 R-WPN-04 §2 part 3].
 func (a *Acquisition) directlyVisible(c Candidate) bool {
 	if c.OwnSide {
 		return true // accepted outright, before any other test [06 §3.1] P0-10
@@ -405,11 +435,14 @@ func (a *Acquisition) rejectsStunned(c Candidate) bool {
 // AcquireTarget performs ordinary automatic target acquisition for one weapon
 // slot per [06 §3.1] [06 §3.2] [06 §3.3] P0-10.
 //
-// Candidates must arrive in deterministic pool-slot-ascending order (I1); this
-// function does not sort via maps. Steps, in the order [06 §3] P0-10 gives them:
+// The candidates are the registry's PRIMARY list as the caller materialized it,
+// in unit-array order (I1); this function does not sort via maps. Steps, in the
+// order [06 §3] P0-10 gives them:
 //
-//  1. The primary list requires hostility and the direct-visibility predicate
-//     [06 §3.1] P0-10, then acquisition-time physical admission: heights Y>sea, toAir, ballistic, planar range.
+//  1. The per-attempt filter and acquisition-time physical admission: heights
+//     Y>sea, toAir, ballistic, planar range. NO visibility test — the
+//     direct-visibility predicate ran at the registry rebuild, up to thirty
+//     ticks ago [06 §3.1].
 //  2. Randomly sample and remove at most 50 candidates from the input set via swap-remove RNG(remaining.len) [06 §3.2] P0-10.
 //     len≤50 no sampling draw, >50 swap-remove 50x.
 //  3. Partition into preferred (category clear of BadMask) and fallback
@@ -417,17 +450,29 @@ func (a *Acquisition) rejectsStunned(c Candidate) bool {
 //  4. Within each bucket, each candidate receives a shared-RNG score bounded
 //     by high halves >>32 sum; bound<2→0 no-advance, strictly lower wins [06 §3.2] P0-10.
 //
-// Secondary radar-like list consulted only when primary filtered empty && HasUpgrade [06 §3.1] P0-11.
+// The secondary (seen-bit) list is consulted only when the primary walk filtered empty and
+// HasUpgrade is set; it gets the same distance/liveness test and NO visibility re-test [06 §3.1].
 // Shot-gate never tests radar/cloak/jammer (NEGATIVE-BOUNDED) [06 §3.3] P0-10.
 //
 // Determinism: scan order is fixed (pool slot asc) (I1); no map iteration; the
 // RNG draw order is authoritative (I4) P0-10.
 func AcquireTarget(candidates []Candidate, a Acquisition) (pool.Handle, bool) {
-	// Step 1: primary list gating and physical admission [06 §3.1] P0-10 [06 §3.3] P0-10.
+	// Step 1: the per-attempt filter over the registry's primary list, then
+	// physical admission [06 §3.1][06 §3.3].
+	//
+	// There is no visibility test here, and there must not be one: the
+	// direct-visibility predicate ran when the registry filed these candidates,
+	// and "no visibility, category, sensor, medium, alliance or range test
+	// happens at this point" [06 §3.1]. Running it again would make a listed
+	// candidate that has since gone dark unshootable and would erase the
+	// staleness the section makes a contract. Service.primaryCandidates applies
+	// the liveness and hostility half of the filter while materializing the
+	// list; the distance test is a.admits' last clause, shared with the
+	// secondary walk below.
 	filtered := make([]Candidate, 0, len(candidates))
 	for _, c := range candidates {
-		if !c.Hostile || !a.directlyVisible(c) {
-			continue // primary list requires hostility + direct visibility [06 §3.1] P0-10
+		if !c.Hostile {
+			continue // both lists are built hostile-only at rebuild [06 §3.1]
 		}
 		if !a.admits(c) {
 			continue
@@ -441,11 +486,26 @@ func AcquireTarget(candidates []Candidate, a Acquisition) (pool.Handle, bool) {
 		// Secondary status list consulted only when primary empty && upgrade [06 §3.1] P0-11
 		// Not retried if primary existed but failed scoring [06 §3.1] P0-10.
 		if a.HasUpgrade && len(a.Secondary) > 0 {
-			// Build secondary filtered set with same gates
+			// The secondary walk is the primary walk MINUS the visibility
+			// predicate. [06 §3.1] (refinement of 2026-09-02): the filter
+			// "applies to it the **same** test as the primary walk — planar
+			// d² ≤ r² on the truncated whole-unit metric, alive bit set, death
+			// latch clear — with no visibility re-test: the secondary list was
+			// populated from the *seen* bit at rebuild, and that is the only
+			// sensor test it ever receives."
+			//
+			// directlyVisible used to run here as well, which made the fallback
+			// list a second copy of the primary list: every entry it could admit
+			// the primary walk had already admitted, so the gate could never
+			// produce a target the primary walk had not.
+			//
+			// Liveness is re-tested by the caller when it materializes these
+			// candidates from the registry's stored handles, because the list is
+			// up to thirty ticks stale [06 §3.1].
 			secFiltered := make([]Candidate, 0, len(a.Secondary))
 			for _, c := range a.Secondary {
-				if !c.Hostile || !a.directlyVisible(c) {
-					continue
+				if !c.Hostile {
+					continue // both lists are built hostile-only at rebuild [06 §3.1]
 				}
 				if !a.admits(c) {
 					continue

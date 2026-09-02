@@ -87,6 +87,13 @@ func TestBallisticRequirementIsARequirementNotADefaultPass(t *testing.T) {
 	}
 }
 
+// The direct-visibility predicate is the REBUILD's, not the acquisition's
+// [06 §3.1]: it decides which hostile units the registry files on the primary
+// list, and an acquisition attempt filters that list without re-testing it.
+// IsValidAcquisitionCandidate is the predicate's one remaining caller — the
+// reaction offer's single-candidate question [06 R-WPN-04 §2 part 3] — so the
+// clauses are locked through it. directlyVisibleAtRebuild is the same three
+// clauses over a live unit, locked in target_registry_test.go.
 func TestDirectVisibilityPredicate(t *testing.T) {
 	r := rng.NewSimulation(1)
 	a := base(&r)
@@ -95,38 +102,49 @@ func TestDirectVisibilityPredicate(t *testing.T) {
 	own := hostileAt(1, 10, 9)
 	own.OwnSide = true
 	// Own-side units are accepted outright, before the sampling [06 §3.1].
-	if _, ok := AcquireTarget([]Candidate{own}, a); !ok {
+	if !IsValidAcquisitionCandidate(own, a) {
 		t.Fatalf("an own-side candidate was rejected by the visibility state")
 	}
 	// Everything else needs the sampled predicate.
-	if _, ok := AcquireTarget([]Candidate{hostileAt(2, 10, 9)}, a); ok {
-		t.Fatalf("an unseen candidate was acquired")
+	if IsValidAcquisitionCandidate(hostileAt(2, 10, 9), a) {
+		t.Fatalf("an unseen candidate passed the predicate")
 	}
 
 	a.Visible = func(Candidate) bool { return true }
 	cloaked := hostileAt(3, 10, 9)
 	cloaked.Cloaked = true
-	if _, ok := AcquireTarget([]Candidate{cloaked}, a); ok {
-		t.Fatalf("a cloaked candidate was acquired")
+	if IsValidAcquisitionCandidate(cloaked, a) {
+		t.Fatalf("a cloaked candidate passed the predicate")
 	}
 
 	sub := hostileAt(4, 10, 9)
 	sub.Underwater = true
-	if _, ok := AcquireTarget([]Candidate{sub}, a); ok {
-		t.Fatalf("an underwater candidate without its status bit was acquired")
+	if IsValidAcquisitionCandidate(sub, a) {
+		t.Fatalf("an underwater candidate without its status bit passed the predicate")
 	}
 	sub.UnderwaterSeen = true
-	if _, ok := AcquireTarget([]Candidate{sub}, a); !ok {
+	if !IsValidAcquisitionCandidate(sub, a) {
 		t.Fatalf("an underwater candidate carrying its status bit was rejected")
+	}
+
+	// The attempt itself applies none of this: a cloaked, unseen entry that is
+	// already on the primary list is acquired, because the predicate ran when
+	// the registry filed it [06 §3.1].
+	a.Visible = func(Candidate) bool { return false }
+	if _, ok := AcquireTarget([]Candidate{cloaked}, a); !ok {
+		t.Fatalf("an entry already on the primary list must not be re-tested for visibility")
 	}
 }
 
+// A missing visibility predicate fails the REBUILD closed, not the attempt: an
+// unbound service files nothing on the primary list, so nothing is acquirable
+// [06 §3.1].
 func TestMissingVisibilityRejectsHostileCandidate(t *testing.T) {
 	r := rng.NewSimulation(1)
 	a := base(&r)
 	a.Visible = nil
-	if _, ok := AcquireTarget([]Candidate{hostileAt(1, 10, 9)}, a); ok {
-		t.Fatalf("hostile candidate acquired without a visibility predicate")
+	if IsValidAcquisitionCandidate(hostileAt(1, 10, 9), a) {
+		t.Fatalf("hostile candidate admitted without a visibility predicate")
 	}
 }
 

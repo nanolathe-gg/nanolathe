@@ -950,6 +950,89 @@ pre-reject: an unreachable or budget-starved goal stalls or loops forever,
 consuming one random draw per re-arm cycle, until the player cancels or the
 goal becomes reachable.
 
+**Closed (2026-09-02, RWU-19-37) — a `Move_Ground` whose goal cell is held by
+a parked mover, composed.** Asked by the commit-success `TODO(T25)` in
+`internal/movement/integrate.go`: what makes a follower stop when the goal cell
+and its neighbourhood are occupied by stationary movers, once the footprint
+clear's class-layer maintenance ([R-COLL-01 §4]) removes the phantom walls the
+build had been relying on. Every link is a direct trace; the composition is
+new. All Established.
+
+1. **A fresh occupant is not a wall, and the search never asks.** The search
+   reads the class layer's stored two-bit value ([R-PATH-01 §2]); the
+   occupant-age gate `mover == null || stampTick < watermark`
+   ([R-PATH-01 §14]) runs only when a rectangle is reclassified, and it has no
+   self-identity term. A mover's cells become `0` at the first same-class
+   request init whose new watermark `max(tick, 30) − 30` exceeds its stamp
+   tick — the revision pass restamps every live unit whose tick lies in the
+   window just crossed — that is, between 30 ticks and 30 ticks plus one
+   request gap after it last committed a cell change. They return to terrain
+   when it leaves (the clear's maintenance, which reads the stamp tick
+   **before** the following stamp rewrites it) or, for a requester, at its own
+   request's release (the correction in [R-PATH-01 §14]). The goal cell is
+   probed like any other: the enumerated-goal bit does not exempt an
+   impassable cell from rejection, only the ray-visited bit does, and the ray
+   never visits an impassable cell ([R-PATH-01 §1]).
+2. **While the occupant is fresh, the route goes to the goal and the validator
+   stops the follower.** The search publishes a route ending on the goal
+   cell; the follower steers into it; the commit validator rejects the cell
+   (foreign occupant, [R-COLL-01 §2]) and sets the blocked flag; the mover
+   keeps turning, speed capped at half `MaxVelocity`, clamped inside its own
+   cell ([R-COLL-01 §1]); the per-tick service arms wants-repath and the next
+   request is at least 60 ticks after the last ([R-MOV-01 §7]). This pushing
+   is transient — at most one throttle period per stage — because by the
+   follower's next request the occupant has been walled (item 1).
+3. **Once walled, the ray decides: "nearest reachable cell", then "stop".**
+   With the goal region classified `0` the ray cannot reach a goal-flagged
+   cell; it returns the minimum scaled heuristic over the start and the cells
+   it walked. If that minimum is strictly below the start's own, the A\*
+   accepts the first popped cell at or below it and publishes a route ending
+   there; the follower walks it, prunes to one point, clears has-waypoint and
+   brakes ([R-MOV-01 §3]). If not — the follower already stands at a local
+   minimum of the heuristic around the wall — request init publishes empty
+   and raises `0x40` ([R-PATH-01 §4] step 9 and its clarification). Retail
+   followers therefore jostle for at most a throttle period per stage and
+   then park at the nearest cell the heuristic admits, one ring out from the
+   occupied rectangle.
+4. **`0x40` re-arms; nothing retires.** `Move_Ground` phase 1 sees `0x40`
+   (not `0x20`) and returns 9; for the last record the pump sets the
+   completion flag, resets the phase and waits 30–59 ticks; phase 0 then
+   releases the payload (`0x80`), wipes `0x20`–`0x200`, installs a fresh
+   point goal — the installer arms wants-repath, runs its gates on the one or
+   two stale points it still holds (both point-count gates need three), and
+   its synthetic straight line is suppressed by the completion flag
+   ([R-PATH-01 §8] step 5.3) — and zeroes the follower's last-request tick
+   when it is more than 10 ticks old, so the scheduler admits the request at
+   its next visit. That request repeats item 3's empty arm. No retry counter
+   exists (the census above); the completion flag is never cleared for the
+   life of the record (bounded negative: no writer clears that bit of an
+   order record); the point class scores `h = 0` only at its centre cell
+   (`R = 4`, [R-PATH-01 §9]); and the handler's predicate is tile equality
+   (`R2 = 0`, §8.3) — so "as close as it can get" never completes the order.
+   The steady state is **silent and unbounded**: no motion, no engine cue,
+   one empty search and one random draw per 30–59-tick cycle, until the
+   player cancels or the goal cell frees. It is the point-goal form of
+   [R-EGRESS-01]'s column.
+5. **Re-arm with the mover already on the goal cell.** Phase 0 tests nothing
+   about arrival. Within the same sweep visit the mover tick runs the
+   follower's per-tick service ([R-MOV-03 §1] item 9), whose first act is the
+   payload's at-goal query on the cached committed cell; it raises `0x20`
+   and, because none of the A\*-facing classes persists after arrival,
+   detaches the payload — which raises `0x80` as well. The next pump visit's
+   phase 1 tests `0x20` first and completes with the arrived cue. Had the
+   scheduler admitted the request first (it runs at the head of the following
+   tick), request init's start predicate would raise `0x100` and publish
+   empty **without** `0x40`, because the publisher's own at-goal query says
+   yes; the completion is the same.
+
+What a reimplementation must carry, in order: the clear maintenance at the
+commit's success branch with the old stamp tick compared, the release re-wall
+of item 1, the ray/threshold arithmetic of item 3 (inclusive compares at both
+ends), and the re-arm sequence of item 4. A build that lacks the release
+re-wall shows the symptom that raised this question — a follower that circles
+the parked cluster forever, blocked by the validator at every approach — and
+had been masked by the phantom walls of an un-maintained clear.
+
 **Correction — the never-published route is settled, and it was never a second
 case [R-PATH-01 §4][R-PATH-01 §7] (2026-08-31).** The sentence that stood here
 left an **Unknown**: "whether the route-release event fires for a route that
@@ -2947,6 +3030,16 @@ on that border". Under the point test a mover that reached the border anywhere
 else — the A* endpoint when the route is long enough, or a clamped mover
 sliding along the edge — never completed its record. Corrected 2026-08-30;
 the point test remains for the point and annulus classes.
+
+**Clarification (2026-09-02, RWU-19-37) — item 4's blocked-mover phase is
+transient.** The validator's cap-and-clamp is what a later product meets only
+while the leading product's stamp tick is still within the class watermark's
+lag; at the next request init after that lag the leader's rectangle classifies
+`0`, and from then on the followers' searches end on the ray's threshold rather
+than on the validator — a route to the nearest heuristic minimum around the
+wall, then empty publications from it, exactly the sequence composed for the
+point goal under [R-ORDER-02 §1]. Nothing in this section's four links
+changes.
 
 ### Closed — how a factory-built aircraft actually leaves the pad [R-AIR-02] (2026-08-30)
 
@@ -8760,6 +8853,30 @@ a unit standing off-map inside its goal's radius reports `0x100`, not `0x200`;
 and the goal enumeration runs **before** either, so its marks and its nearest
 cell survive both early exits.
 
+**Clarification (2026-09-02, RWU-19-37) — step 9 is the "as close as it can
+get" stop.** The threshold the ray returns is the minimum scaled heuristic over
+the start cell and every passable cell the ray stepped onto ([R-PATH-01 §5]);
+the ray probes a cell's passability **before** it tests that cell's
+acceptable-terminal bit, so an enumerated goal cell the class layer classifies
+`0` can never end the ray with zero — the ray walks around it and comes back
+with a nonzero minimum. Step 9's exit `startScaledH <= threshold` therefore
+fires exactly when the ray found no passable cell **strictly** nearer, by
+scaled heuristic, than the cell the mover already stands on: the request
+publishes empty at init, the publisher raises `0x40` because the at-goal query
+says no, and no node is ever seeded. When the ray did find a strictly nearer
+cell, the search seeds with that threshold and, because the expansion of
+[R-PATH-01 §1] marks every opened cell whose scaled heuristic is at or below it
+as an acceptable terminal, the first such cell popped publishes a route to it —
+a route that ends short of the goal. Those two arms, taken in turn across
+successive requests, are the whole of retail's "get as close as you can"
+behaviour: a follower walks to a local minimum of the heuristic around the
+wall and then, from that cell, every further request is an immediate empty
+publication. Nothing in the search, the follower or the handler compares a
+distance to the goal against a tolerance: the point class of [R-PATH-01 §9]
+scores `h = 0` only inside its octile radius, and the handler completes only
+on the tile predicate of §8.3. Established; composed for a shared destination
+under [R-ORDER-02 §1].
+
 ### Established — pre-search wall-follow protocol with upper-transition residual [R-PATH-01 §5] (2026-08-29)
 
 The ray is not a plain greedy walk. It is a cardinal-stepping probe with a
@@ -8860,6 +8977,22 @@ heuristic clamps against **and**, separately, the squared cell radii the arrival
 predicate compares against. Neither is derived from the other at query time.
 An implementation must carry both; "fixing" the mismatch by deriving one from
 the other changes both the heuristic shape and the arrival band [P0-13 A19].
+
+**Established (2026-09-02, RWU-19-37) — the point class's constructor,
+exactly.** The ground goal-handle installer allocates the point class from
+`(record, worldX, worldZ, radius)`, and only when the owning unit's definition
+is not `canfly` (a `canfly` owner gets release only). The constructor stores
+the record, quantises the centre with the occupancy commit's own rule using the
+**owning unit's** footprint pair — `cellX = (worldX + 0x80000 −
+FootPrintX·0x80000) >> 20`, likewise Z, arithmetic shift, so the centre is the
+anchor cell a mover of that footprint would commit at the goal point — and
+stores the octile radius `R = radius` **verbatim** (no conversion from world
+units) and the squared cell radius `R2 = trunc(radius / 16)²`, the divide
+rounding toward zero. For `Move_Ground`, whose radius is the record's radius
+field plus 4 with that field zero at creation (§8.3), this is `R = 4`,
+`R2 = 0`: the heuristic is `oct − 4` everywhere but the centre cell, since the
+nearest neighbour already scores `18`, and the arrival predicate is tile
+equality. `Patrol`'s zero radius gives `R = 0`, `R2 = 0`.
 
 **Established — the two air classes never reach the search.** Their goal
 interface is the base's, so a search seeded on one would enumerate nothing and
@@ -9472,6 +9605,25 @@ it restamps (`[R-DOC04-B]`), and the release path writes it once more. The
 mover's *last-proposal* tick that the hover bob reads (`[R-COLL-01 §1]`,
 `[R-MOV-01 §5]`) is a **different** word with a single writer, the commit
 step; the two must not be merged.
+
+**Correction (2026-09-02, RWU-19-37) — the release path reclassifies; it
+writes no tick.** The clause "and the release path writes it once more" above
+is wrong about the release. The request release — run when a search ends by
+any route: a published route, the empty publication of heap exhaustion, and
+every early exit of [R-PATH-01 §4] — compares the requester's mover stamp tick
+against the class record's watermark and, when the tick is **below** it,
+reclassifies the requester's own footprint rectangle in the class layer
+([R-PATH-01 §2]'s footprint-aware classifier over the rectangle grown by the
+class footprint); it writes nothing to the tick. The revision pass at request
+init had made that rectangle passable by classifying it under a temporarily
+current tick and then **restored** the real tick, so a requester that has been
+stationary for longer than the watermark lag is re-walled by its own release.
+Without this step a parked unit's every re-armed request would leave its cells
+passable to everyone else's searches for the rest of the battle — the revision
+window `[old, new)` never revisits an old stamp tick — and a mover routed into
+it would be stopped only by the commit validator, which is the difference
+between a follower that idles and one that circles. Established; the timeline
+this produces for a shared destination is composed under [R-ORDER-02 §1].
 
 ### 7.4 Goals, build sites, and revalidation
 
