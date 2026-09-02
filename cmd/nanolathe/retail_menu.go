@@ -749,7 +749,7 @@ func (g *gameShell) drawRetailWindow(c *client.Client, mode shellMode, p *ui.Pan
 			g.drawRetailScrollbar(c, p, gad, r)
 		case gui.KindSurface:
 			g.drawRetailSurface(c, p, gad, r)
-		case gui.KindLabel, gui.KindText, gui.KindPicture:
+		case gui.KindLabel, gui.KindPicture:
 			g.drawRetailArt(c, p, gad, r)
 			g.drawRetailText(c, p, gad, r)
 		default:
@@ -786,7 +786,7 @@ func (g *gameShell) drawRetailModal(c *client.Client) {
 				blitRetailFrame(c, frame, int(r.X), int(r.Y))
 			}
 			g.drawRetailTextState(c, m, gad, r)
-		case gui.KindLabel, gui.KindText:
+		case gui.KindLabel:
 			g.drawRetailTextState(c, m, gad, r)
 		}
 	}

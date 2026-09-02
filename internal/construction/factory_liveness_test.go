@@ -45,7 +45,7 @@ func TestDecayClampKillsTheNanoframe(t *testing.T) {
 	q.Push(orders.Lookup("GetBuilt"), orders.Node{Phase: uint8(State2)})
 	node := q.Primary()[0]
 
-	if code := svc.handleGetBuiltOrder(frame, node, 40); code != 2 {
+	if code := svc.handleGetBuiltOrder(frame, node, 0, 40); code != 2 {
 		t.Fatalf("decay visit code=%d, want the ordinary hold", code)
 	}
 	if frame.Remaining != 1 {

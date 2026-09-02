@@ -1315,7 +1315,7 @@ func (h *retailBattleHUD) drawGUIWindow(c *client.Client, window *gui.Window, pa
 		} else if gad.Kind == gui.KindButton && len(gad.Labels) != 0 {
 			text = gad.Labels[0]
 		}
-		if text != "" && h.modalFont != nil && (gad.Kind == gui.KindButton || gad.Kind == gui.KindLabel || gad.Kind == gui.KindText) {
+		if text != "" && h.modalFont != nil && (gad.Kind == gui.KindButton || gad.Kind == gui.KindLabel) {
 			textWidth := retailGAFTextWidth(h.modalFont, text)
 			x := int(r.X)
 			switch {

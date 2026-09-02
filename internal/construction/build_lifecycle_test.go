@@ -72,7 +72,7 @@ func TestGetBuiltRetryStates(t *testing.T) {
 	q.Push(orders.Lookup("GetBuilt"), orders.Node{Phase: uint8(State0), Deadline: -1})
 	svc := NewService(nil, cat, w, &economy.Service{})
 	product.Remaining = 1
-	svc.handleGetBuiltOrder(product, q.Primary()[0], 10)
+	svc.handleGetBuiltOrder(product, q.Primary()[0], 0, 10)
 	gb := orders.QueueForUnit(product).Primary()[0]
 	if State(gb.Phase) != State1 || gb.Deadline != 310 || gb.DynamicGate != 0x8001 {
 		t.Fatalf("state0 retry=%+v", gb)
@@ -88,11 +88,11 @@ func TestGetBuiltRetryStates(t *testing.T) {
 	if State(gb.Phase) != State1 {
 		t.Fatal("state1 advanced before 300-tick deadline")
 	}
-	svc.handleGetBuiltOrder(product, gb, 310)
+	svc.handleGetBuiltOrder(product, gb, 0, 310)
 	if State(gb.Phase) != State2 || gb.Deadline != 340 || gb.DynamicGate != 0x8001 {
 		t.Fatalf("state1 retry=%+v", gb)
 	}
-	svc.handleGetBuiltOrder(product, gb, 340)
+	svc.handleGetBuiltOrder(product, gb, 0, 340)
 	if State(gb.Phase) != State2 || gb.Deadline != 351 || gb.DynamicGate != 0x8001 {
 		t.Fatalf("state2 entry=%+v", gb)
 	}
@@ -109,7 +109,7 @@ func TestGetBuiltPhase2NegativeWorkQuantumIsSinglePrecision(t *testing.T) {
 	product := &units.Unit{Handle: 1, Owner: 0, Alive: true, Def: def, Remaining: 0.5, MaxHealth: 100}
 	node := &orders.Node{Phase: uint8(State2)}
 	svc := NewService(nil, nil, nil, &economy.Service{})
-	if code := svc.handleGetBuiltOrder(product, node, 40); code != 2 {
+	if code := svc.handleGetBuiltOrder(product, node, 0, 40); code != 2 {
 		t.Fatalf("GetBuilt code=%d, want hold", code)
 	}
 	// The fraction rises by quantum/buildtime = 11/buildcostenergy.

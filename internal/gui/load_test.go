@@ -46,21 +46,39 @@ func TestLoadAllKinds(t *testing.T) {
 	if w.Header.Panel != "MyPanel" {
 		t.Fatalf("Header.Panel = %q want MyPanel", w.Header.Panel)
 	}
-	if w.Header.TotalGadgets != 12 {
-		t.Fatalf("TotalGadgets = %d want 12", w.Header.TotalGadgets)
+	if w.Header.TotalGadgets != 15 {
+		t.Fatalf("TotalGadgets = %d want 15", w.Header.TotalGadgets)
 	}
-	if len(w.Gadgets) < 13 {
-		t.Fatalf("Gadgets len = %d want >=13 (header+12 kinds + slider children)", len(w.Gadgets))
+	// No record is ever dropped: the parser rejects no kind and the builder's
+	// switch only decides whether build work follows [07 R-WGT-01 §11][§12].
+	if len(w.Gadgets) != 16 {
+		t.Fatalf("Gadgets len = %d want 16 (header + 15 records, none dropped) [07 R-WGT-01 §12]", len(w.Gadgets))
 	}
-	// Verify twelve kinds present: map kind counts
 	kinds := make(map[Kind]int)
 	for _, g := range w.Gadgets {
 		kinds[g.Kind]++
 	}
-	for _, k := range []Kind{KindPanel, KindButton, KindListBox, KindTextBox, KindScrollBar, KindLabel, KindSurface, KindFont, KindSlider, KindText, KindZero, KindPicture} {
+	for _, k := range []Kind{KindPanel, KindButton, KindListBox, KindTextBox, KindScrollBar, KindLabel, KindSurface, KindFont, KindRawFile, KindLine, KindPanelAlias, KindPicture, KindScoreBar} {
 		if kinds[k] == 0 {
 			t.Fatalf("kind %d not found in all_kinds", k)
 		}
+	}
+	// Kind 9 has no build arm and no per-kind keys, and is kept and serviced
+	// all the same [07 R-WGT-01 §11][07 R-WGT-01 §12].
+	noArm := -1
+	for i, g := range w.Gadgets {
+		if g.Name == "MYNOARM" {
+			noArm = i
+		}
+	}
+	if noArm < 0 {
+		t.Fatal("kind-9 record dropped; the builder does no build work for it but the record is still serviced [07 R-WGT-01 §12]")
+	}
+	if w.Gadgets[noArm].Kind != 9 || w.Gadgets[noArm].Kind.RuntimeFamily() != 0 {
+		t.Fatalf("kind-9 record = kind %d family %d; want kind 9, no runtime family", w.Gadgets[noArm].Kind, w.Gadgets[noArm].Kind.RuntimeFamily())
+	}
+	if got := w.HitTest(w.PlacedRect(noArm).X, w.PlacedRect(noArm).Y); got != noArm {
+		t.Fatalf("kind-9 record hit test = %d want %d: the pass visits it like any other [07 R-WGT-01 §1]", got, noArm)
 	}
 	// Button staged labels [07 §4]
 	var btn *Gadget
@@ -158,41 +176,88 @@ func TestSentinelCentering(t *testing.T) {
 	}
 }
 
-func TestNameCappedAt127(t *testing.T) {
+func TestMaxCharsCappedAt127(t *testing.T) {
+	// The parser caps `maxchars` at 128 and the builder caps it again at 127;
+	// doc 07 §4's "name capped at 127 bytes" was this cap, not the name
+	// [07 R-WGT-01 §11][07 R-WGT-01 §12]. The name field is 16 bytes for every
+	// kind and is retained in full here for diagnostics.
 	fs := testFS(t, "testdata")
 	w, err := Load(fs, "all_kinds.gui")
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
+	seen := false
 	for _, g := range w.Gadgets {
-		if g.Kind == KindTextBox {
-			if len(g.Name) > 127 {
-				t.Fatalf("textbox name len = %d >127 capped per [07 §4]", len(g.Name))
-			}
+		if g.Kind != KindTextBox {
+			continue
+		}
+		seen = true
+		if g.MaxChars != 127 {
+			t.Fatalf("textbox maxchars = %d want 127 [07 R-WGT-01 §12]", g.MaxChars)
+		}
+		if !strings.HasPrefix(g.Name, "MYTEXTINPUT") || len(g.Name) <= 127 {
+			t.Fatalf("textbox name = %q (len %d); the authored name is retained, not capped [07 R-WGT-01 §12]", g.Name, len(g.Name))
 		}
 	}
-	// Also check that the intentionally long name was truncated
-	for _, g := range w.Gadgets {
-		if strings.HasPrefix(g.Name, "MYTEXTINPUT") {
-			if len(g.Name) != 127 {
-				t.Fatalf("long name truncated len = %d want 127", len(g.Name))
-			}
-		}
+	if !seen {
+		t.Fatal("no text input in all_kinds")
 	}
 }
 
-func TestMaxCharsCappedAt128(t *testing.T) {
+func TestFileSlotArms(t *testing.T) {
+	// Kind 7 loads `<font directory>\<filename>.FNT`; kind 8 loads the
+	// authored filename verbatim into the same slot [07 R-WGT-01 §12].
 	fs := testFS(t, "testdata")
 	w, err := Load(fs, "all_kinds.gui")
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	for _, g := range w.Gadgets {
-		if g.Kind == KindTextBox {
-			if g.MaxChars != 128 {
-				t.Fatalf("textbox maxchars = %d want 128 capped per [07 §4]", g.MaxChars)
-			}
+	var font, raw *Gadget
+	for i := range w.Gadgets {
+		switch w.Gadgets[i].Kind {
+		case KindFont:
+			font = &w.Gadgets[i]
+		case KindRawFile:
+			raw = &w.Gadgets[i]
 		}
+	}
+	if font == nil || raw == nil {
+		t.Fatal("font or raw-file gadget missing")
+	}
+	if font.FilePath != "fonts/SMLFONT.FNT" {
+		t.Fatalf("font file slot = %q want fonts/SMLFONT.FNT [07 R-WGT-01 §12]", font.FilePath)
+	}
+	if raw.FilePath != "embed1.dat" {
+		t.Fatalf("raw file slot = %q want embed1.dat verbatim [07 R-WGT-01 §12]", raw.FilePath)
+	}
+}
+
+func TestLabelArmInertOnEmptyLink(t *testing.T) {
+	// The label arm sets attribute 0x10 on every label whose `link` is empty,
+	// which is why plain caption labels never react
+	// [07 R-WGT-01 §12][07 R-WGT-01 §7].
+	fs := testFS(t, "testdata")
+	w, err := Load(fs, "all_kinds.gui")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	var linked, caption *Gadget
+	for i := range w.Gadgets {
+		switch w.Gadgets[i].Name {
+		case "MYLABEL":
+			linked = &w.Gadgets[i]
+		case "MYCAPTION":
+			caption = &w.Gadgets[i]
+		}
+	}
+	if linked == nil || caption == nil {
+		t.Fatal("labels missing")
+	}
+	if caption.Attribs&AttribInert == 0 {
+		t.Fatalf("caption label attribs = %#x; want attribute 0x10 set [07 R-WGT-01 §12]", caption.Attribs)
+	}
+	if linked.Attribs&AttribInert != 0 {
+		t.Fatalf("linked label attribs = %#x; a non-empty link leaves 0x10 clear [07 R-WGT-01 §12]", linked.Attribs)
 	}
 }
 
@@ -239,23 +304,101 @@ func TestScrollbarAssociation(t *testing.T) {
 
 type RangeCheck struct{ Range, KnobPos, KnobSize int16 }
 
-func TestSliderSynthesizesChildren(t *testing.T) {
+func TestBuildSliderArrows(t *testing.T) {
+	// [07 R-WGT-01 §5]. Horizontal: frame base 10, the short axis takes the
+	// base frame's size, the second arrow sits at x+w-arrowW, the bar shrinks
+	// by 2*arrowW and shifts right by arrowW, knobsize is the width of frame
+	// base+5 and travel is w' - knobsize - 4.
+	bar := Gadget{Kind: KindScrollBar, Assoc: 6, Active: 1, Range: 10, KnobSize: 4,
+		Rect: Rect{X: 100, Y: 40, W: 200, H: 16}, SourceName: "GADGET14"}
+	art := &SliderArt{BaseExtent: 14, KnobExtent: 9, ArrowExtent: 12}
+	got, arrows := BuildSlider(bar, art)
+	if len(arrows) != 2 {
+		t.Fatalf("arrows = %d want 2 appended BUTTON gadgets [07 R-WGT-01 §5]", len(arrows))
+	}
+	if arrows[0].Kind != KindButton || arrows[1].Kind != KindButton {
+		t.Fatalf("arrow kinds = %d,%d want button [07 R-WGT-01 §5]", arrows[0].Kind, arrows[1].Kind)
+	}
+	if arrows[0].Attribs != AttribSliderDecrement || arrows[1].Attribs != AttribSliderIncrement {
+		t.Fatalf("arrow attribs = %#x,%#x want 0x3400,0x2c00 [07 R-WGT-01 §5]", arrows[0].Attribs, arrows[1].Attribs)
+	}
+	if base := SliderFrameBase(bar.Rect); base != 10 {
+		t.Fatalf("frame base = %d want 10 for a horizontal bar [07 R-WGT-01 §5]", base)
+	}
+	if arrows[0].ArtFrame != 16 || arrows[1].ArtFrame != 18 {
+		t.Fatalf("arrow frames = %d,%d want base+6,base+8 = 16,18 [07 R-WGT-01 §5]", arrows[0].ArtFrame, arrows[1].ArtFrame)
+	}
+	if arrows[0].Art != "SLIDERS" || arrows[1].Art != "SLIDERS" {
+		t.Fatalf("arrow art = %q,%q want SLIDERS [07 R-WGT-01 §5]", arrows[0].Art, arrows[1].Art)
+	}
+	for i, a := range arrows {
+		if a.Assoc != bar.Assoc || a.Active != bar.Active {
+			t.Fatalf("arrow %d assoc/active = %d/%d want %d/%d [07 R-WGT-01 §5]", i, a.Assoc, a.Active, bar.Assoc, bar.Active)
+		}
+	}
+	if arrows[0].Rect.X != 100 || arrows[1].Rect.X != 100+200-12 {
+		t.Fatalf("arrow X = %d,%d want 100,288 [07 R-WGT-01 §5]", arrows[0].Rect.X, arrows[1].Rect.X)
+	}
+	if got.Rect.H != 14 {
+		t.Fatalf("bar short axis = %d want the base frame's 14 [07 R-WGT-01 §5]", got.Rect.H)
+	}
+	if got.Rect.W != 200-2*12 || got.Rect.X != 100+12 {
+		t.Fatalf("bar = x %d w %d want x 112 w 176 [07 R-WGT-01 §5]", got.Rect.X, got.Rect.W)
+	}
+	if got.KnobSize != 9 {
+		t.Fatalf("knobsize = %d want width(frame base+5) = 9 [07 R-WGT-01 §5]", got.KnobSize)
+	}
+	if got.Range != int16(176-9-4) {
+		t.Fatalf("travel = %d want w'-knobsize-4 = 163 [07 R-WGT-01 §5]", got.Range)
+	}
+
+	// Vertical keeps its authored travel; the second arrow sits at y+h-arrowH.
+	vbar := Gadget{Kind: KindScrollBar, Active: 1, Range: 10, KnobSize: 4,
+		Rect: Rect{X: 20, Y: 30, W: 16, H: 100}}
+	vgot, varrows := BuildSlider(vbar, art)
+	if SliderFrameBase(vbar.Rect) != 0 {
+		t.Fatalf("vertical frame base = %d want 0 [07 R-WGT-01 §5]", SliderFrameBase(vbar.Rect))
+	}
+	if varrows[0].ArtFrame != 6 || varrows[1].ArtFrame != 8 {
+		t.Fatalf("vertical arrow frames = %d,%d want 6,8 [07 R-WGT-01 §5]", varrows[0].ArtFrame, varrows[1].ArtFrame)
+	}
+	if varrows[1].Rect.Y != 30+100-12 {
+		t.Fatalf("vertical second arrow Y = %d want 118 [07 R-WGT-01 §5]", varrows[1].Rect.Y)
+	}
+	if vgot.Range != 10 {
+		t.Fatalf("vertical travel = %d want the authored 10 [07 R-WGT-01 §5]", vgot.Range)
+	}
+	if vgot.Rect.H != 100-2*12 || vgot.Rect.Y != 30+12 {
+		t.Fatalf("vertical bar = y %d h %d want y 42 h 76 [07 R-WGT-01 §5]", vgot.Rect.Y, vgot.Rect.H)
+	}
+
+	// No art: travel := max(w,h) - 6 and no arrows are appended.
+	nbar, narrows := BuildSlider(bar, nil)
+	if len(narrows) != 0 {
+		t.Fatalf("art-less arrows = %d want none [07 R-WGT-01 §5]", len(narrows))
+	}
+	if nbar.Range != 200-6 {
+		t.Fatalf("art-less travel = %d want max(w,h)-6 = 194 [07 R-WGT-01 §5]", nbar.Range)
+	}
+}
+
+func TestLoadDoesNotSynthesizeSliderChildren(t *testing.T) {
+	// The kind-4 arm needs SLIDERS metrics; the loader holds no GAF handle, so
+	// it leaves the authored record alone [07 R-WGT-01 §5].
 	fs := testFS(t, "testdata")
 	w, err := Load(fs, "all_kinds.gui")
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	count := 0
 	for _, g := range w.Gadgets {
-		if strings.HasPrefix(g.Name, "MYSLIDER_S") {
-			count++
-			if g.Kind != KindScrollBar {
-				t.Fatalf("slider child kind = %d want scrollbar", g.Kind)
-			}
+		if g.Attribs == AttribSliderDecrement || g.Attribs == AttribSliderIncrement {
+			t.Fatalf("Load synthesized a slider arrow (%s); art-dependent synthesis belongs to the builder [07 R-WGT-01 §5]", g.SourceName)
 		}
 	}
-	if count != 2 {
-		t.Fatalf("slider children count = %d want 2 per [07 §4]", count)
+	for _, g := range w.Gadgets {
+		if g.Name == "MYSLIDER" && (g.Range != 10 || g.KnobSize != 4) {
+			t.Fatalf("MYSLIDER travel/knobsize = %d/%d; want the authored 10/4 untouched [07 R-WGT-01 §5]", g.Range, g.KnobSize)
+		}
 	}
 }
 
@@ -315,7 +458,7 @@ func TestArtResolutionOrder(t *testing.T) {
 	}
 }
 
-func TestHitTestInclusiveAndGrayedReject(t *testing.T) {
+func TestHitTestHoversGreyedButOnlyUngreyedFires(t *testing.T) {
 	fs := testFS(t, "testdata")
 	w, err := Load(fs, "all_kinds.gui")
 	if err != nil {
@@ -342,15 +485,26 @@ func TestHitTestInclusiveAndGrayedReject(t *testing.T) {
 	if w.HitTest(btn.Rect.X+btn.Rect.W, btn.Rect.Y) != -1 {
 		t.Fatalf("HitTest outside should miss")
 	}
-	// Grayed reject [07 §3]
+	if !w.Fires(idx) {
+		t.Fatalf("an active, un-greyed button should fire [07 R-WGT-01 §13]")
+	}
+	// The grey bit is tested at press/fire time, not at hover: the pass's hit
+	// test skips only hidden gadgets, so a greyed gadget still becomes the
+	// hovered gadget and still feeds HELPTEXT [07 R-WGT-01 §13].
 	w.Gadgets[idx].GrayedOut = 1
-	if w.HitTest(btn.Rect.X, btn.Rect.Y) != -1 {
-		t.Fatalf("grayed control should reject hit per [07 §3]")
+	if w.HitTest(btn.Rect.X, btn.Rect.Y) != idx {
+		t.Fatalf("greyed control must still be hovered so it feeds HELPTEXT [07 R-WGT-01 §13]")
+	}
+	if w.Fires(idx) {
+		t.Fatalf("greyed button must neither capture nor fire [07 R-WGT-01 §13]")
 	}
 	w.Gadgets[idx].GrayedOut = 0
 	w.Gadgets[idx].Active = 0
 	if w.HitTest(btn.Rect.X, btn.Rect.Y) != -1 {
-		t.Fatalf("hidden control should reject hit per [07 §3]")
+		t.Fatalf("hidden control should reject hit [07 R-WGT-01 §1]")
+	}
+	if w.Fires(idx) {
+		t.Fatalf("hidden control should not fire [07 R-WGT-01 §1]")
 	}
 }
 

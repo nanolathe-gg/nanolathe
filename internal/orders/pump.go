@@ -120,14 +120,16 @@ type Queue struct {
 	// getBuiltHandler is supplied by the construction service that owns the
 	// product lifecycle. Keeping it on the queue preserves the ordinary ordered
 	// primary walk without introducing package-global session state
-	// [04 R-FAC-02 §4][I16].
-	getBuiltHandler func(*units.Unit, *Node, uint32) Code
+	// [04 R-FAC-02 §4][I16]. Its signature is the descriptor Handler's: the
+	// satisfied set is an argument because `GetBuilt`'s phase-2 body reads it —
+	// the `0x8000` arm holds, the bit-0 arm decays [04 R-ORD-01 §11].
+	getBuiltHandler func(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code
 }
 
 // SetGetBuiltHandler binds the construction-owned GetBuilt lifecycle to this
 // queue. The queue pump remains the sole dispatcher and therefore preserves
 // BeCarried/GetBuilt composition timing [04 R-FAC-02 §4].
-func (q *Queue) SetGetBuiltHandler(handler func(*units.Unit, *Node, uint32) Code) {
+func (q *Queue) SetGetBuiltHandler(handler func(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code) {
 	if q != nil {
 		q.getBuiltHandler = handler
 	}
@@ -1571,11 +1573,14 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 		var code Code
 		if desc.Name == "GetBuilt" && q.getBuiltHandler != nil {
 			// GetBuilt is not a descriptor handler: the construction service
-			// that owns the product lifecycle binds it per queue, and its
-			// third argument has always been the tick [04 R-FAC-02 §4]. The
-			// result-code handling below is its own too, so this stays a named
-			// case.
-			code = q.getBuiltHandler(u, n, tick)
+			// that owns the product lifecycle binds it per queue
+			// [04 R-FAC-02 §4]. Its signature is the descriptor Handler's, and
+			// the satisfied set it receives is the same one computed above —
+			// `GetBuilt`'s gate is `0x8001` and its phase-2 body reads the set
+			// to choose its arm: `0x8000` holds for another 30 ticks, bit 0
+			// alone decays [04 R-ORD-01 §11]. The result-code handling below is
+			// its own, so this stays a named case.
+			code = q.getBuiltHandler(u, n, satisfied, tick)
 		} else {
 			// Removed (WU-18-7): three by-name cases stood here, calling
 			// `beCarriedHandlerAtTick`, `stopHandlerAtTick` and

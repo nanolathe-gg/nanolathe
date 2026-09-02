@@ -449,11 +449,16 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 		return nil, err
 	}
 	report.Report(FamilyTerrain, 100)
-	// 4. create retail sliced unit pool [P0-16]. Skirmish is mission mode 2,
-	// whose retail comparator path retains the fixed player-slot order. Keep
-	// the key seam explicit for mode-3 battle reconstruction [R-P0-16-A].
-	var playerSortKeys [pool.PlayerCount]uint32
-	unitsWorld, err := newBattleSlicedWorldWithCOB(cat, fs, int(m.Type), playerSortKeys)
+	// 4. create retail sliced unit pool [P0-16]. This constructor only ever
+	// builds a skirmish session (session kind 2), whose comparator path
+	// always orders by slot; the peer-identity sort key is consulted only
+	// in session kind 3 (multiplayer, never built by this engine)
+	// [08 R-SESS-01 §7]. Pass the skirmish kind explicitly rather than
+	// mission.Type — a different, file-loading discriminant — and drop the
+	// sort-key plumbing entirely: [08 R-SESS-01 §7 "Consequence for
+	// single-player"] establishes that an engine which never builds a
+	// kind-3 session needs none.
+	unitsWorld, err := newBattleSlicedWorldWithCOB(cat, fs, sessionKindSkirmish, [pool.PlayerCount]uint32{})
 	if err != nil {
 		return nil, err
 	}

@@ -21,7 +21,16 @@ type Type uint8
 const (
 	TypeCampaign Type = 1 // [08 "Mission type dispatch"] campaign
 	TypeSkirmish Type = 2 // [08 "Mission type dispatch"] skirmish/multiplayer direct OTA
-	TypeSaved    Type = 3 // [08 "Mission type dispatch"] loaded-save OTA
+	// TypeSaved selects the file-loading path for a loaded save's mission
+	// OTA — dispatched identically to TypeSkirmish, direct maps/<name>.ota
+	// with one translated-name retry [08 "Mission type dispatch"]. Its
+	// numeral (3) is unrelated to retail's separate *session kind* word,
+	// which also runs 1..3 but names campaign/skirmish/multiplayer
+	// [08 R-SESS-01 §7]: a loaded save restores its session kind from the
+	// save bank's own Summary.Gametype (1 or 2 only — this engine never
+	// builds session kind 3) [08 "Load process"], never from this
+	// discriminant. Do not read this constant's value as a session kind.
+	TypeSaved Type = 3
 )
 
 // Mission is the loaded mission object. [08 "Mission object"] [C2] [C4] [C5] [C8]

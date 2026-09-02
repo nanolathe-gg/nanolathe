@@ -18,6 +18,19 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
+// sessionKindCampaign and sessionKindSkirmish are the session-kind words the
+// pool's player-slice comparator switches on [08 R-SESS-01 §7]: kind 1
+// (campaign) and kind 2 (skirmish) both order by slot; only kind 3
+// (multiplayer, never built by this engine) consults the peer-identity sort
+// key. They are a distinct concept from mission.Type — that discriminant
+// selects how a mission *file* is loaded (campaign wrapper vs direct OTA,
+// [08 "Mission type dispatch"]) and must never stand in for the session kind
+// here, even though two of its three values happen to coincide.
+const (
+	sessionKindCampaign = 1
+	sessionKindSkirmish = 2
+)
+
 // NewMission loads a campaign mission by VFS logical path and difficulty per
 // [08 "Mission type dispatch"], [08 "Schema choice"] and prepares the battle
 // session. It is the plan API entry point [PLAN_14 Public API] C3 and is
@@ -82,14 +95,16 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 		return nil, err
 	}
 	report.Report(FamilyTerrain, 100)
-	// Campaign setup currently exposes no player-record sort-key field. Keep
-	// the explicit ten-key seam so mode-3 construction cannot silently derive
-	// a value from unrelated authored fields.
-	// TODO(question): surface the unsigned 32-bit player-record sort key from
-	// the campaign/save player table before any TypeSaved battle reaches this
-	// constructor; the mode-3 pool order depends on that field [R-P0-16-A].
-	var playerSortKeys [pool.PlayerCount]uint32
-	unitsWorld, err := newBattleSlicedWorldWithCOB(cat, fs, int(m.Type), playerSortKeys)
+	// The pool's player-slice order only ever consults the peer-identity sort
+	// key in session kind 3 (multiplayer); kinds 1 (campaign) and 2 (skirmish)
+	// always order by slot regardless of what that word holds [08 R-SESS-01
+	// §7]. This constructor only ever builds a campaign session, so it passes
+	// the campaign kind explicitly rather than deriving it from mission.Type
+	// — a different discriminant (file-loading dispatch, not session kind)
+	// that happens to share this one value. Nanolathe never builds a kind-3
+	// session, so no sort-key plumbing is needed here at all [08 R-SESS-01
+	// §7 "Consequence for single-player"].
+	unitsWorld, err := newBattleSlicedWorldWithCOB(cat, fs, sessionKindCampaign, [pool.PlayerCount]uint32{})
 	if err != nil {
 		return nil, err
 	}
@@ -105,12 +120,22 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 		Latch:        NewEndLatch(),
 		CampaignSlot: m.CampaignIndex,
 	}
-	// Mission retains the exact authored restriction identity for the future
-	// availability-table consumer. Do not approximate the player-visible unit
-	// set from catalog membership here.
-	// TODO(question): the battle-local UseOnly availability-table consumer is not yet
-	// exposed; the retail table writer/reader pair is the decider [02
-	// "UseOnlyUnits routing"][08 R-ENTRY-01 §3].
+	// Mission.UseOnlyPath already carries the resolved logical path for the
+	// unit-restriction file (resource slot 6, opened by kind 1 only). The
+	// retail rule itself is Established, not an open research question
+	// [08 R-ENTRY-01 §2 step 4]: when the file exists it clears the
+	// "available" bit of every catalog definition from index 2 upward, then
+	// sets it again for each `[name]` section, case-insensitive; a missing
+	// file leaves every definition available. That is the same bit the unit
+	// allocator's creatable-bit gate tests at battle-entry time
+	// [05 R-SHARE-01 §8].
+	//
+	// Applying it needs a seam this unit does not own: content.UnitDef has no
+	// available/creatable bit, and internal/units.World's allocator
+	// (create, internal/units/units.go) does not test one — both packages
+	// are outside this file's ownership. Do not approximate the restricted
+	// set from catalog membership here; every definition stays available
+	// until that catalog/allocator seam is added.
 	// Correct controller states: human local 1, computer enemy 2 [08 "Established AI-facing data"]
 	for i := 0; i < 2 && i < 10; i++ {
 		p := &s.Econ.Players[i]
@@ -237,10 +262,17 @@ func applyCampaignPlayerTableSides(s *Session, fs vfs.FSOps, m *mission.Mission)
 	name, ok := header.StringValue("campaignside", "")
 	name = strings.TrimSpace(name)
 	if !ok || name == "" || strings.EqualFold(name, "ALL") {
-		// TODO(question): `campaignside=ALL` names no side and no stock campaign
-		// authors it; the decider is the front-end local-side value, which
-		// [08 R-CAMP-01 §1] records as settled before the campaign list is
-		// filtered. Do not default a side here.
+		// This is not an open research question: [08 R-CAMP-01 §1] establishes
+		// that `campaignside` only filters which campaigns the new-game panel
+		// offers, and that `ALL` is admitted to both lists and settles
+		// nothing — "a real gap, not a defaulting opportunity". The side is
+		// actually decided earlier, by the front-end local-side value written
+		// when the new-game panel opens, and no constructor seam here carries
+		// that value into the session. So for `ALL` (and for the absent/empty
+		// name case, which authors no side at all) this function leaves the
+		// identity unknown: campaignPlayerSideKnown stays false and every
+		// commander/trigger owner test that depends on it fails closed rather
+		// than guessing a side.
 		return
 	}
 	// The admission test compares `campaignside` case-insensitively against the

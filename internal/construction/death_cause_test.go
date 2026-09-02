@@ -75,7 +75,7 @@ func TestDecayClampStampsCauseNine(t *testing.T) {
 	q := svc.queueForUnit(frame)
 	q.Push(orders.Lookup("GetBuilt"), orders.Node{Phase: uint8(State2)})
 
-	if code := svc.handleGetBuiltOrder(frame, q.Primary()[0], 40); code != 2 {
+	if code := svc.handleGetBuiltOrder(frame, q.Primary()[0], 0, 40); code != 2 {
 		t.Fatalf("decay visit code=%d, want the ordinary hold", code)
 	}
 	if frame.LastDamageCause != Kind9Cause {

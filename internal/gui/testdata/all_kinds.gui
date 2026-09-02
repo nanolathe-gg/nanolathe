@@ -4,7 +4,7 @@
     {
         id=0; name=TestPanel; xpos=0; ypos=0; width=640; height=480; active=1;
     }
-    totalgadgets=12;
+    totalgadgets=15;
     panel=MyPanel;
     crdefault=OK;
     escdefault=CANCEL;
@@ -74,15 +74,15 @@
 {
     [COMMON]
     {
-        id=8; name=MYSLIDER; xpos=-1; ypos=320; width=200; height=16; active=1; assoc=6;
+        id=8; name=MYRAWFILE; xpos=10; ypos=320; width=60; height=20; active=1;
     }
-    range=10; knobpos=2; knobsize=4; thick=4;
+    filename=embed1.dat;
 }
 [GADGET9]
 {
     [COMMON]
     {
-        id=9; name=MYTEXT; xpos=10; ypos=340; width=200; height=20; active=1;
+        id=9; name=MYNOARM; xpos=10; ypos=340; width=200; height=20; active=1;
     }
     text=Some text case;
 }
@@ -90,22 +90,44 @@
 {
     [COMMON]
     {
-        id=10; name=ZEROING; xpos=10; ypos=360; width=50; height=10; active=1;
+        id=10; name=MYLINE; xpos=10; ypos=360; width=50; height=10; active=1;
     }
-    text=should be zeroed; link=MYBUTTON; filename=ignored;
+    nuttin=42;
 }
 [GADGET11]
 {
     [COMMON]
     {
-        id=11; name=EMBED1; xpos=10; ypos=380; width=60; height=20; active=1;
+        id=11; name=MYPANELALIAS; xpos=10; ypos=380; width=60; height=20; active=1;
     }
-    filename=embed1.dat; text=embed1;
 }
 [GADGET12]
 {
     [COMMON]
     {
-        id=12; name=MYPICTURE; xpos=-2; ypos=400; width=80; height=60; active=1;
+        id=12; name=MYPICTURE; xpos=-2; ypos=400; width=80; height=60; active=1; colorf=7;
     }
+}
+[GADGET13]
+{
+    [COMMON]
+    {
+        id=13; name=MYSCOREBAR; xpos=10; ypos=420; width=100; height=12; active=1;
+    }
+}
+[GADGET14]
+{
+    [COMMON]
+    {
+        id=4; name=MYSLIDER; xpos=-1; ypos=440; width=200; height=16; active=1; assoc=6; attribs=1;
+    }
+    range=10; knobpos=2; knobsize=4; thick=4;
+}
+[GADGET15]
+{
+    [COMMON]
+    {
+        id=5; name=MYCAPTION; xpos=10; ypos=460; width=120; height=16; active=1;
+    }
+    text=CaptionOnly;
 }

@@ -2278,6 +2278,25 @@ the guarded GetBuilt block is the post-build gate — keep both stages distinct
 rather than treating the product's initial flags as proof that GetBuilt has
 already run.
 
+**Correction (2026-09-02, WU-19-101) — the experience-word gate is control
+byte 2, not 1.** The parenthetical above read "for a computer-owned builder
+(owner player state byte value 1)". That value is wrong: it repeats the
+mislabel of the player slot's control byte that section 3.6's 2026-08-31
+correction retired for the idle-queue refill, where "the owner player state
+byte holds one of the two computer-player states" turned out to name the two
+ACTIVE player states. Three Established traces give the identity the same way:
+[05 R-SHARE-01 §1] (the control byte is `1` for a locally controlled human,
+`2` for a computer player, `3` for a remote peer; skirmish setup writes `1`
+for the local human seat and `2` for each computer seat), [05 R-ECO-01 §3]
+(the difficulty discount runs for control byte `2`), and [R-SPEC-01 §5] ("the
+searching unit's owning player has controller type 2 (a computer player)").
+Read as authored, the parenthetical would have copied the experience word for
+every HUMAN-owned factory product and for no computer-owned one — the gate
+inverted, not merely misnamed. The standing-bit half of the sentence is
+unaffected. Section 3.5's summary mirror ("the experience word copies only for
+computer-player-owned builders (owner player state byte value 1)") carries the
+same stale value and is corrected by this paragraph.
+
 **Established fact — same-tick product publication windows [R-P0-09]:** A
 product allocated during the unit sweep exists before the projectile phase and
 can be selected as a projectile target in that phase, even while its remaining

@@ -4,28 +4,26 @@ package gui
 // Retail gadgets have 347-byte record identity [07 §4][02 §6 "Control-kind mapping"]; Go uses named fields per I13.
 type Kind uint8
 
+// The kind byte and the arms it selects are the builder's fourteen-entry
+// switch, indexed 0..13 after an unsigned "> 13" bounds test
+// [07 R-WGT-01 §12]. Keys 6, 9 and 10 and every value above 13 do no build
+// work; their records are still parsed and still serviced. Kind 9 has no arm,
+// no per-kind keys [07 R-WGT-01 §11] and no traced runtime role, so it gets no
+// name here — an id without a behavior is not a control type.
 const (
-	KindPanel     Kind = 0 // background/panel with -1 centering and BackTile fallback [07 §4]
-	KindButton    Kind = 1 // button with staged frames and | labels [07 §4]
-	KindListBox   Kind = 2 // listbox [07 §4][02 §6]
-	KindTextBox   Kind = 3 // text input, name capped at 127 bytes [07 §4]
-	KindScrollBar Kind = 4 // scrollbar [07 §4][02 §6]
-	KindLabel     Kind = 5 // label [02 §6]
-	KindSurface   Kind = 6 // blank surface [02 §6]
-	KindFont      Kind = 7 // font selector [02 §6]
-	// Ids 8-11 and 14-15 are OUR assignment, not retail's: [07 §4] closes the
-	// twelve cases the control-kind byte selects among but not which byte
-	// selects each of the seven beyond the authored corpus {0..7,12}
-	// [fmt gui]. The open question and its decider live at the switch in
-	// load.go; these are the first free ids in corpus order.
-	KindSlider    Kind = 8  // slider synthesizing two scrollbar children [07 §4]
-	KindText      Kind = 9  // text case [07 §4]
-	KindZero      Kind = 10 // unnamed zeroing case [07 §4]
-	KindEmbedded1 Kind = 11 // embedded-file case [07 §4]
-	KindPicture   Kind = 12 // picture-box style control [02 §6][07 §4]
-	KindRepeat    Kind = 13 // repeating/decrementing runtime family 12/13 mapped [07 §4] — also covers second embedded-file / single-purpose slot
-	KindSingle1   Kind = 14 // single-purpose placeholder [07 §4]
-	KindSingle2   Kind = 15 // single-purpose placeholder [07 §4]
+	KindPanel      Kind = 0  // panel: window GAF, centring offset, panel art own -> common -> BackTile [07 R-WGT-01 §12]
+	KindButton     Kind = 1  // button with staged frames and | labels [07 R-WGT-01 §3]
+	KindListBox    Kind = 2  // listbox; assoc peers share the larger itemheight [07 R-WGT-01 §12]
+	KindTextBox    Kind = 3  // text input; the builder caps maxchars at 127 [07 R-WGT-01 §12]
+	KindScrollBar  Kind = 4  // scrollbar and slider are one kind [07 R-WGT-01 §5]
+	KindLabel      Kind = 5  // label; an empty link makes it inert [07 R-WGT-01 §7]
+	KindSurface    Kind = 6  // blank surface with a per-pass callback and hotornot [07 R-WGT-01 §8]
+	KindFont       Kind = 7  // font: loads <font directory>\<filename>.FNT whole [07 R-WGT-01 §12]
+	KindRawFile    Kind = 8  // raw file: loads the authored filename verbatim; nothing reads it [07 R-WGT-01 §12]
+	KindLine       Kind = 10 // line painter; reads nuttin and needs no build work [07 R-WGT-01 §8][R-WGT-01 §11]
+	KindPanelAlias Kind = 11 // shares the panel arm with kind 0 [07 R-WGT-01 §12]
+	KindPicture    Kind = 12 // picture box: frame 0 by name, own GAF then common [07 R-WGT-01 §12]
+	KindScoreBar   Kind = 13 // score bar: next-due stamp = scaled timer + interval [07 R-WGT-01 §12]
 )
 
 // RuntimeFamily maps a stored Kind to its runtime dispatch family [07 §4].
@@ -39,14 +37,14 @@ func (k Kind) RuntimeFamily() uint8 {
 	case KindTextBox:
 		return 3 // focusable text editor [07 §4]
 	case KindScrollBar:
-		return 4 // dedicated update [07 §4]
+		return 4 // scrollbar/slider update [07 §4 correction][07 R-WGT-01 §5]
 	case KindLabel:
-		return 5 // association-capable [07 §4]
+		return 5 // link redirection [07 §4 correction][07 R-WGT-01 §7]
 	case KindSurface:
-		return 6 // callback-producing [07 §4]
+		return 6 // per-pass callback and hotornot click [07 §4 correction][07 R-WGT-01 §8]
 	case KindPicture:
 		return 12 // repeating/decrementing [07 §4]
-	case KindRepeat:
+	case KindScoreBar:
 		return 13 // timed/range animating [07 §4]
 	default:
 		return 0
@@ -100,13 +98,23 @@ type Gadget struct {
 	Thick    int32 // scrollbar thick 32-bit [02 §6]
 
 	Link     string // label link [02 §6]
-	FileName string // font filename [02 §6]
-	HotOrNot int32  // blank surface hotornot [02 §6]
-	// TODO(question): what does the compound control's `nuttin` key mean?
-	// [02 §6] gives its accessor and width and no consumer, and no reader has
-	// been traced. Decider: a static trace of the compound control's use of the
-	// field. Parsed and retained losslessly meanwhile.
-	Nuttin int32 // compound control [02 §6]
+	FileName string // authored filename, kinds 7 and 8 [02 §6][07 R-WGT-01 §11]
+	// FilePath is the gadget's file slot: the path the builder opens for a
+	// kind-7 font (`<font directory>\<filename>.FNT`) or a kind-8 raw file
+	// (the authored `filename` verbatim). Both arms write the same slot
+	// [07 R-WGT-01 §12].
+	FilePath string
+	HotOrNot int32 // blank surface hotornot, bit 0 of the surface flag word [02 §6][07 R-WGT-01 §11]
+	// `nuttin` is the kind-10 line gadget's key, stored as a 32-bit word at the
+	// start of the text field [07 R-WGT-01 §11]. The line painter's use of it is
+	// still open.
+	// TODO(question): does the kind-10 line painter read `nuttin` as the
+	// attribute-4 (outline) second X coordinate? [07 R-WGT-01 §8] describes the
+	// horizontal/vertical/outlined line and doc 07's "Unknown" list keeps the
+	// outline's second X open because the decompiler drops it. Decider: an
+	// instruction-level read of the line painter. Parsed and retained losslessly
+	// meanwhile.
+	Nuttin int32 // kind-10 line gadget [02 §6][07 R-WGT-01 §11]
 
 	ItemHeight int16 // listbox itemheight rare [02 §6][fmt gui]
 	MaxChars   int16 // textbox maxchars stored as 16-bit capped at 128 [07 §4]
@@ -115,6 +123,11 @@ type Gadget struct {
 	// Own entry is Name; Fallback is BackTile chain for panel [07 §4].
 	Art         string // primary art name (Name) [02 §6]
 	FallbackArt string // built-in fallback, last link of [07 §4]'s own-entry -> side GAF -> built-in chain
+	// ArtFrame selects one frame inside Art. Authored gadgets leave it 0 —
+	// the picture box blits frame 0 of the entry named by the gadget
+	// [07 R-WGT-01 §12] — and the builder's synthesized slider arrows carry
+	// frames base+6 and base+8 of SLIDERS here [07 R-WGT-01 §5].
+	ArtFrame int32
 
 	// Provenance
 	SourceName string // original TDF section name like GADGET0

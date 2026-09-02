@@ -8,7 +8,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
-	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -116,55 +115,32 @@ func TestFeatureBeforeAlive(t *testing.T) {
 	}
 }
 
-// TestReverseMetalOnly locks metal-only refund, no energy, cause-9 no-corpse [P0-15].
-func TestReverseMetalOnly(t *testing.T) {
-	def := &content.UnitDef{UnitName: "armmakr", BuildCostMetal: 500, BuildTime: 3000, MaxDamage: 1000}
-	target := &units.Unit{Def: def, Remaining: 0.2, Health: 800, MaxHealth: 1000}
-	worker := int32(-1) // negative
-	nv, refund, healthDelta := ReverseStep(target.Remaining, worker, def.BuildTime, target.MaxHealth, def.BuildCostMetal)
-	if nv <= target.Remaining {
-		t.Fatalf("reverse nv %v should increase from 0.2", nv)
-	}
-	if refund <= 0 {
-		t.Fatalf("reverse refund %v should be positive", refund)
-	}
-	if healthDelta > 0 {
-		t.Fatalf("reverse healthDelta %d should be negative or zero (health reduces)", healthDelta)
-	}
-	// Apply with bucket
+// The reverse arm's refund ladder: direct metal credit, and the special
+// second state's 0.5/0.7 selector pairing tied to the TARGET's owner
+// [05 R-WORK-01 §1][05 "Cancel-current and stop interrupts"]. The arm itself is
+// exercised through sharedStep by the decay-wrapper tests in
+// getbuilt_decay_gate_test.go; ReverseStep/ApplyReverse/ReverseCause9, the
+// parallel expression this test used to drive, are retired (WU-19-101).
+func TestReverseRefundSelectorLadder(t *testing.T) {
 	bucket := float32(0)
-	ReverseRefund(&bucket, refund, false, 0)
-	if bucket != refund {
-		t.Fatalf("refund bucket %v want %v", bucket, refund)
+	ReverseRefund(&bucket, 40, false, 0)
+	if bucket != 40 {
+		t.Fatalf("ordinary owner credits the whole amount: got %v want 40", bucket)
 	}
-	// Discounted via victim owner state2
 	bucket2 := float32(0)
 	ReverseRefund(&bucket2, 100, true, 0)
 	if bucket2 != -50 {
-		t.Fatalf("discount 0 => -0.5 => -50 got %v", bucket2)
+		t.Fatalf("selector 0 credits half: got %v want -50", bucket2)
 	}
 	bucket3 := float32(0)
 	ReverseRefund(&bucket3, 100, true, 1)
 	if bucket3 != -70 {
-		t.Fatalf("discount 1 => -0.7 => -70 got %v", bucket3)
+		t.Fatalf("selector 1 credits seven tenths: got %v want -70", bucket3)
 	}
-	// Cause-9 when clamped
-	if !ReverseCause9(1.0) {
-		t.Fatalf("clamped 1.0 should cause 9")
-	}
-	if ReverseCause9(0.9) {
-		t.Fatalf("0.9 not cause9")
-	}
-	// Full reverse via ApplyReverse should return true when clamped
-	target2 := &units.Unit{Def: def, Remaining: 0.999, Health: 999, MaxHealth: 1000}
-	workerBig := int32(-10) // large negative to clamp in one step: delta 10/3000=0.00333 => 0.999+0.00333=1.0 clamped
-	// Use worker -10 to ensure clamp
 	bucket4 := float32(0)
-	kind9 := ApplyReverse(nil, target2, workerBig, false, 0, &bucket4)
-	_ = worker
-	_ = nv
-	if !kind9 && target2.Remaining != 1.0 {
-		t.Logf("not yet clamped, remaining %v", target2.Remaining)
+	ReverseRefund(&bucket4, 100, true, 2)
+	if bucket4 != 100 {
+		t.Fatalf("any other selector credits the whole amount: got %v want 100", bucket4)
 	}
 }
 

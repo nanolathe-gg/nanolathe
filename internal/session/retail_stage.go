@@ -68,11 +68,22 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	if err != nil {
 		return nil, fmt.Errorf("session: retail map resolution: %w", err)
 	}
-	// Keep the mission type as the sole permutation gate. The mode-3
-	// PlayerSortKey path is selected only by the established TypeSaved mission
-	// mode; no saved sort-key field is established in the retail bank schema, so
-	// never derive one from unit IDs or enumeration order [R-P0-16-A].
-	unitsWorld, err := newBattleSlicedWorldWithCOB(cat, deps.FS, int(m.Type), [pool.PlayerCount]uint32{})
+	// The pool's player-slice order only consults the peer-identity sort key
+	// in session kind 3 (multiplayer); kinds 1 (campaign) and 2 (skirmish)
+	// both order by slot regardless of that word [08 R-SESS-01 §7]. A loaded
+	// battle restores its session kind from the save's own Summary.Gametype
+	// [08 "Load process"], never from mission.Type — a different discriminant
+	// for how the mission *file* is resolved, not for the session's kind.
+	// Retail's Gametype save value only distinguishes campaign from "not
+	// campaign"; this engine never implements true kind-3 network
+	// multiplayer, so every non-campaign restore runs as a skirmish (kind 2)
+	// restore and needs no saved sort-key field at all [08 R-SESS-01 §7
+	// "Consequence for single-player"].
+	sessionKind := sessionKindCampaign
+	if image.Summary.Gametype == GametypeMultiplayer {
+		sessionKind = sessionKindSkirmish
+	}
+	unitsWorld, err := newBattleSlicedWorldWithCOB(cat, deps.FS, sessionKind, [pool.PlayerCount]uint32{})
 	if err != nil {
 		return nil, err
 	}

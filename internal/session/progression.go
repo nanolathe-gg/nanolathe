@@ -264,7 +264,13 @@ type BankProgress struct {
 // [P1-01 §2.4]. Projectile phase captures count at entry; trigger poll sits
 // inside player phase after settlement gate [P1-01 §3]. Latch freezes
 // settlement same tick; network drain still runs at next tick top [P1-01 §3].
-// TODO(question): exact WinLoseTime/DisplayTimer UI consumers outside save [P1-01 §8].
+// WinLoseTime and DisplayTimer's UI consumers are closed, not open: the save
+// record's `WinLoseTime` has no reader anywhere in the image beyond the save
+// writer itself (persisted verbatim for compatibility, otherwise inert), and
+// `DisplayTimer` is the HUD resource-rate refresh deadline — a presentation
+// consumer, not a sim phase — advanced on a strict compare one tick ahead of
+// the settlement deadline [08 "Player records"][05 R-ECO-01 §6]. Neither
+// belongs in this teardown order.
 const TeardownOrder = "network→units→projectiles→player/economy/triggers→sharing→features→visibility→wind→cleanup→barrier→cadence"
 
 // ApplyCampaignResult writes the single 'W'/'L' mark at the mission slot.
@@ -349,8 +355,16 @@ func ContinuationSummary(p PostBattleSummary, meta ContinuationSaveMetadata) sav
 // without rewriting campaign progress beyond current slot, while CONTINUE
 // or RETURN routes via post-battle handler that writes W/L and unlocks next
 // mission before returning to the front-end router [P1-01 §7.5].
-// TODO(question): campaign progress registry vs file persistence location
-// and write timing relative to report ticker remains TODO(question) [P1-01 §8].
+// Persistence location and write timing are closed, not open [08 R-CAMP-01
+// §6–§8]: campaign progress is exactly three in-memory items (the mission
+// index, the 25-byte Thumbs mark array, and the difficulty word); they are
+// never written to the registry (which holds only the difficulty/games/
+// all-missions mirrors), and persist only through the save bank's own
+// Summary account. The single W/L mark is written once per battle, by the
+// score helper, at the battle-teardown end transition — before the results
+// handler is installed. Session.pollMissionTriggers matches that timing: it
+// calls BankProgress.ApplyCampaignResult the instant the latch crosses into
+// its ending state, before the post-battle result is reported.
 type CampaignTransition int
 
 const (

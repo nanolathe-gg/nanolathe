@@ -30,17 +30,26 @@ func TestGetBuiltWakeArmHoldsWithoutDecaying(t *testing.T) {
 	svc := NewService(nil, cat, w, &economy.Service{})
 
 	// A forward step raises the wake in the unit's pending word — the bit the
-	// pump ORs into the satisfied set — and mirrors it onto the record.
+	// pump ORs into the satisfied set. That word is the ONLY store: no mirror is
+	// written onto the record [04 R-ORD-01 §11].
 	svc.applyWorkStep(product, product, 40)
 	if product.Pending&pendingUnderConstructionWake == 0 {
 		t.Fatalf("forward step did not raise 0x8000 in the unit pending word")
 	}
-	if node.Param1 == 0 {
-		t.Fatalf("forward step did not reach the product's GetBuilt record")
+	if node.Param1 != 0 {
+		t.Fatalf("the wake must not be mirrored onto the record: Param1=%d", node.Param1)
+	}
+
+	// The pump's own satisfied set, `(record pending | unit pending) & gate`,
+	// with GetBuilt's gate at 0x8001 [04 R-ORD-01 §10].
+	node.DynamicGate = 0x8001
+	satisfied := (node.Satisfied | product.Pending) & node.DynamicGate
+	if satisfied&pendingUnderConstructionWake == 0 {
+		t.Fatalf("satisfied=%#x, want bit 15 raised", satisfied)
 	}
 
 	before := product.Remaining
-	if code := svc.handleGetBuiltOrder(product, node, 45); code != 2 {
+	if code := svc.handleGetBuiltOrder(product, node, satisfied, 45); code != 2 {
 		t.Fatalf("worked visit code=%d, want hold", code)
 	}
 	if product.Remaining != before {
@@ -53,12 +62,12 @@ func TestGetBuiltWakeArmHoldsWithoutDecaying(t *testing.T) {
 		t.Fatalf("worked visit gate=%#x, want 0x8001", node.DynamicGate)
 	}
 	if node.Param1 != 0 {
-		t.Fatalf("the dispatch did not consume the wake")
+		t.Fatalf("the handler must leave the record's scratch word alone: Param1=%d", node.Param1)
 	}
 
 	// A whole deadline with no forward step reaches the decay: the quantum is
 	// -(buildtime*11)/buildcostenergy, so the fraction rises by 11/energy.
-	if code := svc.handleGetBuiltOrder(product, node, 75); code != 2 {
+	if code := svc.handleGetBuiltOrder(product, node, 0, 75); code != 2 {
 		t.Fatalf("expired visit code=%d, want hold", code)
 	}
 	want := before + float32(11)/float32(60)
@@ -94,7 +103,7 @@ func TestGetBuiltDecayStillRunsWithoutWork(t *testing.T) {
 	product := &units.Unit{Handle: 1, Owner: 0, Alive: true, Def: def, Remaining: 0.5, MaxHealth: 100}
 	node := &orders.Node{Phase: uint8(State2)}
 	svc := NewService(nil, nil, nil, &economy.Service{})
-	if code := svc.handleGetBuiltOrder(product, node, 40); code != 2 {
+	if code := svc.handleGetBuiltOrder(product, node, 0, 40); code != 2 {
 		t.Fatalf("code=%d, want hold", code)
 	}
 	if product.Remaining <= 0.5 {
@@ -120,7 +129,7 @@ func TestMalformedBuildNumbersThroughTheDecayWrapper(t *testing.T) {
 		svc := NewService(nil, cat, w, &economy.Service{})
 		node := &orders.Node{Phase: uint8(State2)}
 
-		svc.handleGetBuiltOrder(product, node, 10)
+		svc.handleGetBuiltOrder(product, node, 0, 10)
 
 		if product.Remaining != 1 {
 			t.Fatalf("remaining=%v, want the clamp to 1.0", product.Remaining)
@@ -144,7 +153,7 @@ func TestMalformedBuildNumbersThroughTheDecayWrapper(t *testing.T) {
 		svc := NewService(nil, nil, nil, &economy.Service{})
 		node := &orders.Node{Phase: uint8(State2)}
 
-		svc.handleGetBuiltOrder(product, node, 10)
+		svc.handleGetBuiltOrder(product, node, 0, 10)
 
 		if product.Remaining != 0.25 || product.Health != 75 || !product.Alive {
 			t.Fatalf("NaN quantum wrote state: remaining=%v health=%d alive=%v", product.Remaining, product.Health, product.Alive)

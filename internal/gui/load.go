@@ -13,10 +13,40 @@ const (
 	logicalHeight = 480
 )
 
-// Load parses a .gui panel file from VFS [02 §6][07 §4].
-// It handles the twelve control-kind cases, [COMMON] keys with documented accessors/defaults,
-// gadget rects with -1/-2 sentinel centering, attribs, art refs in established resolution order,
-// and stored widths honored. Unhandled ids beyond the twelve are skipped per research.
+// Attribute bits the window builder writes [07 R-WGT-01 §12][07 R-WGT-01 §5].
+const (
+	// AttribInert is the bit the label arm sets on every label whose `link` is
+	// empty, which is why plain caption labels never react; a kind-4 gadget
+	// carrying it is inert and drawn darkened
+	// [07 R-WGT-01 §12][07 R-WGT-01 §7][07 R-WGT-01 §5].
+	AttribInert uint32 = 0x10
+	// AttribSliderDecrement and AttribSliderIncrement are the attribute words
+	// the builder gives a kind-4 gadget's two synthesized arrows: auto-repeat,
+	// not focusable, arrow-minus and arrow-plus [07 R-WGT-01 §5].
+	AttribSliderDecrement uint32 = 0x3400
+	AttribSliderIncrement uint32 = 0x2c00
+)
+
+// fontDirectory is the interface context's font directory, set to `fonts` when
+// the interface starts and joined to a kind-7 gadget's `filename` with a
+// separator [07 R-WGT-01 §12][03 R-FONT-01 §5].
+const fontDirectory = "fonts"
+
+// sliderArtEntry is the GAF entry a kind-4 gadget's track, knob and arrows come
+// from; the builder resolves it in the window's own GAF, then the common GAF
+// [07 R-WGT-01 §5].
+const sliderArtEntry = "SLIDERS"
+
+// Load parses a .gui panel file from VFS and applies the window builder's
+// per-kind arms [02 §6][07 R-WGT-01 §11][07 R-WGT-01 §12].
+//
+// Every record survives: the parser rejects no kind, and the builder's
+// fourteen-entry switch only decides whether build work follows. What Load does
+// is the parse ([COMMON] keys with their documented accessors and defaults, the
+// per-kind key table), the rect sentinels and header clamp, the art resolution
+// order, and the build arms that need no GAF handle. The arms that resolve
+// frames — panel, listbox, text input, button, picture and the kind-4 synthesis
+// of BuildSlider — are finished by the presentation layer, which holds the GAF.
 func Load(fs vfs.FSOps, name string) (*Window, error) {
 	if fs == nil {
 		return nil, fmt.Errorf("gui: nil VFS")
@@ -57,39 +87,22 @@ func Load(fs vfs.FSOps, name string) (*Window, error) {
 
 	// Convert each formats.Gadget to gui.Gadget with per-kind handling.
 	// Preserve file order [07 §4]; numeric suffix in GADGETn is cosmetic — order matters.
-	gadgets := make([]Gadget, 0, len(fGui.Gadgets)+2) // +2 for slider synthesis
+	gadgets := make([]Gadget, 0, len(fGui.Gadgets))
 	for idx, fg := range fGui.Gadgets {
-		kind := Kind(fg.Common.ID & 0xFF) // stored as byte, truncate [02 §6]
+		// `id` is read as an integer and stored as one byte — the low eight
+		// bits — so the byte the builder and the service pass dispatch on is
+		// `id mod 256` [07 R-WGT-01 §11].
+		kind := Kind(fg.Common.ID & 0xFF)
 
-		// Twelve handled cases [07 §4]: background/panel, button, listbox, text input, slider,
-		// text case, zeroing, two embedded-file, three single-purpose.
-		// Known retail corpus uses ids {0,1,2,3,4,5,6,7,12} [fmt gui]; remaining three free ids 8,9,10
-		// are mapped to slider/text/zeroing here. Unknown ids >15 are treated as unhandled and skipped.
-		// [07 §4] closes WHICH twelve cases the control-kind byte selects among
-		// — panel, button, listbox, text input, slider, a text case, an unnamed
-		// zeroing case, two embedded-file cases and three single-purpose ones —
-		// but not which byte value selects which of the last seven. The retail
-		// corpus authors only {0,1,2,3,4,5,6,7,12} [fmt gui].
-		// TODO(question): what byte value does the parser's control-kind switch
-		// give each of the seven cases beyond the authored corpus? Decider: a
-		// static trace of that switch's case table; the finding belongs in
-		// [07 §4].
-		isHandled := false
-		switch kind {
-		case KindPanel, KindButton, KindListBox, KindTextBox, KindScrollBar, KindLabel, KindSurface, KindFont, KindSlider, KindText, KindZero, KindPicture:
-			isHandled = true
-		case KindEmbedded1, KindRepeat, KindSingle1, KindSingle2:
-			// These cover the remaining two embedded-file and two single-purpose slots; treat as handled for completeness.
-			isHandled = true
-		default:
-			// Unhandled stored kinds have no established runtime family. Preserve
-			// the parser's authored records only for the closed set above; do not
-			// synthesize a generic widget for an unknown kind [07 §4].
-			continue
-		}
-		if !isHandled {
-			continue
-		}
+		// No record is ever dropped. The parser rejects no kind: an unknown
+		// kind keeps its [COMMON] fields [07 R-WGT-01 §11], and the builder's
+		// fourteen-entry switch — indexed 0..13 after an unsigned "> 13"
+		// bounds test — decides only whether any build work follows
+		// [07 R-WGT-01 §12]. Eleven keys select ten arms: {0, 11} share the
+		// panel arm and 1, 2, 3, 4, 5, 7, 8, 12, 13 have one each. Keys 6, 9,
+		// 10 and every value above 13 do no build work — kind 6's surface
+		// callback and kind 10's line painter need nothing built — and are
+		// still serviced by the pass as usual.
 
 		g := Gadget{
 			Kind:          kind,
@@ -112,10 +125,10 @@ func Load(fs vfs.FSOps, name string) (*Window, error) {
 			g.GAFFile = int16(formats.ParseTDFInteger(v))
 		}
 
-		// Name cap for text input [07 §4]: name capped at 127 bytes.
-		if kind == KindTextBox && len(g.Name) > 127 {
-			g.Name = g.Name[:127]
-		}
+		// The name field is 16 bytes for every kind; the 127-byte cap doc 07 §4
+		// attached to a text input's name is the `maxchars` cap, applied below
+		// ([07 R-WGT-01 §12] correction to §4). Names are retained in full here
+		// for diagnostics; every retail comparison is the 16-byte one.
 
 		// Rect: xpos,ypos,width,height stored as int16 [02 §6]; stored widths honored [PLAN_12].
 		rawX := int32(fg.Common.X)
@@ -167,7 +180,8 @@ func Load(fs vfs.FSOps, name string) (*Window, error) {
 		if g.Name != "" {
 			g.Art = g.Name
 		}
-		if kind == KindPanel && w.Header.Panel != "" {
+		// Kind 11 shares the panel arm with kind 0 [07 R-WGT-01 §12].
+		if (kind == KindPanel || kind == KindPanelAlias) && w.Header.Panel != "" {
 			// Header panel art; if gadget's own art empty, use panel.
 			if g.Art == "" {
 				g.Art = w.Header.Panel
@@ -232,77 +246,73 @@ func Load(fs vfs.FSOps, name string) (*Window, error) {
 		g.Nuttin = int32(fieldInt(fg.Fields, "nuttin", 0))
 		g.ItemHeight = int16(fieldInt(fg.Fields, "itemheight", 0))
 		g.MaxChars = int16(fieldInt(fg.Fields, "maxchars", 0))
-		// Text input maxchars capped at 128 [07 §4].
-		if kind == KindTextBox && g.MaxChars > 128 {
-			g.MaxChars = 128
-		}
-		if kind == KindTextBox && g.MaxChars < 0 {
-			g.MaxChars = 0
-		}
-		// Handle common strings length limits: name 16 bytes, help empty, panel etc 16 bytes [02 §6].
-		// We preserve full string for diagnostics but note truncation would be 16 for non-textbox.
-		// For button text, quickkey, etc., no explicit limit stated beyond storage.
-
-		// Unnamed zeroing case [07 §4]: zero out fields? Research says a text case and an unnamed zeroing case.
-		if kind == KindZero {
-			// TODO(question): which fields does the unnamed zeroing case clear?
-			// [07 §4] names the case among the twelve and says nothing about its
-			// body. Decider: a static trace of that case arm. Clearing the four
-			// text-bearing fields and retaining the rect is the placeholder.
-			g.Text = ""
-			g.Labels = nil
-			g.Link = ""
-			g.FileName = ""
-			// Keep rect/attribs as authored? The name implies zeroing, but we retain minimal.
+		// The parser caps `maxchars` at 128 and the builder caps it again at
+		// 127 [07 R-WGT-01 §11][07 R-WGT-01 §12]. A kind-3 record therefore
+		// never leaves the builder above 127.
+		if kind == KindTextBox {
+			if g.MaxChars > 127 {
+				g.MaxChars = 127
+			}
+			if g.MaxChars < 0 {
+				g.MaxChars = 0
+			}
 		}
 
-		// TODO(question): what do the two embedded-file cases and the three
-		// single-purpose cases do? [07 §4] names all five among the twelve and
-		// describes none. Decider: a static trace of those five case arms.
-		// Retained as generic gadgets meanwhile.
+		// The build arms that touch the parsed record [07 R-WGT-01 §12]. The
+		// arms that resolve art (panel, listbox, text input, button, picture)
+		// need a GAF handle the loader does not hold; their file-order and
+		// naming halves are above and in ArtSources, and the frame lookup
+		// itself belongs to the presentation layer.
+		//
+		// `colorf` is deliberately not zeroed here. It is not a colour: the
+		// button painter passes it as the light-table row of the keyed blitter,
+		// the service pass decays it (by 2 per timer tick for a button, by 1
+		// for a picture box), and the builder zeroes it for every button, label
+		// and picture box at open [07 R-WGT-01 §1][07 R-WGT-01 §12]
+		// [03 R-FONT-01 §6]. That makes it runtime flash state rather than part
+		// of the authored record, so the zeroing belongs to the panel instance,
+		// not to this compiled definition. Presentation currently reads ColorF
+		// as a palette index — which [03 R-FONT-01 §6] says it is not — so
+		// zeroing it here would recolour every menu and HUD string; the fix
+		// belongs with those painters, outside this package.
+		switch kind {
+		case KindScrollBar:
+			// The slider arm is BuildSlider below. It needs the SLIDERS entry —
+			// the frame base's short-axis size, the knob cap's width and the
+			// arrows' extent — and the loader holds no GAF handle, so nothing is
+			// synthesized here: the record stays exactly as the parser produced
+			// it and the presentation layer finishes it once art is resolved
+			// [07 R-WGT-01 §5].
+		case KindLabel:
+			// The label arm: an empty `link` sets attribute 0x10, which is what
+			// makes a plain caption label inert [07 R-WGT-01 §12][07 R-WGT-01 §7].
+			if g.Link == "" {
+				g.Attribs |= AttribInert
+			}
+		case KindPicture:
+			// The picture arm zeroes the frame pointer and resolves frame 0 of
+			// the entry named by the gadget, own GAF first then the common GAF
+			// [07 R-WGT-01 §12]. ArtFrame is that pointer and Art is the name
+			// (both set above); the lookup needs a GAF handle the loader does
+			// not hold.
+			g.ArtFrame = 0
+		case KindFont:
+			// The font arm loads the whole file `<font directory>\<filename>.FNT`
+			// into the gadget's file slot. The directory is the interface
+			// context's font directory, set to `fonts` when the interface starts;
+			// the extension is appended verbatim to the authored name
+			// [07 R-WGT-01 §12][03 R-FONT-01 §5].
+			if g.FileName != "" {
+				g.FilePath = fontDirectory + "/" + g.FileName + ".FNT"
+			}
+		case KindRawFile:
+			// The raw-file arm opens the authored `filename` verbatim — no
+			// directory, no extension — into the same slot as kind 7. Nothing
+			// reads it afterwards [07 R-WGT-01 §12][07 R-WGT-01 §8].
+			g.FilePath = g.FileName
+		}
 
 		gadgets = append(gadgets, g)
-
-		// Slider synthesizes two scrollbar child gadgets with derived knob travel [07 §4].
-		if kind == KindSlider {
-			// TODO(question): how does the slider derive its two scrollbar
-			// children's knob travel and placement? [07 §4] establishes that it
-			// "synthesizes two scrollbar child gadgets with derived knob
-			// travel" and stops there. Decider: a static trace of the slider
-			// case arm's child construction. Placeholder: two children sharing
-			// assoc, split width, knob sizes halved.
-			childW := rawW / 2
-			if childW < 1 {
-				childW = rawW
-			}
-			child1 := Gadget{
-				Kind:       KindScrollBar,
-				Name:       g.Name + "_S1",
-				Assoc:      g.Assoc,
-				Rect:       Rect{X: g.Rect.X, Y: g.Rect.Y, W: childW, H: rawH, RawX: rawX, RawY: rawY},
-				Active:     g.Active,
-				Range:      g.Range,
-				KnobPos:    g.KnobPos,
-				KnobSize:   g.KnobSize / 2,
-				Thick:      g.Thick,
-				Art:        g.Art + "_S1",
-				SourceName: g.SourceName + "_SLIDER_CHILD0",
-			}
-			child2 := Gadget{
-				Kind:       KindScrollBar,
-				Name:       g.Name + "_S2",
-				Assoc:      g.Assoc,
-				Rect:       Rect{X: g.Rect.X + childW, Y: g.Rect.Y, W: rawW - childW, H: rawH, RawX: rawX, RawY: rawY},
-				Active:     g.Active,
-				Range:      g.Range,
-				KnobPos:    g.KnobPos,
-				KnobSize:   g.KnobSize - child1.KnobSize,
-				Thick:      g.Thick,
-				Art:        g.Art + "_S2",
-				SourceName: g.SourceName + "_SLIDER_CHILD1",
-			}
-			gadgets = append(gadgets, child1, child2)
-		}
 	}
 
 	// Scrollbars associated with lists take range, knob size, position from the list — authored not trusted [07 §4] C7.
@@ -348,30 +358,30 @@ func Load(fs vfs.FSOps, name string) (*Window, error) {
 	return w, nil
 }
 
-// HitTest returns the index of the gadget containing (x,y) inclusive; grayed/hidden reject [07 §3][07 §4].
-// Returns -1 if none. Scan is in file order; header (KindPanel) is skipped as it is not interactive.
+// HitTest returns the index of the gadget the pointer is over, or -1.
+//
+// This is the service pass's hover test, and it skips only hidden gadgets: a
+// greyed gadget still becomes the hovered gadget and still feeds `HELPTEXT`
+// [07 R-WGT-01 §13][07 R-WGT-01 §1]. The grey bit belongs to press/fire time
+// and is tested by Fires, never here.
+//
+// Gadgets are visited 1..N in index order — index 0 is the window's own header
+// record, which the pass never visits — and every visit that hits replaces the
+// hovered gadget, so where rectangles overlap the answer is the last hit in
+// index order [07 R-WGT-01 §1 step 5]. Bounds are inclusive:
+// gx <= x <= gx+w-1 and gy <= y <= gy+h-1 [07 §3].
 func (w *Window) HitTest(x, y int32) int {
 	if w == nil {
 		return -1
 	}
+	hovered := -1
 	for i, g := range w.Gadgets {
-		if g.Kind == KindPanel {
+		if i == 0 || g.Kind == KindPanel {
 			continue
 		}
 		if g.Active == 0 {
-			continue // hidden rejects [07 §3]
+			continue // hidden gadgets are skipped before the hit test [07 R-WGT-01 §1]
 		}
-		if g.GrayedOut != 0 {
-			continue // grayed rejects [07 §3]
-		}
-		// Retail tests the grayed attribute bit before activation [07 §3]; the
-		// GrayedOut field above carries it, and [07 §4] lists disabled/hidden
-		// among the observed attributes without giving the attribs bit its own
-		// number.
-		// TODO(question): which attribs bit is the grayed bit, and is it tested
-		// in addition to the grayedout key? Decider: a static trace of the
-		// activation gate's attribute test [07 §3].
-		// Inclusive bounds: gx <= x <= gx+w-1 && gy <= y <= gy+h-1 [07 §3].
 		r := w.PlacedRect(i)
 		if r.W <= 0 || r.H <= 0 {
 			continue
@@ -382,9 +392,117 @@ func (w *Window) HitTest(x, y int32) int {
 		if y < r.Y || y > r.Y+r.H-1 {
 			continue
 		}
-		return i
+		hovered = i
 	}
-	return -1
+	return hovered
+}
+
+// Fires reports whether a press or a quickkey on the gadget at index may
+// capture and fire.
+//
+// "Greyed" is bit 0 of a per-gadget word that is not the `attribs` word —
+// `attribs` has no greyed bit — written by the parser from `grayedout` and at
+// run time by the grey/lock helpers. GrayedOut carries that word, and it is the
+// whole test: the button handler returns on it as its first statement, before
+// its own hit test, so a greyed button neither captures nor fires whether the
+// press is a click or a quickkey [07 R-WGT-01 §13][07 R-WGT-01 §3]. A hidden
+// gadget is not reachable at all [07 R-WGT-01 §1].
+func (w *Window) Fires(index int) bool {
+	if w == nil || index <= 0 || index >= len(w.Gadgets) {
+		return false
+	}
+	g := w.Gadgets[index]
+	return g.Kind != KindPanel && g.Active != 0 && g.GrayedOut == 0
+}
+
+// SliderArt carries the SLIDERS frame metrics the window builder reads when it
+// finishes a kind-4 gadget [07 R-WGT-01 §5]. Frame indices are relative to the
+// base returned by SliderFrameBase.
+type SliderArt struct {
+	// BaseExtent is the short-axis size of frame `base`, the track's end cap:
+	// the builder replaces the gadget's short axis with it.
+	BaseExtent int32
+	// KnobExtent is the width of frame base+5, which a horizontal bar adopts
+	// as its `knobsize`.
+	KnobExtent int32
+	// ArrowExtent is the long-axis size of frames base+6 and base+8, the two
+	// arrows: their width on a horizontal bar, their height on a vertical one.
+	ArrowExtent int32
+}
+
+// SliderFrameBase returns the SLIDERS frame base for a kind-4 gadget's
+// rectangle: 10 when the bar is horizontal (w > h), else 0 [07 R-WGT-01 §5].
+func SliderFrameBase(r Rect) int32 {
+	if r.W > r.H {
+		return 10
+	}
+	return 0
+}
+
+// BuildSlider is the window builder's kind-4 arm [07 R-WGT-01 §5]. It returns
+// the finished bar and the arrow gadgets the builder appends to the window.
+//
+// With no art (art nil — SLIDERS resolved in neither the window's own GAF nor
+// the common GAF) the bar keeps its rectangle and takes travel
+// `max(w, h) - 6`, and no arrows are appended.
+//
+// With art the short axis is replaced by the base frame's size and two BUTTON
+// gadgets are appended, so the window's gadget count grows by two: frames
+// base+6 and base+8, attributes 0x3400 (decrement) and 0x2c00 (increment), the
+// bar's own `assoc` and `active`. Horizontal: the second arrow sits at
+// `x + w - arrowW`, the bar then shrinks by `2*arrowW` and shifts right by
+// `arrowW`, `knobsize` becomes the width of frame base+5 and travel becomes
+// `w' - knobsize - 4` over the shrunken width. Vertical: the second arrow sits
+// at `y + h - arrowH`, the bar shrinks and shifts likewise, and travel is left
+// as authored — a vertical bar takes its travel from its list or the screen.
+//
+// TODO(question): what is an arrow gadget's cross-axis extent? [07 R-WGT-01 §5]
+// gives each arrow's position and its long-axis frame size and says nothing
+// about the other axis; the bar's own short axis, used here, is the only extent
+// in scope at that point. Decider: a static trace of the arrow gadget's
+// rectangle store.
+func BuildSlider(bar Gadget, art *SliderArt) (Gadget, []Gadget) {
+	if art == nil {
+		travel := bar.Rect.W
+		if bar.Rect.H > travel {
+			travel = bar.Rect.H
+		}
+		bar.Range = int16(travel - 6)
+		return bar, nil
+	}
+	base := SliderFrameBase(bar.Rect)
+	horizontal := bar.Rect.W > bar.Rect.H
+	if horizontal {
+		bar.Rect.H = art.BaseExtent
+	} else {
+		bar.Rect.W = art.BaseExtent
+	}
+	arrows := []Gadget{
+		{
+			Kind: KindButton, Assoc: bar.Assoc, Active: bar.Active,
+			Attribs: AttribSliderDecrement, Art: sliderArtEntry, ArtFrame: base + 6,
+			SourceName: bar.SourceName + "/arrow-decrement",
+		},
+		{
+			Kind: KindButton, Assoc: bar.Assoc, Active: bar.Active,
+			Attribs: AttribSliderIncrement, Art: sliderArtEntry, ArtFrame: base + 8,
+			SourceName: bar.SourceName + "/arrow-increment",
+		},
+	}
+	if horizontal {
+		arrows[0].Rect = Rect{X: bar.Rect.X, Y: bar.Rect.Y, W: art.ArrowExtent, H: bar.Rect.H}
+		arrows[1].Rect = Rect{X: bar.Rect.X + bar.Rect.W - art.ArrowExtent, Y: bar.Rect.Y, W: art.ArrowExtent, H: bar.Rect.H}
+		bar.Rect.W -= 2 * art.ArrowExtent
+		bar.Rect.X += art.ArrowExtent
+		bar.KnobSize = int16(art.KnobExtent)
+		bar.Range = int16(bar.Rect.W - int32(bar.KnobSize) - 4)
+	} else {
+		arrows[0].Rect = Rect{X: bar.Rect.X, Y: bar.Rect.Y, W: bar.Rect.W, H: art.ArrowExtent}
+		arrows[1].Rect = Rect{X: bar.Rect.X, Y: bar.Rect.Y + bar.Rect.H - art.ArrowExtent, W: bar.Rect.W, H: art.ArrowExtent}
+		bar.Rect.H -= 2 * art.ArrowExtent
+		bar.Rect.Y += art.ArrowExtent
+	}
+	return bar, arrows
 }
 
 func fieldInt(m map[string]string, key string, def int) int {

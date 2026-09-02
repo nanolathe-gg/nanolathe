@@ -1987,15 +1987,34 @@ func (s *Service) deactivate(u *units.Unit) {
 	u.SetActivationEdge(false)
 }
 
+// standingMergeAdmits is the double guard both standing-field merges share:
+// the copy is allowed only when BOTH units carry the state word's alive bit
+// (bit 28) and NEITHER carries bit 14, the death latch the kill service sets
+// beside the cause byte and the completion transition sets for an `isfeature`
+// product [04 §3.8][04 R-SPEC-01 §12].
+//
+// Retail keeps both bits in one status word; Nanolathe keeps each as its own
+// named field, which is what I13 requires — the alive bit is units.Unit.Alive
+// ("slot valid; cleared by the phase-2 finalizer" [04 §2.4]) and the death
+// latch is units.Unit.Dying, the mark World.Destroy sets. Reading them off the
+// instance flag word instead, as this guard used to, tested two literals no
+// live code path ever sets: the allocator's initial status word carries
+// neither, so the state-2 merge below was a silent no-op in every battle.
+func standingMergeAdmits(builder, product *units.Unit) bool {
+	if builder == nil || product == nil {
+		return false
+	}
+	return builder.Alive && product.Alive && !builder.Dying && !product.Dying
+}
+
 // copyStandingFlags is the recovered initial standing-field merge guard. The
 // class and auto exclusions are distinct from the later rally traversal
-// [R-P0-09].
+// [R-P0-09]. This is the state-2 epilogue's copy — the initial product-state
+// merge — and is a distinct stage from the post-build gate in
+// inheritStandingFields; the product's initial flags are not proof that
+// `GetBuilt` has run [04 §3.8].
 func copyStandingFlags(builder, product *units.Unit) {
-	if builder == nil || product == nil {
-		return
-	}
-	if builder.Flags&0x10000000 == 0 || product.Flags&0x10000000 == 0 ||
-		builder.Flags&0x00004000 != 0 || product.Flags&0x00004000 != 0 {
+	if !standingMergeAdmits(builder, product) {
 		return
 	}
 	product.Flags = (product.Flags &^ (StandingMoveMask | StandingFireMask)) |
@@ -2004,6 +2023,53 @@ func copyStandingFlags(builder, product *units.Unit) {
 
 func (s *Service) copyStandingFlags(builder, product *units.Unit) {
 	copyStandingFlags(builder, product)
+}
+
+// controlByteComputer is the player slot's control byte for a computer player:
+// `1` is a locally controlled human, `2` a computer player, `3` a remote peer
+// [05 R-SHARE-01 §1].
+//
+// [04 §3.8] parenthesises the experience-word gate as "owner player state byte
+// value 1". That parenthetical is the same mislabel [04 §3.6]'s 2026-08-31
+// correction retired for the idle-queue refill — it read the pair {1,2} as two
+// computer-player states — and three Established traces disagree with it:
+// [05 R-SHARE-01 §1] (skirmish setup writes 1 for the human seat and 2 for each
+// computer seat), [05 R-ECO-01 §3] (the difficulty discount runs for control
+// byte 2), and [04 R-SPEC-01 §5] ("the searching unit's owning player has
+// controller type 2 (a computer player)"). The gate is control byte 2.
+const controlByteComputer uint8 = 2
+
+// ownerControlByte reads the owning player row's control byte through the
+// economy ledger, which is where the session writes it [05 R-SHARE-01 §1]. A
+// row this service cannot see reads as 0 — not a control-byte value, so it
+// never satisfies the computer-player gate.
+func (s *Service) ownerControlByte(owner uint8) uint8 {
+	if s == nil || s.Economy == nil || int(owner) >= len(s.Economy.Players) {
+		return 0
+	}
+	return s.Economy.Players[owner].ControllerState
+}
+
+// inheritStandingFields is `GetBuilt`'s post-build standing merge, the second
+// of the two stages [04 §3.8] keeps distinct. Under the same alive/death-latch
+// guard as the state-2 copy it moves standing-move bits 18-19 and standing-fire
+// bits 20-21 from builder to product, and the experience word rides the same
+// guarded block under one further gate — the OWNER's control byte reading as a
+// computer player [04 §3.8][04 R-FAC-02 §4].
+//
+// `units.Unit.Kills` is the experience word: it is the field the capture timer's
+// divide-by-five reads and the field the account record saves [05 "Unit
+// capture"][08 R-SAVE-02 §6]. A product and its builder always share an owner,
+// so the control byte is read once, off the builder.
+func (s *Service) inheritStandingFields(builder, product *units.Unit) {
+	if !standingMergeAdmits(builder, product) {
+		return
+	}
+	product.Flags = (product.Flags &^ (StandingMoveMask | StandingFireMask)) |
+		(builder.Flags & (StandingMoveMask | StandingFireMask))
+	if s.ownerControlByte(builder.Owner) == controlByteComputer {
+		product.Kills = builder.Kills
+	}
 }
 
 // OnRefresh is the interface refresh callback, set by tests.
@@ -2024,7 +2090,10 @@ func (s *Service) rallyInheritance(factory *units.Unit, product *units.Unit, tic
 	}
 	fq := s.queueForUnit(factory)
 	if fq == nil {
-		// No queue => park
+		// No queue => nothing to inherit, so the standing merge still runs and
+		// then Park. Retail's builder always has a queue object; an empty walk
+		// and a missing one reach the same two steps [04 R-FAC-02 §4].
+		s.inheritStandingFields(factory, product)
 		parkID := orders.Lookup("Park")
 		if parkID != 0 {
 			pq := orders.BindQueueBinding(product, s.OrderBinding)
@@ -2039,18 +2108,6 @@ func (s *Service) rallyInheritance(factory *units.Unit, product *units.Unit, tic
 	patrolID := orders.Lookup("Patrol")
 	parkID := orders.Lookup("Park")
 
-	// The post-build gate, distinct from the state-2 epilogue's initial merge
-	// (copyStandingFlags): the copy is allowed only when BOTH product and
-	// builder carry state bit 28 and NEITHER carries bit 14 (the death latch),
-	// and it moves standing-move bits 18-19 and standing-fire bits 20-21 from
-	// builder to product. The experience word rides the same block under one
-	// further gate — the OWNER's control byte reading as a computer player —
-	// and a product and its builder always share that owner, so the gate is
-	// read once off the builder [04 §3.8][04 R-FAC-02 §4].
-	// TODO(T25): neither copy runs here yet. Blocked: the standing-bit merge
-	// and the experience word belong to the same guarded block, and the owner
-	// control byte reaches this package only through the session-owned combat
-	// service; landing them is a separate unit with those files in scope.
 	inherited := 0
 	pq := orders.BindQueueBinding(product, s.OrderBinding)
 	// Collect rally nodes in traversal order first, then tail-append to preserve order [05 C19].
@@ -2084,6 +2141,11 @@ func (s *Service) rallyInheritance(factory *units.Unit, product *units.Unit, tic
 			}
 		}
 	}
+	// [04 R-FAC-02 §4] fixes the order inside the completion arm: the resolved
+	// rally records are walked and inserted first, THEN the standing-bit copy
+	// under the §3.8 guard (with the experience word for a computer-owned
+	// builder), THEN `Park` if nothing was inserted.
+	s.inheritStandingFields(factory, product)
 	if inherited == 0 {
 		if parkID != 0 {
 			rec := productRecord(product, tick, orders.Node{ID: parkID, Deadline: -1, StaticGate: orders.DescriptorFor(parkID).StaticGate})
@@ -2932,10 +2994,14 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 		if product != nil {
 			delete(s.builderLinks, product.Handle)
 		}
-		// Refresh interface [05].
+		// The order-panel refresh keys on the BUILDER's identity: the compare
+		// is against the builder's identity word and the panel refreshed is the
+		// builder's — for a factory, its build page, which is the same step
+		// [04 R-FAC-02 §3] calls the queue-count label refresh
+		// [04 R-SPEC-01 §12]. The product refresh that stood beside it was a
+		// second presentation call retail never makes.
 		if s != nil && s.OnRefresh != nil {
 			s.OnRefresh(factory)
-			s.OnRefresh(product)
 		}
 		// BuildingBuild result 0 restarts state 0 in this same primary-pump
 		// pass. The count test there is authoritative: an empty count lowers
@@ -3196,17 +3262,16 @@ func firstWorkNode(prim []*orders.Node) *orders.Node {
 
 // handleGetBuiltOrder is the construction-owned handler invoked only by the
 // ordered primary queue walk [04 R-FAC-02 §4].
-func (s *Service) handleGetBuiltOrder(product *units.Unit, node *orders.Node, tick uint32) orders.Code {
+func (s *Service) handleGetBuiltOrder(product *units.Unit, node *orders.Node, satisfied uint32, tick uint32) orders.Code {
 	if s == nil || product == nil || node == nil {
 		return 5
 	}
-	// The pump consumed the satisfied set out of both pending words before it
-	// dispatched this record; the wake's mirror is read and cleared here for the
-	// same reason and at the same moment (raiseUnderConstructionWake). A raised
-	// bit means some builder ran a forward step on this product since the last
-	// dispatch [04 R-ORD-01 §11].
-	worked := node.Param1 != 0
-	node.Param1 = 0
+	// The satisfied set is `(record pending | unit pending) & gate`, computed
+	// and cleared out of both words by the pump before it dispatched this
+	// record. With `GetBuilt`'s gate at `0x8001`, bit 15 in the set means some
+	// builder ran a forward step on this product since the last dispatch
+	// [04 R-ORD-01 §10][04 R-ORD-01 §11].
+	worked := satisfied&pendingUnderConstructionWake != 0
 	if product.Remaining > 0 {
 		switch State(node.Phase) {
 		case State0:
@@ -3226,11 +3291,12 @@ func (s *Service) handleGetBuiltOrder(product *units.Unit, node *orders.Node, ti
 			// [04 R-ORD-01 §11].
 			//
 			// Retired with the producer's closure: the local defer stamp this
-			// arm used to test (`Param1` as a next-decay tick, written by every
-			// admitted step) reproduced the suppression with an eleven-tick
-			// window and only for an admitted step. §11 gives the window as the
-			// full 30-tick re-arm and the raise as unconditional on the forward
-			// arm, so a refused admission and a sub-30 `workertime` defer too.
+			// arm used to test (a next-decay tick on the record, written by
+			// every admitted step) reproduced the suppression with an
+			// eleven-tick window and only for an admitted step. §11 gives the
+			// window as the full 30-tick re-arm and the raise as unconditional
+			// on the forward arm, so a refused admission and a sub-30
+			// `workertime` defer too.
 			if worked {
 				node.DynamicGate = 0x8001
 				node.Deadline = int32(tick + getBuiltWorkedPeriod)
@@ -3290,7 +3356,7 @@ func (s *Service) handleGetBuiltOrder(product *units.Unit, node *orders.Node, ti
 // [05 "Reverse and deconstruction"][05 C21]. It is the same packet
 // cancel-current sends, minus cancel-current's refund and completion
 // transition — the reverse arm has already paid its own metal back through
-// ApplyReverse, and the completion transition runs only on a remaining
+// ReverseRefund, and the completion transition runs only on a remaining
 // fraction of zero, which this is the opposite of.
 //
 // Releasing the placement here is what unblocks whatever the frame was sitting
@@ -3531,31 +3597,14 @@ const pendingUnderConstructionWake uint32 = 0x8000
 // stood here while the producer was unlocated; that stamp reproduced the effect
 // with the wrong window and only for a record this package could find.
 //
-// The mirror on the record is a plumbing seam, not a second retail store: the
-// pump consumes the bit out of both words before it dispatches, and the
-// construction-owned handler is bound through `Queue.SetGetBuiltHandler`, whose
-// signature carries the tick and not the satisfied set. The record's own scratch
-// word (`Param1`, which `GetBuilt` leaves zero — it is pushed with a zero
-// payload) therefore carries the same raise to the handler and is cleared at
-// dispatch exactly where the pump clears the bit.
+// This store is the whole of the raise. WU-19-95 additionally mirrored the bit
+// onto the `GetBuilt` record's scratch word because the bound handler's
+// signature carried only the tick; `Queue.SetGetBuiltHandler` now takes the
+// descriptor Handler shape, so the handler reads the pump's own satisfied set
+// and the mirror is gone — one writer, one word, exactly as §11 describes.
 func raiseUnderConstructionWake(product *units.Unit) {
 	if product == nil {
 		return
 	}
 	product.Pending |= pendingUnderConstructionWake
-	q := orders.QueueForUnit(product)
-	if q == nil {
-		return
-	}
-	getBuiltID := orders.Lookup("GetBuilt")
-	if getBuiltID == 0 {
-		return
-	}
-	for _, n := range q.Primary() {
-		if n == nil || n.ID != getBuiltID {
-			continue
-		}
-		n.Param1 = 1
-		return
-	}
 }
