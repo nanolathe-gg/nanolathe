@@ -209,13 +209,23 @@ func TestRectPerimeterArrivalIsBorderMembership(t *testing.T) {
 	if ah == nil || ah.border == nil {
 		t.Fatal("a Park record's arrival handle carries no rectangle border [04 §7.2]")
 	}
+	// Corrected 2026-09-01 (WU-19-24): the fixture took its border cells from
+	// ParkGoalRect's `(origin, 8s x 6s)` arguments directly. Those are the
+	// CONSTRUCTOR's arguments; the class stores them grown by the mover's own
+	// footprint [04 R-PATH-01 §12], so for this 1x1 product the argument
+	// rectangle's own minimum corner is now interior. The cells must come from
+	// the handle's rectangle, which is the one the search is aimed at.
+	rect := *ah.border
+	if rect.Min.X != minX-1 || rect.Min.Z != minZ-1 || rect.Max.X != maxX+1 || rect.Max.Z != maxZ+1 {
+		t.Fatalf("arrival rectangle %v, want the argument rectangle [%d,%d]x[%d,%d] grown by the 1x1 product [04 R-PATH-01 §12]", rect, minX, maxX, minZ, maxZ)
+	}
 	// A border cell that is deliberately NOT the bound steering point.
-	other := Cell{X: minX, Z: minZ + 1}
+	other := Cell{X: rect.Min.X, Z: rect.Min.Z + 1}
 	if other.X == ah.goalX && other.Z == ah.goalZ {
 		t.Fatal("fixture picked the bound steering point; choose another border cell")
 	}
-	if !onRectBorder(*ah.border, other.X, other.Z) {
-		t.Fatalf("fixture cell (%d,%d) is not on the border [%d,%d]x[%d,%d]", other.X, other.Z, minX, maxX, minZ, maxZ)
+	if !onRectBorder(rect, other.X, other.Z) {
+		t.Fatalf("fixture cell (%d,%d) is not on the border %v", other.X, other.Z, rect)
 	}
 	coll := sys.Collisions[u.Handle]
 	if coll == nil {
@@ -231,8 +241,8 @@ func TestRectPerimeterArrivalIsBorderMembership(t *testing.T) {
 	// The rectangle's interior is not the goal: a cell strictly inside must not
 	// arrive, or a product would complete its Park on the pad it started from.
 	head.Satisfied = 0
-	inside := Cell{X: (minX + maxX) / 2, Z: (minZ + maxZ) / 2}
-	if onRectBorder(*ah.border, inside.X, inside.Z) {
+	inside := Cell{X: (rect.Min.X + rect.Max.X) / 2, Z: (rect.Min.Z + rect.Max.Z) / 2}
+	if onRectBorder(rect, inside.X, inside.Z) {
 		t.Fatalf("fixture centre (%d,%d) lies on the border; widen the rectangle", inside.X, inside.Z)
 	}
 	coll.CachedAnchor = inside

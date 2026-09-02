@@ -135,13 +135,20 @@ func TestComputerPlayerEliminatesIdleHumanRetail(t *testing.T) {
 	if result.Tick == 0 || result.Tick > aiE2ETickCap {
 		t.Fatalf("result latched at tick %d, outside the bounded battle", result.Tick)
 	}
-	// Kill credit is deliberately not asserted, even though this seed does
-	// credit it. On seed 1 the human commander's last packet was its own
-	// weapon's blast — the area-damage collector admits the shooter itself and
-	// then stamps the victim's provenance with the shooter's owner — so the
-	// credited kill landed on player 0 although the computer player's wave
-	// drove the battle. That belongs to the combat package, not to this unit;
-	// the engagement check above is what this test owns.
+	// Kill credit is deliberately not asserted; the arithmetic that decides it
+	// belongs to the combat package's own tests, not to this unit. It used to
+	// be misattributed here on this exact seed by two defects this test's
+	// kills log first surfaced, both now fixed: the area-damage collector
+	// admitted a shooter into its own blast and then stamped the victim's
+	// provenance with the shooter's owner (WU-19-22, [06 §9.3][06 R-DMG-01
+	// §9] — a shooter is unconditionally excluded from its own blast, the
+	// whole of retail's self-damage policy); and a dying unit's death
+	// explosion was built with that unit's own still-resolvable handle as the
+	// shooter (Destroy sets Dying but leaves Alive set until FinalizeDeath
+	// runs later), so a victim killed by the explosion was credited to the
+	// dead unit's owner instead of nobody (WU-19-23, [06 R-WPN-02 §5] — the
+	// death-explosion record carries no shooter). The engagement check above
+	// is what this test owns.
 	t.Logf("computer player won at tick %d (its kills=%d, losses=%d, live=%d)",
 		result.Tick, sess.Econ.Players[1].Kills, sess.Econ.Players[1].Losses, sess.Units.LiveCountForPlayer(1))
 }

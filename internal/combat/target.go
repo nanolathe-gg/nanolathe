@@ -439,13 +439,17 @@ func ShouldRetainMask(current Candidate, hostile bool, badMask content.CategoryM
 // The autonomous scan's per-slot admission [06 §3.2]
 // ---------------------------------------------------------------------------
 
-// AutonomousScanAdmitsSlot is the command-fire clause of the autonomous target
-// scan's per-slot admission [06 §3.2]: within a visited unit the three slots
-// are processed in numeric order, and a slot is skipped unless (among the other
-// clauses of that sentence) "either the owning player's controller type is 2
-// (computer) or the weapon is **not** `commandfire`". The stated consequence is
-// the contract: a human player's units never acquire autonomously with a
-// command-fire weapon, and a computer player's do.
+// AutonomousScanAdmitsSlot is the dropped and command-fire clauses of the
+// autonomous target scan's per-slot admission [06 §3.2]: within a visited
+// unit the three slots are processed in numeric order, and a slot is skipped
+// unless (among the other clauses of that sentence) "its weapon is not
+// `dropped`, and either the owning player's controller type is 2 (computer)
+// or the weapon is **not** `commandfire`". A `dropped` weapon — one that
+// falls under gravity rather than firing outward, e.g. a strafing bomb — is
+// therefore never a candidate for autonomous acquisition, on any controller.
+// The command-fire consequence is a separate contract: a human player's
+// units never acquire autonomously with a command-fire weapon, and a
+// computer player's do.
 //
 // ownerControlByte is the owning player row's control byte — 1 human, 2
 // computer, 3 remote peer, 0 an unoccupied row [05 R-SHARE-01 §1] — read
@@ -461,14 +465,19 @@ func ShouldRetainMask(current Candidate, hostile bool, badMask content.CategoryM
 // code 3 against its target, sets p1 = 2, and the resolved attack handler binds
 // **slot 2** to the target from its next visit [04 R-ORD-01 §2][04 R-ORD-01 §3],
 // which is a target install, not an acquisition, and is therefore not gated
-// here.
+// here. The same reasoning applies to a `dropped` weapon's manually installed
+// target: this helper only gates the autonomous scan's own acquisition
+// attempt, never a forced/manual installation reaching this slot by another
+// path.
 //
-// The other clauses of the same [06 §3.2] sentence — the two persisted slot
-// flags and "its weapon is not `dropped`" — are separate readers and are not
-// this helper's business.
+// The other clause of the same [06 §3.2] sentence — the two persisted slot
+// flags — is a separate reader and is not this helper's business.
 func AutonomousScanAdmitsSlot(weapon *content.WeaponDef, ownerControlByte uint8) bool {
 	if weapon == nil {
 		return false
+	}
+	if weapon.Dropped {
+		return false // "its weapon is not `dropped`" [06 §3.2] — unconditional, any controller
 	}
 	if !weapon.CommandFire {
 		return true // an ordinary weapon acquires for every controller [06 §3.2]

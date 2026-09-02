@@ -1370,6 +1370,15 @@ func (s *System) runAirOrderLeg(u *units.Unit, n *orders.Node, satisfied uint32,
 		return s.legAirToGroundHover(u, n, tick), true
 	case "AirToAir":
 		return s.legAirToAir(u, n, satisfied, tick), true
+	case "VTOL_Pickup":
+		// The air transport pair [04 §10.2]. Both legs live in transport.go
+		// beside the cargo helpers they call, and reach the pump through this
+		// one runner like every other pump-driven air executor, because every
+		// command their phase tables queue is an air path marker of
+		// [04 R-AIR-01 §4].
+		return s.legVTOLPickup(u, n, satisfied, tick), true
+	case "VTOL_Unload":
+		return s.legVTOLUnload(u, n, satisfied, tick), true
 	}
 	return 0, false
 }

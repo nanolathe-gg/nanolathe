@@ -68,340 +68,202 @@ func TestBeCarriedUsesExactTenTickWaitWithoutRNG(t *testing.T) {
 	}
 }
 
-func mkTransportCarrier(handle pool.Handle, owner uint8, canFly bool) *units.Unit {
-	def := &content.UnitDef{
-		CanLoad:           true,
-		CanFly:            canFly,
-		CanMove:           true,
-		TransportSize:     10,
-		TransportCapacity: 1,
-		FootprintX:        2,
-		FootprintZ:        2,
-		MaxDamage:         100,
+// transportFixture builds a carrier and a cargo in one world with a binding
+// that resolves handles and records every status kind the handlers raise.
+func transportFixture(t *testing.T, carrierDef, cargoDef *content.UnitDef) (*units.World, *units.Unit, *units.Unit, *[]uint8) {
+	t.Helper()
+	w := newOrdersFixtureWorld(10, &content.Catalog{})
+	hC, err := w.Create(carrierDef, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create carrier: %v", err)
 	}
-	if canFly {
-		def.CanFly = true
+	hCargo, err := w.Create(cargoDef, 0, numeric.Fixed(5*65536), numeric.Fixed(10*65536), 0)
+	if err != nil {
+		t.Fatalf("create cargo: %v", err)
 	}
-	def.UnitName = "carrier"
-	def.CanonicalKey = "carrier"
-	u := &units.Unit{
-		Handle:    handle,
-		Owner:     owner,
-		Def:       def,
-		Health:    100,
-		MaxHealth: 100,
-		Alive:     true,
-		X:         numeric.Fixed(0),
-		Y:         numeric.Fixed(0),
-		Z:         numeric.Fixed(0),
+	carrier, cargo := w.Unit(hC), w.Unit(hCargo)
+	carrier.Move.Mode, cargo.Move.Mode = 1, 1
+	kinds := &[]uint8{}
+	binding := &QueueBinding{
+		Lookup: w.Unit,
+		Presentation: &PresentationAdapter{
+			Ready: func() bool { return true },
+			Status: func(_ *units.Unit, kind uint8, _ string) bool {
+				*kinds = append(*kinds, kind)
+				return true
+			},
+		},
 	}
-	u.Move.Mode = 1
-	return u
+	QueueForUnit(carrier).SetBinding(binding)
+	QueueForUnit(cargo).SetBinding(binding)
+	return w, carrier, cargo, kinds
 }
 
-func mkCargo(handle pool.Handle, owner uint8) *units.Unit {
-	def := &content.UnitDef{
-		CanMove:           true,
-		CantBeTransported: false,
-		FootprintX:        1,
-		FootprintZ:        1,
-		MaxDamage:         50,
+func countKind(kinds []uint8, want uint8) int {
+	n := 0
+	for _, k := range kinds {
+		if k == want {
+			n++
+		}
 	}
-	def.UnitName = "cargo"
-	def.CanonicalKey = "cargo"
-	u := &units.Unit{
-		Handle:    handle,
-		Owner:     owner,
-		Def:       def,
-		Health:    50,
-		MaxHealth: 50,
-		Alive:     true,
-		X:         numeric.Fixed(0),
-		Y:         numeric.Fixed(10 * 65536), // above sea level to pass gate 3 [04 §10.2] TODO(question) modelTop
-		Z:         numeric.Fixed(0),
-	}
-	u.Move.Mode = 1
-	return u
+	return n
 }
 
-// hashTransportState computes a simple deterministic hash of relevant transport state.
-func hashTransportState(carrier, cargo *units.Unit) uint64 {
-	var h uint64 = 146959
-	h = h*1099511628211 ^ uint64(carrier.Handle)
-	h = h*1099511628211 ^ uint64(len(carrier.Attachment.Cargo))
-	if len(carrier.Attachment.Cargo) > 0 {
-		h = h*1099511628211 ^ uint64(carrier.Attachment.Cargo[0])
-	}
-	h = h*1099511628211 ^ uint64(cargo.Attachment.Carrier)
-	h = h*1099511628211 ^ uint64(int32(cargo.X.Raw()))
-	h = h*1099511628211 ^ uint64(int32(cargo.Z.Raw()))
-	h = h*1099511628211 ^ uint64(carrier.X.Raw())
-	h = h*1099511628211 ^ uint64(cargo.Attachment.AttachPiece+2)
-	return h
-}
+// TestAirTransportDescriptorsHandOffRatherThanAttachInPlace locks the boundary
+// this unit moved. `VTOL_Pickup` and `VTOL_Unload` install air path markers
+// [04 R-AIR-01 §4], a family internal/orders cannot reach, so their descriptor
+// handlers hand the record to the movement runner and the legs do the work
+// [04 §10.2].
+//
+// What this asserts is the arm taken with NO runner bound, which is the same
+// one `airHandOff` gives every other air executor: the one-tick deadline hold
+// of [04 R-ORD-01 §1]. The previous handlers attached the cargo on their fourth
+// visit with the carrier still sitting on the ground, because nothing they did
+// could fly.
+func TestAirTransportDescriptorsHandOffRatherThanAttachInPlace(t *testing.T) {
+	carrierDef := &content.UnitDef{UnitName: "armatlas", CanLoad: true, CanFly: true, CanMove: true, TransportSize: 10, TransportCapacity: 1, FootprintX: 2, FootprintZ: 2, MaxDamage: 100}
+	cargoDef := &content.UnitDef{UnitName: "armpw", CanMove: true, FootprintX: 1, FootprintZ: 1, MaxDamage: 50}
+	w, carrier, cargo, _ := transportFixture(t, carrierDef, cargoDef)
+	q := QueueForUnit(carrier)
+	id := Lookup("VTOL_Pickup")
+	q.Push(id, NewNodeForOrder(id, cargo.Handle, 0, 0, 0, 0, carrier.Handle, false))
+	pump := &Pump{World: w}
+	startX, startZ := carrier.X, carrier.Z
 
-func runTransportScenario(seed uint32) (uint64, int, []string) {
-	rng.SeedGlobal(seed, 0)
-	w := newOrdersFixtureWorld(10, nil)
-	carrier := mkTransportCarrier(1, 0, true)
-	cargo := mkCargo(2, 0)
-	// Place cargo slightly offset but within boarding range (16) [04 §10.2]
-	cargo.X = numeric.Fixed(5 * 65536)
-	cargo.Z = numeric.Fixed(0)
-	carrier.X = numeric.Fixed(0)
-	carrier.Z = numeric.Fixed(0)
-	// Ensure world can resolve handles
-	// Use non-sliced world for test simplicity (capacity 10)
-	// Insert units directly into world via Create path? For headless we bypass pool and directly set.
-	// Use w.Create to get proper handles, but we already have handles 1,2.
-	// Instead, use units.NewSliced? For simplicity, we directly inject via w.units hack? But World is opaque.
-	// Instead, use w.Create with defs and then replace?
-	// Simpler: create world via NewSliced and Create.
-	cat := &content.Catalog{}
-	w2 := newOrdersFixtureWorld(10, cat)
-	hC, _ := w2.Create(carrier.Def, 0, carrier.X, carrier.Y, carrier.Z)
-	hCargo, _ := w2.Create(cargo.Def, 0, cargo.X, cargo.Y, cargo.Z)
-	uC := w2.Unit(hC)
-	uCargo := w2.Unit(hCargo)
-	_ = w // avoid unused
-	// Use w2 for simulation
-	// Set queues
-	qC := QueueForUnit(uC)
-	qCargo := QueueForUnit(uCargo)
-	// Bind lookup for target resolution
-	lookup := func(h pool.Handle) *units.Unit { return w2.Unit(h) }
-	qC.SetBinding(&QueueBinding{Lookup: lookup})
-	qCargo.SetBinding(&QueueBinding{Lookup: lookup})
-	// Push VTOL_Pickup order onto carrier targeting cargo
-	idPickup := Lookup("VTOL_Pickup")
-	if idPickup == 0 {
-		panic("VTOL_Pickup lookup failed")
+	for tick := uint32(0); tick < 8; tick++ {
+		pump.PumpUnit(carrier.Handle, tick)
 	}
-	nPickup := NewNodeForOrder(idPickup, hCargo, 0, 0, 0, 0, hC, false)
-	// Ensure gate cleared for test (mimics pump's clearing)
-	// Push will set DynamicGate to 0x200, but pump will clear for phase0.
-	qC.Push(idPickup, nPickup)
-	// Pump ticks until attached or max
-	pump := &Pump{World: w2}
-	var diags []string
-	for tick := uint32(0); tick < 10; tick++ {
-		res := pump.PumpUnit(hC, tick)
-		diags = append(diags, res.Diagnostics...)
-		if uCargo.Attachment.Carrier == hC {
-			break
-		}
+	if cargo.Attachment.Carrier != 0 || len(carrier.Attachment.Cargo) != 0 {
+		t.Fatal("the descriptor attached the cargo itself; the attach is the leg's, after the follow marker's 0x30 arrival [04 §10.2]")
 	}
-	// Simulate carrier moving to unload point (10 cells away)
-	dropX := numeric.Fixed(20 * 65536)
-	dropZ := numeric.Fixed(0)
-	// Move carrier directly (no path) – deterministic
-	uC.X = dropX
-	uC.Z = dropZ
-	// Also slave cargo via direct (movement System would do)
-	if uCargo.Attachment.Carrier == hC {
-		uCargo.X = uC.X
-		uCargo.Z = uC.Z
+	if carrier.X != startX || carrier.Z != startZ {
+		t.Fatal("the descriptor moved the carrier itself")
 	}
-	// Now unload at drop point
-	idUnload := Lookup("VTOL_Unload")
-	nUnload := NewNodeForOrder(idUnload, 0, dropX, 0, dropZ, 10, hC, false)
-	// Ensure drop point stored in Goal
-	nUnload.GoalX = dropX
-	nUnload.GoalZ = dropZ
-	qC.Push(idUnload, nUnload)
-	for tick := uint32(10); tick < 20; tick++ {
-		res := pump.PumpUnit(hC, tick)
-		diags = append(diags, res.Diagnostics...)
-		if uCargo.Attachment.Carrier == 0 {
-			break
-		}
+	if q.LenPrimary() != 1 {
+		t.Fatalf("the load record was freed with no runner bound; want it held on the one-tick deadline, got %d records", q.LenPrimary())
 	}
-	hash := hashTransportState(uC, uCargo)
-	draws := 0
-	if rng.Global.Sim != nil {
-		draws = int(rng.Global.Sim.Draws())
-	}
-	return hash, draws, diags
-}
-
-func TestTransportLoadMoveUnloadDeterministic(t *testing.T) {
-	// Two-run hash match, no new RNG draws beyond executors [I4][04 §10.2]
-	h1, d1, _ := runTransportScenario(12345)
-	h2, d2, _ := runTransportScenario(12345)
-	if h1 != h2 {
-		t.Fatalf("two-run hash mismatch: %x vs %x", h1, h2)
-	}
-	if d1 != d2 {
-		t.Fatalf("two-run draws mismatch: %d vs %d", d1, d2)
-	}
-	// Hash should reflect successful load/unload cycle
-	// Cargo should be detached at drop point after second run
-	// Re-run with detailed check
-	rng.SeedGlobal(12345, 0)
-	w2 := newOrdersFixtureWorld(10, &content.Catalog{})
-	defCarrier := &content.UnitDef{UnitName: "carrier", CanLoad: true, CanFly: true, CanMove: true, TransportSize: 10, TransportCapacity: 1, FootprintX: 2, FootprintZ: 2, MaxDamage: 100}
-	defCargo := &content.UnitDef{UnitName: "cargo", CanMove: true, CantBeTransported: false, FootprintX: 1, FootprintZ: 1, MaxDamage: 50}
-	hC, _ := w2.Create(defCarrier, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
-	hCargo, _ := w2.Create(defCargo, 0, numeric.Fixed(5*65536), numeric.Fixed(10*65536), numeric.Fixed(0))
-	uC := w2.Unit(hC)
-	uCargo := w2.Unit(hCargo)
-	uC.Move.Mode = 1
-	uCargo.Move.Mode = 1
-	qC := QueueForUnit(uC)
-	qC.SetBinding(&QueueBinding{Lookup: func(h pool.Handle) *units.Unit { return w2.Unit(h) }})
-	QueueForUnit(uCargo).SetBinding(&QueueBinding{Lookup: qC.Binding().Lookup})
-	idPickup := Lookup("VTOL_Pickup")
-	qC.Push(idPickup, NewNodeForOrder(idPickup, hCargo, 0, 0, 0, 0, hC, false))
-	pump := &Pump{World: w2}
-	for tick := uint32(0); tick < 10; tick++ {
-		pump.PumpUnit(hC, tick)
-		if uCargo.Attachment.Carrier == hC {
-			break
-		}
-	}
-	if uCargo.Attachment.Carrier != hC {
-		t.Fatalf("cargo not attached after pickup, carrier cargo %v cargo carrier %v", uC.Attachment.Cargo, uCargo.Attachment.Carrier)
-	}
-	if len(uC.Attachment.Cargo) != 1 || uC.Attachment.Cargo[0] != hCargo {
-		t.Fatalf("carrier cargo list incorrect after load: %v", uC.Attachment.Cargo)
-	}
-	// Check BeCarried pushed onto cargo
-	qCargo := QueueForUnit(uCargo)
-	hasBe := false
-	for _, n := range qCargo.Primary() {
-		if DescriptorFor(n.ID).Name == "BeCarried" {
-			hasBe = true
-			break
-		}
-	}
-	if !hasBe {
-		t.Fatalf("cargo should have BeCarried order after load")
-	}
-	// Move
-	dropX := numeric.Fixed(20 * 65536)
-	dropZ := numeric.Fixed(0)
-	uC.X = dropX
-	uC.Z = dropZ
-	uCargo.X = dropX
-	uCargo.Z = dropZ
-	// Unload
-	idUnload := Lookup("VTOL_Unload")
-	nUnload := NewNodeForOrder(idUnload, 0, dropX, 0, dropZ, 10, hC, false)
-	nUnload.GoalX = dropX
-	nUnload.GoalZ = dropZ
-	qC.Push(idUnload, nUnload)
-	for tick := uint32(10); tick < 20; tick++ {
-		pump.PumpUnit(hC, tick)
-		if uCargo.Attachment.Carrier == 0 {
-			break
-		}
-	}
-	if uCargo.Attachment.Carrier != 0 {
-		t.Fatalf("cargo still attached after unload: carrier cargo %v cargo carrier %v queue len %d head %v diags %v", uC.Attachment.Cargo, uCargo.Attachment.Carrier, qC.LenPrimary(), func() string {
-			if h := qC.Head(); h != nil {
-				return DescriptorFor(h.ID).Name
-			}
-			return "nil"
-		}(), qC.Diagnostics())
-	}
-	if len(uC.Attachment.Cargo) != 0 {
-		t.Fatalf("carrier cargo not empty after unload: %v", uC.Attachment.Cargo)
-	}
-	if uCargo.X != dropX || uCargo.Z != dropZ {
-		t.Fatalf("cargo not at drop point after unload: got %v,%v want %v,%v", uCargo.X, uCargo.Z, dropX, dropZ)
-	}
-	// BeCarried should be removed after unload
-	hasBe = false
-	for _, n := range qCargo.Primary() {
-		if DescriptorFor(n.ID).Name == "BeCarried" {
-			hasBe = true
-			break
-		}
-	}
-	if hasBe {
-		t.Fatalf("BeCarried should be removed after unload")
-	}
-	// No diagnostics for transport orders (nil handler) should be empty
-	// The pump should not have recorded "nil handler" for these orders
-	for _, q := range []*Queue{qC, qCargo} {
-		for _, d := range q.Diagnostics() {
-			if len(d) > 20 && d[:20] == "orders: nil handler" {
-				t.Fatalf("unexpected nil handler diagnostic for wired order: %q", d)
-			}
-		}
+	if head := q.Head(); head == nil || head.DynamicGate&gateDeadline == 0 {
+		t.Fatalf("hand-off did not arm the deadline gate: %+v", q.Head())
 	}
 }
 
-func TestTransportHeavyAndGates(t *testing.T) {
-	rng.SeedGlobal(1, 0)
-	w2 := newOrdersFixtureWorld(10, &content.Catalog{})
-	defCarrier := &content.UnitDef{UnitName: "heavycarrier", CanLoad: true, CanFly: true, CanMove: true, TransportSize: 1, TransportCapacity: 1, FootprintX: 2, FootprintZ: 2, MaxDamage: 100}
-	defCargo := &content.UnitDef{UnitName: "heavycargo", CanMove: true, CantBeTransported: false, FootprintX: 5, FootprintZ: 5, MaxDamage: 50}
-	hC, _ := w2.Create(defCarrier, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
-	hCargo, _ := w2.Create(defCargo, 0, numeric.Fixed(5*65536), numeric.Fixed(10*65536), numeric.Fixed(0))
-	uC := w2.Unit(hC)
-	uCargo := w2.Unit(hCargo)
-	uC.Move.Mode = 1
-	uCargo.Move.Mode = 1
-	qC := QueueForUnit(uC)
-	qC.SetBinding(&QueueBinding{Lookup: func(h pool.Handle) *units.Unit { return w2.Unit(h) }})
-	idPickup := Lookup("VTOL_Pickup")
-	qC.Push(idPickup, NewNodeForOrder(idPickup, hCargo, 0, 0, 0, 0, hC, false))
-	pump := &Pump{World: w2}
-	// First tick should fail size gate and return 8 -> node removed? Handler returns 8, pump will handle code >9? Actually 8 is TransportResultFailed, which pump maps to case 5,8: unlink.
-	// For handler returning 8, pump's switch case 5,8 will unlink.
-	pump.PumpUnit(hC, 0)
-	if len(qC.Primary()) != 0 {
-		t.Fatalf("heavy transport should have failed and removed order, remaining %d", len(qC.Primary()))
+// TestGroundPickupFiresTransportPickupAndEvent12 locks the ground carrier's
+// load machine [04 R-AIR-01 §9]: it never moves the cargo itself, it fires
+// `TransportPickup` on the CARRIER's script at phase 2 and emits notification
+// event 12 right after, and phase 4 completes only once the script has done the
+// attachment.
+func TestGroundPickupFiresTransportPickupAndEvent12(t *testing.T) {
+	carrierDef := &content.UnitDef{UnitName: "armmship", CanLoad: true, CanMove: true, TransportSize: 10, FootprintX: 3, FootprintZ: 3, MaxDamage: 100}
+	cargoDef := &content.UnitDef{UnitName: "armpw", CanMove: true, FootprintX: 1, FootprintZ: 1, MaxDamage: 50}
+	w, carrier, cargo, kinds := transportFixture(t, carrierDef, cargoDef)
+	q := QueueForUnit(carrier)
+	id := Lookup("Ground_Pickup")
+	q.Push(id, NewNodeForOrder(id, cargo.Handle, 0, 0, 0, 0, carrier.Handle, false))
+	pump := &Pump{World: w}
+	head := q.Head()
+
+	// Phases 0 through 2: the caption, the short move, then the callback and
+	// the event. Phase 2's deadline stops the walk.
+	for tick := uint32(0); tick < 3; tick++ {
+		pump.PumpUnit(carrier.Handle, tick)
 	}
-	// Check diagnostic for heavy?
-	foundHeavy := false
-	for _, d := range qC.Diagnostics() {
-		if d == transportHeavyMessage {
-			foundHeavy = true
-			break
-		}
+	if got := countKind(*kinds, statusLoadEvent); got != 1 {
+		t.Fatalf("notification event 12 published %d times, want exactly one [04 R-AIR-01 §9]", got)
 	}
-	if !foundHeavy {
-		t.Fatalf("heavy transport should have recorded diagnostic %q, got %v", transportHeavyMessage, qC.Diagnostics())
+	if head.Param2 != 1 {
+		t.Fatalf("attempt counter = %d after one callback, want 1 [04 R-AIR-01 §9]", head.Param2)
 	}
-	// Test cargo empty gate for air: second load should fail 8 with no message when cargo already loaded
-	defCarrier2 := &content.UnitDef{UnitName: "carrier", CanLoad: true, CanFly: true, CanMove: true, TransportSize: 10, TransportCapacity: 1, FootprintX: 2, FootprintZ: 2, MaxDamage: 100}
-	defCargo2 := &content.UnitDef{UnitName: "cargo", CanMove: true, CantBeTransported: false, FootprintX: 1, FootprintZ: 1, MaxDamage: 50}
-	w2 = newOrdersFixtureWorld(10, &content.Catalog{})
-	hC, _ = w2.Create(defCarrier2, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
-	hCargo, _ = w2.Create(defCargo2, 0, numeric.Fixed(5*65536), numeric.Fixed(10*65536), numeric.Fixed(0))
-	hCargo2, _ := w2.Create(defCargo2, 0, numeric.Fixed(6*65536), numeric.Fixed(10*65536), numeric.Fixed(0))
-	uC = w2.Unit(hC)
-	uCargo = w2.Unit(hCargo)
-	uCargo2 := w2.Unit(hCargo2)
-	uC.Move.Mode = 1
-	uCargo.Move.Mode = 1
-	uCargo2.Move.Mode = 1
-	qC = QueueForUnit(uC)
-	qC.SetBinding(&QueueBinding{Lookup: func(h pool.Handle) *units.Unit { return w2.Unit(h) }})
-	// Load first cargo
-	qC.Push(idPickup, NewNodeForOrder(idPickup, hCargo, 0, 0, 0, 0, hC, false))
-	pump = &Pump{World: w2}
-	for tick := uint32(0); tick < 5; tick++ {
-		pump.PumpUnit(hC, tick)
-		if uCargo.Attachment.Carrier == hC {
-			break
-		}
+	if cargo.Attachment.Carrier != 0 {
+		t.Fatal("the ground executor attached the cargo itself; the SCRIPT performs the attach [04 R-COB-03 §5]")
 	}
-	if uCargo.Attachment.Carrier != hC {
-		t.Fatalf("first load should succeed")
+	// Phase 4 completes once the script has attached.
+	cargo.Attachment.Carrier = carrier.Handle
+	carrier.Attachment.Cargo = []pool.Handle{cargo.Handle}
+	for tick := uint32(20); tick < 26 && q.LenPrimary() > 0; tick++ {
+		pump.PumpUnit(carrier.Handle, tick)
 	}
-	// Try second load while air cargo not empty – should fail gate 4 with no message and code 8
-	qC.Push(idPickup, NewNodeForOrder(idPickup, hCargo2, 0, 0, 0, 0, hC, false))
-	pump.PumpUnit(hC, 10)
-	if len(qC.Primary()) != 0 {
-		// The failed second pickup should be removed (code 8)
-		t.Fatalf("second pickup with cargo not empty should fail and be removed, remaining %d", len(qC.Primary()))
+	if q.LenPrimary() != 0 {
+		t.Fatalf("the load record survived the script's attach, %d left at phase %d", q.LenPrimary(), head.Phase)
 	}
-	// Cargo2 should not be attached
-	if uCargo2.Attachment.Carrier == hC {
-		t.Fatalf("second cargo should not be attached when carrier already has cargo")
+	if got := countKind(*kinds, statusLoadEvent); got != 1 {
+		t.Fatalf("event 12 published %d times over the whole load, want exactly one", got)
+	}
+}
+
+// TestGroundPickupSizeGateAndEntryGate locks the two rejections
+// [04 R-AIR-01 §9] quotes verbatim for the ground load: the size gate's
+// `Unit is too large to transport` with result 8 — one word different from the
+// air twin's `too heavy`, and that difference is the contract — and the entry
+// gate's `Transport mission failed` on a null target.
+func TestGroundPickupSizeGateAndEntryGate(t *testing.T) {
+	carrierDef := &content.UnitDef{UnitName: "armmship", CanLoad: true, CanMove: true, TransportSize: 1, FootprintX: 3, FootprintZ: 3, MaxDamage: 100}
+	cargoDef := &content.UnitDef{UnitName: "armbull", CanMove: true, FootprintX: 5, FootprintZ: 5, MaxDamage: 50}
+	w, carrier, cargo, kinds := transportFixture(t, carrierDef, cargoDef)
+	q := QueueForUnit(carrier)
+	id := Lookup("Ground_Pickup")
+	q.Push(id, NewNodeForOrder(id, cargo.Handle, 0, 0, 0, 0, carrier.Handle, false))
+	pump := &Pump{World: w}
+	pump.PumpUnit(carrier.Handle, 0)
+	if q.LenPrimary() != 0 {
+		t.Fatalf("the oversize load survived its size gate, %d records left", q.LenPrimary())
+	}
+	if got := countKind(*kinds, statusCant); got != 1 {
+		t.Fatalf("size-gate rejection raised %d `cant` cues, want one [04 R-AIR-01 §9]", got)
+	}
+
+	*kinds = (*kinds)[:0]
+	q.Push(id, NewNodeForOrder(id, 0, 0, 0, 0, 0, carrier.Handle, false))
+	pump.PumpUnit(carrier.Handle, 1)
+	if q.LenPrimary() != 0 {
+		t.Fatal("a null-target load survived its entry gate [04 R-AIR-01 §9]")
+	}
+	if got := countKind(*kinds, statusCant); got != 1 {
+		t.Fatalf("null-target entry raised %d `cant` cues, want one", got)
+	}
+}
+
+// TestGroundUnloadPacksTheDropPointAndEmitsEvent13 locks `Ground_Unload`'s two
+// established payloads [04 R-AIR-01 §9][04 R-UNIT-06 §3]: `TransportDrop`'s
+// cell 1 is the record's goal X in the high half and its goal Z in the low
+// half, both truncated to whole world units; and phase 2 emits notification
+// event 13 as soon as the cargo's carrier reference is no longer this carrier.
+func TestGroundUnloadPacksTheDropPointAndEmitsEvent13(t *testing.T) {
+	carrierDef := &content.UnitDef{UnitName: "armmship", CanLoad: true, CanMove: true, TransportSize: 10, FootprintX: 3, FootprintZ: 3, MaxDamage: 100}
+	cargoDef := &content.UnitDef{UnitName: "armpw", CanMove: true, FootprintX: 1, FootprintZ: 1, MaxDamage: 50}
+	w, carrier, cargo, kinds := transportFixture(t, carrierDef, cargoDef)
+	cargo.Attachment.Carrier = carrier.Handle
+	carrier.Attachment.Cargo = []pool.Handle{cargo.Handle}
+	q := QueueForUnit(carrier)
+	id := Lookup("Ground_Unload")
+	n := NewNodeForOrder(id, 0, numeric.Fixed(300*65536), 0, numeric.Fixed(72*65536), 0, carrier.Handle, false)
+	n.GoalX, n.GoalZ = numeric.Fixed(300*65536), numeric.Fixed(72*65536)
+	q.Push(id, n)
+	head := q.Head()
+	if got, want := packedDropPoint(head), int32(300<<16|72); got != want {
+		t.Fatalf("packed drop point = %#x, want %#x [04 R-UNIT-06 §3]", got, want)
+	}
+
+	pump := &Pump{World: w}
+	for tick := uint32(0); tick < 3; tick++ {
+		pump.PumpUnit(carrier.Handle, tick)
+	}
+	if head.Target != cargo.Handle {
+		t.Fatalf("phase 0 did not bind the record's target to the cargo-list head, got %d", head.Target)
+	}
+	if got := countKind(*kinds, statusUnloadEvent); got != 0 {
+		t.Fatalf("event 13 published %d times while the cargo was still aboard [04 R-AIR-01 §9]", got)
+	}
+	// The script performs the drop.
+	cargo.Attachment.Carrier = 0
+	carrier.Attachment.Cargo = nil
+	for tick := uint32(20); tick < 26 && q.LenPrimary() > 0; tick++ {
+		pump.PumpUnit(carrier.Handle, tick)
+	}
+	if got := countKind(*kinds, statusUnloadEvent); got != 1 {
+		t.Fatalf("notification event 13 published %d times, want exactly one [04 R-AIR-01 §9]", got)
+	}
+	if q.LenPrimary() != 0 {
+		t.Fatalf("the unload record survived the script's drop, %d left", q.LenPrimary())
 	}
 }
 

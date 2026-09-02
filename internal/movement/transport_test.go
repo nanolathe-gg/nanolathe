@@ -1,418 +1,333 @@
 package movement
 
-import "testing"
+import (
+	"testing"
 
-// helper to make a valid load state that passes all entry gates.
-func validLoadState(phase uint8) *TransportState {
-	return &TransportState{
-		Phase:                phase,
-		TargetPresent:        true,
-		ExecutorFlags:        0,
-		TargetY:              1 << 16, // 1 wu above sea level
-		TargetModelTop:       0,
-		SeaLevel:             0,
-		CargoListEmpty:       true,
-		IsAirCarrier:         true,
-		CarrierTransportSize: 10,
-		TargetFootprintX:     5,
-		CarrierHasLiveMover:  true,
-		CarrierCanFly:        true,
-		InterruptFlags:       0,
-		AttachPiece:          3,
-		AttachPieceValid:     true,
-		CarrierCruiseAlt:     100,
+	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/orders"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe/nanolathe/internal/world"
+)
+
+// transportFixture builds the smallest world the two air transport executors of
+// [04 §10.2] need: a flat map, an air carrier with a cruise altitude, a ground
+// cargo, one shared queue binding whose presentation adapter records every
+// status kind raised, and the movement runner bound so the descriptor handlers
+// reach their legs.
+func transportFixture(t *testing.T) (*System, *units.World, *units.Unit, *units.Unit, *rng.Simulation, *[]uint8) {
+	t.Helper()
+	ter := syntheticFlat(64, 64)
+	sys := NewSystem(ter, Profile{FootPrintX: 1, FootPrintZ: 1, MinWaterDepth: -10000, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 255, BadWaterSlope: 127}, NewOccupancyGrid())
+	w := newMovementFixtureWorld(16)
+	sys.BindWorld(w)
+
+	carrierDef := &content.UnitDef{
+		DefinitionHeader:  content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armatlas")},
+		UnitName:          "armatlas",
+		CanFly:            true,
+		CanLoad:           true,
+		CanMove:           true,
+		BMCode:            true,
+		FootprintX:        1,
+		FootprintZ:        1,
+		MaxDamage:         100,
+		CruiseAlt:         60,
+		TransportSize:     4,
+		TransportCapacity: 1,
+		MaxVelocity:       6 * 65536,
+		Acceleration:      65536,
+		BrakeRate:         65536 / 2,
+		TurnRate:          2000,
+		BankScale:         65536,
+		MinWaterDepth:     -10000,
+	}
+	cargoDef := &content.UnitDef{
+		DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armpw")},
+		UnitName:         "armpw",
+		CanMove:          true,
+		BMCode:           true,
+		FootprintX:       1,
+		FootprintZ:       1,
+		MaxDamage:        100,
+		ModelTop:         6,
+		ModelTopFixed:    6 * 65536,
+		MinWaterDepth:    -10000,
+	}
+	cx, cz := world.CellToWorld(8), world.CellToWorld(8)
+	ch, err := w.Create(carrierDef, 0, cx, ter.HeightAt(cx, cz), cz)
+	if err != nil {
+		t.Fatalf("create carrier: %v", err)
+	}
+	gx, gz := world.CellToWorld(30), world.CellToWorld(8)
+	gh, err := w.Create(cargoDef, 0, gx, ter.HeightAt(gx, gz), gz)
+	if err != nil {
+		t.Fatalf("create cargo: %v", err)
+	}
+	carrier, cargo := w.Unit(ch), w.Unit(gh)
+	sys.EnsureUnit(carrier)
+	sys.EnsureUnit(cargo)
+
+	sim := rng.NewSimulation(0x12345677)
+	kinds := &[]uint8{}
+	binding := &orders.QueueBinding{
+		SimRNG: &sim,
+		Lookup: w.Unit,
+		Presentation: &orders.PresentationAdapter{
+			Ready: func() bool { return true },
+			Status: func(_ *units.Unit, kind uint8, _ string) bool {
+				*kinds = append(*kinds, kind)
+				return true
+			},
+		},
+	}
+	orders.QueueForUnit(carrier).SetBinding(binding)
+	orders.QueueForUnit(cargo).SetBinding(binding)
+	sys.BindAirOrderLegs()
+	return sys, w, carrier, cargo, &sim, kinds
+}
+
+func transportCountKind(kinds []uint8, want uint8) int {
+	n := 0
+	for _, k := range kinds {
+		if k == want {
+			n++
+		}
+	}
+	return n
+}
+
+func transportHeadPhase(q *orders.Queue) int {
+	if q == nil || q.LenPrimary() == 0 {
+		return -1
+	}
+	return int(q.Primary()[0].Phase)
+}
+
+// TestAtlasLoadsCarriesAndUnloadsAPeewee is this unit's end-to-end proof, and
+// it locks the relationships §10.2 states rather than a census of the run:
+//
+//   - the load flies: phase 0's takeoff preamble puts the carrier airborne and
+//     phase 1's follow marker carries it to the cargo, so the attach happens
+//     within the follow leg's horizontal arrival radius 0x30 rather than across
+//     the map;
+//   - the attach is request mode 0, which writes no occupancy word
+//     [04 R-COLL-01 §4], and the carried branch slaves the cargo to the carrier
+//     every tick;
+//   - notification event 12 is published exactly once [04 §10.2];
+//   - the unload validates the site, releases with request mode 1, and leaves
+//     the cargo standing on the terrain and stamped in the GROUND plane;
+//   - notification event 13 is published exactly once;
+//   - neither executor draws from the simulation stream: §10.2's two phase
+//     tables name no random value anywhere (I4).
+func TestAtlasLoadsCarriesAndUnloadsAPeewee(t *testing.T) {
+	sys, w, carrier, cargo, sim, kinds := transportFixture(t)
+	q := orders.QueueForUnit(carrier)
+	pickup := orders.Lookup("VTOL_Pickup")
+	if pickup == 0 {
+		t.Fatal("VTOL_Pickup missing from the order table")
+	}
+	q.Push(pickup, orders.Node{Owner: carrier.Handle, Target: cargo.Handle, Deadline: -1})
+
+	tick := uint32(1)
+	for ; tick <= 900 && cargo.Attachment.Carrier == 0; tick++ {
+		q.Pump(carrier, tick)
+		runMovementTick(sys, tick, w)
+	}
+	if cargo.Attachment.Carrier != carrier.Handle {
+		t.Fatalf("the Atlas never attached its cargo; record phase %d, carrier at %d,%d cargo at %d,%d",
+			transportHeadPhase(q), carrier.X.Raw()>>16, carrier.Z.Raw()>>16, cargo.X.Raw()>>16, cargo.Z.Raw()>>16)
+	}
+	if carrier.Move.Mode&0x3 != 2 {
+		t.Fatalf("carrier mover mode %d at the attach, want the airborne 2 — the takeoff preamble did not run [04 R-AIR-01 §6]", carrier.Move.Mode)
+	}
+	// The follow leg's horizontal arrival radius is 0x30 world units
+	// [04 §10.2], so the attach cannot happen further out than that. Measured
+	// before the carried branch has slaved the cargo onto the carrier.
+	if d := airPlanarDistance(carrier.X, carrier.Z, cargo.X, cargo.Z); d > 0x30<<16 {
+		t.Fatalf("attach distance %d world units exceeds the follow leg's 0x30 arrival radius [04 §10.2]", d>>16)
+	}
+	if cargo.Move.Mode&0x3 != 0 {
+		t.Fatalf("cargo mover mode %d after the attach, want the attached mode 0 [04 R-AIR-01 §9]", cargo.Move.Mode)
+	}
+	if coll := sys.Collisions[cargo.Handle]; coll != nil {
+		if _, present := sys.Grid.OccupantAtPlane(PlaneGround, coll.CachedAnchor); present {
+			t.Fatal("attached cargo still holds a ground occupancy word; mode 0 writes none [04 R-COLL-01 §4]")
+		}
+	}
+	if got := transportCountKind(*kinds, TransportEventAttach); got != 1 {
+		t.Fatalf("notification event 12 published %d times, want exactly one [04 §10.2]", got)
+	}
+
+	// The carry: the cargo follows the carrier's motion every tick. The attach
+	// piece is the root fallback, so the hang point is the carrier's origin.
+	for i := 0; i < 20; i++ {
+		q.Pump(carrier, tick)
+		runMovementTick(sys, tick, w)
+		tick++
+		if cargo.X != carrier.X || cargo.Z != carrier.Z {
+			t.Fatalf("carried cargo at %d,%d, carrier at %d,%d: the carried branch is not slaving it [04 §10.2]",
+				cargo.X.Raw()>>16, cargo.Z.Raw()>>16, carrier.X.Raw()>>16, carrier.Z.Raw()>>16)
+		}
+	}
+
+	// The unload, at a drop point the carrier must fly to.
+	dropX, dropZ := world.CellToWorld(44), world.CellToWorld(20)
+	unload := orders.Lookup("VTOL_Unload")
+	if unload == 0 {
+		t.Fatal("VTOL_Unload missing from the order table")
+	}
+	q.Push(unload, orders.Node{Owner: carrier.Handle, GoalX: dropX, GoalY: carrier.Y, GoalZ: dropZ, Deadline: -1})
+	for ; tick <= 2400 && cargo.Attachment.Carrier != 0; tick++ {
+		q.Pump(carrier, tick)
+		runMovementTick(sys, tick, w)
+	}
+	if cargo.Attachment.Carrier != 0 {
+		t.Fatalf("the cargo was never released; record phase %d, carrier at %d,%d",
+			transportHeadPhase(q), carrier.X.Raw()>>16, carrier.Z.Raw()>>16)
+	}
+	// The released cargo stands on the footprint the validator accepted, at the
+	// terrain height, in the grounded mode the release requests.
+	anchorX, anchorZ := world.PlacementAnchor(dropX, dropZ, 1, 1)
+	wantX, wantZ := world.PlacementCenter(anchorX, anchorZ, 1, 1)
+	if cargo.X != wantX || cargo.Z != wantZ {
+		t.Fatalf("released cargo at %d,%d, want the drop point's footprint centre %d,%d [04 §10.2]",
+			cargo.X.Raw()>>16, cargo.Z.Raw()>>16, wantX.Raw()>>16, wantZ.Raw()>>16)
+	}
+	if want := sys.Terrain.HeightAt(cargo.X, cargo.Z); cargo.Y != want {
+		t.Fatalf("released cargo Y=%d, want the terrain height %d — it is hovering, not standing", cargo.Y.Raw()>>16, want.Raw()>>16)
+	}
+	if cargo.Move.Mode&0x3 != 1 {
+		t.Fatalf("released cargo mover mode %d, want the grounded 1 [04 R-AIR-01 §9]", cargo.Move.Mode)
+	}
+	coll := sys.Collisions[cargo.Handle]
+	if coll == nil {
+		t.Fatal("released cargo has no collision record")
+	}
+	if got, present := sys.Grid.OccupantAtPlane(PlaneGround, coll.CachedAnchor); !present || got != coll.ID {
+		t.Fatalf("released cargo ground occupancy = (%d,%t), want its own id %d [04 R-COLL-01 §4]", got, present, coll.ID)
+	}
+	// Phase 3's event follows the phase-2 release once the climb-away marker
+	// the release constructs has been reached.
+	for ; tick <= 3200 && transportCountKind(*kinds, TransportEventDetach) == 0; tick++ {
+		q.Pump(carrier, tick)
+		runMovementTick(sys, tick, w)
+	}
+	if got := transportCountKind(*kinds, TransportEventDetach); got != 1 {
+		t.Fatalf("notification event 13 published %d times, want exactly one [04 §10.2]", got)
+	}
+	if sim.Draws() != 0 {
+		t.Fatalf("the transport executors drew %d simulation values; §10.2's phase tables name none (I4)", sim.Draws())
 	}
 }
 
-// TestLoadPerPhaseRechecks verifies that every phase re-checks the four
-// entry gates in order before doing work [04 §10.2] C31. Each gate failure
-// must return code 8; gates 1–3 carry Transport mission failed verbatim,
-// gate 4 returns code 8 with NO message. The check is re-applied at each
-// phase 0..5.
-func TestLoadPerPhaseRechecks(t *testing.T) {
-	for phase := uint8(0); phase <= 5; phase++ {
-		// Gate 1: target non-null [04 §10.2].
-		s := validLoadState(phase)
-		s.TargetPresent = false
-		r, msg, ev := s.StepLoad()
-		if r != TransportResultFailed || msg != TransportFailedMessage || ev != TransportEventNone {
-			t.Fatalf("phase %d gate1 target null: got (%d,%q,%d) want (8,%q,0)", phase, r, msg, ev, TransportFailedMessage)
-		}
-		if s.Phase != phase {
-			t.Fatalf("phase %d gate1 must not advance phase", phase)
-		}
+// TestUnloadRefusesASiteThePlacementValidatorRejects locks §10.2's unload
+// phase 1: the drop point becomes a footprint anchor from the cargo's packed
+// footprint dimensions and the cargo definition is validated through the
+// standard placement validator in mode 1; failure emits `Unable to unload unit`
+// and returns 9. The record takes code 9's last-record arm — phase reset plus a
+// 30..59-tick re-arm [04 §3.3] — rather than being freed, so the order the
+// player still owns keeps retrying.
+//
+// The site is refused by a reserved feature sentinel on the drop cell, the
+// first of mode 1's per-cell rejects [08 R-AI-03 §4].
+func TestUnloadRefusesASiteThePlacementValidatorRejects(t *testing.T) {
+	sys, w, carrier, cargo, _, kinds := transportFixture(t)
+	if !AttachCargoMode(w, carrier.Handle, cargo.Handle, -1, 0) {
+		t.Fatal("fixture attach failed")
+	}
+	carrier.Move.Mode = 2
+	if fl := sys.Flights[carrier.Handle]; fl != nil {
+		fl.Mode = 2
+	}
 
-		// Gate 2: executor flags free of 0x10048 [04 §10.2] C31.
-		s = validLoadState(phase)
-		s.ExecutorFlags = 0x10048
-		r, msg, ev = s.StepLoad()
-		if r != TransportResultFailed || msg != TransportFailedMessage || ev != TransportEventNone {
-			t.Fatalf("phase %d gate2 flags 0x10048: got (%d,%q,%d) want (8,%q,0)", phase, r, msg, ev, TransportFailedMessage)
-		}
-		// Also single bit of mask should fail: 0x00008 part.
-		s = validLoadState(phase)
-		s.ExecutorFlags = 0x40
-		r, msg, _ = s.StepLoad()
-		if r != TransportResultFailed || msg != TransportFailedMessage {
-			t.Fatalf("phase %d gate2 flags 0x40: got (%d,%q) want (8,%q)", phase, r, msg, TransportFailedMessage)
-		}
-		s = validLoadState(phase)
-		s.ExecutorFlags = 0x10000
-		r, msg, _ = s.StepLoad()
-		if r != TransportResultFailed || msg != TransportFailedMessage {
-			t.Fatalf("phase %d gate2 flags 0x10000: got (%d,%q) want (8,%q)", phase, r, msg, TransportFailedMessage)
-		}
+	dropX, dropZ := world.CellToWorld(44), world.CellToWorld(20)
+	cellX, cellZ := world.PlacementAnchor(dropX, dropZ, 1, 1)
+	cell := sys.Terrain.PlotAt(cellX, cellZ)
+	if cell == nil {
+		t.Fatalf("drop cell %d,%d off the fixture map", cellX, cellZ)
+	}
+	cell.SetFeature(0xFFFB)
+	if sys.ValidateUnloadSite(w, cargo.Handle, dropX, dropZ, sys.Terrain) {
+		t.Fatal("the placement validator accepted a blocked drop cell [08 R-AI-03 §4]")
+	}
 
-		// Gate 3: target Y+modelTop signed greater than seaLevel<<16 [04 §10.2].
-		s = validLoadState(phase)
-		s.TargetY = 0
-		s.TargetModelTop = 0
-		s.SeaLevel = 0 // 0 <=0 fails (must be >)
-		r, msg, ev = s.StepLoad()
-		if r != TransportResultFailed || msg != TransportFailedMessage || ev != TransportEventNone {
-			t.Fatalf("phase %d gate3 at sea level: got (%d,%q,%d) want (8,%q,0)", phase, r, msg, ev, TransportFailedMessage)
-		}
-		// Also below sea level fails.
-		s = validLoadState(phase)
-		s.TargetY = -10 << 16
-		s.TargetModelTop = 0
-		s.SeaLevel = 0
-		r, msg, _ = s.StepLoad()
-		if r != TransportResultFailed || msg != TransportFailedMessage {
-			t.Fatalf("phase %d gate3 below sea level: got (%d,%q) want (8,%q)", phase, r, msg, TransportFailedMessage)
-		}
-		// Above passes (tested implicitly via validLoadState).
-
-		// Gate 4: air carrier cargo list must be EMPTY; ground carriers don't apply [04 §10.2] C31.
-		s = validLoadState(phase)
-		s.IsAirCarrier = true
-		s.CargoListEmpty = false
-		r, msg, ev = s.StepLoad()
-		if r != TransportResultFailed || msg != "" || ev != TransportEventNone {
-			t.Fatalf("phase %d gate4 air cargo not empty: got (%d,%q,%d) want (8,\"\",0)", phase, r, msg, ev)
-		}
-		if s.Phase != phase {
-			t.Fatalf("phase %d gate4 must not advance", phase)
-		}
-		// Ground carrier with cargo not empty must PASS gate 4.
-		s = validLoadState(phase)
-		s.IsAirCarrier = false
-		s.CargoListEmpty = false
-		// Need to bypass phase-0 heavy/live gates to see that entry gate itself passes.
-		// For phases other than 0, no additional size gate interferes; for phase 0 we set size to pass.
-		// The call should NOT return 8 due to gate4.
-		r, msg, _ = s.StepLoad()
-		if r == TransportResultFailed && msg == "" {
-			t.Fatalf("phase %d ground carrier must not apply cargo-empty gate, but got gate4 failure", phase)
-		}
-		// For phase 0, even ground carrier with cargo not empty continues to heavy/mover checks;
-		// ensure it doesn't fail with empty-diagnostic gate4 code.
-		if phase == 0 && r == TransportResultFailed && msg == "" {
-			t.Fatalf("phase 0 ground carrier incorrectly failed gate4")
-		}
+	q := orders.QueueForUnit(carrier)
+	unload := orders.Lookup("VTOL_Unload")
+	q.Push(unload, orders.Node{Owner: carrier.Handle, GoalX: dropX, GoalY: carrier.Y, GoalZ: dropZ, Deadline: -1})
+	head := q.Primary()[0]
+	for tick := uint32(1); tick <= 2000 && transportCountKind(*kinds, 7) == 0; tick++ {
+		q.Pump(carrier, tick)
+		runMovementTick(sys, tick, w)
+	}
+	if transportCountKind(*kinds, 7) == 0 {
+		t.Fatalf("the refused unload never raised the `cant` cue carrying `Unable to unload unit`; record phase %d [04 §10.2]", transportHeadPhase(q))
+	}
+	if cargo.Attachment.Carrier != carrier.Handle {
+		t.Fatal("the cargo was released onto a site the validator refuses [04 §10.2]")
+	}
+	if q.LenPrimary() == 0 {
+		t.Fatal("the refused unload record was freed; code 9's last-record arm re-arms it [04 §3.3]")
+	}
+	if head.Phase != 0 {
+		t.Fatalf("refused record phase %d, want code 9's phase reset [04 §3.3]", head.Phase)
 	}
 }
 
-// TestHeavyTransportMessageVerbatim locks the verbatim diagnostic string
-// Unit is too heavy to transport at the phase-0 size gate [04 §10.2].
-func TestHeavyTransportMessageVerbatim(t *testing.T) {
-	s := validLoadState(0)
-	s.TargetFootprintX = 5
-	s.CarrierTransportSize = 2 // 5 >2 => too heavy
-	r, msg, ev := s.StepLoad()
-	if r != TransportResultFailed {
-		t.Fatalf("heavy: result %d want 8", r)
-	}
-	if msg != HeavyTransportMessage {
-		t.Fatalf("heavy: msg %q want %q", msg, HeavyTransportMessage)
-	}
-	if msg != "Unit is too heavy to transport" {
-		t.Fatalf("heavy verbatim mismatch: %q", msg)
-	}
-	if ev != TransportEventNone {
-		t.Fatalf("heavy: event %d want 0", ev)
-	}
-	// Exact case sensitive check: lower case variant must not equal.
-	if msg == "unit is too heavy to transport" {
-		t.Fatal("heavy message case mismatch must be verbatim")
-	}
-	// Size gate is signed compare: negative footprint must pass even if carrier small.
-	s = validLoadState(0)
-	s.TargetFootprintX = -5 // negative, signed comparison -5 <=2 passes
-	s.CarrierTransportSize = 2
-	r, msg, _ = s.StepLoad()
-	if r == TransportResultFailed && msg == HeavyTransportMessage {
-		t.Fatalf("heavy signed compare: negative footprint -5 should not be heavy vs 2, got heavy")
-	}
-	if r != TransportResultContinue {
-		t.Fatalf("heavy signed negative should advance, got %d", r)
-	}
-	// Equal passes: 2 <=2 not heavy.
-	s = validLoadState(0)
-	s.TargetFootprintX = 2
-	s.CarrierTransportSize = 2
-	r, msg, _ = s.StepLoad()
-	if r == TransportResultFailed && msg == HeavyTransportMessage {
-		t.Fatalf("heavy equal should not be heavy")
-	}
-	// One over fails.
-	s = validLoadState(0)
-	s.TargetFootprintX = 3
-	s.CarrierTransportSize = 2
-	r, msg, _ = s.StepLoad()
-	if msg != HeavyTransportMessage {
-		t.Fatalf("heavy equal+1 should be heavy, got %q", msg)
-	}
-}
+// TestLoadEntryGatesRejectInOrder locks the four re-checks every phase of the
+// load executor runs [04 §10.2]. Gate four is the one that distinguishes the
+// air executor from general admission: it requires an EMPTY cargo list even
+// though admission only compares the carried count against `transportcapacity`,
+// and it returns result 8 with NO message.
+func TestLoadEntryGatesRejectInOrder(t *testing.T) {
+	sys, w, carrier, cargo, _, kinds := transportFixture(t)
 
-// TestPhase0LiveMoverGate checks the live mover / canfly gate at phase 0
-// else 7 [04 §10.2].
-func TestPhase0LiveMoverGate(t *testing.T) {
-	s := validLoadState(0)
-	s.CarrierHasLiveMover = false
-	s.CarrierCanFly = true
-	r, _, _ := s.StepLoad()
-	if r != TransportResultBlocked {
-		t.Fatalf("phase0 no live mover want 7 got %d", r)
+	// Gate 3: a target whose Y plus its model total height is at or below sea
+	// level is submerged and refused with `Transport mission failed`.
+	cargo.Y = numeric.Fixed((int64(sys.Terrain.SeaLevel) << 16) - int64(cargo.Def.ModelTopFixed))
+	n := &orders.Node{Owner: carrier.Handle, Target: cargo.Handle, Deadline: -1}
+	if code := sys.legVTOLPickup(carrier, n, 0, 1); code != 8 {
+		t.Fatalf("submerged target gave result %d, want 8 [04 §10.2]", code)
 	}
-	s = validLoadState(0)
-	s.CarrierHasLiveMover = true
-	s.CarrierCanFly = false
-	r, _, _ = s.StepLoad()
-	if r != TransportResultBlocked {
-		t.Fatalf("phase0 no canfly want 7 got %d", r)
+	if got := transportCountKind(*kinds, 7); got != 1 {
+		t.Fatalf("submerged-target gate raised %d `cant` cues, want one [04 §10.2]", got)
 	}
-	// Both true passes to heavy check.
-	s = validLoadState(0)
-	r, _, _ = s.StepLoad()
-	if r != TransportResultContinue {
-		t.Fatalf("phase0 both live+canfly want 1 got %d", r)
-	}
-}
+	cargo.Y = sys.Terrain.HeightAt(cargo.X, cargo.Z)
 
-// TestEventCodesAndPhaseProgression verifies the full load phase machine
-// and that event codes 12 and 13 are emitted at the established transitions
-// [GAP T16][04 §10.2]. Load success row: phase 4 emits 12; unload phase 3 emits 13.
-func TestEventCodesAndPhaseProgression(t *testing.T) {
-	// Load phases 0..5 successful progression.
-	s := validLoadState(0)
-	// Phase 0 ->1
-	r, msg, ev := s.StepLoad()
-	if r != TransportResultContinue || ev != TransportEventNone || s.Phase != 1 {
-		t.Fatalf("load p0: got (%d,%q,%d) phase %d want (1,Loading,0) 1", r, msg, ev, s.Phase)
-	}
-	if msg != "Loading" {
-		t.Fatalf("load p0 diagnostic %q want Loading", msg)
-	}
-	// Phase1 ->2
-	r, _, ev = s.StepLoad()
-	if r != TransportResultContinue || ev != TransportEventNone || s.Phase != 2 {
-		t.Fatalf("load p1: got (%d,_,%d) phase %d want 1,0 2", r, ev, s.Phase)
-	}
-	// Phase2 prepares attach piece, status Preparing for transport [04 §10.2].
-	s.AttachPieceValid = false // force fallback path
-	s.AttachPiece = 0
-	r, msg, ev = s.StepLoad()
-	if r != TransportResultContinue || ev != TransportEventNone || s.Phase != 3 {
-		t.Fatalf("load p2: got (%d,%q,%d) phase %d want 1,Preparing...,0 3", r, msg, ev, s.Phase)
-	}
-	if msg != "Preparing for transport" {
-		t.Fatalf("load p2 diagnostic %q want Preparing for transport", msg)
-	}
-	if s.AttachPiece != -1 || !s.AttachPieceValid {
-		t.Fatalf("load p2 attach fallback want -1 got %d valid %v", s.AttachPiece, s.AttachPieceValid)
-	}
-	// Provide a real piece for next steps.
-	s.AttachPiece = 7
-	s.AttachPieceValid = true
-	// Phase3 ->4
-	r, _, ev = s.StepLoad()
-	if r != TransportResultContinue || ev != TransportEventNone || s.Phase != 4 {
-		t.Fatalf("load p3: got (%d,_,%d) phase %d want 1,0 4", r, ev, s.Phase)
-	}
-	// Phase4 success emits 12 and moves to 5.
-	r, _, ev = s.StepLoad()
-	if r != TransportResultContinue || ev != TransportEventAttach || s.Phase != 5 {
-		t.Fatalf("load p4 success: got (%d,_,%d) phase %d want (1,_,12) 5", r, ev, s.Phase)
-	}
-	if ev != 12 {
-		t.Fatalf("load p4 event %d want 12", ev)
-	}
-	// Phase5 done 5.
-	r, _, ev = s.StepLoad()
-	if r != TransportResultDone || ev != TransportEventNone {
-		t.Fatalf("load p5: got (%d,_,%d) want (5,_,0)", r, ev)
-	}
-	// Other phase ->7.
-	s.Phase = 9
-	r, _, ev = s.StepLoad()
-	if r != TransportResultBlocked || ev != TransportEventNone {
-		t.Fatalf("load other: got (%d,_,%d) want (7,_,0)", r, ev)
+	// Gate 2: the entry mask 0x10048 in the satisfied set.
+	*kinds = (*kinds)[:0]
+	if code := sys.legVTOLPickup(carrier, n, 0x40, 1); code != 8 {
+		t.Fatalf("entry-mask bit 0x40 gave result %d, want 8 [04 §10.2]", code)
 	}
 
-	// Unload events: phase 3 emits 13 [04 §10.2][GAP T16].
-	us := &TransportUnloadState{
-		Phase:                0,
-		CargoListEmpty:       false,
-		CarrierHasLiveMover:  true,
-		CarrierCanFly:        true,
-		PlacementValidFirst:  true,
-		PlacementValidSecond: true,
-		Interrupt:            false,
+	// Gate 4: a non-empty cargo list, result 8 with NO message.
+	*kinds = (*kinds)[:0]
+	ox, oz := world.CellToWorld(12), world.CellToWorld(12)
+	other, err := w.Create(cargo.Def, 0, ox, sys.Terrain.HeightAt(ox, oz), oz)
+	if err != nil {
+		t.Fatalf("create second cargo: %v", err)
 	}
-	r, msg, ev = us.StepUnload()
-	if r != TransportResultContinue || msg != "Unloading" || ev != TransportEventNone || us.Phase != 1 {
-		t.Fatalf("unload p0: got (%d,%q,%d) phase %d want (1,Unloading,0) 1", r, msg, ev, us.Phase)
+	if !AttachCargoMode(w, carrier.Handle, other, -1, 0) {
+		t.Fatal("fixture attach failed")
 	}
-	r, _, ev = us.StepUnload()
-	if r != TransportResultContinue || ev != TransportEventNone || us.Phase != 2 {
-		t.Fatalf("unload p1: got (%d,_,%d) phase %d want 1,0 2", r, ev, us.Phase)
+	if code := sys.legVTOLPickup(carrier, n, 0, 1); code != 8 {
+		t.Fatalf("loaded carrier gave result %d, want 8 [04 §10.2]", code)
 	}
-	r, _, ev = us.StepUnload()
-	if r != TransportResultContinue || ev != TransportEventNone || us.Phase != 3 {
-		t.Fatalf("unload p2: got (%d,_,%d) phase %d want 1,0 3", r, ev, us.Phase)
+	if len(*kinds) != 0 {
+		t.Fatalf("gate four raised %d status cues, want none — it returns code 8 with NO message [04 §10.2]", len(*kinds))
 	}
-	r, _, ev = us.StepUnload()
-	if r != TransportResultDone || ev != TransportEventDetach || us.Phase != 4 {
-		t.Fatalf("unload p3: got (%d,_,%d) phase %d want (5,_,13) 4", r, ev, us.Phase)
-	}
-	if ev != 13 {
-		t.Fatalf("unload p3 event %d want 13", ev)
-	}
-	// Immediate empty cargo returns done 5 before any phase dispatch.
-	us = &TransportUnloadState{CargoListEmpty: true, Phase: 0}
-	r, _, ev = us.StepUnload()
-	if r != TransportResultDone || ev != TransportEventNone {
-		t.Fatalf("unload empty immediate: got (%d,_,%d) want (5,_,0)", r, ev)
-	}
-}
 
-// TestPhase4Interruption ensures phase-4 interrupted edge ends the transport
-// without attaching and returns code 8 [04 §10.2]. No event 12.
-func TestPhase4Interruption(t *testing.T) {
-	s := validLoadState(4)
-	s.InterruptFlags = 0x42 // interrupt combination present [04 §10.2] mask 0x42
-	r, msg, ev := s.StepLoad()
-	if r != TransportResultFailed || msg != "" || ev != TransportEventNone {
-		t.Fatalf("phase4 interrupted: got (%d,%q,%d) want (8,\"\",0)", r, msg, ev)
+	// The size gate is phase 0's, not an entry gate, and it carries the
+	// `too heavy` message [04 §10.2] — one word different from the ground twin's
+	// `too large` [04 R-AIR-01 §9].
+	DetachCargoMode(w, other, 1)
+	*kinds = (*kinds)[:0]
+	sys.profiles[cargo.Handle] = Profile{FootPrintX: int16(carrier.Def.TransportSize) + 1, FootPrintZ: 1}
+	if code := sys.legVTOLPickup(carrier, n, 0, 1); code != 8 {
+		t.Fatalf("oversize cargo gave result %d, want 8 [04 §10.2]", code)
 	}
-	if ev == TransportEventAttach {
-		t.Fatal("phase4 interrupted must NOT emit event 12")
-	}
-	// Phase must not have advanced to 5 on interruption (spec says return WITHOUT attaching => no climb-away, no event).
-	// Our implementation leaves Phase at 4 on interrupted path (or could advance, but test checks that re-interrogating still fails with gate check).
-	// Ensure that after interruption the order would be freed (code 8) and no later step emits 12.
-	// Call again with same interrupt — should still return 8 and still no event.
-	r, _, ev = s.StepLoad()
-	if r != TransportResultFailed || ev != TransportEventNone {
-		t.Fatalf("phase4 interrupted second call: got (%d,_,%d) want (8,_,0)", r, ev)
-	}
-	// Without interrupt flag, phase 4 success does emit 12.
-	s = validLoadState(4)
-	s.InterruptFlags = 0
-	r, _, ev = s.StepLoad()
-	if r != TransportResultContinue || ev != TransportEventAttach {
-		t.Fatalf("phase4 success: got (%d,_,%d) want (1,_,12)", r, ev)
-	}
-	// Partial flags: 0x40 alone should trigger? Mask is 0x42, so 0x02 alone also triggers per & !=0?
-	// Retail checks flags & 0x42 non-zero [04 §10.2] — any bit of 0x42 triggers.
-	s = validLoadState(4)
-	s.InterruptFlags = 0x40
-	r, _, ev = s.StepLoad()
-	if r != TransportResultFailed {
-		t.Fatalf("phase4 interrupt 0x40 should trigger, got %d", r)
-	}
-	s = validLoadState(4)
-	s.InterruptFlags = 0x02
-	r, _, ev = s.StepLoad()
-	if r != TransportResultFailed {
-		t.Fatalf("phase4 interrupt 0x02 should trigger, got %d", r)
-	}
-	// No interrupt bits => success.
-	s = validLoadState(4)
-	s.InterruptFlags = 0x01
-	r, _, ev = s.StepLoad()
-	if r != TransportResultContinue || ev != TransportEventAttach {
-		t.Fatalf("phase4 0x01 should not trigger interrupt, got (%d, %d)", r, ev)
-	}
-}
-
-// TestAirCarrierCargoEmptyGate explicitly locks the air vs ground
-// distinction [04 §10.2] C31. Air requires empty, ground does not.
-func TestAirCarrierCargoEmptyGate(t *testing.T) {
-	// Air carrier with cargo not empty fails gate 4 with no message and code 8, at any phase.
-	for _, phase := range []uint8{0, 1, 2, 3, 4, 5} {
-		s := validLoadState(phase)
-		s.IsAirCarrier = true
-		s.CargoListEmpty = false
-		r, msg, _ := s.StepLoad()
-		if r != TransportResultFailed || msg != "" {
-			t.Fatalf("air phase %d cargo not empty want (8,\"\") got (%d,%q)", phase, r, msg)
-		}
-	}
-	// Ground carrier with cargo not empty must NOT fail gate4; it should reach the phase-specific logic.
-	for _, phase := range []uint8{1, 2, 3} { // avoid phase0 heavy/live gates obscuring
-		s := validLoadState(phase)
-		s.IsAirCarrier = false
-		s.CargoListEmpty = false
-		r, msg, _ := s.StepLoad()
-		// Should not be gate4 failure (which is msg=="" + 8). For phase 1, expect continue.
-		if r == TransportResultFailed && msg == "" {
-			t.Fatalf("ground phase %d incorrectly failed gate4 air-empty check", phase)
-		}
-		if phase == 1 && r != TransportResultContinue {
-			t.Fatalf("ground phase1 with cargo non-empty should pass gate4 and continue, got %d", r)
-		}
-	}
-	// Air carrier empty passes.
-	s := validLoadState(1)
-	s.IsAirCarrier = true
-	s.CargoListEmpty = true
-	r, _, _ := s.StepLoad()
-	if r != TransportResultContinue {
-		t.Fatalf("air empty should pass, got %d", r)
-	}
-}
-
-// TestUnloadValidation ensures unload double validation is injected and
-// that Unable to unload unit is verbatim [04 §10.2].
-func TestUnloadValidation(t *testing.T) {
-	us := &TransportUnloadState{
-		Phase:               1,
-		CargoListEmpty:      false,
-		PlacementValidFirst: false,
-	}
-	r, msg, _ := us.StepUnload()
-	if r != TransportResultRetry || msg != UnableUnloadMessage {
-		t.Fatalf("unload p1 invalid: got (%d,%q) want (9,%q)", r, msg, UnableUnloadMessage)
-	}
-	if msg != "Unable to unload unit" {
-		t.Fatalf("unload p1 verbatim want %q got %q", "Unable to unload unit", msg)
-	}
-	us = &TransportUnloadState{
-		Phase:                2,
-		CargoListEmpty:       false,
-		Interrupt:            true,
-		PlacementValidSecond: true,
-	}
-	r, msg, _ = us.StepUnload()
-	if r != TransportResultRetry || msg != "" {
-		t.Fatalf("unload p2 interrupt before validation: got (%d,%q) want (9,\"\")", r, msg)
-	}
-	us = &TransportUnloadState{
-		Phase:                2,
-		CargoListEmpty:       false,
-		Interrupt:            false,
-		PlacementValidSecond: false,
-	}
-	r, msg, _ = us.StepUnload()
-	if r != TransportResultRetry || msg != UnableUnloadMessage {
-		t.Fatalf("unload p2 second invalid: got (%d,%q) want (9,%q)", r, msg, UnableUnloadMessage)
-	}
-	// Phase0 live mover gate also else 7.
-	us = &TransportUnloadState{Phase: 0, CargoListEmpty: false, CarrierHasLiveMover: false, CarrierCanFly: true}
-	r, _, _ = us.StepUnload()
-	if r != TransportResultBlocked {
-		t.Fatalf("unload p0 no mover want 7 got %d", r)
+	if got := transportCountKind(*kinds, 7); got != 1 {
+		t.Fatalf("size gate raised %d `cant` cues, want one [04 §10.2]", got)
 	}
 }

@@ -128,16 +128,59 @@ func (s *System) InstallAnnulusGoal(req orders.AnnulusGoalRequest) bool {
 	return s.installGroundPayload(req.Owner, req.Node, path.AnnulusGoal(center, req.InnerRadius, req.OuterRadius), req.X, req.Z)
 }
 
-// InstallRectangleGoal binds a footprint rectangle payload to n.
+// InstallRectangleGoal binds a footprint rectangle payload to n. The request
+// carries the TARGET's anchor cell and footprint size; the rectangle the goal
+// class stores is that footprint grown by the OWNING MOVER's own footprint
+// [04 R-PATH-01 §12] — see grownGoalRect.
 func (s *System) InstallRectangleGoal(req orders.RectangleGoalRequest) bool {
 	if s == nil || req.Node == nil {
 		return false
 	}
-	if u := s.unitFor(req.Owner); u != nil && u.Def != nil && u.Def.CanFly {
+	u := s.unitFor(req.Owner)
+	if u != nil && u.Def != nil && u.Def.CanFly {
 		return false
 	}
-	goal := path.RectPerimeterGoal(path.Rect{Min: path.Cell{X: req.CellX, Z: req.CellZ}, Max: path.Cell{X: req.CellX + req.Width - 1, Z: req.CellZ + req.Depth - 1}})
+	fx, fz := s.pathFootprint(u)
+	goal := path.RectPerimeterGoal(grownGoalRect(req.CellX, req.CellZ, req.Width, req.Depth, fx, fz))
 	return s.installGroundPayload(req.Owner, req.Node, goal, worldCellCenter(req.CellX), worldCellCenter(req.CellZ))
+}
+
+// grownGoalRect is the rectangle-goal constructor [04 R-PATH-01 §12]. The
+// installer's arguments are the TARGET's anchor cell `(originX, originZ)` and
+// its footprint size `(sizeX, sizeZ)`; the class stores, with `(fx, fz)` the
+// owning MOVER's own footprint pair in cells — never the target's —
+//
+//	x1 = originX − fx    x2 = originX + sizeX
+//	z1 = originZ − fz    z2 = originZ + sizeZ
+//
+// all four inclusive. Arrival is the mover's committed anchor cell lying on
+// that border, which puts the mover's whole footprint edge- or corner-adjacent
+// to the target with no gap; the target's own cells are interior, never
+// enumerated, so a BLOCKING target is never a goal cell. Before this the build
+// stored the bare footprint, whose only admissible cells for a one-cell feature
+// were the feature's own — impassable in the searched layer — so every rock and
+// tree reclaim published an empty route and abandoned on `0x40`.
+//
+// A footprint size below one cell is read as one: every definition's authored
+// footprint is at least one cell, and the same clamp is applied wherever this
+// package reads a footprint pair (pathFootprint).
+func grownGoalRect(originX, originZ, sizeX, sizeZ, moverFootX, moverFootZ int32) path.Rect {
+	if sizeX < 1 {
+		sizeX = 1
+	}
+	if sizeZ < 1 {
+		sizeZ = 1
+	}
+	if moverFootX < 1 {
+		moverFootX = 1
+	}
+	if moverFootZ < 1 {
+		moverFootZ = 1
+	}
+	return path.Rect{
+		Min: path.Cell{X: originX - moverFootX, Z: originZ - moverFootZ},
+		Max: path.Cell{X: originX + sizeX, Z: originZ + sizeZ},
+	}
 }
 
 func worldCellCenter(c int32) numeric.Fixed { return numeric.Fixed(int64(c) << 20) }
@@ -272,16 +315,26 @@ func (s *System) goalForOrder(goalCell path.Cell, n *orders.Node) path.Goal {
 //     goal on the target's own anchor cell can never be occupied, so the
 //     search fails and the record abandons instead of working.
 //
-//   - `RepairUnit` phase 1 and `Capture` phase 0 install a RECTANGLE on the
-//     target's footprint; its admissible cells are exactly the border and
-//     arrival is lying on it [04 §7.2].
+//   - `RepairUnit` phase 1 and `Capture` phase 0 install a RECTANGLE from the
+//     target's committed anchor cell and its copied footprint size; the goal
+//     class grows that by this mover's own footprint and its admissible cells
+//     are exactly the border of the GROWN rectangle [04 R-PATH-01 §12].
 //
-//   - `Reclaim` phase 0 and `Resurrect` phase 0 install that same rectangle on
+//   - `Reclaim` phase 0 and `Resurrect` phase 0 install that same rectangle from
 //     the FEATURE's footprint — "origin cell, size" [04 R-ORD-01 §5]. The
 //     origin is the anchor cell, with no half-footprint offset: a feature's
 //     stamp writes the definition index on the anchor and the fringe sentinel
 //     across the rest of the footprint, so the anchor already is the
-//     rectangle's minimum corner [05 R-ECO-02 §2][05 R-FEAT-01 §3].
+//     constructor's origin [05 R-ECO-02 §2][05 R-FEAT-01 §3].
+//
+// Corrected 2026-09-01 (WU-19-24): all three arms built the BARE footprint
+// rectangle, `[origin, origin + size − 1]`, on the reading that "arrival is
+// lying on the footprint's own border". [04 R-PATH-01 §12] establishes the
+// arithmetic between the installer's arguments and the class's stored fields:
+// the constructor grows the argument rectangle by the owning mover's footprint,
+// so the target's cells are interior and the border is the ring of anchor cells
+// at which the mover stands flush against the target. Every rectangle goal in
+// the engine is built that way — see grownGoalRect.
 //
 // Retired 2026-09-01 (WU-19-5): the two feature rows used to fall through to
 // the default point goal, on the note that "this build has no feature resolver
@@ -331,19 +384,16 @@ func (s *System) workApproachGoal(mover *units.Unit, goalCell path.Cell, n *orde
 		}
 		anchorX := goalCellForWorld(target.X, tfx)
 		anchorZ := goalCellForWorld(target.Z, tfz)
-		return path.RectPerimeterGoal(path.Rect{
-			Min: path.Cell{X: anchorX, Z: anchorZ},
-			Max: path.Cell{X: anchorX + tfx - 1, Z: anchorZ + tfz - 1},
-		}), true
+		// The target's anchor and size are the constructor's arguments; the
+		// stored rectangle grows them by THIS mover's footprint
+		// [04 R-PATH-01 §12].
+		return path.RectPerimeterGoal(grownGoalRect(anchorX, anchorZ, tfx, tfz, footX, footZ)), true
 	case "Reclaim", "Resurrect":
 		anchorX, anchorZ, ffx, ffz, ok := featureRectForGoal(mover, n)
 		if !ok {
 			return nil, false
 		}
-		return path.RectPerimeterGoal(path.Rect{
-			Min: path.Cell{X: anchorX, Z: anchorZ},
-			Max: path.Cell{X: anchorX + ffx - 1, Z: anchorZ + ffz - 1},
-		}), true
+		return path.RectPerimeterGoal(grownGoalRect(anchorX, anchorZ, ffx, ffz, footX, footZ)), true
 	}
 	return nil, false
 }
@@ -401,11 +451,13 @@ func (s *System) goalForOrderWithFootprint(mover *units.Unit, goalCell path.Cell
 		// The rectangle is authored by the Park handler [04 R-ORD-01 §2]
 		// [04 R-FAC-02 §4]; a record that has not run its phase 0 yet has no
 		// rectangle and falls back to the ordinary point goal.
+		//
+		// ParkGoalRect returns the handler's `(origin, 8s × 6s size)` as an
+		// inclusive origin..origin+size−1 pair; the constructor grows that by
+		// the product's own footprint exactly as it does for the other six
+		// callers [04 R-PATH-01 §12].
 		if minX, minZ, maxX, maxZ, ok := orders.ParkGoalRect(n); ok {
-			return path.RectPerimeterGoal(path.Rect{
-				Min: path.Cell{X: minX, Z: minZ},
-				Max: path.Cell{X: maxX, Z: maxZ},
-			})
+			return path.RectPerimeterGoal(grownGoalRect(minX, minZ, maxX-minX+1, maxZ-minZ+1, footX, footZ))
 		}
 		return path.PointGoal(goalCell, 0)
 	// Retired 2026-08-31: an `Attack_Chase` case stood here forcing an

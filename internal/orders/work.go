@@ -191,6 +191,23 @@ func inBuildRangeOf(builder, target *units.Unit) bool {
 	return inBuildRange(builder, target.X, target.Z, target.Def.FootprintX, target.Def.FootprintZ)
 }
 
+// footprintAnchorCell is the footprint snap of [04 R-ORD-01 §1]: a unit's
+// committed footprint cell for an axis is `(pos − foot·2^19 + 2^19) >> 20`
+// (arithmetic shift, so floor for negative coordinates — I3), i.e. the cell
+// containing the footprint's minimum edge. It is the quantity a rectangle-goal
+// installer passes as the target's origin and the quantity the follower's
+// arrival test compares against the goal border [04 R-PATH-01 §12].
+//
+// A footprint below one cell is read as one; every authored definition has at
+// least a 1x1 footprint.
+func footprintAnchorCell(pos numeric.Fixed, foot int32) int32 {
+	if foot < 1 {
+		foot = 1
+	}
+	const half = int64(1) << 19
+	return int32((int64(pos) - int64(foot)*half + half) >> 20)
+}
+
 // installWorkGoal selects the researched payload shape for each work row. The
 // session-owned movement adapter is required for production work records.
 func installWorkGoal(u *units.Unit, n *Node, x, y, z numeric.Fixed) bool {
@@ -223,21 +240,31 @@ func installWorkGoalWithRadius(u *units.Unit, n *Node, x, y, z numeric.Fixed, ai
 					if b.Movement.InstallAnnulus != nil {
 						return b.Movement.InstallAnnulus(AnnulusGoalRequest{Owner: n.Owner, Node: n, X: x, Y: y, Z: z, OuterRadius: u.Def.BuildDistance + half, InnerRadius: half})
 					}
-				case "RepairUnit":
+				case "RepairUnit", "Capture":
+					// Both live-target rows pass the TARGET's committed anchor
+					// cell pair and its copied footprint pair
+					// [04 R-PATH-01 §12]. The anchor is the footprint snap of
+					// [04 R-ORD-01 §1] — the cell containing the footprint's
+					// minimum edge, the same quantity the arrival test reads
+					// back off the mover's committed anchor — not a floor of
+					// the centre with half the footprint taken off it, which
+					// is a different cell for every even footprint.
 					if target := targetOf(u, n); target != nil && target.Def != nil && b.Movement.InstallRectangle != nil {
-						cellX := world.WorldToCell(target.X) - target.Def.FootprintX/2
-						cellZ := world.WorldToCell(target.Z) - target.Def.FootprintZ/2
+						cellX := footprintAnchorCell(target.X, target.Def.FootprintX)
+						cellZ := footprintAnchorCell(target.Z, target.Def.FootprintZ)
 						return b.Movement.InstallRectangle(RectangleGoalRequest{Owner: n.Owner, Node: n, CellX: cellX, CellZ: cellZ, Width: target.Def.FootprintX, Depth: target.Def.FootprintZ})
 					}
 				case "Reclaim", "Resurrect":
-					// Both feature rows install a RECTANGLE on the FEATURE's
+					// Both feature rows install a RECTANGLE from the FEATURE's
 					// footprint — "origin cell, size" [04 R-ORD-01 §5]. The
-					// origin is the anchor cell the grid resolver returns, not
-					// a centred cell as `RepairUnit`'s live-unit rectangle is:
-					// a feature's stamp writes the definition index on the
-					// anchor and the fringe sentinel on the rest of the
-					// footprint, so the anchor already IS the rectangle's
-					// minimum corner [05 R-ECO-02 §2][05 R-FEAT-01 §3].
+					// origin is the anchor cell the grid resolver returns: a
+					// feature's stamp writes the definition index on the anchor
+					// and the fringe sentinel on the rest of the footprint, so
+					// the anchor already IS the constructor's origin
+					// [05 R-ECO-02 §2][05 R-FEAT-01 §3]. The rectangle the goal
+					// class stores is that footprint grown by the RECLAIMER's
+					// own footprint [04 R-PATH-01 §12]; this seam passes the
+					// arguments, internal/movement builds the rectangle.
 					if fdef, cx, cz, ok := featureAtGoal(u, n); ok && b.Movement.InstallRectangle != nil {
 						footX, footZ := featureFootprint(fdef)
 						return b.Movement.InstallRectangle(RectangleGoalRequest{Owner: n.Owner, Node: n, CellX: int32(cx), CellZ: int32(cz), Width: footX, Depth: footZ})
@@ -1041,9 +1068,9 @@ func reclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 			// service for a unit already at its goal [04 §10 "The follower's
 			// per-tick service"], where this build's follower raises it only
 			// after a movement step it has no reason to take. Arming 0xE0 for a
-			// builder already standing on the footprint border would therefore
-			// wait a tick on the arrival of a walk of length zero — half of
-			// PT3-05, and the same defect the assist row carried.
+			// builder already standing on the goal border would therefore wait a
+			// tick on the arrival of a walk of length zero — half of PT3-05, and
+			// the same defect the assist row carried.
 			return 1
 		}
 		// Out of reach the row does exactly what it does in reach — the row
@@ -1053,25 +1080,21 @@ func reclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 		// (`0x40`) or a payload release (`0x80`). The gate IS the wait; phase 1
 		// is not re-entered until one of those three producers fires.
 		//
-		// TODO(question): a BLOCKING one-cell feature — every stock tree and
-		// rock — makes this rectangle's only admissible cell the feature's own,
-		// which the ground search cannot enter, so the request publishes an
-		// empty route, the publisher raises `0x40` and phase 1 abandons
-		// [04 R-PATH-01 §9]. Measured on Great Divide: a shrub (`blocking 0`)
-		// 380 world units away is walked to and reclaimed; a `tree2` at the
-		// same range abandons after ~56 ticks with pending `0x200`
-		// (ray-did-not-connect). [04 R-ORD-01 §5] gives the goal as the
-		// feature's footprint rectangle with no expansion and [04 R-PATH-01 §9]
-		// gives the class's admissible cells as exactly the border, so neither
-		// the row nor the goal class is where the difference lives; what is
-		// untraced is whether retail's SEARCHED passability layer carries
-		// blocking features at all, or whether they are a collision-layer
-		// concern the ground search never sees [04 §6.1][04 R-DOC04-B]. Nothing
-		// is worked around here: a widened rectangle or an adjacent-cell
-		// fallback would be an invented approach radius. Decider: the class
-		// layer's stamp sources against the feature grid's blocking bit.
-		// The same question governs `RepairUnit`'s and `Capture`'s rectangles
-		// on a live target's occupied footprint.
+		// Closed 2026-09-01 (WU-19-24). A `TODO(question)` stood here asking why
+		// a BLOCKING one-cell feature — every stock tree and rock — abandoned:
+		// the rectangle's only admissible cell was the feature's own, which the
+		// ground search cannot enter, so the request published an empty route,
+		// the publisher raised `0x40` and phase 1 abandoned. It asked whether
+		// retail's searched passability layer carries blocking features at all.
+		// It does, in both layers [04 R-PATH-01 §12]; the difference was neither
+		// the row nor the goal class but the arithmetic between the installer's
+		// arguments and the class's stored fields. The constructor grows the
+		// argument rectangle by the MOVER's own footprint, so a one-cell feature
+		// and a one-cell reclaimer give an eight-cell ring of anchor cells
+		// around the feature and the feature's own cell is interior, never
+		// enumerated. internal/movement now builds the goal that way
+		// (grownGoalRect), and the same growth answers `RepairUnit`'s and
+		// `Capture`'s rectangles on a live target's occupied footprint.
 		//
 		// Correction (WU-19-5). A `TODO(T25)` placeholder stood here holding at
 		// phase 0 behind a plain thirty-tick re-poll, on the reading that
@@ -1086,7 +1109,8 @@ func reclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 		// footprint case, so the rectangle was never built. It is built now
 		// (installWorkGoalWithRadius), so the row's own advance is restored and
 		// the placeholder is deleted, not replaced. A right-click on a distant
-		// rock or wreck therefore walks to the footprint border and reclaims.
+		// rock or wreck therefore walks to the grown rectangle's border and
+		// reclaims [04 R-PATH-01 §12].
 		n.DynamicGate = gateMoveOutcomes
 		n.MoveState = MoveEnRoute
 		return 1 // advance; phase 1 waits behind 0xE0

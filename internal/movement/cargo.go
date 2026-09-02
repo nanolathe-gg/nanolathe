@@ -14,17 +14,48 @@
 package movement
 
 import (
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
+// attachModeUnchanged is Nanolathe's "the request carried no mode" sentinel,
+// not a retail value. [04 R-AIR-01 §9] establishes that the attachment helper
+// overwrites the child's committed mover-mode pair with the request's mode on
+// both halves, and names the modes actually used: 0 on every ordinary attach,
+// 2 on the self-detach a carried carrier performs in the takeoff preamble, and
+// 1 on the `VTOL_Unload` phase-2 release. It does NOT name the request mode of
+// the factory-product link, which is the fourth caller of the same helper
+// [04 R-UNIT-06 §3], and a mode-0 write there would take a nanoframe out of the
+// ground plane it holds for the whole build [04 R-FAC-02 §2]. So the callers
+// that know their mode pass it, and the ones the research does not cover keep
+// the mode they have.
+//
+// TODO(question): what request mode does the factory product's builder link
+// pass to the attachment helper? [04 R-AIR-01 §9] lists three of the four
+// callers' modes and omits this one. What would settle it: the factory link
+// site's mode argument read the way the other three were.
+const attachModeUnchanged = -1
+
 // AttachCargo attaches cargo to carrier on piece [04 §10.2] load phase 4.
 // It updates both sides: cargo.Carrier = carrier, carrier.Cargo appends cargo.
 // Piece -1 is root fallback [04 §5.3][04 §10.2]. Cargo must not already be carried.
 // Carrier must have live mover and canfly per gate [04 §10.2] but this helper does not re-check gates.
+//
+// This form carries no request mode; see AttachCargoMode.
 func AttachCargo(w *units.World, carrierHandle, cargoHandle pool.Handle, piece int) bool {
+	return AttachCargoMode(w, carrierHandle, cargoHandle, piece, attachModeUnchanged)
+}
+
+// AttachCargoMode is AttachCargo with the request mode of [04 R-AIR-01 §9].
+// After the linkage is recorded the helper "overwrites the child's committed
+// mover-mode pair with the request's mode value", and the write is DIRECT — it
+// does not go through the mover-mode setter, so attaching never zeroes
+// velocity, never levels bank and pitch, and never raises `Activate` or
+// `Deactivate` [04 R-AIR-01 §3].
+func AttachCargoMode(w *units.World, carrierHandle, cargoHandle pool.Handle, piece, mode int) bool {
 	if w == nil {
 		return false
 	}
@@ -54,7 +85,18 @@ func AttachCargo(w *units.World, carrierHandle, cargoHandle pool.Handle, piece i
 	cargo.Attachment.AttachPiece = int(int8(uint8(piece)))
 	// Cargo is linked at the head, not appended [04 R-COB-03 §5].
 	carrier.Attachment.Cargo = append([]pool.Handle{cargoHandle}, carrier.Attachment.Cargo...)
+	writeRequestedMoverMode(cargo, mode)
 	return true
+}
+
+// writeRequestedMoverMode is the attachment helper's mode write: the request's
+// LOW TWO BITS go straight into the committed mover-mode pair, bypassing the
+// mover-mode setter [04 R-AIR-01 §9][04 R-AIR-01 §3].
+func writeRequestedMoverMode(child *units.Unit, mode int) {
+	if child == nil || mode == attachModeUnchanged {
+		return
+	}
+	child.Move.Mode = uint8(mode) & 0x3
 }
 
 // AttachFactoryProduct applies the factory allocation gates before entering
@@ -78,8 +120,18 @@ func AttachFactoryProduct(w *units.World, carrierHandle, productHandle pool.Hand
 }
 
 // DetachCargo detaches cargo from its carrier [04 §10.2] unload phase 2.
-// Returns carrier handle if found.
+// Returns carrier handle if found. This form carries no request mode; see
+// DetachCargoMode.
 func DetachCargo(w *units.World, cargoHandle pool.Handle) (pool.Handle, bool) {
+	return DetachCargoMode(w, cargoHandle, attachModeUnchanged)
+}
+
+// DetachCargoMode is DetachCargo with the request mode of [04 R-AIR-01 §9]:
+// the detach half takes the mover mode from the request and writes its low two
+// bits directly into the child's committed mover-mode pair. `VTOL_Unload`'s
+// phase-2 release passes 1 — grounded — which is what puts the released cargo
+// back into the ground occupancy plane [04 R-COLL-01 §4].
+func DetachCargoMode(w *units.World, cargoHandle pool.Handle, mode int) (pool.Handle, bool) {
 	if w == nil {
 		return 0, false
 	}
@@ -104,6 +156,7 @@ func DetachCargo(w *units.World, cargoHandle pool.Handle) (pool.Handle, bool) {
 	}
 	cargo.Attachment.Carrier = 0
 	cargo.Attachment.AttachPiece = -1
+	writeRequestedMoverMode(cargo, mode)
 	return carrierHandle, true
 }
 
@@ -318,27 +371,20 @@ func (s *System) HandleDeath(w *units.World, dyingHandle pool.Handle, deathSever
 	}
 }
 
-// ValidateUnloadSite checks if cargo can be unloaded at drop point [04 §10.2] unload phases 1–2.
-//
-// It converts drop point to footprint anchor using cargo packed footprint dimensions and validates through
-// standard placement validator in mode 1 [04 §10.2]: footprint clear, flat, no overlap.
-// Mode 1 is the placement validator mode for unloading [04 §10.2].
-func (s *System) ValidateUnloadSite(w *units.World, cargoHandle pool.Handle, dropX, dropZ numeric.Fixed, terrain *world.Terrain) bool {
-	if w == nil || cargoHandle == 0 {
-		return false
+// unloadFootprint is the cargo's packed footprint dimension pair the unload
+// anchor conversion reads [04 §10.2]. The unit keeps a copy of the
+// definition's footprint-size pair [04 R-ORD-01 §1]; a resolved movement
+// profile carries the class width and depth when one is bound.
+func (s *System) unloadFootprint(cargoHandle pool.Handle, cargo *units.Unit) (fx, fz int32) {
+	fx, fz = 1, 1
+	if cargo != nil && cargo.Def != nil {
+		if cargo.Def.FootprintX > 0 {
+			fx = cargo.Def.FootprintX
+		}
+		if cargo.Def.FootprintZ > 0 {
+			fz = cargo.Def.FootprintZ
+		}
 	}
-	cargo := w.Unit(cargoHandle)
-	if cargo == nil || cargo.Def == nil {
-		return false
-	}
-	if terrain == nil && s.Terrain != nil {
-		terrain = s.Terrain
-	}
-	if terrain == nil {
-		return false
-	}
-	// Footprint dimensions from profile or def
-	fx, fz := int32(cargo.Def.FootprintX), int32(cargo.Def.FootprintZ)
 	prof := s.ProfileFor(cargoHandle)
 	if prof.FootPrintX > 0 {
 		fx = int32(prof.FootPrintX)
@@ -346,47 +392,106 @@ func (s *System) ValidateUnloadSite(w *units.World, cargoHandle pool.Handle, dro
 	if prof.FootPrintZ > 0 {
 		fz = int32(prof.FootPrintZ)
 	}
-	if fx <= 0 {
-		fx = 1
-	}
-	if fz <= 0 {
-		fz = 1
-	}
-	// Convert drop point to footprint anchor using cargo packed footprint dimensions [04 §10.2] unload phase 1.
-	// Anchor = worldToCell(drop) - footprint/2 ? For 1x1, anchor is cell containing drop.
-	// Use half bias: anchor = WorldToCell(drop) - floor(fx/2) ??? For simplicity, anchor = cell of drop.
-	cellX := world.WorldToCell(dropX)
-	cellZ := world.WorldToCell(dropZ)
-	ax := cellX - fx/2
-	az := cellZ - fz/2
-	anchor := Cell{X: ax, Z: az}
-	// Clamp? ValidateFootprint will reject OOB.
-	// Use profile.CanOccupy for terrain passability [04 §6.1][04 §8.2] and grid for overlap.
-	perCell := func(c Cell) bool {
-		if s.Grid != nil {
-			if occ, ok := s.Grid.OccupantAt(c); ok && occ != int(cargoHandle) {
-				return false
-			}
-		}
-		return true
-	}
-	aggregate := func() bool { return prof.IsPassableFootprint(terrain, anchor.X, anchor.Z) }
-	if !ValidateFootprint(anchor, int16(fx), int16(fz), perCell, aggregate) {
-		return false
-	}
-	// Also check footprint occupancy via grid.CanOccupy for speed
-	if s.Grid != nil && !s.Grid.CanOccupy(anchor, int16(fx), int16(fz), int(cargoHandle)) {
-		return false
-	}
-	// Placement validator mode 1 for unloading [04 §10.2] also checks flatness via slope? Profile.CanOccupy already does.
-	// For headless test, terrain flat check via slope < MaxSlope etc is enough.
-	return true
+	return fx, fz
 }
 
-// TryUnload attempts to detach cargo at drop point [04 §10.2] double validation.
+// ValidateUnloadSite is the unload executor's site test [04 §10.2] phases 1
+// and 2: "converts the drop point to a footprint anchor using the cargo's
+// packed footprint dimensions and validates the cargo definition through the
+// standard placement validator in mode 1".
 //
-// Validates placement twice (phase1 and phase2 revalidation) [04 §10.2].
-// If both pass, detaches cargo and sets its position to drop anchor center.
+// The anchor conversion is the footprint snap of [04 R-ORD-01 §1] —
+// `(pos − foot·2^19 + 2^19) >> 20`, an arithmetic shift — which is
+// `world.PlacementAnchor`, the same helper the ghost updater and the order
+// issuer use. It replaces a hand-rolled `cell − foot/2` that was neither the
+// snap nor a floor and that disagreed with the anchor every other placement
+// caller computes for the same point.
+//
+// Mode 1's contract, for a mobile definition (`bmcode == 0`), is
+// [08 R-AI-03 §4]: bounds first — `gx >= 0`, `gz >= 0`, `gx + footX <
+// mapCellWidth`, `gz + footZ < mapCellHeight`, off-map is false because only
+// mode 2 treats off-map as placeable — then the footprint blocker's per-cell
+// walk over blocking features, non-self occupants, the water band and the
+// slope tier. `world.Terrain.CheckPlacement` with `Mobile` set is that walk,
+// and it reads the mover-written half of the ground word through
+// `Terrain.Movers`, which this package installs [04 R-COLL-01 §2].
+//
+// Self identity: [08 R-AI-03 §4]'s mode-1 caller passes 0. The cargo is
+// attached in mode 0 while this runs and mode 0 writes no occupancy word
+// [04 R-COLL-01 §4], so passing the cargo's own identity cannot differ from
+// passing 0; it is passed so the second validation, which the phase-2 release
+// runs immediately before the detach, keeps the same answer.
+func (s *System) ValidateUnloadSite(w *units.World, cargoHandle pool.Handle, dropX, dropZ numeric.Fixed, terrain *world.Terrain) bool {
+	if s == nil || w == nil || cargoHandle == 0 {
+		return false
+	}
+	cargo := w.Unit(cargoHandle)
+	if cargo == nil || cargo.Def == nil {
+		return false
+	}
+	if terrain == nil {
+		terrain = s.Terrain
+	}
+	if terrain == nil {
+		return false
+	}
+	fx, fz := s.unloadFootprint(cargoHandle, cargo)
+	extent, err := world.NewFootprintExtent(fx, fz)
+	if err != nil {
+		return false
+	}
+	cellX, cellZ := world.PlacementAnchor(dropX, dropZ, fx, fz)
+	rect, err := world.NewFootprintRect(world.NewFootprintAnchor(cellX, cellZ), extent)
+	if err != nil {
+		return false
+	}
+	// The compiled movement profile is this package's resolved copy of the same
+	// class record the catalog-facing rule resolver reads, and it is the one the
+	// cargo's own mover commits against; taking the limits from it keeps the
+	// unload site and the commit validator agreeing [04 §6.1 R-DOC04-A]. The
+	// aircraft domain skips the terrain aggregates exactly as the shared
+	// resolver does [04 §6.4].
+	prof := s.ProfileFor(cargoHandle)
+	domain := content.MobilityGround
+	if cargo.Def.CanFly {
+		domain = content.MobilityAircraft
+	}
+	rules := world.PlacementRules{
+		Domain:          domain,
+		Waterline:       cargo.Def.Waterline,
+		MaxSlope:        int32(prof.MaxSlope),
+		MaxWaterSlope:   int32(prof.MaxWaterSlope),
+		MaxWaterDepth:   prof.MaxWaterDepth,
+		MinWaterDepth:   prof.MinWaterDepth,
+		Terrain:         true,
+		ProfileResolved: true,
+	}
+	_, err = terrain.CheckPlacement(world.PlacementQuery{
+		Rect:   rect,
+		Rules:  rules,
+		Self:   uint16(cargoHandle),
+		Mobile: true,
+	})
+	return err == nil
+}
+
+// TryUnload is the unload executor's phase-2 release [04 §10.2]:
+//
+//	success starts the deferred zero-argument `EndTransport` FIRST, then
+//	detaches the cargo (reserved no-piece index), then constructs the
+//	climb-away point command — release order is exactly callback → detach →
+//	climb-away.
+//
+// The climb-away marker is the caller's, so this helper owns the first two
+// steps and the released cargo's placement. The callback runs on the CARRIER's
+// script, like every transport callback [04 R-UNIT-06 §3], and the detach
+// passes request mode 1 — grounded — which is the mode [04 R-AIR-01 §9] names
+// for this release and which puts the cargo back into the ground occupancy
+// plane [04 R-COLL-01 §4].
+//
+// It still validates before releasing: the second of §10.2's two validator
+// calls is the caller's, and this repeats it so a direct caller cannot release
+// onto a site the validator refuses.
 func (s *System) TryUnload(w *units.World, carrierHandle, cargoHandle pool.Handle, dropX, dropZ numeric.Fixed) (bool, string) {
 	if s == nil || w == nil {
 		return false, "nil"
@@ -404,44 +509,35 @@ func (s *System) TryUnload(w *units.World, carrierHandle, cargoHandle pool.Handl
 	if cargo.Attachment.Carrier != carrierHandle {
 		return false, "not cargo of carrier"
 	}
-	// First validation
 	if !s.ValidateUnloadSite(w, cargoHandle, dropX, dropZ, s.Terrain) {
 		return false, UnableUnloadMessage // verbatim [04 §10.2]
 	}
-	// Revalidation second anchor recompute plus validator before release [04 §10.2]
-	// For headless, recompute same; if terrain hasn't changed, second passes same as first.
-	if !s.ValidateUnloadSite(w, cargoHandle, dropX, dropZ, s.Terrain) {
-		return false, UnableUnloadMessage
+	// Step 1 of the release order: the deferred zero-argument `EndTransport`,
+	// on the CARRIER's script, BEFORE the detach [04 §10.2][04 R-UNIT-06 §3].
+	if bridge := carrier.ScriptBridge(); bridge != nil {
+		bridge.Deferred("EndTransport", nil, nil)
 	}
-	// Success: start deferred zero-argument EndTransport FIRST, then detaches cargo (reserved no-piece index),
-	// then constructs climb-away point command at carrier current X/Z with altitude cruisealt [04 §10.2]
-	// Release order callback→detach→climb-away.
-	// Here implement detach.
-	DetachCargo(w, cargoHandle)
-	// Set cargo position to drop anchor center
-	fx, fz := int32(cargo.Def.FootprintX), int32(cargo.Def.FootprintZ)
-	prof := s.ProfileFor(cargoHandle)
-	if prof.FootPrintX > 0 {
-		fx = int32(prof.FootPrintX)
-	}
-	if prof.FootPrintZ > 0 {
-		fz = int32(prof.FootPrintZ)
-	}
-	if fx <= 0 {
-		fx = 1
-	}
-	if fz <= 0 {
-		fz = 1
-	}
-	cellX := world.WorldToCell(dropX)
-	cellZ := world.WorldToCell(dropZ)
-	ax := cellX - fx/2
-	az := cellZ - fz/2
-	// Place at cell center + half? Convert anchor to world.
-	worldX := world.CellToWorld(ax) + numeric.Fixed(int64(fx)*worldUnitsPerCell/2)
-	worldZ := world.CellToWorld(az) + numeric.Fixed(int64(fz)*worldUnitsPerCell/2)
+	// Step 2: the detach, with the reserved no-piece index and request mode 1.
+	DetachCargoMode(w, cargoHandle, 1)
+	// The released cargo stands on the footprint the validator just accepted:
+	// the same anchor snap of [04 R-ORD-01 §1], re-centred through its exact
+	// reverse `pos = (foot + 2·cell) · 2^19`.
+	fx, fz := s.unloadFootprint(cargoHandle, cargo)
+	cellX, cellZ := world.PlacementAnchor(dropX, dropZ, fx, fz)
+	worldX, worldZ := world.PlacementCenter(cellX, cellZ, fx, fz)
 	cargo.X = worldX
 	cargo.Z = worldZ
+	// TODO(question): §10.2 does not state the released cargo's Y. What it
+	// states is the LOWERING marker's altitude — the carrier is commanded to
+	// `max(seaLevel, terrainHeightAtDropPoint) + cargoModelHeight`, "exactly
+	// the height at which cargo suspended below the carrier touches the ground"
+	// [04 R-AIR-01 §9] — from which the cargo's own resting Y is a consequence
+	// of the carried-motion hang geometry rather than an assignment the
+	// executor makes. Placeholder: settle the cargo on the four-corner terrain
+	// height at its new centre, which is where that lowering leaves it and what
+	// makes it stand rather than hover. What would settle it (RWU-19-6): the
+	// release path's own Y write, if it makes one, and the model-bottom offset
+	// it would apply.
 	if s.Terrain != nil {
 		cargo.Y = s.Terrain.HeightAt(cargo.X, cargo.Z)
 		// Floater cargo over water gets floater clamp already handled elsewhere, but after unload ensure correct Y.
@@ -461,10 +557,19 @@ func (s *System) TryUnload(w *units.World, carrierHandle, cargoHandle pool.Handl
 		st.X = int32(cargo.X.Raw())
 		st.Z = int32(cargo.Z.Raw())
 	}
+	// The request mode the detach wrote is the committed pair; this package's
+	// per-unit motion records mirror it [04 §9.1].
+	if fl, ok := s.Flights[cargoHandle]; ok {
+		fl.X = int32(cargo.X.Raw())
+		fl.Y = int32(cargo.Y.Raw())
+		fl.Z = int32(cargo.Z.Raw())
+		fl.Mode = cargo.Move.Mode & 0x3
+	}
 	if coll, ok := s.Collisions[cargoHandle]; ok {
 		coll.X = int32(cargo.X.Raw())
 		coll.Z = int32(cargo.Z.Raw())
 		coll.Y = int32(cargo.Y.Raw())
+		coll.Mode = cargo.Move.Mode & 0x3
 		newAnchor := coll.ProposedAnchor(coll.Mode)
 		coll.CachedAnchor = newAnchor
 		coll.OldAnchor = newAnchor
@@ -472,7 +577,6 @@ func (s *System) TryUnload(w *units.World, carrierHandle, cargoHandle pool.Handl
 		// plane the released mover's mode names [04 R-COLL-01 §4].
 		s.syncMoverStamp(cargo)
 	}
-	// Trigger cargo's own movement reset? Keep mode active.
 	return true, ""
 }
 

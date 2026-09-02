@@ -1865,8 +1865,17 @@ func (s *System) bindArrivalHandle(u *units.Unit, head *orders.Node) {
 	// a blocked mover clamped along the edge — never retired its record. The
 	// column of products behind a factory is a separate, retail-faithful shape
 	// [04 R-EGRESS-01]; this is the arrival predicate only.
+	//
+	// The rectangle tested here must be the SAME one the search is aimed at.
+	// ParkGoalRect reports the handler's `(origin, 8s × 6s)` arguments; the goal
+	// class grows them by this mover's own footprint [04 R-PATH-01 §12], and
+	// goalForOrderWithFootprint builds the search goal that way. Testing arrival
+	// against the bare argument rectangle instead leaves a product that reached
+	// the grown border unable to raise `0x20`, so its `Park` record re-arms its
+	// thirty-tick deadline for the rest of the battle.
 	if minX, minZ, maxX, maxZ, ok := orders.ParkGoalRect(head); ok {
-		ah.border = &path.Rect{Min: path.Cell{X: minX, Z: minZ}, Max: path.Cell{X: maxX, Z: maxZ}}
+		grown := grownGoalRect(minX, minZ, maxX-minX+1, maxZ-minZ+1, int32(footX), int32(footZ))
+		ah.border = &grown
 	}
 	// The work rows' payload is the object the search is aimed at, built once
 	// here so steering target, search goal and arrival test can never disagree

@@ -24,7 +24,29 @@ import (
 // relationships, not a census: the builder must close most of the gap, the
 // feature must leave the grid, and the pools must reach the builder's
 // production accumulators [04 R-ORD-01 §5][05 R-WORK-01 §5].
+//
+// Extended 2026-09-01 (WU-19-24) to a BLOCKING one-cell feature — every stock
+// tree and rock. That case is the one RWU-19-12 was filed for: with the bare
+// footprint as the goal rectangle its only admissible cell was the feature's
+// own, which the searched layer holds as blocked, so the request published an
+// empty route and the row abandoned on `0x40`. [04 R-PATH-01 §12] establishes
+// that the goal class grows the rectangle by the reclaimer's own footprint, so
+// a one-cell feature and a one-cell commander give an eight-cell ring of
+// approach anchors and the feature's cell is interior. A blocking subtest that
+// walks and pays is the proof; before the growth it could not pass.
 func TestReclaimBeyondNanolatheRangeWalksAndPays(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		blocking bool
+	}{
+		{"non-blocking", false},
+		{"blocking one cell", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) { reclaimBeyondRangeWalksAndPays(t, tc.blocking) })
+	}
+}
+
+func reclaimBeyondRangeWalksAndPays(t *testing.T, blocking bool) {
 	root := testsupport.RetailRoot(t)
 	fs := vfs.New()
 	if err := fs.MountGameDirectory(root); err != nil {
@@ -68,13 +90,9 @@ func TestReclaimBeyondNanolatheRangeWalksAndPays(t *testing.T) {
 	// walk to inside the tick budget. Instances() is the feature service's own
 	// stable anchor order, so the pick is deterministic (I1).
 	//
-	// NON-BLOCKING only, and deliberately: a blocking one-cell feature makes
-	// the row's footprint rectangle a goal whose single admissible cell the
-	// ground search cannot enter, so the request publishes an empty route and
-	// the row abandons on `0x40` [04 R-PATH-01 §9]. That is an open question
-	// about the searched passability layer, recorded at reclaimHandler's phase
-	// 0; it is not this row's to work around, and pinning it here would lock a
-	// behavior nobody has traced.
+	// The blocking leg additionally requires a ONE-CELL footprint: that is the
+	// shape whose bare-footprint rectangle had a single admissible cell, and it
+	// is the shape every stock tree and rock has [04 R-PATH-01 §12].
 	reach := int64(builder.Def.BuildDistance)
 	var (
 		anchorX, anchorZ     int
@@ -84,7 +102,10 @@ func TestReclaimBeyondNanolatheRangeWalksAndPays(t *testing.T) {
 	)
 	found := false
 	for _, inst := range sess.Features.Instances() {
-		if inst == nil || inst.Def == nil || !inst.Def.Reclaimable || inst.Def.Blocking {
+		if inst == nil || inst.Def == nil || !inst.Def.Reclaimable || inst.Def.Blocking != blocking {
+			continue
+		}
+		if blocking && (inst.Def.FootprintX != 1 || inst.Def.FootprintZ != 1) {
 			continue
 		}
 		dx := int64(builder.X-inst.X) >> 16
@@ -106,7 +127,7 @@ func TestReclaimBeyondNanolatheRangeWalksAndPays(t *testing.T) {
 		break
 	}
 	if !found {
-		t.Skip("no reclaimable feature stands between nanolathe range and 900 world units of the commander")
+		t.Skipf("no reclaimable feature with blocking=%v stands between nanolathe range and 900 world units of the commander", blocking)
 	}
 	if poolMetal == 0 && poolEnerg == 0 {
 		t.Skip("the chosen feature authors no pools, so the credit is unobservable")

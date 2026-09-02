@@ -219,6 +219,102 @@ func TestDeathExplosionDamagesNeighbor(t *testing.T) {
 	}
 }
 
+// TestDeathExplosionCreditsNoOwner locks [06 R-WPN-02 §5] and [06 R-DMG-01 §9]
+// at the session's death-explosion call site: a unit killed outright by
+// another unit's death explosion must not credit the dying unit's owner (or
+// any owner) with a kill, because the record carries no shooter. Before this
+// fix, session.go passed the dying unit's own still-resolvable handle as
+// ExplodeWeaponAt's shooter (Destroy sets Dying but Alive is not cleared
+// until FinalizeDeath, which runs later), so the neighbor's provenance was
+// stamped with the dying unit's owner and its death credited that owner a
+// kill it never earned.
+func TestDeathExplosionCreditsNoOwner(t *testing.T) {
+	cat := strictMinimalCatalog()
+	wdef := &content.WeaponDef{ID: 99, DamageDefault: 5000, AreaOfEffect: 64, EdgeEffectiveness: 0}
+	wdef.CanonicalKey = content.CanonicalKey("explodegun")
+	cat.Weapons = map[string]*content.WeaponDef{"explodegun": wdef}
+	cat.RebuildWeaponIndex()
+
+	terrain := strictMinimalTerrain()
+	terrain.CellW = 32
+	terrain.CellH = 32
+
+	explDef := cat.Units["armcom"]
+	explDef.Corpse = ""
+	explDef.MaxDamage = 200
+	explDef.ExplodeAs = "explodegun"
+	explDef.ExplodeAsDef = wdef
+	explDef.CanMove = true
+
+	nbrDef := cat.Units["corcom"]
+	nbrDef.MaxDamage = 200
+	nbrDef.CanMove = true
+	nbrDef.Corpse = ""
+
+	m := strictSyntheticMission()
+	s := &Session{Catalog: cat, World: terrain, Mission: m}
+	w, _ := newSlicedWorld(cat)
+	s.Units = w
+	s.Econ = strictEconomyForTest()
+	for i := 0; i < 2; i++ {
+		p := &s.Econ.Players[i]
+		p.Exists = true
+		p.ControllerState = uint8(i + 1)
+		p.IsObserver = false
+		p.SetSettlementStatusPair(1, 0)
+	}
+	s.Econ.SeedDeadlines(0)
+	s.InitBattleWindForSession()
+	if err := createAndBindServicesForTest(t, s); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	s.RegisterAll()
+	s.State = StateBattle
+	if s.Clock == nil {
+		s.Clock = &clock.State{Requested: 10, Active: 10}
+	}
+	s.Clock.GlobalTick = 10
+
+	// hExpl (owner 0) dies and explodes; hNbr (owner 1) sits well within the
+	// blast and takes lethal damage from it, so the credit path actually runs.
+	hExpl, _ := s.Units.Create(explDef, 0, world.CellToWorld(10), 0, world.CellToWorld(10))
+	uExpl := s.Units.Unit(hExpl)
+	uExpl.Health = -20
+	uExpl.MaxHealth = 200
+	uExpl.PriorSample = 80
+	uExpl.Remaining = 0
+	uExpl.SetScript(cob.NewVM(makeKilledProg(1)))
+
+	hNbr, _ := s.Units.Create(nbrDef, 1, world.CellToWorld(11), 0, world.CellToWorld(10))
+	uNbr := s.Units.Unit(hNbr)
+	uNbr.Health = 1
+	uNbr.MaxHealth = 200
+	uNbr.PriorSample = 0
+	uNbr.SetScript(cob.NewVM(&cob.Program{Code: []uint32{0x10065000}, Scripts: map[string]int{}, Pieces: []string{"base"}}))
+
+	killsBefore0 := s.Econ.Players[0].Kills
+	killsBefore1 := s.Econ.Players[1].Kills
+
+	s.Units.Destroy(hExpl, units.DeathKilled)
+	s.Units.FinalizeDeath(hExpl, 10)
+
+	if uNbr.Health > 0 && !uNbr.Dying {
+		t.Fatalf("neighbor should take lethal damage from the death explosion, health=%d dying=%v", uNbr.Health, uNbr.Dying)
+	}
+	// Drain the neighbor's own death finalization, exactly as the session's
+	// phase-2 sweep would, so recordFinalizedDeathStatistics runs for it too.
+	if s.Units.NeedsDeathFinalization(hNbr) {
+		s.Units.FinalizeDeath(hNbr, 10)
+	}
+
+	if got := s.Econ.Players[0].Kills; got != killsBefore0 {
+		t.Fatalf("death explosion must not credit the dying unit's own owner (side 10, not owner 0) [06 R-WPN-02 §5][06 R-DMG-01 §9]: owner 0 kills %d -> %d", killsBefore0, got)
+	}
+	if got := s.Econ.Players[1].Kills; got != killsBefore1 {
+		t.Fatalf("death explosion must not credit the victim's own owner either: owner 1 kills %d -> %d", killsBefore1, got)
+	}
+}
+
 func TestKilledDedupAcrossHandleReuse(t *testing.T) {
 	cat := strictMinimalCatalog()
 	terrain := strictMinimalTerrain()

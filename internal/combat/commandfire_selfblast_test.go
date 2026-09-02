@@ -124,6 +124,31 @@ func TestCommandFireUnoccupiedRowDoesNotAutoAcquire(t *testing.T) {
 	}
 }
 
+// TestDroppedWeaponSlotRefusedByAutonomousScan locks [06 §3.2]'s "its weapon
+// is not `dropped`" clause: a dropped weapon (one that falls under gravity
+// rather than firing outward, e.g. a strafing bomb) never acquires
+// autonomously, on any controller — the same unconditional refusal on both
+// the human and computer rows that `commandfire` gives only on a human row.
+func TestDroppedWeaponSlotRefusedByAutonomousScan(t *testing.T) {
+	dropped := &content.WeaponDef{Dropped: true}
+	if AutonomousScanAdmitsSlot(dropped, ControlByteHuman) {
+		t.Fatalf("a dropped weapon must not acquire autonomously for a human controller [06 §3.2]")
+	}
+	if AutonomousScanAdmitsSlot(dropped, ControlByteComputer) {
+		t.Fatalf("a dropped weapon must not acquire autonomously for a computer controller either [06 §3.2]")
+	}
+	// A dropped, command-fire weapon is refused by the dropped clause alone,
+	// independent of the command-fire clause below it [06 §3.2].
+	droppedCommandFire := &content.WeaponDef{Dropped: true, CommandFire: true}
+	if AutonomousScanAdmitsSlot(droppedCommandFire, ControlByteComputer) {
+		t.Fatalf("dropped must refuse acquisition even when the command-fire clause would otherwise admit it [06 §3.2]")
+	}
+	// An ordinary (non-dropped, non-commandfire) weapon is unaffected.
+	if !AutonomousScanAdmitsSlot(&content.WeaponDef{}, ControlByteHuman) {
+		t.Fatalf("an ordinary weapon must still acquire for every controller [06 §3.2]")
+	}
+}
+
 // TestManualTargetStillFiresACommandFireWeapon is the other half of the same
 // contract. The gate suppresses ACQUISITION only: a target installed by the
 // manual path — `AttackSpecial` resolves command code 3, sets p1 = 2, and the

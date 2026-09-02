@@ -405,6 +405,45 @@ func ValidatePacketKind(kind uint8) bool {
 	return IsDamagePacketKind(kind) // [P1-07 §2.6] 1,2,10,11
 }
 
+// The damage-intake reaction routine [06 §9.1] step 4 "reaction/wake/retarget"
+// — closed at [06 R-WPN-04 §2] — is Established but has NO implementation
+// anywhere in this package or its neighbors. It runs for every accepted
+// non-heal packet whose kind is not 11, in four parts: (1) an observer notice
+// walked off the victim's order-task list; (2) attacker validation (a freed
+// slot counts as no attacker); (3) the construction throttle and the
+// retaliation offer, cited as exactly [08 R-AI-01 §11]; (4) the "Under Attack"
+// interface notice.
+//
+// TODO(question): part 3's retaliation offer — including its `commandfire`
+// admission, the finding this unit was dispatched to close — cannot be added
+// from this file alone. [08 R-AI-01 §11] states it needs, all at the same
+// reaction site: the victim's live weapon Slots and standing-fire field
+// (content.UnitDef.StandingFireOrder / the runtime StandingFireShift bits of
+// [internal/units/units.go], neither read anywhere in internal/combat today);
+// the §3.1 acquisition physical gate this package already exposes
+// (IsValidAcquisitionCandidate, AutonomousScanAdmitsSlot's siblings); and, for
+// the "no current order, or an interruptible one" branch, an order-issuing
+// seam into internal/orders, which internal/combat does not import. The
+// construction throttle half of the same reaction site already exists, but
+// misplaced at the death-finalization boundary in internal/session/session.go
+// (see the comment beside its `Units.OnDeath` throttle call, "Residual:
+// retail arms this throttle from damage to a CanCapture unit, not death
+// finalization; moving the hook awaits the later combat-reaction unit that
+// owns that damage boundary [08 R-AI-01 §11]") — this unit is that later
+// combat-reaction unit, and moving the throttle is part of the same
+// undone seam.
+//
+// None of this can be wired from internal/combat/damage.go (or
+// internal/combat/target.go) without either reaching into internal/session
+// and internal/orders from internal/combat (a cross-package refactor no
+// single-unit dispatch should make unilaterally) or inventing a call site
+// that does not exist yet. Per AGENTS.md's dispatch discipline this is left
+// as a named gap for a follow-up unit scoped to internal/combat/service.go
+// (the packet dispatcher that would host the reaction call) together with
+// internal/session/session.go (to relocate the throttle) and, for the
+// auto-engage order branch, internal/orders. Decider: a work unit whose
+// Public API names the reaction site's seam into internal/orders.
+
 // ApplyHealing performs the early healing path [06 §9.1]: adds packet's
 // unsigned 16-bit amount to signed current health in 32-bit arithmetic,
 // compares against maximum health as unsigned, clamps when required. Healing

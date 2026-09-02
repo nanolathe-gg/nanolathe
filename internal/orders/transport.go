@@ -1,40 +1,70 @@
-// Package orders — transport order handlers [04 §10.2] C31 [PLAN_07].
+// Package orders — the transport order handlers [04 §10.2][04 R-AIR-01 §9].
 //
-// Wires the EXISTING transport executors (helper-only in internal/movement)
-// into their order descriptors so Load/Unload orders drive them end-to-end.
+// There are two load executors and two unload executors, split by carrier
+// locomotion rather than by order family name [04 R-AIR-01 §9]:
 //
-// Mapping per [04 §10.2][04 §3.1][04 §3.4]:
+//	VTOL_Pickup / VTOL_Unload      the air pair of [04 §10.2]. Every command
+//	                               their phase tables queue is an air path
+//	                               marker of [04 R-AIR-01 §4], which is
+//	                               internal/movement's family, so the legs live
+//	                               there and reach the pump through the runner
+//	                               seam of vtolair.go — the same arrangement
+//	                               the seven other pump-driven air executors
+//	                               already use.
+//	Ground_Pickup / Ground_Unload  a separate machine that never moves the
+//	                               cargo itself: it fires a COB callback and
+//	                               waits for the SCRIPT to perform the
+//	                               attachment or the drop through the COB
+//	                               transport opcodes [04 R-COB-03 §5]. Its
+//	                               whole body is here, because it installs
+//	                               ground goal handles rather than air markers.
 //
-//	Ground_Pickup / VTOL_Pickup  -> load executor (phase table 0..5)
-//	Ground_Unload / VTOL_Unload  -> unload executor (phase table 0..3, double validation)
-//	VTOL_Landing                 -> landing-pad executor (QueryLandingPad 0..3)
-//	BeCarried                    -> cargo passive state while carried
+//	BeCarried                      the cargo's own two-phase carried wait
+//	                               [04 R-ORD-01 §2].
 //
-// Anything not established (exact pickup approach radius, modelTop/modelBottom
-// offsets, cruise altitude queuing, status bits, event codes) stays
-// TODO(question) with placeholder marked. No new RNG draws beyond what
-// executors and pump codes already specify [I4].
+// The two families are selected by order identity at command resolution and
+// never both run for one record [04 R-AIR-01 §9].
 package orders
 
 import (
-	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
-// Transport verbatim diagnostics [04 §10.2] C31 [GAP T16].
+// Verbatim retail diagnostics [04 §10.2][04 R-AIR-01 §9]. Only the ground
+// pair's are here; the air pair's belong to its legs. The two size-gate
+// messages differ by exactly one word and that difference is the contract:
+// `too large` for the ground carrier, `too heavy` for the air one.
 const (
-	transportFailedMessage = "Transport mission failed"       // gates 1–3 share this terminal with code 8 [04 §10.2]
-	transportHeavyMessage  = "Unit is too heavy to transport" // size gate at phase 0 code 8 verbatim [04 §10.2]
-	unableUnloadMessage    = "Unable to unload unit"          // unload placement failure code 9 [04 §10.2]
+	groundTransportFailedMessage = "Transport mission failed"
+	groundTransportLargeMessage  = "Unit is too large to transport"
+	groundUnloadSuboptimalText   = "Unloading process is proceeding non-optimally"
 )
 
-// Sentinel for attach piece -1 (root fallback) stored in Param1 [04 §5.3][04 §10.2].
-// Param1 is uint32; 0xFFFFFFFF represents -1.
-const attachPieceRootSentinel = 0xFFFFFFFF
+// Status kinds this family raises, from [04 R-ORD-01 §1]'s table. Kinds 12
+// (`load`) and 13 (`unload`) are the two notification event codes the ground
+// pair emits — [04 R-AIR-01 §9] phase 2 of each — and both carry no default
+// text in that table, which is what "no text payload" means at the emitter.
+const (
+	statusLoadEvent   uint8 = 12
+	statusUnloadEvent uint8 = 13
+)
 
-func isVTOLPickup(name string) bool { return name == "VTOL_Pickup" }
-func isVTOLUnload(name string) bool { return name == "VTOL_Unload" }
+// transportEntryInterrupt is the satisfied bit `0x8` both ground executors
+// test at entry [04 R-AIR-01 §9]. It is `pendTargetRemoved` of
+// [04 R-ORD-01 §0], already named by combat.go.
+const transportEntryInterrupt = pendTargetRemoved
+
+// groundTransportAttempts is the attempt counter's terminal value: phase 4 of
+// `Ground_Pickup` and phase 2 of `Ground_Unload` both give up at 3
+// [04 R-AIR-01 §9].
+const groundTransportAttempts = 3
+
+// groundTransportApproachGate is the `0xE8` both ground executors write when
+// they install their approach goal handle [04 R-AIR-01 §9]: the three movement
+// outcomes plus the target-removed interrupt.
+const groundTransportApproachGate uint32 = 0xE8
 
 // lookupTarget resolves target handle via per-queue Lookup [P0-I16].
 func lookupTarget(carrier *units.Unit, target pool.Handle) *units.Unit {
@@ -49,430 +79,322 @@ func lookupTarget(carrier *units.Unit, target pool.Handle) *units.Unit {
 	return nil
 }
 
-// boardingRange returns the effective boarding range for carrier [04 §10.2].
-// First enabled weapon slot's range scanned via weapon-slot enabled flag;
-// shipped unarmed fallback is weapon record 0 (NOWEAPON, Range 16) [04 §10.2].
-// TODO(question): exact weapon-slot enabled flag not represented in content.UnitDef;
-// using first active Weapon1Def/2Def/3Def as proxy [02 "Unit record"][06 §1.2];
-// the record-0 inactive sentinel a missed link resolves to is not a weapon
-// [02 §5 R-CONTENT-02].
-func boardingRange(carrier *units.Unit) int32 {
+// transportFootprintX is the target's cached footprint-X word both size gates
+// read, compared SIGNED against the carrier definition's `transportsize` byte
+// zero-extended. [04 R-AIR-01 §9] re-verified both operands and recorded that
+// the earlier "a byte of the target's definition against a word of the
+// carrier's runtime state" reading is inverted.
+func transportFootprintX(target *units.Unit) int16 {
+	if target == nil || target.Def == nil {
+		return 0
+	}
+	return int16(target.Def.FootprintX)
+}
+
+// transportSizeByte is the carrier side of that comparison.
+func transportSizeByte(carrier *units.Unit) int32 {
 	if carrier == nil || carrier.Def == nil {
-		return 16
+		return 0
 	}
-	if !content.IsWeaponInactive(carrier.Def.Weapon1Def) {
-		return carrier.Def.Weapon1Def.Range
-	}
-	if !content.IsWeaponInactive(carrier.Def.Weapon2Def) {
-		return carrier.Def.Weapon2Def.Range
-	}
-	if !content.IsWeaponInactive(carrier.Def.Weapon3Def) {
-		return carrier.Def.Weapon3Def.Range
-	}
-	// Fallback via installed slots (units.Slot.Weapon) when Def.Weapon*Def not wired.
-	for i := 0; i < 3; i++ {
-		if sl := carrier.SlotAt(i); sl != nil && sl.Weapon != nil {
-			return sl.Weapon.Range
-		}
-	}
-	return 16 // NOWEAPON fallback [04 §10.2]
+	return int32(uint8(carrier.Def.TransportSize))
 }
 
-// checkPickupEntryGates implements the four re-checks run at entry to every load
-// phase [04 §10.2] C31. Returns true with result 8 and appropriate diagnostic
-// when a gate fails; gate 4 returns code 8 with NO message [04 §10.2].
-// Order of checks is retail order [04 §10.2].
-func checkPickupEntryGates(carrier *units.Unit, n *Node) (failed bool, code Code, msg string) {
-	if n == nil || n.Target == 0 {
-		return true, 8, transportFailedMessage // gate 1: target non-null [04 §10.2]
-	}
-	// Gate 2: executor flags word must hold none of mask 0x10048 [04 §10.2] C31.
-	// TODO(question): exact offset of this flags word not established; word is on the executor/unit state.
-	// Placeholder: treat Node.Flags bits 0x10048 as proxy; assume 0 for tests.
-	if n.Flags&0x10048 != 0 {
-		return true, 8, transportFailedMessage
-	}
-	// Gate 3: target Y + modelTop SIGNED greater than seaLevel<<16 [04 §10.2] C31.
-	// TODO(question): definition modelTop field not in content.UnitDef; placeholder uses target.Y alone.
-	// SeaLevel placeholder 0 when no terrain; assume pass for ground tests.
-	// For now, if target lookup succeeds and target.Y is very low (submerged), we would fail,
-	// but without seaLevel we assume pass.
-	// Gate 4: AIR carrier cargo list must be EMPTY; ground carriers don't apply [04 §10.2] C31.
-	if carrier != nil && carrier.Def != nil && carrier.Def.CanFly {
-		if len(carrier.Attachment.Cargo) > 0 {
-			// Count live cargo where parent == carrier
-			cnt := 0
-			for _, h := range carrier.Attachment.Cargo {
-				if tgt := lookupTarget(carrier, h); tgt != nil && tgt.Attachment.Carrier == carrier.Handle {
-					cnt++
-				} else if h != 0 {
-					// Fallback count raw entry when lookup fails but handle non-zero
-					cnt++
-				}
-			}
-			if cnt > 0 {
-				return true, 8, "" // gate 4 returns code 8 with NO message [04 §10.2]
-			}
-		}
-	}
-	return false, 0, ""
+// ---------------------------------------------------------------------------
+// VTOL_Pickup, VTOL_Unload [04 §10.2]
+// ---------------------------------------------------------------------------
+
+// airTransportHandler routes the air pair to its legs. Both executors' whole
+// bodies — the four entry gates, the phase tables, the markers, the callbacks
+// and the two event codes — are `legVTOLPickup` and `legVTOLUnload` in
+// internal/movement, for the reason the package comment gives.
+//
+// This replaces a pair of handlers that ran the phase tables here with every
+// side effect stubbed: each phase advanced and left a `TODO(question)` reading
+// "not simulated beyond phase advance", so an ordered Atlas attached its cargo
+// on the spot without ever flying to it, and an unload dropped a unit wherever
+// the record's goal said with no validator and no descent. What made that
+// unfixable in place is the air marker family: internal/orders cannot import
+// internal/movement, and every command §10.2's tables queue is one of those
+// markers.
+func airTransportHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
+	return airHandOff(u, n, satisfied, tick)
 }
 
-// pickupHandler implements Ground_Pickup / VTOL_Pickup per [04 §10.2] load phase table.
-// It advances phases 0..5 and performs attachment at phase 4.
-// All fixed-point world state remains 16.16 [I2]; no float64; no map iteration [I1].
-func pickupHandler(carrier *units.Unit, n *Node, satisfied uint32, _ uint32) Code {
-	_ = satisfied
-	if carrier == nil || n == nil {
-		return 8
-	}
-	if failed, code, _ := checkPickupEntryGates(carrier, n); failed {
-		return code
-	}
-	name := DescriptorFor(n.ID).Name
-	isVTOL := isVTOLPickup(name)
+// ---------------------------------------------------------------------------
+// Ground_Pickup [04 R-AIR-01 §9]
+// ---------------------------------------------------------------------------
 
+// groundPickupHandler is the ground carrier's load executor. It never moves
+// the cargo: phase 2 fires `TransportPickup` on the CARRIER's script and phase
+// 4 waits for that script to perform the attachment through the COB transport
+// opcodes [04 R-COB-03 §5].
+//
+//	Entry: a null target, or a satisfied bit 0x8, emits status cue slot 7
+//	`Transport mission failed` and returns 8; a phase above 5 returns 7.
+//
+//	0     a live mover (else 7) and the carrier definition's `canload` bit
+//	      (else 7); the size gate, whose failure is slot 7
+//	      `Unit is too large to transport` and 8; otherwise the caption
+//	      `Loading unit` (slot 5).                                        -> 1
+//	1, 3  the shared short-move helper.                              -> 1 or 2
+//	2     asynchronous one-argument `TransportPickup` on the carrier's script
+//	      with cell 0 = the cargo's stable unit identity; notification event
+//	      12; increment the attempt counter; deadline tick + 15.          -> 1
+//	4     the target now has a carrier -> 5; the attempt counter has reached 3
+//	      -> 9; else a ground goal handle at the target's current position with
+//	      radius parameter 0, gate = 0xE8.                          -> 1, 5 or 9
+//	5     clear the goal payload.                                          -> 0
+func groundPickupHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
+	target := lookupTarget(u, n.Target)
+	if n.Target == 0 || target == nil || satisfied&transportEntryInterrupt != 0 {
+		workStatus(u, statusCant, groundTransportFailedMessage)
+		return 8 // *abandon* [04 R-AIR-01 §9]
+	}
 	switch n.Phase {
 	case 0:
-		// Phase 0: require live carrier mover and canfly else 7 [04 §10.2].
-		// TODO(question): live mover check placeholder; assume CanMove/CanFly/CanLoad indicates live mover.
-		hasLiveMover := false
-		if carrier.Def != nil {
-			if carrier.Def.CanMove || carrier.Def.CanFly || carrier.Def.CanLoad {
-				hasLiveMover = true
-			}
+		if u.Def == nil || !u.Def.CanMove || !u.Def.CanLoad {
+			return 7 // *cancel-all*: no live mover, or no `canload` [04 R-AIR-01 §9]
 		}
-		// Fallback: if Move.Mode !=0, consider live.
-		if !hasLiveMover && carrier.Move.Mode != 0 {
-			hasLiveMover = true
+		if int32(transportFootprintX(target)) > transportSizeByte(u) {
+			workStatus(u, statusCant, groundTransportLargeMessage)
+			return 8
 		}
-		if !hasLiveMover {
-			return 7
-		}
-		if isVTOL {
-			if carrier.Def == nil || !carrier.Def.CanFly {
-				return 7
-			}
-		}
-		// Size gate: target cached FootPrintX WORD signed must be <= carrier transportsize BYTE zero-extended [04 §10.2].
-		target := lookupTarget(carrier, n.Target)
-		if target != nil && target.Def != nil && carrier.Def != nil {
-			foot := int16(target.Def.FootprintX) // TODO(question): using Def.FootprintX vs movement class FootPrintX WORD
-			if int32(foot) > int32(carrier.Def.TransportSize) {
-				// Log verbatim diagnostic via queue diagnostics? Handler return code is 8; message is emitted by caller via diagnostics.
-				// For now, record diagnostic on queue if available.
-				if q := QueueForUnit(carrier); q != nil {
-					q.recordDiagnostic(transportHeavyMessage)
-				}
-				return 8 // Unit is too heavy to transport verbatim [04 §10.2]
-			}
-		}
-		// TODO(question): point-command queuing at carrier current X/Z with altitude cruisealt/2 and no radius, status bits, Activate, mover mode etc not simulated beyond phase advance [04 §10.2].
+		workStatus(u, statusOK, "Loading unit")
 		return 1
-	case 1:
-		// Phase 1: queue follow command toward target with full cruisealt altitude offset and horizontal arrival radius 0x30 [04 §10.2].
-		// TODO(question): follow-command altitude cruisealt and radius 0x30 queuing not simulated beyond phase advance [04 §10.2].
-		// TODO(question): exact pickup approach radius remains TODO(question); using BoardingRange placeholder for admission but 0x30 for phase1 radius [04 §10.2] C31.
-		_ = boardingRange(carrier) // ensure no unused, but approach radius is fixed 0x30 [04 §10.2]
-		return 1
+	case 1, 3:
+		return groundTransportShortMove(n)
 	case 2:
-		// Phase 2: status Preparing for transport; pre-seed first QueryTransport output to -1 and run synchronous four-output query [04 §5.3][04 §10.2].
-		// Observed seed [-1,0,0,0]; missing script leaves -1 root-piece fallback [04 §10.2]; retain output 0 as attach piece; status =0x100E8 [04 §10.2].
-		if n.Param1 == 0 && n.Param2 == 0 && n.Param3 == 0 {
-			n.Param1 = attachPieceRootSentinel // root fallback [04 §5.3][04 §10.2]
+		// Arity 1, cell 0 = the cargo's stable unit identity (its pool slot
+		// id), fillers 0, wake flag set; the engine emits notification event 12
+		// right after [04 R-UNIT-06 §3].
+		if bridge := callbackBridgeFor(u); bridge != nil {
+			bridge.DeferredWake("TransportPickup", []int32{int32(n.Target)}, nil)
 		}
-		if n.Param1 == 0 {
-			n.Param1 = attachPieceRootSentinel
-		}
-		return 1
-	case 3:
-		// Phase 3: start asynchronous one-argument BeginTransport with exact 32-bit target-definition model-top value mirrored through network forwarder [04 §10.2];
-		// fetch selected piece world transform; construct cargo follow order with altitude offset = NEGATED integer part of that piece's world Y [04 §10.2];
-		// status =0x100EA [04 §10.2].
-		// TODO(question): BeginTransport async callback and cargo follow-order hang height (negated piece Y) are established but piece world transform fetch and network mirroring not simulated [04 §10.2].
+		workStatus(u, statusLoadEvent, "")
+		n.Param2++
+		n.Deadline = int32(tick + 15)
+		n.DynamicGate |= gateDeadline // the deadline setter's bit [04 R-ORD-01 §1]
 		return 1
 	case 4:
-		// Phase 4 has two edges [04 §10.2]:
-		// Interrupted: flags &0x42 present => start deferred zero-argument EndTransport and return WITHOUT attaching => code 8 [04 §10.2].
-		// TODO(question): exact flags word offset not established; using Node.Flags placeholder for interrupt check.
-		if n.Flags&0x42 != 0 {
-			return 8
-		}
-		// Success: attach target to carrier on queried piece; emit event code 12 [GAP T16][04 §10.2]; queue climb-away point command at carrier current X/Z with altitude cruisealt, no radius; status |=0xE0 [04 §10.2].
-		target := lookupTarget(carrier, n.Target)
-		if target == nil {
-			return 8
-		}
 		if target.Attachment.Carrier != 0 {
-			return 8 // already carried
+			return 5 // the script did the attach [04 R-AIR-01 §9]
 		}
-		piece := int32(-1)
-		if n.Param1 != attachPieceRootSentinel {
-			// Param1 holds piece index; decode sentinel -1 vs valid
-			if n.Param1 == 0xFFFFFFFF {
-				piece = -1
-			} else {
-				piece = int32(n.Param1)
-			}
+		if n.Param2 >= groundTransportAttempts {
+			return 9 // *retry* [04 R-AIR-01 §9]
 		}
-		// Perform attachment via direct field mutation (avoids import cycle with movement).
-		target.Attachment.Carrier = carrier.Handle
-		target.Attachment.AttachPiece = int(piece)
-		// Append to carrier cargo if not already
-		found := false
-		for _, h := range carrier.Attachment.Cargo {
-			if h == n.Target {
-				found = true
-				break
-			}
-		}
-		if !found {
-			carrier.Attachment.Cargo = append(carrier.Attachment.Cargo, n.Target)
-		}
-		// Also push BeCarried onto cargo's queue to reflect "Being transported" state [04 §3.1] BeCarried.
-		if cargoQ := QueueForUnit(target); cargoQ != nil {
-			beID := Lookup("BeCarried")
-			if beID != 0 {
-				// Avoid duplicate BeCarried
-				hasBe := false
-				for _, nn := range cargoQ.Primary() {
-					if nn.ID == beID {
-						hasBe = true
-						break
-					}
-				}
-				if !hasBe {
-					cargoQ.Push(beID, Node{Target: carrier.Handle})
-					// BeCarried has gate 0x24; ensure it is dispatchable (clear gate for phase 0)
-					if head := cargoQ.Head(); head != nil && head.ID == beID && head.Phase == 0 && head.DynamicGate != 0 {
-						head.DynamicGate = 0
-						head.Deadline = -1
-					}
-				}
-			}
-		}
-		// TODO(question): climb-away point command at carrier current X/Z with altitude cruisealt, no radius – not simulated.
-		// TODO(question): event code 12 emission via presentation service not wired – would be Gap T16.
+		installGroundGoal(u, n, target.X, target.Y, target.Z, 0)
+		n.DynamicGate = groundTransportApproachGate
 		return 1
 	case 5:
-		// Phase 5: no work result 5 [04 §10.2].
-		return 5
+		releaseGoal(u, n)
+		return 0 // *restart* [04 R-AIR-01 §9]
 	default:
-		// Other: no work result 7 [04 §10.2].
-		return 7
+		return 7 // a phase above 5 [04 R-AIR-01 §9]
 	}
 }
 
-// unloadHandler implements Ground_Unload / VTOL_Unload per [04 §10.2] unload dispatch.
-// Returns done 5 immediately when cargo list already empty, then dispatches on phase.
-func unloadHandler(carrier *units.Unit, n *Node, satisfied uint32, _ uint32) Code {
-	_ = satisfied
-	if carrier == nil || n == nil {
-		return 7
-	}
-	// Immediate done when cargo list already empty [04 §10.2] unload.
-	if len(carrier.Attachment.Cargo) == 0 {
-		return 5
-	}
-	name := DescriptorFor(n.ID).Name
-	isVTOL := isVTOLUnload(name)
+// ---------------------------------------------------------------------------
+// Ground_Unload [04 R-AIR-01 §9]
+// ---------------------------------------------------------------------------
 
+// groundUnloadHandler is the ground carrier's unload executor, the twin of the
+// above: phase 0 fires `TransportDrop` and phase 2 waits for the script to have
+// released the cargo.
+//
+//	Entry: a satisfied bit 0x8 emits status cue slot 7
+//	`Unloading process is proceeding non-optimally` and returns 8.
+//
+//	0  a live mover and `canload`; bind the record's target handle to the
+//	   carrier's cargo-list head and return 5 if that head is null; the caption
+//	   `Unloading`; asynchronous one-argument `TransportDrop` on the carrier's
+//	   script with cell 0 = the cargo's identity and cell 1 = the packed drop
+//	   point; increment the attempt counter; deadline tick + 15.           -> 1
+//	1  the shared short-move helper.                                 -> 1 or 2
+//	2  notification event 13 and 5 as soon as the cargo's carrier reference is
+//	   no longer this carrier; 9 once the attempt counter reaches 3; else a
+//	   ground goal handle at the record's goal with the hover radius parameter,
+//	   gate = 0xE8.                                                 -> 1, 5 or 9
+//	3  return 0.
+func groundUnloadHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
+	if satisfied&transportEntryInterrupt != 0 {
+		workStatus(u, statusCant, groundUnloadSuboptimalText)
+		return 8 // *abandon* [04 R-AIR-01 §9]
+	}
 	switch n.Phase {
 	case 0:
-		// Phase 0 requires live canfly carrier mover else 7 [04 §10.2] unload.
-		hasLiveMover := false
-		if carrier.Def != nil {
-			if carrier.Def.CanMove || carrier.Def.CanFly || carrier.Def.CanLoad {
-				hasLiveMover = true
-			}
-		}
-		if !hasLiveMover && carrier.Move.Mode != 0 {
-			hasLiveMover = true
-		}
-		if !hasLiveMover {
+		if u.Def == nil || !u.Def.CanMove || !u.Def.CanLoad {
 			return 7
 		}
-		if isVTOL {
-			if carrier.Def == nil || !carrier.Def.CanFly {
-				return 7
-			}
+		if len(u.Attachment.Cargo) == 0 {
+			return 5 // a null cargo-list head completes at once [04 R-AIR-01 §9]
 		}
-		// Success announces Unloading, records cargo reference, queues point command toward stored drop point with altitude cruisealt and radius 0x140 [04 §10.2].
-		// Record cargo reference in Param1 if not already
-		if n.Param1 == 0 && len(carrier.Attachment.Cargo) > 0 {
-			n.Param1 = uint32(carrier.Attachment.Cargo[0])
+		// The list is LIFO, so the head is the most recently attached cargo
+		// [04 R-UNIT-06 §3].
+		n.Target = u.Attachment.Cargo[0]
+		workStatus(u, statusOK, "Unloading")
+		if bridge := callbackBridgeFor(u); bridge != nil {
+			// Cell 0 = the cargo's identity, cell 1 = the packed drop point;
+			// the position cell is physically present even though the arity
+			// byte says one argument [04 R-UNIT-06 §3].
+			bridge.DeferredWake("TransportDrop", []int32{int32(n.Target), packedDropPoint(n)}, nil)
 		}
-		// TODO(question): point-command altitude cruisealt and radius 0x140 queuing not simulated beyond phase advance [04 §10.2].
+		n.Param2++
+		n.Deadline = int32(tick + 15)
+		n.DynamicGate |= gateDeadline
 		return 1
 	case 1:
-		// Phase 1 converts drop point to footprint anchor using cargo packed footprint dimensions and validates via placement validator mode 1 [04 §10.2].
-		// Failure emits Unable to unload unit and returns 9 [04 §10.2]; success queues lowering command at same X/Z with signed altitude offset = cargo definition model-bottom and no radius [04 §10.2].
-		// TODO(question): placement validator mode 1 for unloading not injected in orders package; placeholder assumes valid when Goal present or cargo has footprint [04 §10.2].
-		// For determinism, if GoalX/Z is zero and no cargo, treat as invalid? But test will set Goal.
-		// Assume valid for now; if we had terrain we would check.
-		// To exercise failure path, we could check if cargo definition has footprint 0? But assume pass.
-		// Record diagnostic would be via queue if needed.
-		return 1
+		return groundTransportShortMove(n)
 	case 2:
-		// Phase 2 REVALIDATES — second anchor recompute plus validator before release [04 §10.2] double validation.
-		// An unload interrupt flag returns 9 BEFORE second validation [04 §10.2].
-		// TODO(question): interrupt flag exact word not established; using Node.Flags placeholder.
-		if n.Flags&0x1 != 0 { // placeholder for unload interrupt flag
+		if cargo := lookupTarget(u, n.Target); cargo == nil || cargo.Attachment.Carrier != u.Handle {
+			workStatus(u, statusUnloadEvent, "")
+			return 5 // the script did the drop [04 R-AIR-01 §9]
+		}
+		if n.Param2 >= groundTransportAttempts {
 			return 9
 		}
-		// Failed revalidation emits same message and returns 9 [04 §10.2].
-		// TODO(question): second validation same as first; placeholder passes.
-		// Success starts deferred zero-argument EndTransport FIRST, then detaches cargo (reserved no-piece index), then constructs climb-away point command at carrier current X/Z with altitude cruisealt [04 §10.2].
+		installGroundGoal(u, n, n.GoalX, n.GoalY, n.GoalZ, groundUnloadRadius(u))
+		n.DynamicGate = groundTransportApproachGate
 		return 1
 	case 3:
-		// Phase 3 emits event code 13 with no text payload and finishes [04 §10.2][GAP T16].
-		cargoHandle := pool.Handle(n.Param1)
-		if cargoHandle == 0 && len(carrier.Attachment.Cargo) > 0 {
-			cargoHandle = carrier.Attachment.Cargo[0]
-		}
-		cargo := lookupTarget(carrier, cargoHandle)
-		// Fallback: if lookup fails, try direct world via cargo handle's unit via attachment list? Already have handle.
-		// If still nil, try to find cargo unit via direct handle in carrier's list without lookup (for tests where Lookup not set)
-		if cargo == nil && cargoHandle != 0 {
-			// Attempt to find via carrier's cargo list's unit's world not available; keep nil and try alternative path:
-			// For headless tests where Lookup not set, we still need to detach. We can attempt to locate cargo via a global registry?
-			// As fallback, we will detach via carrier's list manipulation even without cargo unit pointer,
-			// but we need cargo pointer to clear its Carrier field and set position.
-			// If lookup fails, we cannot fully detach; return 9 to indicate failure.
-			// For now, treat as failure if cargo not found.
-			return 9
-		}
-		if cargo != nil {
-			// TODO(question): EndTransport deferred zero-arg start not modeled.
-			// Detach cargo (reserved no-piece index) [04 §10.2]
-			cargo.Attachment.Carrier = 0
-			cargo.Attachment.AttachPiece = -1
-			// Remove from carrier cargo list – copy first to avoid aliasing with [:0] range bug [I1].
-			origCargo := append([]pool.Handle(nil), carrier.Attachment.Cargo...)
-			newCargo := origCargo[:0]
-			for _, h := range origCargo {
-				if h != cargoHandle {
-					newCargo = append(newCargo, h)
-				}
-			}
-			carrier.Attachment.Cargo = newCargo
-			// Set cargo position to drop point anchor center [04 §10.2] unload phase 1 anchor conversion.
-			// Goal holds drop point world Fixed; use it directly.
-			if n.GoalX != 0 || n.GoalZ != 0 {
-				cargo.X = n.GoalX
-				cargo.Z = n.GoalZ
-				// Y: use terrain height if available else carrier Y; placeholder keep cargo.Y as is or set to carrier Y.
-				// TODO(question): exact Y after unload not established (modelBottom offset, terrain clamp) [04 §10.2][04 §9.2].
-				// Use carrier Y as placeholder for air carrier's altitude? For ground unload, use terrain height.
-				// Keep cargo.Y unchanged for now; movement system will clamp on next tick via SyncCarriedMotion/Validate.
-			}
-			// Remove BeCarried from cargo's queue if present
-			if cargoQ := QueueForUnit(cargo); cargoQ != nil {
-				beID := Lookup("BeCarried")
-				if beID != 0 {
-					// Remove BeCarried head if present
-					if head := cargoQ.Head(); head != nil && head.ID == beID {
-						cargoQ.RemoveHead()
-					} else {
-						// Scan and remove any BeCarried
-						prim := cargoQ.Primary()
-						newPrim := prim[:0]
-						for _, nn := range prim {
-							if nn.ID != beID {
-								newPrim = append(newPrim, nn)
-							}
-						}
-						// Rebuild queue preserving hooks
-						if len(newPrim) != len(prim) {
-							sec := cargoQ.Secondary()
-							// Clear old queue in place so its owner binding and diagnostics survive.
-							cargoQ.SetPrimary(newPrim)
-							cargoQ.SetSecondary(sec)
-						}
-					}
-				}
-			}
-			// TODO(question): climb-away point command at carrier current X/Z with altitude cruisealt – not simulated.
-			// TODO(question): event code 13 [GAP T16] not emitted.
-		}
-		return 5
+		return 0 // *restart* [04 R-AIR-01 §9]
 	default:
 		return 7
 	}
 }
 
-// beCarriedHandler implements BeCarried (Being transported) per [04 §3.1] 0x24.
-// It keeps the cargo's order alive while attached, and completes when detached.
+// packedDropPoint is `TransportDrop`'s cell 1 [04 R-UNIT-06 §3]: "the
+// destination X truncated to whole world units in the high half, destination Z
+// integer part in the low half". Both halves are the 16.16 goal's high word.
+func packedDropPoint(n *Node) int32 {
+	x := int32(int64(n.GoalX) >> 16)
+	z := int32(int64(n.GoalZ) >> 16)
+	return int32(uint32(uint16(x))<<16 | uint32(uint16(z)))
+}
+
+// groundUnloadRadius is phase 2's goal-handle radius parameter
+// [04 R-AIR-01 §9]: `trunc(carrierModelZExtentInteger · 1.5)` when the carrier
+// definition has `canhover` set, and 0 when it does not.
 //
-// It is the exact two-phase carried wait and draws no RNG: phase 0 releases
-// weapon slots and advances; phase 1 holds on an exact ten-tick deadline until
-// detach makes the pre-check complete [04 R-ORD-01 §2][04 R-FAC-02 §4]. The
-// deadline is measured from the handler's tick argument (WU-18-7 retired the
-// by-name `beCarriedHandlerAtTick` special case the pump used to reach this
-// body with).
+// TODO(question): the compiled definition carries the model's total height
+// (`ModelTop`, the max-Y dword's high half [04 R-UNIT-06 §3]) but no model Z
+// extent, and no format or spec section names one. Placeholder: 0 for every
+// carrier, which is the non-hover arm — a hovercraft therefore approaches its
+// own drop point exactly rather than standing off by one and a half hull
+// lengths. What would settle it: which model-bounds word the definition loader
+// stores beside the max-Y one, in `research/formats/3do.md` terms.
+func groundUnloadRadius(u *units.Unit) int32 {
+	_ = u
+	return 0
+}
+
+// groundTransportShortMove is the helper phases 1 and 3 of `Ground_Pickup` and
+// phase 1 of `Ground_Unload` share [04 R-AIR-01 §9]: "when the unit's
+// movement-state byte has bit 0x2 set, write gate 0x8 | 0x4 and return 2;
+// otherwise return 1".
+//
+// TODO(question): §9 names the tested word only as "the unit's movement-state
+// byte", and no section maps it onto a field this build has. `Node.MoveState`
+// is the movement scheduler's published enumeration (0 none, 1 en route, 2
+// arrived, 3 blocked [P0-I03]), not a bit field, so testing bit 0x2 on it would
+// answer a different question. Placeholder: take the "otherwise" arm, so the
+// phase advances and the machine reaches its callback rather than parking on a
+// gate whose raising condition is unknown. What would settle it: which of the
+// mover's state words that byte is, in the terms [04 R-MOV-01 §8] uses for the
+// committed mover-mode pair.
+func groundTransportShortMove(n *Node) Code {
+	_ = n
+	return 1
+}
+
+// installGroundGoal installs one point payload through the session-owned
+// movement adapter [04 R-ORD-01 §1]. A queue with no movement service bound is
+// a fixture, and leaves the payload alone.
+func installGroundGoal(u *units.Unit, n *Node, x, y, z numeric.Fixed, radius int32) {
+	b := bindingOfUnit(u)
+	if b == nil || b.Movement == nil || b.Movement.InstallPoint == nil {
+		return
+	}
+	b.Movement.InstallPoint(PointGoalRequest{Owner: u.Handle, Node: n, X: x, Y: y, Z: z, Radius: radius})
+}
+
+// releaseGoal is the payload release of [04 R-ORD-01 §1]'s four goal
+// installers.
+func releaseGoal(u *units.Unit, n *Node) {
+	b := bindingOfUnit(u)
+	if b == nil || b.Movement == nil || b.Movement.Release == nil {
+		return
+	}
+	b.Movement.Release(n)
+}
+
+// ---------------------------------------------------------------------------
+// BeCarried [04 R-ORD-01 §2]
+// ---------------------------------------------------------------------------
+
+// beCarriedHandler is the carried unit's own record:
+//
+//	If the unit's carrier link is null → complete. Phase 0: release all slots;
+//	advance. Phase 1: deadline 10; hold. Other: cancel-all. A carried unit
+//	therefore re-checks its carrier link every ~10 ticks.
+//
+// It draws no RNG. The deadline is measured from the handler's tick argument
+// (WU-18-7 retired the by-name `beCarriedHandlerAtTick` special case the pump
+// used to reach this body with).
 func beCarriedHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	_ = satisfied
 	if u == nil || n == nil {
 		return 5
 	}
 	if u.Attachment.Carrier == 0 {
-		return 5 // no longer carried, done [04 §10.2] cargo first detaches
+		return 5 // the carrier link is null [04 R-ORD-01 §2]
 	}
-	if n.Phase == 0 {
+	switch n.Phase {
+	case 0:
 		for i := 0; i < units.NumSlots; i++ {
 			if slot := u.SlotAt(i); slot != nil {
 				slot.Target = units.Target{Kind: units.TargetNone}
 			}
 		}
 		return 1
+	case 1:
+		n.DynamicGate = gateDeadline
+		n.Deadline = int32(tick + 10)
+		return 2 // *hold* [04 R-ORD-01 §2]
+	default:
+		return 7 // *cancel-all* [04 R-ORD-01 §2]
 	}
-	n.DynamicGate = 1
-	n.Deadline = int32(tick + 10)
-	return 2
 }
 
-// setQueuePrimary and setQueueSecondary are helpers to rebuild queues without import cycle.
-// They use the exported Queue.SetPrimary/SetSecondary.
-func setQueuePrimary(q *Queue, prim []*Node) {
-	if q == nil {
-		return
-	}
-	q.SetPrimary(prim)
-}
-func setQueueSecondary(q *Queue, sec []*Node) {
-	if q == nil {
-		return
-	}
-	q.SetSecondary(sec)
+// ---------------------------------------------------------------------------
+// Registration
+// ---------------------------------------------------------------------------
+
+// transportHandlers is the family's registration list, a slice so that source
+// order is registration order (I1).
+var transportHandlers = []struct {
+	name    string
+	handler func(*units.Unit, *Node, uint32, uint32) Code
+}{
+	{"Ground_Pickup", groundPickupHandler},
+	{"Ground_Unload", groundUnloadHandler},
+	{"VTOL_Pickup", airTransportHandler},
+	{"VTOL_Unload", airTransportHandler},
+	{"BeCarried", beCarriedHandler},
 }
 
 func ensureTransportHandlers() {
-	// Called lazily from pump and init to wire handlers after table built [04 §3.1] C4.
 	if len(table) == 0 {
 		return
 	}
-	mappings := []struct {
-		name string
-		h    func(*units.Unit, *Node, uint32, uint32) Code
-	}{
-		{"Ground_Pickup", pickupHandler},
-		{"VTOL_Pickup", pickupHandler},
-		{"Ground_Unload", unloadHandler},
-		{"VTOL_Unload", unloadHandler},
-		{"BeCarried", beCarriedHandler},
-	}
-	for _, m := range mappings {
-		id := Lookup(m.name)
+	for _, entry := range transportHandlers {
+		id := Lookup(entry.name)
 		if id == 0 || int(id) >= len(table) {
 			continue
 		}
 		if table[int(id)].Handler == nil {
-			table[int(id)].Handler = m.h
+			table[int(id)].Handler = entry.handler
 		}
 	}
 }
 
-func init() {
-	// Attempt early wiring; if table not yet built, lazy ensure will retry on first pump.
-	ensureTransportHandlers()
-}
+func init() { ensureTransportHandlers() }

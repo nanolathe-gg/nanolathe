@@ -105,8 +105,13 @@ func newFeatureWorkFixture(t *testing.T, defs []*content.FeatureDef, cx, cz int)
 // the `Reclaim` row: "rectangle goal on the feature's footprint (origin cell,
 // size), gate = 0xE0, advance" [04 R-ORD-01 §5]. The origin is the ANCHOR
 // cell — a feature's stamp writes its definition index there and the fringe
-// sentinel across the rest of the footprint [05 R-ECO-02 §2], so unlike the
-// live-unit rectangle of `RepairUnit` no half-footprint offset applies.
+// sentinel across the rest of the footprint [05 R-ECO-02 §2].
+//
+// These are the CONSTRUCTOR's arguments, and they are the target's alone: the
+// growth by the mover's own footprint happens inside the goal class
+// [04 R-PATH-01 §12], so what this seam passes is unchanged by WU-19-24 and
+// internal/movement's TestRectangleGoalIsTheTargetFootprintGrownByTheMover
+// owns the other half.
 func TestFeatureReclaimBeyondRangeInstallsTheFootprintRectangle(t *testing.T) {
 	tree, _ := retailShapedTree()
 	tree.FootprintX, tree.FootprintZ = 3, 2
@@ -463,5 +468,47 @@ func TestResurrectionDelayIsThreeTenthsOfBuildTime(t *testing.T) {
 		if got := ResurrectionDelay(c.buildTime, c.workerTime); got != c.want {
 			t.Fatalf("delay(buildtime %d, workertime %d) = %d, want %d", c.buildTime, c.workerTime, got, c.want)
 		}
+	}
+}
+
+// TestLiveTargetRectangleOriginIsTheFootprintSnap locks the origin the
+// `RepairUnit` and `Capture` rows pass to the rectangle installer. Retail hands
+// the constructor the target's committed anchor cell pair — the footprint snap
+// `(pos − foot·2^19 + 2^19) >> 20` of [04 R-ORD-01 §1], the cell containing the
+// footprint's minimum edge — and the same quantity is what the follower's
+// arrival test reads back off the mover [04 R-PATH-01 §12].
+//
+// Corrected 2026-09-01 (WU-19-24): the rows derived the origin as
+// `WorldToCell(pos) − footprint/2`. That agrees with the snap for a target
+// resting exactly on its footprint centre, which is why it survived — every
+// fixture target is a placed building — but it is a different cell for any
+// off-centre target with a footprint of two cells or more, which is every
+// repairable mover mid-step.
+func TestLiveTargetRectangleOriginIsTheFootprintSnap(t *testing.T) {
+	// The reverse conversion of [04 R-ORD-01 §1]: a footprint centred on
+	// anchor cell `a` sits at `pos = (foot + 2a)·2^19`. The snap must return
+	// `a` for every footprint size.
+	for foot := int32(1); foot <= 4; foot++ {
+		for _, a := range []int32{0, 9, 37} {
+			pos := numeric.Fixed((int64(foot) + 2*int64(a)) << 19)
+			if got := footprintAnchorCell(pos, foot); got != a {
+				t.Fatalf("footprint %d centred on anchor %d snapped to %d", foot, a, got)
+			}
+		}
+	}
+	// An off-centre 2x2 target ten world units past the centre of anchor 9.
+	// The minimum edge stands at cell 9.625, which snaps to 10; the retired
+	// `WorldToCell(170) − 2/2` derivation answered 9.
+	pos := numeric.Fixed(170 << 16)
+	if got := footprintAnchorCell(pos, 2); got != 10 {
+		t.Fatalf("off-centre 2x2 target snapped to %d, want the committed anchor 10 [04 R-ORD-01 §1]", got)
+	}
+	if old := world.WorldToCell(pos) - 2/2; old != 9 {
+		t.Fatalf("the retired derivation is assumed to answer 9 here; it answered %d", old)
+	}
+	// A footprint below one cell is read as one rather than dividing by zero
+	// or biasing the snap backwards.
+	if got, want := footprintAnchorCell(numeric.Fixed(1<<19), 0), footprintAnchorCell(numeric.Fixed(1<<19), 1); got != want {
+		t.Fatalf("a zero footprint snapped to %d, want the one-cell answer %d", got, want)
 	}
 }

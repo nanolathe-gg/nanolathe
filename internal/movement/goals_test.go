@@ -288,13 +288,20 @@ func TestInstallingASecondGoalResubmitsTheMover(t *testing.T) {
 }
 
 // TestFeatureWorkGoalIsTheFootprintRectangle is WU-19-5's half of
-// workApproachGoal: `Reclaim` and `Resurrect` install a RECTANGLE on the
+// workApproachGoal: `Reclaim` and `Resurrect` install a RECTANGLE from the
 // FEATURE's footprint — "origin cell, size" [04 R-ORD-01 §5] — where the origin
 // is the anchor cell the grid resolver returns [05 R-ECO-02 §2], with no
-// half-footprint offset. Before this unit both rows fell through to the
-// ordinary point goal on the record's own goal cell, which for a feature is the
-// anchor cell itself: a cell the reclaimer can never occupy, so the search
-// failed and the record abandoned instead of walking to the rock.
+// half-footprint offset. Before WU-19-5 both rows fell through to the ordinary
+// point goal on the record's own goal cell, which for a feature is the anchor
+// cell itself: a cell the reclaimer can never occupy, so the search failed and
+// the record abandoned instead of walking to the rock.
+//
+// Corrected 2026-09-01 (WU-19-24): this asserted the BARE footprint rectangle,
+// `(12,9)..(14,10)` for a 3x2 feature. [04 R-PATH-01 §12] establishes that the
+// class's constructor grows the installer's `(origin, size)` by the OWNING
+// MOVER's own footprint, so a 1x1 reclaimer's rectangle is `(11,8)..(15,11)`
+// and the feature's own cells are interior — never enumerated, which is what
+// makes a blocking feature reachable at all.
 //
 // This arm is the fallback for a record whose payload is not bound; the handler
 // installs the same rectangle itself and goalForOrderWithFootprint consults the
@@ -343,13 +350,26 @@ func TestFeatureWorkGoalIsTheFootprintRectangle(t *testing.T) {
 		if !isRect {
 			t.Fatalf("%s: goal %T is not a rectangle-perimeter goal", name, goal)
 		}
-		if rect.Min.X != 12 || rect.Min.Z != 9 || rect.Max.X != 14 || rect.Max.Z != 10 {
-			t.Fatalf("%s: rectangle %v, want the anchor (12,9) and the 3x2 footprint's inclusive maximum (14,10)", name, rect)
+		// origin (12,9), size 3x2, mover footprint 1x1:
+		//   x1 = 12 − 1 = 11, x2 = 12 + 3 = 15
+		//   z1 =  9 − 1 =  8, z2 =  9 + 2 = 11   [04 R-PATH-01 §12]
+		if rect.Min.X != 11 || rect.Min.Z != 8 || rect.Max.X != 15 || rect.Max.Z != 11 {
+			t.Fatalf("%s: rectangle %v, want the 3x2 footprint at (12,9) grown by the 1x1 mover: (11,8)..(15,11)", name, rect)
 		}
-		// Arrival is lying ON the border, never inside: the anchor cell itself
-		// is occupied by the feature [04 §7.2].
-		if goal.StartSatisfied(path.Cell{X: 13, Z: 9}) == goal.StartSatisfied(path.Cell{X: 20, Z: 20}) {
-			t.Fatalf("%s: the rectangle does not separate its border from the rest of the map", name)
+		// Every cell of the feature's own footprint is INTERIOR — the search
+		// never enumerates it, so a blocking feature is not a goal cell
+		// [04 R-PATH-01 §12].
+		for _, c := range []path.Cell{{X: 12, Z: 9}, {X: 13, Z: 9}, {X: 14, Z: 10}} {
+			if goal.StartSatisfied(c) {
+				t.Fatalf("%s: the feature's own cell %v is on the goal border", name, c)
+			}
+		}
+		// Arrival is lying ON the grown border, and nowhere else.
+		if !goal.StartSatisfied(path.Cell{X: 11, Z: 9}) {
+			t.Fatalf("%s: the anchor flush against the feature's west edge is not on the border", name)
+		}
+		if goal.StartSatisfied(path.Cell{X: 19, Z: 19}) {
+			t.Fatalf("%s: a cell far outside the rectangle satisfies the start predicate", name)
 		}
 	}
 
@@ -358,5 +378,86 @@ func TestFeatureWorkGoalIsTheFootprintRectangle(t *testing.T) {
 	n := &orders.Node{ID: orders.Lookup("Reclaim"), Owner: h, GoalX: world.CellToWorld(2), GoalZ: world.CellToWorld(2)}
 	if _, ok := sys.workApproachGoal(u, path.Cell{X: 2, Z: 2}, n, 1, 1); ok {
 		t.Fatalf("an empty cell produced a feature rectangle")
+	}
+}
+
+// TestRectangleGoalIsTheTargetFootprintGrownByTheMover locks the rectangle-goal
+// constructor of [04 R-PATH-01 §12]. The installer's arguments are the TARGET's
+// anchor cell and footprint size; the class stores
+//
+//	x1 = originX − fx    x2 = originX + sizeX
+//	z1 = originZ − fz    z2 = originZ + sizeZ
+//
+// with `(fx, fz)` the OWNING MOVER's footprint. The two counts are the whole
+// point of the correction: a one-cell target and a one-cell mover give a 3x3
+// rectangle whose border is eight cells, and a 2x2 mover a 4x4 rectangle whose
+// border is twelve — where the bare footprint the build stored before had a
+// one-cell "border" that was the target's own impassable cell, so every rock
+// and tree reclaim published an empty route and abandoned.
+func TestRectangleGoalIsTheTargetFootprintGrownByTheMover(t *testing.T) {
+	terrain := terrainForGoals()
+	sys := NewSystem(terrain, Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}, NewOccupancyGrid())
+	w := newMovementFixtureWorld(10)
+	sys.BindWorld(w)
+
+	// The target is one cell at (10,10) and is never enumerated.
+	const targetX, targetZ int32 = 10, 10
+
+	for _, tc := range []struct {
+		name       string
+		moverFoot  int32
+		wantMin    path.Cell
+		wantMax    path.Cell
+		wantBorder int
+	}{
+		{"1x1 mover", 1, path.Cell{X: 9, Z: 9}, path.Cell{X: 11, Z: 11}, 8},
+		{"2x2 mover", 2, path.Cell{X: 8, Z: 8}, path.Cell{X: 11, Z: 11}, 12},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			def := &content.UnitDef{UnitName: "armck", MaxVelocity: 2 * 65536, TurnRate: 500, MaxDamage: 100}
+			def.FootprintX, def.FootprintZ = tc.moverFoot, tc.moverFoot
+			h, err := w.Create(def, 0, world.CellToWorld(2), numeric.Fixed(0), world.CellToWorld(2))
+			if err != nil {
+				t.Fatalf("mover placement refused: %v", err)
+			}
+			u := w.Unit(h)
+			sys.EnsureUnit(u)
+
+			n := &orders.Node{Owner: h}
+			if !sys.InstallRectangleGoal(orders.RectangleGoalRequest{Owner: h, Node: n, CellX: targetX, CellZ: targetZ, Width: 1, Depth: 1}) {
+				t.Fatal("the rectangle payload was rejected")
+			}
+			goal := sys.moveGoalPayload(h, n)
+			if goal == nil {
+				t.Fatal("the rectangle payload was not retained")
+			}
+			rect, isRect := path.IsRectGoal(goal)
+			if !isRect {
+				t.Fatalf("goal %T is not a rectangle-perimeter goal", goal)
+			}
+			if rect.Min != tc.wantMin || rect.Max != tc.wantMax {
+				t.Fatalf("rectangle (%v)..(%v), want (%v)..(%v) for a 1x1 target at (10,10) grown by this mover [04 R-PATH-01 §12]", rect.Min, rect.Max, tc.wantMin, tc.wantMax)
+			}
+			cells := goal.Enumerate(nil)
+			if len(cells) != tc.wantBorder {
+				t.Fatalf("the border enumerates %d cells, want %d", len(cells), tc.wantBorder)
+			}
+			// The target's own cell is interior: never enumerated, never an
+			// arrival cell [04 R-PATH-01 §12].
+			for _, c := range cells {
+				if c.X == targetX && c.Z == targetZ {
+					t.Fatal("the target's own cell is a goal cell")
+				}
+				if !goal.StartSatisfied(c) {
+					t.Fatalf("enumerated cell %v is not on the border the arrival test admits", c)
+				}
+			}
+			if goal.StartSatisfied(path.Cell{X: targetX, Z: targetZ}) {
+				t.Fatal("the target's own cell satisfies arrival")
+			}
+			if goal.StartSatisfied(path.Cell{X: 2, Z: 2}) {
+				t.Fatal("a cell outside the rectangle satisfies arrival")
+			}
+		})
 	}
 }

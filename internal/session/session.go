@@ -1062,7 +1062,53 @@ func (s *Session) RegisterAll() {
 						if s.Clock != nil {
 							tick = s.Clock.GlobalTick
 						}
-						s.Combat.ExplodeWeaponAt(s.Units, s.World, weapon, impact, h, tick) // [06 §9.3][06 §12.1] shared splash
+						// The death explosion record carries NO shooter
+						// [06 R-WPN-02 §5]: it is a stack structure holding
+						// the selected weapon, the victim's position as both
+						// points, a null target, a null shooter and the
+						// victim's owning-player byte — the null shooter is
+						// load-bearing, since it forces the area path
+						// regardless of areaofeffect and SUPPRESSES ATTACKER
+						// VETERANCY. Passing the dying unit's own handle `h`
+						// here (as an earlier revision did) makes it resolve
+						// as a live shooter for the rest of this tick — Dying
+						// is set but Alive is not cleared until FinalizeDeath,
+						// which runs later — so the explosion's damage was
+						// scaled by the dying unit's own veterancy and every
+						// victim's provenance was stamped with the dying
+						// unit's owner, crediting kills to the wrong side
+						// [06 R-DMG-01 §9] (the null shooter is what makes a
+						// meteor or a death explosion credit nobody).
+						// ExplodeWeaponAt has no separate parameter for the
+						// record's side byte (the victim's owning-player byte
+						// per [06 R-WPN-02 §5], distinct from the shooter);
+						// that byte only gates §9.1's routing test and §9.3's
+						// friendly/enemy sum, neither of which this call path
+						// exercises, so shooter 0 alone reproduces the
+						// observable contract here.
+						//
+						// TODO(question): with shooter 0, combat/service.go's
+						// applyDamageToUnit (internal/combat/service.go, not
+						// owned by this unit) stamps victim.LastDamageSide
+						// and victim.LastDamageCause together inside one
+						// `if shooter != nil` block. Retail's §9.1 step 4
+						// records the packet's kind byte on the victim
+						// UNCONDITIONALLY and stores the attacker pointer/side
+						// snapshot only "when the attacker is nonzero" — two
+						// separate clauses. Because our single Go gate ties
+						// both to shooter presence, a unit killed outright by
+						// a null-shooter blast (a death explosion or a
+						// meteor) never gets LastDamageCause stamped, so
+						// internal/session/stats.go's
+						// recordFinalizedDeathStatistics sees cause 0 and
+						// skips even the victim-loss credit, not just kill
+						// credit. Splitting the two stamps needs a
+						// combat/service.go change outside this unit's file
+						// ownership (internal/session/session.go,
+						// internal/session/ai_e2e_retail_test.go,
+						// internal/session/*_test.go, internal/combat/target.go,
+						// internal/combat/damage.go).
+						s.Combat.ExplodeWeaponAt(s.Units, s.World, weapon, impact, 0, tick) // [06 R-WPN-02 §5][06 R-DMG-01 §9] null-shooter record, shared splash path [06 §9.3]
 						if s.publication != nil && s.publication.events != nil {
 							// The death explosion draws the weapon's LAND art:
 							// both keys or nothing, the bank and the entry

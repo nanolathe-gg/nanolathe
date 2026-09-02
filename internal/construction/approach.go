@@ -48,13 +48,26 @@ import (
 // around the footprint, a build-distance filter, a placement-validation
 // filter, a sorted bounded candidate list, and a single selected point goal.
 //
-// TODO(question): retail's candidate ring geometry is not recovered. This
-// enumerates square rings outward from the one immediately outside the
-// footprint, bounded by the builder's own footprint extent (past that offset a
-// further ring cannot change whether the builder clears the site), and takes
-// the best candidate found across them. Whether retail emits one ring, a fixed
-// offset, or a ring scaled by either footprint would be settled by tracing the
-// build-site generator's candidate emission.
+// Closed in part 2026-09-01 (WU-19-24, [04 R-PATH-01 §12]): the INNERMOST ring
+// is no longer a placeholder. §7.4's [R-P0-19] described this build's walk
+// target as the product footprint "expanded outward by the builder's footprint
+// half-extents, so a builder resting its CENTRE on the expanded border clears
+// the product footprint"; that description is superseded. The retail rectangle
+// goal's constructor grows the target footprint by the mover's WHOLE footprint
+// on the west and north and by one cell on the east and south, in ANCHOR-cell
+// terms — `[originX − fx, originX + sizeX] × [originZ − fz, originZ + sizeZ]`.
+// approachRing at offset 1 is exactly that rectangle, and it already enumerated
+// anchors rather than centres, so no geometry moved here; what changed is that
+// the offset-1 ring now cites an Established contract instead of a placeholder.
+//
+// TODO(question): the rings BEYOND offset 1 remain untraced. §12 establishes
+// the mobile-build goal rectangle, not the build-site generator's candidate
+// emission, which is a separate mechanism [04 §7.4]. This enumerates square
+// rings outward from offset 1, bounded by the builder's own footprint extent
+// (past that offset a further ring cannot change whether the builder clears the
+// site), and takes the best candidate found across them. Whether retail emits
+// only the one ring or scales further ones would be settled by tracing that
+// generator's candidate emission.
 //
 // TODO(question): the sort key, the tie-break, and the size of the "bounded
 // list" [04 §7.4] are not recovered. Candidates here are ordered by squared
@@ -85,6 +98,11 @@ import (
 // flush against one side of the site. Enumerating cell centres instead made
 // clearance depend on how the anchor snap rounded the mover's halt position,
 // which is not a property of the candidate at all.
+//
+// Offset 1 is therefore `[anchorX − builderX, anchorX + footX]` inclusive,
+// which is the retail rectangle-goal constructor's grown rectangle for a mover
+// of that footprint [04 R-PATH-01 §12] — the same border internal/movement's
+// grownGoalRect builds for the seven installer callers.
 func approachRing(anchorX, anchorZ, footX, footZ, builderX, builderZ, offset int32) path.Rect {
 	return path.Rect{
 		Min: path.Cell{X: anchorX - builderX - (offset - 1), Z: anchorZ - builderZ - (offset - 1)},
