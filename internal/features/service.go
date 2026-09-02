@@ -93,6 +93,12 @@ type Service struct {
 	cursor int // global cursor descending from W*H-1 with wrap-skip [06 §13.1]
 
 	instances map[int]*Instance // key = cz*W+cx, deterministic iteration via sorted keys
+	// instanceKeys is the sorted key list sortedInstanceKeys hands out, and
+	// instanceKeysStale says whether it still describes the map. Every writer
+	// of instances goes through setInstance/deleteInstance/resetInstances,
+	// which is what keeps the flag honest — see sortedInstanceKeys.
+	instanceKeys      []int
+	instanceKeysStale bool
 
 	// LastReproIdx is the last cell visited by the reproduction walker, -1 if
 	// the wrap-skip cell was the cursor (W*H-1 never scanned) [06 §13.1].
@@ -313,7 +319,7 @@ func (s *Service) ResetForRestore() {
 			s.clearFootprintNoRevision(inst.CX, inst.CZ, inst.Def)
 		}
 	}
-	s.instances = make(map[int]*Instance)
+	s.resetInstances()
 }
 
 // PlaceAtWorld stamps a feature at world position (x,z) using floor-corrected
@@ -649,10 +655,10 @@ func (s *Service) clearFootprintNoRevision(cx, cz int, def *content.FeatureDef) 
 			s.Terrain.Plot[idx].SetAnchor(0, 0)
 			// Release instance if anchor.
 			if px == cx && pz == cz {
-				delete(s.instances, idx)
+				s.deleteInstance(idx)
 			} else {
 				// Fringe cells: also delete any stray instance mapping if present.
-				delete(s.instances, idx)
+				s.deleteInstance(idx)
 			}
 		}
 	}
@@ -784,7 +790,7 @@ func (s *Service) spawnFeatureAt(cx, cz int, def *content.FeatureDef) *Instance 
 	// X/Z world centre of footprint.
 	inst.X = world.CellToWorld(int32(cx)).Add(numeric.Fixed(int64(footX) * 1048576 / 2))
 	inst.Z = world.CellToWorld(int32(cz)).Add(numeric.Fixed(int64(footZ) * 1048576 / 2))
-	s.instances[idx] = inst
+	s.setInstance(idx, inst)
 	// Service-owned flags remain separate from the shared feature/delta writer.
 	for dz := 0; dz < int(footZ); dz++ {
 		for dx := 0; dx < int(footX); dx++ {
@@ -830,13 +836,54 @@ func (s *Service) featureIndexForDef(def *content.FeatureDef) uint16 {
 }
 
 // sortedInstanceKeys returns deterministic iteration order (I1).
+// The key set changes only when a feature is placed or removed, but the four
+// per-tick callers — the sink pass, the burn pass, the grid resync and the
+// publication walk — each rebuilt it from a map walk and a sort over every
+// feature on the map. The list is therefore built once per change and handed
+// out until a writer invalidates it. Every writer of instances goes through
+// setInstance, deleteInstance or resetInstances, which is what makes that
+// safe; nothing else in the package touches the map.
+//
+// The slice is the service's, not the caller's: it must not be retained past
+// the next mutation, and callers that delete while walking it (the grid
+// resync does) are walking a snapshot taken before their first delete, which
+// is exactly what the old per-call rebuild gave them.
 func (s *Service) sortedInstanceKeys() []int {
+	if !s.instanceKeysStale && s.instanceKeys != nil {
+		return s.instanceKeys
+	}
 	keys := make([]int, 0, len(s.instances))
 	for k := range s.instances {
 		keys = append(keys, k)
 	}
 	sort.Ints(keys)
+	s.instanceKeys, s.instanceKeysStale = keys, false
 	return keys
+}
+
+// setInstance is the only way a feature instance enters the map.
+func (s *Service) setInstance(idx int, inst *Instance) {
+	if s.instances == nil {
+		s.instances = make(map[int]*Instance)
+	}
+	if _, existed := s.instances[idx]; !existed {
+		s.instanceKeysStale = true
+	}
+	s.instances[idx] = inst
+}
+
+// deleteInstance is the only way a feature instance leaves the map.
+func (s *Service) deleteInstance(idx int) {
+	if _, existed := s.instances[idx]; existed {
+		s.instanceKeysStale = true
+	}
+	delete(s.instances, idx)
+}
+
+// resetInstances empties the map.
+func (s *Service) resetInstances() {
+	s.instances = make(map[int]*Instance)
+	s.instanceKeys, s.instanceKeysStale = nil, true
 }
 
 // RemoveFeatureAt removes a feature at anchor cell with cause-specific successor
@@ -973,7 +1020,7 @@ func (s *Service) PopulateFromTerrain() int {
 			inst.Y = s.Terrain.CoarseHeightAt(int32(cx), int32(cz))
 			inst.X = world.CellToWorld(int32(cx)).Add(numeric.Fixed(int64(footX) * 1048576 / 2))
 			inst.Z = world.CellToWorld(int32(cz)).Add(numeric.Fixed(int64(footZ) * 1048576 / 2))
-			s.instances[idx] = inst
+			s.setInstance(idx, inst)
 			// A map-authored vent reaches its instance here rather than through
 			// spawnFeatureAt, because the map loader writes the plot grid
 			// directly and this walk builds the animation side from it. Retail
@@ -1220,24 +1267,24 @@ func (s *Service) syncInstancesToGrid() {
 	for _, idx := range s.sortedInstanceKeys() {
 		inst := s.instances[idx]
 		if inst == nil || inst.Def == nil {
-			delete(s.instances, idx)
+			s.deleteInstance(idx)
 			continue
 		}
 		cx, cz := idx%w, idx/w
 		cell := s.Terrain.PlotAt(int32(cx), int32(cz))
 		if cell == nil || !cell.IsRealFeature() {
-			delete(s.instances, idx)
+			s.deleteInstance(idx)
 			continue
 		}
 		def, bound := s.Terrain.FeatureDefAt(cell.Feature())
 		if !bound || def == nil {
-			delete(s.instances, idx)
+			s.deleteInstance(idx)
 			continue
 		}
 		if def == inst.Def || def.CanonicalKey == inst.Def.CanonicalKey {
 			continue
 		}
-		s.instances[idx] = s.newInstanceAt(cx, cz, def)
+		s.setInstance(idx, s.newInstanceAt(cx, cz, def))
 	}
 }
 

@@ -6,7 +6,7 @@ import (
 )
 
 func TestParseBuildsExplicitSeedPair(t *testing.T) {
-	request, _, err := parse([]string{"-root", "/tmp/assets", "-map", "test", "-seed", "23", "-ticks", "7"}, &bytes.Buffer{})
+	request, _, _, err := parse([]string{"-root", "/tmp/assets", "-map", "test", "-seed", "23", "-ticks", "7"}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -523,7 +523,7 @@ func (s *Service) igniteAt(cx, cz int, def *content.FeatureDef) bool {
 		inst.Z = world.CellToWorld(int32(cz))
 		inst.Y = s.Terrain.CoarseHeightAt(int32(cx), int32(cz))
 	}
-	s.instances[idx] = inst
+	s.setInstance(idx, inst)
 	s.Terrain.Plot[idx].SetOccupied(true) // mark instance attached [05 ...]
 	// Record tile, play burn sound at tile's world position [05 ...] — presentation only.
 	return true

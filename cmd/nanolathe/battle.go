@@ -996,7 +996,11 @@ func (b *battleSession) minimapClickOrder(cl *client.Client, mx, my int32, addit
 	// here, which made an own blip unclickable.
 	if f, ok := b.currentSnapshot(); ok {
 		if h := b.minimapHoverUnit(f, mx, my); h != 0 {
-			if v, found := snapshotUnitByHandle(f, h); found && v.Owner == f.Selection.LocalPlayer {
+			// The branch is cursor kind `0x0F`, so its admission is the shared
+			// eligibility predicate `E(u)`, not ownership alone: a blip whose
+			// remaining-build fraction is nonzero is not selectable
+			// [07 R-CAM-01 §14 step 2][07 R-WGT-01 §10].
+			if v, found := snapshotUnitByHandle(f, h); found && b.ownSelectableUnit(f, v) {
 				kind := session.HumanSelectionReplace
 				if additive {
 					kind = session.HumanSelectionToggle
@@ -1517,7 +1521,23 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 				// a second time [03 §2.5][07 §8].
 				shellX, shellY := mx, my
 				bh, bu, hit = client.PickSnapshotUnit(f, shellX, shellY, b.cam, uint8(viewer))
-				hitOwn := hit && bh != 0 && bu.Owner == b.sess.LocalOwner
+				// Branch 2 of the world-click handler is cursor kind `0x0F`,
+				// "the resolver's select answer: latch idle and the hovered unit
+				// is an own SELECTABLE unit (own slot, selectable bit,
+				// remaining-build fraction `0.0`, post-capture grace zero,
+				// carrier null or itself a visible carrier)"
+				// [07 R-CAM-01 §14 step 2]. That list is the shared eligibility
+				// predicate `E(u)` of [07 R-WGT-01 §9][07 R-WGT-01 §10], and
+				// ownSelectableUnit is this build's one copy of it.
+				//
+				// The test used to be ownership alone, so a click on an own
+				// nanoframe selected it — and, because the select branch runs
+				// before the order branch, ate the click a builder meant as an
+				// assist. Failing `E(u)` here is what lets the click reach
+				// branch 3, where the contextual code resolves "nano-reach
+				// passes and the target is unfinished → code 8" into HelpBuild
+				// [07 R-CAM-01 §14 step 3][04 R-ORD-02 §1].
+				hitOwn := hit && bh != 0 && b.ownSelectableUnit(f, bu)
 				if hitOwn {
 					if additive {
 						_ = b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanSelectionToggle, Selection: session.HumanSelectionCommand{Handles: []pool.Handle{bh}}})
@@ -2166,6 +2186,12 @@ func loadFNT(cs *contentSet) *formats.FNT {
 // under cell wins), and command validity via orders.Resolve gate [04 §3.5][07 §9][03 §3.2] C8 [P0-I03][P0-I14].
 // Feature picking sets ResolvePos.HasFeature when a feature footprint covers the
 // clicked cell and is visible; unit picking is tried first [07 §8][07 §9][P0-I14].
+//
+// The short-lived copy carries the committed remaining-build fraction. It is a
+// clause of the shared eligibility predicate `E(u)` and the word the shape
+// chooser reads in the opposite, *unfinished* sense for its cursorrepair rows
+// [07 R-WGT-01 §10]; leaving it zero made every nanoframe look finished, so the
+// idle branch offered `cursorselect` over one.
 func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *orders.ResolvePos) {
 	wx, wy, wz := b.cursorWorld(sx, sy)
 	pos := &orders.ResolvePos{X: wx, Y: wy, Z: wz}
@@ -2196,7 +2222,7 @@ func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *ord
 			if view.Slot != handle {
 				continue
 			}
-			hit := &units.Unit{Handle: handle, Owner: view.Owner, X: view.X, Y: view.Y, Z: view.Z, Flags: view.Flags, Health: view.Health, MaxHealth: view.MaxHealth, Alive: true}
+			hit := &units.Unit{Handle: handle, Owner: view.Owner, X: view.X, Y: view.Y, Z: view.Z, Flags: view.Flags, Health: view.Health, MaxHealth: view.MaxHealth, Remaining: view.BuildRemaining, Alive: true}
 			if b.cat != nil && view.DefName != "" {
 				hit.Def, _ = b.cat.Unit(view.DefName)
 			}
@@ -2206,7 +2232,7 @@ func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *ord
 	}
 	if f, ok := b.currentSnapshot(); ok {
 		if bh, view, hit := client.PickSnapshotUnit(f, sx, sy, b.cam, b.sess.LocalOwner); hit {
-			copy := &units.Unit{Handle: bh, Owner: view.Owner, X: view.X, Y: view.Y, Z: view.Z, Flags: view.Flags, Health: view.Health, MaxHealth: view.MaxHealth, Alive: true}
+			copy := &units.Unit{Handle: bh, Owner: view.Owner, X: view.X, Y: view.Y, Z: view.Z, Flags: view.Flags, Health: view.Health, MaxHealth: view.MaxHealth, Remaining: view.BuildRemaining, Alive: true}
 			if b.cat != nil && view.DefName != "" {
 				copy.Def, _ = b.cat.Unit(view.DefName)
 			}

@@ -10,6 +10,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/pprof"
 	"time"
 
 	"github.com/nanolathe/nanolathe/internal/headless"
@@ -18,7 +20,7 @@ import (
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	request, reportPath, err := parse(args, stderr)
+	request, reportPath, profiles, err := parse(args, stderr)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -26,7 +28,27 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	// Profiling wraps the session but never enters it: the sampler is a host
+	// concern and the authoritative run is bit-identical with or without it
+	// [I6]. Elapsed wall time is reported alongside so a profile always comes
+	// with the ticks-per-second it was measured at.
+	stopCPU, err := profiles.startCPU()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	started := time.Now()
 	report, runErr := headless.Run(request)
+	elapsed := time.Since(started)
+	stopCPU()
+	if err := profiles.writeHeap(); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if profiles.enabled() {
+		fmt.Fprintf(stderr, "nanolathe: %d ticks in %s (%.1f ticks/s)\n",
+			report.Tick, elapsed.Round(time.Millisecond), float64(report.Tick)/elapsed.Seconds())
+	}
 	if report.ScenarioIdentity != "" {
 		if err := writeReport(reportPath, stdout, report); err != nil {
 			fmt.Fprintln(stderr, err)
@@ -43,9 +65,62 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 1
 }
 
-func parse(args []string, output io.Writer) (headless.Request, string, error) {
+// profileOptions names the two host-side sampler outputs. Neither reaches the
+// session: a profiled run draws the same numbers in the same order as an
+// unprofiled one, so a profile can be taken of the shipping path rather than of
+// a special build [I11].
+type profileOptions struct {
+	cpuPath  string
+	heapPath string
+}
+
+func (p profileOptions) enabled() bool { return p.cpuPath != "" || p.heapPath != "" }
+
+// startCPU begins CPU sampling and returns the stop function. The stop is safe
+// to call when no profile was requested.
+func (p profileOptions) startCPU() (func(), error) {
+	if p.cpuPath == "" {
+		return func() {}, nil
+	}
+	file, err := os.Create(p.cpuPath)
+	if err != nil {
+		return func() {}, fmt.Errorf("nanolathe: create CPU profile %q: %w", p.cpuPath, err)
+	}
+	if err := pprof.StartCPUProfile(file); err != nil {
+		file.Close()
+		return func() {}, fmt.Errorf("nanolathe: start CPU profile %q: %w", p.cpuPath, err)
+	}
+	return func() {
+		pprof.StopCPUProfile()
+		file.Close()
+	}, nil
+}
+
+// writeHeap writes the allocation profile after the session has finished, so
+// the cumulative allocation counters cover the whole run.
+func (p profileOptions) writeHeap() error {
+	if p.heapPath == "" {
+		return nil
+	}
+	file, err := os.Create(p.heapPath)
+	if err != nil {
+		return fmt.Errorf("nanolathe: create memory profile %q: %w", p.heapPath, err)
+	}
+	runtime.GC()
+	if err := pprof.Lookup("allocs").WriteTo(file, 0); err != nil {
+		file.Close()
+		return fmt.Errorf("nanolathe: write memory profile %q: %w", p.heapPath, err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("nanolathe: close memory profile %q: %w", p.heapPath, err)
+	}
+	return nil
+}
+
+func parse(args []string, output io.Writer) (headless.Request, string, profileOptions, error) {
 	var request headless.Request
 	var reportPath string
+	var profiles profileOptions
 	var seed int64
 	var ticks int64
 	flags := flag.NewFlagSet("nanolathe-headless", flag.ContinueOnError)
@@ -57,11 +132,13 @@ func parse(args []string, output io.Writer) (headless.Request, string, error) {
 	flags.Int64Var(&seed, "seed", -1, "seed for both deterministic streams; negative derives a pair from the clock")
 	flags.Int64Var(&ticks, "ticks", 0, "authoritative tick limit (0 = 18000)")
 	flags.StringVar(&reportPath, "report", "", "JSON report path (default stdout)")
+	flags.StringVar(&profiles.cpuPath, "cpuprofile", "", "write a pprof CPU profile of the authoritative run to this file")
+	flags.StringVar(&profiles.heapPath, "memprofile", "", "write a pprof allocation profile of the authoritative run to this file")
 	if err := flags.Parse(args); err != nil {
-		return request, reportPath, err
+		return request, reportPath, profiles, err
 	}
 	if ticks < 0 || uint64(ticks) > uint64(^uint32(0)) {
-		return request, reportPath, fmt.Errorf("nanolathe: tick limit is outside the non-negative 32-bit battle boundary")
+		return request, reportPath, profiles, fmt.Errorf("nanolathe: tick limit is outside the non-negative 32-bit battle boundary")
 	}
 	if seed < 0 {
 		now := time.Now()
@@ -72,7 +149,7 @@ func parse(args []string, output io.Writer) (headless.Request, string, error) {
 		request.CRTSeed = uint32(seed)
 	}
 	request.TickLimit = uint32(ticks)
-	return request, reportPath, nil
+	return request, reportPath, profiles, nil
 }
 
 func defaultRoot() string {

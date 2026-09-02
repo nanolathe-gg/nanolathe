@@ -88,9 +88,20 @@ type Scheduler struct {
 
 	scales [10]int32
 
-	callCount     uint32
-	haveLast      bool // false preserves the constructor's initial 6x quantum
-	active        *Request
+	callCount uint32
+	haveLast  bool // false preserves the constructor's initial 6x quantum
+	active    *Request
+	// activeReq is the storage `active` points at. The admission loop used to
+	// take the address of a loop-local request, which makes Go's escape
+	// analysis heap-allocate that local on *every* poll iteration — including
+	// the overwhelming majority that reject the candidate and never admit it.
+	// At roughly a thousand polls a tick that was three quarters of the whole
+	// run's allocated objects and a large share of its GC time. Pointing at a
+	// field of the scheduler is behaviourally identical: there is one active
+	// request at a time [04 R-PATH-01 §6], it is cleared to nil on completion
+	// or cancellation, and no caller retains the pointer across an admission —
+	// TraceState and TraceFor both copy through it immediately.
+	activeReq     Request
 	activePlayer  int
 	activeScale   int32
 	playerCursor  int
@@ -475,7 +486,8 @@ func (s *Scheduler) Tick(tick uint32) {
 		if poll != PollRequest || s.accumulator[player] < 0 {
 			continue
 		}
-		s.active, s.activePlayer = &req, player
+		s.activeReq = req
+		s.active, s.activePlayer = &s.activeReq, player
 		s.activeScale = s.ScaleFor(uint8(player))
 		// Admission initializes the request and ray only. Heap pops begin in
 		// the active continuation below when the remaining allowance permits.

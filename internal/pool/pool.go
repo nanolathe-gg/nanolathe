@@ -115,9 +115,16 @@ type Units struct {
 	alive     []bool   // index 0 is sentinel, never allocated; len = totalRecords
 	defID     []uint16 // occupancy identity per slot, 0 = free [P0-16 §2.1]
 	slotIndex []uint16 // slot number stamped at init, retained stale after free [P0-16 §3.4]
-	maxDefs   int
-	slices    [10]struct{ start, end int } // inclusive per-player bounds [P0-16 §3.1]
-	sliced    bool
+	// used mirrors the count Used() would compute by scanning. The pool is
+	// sized at maxDefs*10+1 records — several thousand for a retail catalog —
+	// so the scan cost is set by the catalog, not by how many units exist, and
+	// the per-tick caller paid it in full on a battle with fifty units. Alloc
+	// and Free are the only writers of alive/defID, and each sets or clears
+	// both together, so the maintained count is exactly the scan's answer.
+	used    int
+	maxDefs int
+	slices  [10]struct{ start, end int } // inclusive per-player bounds [P0-16 §3.1]
+	sliced  bool
 }
 
 // NewUnitsSliced creates a sliced retail pool for maxDefs catalog
@@ -167,6 +174,7 @@ func (p *Units) InitSlicedWithOrder(maxDefs int, order PlayerPermutation) error 
 	}
 	p.alive = make([]bool, total)
 	p.defID = make([]uint16, total)
+	p.used = 0
 	p.slotIndex = make([]uint16, total)
 	for i := 0; i < total; i++ {
 		p.slotIndex[i] = uint16(i) // slot index stamped at init, retained after free [P0-16 §3.4]
@@ -288,6 +296,7 @@ func (p *Units) AllocForPlayerWithDef(player int, defID uint16, limitEnabled boo
 		if !p.alive[i] && p.defID[i] == 0 {
 			p.alive[i] = true
 			p.defID[i] = defID
+			p.used++
 			return Handle(i), true
 		}
 	}
@@ -331,6 +340,7 @@ func (p *Units) AllocForcedWithDef(player int, defID uint16, forced Handle, limi
 	}
 	p.alive[idx] = true
 	p.defID[idx] = defID
+	p.used++
 	return forced, true
 }
 
@@ -349,7 +359,12 @@ func (p *Units) Free(h Handle) {
 	if idx <= 0 || idx >= len(p.alive) {
 		return
 	}
-	// Retain slotIndex stale [P0-16 §3.4]; clear occupancy and alive.
+	// Retain slotIndex stale [P0-16 §3.4]; clear occupancy and alive. A free
+	// of an already-free slot is a no-op for the count, exactly as it is for
+	// the flags.
+	if p.alive[idx] && p.defID[idx] != 0 {
+		p.used--
+	}
 	p.alive[idx] = false
 	p.defID[idx] = 0
 	// slotIndex[idx] untouched
@@ -379,8 +394,19 @@ func (p *Units) Capacity() int {
 	return len(p.alive) - 1
 }
 
-// Used returns the number of currently allocated slots.
+// Used returns the number of currently allocated slots. It is the maintained
+// count, not a scan; countUsed is the scan the count mirrors and exists so a
+// test can hold the two against each other.
 func (p *Units) Used() int {
+	if p == nil || p.alive == nil {
+		return 0
+	}
+	return p.used
+}
+
+// countUsed recomputes the allocated-slot count by scanning. Production reads
+// Used; this is the reference the maintained count is tested against.
+func (p *Units) countUsed() int {
 	if p == nil || p.alive == nil {
 		return 0
 	}

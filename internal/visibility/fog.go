@@ -9,6 +9,8 @@ type FogCache struct {
 	ch1  []uint8 // channel one: values 0..15
 	// originX/originZ identify the first cache cell in a viewport-aligned window.
 	originX, originZ int32
+	// out0/out1 back Channels' result. See Channels for why they are retained.
+	out0, out1 []uint8
 }
 
 // Fog returns the presentation fog cache [PLAN_05 Public API].
@@ -32,16 +34,33 @@ func (f *FogCache) Origin() (int32, int32) {
 }
 
 // Channels returns copies of the two channel slices for snapshot presentation [03 §3.3] C13.
-// The slices are copies; mutation does not affect the cache (I6).
+// The slices are copies: writing through them does not affect the cache (I6).
+//
+// They are not fresh copies. The publication boundary calls this once per tick
+// and copies the result straight into the frame's own buffers, so allocating
+// two map-sized slices per tick only to discard them was a per-tick allocation
+// funding nothing — and the zeroing of the new slices, immediately overwritten
+// by the copy, was the visible cost. The result is therefore backed by storage
+// the cache retains and refills, which keeps the documented guarantee (the
+// cache's own channels are still untouched by a caller's writes) while costing
+// nothing per tick.
+//
+// The consequence a caller must respect: a second call invalidates the slices
+// the first one returned. Consume or copy the result before calling again.
 func (f *FogCache) Channels() ([]uint8, []uint8) {
 	if f == nil || f.ch0 == nil {
 		return nil, nil
 	}
-	c0 := make([]uint8, len(f.ch0))
-	copy(c0, f.ch0)
-	c1 := make([]uint8, len(f.ch1))
-	copy(c1, f.ch1)
-	return c0, c1
+	if cap(f.out0) < len(f.ch0) {
+		f.out0 = make([]uint8, len(f.ch0))
+	}
+	if cap(f.out1) < len(f.ch1) {
+		f.out1 = make([]uint8, len(f.ch1))
+	}
+	f.out0, f.out1 = f.out0[:len(f.ch0)], f.out1[:len(f.ch1)]
+	copy(f.out0, f.ch0)
+	copy(f.out1, f.ch1)
+	return f.out0, f.out1
 }
 
 // NewFogCacheFromChannels creates a detached presentation FogCache from

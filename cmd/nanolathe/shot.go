@@ -4,9 +4,61 @@ import (
 	"fmt"
 	"image/png"
 	"os"
+	"runtime"
+	"runtime/pprof"
+	"sync"
+	"time"
 
 	"github.com/nanolathe/nanolathe/internal/client"
 )
+
+// startCPUProfile begins host-side CPU sampling and returns the stop function.
+// The sampler observes the shipping compose path; it neither enters the session
+// nor changes what the session draws [I6][I11].
+func startCPUProfile(path string) (func(), error) {
+	if path == "" {
+		return func() {}, nil
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		return func() {}, fmt.Errorf("nanolathe: create CPU profile %q: %w", path, err)
+	}
+	if err := pprof.StartCPUProfile(file); err != nil {
+		file.Close()
+		return func() {}, fmt.Errorf("nanolathe: start CPU profile %q: %w", path, err)
+	}
+	// The stop is idempotent so the normal path can flush the profile before
+	// the memory profile is taken while an early return still flushes it.
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			pprof.StopCPUProfile()
+			file.Close()
+		})
+	}, nil
+}
+
+// writeMemProfile writes the cumulative allocation profile once the measured
+// work is over, so per-frame allocation shows up as a total rather than as a
+// live-heap sample.
+func writeMemProfile(path string) error {
+	if path == "" {
+		return nil
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("nanolathe: create memory profile %q: %w", path, err)
+	}
+	runtime.GC()
+	if err := pprof.Lookup("allocs").WriteTo(file, 0); err != nil {
+		file.Close()
+		return fmt.Errorf("nanolathe: write memory profile %q: %w", path, err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("nanolathe: close memory profile %q: %w", path, err)
+	}
+	return nil
+}
 
 // shotMillisSource is the capture path's host clock. The windowed loop samples
 // a monotonic wall clock, so a capture that only calls the viewer step in a
@@ -71,6 +123,19 @@ func runShot(opts Options, cs *contentSet) error {
 	}
 	defer b.teardown(cl)
 
+	// Sampling starts after content load and battle composition so a profile
+	// describes the steady-state loop rather than one-time setup. With
+	// `--profile-seconds` it starts later still, at the measured loop itself,
+	// so the warm-up ticks do not dilute the per-frame picture.
+	var stopCPU = func() {}
+	if opts.ProfileSeconds <= 0 {
+		stopCPU, err = startCPUProfile(opts.CPUProfile)
+		if err != nil {
+			return err
+		}
+	}
+	defer func() { stopCPU() }()
+
 	// One tick of wall clock per authoritative tick at the 30 Hz rate [01 §4.1].
 	// The viewer step owns the clock, the sub-tick budget and the publication
 	// boundary, so driving it is what makes the captured frame a committed one.
@@ -111,6 +176,33 @@ func runShot(opts Options, cs *contentSet) error {
 		}
 		b.cam.SetScaleAbout(fx, fy, float32(opts.ShotZoom))
 	}
+
+	// `--profile-seconds` is the render-side measurement path. It drives the
+	// two calls the Ebitengine adapter makes — the viewer step and Present —
+	// at the 30 Hz rate with the window loop left unentered, so the per-frame
+	// cost it reports is the windowed loop's own cost minus the GPU upload
+	// [03 §2.4][I6]. It deliberately does not use ComposeFrame: that path
+	// allocates a screen-sized image per call for the PNG encoder, which is a
+	// capture cost the game does not pay and would dominate the measurement.
+	if opts.ProfileSeconds > 0 {
+		stopCPU, err = startCPUProfile(opts.CPUProfile)
+		if err != nil {
+			return err
+		}
+		frames := opts.ProfileSeconds * 30
+		started := time.Now()
+		for i := 0; i < frames; i++ {
+			millis.step = uint32(opts.ShotTicks) + uint32(i) + 2
+			b.viewerStep(tickSeconds, cl)
+			cl.Present()
+		}
+		elapsed := time.Since(started)
+		fmt.Fprintf(os.Stderr, "nanolathe: %d frames in %s (%.2f ms/frame, %.1f fps)\n",
+			frames, elapsed.Round(time.Millisecond),
+			float64(elapsed.Microseconds())/float64(frames)/1000,
+			float64(frames)/elapsed.Seconds())
+	}
+
 	img := cl.ComposeFrame()
 	file, err := os.Create(opts.Shot)
 	if err != nil {
@@ -123,5 +215,6 @@ func runShot(opts Options, cs *contentSet) error {
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("nanolathe: close shot %q: %w", opts.Shot, err)
 	}
-	return nil
+	stopCPU()
+	return writeMemProfile(opts.MemProfile)
 }

@@ -908,6 +908,11 @@ type World struct {
 	pool    *pool.Units
 	catalog *content.Catalog
 
+	// iterHint is the live-unit count Iter last produced, used only to size
+	// the next Iter allocation. It is presentation-neutral bookkeeping and
+	// never reaches simulation arithmetic.
+	iterHint int
+
 	// OnDeath is the death-notification hook [08 "Evaluation"]; nil means no
 	// consumer. It fires exactly once per unit at slot-end finalization.
 	OnDeath DeathHook
@@ -2095,17 +2100,26 @@ func (w *World) CreatedCountForPlayer(player int) uint32 {
 	return w.createdCounters[player]
 }
 
-// Iter returns units in deterministic order for tests (pool asc).
+// Iter returns units in deterministic order (pool slot ascending, I1). It is
+// read several times a tick by the economy, movement, combat and publication
+// phases, so the result is sized from the previous call's answer: an append
+// from nil regrows the slice five or six times on the way to a battle's unit
+// count, and the hint turns that into one allocation. The hint only affects
+// capacity — the contents, order and length are what the scan produces.
 func (w *World) Iter() []*Unit {
 	if w == nil {
 		return nil
 	}
 	var out []*Unit
+	if w.iterHint > 0 {
+		out = make([]*Unit, 0, w.iterHint)
+	}
 	for i := 1; i < len(w.units); i++ {
 		if u := w.units[i]; u != nil && u.Alive {
 			out = append(out, u)
 		}
 	}
+	w.iterHint = len(out)
 	return out
 }
 

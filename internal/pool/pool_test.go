@@ -465,3 +465,53 @@ func TestP016_SameTickReuseVisibility(t *testing.T) {
 	_ = h1
 	_ = h3
 }
+
+// TestUsedMatchesScanThroughAllocAndFree locks the maintained allocated-slot
+// count to the scan it replaced. Used() is read once per tick over a pool sized
+// by the catalog, so it is maintained rather than scanned; if a future writer
+// of alive/defID forgets to keep the count, this is what catches it.
+func TestUsedMatchesScanThroughAllocAndFree(t *testing.T) {
+	p := NewUnitsSliced(4)
+	check := func(step string) {
+		t.Helper()
+		if got, want := p.Used(), p.countUsed(); got != want {
+			t.Fatalf("%s: Used() = %d, scan = %d", step, got, want)
+		}
+	}
+	check("fresh")
+	var handles []Handle
+	for player := 0; player < 3; player++ {
+		for def := uint16(1); def <= 3; def++ {
+			h, ok := p.AllocForPlayerWithDef(player, def, false, 0)
+			if !ok {
+				t.Fatalf("alloc player %d def %d", player, def)
+			}
+			handles = append(handles, h)
+			check("after alloc")
+		}
+	}
+	if p.Used() != 9 {
+		t.Fatalf("Used() = %d, want 9", p.Used())
+	}
+	// A double free must not double-decrement, and a free of the null slot or
+	// an out-of-range handle must not move the count at all.
+	p.Free(handles[0])
+	check("after free")
+	p.Free(handles[0])
+	check("after double free")
+	p.Free(0)
+	p.Free(Handle(len(p.alive) + 5))
+	check("after invalid frees")
+	// A forced-slot reallocation of the freed slot restores the count.
+	if _, ok := p.AllocForcedWithDef(0, 2, handles[0], false, 0); !ok {
+		t.Fatalf("forced alloc of freed slot %d", handles[0])
+	}
+	check("after forced alloc")
+	for _, h := range handles {
+		p.Free(h)
+	}
+	check("after draining")
+	if p.Used() != 0 {
+		t.Fatalf("Used() = %d after draining, want 0", p.Used())
+	}
+}

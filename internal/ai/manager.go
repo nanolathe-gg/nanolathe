@@ -98,6 +98,11 @@ type Manager struct {
 	// unitLossDeadline is written by RecordUnitLoss and gates the corresponding
 	// construction retry path when that definition-level gate is present [08].
 	unitLossDeadline uint32
+	// strategicTypes is the sorted catalog unit-key list EnsureStrategicInitialized
+	// tests the strategic maps against, cached against the catalog it was built
+	// from. It is derived state with no simulation meaning of its own.
+	strategicTypes    []string
+	strategicTypesFor *content.Catalog
 
 	// Each attack-wave task owns its own engagement hysteresis latch. It starts
 	// clear, survives ordinary group churn, and is cleared only by the gather
@@ -265,14 +270,28 @@ func (m *Manager) EnsureStrategicInitialized() {
 	if cat == nil || cat.Units == nil || len(cat.Units) == 0 {
 		return
 	}
-	types := make([]string, 0, len(cat.Units))
-	for k := range cat.Units {
-		types = append(types, k)
+	// This runs once per AI player per tick and almost always finds the maps
+	// already complete, but the sorted key list it tests against was rebuilt
+	// from scratch every time: a map walk and a string sort over the whole
+	// catalog's unit table for an answer that cannot change while the catalog
+	// does not. The list is a pure function of the catalog's key set, so it is
+	// cached against the catalog identity and its size; a different catalog,
+	// or a fixture that adds or removes a definition, rebuilds it.
+	types := m.strategicTypes
+	if m.strategicTypesFor != cat || len(types) != len(cat.Units) {
+		types = make([]string, 0, len(cat.Units))
+		for k := range cat.Units {
+			types = append(types, k)
+		}
+		sort.Strings(types)
+		m.strategicTypes, m.strategicTypesFor = types, cat
 	}
-	sort.Strings(types)
 	if strategicMapsComplete(&m.Strategic, types) {
 		return
 	}
+	// Init and the loop below may retain what they are handed, so the rare
+	// rebuild path gets its own copy rather than the cached slice.
+	types = append([]string(nil), types...)
 	// Rebuild all per-type maps through the established initializer. Preserve
 	// any concrete class-vector values supplied by a caller for keys that are
 	// still in the authored catalog; missing and extra keys are never accepted

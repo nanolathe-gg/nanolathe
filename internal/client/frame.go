@@ -1,6 +1,8 @@
 package client
 
 import (
+	"encoding/binary"
+
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/render"
@@ -377,18 +379,32 @@ func (c *Client) drawSelectionStage() {
 // GUI semantic colors are resolved through the logical→physical map by the
 // caller before FNT/primitives write, and "no GUI lookup is performed again
 // during indexed-to-RGB presentation" [03 §4.3][07 "Retail palette contract"].
+//
+// It runs over every pixel of the screen on every presented frame, so the
+// per-pixel work is what matters: four separately bounds-checked byte stores
+// plus an alpha re-read and test. The palette is 256 entries, so folding the
+// opaque-alpha rule into a packed lookup built once per call turns the inner
+// loop into a single 32-bit store while writing exactly the same bytes. The
+// table is rebuilt per call rather than cached, so a palette swap needs no
+// invalidation and 256 iterations cost nothing against a full screen.
 func (c *Client) convertIndexedToRGBA() {
 	if len(c.indexed)*4 != len(c.rgba) {
 		return
 	}
-	for i, idx := range c.indexed {
-		c.rgba[i*4+0] = c.base[idx][0]
-		c.rgba[i*4+1] = c.base[idx][1]
-		c.rgba[i*4+2] = c.base[idx][2]
-		c.rgba[i*4+3] = c.base[idx][3]
+	// Little-endian packing puts byte 0 (red) in the low bits, so the packed
+	// store lands the four components in the order the explicit stores did.
+	var lut [256]uint32
+	for i := range lut {
+		e := c.base[i]
 		// Ensure opaque; PALETTE.PAL's fourth byte is reserved zero.
-		if c.rgba[i*4+3] == 0 {
-			c.rgba[i*4+3] = 255
+		a := e[3]
+		if a == 0 {
+			a = 255
 		}
+		lut[i] = uint32(e[0]) | uint32(e[1])<<8 | uint32(e[2])<<16 | uint32(a)<<24
+	}
+	dst := c.rgba
+	for i, idx := range c.indexed {
+		binary.LittleEndian.PutUint32(dst[i*4:i*4+4:i*4+4], lut[idx])
 	}
 }
