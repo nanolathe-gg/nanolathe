@@ -198,15 +198,18 @@ func TestComputerPlayerFormsAnAttackWaveRetail(t *testing.T) {
 		t.Fatal("the computer slot composed without a manager")
 	}
 	scaled := sess.Clock.ScaledAnchor
-	// This test runs at the lobby default difficulty, Medium, and the wave
-	// forms on this seed at tick 10500. The budget was briefly 18000 during
+	// This test runs at the lobby default difficulty, Medium. Compiling the
+	// complete download menu in retail union order changes the weighted unit
+	// candidate sequence [02 R-CAT-01 §1][08 R-AI-01 §8], so the first
+	// regroup-A member on this seed now arrives at tick 15090. The budget was
+	// briefly 18000 during
 	// WU-19-32: the exact-versus-category matcher of [08 R-AI-01 §12] made
 	// ai/default.txt's `Weight ARM 0.2` / `Weight CORE 0.2` reach every member
 	// of those categories for the first time, and against the hard tables the
 	// profile then fell back to that pushed formation out to 14100. Binding the
-	// real difficulty word brought it back in, so the budget returns to what it
-	// was rather than keeping the margin.
-	const formationBy = uint32(12000)
+	// real difficulty word brought it back in; the complete authored candidate
+	// table moves it forward again, still within the established 18000 bound.
+	const formationBy = uint32(18000)
 	for sess.Clock.GlobalTick < formationBy && sess.State != StatePostBattle {
 		scaled += 5
 		sess.Step(scaled)

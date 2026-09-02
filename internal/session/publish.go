@@ -291,10 +291,31 @@ func (s *Session) publishSnapshot(tick uint32) {
 					published.CommandPage.PageCount = uint16(pageCount)
 					pageNumber := hud.ClampPage(hud.DecodePage(u.Flags), pageCount)
 					published.CommandPage.Page = uint16(pageNumber)
-					// The keys are copied, not aliased: the catalog's slice must
-					// not reach presentation through the frame [I6].
-					products := hud.ProductsForPage(page.Buttons, pageNumber, buttonsPerPage)
-					published.CommandPage.ProductKeys = append(published.CommandPage.ProductKeys[:0], products...)
+					// Base CANBUILD membership keeps its canonical page order. The
+					// download-menu tail on BuildMenuPage.Buttons is an extension of
+					// authoritative membership, not a flat continuation whose slice
+					// position determines a page: download records carry PAGE and
+					// BUTTON explicitly [02 R-CAT-01 §8][07 §9].
+					baseButtons := page.BaseButtons()
+					// Hand-built catalogs predating BaseButtonCount have no
+					// download records and therefore consist wholly of CANBUILD
+					// membership. Compiled catalogs always set the count, including
+					// the legitimate zero-base/download-only case.
+					if page.BaseButtonCount == 0 && len(s.Catalog.DownloadPlacements) == 0 {
+						baseButtons = page.Buttons
+					}
+					baseProducts := hud.ProductsForPage(baseButtons, pageNumber, buttonsPerPage)
+					published.CommandPage.ProductKeys = append(published.CommandPage.ProductKeys[:0], baseProducts...)
+					for _, placement := range s.Catalog.DownloadPlacementsForPage(u.Def.CanonicalKey, pageNumber) {
+						published.CommandPage.GeneratedProducts = append(published.CommandPage.GeneratedProducts, frame.GeneratedProductPlacement{
+							ProductKey: placement.Product,
+							Button:     placement.Button,
+						})
+						if containsCanonicalProduct(published.CommandPage.ProductKeys, placement.Product) {
+							continue
+						}
+						published.CommandPage.ProductKeys = append(published.CommandPage.ProductKeys, placement.Product)
+					}
 				}
 			}
 		}
@@ -662,6 +683,16 @@ func (s *Session) publishSnapshot(tick uint32) {
 	if s.publication != nil && s.publication.events != nil {
 		s.publication.events.Reset()
 	}
+}
+
+func containsCanonicalProduct(products []string, candidate string) bool {
+	want := content.CanonicalKey(candidate)
+	for _, product := range products {
+		if content.CanonicalKey(product) == want {
+			return true
+		}
+	}
+	return false
 }
 
 // publishPlayerRows publishes the ten player slots' live rows once per tick,

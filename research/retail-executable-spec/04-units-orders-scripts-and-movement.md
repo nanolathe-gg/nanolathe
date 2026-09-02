@@ -805,6 +805,17 @@ segment when the record's static mask carries the rear-segment selection flag
 insert — the record is dispatched on the unit's next pump visit, never in the
 same one.
 
+**Established (2026-09-01, [07 R-WGT-01 §10]) — the standing record does not
+affect selectability.** The eligibility predicate behind rectangle selection,
+the bulk-select hotkeys, the idle-latch `cursorselect` test and the mission
+triggers reads no order state: its float compare is the remaining-build
+fraction, and neither pump, the record constructor, the handler epilogue, nor
+this refill writes that word. A unit idling on its `defaultmissiontype` record
+is as selectable and inspectable as one whose queue is empty. The reference
+install's census (278 definitions: `Standby` 122, `VTOL_Standby` 30,
+`Standby_Mine` 12, `Guard_NoMove` 26, 88 structures with no key) is recorded
+there.
+
 ### Closed — handler retry and pre-reject mapping [R-ORDER-02 §1] (2026-08-27)
 
 This closure answers the open orders question that the per-handler

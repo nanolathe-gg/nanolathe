@@ -118,6 +118,39 @@ type Service struct {
 	// session gets.
 	GeothermalSteam func(x, y, z numeric.Fixed)
 
+	// AnimationTicks reports how long a definition's DEATH or RECLAIM sequence
+	// runs, in visits, for the animation records of [05 R-FEAT-01 §5] step 5.
+	// It is the twin of BurnAnimationTicks for the other two sequences, and the
+	// selector picks between them: 1 selects `seqnamedie`, 2 selects
+	// `seqnamereclamate` [R-SAVE-FEATURE-01]. The length is the sum over the
+	// GAF entry's frames of max(delay, 1) [05 R-FEAT-01 §10], which is asset
+	// data this package does not own — hence a seam.
+	//
+	// A nil hook, or a zero result, means the sequence cannot be run at all.
+	// The transition then takes §5 step 3's immediate replacement rather than
+	// attaching a record that would never finish: an animation with no length
+	// would freeze the cell forever, which is a worse divergence than the
+	// replacement the same section already prescribes when no sequence is
+	// named. No length is invented here.
+	AnimationTicks func(def *content.FeatureDef, selector uint8) int32
+
+	// BurnFrameGeometry reports the burn animation's CURRENT frame geometry —
+	// the GAF frame's width and height and its two authored offsets [fmt gaf] —
+	// on the visit'th visit of the burn cursor. It is what the smoke jitter of
+	// [05 R-FEAT-01 §10] pass 3a scales its two CRT draws by; burnSmokeJitter
+	// in burn.go is that arithmetic. A nil hook means no geometry is known and
+	// the puff is emitted unjittered at the footprint centre, which is the
+	// established base position of the same paragraph.
+	BurnFrameGeometry func(def *content.FeatureDef, visit int32) (w, h, xoff, yoff int32)
+
+	// BurnSmoke is the strip-5 burning-feature smoke producer of
+	// [R-STRIP-01 §1 strip 5], called once per burning instance on every third
+	// tick with the already-jittered world position [05 R-FEAT-01 §10] pass 3a.
+	// The strip table is session state, so this is a seam rather than a call,
+	// exactly like GeothermalSteam above; a nil hook means no puff, which is
+	// what every fixture that does not compose a session gets.
+	BurnSmoke func(pos [3]numeric.Fixed)
+
 	// pendingBurnReplacement is a bounded hand-off for burn.go's established
 	// clear-then-spawn sequence. It is consumed and cleared by the next spawn
 	// (including every failure path), so a failed successor cannot suppress a
@@ -322,6 +355,88 @@ func (s *Service) SetBurnAnimationTicks(fn func(*content.FeatureDef) int32) {
 	s.BurnAnimationTicks = fn
 }
 
+// SetAnimationTicks installs the death/reclaim sequence-length hook, the twin
+// of SetBurnAnimationTicks for the other two sequences [05 R-FEAT-01 §5]
+// step 5. With no hook installed the transition replaces immediately, which is
+// what every path did before the animation records existed.
+func (s *Service) SetAnimationTicks(fn func(def *content.FeatureDef, selector uint8) int32) {
+	s.AnimationTicks = fn
+}
+
+// transitionFeatureAt is the transition of [05 R-FEAT-01 §5]: what damage
+// death, the reclaim payout, the multiplayer state commands and save reload
+// call. It reports whether it attached an event animation, in which case the
+// caller must NOT replace — the feature phase drives the record to completion
+// and runs the replacement itself [05 R-FEAT-01 §10] pass 3.
+//
+// The steps are the section's own, in order:
+//
+//  1. walk a fringe back to its anchor; a word at or above the sentinel band
+//     returns silently (the anchor walk is the resolver the callers already
+//     use, so it happens at the call site);
+//  2. for a SPRITE definition select the event sequence — `seqnamedie` when
+//     the cause is death, `seqnamereclamate` when it is reclaim; for a 3D
+//     definition the selection is always "none";
+//  3. no sequence means immediate replacement, which is the caller's default;
+//  4. sequence present and the cell already carries an event record means
+//     return with no effect — the death or reclaim is dropped, not queued;
+//  5. sequence present and no record: attach it at frame 0, record the anchor,
+//     and set the mode bits — burning clear, reclaim-animation set from the
+//     cause.
+func (s *Service) transitionFeatureAt(cx, cz int, def *content.FeatureDef, isReclaim bool) bool {
+	if s == nil || s.Terrain == nil || def == nil {
+		return false
+	}
+	// Step 2: a 3D definition never selects a sequence, so it always replaces.
+	// Object naming is the 3D discriminator the rest of this package uses.
+	if def.Object != "" {
+		return false
+	}
+	selector := featureAnimSelectorDie
+	sequence := def.SeqNameDie
+	if isReclaim {
+		selector = featureAnimSelectorReclaim
+		sequence = def.SeqNameReclamate
+	}
+	if sequence == "" {
+		return false // step 3
+	}
+	// The sequence's length in visits is asset data behind a seam. Without it
+	// the record could never finish, so the transition falls back to step 3's
+	// replacement instead of freezing the cell (see AnimationTicks).
+	if s.AnimationTicks == nil {
+		return false
+	}
+	visits := s.AnimationTicks(def, selector)
+	if visits <= 0 {
+		return false
+	}
+	idx := cz*int(s.Terrain.CellW) + cx
+	if idx < 0 || idx >= len(s.Terrain.Plot) {
+		return false
+	}
+	inst, ok := s.instances[idx]
+	if !ok || inst == nil {
+		// Retail pops a fresh animation slot and attaches it to the cell. In
+		// this build every stamped anchor already owns its instance, so a cell
+		// with none is one the service does not track; replacing is then the
+		// only honest outcome.
+		return false
+	}
+	if inst.IsBurning || inst.IsAnimating {
+		return true // step 4: dropped, and the caller must not replace either
+	}
+	// Step 5.
+	inst.IsBurning = false
+	inst.IsAnimating = true
+	inst.AnimationSelector = selector
+	inst.AnimationFrame = 0
+	inst.BurnTicks = 0
+	inst.BurnDuration = visits
+	s.Terrain.Plot[idx].SetOccupied(true) // the anchor's instance-attached bit
+	return true
+}
+
 // CorpseDefFor resolves the corpse feature for depth low-nibble [06 §12.1] C23 [04 §5.1].
 // It mirrors combat.ResolveCorpse but lives in features so callers without
 // combat import can still resolve. Depth is the Killed-variant low nibble
@@ -382,6 +497,15 @@ func (s *Service) Reclaim(u *units.Unit, f *Instance, tick uint32) (metal, energ
 	if f.IsBurning && f.Def.Filename != "" {
 		return 0, 0
 	}
+	// A cell already carrying an event record — burning, dying or reclaiming —
+	// is inert to every further cause, and the reclaim executor's payout
+	// refuses along with the rest [05 R-FEAT-01 §5 "same-tick precedence"]
+	// [05 R-FEAT-01 §15]. Without this the same tree could pay out once per
+	// visit while its animation ran, and the transition below would drop the
+	// replacement at step 4 with the credit already spent.
+	if f.IsAnimating || f.IsBurning {
+		return 0, 0
+	}
 	def := f.Def
 	// Verify reclaimable and not indestructible [05 "Feature reclaim"].
 	if !def.Reclaimable || def.Indestructible {
@@ -393,8 +517,12 @@ func (s *Service) Reclaim(u *units.Unit, f *Instance, tick uint32) (metal, energ
 	// Apply special-player scaling where required TODO(T25) — no established
 	// consumer for the builder's player mode in this phase; placeholder keeps
 	// ordinary addition.
-	// Replace with reclaimed successor or remove [05 "Removal and successor replacement"].
-	s.replaceFeatureAt(f.CX, f.CZ, def.FeatureReclamateDef)
+	// The payout is settled above; the cell itself goes through the transition
+	// of [05 R-FEAT-01 §5], which plays `seqnamereclamate` when the definition
+	// names one and replaces immediately when it does not.
+	if !s.transitionFeatureAt(f.CX, f.CZ, def, true) {
+		s.replaceFeatureAt(f.CX, f.CZ, def.FeatureReclamateDef)
+	}
 	_ = u
 	_ = tick
 	return metal, energy
@@ -698,6 +826,16 @@ func (s *Service) RemoveFeatureAt(cx, cz int, cause Cause) {
 			if d, ok := s.Terrain.FeatureDefAt(feat); ok {
 				def = d
 			}
+		}
+	}
+	// Death and reclaim are the transition of [05 R-FEAT-01 §5]: when the
+	// definition names the matching event sequence the feature plays it out
+	// first and the feature phase replaces at the end, so the removal here
+	// stops. Burn completion is not the transition — pass 3c tears down and
+	// stamps `featureburnt` directly — so it never consults a sequence.
+	if cause == CauseDead || cause == CauseReclaim {
+		if s.transitionFeatureAt(cx, cz, def, cause == CauseReclaim) {
+			return
 		}
 	}
 	var succ *content.FeatureDef

@@ -138,6 +138,16 @@ func catalogHash(c *Catalog) string {
 			fmt.Fprintf(h, "buildmenu %s %s\n", k, bm.Hash)
 		}
 	}
+	// Download placements retain union-enumeration and section order; no sort
+	// is needed because CompileDownloadMenus produces the deterministic retail
+	// order [02 R-CAT-01 §8]. Provenance distinguishes overlay winners.
+	for _, placement := range c.DownloadPlacements {
+		fmt.Fprintf(h, "download %d %d %s %t %d %d %s %t %s %s %d\n",
+			placement.FileOrder, placement.ItemOrder,
+			CanonicalKey(placement.Builder), placement.BuilderResolved, placement.Menu, placement.Button,
+			CanonicalKey(placement.Product), placement.ProductResolved, placement.Provenance.LogicalPath,
+			placement.Provenance.ProviderID, placement.Provenance.MountOrder)
+	}
 	// Sound aliases — sorted [02 "Sound aliases"].
 	if len(c.Aliases) > 0 {
 		keys := make([]string, 0, len(c.Aliases))
@@ -183,8 +193,8 @@ func catalogHash(c *Catalog) string {
 	if c.Categories != nil {
 		categoryCount = len(c.Categories.entries)
 	}
-	fmt.Fprintf(h, "counts u=%d w=%d f=%d m=%d sides=%d s=%d maps=%d ai=%d aliases=%d menus=%d models=%d categories=%d los=%d meteor=%d\n",
-		len(c.Units), len(c.Weapons), len(c.Features), len(c.Movement), len(c.Sides), len(c.Sounds), len(c.Maps), len(c.AIProfiles), len(c.Aliases), len(c.BuildMenus), len(c.sortedModels), categoryCount, lenTables(c.LOS), hasMeteor(c.Meteor))
+	fmt.Fprintf(h, "counts u=%d w=%d f=%d m=%d sides=%d s=%d maps=%d ai=%d aliases=%d menus=%d downloads=%d models=%d categories=%d los=%d meteor=%d\n",
+		len(c.Units), len(c.Weapons), len(c.Features), len(c.Movement), len(c.Sides), len(c.Sounds), len(c.Maps), len(c.AIProfiles), len(c.Aliases), len(c.BuildMenus), len(c.DownloadPlacements), len(c.sortedModels), categoryCount, lenTables(c.LOS), hasMeteor(c.Meteor))
 
 	sum := h.Sum(nil)
 	return hex.EncodeToString(sum)

@@ -175,21 +175,21 @@ type UnitDef struct {
 	// `guis/<n>0.GUI` exists), else 1 when page 0 exists, else 0. Valid pages
 	// are therefore `0 .. BuildPageCount-1`.
 	//
-	// The authored `<n>N.GUI` pages are the sole authority for page existence:
-	// "a replacement engine must not infer an eight-slot grid or synthesize
-	// missing pages" [07 §9]. Dividing the `CANBUILD` list by six instead
-	// invents pages no page window exists for — three Arm and three Core
-	// builders author nineteen or twenty products across three authored pages,
-	// so that arithmetic claims a fourth — and selecting one leaves the command
-	// panel with no window at all.
+	// Two authored sources establish page existence. Physical `<n>N.GUI` files
+	// establish the initial count [02 R-CAT-01 §5 step 5]. A later download
+	// MENU can raise it; when that physical file is absent, the HUD opens the
+	// side's `ARMDL`/`CORDL` template and patches the authored BUTTON slots
+	// [02 R-CAT-01 §8][07 R-HUD-03 §6]. Dividing the flat `CANBUILD` list by
+	// six is not a third source: it invents pages neither a GUI nor a download
+	// record authors.
 	//
 	// Like ModelTop this comes from a different asset than the FBI record and
 	// is deliberately absent from the canonical identity string below.
 	//
-	// TODO(question): `download*.TDF` raises this byte to the largest `MENU`
-	// byte naming the definition, never lowering it [02 R-CAT-01 §8 step 2].
-	// The reference install ships no such file, so the raise has no input and
-	// is not implemented; a mod that shipped one would need it.
+	// Download-menu compilation subsequently raises this byte to the largest
+	// authored MENU byte naming the definition, never lowering it
+	// [02 R-CAT-01 §8 step 2]. MENU is one greater than the visible page
+	// number [fmt tdf][07 R-HUD-03 §6].
 	BuildPageCount int32
 
 	// HasPageZeroGUI is bit 31 of the first flags word: `guis/<n>0.GUI` exists

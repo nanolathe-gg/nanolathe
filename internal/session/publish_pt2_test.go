@@ -186,7 +186,7 @@ func TestPublishedCommandPageCountsTheOrdersPage(t *testing.T) {
 		for i := range buttons {
 			buttons[i] = fmt.Sprintf("%s-p%d", key, i+1)
 		}
-		cat.BuildMenus[key] = &content.BuildMenuPage{Buttons: buttons}
+		cat.BuildMenus[key] = &content.BuildMenuPage{Buttons: buttons, BaseButtonCount: len(buttons)}
 		return buttons
 	}
 	commanderProducts := newBuilder("commander", 19, 4)
@@ -242,4 +242,55 @@ func TestPublishedCommandPageCountsTheOrdersPage(t *testing.T) {
 		t.Fatalf("factory orders page carried %v, want no products", plant.ProductKeys)
 	}
 	sameKeys(t, publish("factory", 1).ProductKeys, factoryProducts)
+}
+
+func TestPublishedCommandPageUnionsBasePageWithExplicitDownloads(t *testing.T) {
+	base := []string{"p1", "p2", "p3", "p4", "p5", "p6", "p7"}
+	def := &content.UnitDef{
+		DefinitionHeader: content.DefinitionHeader{CanonicalKey: "lab"},
+		UnitName:         "lab",
+		Builder:          true,
+		MaxDamage:        100,
+		BuildPageCount:   3,
+	}
+	cat := &content.Catalog{
+		Units: map[string]*content.UnitDef{"lab": def},
+		BuildMenus: map[string]*content.BuildMenuPage{"lab": {
+			Buttons:         append(append([]string(nil), base...), "download-a", "download-b", "P7"),
+			BaseButtonCount: len(base),
+		}},
+		DownloadPlacements: []content.DownloadMenuPlacement{
+			{Builder: "lab", Product: "download-a", Menu: 3, Button: 4, BuilderResolved: true, ProductResolved: true},
+			{Builder: "lab", Product: "download-b", Menu: 3, Button: 1, BuilderResolved: true, ProductResolved: true},
+			{Builder: "lab", Product: "P7", Menu: 3, Button: 5, BuilderResolved: true, ProductResolved: true},
+		},
+	}
+	w := newSessionFixtureWorld(3, cat)
+	h, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Unit(h).Flags = 0x10 | hud.EncodePageBits(0, 2)
+	s := &Session{Units: w, Catalog: cat, LocalOwner: 0, Snapshot: frame.NewBuffer()}
+	s.publishSnapshot(1)
+	page := s.Snapshot.Current().CommandPage
+	wantKeys := []string{"p7", "download-a", "download-b"}
+	if fmt.Sprint(page.ProductKeys) != fmt.Sprint(wantKeys) {
+		t.Fatalf("page products = %v, want base-page union %v", page.ProductKeys, wantKeys)
+	}
+	wantSlots := []frame.GeneratedProductPlacement{
+		{ProductKey: "download-a", Button: 4},
+		{ProductKey: "download-b", Button: 1},
+		{ProductKey: "P7", Button: 5},
+	}
+	if fmt.Sprint(page.GeneratedProducts) != fmt.Sprint(wantSlots) {
+		t.Fatalf("generated placements = %v, want authored order %v", page.GeneratedProducts, wantSlots)
+	}
+	// Publication owns both slices; changing catalog storage after commit must
+	// not mutate the committed frame [I6].
+	cat.DownloadPlacements[0].Product = "changed"
+	cat.BuildMenus["lab"].Buttons[6] = "changed"
+	if fmt.Sprint(page.ProductKeys) != fmt.Sprint(wantKeys) || fmt.Sprint(page.GeneratedProducts) != fmt.Sprint(wantSlots) {
+		t.Fatalf("committed page aliases catalog storage: %+v", page)
+	}
 }

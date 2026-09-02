@@ -71,7 +71,10 @@ func TestFrameResetRetainsNestedCapacities(t *testing.T) {
 		OrderQueues: make([]OrderQueueView, 1, 2),
 		Events:      make([]EventView, 1, 2),
 		Selection:   SelectionView{Handles: make([]pool.Handle, 1, 3)},
-		CommandPage: CommandPageView{ProductKeys: make([]string, 1, 3)},
+		CommandPage: CommandPageView{
+			ProductKeys:       make([]string, 1, 3),
+			GeneratedProducts: make([]GeneratedProductPlacement, 1, 4),
+		},
 		Visibility: VisibilityView{
 			Visible:     make([]uint8, 1, 4),
 			WordVisible: make([]uint16, 1, 4),
@@ -122,6 +125,27 @@ func TestFrameResetRetainsNestedCapacities(t *testing.T) {
 	}
 	if len(f.Result.Scores) != 0 || cap(f.Result.Scores) != 3 {
 		t.Fatal("result slice capacity was not retained")
+	}
+	if len(f.CommandPage.ProductKeys) != 0 || cap(f.CommandPage.ProductKeys) != 3 ||
+		len(f.CommandPage.GeneratedProducts) != 0 || cap(f.CommandPage.GeneratedProducts) != 4 {
+		t.Fatal("command-page slice capacities were not retained")
+	}
+}
+
+func TestFrameResetClearsGeneratedProductReferences(t *testing.T) {
+	f := Frame{CommandPage: CommandPageView{
+		ProductKeys: []string{"base", "download"},
+		GeneratedProducts: []GeneratedProductPlacement{{
+			ProductKey: "download",
+			Button:     4,
+		}},
+	}}
+	f.Reset()
+	if len(f.CommandPage.ProductKeys) != 0 || len(f.CommandPage.GeneratedProducts) != 0 {
+		t.Fatalf("reset command page = %+v, want empty slices", f.CommandPage)
+	}
+	if got := f.CommandPage.GeneratedProducts[:1][0]; got.ProductKey != "" || got.Button != 0 {
+		t.Fatalf("reset retained generated placement reference: %+v", got)
 	}
 }
 

@@ -21,8 +21,22 @@ import (
 // authored; consumers compare case-insensitively via CanonicalKey.
 type BuildMenuPage struct {
 	DefinitionHeader
-	Builder string   // the CANBUILD child-section name, verbatim
-	Buttons []string // canbuild1..N values in ascending key order, gaps skipped
+	Builder         string   // the CANBUILD child-section name, verbatim
+	Buttons         []string // final authoritative products: base first, downloads appended [02 R-CAT-01 §8]
+	BaseButtonCount int      // prefix authored by CANBUILD before download extension [02 R-CAT-01 §5,§8]
+}
+
+// BaseButtons returns a copy of the CANBUILD-authored prefix. Generated pages
+// use explicit DownloadMenuPlacement slots instead of slicing appended products.
+func (p *BuildMenuPage) BaseButtons() []string {
+	if p == nil || p.BaseButtonCount <= 0 || len(p.Buttons) == 0 {
+		return nil
+	}
+	count := p.BaseButtonCount
+	if count > len(p.Buttons) {
+		count = len(p.Buttons)
+	}
+	return append([]string(nil), p.Buttons[:count]...)
 }
 
 // ButtonsSorted returns the button names in canonical order for hashing and
@@ -106,16 +120,32 @@ func CompileBuildMenus(fs vfs.FSOps) (map[string]*BuildMenuPage, error) {
 			}
 			page.Buttons = append(page.Buttons, button)
 		}
-		// Hash over canonical bytes including defaults (I1).
-		var b strings.Builder
-		fmt.Fprintf(&b, "%s|%s|", page.CanonicalKey, page.Builder)
-		for _, btn := range page.ButtonsSorted() {
-			fmt.Fprintf(&b, "%s|", btn)
-		}
-		page.Hash = HashDefinition([]byte(b.String()))
+		page.BaseButtonCount = len(page.Buttons)
+		hashBuildMenu(page)
 		pages[page.CanonicalKey] = page
 	}
 	return pages, nil
+}
+
+func hashBuildMenu(page *BuildMenuPage) {
+	if page == nil {
+		return
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s|%s|base=%d|", page.CanonicalKey, page.Builder, page.BaseButtonCount)
+	for _, btn := range page.ButtonsSorted() {
+		fmt.Fprintf(&b, "%s|", btn)
+	}
+	page.Hash = HashDefinition([]byte(b.String()))
+}
+
+func sortedBuildMenuKeys(pages map[string]*BuildMenuPage) []string {
+	keys := make([]string, 0, len(pages))
+	for key := range pages {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // MenuButtonNames returns every distinct button name across all pages in

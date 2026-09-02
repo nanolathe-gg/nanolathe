@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 )
 
@@ -246,5 +247,229 @@ func TestRestingSpriteIsNotAnAnimationRecord(t *testing.T) {
 	}
 	if inst.BurnTicks != 0 {
 		t.Fatalf("a resting sprite feature advanced a cursor %d times [05 R-FEAT-01 §10 pass 1]", inst.BurnTicks)
+	}
+}
+
+// transitionService builds a sprite feature that names both event sequences,
+// with the death/reclaim length seam bound, so the transition of
+// [05 R-FEAT-01 §5] can take steps 4-5 instead of step 3.
+func transitionService(t *testing.T, visits int32, namesSequences bool) (*Service, *content.FeatureDef) {
+	t.Helper()
+	terrain := newEmptyTerrain(4, 4)
+	dead := featureDef("stumpdead", 0, 0, 10)
+	reclamate := featureDef("smudgereclaim", 0, 0, 10)
+	src := featureDef("standingtree", 0, 0, 10)
+	src.Reclaimable = true
+	if namesSequences {
+		src.SeqNameDie = "die"
+		src.SeqNameReclamate = "reclamate"
+	}
+	src.FeatureDeadDef = dead
+	src.FeatureReclamateDef = reclamate
+	terrain.FeatureDefs = []*content.FeatureDef{src, dead, reclamate}
+	svc := NewService(terrain, nil, nil, nil)
+	if visits > 0 {
+		svc.SetAnimationTicks(func(def *content.FeatureDef, selector uint8) int32 { return visits })
+	}
+	if svc.spawnFeatureAt(1, 1, src) == nil {
+		t.Fatal("spawn rejected")
+	}
+	return svc, src
+}
+
+// TestReclaimRemovalPlaysTheReclaimSequenceThenReplaces locks [05 R-FEAT-01 §5]
+// steps 4-5 on the reclaim cause: a definition naming `seqnamereclamate` does
+// not replace at once, it attaches the animation record with the
+// reclaim-animation bit set, and the feature phase replaces it with
+// `featurereclamate` when the sequence ends (§10 pass 3).
+func TestReclaimRemovalPlaysTheReclaimSequenceThenReplaces(t *testing.T) {
+	const visits = 3
+	svc, src := transitionService(t, visits, true)
+	before := svc.InstanceAt(1, 1)
+	svc.RemoveFeatureAt(1, 1, CauseReclaim)
+	inst := svc.InstanceAt(1, 1)
+	if inst == nil || inst != before {
+		t.Fatal("the reclaim transition replaced instead of attaching the sequence [05 R-FEAT-01 §5 step 5]")
+	}
+	if inst.Def != src {
+		t.Fatalf("the anchor holds %v, want the source definition while its sequence plays", inst.Def)
+	}
+	if !inst.IsAnimating || inst.IsBurning || inst.AnimationSelector != featureAnimSelectorReclaim {
+		t.Fatalf("attached record animating=%v burning=%v selector=%d, want an animating reclaim record", inst.IsAnimating, inst.IsBurning, inst.AnimationSelector)
+	}
+	for visit := uint32(1); visit < visits; visit++ {
+		svc.TickLifecycle(visit)
+		if svc.InstanceAt(1, 1) != inst {
+			t.Fatalf("visit %d replaced before the sequence ended", visit)
+		}
+	}
+	svc.TickLifecycle(visits)
+	got := svc.InstanceAt(1, 1)
+	if got == nil || got.Def == nil || string(got.Def.CanonicalKey) != "smudgereclaim" {
+		t.Fatalf("successor %v, want smudgereclaim [05 R-FEAT-01 §5 step 6]", got)
+	}
+}
+
+// TestRemovalWithoutSequenceReplacesImmediately is step 3: a definition naming
+// neither event sequence replaces at once, which is what every removal did
+// before the animation records existed.
+func TestRemovalWithoutSequenceReplacesImmediately(t *testing.T) {
+	svc, _ := transitionService(t, 3, false)
+	svc.RemoveFeatureAt(1, 1, CauseReclaim)
+	got := svc.InstanceAt(1, 1)
+	if got == nil || got.Def == nil || string(got.Def.CanonicalKey) != "smudgereclaim" {
+		t.Fatalf("successor %v, want an immediate smudgereclaim [05 R-FEAT-01 §5 step 3]", got)
+	}
+}
+
+// TestDeathRemovalPlaysTheDeathSequence is the same transition on the other
+// cause: `seqnamedie` attaches a death record, which retires to `featuredead`.
+func TestDeathRemovalPlaysTheDeathSequence(t *testing.T) {
+	const visits = 2
+	svc, _ := transitionService(t, visits, true)
+	svc.RemoveFeatureAt(1, 1, CauseDead)
+	inst := svc.InstanceAt(1, 1)
+	if inst == nil || !inst.IsAnimating || inst.AnimationSelector != featureAnimSelectorDie {
+		t.Fatalf("death transition attached %#v, want an animating death record [05 R-FEAT-01 §5 step 5]", inst)
+	}
+	for visit := uint32(1); visit <= visits; visit++ {
+		svc.TickLifecycle(visit)
+	}
+	got := svc.InstanceAt(1, 1)
+	if got == nil || got.Def == nil || string(got.Def.CanonicalKey) != "stumpdead" {
+		t.Fatalf("successor %v, want stumpdead", got)
+	}
+}
+
+// TestUnboundAnimationLengthReplacesImmediately locks the seam's absence
+// behaviour: with no length source a sequence cannot be run, so the transition
+// falls back to step 3 rather than attaching a record that could never finish.
+func TestUnboundAnimationLengthReplacesImmediately(t *testing.T) {
+	svc, _ := transitionService(t, 0, true) // sequences named, no length seam
+	svc.RemoveFeatureAt(1, 1, CauseDead)
+	got := svc.InstanceAt(1, 1)
+	if got == nil || got.Def == nil || string(got.Def.CanonicalKey) != "stumpdead" {
+		t.Fatalf("successor %v, want an immediate stumpdead when no length is known", got)
+	}
+}
+
+// TestReclaimPayoutRefusesWhileAnimationRuns locks the same-tick precedence of
+// [05 R-FEAT-01 §5]: a cell already playing an event animation is inert to
+// every further cause, the reclaim payout included [05 R-FEAT-01 §15]. Without
+// it one tree would pay out once per visit of its own reclaim animation.
+func TestReclaimPayoutRefusesWhileAnimationRuns(t *testing.T) {
+	svc, src := transitionService(t, 5, true)
+	src.Metal, src.Energy = 100, 250
+	inst := svc.InstanceAt(1, 1)
+	metal, energy := svc.Reclaim(nil, inst, 0)
+	if metal != 100 || energy != 250 {
+		t.Fatalf("first payout (%v, %v), want the full pools", metal, energy)
+	}
+	if !inst.IsAnimating {
+		t.Fatal("the payout did not attach the reclaim animation [05 R-FEAT-01 §5 step 5]")
+	}
+	if metal, energy := svc.Reclaim(nil, inst, 0); metal != 0 || energy != 0 {
+		t.Fatalf("second payout (%v, %v) while the animation ran, want none [05 R-FEAT-01 §15]", metal, energy)
+	}
+}
+
+// TestBurnSmokeEmitsAtTheFootprintCentre locks pass 3a's base point: the puff
+// goes to the footprint centre at the sampled terrain height, the same centre
+// the burn weapon fires at, `((footprintx + 2x)·8, (footprintz + 2z)·8)`
+// [05 R-FEAT-01 §11 step 3].
+func TestBurnSmokeEmitsAtTheFootprintCentre(t *testing.T) {
+	crt := rng.CRTFromState(3)
+	sim := rng.SimulationFromState(3)
+	svc := burningFeatureService(t, &crt, &sim, [2]int{3, 4})
+	var got [][3]numeric.Fixed
+	svc.BurnSmoke = func(pos [3]numeric.Fixed) { got = append(got, pos) }
+
+	svc.TickLifecycle(0) // gated tick: one puff
+	svc.TickLifecycle(1) // ungated: none
+	if len(got) != 1 {
+		t.Fatalf("%d puffs over one gated tick and one ungated, want 1 [05 R-FEAT-01 §10 pass 3a]", len(got))
+	}
+	wantX := numeric.FixedFromInt(3*16 + 8)
+	wantZ := numeric.FixedFromInt(4*16 + 8)
+	wantY := svc.Terrain.CoarseHeightAt(3, 4)
+	if got[0][0] != wantX || got[0][2] != wantZ || got[0][1] != wantY {
+		t.Fatalf("puff at %v, want the footprint centre (%v, %v, %v) [05 R-FEAT-01 §11 step 3]", got[0], wantX, wantY, wantZ)
+	}
+}
+
+// TestBurnSmokeJitterMovesWorldXAndHeight encodes an INFERENCE, not a traced
+// contract: [05 R-FEAT-01 §10] pass 3a names the two jittered words `x` and
+// `y`, and the smoke-puff family's own position triple has `y` as the vertical
+// word (its per-tick update adds the authored gravity to `y` and the wind to
+// `x` and `z`, [03 §5.5 "Smoke-puff family"]), so the addends land on world X
+// and world HEIGHT and the puff's Z stays at the footprint centre. The factor
+// of two on the y term agrees with the projection's half-height shear
+// [03 §2.5]. A trace of the producer site would settle it; until then this
+// test locks the reading, not a fact.
+func TestBurnSmokeJitterMovesWorldXAndHeightInference(t *testing.T) {
+	const seed = 0x51ee7
+	frame := burnFrameGeometry{W: 20, H: 12, XOff: 7, YOff: 5}
+
+	crtA := rng.CRTFromState(seed)
+	simA := rng.SimulationFromState(1)
+	plain := burningFeatureService(t, &crtA, &simA, [2]int{3, 4})
+	var gotPlain [][3]numeric.Fixed
+	plain.BurnSmoke = func(pos [3]numeric.Fixed) { gotPlain = append(gotPlain, pos) }
+	plain.TickLifecycle(0)
+
+	crtB := rng.CRTFromState(seed)
+	simB := rng.SimulationFromState(1)
+	jittered := burningFeatureService(t, &crtB, &simB, [2]int{3, 4})
+	jittered.BurnFrameGeometry = func(*content.FeatureDef, int32) (int32, int32, int32, int32) {
+		return frame.W, frame.H, frame.XOff, frame.YOff
+	}
+	var gotJitter [][3]numeric.Fixed
+	jittered.BurnSmoke = func(pos [3]numeric.Fixed) { gotJitter = append(gotJitter, pos) }
+	jittered.TickLifecycle(0)
+
+	if len(gotPlain) != 1 || len(gotJitter) != 1 {
+		t.Fatalf("puff counts %d and %d, want one each", len(gotPlain), len(gotJitter))
+	}
+	ref := rng.CRTFromState(seed)
+	wantDX, wantDY := burnSmokeJitter(frame, ref.Rand(), ref.Rand())
+	if wantDX == 0 && wantDY == 0 {
+		t.Fatal("the fixture's draws produce no offset; pick another seed")
+	}
+	if got := gotJitter[0][0] - gotPlain[0][0]; got != numeric.FixedFromInt(int64(wantDX)) {
+		t.Fatalf("world X moved by %v, want %d whole units", got, wantDX)
+	}
+	if got := gotJitter[0][1] - gotPlain[0][1]; got != numeric.FixedFromInt(int64(wantDY)) {
+		t.Fatalf("world height moved by %v, want %d whole units", got, wantDY)
+	}
+	if gotJitter[0][2] != gotPlain[0][2] {
+		t.Fatalf("world Z moved to %v; pass 3a jitters two words, not three", gotJitter[0][2])
+	}
+}
+
+// TestBurnSmokeDrawsTwoCRTWithTheGeometrySeamBound repeats the draw budget with
+// both seams bound: binding a producer must not change what the site takes
+// from the CRT stream, because the draws happen before any seam is consulted.
+func TestBurnSmokeDrawsTwoCRTWithTheGeometrySeamBound(t *testing.T) {
+	crt := rng.CRTFromState(0x1234567)
+	sim := rng.SimulationFromState(99)
+	svc := burningFeatureService(t, &crt, &sim, [2]int{1, 1}, [2]int{5, 3})
+	svc.BurnFrameGeometry = func(*content.FeatureDef, int32) (int32, int32, int32, int32) {
+		return 16, 24, 3, 9
+	}
+	puffs := 0
+	svc.BurnSmoke = func([3]numeric.Fixed) { puffs++ }
+	for tick := uint32(0); tick < 7; tick++ {
+		before := crt.Draws()
+		svc.TickLifecycle(tick)
+		want := uint64(0)
+		if tick%3 == 0 {
+			want = 4 // two burning instances, two draws each
+		}
+		if got := crt.Draws() - before; got != want {
+			t.Fatalf("tick %d consumed %d CRT draws with the seams bound, want %d", tick, got, want)
+		}
+	}
+	if puffs != 6 { // three gated ticks (0, 3, 6) x two instances
+		t.Fatalf("%d puffs, want 6 [05 R-FEAT-01 §10 pass 3a]", puffs)
 	}
 }

@@ -409,6 +409,12 @@ type CommandPageView struct {
 	Page        uint16
 	PageCount   uint16
 	ProductKeys []string
+	// GeneratedProducts retains the explicit product-to-slot records authored
+	// by download/*.tdf for this visible page. ProductKeys remains the
+	// canonical membership union used by dispatch; this slice preserves sparse
+	// and conflicting BUTTON claims for generated GUI assembly [02 R-CAT-01
+	// §8][07 §9].
+	GeneratedProducts []GeneratedProductPlacement
 
 	// MoveStance and FireStance are the two three-bit standing-order
 	// aggregates [04 R-STANCE-01 §1].  0, 1 and 2 are the three stances, 3
@@ -470,6 +476,14 @@ type CommandPageView struct {
 	CanRepair   bool
 	IsTransport bool
 	CanBlast    bool
+}
+
+// GeneratedProductPlacement is one committed download-menu patch. Button is
+// the authored zero-based slot byte and is deliberately not normalized or
+// clamped at publication time [02 R-CAT-01 §8][fmt tdf].
+type GeneratedProductPlacement struct {
+	ProductKey string
+	Button     uint8
 }
 
 // BuildProgressView carries construction progress in its authored float32
@@ -841,6 +855,7 @@ func (f *Frame) Reserve(c Capacities) {
 	f.Events = reserve(f.Events, c.Cues)
 	f.Selection.Handles = reserve(f.Selection.Handles, c.Selection)
 	f.CommandPage.ProductKeys = reserve(f.CommandPage.ProductKeys, c.CommandProducts)
+	f.CommandPage.GeneratedProducts = reserve(f.CommandPage.GeneratedProducts, c.CommandProducts)
 	f.Visibility.Visible = reserve(f.Visibility.Visible, c.Visibility)
 	f.Radar.Contacts = reserve(f.Radar.Contacts, c.RadarContacts)
 	f.Fog.Ch0 = reserve(f.Fog.Ch0, c.Fog)
@@ -890,6 +905,8 @@ func (f *Frame) Reset() {
 	f.Selection.Handles = f.Selection.Handles[:0]
 	clear(f.CommandPage.ProductKeys)
 	f.CommandPage.ProductKeys = f.CommandPage.ProductKeys[:0]
+	clear(f.CommandPage.GeneratedProducts)
+	f.CommandPage.GeneratedProducts = f.CommandPage.GeneratedProducts[:0]
 	clear(f.Visibility.Visible)
 	f.Visibility.Visible = f.Visibility.Visible[:0]
 	clear(f.Visibility.WordVisible)
@@ -928,7 +945,10 @@ func (f *Frame) Reset() {
 	f.ShakeAmpX = 0
 	f.ShakeAmpY = 0
 	f.Selection = SelectionView{Handles: f.Selection.Handles}
-	f.CommandPage = CommandPageView{ProductKeys: f.CommandPage.ProductKeys}
+	f.CommandPage = CommandPageView{
+		ProductKeys:       f.CommandPage.ProductKeys,
+		GeneratedProducts: f.CommandPage.GeneratedProducts,
+	}
 	f.Visibility = VisibilityView{Visible: f.Visibility.Visible, WordVisible: f.Visibility.WordVisible}
 	for i := range f.Radar.Contacts {
 		clear(f.Radar.Contacts[i].Rings)

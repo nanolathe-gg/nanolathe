@@ -6,6 +6,7 @@ package main
 // below are the retail panel-shell call sites recovered from TotalA.exe.
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -71,6 +72,15 @@ type retailBattleHUD struct {
 	// Cache resolved GUI/model once instead of reparsing on draw/click [ON-05 1][R-P0-03]
 	windows    map[string]*gui.Window
 	pageCounts map[string]int
+	// generatedWindows are cloned command pages patched from the committed
+	// download-menu slot records. The unmodified authored page/template stays
+	// in windows so another generated page can safely reuse it [07 R-HUD-03
+	// §6][07 §9].
+	generatedWindows  map[string]*gui.Window
+	generatedPageArt  map[string]*formats.GAF
+	generatedProducts map[string]bool
+	productGAFs       map[string]*formats.GAF
+	productGAFChecked map[string]bool
 
 	// Retail refreshes the displayed production/consumption counters on a
 	// one-second (30 tick) cadence while the stock bars remain live [07 §6].
@@ -419,10 +429,15 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 		optionsGAF: optionsGAF, optionsWin: optionsWin, exitWin: exitWin, confirmWin: confirmWin,
 		modalFont: modalFont, pausedFrame: pausedFrame, victoryFrame: victoryFrame, defeatFrame: defeatFrame,
 		resultWin: resultWin, resultGAF: resultGAF, resultVictoryFrame: resultVictoryFrame, resultDefeatFrame: resultDefeatFrame, resultPanel: resultPanel,
-		fs:         fs,
-		pages:      make(map[string]*formats.GAF),
-		windows:    make(map[string]*gui.Window),
-		pageCounts: make(map[string]int),
+		fs:                fs,
+		pages:             make(map[string]*formats.GAF),
+		windows:           make(map[string]*gui.Window),
+		pageCounts:        make(map[string]int),
+		generatedWindows:  make(map[string]*gui.Window),
+		generatedPageArt:  make(map[string]*formats.GAF),
+		generatedProducts: make(map[string]bool),
+		productGAFs:       make(map[string]*formats.GAF),
+		productGAFChecked: make(map[string]bool),
 	}
 	// The empty-selection command page is the first page composed at battle
 	// entry. Require its authored window now so a failed battle construction
@@ -2401,11 +2416,92 @@ func (h *retailBattleHUD) windowForRequired(b *battleSession, f *frame.Frame) (*
 		window, page := h.loadWindow(name)
 		return window, page, nil
 	}
-	window, page, err := h.loadWindowRequired(name)
+	return h.numberedPage(name, f.CommandPage.GeneratedProducts)
+}
+
+// numberedPage opens an ordinary physical page when it has no generated
+// placements. A physical page with placements is cloned and patched; an
+// absent physical page is always cloned from the side's DL template, including
+// when every authored product failed catalog resolution. An existing malformed
+// page is still an error: only ErrNotFound selects DL [07 R-HUD-03 §6].
+func (h *retailBattleHUD) numberedPage(name string, placements []frame.GeneratedProductPlacement) (*gui.Window, *formats.GAF, error) {
+	if h == nil || name == "" {
+		return nil, nil, nil
+	}
+	if cached := h.generatedWindows[name]; cached != nil {
+		return cached, h.generatedPageArt[name], nil
+	}
+	physical := h.windows[name] != nil
+	if !physical {
+		logical := "guis/" + name + ".gui"
+		if _, err := h.fs.Stat(logical); err == nil {
+			physical = true
+		} else {
+			if !errors.Is(err, vfs.ErrNotFound) {
+				return nil, nil, hudAssetError(h.fs, logical, "builder GUI probe "+name+" [07 R-HUD-03 §6]", err)
+			}
+		}
+	}
+	if physical && len(placements) == 0 {
+		return h.loadWindowRequired(name)
+	}
+	sourceName := name
+	if !physical {
+		sourceName = strings.ToLower(sideNamePrefix(h.side)) + "dl"
+	}
+	source, sourceArt, err := h.loadWindowRequired(sourceName)
 	if err != nil {
 		return nil, nil, err
 	}
-	return window, page, nil
+	if source == nil {
+		return nil, nil, hudAssetError(h.fs, "guis/"+sourceName+".gui", "generated build-page source "+sourceName+" [07 R-HUD-03 §6]", vfs.ErrNotFound)
+	}
+	window := cloneGUIWindow(source)
+	for _, placement := range placements {
+		// Stock generated pages have exactly six authored product slots at
+		// gadget indexes BUTTON+4. Retain the authored byte and refuse values
+		// outside that safe representable range; clamping would invent a slot
+		// [07 §9][fmt tdf].
+		if placement.Button >= hud.RetailBuildButtonsPerPage {
+			hudAssetWarning(h.fs, "download/*.tdf", fmt.Sprintf("generated page %s product %s has invalid BUTTON %d [07 §9]", name, placement.ProductKey, placement.Button), fmt.Errorf("button outside six stock slots"))
+			continue
+		}
+		index := int(placement.Button) + 4
+		if index < 4 || index >= len(window.Gadgets) {
+			hudAssetWarning(h.fs, "guis/"+sourceName+".gui", fmt.Sprintf("generated page %s has no gadget index %d for product %s [07 §9]", name, index, placement.ProductKey), fmt.Errorf("template does not expose authored slot"))
+			continue
+		}
+		gad := &window.Gadgets[index]
+		gad.Name = placement.ProductKey
+		gad.Art = placement.ProductKey
+		gad.GrayedOut = 0
+		gad.CommonAttribs = 4
+		if h.generatedProducts == nil {
+			h.generatedProducts = make(map[string]bool)
+		}
+		h.generatedProducts[content.CanonicalKey(placement.ProductKey)] = true
+	}
+	if h.generatedWindows == nil {
+		h.generatedWindows = make(map[string]*gui.Window)
+	}
+	h.generatedWindows[name] = window
+	if h.generatedPageArt == nil {
+		h.generatedPageArt = make(map[string]*formats.GAF)
+	}
+	h.generatedPageArt[name] = sourceArt
+	return window, sourceArt, nil
+}
+
+func cloneGUIWindow(source *gui.Window) *gui.Window {
+	if source == nil {
+		return nil
+	}
+	clone := *source
+	clone.Gadgets = append([]gui.Gadget(nil), source.Gadgets...)
+	for i := range clone.Gadgets {
+		clone.Gadgets[i].Labels = append([]string(nil), source.Gadgets[i].Labels...)
+	}
+	return &clone
 }
 
 // sideNamePrefix is the side's authored nameprefix, the "%s" of "%sGEN.GUI"
@@ -2511,7 +2607,24 @@ func (h *retailBattleHUD) gadgetArtEntry(gad gui.Gadget, page *formats.GAF) *for
 	if name == "" {
 		name = gad.Name
 	}
-	for _, g := range []*formats.GAF{page, h.intGAF, h.oldMain, h.share, h.common} {
+	if page != nil {
+		if found, ok := page.Find(name); ok {
+			return found
+		}
+	}
+	// A generated product first resolves anims/<product>_gadget.gaf entry
+	// <product>; only then does it fall through to the generic interface/support
+	// GAFs [fmt gaf][07 R-HUD-03 §6]. Both hits and misses are cached, so the
+	// draw/click loop never reloads the VFS per frame.
+	key := content.CanonicalKey(gad.Name)
+	if h.generatedProducts[key] {
+		if productGAF := h.generatedProductGAF(gad.Name); productGAF != nil {
+			if found, ok := productGAF.Find(gad.Name); ok {
+				return found
+			}
+		}
+	}
+	for _, g := range []*formats.GAF{h.intGAF, h.oldMain, h.share, h.common} {
 		if g == nil {
 			continue
 		}
@@ -2520,6 +2633,31 @@ func (h *retailBattleHUD) gadgetArtEntry(gad gui.Gadget, page *formats.GAF) *for
 		}
 	}
 	return nil
+}
+
+func (h *retailBattleHUD) generatedProductGAF(product string) *formats.GAF {
+	if h == nil || h.fs == nil {
+		return nil
+	}
+	key := content.CanonicalKey(product)
+	if h.productGAFChecked[key] {
+		return h.productGAFs[key]
+	}
+	if h.productGAFChecked == nil {
+		h.productGAFChecked = make(map[string]bool)
+	}
+	if h.productGAFs == nil {
+		h.productGAFs = make(map[string]*formats.GAF)
+	}
+	h.productGAFChecked[key] = true
+	logical := "anims/" + strings.ToLower(strings.TrimSpace(product)) + "_gadget.gaf"
+	loaded, err := formats.LoadGAFFile(h.fs, logical)
+	if err != nil {
+		h.productGAFs[key] = nil
+		return nil
+	}
+	h.productGAFs[key] = loaded
+	return loaded
 }
 
 func (h *retailBattleHUD) gadgetFrame(gad gui.Gadget, page *formats.GAF, pressed, disabled bool) *formats.GAFFrame {

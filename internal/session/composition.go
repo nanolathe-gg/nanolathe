@@ -1025,6 +1025,7 @@ func createAndBindServices(s *Session) error {
 		s.Features.GeothermalSteam = func(x, y, z numeric.Fixed) {
 			s.appendStripGeothermalSteam([3]numeric.Fixed{x, y, z})
 		}
+		s.bindFeatureStripProducers()
 		s.Features.PopulateFromTerrain()
 	} else if s.Features.Terrain != s.World {
 		return fmt.Errorf("session: Features.Terrain mismatch")
@@ -1035,8 +1036,11 @@ func createAndBindServices(s *Session) error {
 				s.appendStripGeothermalSteam([3]numeric.Fixed{x, y, z})
 			}
 		}
+		s.bindFeatureStripProducers()
 		s.Features.PopulateFromTerrain()
 	}
+	// The two remaining feature seams — BurnFrameGeometry and AnimationTicks —
+	// stay unbound here; bindFeatureStripProducers says why.
 	// Visibility [03 §3] dimensions from terrain, mode respects SkirmishConfig
 	// Mapping 0 → history disabled (word fills all bits), LineOfSight 0 → current disabled (byte grids fill 1), LOSType 0 → sprite-mask [08 "Skirmish configuration"][03 §3.1] C2.
 	mode := visibilityModeForSession(s)
@@ -1639,3 +1643,48 @@ func (s *Session) bindDamageReaction() {
 		},
 	}
 }
+
+// bindFeatureStripProducers connects the feature service's strip producers to
+// this session's strip table. It sits beside the geothermal binding above and
+// owns the same kind of seam: the strip table is session state, so the feature
+// service can only reach it through a function the composer fills.
+//
+// The burning-feature smoke of [05 R-FEAT-01 §10] pass 3a is a strip-5
+// container [R-STRIP-01 §1 strip 5]. Pass 3a emits ONE smoke particle per
+// gated visit — the every-third-tick cadence is the phase-6 gate's, not the
+// container's — so the container is built with the family's one-puff shape:
+// the constructor spawns the only puff and the closed window retires it. The
+// puff's authored variant and life are still open ([03 §5.5], and the site in
+// burn.go carries the TODO(question)); nothing here invents them, it takes the
+// family's default init.
+//
+// Two feature seams are deliberately left nil, because filling them needs
+// files outside this unit:
+//
+//   - BurnFrameGeometry wants the burn sequence's current GAF frame. The
+//     session resolves no feature GAF at all — content.Catalog carries the
+//     definition's sequence NAMES, and the only GAF cache in the build is the
+//     client's. Filling it needs a resolver field and setter on Session (the
+//     shape of SetEffectEntryFrameCount), an accessor over the client's
+//     feature-GAF cache, and one line in the composer that binds them, exactly
+//     as the effect frame count is bound today. Until then the puff is emitted
+//     unjittered at the footprint centre, which is pass 3a's own base point.
+//   - AnimationTicks wants the death/reclaim sequence LENGTH from the same
+//     GAF entries, through the same chain. Until it is bound, the transition
+//     of [05 R-FEAT-01 §5] takes step 3's immediate replacement, which is what
+//     every removal did before the animation records existed — so a missing
+//     seam changes nothing rather than freezing a cell.
+func (s *Session) bindFeatureStripProducers() {
+	if s == nil || s.Features == nil {
+		return
+	}
+	if s.Features.BurnSmoke == nil {
+		s.Features.BurnSmoke = func(pos [3]numeric.Fixed) {
+			s.appendStripSmokePuffer(stripBurningFeatureSmoke, pos, SmokePuffTrail)
+		}
+	}
+}
+
+// stripBurningFeatureSmoke is the literal strip index the burning-feature
+// producer passes [R-STRIP-01 §1 strip 5].
+const stripBurningFeatureSmoke = 5

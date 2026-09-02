@@ -2,6 +2,7 @@ package features
 
 import (
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -9,6 +10,17 @@ import (
 // rather than truncating toward zero (I3). Go's arithmetic right shift on a
 // signed value is already floor, which is the point.
 func floorShift16(v int64) int64 { return v >> 16 }
+
+// footprintCentreWorld is one axis of a stamped footprint's centre in world
+// 16.16, the point [05 R-FEAT-01 §11] step 3 fires the burn weapon at:
+// `(footprint + 2·cell)·8`, i.e. the cell origin plus half the footprint.
+// A zero or negative extent is the 1x1 the placement helper normalises to.
+func footprintCentreWorld(cell int, extent int32) numeric.Fixed {
+	if extent <= 0 {
+		extent = 1
+	}
+	return world.CellToWorld(int32(cell)).Add(numeric.FixedFromInt(int64(extent) * 8))
+}
 
 // The animating selectors of the battle-save feature family: 0 burn, 1 death,
 // 2 reclaim [R-SAVE-FEATURE-01]. Selector 2 is the record whose
@@ -73,17 +85,9 @@ func (s *Service) burnTick(tick uint32) {
 			}
 			// The visit counter and the animation's length in visits are the
 			// same two words the burn cursor uses below, because retail
-			// advances every sprite cursor with one routine.
-			//
-			// Unimplemented seam, not research: nothing attaches a die or
-			// reclaim animation at runtime yet. §5 steps 4-5 (a transition
-			// with a named `seqnamedie`/`seqnamereclamate` attaches an
-			// instance instead of replacing at once) lives in the transition
-			// entry in service.go, and the sequence-length source for those
-			// two sequences has no seam the way the burn sequence has
-			// Service.BurnAnimationTicks. Until both land, only a save-restored
-			// selector-1/2 record reaches this branch and it retires only when
-			// a length is known. See PLAN 19 §2.4.
+			// advances every sprite cursor with one routine. The records that
+			// reach here are the ones the transition of §5 steps 4-5 attaches
+			// (Service.transitionFeatureAt) plus those save restore rebuilds.
 			inst.BurnTicks++
 			if inst.BurnDuration > 0 && inst.BurnTicks >= inst.BurnDuration {
 				finished = append(finished, featureAnimEnd{idx: idx})
@@ -94,11 +98,11 @@ func (s *Service) burnTick(tick uint32) {
 			// Emit smoke particle at footprint centre jittered by presentation
 			// stream, not simulation stream [05 "Feature burning"].
 			//
-			// This is also the burning-feature strip-5 smoke producer
+			// This is the burning-feature strip-5 smoke producer
 			// [R-STRIP-01 §1 strip 5]: one wind-drifted smoke puff every 3rd
-			// tick, with exactly two CRT jitter draws at the call site — the
-			// draws below are those two, and the puff would append a strip-5
-			// smoke container via the session's appendStripSmokePuffer.
+			// tick, reached through the BurnSmoke seam the session binds to
+			// its strip table.
+			//
 			// [05 R-FEAT-01 §10] pass 3a gives the jitter law in full. The
 			// puff sits at the footprint centre at terrain height, and the two
 			// draws — first the horizontal one, then the vertical one, in that
@@ -109,33 +113,62 @@ func (s *Service) burnTick(tick uint32) {
 			//	y += 2·(frame.yoff - (draw·(h/2))/32768) - 2·(h/4)
 			//
 			// taking integer parts with 16-bit truncation. burnSmokeJitter
-			// below returns exactly those two addends; the site cannot call it
-			// with real geometry yet, because two things it needs are absent
-			// and neither of them is research. The burn cursor's current GAF
-			// frame geometry does not reach this service
-			// (there is no seam for it the way Service.BurnAnimationTicks is a
-			// seam for the sequence length), and features has no session-side
-			// port to the strip table, so the container cannot be appended —
-			// the session helper Session.appendStripSmokePuffer(5, …) is ready
-			// for that port and only the Service field and its wiring are
-			// missing. See PLAN 19 §2.4.
+			// below is exactly those two addends.
+			//
+			// WHICH AXES the two addends move (Supported inference). The
+			// smoke-puff family's sub-record carries a raw 16.16 position
+			// triple whose per-tick update is `x += windX·8`, `z += windZ·8`,
+			// `y += authoredGravity·16` [03 §5.5 "Smoke-puff family"] — so the
+			// family's own `y` is world HEIGHT and its `x` is world X, and
+			// pass 3a's `x` and `y` are those two words. The factor of two on
+			// the y term corroborates it: the projection shears height by half
+			// a row (`screenY = worldZ − worldY/2`, [03 §2.5]), so one sprite
+			// row is two world height units, while x is one-to-one and carries
+			// no factor. The puff's Z therefore stays at the footprint centre.
+			// A trace of the producer site would settle it outright.
 			//
 			// TODO(question): the strip-5 burning-feature puff's own
 			// parameters — the smoke variant and the particle life passed to
 			// the container's constructor — are still an open item on doc 03's
 			// own list ("The strip-5 burning-feature smoke producer's puff
-			// parameters (variant, life)", [03 §5.5][R-STRIP-01 §1]). Decider:
-			// a static trace of the phase-6 producer site, which would name
-			// both arguments and settle whether the jittered pair above is the
-			// container's world position or a sprite-space offset applied to
-			// it — §10 pass 3a states the arithmetic but not its space.
+			// parameters (variant, life)", [03 §5.5][R-STRIP-01 §1]). The same
+			// trace would settle a second question this site cannot: whether
+			// the container's constructor draw lands here, making the emission
+			// cost three CRT draws, or whether the producer appends into a
+			// container that already exists, making it the two that
+			// [01 §7.5 "6 features | CRT | 2 per fire-effect emission"] counts.
+			// The census row names the position jitter specifically and cites
+			// §12 (reproduction) rather than §10, so it is read here as
+			// scoping itself to the jitter, and the family's constructor draw
+			// [R-STRIP-01 §2] is left where the family puts it. Decider:
+			// a static trace of the phase-6 producer site.
 			//
-			// The two draws below are the right two draws in the right place,
-			// so the CRT stream stays correct while the puff is missing
-			// [01 §7.5 "6 features | CRT | 2 per fire-effect emission"].
+			// The two draws are taken unconditionally — before any seam is
+			// consulted — so a session with no producer bound advances the CRT
+			// stream exactly as one with a producer does.
+			var drawX, drawY int32
 			if crt := s.crt(); crt != nil {
-				_ = crt.Rand()
-				_ = crt.Rand()
+				drawX = crt.Rand()
+				drawY = crt.Rand()
+			}
+			if s.BurnSmoke != nil {
+				// The base is the footprint centre at the sampled terrain
+				// height. The centre is the same one the burn weapon fires at,
+				// `((footprintx + 2x)·8, (footprintz + 2z)·8)`
+				// [05 R-FEAT-01 §11 step 3].
+				px := footprintCentreWorld(inst.CX, inst.FootprintX)
+				pz := footprintCentreWorld(inst.CZ, inst.FootprintZ)
+				py := inst.Y
+				if s.Terrain != nil {
+					py = s.Terrain.CoarseHeightAt(int32(inst.CX), int32(inst.CZ))
+				}
+				if s.BurnFrameGeometry != nil {
+					w, h, xoff, yoff := s.BurnFrameGeometry(inst.Def, inst.BurnTicks)
+					dx, dy := burnSmokeJitter(burnFrameGeometry{W: w, H: h, XOff: xoff, YOff: yoff}, drawX, drawY)
+					px = px.Add(numeric.FixedFromInt(int64(dx)))
+					py = py.Add(numeric.FixedFromInt(int64(dy)))
+				}
+				s.BurnSmoke([3]numeric.Fixed{px, py, pz})
 			}
 		}
 		// Advance burn animation and shadow when present [05 ...].
@@ -172,11 +205,20 @@ func (s *Service) burnTick(tick uint32) {
 			// A successor word of 0xFFFF makes the stamp a no-op, i.e. final
 			// removal, which the replacement path already models as a nil
 			// successor definition.
-			cause := CauseDead
-			if inst.AnimationSelector == featureAnimSelectorReclaim {
-				cause = CauseReclaim
+			//
+			// This is the REPLACEMENT, not the transition: going back through
+			// the transition entry would meet its own record at step 4 and
+			// drop the removal, leaving the finished animation on the cell
+			// forever.
+			var succ *content.FeatureDef
+			if inst.Def != nil {
+				if inst.AnimationSelector == featureAnimSelectorReclaim {
+					succ = inst.Def.FeatureReclamateDef
+				} else {
+					succ = inst.Def.FeatureDeadDef
+				}
 			}
-			s.RemoveFeatureAt(cx, cz, cause)
+			s.replaceFeatureAt(cx, cz, succ)
 			continue
 		}
 		// Burn completion is pass 3c and is deliberately NOT the replacement

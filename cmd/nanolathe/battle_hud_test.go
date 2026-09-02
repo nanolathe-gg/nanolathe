@@ -78,3 +78,87 @@ func TestProductQueueCountLabel(t *testing.T) {
 		t.Fatalf("label without a selected builder = %q, want empty", got)
 	}
 }
+
+func generatedPageFixture(name string) *gui.Window {
+	gadgets := make([]gui.Gadget, 10)
+	for i := range gadgets {
+		gadgets[i] = gui.Gadget{Name: "UNCHANGED", Art: "IGPATCH", GrayedOut: 1, CommonAttribs: 9}
+	}
+	return &gui.Window{Name: name, Gadgets: gadgets}
+}
+
+func TestGeneratedPageClonesTemplateAndPatchesAuthoredSlots(t *testing.T) {
+	template := generatedPageFixture("guis/armdl.gui")
+	h := &retailBattleHUD{
+		fs:      vfs.New(),
+		side:    &content.SideDef{NamePrefix: "ARM"},
+		windows: map[string]*gui.Window{"armdl": template},
+	}
+	placements := []frame.GeneratedProductPlacement{
+		{ProductKey: "slot-four", Button: 4},
+		{ProductKey: "slot-one-old", Button: 1},
+		{ProductKey: "slot-one-new", Button: 1}, // later authored claim wins
+		{ProductKey: "invalid", Button: 255},
+	}
+	got, _, err := h.numberedPage("armlab2", placements)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got == template {
+		t.Fatalf("generated page = %p, template = %p; want isolated clone", got, template)
+	}
+	assertSlot := func(button int, product string) {
+		t.Helper()
+		gad := got.Gadgets[button+4]
+		if gad.Name != product || gad.Art != product || gad.GrayedOut != 0 || gad.CommonAttribs != 4 {
+			t.Fatalf("slot %d = %+v, want patched product %q", button, gad, product)
+		}
+	}
+	assertSlot(4, "slot-four")
+	assertSlot(1, "slot-one-new")
+	if got.Gadgets[4].Name != "UNCHANGED" || got.Gadgets[6].Name != "UNCHANGED" {
+		t.Fatalf("sparse unclaimed slots were changed: slot0=%+v slot2=%+v", got.Gadgets[4], got.Gadgets[6])
+	}
+	if template.Gadgets[5].Name != "UNCHANGED" || template.Gadgets[8].Name != "UNCHANGED" {
+		t.Fatalf("source template was mutated: %+v", template.Gadgets)
+	}
+	again, _, err := h.numberedPage("armlab2", placements)
+	if err != nil || again != got {
+		t.Fatalf("generated page cache = %p, %v; want %p", again, err, got)
+	}
+}
+
+func TestGeneratedPageOverlaysExistingNumberedPage(t *testing.T) {
+	source := generatedPageFixture("guis/coralab1.gui")
+	h := &retailBattleHUD{
+		fs:      vfs.New(),
+		side:    &content.SideDef{NamePrefix: "COR"},
+		windows: map[string]*gui.Window{"coralab1": source},
+	}
+	got, _, err := h.numberedPage("coralab1", []frame.GeneratedProductPlacement{{ProductKey: "corfast", Button: 3}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Gadgets[7].Name != "corfast" || got.Gadgets[7].CommonAttribs != 4 || got.Gadgets[7].GrayedOut != 0 {
+		t.Fatalf("existing IGPATCH overlay = %+v", got.Gadgets[7])
+	}
+	if source.Gadgets[7].Name != "UNCHANGED" || source.Gadgets[7].Art != "IGPATCH" {
+		t.Fatalf("cached physical page was mutated: %+v", source.Gadgets[7])
+	}
+}
+
+func TestAbsentNumberedPageFallsBackToDLWithoutPlacements(t *testing.T) {
+	template := generatedPageFixture("guis/armdl.gui")
+	h := &retailBattleHUD{
+		fs:      vfs.New(),
+		side:    &content.SideDef{NamePrefix: "ARM"},
+		windows: map[string]*gui.Window{"armdl": template},
+	}
+	got, _, err := h.numberedPage("unresolved2", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got == template || got.Name != template.Name {
+		t.Fatalf("zero-placement fallback = %#v, want cloned ARMDL", got)
+	}
+}

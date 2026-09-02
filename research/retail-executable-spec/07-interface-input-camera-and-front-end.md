@@ -1209,6 +1209,119 @@ logical entry 10, always on): document 03 owns its drawing; nothing in
 the widget or footer code draws a selection count ([R-HUD-03 §12]).
 
 
+### Closed — the eligibility float is the remaining-build fraction, and no order state feeds it [R-WGT-01 §10] (2026-09-01)
+
+RWU-19-14 asked what the "per-unit order-guard float" that §8's
+Supported-inference block and §9's Established block compared with `0.0` is,
+who writes it, and whether an idle unit's standing order keeps it nonzero.
+There is no order-guard float. §9 above and [08 R-TRIG-01 §3] already had the
+field right; this section records the census that settles it and corrects the
+three places that did not.
+
+**Established — identity.** The single-precision unit-record word every
+eligibility site compares with literal `0.0` is the unit's **remaining-build
+fraction**: the word the construction step of [05 R-WORK-01 §1] stores, the
+capture sentinel of [05 R-WORK-01 §10] tests, the constructor seeds
+([04 R-COB-03 §4]) and COB port 17 (`BUILD_PERCENT_LEFT`, [04 R-COB-03 §2])
+reads. The identification rests on a whole-executable census of every load
+and every store of that word — the readers below are the complete load set,
+the writers below the complete store set, and no pointer to the word is ever
+taken — so no store site outside the list exists.
+
+**Established — writers, exhaustively.** Five events write the word; two
+whole-record copies carry it unchanged.
+
+1. *Unit creation* [04 R-COB-03 §4]: `1.0f` when the unit is created as a
+   nanoframe (the creation call's under-construction argument), integer zero
+   (`+0.0f`) when it is created complete. The same branch seeds health to 0
+   for the nanoframe and to the low sixteen bits of `maxdamage` for the
+   complete unit.
+2. *The shared construction step* [05 R-WORK-01 §1]: the clamped `0..1` new
+   fraction — on the forward arm only after the two-resource admission
+   succeeds, on the reverse (deconstruction/decay) arm unconditionally. The
+   step returns without writing when the fraction is already `0.0`. This is
+   the "clamped `0..1` ratio" the retracted text attributed to order
+   processing: it is a build-work quantum divided by `buildtime`, not an
+   order-state ratio.
+3. *Construction completion* [04 §3.8][05 R-PROD-01 §2]: zero, together with
+   the product's presentation-dirty bit; the step invokes it synchronously
+   when its stored fraction reaches `0.0`.
+4. *Resurrection completion* [05 R-WORK-01 §7]: zero, with health 1.
+5. *Save-game restore* and *capture ownership transfer*: the value is copied
+   from the saved or source record unchanged.
+
+No routine of the order subsystem stores to the word: not the order-record
+constructor, not the primary or secondary pump, not the handler
+return-code epilogue, not cancel-all, not the single-record expiry helper,
+and not the idle-queue refill of [04 §3.3]. "Zeroed at order completion" was
+true only of the build order's completion on its *product*, which is item 3.
+
+**Established — readers beyond the two gates.** Every other load compares the
+same word with `0.0` in one of two senses. *Finished* (`== 0.0`): point-click
+selection and every bulk-selection walk — select-all, category select,
+select-on-screen, control-group recall, and the next-eligible-unit loops of
+[R-CAM-01 §2]; the build-menu opener, which opens no menu on a nanoframe
+[R-17-B]; `SelfRepair` and `RepairUnitNoMove`'s admit test [04 R-ORD-01 §5];
+the damage-intake reaction, which only a finished unit runs [06 R-WPN-04 §2];
+the per-player round-robin acquisition scan and the target-registry rebuild
+[06 §3.1–§3.2]; the targeting-upgrade registry rebuild [04 R-SPEC-01 §8]; the
+`BuildUnitType`, `AllUnitsKilled` and `MoveUnitToRadius` trigger visitors
+[08 R-TRIG-01 §3–§4]; and the kill bookkeeping that credits a kill only for a
+finished victim [08 R-SKIR-01 §3]. *Unfinished* (`!= 0.0`): the shape
+chooser's `cursorrepair` rows and the command resolver's help-build routing
+(§8, [04 §3.4]), `RepairUnit`'s entry branch, `GetBuilt`, the repair-candidate
+filter of the repair-patrol family (which accepts a target whose health is
+below `maxdamage` **or** whose fraction is nonzero), the `VTOL_HelpBuild`
+phase exits, the renderer's nanoframe-versus-model choice [03 R-RAST-01 §7],
+and the death bookkeeping's refund scale, which multiplies a definition cost
+by `(1.0 − fraction)`. COB port 17 is the one arithmetic reader: `0` when the
+fraction is exactly `0.0`, otherwise `1 − trunc(...)` per [04 R-COB-03 §2].
+
+**Established — the idle queue is irrelevant to the predicate, and what an
+idle unit's queue holds.** Because nothing in the order subsystem touches the
+word, a finished unit is eligible whatever its queue contains. What it does
+contain is authored data: the refill of [04 §3.3, "Closed — the idle-queue
+refill"] parks a `defaultmissiontype` record on an empty queue. A census over
+the 278 unit definitions of the reference install gives `Standby` 122,
+`VTOL_Standby` 30, `Standby_Mine` 12, `Guard_NoMove` 26, and no key on 88 —
+every one of the 88 a structure (factories, extractors, generators, storage,
+sensors, walls, silos). So an idle stock **mobile** unit's front queue holds a
+standing `Standby`-family record, an idle stock structure's queue is empty
+unless it authors `Guard_NoMove`, and both are selectable and inspectable.
+A build that models the standing record is modelling retail; a build that
+derives an eligibility word from the queue's emptiness is not.
+
+**Established — the two gates, restated for implementation.** Let `E(u)` be:
+`u`'s status bit 5 (*selectable*) set; `u`'s remaining-build fraction compares
+equal to `0.0` (an exact single-precision compare: `−0.0` passes, a NaN would
+fail, and no writer produces one); `u`'s post-capture grace counter is zero
+(armed only by a capture whose new owner is a remote controller — always zero
+in single-player, [08 R-TRIG-01 §3]); and `u` has no carrier, or its carrier's
+status bit 30 (*cargo-selectable*) is set. Clause order in the code is as
+listed, short-circuiting.
+
+* *Rectangle selection (§9):* walk the local player's unit slice in ascending
+  record order; for each record with `E(u)` true, apply the inclusive
+  rectangle test and the set-or-toggle of §9's truth table. A record failing
+  `E(u)` is neither written, toggled, nor counted, regardless of position.
+* *Idle-latch inspect (§8):* with the idle latch armed and the candidate set
+  empty, the hovered unit is inspectable — `cursorselect`, index 15 — when it
+  is non-null, its owner-slot byte equals the local player's, and `E(u)` is
+  true. Under interface type 1 the same test runs first in the idle case and
+  precedes the red/green divert. Immediately before the inspect test on the
+  empty-candidate path, a hovered unit that the selection's repair-target
+  predicate accepts **and** whose fraction is nonzero yields `cursorrepair`
+  (index 6) instead — the same word read in the opposite sense, and the
+  "friendly target needing assistance" row of §8's idle-latch list.
+
+The "finished" clause of the build's inspect predicate — the remaining
+fraction is zero — is therefore the entire "empty current-task" gate, and a
+build carrying a separate order-derived guard word has one clause too many.
+Nothing here is a Supported inference; every claim is the store and load
+census plus the authored key census, and the trail is in the decompile
+workspace's notes for this unit.
+
+
 ### Closed — art-less bevels: geometry, the three colour fields, and the window fill [R-FE-02 §4] (2026-08-29)
 
 **Established fact — geometry.** Every art-less control (a button whose name
@@ -4152,8 +4265,21 @@ also its shape priority order (re-verified: the chooser collects the selected
 units plus the hover id, evaluates each through the per-latch shape table, and
 keeps the smallest index with a strict `<` reduction). Fourth, when that
 candidate set is empty the
-idle latch over an own, active, finished, untasked unit gives `cursorselect`
-and everything else gives `cursornormal`.
+idle latch over an own, selectable, finished unit gives `cursorselect`
+and everything else gives `cursornormal`. The tests behind "selectable,
+finished" are the shared eligibility predicate of [R-WGT-01 §9]: status bit
+5, remaining-build fraction exactly `0.0`, post-capture grace counter zero,
+and carrier null or cargo-selectable.
+
+**Correction (2026-09-01, [R-WGT-01 §10]).** The sentence above previously
+read "an own, active, finished, untasked unit". "Untasked" was wrong: the
+predicate reads no order state at all, and its float compare — which the
+Supported-inference block later in this section and §9 called "a per-unit
+order guard float" — is the remaining-build fraction, the very word
+"finished" names. An implementation that tested a separate order-queue
+emptiness would gate `cursorselect` off for every idle unit whose queue
+holds its `defaultmissiontype` standing record ([04 §3.3, "Closed — the
+idle-queue refill"]).
 
 Per selected unit the shape is dispatched on the armed latch and gated on the
 same authored capability flags the order predicate reads, so the advertised
@@ -4641,8 +4767,11 @@ exactly three tests, in this order:
    bit — and the **first** sample that reads visible admits the candidate;
    later samples are evaluated only after an earlier one fails.
 
-The producer body evaluates **no** active-state, zero-order guard,
-parent-state, health, or build-fraction predicate. The viewport hover
+The producer body evaluates **no** selectable-bit, remaining-build-fraction,
+grace-counter, carrier-state, or health predicate (this sentence previously
+listed "active-state, zero-order guard, parent-state, health, or
+build-fraction"; the "zero-order guard" and "build-fraction" entries were one
+field [R-WGT-01 §10]). The viewport hover
 consumer walks the stored identities in producer order, repeats only test 1,
 calls the hull path of §§1–4, applies the score reduction, and replaces the
 winner only on a strictly smaller score — so an equal score retains the
@@ -4834,17 +4963,31 @@ diverting condition was "not implemented because its byte's writer was not
 located" is superseded: the writers are the option loaders and the gate is the
 option value itself.
 
-The runtime active-state bit `0x20` and the empty-current-task field that the
-own-unit inspect predicate also tests are established for retail but have no
-counterpart in the current runtime flag word (see `docs/SPEC_CONFLICTS.md`).
 The shared eligibility predicate's exact single-precision compare is **equal to
 `0.0`**, not `1.0`: all eligibility sites compile to an exact compare against
-the constant `0.0`, and the compared field is a per-unit order guard float —
-zeroed at unit creation and at order completion, written with a clamped `0..1`
-ratio while an order is being processed — so eligibility means the unit is not
-mid-order. An earlier reading of the constant as `1.0` (and the corpus note
-that endorsed it) misread the compared value; the machine code and the
+the constant `0.0`. An earlier reading of the constant as `1.0` (and the corpus
+note that endorsed it) misread the compared value; the machine code and the
 constant's bytes are unambiguous.
+
+**Correction (2026-09-01, [R-WGT-01 §10]) — the compared field.** This
+paragraph previously opened with "The runtime active-state bit `0x20` and the
+empty-current-task field that the own-unit inspect predicate also tests are
+established for retail but have no counterpart in the current runtime flag
+word (see `docs/SPEC_CONFLICTS.md`)", and continued after the constant: "and
+the compared field is a per-unit order guard float — zeroed at unit creation
+and at order completion, written with a clamped `0..1` ratio while an order is
+being processed — so eligibility means the unit is not mid-order". Both are
+retracted. The compared field is the **remaining-build fraction** — the word
+the construction step drives from `1.0` toward `0.0` [05 R-WORK-01 §1] — so
+"eligible" means *construction complete*, exactly as [R-WGT-01 §9] and
+[08 R-TRIG-01 §3] already state. The "clamped `0..1` ratio" that misled the
+earlier reading is the construction step's own clamp, and the "order
+completion" that zeroes it is the completion of the *build* order on the
+product; no routine of the order subsystem writes the word. The
+"empty-current-task field" is therefore not a second gate but the "finished"
+gate itself, and the `0x20` half is the *selectable* status bit of
+[08 R-P0-04 "Runtime eligibility bit lifecycle"]; both have counterparts in the
+build (`Remaining` and the eligibility status bit).
 
 The visibility gate is the word-grid bit `1 << (localPlayer & 0x1F)` versus the
 per-viewer byte grid selected by a visibility-mode bit. The named-entry index
@@ -4907,12 +5050,17 @@ Selection operates on the runtime unit pool. Bulk-selection paths walk the
 owning player's inclusive unit range in ascending address order at a fixed
 280-byte unit-record stride, so iteration stays stable regardless of writes
 made during the walk. The shared eligibility predicate tests authoritative
-fields: the active-state bit `0x20` of unit runtime flags; an exact runtime
-single-precision value compared equal to `0.0` — a per-unit order-guard float
-zeroed at unit creation and at order completion, nonzero while an order is
-being processed; no disqualifying state
-reference (zero); and either no parent-unit reference or a parent whose
-runtime flags carry state bit `0x40000000`. Selection membership is bit
+fields: the *selectable* status bit `0x20` (bit 5) of unit runtime flags; the
+remaining-build fraction compared exactly equal to `0.0` — construction
+complete; the post-capture grace counter equal to zero; and either no carrier
+reference or a carrier whose runtime flags carry the *cargo-selectable* bit
+`0x40000000` (bit 30) [R-WGT-01 §9][R-WGT-01 §10]. **Correction (2026-09-01,
+[R-WGT-01 §10]):** the second and third clauses previously read "an exact
+runtime single-precision value compared equal to `0.0` — a per-unit
+order-guard float zeroed at unit creation and at order completion, nonzero
+while an order is being processed; no disqualifying state reference (zero)".
+The float is the remaining-build fraction and reads no order state; the
+"state reference" is the grace counter. Selection membership is bit
 `0x10` of unit runtime flags. Bulk changes also clear the selected-builder
 single-select id, refresh aggregate command/UI state, and set battle-
 interface dirty bit `0x10` (a different field that coincidentally shares the

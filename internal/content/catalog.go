@@ -95,6 +95,12 @@ type Catalog struct {
 	// their button names at Compile time [02 "Unit record"]; phase 8's
 	// construction UI consumes pages directly.
 	BuildMenus map[string]*BuildMenuPage
+	// DownloadPlacements retains safely representable download/*.tdf items in
+	// deterministic union-enumeration and section order [02 R-CAT-01 §8].
+	// Resolution flags preserve the independent retail passes; the page accessor
+	// exposes only fully resolved placements. Authored BUTTON slots remain
+	// explicit because a generated page can be sparse.
+	DownloadPlacements []DownloadMenuPlacement
 
 	// Aliases holds the gamedata/allsound.tdf alias registrations (cap 255,
 	// 32-byte names) [02 "Sound aliases"]. Phase 13's audio path resolves
@@ -268,6 +274,11 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 	// The page-count byte is a per-record probe of the authored page windows,
 	// step 5 of the compiler's own order [02 R-CAT-01 §5].
 	fillBuildPages(fs, units)
+	downloadPlacements, err := CompileDownloadMenus(fs, units)
+	if err != nil {
+		return nil, err
+	}
+	warnings = append(warnings, ApplyDownloadMenus(units, buildMenus, downloadPlacements)...)
 	if err := fillUnitScripts(fs, units); err != nil {
 		return nil, err
 	}
@@ -277,25 +288,26 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 	manifest, _ := manifestHashFor(fs)
 
 	c := &Catalog{
-		Units:        units,
-		Categories:   categories,
-		Weapons:      weapons,
-		Features:     features,
-		Movement:     movement,
-		Sides:        sides,
-		Sounds:       sounds,
-		Maps:         maps,
-		LOS:          losTables,
-		Sight:        sightShapes,
-		Meteor:       meteorDefaults,
-		AIProfiles:   aiProfiles,
-		Aliases:      aliases,
-		AliasOrder:   aliasOrder,
-		BuildMenus:   buildMenus,
-		Warnings:     warnings,
-		Manifest:     manifest,
-		sortedModels: sortedModels,
-		modelIndex:   modelIndex,
+		Units:              units,
+		Categories:         categories,
+		Weapons:            weapons,
+		Features:           features,
+		Movement:           movement,
+		Sides:              sides,
+		Sounds:             sounds,
+		Maps:               maps,
+		LOS:                losTables,
+		Sight:              sightShapes,
+		Meteor:             meteorDefaults,
+		AIProfiles:         aiProfiles,
+		Aliases:            aliases,
+		AliasOrder:         aliasOrder,
+		BuildMenus:         buildMenus,
+		DownloadPlacements: downloadPlacements,
+		Warnings:           warnings,
+		Manifest:           manifest,
+		sortedModels:       sortedModels,
+		modelIndex:         modelIndex,
 	}
 	// Stable weapon index: one record per slot [02 §5 R-CONTENT-02].
 	c.weaponByID, c.weaponDuplicates = buildWeaponIndex(weapons, weaponDuplicates)
@@ -303,6 +315,25 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 	// independent of map iteration, identical across two runs (I1) [02 §5] C12.
 	c.Hash = catalogHash(c)
 	return c, nil
+}
+
+// DownloadPlacementsForPage returns a copy of the resolved generated-page
+// placements for one builder and visible page, in authored file/section order
+// [02 R-CAT-01 §8][07 R-HUD-03 §6]. Retail MENU is visiblePage+1.
+func (c *Catalog) DownloadPlacementsForPage(builder string, visiblePage int) []DownloadMenuPlacement {
+	if c == nil || visiblePage < -1 {
+		return nil
+	}
+	wantBuilder := CanonicalKey(builder)
+	wantMenu := visiblePage + 1
+	var out []DownloadMenuPlacement
+	for _, placement := range c.DownloadPlacements {
+		if placement.BuilderResolved && placement.ProductResolved &&
+			CanonicalKey(placement.Builder) == wantBuilder && int(placement.Menu) == wantMenu {
+			out = append(out, placement)
+		}
+	}
+	return out
 }
 
 // buildWeaponIndex builds the once-compiled ID->def map and duplicate diagnostics.
@@ -741,6 +772,9 @@ func (c *Catalog) Clone() *Catalog {
 			}
 			out.BuildMenus[k] = &cp
 		}
+	}
+	if c.DownloadPlacements != nil {
+		out.DownloadPlacements = append([]DownloadMenuPlacement(nil), c.DownloadPlacements...)
 	}
 	// Warnings are immutable diagnostics; a slice copy suffices.
 	if c.Warnings != nil {
