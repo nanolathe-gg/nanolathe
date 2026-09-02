@@ -361,6 +361,21 @@ func deadlineHold(n *Node, tick uint32, ticks int32) Code {
 	return 2
 }
 
+// deadlineRestart is `deadlineHold`'s sibling for the rows that arm a deadline
+// and *restart* instead of holding — `RepairUnit`'s moving-target arm
+// [04 R-ORD-01 §5][04 R-ORD-01 §12]. The deadline setter is the same one
+// [04 R-ORD-01 §1] describes (store `tick + n`, OR gate bit 0); only the result
+// code differs, and code 0 resets the record's phase to 0 [04 §3.3], which is
+// what makes the row re-approach.
+func deadlineRestart(n *Node, tick uint32, ticks int32) Code {
+	if n == nil {
+		return 0
+	}
+	n.Deadline = int32(tick + uint32(ticks))
+	n.DynamicGate |= gateDeadline
+	return 0
+}
+
 // inBuildStanceWait is the shared `INBUILDSTANCE` wait [04 R-ORD-01 §1]: it
 // returns *advance* (1) once the unit's build-stance byte is set, and otherwise
 // writes the dynamic gate to `extra | 0x4` and returns *hold* (2). The gate is
@@ -489,10 +504,10 @@ func workerQuantum(u *units.Unit) int32 {
 // called with the arguments reversed relative to `RepairUnit`: the repairer's
 // energy is billed and the patient is healed [05 R-WORK-01 §3].
 //
-// Row [04 R-ORD-01 §2]: target null -> status 7 `Repair aborted.`, abandon (8).
-// Phase 0: the target's definition must have `builder` (else cancel-all 7); the
-// target must be complete and activated -> release all slots, advance (1); else
-// abandon (8). Phase 1: own health >= own maxdamage -> advance (1); else the
+// Row [04 R-ORD-01 §2] as corrected by [04 R-ORD-01 §12]: target null -> status
+// 7 `Repair aborted.`, abandon (8). Phase 0: the target's definition must have
+// `builder` (else cancel-all 7); the target must be complete AND THIS UNIT
+// activated -> release all slots, advance (1); else abandon (8). Phase 1: own health >= own maxdamage -> advance (1); else the
 // repair step, deadline 1, gate |= 0x8, hold (2). Phase 2: status 10
 // `Unit repaired`, complete (5). Other: cancel-all (7).
 func selfRepairHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
@@ -509,14 +524,13 @@ func selfRepairHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
 		if repairer.Def == nil || !repairer.Def.Builder {
 			return 7 // cancel-all
 		}
-		// TODO(question): [04 R-ORD-01 §2] puts both clauses on the target —
-		// "target must be complete (remaining fraction 0.0) and activated (edge
-		// bit 0)" — while [05 R-WORK-01 §3] splits them, requiring the
-		// REPAIRER's remaining fraction to be zero and "the patient carries an
-		// instance permission byte's low bit". The handler row is followed here
-		// because it owns the body; a trace of phase 0's two reads would settle
-		// whose fields they are [04 R-ORD-01 §2][05 R-WORK-01 §3].
-		if repairer.Remaining != 0 || !repairer.Activated {
+		// Closed by [04 R-ORD-01 §12]: phase 0 reads one field on the TARGET
+		// and one on ITSELF. The remaining fraction is the target's — the
+		// repairer must be complete — while the activation is the PATIENT's,
+		// the unit running this order. [05 R-WORK-01 §3] had the split right;
+		// the §2 row's "and activated" is corrected to "and **this unit** is
+		// activated", and this build had been following the uncorrected row.
+		if repairer.Remaining != 0 || !u.Activated {
 			return 8 // abandon
 		}
 		releaseSlot(u, slotAll) // "release all slots": k = 3 is slots 0, 1, 2 in order [04 R-ORD-01 §1]
@@ -621,14 +635,20 @@ func repairUnitHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Co
 		if target.Def != nil && uint32(target.Health) >= uint32(target.Def.MaxDamage) {
 			return 1 // advance
 		}
-		// TODO(question): the "target state-word bits 2-3 set" arm
-		// ([04 R-ORD-01 §5], `(target.status & 0xc) != 0` in
-		// [05 R-WORK-01 §6]) has no field in this build: units.Unit mirrors
-		// only the low two status bits, as Move.Mode. A trace naming bits 2 and
-		// 3 of that word would settle what they mirror; until then this arm —
-		// StopBuilding, deadline 15, restart — is left unreachable rather than
-		// invented.
-		//
+		// The "target state-word bits 2-3 set" arm, closed by
+		// [04 R-ORD-01 §12]: those two bits are the movement-rate classifier's
+		// cached tier [04 R-MOV-01 §6], which this build keeps as
+		// `units.Unit.MoveTier` — nonzero means the target is moving under its
+		// own mover this tick. [05 R-WORK-01 §3]'s "either of the target's
+		// movement-mode bits" named the wrong pair: the movement-mode mirror is
+		// bits 0-1, tested before the phase switch, and the re-approach arm
+		// reads bits 2-3. The arm emits `StopBuilding` mid-life, arms deadline
+		// 15 and *restarts*, which returns the record to phase 0 and so
+		// re-approaches [04 §3.3].
+		if target.MoveTier != 0 {
+			emitStopBuilding(u, n)
+			return deadlineRestart(n, tick, 15)
+		}
 		// The stamp precedes the helper call: "otherwise it pushes the
 		// builder's cloak deadline to `tick + 150`, calls the helper"
 		// [05 R-WORK-01 §3][04 R-ORD-01 §5].
@@ -680,8 +700,12 @@ func repairUnitNoMoveHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code
 		if target.Def != nil && uint32(target.Health) >= uint32(target.Def.MaxDamage) {
 			return 1 // advance
 		}
-		// The bits 2-3 arm of this row advances rather than restarting; it is
-		// unreachable for the reason given in repairUnitHandler.
+		// The bits 2-3 arm of this row simply *advances* rather than restarting
+		// [04 R-ORD-01 §5]. Those bits are the target's cached movement-rate
+		// tier [04 R-ORD-01 §12][04 R-MOV-01 §6]; see repairUnitHandler.
+		if target.MoveTier != 0 {
+			return 1 // advance
+		}
 		//
 		// "`RepairUnitNoMove` 36 is the same work visit with no approach phases
 		// and with only the null-target entry guard" — stamp included
@@ -710,12 +734,12 @@ func repairUnitNoMoveHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code
 // X term and add Z twice; §2 reproduces it as the instructions compute it and
 // leaves whether that is a retail defect Unknown.
 //
-// TODO(question): the two sections disagree on WHOSE footprint the radicand
-// reads. [04 R-ORD-01 §5] says the term is taken "from **my own** footprint";
-// [05 R-WORK-01 §2] says it is "taken from the **target's** definition". The
-// arithmetic is identical in both. The handler row is followed here, because
-// §5 owns this body; a trace of the assist phase 0's two footprint loads would
-// settle it [04 R-ORD-01 §5][05 R-WORK-01 §2].
+// The two sections used to disagree on WHOSE footprint the radicand reads, and
+// [04 R-ORD-01 §12] settles it: phase 0 loads the footprint pair from the
+// TARGET's definition — the unit being assisted — and [05 R-WORK-01 §2] ("taken
+// from the target's definition") was right, while §5's "from **my own**
+// footprint" is withdrawn. Only `builddistance`, the annulus's outer term, is
+// the builder's own. Callers must therefore pass the TARGET's footprint pair.
 func assistApproachHalf(footX, footZ int32) int32 {
 	r := int64(footX)*int64(footX) + int64(footZ) + int64(footZ)
 	return int32(isqrt64(256*r)) / 2 // 16·sqrt(r) = sqrt(256r); the /2 is signed
@@ -723,7 +747,9 @@ func assistApproachHalf(footX, footZ int32) int32 {
 
 // AssistApproachHalf is the exported form of the term above. internal/movement
 // uses it to build the annulus payload that `HelpBuild` phase 0 installs —
-// outer `builddistance + half`, inner `half` [04 R-ORD-01 §5].
+// outer `builddistance + half` with `builddistance` the BUILDER's, inner
+// `half` over the TARGET's footprint pair [04 R-ORD-01 §5][04 R-ORD-01 §12]
+// [05 R-WORK-01 §2].
 func AssistApproachHalf(footX, footZ int32) int32 {
 	return assistApproachHalf(footX, footZ)
 }

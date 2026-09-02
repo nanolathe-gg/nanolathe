@@ -968,11 +968,26 @@ else:
      mission-global words ([R-SKIR-01 §4], [03 R-VIS-01 §1]); then the
      **unit-restriction loader** runs: it opens resource-path slot 6
      (`UseOnlyUnits`, [02 R-MAP-01 §1]); when the file exists it clears the
-     *available* bit of every catalog definition from index 2 upward, then
-     sets it again for every definition whose name matches a `[name]`
-     section of the file (case-insensitive compare). A missing file leaves
-     every definition available. The available bit is the same one the unit
-     allocator tests ([05 R-SHARE-01 §8]).
+     *available* bit of every catalog definition except the `None` sentinel
+     at index 0 — index 1 upward, every real definition — then sets it
+     again for every definition whose `unitname` matches a `[name]` section
+     of the file (case-insensitive compare, first matching record per
+     section). A missing file leaves every definition available. The
+     available bit is the *compatible* flag of [02 R-CAT-01 §4] (bit 23 of
+     the first definition-flags word), the same one the unit allocator
+     tests ([05 R-SHARE-01 §8]). *Correction (2026-09-02, RWU-19-32):* the
+     previous text said "from index 2 upward"; the loop's counter starts at
+     2 but its first record is index 1 — verified in the instruction
+     stream. **Consequence (Established).** The catalog compile of §3 step
+     13 runs *after* this step in the same entry and compacts every record
+     whose bit is clear out of the table ([02 R-CAT-01 §5] step 3),
+     re-sorting and renumbering the survivors. In a kind-1 battle the
+     restriction therefore takes effect as *catalog removal* — an excluded
+     definition has no unit index, no build-menu button and cannot be
+     spawned by name — not as an allocator refusal. The table is rebuilt
+     from the FBI files by the front end's pre-load state as its first act
+     (the state the lobby screens, the load-game handler and the
+     battle-exit continuation install), so the removal lasts one battle.
    - *Kind 2 (skirmish)*: session unit limit ← lobby unit limit;
      local-authority flag ← 1; commander-death rule and the three mode bits
      from the setup record ([R-SKIR-01 §2]).
@@ -1806,6 +1821,23 @@ on the local player's side definition) is clear — the commander-dead test"
 is retracted on both counts: the bit is the watch-mode bit that the
 elimination handler sets, and no defeat queue is polled in kinds 2/3.
 
+**The due tick is the settlement deadline — Established (2026-09-02,
+RWU-19-32).** The "due tick" above is the player record's `UpdateTime`
+word — the same word the economy pass compares and advances ([05 R-ECO-01
+§1]); there is no separate trigger-poll or win/lose deadline. For a slot
+whose `UpdateTime <= globalTick`, the per-player phase runs, in order: the
+advance `UpdateTime += 30`; for the **local** slot only, the end-condition
+block of this section (both polls, the shared countdown, the end latch);
+the settlement gate chain and the settlement itself; then a
+reference-slot tail of per-slot helpers this unit did not trace. The
+end-condition block is therefore evaluated once per settlement due, before
+that due's settlement, and a load resumes it on the saved `UpdateTime`
+phase. The sibling `WinLoseTime` word is seeded with the other two
+deadlines and is neither read nor advanced by this block or by any other
+gameplay site ([08 "Player records"]). An implementation that keeps a
+private deadline for the trigger site diverges after a load — a retail save
+carries one deadline, and the poll must resume on it.
+
 **The kind-1 predicates.** Both first require the mission object's *armed*
 flag, which the mission-object constructor sets and the mission spawner
 clears when the mission has **no `[units]` records** (kind 1 only) — a
@@ -2318,8 +2350,9 @@ removed (the same function that clears the unit's "alive" bit), and in
 multiplayer notifies peers when it reaches zero.
 
 **Defeat detection.** In the per-player phase, on the **local** player's
-30-tick due (`globalTick >= due` then `due += 30`), for session kinds 2 and
-3, when the local record is inactive or its watch-mode bit is clear, the
+30-tick due (`globalTick >= due` then `due += 30`; the due word is the
+settlement deadline `UpdateTime`, not `WinLoseTime` — [R-TRIG-01 §6],
+2026-09-02), for session kinds 2 and 3, when the local record is inactive or its watch-mode bit is clear, the
 defeat predicate is evaluated: for kinds 2/3 it is simply **`local live unit
 count == 0`** (the campaign kind polls its defeat queue instead). A second,
 preceding branch of the same predicate arms a random deadline of `9000 +
@@ -5439,6 +5472,15 @@ compatibility and otherwise inert; `DisplayTimer` is the **HUD resource-rate
 refresh deadline**: a presentation function advances it by thirty whenever
 it trails the global tick and refreshes the four displayed resource-rate
 floats from the player record.
+
+*Addendum (2026-09-02, RWU-19-32) — Established.* `WinLoseTime`'s complete
+access census: written by the per-player reset of battle entry
+([R-ENTRY-01 §3] step 24, when the global tick is 0) and by the save
+reader; read by the save writer only. In a battle reached without a load it
+is therefore `0` for the whole session, and a restored value never changes
+afterwards. The 30-tick due on which the end-condition block of
+[R-TRIG-01 §6] polls is `UpdateTime` — the settlement deadline — which is
+why no third deadline exists for that block to read.
 
 The `Alliances` box is exactly 11 bytes and loads only when the selected box
 size is exactly 11; afterwards the player's own self-alliance byte is forced

@@ -173,11 +173,13 @@ func TestPublicationAdoptsTwoPointRouteVerbatim(t *testing.T) {
 }
 
 // TestHelpBuildInstallsAnnulusAndArrivesBesideTarget locks the assist approach
-// of [04 R-ORD-01 §5]: `HelpBuild` phase 0 installs an annulus at the target's
-// position with outer `builddistance + half` and inner `half` from the
-// assistant's own footprint, and the follower's arrival question is that
-// payload's own start predicate ([04 R-MOV-03 §2]). Before this the work family
-// reached neither ActivateMove nor an arrival handle, so an out-of-reach
+// of [04 R-ORD-01 §5] as corrected by [04 R-ORD-01 §12]: `HelpBuild` phase 0
+// installs an annulus at the target's position with inner `half` over the
+// TARGET's definition footprint and outer `builddistance + half` with
+// `builddistance` the BUILDER's, and the follower's arrival question is that
+// payload's own start predicate ([04 R-MOV-03 §2]). The fixture's builder is
+// 2x2 and its site 4x4 precisely so the two halves differ. Before this the work
+// family reached neither ActivateMove nor an arrival handle, so an out-of-reach
 // assistant never took a step and its 0xE8 approach gate had no producer at all.
 func TestHelpBuildInstallsAnnulusAndArrivesBesideTarget(t *testing.T) {
 	sys := NewSystem(wakeTerrain(48), wakeProfile, NewOccupancyGrid())
@@ -219,17 +221,27 @@ func TestHelpBuildInstallsAnnulusAndArrivesBesideTarget(t *testing.T) {
 		t.Fatalf("HelpBuild bound no annulus payload: %+v", ah)
 	}
 	trace := path.DescribeGoal(ah.payload)
-	half := orders.AssistApproachHalf(builderDef.FootprintX, builderDef.FootprintZ)
+	// The radicand is the TARGET's footprint pair; only builddistance is the
+	// builder's [04 R-ORD-01 §12][05 R-WORK-01 §2].
+	half := orders.AssistApproachHalf(siteDef.FootprintX, siteDef.FootprintZ)
 	if trace.Kind != 2 || trace.A != half || trace.B != builderDef.BuildDistance+half {
 		t.Fatalf("annulus=%+v want kind 2 inner %d outer %d", trace, half, builderDef.BuildDistance+half)
 	}
+	// The builder's own pair would give a different band, so this test would
+	// pass on the withdrawn reading only by coincidence.
+	if builderHalf := orders.AssistApproachHalf(builderDef.FootprintX, builderDef.FootprintZ); builderHalf == half {
+		t.Fatalf("fixture footprints must separate the two readings: both give %d", half)
+	}
 	// The band is measured in cells after the >>4 quantisation of
 	// [04 R-PATH-01 §9], so a builder standing between inner/16 and outer/16
-	// cells of the site has arrived and one still far away has not.
+	// cells of the goal centre has arrived and one still far away has not.
 	if ah.payload.StartSatisfied(path.Cell{X: 6, Z: 24}) {
 		t.Fatal("a builder eighteen cells away must not read as arrived")
 	}
-	if !ah.payload.StartSatisfied(path.Cell{X: 24 - half/16, Z: 24}) {
-		t.Fatalf("a builder on the inner band edge must read as arrived (half=%d)", half)
+	if !ah.payload.StartSatisfied(path.Cell{X: trace.Center.X - half/16, Z: trace.Center.Z}) {
+		t.Fatalf("a builder on the inner band edge must read as arrived (half=%d centre=%v)", half, trace.Center)
+	}
+	if ah.payload.StartSatisfied(trace.Center) {
+		t.Fatal("the goal centre itself lies inside the band's hole, not on it")
 	}
 }

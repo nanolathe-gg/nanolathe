@@ -572,20 +572,14 @@ func spawnImmediateSelfDestruct(u *units.Unit, n *Node) {
 func attackSpecialHandler(u *units.Unit, n *Node, _ uint32, _ uint32) Code {
 	resolved := Resolve(3, u, targetOf(u, n), nil)
 	if resolved == 0 {
-		// TODO(question): [04 R-ORD-01 §2]'s row does not say what the handler
-		// does when the resolver rejects — it describes only the resolving
-		// case, and §3.4's resolver returns the reject sentinel for a missing
-		// target or a unit that cannot make the attack. Re-identifying the
-		// record as the sentinel descriptor would leave it with no handler at
-		// all, and returning *hold* unchanged would re-dispatch this same body
-		// forever inside one pump pass [04 §3.3]. The placeholder is the
-		// outcome every other row in [04 R-ORD-01 §3] gives for "there is
-		// nothing to attack" — target null → complete — recorded as a queue
-		// diagnostic so the failure is visible. A trace of this handler's
-		// reject arm settles it.
-		if q := QueueForUnit(u); q != nil {
-			q.recordDiagnostic("orders: AttackSpecial could not resolve command code 3 against its target, completed")
-		}
+		// Closed by [04 R-ORD-01 §12]: the handler has NO reject arm. Its body
+		// is three statements with no branch, so a rejected resolution simply
+		// re-identifies the record as the reject sentinel — descriptor 0 — and
+		// the pump re-dispatches it in the same pass under descriptor 0's
+		// handler, which returns 5 (complete) unconditionally: it reads
+		// nothing, writes nothing, and emits no caption. The record therefore
+		// completes silently, which is what this arm returns directly; the
+		// earlier queue diagnostic was ours, not retail's, and is withdrawn.
 		return Code(5)
 	}
 	n.ID = resolved
@@ -763,16 +757,14 @@ func guardNoMoveHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 		if tgt != nil {
 			n.Target = tgt.Handle
 		}
-		// "if it exists and carries bit 28": [04 R-ORD-01 §1] names bit 28 of
-		// the status word "the alive/building-class bit". This build splits
-		// those two halves — aliveness is the unit's own live flag, and the
-		// definition-derived building class is a separate status bit — and the
-		// half a guard's bound target must satisfy is aliveness.
-		//
-		// TODO(question): which half bit 28 is at this site is not stated;
-		// a guard that could only hold a BUILDING would never return fire at a
-		// mobile attacker, which is why the live half is the one read here. A
-		// writer census of status bit 28 settles it.
+		// "if it exists and carries bit 28": closed by [04 R-ORD-01 §12]'s
+		// writer census. Bit 28 is the ALIVE bit and nothing else — the unit
+		// initializer sets it for both classes and the teardown clears it, so
+		// it means "constructed and not yet torn down"; the building-class bit
+		// is bit 29 [08 R-AI-03 §4]. The "/building-class" half of the label in
+		// [04 R-ORD-01 §1] is withdrawn, so the guard's phase-1 test is an
+		// aliveness test satisfied by mobile targets, which is this build's own
+		// live flag.
 		if tgt != nil && tgt.Alive {
 			n.GoalX, n.GoalY, n.GoalZ = tgt.X, tgt.Y, tgt.Z
 			releaseSlot(u, 0)
@@ -875,10 +867,13 @@ func scanRegistryAroundPoint(u *units.Unit, x, z numeric.Fixed, radius int32) []
 // arms ends the order.
 //
 //  1. If the satisfied set intersects 0x1000A (`AirStrike`, `AirToGround`) or
-//     0x10008 (`AirToGroundHover`): ... return 5 either way.
-//  2. If the target reference is null but the record's 0x200 "cached goal
-//     valid" bit is set, replace the current order with `VTOL_SeekAttack` at
-//     the unit's own position and return 5.
+//     0x10008 (`AirToGroundHover`): when the record is the last on its segment
+//     and the unit's fire stance is not *hold fire*, replace the current order
+//     with a fresh `VTOL_SeekAttack` carrying the same target and cached goal;
+//     return 5 either way.
+//  2. If the target reference is null but the record was issued against a
+//     target and it is the last on its segment, replace the current order with
+//     `VTOL_SeekAttack` at the unit's own position and return 5.
 //  3. If the target reference is live, refresh the record's cached goal from
 //     the target's current position every visit — the cached goal trails a
 //     live target and stands in for it once it is gone; it is never a fixed
@@ -886,42 +881,76 @@ func scanRegistryAroundPoint(u *units.Unit, x, z numeric.Fixed, radius int32) []
 //  4. Off-map recovery ([04 R-AIR-01 §5]).
 //  5. The maneuver leash ... return 5 when `leash <= distance`.
 //
-// Step 1's own text makes the return unconditional ("return 5 either way"), so
-// the arm is reproduced as a completion; what is NOT reproduced is the
-// replacement it performs first.
+// Steps 1 and 2 were carried as an open question until [04 R-AIR-01 §16] named
+// their three fields: the "successor marker" is the record's next-record link,
+// so the test is "the record is the last on its segment" (`hasSuccessor`); bits
+// `0x300000` are the unit's fire-stance pair, bits 20–21 [04 R-STANCE-01 §2],
+// and "either set" means the stance is not *hold fire*; and the `0x200` bit is
+// bit 9 of the record's STATIC-mask copy, which means *this record was issued
+// against a target*, not "cached goal valid". §16 also adds the successor gate
+// to step 2, which the earlier text stated unconditionally.
 //
-// TODO(question): step 1's replacement is gated on "the record has no successor
-// marker **and** the unit's status word has either of bits 0x300000", and step
-// 2's on "the record's 0x200 'cached goal valid' bit". [04 R-AIR-01 §8] names
-// neither field: the successor marker is not one of the record fields
-// [04 §3.2] enumerates, the two status-word bits are not in [04 §2.4]'s census,
-// and the 0x200 bit is stated without saying which of the record's words holds
-// it — the record's pending word's 0x200 is the path-search "start out of
-// bounds" bit [04 R-ORD-01 §0], which is not a cached-goal validity flag. So
-// the conditions cannot be evaluated and the `VTOL_SeekAttack` replacements are
-// not issued; the established return code is. A trace naming those three fields
-// settles it.
+// Step 2's "the target reference is null" is a target that HAS SINCE GONE:
+// [04 §3.1]'s record constructor clears static bit 9 when the record is built
+// with no target unit at all, so such a record never seeks. This build's record
+// keeps its target handle when the target dies and resolves it per visit, so
+// the two cases separate on the handle rather than on the mask bit: a handle
+// that no longer resolves is §16's null reference, and a record built with no
+// target (handle zero) is the constructor-cleared case that must NOT seek. The
+// handle test is therefore what stands in for the constructor's clear here; it
+// becomes redundant, not wrong, if the record constructor ever applies it.
 //
 // Off-map recovery is owned by the movement runner's marker family [04
 // R-AIR-01 §5]. The queue-side entry performs the shared record checks first;
 // the runner then applies the recovery leg with the current tick.
 func airEntry(u *units.Unit, n *Node, satisfied uint32, interruptMask uint32) (Code, bool) {
 	if satisfied&interruptMask != 0 {
-		return Code(5), true // step 1, "return 5 either way"
+		// Step 1: the replacement carries the same target and cached goal, and
+		// runs only for the last record on the segment whose unit is not on
+		// hold fire [04 R-AIR-01 §16].
+		if !hasSuccessor(u, n) && u != nil && (u.Flags>>units.StandingFireShift)&units.StandingFieldMask != 0 {
+			spawnSeekAttack(u, n, n.Target, n.GoalX, n.GoalY, n.GoalZ)
+		}
+		return Code(5), true // "return 5 either way"
 	}
 	tgt := targetOf(u, n)
 	if tgt == nil {
-		if n.Target == 0 {
-			return Code(5), true // step 2's completion, without its replacement
+		// Step 2: with the target gone, the seek starts from the unit's own
+		// position and carries no target [04 R-AIR-01 §16].
+		if n.Target != 0 && n.StaticGate&staticTargetObserver != 0 && !hasSuccessor(u, n) && u != nil {
+			spawnSeekAttack(u, n, 0, u.X, u.Y, u.Z)
 		}
-	} else {
-		// Step 3: the cached goal follows the target every visit.
-		n.GoalX, n.GoalY, n.GoalZ = tgt.X, tgt.Y, tgt.Z
+		return Code(5), true
 	}
+	// Step 3: the cached goal follows the target every visit.
+	n.GoalX, n.GoalY, n.GoalZ = tgt.X, tgt.Y, tgt.Z
 	if leashBroken(u, n) {
 		return Code(5), true // step 5, the maneuver leash [R-STANCE-01 §4]
 	}
 	return Code(0), false
+}
+
+// spawnSeekAttack head-inserts the fresh `VTOL_SeekAttack` record the air
+// entry's two replacement arms issue [04 R-AIR-01 §16]. The replacement
+// allocates the record, constructs it with the caller's target and position
+// triple, and hands it to the replace-at-head tail; the entry then returns 5,
+// so the head insert plus the completion is the replacement. "A null allocation
+// degrades to the plain return 5" — here, a missing descriptor or an unbound
+// queue leaves the completion alone.
+//
+// The spawned record inherits the replaced record's creation tick, as the
+// kamikaze self-destruct spawn does: nothing in [04 §3.2] gives a spawned
+// record a creation tick of its own.
+func spawnSeekAttack(u *units.Unit, n *Node, target pool.Handle, x, y, z numeric.Fixed) {
+	id := Lookup("VTOL_SeekAttack")
+	if id == 0 || u == nil || n == nil {
+		return
+	}
+	q := QueueOfUnit(u)
+	if q == nil {
+		return
+	}
+	q.PushHead(id, NewNodeForOrder(id, target, x, y, z, n.CreationTick, u.Handle, false))
 }
 
 // ---------------------------------------------------------------------------

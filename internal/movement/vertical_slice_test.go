@@ -160,9 +160,13 @@ func defForHover(name string) *content.UnitDef {
 
 func defForShip(name string) *content.UnitDef {
 	return &content.UnitDef{
-		UnitName:      name,
-		Floater:       true,
-		CanMove:       true,
+		UnitName: name,
+		Floater:  true,
+		CanMove:  true,
+		// EnsureUnit reads !BMCode as building-class, and a building has no
+		// mover, so the occupant-age gate blocks its cells unconditionally
+		// [04 R-PATH-01 §14][04 R-COLL-01 §4]. A mobile fixture must author it.
+		BMCode:        true,
 		MovementClass: "BOAT4x4",
 		FootprintX:    4,
 		FootprintZ:    4,

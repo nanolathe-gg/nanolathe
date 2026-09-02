@@ -20,8 +20,7 @@
 //	BrakeRate            definition BrakeRate, fixed 16.16 [02 "Unit record"]
 //	TurnRate             definition TurnRate, integer [02 "Unit record"]
 //	TargetY              command altitude, 16.16 (targetY) [04 §10.1] C29
-//	VerticalHoldSentinel the unit's vertical-hold word equals the global sentinel [04 §10.1] C29
-//	                     TODO(question): sentinel semantic name unknown, called verticalHoldSentinel per PLAN_07 Explicit unknowns.
+//	OffMap               the unit's air-sector link is the off-map sector record [04 R-AIR-01 §5][04 R-AIR-01 §15]
 //	TargetX/Z            command XZ 16.16 [04 §10.1] horizontal accel
 //	TargetVX/VZ          command VXZ 16.16 [04 §10.1]
 //	Dirty                transform-dirty bit set by heading integration when err != 0 [04 §10.1] C30
@@ -54,22 +53,31 @@ type FlightState struct {
 	TurnRate     int32 // integer [02 "Unit record"]
 
 	TargetY int32 // target altitude 16.16 [04 §10.1] C29
-	// The sentinel is the unit's occupancy sector-list head compared against a
-	// global sector sentinel; when they are equal the vertical assignment is
-	// skipped entirely and vertical velocity keeps its damped value
-	// [04 §10.1] C29.
+	// OffMap is the flight integrator's vertical bypass: the word [04 §10.1]
+	// C29 compares by full 32-bit equality against a global is the unit's
+	// AIR-SECTOR LIST LINK, and the global is the OFF-MAP SECTOR RECORD — one
+	// extra 10-byte record allocated beside the coarse sector grid at map load,
+	// never in the grid array, that the occupancy re-stamp links a unit into
+	// when its footprint anchor lies outside the attribute grid
+	// (anchorX < 0 || anchorZ < 0 || width <= anchorX + footX ||
+	// height <= anchorZ + footZ) [04 R-AIR-01 §5]. While the link is that
+	// record the vertical velocity assignment is skipped entirely and vertical
+	// velocity keeps its damped value: an aircraft that leaves the map has no
+	// vertical control at all until it re-enters. The earlier placeholder name
+	// "vertical-hold sentinel" described the effect; [04 R-AIR-01 §15] gives
+	// the role, which is off-map.
 	//
 	// This has no production writer, and that is correct rather than missing.
 	// Retail's only writers are on the footprint stamp — an out-of-bounds stamp
-	// writes the sentinel, any other stamp writes a real sector. An airborne
-	// mover holds no ground cells and performs no stamp (see the commit note in
-	// airorders.go), so it carries whatever its takeoff stamp wrote, and a
-	// takeoff always happens inside the map. The field is therefore false for
-	// every reachable case in this build, which is the value retail would also
-	// hold. Give it a writer only alongside an occupancy model that can stamp
-	// out of bounds; until then a writer would be inventing the transition.
-	// Semantic name unknown; called verticalHoldSentinel per PLAN_07 Explicit unknowns.
-	VerticalHoldSentinel bool
+	// links the off-map record, any other stamp links a real sector. An
+	// airborne mover holds no ground cells and performs no stamp (see the
+	// commit note in airorders.go), so it carries whatever its takeoff stamp
+	// wrote, and a takeoff always happens inside the map. The field is
+	// therefore false for every reachable case in this build, which is the
+	// value retail would also hold. Give it a writer only alongside an
+	// occupancy model that can stamp out of bounds; until then a writer would
+	// be inventing the transition.
+	OffMap bool
 
 	TargetX  int32 // command X 16.16 [04 §10.1] horizontal accel
 	TargetZ  int32 // command Z 16.16 [04 §10.1]
@@ -119,17 +127,17 @@ func bearing(ax, az, bx, bz numeric.Fixed) uint16 {
 }
 
 // rotateLeanPair rotates the lean accumulator's horizontal pair by the unit's
-// heading, leaving it unchanged when the heading is exactly zero, and stores
-// both results under round-to-nearest [04 R-AIR-01 §2].
+// heading, leaving it unchanged when the heading word is exactly zero, and
+// stores both results under round-to-nearest, ties to even [04 R-AIR-01 §2].
 //
-// TODO(question): [04 R-AIR-01 §2] names the shared coordinate-pair rotation and
-// fixes its rounding and its identity at heading zero, but does not state its
-// sign convention, so which of the two transposes it is remains open. The form
-// below matches this codebase's heading convention — heading 0 is +Z and a
-// vector at heading t is (r·sin t, r·cos t) [04 §5.1] — read as body to world.
-// What would settle it is a trace of that shared rotation helper's two stores.
-// Only the bank sign is observable on stock content, because `pitchscale`
-// defaults to zero.
+// The sign convention this site used to leave open is settled
+// [04 R-AIR-01 §15]: the shared coordinate-pair rotation stores
+// x' = x·cos θ − z·sin θ first, then z' = x·sin θ + z·cos θ, which is
+// BODY-TO-WORLD against retail's heading convention; the transpose
+// (x·cos + z·sin, −x·sin + z·cos) is not what retail computes. The form below
+// is already that one. Retail converts the heading as a SIGNED 16-bit integer,
+// which differs from the unsigned conversion here by a whole turn and so gives
+// the same sine and cosine.
 func rotateLeanPair(x, z int32, heading uint16) (int32, int32) {
 	if heading == 0 {
 		return x, z
@@ -225,19 +233,22 @@ func IntegrateFlight(s *FlightState) {
 		q := int32((h - b) * 65536.0) // trunc((h−b)·65536) [04 §10.1] C28
 		// Fixed-point heading trig: Sin/Cos tables scaled 8192 [04 §5.1].
 		// Heading 0 == north (+Z), so X via Sin, Z via Cos.
-		// TODO(question): sin→VX / cos→VZ axis mapping [04 §10.1] C28
+		// Sine feeds VX, cosine feeds VZ, both subtractions, each product
+		// rounded by adding 0x1000 before the 13-bit shift [04 R-AIR-01 §15]
+		// [04 §10.1] C28. The mapping is confirmed, not assumed.
 		sin := int32(numeric.Sin(numeric.Angle(s.Heading)))
 		cos := int32(numeric.Cos(numeric.Angle(s.Heading)))
 		s.VX -= int32((int64(q)*int64(sin) + 4096) >> 13) // round to nearest [04 §5.1] via [04 §10.1] C28
 		s.VZ -= int32((int64(q)*int64(cos) + 4096) >> 13)
 	}
 
-	// C29 — vertical control sentinel-gated [04 §10.1].
-	// dy = unitY − targetY (both 16.16); if the vertical-hold word equals the global
-	// sentinel by full 32-bit compare, skip assignment and vy keeps damped
+	// C29 — vertical control gated on the off-map sector link [04 §10.1]
+	// [04 R-AIR-01 §5][04 R-AIR-01 §15].
+	// dy = unitY − targetY (both 16.16); while the unit's air-sector link is the
+	// off-map sector record the assignment is skipped and vy keeps its damped
 	// value. Otherwise limit = 0x10000 when (speed & ~3) < 0x40000 else speed>>2,
 	// then dy<=-limit ⇒ vy=+limit; dy<limit ⇒ vy=-dy; else vy=-limit.
-	if !s.VerticalHoldSentinel {
+	if !s.OffMap {
 		dy := int64(s.Y) - int64(s.TargetY)
 		limit := int32(0x10000)
 		if (s.Speed & ^int32(3)) >= int32(0x40000) {

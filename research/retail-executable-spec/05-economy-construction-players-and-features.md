@@ -965,6 +965,16 @@ gate chain that follows is, in evaluation order and all required:
 6. the game-ended flag word's `0x04` bit is clear;
 7. the end-of-game countdown halfword is **signed less than zero**.
 
+**Established (2026-09-02, RWU-19-32) — what sits between the advance and
+the gate chain.** For the **local** slot only, the end-condition block of
+[08 R-TRIG-01 §6] runs there: the victory and defeat polls, the shared
+countdown and the end latch. Its 30-tick due is this same `UpdateTime`
+word — the trigger poll owns no deadline of its own, and `WinLoseTime` is
+not it. The order within one due is therefore: advance; end-condition block
+(local slot); gate chain; settlement; reference-slot tail. The end-of-game
+freeze paragraph above ("one arm/decrement family sits inside the local
+player's 30-tick deadline block") describes this block.
+
 **Established — the HUD deadline is one tick stricter.** The sibling
 `DisplayTimer` field is advanced by the same `+30` but by a **strict**
 compare, `if (playerDisplayTimer < globalTick)`. Its consumer is the resource
@@ -975,7 +985,10 @@ beyond their save keys": `DisplayTimer` has exactly one consumer, the resource
 bar's rate latch. `WinLoseTime` is closed too (2026-09-02, RWU-19-31): a
 bounded census of every access to that record field finds only the save
 reader and writer — it has no gameplay reader ([08 "Player records"]).
-*Previous text:* "`WinLoseTime` remains open."
+*Previous text:* "`WinLoseTime` remains open." *Addendum (2026-09-02,
+RWU-19-32):* the end-condition poll that an implementation might expect to
+own `WinLoseTime` reads `UpdateTime` instead — see the paragraph after the
+gate chain above.
 
 **Established — the x87 environment, and what "bit-exact" therefore means.**
 The runtime calls `fninit` at startup and immediately sets the precision
@@ -2905,6 +2918,48 @@ owner would settle the name. The caption string is exactly
 `Unable to create any more units`; the success caption is
 `Starting construction`.
 
+**The creatable bit — identity, default, writers and readers (Established,
+2026-09-02, RWU-19-32).** The bit step 2 tests is bit 23 of the
+definition's first definition-flags word — the *compatible* flag of
+[02 R-CAT-01 §4]. It is a runtime bit: no FBI key parses into it and no
+accessor reads it as authored data ([02 "Unit record"]).
+
+*Default.* The catalog loader sets it on the `None` sentinel (index 0) and
+on every FBI record whose `Version`, `Copyright` and loose-file gates pass;
+a record that fails a gate has it clear and is compacted out at the end of
+discovery, and the catalog compiler compacts again (stable remove from
+index 1) before sorting ([02 R-CAT-01 §5] step 3). The record-move helper
+both compactions use carries the bit with the record. A compiled catalog
+therefore carries the bit on **every** record, sentinel included.
+
+*Writers after discovery.* Exactly two: the campaign `UseOnlyUnits` loader
+of [08 R-ENTRY-01 §2] step 4 (kind 1 only — clear on index 1 upward, then
+set on the first record whose `unitname` matches each `[name]` section) and
+the multiplayer restriction apply of §9. The campaign's per-mission unit
+lists *are* the `UseOnlyUnits` files; no mission script, trigger,
+progression record, AI routine or save item writes the bit, and the save
+file does not persist it.
+
+*Readers.* The two compactions, this allocator's step 2, and one
+per-definition re-parse helper that nothing calls. The build menus, the
+side `CANBUILD` lists, the download-menu compile, the computer player's
+class routine and the mission spawner do not read it — they see only the
+compacted table.
+
+*Consequence.* Because the battle-entry catalog compile (world-rebuild
+step 13, [08 R-ENTRY-01 §3]) runs after the `UseOnlyUnits` loader (§2
+step 4) and compacts bit-clear records out, a kind-1 restriction manifests
+as absence from the catalog — no unit index, no menu button, no spawn by
+name — and step 2 never sees a clear bit for a non-zero index in any
+single-player battle; it is reachable only for a bit cleared after the
+compile, and no single-player writer does that. The table is rebuilt from
+the FBI files by the front end's pre-load state before every battle, so
+the removal lasts one battle. An implementation should therefore apply
+`UseOnlyUnits` as a catalog filter at battle entry — remove, re-sort,
+renumber — and keep the allocator's bit test as the cheap invariant it is
+in retail, not as the mechanism. The ordering of the multiplayer apply
+against that pre-load rebuild was not traced (out of scope).
+
 #### R-SHARE-01 §9 — The per-definition limit field, its writers, and `norestrict` [R-SHARE-01] (2026-08-29)
 
 **Established — default.** The unit definition parser stores `-1` (unlimited)
@@ -2912,7 +2967,13 @@ into the per-definition limit field of every definition it parses, and sets
 the definition's creatable bit for every definition it keeps (definitions
 failing the parser's validation lose the bit and are compacted out of the
 catalog before any battle; doc 02 owns that validation). In every single-player
-session these are the final values.
+session these are the final values. *Correction (2026-09-02, RWU-19-32):*
+the previous sentence said "In every single-player session these are the
+final values" — not for the creatable bit in a kind-1 battle: a mission's
+`UseOnlyUnits` file clears it on every non-sentinel record and re-sets it per
+listed name before the battle-entry compile removes the cleared records
+([08 R-ENTRY-01 §2] step 4; the creatable-bit paragraphs of §8). The limit
+field is untouched by that path.
 
 **Established — the only other writer is the multiplayer restriction
 dialog.** The multiplayer lobby's `RESTRICTIONS` button constructs a
@@ -6878,6 +6939,7 @@ executor's phase 0 runs.
   predicates behind the confirmation delay; the bit patterns and the
   freeze-on-settlement effect are established · doc 08 · static trace.
 - ~~The consumer of the `WinLoseTime` sibling deadline beyond its save key~~ — closed 2026-09-02 (RWU-19-31): none exists beyond the save reader/writer ([08 "Player records"]);
+  the end-condition poll's due is `UpdateTime` (RWU-19-32, [R-ECO-01 §1]);
   `DisplayTimer`'s sole consumer is closed by [R-ECO-01 §6], and the two
   settlement status-pair fields are named by [R-ECO-01 §12] (the live-unit and
   units-ever-created counters) · "Authoritative settlement order" · static

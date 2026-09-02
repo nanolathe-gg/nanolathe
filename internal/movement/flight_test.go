@@ -13,26 +13,26 @@ func TestFlightVerticalClamp(t *testing.T) {
 	// heading zero so C30 does not interfere with VY, TargetX/Z at X/Z so horiz 0).
 	newBase := func(y, targetY, speed int32, sentinel bool) *FlightState {
 		s := &FlightState{
-			Mode:                 2,
-			Y:                    y,
-			TargetY:              targetY,
-			Speed:                speed,
-			VX:                   0,
-			VZ:                   0,
-			VY:                   999999, // sentinel: should be overwritten unless sentinel skip
-			Acceleration:         0,
-			MaxVelocity:          65536, // non-zero to avoid panic, decay = 0x10000
-			BrakeRate:            65536, // b=1, h=0 => brake skipped
-			TurnRate:             0,
-			Heading:              0,
-			TargetHeading:        0,
-			VerticalHoldSentinel: sentinel,
-			X:                    0,
-			Z:                    0,
-			TargetX:              0,
-			TargetZ:              0,
-			TargetVX:             0,
-			TargetVZ:             0,
+			Mode:          2,
+			Y:             y,
+			TargetY:       targetY,
+			Speed:         speed,
+			VX:            0,
+			VZ:            0,
+			VY:            999999, // sentinel: should be overwritten unless sentinel skip
+			Acceleration:  0,
+			MaxVelocity:   65536, // non-zero to avoid panic, decay = 0x10000
+			BrakeRate:     65536, // b=1, h=0 => brake skipped
+			TurnRate:      0,
+			Heading:       0,
+			TargetHeading: 0,
+			OffMap:        sentinel,
+			X:             0,
+			Z:             0,
+			TargetX:       0,
+			TargetZ:       0,
+			TargetVX:      0,
+			TargetVZ:      0,
 		}
 		return s
 	}
@@ -83,7 +83,7 @@ func TestFlightVerticalClamp(t *testing.T) {
 		t.Fatalf("dy==limit vy=%d want %d", s.VY, -0x10000)
 	}
 
-	// Sentinel skip: when VerticalHoldSentinel true, vy keeps damped value [04 §10.1] C29
+	// Sentinel skip: when OffMap true, vy keeps damped value [04 §10.1] C29
 	// Use Acceleration=0 so damped == initial, sentinel true should preserve.
 	s = newBase(70000, 0, 0x30000, true)
 	s.VY = 12345 // will be decayed to 12345 (decay 1.0) then kept
@@ -140,9 +140,9 @@ func TestFlightDecayTruncation(t *testing.T) {
 			X: 0, Z: 0, TargetX: 0, TargetZ: 0,
 			TargetVX: tc.want, TargetVZ: tc.want,
 			MaxVelocity: tc.max, Acceleration: tc.acc,
-			Speed:                0,
-			VerticalHoldSentinel: true, // skip vertical overwrite
-			TurnRate:             0, Heading: 0, TargetHeading: 0,
+			Speed:    0,
+			OffMap:   true, // skip vertical overwrite
+			TurnRate: 0, Heading: 0, TargetHeading: 0,
 		}
 		s.BrakeRate = 65536 * 10 // b=10 >h => brake skip
 		IntegrateFlight(s)
@@ -162,7 +162,7 @@ func TestFlightDecayTruncation(t *testing.T) {
 				didPanic = true
 			}
 		}()
-		s := &FlightState{Mode: 2, VX: 100, MaxVelocity: 0, Acceleration: 65536, VerticalHoldSentinel: true}
+		s := &FlightState{Mode: 2, VX: 100, MaxVelocity: 0, Acceleration: 65536, OffMap: true}
 		IntegrateFlight(s)
 	}()
 	if !didPanic {
@@ -179,7 +179,7 @@ func TestFlightBrakeStrictEquality(t *testing.T) {
 		VX:   65536, VZ: 0, VY: 0,
 		Acceleration: 0, MaxVelocity: 65536,
 		BrakeRate: 65536,
-		Speed:     0, Y: 0, TargetY: 0, VerticalHoldSentinel: true,
+		Speed:     0, Y: 0, TargetY: 0, OffMap: true,
 		Heading: 0, TargetHeading: 0, TurnRate: 0,
 		X: 0, Z: 0, TargetX: 0, TargetZ: 0, TargetVX: 65536, TargetVZ: 0,
 	}
@@ -192,9 +192,9 @@ func TestFlightBrakeStrictEquality(t *testing.T) {
 		Mode: 2,
 		VX:   32768, VZ: 0,
 		Acceleration: 0, MaxVelocity: 65536,
-		BrakeRate:            65536, // b=1, h=0.5 => skip
-		VerticalHoldSentinel: true,
-		X:                    0, Z: 0, TargetX: 0, TargetZ: 0, TargetVX: 32768, TargetVZ: 0,
+		BrakeRate: 65536, // b=1, h=0.5 => skip
+		OffMap:    true,
+		X:         0, Z: 0, TargetX: 0, TargetZ: 0, TargetVX: 32768, TargetVZ: 0,
 	}
 	IntegrateFlight(s)
 	if s.VX != 32768 {
@@ -209,10 +209,10 @@ func TestFlightBrakeStrictEquality(t *testing.T) {
 		Mode: 2,
 		VX:   131072, VZ: 0,
 		Acceleration: 0, MaxVelocity: 65536,
-		BrakeRate:            65536,
-		Heading:              0,
-		VerticalHoldSentinel: true,
-		TurnRate:             0, TargetHeading: 0,
+		BrakeRate: 65536,
+		Heading:   0,
+		OffMap:    true,
+		TurnRate:  0, TargetHeading: 0,
 		X: 0, Z: 0, TargetX: 0, TargetZ: 0,
 		TargetVX: 65536, TargetVZ: -65536,
 	}
@@ -230,10 +230,10 @@ func TestFlightBrakeStrictEquality(t *testing.T) {
 		Mode: 2,
 		VX:   131072, VZ: 0,
 		Acceleration: 0, MaxVelocity: 65536,
-		BrakeRate:            65536,
-		Heading:              16384, // 90 deg
-		VerticalHoldSentinel: true,
-		TurnRate:             0, TargetHeading: 16384,
+		BrakeRate: 65536,
+		Heading:   16384, // 90 deg
+		OffMap:    true,
+		TurnRate:  0, TargetHeading: 16384,
 		X: 0, Z: 0, TargetX: 0, TargetZ: 0,
 		TargetVX: 0, TargetVZ: 0,
 	}
@@ -258,10 +258,10 @@ func TestFlightBrakeStrictEquality(t *testing.T) {
 		Mode: 2,
 		VX:   65537, VZ: 0,
 		Acceleration: 0, MaxVelocity: 65536,
-		BrakeRate:            65536,
-		Heading:              8192, // sin approx 0.707? Actually angle 8192 => 45deg sin~5793
-		VerticalHoldSentinel: true,
-		TurnRate:             0, TargetHeading: 8192,
+		BrakeRate: 65536,
+		Heading:   8192, // sin approx 0.707? Actually angle 8192 => 45deg sin~5793
+		OffMap:    true,
+		TurnRate:  0, TargetHeading: 8192,
 		X: 0, Z: 0, TargetX: 0, TargetZ: 0,
 		TargetVX: 0, TargetVZ: 0,
 	}
@@ -291,7 +291,7 @@ func TestFlightModeNot2Zeroing(t *testing.T) {
 			Heading:      1000, TargetHeading: 2000,
 			Acceleration: 65536, MaxVelocity: 65536,
 			BrakeRate: 65536,
-			Y:         100, TargetY: 0, VerticalHoldSentinel: false,
+			Y:         100, TargetY: 0, OffMap: false,
 			X: 0, Z: 0, TargetX: 0, TargetZ: 0,
 		}
 		IntegrateFlight(s)
@@ -319,9 +319,9 @@ func TestFlightModeNot2Zeroing(t *testing.T) {
 		Speed:        40000,
 		TurnResidual: 1234,
 		MaxVelocity:  65536, Acceleration: 0,
-		BrakeRate:            0,
-		VerticalHoldSentinel: true,
-		Heading:              0, TargetHeading: 0, TurnRate: 0,
+		BrakeRate: 0,
+		OffMap:    true,
+		Heading:   0, TargetHeading: 0, TurnRate: 0,
 		X: 0, Z: 0, TargetX: 0, TargetZ: 0, TargetVX: 10000, TargetVZ: 30000,
 	}
 	IntegrateFlight(s)
@@ -334,7 +334,7 @@ func TestFlightHeadingClamp(t *testing.T) {
 	// C30 err = int16(target - heading); zero zeroes residual without dirty;
 	// otherwise clamp to TurnRate [04 §10.1]
 	// Zero error case
-	s := &FlightState{Mode: 2, Heading: 1000, TargetHeading: 1000, TurnRate: 100, TurnResidual: 555, Acceleration: 0, MaxVelocity: 65536, VerticalHoldSentinel: true, X: 0, Z: 0, TargetX: 0, TargetZ: 0}
+	s := &FlightState{Mode: 2, Heading: 1000, TargetHeading: 1000, TurnRate: 100, TurnResidual: 555, Acceleration: 0, MaxVelocity: 65536, OffMap: true, X: 0, Z: 0, TargetX: 0, TargetZ: 0}
 	IntegrateFlight(s)
 	if s.TurnResidual != 0 {
 		t.Fatalf("zero err residual %d want 0", s.TurnResidual)
@@ -347,7 +347,7 @@ func TestFlightHeadingClamp(t *testing.T) {
 	}
 
 	// Positive clamp: err 1000, TurnRate 100 => clamped to 100
-	s = &FlightState{Mode: 2, Heading: 0, TargetHeading: 1000, TurnRate: 100, Acceleration: 0, MaxVelocity: 65536, VerticalHoldSentinel: true, X: 0, Z: 0, TargetX: 0, TargetZ: 0}
+	s = &FlightState{Mode: 2, Heading: 0, TargetHeading: 1000, TurnRate: 100, Acceleration: 0, MaxVelocity: 65536, OffMap: true, X: 0, Z: 0, TargetX: 0, TargetZ: 0}
 	IntegrateFlight(s)
 	if s.TurnResidual != 100 || s.Heading != 100 {
 		t.Fatalf("clamp pos got resid %d heading %d want 100,100", s.TurnResidual, s.Heading)
@@ -357,7 +357,7 @@ func TestFlightHeadingClamp(t *testing.T) {
 	}
 
 	// Negative clamp
-	s = &FlightState{Mode: 2, Heading: 1000, TargetHeading: 0, TurnRate: 50, Acceleration: 0, MaxVelocity: 65536, VerticalHoldSentinel: true, X: 0, Z: 0, TargetX: 0, TargetZ: 0}
+	s = &FlightState{Mode: 2, Heading: 1000, TargetHeading: 0, TurnRate: 50, Acceleration: 0, MaxVelocity: 65536, OffMap: true, X: 0, Z: 0, TargetX: 0, TargetZ: 0}
 	IntegrateFlight(s)
 	// err = 0-1000 = -1000 => clamp -50 => heading 950
 	if s.TurnResidual != -50 || s.Heading != 950 {
@@ -365,20 +365,20 @@ func TestFlightHeadingClamp(t *testing.T) {
 	}
 
 	// No clamp when TurnRate larger than err
-	s = &FlightState{Mode: 2, Heading: 0, TargetHeading: 500, TurnRate: 1000, Acceleration: 0, MaxVelocity: 65536, VerticalHoldSentinel: true, X: 0, Z: 0, TargetX: 0, TargetZ: 0}
+	s = &FlightState{Mode: 2, Heading: 0, TargetHeading: 500, TurnRate: 1000, Acceleration: 0, MaxVelocity: 65536, OffMap: true, X: 0, Z: 0, TargetX: 0, TargetZ: 0}
 	IntegrateFlight(s)
 	if s.TurnResidual != 500 || s.Heading != 500 {
 		t.Fatalf("no clamp got %d %d want 500,500", s.TurnResidual, s.Heading)
 	}
 
 	// Wrap around: heading 65535 target 0 => uint16 diff 1 => err 1
-	s = &FlightState{Mode: 2, Heading: 65535, TargetHeading: 0, TurnRate: 10, Acceleration: 0, MaxVelocity: 65536, VerticalHoldSentinel: true, X: 0, Z: 0, TargetX: 0, TargetZ: 0}
+	s = &FlightState{Mode: 2, Heading: 65535, TargetHeading: 0, TurnRate: 10, Acceleration: 0, MaxVelocity: 65536, OffMap: true, X: 0, Z: 0, TargetX: 0, TargetZ: 0}
 	IntegrateFlight(s)
 	if s.TurnResidual != 1 || s.Heading != 0 {
 		t.Fatalf("wrap pos got %d %d want 1,0", s.TurnResidual, s.Heading)
 	}
 	// Wrap other way: heading 0 target 65535 => diff 65535 => int16 -1
-	s = &FlightState{Mode: 2, Heading: 0, TargetHeading: 65535, TurnRate: 10, Acceleration: 0, MaxVelocity: 65536, VerticalHoldSentinel: true, X: 0, Z: 0, TargetX: 0, TargetZ: 0}
+	s = &FlightState{Mode: 2, Heading: 0, TargetHeading: 65535, TurnRate: 10, Acceleration: 0, MaxVelocity: 65536, OffMap: true, X: 0, Z: 0, TargetX: 0, TargetZ: 0}
 	IntegrateFlight(s)
 	if s.TurnResidual != -1 || s.Heading != 65535 {
 		t.Fatalf("wrap neg got %d %d want -1,65535", s.TurnResidual, s.Heading)
@@ -390,8 +390,8 @@ func TestFlightHeadingClamp(t *testing.T) {
 		Acceleration: 0, MaxVelocity: 65536,
 		BrakeRate: 0, VX: 0, VZ: 0,
 		Y: 70000, TargetY: 0, Speed: 0,
-		VerticalHoldSentinel: true, // would skip vertical
-		X:                    0, Z: 0, TargetX: 0, TargetZ: 0,
+		OffMap: true, // would skip vertical
+		X:      0, Z: 0, TargetX: 0, TargetZ: 0,
 	}
 	IntegrateFlight(s)
 	if s.Heading != 10 || s.TurnResidual != 10 {
@@ -410,8 +410,8 @@ func TestFlightHorizontalAccelDistanceFloor(t *testing.T) {
 		X:    4 * 65536, Z: 0, TargetX: 0, TargetZ: 0,
 		VX: 0, VZ: 0, TargetVX: 0, TargetVZ: 0,
 		Acceleration: 65536, MaxVelocity: 655360,
-		BrakeRate:            0, // ensure brake skipped (h=0)
-		VerticalHoldSentinel: true, TurnRate: 0, Heading: 0, TargetHeading: 0,
+		BrakeRate: 0, // ensure brake skipped (h=0)
+		OffMap:    true, TurnRate: 0, Heading: 0, TargetHeading: 0,
 		Y: 0, TargetY: 0, Speed: 0,
 	}
 	// With a=1, d floor 8, k=-0.5, dx 4 => ax -2 => cap to -1 => VX -65536
@@ -426,8 +426,8 @@ func TestFlightHorizontalAccelDistanceFloor(t *testing.T) {
 		X:    2 * 65536, Z: 0, TargetX: 0, TargetZ: 0,
 		VX: 0, VZ: 0, TargetVX: 0, TargetVZ: 0,
 		Acceleration: 655360, MaxVelocity: 6553600, // a=10, decay ~0.9 but VX 0
-		BrakeRate:            0,
-		VerticalHoldSentinel: true, TurnRate: 0, Heading: 0, TargetHeading: 0,
+		BrakeRate: 0,
+		OffMap:    true, TurnRate: 0, Heading: 0, TargetHeading: 0,
 		Y: 0, TargetY: 0, Speed: 0,
 	}
 	IntegrateFlight(s)
@@ -450,10 +450,10 @@ func TestFlightHorizontalAccelCap(t *testing.T) {
 		Mode: 2,
 		X:    100 * 65536, Z: 0, TargetX: 0, TargetZ: 0,
 		VX: 0, VZ: 0, TargetVX: 0, TargetVZ: 0,
-		Acceleration:         65536,      // a=1.0
-		MaxVelocity:          10 * 65536, // decay ~0.9 but VX 0 stays 0
-		BrakeRate:            0,
-		VerticalHoldSentinel: true, TurnRate: 0, Heading: 0, TargetHeading: 0,
+		Acceleration: 65536,      // a=1.0
+		MaxVelocity:  10 * 65536, // decay ~0.9 but VX 0 stays 0
+		BrakeRate:    0,
+		OffMap:       true, TurnRate: 0, Heading: 0, TargetHeading: 0,
 		Y: 0, TargetY: 0, Speed: 0,
 	}
 	// Decay: Acc 65536 Max 655360 => decay 58982 => VX 0
@@ -471,10 +471,10 @@ func TestFlightHorizontalAccelCap(t *testing.T) {
 		Mode: 2,
 		X:    1 * 65536, Z: 0, TargetX: 0, TargetZ: 0,
 		VX: 0, VZ: 0, TargetVX: 0, TargetVZ: 0,
-		Acceleration:         65536,
-		MaxVelocity:          10 * 65536,
-		BrakeRate:            0,
-		VerticalHoldSentinel: true, TurnRate: 0,
+		Acceleration: 65536,
+		MaxVelocity:  10 * 65536,
+		BrakeRate:    0,
+		OffMap:       true, TurnRate: 0,
 	}
 	// dx=65536, d=8 floor => k -0.5 => ax=65536*-0.5/65536=-0.5 => VX -32768 (<a, no cap)
 	IntegrateFlight(s)
@@ -490,9 +490,9 @@ func TestFlightScalarSpeed(t *testing.T) {
 		VX:   3 * 65536, VY: 4 * 65536, VZ: 0,
 		X: 0, Z: 0, TargetX: 0, TargetZ: 0, TargetVX: 3 * 65536, TargetVZ: 0,
 		Acceleration: 0, MaxVelocity: 65536,
-		BrakeRate:            65536 * 10, // skip brake
-		VerticalHoldSentinel: true,       // keep VY 4*65536
-		TurnRate:             0, Heading: 0, TargetHeading: 0,
+		BrakeRate: 65536 * 10, // skip brake
+		OffMap:    true,       // keep VY 4*65536
+		TurnRate:  0, Heading: 0, TargetHeading: 0,
 		Y: 0, TargetY: 0, Speed: 0,
 	}
 	// Acceleration 0 => decay 65536, horiz a=0 => no change, so velocities stay 3,4,0
@@ -509,9 +509,9 @@ func TestFlightScalarSpeed(t *testing.T) {
 		X: 0, Z: 0, TargetX: 0, TargetZ: 0, TargetVX: 0, TargetVZ: 0,
 		Y: 0, TargetY: 70000, Speed: 0, // Speed 0 => limit 65536 => VY 65536
 		Acceleration: 0, MaxVelocity: 65536,
-		BrakeRate:            65536 * 10,
-		VerticalHoldSentinel: false,
-		TurnRate:             0,
+		BrakeRate: 65536 * 10,
+		OffMap:    false,
+		TurnRate:  0,
 	}
 	IntegrateFlight(s)
 	// VY should be 65536 after vertical, then horiz no change, speed =65536
@@ -527,9 +527,9 @@ func TestFlightScalarSpeed(t *testing.T) {
 		VX:   65537, VY: 0, VZ: 0,
 		X: 65537, Z: 0, TargetX: 65537, TargetZ: 0, TargetVX: 65537, TargetVZ: 0,
 		Acceleration: 0, MaxVelocity: 65536,
-		BrakeRate:            65536 * 10,
-		VerticalHoldSentinel: true,
-		TurnRate:             0,
+		BrakeRate: 65536 * 10,
+		OffMap:    true,
+		TurnRate:  0,
 	}
 	IntegrateFlight(s)
 	if s.Speed != 65537 {
@@ -542,8 +542,8 @@ func TestFlightScalarSpeed(t *testing.T) {
 		VX:   65536, VZ: 65536, VY: 0,
 		X: 65536, Z: 65536, TargetX: 65536, TargetZ: 65536, TargetVX: 65536, TargetVZ: 65536,
 		Acceleration: 0, MaxVelocity: 65536,
-		BrakeRate:            65536 * 10,
-		VerticalHoldSentinel: true, TurnRate: 0,
+		BrakeRate: 65536 * 10,
+		OffMap:    true, TurnRate: 0,
 	}
 	IntegrateFlight(s)
 	want2 := int32(math.Sqrt(float64(2) * float64(65536) * float64(65536))) // trunc

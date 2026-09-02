@@ -1037,6 +1037,17 @@ the rest of the session.
 `selfdestructcountdown` is read with the raw accessor, so the record can tell
 an authored value from an absent key.
 
+**The runtime *compatible* / *creatable* bit is not a key (Established,
+2026-09-02, RWU-19-32).** Bit 23 of the record's first definition-flags
+word is written only by the executable: set for the `None` sentinel and for
+every FBI whose `Version`, `Copyright` and loose-file gates pass
+([R-CAT-01 §4]); carried with the record by the compaction moves
+([R-CAT-01 §4], [R-CAT-01 §5] step 3); cleared and re-set per definition by
+a campaign mission's `UseOnlyUnits` file at battle entry ([08 R-ENTRY-01
+§2] step 4) and by the multiplayer restriction dialog ([05 R-SHARE-01 §9]).
+Its readers are the two compactions and the unit allocator ([05 R-SHARE-01
+§8]). No FBI key parses into it and no accessor reads it as authored data.
+
 ### Building heading field audit [R-P28-ANG-01R §1]
 
 **Established — authored values.** An asset-backed read with

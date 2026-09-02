@@ -491,26 +491,35 @@ func TestClassLayersSharedPerClass(t *testing.T) {
 	}
 }
 
-// TestLayerOwnerMask locks the owner/building-mask overlay [04 §6.1
-// R-DOC04-B]: OOB → 0; requester's bit absent → 2; present → packed terrain
-// value. Only 0 hard-blocks: 2 expands. The foot>>2 terms shift the tested
-// block toward the footprint's centre half.
-func TestLayerOwnerMask(t *testing.T) {
+// TestLayerMappingWordGate locks the four-step search consumer of
+// [04 R-PATH-01 §2]: OOB cell → 0; mapping block outside mapWidth>>1 ×
+// mapHeight>>1 → 0; requesting player's slot bit absent from the mapping word
+// → 2 without the terrain layer being read; present → the packed terrain value.
+// The foot>>2 terms shift the tested block toward the footprint's centre half.
+// The grid itself is the visibility publisher's, read through the port; this
+// package never writes it [04 R-PATH-01 §14].
+func TestLayerMappingWordGate(t *testing.T) {
 	tr := layerTerrain(32, 32, 20)
 	l := NewClassLayer(kbotsSS2, tr, nil)
-	// No bits set: every in-bounds cell is a mask miss → 2 (traversable).
-	if got := l.Passable(5, 5, 2, 2, 0); got != LayerMaskMiss {
-		t.Fatalf("bit miss want 2 got %d", got)
+	// One tile — (4,4) — is mapped for player 0 and nobody else.
+	l.mapping = func(tileX, tileZ int32) (uint16, bool) {
+		if tileX == 4 && tileZ == 4 {
+			return 1 << 0, true
+		}
+		return 0, true
+	}
+	// Unmapped tiles are the traversable value 2.
+	if got := l.Passable(5, 5, 2, 2, 0); got != LayerUnmapped {
+		t.Fatalf("unmapped want 2 got %d", got)
 	}
 	if got := l.Passable(-1, 5, 2, 2, 0); got != LayerBlocked {
 		t.Fatalf("OOB want 0 got %d", got)
 	}
-	// Set player 0's bits over a 2×2 building at (8,8): one 2×2-cell block.
-	l.SetOwnerRect(Cell{X: 8, Z: 8}, 2, 2, 0)
+	// The mapped tile falls through to the packed terrain value for player 0.
 	if got := l.Passable(8, 8, 2, 2, 0); got != LayerClear {
-		t.Fatalf("owner bit present want terrain value 3 got %d", got)
+		t.Fatalf("mapped tile want terrain value 3 got %d", got)
 	}
-	if got := l.Passable(8, 8, 2, 2, 1); got != LayerMaskMiss {
+	if got := l.Passable(8, 8, 2, 2, 1); got != LayerUnmapped {
 		t.Fatalf("other player's bit absent want 2 got %d", got)
 	}
 	// footX>>2 shifts the tested block one east: (7>>1 + 1, 8>>1) = (4,4).
@@ -521,9 +530,14 @@ func TestLayerOwnerMask(t *testing.T) {
 	if got := l.Passable(8, 7, 2, 4, 0); got != LayerClear {
 		t.Fatalf("footZ>>2 block shift want the south block's word, got %d", got)
 	}
-	l.ClearOwnerRect(Cell{X: 8, Z: 8}, 2, 2, 0)
-	if got := l.Passable(8, 8, 2, 2, 0); got != LayerMaskMiss {
-		t.Fatalf("cleared bit want 2 got %d", got)
+	// Step 2's own bound: a block index at or past mapWidth>>1 is 0, not 2.
+	if got := l.Passable(31, 31, 8, 8, 0); got != LayerBlocked {
+		t.Fatalf("block index past mapWidth>>1 want 0 got %d", got)
+	}
+	// With no grid bound the terrain value is returned, never an invented word.
+	l.mapping = nil
+	if got := l.Passable(5, 5, 2, 2, 0); got != LayerClear {
+		t.Fatalf("unbound grid want terrain value 3 got %d", got)
 	}
 }
 
@@ -537,7 +551,9 @@ func TestLayerOwnerMask(t *testing.T) {
 func TestLayerSearchConsumptionOnlyZeroBlocks(t *testing.T) {
 	tr := layerTerrain(24, 24, 20)
 	l := NewClassLayer(kbotsSS2, tr, nil)
-	l.SetOwnerRect(Cell{X: 0, Z: 0}, 24, 24, 0) // requester owns the map
+	// The whole map is mapped for player 0, so the gate falls through to the
+	// packed terrain value everywhere [04 R-PATH-01 §2].
+	l.mapping = func(int32, int32) (uint16, bool) { return 0x03FF, true }
 	run := func(ring uint8) path.SearchResult {
 		// Paint the 8-neighbour enclosure of the start cell.
 		for z := int32(4); z <= 6; z++ {
@@ -561,7 +577,7 @@ func TestLayerSearchConsumptionOnlyZeroBlocks(t *testing.T) {
 		}
 		return path.Search(cfg)
 	}
-	for _, ring := range []uint8{LayerSteep, LayerMaskMiss, LayerClear} {
+	for _, ring := range []uint8{LayerSteep, LayerUnmapped, LayerClear} {
 		res := run(ring)
 		if res.Status != 0 || len(res.Points) == 0 {
 			t.Fatalf("ring value %d must not block: status %d points %d", ring, res.Status, len(res.Points))

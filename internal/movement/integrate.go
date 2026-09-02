@@ -579,6 +579,28 @@ func (s *System) newLayerRegistry() *ClassLayers {
 	return NewClassLayers(s.Terrain, s.Grid, s.world, s)
 }
 
+// mappingWordSource resolves the view of the visibility publisher's per-player
+// mapping word grid that the search's coarse test reads [04 R-PATH-01 §2]
+// [04 R-PATH-01 §14]. internal/movement holds no visibility handle, so it
+// reaches the grid through the requester's order-queue binding — the same route
+// the aircraft landing test's coarse early accept takes [04 R-AIR-01 §14.2].
+// Nil when the unit carries no binding or the composition has no visibility
+// service, which leaves Passable on its terrain-only fallback.
+func (s *System) mappingWordSource(h pool.Handle) MappingWordSource {
+	if s == nil || s.world == nil {
+		return nil
+	}
+	u := s.world.Unit(h)
+	if u == nil {
+		return nil
+	}
+	b := airBinding(u)
+	if b == nil || b.World == nil || b.World.MappingWord == nil {
+		return nil
+	}
+	return b.World.MappingWord
+}
+
 // ensureLayerRegistry returns the layer registry, creating it at first use for
 // wiring sites reached without a prior BindWorld call.
 func (s *System) ensureLayerRegistry() *ClassLayers {
@@ -765,15 +787,17 @@ func applyGroundPostMove(t *world.Terrain, u *units.Unit, dirty bool, mode uint8
 // counter is therefore derived from the tick, which keeps the rest of §5 exact
 // and confines the divergence to which of {0, -1} the offset takes.
 //
-// TODO(question): two inputs to the bob's phase are untraced and share this
-// deferral. First, the rate field's own value is Unknown [01 §7.4 "Missing and
-// unknown"], so one step per tick is a placeholder — the minimal assumption.
-// Second, retail adds a per-unit signed 16-bit bob phase word [04 R-MOV-01 §5]
-// whose writer is untraced, so there is no value to carry and no point storing
-// an always-zero field on the unit; a zero phase makes every hovercraft rock in
-// lockstep. Neither affects the ±1 residue that [R-MOV-01 §5b] bounds, since
-// that closure ranges over every counter phase and every phase word. What would
-// settle them is the writer of the rate field and the writer of that word.
+// Both inputs the previous marker here deferred are now traced
+// [04 R-MOV-01 §5c]. The rate field has exactly one writer — the boot-time
+// timebase installer stores 30 into it, once — so retail's counter is
+// floor(GetTickCount() * 30 / 1000), the same 30-per-second wall-clock scale
+// that budgets the tick [01 §4.1]. One step per tick is what "30 per second at
+// 30 ticks per second" reduces to when no budget lag exists, so the rate stays
+// 1 and the only remaining divergence is the one [R-MOV-01 §5b] bounds: which
+// of {0, -1} a hovering unit's height offset takes on a tick where the wall
+// clock and the tick disagree. The per-unit phase word's writer is the unit
+// initializer's full-domain allocator draw, carried on units.Unit.BobPhase and
+// read by component below [04 R-MOV-01 §5c].
 const hoverAnimationRate = 1
 
 // hoverBob carries the canhover inputs of the four-corner conform's per-corner
@@ -782,6 +806,7 @@ const hoverAnimationRate = 1
 type hoverBob struct {
 	counter int32 // the animation counter; only its low five bits are read
 	amp     int32 // 0, 1 or 2 after the speed term and the age fade
+	phase   int16 // the unit's allocator-drawn bob phase word [04 R-MOV-01 §5c]
 }
 
 // newHoverBob builds the bob inputs, or returns nil when this unit does not
@@ -795,7 +820,7 @@ func newHoverBob(u *units.Unit, speed int32, tick, lastProposal uint32) *hoverBo
 	// faded or speed-cancelled amplitude still takes the floor, so this returns
 	// a zero-amplitude bob rather than nil — nil means "not a hovering unit"
 	// and selects the ordinary terrain plate.
-	bob := &hoverBob{counter: int32(tick) * hoverAnimationRate}
+	bob := &hoverBob{counter: int32(tick) * hoverAnimationRate, phase: u.BobPhase}
 	half := u.Def.MaxVelocity / 2
 	if half <= 0 {
 		// MaxVelocity/2 is an unguarded divisor in retail: a canhover
@@ -827,11 +852,11 @@ func newHoverBob(u *units.Unit, speed int32, tick, lastProposal uint32) *hoverBo
 // component is the per-corner offset for corner i. The four corners sit a
 // quarter circle apart, so the unit rocks rather than heaves [04 R-MOV-01 §5].
 func (b *hoverBob) component(i int32) int32 {
-	// The per-unit phase word retail adds here is one of the two untraced
-	// inputs deferred on hoverAnimationRate above; zero until its writer is
-	// found [04 R-MOV-01 §5].
-	const bobPhase = 0
-	angle := int16(((b.counter&0x1f + 8*i) << 11) + bobPhase)
+	// The per-unit phase word the allocator drew at creation, added to the
+	// corner angle so hovercraft rock out of phase with one another
+	// [04 R-MOV-01 §5][04 R-MOV-01 §5c]. The sum wraps in 16 bits, as the
+	// angle does.
+	angle := int16(((b.counter&0x1f + 8*i) << 11) + int32(b.phase))
 	// The shared table biases the angle by 0x20 before selecting one of its 512
 	// entries, and the product rounds to nearest at the table's 8192 scale
 	// [04 R-MOV-01 §4][04 R-MOV-01 §5].
@@ -1114,13 +1139,20 @@ func (s *System) detachOnArrival(u *units.Unit, ah *arrivalHandle) {
 	delete(s.arrivalHandles, u.Handle)
 }
 
+// finalGoalReached raises the ground arrival bit 0x20 from the goal payload's
+// OWN arrival test — the tile-versus-goal-cell predicate — which carries no
+// route, point-count or search-status term. A mover that reaches the goal cell
+// by direct walking while its path request is still pending, or was never
+// published, completes the order exactly as one that consumed a route does
+// [04 R-P0-01 "Closed — compact ground controller", clarification 2026-09-02].
+// hadRoute is therefore not consulted: the parameter is retained for the
+// caller's own bookkeeping.
 func (s *System) finalGoalReached(u *units.Unit, hadRoute bool) bool {
+	_ = hadRoute
 	if u == nil {
 		return false
 	}
 	// Arrival is defined only for an order that has an arrival handle bound [R-P0-01].
-	// hadRoute gates the diagnostic Arrived flag but the satisfied bit is still
-	// set via the handle when within threshold even if route already pruned [R-P0-01].
 	ah, ok := s.arrivalHandles[u.Handle]
 	if !ok || ah == nil || ah.order == nil {
 		return false
@@ -1149,7 +1181,7 @@ func (s *System) finalGoalReached(u *units.Unit, hadRoute bool) bool {
 	if ah.payload != nil {
 		if ah.payload.StartSatisfied(path.Cell{X: tileX, Z: tileZ}) {
 			s.raiseArrival(u, ah) // [R-P0-01] OR 0x20, then detach [04 R-PATH-01 §8]
-			return hadRoute
+			return true
 		}
 		return false
 	}
@@ -1158,7 +1190,7 @@ func (s *System) finalGoalReached(u *units.Unit, hadRoute bool) bool {
 	if ah.border != nil {
 		if onRectBorder(*ah.border, tileX, tileZ) {
 			s.raiseArrival(u, ah) // [R-P0-01] OR 0x20, then detach [04 R-PATH-01 §8]
-			return hadRoute
+			return true
 		}
 		return false
 	}
@@ -1168,30 +1200,22 @@ func (s *System) finalGoalReached(u *units.Unit, hadRoute bool) bool {
 	if dx*dx+dz*dz <= int64(ah.threshSq) {
 		// The arrival-bit setter's OR of 0x20, then the detach [04 R-PATH-01 §8].
 		s.raiseArrival(u, ah) // [R-P0-01]
-		// Also reflect hadRoute gating for diagnostic Arrived flag: only report
-		// Arrived when we had a route at entry, preserving prior contract that
-		// EmptyRoute paths do not count as arrived [R-P0-01][task].
-		if hadRoute {
-			return true
-		}
-		// Still signal the bit even when hadRoute false so pump can complete
-		// a direct-walk goal without a published route [R-P0-01]. Whether a
-		// direct arrival without a route should complete is Unknown for the
-		// compact controller class — the open questions are consolidated in
-		// the block directly below this function. Keep bit set but
-		// diagnostic false.
-		return false
+		return true
 	}
 	return false
 }
 
-// TODO(question): how does the compact ground locomotion controller — the small
-// controller class the runtime picks for owner-type byte 3 — signal ground-order
-// arrival, when its arrival-notify virtual slot is a plain return? Related, and
-// the same gap: whether a direct arrival with no published route should complete
-// the order. The bit is kept set with the diagnostic false in finalGoalReached
-// above. Decider: static trace of that controller class's notify slot and of its
-// callers. [R-P0-01]
+// Closed 2026-09-02 (RWU-19-30, [04 R-P0-01]): this site used to ask how the
+// compact ground locomotion controller signals ground-order arrival when its
+// arrival-notify slot is a plain return, and whether a direct arrival with no
+// published route should complete the order. Both are answered. The mechanism
+// is not a hook at all: the per-unit sweep gates the order pumps and the
+// movement tick on the owner's state byte being 1 or 2, so a state-3
+// (defeated/watching) owner's units are inert because the whole pump+mover
+// block is skipped. And arrival needs no published route — the bit is raised
+// from the goal payload's own tile-versus-goal-cell predicate, which has no
+// route, point-count or search-status term, so finalGoalReached above returns
+// true on a direct walk-in.
 //
 // Closed 2026-09-01 (WU-19-16): this marker also asked what advances the
 // `VTOL_Move` handler from phase 1 to phase 2. [04 R-ORD-02 §2] answers it —
@@ -1489,10 +1513,14 @@ func (s *System) EnsureUnit(u *units.Unit) {
 	coll.CachedMode = 1
 	s.Collisions[h] = coll
 	if s.Grid != nil {
-		// Every successful stamp writes the occupant-age clock first. Recording
-		// the same tick here lets a later request revision cross a stationary
-		// building into the shared class layer [04 R-COLL-01 §4]
-		// [04 R-PATH-01 §2][04 §6.1 R-DOC04-B].
+		// Every successful stamp writes the occupant-age clock first, and unit
+		// creation is one of the stamp's writers: the creator stamps the new
+		// unit's footprint after the initializer returns, so the creation-time
+		// stamp does write the mover's commit tick [04 R-PATH-01 §14]
+		// [04 R-COLL-01 §4][04 §6.1 R-DOC04-B]. A building's tick is written
+		// here too and then never advances again, but that is no longer what
+		// makes it block the search: with no mover it takes the occupant-age
+		// gate's null arm unconditionally [04 R-PATH-01 §14].
 		stamped := false
 		if coll.Building {
 			stamped = s.stampBuildingGrid(anchor, footX, footZ, coll.Yard, coll.YardOpen, coll.ID)
@@ -1522,24 +1550,24 @@ func (s *System) EnsureUnit(u *units.Unit) {
 	// FlightState for can-fly units
 	if u.Def.CanFly {
 		flight := &FlightState{
-			Mode:                 1,
-			X:                    int32(u.X.Raw()),
-			Y:                    int32(u.Y.Raw()),
-			Z:                    int32(u.Z.Raw()),
-			VX:                   0,
-			VY:                   0,
-			VZ:                   0,
-			Speed:                0,
-			Heading:              u.Move.Heading, // allocated `buildangle` heading [04 §2.3b]
-			TargetHeading:        u.Move.Heading,
-			TurnResidual:         0,
-			MaxVelocity:          int32(u.Def.MaxVelocity),
-			Acceleration:         int32(u.Def.Acceleration),
-			BrakeRate:            int32(u.Def.BrakeRate),
-			TurnRate:             int32(u.Def.TurnRate),
-			TargetY:              int32(u.Y.Raw()),
-			VerticalHoldSentinel: false,
-			Dirty:                false,
+			Mode:          1,
+			X:             int32(u.X.Raw()),
+			Y:             int32(u.Y.Raw()),
+			Z:             int32(u.Z.Raw()),
+			VX:            0,
+			VY:            0,
+			VZ:            0,
+			Speed:         0,
+			Heading:       u.Move.Heading, // allocated `buildangle` heading [04 §2.3b]
+			TargetHeading: u.Move.Heading,
+			TurnResidual:  0,
+			MaxVelocity:   int32(u.Def.MaxVelocity),
+			Acceleration:  int32(u.Def.Acceleration),
+			BrakeRate:     int32(u.Def.BrakeRate),
+			TurnRate:      int32(u.Def.TurnRate),
+			TargetY:       int32(u.Y.Raw()),
+			OffMap:        false,
+			Dirty:         false,
 		}
 		// Authored zeros stay zero. The previous 65536/16384/65536 substitutes
 		// were invented constants on an authoritative path (I6): a unit whose
@@ -2169,25 +2197,35 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) path.WorkRe
 			// occupant-age gate fed by the request revision pass
 			// [docs/SPEC_CONFLICTS SC22][04 §8.2].
 			//
-			// PassableValue binds the packed terrain stamp, not the full
-			// Passable consumer: the owner/building-mask write sites are
-			// Supported inference with no located retail writer (the
-			// unwired-write-site questions are recorded at the
-			// occupancy-commit site in StepUnit), and Passable's bit-miss
-			// value 2 short-circuits the terrain value, so consulting an
-			// unwired mask would bypass terrain blocking entirely. With the
-			// terrain binding the bit-miss value 2 never occurs in
-			// production — matching the pre-layer terrain-only search
-			// [04 §6.1 R-DOC04-B].
+			// PassableValue binds the full four-step consumer of
+			// [04 R-PATH-01 §2], mapping-word gate included. The gate reads
+			// the visibility publisher's per-player grid through the
+			// MappingWord port, which is the only array retail has: the
+			// mapping grid's complete writer set is the map-load fill, the
+			// bulk rebuild and the phase-5 LOS stamp, and no occupancy commit
+			// writes it, so a movement-side copy would stay all-zero and the
+			// unmapped value 2 would never occur [04 R-PATH-01 §14]
+			// [03 R-LAYER §1]. With the real grid bound, ground the requesting
+			// player has never mapped returns 2 and expands without the
+			// terrain layer being read at all — retail's optimistic pathing
+			// through fog.
 			//
 			// The per-request revision pass runs at request init before any
 			// expansion [04 §6.1 R-DOC04-B][04 §7.3]; path.Session.init
 			// invokes cfg.Revise first.
 			reg := s.ensureLayerRegistry()
+			reg.BindMappingWord(s.mappingWordSource(r.Unit))
 			cls := s.classKeyFor(r.Unit)
 			layer := reg.For(cls, profile)
 			requester := r.Unit
 			revTick := s.tick
+			footX, footZ := profile.FootPrintX, profile.FootPrintZ
+			owner := uint8(0)
+			if s.world != nil {
+				if u := s.world.Unit(r.Unit); u != nil {
+					owner = u.Owner
+				}
+			}
 			cfg = path.SearchConfig{
 				Start:      r.Start,
 				Goal:       r.Goal,
@@ -2198,7 +2236,7 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) path.WorkRe
 				HasBounds:  hasBounds,
 				Bounds:     bounds,
 				PassableValue: func(c path.Cell) uint8 {
-					return layer.Value(c.X, c.Z)
+					return layer.Passable(c.X, c.Z, footX, footZ, owner)
 				},
 				Revise: func() {
 					reg.ReviseFor(cls, profile, requester, revTick)
@@ -2950,16 +2988,17 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		// [04 §6.1 R-DOC04-B] sees it. The same-cell fast path commits the
 		// transform without restamping occupancy [04 §8.2] C23, so it writes
 		// no commit tick.
-		// TODO(question): the occupancy-commit WRITE SITES are only partially
-		// established. (a) The owner/building-mask writers (ClassLayer
-		// SetOwnerRect/ClearOwnerRect) are Supported inference with no located
-		// retail writer; a traced building-commit writer would settle where
-		// retail sets and clears the requester's mask bits. (b) Whether the
-		// creation-time occupancy stamp (EnsureUnit) also writes the unit
-		// record's commit-tick field is untraced. Until the mask writers are
-		// wired the mask stays all-zero and the search binds the terrain stamp
-		// only (see searchFunc), so the bit-miss value 2 never occurs in
-		// production — matching the pre-layer terrain-only search.
+		// Both halves of the write-site question this site used to carry are
+		// closed by [04 R-PATH-01 §14]. (a) There is no owner/building-mask
+		// array and so no mask writer: the word the search tests is the
+		// visibility publisher's mapping grid, whose complete writer set is the
+		// map-load fill, the bulk rebuild and the phase-5 LOS stamp — the
+		// occupancy commit, the footprint stamp and clear, unit creation and
+		// building completion never reference it. searchFunc binds a view of
+		// that grid. (b) Unit creation DOES write the commit tick: the creator
+		// stamps the new unit's footprint after the initializer returns, and
+		// the footprint stamp writes the tick as its first action; EnsureUnit
+		// does the same.
 		if !isBlocked && !fastPath {
 			s.noteOccupancyCommit(handle, tick)
 		}

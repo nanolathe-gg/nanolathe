@@ -360,8 +360,9 @@ func (s *System) goalForOrder(goalCell path.Cell, n *orders.Node) path.Goal {
 //
 //   - `HelpBuild` phase 0 installs an ANNULUS at the target's position with
 //     outer radius `builddistance + half` and inner radius `half`, where
-//     `half` is the assist approach term taken from the assistant's OWN
-//     footprint (orders.AssistApproachHalf). The annulus class stores the
+//     `half` is the assist approach term over the TARGET's definition
+//     footprint (orders.AssistApproachHalf) and `builddistance` alone is the
+//     builder's own [04 R-ORD-01 §12][05 R-WORK-01 §2]. The annulus class stores the
 //     octile radii the heuristic clamps against and, separately, the squared
 //     cell radii the arrival predicate compares — internal/path derives the
 //     second pair by the >>4 quantisation [04 R-PATH-01 §9][04 R-MOV-03 §2].
@@ -419,7 +420,18 @@ func (s *System) workApproachGoal(mover *units.Unit, goalCell path.Cell, n *orde
 		if target != nil {
 			center = path.Cell{X: goalCellForWorld(target.X, footX), Z: goalCellForWorld(target.Z, footZ)}
 		}
-		half := orders.AssistApproachHalf(mover.Def.FootprintX, mover.Def.FootprintZ)
+		// The radicand reads the footprint pair from the TARGET's definition —
+		// the unit being assisted — not the assistant's [04 R-ORD-01 §12],
+		// which withdraws [04 R-ORD-01 §5]'s "from my own footprint" and
+		// confirms [05 R-WORK-01 §2]. Only `builddistance`, the outer term, is
+		// the builder's own. The builder's pair is the fallback for the one
+		// case retail cannot reach and this fallback arm can: a record whose
+		// payload is unbound and whose target no longer resolves.
+		halfX, halfZ := mover.Def.FootprintX, mover.Def.FootprintZ
+		if target != nil && target.Def != nil {
+			halfX, halfZ = target.Def.FootprintX, target.Def.FootprintZ
+		}
+		half := orders.AssistApproachHalf(halfX, halfZ)
 		outer := mover.Def.BuildDistance + half
 		if outer < half {
 			outer = half

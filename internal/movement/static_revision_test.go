@@ -45,22 +45,11 @@ func TestClassLayerRefreshesAfterBlockingFeatureMutation(t *testing.T) {
 	}
 }
 
-func TestOwnerMaskMutationDoesNotInventStaticRevisionAndMobileDoesNot(t *testing.T) {
+// The mapping-word grid belongs to the visibility publisher and this package
+// only reads it [04 R-PATH-01 §14], so the surviving half of this test is that
+// mobile occupancy does not invent a static-obstacle revision.
+func TestMobileOccupancyDoesNotInventStaticRevision(t *testing.T) {
 	terrain := staticRevisionTerrain(8, 8)
-	layer := NewClassLayer(Template(), terrain, nil)
-	start := terrain.StaticObstacleRevision()
-	layer.SetOwnerRect(Cell{X: 1, Z: 1}, 2, 2, 0)
-	if terrain.StaticObstacleRevision() != start {
-		t.Fatalf("owner set invented static revision %d from %d", terrain.StaticObstacleRevision(), start)
-	}
-	layer.SetOwnerRect(Cell{X: 1, Z: 1}, 2, 2, 0)
-	if terrain.StaticObstacleRevision() != start {
-		t.Fatalf("idempotent owner set changed revision to %d", terrain.StaticObstacleRevision())
-	}
-	layer.ClearOwnerRect(Cell{X: 1, Z: 1}, 2, 2, 0)
-	if terrain.StaticObstacleRevision() != start {
-		t.Fatalf("owner clear invented static revision %d", terrain.StaticObstacleRevision())
-	}
 	grid := NewOccupancyGrid()
 	beforeMobile := terrain.StaticObstacleRevision()
 	grid.Stamp(Cell{X: 2, Z: 2}, 1, 1, 9)
@@ -239,9 +228,13 @@ func TestAStarSharesHardBlockPredicate(t *testing.T) {
 	if searchPassable(path.Cell{X: 1, Z: 1}) {
 		t.Fatal("A* hard-block predicate accepted the stamped blocking cell")
 	}
-	if got := layer.Passable(0, 0, 1, 1, 0); got != LayerMaskMiss {
-		t.Fatalf("unowned cell passability = %d, want traversable mask-miss value %d", got, LayerMaskMiss)
+	// A block the requesting player has not mapped returns the traversable
+	// unmapped value 2 without the terrain layer being read [04 R-PATH-01 §2].
+	layer.mapping = func(int32, int32) (uint16, bool) { return 0, true }
+	if got := layer.Passable(0, 0, 1, 1, 0); got != LayerUnmapped {
+		t.Fatalf("unmapped cell passability = %d, want traversable value %d", got, LayerUnmapped)
 	}
+	layer.mapping = nil
 	search := path.Search(path.SearchConfig{
 		Start: path.Cell{X: 0, Z: 0},
 		Goal:  path.PointGoal(path.Cell{X: 2, Z: 2}, 0),

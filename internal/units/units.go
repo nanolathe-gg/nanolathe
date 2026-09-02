@@ -455,9 +455,17 @@ type Unit struct {
 	// Typed per-unit state introduced for P0-I02 real pipeline [04 §1.1][04 §4][06][GAP T15].
 	// These fields own the authoritative per-unit data that the phase-2 sweep
 	// visits in players-asc then slots-asc order [01 §6.2] C2 [P0-16].
-	ScriptState      *ScriptState    // per-unit COB VM/thread/piece state [04 §4.1][04 §4.2][GAP T15]; nil if not yet wired
-	Slots            [NumSlots]Slot  // three weapon slots [06 §1.2] C1 P0-10; local Slot avoids units→combat→economy→units cycle
-	Move             MoveState       // movement status shared with movement.System [04 §8.1][04 §9.1] (movement imports units)
+	ScriptState *ScriptState   // per-unit COB VM/thread/piece state [04 §4.1][04 §4.2][GAP T15]; nil if not yet wired
+	Slots       [NumSlots]Slot // three weapon slots [06 §1.2] C1 P0-10; local Slot avoids units→combat→economy→units cycle
+	Move        MoveState      // movement status shared with movement.System [04 §8.1][04 §9.1] (movement imports units)
+	// BobPhase is the hover bob's per-unit phase word: a signed 16-bit angle
+	// added to the four-corner bob angle so hovercraft rock out of phase with
+	// one another [04 R-MOV-01 §5]. Its single writer is the common unit
+	// initializer, which stores the low 16 bits of the full-domain simulation
+	// draw that follows the `buildangle` draw in the allocator's RNG call order
+	// [04 R-MOV-01 §5c][R-P28-ANG-01R §2]. Every unit gets one, hovering or
+	// not, and a save that restores the unit record restores the phase.
+	BobPhase         int16
 	Attachment       AttachmentState // carrier/cargo linkage [04 §4.4] attach-unit
 	EngagementTarget pool.Handle     // saved plain engagement link; no attachment side effect [08 R-SAVE-02 §6]
 	// SpotMetal is the extractor yield the CREATOR samples once, for every unit
@@ -1187,8 +1195,12 @@ func (w *World) SetSimulationRNG(sim *rng.Simulation) {
 
 // initializeAllocationHeading performs the two common-initializer RNG
 // invocations in retail order: the buildangle-bounded heading invocation,
-// followed by the separate full-domain initialization draw whose semantic
-// destination remains unresolved [R-P28-ANG-01R §2].
+// followed by the full-domain draw [R-P28-ANG-01R §2] places immediately after
+// it. That second draw's destination is now known: it is the unit's hover bob
+// phase word [04 R-MOV-01 §5c] — the initializer stores the low 16 bits of a
+// simulation draw below 0x10000 into it, once, for EVERY unit whether or not it
+// can hover, and no other writer exists. Storing the value changes no draw
+// count and no call order; the draw was already being taken and discarded.
 func (w *World) initializeAllocationHeading(u *Unit, def *content.UnitDef) {
 	if u == nil || def == nil {
 		return
@@ -1199,9 +1211,9 @@ func (w *World) initializeAllocationHeading(u *Unit, def *content.UnitDef) {
 	}
 	u.Move.Heading = uint16(int32(int16(uint16(draw))) - int32(uint16(def.BuildAngle)>>1) + 32768)
 	if w != nil && w.simulationRNG != nil {
-		// Only this full-domain invocation and its call position are established;
-		// no semantic destination is assigned [R-P28-ANG-01R §2].
-		_ = w.simulationRNG.Uint32n(0x10000)
+		// The phase word is signed 16-bit, so the draw's low 16 bits are kept
+		// as they land [04 R-MOV-01 §5][04 R-MOV-01 §5c].
+		u.BobPhase = int16(uint16(w.simulationRNG.Uint32n(0x10000)))
 	}
 }
 
