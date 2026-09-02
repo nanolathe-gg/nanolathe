@@ -243,18 +243,20 @@ most common retail value is 75.
   the minimap and the OTA start positions but heights/features should be
   validated visually when implementing.
 - Whether height 255 scaling interacts with anything besides SeaLevel
-  (e.g. camera) is engine behavior, not format. **What rides on it
-  (2026-09-01, WU-19-41).** Whether the attribute cell's height byte reaches
-  the derived floor pair verbatim, or passes through a transform first, decides
-  ground passability outright and by a very small margin. The derived pair and
-  its footprint aggregation are Established (`[02 R-CONTENT-01]`,
-  `[04 §6.1 R-DOC04-B]` step 6), so `slope = hmax − hmin` over a class's
-  footprint rectangle is the only free variable left. Measured on `ashap
-  plateau`: the start plateaus' rims classify at slope 17 while the stock
-  vehicle classes author `MaxSlope=15`, and that two-byte gap pens every
-  vehicle in a 2735-cell pocket out of 68112 — raising the limit to 17 opens
-  45339. A trace of the height byte's path from the TNT read to the derived
-  pair settles it; the reproducer is
+  (e.g. camera) is engine behavior, not format. **Settled for passability
+  (2026-09-01, RWU-19-15, `[04 R-SLOPE-01]`).** The height byte reaches the
+  runtime plot cell **verbatim** — no scaling, shift or height-scale between
+  this byte and the engine's derived per-cell minimum/maximum, which are the
+  min/max over the cell, its east, south and south-east neighbours (edge
+  guarded). The WU-19-41 measurement that motivated the question ("the start
+  plateaus' rims classify at slope 17 while the stock vehicle classes author
+  `MaxSlope=15`", a 2735-cell pocket on `ashap plateau`) was an artefact of
+  aggregating heights over the class footprint: retail classifies each cell
+  on its own 2×2 corner quad and takes the minimum tier over the footprint,
+  under which every cell of those rim anchors is at or below the limit (the
+  three sampled anchors: per-cell slopes 4–13) and the pocket is 53370 cells. The earlier sentence here, "The derived pair and its footprint
+  aggregation are Established", was half right — the pair is, the footprint
+  height aggregation is not retail's movement rule. Reproducer:
   `internal/session/ai_terrain_pocket_probe_test.go`.
 
 ## Sources

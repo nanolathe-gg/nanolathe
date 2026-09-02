@@ -71,6 +71,20 @@ type publicationState struct {
 // entry's frame count through; see SetEffectEntryFrameCount.
 type effectFrameCountResolver func(bank, entry string) (int, bool)
 
+// featureSequenceResolver is the seam the FEATURE phase reads authored
+// animation art through; see SetFeatureSequenceResolver. For a definition's
+// GAF file and one of its named sequences it reports the geometry of the frame
+// the cursor is on after `visit` visits — what the smoke jitter of
+// [05 R-FEAT-01 §10] pass 3a scales its two CRT draws by — and the entry's
+// whole lifetime in visits, the sum over its frames of max(delay, 1), which is
+// when a die, reclaim or burn animation ends.
+//
+// It answers from the file's bytes alone, so it is identical in every run over
+// the same install (I4), and a session with no resolver (every headless run)
+// gets no geometry and no length, which leaves the transition on the immediate
+// replacement it took before the animation records existed.
+type featureSequenceResolver func(filename, sequence string, visit int32) (w, h, xoff, yoff, visits int32, ok bool)
+
 type Phase7Service interface {
 	StepPhase7()
 }
@@ -111,6 +125,10 @@ type Session struct {
 	// effectFrameCount resolves an effect entry's frame count for the strip
 	// families; see SetEffectEntryFrameCount.
 	effectFrameCount effectFrameCountResolver
+
+	// featureSequence resolves a feature animation sequence for the feature
+	// phase; see SetFeatureSequenceResolver.
+	featureSequence featureSequenceResolver
 
 	Clock    *clock.State
 	Catalog  *content.Catalog
@@ -1017,35 +1035,6 @@ func (s *Session) RegisterAll() {
 					return 0, false
 				}
 				res := combat.ResolveDeath(ctx, featMap, syncKilled) // [04 §5.1][06 §12.1] C22-C25
-				// Corpse depth comes from the Killed-variant low nibble [04 §5.1][06 §12.1] C23, replacing the constant switch.
-				if res.DoCorpse && u.Def.Corpse != "" {
-					depth := res.Variant & 0x0F // low nibble [06 §12.1] C23
-					var corpseDef *content.FeatureDef
-					if s.Catalog != nil && s.Catalog.Features != nil {
-						corpseDef = features.CorpseDefFor(u.Def, s.Catalog.Features, depth) // [06 §12.1] C23 low nibble
-						if corpseDef == nil && depth != 0 {
-							// Fallback to direct catalog lookup for depth1 when chain helper misses
-							if d, ok := s.Catalog.Features[content.CanonicalKey(u.Def.Corpse)]; ok && depth == 1 {
-								corpseDef = d
-							}
-						}
-					} else {
-						for _, d := range s.World.FeatureDefs {
-							if d != nil && d.CanonicalKey == content.CanonicalKey(u.Def.Corpse) {
-								if depth != 0 {
-									corpseDef = features.CorpseDefFor(u.Def, map[string]*content.FeatureDef{content.CanonicalKey(u.Def.Corpse): d}, depth)
-									if corpseDef == nil && depth == 1 {
-										corpseDef = d
-									}
-								}
-								break
-							}
-						}
-					}
-					if corpseDef != nil {
-						_ = s.Features.PlaceCorpse(u.X, u.Z, corpseDef, u.Def.IsFeature)
-					}
-				}
 				// Death-explosion weapon trigger (DoExplosion) [06 §12.1] C22-C25
 				// Shared with projectile splash via ExplodeWeaponAt [06 §9.3] (I1, I2)
 				if res.DoExplosion {
@@ -1109,6 +1098,44 @@ func (s *Session) RegisterAll() {
 								s.publication.events.EmitExplosion(pe) // [06 §13.2] C27
 							}
 						}
+					}
+				}
+				// ORDER. The central handler runs the death explosion and only
+				// THEN the corpse: "the death explosion (§12.2) ... ; then the
+				// corpse (§12.2)" [06 §12.1 "the timeline of one weapon death, in
+				// tick order" step 3]. The two blocks used to stand the other way
+				// round, which was invisible while blasts could not touch features
+				// and became visible the moment they could: the wreck was stamped
+				// into its own blast and destroyed by it whenever the explode
+				// weapon's default damage reached the corpse definition's capacity
+				// [05 R-FEAT-01 §8], so an exploding unit left no wreck at all.
+				// Corpse depth comes from the Killed-variant low nibble [04 §5.1][06 §12.1] C23, replacing the constant switch.
+				if res.DoCorpse && u.Def.Corpse != "" {
+					depth := res.Variant & 0x0F // low nibble [06 §12.1] C23
+					var corpseDef *content.FeatureDef
+					if s.Catalog != nil && s.Catalog.Features != nil {
+						corpseDef = features.CorpseDefFor(u.Def, s.Catalog.Features, depth) // [06 §12.1] C23 low nibble
+						if corpseDef == nil && depth != 0 {
+							// Fallback to direct catalog lookup for depth1 when chain helper misses
+							if d, ok := s.Catalog.Features[content.CanonicalKey(u.Def.Corpse)]; ok && depth == 1 {
+								corpseDef = d
+							}
+						}
+					} else {
+						for _, d := range s.World.FeatureDefs {
+							if d != nil && d.CanonicalKey == content.CanonicalKey(u.Def.Corpse) {
+								if depth != 0 {
+									corpseDef = features.CorpseDefFor(u.Def, map[string]*content.FeatureDef{content.CanonicalKey(u.Def.Corpse): d}, depth)
+									if corpseDef == nil && depth == 1 {
+										corpseDef = d
+									}
+								}
+								break
+							}
+						}
+					}
+					if corpseDef != nil {
+						_ = s.Features.PlaceCorpse(u.X, u.Z, corpseDef, u.Def.IsFeature)
 					}
 				}
 			} else if u != nil && u.Def != nil && u.Def.Corpse != "" && s.World != nil {

@@ -174,7 +174,13 @@ func writeRetailWeaponSlot(data []byte, s *Slot, stableID RetailStableID) error 
 		return fmt.Errorf("stockpile %d is outside byte range", s.Ammo)
 	}
 	data[0x16] = byte(s.Ammo)
-	data[0x17] = s.Flags & 0x1f
+	// The persisted slot-flag byte carries bit 0 (aim latch), bit 1 (enabled)
+	// and bit 4 (the autonomy bit) [08 R-SAVE-WEAPON-01]. [04 R-UNIT-06 §5
+	// part 3] establishes that bit 4 lives on the CONTROL byte, not on Flags,
+	// so it is folded in here and split back out on restore; without this a
+	// save dropped every slot's autonomy state and reloaded units whose weapons
+	// no longer acquired.
+	data[0x17] = (s.Flags & 0x0f) | (s.OrderControl & OrderControlInhibit)
 	return nil
 }
 

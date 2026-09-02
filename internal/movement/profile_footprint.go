@@ -30,84 +30,57 @@ func (p Profile) footprintSize() (int32, int32) {
 	return fx, fz
 }
 
-// footprintRange reads the derived low/high terrain pair from every covered
-// cell [R-P0-08 mobile terrain validator].
-func (p Profile) footprintRange(t *world.Terrain, ax, az int32) (minLow, maxHigh int32, ok bool) {
-	if t == nil {
-		return 0, 0, false
-	}
-	fx, fz := p.footprintSize()
-	if ax < 0 || az < 0 || ax+fx > t.CellW || az+fz > t.CellH {
-		return 0, 0, false
-	}
-	minLow, maxHigh = 255, 0
-	for dz := int32(0); dz < fz; dz++ {
-		for dx := int32(0); dx < fx; dx++ {
-			cell := t.PlotAt(ax+dx, az+dz)
-			if cell == nil {
-				return 0, 0, false
-			}
-			if h := int32(cell.MinHeight()); h < minLow {
-				minLow = h
-			}
-			if h := int32(cell.MaxHeight()); h > maxHigh {
-				maxHigh = h
-			}
-		}
-	}
-	return minLow, maxHigh, true
-}
-
-// ClassifyFootprint applies terrain and feature legality to the complete
-// footprint. Feature checks remain row-major/immediate; the depth and slope
-// gates then run over the aggregate height span (min of mins, max of maxes).
+// classifyCell is the per-cell classifier chain, the single source of the
+// terrain tier for one attribute cell [04 §6.1 R-DOC04-B][04 R-SLOPE-01 §2].
 //
-// This is the aggregate footprint VALIDATOR of the commit stage [04 §8.2]:
-// path search uses the pre-stamped per-class 2-bit layer (layer.go, per-cell
-// classifier chain of [04 §6.1 R-DOC04-B]), while movement commit checks the
-// current rectangle here [04 §8.2]. Only the blocked verdict rejects.
-func (p Profile) ClassifyFootprint(t *world.Terrain, ax, az int32) CellClass {
-	fx, fz := p.footprintSize()
-	if t == nil || ax < 0 || az < 0 || ax+fx > t.CellW || az+fz > t.CellH {
+// Every gate reads THIS cell's own derived pair — the plot's derived maximum
+// (byte 0x05) and minimum (byte 0x06) over its 2×2 height neighbourhood. There
+// is no height aggregate across a footprint here or in any other movement
+// classifier: the `min of mins` / `max of maxes` form belongs to the structure
+// placement validator's yard-map walk and the spawner height probe alone
+// [04 R-SLOPE-01 §3 "Bounded census"].
+//
+// Order is the documented chain: feature gate, deep gate, shallow gate, medium
+// split, slope tier. The occupant-age gate (step 2) is not here — it needs the
+// class layer's grid and revision watermark, so ClassLayer interposes it.
+func (p Profile) classifyCell(t *world.Terrain, cx, cz int32) CellClass {
+	if t == nil || cx < 0 || cz < 0 || cx >= t.CellW || cz >= t.CellH {
 		return ClassBlocked
 	}
-	for dz := int32(0); dz < fz; dz++ {
-		for dx := int32(0); dx < fx; dx++ {
-			if isFeatureBlocked(t, ax+dx, az+dz) {
-				return ClassBlocked
-			}
-		}
-	}
-	minLow, maxHigh, ok := p.footprintRange(t, ax, az)
-	if !ok {
+	// Step 1, feature gate: a resolved blocking feature, a stale feature
+	// identity and a void cell all block [04 §6.1 R-DOC04-B step 1].
+	if isFeatureBlocked(t, cx, cz) {
 		return ClassBlocked
 	}
+	cell := t.PlotAt(cx, cz)
+	if cell == nil {
+		return ClassBlocked
+	}
+	low, high := int32(cell.MinHeight()), int32(cell.MaxHeight())
 	sea := int32(t.SeaLevel)
-	// Depth gates, signed 32-bit on the record's depth fields: blocked iff
-	// hmin < SeaLevel − MaxWaterDepth or hmax > SeaLevel − MinWaterDepth;
-	// a depth exactly at the limit passes [04 §6.1 R-DOC04-B steps 3-4].
-	// The depths are record values, not presence flags: the startup template
-	// supplies ±10000 wherever a class omits the key, so an unlimited
-	// direction never fires [04 §6.1 R-DOC04-A].
-	if minLow < sea-p.MaxWaterDepth {
+	// Steps 3-4, depth gates, signed 32-bit on the record's depth fields:
+	// blocked iff hmin < SeaLevel − MaxWaterDepth or hmax > SeaLevel −
+	// MinWaterDepth; a depth exactly at the limit passes. The depths are
+	// record values, not presence flags: the startup template supplies ±10000
+	// wherever a class omits the key, so an unlimited direction never fires
+	// [04 §6.1 R-DOC04-A].
+	if low < sea-p.MaxWaterDepth {
 		return ClassBlocked
 	}
-	if maxHigh > sea-p.MinWaterDepth {
+	if high > sea-p.MinWaterDepth {
 		return ClassBlocked
 	}
-	// slope = hmax − hmin over the footprint (min of mins, max of maxes).
-	slope := maxHigh - minLow
-	// Medium split: land iff hmin >= SeaLevel, which selects the land or
-	// water slope pair [04 §6.1 R-DOC04-B step 5].
+	// Step 5, medium split: land iff hmin >= SeaLevel, which selects the land
+	// or water slope pair for THIS cell [04 R-SLOPE-01 §2].
 	maxSlope, badSlope := p.MaxWaterSlope, p.BadWaterSlope
-	if minLow >= sea {
+	if low >= sea {
 		maxSlope, badSlope = p.MaxSlope, p.BadSlope
 	}
-	// Slope tier, unsigned byte comparisons in the documented chain order
-	// [04 §6.1 R-DOC04-B step 6]: slope <= Bad is clear, slope > Max is
-	// blocked, anything between is steep. Equality with the bad threshold is
-	// clear; equality with the max threshold is steep, not blocked. Only the
-	// blocked verdict rejects a footprint.
+	// Step 6, slope tier, unsigned byte subtraction of this cell's own pair:
+	// slope <= Bad is clear, slope > Max is blocked, anything between is
+	// steep. Equality with the bad threshold is clear; equality with the max
+	// threshold is steep, not blocked [04 R-SLOPE-01 §2].
+	slope := high - low
 	if slope <= int32(badSlope) {
 		return ClassClear
 	}
@@ -117,6 +90,75 @@ func (p Profile) ClassifyFootprint(t *world.Terrain, ax, az int32) CellClass {
 	// Exact HOT cost and forward-speed factor remain unknown [R-P1-11].
 	// Preserve the soft terrain state without inventing a multiplier.
 	return ClassSteep
+}
+
+// classifyRectMin runs classifyCell over an inclusive rectangle and returns the
+// MINIMUM tier over its cells [04 R-SLOPE-01 §3 item 2]. A blocked cell returns
+// immediately; a steep cell lowers a running clear to steep. Cells outside the
+// map are tier 0, so any rectangle leaving the map is blocked.
+func (p Profile) classifyRectMin(t *world.Terrain, x1, z1, x2, z2 int32) CellClass {
+	if x2 < x1 || z2 < z1 {
+		return ClassBlocked
+	}
+	result := ClassClear
+	for z := z1; z <= z2; z++ {
+		for x := x1; x <= x2; x++ {
+			switch p.classifyCell(t, x, z) {
+			case ClassBlocked:
+				return ClassBlocked
+			case ClassSteep:
+				result = ClassSteep
+			}
+		}
+	}
+	return result
+}
+
+// ClassifyFootprint classifies a footprint anchored at (ax, az) the way every
+// movement-side classifier does: each covered cell on its own derived pair, the
+// MINIMUM tier over the footprint, and a clear result demoted to steep unless
+// every cell of the surrounding one-cell ring is clear too
+// [04 R-SLOPE-01 §3][04 §6.1 R-DOC04-B].
+//
+// Corrected by WU-19-46. This used to aggregate the footprint's heights as
+// min-of-mins/max-of-maxes and classify that single span, which judged a 2×2
+// class on the height range of a 3×3 corner window. The aggregate range is at
+// least every cell's own range, so it is strictly harsher, and the gap grows
+// with the footprint: on `ashap plateau` it turned the computer player's start
+// plateau into a 2735-cell pocket for TANKSH2 where retail reaches 53370 cells
+// [04 R-SLOPE-01 §4].
+//
+// Bounds are the map-load layer builder's: its sliding window zeroes exactly
+// the anchors whose footprint leaves the map [04 R-SLOPE-01 §3 item 1]. The
+// rectangle restamp and the mobile commit validator carry a stricter bound —
+// a rectangle reaching column W−1 or row H−1 is 0 outright — and it lives
+// where they do, in ClassLayer.RestampRect and in commitRectInBounds
+// [04 R-SLOPE-01 §3 item 2][04 R-COLL-01 §2 steps 1-4]. In retail the two
+// agree on a loaded map: the edge strips are voided and a void cell is tier 0
+// [03 R-TERR-01 §2]. That strip pass is not implemented in internal/world, so
+// here the difference is visible — on `ashap plateau` it is 118 of 53901
+// passable TANKSH2 anchors, all in the last column or last row.
+//
+// Only the blocked verdict rejects: steep and clear are both passable.
+func (p Profile) ClassifyFootprint(t *world.Terrain, ax, az int32) CellClass {
+	fx, fz := p.footprintSize()
+	if t == nil || ax < 0 || az < 0 || ax+fx > t.CellW || az+fz > t.CellH {
+		return ClassBlocked
+	}
+	result := p.classifyRectMin(t, ax, az, ax+fx-1, az+fz-1)
+	if result != ClassClear {
+		return result
+	}
+	// The four strips cover the complete ring including its corners. A ring
+	// cell that is blocked demotes the anchor to steep — it never blocks it
+	// [04 R-SLOPE-01 §3 item 1 closed form].
+	if p.classifyRectMin(t, ax-1, az-1, ax+fx, az-1) != ClassClear ||
+		p.classifyRectMin(t, ax+fx, az-1, ax+fx, az+fz) != ClassClear ||
+		p.classifyRectMin(t, ax-1, az+fz, ax+fx, az+fz) != ClassClear ||
+		p.classifyRectMin(t, ax-1, az-1, ax-1, az+fz) != ClassClear {
+		return ClassSteep
+	}
+	return ClassClear
 }
 
 // IsPassableFootprint is the path/commit predicate for a footprint anchor.

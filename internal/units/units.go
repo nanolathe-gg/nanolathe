@@ -295,14 +295,6 @@ type Unit struct {
 	// later terrain or feature changes do not move it, and the settlement reads
 	// this rate rather than `extractsmetal` [05 R-PROD-01 §1].
 	SpotMetal float32
-	// OrderGuard is the per-unit order-guard float of the shared eligibility
-	// predicate [07 §8/§9]: zero at unit creation and at order completion,
-	// nonzero (a clamped 0..1 ratio) while an order is being processed.
-	// Eligibility compares it exactly equal to 0.0, so the guard means "not
-	// mid-order". float32 per the I2 allowlist row "Per-unit order-guard
-	// float". Written by the orders pump; the exact ratio source is
-	// unattested — only the 0/nonzero distinction is established TODO(question).
-	OrderGuard float32
 	// Economy state bound to the one ledger per [05] — activation/on-off, cloak, storage, extraction, wind/tidal, makers [P1-I04].
 	Activated bool  // operational/activated bit for on/offable units [05 "Unit instance economy state"] [P1-I04]; true when the unit is turned on; for non-OnOffable units always true when complete
 	IsCloaked bool  // whether cloak upkeep is due this pass [05 "Cloak debit"] [P1-I04]
@@ -345,18 +337,36 @@ func (u *Unit) ClearClassifierEligibility() {
 	}
 }
 
-// Eligible implements the shared eligibility predicate [07 §8/§9]: the
-// classifier/selection status bit 0x20 is set, and the per-unit order-guard
-// float compares exactly equal to 0.0 — the unit is not mid-order. The
-// predicate's remaining retail clauses (no disqualifying state reference; a
-// parent unit whose status word carries bit 0x40000000) have no nanolathe
-// counterpart yet TODO(question): map parent status bits when the
-// transport/carrier flag set is closed.
+// Eligible is the shared eligibility predicate `E(u)` of [07 R-WGT-01 §10],
+// which every selection, inspect and bulk-walk site reads: the *selectable*
+// status bit 5 is set, and the remaining-build fraction compares exactly equal
+// to `0.0` — the unit's construction is complete.
+//
+// Corrected 2026-09-01 (WU-19-45). The second clause used to read a per-unit
+// `OrderGuard` float this build wrote from the order pump. [07 R-WGT-01 §10]
+// settles that there is no order-guard float: a whole-executable census of
+// every load and store of the compared word identifies it as the
+// remaining-build fraction — the word the construction step drives from `1.0`
+// toward `0.0` [05 R-WORK-01 §1] and COB port 17 reads — and finds that NO
+// routine of the order subsystem stores to it. "Eligible" therefore means
+// *construction complete*, not *not mid-order*, and reads no order state at
+// all. The old form was worse than imprecise: the pump wrote the guard nonzero
+// whenever the primary queue was non-empty, and an idle unit's queue holds its
+// authored `defaultmissiontype` standing record [04 §3.3], so every idle stock
+// mobile unit read as ineligible.
+//
+// TODO(question): the predicate's last two clauses have no counterpart here —
+// the post-capture grace counter (armed only by a capture whose new owner is a
+// remote controller, so always zero in single-player [08 R-TRIG-01 §3]) and
+// "no carrier, or a carrier whose status bit 30 (cargo-selectable) is set".
+// The carrier clause needs the transport flag set closed; the shell's own
+// selection predicate already approximates it from the carrier definition's
+// `isairbase` mirror [04 R-UNIT-06 §3].
 func (u *Unit) Eligible() bool {
 	if u == nil || !u.Alive || u.Dying {
 		return false
 	}
-	return u.Flags&ClassifierEligibleStatus != 0 && u.OrderGuard == 0.0
+	return u.Flags&ClassifierEligibleStatus != 0 && u.Remaining == 0
 }
 
 // EconomyActive reports whether the unit is eligible for passive economy
@@ -1237,6 +1247,17 @@ func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed,
 
 // installWeapons copies Weapon1/2/3 definitions from UnitDef into Units.Slots [06 §1.2] C1 [P0-I04].
 // It is the sole wiring of weapon definitions to per-unit slots; no other site fabricates them.
+// The autonomy bit goes on with the weapon. [04 R-UNIT-06 §5 part 3]: "spawn
+// runs the return verb on all three slots after writing the empty pair, so a
+// new unit's slots are autonomous from its first tick **provided the enabled
+// bit is already set**". In this build the enabled bit IS the resolved weapon
+// pointer, so the two land together here rather than in two passes; the effect
+// is §5's, and a slot with no weapon stays both disabled and non-autonomous,
+// which every reader tests as one condition anyway.
+//
+// Without this a freshly built unit's slots would never be offered a target by
+// the retaliation walk or rebound by a guard's leg 2 until some order had run
+// its return verb over them.
 func installWeapons(u *Unit, def *content.UnitDef) {
 	if u == nil || def == nil {
 		return
@@ -1254,14 +1275,17 @@ func installWeapons(u *Unit, def *content.UnitDef) {
 	if !content.IsWeaponInactive(def.Weapon1Def) {
 		u.Slots[0].Weapon = def.Weapon1Def
 		u.Slots[0].Flags |= 0x02 // armed/hasTarget when populated [06 §1.2] P0-10
+		u.Slots[0].OrderControl |= OrderControlInhibit
 	}
 	if !content.IsWeaponInactive(def.Weapon2Def) {
 		u.Slots[1].Weapon = def.Weapon2Def
 		u.Slots[1].Flags |= 0x02
+		u.Slots[1].OrderControl |= OrderControlInhibit
 	}
 	if !content.IsWeaponInactive(def.Weapon3Def) {
 		u.Slots[2].Weapon = def.Weapon3Def
 		u.Slots[2].Flags |= 0x02
+		u.Slots[2].OrderControl |= OrderControlInhibit
 	}
 }
 

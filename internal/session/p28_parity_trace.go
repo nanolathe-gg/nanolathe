@@ -45,7 +45,6 @@ type ParityUnit struct {
 	Move                                              MoveTrace
 	Attachment                                        AttachmentTrace
 	SpotMetal                                         float32
-	OrderGuard                                        float32
 	Activated, IsCloaked                              bool
 	Kills                                             int32
 	ParalyzeExpire                                    uint32
@@ -283,7 +282,7 @@ func (s *Session) parityUnit(u *units.Unit) ParityUnit {
 		X: u.X.Raw(), Y: u.Y.Raw(), Z: u.Z.Raw(), Health: u.Health, MaxHealth: u.MaxHealth,
 		Remaining: u.Remaining, Flags: u.Flags, Pending: u.Pending, InBuildStance: u.InBuildStance,
 		Busy: u.Busy, YardOpen: u.YardOpen, BuggerOff: u.BuggerOff, Armored: u.Armored,
-		Group: u.Group, SpotMetal: u.SpotMetal, OrderGuard: u.OrderGuard, Activated: u.Activated,
+		Group: u.Group, SpotMetal: u.SpotMetal, Activated: u.Activated,
 		IsCloaked: u.IsCloaked, Kills: u.Kills, ParalyzeExpire: u.ParalyzeExpire, Stunned: u.Stunned,
 		CurrentSample: u.CurrentSample, PriorSample: u.PriorSample}
 	if u.Def != nil {
@@ -504,7 +503,7 @@ func writeGoal(w func(string, ...interface{}), g path.GoalTrace) {
 }
 
 func writeParityUnit(w func(string, ...interface{}), u ParityUnit) {
-	w("unit:%d:%s:%d:%t:%t:%d:%d:%d:%d:%d:%d:%08x:%08x:%08x:%t:%t:%t:%t:%t:%d:%08x:%08x:%t:%t:%d:%d:%t:%d:%d|", u.Slot, u.DefinitionKey, u.Owner, u.Alive, u.Dying, u.DeathCause, u.X, u.Y, u.Z, u.Health, u.MaxHealth, math.Float32bits(u.Remaining), u.Flags, u.Pending, u.InBuildStance, u.Busy, u.YardOpen, u.BuggerOff, u.Armored, u.Group, math.Float32bits(u.SpotMetal), math.Float32bits(u.OrderGuard), u.Activated, u.IsCloaked, u.Kills, u.ParalyzeExpire, u.Stunned, u.CurrentSample, u.PriorSample)
+	w("unit:%d:%s:%d:%t:%t:%d:%d:%d:%d:%d:%d:%08x:%08x:%08x:%t:%t:%t:%t:%t:%d:%08x:%t:%t:%d:%d:%t:%d:%d|", u.Slot, u.DefinitionKey, u.Owner, u.Alive, u.Dying, u.DeathCause, u.X, u.Y, u.Z, u.Health, u.MaxHealth, math.Float32bits(u.Remaining), u.Flags, u.Pending, u.InBuildStance, u.Busy, u.YardOpen, u.BuggerOff, u.Armored, u.Group, math.Float32bits(u.SpotMetal), u.Activated, u.IsCloaked, u.Kills, u.ParalyzeExpire, u.Stunned, u.CurrentSample, u.PriorSample)
 	w("move:%d:%d:%d:%d:%d:%d:%d:%d:%d|", u.Move.Mode, u.Move.Heading, u.Move.Pitch, u.Move.Bank, u.Move.Speed, u.Move.PendingHeading, u.Move.PendingSpeed, u.Attachment.Carrier, u.Attachment.AttachPiece)
 	for _, c := range u.Attachment.Cargo {
 		w("cargo:%d:%d|", u.Slot, c)

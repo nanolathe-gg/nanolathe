@@ -1,13 +1,14 @@
-// WU-19-41 diagnostic probe. It is the reproducer for the finding recorded at
-// TestComputerPlayerEliminatesIdleHumanRetail: on `ashap plateau` the stock
-// vehicle movement classes cannot leave the start plateau, so the computer
-// player's attack wave freezes at the rim whenever the difficulty tables make
-// it build vehicles rather than kbots.
+// Terrain-reachability probes for the stock vehicle movement classes. They
+// began as WU-19-41's reproducer for a start plateau the vehicle classes could
+// not leave; WU-19-46 applied [04 R-SLOPE-01] — per-cell slope, minimum tier
+// over the footprint — and they now serve as the standing re-measurement of
+// the four numbers that finding took off the reference install.
 //
-// It asserts nothing. Locking either number would freeze a terrain reading
-// that is only two height bytes away from the opposite answer, which is the
-// point of the measurement. Set NANOLATHE_AI_POCKET_PROBE to a file path to
-// run it; it skips otherwise.
+// They assert nothing. A pocket census is a reading of one map's terrain
+// against one class's authored limits; pinning it would freeze a measurement
+// rather than a contract, and the contract itself is locked in
+// internal/movement. Set NANOLATHE_AI_POCKET_PROBE to a file path to run
+// them; they skip otherwise.
 package session
 
 import (
@@ -130,12 +131,70 @@ func TestAIVehiclePocketProbe(t *testing.T) {
 	}
 }
 
+// TestAIVehicleRetailSlopeProbe re-measures the four numbers [04 R-SLOPE-01 §4]
+// took off the reference install for TANKSH2 on `ashap plateau`, so the
+// per-cell classifier of WU-19-46 can be checked against them: the passable
+// anchor total (retail 53901), the flood from the computer player's start cell
+// (53, 231) (retail 53370), whether that flood reaches the human start at
+// (219, 19) (retail yes), and the tiers of the three rim anchors the finding
+// lists (all three passable, per-cell slopes 9/8/9/9, 12/12/6/4, 13/6/10/5).
+//
+// It asserts nothing: it prints, so a divergence is read rather than pinned.
+func TestAIVehicleRetailSlopeProbe(t *testing.T) {
+	out := aiPocketProbeOut(t)
+	sess := aiE2ESkirmishAt(t, "ashap plateau", aiE2ESeed, SkirmishDefaultDifficulty)
+	w := sess.World
+	total := 0
+	for z := int32(0); z < w.CellH; z++ {
+		for x := int32(0); x < w.CellW; x++ {
+			if tanksh2.IsPassableFootprint(w, x, z) {
+				total++
+			}
+		}
+	}
+	var startX, startZ, humanX, humanZ int32 = -1, -1, -1, -1
+	for _, u := range sess.Units.IterSliced() {
+		if u == nil || !u.Alive {
+			continue
+		}
+		// One cell is 0x100000 in 16.16 world units [03 §2.1].
+		cx, cz := int32(int64(u.X)>>20), int32(int64(u.Z)>>20)
+		if u.Owner == 1 && startX < 0 {
+			startX, startZ = cx, cz
+		}
+		if u.Owner == 0 && humanX < 0 {
+			humanX, humanZ = cx, cz
+		}
+	}
+	reach, found := floodFrom(tanksh2, sess, startX, startZ, humanX, humanZ)
+	fmt.Fprintf(out, "cells=%dx%d passableAnchors=%d (retail 53901)\n", w.CellW, w.CellH, total)
+	fmt.Fprintf(out, "computerStart=(%d,%d) humanStart=(%d,%d)\n", startX, startZ, humanX, humanZ)
+	fmt.Fprintf(out, "floodFromComputerStart=%d (retail 53370) reachesHumanStart=%v (retail true)\n", reach, found)
+	for _, a := range [3][2]int32{{48, 213}, {34, 208}, {20, 221}} {
+		fx, fz := int32(tanksh2.FootPrintX), int32(tanksh2.FootPrintZ)
+		slopes := make([]int32, 0, fx*fz)
+		for dz := int32(0); dz < fz; dz++ {
+			for dx := int32(0); dx < fx; dx++ {
+				c := w.PlotAt(a[0]+dx, a[1]+dz)
+				if c == nil {
+					slopes = append(slopes, -1)
+					continue
+				}
+				slopes = append(slopes, int32(c.MaxHeight())-int32(c.MinHeight()))
+			}
+		}
+		fmt.Fprintf(out, "rim(%d,%d) class=%v passable=%v perCellSlopes=%v\n",
+			a[0], a[1], tanksh2.ClassifyFootprint(w, a[0], a[1]),
+			tanksh2.IsPassableFootprint(w, a[0], a[1]), slopes)
+	}
+}
+
 // TestAIVehicleSlopeSensitivityProbe reports at which MaxSlope the computer
 // player's start pocket on `ashap plateau` joins the rest of the map. The
 // authored TANKSH2 limit is 15; the answer measures how far the rim sits from
 // it, and therefore how much of the outcome rests on the derived floor pair of
-// internal/world.deriveFloorPair and the footprint aggregation of
-// [04 §6.1 R-DOC04-B step 6].
+// internal/world.deriveFloorPair and the per-cell minimum-tier footprint rule
+// of [04 R-SLOPE-01 §3].
 func TestAIVehicleSlopeSensitivityProbe(t *testing.T) {
 	out := aiPocketProbeOut(t)
 	sess := aiE2ESkirmishAt(t, "ashap plateau", aiE2ESeed, SkirmishDefaultDifficulty)

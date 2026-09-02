@@ -114,12 +114,27 @@ func (l *ClassLayer) stampAll() {
 	}
 }
 
-// classify stamps one candidate anchor for this movement class. The authored
-// footprint is classified as one aggregate; a clear result is demoted to
-// steep when any cell in the surrounding one-cell ring is non-clear
+// classify stamps one candidate anchor for this movement class. Every covered
+// cell is classified on its own derived pair and the anchor takes the MINIMUM
+// tier over the footprint; a clear result is then demoted to steep when any
+// cell of the surrounding one-cell ring is non-clear [04 R-SLOPE-01 §3]
 // [04 R-PATH-01 §2][04 R-MOV-03 §3].
+//
+// This is the closed form of the map-load builder's two separable window
+// minima: 0 iff any footprint cell is 0, 3 iff every cell of the
+// (fx+2) × (fz+2) footprint-plus-ring rectangle is 3, 1 otherwise
+// [04 R-SLOPE-01 §3 item 1]. Corrected by WU-19-46: the footprint used to be
+// classified on one min-of-mins/max-of-maxes height span, a form that belongs
+// to the structure placement validator alone and that judged a 2×2 class on
+// the height range of a 3×3 corner window.
+//
+// The bound is the map-load builder's: 0 exactly when the footprint leaves the
+// map. RestampRect adds the restamp's stricter one on top [04 R-SLOPE-01 §3].
 func (l *ClassLayer) classify(cx, cz int32) uint8 {
 	fx, fz := l.footprintSize()
+	if l.Terrain == nil || cx < 0 || cz < 0 || cx+fx > l.W || cz+fz > l.H {
+		return LayerBlocked
+	}
 	result := l.classifyRect(cx, cz, cx+fx-1, cz+fz-1)
 	if result != LayerClear {
 		return result
@@ -135,56 +150,53 @@ func (l *ClassLayer) classify(cx, cz int32) uint8 {
 	return LayerClear
 }
 
-// classifyRect applies immediate feature/occupant rejection, aggregates the
-// derived terrain range as min-of-mins/max-of-maxes, then evaluates the depth,
-// medium and slope gates once for the rectangle [04 §6.1 R-DOC04-B]
-// [04 R-PATH-01 §2]. Coordinates are inclusive.
+// classifyRect runs the per-cell chain on each cell of an inclusive rectangle
+// and returns the MINIMUM tier over those cells [04 R-SLOPE-01 §3 item 2]: a
+// blocked cell returns immediately, a steep cell lowers a running clear to
+// steep. Cells outside the map are tier 0, so a rectangle leaving the map is
+// blocked.
 func (l *ClassLayer) classifyRect(x1, z1, x2, z2 int32) uint8 {
-	if l.Terrain == nil {
+	if l.Terrain == nil || x2 < x1 || z2 < z1 {
 		return LayerBlocked
 	}
-	if x1 < 0 || z1 < 0 || x2 < x1 || z2 < z1 || x2 >= l.W || z2 >= l.H {
-		return LayerBlocked
-	}
-	minLow, maxHigh := int32(255), int32(0)
+	result := LayerClear
 	for z := z1; z <= z2; z++ {
 		for x := x1; x <= x2; x++ {
-			cell := l.Terrain.PlotAt(x, z)
-			if cell == nil || isFeatureBlocked(l.Terrain, x, z) {
+			switch l.classifyCell(x, z) {
+			case LayerBlocked:
 				return LayerBlocked
-			}
-			if l.Grid != nil {
-				if id, ok := l.Grid.OccupantAt(Cell{X: x, Z: z}); ok && l.commits[pool.Handle(id)] < l.watermark {
-					return LayerBlocked
-				}
-			}
-			if h := int32(cell.MinHeight()); h < minLow {
-				minLow = h
-			}
-			if h := int32(cell.MaxHeight()); h > maxHigh {
-				maxHigh = h
+			case LayerSteep:
+				result = LayerSteep
 			}
 		}
 	}
-	sea := int32(l.Terrain.SeaLevel)
-	if minLow < sea-l.MaxWaterDepth {
+	return result
+}
+
+// classifyCell is the layer's per-cell chain: the profile's terrain chain
+// (feature gate, depth gates, medium split, slope tier) plus the occupant-age
+// gate, which needs the layer's grid and watermark [04 §6.1 R-DOC04-B
+// steps 1-6][04 R-SLOPE-01 §2].
+//
+// Retail runs the occupant-age gate as step 2, between the feature gate and
+// the deep gate; both it and the terrain gates only ever return blocked, so
+// testing it after the terrain chain yields the same tier. The watermark is
+// zero until the first request revision arms it, so the map-load stamp never
+// blocks on occupants — the static layer is terrain and features only.
+func (l *ClassLayer) classifyCell(x, z int32) uint8 {
+	tier := LayerClear
+	switch l.Profile.classifyCell(l.Terrain, x, z) {
+	case ClassBlocked:
 		return LayerBlocked
+	case ClassSteep:
+		tier = LayerSteep
 	}
-	if maxHigh > sea-l.MinWaterDepth {
-		return LayerBlocked
+	if l.Grid != nil {
+		if id, ok := l.Grid.OccupantAt(Cell{X: x, Z: z}); ok && l.commits[pool.Handle(id)] < l.watermark {
+			return LayerBlocked
+		}
 	}
-	slope := maxHigh - minLow
-	bad, max := l.BadWaterSlope, l.MaxWaterSlope
-	if minLow >= sea {
-		bad, max = l.BadSlope, l.MaxSlope
-	}
-	if slope <= int32(bad) {
-		return LayerClear
-	}
-	if slope > int32(max) {
-		return LayerBlocked
-	}
-	return LayerSteep
+	return tier
 }
 
 // setValue packs v into cell (x,z) [04 §6.1]: dword (z>>4)·W + x, shift
@@ -247,8 +259,18 @@ func (l *ClassLayer) RestampRect(x1, z1, x2, z2 int32) {
 	if z2 > l.H-1 {
 		z2 = l.H - 1
 	}
+	// The restamp's own bound, stricter than the map-load window's: a
+	// rectangle whose extent reaches column W−1 or row H−1 is 0 outright
+	// [04 R-SLOPE-01 §3 item 2][04 R-COLL-01 §2 steps 3-4]. In retail both
+	// bounds agree on a loaded map because those strips are voided
+	// [03 R-TERR-01 §2].
+	fx, fz := l.footprintSize()
 	for z := z1; z <= z2; z++ {
 		for x := x1; x <= x2; x++ {
+			if x+fx >= l.W || z+fz >= l.H {
+				l.setValue(x, z, LayerBlocked)
+				continue
+			}
 			l.setValue(x, z, l.classify(x, z))
 		}
 	}

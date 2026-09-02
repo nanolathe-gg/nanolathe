@@ -64,8 +64,15 @@ func newReactionFixture(t *testing.T) *reactionFixture {
 	return f
 }
 
+// installSlotWeapon mirrors what unit spawn does to a slot whose weapon link
+// resolves [04 R-UNIT-06 §5 part 3]: the weapon, the armed bit, and the control
+// byte's AUTONOMY bit, which every per-slot reader — this offer, the autonomous
+// scan, and the guard's leg 2 — requires.
 func installSlotWeapon(u *units.Unit, idx int, weapon *content.WeaponDef) {
-	u.SlotAt(idx).Weapon = weapon
+	s := u.SlotAt(idx)
+	s.Weapon = weapon
+	s.Flags |= 0x02
+	s.OrderControl |= units.OrderControlInhibit
 }
 
 // TestReactionOffersTheAttackerToAnIdleSlot locks the per-slot offer of
@@ -81,9 +88,9 @@ func TestReactionOffersTheAttackerToAnIdleSlot(t *testing.T) {
 	if slot.Target.Kind != units.TargetUnit || slot.Target.Unit != f.attacker.Handle {
 		t.Fatalf("the offer left slot 0 targeting %+v, want the attacker %d [06 R-WPN-04 §2]", slot.Target, f.attacker.Handle)
 	}
-	if slot.Flags&0x02 == 0 {
-		t.Fatal("the installed target did not set the armed/has-target flag [06 §1.2]")
-	}
+	// The setter writes ONLY the target pair [04 R-UNIT-06 §5 part 3]: an
+	// `armed` OR that stood in the offer had no retail counterpart, and the bit
+	// it wrote is already set when the weapon link resolves.
 
 	// The same slot with a command-fire weapon refuses.
 	g := newReactionFixture(t)
@@ -281,5 +288,68 @@ func TestNoDamageRunsNoReaction(t *testing.T) {
 	if events != 0 || f.observed != 0 || f.throttle != 0 || f.notices != 0 || f.orders != 0 {
 		t.Fatalf("an undamaged scenario ran the reaction: events=%d observed=%d throttle=%d notices=%d orders=%d",
 			events, f.observed, f.throttle, f.notices, f.orders)
+	}
+}
+
+// TestDamageRecordsTheAttackerLink locks the recorded-attacker writer of
+// [04 R-UNIT-06 §5 part 1]: every damage application with a nonzero attacker id
+// stores that id on the victim, beside the side snapshot, and nothing clears it
+// afterwards — not a later tick, and not the attacker's own death. It is the
+// producer the guard's legs 1 and 2 read [04 R-UNIT-06 §1].
+func TestDamageRecordsTheAttackerLink(t *testing.T) {
+	f := newReactionFixture(t)
+	weapon := &content.WeaponDef{ID: 1, Range: 400, DamageDefault: 10}
+	p := &Projectile{Pos: Vec3{X: f.victim.X, Y: f.victim.Y, Z: f.victim.Z}, Shooter: f.attacker.Handle}
+
+	applyDamageToUnit(f.svc, f.victim, p, weapon, 1, 0, f.w, 5)
+	if f.victim.EngagementTarget != f.attacker.Handle {
+		t.Fatalf("the victim's recorded attacker = %d, want the shooter %d [04 R-UNIT-06 §5]", f.victim.EngagementTarget, f.attacker.Handle)
+	}
+	if f.victim.LastDamageSide != f.attacker.Owner {
+		t.Fatalf("the side snapshot must be written with it, got %d", f.victim.LastDamageSide)
+	}
+
+	// No per-tick clear, and no clear when the attacker dies: the link is stale
+	// by design and the READER carries the liveness test [04 R-UNIT-06 §5].
+	f.w.Destroy(f.attacker.Handle, units.DeathKilled)
+	if f.victim.EngagementTarget != f.attacker.Handle {
+		t.Fatalf("the attacker's death must not clear the link, got %d", f.victim.EngagementTarget)
+	}
+
+	// A packet with no attacker leaves the link alone rather than clearing it.
+	before := f.victim.EngagementTarget
+	applyDamageToUnit(f.svc, f.victim, &Projectile{Pos: p.Pos}, weapon, 1, 0, f.w, 6)
+	if f.victim.EngagementTarget != before {
+		t.Fatalf("a null-shooter packet rewrote the link to %d [04 R-UNIT-06 §5]", f.victim.EngagementTarget)
+	}
+}
+
+// TestSlotAutonomyBitPreconditions locks [04 R-UNIT-06 §5 part 3]: the two slot
+// verbs are the only writers of the control byte's bit 4, each with its own
+// precondition, and the offer refuses a slot an order currently holds.
+func TestSlotAutonomyBitPreconditions(t *testing.T) {
+	f := newReactionFixture(t)
+	installSlotWeapon(f.victim, 0, &content.WeaponDef{ID: 1, Range: 400})
+	slot := f.victim.SlotAt(0)
+
+	// Spawn leaves the slot autonomous, so the offer takes it.
+	if slot.OrderControl&units.OrderControlInhibit == 0 {
+		t.Fatal("a slot whose weapon link resolved must be autonomous [04 R-UNIT-06 §5]")
+	}
+	f.svc.ReactToDamage(f.w, f.victim, f.attacker, 5)
+	if slot.Target.Unit != f.attacker.Handle {
+		t.Fatalf("an autonomous slot must take the offer, got %+v", slot.Target)
+	}
+
+	// With the bit clear — an attack order holding the slot — the offer skips
+	// it, whatever its present target.
+	g := newReactionFixture(t)
+	installSlotWeapon(g.victim, 0, &content.WeaponDef{ID: 1, Range: 400})
+	held := g.victim.SlotAt(0)
+	held.OrderControl &^= units.OrderControlInhibit
+	held.Target = units.Target{}
+	g.svc.ReactToDamage(g.w, g.victim, g.attacker, 5)
+	if held.Target.Kind != units.TargetNone {
+		t.Fatalf("a slot held by an order must be skipped, got %+v", held.Target)
 	}
 }

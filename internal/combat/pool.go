@@ -1,6 +1,7 @@
 package combat
 
 import (
+	"github.com/nanolathe/nanolathe/internal/features"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -192,6 +193,14 @@ type Service struct {
 	// 4. The session installs it at composition; with none installed the
 	// routine's four parts are no-ops. See ReactionSeams in damage.go.
 	Reaction *ReactionSeams `json:"-"`
+
+	// Features is the feature runtime the area walk of [06 §9.3] hands its
+	// accepted feature candidates to. Every cell inside a blast offers one, and
+	// the entry it reaches is the feature damage of [06 §13.1] / [05 R-FEAT-01
+	// §8] — the ignition test and the two accumulators. The session installs it
+	// at composition; with none installed a blast reaches units only, which is
+	// what every fixture that does not compose a session gets.
+	Features *features.Service `json:"-"`
 }
 
 // Reserve appends a projectile record at the active-span tail [06 §5.1], [01 §6.1].

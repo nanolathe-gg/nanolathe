@@ -221,8 +221,13 @@ func TestCommitTerrainChecksEachFootprintCell(t *testing.T) {
 	terrain.PlotAt(3, 2).SetMinHeight(18)
 	terrain.PlotAt(3, 2).SetMaxHeight(22)
 	profile := Profile{FootPrintX: 2, FootPrintZ: 1, MinWaterDepth: -10000, MaxWaterDepth: 10000, MaxSlope: 5}
-	if profile.IsPassableFootprint(terrain, 2, 2) {
-		t.Fatal("aggregate classifier should expose the old false rejection")
+	// Both cells span 4 on their own pairs and the aggregate span is 12. The
+	// footprint classifier and the commit validator now agree, because both
+	// are per cell: the aggregate belongs to the structure placement validator
+	// alone [04 R-SLOPE-01 §3]. Before WU-19-46 the footprint side rejected
+	// this anchor while the commit side accepted both its cells.
+	if !profile.IsPassableFootprint(terrain, 2, 2) {
+		t.Fatal("per-cell footprint classifier rejected an anchor whose every cell is legal [04 R-SLOPE-01 §3]")
 	}
 	if !profile.IsPassableCommitCell(terrain, 2, 2) || !profile.IsPassableCommitCell(terrain, 3, 2) {
 		t.Fatal("individually legal footprint cells were rejected")

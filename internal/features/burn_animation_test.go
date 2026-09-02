@@ -473,3 +473,220 @@ func TestBurnSmokeDrawsTwoCRTWithTheGeometrySeamBound(t *testing.T) {
 		t.Fatalf("%d puffs, want 6 [05 R-FEAT-01 §10 pass 3a]", puffs)
 	}
 }
+
+// authoredSequence is a test stand-in for one GAF entry: the per-frame delays
+// the client's resolver reads and the geometry pass 3a scales by. The visit
+// cadence is [05 R-FEAT-01 §10]'s — each frame holds for max(delay, 1) visits.
+type authoredSequence struct {
+	delays []int32
+	frames []burnFrameGeometry
+}
+
+func (a authoredSequence) visits() int32 {
+	total := int32(0)
+	for _, d := range a.delays {
+		if d < 1 {
+			d = 1
+		}
+		total += d
+	}
+	return total
+}
+
+func (a authoredSequence) at(visit int32) burnFrameGeometry {
+	elapsed := int32(0)
+	for i, d := range a.delays {
+		if d < 1 {
+			d = 1
+		}
+		elapsed += d
+		if visit < elapsed {
+			return a.frames[i]
+		}
+	}
+	return a.frames[len(a.frames)-1]
+}
+
+// TestDeathAnimationRetiresAfterTheAuthoredVisitTotal drives the transition
+// with a length that comes from authored frame delays rather than a round
+// number: delays 4, 0, 1 hold for 4 + 1 + 1 = 6 visits [05 R-FEAT-01 §10], and
+// the feature's successor is stamped on the sixth, not the fifth or seventh.
+func TestDeathAnimationRetiresAfterTheAuthoredVisitTotal(t *testing.T) {
+	seq := authoredSequence{
+		delays: []int32{4, 0, 1},
+		frames: []burnFrameGeometry{{W: 20, H: 12, XOff: 7, YOff: 5}, {W: 5, H: 7, XOff: 2, YOff: 3}, {W: 16, H: 24, XOff: -3, YOff: 9}},
+	}
+	if got := seq.visits(); got != 6 {
+		t.Fatalf("fixture lifetime %d, want 6", got)
+	}
+	svc, _ := transitionService(t, 0, true) // sequences named, seam bound below
+	svc.SetAnimationTicks(func(def *content.FeatureDef, selector uint8) int32 {
+		if selector != featureAnimSelectorDie {
+			return 0
+		}
+		return seq.visits()
+	})
+	svc.RemoveFeatureAt(1, 1, CauseDead)
+	inst := svc.InstanceAt(1, 1)
+	if inst == nil || !inst.IsAnimating {
+		t.Fatalf("death transition attached %#v, want an animating record", inst)
+	}
+	for visit := int32(1); visit < seq.visits(); visit++ {
+		svc.TickLifecycle(uint32(visit))
+		if svc.InstanceAt(1, 1) != inst {
+			t.Fatalf("visit %d of %d replaced early [05 R-FEAT-01 §10 pass 3]", visit, seq.visits())
+		}
+	}
+	svc.TickLifecycle(uint32(seq.visits()))
+	got := svc.InstanceAt(1, 1)
+	if got == nil || got.Def == nil || string(got.Def.CanonicalKey) != "stumpdead" {
+		t.Fatalf("successor %v after %d visits, want stumpdead", got, seq.visits())
+	}
+}
+
+// TestBurnSmokeWithAuthoredGeometryKeepsTheDrawBudget runs the jitter against a
+// sequence whose geometry CHANGES as the burn cursor advances — the resolver's
+// job — and locks that the CRT budget is unaffected: two draws per burning
+// instance on every third tick and none on any other [05 R-FEAT-01 §10 pass
+// 3a][01 §7.5].
+func TestBurnSmokeWithAuthoredGeometryKeepsTheDrawBudget(t *testing.T) {
+	seq := authoredSequence{
+		delays: []int32{3, 0, 2},
+		frames: []burnFrameGeometry{{W: 20, H: 12, XOff: 7, YOff: 5}, {W: 5, H: 7, XOff: 2, YOff: 3}, {W: 16, H: 24, XOff: -3, YOff: 9}},
+	}
+	crt := rng.CRTFromState(0xabcdef)
+	sim := rng.SimulationFromState(5)
+	svc := burningFeatureService(t, &crt, &sim, [2]int{2, 2})
+	svc.BurnFrameGeometry = func(_ *content.FeatureDef, visit int32) (int32, int32, int32, int32) {
+		f := seq.at(visit)
+		return f.W, f.H, f.XOff, f.YOff
+	}
+	var puffs [][3]numeric.Fixed
+	svc.BurnSmoke = func(pos [3]numeric.Fixed) { puffs = append(puffs, pos) }
+
+	ref := rng.CRTFromState(0xabcdef)
+	baseX := numeric.FixedFromInt(2*16 + 8)
+	baseY := svc.Terrain.CoarseHeightAt(2, 2)
+	baseZ := numeric.FixedFromInt(2*16 + 8)
+	for tick := uint32(0); tick < 9; tick++ {
+		before := crt.Draws()
+		visit := int32(tick) // BurnTicks is the count of completed visits
+		svc.TickLifecycle(tick)
+		want := uint64(0)
+		if tick%3 == 0 {
+			want = 2
+		}
+		if got := crt.Draws() - before; got != want {
+			t.Fatalf("tick %d consumed %d CRT draws with real geometry, want %d [01 §7.5]", tick, got, want)
+		}
+		if want == 0 {
+			continue
+		}
+		dx, dy := burnSmokeJitter(seq.at(visit), ref.Rand(), ref.Rand())
+		last := puffs[len(puffs)-1]
+		wantPos := [3]numeric.Fixed{baseX.Add(numeric.FixedFromInt(int64(dx))), baseY.Add(numeric.FixedFromInt(int64(dy))), baseZ}
+		if last != wantPos {
+			t.Fatalf("tick %d puff at %v, want %v (frame %v)", tick, last, wantPos, seq.at(visit))
+		}
+	}
+	if len(puffs) != 3 { // ticks 0, 3, 6
+		t.Fatalf("%d puffs over nine ticks, want 3", len(puffs))
+	}
+}
+
+// TestReclaimAtPaysOutAndPlaysTheReclaimSequence locks the payout entry the
+// order executor calls [05 R-WORK-01 §5]: the credit is the definition's own
+// metal and energy pools, unchanged from the terrain-only transition it
+// replaces, and the cell goes through [05 R-FEAT-01 §5] — a definition naming
+// `seqnamereclamate` plays it out and the successor is stamped when the
+// sequence ends, one naming none replaces at once.
+func TestReclaimAtPaysOutAndPlaysTheReclaimSequence(t *testing.T) {
+	const visits = 4
+	for _, tc := range []struct {
+		name       string
+		sequence   bool
+		wantLive   bool
+		wantDefKey string
+	}{
+		{name: "with a reclaim sequence the feature plays it", sequence: true, wantLive: true, wantDefKey: "standingtree"},
+		{name: "without one it replaces at once", sequence: false, wantLive: false, wantDefKey: "smudgereclaim"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, src := transitionService(t, visits, tc.sequence)
+			src.Metal, src.Energy = 100, 250
+			metal, energy, ok := svc.ReclaimAt(1, 1)
+			if !ok || metal != 100 || energy != 250 {
+				t.Fatalf("payout (%v, %v, %v), want the full pools [05 R-WORK-01 §5]", metal, energy, ok)
+			}
+			got := svc.InstanceAt(1, 1)
+			if got == nil || got.Def == nil || string(got.Def.CanonicalKey) != tc.wantDefKey {
+				t.Fatalf("anchor holds %v, want %q", got, tc.wantDefKey)
+			}
+			if got.IsAnimating != tc.wantLive {
+				t.Fatalf("animating=%v, want %v", got.IsAnimating, tc.wantLive)
+			}
+			if !tc.wantLive {
+				return
+			}
+			// The successor lands when the sequence ends, not before.
+			for visit := uint32(1); visit < visits; visit++ {
+				svc.TickLifecycle(visit)
+			}
+			if svc.InstanceAt(1, 1) != got {
+				t.Fatal("the successor was stamped before the sequence ended")
+			}
+			svc.TickLifecycle(visits)
+			final := svc.InstanceAt(1, 1)
+			if final == nil || final.Def == nil || string(final.Def.CanonicalKey) != "smudgereclaim" {
+				t.Fatalf("successor %v, want smudgereclaim [05 R-FEAT-01 §5 step 6]", final)
+			}
+		})
+	}
+}
+
+// TestReclaimAtRefusesTwice locks the payout guard [05 R-FEAT-01 §15]: a cell
+// already playing its reclaim sequence pays nothing more, so a second visit of
+// the executor cannot double-credit while the animation runs.
+func TestReclaimAtRefusesTwice(t *testing.T) {
+	svc, src := transitionService(t, 4, true)
+	src.Metal, src.Energy = 60, 90
+	if _, _, ok := svc.ReclaimAt(1, 1); !ok {
+		t.Fatal("first payout refused")
+	}
+	if metal, energy, ok := svc.ReclaimAt(1, 1); ok || metal != 0 || energy != 0 {
+		t.Fatalf("second payout (%v, %v, %v) while the sequence ran, want none", metal, energy, ok)
+	}
+}
+
+// TestSparkCountdownHalvesTheCompiledTicks locks the correction of
+// [05 R-FEAT-01 §9] step 4: the compiled `sparktime` field already holds
+// seconds × 30 truncated, so the countdown halves THAT — the shipped 5 stores
+// 150 and gives 75..149 visits, not the 2 or 3 the superseded text claimed.
+func TestSparkCountdownHalvesTheCompiledTicks(t *testing.T) {
+	for seed := uint32(1); seed <= 24; seed++ {
+		terrain := newEmptyTerrain(4, 4)
+		def := featureDef("torchtree", 0, 0, 10)
+		def.Flamable = true
+		def.SeqNameBurn = "burn"
+		def.SparkTime = 150 // the shipped 5 seconds, compiled to ticks
+		sim := rng.SimulationFromState(seed)
+		svc := NewService(terrain, &sim, nil, nil)
+		if svc.spawnFeatureAt(1, 1, def) == nil {
+			t.Fatal("spawn rejected")
+		}
+		before := sim.Draws()
+		if !svc.Ignite(1, 1, 1, 5) {
+			t.Fatalf("seed %d: ignition refused", seed)
+		}
+		if got := sim.Draws() - before; got != 1 {
+			t.Fatalf("seed %d: ignition consumed %d draws, want one", seed, got)
+		}
+		inst := svc.InstanceAt(1, 1)
+		if inst == nil || !inst.IsBurning {
+			t.Fatalf("seed %d: not burning", seed)
+		}
+		if inst.BurnCountdown < 75 || inst.BurnCountdown > 149 {
+			t.Fatalf("seed %d: countdown %d, want 75..149 [05 R-FEAT-01 §9]", seed, inst.BurnCountdown)
+		}
+	}
+}

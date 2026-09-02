@@ -23,6 +23,13 @@ import (
 // producer [04 R-ORD-01 §6] could not locate, closed by [04 R-MOV-03 §7].
 const observerNotice uint32 = 0x10
 
+// staticSlotKeeper is bit 16 of a descriptor's static gate mask: a record
+// carrying it is exempt from the record destructor's "return all three slots"
+// step [04 R-UNIT-06 §5 part 3]. The rows that carry it in this build's table
+// are the two activation rows, the two cloak toggles, the two standing-order
+// rows and `BuildingBuild` — none of which ever takes a weapon slot.
+const staticSlotKeeper uint32 = 1 << 16
+
 // staticTargetObserver is static gate-mask bit 9. A record constructed without
 // a target unit has it cleared, and the record constructor unlinks the observer
 // node again when it is clear, so a record whose descriptor does not carry

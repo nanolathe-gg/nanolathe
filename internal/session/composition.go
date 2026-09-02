@@ -503,6 +503,12 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 			}
 			return s.Units.Unit(h)
 		},
+		// The one-directional row read the guard's combat join needs
+		// [04 R-UNIT-06 §1][05 R-SHARE-01 §1]; `Hostile` below stays the
+		// symmetric predicate the command resolver asks for [04 R-ORD-02 §1].
+		DeclaresAlliance: func(from, toward uint8) bool {
+			return s.Econ.DeclaresAlliance(from, toward)
+		},
 		Hostile: func(actor, target *units.Unit) bool {
 			if actor == nil || target == nil {
 				return false
@@ -646,6 +652,15 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 		},
 		Movement: movementGoals,
 		World:    worldQueries,
+		// The reclaim payout's cell entry [05 R-WORK-01 §5]. Reading it at CALL
+		// time keeps the binding independent of whether the feature service has
+		// been composed yet.
+		ReclaimFeature: func(cx, cz int) (float32, float32, bool) {
+			if s.Features == nil {
+				return 0, 0, false
+			}
+			return s.Features.ReclaimAt(cx, cz)
+		},
 		// Command code 14's gate: the definition's compiled build list is
 		// non-empty [04 R-ORD-02 §1]. The pages are the `CANBUILD` sections of
 		// gamedata/sidedata.tdf, keyed by the builder's canonical unit name
@@ -1114,6 +1129,14 @@ func createAndBindServices(s *Session) error {
 		s.Combat = &combat.Service{}
 	}
 	s.Build.Combat = s.Combat
+	// The area walk of [06 §9.3] offers a feature candidate in every covered
+	// cell, and the entry it reaches is the feature damage of [06 §13.1]. The
+	// combat service holds no feature runtime of its own, so the composer hands
+	// it the one built above. This sits with the combat construction rather
+	// than in the feature block, because the feature service is composed first
+	// and Combat does not exist yet there; with none bound a blast reaches
+	// units only.
+	s.Combat.Features = s.Features
 	s.Build.World = s.Units
 	// The damage funnel's three control-byte gates read the player slot's
 	// control byte, never the unit's own owner byte [06 R-DMG-01 §8]. The byte
@@ -1683,7 +1706,50 @@ func (s *Session) bindFeatureStripProducers() {
 			s.appendStripSmokePuffer(stripBurningFeatureSmoke, pos, SmokePuffTrail)
 		}
 	}
+	// The two art-backed seams read the session's feature-sequence resolver at
+	// CALL time, not at bind time: the shell installs the resolver when it
+	// attaches the client, which can happen either side of this composition.
+	// A session with no resolver answers "unknown" — zero geometry, which
+	// makes pass 3a's addends zero, and zero visits, which keeps the
+	// transition of [05 R-FEAT-01 §5] on step 3's immediate replacement.
+	if s.Features.BurnFrameGeometry == nil {
+		s.Features.BurnFrameGeometry = func(def *content.FeatureDef, visit int32) (w, h, xoff, yoff int32) {
+			if s.featureSequence == nil || def == nil || def.SeqNameBurn == "" {
+				return 0, 0, 0, 0
+			}
+			w, h, xoff, yoff, _, ok := s.featureSequence(def.Filename, def.SeqNameBurn, visit)
+			if !ok {
+				return 0, 0, 0, 0
+			}
+			return w, h, xoff, yoff
+		}
+	}
+	if s.Features.AnimationTicks == nil {
+		s.Features.AnimationTicks = func(def *content.FeatureDef, selector uint8) int32 {
+			if s.featureSequence == nil || def == nil {
+				return 0
+			}
+			sequence := def.SeqNameDie
+			if selector == featureAnimSelectorReclaim {
+				sequence = def.SeqNameReclamate
+			}
+			if sequence == "" {
+				return 0
+			}
+			_, _, _, _, visits, ok := s.featureSequence(def.Filename, sequence, 0)
+			if !ok {
+				return 0
+			}
+			return visits
+		}
+	}
 }
+
+// featureAnimSelectorReclaim is the animating save selector of the reclaim
+// sequence: 0 burn, 1 death, 2 reclaim [R-SAVE-FEATURE-01]. The features
+// package keeps the same vocabulary unexported; this is the one value the
+// composer needs to pick a definition's sequence name.
+const featureAnimSelectorReclaim uint8 = 2
 
 // stripBurningFeatureSmoke is the literal strip index the burning-feature
 // producer passes [R-STRIP-01 §1 strip 5].

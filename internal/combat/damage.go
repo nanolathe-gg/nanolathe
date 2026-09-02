@@ -444,19 +444,19 @@ type ReactionSeams struct {
 	UnderAttackNotice func(victim *units.Unit)
 }
 
-// slotTrackingFlag is bit 4 of a weapon slot's flag byte — the tracking flag of
-// the two persisted slot flags [06 §1.2][08 R-SAVE-WEAPON-01].
+// The slot autonomy bit is units.OrderControlInhibit. [04 R-UNIT-06 §5 part 3]
+// answers what this file's `slotTrackingFlag` constant recorded as unknown:
+// [R-ORDER-02 §2]'s "slot control byte" and [08 R-SAVE-WEAPON-01]'s persisted
+// slot-flag byte ARE one byte, whose bit 1 is *slot enabled* and whose bit 4 is
+// the one [R-ORD-01 §7] called the "inhibit latch" and [06 §1.2] called
+// "tracking". A build modelling them as two fields must collapse them to this
+// one bit, so the separate constant is gone and every reader here reads the
+// control byte.
 //
-// TODO(question): nothing in this build SETS it (the only writer is the manual
-// target path, which clears it), so the autonomous scan of [06 §3.2] does not
-// test it either and neither does the offer below; both would otherwise be dead
-// code. The unresolved question is the one already recorded beside the
-// autonomous scan in service.go — whether [R-ORDER-02 §2]'s "slot control byte"
-// and [08 R-SAVE-WEAPON-01]'s persisted slot-flag byte are one byte, which
-// would make *release*/*inhibit* the writers of this bit. Decider: a trace of
-// the two order-side helpers' stores against the byte the save writer
-// serializes.
-const slotTrackingFlag uint8 = 0x10
+// Set means the slot belongs to AUTONOMOUS acquisition; the two slot verbs are
+// its only writers, and their names read inverted against their effect —
+// *release* takes the slot for an order's own target (clearing the bit) and
+// *inhibit* hands it back (setting it).
 
 // ReactToDamage is the damage-intake reaction routine of [06 §9.1] step 4,
 // closed at [06 R-WPN-04 §2]. It runs for every accepted non-heal packet whose
@@ -583,8 +583,15 @@ func (s *Service) offerAttackerToSlots(w *units.World, victim, attacker *units.U
 		if slot == nil || !slot.IsPopulated() {
 			continue
 		}
-		// The tracking half of the two persisted slot flags has no producer in
-		// this build; see slotTrackingFlag's TODO(question).
+		// "for each slot whose armed and tracking bits are set" — the tracking
+		// half is the control byte's autonomy bit [04 R-UNIT-06 §5 part 3], and
+		// the test is load bearing: a slot an attack order currently holds must
+		// not be handed the attacker, and becomes eligible again the moment the
+		// record destructor returns it. It was skipped while §1 left the bit's
+		// writers open; §5 closes them.
+		if slot.OrderControl&units.OrderControlInhibit == 0 {
+			continue
+		}
 		if slot.Weapon.CommandFire {
 			continue // "and the weapon is not `commandfire`" [06 R-WPN-04 §2]
 		}
@@ -595,10 +602,11 @@ func (s *Service) offerAttackerToSlots(w *units.World, victim, attacker *units.U
 			continue
 		}
 		// The unit-target setter preserves the Aim latch and the asynchronous
-		// Aim result [06 §3.2]; only the target pair and the armed/has-target
-		// bit are written.
+		// Aim result and writes ONLY the target pair [06 §3.2]: "the unit-target
+		// and point-target setters write only the target pair; they do not touch
+		// the control byte" [04 R-UNIT-06 §5 part 3]. An `armed` OR stood here
+		// with no retail counterpart — the setters write no flag byte at all.
 		slot.Target = units.Target{Kind: units.TargetUnit, Unit: attacker.Handle}
-		slot.Flags |= 0x02
 	}
 }
 

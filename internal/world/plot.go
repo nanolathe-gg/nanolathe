@@ -44,9 +44,13 @@ func (p PlotCell) Height() uint8 { return p[4] }
 // MinHeight returns the derived floor minimum at byte 0x06. Byte order is the
 // runtime field convention: byte 0x05 carries the max and byte 0x06 the min
 // (notes/terrain/01_attribute_cells.md §3.2 rows 5/6; slope gates read byte 5 as
-// the max). The low two bits of hmin are cleared at allocation, before the
-// first recompute, so the mask is not observable in a loaded map
-// [02 "Map files" row 0x06].
+// the max).
+//
+// Corrected 2026-09-02: this said "the low two bits of hmin are cleared at
+// allocation". They are not. The plot allocation loop clears bits 0 and 1 of
+// the FLAG byte at offset 0x0C and never touches the derived minimum; the
+// earlier reading came from a two-byte-unit pointer offset read as a byte
+// offset [04 R-SLOPE-01 §1][03 R-TERR-01 §1][02 "Map files" row 0x06].
 func (p PlotCell) MinHeight() uint8 { return p[6] }
 
 // MaxHeight returns the derived floor maximum at byte 0x05 [GAP T14][02 "Terrain file"].
@@ -360,15 +364,22 @@ func ExpandPlot(attrs []formats.TNTAttribute, cellW, cellH int) []PlotCell {
 // same sample the "x+1 < W / z+1 < H" edge guard selects. The previous text
 // here called the rule unknown; it is not, and the TODO(question) is retired.
 //
+// Retail's own pass clips its extent to W−1 and H−1 exclusive, so its last
+// column and last row keep whatever the plot allocation held. That is
+// unobservable: those strips are voided, and no footprint validator accepts a
+// rectangle reaching them, so this inward clamp differs from retail only on
+// cells no footprint can occupy [04 R-SLOPE-01 §1]. The height byte itself is
+// untransformed between the TNT record and this pass — no scaling, shift or
+// map height scale [04 R-SLOPE-01 §1][fmt tnt].
+//
 // This pair is load-bearing far beyond the coarse height query: the movement
-// classifier's slope is `hmax − hmin` aggregated as min-of-mins/max-of-maxes
-// over the class footprint rectangle [04 §6.1 R-DOC04-B step 6], so a 2×2
-// footprint is judged on the height range across a 3×3 corner grid. On stock
-// content that window is what decides whether a movement class can leave a
-// plateau at all — see the WU-19-41 note in
-// internal/session/ai_e2e_retail_test.go for a measured case where two height
-// bytes separate "vehicles roam the map" from "vehicles are penned in their
-// start pocket".
+// classifier's slope is `hmax − hmin` of ONE cell's own pair, and a footprint
+// takes the minimum tier over its cells — not a height span aggregated over
+// the rectangle [04 R-SLOPE-01 §2-§3]. Reading it as an aggregate judged a 2×2
+// class on the height range across a 3×3 corner grid, which is strictly
+// harsher and penned stock vehicles into their start plateau on `ashap
+// plateau`; see internal/movement/profile_footprint.go and the WU-19-46 note
+// in internal/session/ai_e2e_retail_test.go.
 func deriveFloorPair(plot []PlotCell, cellW, cellH int) {
 	at := func(x, z int) uint8 {
 		if x >= cellW {

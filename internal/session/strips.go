@@ -1254,3 +1254,22 @@ func (s *Session) SetEffectEntryFrameCount(resolve func(bank, entry string) (int
 	s.effectFrameCount = resolve
 	s.resolveSmokeFrameCounts()
 }
+
+// SetFeatureSequenceResolver installs the resolver the FEATURE phase asks for
+// a definition's animation sequence — the burn frame's geometry and the
+// die/reclaim/burn lifetime of [05 R-FEAT-01 §10]. It is the same shape as the
+// two effect resolvers above and is filled by the same composer, from the same
+// process's asset cache, so the frames the draw pass blits and the frames the
+// simulation counts can never come apart.
+//
+// Unlike the effect resolvers this one feeds AUTHORITATIVE state: the visit a
+// feature's death animation ends on is when its successor is stamped. That is
+// sound because the answer depends on nothing but the asset bytes, and it is
+// why the resolver must be installed before the battle composes rather than at
+// the first draw.
+func (s *Session) SetFeatureSequenceResolver(resolve func(filename, sequence string, visit int32) (w, h, xoff, yoff, visits int32, ok bool)) {
+	if s == nil {
+		return
+	}
+	s.featureSequence = resolve
+}

@@ -7041,6 +7041,18 @@ established and are unchanged.
 
 **Established fact:** A movement profile classifies a footprint rectangle against map bounds, blocking features, terrain height span, sea level, slope, and water-depth thresholds. The footprint validator aggregates `min of mins` and `max of maxes` across the rectangle, selects the water-vs-land slope branch by whether the footprint is entirely above water (sea level at or below the footprint minimum chooses movement class MaxSlope, otherwise MaxWaterSlope), and tests passability with strict `<` (`slope == limit` and depth == limit pass). `BadSlope` and `BadWaterSlope` do not block in the validator — they are soft cost tiers.
 
+**Corrected by [R-SLOPE-01] (2026-09-01).** The paragraph above says the footprint
+validator "aggregates `min of mins` and `max of maxes` across the rectangle" and
+selects the slope pair "by whether the footprint is entirely above water". Both
+clauses are wrong for movement: every movement-side classifier — the map-load layer
+stamp, the rectangle restamp, and both commit validators — tests **each cell on its
+own derived pair** and combines cells by taking the **minimum tier** over the
+footprint; the land/water pair is chosen per cell. The height aggregate exists only
+in the structure placement validator's yard-map walk ([R-P0-08]) and the spawner
+height probe ([08 R-ENTRY-02 §1]), from which the earlier text generalized. The
+comparison strictness in the paragraph is correct. See [R-SLOPE-01] §3 for the
+exact rule and the measured consequence.
+
 The classifier yields three terrain states:
 
 - blocked;
@@ -7062,6 +7074,12 @@ separately from the packed terrain value.
 **Established — the per-cell passability classifier [R-DOC04-B] (2026-08-27).** One
 comparison chain produces the 2-bit value, and it is the contract both for the map-load stamp
 (single-cell form) and for rectangle restamps (footprint form over the same record fields).
+*(Precision added by [R-SLOPE-01] (2026-09-01): "footprint form" does not mean a height
+aggregate over the rectangle. The restamp runs this same per-cell chain on each covered
+cell's own `hmin`/`hmax` and keeps the minimum tier; the map-load stamp does the same
+through a separable window minimum. The earlier phrase "single-cell form" for the
+map-load stamp understated it: the stamped value is already the footprint minimum,
+which is why the search probe reads only the anchor cell.)*
 Per attribute cell, in order, all comparisons on the derived 2×2 heights `hmin`/`hmax` (the
 per-cell derived minimum/maximum of §6.1's plot expansion):
 
@@ -7124,6 +7142,124 @@ effect is: units that committed occupancy within the last 30 ticks do not block 
 tick predates the watermark blocks any cell it occupies that is re-stamped afterwards. This
 is the dynamic-blocker channel of §7.4 ("passability is rechecked lazily") — existing heap
 entries are re-tested against the revised layer on expansion.
+
+### Closed — the height byte's path into the movement slope test, and the footprint rule [R-SLOPE-01] (2026-09-01)
+
+Status: **Established** throughout — a static trace of the map loader's plot fill,
+the derived-pair pass, the per-cell classifier, the map-load layer builder, the
+rectangle-restamp family, both movement commit validators and the search probe,
+checked numerically against the reference install on `ashap plateau` (§4). Closes
+the "height scaling" item that `[fmt tnt]` left open and the WU-19-41 question.
+
+**§1 The height byte is untransformed.** The loader copies the attribute record's
+height byte (byte 0 of both the canonical 4-byte and the legacy 8-byte record) into
+the plot cell's height byte **verbatim**: no scaling, shift, doubling or map height
+scale anywhere between the file and the plot. The sea level the classifiers compare
+against is the header's sea-level slot truncated to a byte ([03 R-TERR-01 §1]). The
+derived pair is produced by one rectangle pass over the whole map after the fill,
+the same pass the building stamp/unstamp reuses on a footprint-plus-ring rectangle
+([03 R-TERR-01 §3]):
+
+* per cell `(x, z)` the pass takes the minimum and maximum over the height bytes of
+  the cell itself, its east neighbour when `x < W−1`, its south neighbour when
+  `z < H−1`, and the south-east neighbour when both hold; the maximum is stored in
+  the plot cell's byte after the height byte and the minimum in the byte after that
+  (`[02 "Map files"]` plot-cell table, offsets `0x05`/`0x06`);
+* the pass clips its extent to `W−1` and `H−1` **exclusive**, so the last column
+  and the last row never receive a derived pair from the full pass; those two bytes
+  keep whatever the plot allocation held (the plot allocation is a plain heap block,
+  not zero-filled). This is unobservable: both edge columns and the edge rows are
+  voided by the strip pass ([03 R-TERR-01 §2]), and every footprint validator
+  rejects a rectangle that reaches column `W−1` or row `H−1` anyway. Nanolathe's
+  inward-clamping edge rule therefore differs from retail only on cells no
+  footprint can occupy — **Established, no action**;
+* the allocation-time loop clears bits 0 and 1 of the **flag byte** (offset `0x0C`),
+  as [03 R-TERR-01 §1] states; it does not touch the derived minimum. Document 02's
+  plot table row `0x06` said "low two bits cleared to zero at allocation before the
+  first recompute" — a misreading of a two-byte-unit pointer offset as a byte offset
+  (six two-byte units is the flag byte). Corrected in place there.
+
+**§2 The per-cell slope is the cell's own pair.** In the per-cell classifier of
+[R-DOC04-B], `slope = hmax − hmin` is an 8-bit unsigned subtraction of the cell's
+own derived bytes; the deep and shallow gates compare the same cell's `hmin`/`hmax`
+as signed 32-bit against `SeaLevel − MaxWaterDepth` / `SeaLevel − MinWaterDepth`;
+the medium split is `hmin < SeaLevel` → water pair, else land pair; the tier chain
+is exactly [R-DOC04-B] step 6 — `slope <= Bad` → 3 clear, `slope > Max` → 0
+blocked, otherwise 1 steep (re-verified against the return paths: the clear return
+is the literal 3, the other two are 0/1). The comparison against `MaxSlope` is
+strict: a slope equal to the limit is steep, never blocked.
+
+**§3 The footprint rule is the minimum of per-cell tiers, never a height
+aggregate.** Writing `c(x, z)` for the per-cell tier (0 for any cell outside the
+map) and `fx × fz` for the class footprint:
+
+1. **Map-load layer builder.** Two separable passes over a scratch row. Row pass, per
+   row `z`: `r1(x, z) = min c(i, z)` for `i` in `[x, x+fx−1]`; if `r1 = 3` and
+   either `c(x−1, z) < 3` or `c(x+fx, z) < 3`, the stamped value is 1 instead.
+   Column pass, per column `x`, reading the row-pass values back out of the layer:
+   `r2(x, z) = min r1(x, j)` for `j` in `[z, z+fz−1]`; if `r2 = 3` and either
+   `r1(x, z−1) < 3` or `r1(x, z+fz) < 3`, stamp 1 instead; otherwise stamp `r2`.
+   The window minimum is computed with a running minimum that is recomputed over
+   the window only when the departing cell was at or below it — the value is the
+   plain window minimum. Closed form of the stamped anchor value: **0** iff any
+   footprint cell is 0; **3** iff every cell of the `(fx+2) × (fz+2)` rectangle
+   (footprint plus one-cell ring) is 3; **1** otherwise. This is what [R-DOC04-B]'s
+   "two-direction contagion pass" is.
+2. **Rectangle restamp** ([R-MOV-03 §3]): the rectangle classifier walks the
+   footprint cells, applies §2's chain to each cell's own pair, and returns the
+   minimum tier (a 0 returns immediately; a steep cell lowers 3 to 1); the footprint
+   classifier then demands all four one-cell ring strips be 3 to keep a 3. A
+   rectangle whose extent reaches column `W−1` or row `H−1` is 0 outright, whereas
+   the map-load window only zeroes anchors whose footprint *leaves* the map — a
+   last-column difference the void strips make unobservable.
+3. **Search probe** ([R-DOC04-B] "path-search consumption"): reads the layer at the
+   anchor cell only; the footprint is already folded into the stamped value.
+4. **Commit validators**: the mobile footprint validator is per cell on the unit
+   definition's own limits ([R-COLL-01 §2]); the unit-position variant used by the
+   position fixup likewise compares each cell's `hmax − hmin` against the
+   definition's `MaxSlope` alone.
+
+Bounded census: every routine that reads the sea-level byte together with both
+slope bytes of a class record is one of the two per-cell classifier bodies (single
+cell and rectangle). The only rectangle-wide `min of mins` / `max of maxes` over
+derived pairs in the executable are the structure placement validator's yard-bit-3
+walk ([R-P0-08], land `MaxSlope` only, no water pair) and the spawner height probe
+([08 R-ENTRY-02 §1]), neither of which is a movement test.
+
+**What the earlier text said and why it was wrong.** §6.1's "Established fact: A
+movement profile classifies a footprint rectangle … aggregates `min of mins` and
+`max of maxes` across the rectangle, selects the water-vs-land slope branch by
+whether the footprint is entirely above water", [R-DOC04-B]'s "(footprint form over
+the same record fields)", [R-COLL-01 §8] item 1's "The aggregate form … belongs to
+the class-layer classifier", and document 02's "Validation aggregates `min of mins`
+and `max of maxes` across the footprint rectangle" all carried the structure
+validator's aggregate into the movement classifiers. Consequence of the confusion:
+a 2×2 class is judged by retail on four 2×2 corner quads (each spanning two corners
+per axis) and by the aggregate on the 3×3 corner window; the aggregate range is at
+least every quad's range, so the aggregate is strictly harsher and the gap grows
+with the footprint.
+
+**§4 Verification against the reference install (`ashap plateau`, TANKSH2:
+2×2, `MaxSlope` 15, `BadSlope` 7, `MaxWaterDepth` 12; sea level 1).** Nanolathe's
+interior derived pairs equal §1's rule at every cell (0 mismatches over the
+257 × 263 interior). Anchors passable to the class: 53 901 under §3, 50 516 under
+the aggregate. Flood from the computer player's start cell (53, 231): **53 370**
+anchors under §3 (the human start at (219, 19) is reachable) against 2 735 under
+the aggregate. Three rim anchors, corner heights listed as rows `z..z+2` × columns
+`x..x+2`:
+
+| anchor | corner heights | per-cell slopes (tiers) | aggregate slope | retail | aggregate |
+|---|---|---|---|---|---|
+| (48, 213) | 225 224 225 / 233 232 232 / 241 241 240 | 9, 8, 9, 9 (all steep) | 17 | steep, passable | blocked |
+| (34, 208) | 228 229 235 / 236 240 241 / 242 242 244 | 12, 12, 6, 4 (1, 1, 3, 3) | 16 | steep, passable | blocked |
+| (20, 221) | 225 234 236 / 232 238 240 / 240 242 243 | 13, 6, 10, 5 (1, 3, 1, 3) | 18 | steep, passable | blocked |
+
+Retail's arithmetic yields ≤ 15 on every cell of each rim anchor, so a TANKSH2 unit
+may enter all three; the plateau is not a pocket. **Nanolathe divergence:** the
+class-layer stamp and the aggregate footprint predicate implement the height
+aggregate; the fix is to classify each covered cell on its own pair and take the
+minimum tier (with the ring demotion of §3 item 1), leaving the per-cell commit
+validator as it is.
 
 ### 6.2 Footprints and yard maps
 
@@ -9733,9 +9869,11 @@ Therefore:
    height, depth, and slope gates run after the scan". Wrong: in the mobile
    validator every gate is per cell inside the scan, in the order feature →
    occupant → deep → shallow → slope (§2). The aggregate form (`min of mins`,
-   `max of maxes`) belongs to the class-layer classifier ([R-DOC04-B]) and to
-   the yard-map placement validator ([R-P0-08]), which the earlier text
-   conflated with the commit path.
+   `max of maxes`) belongs to the yard-map placement validator ([R-P0-08]),
+   which the earlier text conflated with the commit path. *(This item first
+   also attributed the aggregate to the class-layer classifier ([R-DOC04-B]);
+   [R-SLOPE-01] (2026-09-01) shows the layer classifier is per cell too — the
+   footprint takes the minimum tier over its cells, not a height aggregate.)*
 2. **[R-MOV-01 §1]** listed "the tick of its last committed position" among
    the mover's state. The word is written before validation and on blocked
    ticks (§1); it is the last-*proposal* tick. The last-*stamp* tick is a

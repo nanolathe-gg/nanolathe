@@ -1515,8 +1515,16 @@ func (s *Service) ExplodeWeaponAt(w *units.World, terrain *world.Terrain, weapon
 		u       *units.Unit
 		dist    int32
 		falloff float32
+		// feature marks a recipient that is a FEATURE anchor rather than a
+		// unit; fcx/fcz are then the anchor cell [05 R-FEAT-01 §8].
+		feature  bool
+		fcx, fcz int
 	}
 	var victims []victim
+	// The feature walk is skipped entirely by `unitsonly` [06 §9.3][05
+	// R-FEAT-01 §8], and needs the feature runtime the session installs.
+	featureWalk := !weapon.UnitsOnly && s != nil && s.Features != nil
+	var featDedup FeatureDedup
 	EnumerateArea(impact, radius, mapW, mapH, func(cx, cz int32) {
 		for _, u := range w.Iter() { // deterministic pool asc (I1)
 			if u == nil || !u.Alive || u.Dying {
@@ -1571,6 +1579,40 @@ func (s *Service) ExplodeWeaponAt(w *units.World, terrain *world.Terrain, weapon
 			}
 			victims = append(victims, victim{h: u.Handle, u: u, dist: dist, falloff: falloff})
 		}
+		// "Within each cell the order is unit slot zero, unit slot one, then
+		// the feature/terrain candidate" [06 §9.3]. The feature therefore joins
+		// the SAME ordered recipient list, after this cell's units and before
+		// the next cell's, which is what fixes the position of an ignition's
+		// simulation draw relative to the unit damage around it (I4).
+		if !featureWalk {
+			return
+		}
+		cand, ok := s.Features.AreaCandidateAt(int(cx), int(cz))
+		if !ok {
+			return
+		}
+		// The distance is measured to the candidate's reference point with the
+		// same truncate-and-narrow form units use, and accepted on the same
+		// strict `< R` [06 §9.3][06 R-WPN-04 §3].
+		fdist := DistanceToBox(impact, UnitForArea{
+			Pos: Vec3{X: cand.X, Y: cand.Y, Z: cand.Z},
+			Min: Vec3{X: cand.X, Y: cand.Y, Z: cand.Z},
+			Max: Vec3{X: cand.X, Y: cand.Y, Z: cand.Z},
+		})
+		if fdist >= radius {
+			return
+		}
+		// Unlike the unit walk, the distance is tested BEFORE deduplication
+		// [06 §9.3], so an out-of-radius first sighting never consumes one of
+		// the sixty-four ANCHOR entries — the memory holds anchors, not covered
+		// cells, which is what makes one blast damage a multi-cell footprint
+		// once rather than once per cell it covers. A blast covering more than
+		// 64 distinct anchors stops remembering, and the 65th onward can be hit
+		// once per covered cell [05 R-FEAT-01 §8].
+		if featDedup.SeenFeature(int32(cand.CX), int32(cand.CZ)) {
+			return
+		}
+		victims = append(victims, victim{feature: true, fcx: cand.CX, fcz: cand.CZ, dist: fdist})
 	})
 	if terrain == nil || mapW == 0 {
 		// Fallback when no terrain map (mirrors TickProjectiles fallback) — planar dist2 check, no float64
@@ -1594,6 +1636,21 @@ func (s *Service) ExplodeWeaponAt(w *units.World, terrain *world.Terrain, weapon
 	}
 	// Apply deterministically in collected order (EnumerateArea rows Z asc, cols X asc, Iter pool asc) [I1]
 	for _, vi := range victims {
+		if vi.feature {
+			// The feature damage entry [06 §13.1][05 R-FEAT-01 §8]: the
+			// weapon's authored DEFAULT damage word exactly — no area falloff,
+			// no armour table, no veterancy, no global double/half gate — and
+			// the firestarter byte, whose only reader is the ignition test and
+			// which carries no roll of its own. Ignition takes precedence: a
+			// flammable feature hit by a firestarter weapon never accumulates
+			// damage on that hit. Service.Ignite is that whole cascade.
+			//
+			// Step 1's global settings bit is not modelled: its only writer
+			// sets it unconditionally at startup and nothing clears it, so the
+			// gate is always open in retail [05 R-FEAT-01 §8 step 1].
+			s.Features.Ignite(vi.fcx, vi.fcz, weapon.Firestarter, weapon.DamageDefault)
+			continue
+		}
 		cand := vi.u
 		if cand == nil || !cand.Alive || cand.Dying {
 			continue
@@ -1642,6 +1699,24 @@ func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weap
 	// reached. Any later known weapon intake clears a stale reclaim bite
 	// marker, including paralyzer packets that do not reduce health [06 §9.1].
 	victim.LastDamageCause = uint8(CauseOrdinary)
+	// The recorded-attacker link of [04 R-UNIT-06 §5 part 1], which §5 gives as
+	// an implementation rule: on every damage application that passes the
+	// dispatcher's gates, when the packet is not a heal and the attacker id is
+	// nonzero, store the attacker and its owner byte — after the reaction
+	// routine and before the paralyze and health arms, which is exactly here.
+	//
+	// The id is stored, not the pointer, and it is stored whether or not the
+	// slot it names is still live: §5's writer table admits "the pool slot that
+	// id names, whether or not it is live", and there is no per-tick clear and
+	// no clear when the attacker dies. Readers check liveness themselves.
+	//
+	// This is the producer WU-19-35 recorded as missing for the guard's legs 1
+	// and 2 [04 R-UNIT-06 §1]: the link is what the guard attacks and what it
+	// points its free weapon slots at, so without it a guard never joins its
+	// ward's fight. The side snapshot beside it was already written here.
+	if p.Shooter != 0 && victim.Alive && !victim.Dying {
+		victim.EngagementTarget = p.Shooter
+	}
 	if shooter != nil {
 		victim.LastDamageSide = shooter.Owner
 	} else {

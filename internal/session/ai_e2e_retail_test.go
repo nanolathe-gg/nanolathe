@@ -102,73 +102,50 @@ func aiE2ESkirmishAt(t *testing.T, mapName string, seed uint32, difficulty int) 
 // merge leash is 50,000 rather than 20,000 — never held the six members its
 // engage threshold needs [08 R-P0-04 §3][08 R-AI-01 §4].
 //
-// The difficulty is pinned to Hard, and that is a statement of what this gate
-// currently proves rather than a knob. Until WU-19-32 bound the session's
-// difficulty word, ai.Profile picked its plan gate with a "last plan the file
-// names" fallback, which is `hard` in all ten stock profiles — so every number
-// this test has ever been tuned against was measured against ai/default.txt's
-// hard tables. Pinning Hard keeps the measured contract intact while the word
-// becomes real everywhere else.
+// It runs at both difficulties that decide what the wave is made of: Hard,
+// whose tables build Thuds (movement class KBOTSS2, MaxSlope 32), and Medium,
+// the lobby's missing-value default, whose tables build level-1/2 ground
+// vehicles (TANKSH2/TANKSH3, MaxSlope 15) [08 R-AI-01 §12].
 //
-// WU-19-41 settled why the lobby default, Medium, does not finish the idle
-// commander on this map, and the answer is not in the computer player. It is
-// terrain, and the difficulty word only decides which movement class the wave
-// is made of.
+// Medium used to be un-runnable here and the test pinned Hard. WU-19-41
+// measured why: on `ashap plateau` the computer player's start plateau was a
+// closed 2735-cell pocket for TANKSH2, every rim cell rejected by the slope
+// gate, so the wave formed at 20400, engaged, was issued `Attack_Chase` at the
+// idle commander — and never moved, because every route request failed at
+// [04 R-PATH-01 §4] step 9. That was our defect, not the map's rim. WU-19-46
+// applied [04 R-SLOPE-01]: the movement classifiers test each covered cell on
+// its own derived pair and take the MINIMUM tier over the footprint, where
+// Nanolathe had aggregated the footprint's heights as min-of-mins/max-of-maxes
+// and classified that one span. The aggregate is strictly harsher, and it was
+// what walled the plateau in. The rim anchors the finding lists — (48,213),
+// (34,208), (20,221) — carry per-cell slopes 9/8/9/9, 12/12/6/4 and 13/6/10/5,
+// all under the authored 15, against 3×3 aggregates of 17, 16 and 18.
 //
-// What the instrumented Medium run shows. The wave forms and engages: at tick
-// 20400 wave A holds seven members, the engage arm of [08 R-AI-01 §4] latches
-// (min 3 < n, max 6 <= n), the nearest-hostile helper picks the idle commander,
-// and every member is issued `Attack_Chase` at it and turns to the correct
-// bearing at full speed. None of them moves. Their path requests come back
-// rejected — the ray of [04 R-PATH-01 §5] returns an acceptance threshold equal
-// to the start's own scaled heuristic, so [04 R-PATH-01 §4] step 9 publishes
-// empty and never seeds the A* — and they stand at the same coordinates from
-// tick 20700 to tick 60000 with the order still current.
-//
-// The rejection is correct. The Medium tables build level-1/2 ground vehicles,
-// whose stock movement class is TANKSH2/TANKSH3: 2×2 or 3×3 footprint, authored
-// MaxSlope 15 [fmt tdf "MOVEINFO.TDF"]. On `ashap plateau` the computer
-// player's start plateau is a closed 2735-cell pocket for that class — a flood
-// over the classifier of [04 §6.1 R-DOC04-B] escapes nowhere, and every rim
-// cell is blocked by the slope gate, none by water or features. The Hard tables
-// build Thuds, whose class is KBOTSS2 at MaxSlope 32; that class reaches 53483
-// cells including the human start, which is the whole of why Hard wins here.
-// The one kbot the Medium wave does contain can cross, but the wave merge's
-// farthest-member rule transfers it back to regroup A as soon as it is roughly
-// 350 world units from the wave centroid (threshold 20000 × member count,
-// [08 R-P0-04 §3] step 4) and the regroup task then walks it home to the wave's
-// centroid [08 R-AI-01 §5] — so the single mobile member is recalled rather
-// than arriving. Zero losses follows: nothing of the computer player's ever
-// comes within the idle commander's reach.
-//
-// The same Medium battle on `acid foursome`, a map whose start pocket is the
-// whole of its vehicle-passable area, ends in the human's defeat at tick 53709.
-// So the computer player at the lobby default builds, forms, engages and kills;
-// this map's rim is what it cannot climb.
-//
-// Why this test still pins Hard rather than running Medium. Medium cannot win
-// on `ashap plateau` at all, and the maps where it does win are neither cheap
-// nor comfortably inside the thirty-minute bound — of the three open maps
-// measured, only `acid foursome` finished, 291 ticks under the cap, while
-// `aqua verdigris` and `brilliant cut lake` were still running at 54000. A
-// Medium case would therefore be a cherry-picked map on a 0.5% margin, which is
-// a flaky gate rather than a stronger one. The wave-formation test below
-// already covers the Medium path up to engagement.
-//
-// TODO(question): does retail's Medium computer player take `ashap plateau`?
-// Everything above follows from rules the research marks Established — the
-// derived floor pair [02 R-CONTENT-01], its min-of-mins/max-of-maxes footprint
-// aggregation and the slope tier [04 §6.1 R-DOC04-B step 6] — but the outcome
-// is two height bytes wide: the plateau rim classifies at slope 17 against the
-// class's authored 15, and raising the limit to 17 opens the pocket from 2735
-// cells to 45339. A trace must settle whether retail applies any transform to
-// the attribute cell's height byte between the TNT read and the derived pair
-// (research/formats/tnt.md still lists height scaling as open), because nothing
-// short of that changes the answer. TestAIVehiclePocketProbe and
-// TestAIVehicleSlopeSensitivityProbe in ai_terrain_pocket_probe_test.go are the
-// reproducers.
+// With the per-cell rule the flood from the computer start cell (53, 231)
+// reaches 53370 of the map's 53901 TANKSH2-passable anchors and includes the
+// human start at (219, 19) — retail's own numbers, to the cell
+// [04 R-SLOPE-01 §4]. Both difficulties then finish inside the bound.
+// TestAIVehicleRetailSlopeProbe in ai_terrain_pocket_probe_test.go re-measures
+// all four numbers on demand.
 func TestComputerPlayerEliminatesIdleHumanRetail(t *testing.T) {
-	sess := aiE2ESkirmishAt(t, "ashap plateau", aiE2ESeed, 2)
+	// 2 is Hard; SkirmishDefaultDifficulty is the lobby default, 1 Medium
+	// [08 "Skirmish configuration"].
+	for _, tc := range []struct {
+		name       string
+		difficulty int
+	}{
+		{"Hard", 2},
+		{"Medium", SkirmishDefaultDifficulty},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			idleHumanEliminationRetail(t, tc.difficulty)
+		})
+	}
+}
+
+// idleHumanEliminationRetail runs the gate at one difficulty word.
+func idleHumanEliminationRetail(t *testing.T, difficulty int) {
+	sess := aiE2ESkirmishAt(t, "ashap plateau", aiE2ESeed, difficulty)
 
 	if local := int(sess.LocalOwner); local != 0 {
 		t.Fatalf("direct skirmish resolved local owner %d, want the human slot 0", local)

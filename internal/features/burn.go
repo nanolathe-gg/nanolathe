@@ -402,6 +402,17 @@ func (s *Service) fireBurnEvent(inst *Instance, idx int) {
 	}
 }
 
+// hasEventRecordAt reports whether the anchor carries an EVENT animation
+// record — burning, dying or reclaiming. That is what retail means by "the cell
+// has an instance" [05 R-FEAT-01 §8][05 R-FEAT-01 §9]: a sprite feature at rest
+// owns no slot there, while this build attaches an Instance to every stamped
+// anchor, so every "no instance" test in the impact and ignition paths reads
+// through here.
+func (s *Service) hasEventRecordAt(idx int) bool {
+	inst := s.instances[idx]
+	return inst != nil && (inst.IsBurning || inst.IsAnimating)
+}
+
 // igniteAt performs ignition per [05 "Feature burning"] [06 §13.1].
 // Requires burn animation sequence, refuses when cell already has instance,
 // takes slot from burning-feature free list (silent no-op if none free).
@@ -418,12 +429,22 @@ func (s *Service) igniteAt(cx, cz int, def *content.FeatureDef) bool {
 		return false
 	}
 	cell := s.Terrain.Plot[idx]
-	// Refuse when cell already has instance attached [05 ...].
-	if cell.Occupied() {
+	// "The cell must have no instance" [05 R-FEAT-01 §9 step 1] — and in retail
+	// a sprite feature AT REST has none: instances are popped for event
+	// animations only, the rest cursor living on the catalog record instead
+	// [05 R-FEAT-01 §10] pass 1. This build attaches an Instance to every
+	// stamped anchor, so the faithful translation of "no instance" is "no event
+	// record": a resting feature ignites, one already burning, dying or
+	// reclaiming refuses (which is also §5's "a second ignition refuses").
+	//
+	// Reading it as "no Instance object" is why nothing could ever catch fire
+	// once the impact path was wired: every stamped tree owns one.
+	existing := s.instances[idx]
+	if s.hasEventRecordAt(idx) {
 		return false
 	}
-	if _, ok := s.instances[idx]; ok {
-		return false
+	if existing == nil && cell.Occupied() {
+		return false // an attachment this service does not track
 	}
 	// Pools 0x100/0x800/0xD silent fail, successors 0xFFFF [P1-10][P1-15]; burning anim slots 0x800 [P1-10][P1-15].
 	if len(s.instances) >= FeatureAnimSlots {
@@ -436,17 +457,28 @@ func (s *Service) igniteAt(cx, cz int, def *content.FeatureDef) bool {
 	if sim == nil {
 		return false
 	}
-	// countdown = simulationRandom(sparktime/2) + (sparktime/2), one draw [P1-10] 48+5wind etc.
-	// Written literally: the stream's own bound semantics decide whether a bound below two advances it (PLAN_03 C-rng),
-	// and that decision belongs to the stream, not to this call site. Shipped spark time is 5, giving a countdown of 2 or 3.
+	// The countdown, one simulation draw [05 R-FEAT-01 §9 step 4]:
 	//
-	// The countdown counts VISITS, so the formula consumes the AUTHORED
-	// sparktime; the compiled field is ×30 truncated ticks [02 "Feature
-	// record"] (I8), so the authored value is recovered once at this
-	// documented boundary. One-shot after sparktime countdown then inert [P1-10].
-	authored := def.SparkTime / 30
-	half := authored / 2
-	countdown := int32(sim.Uint32n(uint32(half))) + half
+	//	half      = sparkTicks >> 1
+	//	countdown = uint8(boundedDraw(half) + half)
+	//
+	// CORRECTION. This site read `def.SparkTime / 30` first, recovering an
+	// "authored" seconds value and halving that, on the older text's claim that
+	// the shipped spark time of 5 yields a countdown of 2 or 3. [05 R-FEAT-01
+	// §9] corrects exactly that: the parser multiplies the authored seconds by
+	// thirty and truncates, so the compiled field ALREADY holds ticks and the
+	// formula halves the ticks. The shipped 5 stores 150, and the countdown is
+	// 75..149 visits — two and a half to five seconds, not two or three visits.
+	// [06 §13.1] carries the same correction. The old reading fired the spread
+	// and burn-weapon event about thirty times too early.
+	//
+	// The bound's own semantics decide whether a bound below two advances the
+	// stream (a half of 0 or 1 draws nothing and returns 0, [01 §7.3]), and that
+	// decision belongs to the stream, not to this call site. Retail stores the
+	// result as a BYTE, so a spark time whose ticks reach 512 wraps; the
+	// shipped corpus tops out at 150 ticks.
+	half := def.SparkTime >> 1
+	countdown := int32(uint8(int32(sim.Uint32n(uint32(half))) + half))
 
 	// The burn ends when the burn ANIMATION finishes, not on a tick budget:
 	// "if the burn animation has finished, clear the cell" [05 "Feature
@@ -460,31 +492,43 @@ func (s *Service) igniteAt(cx, cz int, def *content.FeatureDef) bool {
 	if duration == 0 {
 		duration = 100 // within 46-282 [P1-10], forced non-looping [P1-15]
 	}
-	inst := &Instance{
-		Def:           def,
-		Terrain:       s.Terrain,
-		CX:            cx,
-		CZ:            cz,
-		IsBurning:     true,
-		BurnCountdown: countdown,
-		BurnDuration:  duration,
-		BurnTicks:     0,
-		FootprintX:    def.FootprintX,
-		FootprintZ:    def.FootprintZ,
-		Status:        0,
+	// A resting instance is CONVERTED rather than replaced: retail pops a slot
+	// because the resting feature owns none, so the one record this build
+	// already has is the same record retail ends up with.
+	inst := existing
+	if inst == nil {
+		inst = &Instance{
+			Def:        def,
+			Terrain:    s.Terrain,
+			CX:         cx,
+			CZ:         cz,
+			FootprintX: def.FootprintX,
+			FootprintZ: def.FootprintZ,
+		}
 	}
+	inst.IsBurning = true
+	inst.IsAnimating = false
+	inst.AnimationSelector = featureAnimSelectorBurn
+	inst.BurnCountdown = countdown
+	inst.BurnDuration = duration
+	inst.BurnTicks = 0
+	inst.Status = 0
 	if inst.FootprintX <= 0 {
 		inst.FootprintX = 1
 	}
 	if inst.FootprintZ <= 0 {
 		inst.FootprintZ = 1
 	}
-	// World position of the cell: X and Z are the cell origin, Y is the terrain
-	// height there [03 §2.1]. These were all three assigned a HEIGHT, which put
-	// every burning instance on the diagonal at height-scale coordinates.
-	inst.X = world.CellToWorld(int32(cx))
-	inst.Z = world.CellToWorld(int32(cz))
-	inst.Y = s.Terrain.CoarseHeightAt(int32(cx), int32(cz))
+	if existing == nil {
+		// World position of the cell: X and Z are the cell origin, Y is the
+		// terrain height there [03 §2.1]. These were all three assigned a
+		// HEIGHT, which put every burning instance on the diagonal at
+		// height-scale coordinates. A CONVERTED record keeps the position the
+		// stamp gave it — ignition does not move a feature.
+		inst.X = world.CellToWorld(int32(cx))
+		inst.Z = world.CellToWorld(int32(cz))
+		inst.Y = s.Terrain.CoarseHeightAt(int32(cx), int32(cz))
+	}
 	s.instances[idx] = inst
 	s.Terrain.Plot[idx].SetOccupied(true) // mark instance attached [05 ...]
 	// Record tile, play burn sound at tile's world position [05 ...] — presentation only.
@@ -537,11 +581,13 @@ func (s *Service) Ignite(cx, cz int, weaponFirestarter, weaponDamage int32) bool
 	// Ignition candidate when flammable && weapon firestarter nonzero [05 ...].
 	// There is no probability roll against firestarter — only nonzero test [05 ...][06 §13.1].
 	isCandidate := def.Flamable && weaponFirestarter != 0
-	if isCandidate && !cell.Occupied() {
-		if _, attached := s.instances[idx]; !attached {
-			// Ignites, and the impact deals no blast damage [05 "Feature burning"].
-			return s.igniteAt(cx, cz, def)
-		}
+	if isCandidate && !s.hasEventRecordAt(idx) {
+		// Step 5 of [05 R-FEAT-01 §8]: the entry ignites and RETURNS — the
+		// impact deals no blast damage — and it returns whether or not the
+		// ignition itself succeeded, so a flammable definition naming no
+		// `seqnameburn` simply absorbs the hit. Only "an instance is attached"
+		// falls through to the accumulators.
+		return s.igniteAt(cx, cz, def)
 	}
 	// Every other case accumulates damage: a cell with no attached instance
 	// accrues against the definition's hit points, and an attached
@@ -578,11 +624,21 @@ func (s *Service) DamageFeature(cx, cz int, damage int32) bool {
 		}
 		// Use anchor coordinates? For damage, anchor cell holds instance.
 	}
-	// If burning instance attached and definition filename-based, immune [05 ...].
-	if inst, ok := s.instances[idx]; ok && inst != nil && inst.IsBurning {
-		// Need to check filename-based: def.Filename != "" covers shipped ignitable [05 ...].
-		if inst.Def != nil && inst.Def.Filename != "" {
-			return false // ignored [05 "Feature burning"]
+	// Step 8 of the damage entry [05 R-FEAT-01 §8]: a SPRITE definition that
+	// already carries an instance — burning, dying or reclaiming — has no
+	// branch at all, so the impact is discarded. The two accumulating branches
+	// below are the no-instance case (step 6, the anchor word) and the 3D case
+	// (step 7, the instance's own accumulator), and a sprite with a live record
+	// is neither. This is the same "every further cause is inert" rule the
+	// same-tick precedence of [05 R-FEAT-01 §5] states from the other side, and
+	// it subsumes the older filename-scoped burning guard that stood here:
+	// "burning filename-based features ... are immune to further blast-damage
+	// accumulation" [06 §13.1] is one consequence of it, not the whole rule.
+	// Without this a tree playing its death animation kept accruing damage into
+	// the anchor word the animation record had already taken over.
+	if inst, ok := s.instances[idx]; ok && inst != nil {
+		if inst.Def != nil && inst.Def.Object == "" && (inst.IsBurning || inst.IsAnimating) {
+			return false // discarded [05 R-FEAT-01 §8 step 8]
 		}
 	}
 	def, ok := s.Terrain.FeatureDefAt(featIdx)

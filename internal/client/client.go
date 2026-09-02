@@ -132,7 +132,14 @@ type Client struct {
 	featureGAFs   map[string]*formats.GAF      // lower filename -> GAF
 	featureFrames map[string]*formats.GAFFrame // lower "filename|seqname" -> frame
 	featureGACErr map[string]error             // memoised load failures (presentation-only)
-	featureYSort  bool                         // when true force Y-bucket sort for feature pass [03 §1]
+	// featureSeqs memoises the compiled animation sequences the SIMULATION
+	// reads through Client.FeatureSequence — the burn frame geometry and the
+	// die/reclaim/burn lifetimes of [05 R-FEAT-01 §10]. A nil value is a
+	// memoised miss. Unlike every other cache here this one is consulted from
+	// an authoritative phase, so it is warmed up front and never loads on a
+	// visit; feature_sequence.go owns the contract.
+	featureSeqs  map[string]*featureSequenceInfo
+	featureYSort bool // when true force Y-bucket sort for feature pass [03 §1]
 	// featureAnim holds the per-DEFINITION rest cursors of the animating
 	// features, keyed by the lower-case "filename|seqname" that names the
 	// definition's sequence. Retail initialises one cursor per definition, not
@@ -408,6 +415,7 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 	c.featureGAFs = map[string]*formats.GAF{}
 	c.featureFrames = map[string]*formats.GAFFrame{}
 	c.featureGACErr = map[string]error{}
+	c.featureSeqs = map[string]*featureSequenceInfo{}
 	c.projectileGAF = nil
 	c.projectileGAFErr = nil
 	c.projectileGAFLoaded = false

@@ -54,6 +54,11 @@ func newGuardLegsFixture(t *testing.T) *guardLegsFixture {
 	// owner: the ward (owner 0) is the guard's own, the attacker (owner 1) is
 	// not. The base fixture's blanket "nothing is hostile" would decline leg 1.
 	b.Hostility = func(a, t *units.Unit) bool { return a != nil && t != nil && a.Owner != t.Owner }
+	// Leg 1 reads row A of the ATTACKER indexed by the guard's owner
+	// [04 R-UNIT-06 §1][05 R-SHARE-01 §1] — a one-directional read, not the
+	// symmetric Hostility predicate above. Here: nobody has declared toward
+	// anybody, so a different owner is hostile.
+	b.World = &WorldQueryAdapter{DeclaresAlliance: func(from, toward uint8) bool { return from == toward }}
 	QueueForUnit(f.guard).SetBinding(b)
 	QueueForUnit(f.enemy).SetBinding(&QueueBinding{})
 	// The ward's recorded-attacker link: the unit that last damaged it
@@ -130,13 +135,25 @@ func TestGuardCombatJoinRespectsDiplomacyAndNoChase(t *testing.T) {
 	// declaration closes the leg [04 R-UNIT-06 §1 as corrected by RWU-19-13].
 	// The ward's own rows are never consulted.
 	b := q.Binding()
-	b.Hostility = func(_, _ *units.Unit) bool { return false }
+	b.World.DeclaresAlliance = func(from, toward uint8) bool { return true }
 	q.SetBinding(b)
 	q.primary = nil
 	if code := guardHandler(f.guard, n, 0x10, 100); code != Code(2) || len(q.primary) != 0 {
 		t.Fatalf("an attacker allied to the guard must not be joined: code %d queue %v", code, f.queueNames())
 	}
-	b.Hostility = func(a, t *units.Unit) bool { return a.Owner != t.Owner }
+
+	// The row is the ATTACKER's, one-directionally: a guard whose own side has
+	// declared alliance to the attacker, unreciprocated, still joins. That is
+	// the case the symmetric predicate would decline, and [04 R-UNIT-06 §1]'s
+	// correction names it explicitly.
+	b.World.DeclaresAlliance = func(from, toward uint8) bool { return from == f.guard.Owner }
+	q.SetBinding(b)
+	q.primary = nil
+	if code := guardHandler(f.guard, n, 0x10, 100); code != Code(3) {
+		t.Fatalf("a one-sided declaration BY the guard must not close leg 1, got %d", code)
+	}
+
+	b.World.DeclaresAlliance = func(from, toward uint8) bool { return from == toward }
 	q.SetBinding(b)
 
 	// A hostile WARD is irrelevant either way — only the attacker's row is
@@ -288,4 +305,52 @@ func TestGuardKeepsNoLatchAcrossTicks(t *testing.T) {
 	// units.Unit entirely, so there is no latch state left to assert on: the
 	// loop above IS the contract. If a latch is ever reintroduced, the second
 	// iteration fails.
+}
+
+// TestGuardJoinsAfterItsWardIsHit is the end-to-end shape of legs 1's two
+// producers [04 R-UNIT-06 §5]: the damage dispatcher writes the ward's recorded
+// attacker, the damage reaction raises pending 0x10 on every record observing
+// the ward, and the guard's next admitted visit joins the fight. A link naming
+// a slot that is no longer live is dropped at the read, because §5 puts the
+// liveness burden on the reader and nothing clears the link on death.
+func TestGuardJoinsAfterItsWardIsHit(t *testing.T) {
+	f := newGuardLegsFixture(t)
+	n := guardNode(f.guardFixture)
+	n.Phase = 1
+	q := QueueForUnit(f.guard)
+
+	// Before the ward is hit there is no link and the guard only follows.
+	f.ward.EngagementTarget = 0
+	q.primary = nil
+	if code := guardHandler(f.guard, n, 0x10, 100); code != Code(2) || len(q.primary) != 0 {
+		t.Fatalf("no recorded attacker: want the maintenance hold, got %d / %v", code, f.queueNames())
+	}
+
+	// The dispatcher's write, then the wake bit the observer notice delivers.
+	f.ward.EngagementTarget = f.enemy.Handle
+	q.primary = nil
+	if code := guardHandler(f.guard, n, 0x10, 100); code != Code(3) {
+		t.Fatalf("a hit ward must be avenged on the next admitted visit, got %d", code)
+	}
+	if len(q.primary) == 0 || q.primary[0].Target != f.enemy.Handle {
+		t.Fatalf("leg 1 must attack the recorded attacker, got %v", f.queueNames())
+	}
+
+	// A link to a dead slot is not a target: the reader tests liveness.
+	f.enemy.Alive = false
+	q.primary = nil
+	if code := guardHandler(f.guard, n, 0x10, 100); code != Code(2) || len(q.primary) != 0 {
+		t.Fatalf("a dead recorded attacker must be dropped at the read, got %d / %v", code, f.queueNames())
+	}
+	f.enemy.Alive = true
+
+	// Leg 2 reads the same link, so it also declines once the slot is dying.
+	f.guard.Flags |= 2 << stanceFireShift
+	armSlotAutonomous(f.guard, 0, &content.WeaponDef{Name: "gun", Range: 1000})
+	f.enemy.Dying = true
+	guardHandler(f.guard, n, 0, 100)
+	if f.guard.Slots[0].Target.Kind == units.TargetUnit {
+		t.Fatalf("leg 2 must not rebind onto a dying attacker, got %+v", f.guard.Slots[0].Target)
+	}
+	f.enemy.Dying = false
 }

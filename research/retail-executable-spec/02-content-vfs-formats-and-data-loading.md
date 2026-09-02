@@ -1758,6 +1758,8 @@ limits, `MaxSlope`, and `MaxWaterSlope`.
 
 **Established:** Slope is derived from a 2×2 height neighbourhood. The plot expansion computes per-cell derived `MinHeight` and `MaxHeight` as the minimum and maximum of up to four height bytes (cell, east, south, southeast, with edge guards) — these derived values are the slope inputs, not a single height sample. Height queries use bilinear interpolation of the four corner heights with low-four-bit fractions and signed-bias correction. Validation aggregates `min of mins` and `max of maxes` across the footprint rectangle. Passability comparisons are strict `<` for the hard blocks (`slope == limit` passes) and `≤` for the clear/steep boundary. Land-vs-water slope selection happens per cell in the movement classifier (`hmin` below sea level switches to the water pair) and in the mobile-movement wrapper; the structure validator's slope gate always uses the land pair.
 
+**Corrected by [04 R-SLOPE-01] (2026-09-01).** The sentence "Validation aggregates `min of mins` and `max of maxes` across the footprint rectangle" is true only of the structure placement validator ([04 R-P0-08]) and the spawner height probe ([08 R-ENTRY-02 §1]). The movement classifiers — the per-class layer stamp, the rectangle restamp and both commit validators — evaluate **each cell on its own derived pair** (slope = that cell's `MaxHeight − MinHeight`, 8-bit) and combine a footprint by taking the **minimum tier** over its cells; a 2×2 class is never judged on the 3×3 corner window. The height byte itself reaches the plot verbatim — no scaling or shift between the TNT record and the derived pair. The rest of the paragraph stands.
+
 ### Sound aliases
 
 The alias catalog is a TDF in the game-data directory. Each top-level section

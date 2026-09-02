@@ -1089,9 +1089,15 @@ const (
 	guardCombatJoinBit uint32 = 0x10
 )
 
-// unitByHandle resolves a pool handle through the acting unit's queue binding,
-// the same seam targetOf reads a record's target through [P0-I16].
-func unitByHandle(actor *units.Unit, h pool.Handle) *units.Unit {
+// liveUnitByHandle resolves a pool handle through the acting unit's queue
+// binding — the same seam targetOf reads a record's target through [P0-I16] —
+// and drops a handle whose slot is no longer live.
+//
+// The liveness test is required, not defensive. The recorded-attacker link has
+// no per-tick clear and is not cleared when the attacker dies, so it routinely
+// names a dead or reused slot; [04 R-UNIT-06 §5 part 1] says so outright and
+// puts the burden on the reader.
+func liveUnitByHandle(actor *units.Unit, h pool.Handle) *units.Unit {
 	if actor == nil || h == 0 {
 		return nil
 	}
@@ -1103,7 +1109,11 @@ func unitByHandle(actor *units.Unit, h pool.Handle) *units.Unit {
 	if binding == nil || binding.Lookup == nil {
 		return nil
 	}
-	return binding.Lookup(h)
+	tgt := binding.Lookup(h)
+	if tgt == nil || !tgt.Alive || tgt.Dying {
+		return nil
+	}
+	return tgt
 }
 
 func getLookupForWard(n *Node, u *units.Unit) *units.Unit {
@@ -1138,23 +1148,18 @@ func getLookupForWard(n *Node, u *units.Unit) *units.Unit {
 // refused it whenever the ward was an enemy's unit, neither of which is the
 // traced gate. The ward's owner's rows are never read here at all.
 //
-// The hostility function is taken off the GUARD's binding (which a live guard
-// always has) and applied to the (attacker, guard) pair, so the argument order
-// carries the traced direction.
-//
-// TODO(T25): the session's injected predicate is symmetric — it answers "either
-// side has declared alliance" [05 R-SHARE-01 §1] through economy's isAllied —
-// where the traced byte is the attacker's row alone. The difference is visible
-// only in a one-sided declaration: §1's correction notes that a guard whose own
-// side has declared alliance to the attacker, unreciprocated, still joins,
-// where this build declines. Closing it needs a one-directional row read on the
-// queue binding, which internal/session owns.
+// The row is read one-directionally through the binding's DeclaresAlliance,
+// which is economy's row-A read [05 R-SHARE-01 §1]. The symmetric `Hostile`
+// predicate the command resolver uses would answer a different question — "has
+// EITHER side declared" — and would decline the join whenever the guard's own
+// side had declared alliance to the attacker without reciprocation, which §1's
+// correction names as a case that still joins.
 func attackerHostileToGuard(guard, attacker *units.Unit) bool {
 	if guard == nil || attacker == nil {
 		return false
 	}
-	if fn := getHostility(guard); fn != nil {
-		return fn(attacker, guard)
+	if b := bindingOfUnit(guard); b != nil && b.World != nil && b.World.DeclaresAlliance != nil {
+		return !b.World.DeclaresAlliance(attacker.Owner, guard.Owner)
 	}
 	// No rows to read: slot initialization leaves each player allied only to
 	// itself [05 R-SHARE-01 §1], so a different owner is hostile.
@@ -1223,7 +1228,7 @@ func guardSlotKeepsTarget(u *units.Unit, s *units.Slot, idx int) bool {
 	if s.Target.Kind != units.TargetUnit || s.Target.Unit == 0 {
 		return false // "the slot has no target"
 	}
-	held := unitByHandle(u, s.Target.Unit)
+	held := liveUnitByHandle(u, s.Target.Unit)
 	if held == nil || held.Def == nil {
 		return false
 	}
@@ -1368,16 +1373,13 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	// non-heal packet with a nonzero attacker, and cleared only at spawn, death
 	// and console kill. Nothing clears it per tick, and nothing clears it when
 	// the attacker dies, so a reader must tolerate a dead or reused slot: the
-	// unit lookup below and the command resolver's own tests are that guard
+	// liveness filter below and the command resolver's own tests are that guard
 	// [04 R-UNIT-06 §5 part 1]. In one line: the guard attacks, and points its
 	// free slots at, whatever last hurt its ward.
 	//
-	// TODO(T25): this build has no writer for the link. The damage dispatcher in
-	// internal/combat/damage.go already stores the attacker-side snapshot beside
-	// it (units.Unit.LastDamageSide); the attacker pointer itself is the missing
-	// half, and that file is outside this unit. Until it lands the lookup yields
-	// nothing and both legs decline — a missing producer, not a stand-in.
-	wardTarget := unitByHandle(u, ward.EngagementTarget)
+	// The writer is the damage dispatcher, beside the attacker-side snapshot it
+	// already stored (WU-19-43).
+	wardTarget := liveUnitByHandle(u, ward.EngagementTarget)
 
 	// Leg 1 — the combat join [04 R-UNIT-06 §1]. Four terms, in order: the
 	// ward's recorded-attacker link is set; the diplomacy term (that attacker is

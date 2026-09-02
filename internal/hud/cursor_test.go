@@ -19,11 +19,10 @@ func unit(owner uint8, def *content.UnitDef) *units.Unit {
 }
 
 // TestInspectableGates locks the clauses of [07 §8]'s own-unit inspect
-// predicate — "an own, active, finished, untasked unit" — one at a time. The
-// active clause was missing while `docs/SPEC_CONFLICTS.md` SC16 stood; the
-// collision it recorded (bit `0x20` claimed by INBUILDSTANCE) is gone, so it is
-// gated here. The untasked clause is deliberately absent: see the
-// `TODO(question)` on isInspectable.
+// predicate one at a time. [07 R-WGT-01 §10] corrects that section's "own,
+// active, finished, UNTASKED unit": the predicate reads no order state, and
+// what §8 called the empty-current-task field is the remaining-build fraction
+// the "still building" case already covers. Both halves of SC16 are closed.
 func TestInspectableGates(t *testing.T) {
 	def := &content.UnitDef{UnitName: "ARMPW", CanMove: true}
 	cases := []struct {
@@ -36,11 +35,11 @@ func TestInspectableGates(t *testing.T) {
 		{"dead", func(u *units.Unit) { u.Alive = false }, false},
 		{"still building", func(u *units.Unit) { u.Remaining = 0.5 }, false},
 		{"active-state bit clear", func(u *units.Unit) { u.Flags &^= units.ClassifierEligibleStatus }, false},
-		// The untasked gate is not implemented: this build's order guard reads
-		// nonzero for every idle unit, because an idle primary queue holds a
-		// Standby node. Locking the current behaviour keeps the omission
-		// visible rather than letting a later change slip it in unnoticed.
-		{"order guard nonzero is NOT yet a gate", func(u *units.Unit) { u.OrderGuard = 0.25 }, true},
+		// There is no separate "untasked" gate to implement: [07 R-WGT-01 §10]
+		// identifies §8's empty-current-task field as the remaining-build
+		// fraction, which the "still building" row above already covers. An
+		// idle unit holding its `defaultmissiontype` standing record is
+		// inspectable, which is the case the retired order-guard word broke.
 	}
 	for _, tc := range cases {
 		u := unit(0, def)
@@ -171,5 +170,46 @@ func TestCommandFireAffordability(t *testing.T) {
 	poor := CursorSelection{Viewer: 0, Units: []*units.Unit{unit(0, com)}, Energy: 100}
 	if got := ChooseCursor(input.LatchBlast, poor, h); got != render.CursorTooFar {
 		t.Fatalf("unaffordable got %d (%s) want cursortoofar [07 §8]", got, render.CursorName(got))
+	}
+}
+
+// TestIdleUnitWithAStandingRecordIsInspectable is the case the retired
+// order-guard word broke. [07 R-WGT-01 §10]: "a finished unit is eligible
+// whatever its queue contains", and an idle stock mobile unit's queue holds the
+// `Standby`-family record its `defaultmissiontype` authored [04 §3.3] — 122 of
+// the reference install's 278 definitions author `Standby` alone. A predicate
+// deriving eligibility from queue emptiness would gate `cursorselect` off for
+// every one of them.
+func TestIdleUnitWithAStandingRecordIsInspectable(t *testing.T) {
+	def := &content.UnitDef{UnitName: "ARMPW", CanMove: true, DefaultMissionType: "Standby"}
+	u := unit(0, def)
+	if !isInspectable(u, 0) {
+		t.Fatal("an idle own unit holding its standing record must be inspectable [07 R-WGT-01 §10]")
+	}
+}
+
+// TestIdleLatchRepairsAnUnfinishedFriendly confirms the row [07 R-WGT-01 §10]
+// places immediately before the inspect test on the empty-candidate path: a
+// hovered friendly the repair predicate accepts and whose remaining-build
+// fraction is nonzero yields `cursorrepair`, not `cursorselect`. It is the same
+// word the inspect gate reads, in the opposite sense.
+func TestIdleLatchRepairsAnUnfinishedFriendly(t *testing.T) {
+	builderDef := &content.UnitDef{UnitName: "ARMCV", CanMove: true, Builder: true}
+	builder := unit(0, builderDef)
+
+	target := unit(0, &content.UnitDef{UnitName: "ARMSOLAR"})
+	target.Remaining = 0.5 // a nanoframe: nonzero fraction
+
+	sel := CursorSelection{Viewer: 0, Units: []*units.Unit{builder},
+		Hostile: func(_, _ *units.Unit) bool { return false }}
+	h := CursorHover{OverWorld: true, Target: target}
+	if got := ChooseCursor(input.LatchNormal, sel, h); got != render.CursorRepair {
+		t.Fatalf("a hovered nanoframe must give cursorrepair, got %v [07 R-WGT-01 §10]", got)
+	}
+
+	// Finished and undamaged, the same hover falls through to the inspect row.
+	target.Remaining = 0
+	if got := ChooseCursor(input.LatchNormal, sel, h); got != render.CursorSelect {
+		t.Fatalf("a finished own unit must give cursorselect, got %v [07 §8]", got)
 	}
 }

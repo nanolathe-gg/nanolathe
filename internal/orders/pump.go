@@ -164,6 +164,16 @@ type QueueBinding struct {
 	// owner of these values [04 R-ORD-01 §4][05 "Player slot"].
 	Resources func(uint8) (ResourceView, bool)
 
+	// ReclaimFeature settles a finished feature reclaim at an anchor cell: it
+	// reports the pools to credit and rewrites the cell [05 R-WORK-01 §5]. The
+	// session binds it to the feature service, whose transition plays a
+	// `seqnamereclamate` sequence out before the successor is stamped
+	// [05 R-FEAT-01 §5]; the order package holds no service handle, so this is
+	// a query like the two above. With none bound the payout falls back to the
+	// terrain-only transition, which is what it used before the service grew
+	// one — see finishFeatureReclaim.
+	ReclaimFeature func(cx, cz int) (metal, energy float32, ok bool)
+
 	// BuildList reports whether a definition's compiled build list holds at
 	// least one entry. It is command code 14's whole gate: "the definition's
 	// build list is non-empty and a live mover exists" [04 R-ORD-02 §1], NOT
@@ -289,6 +299,13 @@ type WorldQueryAdapter struct {
 	TerrainHeight  func(numeric.Fixed, numeric.Fixed) (numeric.Fixed, bool)
 	SeaLevel       func() uint8
 	ModelBounds    func(pool.Handle) (int32, int32, bool)
+	// DeclaresAlliance is the one-directional row read of [05 R-SHARE-01 §1]:
+	// row A of `from` indexed by `toward`. `Hostile` above answers the
+	// symmetric question the command resolver asks [04 R-ORD-02 §1]; this
+	// answers the single-row question the guard's combat join asks
+	// [04 R-UNIT-06 §1]. Nil when the binding has no player rows, in which case
+	// the caller falls back.
+	DeclaresAlliance func(from, toward uint8) bool
 }
 
 // WorkAdapter is the construction/repair/ownership port. The result is kept
@@ -563,16 +580,12 @@ func (p *Pump) PumpUnit(handle pool.Handle, tick uint32) PumpResult {
 	q.Pump(u, tick)
 	prim := q.LenPrimary()
 	sec := q.LenSecondary()
-	// Order-guard float [07 §8/§9]: nonzero (a clamped 0..1 ratio) while the
-	// unit is mid-order, zero at order completion — i.e. when the primary
-	// queue empties (completion, cancellation, or expiry all land here). The
-	// exact ratio source is unattested; only the 0/nonzero distinction is
-	// established, so the ratio is written as 1.0 TODO(question).
-	if prim > 0 {
-		u.OrderGuard = 1.0
-	} else {
-		u.OrderGuard = 0.0
-	}
+	// No order-guard write. [07 R-WGT-01 §10]'s store census over the word the
+	// eligibility sites compare finds no writer anywhere in the order subsystem
+	// — "not the order-record constructor, not the primary or secondary pump,
+	// not the handler return-code epilogue, not cancel-all, not the
+	// single-record expiry helper, and not the idle-queue refill". The word is
+	// the remaining-build fraction, which construction owns.
 	diags := q.Diagnostics()
 	return PumpResult{Handle: handle, Found: true, HadQueue: had, PrimaryLen: prim, SecondaryLen: sec, Diagnostics: append([]string(nil), diags...)}
 }
@@ -857,7 +870,14 @@ func (q *Queue) cleanupNode(n *Node) {
 	if q.binding != nil && q.binding.Movement != nil && q.binding.Movement.Release != nil {
 		q.binding.Movement.Release(n)
 	}
-	if n.Flags&FlagTombstone == 0 {
+	// "The record destructor returns all three slots (with their targets
+	// cleared) for every removed record whose static-mask copy lacks bit 16"
+	// [04 R-UNIT-06 §5 part 3] — which is what hands a completed or purged
+	// attack's slots back to autonomous acquisition. Bit 16 excludes the rows
+	// that never took a slot in the first place: `Activate`, `Deactivate`, the
+	// two cloak toggles, the two standing-order rows and `BuildingBuild`, whose
+	// removal must not wipe the weapon targets an acquisition put there.
+	if n.Flags&FlagTombstone == 0 && n.StaticGate&staticSlotKeeper == 0 {
 		clearWeaponBuildTargets(u)
 	}
 }
@@ -1190,20 +1210,8 @@ func (q *Queue) Pump(u *units.Unit, tick uint32) {
 		return
 	}
 	q.lastPumpTick = tick
-	// Order-guard float [07 §8/§9]: nonzero (a clamped 0..1 ratio) while the
-	// unit is mid-order, zero at order completion — i.e. when the primary
-	// queue empties (completion, cancellation, or expiry all land here). The
-	// defer covers every pump exit. The exact ratio source is unattested; only
-	// the 0/nonzero distinction is established, so the ratio is written as 1.0
-	// TODO(question).
-	defer func() {
-		if len(q.primary) > 0 {
-			u.OrderGuard = 1.0
-		} else {
-			u.OrderGuard = 0.0
-		}
-	}()
-
+	// No order-guard write here either; see PumpUnit above and
+	// [07 R-WGT-01 §10].
 	q.pumpPrimary(u, tick)
 	if len(q.primary) > 0 {
 		head := q.primary[0]

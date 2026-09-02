@@ -927,11 +927,14 @@ func TestQueueModifiers_SegmentMapping(t *testing.T) {
 	}
 }
 
-// TestOrderGuardFloat locks the per-unit order-guard float [07 §8/§9]: zero
-// when the primary queue is empty, nonzero (1.0 placeholder, the exact ratio
-// source unattested) while an order is queued, and zero again once the queue
-// empties. Eligibility reads it via an exact == 0.0 compare.
-func TestOrderGuardFloat(t *testing.T) {
+// TestPumpWritesNoEligibilityWord is the negative [07 R-WGT-01 §10] states as a
+// census result: no routine of the order subsystem stores to the word the
+// eligibility sites compare. This build used to write a per-unit order-guard
+// float from both pump entry points, which made every idle unit — one holding
+// its authored `defaultmissiontype` standing record [04 §3.3] — read as
+// ineligible for selection and inspection. The word is the remaining-build
+// fraction, and construction owns it; pumping must leave it alone.
+func TestPumpWritesNoEligibilityWord(t *testing.T) {
 	rng.SeedGlobal(7, 0)
 	moveID := Lookup("Move_Ground")
 	if moveID == 0 {
@@ -939,13 +942,13 @@ func TestOrderGuardFloat(t *testing.T) {
 	}
 	q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	u := newTestUnit()
-	if u.OrderGuard != 0 {
-		t.Fatalf("fresh unit guard = %v, want 0", u.OrderGuard)
+	u.Alive = true
+	u.Flags |= units.ClassifierEligibleStatus
+	if !u.Eligible() {
+		t.Fatalf("a finished, selectable unit must be eligible before pumping")
 	}
-	// Queue a Move_Ground with a handler that parks the record on an
-	// unsatisfied gate: the record stays queued (mid-order) and the walk
-	// stops on the blocked head [04 §3.3] step 3 — no iteration cap exists
-	// to rescue a continue-code loop (ORD-02).
+	// A record parked on an unsatisfied gate: the unit is as "mid-order" as it
+	// can get, and it stays eligible.
 	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 		n.DynamicGate = 0x400
 		return Code(2)
@@ -953,14 +956,16 @@ func TestOrderGuardFloat(t *testing.T) {
 	defer restore()
 	q.primary = append(q.primary, &Node{ID: moveID, DynamicGate: 0, Deadline: -1})
 	q.Pump(u, 0)
-	if u.OrderGuard != 1.0 {
-		t.Fatalf("guard mid-order = %v, want 1.0", u.OrderGuard)
+	if u.Remaining != 0 {
+		t.Fatalf("the pump wrote the remaining-build fraction: %v [07 R-WGT-01 §10]", u.Remaining)
 	}
-	// Empty the queue: completion path (head removed) clears the guard.
+	if !u.Eligible() {
+		t.Fatalf("a queued order must not make a unit ineligible [07 R-WGT-01 §10]")
+	}
 	q.primary = q.primary[1:]
 	q.Pump(u, 1)
-	if u.OrderGuard != 0.0 {
-		t.Fatalf("guard after completion = %v, want 0", u.OrderGuard)
+	if u.Remaining != 0 || !u.Eligible() {
+		t.Fatalf("emptying the queue must not touch eligibility either")
 	}
 }
 

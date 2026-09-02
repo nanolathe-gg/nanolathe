@@ -181,6 +181,28 @@ func (s *Service) ensureUnitBuckets(handle pool.Handle) {
 
 // UnitBuckets returns the live bucket pair for handle, growing the slice if needed.
 // Caller must hold handle validity; slot 0 returns nil.
+// DeclaresAlliance is the ONE-DIRECTIONAL alliance read of [05 R-SHARE-01 §1]:
+// row A of `from`, indexed by `toward` — "this player's declaration toward each
+// other slot (non-zero = allied)". A slot is always allied to itself.
+//
+// It exists because the shared predicate every other consumer reaches through
+// composition ORs both rows, which answers "either side has declared". Two
+// traced sites read exactly one row and differ from the OR under a one-sided
+// declaration: automatic resource sharing (`source.A[candidate] != 0`,
+// [05 R-SHARE-01 §3]) and the guard's combat join
+// (`attackerOwner.A[guardOwner] == 0`, [04 R-UNIT-06 §1] as corrected by
+// RWU-19-13). The symmetric predicate stays where the resolver's own hostility
+// test uses it [04 R-ORD-02 §1]; this is not a replacement for it.
+func (s *Service) DeclaresAlliance(from, toward uint8) bool {
+	if from == toward {
+		return true
+	}
+	if s == nil || int(from) >= len(s.Players) || int(toward) >= len(s.Players) {
+		return false
+	}
+	return s.Players[from].Allies[toward]
+}
+
 func (s *Service) UnitBuckets(handle pool.Handle) *[2]Bucket {
 	if s == nil || handle == 0 {
 		return nil

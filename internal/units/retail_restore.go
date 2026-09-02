@@ -75,7 +75,10 @@ func RetailUnitBase(u *Unit, data []byte) error {
 		s.DesiredYaw = binary.LittleEndian.Uint16(data[off+0x12:])
 		s.DesiredPitch = binary.LittleEndian.Uint16(data[off+0x14:])
 		s.Ammo = int32(data[off+0x16])
-		s.Flags = (s.Flags &^ 0x1f) | (data[off+0x17] & 0x1f)
+		// Bit 4 of the persisted byte is the control byte's autonomy bit, not a
+		// Flags bit [04 R-UNIT-06 §5 part 3]; the other four stay on Flags.
+		s.Flags = (s.Flags &^ 0x1f) | (data[off+0x17] & 0x0f)
+		s.OrderControl = (s.OrderControl &^ OrderControlInhibit) | (data[off+0x17] & OrderControlInhibit)
 		s.SavedTargetLow = binary.LittleEndian.Uint16(data[off:])
 		s.SavedTargetHigh = binary.LittleEndian.Uint16(data[off+2:])
 		s.SavedActiveByte = data[off+0x08]

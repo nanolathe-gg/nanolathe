@@ -1184,7 +1184,23 @@ func finishFeatureReclaim(u *units.Unit, cx, cz int) {
 	if econ == nil {
 		return
 	}
-	metal, energy, ok := features.ReclaimTransition(econ.Terrain, cx, cz)
+	// The cell goes through the FEATURE SERVICE when the session bound one, so
+	// the transition of [05 R-FEAT-01 §5] runs: a definition naming
+	// `seqnamereclamate` plays that sequence and the feature phase stamps the
+	// successor when it ends, one naming none replaces at once. The payout
+	// arithmetic and its timing are identical either way — the pools are read
+	// and the cell rewritten by the same call, so the two still cannot come
+	// apart and pay twice.
+	//
+	// With no binding the terrain-only transition stands, which is what every
+	// fixture that does not compose a session gets.
+	reclaim := features.ReclaimTransition
+	if binding := q.Binding(); binding != nil && binding.ReclaimFeature != nil {
+		reclaim = func(_ *world.Terrain, cx, cz int) (float32, float32, bool) {
+			return binding.ReclaimFeature(cx, cz)
+		}
+	}
+	metal, energy, ok := reclaim(econ.Terrain, cx, cz)
 	if !ok {
 		return
 	}

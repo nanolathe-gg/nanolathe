@@ -314,19 +314,21 @@ func TestOnDeathExtraFiresExactlyOnceAlongsidePrimary(t *testing.T) {
 	}
 }
 
-// TestEligiblePredicate locks the shared eligibility predicate [07 §8/§9]:
-// status bit 0x20 set AND the order-guard float exactly 0.0 (not mid-order).
-// A guard of 0.0001 (any nonzero) must fail the exact compare.
+// TestEligiblePredicate locks the shared eligibility predicate `E(u)` of
+// [07 R-WGT-01 §10]: the selectable status bit 5 set AND the remaining-build
+// fraction exactly `0.0`. The compare is exact single-precision, so any nonzero
+// fraction — a nanoframe one work quantum from done included — fails it, and
+// the predicate reads NO order state.
 func TestEligiblePredicate(t *testing.T) {
 	u := &Unit{Alive: true, Flags: ClassifierEligibleStatus}
 	if !u.Eligible() {
 		t.Fatalf("fresh eligible unit rejected")
 	}
-	u.OrderGuard = 0.0001
+	u.Remaining = 0.0001
 	if u.Eligible() {
-		t.Fatalf("mid-order unit accepted (guard %v)", u.OrderGuard)
+		t.Fatalf("unfinished unit accepted (fraction %v)", u.Remaining)
 	}
-	u.OrderGuard = 0.0
+	u.Remaining = 0.0
 	u.Flags &^= ClassifierEligibleStatus
 	if u.Eligible() {
 		t.Fatalf("bit-0x20-clear unit accepted")

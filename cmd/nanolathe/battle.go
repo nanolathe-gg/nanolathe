@@ -300,6 +300,18 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	// is drawn against the bound entry's frame count [03 R-STRIP-01 §2] — the
 	// same asset the timing resolver above reads, through the same bank cache.
 	b.sess.SetEffectEntryFrameCount(cl.EffectEntryFrameCount)
+	// The feature phase reads two things out of a definition's GAF entries: the
+	// current burn frame's geometry, which pass 3a scales the smoke jitter by,
+	// and the die/reclaim/burn lifetime in visits, which is when an animation
+	// record's successor is stamped [05 R-FEAT-01 §10]. Both come from the
+	// client's own feature-GAF cache, so the frames the feature pass draws and
+	// the frames the simulation counts are one reading. The warm pass compiles
+	// the whole catalog here, off the simulation path, so no visit ever waits
+	// on a load.
+	b.sess.SetFeatureSequenceResolver(cl.FeatureSequence)
+	if b.sess.Catalog != nil {
+		cl.WarmFeatureSequences(b.sess.Catalog.Features)
+	}
 	attachBattleAudio(cl, b.sess, b.fs)
 }
 
@@ -1389,7 +1401,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 			if !ok {
 				return
 			}
-			handles := client.SnapshotUnitHandlesInRect(f, b.cam, shellRect, b.sess.LocalOwner)
+			handles := b.eligibleHandlesInRect(f, shellRect)
 			kind := session.HumanSelectionReplace
 			if additive {
 				kind = session.HumanSelectionToggle
@@ -2596,6 +2608,39 @@ func (b *battleSession) snapshotAirBase(v frame.UnitView) bool {
 	}
 	def, ok := b.cat.Unit(v.DefName)
 	return ok && def != nil && def.IsAirBase
+}
+
+// eligibleHandlesInRect is the drag-rectangle walk of [07 §9] as
+// [07 R-WGT-01 §10] restates it: "walk the local player's unit slice in
+// ascending record order; for each record with `E(u)` true, apply the inclusive
+// rectangle test... A record failing `E(u)` is neither written, toggled, nor
+// counted, regardless of position."
+//
+// The eligibility filter used to be missing here: the rect walk returned every
+// VISIBLE unit, so a drag across a battle line selected the enemy's units and
+// half-built nanoframes alongside one's own. `ownSelectableUnit` is this
+// build's `E(u)` — the selectable status bit, the remaining-build fraction, and
+// the carrier clause through the carrier definition's airbase mirror — so the
+// two are composed rather than the predicate being written twice. Both inputs
+// are frame order, which is pool-slot order [I1], so the result stays ascending.
+func (b *battleSession) eligibleHandlesInRect(f *frame.Frame, rect client.Rect) []pool.Handle {
+	if b == nil || f == nil {
+		return nil
+	}
+	eligible := make(map[pool.Handle]struct{}, len(f.Units))
+	for i := range f.Units {
+		if v := f.Units[i]; b.ownSelectableUnit(f, v) {
+			eligible[v.Slot] = struct{}{}
+		}
+	}
+	inRect := client.SnapshotUnitHandlesInRect(f, b.cam, rect, b.sess.LocalOwner)
+	out := make([]pool.Handle, 0, len(inRect))
+	for _, h := range inRect {
+		if _, ok := eligible[h]; ok {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 // ownSelectableHandles walks the committed frame in slot order and returns the

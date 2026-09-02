@@ -133,21 +133,18 @@ func cursorForBuildSite(valid bool) int {
 // mission unit still under script control is not inspectable, which is the
 // point of the gate, and SC16's "no implementable counterpart" no longer holds.
 //
-// TODO(question): the untasked gate is still not implemented, and this is why.
-// [07 §8] names it "the empty-current-task field"; the paragraph after it
-// identifies the shared eligibility predicate's compared value as a per-unit
-// order-guard float compared exactly to `0.0`, but no sentence says the two are
-// the same field. `units.Unit.OrderGuard` is this build's order guard, and
-// gating on it here makes `cursorselect` unreachable: the guard is written
-// nonzero whenever the primary queue is non-empty, and an idle unit's primary
-// queue holds a `Standby` node, so every idle own unit reads as mid-order. That
-// is the same failure mode SC16 warned about for the `0x20` bit, so the clause
-// is left out rather than shipped wrong. Either the guard's writer is too
-// coarse — `Standby` is the idle state, not "an order being processed" — or the
-// current-task field is a different word; retail's rectangle selection shares
-// the same compare [07 §9], so under our writer it would select nothing either.
-// A static trace of the inspect predicate's second compare, naming the field it
-// reads and what an idle unit holds in it, would settle both.
+// The "empty current task" gate is the remaining-build fraction, and it is
+// already here. [07 R-WGT-01 §10] closes the question this comment carried: the
+// word every eligibility site compares with `0.0` is the remaining-build
+// fraction, no routine of the order subsystem writes it, and so §8's
+// "empty-current-task field" is not a second gate but the *finished* gate
+// itself — "a build carrying a separate order-derived guard word has one clause
+// too many". The order-guard float this build wrote, and the fear that gating
+// on it would make `cursorselect` unreachable for every idle unit holding its
+// `defaultmissiontype` standing record, are both retired with the field
+// (WU-19-45). The predicate below is complete for single-player: the two
+// clauses it still lacks are the post-capture grace counter, always zero
+// without a remote controller, and the carrier's cargo-selectable bit.
 func isInspectable(t *units.Unit, viewer uint8) bool {
 	if t == nil || !t.Alive {
 		return false
