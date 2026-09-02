@@ -59,20 +59,40 @@ func TestWindingCullKeepsClockwiseRings(t *testing.T) {
 	}
 }
 
-// TestCollectDrawTrisAppliesTheWindingCull checks the cull reaches the
-// triangle stream, not just the predicate.
-func TestCollectDrawTrisAppliesTheWindingCull(t *testing.T) {
+// TestTheWindingCullIsTheSpanComparison checks that the cull reaches composed
+// pixels. It no longer runs before the raster: collectDrawPolys emits both
+// rings, and the empty span of [R-RAST-01 §1] step 7 is what removes the back
+// face while the walk runs. Asserting the pixel count rather than a face count
+// is the point — it is the mechanism that has to hold, not a predicate.
+func TestTheWindingCullIsTheSpanComparison(t *testing.T) {
 	c := testModelTextureClient()
 	front := [][3]numeric.Fixed{
 		fixedVertex(0, 0, 0), fixedVertex(4, 0, 0), fixedVertex(4, 0, -4), fixedVertex(0, 0, -4),
 	}
 	pr := presentationrender.PrimitiveDraw{IsColored: 1, ColorIndex: 56, VertexIndices: []uint16{0, 1, 2, 3}}
-	if got := len(c.collectDrawTris(testPrimitiveDraw(pr, front), 0, 1, modelCursorUnit)); got != 2 {
-		t.Fatalf("front face emitted %d triangles, want 2", got)
+	painted := func(indices []uint16) int {
+		pr.VertexIndices = indices
+		polys := c.collectDrawPolys(testPrimitiveDraw(pr, front), 0, 1, modelCursorUnit)
+		if len(polys) != 1 {
+			t.Fatalf("indices %v emitted %d faces, want 1: the cull is the span comparison, not a face filter", indices, len(polys))
+		}
+		w, h, ox, oy := modelExtentPolys(polys)
+		placePolys(polys, ox, oy, 1)
+		target := newModelImage(w, h, ox, oy, 0, 0, true, 1)
+		c.fillPolyTarget(target, &polys[0], polys[0].color, nil)
+		n := 0
+		for _, covered := range target.covered {
+			if covered {
+				n++
+			}
+		}
+		return n
 	}
-	pr.VertexIndices = []uint16{3, 2, 1, 0}
-	if got := len(c.collectDrawTris(testPrimitiveDraw(pr, front), 0, 1, modelCursorUnit)); got != 0 {
-		t.Fatalf("back face emitted %d triangles, want 0", got)
+	if got := painted([]uint16{0, 1, 2, 3}); got == 0 {
+		t.Fatal("clockwise ring painted nothing; retail's right chain is to the right of its left chain here")
+	}
+	if got := painted([]uint16{3, 2, 1, 0}); got != 0 {
+		t.Fatalf("counter-clockwise ring painted %d pixels; the span comparison is empty on every row", got)
 	}
 }
 
@@ -117,12 +137,12 @@ func TestRetailFlapKeepsItsOuterSkin(t *testing.T) {
 
 	draw := presentationrender.BuildUnitDrawSimple(m.compiled, make([]compiledmodel.PieceState, len(m.compiled.Pieces)), 0, 0, 0, [3]numeric.Fixed{})
 	draw.KeyPlane = true
-	tris := c.collectDrawTris(draw, 0, 1, modelCursorUnit)
-	if len(tris) == 0 {
-		t.Fatal("ARMCK composed no triangles")
+	polys := c.collectDrawPolys(draw, 0, 1, modelCursorUnit)
+	if len(polys) == 0 {
+		t.Fatal("ARMCK composed no faces")
 	}
-	width, height, originX, originY := modelExtent(tris)
-	placeTris(tris, originX, originY, 1)
+	width, height, originX, originY := modelExtentPolys(polys)
+	placePolys(polys, originX, originY, 1)
 	target := newModelImage(width, height, originX, originY, 0, 0, true, 1)
 
 	owner := make([]int, width*height)
@@ -131,11 +151,11 @@ func TestRetailFlapKeepsItsOuterSkin(t *testing.T) {
 	}
 	previous := make([]uint8, len(target.color))
 	copy(previous, target.color)
-	for i := range tris {
-		if tris[i].frame != nil {
-			c.blitTexturedTriTarget(target, &tris[i], tris[i].frame, 1)
+	for i := range polys {
+		if polys[i].frame != nil {
+			c.blitTexturedPolyTarget(target, &polys[i], polys[i].frame, nil, 1)
 		} else {
-			c.fillTriTarget(target, &tris[i], tris[i].color, 1)
+			c.fillPolyTarget(target, &polys[i], polys[i].color, nil, 1)
 		}
 		for p := range target.color {
 			if target.color[p] != previous[p] {
@@ -147,10 +167,10 @@ func TestRetailFlapKeepsItsOuterSkin(t *testing.T) {
 
 	var skin, team int
 	for p, o := range owner {
-		if o < 0 || !target.covered[p] || !flaps[tris[o].piece] {
+		if o < 0 || !target.covered[p] || !flaps[polys[o].piece] {
 			continue
 		}
-		switch name := strings.ToLower(tris[o].texture); {
+		switch name := strings.ToLower(polys[o].texture); {
 		case strings.HasPrefix(name, "noise3"):
 			skin++
 		case strings.HasPrefix(name, "color"), name == "32xlogos":

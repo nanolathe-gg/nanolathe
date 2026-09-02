@@ -322,8 +322,10 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 			}
 			// A participating slot that has not created any unit is not an
 			// eliminated opponent; victory waits for its first allocation
-			// [08 R-SKIR-01 §3].
-			if s.Units.CreatedCountForPlayer(i) == 0 && !s.resultPending {
+			// [08 R-SKIR-01 §3] "Victory detection". "Not eliminated with
+			// nothing alive" is the counters' way of saying "ever created is
+			// zero" — the predicate's second term.
+			if !s.ownerEliminated(i) && s.Units.LiveCountForPlayer(i) == 0 && !s.resultPending {
 				return false
 			}
 			addTeam(s.teamForOwner(i))
@@ -338,7 +340,7 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 		if s.Econ != nil {
 			for i := 0; i < 10; i++ {
 				if s.resultOwnerEligible(i) {
-					if s.Units.CreatedCountForPlayer(i) == 0 && !s.resultPending {
+					if !s.ownerEliminated(i) && s.Units.LiveCountForPlayer(i) == 0 && !s.resultPending {
 						return false
 					}
 					addTeam(s.teamForOwner(i))
@@ -356,7 +358,10 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 	// cannot arm victory merely because a unit has been marked Dying
 	// [08 R-SKIR-01 §3]. In skirmish, each participating player's counter is
 	// tested independently; AllyGroup affects result presentation only and does
-	// not collapse allied players into one surviving side.
+	// not collapse allied players into one surviving side. A zero live count is
+	// the whole test here: by the loop above, every eligible slot has created a
+	// unit, so a zero count is exactly ownerEliminated — the sweep's "skip the
+	// eliminated slot" leg [08 R-SKIR-01 §3] "Victory detection".
 	var active [10]int
 	activeCount := 0
 	addActive := func(team int) {
@@ -624,6 +629,17 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 		ColumnMaxima: resultColumnMaxima(scores),
 	}
 	return false
+}
+
+// ownerEliminated is the elimination predicate the victory sweep, the phase-2
+// player gate and the sharing dispatcher share: live count zero AND at least
+// one unit ever created [08 R-SKIR-01 §3][05 R-SHARE-01 §3]. It is derived from
+// the player record's two counters; there is no elimination flag to read.
+func (s *Session) ownerEliminated(owner int) bool {
+	if s == nil {
+		return false
+	}
+	return economy.PlayerEliminated(s.Units, owner)
 }
 
 func (s *Session) resultOwnerEligible(owner int) bool {

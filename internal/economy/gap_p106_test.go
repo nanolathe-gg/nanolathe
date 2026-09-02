@@ -223,7 +223,7 @@ func TestRefillMinGap(t *testing.T) {
 	svc.Players[1].Stock[Energy] = 100
 	svc.ReferencePlayer = 0
 	// Metal: excess 600 *0.333=200, gap 900 => transfer 200
-	svc.ShareTick(60)
+	svc.ShareTick(60, nil)
 	if svc.Players[0].Stock[Metal] != 600 || svc.Players[1].Mirror[Metal].Production != 200 {
 		t.Fatalf("metal refill min gap failed source=%v production=%v", svc.Players[0].Stock[Metal], svc.Players[1].Mirror[Metal].Production)
 	}
@@ -239,7 +239,7 @@ func TestRefillMinGap(t *testing.T) {
 	svc.Players[0].Stock[Energy] = 800
 	svc.Players[1].Stock[Energy] = 100
 	svc.ReferencePlayer = 0
-	svc.ShareTick(120) // 120%60==0
+	svc.ShareTick(120, nil) // 120%60==0
 	if svc.Players[1].Mirror[Metal].Production != 1 {
 		t.Fatalf("automatic amount should be capped to the destination gap, production=%v", svc.Players[1].Mirror[Metal].Production)
 	}
@@ -274,7 +274,7 @@ func TestLastWinsAlliances(t *testing.T) {
 	svc.Players[2].Stock[Metal] = 50
 	svc.Players[3].Stock[Metal] = 200
 	svc.ReferencePlayer = 0
-	svc.ShareTick(60)
+	svc.ShareTick(60, nil)
 	// All three lower than src (800), last qualifying wins => dest should be 3 (last index)
 	if svc.Players[3].Mirror[Metal].Production == 0 {
 		t.Fatalf("last-wins should transfer to player 3")

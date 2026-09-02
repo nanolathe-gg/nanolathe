@@ -75,6 +75,44 @@ func setTestHostility(u *units.Unit, fn func(*units.Unit, *units.Unit) bool) {
 	q.SetBinding(b)
 }
 
+// setTestBuildList binds command code 14's build-list query [04 R-ORD-02 §1].
+func setTestBuildList(u *units.Unit, fn func(*content.UnitDef) bool) {
+	q := QueueForUnit(u)
+	b := q.Binding()
+	if b == nil {
+		b = &QueueBinding{}
+	}
+	b.BuildList = fn
+	q.SetBinding(b)
+}
+
+// setTestAdmission binds the carriable test — §10.2's nine-reject transport
+// admission — onto the CARRIER's queue [04 §10.2][04 R-ORD-02 §1].
+func setTestAdmission(u *units.Unit, fn func(carrier, candidate *units.Unit) bool) {
+	q := QueueForUnit(u)
+	b := q.Binding()
+	if b == nil {
+		b = &QueueBinding{}
+	}
+	b.TransportAdmission = fn
+	q.SetBinding(b)
+}
+
+// setTestSeaLevel binds the map's sea level, which nano-reach's water clause
+// reads through the world adapter [04 R-ORD-01 §7].
+func setTestSeaLevel(u *units.Unit, level uint8) {
+	q := QueueForUnit(u)
+	b := q.Binding()
+	if b == nil {
+		b = &QueueBinding{}
+	}
+	if b.World == nil {
+		b.World = &WorldQueryAdapter{}
+	}
+	b.World.SeaLevel = func() uint8 { return level }
+	q.SetBinding(b)
+}
+
 func setTestLookup(u *units.Unit, fn func(pool.Handle) *units.Unit) {
 	q := QueueForUnit(u)
 	b := q.Binding()
@@ -127,6 +165,12 @@ func TestResolveFullTable(t *testing.T) {
 		d.Builder = false
 	}))
 	setTestHostility(actorNoAttack, func(a, b *units.Unit) bool { return true })
+	// Carriable is §10.2's nine-reject admission, asked of the carrier's queue
+	// binding [04 R-ORD-02 §1]; the ladder itself is exercised against
+	// internal/movement's owner in resolve_contracts_test.go.
+	setTestAdmission(actorNoAttack, func(_, candidate *units.Unit) bool {
+		return candidate != nil && candidate.Def != nil && !candidate.Def.CantBeTransported
+	})
 	id := Resolve(1, actorNoAttack, transportable, nil)
 	if got := DescriptorFor(id).Name; got != "Ground_Pickup" {
 		t.Fatalf("code1 transportable want Ground_Pickup got %q", got)
@@ -204,7 +248,11 @@ func TestResolveFullTable(t *testing.T) {
 		t.Fatalf("code2 hostile capture want Capture got %q", got)
 	}
 	setTestHostility(actor, func(a, b *units.Unit) bool { return false })
-	friendlyUnfinished := mkUnit(7, 0, "ARM", 100, 100, true, 0.5, mkDef(nil))
+	// A nanoframe's health is scaled with its remaining fraction [04 §2.3], so
+	// a half-built frame is below `maxdamage` — which is one of nano-reach's
+	// four terms and therefore part of what the assist arm admits
+	// [04 R-ORD-01 §7][04 R-ORD-02 §1].
+	friendlyUnfinished := mkUnit(7, 0, "ARM", 50, 100, true, 0.5, mkDef(nil))
 	id = Resolve(2, actor, friendlyUnfinished, nil)
 	if got := DescriptorFor(id).Name; got != "HelpBuild" {
 		t.Fatalf("code2 friendly build want HelpBuild got %q", got)
@@ -227,6 +275,11 @@ func TestResolveFullTable(t *testing.T) {
 		t.Fatalf("code2 ground actor must not land on a pad [04 R-ORD-02 §1]")
 	}
 	setTestHostility(actor, func(a, b *units.Unit) bool { return false })
+	// Code 2's pickup arm asks the same carriable question code 6 does — the
+	// nine-reject admission, of the acting unit as carrier [04 R-ORD-02 §1].
+	setTestAdmission(actor, func(_, candidate *units.Unit) bool {
+		return candidate != nil && candidate.Def != nil && !candidate.Def.CantBeTransported
+	})
 	carriableUnfinishedFalse := mkUnit(9, 1, "CORE", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CantBeTransported = false; d.IsAirBase = false }))
 	id = Resolve(2, actor, carriableUnfinishedFalse, nil)
 	if got := DescriptorFor(id).Name; got != "Ground_Pickup" {
@@ -369,6 +422,13 @@ func TestResolveFullTable(t *testing.T) {
 	}
 
 	carriableT := mkUnit(18, 1, "CORE", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CantBeTransported = false }))
+	// Code 6's whole gate is the carriable test, asked of the acting carrier
+	// [04 R-ORD-02 §1]; reject 1 stands in for the ladder here.
+	admitByKey := func(_, candidate *units.Unit) bool {
+		return candidate != nil && candidate.Def != nil && !candidate.Def.CantBeTransported
+	}
+	setTestAdmission(actorLoad, admitByKey)
+	setTestAdmission(actorLoadVTOL, admitByKey)
 	if id := Resolve(6, actor, nil, nil); id != 0 {
 		t.Fatalf("code6 no target should reject")
 	}
@@ -406,14 +466,20 @@ func TestResolveFullTable(t *testing.T) {
 	}
 	setTestHostility(actor, nil)
 
-	actorNonBuilder := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.Builder = false }))
-	if id := Resolve(8, actorNonBuilder, friendlyDamaged, nil); id != 0 {
-		t.Fatalf("code8 non builder should reject")
+	// Code 8's gate is nano-reach, whose first term is the `canreclamate`
+	// mirror bit — not the authored `builder` key [04 R-ORD-02 §1]
+	// [04 R-ORD-01 §7]. This assertion used to clear `Builder`, which the
+	// corrected gate does not read at all.
+	actorNoMirrorBit := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanReclamate = false }))
+	if id := Resolve(8, actorNoMirrorBit, friendlyDamaged, nil); id != 0 {
+		t.Fatalf("code8 without the canreclamate mirror bit should reject, got %q", DescriptorFor(id).Name)
 	}
 	if id := Resolve(8, actor, nil, nil); id != 0 {
 		t.Fatalf("code8 no target should reject")
 	}
-	unfinished := mkUnit(21, 0, "ARM", 100, 100, true, 0.5, mkDef(nil))
+	// Health below `maxdamage` is nano-reach's own health term, and a partly
+	// built frame's health is scaled with its remaining fraction [04 §2.3].
+	unfinished := mkUnit(21, 0, "ARM", 50, 100, true, 0.5, mkDef(nil))
 	id = Resolve(8, actor, unfinished, nil)
 	if got := DescriptorFor(id).Name; got != "HelpBuild" {
 		t.Fatalf("code8 unfinished want HelpBuild got %q", got)
@@ -542,15 +608,21 @@ func TestResolveFullTable(t *testing.T) {
 	}
 	setTestHostility(actor, nil)
 
-	actorNonBuilder2 := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.Builder = false }))
-	if id := Resolve(14, actorNonBuilder2, nil, nil); id != 0 {
-		t.Fatalf("code14 non builder should reject")
+	// Code 14 gates on the definition's compiled build list being non-empty,
+	// never on the authored `builder` key [04 R-ORD-02 §1]. The query is the
+	// session-owned catalog seam; an empty page is a reject.
+	actorEmptyList := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.Builder = true }))
+	setTestBuildList(actorEmptyList, func(*content.UnitDef) bool { return false })
+	if id := Resolve(14, actorEmptyList, nil, nil); id != 0 {
+		t.Fatalf("code14 with an empty build list should reject, got %q", DescriptorFor(id).Name)
 	}
+	setTestBuildList(actor, func(*content.UnitDef) bool { return true })
 	id = Resolve(14, actor, nil, nil)
 	if got := DescriptorFor(id).Name; got != "MobileBuild" {
 		t.Fatalf("code14 want MobileBuild got %q", got)
 	}
 	actorMobileVTOL := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.Builder = true; d.CanFly = true }))
+	setTestBuildList(actorMobileVTOL, func(*content.UnitDef) bool { return true })
 	id = Resolve(14, actorMobileVTOL, nil, nil)
 	if got := DescriptorFor(id).Name; got != "VTOL_MobileBuild" {
 		t.Fatalf("code14 vtol want VTOL_MobileBuild got %q", got)

@@ -13,7 +13,8 @@ import (
 // per-side byte on the acting unit's definition, and it is read once at
 // resolver entry — a value of 0 is hostile, any other value friendly; with no
 // target both hostile and friendly are false. That is exactly the session's
-// alliance row, which composition injects as Queue.Binding().Hostility.
+// alliance row A of [05 R-SHARE-01 §1], which composition injects as
+// Queue.Binding().Hostility.
 //
 // P0-I16: hostility and target lookup moved onto Queue.Hostility/Lookup; package globals removed.
 
@@ -29,17 +30,29 @@ func getHostility(actor *units.Unit) func(*units.Unit, *units.Unit) bool {
 }
 
 func isHostile(actor, target *units.Unit) bool {
-	if fn := getHostility(actor); fn != nil {
-		return fn(actor, target)
-	}
+	// "with no target both hostile and friendly are false" [04 R-ORD-02 §1].
 	if actor == nil || target == nil {
 		return false
 	}
-	if actor.Def != nil && target.Def != nil && actor.Def.Side != "" && target.Def.Side != "" {
-		// Unbound queue (tests and tools only): with no alliance row to read,
-		// side inequality stands in for the diplomacy byte [04 §2.2].
-		return actor.Def.Side != target.Def.Side
+	if fn := getHostility(actor); fn != nil {
+		return fn(actor, target)
 	}
+	// Retired 2026-09-01 (WU-19-34): a `Def.Side != Def.Side` arm stood here as
+	// the unbound fallback, cited to §3.4's sentence "hostility comes from a
+	// per-side diplomacy byte on the acting unit's definition, indexed by the
+	// target's side". [04 R-ORD-02 §1] corrects that sentence: the byte is the
+	// acting PLAYER's diplomacy byte toward the target's side, which is row A
+	// of the player slot's two alliance rows, indexed by the target's slot
+	// [05 R-SHARE-01 §1][05 "Player slot"]. Reading the definition's side made
+	// two players who picked the same side permanently friendly and two allies
+	// of different sides permanently hostile — neither is a fact about the
+	// alliance rows.
+	//
+	// With no rows to read (an unbound queue: tests and tools) the answer is
+	// the rows as slot initialization leaves them — "slot initialization zeroes
+	// both rows and sets the self entry of each to one" [05 R-SHARE-01 §1] — so
+	// a unit is friendly to its own player's units and hostile to every other
+	// slot. That is a citable state, not a stand-in.
 	return actor.Owner != target.Owner
 }
 
@@ -131,28 +144,118 @@ func canPatrol(u *units.Unit) bool {
 	}
 	return u.Def.CanPatrol
 }
-func isBuilder(u *units.Unit) bool { // build list non-empty [04 §3.4] code 14
+
+// hasBuildList is command code 14's gate: "the definition's build list is
+// non-empty" [04 R-ORD-02 §1]. It is NOT the authored `builder` key — retail
+// tests the compiled `CANBUILD` page, and the two are independent authorings
+// [02 "Build-menu catalog keys"].
+//
+// The page lives in the catalog, which this package holds no handle to, so the
+// question is asked through the queue's session-owned binding. A queue with no
+// build-list query refuses, the same way canEngageSlot refuses without a weapon
+// adapter: the alternative is answering a catalog question from a different
+// key and calling the answer retail's.
+func hasBuildList(u *units.Unit) bool {
 	if u == nil || u.Def == nil {
 		return false
 	}
-	// Unimplemented: [04 R-ORD-02 §1] establishes that code 14's gate is "the
-	// definition's build list is non-empty", not the authored `builder` key.
-	// The compiled build list is content.Catalog.BuildMenus, which the resolver
-	// has no handle to; wiring one is a package-API change — see PLAN 19 §2.3.
-	// `Builder` stands in until then: every stock definition with a CANBUILD
-	// page also authors `builder=1`, so the two disagree only on modded data.
-	return u.Def.Builder
-}
-func isTransportable(t *units.Unit) bool { // carriable test [04 §10.2]
-	if t == nil || t.Def == nil {
+	b := bindingOfUnit(u)
+	if b == nil || b.BuildList == nil {
 		return false
 	}
-	// Unimplemented: "Carriable is the nine-reject transport admission of
-	// §10.2" [04 R-ORD-02 §1] — size against `transportsize`, remaining
-	// capacity, the carrier's own mover mode and the rest of §10.2's ladder.
-	// Only the authored `cantbetransported` reject is applied here; the other
-	// eight need the carrier's runtime cargo state — see PLAN 19 §2.3.
-	return !t.Def.CantBeTransported
+	return b.BuildList(u.Def)
+}
+
+// isCarriable is the carriable test of [04 R-ORD-02 §1] codes 1, 2 and 6:
+// "*Carriable* is the nine-reject transport admission of §10.2", applied in
+// §10.2's order with the carrier's runtime cargo state included.
+//
+// internal/movement owns that ladder (its CanTransport walks the nine rejects
+// and names the one that fired); the resolver reaches it through the binding
+// rather than keeping a second copy, because rejects 3, 5, 6, 8 and 9 read the
+// carrier's live cargo list, the candidate's mover reference and committed
+// mover mode, and the map's sea level — state the order package does not own.
+// An unbound queue refuses rather than applying a partial ladder: the previous
+// site applied reject 1 alone, which admitted a submerged, airborne or
+// still-under-construction candidate onto a full transport.
+func isCarriable(carrier, candidate *units.Unit) bool {
+	if carrier == nil || candidate == nil || carrier.Def == nil || candidate.Def == nil {
+		return false
+	}
+	b := bindingOfUnit(carrier)
+	if b == nil || b.TransportAdmission == nil {
+		return false
+	}
+	return b.TransportAdmission(carrier, candidate)
+}
+
+// nanoReach is the repair admission of [04 R-ORD-01 §7], which
+// [04 R-ORD-02 §1] names *nano-reach* and shares between command codes 1, 2
+// and 8. Its terms, in the order that section gives them:
+//
+//	the target exists; my definition carries the `canreclamate` mirror bit
+//	(word B bit 9, the parser's second copy of `canreclamate`); the target's
+//	16-bit health differs from its `maxdamage`; the target's mover mode is not
+//	airborne (≠ 2); and the water clause
+//	  (not canfly(me) or amphibious(me) or seaLevel <= targetTop)
+//	  and (canfly(me) or seaLevel − MaxWaterDepth(me) <= targetTop)
+//	with targetTop = the whole part of the target's Y plus the whole part of
+//	its definition's model-height word ([R-COB-03 §2] port 11, the model
+//	bounding box's maximum Y, [04 R-MOV-03 §5]).
+//
+// Both whole parts are the high word of a 16.16 dword, which is an arithmetic
+// shift and therefore floors (I3); numeric.Fixed.Floor is that shift, and
+// content.UnitDef.ModelTop is already the definition word's whole part.
+//
+// For an aircraft the clause reduces to `seaLevel <= targetTop`: it will not
+// repair a unit whose top is under water [04 R-ORD-01 §7].
+func nanoReach(actor, target *units.Unit) bool {
+	if actor == nil || actor.Def == nil || target == nil || target.Def == nil {
+		return false
+	}
+	// The mirror bit is a second copy of `canreclamate` alone; `canresurrect`
+	// is a different bit of word B and is not part of it [04 R-ORD-02 §1].
+	if !actor.Def.CanReclamate {
+		return false
+	}
+	// TODO(question): [04 R-ORD-02 §1] code 1 step 3 adds, in parentheses,
+	// "no health test — a full-health friendly resolves to a repair", while
+	// the nano-reach admission it requires, [04 R-ORD-01 §7], carries this
+	// health term. The two sentences cannot both be literal. The traced
+	// admission is implemented; the parenthetical is read as "no test beyond
+	// nano-reach's own", the way code 2's arm adds a second, stricter one.
+	// What would settle it: a trace of code 1's friendly arm showing whether
+	// it calls the shared admission or an inlined copy without the health term.
+	if target.Health == target.Def.MaxDamage {
+		return false
+	}
+	if target.Move.Mode == 2 { // airborne [04 R-MOV-01 §8]
+		return false
+	}
+	targetTop := int32(target.Y.Floor()) + target.Def.ModelTop
+	sea := seaLevelWholeUnits(actor)
+	if actor.Def.CanFly {
+		// (canfly and not amphibious) leaves the first conjunct as the sea
+		// test; the second is satisfied by `canfly`.
+		return actor.Def.Amphibious || sea <= targetTop
+	}
+	// A ground actor satisfies the first conjunct outright and keeps the
+	// second: its own movement class's maximum water depth is how far below
+	// the surface it can still reach.
+	return sea-actor.Def.MaxWaterDepth <= targetTop
+}
+
+// seaLevelWholeUnits reads the map's sea level through the queue's world
+// adapter. The terrain header's sea level is a byte in whole world units
+// [04 §10.2]; a queue with no world adapter reports 0, which is the height of
+// a map with no water and makes nano-reach's water clause vacuous rather than
+// inventing a level.
+func seaLevelWholeUnits(u *units.Unit) int32 {
+	b := bindingOfUnit(u)
+	if b == nil || b.World == nil || b.World.SeaLevel == nil {
+		return 0
+	}
+	return int32(b.World.SeaLevel())
 }
 
 // isFollowable is the alive gate and nothing else. [04 R-ORD-02 §1] settles
@@ -175,12 +278,10 @@ func isLandingPad(t *units.Unit) bool {
 // variant". Its only caller was code 3's ground tail, which [R-ORD-02 §1] settles as a
 // test on the ACTOR's mover reference and state bit 29, not on the target's
 // class. There is no structure-detection question left to answer.
-func isDamaged(u *units.Unit) bool {
-	if u == nil {
-		return false
-	}
-	return u.Health < u.MaxHealth
-}
+// Retired 2026-09-01 (WU-19-34): `isDamaged` stood here, `Health < MaxHealth`.
+// Its only caller was code 1's repair arm, whose real admission is nano-reach
+// [04 R-ORD-02 §1] — and nano-reach's own health term is `health differs from
+// maxdamage`, not `below` it, so the two are not the same test.
 
 // isUnfinished is the "target unfinished" predicate the assist-or-repair
 // resolutions read (command codes 1, 2 and 8, [04 R-ORD-01 §5]).
@@ -290,7 +391,10 @@ func resolveName(code int, actor *units.Unit, target *units.Unit, pos *ResolvePo
 		}
 		return "Ground_Unload"
 	case 6:
-		if target == nil || !isTransportable(target) {
+		// "A target that is carriable → pickup or air twin; else reject"
+		// [04 R-ORD-02 §1]; carriable is the whole nine-reject admission, so
+		// the acting unit is the carrier of that pair.
+		if target == nil || !isCarriable(actor, target) {
 			return ""
 		}
 		if actor.Def != nil && actor.Def.CanFly {
@@ -306,16 +410,19 @@ func resolveName(code int, actor *units.Unit, target *units.Unit, pos *ResolvePo
 		}
 		return "Follow_Ground"
 	case 8:
-		if target == nil || !isBuilder(actor) {
+		// "Nano-reach must pass (else reject); target unfinished →
+		// `HelpBuild` or air twin, else `RepairUnit` or air twin — no health
+		// test here either" [04 R-ORD-02 §1]. "No health test here" means no
+		// test beyond the one nano-reach already carries (health differs from
+		// `maxdamage`), which is why a full-health finished friendly rejects at
+		// the gate rather than resolving a repair with nothing to repair.
+		//
+		// The gate used to be `isBuilder`, the authored `builder` key, which
+		// admitted a factory (builder, no nanolathe reach) and rejected a
+		// reclaimer, and applied none of the other three terms.
+		if target == nil || !nanoReach(actor, target) {
 			return ""
 		}
-		// Unimplemented: [04 R-ORD-02 §1] names code 8's gate "nano-reach", the
-		// repair admission of [04 R-ORD-01 §7] — the `canreclamate` mirror bit
-		// on me, the target's health differing from `maxdamage`, the target not
-		// airborne, and the water clause — and "no health test here either" on
-		// the resolved name. `isBuilder` stands in for the mirror bit and the
-		// remaining three terms are unapplied; the admission is shared with
-		// codes 1 and 2, so it belongs in one helper — see PLAN 19 §2.3.
 		if isUnfinished(target) {
 			if actor.Def != nil && actor.Def.CanFly {
 				return "VTOL_HelpBuild"
@@ -401,7 +508,12 @@ func resolveName(code int, actor *units.Unit, target *units.Unit, pos *ResolvePo
 		}
 		return "Capture"
 	case 14:
-		if !isBuilder(actor) {
+		// "The definition's build list is non-empty **and a live mover exists**
+		// → `MobileBuild` or air twin; else reject" [04 R-ORD-02 §1]. The mover
+		// term is why a factory — which authors `CanMove=1` on a `BMcode=0`
+		// definition and owns a build list — does not resolve a mobile build
+		// from its own build page.
+		if !hasBuildList(actor) || !hasLiveMover(actor) {
 			return ""
 		}
 		if actor.Def != nil && actor.Def.CanFly {
@@ -421,8 +533,12 @@ func resolveContextual(actor *units.Unit, target *units.Unit, pos *ResolvePos) s
 			return name
 		}
 	}
-	// Damaged or unfinished friendly becomes repair or build assistance
-	if target != nil && !isHostile(actor, target) && (isDamaged(target) || isUnfinished(target)) {
+	// "friendly and nano-reach passes: target unfinished → `HelpBuild` or air
+	// twin, else `RepairUnit` or air twin" [04 R-ORD-02 §1] code 1 step 3. The
+	// arm used to be gated on `isDamaged(target) || isUnfinished(target)` with
+	// no admission at all, so any unit at all — a tank with no nanolathe —
+	// resolved a repair on a scratched friendly and then stood there.
+	if target != nil && !isHostile(actor, target) && nanoReach(actor, target) {
 		if isUnfinished(target) {
 			if actor.Def != nil && actor.Def.CanFly {
 				return "VTOL_HelpBuild"
@@ -434,7 +550,7 @@ func resolveContextual(actor *units.Unit, target *units.Unit, pos *ResolvePos) s
 		}
 		return "RepairUnit"
 	}
-	if target != nil && isTransportable(target) {
+	if target != nil && isCarriable(actor, target) {
 		if actor.Def != nil && actor.Def.CanFly {
 			return "VTOL_Pickup"
 		}
@@ -495,7 +611,13 @@ func resolveMove(actor *units.Unit, target *units.Unit) string {
 			}
 			return "ReclaimUnit"
 		}
-		if !isHostile(actor, target) && isUnfinished(target) {
+		// "friendly and nano-reach passes and the target is unfinished →
+		// `HelpBuild` or air twin" [04 R-ORD-02 §1] code 2. The same section's
+		// next arm — friendly, nano-reach, and health below `maxdamage` →
+		// `RepairUnit` — is not built here: PLAN 19 §2.4's row is code 8's gate
+		// and the shared helper, and adding a resolution code 2 does not have
+		// today is a separate change with its own before/after.
+		if !isHostile(actor, target) && nanoReach(actor, target) && isUnfinished(target) {
 			if actor.Def != nil && actor.Def.CanFly {
 				return "VTOL_HelpBuild"
 			}
@@ -507,7 +629,7 @@ func resolveMove(actor *units.Unit, target *units.Unit) string {
 		if actor.Def != nil && actor.Def.CanFly && !isHostile(actor, target) && isLandingPad(target) {
 			return "VTOL_Landing"
 		}
-		if isTransportable(target) {
+		if isCarriable(actor, target) {
 			if actor.Def != nil && actor.Def.CanFly {
 				return "VTOL_Pickup"
 			}

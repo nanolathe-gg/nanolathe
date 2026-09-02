@@ -68,7 +68,13 @@ func TestModelPrimitiveDispatch(t *testing.T) {
 	}
 }
 
-func TestCollectDrawTrisUsesPrimitiveCornerShadeRows(t *testing.T) {
+// TestCollectDrawPolysKeepsAuthoredArityAndCornerOrder locks that one authored
+// primitive becomes one face at its authored arity, with the per-corner SHD
+// rows in authored index order. The fan triangulation this replaced re-used
+// corner 0 in every triangle and would have reported the rows {3,7,11} and
+// {3,11,19}; the walk of [R-RAST-01 §1] derives its chains from the index ring
+// itself, so a split would change which faces paint.
+func TestCollectDrawPolysKeepsAuthoredArityAndCornerOrder(t *testing.T) {
 	c := testModelTextureClient()
 	pr := presentationrender.PrimitiveDraw{
 		TextureName:   "tex",
@@ -79,29 +85,35 @@ func TestCollectDrawTrisUsesPrimitiveCornerShadeRows(t *testing.T) {
 	for i := range vertices {
 		vertices[i] = fixedVertex(int64(i), 0, int64(i))
 	}
-	// The four corners the primitive names are authored front-facing: their
-	// projected ring (x, -z) has to run clockwise or the winding cull of
-	// [R-RAST-01 §1] step 7 drops the face.
 	vertices[2] = fixedVertex(0, 0, 0)
 	vertices[4] = fixedVertex(1, 0, 0)
 	vertices[5] = fixedVertex(1, 0, -1)
 	vertices[6] = fixedVertex(0, 0, -1)
-	tris := c.collectDrawTris(testPrimitiveDraw(pr, vertices), 0, 1, modelCursorUnit)
-	if len(tris) != 2 {
-		t.Fatalf("triangle count = %d, want 2", len(tris))
+	polys := c.collectDrawPolys(testPrimitiveDraw(pr, vertices), 0, 1, modelCursorUnit)
+	if len(polys) != 1 {
+		t.Fatalf("face count = %d, want 1 (no fan triangulation)", len(polys))
 	}
-	if !tris[0].useSHD || !tris[1].useSHD {
+	if len(polys[0].x) != 4 {
+		t.Fatalf("corner count = %d, want the authored 4", len(polys[0].x))
+	}
+	if !polys[0].useSHD {
 		t.Fatal("shaded primitive lost its SHD dispatch")
 	}
-	if got, want := tris[0].row, [3]float64{3, 7, 11}; got != want {
-		t.Fatalf("first corner rows = %v, want %v", got, want)
+	for corner, want := range []int32{3, 7, 11, 19} {
+		if got := polys[0].attr[spanRow][corner]; got != want {
+			t.Fatalf("corner %d row = %d, want %d", corner, got, want)
+		}
 	}
-	if got, want := tris[1].row, [3]float64{3, 11, 19}; got != want {
-		t.Fatalf("second corner rows = %v, want %v", got, want)
+	// Retail's quad mapper defaults the corners to (0,0) (w-1,0) (w-1,h-1)
+	// (0,h-1) in vertex-index order, in texels [R-RAST-01 §1].
+	for corner, want := range [][2]int32{{0, 0}, {0, 0}, {0, 0}, {0, 0}} {
+		if got := [2]int32{polys[0].attr[spanU][corner], polys[0].attr[spanV][corner]}; got != want {
+			t.Fatalf("corner %d uv = %v, want %v on this 1x1 frame", corner, got, want)
+		}
 	}
 }
 
-func TestCollectDrawTrisCarriesNoShadeRowToRaster(t *testing.T) {
+func TestCollectDrawPolysCarriesNoShadeRowToRaster(t *testing.T) {
 	c := testModelTextureClient()
 	pr := presentationrender.PrimitiveDraw{
 		TextureName: "tex", ShadeRow: presentationrender.NoShadeRow,
@@ -111,16 +123,42 @@ func TestCollectDrawTrisCarriesNoShadeRowToRaster(t *testing.T) {
 		fixedVertex(0, 0, 0), fixedVertex(1, 0, 0),
 		fixedVertex(1, 0, -1), fixedVertex(0, 0, -1),
 	}
-	tris := c.collectDrawTris(testPrimitiveDraw(pr, vertices), 0, 1, modelCursorUnit)
-	if len(tris) != 2 {
-		t.Fatalf("triangle count = %d, want 2", len(tris))
+	polys := c.collectDrawPolys(testPrimitiveDraw(pr, vertices), 0, 1, modelCursorUnit)
+	if len(polys) != 1 {
+		t.Fatalf("face count = %d, want 1", len(polys))
 	}
-	for i := range tris {
-		if tris[i].useSHD {
-			t.Fatalf("unshaded triangle %d retained SHD dispatch", i)
+	if polys[0].useSHD {
+		t.Fatal("unshaded face retained SHD dispatch")
+	}
+	for corner := range polys[0].x {
+		if got := polys[0].attr[spanRow][corner]; got != 0 {
+			t.Fatalf("unshaded face corner %d emitted row %d", corner, got)
 		}
-		if tris[i].row != [3]float64{} {
-			t.Fatalf("unshaded triangle %d emitted corner rows %v", i, tris[i].row)
+	}
+}
+
+// TestDefaultUVCornersAreTheFrameSizeInTexels locks the default corner table
+// against a frame big enough to distinguish it from a normalised one
+// [R-RAST-01 §1][R-REN-03A §5].
+func TestDefaultUVCornersAreTheFrameSizeInTexels(t *testing.T) {
+	c := testModelTextureClient()
+	c.texIndex["big"] = texRef{kind: texStatic, key: "big", frame: &formats.GAFFrame{
+		Width: 8, Height: 4, Pixels: make([]byte, 32), Transparent: make([]bool, 32),
+	}}
+	pr := presentationrender.PrimitiveDraw{TextureName: "big", VertexIndices: []uint16{0, 1, 2, 3}}
+	vertices := [][3]numeric.Fixed{
+		fixedVertex(0, 0, 0), fixedVertex(1, 0, 0),
+		fixedVertex(1, 0, -1), fixedVertex(0, 0, -1),
+	}
+	polys := c.collectDrawPolys(testPrimitiveDraw(pr, vertices), 0, 1, modelCursorUnit)
+	if len(polys) != 1 {
+		t.Fatalf("face count = %d, want 1", len(polys))
+	}
+	want := [4][2]int32{{0, 0}, {7, 0}, {7, 3}, {0, 3}}
+	for corner, w := range want {
+		got := [2]int32{polys[0].attr[spanU][corner], polys[0].attr[spanV][corner]}
+		if got != w {
+			t.Fatalf("corner %d uv = %v, want %v", corner, got, w)
 		}
 	}
 }
@@ -134,16 +172,17 @@ func TestTexturedRasterBypassesSHDOnlyForNoShadeRow(t *testing.T) {
 	for _, nanoframe := range []bool{false, true} {
 		for _, shaded := range []bool{false, true} {
 			c := &Client{width: 8, height: 8, indexed: make([]uint8, 64), pal: pal}
-			tri := screenTri{
-				x: [3]int32{0, 6, 0}, y: [3]int32{0, 0, 6},
-				row: [3]float64{presentationrender.SHDIdentityRow, presentationrender.SHDIdentityRow, presentationrender.SHDIdentityRow},
-				key: [3]float64{70, 70, 70}, useSHD: shaded,
+			face := walkPoly([][2]int32{{0, 0}, {6, 0}, {0, 6}}, []int32{70, 70, 70})
+			face.useSHD = shaded
+			for i := range face.attr[spanRow] {
+				face.attr[spanRow][i] = presentationrender.SHDIdentityRow
 			}
 			target := newModelTarget(c.width, c.height)
 			if nanoframe {
-				c.blitTexturedTriNanoframeTarget(target, &tri, texture, presentationRevealKeep())
+				reveal := presentationRevealKeep()
+				c.blitTexturedPolyTarget(target, &face, texture, &reveal)
 			} else {
-				c.blitTexturedTriTarget(target, &tri, texture)
+				c.blitTexturedPolyTarget(target, &face, texture, nil)
 			}
 			target.commit(c.indexed, c.width, c.height)
 			want := source
@@ -166,10 +205,10 @@ func TestCollectDrawTrisSelectsTeamLogoFrame(t *testing.T) {
 	entry := &formats.GAFEntry{Name: "logo", Frames: frames}
 	c.texIndex["logo"] = texRef{kind: texTeam, key: "logo", entry: entry}
 	pr := presentationrender.PrimitiveDraw{TextureName: "logo", VertexIndices: []uint16{0, 1, 2, 3}}
-	tris := c.collectDrawTris(testPrimitiveDraw(pr, [][3]numeric.Fixed{
+	polys := c.collectDrawPolys(testPrimitiveDraw(pr, [][3]numeric.Fixed{
 		fixedVertex(0, 0, 0), fixedVertex(1, 0, 0), fixedVertex(1, 0, -1), fixedVertex(0, 0, -1),
 	}), 7, 1, modelCursorUnit)
-	if len(tris) != 2 || tris[0].frame != frames[7].Frame || tris[1].frame != frames[7].Frame {
+	if len(polys) != 1 || polys[0].frame != frames[7].Frame {
 		t.Fatalf("team texture did not select owner frame")
 	}
 }
@@ -182,16 +221,14 @@ func TestCollectDrawTrisFlatOverrideWinsOverTeamLogo(t *testing.T) {
 	}
 	c.texIndex["logo"] = texRef{kind: texTeam, key: "logo", entry: &formats.GAFEntry{Frames: frames}}
 	pr := presentationrender.PrimitiveDraw{TextureName: "logo", IsColored: 1, ColorIndex: 56, VertexIndices: []uint16{0, 1, 2, 3}}
-	tris := c.collectDrawTris(testPrimitiveDraw(pr, [][3]numeric.Fixed{
+	polys := c.collectDrawPolys(testPrimitiveDraw(pr, [][3]numeric.Fixed{
 		fixedVertex(0, 0, 0), fixedVertex(1, 0, 0), fixedVertex(1, 0, -1), fixedVertex(0, 0, -1),
 	}), 7, 1, modelCursorUnit)
-	if len(tris) != 2 {
-		t.Fatalf("flat team override emitted %d triangles, want 2", len(tris))
+	if len(polys) != 1 {
+		t.Fatalf("flat team override emitted %d faces, want 1", len(polys))
 	}
-	for _, tri := range tris {
-		if tri.frame != nil || tri.color != 56 {
-			t.Fatalf("flat team override = frame %v color %d, want direct color 56", tri.frame, tri.color)
-		}
+	if polys[0].frame != nil || polys[0].color != 56 {
+		t.Fatalf("flat team override = frame %v color %d, want direct color 56", polys[0].frame, polys[0].color)
 	}
 }
 
@@ -231,55 +268,56 @@ func TestFeatureAnimatedModelSuppressesMissingIdentity(t *testing.T) {
 	}}}
 	pr := presentationrender.PrimitiveDraw{TextureName: "anim", VertexIndices: []uint16{0, 1, 2, 3}}
 	vertices := [][3]numeric.Fixed{fixedVertex(0, 0, 0), fixedVertex(1, 0, 0), fixedVertex(1, 0, -1), fixedVertex(0, 0, -1)}
-	if got := c.collectDrawTris(testPrimitiveDraw(pr, vertices), 0, 0, modelCursorFeature); len(got) != 0 {
-		t.Fatalf("animated feature with missing identity emitted %d triangles", len(got))
+	if got := c.collectDrawPolys(testPrimitiveDraw(pr, vertices), 0, 0, modelCursorFeature); len(got) != 0 {
+		t.Fatalf("animated feature with missing identity emitted %d faces", len(got))
 	}
 	if got := c.animatedGAFFrame("anim", 0, c.texIndex["anim"].entry); got != nil {
 		t.Fatal("animated feature sprite with missing identity returned a frame")
 	}
 }
 
-func TestCollectDrawTrisUsesCameraScale(t *testing.T) {
+func TestCollectDrawPolysUsesCameraScale(t *testing.T) {
 	c := testModelTextureClient()
 	c.cam.Scale = 2
 	vertices := [][3]numeric.Fixed{fixedVertex(2, 4, 6), fixedVertex(4, 4, 6), fixedVertex(2, 4, 4), fixedVertex(2, 4, 6)}
 	pr := presentationrender.PrimitiveDraw{TextureName: "tex", VertexIndices: []uint16{0, 1, 2, 3}}
-	tris := c.collectDrawTris(testPrimitiveDraw(pr, vertices), 0, 1, modelCursorUnit)
-	if len(tris) == 0 {
-		t.Fatal("expected projected triangles")
+	polys := c.collectDrawPolys(testPrimitiveDraw(pr, vertices), 0, 1, modelCursorUnit)
+	if len(polys) == 0 {
+		t.Fatal("expected projected faces")
 	}
+	face := &polys[0]
 	// The model path is deliberately NOT the world projection: a unit's own
 	// position enters the blit as +worldZ, while a model-relative vertex
 	// narrows as `Zn = hi16(-vz)` [R-RAST-01 §2]. Zoom then scales the
 	// model-relative offset. WorldPos is zero here, so the model-relative
 	// value is the vertex itself.
-	for i, vi := range []int{0, 1, 2} {
-		zn := int32(-vertices[vi][2] >> 16)
-		wantX, wantY := c.scaleModelLocal(int32(vertices[vi][0]>>16), zn-(int32(vertices[vi][1]>>16)>>1))
-		if tris[0].x[i] != wantX || tris[0].y[i] != wantY {
-			t.Fatalf("corner %d = (%d,%d), want scaled model-local (%d,%d)", i, tris[0].x[i], tris[0].y[i], wantX, wantY)
+	for i := range vertices {
+		zn := int32(-vertices[i][2] >> 16)
+		wantX, wantY := c.scaleModelLocal(int32(vertices[i][0]>>16), zn-(int32(vertices[i][1]>>16)>>1))
+		if face.x[i] != wantX || face.y[i] != wantY {
+			t.Fatalf("corner %d = (%d,%d), want scaled model-local (%d,%d)", i, face.x[i], face.y[i], wantX, wantY)
 		}
 	}
 	// Spelled out for corner 0: x = 2*2, y = 2*(-6 - (4>>1)).
-	if tris[0].x[0] != 4 || tris[0].y[0] != -16 {
-		t.Fatalf("corner 0 = (%d,%d), want (4,-16)", tris[0].x[0], tris[0].y[0])
+	if face.x[0] != 4 || face.y[0] != -16 {
+		t.Fatalf("corner 0 = (%d,%d), want (4,-16)", face.x[0], face.y[0])
 	}
 }
 
-func TestCollectDrawTrisSuppressesInvalidPrimitive(t *testing.T) {
+func TestCollectDrawPolysSuppressesInvalidPrimitive(t *testing.T) {
 	c := testModelTextureClient()
 	pr := presentationrender.PrimitiveDraw{TextureName: "tex", VertexIndices: []uint16{0, 1, 9, 2}, ShadeRows: []int{1, 2, 3, 4}}
 	vertices := [][3]numeric.Fixed{fixedVertex(0, 0, 0), fixedVertex(1, 0, 0), fixedVertex(0, 0, 1)}
-	if got := c.collectDrawTris(testPrimitiveDraw(pr, vertices), 0, 1, modelCursorUnit); len(got) != 0 {
-		t.Fatalf("invalid primitive emitted %d triangles", len(got))
+	if got := c.collectDrawPolys(testPrimitiveDraw(pr, vertices), 0, 1, modelCursorUnit); len(got) != 0 {
+		t.Fatalf("invalid primitive emitted %d faces", len(got))
 	}
 }
 
-func TestCollectDrawTrisSuppressesUnsupportedTexturedNGon(t *testing.T) {
+func TestCollectDrawPolysSuppressesUnsupportedTexturedNGon(t *testing.T) {
 	c := testModelTextureClient()
 	vertices := [][3]numeric.Fixed{fixedVertex(0, 0, 0), fixedVertex(1, 0, 0), fixedVertex(2, 0, 1), fixedVertex(1, 0, 2), fixedVertex(0, 0, 1)}
 	pr := presentationrender.PrimitiveDraw{TextureName: "tex", VertexIndices: []uint16{0, 1, 2, 3, 4}, ShadeRows: []int{1, 2, 3, 4, 5}}
-	if got := c.collectDrawTris(testPrimitiveDraw(pr, vertices), 0, 1, modelCursorUnit); len(got) != 0 {
-		t.Fatalf("unsupported textured n-gon emitted %d triangles", len(got))
+	if got := c.collectDrawPolys(testPrimitiveDraw(pr, vertices), 0, 1, modelCursorUnit); len(got) != 0 {
+		t.Fatalf("unsupported textured n-gon emitted %d faces", len(got))
 	}
 }

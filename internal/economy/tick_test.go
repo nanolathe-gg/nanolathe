@@ -544,7 +544,7 @@ func TestShareCadences(t *testing.T) {
 	svc.Players[1].Capacity[Energy] = 1000
 
 	// tick 60 should transfer (60%60==0)
-	svc.ShareTick(60)
+	svc.ShareTick(60, nil)
 	if svc.Players[0].Stock[Metal] >= 200 {
 		t.Fatalf("metal share at tick 60 should have transferred, stock %v", svc.Players[0].Stock[Metal])
 	}
@@ -558,7 +558,7 @@ func TestShareCadences(t *testing.T) {
 	svc.Players[1].Stock[Energy] = 10
 	svc.SensorShareCalls = 0
 	// tick 61 should NOT transfer
-	svc.ShareTick(61)
+	svc.ShareTick(61, nil)
 	if svc.Players[0].Stock[Metal] != 200 {
 		t.Fatalf("tick 61 should not transfer metal")
 	}
@@ -571,7 +571,7 @@ func TestShareCadences(t *testing.T) {
 	svc.Players[0].Stock[Energy] = 200
 	svc.Players[1].Stock[Energy] = 10
 	svc.SensorShareCalls = 0
-	svc.ShareTick(450)
+	svc.ShareTick(450, nil)
 	if svc.Players[0].Stock[Metal] != 200 {
 		t.Fatalf("450 should NOT trigger metal share (450%%60=30), stock %v", svc.Players[0].Stock[Metal])
 	}
@@ -584,7 +584,7 @@ func TestShareCadences(t *testing.T) {
 	svc.Players[0].Stock[Energy] = 200
 	svc.Players[1].Stock[Energy] = 10
 	svc.SensorShareCalls = 0
-	svc.ShareTick(900)
+	svc.ShareTick(900, nil)
 	if svc.Players[0].Stock[Metal] >= 200 {
 		t.Fatalf("900 should trigger metal share")
 	}
@@ -595,7 +595,7 @@ func TestShareCadences(t *testing.T) {
 	svc.Players[0].Stock[Metal] = 200
 	svc.Players[1].Stock[Metal] = 10
 	svc.SensorShareCalls = 0
-	svc.ShareTick(120)
+	svc.ShareTick(120, nil)
 	if svc.Players[0].Stock[Metal] >= 200 {
 		t.Fatalf("120 should transfer")
 	}
@@ -608,7 +608,7 @@ func TestShareCadences(t *testing.T) {
 	svc.Players[0].Stock[Energy] = 200
 	svc.Players[1].Stock[Energy] = 10
 	svc.SensorShareCalls = 0
-	svc.ShareTick(0)
+	svc.ShareTick(0, nil)
 	if svc.Players[0].Stock[Metal] >= 200 {
 		t.Fatalf("0 should transfer")
 	}
@@ -635,7 +635,7 @@ func TestShareTransferUsesLedger(t *testing.T) {
 	svc.Players[1].Stock[Metal] = 0
 	svc.Players[1].Capacity[Metal] = 10 // small gap limits transfer
 	// excess =100-0=100, ratio 0.333 =>33.33, gap=10 => transfer 10
-	svc.ShareTick(60)
+	svc.ShareTick(60, nil)
 	if svc.Players[0].Stock[Metal] != 90 {
 		t.Fatalf("transfer should be min(gap, excess*ratio)=10, src stock 90 got %v", svc.Players[0].Stock[Metal])
 	}

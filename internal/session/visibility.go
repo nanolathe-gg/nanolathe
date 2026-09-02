@@ -278,7 +278,11 @@ func (s *Session) stepSensorPhase(tick uint32) {
 	defeated := false
 	if s.Econ != nil && viewer >= 0 && viewer < len(s.Econ.Players) {
 		p := &s.Econ.Players[viewer]
-		defeated = p.IsObserver || p.Eliminated
+		// Defeat is derived from the viewer's two unit counters, not from a
+		// flag: the defeat predicate for session kinds 2 and 3 is the local
+		// live unit count reaching zero [08 R-SKIR-01 §3] "Defeat detection",
+		// which is this predicate once the row has created a unit.
+		defeated = p.IsObserver || s.ownerEliminated(viewer)
 	}
 	s.Vis.SetViewerDefeated(defeated)
 	s.Vis.SensorTick(tick, active, allied, sensorUnits)

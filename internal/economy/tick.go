@@ -229,7 +229,10 @@ func (s *Service) SeedDeadlines(tick uint32) {
 // metal/energy transfers when globalTick %60==0, sensor sharing at %450==0.
 // Local transfers debit live stock and stage a request; received packets stage
 // production without repeating the source debit [R-SHARE-01 §2, §4].
-func (s *Service) ShareTick(tick uint32) {
+// The unit world is the candidate scan's elimination source: the slot's
+// "not eliminated" clause is derived from the two unit counters, never from a
+// flag [05 R-SHARE-01 §3]. See PlayerEliminated.
+func (s *Service) ShareTick(tick uint32, w *units.World) {
 	if s == nil {
 		return
 	}
@@ -238,15 +241,15 @@ func (s *Service) ShareTick(tick uint32) {
 		ref = 0
 	}
 	if tick%60 == 0 {
-		s.shareResource(ref, Metal)
-		s.shareResource(ref, Energy)
+		s.shareResource(ref, Metal, w)
+		s.shareResource(ref, Energy, w)
 	}
 	if tick%450 == 0 {
-		s.shareSensors(ref)
+		s.shareSensors(ref, w)
 	}
 }
 
-func (s *Service) shareResource(ref int, res Res) {
+func (s *Service) shareResource(ref int, res Res, w *units.World) {
 	if s == nil {
 		return
 	}
@@ -289,7 +292,7 @@ func (s *Service) shareResource(ref int, res Res) {
 			continue
 		}
 		dst := &s.Players[i]
-		if !dst.Exists || dst.IsObserver || !isActiveState(dst.ControllerState) || dst.ControllerState != 3 || dst.OptionKind != 1 || dst.Eliminated {
+		if !dst.Exists || dst.IsObserver || !isActiveState(dst.ControllerState) || dst.ControllerState != 3 || dst.OptionKind != 1 || PlayerEliminated(w, i) {
 			continue
 		}
 		if !src.Allies[i] {
@@ -323,7 +326,7 @@ func (s *Service) shareResource(ref int, res Res) {
 	s.transfer(src, dst, res, transfer, true)
 }
 
-func (s *Service) shareSensors(ref int) {
+func (s *Service) shareSensors(ref int, w *units.World) {
 	if s == nil {
 		return
 	}
@@ -345,7 +348,7 @@ func (s *Service) shareSensors(ref int) {
 			continue
 		}
 		dst := &s.Players[i]
-		if dst.Exists && !dst.IsObserver && !dst.Eliminated && dst.ControllerState == 3 && dst.OptionKind == 1 && src.Allies[i] {
+		if dst.Exists && !dst.IsObserver && !PlayerEliminated(w, i) && dst.ControllerState == 3 && dst.OptionKind == 1 && src.Allies[i] {
 			s.SensorShareCalls++
 		}
 	}

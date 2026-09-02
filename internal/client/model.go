@@ -378,6 +378,97 @@ type screenTri struct {
 	depth      int32 // mean screen y for painter order
 }
 
+// spanU..spanRow index the attributes the two-chain edge walk carries beside
+// the edge X. Retail promotes each of them to signed 16.16 when the walk
+// starts, steps it down the chain edges, and steps it again across the span
+// [R-RAST-01 §1] steps 3-5. The SHD row rides the same interpolation as the
+// key, chosen per vertex from the smoothed normal [R-RAST-01 §5].
+const (
+	spanU = iota
+	spanV
+	spanKey
+	spanRow
+	spanAttrs
+)
+
+// spanEdgeBias is what retail adds to a chain edge's starting 16.16 X: the
+// largest 16.16 fraction, one step short of a whole unit. Followed by the
+// arithmetic shift down it is a ceiling for every non-integer edge position and
+// the identity for an integer one, which is the section's whole pixel-coverage
+// rule [R-RAST-01 §1] steps 3 and 5. Attributes carry no such bias.
+const spanEdgeBias int64 = (1 << 16) - 1
+
+// spanEdge is one row of a chain's edge table: the pixel X the chain reaches on
+// that row, and the attributes still in 16.16 [R-RAST-01 §1] step 3.
+type spanEdge struct {
+	x   int32
+	a   [spanAttrs]int64
+	set bool
+}
+
+// screenPoly is one authored primitive as retail's scan converter consumes it:
+// the projected corners in **authored index order** — never re-ordered, never
+// fan-triangulated — with one integer attribute lane per corner.
+//
+// Index order is load-bearing. The walk treats the chain of decreasing indices
+// from the topmost corner as the left edge and the chain of increasing indices
+// as the right edge, so the vertex order is what decides which faces paint at
+// all [R-RAST-01 §1] steps 3, 4 and 7.
+type screenPoly struct {
+	x, y []int32
+	// oddHeight records the low bit of each corner's model-relative whole-unit
+	// height. The supersampled shear is (2*z) - y rather than 2*(z - (y>>1)),
+	// which is one pixel lower exactly when that bit is set [R-REN-03A §6].
+	oddHeight []bool
+	// attr holds the per-corner lanes the walk interpolates, indexed by
+	// spanU..spanRow. u and v are texel coordinates, not normalised: retail's
+	// quad mapper defaults the four corners to (0,0) (w-1,0) (w-1,h-1) (0,h-1)
+	// in vertex-index order [R-RAST-01 §1].
+	attr [spanAttrs][]int32
+
+	color      uint8
+	frame      *formats.GAFFrame
+	useSHD     bool // textured texels pass through PALETTE.SHD [R-RND-02A]
+	candidate  uint32
+	piece      int
+	primitive  int
+	texture    string
+	frameIndex int
+	frameState RendererValueState
+}
+
+// newScreenPoly allocates one face's corner lanes out of a single backing
+// array, so a model with a few hundred primitives costs a few hundred
+// allocations rather than a few thousand.
+func newScreenPoly(n int) screenPoly {
+	buf := make([]int32, n*(2+spanAttrs))
+	p := screenPoly{
+		x:         buf[0:n:n],
+		y:         buf[n : 2*n : 2*n],
+		oddHeight: make([]bool, n),
+	}
+	for k := 0; k < spanAttrs; k++ {
+		lo := (2 + k) * n
+		p.attr[k] = buf[lo : lo+n : lo+n]
+	}
+	return p
+}
+
+// traceFace adapts a face to the per-candidate trace helpers, which read only
+// the face's identity fields and never its corners.
+func (p *screenPoly) traceFace() *screenTri {
+	return &screenTri{
+		color: p.color, frame: p.frame, useSHD: p.useSHD,
+		candidate: p.candidate, piece: p.piece, primitive: p.primitive,
+		texture: p.texture, frameIndex: p.frameIndex, frameState: p.frameState,
+	}
+}
+
+// spanByte narrows an interpolated 16.16 attribute the way the span writers'
+// key test does: an arithmetic shift down, then the low byte [R-RAST-01 §1]
+// step 6.
+func spanByte(v int64) uint8 { return uint8((v >> 16) & 0xFF) }
+
 // modelTarget is the retail per-unit composition image [R-REN-03A §1]. It is
 // sized to the model's own projected extent plus a two-pixel margin, not to
 // the framebuffer, and it records where the model's own (0,0) sits inside it
@@ -403,6 +494,10 @@ type modelTarget struct {
 	trace  *rendererTrace
 	winner []int
 	tick   uint32
+	// scanLeft and scanRight are the two chains' edge tables [R-RAST-01 §1]
+	// steps 3-4, retained across the faces of one composition so the walk
+	// allocates once per image rather than once per primitive.
+	scanLeft, scanRight []spanEdge
 }
 
 // transparentModelIndex is the composition image's background. Retail prefills
@@ -511,6 +606,192 @@ func (t *modelTarget) bounds(tri *screenTri) (minX, minY, maxX, maxY int32) {
 		maxY = int32(t.heightPx) - 1
 	}
 	return
+}
+
+// storedKey reads the key plane for the trace. An image whose definition
+// authors no ZBuffer has no key plane at all, and every candidate then reports
+// a stored key of zero [R-REN-03A §2].
+func (t *modelTarget) storedKey(idx int) uint8 {
+	if t == nil || t.height == nil || idx < 0 || idx >= len(t.height) {
+		return 0
+	}
+	return t.height[idx]
+}
+
+// polyScan is retail's two-chain scanline edge walk over one face
+// [R-RAST-01 §1] steps 1-5, in the composition-image variant: the bounds are
+// the image's own, L = 0, T = 0, R = width-1, B = height-1.
+//
+// It replaces a fan triangulation with a barycentric point-in-triangle test.
+// The two are not equivalent, and the difference is the whole point of the
+// section. Retail never looks at a face as a whole: from the topmost corner it
+// walks decreasing indices as the *left* chain and increasing indices as the
+// *right* chain, and each row is painted only where the right chain is still
+// strictly right of the left one. That per-scanline comparison is simultaneously
+// the back-face cull — a ring that projects counter-clockwise with screen Y
+// increasing downward yields an empty span on every row (step 7) — and the rule
+// for a folded projection, which paints exactly the rows above the crossing and
+// nothing at or below it.
+//
+// span is called once per painted row with the span already clamped to the
+// image and the attribute accumulator positioned at its first pixel, together
+// with the per-pixel step. Left and top are inclusive, right and bottom
+// exclusive: the walk never writes the image's last row or last column, which
+// the two-pixel margin of [R-REN-03A §1] makes harmless.
+func (t *modelTarget) polyScan(p *screenPoly, span func(row, xl, xr int32, a, da *[spanAttrs]int64)) {
+	n := len(p.x)
+	if n < 3 || t == nil || t.width <= 0 || t.heightPx <= 0 {
+		// A two-corner flat primitive makes both chains the same single edge,
+		// so xr == xl on every row and nothing is drawn [R-RAST-01 §1] step 7.
+		return
+	}
+	const boundLeft, boundTop = int32(0), int32(0)
+	boundRight, boundBottom := int32(t.width)-1, int32(t.heightPx)-1
+
+	// Step 1. The top and bottom indices are the FIRST corners attaining their
+	// extreme, under a strict comparison; a tie keeps the earlier index.
+	minY, maxY, minX, maxX := p.y[0], p.y[0], p.x[0], p.x[0]
+	topIdx, botIdx := 0, 0
+	for i := 1; i < n; i++ {
+		if p.y[i] < minY {
+			minY, topIdx = p.y[i], i
+		}
+		if p.y[i] > maxY {
+			maxY, botIdx = p.y[i], i
+		}
+		if p.x[i] < minX {
+			minX = p.x[i]
+		}
+		if p.x[i] > maxX {
+			maxX = p.x[i]
+		}
+	}
+	// Step 2. Reject against the bounds, then clip the row range. The fill is
+	// exclusive of yEnd, so the bottom row is never written.
+	if maxX < boundLeft || minX > boundRight || maxY < boundTop || minY > boundBottom {
+		return
+	}
+	yStart, yEnd := minY, maxY
+	if yStart < boundTop {
+		yStart = boundTop
+	}
+	if yEnd > boundBottom {
+		yEnd = boundBottom
+	}
+	if yStart >= yEnd {
+		return
+	}
+	rows := int(yEnd - yStart)
+	if cap(t.scanLeft) < rows || cap(t.scanRight) < rows {
+		t.scanLeft = make([]spanEdge, rows)
+		t.scanRight = make([]spanEdge, rows)
+	}
+	leftTab, rightTab := t.scanLeft[:rows], t.scanRight[:rows]
+	for i := 0; i < rows; i++ {
+		leftTab[i].set, rightTab[i].set = false, false
+	}
+
+	// Steps 3 and 4. One walk serves both chains; only the index direction
+	// differs. An edge contributes only when it descends — horizontal edges and
+	// edges that go up are skipped outright — and both chains index the table
+	// from yStart, so an edge clipped at T lands on the row an unclipped one
+	// would have.
+	walk := func(step int, tab []spanEdge) {
+		cur := topIdx
+		for guard := 0; guard <= n; guard++ {
+			next := cur + step
+			if next < 0 {
+				next = n - 1
+			} else if next >= n {
+				next = 0
+			}
+			if p.y[next] > p.y[cur] {
+				dy := int64(p.y[next] - p.y[cur])
+				// The edge X is the only biased quantity: one fraction short of
+				// a whole unit, followed by the arithmetic shift, is a ceiling
+				// for a fractional position and the identity for a whole one,
+				// which is what makes two faces sharing an edge neither overlap
+				// nor leave a gap.
+				x := int64(p.x[cur])<<16 + spanEdgeBias
+				xStep := (int64(p.x[next]-p.x[cur]) << 16) / dy
+				var a, aStep [spanAttrs]int64
+				for k := 0; k < spanAttrs; k++ {
+					a[k] = int64(p.attr[k][cur]) << 16
+					aStep[k] = (int64(p.attr[k][next]-p.attr[k][cur]) << 16) / dy
+				}
+				row := p.y[cur]
+				if row < boundTop {
+					d := int64(boundTop - row)
+					x += xStep * d
+					for k := range a {
+						a[k] += aStep[k] * d
+					}
+					row = boundTop
+				}
+				stop := p.y[next]
+				if stop > boundBottom {
+					stop = boundBottom
+				}
+				for ; row < stop; row++ {
+					if i := int(row - yStart); i >= 0 && i < rows {
+						tab[i].x, tab[i].a, tab[i].set = int32(x>>16), a, true
+					}
+					x += xStep
+					for k := range a {
+						a[k] += aStep[k]
+					}
+				}
+			}
+			if next == botIdx {
+				return
+			}
+			cur = next
+		}
+	}
+	walk(-1, leftTab)  // step 3: decreasing indices are the left chain
+	walk(+1, rightTab) // step 4: increasing indices are the right chain
+
+	// Step 5. The composition span writers run only where xr > xl. The
+	// per-pixel attribute step divides by the UNCLAMPED width, and only then is
+	// the span clamped into the image.
+	for r := yStart; r < yEnd; r++ {
+		i := int(r - yStart)
+		l, rt := &leftTab[i], &rightTab[i]
+		if !l.set || !rt.set {
+			// TODO(question): a chain that folds back on itself leaves some
+			// rows of its edge table unwritten, and [R-RAST-01 §1] does not say
+			// what retail's table holds there — its buffer is not documented as
+			// initialised, so the row would take stale contents from an earlier
+			// face. Treating an unwritten row as an empty span is the
+			// conservative reading; tracing the edge tables' allocation and any
+			// per-face clear would settle it.
+			continue
+		}
+		if rt.x <= l.x {
+			continue // step 7's cull, evaluated per scanline
+		}
+		width := int64(rt.x - l.x)
+		var a, da [spanAttrs]int64
+		for k := 0; k < spanAttrs; k++ {
+			a[k] = l.a[k]
+			da[k] = (rt.a[k] - l.a[k]) / width
+		}
+		xl, xr := l.x, rt.x
+		if xl < boundLeft {
+			d := int64(boundLeft - xl)
+			for k := range a {
+				a[k] += da[k] * d
+			}
+			xl = boundLeft
+		}
+		if xr > boundRight {
+			xr = boundRight
+		}
+		if xr <= xl {
+			continue
+		}
+		span(r, xl, xr, &a, &da)
+	}
 }
 
 // resolveSupersample is retail's 2:1 resolve of an anti-aliased structure
@@ -712,13 +993,13 @@ func modelStatesForCompiled(m *compiledmodel.Model, pieces []frame.PieceView) []
 // exactly the quantity retail's chains compare. The shadow pass passes its own
 // quarter-shear projection for the same reason.
 //
-// Unimplemented: [03 R-RAST-01 §1] establishes the two-chain edge walk, whose
-// cull is per SCANLINE — a primitive whose projection folds (a concave n-gon or
-// a bow-tie quad) paints exactly the rows where the right chain is still right
-// of the left chain, while this whole-polygon test drops it outright.
-// Implementing it replaces the barycentric filler and the fan triangulation
-// together. No stock face is known to fold, and this filler already mis-fills a
-// concave polygon. See PLAN 19 §2.4.
+// The body raster no longer needs this predicate: polyScan performs the real
+// per-scanline comparison, so a folded projection paints exactly the rows where
+// its right chain is still right of its left one instead of being dropped
+// whole. What remains here is the convex summary of the same comparison, used
+// by the two passes that do not run a span writer at all — the nanoframe
+// wireframe, which draws edges rather than spans, and the shadow
+// rasterization's own quarter-shear pass.
 func modelFacePaints(vertices [][3]numeric.Fixed, indices []uint16, origin [3]numeric.Fixed) bool {
 	return facePaints(vertices, indices, origin, modelLocalVertex)
 }
@@ -747,14 +1028,21 @@ func facePaints(vertices [][3]numeric.Fixed, indices []uint16, origin [3]numeric
 	return area > 0
 }
 
-// collectDrawTris adapts canonical render records to the indexed framebuffer.
+// collectDrawPolys adapts canonical render records to the indexed framebuffer.
 // It owns no hierarchy math: units, features, and projectiles all pass through
 // render.UnitDraw [03 §2.4][03 §5.2].
-func (c *Client) collectDrawTris(draw *presentationrender.UnitDraw, owner uint8, id uint64, kind uint8) []screenTri {
+//
+// One authored primitive becomes one face, at its authored arity and in its
+// authored corner order. There is no fan triangulation: retail's scan converter
+// takes the vertex count as an argument and derives its two chains from the
+// index order, so splitting a quad into triangles would change both the chains
+// and the interpolation the section specifies [R-RAST-01 §1]. The winding cull
+// is not applied here either — it is the span comparison inside the walk.
+func (c *Client) collectDrawPolys(draw *presentationrender.UnitDraw, owner uint8, id uint64, kind uint8) []screenPoly {
 	if c == nil || c.cam == nil || draw == nil || draw.Model == nil {
 		return nil
 	}
-	var tris []screenTri
+	var polys []screenPoly
 	// Retail walks the piece list last-to-first. Because the height-key test
 	// admits equal keys, draw order is the tie-break, so this direction is what
 	// makes piece 0 win every tie against every later piece — reversing it
@@ -823,67 +1111,58 @@ func (c *Client) collectDrawTris(draw *presentationrender.UnitDraw, owner uint8,
 			if !valid {
 				continue // malformed primitive suppresses the whole face [fmt 3do]
 			}
-			if !modelFacePaints(piece.WorldVertices, pr.VertexIndices, draw.WorldPos) {
-				continue // the winding cull of [R-RAST-01 §1] step 7
-			}
-			uvFor := func(corner int) (float64, float64) {
-				uv := [4][2]float64{{0, 0}, {1, 0}, {1, 1}, {0, 1}}
-				return uv[corner][0], uv[corner][1]
-			}
-			for k := 1; k+1 < n; k++ { // quads split only for the indexed raster adapter [03 §2.4.1]
-				indices := [3]int{int(pr.VertexIndices[0]), int(pr.VertexIndices[k]), int(pr.VertexIndices[k+1])}
-				var tri screenTri
-				tri.color, tri.frame, tri.order = color, texFrame, pri
-				tri.useSHD = pr.ShadeRow != presentationrender.NoShadeRow
-				tri.candidate, tri.piece, tri.primitive, tri.texture = uint32(len(tris)), pi, pri, pr.TextureName
-				if texFrame != nil && c.rendererTraceSink != nil {
-					tri.frameState = RendererValueAvailable
-					if ref.kind == texStatic {
-						tri.frameIndex = 0
-					} else if ref.entry != nil {
-						for fi := range ref.entry.Frames {
-							if ref.entry.Frames[fi].Frame == texFrame {
-								tri.frameIndex = fi
-								break
-							}
+			poly := newScreenPoly(n)
+			poly.color, poly.frame = color, texFrame
+			poly.useSHD = pr.ShadeRow != presentationrender.NoShadeRow
+			poly.candidate, poly.piece, poly.primitive, poly.texture = uint32(len(polys)), pi, pri, pr.TextureName
+			if texFrame != nil && c.rendererTraceSink != nil {
+				poly.frameState = RendererValueAvailable
+				if ref.kind == texStatic {
+					poly.frameIndex = 0
+				} else if ref.entry != nil {
+					for fi := range ref.entry.Frames {
+						if ref.entry.Frames[fi].Frame == texFrame {
+							poly.frameIndex = fi
+							break
 						}
 					}
 				}
-				for corner, vi := range indices {
-					v := piece.WorldVertices[vi]
-					// Retail composes model-relative: the piece chain result is
-					// narrowed once, the shear applied, and the unit's position
-					// enters only at the final blit [03 §5.2][R-REN-03A §1].
-					lx, ly, ry := modelLocalVertex(v, draw.WorldPos)
-					lx, ly = c.scaleModelLocal(lx, ly)
-					tri.x[corner], tri.y[corner] = lx, ly
-					tri.oddHeight[corner] = ry&1 != 0
-					tri.depth += ly
-					key := ry + presentationrender.NanoframeHeightBias
-					if draw.DiggerClip {
-						key += diggerKeyBias
-					}
-					tri.key[corner] = float64(key)
-					if tri.useSHD {
-						primitiveCorner := [3]int{0, k, k + 1}[corner]
-						if primitiveCorner < len(pr.ShadeRows) {
-							tri.row[corner] = float64(pr.ShadeRows[primitiveCorner])
-						} else {
-							tri.row[corner] = 15
-						}
-					}
-				}
-				tri.depth /= 3
-				if texFrame != nil {
-					tri.u[0], tri.v[0] = uvFor(0)
-					tri.u[1], tri.v[1] = uvFor(k)
-					tri.u[2], tri.v[2] = uvFor(k + 1)
-				}
-				tris = append(tris, tri)
 			}
+			for corner, vi := range pr.VertexIndices {
+				v := piece.WorldVertices[vi]
+				// Retail composes model-relative: the piece chain result is
+				// narrowed once, the shear applied, and the unit's position
+				// enters only at the final blit [03 §5.2][R-REN-03A §1].
+				lx, ly, ry := modelLocalVertex(v, draw.WorldPos)
+				lx, ly = c.scaleModelLocal(lx, ly)
+				poly.x[corner], poly.y[corner] = lx, ly
+				poly.oddHeight[corner] = ry&1 != 0
+				poly.attr[spanKey][corner] = modelHeightKey(v[1].Sub(draw.WorldPos[1]), draw.DiggerClip)
+				if poly.useSHD {
+					// The DONT_SHADE pin is the one retail value this lane can
+					// hold before a corner's own row is known [R-RAST-01 §5].
+					row := int32(presentationrender.SHDIdentityRow)
+					if corner < len(pr.ShadeRows) {
+						row = int32(pr.ShadeRows[corner])
+					}
+					poly.attr[spanRow][corner] = row
+				}
+			}
+			if texFrame != nil {
+				// Retail's quad mapper defaults the four corners to
+				// (0,0) (w-1,0) (w-1,h-1) (0,h-1) in vertex-index order, with
+				// the clamp built into the default rather than applied after
+				// sampling [R-RAST-01 §1][R-REN-03A §5].
+				u := [4]int32{0, int32(texFrame.Width) - 1, int32(texFrame.Width) - 1, 0}
+				vv := [4]int32{0, 0, int32(texFrame.Height) - 1, int32(texFrame.Height) - 1}
+				for corner := 0; corner < n && corner < 4; corner++ {
+					poly.attr[spanU][corner], poly.attr[spanV][corner] = u[corner], vv[corner]
+				}
+			}
+			polys = append(polys, poly)
 		}
 	}
-	return tris
+	return polys
 }
 
 // modelExtent measures the composition image from the collected triangles:
@@ -937,6 +1216,48 @@ func placeTris(tris []screenTri, originX, originY, scale int32) {
 	}
 }
 
+// modelExtentPolys and placePolys are modelExtent and placeTris over the body
+// path's n-corner faces. The rules are identical — extrema seeded at the model
+// origin with a two-pixel margin [R-REN-03A §1], and the supersampled shear's
+// odd-height term [R-REN-03A §6]; only the corner count differs. The shadow
+// rasterization still fan-triangulates, so both shapes are live.
+func modelExtentPolys(polys []screenPoly) (width, height int, originX, originY int32) {
+	var minX, minY, maxX, maxY int32 // seeded at the model origin, not at a vertex
+	for i := range polys {
+		for k := range polys[i].x {
+			if polys[i].x[k] < minX {
+				minX = polys[i].x[k]
+			}
+			if polys[i].x[k] > maxX {
+				maxX = polys[i].x[k]
+			}
+			if polys[i].y[k] < minY {
+				minY = polys[i].y[k]
+			}
+			if polys[i].y[k] > maxY {
+				maxY = polys[i].y[k]
+			}
+		}
+	}
+	originX = modelTargetMargin - minX
+	originY = modelTargetMargin - minY
+	return int(maxX - minX + 2*modelTargetMargin), int(maxY - minY + 2*modelTargetMargin), originX, originY
+}
+
+func placePolys(polys []screenPoly, originX, originY, scale int32) {
+	for i := range polys {
+		for k := range polys[i].x {
+			if scale == 2 {
+				polys[i].x[k] = 2 * (polys[i].x[k] + originX)
+				polys[i].y[k] = 2*(polys[i].y[k]+originY) - boolToInt32(polys[i].oddHeight[k])
+				continue
+			}
+			polys[i].x[k] += originX
+			polys[i].y[k] += originY
+		}
+	}
+}
+
 func boolToInt32(b bool) int32 {
 	if b {
 		return 1
@@ -960,18 +1281,18 @@ func (c *Client) supersampleModel(structure bool) bool {
 // and then recolours it band by band and overdraws its polygon outlines, which
 // is the nanoframe [03 §5.2].
 func (c *Client) drawModel(draw *presentationrender.UnitDraw, owner uint8, id uint64, kind uint8, reveal *presentationrender.NanoframeReveal, outline uint8) bool {
-	tris := c.collectDrawTris(draw, owner, id, kind)
-	if len(tris) == 0 {
+	polys := c.collectDrawPolys(draw, owner, id, kind)
+	if len(polys) == 0 {
 		return false
 	}
 	anchorX, anchorY := c.modelAnchor(draw)
-	width, height, originX, originY := modelExtent(tris)
+	width, height, originX, originY := modelExtentPolys(polys)
 
 	scale := int32(1)
 	if c.supersampleModel(draw.Structure) {
 		scale = 2
 	}
-	placeTris(tris, originX, originY, scale)
+	placePolys(polys, originX, originY, scale)
 
 	// The image the unit is blitted from is always 1x; when anti-aliasing is
 	// active the model is rasterized into a doubled scratch first and resolved
@@ -984,17 +1305,12 @@ func (c *Client) drawModel(draw *presentationrender.UnitDraw, owner uint8, id ui
 	}
 	c.attachModelTrace(raster, id)
 
-	for i := range tris {
-		switch {
-		case reveal != nil && tris[i].frame != nil:
-			c.blitTexturedTriNanoframeTarget(raster, &tris[i], tris[i].frame, *reveal, id)
-		case reveal != nil:
-			c.fillTriNanoframeTarget(raster, &tris[i], tris[i].color, *reveal, id)
-		case tris[i].frame != nil:
-			c.blitTexturedTriTarget(raster, &tris[i], tris[i].frame, id)
-		default:
-			c.fillTriTarget(raster, &tris[i], tris[i].color, id)
+	for i := range polys {
+		if polys[i].frame != nil {
+			c.blitTexturedPolyTarget(raster, &polys[i], polys[i].frame, reveal, id)
+			continue
 		}
+		c.fillPolyTarget(raster, &polys[i], polys[i].color, reveal, id)
 	}
 	if scale == 2 {
 		raster.resolveSupersample(target, &c.pal.Alpha)
@@ -1003,7 +1319,7 @@ func (c *Client) drawModel(draw *presentationrender.UnitDraw, owner uint8, id ui
 		// A Digger definition raises every key by 75; erasing at or below 125
 		// therefore removes exactly the geometry at or below the model origin,
 		// which is the buried half of a pop-up defence [R-REN-03A §8].
-		target.eraseAtOrBelow(uint8(diggerKeyBias + presentationrender.NanoframeHeightBias))
+		target.eraseAtOrBelow(uint8(diggerEraseThreshold))
 	}
 	// The shadow is composed and blitted before the body for the same subject
 	// [03 §5.3]. It reads the finished body image to punch the body's own
@@ -1248,20 +1564,29 @@ func (c *Client) scaleModelLocal(lx, ly int32) (int32, int32) {
 // through __ftol, so I3's truncate-toward-zero rule does not apply here
 // [R-REN-03A §2].
 //
-// Unimplemented: [03 R-REN-03A §8] establishes that a definition authoring the
-// FBI Digger key adds a further +75 here and then erases the image wherever the
-// key is at or below 125. Adding the offset alone would only shift every key
-// uniformly, so the two go together. Three stock units are affected: ARMAMB,
-// CORTOAST, CORVIPE. See PLAN 19 §2.4.
-func modelHeightKey(relativeY numeric.Fixed) int32 {
-	return int32(relativeY.Floor()) + presentationrender.NanoframeHeightBias
+// A definition authoring the FBI Digger key raises every key by a further 75,
+// and the finished image is then erased wherever the key is at or below 125
+// [R-REN-03A §8]. The offset alone would only shift every key uniformly, so the
+// two halves go together: drawModel runs the erase, this function supplies the
+// raised keys it acts on. Three stock units author it — ARMAMB, CORTOAST,
+// CORVIPE — and for those the erase removes exactly the geometry at or below
+// the model origin, which is the buried half of a pop-up defence.
+func modelHeightKey(relativeY numeric.Fixed, digger bool) int32 {
+	key := int32(relativeY.Floor()) + presentationrender.NanoframeHeightBias
+	if digger {
+		key += diggerKeyBias
+	}
+	return key
 }
 
 // diggerKeyBias is the extra height-key offset a definition authoring the FBI
-// Digger key carries. It exists so the clip threshold of [R-REN-03A §8] lands
-// exactly at the model origin. Three stock units author it: ARMAMB, CORTOAST,
-// CORVIPE.
-const diggerKeyBias int32 = 75
+// Digger key carries, and diggerEraseThreshold is the key at or below which the
+// finished image is erased. The threshold is the sum of the two bases, so it
+// lands exactly at the model origin [R-REN-03A §8].
+const (
+	diggerKeyBias        int32 = 75
+	diggerEraseThreshold       = diggerKeyBias + presentationrender.NanoframeHeightBias
+)
 
 // groundHeightUnder samples the terrain height beneath a unit, which is what
 // the shadow shear uses [R-REN-03D §3].
@@ -1352,129 +1677,141 @@ func nanoframeVerdict(rev presentationrender.NanoframeReveal, key uint8, compose
 	}
 }
 
-func (c *Client) fillTriNanoframeTarget(target *modelTarget, t *screenTri, color uint8, rev presentationrender.NanoframeReveal, ids ...uint64) {
-	id := rendererID(ids)
-	minX, minY, maxX, maxY := target.bounds(t)
-	d := baryDenom(t)
-	if d == 0 {
+// fillPolyTarget is retail's flat polygon span writer over the two-chain walk:
+// one colour byte per pixel, the key interpolated across the span and tested
+// per pixel [R-RAST-01 §1] steps 5-6, [R-REN-03A §5]. A non-nil reveal composes
+// the nanoframe verdict on top of the same admission [03 §5.2].
+//
+// Unimplemented: [R-REN-03A §5]'s writer table gives the *shaded* flat polygon
+// `SHD[row*256 + colour]`. This writer emits the raw colour byte for every flat
+// face, as the client has since the flat filler was introduced; adopting the
+// shaded form recolours every untextured face in the game and is its own unit.
+func (c *Client) fillPolyTarget(target *modelTarget, p *screenPoly, color uint8, rev *presentationrender.NanoframeReveal, ids ...uint64) {
+	if target == nil || p == nil {
 		return
 	}
-	for py := minY; py <= maxY; py++ {
-		row := py * int32(target.width)
-		for px := minX; px <= maxX; px++ {
-			l0, l1, l2 := bary(t, d, px, py)
-			if l0 < 0 || l1 < 0 || l2 < 0 {
-				continue
-			}
-			key := scanlineHeightKey(t, px, py)
-			idx := int(row + px)
+	id := rendererID(ids)
+	face := p.traceFace()
+	target.polyScan(p, func(row, xl, xr int32, a, da *[spanAttrs]int64) {
+		base := row * int32(target.width)
+		acc := *a
+		for px := xl; px < xr; px++ {
+			key := spanByte(acc[spanKey])
+			idx := int(base + px)
 			event := -1
 			if target.trace != nil {
-				event = target.traceCandidate(rendererCandidate(t, target.tick, id, px, py, key, target.height[idx], color, 0, rendererTexture(t, 0, 0, 0, RendererValueUnavailable, false)))
+				event = target.traceCandidate(rendererCandidate(face, target.tick, id, px, row, key, target.storedKey(idx), color, 0, rendererTexture(face, 0, 0, 0, RendererValueUnavailable, false)))
 			}
-			if !target.admit(idx, key) {
+			switch {
+			case !target.admit(idx, key):
 				target.traceRejected(event, RendererReasonHeightRejected, "height")
-				continue
-			}
-			target.traceAdmitted(idx, event)
-			if b, ok := nanoframeVerdict(rev, key, color); ok {
-				if event >= 0 {
-					target.trace.events[event].CandidateIndex = b
+			case rev == nil:
+				target.traceAdmitted(idx, event)
+				target.write(idx, color, true)
+			default:
+				target.traceAdmitted(idx, event)
+				if b, ok := nanoframeVerdict(*rev, key, color); ok {
+					if event >= 0 {
+						target.trace.events[event].CandidateIndex = b
+					}
+					target.write(idx, b, true)
+				} else {
+					target.traceRejected(event, RendererReasonNanoframeErase, "nanoframe-erase")
+					target.write(idx, 0, false)
 				}
-				target.write(idx, b, true)
-			} else {
-				target.traceRejected(event, RendererReasonNanoframeErase, "nanoframe-erase")
-				target.write(idx, 0, false)
+			}
+			for k := range acc {
+				acc[k] += da[k]
 			}
 		}
-	}
+	})
 }
 
-func (c *Client) blitTexturedTriNanoframeTarget(target *modelTarget, t *screenTri, frame *formats.GAFFrame, rev presentationrender.NanoframeReveal, ids ...uint64) {
-	id := rendererID(ids)
-	minX, minY, maxX, maxY := target.bounds(t)
-	d := baryDenom(t)
-	if d == 0 {
+// blitTexturedPolyTarget is retail's textured quad mapper over the same walk.
+// The texel is sampled at the interpolated integer texel coordinates —
+// `pixels[(v >> 16) * w + (u >> 16)]` — with no perspective divide and no
+// stored UVs; the default corners keep u in [0, w-1] and v in [0, h-1] because
+// the interpolation never reaches the right corner's value [R-RAST-01 §1]
+// steps 5-6. The SHD row rides the same interpolation as the key
+// [R-RAST-01 §5].
+//
+// Unimplemented: [R-REN-03A §5] establishes (bounded-negative) that none of the
+// four span writers tests the sampled texel against a transparent index — a
+// texture is fully opaque inside the model raster path, and transparency is
+// expressed only by the composition image's own background. This writer still
+// skips a texel the GAF marks transparent, which is what the client has always
+// done; dropping that test changes the silhouette of every textured face and is
+// its own unit.
+func (c *Client) blitTexturedPolyTarget(target *modelTarget, p *screenPoly, gafFrame *formats.GAFFrame, rev *presentationrender.NanoframeReveal, ids ...uint64) {
+	if target == nil || p == nil || gafFrame == nil {
 		return
 	}
-	w, h := int(frame.Width), int(frame.Height)
-	for py := minY; py <= maxY; py++ {
-		row := py * int32(target.width)
-		for px := minX; px <= maxX; px++ {
-			l0, l1, l2 := bary(t, d, px, py)
-			if l0 < 0 || l1 < 0 || l2 < 0 {
-				continue
-			}
-			tx, ty := texelAt(t, l0, l1, l2, w, h)
-			b, ok := frame.At(tx, ty)
-			key := scanlineHeightKey(t, px, py)
-			idx := int(row + px)
+	id := rendererID(ids)
+	face := p.traceFace()
+	w, h := int(gafFrame.Width), int(gafFrame.Height)
+	target.polyScan(p, func(row, xl, xr int32, a, da *[spanAttrs]int64) {
+		base := row * int32(target.width)
+		acc := *a
+		for px := xl; px < xr; px++ {
+			tx, ty := int(acc[spanU]>>16), int(acc[spanV]>>16)
+			b, opaque := gafFrame.At(tx, ty)
+			key := spanByte(acc[spanKey])
+			idx := int(base + px)
 			sourceState := RendererValueUnavailable
-			if tx >= 0 && ty >= 0 && tx < w && ty < h && ty*w+tx < len(frame.Pixels) {
+			if tx >= 0 && ty >= 0 && tx < w && ty < h && ty*w+tx < len(gafFrame.Pixels) {
 				sourceState = RendererValueAvailable
-				b = frame.Pixels[ty*w+tx]
+				b = gafFrame.Pixels[ty*w+tx]
+			}
+			shade := presentationrender.NoShadeRow
+			if p.useSHD {
+				shade = spanShadeRow(acc[spanRow])
 			}
 			event := -1
 			if target.trace != nil {
-				shade := presentationrender.NoShadeRow
-				if t.useSHD {
-					shade = shadeRowAt(t, l0, l1, l2)
-				}
-				event = target.traceCandidate(rendererCandidate(t, target.tick, id, px, py, key, target.height[idx], b, shade, rendererTexture(t, tx, ty, b, sourceState, !ok)))
+				event = target.traceCandidate(rendererCandidate(face, target.tick, id, px, row, key, target.storedKey(idx), b, shade, rendererTexture(face, tx, ty, b, sourceState, !opaque)))
 			}
-			if !ok {
+			switch {
+			case !opaque:
 				target.traceRejected(event, RendererReasonTransparentTexel, "transparent-texel")
-				continue
-			}
-			if !target.admit(idx, key) {
+			case !target.admit(idx, key):
 				target.traceRejected(event, RendererReasonHeightRejected, "height")
-				continue
-			}
-			target.traceAdmitted(idx, event)
-			if c.pal != nil && t.useSHD {
-				b = c.pal.Shade[shadeRowAt(t, l0, l1, l2)][b]
-			}
-			if b, ok := nanoframeVerdict(rev, key, b); ok {
+			default:
+				target.traceAdmitted(idx, event)
+				if c != nil && c.pal != nil && p.useSHD {
+					b = c.pal.Shade[shade][b]
+				}
+				if rev != nil {
+					var ok bool
+					if b, ok = nanoframeVerdict(*rev, key, b); !ok {
+						target.traceRejected(event, RendererReasonNanoframeErase, "nanoframe-erase")
+						target.write(idx, 0, false)
+						break
+					}
+				}
 				if event >= 0 {
 					target.trace.events[event].CandidateIndex = b
 				}
 				target.write(idx, b, true)
-			} else {
-				target.traceRejected(event, RendererReasonNanoframeErase, "nanoframe-erase")
-				target.write(idx, 0, false)
+			}
+			for k := range acc {
+				acc[k] += da[k]
 			}
 		}
-	}
+	})
 }
 
-// texelAt is the shared affine texture sample used by both raster variants.
-func texelAt(t *screenTri, l0, l1, l2 float64, w, h int) (int, int) {
-	u := l0*t.u[0] + l1*t.u[1] + l2*t.u[2]
-	v := l0*t.v[0] + l1*t.v[1] + l2*t.v[2]
-	tx, ty := int(u*float64(w)), int(v*float64(h))
-	if tx < 0 {
-		tx = 0
-	} else if tx >= w {
-		tx = w - 1
-	}
-	if ty < 0 {
-		ty = 0
-	} else if ty >= h {
-		ty = h - 1
-	}
-	return tx, ty
-}
-
-// shadeRowAt is the shared clamped SHD row lookup [03 §2.4.1].
-func shadeRowAt(t *screenTri, l0, l1, l2 float64) int {
-	ri := int(l0*t.row[0] + l1*t.row[1] + l2*t.row[2])
-	if ri < 0 {
+// spanShadeRow narrows an interpolated SHD row. The rows the model path carries
+// are already 0..31 by construction (`trunc(dot * 5.0) & 0x1F`), so the clamp
+// only guards the table lookup [R-RAST-01 §5][03 §2.4.1].
+func spanShadeRow(v int64) int {
+	r := int(v >> 16)
+	if r < 0 {
 		return 0
 	}
-	if ri > 31 {
+	if r > 31 {
 		return 31
 	}
-	return ri
+	return r
 }
 
 func (c *Client) fillTriTarget(target *modelTarget, t *screenTri, color uint8, ids ...uint64) {
@@ -1497,58 +1834,6 @@ func (c *Client) fillTriTarget(target *modelTarget, t *screenTri, color uint8, i
 					target.traceRejected(event, RendererReasonHeightRejected, "height")
 				}
 			}
-		}
-	}
-}
-
-func (c *Client) blitTexturedTriTarget(target *modelTarget, t *screenTri, frame *formats.GAFFrame, ids ...uint64) {
-	id := rendererID(ids)
-	minX, minY, maxX, maxY := target.bounds(t)
-	d := baryDenom(t)
-	if d == 0 {
-		return
-	}
-	w, h := int(frame.Width), int(frame.Height)
-	for py := minY; py <= maxY; py++ {
-		row := py * int32(target.width)
-		for px := minX; px <= maxX; px++ {
-			l0, l1, l2 := bary(t, d, px, py)
-			if l0 < 0 || l1 < 0 || l2 < 0 {
-				continue
-			}
-			tx, ty := texelAt(t, l0, l1, l2, w, h)
-			b, ok := frame.At(tx, ty)
-			key := scanlineHeightKey(t, px, py)
-			idx := int(row + px)
-			sourceState := RendererValueUnavailable
-			if tx >= 0 && ty >= 0 && tx < w && ty < h && ty*w+tx < len(frame.Pixels) {
-				sourceState = RendererValueAvailable
-				b = frame.Pixels[ty*w+tx]
-			}
-			shade := presentationrender.NoShadeRow
-			if t.useSHD {
-				shade = shadeRowAt(t, l0, l1, l2)
-			}
-			event := -1
-			if target.trace != nil {
-				event = target.traceCandidate(rendererCandidate(t, target.tick, id, px, py, key, target.height[idx], b, shade, rendererTexture(t, tx, ty, b, sourceState, !ok)))
-			}
-			if !ok {
-				target.traceRejected(event, RendererReasonTransparentTexel, "transparent-texel")
-				continue
-			}
-			if !target.admit(idx, key) {
-				target.traceRejected(event, RendererReasonHeightRejected, "height")
-				continue
-			}
-			target.traceAdmitted(idx, event)
-			if c.pal != nil && t.useSHD {
-				b = c.pal.Shade[shade][b]
-			}
-			if event >= 0 {
-				target.trace.events[event].CandidateIndex = b
-			}
-			target.write(idx, b, true)
 		}
 	}
 }

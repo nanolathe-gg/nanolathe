@@ -646,6 +646,26 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 		},
 		Movement: movementGoals,
 		World:    worldQueries,
+		// Command code 14's gate: the definition's compiled build list is
+		// non-empty [04 R-ORD-02 §1]. The pages are the `CANBUILD` sections of
+		// gamedata/sidedata.tdf, keyed by the builder's canonical unit name
+		// [02 "Build-menu catalog keys"]; a definition with no page has no
+		// build list, which is a reject, not an error.
+		BuildList: func(def *content.UnitDef) bool {
+			if def == nil || s.Catalog == nil || s.Catalog.BuildMenus == nil {
+				return false
+			}
+			page := s.Catalog.BuildMenus[content.CanonicalKey(def.CanonicalKey)]
+			return page != nil && len(page.Buttons) > 0
+		},
+		// The carriable test of codes 1, 2 and 6 is §10.2's nine-reject
+		// admission, which internal/movement owns [04 §10.2][04 R-ORD-02 §1].
+		TransportAdmission: func(carrier, candidate *units.Unit) bool {
+			if s.Movement == nil || s.Units == nil || carrier == nil || candidate == nil {
+				return false
+			}
+			return s.Movement.CanTransport(carrier.Handle, candidate.Handle, s.Units).Allowed
+		},
 		Resources: func(owner uint8) (orders.ResourceView, bool) {
 			if s.Econ == nil || int(owner) >= len(s.Econ.Players) {
 				return orders.ResourceView{}, false

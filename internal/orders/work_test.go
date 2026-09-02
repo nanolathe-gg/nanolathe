@@ -322,7 +322,13 @@ func assistFixture(quanta ...int32) (*economy.Service, []*units.Unit, *units.Uni
 	for i, quantum := range quanta {
 		def := &content.UnitDef{
 			BMCode: true, Builder: true,
-			WorkerTime: 30 * quantum, BuildDistance: 1000,
+			// The `canreclamate` mirror bit is one of nano-reach's four terms
+			// [04 R-ORD-01 §7], and nano-reach is the admission every
+			// assist/repair resolution passes through [04 R-ORD-02 §1]. Stock
+			// construction units and commanders author the key; the fixture
+			// says so explicitly rather than leaving the gate to a default.
+			CanReclamate: true,
+			WorkerTime:   30 * quantum, BuildDistance: 1000,
 			FootprintX: 2, FootprintZ: 2, MaxDamage: 100,
 		}
 		b := &units.Unit{

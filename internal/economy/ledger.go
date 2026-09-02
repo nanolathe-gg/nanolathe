@@ -78,25 +78,9 @@ type Player struct {
 	ControllerState uint8
 	IsObserver      bool  // observer byte excludes observers [05 "Authoritative settlement order"]
 	OptionKind      uint8 // lobby option kind used by network sharing [R-SHARE-01 §3]
-	// Eliminated is Nanolathe's own field, and it has no writer. Retail keeps
-	// no elimination flag: elimination is DERIVED from the player record's live
-	// unit count, which is "incremented at unit creation, decremented in unit
-	// teardown, and reaching zero is the player-elimination trigger; it is also
-	// the 'player still alive' predicate the sharing and endgame paths use"
-	// [08 R-SKIR-01 §3][05 "Player slot"]. The automatic dispatcher spells the
-	// test out as "the slot is not eliminated (`live unit count != 0` or `total
-	// units ever created == 0`)" [05 R-SHARE-01 §3] — a player who has never
-	// created a unit is not eliminated, which is what keeps a slot alive during
-	// battle entry.
-	//
-	// Unimplemented: the three readers below should call that derived predicate
-	// instead of this flag, which means the ledger needs both counters (or the
-	// session needs to supply them) and the flag goes away. That is a real
-	// change across economy, session and visibility — see PLAN 19 §2.3. Until
-	// then the flag is false for every row, so every gate that reads it is
-	// permanently open, which matches an in-progress game.
-	Eliminated bool
-	GameEnded  bool // game-ended flag bit clear required [05 "Authoritative settlement order"]
+	// There is no elimination flag on the player record: elimination is derived
+	// from the record's two unit counters. See PlayerEliminated below.
+	GameEnded bool // game-ended flag bit clear required [05 "Authoritative settlement order"]
 	// EndGameCountdown must be negative for settlement; initialized -1
 	// [05 "Authoritative settlement order"].
 	// TODO(question): the two arm/decrement sites that latch GameEnded and
@@ -231,6 +215,44 @@ func (s *Service) RestoreUnitEconomy(handle pool.Handle, buckets [2]Bucket, arch
 	s.ensureUnitBuckets(handle)
 	s.unitBuckets[handle] = UnitEconomy{Buckets: buckets, Archived: archived}
 	return true
+}
+
+// PlayerEliminated is the retail player record's elimination test, derived
+// rather than flagged. Retail keeps no elimination bit; the automatic share
+// dispatcher spells the predicate out as "the slot is not eliminated (`live
+// unit count != 0` or `total units ever created == 0`)" [05 R-SHARE-01 §3],
+// so a slot is eliminated exactly when its live count is zero AND it has
+// created at least one unit. A participating slot that has never created a
+// unit is NOT eliminated — that is what keeps a row alive through battle
+// entry, and it is why the victory sweep answers "no victory" rather than
+// "eliminated" for such a slot [08 R-SKIR-01 §3] "Victory detection".
+//
+// The two counters are the player record's, per [08 R-SKIR-01 §3] "Counters":
+// a live unit count and a units-ever-created count, both incremented by both
+// unit allocators, with the live count decremented by the kill-record handler
+// when the unit is finally removed. Nanolathe files them on units.World
+// (`liveCounters`, `createdCounters`) because that is where both allocators
+// and the death finalizer are; per I13 the same logical field has one Go home,
+// and this package already takes the world as a parameter everywhere it
+// settles. A mirrored copy on Player would be read stale: the phase-2 player
+// gate consults this predicate per unit, inside the same sweep that decrements
+// the live count.
+//
+// Capture does not move either counter: [08 R-SKIR-01 §3] names the allocators
+// and the kill-record handler as the only writers, and nothing in the
+// ownership-transfer contract touches them.
+//
+// TODO(question): neither counter appears in the established `Player%i` save
+// table [08 "Player records"], and restoring a battle re-allocates units
+// through the forced-slot allocator, which rebuilds "ever created" as the live
+// count. A slot that lost its last unit before the save therefore reloads as
+// "never created" instead of "eliminated". What would settle it is a save
+// writer trace showing whether retail persists the two counters at all.
+func PlayerEliminated(w *units.World, player int) bool {
+	if w == nil || player < 0 || player >= 10 {
+		return false
+	}
+	return w.LiveCountForPlayer(player) == 0 && w.CreatedCountForPlayer(player) != 0
 }
 
 // ForEachUnitOrdered visits units owned by player in stable slot order

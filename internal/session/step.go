@@ -5,6 +5,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/orders"
@@ -223,11 +224,23 @@ func (s *Session) finalizePhase2Death(h pool.Handle, tick uint32) {
 // which is exactly what [06 R-DMG-01 §8] requires of an implementation.
 //
 // A row past the ten records, or one that does not exist, is not swept at all.
-// The elimination term reads `economy.Player.Eliminated`, which has no writer:
-// retail keeps no such flag and derives elimination from the row's live unit
-// count [08 R-SKIR-01 §3][05 R-SHARE-01 §3]. See the field's own comment. The
-// term is therefore satisfied for every row today; it is stated here because
-// the gate is the section's, not the current composition's.
+// The elimination term is derived, not flagged: a row is eliminated when its
+// live unit count is zero and it has created at least one unit
+// [08 R-SKIR-01 §3][05 R-SHARE-01 §3], which is what economy.PlayerEliminated
+// computes from the two counters. It costs the sweep nothing: an eliminated
+// row owns no live unit for the traversal to hand back here.
+//
+// TODO(question): [04 R-MOV-03 §1] words this clause as "its state byte is not
+// the eliminated value 10", but no per-player state byte in the docs takes the
+// value 10 — the byte carrying a 10 sentinel is the side/team byte, whose
+// value 10 is the never-occupied neutral row ([05 "Player slot"], the spawner
+// gate of [08 "Established — the invalid-player path is fatal"]), and the
+// parallel gate in [05 R-SHARE-01 §3] lists "the slot's own index is not 10"
+// and "the slot is not eliminated" as two separate clauses. Both readings are
+// inert for any row this sweep would otherwise visit (no Nanolathe row carries
+// side 10, and an eliminated row has no units), so the derived predicate is
+// used. What would settle it is a trace of the byte the sweep's second clause
+// loads.
 //
 // A session with no economy service at all has no player table to read, which
 // is not a state retail can be in: the battle block allocates the table before
@@ -244,7 +257,7 @@ func (s *Session) sweepPlayerGate(owner uint8) (visit, work bool) {
 		return false, false
 	}
 	p := &s.Econ.Players[owner]
-	if !p.Exists || p.Eliminated {
+	if !p.Exists || economy.PlayerEliminated(s.Units, int(owner)) {
 		return false, false
 	}
 	switch p.ControllerState {
@@ -557,7 +570,9 @@ func (s *Session) stepSharingPhase(tick uint32) {
 	// Sharing cadence is the transport tail after phase 12 [01 §4.4][05
 	// "Allied resource and sensor sharing"].
 	if s.Econ != nil {
-		s.Econ.ShareTick(tick)
+		// The unit world carries the candidate scan's elimination counters
+		// [05 R-SHARE-01 §3].
+		s.Econ.ShareTick(tick, s.Units)
 		// No map iteration inside ShareTick (it iterates players 0..9 asc)
 	}
 }

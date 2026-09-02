@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -162,6 +163,31 @@ type QueueBinding struct {
 	// read by repair-patrol admission only; the economy service remains the
 	// owner of these values [04 R-ORD-01 §4][05 "Player slot"].
 	Resources func(uint8) (ResourceView, bool)
+
+	// BuildList reports whether a definition's compiled build list holds at
+	// least one entry. It is command code 14's whole gate: "the definition's
+	// build list is non-empty and a live mover exists" [04 R-ORD-02 §1], NOT
+	// the authored `builder` key. The list is the `CANBUILD` page of
+	// gamedata/sidedata.tdf, compiled into content.Catalog.BuildMenus
+	// [02 "Build-menu catalog keys"]; the order package holds no catalog
+	// handle, so the session supplies the query.
+	BuildList func(*content.UnitDef) bool
+
+	// TransportAdmission is the carriable test — §10.2's nine-reject transport
+	// admission for a (carrier, candidate) pair [04 §10.2][04 R-ORD-02 §1] —
+	// which internal/movement owns. Five of the nine rejects read state the
+	// order package does not own (the carrier's live cargo list, the
+	// candidate's mover reference and committed mover mode, the map's sea
+	// level), so the resolver asks the owner rather than re-deriving a second
+	// copy of the ladder that could disagree with it.
+	TransportAdmission func(carrier, candidate *units.Unit) bool
+
+	// There is deliberately no separate alliance/diplomacy query here.
+	// [04 R-ORD-02 §1] settles hostility as the acting PLAYER's diplomacy byte
+	// toward the target's side — row A of [05 R-SHARE-01 §1], indexed by the
+	// target's slot — and Hostility above is exactly that row as the session
+	// composes it. A second field reading the same byte would be two sources of
+	// truth for one value.
 }
 
 // ResourceView is the value-only economy snapshot needed by repair patrol's
@@ -337,6 +363,13 @@ func (b *QueueBinding) Validate() error {
 	}
 	if b.World.LookupUnit == nil || b.World.Hostile == nil || b.World.ForEachUnit == nil || b.World.ForEachFeature == nil || b.World.LookupFeature == nil || b.World.TerrainHeight == nil || b.World.SeaLevel == nil {
 		return fmt.Errorf("orders: incomplete world query service")
+	}
+	// Command resolution's two owned-elsewhere gates: code 14's build list and
+	// the carriable test [04 R-ORD-02 §1][04 §10.2]. Both fail closed when
+	// absent, so a battle that started without them would silently refuse
+	// mobile build and every pickup.
+	if b.BuildList == nil || b.TransportAdmission == nil {
+		return fmt.Errorf("orders: incomplete command resolution service")
 	}
 	return nil
 }

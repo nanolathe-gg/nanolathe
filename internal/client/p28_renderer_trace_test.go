@@ -9,6 +9,13 @@ import (
 	presentationrender "github.com/nanolathe/nanolathe/internal/render"
 )
 
+// traceFace is traceTriangle as the n-corner face the body raster consumes.
+func traceFace(key int32, color uint8) screenPoly {
+	p := walkPoly([][2]int32{{0, 0}, {4, 0}, {0, 4}}, []int32{key, key, key})
+	p.color, p.candidate, p.piece, p.primitive, p.texture = color, uint32(color), 2, 7, "trace-texture"
+	return p
+}
+
 func traceTriangle(key float64, color uint8) screenTri {
 	return screenTri{
 		x: [3]int32{0, 4, 0}, y: [3]int32{0, 0, 4},
@@ -183,11 +190,12 @@ func TestP28RendererTraceTexturePaletteAndShadeArePerPixel(t *testing.T) {
 	target.trace = newRendererTrace(36)
 	target.winner = target.trace.winner
 	target.trace.width, target.trace.height = 6, 6
-	tri := traceTriangle(1, 17)
-	tri.frame, tri.frameIndex, tri.frameState = frame, 3, RendererValueAvailable
-	tri.row = [3]float64{7, 19, 31}
+	face := traceFace(1, 17)
+	face.frame, face.frameIndex, face.frameState = frame, 3, RendererValueAvailable
+	face.useSHD = true
+	face.attr[spanRow][0], face.attr[spanRow][1], face.attr[spanRow][2] = 7, 19, 31
 	var got []RendererCandidate
-	c.blitTexturedTriTarget(target, &tri, frame, 123)
+	c.blitTexturedPolyTarget(target, &face, frame, nil, 123)
 	target.commit(c.indexed, c.width, c.height)
 	target.trace.resolve(target, c.indexed, 6, 6)
 	target.trace.emit(func(v RendererCandidate) { got = append(got, v) }, nil)
@@ -219,9 +227,9 @@ func TestP28RendererTraceNanoframeEraseIsUnknown(t *testing.T) {
 	target.trace = newRendererTrace(36)
 	target.winner = target.trace.winner
 	target.trace.width, target.trace.height = 6, 6
-	tri := traceTriangle(4, 33)
+	face := traceFace(4, 33)
 	reveal := presentationrender.NanoframeReveal{Below: presentationrender.NanoframeErase, Band: presentationrender.NanoframeErase, Above: presentationrender.NanoframeErase}
-	c.fillTriNanoframeTarget(target, &tri, tri.color, reveal, 55)
+	c.fillPolyTarget(target, &face, face.color, &reveal, 55)
 	target.commit(c.indexed, c.width, c.height)
 	target.trace.resolve(target, c.indexed, 6, 6)
 	var erased *RendererCandidate

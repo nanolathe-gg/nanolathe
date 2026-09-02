@@ -88,6 +88,24 @@ func newTestClient(t *testing.T) *Client {
 	return c
 }
 
+// newPieceFixtureClient offsets the camera so a fixture unit at the world
+// origin composes well inside the framebuffer.
+//
+// The offset is load-bearing for the piece fixtures specifically. Every
+// triangle they author extends up and to the left in screen space, and with the
+// camera at (0,0) a unit at the world origin anchors its composition image at
+// framebuffer (0,0) — so the face sits off the top-left corner entirely. The
+// old barycentric filler still kept the single bottom row that landed on
+// scanline zero, and retail's `[yTop, yBottom)` fill excludes exactly that row
+// [R-RAST-01 §1] steps 2 and 5. Composing where the geometry actually lands is
+// what these tests meant all along.
+func newPieceFixtureClient(t *testing.T) *Client {
+	t.Helper()
+	c := newTestClient(t)
+	c.cam = &camera.Camera{X: -160, Z: -120, ViewW: 640, ViewH: 480, MapW: 4096, MapH: 4096}
+	return c
+}
+
 // clearIndexed zeros the framebuffer.
 func clearIndexed(c *Client) {
 	for i := range c.indexed {
@@ -119,7 +137,7 @@ func makeTriangle(piece int, name string, corners [3][3]float64, color uint8, or
 // TestPieceParentChildComposition verifies that parent transform composes child [03 §2.4] C21.
 // Child authored translation (10,0,5) plus script lane (5,0,2) should place child's triangle at (15,0,7) world offset from unit origin.
 func TestPieceParentChildComposition(t *testing.T) {
-	c := newTestClient(t)
+	c := newPieceFixtureClient(t)
 	pieces := []pieceInfo{
 		{name: "base", parent: -1, translate: [3]float64{0, 0, 0}},
 		{name: "turret", parent: 0, translate: [3]float64{10, 0, 5}},
@@ -207,7 +225,7 @@ func TestPieceParentChildComposition(t *testing.T) {
 
 // TestHiddenPieceAbsent verifies hidden pieces are not rasterized [04 §4.3][03 §2.4].
 func TestHiddenPieceAbsent(t *testing.T) {
-	c := newTestClient(t)
+	c := newPieceFixtureClient(t)
 	pieces := []pieceInfo{
 		{name: "base", parent: -1, translate: [3]float64{0, 0, 0}},
 		{name: "turret", parent: 0, translate: [3]float64{0, 0, 0}},
@@ -278,7 +296,7 @@ func TestHiddenPieceAbsent(t *testing.T) {
 
 // TestFlareFlashPolicy verifies that flare/flash named pieces follow Hidden state, not silent drop [fmt 3do "Piece naming conventions"].
 func TestFlareFlashPolicy(t *testing.T) {
-	c := newTestClient(t)
+	c := newPieceFixtureClient(t)
 	pieces := []pieceInfo{
 		{name: "base", parent: -1, translate: [3]float64{0, 0, 0}},
 		{name: "flare", parent: 0, translate: [3]float64{5, 0, 0}},
@@ -331,7 +349,7 @@ func TestFlareFlashPolicy(t *testing.T) {
 // TestTurretRotationChangesPixels verifies that turret rotation changes rendered pixels while unit frame unchanged [03 §2.4] C21.
 // Uses framebuffer hash compare.
 func TestTurretRotationChangesPixels(t *testing.T) {
-	c := newTestClient(t)
+	c := newPieceFixtureClient(t)
 	pieces := []pieceInfo{
 		{name: "base", parent: -1, translate: [3]float64{0, 0, 0}},
 		{name: "turret", parent: 0, translate: [3]float64{0, 0, 0}},
@@ -378,8 +396,8 @@ func TestTurretRotationChangesPixels(t *testing.T) {
 
 // TestSameSnapshotIdenticalFramebuffer verifies deterministic rendering: same snapshot yields identical indexed framebuffer [I1].
 func TestSameSnapshotIdenticalFramebuffer(t *testing.T) {
-	c1 := newTestClient(t)
-	c2 := newTestClient(t)
+	c1 := newPieceFixtureClient(t)
+	c2 := newPieceFixtureClient(t)
 	pieces := []pieceInfo{
 		{name: "base", parent: -1, translate: [3]float64{0, 0, 0}},
 	}
@@ -421,7 +439,7 @@ func TestSameSnapshotIdenticalFramebuffer(t *testing.T) {
 // This is a light check that piece transforms remain independent of selection projection.
 // We verify that unit's screen position for selection is still via UnitView.X/Z, not piece offset.
 func TestSelectionPickingStable(t *testing.T) {
-	c := newTestClient(t)
+	c := newPieceFixtureClient(t)
 	pieces := []pieceInfo{
 		{name: "base", parent: -1, translate: [3]float64{0, 0, 0}},
 		{name: "turret", parent: 0, translate: [3]float64{100, 0, 0}}, // far offset would move visual but not selection center

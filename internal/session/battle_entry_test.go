@@ -169,7 +169,7 @@ func TestSkirmishStorageBonusPreservesOpeningStock(t *testing.T) {
 	// Global tick increments per sub-tick; we simulate tick 0..60 inclusive.
 	for tick := uint32(0); tick <= 60; tick++ {
 		s.Econ.Tick(tick, s.Units)
-		s.Econ.ShareTick(tick)
+		s.Econ.ShareTick(tick, s.Units)
 	}
 	// Strict assertion: both players stock >=900 at tick 60 without fixture credit
 	for i := 0; i < 2; i++ {
@@ -180,7 +180,7 @@ func TestSkirmishStorageBonusPreservesOpeningStock(t *testing.T) {
 	// Also step to 600 and ensure nonzero stock remains (headless default-AI nonzero at 600)
 	for tick := uint32(61); tick <= 600; tick++ {
 		s.Econ.Tick(tick, s.Units)
-		s.Econ.ShareTick(tick)
+		s.Econ.ShareTick(tick, s.Units)
 	}
 	for i := 0; i < 2; i++ {
 		if s.Econ.Players[i].Stock[economy.Metal] == 0 && s.Econ.Players[i].Stock[economy.Energy] == 0 {
