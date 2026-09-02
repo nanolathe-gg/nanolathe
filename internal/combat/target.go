@@ -137,6 +137,12 @@ type Candidate struct {
 	// AirTarget is the to-air target-status class, enforced when the slot
 	// requests it [06 §3.1] P0-10.
 	AirTarget bool
+	// Stunned carries the candidate's stunned mark. Exactly one gate reads it —
+	// a paralyzer weapon rejects a candidate already carrying it, check 5 of the
+	// picked-candidate order [06 §3.2] — and nothing else does: the mark is a
+	// note ON the victim for other units' scans and disables nothing on the
+	// victim itself [06 R-DMG-01 §11].
+	Stunned bool
 }
 
 // IsPreferredCategory reports whether candidate's category is clear of the slot's bad-target-category mask,
@@ -216,6 +222,13 @@ type Acquisition struct {
 	BadMask       uint32
 	BadTargetMask content.CategoryMask
 	MaskResolved  bool
+
+	// Paralyzer marks the slot's weapon as a paralyzer, which is the only thing
+	// that makes a candidate's stunned mark matter: "a paralyzer weapon rejects
+	// a candidate already carrying the stunned bit", check 5 of the
+	// picked-candidate order [06 §3.2]. An ordinary weapon ignores the mark
+	// [06 R-DMG-01 §11].
+	Paralyzer bool
 
 	// WaterWeapon takes the water branch: the depth/type predicates and planar
 	// range, with no sea-level height requirement [06 §3.1] P0-10.
@@ -317,6 +330,19 @@ func (a *Acquisition) admits(c Candidate) bool {
 	return WithinRange(a.ShooterX, a.ShooterZ, c.X, c.Z, a.Range) // [06 §3.3] P0-10 inclusive
 }
 
+// rejectsStunned is check 5 of the picked-candidate order [06 §3.2]: "a
+// paralyzer weapon rejects a candidate already carrying the stunned bit". It is
+// paralyzer-only — an ordinary weapon happily re-targets a stunned unit, and
+// nothing else in the engine reads the mark [06 R-DMG-01 §11].
+//
+// The check sits after the physical gate here because that is its position in
+// the section's list; this build applies the picked-candidate checks to the
+// whole set before sampling rather than to each pick, which is a pre-existing
+// difference from [06 §3.2] and not this predicate's.
+func (a *Acquisition) rejectsStunned(c Candidate) bool {
+	return a.Paralyzer && c.Stunned
+}
+
 // AcquireTarget performs ordinary automatic target acquisition for one weapon
 // slot per [06 §3.1] [06 §3.2] [06 §3.3] P0-10.
 //
@@ -347,6 +373,9 @@ func AcquireTarget(candidates []Candidate, a Acquisition) (pool.Handle, bool) {
 		if !a.admits(c) {
 			continue
 		}
+		if a.rejectsStunned(c) {
+			continue // check 5: a paralyzer rejects an already-stunned candidate [06 §3.2]
+		}
 		filtered = append(filtered, c)
 	}
 	if len(filtered) == 0 {
@@ -361,6 +390,9 @@ func AcquireTarget(candidates []Candidate, a Acquisition) (pool.Handle, bool) {
 				}
 				if !a.admits(c) {
 					continue
+				}
+				if a.rejectsStunned(c) {
+					continue // check 5 again on the secondary list [06 §3.2]
 				}
 				secFiltered = append(secFiltered, c)
 			}
@@ -426,37 +458,16 @@ func AcquireTarget(candidates []Candidate, a Acquisition) (pool.Handle, bool) {
 }
 
 // ---------------------------------------------------------------------------
-// Retention / hysteresis per [06 §3.2] P0-10 (I1)
+// Retention per [06 §3.2] P0-10 (I1)
 // ---------------------------------------------------------------------------
-
-// ShouldRetain reports whether an automatic acquisition should retain its current live target
-// without rerunning acquisition [06 §3.2] P0-10.
-// Retention rechecks hostility, bad-target-category rejection, and paralyzer already-stunned exclusion [06 §3.2] P0-10.
-// It otherwise keeps the current live target without re-running acquisition-time physical or sensor gates [06 §3.2] P0-10.
-// Returns true to keep, false to drop and re-acquire.
-func ShouldRetain(current Candidate, hostile bool, badMask uint32, stunned bool) bool {
-	if current.Handle == 0 {
-		return false // no target
-	}
-	if !hostile {
-		return false // [06 §3.2] P0-10 rechecks hostility
-	}
-	if !IsPreferredCategory(current.Category, badMask) {
-		return false // [06 §3.2] P0-10 bad-target-category rejection (retention stricter)
-	}
-	if stunned {
-		return false // [06 §3.2] P0-10 paralyzer already-stunned exclusion
-	}
-	return true // retain without re-running physical/sensor gates [06 §3.2] P0-10
-}
-
-// ShouldRetainMask is the compiled-mask retention path [R-P0-03][06 §3.2].
-func ShouldRetainMask(current Candidate, hostile bool, badMask content.CategoryMask, stunned bool) bool {
-	if current.Handle == 0 || !hostile || stunned {
-		return false
-	}
-	return IsPreferredCategoryMask(current.CategoryMask, badMask)
-}
+//
+// Removed (WU-19-80): `ShouldRetain` and `ShouldRetainMask` stood here as the
+// retention predicate. Neither had a production caller — the scan's one
+// retention site is in service.go's per-slot loop — and both rejected a stunned
+// target for EVERY weapon, where [06 §3.2] rejects it only when the slot's
+// weapon is a paralyzer. Two exported helpers that answer the question wrongly
+// are worse than none: the live site now applies the paralyzer clause itself,
+// with the drop written where the stale/dead drop already lives.
 
 // ---------------------------------------------------------------------------
 // The autonomous scan's per-slot admission [06 §3.2]

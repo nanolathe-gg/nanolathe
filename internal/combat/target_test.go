@@ -161,27 +161,41 @@ func TestAcquisitionVisibilityHostilityFiltering(t *testing.T) {
 	}
 }
 
-func TestTargetRetentionHysteresis(t *testing.T) {
-	// Retention rechecks hostility, badMask, stunned; otherwise keeps without rerunning range/sensor [06 §3.2].
-	cand := Candidate{Handle: pool.Handle(5), Category: 0, Hostile: true, Y: fixed(1)}
-	if !ShouldRetain(cand, true, 0, false) {
-		t.Fatalf("retain true want true [06 §3.2]")
+// The stunned mark is read by exactly one acquisition gate, and only for a
+// paralyzer: "a paralyzer weapon rejects a candidate already carrying the
+// stunned bit" is check 5 of the picked-candidate order [06 §3.2], and an
+// ordinary weapon ignores the mark entirely [06 R-DMG-01 §11]. Wiring it
+// unconditionally would make every weapon in the game stop shooting at
+// paralyzed units, which is the defect the dead ShouldRetain helpers encoded.
+func TestParalyzerRejectsStunnedCandidateOrdinaryDoesNot(t *testing.T) {
+	shooterX, shooterZ := fixed(0), fixed(0)
+	weaponRange := int32(1000)
+	candidates := []Candidate{
+		{Handle: pool.Handle(7), X: fixed(10), Z: fixed(0), Hostile: true, Y: fixed(1), Stunned: true},
 	}
-	if ShouldRetain(cand, false, 0, false) {
-		t.Fatalf("retain with hostile false, want false [06 §3.2] hostility recheck")
+
+	r := rng.NewSimulation(1)
+	ordinary := acq(shooterX, shooterZ, weaponRange, 0, &r)
+	if h, ok := AcquireTarget(candidates, ordinary); !ok || h != pool.Handle(7) {
+		t.Fatalf("ordinary weapon got (%d, %v), want candidate 7 retained: the mark is paralyzer-only [06 §3.2][06 R-DMG-01 §11]", h, ok)
 	}
-	// Category 0 vs bad 0x1 -> preferred (clear), so should retain
-	if !ShouldRetain(cand, true, 0x1, false) {
-		t.Fatalf("retain cat0 vs bad 0x1 should retain (preferred) [06 §3.2]")
+
+	r2 := rng.NewSimulation(1)
+	paralyzer := acq(shooterX, shooterZ, weaponRange, 0, &r2)
+	paralyzer.Paralyzer = true
+	if h, ok := AcquireTarget(candidates, paralyzer); ok {
+		t.Fatalf("paralyzer got (%d, %v), want no target: check 5 rejects a stunned candidate [06 §3.2]", h, ok)
 	}
-	candBad := Candidate{Handle: pool.Handle(5), Category: 0x1}
-	if ShouldRetain(candBad, true, 0x1, false) {
-		t.Fatalf("retain with bad category match, want false [06 §3.2] bad-target rejection")
+
+	// An unstunned candidate is acquired by the paralyzer as usual — the
+	// rejection is the mark's, not the weapon's.
+	awake := []Candidate{{Handle: pool.Handle(8), X: fixed(10), Z: fixed(0), Hostile: true, Y: fixed(1)}}
+	r3 := rng.NewSimulation(1)
+	paralyzer2 := acq(shooterX, shooterZ, weaponRange, 0, &r3)
+	paralyzer2.Paralyzer = true
+	if h, ok := AcquireTarget(awake, paralyzer2); !ok || h != pool.Handle(8) {
+		t.Fatalf("paralyzer got (%d, %v), want candidate 8 [06 §3.2]", h, ok)
 	}
-	if ShouldRetain(cand, true, 0, true) {
-		t.Fatalf("retain with stunned, want false [06 §3.2] paralyzer exclusion")
-	}
-	// TODO(question): range/visibility not rechecked on retention — we keep even if now out of range.
 }
 
 func TestRngBoundBelowTwoNoAdvance(t *testing.T) {

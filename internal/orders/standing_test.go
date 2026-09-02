@@ -355,3 +355,68 @@ func TestOpportunityScanIsFireAtWillOnly(t *testing.T) {
 		}
 	}
 }
+
+// TestParalyzeCreditPrependsAndAccumulates locks the packet side of the stun
+// [06 §10]: a kind-2 hit inspects only the HEAD of the primary list, adds its
+// amount into a head that already carries the stun task, and otherwise
+// PREPENDS a fresh record carrying the credit — it never appends and never
+// searches the list. The first visit then turns the credit into the wait, and
+// a hit arriving during the wait extends the CREDIT, not the deadline: the
+// extension takes effect only when the wait expires and the record
+// re-activates.
+func TestParalyzeCreditPrependsAndAccumulates(t *testing.T) {
+	q, u := standingFixture(nil)
+	slot := u.SlotAt(0)
+	slot.Flags |= units.SlotFlagEnabled | slotTracking
+	slot.Target = units.Target{Kind: units.TargetUnit, Unit: 9}
+	// A standing record the stun must displace rather than queue behind.
+	q.Push(Lookup("Wait"), Node{Owner: u.Handle, Param1: 900})
+
+	PushParalyzeCredit(u, 120, 10)
+	head := q.Head()
+	if head == nil || head.ID != Lookup("Paralyze") {
+		t.Fatalf("head = %+v, want the stun record prepended [06 §10]", head)
+	}
+	if head.Param1 != 120 {
+		t.Fatalf("credit = %d, want the packet's amount 120 [06 §10]", head.Param1)
+	}
+	if q.LenPrimary() != 2 {
+		t.Fatalf("primary length = %d, want the displaced record still behind the stun [06 §10]", q.LenPrimary())
+	}
+
+	// A second hit before the first visit lands on the same head: a plain add,
+	// no second record [06 §10].
+	PushParalyzeCredit(u, 30, 11)
+	if q.LenPrimary() != 2 || q.Head().Param1 != 150 {
+		t.Fatalf("length %d credit %d, want one record carrying 150 [06 §10]", q.LenPrimary(), q.Head().Param1)
+	}
+
+	q.Pump(u, 12)
+	n := q.Head()
+	if n.Deadline != 12+150 {
+		t.Fatalf("deadline = %d, want the resume tick currentTick + credit = %d [06 §10]", n.Deadline, 12+150)
+	}
+	if !u.Stunned || u.ParalyzeExpire != uint32(n.Deadline) {
+		t.Fatalf("stun = %v expiry = %d, want the mark raised at the record's own deadline [06 §10]", u.Stunned, u.ParalyzeExpire)
+	}
+	if slot.Target.Kind != units.TargetNone {
+		t.Fatal("the unconditional target clear did not run [06 R-DMG-01 §11]")
+	}
+	if slot.Flags&slotTracking != 0 {
+		t.Fatal("the release verb did not clear the slot's autonomy bit [04 R-UNIT-06 §5][06 R-DMG-01 §11]")
+	}
+
+	// A hit during the wait extends the credit; the armed deadline stands
+	// until the record re-activates [06 §10].
+	PushParalyzeCredit(u, 60, 20)
+	if n.Deadline != 162 || n.Param1 != 60 {
+		t.Fatalf("deadline %d credit %d, want the deadline unmoved and the credit extended [06 §10]", n.Deadline, n.Param1)
+	}
+	q.Pump(u, 162)
+	if q.Head() != n || n.Deadline != 162+60 {
+		t.Fatalf("deadline = %d, want the extension applied at re-activation [06 §10]", n.Deadline)
+	}
+	if !u.Stunned {
+		t.Fatal("the extension left the unit unstunned [06 §10]")
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -586,5 +587,79 @@ func TestDamageIntakeDrawsNoRandomness(t *testing.T) {
 	}
 	if target.Health != 60 {
 		t.Fatalf("fixture did not actually damage: health = %d", target.Health)
+	}
+}
+
+// --- WU-19-80: the paralyzer packet runs retail's stun mechanism [06 §10] ---
+
+// TestParalyzerHitCreditsTheStunTaskAndTouchesNothingElse locks the packet
+// side of [06 §10]: a kind-2 packet never subtracts health, never writes the
+// stunned mark itself — the mark's one setter is the stun task's first visit
+// [06 R-DMG-01 §11] — and hands the task a credit that is the damage number the
+// weapon would have dealt, scaled exactly as ordinary damage INCLUDING the
+// armored-state modifier. The three eligibility tests gate the push and nothing
+// else: a victim failing one keeps the preliminary side effects and receives
+// neither task nor damage.
+func TestParalyzerHitCreditsTheStunTaskAndTouchesNothingElse(t *testing.T) {
+	type push struct {
+		victim pool.Handle
+		credit uint32
+		tick   uint32
+	}
+	// The seam is a package variable installed by internal/orders in a real
+	// build; a fixture composing internal/combat alone installs its own.
+	prior := ParalyzeTaskPush
+	t.Cleanup(func() { ParalyzeTaskPush = prior })
+
+	// damagemodifier 0.5 in 16.16, so an armored victim is stunned for half as
+	// long as an unarmored one.
+	const halfModifier = 32768
+	run := func(t *testing.T, armored, immune bool, controlByte uint8) ([]push, int32, bool) {
+		t.Helper()
+		var pushes []push
+		ParalyzeTaskPush = func(v *units.Unit, credit uint32, tick uint32) {
+			pushes = append(pushes, push{victim: v.Handle, credit: credit, tick: tick})
+		}
+		var svc Service
+		svc.ControlByte = func(uint8) uint8 { return controlByte }
+		w, terrain, shooter, target := newTestWorldAndUnits(t)
+		target.Def = &content.UnitDef{
+			UnitName: "stuntest", MaxDamage: 100, Limit: -1,
+			DamageModifier: halfModifier, ImmuneToParalyzer: immune,
+		}
+		target.Health = 100
+		target.MaxHealth = 100
+		target.Armored = armored
+		weapon := wu1913Weapon(40)
+		weapon.Paralyzer = true
+		p := &Projectile{Shooter: shooter.Handle, ShooterSide: shooter.Owner,
+			TargetUnit: target.Handle, Pos: Vec3{X: target.X, Y: target.Y, Z: target.Z}}
+		handleProjectileImpact(&svc, 1, p, weapon, w, terrain, nil, nil, nil, 7, Vec3{}, nil, false)
+		return pushes, target.Health, target.Stunned
+	}
+
+	pushes, health, stunned := run(t, false, false, ControlByteHuman)
+	if len(pushes) != 1 || pushes[0].credit != 40 || pushes[0].tick != 7 {
+		t.Fatalf("pushes = %+v, want one credit of 40 ticks at tick 7 [06 §10]", pushes)
+	}
+	if health != 100 {
+		t.Fatalf("health = %d, want 100: a kind-2 packet never subtracts health [06 §10]", health)
+	}
+	if stunned {
+		t.Fatal("the packet raised the stunned mark itself; its one setter is the task's first visit [06 R-DMG-01 §11]")
+	}
+
+	// "scaled exactly as ordinary damage (§9.2), including the armored-state
+	// modifier" — the pair used to be passed as (false, 0) here [06 §10].
+	if pushes, _, _ := run(t, true, false, ControlByteHuman); len(pushes) != 1 || pushes[0].credit != 20 {
+		t.Fatalf("armored pushes = %+v, want one credit of 20 ticks [06 §10]", pushes)
+	}
+	// Test 3: `immunetoparalyzer` [06 §10].
+	if pushes, health, _ := run(t, false, true, ControlByteHuman); len(pushes) != 0 || health != 100 {
+		t.Fatalf("immune pushes = %+v health = %d, want no task and no damage [06 §10]", pushes, health)
+	}
+	// Test 2: only controller types 1 and 2 are eligible [06 §10][06 R-DMG-01 §8].
+	if pushes, _, _ := run(t, false, false, ControlByteAbsent); len(pushes) != 0 {
+		t.Fatalf("absent-row pushes = %+v, want none [06 §10]", pushes)
 	}
 }

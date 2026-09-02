@@ -14,7 +14,88 @@ import (
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe/nanolathe/internal/visibility"
+	"github.com/nanolathe/nanolathe/internal/world"
 )
+
+// TestBuildGhostRunsKnownSiteGate locks the build cursor's use of the
+// PLAYER-record form of the footprint blocker [04 R-P0-08-B §1]: the ghost
+// rejects a site the local viewing slot cannot currently see, while the
+// null-player form every other placement caller uses accepts the same site.
+// The ghost previously called the null-player form, so an unseen site drew as
+// placeable.
+func TestBuildGhostRunsKnownSiteGate(t *testing.T) {
+	cat := testCatalogON05()
+	terrain := testWorldON05(64, 64)
+	uw := units.NewSliced(32, cat)
+	builderDef, ok := cat.Unit("armcons")
+	if !ok {
+		t.Fatal("fixture builder missing")
+	}
+	builder, err := uw.Create(builderDef, 0, numeric.Fixed(160<<16), 0, numeric.Fixed(160<<16))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// ModeHistoryEnabled zeroes the word mask at construction, so nothing is
+	// currently visible to any viewing slot [03 §3.1].
+	s := &session.Session{
+		State:      session.StateBattle,
+		Catalog:    cat,
+		World:      terrain,
+		Units:      uw,
+		LocalOwner: 0,
+		Clock:      &clock.State{Requested: 10, Active: 10},
+		Snapshot:   &frame.Buffer{},
+		Vis:        visibility.New(terrain, visibility.ModeHistoryEnabled),
+	}
+	s.Vis.SetLocal(0)
+	b := &battleSession{
+		sess: s,
+		cat:  cat,
+		cam:  &camera.Camera{ViewW: 640, ViewH: 480, MapW: 64 * 16, MapH: 64 * 16},
+	}
+	prodDef, ok := cat.Unit("armsolar")
+	if !ok {
+		t.Fatal("fixture product missing")
+	}
+	footX, footZ := footprintCellsForCatalog(cat, prodDef)
+	const cx, cz = int32(15), int32(15)
+
+	// The null-player form still accepts the site: nothing about the terrain,
+	// footprint or occupancy refuses it. Only the known-site gate does.
+	if _, err := s.PreviewPlacement(cx, cz, prodDef, footX, footZ, pool.Handle(builder)); err != nil {
+		t.Fatalf("null-player preview rejected the fixture site (%v); the test would prove nothing", err)
+	}
+	if _, err := b.checkProductPlacement(cx, cz, prodDef, footX, footZ, uint16(builder)); err == nil {
+		t.Fatal("the build ghost accepted an unseen site: it is not running the known-site gate [04 R-P0-08-B §1]")
+	}
+
+	// Once the site's LOS cell carries the local viewing slot's bit, the two
+	// forms agree again — the gate is a visibility test, not a second rule set.
+	revealPlacementSite(t, s, terrain, cx, cz, footX, footZ)
+	if _, err := b.checkProductPlacement(cx, cz, prodDef, footX, footZ, uint16(builder)); err != nil {
+		t.Fatalf("the build ghost rejected a visible, otherwise legal site: %v", err)
+	}
+}
+
+// revealPlacementSite sets the local viewing slot's bit on the LOS cell the
+// known-site gate projects the footprint centre onto: world centre
+// ((footX+2·cellX)·8, (footZ+2·cellZ)·8), then vx = worldX>>5 and
+// vz = (worldZ − height>>1)>>5 [04 R-P0-08-B §1][03 §2.1].
+func revealPlacementSite(t *testing.T, s *session.Session, terrain *world.Terrain, cx, cz, footX, footZ int32) {
+	t.Helper()
+	worldX := (footX + 2*cx) * 8
+	worldZ := (footZ + 2*cz) * 8
+	height := int32(terrain.HeightAt(numeric.FixedFromInt(int64(worldX)), numeric.FixedFromInt(int64(worldZ))).Raw() >> 16)
+	vx := worldX >> 5
+	vz := (worldZ - (height >> 1)) >> 5
+	mask := s.Vis.WordMask()
+	idx := int(vz*s.Vis.W + vx)
+	if idx < 0 || idx >= len(mask) {
+		t.Fatalf("fixture LOS cell (%d,%d) outside the %dx%d grid", vx, vz, s.Vis.W, s.Vis.H)
+	}
+	mask[idx] |= 1 << 0 // the local viewing slot
+}
 
 // placeClickFixture builds the production command composition over the
 // synthetic ON-05 catalog: typed dispatch through the session's human-command
@@ -32,6 +113,12 @@ func placeClickFixture(t *testing.T, cellW, cellH int32) (*battleSession, *sessi
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The build ghost is the one placement caller that binds the blocker's
+	// fourth argument to a player record and runs the known-site gate
+	// [04 R-P0-08-B §1], so the fixture needs a visibility service. Mode 0
+	// leaves history and current coverage disabled, which fills the word mask
+	// with every viewing slot's bit — the whole fixture map is visible, so
+	// these tests still measure the mouse-button contract and not fog.
 	s := &session.Session{
 		State:      session.StateBattle,
 		Catalog:    cat,
@@ -40,7 +127,9 @@ func placeClickFixture(t *testing.T, cellW, cellH int32) (*battleSession, *sessi
 		LocalOwner: 0,
 		Clock:      &clock.State{Requested: 10, Active: 10},
 		Snapshot:   &frame.Buffer{},
+		Vis:        visibility.New(terrain, 0),
 	}
+	s.Vis.SetLocal(0)
 	b := &battleSession{
 		sess: s,
 		cat:  cat,

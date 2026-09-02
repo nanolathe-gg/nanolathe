@@ -1982,11 +1982,20 @@ func (b *battleSession) updatePlacement(mx, my int32) {
 // preview/commit predicate. It resolves movement/FBI terrain rules and uses
 // the product's compiled footprint, matching construction exactly [R-P0-08]
 // [07 §9].
+//
+// The human build cursor is the one caller in the whole executable that binds
+// the blocker's fourth argument to a PLAYER record rather than null
+// [04 R-P0-08-B §1], so the ghost goes through PreviewPlacementForCursor: it
+// runs the known-site gate — the footprint centre projected onto the
+// 32-world-unit LOS grid, a site off that grid or one the local viewing slot
+// cannot currently see rejected outright — before the mapping option decides
+// whether the occupancy rejections apply. The null-player form this used to
+// call accepts a site the local player cannot see.
 func (b *battleSession) checkProductPlacement(cx, cz int32, def *content.UnitDef, footX, footZ int32, self uint16) (world.PlacementResult, error) {
 	if b == nil || b.sess == nil {
 		return world.PlacementResult{}, fmt.Errorf("battle: placement world unavailable")
 	}
-	return b.sess.PreviewPlacement(cx, cz, def, footX, footZ, pool.Handle(self))
+	return b.sess.PreviewPlacementForCursor(cx, cz, def, footX, footZ, pool.Handle(self))
 }
 
 // placementRect returns the armed site's footprint as a screen rectangle

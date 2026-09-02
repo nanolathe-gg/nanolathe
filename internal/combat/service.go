@@ -166,18 +166,26 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 	if !u.Alive || u.Dying {
 		return sum
 	}
-	if u.Stunned && tick >= u.ParalyzeExpire {
-		u.Stunned = false
-		u.ParalyzeExpire = 0
-	}
+	// The stunned mark is neither raised nor lowered here any more (WU-19-80).
+	// Its one setter is the stun task's first visit and its one clearer is that
+	// task's re-activation with a zero credit — the Paralyze row of
+	// internal/orders — because [06 R-DMG-01 §11] gives the bit a single setter
+	// and [06 §10] makes the stun a scheduled wait with no per-tick decrement:
+	// nothing counts it down. The expiry-driven clear that used to stand here
+	// lowered the mark on the tick the stored deadline passed whether or not the
+	// row had re-activated, so the mark and the row could disagree.
+	//
 	// This early return is an over-approximation, not the mechanism. Retail's
 	// weapon phase does not read the stunned bit at all: a paralyzed unit is
-	// silent because the Paralyze row already ran the release verb on all three
-	// slots and cleared their targets unconditionally, and because the head wait
+	// silent because the Paralyze row ran the release verb on all three slots
+	// and cleared their targets unconditionally, and because the head wait
 	// blocks the list runner so no order can hand it a new target
-	// [06 R-DMG-01 §11]. Skipping the pipeline here is harmless only while that
-	// stays true, and must never be relied on as the reason a stunned unit does
-	// not fire.
+	// [06 R-DMG-01 §11]. It is kept because the second half of that guarantee is
+	// not yet true here: the autonomous scan below does not read the slot
+	// autonomy bit the release verb clears (see the bit-4 note in the slot
+	// loop), so without this return a stunned unit would re-acquire into a slot
+	// the row had just released. It must never be read as the reason a stunned
+	// unit does not fire; the row is.
 	if u.Stunned {
 		return sum
 	}
@@ -231,7 +239,21 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		// build's separate OrderControl field is gone with the question.
 		if slot.Target.Kind == units.TargetUnit && slot.Target.Unit != 0 {
 			tu := w.Unit(slot.Target.Unit)
-			if tu == nil || !tu.Alive || tu.Dying {
+			// The scan tries to RETAIN first [06 §3.2]. Beside the stale/dead
+			// drop this site already made, the current target is dropped when
+			// the slot's weapon is a paralyzer and the target already carries
+			// the stunned mark — one of the exactly two readers of that mark
+			// [06 R-DMG-01 §11], and the reason a paralyzer does not spend its
+			// shots re-stunning a unit that is already down. An ordinary weapon
+			// ignores the mark entirely.
+			//
+			// The other two retention drops of [06 §3.2] — a target whose owner
+			// is now allied to the scanning player, and one whose definition
+			// index is in the slot's bad-target mask — are still not applied
+			// here; this site drops on staleness and on the paralyzer clause
+			// only.
+			paralyzerHoldsStunned := tu != nil && tu.Stunned && slot.Weapon != nil && slot.Weapon.Paralyzer
+			if tu == nil || !tu.Alive || tu.Dying || paralyzerHoldsStunned {
 				clearedHeading := slot.DesiredYaw != 0
 				clearedPitch := slot.DesiredPitch != 0x8000
 				slot.Target = units.Target{Kind: units.TargetNone}
@@ -655,13 +677,10 @@ func (s *Service) TickWeapons(tick uint32, w *units.World, vis *visibility.Servi
 				if u == nil || !u.Alive || u.Dying {
 					continue
 				}
-				if u.Stunned && tick >= u.ParalyzeExpire {
-					u.Stunned = false
-					u.ParalyzeExpire = 0
-				}
-				if u.Stunned {
-					continue
-				}
+				// The stunned over-approximation lives once, at the top of
+				// StepWeaponsForUnit [06 R-DMG-01 §11]; the copy that stood
+				// here also lowered the mark on expiry, which is the Paralyze
+				// row's job and not this loop's [06 §10].
 				s.StepWeaponsForUnit(u, tick, w, vis, terrain, econ, catalog, simRNG, crtRNG)
 			}
 		}
@@ -671,13 +690,9 @@ func (s *Service) TickWeapons(tick uint32, w *units.World, vis *visibility.Servi
 			if u == nil || u.Dying {
 				continue
 			}
-			if u.Stunned && tick >= u.ParalyzeExpire {
-				u.Stunned = false
-				u.ParalyzeExpire = 0
-			}
-			if u.Stunned {
-				continue
-			}
+			// As above: the stunned skip is StepWeaponsForUnit's one
+			// over-approximation [06 R-DMG-01 §11], and the mark's expiry
+			// belongs to the Paralyze row [06 §10].
 			buckets[u.Owner] = append(buckets[u.Owner], u)
 		}
 		for player := 0; player < 10; player++ {
@@ -744,6 +759,9 @@ func acquisitionCandidate(u *units.Unit, cand *units.Unit, seaLevel numeric.Fixe
 		Underwater:           isUnderwaterUnit(cand, seaLevel),
 		UnderwaterSeen:       isAllied(u.Owner, cand.Owner, econ),
 		AirTarget:            cand.Def != nil && cand.Def.CanFly,
+		// The stunned mark travels with the candidate; only a paralyzer slot
+		// reads it [06 §3.2] check 5 [06 R-DMG-01 §11].
+		Stunned: cand.Stunned,
 	}
 }
 
@@ -766,7 +784,10 @@ func slotAcquisition(u *units.Unit, slot *units.Slot, idx int, w *units.World, v
 		WaterWeapon:   weapon.WaterWeapon,
 		ToAir:         weapon.ToAirWeapon,
 		Ballistic:     weapon.Ballistic,
-		RNG:           simRNG,
+		// A paralyzer slot rejects candidates that already carry the stunned
+		// mark [06 §3.2] check 5; every other weapon ignores it.
+		Paralyzer: weapon.Paralyzer,
+		RNG:       simRNG,
 	}
 	if vis == nil {
 		// Hostile acquisition is visibility-gated. Keep the predicate installed
@@ -1737,6 +1758,37 @@ func (s *Service) ExplodeWeaponAt(w *units.World, terrain *world.Terrain, weapon
 	}
 }
 
+// ParalyzeTaskPush is the seam a kind-2 packet reaches the victim's primary
+// command list through [06 §10]: "the engine then resolves the task type by the
+// authored alias `paralyze` and inspects only the HEAD of the victim's primary
+// command list. If the head already carries that task type, the packet's
+// unsigned 16-bit amount is added to the head's 32-bit accumulated credit — a
+// plain add … Otherwise a task object is allocated, constructed with the credit
+// as its parameter, and PREPENDED."
+//
+// The task itself is a row of internal/orders, which imports this package, so
+// the mechanism cannot be called from here directly; that package's own
+// initializer installs the entry point (orders.PushParalyzeCredit). The
+// installer is static — the value does not vary with the session, and the row
+// it drives reaches everything session-scoped through the victim's own queue
+// binding — so this is a wiring table, not shared simulation state (I6).
+//
+// With nothing installed a paralyzer hit keeps the preliminary side effects of
+// [06 §10] and pushes no task, which is what a fixture composing internal/combat
+// alone gets.
+var ParalyzeTaskPush func(victim *units.Unit, credit uint32, tick uint32)
+
+// pushParalyzeTask is the packet side of [06 §10]. The stun's whole mechanism —
+// the release verb on all three slots, the unconditional target clear, the
+// goal-payload release, the wait arm and the stunned mark — belongs to the
+// task's first visit, not to this site [06 R-DMG-01 §11].
+func pushParalyzeTask(victim *units.Unit, credit uint32, tick uint32) {
+	if victim == nil || ParalyzeTaskPush == nil {
+		return
+	}
+	ParalyzeTaskPush(victim, credit, tick)
+}
+
 func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weapon *content.WeaponDef, falloff float32, distance int32, w *units.World, tick uint32) {
 	if victim == nil || weapon == nil || w == nil {
 		return
@@ -1811,13 +1863,22 @@ func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weap
 		victim.LastDamageSide = NeutralSide
 	}
 	if weapon.Paralyzer {
-		if victim.Def != nil && victim.Def.ImmuneToParalyzer {
+		// Stun eligibility is three tests in this order [06 §10]:
+		//
+		//  1. the alive bit set and the death latch clear, re-tested here;
+		//  2. the victim's player record exists and its controller type is 1 or
+		//     2 — the same predicate the death latch admits [06 R-DMG-01 §8];
+		//  3. the definition does not carry `immunetoparalyzer`.
+		//
+		// A victim failing any of the three keeps the preliminary side effects
+		// above and receives no stun task and no health damage.
+		if !victim.Alive || victim.Dying {
 			return
 		}
-		// The paralyzer branch tests the victim owner's control byte before
-		// queuing a stun, the same two values the death latch admits
-		// [06 R-DMG-01 §8][06 §10].
 		if !service.DeathLatchAdmitted(victim.Owner) {
+			return
+		}
+		if victim.Def != nil && victim.Def.ImmuneToParalyzer {
 			return
 		}
 		base := SelectBaseDamage(weapon, victim.Def.UnitName)
@@ -1825,13 +1886,25 @@ func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weap
 		if shooter != nil {
 			attackerKills = shooter.Kills
 		}
-		amount := ComputeScaledAmount(base, falloff, attackerKills, victim.Kills, false, 0, false, false, false)
-		dur := uint32(amount)
-		if dur == 0 {
-			dur = 1
+		// "The incoming amount is scaled exactly as ordinary damage (§9.2),
+		// including the armored-state modifier and defender veterancy, before
+		// it becomes the stun credit" [06 §10]. The credit is the damage number
+		// the weapon would have dealt, reinterpreted as ticks; only healing
+		// bypasses those scales, and this branch never subtracts health on any
+		// path. The armored pair used to be passed as (false, 0) here, which
+		// gave an armored victim the unarmored stun.
+		isArmored := UnitArmored(victim)
+		damageMod := int32(65536)
+		if victim.Def != nil {
+			damageMod = victim.Def.DamageModifier
 		}
-		victim.ParalyzeExpire = tick + dur
-		victim.Stunned = true
+		// ComputeScaledAmount already packs to the packet's unsigned 16-bit
+		// amount field [06 §9.2] step 7, which is the width [06 §10] adds into
+		// the task's 32-bit credit. A zero credit is a real value, not a floor:
+		// the task's first visit sees credit 0, lowers the mark and completes.
+		// The `if dur == 0 { dur = 1 }` that stood here was invented.
+		credit := uint32(ComputeScaledAmount(base, falloff, attackerKills, victim.Kills, isArmored, damageMod, false, false, false))
+		pushParalyzeTask(victim, credit, tick)
 		return
 	}
 	base := SelectBaseDamage(weapon, victim.Def.UnitName)

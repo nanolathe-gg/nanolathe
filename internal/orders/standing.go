@@ -10,6 +10,7 @@ package orders
 // *cancel-all* 7. Each handler says which it returns and why, quoting its row.
 
 import (
+	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
@@ -320,6 +321,50 @@ func paralyzeHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
 	u.Stunned = true
 	u.ParalyzeExpire = uint32(n.Deadline)
 	return Code(1) // *advance* [04 R-ORD-01 §2]
+}
+
+// PushParalyzeCredit is the packet side of the stun [06 §10] — the entry point
+// a kind-2 damage packet reaches this row through. internal/combat cannot call
+// it directly, because this package imports that one, so combat declares the
+// seam (combat.ParalyzeTaskPush) and the initializer below installs this
+// function into it.
+//
+// [06 §10]: the engine resolves the task type by the authored alias `paralyze`
+// and inspects only the HEAD of the victim's primary command list. If the head
+// already carries that type, the packet's unsigned 16-bit amount is added to
+// the head's 32-bit accumulated credit — a plain add, so repeated hits
+// accumulate with 32-bit wrap and never allocate. Otherwise a record is
+// constructed with the credit as its parameter and PREPENDED; the linker does
+// not append and does not search the list. A hit arriving DURING a stun
+// therefore lands on the same head record and extends the CREDIT, not the
+// deadline: the extension takes effect only when the wait expires and the
+// record re-activates, which is the behavior a clone must reproduce rather than
+// adding the remainder to the deadline.
+//
+// Nothing else happens here. The release verb on all three slots, the
+// unconditional target clear, the goal-payload release, the wait arm and the
+// raising of the stunned mark are the record's own first visit
+// [06 R-DMG-01 §11] — paralyzeHandler above — and its re-activation with a zero
+// credit is the mark's only clearer.
+func PushParalyzeCredit(u *units.Unit, credit uint32, tick uint32) {
+	if u == nil {
+		return
+	}
+	id := Lookup("Paralyze")
+	if id == 0 {
+		return
+	}
+	q := QueueForUnit(u)
+	if q == nil {
+		return
+	}
+	if head := q.Head(); head != nil && head.ID == id {
+		head.Param1 += credit // the plain 32-bit add, wrap included [06 §10]
+		return
+	}
+	n := NewNodeForOrder(id, 0, 0, 0, 0, tick, u.Handle, false)
+	n.Param1 = credit
+	q.PushHead(id, n) // prepended, never appended [06 §10]
 }
 
 // ---------------------------------------------------------------------------
@@ -634,4 +679,11 @@ func ensureStandingHandlers() {
 	}
 }
 
-func init() { ensureStandingHandlers() }
+func init() {
+	ensureStandingHandlers()
+	// The stun's packet-side entry point [06 §10]. It is installed here rather
+	// than by the session composer because it carries no session state: the
+	// record it pushes reaches the mover, the RNG and every other session-owned
+	// port through the victim's own queue binding.
+	combat.ParalyzeTaskPush = PushParalyzeCredit
+}

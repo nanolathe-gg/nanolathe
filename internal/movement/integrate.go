@@ -314,21 +314,48 @@ func thresholdSqFromRadius(radiusParam int32) int32 {
 }
 
 // goalRadiusParamFor returns the movement-goal handle radius parameter for a
-// move-family order head [R-P0-01 corrected]. The traced Move_Ground handler
-// binds the goal handle with the node's radius field plus 4; the field is 0
-// for HUD/AI-issued point moves, so the ground arrival radius is 4 and the
-// handle threshold is floor(4/16)² = 0 — the order completes only when the
-// committed tile equals the goal cell. The VTOL_Move handler instead passes
-// the definition's kamikaze distance clamped to at least 16. Patrol
-// substates bind other radii (halved/zero); their exact per-substate values are
-// not recovered, so the patrol family keeps the ground default.
-func goalRadiusParamFor(name string, def *content.UnitDef) int32 {
-	if name == "VTOL_Move" {
+// move-family order head [R-P0-01 corrected][04 R-ORD-01 §4].
+//
+// `Move_Ground` phase 0 binds its point goal with radius
+// `(int16)argument + 4`, where the argument is the record's first parameter
+// word read as a SIGNED 16-bit value. Interface-issued moves and the AI's
+// regroup/explore broadcasts leave that word 0, giving the familiar radius 4
+// and handle threshold floor(4/16)² = 0 — arrival only on the exact goal cell.
+// The AI wave task's gather broadcast forwards 160 through the same word
+// [08 R-AI-01 §19], so a gather is a move with a 164-world-unit arrival radius.
+// Passing the word instead of hardcoding 4 was the missing half of that
+// contract: the AI filled the word (WU-19-74) but this helper never read it.
+//
+// The VTOL_Move handler does not read the word at all; it passes the
+// definition's kamikaze distance clamped to at least 16.
+//
+// The ground patrol family binds radii of its own, and they are NOT the ground
+// default: §4 gives `Patrol` phase 1 radius 0 and `RepairPatrol` phase 1
+// radius 16. This helper does not model the patrol substate machine and must
+// not guess those values from the descriptor name, so it reads back what the
+// handler bound — orders.PatrolGoalRadius, the same read-back shape
+// orders.ParkGoalRect already gives this file for the rectangle `Park`
+// installs. Binding 4 for both rows left `RepairPatrol` on threshold
+// floor(4/16)² = 0 where the row's radius 16 gives floor(16/16)² = 1, a real
+// difference in the arrival predicate, and stated `Patrol`'s radius wrongly
+// even though its threshold happened to agree.
+func goalRadiusParamFor(def *content.UnitDef, head *orders.Node) int32 {
+	if head == nil {
+		return 4 // radius field (0 at order creation) + 4 [R-P0-01 corrected]
+	}
+	switch orders.DescriptorFor(head.ID).Name {
+	case "VTOL_Move":
 		rp := int32(16)
 		if def != nil && def.KamikazeDistance > rp {
 			rp = def.KamikazeDistance
 		}
 		return rp
+	case "Move_Ground":
+		// Signed 16-bit read of the argument word, then +4 [04 R-ORD-01 §4].
+		return int32(int16(uint16(head.Param1))) + 4
+	}
+	if radius, ok := orders.PatrolGoalRadius(head); ok {
+		return radius // [04 R-ORD-01 §4], authored beside the handler that binds it
 	}
 	return 4 // radius field (0 at order creation) + 4 [R-P0-01 corrected]
 }
@@ -1864,13 +1891,15 @@ func (s *System) bindArrivalHandle(u *units.Unit, head *orders.Node) {
 	goalWorldX, goalWorldZ, _ := s.moveGoalFor(u.Handle, head)
 	goalX := goalCellForWorld(goalWorldX, int32(footX))
 	goalZ := goalCellForWorld(goalWorldZ, int32(footZ))
-	// [R-P0-01 corrected] radiusParam for the goal handle: ground move-family
-	// binds the node's radius field plus 4, and the field is 0 at order
-	// creation (threshold 0 — exact goal cell); VTOL_Move binds
-	// max(KamikazeDistance,16). The sight-derived radius previously used here
-	// was a misattribution: the sight reads in the traced handlers feed
+	// [R-P0-01 corrected][04 R-ORD-01 §4] radiusParam for the goal handle:
+	// Move_Ground binds `(int16)argument + 4` from the record's first parameter
+	// word, which is 0 for interface- and most AI-issued moves (threshold 0 —
+	// exact goal cell) and 160 for an AI wave gather; VTOL_Move binds
+	// max(KamikazeDistance,16); the two ground patrol rows bind the radii they
+	// author themselves. The sight-derived radius previously used here was a
+	// misattribution: the sight reads in the traced handlers feed
 	// range/acquire paths, never the goal handle.
-	radiusParam := goalRadiusParamFor(name, u.Def)
+	radiusParam := goalRadiusParamFor(u.Def, head)
 	threshSq := thresholdSqFromRadius(radiusParam) // [R-P0-01] floor(radiusParam/16)²
 	ah := &arrivalHandle{order: head, goalX: goalX, goalZ: goalZ, threshSq: threshSq}
 	// A rectangle-perimeter goal does not arrive at a point. Its enumerated goal

@@ -67,6 +67,47 @@ import (
 // `Arrived` [04 R-ORD-01 §1].
 const statusArrived uint8 = 6
 
+// The two ground patrol rows' point-goal radii [04 R-ORD-01 §4]: `Patrol`
+// phase 1 binds "point goal at the goal with radius 0", `RepairPatrol` phase 1
+// "point goal at the goal radius 16". They are named here, beside the handlers
+// that bind them, because the movement layer needs the same two values for the
+// goal handle's threshold and must not re-derive them from a descriptor name.
+//
+// What the pair means at the handle: the threshold is floor(radius/16)²
+// [R-P0-01 corrected], so a patrol leg retires only on its waypoint's own cell
+// while a repair-patrol leg retires anywhere within one cell of it.
+const (
+	patrolGoalRadius       int32 = 0
+	repairPatrolGoalRadius int32 = 16
+)
+
+// PatrolGoalRadius reports the arrival radius the ground patrol family binds
+// with its point goal, and whether n is one of those rows.
+//
+// It is the same read-back seam as ParkGoalRect: the handler authors the goal
+// geometry and the movement layer reads it back, so the value is stated once
+// and the movement layer never guesses a radius from a name it does not own.
+// Both rows bind in phase 1 and the bound radius does not vary with the phase
+// the record is later left in, so this is a per-record constant.
+//
+// The two air rows are deliberately absent. `VTOL_Patrol` installs an air
+// marker with the arrival radius of [04 R-ORD-02 §2] through the air seam
+// (airPatrolArrivalRadius below), not a ground point goal, and
+// `VTOL_RepairPatrol` is vtolwork.go's row [04 R-ORD-01 §7]; neither binds the
+// ground goal handle this accessor describes.
+func PatrolGoalRadius(n *Node) (int32, bool) {
+	if n == nil {
+		return 0, false
+	}
+	switch DescriptorFor(n.ID).Name {
+	case "Patrol":
+		return patrolGoalRadius, true
+	case "RepairPatrol":
+		return repairPatrolGoalRadius, true
+	}
+	return 0, false
+}
+
 // hasSuccessor reports whether a record has another record behind it in the
 // front segment. ONE row asks it: `VTOL_Move` phase 2's "when this record has
 // no successor", which decides whether the air move captions `Arrived`
@@ -159,7 +200,7 @@ func patrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 		return 1 // advance
 	case 1:
 		clearWeaponTargetsUnconditional(u) // "clear the three slot targets" [R-ORDER-02 §2]
-		installPointGoal(u, n, n.GoalX, n.GoalY, n.GoalZ, 0)
+		installPointGoal(u, n, n.GoalX, n.GoalY, n.GoalZ, patrolGoalRadius)
 		armDeadline(n, tick, 15)
 		n.DynamicGate = gateMoveOutcomes // ASSIGNED: the leg waits on movement alone (file header)
 		return 1                         // advance
@@ -219,7 +260,7 @@ func repairPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 		if satisfied&gateMoveOutcomes != 0 {
 			return 6 // *rotate*: the leg is done, the next waypoint takes the head
 		}
-		installPointGoal(u, n, n.GoalX, n.GoalY, n.GoalZ, 16)
+		installPointGoal(u, n, n.GoalX, n.GoalY, n.GoalZ, repairPatrolGoalRadius)
 		armDeadline(n, tick, 60)
 		n.DynamicGate |= gateMoveOutcomes // ORed: the 60-tick deadline survives
 		if resources, ok := playerResources(u); ok && resourceAtLeastTwenty(resources.Stock[1], resources.Capacity[1]) {
