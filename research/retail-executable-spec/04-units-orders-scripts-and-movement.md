@@ -5331,7 +5331,10 @@ reader consumes it (write-only in the bounded census; store it opaque).
 `TODO(question)` — the semantic NAME of the busy bit beyond the transport
 scripts that write it; the admission half is closed: the nine-gate transport
 admission predicate performs no busy-bit test (bounded census of the
-admission predicate) [P1-05]. `TODO(question)` — the name of the engine-driven
+admission predicate) [P1-05]. **Closed (2026-09-01, [R-AIR-01 §10]):** the
+bit's engine consumer is the ground transport executors' hold — `Ground_Pickup`
+phases 1 and 3 and `Ground_Unload` phase 1 wait while the script holds `BUSY`
+through `TransportPickup`/`TransportDrop`. `TODO(question)` — the name of the engine-driven
 cloak-family bit (bit 2 of the first state byte) and its writers outside the
 edge machine (naming-only; the edge behavior is established).
 **Closed (2026-08-28):** the axis naming of the packed position halves — the
@@ -5576,7 +5579,10 @@ unit points at. `[fmt cob]` recorded this value as "always 0 in retail content,
 effect unknown"; it is not inert. **Unknown:** what that two-bit field means —
 naming only, since every shipped call site passes 0 and therefore clears it.
 Decider: static trace of the pointed-to record's other readers. Marked
-`TODO(question)`.
+`TODO(question)`. **Closed (2026-09-01):** the record is the cargo's mover and
+the field is its committed mover-mode pair — `0` attached/parked, `1`
+grounded, `2` airborne ([R-AIR-01 §3], [R-AIR-01 §9]); the unload release
+writes `1` through the same commit ([R-AIR-01 §10]).
 
 ### Closed — the effect opcode, engine side [R-COB-03 §6] (2026-08-28)
 
@@ -11086,6 +11092,201 @@ the takeoff preamble; `1` on the `VTOL_Unload` phase-2 release. Mode `0` is
 therefore reached in ordinary play by every transported unit and by every
 aircraft parked on a pad — see [R-AIR-01 §3].
 
+### Closed — unload geometry: the drop point, the cargo's height after release, the climb-aways, the unload gates, the ground pair's hold and radius, and the re-arm purge [R-AIR-01 §10] (2026-09-01)
+
+RWU-19-6 (`docs/PLAN_19_PARITY_ROADMAP.md` §3) asked six questions that
+§10.2 and [R-AIR-01 §9] left as `TODO(question)` markers in the transport
+executors. Every answer below is a direct static trace of the two air
+executors, the two ground executors, the attachment helper's apply step, the
+`becarried` re-arm, and the definition bounds writer, composed with contracts
+already established elsewhere in this document; the composition steps cite
+their sections. Nothing in [R-AIR-01 §9] is withdrawn except the two namings
+corrected in (3) and (5).
+
+**Established — (1) the drop point is the record's goal triple, written
+once when the record is made.** Both unload executors read the order record's
+goal position — the three 16.16 world values of §3.2 — and **neither writes
+it**. The value arrives with the record: the issuer constructs the record from
+the resolved command's position ([R-ORD-02 §1]), and the `u x,y` mission verb
+of §3.6 queues the same record. No phase of either executor, no validator and
+no marker constructor stores a drop point anywhere else, and nothing snaps the
+stored triple — every phase re-derives what it needs from the raw goal:
+
+* **Air, phase 0** copies all three goal values into the point marker
+  ([R-AIR-01 §4]'s point constructor). The marker's altitude setter then
+  recomputes the goal Y from the terrain under goal X/Z, so the record's own
+  Y never reaches the flight.
+* **Air, phases 1 and 2** compute the footprint anchor from goal X and goal Z
+  each time: per axis `cell = (goal + 0x80000 − foot · 0x80000) >> 20`, an
+  arithmetic shift on the 32-bit sum, with `foot` the cargo's cached footprint
+  pair (X in the low half, Z in the high half — the same snap as
+  [R-ORD-01 §1]); the pair is packed with X in the low half and Z in the high
+  half and handed to the placement validator with self identity `0` and mode
+  `1`. The phase-1 lowering marker copies the goal triple again. The phase-2
+  climb-away does not use the goal at all (see (3)).
+* **Ground, phase 0** packs `(goalX & 0xFFFF0000) + (goalZ >> 16)` for the
+  `TransportDrop` cell 1 of [R-UNIT-06 §3] — an **addition**, not an OR, so a
+  negative Z integer part borrows from the X half. **Ground, phase 2** hands
+  the goal triple to the ground goal-handle installer, which reads only the X
+  and Z words (and builds no handle at all for a `canfly` unit).
+
+The two executors therefore store the drop point "the same way" in the only
+sense there is: they do not store it; the record does.
+
+**Established — (2) the released cargo's height is not assigned by the
+release; the cargo's own mover assigns it on its next tick.** The unload
+release is the attachment helper's detach half, whose apply step writes the
+linkage fields (parent, sibling, attach piece, the no-piece status bit) and
+the request's low two bits into the committed mover-mode pair — `1`,
+grounded — and **nothing else**: it does not write X, Y or Z, does not write
+the unit flags word's mover-mode mirror, and does not touch velocity or speed
+([R-AIR-01 §9]). At the instant of release the cargo therefore holds exactly
+what the carried branch of the occupancy commit last wrote ([R-FAC-02 §2]):
+position = carrier position + attach-piece world transform, with the floater
+deck clamp already applied for a `floater` cargo, and velocity, speed and
+orientation copied from the carrier on its last carried tick.
+
+From the cargo's next mover tick its height belongs to the ground path, and
+the sequence is fixed by contracts already established:
+
+1. **Commit** (section 8.2, [R-COLL-01 §1]). The mover mode is now `1` but
+   the flags-word mirror is still `0` — the carried-position setter wrote the
+   carried mode there every tick — so neither early return fires. The cell is
+   computed from the cargo's **actual** X/Z (the hang point, not the anchor
+   the executor validated) and the mobile validator runs with the cargo's own
+   identity, that cell and mode `1`. On success the ground words are cleared
+   and restamped, the mirror becomes `1`, and transform-dirty is raised. On
+   failure the blocked clamp of [R-MOV-01 §7] runs instead: transform-dirty is
+   raised but the mirror is **not** rewritten.
+2. **Post-move correction** ([R-MOV-01 §5]) runs when transform-dirty is set
+   and the mirror equals `1`, and writes Y by exactly its four branches:
+   `upright` without `canhover` → `terrainHeight(XZ) << 16`; `upright` with
+   `canhover` → `max(terrainHeight(XZ), seaLevel − waterline) << 16`;
+   `floater` → `(seaLevel − waterline) << 16`; otherwise the four-corner
+   terrain conform — which writes nothing when the model root's selection
+   primitive index is `−1`, so such a cargo keeps its hang height.
+
+Consequences a reimplementation must preserve: there is **no model-bottom
+offset** anywhere on the path — the definition's lower Y bound is zeroed at
+catalog time ([02 R-CAT-01 §7]) and no release code reads it; the cargo's X/Z
+are the hang point — the carrier's arrival position (within the default
+half-world-unit tolerance of [R-AIR-01 §4], the lowering marker having no
+explicit radius) plus the attach piece's model-frame X/Z — and are **not**
+re-centred onto the footprint anchor the executor validated; a cargo whose
+first free commit fails validation is clamped and keeps its hang height until
+a commit passes; and the cargo's mover inherits the carrier's last velocity,
+which the ground steering then brakes, because the direct mode write never
+zeroes it. Whether the hang position is visible for one committed tick
+depends only on the per-player sweep order of the two units
+([R-MOV-03 §1]).
+
+The `TODO(question)` on the floater cargo's clamp is closed by the same
+trace: the executor applies no clamp of its own; the floater branch above is
+the whole rule.
+
+**Established — (3) the two climb-away markers, and a correction.** The
+unload's phase-2 climb-away is a point marker on the **carrier's own current
+X/Y/Z** (not the goal), altitude offset = the carrier definition's `cruisealt`
+(the signed 16-bit word, undivided), **no** arrival radius, installed as the
+record's payload, gate `= 0xE0`. The load's phase-4 climb-away is built the
+same way — point marker on the carrier's own X/Y/Z, `cruisealt`, no radius —
+**and is never installed.** The phase allocates the marker, sets its altitude,
+ORs `0xE0` into the record's gate and returns *advance*; there is no payload
+install between the attach and the return, so the marker leaks and the
+record's payload stays the phase-3 follow marker on the cargo. Phase 5 then
+returns *done*. **Correction:** §10.2's phase-4 row reads "queue the climb-away
+point command at the carrier's current X/Z with altitude `cruisealt`, no
+radius" and its `docs/PLAN_19_PARITY_ROADMAP.md` gloss reads "`cruisealt`
+climb-away". The marker is constructed exactly as stated but is not queued;
+a loaded transport climbs only when its **next** order's takeoff or cruise
+leg commands it. The load's phase-0 initial climb is confirmed as
+[R-AIR-01 §6] states it: point marker on the unit's own position, altitude
+`cruisealt / 2` as a C division of the signed 16-bit word (truncating toward
+zero), no radius, built only when the committed mode is `1`, gate `|= 0xE0`.
+
+**Established — (4) the unload's gate words and its interrupt bit.** The
+three unload phases write the record's dynamic gate word by assignment, not
+OR: phase 0 `= 0xE8`, phase 1 `= 0xE8`, phase 2 `= 0xE0` — the movement
+outcomes `0x20/0x40/0x80` of [R-ORD-01 §0], plus the interrupt/abandon bit
+`0x8` on the two approach legs. The "unload interrupt flag" of §10.2 is bit
+`0x40` of the **satisfied set the pump hands the handler** (§3.3 step 2:
+pending word plus capability word, masked by the gate), i.e. the
+"cannot get there" outcome of [R-ORD-01 §0] and [R-COLL-01 §6], tested at the
+top of phase 2 and returning 9 before the second anchor recompute. The load
+executor tests its `0x10048` entry mask and its `0x42` phase-4 mask on the
+same argument. Three further readings of the same executor: the
+"cargo list empty → 5" exit precedes the phase switch, so a carrier whose
+cargo has gone finishes at any phase; phase 0 binds the record's target
+reference to the carrier's cargo-list **head**; phase 1 takes the footprint
+from the record's target and the lowering altitude from the cargo-list head's
+definition (the model total-height integer of [R-AIR-01 §9]); and phase 2
+detaches the cargo-list head — the most recently attached cargo, per the LIFO
+list of [R-UNIT-06 §3] — not the record's target as such.
+
+**Established — (5) the ground pair's hold byte and hover radius, with a
+naming correction.** [R-AIR-01 §9] describes the shared short-move helper as
+testing "the unit's movement-state byte" for bit `0x2`. **Correction:** the
+byte is the **second unit state byte** — the one COB ports 5, 6 and 19 write
+([R-COB-03 §4], §4.4) — and bit `0x2` is the level port 6, `BUSY`, sets from
+the low bit of its value. The helper is: if `BUSY` is set, write the gate
+`0x8 | 0x4` and return *hold* (2); otherwise return *advance* (1). It is not
+the work handlers' `INBUILDSTANCE` wait of [R-ORD-01 §1] (that one tests
+port 5's bit and holds on the *clear* level); its only callers are
+`Ground_Pickup` phases 1 and 3 and `Ground_Unload` phase 1 (bounded to the
+recovered function set). This is the engine half of the sea/hover transport
+handshake: the script raises `BUSY` in `TransportPickup`/`TransportDrop`
+while it animates the attach or the drop, and the executor waits on it. That
+locates the one engine consumer §4.7's open item asked for; the bit's
+readers elsewhere were not censused here.
+
+`Ground_Unload` phase 2's radius parameter is `trunc(1.5 · zExtent)` where
+`zExtent` is the integer half of the definition's **Z extent** word — the
+bounding record's `maxZ − minZ`, which the unit-record compiler derives from
+the **footprint**, not the model: `±(FootprintZ << 20) / 2` in 16.16
+([02 R-CAT-01 §7]), so the extent is `FootprintZ << 20` and its integer half
+is `16 · FootprintZ`. The radius is therefore exactly `24 · FootprintZ` world
+units of the **carrier's** definition (the product is an integer; the
+truncation never bites), and `0` when the carrier lacks `canhover`. The
+number is a ground goal-handle radius with the meaning [R-PATH-01 §9] gives
+that parameter. "carrierModelZExtentInteger" in [R-AIR-01 §9] was the right
+word read with the wrong provenance.
+
+**Established — (6) the `becarried` re-arm purges the front chain in
+keep-survivors mode.** When the attachment helper's apply step fires the
+re-arm (predicate in [R-AIR-01 §9]), it walks the cargo's **front** chain
+only and, for every record whose static-mask copy lacks bit `0x4` — the
+purge-survivor bit of [R-MOV-03 §6] — unlinks it, tombstones it unless it is
+the front head, runs the ordinary record cleanup of §3.3 (cancel notification
+when the state-block bit is set, `StopBuilding` if pending, payload release,
+and `TargetCleared` for the non-tombstoned head), and frees it. This is the
+same keep-survivors purge a non-queued issue performs, so the survivors are
+the same set: `BeCarried`, `GetBuilt`, `Wait`, `WaitForAttack`,
+`MakeSelectable`, `AttackUType`, `Paralyze`, `SelfRepair` and
+`BuildingBuild` outlive the lift; a `Move`, `Patrol`, guard or attack the
+cargo was executing dies with its cancel notification. The rear chain is not
+touched. It then allocates a `BeCarried` record and head-inserts it into the
+chain its descriptor's rear-segment flag selects — the front chain, since
+`BeCarried`'s static mask is `0x24` — copying the old head's auto-operation
+flag onto it. The Nanolathe placeholder "head-insert without purging" keeps
+orders retail discards.
+
+Aside, from the factory egress trace: the factory product's builder link —
+the fourth caller of the attachment helper — passes request mode **1**
+([R-FAC-02 §1] item 4), which answers the `TODO(question)` in
+`internal/movement/cargo.go` on that caller's mode without a new trace.
+
+**Retired from the tail lists.** The "semantic name of the busy bit" item
+(§4.7 and the COB list below) closes as the ground-transport hold above,
+bounded as stated; the "two-bit field the `attach-unit` third value writes"
+item ([R-COB-03 §5]) was already the committed mover-mode pair by
+[R-AIR-01 §9] and is re-verified here on the unload release (mode `1`) — it
+is removed from the list.
+
+**Unknown — nothing new.** All six questions closed. What remains open on
+the transport family is unchanged: the allied cross-owner command gate of
+§10.2's admission paragraph, and the carrier collision item of the Hover and
+VTOL list.
+
 ### 10.3 Patrol and air construction orbit
 
 **Established fact:** Air construction orbit is an exact geometric recurrence,
@@ -11772,16 +11973,9 @@ question is the engine's own pool allocator. Two new bullets are added.
   of the unit allocator's clearing of the record before initialization.
 - Consumer of the script-touched marker · §4.7 [R-P0-10] · static trace.
   Write-only in the bounded census. Marked `TODO(question)`.
-- Semantic name of the busy bit; the transport-admission half is closed (no
-  busy-bit test in the nine gates) · §4.7 [P1-05] · static trace. Marked
-  `TODO(question)`.
 - Name of the engine-driven cloak-family bit (bit 2 of the first state byte)
   and its writers outside the edge machine · §4.7 · static trace, naming only.
   Marked `TODO(question)`.
-- Meaning of the two-bit field the `attach-unit` third value writes on a record
-  the cargo unit points at · §4.7 [R-COB-03 §5] · static trace, naming only.
-  Every shipped call site passes 0, so the field is always cleared. Marked
-  `TODO(question)`.
 - Yard-character class matrix inside the yard-open admission gate · §4.7,
   `[fmt tnt]` · static trace. Marked `TODO(question)`.
 - Whether mission or third-party content depends on a bare `get UNIT_HEIGHT`

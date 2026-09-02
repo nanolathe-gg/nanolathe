@@ -920,7 +920,7 @@ func (b *battleSession) minimapClickOrder(mx, my int32, additive bool) {
 //	0xE6..0xE9             F5..F8         done — recall bookmark 0..3, `SelectSquad`
 //	0xD6                   Ctrl+F9        out of scope — screenshot; the battle shell has no in-battle capture writer
 //	0xD7                   Ctrl+F10       out of scope — developer mode only
-//	0xE2                   F1             stub — the key is bound and reports that `UNITINFOx.GUI` is not built yet (WU-19-10 owns the screen, [07 §6])
+//	0xE2                   F1             done — opens `UNITINFOx.GUI` for the hovered unit or the hovered build button's product [07 R-HUD-03 §8]
 //	0xE4                   F3             done — message-source glide
 //	0xE5                   F4             done — interface-flags bit 0x80
 //	0xEC                   F11            out of scope — developer mode only
@@ -2927,11 +2927,9 @@ func (b *battleSession) glideToMessageSource() {
 }
 
 // openUnitInfo is F1. Retail opens `UNITINFOx.GUI` for the hovered unit, or
-// for a hovered build button's product [07 R-CAM-01 §2][07 §6].
-//
-// TODO(T25): the unit-info screen is WU-19-10's. The key is bound here so the
-// row is not silently absent from the dispatcher; it opens nothing.
-func (b *battleSession) openUnitInfo() {}
+// for a hovered build button's product [07 R-CAM-01 §2][07 R-HUD-03 §8].
+// cmd/nanolathe/unitinfo.go owns the screen and its close.
+func (b *battleSession) openUnitInfo() { b.toggleUnitInfo() }
 
 // stepFollowCamera is the follow half of phase 10 [01 §4.4][07 R-CAM-01 §12]:
 // a live tracked object recomputes the desired origin every pass and the

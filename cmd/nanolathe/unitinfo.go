@@ -1,0 +1,329 @@
+package main
+
+// The unit information screen `UNITINFOx.GUI` [07 R-HUD-03 §8].
+//
+// F1 without Shift opens it for the hovered build button's product, or for
+// the hovered world unit; the authored file carries the frame, the picture
+// surface and the DONE button, and the runtime appends the eight label rows
+// and their value column. Everything drawn here is either an authored gadget
+// rectangle or one of the fixed positions the section lists; nothing about
+// the layout is ours.
+//
+// Screen state is a process singleton for the same reason the save/load
+// dialog's is (see loadgame.go): there is exactly one battle shell, and the
+// battleSession struct is owned by another unit's file.
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/gui"
+	"github.com/nanolathe/nanolathe/internal/hud"
+	"github.com/nanolathe/nanolathe/internal/ui"
+)
+
+// retailUnitInfoGUI is the authored file the screen is built from
+// [07 R-HUD-03 §8]. The stock install spells it `Unitinfox.GUI`; the mount is
+// case-insensitive.
+const retailUnitInfoGUI = "guis/unitinfox.gui"
+
+// unitInfoTicksPerSecond is the runtime's ticks-per-second word the three
+// mobile statistics are scaled by [07 R-HUD-03 §8].
+const unitInfoTicksPerSecond = 30.0
+
+// unitInfoMetreScale is retail's world-unit-to-metre convention for this
+// screen only; no other reader uses it [07 R-HUD-03 §8].
+const unitInfoMetreScale = 0.4
+
+// unitInfoDegreeScale is 360/65536, the literal double the turn rate is
+// scaled by [07 R-HUD-03 §8].
+const unitInfoDegreeScale = 0.0054931640625
+
+// unitInfoNotApplicable is the value a building's three statistic rows carry
+// [07 R-HUD-03 §8].
+const unitInfoNotApplicable = "N/A"
+
+// unitInfoHeaderValue is the value-column string the two header rows hold. It
+// occupies its row without printing anything [07 R-HUD-03 §8].
+const unitInfoHeaderValue = "\n"
+
+// unitInfoLabel is one appended label gadget: its window-local position and
+// its localized caption [07 R-HUD-03 §8].
+type unitInfoLabel struct {
+	X, Y int
+	Text string
+}
+
+// unitInfoLabels are the eight appended labels, in the order the screen
+// appends them, at the fixed positions [07 R-HUD-03 §8] gives.
+var unitInfoLabels = [8]unitInfoLabel{
+	{130, 32, "Cost"},
+	{140, 47, "Energy"},
+	{140, 62, "Metal"},
+	{140, 77, "Build Time"},
+	{130, 92, "Statistics"},
+	{140, 107, "Max Velocity"},
+	{140, 122, "Acceleration"},
+	{140, 137, "Turn Rate"},
+}
+
+// unitInfoValueColumn is the value column's window-local x [07 R-HUD-03 §8].
+const unitInfoValueColumn = 240
+
+// unitInfoNameLimit is the 128-byte limit argument the NAME gadget's text is
+// written with [07 R-HUD-03 §8].
+const unitInfoNameLimit = 128
+
+// unitInfoScreen is the open screen: the authored window, the subject
+// definition, its picture and the eight value strings.
+type unitInfoScreen struct {
+	window *gui.Window
+	def    *content.UnitDef
+	pic    *formats.PCX
+	values [8]string
+}
+
+// unitInfoUI is the one open screen, or nil.
+var unitInfoUI *unitInfoScreen
+
+// unitInfoOpen reports whether the screen is up.
+func unitInfoOpen() bool { return unitInfoUI != nil }
+
+// closeUnitInfo is what `DONE` does. The authored file names `DONE` as its
+// `crdefault`, `escdefault` and `defaultfocus`, so Enter, Escape and a click
+// on the button are the same action [07 §3][fmt gui].
+func closeUnitInfo() bool {
+	if unitInfoUI == nil {
+		return false
+	}
+	unitInfoUI = nil
+	return true
+}
+
+// toggleUnitInfo is F1's whole behavior. Retail opens the screen when the
+// options window is not open; the subject is the hovered gadget's product
+// when a gadget is hovered, otherwise the hovered world unit when it is alive
+// and passes the visibility predicate, otherwise nothing opens
+// [07 R-HUD-03 §8][07 §2].
+//
+// TODO(question): retail never needs F1 to close the screen — the active GUI
+// consumes the token before the battle hotkey dispatcher runs ([07 §3]), and
+// `DONE` is the file's `escdefault`/`crdefault`, so Escape and Enter close it.
+// This shell has no keyboard-ownership seam for a battle child window yet
+// (the battle key dispatcher owns Escape unconditionally), so F1 is also the
+// close here. Wiring [07 R-WGT-01 §2]'s Enter/Escape matrix into the battle
+// shell would retire this.
+func (b *battleSession) toggleUnitInfo() {
+	if closeUnitInfo() {
+		return
+	}
+	b.openUnitInfoScreen()
+}
+
+// openUnitInfoScreen resolves the subject and builds the screen. A subject
+// that does not resolve opens nothing, which is what retail's third branch
+// does [07 R-HUD-03 §8].
+func (b *battleSession) openUnitInfoScreen() {
+	if b == nil || b.cat == nil || b.fs == nil {
+		return
+	}
+	// "F1 opens the screen when the options window is not open"
+	// [07 R-HUD-03 §8].
+	if state := b.battleState(); state != nil && state.Modal() != ui.BattleModalClosed {
+		return
+	}
+	def, ok := b.unitInfoSubject()
+	if !ok || def == nil {
+		return
+	}
+	window, err := gui.Load(b.fs, retailUnitInfoGUI)
+	if err != nil || window == nil {
+		if b.hud != nil {
+			b.hud.assetErr = hudAssetError(b.fs, retailUnitInfoGUI, "the authored unit information window", err)
+		}
+		return
+	}
+	screen := &unitInfoScreen{window: window, def: def, values: unitInfoValues(def)}
+	// The `HOTR` gadget receives the picture `unitpics/<internal name>.PCX`
+	// [07 R-HUD-03 §8]. Missing art leaves the surface empty rather than
+	// refusing the screen.
+	logical := "unitpics/" + strings.ToLower(strings.TrimSpace(def.UnitName)) + ".pcx"
+	if pic, err := formats.LoadPCXFile(b.fs, logical); err == nil {
+		screen.pic = pic
+	} else {
+		hudAssetWarning(b.fs, logical, "the unit information picture", err)
+	}
+	unitInfoUI = screen
+}
+
+// unitInfoSubject is the section's two-branch subject resolution: the hovered
+// gadget's product when the hovered-gadget index is not -1, resolved by the
+// same name lookup as the build card; otherwise the hovered world unit when
+// it is alive and passes the visibility predicate [07 R-HUD-03 §8].
+func (b *battleSession) unitInfoSubject() (*content.UnitDef, bool) {
+	if b == nil || b.cat == nil {
+		return nil, false
+	}
+	if b.hud != nil {
+		if index, name := b.hud.hoveredGadgetSource(); index != hud.NoGadget && name != "" {
+			def, ok := b.cat.Unit(content.CanonicalKey(name))
+			return def, ok && def != nil
+		}
+	}
+	f, ok := b.currentSnapshot()
+	if !ok || b.footerHoverUnit == 0 {
+		return nil, false
+	}
+	view, found := snapshotUnitByHandle(f, b.footerHoverUnit)
+	if !found || view.Slot == 0 || view.DefName == "" {
+		return nil, false
+	}
+	if b.sess != nil && !client.SnapshotVisible(f, view, b.sess.LocalOwner) {
+		return nil, false
+	}
+	def, ok := b.cat.Unit(view.DefName)
+	return def, ok && def != nil
+}
+
+// unitInfoValues builds the value column: the three costs, then three
+// localized `N/A` for a building (`bmcode` 0) or the three scaled statistics
+// for a mobile unit. The two header rows hold the `"\n"` string
+// [07 R-HUD-03 §8].
+//
+// The scale arithmetic is presentation text formatting only; no authoritative
+// value is produced here [I2].
+func unitInfoValues(def *content.UnitDef) [8]string {
+	var out [8]string
+	out[0] = unitInfoHeaderValue
+	out[4] = unitInfoHeaderValue
+	if def == nil {
+		return out
+	}
+	out[1] = fmt.Sprintf("%d", def.BuildCostEnergy)
+	out[2] = fmt.Sprintf("%d", def.BuildCostMetal)
+	out[3] = fmt.Sprintf("%d", def.BuildTime)
+	if !def.BMCode {
+		out[5], out[6], out[7] = unitInfoNotApplicable, unitInfoNotApplicable, unitInfoNotApplicable
+		return out
+	}
+	// The first two products narrow to single after the 2^-16 scale and are
+	// then widened; the unit words are localized [07 R-HUD-03 §8].
+	velocity := float64(float32(def.MaxVelocity)/65536) * unitInfoTicksPerSecond * unitInfoMetreScale
+	accel := float64(float32(def.Acceleration)/65536) * unitInfoTicksPerSecond * unitInfoMetreScale
+	turn := float64(def.TurnRate) * unitInfoTicksPerSecond * unitInfoDegreeScale
+	out[5] = fmt.Sprintf("%.1f m/s", velocity)
+	out[6] = fmt.Sprintf("%.2f m/s/s", accel)
+	out[7] = fmt.Sprintf("%.0f deg/s", turn)
+	return out
+}
+
+// unitInfoDoneIndex returns the authored `DONE` gadget's index, or -1.
+func (s *unitInfoScreen) doneIndex() int {
+	if s == nil || s.window == nil {
+		return -1
+	}
+	for i, gad := range s.window.Gadgets {
+		if i == 0 || gad.Kind != gui.KindButton {
+			continue
+		}
+		if strings.EqualFold(gad.Name, "DONE") {
+			return i
+		}
+	}
+	return -1
+}
+
+// unitInfoCovers reports whether the open screen covers a pointer position.
+// A modal that covers the pointer gates world picking out [07 §3].
+func unitInfoCovers(x, y int32) bool {
+	if unitInfoUI == nil || unitInfoUI.window == nil {
+		return false
+	}
+	return guiRectContains(unitInfoUI.window.Rect, x, y)
+}
+
+// unitInfoConsumeClick services one release inside the open screen: a release
+// on `DONE` closes it, and any other release inside the window is consumed by
+// the window rather than reaching the world [07 §3][07 R-WGT-01 §1].
+func (h *retailBattleHUD) unitInfoConsumeClick(x, y int32) bool {
+	if unitInfoUI == nil || unitInfoUI.window == nil {
+		return false
+	}
+	if !unitInfoCovers(x, y) {
+		return false
+	}
+	if index := unitInfoUI.doneIndex(); index >= 0 {
+		if guiRectContains(h.modalGadgetRect(unitInfoUI.window, index, nil), x, y) {
+			closeUnitInfo()
+			return true
+		}
+	}
+	return true
+}
+
+// drawUnitInfo composes the authored window, the picture, the name and the
+// eight appended label rows with their value column [07 R-HUD-03 §8].
+func (h *retailBattleHUD) drawUnitInfo(c *client.Client) {
+	if h == nil || c == nil || unitInfoUI == nil || unitInfoUI.window == nil {
+		return
+	}
+	screen := unitInfoUI
+	window := screen.window
+	// The `NAME` gadget's text is the definition's display name, written with
+	// a 128-byte limit argument [07 R-HUD-03 §8]. The authored label carries
+	// no text of its own, so the runtime binds it before the window draws.
+	for i := range window.Gadgets {
+		if strings.EqualFold(window.Gadgets[i].Name, "NAME") {
+			name := screen.def.Name
+			if len(name) > unitInfoNameLimit {
+				name = name[:unitInfoNameLimit]
+			}
+			window.Gadgets[i].Text = name
+		}
+	}
+	h.drawGUIWindow(c, window, nil, "")
+	h.drawUnitInfoPicture(c, screen)
+	h.drawUnitInfoRows(c, screen)
+}
+
+// drawUnitInfoPicture stamps `unitpics/<internal name>.PCX` into the authored
+// `HOTR` surface rectangle [07 R-HUD-03 §8].
+func (h *retailBattleHUD) drawUnitInfoPicture(c *client.Client, screen *unitInfoScreen) {
+	if screen.pic == nil {
+		return
+	}
+	for i, gad := range screen.window.Gadgets {
+		if i == 0 || !strings.EqualFold(gad.Name, "HOTR") {
+			continue
+		}
+		r := screen.window.PlacedRect(i)
+		c.UIBlitPCXClipped(screen.pic, int(r.X), int(r.Y), int(r.X), int(r.Y), int(r.W), int(r.H))
+		return
+	}
+}
+
+// drawUnitInfoRows writes the eight labels and the value column. The value
+// column's `"\n"` header entries occupy their row and print nothing
+// [07 R-HUD-03 §8].
+func (h *retailBattleHUD) drawUnitInfoRows(c *client.Client, screen *unitInfoScreen) {
+	if h.modalFont == nil {
+		return
+	}
+	clip := screen.window.Rect
+	originX, originY := int(screen.window.Rect.X), int(screen.window.Rect.Y)
+	for i, label := range unitInfoLabels {
+		drawRetailGAFTextClipped(c, h.modalFont, label.Text,
+			originX+label.X, originY+label.Y, -1,
+			int(clip.X), int(clip.Y), int(clip.W), int(clip.H))
+		value := screen.values[i]
+		if value == unitInfoHeaderValue || value == "" {
+			continue
+		}
+		drawRetailGAFTextClipped(c, h.modalFont, value,
+			originX+unitInfoValueColumn, originY+label.Y, -1,
+			int(clip.X), int(clip.Y), int(clip.W), int(clip.H))
+	}
+}

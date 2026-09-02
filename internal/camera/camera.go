@@ -311,7 +311,18 @@ func (c *Camera) AddZoom(delta float32, mx, my int32) {
 	} else if delta < 0 {
 		factor = 1 / 1.1
 	}
-	newS := oldS * factor
+	c.SetScaleAbout(mx, my, oldS*factor)
+}
+
+// SetScaleAbout sets the presentation zoom, clamped to [0.25, 4], keeping the
+// world point under screen position (mx, my) where it is [F-P1-008]. The
+// wheel path steps through it; tooling captures use it to zoom to an exact
+// factor.
+func (c *Camera) SetScaleAbout(mx, my int32, newS float32) {
+	if c == nil {
+		return
+	}
+	oldS := c.scale()
 	if newS < 0.25 {
 		newS = 0.25
 	}
@@ -321,7 +332,7 @@ func (c *Camera) AddZoom(delta float32, mx, my int32) {
 	if newS == oldS {
 		return
 	}
-	// Keep cursor point stable: world = (screen - Origin)/oldS + cam
+	// Keep the point stable: world = (screen - Origin)/oldS + cam
 	// New cam = world - (screen - Origin)/newS
 	// Use float for subpixel before trunc.
 	ox := float32(OriginX)

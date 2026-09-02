@@ -82,6 +82,17 @@ func runShot(opts Options, cs *contentSet) error {
 		b.viewerStep(tickSeconds, cl)
 	}
 
+	// Zoom is presentation-only [F-P1-008]; it is applied after the ticks so
+	// the simulation is identical to an unzoomed capture of the same seed.
+	if opts.ShotZoom != 0 && opts.ShotZoom != 1 && b.cam != nil {
+		fx, fy := int32(retailScreenW/2), int32(retailScreenH/2)
+		if opts.ShotFocus != "" {
+			if _, err := fmt.Sscanf(opts.ShotFocus, "%d,%d", &fx, &fy); err != nil {
+				return fmt.Errorf("nanolathe: shot: --shot-focus wants \"x,y\", got %q", opts.ShotFocus)
+			}
+		}
+		b.cam.SetScaleAbout(fx, fy, float32(opts.ShotZoom))
+	}
 	img := cl.ComposeFrame()
 	file, err := os.Create(opts.Shot)
 	if err != nil {

@@ -717,14 +717,24 @@ The mission loader dispatches on the mission type discriminant:
 
 - **Type 1 (campaign)** builds the `MISSION%d` section name and requires the
   mission file's `GlobalHeader` block plus `missionfile`/`missionname`.
-  Distinct diagnostics cover each failure shape: missing mission file ("The
-  requested mission file … does not exist"), corrupt mission file ("Hey,
-  joker! Mission file %s is corrupt"), legacy format ("Old TED format no
-  longer supported!"), and missing block ("No GlobalHeader block in mission
+  Distinct diagnostics cover each failure shape: missing mission block ("The
+  requested mission file … does not exist"), a `MISSION%d` block with no
+  `missionfile` key at all ("Old TED format no longer supported!" — a test
+  on the campaign file's keys, not on any byte signature of the map file;
+  see [R-CAMP-01 §11]), an OTA that cannot be read or parsed ("Hey, joker!
+  There is no mission defintion for this mission: %s"), a parsed OTA
+  without `[GlobalHeader]` ("Hey, joker! Mission file %s is corrupt"), and,
+  in the common tail, a missing block ("No GlobalHeader block in mission
   file!").
 - **Types 2 and 3** (skirmish/multiplayer and loaded-save OTA) join the raw
-  OTA path directly against the maps directory; when parsing misses, a fuzzy
-  search falls back to the closest match.
+  OTA path directly against the maps directory. When that file cannot be
+  read or parsed, the loader tries **exactly one** alternative: the name is
+  taken to be a *translated* map display name and is mapped back to its
+  source string through the translation table (case-insensitive equality
+  on the translated text, first entry in table order); a second miss, or
+  no table entry, fails the load silently. There is no directory scan and
+  no distance metric — the earlier "a fuzzy search falls back to the
+  closest match" wording is corrected in [R-CAMP-01 §11].
 
 The common tail loads briefing/environment values, builds trigger objects,
 meteor configuration, and the remaining mission subsystems.
@@ -6198,6 +6208,94 @@ online-service callback and the DirectPlay lobby report; both are
 placed. "Excess" is therefore the `EnergyWasted`/`MetalWasted` overflow
 accumulator of §7. Established as to fields; OOS as to consumers.
 
+### Closed — mission-file recovery: the translated-name fallback, the `Old TED` test, and the score multipliers [R-CAMP-01 §11] (2026-09-01)
+
+**Scope.** RWU-19-7. Static trace of the mission loader (the four-way
+message-box function §1 describes), the mission-select-by-name entry that
+wraps it, the skirmish map catalog builder, the translation-table loader and
+its two lookups, and the score helper of §7. Raw trail kept out of the repo.
+Status: **Established** unless a claim says otherwise.
+
+**1. There is no "closest match" search.** For kinds 2 and 3 the loader
+copies the requested name into the mission's display-name field, builds
+`Maps\<name>.OTA` (extension replaced; language-suffixed directory probed
+first per §1) and parses it. When that read or parse fails it does exactly
+one more thing: it asks the translation table for the *source* string whose
+*translation* equals the requested name — the reverse of the ordinary
+lookup of [02 §3 "Translation table"]. The reverse lookup walks the table's
+entries in stored (byte-sorted source) order and returns the first entry
+whose translated text compares equal to the name **case-insensitively**;
+with no table loaded, a null name, or no such entry it returns nothing and
+the loader fails. On a hit the source string replaces the display name, the
+path is rebuilt from it and parsed once more; a second miss fails the load.
+Nothing else is tried: no enumeration of the maps directory, no prefix or
+edit-distance comparison, no "first entry" default. Both failure exits are
+**silent** — the loader returns failure without a message box. The skirmish
+Start handler is the caller that speaks: when the select-by-name entry
+returns failure it shows `The terrain for the selected map does not exist.`
+and stays on the screen (this is the "terrain lookup" of [R-SKIR-01 §1]).
+Once a file has parsed, the common tail's `[GlobalHeader]` seek still raises
+`No GlobalHeader block in mission file!` before failing.
+
+*Why the fallback exists.* The skirmish map catalog is built from
+`Maps\*.ota`: each basename (extension stripped) is copied, upper-cased and
+forward-translated; when the translation differs from the upper-cased text
+the catalog stores the translation, otherwise the basename as found. The
+select-by-name entry mirrors this on success: with a language set and not
+equal to `english`, it upper-cases the raw name and stores its forward
+translation as the localized display name. So a localized catalog can hand
+the loader a translated display name, and the reverse lookup is how the
+loader gets back to the file's name. **Supported inference:** with the
+stock translation file this path can never fire — its map-name sections
+are authored in lower case (`[ashap plateau]` with German, French, Italian
+and Spanish keys and no `english` key anywhere), the forward lookup is
+byte-exact on the upper-cased text [02 §3 "Translation table"], so no stock
+map name ever translates and the English table is empty; the fallback only
+matters for a language file whose map-name sections are upper-cased.
+Decider: an asset census of a localized retail install's translation file.
+
+**Implementation rule.** Delete the Levenshtein search. Kinds 2/3: try
+`Maps\<name>.OTA`; on a read/parse miss, look the name up as a translated
+text in the translation table (case-insensitive equality, first entry in
+source-sorted order); on a hit retry once with the source string as both
+the display name and the file name; otherwise fail without a diagnostic and
+let the skirmish Start preflight report `The terrain for the selected map
+does not exist.`
+
+**2. `Old TED format no longer supported!` is a campaign-file key test, not a
+byte signature.** Kind 1 only. After the `MISSION%d` block is found and
+`missionname` is read, the loader reads the plain key `missionfile` with the
+string accessor that reports whether the key exists; when the key is
+**absent** the message box is raised and the load fails. A `missionfile`
+whose value is empty counts as present: the path becomes `Maps\.OTA`, which
+fails to parse and raises the "no mission defintion" box instead. No bytes
+of any map file are inspected — a legacy mission is one whose campaign
+entry predates the `missionfile` key. Kinds 2 and 3 can never raise it.
+There is therefore no legacy-file signature for the build to detect and
+nothing for `research/formats` to record; the build's "starts with `TED`"
+prefix test is invented and must go.
+
+**3. `killmul` and `timemul`.** Both are plain keys of `[GlobalHeader]`,
+read by the float accessor (leading spaces skipped, then the CRT
+string-to-double conversion), **default `0.0` when absent**, and stored as
+single-precision floats in the mission record — read after the water-damage
+keys and the trigger builder, before schema selection (§1's order stands).
+The score helper of §7 is their only reader: the row's score is
+`__ftol(float(int64(globalTick / 60)) × timemul) + __ftol(float(Kills) ×
+killmul)`, the division unsigned and the tick widened through a 64-bit
+integer, each product formed in extended precision from the stored single
+and truncated separately, then summed and clamped at zero (`< 0 → 0`).
+With both keys absent every score is 0; the stock `killmul=50; timemul=0;`
+scores 50 per kill. **Correction to [02 R-MAP-01 §3] and [fmt ota]:** both
+mark these keys "inert (reader census: none)"; that census missed the score
+helper, which multiplies by both. Those rows should read "read by the
+end-of-battle score helper [08 R-CAMP-01 §7]".
+
+**Unknown.** Whether any localized retail translation file authors
+upper-case map-name sections (the only way the forward translation, and so
+the reverse fallback, can fire on stock data) · decider: asset census of a
+localized install.
+
 
 ## R-AI-02 — Computer player: ledger-closure findings (2026-08-29)
 
@@ -6869,6 +6967,10 @@ finding. The recitals are deleted here only; the body sections and the
 - The meaning of the per-slot auxiliary word that admits a slot to the score
   display and statistics rows even when its controller test fails ·
   [R-CAMP-01 §7] · static trace of the word's writers.
+- Whether any localized retail translation file authors upper-case map-name
+  sections, so that the skirmish catalog's forward translation and the
+  loader's reverse-translation fallback can fire on stock data · [R-CAMP-01
+  §11] · asset census of a localized install.
 - Whether commander-kill and commander-loss counters have save-bank keys in
   addition to the established `Kills` and `Losses` entries · "Player records"
   / [R-CAMP-01 §10] · static trace of the Player%i writer and reader.

@@ -12,18 +12,20 @@ import (
 // Options is the command-line surface for the retail runtime and its host
 // configuration. Developer probes and capture modes are separate tools.
 type Options struct {
-	Root       string // retail install root
-	Map        string // map name without extension, e.g. "ashap plateau"
-	Seed       int64  // battle RNG seed for both streams; <0 = derive pair from clock
-	Headless   bool   // run the session without opening a window
-	Ticks      int    // authoritative tick limit; zero uses the headless default
-	Mission    string // campaign path and mission selector, e.g. "camps/Arm Campaign.tdf:MISSION0"
-	Difficulty int    // campaign difficulty
-	LoadSave   string // explicit retail .SAV path to load in the windowed shell
-	Report     string // JSON headless summary path; empty writes to stdout
-	Shot       string // compose one frame to this PNG and exit, opening no window
-	ShotTicks  int    // authoritative ticks to advance before the frame is captured
-	Remaster   string // remaster override: a loose directory or HPI mounted above every retail tier
+	Root       string  // retail install root
+	Map        string  // map name without extension, e.g. "ashap plateau"
+	Seed       int64   // battle RNG seed for both streams; <0 = derive pair from clock
+	Headless   bool    // run the session without opening a window
+	Ticks      int     // authoritative tick limit; zero uses the headless default
+	Mission    string  // campaign path and mission selector, e.g. "camps/Arm Campaign.tdf:MISSION0"
+	Difficulty int     // campaign difficulty
+	LoadSave   string  // explicit retail .SAV path to load in the windowed shell
+	Report     string  // JSON headless summary path; empty writes to stdout
+	Shot       string  // compose one frame to this PNG and exit, opening no window
+	ShotTicks  int     // authoritative ticks to advance before the frame is captured
+	Remaster   string  // remaster override: a loose directory or HPI mounted above every retail tier
+	ShotZoom   float64 // presentation zoom applied before --shot captures (1 = native)
+	ShotFocus  string  // "x,y" screen point kept fixed while zooming; default the screen centre
 }
 
 // ErrHelp reports that usage was requested and printed.
@@ -56,6 +58,8 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.Shot, "shot", "", "compose one battle frame to this PNG and exit, opening no window")
 	set.IntVar(&opts.ShotTicks, "shot-ticks", 90, "authoritative ticks to advance before --shot captures the frame")
 	set.StringVar(&opts.Remaster, "remaster", "", "remastered-art override: a loose directory or .hpi mounted above every retail archive")
+	set.Float64Var(&opts.ShotZoom, "shot-zoom", 1, "presentation zoom for --shot, 0.25..4 (1 = native)")
+	set.StringVar(&opts.ShotFocus, "shot-focus", "", "screen point \"x,y\" kept fixed by --shot-zoom (default the screen centre)")
 	set.Usage = func() {
 		fmt.Fprintf(out, "nanolathe — a reimplementation of the Total Annihilation engine\n\n")
 		fmt.Fprintf(out, "usage: nanolathe [flags]\n\nflags:\n")

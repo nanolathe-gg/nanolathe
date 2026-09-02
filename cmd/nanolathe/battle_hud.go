@@ -119,6 +119,18 @@ type retailBattleHUD struct {
 	hoveredGadget     int
 	hoveredGadgetName string
 	hoveredGadgetOK   bool
+
+	// score is the Space-held Kills/Losses panel's presentation state: the
+	// slide word the composer steps once per composed frame, and the two
+	// per-slot flash byte arrays [07 R-HUD-04 §1]. Both are presentation only
+	// and are never read by the simulation [I6].
+	score      hud.ScoreSlide
+	scoreFlash hud.ScoreFlash
+	// scoreFlashTick is the committed tick the flash arrays last decayed at.
+	// The decay is one step per unit of the scaled timer, which is the tick
+	// [07 R-HUD-04 §1][07 R-CAM-01 §10].
+	scoreFlashTick   uint32
+	scoreFlashTickOK bool
 }
 
 // hoveredGadgetSource reports the footer's first source: the hovered-gadget
@@ -719,7 +731,14 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	if paused {
 		h.drawPausedTitle(c)
 	}
+	// The Space-held Kills/Losses panel is composed after the world and the
+	// chrome, and before the in-battle menus that can cover it
+	// [07 R-HUD-04 §1].
+	h.drawScorePanel(c, b, cur)
 	h.drawBattleMenu(c, b)
+	// The unit information screen is a child window over the battle
+	// [07 R-HUD-03 §8].
+	h.drawUnitInfo(c)
 	if b != nil {
 		b.drawStatusMessage(c, cur)
 	}
@@ -728,6 +747,10 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 		result = cur.Result
 	}
 	h.drawResultOverlay(c, b, result)
+	// Last layer: the frontend save/load dialog and the shell's message box.
+	// ARMOPT opens them over the battle and ENDMSN over the results surface,
+	// so they sit above both [07 R-FE-01 §7][07 R-FE-01 §8].
+	h.drawFrontendDialog(c, b)
 }
 
 // minimapRect returns the battle composer's fixed radar canvas rectangle.
@@ -992,6 +1015,174 @@ func (h *retailBattleHUD) drawBattleMenu(c *client.Client, b *battleSession) {
 	} else if state.Modal() == ui.BattleModalConfirmExit {
 		h.drawGUIWindow(c, h.confirmWin, nil, state.ConfirmTitle())
 	}
+}
+
+// drawFrontendDialog paints the frontend panel stack's open child window over
+// the battle and over the results surface.
+//
+// `ARMOPT` opens the two `LOADGAME.GUI` modes as child windows over whatever
+// surface raised them, and `ENDMSN`'s `SaveGame`/`LoadGame` do the same over
+// the results screen [07 R-FE-01 §7][07 R-FE-01 §8]. The dialog is therefore
+// the last layer of the battle composition: above the options window it was
+// opened from and above the result overlay. Until this call the dialog was
+// driven but never painted, because the shell's own draw returns early in
+// battle mode; the seam is the one battle_menu.go's opener records.
+//
+// The shell's authored `MSGBOX` follows it: the load direction's "no saved
+// games" refusal is raised from inside a battle and must be visible there
+// [07 R-FE-01 §9].
+func (h *retailBattleHUD) drawFrontendDialog(c *client.Client, b *battleSession) {
+	if h == nil || c == nil || b == nil || b.shell == nil {
+		return
+	}
+	g := b.shell
+	if g.saveLoadPanelActive() && saveLoadPanel != nil {
+		g.drawRetailWindow(c, g.panelMode(saveLoadPanel), saveLoadPanel)
+	}
+	g.drawRetailModal(c)
+}
+
+// battleSessionKind is doc 08's session-kind word for the running battle: 1
+// for a campaign mission, otherwise 2 (skirmish). Multiplayer (3) is out of
+// scope for this build, so no path produces it [08 "Session kinds"].
+func battleSessionKind(b *battleSession) uint8 {
+	if b != nil && b.sess != nil && b.sess.Mission != nil && b.sess.Mission.Type == mission.TypeCampaign {
+		return 1
+	}
+	return 2
+}
+
+// drawScorePanel is the Space-held Kills/Losses panel [07 R-HUD-04 §1].
+//
+// The composer draws it after the world and chrome and only when the session
+// kind is 2 or 3; a campaign mission never calls it, so its slide word stays
+// inert there. The slide word is stepped once per composed frame with no
+// wall-clock throttle — unlike the §6 bottom strip — which is why the step
+// lives in the composer rather than in the host-frame update.
+func (h *retailBattleHUD) drawScorePanel(c *client.Client, b *battleSession, cur *frame.Frame) {
+	if h == nil || c == nil || b == nil {
+		return
+	}
+	// The flash arrays decay whether or not the panel is showing, one step per
+	// unit of the scaled timer [07 R-HUD-04 §1].
+	h.stepScoreFlash(cur)
+	if !hud.ScoreSessionKindDraws(battleSessionKind(b)) {
+		return
+	}
+	spaceHeld := false
+	if c.Input() != nil && c.Input().Kbd != nil {
+		spaceHeld = c.Input().Kbd.KeyHeld(input.KeySpace)
+	}
+	showing := hud.ScoreShowing(b.panelHoldFlag, spaceHeld, h.editorFocused())
+	visible, cue := h.score.Step(showing)
+	if cue != "" {
+		b.playUICue(c, cue)
+	}
+	if !visible || cur == nil {
+		return
+	}
+	width, _ := c.Size()
+	// The player-count word is the number of occupied player slots, which the
+	// committed frame publishes one economy row per [I6].
+	rect := hud.ScorePanelGeometry(int32(width), h.score, len(cur.Economy))
+	c.UIShadeRect(h.pal, int(rect.X0), int(rect.Y0), int(rect.X1-rect.X0), int(rect.Y1-rect.Y0), hud.ScorePanelShadeLevel)
+	// The localised headings: `Kills` at (x0+2, 32), `Losses` right-aligned at
+	// (x1 - textWidth - 2, 32), both at width limit 119 and light row 0.
+	h.drawScoreText(c, "Kills", int(rect.X0)+2, hud.ScorePanelTop, 0)
+	lossesHeading := "Losses"
+	h.drawScoreText(c, lossesHeading, int(rect.X1)-retailGAFTextWidth(h.modalFont, lossesHeading)-2, hud.ScorePanelTop, 0)
+
+	// TODO(question): [07 R-HUD-04 §1] emits rows in rank order and filters
+	// them on the slot's controller/side/watcher bytes, its live-unit count
+	// and the auxiliary word doc 08 leaves unnamed. The committed frame
+	// carries none of those: `frame.ResultScore` has no rank byte, and the
+	// session publishes the score rows only once the result latches (see
+	// internal/session/result.go's collectScores), so a live battle publishes
+	// an empty set and this panel draws a heading with no rows. The arithmetic
+	// the section does establish is implemented and tested in
+	// internal/hud/scorepanel.go (ScoreRowOrder, ScoreSlot.Qualifies); what is
+	// missing is a per-tick publication of the ten player slots with their
+	// kill/loss counters, name, logo, controller, side, watcher bit,
+	// live-unit count, auxiliary word and rank byte. One writer owns a frame
+	// field, and internal/session is not this unit's to change. The rank
+	// byte's own initial assignment at battle entry is additionally recorded
+	// as a Supported inference in [07 R-HUD-04 §1] and is untraced.
+	// Until then the published rows are drawn in the order the frame carries
+	// them; no ordering is invented here.
+	drawn := 0
+	for i := range cur.Result.Scores {
+		row := cur.Result.Scores[i]
+		h.drawScoreRow(c, b, cur, rect, drawn, row)
+		drawn++
+	}
+}
+
+// stepScoreFlash applies one unit of the scaled timer to both flash arrays,
+// at most once per committed tick [07 R-HUD-04 §1][07 R-CAM-01 §10].
+func (h *retailBattleHUD) stepScoreFlash(cur *frame.Frame) {
+	if cur == nil {
+		return
+	}
+	if h.scoreFlashTickOK && h.scoreFlashTick == cur.Tick {
+		return
+	}
+	h.scoreFlashTick, h.scoreFlashTickOK = cur.Tick, true
+	h.scoreFlash.Decay()
+}
+
+// drawScoreRow paints one player's row: the local player's two lightening
+// passes, the player name, and the kill and loss counts with their flash
+// brightness [07 R-HUD-04 §1].
+func (h *retailBattleHUD) drawScoreRow(c *client.Client, b *battleSession, cur *frame.Frame, rect hud.ScorePanelRect, drawn int, row frame.ResultScore) {
+	y := hud.ScoreRowTop(drawn)
+	if row.Player >= 0 && row.Player < hud.ScorePanelSlots && uint8(row.Player) == cur.Selection.LocalPlayer {
+		// (x0+4, y-1)-(x1-4, y+38), lightened at 31 then 20.
+		x, w := int(rect.X0)+4, int(rect.X1-rect.X0)-8
+		top, height := int(y)-1, 40
+		c.UILightRect(h.pal, x, top, w, height, hud.ScorePanelLocalLightA)
+		c.UILightRect(h.pal, x, top, w, height, hud.ScorePanelLocalLightB)
+	}
+	// TODO(question): the row's side logo is "the frame numbered by the lobby
+	// record's logo byte in the side-logo GAF entry" [07 R-HUD-04 §1], quad
+	// mapped from the frame interior onto (x0+7, y+1)-(x0+119, y+37). Which
+	// entry of textures/logos.gaf that frame belongs to is the same open
+	// question the footer's LOGO2 draw records; the stock file holds 18
+	// entries and no section names the one the battle composer addresses. An
+	// asset census would settle it; until then the logo is not drawn rather
+	// than picked from a plausible name.
+	_ = row.Logo
+	h.drawScoreText(c, row.Name, int(rect.X0)+9, int(y)+6, 0)
+	kills, losses := hud.ScoreCounters(row, commanderDeathOption(b))
+	killText := fmt.Sprintf("%d", kills)
+	lossText := fmt.Sprintf("%d", losses)
+	killShade, lossShade := 0, 0
+	if row.Player >= 0 && row.Player < hud.ScorePanelSlots {
+		killShade = int(h.scoreFlash.Kills[row.Player])
+		lossShade = int(h.scoreFlash.Losses[row.Player])
+	}
+	h.drawScoreText(c, killText, int(rect.X0)+9, int(y)+21, killShade)
+	h.drawScoreText(c, lossText, int(rect.X0)+119-retailGAFTextWidth(h.modalFont, lossText)-2, int(y)+21, lossShade)
+}
+
+// drawScoreText is the panel's text writer: the GAF font, the 119-pixel width
+// limit, and the light-table row as the brightness argument
+// [07 R-HUD-04 §1][03 R-FONT-01 §6].
+func (h *retailBattleHUD) drawScoreText(c *client.Client, text string, x, y, shade int) {
+	if text == "" || h.modalFont == nil {
+		return
+	}
+	drawRetailGAFTextLit(c, h.modalFont, text, x, y, hud.ScorePanelTextLimit, h.pal, shade)
+}
+
+// commanderDeathOption is the session's commander-death option word. Value 2
+// is Deathmatch, which swaps the panel's counters for the commander pair. It
+// is immutable session setup, chosen in the lobby before the battle starts
+// [07 R-HUD-04 §1][07 R-FE-01 §7][08 R-SKIR-01 §3].
+func commanderDeathOption(b *battleSession) int {
+	if b == nil || b.sess == nil {
+		return 0
+	}
+	return b.sess.Skirmish.CommanderDeath
 }
 
 // drawGUIWindow composes an authored modal into its retail private surface.
@@ -1752,6 +1943,12 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 	if h == nil || b == nil {
 		return false
 	}
+	// The unit information screen is a child window on top of the battle: it
+	// services the release before the command page does, and a release inside
+	// it never reaches a side-panel control [07 §3][07 R-WGT-01 §1].
+	if h.unitInfoConsumeClick(x, y) {
+		return true
+	}
 	// A committed frame is required for every HUD action [I6]. A frame with a
 	// non-empty selection but no command-page builder still exposes the authored
 	// general/order controls; with an empty selection the command windows are
@@ -1976,6 +2173,11 @@ func (h *retailBattleHUD) hitTestFor(b *battleSession, x, y int32) bool {
 	if h == nil || b == nil {
 		return false
 	}
+	// An open modal that covers the pointer owns the press: world picking and
+	// camera edge behavior are gated out under it [07 §3].
+	if unitInfoCovers(x, y) {
+		return true
+	}
 	var f *frame.Frame
 	if b.sess != nil && b.sess.Snapshot != nil {
 		f = b.sess.Snapshot.Current()
@@ -2053,6 +2255,12 @@ func (h *retailBattleHUD) buttonAt(b *battleSession, x, y int32) int {
 }
 
 func (h *retailBattleHUD) sameButton(b *battleSession, x0, y0, x1, y1 int32) bool {
+	// While the unit information screen is up it is the active window: the
+	// press/release pair is identified against it, not against the command
+	// page underneath [07 §3][07 R-WGT-01 §1].
+	if unitInfoOpen() {
+		return unitInfoCovers(x0, y0) && unitInfoCovers(x1, y1)
+	}
 	pressed := h.buttonAt(b, x0, y0)
 	return pressed >= 0 && pressed == h.buttonAt(b, x1, y1)
 }
