@@ -175,6 +175,24 @@ func (m *Manager) writeGroup(u *units.Unit, newGroup int8) {
 	u.Group = group
 }
 
+// OnUnitDeath is the death-teardown caller of the direct writer. Retail's
+// whole-image caller census names six caller classes for the writer; this is
+// the "death teardown (remove sentinel, so a dying unit leaves its record)"
+// class [R-P0-04 §3 "The direct manager-group writer"]. It removes u from its
+// own stored group record only — swap-delete source removal, no destination,
+// no RNG draw — and leaves every other record untouched. Callers invoke this
+// once, at the FinalizeDeath boundary, on the dying unit's current owner's
+// manager (see internal/session/session.go's Units.OnDeath handler); a unit
+// captured before death and re-classified nowhere keeps its pre-capture
+// owner's stored record entry, which this call cannot reach — see
+// reconcileGroupRecord's comment for that remaining case.
+func (m *Manager) OnUnitDeath(u *units.Unit) {
+	if m == nil || u == nil {
+		return
+	}
+	m.writeGroup(u, -1)
+}
+
 // removeGroupMember is the source-removal half of the direct writer. Retail uses
 // replace-with-last, not stable compaction; preserving that order matters to
 // subsequent farthest-member ties and save bytes [R-P0-04].
@@ -200,28 +218,25 @@ func (m *Manager) removeGroupMember(group uint8, h pool.Handle) bool {
 
 // reconcileGroupRecord drops the entries a retail group record cannot hold.
 //
-// Retail records hold unit POINTERS and are emptied of a dying unit by the
-// death-teardown caller of the direct writer, so a record's members are always
-// live units of the owning player whose stored group number equals the record
-// [08 R-P0-04 §3 "The direct manager-group writer"]. Nanolathe records hold
-// pool handles, and the unit pool recycles a freed slot: after a member dies,
-// its handle stays in the record and can later resolve to a *different* live
-// unit whose stored group is some other record. Such an entry is not a member
-// under the writer's own invariant, and leaving it in place both inflates the
-// counts the wave hysteresis reads [08 R-AI-01 §4] and makes the wave merge's
-// farthest-member transfer a no-op, which does not terminate.
+// Manager.OnUnitDeath now runs the direct writer's remove-sentinel form at
+// the FinalizeDeath boundary (internal/session/session.go's Units.OnDeath
+// handler), so an ordinary death no longer leaves a window before the next
+// 30-entry sweep. One retail-accurate path still can: capture has no writer
+// of its own in the census [R-P0-04 §3] — CaptureUnit changes only u.Owner,
+// never u.Group or any record — so a captured unit keeps its pre-capture
+// owner's record entry exactly as retail's raw pointer would. If that unit
+// later dies, OnUnitDeath fires for its *current* (post-capture) owner's
+// manager, which never held the handle, so the removal is a no-op there and
+// the pre-capture owner's record keeps the now-freed handle. Should the pool
+// later recycle that slot, the stale entry resolves to a *different* live
+// unit whose stored group is some other record — not a member under the
+// writer's own invariant — and inflates the counts the wave hysteresis reads
+// [08 R-AI-01 §4] and stalls the wave merge's farthest-member transfer.
 //
 // The purge is order-preserving. The direct writer's swap-delete order is
 // reproduced for a real removal (see removeGroupMember); these entries have no
 // retail counterpart at all, so compacting them out leaves exactly the
 // sequence of real members retail's record would have held.
-//
-// TODO(question): the exact retail boundary is the death teardown, not this
-// reconciliation — a later unit should remove the member when the session
-// finalizes the death (internal/session/session.go's Units.OnDeath handler,
-// where the computer player's loss throttle is already armed) so no window
-// exists between a death and the next 30-entry classification sweep
-// [08 R-P0-04 §3].
 func (m *Manager) reconcileGroupRecord(group uint8, w *units.World) {
 	if m == nil || w == nil {
 		return

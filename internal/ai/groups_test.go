@@ -552,3 +552,46 @@ func TestWaveMergeDropsRecycledRecordEntries(t *testing.T) {
 		t.Fatalf("the real member's stored group changed to %v", u.Group)
 	}
 }
+
+// TestOnUnitDeathRemovesTheStoredRecordImmediately locks WU-19-21: a dying
+// unit leaves its own group record through the direct writer's
+// remove-sentinel form as soon as OnUnitDeath runs, without waiting for the
+// next 30-entry classification sweep [08 R-P0-04 §3 "The direct
+// manager-group writer"]. It also checks the sibling records are untouched
+// and that no RNG is consumed (I4).
+func TestOnUnitDeathRemovesTheStoredRecordImmediately(t *testing.T) {
+	def := &content.UnitDef{UnitName: "wave-member", MaxDamage: 100, CanMove: true, MaxVelocity: 100}
+	def.CanonicalKey = content.CanonicalKey(def.UnitName)
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}}
+	w := newAIFixtureWorld(8, cat)
+	place := func(x int32) pool.Handle {
+		h, err := w.Create(def, 0, numeric.Fixed(int64(x)<<16), 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	dying := place(0)
+	sibling := place(64)
+	w.Unit(dying).Group = 2
+	w.Unit(sibling).Group = 2
+
+	m := &Manager{Player: 0}
+	m.GroupWaveA = []pool.Handle{dying, sibling}
+	m.GroupResource = []pool.Handle{7}
+
+	m.OnUnitDeath(w.Unit(dying))
+
+	if got, want := m.GroupWaveA, []pool.Handle{sibling}; !sameHandles(got, want) {
+		t.Fatalf("wave A after death = %v, want only the surviving member %v [R-P0-04 §3]", got, want)
+	}
+	if got, want := m.GroupResource, []pool.Handle{7}; !sameHandles(got, want) {
+		t.Fatalf("an unrelated record changed: %v, want %v", got, want)
+	}
+	if u := w.Unit(dying); u.Group != 0 {
+		t.Fatalf("dying unit's stored group = %d, want 0 (remove sentinel, no destination)", u.Group)
+	}
+	if u := w.Unit(sibling); u.Group != 2 {
+		t.Fatalf("sibling's stored group changed to %d", u.Group)
+	}
+}

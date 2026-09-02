@@ -401,6 +401,22 @@ func ApplyAreaDamage(impact Vec3, weapon *content.WeaponDef, shooter pool.Handle
 				if h == 0 {
 					continue
 				}
+				// "A unit candidate must be nonzero **and must not be the
+				// record's shooter** — the shooter is unconditionally excluded
+				// from every blast, which is the whole of retail's self-damage
+				// policy" [06 §9.3][06 R-DMG-01 §9]. There is no owner or
+				// alliance test here: the shooter's own OTHER units take full
+				// damage, and the shooter itself takes full damage from a
+				// different record's blast. A null shooter matches nobody,
+				// which is what lets a meteor or a death explosion damage every
+				// side alike.
+				//
+				// The test sits with the nonzero test, ahead of the dedup
+				// memory, so the shooter never consumes one of the twenty
+				// entries.
+				if shooter != 0 && h == shooter {
+					continue
+				}
 				if unitDedup.SeenUnit(h) {
 					continue // dedup before radius test [06 §9.3]
 				}

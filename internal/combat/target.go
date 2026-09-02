@@ -435,6 +435,47 @@ func ShouldRetainMask(current Candidate, hostile bool, badMask content.CategoryM
 	return IsPreferredCategoryMask(current.CategoryMask, badMask)
 }
 
+// ---------------------------------------------------------------------------
+// The autonomous scan's per-slot admission [06 §3.2]
+// ---------------------------------------------------------------------------
+
+// AutonomousScanAdmitsSlot is the command-fire clause of the autonomous target
+// scan's per-slot admission [06 §3.2]: within a visited unit the three slots
+// are processed in numeric order, and a slot is skipped unless (among the other
+// clauses of that sentence) "either the owning player's controller type is 2
+// (computer) or the weapon is **not** `commandfire`". The stated consequence is
+// the contract: a human player's units never acquire autonomously with a
+// command-fire weapon, and a computer player's do.
+//
+// ownerControlByte is the owning player row's control byte — 1 human, 2
+// computer, 3 remote peer, 0 an unoccupied row [05 R-SHARE-01 §1] — read
+// through Service.PlayerControlByteFor [06 R-DMG-01 §8]. Only the exact value 2
+// opens the command-fire arm, so an unoccupied row (a fixture with no player
+// table bound) reads as "not a computer" and a command-fire weapon there stays
+// silent, which is the same answer a human's row gives.
+//
+// A human's command-fire weapon still fires: the manual attack path installs
+// its target directly, and [06 §3.2] notes that forced/manual installation
+// bypasses the autonomous visibility lists while still reaching the common
+// shot-time physical gate. `AttackSpecial` is that path — it resolves command
+// code 3 against its target, sets p1 = 2, and the resolved attack handler binds
+// **slot 2** to the target from its next visit [04 R-ORD-01 §2][04 R-ORD-01 §3],
+// which is a target install, not an acquisition, and is therefore not gated
+// here.
+//
+// The other clauses of the same [06 §3.2] sentence — the two persisted slot
+// flags and "its weapon is not `dropped`" — are separate readers and are not
+// this helper's business.
+func AutonomousScanAdmitsSlot(weapon *content.WeaponDef, ownerControlByte uint8) bool {
+	if weapon == nil {
+		return false
+	}
+	if !weapon.CommandFire {
+		return true // an ordinary weapon acquires for every controller [06 §3.2]
+	}
+	return ownerControlByte == ControlByteComputer // only controller type 2 [06 §3.2]
+}
+
 // IsValidAcquisitionCandidate reports whether a candidate passes the primary
 // list gate and acquisition-time physical admission for the given slot
 // [06 §3.1] [06 §3.3] P0-10. It is the same pair of predicates AcquireTarget filters

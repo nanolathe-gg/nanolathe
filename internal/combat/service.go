@@ -237,8 +237,27 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 				continue
 			}
 		}
+		// The autonomous scan's per-slot command-fire clause [06 §3.2]: a slot
+		// only acquires when the owning player's controller type is 2
+		// (computer) or the weapon is not `commandfire`. The consequence is a
+		// contract, not a nicety — a human player's units never acquire
+		// autonomously with a command-fire weapon. Without this reader the
+		// commander's disintegrator hunted and fired on its own, which is also
+		// how a human commander ended up standing in its own blast.
+		//
+		// The gate suppresses only the ACQUISITION. A target the manual path
+		// installed on a command-fire slot — `AttackSpecial` resolves command
+		// code 3, sets p1 = 2 and the resolved attack handler binds slot 2
+		// [04 R-ORD-01 §2][04 R-ORD-01 §3] — is left in place and falls through
+		// to the ordinary shot-time gates below, because forced/manual
+		// installation bypasses the autonomous lists and nothing else
+		// [06 §3.2].
 		if slot.Target.Kind == units.TargetNone || slot.Flags&0x02 == 0 {
-			if acquired, ok := acquireTargetForSlot(u, slot, idx, w, vis, terrain, simRNG, econ, catalog); ok {
+			if !AutonomousScanAdmitsSlot(slot.Weapon, s.PlayerControlByteFor(u.Owner)) {
+				if slot.Target.Kind == units.TargetNone {
+					continue // nothing installed and nothing to acquire [06 §3.2]
+				}
+			} else if acquired, ok := acquireTargetForSlot(u, slot, idx, w, vis, terrain, simRNG, econ, catalog); ok {
 				savedYaw := slot.DesiredYaw
 				savedPitch := slot.DesiredPitch
 				savedIssue := slot.Aim.IssueBit
@@ -1454,6 +1473,25 @@ func (s *Service) ExplodeWeaponAt(w *units.World, terrain *world.Terrain, weapon
 			if u == nil || !u.Alive || u.Dying {
 				continue
 			}
+			// A unit candidate must be nonzero and must NOT be the record's
+			// shooter: the shooter is unconditionally excluded from every
+			// blast, and that exclusion is the whole of retail's self-damage
+			// policy [06 §9.3][06 R-DMG-01 §9]. There is no `noselfdamage` key
+			// and no owner or alliance test here — a shooter's own OTHER units
+			// take full damage, and the shooter itself still takes full damage
+			// from a different record's blast.
+			//
+			// A null shooter matches nobody [06 R-DMG-01 §9], which is what
+			// makes a meteor or a death explosion damage every side alike.
+			//
+			// Before this reader existed the shooter enumerated itself, took
+			// its own splash, and had its last-damage provenance overwritten
+			// with its own owner below — so a commander that died inside its
+			// own blast credited the kill to itself instead of to the player
+			// whose shot actually killed it [06 §12.1].
+			if shooter != 0 && u.Handle == shooter {
+				continue
+			}
 			ucx := world.WorldToCell(u.X)
 			ucz := world.WorldToCell(u.Z)
 			if ucx != cx || ucz != cz {
@@ -1492,6 +1530,9 @@ func (s *Service) ExplodeWeaponAt(w *units.World, terrain *world.Terrain, weapon
 				if u == nil || !u.Alive || u.Dying {
 					continue
 				}
+				if shooter != 0 && u.Handle == shooter {
+					continue // the shooter is excluded from every blast [06 §9.3]
+				}
 				dx := impact.X.Int() - u.X.Int()
 				dz := impact.Z.Int() - u.Z.Int()
 				dist2 := int64(dx)*int64(dx) + int64(dz)*int64(dz)
@@ -1519,8 +1560,24 @@ func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weap
 	}
 	shooter := w.Unit(p.Shooter)
 	if shooter != nil {
-		// Any later known weapon intake clears a stale reclaim bite marker,
-		// including paralyzer packets that do not reduce health [06 §9.1].
+		// The provenance stamp of [06 §9.1] step 4 and [06 §12.1]: on accepted
+		// non-heal damage the victim stores the attacker plus a SNAPSHOT OF THE
+		// ATTACKER'S SIDE taken at damage time, and the packet kind is recorded
+		// before health mutation. The credited side is always that damage-time
+		// snapshot — it is what the death packet's attacker-side field and the
+		// session's kill credit read back [06 §12.1].
+		//
+		// The snapshot is the attacker unit's own owner byte, not the record's
+		// side byte: the side byte is the damage gate's operand and the
+		// friendly/enemy sum classifier [06 §9.1][06 §9.3], while the credited
+		// side comes from the attacker. A null attacker stamps nothing, which is
+		// why a meteor or a death explosion credits nobody [06 R-DMG-01 §9].
+		//
+		// A shooter never stamps ITSELF here, because [06 §9.3] excludes the
+		// record's shooter from its own blast enumeration before this site is
+		// reached. Any later known weapon intake clears a stale reclaim bite
+		// marker, including paralyzer packets that do not reduce health
+		// [06 §9.1].
 		victim.LastDamageSide = shooter.Owner
 		victim.LastDamageCause = uint8(CauseOrdinary)
 	}

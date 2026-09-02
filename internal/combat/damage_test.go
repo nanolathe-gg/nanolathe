@@ -282,8 +282,13 @@ func TestFalloffNoClamp(t *testing.T) {
 func TestNoImpulse(t *testing.T) {
 	// C26: there is NO impulse or pushing [06 §9.4] C26
 	// ApplyImpulse is intentionally empty; verify area processing never modifies unit positions
+	// The victim is handle 2 and the shooter handle 1: the record's shooter is
+	// excluded from its own blast [06 §9.3], so a victim that shares the
+	// shooter's handle would never be enumerated and this test would prove
+	// nothing about impulse. (Corrected with WU-19-22, which added that reader;
+	// the case previously passed handle 1 as both.)
 	u := UnitForArea{
-		Handle: 1,
+		Handle: 2,
 		Pos:    Vec3{X: numericFromInt(0), Y: numericFromInt(0), Z: numericFromInt(0)},
 		Min:    Vec3{X: numericFromInt(-10), Y: numericFromInt(-10), Z: numericFromInt(-10)},
 		Max:    Vec3{X: numericFromInt(10), Y: numericFromInt(10), Z: numericFromInt(10)},

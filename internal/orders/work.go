@@ -229,6 +229,19 @@ func installWorkGoalWithRadius(u *units.Unit, n *Node, x, y, z numeric.Fixed, ai
 						cellZ := world.WorldToCell(target.Z) - target.Def.FootprintZ/2
 						return b.Movement.InstallRectangle(RectangleGoalRequest{Owner: n.Owner, Node: n, CellX: cellX, CellZ: cellZ, Width: target.Def.FootprintX, Depth: target.Def.FootprintZ})
 					}
+				case "Reclaim", "Resurrect":
+					// Both feature rows install a RECTANGLE on the FEATURE's
+					// footprint — "origin cell, size" [04 R-ORD-01 §5]. The
+					// origin is the anchor cell the grid resolver returns, not
+					// a centred cell as `RepairUnit`'s live-unit rectangle is:
+					// a feature's stamp writes the definition index on the
+					// anchor and the fringe sentinel on the rest of the
+					// footprint, so the anchor already IS the rectangle's
+					// minimum corner [05 R-ECO-02 §2][05 R-FEAT-01 §3].
+					if fdef, cx, cz, ok := featureAtGoal(u, n); ok && b.Movement.InstallRectangle != nil {
+						footX, footZ := featureFootprint(fdef)
+						return b.Movement.InstallRectangle(RectangleGoalRequest{Owner: n.Owner, Node: n, CellX: int32(cx), CellZ: int32(cz), Width: footX, Depth: footZ})
+					}
 				}
 				if b.Movement.InstallPoint != nil {
 					return b.Movement.InstallPoint(PointGoalRequest{Owner: n.Owner, Node: n, X: x, Y: y, Z: z})
@@ -908,20 +921,29 @@ func featureViewAtGoal(u *units.Unit, n *Node) (FeatureView, bool) {
 	return q.Binding().LookupFeature(int32(cx), int32(cz))
 }
 
+// featureFootprint is a feature definition's authored footprint with the
+// one-cell floor the stamp applies: a definition that authors no footprint
+// still occupies its anchor cell [05 R-FEAT-01 §1][05 R-FEAT-01 §3].
+func featureFootprint(def *content.FeatureDef) (footX, footZ int32) {
+	footX, footZ = 1, 1
+	if def == nil {
+		return footX, footZ
+	}
+	if def.FootprintX > 0 {
+		footX = def.FootprintX
+	}
+	if def.FootprintZ > 0 {
+		footZ = def.FootprintZ
+	}
+	return footX, footZ
+}
+
 // featureBoxCentre is the world centre of a feature's footprint rectangle —
 // the point the rectangle goal and the spray target are built around
 // [04 R-ORD-01 §5]. A footprint cell spans sixteen world units, so half a
 // footprint is `foot * 16 * 65536 / 2` in 16.16.
 func featureBoxCentre(cx, cz int, def *content.FeatureDef) (x, z numeric.Fixed) {
-	footX, footZ := int32(1), int32(1)
-	if def != nil {
-		if def.FootprintX > 0 {
-			footX = def.FootprintX
-		}
-		if def.FootprintZ > 0 {
-			footZ = def.FootprintZ
-		}
-	}
+	footX, footZ := featureFootprint(def)
 	x = world.CellToWorld(int32(cx)).Add(numeric.Fixed(int64(footX) * 1048576 / 2))
 	z = world.CellToWorld(int32(cz)).Add(numeric.Fixed(int64(footZ) * 1048576 / 2))
 	return x, z
@@ -1017,29 +1039,57 @@ func reclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 			// In reach the gate is left clear and the pump cascades into phase
 			// 1 in this same pass: retail's follower raises arrival on its next
 			// service for a unit already at its goal [04 §10 "The follower's
-			// per-tick service"]. This build binds an arrival handle only for
-			// the move-family descriptors (the file header's goal-installer
-			// TODO(T25)), so arming 0xE0 here parked every reclaim a player
-			// issued from inside nanolathe range on a bit nothing can raise —
-			// half of PT3-05, and the same defect the assist row carried.
+			// per-tick service"], where this build's follower raises it only
+			// after a movement step it has no reason to take. Arming 0xE0 for a
+			// builder already standing on the footprint border would therefore
+			// wait a tick on the arrival of a walk of length zero — half of
+			// PT3-05, and the same defect the assist row carried.
 			return 1
 		}
-		// TODO(T25): out of reach the row installs its rectangle goal, arms
-		// 0xE0 and advances, and phase 1 waits on arrival. Nothing in this
-		// build approaches for a work descriptor (no arrival handle, and
-		// internal/session activates movement only for the move-family names),
-		// so advancing here would run the whole reclaim from wherever the
-		// builder happens to stand. Placeholder: the record arms the row's gate
-		// AND a plain thirty-tick re-poll — no random draw, so no stream
-		// divergence (I4) — and HOLDS at phase 0, re-testing reach on every
-		// wake. The order therefore never reclaims out of range and never
-		// permanently jams the head; it starts the moment the builder is within
-		// `builddistance` of the feature by any other means. Decider: bind an
-		// arrival handle for the work descriptors, then restore the row's
-		// advance.
+		// Out of reach the row does exactly what it does in reach — the row
+		// carries NO reach test [04 R-ORD-01 §5] — except that the gate it
+		// arms is the movement-outcome set, so the advance parks the record at
+		// phase 1 until the follower reports arrival (`0x20`), no route
+		// (`0x40`) or a payload release (`0x80`). The gate IS the wait; phase 1
+		// is not re-entered until one of those three producers fires.
+		//
+		// TODO(question): a BLOCKING one-cell feature — every stock tree and
+		// rock — makes this rectangle's only admissible cell the feature's own,
+		// which the ground search cannot enter, so the request publishes an
+		// empty route, the publisher raises `0x40` and phase 1 abandons
+		// [04 R-PATH-01 §9]. Measured on Great Divide: a shrub (`blocking 0`)
+		// 380 world units away is walked to and reclaimed; a `tree2` at the
+		// same range abandons after ~56 ticks with pending `0x200`
+		// (ray-did-not-connect). [04 R-ORD-01 §5] gives the goal as the
+		// feature's footprint rectangle with no expansion and [04 R-PATH-01 §9]
+		// gives the class's admissible cells as exactly the border, so neither
+		// the row nor the goal class is where the difference lives; what is
+		// untraced is whether retail's SEARCHED passability layer carries
+		// blocking features at all, or whether they are a collision-layer
+		// concern the ground search never sees [04 §6.1][04 R-DOC04-B]. Nothing
+		// is worked around here: a widened rectangle or an adjacent-cell
+		// fallback would be an invented approach radius. Decider: the class
+		// layer's stamp sources against the feature grid's blocking bit.
+		// The same question governs `RepairUnit`'s and `Capture`'s rectangles
+		// on a live target's occupied footprint.
+		//
+		// Correction (WU-19-5). A `TODO(T25)` placeholder stood here holding at
+		// phase 0 behind a plain thirty-tick re-poll, on the reading that
+		// "nothing in this build approaches for a work descriptor". Both halves
+		// of that premise are false now and one was false when it was written:
+		// internal/session's activation boundary lists `Reclaim` and
+		// `Resurrect` among the work records that keep the mover, and
+		// internal/movement binds an arrival handle for whatever payload the
+		// record installed — a rectangle-perimeter goal answers arrival by
+		// membership of its border [04 §7.2][04 R-PATH-01 §9]. What was
+		// genuinely missing was the payload: the installer had no feature-
+		// footprint case, so the rectangle was never built. It is built now
+		// (installWorkGoalWithRadius), so the row's own advance is restored and
+		// the placeholder is deleted, not replaced. A right-click on a distant
+		// rock or wreck therefore walks to the footprint border and reclaims.
 		n.DynamicGate = gateMoveOutcomes
 		n.MoveState = MoveEnRoute
-		return deadlineHold(n, tick, 30)
+		return 1 // advance; phase 1 waits behind 0xE0
 	case 1:
 		if satisfied&gateNoRoute != 0 {
 			return 8 // abandon
@@ -1067,8 +1117,18 @@ func reclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 		if work <= 0 {
 			return 1 // advance
 		}
-		if feature, ok := featureViewAtGoal(u, n); ok {
-			emitFeatureNanolathe(u, n, feature, tick)
+		// "p1 > 15 -> draw the spray twice to the feature box"
+		// [04 R-ORD-01 §5][05 R-WORK-01 §5]. Feature reclaim is the engine's
+		// only two-segment producer, and the `> 15` guard is why the last eight
+		// visits of every feature reclaim emit no nano at all. Neither the
+		// count nor the guard is presentation licence: an implementation that
+		// emits one segment per visit draws a single beam for the whole
+		// countdown, including the eight visits retail leaves dark.
+		if work > 15 {
+			if feature, ok := featureViewAtGoal(u, n); ok {
+				emitFeatureNanolathe(u, n, feature, tick)
+				emitFeatureNanolathe(u, n, feature, tick)
+			}
 		}
 		return code
 	case 5:
@@ -1111,12 +1171,21 @@ func finishFeatureReclaim(u *units.Unit, cx, cz int) {
 // Resurrect [04 R-ORD-01 §5][05 R-WORK-01 §7]
 // ---------------------------------------------------------------------------
 
-// resurrectionDelay is `trunc(0.3 · buildtime / (workertime / 30))` with the
+// ResurrectionDelay is `trunc(0.3 · buildtime / (workertime / 30))` with the
 // inner division integer [04 R-ORD-01 §5][05 R-WORK-01 §7]. The 0.3 belongs to
 // this state alone. A builder whose `workertime` is below thirty makes the
 // inner quotient zero; retail's conversion of the resulting infinity yields a
 // zero low word, which is the only word the caller consumes, so the delay is
 // zero and the resurrection completes immediately with no spray [01 §7].
+//
+// It is exported because the row's phase 3 is split across the queue binding's
+// Work adapter: the session resolves the corpse's definition (this package has
+// no catalogue) and this package owns the arithmetic that turns its build time
+// into the wait, so the constant and the truncation stay with the row.
+func ResurrectionDelay(buildTime, workerTime int32) int32 {
+	return resurrectionDelay(buildTime, workerTime)
+}
+
 func resurrectionDelay(buildTime, workerTime int32) int32 {
 	q := workerTime / 30
 	if q == 0 {
@@ -1144,40 +1213,97 @@ func resurrectionDelay(buildTime, workerTime int32) int32 {
 // status 8 `Resurrection complete`; resolve command code 8 (repair) against the
 // new unit and spawn it at the head; complete. Other: cancel-all.
 //
-// The feature resolver TODO(T25) recorded on reclaimHandler applies here
-// too, and takes phases 3 and 5 with it: the corpse name that resolves the unit
-// definition and the transplant both read the feature record.
+// Phases 3 and 5 are split across the queue binding's Work adapter, because
+// both of them need something this package cannot see. Phase 3 needs the unit
+// CATALOGUE (the corpse's name resolves a unit definition) and phase 5 needs
+// the unit ALLOCATOR and the feature grid; neither is reachable from an order
+// record, and internal/construction — which owns both — imports this package,
+// so the call cannot go the other way. `WorkAdapter.Resurrect` is the seam the
+// session binds for exactly this, in the shape `Assist`, `Repair` and
+// `Capture` already use: the record and the tick cross, and the adapter reports
+// only whether the construction-owned step succeeded. Which step it is comes
+// from the record's own phase byte, the same discriminator
+// internal/construction's unit-reclaim step reads. The row's OWN decisions —
+// which caption, which code, which deadline — stay here.
 func resurrectHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	if u == nil || n == nil {
 		return 7
+	}
+	// "The order's stored position resolves to a feature definition index
+	// before the phase switch (for phases 0 through 5)" [05 R-WORK-01 §7].
+	// Phase 6 is deliberately outside it: phase 5 has already removed the
+	// feature, so a lookup there would abandon the record one visit before its
+	// completion caption.
+	var def *content.FeatureDef
+	if n.Phase <= 5 {
+		fdef, _, _, found := featureAtGoal(u, n)
+		if !found {
+			// `Resurrection failed` — the single-s spelling, for "there is no
+			// feature at the recorded position" [05 R-WORK-01 §7].
+			workStatus(u, statusCant, "Resurrection failed")
+			return 8 // abandon
+		}
+		if !fdef.Reclaimable {
+			return 8 // abandon, silently
+		}
+		def = fdef
 	}
 	switch n.Phase {
 	case 0:
 		if !hasMover(u) || u.Def == nil || !u.Def.CanResurrect {
 			return 7 // cancel-all
 		}
-		if !installWorkGoal(u, n, n.GoalX, n.GoalY, n.GoalZ) {
+		cx, cz := int(world.WorldToCell(n.GoalX)), int(world.WorldToCell(n.GoalZ))
+		bx, bz := featureBoxCentre(cx, cz, def)
+		if !installWorkGoal(u, n, bx, n.GoalY, bz) {
 			return 7
 		}
+		if inBuildRange(u, bx, bz, def.FootprintX, def.FootprintZ) {
+			// Already on the footprint: the gate is left clear for the same
+			// reason `Reclaim`'s phase 0 leaves it clear — this build's
+			// follower raises arrival only after a movement step, so arming
+			// 0xE0 here would wait on the arrival of a walk of length zero.
+			return 1
+		}
+		// The rectangle goal on the feature's footprint, gate 0xE0, advance —
+		// and the gate is the wait, exactly as `Reclaim`'s phase 0 is
+		// [04 R-ORD-01 §5]. See reclaimHandler for why the placeholder hold
+		// that used to stand in both rows is gone.
 		n.DynamicGate = gateMoveOutcomes
+		n.MoveState = MoveEnRoute
 		return 1
 	case 1:
 		if satisfied&gateNoRoute != 0 {
 			return 8 // abandon
+		}
+		// "Exactly one bounded simulation draw ... in phase 1, for the vertical
+		// component of the walk target ... skipped without advancing the seed
+		// when the feature's height byte is below two" [05 R-WORK-01 §7]
+		// [01 §8]. It is the executor's ONLY draw; omitting it shifted every
+		// later draw of the tick (I4).
+		if q := QueueForUnit(u); q != nil {
+			_ = q.randBelow(uint32(def.Height))
 		}
 		EmitStartBuilding(u, n)
 		return 1
 	case 2:
 		return inBuildStanceWait(u, n, 0, tick)
 	case 3:
-		// TODO(T25): the corpse name, its truncation at the first underscore and
-		// the catalog lookup all read the feature record; see the resolver
-		// TODO(T25) on reclaimHandler. Placeholder: the delay is computed
-		// from the builder alone, which is the half of phase 3 that does not
-		// need the feature, and the definition index in p1 is left as the
-		// producer set it. The `Ressurection failed` arm belongs to a failed
-		// lookup and is therefore unreachable, not invented.
-		n.Param2 = uint32(resurrectionDelay(0, u.Def.WorkerTime))
+		// "Copy the feature record's 64-byte name, truncate it at the first
+		// '_', look the result up in the unit catalogue. Index 0 ->
+		// `Ressurection failed` on slot 7, terminate. Otherwise store the index
+		// and compute the delay ... raise cue slot 11 with no text"
+		// [05 R-WORK-01 §7]. Retail's doubled `s` is reproduced verbatim, and
+		// it is a DIFFERENT string from the `Resurrection failed` above: the
+		// two failures are distinguishable in play.
+		ok, bound := boundResurrect(u, n, tick)
+		if !bound {
+			return 7 // cancel-all; see boundResurrect
+		}
+		if !ok {
+			workStatus(u, statusCant, "Ressurection failed")
+			return 8 // abandon
+		}
 		workStatus(u, statusWorking, "")
 		return 1
 	case 4:
@@ -1191,21 +1317,84 @@ func resurrectHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Cod
 		}
 		return deadlineHold(n, tick, 1)
 	case 5:
-		// TODO(T25): the allocation, the transplant and the feature removal are
-		// construction.Service.Resurrect's [05 R-WORK-01 §7]; that package
-		// imports this one, so the call cannot be made from here. Placeholder:
-		// the record advances with no unit created, which keeps the phase order
-		// and the terminal caption intact. Reported upward by WU-18-2.
+		// "Phase 5 allocates a unit of the resolved definition at the feature's
+		// recorded position and owner byte. If allocation fails ... it prints
+		// `Unable to create any more units` ... and reschedules exactly 300
+		// ticks without advancing" [05 R-WORK-01 §7]. On success the adapter
+		// has removed the feature and set the new unit's remaining fraction to
+		// 0 and its health to 1, and has bound it as this record's target.
+		ok, bound := boundResurrect(u, n, tick)
+		if !bound {
+			return 7 // cancel-all; see boundResurrect
+		}
+		if !ok {
+			workStatus(u, statusCant, "Unable to create any more units")
+			return deadlineHold(n, tick, 300)
+		}
 		return 1
 	case 6:
 		workStatus(u, statusComplete, "Resurrection complete")
-		// The successor repair order is command code 8 resolved against the new
-		// unit and head-inserted [04 R-ORD-01 §5][04 §3.4]; with no unit created
-		// there is nothing to resolve it against.
+		// "Resolve command code 8 (repair) against the new unit and, when
+		// resolvable, spawn it at the head" [04 R-ORD-01 §5][04 §3.4] — which
+		// is what makes the resurrector immediately start repairing the
+		// one-health unit it just made. The caption is raised BEFORE the
+		// successor record is allocated [05 R-WORK-01 §7]. Code 5 unlinks this
+		// record by identity, so the head-inserted successor survives it.
+		spawnResurrectionRepair(u, n)
 		return 5 // complete
 	default:
 		return 7 // cancel-all
 	}
+}
+
+// boundResurrect runs the construction-owned half of the `Resurrect` row
+// through the queue binding, reporting (step succeeded, seam bound). The
+// adapter reads the record's phase: at 3 it resolves the corpse's name against
+// the unit catalogue and writes p1 (the definition index) and p2 (the delay of
+// [05 R-WORK-01 §7], through ResurrectionDelay); at 5 it allocates, removes the
+// feature and binds the new unit as the record's target.
+//
+// An unbound seam is not a row arm. Every production queue binds it, and a
+// fixture that does not cannot execute this row at all — reporting "the corpse
+// did not resolve" for a missing adapter would put retail's caption on our own
+// composition gap. The caller cancels instead.
+func boundResurrect(u *units.Unit, n *Node, tick uint32) (ok bool, bound bool) {
+	q := QueueOfUnit(u)
+	if q == nil || n == nil {
+		return false, false
+	}
+	if b := q.Binding(); b != nil && b.Work != nil && b.Work.Resurrect != nil {
+		return b.Work.Resurrect(u, n, tick), true
+	}
+	return false, false
+}
+
+// spawnResurrectionRepair head-inserts the successor record of phase 6. The
+// resolver is the ordinary command-code table [04 §3.4]; a resurrected unit is
+// complete (remaining 0), so code 8 against it resolves to `RepairUnit` for a
+// ground builder and `VTOL_RepairUnit` for an air one. An unresolvable code —
+// a builder that is not one any more, a target that did not survive the visit —
+// spawns nothing, which is the row's "when resolvable" clause.
+func spawnResurrectionRepair(u *units.Unit, n *Node) {
+	if u == nil || n == nil || n.Target == 0 {
+		return
+	}
+	q := QueueOfUnit(u)
+	if q == nil {
+		return
+	}
+	var product *units.Unit
+	if b := q.Binding(); b != nil && b.Lookup != nil {
+		product = b.Lookup(n.Target)
+	}
+	if product == nil {
+		return
+	}
+	id := Resolve(8, u, product, nil)
+	if id == 0 {
+		return
+	}
+	q.PushHead(id, Node{Owner: n.Owner, Target: n.Target, GoalX: product.X, GoalY: product.Y, GoalZ: product.Z})
 }
 
 // ---------------------------------------------------------------------------

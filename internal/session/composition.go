@@ -670,6 +670,9 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 				}
 				return s.Build.Repair(builder, patient, construction.WorkerQuantum(builder.Def.WorkerTime))
 			},
+			Resurrect: func(builder *units.Unit, n *orders.Node, _ uint32) bool {
+				return s.resurrectStep(builder, n, worldQueries.LookupFeature)
+			},
 		},
 		Weapons: &orders.WeaponAdapter{
 			Ready: func() bool { return s.Combat != nil },
@@ -1407,4 +1410,93 @@ func seaLevelFor(s *Session) uint8 {
 		return 0
 	}
 	return s.World.SeaLevel
+}
+
+// resurrectStep is the construction-owned half of the `Resurrect` order row,
+// bound onto the queue binding's Work adapter [04 R-ORD-01 §5]
+// [05 R-WORK-01 §7]. internal/orders owns the row — its phases, captions,
+// deadlines and result codes — but two of its steps need things an order record
+// cannot see: the unit CATALOGUE (phase 3 resolves the corpse's name to a unit
+// definition) and the unit ALLOCATOR together with the feature grid (phase 5).
+// internal/construction owns both and imports internal/orders, so the call
+// cannot go the other way; this is the composition seam that closes the loop,
+// exactly as `Assist` and `Repair` above do for their own steps.
+//
+// The record's phase byte selects the step, which is the same discriminator
+// internal/construction's unit-reclaim step reads:
+//
+//   - phase 3: "copy the feature record's name, truncate it at the first '_',
+//     look the result up in the unit catalogue"; store the definition index in
+//     p1 and the delay in p2. A name that resolves to nothing reports false,
+//     which is the row's `Ressurection failed` arm.
+//   - phase 5: allocate the unit of that definition at the feature's position
+//     and the builder's owner byte, remove the feature, set the new unit's
+//     remaining fraction to 0 and its health to 1, and bind it as the record's
+//     target. A refused allocation reports false, which is the row's
+//     `Unable to create any more units` arm.
+//
+// The delay arithmetic stays in internal/orders (orders.ResurrectionDelay):
+// the 0.3 and its truncation belong to this state of the row, not to the
+// catalogue lookup.
+func (s *Session) resurrectStep(builder *units.Unit, n *orders.Node, lookupFeature func(int32, int32) (orders.FeatureView, bool)) bool {
+	if s == nil || s.Build == nil || s.Catalog == nil || s.World == nil {
+		return false
+	}
+	if builder == nil || builder.Def == nil || n == nil || lookupFeature == nil {
+		return false
+	}
+	view, ok := lookupFeature(world.WorldToCell(n.GoalX), world.WorldToCell(n.GoalZ))
+	if !ok {
+		return false
+	}
+	// The corpse's own definition key, truncated at its first underscore, is
+	// the unit name [05 R-WORK-01 §7]. `armaap_dead` resurrects an `armaap`.
+	def, found := s.Catalog.Unit(construction.FeatureNameToDefName(view.DefinitionKey))
+	if !found || def == nil {
+		return false
+	}
+	switch n.Phase {
+	case 3:
+		n.BuildDefKey = def.CanonicalKey
+		if idx, ok := s.Catalog.UnitDefIndex(def.CanonicalKey); ok {
+			n.Param1 = idx
+		}
+		n.Param2 = uint32(orders.ResurrectionDelay(def.BuildTime, builder.Def.WorkerTime))
+		return true
+	case 5:
+		cell := s.World.PlotAt(view.CX, view.CZ)
+		if cell == nil {
+			return false
+		}
+		// The executor's ONLY simulation draw is phase 1's approach-point draw,
+		// which internal/orders takes [05 R-WORK-01 §7]; the construction
+		// service's own optional jitter draw is therefore passed no stream, so
+		// the seed advances exactly once per resurrection (I4).
+		product, err := s.Build.Resurrect(builder, cell, def, view.X, view.Y, view.Z, nil)
+		if err != nil || product == nil {
+			return false
+		}
+		// The feature's blocking footprint has just left the grid, so the
+		// pathfinder's cached static obstacles are stale until the revision
+		// moves; the reclaim transition bumps it for the same reason
+		// [05 "Removal and successor replacement"].
+		// The feature service reconciles its own animation instances against
+		// the grid in the next feature phase, the same route the reclaim
+		// transition's grid-only removal already takes.
+		s.World.BumpStaticObstacleRevision()
+		n.Target = product.Handle
+		// A resurrected unit is finished (remaining 0), so it joins the world
+		// the way any completed product does: movement state and a visibility
+		// publish [01 §6.1][03 §3].
+		s.CompleteUnit(product.Handle)
+		// TODO(question): [05 R-WORK-01 §7] has phase 5 copy "two fields of the
+		// live feature record (a position word and a facing word)" into the new
+		// unit, and [04 R-ORD-01 §5] names the second as the corpse's stored
+		// heading pair. This build's feature instance carries no heading, so the
+		// resurrected unit keeps the allocator's own facing. Decider: the
+		// feature record's heading words in [05 R-FEAT-01 §1]'s field census
+		// against the transplant's two copied offsets.
+		return true
+	}
+	return false
 }

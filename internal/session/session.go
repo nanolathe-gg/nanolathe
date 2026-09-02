@@ -945,6 +945,21 @@ func (s *Session) RegisterAll() {
 					}
 				}
 			}
+			// A dying unit leaves its stored AI group record here, through the
+			// direct writer's remove-sentinel form: swap-delete from the record
+			// only, no destination, no RNG draw. This is the death-teardown
+			// caller of the retail census, closing WU-19-1's reconciliation gap
+			// at its real boundary instead of only at the next 30-entry sweep
+			// [08 R-P0-04 §3 "The direct manager-group writer"]. Every
+			// non-observer player carries a bound manager (initializeBattleAI),
+			// so this runs regardless of controller state; a human-owned unit's
+			// stored group is always zero (the classifier only runs under
+			// controller 2), so the removal is a harmless no-op there.
+			if u != nil && int(u.Owner) < len(s.AI) {
+				if mgr := s.AI[u.Owner]; mgr != nil {
+					mgr.OnUnitDeath(u)
+				}
+			}
 			if s.Vis != nil && u != nil {
 				unpublishOne(s, u)
 				// The central death handler appends a 60-tick temporary sight

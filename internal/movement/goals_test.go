@@ -286,3 +286,77 @@ func TestInstallingASecondGoalResubmitsTheMover(t *testing.T) {
 		t.Fatalf("the mover is still aimed at %v radius %d; the second install must re-aim it at cell (2,9) radius 45", c, r)
 	}
 }
+
+// TestFeatureWorkGoalIsTheFootprintRectangle is WU-19-5's half of
+// workApproachGoal: `Reclaim` and `Resurrect` install a RECTANGLE on the
+// FEATURE's footprint — "origin cell, size" [04 R-ORD-01 §5] — where the origin
+// is the anchor cell the grid resolver returns [05 R-ECO-02 §2], with no
+// half-footprint offset. Before this unit both rows fell through to the
+// ordinary point goal on the record's own goal cell, which for a feature is the
+// anchor cell itself: a cell the reclaimer can never occupy, so the search
+// failed and the record abandoned instead of walking to the rock.
+//
+// This arm is the fallback for a record whose payload is not bound; the handler
+// installs the same rectangle itself and goalForOrderWithFootprint consults the
+// bound payload first.
+func TestFeatureWorkGoalIsTheFootprintRectangle(t *testing.T) {
+	terrain := terrainForGoals()
+	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
+	sys := NewSystem(terrain, profile, NewOccupancyGrid())
+	w := newMovementFixtureWorld(10)
+	sys.BindWorld(w)
+
+	def := &content.UnitDef{UnitName: "armck", MaxVelocity: 2 * 65536, TurnRate: 500, BuildDistance: 128}
+	def.MaxDamage = 100
+	def.FootprintX, def.FootprintZ = 1, 1
+	h, err := w.Create(def, 0, world.CellToWorld(2), numeric.Fixed(0), world.CellToWorld(2))
+	if err != nil {
+		t.Fatalf("builder placement refused: %v", err)
+	}
+	u := w.Unit(h)
+	sys.EnsureUnit(u)
+
+	// The world adapter is the seam internal/session composes: a cell resolves
+	// to an anchored feature view carrying the definition's footprint.
+	q := orders.QueueForUnit(u)
+	binding := &orders.QueueBinding{
+		World: &orders.WorldQueryAdapter{
+			LookupFeature: func(cx, cz int32) (orders.FeatureView, bool) {
+				if cx < 12 || cx > 14 || cz < 9 || cz > 10 {
+					return orders.FeatureView{}, false
+				}
+				// Every cell of the footprint resolves to the same anchor, the
+				// way the terrain's fringe hop does [05 R-ECO-02 §2].
+				return orders.FeatureView{CX: 12, CZ: 9, FootprintX: 3, FootprintZ: 2}, true
+			},
+		},
+	}
+	q.SetBinding(binding)
+
+	for _, name := range []string{"Reclaim", "Resurrect"} {
+		n := &orders.Node{ID: orders.Lookup(name), Owner: h, GoalX: world.CellToWorld(13), GoalZ: world.CellToWorld(10)}
+		goal, ok := sys.workApproachGoal(u, path.Cell{X: 13, Z: 10}, n, 1, 1)
+		if !ok {
+			t.Fatalf("%s: the feature rows must produce a goal once a footprint is readable", name)
+		}
+		rect, isRect := path.IsRectGoal(goal)
+		if !isRect {
+			t.Fatalf("%s: goal %T is not a rectangle-perimeter goal", name, goal)
+		}
+		if rect.Min.X != 12 || rect.Min.Z != 9 || rect.Max.X != 14 || rect.Max.Z != 10 {
+			t.Fatalf("%s: rectangle %v, want the anchor (12,9) and the 3x2 footprint's inclusive maximum (14,10)", name, rect)
+		}
+		// Arrival is lying ON the border, never inside: the anchor cell itself
+		// is occupied by the feature [04 §7.2].
+		if goal.StartSatisfied(path.Cell{X: 13, Z: 9}) == goal.StartSatisfied(path.Cell{X: 20, Z: 20}) {
+			t.Fatalf("%s: the rectangle does not separate its border from the rest of the map", name)
+		}
+	}
+
+	// A record whose goal resolves to no feature produces nothing, rather than
+	// a rectangle around an empty cell.
+	n := &orders.Node{ID: orders.Lookup("Reclaim"), Owner: h, GoalX: world.CellToWorld(2), GoalZ: world.CellToWorld(2)}
+	if _, ok := sys.workApproachGoal(u, path.Cell{X: 2, Z: 2}, n, 1, 1); ok {
+		t.Fatalf("an empty cell produced a feature rectangle")
+	}
+}

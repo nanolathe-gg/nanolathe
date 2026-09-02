@@ -6,6 +6,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 const goalPendingMask uint32 = 0x20 | 0x40 | 0x80 | 0x100 | 0x200
@@ -270,16 +271,33 @@ func (s *System) goalForOrder(goalCell path.Cell, n *orders.Node) path.Goal {
 //     The band is what lets an assistant arrive BESIDE its target: a point
 //     goal on the target's own anchor cell can never be occupied, so the
 //     search fails and the record abandons instead of working.
+//
 //   - `RepairUnit` phase 1 and `Capture` phase 0 install a RECTANGLE on the
 //     target's footprint; its admissible cells are exactly the border and
 //     arrival is lying on it [04 §7.2].
 //
-// `Reclaim` and `Resurrect` install that same rectangle on the FEATURE's
-// footprint [04 R-ORD-01 §5], and this build has no feature resolver reachable
-// from the order layer (the resolver placeholder on reclaimHandler,
-// internal/orders/work.go). They keep the default point goal until a feature
-// footprint is readable here; a trace is not what is missing, the plumbing is.
-// The open marker for that gap stands at the payload bind in integrate.go.
+//   - `Reclaim` phase 0 and `Resurrect` phase 0 install that same rectangle on
+//     the FEATURE's footprint — "origin cell, size" [04 R-ORD-01 §5]. The
+//     origin is the anchor cell, with no half-footprint offset: a feature's
+//     stamp writes the definition index on the anchor and the fringe sentinel
+//     across the rest of the footprint, so the anchor already is the
+//     rectangle's minimum corner [05 R-ECO-02 §2][05 R-FEAT-01 §3].
+//
+// Retired 2026-09-01 (WU-19-5): the two feature rows used to fall through to
+// the default point goal, on the note that "this build has no feature resolver
+// reachable from the order layer". There is one — the queue binding's world
+// adapter resolves a cell to an anchored feature view carrying its footprint,
+// which internal/session composes over the terrain's own fringe hop — so the
+// plumbing that was missing is in place and the rows install what the row
+// states. A point goal on a feature's own anchor cell can never be occupied by
+// the reclaimer, so the search failed and the record abandoned rather than
+// walking to a distant rock or wreck.
+//
+// This arm is the FALLBACK. The handler installs the rectangle itself through
+// the record's own payload installer, and goalForOrderWithFootprint consults
+// the bound payload first; this reproduces the same rectangle for a record
+// whose payload is not bound — one restored from a save, or one re-activated
+// after another record evicted this build's single per-mover slot.
 func (s *System) workApproachGoal(mover *units.Unit, goalCell path.Cell, n *orders.Node, footX, footZ int32) (path.Goal, bool) {
 	if s == nil || n == nil || mover == nil || mover.Def == nil {
 		return nil, false
@@ -317,8 +335,51 @@ func (s *System) workApproachGoal(mover *units.Unit, goalCell path.Cell, n *orde
 			Min: path.Cell{X: anchorX, Z: anchorZ},
 			Max: path.Cell{X: anchorX + tfx - 1, Z: anchorZ + tfz - 1},
 		}), true
+	case "Reclaim", "Resurrect":
+		anchorX, anchorZ, ffx, ffz, ok := featureRectForGoal(mover, n)
+		if !ok {
+			return nil, false
+		}
+		return path.RectPerimeterGoal(path.Rect{
+			Min: path.Cell{X: anchorX, Z: anchorZ},
+			Max: path.Cell{X: anchorX + ffx - 1, Z: anchorZ + ffz - 1},
+		}), true
 	}
 	return nil, false
+}
+
+// featureRectForGoal resolves the feature under a record's stored goal position
+// to its anchor cell and authored footprint, through the same session-composed
+// seam the order layer reads [05 R-ECO-02 §2]. The lookup is the world
+// adapter's, not this package's: the anchored resolution — the fringe hop to a
+// multi-cell feature's origin, and the definition behind the cell's index —
+// belongs to the feature runtime, and routing both the handler's payload
+// install and this fallback through one seam keeps them on the same anchor.
+//
+// A mover with no bound queue, or a session with no world adapter, resolves
+// nothing and the caller falls back to the ordinary point goal rather than
+// inventing a rectangle.
+func featureRectForGoal(mover *units.Unit, n *orders.Node) (cellX, cellZ, footX, footZ int32, ok bool) {
+	q := orders.QueueOfUnit(mover)
+	if q == nil || n == nil {
+		return 0, 0, 0, 0, false
+	}
+	b := q.Binding()
+	if b == nil {
+		return 0, 0, 0, 0, false
+	}
+	view, found := b.LookupFeature(world.WorldToCell(n.GoalX), world.WorldToCell(n.GoalZ))
+	if !found {
+		return 0, 0, 0, 0, false
+	}
+	footX, footZ = view.FootprintX, view.FootprintZ
+	if footX <= 0 {
+		footX = 1
+	}
+	if footZ <= 0 {
+		footZ = 1
+	}
+	return view.CX, view.CZ, footX, footZ, true
 }
 
 // goalForOrderWithFootprint uses the owning mover's footprint for target

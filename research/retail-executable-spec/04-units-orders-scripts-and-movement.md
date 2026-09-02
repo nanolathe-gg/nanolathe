@@ -2776,7 +2776,14 @@ first release the previous payload (raising pending `0x80`, [R-ORD-01 §0]),
 skip the install entirely — release only — when the owner's definition has
 the `canfly` bit, and finish by clearing pending bits `0x20`–`0x200`. The
 ground goal-handle arithmetic behind the point goal is [R-P0-01] §8.3; the
-rectangle goal's cell origin is computed by the footprint snap below.
+rectangle goal's cell origin is computed by the footprint snap below. The
+origin and size the installer receives are the **target's**; the rectangle
+the class stores is that footprint grown by the owner's own footprint —
+`[originX − fx, originX + sizeX] × [originZ − fz, originZ + sizeZ]` — so
+"rectangle goal on the target footprint" throughout this document means
+arrival with the owner's committed anchor on the border of the grown
+rectangle, i.e. flush against the target, never on the target's own cells
+([R-PATH-01 §12]).
 
 **The footprint snap.** A unit's committed footprint cell for an axis is
 `(pos − foot·2^19 + 2^19) >> 20` (arithmetic shift) where `foot` is the
@@ -3186,8 +3193,10 @@ with cause 5 and p2 = 0; stamp `tick + 900`; spray; deadline 2; p2 += 2; hold
 (the feature grid, with the parent lookup for a multi-cell feature's non-origin
 cells); none → status 7 `Reclamation failed`, abandon; feature not
 reclaimable → abandon. Phase 0: mover and `canreclamate` → rectangle goal on
-the feature's footprint (origin cell, size), gate = `0xE0`, advance; else
-cancel-all. Phase 1: satisfied `0x40` → abandon; `p1 = trunc(15 + (metal +
+the feature's footprint (origin cell, size — the feature's anchor cell and
+its definition's footprint pair, grown by the reclaimer's own footprint in
+the constructor, [R-PATH-01 §12]; there is no reach test in this row), gate
+= `0xE0`, advance; else cancel-all. Phase 1: satisfied `0x40` → abandon; `p1 = trunc(15 + (metal +
 energy) / 2)` from the feature definition's values (the remaining work in
 ticks); form the spray target at the footprint centre with `Y = terrain
 height there + RNG(featureHeightByte)` (the byte's TDF key is **Unknown** —
@@ -7495,7 +7504,11 @@ base's null implementations and never reach the search ([R-PATH-01 §9]):
   admissible octile `16·max(dx,dz) + 6·min(dx,dz)` to the rectangle — and
   inside measure `16 · min(distance to each edge)` back out; enumerated goal
   cells are exactly the rectangle border, where h is 0, and arrival requires
-  lying on that border.
+  lying on that border. The stored rectangle is **not** the target footprint:
+  the constructor grows the installer's `(origin, size)` by the owning
+  mover's own footprint, `[originX − fx, originX + sizeX] × [originZ − fz,
+  originZ + sizeZ]`, so the border is the ring of anchor cells at which the
+  mover sits flush against the target ([R-PATH-01 §12]).
 
 **Supported inference:** The {18, 7} form exceeds the true minimal geometric
 cost `16·max + 6·min` by roughly 12.5–13.6 percent depending on run shape —
@@ -7718,7 +7731,7 @@ identically-zero heuristic.
 |---|---|---|---|---|
 | Point / radius | centre cell; an octile radius `R`; a squared cell radius `R2` | `dx² + dz² <= R2` | the single centre cell | `oct = 18·max + 7·min`; `oct < R ? 0 : oct − R` |
 | Annulus | centre cell; octile `inner`, `outer`; squared `min2`, `max2` | `min2 <= dx² + dz² <= max2` | one cell: `(centreX, centreZ + (inner + outer)/32)`, the divide rounded toward zero | `oct <= outer ? (inner <= oct ? 0 : inner − oct) : oct − outer` |
-| Rectangle | `x1, x2, z1, z2` | on the border | exactly the border | outside: `16·max(dxOut,dzOut) + 6·min(...)`; on the x-band: `16·dzOut`; on the z-band: `16·dxOut`; inside: `16 · min(x−x1, x2−x, z−z1, z2−z)` |
+| Rectangle | `x1, x2, z1, z2` — the target footprint grown by the owner's own footprint: `x1 = originX − fx`, `x2 = originX + sizeX`, likewise Z ([R-PATH-01 §12]) | on the border | exactly the border | outside: `16·max(dxOut,dzOut) + 6·min(...)`; on the x-band: `16·dzOut`; on the z-band: `16·dxOut`; inside: `16 · min(x−x1, x2−x, z−z1, z2−z)` |
 | Air work point | a target unit, a piece index, a mode word, a 3-D point; constructed from a 54-byte save record | base (never) | base (none) | base (0) |
 | Air moving point | a 3-D point and a per-tick delta | base (never) | base (none) | base (0) |
 
@@ -7785,6 +7798,132 @@ Consequently the effective heuristic weight in a shipped session is
 `1.5 × {6, 3, 1}` in 16.16 — `0x90000`, `0x48000`, or `0x18000` — selected per
 player by the tier rule of [R-PATH-01 §6]. The tail item and its open-question
 marker are removed.
+
+### Correction — the rectangle goal is the target footprint grown by the mover's own footprint [R-PATH-01 §12] (2026-09-01)
+
+**What the earlier text said.** [R-PATH-01 §9] gives the rectangle class's
+stored geometry as `x1, x2, z1, z2` and its start predicate as "on the
+border"; [R-ORD-01 §1] describes the rectangle installer as taking "a packed
+footprint-cell origin and packed cell size"; and every work row of
+[R-ORD-01 §5] says "rectangle goal on the target footprint" or "on the
+feature's footprint (origin cell, size)". Read together they were taken to
+mean `x1 = origin`, `x2 = origin + size − 1`: the rectangle **is** the
+footprint, and arrival is the mover's committed cell lying on the footprint's
+own outermost cells. Nanolathe built exactly that, and a builder ordered to
+reclaim any one-cell **blocking** feature — every stock tree and rock —
+abandoned: the only enumerated cell was the feature's own, the searched layer
+holds it as blocked ([R-DOC04-B] step 1), so the search published no route,
+the publisher raised `0x40`, and the row's phase 1 abandoned. A non-blocking
+`shrub` at the same range was walked to and reclaimed. Retail reclaims trees
+routinely, so the reading was wrong somewhere; what was missing is the
+arithmetic **between** the installer's arguments and the class's stored
+fields.
+
+**Established — the constructor grows the rectangle.** The rectangle class's
+constructor takes the owning order record, a packed origin cell pair and a
+packed size pair, and stores, with `fx`/`fz` the **owning unit's** copied
+footprint pair (`FootPrintX`, `FootPrintZ` in cells — the mover that will
+walk, never the target):
+
+```text
+x1 = originX − fx          z1 = originZ − fz
+x2 = originX + sizeX       z2 = originZ + sizeZ
+```
+
+all four inclusive, in cells. The installer's arguments are therefore
+`(anchor, size)` of the **target** and the stored rectangle is the target
+footprint grown by the mover's whole footprint on the west and north sides
+and by one cell on the east and south sides. Because the cell the follower
+tests is the mover's committed **anchor** (the footprint's minimum corner,
+[R-ORD-01 §1] "the footprint snap"; forwarded by the satisfied-from-unit
+adapter of [R-MOV-03 §2]), a mover whose anchor lies on that border has its
+whole footprint edge- or corner-adjacent to the target with no gap:
+
+* anchor `x = originX − fx` → the mover occupies columns `originX − fx …
+  originX − 1`, touching the target's west edge;
+* anchor `x = originX + sizeX` → columns `originX + sizeX … originX + sizeX +
+  fx − 1`, touching its east edge;
+* the same on Z; the four corners are the diagonal-adjacent placements.
+
+The target's own cells are **interior** of the stored rectangle (never on its
+border, never enumerated, heuristic `16 · min(distance to each edge)` inside
+per [R-PATH-01 §9]), so a blocking target is never a goal cell. For a 1×1
+feature and a 1×1 mover the border is the 3×3 ring of eight cells around it;
+for a 2×2 mover it is the border of a 4×4 rectangle, twelve cells. The
+save-restore constructor reads `x1, x2, z1, z2` back verbatim, so a restored
+rectangle is the grown one.
+
+Nothing else in the class changes: the border enumeration order
+([R-MOV-03 §9]), the on-border start predicate (both edges inclusive: `x ∈
+{x1, x2}` with `z1 ≤ z ≤ z2`, or `z ∈ {z1, z2}` with `x1 ≤ x ≤ x2`), the
+outside/inside heuristic ([R-PATH-01 §9]) and the goal-point query
+([R-MOV-03 §2]) all operate on the grown rectangle. The [R-PATH-01 §9] row
+"exactly the border" and §7.2's "arrival requires lying on that border" stand
+— the border is of the grown rectangle.
+
+**Established — every rectangle in the engine is built this way.** The
+installer of [R-ORD-01 §1] is the only constructor call site, and its seven
+callers all pass a target anchor and a target size: `MobileBuild` (the
+snapped cell, the product definition's footprint pair), `Capture`,
+`ReclaimUnit` and `RepairUnit` (the target unit's committed cell pair and its
+copied footprint pair), feature `Reclaim` and `Resurrect` (below), and
+`Park` (its computed origin and `8s × 6s` size, [R-ORD-01 §2]). The growth is
+the constructor's, so it applies to all seven. This also settles the
+mobile-build residual of §7.4 [R-P0-19]: the retail expansion of the product
+footprint is the constructor's `− fx / + size`, not a half-extent expansion —
+the builder rests its anchor on the grown border, which puts its footprint
+flush against the site.
+
+**Established — the feature rows' arguments.** The feature lookup shared by
+`Reclaim` and `Resurrect` converts the record's stored goal position to a cell
+by an arithmetic shift of the 16.16 world coordinate (`cell = world >> 4` in
+whole units, i.e. floor — **not** the footprint snap), reads the feature grid
+there, hops from a fringe cell back to its anchor by the cell's stored
+offsets, rejects the sentinel range as "no feature", and returns the
+definition index together with the packed **anchor** cell pair and the
+definition's packed footprint pair (`FootprintX` low, `FootprintZ` high).
+Those two are the installer's origin and size. The spray target the row forms
+in phase 1 is the footprint centre, `(2·anchor + size) · 2^19` per axis in
+16.16 — the reverse of the footprint snap applied to the feature — with the
+random height of [R-ORD-01 §5].
+
+**Established — the feature rows carry no reach test.** Feature `Reclaim`
+phase 0 is exactly: unit present and definition `canreclamate` → install the
+rectangle, gate = `0xE0`, advance; else cancel-all. No distance is measured
+anywhere in the handler; the "out of reach → move" decision does not exist as
+a branch. The row always installs the goal and always waits on the follower:
+arrival (`0x20`, the committed anchor on the grown border, raised by the
+follower's per-tick service — for a builder already standing there, on its
+next service, after the search's start-satisfied exit published an empty
+route with `0x100` and no `0x40`) advances to the work phases; no route
+(`0x40`) abandons. The range test and approach radii of [05 R-WORK-01 §2]
+belong to `MobileBuild`, `RepairUnit`, `Capture` and `HelpBuild`; they are not
+consulted by `Reclaim` or `Resurrect`. `Resurrect` phase 0 is the same body
+gated on `canresurrect`.
+
+**Established — the searched layer and the goal test (the question the
+finding was filed on).** A blocking feature is in **both** layers: the class
+layer's per-cell classifier blocks on the feature word's blocking flag at
+map-load stamp and at every restamp ([R-DOC04-B] step 1), and the movement
+commit validator rejects a footprint over it independently
+([R-COLL-01 §3]). In the expansion the passability probe runs **before** the
+terminal test: a fresh neighbour that reads impassable is marked *rejected*
+and abandoned unless it carries the **ray-visited** bit — that bit alone
+exempts; the goal-enumeration bit does not — and only a cell that survives
+the probe is opened, with the terminal bit added when its scaled heuristic is
+at or below the acceptance threshold ([R-PATH-01 §1]). The pop-time terminal
+test therefore only ever sees cells that were opened. An enumerated goal cell
+that is impassable can never be reached as a terminal; with the bare
+footprint as the rectangle the search could only ever fail on a blocking
+target, which is why the grown rectangle is load-bearing and not a
+convenience.
+
+**What an implementation must do.** Construct every rectangle goal as
+`[originX − fx, originX + sizeX] × [originZ − fz, originZ + sizeZ]` with
+`(fx, fz)` the **installing mover's** footprint, `(origin, size)` the target's
+anchor cell and footprint size; enumerate and test arrival on that border with
+the mover's committed anchor cell; make no other change to the class or to
+the rows.
 
 ### 7.3 Scheduler budget, publication, and route storage
 
@@ -8122,7 +8261,12 @@ and the order reports its approach complete, so the mover no longer keeps
 steering at the build-site anchor. The exact retail perimeter-candidate
 ranking and expansion remain `TODO(question)`; the half-extent expansion is the
 placeholder that reproduces the established stop-outside-the-footprint
-outcome.
+outcome. **Closed in part (2026-09-01, [R-PATH-01 §12]):** the expansion is
+the rectangle constructor's — the product footprint grown by the builder's
+whole footprint on the west/north and by one cell on the east/south, in
+anchor-cell terms — not a half-extent; the half-extent placeholder is
+superseded. The perimeter-candidate ranking of the build-site generator is
+a separate mechanism and stays open.
 
 **Established fact:** Dynamic blockers update a profile revision. Existing heap entries are not eagerly purged; passability is rechecked lazily when a node is expanded. This can turn a previously open node into a blocked one without rebuilding the whole heap. Because the class record and its layer are shared by every request of that movement class and a search spans ticks, this also means a cell the pre-search ray marked can become impassable before the expansion reaches it — the ray-visited bit of [R-PATH-01 §1] is what lets the expansion open it anyway.
 
