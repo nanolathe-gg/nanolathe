@@ -24,13 +24,16 @@ func eliminationFixtureWorld(t *testing.T) (*units.World, *content.UnitDef) {
 	return newSessionFixtureWorld(4, cat), def
 }
 
-// TestPlayerGateSkipsAnEliminatedSlot locks the gate's elimination clause of
-// [04 R-MOV-03 §1] "The player gate" against the derived predicate of
-// [08 R-SKIR-01 §3] / [05 R-SHARE-01 §3]: a row whose live count fell to zero
-// after creating at least one unit is refused, while a row that never created
-// one is still swept — the predicate's second term is what keeps a
-// participating row alive through battle entry.
-func TestPlayerGateSkipsAnEliminatedSlot(t *testing.T) {
+// TestPlayerGateHasNoEliminationTerm locks the corrected player gate of
+// [04 R-MOV-03 §10]: the three clauses are the row's occupancy word being
+// nonzero, its control byte being 1, 2 or 3, and its ally-group byte not being
+// 10. There is NO elimination term — [04 R-MOV-03 §1]'s third clause named the
+// wrong byte and invented a state — so a row whose player has lost every unit
+// is still swept, and trivially owns nothing for the traversal to hand back.
+//
+// The control byte and the occupancy word are still read: control 0 and a row
+// that does not exist are both refused.
+func TestPlayerGateHasNoEliminationTerm(t *testing.T) {
 	w, def := eliminationFixtureWorld(t)
 	s := &Session{Units: w, Econ: &economy.Service{}}
 	for i := 0; i < 3; i++ {
@@ -60,15 +63,34 @@ func TestPlayerGateSkipsAnEliminatedSlot(t *testing.T) {
 	if res := w.FinalizeDeath(doomed, 1); !res.Freed {
 		t.Fatalf("owner 1's unit was not finalized")
 	}
+	if !economy.PlayerEliminated(w, 1) {
+		t.Fatalf("owner 1 must satisfy the derived elimination predicate")
+	}
 
 	if visit, work := s.sweepPlayerGate(0); !visit || !work {
 		t.Fatalf("owner 0 with a live unit must still be swept")
 	}
-	if visit, work := s.sweepPlayerGate(1); visit || work {
-		t.Fatalf("owner 1 lost its last unit and must be refused, got (%v,%v)", visit, work)
+	// The correction: an eliminated but seated row is NOT skipped.
+	if visit, work := s.sweepPlayerGate(1); !visit || !work {
+		t.Fatalf("an eliminated but seated row must still be swept, got (%v,%v)", visit, work)
 	}
 	if visit, work := s.sweepPlayerGate(2); !visit || !work {
-		t.Fatalf("owner 2 never created a unit and is not eliminated, got (%v,%v)", visit, work)
+		t.Fatalf("owner 2 never created a unit and must be swept, got (%v,%v)", visit, work)
+	}
+
+	// Control byte 0 is refused, and so is a row whose occupancy word is zero.
+	s.Econ.Players[2].ControllerState = 0
+	if visit, work := s.sweepPlayerGate(2); visit || work {
+		t.Fatalf("control byte 0 must be refused, got (%v,%v)", visit, work)
+	}
+	s.Econ.Players[0].Exists = false
+	if visit, work := s.sweepPlayerGate(0); visit || work {
+		t.Fatalf("a row with a zero occupancy word must be refused, got (%v,%v)", visit, work)
+	}
+	// The ally-group clause: slot 10 is the never-seated sentinel and is past
+	// the ten records either way.
+	if visit, work := s.sweepPlayerGate(neverSeatedAllyGroup); visit || work {
+		t.Fatalf("the never-seated ally group must be refused, got (%v,%v)", visit, work)
 	}
 }
 

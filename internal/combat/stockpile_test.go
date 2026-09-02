@@ -434,9 +434,40 @@ func TestCoverageSquareSizing(t *testing.T) {
 	if !WithinInterceptorCoverage(candidateYFar, interceptorPos, coverage) {
 		t.Fatalf("Y far should still be inside (coverage only X/Z) [06 §11.2]")
 	}
-	// Negative coverage placeholder
-	if WithinInterceptorCoverage(candidateInside, interceptorPos, -1) {
-		t.Fatalf("negative coverage should be false [06 §11.2] TODO(question)")
+	// A negative coverage -k accepts exactly the complement of the OPEN square
+	// of half-side k: at or beyond k on both axes is accepted, inside is
+	// rejected [06 R-WPN-05 §10]. There is no "negative means none" guard.
+	insideNeg := Vec3{X: fixedI(0), Z: fixedI(0)} // |d| = 0 < 1 on both axes
+	if WithinInterceptorCoverage(insideNeg, interceptorPos, -1) {
+		t.Fatalf("coverage -1: a candidate inside the open square must be rejected [06 R-WPN-05 §10]")
+	}
+	atNeg := Vec3{X: fixedI(1), Z: fixedI(-1)} // |d| = 1 exactly on both axes
+	if !WithinInterceptorCoverage(atNeg, interceptorPos, -1) {
+		t.Fatalf("coverage -1: |delta| == 1 on both axes must be accepted [06 R-WPN-05 §10]")
+	}
+	beyondNeg := Vec3{X: fixedI(400), Z: fixedI(-9)} // both axes beyond 1
+	if !WithinInterceptorCoverage(beyondNeg, interceptorPos, -1) {
+		t.Fatalf("coverage -1: both axes beyond 1 must be accepted [06 R-WPN-05 §10]")
+	}
+	mixedNeg := Vec3{X: fixedI(400), Z: fixedI(0)} // X beyond, Z inside
+	if WithinInterceptorCoverage(mixedNeg, interceptorPos, -1) {
+		t.Fatalf("coverage -1: the Z axis inside the open square must still reject [06 R-WPN-05 §10]")
+	}
+	// A coverage at or above 32,768 wraps C<<17 to zero in 32-bit arithmetic,
+	// so the compare accepts only the single delta whose biased value is zero:
+	// exactly -32768 world units on each axis [06 R-WPN-05 §10]. This is the
+	// wrap itself, not a guard against it.
+	const wrapCoverage = int32(32768)
+	if lim := InterceptorCoverageSide(wrapCoverage); lim != 0 {
+		t.Fatalf("C<<17 at coverage 32768 is %d, want the 32-bit wrap to 0 [06 R-WPN-05 §10]", lim)
+	}
+	wrapHit := Vec3{X: numeric.Fixed(1 << 31), Z: numeric.Fixed(1 << 31)} // interceptor - candidate = -2^31
+	if !WithinInterceptorCoverage(wrapHit, interceptorPos, wrapCoverage) {
+		t.Fatalf("coverage 32768 must accept the delta whose biased value wraps to zero [06 R-WPN-05 §10]")
+	}
+	wrapMiss := Vec3{X: fixedI(32767), Z: fixedI(32767)}
+	if WithinInterceptorCoverage(wrapMiss, interceptorPos, wrapCoverage) {
+		t.Fatalf("coverage 32768 must reject a delta of 32767 world units [06 R-WPN-05 §10]")
 	}
 	// Test FindInterceptorTarget respects coverage square and claims
 	var svc Service
@@ -488,45 +519,6 @@ func TestCoverageSquareSizing(t *testing.T) {
 	}
 	if storedPos.X.Raw() != fixedI(1000).Raw() {
 		t.Fatalf("slot store should be candidate's current position [06 §11.2], got %d want 1000", storedPos.X.Int())
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Firestarter single-site nonzero test [06 §13.1] C29
-// ---------------------------------------------------------------------------
-
-func TestFirestarterSingleSiteNonzero(t *testing.T) {
-	// Firestarter single-site nonzero test if it belongs here per C29 prompt [06 §13.1]
-	// Radial feature damage can ignite only when weapon firestarter !=0 [06 §13.1]
-	wZero := weaponForStockpile(400, 10, 0, 0, false, false, false, 0, 0, 0)
-	if IsFirestarter(wZero) {
-		t.Fatalf("firestarter 0 should be false [06 §13.1]")
-	}
-	if ShouldIgniteFeatureGate(true, true, wZero) {
-		t.Fatalf("zero firestarter should not ignite [06 §13.1]")
-	}
-	wNonzero := weaponForStockpile(401, 10, 0, 0, false, false, false, 0, 0, 7)
-	if !IsFirestarter(wNonzero) {
-		t.Fatalf("firestarter 7 should be true [06 §13.1] C29")
-	}
-	if !ShouldIgniteFeatureGate(true, true, wNonzero) {
-		t.Fatalf("nonzero firestarter with gates true should ignite [06 §13.1]")
-	}
-	if ShouldIgniteFeatureGate(false, true, wNonzero) {
-		t.Fatalf("global disabled should not ignite [06 §13.1]")
-	}
-	if ShouldIgniteFeatureGate(true, false, wNonzero) {
-		t.Fatalf("non-flammable feature should not ignite [06 §13.1]")
-	}
-	// Single-site: nonzero test is exactly field !=0, no threshold >1 required
-	wOne := weaponForStockpile(402, 10, 0, 0, false, false, false, 0, 0, 1)
-	if !IsFirestarter(wOne) {
-		t.Fatalf("firestarter 1 should be true (single-site nonzero) [06 §13.1] C29")
-	}
-	// Negative? TODO(question): negative firestarter malformed untraced; current treats negative as true (nonzero)
-	wNeg := weaponForStockpile(403, 10, 0, 0, false, false, false, 0, 0, -1)
-	if !IsFirestarter(wNeg) {
-		t.Fatalf("negative firestarter should be true as nonzero [06 §13.1] TODO(question)")
 	}
 }
 
@@ -692,7 +684,10 @@ func TestStockpilePoolFullCases(t *testing.T) {
 }
 
 func TestInterceptorTargetDeath(t *testing.T) {
-	// Nuke target dies before interceptor fires: scan should skip dead candidate [06 §11.2].
+	// Neither interceptor scan tests liveness: a dead-but-uncompacted
+	// targetable enemy record inside coverage and unclaimed is still selected
+	// by the aim-time scan and by the fire-time rescan [06 §11.2]
+	// [06 R-WPN-05 §10]. This test used to assert the opposite.
 	nukeWeapon := weaponForStockpile(4000, 30, 0, 0, false, false, true, 0, 0, 0)
 	interceptor := weaponForStockpile(4001, 30, 32, 200, true, true, false, 0, 0, 0)
 	var svc Service
@@ -701,17 +696,25 @@ func TestInterceptorTargetDeath(t *testing.T) {
 	weapons := map[int32]*content.WeaponDef{nukeWeapon.ID: nukeWeapon, interceptor.ID: interceptor}
 	// Kill nuke before interceptor scan.
 	svc.MarkDead(hNuke)
-	_, _, ok := FindInterceptorTarget(&svc, Vec3{X: fixedI(5), Z: fixedI(5)}, 0, interceptor.Coverage, weapons)
-	if ok {
-		t.Fatalf("dead nuke should not be found [06 §11.2] target-death")
+	got, _, ok := FindInterceptorTarget(&svc, Vec3{X: fixedI(5), Z: fixedI(5)}, 0, interceptor.Coverage, weapons)
+	if !ok || got != hNuke {
+		t.Fatalf("dead-but-uncompacted nuke must still be selected, got %d ok %v [06 R-WPN-05 §10]", got, ok)
 	}
 	interceptorSlot := &Slot{Weapon: interceptor, Ammo: 1}
-	_, _, ok2 := AcquireInterceptorTargetForSpawn(&svc, Vec3{X: fixedI(5), Z: fixedI(5)}, 0, interceptor.Coverage, interceptor, interceptorSlot, Vec3{X: fixedI(5), Z: fixedI(5)}, 600, weapons)
-	if ok2 {
-		t.Fatalf("acquire with dead target should fail [06 §11.2]")
+	_, cand, ok2 := AcquireInterceptorTargetForSpawn(&svc, Vec3{X: fixedI(5), Z: fixedI(5)}, 0, interceptor.Coverage, interceptor, interceptorSlot, Vec3{X: fixedI(5), Z: fixedI(5)}, 600, weapons)
+	if !ok2 || cand != hNuke {
+		t.Fatalf("the fire-time rescan must also reach the dead candidate, got %d ok %v [06 R-WPN-05 §10]", cand, ok2)
 	}
-	if interceptorSlot.Ammo != 1 {
-		t.Fatalf("target-death must not consume ammo [06 §11.2]")
+	// A shot that finds no candidate is the only path that leaves the slot
+	// untouched; here one was found, and the interceptor is stockpile-flagged,
+	// so its ammunition is spent [06 §11.2].
+	if interceptorSlot.Ammo != 0 {
+		t.Fatalf("a successful interceptor spawn spends the round, got %d [06 §11.1]", interceptorSlot.Ammo)
+	}
+	// The claim the spawn installed now blocks a second acquisition, which is
+	// the state that prevents a shot — not a dead-bit test [06 §11.2].
+	if _, _, again := FindInterceptorTarget(&svc, Vec3{X: fixedI(5), Z: fixedI(5)}, 0, interceptor.Coverage, weapons); again {
+		t.Fatalf("the candidate claimed at spawn must be rejected by the next scan [06 §11.2]")
 	}
 	// Reservation claim: already claimed target should be skipped.
 	var svc3 Service
@@ -754,4 +757,45 @@ func TestStockpileCancelAndReload(t *testing.T) {
 	}
 	// Verify ammo vs reload distinction: stockpile weapon's Ammo is byte count, Reload is separate countdown [06 §11.1].
 	// AcquireInterceptor with stockpile weapon decrements Ammo, not Reload; we already checked.
+}
+
+// ---------------------------------------------------------------------------
+// Interceptor blast metric [06 §11.2] [06 R-WPN-05 §10]
+// ---------------------------------------------------------------------------
+
+func TestInterceptorBlastMetricIsTruncatedSquares(t *testing.T) {
+	origin := Vec3{}
+	// The compare is strict, so a victim exactly on the radius survives while
+	// one world unit inside is taken [06 R-WPN-05 §10].
+	const area = int32(32)
+	atRadius := Vec3{X: fixedI(32)}
+	if ProjectileInInterceptorBlast(atRadius, origin, area) {
+		t.Fatalf("a victim at exactly area world units must survive: the compare is strict [06 R-WPN-05 §10]")
+	}
+	inside := Vec3{X: fixedI(31)}
+	if !ProjectileInInterceptorBlast(inside, origin, area) {
+		t.Fatalf("a victim one world unit inside the radius must be taken [06 R-WPN-05 §10]")
+	}
+	// Each axis is squared at full 16.16 width and only then truncated, so a
+	// fractional delta contributes more than truncating the delta first would:
+	// 1.9 world units contributes 3, not 1 [06 R-WPN-05 §10]. With area 2 the
+	// budget is 4, so a single axis at 1.9 leaves 1 and a second axis at 1.9
+	// would overflow it — truncate-then-square would leave both inside.
+	frac := numeric.Fixed(fixedI(1).Raw() + 59000) // 1.9 world units in 16.16
+	oneAxis := Vec3{X: frac}
+	if !ProjectileInInterceptorBlast(oneAxis, origin, 2) {
+		t.Fatalf("one axis at 1.9 contributes 3 and stays under 4 [06 R-WPN-05 §10]")
+	}
+	twoAxes := Vec3{X: frac, Z: frac}
+	if ProjectileInInterceptorBlast(twoAxes, origin, 2) {
+		t.Fatalf("two axes at 1.9 contribute 6, not 2: the square precedes the truncation [06 R-WPN-05 §10]")
+	}
+	// Y is the victim record's own current height in the same domain, with no
+	// terrain sample and no separate scale [06 R-WPN-05 §10].
+	if ProjectileInInterceptorBlast(Vec3{Y: fixedI(32)}, origin, area) {
+		t.Fatalf("the Y term uses the same metric as X and Z [06 R-WPN-05 §10]")
+	}
+	if !ProjectileInInterceptorBlast(Vec3{Y: fixedI(31)}, origin, area) {
+		t.Fatalf("the Y term uses the same metric as X and Z [06 R-WPN-05 §10]")
+	}
 }

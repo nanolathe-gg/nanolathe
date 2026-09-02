@@ -5,7 +5,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/orders"
@@ -207,10 +206,11 @@ func (s *Session) finalizePhase2Death(h pool.Handle, tick uint32) {
 	}
 }
 
-// sweepPlayerGate is "The player gate" of [04 R-MOV-03 §1], read on the row
-// that owns the unit being visited. The sweep visits player slots 0..9 in
-// order and processes a slot only when its record EXISTS, its control byte is
-// 1, 2 or 3, and it is not eliminated. Inside a visit a second, narrower test
+// sweepPlayerGate is "The player gate" of [04 R-MOV-03 §1] as corrected by
+// [04 R-MOV-03 §10], read on the row that owns the unit being visited. The
+// sweep visits player slots 0..9 in order and processes a slot only when its
+// leading occupancy word is nonzero, its control byte is 1, 2 or 3, and its
+// ally-group byte is not 10. Inside a visit a second, narrower test
 // admits one block — retail's water damage, self-repair, the two order pumps,
 // the mover tick and the post-move correction — for an owner of control byte
 // 1 or 2 only; it is re-evaluated per unit from the OWNER record, which is why
@@ -223,29 +223,38 @@ func (s *Session) finalizePhase2Death(h pool.Handle, tick uint32) {
 // gates pass for every live unit; the byte is still read rather than assumed,
 // which is exactly what [06 R-DMG-01 §8] requires of an implementation.
 //
-// A row past the ten records, or one that does not exist, is not swept at all.
-// The elimination term is derived, not flagged: a row is eliminated when its
-// live unit count is zero and it has created at least one unit
-// [08 R-SKIR-01 §3][05 R-SHARE-01 §3], which is what economy.PlayerEliminated
-// computes from the two counters. It costs the sweep nothing: an eliminated
-// row owns no live unit for the traversal to hand back here.
+// A row past the ten records, or one whose occupancy word is zero, is not swept
+// at all.
 //
-// TODO(question): [04 R-MOV-03 §1] words this clause as "its state byte is not
-// the eliminated value 10", but no per-player state byte in the docs takes the
-// value 10 — the byte carrying a 10 sentinel is the side/team byte, whose
-// value 10 is the never-occupied neutral row ([05 "Player slot"], the spawner
-// gate of [08 "Established — the invalid-player path is fatal"]), and the
-// parallel gate in [05 R-SHARE-01 §3] lists "the slot's own index is not 10"
-// and "the slot is not eliminated" as two separate clauses. Both readings are
-// inert for any row this sweep would otherwise visit (no Nanolathe row carries
-// side 10, and an eliminated row has no units), so the derived predicate is
-// used. What would settle it is a trace of the byte the sweep's second clause
-// loads.
+// There is NO elimination term. [04 R-MOV-03 §1]'s third clause named the wrong
+// byte and invented a state; [04 R-MOV-03 §10] establishes that the byte the
+// sweep loads is the row's ally-group byte — the byte the row constructor seeds
+// with 10 ([05 "Player slot"]) and the byte the alliance rows are indexed by
+// ([05 R-SHARE-01 §1]) — tested against 10. A row whose player has lost every
+// unit is still swept, and trivially owns nothing to visit; the 10 test can
+// only exclude a row that was never seated. The derived
+// economy.PlayerEliminated term this gate used to carry is removed: it was the
+// invented state.
+//
+// TODO(question): Nanolathe keeps no separate per-slot ally-group byte on the
+// player row — its alliance rows are indexed by the slot number itself
+// (economy.Service.DeclaresAlliance), so the byte's value here IS `owner`,
+// which for rows 0..9 is never 10. That matches the *Supported inference* of
+// [04 R-MOV-03 §10] ("every seated row 0–9 carries its own slot number in that
+// byte", which is why [05 R-SHARE-01 §3]'s parallel gate reads it as "the
+// slot's own index is not 10") and makes the clause inert, exactly as §10 says
+// it is in any battle. What would settle whether a distinct byte is needed is
+// the seat-setup writer §10 names as its decider.
 //
 // A session with no economy service at all has no player table to read, which
 // is not a state retail can be in: the battle block allocates the table before
 // any unit exists. That is an unwired composition rather than a control byte,
 // so it opens both gates instead of silently emptying the sweep.
+// neverSeatedAllyGroup is the value the player-row constructor seeds the
+// ally-group byte with, and which the movement sweep's third clause excludes
+// [04 R-MOV-03 §10][05 "Player slot"].
+const neverSeatedAllyGroup uint8 = 10
+
 func (s *Session) sweepPlayerGate(owner uint8) (visit, work bool) {
 	if s == nil {
 		return false, false
@@ -257,8 +266,11 @@ func (s *Session) sweepPlayerGate(owner uint8) (visit, work bool) {
 		return false, false
 	}
 	p := &s.Econ.Players[owner]
-	if !p.Exists || economy.PlayerEliminated(s.Units, int(owner)) {
-		return false, false
+	if !p.Exists {
+		return false, false // the leading occupancy word [04 R-MOV-03 §10]
+	}
+	if owner == neverSeatedAllyGroup {
+		return false, false // the ally-group byte is not 10 [04 R-MOV-03 §10]
 	}
 	switch p.ControllerState {
 	case combat.ControlByteHuman, combat.ControlByteComputer:
@@ -942,10 +954,17 @@ func (s *Session) Step(scaledNow int32) {
 		// interpose between a phase-12 result and that tick's publication
 		// [01 §4.4].
 		s.runRetailPostLoopTail(s.Clock.GlobalTick)
-	} else {
-		// TODO(question): the retail executor's outer tail on a zero-runnable
-		// pump is not established by [01 §4.4]. Preserve the zero-tick
-		// non-mutation contract until a trace settles whether network-only tail
-		// service occurs in that case.
 	}
+	// A zero-runnable pump: retail still falls through to the same tail, which
+	// is neither inside the loop nor guarded by the runnable count
+	// [01 R-PLAT-02 §7]. It changes nothing there. The global tick did not
+	// advance, so the temporary-sight expiry pass is evaluated against the tick
+	// the previous pump already compacted for and finds nothing new; the ring
+	// slide is likewise idempotent at a fixed tick; the three barrier routines
+	// are empty. The only step that can still move is the text-scroll retire,
+	// which is the presentation message ring ([07 R-CAM-01 §7]) and is not
+	// driven from here. Skipping the call and running it are therefore
+	// observationally identical for simulation state, which is the property
+	// [01 R-PLAT-02 §7] states, and the skip keeps the tail's diagnostic trace
+	// a record of runnable pumps only.
 }

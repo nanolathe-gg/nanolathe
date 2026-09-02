@@ -3834,6 +3834,17 @@ cannot pay, the unit is not cloaked this tick. The result is pushed to the
 instance cloak bit, which is what §3.2's predicate step 2 and the sensor
 phase's pass 5 read.
 
+**Closed (2026-09-02, RWU-19-29) — the not-due pass clears too.** "The result
+is pushed" holds on every exit: a pass on which `cloakActive` is false — the
+request bit clear, the decloak-forced bit set, *or* the deadline not yet
+reached — pushes *clear* to the instance bit through the same transition call
+the paid pass uses to set it, with no cost selection and no compare. The block
+has no exit that leaves the bit alone; the per-exit table is
+[05 R-ECO-01 §9]. So every reveal producer in the census below decloaks the
+unit on its owner's next settlement pass — up to 30 ticks after the stamp —
+never on the tick of the stamp itself, and `Cloak_Off` likewise takes effect
+at the next pass.
+
 **Two mechanisms, not one.** Bit 12 is cleared at the top of the sensor
 phase's first pass every tick and re-set only by that tick's proximity breach,
 so it is a same-tick latch. The suppression deadline is the durable half: the
@@ -8926,6 +8937,99 @@ cooldowns (§8.3), the 8-entry voice queue, the mixer's `MixingBuffers`
 voice limit (steal oldest), the four-instances-per-sample cap (steal
 furthest-along), the 8 transient slots for voice lines (drop), and the
 single exclusive loop. Nothing counts cues per tick.
+
+### Closed — the engine status-cue sink: codes are slots, the raise-site gate, and what else reacts [R-AUD-01 §7] (2026-09-02)
+
+Status: **Established** (instruction-level read of the raise helper and its
+two siblings, the queue's insert, every reader of the queue, and the unit
+edge machine of [05 R-ECO-01 §8]). Written so that one implementation unit
+can wire the four codes the engine raises from the edge machine — 3
+`activate`, 4 `deactivate`, 14 `cloak`, 15 `uncloak` — which Nanolathe
+emits nowhere today; the order handlers' 82 voice sites use the same sink.
+
+**The codes are slot indices.** The integer the edge machine passes as a
+"status code" is the index into the static slot table of §8.3, record by
+record: code 14 *is* slot 14 `cloak` (priority 7, cooldown 1 × 30, default
+caption `Cloaked`), code 15 slot 15 `uncloak` (`Visible`), codes 3 and 4
+slots 3/4 `activate`/`deactivate` (priority 4, cooldown 2 × 30, no default
+caption). There is no translation table between the two numberings.
+
+**One sink for every producer.** The unit voice sites, the edge machine and
+the under-attack path all reach the same raise helper, `raise(unit, code,
+overrideText)`, which does exactly three things:
+
+1. *Gate.* The unit's owner slot must equal the **view slot** — the slot whose
+   side the HUD presents, a global distinct from the local human's slot (the
+   two are equal in single player; an observer may change the view slot) —
+   the unit's status word must carry the alive bit (bit 28, the bit
+   [R-AUD-01 §3] calls "chat-enable") and must not carry the death latch
+   (bit 14, §3's "silenced" bit; [04 R-SPEC-01 §12] names it). When the gate
+   fails the helper returns having touched nothing: no queue write, no
+   allocation, no draw. Remote and computer players' units therefore never
+   enter the queue, and a dying unit's edges are silent.
+2. *Text.* The override text, or when the caller passes none the slot's
+   static default caption; either is passed through the localisation lookup
+   (a sorted-table search; the identity when no table is loaded). The edge
+   machine passes no override for any of its four codes, so 14 and 15 print
+   `<unit name>: Cloaked` / `<unit name>: Visible` when §8.3's speech gate
+   passes, and 3 and 4 print nothing (empty caption, §8.3 Resolve step 4).
+3. *Insert*, exactly §8.3 **Insert**, timed against the **global tick
+   counter**: cooldown (the slot's next-allowed frame `<=` the tick),
+   duplicate-slot drop, full-queue silent resolve of the last entry, sorted
+   insert after equal priorities. The entry copies the caption into its own
+   allocation.
+
+Two sibling raisers share the gate and add one global flag test each (one
+requires it set and has no caller in the image; the other requires it clear
+and is the under-attack path's — §8.3's "gated on selection state"). The
+edge machine and the order handlers use the plain helper.
+
+**Synchronous, from inside the simulation.** The raise runs in the caller's
+own phase — the economy settlement for 14/15 ([05 R-ECO-01 §9]),
+construction admission and the work handlers for 3/4 — and the insert is
+immediate. The queue has exactly one other simulation-side interaction: the
+**unit-teardown purge** — when a unit is removed, every queued entry whose
+unit is that unit is dropped (text freed, queue compacted) before the record
+goes away. No simulation phase reads a queued entry back; the readers are
+the once-per-rendered-frame drain of §8.3 (the presentation pump), the purge,
+and the battle-start / shutdown clear-alls. A clone that keeps presentation
+behind the publication boundary ([03 §2.4], I6) may therefore carry a raise
+as a committed-tick event of `(code, unit)` and perform the insert at the
+boundary, provided (i) the gate's three per-unit facts are evaluated at the
+raise, (ii) each committed tick's events are applied exactly once in raise
+order — the insert's ordering rule and cooldown test depend on order and on
+the tick, not on wall-clock — and (iii) a unit removed in the same tick drops
+its pending entries. The observable difference from retail's synchronous
+insert is nil: nothing in the simulation observes the queue.
+
+**Random draws: none on the raise path.** The gate, the localisation lookup
+and the insert draw from neither stream. The only draw anywhere in the cue
+path is the CRT variant pick at resolve time — once per pop, audible or
+silent (§8.3 Resolve step 2, [R-AUD-01 §6]). Wiring the four codes adds no
+simulation-stream draw and moves the CRT stream only at drain time, as every
+other cue already does.
+
+**What else reacts on the edges, complete.** On the instance cloaked bit's
+rising edge, after the cue: the observer notice — every order record whose
+target reference is registered on the cloaking unit receives pending bit
+`0x10000` ("target cloaked", [04 R-ORD-01 §6]); this is simulation-visible
+and doc 04 owns it; the falling edge sends no notice. On the activation bit's
+edges the COB `Activate` / `Deactivate` callback is raised **before** the cue
+([05 R-ECO-01 §8]). After any edge: the interface-panel dirty flag is set when
+the unit's owner is the **local** slot (not the view slot) and the unit's
+status word carries the bit the panel keys on — presentation only — and, for
+control bytes 1 and 2, the four-byte network event (doc 08). Nothing else:
+no visibility-grid or fog write, no statistic, no score, no positional sound.
+Bounded absence, re-confirmed: no cue is raised by the death or removal path
+(§8.3); the teardown purge is the only removal-side touch.
+
+**Acceptance for the wiring unit.** With the sink wired: an `init_cloaked`
+unit owned by the view slot raises 14 on its first paid pass ([05 R-ECO-01
+§9] arm (d)) and, if the speech gate passes, prints `Cloaked`; an unpayable
+or not-due pass on a hidden unit raises 15; a pass that leaves the byte
+unchanged raises nothing; a computer player's cloaking units raise nothing;
+a second 14 while one is queued is dropped; and the CRT stream is untouched
+until the drain resolves the entry.
 
 ### Closed — the streamed narration path: mode 2 is live, its delay timer, half-buffer refill, and stop [R-AUD-02 §1] (2026-08-29)
 

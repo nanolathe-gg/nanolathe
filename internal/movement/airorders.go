@@ -301,14 +301,24 @@ func (m *airMarker) Release() {
 	m.target = 0
 }
 
-// targetAttachPosition is the goal a follow marker takes from its target.
+// targetAttachPosition is the goal a follow marker takes from its target: the
+// target's own origin.
 //
-// TODO(question): [04 R-AIR-01 §4] says the goal becomes "the target's
-// attach-piece world position (the exit-piece locator transform of [R-REV-02],
-// including the unit-origin addition)", but this package has no compiled piece
-// transform to evaluate. Placeholder: the target's own origin, which is that
-// transform's unit-origin term with a zero piece offset. What would settle it is
-// the model piece world-transform surface reaching internal/movement.
+// [04 R-AIR-01 §14.1] settles what §4's "target's attach-piece world position"
+// resolves to. The follow branch asks the piece world-position locator of
+// [04 R-REV-02] for the marker's stored attach-piece index on the target, and
+// that locator answers a ZERO offset when the index is negative. The
+// follow-unit constructor — flags 0x01/0x07, which is every user of this
+// branch: `VTOL_Follow`, `AirStrike`'s bound-target marker, the guard seek —
+// stores index −1, so a plain follow marker's goal is exactly the target's
+// origin triple, with no piece arithmetic at all. The radial offset of flag
+// 0x02 is added after, as §4 says.
+//
+// Only the follow-unit-piece constructor (flags 0x05, the transport pickup of
+// [04 R-AIR-01 §9]) stores a real index, and that one does need the piece
+// transform. When a compiled piece world-transform surface reaches this
+// package, the pickup marker is the single call site to route through it; the
+// contract for every other follow marker is unchanged [04 R-AIR-01 §14.1].
 func (m *airMarker) targetAttachPosition(t *units.Unit) Vec3 {
 	return Vec3{X: t.X, Y: t.Y, Z: t.Z}
 }
@@ -1073,14 +1083,24 @@ func (s *System) installOffMapRecoveryMarker(u *units.Unit, head *orders.Node) b
 // strict slope maximum with no second water-slope tier, plus an occupancy rule
 // and an aircraft water rule the commit validator does not carry.
 //
-// TODO(question): retail short-circuits to landable when the unit's movement
-// class bit is clear in a half-resolution blocking map, without looking at
-// features, yards, occupancy, depth or slope [04 R-AIR-01 §6a]. This build has
-// no such map, so the full walk always runs and this predicate is therefore
-// STRICTER than retail — retail accepts on the coarse bit alone, including on
-// a cell another unit occupies. The divergence is bounded: a refusal only makes
-// the caller keep searching. What would settle it is the writer and layout of
-// that half-resolution map.
+// The coarse early accept runs before the walk: when the mapping word for the
+// tile under the anchor-plus-quarter-footprint point does NOT carry the
+// aircraft owner's slot bit, the position is landable outright, with no feature,
+// yard, occupancy, depth or slope test at all [04 R-AIR-01 §6a] as corrected by
+// [04 R-AIR-01 §14.2] — the grid is the per-player mapping word grid of
+// [03 R-LAYER §1], not a movement-class blocking map, and the bit is the
+// owner's slot bit, not a class shift. An aircraft sent over ground its owner
+// has never had sight of therefore lands blind.
+//
+// TODO(T25): internal/movement has no binding to that grid. It is the
+// visibility service's word grid, which this package cannot reach: neither
+// System nor the order queue binding carries a mapping query, and this unit
+// owns neither file. landingMappingWord below is the port; with nothing bound
+// it answers "no grid" and the full walk always runs, which is STRICTER than
+// retail — retail accepts on the coarse bit alone, including on a cell another
+// unit occupies. The divergence is bounded: a refusal only makes the caller
+// keep searching, and the ground-landing machine has its repeated-failure
+// fallback. Wiring is one provider away; see landingMappingWord.
 func (s *System) landable(u *units.Unit, x, z numeric.Fixed) bool {
 	if s == nil || u == nil || u.Def == nil || s.Terrain == nil {
 		return false
@@ -1097,6 +1117,11 @@ func (s *System) landable(u *units.Unit, x, z numeric.Fixed) bool {
 	}
 	if anchor.X+int32(fx) >= s.Terrain.CellW || anchor.Z+int32(fz) >= s.Terrain.CellH {
 		return false
+	}
+	// The coarse early accept, before any per-cell work
+	// [04 R-AIR-01 §6a][04 R-AIR-01 §14.2].
+	if word, ok := s.landingMappingWord(anchor.X, anchor.Z, fx); ok && !airMappingBitSet(word, u.Owner) {
+		return true
 	}
 
 	profile := s.ProfileFor(u.Handle)
@@ -1146,6 +1171,64 @@ func (s *System) landable(u *units.Unit, x, z numeric.Fixed) bool {
 		}
 	}
 	return true
+}
+
+// airMappingBitSet reports whether a mapping word carries a player slot's bit.
+// The grid holds one 16-bit word per 2×2-cell tile with bits 0..9 one per
+// player slot [03 R-LAYER §1]; the landing test reads the AIRCRAFT OWNER's bit
+// [04 R-AIR-01 §14.2], the same byte [04 R-ORD-02 §1]'s own-unit test compares
+// with the local slot.
+func airMappingBitSet(word uint16, owner uint8) bool {
+	if owner > 9 {
+		return false // only ten usable bits exist [03 R-LAYER §1]
+	}
+	return word&(1<<owner) != 0
+}
+
+// airMappingIndex is the landing test's index into the mapping word grid
+// [04 R-AIR-01 §6a]:
+//
+//	i = (cellX >> 1) + (fx >> 2) + ((cellZ >> 1) + (fx >> 2)) · stride
+//
+// with stride the grid's tile width. Note that BOTH terms add `fx >> 2`: the Z
+// term does not use `fz`. That asymmetry is what the routine computes, not a
+// transcription slip [04 R-AIR-01 §6a].
+func airMappingIndex(cellX, cellZ int32, fx int16, stride int32) int32 {
+	q := int32(fx >> 2)
+	return (cellX>>1 + q) + (cellZ>>1+q)*stride
+}
+
+// landingMappingWord is the mapping-word-grid port the coarse early accept of
+// [04 R-AIR-01 §6a] reads, at the index airMappingIndex gives.
+//
+// TODO(T25): no provider is bound. The grid is the visibility service's
+// per-player mapping word grid ([03 R-LAYER §1]; [04 R-AIR-01 §14.2] identifies
+// it as the one the landing test reads), and internal/movement has no route to
+// it — System's fields and the order queue binding's world adapter both belong
+// to files this unit does not own. Until a provider is bound the port answers
+// "no grid" and landable runs the full per-cell walk, which is the stricter,
+// bounded divergence recorded on landable itself. Nothing here guesses at the
+// grid's contents: the alternative in-package word array, the class layer's
+// owner/building mask, has no production writer at all (see the occupancy
+// commit's own marker), so reading it would early-accept everywhere and let an
+// aircraft park on water — the exact rule [04 R-AIR-01 §6a] calls its
+// substantive finding.
+func (s *System) landingMappingWord(cellX, cellZ int32, fx int16) (uint16, bool) {
+	grid, stride := s.landingMappingGrid()
+	if len(grid) == 0 || stride <= 0 {
+		return 0, false
+	}
+	idx := airMappingIndex(cellX, cellZ, fx, stride)
+	if idx < 0 || int(idx) >= len(grid) {
+		return 0, false
+	}
+	return grid[idx], true
+}
+
+// landingMappingGrid resolves the mapping word grid and its tile stride. See
+// landingMappingWord's TODO(T25): there is no provider yet.
+func (s *System) landingMappingGrid() ([]uint16, int32) {
+	return nil, 0
 }
 
 // terrainAndSea returns the terrain height byte at a position and the map's sea
@@ -1641,6 +1724,71 @@ func airSpawnAtHead(u *units.Unit, name string, target pool.Handle, goal Vec3, t
 	q.PushHead(id, orders.NewNodeForOrder(id, target, goal.X, goal.Y, goal.Z, tick, u.Handle, false))
 }
 
+// airSpawnIDAtHead is airSpawnAtHead for a record the caller has already
+// resolved to an ID — the guard seek spawns "the result whatever it is"
+// [04 R-ORD-02 §3], so it never names the order.
+func airSpawnIDAtHead(u *units.Unit, id orders.ID, target pool.Handle, goal Vec3, tick uint32) {
+	q := orders.QueueForUnit(u)
+	if q == nil || id == 0 {
+		return
+	}
+	q.PushHead(id, orders.NewNodeForOrder(id, target, goal.X, goal.Y, goal.Z, tick, u.Handle, false))
+}
+
+// airGuardVisitorAdmits is the guard-candidate visitor of [04 R-ORD-02 §4],
+// with the polarity [04 R-AIR-01 §14.4] established. It admits `cand` when all
+// three clauses hold:
+//
+//   - the candidate OWNER's alliance row A, indexed by the SEEKER's owner slot,
+//     is nonzero — row A is that owner's own one-directional declaration
+//     ([05 R-SHARE-01 §1]), nonzero for a declared ally and for the owner
+//     itself, whose self entry is seeded to one;
+//   - the candidate is not `canfly`;
+//   - the candidate is not the seeker.
+//
+// `declares` is the row read; with none bound only the seeker's own side is
+// admitted, which is the self entry alone.
+func airGuardVisitorAdmits(seeker, cand *units.Unit, declares func(from, toward uint8) bool) bool {
+	if seeker == nil || cand == nil || cand.Def == nil {
+		return false
+	}
+	if cand == seeker || cand.Handle == seeker.Handle {
+		return false // not the seeker [04 R-ORD-02 §4]
+	}
+	if cand.Def.CanFly {
+		return false // not `canfly` [04 R-ORD-02 §4]
+	}
+	if cand.Owner == seeker.Owner {
+		return true // the row's self entry is seeded to one [04 R-AIR-01 §14.4]
+	}
+	if declares == nil {
+		return false
+	}
+	return declares(cand.Owner, seeker.Owner)
+}
+
+// airGuardCandidate is `VTOL_SeekGuard` phase 1's enumeration: the units within
+// the seeker's `sightdistance`, filtered by the visitor, of which only the
+// first listed is used [04 R-ORD-02 §3]. The pool is walked slot-ascending, the
+// project's one deterministic unit order (I1), and the range test is the
+// established truncated whole-world-unit planar metric [06 §3.1].
+func (s *System) airGuardCandidate(u *units.Unit) *units.Unit {
+	if s == nil || u == nil || u.Def == nil || s.world == nil {
+		return nil
+	}
+	declares := s.diplomacyRows()
+	for _, cand := range s.world.Iter() {
+		if !airGuardVisitorAdmits(u, cand, declares) {
+			continue
+		}
+		if !combat.WithinRange(u.X, u.Z, cand.X, cand.Z, u.Def.SightDistance) {
+			continue
+		}
+		return cand
+	}
+	return nil
+}
+
 // --- VTOL_Evade [04 R-AIR-01 §8] ---
 
 // legVTOLEvade is the random 90-degree break:
@@ -1653,13 +1801,9 @@ func airSpawnAtHead(u *units.Unit, name string, target pool.Handle, goal Vec3, t
 //	scratch word is re-read, not re-drawn) at twice the radius. Phase 2 returns
 //	5. Exactly one random draw per evasion.
 //
-// TODO(question): [04 R-AIR-01 §8] says "a record scratch word" without saying
-// which of the record's three general parameters holds it. p1 is used, matching
-// [04 R-ORD-02 §3], which puts the one drawn value of `VTOL_Follow` and
-// `VTOL_SeekGuard` phase 0 in p1 and its derived bit in p2. The choice is
-// unobservable in flight — the same side is re-read in phase 1 either way — but
-// it is visible in a record dump, so it is recorded rather than assumed.
-// A trace of the store settles it.
+// The scratch word §8 leaves unnamed is p1: [04 R-AIR-01 §14.3]'s census over
+// the four combat executors and this one has `VTOL_Evade` drawing `random
+// below 2` into p1 and re-reading p1 in phase 1, with p2 untouched.
 func (s *System) legVTOLEvade(u *units.Unit, n *orders.Node, tick uint32) orders.Code {
 	switch n.Phase {
 	case 0:
@@ -1818,19 +1962,14 @@ func (s *System) legVTOLSeekAttack(u *units.Unit, n *orders.Node, satisfied uint
 //	slot 0 unconditionally, about the record's goal; hold. Other phase:
 //	cancel-all.
 //
-// TODO(question): the guard-candidate visitor "admits `u` when `u`'s owner's
-// diplomacy byte toward my side is nonzero, `u` is not `canfly`, and `u` is not
-// the seeker" [04 R-ORD-02 §4]. The polarity of that first clause is not
-// settled by the section: the same phrase admits candidates for the *repair*
-// filter in the same list, where the units wanted are friendly, and here the
-// units wanted are the ones this aircraft would guard — also friendly — yet
-// "nonzero diplomacy" reads naturally as the not-allied side of the byte. The
-// only relation this package can reach is the queue binding's hostility
-// predicate, which answers the opposite question. Implementing either reading
-// would decide whether a seeking guard attaches itself to friends or to enemies
-// — an inversion, not an imprecision — so the enumeration is reported empty and
-// the leg falls to its own stated "else" arm, the orbit. A trace of that
-// visitor's diplomacy compare settles it.
+// The guard-candidate visitor's diplomacy clause is settled by
+// [04 R-AIR-01 §14.4]: the byte is the CANDIDATE owner's alliance row A
+// ([05 R-SHARE-01 §1], that owner's own declaration) indexed by the SEEKER's
+// owner slot, and the visitor admits on nonzero — the same shape
+// [04 R-ORD-01 §3]'s combat-join correction established for the ground guard,
+// read from the candidate's side. A seeking guard therefore attaches itself to
+// its own side's units and its allies', never to an enemy. See
+// airGuardVisitorAdmits.
 func (s *System) legVTOLSeekGuard(u *units.Unit, n *orders.Node, satisfied uint32, tick uint32) orders.Code {
 	if s.installOffMapRecoveryMarker(u, n) {
 		return 2 // the recovery leg pre-empts and holds [04 R-AIR-01 §5]
@@ -1858,11 +1997,20 @@ func (s *System) legVTOLSeekGuard(u *units.Unit, n *orders.Node, satisfied uint3
 		if airBelowThreeQuarters(u) && s.airFindBaseAndLand(u, n, sim, tick) {
 			return 0 // *restart* [04 R-ORD-02 §3][04 R-AIR-01 §11]
 		}
-		// The guard-candidate enumeration is the open question recorded above;
-		// with an
-		// empty list the leg is the orbit step of `VTOL_Follow` leg 4, about
-		// the record's goal rather than a ward, with the radius read from slot
-		// 0 unconditionally [04 R-ORD-02 §3].
+		// The guard-candidate enumeration: non-empty → release the payload,
+		// resolve code 7 against the FIRST listed unit and spawn the result at
+		// the head whatever it is, gate = 0, wait [04 R-ORD-02 §3].
+		if cand := s.airGuardCandidate(u); cand != nil {
+			s.releaseAirGoal(u)
+			if id := orders.Resolve(7, u, cand, nil); id != 0 {
+				airSpawnIDAtHead(u, id, cand.Handle, Vec3{X: cand.X, Y: cand.Y, Z: cand.Z}, tick)
+			}
+			n.DynamicGate = 0
+			return 3 // *wait* — the pump's `30 + random below 15` [04 R-ORD-02 §3]
+		}
+		// With an empty list the leg is the orbit step of `VTOL_Follow` leg 4,
+		// about the record's goal rather than a ward, with the radius read from
+		// slot 0 unconditionally [04 R-ORD-02 §3].
 		if satisfied&airLegGate != 0 {
 			n.Param1 = uint32(uint16(n.Param1) - uint16(0x4000+sim.Uint32n(0x2000)))
 		}
@@ -2185,9 +2333,11 @@ func (s *System) legAirToGround(u *units.Unit, n *orders.Node, tick uint32) orde
 // The weapon layer supplies the engagement result; a failed query increments
 // the miss counter before selecting the recovery orbit.
 //
-// TODO(question): [04 R-AIR-01 §8] does not name which record scratch words
-// phase 2 zeroes; p1 (the side flag) and p2 (the miss counter) are used, in the
-// order the section lists them. See legVTOLEvade's note on the same question.
+// The two scratch words §8 leaves unnamed are p1 and p2, and
+// [04 R-AIR-01 §14.3] names which is which: phase 2 zeroes BOTH, phase 3 uses
+// p2 as the miss counter (incremented on a refused engagement, reset to 0 when
+// it exceeds 1) and p1 as the side flag (0 → subtract the quarter turn and
+// write 1; 1 → add it and write 0). That is the assignment used below.
 func (s *System) legAirToGroundHover(u *units.Unit, n *orders.Node, tick uint32) orders.Code {
 	if s.installOffMapRecoveryMarker(u, n) {
 		return 2 // step 4: `AirToGroundHover` takes the recovery leg
@@ -2424,20 +2574,22 @@ func (s *System) installAirPayload(u *units.Unit, rec *orders.Node, p GoalPayloa
 //     with the same target at the head, zeroes the counter and the gate, and
 //     returns *restart*.
 //
-// TODO(question): neither leg is said to set the payload's "steer to a
-// commanded heading" flag, and [04 R-AIR-01 §8] describes that flag only in the
-// abstract — it changes both the goal update (the velocity is rotated and its
-// vertical component zeroed) and the arrival test (the velocity's bearing must
-// equal the commanded heading exactly), so setting it on the wrong leg would
-// change when a dogfight leg completes. Both legs leave it clear here, which is
-// the payload's constructed state; the flag's machinery is implemented so that
-// a trace naming its setter is a one-field change.
+// The payload's "steer to a commanded heading" flag stays CLEAR on both legs,
+// and that is retail's own state, not a placeholder: [04 R-AIR-01 §14.5] finds
+// the flag's single setter has no caller anywhere in the image — no executor
+// leg, no constructor (the constructor zeroes the flag word), and no stream
+// path, since the serializer emits the commanded heading only when the flag is
+// set. The flag-gated branches §8 describes are therefore dead in play: the
+// goal advances by its velocity unrotated and arrival is the 48-world-unit test
+// alone. The machinery is kept because §8 documents it, not because anything
+// arms it.
 //
-// TODO(question): §8 gives no arm for "arrival bits clear, counter below 0x5A,
-// and the range to the target at or below 0xA0" — the lead intercept's own
-// condition fails and the give-up arm is the counter's, not the range's.
-// The one-tick deadline hold is taken there so the record neither parks nor
-// invents a leg; a trace of that fall-through settles it.
+// The arm §8 omits — arrival bits clear, counter below 0x5A, range to the
+// target AT OR BELOW 0xA0 — is the lead intercept's own tail minus the marker
+// [04 R-AIR-01 §14.5]: no new payload is installed, whatever is bound stays
+// bound; deadline `tick + 45`; gate `|= 0x100E8`; hold. The give-up arm of
+// [04 R-ORD-02 §5] is reached from exactly two states, arrival bits set with a
+// non-positive dot, or arrival bits clear with the counter at or above 0x5A.
 //
 // Target aiming is issued through the queue binding and consumed by combat's
 // ordinary slot pipeline.
@@ -2514,7 +2666,12 @@ func (s *System) legAirToAir(u *units.Unit, n *orders.Node, satisfied uint32, ti
 				n.DynamicGate |= airLegGateStrike
 				return 2
 			}
-			return airLegUnbound(n, tick) // the unstated range arm, see the note above
+			// Range at or below 0xA0: the lead intercept's tail without the
+			// marker — no new payload, deadline tick+45, gate |= 0x100E8, hold
+			// [04 R-AIR-01 §14.5].
+			airDeadline(n, tick, 45)
+			n.DynamicGate |= airLegGateStrike
+			return 2
 		}
 		s.releaseAirGoal(u)
 		airSpawnAtHead(u, "VTOL_Evade", n.Target, Vec3{X: n.GoalX, Y: n.GoalY, Z: n.GoalZ}, tick)

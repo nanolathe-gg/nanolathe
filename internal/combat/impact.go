@@ -446,6 +446,44 @@ func ApplyAreaDamage(impact Vec3, weapon *content.WeaponDef, shooter pool.Handle
 	})
 }
 
+// ---------------------------------------------------------------------------
+// Feature ignition gate [06 §13.1] [06 R-WPN-05 §10]
+// ---------------------------------------------------------------------------
+//
+// `firestarter` is read exactly once, and it is read here: the nonzero test
+// sits inside the feature-damage accumulator that the area-damage feature phase
+// above calls for each accepted feature, and nowhere in the stockpile,
+// interceptor or projectile paths [06 R-WPN-05 §10]. These helpers used to sit
+// beside the interceptor code in stockpile.go; they belong beside the feature
+// phase of the area sweep.
+
+// IsFirestarter reports whether the weapon ignites features [06 §13.1].
+//
+// The weapon loader stores the authored integer's low byte
+// ([02 "Weapon record"] lists the field as 8-bit) and the test is on that byte,
+// so an authored firestarter of 256 ignites nothing [06 R-WPN-05 §10]. The
+// truncation is applied at this read because the compiled definition keeps the
+// authored integer width.
+func IsFirestarter(w *content.WeaponDef) bool {
+	if w == nil {
+		return false
+	}
+	return uint8(w.Firestarter) != 0 // low byte, nonzero [06 R-WPN-05 §10]
+}
+
+// ShouldIgniteFeatureGate is the whole ignition gate for one accepted feature:
+// feature fire globally enabled, the feature flammable, and the weapon's
+// firestarter byte nonzero [06 §13.1] [06 R-WPN-05 §10].
+func ShouldIgniteFeatureGate(globalFeatureFireEnabled bool, featureFlammable bool, w *content.WeaponDef) bool {
+	if !globalFeatureFireEnabled {
+		return false
+	}
+	if !featureFlammable {
+		return false
+	}
+	return IsFirestarter(w) // [06 §13.1] the single read of the byte
+}
+
 // ApplyImpulse is intentionally absent: there is NO impulse or pushing
 // [06 §9.4] C26 — do not add knockback. This stub exists to assert absence in tests.
 func ApplyImpulse() {

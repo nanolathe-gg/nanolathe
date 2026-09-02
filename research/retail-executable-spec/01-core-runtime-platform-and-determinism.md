@@ -1166,6 +1166,48 @@ and exchanges packets — therefore never runs in campaign or skirmish and is
 out of scope ([08 R-OOS-01]); its main-thread CRT draws do not enter the
 single-player stream census of [R-PLAT-01 §7].
 
+### Closed — the sub-tick executor's tail runs unconditionally, including on a zero-runnable pump [R-PLAT-02 §7] (2026-09-02)
+
+**Established (direct trace of the executor, RWU-19-28).** §4.4's account of
+the post-loop tail describes what runs after the sub-tick loop but not
+*whether* it runs when the loop body never executed. It does. The tail is not
+inside the loop and is not guarded by the runnable count: a pump that
+advances zero sub-ticks — a paused session, a budget that rounded to nothing,
+a frame that arrived early — still falls through the loop and runs the same
+tail.
+
+The tail, in order, is:
+
+1. the **three empty barrier routines** of [R-PLAT-02 §5]'s stub census — they
+   read and write nothing, and a re-implementation omits them;
+2. the deadline-ring slide of §4.4;
+3. the **text-scroll retire** — the in-battle message ring of 30 entries
+   (doc 07's object). At most one entry is retired per call: the entry at the
+   display index is retired when the tick it was posted, plus
+   `(the text-scroll interface option + 1) × 30` ticks, is below the current
+   tick. That option is `TXTSCROL`, in seconds, default 10
+   ([07 R-CAM-01 §7]), so the term is that many seconds converted to ticks.
+   This is presentation state;
+4. the **temporary-sight expiry pass** over the "eyeball" observer list of
+   [R-PLAT-02 §5]: every record whose expiry tick is **strictly below** the
+   global tick (unsigned compare) invokes the throttled LOS refresh, followed
+   by the in-place compaction that section describes.
+
+**What a zero-runnable pump changes, exactly.** Nothing in simulation state.
+The global tick is not incremented — only the loop body's own increment, ahead
+of phase 1, does that — so the expiry comparison is evaluated against the same
+tick the
+previous pump already compacted for, and it finds nothing new to expire. The
+barrier routines are empty. The only thing that can still move is the
+text-scroll retire, which may advance one entry per pump because its
+condition is a function of the tick and not of the loop having run; that is
+presentation, outside the simulation's committed state.
+
+For an implementation the contract is therefore: run the tail on every pump,
+runnable sub-ticks or none, and rely on the tail's own predicates rather than
+on a "did we tick" flag. The zero-tick non-mutation property holds because
+each step is separately inert, not because the tail is skipped.
+
 ## 5. Threads, TLS, locks, and synchronization
 
 ### 5.1 Threads

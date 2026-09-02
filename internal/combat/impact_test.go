@@ -217,3 +217,48 @@ func init() {
 	// Ensure world import used
 	_ = world.WorldToCell
 }
+
+// ---------------------------------------------------------------------------
+// Feature ignition gate [06 §13.1] [06 R-WPN-05 §10]
+// ---------------------------------------------------------------------------
+
+func TestFirestarterGateReadsTheLowByte(t *testing.T) {
+	// The single read of `firestarter` lives in the feature-damage helper of
+	// the area sweep's feature phase and is a byte test, because the weapon
+	// loader stores the authored integer's low byte [06 R-WPN-05 §10].
+	if IsFirestarter(nil) {
+		t.Fatal("no weapon cannot ignite [06 §13.1]")
+	}
+	zero := weaponForStockpile(400, 10, 0, 0, false, false, false, 0, 0, 0)
+	if IsFirestarter(zero) {
+		t.Fatal("firestarter 0 does not ignite [06 §13.1]")
+	}
+	one := weaponForStockpile(401, 10, 0, 0, false, false, false, 0, 0, 1)
+	if !IsFirestarter(one) {
+		t.Fatal("the test is nonzero, not a threshold: 1 ignites [06 §13.1]")
+	}
+	// An authored 256 has a zero low byte and so ignites nothing
+	// [06 R-WPN-05 §10]. This is the case that separates the byte test from an
+	// int test.
+	truncated := weaponForStockpile(402, 10, 0, 0, false, false, false, 0, 0, 0x100)
+	if IsFirestarter(truncated) {
+		t.Fatal("an authored firestarter of 256 has a zero low byte and ignites nothing [06 R-WPN-05 §10]")
+	}
+	if wrapped := weaponForStockpile(403, 10, 0, 0, false, false, false, 0, 0, 0x101); !IsFirestarter(wrapped) {
+		t.Fatal("257 keeps a nonzero low byte and ignites [06 R-WPN-05 §10]")
+	}
+	// The two collaborating gates are the global feature-fire switch and the
+	// feature's own flammability [06 §13.1].
+	if !ShouldIgniteFeatureGate(true, true, one) {
+		t.Fatal("all three gates open must ignite [06 §13.1]")
+	}
+	if ShouldIgniteFeatureGate(false, true, one) {
+		t.Fatal("feature fire disabled globally cannot ignite [06 §13.1]")
+	}
+	if ShouldIgniteFeatureGate(true, false, one) {
+		t.Fatal("a non-flammable feature cannot ignite [06 §13.1]")
+	}
+	if ShouldIgniteFeatureGate(true, true, truncated) {
+		t.Fatal("the gate reads the same truncated byte [06 R-WPN-05 §10]")
+	}
+}

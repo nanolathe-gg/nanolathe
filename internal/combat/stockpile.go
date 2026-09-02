@@ -7,8 +7,6 @@
 package combat
 
 import (
-	"math"
-
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 )
@@ -329,69 +327,71 @@ func TryStockpileLaunch(svc *Service, slot *Slot, slotIdx int, tgt Target, tick 
 // Interceptor coverage square [06 §11.2] C29
 // ---------------------------------------------------------------------------
 
-// InterceptorCoverageHalfExtent returns the half-extent of the interceptor
-// coverage square in fixed-point raw units per [06 §11.2].
-// The axis-aligned square has side twice coverage<<16 around the stored aim
-// point [06 §11.2] C29 (prompt scope). Coverage is the authored integer weapon
-// coverage; shift left 16 converts to 16.16 fixed per [03 §2.1] I2.
+// InterceptorCoverageHalfExtent returns the `C << 16` bias term the coverage
+// compare adds to each axis delta, in raw 16.16 units [06 R-WPN-05 §10].
+// For an ordinary nonnegative coverage below 32,768 this is the half-extent of
+// the axis-aligned square in 16.16 units, which is what the name says; the
+// shift is formed in 32-bit arithmetic, so larger or negative authored values
+// wrap and the term stops being a half-extent. That wrap is the contract, not
+// an error case, and there is no "negative means none" guard
+// [06 R-WPN-05 §10].
 func InterceptorCoverageHalfExtent(coverage int32) int64 {
-	if coverage < 0 {
-		return 0 // TODO(question): negative coverage untraced [06 §11.2]
-	}
-	return int64(coverage) << 16 // coverage<<16 [06 §11.2] C29
+	return int64(int32(uint32(coverage) << 16)) // C<<16, 32-bit [06 R-WPN-05 §10]
 }
 
-// InterceptorCoverageSide returns the full side length of the square
-// (twice coverage<<16) per [06 §11.2] C29 for sizing tests.
+// InterceptorCoverageSide returns the `C << 17` limit the coverage compare
+// tests against, in raw 16.16 units [06 R-WPN-05 §10]. For ordinary coverage
+// it is the full side of the square; like the bias it is formed in 32-bit
+// arithmetic and wraps at or above 32,768, which is why it is not simply twice
+// the half-extent computed in a wider type [06 R-WPN-05 §10].
 func InterceptorCoverageSide(coverage int32) int64 {
-	return InterceptorCoverageHalfExtent(coverage) * 2 // side twice coverage<<16 [06 §11.2]
+	return int64(int32(uint32(coverage) << 17)) // C<<17, 32-bit [06 R-WPN-05 §10]
 }
 
-// WithinInterceptorCoverage tests whether the candidate's stored aim point lies
-// within the interceptor's inclusive axis-aligned coverage square per [06 §11.2].
-// The scan measures an axis-aligned square of side twice coverage<<16 around the
-// incoming projectile's stored aim point ([06 §4.x] consumed-linking semantics)
-// per C29 prompt, and per [06 §11.2] coverage is not ordinary fire range.
+// WithinInterceptorCoverage tests the interceptor scan's coverage compare on
+// the candidate's stored aim point [06 §11.2][06 R-WPN-05 §10].
 //
-// Both axes are tested with inclusive bounds and with wrapped unsigned
-// comparison semantics around coverage in fixed-point units [06 §11.2].
-// For ordinary nonnegative coverage without overflow this is absolute distance
-// [06 §11.2]. Malformed overflowed coverage remains TODO(question) [06 §11.2] unknown.
-// TODO(question): wrapped unsigned handling for overflow not modeled; using absolute compare placeholder.
+// The compare is 32-bit unsigned, per axis, X first and then Z, never Y, and
+// the subtraction is the interceptor *unit's* position minus the candidate's
+// stored aim point [06 R-WPN-05 §10]:
+//
+//	accept axis iff uint32((unit.axis - candidate.storedAim.axis) + (C<<16))
+//	                <= uint32(C<<17)
+//
+// The formula in uint32 is the whole contract — there is no separate rule for
+// malformed values [06 R-WPN-05 §10]. For ordinary nonnegative coverage below
+// 32,768 it is |delta| <= C world units, inclusive at the boundary, and an
+// axis-aligned square rather than a radius circle [06 §11.2]. A negative
+// coverage -k accepts exactly the complement of the open square of half-side
+// k: a candidate at or beyond k world units on both axes is accepted and one
+// inside is rejected. A coverage at or above 32,768 wraps C<<17 and accepts
+// whatever set the formula then gives [06 R-WPN-05 §10].
 func WithinInterceptorCoverage(candidateAim Vec3, interceptorPos Vec3, coverage int32) bool {
-	if coverage < 0 {
-		return false // TODO(question): negative coverage untraced [06 §11.2]
+	bias := uint32(coverage) << 16  // C<<16 [06 R-WPN-05 §10]
+	limit := uint32(coverage) << 17 // C<<17 [06 R-WPN-05 §10]
+	// The deltas are 32-bit subtractions of the 16.16 values [06 R-WPN-05 §10].
+	dx := uint32(int32(interceptorPos.X.Raw() - candidateAim.X.Raw()))
+	if dx+bias > limit {
+		return false // X is tested first [06 R-WPN-05 §10]
 	}
-	half := InterceptorCoverageHalfExtent(coverage) // [06 §11.2]
-	dx := candidateAim.X.Raw() - interceptorPos.X.Raw()
-	if dx < 0 {
-		dx = -dx
-	}
-	dz := candidateAim.Z.Raw() - interceptorPos.Z.Raw()
-	if dz < 0 {
-		dz = -dz
-	}
-	// Inclusive bounds [06 §11.2]
-	return dx <= half && dz <= half // axis-aligned square, not radius circle [06 §11.2]
+	dz := uint32(int32(interceptorPos.Z.Raw() - candidateAim.Z.Raw()))
+	return dz+bias <= limit // then Z; Y is never tested [06 R-WPN-05 §10]
 }
 
-// IsProjectileClaimed reports whether any live projectile already references
+// IsProjectileClaimed reports whether any projectile already references
 // candidate via its reservation link (TargetProjectile) per [06 §11.2].
 // Scans the current packed projectile prefix in increasing order [06 §11.2] I1.
 // Alliance is not consulted for this dedup; only the link matters [06 §11.2].
+// This is the claim pass, and like the candidate pass it does not test the dead
+// bit — a dead-but-uncompacted record's link still claims its candidate
+// [06 §11.2].
 func IsProjectileClaimed(svc *Service, candidate pool.Handle) bool {
 	if svc == nil || candidate == 0 {
 		return false
 	}
 	// Scan current prefix ascending, as interceptor acquisition does [06 §11.2] I1.
-	// Use dynamic Count each iteration? Count stable during scan per phase capture [01 §6.2], but reservation link scan must see all live links.
-	// Iterate over current count at call time [06 §11.2].
 	cnt := svc.Count()
 	for i := 0; i < cnt; i++ {
-		h := pool.Handle(i + 1)
-		if !svc.Alive(h) {
-			continue
-		}
 		if svc.Records[i].TargetProjectile == candidate {
 			return true // already referenced by any projectile's reservation link [06 §11.2]
 		}
@@ -425,9 +425,9 @@ func FindInterceptorTarget(svc *Service, interceptorPos Vec3, interceptorSide ui
 	cnt := svc.Count() // capture at entry [01 §6.2] [06 §5.2] projectile phase capture
 	for i := 0; i < cnt; i++ {
 		h := pool.Handle(i + 1)
-		if !svc.Alive(h) {
-			continue
-		}
+		// No dead-bit test: neither interceptor scan filters on liveness, so a
+		// dead-but-uncompacted targetable enemy record inside coverage and
+		// unclaimed is still selected [06 §11.2][06 R-WPN-05 §10].
 		rec := &svc.Records[i]
 		if rec.ShooterSide == interceptorSide {
 			continue // owner byte differs required, alliance not consulted [06 §11.2]
@@ -502,8 +502,14 @@ func AcquireInterceptorTargetForSpawn(svc *Service, interceptorPos Vec3, interce
 			slot.Ammo = 0
 		}
 	}
-	// TODO(question): dead-candidate behavior between aim and fire scans remains open [06 §11.2] unknown
-	// TODO(question): multiplayer reconstruction index-versus-pointer anomaly remains open [06 §11.2] unknown
+	// The two markers that used to stand here are closed. Dead-candidate
+	// behavior between the aim scan and this rescan is not a question: neither
+	// scan tests the dead bit, so the scans cannot distinguish a dead candidate
+	// from a live one, and "both dead" prevents a shot only through the
+	// coverage and claim state [06 §11.2][06 R-WPN-05 §10]. The
+	// index-versus-pointer anomaly belongs to the multiplayer reconstruction
+	// path, which Nanolathe does not implement; it stays Unknown in the
+	// research and out of scope here [06 §11.2][06 R-WPN-05 §10].
 	return h, candHandle, true
 }
 
@@ -514,16 +520,23 @@ func AcquireInterceptorTargetForSpawn(svc *Service, interceptorPos Vec3, interce
 // VictimSig is the signature packet published for each qualifying victim per
 // [06 §11.2]. It contains the victim's stored target position and weapon index
 // byte [06 §11.2].
+// The weapon byte is the one the weapon loader stamps into every record with
+// that record's own slot index, 0..255. Because an authored `ID` selects the
+// record slot ([02 "Weapon record"]), the byte is the low byte of the authored
+// ID for every record an ID selects, so `uint8(WeaponID & 0xFF)` is exact
+// [06 R-WPN-05 §10]. The signature exists to replicate the removal to other
+// endpoints; in a single-process game the local impact-selector call is the
+// whole effect and the byte has no consumer [06 R-WPN-05 §10].
 type VictimSig struct {
 	TargetPos Vec3  // stored target position [06 §11.2]
-	WeaponIdx uint8 // weapon index byte [06 §11.2] low byte of weapon ID
+	WeaponIdx uint8 // weapon record slot index [06 R-WPN-05 §10]
 }
 
 // PublishVictimSig builds the signature for a projectile per [06 §11.2].
 func PublishVictimSig(rec Projectile) VictimSig {
 	return VictimSig{
 		TargetPos: rec.TargetPos,              // stored target position [06 §11.2]
-		WeaponIdx: uint8(rec.WeaponID & 0xFF), // weapon index byte [06 §11.2] TODO(question): mapping of retail weapon index vs ID low byte remains untraced; low byte as placeholder
+		WeaponIdx: uint8(rec.WeaponID & 0xFF), // record slot index [06 R-WPN-05 §10]
 	}
 }
 
@@ -574,28 +587,34 @@ func FindVictimBySignature(svc *Service, sig VictimSig) (pool.Handle, bool) {
 }
 
 // ProjectileInInterceptorBlast tests whether a projectile lies within the
-// interceptor's unhalved areaofeffect radius per [06 §11.2] [06 §9.3] C29.
-// Uses the unhalved authored area value (no >>1) [06 §11.2] and strict
-// three-axis distance test (< area²) per [06 §8.1] projectile-link proximity
-// and [06 §9.3] interceptor-chain flag strict test [06 §11.2].
+// interceptor's unhalved areaofeffect per [06 §11.2][06 §9.3][06 R-WPN-05 §10].
 //
-// Distance is computed in integer world units (truncate toward zero [01 §8] I3)
-// from three-dimensional current-point positions [06 §8.1].
-// Halved vs unhalved distinction is critical for sizing test [06 §9.3] C29.
-// TODO(question): exact scale of victim height vs terrain/explosion center height comparison remains untraced beyond ordinary samples.
+// The metric is the sum of three truncated squares. With d.axis the raw 16.16
+// difference of the two records' current points [06 R-WPN-05 §10]:
+//
+//	((dx·dx)>>32) + ((dy·dy)>>32) + ((dz·dz)>>32)  <  area × area
+//
+// each square a 64-bit signed product arithmetically shifted right by 32 —
+// whole world units squared, truncated per axis — summed as a signed 32-bit
+// integer and compared strictly against the square of the *unhalved* 16-bit
+// areaofeffect. Squaring the whole 16.16 delta and truncating afterwards is not
+// the same as truncating the delta and squaring it: a delta of 1.9 world units
+// contributes 3, not 1 [06 R-WPN-05 §10]. That is why the halved/unhalved and
+// the truncation order both matter to the sizing.
+//
+// The Y term is the two projectile records' current heights in the same 16.16
+// domain as X and Z — no terrain sample, no separate scale; the "victim height"
+// is simply the victim record's current Y [06 R-WPN-05 §10]. The comparison is
+// widened to 64 bits so the 16-bit area's square is exact.
 func ProjectileInInterceptorBlast(victimPos, exploderPos Vec3, unhalvedArea int32) bool {
-	if unhalvedArea <= 0 {
-		return false
-	}
-	// Convert fixed to integer world units trunc toward zero [01 §8] I3
-	dx := victimPos.X.Int() - exploderPos.X.Int()
-	dy := victimPos.Y.Int() - exploderPos.Y.Int()
-	dz := victimPos.Z.Int() - exploderPos.Z.Int()
-	// Strict three-axis squared test [06 §8.1] [06 §9.3]
-	// Compare squared distance < radius² [06 §8.1]
-	dist2 := dx*dx + dy*dy + dz*dz
-	area2 := int64(unhalvedArea) * int64(unhalvedArea)
-	return int64(dist2) < area2 // strict < [06 §9.3] [06 §8.1] [06 §11.2]
+	dx := exploderPos.X.Raw() - victimPos.X.Raw() // raw 16.16 deltas [06 R-WPN-05 §10]
+	dy := exploderPos.Y.Raw() - victimPos.Y.Raw()
+	dz := exploderPos.Z.Raw() - victimPos.Z.Raw()
+	// 64-bit signed squares, arithmetic shift right 32, summed as int32
+	// [06 R-WPN-05 §10].
+	sum := int32((dx*dx)>>32) + int32((dy*dy)>>32) + int32((dz*dz)>>32)
+	area := int64(uint16(unhalvedArea)) // unhalved 16-bit areaofeffect [06 R-WPN-05 §10]
+	return int64(sum) < area*area       // strict < [06 §9.3][06 R-WPN-05 §10]
 }
 
 // CollectInterceptorVictims scans live non-self projectile records in pool
@@ -695,38 +714,3 @@ func ApplyInterceptorExplosion(svc *Service, exploder pool.Handle, exploderPos V
 		onVictims(victims, victimSigs, exploderSigs)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Firestarter [06 §13.1] C29 scope: single-site nonzero test if it belongs here
-// ---------------------------------------------------------------------------
-
-// IsFirestarter reports whether the weapon's firestarter value is nonzero per
-// [06 §13.1] — radial feature damage can ignite only when the weapon firestarter
-// value is nonzero [06 §13.1] (among other gates: feature fire globally enabled,
-// feature flammable). This is a single-site nonzero test (field !=0) per C29
-// prompt, included in stockpile.go because interceptor area enumeration and
-// feature fire handling are adjacent weapon-driven feature effects.
-// TODO(question): whether firestarter belongs strictly to stockpile.go vs impact.go remains open; placed here as C29 asks to include the nonzero test if it belongs here.
-func IsFirestarter(w *content.WeaponDef) bool {
-	if w == nil {
-		return false
-	}
-	return w.Firestarter != 0 // [06 §13.1] nonzero enables ignition
-}
-
-// ShouldIgniteFeatureGate tests the collaborative gate for feature fire
-// ignition via weapon firestarter per [06 §13.1] C29.
-// Returns true only when global feature fire enabled, feature is flammable,
-// and weapon firestarter is nonzero [06 §13.1].
-func ShouldIgniteFeatureGate(globalFeatureFireEnabled bool, featureFlammable bool, w *content.WeaponDef) bool {
-	if !globalFeatureFireEnabled {
-		return false
-	}
-	if !featureFlammable {
-		return false
-	}
-	return IsFirestarter(w) // [06 §13.1] single-site nonzero test
-}
-
-// Ensure imports used: math for sqrt alternative (not needed but keep for future malformed cases)
-var _ = math.Sqrt

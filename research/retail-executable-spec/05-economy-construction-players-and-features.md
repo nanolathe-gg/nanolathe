@@ -1671,7 +1671,11 @@ the cloak gate is due, the engine:
    earlier revision that named the operational/building bit was imprecise;
    slots 14 and 15 are cue slots raised with no caption text, not COB
    callbacks — see [R-ECO-01 §8]);
-6. if unaffordable, takes the failure transition without a partial payment.
+6. if unaffordable, takes the failure transition without a partial payment;
+7. if the gate is **not** due — the request bit is clear, the decloak-forced
+   bit is set, or the reveal deadline has not been reached — takes the same
+   failure transition (bit 2 cleared) with no cost selection and no compare
+   ([R-ECO-01 §9] "every exit", 2026-09-02).
 
 Because units are visited in stable order, simultaneous cloak costs are
 sequential: an earlier slot can make a later slot fail during the same pass.
@@ -1829,13 +1833,73 @@ request bit is set is gated and charged exactly like a finished one. For an
 settlement pass and, when the owner can pay, is cloaked while still being
 built.
 
-**Established (bounded negative) — the second bit is inert.** The status bit
-whose clearness the gate also requires is *read* only here. A search of the
-complete decompiled function set found no writer that sets it, and the spawn
-initialiser preserves rather than sets it, so the term is always satisfied in
-practice. It is recorded because it is part of the literal predicate; it is
-not a behavior an implementation can observe. Its intended meaning is
-**Unknown** — decider: static trace over the regions the export still misses.
+**Correction (2026-09-02, RWU-19-29) — the second bit is not inert.** The
+previous text said: "**Established (bounded negative) — the second bit is
+inert.** The status bit whose clearness the gate also requires is *read* only
+here. A search of the complete decompiled function set found no writer that
+sets it, and the spawn initialiser preserves rather than sets it, so the term
+is always satisfied in practice. … Its intended meaning is **Unknown** —
+decider: static trace over the regions the export still misses." That search
+predated the sensor-phase trace and was wrong. The bit is the **decloak-forced**
+latch of [03 R-VIS-01 §4] and [03 R-VIS-01 §6]: the sensor phase's first pass
+clears it on every live unit every tick, and its proximity-breach pass sets it
+again on the same visit that stamps the `tick + 90` deadline. Its meaning is
+therefore Established. Because the breach writes the deadline on the same
+visit, the bit's own contribution to the gate is observable only on the breach
+tick itself (where the deadline term also fails); an implementation that
+carries the breach as the deadline alone diverges by nothing, but the term is
+real and a clone should keep it.
+
+**Closed — every exit of the cloak block writes the instance bit (2026-09-02,
+RWU-19-29).** Established at instruction level. The block's own entry test —
+the owner record's existence word is non-zero and its control byte is not the
+observer value 3 — is already implied by the settlement gate chain (steps 1
+and 5 of "Settlement cadence"), so for every player that settles, the block
+runs for every unit of the slice. Inside it the three gate terms are tested in
+order — request bit set; decloak-forced bit clear; `currentTick >= deadline`
+as an unsigned, inclusive compare — and **every** failure and every success
+ends at the same transition-service call ([R-ECO-01 §8]) with bit 2 as the
+mask and the outcome as the selector:
+
+| Exit | Bit 2 (instance cloaked) |
+|---|---|
+| (a) request bit clear — after `Cloak_Off`, or never requested | cleared |
+| (b) decloak-forced bit set — the breach tick | cleared |
+| (c) deadline not yet reached — after a stroke's `+150`/`+300`/`+900`, a shot's `+600`, or the breach's `+90` | cleared |
+| (d) gate due, integerized cost `<=` live energy stock | **set** (stock debited, request recorded) |
+| (e) gate due, cost `>` stock | cleared (no partial payment) |
+
+No exit leaves the bit alone, and the block never reads the bit. The pseudocode
+above shows only arms (d) and (e); arms (a)–(c) are the `else` of the gate,
+with no cost selection and no compare. WU-19-92's implementation assumed
+exactly this as a Supported inference — its comment reads: "gate not due at
+all — CLEAR bit 2. Supported inference, not a traced arm: `TODO(question)`:
+whether the settlement clears the instance bit on a not-due pass, or leaves it
+and the reveal happens elsewhere — decider: a trace of the debit block's exit
+paths." The decider is met; the inference is confirmed and the marker can
+close. Consequences a clone must preserve: `Cloak_Off` decloaks on the
+owner's *next settlement pass*, not on the order; a reveal stamp decloaks on
+the next pass, so a unit can stay hidden up to one settlement interval (30
+ticks) after its last stroke or shot; and since the transition write is
+unconditional but its edge notifications are suppressed when the byte did not
+change ([R-ECO-01 §8]), arms (a)–(c) and (e) on an already-visible unit raise
+nothing and send nothing.
+
+**Established — the instance bit's writers, complete.** Bit 2 of the
+operational byte has exactly one *deciding* writer: this block, through the
+transition service — the only caller in the image that passes the service a
+mask of bit 2 alone. Every other writer copies a byte: the unit constructor
+zeroes the whole operational byte at creation; the save-game restore writes
+the persisted byte (doc 08); the ownership-transfer service (reached from
+`Capture`'s completion and from the network transfer paths) copies the old
+instance's whole operational byte onto the replacement unit through two
+transition calls — set the bits that are set, then clear the complement — so
+a captured cloaked unit arrives with bit 2 set and pays from its new owner's
+next pass; and the network state appliers write the received byte on
+remote-controlled slots (doc 08). The reveal-stamp sites ([03 R-VIS-01 §6]
+census), the sensor breach and first pass, `Cloak_On`/`Cloak_Off`, and the
+build-completion service write the status word or the deadline and never the
+operational byte.
 
 **Established — cost selection and conversion.** The cost is `cloakcostmoving`
 when the unit's movement-mode bits are non-zero and `cloakcost` otherwise.
