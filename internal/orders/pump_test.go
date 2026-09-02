@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
@@ -111,9 +112,20 @@ func TestPumpResultCodes(t *testing.T) {
 		}
 	})
 	t.Run("code2", func(t *testing.T) {
-		// [04 R-FAC-02 §4]: "a *hold* (code 2) does NOT stop the walk — the
-		// next record is visited in the same pass." The held record itself is
-		// dispatched once and left unchanged.
+		// [04 R-ORD-01 §10]: a hold reloads the HEAD, so the held record is
+		// dispatched again and the record behind it is never reached. The hold
+		// leaves the phase alone.
+		//
+		// This subtest used to assert the dispatch order {held record,
+		// follower}, on [04 R-FAC-02 §4]'s "a *hold* (code 2) does NOT stop the
+		// walk — the next record is visited in the same pass", which §4's own
+		// 2026-09-02 correction withdraws.
+		//
+		// The handler arms an unsatisfiable gate on the second visit, which is
+		// §10's termination invariant written into the fixture: "Every handler
+		// that returns 2 (hold) or 4 has, before returning, either armed a gate
+		// on the record … or changed the segment head; otherwise the primary
+		// loop would never terminate."
 		rng.SeedGlobal(3, 0)
 		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
@@ -121,6 +133,9 @@ func TestPumpResultCodes(t *testing.T) {
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 			seen = append(seen, n.Param1)
 			if n.Param1 == 1 {
+				if len(seen) > 1 {
+					n.DynamicGate = 0x400 // nonzero, nothing satisfied [04 §3.3] step 3
+				}
 				return Code(2)
 			}
 			return Code(3)
@@ -133,8 +148,8 @@ func TestPumpResultCodes(t *testing.T) {
 		if q.primary[0].Phase != 7 {
 			t.Fatalf("code2 phase changed")
 		}
-		if len(seen) != 2 || seen[0] != 1 || seen[1] != 2 {
-			t.Fatalf("code2 dispatch order %v, want the held record then its follower", seen)
+		if len(seen) != 2 || seen[0] != 1 || seen[1] != 1 {
+			t.Fatalf("code2 dispatch order %v, want the held record twice — the hold reloads the head [04 R-ORD-01 §10]", seen)
 		}
 	})
 	t.Run("code3", func(t *testing.T) {
@@ -159,7 +174,8 @@ func TestPumpResultCodes(t *testing.T) {
 	})
 	t.Run("code4", func(t *testing.T) {
 		// Code 4 shares code 2's row in [04 §3.3] and therefore its walk
-		// effect: the next record is visited in the same pass.
+		// effect: the head reload of [04 R-ORD-01 §10], not a visit to the
+		// record behind it (what this subtest used to assert).
 		rng.SeedGlobal(4, 0)
 		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
@@ -167,6 +183,9 @@ func TestPumpResultCodes(t *testing.T) {
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 			seen = append(seen, n.Param1)
 			if n.Param1 == 1 {
+				if len(seen) > 1 {
+					n.DynamicGate = 0x400 // §10's hold invariant: arm, or never terminate
+				}
 				return Code(4)
 			}
 			return Code(3)
@@ -179,8 +198,8 @@ func TestPumpResultCodes(t *testing.T) {
 		if q.primary[0].Phase != 1 {
 			t.Fatalf("code4 phase")
 		}
-		if len(seen) != 2 || seen[0] != 1 || seen[1] != 2 {
-			t.Fatalf("code4 dispatch order %v, want the held record then its follower", seen)
+		if len(seen) != 2 || seen[0] != 1 || seen[1] != 1 {
+			t.Fatalf("code4 dispatch order %v, want the held record twice — the hold reloads the head [04 R-ORD-01 §10]", seen)
 		}
 	})
 	t.Run("code5", func(t *testing.T) {
@@ -444,6 +463,15 @@ func TestDeadline(t *testing.T) {
 	calls := 0
 	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 		calls++
+		if calls > 1 {
+			// The hold reloads the head [04 R-ORD-01 §10], so the record is
+			// dispatched a second time; §10's invariant is that a hold has armed
+			// a gate first. This one arms on the second visit so the pass ends
+			// there and the deadline-bit assertion below is about the FIRST
+			// dispatch, the one step 1 raised bit 0 for.
+			n.DynamicGate = 0x400
+			return Code(2)
+		}
 		if s&1 == 0 {
 			t.Fatalf("deadline satisfied bit not set s %x", s)
 		}
@@ -460,16 +488,18 @@ func TestDeadline(t *testing.T) {
 	q.Pump(u, 20)
 	// [04 §3.3] step 1 clears the deadline and raises bit 0; step 4 consumes
 	// the satisfied bits and clears the dynamic gate before the handler runs.
-	// The hold neither restores the gate nor re-dispatches the record: with no
-	// record behind it the walk simply runs out [04 R-FAC-02 §4].
-	if calls != 1 {
-		t.Fatalf("deadline dispatches %d, want exactly one", calls)
+	// The hold does not restore the gate; it reloads the head, so the record is
+	// dispatched a second time and the pass ends on the gate that second visit
+	// armed [04 R-ORD-01 §10]. Before WU-19-73 the hold advanced a cursor and,
+	// with no record behind it, the walk simply ran out after one dispatch.
+	if calls != 2 {
+		t.Fatalf("deadline dispatches %d, want two: the hold reloads the head [04 R-ORD-01 §10]", calls)
 	}
 	if q.primary[0].Deadline == 20 {
 		t.Fatalf("deadline not cleared after arrival")
 	}
-	if q.primary[0].DynamicGate != 0 {
-		t.Fatalf("gate %x after a hold, want the pump's step-4 clear to stand", q.primary[0].DynamicGate)
+	if q.primary[0].DynamicGate != 0x400 {
+		t.Fatalf("gate %#x after the second hold, want the gate that hold armed (0x400)", q.primary[0].DynamicGate)
 	}
 }
 
@@ -1224,5 +1254,97 @@ func TestArmedDeadlineIsMeasuredFromThePumpTick(t *testing.T) {
 	q.Pump(u, tick+wait)
 	if visits != 2 {
 		t.Fatalf("handler ran %d times, want a second visit once the deadline arrived [04 §3.3]", visits)
+	}
+}
+
+// TestRemoveHeadSurvivesACancelNoticeThatRemovesTheHead reproduces, without
+// retail assets, the crash a `Coast to Coast` skirmish hit at tick 3865:
+// `panic: runtime error: slice bounds out of range [1:0]` inside RemoveHead.
+//
+// The mechanism is a double removal of one record. Every removal path runs the
+// record cleanup, and the cleanup sends [R-ORDER-02 §2]'s cancel notification
+// when the record's dynamic gate still holds bit 1 (value 2). For the three
+// construction rows that notification is the production machine's
+// cancel-current, and cancel-current's own epilogue removes the head — so by
+// the time the outer removal spliced the segment, the record was already gone.
+// A positional `q.primary[1:]` then ran off an emptied segment; with a record
+// queued behind the head it would instead have silently dropped that record.
+//
+// The fixture is the same shape with none of construction's machinery: the head
+// is a handler-less driven row (`MobileBuild`) carrying gate bit 1, and the
+// binding's CancelNotice removes the head the way cancel-current does.
+func TestRemoveHeadSurvivesACancelNoticeThatRemovesTheHead(t *testing.T) {
+	buildID := Lookup("MobileBuild")
+	moveID := Lookup("Move_Ground")
+	if buildID == 0 || moveID == 0 {
+		t.Fatalf("descriptor lookup failed")
+	}
+	u := newTestUnit()
+	var q *Queue
+	notices := 0
+	q = &Queue{binding: &QueueBinding{
+		Lookup: func(h pool.Handle) *units.Unit {
+			if h == u.Handle {
+				return u
+			}
+			return nil
+		},
+		Work: &WorkAdapter{
+			CancelNotice: func(owner *units.Unit, n *Node, tick uint32) bool {
+				notices++
+				// Cancel-current's epilogue: release the gate first so the
+				// re-entry sees a record no longer waiting on bit 1, then
+				// remove the head — exactly what DeliverCancelNotice reaches.
+				n.DynamicGate &^= 2
+				q.RemoveHead()
+				return true
+			},
+		},
+	}}
+	q.Push(buildID, Node{Owner: u.Handle, DynamicGate: 0xa, Phase: 3})
+	q.Push(moveID, Node{Owner: u.Handle})
+	if len(q.primary) != 2 {
+		t.Fatalf("fixture queue %d records, want 2", len(q.primary))
+	}
+	head, behind := q.primary[0], q.primary[1]
+
+	removed := q.RemoveHead()
+
+	if notices != 1 {
+		t.Fatalf("cancel notices %d, want exactly one [R-ORDER-02 §2]", notices)
+	}
+	if removed != head {
+		t.Fatalf("RemoveHead returned %p, want the record it was asked to remove %p", removed, head)
+	}
+	// The record behind the head is the survivor. A positional splice would
+	// have removed it as the second half of the double removal.
+	if len(q.primary) != 1 || q.primary[0] != behind {
+		t.Fatalf("queue after the double removal has %d records, want only the record behind the head", len(q.primary))
+	}
+	if q.indexOfPrimary(head) >= 0 {
+		t.Fatal("the cancelled head is still linked")
+	}
+	// And the degenerate case the crash actually hit: nothing behind the head,
+	// so the notification empties the segment before the outer splice runs.
+	q2 := &Queue{}
+	q2.binding = &QueueBinding{
+		Lookup: func(h pool.Handle) *units.Unit {
+			if h == u.Handle {
+				return u
+			}
+			return nil
+		},
+		Work: &WorkAdapter{CancelNotice: func(owner *units.Unit, n *Node, tick uint32) bool {
+			n.DynamicGate &^= 2
+			q2.RemoveHead()
+			return true
+		}},
+	}
+	q2.Push(buildID, Node{Owner: u.Handle, DynamicGate: 0xa, Phase: 3})
+	if got := q2.RemoveHead(); got == nil {
+		t.Fatal("RemoveHead on the lone cancelled record returned nil")
+	}
+	if len(q2.primary) != 0 {
+		t.Fatalf("queue holds %d records after removing its only one", len(q2.primary))
 	}
 }

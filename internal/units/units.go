@@ -130,6 +130,18 @@ const (
 	StandingFieldMask = uint32(3)
 )
 
+// The build-page field lives in the same status word: the page-shown indicator
+// at bit 22 and the page number at bits 23-25 [07 §9]. Unit creation seeds
+// page 1 with the indicator set when the definition's page-count byte is at
+// least 2, and clears both otherwise; **no click writes the field**
+// [07 R-HUD-04 §4 "First build page"][07 R-HUD-03 §6]. internal/hud owns the
+// same two masks for the presentation side and cannot be imported here.
+const (
+	buildPagedStatus     = uint32(1) << 22
+	buildPageNumberShift = 23
+	buildPageMultiPage   = 2
+)
+
 // initialStatusFlags is the status word the allocator initializer produces for
 // a freshly created unit [08 "Classifier eligibility, destinations, and
 // order"].
@@ -162,6 +174,14 @@ func initialStatusFlags(def *content.UnitDef) uint32 {
 	// staged at their hold value with nothing able to change them.
 	flags |= (uint32(def.StandingMoveOrder) & StandingFieldMask) << StandingMoveShift
 	flags |= (uint32(def.StandingFireOrder) & StandingFieldMask) << StandingFireShift
+	// The first build page. A definition with two or more authored pages starts
+	// its units on page 1 with the page-shown indicator set; one page or none
+	// clears both. This is the field's only writer — the BUILD gadget's click
+	// does not write it, so the page a builder is on is the one creation seeded
+	// or a later page move wrote [07 R-HUD-04 §4 "First build page"].
+	if def.BuildPageCount >= buildPageMultiPage {
+		flags |= buildPagedStatus | uint32(1)<<buildPageNumberShift
+	}
 	return flags
 }
 

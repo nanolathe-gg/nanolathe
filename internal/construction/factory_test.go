@@ -690,7 +690,7 @@ func TestRallyInheritanceOrdering(t *testing.T) {
 	if pqBefore != 0 {
 		t.Fatalf("product queue not empty")
 	}
-	svc.rallyInheritance(factory, prod)
+	svc.rallyInheritance(factory, prod, 0)
 	pq := orders.QueueForUnit(prod)
 	if pq.Binding() != orderBinding {
 		t.Fatal("factory-created product queue lost its owning order binding")
@@ -758,7 +758,7 @@ func TestRallyInheritanceOrdering(t *testing.T) {
 	q2.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 1, Phase: uint8(State3)})
 	hp2, _ := w2.Create(prodDef, 0, world.CellToWorld(10), 0, world.CellToWorld(10))
 	prod2 := w2.Unit(hp2)
-	svc.rallyInheritance(factory2, prod2)
+	svc.rallyInheritance(factory2, prod2, 0)
 	pq2 := orders.QueueForUnit(prod2)
 	foundPark := false
 	parkID := orders.Lookup("Park")

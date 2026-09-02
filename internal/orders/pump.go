@@ -1382,26 +1382,49 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 	q.lastPumpTick = tick
 	// No iteration cap here (ORD-02): a handler looping through the continue
 	// codes wedges exactly as retail's does [04 §3.3][I11].
-	if len(q.primary) == 0 {
-		// The idle refill from `defaultmissiontype` [04 §3.3]. A unit whose
-		// primary segment has emptied is handed its standing auto-op record —
-		// for every stock aircraft that is `VTOL_Standby`, whose no-cargo arm
-		// pushes `VTOL_LandIfCan`, which is how an idle aircraft comes home.
-		//
-		// This was written, exported and tested but deliberately not called,
-		// because the landing-legality predicate `VTOL_LandIfCan` depends on was
-		// a placeholder and a factory's first aircraft product landed on its own
-		// plant, stalling the plant's build-stance handshake forever. That
-		// predicate is now traced and implemented [04 R-AIR-01 §6a], and it
-		// refuses a finished building's yard cells, so the product no longer
-		// parks on the plant that made it.
-		q.refillIdle(u)
+	//
+	// The walk is HEAD-ONLY [04 R-ORD-01 §10]: after every non-returning result
+	// code the loop reloads the front head and applies steps 1 to 4 to it.
+	// There is no cursor, because "continue walking" never means "visit the
+	// record behind this one" — a record behind the head is reached in a pass
+	// only when the head is unlinked (codes 5, 8, 9-not-last, the above-9
+	// helper), rotated to the tail (code 6), or replaced by a handler's head
+	// insert ([04 R-ORD-01 §1]).
+	//
+	// Retired (WU-19-73): this loop used to carry `for cursor := 0; cursor <
+	// len(q.primary);` with `cursor++` on a hold and `cursor = 0` on every
+	// other continuing code. The cursor was WU-19-4's generalisation of
+	// [04 R-FAC-02 §4]'s "a *hold* (code 2) does NOT stop the walk — the next
+	// record is visited in the same pass", which §4's own 2026-09-02 correction
+	// withdraws: the primary pump reloads the head after every code, so a
+	// code-2 hold re-runs whatever is at the head, never the record behind it.
+	for {
 		if len(q.primary) == 0 {
+			// §10's first line: "if rec is null: (auto-order spawn for an idle
+			// mover, §3.4a) return". The idle refill from
+			// `defaultmissiontype` [04 §3.3]. A unit whose primary segment has
+			// emptied is handed its standing auto-op record — for every stock
+			// aircraft that is `VTOL_Standby`, whose no-cargo arm pushes
+			// `VTOL_LandIfCan`, which is how an idle aircraft comes home.
+			//
+			// This was written, exported and tested but deliberately not called,
+			// because the landing-legality predicate `VTOL_LandIfCan` depends on was
+			// a placeholder and a factory's first aircraft product landed on its own
+			// plant, stalling the plant's build-stance handshake forever. That
+			// predicate is now traced and implemented [04 R-AIR-01 §6a], and it
+			// refuses a finished building's yard cells, so the product no longer
+			// parks on the plant that made it.
+			//
+			// Corrected (WU-19-73): the refill used to fall through into the
+			// walk, so a refilled record was dispatched in the same pass. The
+			// refill closure of [04 §3.3] states the opposite outright — "It
+			// returns immediately after the insert — the record is dispatched
+			// on the unit's next pump visit, never in the same one" — and §10's
+			// loop returns on the null head for the same reason.
+			q.refillIdle(u)
 			return
 		}
-	}
-	for cursor := 0; cursor < len(q.primary); {
-		n := q.primary[cursor]
+		n := q.primary[0]
 		if n.Deadline != -1 && tick >= uint32(n.Deadline) {
 			n.Deadline = -1
 			n.Satisfied |= 1 // ordinary deadline expiry raises only bit 0 [04 R-ORD-01 §0]
@@ -1496,40 +1519,44 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 			// needs the tick to form one.
 			code = handler(u, n, satisfied, tick)
 		}
-		// [04 §3.3] codes 2 and 4 "continue walking unchanged", and
-		// [04 R-FAC-02 §4] states what continuing means for them without
-		// naming a descriptor: "The primary pump stops its walk at the first
+		// [04 §3.3] codes 2 and 4 "continue walking unchanged". Continuing is
+		// the head reload of [04 R-ORD-01 §10], so a hold re-runs the record
+		// that is at the head *after* the handler returned — the same record
+		// when the handler only armed a gate (the reload then finds it blocked
+		// and the pass ends), or the record a handler head-inserted or
+		// re-identified in its place.
+		//
+		// Corrected (WU-19-73). WU-19-4 made this arm `cursor++` for every row,
+		// on [04 R-FAC-02 §4]'s "The primary pump stops its walk at the first
 		// record whose gate is non-zero and whose satisfied set is empty; a
 		// *hold* (code 2) does NOT stop the walk — the next record is visited
-		// in the same pass." So a hold advances the cursor for EVERY row.
-		//
-		// Removed (WU-19-4): this branch used to require `desc.Name ==
-		// "BeCarried"`, which is the general rule wearing one descriptor's
-		// name. It was written for the factory composition — the carried
-		// record's ten-tick expiry is the only opportunity to visit the
-		// GetBuilt record behind it — and every other row that returned a hold
-		// took the restart-from-head arm below instead, which re-tests the
-		// head's freshly armed gate and ends the pass. That is the same
-		// observable outcome for a row whose hold arms a gate or a deadline
-		// (both do, through the deadline setter's gate bit 0
-		// [04 R-ORD-01 §1]), and the wrong one for any record queued behind it.
+		// in the same pass." That sentence is withdrawn by §4's own 2026-09-02
+		// correction — it was the reasoning behind the retracted `t0 + 301` pad
+		// dwell — and [04 R-ORD-01 §10] gives the loop in full: nothing ever
+		// resumes at the *next* record. §10 also names the invariant this arm
+		// now relies on: every handler returning 2 or 4 has first armed a gate
+		// on the record or changed the segment head, or the loop would not
+		// terminate. `BeCarried` phase 1 (deadline 10, code 2, every visit) is
+		// its canonical example.
 		if code == 2 || code == 4 {
-			cursor++
 			continue
 		}
 		if desc.Name == "GetBuilt" {
+			// The construction service's own result handling. Under the
+			// head-only walk this record is always the front head, so the
+			// removal never tombstones ([R-ORDER-02 §2]) and the pass always
+			// continues into the record the unlink exposed — which is how the
+			// rally or `Park` that `handleGetBuiltOrder` appended is dispatched
+			// in the same pass [04 R-FAC-02 §4].
 			if code == 5 || code == 8 {
-				q.RemovePrimaryNode(n, cursor != 0)
-				if cursor == 0 {
-					continue
-				}
+				q.RemovePrimaryNode(n, false)
+				continue
 			}
 			return
 		}
 		if !q.applyPrimaryResultCode(n, code, tick) {
 			return
 		}
-		cursor = 0
 	}
 }
 
@@ -1543,6 +1570,38 @@ func (q *Queue) indexOfPrimary(n *Node) int {
 	return -1
 }
 
+// spliceOutPrimary unlinks n from the primary segment by identity and reports
+// whether it was still linked. It takes no index from the caller, and that is
+// the point: it is called AFTER the removal cleanup, which can re-enter the
+// queue.
+//
+// Every removal path runs cleanupNode, and cleanupNode sends the cancel
+// notification of [R-ORDER-02 §2] — "when the record's dynamic gate mask still
+// holds bit 1 (value 2) at removal, invoke the operation handler with that
+// cancel-notification mask". That handler is arbitrary work: for the three
+// construction rows it is the production machine, whose cancel-current epilogue
+// removes the head itself; for a descriptor row it may head-insert a spawned
+// record ([04 R-ORD-01 §1]) or cancel the whole queue (code 7). So the segment
+// the caller measured before the cleanup is not the segment that exists after
+// it, and an index taken before is stale.
+//
+// In retail the queue is a linked list and a record's destructor unlinks the
+// node itself — unlinking a node that the notification already unlinked is a
+// no-op there, because its links are gone. Our segment is a slice, which has no
+// such property: the same double removal drops whichever record has since taken
+// slot 0, or runs off the end of an emptied segment. Re-locating the record is
+// how the slice keeps the linked list's semantics; it is not a bounds guard,
+// and it removes exactly the record the caller named or nothing at all.
+func (q *Queue) spliceOutPrimary(n *Node) bool {
+	idx := q.indexOfPrimary(n)
+	if idx < 0 {
+		return false // the cancel notification already unlinked it
+	}
+	copy(q.primary[idx:], q.primary[idx+1:])
+	q.primary = q.primary[:len(q.primary)-1]
+	return true
+}
+
 // unlinkPrimary removes the dispatched record from the primary segment and
 // runs the removal cleanup [05 "Queue subtraction"]. The record is found by
 // identity rather than assumed to be at the front: a handler that head-inserts
@@ -1552,7 +1611,11 @@ func (q *Queue) indexOfPrimary(n *Node) int {
 //
 // The tombstone follows [R-ORDER-02 §2]: it is set on every freed record
 // except the one that is the primary segment's front head at that moment, and
-// it is what suppresses that record's weapon-target-clear notification.
+// it is what suppresses that record's weapon-target-clear notification. The
+// tombstone decision is made before the cleanup, because it is about where the
+// record stood when the removal was decided; the unlink is made after it, by
+// identity, because the cleanup's cancel notification can move or remove
+// records (see spliceOutPrimary).
 func (q *Queue) unlinkPrimary(n *Node) {
 	idx := q.indexOfPrimary(n)
 	if idx < 0 {
@@ -1562,8 +1625,7 @@ func (q *Queue) unlinkPrimary(n *Node) {
 		n.Flags |= FlagTombstone
 	}
 	q.cleanupNode(n)
-	copy(q.primary[idx:], q.primary[idx+1:])
-	q.primary = q.primary[:len(q.primary)-1]
+	q.spliceOutPrimary(n)
 	q.ensureSingleActive() // mark moves to the successor [04 §3.3]
 }
 
@@ -1576,12 +1638,13 @@ func (q *Queue) unlinkPrimary(n *Node) {
 // segment tail, code 7 is the exclusive whole-queue cancel, code 9's
 // last-record arm re-arms with RNG(30) [R-P0-01].
 //
-// Returns false when the walk stops for this pump. Note that §3.3 names exactly
-// one stop — step 3's gate test, applied to a record the walk reaches — and the
-// codes below that return false do so because the section's consequence list
-// says the pass ends there (code 7 returns, above-9 returns, code 9's
-// last-record arm and code 3 arm a wait). Code 3's is the one the section does
-// not settle; see the marker on that arm.
+// Returns false when the walk stops for this pump. §3.3 names exactly one stop
+// — step 3's gate test, applied to the head the loop reloads
+// ([04 R-ORD-01 §10]) — and the codes below that return false do so because
+// the section's consequence list says the pass ends there: code 7 and the
+// above-9 helper return outright, and code 9's last-record arm and code 3 arm a
+// wait on the head, which the reload's gate test then refuses. Returning false
+// on those two is the reload written out.
 func (q *Queue) applyPrimaryResultCode(n *Node, code Code, tick uint32) bool {
 	switch code {
 	case 0:
@@ -1593,32 +1656,14 @@ func (q *Queue) applyPrimaryResultCode(n *Node, code Code, tick uint32) bool {
 	case 3:
 		n.DynamicGate = 1                               // [04 §3.3] lowest gate bit
 		n.Deadline = int32(tick + 30 + q.randBelow15()) // [04 §3.3][I4] wait 30..44; the only arm drawing RNG(15)
-		// TODO(question): where does code 3's "continue" resume? [04 §3.3]'s
-		// table row reads "set the lowest gate bit, set the deadline to the
-		// current tick plus 30 plus a random value below 15, and continue —
-		// range 30 to 44", while the same section's step 3 reads "If the record
-		// has a nonzero gate mask and nothing in it is satisfied, the walk stops
-		// for this tick." The section never says which record the walk resumes
-		// at, and the two sentences compose differently depending on the answer:
-		//
-		//   - resuming at the SAME record, the gate this arm just armed has
-		//     nothing satisfied (the deadline is 30+ ticks out), so step 3 ends
-		//     the pass. That is the outcome this `return false` produces, and it
-		//     is what §3.3's own consequence list describes — "one pump call can
-		//     cascade a record through several phases in the same tick until a
-		//     waiting or blocked code appears", code 3 being the waiting code.
-		//     [04 R-FAC-02 §4] singles out code 2 as the code that "does NOT
-		//     stop the walk — the next record is visited in the same pass",
-		//     which would be unremarkable if code 3 behaved the same way.
-		//   - resuming at the NEXT record, the walk runs the record behind this
-		//     one in the same pass and only stalls on the following tick.
-		//
-		// The two differ for one tick per wait, and the difference is visible
-		// wherever a record behind a waiting one would install a goal or take a
-		// draw. Nothing is invented here: the outcome-preserving reading is kept
-		// and the divergence, if it is one, is bounded to that tick.
-		// What would settle it: whether the executable's pump loop reloads the
-		// list head or advances a cursor after this arm's shared draw epilogue.
+		// Closed (WU-19-73) by [04 R-ORD-01 §10], which settles the question
+		// this arm carried as a TODO: the loop reloads the FRONT HEAD after
+		// every non-returning code and applies the gate test to it. This arm
+		// just armed the head's own gate with a deadline 30 or more ticks out,
+		// so the reload finds it blocked and the pass ends. `return false` is
+		// therefore not merely outcome-preserving — it is the rule, and the
+		// pump reaches it one step earlier than retail does (retail reloads and
+		// re-gates; we return, which is the same observable pass).
 		return false
 	case 5, 8:
 		q.unlinkPrimary(n) // [04 §3.3][05 "Queue subtraction"]
@@ -1874,13 +1919,27 @@ func MobileBuildBlockedVisit(n *Node, tick uint32) (statusText string, code Code
 	return MobileBuildWaitingText, 2
 }
 
+// RemoveHead removes the primary segment's front record with the ordinary
+// removal cleanup.
+//
+// Fixed (WU-19-73): this used to drop slot 0 positionally — `q.primary =
+// q.primary[1:]` — after the cleanup had already run. It crashed a `Coast to
+// Coast` skirmish at tick 3865 with `slice bounds out of range [1:0]`: the head
+// was a `MobileBuild` record carrying gate bit 1 (gate `0xa`), so the cleanup
+// sent [R-ORDER-02 §2]'s cancel notification, which for a construction row is
+// the production machine's cancel-current — and cancel-current's own epilogue
+// removes the head. The segment was already empty when the positional re-slice
+// ran. On a queue with a record behind the head the same double removal would
+// have silently dropped that record instead of crashing. The unlink now goes
+// through spliceOutPrimary, which re-locates the record by identity after the
+// cleanup and removes nothing when the notification already removed it.
 func (q *Queue) RemoveHead() *Node {
 	if q == nil || len(q.primary) == 0 {
 		return nil
 	}
 	n := q.primary[0]
 	q.cleanupNode(n)
-	q.primary = q.primary[1:]
+	q.spliceOutPrimary(n)
 	q.ensureSingleActive()
 	if n != nil {
 		n.MoveState = MoveArrived
@@ -2004,7 +2063,10 @@ func (q *Queue) RemovePrimaryNode(node *Node, tombstone bool) *Node {
 		removed.Flags &^= FlagActive
 		q.cleanupNode(removed)
 	}
-	q.primary = append(q.primary[:idx], q.primary[idx+1:]...)
+	// By identity after the cleanup, not by the index taken before it: the
+	// cleanup's cancel notification can unlink this record itself or insert
+	// ahead of it (see spliceOutPrimary).
+	q.spliceOutPrimary(removed)
 	q.ensureSingleActive()
 	return removed
 }

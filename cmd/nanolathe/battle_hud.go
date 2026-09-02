@@ -141,6 +141,15 @@ type retailBattleHUD struct {
 	// [07 R-HUD-04 §1][07 R-CAM-01 §10].
 	scoreFlashTick   uint32
 	scoreFlashTickOK bool
+	// scorePrevKills and scorePrevLosses are the previous committed tick's
+	// per-slot counters. The kill-credit finalize is the arming site in retail;
+	// the counters it writes are what the committed frame carries, so an
+	// increment between two committed ticks is that finalize having run
+	// [07 R-HUD-04 §1 "Correction (2026-09-02)"][I6]. scoreCountersOK guards
+	// the first frame, whose counters are a baseline and not a kill.
+	scorePrevKills  [frame.PlayerRowSlots]int
+	scorePrevLosses [frame.PlayerRowSlots]int
+	scoreCountersOK bool
 }
 
 // hoveredGadgetSource reports the footer's first source: the hovered-gadget
@@ -729,6 +738,11 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 		offset = int(b.battleState().PanelOffset)
 	}
 	blitBattlePanel(c, h.panelSide, 0, offset)
+	// The §6 slide strip's three readouts, drawn over the bottom strip while
+	// the slide is off its closed detent [07 R-HUD-04 §4].
+	if cur != nil {
+		h.drawSlideStrip(c, b, cur)
+	}
 
 	// The hovered-gadget index is the footer's first source, so the pointer
 	// pass over the open page runs before the footer draws [07 R-HUD-03 §1].
@@ -909,7 +923,7 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 			LocalPlayer:  cur.Selection.LocalPlayer,
 			RawDistRadar: published.RadarDistance, RawDistSonar: published.SonarDistance,
 			RawDistJamR: published.RadarJam, RawDistJamS: published.SonarJam,
-			MinimapMode: 1,
+			MinimapMode: b.minimapMaskWord(),
 		}
 		if radarContactAdmitted(contact, blink) {
 			regularArt = append(regularArt, radarGAFFrame(h.radarBlipGAF, h.radarOwnerFrameIndex(published, radarGAFFrameCount(h.radarBlipGAF))))
@@ -930,7 +944,7 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 				WorldX: contact.WorldX, WorldZ: contact.WorldZ, WorldY: contact.WorldY,
 				Owner: contact.Owner, Status: contact.Status, Stealth: contact.Stealth,
 				RangeStatus: contact.RangeStatus, BlinkSuppress: contact.BlinkSuppress,
-				Visible: contact.Visible, LocalPlayer: contact.LocalPlayer, MinimapMode: 1,
+				Visible: contact.Visible, LocalPlayer: contact.LocalPlayer, MinimapMode: contact.MinimapMode,
 				RingEnabled: ring.Enabled, RingDashed: ring.Dashed, RingRange: ring.Range,
 			}
 			contacts = append(contacts, ringContact)
@@ -1087,8 +1101,9 @@ func (h *retailBattleHUD) drawScorePanel(c *client.Client, b *battleSession, cur
 		return
 	}
 	// The flash arrays decay whether or not the panel is showing, one step per
-	// unit of the scaled timer [07 R-HUD-04 §1].
-	h.stepScoreFlash(cur)
+	// unit of the scaled timer, and arm only while the F4 interface bit is set
+	// [07 R-HUD-04 §1].
+	h.stepScoreFlash(cur, b.panelHoldFlag)
 	if !hud.ScoreSessionKindDraws(battleSessionKind(b)) {
 		return
 	}
@@ -1143,9 +1158,22 @@ func (h *retailBattleHUD) drawScorePanel(c *client.Client, b *battleSession, cur
 	}
 }
 
-// stepScoreFlash applies one unit of the scaled timer to both flash arrays,
-// at most once per committed tick [07 R-HUD-04 §1][07 R-CAM-01 §10].
-func (h *retailBattleHUD) stepScoreFlash(cur *frame.Frame) {
+// stepScoreFlash arms and then decays the two flash arrays, at most once per
+// committed tick [07 R-HUD-04 §1][07 R-CAM-01 §10].
+//
+// Arming is the kill-credit finalize's, and it happens **only while the F4
+// interface bit is set** — with the bit clear the finalize skips the arm and
+// both arrays stay zero, so a Space-held panel shows steady numbers. That gate
+// is the F4 bit's second visible effect, and it is why nothing armed these
+// arrays before [07 R-HUD-04 §1 "Correction (2026-09-02)"][07 R-CAM-01 §14].
+//
+// The finalize's own writes are the per-slot kill and loss counters the
+// committed frame carries, so an increment between two committed ticks is one
+// or more credited kills at that slot. A commander kill increments the
+// ordinary counter too, so the commander pair needs no separate watch even in
+// Deathmatch, where the panel prints it. Arming precedes the decay because the
+// finalize runs inside the tick and the panel routine decays afterwards.
+func (h *retailBattleHUD) stepScoreFlash(cur *frame.Frame, armed bool) {
 	if cur == nil {
 		return
 	}
@@ -1153,6 +1181,19 @@ func (h *retailBattleHUD) stepScoreFlash(cur *frame.Frame) {
 		return
 	}
 	h.scoreFlashTick, h.scoreFlashTickOK = cur.Tick, true
+	for i := range cur.Players {
+		kills, losses := cur.Players[i].Kills, cur.Players[i].Losses
+		if h.scoreCountersOK && armed {
+			if kills > h.scorePrevKills[i] {
+				h.scoreFlash.Credit(i, -1)
+			}
+			if losses > h.scorePrevLosses[i] {
+				h.scoreFlash.Credit(-1, i)
+			}
+		}
+		h.scorePrevKills[i], h.scorePrevLosses[i] = kills, losses
+	}
+	h.scoreCountersOK = true
 	h.scoreFlash.Decay()
 }
 
@@ -1168,15 +1209,18 @@ func (h *retailBattleHUD) drawScoreRow(c *client.Client, b *battleSession, cur *
 		c.UILightRect(h.pal, x, top, w, height, hud.ScorePanelLocalLightA)
 		c.UILightRect(h.pal, x, top, w, height, hud.ScorePanelLocalLightB)
 	}
-	// TODO(question): the row's side logo is "the frame numbered by the lobby
-	// record's logo byte in the side-logo GAF entry" [07 R-HUD-04 §1], quad
-	// mapped from the frame interior onto (x0+7, y+1)-(x0+119, y+37). Which
-	// entry of textures/logos.gaf that frame belongs to is the same open
-	// question the footer's LOGO2 draw records; the stock file holds 18
-	// entries and no section names the one the battle composer addresses. An
-	// asset census would settle it; until then the logo is not drawn rather
-	// than picked from a plausible name.
-	_ = row.Logo
+	// The row's side logo: the frame numbered by the lobby record's logo byte,
+	// quad mapped from the frame *interior* — source corners (1,1) (w-1,1)
+	// (w-1,h-1) (1,h-1) — onto (x0+7, y+1)-(x0+119, y+37), i.e. stretched to
+	// 112 x 36 [07 R-HUD-04 §1][03 R-RAST-01 §1]. The entry is `32xlogos` of
+	// textures/logos.gaf [07 R-HUD-04 §4], which is the same handle the
+	// footer's LOGO2 draw and the result surface read.
+	if logo := h.sideLogoFrame(row.Logo); logo != nil {
+		width, height := c.Size()
+		c.UIBlitFrameSourceRectScaledClipped(logo, 1, 1, int(logo.Width)-1, int(logo.Height)-1,
+			int(rect.X0)+7, int(y)+1, hud.ScorePanelLogoWidth, hud.ScorePanelLogoHeight,
+			0, 0, width, height)
+	}
 	h.drawScoreText(c, row.Name, int(rect.X0)+9, int(y)+6, 0)
 	kills, losses := hud.ScoreCounters(row, commanderDeathOption(b))
 	killText := fmt.Sprintf("%d", kills)
@@ -1189,6 +1233,30 @@ func (h *retailBattleHUD) drawScoreRow(c *client.Client, b *battleSession, cur *
 	h.drawScoreText(c, killText, int(rect.X0)+9, int(y)+21, killShade)
 	h.drawScoreText(c, lossText, int(rect.X0)+119-retailGAFTextWidth(h.modalFont, lossText)-2, int(y)+21, lossShade)
 }
+
+// sideLogoFrame resolves the side-logo frame for a lobby colour byte. Both
+// battle logo draws — the footer's LOGO2 and the score panel's row logo — read
+// one GAF handle bound during battle-data initialization, and the frame index
+// is the owner's lobby colour byte:
+//
+//	frame = logos.gaf["32xlogos"].Frames[lobbyColour]
+//
+// [07 R-HUD-04 §4]. An absent file or an out-of-range colour draws nothing;
+// the art is retail content, and this seam does not substitute for it.
+func (h *retailBattleHUD) sideLogoFrame(colour uint8) *formats.GAFFrame {
+	if h == nil || h.logos == nil {
+		return nil
+	}
+	entry, ok := h.logos.Find(sideLogoEntry)
+	if !ok || int(colour) >= len(entry.Frames) {
+		return nil
+	}
+	return entry.Frames[colour].Frame
+}
+
+// sideLogoEntry is the GAF entry both battle logo draws address
+// [07 R-HUD-04 §4].
+const sideLogoEntry = "32xlogos"
 
 // drawScoreText is the panel's text writer: the GAF font, the 119-pixel width
 // limit, and the light-table row as the brightness argument
@@ -1486,11 +1554,78 @@ func formatEnergyRate(value float32) string {
 // `Game Time:` as hh:mm:ss, `Total Units: %d (Max %d)` and `Game Speed: %s%s`
 // [07 R-HUD-03 §6].
 //
-// TODO(question): the slide strip's three fixed text offsets are not stated —
-// [07 R-HUD-03 §6] gives the strings and the y+offset blit of the strip but
-// no per-line x/y. A capture of the strip at a known panel offset would
-// settle them; until then the strip draws its art with no text rather than
-// borrowing an anchor that has no consumer [07 R-HUD-03 §5].
+// The slide strip's text placement is now established [07 R-HUD-04 §4]: with
+// `x` the composer surface rectangle's left edge, `yBottom` its bottom edge
+// and `off` the slide offset (-31..0, drawn only while non-zero), the three
+// strings are written on one line at `yBottom + off + 10` — `Game Time:` at
+// `x + 25`, `Total Units:` at `x + 190`, `Game Speed:` at `x + 380` — in the
+// default font at light-table row 0. drawSlideStrip below is that draw; the
+// strip used to paint its art with no text at all.
+
+// Slide-strip text offsets [07 R-HUD-04 §4]. `x` is the composer surface
+// rectangle's left edge and `yBottom` its bottom edge.
+const (
+	slideStripTimeX  = 25
+	slideStripUnitsX = 190
+	slideStripSpeedX = 380
+	slideStripTextY  = 10
+	// slideStripNormalSpeed is the speed word at which the line prints the
+	// localized normal word instead of an offset [07 §6][07 R-CAM-01 §3].
+	slideStripNormalSpeed = 10
+)
+
+// drawSlideStrip writes the §6 strip's three readouts. The strip is drawn only
+// while the slide offset is non-zero — at 0 it is off screen — and every string
+// sits on one line at `yBottom + off + 10` [07 R-HUD-04 §4][07 §6].
+//
+// The composer steps this strip in every session kind, unlike the Space-held
+// score panel of [07 R-HUD-04 §1], and its show test is Space unless a text
+// editor has the focus. That test is the rail state this build already owns, so
+// the offset is read rather than recomputed.
+func (h *retailBattleHUD) drawSlideStrip(c *client.Client, b *battleSession, cur *frame.Frame) {
+	if h == nil || c == nil || b == nil || cur == nil || h.console == nil {
+		return
+	}
+	off := int(b.battleState().PanelOffset)
+	if off == 0 {
+		return
+	}
+	_, height := c.Size()
+	y := height + off + slideStripTextY
+	write := func(x int, text string) {
+		c.UIText(h.console, text, x, y, h.guiColor(0))
+	}
+	write(slideStripTimeX, "Game Time: "+retailSummaryTime(int32(cur.Tick)))
+	live := 0
+	if slot := int(cur.Selection.LocalPlayer); slot >= 0 && slot < len(cur.Players) {
+		live = cur.Players[slot].LiveUnits
+	}
+	write(slideStripUnitsX, fmt.Sprintf("Total Units: %d (Max %d)", live, cur.Strip.UnitLimit))
+	write(slideStripSpeedX, "Game Speed: "+slideStripSpeedText(cur.Strip))
+}
+
+// slideStripSpeedText is the composer's own speed formatter, which is separate
+// from the message-ring announcement of [07 R-CAM-01 §3]: `Normal` at the
+// target word 10, otherwise `%+d`, with ` (%+d)` appended while the adapted
+// current speed differs from the target [07 §6].
+//
+// TODO(question): what `%+d` prints is not spelled out — the offset from
+// normal, or the raw speed word. The offset is taken here because it is the
+// only reading under which the value-10 case degenerates to the word `Normal`
+// rather than to `+10`, and because the announcement's established formatter
+// prints the same offset [07 R-CAM-01 §3]. A capture of the strip at a
+// non-normal speed settles it.
+func slideStripSpeedText(strip frame.StripReadout) string {
+	target := strip.RequestedSpeed
+	text := fmt.Sprintf("%+d", target-slideStripNormalSpeed)
+	if target == slideStripNormalSpeed {
+		text = "Normal"
+	}
+	if strip.ActiveSpeed != target {
+		text += fmt.Sprintf(" (%+d)", strip.ActiveSpeed-slideStripNormalSpeed)
+	}
+	return text
+}
 
 // drawFooter paints the ordinary footer [07 R-HUD-03 §1–§3]. It replaces the
 // former drawSelectedUnit, which drew the SELECTED unit's name, description
@@ -1519,19 +1654,24 @@ func (h *retailBattleHUD) drawFooter(c *client.Client, b *battleSession, f *fram
 		}
 		h.drawFooterBar(c, r, dy, bar.HP, bar.Max)
 	}
-	// TODO(question): the owner logo at LOGO2 is "the frame of the logos GAF
-	// indexed by the owner's lobby colour index" [07 R-HUD-03 §2], but which
-	// of textures/logos.gaf's entries that frame belongs to is not stated.
-	// The stock file holds 18 entries, 17 of them ten-frame team sets
-	// (colorslt, colorsmd, colorsdk, colordk2, Solid1a..Solgradb, 32xlogos,
-	// 32XGouraud, Arm32Lt/Dk, Core32Lt/Dk) [03 "Which primitives are
-	// team-coloured"], and the skirmish Color%d control resamples 32x32 raw
-	// frames into a 20x20 record [07 §6] without naming the entry either. An
-	// asset census of the entry the battle composer addresses would settle it;
-	// until then the logo is not drawn rather than picked from a plausible
-	// name. footer.Logos carries the resolved frame index so only this lookup
-	// is missing.
-	_ = footer.Logos
+	// The owner's logo at LOGO2: the frame of the side-logo GAF indexed by the
+	// owner's lobby colour byte, at the frame's full size, at the anchor
+	// shifted by dy [07 R-HUD-03 §2]. The entry is `32xlogos` of
+	// textures/logos.gaf — one handle bound at battle-data initialization that
+	// this draw and the score panel's row logo both read
+	// [07 R-HUD-04 §4]. footer.Logos already carried the resolved frame index;
+	// only the entry name was missing.
+	for _, logo := range footer.Logos {
+		r, ok := h.anchors.ByIndex(logo.Anchor)
+		if !ok {
+			continue
+		}
+		art := h.sideLogoFrame(uint8(logo.Frame))
+		if art == nil {
+			continue
+		}
+		c.UIBlit(art, int(r.X1), int(r.Y1+dy))
+	}
 	for _, text := range footer.Texts {
 		r, ok := h.anchors.ByIndex(text.Anchor)
 		if !ok || text.Text == "" {
@@ -1639,18 +1779,17 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, offse
 			// shell, their GAF offsets are not applied [07 §4].
 			c.UIBlit(frameArt, int(r.X), int(r.Y))
 		}
-		// TODO(question): a greyed button's rectangle is darkened "by 20 palette
-		// steps afterwards" [07 R-HUD-03 §6] — after the frame is blitted, which
-		// is where this note sits — but §6 does not say what one palette step is.
-		// [03 R-COMP-02 §5] describes a rectangle shader taking a signed level
-		// whose negative values index the PALETTE.SHD darken rows as level + 32,
-		// which would make "20 steps" row 12; §6 never says the two are the same
-		// operator, so the row is not settled and nothing is darkened here.
-		// Settle it by tracing which level the greyed-button painter passes that
-		// shader. Two things are needed before the darkening can be written: that
-		// finding, and a darkening rectangle operator on internal/client, whose
-		// UILightRect only brightens through PALETTE.LHT — and internal/client is
-		// not this unit's to change.
+		// A greyed button's rectangle goes through the rectangle shader after
+		// the frame blit, at level -20 — PALETTE.SHD darken row 12 — unless the
+		// button carries attribute 0x80 [07 R-HUD-04 §4][03 R-COMP-02 §5]. That
+		// settles what §6's "20 palette steps" means: the two are one operator,
+		// and the level indexes the SHD rows as level + 32. The cycle branch
+		// (attribute 0x100) is excluded because it has its own greyed frame,
+		// frames-1, and §3 attaches the darken clause to the other three greyed
+		// sub-branches only [07 R-WGT-01 §3].
+		if frameArt != nil && grey && gad.Attribs&guiAttribCheckbox == 0 && !cycleButton(gad) {
+			c.UIShadeRect(h.pal, int(r.X), int(r.Y), int(r.W), int(r.H), retailGreyedButtonShade)
+		}
 		// A command button never draws its caption: the painter reads the art
 		// alone [07 R-HUD-03 §6]. Stock content authors these gadgets with an
 		// empty label anyway.
@@ -1762,14 +1901,13 @@ func commandPageIsPaged(f *frame.Frame) bool {
 // field still names the build page the builder was last on and setting the bit
 // again brings that page back.
 //
-// TODO(question): which page a BUILD click selects for a builder whose page
-// field is still 0 — one that has never left the orders page — is not
-// established. [07 R-HUD-03 §6] gives the field's persistence and the stage the
-// button reads, but not the click's own producer, and with the bit set over a
-// zero field retail composes "<internal name>0.GUI", the word-A bit-31 branch
-// no stock unit reaches. Page 1 stands in here because it is where both
-// established forward moves out of page 0 land — the `.` key and the NEXT
-// gadget [07 R-HUD-03 §6]. Tracing the BUILD gadget's handler settles it.
+// No click writes the page field: it is seeded at **unit creation**, page 1
+// with the paged bit set when the definition's page-count byte is at least 2
+// and both cleared otherwise [07 R-HUD-04 §4 "First build page"]. The seed
+// lives in internal/units' allocator initializer, which is why the zero-field
+// case this function used to guess about no longer arises for a multi-page
+// builder. The clamp below stays as a bounds guard for a single-page or
+// malformed record, not as a stand-in for the missing producer.
 func buildButtonPage(f *frame.Frame) int {
 	if f == nil || f.CommandPage.Builder == 0 {
 		return 0
@@ -1908,43 +2046,70 @@ func boolStage(v bool) int {
 // ARMMOVEORD and ARMFIREORD are all authored with it.
 const guiAttribCycle = 0x100
 
-// commandButtonFrame is the button painter's frame choice for a command button
-// [07 R-HUD-03 §6]. Not greyed, the mouse-up art is the authored starting frame
-// plus the stage; greyed it is that starting frame plus min(stage + 2,
-// frames − 1), except that a cycle button takes the last frame outright.
+// guiAttribCheckbox is attribute 0x80, the checkbox fallback bit. It is also
+// the one exemption from the greyed-button darkening [07 R-WGT-01 §3]
+// [07 R-HUD-04 §4].
+const guiAttribCheckbox = 0x80
+
+// retailGreyedButtonShade is the rectangle-shader level a greyed button's
+// rectangle is darkened at: -20, which indexes PALETTE.SHD row 12 as
+// level + 32 [07 R-HUD-04 §4][03 R-COMP-02 §5].
+const retailGreyedButtonShade = -20
+
+func cycleButton(gad gui.Gadget) bool { return gad.Attribs&guiAttribCycle != 0 }
+
+// commandButtonFrame is the button painter's frame choice
+// [07 R-WGT-01 §3 "the painter's frame choice"], which completes and corrects
+// [07 R-HUD-03 §6]. The authored `status` field is the button's **down-state
+// word**, not the frame a stage counts from; the frame *base* comes from art
+// resolution and is frame 0 on the named-art path every command button takes.
+// §6's reading of `status` as a base is superseded [07 R-HUD-04 §4].
 //
-// §6 names a pressed frame without giving its index; [07 R-WGT-01 §3], which
-// completes §6, gives the layout — a plain button's art is rest, pressed,
-// greyed, and staged art keeps its pressed look in the second-to-last frame. A
-// cycle button has no held look at all: a press on one advances its state and
-// fires immediately, so it keeps showing its stage while the mouse is down.
+// With `down` the down-state word and `stage` the current-stage byte:
 //
-// TODO(question): §6 reads the authored `status` field as the frame the stage
-// counts from, while [07 R-WGT-01 §3] reads the same field as the button's
-// down-state word and takes the frame base from art resolution. The two agree
-// wherever `status` is 0, which is how every stock command button is authored,
-// so nothing observable turns on it here; settling it needs a gadget authored
-// with a nonzero `status` and staged art to disagree over.
+//   - greyed and a cycle button (0x100) -> frames - 1;
+//   - greyed otherwise                  -> base + min(state + 2, frames - 1);
+//   - a cycle button                     -> base + its state, with no held look;
+//   - down set on staged art             -> frames - 2, the pressed look;
+//   - down set otherwise                 -> base + down;
+//   - otherwise                          -> base + the state.
+//
+// `state` is the runtime index the command-button table supplies: the
+// down-state word for a cycle button and the current-stage byte for staged
+// art, which is the one value [07 R-HUD-03 §6] calls the stage.
+//
+// A press sets the down-state word to 1 while the button is captured — except
+// on a cycle button, which has no held look at all: a press advances its state
+// and fires immediately, so it keeps showing its stage while the mouse is down.
+// The greyed darkening is applied by the caller, not folded into the frame.
 func commandButtonFrame(entry *formats.GAFEntry, gad gui.Gadget, stage int, grey, pressed bool) *formats.GAFFrame {
 	if entry == nil || len(entry.Frames) == 0 {
 		return nil
 	}
 	last := len(entry.Frames) - 1
-	cycle := gad.Attribs&guiAttribCycle != 0
+	cycle := cycleButton(gad)
+	// The frame base of a named-art gadget is frame 0, and the authored
+	// `status` is the down-state word that sits on top of it. A press sets the
+	// down-state to 1 while the button is captured, except on a cycle button.
+	const base = 0
+	down := int(gad.Status)
+	if pressed && !cycle {
+		down = 1
+	}
 	idx := 0
 	switch {
 	case grey && cycle:
 		idx = last
 	case grey:
-		idx = int(gad.Status) + min(stage+2, last)
-	case pressed && cycle:
-		idx = int(gad.Status) + stage
-	case pressed && gad.Stages != 0:
+		idx = base + min(stage+down+2, last)
+	case cycle:
+		idx = base + stage
+	case gad.Stages != 0 && down != 0:
 		idx = last - 1
-	case pressed:
-		idx = int(gad.Status) + 1
+	case down != 0:
+		idx = base + down
 	default:
-		idx = int(gad.Status) + stage
+		idx = base + stage
 	}
 	// Authored art shorter than the frame the table asks for is a bounds guard,
 	// not a retail behavior: an out-of-range index would panic here [I11].

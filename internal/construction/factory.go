@@ -1661,8 +1661,52 @@ func initializeNanoframe(prod *units.Unit, def *content.UnitDef) {
 	prod.SetActivationEdge(false)
 }
 
+// productRecord stamps the two order-record fields that every ordinary issuer
+// writes and that a bare `orders.Node{}` literal leaves at zero, for a record
+// this package pushes onto a PRODUCT's own queue.
+//
+// The owning unit is one of the order record's own fields [04 §3.2]; a handler
+// body is handed it alongside the record [04 R-ORD-01 §1]; and the movement
+// controller's single goal slot is addressed BY it [04 R-ORD-01 §9]. Every
+// record this package puts on a product is the PRODUCT's: [04 R-FAC-02 §4]
+// states the product's first order is `BeCarried`, its second is `GetBuilt`,
+// and that `GetBuilt` itself resolves the builder's `QMove`/`QPatrol` records
+// "against the product ... and inserted queued on the product", with `Park`
+// inserted in their place when nothing was. The factory is the record's TARGET
+// or its source, never its owner.
+//
+// Left null, every such record on every product in the battle named the same
+// controller slot at handle 0, and `Queue.ownerUnit` could not resolve the
+// record's unit at all, so every owner-side step of the record destructor was
+// a no-op. The measured one is the slot return: [04 R-UNIT-06 §5 part 3] has
+// the destructor hand all three weapon slots back — targets cleared, autonomy
+// bit raised — for every removed record whose static-mask copy lacks bit 16,
+// and with a null owner a product's `BeCarried`/`GetBuilt`/rally record
+// returned nothing. Two further owner-side steps fail the same way and were
+// simply not exercised on the scenarios measured for this unit: the cancel
+// notification and the `StopBuilding` counterpart. So does the air installer,
+// which refuses an install whose resolved unit does not carry `canfly` and can
+// resolve no unit from a null owner. This is the same defect WU-19-69 fixed
+// for the mission-script interpreter, in the same shape.
+//
+// CreationTick is the creation-tick snapshot [04 §3.2]: the tick current at
+// the handler visit that pushes the record. Unlike the mission interpreter's,
+// which runs once before the first tick is stepped, these visits are ordinary
+// pumped ones, so the caller passes its own tick.
+//
+// It writes nothing else: the goal triple, the target smart-reference and the
+// parameter words stay the pushing site's.
+func productRecord(product *units.Unit, tick uint32, n orders.Node) orders.Node {
+	if product == nil {
+		return n
+	}
+	n.Owner = product.Handle
+	n.CreationTick = tick
+	return n
+}
+
 // successEpilogue performs the success sequence after allocation [05 C18].
-func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, product *units.Unit, cell world.Cell, buildPiece int) error {
+func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, product *units.Unit, cell world.Cell, buildPiece int, tick uint32) error {
 	// A mobile product enters the shared carried representation before any
 	// factory/product publication. Failure is therefore an explicit rejected
 	// allocation, never a live partially accepted factory state
@@ -1711,7 +1755,7 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 		if beCarriedID != 0 {
 			pq := orders.BindQueueBinding(product, s.OrderBinding)
 			pq.SetGetBuiltHandler(s.handleGetBuiltOrder)
-			pq.Push(beCarriedID, orders.Node{Target: factory.Handle})
+			pq.Push(beCarriedID, productRecord(product, tick, orders.Node{Target: factory.Handle}))
 		}
 	}
 
@@ -1722,7 +1766,7 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 		pq := orders.BindQueueBinding(product, s.OrderBinding)
 		pq.SetGetBuiltHandler(s.handleGetBuiltOrder)
 		// Queued mode, zero count per [05 C18]: Param2 zero count special? Queue treats 0 as 1? But we pass 0 and CoalesceTail will treat 0 as 1? However plan says zero count. We pass Node with Param2 0.
-		pq.Push(getBuiltID, orders.Node{Param2: 0})
+		pq.Push(getBuiltID, productRecord(product, tick, orders.Node{Param2: 0}))
 		// Ensure product's queue head is GetBuilt with active marker.
 	}
 
@@ -1819,7 +1863,13 @@ func (s *Service) copyStandingFlags(builder, product *units.Unit) {
 // C19 Rally inheritance [05 "Rally inheritance"].
 // ---------------------------------------------------------------------------
 
-func (s *Service) rallyInheritance(factory *units.Unit, product *units.Unit) {
+// rallyInheritance is `GetBuilt`'s completion arm: it walks the builder's
+// primary queue and inserts the resolved rally records — or `Park` when there
+// were none — QUEUED ON THE PRODUCT [04 R-FAC-02 §4]. Every record it makes is
+// therefore the product's own, and is stamped through productRecord; tick is
+// the GetBuilt visit's, which is when these records come into being
+// [04 §3.2].
+func (s *Service) rallyInheritance(factory *units.Unit, product *units.Unit, tick uint32) {
 	if factory == nil || product == nil {
 		return
 	}
@@ -1829,7 +1879,7 @@ func (s *Service) rallyInheritance(factory *units.Unit, product *units.Unit) {
 		parkID := orders.Lookup("Park")
 		if parkID != 0 {
 			pq := orders.BindQueueBinding(product, s.OrderBinding)
-			pq.Push(parkID, orders.Node{})
+			pq.Push(parkID, productRecord(product, tick, orders.Node{}))
 		}
 		return
 	}
@@ -1854,7 +1904,8 @@ func (s *Service) rallyInheritance(factory *units.Unit, product *units.Unit) {
 		}
 		if n.ID == qMoveID {
 			if moveID != 0 {
-				nn := &orders.Node{ID: moveID, GoalX: n.GoalX, GoalY: n.GoalY, GoalZ: n.GoalZ, DynamicGate: 0, Deadline: -1, StaticGate: orders.DescriptorFor(moveID).StaticGate, Flags: 0}
+				rec := productRecord(product, tick, orders.Node{ID: moveID, GoalX: n.GoalX, GoalY: n.GoalY, GoalZ: n.GoalZ, DynamicGate: 0, Deadline: -1, StaticGate: orders.DescriptorFor(moveID).StaticGate, Flags: 0})
+				nn := &rec
 				// Ensure deadline -1 for new node [04 §3.2]
 				if nn.Deadline == 0 {
 					nn.Deadline = -1
@@ -1864,7 +1915,8 @@ func (s *Service) rallyInheritance(factory *units.Unit, product *units.Unit) {
 			}
 		} else if n.ID == qPatrolID {
 			if patrolID != 0 {
-				nn := &orders.Node{ID: patrolID, GoalX: n.GoalX, GoalY: n.GoalY, GoalZ: n.GoalZ, DynamicGate: 0, Deadline: -1, StaticGate: orders.DescriptorFor(patrolID).StaticGate}
+				rec := productRecord(product, tick, orders.Node{ID: patrolID, GoalX: n.GoalX, GoalY: n.GoalY, GoalZ: n.GoalZ, DynamicGate: 0, Deadline: -1, StaticGate: orders.DescriptorFor(patrolID).StaticGate})
+				nn := &rec
 				if nn.Deadline == 0 {
 					nn.Deadline = -1
 				}
@@ -1875,7 +1927,8 @@ func (s *Service) rallyInheritance(factory *units.Unit, product *units.Unit) {
 	}
 	if inherited == 0 {
 		if parkID != 0 {
-			nn := &orders.Node{ID: parkID, Deadline: -1, StaticGate: orders.DescriptorFor(parkID).StaticGate}
+			rec := productRecord(product, tick, orders.Node{ID: parkID, Deadline: -1, StaticGate: orders.DescriptorFor(parkID).StaticGate})
+			nn := &rec
 			if nn.Deadline == 0 {
 				nn.Deadline = -1
 			}
@@ -2408,7 +2461,7 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 		return
 	}
 	// Success epilogue [05 C18].
-	if err := s.successEpilogue(factory, node, product, cell, buildPiece); err != nil {
+	if err := s.successEpilogue(factory, node, product, cell, buildPiece, tick); err != nil {
 		// successEpilogue's own comment already calls its failure "an explicit
 		// rejected allocation" [04 R-FAC-02 §1]; a rejected allocation is a
 		// product that never existed [04 R-FAC-02 §3], so it is freed here, not
@@ -2546,11 +2599,11 @@ func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tic
 	// It stores cell origin as Goal? We preserve original Goal for site authoritative test, so store snapshot separately?
 	// Keep Goal as site, but successEpilogue will overwrite Goal with cell origin. Preserve site in a separate snapshot?
 	// Instead call mobile-specific epilogue that keeps Goal as site and uses cell for product creation.
-	s.successEpilogueMobile(builder, node, product, cell)
+	s.successEpilogueMobile(builder, node, product, cell, tick)
 }
 
 // successEpilogueMobile is like successEpilogue but preserves the authoritative site Goal [P0-I05].
-func (s *Service) successEpilogueMobile(builder *units.Unit, node *orders.Node, product *units.Unit, cell world.Cell) {
+func (s *Service) successEpilogueMobile(builder *units.Unit, node *orders.Node, product *units.Unit, cell world.Cell, tick uint32) {
 	// Preserve original Goal site for test assertion that structure appears at clicked location [P0-I05].
 	// The product's world position is at cell origin, which corresponds to site snapped with half-extent.
 	// Node.Goal remains the clicked site; we do not overwrite it with cell origin.
@@ -2569,7 +2622,7 @@ func (s *Service) successEpilogueMobile(builder *units.Unit, node *orders.Node, 
 	getBuiltID := orders.Lookup("GetBuilt")
 	if getBuiltID != 0 {
 		pq := orders.BindQueueBinding(product, s.OrderBinding)
-		pq.Push(getBuiltID, orders.Node{Param2: 0})
+		pq.Push(getBuiltID, productRecord(product, tick, orders.Node{Param2: 0}))
 	}
 	// No heading snap here. The question this site used to record — whether
 	// retail rotates the unit or leaves the turn to the script — is answered:
@@ -3036,7 +3089,7 @@ func (s *Service) handleGetBuiltOrder(product *units.Unit, node *orders.Node, ti
 				s.OnRefresh(builder)
 			}
 			if product.Def != nil && product.Def.BMCode {
-				s.rallyInheritance(builder, product)
+				s.rallyInheritance(builder, product, tick)
 			}
 		}
 	}

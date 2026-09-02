@@ -337,7 +337,7 @@ func TestAircraftProductTakesOffAndFreesTheYard(t *testing.T) {
 
 	// No rally: GetBuilt appends Park, whose canfly arm restarts the record as
 	// VTOL_Move at the product's own position [04 R-FAC-02 §4].
-	svc.rallyInheritance(factory, prod)
+	svc.rallyInheritance(factory, prod, 0)
 	pq := orders.QueueForUnit(prod)
 	if pq == nil || pq.LenPrimary() == 0 {
 		t.Fatal("product queue is empty after rally inheritance")

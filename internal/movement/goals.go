@@ -25,25 +25,21 @@ const goalPendingMask uint32 = 0x20 | 0x40 | 0x80 | 0x100 | 0x200
 // record — the "goal-handle detach or rebind" producer of the movement
 // families' outcome table.
 //
-// One guard: a NULL owner handle names no controller. A record whose owner
-// field was never filled collides with every other such record on the single
-// map entry at handle 0 — a Nanolathe representation artifact, not a mover.
-// Raising `0x80` there would carry the bit BETWEEN UNITS, which is not what §9
-// describes. The null key is skipped, and a missing owner stays a defect for
-// the record's issuer to fix, not something this raise papers over.
-//
-// The producer this guard was written for was the mission-script interpreter of
-// [04 §3.6], which built its records with only a goal triple; WU-19-69 gave
-// them their owners, and on MISSION0 (AC01) that took the interpreter's share
-// of null-key installs from 61 in 740 ticks to zero and separated 23 records
-// across 20 distinct controller keys. The guard stays because one producer
-// still queues ownerless records: `internal/construction`'s rally inheritance
-// copies a factory's queued `QMove`/`QPatrol` records onto a product as
-// `Move_Ground`/`Patrol` without an owner, and `Park`, `GetBuilt` and
-// `BeCarried` are pushed the same way [05 "Rally inheritance"]. Those are
-// movement-goal-installing descriptors, so the null bucket is still reachable.
+// Retired 2026-09-02 (WU-19-71): a null-owner guard stood here, skipping the
+// raise when `owner` was zero. Its text said "a NULL owner handle names no
+// controller ... raising `0x80` there would carry the bit BETWEEN UNITS", and
+// it named its live producers — the mission-script interpreter of [04 §3.6]
+// (retired by WU-19-69), then `internal/construction`'s factory product
+// records. Both are stamped now. A sweep of every `orders.Node` composite
+// literal and every queue-insertion call site in the tree found no producer
+// left that leaves the field zero, and instrumenting both install paths over a
+// seed-7 skirmish to 50000 ticks and MISSION0 to 18000 counted zero writes to
+// the handle-0 entry, so the guard has nothing to guard: nothing is stored
+// there, and a lookup there finds no record to raise the bit on. It was never
+// a behavioural rule of §9 — it was cover for our own defect — so it goes
+// rather than standing as a permanent exception to an unconditional raise.
 func (s *System) raiseEvictedGoalRelease(owner pool.Handle) {
-	if s == nil || owner == 0 {
+	if s == nil {
 		return
 	}
 	// Unconditional, as §9 states it: the raise lands on the owner of whatever

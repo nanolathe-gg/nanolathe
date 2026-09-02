@@ -121,7 +121,7 @@ func TestAbandonedFrameOnTheExitStopsBlockingTheFactory(t *testing.T) {
 	q.Primary()[0].Phase = uint8(State2)
 
 	// One admission, then abandon the record while the frame is still partly
-	// built. This is the state a factory killed mid-product leaves behind.
+	// built: a nanoframe standing on the exit with no builder working it.
 	var abandoned pool.Handle
 	tick := uint32(0)
 	for i := 0; i < 20 && abandoned == 0; i++ {
@@ -140,6 +140,23 @@ func TestAbandonedFrameOnTheExitStopsBlockingTheFactory(t *testing.T) {
 		t.Fatal("the fixture completed the frame instead of leaving it partly built")
 	}
 	q.SetPrimary(nil)
+	// Detaching is part of abandoning it, not scenery. A frame that is still
+	// its producer's cargo is not abandoned: its `BeCarried` record sits at the
+	// head of its queue holding a ten-tick deadline, and the primary pump
+	// reloads the head after every result code, so `GetBuilt` — the record that
+	// carries the decay — is never reached while the product is carried
+	// ([04 R-FAC-02 §4]'s 2026-09-02 correction, [04 R-ORD-01 §10]). Every
+	// route that actually leaves a frame behind detaches it first: `BeCarried`
+	// completes on a null carrier ([04 R-ORD-01 §2]) and the release pass hands
+	// the queue to `GetBuilt`, whose phase-2 arm is what decays an unworked
+	// frame to its clamp and self-kills it [05 "Reverse and deconstruction"].
+	//
+	// Before WU-19-73 the pump walked past the held `BeCarried` to `GetBuilt`,
+	// so this fixture decayed a still-carried frame; that walk rule is
+	// withdrawn.
+	if _, ok := movement.DetachCargo(w, abandoned); !ok {
+		t.Fatal("abandoning the frame requires detaching it from the lab")
+	}
 
 	// The exit is now held by a frame with no builder. Queue a fresh product
 	// and drive the ordinary per-unit visit for every live unit.

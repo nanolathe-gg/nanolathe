@@ -1636,6 +1636,26 @@ owning player, in the settlement's stable unit-slot order; authored cloak
 costs are per-settlement-pass amounts like every other authored economy
 field.
 
+#### R-PROD-01 §6-A — The intermediate's shape, restated for the implementer [R-PROD-01] (2026-09-02)
+
+The pre-closure prose of "Terrain metal extraction" said retail "performs the
+intermediate sum with fixed-point-shaped integer arithmetic and then converts
+it to a single-precision value" and that "an exact compatibility mode must
+preserve that conversion and rounding order", and a code marker still cites
+that sentence as unresolved. It is resolved by §6 above (re-verified
+RWU-19-22, Established): the sum is a **sixteen-bit** accumulator of
+`metalByte + 1` per in-bounds footprint cell; the rate is
+`float32( ((float)(int32)(accumulator << 16)) × extractsmetal × 2⁻¹⁶ )`,
+evaluated left to right at the x87 working precision with the only narrowing
+at the store. Because `accumulator << 16` is exact as a floating value and
+`extractsmetal` is a single, the double product rounds once at the store to
+the same single as `float32(accumulator) × extractsmetal` for every
+accumulator below `0x8000`. There is no other rounding to preserve. The
+single corner is the sign: at `0x8000` and above the shifted word is loaded
+as a negative 32-bit integer and the rate goes negative; a wider or unsigned
+accumulator diverges there and nowhere else, and no shipped footprint reaches
+it.
+
 #### R-PROD-01 §7 — Cost selection, the player gate, the can-cloak capability, and the unconditional transition [R-PROD-01] (2026-08-29)
 
 **Established — the player gate, exactly.** The whole cloak block — gate,
@@ -5371,6 +5391,24 @@ anchor is `(cellX − footprintx/2, cellZ − footprintz/2)` with truncating
 division (the entry is centre-referenced), for a sprite definition the anchor
 is the cell itself. A mission-file name not yet compiled is compiled on the
 spot. Both loaders pass nibble 10. The reload path is `[R-SAVE-FEATURE-01]`.
+
+#### R-FEAT-01 §3-A — Dense pack over a fringe cell, restated [R-FEAT-01] (2026-09-02)
+
+A code marker asks what retail does when a footprint covers a *partial* cell
+— a `0xFFFE` fringe cell — of a different live feature. Step 3 above already
+answers it and was re-verified RWU-19-22 (Established): the covered-cell
+test is "feature word not `0xFFFF`", so a fringe cell is torn down like an
+anchor. The teardown (§4) walks the fringe back to its anchor and applies
+its rule to the **anchor's** definition: an indestructible anchor returns 0
+and the stamp fails at once, leaving the cells torn so far torn; any other
+anchor is freed and its whole footprint — anchor and every `0xFFFE` cell —
+cleared to `0xFFFF`, and the new feature's stamp proceeds. Two consequences
+for a loader that derives fringe ownership itself: a later footprint that
+overlaps an earlier non-indestructible feature **replaces** it entirely (the
+earlier anchor does not survive with a truncated fringe), and a later
+footprint that overlaps an indestructible feature's fringe is **not
+stamped** (its own anchor cell is not written). Skipping the contested cell
+and keeping both anchors is neither of retail's outcomes.
 
 #### R-FEAT-01 §4 — Teardown, exactly, and two corrections [R-FEAT-01] (2026-08-29)
 

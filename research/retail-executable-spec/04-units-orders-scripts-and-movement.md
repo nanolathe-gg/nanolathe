@@ -7880,7 +7880,7 @@ Each covered cell's yard byte gates independent tests:
 
 | Yard bit | Gate | Meaning |
 |---:|---|---|
-| 0 | enemy-visibility/occupancy branch | tests the authoritative visibility/occupancy predicate only when the mode and bit branch request it; mode 0 applies the occupancy rejections unconditionally, a nonzero mode gates them on the LOCAL player's team bit in the cell's LOS word (or, under the footprint-overlay global, the overlay char at the cell) — the alias and mode matrix are closed in section 4.7 |
+| 0 | structure-yard mark | rejects when the cell's flag-byte bit 1 — the *structure yard* mark a building stamp sets on every cell whose yard byte has bit 0 [R-COLL-01 §4] — is set, subject to the known-site gate of [R-P0-08-B §1]; corrected 2026-09-02 (previous row text: "enemy-visibility/occupancy branch … the alias and mode matrix are closed in section 4.7", which pointed at the wrong section and conflated the validator's mode with the blocker's player argument) |
 | 1–2 | unit occupancy | a nonzero occupant other than the passed self identity rejects |
 | 3 | slope aggregate participation | contributes the cell's low and high terrain heights to the footprint aggregate |
 | 4 | height aggregate participation | contributes the high terrain height to the separate height maximum |
@@ -7896,10 +7896,65 @@ These flags are resolved through the feature cell's live identity, including
 the signed fringe-anchor hop: a fringe cell whose hop finds no live feature is
 not blocking; an out-of-range feature identity blocks for bit 5 and satisfies
 neither bit 6 nor bit 7. The bit-0 branch is an authoritative
-visibility/occupancy check, not a minimap or fog-presentation lookup — the
-placement predicate reuses the gameplay predicate family selected by its mode,
-with the local player's team bit as the alias (closed in section 4.7); do not
-equate it with the presentation fog surface.
+occupancy check — the structure-yard mark — not a minimap or fog-presentation
+lookup; the visibility half of the old description is the blocker's
+*known-site gate*, stated exactly in [R-P0-08-B §1] below (previous text here:
+"the placement predicate reuses the gameplay predicate family selected by its
+mode, with the local player's team bit as the alias (closed in section 4.7)";
+section 4.7 is the engine-port section and never closed it).
+
+#### Closed — yard bit 0: the structure-yard mark and the known-site gate [R-P0-08-B §1] (2026-09-02)
+
+Traced RWU-19-22 (static: the yard-map blocker, its three callers, the
+building stamp's flag write of [R-COLL-01 §4]). Established throughout.
+
+**The bit-0 test.** For a covered cell whose yard byte has bit 0, the
+blocker rejects the footprint when the cell's flag-byte **bit 1** is set.
+That bit is the *structure-yard mark*: the building stamp sets it on every
+cell whose own yard byte has bit 0 and the building clear resets it
+([R-COLL-01 §4]), so the mark is "a completed or stamped building's yard
+already covers this cell". It is a building-versus-building test and reads
+no occupant identity, no LOS word and no fog surface. Together with bits 1–2
+(the ground occupant word) it is one of the two rejections the gate below
+can switch off.
+
+**The blocker's fourth argument is a player record, not a mode.** The
+placement validator's *mode* ([R-COLL-01 §2]) never reaches the blocker; the
+validator delegates a building-class definition with self `0` and a **null
+player**. The blocker's callers are exactly three: the computer player's
+exhaustive metal-spot helper (null player) [08 R-AI-03 §3], the validator's
+delegation (null player), and the human build-cursor **preview**, which
+passes the **local player's** record [07 §9].
+
+**The known-site gate, exactly.** With a null player the two occupancy
+rejections (bit 0 mark, bits 1–2 occupant) apply unconditionally. With a
+player record:
+
+1. the footprint centre is taken in world units — `(footX + 2·cellX) × 8`,
+   `(footZ + 2·cellZ) × 8` — and its terrain height sampled; the visibility
+   cell is `vx = worldX >> 5`, `vz = (worldZ − (height >> 1)) >> 5` (the
+   32-world-unit LOS grid with the height shear of [03 §2.1]);
+2. `vx` at or beyond the player's explored-grid width, or `vz` at or beyond
+   its height, **rejects** the footprint;
+3. the global per-cell visibility word at `(vx, vz)` must carry the bit of
+   the **local viewing slot** — the same alias the rally probe's second form
+   reads [08 R-AI-01 §7] — or the footprint is **rejected**: a site the local
+   viewer cannot currently see is unplaceable from the cursor;
+4. then the *gate* for the two occupancy rejections is: under the mapping
+   option (the LOS-mode word's bit 1, the same word doc 03 reads for the
+   mapping/fog option) the passed player's **explored-grid byte** at
+   `(vx, vz)` is non-zero; without that option it is the visibility bit
+   already tested in step 3, so the rejections always apply.
+
+So the only case in which a visible cursor site skips the occupancy
+rejections is the mapping option with a site the local player has never
+explored — which cannot be visible in step 3 in ordinary play, so in practice
+the cursor preview applies both rejections whenever it reaches them. The
+alias is the local viewing slot's bit; no other player's visibility is ever
+consulted, and the computer player's placement never enters the gate.
+Implementation rule: bit 0 = reject on the structure-yard mark; the null-player
+callers apply the occupancy rejections unconditionally; the cursor preview
+alone runs steps 1–4 with the local player's grids.
 
 **Established fact — footprint aggregates and strict comparisons [R-P0-08]:**
 For yard bytes that request terrain sampling the validator maintains

@@ -128,11 +128,20 @@ func TestPumpResultCodeTables(t *testing.T) {
 				t.Fatalf("code1: draw delta %d, want 0", d)
 			}
 		})
-		t.Run("code2 continues to the next record and consumes satisfied bits", func(t *testing.T) {
-			// [04 R-FAC-02 §4] states the walk effect for a hold without
-			// naming a descriptor: "a *hold* (code 2) does NOT stop the walk —
-			// the next record is visited in the same pass". The held record is
-			// dispatched once, keeps its phase, and its satisfied bits were
+		t.Run("code2 reloads the head and consumes satisfied bits", func(t *testing.T) {
+			// [04 R-ORD-01 §10]: "continue walking" is a HEAD RELOAD, so a
+			// hold re-dispatches whatever is at the head — here the same
+			// record, which the probe's second call gates. The record behind it
+			// is never reached: "A record behind an ungated head is never
+			// reached by walking past it. Nothing resumes at the next record."
+			//
+			// This subtest used to assert the opposite — one call on the held
+			// record and at least one on the record behind it — on
+			// [04 R-FAC-02 §4]'s "a *hold* (code 2) does NOT stop the walk —
+			// the next record is visited in the same pass", which §4's own
+			// 2026-09-02 correction withdraws.
+			//
+			// The held record keeps its phase, and its satisfied bits were
 			// consumed by step 4 before the handler ran.
 			sim := injectTestSim(t)
 			q, u := &Queue{binding: &QueueBinding{SimRNG: sim}}, newTestUnit()
@@ -152,11 +161,11 @@ func TestPumpResultCodeTables(t *testing.T) {
 			if n.Satisfied != 0 {
 				t.Fatalf("code2: satisfied %x, want consumed bits cleared", n.Satisfied)
 			}
-			if p.callsFor(1) != 1 {
-				t.Fatalf("code2: held-record calls %d, want 1", p.callsFor(1))
+			if p.callsFor(1) != 2 {
+				t.Fatalf("code2: held-record calls %d, want 2 (the hold reloads the head) [04 R-ORD-01 §10]", p.callsFor(1))
 			}
-			if p.callsFor(2) == 0 {
-				t.Fatalf("code2: the record behind the hold was never visited")
+			if p.callsFor(2) != 0 {
+				t.Fatalf("code2: the record behind the hold was visited %d times, want 0 [04 R-ORD-01 §10]", p.callsFor(2))
 			}
 			if d := sim.Draws() - before; d != 0 {
 				t.Fatalf("code2: draw delta %d, want 0", d)
@@ -189,9 +198,10 @@ func TestPumpResultCodeTables(t *testing.T) {
 				t.Fatalf("code3: draw delta %d, want exactly 1", d)
 			}
 		})
-		t.Run("code4 continues to the next record unchanged", func(t *testing.T) {
+		t.Run("code4 reloads the head unchanged", func(t *testing.T) {
 			// Code 4 shares code 2's row in [04 §3.3] and therefore its walk
-			// effect [04 R-FAC-02 §4].
+			// effect: the head reload of [04 R-ORD-01 §10]. It too used to
+			// assert a visit to the record behind the hold.
 			sim := injectTestSim(t)
 			q, u := &Queue{binding: &QueueBinding{SimRNG: sim}}, newTestUnit()
 			p := newProbe()
@@ -204,11 +214,11 @@ func TestPumpResultCodeTables(t *testing.T) {
 			if len(q.primary) != 2 || q.primary[0].Phase != 7 {
 				t.Fatalf("code4: len %d phase %d, want unchanged", len(q.primary), q.primary[0].Phase)
 			}
-			if p.callsFor(1) != 1 {
-				t.Fatalf("code4: held-record calls %d, want 1", p.callsFor(1))
+			if p.callsFor(1) != 2 {
+				t.Fatalf("code4: held-record calls %d, want 2 (the hold reloads the head) [04 R-ORD-01 §10]", p.callsFor(1))
 			}
-			if p.callsFor(2) == 0 {
-				t.Fatalf("code4: the record behind the hold was never visited")
+			if p.callsFor(2) != 0 {
+				t.Fatalf("code4: the record behind the hold was visited %d times, want 0 [04 R-ORD-01 §10]", p.callsFor(2))
 			}
 			if d := sim.Draws() - before; d != 0 {
 				t.Fatalf("code4: draw delta %d, want 0", d)

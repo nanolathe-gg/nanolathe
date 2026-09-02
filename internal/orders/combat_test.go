@@ -369,10 +369,26 @@ func TestKamikazeDeadlineIsFormedFromThePumpTick(t *testing.T) {
 	}
 
 	// The watchdog fires: the movement layer reported nothing, so phase 1 takes
-	// its else-arm, resets to phase 0 and holds. One dispatch, no spin.
+	// its else-arm, resets to phase 0 and holds. The hold reloads the head
+	// [04 R-ORD-01 §10], so phase 0 re-issues the goal in the SAME pass and
+	// advances back to phase 1 with a deadline formed from this tick; the next
+	// reload finds gate 0xE1 unsatisfied and the pass ends. That is §3.3's
+	// cascade, bounded by exactly one round trip — and it is the property this
+	// test exists for: with a fabricated tick base the fresh deadline would be
+	// in the past, step 1 would hand bit 0 straight back, and the cascade would
+	// never end.
+	//
+	// Before WU-19-73 the hold advanced a cursor instead of reloading the head,
+	// so the pass ended with the record parked at phase 0.
 	q.Pump(u, tick+60)
-	if n.Phase != 0 {
-		t.Fatalf("phase = %d after the deadline expired, want 0: the row re-issues its goal [04 R-ORD-01 §3]", n.Phase)
+	if n.Phase != 1 {
+		t.Fatalf("phase = %d after the deadline expired, want 1: phase 1 resets to 0, the reload re-issues the goal and advances [04 R-ORD-01 §3][04 R-ORD-01 §10]", n.Phase)
+	}
+	if n.Deadline != int32(tick+60+60) {
+		t.Fatalf("deadline = %d after the watchdog, want tick+60+60 = %d: the re-issue forms it from the pump tick", n.Deadline, tick+120)
+	}
+	if n.DynamicGate != 0xE1 {
+		t.Fatalf("gate = %#x after the watchdog, want 0xE1", n.DynamicGate)
 	}
 }
 

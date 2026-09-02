@@ -136,11 +136,56 @@ func TestEnterBattlePreparationFailureIsAtomic(t *testing.T) {
 	}
 }
 
+// TestRetailSavedCameraWinsOverCommanderCentering also locks the load's shape:
+// it is a *jump*, so the desired origin ends equal to the restored current
+// origin and no glide survives the load [07 R-CAM-01 §14].
 func TestRetailSavedCameraWinsOverCommanderCentering(t *testing.T) {
-	cam := &camera.Camera{X: 1, Z: 2}
+	// The fixture carries map extents because retail clamps the loaded origin
+	// too; with none, this would measure the clamp rather than the load.
+	cam := camera.NewFromTerrain(2048, 2048, 2048, 2048, 640, 480)
+	cam.X, cam.Z = 1, 2
+	cam.GlideTo(900, 900)
 	applyRetailSavedCamera(cam, &save.Camera{XPosition: 317, ZPosition: 419})
 	if cam.X != 317 || cam.Z != 419 {
 		t.Fatalf("saved camera = %d,%d, want 317,419", cam.X, cam.Z)
+	}
+	if cam.Follow.Desired.X != cam.X || cam.Follow.Desired.Z != cam.Z {
+		t.Fatalf("desired origin = %d,%d after a load, want the current origin %d,%d",
+			cam.Follow.Desired.X, cam.Follow.Desired.Z, cam.X, cam.Z)
+	}
+}
+
+// TestCameraResetZeroesBothOrigins locks the world rebuild's camera-block
+// reset: the block spans the current and the desired origin, so both read
+// (0, 0) afterwards [07 R-CAM-01 §14].
+func TestCameraResetZeroesBothOrigins(t *testing.T) {
+	cam := camera.NewFromTerrain(2048, 2048, 2048, 2048, 640, 480)
+	cam.X, cam.Z = 500, 600
+	cam.GlideTo(900, 900)
+	cam.JumpTo(0, 0)
+	if cam.X != 0 || cam.Z != 0 {
+		t.Fatalf("current origin = %d,%d after the reset, want 0,0", cam.X, cam.Z)
+	}
+	if cam.Follow.Desired.X != 0 || cam.Follow.Desired.Z != 0 {
+		t.Fatalf("desired origin = %d,%d after the reset, want 0,0", cam.Follow.Desired.X, cam.Follow.Desired.Z)
+	}
+}
+
+// TestWatcherBattleStartCameraJumpsToViewCentreOrigin locks the world-rebuild
+// tail's watcher branch: retail's origin is (trunc(viewW/2), trunc(viewH/2)),
+// which in this build's frame of reference is that value less the leading
+// inset, and the jump leaves no glide [07 R-CAM-01 §14][03 §4.1].
+func TestWatcherBattleStartCameraJumpsToViewCentreOrigin(t *testing.T) {
+	cam := camera.NewFromTerrain(4096, 4096, 4096, 4096, 640, 480)
+	watcherBattleStartCamera(cam)
+	viewW, viewH := cam.BattleView()
+	wantX, wantZ := cam.BattleViewCenterOrigin(2*(viewW/2), 2*(viewH/2))
+	if cam.X != wantX || cam.Z != wantZ {
+		t.Fatalf("watcher origin = %d,%d, want %d,%d", cam.X, cam.Z, wantX, wantZ)
+	}
+	if cam.Follow.Desired.X != cam.X || cam.Follow.Desired.Z != cam.Z {
+		t.Fatalf("watcher jump left a glide: desired %d,%d current %d,%d",
+			cam.Follow.Desired.X, cam.Follow.Desired.Z, cam.X, cam.Z)
 	}
 }
 

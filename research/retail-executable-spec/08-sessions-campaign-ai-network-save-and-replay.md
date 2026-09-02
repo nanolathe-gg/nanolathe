@@ -2824,7 +2824,7 @@ Scores at or below zero are excluded **without drawing**. The remaining positive
 
 The class routine walks definition IDs in strict ascending type order, skips the zero sentinel, and draws no random numbers itself. All float-to-integer conversions truncate toward zero; float32 narrowing occurs at the recovered helper boundaries. Final signed-byte coefficients clamp to `[-100, 100]`.
 
-The initialization-only single-byte vector is written once at construction — zero, plus 40 when the definition's category flag is clear, plus 20 when the build-option list is non-empty — and is never rewritten by the refresh routine. The category flag's authored semantic name is not closed and must not be replaced with a guessed meaning. [08 "Strategic state construction and refresh"]
+The initialization-only single-byte vector is written once at construction — zero, plus 40 when the definition's category flag is clear, plus 20 when the build-option list is non-empty — and is never rewritten by the refresh routine. **Closed (2026-09-02, §9):** the "category flag" is the authored `bmcode` byte — the 40 is added for every **building** (`bmcode == 0`). *Previous text:* "The category flag's authored semantic name is not closed and must not be replaced with a guessed meaning." [08 "Strategic state construction and refresh"]
 
 The single coefficient (first pass):
 
@@ -2889,6 +2889,50 @@ metal = clamp(trunc(metalBase
 ```
 
 The definition inputs consumed by the routine — extracts-metal, makes-metal, metal and energy build costs, can-attack, builder, can-fly, can-load, is-feature, max-slope, radar and sonar distance, and wind-generator — are recovered runtime field mappings, not guesses based on similarly named proxies. Confidence is high for the comparisons, constants, cadence, and field mappings; medium for the classification helper's semantic name; the two weapon-field key identities are closed as the `DAMAGE/default` word and the `range` word.
+
+#### R-P0-05 §9 — The three class-routine inputs the marker census left open — Established [R-P0-05]
+
+Traced RWU-19-22 (static: the strategic-state constructor's initialization
+pass, the class routine's weapon loop and zeroing tail, the weapon catalog
+loader). All three are Established.
+
+**The category flag is `bmcode`.** The initialization pass walks definition
+IDs in ascending type order and writes the single-byte vector as: `0`, `+40`
+when the definition's authored `bmcode` byte is **zero** (the building class
+— the same byte the placement validator dispatches on, [R-AI-03 §7.4]),
+`+20` when its compiled build-option list is non-empty. So a plain building
+initializes to 40, a factory or construction building to 60, a mobile unit
+to 0 or 20 (a mobile builder). The same pass seeds the per-type completed
+count to 0 and the other per-type vectors to their constants; none of that
+is rewritten by the refresh. The earlier caution against "substituting
+`bmcode`" is withdrawn: it is that byte.
+
+**The weapon slot's "active" test is the record-0 sentinel test.** The class
+routine's weapon loop reads the definition's three compiled weapon links —
+each resolved by the FBI compile to a weapon catalog record, or to **record
+0** when the authored name does not resolve [02 §5 R-CONTENT-02] — and tests
+one byte of the linked record. That byte is written by the weapon catalog
+loader's prologue, which stamps every record with **its own catalog index**
+before any TDF is parsed; record 0 therefore reads 0 and every real weapon
+reads its non-zero index. (The same byte seeds the unit's per-slot "slot
+active" flag at creation and is the weapon id the projectile packet carries
+[06 §3.3].) So "`weapon.active != 0`" in §5 means exactly "the link resolves
+to a record other than the inactive sentinel"; there is no separate runtime
+bit, and an implementation that skips nil and sentinel links already matches
+retail.
+
+**The wind-generator zeroing.** The third zeroing branch of the triple's
+first coefficient is: zero the accumulator when the definition's
+`windgenerator` compares **not equal** to floating zero **and** the map's
+maximum wind word is **less than** the wind divisor divided by two — a signed
+integer divide of the compiled-in **5000** [05 R-PROD-01 §3], so the
+threshold is `2500`. The maximum wind word is the session's authored
+`maxwindspeed` (canonical fallback 2000 when the mission does not author it,
+[05 R-PROD-01 §3]); the comparison is strict and integer. Doc 05's correction
+note under [05 R-PROD-01 §3] already described this branch from the economy
+side; this is its home. On a map whose maximum wind is below 2500 the
+computer player's class coefficient for every wind generator is zero, which
+suppresses the definition in the construction selection of §3–§4.
 
 #### R-P0-05 §6 — Cadence and same-tick ordering — Established [R-P0-05]
 
@@ -3334,14 +3378,19 @@ for unit in group vector order:
   always yields to any positive challenger, and two equal scores swap with
   probability just under one half. Both draws are taken every time the probe
   validates, in that order.
-* `hasNoLocomotion` reads the unit record's locomotion-object pointer — the
-  same field the shared build-queue producer uses to choose between the
-  building-build and mobile-build commands [07 "Factory product click producer
-  (R-P0-11 §1)"], so a null value means an immobile unit. Only for such a unit
-  is the shared order-admission predicate consulted first, and only such a unit
-  can be skipped by it; a mobile member is always ordered. The reading of that
-  field as "locomotion object" is **Supported inference** from the build-queue
-  producer's use of it; its width and null test are established.
+* `hasNoLocomotion` reads the unit record's **mover pointer** — the object
+  [04 R-AIR-01 §1] describes, which the unit creator allocates only for a
+  `bmcode == 1` (mobile) definition — so a null value means a building. Only
+  for such a unit is a further predicate consulted first, and only such a unit
+  can be skipped by it; a mobile member is always ordered. **Closed
+  (2026-09-02, §19):** the field identity is Established (creator trace), and
+  the predicate is not an order-admission test at all but the **weapon
+  shot-time physical gate** of [06 §3.3] for the unit's first weapon slot,
+  evaluated from the unit's own position to `best`. *Previous text:* "the
+  same field the shared build-queue producer uses … The reading of that field
+  as 'locomotion object' is **Supported inference** …; its width and null test
+  are established" and the pseudo-code's `orderWouldBeAccepted(unit,
+  unit.position, best)`.
 * Orders are resolved and submitted **per unit**, not through the group
   broadcast helper of §9, so the rally task is the only task whose order
   submission follows group-vector order rather than unit-pool order.
@@ -3398,14 +3447,19 @@ maximum signed 32-bit value, and the helper returns "none" when nothing
 qualifies. The vertical coordinate is passed in but never read.
 
 **Group order broadcast.** Given a player, a group number, an intent, a queue
-modifier, an optional target unit, an optional target position and a spacing
-parameter, it walks the **player's whole unit slice in ascending pool order**
-and, for every unit whose type index is non-zero and whose stored group number
-equals the given one, resolves the intent and submits the order. Two
-consequences are load-bearing: the broadcast order is unit-pool order, not
+modifier, an optional target unit, an optional target position and two
+further words, it walks the **player's whole unit slice in ascending pool
+order** and, for every unit whose type index is non-zero and whose stored
+group number equals the given one, resolves the intent and submits the order.
+Two consequences are load-bearing: the broadcast order is unit-pool order, not
 group-vector order, so it is stable across group-vector churn; and a unit whose
 stored group number was changed since the vector was last rebuilt is included
-or excluded by the **stored number**, not by vector membership.
+or excluded by the **stored number**, not by vector membership. **Closed
+(2026-09-02, §19):** the helper never reads the two trailing words; it
+forwards them verbatim into every member's order submission, where they
+become the order node's **argument word** and its companion. *Previous text*
+called the first of them "a spacing parameter"; it is not a spacing and no
+per-member transform exists.
 
 #### R-AI-01 §10 — The classifier also writes standing orders — Established [R-AI-01]
 
@@ -6388,6 +6442,46 @@ the reverse fallback, can fire on stock data) · decider: asset census of a
 localized install.
 
 
+#### R-AI-01 §19 — Rally admission for buildings, and the broadcast's forwarded word — Established [R-AI-01]
+
+Traced RWU-19-22 (static: the rally task body, the unit creator, the
+shot-time gate, the broadcast helper, the order-node allocator, the
+ground-move handler). Both findings are Established.
+
+**Rally: which record, which predicate.** The member test of §7 reads the
+first word of the unit record, the pointer to the unit's mover. The creator
+allocates a mover only when the definition's `bmcode` is 1 and stores the
+pointer there; a building never gets one, and the command resolver, the
+standby handler and the height snap all treat a null there as "no mover"
+[04 R-SPEC-01 §1]. So `hasNoLocomotion` is "the member is a building". For
+such a member the task calls the **shot-time physical admission gate** of
+[06 §3.3] with the member's own position as the shooter position, `best` as
+the target position, and **weapon slot 1** (the first slot): the gate passes
+when the slot's weapon range squared is at least the planar distance squared
+(each 16.16 delta squared as a 64-bit product and shifted back 32), and, for
+a non-water weapon, when the shooter's height word plus the definition's
+firing-height term exceeds the sea-level byte and (for a ballistic weapon) the
+trajectory solver finds an angle. A building whose first slot cannot reach
+`best` is skipped without resolving anything; a building with no weapon in
+slot 1 reads the sentinel record's zero range and is likewise skipped. A
+mobile member is never gated. Implementation rule: the manager's rally
+admission binding is "for a unit with no mover, the combat service's
+slot-1 shot-time check against the point"; no order-admission predicate is
+involved.
+
+**Broadcast: the forwarded word.** The helper's two trailing arguments are
+not read by the helper; each member's submission carries them into the
+order node's **argument word** and its companion, the same slots the
+construction task fills with the product type index for a MobileBuild. The
+wave task's gather broadcast (intent 2, the group centroid) passes **160** in
+the argument word; the regroup and explore broadcasts pass 0. The ground
+move handler reads that word as its phase-0 arrival radius, `argument + 4`
+[04 R-ORD-01 §4] — so a wave gather is a move with a **164**-world-unit
+arrival radius for every member, a regroup or explore move one with radius 4.
+That is the whole effect of the "spacing" argument: no formation, no
+per-member offset. Implementation rule: the broadcast forwards the word into
+each member's move order unchanged; the move handler owns its meaning.
+
 ## R-AI-02 — Computer player: ledger-closure findings (2026-08-29)
 
 Bottom-up closure of the last open lane-08 computer-player rows. Everything
@@ -6865,10 +6959,20 @@ in rows; that is retail's base layout.
 1. bounds: `gx >= 0`, `gz >= 0`, `gx + footX < mapCellWidth`,
    `gz + footZ < mapCellHeight`; off-map returns **false** (only mode `2`
    treats off-map as placeable);
-2. `bmcode == 0` (a mobile definition): delegate to the footprint blocker of
+2. `bmcode == 0` (every **building**): delegate to the footprint blocker of
    §3 with self `0` and ghost `0` — which **writes** the accumulator;
-3. `bmcode != 0` (every building): walk the footprint cells row-major with the
-   plain rule set, no yard bytes and no accumulator write. A cell rejects when
+3. `bmcode != 0` (a **mobile** definition): walk the footprint cells row-major
+   with the plain rule set, no yard bytes and no accumulator write.
+
+**Correction (2026-09-02, RWU-19-22).** The two class labels above were
+inverted when first written: branch 2 read "`bmcode == 0` (a mobile
+definition)" and branch 3 "`bmcode != 0` (every building)". `bmcode` is 0 for
+the building class — the same byte that selects the yard-map parse, sets the
+building-class flag at creation, and (under §7.4) adds the class routine's
+initialization addend — and 1 for the mobile class, the only class the unit
+creator gives a mover. [04 R-COLL-01 §2] already had the dispatch the right
+way round; this section now agrees with it. The consequence for the limit
+test is stated in the paragraph below, which is rewritten. A cell rejects when
    its feature reference resolves to a feature whose `blocking` flag is set
    (a reference at or beyond the feature count, or in the `0xfffb`–`0xfffd`
    band, blocks; a `0xfffe` part-cell is resolved through its anchor offsets to
@@ -6883,18 +6987,24 @@ This is the water legality "Placement root and search helpers" located: the
 band is enforced per cell, on every cell, with the definition's own depth
 fields.
 
-**The stale score.** Because branch 3 never writes the accumulator, the
-`accumulator <= limit` test for a building reads whatever the **last footprint
-blocker call in the process** left there: this player's most recent exhaustive
-attempt, a mobile-definition validation by any player (branch 2), or the
-human player's build cursor and order placement [07 §9] — including a partial
-sum from a rejected footprint. The process global starts at zero, so a fresh
-session accepts the first valid trial. This is retail's contract, not a
-Nanolathe choice; an implementation that wants retail's placement sequence
-keeps one process-wide accumulator written only by the blocker, and one that
-prefers a sane test (the trial footprint's own metal-byte sum) takes a
-sanctioned divergence, since the two differ only in *which* valid trial is
-accepted, never in whether a placement is legal.
+**The score the limit test reads.** For a building — every definition the
+construction task hands the root in stock content, since mobile builders
+author only buildings — branch 2 runs the yard-map blocker, which clears the
+process-wide accumulator on entry and adds every footprint cell's metal byte
+before applying that cell's yard rules. A trial that passes therefore leaves
+the **trial footprint's own metal-byte sum** in the accumulator, and
+`accumulator <= limit` compares exactly that sum; a trial the blocker rejects
+is skipped before the comparison, so its partial sum is never read here.
+Only a *mobile* definition placed through the root (branch 3, no accumulator
+write) would read a stale value — the last blocker call in the process — and
+no stock build list produces one. *Previous text* ("The stale score … Because
+branch 3 never writes the accumulator, the `accumulator <= limit` test for a
+building reads whatever the last footprint blocker call in the process left
+there … an implementation … that prefers a sane test (the trial footprint's
+own metal-byte sum) takes a sanctioned divergence") followed from the inverted
+labels and is withdrawn: the footprint's own sum **is** retail's test, and
+§4-A's arithmetic (a uniform seed sums to half the limit) was already
+computed on that basis.
 
 #### R-AI-03 §4-A — Which authored key the `surfaceMetal` word is — Established [R-AI-03]
 
@@ -6959,19 +7069,17 @@ radius is already zero by then.
 
 ### R-AI-03 §6 — Unknowns left, with deciders — Unknown [R-AI-03]
 
-- **Negative candidate row in the exhaustive path.** The blocker rejects a
-  candidate whose column is `<= 0` but does not test the row's sign; a deposit
-  in row 0 or 1 with a footprint of five or more rows yields `candZ < 0` and a
-  row pointer before the plot grid. Whether that reads harmlessly (returns
-  false on a garbage cell) or faults is not established · static trace of the
-  blocker's cell addressing for a negative row, or a retail probe on a map
-  with a metal deposit in its top row.
-- **The mode-2 off-map acceptance** of the placement validator is outside
-  this unit (no computer-player caller passes 2) · static trace of the
-  mode-2 callers (doc 04 order handlers).
-- **The `y` of the submitted position** is stack residue (§5); whether the
-  MobileBuild handler reads it at all · static trace of the order handler
-  [R-ORD-01].
+- **Negative candidate row in the exhaustive path** — narrowed 2026-09-02,
+  see §7.1. The blocker's row test is now traced (row 0 is rejected, negative
+  rows are not); what remains Unknown is only whether the out-of-grid read
+  faults or returns a garbage verdict · a retail probe on a map with a metal
+  deposit in its top row, or the allocator's placement of the plot grid.
+- **The mode-2 off-map acceptance** — closed 2026-09-02, §7.2: doc 04 owns it
+  ([04 R-COLL-01 §2]), and the census of callers passing a non-literal mode is
+  recorded there.
+- **The `y` of the submitted position** — closed 2026-09-02, §7.3: the
+  MobileBuild handler overwrites it from the site-height query before the
+  nanoframe is created; the residue is dead.
 - **Field label in the class routine.** [R-P0-05 §5] and [R-P0-04 §3]
   describe a "max-slope" term (`× 3` when non-negative; classifier row
   "definition max-slope field signed greater than zero"). The definition word
@@ -6983,6 +7091,72 @@ radius is already zero by then.
   readers.
 - Nothing else in the placement path is open: every constant, comparison,
   truncation, draw bound and draw order above is read from the executable.
+
+### R-AI-03 §7 — Closures from the 2026-09-02 marker census — Established [R-AI-03]
+
+Traced RWU-19-22 (static, the placement root, the two validators, the
+construction task and the MobileBuild handler). Each item names its confidence.
+
+#### R-AI-03 §7.1 — The blocker's row test, and the negative row — Established, with one Unknown [R-AI-03]
+
+§3 said the blocker "does not test `candZ` for sign". Exactly: the blocker's
+entry test is `candX > 0` on the column as a signed 16-bit word **and** "the
+packed cell word, read as an unsigned 32-bit value, exceeds `0xffff`" — which
+is true precisely when the row's 16-bit pattern is non-zero. So **row 0 is
+rejected the same way column 0 is**, and a negative row (`0xffff`, `0xfffe`,
+…) passes that test and then the signed `candZ + footZ < mapCellHeight` test.
+The cell walk then addresses `(candZ × mapCellWidth + candX)` cells before the
+plot grid's first cell for a negative row — one row of storage per unit of
+negative row — and reads metal bytes, heights, occupant and feature words from
+whatever precedes the grid. There is no guard. (Established.) Whether that
+storage is mapped, so the walk returns a garbage verdict rather than faulting,
+depends on where the process allocator placed the grid and is **Unknown**;
+nothing in the executable decides it. A deposit in row 0 or 1 under a
+footprint of five or more rows is the only way to reach it (§3's candidate
+offset). Implementation rule: a candidate whose row is negative has no retail
+verdict to reproduce; rejecting it is the only deterministic choice and must
+be marked as that choice, not as retail's. Row 0 must be rejected as retail
+does.
+
+#### R-AI-03 §7.2 — The validator's mode, and who passes 2 — Established [R-AI-03]
+
+The placement validator's mode argument is the caller's **movement mode** —
+the two-bit field [04 R-COLL-01 §2] describes (1 grounded/stopped, 2 active
+locomotion, 0 and 3 load-only), not a placement policy. Its off-map verdict
+is `mode == 2` and its non-building, non-mode-1 short-circuit is owned by
+[04 R-COLL-01 §2], which already states both. The caller census: the
+**mover commit step** passes its own mover's mode word (the only path on
+which 2 is reachable); the **factory product allocation** passes the
+factory's unit-mirrored mode, which creation sets to 1 and a building never
+changes ([04 R-FAC-02 §5]); every other recovered caller — the scatter helper
+of §4, the mobile-build site check, the skirmish spawn scan and the remaining
+order-handler site checks — passes the literal 1. No computer-player path can
+observe the mode-2 acceptance.
+
+#### R-AI-03 §7.3 — The submitted `y` is dead — Established [R-AI-03]
+
+§5 left open whether the MobileBuild handler reads the stack-residue `y` the
+construction task submits. Traced: the order node stores the triple verbatim;
+the handler's first phase re-snaps `x` and `z` to the footprint centre and
+copies `y` into a local it never uses; the walk-approach phase reads only
+`x`/`z`; and immediately before the nanoframe is created the handler runs the
+building **site-height rewrite** — for a `bmcode == 0` definition it re-snaps
+`x`/`z` again and stores `y := siteHeight(def, cell) << 16`, the same
+height-under-footprint query the blocker's tail computes. The unit creator
+then stores that rewritten triple as the new unit's position. The residue
+therefore reaches nothing that survives: an implementation submits `x`/`z`
+and any `y` (zero is fine) and derives the nanoframe's height at creation,
+exactly as the human build path does.
+
+#### R-AI-03 §7.4 — `bmcode` is the building/mobile selector everywhere the placement path reads it — Established [R-AI-03]
+
+Four readers agree, and the §4 correction above rests on them: the FBI
+compile stores the authored `bmcode` byte on the definition; the unit creator
+sets the building-class flag from "`bmcode == 0`" and allocates a mover only
+for "`bmcode == 1`"; the validator sends `bmcode == 0` to the yard-map
+blocker; and the strategic state's initialization vector adds its 40 for
+`bmcode == 0` ([R-P0-05 §9]). Stock content authors `bmcode=0` on buildings
+and `bmcode=1` on mobile units.
 
 ## Required implementation invariants
 

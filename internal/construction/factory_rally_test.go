@@ -108,7 +108,7 @@ func TestFactoryMoveOrderInstallsRallyAndKeepsProduction(t *testing.T) {
 		t.Fatal(err)
 	}
 	product := w.Unit(ph)
-	svc.rallyInheritance(factory, product)
+	svc.rallyInheritance(factory, product, 0)
 
 	pprim := orders.QueueForUnit(product).Primary()
 	if len(pprim) != 1 || pprim[0].ID != moveID {

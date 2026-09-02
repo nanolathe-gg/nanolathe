@@ -457,6 +457,42 @@ func TestMinimapSelectedUnitCircleGate(t *testing.T) {
 	}
 }
 
+// TestMinimapWeaponRingIsGatedOnSelection locks the layer-5 gate: the ring
+// loop sits under the unit's selected bit (status bit 4), like the sensor
+// circles, so a detected enemy is never ringed [03 R-MM-01 §3 "rings are gated
+// on selection"]. Before this the loop ran for any admitted contact carrying
+// the ring flag.
+func TestMinimapWeaponRingIsGatedOnSelection(t *testing.T) {
+	m := camera.Minimap{W: 10, H: 10}
+	playW, playH := int32(100), int32(100)
+	blit := func(dst *RadarSurface, x, y int, color byte, commander bool) { dst.Set(x, y, color) }
+	base := MinimapContact{
+		WorldX: 50, WorldZ: 50, Visible: true, Palette: 9,
+		RingEnabled: true, RingRange: 532,
+	}
+	centerX, centerY := RadarProjection(base.WorldX, base.WorldZ, 0, playW, playH, m)
+	ringX := centerX + RadarRadius(base.RingRange-512, m.W, playW)
+
+	mapped := &RadarSurface{W: 10, H: 10, Bits: make([]byte, 100)}
+	final := rebuildFinalExact(mapped, m, playW, playH, []MinimapContact{base}, BlinkState{Phase: 1}, blit, 7, 8, 9)
+	if got, _ := final.At(int(ringX), int(centerY)); got != 0 {
+		t.Fatalf("an unselected contact drew a weapon ring: got %d want none [03 R-MM-01 §3]", got)
+	}
+
+	selected := base
+	selected.Status = 0x10
+	final = rebuildFinalExact(mapped, m, playW, playH, []MinimapContact{selected}, BlinkState{Phase: 1}, blit, 7, 8, 9)
+	if got, _ := final.At(int(ringX), int(centerY)); got != 9 {
+		t.Fatalf("a selected contact drew no weapon ring: got %d want the ring index 9 [03 R-MM-01 §3]", got)
+	}
+
+	// The ring loop is independent of the circles' activation term: a selected
+	// unit with RangeStatus false still rings.
+	if selected.RangeStatus {
+		t.Fatal("fixture error: the ring case must not carry the circle gate")
+	}
+}
+
 func TestMinimapBlinkGate(t *testing.T) {
 	m := camera.Minimap{W: 10, H: 10}
 	mapped := &RadarSurface{W: 10, H: 10, Bits: make([]byte, 100)}

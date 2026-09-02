@@ -88,3 +88,52 @@ func TestMessageRingClearAndVisitedWalk(t *testing.T) {
 		t.Fatalf("Clear left producer %d display %d and %d lines", r.Producer, r.Display, len(r.Visible()))
 	}
 }
+
+// TestMessageRingF3BitsAreDistinct locks the two flag-byte bits F3 uses:
+// the leading clear is 0x20 (ClearJumped) and the scan tests 0x10 (Visited),
+// so the leading clear must not restart an exhausted walk and a hit must set
+// both [07 R-CAM-01 §14]. Reading the two writes as one bit made the "not yet
+// visited" test and the retry arm unreachable.
+func TestMessageRingF3BitsAreDistinct(t *testing.T) {
+	r := NewMessageRing()
+	r.Append("live", 1, 5, 10, 0)
+	alive := func(h pool.Handle) bool { return h == 5 }
+
+	r.ClearJumped()
+	if _, ok := r.NextUnvisitedSource(alive); !ok {
+		t.Fatalf("first scan found no live source")
+	}
+	if !r.Entries[0].Visited || !r.Entries[0].Jumped {
+		t.Fatalf("a hit set visited=%v jumped=%v, want both", r.Entries[0].Visited, r.Entries[0].Jumped)
+	}
+	// The leading clear alone must leave the walk exhausted — that is what makes
+	// the retry arm reachable.
+	r.ClearJumped()
+	if _, ok := r.NextUnvisitedSource(alive); ok {
+		t.Fatalf("clearing bit 0x20 restarted the walk; it must clear only the jumped mark")
+	}
+	r.ClearVisited()
+	if _, ok := r.NextUnvisitedSource(alive); !ok {
+		t.Fatalf("clearing bit 0x10 did not restart the walk")
+	}
+}
+
+// TestMessageRingScanStopsAtProducer locks the scan's range: display index
+// toward the producer index, wrapping at 30, so the empty slots past the
+// producer are never offered [07 R-CAM-01 §14].
+func TestMessageRingScanStopsAtProducer(t *testing.T) {
+	r := NewMessageRing()
+	// A record parked beyond the producer is not part of the displayed span.
+	r.Entries[20] = MessageLine{Text: "stale", SourceUnit: 7}
+	r.Append("live", 1, 5, 10, 0)
+	alive := func(pool.Handle) bool { return true }
+
+	r.ClearJumped()
+	got, ok := r.NextUnvisitedSource(alive)
+	if !ok || got != 5 {
+		t.Fatalf("scan returned %d (%v), want the displayed source 5", got, ok)
+	}
+	if _, ok := r.NextUnvisitedSource(alive); ok {
+		t.Fatalf("scan ran past the producer index and offered a stale slot")
+	}
+}

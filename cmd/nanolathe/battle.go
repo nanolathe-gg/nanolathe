@@ -102,9 +102,16 @@ type battleSession struct {
 	// walks it, and the game-speed announcement posts into it.
 	messages *frame.MessageRing
 
-	// panelHoldFlag is interface-flags bit 0x80: the HUD side-panel slide
-	// treats it as "Space held" [07 R-CAM-01 §2][07 §6]. Presentation-only [I6].
+	// panelHoldFlag is interface-flags bit 0x80. It has exactly two readers:
+	// the score panel's showing test, and the kill-credit finalize's flash arm
+	// [07 R-HUD-04 §1][07 R-CAM-01 §14]. Presentation-only [I6].
 	panelHoldFlag bool
+
+	// watcherSlot latches the world-rebuild tail's watcher branch for the local
+	// slot. Besides the camera jump, that tail clears render-flags bits 0 and 1
+	// — the mapping and LOS masks — so a watcher's minimap is unmasked from its
+	// first frame [07 R-CAM-01 §14][03 R-MM-01 §3]. Presentation-only [I6].
+	watcherSlot bool
 
 	// visitedUnits and currentUnit are the `n` unit cycle's state
 	// [07 R-CAM-01 §2]. Retail keeps the visited bits in each unit's status
@@ -222,16 +229,16 @@ func composeBattleEntryDetached(sess *session.Session, cat *content.Catalog, cs 
 	// marker projection; raw terrain extents include the void margins [07 §10].
 	cam := camera.NewFromTerrain(terrainW, terrainH, terrain.PlayRight, terrain.PlayBottom, retailScreenW, retailScreenH)
 	// The world rebuild resets the camera block before any battle-start writer
-	// runs [08 R-ENTRY-01 §3 step 12]. Only the scroll setting byte is
-	// established to survive that reset, so this is the reset origin Nanolathe
-	// has always used and the position a campaign without a start-position
-	// special keeps [08 "Campaign camera"].
-	// TODO(question): the origin words' value after the camera-block reset is
-	// not established — [07 R-CAM-01 §10] records only that the scroll byte is
-	// restored and that the tracked object, follow target, bookmarks and hold
-	// state are zeroed. A static trace of the reset routine would settle
-	// whether retail leaves (0,0) or something else here.
-	cam.Pan(0, 0)
+	// runs [08 R-ENTRY-01 §3 step 12]. The reset zeroes twenty-three
+	// consecutive words of that block and writes the scroll-setting byte back;
+	// the block spans the **current origin** and the **desired origin** as well
+	// as the tracked object, follow target, bookmarks and hold state, so after
+	// it `current = desired = (0, 0)` [07 R-CAM-01 §14 "the camera-block reset
+	// leaves both origins at (0, 0)"]. §10's earlier list omitted the two
+	// origins, which is why this used to be a bare pan that left the desired
+	// origin alone. A campaign without a start-position special keeps (0, 0)
+	// as both origins [08 "Campaign camera"].
+	cam.JumpTo(0, 0)
 	if savedCamera != nil {
 		applyRetailSavedCamera(cam, savedCamera)
 	} else {
@@ -248,6 +255,7 @@ func composeBattleEntryDetached(sess *session.Session, cat *content.Catalog, cs 
 	b := &battleSession{
 		sess: sess, cat: cat, cam: cam, hud: hud, fs: cs.fs, shell: shell,
 		millisSource: newMonotonicMillisSource(), battleUI: ui.NewProductionBattleState(),
+		watcherSlot: sessionLocalIsWatcher(sess),
 	}
 	// Rail detent cues are emitted by canonical UI state; this callback only
 	// adapts the authored cue to the session audio sink [07 §6][I6].
@@ -259,17 +267,23 @@ func composeBattleEntryDetached(sess *session.Session, cat *content.Catalog, cs 
 	return b, nil
 }
 
+// applyRetailSavedCamera loads the `Camera` account's origin. The load is a
+// *jump*, not a glide: retail reads `X Position` / `Z Position` with the
+// current origin as each default, writes them to the current origin, sets the
+// view-dirty bit, clamps, copies current into desired, and clears the terrain
+// cache-valid bit [07 R-CAM-01 §14 "a saved-camera load is a jump"]. Camera.
+// JumpTo is exactly that write-clamp-copy, so the load no longer leaves a
+// stale desired origin behind the restored one.
+//
+// The two "state bits" every camera writer touches are the view-dirty bit and
+// the terrain view-cache-valid bit; neither is authored or saved, and a build
+// that rebuilds the view every frame — this one — needs nothing beyond
+// `desired := current`. That is what closes the old marker here.
 func applyRetailSavedCamera(cam *camera.Camera, saved *save.Camera) {
 	if cam == nil || saved == nil {
 		return
 	}
-	// Retail copies saved X/Z into current and target camera positions.
-	// Target/glide/state-bit names are not established by the presentation API,
-	// so this seam deliberately does not synthesize them.
-	cam.X = saved.XPosition
-	cam.Z = saved.ZPosition
-	// TODO(question): camera target/glide/state-bit semantics are unknown; a
-	// retail probe is needed before exposing those words here.
+	cam.JumpTo(saved.XPosition, saved.ZPosition)
 }
 
 // installBattleClient is the non-fallible render-thread half of battle
@@ -433,9 +447,21 @@ func configWithBattleSeeds(cfg session.SkirmishConfig, source BattleSeedSource) 
 //
 // Both branches centre through Camera.JumpToBattleViewCenter, which halves the
 // battle viewport rather than the framebuffer and converts retail's camera
-// origin into this build's [07 R-CAM-01 §12][03 §4.1].
+// origin into this build's [07 R-CAM-01 §12][03 §4.1]. Neither shears: both
+// battle-start writers call the jump with `x = stampX − trunc(viewWidth/2)`
+// and `z = stampZ − trunc(viewHeight/2)` and never read the Y word. The
+// `(z − y/2)` shear of §12 belongs to the unit-position *glide* conversion
+// alone [07 R-CAM-01 §14 "the battle-start jump has no height shear"], which
+// is what glideToUnit applies and this path does not — the reading this file
+// already had, now established rather than chosen.
+//
+// A watcher slot takes neither branch: see watcherBattleStartCamera.
 func centerBattleStartCamera(sess *session.Session, cam *camera.Camera) {
 	if sess == nil || cam == nil {
+		return
+	}
+	if sessionLocalIsWatcher(sess) {
+		watcherBattleStartCamera(cam)
 		return
 	}
 	if sess.Mission != nil && sess.Mission.Type == mission.TypeCampaign {
@@ -449,12 +475,55 @@ func centerBattleStartCamera(sess *session.Session, cam *camera.Camera) {
 	if u, ok := localCommanderUnit(sess); ok {
 		cam.JumpToBattleViewCenter(int32(u.X>>16), int32(u.Z>>16))
 	}
-	// TODO(question): [07 R-CAM-01 §12] gives unit positions entering the
-	// *desired* origin a half-height shear (z - y/2), but the battle-start row
-	// of that section's writer table names only "the commander stamp position
-	// minus half the viewport". Whether the jump shears is unresolved; a static
-	// trace of the stamp helper's camera write would settle it. No shear is
-	// applied here, matching the table's wording.
+}
+
+// sessionLocalIsWatcher reports whether the local slot carries the lobby
+// record's watcher bit. The observer byte skirmish setup writes is the same
+// exclusion everywhere else it is spent, so it is ORed in here exactly as the
+// score panel's row filter does [07 R-HUD-04 §1].
+func sessionLocalIsWatcher(sess *session.Session) bool {
+	if sess == nil || sess.Econ == nil {
+		return false
+	}
+	slot := int(sess.LocalOwner)
+	if slot < 0 || slot >= len(sess.Econ.Players) {
+		return false
+	}
+	p := sess.Econ.Players[slot]
+	return p.Watcher || p.IsObserver
+}
+
+// watcherBattleStartCamera is the world-rebuild tail's watcher branch: instead
+// of a stamp position it jumps to the camera origin
+// `(trunc(viewWidth / 2), trunc(viewHeight / 2))` [07 R-CAM-01 §14 "the
+// battle-start jump has no height shear"].
+//
+// A retail camera origin is the world point drawn at the *viewport's*
+// top-left corner; this build's is the world point drawn at the framebuffer's
+// top-left, so the leading inset comes off as well. BattleViewCenterOrigin is
+// the only public converter that applies that inset, and it also subtracts
+// half the span — so the point handed to it is retail's origin plus that same
+// half span, `2 * trunc(view / 2)`, which reproduces the truncation exactly on
+// an odd span too [07 R-CAM-01 §12][03 §4.1].
+// minimapMaskWord is the render-flags word's mapping and LOS mask bits as the
+// minimap contact pass reads them: the blip gate admits a unit when both are
+// clear [03 R-MM-01 §3]. They are the `+Mapping`/`+LOS` toggles, and no `+`
+// command vocabulary exists in this build, so an ordinary slot reads them set.
+// The world-rebuild tail clears both for a watcher slot, whose view is
+// unmasked from its first frame [07 R-CAM-01 §14].
+func (b *battleSession) minimapMaskWord() uint8 {
+	if b != nil && b.watcherSlot {
+		return 0
+	}
+	return 1
+}
+
+func watcherBattleStartCamera(cam *camera.Camera) {
+	if cam == nil {
+		return
+	}
+	viewW, viewH := cam.BattleView()
+	cam.JumpToBattleViewCenter(2*(viewW/2), 2*(viewH/2))
 }
 
 // campaignStartPosition returns the start-position special the campaign camera
@@ -520,9 +589,12 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	// Advance the canonical panel state during the host-frame update. Drawing
 	// must remain a pure read of this state so hit testing and raster placement
 	// use the same offset [07 §6][I6].
-	// Interface-flags bit 0x80 reads to the panel slide exactly as Space held
-	// does, so the panel stays extended while it is set [07 R-CAM-01 §2][07 §6].
-	spaceHeld := b.panelHoldFlag || (in != nil && in.Kbd != nil && in.Kbd.KeyHeld(input.KeySpace))
+	// The rail slide's test is Space alone, unless a text editor has the focus
+	// [07 §6]. Interface-flags bit 0x80 is *not* a term of it: that bit has
+	// exactly two readers, the score panel's showing test and the kill-credit
+	// finalize's flash arm [07 R-HUD-04 §1][07 R-CAM-01 §14]. It used to be
+	// ORed in here, which pinned the rail open as well as the panel.
+	spaceHeld := in != nil && in.Kbd != nil && in.Kbd.KeyHeld(input.KeySpace)
 	editorFocused := b.hud != nil && b.hud.editorFocused()
 	b.battleState().AdvancePanelNow(spaceHeld, editorFocused)
 	// End-mission presentation takes ownership of the frame once the
@@ -736,10 +808,14 @@ func (b *battleSession) syncSelectionDrag(cl *client.Client) {
 		EndX:             in.DragEndX,
 		EndY:             in.DragEndY,
 		MobileBuildLatch: in.Latch == input.LatchMobileBuild,
-		// TODO(question): Nanolathe keeps no latch-flags word, so latch-flag
-		// bit 0x40 is always clear here and an armed drag takes entry 4. What
-		// writes that bit while MOBILEBUILD is armed is unknown [07 §9].
-		SpecialLatchFlag: false,
+		// Latch-flag bit 0x40 is the pointer-flags byte's **site-valid** bit,
+		// and it has exactly one writer: the in-view placement preview, which
+		// the frame handler runs only when the pointer is over the view and
+		// the latch is MOBILEBUILD; the world rebuild clears it
+		// [07 R-CAM-01 §14 step 1]. This build's placement verdict is that
+		// bit, so the drag box's colour follows the same word the placement
+		// cursor and the build click read [07 §9].
+		SpecialLatchFlag: in.BuildOK,
 		VisiblePanel:     state.PanelOffset == ui.PanelVisible,
 	})
 }
@@ -865,27 +941,35 @@ func (b *battleSession) minimapCameraLatch(mx, my int32, mouse *input.MouseState
 	return true
 }
 
-// minimapClickOrder issues the armed order, or the contextual world click, at
-// the minimap's world point — retail's left-button path over the minimap under
-// `Interface Type 0` [07 R-CAM-01 §5].
+// minimapClickOrder is retail's left-button path over the minimap under
+// `Interface Type 0`. The world-click handler is **region-agnostic**: with the
+// armed-order latch not idle the frame handler routes a left-down to it
+// whatever the region, and with the latch idle a left-down over the minimap
+// reaches it at once — no box drag starts there. Its branches run in the order
+// below [07 R-CAM-01 §14 "the world-click handler is region-agnostic, and its
+// branch order"].
 //
-// It routes through orderSelected, the single order producer. Nothing else is
-// special-cased: pickTarget and cursorWorld already take the minimap branch of
-// the pointer classification for a pointer over the radar rectangle, so the
-// world view and the minimap differ only in how the pointer's world point and
-// unit word are resolved [07 R-CAM-01 §11][07 R-HUD-03 §1].
-func (b *battleSession) minimapClickOrder(mx, my int32, additive bool) {
+// Orders route through orderSelected, the single order producer. pickTarget
+// and cursorWorld already take the minimap branch of the pointer
+// classification, so the view and the minimap differ only in how the pointer's
+// world point and unit word are resolved [07 R-CAM-01 §11][07 R-HUD-03 §1].
+func (b *battleSession) minimapClickOrder(cl *client.Client, mx, my int32, additive bool) {
 	if b == nil || !b.isOnRadar(mx, my) {
 		return
 	}
-	// TODO(question): what a left click over the minimap does while a build
-	// product is armed is untraced. [07 R-CAM-01 §5] says only "issues the
-	// armed order / world click", and the placement path of [07 R-P0-11 §1]
-	// resolves a *view* pixel to a build site. Rather than site a building from
-	// the radar lens, the click is ignored while placement is armed; tracing
-	// the world-click handler's MOBILEBUILD branch under region bit 0 settles
-	// it.
+	// Branch 1: the MOBILEBUILD latch. The site-valid bit has one writer — the
+	// in-view placement preview, which the frame handler runs only over the
+	// view — so over the minimap the bit still holds the verdict of the last
+	// in-view hover. A click while placement is armed therefore sites the
+	// building at the minimap-resolved world point when that verdict was OK,
+	// and plays `notoktobuild` when it was not. Dropping the click, as this
+	// path used to, is the one thing retail does not do [07 R-CAM-01 §14].
 	if b.battleState().Input.BuildDef != "" {
+		if !b.battleState().Input.BuildOK {
+			b.playUICue(cl, "notoktobuild")
+			return
+		}
+		b.siteBuildAtMinimapPoint(cl, mx, my, additive)
 		return
 	}
 	if b.battleState().Input.Latch != input.LatchNormal {
@@ -903,18 +987,59 @@ func (b *battleSession) minimapClickOrder(mx, my int32, additive bool) {
 		}
 		return
 	}
-	// Idle latch: the contextual order, which orders.Resolve specialises from
-	// the target and the point [04 §3.4][07 §9].
-	//
-	// TODO(question): the world-click handler's own-unit *select* branch is not
-	// reproduced here. Retail's pointer unit word over the minimap is the dot
-	// winner within squared pixel distance 4 [07 R-HUD-03 §1], so the branch
-	// plausibly runs, but [07 R-CAM-01 §5] records only "the armed order /
-	// world click" and the handler's branch order under region bit 0 has not
-	// been traced. Selecting a unit by clicking its minimap blip is therefore
-	// not implemented.
+	// Branch 2: cursor kind 0x0F, the resolver's "select" answer. With the
+	// latch idle and the hovered unit an own selectable unit the click selects
+	// it — Shift toggles the selected bit, otherwise the selection is replaced.
+	// The hovered unit over the minimap is the blip-dot winner within squared
+	// pixel distance 4, so clicking a blip selects that unit
+	// [07 R-CAM-01 §14 step 2][07 R-HUD-03 §1]. This branch used to be missing
+	// here, which made an own blip unclickable.
+	if f, ok := b.currentSnapshot(); ok {
+		if h := b.minimapHoverUnit(f, mx, my); h != 0 {
+			if v, found := snapshotUnitByHandle(f, h); found && v.Owner == f.Selection.LocalPlayer {
+				kind := session.HumanSelectionReplace
+				if additive {
+					kind = session.HumanSelectionToggle
+				}
+				_ = b.enqueueHumanCommand(session.HumanCommand{Kind: kind, Selection: session.HumanSelectionCommand{Handles: []pool.Handle{h}}})
+				return
+			}
+		}
+	}
+	// Branch 3: the contextual order, which orders.Resolve specialises from the
+	// target and the point [04 §3.4][07 §9].
 	if b.hasSelection() {
 		b.orderSelected(1, mx, my, additive)
+	}
+}
+
+// siteBuildAtMinimapPoint is branch 1's issue arm: resolve MOBILEBUILD against
+// the armed product and the pointer's world point snapped to the product's
+// footprint grid, queued when Shift is held, play `oktobuild`, and keep the
+// latch only while Shift is held [07 R-CAM-01 §14 step 1].
+//
+// It deliberately does not run updatePlacement: the site-valid bit's one
+// writer is the in-view preview, and re-validating from the minimap point
+// would overwrite the in-view verdict the branch has already consulted. The
+// snap is the same PlacementAnchor the preview applies, and cursorWorld takes
+// the minimap lens branch for a pointer over the radar rectangle
+// [07 R-CAM-01 §11][03 §3.11].
+func (b *battleSession) siteBuildAtMinimapPoint(cl *client.Client, mx, my int32, additive bool) {
+	in := &b.battleState().Input
+	wx, _, wz := b.cursorWorld(mx, my)
+	in.BuildMX, in.BuildMY = mx, my
+	in.BuildCellX, in.BuildCellZ = world.PlacementAnchor(wx, wz, in.BuildFootX, in.BuildFootZ)
+	if !b.commitBuild(additive) {
+		// A command rejection is a failed commit, not an armed placement state,
+		// exactly as on the in-view path.
+		b.disarmPlacement()
+		return
+	}
+	b.playUICue(cl, "oktobuild")
+	if additive {
+		in.BuildSticky = true
+	} else {
+		b.disarmPlacement()
 	}
 }
 
@@ -930,17 +1055,17 @@ func (b *battleSession) minimapClickOrder(mx, my int32, additive bool) {
 //	0xE3                   F2             done — same window; Shift+F2's Unit Builder Probe is a developer overlay, out of scope
 //	0x0D                   Enter          out of scope — chat is `TALK.GUI` with its own dialog, focus and recipient rows [07 §5 "Chat"]; single player drops the packet unsent
 //	0x1B                   Escape         done — options close, latch cancel, else deselect all
-//	0x21 0x23 0x2A         ! # *          not bound — the three shifted-digit tokens; see the toggleDamageBars TODO(question) below
+//	0x21 0x23 0x2A         ! # *          done — Shift+1/3/8, the same "label every unit" bit as ` and ~ [07 R-CAM-01 §14]
 //	0x60 0x7E              ` ~            done — "label every unit" bit
 //	0x2B 0x3D              + =            done — speed up, with the ring announcement
 //	0x2D 0x5F              - _            done — speed down, with the ring announcement
 //	0x2C                   ,              done — previous build page, `nextbuildmenu`
 //	0x2E                   .              done — next build page, `nextbuildmenu`
-//	0x31..0x39             1..9           done — SwitchAlt mux; group recall plays `SelectSquad`
+//	0x31..0x39             1..9           done — SwitchAlt mux; group recall plays `SelectSquad`; reached by an unshifted digit or Alt+digit, so additive recall is Shift+Alt+digit [07 R-CAM-01 §14]
 //	0x54 0x74              T t            done — follow camera, previous/next selected unit
 //	0x5C                   \              out of scope — developer mode only
 //	0x68                   h              out of scope — `SHARE.GUI` is multiplayer
-//	0x6E                   n              done — next unvisited own unit, camera glide, no selection change
+//	0x6E                   n              done — next unvisited own unit, camera glide, no selection change; `N` (0x4E) has no case [07 R-CAM-01 §14]
 //	0xAA                   Ctrl+A         done — select every own selectable unit, additive
 //	0xAC                   Ctrl+C         done — `CTRL_C` category select, then follow the commander
 //	0xAD                   Ctrl+D         done — self-destruct the selection
@@ -1000,7 +1125,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 			return
 		}
 		if mouse.Pressed(input.MouseButtonLeft) {
-			b.minimapClickOrder(mx, my, kbd.HasShift())
+			b.minimapClickOrder(cl, mx, my, kbd.HasShift())
 			return
 		}
 		// While over the minimap, suppress world drag/selection [07 §10].
@@ -1047,20 +1172,15 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 		if kbd.KeyDown(input.KeyO) {
 			b.toggleOnOffSelected(kbd.HasShift())
 		}
-		if kbd.KeyDown(input.KeyN) {
-			if kbd.HasShift() {
-				// TODO(question): retail's table has a case for `n` (0x6E) and
-				// none for `N` (0x4E), and the stockpile round is enqueued from
-				// the palette's `MAKENUKE`/`MAKEANTI` gadgets, not from a
-				// hotkey [07 R-CAM-01 §2][07 §6]. Shift+N is kept as this
-				// build's stand-in for those gadgets until the palette owner
-				// wires them; which token, if any, retail accepts for a
-				// stockpile round would be settled by tracing the two gadgets'
-				// authored quick-key bytes.
-				b.stockpileSelected(true)
-			} else {
-				b.cycleNextUnvisitedUnit()
-			}
+		// `n` (0x6E) cycles the next unvisited own unit. `N` (0x4E) is a
+		// separate character token and the dispatcher has no case for it, so
+		// Shift+n does nothing: the stockpile round is enqueued only by the
+		// palette's `MAKENUKE`/`MAKEANTI` gadgets [07 R-CAM-01 §14 item 3]
+		// [07 §6]. The Shift+N stand-in that used to call stockpileSelected
+		// here is gone; stockpileSelected keeps its one authored caller, the
+		// gadget dispatch of DispatchStockpile.
+		if kbd.KeyDown(input.KeyN) && !kbd.HasShift() {
+			b.cycleNextUnvisitedUnit()
 		}
 	}
 	// The "label every unit" bit. Retail's dispatcher has a case for each of
@@ -1069,15 +1189,14 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	// [07 R-CAM-01 §2][07 R-HUD-03 §7]. Both backquote tokens are the same
 	// physical key, shifted and unshifted, so one key edge covers them.
 	//
-	// TODO(question): the other three tokens are the shifted digits 1, 3 and 8,
-	// which in this key-based input layer are indistinguishable from Shift+digit
-	// — and Shift+digit is already additive group recall here, which
-	// [07 R-CAM-01 §2]'s own digit row and [07 §9] describe. Under the token
-	// model of [07 R-CAM-01 §2] Shift+1 can only produce `!`, so the two rules
-	// cannot both hold; which one retail actually reaches would be settled by
-	// tracing whether the digit case is reachable at all with Shift held. The
-	// chosen placeholder is to leave the digit routing alone and bind only the
-	// two tokens that collide with nothing [07 R-CAM-01 §2].
+	// The other three are the shifted digits: the window procedure pushes the
+	// translated *character*, so Shift+1/3/8 on the US layout the retail
+	// install assumes are `!` `#` `*` and never the digit token
+	// [07 R-CAM-01 §14 "the key-token producer"]. The digit case of §2 is
+	// reached by an unshifted digit character or by Alt+digit, so the label
+	// toggle and group recall never meet — the apparent contradiction this
+	// site used to record was two different tokens. The shifted-digit arm
+	// lives in the digit loop below, where the same key edge is classified.
 	if kbd.KeyDown(input.KeyBackquote) {
 		b.toggleDamageBars()
 	}
@@ -1096,6 +1215,19 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	// Ctrl+digit is assignment and plays `CreateSquad`; the non-page branch is
 	// group recall with Shift as preserve / toggle and plays `SelectSquad`
 	// [07 R-CAM-01 §2][07 §9] C9-C10. Ctrl+0 has no case.
+	//
+	// Which physical edges reach the digit case is the key-token producer of
+	// [07 R-CAM-01 §14]. Ctrl composes the token itself, so Ctrl+Shift+digit
+	// still assigns. Without Ctrl the digit case is reached by an *unshifted*
+	// digit character or by Alt+digit — Alt's system key-down pushes the raw
+	// digit value and produces no character message. Shift with Alt therefore
+	// keeps the digit token and the Shift argument recall reads is live only
+	// for Shift+Alt+digit; Shift without Alt yields the shifted character
+	// instead, and only `!` `#` `*` (Shift+1/3/8) have a case — the label
+	// toggle. The other six shifted digits do nothing. Under the default
+	// SwitchAlt = 0 that makes additive recall Shift+Alt+digit; with
+	// SwitchAlt = 1 a plain digit recalls and additive recall is unreachable
+	// from the keyboard, which is retail's behaviour and not a gap to patch.
 	for d := 1; d <= 9; d++ {
 		var key input.Key
 		switch d {
@@ -1118,14 +1250,23 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 		case 9:
 			key = input.Key9
 		}
-		if kbd.KeyDown(key) {
-			if ctrlHeld {
-				if b.DispatchGroupAssign(d) == nil {
-					b.playUICue(cl, "CreateSquad") // [07 R-CAM-01 §2]
-				}
-			} else {
-				b.routeDigit(d, kbd.KeyHeld(input.KeyAlt), kbd.HasShift(), cl)
+		if !kbd.KeyDown(key) {
+			continue
+		}
+		altHeld := kbd.KeyHeld(input.KeyAlt)
+		switch {
+		case ctrlHeld:
+			if b.DispatchGroupAssign(d) == nil {
+				b.playUICue(cl, "CreateSquad") // [07 R-CAM-01 §2]
 			}
+		case kbd.HasShift() && !altHeld:
+			// The shifted-digit character tokens. `!` `#` `*` flip the label
+			// bit; the other six have no case [07 R-CAM-01 §14 item 2].
+			if d == 1 || d == 3 || d == 8 {
+				b.toggleDamageBars()
+			}
+		default:
+			b.routeDigit(d, altHeld, kbd.HasShift(), cl)
 		}
 	}
 	// Page next/prev data-driven with guard [R-P0-03][07 §9] C10: no hardcoding.
@@ -1181,15 +1322,17 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 		b.glideToMessageSource()
 	}
 	if !ctrlHeld && kbd.KeyDown(input.KeyF4) {
-		// Interface-flags bit 0x80. Its readers are presentation: the HUD side
-		// panel treats the bit as "Space held", and the kill announcement arms
-		// two 30-frame counters while it is set [07 R-CAM-01 §2][07 §6].
+		// Interface-flags bit 0x80 has exactly two readers, and F4 pins both
+		// [07 R-CAM-01 §14 "F4 pins the score panel open and arms the kill/loss
+		// flash"]. The score panel shows while the bit is set as if Space were
+		// held ([07 R-HUD-04 §1]), and the kill-credit finalize arms the
+		// crediting slot's kill flash and the victim slot's loss flash to 30
+		// **only** while it is set — with F4 off the arrays are never armed and
+		// a Space-held panel shows steady numbers. Both readers are wired; the
+		// bit is not a term of the rail slide.
 		//
-		// TODO(question): the bit's user-facing name and the visible effect of
-		// those two counters are recorded Unknown in [07 R-CAM-01 §2]; only the
-		// panel-hold reader is implemented here. A static trace of the
-		// composer's kill-announcement pass, or a retail observation of what
-		// appears on a kill, would settle it.
+		// TODO(question): the bit's user-facing name. No string in the image
+		// names it [07 R-CAM-01 §14]; nothing observable turns on the name.
 		b.panelHoldFlag = !b.panelHoldFlag
 	}
 	if !ctrlHeld && kbd.KeyDown(input.KeyF12) {
@@ -2982,18 +3125,24 @@ func (b *battleSession) glideToUnit(v frame.UnitView) {
 	b.cam.GlideTo(ox, oz)
 }
 
-// glideToMessageSource is F3: clear the visited bit on all thirty message-ring
-// records, then glide to the first message whose source unit is alive and not
-// yet visited, marking it visited; if none, clear the visited bits and retry
-// once [07 R-CAM-01 §2]. The message-source glide reads the unit's map-pixel
-// X/Z words directly and subtracts the half viewport without the height shear
-// [07 R-CAM-01 §12].
+// glideToMessageSource is F3 [07 R-CAM-01 §14 "F3's leading clear is a
+// different bit from the visited bit"]:
 //
-// TODO(question): the leading clear makes the "not yet visited" test and the
-// retry arm unreachable — every record is unvisited when the scan starts. The
-// section is followed literally here. Whether the leading clear writes a
-// different bit than the scan tests would be settled by re-tracing the F3
-// case's two bit writes.
+//  1. clear bit 0x20 on every one of the thirty message-ring records;
+//  2. scan from the display index toward the producer index, wrapping at 30 —
+//     oldest displayed message first — for a record whose source unit id is
+//     nonzero, whose bit 0x10 is clear and whose unit is alive; on a hit set
+//     both bits and glide to that unit;
+//  3. if the scan finds nothing, clear bit 0x10 on every record and scan once
+//     more.
+//
+// The leading clear and the scan's test are different bits, so "not yet
+// visited" is a real test and the retry runs exactly when every live-source
+// message has been visited. This site used to clear the bit the scan tests,
+// which made both the test and the retry arm dead.
+//
+// The glide reads the unit's map-pixel X/Z words directly and subtracts the
+// half viewport without the height shear [07 R-CAM-01 §12].
 func (b *battleSession) glideToMessageSource() {
 	ring := b.messageRing()
 	if ring == nil || b.cam == nil {
@@ -3007,7 +3156,7 @@ func (b *battleSession) glideToMessageSource() {
 		v, found := snapshotUnitByHandle(f, h)
 		return found && v.Slot != 0
 	}
-	ring.ClearVisited()
+	ring.ClearJumped()
 	src, found := ring.NextUnvisitedSource(alive)
 	if !found {
 		ring.ClearVisited()

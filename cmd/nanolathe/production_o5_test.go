@@ -89,9 +89,13 @@ func TestBattleCommandsPublishQueueAndShiftOverlay(t *testing.T) {
 	controller.Step(BattleInputFrame{HeldKeys: []input.Key{input.KeyShift}, Modifiers: BattleModifiers{Shift: true}, Elapsed: 1.0 / 30.0}, nil)
 	queueClick(t, controller, attackX, attackY, BattleModifiers{Shift: true})
 
-	// Stockpile uses the production N command and the same held-Shift input,
-	// exercising the independent secondary chain without fabricating a node.
-	controller.Step(BattleInputFrame{PressedKeys: []input.Key{input.KeyN}, HeldKeys: []input.Key{input.KeyN, input.KeyShift}, Modifiers: BattleModifiers{Shift: true}, Elapsed: 1.0 / 30.0}, nil)
+	// Stockpile exercises the independent secondary chain without fabricating a
+	// node. It is dispatched directly rather than through a key edge: the
+	// stockpile round has no hotkey — `N` (0x4E) has no case at the dispatcher
+	// and the round is enqueued only from the palette's `MAKENUKE`/`MAKEANTI`
+	// gadgets [07 R-CAM-01 §14 item 3][07 §6]. stockpileSelected is the same
+	// entry point those gadgets reach.
+	b.stockpileSelected(true)
 	controller.Step(BattleInputFrame{HeldKeys: []input.Key{input.KeyShift}, Modifiers: BattleModifiers{Shift: true}, Elapsed: 1.0 / 30.0}, nil)
 	advanceQueueFixture(t, s)
 

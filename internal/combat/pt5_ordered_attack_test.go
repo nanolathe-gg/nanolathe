@@ -90,6 +90,16 @@ func TestPT5_OrderedUnitsStillFire(t *testing.T) {
 	// Park a handful of the ordered shooters on the target, which is the
 	// geometry the screenshot shows; the chase geometry that would walk them
 	// there is an open question in the order layer, not this package's.
+	//
+	// The park has to go through the mover's own state, not just the unit
+	// record: the integration step writes `u.X`/`u.Z` back from the collision
+	// state on every tick [04 §8.2], so a park written only onto the unit is
+	// undone by the next `Step` before a single shot is attempted. Traced
+	// before WU-19-73 and after, that is exactly what happened — the "parked"
+	// shooters were a hundred cells away one tick later, and whether the target
+	// died was down to how the ordinary chase happened to fall out. Writing the
+	// collision and steer positions too makes the geometry this test names
+	// actually hold.
 	parked := 0
 	for _, u := range sess.Units.IterSliced() {
 		if u == nil || !u.Alive || u.Owner != 0 || parked >= 6 || !u.SlotAt(0).IsPopulated() {
@@ -99,6 +109,14 @@ func TestPT5_OrderedUnitsStillFire(t *testing.T) {
 		u.X = victim.X.Add(offset)
 		u.Z = victim.Z.Add(offset)
 		u.Y = victim.Y
+		if coll := sess.Movement.Collisions[u.Handle]; coll != nil {
+			coll.X, coll.Y, coll.Z = int32(u.X.Raw()), int32(u.Y.Raw()), int32(u.Z.Raw())
+			coll.Speed, coll.VX, coll.VZ = 0, 0, 0
+		}
+		if steer := sess.Movement.Steers[u.Handle]; steer != nil {
+			steer.X, steer.Z = int32(u.X.Raw()), int32(u.Z.Raw())
+			steer.Speed = 0
+		}
 		parked++
 	}
 	if parked == 0 {

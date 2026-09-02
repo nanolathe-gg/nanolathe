@@ -62,10 +62,15 @@ func minimapFloorDiv(a, b int64) int64 {
 // baked == nil or len==0 uses 2× supersampled tile sampling and ALP 2×2→1 blending [03 §3.7][fmt tnt][fmt pal].
 // When baked != nil, it is rescaled through the established picture path [03 §3.7].
 // The ALP table is mandatory: there is no nearest-neighbor compatibility path.
-// TODO(question): what fills the letterbox bars outside the exact w x h picture
-// surface? [03 §3.7] specifies the picture and stops there. Decider: manual
-// retail observation — this is the "bar fill" probe of probes/ that RWU-19-9
-// runs in one retail session.
+// The letterbox bars are not this function's to fill. No radar surface covers
+// them: PICTURE, MAPPED and FINAL are all allocated at exactly the fitted
+// RadarW x RadarH, and the presenter blits FINAL at (padX, padY) and paints no
+// fill [03 R-MM-01 §3]. What shows in the bars is whatever the composer frame
+// already holds there.
+//
+// TODO(question): which pixels those are — the side-panel shell's own art
+// versus a cleared frame — is Unknown. Decider: the bar-fill probe of
+// RWU-19-9, one retail session on a non-square map [03 R-MM-01 §3].
 func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, baked []byte, bakedW, bakedH int, tables *palette.Tables) *RadarSurface {
 	if m.W <= 0 || m.H <= 0 || tables == nil {
 		return nil
@@ -113,8 +118,13 @@ func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, b
 
 			var pix byte
 			if tileX < 0 || tileX >= int64(tileW) || tileZ < 0 || tileZ >= int64(tileH) {
-				// TODO(question): the source map's out-of-domain sample behavior is
-				// untraced; suppress this picture rather than inventing a fill index.
+				// Unreachable by construction, and kept as an assertion rather
+				// than a behavior: `worldX = PlayRight * x / (2*RadarW)` with
+				// `x < 2*RadarW` lies in [0, PlayRight), and likewise for Z, so
+				// the generated picture's loop never leaves the tile map and
+				// there is no out-of-domain sample to define. The tile-index
+				// guard below is the only real one [03 R-MM-01 §3]. Suppressing
+				// the picture is the safe answer to a malformed terrain record.
 				return nil
 			} else {
 				idx := int(tileZ)*tileW + int(tileX)
@@ -254,6 +264,11 @@ func BuildMapped(picture *RadarSurface, wordMask []uint16, byteGrid []uint8, map
 	return &RadarSurface{W: w, H: h, Pitch: pitch, Bits: bits}
 }
 
+// minimapSelectedStatus is the unit status word's selected bit (bit 4), the
+// gate on both the sensor circles and the weapon/interceptor rings
+// [03 R-MM-01 §3].
+const minimapSelectedStatus uint32 = 0x10
+
 // MinimapContact carries world coords already in map pixels (short world>>16) plus owner, flags, def distances [03 §3.9].
 type MinimapContact struct {
 	WorldX, WorldZ, WorldY int32 // map pixels (short narrow already), WorldY high word for shear [03 §3.9]
@@ -273,17 +288,17 @@ type MinimapContact struct {
 	BlinkSuppress uint8
 	Visible       bool
 	LocalPlayer   uint8
-	// Options is the global options word whose bit 9 is the blip gate's first
-	// disjunct [03 §3.9] "Blip gate".
-	//
-	// TODO(question): [03 §3.9] names "a global options word bit 9" without
-	// saying which word that is, what the bit means, or where it is authored,
-	// and no writer for it has been traced. Nothing publishes a value here
-	// today, so the disjunct reads false and the gate is narrower than retail's
-	// by exactly that term. Tracing the word's owner and its authored source
-	// settles it; until then this stays one named seam rather than an invented
-	// session field.
-	Options      uint32
+	// Options is the mode-flags word whose bit 9 is the blip gate's first
+	// disjunct: the **full-radar bit**, which the `+Radar` cheat toggles and
+	// the world rebuild clears [03 R-MM-01 §3][07 R-CAM-01 §6]
+	// [08 R-ENTRY-01 §3]. Until a `+` command vocabulary exists nothing sets
+	// it, so the disjunct reads false — which is the state a battle starts in,
+	// not a gap in the gate.
+	Options uint32
+	// MinimapMode carries the render-flags word's mapping and LOS mask bits,
+	// the `+Mapping`/`+LOS` toggles. The gate's second disjunct is both bits
+	// clear, which the world-rebuild tail arranges for a watcher slot
+	// [03 R-MM-01 §3][07 R-CAM-01 §14].
 	MinimapMode  uint8
 	RawDistRadar int32
 	RawDistSonar int32
@@ -372,16 +387,20 @@ func rebuildFinalExact(mapped *RadarSurface, m camera.Minimap, playW, playH int3
 	// Layer 5 — weapon/interceptor rings, a separate layer after the circles
 	// [03 §3.9].
 	//
-	// TODO(question): [03 §3.9]'s "Selected-unit circle gate correction" is
-	// worded for the circle branch of layer 4; whether the same
-	// selected/range-status bit also precedes the ring loop of layer 5 is not
-	// stated there, and the ring paragraph names only the definition and
-	// weapon flag bits. Until that is traced the ring loop keeps the gate it
-	// has, so a detected enemy with the ring-enable flag still draws its
-	// weapon rings. Tracing the ring loop's entry condition settles it.
+	// The ring loop sits **under the selected bit**, like the circles of layer
+	// 4: within one unit's iteration retail runs the sensor circles and then,
+	// independently of their activation term but still under status bit 4, the
+	// ring loop [03 R-MM-01 §3 "rings are gated on selection"]. A detected
+	// enemy is never ringed. This loop used to run for any admitted contact
+	// carrying the ring flag, which drew enemy weapon rings on the minimap.
+	//
+	// The blink and stealth terms are not part of it either: a unit whose blip
+	// is suppressed on a non-blink phase still runs its range branches, which
+	// is what §3.9 calls the ring-only case — the same reason layer 4 carries
+	// no blink term.
 	for _, c := range contacts {
 		admit := c.Visible || c.Options&(1<<9) != 0 || c.MinimapMode&3 == 0 || c.Status&0x300 != 0 || c.Owner == c.LocalPlayer
-		if !admit || (c.BlinkSuppress != 0 && blink.Phase&1 == 0) || c.Stealth && !blink.IsBlinkOn() || !c.RingEnabled {
+		if !admit || c.Status&minimapSelectedStatus == 0 || !c.RingEnabled {
 			continue
 		}
 		rx, ry := RadarProjection(c.WorldX, c.WorldZ, c.WorldY, playW, playH, m)

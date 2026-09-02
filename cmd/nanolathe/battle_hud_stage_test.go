@@ -99,9 +99,11 @@ func TestCommandButtonNameTakesTheLongestSuffix(t *testing.T) {
 	}
 }
 
-// The painter's frame choice [07 R-HUD-03 §6]: mouse-up art is the authored
-// starting frame plus the stage, greyed art is that plus min(stage + 2,
-// frames − 1) — except for a cycle button, which takes the last frame.
+// The painter's frame choice [07 R-WGT-01 §3], which completes and corrects
+// [07 R-HUD-03 §6]: the base is frame 0 on the named-art path, the runtime
+// state indexes off it, greyed art is base + min(state + 2, frames − 1), and a
+// greyed cycle button takes the last frame. The authored `status` is the
+// down-state word, not a frame base [07 R-HUD-04 §4].
 func TestCommandButtonFrameChoice(t *testing.T) {
 	entry := &formats.GAFEntry{Name: "ARMONOFF"}
 	for i := 0; i < 4; i++ {
@@ -136,10 +138,13 @@ func TestCommandButtonFrameChoice(t *testing.T) {
 	if got := frameIndex(commandButtonFrame(entry, plain, 0, true, false)); got != 2 {
 		t.Fatalf("greyed command button chose frame %d, want 2", got)
 	}
-	// The authored starting frame offsets the whole choice.
-	staged := gui.Gadget{Name: "ARMONOFF", Kind: gui.KindButton, Status: 1}
-	if got := frameIndex(commandButtonFrame(entry, staged, 1, false, false)); got != 2 {
-		t.Fatalf("status 1 stage 1 chose frame %d, want 2", got)
+	// The authored `status` is the button's **down-state word**, not the frame
+	// a stage counts from: a named-art gadget's base is frame 0, and a button
+	// authored down draws base + downState [07 R-WGT-01 §3][07 R-HUD-04 §4].
+	// This assertion used to read `status` as a base and expect frame 2.
+	down := gui.Gadget{Name: "ARMMOVE", Kind: gui.KindButton, Status: 1}
+	if got := frameIndex(commandButtonFrame(entry, down, 0, false, false)); got != 1 {
+		t.Fatalf("an authored-down button chose frame %d, want its down-state 1", got)
 	}
 }
 

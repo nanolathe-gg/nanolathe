@@ -60,12 +60,18 @@ func TestDeniedBuildStepStillRecordsBothRequests(t *testing.T) {
 	}
 }
 
-// The decay-visit cadence a carried product actually sees. GetBuilt's phase-2
-// arm re-arms eleven ticks out, but the walk can only reach GetBuilt on a tick
-// on which the BeCarried record ahead of it has just expired, and that record
-// re-arms every ten ticks. The two compose to a visit every twenty ticks from
-// the first decay visit [04 R-FAC-02 §4].
-func TestCarriedProductDecayVisitCadenceIsTwentyTicks(t *testing.T) {
+// A carried product takes NO decay visit at all: `GetBuilt` is never reached
+// while the product is cargo [04 R-FAC-02 §4]'s 2026-09-02 correction. The
+// primary pump reloads the head after every result code [04 R-ORD-01 §10], and
+// `BeCarried`'s phase-1 arm sets a ten-tick deadline and returns 2 on every
+// visit, so the reload finds the head gated and the pass ends there — the
+// record behind it is never walked to.
+//
+// This test used to be TestCarriedProductDecayVisitCadenceIsTwentyTicks and
+// asserted the retracted composition: a first decay visit at tick 351 and one
+// every twenty ticks after it, built on §4's since-withdrawn "a *hold* (code 2)
+// does NOT stop the walk — the next record is visited in the same pass".
+func TestCarriedProductTakesNoDecayVisit(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	// A costly product keeps each decay step small, so the fraction is still
 	// below 1.0 after every visit in the measured window and each visit is
@@ -102,23 +108,26 @@ func TestCarriedProductDecayVisitCadenceIsTwentyTicks(t *testing.T) {
 			prev = product.Remaining
 		}
 	}
-	if len(visits) < 5 {
-		t.Fatalf("carried product saw %d decay visits in 500 ticks: %v", len(visits), visits)
+	if len(visits) != 0 {
+		t.Fatalf("carried product saw %d decay visits in 500 ticks (%v); GetBuilt is never visited while carried [04 R-FAC-02 §4]", len(visits), visits)
 	}
-	if visits[0] != 351 {
-		t.Fatalf("first decay visit at tick %d, want 351 [04 R-FAC-02 §4]", visits[0])
-	}
-	for i := 1; i < len(visits); i++ {
-		if got := visits[i] - visits[i-1]; got != 20 {
-			t.Fatalf("decay visits %v: interval %d between %d and %d, want 20 [04 R-FAC-02 §4]",
-				visits, got, visits[i-1], visits[i])
-		}
-	}
-	// The product is still carried throughout: BeCarried is what paces the walk.
+	// The product is still carried throughout: BeCarried is what stalls the walk.
 	if product.Attachment.Carrier == 0 {
 		t.Fatal("product detached during the measurement")
 	}
-	if len(q.Primary()) != 2 || orders.DescriptorFor(q.Primary()[0].ID).Name != "BeCarried" {
-		t.Fatalf("primary queue %v, want BeCarried still linked ahead of GetBuilt", q.Primary())
+	prim := q.Primary()
+	if len(prim) != 2 || orders.DescriptorFor(prim[0].ID).Name != "BeCarried" {
+		t.Fatalf("primary queue %v, want BeCarried still linked ahead of GetBuilt", prim)
+	}
+	// GetBuilt is untouched: still the record the factory pushed, never
+	// dispatched once in 500 ticks.
+	if gb := prim[1]; State(gb.Phase) != State0 || gb.Deadline != -1 || gb.DynamicGate != 0 || gb.Satisfied != 0 {
+		t.Fatalf("GetBuilt phase=%d deadline=%d gate=%#x satisfied=%#x, want the untouched pushed record 0/-1/0/0 [04 R-FAC-02 §4]",
+			gb.Phase, gb.Deadline, gb.DynamicGate, gb.Satisfied)
+	}
+	// BeCarried is the record that ran: phase 1, re-armed ten ticks out from
+	// its last expiry, gate carrying the deadline setter's bit 0.
+	if be := prim[0]; be.Phase != 1 || be.DynamicGate != 1 {
+		t.Fatalf("BeCarried phase=%d gate=%#x, want the phase-1 ten-tick hold 1/0x1 [04 R-ORD-01 §2]", be.Phase, be.DynamicGate)
 	}
 }

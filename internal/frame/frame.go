@@ -837,6 +837,25 @@ type Frame struct {
 	ShakeRemaining int32
 	ShakeAmpX      int32
 	ShakeAmpY      int32
+	// Strip is the Space-held bottom slide strip's three readouts
+	// [07 §6][07 R-HUD-04 §4]. They are scheduling and lobby scalars, not
+	// simulation state, and the strip is the only consumer.
+	Strip StripReadout
+}
+
+// StripReadout carries what the §6 slide strip prints: the game time is the
+// frame's own tick, so only the unit limit and the two speed words need
+// publishing [07 §6][07 R-HUD-04 §4].
+type StripReadout struct {
+	// UnitLimit is the session's per-player unit limit — the `(Max %d)` half
+	// of `Total Units: %d (Max %d)`. The count half is the viewing slot's live
+	// unit count, which Players already carries [07 R-HUD-03 §12].
+	UnitLimit int32
+	// ActiveSpeed and RequestedSpeed are the scheduler's two speed words. The
+	// strip prints the active one and appends a `(+/-n)` suffix when the
+	// requested value differs [07 §6].
+	ActiveSpeed    int32
+	RequestedSpeed int32
 }
 
 // Reserve preallocates top-level slices. It preserves existing values and

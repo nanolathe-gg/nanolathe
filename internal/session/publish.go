@@ -90,6 +90,13 @@ func (s *Session) publishSnapshot(tick uint32) {
 	}
 	published.Tick = tick
 	published.Paused = s.Clock != nil && s.Clock.Paused
+	// The §6 slide strip's two non-tick readouts. Both are scheduling/lobby
+	// scalars the composer may not read live [07 §6][07 R-HUD-04 §4][I6].
+	published.Strip = frame.StripReadout{UnitLimit: sessionUnitLimit(s)}
+	if s.Clock != nil {
+		published.Strip.ActiveSpeed = s.Clock.Active
+		published.Strip.RequestedSpeed = s.Clock.Requested
+	}
 	if s.publication != nil && s.publication.effects != nil {
 		published.Effects = s.publication.effects.SnapshotInto(published.Effects)
 	} else {

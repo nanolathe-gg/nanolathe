@@ -16,9 +16,20 @@ type MessageLine struct {
 	SourceUnit  pool.Handle
 	SpeakerSlot uint8
 	Class       uint8
-	// Visited is the per-record bit the F3 message-source jump walks
-	// [07 R-CAM-01 §2].
+	// Visited is flag-byte bit 0x10: the "already jumped to since the last
+	// exhaustion" bit F3's scan tests and sets [07 R-CAM-01 §14 "F3's leading
+	// clear is a different bit from the visited bit"].
 	Visited bool
+	// Jumped is flag-byte bit 0x20, which F3 clears on every record before it
+	// scans and then sets on the record it lands on, so it marks the record
+	// most recently jumped to. It is a different bit from Visited: reading the
+	// two writes as one bit made the "not yet visited" test and the retry arm
+	// unreachable.
+	//
+	// TODO(question): what reads bit 0x20 is not traced. A composer highlight
+	// of the message line just jumped to is the natural candidate; the decider
+	// is the readers of that bit [07 R-CAM-01 §14].
+	Jumped bool
 }
 
 // MessageRing is the fixed 30-entry output ring shared by unit captions and
@@ -169,7 +180,9 @@ func (r *MessageRing) Clear() {
 	r.Producer, r.Display = 0, 0
 }
 
-// ClearVisited clears the visited bit on all thirty records [07 R-CAM-01 §2].
+// ClearVisited clears bit 0x10, the visited bit, on all thirty records. It is
+// the retry arm of F3: the scan runs it once when every live-source message has
+// already been visited [07 R-CAM-01 §14].
 func (r *MessageRing) ClearVisited() {
 	if r == nil {
 		return
@@ -179,22 +192,37 @@ func (r *MessageRing) ClearVisited() {
 	}
 }
 
-// NextUnvisitedSource returns the first record whose source unit is alive and
-// whose visited bit is clear, marks it visited, and reports its source unit
-// [07 R-CAM-01 §2]. The walk starts at the display index and runs forward
-// through the thirty records so the oldest visible line is offered first;
-// alive reports whether a source handle still names a live unit.
+// ClearJumped clears bit 0x20 on all thirty records. It is F3's *leading*
+// clear, run before the scan starts, and it is a different bit from the one
+// the scan tests [07 R-CAM-01 §14].
+func (r *MessageRing) ClearJumped() {
+	if r == nil {
+		return
+	}
+	for i := range r.Entries {
+		r.Entries[i].Jumped = false
+	}
+}
+
+// NextUnvisitedSource returns the first record whose source unit id is nonzero,
+// whose visited bit (0x10) is clear and whose unit is alive; on a hit it sets
+// both bits (`|= 0x30`) and reports the source unit [07 R-CAM-01 §14].
+//
+// The walk runs from the display index *toward the producer index*, wrapping at
+// 30, so the oldest displayed message is offered first and the empty slots
+// beyond the producer are never scanned. alive reports whether a source handle
+// still names a live unit.
 func (r *MessageRing) NextUnvisitedSource(alive func(pool.Handle) bool) (pool.Handle, bool) {
 	if r == nil || alive == nil {
 		return 0, false
 	}
-	for step := 0; step < 30; step++ {
-		idx := uint16((uint32(r.Display) + uint32(step)) % 30)
+	for idx := r.Display; idx != r.Producer; idx = uint16((uint32(idx) + 1) % 30) {
 		line := &r.Entries[idx]
 		if line.Visited || line.SourceUnit == 0 || !alive(line.SourceUnit) {
 			continue
 		}
 		line.Visited = true
+		line.Jumped = true
 		return line.SourceUnit, true
 	}
 	return 0, false

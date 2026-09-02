@@ -77,8 +77,11 @@ func TestGetBuiltRetryStates(t *testing.T) {
 	if State(gb.Phase) != State1 || gb.Deadline != 310 || gb.DynamicGate != 0x8001 {
 		t.Fatalf("state0 retry=%+v", gb)
 	}
-	// Direct handler invocation locks its phase arithmetic; the composed queue
-	// cadence is covered by TestFactoryCarriedGetBuiltQueueCadence below.
+	// Direct handler invocation locks its phase arithmetic. It is deliberately
+	// direct: these phase deadlines count from the product's RELEASE, never
+	// from its attach, because the pump cannot reach `GetBuilt` while the
+	// product is carried [04 R-FAC-02 §4]. The composed queue behaviour is
+	// TestFactoryCarriedGetBuiltWaitsForRelease below.
 	if gb.Deadline <= 100 {
 		t.Fatal("fixture deadline unexpectedly due")
 	}
@@ -136,7 +139,18 @@ func TestGetBuiltDeadlineRaisesOnlyOrdinaryBit(t *testing.T) {
 	}
 }
 
-func TestFactoryCarriedGetBuiltQueueCadence(t *testing.T) {
+// TestFactoryCarriedGetBuiltWaitsForRelease locks [04 R-FAC-02 §4]'s 2026-09-02
+// correction: `GetBuilt` is never visited while the product is carried, and its
+// first visit is the release pass.
+//
+// It used to be TestFactoryCarriedGetBuiltQueueCadence and asserted the
+// retracted latency composition — GetBuilt's phase 0 → 1 at tick 301, phase 1 →
+// 2 at 331, and a phase-2 decay visit at 351 — which followed from §4's
+// withdrawn claim that a hold does not stop the walk. The primary pump reloads
+// the head after every result code [04 R-ORD-01 §10]; `BeCarried` phase 1 arms
+// a ten-tick deadline and returns 2 on every visit, so the pass ends at
+// `BeCarried` and the record behind it is never reached.
+func TestFactoryCarriedGetBuiltWaitsForRelease(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	def := newProductDef("armflash", 1, 1, 100, 100)
 	def.BMCode = true
@@ -159,48 +173,47 @@ func TestFactoryCarriedGetBuiltQueueCadence(t *testing.T) {
 	svc.queueForUnit(product)
 	drawsBefore, stateBefore := sim.Draws(), sim.State
 	product.Remaining = 0.5
-	for tick := uint32(1); tick <= 301; tick++ {
+	for tick := uint32(1); tick <= 351; tick++ {
 		q.Pump(product, tick)
 	}
 	gb := q.Primary()[1]
-	if gb.Deadline != 331 || State(gb.Phase) != State2 || gb.DynamicGate != 0x8001 || gb.Satisfied != 0 {
-		t.Fatalf("GetBuilt at tick 301 deadline=%d phase=%d gate=%#x satisfied=%#x, want 331/2/0x8001/0", gb.Deadline, gb.Phase, gb.DynamicGate, gb.Satisfied)
+	// Untouched: never dispatched once in 351 ticks of being carried. The
+	// pushed record's own phase 0, no-deadline, no-gate state is still there.
+	if State(gb.Phase) != State0 || gb.Deadline != -1 || gb.DynamicGate != 0 || gb.Satisfied != 0 || product.Remaining != 0.5 {
+		t.Fatalf("GetBuilt while carried: deadline=%d phase=%d gate=%#x satisfied=%#x remaining=%v, want the untouched pushed record -1/0/0/0/0.5 [04 R-FAC-02 §4]",
+			gb.Deadline, gb.Phase, gb.DynamicGate, gb.Satisfied, product.Remaining)
 	}
-	if be := q.Primary()[0]; be.Deadline != 311 {
-		t.Fatalf("BeCarried deadline=%d at tick 301, want 311", be.Deadline)
-	}
-	for tick := uint32(302); tick <= 331; tick++ {
-		q.Pump(product, tick)
-	}
-	// Param3 is the explicitly unresolved local storage choice for the
-	// established first phase-2 setup visit; see the TODO(question) at the
-	// handler. The externally established phase remains 2 throughout.
-	if gb.Deadline != 342 || State(gb.Phase) != State2 || gb.Param3 != 0 || gb.DynamicGate != 0x8001 || gb.Satisfied != 0 || product.Remaining != 0.5 {
-		t.Fatalf("GetBuilt at tick 331 deadline=%d phase=%d marker=%d gate=%#x satisfied=%#x remaining=%v, want 342/2/0/0x8001/0/0.5", gb.Deadline, gb.Phase, gb.Param3, gb.DynamicGate, gb.Satisfied, product.Remaining)
-	}
-	for tick := uint32(332); tick <= 351; tick++ {
-		q.Pump(product, tick)
-	}
-	if gb.Deadline != 362 || gb.DynamicGate != 0x8001 || gb.Satisfied != 0 || product.Remaining != float32(0.7) {
-		t.Fatalf("phase-2 visit at tick 351 deadline=%d gate=%#x satisfied=%#x remaining=%v, want 362/0x8001/0/0.7", gb.Deadline, gb.DynamicGate, gb.Satisfied, product.Remaining)
+	// BeCarried is what the pass stops at, re-armed ten ticks past its last
+	// expiry — `t0 + 1 + 10k`, which for a record pushed at tick 0 is 11, 21,
+	// … 351, so the next deadline is 361 [04 R-FAC-02 §4][04 R-ORD-01 §2].
+	if be := q.Primary()[0]; be.Deadline != 361 || be.Phase != 1 || be.DynamicGate != 1 {
+		t.Fatalf("BeCarried at tick 351 deadline=%d phase=%d gate=%#x, want 361/1/0x1", be.Deadline, be.Phase, be.DynamicGate)
 	}
 	if sim.Draws() != drawsBefore || sim.State != stateBefore {
-		t.Fatalf("carried/GetBuilt cadence consumed RNG: state %d->%d draws %d->%d", stateBefore, sim.State, drawsBefore, sim.Draws())
+		t.Fatalf("the carried wait consumed RNG: state %d->%d draws %d->%d", stateBefore, sim.State, drawsBefore, sim.Draws())
 	}
+
+	// Release. The first GetBuilt visit in the product's whole life is the pass
+	// in which BeCarried sees a null carrier, completes (code 5) and is
+	// unlinked; the head reload [04 R-ORD-01 §10] then dispatches GetBuilt, and
+	// with the remaining fraction already 0.0 that visit is the completion arm.
 	product.Remaining = 0
 	if _, ok := movement.DetachCargo(w, product.Handle); !ok {
 		t.Fatal("completion detach failed")
 	}
-	for tick := uint32(352); tick <= 361; tick++ {
+	for tick := uint32(352); tick <= 360; tick++ {
 		q.Pump(product, tick)
 	}
-	if len(q.Primary()) != 1 || q.Primary()[0].ID != orders.Lookup("GetBuilt") {
-		t.Fatalf("queue at detach expiry=%v, want GetBuilt waiting for own deadline", q.Primary())
+	if len(q.Primary()) != 2 {
+		t.Fatalf("queue before BeCarried's expiry=%v, want both records still linked", q.Primary())
 	}
-	q.Pump(product, 362)
+	q.Pump(product, 361)
 	for _, n := range q.Primary() {
+		if n.ID == orders.Lookup("BeCarried") {
+			t.Fatal("BeCarried survived the detach: a null carrier completes it [04 R-ORD-01 §2]")
+		}
 		if n.ID == orders.Lookup("GetBuilt") {
-			t.Fatal("GetBuilt survived its own completion deadline")
+			t.Fatal("GetBuilt survived the release pass: its first visit is the completion arm [04 R-FAC-02 §4]")
 		}
 	}
 }

@@ -210,3 +210,33 @@ func TestFreshCampaignAdaptersHaveEqualAuthoritativeSetup(t *testing.T) {
 		})
 	}
 }
+
+// TestCoastToCoastSurvivesTheCancelledMobileBuild is the retail-gated half of
+// WU-19-73's crash fix. Seed 7 on `Coast to Coast` panicked at tick 3865 with
+// `slice bounds out of range [1:0]` in the order queue's head removal: a
+// `MobileBuild` record carrying gate bit 1 was removed while
+// [R-ORDER-02 §2]'s cancel notification — construction's cancel-current — had
+// already removed it, and the outer removal spliced a segment that was no
+// longer there. The queue now unlinks by identity after the cleanup, so the
+// second removal finds nothing to remove.
+//
+// The mechanism itself is locked without retail assets by
+// TestRemoveHeadSurvivesACancelNoticeThatRemovesTheHead in internal/orders;
+// this run is the scenario that found it. 5000 ticks clears the crash tick with
+// room to spare.
+func TestCoastToCoastSurvivesTheCancelledMobileBuild(t *testing.T) {
+	request := Request{
+		Root:           testsupport.RetailRoot(t),
+		Map:            "Coast to Coast",
+		SimulationSeed: 7,
+		CRTSeed:        7,
+		TickLimit:      5000,
+	}
+	report, err := Run(request)
+	if !errors.Is(err, ErrTickLimit) {
+		t.Fatalf("Run error = %v, want the tick limit (a panic here is the regression)", err)
+	}
+	if report.Tick != 5000 || report.Status != "tick_limit" {
+		t.Fatalf("tick/status = %d/%q, want 5000/tick_limit", report.Tick, report.Status)
+	}
+}
