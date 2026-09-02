@@ -3,7 +3,15 @@
 REVIEW*.md
 HANDOFF*
 .oracle/
-.claude/
+.claude/*
+!.claude/skills/
 .worktrees/
 /nanolathe
 /nanolathe-headless
+# remaster workspace: retail-derived sources and build products stay local;
+# remastered/units/*/work is the authored remaster and is committed.
+remastered/units/*/source/
+remastered/units/*/preview/
+remastered/out/
+remastered/*.hpi
+/remaster

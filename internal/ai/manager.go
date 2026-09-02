@@ -419,6 +419,11 @@ func (m *Manager) runClassifications(tick uint32, w *units.World, econ *economy.
 	// group value is zero. Keep the cadence counter and call shape here so the
 	// writer remains on the established manager entry path [R-P0-04].
 	_, _ = tick, econ
+	// Records first: a handle whose slot the unit pool has recycled since the
+	// member died is not a member of that record under the direct writer's
+	// invariant, and the classifier's ungrouped gate would otherwise never see
+	// the slot's new occupant as ungrouped [08 R-P0-04 §3].
+	m.reconcileGroupRecords(w)
 	m.classifyGroups(w)
 }
 
@@ -908,6 +913,12 @@ func (m *Manager) mergeWaveGroupRecords(groupID, peerID uint8, w *units.World, t
 	if m == nil || w == nil {
 		return
 	}
+	// Both records are reconciled before the merge reads their counts: the
+	// bootstrap, the farthest-member loop and the peer collection all size
+	// their comparisons on the record's member count, and the loop's exit
+	// depends on each transfer shrinking the own record [08 R-P0-04 §3].
+	m.reconcileGroupRecord(groupID, w)
+	m.reconcileGroupRecord(peerID, w)
 	current := m.groupVector(groupID)
 	peer := m.groupVector(peerID)
 	if current == nil || peer == nil {
@@ -942,8 +953,17 @@ func (m *Manager) mergeWaveGroupRecords(groupID, peerID uint8, w *units.World, t
 		if farthest < 0 || farthestDistance < limit {
 			break
 		}
+		before := len(*current)
 		if u := w.Unit((*current)[farthest]); u != nil {
 			m.transferGroupMember(u, groupID, peerID)
+		}
+		// The loop's only progress is the transfer removing the farthest member
+		// from this record. Reconciliation above guarantees every entry can be
+		// transferred, so this never fires; it is here so a future break of the
+		// record invariant costs one missed transfer instead of a session that
+		// never returns from the wave task [08 R-P0-04 §3].
+		if len(*current) >= before {
+			break
 		}
 		cx, cz, ok = retailGroupCentroid(*current, w)
 		if !ok {
@@ -986,60 +1006,39 @@ func (m *Manager) transferGroupMember(u *units.Unit, from, to uint8) {
 	m.writeGroup(u, int8(to))
 }
 
-// doRegroup implements the regroup task at tick plus 150, paired with its wave
-// record [08 "Strategy manager and its task graph"].
-// It moves own group toward peer centroid via ordinary move orders [P0-02][P0-I12].
+// doRegroup is the regroup task body. It reschedules at tick+150 (the caller
+// has already written it), returns unless both its own record and its peer
+// wave's record are non-empty, and otherwise broadcasts intent 2 to the peer's
+// centroid with queue modifier 0 and the spacing parameter 0. There is no
+// target selection, no draw, and no other state write [08 R-AI-01 §5].
+//
+// Corrected: the body used to walk its own group VECTOR and push a hand-picked
+// `Move_Ground`/`VTOL_Move` node, skipping members still under construction.
+// The section routes it through the shared group broadcast, which walks the
+// player's whole unit slice in ascending POOL order, keys membership from the
+// unit's stored group number, resolves the intent through the ordinary
+// resolver, and applies no completion filter [08 R-AI-01 §9].
 func (m *Manager) doRegroup(tick uint32, w *units.World, econ *economy.Service, peer TaskKind) {
-	_, _, _ = tick, econ, peer
+	_ = econ
 	if w == nil {
 		return
 	}
-	var ownGroup []pool.Handle
+	var ownID uint8
 	var peerGroup []pool.Handle
 	if peer == TaskWaveA {
-		ownGroup = m.GroupRegroupA
-		peerGroup = m.GroupWaveA
+		ownID, peerGroup = 3, m.GroupWaveA
 	} else {
-		ownGroup = m.GroupRegroupB
-		peerGroup = m.GroupWaveB
+		ownID, peerGroup = 7, m.GroupWaveB
 	}
-	if len(ownGroup) == 0 || len(peerGroup) == 0 {
+	own := m.groupVector(ownID)
+	if own == nil || len(*own) == 0 || len(peerGroup) == 0 {
 		return
 	}
-	// Peer centroid
 	cx, cy, cz, ok := groupCentroid(peerGroup, w)
 	if !ok {
 		return
 	}
-	issued := 0
-	for _, h := range ownGroup {
-		u := w.Unit(h)
-		if u == nil || !u.Alive || u.Remaining != 0 {
-			continue
-		}
-		var id orders.ID
-		if u.Def != nil && u.Def.CanFly {
-			id = orders.Lookup("VTOL_Move")
-		} else {
-			id = orders.Lookup("Move_Ground")
-		}
-		if id == 0 {
-			continue
-		}
-		node := orders.NewNodeForOrder(id, 0, cx, cy, cz, tick, u.Handle, false)
-		q := orders.QueueForUnit(u)
-		if q == nil {
-			continue
-		}
-		if m.OrderBinding != nil {
-			q.SetBinding(m.OrderBinding)
-		}
-		q.PurgeUnprotected()
-		q.DropLeadingAutoOps()
-		q.Push(id, node)
-		issued++
-	}
-	_ = issued
+	m.broadcastGroupOrder(w, ownID, 2, 0, nil, cx, cy, cz, tick, 0)
 }
 
 // broadcastGroupOrder is the shared manager-task broadcast. It scans the

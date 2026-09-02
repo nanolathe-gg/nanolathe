@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/ai"
@@ -89,42 +88,6 @@ type Request struct {
 	SimulationSeed uint32
 	CRTSeed        uint32
 	TickLimit      uint32
-}
-
-type IntentReport struct {
-	Intent string `json:"intent"`
-	Count  int    `json:"count"`
-}
-
-type PlayerReport struct {
-	Player          int            `json:"player"`
-	LiveUnits       int            `json:"live_units"`
-	UnitsCreated    int            `json:"units_created"`
-	AIManagerBound  bool           `json:"ai_manager_bound"`
-	OrdersSubmitted int            `json:"orders_submitted"`
-	OrderIntents    []IntentReport `json:"order_intents,omitempty"`
-}
-
-// Report is a stable diagnostic surface, not additional authoritative state.
-// StateHash is produced by Session.ParityAuthoritativeHash, which walks the
-// ordered authoritative surfaces without mutating them.
-type Report struct {
-	ScenarioKind     ScenarioKind     `json:"scenario_kind"`
-	ScenarioIdentity string           `json:"scenario_identity"`
-	SimulationSeed   uint32           `json:"simulation_seed"`
-	CRTSeed          uint32           `json:"crt_seed"`
-	SimulationState  uint32           `json:"simulation_state"`
-	CRTState         uint32           `json:"crt_state"`
-	SimulationDraws  uint64           `json:"simulation_draws"`
-	CRTDraws         uint64           `json:"crt_draws"`
-	CatalogHash      string           `json:"catalog_hash,omitempty"`
-	ManifestHash     string           `json:"manifest_hash,omitempty"`
-	Tick             uint32           `json:"tick"`
-	Status           string           `json:"status"`
-	State            string           `json:"state"`
-	Result           string           `json:"result"`
-	StateHash        string           `json:"state_hash"`
-	Players          [10]PlayerReport `json:"players"`
 }
 
 // Run mounts a retail install and enters the ordinary session composition and
@@ -360,10 +323,14 @@ func providerNames(fs *vfs.FS) []string {
 }
 
 type observer struct {
-	created   [10]int
-	submitted [10]int
-	active    [10]map[*orders.Node]struct{}
-	intents   [10]map[string]int
+	created     [10]int
+	submitted   [10]int
+	active      [10]map[*orders.Node]struct{}
+	intents     [10]map[string]int
+	firstAttack [10]*AttackEvent
+	groups      [10][]GroupSample
+	sampled     bool
+	lastSample  uint32
 }
 
 func observe(sess *session.Session) *observer {
@@ -397,6 +364,7 @@ func observe(sess *session.Session) *observer {
 		}
 	}
 	o.scan(sess, false)
+	o.sampleGroups(sess)
 	return o
 }
 
@@ -429,12 +397,15 @@ func (o *observer) scan(sess *session.Session, countNew bool) {
 				if _, exists := o.active[player][node]; exists {
 					continue
 				}
-				intent := orders.DescriptorFor(node.ID).Name
+				intent := descriptorName(node.ID)
 				if intent != "" {
 					if o.intents[player] == nil {
 						o.intents[player] = make(map[string]int)
 					}
 					o.intents[player][intent]++
+					if isAttackIntent(intent) && sess.Clock != nil {
+						o.noteAttack(player, sess.Clock.GlobalTick, intent, unit.Handle, node.Target)
+					}
 				}
 				if node.BuildDefKey == "" {
 					o.submitted[player]++
@@ -456,62 +427,6 @@ func advance(sess *session.Session, limit uint32, observer *observer) {
 		scaledNow += delta
 		sess.Step(scaledNow)
 		observer.scan(sess, true)
+		observer.sampleGroups(sess)
 	}
-}
-
-func buildReport(request Request, kind ScenarioKind, identity string, sess *session.Session, observer *observer) (Report, error) {
-	report := Report{
-		ScenarioKind:     kind,
-		ScenarioIdentity: identity,
-		SimulationSeed:   request.SimulationSeed,
-		CRTSeed:          request.CRTSeed,
-		Tick:             sess.Clock.GlobalTick,
-		State:            sess.State.String(),
-	}
-	if simulation := sess.SimRNG(); simulation != nil {
-		report.SimulationState = simulation.State
-		report.SimulationDraws = simulation.Draws()
-	}
-	if crt := sess.CrtRNG(); crt != nil {
-		report.CRTState = crt.State
-		report.CRTDraws = crt.Draws()
-	}
-	if sess.Catalog != nil {
-		report.CatalogHash = sess.Catalog.Hash
-		report.ManifestHash = sess.Catalog.Manifest
-	}
-	for i := range report.Players {
-		report.Players[i].Player = i
-		if sess.Units != nil {
-			report.Players[i].LiveUnits = sess.Units.LiveCountForPlayer(i)
-		}
-		report.Players[i].UnitsCreated = observer.created[i]
-		report.Players[i].AIManagerBound = sess.AI[i] != nil
-		report.Players[i].OrdersSubmitted = observer.submitted[i]
-		names := make([]string, 0, len(observer.intents[i]))
-		for name := range observer.intents[i] {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			report.Players[i].OrderIntents = append(report.Players[i].OrderIntents, IntentReport{Intent: name, Count: observer.intents[i][name]})
-		}
-	}
-	result := sess.GetResult()
-	if result.Ended {
-		switch result.Kind {
-		case "victory":
-			report.Result = "won"
-		case "defeat":
-			report.Result = "lost"
-		case "draw":
-			report.Result = "draw"
-		}
-	}
-	hash, err := sess.ParityAuthoritativeHash()
-	if err != nil {
-		return report, err
-	}
-	report.StateHash = hash
-	return report, nil
 }

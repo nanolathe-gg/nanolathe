@@ -168,6 +168,11 @@ func TestRegroupMoveBindsQueueBeforeSubmission(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create regroup peer: %v", err)
 	}
+	// The broadcast helper keys membership from the unit's STORED group
+	// number, not from the task vector, so the fixture must stamp both
+	// [08 R-AI-01 §9].
+	w.Unit(hOwn).Group = 3
+	w.Unit(hPeer).Group = 2
 	sim := rng.NewSimulation(77)
 	binding := &orders.QueueBinding{SimRNG: &sim}
 	m := &Manager{Player: 0, OrderBinding: binding, GroupRegroupA: []pool.Handle{hOwn}, GroupWaveA: []pool.Handle{hPeer}}

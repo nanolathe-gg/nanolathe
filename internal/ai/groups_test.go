@@ -69,8 +69,8 @@ func TestClassifierDestinations(t *testing.T) {
 		{UnitName: "maker", MakesMetal: 1},
 		{UnitName: "builder", Builder: true},
 		{UnitName: "air", CanFly: true},
-		{UnitName: "slope", MaxSlope: 1},
-		{UnitName: "flagged", MaxSlope: 0},
+		{UnitName: "water", MinWaterDepth: 1},
+		{UnitName: "flagged", MinWaterDepth: 0},
 		{UnitName: "none"},
 	}
 	cat := &content.Catalog{Units: make(map[string]*content.UnitDef, len(defs))}
@@ -460,5 +460,95 @@ func TestDoWavePairsWithRegroupNotTheOtherWave(t *testing.T) {
 	}
 	if u := w.Unit(rb); u == nil || u.Group != 6 {
 		t.Errorf("transferred unit group field = %v, want wave B record 6", u.Group)
+	}
+}
+
+// TestClassifierRoutesLandCombatToRegroupA locks the 2026-08-29 correction to
+// the classifier's regroup-B row: the word it tests is the definition's
+// MinWaterDepth, compared `>= 1`, not the MaxSlope byte [08 R-P0-04 §3
+// "Classifier eligibility, destinations, and order"][08 R-AI-03 §6].
+//
+// The distinction decides whether the computer player ever attacks. Every
+// stock land definition carries the movement template's MinWaterDepth of
+// -10000 together with a positive MaxSlope, so reading the slope word sent
+// every armed ground unit to regroup B and left regroup A — the peer the
+// wave-A merge bootstraps from — empty for the whole battle [08 "Wave merge"].
+func TestClassifierRoutesLandCombatToRegroupA(t *testing.T) {
+	land := &content.UnitDef{UnitName: "land-tank", MinWaterDepth: -10000, MaxSlope: 15}
+	amphibious := &content.UnitDef{UnitName: "amphibious", MinWaterDepth: 1, MaxSlope: 15}
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
+	for _, def := range []*content.UnitDef{land, amphibious} {
+		def.CanonicalKey = content.CanonicalKey(def.UnitName)
+		cat.Units[def.CanonicalKey] = def
+	}
+	w := newAIFixtureWorld(32, cat)
+	create := func(def *content.UnitDef) pool.Handle {
+		h, err := w.Create(def, 0, 0, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The allocator eligibility bit plus the armed bit: an ordinary armed
+		// mobile unit [08 R-P0-04 §3].
+		w.Unit(h).Flags = classifierEligibleBit | classifierArmed
+		return h
+	}
+	tank := create(land)
+	amph := create(amphibious)
+
+	m := &Manager{Player: 0}
+	m.classifyGroups(w)
+
+	if got, want := m.GroupRegroupA, []pool.Handle{tank}; !sameHandles(got, want) {
+		t.Fatalf("regroup A = %v, want the land definition %v: the MaxSlope word is not the classifier key", got, want)
+	}
+	if got, want := m.GroupRegroupB, []pool.Handle{amph}; !sameHandles(got, want) {
+		t.Fatalf("regroup B = %v, want the MinWaterDepth>=1 definition %v", got, want)
+	}
+}
+
+// TestWaveMergeDropsRecycledRecordEntries locks the record reconciliation.
+//
+// A retail record holds unit pointers and is emptied of a dying member by the
+// death-teardown caller of the direct writer, so every member is a live unit of
+// the owning player whose stored group equals the record [08 R-P0-04 §3].
+// Nanolathe records hold pool handles and the pool recycles freed slots, so a
+// dead member's handle can come back pointing at a different live unit. Left in
+// place, that entry inflates the count the wave hysteresis reads and makes the
+// merge's farthest-member transfer a no-op — the loop then never terminates,
+// which is exactly how a thirty-minute headless skirmish hung at tick 44700
+// before this unit.
+func TestWaveMergeDropsRecycledRecordEntries(t *testing.T) {
+	def := &content.UnitDef{UnitName: "wave-member", MaxDamage: 100, CanMove: true, MaxVelocity: 100}
+	def.CanonicalKey = content.CanonicalKey(def.UnitName)
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}}
+	w := newAIFixtureWorld(8, cat)
+	place := func(x int32) pool.Handle {
+		h, err := w.Create(def, 0, numeric.Fixed(int64(x)<<16), 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	member := place(0)
+	// 400 world units away: with wave A's threshold of 20,000 and a two-member
+	// record the farthest-member test (200^2 >= 20000*2) admits a transfer, so
+	// the loop below really does run [08 R-AI-01 §4][08 "Wave merge"].
+	recycled := place(400)
+	w.Unit(member).Group = 2
+	// The recycled slot's new occupant belongs to some other record; only its
+	// stale handle is still in wave A.
+	w.Unit(recycled).Group = 3
+
+	m := &Manager{Player: 0}
+	m.GroupWaveA = []pool.Handle{member, recycled}
+	m.GroupRegroupA = []pool.Handle{recycled}
+
+	m.mergeWaveGroupRecords(2, 3, w, waveAThreshold)
+
+	if got, want := m.GroupWaveA, []pool.Handle{member}; !sameHandles(got, want) {
+		t.Fatalf("wave A = %v, want only the real member %v [08 R-P0-04 §3]", got, want)
+	}
+	if u := w.Unit(member); u == nil || u.Group != 2 {
+		t.Fatalf("the real member's stored group changed to %v", u.Group)
 	}
 }

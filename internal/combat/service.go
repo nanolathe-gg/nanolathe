@@ -1182,6 +1182,24 @@ func checkCollision(p *Projectile, weapon *content.WeaponDef, w *units.World, te
 			isOffMap = true
 			return
 		}
+		// Steps 3 and 4 of the ladder run BEFORE feature, terrain and water
+		// [06 §8.1]: the two unit slots of the projectile's own cell, then
+		// "units-only early return", and only then feature resolution. This
+		// build used to resolve feature/terrain/water first, which made a unit
+		// standing on a feature cell — or wading — unreachable by a shell that
+		// arrived in the same cell.
+		if hit := contactUnitInCell(p, w, terrain, cx, cz); hit != 0 {
+			hitUnit = hit
+			return
+		}
+		// Step 5 of the ladder, the units-only early return, has no reader
+		// here: `WeaponDef.UnitsOnly` is compiled but nothing consults it, so a
+		// `unitsonly` weapon that misses both unit slots still falls through to
+		// feature, terrain, bounce and water below, where [06 §8.1] would have
+		// it return. The gate only becomes expressible now that the unit slots
+		// precede those steps; wiring it needs a "kept flying" result the
+		// caller's own terrain fallback also honours, which is a change to
+		// TickProjectiles' contract rather than to this ladder.
 		cache := [2]int32{p.CacheCellX, p.CacheCellZ}
 		suppressed := FeatureCacheSuppressed(&cache, int32(cx), int32(cz))
 		p.CacheCellX, p.CacheCellZ = cache[0], cache[1]
@@ -1223,39 +1241,84 @@ func checkCollision(p *Projectile, weapon *content.WeaponDef, w *units.World, te
 			}
 		}
 	}
-	if w != nil {
-		// [06 §8.1] faithful two-slot Y-gate via CollisionSlotYGate [06 §8.1] C? ; planar r=24 retained for XY until grid slots wired
-		bestDist2 := int64(1 << 62)
-		var best pool.Handle
-		for _, u := range w.Iter() {
-			if u == nil || !u.Alive || u.Dying {
-				continue
-			}
-			if u.Handle == p.Shooter {
-				continue
-			}
-			lower := int32(u.Y.Raw() - 16*65536)
-			upper := int32(u.Y.Raw() + 16*65536)
-			py := int32(p.Pos.Y.Raw())
-			// [06 §8.1] slot0: Y<upper (no lower), slot1: lower<=Y<=upper; either slot may authorize
-			if !CollisionSlotYGate(py, lower, upper, 0) && !CollisionSlotYGate(py, lower, upper, 1) {
-				continue
-			}
-			dx := p.Pos.X.Int() - u.X.Int()
-			dz := p.Pos.Z.Int() - u.Z.Int()
-			dist2 := int64(dx)*int64(dx) + int64(dz)*int64(dz)
-			const hitRadius = 24 // TODO(question): planar radius approximation retained; grid-slot XY gate unresolved [06 §8.1]
-			if dist2 <= hitRadius*hitRadius && dist2 < bestDist2 {
-				bestDist2 = dist2
-				best = u.Handle
-			}
-		}
-		if best != 0 {
-			hitUnit = best
-			return
+	return
+}
+
+// contactUnitInCell is steps 3 and 4 of the contact ladder [06 §8.1]: the two
+// occupancy words of the ONE plot cell under the projectile's post-motion
+// point, ground word first and air word second [03 §2.2].
+//
+// There is no radius. A unit is a candidate iff its pool index IS the value in
+// one of those two words, so the XY gate is exactly the footprint rectangle the
+// occupancy stamper wrote [04 R-COLL-01 §4] — up to footprintX × footprintZ
+// cells, never a disc. Nothing here computes a planar distance, builds a
+// candidate list, or prefers a nearer unit; the first word whose occupant
+// passes both gates impacts and returns [06 R-DMG-01 §7].
+//
+// The owner test compares the unit's owner byte with the projectile's side
+// byte, so an ALLIED unit standing on the cell is a valid contact and only the
+// shooter's own side is exempt; a shooter-less record carries the neutral side
+// byte, which differs from every player slot and therefore contacts anyone
+// [06 R-DMG-01 §7][06 §6.5].
+//
+// The vertical band is asymmetric because the two words hold different
+// classes: the ground word holds occupants whose extent runs base-to-top, so
+// its test is `point.Y < unit.Y + modelTop` with no lower bound; the air word
+// holds the flying class in an altitude band, so its test is
+// `unit.Y <= point.Y <= unit.Y + modelTop`, both ends inclusive. All compares
+// are signed 32-bit on full 16.16 values, and modelTop is the definition's
+// 16.16 model-top walk, floored at zero [06 §8.1][06 R-DMG-01 §7].
+func contactUnitInCell(p *Projectile, w *units.World, terrain *world.Terrain, cx, cz int32) pool.Handle {
+	if p == nil || w == nil || terrain == nil {
+		return 0
+	}
+	cell := terrain.PlotAt(cx, cz)
+	if cell == nil {
+		return 0
+	}
+	py := int32(p.Pos.Y.Raw())
+	if u := contactCandidate(w, p, cell.OccupantA()); u != nil {
+		lower, upper := contactBand(u)
+		if CollisionSlotYGate(py, lower, upper, 0) {
+			return u.Handle
 		}
 	}
-	return
+	if u := contactCandidate(w, p, cell.OccupantB()); u != nil {
+		lower, upper := contactBand(u)
+		if CollisionSlotYGate(py, lower, upper, 1) {
+			return u.Handle
+		}
+	}
+	return 0
+}
+
+// contactCandidate resolves one occupancy word to the live unit it names and
+// applies the owner-differs gate [06 §8.1] steps 3 and 4. A zero word is the
+// free sentinel; a word naming a freed slot resolves to nil.
+func contactCandidate(w *units.World, p *Projectile, word int16) *units.Unit {
+	if word <= 0 {
+		return nil
+	}
+	u := w.Unit(pool.Handle(word))
+	if u == nil || u.Def == nil {
+		return nil
+	}
+	if u.Owner == p.ShooterSide {
+		return nil
+	}
+	return u
+}
+
+// contactBand returns the slot band's two 16.16 bounds for a unit: its own
+// current height and that height plus the definition's full 16.16 model top,
+// added as a signed 32-bit value the way retail forms it [06 R-DMG-01 §7].
+func contactBand(u *units.Unit) (lower, upper int32) {
+	lower = int32(u.Y.Raw())
+	top := u.Def.ModelTopFixed
+	if top < 0 {
+		top = 0 // the walk is floored at zero [06 R-DMG-01 §7]
+	}
+	return lower, lower + top
 }
 
 func handleProjectileImpact(s *Service, h pool.Handle, p *Projectile, weapon *content.WeaponDef, w *units.World, terrain *world.Terrain, featSvc *features.Service, econ *economy.Service, catalog *content.Catalog, tick uint32, wind Vec3, simRNG *rng.Simulation, isWaterTerrain bool) {

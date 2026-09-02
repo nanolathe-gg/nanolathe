@@ -1181,17 +1181,27 @@ func manifestHashFor(fs vfs.FSOps) (string, error) {
 	return "", nil
 }
 
+// modelTopPair is one model's top extent in both the forms the definition
+// carries: the full 16.16 dword and its whole-unit high word [06 R-DMG-01 §7].
+type modelTopPair struct {
+	fixed int32 // full 16.16 extent, floored at zero [06 R-DMG-01 §7]
+	whole int32 // the byte-masked whole-unit high word the LOS writer reads [03 §3.2]
+}
+
 // fillModelTops resolves each unit's ModelTop from its 3DO, reading every
 // distinct objects3d/<ObjectName>.3do once [03 §3.2].
 //
-// Retail computes this at model load as a 16.16 model extent; the LOS writer
-// consumes its whole-unit component as the observer height addend [03 §3.2].
-// A missing or unparsable model leaves ModelTop zero.
+// Retail computes this at model load as a 16.16 model extent and writes it as
+// the definition's upper Y bound; the LOS writer consumes only its whole-unit
+// component as the observer height addend [03 §3.2], while the projectile
+// contact test's vertical band needs the whole dword [06 R-DMG-01 §7]. Both
+// forms are stored, from one walk. A missing or unparsable model leaves both
+// zero.
 func fillModelTops(fs vfs.FSOps, units map[string]*UnitDef) {
 	if fs == nil || len(units) == 0 {
 		return
 	}
-	tops := make(map[string]int32)
+	tops := make(map[string]modelTopPair)
 	for _, u := range units {
 		name := strings.ToLower(strings.TrimSpace(u.ObjectName))
 		if name == "" {
@@ -1201,13 +1211,16 @@ func fillModelTops(fs vfs.FSOps, units map[string]*UnitDef) {
 		if !done {
 			if data, err := fs.ReadFileLimit("objects3d/"+name+".3do", 1<<22); err == nil {
 				if model, perr := formats.LoadThreeDO(data); perr == nil {
+					raw := model.ModelTop() // 16.16, floored at zero [fmt 3do]
+					top.fixed = raw
 					// Convert the model's 16.16 extent to whole world units.
-					top = (model.ModelTop() >> 16) & 0xFF
+					top.whole = (raw >> 16) & 0xFF
 				}
 			}
 			tops[name] = top
 		}
-		u.ModelTop = top
+		u.ModelTop = top.whole
+		u.ModelTopFixed = top.fixed
 	}
 }
 

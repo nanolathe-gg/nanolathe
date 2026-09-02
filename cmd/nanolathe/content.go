@@ -59,6 +59,12 @@ func openContent(opts Options) (*contentSet, error) {
 	if err := fileSystem.MountGameDirectory(opts.Root); err != nil {
 		return nil, fmt.Errorf("nanolathe: mounting %s: %w", opts.Root, err)
 	}
+	if opts.Remaster != "" {
+		if err := mountRemaster(fileSystem, opts.Remaster); err != nil {
+			fileSystem.Close()
+			return nil, err
+		}
+	}
 	set := &contentSet{fs: fileSystem, root: opts.Root, notes: fileSystem.Notes()}
 
 	// One required product proves the mount produced game data rather than an
@@ -89,4 +95,29 @@ func providerNames(fileSystem *vfs.FS) []string {
 		names = append(names, filepath.Base(provider.ID))
 	}
 	return names
+}
+
+// remasterPriority places the remaster override above every retail tier,
+// loose files included, so its 3DO and GAF products shadow the stock art
+// while everything else still resolves from the install.
+const remasterPriority = 1000
+
+// mountRemaster mounts a loose override tree or a packed archive produced by
+// cmd/remaster (docs/REMASTER.md). Only art formats live there; the override
+// never carries unit definitions, so the retail catalog is unchanged.
+func mountRemaster(fileSystem *vfs.FS, path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return &missingProductError{what: "remaster override is not readable", logical: path, expected: "a directory or .hpi written by `remaster build` / `remaster pack`"}
+	}
+	if info.IsDir() {
+		if err := fileSystem.MountDirectory(path, remasterPriority); err != nil {
+			return fmt.Errorf("nanolathe: mounting remaster directory %s: %w", path, err)
+		}
+		return nil
+	}
+	if _, err := fileSystem.MountArchive(path, remasterPriority); err != nil {
+		return fmt.Errorf("nanolathe: mounting remaster archive %s: %w", path, err)
+	}
+	return nil
 }

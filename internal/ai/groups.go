@@ -121,7 +121,17 @@ func (m *Manager) classifyGroups(w *units.World) {
 				group = 4
 			case u.Def.CanFly:
 				group = 8
-			case u.Def.MaxSlope > 0:
+			// The regroup-B key is the definition's MinWaterDepth word, the
+			// value the FBI compile copies from the movement class, and the
+			// test is `>= 1`: a definition that may stand in water goes to
+			// regroup B. This row used to read the MaxSlope word, which the
+			// 2026-08-29 correction retired as the wrong label [08 R-P0-04 §3
+			// "Classifier eligibility, destinations, and order"][08 R-AI-03 §6].
+			// Every stock land definition leaves MinWaterDepth at its movement
+			// template value, so the wrong key sent every armed ground unit to
+			// regroup B and left regroup A — and therefore wave A — empty for
+			// the whole battle.
+			case u.Def.MinWaterDepth >= 1:
 				group = 7
 			case u.Flags&classifierArmed != 0:
 				// Ordinary armed ground units land in regroup A, which is the
@@ -186,6 +196,57 @@ func (m *Manager) removeGroupMember(group uint8, h pool.Handle) bool {
 		return true
 	}
 	return false
+}
+
+// reconcileGroupRecord drops the entries a retail group record cannot hold.
+//
+// Retail records hold unit POINTERS and are emptied of a dying unit by the
+// death-teardown caller of the direct writer, so a record's members are always
+// live units of the owning player whose stored group number equals the record
+// [08 R-P0-04 §3 "The direct manager-group writer"]. Nanolathe records hold
+// pool handles, and the unit pool recycles a freed slot: after a member dies,
+// its handle stays in the record and can later resolve to a *different* live
+// unit whose stored group is some other record. Such an entry is not a member
+// under the writer's own invariant, and leaving it in place both inflates the
+// counts the wave hysteresis reads [08 R-AI-01 §4] and makes the wave merge's
+// farthest-member transfer a no-op, which does not terminate.
+//
+// The purge is order-preserving. The direct writer's swap-delete order is
+// reproduced for a real removal (see removeGroupMember); these entries have no
+// retail counterpart at all, so compacting them out leaves exactly the
+// sequence of real members retail's record would have held.
+//
+// TODO(question): the exact retail boundary is the death teardown, not this
+// reconciliation — a later unit should remove the member when the session
+// finalizes the death (internal/session/session.go's Units.OnDeath handler,
+// where the computer player's loss throttle is already armed) so no window
+// exists between a death and the next 30-entry classification sweep
+// [08 R-P0-04 §3].
+func (m *Manager) reconcileGroupRecord(group uint8, w *units.World) {
+	if m == nil || w == nil {
+		return
+	}
+	list := m.groupVector(group)
+	if list == nil || len(*list) == 0 {
+		return
+	}
+	kept := (*list)[:0]
+	for _, h := range *list {
+		u := w.Unit(h)
+		if u == nil || !u.Alive || u.Owner != m.Player || u.Group != group {
+			continue
+		}
+		kept = append(kept, h)
+	}
+	*list = kept
+}
+
+// reconcileGroupRecords applies reconcileGroupRecord to all nine task records
+// in ascending record order [08 R-P0-04 §2].
+func (m *Manager) reconcileGroupRecords(w *units.World) {
+	for group := uint8(1); group <= 9; group++ {
+		m.reconcileGroupRecord(group, w)
+	}
 }
 
 // groupVector returns the mutable task vector for its retail record number.

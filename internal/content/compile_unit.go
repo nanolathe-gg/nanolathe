@@ -153,6 +153,20 @@ type UnitDef struct {
 	// asset with its own provenance.
 	ModelTop int32
 
+	// ModelTopFixed is the SAME model-top walk kept in full 16.16 world units:
+	// the dword the definition loader writes as the unit's upper Y bound after
+	// the model load, floored at zero [06 R-DMG-01 §7]. ModelTop above is that
+	// dword's whole-unit high word, which is what the LOS eye-height writer
+	// reads [03 §3.2]; the projectile contact test needs the whole dword,
+	// because its vertical band is `unit.Y + modelTop` compared against a full
+	// 16.16 projectile height [06 §8.1]. Zero when the model is missing,
+	// unparsable, or entirely below its origin.
+	//
+	// Like ModelTop it comes from a different asset than the FBI record, so it
+	// is deliberately absent from the canonical string below and therefore
+	// changes neither the per-definition hash nor the catalog hash.
+	ModelTopFixed int32
+
 	// BuildPageCount is the definition's build-menu page-count byte
 	// [02 R-CAT-01 §5 step 5]. With `<n>` the unit name, the compiler probes
 	// `guis/<n>1.GUI`, `guis/<n>2.GUI`, … until the first missing one; the byte

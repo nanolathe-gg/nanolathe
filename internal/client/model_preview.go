@@ -1,0 +1,164 @@
+package client
+
+// Deterministic isolated 3DO previews use the same model loading, hierarchy,
+// texture resolution, composition image, and indexed raster path as live units.
+// This file only supplies the committed presentation inputs that a live unit
+// would otherwise receive from a frame [03 §2.4][03 §2.4.1][R-REN-03A].
+
+import (
+	"fmt"
+	"image"
+	"strings"
+
+	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/palette"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/vfs"
+)
+
+const maxModelPreviewDimension = 8192
+
+// ModelPreviewOptions describes one isolated model view. Owner is the retail
+// player colour slot (0..9). Structure and KeyPlane are explicit because they
+// are unit-definition properties, not properties stored in a 3DO [fmt 3do].
+// Heading uses the engine's uint16 full-circle representation [03 §2.4].
+// Background is a physical PALETTE.PAL index.
+type ModelPreviewOptions struct {
+	Model   string
+	Owner   uint8
+	Heading uint16
+	Pitch   uint16
+	Bank    uint16
+	Width   int
+	Height  int
+	// Scale magnifies the unchanged orthographic game-camera projection through
+	// the client's existing presentation zoom. Zero means native scale 1.
+	Scale      float32
+	Background uint8
+	Structure  bool
+	KeyPlane   bool
+	// HiddenPieces is an explicit tooling pose override. It lets a contact
+	// sheet omit script-driven flash/locator geometry without claiming an
+	// initial COB state or changing the authored model.
+	HiddenPieces []string
+}
+
+// ModelPreviewRenderer retains the production model and texture caches while
+// rendering any number of isolated headings from one mounted VFS. It is
+// presentation-only and never advances texture playback or simulation state.
+type ModelPreviewRenderer struct {
+	client  *Client
+	palette *palette.Tables
+}
+
+// NewModelPreviewRenderer loads the retail palette tables and binds the
+// production model texture index to fs.
+func NewModelPreviewRenderer(fs *vfs.FS) (*ModelPreviewRenderer, error) {
+	if fs == nil {
+		return nil, fmt.Errorf("nanolathe: creating model preview: logical path palettes/palette.pal, providers searched [], expected mounted retail VFS")
+	}
+	tables, err := palette.Load(fs)
+	if err != nil {
+		return nil, fmt.Errorf("nanolathe: creating model preview: logical path palettes/palette.pal, providers searched %s, expected retail palette tables: %w", previewProviders(fs), err)
+	}
+	c, err := New(Options{Width: 1, Height: 1})
+	if err != nil {
+		return nil, fmt.Errorf("nanolathe: creating model preview: %w", err)
+	}
+	c.SetPalette(tables)
+	c.SetModelFS(fs)
+	return &ModelPreviewRenderer{client: c, palette: tables}, nil
+}
+
+// RenderModel renders one model at one heading through the production unit
+// hierarchy and raster path. Every call starts with the requested palette
+// background and centers the unit origin in an identically sized frame.
+func (r *ModelPreviewRenderer) RenderModel(opts ModelPreviewOptions) (*image.RGBA, error) {
+	if r == nil || r.client == nil || r.palette == nil {
+		return nil, fmt.Errorf("nanolathe: rendering model preview: renderer is not initialized")
+	}
+	name := strings.TrimSpace(opts.Model)
+	if name == "" {
+		return nil, fmt.Errorf("nanolathe: rendering model preview: logical path objects3d, providers searched %s, expected model name", previewProviders(r.client.modelFS))
+	}
+	// The production loader accepts either a bare model name or a complete
+	// logical path. Make the command's documented "armcom.3do" shorthand a
+	// complete path before entering that loader.
+	renderName := name
+	if strings.HasSuffix(strings.ToLower(name), ".3do") && !strings.ContainsAny(name, `/\`) {
+		renderName = "objects3d/" + name
+	}
+	if opts.Owner >= 10 {
+		return nil, fmt.Errorf("nanolathe: rendering model preview: owner colour %d outside retail slots 0..9", opts.Owner)
+	}
+	if opts.Width <= 0 || opts.Height <= 0 || opts.Width > maxModelPreviewDimension || opts.Height > maxModelPreviewDimension {
+		return nil, fmt.Errorf("nanolathe: rendering model preview: output size %dx%d outside 1..%d", opts.Width, opts.Height, maxModelPreviewDimension)
+	}
+	if opts.Scale < 0 || opts.Scale > 4 || (opts.Scale > 0 && opts.Scale < 0.25) {
+		return nil, fmt.Errorf("nanolathe: rendering model preview: scale %.3g outside 0.25..4", opts.Scale)
+	}
+
+	c := r.client
+	c.width, c.height = opts.Width, opts.Height
+	c.indexed = make([]uint8, opts.Width*opts.Height)
+	c.rgba = make([]byte, opts.Width*opts.Height*4)
+	for i := range c.indexed {
+		c.indexed[i] = opts.Background
+	}
+	// World position is chosen so modelAnchor lands on the image centre. Scale
+	// magnifies the ordinary orthographic game-camera projection without
+	// changing its angle or shear [03 §2.5][R-REN-03A §1].
+	scale := opts.Scale
+	if scale == 0 {
+		scale = 1
+	}
+	anchorX := int64(float32(opts.Width/2) / scale)
+	anchorZ := int64(float32(opts.Height/2) / scale)
+	c.cam = &camera.Camera{
+		ViewW: int32(opts.Width), ViewH: int32(opts.Height),
+		MapW: int32(opts.Width), MapH: int32(opts.Height), Scale: scale,
+	}
+	view := frame.UnitView{
+		Slot:       1,
+		InstanceID: 1,
+		Owner:      opts.Owner,
+		Model:      renderName,
+		Heading:    opts.Heading,
+		Pitch:      opts.Pitch,
+		Bank:       opts.Bank,
+		X:          numeric.Fixed(anchorX << 16),
+		Z:          numeric.Fixed(anchorZ << 16),
+		BMCode:     !opts.Structure,
+		ZBuffer:    opts.KeyPlane,
+		NoShadow:   true,
+	}
+	for _, name := range opts.HiddenPieces {
+		if name = strings.TrimSpace(name); name != "" {
+			view.Pieces = append(view.Pieces, frame.PieceView{Name: name, Hidden: true})
+		}
+	}
+	if !c.drawUnitModel(view, int32(opts.Width/2), int32(opts.Height/2)) {
+		path := renderName
+		if !strings.HasSuffix(strings.ToLower(path), ".3do") {
+			path = "objects3d/" + path + ".3do"
+		}
+		return nil, fmt.Errorf("nanolathe: rendering model preview: logical path %s, providers searched %s, expected drawable 3DO model", path, previewProviders(c.modelFS))
+	}
+	c.convertIndexedToRGBA()
+	out := image.NewRGBA(image.Rect(0, 0, opts.Width, opts.Height))
+	copy(out.Pix, c.rgba)
+	return out, nil
+}
+
+func previewProviders(fs *vfs.FS) string {
+	if fs == nil {
+		return "[]"
+	}
+	providers := fs.Providers()
+	names := make([]string, 0, len(providers))
+	for _, provider := range providers {
+		names = append(names, provider.ID)
+	}
+	return "[" + strings.Join(names, ", ") + "]"
+}
