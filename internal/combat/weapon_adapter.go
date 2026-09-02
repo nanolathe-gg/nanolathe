@@ -204,24 +204,59 @@ func (s *Service) ShotTimeAdmitsPoint(u *units.Unit, idx int, x, y, z numeric.Fi
 	if slot == nil || slot.Weapon == nil || u == nil || u.Def == nil {
 		return false
 	}
-	w := slot.Weapon
-	if !WithinRange(u.X, u.Z, x, z, w.Range) {
+	return shotTimeAdmits(u, slot.Weapon, x, y, z, terrain)
+}
+
+// shotTimeAdmits is the one body of the shot-time gate, shared by the point
+// form above and by the slot pipeline's own admission site. [06 R-WPN-05 §9]
+// states the gate's clauses exhaustively and in evaluation order, and states
+// that it has NO target-side clause of any kind — no target height or model
+// top, no `floater`/`canhover` medium test, no `toairweapon` mover-mode test,
+// no alliance, no category. The target contributes only its point:
+//
+//  1. range — inclusive, signed 32-bit, on the raw 16.16 deltas shooter →
+//     target point, for water and non-water weapons alike, evaluated FIRST;
+//  2. non-water only — the shooter's whole-unit Y word plus its definition's
+//     model top-height word, strictly greater than the map's sea-level byte;
+//  3. non-water and `ballistic` only — refuse on the solver's no-solution
+//     sentinel, given the shooter-minus-target deltas on all three axes.
+//
+// A water weapon runs clause 1 and admits. The gate performs no terrain, hill,
+// visibility or sensor test and consults neither reload nor ammunition nor
+// cost; the target-side clauses live in the acquisition/order-installation
+// gate alone (CanEngageSlotTarget, IsValidAcquisitionCandidate), which orders
+// its own range test LAST [06 §3.1][06 R-WPN-05 §1].
+func shotTimeAdmits(u *units.Unit, weapon *content.WeaponDef, x, y, z numeric.Fixed, terrain *world.Terrain) bool {
+	if u == nil || weapon == nil {
 		return false
 	}
-	if w.WaterWeapon {
+	if !WithinRange(u.X, u.Z, x, z, weapon.Range) {
+		return false
+	}
+	if weapon.WaterWeapon {
 		return true
 	}
 	sea := int32(0)
 	if terrain != nil {
 		sea = int32(terrain.SeaLevel)
 	}
-	if wholeY(u)+u.Def.ModelTop <= sea {
+	if wholeY(u)+modelTop(u) <= sea {
 		return false
 	}
-	if w.Ballistic && !hasBallisticSolutionToPoint(u, x, y, z, w, terrain) {
+	if weapon.Ballistic && !hasBallisticSolutionToPoint(u, x, y, z, weapon, terrain) {
 		return false
 	}
 	return true
+}
+
+// modelTop is the shooter's definition model total-height whole-unit word, the
+// addend clause 2 carries [03 R-P0-18-A §1]. A unit with no resolved definition
+// contributes nothing, which is a fixture case: retail units always have one.
+func modelTop(u *units.Unit) int32 {
+	if u == nil || u.Def == nil {
+		return 0
+	}
+	return u.Def.ModelTop
 }
 
 // airborneMoverMode is the committed mover-mode value the `toairweapon` gate

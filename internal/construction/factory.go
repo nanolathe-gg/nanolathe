@@ -2689,6 +2689,16 @@ func (s *Service) handleState3(factory *units.Unit, node *orders.Node, tick uint
 	// Query and emit only after the two-resource admission and authoritative
 	// state update have committed [R-P0-06]. Rejected work reaches no query.
 	s.emitAcceptedNano(tick, factory, product)
+	// "Beside the spray" the reveal stamp is written by ten handler sites, and
+	// `MobileBuild`'s work phase is one of them at `tick + 300`; `BuildingBuild`
+	// is named explicitly as one that never writes it, even though this same
+	// loop is its phase-3 work visit too [04 R-ORD-01 §5 "The reveal stamp"].
+	// The write is an outright store to the one shared reveal/cloak deadline
+	// field, never a maximum [03 R-VIS-01 §6], and its only reader is the
+	// cloak debit gate [05 R-ECO-01 §9].
+	if isMobileBuild(node.ID) {
+		factory.RevealDeadline = tick + 300
+	}
 	if product.Remaining == 0 {
 		// The shared work helper owns the first completion transition. It runs
 		// synchronously when the admitted increment stores zero, before the

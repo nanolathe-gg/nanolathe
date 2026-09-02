@@ -192,6 +192,12 @@ func (s *Service) stepUnitReclaim(builder *units.Unit, node *orders.Node, tick u
 		s.World.ApplyDamage(target.Handle, pulse)
 		fired = true
 	}
+	// "both pass → ... stamp `tick + 900`; spray" — one of the ten reveal-stamp
+	// handler sites [04 R-ORD-01 §5 "The reveal stamp"]. The write is an
+	// outright store to the one shared reveal/cloak deadline field on every
+	// qualifying visit (fired or not), never a maximum [03 R-VIS-01 §6]; its
+	// only reader is the cloak debit gate [05 R-ECO-01 §9].
+	builder.RevealDeadline = tick + 900
 	if s.Presentation != nil {
 		s.emitReclaimNano(tick, builder, target)
 	}

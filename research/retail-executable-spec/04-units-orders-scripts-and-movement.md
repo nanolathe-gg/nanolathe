@@ -1980,8 +1980,9 @@ waypoints are inherited in queue order, and the factory itself never moves. If
 nothing was inherited the product receives a queued `Park` order instead.
 Standing-move bits (18–19) and standing-fire bits (20–21) copy from builder
 to product only when both units carry the building-class/alive state bit
-(bit 28) and NEITHER carries bit 14 (the auto flag, which also marks the
-cloak/initial-posture posture the completion transition applies); the
+(bit 28) and NEITHER carries bit 14 (the death latch the kill service sets
+beside the cause byte, which the completion transition also sets for an
+`isfeature` product — [R-SPEC-01 §12]); the
 experience word copies only for computer-player-owned builders (owner player
 state byte value 1) [R-P0-09].
 The full production lifecycle, refund arithmetic, and completion transition
@@ -2210,9 +2211,22 @@ The completion transition, gated on the recovered class preconditions
 remaining fraction 0.0, sets the product's completion flag (bit 13 of the
 state word), clears the product's build/weapon auxiliary field, raises the
 product's Activate edge when the product definition's capability word requests
-activation (capability bit 18), and applies the cloak/initial-posture handling
-when capability bit 24 requests it (writes the cloak/init byte value and sets
-bit 14 of the state word). The normal completion transition is not the
+activation (capability bit 18), and, when capability bit 24 (`isfeature`) is
+set, marks the product as a feature stand-in (death cause byte 7 and the
+death-latch bit 14 of the state word, [R-SPEC-01 §12]). **Correction
+(2026-09-02, RWU-19-26):** this sentence, the section-3.5 summary, the
+numbered list below and two standing-order parentheticals previously called
+that arm "the cloak/initial-posture handling … (writes the cloak/init byte
+value and sets bit 14 of the state word)" and bit 14 "the auto flag, which
+also marks the cloak/initial-posture posture". Capability bit 24 is
+`isfeature` (doc 02's flag table), the byte written is the death cause byte
+the death visitor reads, and bit 14 is the latch that visitor tests — exactly
+what [R-SPEC-01 §12] already recorded. The completion transition never reads
+`init_cloaked` (capability bit 4) and never writes the cloak-requested or
+cloaked bits; `init_cloaked` is consumed once, by the unit constructor, which
+seeds the cloak-requested bit ([03 R-VIS-01 §6], [05 R-ECO-01 §9]). The
+mislabel had been read downstream as an "initial-posture path" for
+`init_cloaked`; no such path exists. The normal completion transition is not the
 cancel-current interrupt: cancel-current invokes the same transition before a
 cause-9 kill and lowers the Activate AND StartBuilding edges together without
 decrementing the queued count; construction-stopped (wake mask 8) instead
@@ -2235,8 +2249,8 @@ completion watcher.
 
 Standing-order inheritance is separately gated (summary in section 3.5): the
 copy is allowed only when BOTH the product and the builder carry the
-building-class/alive state bit (bit 28) and NEITHER carries bit 14 (the auto
-flag, which also marks the cloak/initial-posture posture). When the guard
+building-class/alive state bit (bit 28) and NEITHER carries bit 14 (the
+death latch — neither unit is dying; see the correction in section 3.8). When the guard
 passes, standing-move bits 18–19 and standing-fire bits 20–21 copy from the
 builder's state word to the product's; for a computer-owned builder (owner
 player state byte value 1) the builder's experience word also copies. The
@@ -2531,7 +2545,8 @@ body, at implementable precision:
    mode 1; a building-class product instead refreshes the builder GUI;
 3. capability bit 18 → raise the product's `Activate` edge;
 4. the local player's queue-count label refresh;
-5. capability bit 24 → cloak/initial-posture byte 7 and flags bit 14;
+5. capability bit 24 (`isfeature`) → death cause byte 7 and death-latch bit
+   14, the feature stand-in of [R-SPEC-01 §12];
 6. owner in state 1 or 2 → the kind-18 builder/product link event
    `{kind 18, product identity, builder identity}` to the owner's event sink;
 7. either unit selected → HUD dirty.
@@ -3136,10 +3151,26 @@ owner's `QueryNanoPiece` result (the piece's world position, resolved
 through the script's query port) to the target's bounding box
 (position plus the definition's model minimum and maximum triple, or, for a
 feature, its footprint box), effect kind 6. It is presentation only (doc 03).
-The unit's *nanolathe-active stamp* (a tick value on the unit) is written
-beside it — `tick + 150` by the repair pair, `tick + 300` by the build and
-feature-reclaim family, `tick + 900` by `Capture` and `ReclaimUnit` — and is
-read by presentation, not by any handler.
+**The reveal stamp.** Beside the spray, the working unit's **reveal /
+cloak-suppression deadline** — the one per-unit tick word that the sensor
+phase's proximity breach (`+ 90`) and the projectile fill (`+ 600`) also
+write ([03 R-VIS-01 §6]) — is overwritten with `tick + N`. Ten handler sites
+write it: `tick + 150` in `SelfRepair`, `RepairUnit` (work phase) and
+`RepairUnitNoMove`; `tick + 300` in `MobileBuild` (work phase), `HelpBuild`,
+`Reclaim`, `Resurrect` and `VTOL_Reclaim`; `tick + 900` in `Capture` and
+`ReclaimUnit`. `BuildingBuild`, `GetBuilt` and the other VTOL work handlers
+do not write it. It has exactly one reader, and that reader is not
+presentation: the economy's cloak debit gate refuses to cloak the unit until
+`currentTick >= deadline` ([05 R-ECO-01 §9]), so a working builder that has
+cloak requested stays visible for five, ten or thirty seconds after its last
+stroke, and no handler reads it back. **Correction (2026-09-02, RWU-19-26):**
+the previous text read "The unit's *nanolathe-active stamp* (a tick value on
+the unit) is written beside it — `tick + 150` by the repair pair, `tick +
+300` by the build and feature-reclaim family, `tick + 900` by `Capture` and
+`ReclaimUnit` — and is read by presentation, not by any handler." The
+"repair pair" undercounted (`SelfRepair` also stamps), the build family was
+stated loosely (it is exactly the five handlers named above; `BuildingBuild`
+never stamps), and the reader is the cloak gate, not presentation.
 
 **The work-amount seed** used by the reclaim family with a scale `k` is
 `max(1, trunc(workertime · ((experience + 5) / 5) · targetMaxDamage · k /

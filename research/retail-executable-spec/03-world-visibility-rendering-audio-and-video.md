@@ -3803,6 +3803,23 @@ proximity test, and no spawn-time visibility edit. A unit authored
 `init_cloaked=1` simply starts with cloak requested, and the ordinary upkeep
 below decides tick by tick whether it is actually cloaked.
 
+**Re-verified (2026-09-02, RWU-19-26) against doc 05's contrary text.** Doc
+05's [R-ECO-01 §9] had said the bit "is not seeded from `init_cloaked`" and
+that `init_cloaked` feeds "the initial-posture path"; a second bounded trace
+confirms this section and doc 05 is corrected in place. Precisely: the
+constructor clears bit 11 in an early masked store and then, in its final
+status-word store, ORs in the definition's `init_cloaked` flag shifted to
+bit 11 alongside the standing-move and standing-fire copies; the complete
+writer set for bit 11 is that constructor store, the `Cloak_On` / `Cloak_Off`
+handlers, and the save-game restore. The build-completion service writes
+neither bit 11 nor the instance cloaked bit and never reads `init_cloaked`;
+its capability-bit-24 arm is `isfeature` (death cause 7 plus the death
+latch, [04 R-SPEC-01 §12]). Since the cloak upkeep block is not gated on
+completion (doc 05), an `init_cloaked` nanoframe is cloak-requested — and,
+when paid for, cloaked — while still under construction. No consumer of
+`init_cloaked` exists outside the constructor: the visibility predicate of
+§3.2 and pass 5 read only the instance cloaked bit.
+
 **The cloak gate.** The per-player economy pass evaluates, for each of that
 player's units:
 
@@ -3828,6 +3845,29 @@ outside this document — firing and several order transitions write
 and 06 own those) — so a later write always wins outright, and a shorter
 sensor breach can *shorten* a longer reveal already in progress. Retail does
 not take a maximum.
+
+**Writer census of the shared deadline (2026-09-02, RWU-19-26).** Every
+store to the per-unit deadline word in the recovered image, by value:
+
+| Value | Writer | Owner |
+|---|---|---|
+| `0` | the unit constructor (creation) | [04 §2] |
+| `tick + 90` | the sensor phase's proximity breach, pass 4 (`[R-VIS-01 §4]`) | this section |
+| `tick + 150` | `SelfRepair`, `RepairUnit` (work phase), `RepairUnitNoMove` | [04 R-ORD-01 §5] |
+| `tick + 300` | `MobileBuild` (work phase), `HelpBuild`, `Reclaim`, `Resurrect`, `VTOL_Reclaim` | [04 R-ORD-01 §5] |
+| `tick + 600` | the projectile fill that every shot runs, stamping the shooter | [06 §4.1] |
+| `tick + 900` | `Capture`, `ReclaimUnit` | [04 R-ORD-01 §5] |
+| persisted value | the save-game restore | doc 08 |
+
+Ten order-handler sites, one sensor site, one weapon site: the field is one
+word and all twelve gameplay writers overwrite it. `BuildingBuild`,
+`GetBuilt`, `VTOL_MobileBuild`, `VTOL_HelpBuild`, `VTOL_RepairUnit` and
+`VTOL_ReclaimUnit` do not write it. The word has exactly **one** gameplay
+reader — the cloak debit gate's `currentTick >= deadline` term (doc 05
+[R-ECO-01 §9]); the save writer copies it out and nothing else, presentation
+included, reads it. The sensor breach and the order handlers only write.
+The earlier sentence above ("firing and several order transitions write …")
+is therefore exact but under-specified; this table is the contract.
 
 **Cloak is still a predicate early-out, not a mask edit** (§3.2): nothing in
 this path writes either visibility grid.

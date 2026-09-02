@@ -1754,27 +1754,80 @@ and the unit's per-unit cloak payment deadline is due — the gate is bit set
 cooldown bit into the gate was falsified at byte level, and the
 owner-control-byte-3 condition that would suppress the whole block is inert
 during live play because the settlement caller excludes control byte 3. The
-per-unit deadline itself is written by nine handler sites as the global tick
-plus 150, 300, or 900 (repair, build/get-built/resurrection, and
-capture/reclaim respectively); idle cloaked units therefore pay every pass
-from the first.
+per-unit deadline itself is written by **ten** order-handler sites as the
+global tick plus 150 (`SelfRepair`, `RepairUnit`, `RepairUnitNoMove`), 300
+(`MobileBuild`, `HelpBuild`, `Reclaim`, `Resurrect`, `VTOL_Reclaim`) or 900
+(`Capture`, `ReclaimUnit`), and by two writers outside the order system — the
+sensor phase's proximity breach (`+ 90`, [03 R-VIS-01 §6]) and the projectile
+fill on every shot (`+ 600`, [06 §4.1]) — all into the **same** word, a later
+write always replacing an earlier one (no maximum). Idle cloaked units, which
+nothing stamps, therefore pay every pass from the first. **Correction
+(2026-09-02, RWU-19-26).** The previous text said "written by nine handler
+sites as the global tick plus 150, 300, or 900 (repair, build/get-built/
+resurrection, and capture/reclaim respectively)". A store-by-store census of
+the field found ten handler sites, not nine — `Resurrect` and `VTOL_Reclaim`
+both stamp `+ 300`, while neither `GetBuilt` nor `BuildingBuild` writes the
+field at all — and the sentence omitted the two non-handler writers that
+share the word. The full census, with readers, is [03 R-VIS-01 §6]
+"Writer census of the shared deadline" and [04 R-ORD-01 §5] "The reveal
+stamp".
 
 #### R-ECO-01 §9 — Cloak gate, conversion, and the second bit [R-ECO-01] (2026-08-29)
 
-**Established, and a correction to the reach claim.** The first gate bit is
-not seeded from `init_cloaked` and it *does* have runtime togglers. It is
-cleared at spawn along with its neighbours, and it is set by the **`Cloak_On`**
-order handler and cleared by the **`Cloak_Off`** order handler, each of which
-first requires a capability bit on the definition and is otherwise a
-one-instruction set/clear of that status bit. The previous text — "the
-init-cloaked instance bit (seeded once at spawn from the definition's
-`init_cloaked`; no runtime toggler exists in the reviewed image) … authored
-reach is exactly the mine family; commanders, spies and snipers carry cloak
-costs but never enter this block" — was wrong on both halves: the two cloak
-orders are the togglers ([R-ECO-01 §10] gives their operation bytes), so any
-unit whose definition carries the cloak capability pays cloak upkeep for as
-long as the player leaves cloak on. `init_cloaked` is a separate definition
-flag bit; its consumer is the initial-posture path, not this gate.
+**Established, and a correction to the reach claim.** The first gate bit —
+the **cloak-requested** status bit, bit 11 of the unit status word — has
+exactly three writers in the recovered image, and one gameplay reader:
+
+* the **unit constructor** seeds it from the definition's `init_cloaked` flag.
+  The constructor first clears the bit in a masked store of neighbouring
+  bits, then, in the same masked store that copies the definition's two
+  standing-order fields into the status word, ORs in `init_cloaked` shifted to
+  bit 11. Both creation paths in the image (the shared create service and
+  the network-packet create) run this constructor, and nothing after it —
+  neither the create service's own tail nor the **build-completion service**
+  — touches
+  bit 11, the instance cloaked bit, or `init_cloaked` again. An
+  `init_cloaked=1` unit is therefore cloak-requested from the tick it is
+  placed, as a nanoframe, with no player order ([03 R-VIS-01 §6]);
+* the **`Cloak_On`** order handler sets it and the **`Cloak_Off`** order
+  handler clears it, each behind the definition's derived can-cloak capability
+  (`cloakcost > 0`, [R-PROD-01 §7]) and otherwise a one-instruction set/clear
+  ([R-ECO-01 §10] gives their operation bytes);
+* the save-game restore rebuilds it from the persisted status word (doc 08).
+
+The only reader is this gate. The two cloak orders are the runtime togglers,
+so any unit whose definition carries the cloak capability pays cloak upkeep
+for as long as the player leaves cloak on, whether or not it was authored
+`init_cloaked`. The first previous text — "the init-cloaked instance bit
+(seeded once at spawn from the definition's `init_cloaked`; no runtime
+toggler exists in the reviewed image) … authored reach is exactly the mine
+family; commanders, spies and snipers carry cloak costs but never enter this
+block" — was wrong about the togglers and the reach.
+
+**Correction (2026-09-02, RWU-19-26).** The 2026-08-29 text of this paragraph
+over-corrected: it said "The first gate bit is not seeded from
+`init_cloaked` … It is cleared at spawn along with its neighbours … 
+`init_cloaked` is a separate definition flag bit; its consumer is the
+initial-posture path, not this gate." That was wrong. The constructor's
+clearing store is followed, in the same function, by the masked store that
+copies `init_cloaked` into bit 11 — the seeding is Established at instruction
+level, and [03 R-VIS-01 §6] had it right. There is no "initial-posture path":
+the phrase came from doc 04 §3.8's description of the completion transition's
+capability-bit-24 arm, which is `isfeature` (death cause 7 and the death
+latch — [04 R-SPEC-01 §12]), not `init_cloaked` (bit 4); doc 04 §3.8 is
+corrected in place. Implementation consequence: the cloak-requested state is
+seeded from `init_cloaked` at creation, the completion transition writes
+nothing cloak-related, and nothing else consumes `init_cloaked` — the
+visibility predicate reads only the instance cloaked bit that this gate's
+transition service sets ([03 §3.2], [R-ECO-01 §8]).
+
+**Established — the debit is not gated on completion.** The cloak block sits
+after, and outside, the settlement's `remaining fraction == 0` test that
+guards the producer and storage contributions: an unfinished unit whose
+request bit is set is gated and charged exactly like a finished one. For an
+`init_cloaked` definition that means the nanoframe pays from its first
+settlement pass and, when the owner can pay, is cloaked while still being
+built.
 
 **Established (bounded negative) — the second bit is inert.** The status bit
 whose clearness the gate also requires is *read* only here. A search of the

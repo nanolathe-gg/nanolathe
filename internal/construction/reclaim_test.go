@@ -107,6 +107,20 @@ func TestUnitReclaimFriendlyTargetIsAdmitted(t *testing.T) {
 	}
 }
 
+// TestUnitReclaimStampsSharedRevealDeadline locks the ReclaimUnit phase-5
+// stamp: a qualifying visit writes the builder's shared reveal/cloak
+// deadline to tick + 900 outright [04 R-ORD-01 §5][03 R-VIS-01 §6].
+func TestUnitReclaimStampsSharedRevealDeadline(t *testing.T) {
+	s, builder, target, _ := reclaimFixture(t, 100, 10)
+	target.Owner = builder.Owner
+	builder.RevealDeadline = 12345 // a prior, larger value must not survive: no maximum is taken.
+	const tick = 7
+	s.StepUnit(TickContext{Tick: tick, World: s.World, Economy: s.Economy, Catalog: s.Catalog}, builder.Handle)
+	if want := uint32(tick) + 900; builder.RevealDeadline != want {
+		t.Fatalf("RevealDeadline=%d want %d (tick+900)", builder.RevealDeadline, want)
+	}
+}
+
 func TestUnitReclaimCadenceAndFatalRefundCleanup(t *testing.T) {
 	s, builder, target, node := reclaimFixture(t, 1, 10)
 	builder.Def.WorkerTime = 300 // pulse 15, exercising ordinary lethal health clamp

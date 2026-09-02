@@ -279,8 +279,14 @@ func waitForAttackHandler(_ *units.Unit, n *Node, _ uint32, _ uint32) Code {
 // Paralyze [04 R-ORD-01 §2]
 // ---------------------------------------------------------------------------
 
-// paralyzeMaxCredit is the row's clamp on the stun credit [04 R-ORD-01 §2].
-const paralyzeMaxCredit = 1800
+// paralyzeMaxCredit is the row's clamp on the stun credit [04 R-ORD-01 §2] —
+// 1,800 ticks, sixty seconds. The compare against it is SIGNED [06 §10]: the
+// credit accumulates as a plain 32-bit add across repeated paralyzer hits, and
+// a credit that has wrapped to a negative value is NOT capped. Reading the
+// compare as unsigned turned that wrap into a full-length stun; reading it
+// signed keeps retail's behavior, in which the wrapped credit arms a deadline
+// in the past and the wait expires immediately.
+const paralyzeMaxCredit int32 = 1800
 
 // paralyzeHandler holds the stun credit in p1, in ticks.
 //
@@ -310,8 +316,8 @@ func paralyzeHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
 		u.ParalyzeExpire = 0
 		return Code(5) // *complete* [04 R-ORD-01 §2]
 	}
-	if n.Param1 > paralyzeMaxCredit {
-		n.Param1 = paralyzeMaxCredit
+	if int32(n.Param1) > paralyzeMaxCredit { // SIGNED compare [06 §10]
+		n.Param1 = uint32(paralyzeMaxCredit)
 	}
 	releaseAllWeaponSlots(u)
 	clearWeaponTargetsUnconditional(u)

@@ -60,6 +60,80 @@ func TestDeniedBuildStepStillRecordsBothRequests(t *testing.T) {
 	}
 }
 
+// An admitted BuildingBuild/MobileBuild work step stamps the acting unit's
+// shared reveal/cloak deadline outright to tick + 300 — the phase-3 work
+// visit both handlers share in handleState3 [04 R-ORD-01 §5][03 R-VIS-01
+// §6]. The economy consumer is the cloak-payment gate, which is why a prior,
+// larger deadline must not survive: the write is unconditional, never a
+// maximum.
+func TestAdmittedMobileBuildStepStampsSharedRevealDeadline(t *testing.T) {
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
+	facDef := newFactoryDef("armck", 1, 1, 60) // a mobile builder, not a factory
+	prodDef := newProductDef("armflash", 1, 1, 100, 100)
+	cat.Units[facDef.CanonicalKey] = facDef
+	cat.Units[prodDef.CanonicalKey] = prodDef
+	w := newConstructionFixtureWorld(12, cat)
+	fh, _ := w.Create(facDef, 0, 0, 0, 0)
+	ph, _ := w.Create(prodDef, 0, 0, 0, 0)
+	builder, product := w.Unit(fh), w.Unit(ph)
+	product.Remaining, product.MaxHealth = 0.5, 100
+	builder.RevealDeadline = 999999 // a prior, larger value must not survive.
+
+	econ := &economy.Service{}
+	svc := NewService(nil, cat, w, econ)
+	mobileID := orders.Lookup(MobileBuildOrder)
+	if mobileID == 0 {
+		t.Fatal("MobileBuild descriptor missing")
+	}
+	node := &orders.Node{ID: mobileID, BuildDefKey: prodDef.CanonicalKey, Param2: 1, Phase: uint8(State3), Target: ph}
+	const tick = 7
+	svc.handleState3(builder, node, tick)
+
+	if product.Remaining == 0.5 {
+		t.Fatal("fixture work step was denied; want an admitted pass so the stamp fires")
+	}
+	// "MobileBuild (work phase)" is one of the ten reveal-stamp handler sites
+	// at tick + 300 [04 R-ORD-01 §5 "The reveal stamp"].
+	if want := uint32(tick) + 300; builder.RevealDeadline != want {
+		t.Fatalf("RevealDeadline=%d want %d (tick+300)", builder.RevealDeadline, want)
+	}
+}
+
+// TestAdmittedBuildingBuildStepDoesNotStampRevealDeadline locks the
+// correction (RWU-19-26): unlike MobileBuild, BuildingBuild's phase-3 work
+// visit — the very same handleState3 loop — never writes the shared
+// reveal/cloak deadline [04 R-ORD-01 §5 "The reveal stamp"].
+func TestAdmittedBuildingBuildStepDoesNotStampRevealDeadline(t *testing.T) {
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
+	facDef := newFactoryDef("armfac", 1, 1, 60)
+	prodDef := newProductDef("armflash", 1, 1, 100, 100)
+	cat.Units[facDef.CanonicalKey] = facDef
+	cat.Units[prodDef.CanonicalKey] = prodDef
+	w := newConstructionFixtureWorld(12, cat)
+	fh, _ := w.Create(facDef, 0, 0, 0, 0)
+	ph, _ := w.Create(prodDef, 0, 0, 0, 0)
+	factory, product := w.Unit(fh), w.Unit(ph)
+	product.Remaining, product.MaxHealth = 0.5, 100
+	factory.RevealDeadline = 42 // must survive untouched.
+
+	econ := &economy.Service{}
+	svc := NewService(nil, cat, w, econ)
+	buildingID := orders.Lookup(FactoryBuildOrder)
+	if buildingID == 0 {
+		t.Fatal("BuildingBuild descriptor missing")
+	}
+	node := &orders.Node{ID: buildingID, BuildDefKey: prodDef.CanonicalKey, Param2: 1, Phase: uint8(State3), Target: ph}
+	const tick = 7
+	svc.handleState3(factory, node, tick)
+
+	if product.Remaining == 0.5 {
+		t.Fatal("fixture work step was denied; want an admitted pass to exercise the non-stamp")
+	}
+	if factory.RevealDeadline != 42 {
+		t.Fatalf("RevealDeadline=%d want untouched 42; BuildingBuild must never write the reveal stamp", factory.RevealDeadline)
+	}
+}
+
 // A carried product takes NO decay visit at all: `GetBuilt` is never reached
 // while the product is cargo [04 R-FAC-02 §4]'s 2026-09-02 correction. The
 // primary pump reloads the head after every result code [04 R-ORD-01 §10], and

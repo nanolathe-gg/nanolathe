@@ -1178,7 +1178,22 @@ const smokeDefaultFrameDelay = 7
 // producer spends exactly three CRT draws per spawn (per-axis jitter)
 // [R-STRIP-01 §3]. colorSel selects the palette entry: nonzero → 0x61, zero
 // → 0x67 [R-STRIP-01 §1 strips 2/7].
-func (s *Session) appendStripSprinkle(strip int, pos [3]numeric.Fixed, spacing int32, colorSel uint8) {
+//
+// The producer takes two points, A and B [03 R-FX-01 §3]: the container's
+// second point is not a copy of the spawn point but the emit-sfx producer's
+// own — the piece's other transformed vertex, or the surface point the
+// sub-bubble case substitutes — and is what the sprinkle's per-tick velocity
+// is built from: `step = ((B − A) · trunc(0x80000000 / len)) >> 16`, half a
+// world unit per tick along A→B [03 R-FX-02 §6]. This folds what was two
+// producers (a one-point form here and a two-point `appendStripSprinkleVector`
+// in composition.go) into the one the family has always had; the one-point
+// form had no production caller once the emit-sfx sink started passing its
+// own second vertex, only test callers passing the same point twice.
+//
+// A == B is retail's integer-divide fault; sprinkleStep yields a zero step
+// here instead — the same bounds-check divergence a caller that still passes
+// one point twice observes.
+func (s *Session) appendStripSprinkle(strip int, a, b [3]numeric.Fixed, spacing int32, colorSel uint8) {
 	if s == nil || s.strips == nil {
 		return
 	}
@@ -1199,14 +1214,8 @@ func (s *Session) appendStripSprinkle(strip int, pos [3]numeric.Fixed, spacing i
 		particleLife:  spacing * 6,
 		phaseModulus:  spacing,
 		colorSel:      colorSel,
-		src:           pos,
-		// dst stays at the spawn point. The container's second point is the
-		// emitting piece's transformed vertex 1 (vertex 0 for the swapped
-		// types 4/5) [03 R-FX-02 §6][04 R-COB-03 §6], and the emit-sfx sink
-		// has no piece-vertex transform to hand it one yet — its own
-		// open second-vertex question in composition.go. Until it does, A == B and
-		// the step
-		// is zero; retail would fault there instead (see sprinkleStep).
+		src:           a,
+		dst:           b,
 	}
 	if crt := s.CrtRNG(); crt != nil {
 		o.spawnOnce(tick, crt)

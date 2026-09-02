@@ -264,12 +264,36 @@ func TestParalyzeClampsTheCreditAndLowersTheStunOnExpiry(t *testing.T) {
 		t.Fatal("the slots were not released")
 	}
 
-	q.Pump(u, paralyzeMaxCredit)
+	q.Pump(u, uint32(paralyzeMaxCredit))
 	if q.LenPrimary() != 0 {
 		t.Fatalf("primary length = %d, want the record completed on expiry", q.LenPrimary())
 	}
 	if u.Stunned {
 		t.Fatal("the stun was not lowered when the record completed [04 R-ORD-01 §2]")
+	}
+}
+
+// TestParalyzeClampIsASignedCompare locks the comparison strictness of
+// [06 §10]: "if (credit > 1800) credit = 1800 ; SIGNED compare: a 32-bit wrap
+// to a negative credit is NOT capped". Repeated paralyzer hits add into the
+// head record's 32-bit credit with a plain add, so the wrap is reachable, and
+// an unsigned compare turned it into a full sixty-second stun instead of the
+// deadline in the past retail arms.
+func TestParalyzeClampIsASignedCompare(t *testing.T) {
+	wrapped := uint32(0x80000000) // the smallest negative int32 credit
+
+	q, u := standingFixture(nil)
+	q.Push(Lookup("Paralyze"), Node{Owner: u.Handle, Param1: wrapped})
+	q.Pump(u, 0)
+
+	if q.LenPrimary() != 1 {
+		t.Fatalf("primary length = %d, want the stun record waiting", q.LenPrimary())
+	}
+	if got := q.Primary()[0].Deadline; got != int32(wrapped) {
+		t.Fatalf("deadline = %d, want the wrapped credit left uncapped at %d [06 §10]", got, int32(wrapped))
+	}
+	if q.Primary()[0].Deadline == paralyzeMaxCredit {
+		t.Fatal("the clamp compared unsigned and capped a negative credit [06 §10]")
 	}
 }
 

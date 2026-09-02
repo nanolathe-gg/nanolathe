@@ -175,20 +175,20 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 	// lowered the mark on the tick the stored deadline passed whether or not the
 	// row had re-activated, so the mark and the row could disagree.
 	//
-	// This early return is an over-approximation, not the mechanism. Retail's
-	// weapon phase does not read the stunned bit at all: a paralyzed unit is
-	// silent because the Paralyze row ran the release verb on all three slots
-	// and cleared their targets unconditionally, and because the head wait
-	// blocks the list runner so no order can hand it a new target
-	// [06 R-DMG-01 §11]. It is kept because the second half of that guarantee is
-	// not yet true here: the autonomous scan below does not read the slot
-	// autonomy bit the release verb clears (see the bit-4 note in the slot
-	// loop), so without this return a stunned unit would re-acquire into a slot
-	// the row had just released. It must never be read as the reason a stunned
-	// unit does not fire; the row is.
-	if u.Stunned {
-		return sum
-	}
+	// There is no `if u.Stunned { return }` here any more, and there must not
+	// be one: retail's weapon phase does not read the stunned bit at all
+	// [06 §10]. A paralyzed unit is silent because the Paralyze row ran the
+	// release verb on all three slots — which clears the autonomy bit and the
+	// target [04 R-UNIT-06 §5 part 3] — and because the row's head wait blocks
+	// the list runner, so no order can hand the unit a new target while it
+	// stands stunned. WU-19-80 kept the early return only because the slot loop
+	// below did not yet read the autonomy bit and a stunned unit would have
+	// re-acquired into a slot the row had just released; the loop reads it now,
+	// so the mechanism covers the case and the over-approximation goes. Its
+	// side effects mattered: it also skipped the reload decrement and the Aim
+	// handshake, neither of which [06 §10] stops ("damage, healing, death,
+	// economy settlement, cloak/upkeep ... are outside the blocked task
+	// runner").
 	bridge := s.callbackBridgeForUnit(u)
 	// --- Phase: pre-drain callback scheduling (TargetCleared + Aim) in slot order 0..2 [GAP T15] ---
 	type slotPrep struct {
@@ -199,8 +199,6 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		tgtHandle    pool.Handle
 		desiredYaw   uint16
 		desiredPitch uint16
-		ballisticOk  bool
-		pitch        uint16
 		suppressAim  bool
 	}
 	var preps [NumSlots]*slotPrep
@@ -221,39 +219,52 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		if slot.Reload > 0 {
 			slot.Reload--
 		}
-		// The slot visit does not gate on the control byte's bit 4. It used to
-		// `continue` here when the bit was set, on the claim that it is "an
-		// order-side stop latch [that] suppresses both reacquisition and the
-		// retained-target firing path". The regression was total: the removal
-		// cleanup walk sets the bit on every assigned slot on EVERY
-		// order-record removal [R-ORDER-02 §2] — the purge a player's own
-		// non-queued right-click performs included — so one order silenced
-		// every weapon that unit owned for the rest of the battle.
+		// The control byte's bit 4 is AUTONOMY [06 R-WPN-05 §3]
+		// [04 R-UNIT-06 §5 part 3]: set means the slot belongs to autonomous
+		// acquisition, clear means an order currently holds it. It is not a
+		// firing gate — a slot an attack order took still shoots the target
+		// that order installed — so it gates only the two halves of the
+		// autonomous scan [06 §3.2]: the scan's retention drops below, and the
+		// re-acquisition after them. Every other reader of the bit already
+		// tests it (the retaliation offer, the guards); this site claimed in a
+		// comment that the bit "gates the AUTONOMOUS SCAN below" and then never
+		// read it.
 		//
-		// [06 R-WPN-05 §3] now names the bit: it is autonomy, doc 06's
-		// "tracking flag", and it gates the AUTONOMOUS SCAN below, never a
-		// retained target's shot. Inhibiting a slot already suppresses that
-		// shot by clearing the target; that is the whole of the effect. The
-		// TODO(question) that stood here — whether the order side's byte and
-		// the persisted slot-flag byte are one — is closed: they are, and this
-		// build's separate OrderControl field is gone with the question.
+		// Reading it as a *suppression* gate on the whole slot visit, which
+		// this file did before, was a total regression: the order-record
+		// removal cleanup walk sets the bit on every assigned slot on EVERY
+		// removal [04 R-ORDER-02 §2] — a player's own non-queued right-click
+		// included — so one order silenced every weapon that unit owned.
+		autonomous := slot.Flags&units.SlotFlagAutonomous != 0
 		if slot.Target.Kind == units.TargetUnit && slot.Target.Unit != 0 {
 			tu := w.Unit(slot.Target.Unit)
-			// The scan tries to RETAIN first [06 §3.2]. Beside the stale/dead
-			// drop this site already made, the current target is dropped when
-			// the slot's weapon is a paralyzer and the target already carries
-			// the stunned mark — one of the exactly two readers of that mark
-			// [06 R-DMG-01 §11], and the reason a paralyzer does not spend its
-			// shots re-stunning a unit that is already down. An ordinary weapon
-			// ignores the mark entirely.
-			//
-			// The other two retention drops of [06 §3.2] — a target whose owner
-			// is now allied to the scanning player, and one whose definition
-			// index is in the slot's bad-target mask — are still not applied
-			// here; this site drops on staleness and on the paralyzer clause
-			// only.
-			paralyzerHoldsStunned := tu != nil && tu.Stunned && slot.Weapon != nil && slot.Weapon.Paralyzer
-			if tu == nil || !tu.Alive || tu.Dying || paralyzerHoldsStunned {
+			// Stale/dead resolution belongs to the slot pipeline's own target
+			// resolution and runs for every slot, autonomous or not: [06 §3.2]
+			// lists "stale/dead resolution" among TargetCleared's producers
+			// beside the scanner's own failure.
+			drop := tu == nil || !tu.Alive || tu.Dying
+			if !drop && autonomous {
+				// The autonomous scan tries to RETAIN first, and [06 §3.2]
+				// gives retention exactly three drops, in this order: the
+				// target's owning player is now allied to the scanning player;
+				// the target's definition index is in the slot's bad-target
+				// mask (retention is stricter than acquisition, which merely
+				// buckets such a candidate as fallback, [06 §3.1]); or the
+				// slot's weapon is a paralyzer and the target already carries
+				// the stunned mark — one of the exactly two readers of that
+				// mark [06 R-DMG-01 §11], and the reason a paralyzer does not
+				// spend its shots re-stunning a unit that is already down. An
+				// ordinary weapon ignores the mark entirely.
+				switch {
+				case isAllied(u.Owner, tu.Owner, econ):
+					drop = true
+				case !IsPreferredCategoryMask(tu.Def.DefinitionMask(), badMaskForSlot(u.Def, idx)):
+					drop = true
+				case slot.Weapon != nil && slot.Weapon.Paralyzer && tu.Stunned:
+					drop = true
+				}
+			}
+			if drop {
 				clearedHeading := slot.DesiredYaw != 0
 				clearedPitch := slot.DesiredPitch != 0x8000
 				slot.Target = units.Target{Kind: units.TargetNone}
@@ -291,9 +302,11 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		// [06 §3.2].
 		// The trigger is target absence alone. It used to read `|| bit 1
 		// clear` as "not armed"; bit 1 is the enabled bit and is set for the
-		// whole life of every populated slot [06 R-WPN-05 §3].
+		// whole life of every populated slot [06 R-WPN-05 §3]. The autonomy
+		// bit is the scan's other per-slot clause [06 §3.2], so a slot an
+		// order holds re-acquires nothing.
 		if slot.Target.Kind == units.TargetNone {
-			if !AutonomousScanAdmitsSlot(slot.Weapon, s.PlayerControlByteFor(u.Owner)) {
+			if !autonomous || !AutonomousScanAdmitsSlot(slot.Weapon, s.PlayerControlByteFor(u.Owner)) {
 				if slot.Target.Kind == units.TargetNone {
 					continue // nothing installed and nothing to acquire [06 §3.2]
 				}
@@ -353,8 +366,6 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		dz := tgtPos.Z.Sub(muzzlePos.Z)
 		var desiredYaw uint16
 		var desiredPitch uint16
-		var ballisticOk bool
-		var ballisticPitch uint16
 		if weapon.Ballistic {
 			var grav numeric.Fixed
 			if terrain != nil {
@@ -378,8 +389,10 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 				preps[idx] = &slotPrep{weapon: weapon, tgtPos: tgtPos, tgtHandle: tgtHandle, desiredYaw: desiredYaw, desiredPitch: desiredPitch, suppressAim: true}
 				continue
 			}
-			ballisticPitch = pitch
-			ballisticOk = true
+			// The aim-time solve runs from the AimFrom/Query muzzle piece
+			// [06 §3.3]; the shot-time gate's own ballistic clause re-solves
+			// from the SHOOTER's position [06 R-WPN-05 §9] clause 3, so its
+			// result is not cached here.
 			desiredPitch = pitch
 			desiredYaw = uint16(YawFromDelta(dx, dz))
 		} else {
@@ -437,7 +450,7 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 			slot.DesiredYaw = storedYaw
 			slot.DesiredPitch = desiredPitch
 		}
-		preps[idx] = &slotPrep{weapon: weapon, tgtPos: tgtPos, tgtHandle: tgtHandle, desiredYaw: desiredYaw, desiredPitch: desiredPitch, ballisticOk: ballisticOk, pitch: ballisticPitch, needLatch: needLatch, needResult: needResult, suppressAim: suppress}
+		preps[idx] = &slotPrep{weapon: weapon, tgtPos: tgtPos, tgtHandle: tgtHandle, desiredYaw: desiredYaw, desiredPitch: desiredPitch, needLatch: needLatch, needResult: needResult, suppressAim: suppress}
 		// Aim dispatch is gated on the latch being clear and on nothing else
 		// [06 §3.3]. The aim-ready word is a separate latch that a nonzero
 		// completion sets: a drift-gate failure clears the request latch and
@@ -525,7 +538,7 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		if slot.Reload > 0 {
 			continue
 		}
-		if !checkAdmission(u, slot, weapon, pre.tgtPos, pre.tgtHandle, w, vis, terrain, pre.ballisticOk, pre.pitch) {
+		if !checkAdmission(u, weapon, pre.tgtPos, terrain) {
 			// A failed shot-time gate sets the shooter's "could not fire"
 			// status and clears no latch [06 §3.3]. Clearing the aim issue
 			// bit and the aim result here — which this path used to do for
@@ -873,53 +886,21 @@ func SlotAcquisitionAdmits(u *units.Unit, idx int, cand *units.Unit, w *units.Wo
 	return IsValidAcquisitionCandidate(c, acq)
 }
 
-func checkAdmission(u *units.Unit, slot *units.Slot, weapon *content.WeaponDef, tgtPos Vec3, tgtHandle pool.Handle, w *units.World, vis *visibility.Service, terrain *world.Terrain, ballisticOk bool, ballisticPitch uint16) bool {
-	if weapon == nil {
-		return false
-	}
-	if !WithinRange(u.X, u.Z, tgtPos.X, tgtPos.Z, weapon.Range) {
-		return false
-	}
-	var seaLevel numeric.Fixed
-	if terrain != nil {
-		seaLevel = terrain.SeaLevelWorld()
-	}
-	if weapon.WaterWeapon {
-	} else {
-		if u.Y <= seaLevel {
-			return false
-		}
-		var tgtY numeric.Fixed
-		if tgtHandle != 0 {
-			if tu := w.Unit(tgtHandle); tu != nil {
-				tgtY = tu.Y
-			} else {
-				tgtY = tgtPos.Y
-			}
-		} else {
-			tgtY = tgtPos.Y
-		}
-		if tgtY <= seaLevel {
-			return false
-		}
-		if weapon.ToAirWeapon {
-			isAir := false
-			if tgtHandle != 0 {
-				if tu := w.Unit(tgtHandle); tu != nil && tu.Def != nil {
-					isAir = tu.Def.CanFly
-				}
-			}
-			if !isAir {
-				return false
-			}
-		}
-		if weapon.Ballistic {
-			if !ballisticOk {
-				return false
-			}
-		}
-	}
-	return true
+// checkAdmission is the slot pipeline's shot-time gate [06 §3.3]. It is the
+// gate's ONLY site inside the pipeline and it carries exactly the three clauses
+// of [06 R-WPN-05 §9], which shotTimeAdmits writes down once for both callers.
+//
+// It used to mix the acquisition gate's target-side clauses in here — a
+// target-Y test, a `toairweapon`/`canfly` test — and to compare the shooter's
+// raw 16.16 Y against sea level instead of the whole-unit word plus the model
+// top height. [06 R-WPN-05 §9] establishes that the two admissions are two
+// distinct routines and that this one has no target-side clause of any kind:
+// the unit-to-unit gate runs when a target is INSTALLED on a slot (the order
+// handlers and the autonomous scan's per-candidate test), never per shot. The
+// merged form refused every ground/point target for a non-water weapon,
+// because a point target carries no Y and 0 is never above sea level.
+func checkAdmission(u *units.Unit, weapon *content.WeaponDef, tgtPos Vec3, terrain *world.Terrain) bool {
+	return shotTimeAdmits(u, weapon, tgtPos.X, tgtPos.Y, tgtPos.Z, terrain)
 }
 
 func muzzleWorldPosResolved(u *units.Unit, piece int32) (Vec3, bool) {

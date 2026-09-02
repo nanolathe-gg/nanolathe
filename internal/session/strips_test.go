@@ -293,9 +293,9 @@ func TestStripProducerCensusKeepsWriterlessStripsEmpty(t *testing.T) {
 	s.appendStripSmokePuffer(9, point, SmokePuffInit{SpawnInterval: 15, Lifetime: 900}) // sinking-wreck smoke column profile
 	s.appendStripSmokePuffer(5, point, SmokePuffInit{SpawnInterval: 3, Lifetime: 30})   // burning-feature smoke profile
 	s.appendStripSmokePuffer(9, point, SmokePuffTrail)                                  // impact / weapon-fire smoke profile
-	s.appendStripSprinkle(2, point, 16, 1)                                              // emit-sfx thrust pair (type 2)
-	s.appendStripSprinkle(2, point, 8, 1)                                               // emit-sfx thrust pair (type 3)
-	s.appendStripSprinkle(7, point, 8, 0)                                               // emit-sfx sub-bubbles (0x103)
+	s.appendStripSprinkle(2, point, point, 16, 1)                                       // emit-sfx thrust pair (type 2)
+	s.appendStripSprinkle(2, point, point, 8, 1)                                        // emit-sfx thrust pair (type 3)
+	s.appendStripSprinkle(7, point, point, 8, 0)                                        // emit-sfx sub-bubbles (0x103)
 
 	for tick := uint32(10); tick <= 15; tick++ {
 		s.phaseObjectSweeps(tick)
@@ -461,7 +461,7 @@ func TestSprinkleProducerTwoPuffsAndLifetime(t *testing.T) {
 	s.Clock.GlobalTick = 40
 	pos := [3]numeric.Fixed{numeric.FixedFromInt(10), numeric.FixedFromInt(20), numeric.FixedFromInt(30)}
 	draws0 := crt.Draws()
-	s.appendStripSprinkle(2, pos, 16, 1)
+	s.appendStripSprinkle(2, pos, pos, 16, 1)
 	if got := crt.Draws() - draws0; got != 3 {
 		t.Fatalf("producer spent %d draws, want 3 (per-axis jitter)", got)
 	}
@@ -508,7 +508,7 @@ func TestSprinkleProducerTwoPuffsAndLifetime(t *testing.T) {
 
 	// colorSel zero selects the other palette entry (the strip-7 variant's
 	// selection).
-	s.appendStripSprinkle(7, pos, 8, 0)
+	s.appendStripSprinkle(7, pos, pos, 8, 0)
 	if p := s.strips.strips[7][0].particles[0]; p.color != 0x67 {
 		t.Fatalf("colorSel=0 puff color %#x, want 0x67", p.color)
 	}
@@ -731,8 +731,8 @@ func TestEveryStripFamilyMirrorsItsOwnDrawForm(t *testing.T) {
 	s.Clock.GlobalTick = 0
 	s.appendStripGeothermalSteam([3]numeric.Fixed{numeric.FixedFromInt(104), 0, numeric.FixedFromInt(152)})
 	s.appendStripSmokePuffer(9, [3]numeric.Fixed{}, SmokePuffTrail)
-	s.appendStripSprinkle(2, [3]numeric.Fixed{}, 8, 0)
-	s.appendStripSprinkle(7, [3]numeric.Fixed{}, 16, 1)
+	s.appendStripSprinkle(2, [3]numeric.Fixed{}, [3]numeric.Fixed{}, 8, 0)
+	s.appendStripSprinkle(7, [3]numeric.Fixed{}, [3]numeric.Fixed{}, 16, 1)
 	s.appendStripNanoEmitter(
 		[3]numeric.Fixed{0, 0, 0},
 		[3]numeric.Fixed{numeric.FixedFromInt(40), 0, numeric.FixedFromInt(40)},
@@ -1146,8 +1146,8 @@ func TestStripViewsArePublishedEveryTickAndAreByteStable(t *testing.T) {
 		// One producer of each mirrored family, on four different strips.
 		s.appendStripGeothermalSteam([3]numeric.Fixed{numeric.FixedFromInt(104), 0, numeric.FixedFromInt(152)})
 		s.appendStripSmokePuffer(9, [3]numeric.Fixed{numeric.FixedFromInt(40), 0, numeric.FixedFromInt(40)}, SmokePuffLandDust)
-		s.appendStripSprinkle(2, [3]numeric.Fixed{numeric.FixedFromInt(8), 0, numeric.FixedFromInt(8)}, 8, 0)
-		s.appendStripSprinkle(7, [3]numeric.Fixed{numeric.FixedFromInt(9), 0, numeric.FixedFromInt(9)}, 16, 1)
+		s.appendStripSprinkle(2, [3]numeric.Fixed{numeric.FixedFromInt(8), 0, numeric.FixedFromInt(8)}, [3]numeric.Fixed{numeric.FixedFromInt(8), 0, numeric.FixedFromInt(8)}, 8, 0)
+		s.appendStripSprinkle(7, [3]numeric.Fixed{numeric.FixedFromInt(9), 0, numeric.FixedFromInt(9)}, [3]numeric.Fixed{numeric.FixedFromInt(9), 0, numeric.FixedFromInt(9)}, 16, 1)
 
 		out := make([]string, 0, ticks)
 		for tick := uint32(1); tick <= ticks; tick++ {
@@ -1298,7 +1298,7 @@ func TestStripPoolCapIsGlobalAndPrecedesTheStripCap(t *testing.T) {
 		n++
 	}
 	for s.strips.live < stripPoolCapacity {
-		s.appendStripSprinkle(2, marker(n), 16, 1)
+		s.appendStripSprinkle(2, marker(n), marker(n), 16, 1)
 		n++
 	}
 
@@ -1327,7 +1327,7 @@ func TestStripPoolCapIsGlobalAndPrecedesTheStripCap(t *testing.T) {
 	// A producer aimed at an unsaturated strip is dropped just the same: the
 	// count is one pool across all ten strips, not a per-strip budget.
 	before7 := len(s.strips.strips[7])
-	s.appendStripSprinkle(7, marker(n), 8, 0)
+	s.appendStripSprinkle(7, marker(n), marker(n), 8, 0)
 	if got := len(s.strips.strips[7]); got != before7 {
 		t.Fatalf("strip 7 accepted an object at the global cap (%d → %d)", before7, got)
 	}
@@ -1370,7 +1370,7 @@ func TestSprinkleWakeDiesOnLand(t *testing.T) {
 	s.Clock.GlobalTick = 5
 
 	pos := [3]numeric.Fixed{numeric.FixedFromInt(80), numeric.FixedFromInt(0), numeric.FixedFromInt(80)}
-	s.appendStripSprinkle(2, pos, 16, 1)
+	s.appendStripSprinkle(2, pos, pos, 16, 1)
 
 	// Over water the puffs outlive the container's spawn window; their only
 	// remaining exit is the spacing×6 deadline, which is 96 ticks away.

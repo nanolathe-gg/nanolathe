@@ -206,48 +206,6 @@ func (s *cobPresentationSink) pieceEffectPoints(cobPiece int) (a, b [3]numeric.F
 	return effectWorldPoint(u, xf.Apply(vertices[0])), effectWorldPoint(u, xf.Apply(vertices[1])), true
 }
 
-// appendStripSprinkleVector is the two-point form of appendStripSprinkle: the
-// container's second point B is the emit-sfx producer's own, not a copy of the
-// spawn point. It is what the sprinkle's per-tick velocity is built from —
-// `step = ((B − A) · trunc(0x80000000 / len)) >> 16`, half a world unit per
-// tick along A→B [03 R-FX-01 §3][03 R-FX-02 §6]. Everything else — the
-// one-tick window, the two puffs, the three CRT jitter draws per spawn, the
-// `spacing × 6` puff deadline and the palette selector — is the same family
-// [R-STRIP-01 §1 strips 2/7][R-STRIP-01 §3].
-//
-// A == B is retail's integer-divide fault; sprinkleStep yields a zero step
-// here instead, which is the same bounds-check divergence the one-point form
-// already carries.
-func (s *Session) appendStripSprinkleVector(strip int, a, b [3]numeric.Fixed, spacing int32, colorSel uint8) {
-	if s == nil || s.strips == nil {
-		return
-	}
-	if s.strips.poolFull() {
-		// The three jitter draws sit inside the family's spawn, so a dropped
-		// container spends none of them [03 R-FX-02 §4].
-		return
-	}
-	tick := uint32(0)
-	if s.Clock != nil {
-		tick = s.Clock.GlobalTick
-	}
-	o := stripObject{
-		family:        stripFamilySprinkle,
-		windowEnd:     tick + 1,
-		nextSpawn:     tick + 1,
-		spawnInterval: 1,
-		particleLife:  spacing * 6,
-		phaseModulus:  spacing,
-		colorSel:      colorSel,
-		src:           a,
-		dst:           b,
-	}
-	if crt := s.CrtRNG(); crt != nil {
-		o.spawnOnce(tick, crt)
-	}
-	s.strips.append(strip, o)
-}
-
 // appendStripFlameTrail creates a strip-7 flame-stream trail container: the
 // emit-sfx wake pair's effect [03 R-FX-01 §3][03 R-FX-02 §1]. Its init lays
 // one segment immediately and one per tick while `nextSpawn ≤ deadline`, so
@@ -342,7 +300,7 @@ func (s *cobPresentationSink) emitSFXStripProducers(ev cob.PresentationEvent) {
 		if s.session.World != nil {
 			toSurface[1] = s.session.World.SeaLevelWorld()
 		}
-		s.session.appendStripSprinkleVector(7, pos, toSurface, 8, 0)
+		s.session.appendStripSprinkle(7, pos, toSurface, 8, 0)
 	}
 }
 
@@ -379,7 +337,7 @@ func (s *cobPresentationSink) emitSFXVectorProducer(ev cob.PresentationEvent) {
 		if ev.SFXType >= 4 {
 			a, b = b, a
 		}
-		s.session.appendStripSprinkleVector(2, a, b, spacing, 1)
+		s.session.appendStripSprinkle(2, a, b, spacing, 1)
 	}
 }
 

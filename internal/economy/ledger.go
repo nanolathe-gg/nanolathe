@@ -151,23 +151,33 @@ type Service struct {
 	// request is never inferred from authored cost alone: `cloakcost > 0` is
 	// the capability that lets the order handlers write the bit, not the bit.
 	//
-	// Term 1 has runtime togglers: the `Cloak_On` handler sets the bit and
-	// `Cloak_Off` clears it, each behind the definition's cloak capability
-	// [R-ECO-01 §9]. It is NOT seeded from `init_cloaked`, whose consumer is
-	// the initial-posture path. Term 2 is inert — a bounded negative scan
-	// found no writer for that bit and the spawn initialiser preserves rather
-	// than sets it, so the term is always satisfied and a provider has nothing
-	// to report for it. Term 3 is written by nine work handlers as the global
-	// tick plus 150, 300 or 900, so an idle cloaked unit pays from the first
-	// pass.
+	// Term 1 has three writers: the unit constructor seeds it from the
+	// definition's `init_cloaked` flag at creation (the same masked store that
+	// copies the two standing-order fields), the `Cloak_On`/`Cloak_Off` order
+	// handlers set/clear it behind the definition's cloak capability, and
+	// save-game restore rebuilds it from the persisted status word. The
+	// build-completion transition writes nothing cloak-related — that claim
+	// traced to `isfeature`'s completion arm, a different bit entirely
+	// [05 R-ECO-01 §9][03 R-VIS-01 §6]. Term 2 is inert — a bounded negative
+	// scan found no writer for that bit and the spawn initialiser preserves
+	// rather than sets it, so the term is always satisfied and a provider has
+	// nothing to report for it. Term 3 is written by ten handler sites as the
+	// global tick plus 150, 300 or 900, so an idle cloaked unit pays from the
+	// first pass.
 	//
-	// TODO(question): no producer writes the per-unit cloak payment deadline of
-	// term 3 yet — the nine handler sites (repair 150; build/get-built/
-	// resurrection 300; capture/reclaim 900) live in internal/orders, which
-	// this unit does not own. A never-written deadline is permanently due,
-	// which is right for an idle cloaked unit and charges a working one a few
-	// passes retail would have skipped. What would settle it is the deadline
-	// field landing on the unit record with those nine writers.
+	// Term 3's deadline is the ONE shared reveal/cloak-suppression field the
+	// unit record carries (`units.Unit.RevealDeadline`): every writer stores
+	// outright, never a maximum, and a later write always wins [03 R-VIS-01
+	// §6]. The ten handler sites — `SelfRepair`/`RepairUnit`/`RepairUnitNoMove`
+	// at +150; `MobileBuild`/`HelpBuild`/`Reclaim`/`Resurrect`/`VTOL_Reclaim`
+	// at +300; `Capture`/`ReclaimUnit` at +900 — are the field's only
+	// producers; `BuildingBuild`, `GetBuilt` and the other VTOL work handlers
+	// never write it [04 R-ORD-01 §5 "The reveal stamp"]. `MobileBuild`'s and
+	// `ReclaimUnit`'s work visits are implemented in internal/construction
+	// rather than internal/orders, so that package supplies those two of the
+	// ten. Economy still asks through the seam above rather than reading the
+	// field directly: it owns neither the unit's runtime cloak-status bits nor
+	// this deadline, only the gate that conjoins all three [05 R-ECO-01 §9].
 	//
 	// A nil hook is inert: no unit is cloak-due, which is what a fixture that
 	// composes no session observes.
