@@ -687,14 +687,21 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	if b != nil {
 		b.drawBuildGhost(c)
 		if frameOK && cur != nil {
-			// Unimplemented: retail's third full-mask source is the
-			// pointer-hover unit id, the same word the footer's first hover
-			// source reads [R-P0-11 §3][R-HUD-03 §1]. The committed frame does
-			// not publish it (WU-16-6 owns that publication), so the
-			// authoritative focus handle stands in. Do not consult the live unit
-			// pool or the pointer picker from here — that would breach I6.
-			// See PLAN 19 §2.4.
-			drawQueueOverlay(c, b, cur, cur.Tick, b.battleState().Input.ShiftHeld, cur.Selection.LocalPlayer, cur.Selection.Primary)
+			// The walker's four full-mask sources [R-P0-11 §3]: the follow
+			// camera's tracked unit, the unit whose command page is open, the
+			// hovered unit id, and every selected unit. The first and third are
+			// presentation-owned — the camera block's tracked slot
+			// [07 R-CAM-01 §12], and the very same hover word the footer's
+			// first hover source reads [07 R-HUD-03 §1] — so they are read from
+			// the shell here rather than from the committed frame; the second
+			// and fourth come out of the frame inside the walker.
+			//
+			// The committed selection primary used to stand in for the hover
+			// source, which made the overlay follow the selection instead of
+			// the pointer. Do not consult the live unit pool or run the pointer
+			// picker from here — that would breach I6; `footerHoverUnit` is the
+			// composer's own per-frame pointer record.
+			drawQueueOverlay(c, b, cur, cur.Tick, b.battleState().Input.ShiftHeld, cur.Selection.LocalPlayer, b.cam.Tracked(), b.footerHoverUnit)
 		}
 	}
 	// The shell call order is PANELTOP, PANELBOT, PANELSIDE. The two horizontal
@@ -1328,15 +1335,27 @@ func (h *retailBattleHUD) modalButtonAt(window *gui.Window, x, y int32) int {
 	return -1
 }
 
-// modalGadgetFrame keeps modal art within the window's own GAF and the common
-// GUI stock controls. Side-page GAFs contain unrelated entries with colliding
-// names (notably EXIT) and are not part of ARMOPT's retail binding.
+// modalGadgetFrame resolves modal control art through [07 §4]'s three-link
+// chain: the gadget's own named entry in the window's own GAF, then the
+// side-specific interface GAF, then the built-in fallback (the common GUI
+// stock controls, and BUTTONS0 for a button).
+//
+// The middle link used to be missing here — the one art chain in the shell
+// that skipped it, while the window background [07 §4] and the side page
+// [07 §6] both already walked `page → intGAF → … → common`. The side GAF is
+// resolved through `content.SideDef.IntGAF` [02 §6] and is the same handle the
+// three battle panel frames come from, so a modal control the side authors
+// (rather than the stock common set) now resolves instead of falling through
+// to the generic button plate.
+//
+// Side-*page* GAFs are still not consulted: they carry unrelated entries with
+// colliding names (notably EXIT) and are not part of ARMOPT's retail binding.
 func (h *retailBattleHUD) modalGadgetFrame(gad gui.Gadget, page *formats.GAF, pressed, disabled bool) *formats.GAFFrame {
 	name := gad.Art
 	if name == "" {
 		name = gad.Name
 	}
-	for _, gaf := range []*formats.GAF{page, h.common} {
+	for _, gaf := range []*formats.GAF{page, h.intGAF, h.common} {
 		if gaf == nil {
 			continue
 		}

@@ -114,15 +114,40 @@ func cursorForBuildSite(valid bool) int {
 }
 
 // isInspectable is the own-unit predicate shared by the empty-selection branch
-// and the contextual branch [07 §8]: the unit belongs to the viewer and has
-// finished building.
+// and the contextual branch [07 §8]. The section spells the subject as "an
+// own, active, finished, untasked unit", which is four gates: the unit belongs
+// to the viewer; the runtime status word carries the active-state bit `0x20`;
+// construction has finished; and the per-unit order guard is empty.
 //
-// Unimplemented: [07 §8]/[07 §9] establish two further gates — the runtime
-// active-state bit `0x20` and an empty current-task field. That active-state
-// bit is a bit of the runtime status word, distinct from the script-owned
-// INBUILDSTANCE byte the COB port writes, and this build's unit record does not
-// separate the two. Both gates land together once the runtime flag word is
-// reconciled with [07 §9]. See PLAN 19 §2.4.
+// The active gate used to be missing. [07 §8] recorded the active-state bit
+// and the empty-current-task field as having "no counterpart in the current
+// runtime flag word", and `docs/SPEC_CONFLICTS.md` SC16 wrote that up as a
+// standing conflict, because bit `0x20` of this build's flag word was then the
+// COB port's INBUILDSTANCE and testing it would have made the `cursorselect`
+// shape unreachable. That collision is gone: INBUILDSTANCE is now the separate
+// `units.Unit.InBuildStance` byte, and `units.ClassifierEligibleStatus` is bit
+// `0x20` of the status word — written by the allocator initializer, cleared by
+// death finalization, cleared for a scripted unit by the InitialMission
+// postlude and set again by `MakeSelectable`
+// [R-P0-04 "Runtime eligibility bit lifecycle"][04 §3.6][08 R-TRIG-01 §3]. So a
+// mission unit still under script control is not inspectable, which is the
+// point of the gate, and SC16's "no implementable counterpart" no longer holds.
+//
+// TODO(question): the untasked gate is still not implemented, and this is why.
+// [07 §8] names it "the empty-current-task field"; the paragraph after it
+// identifies the shared eligibility predicate's compared value as a per-unit
+// order-guard float compared exactly to `0.0`, but no sentence says the two are
+// the same field. `units.Unit.OrderGuard` is this build's order guard, and
+// gating on it here makes `cursorselect` unreachable: the guard is written
+// nonzero whenever the primary queue is non-empty, and an idle unit's primary
+// queue holds a `Standby` node, so every idle own unit reads as mid-order. That
+// is the same failure mode SC16 warned about for the `0x20` bit, so the clause
+// is left out rather than shipped wrong. Either the guard's writer is too
+// coarse — `Standby` is the idle state, not "an order being processed" — or the
+// current-task field is a different word; retail's rectangle selection shares
+// the same compare [07 §9], so under our writer it would select nothing either.
+// A static trace of the inspect predicate's second compare, naming the field it
+// reads and what an idle unit holds in it, would settle both.
 func isInspectable(t *units.Unit, viewer uint8) bool {
 	if t == nil || !t.Alive {
 		return false
@@ -130,7 +155,11 @@ func isInspectable(t *units.Unit, viewer uint8) bool {
 	if t.Owner != viewer {
 		return false
 	}
-	return t.Remaining == 0 // finished construction [04 §2.3]
+	if t.Remaining != 0 { // finished construction [04 §2.3]
+		return false
+	}
+	// The runtime active-state bit `0x20` [07 §8][07 §9].
+	return t.Flags&units.ClassifierEligibleStatus != 0
 }
 
 // cursorForActor is the per-selected-unit shape table, dispatched on the armed

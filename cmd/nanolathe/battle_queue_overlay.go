@@ -12,6 +12,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
@@ -23,40 +24,86 @@ import (
 // cursor-like sprites marching along a queue line [R-P0-11 §3].
 const DashChainEntry = "pathicon"
 
-// dashChain caches the resolved dash sprite entry for one mounted install.
-// Resolution is by name from the cursor GAF root; a missing entry suppresses
-// the chain rather than substituting artwork.
-type dashChainCache struct {
-	fs    vfs.FSOps
-	entry *formats.GAFEntry
-	done  bool
+// cursorArtCache caches the cursor GAF root for one mounted install.  Both the
+// dash chain and the queued-order icons come out of it: `pathicon` is loaded in
+// the same run of names as the twenty-one cursors, and an order descriptor's
+// icon byte indexes that same handle array [R-P0-11 §3][07 §8].  A missing
+// entry suppresses the helper rather than substituting artwork.
+type cursorArtCache struct {
+	fs   vfs.FSOps
+	gaf  *formats.GAF
+	done bool
 }
 
-var dashChain dashChainCache
+var cursorArt cursorArtCache
 
-func dashChainEntry(fs vfs.FSOps) *formats.GAFEntry {
+func cursorArtGAF(fs vfs.FSOps) *formats.GAF {
 	if fs == nil {
 		return nil
 	}
-	if dashChain.done && dashChain.fs == fs {
-		return dashChain.entry
+	if cursorArt.done && cursorArt.fs == fs {
+		return cursorArt.gaf
 	}
-	dashChain = dashChainCache{fs: fs, done: true}
-	gaf, err := formats.LoadGAFFile(fs, client.CursorGAFPath)
-	if err != nil {
+	cursorArt = cursorArtCache{fs: fs, done: true}
+	if gaf, err := formats.LoadGAFFile(fs, client.CursorGAFPath); err == nil {
+		cursorArt.gaf = gaf
+	}
+	return cursorArt.gaf
+}
+
+func dashChainEntry(fs vfs.FSOps) *formats.GAFEntry {
+	gaf := cursorArtGAF(fs)
+	if gaf == nil {
 		return nil
 	}
 	if e, ok := gaf.Find(DashChainEntry); ok {
-		dashChain.entry = e
+		return e
 	}
-	return dashChain.entry
+	return nil
+}
+
+// queueIconEntry resolves one order-descriptor icon byte through the cursor
+// index table, which is the handle array the icon helper indexes [R-P0-11 §3]
+// [07 §8].  Slot 0 is the unused/overflow slot and is never a valid icon.
+func queueIconEntry(fs vfs.FSOps, cursorIndex uint8) *formats.GAFEntry {
+	if !render.IsValidCursorIndex(int(cursorIndex)) {
+		return nil
+	}
+	gaf := cursorArtGAF(fs)
+	if gaf == nil {
+		return nil
+	}
+	entry, ok := render.ResolveCursorEntry(gaf, int(cursorIndex))
+	if !ok || entry == nil || len(entry.Frames) == 0 {
+		return nil
+	}
+	return entry
+}
+
+// queueIconFrame is the icon helper's frame selector: `tick/(tpf*2) % nFrames`
+// [R-P0-11 §3].
+//
+// TODO(question): §3 gives the divisor as `tpf*2` without naming where `tpf`
+// comes from for this helper.  The dash-chain helper beside it is established
+// to read "the first frame reference's duration field" rather than per-frame
+// durations, and this site follows that sibling.  A static trace of the icon
+// helper's own duration read would settle it [R-P0-11 §3].
+func queueIconFrame(entry *formats.GAFEntry, tick uint32) (int32, bool) {
+	if entry == nil || len(entry.Frames) == 0 {
+		return 0, false
+	}
+	ticksPerFrame := int64(entry.Frames[0].Value)
+	if ticksPerFrame < 1 {
+		ticksPerFrame = 1
+	}
+	return int32(int64(tick) / (ticksPerFrame * 2) % int64(len(entry.Frames))), true
 }
 
 // drawQueueOverlay is the sole battle integration call required by QUEUE-02.
 // It consumes only a published frame and input presentation state.  Releasing
 // Shift returns before constructing instructions and cannot mutate orders or
 // influence an authoritative hash [07 §9][R-P0-11 §4].
-func drawQueueOverlay(c *client.Client, b *battleSession, f *frame.Frame, tick uint32, shiftHeld bool, localOwner uint8, hovered pool.Handle) {
+func drawQueueOverlay(c *client.Client, b *battleSession, f *frame.Frame, tick uint32, shiftHeld bool, localOwner uint8, tracked, hovered pool.Handle) {
 	if c == nil || b == nil || f == nil || !shiftHeld {
 		return
 	}
@@ -73,8 +120,20 @@ func drawQueueOverlay(c *client.Client, b *battleSession, f *frame.Frame, tick u
 		Tick:        tick,
 		ShiftHeld:   shiftHeld,
 		LocalOwner:  localOwner,
+		TrackedUnit: tracked,
 		HoveredUnit: hovered,
 		Project:     project,
+		// The builder-capability test that gates the marker-only fallback
+		// [R-P0-11 §3].  It reads an immutable compiled definition, the same
+		// way the production dispatcher's builder check does; no live pool or
+		// tick state is consulted [I6].
+		Builder: func(v frame.UnitView) bool { return b.snapshotBuilder(v) },
+		// The queued-order icon: the descriptor's icon byte selects the entry
+		// from the cursor handle array and the helper animates it
+		// [R-P0-11 §3][07 §8].
+		Icon: func(cursorIndex uint8, at uint32) (int32, bool) {
+			return queueIconFrame(queueIconEntry(b.fs, cursorIndex), at)
+		},
 		BuildRect: func(o frame.OrderView) (hud.QueueRect, bool) {
 			fx, fz := int32(o.FootX), int32(o.FootZ)
 			if fx <= 0 || fz <= 0 {
@@ -89,9 +148,10 @@ func drawQueueOverlay(c *client.Client, b *battleSession, f *frame.Frame, tick u
 			l, t, r, btm := b.siteRectToScreen(cx*16, cz*16, (cx+fx)*16, (cz+fz)*16, int32(o.GoalY>>16))
 			return hud.QueueRect{Left: l, Top: t, Right: r, Bottom: btm}, true
 		},
-		// Target-unit radii and authored icon GAF metadata are not in the
-		// immutable frame yet.  Suppressing these callbacks is required by the
-		// clean-room contract; do not substitute a guessed radius/artwork.
+		// Target-unit radii for the circle helper and the labelled range rings
+		// are not in the immutable frame yet.  Suppressing those callbacks is
+		// required by the clean-room contract; do not substitute a guessed
+		// radius.
 	}
 	chain := dashChainEntry(b.fs)
 	for _, op := range hud.QueueOverlay(f, opts) {
@@ -111,12 +171,7 @@ func drawQueueOverlay(c *client.Client, b *battleSession, f *frame.Frame, tick u
 				drawQueueLine(c, op.A, op.B, c.GUIColor(op.Color))
 			}
 		case hud.QueuePrimitiveIcon:
-			// Unimplemented: [R-P0-11 §3] establishes that the queued-order icon
-			// indexes the cursor handle array with the order DESCRIPTOR's icon
-			// byte. The committed frame publishes the order kind as text, not
-			// its descriptor, so the byte does not cross the boundary and no
-			// icon can be drawn without inventing one. Publishing it on
-			// OrderView is the fix. See PLAN 19 §2.4.
+			drawQueueIcon(c, queueIconEntry(b.fs, op.IconCursor), op)
 		}
 	}
 }
@@ -138,6 +193,34 @@ func drawDashChain(c *client.Client, entry *formats.GAFEntry, op hud.QueuePrimit
 		at := project(x, y, z)
 		c.UIBlit(ref.Frame, int(at.X)-int(ref.Frame.XOffset), int(at.Y)-int(ref.Frame.YOffset))
 	})
+}
+
+// drawQueueIcon blits the queued-order icon at the order's anchor.  The frame
+// comes from the cursor handle array slot the descriptor's icon byte names, and
+// its authored placement offsets are the hotspot exactly as they are for the
+// software pointer and for the dash chain [R-P0-11 §3][07 §8]
+// [fmt gaf "Placement offsets"].  The anchor is already projected through the
+// half-height shear by the overlay's own projection callback.
+//
+// The battle attack icons additionally alternate two colour-map entries on the
+// low tick bit and draw the weapon AOE/coverage/attack-length rings around
+// themselves [R-P0-11 §3].  Neither is drawn here: the icon frames are authored
+// indexed GAF bytes, blitted rather than recoloured, and the ring radii are the
+// weapon-definition fields the committed frame does not publish.  Suppressing
+// them keeps a guessed radius or palette entry out of the overlay.
+func drawQueueIcon(c *client.Client, entry *formats.GAFEntry, op hud.QueuePrimitive) {
+	if entry == nil || !op.IconKnown {
+		return
+	}
+	index := int(op.IconFrame)
+	if index < 0 || index >= len(entry.Frames) {
+		return
+	}
+	ref := entry.Frames[index]
+	if ref.Frame == nil {
+		return
+	}
+	c.UIBlit(ref.Frame, int(op.Center.X)-int(ref.Frame.XOffset), int(op.Center.Y)-int(ref.Frame.YOffset))
 }
 
 // drawQueueLine is the indexed-framebuffer equivalent of retail's integer

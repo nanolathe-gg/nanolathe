@@ -5,10 +5,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/units"
-	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 func TestArchivedBucketHasOnlyReportSlots(t *testing.T) {
@@ -374,66 +372,4 @@ func TestMirrorClosedWriterSurface(t *testing.T) {
 	// There is NO factory queue-draw writer — this comment is the contract.
 	// If a future helper named FactoryQueueDraw existed, this test would fail via vet
 	// because the closed set is enumerated above.
-}
-
-// TestTerrainMetalExtraction locks C14: Σ(cellMetal+1) × extractsMetal via world.SampleMetal.
-func TestTerrainMetalExtraction(t *testing.T) {
-	cellW, cellH := int32(4), int32(4)
-	attrs := make([]formats.TNTAttribute, cellW*cellH)
-	for i := range attrs {
-		attrs[i] = formats.TNTAttribute{Height: 10, Feature: world.PlotFeatureNone}
-	}
-	plot := world.ExpandPlot(attrs, int(cellW), int(cellH))
-	ter := &world.Terrain{
-		CellW:   cellW,
-		CellH:   cellH,
-		Version: world.VersionCanonical,
-		Plot:    plot,
-	}
-	mh := &content.MapHeader{Schemas: []content.MapSchema{{SurfaceMetal: 3}}}
-	if err := ter.ApplySchema(mh, 0); err != nil {
-		t.Fatal(err)
-	}
-	// 3x3 footprint, each cell metal 3 => (3+1)=4 per cell, sum 36
-	got, err := SampleExtractorYield(ter, 0, 0, 3, 3, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != 36 {
-		t.Fatalf("SampleExtractorYield = %v want 36", got)
-	}
-	// With extractsMetal multiplier 2 => 72
-	got2, err := SampleExtractorYield(ter, 0, 0, 3, 3, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got2 != 72 {
-		t.Fatalf("with extractsMetal 2 => %v want 72", got2)
-	}
-	// Zero metal still contributes 1 per cell: surface 0 => 9 cells *1 =9
-	if err := ter.ApplySchema(&content.MapHeader{Schemas: []content.MapSchema{{SurfaceMetal: 0}}}, 0); err != nil {
-		t.Fatal(err)
-	}
-	got3, err := SampleExtractorYield(ter, 0, 0, 3, 3, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got3 != 9 {
-		t.Fatalf("zero metal sample = %v want 9", got3)
-	}
-	def := economyFixtureDef(&content.UnitDef{})
-	def.FootprintX = 2
-	def.FootprintZ = 2
-	def.ExtractsMetal = 1
-	if err := ter.ApplySchema(&content.MapHeader{Schemas: []content.MapSchema{{SurfaceMetal: 1}}}, 0); err != nil {
-		t.Fatal(err)
-	}
-	got4, err := SampleExtractorYieldForDef(ter, 0, 0, def)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// 2x2 * (1+1)=8
-	if got4 != 8 {
-		t.Fatalf("SampleExtractorYieldForDef = %v want 8", got4)
-	}
 }

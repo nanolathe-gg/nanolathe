@@ -556,6 +556,27 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		cl.Cursors().SetIndex(render.CursorNormal)
 		return
 	}
+	// The keyboard-ownership seam for a battle child window [07 §3]. The host
+	// frame dispatches the active GUI first and "only afterwards runs the
+	// battle hotkey dispatcher", so while the unit-information screen is up it
+	// owns the queued keyboard tokens and no battle hotkey — Tab, F2, Escape,
+	// F1 or any other — sees them. It runs after the options-modal block above
+	// because a modal opened later sits higher on the GUI stack.
+	//
+	// A consumed token is replaced by zero for everything downstream
+	// [07 R-WGT-01 §2], so the rest of the frame runs against a keyboard with
+	// no edges. The held-key state is deliberately preserved: Shift and Ctrl
+	// are live asynchronous queries made at draw and dispatch time, not entries
+	// in the token queue [07 R-CAM-01 §2][R-P0-11 §3]. The mouse is untouched,
+	// so the DONE button and the world outside the window still take clicks.
+	if in != nil && b.unitInfoConsumeKeys(in.Kbd) {
+		quiet := input.KeyboardState{}
+		if in.Kbd != nil {
+			quiet = *in.Kbd
+			quiet.ResetEdges()
+		}
+		in = &input.State{Mouse: in.Mouse, Kbd: &quiet}
+	}
 	if keyDown(input.KeyTab) || (keyDown(input.KeyF2) && !shiftHeld) {
 		b.openBattleMenu()
 		cl.Cursors().SetIndex(render.CursorNormal)
@@ -2519,20 +2540,33 @@ func (b *battleSession) currentTick() uint32 {
 	return 0
 }
 
-// ownSelectableUnit is the census's "own selectable unit" predicate: a unit in
-// the local player's slot range whose status word has the selection/classifier
-// eligibility bit set, whose build-progress fraction is 0.0, and whose carrier
-// reference is null [07 R-CAM-01 §2]. It is the same predicate the rectangle
-// selection of [07 §9] and the trigger system's eligible-unit test
-// [08 R-TRIG-01 §3] use.
+// ownSelectableUnit is the census's "own selectable unit" predicate
+// [07 R-CAM-01 §2], byte-for-byte the predicate the rectangle selection of
+// [07 §9] and the trigger system's eligible-unit test [08 R-TRIG-01 §3] share.
+// Its four clauses, in that section's order: the status word carries
+// selection bit 5 (`0x20`); construction remaining is `0.0`; the post-capture
+// grace counter is `0`; and either the carrier reference is null or the
+// carrier's own status word carries the cargo-selectable bit 30.
 //
-// Unimplemented: two clauses of [08 R-TRIG-01 §3]'s predicate do not cross the
-// frame boundary — the post-capture grace counter, and the "carrier is itself
-// marked a visible carrier" relaxation of the carrier clause. So a carried unit
-// is never selectable here and a just-captured one always is. Publishing the
-// grace counter and the carrier's visible bit is the frame owner's call.
-// See PLAN 19 §2.4.
-func (b *battleSession) ownSelectableUnit(v frame.UnitView) bool {
+// The last two used to be missing, on the grounds that neither crossed the
+// frame boundary. Neither needs to:
+//
+//   - The grace counter "is armed to 150 ticks only by a capture whose new
+//     owner is a remote (multiplayer) controller … in single-player it is
+//     always zero" [08 R-TRIG-01 §3]. Nanolathe is single-player, so the
+//     clause is satisfied by construction and is recorded here rather than
+//     published. It becomes a real field the day a remote controller exists.
+//   - Bit 30 (`0x40000000`) is not a dynamic transport bit at all: it is a
+//     static mirror of the carrier definition's `isairbase` flag, written once
+//     by the unit initializer and never touched again [04 R-UNIT-06 §3]. The
+//     committed carrier's definition answers it, the same way the production
+//     dispatcher's builder check reads a compiled definition, so no live pool
+//     read and no new frame field are involved [I6].
+//
+// The visible consequence: a landed aircraft parked on an airbase — or a
+// factory product whose factory definition is an airbase — is selectable,
+// while cargo aboard an ordinary transport still is not.
+func (b *battleSession) ownSelectableUnit(f *frame.Frame, v frame.UnitView) bool {
 	if b == nil || b.sess == nil || v.Slot == 0 {
 		return false
 	}
@@ -2545,7 +2579,23 @@ func (b *battleSession) ownSelectableUnit(v frame.UnitView) bool {
 	if v.BuildRemaining != 0 {
 		return false
 	}
-	return v.Carrier == 0
+	// The post-capture grace counter, always zero in single-player
+	// [08 R-TRIG-01 §3].
+	if v.Carrier == 0 {
+		return true
+	}
+	carrier, ok := snapshotUnitByHandle(f, v.Carrier)
+	return ok && b.snapshotAirBase(carrier)
+}
+
+// snapshotAirBase answers the carrier's cargo-selectable status bit from the
+// compiled definition it mirrors [04 R-UNIT-06 §3][08 R-TRIG-01 §3].
+func (b *battleSession) snapshotAirBase(v frame.UnitView) bool {
+	if b == nil || b.cat == nil {
+		return false
+	}
+	def, ok := b.cat.Unit(v.DefName)
+	return ok && def != nil && def.IsAirBase
 }
 
 // ownSelectableHandles walks the committed frame in slot order and returns the
@@ -2559,7 +2609,7 @@ func (b *battleSession) ownSelectableHandles(keep func(frame.UnitView) bool) []p
 	out := make([]pool.Handle, 0, len(f.Units))
 	for i := range f.Units {
 		v := f.Units[i]
-		if !b.ownSelectableUnit(v) {
+		if !b.ownSelectableUnit(f, v) {
 			continue
 		}
 		if keep != nil && !keep(v) {

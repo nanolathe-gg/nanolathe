@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
@@ -210,5 +211,207 @@ func TestQueueOverlayDoesNotTreatEveryStructureAsBuilderContext(t *testing.T) {
 		if op.Unit == 2 {
 			t.Fatalf("non-builder structure enabled marker-only overlay: %+v", op)
 		}
+	}
+}
+
+// TestQueueDescriptorCensusMatchesOrderTable pins the presentation census
+// against the same two bytes on the simulation's order-descriptor table, where
+// they are the `Class` and `AckGroup` fields. Both are transcriptions of
+// [04 §3.1]'s sixty-seven-record table, and [R-P0-11 §3] is what identifies
+// them as the overlay's draw mask and icon byte. The check keeps them from
+// drifting without making presentation import the order package at run time.
+func TestQueueDescriptorCensusMatchesOrderTable(t *testing.T) {
+	seen := 0
+	for _, d := range orders.Table() {
+		if d.Name == "" {
+			continue // the reject sentinel's empty canonical name [04 §3.1]
+		}
+		seen++
+		got, ok := queueDescriptors[d.Name]
+		if !ok {
+			t.Errorf("%s has no overlay census row [04 §3.1][R-P0-11 §3]", d.Name)
+			continue
+		}
+		if uint8(got.mask) != d.Class {
+			t.Errorf("%s overlay mask 0x%02x, order table 0x%02x [R-P0-11 §3]", d.Name, uint8(got.mask), d.Class)
+		}
+		if got.icon != d.AckGroup {
+			t.Errorf("%s overlay icon byte %d, order table %d [R-P0-11 §3]", d.Name, got.icon, d.AckGroup)
+		}
+	}
+	if seen != 67 || len(queueDescriptors) != 67 {
+		t.Errorf("census sizes: order table %d, overlay %d; want 67 each [04 §3.1]", seen, len(queueDescriptors))
+	}
+	// The circle bit is set by no stock record [R-P0-11 §3].
+	for name, d := range queueDescriptors {
+		if d.mask&QueueCircleMask != 0 {
+			t.Errorf("%s sets the circle bit; no stock record does [R-P0-11 §3]", name)
+		}
+	}
+}
+
+// TestQueueOverlayIconHelperRunsFromTheAnchorGetter locks the two facts
+// [R-P0-11 §3] establishes about the icon: the bit-2 (dash) helper calls the
+// icon helper too, because that helper is also the anchor getter, and whether
+// an icon appears is decided by the descriptor's icon byte alone.
+func TestQueueOverlayIconHelperRunsFromTheAnchorGetter(t *testing.T) {
+	iconFor := func(kind string) (uint8, bool) {
+		f := queueTestFrame()
+		f.OrderQueues[0].Primary = []frame.OrderView{{
+			Unit: 1, Index: 0, Kind: kind, BuildProduct: "armmex", FootX: 2, FootZ: 2,
+			GoalX: numeric.Fixed(16 << 16), GoalZ: numeric.Fixed(8 << 16), CreationTick: 12,
+		}}
+		ops := QueueOverlay(f, QueueOverlayOptions{
+			Tick: 20, ShiftHeld: true, LocalOwner: 0, Project: queueTestProject,
+			BuildRect: queueTestRect,
+			Icon:      func(cursorIndex uint8, _ uint32) (int32, bool) { return 0, true },
+		})
+		for _, op := range ops {
+			if op.Kind == QueuePrimitiveIcon {
+				return op.IconCursor, true
+			}
+		}
+		return 0, false
+	}
+
+	// Move_Ground: mask 0x12 sets bit 2 and not bit 8, icon byte 14
+	// (`cursormove`). The chain still runs the icon helper.
+	if got, ok := iconFor("Move_Ground"); !ok || got != 14 {
+		t.Errorf("Move_Ground icon = %d, present %v; want cursor slot 14 [R-P0-11 §3]", got, ok)
+	}
+	// Capture: mask 0x08 is the icon bit alone, icon byte 4.
+	if got, ok := iconFor("Capture"); !ok || got != 4 {
+		t.Errorf("Capture icon = %d, present %v; want cursor slot 4 [R-P0-11 §3]", got, ok)
+	}
+	// MobileBuild sets bit 2 but carries icon byte 0, which is the "no icon"
+	// encoding, not cursor slot 0: a queued build site draws no order icon.
+	if got, ok := iconFor("MobileBuild"); ok {
+		t.Errorf("MobileBuild drew icon %d; icon byte 0 means no icon [R-P0-11 §3]", got)
+	}
+	// A mask of zero draws nothing however privileged the unit.
+	if got, ok := iconFor("VTOL_LandIfCan"); ok {
+		t.Errorf("VTOL_LandIfCan drew icon %d; mask 0x00 draws nothing [R-P0-11 §3]", got)
+	}
+	// Wait carries icon byte 19 but mask 0x00, so nothing is drawn; and an
+	// order kind with no census row at all draws nothing rather than guessing.
+	if got, ok := iconFor("Wait"); ok {
+		t.Errorf("Wait drew icon %d; mask 0x00 draws nothing [04 §3.1][R-P0-11 §3]", got)
+	}
+	if got, ok := iconFor("NotAnOrderKind"); ok {
+		t.Errorf("an uncensused kind drew icon %d [R-P0-11 §3]", got)
+	}
+}
+
+// TestQueueOverlayPrivilegedSourcesGetTheFullMask locks [R-P0-11 §3]'s
+// correction: all four sources — tracked, command-page subject, hovered, and
+// *every* selected unit — get the full five-bit mask, and the marker-only
+// fallback for the rest runs only when one of the first three resolves to a
+// live builder. The selection does not create a builder context.
+func TestQueueOverlayPrivilegedSourcesGetTheFullMask(t *testing.T) {
+	// Two local units, each holding one Capture order: mask 0x08 is the icon
+	// bit alone, so an icon primitive appears only for a full-mask queue.
+	order := func(u pool.Handle) frame.OrderQueueView {
+		return frame.OrderQueueView{Unit: u, Primary: []frame.OrderView{{
+			Unit: u, Kind: "Capture", GoalX: numeric.Fixed(16 << 16), CreationTick: 12,
+		}}}
+	}
+	base := func() *frame.Frame {
+		return &frame.Frame{
+			Tick: 20,
+			Units: []frame.UnitView{
+				{Slot: 1, Owner: 0, Health: 100, MaxHealth: 100},
+				{Slot: 2, Owner: 0, Health: 100, MaxHealth: 100},
+			},
+			Selection:   frame.SelectionView{LocalPlayer: 0},
+			OrderQueues: []frame.OrderQueueView{order(1), order(2)},
+		}
+	}
+	run := func(f *frame.Frame, opt QueueOverlayOptions) map[pool.Handle]bool {
+		opt.Tick, opt.ShiftHeld, opt.LocalOwner = 20, true, 0
+		opt.Project = queueTestProject
+		opt.Icon = func(uint8, uint32) (int32, bool) { return 0, true }
+		out := map[pool.Handle]bool{}
+		for _, op := range QueueOverlay(f, opt) {
+			if op.Kind == QueuePrimitiveIcon {
+				out[op.Unit] = true
+			}
+		}
+		return out
+	}
+
+	for _, tc := range []struct {
+		name string
+		opt  QueueOverlayOptions
+		sel  []pool.Handle
+		page pool.Handle
+	}{
+		{name: "tracked", opt: QueueOverlayOptions{TrackedUnit: 1}},
+		{name: "command page subject", page: 1},
+		{name: "hovered", opt: QueueOverlayOptions{HoveredUnit: 1}},
+		{name: "selected", sel: []pool.Handle{1}},
+	} {
+		f := base()
+		f.Selection.Handles = tc.sel
+		f.CommandPage.Builder = tc.page
+		got := run(f, tc.opt)
+		if !got[1] {
+			t.Errorf("%s: unit 1 did not get the full mask [R-P0-11 §3]", tc.name)
+		}
+		if got[2] {
+			t.Errorf("%s: unit 2 got the full mask without being privileged [R-P0-11 §3]", tc.name)
+		}
+	}
+
+	// Every selected unit, not only a lone one: "single-selected" was the
+	// wording §3 corrects.
+	f := base()
+	f.Selection.Handles = []pool.Handle{1, 2}
+	if got := run(f, QueueOverlayOptions{}); !got[1] || !got[2] {
+		t.Errorf("a two-unit selection did not give both queues the full mask [R-P0-11 §3]")
+	}
+
+	// The builder-context test reads only the first three sources. A selected
+	// builder does not arm the marker-only fallback for the other local units.
+	markers := func(f *frame.Frame, opt QueueOverlayOptions) map[pool.Handle]bool {
+		opt.Tick, opt.ShiftHeld, opt.LocalOwner = 20, true, 0
+		opt.Project = queueTestProject
+		opt.BuildRect = queueTestRect
+		out := map[pool.Handle]bool{}
+		for _, op := range QueueOverlay(f, opt) {
+			if op.Kind == QueuePrimitiveMarker {
+				out[op.Unit] = true
+			}
+		}
+		return out
+	}
+	withBuild := func() *frame.Frame {
+		f := base()
+		for i := range f.OrderQueues {
+			f.OrderQueues[i].Primary = []frame.OrderView{{
+				Unit: f.OrderQueues[i].Unit, Kind: "MobileBuild", BuildProduct: "armmex",
+				FootX: 2, FootZ: 2, GoalX: numeric.Fixed(16 << 16), CreationTick: 12,
+			}}
+		}
+		return f
+	}
+
+	f = withBuild()
+	f.Selection.Handles = []pool.Handle{1}
+	if got := markers(f, QueueOverlayOptions{Builder: func(v frame.UnitView) bool { return v.Slot == 1 }}); got[2] {
+		t.Errorf("a selected builder armed the marker-only fallback; only sources 1-3 do [R-P0-11 §3]")
+	}
+	f = withBuild()
+	if got := markers(f, QueueOverlayOptions{HoveredUnit: 1, Builder: func(v frame.UnitView) bool { return v.Slot == 1 }}); !got[2] {
+		t.Errorf("a hovered builder did not arm the marker-only fallback [R-P0-11 §3]")
+	}
+	f = withBuild()
+	if got := markers(f, QueueOverlayOptions{HoveredUnit: 1, Builder: func(frame.UnitView) bool { return false }}); got[2] {
+		t.Errorf("the marker-only fallback ran with no builder context [R-P0-11 §3]")
+	}
+	// A nil Builder callback suppresses the fallback rather than admitting
+	// every local unit.
+	f = withBuild()
+	if got := markers(f, QueueOverlayOptions{HoveredUnit: 1}); got[2] {
+		t.Errorf("a nil Builder callback admitted a non-privileged unit [R-P0-11 §3]")
 	}
 }

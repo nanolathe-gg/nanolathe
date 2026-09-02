@@ -1,9 +1,6 @@
 package economy
 
 import (
-	"fmt"
-
-	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -367,29 +364,6 @@ func rebuildCapacityPlayer(s *Service, player int, w *units.World) {
 		s.Players[player].Capacity[Metal] += s.Players[player].StorageBonus[Metal]
 		s.Players[player].Capacity[Energy] += s.Players[player].StorageBonus[Energy]
 	}
-}
-
-// SampleExtractorYield wraps world.Terrain.SampleMetal for placement-time metal extraction
-// per [05 "Terrain metal extraction"] C14. The value is Σ(cellMetal+1) × extractsMetal
-// sampled at placement and stored on the unit; it is not resampled each pass.
-// Adapt the signature without modifying internal/world.
-func SampleExtractorYield(t *world.Terrain, cx, cz int32, footX, footZ int, extractsMetal float64) (float32, error) {
-	if t == nil {
-		return 0, fmt.Errorf("economy: nil terrain")
-	}
-	// SampleMetal signature is (cx, cz int32, footX, footZ int, extractsMetal float32) (float32, error) per [PLAN_04].
-	return t.SampleMetal(cx, cz, footX, footZ, float32(extractsMetal))
-}
-
-// SampleExtractorYieldForDef is a convenience that samples using the unit definition's
-// extractsMetal field per [02 "Unit record"] and the given footprint.
-func SampleExtractorYieldForDef(t *world.Terrain, cx, cz int32, def *content.UnitDef) (float32, error) {
-	if def == nil {
-		return 0, fmt.Errorf("economy: nil def")
-	}
-	footX := int(def.FootprintX)
-	footZ := int(def.FootprintZ)
-	return SampleExtractorYield(t, cx, cz, footX, footZ, def.ExtractsMetal)
 }
 
 // DebitCloak applies a single cloak upkeep debit with truncation toward zero

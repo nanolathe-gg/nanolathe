@@ -22,6 +22,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/hud"
+	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/ui"
 )
 
@@ -103,18 +104,79 @@ func closeUnitInfo() bool {
 	return true
 }
 
+// unitInfoConsumeKeys is the keyboard-ownership seam for this battle child
+// window [07 §3][07 R-WGT-01 §2].
+//
+// The host frame's input pass "dispatches the active GUI … and only afterwards
+// runs the battle hotkey dispatcher. An active GUI therefore consumes queued
+// keyboard tokens before battle hotkeys run" [07 §3]. While this screen is up
+// it is the top object of the GUI stack, so the battle dispatcher sees nothing:
+// the shell used to run the whole hotkey table underneath the open window, and
+// F1 had to double as the close because Escape never reached the window.
+//
+// Inside the GUI pass, the window key matrix applies [07 R-WGT-01 §2]: Escape
+// fires the `escdefault` gadget when it exists and is active, and Enter fires
+// the `crdefault` gadget when it is active and not a greyed button. Stock
+// `UNITINFOX.GUI` names `DONE` for both (and for `defaultfocus`), and `DONE` is
+// an active button, so either token closes the screen — the same action the
+// click path already performs. Every other token is consumed by the window and
+// goes no further, which is what makes F1 a no-op here instead of a second
+// close.
+//
+// It returns true when the screen owned this frame's tokens.
+//
+// TODO(question): [07 R-WGT-01 §2] runs the matrix "only when the window's
+// token mode is non-zero and its key-navigation flag is set", and both are
+// runtime window fields rather than authored `.GUI` keys — the parsed header
+// carries neither, and [07 §3]'s Unknown list still has "the meaning of the
+// window key-navigation flag's clear state … which screens deliberately leave
+// Tab/Enter/Escape to their own key callback". A per-screen static trace of
+// `UNITINFOX.GUI`'s window flags would settle whether the matrix applies to
+// this window; the escdefault/crdefault binding it names is authored and is
+// what is implemented here.
+func (b *battleSession) unitInfoConsumeKeys(kbd *input.KeyboardState) bool {
+	if !unitInfoOpen() {
+		return false
+	}
+	if kbd == nil {
+		return true
+	}
+	if kbd.KeyDown(input.KeyEscape) && unitInfoDefaultFires(unitInfoUI.window.Header.EscDefault) {
+		closeUnitInfo()
+		return true
+	}
+	if kbd.KeyDown(input.KeyEnter) && unitInfoDefaultFires(unitInfoUI.window.Header.CrDefault) {
+		closeUnitInfo()
+	}
+	return true
+}
+
+// unitInfoDefaultFires reports whether the named default gadget "exists and is
+// active" — the matrix's own condition for firing it [07 R-WGT-01 §2]. A
+// greyed button is excluded, as the Enter row spells out.
+func unitInfoDefaultFires(name string) bool {
+	if unitInfoUI == nil || unitInfoUI.window == nil || strings.TrimSpace(name) == "" {
+		return false
+	}
+	for i, gad := range unitInfoUI.window.Gadgets {
+		if i == 0 || !strings.EqualFold(gad.Name, name) {
+			continue
+		}
+		return gad.Active != 0 && !(gad.Kind == gui.KindButton && gad.GrayedOut != 0)
+	}
+	return false
+}
+
 // toggleUnitInfo is F1's whole behavior. Retail opens the screen when the
 // options window is not open; the subject is the hovered gadget's product
 // when a gadget is hovered, otherwise the hovered world unit when it is alive
 // and passes the visibility predicate, otherwise nothing opens
 // [07 R-HUD-03 §8][07 §2].
 //
-// Unimplemented: retail never needs F1 to close this screen. The active GUI
-// consumes the token before the battle hotkey dispatcher runs [07 §3], and
-// `DONE` is the file's `escdefault`/`crdefault`, so Escape and Enter close it
-// through [07 R-WGT-01 §2]'s matrix. This shell has no keyboard-ownership seam
-// for a battle child window — the battle key dispatcher owns Escape
-// unconditionally — so F1 doubles as the close here. See PLAN 19 §2.4.
+// It is only ever reached with the screen closed now: while it is open the
+// window owns the keyboard and F1 never arrives here (unitInfoConsumeKeys).
+// The close arm is retained so a caller that reaches it with the screen up
+// still behaves, but retail never needs F1 to close this screen.
 func (b *battleSession) toggleUnitInfo() {
 	if closeUnitInfo() {
 		return

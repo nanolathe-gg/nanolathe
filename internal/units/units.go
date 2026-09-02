@@ -743,8 +743,11 @@ func (w *World) sampleExtraction(u *Unit, def *content.UnitDef) {
 	cz := world.WorldToCell(u.Z) - int32(footZ/2)
 	rate, footprintSum, err := w.extraction.SampleMetalWithFootprintSum(cx, cz, footX, footZ, float32(def.ExtractsMetal))
 	if err != nil {
-		// An unseeded or out-of-range plot is a placement question, not a rate
-		// to invent: leave the zero the record was created with.
+		// A rectangle that leaves the map is not an error: its off-map cells
+		// contribute nothing and the in-bounds ones still accumulate
+		// [05 R-PROD-01 §6]. What remains here is an unseeded or unbuilt plot —
+		// a setup fault, not a rate to invent: leave the zero the record was
+		// created with.
 		return
 	}
 	u.SpotMetal = rate

@@ -814,24 +814,25 @@ func (t *Terrain) SiteHeight(cx, cz int32, yard []YardCell, footX, footZ int, wa
 	return minLow
 }
 
-// SampleMetal computes the metal a placed extractor samples from its footprint
-// [05 "Terrain metal extraction"] [P1-10][P1-15]:
+// SampleMetal computes the metal an extractor samples from its footprint at
+// creation [05 R-PROD-01 §6]:
 //
-//	sampled metal = extracts-metal multiplier x sum(cell metal byte + 1)
+//	sampled metal = extracts-metal multiplier x Σ(cell metal byte + 1)
 //
-// Every cell contributes at least one, so a zero-metal cell still adds one. The
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// and never resampled [P1-10]:Σ(byte+1)*extractsMetal once, [P1-15] uniform char write.
-// Later terrain or feature changes do not change an already stored amount.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Pools 0x100 catalog / 0x800 anim slots / WH*0xD grid silent fail with successor 0xFFFF [P1-10][P1-15].
-// TNT unk3 byte uniformly 0 corpus-wide, not a metal raster [P1-15].
+// Every covered cell contributes at least one, so a zero-metal cell still adds
+// one. The rate is stored once on the unit and never resampled, so later
+// terrain or feature changes do not move it. A feature's own metal field is a
+// reclaim reward and is not part of this sum [05 R-FEAT-01 §7].
+//
+// On a canonical map the metal byte is the uniform schema value written to
+// every cell, not a per-cell raster: the four-byte attribute record never
+// touches it, and the shipped corpus's fourth attribute byte is uniformly zero
+// [05 R-PROD-01 §6][fmt tnt]. A legacy map's per-cell bytes come from its
+// eight-byte attribute record instead, which is the only varying source.
 //
 // The metal field must have been seeded by ApplySchema first; sampling before
 // that is an error rather than a plausible wrong number.
 //
-// TODO(question): varying per-cell metal file beyond uniform SurfaceMetal byte remains TODO(question) [P1-15];
-// per-cell metal beyond uniform not shipped (uniform SurfaceMetal seeds every cell via char write) [P1-15].
 // TODO(question): retail "performs the intermediate sum with fixed-point-shaped
 // integer arithmetic and then converts it to a single-precision value", and
 // notes that an exact compatibility mode must preserve that conversion and
@@ -860,15 +861,24 @@ func (t *Terrain) SampleMetal(cx, cz int32, footX, footZ int, extractsMetal floa
 // it needs Σ(byte+1) ≥ 65536, which no shipped footprint approaches
 // [05 R-PROD-01 §6]; the rate-side divergence is the open question recorded
 // above and is deliberately not resolved here.
+//
+// The rectangle may leave the map. The walk resolves each coordinate through a
+// per-cell bounds test — 0 ≤ x < cell width and 0 ≤ z < cell height, else no
+// cell — and an off-map coordinate contributes nothing at all, not even the
+// +1, while the in-bounds cells of the same rectangle still accumulate
+// [05 R-PROD-01 §6]. *Correction:* this function previously rejected the whole
+// sample with an out-of-bounds error whenever any part of the rectangle left
+// the map, so an extractor placed against a map edge stored a rate of zero
+// instead of its partial sum. That rejection was ours, not retail's; the
+// established walk has no rectangle-level bounds test. Callers that must
+// refuse an off-map footprint — CheckExtractorOverlap is the one — carry their
+// own bounds test and are unaffected.
 func (t *Terrain) SampleMetalWithFootprintSum(cx, cz int32, footX, footZ int, extractsMetal float32) (float32, uint16, error) {
 	if t == nil {
 		return 0, 0, fmt.Errorf("world: nil terrain")
 	}
 	if footX <= 0 || footZ <= 0 {
 		return 0, 0, fmt.Errorf("world: invalid footprint %dx%d", footX, footZ)
-	}
-	if cx < 0 || cz < 0 || cx+int32(footX) > t.CellW || cz+int32(footZ) > t.CellH {
-		return 0, 0, fmt.Errorf("world: sample %d,%d %dx%d out of bounds %dx%d", cx, cz, footX, footZ, t.CellW, t.CellH)
 	}
 	if t.Plot == nil || len(t.Plot) < int(t.CellW*t.CellH) {
 		return 0, 0, fmt.Errorf("world: terrain plot not initialized")
@@ -881,10 +891,20 @@ func (t *Terrain) SampleMetalWithFootprintSum(cx, cz int32, footX, footZ int, ex
 		// [05 "Terrain metal extraction"].
 		return 0, 0, fmt.Errorf("world: surface metal not seeded; call Terrain.ApplySchema before sampling [05 %q]", "Terrain metal extraction")
 	}
+	// Outer loop over the Z extent from the stamped Z cell, inner over the X
+	// extent from the stamped X cell [05 R-PROD-01 §6].
 	sum := int64(0)
 	for dz := 0; dz < footZ; dz++ {
+		z := cz + int32(dz)
+		if z < 0 || z >= t.CellH {
+			continue // off-map row: no cell, no +1
+		}
 		for dx := 0; dx < footX; dx++ {
-			sum += int64(t.Plot[(cz+int32(dz))*t.CellW+cx+int32(dx)].Metal()) + 1
+			x := cx + int32(dx)
+			if x < 0 || x >= t.CellW {
+				continue // off-map column: no cell, no +1
+			}
+			sum += int64(t.Plot[z*t.CellW+x].Metal()) + 1
 		}
 	}
 	return float32(sum) * extractsMetal, uint16(sum), nil

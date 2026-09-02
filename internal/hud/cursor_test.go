@@ -9,9 +9,49 @@ import (
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
-// unit builds a fixture unit owned by owner with the given definition.
+// unit builds a fixture unit owned by owner with the given definition. The
+// status word carries the active-state bit `0x20`, because the allocator
+// initializer sets it on every unit it creates [R-P0-04 "Runtime eligibility
+// bit lifecycle"] and the inspect predicate of [07 §8] tests it.
 func unit(owner uint8, def *content.UnitDef) *units.Unit {
-	return &units.Unit{Owner: owner, Def: def, Alive: true, Health: 100, MaxHealth: 100}
+	return &units.Unit{Owner: owner, Def: def, Alive: true, Health: 100, MaxHealth: 100,
+		Flags: units.ClassifierEligibleStatus}
+}
+
+// TestInspectableGates locks the clauses of [07 §8]'s own-unit inspect
+// predicate — "an own, active, finished, untasked unit" — one at a time. The
+// active clause was missing while `docs/SPEC_CONFLICTS.md` SC16 stood; the
+// collision it recorded (bit `0x20` claimed by INBUILDSTANCE) is gone, so it is
+// gated here. The untasked clause is deliberately absent: see the
+// `TODO(question)` on isInspectable.
+func TestInspectableGates(t *testing.T) {
+	def := &content.UnitDef{UnitName: "ARMPW", CanMove: true}
+	cases := []struct {
+		name string
+		mut  func(*units.Unit)
+		want bool
+	}{
+		{"own active finished untasked", func(*units.Unit) {}, true},
+		{"another player's unit", func(u *units.Unit) { u.Owner = 1 }, false},
+		{"dead", func(u *units.Unit) { u.Alive = false }, false},
+		{"still building", func(u *units.Unit) { u.Remaining = 0.5 }, false},
+		{"active-state bit clear", func(u *units.Unit) { u.Flags &^= units.ClassifierEligibleStatus }, false},
+		// The untasked gate is not implemented: this build's order guard reads
+		// nonzero for every idle unit, because an idle primary queue holds a
+		// Standby node. Locking the current behaviour keeps the omission
+		// visible rather than letting a later change slip it in unnoticed.
+		{"order guard nonzero is NOT yet a gate", func(u *units.Unit) { u.OrderGuard = 0.25 }, true},
+	}
+	for _, tc := range cases {
+		u := unit(0, def)
+		tc.mut(u)
+		if got := isInspectable(u, 0); got != tc.want {
+			t.Errorf("%s: isInspectable = %v, want %v [07 §8][07 §9]", tc.name, got, tc.want)
+		}
+	}
+	if isInspectable(nil, 0) {
+		t.Errorf("nil target inspects [07 §8]")
+	}
 }
 
 // TestChooseCursorHoverTable locks the hover/armed shape table [07 §8] C12.

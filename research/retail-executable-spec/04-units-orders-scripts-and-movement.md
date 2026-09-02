@@ -1394,6 +1394,27 @@ which the same pump cascade re-enters immediately.
    the queue tail; on a successful enqueue the record's dynamic gate clears
    and the handler returns the wait code. The queued-mode attack also bypasses
    the standing-order gates the non-queued attack issue applies.
+   **Correction (2026-09-01, RWU-19-13) — the diplomacy term.** The sentence
+   above says "the ward's owner's diplomacy byte toward the guard's side reads
+   zero (allied)". The row owner and the gloss were both wrong; only "reads
+   zero" was right. The byte the handler loads is **row A of the engagement
+   target's owner** — the attacker's own alliance declaration, in the
+   vocabulary of [05 R-SHARE-01 §1] — **indexed by the guard's owner's slot
+   number**, and the leg proceeds when that byte is **zero: the attacker has
+   not declared alliance toward the guard's side, i.e. it is hostile to the
+   guard** (Established, direct; the air guard's chain is byte-identical).
+   In the predicate-table form of [05 R-SHARE-01 §1]:
+   `attackerOwner.A[guardOwner] == 0`. It is the same shape as the
+   retaliation site's "attacker not allied" test ([R-STANCE-01 §3] reads
+   `attackerOwner.A[victimOwner] == 0`) and the mirror image of the command
+   resolver's hostile predicate ([R-ORD-02 §1]: the *acting* player's row
+   toward the *target's* slot). Consequences: a guard whose own side has
+   declared alliance to the attacker while the attacker has not reciprocated
+   still joins; the ward's owner's rows are never read; and the command
+   resolver the join then runs (code 3, with force) applies its own,
+   opposite-direction test on top. The wrong gloss was the only reason
+   [05 R-SHARE-01 §1] and [R-ORD-02 §1] appeared to disagree with this
+   section; both were right and are unchanged.
 2. **Slot re-target (auto-fire support).** Skipped entirely when the guard's
    standing-move bits (18–19) and standing-fire bits (20–21) of the status
    word are all clear. *(Corrected by [R-STANCE-01 §3]: the traced gate reads
@@ -1442,6 +1463,21 @@ producer sets it during ordinary play; a bounded census over the decompiled
 function set and an instruction-pattern scan of the code sections found only
 the initializer zero, the save pair, and the tick-clear write.
 
+**Correction (2026-09-01, RWU-19-13) — the link is the ward's recorded
+attacker, and nothing clears it per tick.** The paragraph above is
+superseded on three points. (1) "Cleared by the per-unit tick refresh helper
+each tick" was a misidentification: the routine that writes the zero is the
+**unit spawn initializer** (reached only from the three unit-creation paths),
+not a tick helper; the actual per-unit tick refresh never touches the field.
+Once written, the link persists until the next writer. (2) The Supported
+inference "it is the ward's current combat target" was inverted: the link is
+the **unit that last damaged the ward** — the damage dispatcher's attacker
+pointer that [06 R-WPN-04 §2] ("the recorded-attacker reference") already
+identified. (3) The producer is therefore not Unknown; the full writer set is
+in [R-UNIT-06 §5] below. The consumer contracts of legs 1 and 2 are unchanged
+in form, but their meaning is now: *the guard attacks, and points its free
+weapon slots at, whatever last hurt its ward.*
+
 **Unknown — the guard's re-arm bit producers.** The guard arms its gate with
 bit values `0x08` and `0x10` (step 5) and branch 1 consumes `0x10`. The
 node-pending writers found anywhere are: the three goal-payload installers
@@ -1452,6 +1488,18 @@ No writer of `0x08`/`0x10` was located, so these belong to the same
 unlocated-writer family as the mask-2/mask-8 interrupt bits and the
 satisfied-bit-`0x10000` weapon-slot clear recorded in the Missing list. The
 consumer semantics above are Established; the producers remain open.
+
+**Correction (2026-09-01, RWU-19-13) — both producers are located.** The
+paragraph above is superseded: `0x08` is *target removed* ([R-ORD-01 §6]) and
+`0x10` is *target damaged*, delivered through the observer node of
+[R-MOV-03 §7] by the damage-intake observer notice of [06 R-WPN-04 §2]. Both
+were closed on 2026-08-29 by other units; this section had not caught up, and
+[R-ORD-01 §6]'s third bullet ("`0x10` has no located producer") is likewise
+superseded by [R-MOV-03 §7]'s own correction. The re-trace for this unit
+re-read the notice and the pump and adds the producer contract — event,
+phase, condition, clear — as [R-UNIT-06 §5], so the guard's `0x18` gate now
+reads, exactly: **wake when the ward is destroyed or when the ward takes
+damage**, plus the 30-tick deadline.
 
 **Established — air guard differences.** The VTOL follow handler adds an
 interrupt-bit pre-check (satisfied bits `0x48` fail the order) and a
@@ -1490,6 +1538,142 @@ Shift-queue (including `QMove`/`QPatrol`) both insert after the active marker
 without purging, differing only in descriptor class; Internal-Auto is the pump's
 own empty-list head-insert that inherits the old head's auto flag. The rear flag
 selects the segment for every modifier.
+
+### Closed — the guard's wake and re-target producers: the recorded attacker, pending bit 0x10, and the slot autonomy bit [R-UNIT-06 §5] (2026-09-01)
+
+RWU-19-13 re-traced the three producers legs 1 and 2 of [R-UNIT-06 §1]
+depend on, so a build can implement them as contracts rather than as gaps.
+Everything here is **Established** by direct static trace unless a sentence
+says otherwise; the census bounds are stated where a negative is claimed.
+
+**1. The recorded-attacker link (what §1 calls the "engagement-target
+reference").** One unit-pointer field on the unit record, beside the side
+snapshot byte the under-attack notice reads ([06 R-WPN-04 §2]). Its writers,
+the complete set (a whole-image store census on the field's offset agrees
+with the decompiled-set census):
+
+| Event | Tick phase | Condition | Value written |
+|---|---|---|---|
+| Unit spawn | creation (all three creation paths) | always | null; side snapshot `10` |
+| Damage application ([06 §9.1]) | inside the damage dispatcher, whatever produced the packet | victim alive and not death-latched; packet kind is not heal (10); attacker id nonzero — the pool slot that id names, **whether or not it is live** | the attacker; side snapshot = attacker's owner byte |
+| Unit death | the death handler | always | the death packet's attacker (may be null) |
+| Developer console kill | console | always | null; snapshot `10`; death latch set |
+| Save load | load | always | the saved link ([08 R-SAVE-02 §6]) |
+
+There is **no per-tick clear** and **no clear on the attacker's death**: the
+per-unit tick refresh never writes the field, and a link to a unit that has
+since died or been reused stays until the next damage event rewrites it.
+(The earlier text's "tick refresh" was the spawn initializer.) The damage
+dispatcher writes the link **after** the reaction routine of
+[06 R-WPN-04 §2] has run for the same packet — the reaction uses the packet's
+own attacker — so the guard handlers, which run in the order pump, always read
+the newest attacker. Consumers: leg 1 and leg 2 of both guard handlers (which
+guard against a stale link only through the command resolver's alive test and
+the acquisition gate), and the unit save block.
+
+*Implementation rule.* On every damage application that passes the
+dispatcher's gates: `if packet.kind != heal && packet.attackerID != 0 {
+victim.recordedAttacker = unit at attackerID; victim.attackerSide = that
+unit's owner byte }`, after the reaction routine and before the paralyze /
+health arms; never clear it elsewhere except spawn, death, console kill.
+Readers must tolerate a dead or reused slot.
+
+**2. Pending bit `0x10` — "my target took damage".** The observer node of
+[R-MOV-03 §7] is the delivery path; this is the producer contract.
+
+* *Event.* The first step of the damage reaction routine ([06 R-WPN-04 §2]
+  part 1), which the dispatcher runs for every accepted packet whose kind is
+  neither heal (10) nor 11, on a live, non-death-latched victim. It runs
+  **before** attacker validation and before any stance, controller, or
+  build-state test: attacker-less damage (a self-inflicted explosion, a
+  console-applied packet) raises the bit exactly as enemy fire does.
+* *Recipients.* Every order record whose observer node is linked on the
+  victim — a record whose target is the victim and whose descriptor carries
+  the observer static bit (`0x200`, [R-MOV-03 §7]) — **regardless of which
+  unit owns the record and regardless of the record's position in its
+  queue**. A guard record (target = ward) is one such record; an enemy's
+  attack record targeting the ward is another, and it receives the bit too
+  (its gates never admit `0x10`, so the bit merely accumulates there).
+* *Effect.* `record.pending |= 0x10`. Nothing else is written; no phase or
+  gate changes.
+* *Clear.* Only the queue pump, when it visits the record as the front of its
+  segment: it forms `satisfied = (record.pending | owner's capability word)
+  & record.dynamicGate`, returns without dispatching when the gate is nonzero
+  and `satisfied` is zero, and otherwise clears `satisfied` out of the
+  pending word (and out of the capability word), zeroes the gate, and
+  dispatches the handler with `satisfied`. **A pending bit the gate does not
+  admit persists.** The record constructor zeroes the pending word; no other
+  writer touches bit 4 (bounded: every store into the pending word in the
+  decompiled set is the observer method, the goal-payload raiser of
+  [R-ORD-01 §0]'s movement bits, the pump's own deadline bit, and one
+  `0x100` raiser). The owner's capability word has no writer for bit 4
+  either, so the pump's OR contributes nothing to this bit.
+* *Consequence for the guard.* While the guard waits behind the attack it
+  spawned (gate 0), hits on the ward accumulate as one pending `0x10`. When
+  the attack record is removed the guard's next visit runs with an empty
+  gate (satisfied 0): leg 1 is skipped, legs 2–4 run, leg 5 re-arms `0x19`.
+  On the following visit the persisted `0x10` is admitted and leg 1 attacks
+  the ward's **current** recorded attacker. The guard therefore re-joins one
+  visit after its attack ends whenever the ward was hit meanwhile, with no
+  latch and no timer.
+
+**3. The slot autonomy bit (§1's "slot tracking bit").** It is **bit 4 of
+the weapon slot's control byte** — the same byte whose bit 1 is *slot
+enabled* ([R-ORD-01 §7]) and the byte the save persists as bits 0 (aim
+latch), 1 (enabled), 4 (tracking) ([08 R-SAVE-WEAPON-01]). [R-ORD-01 §7]'s
+"inhibit latch" and doc 06's "tracking flag" are one bit. Its writers are
+**exactly the two slot verbs of [R-ORD-01 §7]** (bounded: every store to the
+byte in the decompiled set, and every byte-OR/AND on its three offsets in the
+image):
+
+* the verb that section names *inhibit slot k* **sets** the bit — precondition
+  enabled set and bit 4 clear; then, only when the target pair is not already
+  the empty pair, the pair is reset and `TargetCleared` posted with the slot
+  index;
+* the verb it names *release slot k* **clears** the bit — precondition enabled
+  set and bit 4 set; the same conditional target reset and notification.
+
+The unit-target and point-target setters of [06 §3.2] write **only** the
+target pair (and clear bits 10–14 of the owner's capability word); they do
+not touch the control byte. Save load restores the byte wholesale.
+
+*Meaning.* Bit 4 set = **the slot belongs to autonomous acquisition**. Every
+reader requires enabled **and** bit 4: the autonomous scan of [06 §3.2], the
+retaliation per-slot offer of [06 R-WPN-04 §2] part 3, leg 2 of both guard
+handlers, and one AI-side reader. So the verbs' names read inverted against
+their effect, as [06 §1.2]'s discussion of bit 4 suspected: "release" takes
+the slot **away** from autonomy for an order's own target and "inhibit"
+hands it **back** with the target cleared. The names are kept for citation
+stability; implementers should read *release* as "take slot k for this
+order" and *inhibit* as "return slot k to autonomy".
+
+*Who takes and who returns.* Attack orders take: `Attack_NoMove` phase 0
+returns all three, takes slot 0, then binds the target; `Attack_Chase` takes
+slots 0 and 2 before binding its picked slot ([R-ORD-01 §7]). The record
+destructor returns all three slots (with their targets cleared) for every
+removed record whose static-mask copy lacks bit 16, so a completed or purged
+attack hands its slots back to autonomy. Both guards' admit phase returns all
+three ([R-UNIT-06 §1] "clear all three weapon-slot build targets"), so leg 2
+is live from the first phase-1 visit. Spawn runs the return verb on all three
+slots after writing the empty pair, so a new unit's slots are autonomous from
+its first tick **provided the enabled bit is already set** — the enabled
+bit's own writer is still [R-ORD-01 §7]'s Unknown (**Supported inference:**
+it precedes the spawn initializer, since retail units acquire from their
+first tick; decider: the writer census that section asks for).
+
+*Implementation rule for leg 2 and for the retaliation offer.* Test the bit.
+It is not dead code once the verbs are modelled: a slot an attack order
+currently holds (bit clear) must be left alone by the guard and by the
+offer, and it becomes eligible again the moment the record destructor
+returns it. A build that models "inhibit latch" and "tracking" as two fields
+should collapse them to this one bit.
+
+**What this closes and what stays open.** The doc's Missing-list item
+"Producer that sets a unit's engagement-target link" is closed by part 1
+and removed. Still open: the enabled bit's writer ([R-ORD-01 §7]); the
+capability word's bit-16 writer ([R-ORD-01 §6]). Nothing in this section
+contradicts [05 R-SHARE-01 §1] or [R-ORD-02 §1]; the diplomacy correction is
+inline in [R-UNIT-06 §1] leg 1.
 
 ### Closed — the standing-fire gates, site by site [R-STANCE-01 §3] (2026-08-29)
 
@@ -11895,9 +12079,6 @@ replacement bullet is needed because the ground path has no vertical term.
   on the 3-bit field.
 - The TDF key behind the feature definition byte that bounds the reclaim and
   resurrect spray height draw · [R-ORD-01 §5] · the feature parser's key list.
-- Producer that sets a unit's engagement-target link — the ward-side reference
-  both guard handlers attack toward · [R-UNIT-06 §1] · static trace. Not found
-  in the bounded decompiled set or by instruction-pattern scan.
 - Meaning of the unit state word's low two bits, which `Standby_Mine` compares
   against `1` on the scanned target before it self-destructs · §2.4,
   [R-STANCE-01 §3] · static trace of the writers of those two bits.

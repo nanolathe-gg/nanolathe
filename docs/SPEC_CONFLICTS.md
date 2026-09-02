@@ -19,8 +19,10 @@ status line never changes an entry's Decision; where a closure implies work in
 the code, the status names that action. There are no SC11–SC13 entries; the
 numbering has always skipped them.
 
-One open entry gates real work: **SC16** (the `0x20` active-state bit has no
-implementable counterpart). **SC7** closed 2026-08-29 (`[02 R-SND-01 §1]`). **SC5** is closed but its
+One open entry gates real work: **SC16**, now narrowed to the
+empty-current-task field alone — its `0x20` active-state half closed 2026-09-01
+(WU-19-37) when the flag-word collision it recorded turned out no longer to
+exist. **SC7** closed 2026-08-29 (`[02 R-SND-01 §1]`). **SC5** is closed but its
 divergence is still in the code.
 
 ---
@@ -411,27 +413,58 @@ the corrected table.
 
 ---
 
-## SC16 — No runtime bit corresponds to `[07 §9]`'s active-state `0x20`
+## SC16 — the active-state `0x20` bit (closed); the empty-current-task field (open)
 
-**Status:** open — decider: static trace reconciling the runtime flag word with `[07 §9]`'s active-state bit. `[07 §8]` records the bit and the empty-current-task field as established for retail with no counterpart in our flag word; `INBUILDSTANCE` and the active-state bit cannot both be `0x20`.
+**Status:** the active-state half is **closed** (WU-19-37, 2026-09-01) — the
+flag-word collision it recorded no longer exists and `hud.isInspectable` gates
+on the bit. The empty-current-task half stays **open** — decider: a static
+trace of the inspect predicate's second compare, naming the field it reads and
+what an idle unit holds in it.
 
 **Spec** `[07 §9]`: the shared selection eligibility predicate, and the
 own-unit inspect predicate behind `cursorselect` in `[07 §8]`, test "the
-active-state bit `0x20` of unit runtime flags".
+active-state bit `0x20` of unit runtime flags" and an empty current-task field.
 
-**Observed:** in this repo bit `0x20` of `units.Unit.Flags` is already claimed
-by `construction.FlagInBuildStance` (`1 << 5`, COB port 5 `INBUILDSTANCE`,
-`[04 §4.4]`), and no code path sets an active-state bit. Gating on `0x20`
-would make the inspect predicate permanently false and would make the
-`cursorselect` shape unreachable.
+**Observed (superseded).** This entry previously read: "in this repo bit `0x20`
+of `units.Unit.Flags` is already claimed by `construction.FlagInBuildStance`
+(`1 << 5`, COB port 5 `INBUILDSTANCE`, `[04 §4.4]`), and no code path sets an
+active-state bit. Gating on `0x20` would make the inspect predicate permanently
+false and would make the `cursorselect` shape unreachable." Its decision was
+"`hud.isInspectable` gates on ownership plus completed construction only … Do
+not 'fix' it by testing `0x20` until the runtime flag word is reconciled with
+`[07 §9]`".
 
-**Decision:** `hud.isInspectable` gates on ownership plus completed
-construction only, with a `TODO(question)` naming both missing gates. Do not
-"fix" it by testing `0x20` until the runtime flag word is reconciled with
-`[07 §9]` — `INBUILDSTANCE` and the active-state bit cannot both be `0x20`.
+Both halves of that observation are now wrong. `construction.FlagInBuildStance`
+no longer exists: the COB port's INBUILDSTANCE is the separate
+`units.Unit.InBuildStance` byte. Bit `0x20` of `units.Unit.Flags` is
+`units.ClassifierEligibleStatus`, written by the allocator initializer, cleared
+by death finalization, cleared for a scripted unit by the InitialMission
+postlude and set again by `MakeSelectable`
+(`[R-P0-04 "Runtime eligibility bit lifecycle"]`, `[04 §3.6]`,
+`[08 R-TRIG-01 §3]`). Nothing collides, the bit is set on every live unit, and
+a capture on Coast to Coast confirms `cursorselect` resolves over an own idle
+unit and falls back to `cursornormal` with the bit cleared.
 
-**Falsifies:** nothing in the spec; it records that a `[07 §9]` gate has no
-implementable counterpart yet.
+**Observed (the half that remains).** `units.Unit.OrderGuard` is this build's
+per-unit order-guard float, and `internal/orders/pump.go` writes it `1.0`
+whenever the primary queue is non-empty. An idle unit's primary queue holds a
+`Standby` node, so the guard is nonzero for every idle unit. Gating
+`hud.isInspectable` on it therefore makes `cursorselect` unreachable — the same
+failure this entry originally warned about for the bit. Note the wider
+consequence: `[07 §9]` gives the *rectangle selection* the same
+compare-to-`0.0`, so if the guard's writer were right, retail's bulk selection
+would select nothing either. `units.Unit.Eligible` reduces bit + guard together
+and, before WU-19-37, had no production caller at all, which is why the
+contradiction had not surfaced.
+
+**Decision:** `hud.isInspectable` gates on ownership, completed construction
+and the active-state bit `0x20`. It does **not** gate on `OrderGuard`; a
+`TODO(question)` at the site records why. Do not add that clause until either
+the guard's writer is reconciled with `[07 §9]` (is `Standby` "an order being
+processed"?) or the current-task field is identified as a different word.
+
+**Falsifies:** its own earlier "Observed" and "Decision" blocks, quoted above.
+Nothing in the spec.
 
 ---
 

@@ -6,7 +6,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/session"
 )
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TestRetailAllyIconFrame locks the ally-icon frame chooser. TEAMICONSx holds
 // six symbols as twelve frames, the odd frame split in half and the even frame
 // whole, so the count of configured rows sharing an alliance decides which of
 // the pair a row shows.

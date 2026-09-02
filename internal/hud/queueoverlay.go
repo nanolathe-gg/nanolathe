@@ -12,9 +12,9 @@ import (
 )
 
 // QueueOverlayMask is the five-bit helper mask used by retail's descriptor
-// walker [07 §9][R-P0-11 §3].  The runtime writer for descriptor mask bytes is
-// not recovered; only the established/support-inference mappings below are
-// enabled.
+// walker [07 §9][R-P0-11 §3].  There is no separate runtime writer for the mask
+// byte: the runtime table is built from the static records whose census is
+// queueDescriptors below.
 type QueueOverlayMask uint32
 
 const (
@@ -72,21 +72,45 @@ type QueuePrimitive struct {
 	DashAge    uint32
 	IconFrame  int32
 	IconKnown  bool
+	// IconCursor is the order descriptor's icon byte, which indexes the same
+	// twenty-two-slot cursor handle array the software pointer uses: the icon
+	// helper blits `cursorHandles[iconByte]`'s current frame at the order's
+	// anchor [R-P0-11 §3][07 §8].  It is nonzero on every icon primitive,
+	// because an icon byte of zero is exactly the "no icon" encoding.
+	IconCursor uint8
 }
 
-// QueueOverlayOptions supplies the two camera/content facts not carried by a
+// QueueOverlayOptions supplies the camera/content facts not carried by a
 // generic frame.  A missing callback suppresses only the affected helper;
 // it never invents a footprint, range, circle radius, or GAF frame.
+//
+// TrackedUnit, PageUnit and HoveredUnit are the walker's first three
+// privileged sources [R-P0-11 §3].  All three are presentation-owned pointer
+// and camera state — the follow camera's tracked slot [07 R-CAM-01 §12], the
+// command page's subject, and the same hover word the footer's first hover
+// source reads [07 R-HUD-03 §1] — so none of them crosses the publication
+// boundary and none may be reconstructed from the live pool [I6].  PageUnit
+// defaults to the committed `CommandPage.Builder` when it is left zero.
 type QueueOverlayOptions struct {
 	Tick        uint32
 	ShiftHeld   bool
 	LocalOwner  uint8
+	TrackedUnit pool.Handle
+	PageUnit    pool.Handle
 	HoveredUnit pool.Handle
 	Project     func(x, y, z numeric.Fixed) QueuePoint
 	BuildRect   func(frame.OrderView) (QueueRect, bool)
 	Circle      func(frame.OrderView) (int32, bool)
-	Icon        func(frame.OrderView, uint32) (int32, bool)
-	Range       func(frame.UnitView) (int32, bool)
+	// Icon resolves the animated cursor-GAF frame index for one icon byte.
+	// The client owns the artwork, so it owns both the frame count and the
+	// ticks-per-frame the index is formed from [R-P0-11 §3].
+	Icon  func(cursorIndex uint8, tick uint32) (int32, bool)
+	Range func(frame.UnitView) (int32, bool)
+	// Builder reports whether a unit's definition carries the builder
+	// capability.  It gates the marker-only fallback alone [R-P0-11 §3]; a nil
+	// callback therefore suppresses that fallback rather than admitting every
+	// local unit.
+	Builder func(frame.UnitView) bool
 }
 
 // QueueOverlay returns stable queue instructions while Shift is held.  The
@@ -110,18 +134,36 @@ func QueueOverlay(f *frame.Frame, opt QueueOverlayOptions) []QueuePrimitive {
 	for _, h := range f.Selection.Handles {
 		selected[h] = true
 	}
-	// Queue overlays walk the local slice.  The marker-only path is only
-	// meaningful when the immutable command page identifies a builder context
-	// or a selected queue already contains a build order [R-P0-11 §3].
-	// IsBuilding alone is insufficient: factories, mexes, and other fixed
-	// structures are not necessarily builders.
-	hasBuilder := false
-	if f.CommandPage.Builder != 0 {
-		_, hasBuilder = units[f.CommandPage.Builder]
+	// The walker's privileged sources, in the order [R-P0-11 §3] lists them:
+	// the follow camera's tracked unit, the unit whose command page is open,
+	// the hovered unit id, and every selected unit.  All four get the full
+	// five-bit mask `0x1F`; every other local unit gets marker-only `1`.
+	//
+	// The earlier reading here gave a selected unit only marker+dash and
+	// reserved the full mask for the hovered one.  §3 corrects both halves:
+	// "single-selected" was misleading — *every* selected unit gets the full
+	// mask — and the tracked and command-page units are privileged too.
+	page := opt.PageUnit
+	if page == 0 {
+		page = f.CommandPage.Builder
 	}
-	if !hasBuilder {
-		for h := range selected {
-			if _, ok := units[h]; ok && hasBuildOrder(f.OrderQueues, h) {
+	privileged := [3]pool.Handle{opt.TrackedUnit, page, opt.HoveredUnit}
+
+	// The marker-only fallback runs only when a builder context exists,
+	// "defined precisely as: at least one of (1), (2), (3) resolves to a live
+	// unit whose definition carries the builder capability" [R-P0-11 §3].  Note
+	// the asymmetry the section spells out: the four privileged units draw
+	// their queues whether or not anything is a builder.  The previous reading
+	// accepted any live command-page unit, and otherwise any selected unit
+	// holding a build order — neither is one of the three sources, and the
+	// selection is not consulted by this test at all.
+	hasBuilder := false
+	if opt.Builder != nil {
+		for _, h := range privileged {
+			if h == 0 {
+				continue
+			}
+			if v, ok := units[h]; ok && opt.Builder(v) {
 				hasBuilder = true
 				break
 			}
@@ -135,15 +177,16 @@ func QueueOverlay(f *frame.Frame, opt QueueOverlayOptions) []QueuePrimitive {
 			continue
 		}
 		isSelected := selected[q.Unit]
-		isHovered := q.Unit == opt.HoveredUnit
+		isPrivileged := isSelected
+		for _, h := range privileged {
+			if h != 0 && h == q.Unit {
+				isPrivileged = true
+				break
+			}
+		}
 		mask := QueueOverlayMask(QueueMarkerMask)
-		if isHovered {
+		if isPrivileged {
 			mask = QueueMarkerMask | QueueDashMask | QueueCircleMask | QueueIconMask | QueueRangeMask
-		} else if isSelected {
-			// The selected queue remains a line/marker pass; hovering one of
-			// those units upgrades only that queue to the full five-bit mask
-			// [R-P0-11].
-			mask = QueueMarkerMask | QueueDashMask
 		} else if !hasBuilder {
 			continue
 		}
@@ -164,6 +207,31 @@ func QueueOverlay(f *frame.Frame, opt QueueOverlayOptions) []QueuePrimitive {
 				for i, w := range world {
 					points[i] = opt.Project(w.X, w.Y, w.Z)
 				}
+				// The bit-8 helper is also the anchor getter, and the bit-2
+				// helper's first act is to call it, so an order kind that sets
+				// bit 2 without bit 8 still runs the icon helper.  Whether an
+				// icon appears is decided by the descriptor's icon byte alone,
+				// and it is drawn before the chain that needed the anchor
+				// [R-P0-11 §3 "The dash chain's artwork, and the anchor getter
+				// that doubles as the icon"].
+				icon, iconByte := queueOrderIcon(order.Kind)
+				drawIcon := iconByte && icon != 0 && opt.Icon != nil &&
+					orderMask&(QueueDashMask|QueueIconMask) != 0
+				emitIcon := func() {
+					if !drawIcon {
+						return
+					}
+					drawIcon = false
+					frameIndex, ok := opt.Icon(icon, opt.Tick)
+					if !ok {
+						return
+					}
+					// The anchor is the order's own point — the target's
+					// position for a targeted node, the node's stored position
+					// otherwise — which is the last of this order's points.
+					center := points[len(points)-1]
+					out = append(out, QueuePrimitive{Kind: QueuePrimitiveIcon, Unit: q.Unit, List: uint8(list), Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, Center: center, IconFrame: frameIndex, IconKnown: true, IconCursor: icon})
+				}
 				// Helpers run in draw-mask bit order: marker (1), dash (2),
 				// circle (4), icon (8) [R-P0-11 §3].
 				if orderMask&QueueMarkerMask != 0 && order.BuildProduct != "" && opt.BuildRect != nil {
@@ -173,6 +241,7 @@ func QueueOverlay(f *frame.Frame, opt QueueOverlayOptions) []QueuePrimitive {
 					}
 				}
 				if orderMask&QueueDashMask != 0 {
+					emitIcon()
 					for i, p := range points {
 						// The dash chain is a sprite chain, not a line: the
 						// instruction keeps the world segment and the order's age
@@ -195,15 +264,12 @@ func QueueOverlay(f *frame.Frame, opt QueueOverlayOptions) []QueuePrimitive {
 						}
 					}
 				}
-				if orderMask&QueueIconMask != 0 && opt.Icon != nil {
-					if icon, ok := opt.Icon(order, opt.Tick); ok {
-						center := points[len(points)-1]
-						out = append(out, QueuePrimitive{Kind: QueuePrimitiveIcon, Unit: q.Unit, List: uint8(list), Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, Center: center, IconFrame: icon, IconKnown: true})
-					}
+				if orderMask&QueueIconMask != 0 {
+					emitIcon()
 				}
 			}
 		}
-		if (isSelected || isHovered) && opt.Range != nil {
+		if isPrivileged && opt.Range != nil {
 			if radius, ok := opt.Range(u); ok && radius > 0 {
 				center := opt.Project(u.X, u.Y, u.Z)
 				for _, chord := range circle15(center, radius) {
@@ -215,38 +281,122 @@ func QueueOverlay(f *frame.Frame, opt QueueOverlayOptions) []QueuePrimitive {
 	return out
 }
 
-func hasBuildOrder(queues []frame.OrderQueueView, unit pool.Handle) bool {
-	for _, q := range queues {
-		if q.Unit != unit {
-			continue
-		}
-		for _, list := range [][]frame.OrderView{q.Primary, q.Secondary} {
-			for _, o := range list {
-				if o.BuildProduct != "" {
-					return true
-				}
-			}
-		}
-	}
-	return false
+// queueDescriptor is one order descriptor's two overlay bytes: the draw-mask
+// word and the icon byte [R-P0-11 §3].
+type queueDescriptor struct {
+	mask QueueOverlayMask
+	icon uint8
+}
+
+// queueDescriptors is the per-kind census of the order-descriptor table's two
+// overlay bytes, transcribed from [04 §3.1]'s sixty-seven-record table (the
+// reject sentinel's empty name excluded).
+//
+// [04 §3.1] names them "a small class parameter" — with a `TODO(question)`
+// recording that a bounded census over 3901 function boundaries found no
+// reader — and "an acknowledgement group index". [R-P0-11 §3] identifies both
+// readers: the class parameter is the overlay's **draw-mask word** and the
+// acknowledgement group is the **icon byte** that indexes the cursor handle
+// array. Its independent transcription of the ground-state and VTOL static
+// tables agrees with [04 §3.1] on all forty-four shared rows, which is what
+// closes the identification. The `TODO(question)` in [04 §3.1] and on
+// `orders.Descriptor.Class` therefore has an answer and belongs to that
+// section's owner to retire.
+//
+// This replaces a five-row table whose default carried its own
+// `TODO(question)` about the "runtime descriptor mask writer": there is no
+// separate writer, the runtime table is built from these static records.
+//
+// The five bits dispatch marker (1), dash (2), circle (4), icon (8) and range
+// rings (16) [R-P0-11 §3]. An icon byte of 0 is the "no icon" encoding rather
+// than cursor slot 0 — MOBILEBUILD and VTOL_MOBILEBUILD are the only records
+// carrying it, which is why a queued build site shows the marker and the
+// `pathicon` chain but no order icon. A mask of 0 draws nothing however
+// privileged the unit; no stock record sets the circle bit.
+//
+// The same two bytes live on `internal/orders`' descriptor table as `Class`
+// and `AckGroup`; `TestQueueDescriptorCensusMatchesOrderTable` pins the two
+// together rather than making presentation import the order package.
+var queueDescriptors = map[string]queueDescriptor{
+	"Activate":           {0x00, 19},
+	"AirStrike":          {0x08, 2},
+	"AirToAir":           {0x08, 1},
+	"AirToGround":        {0x08, 1},
+	"AirToGroundHover":   {0x08, 1},
+	"Attack_Chase":       {0x08, 1},
+	"Attack_Kamikaze":    {0x08, 1},
+	"Attack_NoMove":      {0x08, 1},
+	"AttackSpecial":      {0x08, 1},
+	"AttackUType":        {0x00, 19},
+	"BeCarried":          {0x00, 19},
+	"BuildingBuild":      {0x00, 19},
+	"BuildWeapon":        {0x00, 19},
+	"Capture":            {0x08, 4},
+	"Cloak_Off":          {0x00, 19},
+	"Cloak_On":           {0x00, 19},
+	"Deactivate":         {0x00, 19},
+	"Follow_Ground":      {0x12, 5},
+	"GetBuilt":           {0x00, 19},
+	"Ground_Pickup":      {0x08, 12},
+	"Ground_Unload":      {0x08, 13},
+	"Guard_NoMove":       {0x00, 19},
+	"HelpBuild":          {0x18, 6},
+	"MakeSelectable":     {0x00, 19},
+	"MobileBuild":        {0x13, 0},
+	"Move_Ground":        {0x12, 14},
+	"Paralyze":           {0x00, 19},
+	"Park":               {0x00, 14},
+	"Patrol":             {0x12, 7},
+	"QMove":              {0x02, 14},
+	"QPatrol":            {0x02, 7},
+	"Reclaim":            {0x12, 11},
+	"ReclaimUnit":        {0x12, 11},
+	"RepairPatrol":       {0x12, 7},
+	"RepairUnit":         {0x12, 6},
+	"RepairUnitNoMove":   {0x18, 6},
+	"Resurrect":          {0x12, 11},
+	"SelfDestruct":       {0x00, 19},
+	"SelfDestructFG":     {0x00, 19},
+	"SelfRepair":         {0x00, 19},
+	"Standby":            {0x10, 15},
+	"Standby_Mine":       {0x10, 15},
+	"Standing_FireOrder": {0x00, 19},
+	"Standing_MoveOrder": {0x00, 19},
+	"Stop":               {0x00, 19},
+	"Suppress":           {0x08, 1},
+	"Teleport":           {0x08, 9},
+	"VTOL_Evade":         {0x00, 19},
+	"VTOL_Follow":        {0x02, 5},
+	"VTOL_GetRepaired":   {0x00, 19},
+	"VTOL_HelpBuild":     {0x08, 6},
+	"VTOL_LandIfCan":     {0x00, 19},
+	"VTOL_Landing":       {0x08, 14},
+	"VTOL_MobileBuild":   {0x03, 0},
+	"VTOL_Move":          {0x02, 14},
+	"VTOL_Patrol":        {0x02, 7},
+	"VTOL_Pickup":        {0x08, 8},
+	"VTOL_Reclaim":       {0x02, 11},
+	"VTOL_ReclaimUnit":   {0x02, 11},
+	"VTOL_RepairPatrol":  {0x02, 7},
+	"VTOL_RepairUnit":    {0x02, 6},
+	"VTOL_SeekAttack":    {0x00, 19},
+	"VTOL_SeekGuard":     {0x00, 19},
+	"VTOL_Standby":       {0x00, 15},
+	"VTOL_Unload":        {0x08, 9},
+	"Wait":               {0x00, 19},
+	"WaitForAttack":      {0x00, 19},
 }
 
 func queueOrderMask(kind string) QueueOverlayMask {
-	switch kind {
-	case "MobileBuild":
-		return QueueMarkerMask | QueueDashMask | QueueRangeMask
-	case "VTOL_MobileBuild":
-		return QueueMarkerMask | QueueDashMask
-	case "Move_Ground", "Patrol":
-		return QueueDashMask | QueueRangeMask
-	case "QMove", "QPatrol":
-		return QueueDashMask
-	default:
-		// TODO(question): runtime descriptor mask writer and attack-family
-		// helper assignments are unresolved [R-P0-11 §3]. Suppress them rather
-		// than guess a line/icon/color.
-		return 0
-	}
+	return queueDescriptors[kind].mask
+}
+
+// queueOrderIcon returns the descriptor's icon byte and whether the kind has a
+// census row at all.  A row with icon 0 is a kind that deliberately draws no
+// icon [R-P0-11 §3].
+func queueOrderIcon(kind string) (uint8, bool) {
+	d, ok := queueDescriptors[kind]
+	return d.icon, ok
 }
 
 func orderWorldPoints(o frame.OrderView) []QueueWorldPoint {

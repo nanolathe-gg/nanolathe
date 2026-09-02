@@ -2,8 +2,8 @@ package main
 
 import "testing"
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TestRetailStricmpOrdersMapNames locks the comparison the map-list sort uses
+// on the packed MAPNAMES list: the runtime's own ASCII-only case fold, which is
 // neither locale- nor Unicode-aware.
 func TestRetailStricmpOrdersMapNames(t *testing.T) {
 	cases := []struct {
@@ -25,7 +25,8 @@ func TestRetailStricmpOrdersMapNames(t *testing.T) {
 	}
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TestRetailScrollbarKnobSize locks the knob length the scrollbar sizer
+// computes:
 // round(visible/total * (barLength-3)), clamped up to ten pixels.
 func TestRetailScrollbarKnobSize(t *testing.T) {
 	// SELMAP's SLIDER is 203 tall and its list shows 12 of 99 maps.

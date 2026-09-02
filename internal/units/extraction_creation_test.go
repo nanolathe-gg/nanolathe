@@ -142,6 +142,31 @@ func TestCreatorSamplesExtractionForEveryCreationPath(t *testing.T) {
 	}
 }
 
+// TestCreatorSamplesAnExtractorAgainstTheMapEdge is the creator's half of
+// [05 R-PROD-01 §6]'s per-cell bounds test: an extractor whose stamped
+// rectangle leaves the map keeps the sum of the cells that are on it. The
+// partial sum matters because the settlement reads the stored rate and never
+// `extractsmetal` [05 R-PROD-01 §1] — a rejected sample is silently a
+// non-extractor.
+func TestCreatorSamplesAnExtractorAgainstTheMapEdge(t *testing.T) {
+	const surfaceMetal = 3
+	ter := seededTerrain(t, surfaceMetal) // eight by eight
+	def := extractorFixtureDef(1, 3, 3)
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}}
+	w := newFixtureWorld(4, cat)
+	w.SetExtractionSampler(ter)
+
+	// Cell 0 with a three-wide footprint starts the rectangle at cell -1, so
+	// one column and one row lie off the map and four cells remain.
+	h, err := w.Create(def, 0, cellCentre(0), 0, cellCentre(0))
+	if err != nil {
+		t.Fatalf("create at the map corner: %v", err)
+	}
+	if got, want := w.Unit(h).SpotMetal, float32(4*(surfaceMetal+1)); got != want {
+		t.Fatalf("an extractor on the map corner read rate %v, want %v — the four covered cells, off-map coordinates contributing nothing [05 R-PROD-01 §6]", got, want)
+	}
+}
+
 // TestCreatorLeavesNonExtractorsAlone locks the gate: the sample runs only when
 // the definition's `extractsmetal` is strictly greater than zero, and the
 // script notification is part of the same act, so a non-extractor's script is
