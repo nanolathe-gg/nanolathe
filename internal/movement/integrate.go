@@ -1779,12 +1779,30 @@ func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 	s.bindRectSteeringGoal(u, head, goalObj, fx, fz)
 	if route := s.Routes[u.Handle]; route != nil && !selectedPoint {
 		goalPointX, goalPointZ, haveGoalPoint := groundGoalPoint(goalObj, u, fx, fz)
-		installGroundGoal(route, u, goalObj, goalPointX, goalPointZ, haveGoalPoint, true, s.staticObstacleRevision(), s.tick)
+		installGroundGoal(route, u, goalObj, goalPointX, goalPointZ, haveGoalPoint, allowSyntheticFor(head), s.staticObstacleRevision(), s.tick)
 		route.LastRequestTick = s.tick
 	}
 	s.submitGoalForOrder(u, start, goalObj, token)
 	s.bindArrivalHandle(u, head)
 	return true
+}
+
+// allowSyntheticFor is the goal installer's gate on the synthetic straight-line
+// fallback, written as [04 R-PATH-01 §8] step 5.3 writes it: the fallback runs
+// only "if the unit has a current order record and that record's retiring flag
+// is clear". [05 R-EGRESS-02] names the retiring flag — it is the pump's code-9
+// completion flag, `orders.FlagRetryMark`, set on every record the pump re-arms
+// (and on the ones it frees) before it resets the phase [04 R-ORDER-02 §1].
+//
+// So the fallback is suppressed for exactly the records the pump has already
+// declared complete. That is what keeps a blocked mover still: the 30-59-tick
+// re-arm loop of [04 R-EGRESS-01] reinstalls the goal on every cycle, and
+// without this gate each reinstall handed the mover a fresh two-point straight
+// line at a goal it cannot occupy — it lurched, emitted StartMoving/MoveRate
+// and stopped again, once per cycle, forever. Retail's blocked followers
+// "re-arm every 30 ticks against a goal they cannot occupy and idle in place".
+func allowSyntheticFor(head *orders.Node) bool {
+	return head != nil && head.Flags&orders.FlagRetryMark == 0
 }
 
 // bindRectSteeringGoal is the rectangle-perimeter case of the goal-handle bind
@@ -1857,7 +1875,7 @@ func (s *System) ReplanMove(u *units.Unit, head *orders.Node) bool {
 	s.bindRectSteeringGoal(u, head, goalObj, fx, fz)
 	if route := s.Routes[u.Handle]; route != nil && !selectedPoint {
 		goalPointX, goalPointZ, haveGoalPoint := groundGoalPoint(goalObj, u, fx, fz)
-		installGroundGoal(route, u, goalObj, goalPointX, goalPointZ, haveGoalPoint, true, s.staticObstacleRevision(), s.tick)
+		installGroundGoal(route, u, goalObj, goalPointX, goalPointZ, haveGoalPoint, allowSyntheticFor(head), s.staticObstacleRevision(), s.tick)
 		route.LastRequestTick = s.tick
 	}
 	s.submitGoalForOrder(u, start, goalObj, token)

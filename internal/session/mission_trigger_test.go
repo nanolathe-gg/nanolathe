@@ -148,7 +148,6 @@ func TestMissionTriggerDeadlineLatchAndCue(t *testing.T) {
 	s.publication = newPublicationState(frame.NewEventBuffer(frame.Limits{}))
 	s.Latch = NewEndLatch()
 	s.LocalOwner = 9 // prove the session table, not this adapter field, owns local identity.
-	s.Econ.Players[0].WinLoseTime = 0
 	for _, u := range s.Units.IterSliced() {
 		if u != nil && u.Owner == 1 {
 			s.Units.Destroy(u.Handle, units.DeathKilled)
@@ -156,21 +155,38 @@ func TestMissionTriggerDeadlineLatchAndCue(t *testing.T) {
 		}
 	}
 
-	s.pollMissionTriggers(0)
-	if s.Latch.Countdown != 4 || s.Econ.Players[0].WinLoseTime != 30 {
-		t.Fatalf("first true due did not arm to four and advance by 30: latch=%+v due=%d", s.Latch, s.Econ.Players[0].WinLoseTime)
+	// The end-condition block has no deadline of its own: it rides the local
+	// slot's settlement due [08 R-TRIG-01 §6]. Wrapping the seam records the
+	// ticks it actually fires on, so the cadence is asserted through the same
+	// settlement loop the battle runs, not by calling the poll by hand.
+	var fired []uint32
+	s.Econ.EndCondition = func(player int, tick uint32) {
+		if local, ok := s.triggerLocalPlayer(); ok && local == player {
+			fired = append(fired, tick)
+		}
+		s.endConditionBlock(player, tick)
 	}
-	s.pollMissionTriggers(29)
-	if s.Latch.Countdown != 4 || s.Econ.Players[0].WinLoseTime != 30 {
-		t.Fatalf("non-due poll changed state: latch=%+v due=%d", s.Latch, s.Econ.Players[0].WinLoseTime)
-	}
-	for _, tick := range []uint32{30, 60, 90, 120} {
-		s.pollMissionTriggers(tick)
-		if s.Latch.IsEnding() {
-			t.Fatalf("latched before sixth true due at tick %d", tick)
+	for tick := uint32(0); tick <= 150; tick++ {
+		s.tickPlayers(tick)
+		switch {
+		case tick < 150 && s.Latch.IsEnding():
+			t.Fatalf("latched before the sixth true due at tick %d", tick)
+		case tick == 0 && s.Latch.Countdown != 4:
+			t.Fatalf("first true due did not arm to four: latch=%+v", s.Latch)
+		}
+		if s.Econ.Players[0].WinLoseTime != 0 {
+			t.Fatalf("WinLoseTime advanced at tick %d: it is persisted-only [08 R-TRIG-01 §6], got %d", tick, s.Econ.Players[0].WinLoseTime)
 		}
 	}
-	s.pollMissionTriggers(150)
+	want := []uint32{0, 30, 60, 90, 120, 150}
+	if len(fired) != len(want) {
+		t.Fatalf("end-condition block fired on %v, want exactly the settlement dues %v", fired, want)
+	}
+	for i := range want {
+		if fired[i] != want[i] {
+			t.Fatalf("end-condition block fired on %v, want exactly the settlement dues %v", fired, want)
+		}
+	}
 	if !s.Latch.IsEnding() || !s.Latch.IsWin() || s.Latch.Countdown != -1 {
 		t.Fatalf("sixth true due did not latch exact win: %+v", s.Latch)
 	}

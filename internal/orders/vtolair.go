@@ -192,9 +192,10 @@ func maxDamageOf(u *units.Unit) uint32 {
 // sequence [04 R-AIR-01 §8] followed by the hand-off to their legs. The entry
 // sequence itself — the per-order interrupt mask, the per-visit cached-goal
 // refresh, and the inclusive whole-world-unit maneuver leash — is WU-18-4's
-// `airEntry`, reused rather than re-derived, and it carries that unit's two
-// open questions (the step-1/step-2 `VTOL_SeekAttack` replacements, and
-// `AirToAir`'s unstated interrupt mask).
+// `airEntry`, reused rather than re-derived. Its step-1/step-2
+// `VTOL_SeekAttack` replacements were closed by [04 R-AIR-01 §16]; the one
+// open question it still carries is `AirToAir`'s unstated interrupt mask
+// (see `airInterruptMask` below).
 func airAttackExecutorHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	if code, done := airEntry(u, n, satisfied, airInterruptMask(n.ID)); done {
 		return code

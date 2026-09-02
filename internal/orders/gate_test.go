@@ -42,7 +42,10 @@ func gateFixture() (*Queue, *units.Unit) {
 //
 // The relationship asserted is per descriptor, over the table's own slice
 // order (I1): the static mask survives on the record's own copy field
-// [04 §3.2], and the dynamic gate is empty.
+// [04 §3.2], except that the constructor clears bit 9 (0x200) when the push
+// below supplies no target — [04 §3.1]'s "constructed without a target unit
+// clears it", applied by newNode [04 R-MOV-03 §7] (WU-19-110) — and the
+// dynamic gate is empty.
 func TestFreshRecordAwaitsNothing(t *testing.T) {
 	masked := 0
 	for id := range Table() {
@@ -51,7 +54,7 @@ func TestFreshRecordAwaitsNothing(t *testing.T) {
 			continue // the reject sentinel is never inserted [04 §3.1]
 		}
 		q, u := gateFixture()
-		q.Push(ID(id), Node{Owner: u.Handle})
+		q.Push(ID(id), Node{Owner: u.Handle}) // no target supplied
 		if q.LenPrimary()+q.LenSecondary() != 1 {
 			t.Fatalf("%s: push queued %d records, want one", desc.Name, q.LenPrimary()+q.LenSecondary())
 		}
@@ -64,8 +67,9 @@ func TestFreshRecordAwaitsNothing(t *testing.T) {
 		if n.DynamicGate != 0 {
 			t.Fatalf("%s: fresh dynamic gate = %#x, want 0 [04 R-ORD-01 §1]", desc.Name, n.DynamicGate)
 		}
-		if n.StaticGate != desc.StaticGate {
-			t.Fatalf("%s: static-mask copy = %#x, want the descriptor's %#x [04 §3.2]", desc.Name, n.StaticGate, desc.StaticGate)
+		wantStatic := desc.StaticGate &^ staticTargetObserver // no target supplied [04 §3.1][04 R-MOV-03 §7]
+		if n.StaticGate != wantStatic {
+			t.Fatalf("%s: static-mask copy = %#x, want the descriptor's %#x with bit 9 cleared (no target supplied) [04 §3.1][04 R-MOV-03 §7]", desc.Name, n.StaticGate, wantStatic)
 		}
 		if n.Satisfied != 0 {
 			t.Fatalf("%s: fresh pending word = %#x, want 0 [04 R-ORD-01 §1]", desc.Name, n.Satisfied)
@@ -76,6 +80,38 @@ func TestFreshRecordAwaitsNothing(t *testing.T) {
 	}
 	if masked == 0 {
 		t.Fatal("no descriptor carries a nonzero static mask; the fixture proves nothing")
+	}
+}
+
+// TestNewNodeClearsTargetSuppliedBitWithoutATarget locks the constructor clear
+// [04 §3.1]'s "0x200 cleared when the order is constructed without a target
+// unit", closed by [04 R-MOV-03 §7] and applied by newNode in WU-19-110: a
+// record built with no target has static bit 9 (staticTargetObserver) clear
+// regardless of what the descriptor carries, and a record built WITH a target
+// keeps the descriptor's mask untouched. `Capture`'s descriptor mask is 0x200
+// (bit 9 alone), so it isolates the bit.
+func TestNewNodeClearsTargetSuppliedBitWithoutATarget(t *testing.T) {
+	id := Lookup("Capture")
+	if id == 0 {
+		t.Fatal("Capture is not in the descriptor table")
+	}
+	desc := DescriptorFor(id)
+	if desc.StaticGate&staticTargetObserver == 0 {
+		t.Fatalf("Capture's static mask %#x does not carry bit 9; the fixture proves nothing", desc.StaticGate)
+	}
+
+	q, u := gateFixture()
+	q.Push(id, Node{Owner: u.Handle}) // no target supplied
+	targetless := q.Primary()[0]
+	if targetless.StaticGate&staticTargetObserver != 0 {
+		t.Fatalf("target-less record static mask = %#x, want bit 9 clear [04 §3.1][04 R-MOV-03 §7]", targetless.StaticGate)
+	}
+
+	q2, u2 := gateFixture()
+	q2.Push(id, Node{Owner: u2.Handle, Target: 7}) // target supplied
+	targeted := q2.Primary()[0]
+	if targeted.StaticGate != desc.StaticGate {
+		t.Fatalf("targeted record static mask = %#x, want the descriptor's own %#x untouched [04 §3.1][04 §3.2]", targeted.StaticGate, desc.StaticGate)
 	}
 }
 

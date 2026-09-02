@@ -871,6 +871,30 @@ func newNode(id ID, n Node) *Node {
 	if nn.StaticGate == 0 {
 		nn.StaticGate = desc.StaticGate
 	}
+	// [04 §3.1]'s constructor clear: static bit 9 (0x200, staticTargetObserver
+	// — "this record was issued against a target") is cleared on the record's
+	// own static-mask copy when no target unit was supplied to the
+	// constructor, closed by [04 R-MOV-03 §7] ("clears 0x200 from the
+	// static-mask copy when no target was supplied"). Target zero (pool.Handle's
+	// null) is this build's "no target supplied", matching every existing
+	// target-presence test in the package [04 §3.2]. This is what lets a
+	// reader distinguish "issued without a target" from "issued against a
+	// target that has since gone" by the bit alone, e.g. the shared air-attack
+	// entry's step 2 [04 R-AIR-01 §16].
+	//
+	// The same established fact lists a second constructor clear — bit 10
+	// (0x400) when no goal position was supplied — but this build's Node has
+	// no field distinguishing "no goal was supplied" from "goal supplied at
+	// the fixed-point origin", and every caller that constructs a record
+	// setting GoalX/Y/Z lives outside this file (combat.go, work.go,
+	// resolve.go, vtolwork.go, transport.go, park.go, patrol.go, standing.go
+	// — none owned by this work unit). Applying it here would mean guessing a
+	// "supplied" signal this build does not track, which is the invented
+	// behavior CLAUDE.md rule 1 forbids. Left open for whichever unit adds a
+	// goal-supplied signal at the construction call sites.
+	if nn.Target == 0 {
+		nn.StaticGate &^= staticTargetObserver
+	}
 	// Survivorship is a property of the record's descriptor, not of the queue
 	// modifier that inserted it. This used to be set from the caller's
 	// queued/non-queued flag instead, which had the two halves of [04 §3.3]

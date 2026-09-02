@@ -583,6 +583,64 @@ func (c *Catalog) ResolveCategoryMask(name string) (CategoryMask, bool) {
 	return c.Category(name)
 }
 
+// RestrictToCreatable applies a campaign unit restriction to the compiled
+// unit table: the definitions named survive, every other definition is removed,
+// and the survivors are re-sorted and renumbered [08 R-ENTRY-01 §2 step 4]
+// [05 R-SHARE-01 §8].
+//
+// Retail expresses the restriction as a per-definition *creatable* bit — the
+// same runtime bit the unit allocator's second test reads. Its loader clears
+// the bit on every record from index 1 upward (the `None` sentinel at index 0
+// keeps it), sets it again for the first record whose `unitname` matches each
+// listed name, case-insensitively, and then the battle-entry catalog compile
+// that runs afterwards compacts every bit-clear record out of the table and
+// re-sorts and renumbers what is left. A compiled table therefore carries the
+// bit on every record it holds, so the bit is *not* the mechanism: the
+// mechanism is the removal, and the allocator's bit test stays the cheap
+// invariant it is in retail. This method is that compaction. An excluded
+// definition has no unit index, no build-menu button and cannot be spawned by
+// name [05 R-SHARE-01 §8 "Consequence"].
+//
+// The map is keyed by canonical unit name, so retail's "first record whose
+// `unitname` matches" is exact rather than approximated: one record can carry
+// a given name. Names that match no definition are ignored, as they are in
+// retail, where a `[name]` section with no matching record sets nothing.
+//
+// The restriction lasts one battle: retail rebuilds the table from the FBI
+// files before every battle, so callers apply this to a clone and never to a
+// shared compiled catalog.
+func (c *Catalog) RestrictToCreatable(names []string) error {
+	if c == nil || c.Units == nil {
+		return nil
+	}
+	keep := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		ck := CanonicalKey(n)
+		if ck == "" {
+			continue
+		}
+		if _, ok := c.Units[ck]; ok {
+			keep[ck] = struct{}{}
+		}
+	}
+	for _, k := range c.SortedUnitKeys() { // deterministic removal order (I1)
+		if _, ok := keep[k]; !ok {
+			delete(c.Units, k)
+		}
+	}
+	// Re-sort and renumber: CompileCategories restamps every survivor's
+	// 1-based UnitDefID from the sorted canonical keys and rebuilds the
+	// membership masks and per-definition digests over the compacted table.
+	reg, err := CompileCategories(c.Units)
+	if err != nil {
+		return err
+	}
+	c.Categories = reg
+	// The catalog digest covers definition identity, and identity moved.
+	c.Hash = catalogHash(c)
+	return nil
+}
+
 // SortedUnitKeys returns the unit catalog keys sorted ascending (I1) [02 §5].
 // The slice is a copy; mutations do not affect the catalog.
 func (c *Catalog) SortedUnitKeys() []string {
@@ -786,6 +844,23 @@ func (c *Catalog) Clone() *Catalog {
 	}
 	if c.Meteor != nil {
 		out.Meteor = cloneMeteor(c.Meteor)
+	}
+	// Sight shapes deep copy [03 §3.2]. This was missing: a clone came back
+	// with no sight shapes at all, and the session installs them from the
+	// catalog it runs on, so any consumer of a cloned catalog lost the
+	// quantized sprite masks and fell back to whatever a nil table means.
+	if c.Sight != nil {
+		cp := *c.Sight
+		if c.Sight.Shapes != nil {
+			cp.Shapes = make([]SightShape, len(c.Sight.Shapes))
+			for i, sh := range c.Sight.Shapes {
+				cp.Shapes[i] = sh
+				if sh.Opaque != nil {
+					cp.Shapes[i].Opaque = append([]bool(nil), sh.Opaque...)
+				}
+			}
+		}
+		out.Sight = &cp
 	}
 	// Model catalog copy
 	if c.sortedModels != nil {

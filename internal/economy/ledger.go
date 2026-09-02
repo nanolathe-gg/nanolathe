@@ -44,7 +44,12 @@ type Player struct {
 	AIProduction  [2]float32
 	AIConsumption [2]float32
 	UpdateTime    uint32 // settlement deadline [05 "Authoritative settlement order"] [GAP T1]
-	WinLoseTime   uint32 // sibling deadline used by mission evaluation [08 "Evaluation"]
+	// WinLoseTime is a persisted-only sibling word: battle init seeds it with
+	// the other two deadlines and the save reader restores it, but no gameplay
+	// site reads or advances it — the end-condition block rides UpdateTime
+	// [08 R-TRIG-01 §6][08 "Player records"]. It is kept because the save
+	// writer emits it.
+	WinLoseTime   uint32
 	DisplayTimer  uint32 // HUD refresh deadline [05 "Saving economy, construction, and features"]
 	Waste         [2]float64
 	TotalProduced [2]float64
@@ -98,8 +103,9 @@ type Player struct {
 	// the inactive-or-not-watching test, and a session with no human
 	// participant arms from the post-loop site [08 R-SKIR-01 §3] "Defeat
 	// detection". Nanolathe's session does exactly that — the campaign trigger
-	// poll runs on the local record's WinLoseTime due and the skirmish result
-	// evaluation on its own 30-tick due, and each mirrors the latch's ending
+	// poll runs on the local record's UpdateTime due, through the EndCondition
+	// seam inside this very deadline block [08 R-TRIG-01 §6], and the skirmish
+	// result evaluation on its own 30-tick due, and each mirrors the latch's ending
 	// flag and countdown onto all ten records — so an unarmed session leaves
 	// the gate permanently satisfied, which is what an in-progress game is.
 	// The semantic names of the retail flag bits beyond `0x04` stay open as
@@ -136,6 +142,16 @@ type Service struct {
 	EconomySelector  *int // difficulty selector: 0 easy, 1 medium, 2 hard [R-ECO-01 §3]
 	Networked        bool // networked-session gate for automatic sharing [R-SHARE-01 §3]
 
+	// EndCondition is the end-condition block of [08 R-TRIG-01 §6]: the
+	// victory and defeat polls, the shared countdown and the end latch. It is
+	// invoked from inside a slot's settlement deadline block, after the
+	// deadline advance and before the settlement gate chain, and only on a due
+	// tick — that block's cadence *is* the settlement deadline, not a private
+	// word of its own. The seam exists because the block belongs to the
+	// session and economy must not import it; the callback receives the slot
+	// index and owns the local-slot test, since economy has no notion of which
+	// slot is local. A nil hook is a battle with no end conditions bound.
+	EndCondition func(player int, tick uint32)
 	// CloakCost reports a unit's per-pass cloak upkeep, or zero when the unit
 	// is not cloaked [05 "Cloak debit"] C13. It is a seam rather than a field
 	// read because the cloak state lives on the unit's runtime status and the

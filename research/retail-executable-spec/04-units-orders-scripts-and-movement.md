@@ -9769,7 +9769,12 @@ The **arrival tolerance for consuming a waypoint is therefore a radius of five
 world units, inclusive** (`dx*dx + dz*dz <= 25`), measured to `points[1]`, and
 exactly one point is consumed per tick. Pruning never writes the order's
 satisfied word; order completion is section 8.3's separate tile-versus-goal
-test, unchanged.
+test, unchanged. Re-verified against the disassembly on 2026-09-02 when
+[R-MOV-03 §2] item (2), which had restated this test in the cell domain
+against `points[0]` inside a loop, was corrected to match this section; the
+stored points are world units because their only writers — the publisher of
+[R-PATH-01 §7] and the installer's two-point fallback of [R-PATH-01 §8] —
+store world units.
 
 **The steering gate — Established.** Ground steering first asks the follower
 whether it has a waypoint (bit 0). Bit 0 is set only by route installation and
@@ -13249,16 +13254,46 @@ and the vertical component is zeroed; the update returns the position
 (1) With a payload installed, ask it whether the unit has arrived; on arrival
 raise pending `0x20` on the owning record, ask the payload whether it is
 persistent, and if not release it through the follower's owner. (2) Waypoint
-pruning: while more than one point remains and the unit's committed cell is
-within `dx² + dz² < 26` of the first point's cell (strict, cell domain), drop
-the first point (shift the rest down), and when fewer than two remain clear
-the follower's "has route" bit; every prune sets the "route changed" bit.
-(3) With a payload installed, when the mover's blocked bit is set **or** fewer
-than two points remain, arm the repath bit ([R-MOV-01 §7]). The point fill
-that feeds steering converts the stored 16-bit cell pair of each point to
-16.16 with Y zero and clamps the index to the last point. The route-release
+pruning, exactly as [R-MOV-01 §3] states it: **once** per service (no loop),
+when two or more points remain, form `dx = unitIntegerX − points[1].x` and
+`dz = unitIntegerZ − points[1].z` from the signed high words of the unit's
+16.16 X and Z and the signed 16-bit **world-unit** point being steered to,
+each difference sign-extended to 32 bits; when `dx² + dz² <= 25` (32-bit
+signed, inclusive — the same integer test as `< 26`) shift every later point
+down one slot, decrement the count, clear the has-waypoint bit (bit 0) when
+the new count is below two, and set the published/dirty bit (bit 3). The
+committed cell pair is not read, and `points[0]` — the point just left — is
+never measured. (3) With a payload installed, when the mover's blocked bit is
+set **or** fewer than two points remain, arm the repath bit (bit 1,
+[R-MOV-01 §7]); this test runs whether or not a point was consumed, on the
+post-consumption count. The point fill that feeds steering converts the
+stored 16-bit **world-unit** pair of each point to 16.16 (`x << 16`, Y zero,
+`z << 16`) and clamps the index to the last point. The route-release
 notification zeroes the follower's four route words only when the released
 route is the one it currently holds ([R-PATH-01 §8]).
+
+**Correction (2026-09-02).** The previous text of item (2) said: "while more
+than one point remains and the unit's committed cell is within
+`dx² + dz² < 26` of the first point's cell (strict, cell domain), drop the
+first point", and the point-fill sentence said the stored pair is a "16-bit
+cell pair". That contradicted [R-MOV-01 §3] and was wrong on three counts;
+the strictness was the only harmless difference. Re-reading the per-tick
+service against the disassembly: the compare is guarded by a single forward
+branch with no backward edge, so exactly one point is consumed per service;
+the two point words read are the second stored pair (`points[1]`, the point
+being steered to), not the first; and the unit words read are the signed
+integer parts of its 16.16 X and Z, not the committed cell pair, which lives
+in different fields the routine never touches. The stored points are world
+units because every writer of the array stores world units: the publisher of
+[R-PATH-01 §7] writes `16·cell + 8·FootPrint` per axis — the cell's origin
+corner offset by half the footprint, i.e. where the unit's anchor sits when
+its footprint origin is that cell — and the two-point fallback of the route
+installer ([R-PATH-01 §8]) writes the unit's own integer world X/Z as
+`points[0]` and the goal query's integer world X/Z as `points[1]`. The fill
+shifts those words straight into 16.16, which only makes sense for world
+units. The "cell domain" label was a mislabel carried over from the trace
+notes, not a second reading of the code. The arrival tolerance is therefore
+five world units inclusive, as [R-MOV-01 §3] and section 7.3 already state.
 
 ### Closed — the class-layer restamp family, exactly [R-MOV-03 §3] (2026-08-29)
 

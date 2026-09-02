@@ -54,7 +54,11 @@ func (s *Service) Tick(tick uint32, w *units.World) {
 //  4. Settlement deadline block: deadline is absolute tick compared UNSIGNED against global tick;
 //     while greater, skip slot's remaining processing; when due, advance by EXACTLY 30 BEFORE anything else runs (C2).
 //     Because the advance is a single conditional add, a slot >30 behind settles once per tick until caught up — reproduce that, do NOT loop (C2).
-//  5. Still inside deadline block: settlement gate chain, all required before Settle is called (C4).
+//  5. Still inside the deadline block and still ahead of the gate chain: the
+//     local slot's end-condition block, through the EndCondition seam
+//     [08 R-TRIG-01 §6]. The victory/defeat polls, the shared countdown and the
+//     end latch ride this one deadline — there is no second 30-tick word.
+//  6. Still inside deadline block: settlement gate chain, all required before Settle is called (C4).
 func (s *Service) TickPlayer(player int, tick uint32, w *units.World, beforeDeadline func()) {
 	if s == nil {
 		return
@@ -118,6 +122,19 @@ func (s *Service) TickPlayer(player int, tick uint32, w *units.World, beforeDead
 	// When due, advance by EXACTLY 30 BEFORE anything else in the block runs (C2).
 	// Single conditional add — do NOT loop. A slot >30 behind settles once per tick until caught up.
 	p.UpdateTime += settleInterval
+
+	// The local slot's end-condition block runs here: inside the settlement
+	// deadline block, after the advance and ahead of the gate chain
+	// [08 R-TRIG-01 §6]. The block's due tick *is* this settlement deadline —
+	// there is no separate trigger-poll or win/lose word, and an
+	// implementation that kept a private deadline would diverge after a load,
+	// because a retail save carries this one deadline and the poll resumes on
+	// its phase. Economy cannot import the session, so the block reaches it
+	// through the same callback seam as beforeDeadline; the *local* slot gate
+	// belongs to the callback, which knows which slot is local.
+	if s.EndCondition != nil {
+		s.EndCondition(player, tick)
+	}
 
 	// C4 settlement gate chain, all required before Settle. The early check already covered
 	// exists, active (three states), not observer, but settlement narrows state to two settling states

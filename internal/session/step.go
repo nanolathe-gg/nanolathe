@@ -785,9 +785,12 @@ func (s *Session) tickMeteor(tick uint32) {
 // iteration, after that player's stamp sweep [R-SENSOR-01]: because the loop
 // walks players ascending, it runs after the local player's visibility stamps
 // but before every higher-indexed player's stamps within the same tick.
-// Residual delta from [R-SENSOR-01]'s exact retail ordering: nanolathe's
-// 30-tick victory/defeat polling runs in the per-player before-hook (before
-// that player's work) rather than after the stamp sweep, and the per-tick
+// The campaign end-condition poll no longer rides this before-hook: it runs
+// inside the settlement deadline block, after the local slot's UpdateTime
+// advance and before that slot's settlement gate chain, through
+// economy.Service.EndCondition [08 R-TRIG-01 §6].
+//
+// Residual delta from [R-SENSOR-01]'s exact retail ordering: the per-tick
 // minimap contacts pass and mapped-minimap rebuild are presentation-side and
 // have no sim counterpart here. No economy after-hook is required — the
 // position after stampPlayerSlice is session-owned loop body. The pass runs
@@ -801,6 +804,14 @@ func (s *Session) tickPlayers(tick uint32) {
 	if hasLocalPlayer {
 		s.LocalOwner = uint8(localPlayer)
 	}
+	// The end-condition block is bound onto the ledger, not passed per call,
+	// because it fires from inside the settlement deadline block rather than
+	// at the before-hook position [08 R-TRIG-01 §6]. Binding here rather than
+	// at service wiring keeps every session that ticks — including the ones
+	// tests construct directly — on the one settlement order.
+	if s.Econ.EndCondition == nil {
+		s.Econ.EndCondition = s.endConditionBlock
+	}
 	for player := 0; player < 10; player++ {
 		mgr := s.AI[player] // direct player-indexed access per RS-02 [08] I1
 		// Bind per-session RNG for isolation [RS-06][I4] — ensure manager uses session's stream, not shared global.
@@ -810,9 +821,6 @@ func (s *Session) tickPlayers(tick uint32) {
 		before := func() {
 			if mgr != nil {
 				mgr.Tick(tick, s.Units, s.Econ)
-			}
-			if hasLocalPlayer && player == localPlayer {
-				s.pollMissionTriggers(tick)
 			}
 		}
 		s.Econ.TickPlayer(player, tick, s.Units, before)
@@ -829,10 +837,28 @@ func (s *Session) tickPlayers(tick uint32) {
 	}
 }
 
-// pollMissionTriggers is the local player's phase-5 trigger site [08
-// R-TRIG-01 §6]. The authoritative player's WinLoseTime deadline advances
-// once by 30 when due, so a late record catches up one invocation per tick
-// rather than looping. Only kind 1 polls the authored or injected queues.
+// endConditionBlock is the economy ledger's EndCondition seam: it runs inside
+// the settlement deadline block of every due slot, and forwards the local
+// slot's due to the end-condition poll [08 R-TRIG-01 §6]. The local-slot test
+// lives here because the ledger has no notion of which slot is local.
+func (s *Session) endConditionBlock(player int, tick uint32) {
+	if s == nil {
+		return
+	}
+	if local, ok := s.triggerLocalPlayer(); !ok || local != player {
+		return
+	}
+	s.pollMissionTriggers(tick)
+}
+
+// pollMissionTriggers is the local player's end-condition block [08
+// R-TRIG-01 §6]. It carries no deadline of its own: it is reached from the
+// local slot's settlement deadline block, after that slot's UpdateTime has
+// advanced by 30 and before its settlement gate chain, so the poll runs
+// exactly once per settlement due and a load resumes it on the saved
+// UpdateTime phase. The sibling WinLoseTime word is seeded at battle init and
+// persisted, and no gameplay site reads or advances it. Only kind 1 polls the
+// authored or injected queues.
 func (s *Session) pollMissionTriggers(tick uint32) {
 	if s == nil || s.Mission == nil || s.Mission.Type != mission.TypeCampaign || s.Econ == nil {
 		return
@@ -842,11 +868,6 @@ func (s *Session) pollMissionTriggers(tick uint32) {
 		return
 	}
 	s.LocalOwner = uint8(localPlayer)
-	p := &s.Econ.Players[localPlayer]
-	if p.WinLoseTime > tick {
-		return
-	}
-	p.WinLoseTime += 30
 
 	v, d := triggers.Evaluate(s.Mission.Victory, s.Mission.Defeat, s.missionTriggerContext(tick))
 	s.VictoryDone = s.VictoryDone || v

@@ -581,6 +581,24 @@ func newSlicedWorldWithCOB(cat *content.Catalog, fs vfs.FSOps) (*units.World, er
 // explicit seam for the mode-3 player records; mode 0 is the identity wrapper
 // used by fixture-only construction [R-P0-16-A].
 func newBattleSlicedWorldWithCOB(cat *content.Catalog, fs vfs.FSOps, mode int, sortKeys [pool.PlayerCount]uint32) (*units.World, error) {
+	if cat == nil {
+		return nil, fmt.Errorf("session: nil catalog for unit pool")
+	}
+	return newBattleSlicedWorldWithCOBSized(cat, fs, mode, sortKeys, len(cat.Units))
+}
+
+// newBattleSlicedWorldWithCOBSized is newBattleSlicedWorldWithCOB with the
+// per-player record count stated rather than taken from the definition table.
+//
+// The pool's per-player slice is sized by the session's per-player unit limit
+// and is allocated independently of how many definitions the catalog holds
+// [05 R-SHARE-01 §7]; this engine still stands the definition count in for
+// that limit, which is why the count is a parameter here rather than a read of
+// `cat`. A caller that hands in a *restricted* catalog — the campaign
+// `UseOnlyUnits` filter of [08 R-ENTRY-01 §2 step 4], which can cut the table
+// to a dozen definitions — must pass the unrestricted count, or the
+// restriction would silently starve the pool and drop mission placements.
+func newBattleSlicedWorldWithCOBSized(cat *content.Catalog, fs vfs.FSOps, mode int, sortKeys [pool.PlayerCount]uint32, perPlayerRecords int) (*units.World, error) {
 	if fs == nil {
 		return nil, fmt.Errorf("session: missing filesystem for COB binding [04 §4.1]")
 	}
@@ -590,8 +608,11 @@ func newBattleSlicedWorldWithCOB(cat *content.Catalog, fs vfs.FSOps, mode int, s
 	if len(cat.Units) <= 0 {
 		return nil, fmt.Errorf("session: catalog has no unit definitions [02 §5]")
 	}
+	if perPlayerRecords < len(cat.Units) {
+		perPlayerRecords = len(cat.Units)
+	}
 	order := pool.PlayerPermutationForMode(mode, sortKeys)
-	w, err := units.NewSlicedWithOrder(len(cat.Units), cat, order)
+	w, err := units.NewSlicedWithOrder(perPlayerRecords, cat, order)
 	if err != nil {
 		return nil, err
 	}

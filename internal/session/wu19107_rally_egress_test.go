@@ -162,20 +162,15 @@ func TestAirFactoryRallyProductsLeaveThePadRetail(t *testing.T) {
 // reaches the goal cell must therefore retire its record and fall to its
 // standing auto-op, and it must not keep an active move record afterwards.
 //
-// TODO(question): the FOLLOWERS of a shared rally point are still not settled.
-// Retail leaves them idle in place ([04 R-EGRESS-01]) because the goal
-// installer's synthetic straight line is suppressed for a record the pump has
-// already declared complete — [04 R-PATH-01 §8] step 5.3 "if the unit has a
-// current order record and that record's retiring flag is clear", whose flag
-// [05 R-EGRESS-02] identifies as the pump's code-9 completion flag
-// (`orders.FlagRetryMark`). `internal/movement`'s two goal-install sites in
-// ActivateMove/ReplanMove pass that gate as an unconditional `true`, so every
-// 30-59-tick re-arm hands the mover a fresh straight line at a goal it cannot
-// occupy: it lurches, raises `StartMoving`/`StopMoving`, and stops again,
-// forever. Measured on this scenario: one engine restart per re-arm (59, 56
-// and 50 restarts over 3000 ticks for the three blocked followers), dropping
-// to one apiece when the gate reads the flag. That file belongs to another
-// work unit; this test asserts the arriving mover only.
+// The FOLLOWERS of a shared rally point are WU-19-115's
+// TestRallyMoversSettleRetail next door; this test asserts the arriving mover
+// only. The marker that stood here is closed: `internal/movement`'s two
+// goal-install sites passed [04 R-PATH-01 §8] step 5.3's gate as an
+// unconditional `true`, so every 30-59-tick re-arm handed a blocked mover a
+// fresh straight line at a goal it cannot occupy and it lurched once per
+// re-arm forever. The gate now reads the retiring flag — [05 R-EGRESS-02]'s
+// code-9 completion flag, `orders.FlagRetryMark` — and the blocked followers
+// idle in place as [04 R-EGRESS-01] describes.
 func TestGroundRallyProductArrivesAndRetiresRetail(t *testing.T) {
 	sess, step, com := wu19107Battle(t)
 	local := sess.LocalOwner

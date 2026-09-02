@@ -2,11 +2,13 @@ package mission
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/vfs"
 )
 
 // UnitPlacement is the 36-byte retail unit placement record decoded into named
@@ -142,6 +144,60 @@ func DecodeUseOnlyUnits(global *formats.Section) string {
 	}
 	v, _ := global.StringValue("useonlyunits", "") // [02 "Map files"] [fmt ota]
 	return UseOnlyPath(v)
+}
+
+// LoadUseOnlyNames opens the routed UseOnlyUnits file and returns the unit
+// names it lists, in file order, together with whether the file was present
+// [08 R-ENTRY-01 §2 step 4].
+//
+// The file is a TDF whose top-level sections are named for the units the
+// mission allows; the sections carry no keys. Retail matches each section name
+// against a definition's `unitname` case-insensitively and takes the first
+// matching record. A missing file is not an error: it leaves every definition
+// creatable, which is why presence is reported separately from the list.
+//
+// An empty path is "no restriction file authored" and reports absent without
+// touching the VFS.
+//
+// TODO(question): what retail's TDF reader does with a *malformed* useonly
+// file is untraced — its lenient parser would yield no sections, which would
+// clear every definition and leave an empty catalog. Rather than guess that,
+// this returns the parse error so the caller fails loudly; tracing the
+// reader's error path on resource slot 6 would settle it.
+func LoadUseOnlyNames(fs vfs.FSOps, path string) ([]string, bool, error) {
+	path = strings.TrimSpace(path)
+	if path == "" || fs == nil {
+		return nil, false, nil
+	}
+	data, err := fs.ReadFileLimit(path, int64(formats.DefaultTDFLimits().MaxBytes))
+	if err != nil {
+		// Absent (or unreadable) restriction file: every definition stays
+		// creatable [08 R-ENTRY-01 §2 step 4].
+		return nil, false, nil
+	}
+	doc, err := formats.ParseTDF(data)
+	if err != nil {
+		return nil, false, fmt.Errorf("nanolathe: unit-restriction file parse failed: logical path %s, providers searched [vfs], expected TDF sections naming allowed units: %w", path, err)
+	}
+	if doc == nil || doc.Root == nil {
+		return nil, true, nil
+	}
+	sections := doc.Root.Sections()
+	names := make([]string, 0, len(sections))
+	for _, sec := range sections {
+		if sec == nil {
+			continue
+		}
+		name := strings.TrimSpace(sec.OriginalName)
+		if name == "" {
+			name = strings.TrimSpace(sec.Name)
+		}
+		if name == "" {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names, true, nil
 }
 
 // DecodeUnitPlacements decodes unit placements from the selected schema's

@@ -90,6 +90,31 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 			return nil, err
 		}
 	}
+	// The unit-restriction loader of battle entry, kind 1 only
+	// [08 R-ENTRY-01 §2 step 4]. Mission.UseOnlyPath already carries the
+	// resolved logical path (resource slot 6). When the file exists, the
+	// definitions it does not name are removed from the catalog, and the
+	// survivors are re-sorted and renumbered — retail clears a per-definition
+	// creatable bit and the catalog compile that follows in the same entry
+	// compacts the cleared records out, so a kind-1 restriction manifests as
+	// catalog removal, not as an allocator refusal [05 R-SHARE-01 §8]. A
+	// missing file leaves every definition creatable.
+	//
+	// The restriction lasts one battle — retail rebuilds the table from the
+	// FBI files before every battle — so it is applied to a clone, never to
+	// the shared compiled catalog the caller handed in.
+	//
+	// The pool is sized before the restriction, from the unrestricted table:
+	// retail allocates the per-player slice from the session's unit limit,
+	// never from the definition count [05 R-SHARE-01 §7], so a mission whose
+	// restriction file names a dozen units must not end up with a dozen unit
+	// records per slot. This engine still stands the definition count in for
+	// that limit; wiring the OTA's `maxunits` is a separate unit.
+	poolRecords := len(cat.Units)
+	cat, err = applyUseOnlyRestriction(fs, cat, m.UseOnlyPath)
+	if err != nil {
+		return nil, err
+	}
 	terrain, err := loadTerrainStrict(fs, cat, m)
 	if err != nil {
 		return nil, err
@@ -104,7 +129,7 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 	// that happens to share this one value. Nanolathe never builds a kind-3
 	// session, so no sort-key plumbing is needed here at all [08 R-SESS-01
 	// §7 "Consequence for single-player"].
-	unitsWorld, err := newBattleSlicedWorldWithCOB(cat, fs, sessionKindCampaign, [pool.PlayerCount]uint32{})
+	unitsWorld, err := newBattleSlicedWorldWithCOBSized(cat, fs, sessionKindCampaign, [pool.PlayerCount]uint32{}, poolRecords)
 	if err != nil {
 		return nil, err
 	}
@@ -120,22 +145,6 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 		Latch:        NewEndLatch(),
 		CampaignSlot: m.CampaignIndex,
 	}
-	// Mission.UseOnlyPath already carries the resolved logical path for the
-	// unit-restriction file (resource slot 6, opened by kind 1 only). The
-	// retail rule itself is Established, not an open research question
-	// [08 R-ENTRY-01 §2 step 4]: when the file exists it clears the
-	// "available" bit of every catalog definition from index 2 upward, then
-	// sets it again for each `[name]` section, case-insensitive; a missing
-	// file leaves every definition available. That is the same bit the unit
-	// allocator's creatable-bit gate tests at battle-entry time
-	// [05 R-SHARE-01 §8].
-	//
-	// Applying it needs a seam this unit does not own: content.UnitDef has no
-	// available/creatable bit, and internal/units.World's allocator
-	// (create, internal/units/units.go) does not test one — both packages
-	// are outside this file's ownership. Do not approximate the restricted
-	// set from catalog membership here; every definition stays available
-	// until that catalog/allocator seam is added.
 	// Correct controller states: human local 1, computer enemy 2 [08 "Established AI-facing data"]
 	for i := 0; i < 2 && i < 10; i++ {
 		p := &s.Econ.Players[i]
@@ -153,7 +162,11 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 	// The two campaign player rows exist now, so the panel's side bytes can be
 	// stamped onto them before any trigger consumer runs.
 	applyCampaignPlayerTableSides(s, fs, m)
-	s.Econ.SeedDeadlines(0) // UpdateTime/WinLoseTime/DisplayTimer seeded to GlobalTick per [05] C5; WinLoseTime is trigger poll deadline [08 "Evaluation"]
+	// UpdateTime/WinLoseTime/DisplayTimer seeded to GlobalTick per [05] C5.
+	// UpdateTime is the one deadline the end-condition poll rides; WinLoseTime
+	// is seeded here and persisted, and no gameplay site reads or advances it
+	// [08 R-TRIG-01 §6][08 "Player records"].
+	s.Econ.SeedDeadlines(0)
 	// DET-01 [R-CORE-02]: battle bootstrap seeds both streams fresh before any
 	// battle setup draw; battle-entry wind zeroes the deadline with NO draws
 	// and the meteor initial next-strike is written (no draws) [R-CORE-01
@@ -238,6 +251,30 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 // does not assign"]. The same section records that the literal `ALL` is
 // admitted to both lists and settles nothing, so it stays unknown here and the
 // identity fails closed rather than defaulting.
+// applyUseOnlyRestriction is battle entry's unit-restriction loader for kind 1
+// [08 R-ENTRY-01 §2 step 4]. It returns the catalog the battle runs on: the
+// input unchanged when no restriction file is present, or a restricted clone
+// when one is. The clone matters — retail rebuilds the definition table from
+// the FBI files before every battle, so the removal lasts exactly one battle
+// and must not reach a catalog the caller shares [05 R-SHARE-01 §8].
+func applyUseOnlyRestriction(fs vfs.FSOps, cat *content.Catalog, useOnlyPath string) (*content.Catalog, error) {
+	if cat == nil {
+		return cat, nil
+	}
+	names, present, err := mission.LoadUseOnlyNames(fs, useOnlyPath)
+	if err != nil {
+		return nil, err
+	}
+	if !present {
+		return cat, nil
+	}
+	restricted := cat.Clone()
+	if err := restricted.RestrictToCreatable(names); err != nil {
+		return nil, fmt.Errorf("nanolathe: unit restriction failed: logical path %s, providers searched [vfs], expected a compacted unit catalog: %w", useOnlyPath, err)
+	}
+	return restricted, nil
+}
+
 func applyCampaignPlayerTableSides(s *Session, fs vfs.FSOps, m *mission.Mission) {
 	if s == nil || fs == nil || m == nil || s.Catalog == nil {
 		return

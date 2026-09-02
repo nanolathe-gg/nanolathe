@@ -73,8 +73,7 @@ func TestMissionTriggerPrecedence(t *testing.T) {
 				s.Units.FinalizeDeath(u.Handle, 0)
 			}
 		}
-		s.LocalOwner = 9 // stale adapter state must not select the trigger deadline.
-		s.Econ.Players[0].WinLoseTime = 0
+		s.LocalOwner = 9 // stale adapter state must not select the local slot.
 		return s
 	}
 
@@ -83,13 +82,16 @@ func TestMissionTriggerPrecedence(t *testing.T) {
 	if !campaign.VictoryDone || campaign.DefeatDone {
 		t.Fatalf("campaign simultaneous completion must resolve as victory: victory=%v defeat=%v", campaign.VictoryDone, campaign.DefeatDone)
 	}
-	if campaign.LocalOwner != 0 || campaign.Econ.Players[0].WinLoseTime != 30 {
-		t.Fatalf("campaign did not use authoritative local player deadline: owner=%d due=%d", campaign.LocalOwner, campaign.Econ.Players[0].WinLoseTime)
+	// The poll resolves the local slot from the authoritative player table, and
+	// advances no deadline of its own: it is reached from that slot's
+	// settlement due, and WinLoseTime is persisted-only [08 R-TRIG-01 §6].
+	if campaign.LocalOwner != 0 || campaign.Econ.Players[0].WinLoseTime != 0 {
+		t.Fatalf("campaign poll owner/deadline wrong: owner=%d WinLoseTime=%d", campaign.LocalOwner, campaign.Econ.Players[0].WinLoseTime)
 	}
 
 	direct := newTriggerSession(mission.TypeSkirmish)
 	direct.pollMissionTriggers(0)
 	if direct.VictoryDone || direct.DefeatDone || direct.Econ.Players[0].WinLoseTime != 0 {
-		t.Fatalf("kind 2 polled mission queues: victory=%v defeat=%v due=%d", direct.VictoryDone, direct.DefeatDone, direct.Econ.Players[0].WinLoseTime)
+		t.Fatalf("kind 2 polled mission queues: victory=%v defeat=%v WinLoseTime=%d", direct.VictoryDone, direct.DefeatDone, direct.Econ.Players[0].WinLoseTime)
 	}
 }
