@@ -102,6 +102,16 @@ func TestSystemSearchConsultsLayer(t *testing.T) {
 	start := path.Cell{X: 2, Z: 2}
 	goal := path.Cell{X: 12, Z: 12}
 
+	// Keep this fixture about search consumption, not occupancy bookkeeping: a
+	// current commit triggers neither the requester's stale footprint-and-ring
+	// restamp [04 R-MOV-03 §3] nor the release's re-wall of the requester's own
+	// rectangle [04 R-PATH-01 §14]. It has to be noted BEFORE the first request:
+	// the release of a request whose requester still carries a zero commit tick
+	// walls that unit's own start cell, and the hand-painted ring below never
+	// rewrites (2,2), so the wall would survive every later repaint.
+	layer := sys.layerRegistry.For("", wiringProfile)
+	layer.NoteCommit(h, 50)
+
 	sys.SubmitMove(h, 0, start, goal)
 	sys.Scheduler.Tick(50)
 	route := sys.Routes[h]
@@ -111,11 +121,6 @@ func TestSystemSearchConsultsLayer(t *testing.T) {
 
 	// Paint an 8-neighbour enclosure of the start cell directly into the
 	// packed layer so this test isolates the search consumer.
-	layer := sys.layerRegistry.For("", wiringProfile)
-	// Keep this fixture about search consumption, not requester-cohort
-	// invalidation: a current commit does not trigger the requester's stale
-	// footprint-and-ring restamp [04 R-MOV-03 §3].
-	layer.NoteCommit(h, 50)
 	paintRing := func(v uint8) {
 		for z := int32(1); z <= 3; z++ {
 			for x := int32(1); x <= 3; x++ {

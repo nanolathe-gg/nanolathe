@@ -211,6 +211,18 @@ The immunity high bit *is* transferred to a
 runtime status bit on the created unit — and that bit likewise has no reader,
 so the single consumed flag is itself inert in this executable. Retain all of
 them verbatim for save fidelity and diagnostics; act on none of them.
+
+**Correction (2026-09-02, RWU-19-38).** "That bit likewise has no reader, so
+the single consumed flag is itself inert" is wrong, and "act on none of them"
+is wrong for `Immunity`. The runtime status bit the flag is copied into —
+bit 15 of the unit status word — has two readers: the per-side target
+registry rebuild, which keeps a hostile unit off the **primary** acquisition
+list while the bit is set, and the computer player's nearest-hostile helper,
+which skips it ([06 §3.1] "the primary-list exclusion bit"; [R-AI-01 §9]).
+The `MakeSelectable` order (InitialMission's `s` verb) clears it. `Immunity`
+therefore means "not auto-targetable until made selectable", and a clone
+must set the bit at spawn and honour it in both readers. The other five
+parsed-only fields remain unread.
 `UseOnlyUnits` is not inert: it is read at OTA load and routed through the
 resource resolver into the campaign `camps\useonly` area — path-building
 evidence that it feeds the campaign restricted-units mechanism.
@@ -1944,7 +1956,9 @@ parse as 0), `Immunity` (bit 7). Every key is read with the ordinary
 section accessor, so a key absent from a block takes its default. Reader
 census over the parsed records: `Unitname`, `XPos`/`YPos`/`ZPos`, `Angle`,
 `Player`, `HealthPercentage`, `Immunity` (copied to the unit's status bit
-15, itself unread) and `Ident`/`InitialMission` (the interpreter and the
+15 — **correction 2026-09-02, RWU-19-38:** previously "itself unread"; the
+bit is read by the target-registry rebuild's primary-list test and by the
+nearest-hostile helper, [06 §3.1], [R-AI-01 §9]) and `Ident`/`InitialMission` (the interpreter and the
 name resolver, [04 §3.6]) have readers; `BuildPriority`,
 `CreationCountdown`, `MissionCriticalUnit`, `AiIgnore`, `AiPriorityTarget`
 and `InitialGroup` have **no reader** anywhere — the census in "Mission
@@ -3569,6 +3583,14 @@ slot ascending, then pool ascending) is the tie-break. The initial best is the
 maximum signed 32-bit value, and the helper returns "none" when nothing
 qualifies. The vertical coordinate is passed in but never read.
 
+**Correction (2026-09-02, RWU-19-38).** "its **dying** bit is clear" above
+mislabelled the third test. The helper tests status-word **bit 15** — the
+mission `Immunity` bit that the target-registry rebuild also reads
+([06 §3.1] "the primary-list exclusion bit") — and does **not** test the
+death latch (bit 14). A hostile that is dying but still carries the live bit
+is a candidate; an immune one is not, until a `MakeSelectable` order clears
+the bit. The first, second and fourth tests stand as written.
+
 **Group order broadcast.** Given a player, a group number, an intent, a queue
 modifier, an optional target unit, an optional target position and two
 further words, it walks the **player's whole unit slice in ascending pool
@@ -3864,6 +3886,24 @@ multiply each axis by the double constant `65536.0`; and truncate toward zero
 into the stored 16.16 centre. When the weight sum is zero the centre is the
 truncation of the unscaled accumulators, which are then zero — that is the state
 the explore task's "centre is unset" test detects (§6).
+
+**Closed (2026-09-02, RWU-19-38) — this refresh is the target-registry
+rebuild, and human slots run it.** The refresh and doc 06's per-side target
+registry rebuild are one routine on one object per player slot — the three
+vectors above are the primary, secondary and third candidate lists of
+[06 §3.1] — with one live caller, the per-player phase's per-slot cadence
+gate, whose bound-30 draw is the one draw [R-P0-05 §6] counts. The gate is
+null-checked on the slot's strategic state, never controller-checked, and
+that state exists for every human or computer slot ([R-ENTRY-01 §3] step
+24), so the local human's slot draws on the same 30-tick cadence as a
+computer slot and a one-human, one-computer game consumes two draws per
+thirty ticks in ascending slot order. Two labels above are sharpened by the
+same trace: the first vector's extra status test is bit 15, the mission
+`Immunity` bit, not "not dying" — the death latch is tested for every unit
+in the walk before any vector is considered — and the second vector's "one
+further runtime status bit" is the seen bit of [03 §3.2]. The slot gate,
+the first-rebuild tick and the exclusion bit's full census are in
+[06 §3.1].
 
 #### R-AI-01 §17 — Open items this unit did not close — Unknown [R-AI-01]
 

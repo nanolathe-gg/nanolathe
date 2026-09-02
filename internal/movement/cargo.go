@@ -143,6 +143,44 @@ func AttachFactoryProduct(w *units.World, carrierHandle, productHandle pool.Hand
 	return AttachCargoMode(w, carrierHandle, productHandle, piece, attachModeFactoryProduct)
 }
 
+// detachModeFactoryProduct is the request mode of the completion transition's
+// detach: "a non-building product with a carrier is detached by the
+// attach/detach commit with carrier null, piece `0xff`, mode 1", and "its mover
+// mode is set to 1" [04 R-FAC-02 §3]. It is the same grounded mode the builder
+// link attached with ([04 R-FAC-02 §1] item 4), so a finished product keeps the
+// ground plane it held as a nanoframe [04 R-FAC-02 §2] rather than inheriting
+// whatever mode the mode-less detach happened to leave behind.
+const detachModeFactoryProduct = 1
+
+// DetachFactoryProduct is the completion transition's detach [04 R-FAC-02 §3]:
+// the shared detach commit with request mode 1. No clear, no stamp and no
+// position write happen at detach; the product keeps the cached cell pair and
+// the ground-word footprint the carried-position setter last wrote, at the pad.
+func DetachFactoryProduct(w *units.World, productHandle pool.Handle) (pool.Handle, bool) {
+	return DetachCargoMode(w, productHandle, detachModeFactoryProduct)
+}
+
+// detachModeTakeoff is the request mode of the takeoff preamble's step-2
+// self-detach [04 R-AIR-01 §6 step 2][04 R-AIR-01 §9]: "if the unit currently
+// has a carrier, detach it (reserved no-piece index 0xFF) requesting mover
+// mode 2" — the airborne mode. The detach's apply step writes the request's
+// low two bits directly into the committed mover-mode pair
+// [04 R-AIR-01 §3][04 R-AIR-01 §9], so this write is what actually takes a
+// formerly-carried unit off the ground plane; step 4's mover-mode setter below
+// it runs only when the committed mode is still 1 (grounded) afterward, which
+// it never is for this caller once the detach has written 2.
+const detachModeTakeoff = 2
+
+// DetachTakeoff is the takeoff preamble's step-2 self-detach [04 R-AIR-01 §6].
+// It is DetachCargo with request mode 2 instead of the mode-less sentinel: a
+// no-op (returns handle 0, false) when the unit has no carrier, otherwise the
+// same detach commit every other request mode goes through — no
+// special-casing, so the mode-2 request is written by the same
+// mover-mode/stamp path attachModeOrdinary and detachModeFactoryProduct use.
+func DetachTakeoff(w *units.World, cargoHandle pool.Handle) (pool.Handle, bool) {
+	return DetachCargoMode(w, cargoHandle, detachModeTakeoff)
+}
+
 // DetachCargo detaches cargo from its carrier [04 §10.2] unload phase 2.
 // Returns carrier handle if found. This form carries no request mode; see
 // DetachCargoMode.

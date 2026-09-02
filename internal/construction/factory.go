@@ -2362,10 +2362,13 @@ func (s *Service) applyCompletionPosture(product *units.Unit) {
 	// Completed units become eligible for AI classification (group 4 construction) [R-P0-04][08].
 	// Nanoframes are created with Flags without 0x20 (initializeNanoframe clears it); completion must restore it.
 	product.Flags |= units.ClassifierEligibleStatus
-	// Completion detaches through the shared cargo commit. Detach is idempotent
-	// and performs no position write or re-stamp [04 R-FAC-02 §3].
+	// Completion detaches through the shared cargo commit, with request mode 1:
+	// "its mover mode is set to 1" [04 R-FAC-02 §3]. Detach is idempotent and
+	// performs no position write or re-stamp. The mode-less form that stood here
+	// left the product on whatever mode the builder link had written, which is
+	// the same value today but is not the contract.
 	if product.Def != nil && product.Def.BMCode && product.Attachment.Carrier != 0 {
-		movement.DetachCargo(s.World, product.Handle)
+		movement.DetachFactoryProduct(s.World, product.Handle)
 	}
 	if product.Def != nil && product.Def.ActivateWhenBuilt {
 		s.activate(product)

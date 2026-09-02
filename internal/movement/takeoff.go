@@ -97,9 +97,20 @@ func (s *System) applyOccupancyPlane(u *units.Unit, prev, mode uint8) {
 // stamped and stamps the new one, which is the clear-then-stamp order of the
 // commit's success branch [04 R-COLL-01 §1].
 //
-// The occupant-age clock ([04 §6.1 R-DOC04-B]) is written only when the ground
-// plane moves: the class layer's gate reads the ground plane alone
-// [04 R-COLL-01 §2], so an airborne restamp has nothing to age.
+// The occupant-age clock ([04 §6.1 R-DOC04-B]) is the mover's last-stamp tick,
+// and the stamp writes it UNCONDITIONALLY as its first action, guarded only on
+// the mover existing: it precedes the bounds test, so even a stamp that writes
+// no cell because the rectangle is off map advances it, and the plane the stamp
+// writes is not part of the condition [04 R-COLL-01 §4 "stamp, in order"]
+// [04 R-PATH-01 §14 "writers of the mover's commit tick"].
+//
+// Correction (WU-19-123): this used to write the clock only when the GROUND
+// plane was touched, on the reasoning that the occupant-age gate reads the
+// ground word alone and an airborne restamp has nothing to age. The reasoning
+// picks the wrong side of the contract — the clock is the mover's, not the
+// cell's — and the gap it left is observable: an aircraft that restamps in the
+// air keeps a clock frozen at its takeoff, so the first classification after it
+// touches down can read cells whose occupant the watermark has already passed.
 func (s *System) syncMoverStamp(u *units.Unit) {
 	if s == nil || s.Grid == nil || u == nil {
 		return
@@ -109,20 +120,18 @@ func (s *System) syncMoverStamp(u *units.Unit) {
 		return
 	}
 	plane, stamps := planeForMode(u.Move.Mode)
-	touchedGround := false
+	stamped := false
 	clearedGround := false
 	clearedAnchor := coll.StampedAnchor
 	if coll.HasStamp && (!stamps || coll.StampedPlane != plane || coll.StampedAnchor != coll.CachedAnchor) {
 		if s.Grid.ClearPlane(coll.StampedPlane, coll.StampedAnchor, coll.FootPrintX, coll.FootPrintZ, coll.ID) {
-			touchedGround = touchedGround || coll.StampedPlane == PlaneGround
 			clearedGround = clearedGround || coll.StampedPlane == PlaneGround
 		}
 		coll.HasStamp = false
 	}
 	if stamps && !coll.HasStamp {
-		if s.Grid.StampPlane(plane, coll.CachedAnchor, coll.FootPrintX, coll.FootPrintZ, coll.ID) {
-			touchedGround = touchedGround || plane == PlaneGround
-		}
+		s.Grid.StampPlane(plane, coll.CachedAnchor, coll.FootPrintX, coll.FootPrintZ, coll.ID)
+		stamped = true
 		coll.StampedAnchor = coll.CachedAnchor
 		coll.StampedPlane = plane
 		coll.HasStamp = s.Grid.RectOnMap(coll.CachedAnchor, coll.FootPrintX, coll.FootPrintZ)
@@ -134,11 +143,11 @@ func (s *System) syncMoverStamp(u *units.Unit) {
 		// hands the ground plane back, and a layer that had baked the unit in
 		// through the occupant-age gate would otherwise keep the wall
 		// [04 R-PATH-01 §14]. Only a ground release is reclassified, because
-		// only the ground word is read by the gate [04 R-COLL-01 §2] — the same
-		// reason the clock below is a ground-only write.
+		// only the ground word is read by the gate [04 R-COLL-01 §2]. The clock
+		// write below is NOT conditioned the same way — see the doc comment.
 		s.noteFootprintClear(u.Handle, clearedAnchor, coll.FootPrintX, coll.FootPrintZ, true)
 	}
-	if touchedGround {
+	if stamped {
 		s.noteOccupancyCommit(u.Handle, s.tick)
 	}
 }
@@ -177,10 +186,15 @@ func (s *System) takeoffPreamble(u *units.Unit, rec *orders.Node) bool {
 			q.Binding().Weapons.ReleaseSlot(u, idx)
 		}
 	}
-	// Step 2 — the self-detach requests mode 2, so the mode write below is the
-	// one that runs for a unit that was carried [04 R-AIR-01 §3][04 R-AIR-01 §6].
+	// Step 2 — the self-detach requests mode 2 directly: the detach's apply
+	// step writes the request's low two bits straight into the committed
+	// mover-mode pair [04 R-AIR-01 §3][04 R-AIR-01 §9], so a unit that was
+	// carried is airborne the instant this runs. Step 4's mode-1 gate below
+	// never fires for this caller — the committed mode is 2, not 1 — which is
+	// why no initial climb marker is built for a unit taking off from its
+	// carrier [04 R-AIR-01 §6].
 	if u.Attachment.Carrier != 0 {
-		DetachCargo(s.world, u.Handle)
+		DetachTakeoff(s.world, u.Handle)
 	}
 	// Step 3 — the takeoff script hook. Step 4's setter raises the same edge for
 	// any non-grounded mode, so this is a no-op edge whenever step 4 runs

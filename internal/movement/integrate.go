@@ -2426,6 +2426,13 @@ func (s *System) publishFunc(r path.Request, points []path.Point, status path.St
 	if s == nil {
 		return
 	}
+	// The publication is followed by the request's release, and the release
+	// re-walls the requester's own rectangle in its own class layer
+	// [04 R-PATH-01 §14 correction]. It is deferred rather than called at the
+	// tail because retail releases on EVERY request end, including the ones
+	// this build leaves without a publication (a callback that outlived its
+	// order node, below).
+	defer s.noteRequestRelease(r.Unit)
 	// A scheduler callback can finish after the queue head has changed (for
 	// example, a replace/purge in the order pump).  Publication belongs only to
 	// the node that activated this request.  Leave the current route untouched
@@ -2987,6 +2994,11 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		// and so ran the post-move correction every tick — the very thing
 		// `canhover` alone is supposed to force [04 R-MOV-01 §5].
 		stationary := coll.VX == 0 && coll.VZ == 0 && coll.Mode&0x3 == coll.CachedMode&0x3
+		// The rectangle the success branch's step (1) releases is the one the
+		// unit holds NOW, so it has to be read before CommitOne overwrites the
+		// cached pair: "every writer stamps at the unit's cached pair"
+		// [04 R-COLL-01 §4].
+		clearedAnchor := coll.CachedAnchor
 		fastPath, isBlocked := true, false
 		if !stationary {
 			// On any non-stationary proposal the last-proposal tick is written
@@ -3016,24 +3028,27 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		// the footprint stamp writes the tick as its first action; EnsureUnit
 		// does the same.
 		if !isBlocked && !fastPath {
+			// Step (1) of the success branch is a footprint clear, so it owes
+			// the class-layer maintenance of [04 R-COLL-01 §4] on the rectangle
+			// it just released — the same maintenance noteFootprintClear runs
+			// for the teardown and carried clears. It must run BEFORE the
+			// commit-tick refresh below: the maintenance gate compares this
+			// layer's watermark against the tick the unit had while it stood on
+			// the released rectangle, and a refreshed tick turns it into a
+			// no-op that leaves the vacated cells walled forever.
+			//
+			// The crowded rally goal this used to be left unwired for does not
+			// settle "through the route-acceptance rule" — that claim, which
+			// stood here, was wrong. It settles through the composition in
+			// [04 R-ORDER-02 §1]: the follower's own release re-walls the
+			// parked movers (noteRequestRelease), the ray then finds no
+			// strictly-nearer passable cell, and request init publishes empty
+			// and raises 0x40 on every re-arm. Both halves are needed; this
+			// maintenance alone leaves the parked cluster passable and the
+			// follower circles it, stopped only by the commit validator.
+			s.noteFootprintClear(handle, clearedAnchor, fx, fz, !coll.Building)
 			s.noteOccupancyCommit(handle, tick)
 		}
-		// TODO(T25): step (1) of the success branch is a footprint clear, so it
-		// owes the class-layer maintenance of [04 R-COLL-01 §4] on the
-		// rectangle it just released — the same maintenance noteFootprintClear
-		// runs for the teardown and carried clears. It is not wired here.
-		// Measured 2026-09-02 (WU-19-120): wiring it makes
-		// internal/session's TestRallyMoversSettleRetail fail — mover 6 of the
-		// five-unit rally moves on 2502 of 3000 settled ticks instead of
-		// stopping, because the phantom walls a stale mover leaves behind when
-		// it walks away are today what finally makes the crowded rally goal
-		// unreachable and publishes the empty route that retires the record
-		// ([04 R-EGRESS-01], [04 R-PATH-01 §8]). Retail settles that scenario
-		// through the route-acceptance rule instead, which is a different
-		// contract and a different file set. Placeholder: leave the vacated
-		// tail of a live mover's path stale, which is what this build has
-		// always done, and reclassify only where the unit leaves the ground
-		// plane for good — death or free, pickup and takeoff.
 		coll.BlockerID = blockerID
 		u.X = numeric.Fixed(int64(coll.X))
 		u.Z = numeric.Fixed(int64(coll.Z))

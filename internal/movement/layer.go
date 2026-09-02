@@ -587,6 +587,16 @@ func (c *ClassLayers) For(name string, p Profile) *ClassLayer {
 	return l
 }
 
+// Existing returns the layer already allocated for one movement class, or nil.
+// It is the read-only counterpart of For, for callers that must not allocate
+// (and map-load stamp) a layer as a side effect of asking [04 §6.1].
+func (c *ClassLayers) Existing(name string) *ClassLayer {
+	if c == nil {
+		return nil
+	}
+	return c.byName[name]
+}
+
 // ReviseFor ensures the class layer, runs the request revision pass on it, and
 // returns it — the request-init entry point [04 §6.1 R-DOC04-B][04 §7.3].
 func (c *ClassLayers) ReviseFor(name string, p Profile, requester pool.Handle, tick uint32) *ClassLayer {
@@ -659,6 +669,46 @@ func (s *System) noteFootprintClear(h pool.Handle, anchor Cell, footX, footZ int
 	if hasMover {
 		s.noteOccupancyCommit(h, s.tick)
 	}
+}
+
+// noteRequestRelease is the request release's re-wall [04 R-PATH-01 §14
+// correction]. The release runs when a search ends by ANY route — a published
+// route, the empty publication of heap exhaustion, and every early exit of
+// [04 R-PATH-01 §4] — and on the requester's OWN class layer it compares the
+// requester's commit tick against that layer's watermark: when the tick is
+// below it, the requester's own footprint rectangle is reclassified. It writes
+// nothing to the tick.
+//
+// This undoes the request revision pass's temporary transparency. Revise
+// refreshes the requester's tick to the current tick while it restamps its own
+// rectangle — so the requester never blocks its own start cell — and then
+// restores the real tick. Without the release re-wall that rectangle stays
+// passable to everyone else's searches for the rest of the battle, because the
+// revision window [old, new) never revisits an old stamp tick; a mover routed
+// into it is then stopped only by the commit validator, "which is the
+// difference between a follower that idles and one that circles"
+// [04 R-ORDER-02 §1 item 1].
+func (s *System) noteRequestRelease(requester pool.Handle) {
+	if s == nil || requester == 0 || s.layerRegistry == nil {
+		return
+	}
+	name := s.classKeyFor(requester)
+	if name == "" {
+		name = scratchLayerKey(s.ProfileFor(requester))
+	}
+	l := s.layerRegistry.Existing(name)
+	if l == nil {
+		return // no request of this class has ever allocated a layer
+	}
+	commit, _ := l.CommitTick(requester)
+	if commit >= l.Watermark() {
+		return // still fresh in this layer's eyes; nothing was made passable
+	}
+	anchor, fx, fz, ok := s.CommittedFootprint(requester)
+	if !ok {
+		return
+	}
+	l.restampOccupantRect(anchor, fx, fz)
 }
 
 // mappingTile is the tile pair the search's coarse test reads in the mapping

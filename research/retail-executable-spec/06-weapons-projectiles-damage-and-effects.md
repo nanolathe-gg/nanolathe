@@ -178,22 +178,48 @@ independent per-tick round-robin **scan** throttle (§3.2). An acquisition can
 therefore see a list up to thirty ticks stale, including entries for units that
 died in between — which is why the per-attempt filter re-tests liveness.
 
-**Supported inference (2026-09-02, WU-19-122) — the rebuild draw is the
-strategic refresh's draw.** `[08 R-AI-01 §16]` names the 30-tick strategic
-refresh's three input vectors as non-allied live units passing the ordinary
-visibility predicate, non-allied units carrying one further runtime status
-bit, and own active builder-plus-air-base units — this section's primary,
-secondary and third lists — and names that refresh as the writer of the
-targeting-upgrade flag, the census and the centroid. The two descriptions
-are one routine: the per-side registry rebuild above *is* the strategic
-refresh, and the bound-30 draw here is the draw `[08 R-AI-01 §16]` records.
-An implementation that keeps the lists in a combat module and the census in
-an AI module must take that draw exactly once per side per rebuild.
-**Unknown:** whether a slot with no computer-player manager (the local human
-in single player) takes the draw in retail; the per-player phase runs for
-every occupied slot, but Nanolathe's draw is taken from the AI manager's
-tick. A trace of the per-player phase's strategic-refresh call site against
-the slot's controller byte would settle it.
+**Established (2026-09-02, RWU-19-38; upgraded from WU-19-122's Supported
+inference of the same date) — the rebuild *is* the strategic refresh, and
+every human or computer slot takes its draw.** `[08 R-AI-01 §16]` names the
+30-tick strategic refresh's three input vectors as non-allied live units
+passing the ordinary visibility predicate, non-allied units carrying one
+further runtime status bit, and own active builder-plus-air-base units —
+this section's primary, secondary and third lists — and names that refresh
+as the writer of the targeting-upgrade flag, the census and the centroid. A
+static trace settles what WU-19-122 inferred: the list builder has exactly
+one live caller, the per-slot cadence gate above, and that gate is the
+routine `[08 R-P0-05 §6]` describes. The per-side target registry and the
+strategic state are one object per player slot, the registry rebuild and
+the strategic refresh are one routine, and the bound-30 draw here is the
+one draw `[08 R-AI-01 §16]` records. (A second copy of the cadence gate
+that takes the state pointer directly and omits the null test exists in
+the image and has no caller.) An implementation that keeps the lists in a
+combat module and the census in an AI module must take that draw exactly
+once per side per rebuild.
+
+*Which slots draw* — closing WU-19-122's Unknown ("whether a slot with no
+computer-player manager takes the draw"). The per-player phase walks the
+ten slots in ascending order **every tick**; a slot is visited when its
+record exists, its controller byte is `1`, `2` or `3`, and its own-slot
+byte (the alliance-row index of `[08 R-AI-01 §9]`) is not the unassigned
+value `10`. For a visited slot, in order: the manager tick runs when the
+slot's AI manager record exists (the computer-only gate is inside the
+manager, `[08 R-AI-01 §1]`); then the cadence gate runs when the slot's
+**strategic state** exists — the gate is null-checked, never
+controller-checked; then the slot's per-unit visits. The strategic state
+is constructed by the per-player reset for every slot whose controller is
+not `3` (remote), human slots included (`[08 R-ENTRY-01 §3]` step 24:
+"Humans get an AI record too; only remote peers do not"), and its
+constructor seeds `lastRebuildTick` to `0`, so the first rebuild of every
+such slot fires at tick 30 — the tick-0 priming finds `0 + 30 <= 0` false
+and draws nothing. The local human's slot therefore takes the bound-30
+draw exactly as a computer slot does, on the same ticks, and a
+single-player game of one human and one computer takes **two** bound-30
+draws per thirty ticks, in ascending slot order, each between that slot's
+manager tick and its per-unit visits. A remote slot takes none. Taking the
+draw only for computer-controlled slots, or once per battle instead of
+once per slot, would diverge from retail; taking it from a per-slot
+manager tick that runs for every human and computer slot does not.
 
 **Established fact:** One rebuild walks the entire unit array once, in slot
 order, and classifies each unit whose alive bit is set and death latch is
@@ -202,7 +228,8 @@ clear:
 * **hostile** — the candidate's owning player's alliance row, indexed by *this*
   registry's ally group, reads zero:
   * it joins the **primary list** when the direct-visibility predicate below
-    accepts it **and** a runtime exclusion status bit is clear;
+    accepts it **and** a runtime exclusion status bit is clear — bit 15 of
+    the status word, the mission `Immunity` bit, named below (RWU-19-38);
   * it joins the **secondary list** when its runtime *seen* status bit is set.
     The two tests are independent, so a unit can be on both lists, either, or
     neither.
@@ -219,6 +246,31 @@ rebuild: every fully built friendly unit whose definition carries both
 order. It is the candidate set of the damaged-aircraft base seek — the
 "base candidates within `0xF00`" of [04 R-AIR-01 §7] — and its filter, pick
 and callers are [04 R-AIR-01 §11]. No weapon or acquisition path reads it.
+
+**Established (2026-09-02, RWU-19-38) — the primary-list exclusion bit is
+the mission `Immunity` bit.** The "runtime exclusion status bit" above is
+**bit 15** (`0x8000`) of the 32-bit unit status word — the word whose seen,
+sonar and jammed bits are `[03 §3.2]`'s, whose alive bit and death latch
+the walk tests first, and whose bit 5 is the selectable bit. Its writers,
+by whole-image census: the mission-unit spawner, which copies the placement
+record's `Immunity` flag (flag-byte bit 7, `[08 R-TRIG-01 §9]`) into it at
+creation; the save loader's unit restore, which rewrites it from the packed
+saved status word; and the `MakeSelectable` order handler, which clears it
+while setting the selectable bit (`[04 R-ORD-01 §2]`; InitialMission's `s`
+verb and its postlude queue that order). The common allocator initializer
+leaves it clear, so a unit built during play never carries it. Its readers
+are exactly two: this list builder, which keeps an immune hostile off every
+side's **primary** list — the seen-bit test for the secondary list is
+unaffected, so an immune unit the local observer can see remains a
+fallback candidate for a side whose secondary gate is open — and the
+computer player's nearest-hostile helper (`[08 R-AI-01 §9]`), which skips
+it. The bit is otherwise unread: it is not damage immunity, not a
+selection or rendering state, and not the classifier's eligibility bit
+(bit 5). Contract: a mission unit placed with `Immunity=1` is not
+auto-acquired through the primary list and is never a wave's nearest
+hostile until an `s` / `MakeSelectable` order clears the bit.
+`[08 "Mission placement record"]` and `[08 R-TRIG-01 §9]` previously
+recorded the bit as unread; both are corrected in place.
 
 **Established fact:** The per-attempt filter is much thinner than the rebuild.
 Given a centre point and a radius it walks the primary list, keeps every entry
