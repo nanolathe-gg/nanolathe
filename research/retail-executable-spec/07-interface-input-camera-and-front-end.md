@@ -660,7 +660,11 @@ N gadgets admit GADGET0..GADGETN). Hit testing is inclusive on both axes:
 `gx <= x <= gx+w-1 && gy <= y <= gy+h-1`. Grayed and hidden gadgets reject
 interaction: the hidden flag and the grayed attribute bit are tested before
 activation effects. Callbacks and association handling can redirect which
-gadget becomes active.
+gadget becomes active. **Correction (2026-09-02, RWU-19-31).** "The grayed
+attribute bit" is not a bit of `attribs` — `attribs` has no greyed bit. It
+is bit 0 of the button's own grey word, tested by the button handler at press
+time (before its hit test) and never by the pass's hover hit test, which
+skips only hidden gadgets; see [R-WGT-01 §13].
 
 **Top-object close is closed.** Closing the active GUI object invokes its
 registered callbacks, redraws under nest-counted cursor/display protection,
@@ -830,6 +834,11 @@ gadgets with derived knob travel), a text case, an unnamed zeroing case, two
 embedded-file cases, and three further single-purpose cases. Gadgets live in
 fixed 347-byte records; each kind resolves its art from its own named GAF
 entry first, then the side-specific interface GAF, then the built-in fallback.
+**Correction (2026-09-02, RWU-19-31).** The count and the labels of the last
+seven cases above are superseded by [R-WGT-01 §12]: the builder's switch has
+eleven keys over ten arms (kind 11 shares the panel arm), no arm only zeroes,
+and "text input (name capped at 127 bytes)" is the `maxchars` cap, not the
+name. The parser's own per-kind key table is [R-WGT-01 §11].
 
 **Runtime control-kind dispatch is closed.** The active-GUI pass routes each
 gadget's stored control-type byte to distinct runtime families:
@@ -1328,6 +1337,100 @@ Nothing here is a Supported inference; every claim is the store and load
 census plus the authored key census, and the trail is in the decompile
 workspace's notes for this unit.
 
+
+### Closed — the kind byte and the parser's per-kind key table [R-WGT-01 §11] (2026-09-02)
+
+**Scope.** RWU-19-31, static trace of the panel parser (the `[COMMON]`
+reader, the per-kind reader it dispatches to, and the kind-0 header reader).
+Everything here is **Established**; the raw trail is in the decompile
+workspace's notes for this unit.
+
+**The kind byte.** `id` is read as an integer and stored as **one byte** —
+the low eight bits — so the byte the builder and the service pass dispatch
+on is `id mod 256`. After `[COMMON]` (read only when the subsection exists,
+[02 R-MALF-01 §5]) the parser switches on that byte and reads exactly these
+keys, with the stored width and cap:
+
+| Kind | Keys read after `[COMMON]` |
+|---:|---|
+| 0 | `totalgadgets` (16-bit, later overwritten by the section count), `panel`, `crdefault`, `escdefault`, `defaultfocus` (16 bytes each); then, when a `[VERSION]` subsection exists, `major`, `minor`, `revision` (one byte each) |
+| 1 | `status` (16-bit down-state word), `text` (128 bytes, localized), `quickkey` (an alphabetic first character verbatim, otherwise the decimal value of the string), `grayedout` (bit 0 of the grey word, §13), `stages` (byte) |
+| 2 | `itemheight` (16-bit); the list's change-callback word and its per-row flag pointer are zeroed here |
+| 3 | `maxchars` (16-bit, capped at 128 here; the builder caps it again at 127, §12), then `text` (128 bytes, localized) |
+| 4 | `range` (16-bit `travel`), `thick` (16-bit, widened to the 32-bit read-out range), `knobpos`, `knobsize` (16-bit each); the change-callback word zeroed; then `text` (128 bytes, localized) |
+| 5 | `link` first byte and the label quickkey byte zeroed, the text buffer zeroed; `text` (128-byte buffer, localized, copied back with a 127-byte bound), `link` (16 bytes) |
+| 6 | `hotornot` (bit 0 of the surface's flag word) |
+| 7 | `filename` (32 bytes) into the text field |
+| 8 | `filename` (32 bytes) into the text field — the same key and the same slot as kind 7 |
+| 10 | `nuttin` (integer, stored as a 32-bit word at the start of the text field) |
+| any other value (6 aside: 9, 11, 12, 13, 14 …) | `[COMMON]` only |
+
+The declared count is then replaced by the number of top-level sections
+minus one, as [02 R-MALF-01 §5] states. Nothing in the parser rejects an
+unknown kind; the record keeps its `[COMMON]` fields and the builder (§12)
+decides whether any build work follows.
+
+### Closed — the window builder's kind switch, exactly [R-WGT-01 §12] (2026-09-02)
+
+**Established — the table.** The builder (the routine that resolves art,
+synthesises the slider arrows and paints the tree — the "control-kind
+switch" of §4) dispatches on the kind byte through a **fourteen-entry jump
+table** indexed 0–13 after an unsigned `> 13` bounds test. Entries 6, 9 and
+10 and every value above 13 do **no build work** (the gadget keeps its parsed
+record and is serviced by the pass as usual — kind 6's surface callback and
+kind 10's line painter need nothing built). Eleven keys select ten arms;
+kind 11 shares the panel arm with kind 0:
+
+| Key | Arm |
+|---:|---|
+| 0, 11 | panel: a negative window `ypos` receives the centring offset (§4's "−1 centering"); when the window has no GAF yet, `anims\<name>` is opened as the window's own GAF; the `panel` entry is resolved own GAF → common GAF → common `BackTile` (every frame's origin zeroed) and stored as the window background |
+| 1 | button (§3) |
+| 2 | listbox: `LISTBOX` from the common GAF (frame origins zeroed); then every **other** kind-2 gadget with the same `assoc` byte and this one take the larger of their two `itemheight` values (both records are written) |
+| 3 | text input: `TEXTINPUT` from the common GAF (frame origins zeroed); `maxchars` capped at **127**; the 128-byte text buffer zeroed |
+| 4 | slider (§5) |
+| 5 | label: an empty `link` sets attribute `0x10` (inert, §7), otherwise the quickkey assignment of §3 runs; `colorf` zeroed |
+| 7 | font: the whole file `<font directory>\<filename>.FNT` is loaded into the gadget's file slot — the directory is the interface context's font directory, set to `fonts` when the interface starts, joined with a backslash; the extension is appended verbatim to the authored name |
+| 8 | raw file: the authored `filename` is opened **verbatim** (no directory, no extension) and loaded whole into the same slot; nothing reads it afterwards (§8's "kind 8 has no runtime behaviour") |
+| 12 | picture: `colorf` and the frame pointer zeroed, then frame 0 of the entry named by the gadget's name, own GAF first, then the common GAF |
+| 13 | score bar: the next-due stamp ← scaled timer + the gadget's `interval` ([R-HUD-03 §11]) |
+
+**Correction to §4 "Control-kind mapping is closed".** That paragraph
+counted "twelve handled cases" and named "a text case, an unnamed zeroing
+case, two embedded-file cases, and three further single-purpose cases". The
+switch has eleven keys over ten arms as tabled above. Mapping the old
+labels: the "text case" is the label arm (5); the "two embedded-file cases"
+are 7 and 8; the "three single-purpose cases" are 11 (an alias of the panel
+arm), 12 and 13; and **no arm only zeroes** — the label and picture arms
+zero `colorf` (and the picture arm its frame pointer) before their own work,
+which is the nearest thing to a "zeroing case". The same paragraph's "text
+input (name capped at 127 bytes)" is the `maxchars` cap; the name field is
+16 bytes for every kind. `[fmt gui]` carries the file-side consequences.
+
+### Closed — the grey flag: one word, its writers and every test site [R-WGT-01 §13] (2026-09-02)
+
+**Established.** "Greyed" is bit 0 of a per-gadget word that is **not** the
+`attribs` word — `attribs` has no greyed bit. The word is written by the
+parser from `grayedout` (kind 1 only; on a kind-4 record the same slot holds
+the `thick` read-out range, which is why the grey/lock helper of [R-FE-02 §5]
+locks a slider through its *locked* word instead) and at run time by the
+grey/lock helpers (by index, by name, and the per-kind form). Within the
+widget layer it is read at exactly these sites:
+
+- the **button handler**, as its first statement: a greyed button returns
+  before its own hit test, so it neither captures nor fires, whether the
+  press is a click or a quickkey (§3 "greyed buttons ignore everything");
+- the service pass's link resolution — a greyed link target swallows the
+  click (§7);
+- the key matrix — Enter's `crdefault` and Space refuse a greyed button, and
+  the focus order excludes greyed buttons (§2);
+- the painter's frame choice (§3);
+- a gadget-dump debug printer, which prints the bit and does nothing with it.
+
+So the test is at press/fire time, not at hover: the pass's hit test (§1
+step 5) skips only hidden gadgets, so a greyed gadget still becomes the
+hovered gadget and still feeds `HELPTEXT`. A reimplementation therefore needs
+one boolean per gadget carrying `grayedout` and the helpers' writes; nothing
+derives it from `attribs`.
 
 ### Closed — art-less bevels: geometry, the three colour fields, and the window fill [R-FE-02 §4] (2026-08-29)
 
@@ -5527,7 +5630,29 @@ dispatch:
 | `8` | Queued-order icon: an animated cursor-GAF frame at the order point, index `tick/(tpf*2) % nFrames` into the cursor handle array at the descriptor's icon byte, drawn with the half-height shear; in battle the attack icons (1/2) alternate color-map entries 12/4 on the low tick bit and additionally draw the weapon AOE/coverage/attack-length rings. |
 | `16` | Once per unit: labeled range rings — sight/radar/sonar/jammer/build-distance/maneuver/kamikaze radii read straight from the unit definition's fields (the kamikaze radius is the trigger distance of [04 R-SPEC-01 §1]), weapon ranges from the weapon definition's authored range field — in color-map entries 15/12/14 per branch; the weapon-range pulse grows from 8 to the authored range over `tick mod 60`. |
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+Descriptor-table facts: the table is runtime-built with base and end pointers
+installed at startup; the records are fixed-stride with stride 25, proven by
+the binary-search divisor in the kind lookup. Each record
+carries the order-kind id, the draw-mask word, the icon byte, the
+order-flags
+word (copied onto each node the order issues), and a name pointer. Three
+static record tables feed the registry — the ground-state table (22 records:
+Move_Ground, Follow_Ground, Suppress, Attack_Chase, Attack_Kamikaze,
+AttackSpecial, Park, Patrol, Ground_Pickup, Ground_Unload, Teleport,
+MobileBuild, HelpBuild, RepairPatrol, RepairUnit, Capture, Resurrect, Reclaim,
+ReclaimUnit, RepairUnitNoMove, Standby, Standby_Mine), the ground-special
+table (23 records: Stop, Attack_NoMove, Activate/Deactivate/Cloak pair,
+Standing_MoveOrder/Standing_FireOrder, BuildingBuild, BuildWeapon,
+SelfDestruct pair, Paralyze, GetBuilt, BeCarried, MakeSelectable, Wait,
+WaitForAttack, AttackUType, Guard_NoMove, SelfRepair, QMove, QPatrol), and the
+VTOL table (22 records: VTOL_Standby through VTOL_LandIfCan) — and their
+draw-mask words are listed in the helper table above. The icon bytes equal the
+cursor index table's values, an independent confirmation of the corrected
+table in §8.
+The
+always-on selected-unit connecting quad uses a single GUI-context color-map
+color; there is no owned-vs-other color pair in the overlay itself —
+differentiation is by mask width (full `0x1F` vs marker-only `1`), not color.
 
 Corrections to the overlay paragraph above: the mask is **five bits, not
 four** — the icon helper (bit 8) was missing from that enumeration, and the

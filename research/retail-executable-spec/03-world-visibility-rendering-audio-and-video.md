@@ -2674,6 +2674,16 @@ targeting/visibility predicates of section 3.1. This consumer set is what
 pins the grid's gameplay role as the per-player explored/mapping gate while
 the semantic naming hedge of section 3.1 item 2 stands.
 
+**Confirmation (2026-09-02, RWU-19-30).** Re-read against a code marker that
+asked for the grid's "occupancy-commit write sites": there are none. The
+occupancy commit, the footprint stamp and clear, unit creation and building
+completion do not reference the grid; the three writers above are the
+complete set, and the runtime bit writer is the phase-5 LOS sweep alone. The
+grid the path search, the landing-legality accept (`[04 R-AIR-01 §6a]`) and
+the placement validators read is this one — a movement-side "owner mask" is
+an alias of the visibility publisher's array, never a separately maintained
+copy (`[04 R-PATH-01 §14]`). Established.
+
 #### R-VIS-01 §1 — the visibility mode word: authored option provenance and exact polarity (2026-08-29)
 
 Status: **Established** (direct static trace of the battle-entry initializer,

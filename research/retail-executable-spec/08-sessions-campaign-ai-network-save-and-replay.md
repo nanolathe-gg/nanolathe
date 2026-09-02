@@ -109,6 +109,33 @@ Several numeric slot-state values are directly observed, but the semantic name
 of every value is not completely reconciled. Implementations should keep the
 wire values distinct even when UI labels collapse them.
 
+### Closed — the player record's peer-identity word is the kind-3 pool sort key [R-SESS-01 §7] (2026-09-02)
+
+**Established.** The `PlayerSortKey` of [04 §2.3a] is a 32-bit word of the
+player record that the rest of the executable treats as the slot's **peer
+identity**. Its writers, all of them: the *slot-activation* routine (the
+one the skirmish row→player conversion of [R-SKIR-01 §2] and the lobby's
+join path call with a slot index and a controller code) stores the **slot
+index** in it while it resets the slot's statistics; the lobby's join path
+then overwrites it with the joining peer's DirectPlay identity. Its readers:
+the "local slot's identity" accessor (the first slot whose controller is 1),
+the "record by identity" accessor (a miss returns the tenth, sentinel
+record), the peer-removal and reject paths ([R-OOS-01 §1]'s `0x1b` sender),
+the alliance sender, the chat `+` command's slot-digit check (a slot whose
+word is zero is refused), and the unit-pool initializer's comparator — which
+consults it **only when the session kind is 3** and otherwise orders by the
+slot index, exactly as [04 §2.3a] states.
+
+**Consequence for single-player.** In kinds 1 and 2 the comparator is never
+consulted, so the pool order is the slot order whatever the word holds (and
+after activation it holds the slot index anyway). The word has no save item
+([08 "Player records"]) and a loaded battle restores its kind from the
+`Summary` `Gametype` ([08 "Load process"]), so no "saved sort key" exists to
+be surfaced: a reimplementation that never builds a kind-3 session needs no
+sort-key plumbing at all. Doc 04's "exact provenance and semantic name of
+`PlayerSortKey` … remain outside this section's scope" is answered here
+(cross-doc: doc 04 to cite).
+
 ### Peer transport state
 
 Each network peer has state for:

@@ -167,11 +167,8 @@ func TestNoOtherStartBuildingFlagWriterInConstruction(t *testing.T) {
 		if strings.Contains(src, "orders.EmitStartBuilding(") {
 			emitSites[name] = true
 		}
-		if n := strings.Count(src, "StartBuildingHeading("); n > 0 {
+		if strings.Contains(src, "StartBuildingHeading(") {
 			headingSites[name] = true
-			if n != 1 {
-				t.Errorf("%s issues the slot-form heading emission %d times, want the single construction-command site", name, n)
-			}
 		}
 	}
 	for _, want := range []string{"factory.go", "reclaim.go"} {
@@ -179,8 +176,14 @@ func TestNoOtherStartBuildingFlagWriterInConstruction(t *testing.T) {
 			t.Errorf("%s does not adopt orders.EmitStartBuilding for its nanolathe/assist site [R-ORDER-02 §2]", want)
 		}
 	}
-	if len(headingSites) != 1 || !headingSites["factory.go"] {
-		t.Errorf("slot-form heading emission sites %v, want only factory.go (the construction-command producer)", headingSites)
+	// Corrected (2026-09-02): this required exactly one heading-carrying site,
+	// factory.go's, on §3.8's earlier "carries the producer heading". That is
+	// withdrawn — the argument-carrying form is the order-record emitter of the
+	// nine mobile work handlers and its argument is the relative bearing to the
+	// work target; the factory raises the building-bit EDGE and nothing else
+	// [04 §3.8 correction 2026-09-02][04 R-CB-01 §3].
+	if len(headingSites) != 0 {
+		t.Errorf("heading-carrying StartBuilding sites %v, want none in construction", headingSites)
 	}
 }
 

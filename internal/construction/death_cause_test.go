@@ -42,10 +42,15 @@ func TestCancelCurrentStampsCauseNine(t *testing.T) {
 		t.Fatalf("cancelled product died with kind %d, want 9 [06 §12.1][05 \"Cancellation boundaries\"]", product.LastDamageCause)
 	}
 	if product.LastDamageSide != product.Owner {
-		t.Fatalf("attacker side = %d, want the product's own owner %d [05 R-WORK-01 §1]", product.LastDamageSide, product.Owner)
+		t.Fatalf("attacker side = %d, want the shared owner %d [06 §9.1]", product.LastDamageSide, product.Owner)
 	}
-	if product.EngagementTarget != product.Handle {
-		t.Fatalf("recorded attacker = %d, want the product itself %d [04 R-UNIT-06 §5]", product.EngagementTarget, product.Handle)
+	// Corrected (2026-09-02): this asserted the product as its own attacker.
+	// The packet cancel-current sends is `damage(attacker = the factory, victim
+	// = the product, 30000, kind 9, flag 0)`; the self form belongs to the
+	// shared step's reverse arm alone
+	// [05 "Cancel-current and stop interrupts"][05 R-WORK-01 §1].
+	if product.EngagementTarget != factory.Handle {
+		t.Fatalf("recorded attacker = %d, want the factory %d [04 R-UNIT-06 §5]", product.EngagementTarget, factory.Handle)
 	}
 }
 

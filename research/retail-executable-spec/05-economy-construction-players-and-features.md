@@ -972,7 +972,10 @@ bar ([R-ECO-01 §6]). `UpdateTime` uses `<=`, `DisplayTimer` uses `<`; the
 difference is real and is not a transcription slip. This closes half of the
 tail's "consumers of the `WinLoseTime` / `DisplayTimer` sibling deadlines
 beyond their save keys": `DisplayTimer` has exactly one consumer, the resource
-bar's rate latch. `WinLoseTime` remains open.
+bar's rate latch. `WinLoseTime` is closed too (2026-09-02, RWU-19-31): a
+bounded census of every access to that record field finds only the save
+reader and writer — it has no gameplay reader ([08 "Player records"]).
+*Previous text:* "`WinLoseTime` remains open."
 
 **Established — the x87 environment, and what "bit-exact" therefore means.**
 The runtime calls `fninit` at startup and immediately sets the precision
@@ -6874,7 +6877,7 @@ executor's phase 0 runs.
 - Semantic meaning of the game-ended flag bits and of the two mission-end
   predicates behind the confirmation delay; the bit patterns and the
   freeze-on-settlement effect are established · doc 08 · static trace.
-- The consumer of the `WinLoseTime` sibling deadline beyond its save key;
+- ~~The consumer of the `WinLoseTime` sibling deadline beyond its save key~~ — closed 2026-09-02 (RWU-19-31): none exists beyond the save reader/writer ([08 "Player records"]);
   `DisplayTimer`'s sole consumer is closed by [R-ECO-01 §6], and the two
   settlement status-pair fields are named by [R-ECO-01 §12] (the live-unit and
   units-ever-created counters) · "Authoritative settlement order" · static

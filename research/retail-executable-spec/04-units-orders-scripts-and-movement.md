@@ -202,6 +202,15 @@ another unit-state field. That draw is not part of heading selection; callers
 that model the common allocator must preserve its position in the global RNG
 call order even though the field's semantic name is outside this finding.
 
+**Closed (2026-09-02, RWU-19-30) — the second draw is the hover-bob phase
+word.** The "another unit-state field" above is the per-unit signed 16-bit
+bob phase word that `[R-MOV-01 §5]` names `unit.bobPhase`: the initializer's
+last action before it registers the unit is to draw `RNG(0x10000)` on the
+simulation stream and store the low 16 bits into that word. It is written
+nowhere else (bounded census: the only other store to that record offset in
+the image belongs to a different structure family in the presentation code).
+See `[R-MOV-01 §5c]`. Established.
+
 **Lifecycle and writer census — Established.** The allocator is the only
 heading writer in the common unit-creation path. Mission-unit creation invokes
 the allocator first and then copies the authored mission placement angle over
@@ -4174,6 +4183,80 @@ above is a fourth writer, and `GetBuilt` is woken by it. Doc 05's
 [R-WORK-01 §1] listing named the store `setWorkedThisTickFlag(target)`; it is
 this bit, and the listing is corrected there.
 
+### Closed — six handler details re-read: `AttackSpecial`'s reject, descriptor 0's handler, `SelfRepair`'s two reads, the guard's bit 28, the repair arm's bits 2–3, and `HelpBuild`'s footprint [R-ORD-01 §12] (2026-09-02)
+
+All **Established** (direct static trace of the named handler bodies, the
+descriptor table's battle-entry insert, and a writer census of the status
+word's bit 28).
+
+**`AttackSpecial` has no reject arm, and descriptor 0's handler is an
+unconditional complete.** The `[R-ORD-01 §2]` row is exact for the resolving
+case; the handler body is three statements with no branch: resolve command
+code 3 against the record's target, re-identify the record as whatever
+identity the resolver wrote — the reject sentinel 0 included — set p1 = 2,
+return *hold*. A rejected resolution therefore re-identifies the record as
+**descriptor 0**, keeping only the record's own `0x600` bits (descriptor 0's
+mask is zero), and the pump re-dispatches it under descriptor 0's handler in
+the same pass. That handler is now read: it **returns 5 (complete)
+unconditionally** — it reads nothing, writes nothing, emits no caption.
+Descriptor 0 is the 68th record, inserted at battle entry rather than
+registered from the three static handler tables that hold the other 67:
+canonical name empty, state label `Ready`, no presentation helper,
+acknowledgement group 15, gate mask 0. Net behaviour of a rejected
+`AttackSpecial`: the record completes silently on its next dispatch. The
+same reading closes the two "Missing and unknown" items on "what the pump
+does with a spawned record of identity 0" (`VTOL_SeekGuard`'s unchecked
+code-7 spawn): such a record runs once and completes.
+
+**`SelfRepair` phase 0 reads one field on the target and one on itself.**
+`[R-ORD-01 §2]` says "target must be complete (remaining fraction 0.0) and
+activated (edge bit 0)". The activation read is on the **unit running the
+order — the patient**, not on the target: the phase admits when the target's
+(the repairer's) definition has `builder`, the target's remaining fraction is
+exactly `0.0`, and the *patient's* edge byte has bit 0 set.
+`[05 R-WORK-01 §3]` had this right ("the repairer's own remaining fraction is
+zero … and the patient carries an instance permission byte's low bit"); the
+§2 row's "and activated" is corrected to "and **this unit** is activated".
+`RepairUnitNoMove` phase 0 (`[R-ORD-01 §5]`) reads the same pair the same
+way, and its text was already correct.
+
+**Bit 28 is the in-game bit, not a building-class bit.** `[R-ORD-01 §1]`
+calls the status emitter's gate "the alive/building-class bit 28", and the
+`Guard_NoMove` row tests "if it exists and carries bit 28". Writer census:
+the unit initializer sets bit 28 unconditionally for every unit of either
+class, and the unit teardown clears it (beside zeroing the definition
+index); no other writer exists in the bounded image. The **building-class**
+bit is bit **29**, set by the same initializer from the definition's class
+byte (`[08 R-AI-03 §4]`'s correction). Bit 28 therefore means *constructed
+and not yet torn down* — alive in the record-lifetime sense: it is set on a
+nanoframe and stays set on a dying unit until teardown (the death latch is
+bit 14). The guard's phase-1 test is an aliveness test, satisfied by mobile
+targets, and the status emitter's gate is the same test. The
+"/building-class" half of the §1 label is withdrawn.
+
+**"Target state-word bits 2–3 set" is the movement-rate tier.** The arm
+`RepairUnit` phase 3 and `RepairUnitNoMove` phase 1 take on
+`(target.status & 0xC) != 0` reads the two bits `[R-MOV-01 §6]`'s classifier
+writes as the cached **movement-rate tier** (`0` stopped; `1`–`3` the
+`MoveRate1/2/3` bands): nonzero means the target is moving under its own
+mover this tick. `RepairUnit` then emits `StopBuilding`, sets deadline 15 and
+*restarts* (re-approaches); `RepairUnitNoMove` simply *advances*.
+`[05 R-WORK-01 §3]`'s "if either of the target's movement-mode bits is set it
+re-approaches" names the wrong pair — the movement-mode mirror is bits 0–1,
+tested separately before the phase switch (`≠ 1` → `Repairs unsuccessful.`);
+the re-approach arm reads bits 2–3.
+
+**`HelpBuild`'s approach radicand uses the target's footprint.**
+`[R-ORD-01 §5]` says the half-term is taken "from **my own** footprint". It
+is not: phase 0 loads `FootPrintX` and `FootPrintZ` from the **target's
+definition** (the unit being assisted), forms
+`FootPrintX² + FootPrintZ + FootPrintZ`, takes `trunc(16·sqrt(·))`, halves
+it with a signed divide, and installs the annulus with outer
+`builddistance + half` and inner `half` — where `builddistance` is the
+**builder's own**. `[05 R-WORK-01 §2]` ("taken from the target's
+definition") was right; §5's "from my own footprint" is withdrawn. The
+asymmetric radicand stands exactly as §2 records it.
+
 ### Closed — command resolution, exactly [R-ORD-02 §1] (2026-08-29)
 
 §3.4's table names the outcomes of the command resolver; this block gives
@@ -4575,6 +4658,8 @@ only ground repeats it after the pick.
 - What the pump does with a spawned record of identity 0 (`VTOL_SeekGuard`
   spawns the code-7 result unchecked) · [R-ORD-02 §3], §3.1 · static read of
   descriptor 0's handler pointer.
+  *Closed 2026-09-02 (RWU-19-30, `[R-ORD-01 §12]`): descriptor 0's handler
+  returns 5 unconditionally; the record completes on its first dispatch.*
 
 ### Closed — code 1's friendly arm is the shared nano-reach, health term included [R-ORD-02 §7] (2026-09-02)
 
@@ -9312,6 +9397,63 @@ produces. **Established:**
   two points ([R-MOV-01 §3]). A reimplementation returning a fixed zero
   triple at zero count is not a divergence from anything observable.
 
+### Closed — the owner mask has no occupancy-commit writer, and the commit tick is the mover's [R-PATH-01 §14] (2026-09-02)
+
+Status: **Established** (bounded static census of the mapping grid's writers,
+re-read; direct trace of the occupant-age gate, the footprint stamp, and the
+request revision pass).
+
+**No commit-time writer of the "owner/building-mask" exists.** The word the
+search's coarse test reads is the per-player mapping grid of
+`[03 R-LAYER §1]`, and that section's writer census stands on re-read:
+map-load zero fill, the bulk wipe-and-rebuild, and the phase-5 per-player LOS
+stamp sweep. Neither the occupancy commit, the footprint stamp, the footprint
+clear, unit creation, nor building completion references the grid. A
+reimplementation that gives its class layer an "owner mask" must **bind it
+to the visibility publisher's grid** — the same array, the same per-player
+slot bit, updated only by the LOS sweep — and must not write it from the
+commit step; a mask with no such binding stays all-zero and the search's
+bit-miss value never occurs. `[R-PATH-01 §2]` and `[03 R-TERR-01 §7]` already
+retire the "owner/building-mask" name.
+
+**The occupancy-commit tick lives on the mover, and buildings have none.**
+`[R-DOC04-B]` and `[R-PATH-01 §2]` describe the occupant-age gate as "a cell's
+mobile occupant whose last occupancy-commit tick predates the class record's
+revision watermark blocks" and add "A building never commits a move, so its
+commit tick stops advancing at creation; once the class record's watermark
+passes it the building's footprint cells … hard-block". The field is not on
+the unit record: it is a word on the unit's **mover** structure, and the gate
+reads it through the occupant's mover pointer:
+
+```text
+occ = cell.occupantSlot
+if occ != 0:
+    mover = unit[occ].mover
+    if mover == null or mover.commitTick < classRecord.watermark:  BLOCK
+```
+
+A building has no mover, so the `mover == null` arm blocks it
+**unconditionally — from the first classification that finds it in the
+occupant word, whatever the watermark**. The "frozen commit tick that the
+watermark eventually passes" mechanism is withdrawn; the outcome (buildings
+hard-block the search) is unchanged, but it is immediate and does not wait
+for a request revision to arm the watermark. For a mobile occupant the
+compare is as stated: block when its mover's commit tick is older than the
+watermark.
+
+**Writers of the mover's commit tick.** The footprint stamp writes it to the
+current tick as its first action (guarded on the mover existing), and the
+stamp is reached from: the occupancy commit (every non-stationary proposal,
+`[R-COLL-01 §1]`); **unit creation** — the creator stamps the new unit's
+footprint after the initializer returns, so the creation-time stamp does
+write it; the carried-position setter (`[R-COLL-01 §1]`, also used by
+`Teleport`); and the save-load reconstructors. The request revision pass
+additionally refreshes the requester's own word to the current tick before
+it restamps (`[R-DOC04-B]`), and the release path writes it once more. The
+mover's *last-proposal* tick that the hover bob reads (`[R-COLL-01 §1]`,
+`[R-MOV-01 §5]`) is a **different** word with a single writer, the commit
+step; the two must not be merged.
+
 ### 7.4 Goals, build sites, and revalidation
 
 **Established fact:** Goal objects enumerate one or more goal cells and supply
@@ -10049,7 +10191,49 @@ value of the rate field that scales the counter (doc 01 §7.4), and the writer
 of the per-unit `bobPhase` word. Neither affects this closure — the enumeration
 above ranges over *all* counter phases and *all* `bobPhase` values, so the
 crossing holds whatever those two turn out to be.
+*Closed 2026-09-02 (RWU-19-30): both inputs are now traced — the rate is the
+boot-time constant 30 and the phase word is the allocator's full-domain draw;
+see `[R-MOV-01 §5c]`.*
 
+
+### Closed — the hover bob's two inputs: the 30 Hz scaled clock and the allocator's phase draw [R-MOV-01 §5c] (2026-09-02)
+
+Status: **Established** (direct static trace of the animation-counter helper,
+its rate field's single writer, and the unit initializer's phase store).
+
+**The animation counter is doc 01's scaled clock, at rate 30.** The counter
+`[R-MOV-01 §5]` reads is `floor(GetTickCount() · rate / 1000)`, the multiply a
+32-bit unsigned product and the divide-by-1000 unsigned. The rate word has
+exactly one writer: the engine's boot-time timebase installer stores **30**
+into it, once, before any battle exists — it is not a session option, not a
+registry key, and nothing rewrites it. The counter is therefore the same
+helper family as `scaledNow = floor(ms × 30 / 1000)` of `[01 §4.1]` — the
+30-per-second wall-clock scale that budgets the tick — read raw (no start
+offset subtracted) and masked to its low five bits by §5. This closes the
+doc 01 §7.4 "Missing and unknown" item on the rate field's writer and value;
+it is recorded here because the consumer is doc 04's, and doc 01 may cite
+this section.
+
+**The phase word is the allocator's full-domain draw.** `unit.bobPhase` is
+written once, by the unit initializer, as the low 16 bits of a simulation-RNG
+draw below `0x10000` — the "separate full-domain simulation draw for another
+unit-state field" that `[R-P28-ANG-01R §2]` already places in the RNG call
+order immediately after the `buildangle` draw. Every unit receives one,
+whether or not it can hover; no other writer exists (bounded census over the
+image). Hovercraft therefore rock out of phase with one another by a per-unit
+random offset fixed at creation, and a save that restores the unit record
+restores the phase.
+
+**Consequence for Nanolathe (the deliberate divergence, restated).** With the
+rate known to be 30, the retail counter is a 30 Hz wall-clock count that
+drifts against the simulation tick by exactly the budget clamp's lag, and
+`[R-MOV-01 §5b]` shows that drift is script-visible for ten of the thirteen
+stock `canhover` definitions. Nanolathe keeps §5 exact except that it derives
+the counter from the tick — one step per tick, which is what "30 per second
+at 30 ticks per second" reduces to when no lag exists — and it takes the phase
+word from the allocator draw it already performs. The only remaining
+divergence is the one §5b bounds: which of `{0, −1}` a hovering unit's height
+offset takes on a given tick when the wall clock and the tick disagree.
 
 ### Closed — the movement-rate tiers [R-MOV-01 §6] (2026-08-28)
 
@@ -10887,6 +11071,18 @@ is TODO(question)" — is superseded: the mechanism is the sweep's state-gate,
 not a hook, and the population is the watch/defeated one, whose units are
 inert in the sweep by design.
 
+**Clarification (2026-09-02, RWU-19-30) — arrival needs no published
+route.** The ground arrival bit `0x20` is raised by the follower's per-tick
+service from the goal payload's **own** arrival test — the tile-versus-
+goal-cell predicate above — before any waypoint work; the test has no route,
+point-count or search-status term. A mover that reaches the goal cell by
+direct walking while its path request is still pending, or was never
+published, completes the order exactly as one that consumed a route does.
+The code-side question ("whether a direct arrival with no published route
+should complete the order") is answered affirmatively; the sweep's state-gate
+above is the only thing that withholds arrival from a population, and it does
+so by never running the mover. Established.
+
 ## 9. Hover, floaters, and amphibious behavior
 
 ### 9.1 Medium bands
@@ -11334,6 +11530,9 @@ rounded to nearest and stored as a signed 16-bit angle.
 `pitchscale`'s default of zero means a definition that authors neither key
 banks with unit gain and does not pitch at all. `bankscale` and `pitchscale`
 have no other reader.
+
+*Addendum (2026-09-02, RWU-19-30): the coordinate-pair rotation's exact
+arithmetic and sign convention are stated in `[R-AIR-01 §15]`.*
 
 **Established — bank and pitch are authoritative, not presentation-only.** The
 two words feed the piece-angle triple that the occupancy commit builds for every
@@ -12674,6 +12873,100 @@ lead-intercept arm's own tail, minus the marker. The give-up arm of
 [R-ORD-02 §5] is reached from exactly two states: arrival bits set with a
 non-positive dot, or arrival bits clear with the counter at or above `0x5A`.
 
+### Closed — the coordinate-pair rotation, the brake block's axis mapping, and the vertical-hold sentinel by role [R-AIR-01 §15] (2026-09-02)
+
+Three integrator details that code markers asked about. All **Established**
+(direct instruction trace).
+
+**The shared coordinate-pair rotation.** One helper rotates an `(x, z)` pair
+of 32-bit words in place by a 16-bit heading. It returns at once, leaving
+both words untouched, when the heading **word** is zero. Otherwise it
+converts the heading as a *signed* 16-bit integer to radians
+(`heading · 2π/65536`, a stored double constant), takes sine and cosine on
+the x87 stack, and stores
+
+```text
+x' = x·cos θ − z·sin θ        // stored first
+z' = x·sin θ + z·cos θ
+```
+
+each through a float-to-integer store under the retail control word (round
+to nearest, ties to even). Read against retail's heading convention —
+heading 0 is the `+z` axis and the direction of heading `h` is
+`(−sin h, −cos h)` (`[R-MOV-01 §4]`) — this is **body-to-world**: a
+body-frame offset `(0, r)` at heading `h` lands at world `(−r·sin h, r·cos h)`.
+Seven call sites use it: the lean accumulator of §2, the velocity-marker
+goal update of `[R-MOV-03 §2]`, the four-corner terrain conform of
+`[R-MOV-01 §5]` (whose `wz = unitZ − rz` subtraction is that section's own,
+applied after the helper returns), and four small vector helpers outside the
+movement path. The transpose (`x·cos + z·sin`, `−x·sin + z·cos`) is **not**
+what retail computes.
+
+**The brake block's axis mapping (`[04 §10.1]` C28).** After the strict
+`h > b` test and the `trunc((b/h)·65536)` scaling of both horizontal
+components, the excess `q = trunc((h − b)·65536)` is applied as
+
+```text
+vx −= sinComponent(heading, q)       // (table[sin] · q + 0x1000) >> 13
+vz −= cosComponent(heading, q)       // (table[cos] · q + 0x1000) >> 13
+```
+
+with the two fixed-point component helpers of `[04 §5.1]` (the sine index
+from the heading, the cosine index from the heading plus a quarter circle;
+each product rounded by adding `0x1000` before the 13-bit shift). Sine feeds
+`vx`, cosine feeds `vz`, and both are subtractions. Note what that means
+against the direction convention above: a velocity pointing exactly along
+the heading is `−s·(sin h, cos h)`, so scaling it to magnitude `b` and then
+subtracting `q·(sin h, cos h)` restores magnitude `b + q = h` — for a
+heading-aligned velocity the block is an identity, and it acts only on the
+part of the velocity that is *not* along the heading, turning that excess
+into forward speed. That is the arithmetic as shipped; whether it was
+intended is not a question the executable answers.
+
+**The vertical-hold sentinel, by role.** The word `[04 §10.1]` C29 compares
+"by full 32-bit pointer equality against a global sector sentinel" is the
+unit's **air-sector list link**, and the global is the **off-map sector
+record** of `[R-AIR-01 §5]`: the flight integrator skips its vertical
+velocity assignment while the unit's footprint anchor lies outside the
+attribute grid. The code-side placeholder name *vertical-hold sentinel*
+describes the effect; the role is **off-map**. §5's eight-consumer list
+covers the other readers.
+
+### Correction — the air-attack entry sequence's three unnamed fields, and step 2's missing gate [R-AIR-01 §16] (2026-09-02)
+
+`[R-AIR-01 §8]` step 1 reads: "when the record has no successor marker
+**and** the unit's status word has either of bits `0x300000` set, replace
+the current order with a fresh `VTOL_SEEKATTACK` record carrying the same
+target and cached goal; return 5 either way", and step 2: "If the target
+reference is null but the record's `0x200` 'cached goal valid' bit is set,
+replace the current order with `VTOL_SEEKATTACK` at the unit's own position
+and return 5." Neither step named its fields, and step 2 omitted a gate.
+Re-read from the bombing run's entry block (the four executors share it):
+
+* **"No successor marker"** is the record's *next-record link* being null —
+  the record is the **last on its segment**, the same test `VTOL_Move`
+  phase 2 makes before it captions `Arrived` (`[R-ORD-02 §2]`). "Marker"
+  was a misnomer; no path-marker field is involved.
+* **Bits `0x300000`** are the unit status word's **fire-stance pair** (bits
+  20–21, `[R-STANCE-01 §2]`): "either set" means the stance is not *hold
+  fire*.
+* **The `0x200` bit** is bit 9 of the record's **static-mask copy** — the
+  descriptor mask bit that `[R-MOV-03 §7]` shows the record constructor
+  clears when the record was built with no target. It does not mean "cached
+  goal valid"; it means *this record was issued against a target*, so a null
+  target reference now is a target that has since gone (the cached goal is
+  the position step 3 kept refreshing while it lived).
+* **Step 2 is also gated on the successor test.** With the target null and
+  the mask bit set, a record that has a successor returns 5 **without**
+  issuing the seek; only the last record on its segment replaces itself.
+  The earlier text stated that replacement unconditionally.
+
+The replacement itself allocates the seek record (a null allocation degrades
+to the plain return 5), constructs it with the same target and the record's
+goal triple (step 1) or with no target at the unit's own position (step 2),
+and hands it to the replace-at-head tail; the entry then returns 5.
+Established (direct trace of the shared entry block).
+
 ### 10.3 Patrol and air construction orbit
 
 **Established fact:** Air construction orbit is an exact geometric recurrence,
@@ -13320,6 +13613,8 @@ replacement bullet is needed because the ground path has no vertical term.
 - What the pump does with a spawned record of identity 0, which
   `VTOL_SeekGuard` can produce by spawning an unchecked code-7 resolution
   · §3.1, [R-ORD-02 §3] · static read of descriptor 0's handler pointer.
+  *Closed 2026-09-02 (RWU-19-30, `[R-ORD-01 §12]`): descriptor 0's handler
+  returns 5 unconditionally; the record completes on its first dispatch.*
 
 ### COB
 

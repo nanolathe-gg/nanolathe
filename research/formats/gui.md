@@ -55,7 +55,7 @@ gadget is one element of it.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `id` | int | Gadget type — dispatches everything else. Known: 0 header, 1 button, 2 listbox, 3 textbox, 4 scrollbar, 5 label, 6 blank surface, 7 font, 12 picture box. |
+| `id` | int | Gadget type — dispatches everything else. Known: 0 header, 1 button, 2 listbox, 3 textbox, 4 scrollbar, 5 label, 6 blank surface, 7 font, 12 picture box. **Stored as one byte** (the low eight bits of the integer), so the engine dispatches on `id mod 256`. The executable also knows `8` (raw file, below), `10` (line, below), `11` (built exactly like a header/panel) and `13` (the end-of-mission score bar, created by the engine, never authored); `9` and everything above 13 read only `[COMMON]` and get no build work. Full per-kind key table: [07 R-WGT-01 §11]; builder dispatch: [07 R-WGT-01 §12]. |
 | `assoc` | int | Association key linking gadgets. Confirmed effect: a listbox and scrollbar sharing `assoc` are wired together (listbox drives knob size, scrollbar scrolls list). **Correction (2026-08-29):** "Most gadgets ignore it" was too strong — buttons with the radio attribute use it as their group, a slider's synthesised arrow buttons carry it, a listbox copies its selection to same-`assoc` listboxes and (attribute 8) to a same-`assoc` textbox; see the executable spec [07 R-WGT-01 §3, §5]. |
 | `name` | string | Dual purpose: (a) graphic lookup — the name of a GAF entry in `<menu>.GAF` or `commongui.gaf`, falling back to default art for the type/size; (b) event binding — hard-coded per-menu event names attach behavior. `HELPTEXT` is a universal name: a label so named shows hover help text. |
 | `xpos`, `ypos` | int | Position in pixels (640×480 space). The first gadget is clamped so the interface stays on-screen. |
@@ -90,7 +90,7 @@ out-of-range value as "unset".
 | `status` | Starting frame within the button's GAF entry (multi-stage buttons must use 0) |
 | `text` | Label text. Multi-stage buttons separate per-stage text with a vertical bar (e.g. `text=On\|Off;`) |
 | `quickkey` | Keyboard accelerator as an ASCII code (`83` = `S`); a bare symbol also occurs in data. **Correction (2026-08-29):** this row implied the field is honoured; the executable overwrites it at window open with the first free letter of the label unless `attribs` bit `0x10000` is set — see [07 R-WGT-01 §3] |
-| `grayedout` | `1` = visible but disabled |
+| `grayedout` | `1` = visible but disabled. Stored as bit 0 of the button's own grey word — **not** an `attribs` bit — and tested by the button handler at press time, so a greyed button still shows hover help [07 R-WGT-01 §13] |
 | `stages` | Number of stages for cycle buttons (0 = plain). `stages=1`, or a label of exactly `Off\|On`, is promoted to 2 stages with the `stagebuttn1` art [07 R-WGT-01 §3] |
 
 Stock button GAF entries have frame 0 = rest, frame 1 = pressed, frame 2 =
@@ -147,7 +147,22 @@ screenshots) when its `name` matches the menu's expected event name
 | --- | --- |
 | `filename` | Font resource name without extension (`filename=SMLFONT;` → `fonts/SMLFONT.FNT`) |
 
-Sets the label font for the whole interface.
+Sets the label font for the whole interface. The loader reads `filename`
+into a 32-byte field and the window builder opens
+`fonts\<filename>.FNT` (directory prefix and extension added by the engine)
+[07 R-WGT-01 §12].
+
+### Raw file (`id=8`) — engine-known, never authored
+
+| Field | Meaning |
+| --- | --- |
+| `filename` | Same 32-byte field as the font gadget; the builder opens the name **verbatim** (no directory, no extension) and loads the whole file. Nothing reads it afterwards — the kind has no runtime behaviour [07 R-WGT-01 §8, §12]. |
+
+### Line (`id=10`) — engine-known, never authored
+
+| Field | Meaning |
+| --- | --- |
+| `nuttin` | Integer, stored as a 32-bit word in the text field; no reader found. The line itself is drawn from `attribs`: `1` horizontal, `2` vertical, `4` rectangle outline, in the gadget colour [07 R-WGT-01 §8]. |
 
 ### Picture box (`id=12`)
 
@@ -172,7 +187,9 @@ fields.
   `[COMMON]` is read only when present (an absent one leaves the gadget's
   common fields unwritten); kinds 0–8 and 10 read their extra keys, any
   other `id` reads only `[COMMON]`; a text box's `maxchars` is capped at
-  128. Gadget records are 347 bytes in a fixed 69,463-byte window record
+  128 by the parser and at 127 again by the window builder (the effective
+  cap). The complete per-kind key table with every width is
+  [07 R-WGT-01 §11]. Gadget records are 347 bytes in a fixed 69,463-byte window record
   with no count check (about 199 gadgets fit; more overrun the record). A
   syntax error is fatal like any TDF; a missing panel file returns failure
   to the screen.

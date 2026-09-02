@@ -98,7 +98,12 @@ func TestGetBuiltRetryStates(t *testing.T) {
 	}
 }
 
-func TestGetBuiltPhase2NegativeWorkTruncatesQuantum(t *testing.T) {
+// The decay quantum is not truncated. Corrected (2026-09-02): this test
+// asserted `-(11*100/60)` truncating to -18 before the reverse helper. The
+// wrapper forms `−((float)(buildtime × 11) / buildcostenergy)` in single
+// precision and passes it as a float32 — no integer division, which is what
+// lets a zero `buildcostenergy` reach the step as −∞ [05 R-WORK-01 §11].
+func TestGetBuiltPhase2NegativeWorkQuantumIsSinglePrecision(t *testing.T) {
 	def := newProductDef("armflash", 1, 1, 100, 100)
 	def.BuildCostEnergy = 60
 	product := &units.Unit{Handle: 1, Owner: 0, Alive: true, Def: def, Remaining: 0.5, MaxHealth: 100}
@@ -107,11 +112,13 @@ func TestGetBuiltPhase2NegativeWorkTruncatesQuantum(t *testing.T) {
 	if code := svc.handleGetBuiltOrder(product, node, 40); code != 2 {
 		t.Fatalf("GetBuilt code=%d, want hold", code)
 	}
-	// -(11*100/60) truncates to -18 before the shared reverse helper,
-	// producing exactly +18/100 remaining rather than +11/60.
-	want := float32(0.5) + float32(18)/float32(100)
-	if product.Remaining != want || node.Deadline != 51 || node.DynamicGate != 0x8001 {
-		t.Fatalf("phase-2 result remaining=%v deadline=%d gate=%#x, want %v/51/0x8001", product.Remaining, node.Deadline, node.DynamicGate, want)
+	// The fraction rises by quantum/buildtime = 11/buildcostenergy.
+	want := float32(0.5) + float32(11)/float32(60)
+	if diff := product.Remaining - want; diff > 1e-6 || diff < -1e-6 {
+		t.Fatalf("phase-2 remaining=%v, want %v", product.Remaining, want)
+	}
+	if node.Deadline != 51 || node.DynamicGate != 0x8001 {
+		t.Fatalf("phase-2 deadline=%d gate=%#x, want 51/0x8001", node.Deadline, node.DynamicGate)
 	}
 }
 

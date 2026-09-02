@@ -122,22 +122,19 @@ const (
 	Kind9Cause uint8 = 9
 )
 
-// stampKind9SelfKill writes the provenance pair the cause-9 packet carries,
+// stampKind9Death writes the provenance pair the cause-9 packet carries,
 // on both refund paths [06 §12.1].
 //
-// The one traced form of this packet is the reverse arm's last line,
-// `selfKill(target, target, 30000, kind 9)` [05 R-WORK-01 §1] — the product is
-// both victim and attacker — so the attacker-side snapshot the ordinary intake
-// stores beside the kind byte is the product's own owner [06 §9.1] step 4.
-//
-// TODO(question): cancel-current's step 4 is given only as "send the ordinary
-// kill packet — kind-9 damage of exactly 30000 through the normal death flow"
-// [05 "Cancellation boundaries"], without naming its attacker. Self is taken
-// from the reverse arm's traced call, which killDecayedNanoframe's own
-// contract calls "the same packet cancel-current sends"; nothing observable
-// turns on it, since cause 9's credit branch is none, but the recorded-attacker
-// link does end up holding the frame's own handle.
-func stampKind9SelfKill(product *units.Unit) {
+// The two packets are not the same packet, and the closure of that question is
+// [05 "Cancel-current and stop interrupts"]'s 2026-09-02 correction: the
+// reverse arm's last line is `selfKill(target, target, 30000, kind 9)`
+// [05 R-WORK-01 §1], while cancel-current sends `damage(attacker = the factory,
+// victim = the product, 30000, kind 9, flag 0)`. Only the attacker HANDLE
+// differs, and each call site passes its own; what this helper stamps is the
+// side snapshot the ordinary intake stores beside the kind byte [06 §9.1] step
+// 4, and a factory and its product always share an owner, so the side is the
+// product's owner on both paths.
+func stampKind9Death(product *units.Unit) {
 	if product == nil {
 		return
 	}
@@ -1069,7 +1066,14 @@ func WorkerQuantum(workerTime int32) int32 {
 // RemainingStep computes new remaining fraction clamp(old - worker/buildTime,0,1) [05 "Construction arithmetic"].
 func RemainingStep(old float32, worker int32, buildTime int32) float32 {
 	if buildTime <= 0 {
-		return 0 // TODO(question): zero buildTime guard untraced; clamp to 0 rather than panic
+		// A guard that returns 0 for `buildtime = 0` is retail-exact: the
+		// division is `+∞`, `old − ∞` is `−∞`, and the clamp's first test stores
+		// `0.0f` — the whole remaining cost is demanded in one admission and the
+		// product completes on that call [05 R-WORK-01 §11]. A NEGATIVE
+		// `buildtime` instead inverts the step in retail (the fraction rises and
+		// pins at 1.0, a frame that never completes); that case is malformed,
+		// unshipped, and deliberately not reproduced by this `<= 0` guard.
+		return 0
 	}
 	delta := float32(worker) / float32(buildTime)
 	nv := old - delta
@@ -1096,8 +1100,17 @@ func ConstructionStep(old float32, worker int32, buildTime int32, maxDamage int3
 }
 
 func wideConstructionStep(old float32, worker int32, buildTime int32, maxDamage int32, energyCost, metalCost int32) (float32, int32, float32, float32) {
+	return wideConstructionStepQuantum(old, float32(worker), buildTime, maxDamage, energyCost, metalCost)
+}
+
+// wideConstructionStepQuantum is the same arithmetic with the quantum in its
+// retail type. Every ordinary caller's quantum is an integer converted to
+// float, but the decay wrapper's is not, and its infinities and NaNs have to
+// survive the division and the clamp exactly as x87 leaves them
+// [05 R-WORK-01 §1][05 R-WORK-01 §11].
+func wideConstructionStepQuantum(old float32, quantum float32, buildTime int32, maxDamage int32, energyCost, metalCost int32) (float32, int32, float32, float32) {
 	old80 := float64(old)
-	new80 := old80 - float64(worker)/float64(buildTime)
+	new80 := old80 - float64(quantum)/float64(buildTime)
 	if new80 <= 0 {
 		new80 = 0
 	}
@@ -1143,34 +1156,112 @@ func (s *Service) Assist(builder, target *units.Unit, tick uint32) bool {
 	return true
 }
 
-// applyWorkStep is the one ordinary construction helper used by factory
-// products and assistants [05 R-WORK-01 §1]. It intentionally keeps the
-// admission boundary and state stores together so the two callers cannot
-// diverge in arithmetic or completion ownership.
-func (s *Service) applyWorkStep(builder, target *units.Unit, tick uint32) bool {
-	if s == nil || builder == nil || builder.Def == nil || target == nil || target.Def == nil {
+// applyWorkStep is the ordinary forward entry to the shared step: it derives
+// the integer worker quantum from the builder's own definition and hands it to
+// sharedStep as a float32 [05 "Construction arithmetic"][05 R-WORK-01 §1].
+//
+// The tick is no longer read: the decay suppression is the pending word's
+// `0x8000`, not a tick stamp the step had to compute [04 R-ORD-01 §11]. It
+// stays in the signature because the callers' own contract carries it.
+func (s *Service) applyWorkStep(builder, target *units.Unit, _ uint32) bool {
+	if s == nil || builder == nil || builder.Def == nil {
 		return false
 	}
+	// `(uint16)workertime / 30` is an integer division performed BEFORE the
+	// conversion to float [05 "Construction arithmetic"].
+	return s.sharedStep(builder, target, float32(WorkerQuantum(builder.Def.WorkerTime)))
+}
+
+// sharedStep is the one construction helper every build, assist, factory-
+// product and deconstruction step runs, written out in [05 R-WORK-01 §1]. It
+// takes a builder, a target and a single-precision worker quantum and reports
+// whether work was committed. Both arms live here because retail has one
+// helper: the sign of the quantum picks the arm, and those same entry compares
+// are what settle a malformed definition [05 R-WORK-01 §11].
+//
+// The quantum is float32 because retail's is: the wrapper that forms the decay
+// quantum divides by a single-precision cost, so a zero `buildcostenergy`
+// reaches the compares as −∞ and a zero `buildtime` with it as a NaN. Both are
+// x87 compares, and an unordered operand reads as negative to the first and as
+// equal to zero to the second, which is why a NaN quantum writes nothing and
+// raises no wake bit [05 R-WORK-01 §11]. Go's own `<` and `==` are false for a
+// NaN, so the unordered arm is spelled out.
+//
+// I2 allows the float32: the row is "Construction remaining fraction and its
+// proportional cost/health intermediates" [05 "Construction arithmetic"], and
+// §11 establishes that the quantum itself is single precision in retail.
+func (s *Service) sharedStep(builder, target *units.Unit, quantum float32) bool {
+	if s == nil || target == nil || target.Def == nil {
+		return false
+	}
+	// The exact float compare on the stored fraction [05 R-WORK-01 §1].
 	if target.Remaining == 0 {
 		return false
 	}
-	worker := WorkerQuantum(builder.Def.WorkerTime)
-	if worker >= 0 {
-		deferGetBuiltDecay(target, tick)
+	// `if (worker >= 0.0f) target.pendingWord |= 0x8000` — the wake store runs
+	// before the zero-quantum test and before the admission, so a refused step
+	// and a zero quantum both defer the decay [04 R-ORD-01 §11].
+	unordered := quantum != quantum
+	forward := quantum >= 0 && !unordered
+	if forward {
+		raiseUnderConstructionWake(target)
 	}
-	if worker <= 0 || s.Economy == nil {
+	// `if (worker == 0.0f) return notCommitted`, the compare an unordered
+	// quantum also takes [05 R-WORK-01 §11].
+	if quantum == 0 || unordered {
 		return false
 	}
-	nv, healthGain, energy, metal := wideConstructionStep(target.Remaining, worker, target.Def.BuildTime, target.Def.MaxDamage, target.Def.BuildCostEnergy, target.Def.BuildCostMetal)
-	if !economy.AdmitTwoResource(s.Economy.UnitBuckets(builder.Handle), energy, metal) {
-		return false
+	def := target.Def
+	old := target.Remaining
+	newStored, healthGain, energy, metal := wideConstructionStepQuantum(old, quantum, def.BuildTime, def.MaxDamage, def.BuildCostEnergy, def.BuildCostMetal)
+	if forward {
+		if builder == nil || s.Economy == nil {
+			return false
+		}
+		if !economy.AdmitTwoResource(s.Economy.UnitBuckets(builder.Handle), energy, metal) {
+			return false
+		}
+		health := target.Health + healthGain
+		// The maximum-health cap is an UNSIGNED comparison, so a health that
+		// went negative is clamped up to maxdamage [05 R-WORK-01 §1].
+		if uint32(health) >= uint32(def.MaxDamage) {
+			health = def.MaxDamage
+		}
+		target.Health = int32(int16(health))
+		target.Remaining = newStored
+		return true
+	}
+	// Reverse arm: metal-only, credited direct to the TARGET's bucket through
+	// the special-player selector, health floored at zero with no maxdamage cap,
+	// and the clamp to 1.0 killing the frame [05 R-WORK-01 §1].
+	refund := -metal
+	var bucket *float32
+	if s.Economy != nil {
+		if buckets := s.Economy.UnitBuckets(target.Handle); buckets != nil {
+			bucket = &buckets[economy.Metal].Production
+		}
+	}
+	// The special-player selector credits 0.5 or 0.7 of the amount and any other
+	// value the whole of it, tied to the TARGET's owner [05 R-WORK-01 §1]
+	// [05 "Cancel-current and stop interrupts"]. With no ledger there is no
+	// bucket to credit and the refund is simply not paid; it is never diverted
+	// to another field.
+	special := s.IsSpecialSecondState != nil && s.IsSpecialSecondState(target.Owner)
+	if bucket != nil {
+		ReverseRefund(bucket, refund, special, s.ModeSelector)
 	}
 	health := target.Health + healthGain
-	if uint32(health) >= uint32(target.Def.MaxDamage) {
-		health = target.Def.MaxDamage
+	if health < 1 {
+		health = 0
 	}
 	target.Health = int32(int16(health))
-	target.Remaining = nv
+	target.Remaining = newStored
+	if newStored >= 1 {
+		// `selfKill(target, target, 30000, kind 9)` — the reverse arm's own
+		// last line, and the only thing that removes an abandoned frame
+		// [05 R-WORK-01 §1][05 R-WORK-01 §9].
+		s.killDecayedNanoframe(target)
+	}
 	return true
 }
 
@@ -1814,7 +1905,13 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 		// Ensure product's queue head is GetBuilt with active marker.
 	}
 
-	// Raise StartBuilding only on the rising edge [R-P0-09][04 §5.3].
+	// The factory uses ONLY the edge form: it raises the building-bit edge here
+	// in state 2, lowers it in state 4 and in cancel-current (together with the
+	// activation bit), and never calls the order-record emission helper — so its
+	// production record never carries the StopBuilding-pending flag, the
+	// removal-time `StopBuilding` emission of [04 R-ORDER-02 §2] never fires for
+	// it, and the factory's `StopBuilding` is the falling edge alone
+	// [04 §3.8 correction 2026-09-02].
 	s.startBuilding(factory)
 
 	// Refresh builder interface [05 C18].
@@ -1853,7 +1950,15 @@ func (s *Service) startBuilding(u *units.Unit) {
 	}
 	u.Flags |= FlagStartBuilding
 	if binding := u.COBBinding(); binding != nil && binding.Callbacks != nil {
-		binding.Callbacks.StartBuildingHeading(u.Move.Heading & 0xffff) // [04 §5.3] slot form carries heading & 0xffff
+		// The argument-less deferred edge form. Corrected (2026-09-02): this
+		// called the argument-carrying variant with `Move.Heading & 0xffff`,
+		// on §3.8's earlier "carries the producer heading". That sentence is
+		// withdrawn — the argument-carrying form is the order-record emission
+		// helper of the nine mobile work handlers and its one argument is the
+		// relative bearing from builder to work target; no variant carries a
+		// producer's own heading, and the factory uses only this edge form
+		// [04 §3.8 correction 2026-09-02][04 R-CB-01 §3].
+		binding.Callbacks.StartBuilding()
 	}
 }
 
@@ -1934,8 +2039,18 @@ func (s *Service) rallyInheritance(factory *units.Unit, product *units.Unit, tic
 	patrolID := orders.Lookup("Patrol")
 	parkID := orders.Lookup("Park")
 
-	// Copy standing-order bits under documented gates [05 "Rally inheritance"] — same as success epilogue but additional gate for experience.
-	// TODO(question): experience word copies only for computer-owned builders [05 "Rally inheritance"].
+	// The post-build gate, distinct from the state-2 epilogue's initial merge
+	// (copyStandingFlags): the copy is allowed only when BOTH product and
+	// builder carry state bit 28 and NEITHER carries bit 14 (the death latch),
+	// and it moves standing-move bits 18-19 and standing-fire bits 20-21 from
+	// builder to product. The experience word rides the same block under one
+	// further gate — the OWNER's control byte reading as a computer player —
+	// and a product and its builder always share that owner, so the gate is
+	// read once off the builder [04 §3.8][04 R-FAC-02 §4].
+	// TODO(T25): neither copy runs here yet. Blocked: the standing-bit merge
+	// and the experience word belong to the same guarded block, and the owner
+	// control byte reaches this package only through the session-owned combat
+	// service; landing them is a separate unit with those files in scope.
 	inherited := 0
 	pq := orders.BindQueueBinding(product, s.OrderBinding)
 	// Collect rally nodes in traversal order first, then tail-append to preserve order [05 C19].
@@ -2020,11 +2135,6 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 			metalCost = def.BuildCostMetal
 		}
 	}
-	// Cancel-current performs the same completion transition before its cause-9
-	// kill. The queued count is intentionally untouched [R-P0-09][05 C21].
-	if product != nil {
-		s.applyCompletionPosture(product)
-	}
 	refund := float32(int32((1 - remaining) * float32(metalCost))) // trunc toward zero [01 §8] I3
 
 	// Normally add to builder's metal bucket UNLESS special second state [05 C21].
@@ -2082,10 +2192,16 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 		}
 	}
 
-	// Run the completion transition [05 C21] TODO(question): completion transition side effects not fully located beyond remaining->0.
+	// Step 3, after the refund and before the kill: the SAME completion
+	// transition every other completion runs — not a bare `remaining = 0`
+	// [05 "Cancel-current and stop interrupts"][04 R-FAC-02 §3]. The builder is
+	// the factory, so a product with `activatewhenbuilt` receives its `Activate`
+	// edge here and dies in step 4 of the same call, and the order-panel refresh
+	// the transition owes keys on the BUILDER's identity — this arm's own
+	// `OnRefresh(factory)` below, never the product's [04 R-SPEC-01 §12].
+	// The queued count is intentionally untouched [R-P0-09][05 C21].
 	if product != nil {
-		product.Remaining = 0
-		// TODO(question): completion flag set, activation per standing-order bits, cloak/init posture etc [05 C18] not fully located.
+		s.applyCompletionPosture(product)
 	}
 
 	// Send ordinary kill packet — kind-9 damage exactly 30000 unscaled because scaling requires damage <30000 [05 C21][06 §9.1].
@@ -2094,10 +2210,16 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 	if product != nil {
 		// Apply death: Alive false, but no corpse/explosion.
 		if s.World != nil {
-			stampKind9SelfKill(product)
-			// The packet's attacker is the product itself, so the death row
-			// records the product as its own killer [04 R-UNIT-06 §5].
-			s.World.DestroyBy(product.Handle, units.DeathKilled, product.Handle)
+			stampKind9Death(product)
+			// Corrected (2026-09-02, this unit): the packet cancel-current sends
+			// is `damage(attacker = the factory, victim = the product, 30000,
+			// kind 9, flag 0)` — the FACTORY is the attacker. The self form
+			// belongs to the shared step's reverse arm alone; same kind and
+			// amount, not the same packet. Nothing on the credit side turns on
+			// it (cause 9 has no credit branch), but the recorded-attacker link
+			// and the death row hold the factory's identity for a cancelled
+			// product [05 "Cancel-current and stop interrupts"][06 §12.1].
+			s.World.DestroyBy(product.Handle, units.DeathKilled, factory.Handle)
 		}
 		// Release after the cause-9 death mark. Completion posture intentionally
 		// precedes the kill, so releasing before Destroy would look like a live
@@ -2200,16 +2322,19 @@ func (s *Service) applyCompletionPosture(product *units.Unit) {
 // completed, successor target orders lost target lookup and hostility, and
 // secondary stockpile admission no longer saw the economy buckets.
 //
-// TODO(question): the tombstone marker is applied unconditionally here, while
-// [04 §3.3] exempts the primary head from it. The observable difference is
-// currently nil because the tombstone-gated cleanup step is a stub, so the
-// pre-existing marking is preserved rather than changed on inference.
+// The tombstone bit is set on every freed record EXCEPT one that is the
+// primary segment's front head at that moment, so "the front record of the
+// primary queue is never tombstoned" [04 R-ORDER-02 §2]. Every removal this
+// helper performs is a removal of that head — cancel-current's drop and
+// `MobileBuild`'s phase-4 completion both act on the record the pump is
+// dispatching — so the flag is false and RemovePrimaryNode's own index test
+// keeps the exemption honest if a caller ever hands it a rear record.
 func (s *Service) removeHead(factory *units.Unit, node *orders.Node) {
 	q := s.queueForUnit(factory)
 	if q == nil {
 		return
 	}
-	q.RemovePrimaryNode(node, true)
+	q.RemovePrimaryNode(node, false)
 }
 
 // setQueuePrimary replaces primary segment via exported accessor (ON-02).
@@ -3075,82 +3200,72 @@ func (s *Service) handleGetBuiltOrder(product *units.Unit, node *orders.Node, ti
 	if s == nil || product == nil || node == nil {
 		return 5
 	}
+	// The pump consumed the satisfied set out of both pending words before it
+	// dispatched this record; the wake's mirror is read and cleared here for the
+	// same reason and at the same moment (raiseUnderConstructionWake). A raised
+	// bit means some builder ran a forward step on this product since the last
+	// dispatch [04 R-ORD-01 §11].
+	worked := node.Param1 != 0
+	node.Param1 = 0
 	if product.Remaining > 0 {
 		switch State(node.Phase) {
 		case State0:
+			// Phases 0 and 1 do not test the satisfied set — a raised bit merely
+			// advances them early [04 R-ORD-01 §11].
 			node.Phase = uint8(State1)
 			node.DynamicGate = 0x8001
 			node.Deadline = int32(tick + 300)
 		case State1:
 			node.Phase = uint8(State2)
-			// TODO(question): Param3 is the local first-decay latch because the
-			// curated three-state trace establishes the extra phase-2 setup visit
-			// but does not name its storage. Decider: trace the GetBuilt record
-			// writes surrounding the phase-1 to phase-2 transition and identify
-			// the byte/word tested on the first phase-2 ordinary-deadline visit.
-			node.Param3 = 1
 			node.DynamicGate = 0x8001
-			node.Deadline = int32(tick + 30)
+			node.Deadline = int32(tick + getBuiltWorkedPeriod)
 		case State2:
-			if node.Param3 != 0 {
-				node.Param3 = 0
+			// The `0x8000` arm: deadline 30, hold, no decay. The deadline-expiry
+			// arm below (satisfied bit 0 alone) is reached only when a whole
+			// deadline passes with no forward step on the product
+			// [04 R-ORD-01 §11].
+			//
+			// Retired with the producer's closure: the local defer stamp this
+			// arm used to test (`Param1` as a next-decay tick, written by every
+			// admitted step) reproduced the suppression with an eleven-tick
+			// window and only for an admitted step. §11 gives the window as the
+			// full 30-tick re-arm and the raise as unconditional on the forward
+			// arm, so a refused admission and a sub-30 `workertime` defer too.
+			if worked {
 				node.DynamicGate = 0x8001
-				node.Deadline = int32(tick + 11)
+				node.Deadline = int32(tick + getBuiltWorkedPeriod)
 				return 2
 			}
-			// Phase 2 applies the shared negative work arm before rearming
-			// eleven ticks [04 R-FAC-02 §4][04 R-ORD-01 §5] — but only on a
-			// visit that a builder's work step has not already deferred. See
-			// deferGetBuiltDecay for why the decay cannot be unconditional.
-			if node.Param1 != 0 && tick < node.Param1 {
-				node.DynamicGate = 0x8001
-				node.Deadline = int32(node.Param1)
-				return 2
-			}
-			if product.Def != nil && product.Def.BuildCostEnergy > 0 {
-				worker := -(11 * product.Def.BuildTime / product.Def.BuildCostEnergy)
-				var bucket *float32
-				if s.Economy != nil {
-					if buckets := s.Economy.UnitBuckets(product.Handle); buckets != nil {
-						bucket = &buckets[economy.Metal].Production
-					}
-				}
-				special := s.IsSpecialSecondState != nil && s.IsSpecialSecondState(product.Owner)
-				// The reverse arm carries its own terminator: "If the remaining
-				// fraction is clamped to one, the unit kills itself with a
-				// kind-9 30000 packet — the no-corpse, no-explosion path
-				// (severity zero)" [05 "Reverse and deconstruction"], written
-				// out as `if (newStored >= 1.0f) selfKill(target, target,
-				// 30000, kind 9)` in [05 "Two-stage settlement algorithm"]'s
-				// reverse-arm listing. The result was discarded here, so a
-				// nanoframe whose builder went away decayed to zero health and
-				// then stayed alive forever, holding the ground words of its
-				// footprint. One standing on a factory's exit spot fails every
-				// later product's state-2 area test [04 R-FAC-02 §6], which
-				// leaves the factory in the silent 15-tick retry for the rest
-				// of the battle: no progress, and no resource demand at all,
-				// because state 3 is never reached.
-				if ApplyReverse(product, product, worker, special, s.ModeSelector, bucket) {
-					s.killDecayedNanoframe(product)
-				}
-			} else {
-				// TODO(question): retail behavior for malformed products with zero
-				// BuildCostEnergy; stock factory products provide a positive divisor.
+			// The decay quantum is `−((float)(buildtime × 11) / buildcostenergy)`:
+			// a 32-bit signed product converted to float, divided by the
+			// single-precision cost, negated, and passed as float32. It is formed
+			// here exactly as the wrapper forms it so that a zero
+			// `buildcostenergy` reaches the step as −∞ (reverse arm, clamp to
+			// 1.0, full metal refund, health floor 0, clamp-kill on this first
+			// decay visit) and a zero `buildtime` with it as a NaN (both compares
+			// unordered — the step writes nothing and raises no wake bit). A
+			// `buildcostenergy > 0` guard around the decay is not retail
+			// [05 R-WORK-01 §11].
+			if product.Def != nil {
+				quantum := -(float32(product.Def.BuildTime*11) / float32(product.Def.BuildCostEnergy))
+				// The decay is the self form: the frame is both builder and
+				// target, so the refund lands in its own owner's bucket and the
+				// clamp-kill names it as its own attacker [05 R-WORK-01 §1].
+				s.sharedStep(product, product, quantum)
 			}
 			node.Phase = uint8(State2)
 			node.DynamicGate = 0x8001
-			node.Deadline = int32(tick + 11)
+			node.Deadline = int32(tick + getBuiltDecayPeriod)
 		default:
 			// Only states 0, 1, and 2 are established for GetBuilt
 			// [04 R-P0-09]. Normalize malformed fixture/save state without
 			// introducing another retail phase.
 			node.Phase = uint8(State2)
 			node.DynamicGate = 0x8001
-			node.Deadline = int32(tick + 11)
+			node.Deadline = int32(tick + getBuiltDecayPeriod)
 		}
 		return 2
 	}
-
 	// Completion is observed only on GetBuilt's own due visit. Rally/park is
 	// appended behind this record; code 5 lets the pump unlink it and continue
 	// in the same pass [04 R-FAC-02 §4].
@@ -3186,7 +3301,7 @@ func (s *Service) killDecayedNanoframe(product *units.Unit) {
 	}
 	s.lastKill = KillInfo{Damage: Kind9Damage, Severity: 0, NoCorpse: true}
 	if s.World != nil && s.World.Unit(product.Handle) != nil {
-		stampKind9SelfKill(product)
+		stampKind9Death(product)
 		s.World.DestroyBy(product.Handle, units.DeathKilled, product.Handle)
 	}
 	product.Alive = false
@@ -3384,50 +3499,50 @@ func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {
 	}
 }
 
-// getBuiltDecayPeriod is the eleven-tick rearm of `GetBuilt`'s phase-2 decay
-// visit [04 R-ORD-01 §5].
+// getBuiltDecayPeriod is the eleven-tick rearm of `GetBuilt`'s deadline-expiry
+// arm — the visit that takes the decay [04 R-ORD-01 §11][04 R-FAC-02 §4].
 const getBuiltDecayPeriod = 11
 
-// deferGetBuiltDecay pushes a product's `GetBuilt` decay visit one decay period
-// past this tick. Every admitted construction step on the product calls it, so
-// the decay only ever fires once a full period has passed with no work
-// admitted — which is what "while a builder is working" means.
+// getBuiltWorkedPeriod is the thirty-tick rearm the `0x8000` arm installs, and
+// the arm phase 1 installs on its way into phase 2 [04 R-ORD-01 §11].
+const getBuiltWorkedPeriod = 30
+
+// pendingUnderConstructionWake is bit 15 of the unit's ORDER-EVENT WORD — "the
+// under-construction wait" of [04 R-ORD-01 §0], consumed by `GetBuilt`'s gate
+// `0x8001` [04 R-ORD-01 §11]. Retail's store is a byte store into the word's
+// high byte; the word is one Go field here (I13), so the byte store is an OR of
+// this mask.
+const pendingUnderConstructionWake uint32 = 0x8000
+
+// raiseUnderConstructionWake is the shared step's wake store: on every call
+// whose quantum is not negative — an admitted step, a step the two-resource
+// admission refuses, and a zero quantum alike — it ORs `0x8000` into the
+// TARGET's pending word, before the zero-quantum test and before the admission
+// [04 R-ORD-01 §11].
 //
-// [04 R-ORD-01 §5] leaves this as an explicit Unknown: it establishes that
-// phase 2, "on expiry with `0x8000` absent", applies the shared work step with
-// a negative quantum of `−(11 · buildtime / buildcostenergy)`, and records that
-// the producer of the wake bit `0x8000` — "and therefore whether the 11-tick
-// nanoframe decay runs while a builder is working" — was not found in the
-// bounded trace. Its named deciders are a static trace of the work helper's
-// callers *or* "a timed build measured against the formula". The timed
-// measurement settles it, and it settles it against an unconditional decay:
+// What the bit buys is the whole of the decay contract: `GetBuilt` leaves its
+// gate at `0x8001` after every arm, the primary pump's satisfied set is
+// `(record pending | unit pending) & gate` [04 R-ORD-01 §10], so a raised bit
+// dispatches the record before its deadline and the phase-2 body takes the
+// `0x8000` arm — deadline 30, hold, no decay. A nanoframe therefore decays only
+// after a whole deadline in which no builder's forward step touched it, and a
+// builder stalled on metal keeps its own site alive by standing at it
+// [04 R-ORD-01 §11]. This supersedes the local eleven-tick defer stamp that
+// stood here while the producer was unlocated; that stamp reproduced the effect
+// with the wrong window and only for a record this package could find.
 //
-//   - construction advances the fraction by `trunc(workertime/30) / buildtime`
-//     per tick; the decay retreats it by `1 / buildcostenergy` per tick.
-//   - A construction kbot (`workertime` 80, quantum 2) building a stock
-//     Arm level-1 factory (`buildtime` 6760, `buildcostenergy` 1130) advances
-//     0.000296 per tick against a decay of 0.000885 — three times its own
-//     work. An advanced construction aircraft (quantum 1) is six times short.
-//     With the decay unconditional, neither could finish a factory at all: the
-//     frame would run backwards to full and pay its metal back on the way,
-//     which is exactly the playtest report this closes.
-//   - Retail plainly lets a construction kbot finish a factory, so the decay
-//     is suppressed while work is being admitted. [04 R-FAC-02 §4]'s aside
-//     that "nothing" suppresses it reasoned only about the *factory-product*
-//     case, where the producing factory advances the same record it holds; it
-//     is not evidence about a mobile builder's site.
-//
-// The retail mechanism is presumably the missing `0x8000` producer. What is
-// reproduced here is its measured effect, not a claim about its encoding.
-//
-// TODO(question): the producer of `GetBuilt`'s wake bit `0x8000` and what its
-// phase-2 arm does with it. Decider: a static trace of the shared work helper's
-// callers for a wake into the product's `GetBuilt` record. The window used here
-// is the decay period itself; a traced producer may name another.
-func deferGetBuiltDecay(product *units.Unit, tick uint32) {
+// The mirror on the record is a plumbing seam, not a second retail store: the
+// pump consumes the bit out of both words before it dispatches, and the
+// construction-owned handler is bound through `Queue.SetGetBuiltHandler`, whose
+// signature carries the tick and not the satisfied set. The record's own scratch
+// word (`Param1`, which `GetBuilt` leaves zero — it is pushed with a zero
+// payload) therefore carries the same raise to the handler and is cleared at
+// dispatch exactly where the pump clears the bit.
+func raiseUnderConstructionWake(product *units.Unit) {
 	if product == nil {
 		return
 	}
+	product.Pending |= pendingUnderConstructionWake
 	q := orders.QueueForUnit(product)
 	if q == nil {
 		return
@@ -3440,13 +3555,7 @@ func deferGetBuiltDecay(product *units.Unit, tick uint32) {
 		if n == nil || n.ID != getBuiltID {
 			continue
 		}
-		// Param1 is unused by GetBuilt (the record is pushed with a zero
-		// payload), so it carries the tick the decay may next fire on. Zero
-		// stays "never deferred", which is why the guard tests it first.
-		next := tick + getBuiltDecayPeriod
-		if next > n.Param1 {
-			n.Param1 = next
-		}
+		n.Param1 = 1
 		return
 	}
 }
