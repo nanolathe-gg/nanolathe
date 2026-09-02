@@ -128,7 +128,9 @@ func selfDestructHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 // applySelfDestructDamage applies the row's 30000 damage to the unit itself
 // through the standard damage funnel [04 R-SPEC-01 §1][06 §9.2]: the
 // armored-state reduction is skipped because it applies only to amounts
-// strictly below 30000, and the defender veterancy scale applies as for any
+// strictly below 30000 — and the amount is still 30000 when step 5 tests it,
+// because the defender veterancy of step 6 has not run yet — and the defender
+// veterancy scale applies as for any
 // packet, so the amount is 30000 at zero kills and never less than 24000 at the
 // top kill tier. The attacker term is not taken — the row's arithmetic is the
 // defender factor alone.
@@ -151,7 +153,13 @@ func applySelfDestructDamage(u *units.Unit) {
 		1, // no area falloff: the amount is applied directly to the unit itself
 		0, // attacker veterancy is not taken [04 R-SPEC-01 §1]
 		u.Kills,
-		u.Def.ArmoredState,
+		// The armor gate's operand is the RUNTIME armored posture — bit 1 of
+		// the unit's first state byte, the `set ARMORED` port — never the FBI
+		// `armoredstate` key, which is parsed into a definition flag no retail
+		// path reads [06 R-DMG-01 §8]. Passing the definition flag here made
+		// every unit authored `armoredstate=1` permanently armored at this
+		// call site. It is inert at amount 30000, but it was the wrong operand.
+		combat.UnitArmored(u),
 		u.Def.DamageModifier,
 		false, false, false,
 	)

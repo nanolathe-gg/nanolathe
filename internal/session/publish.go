@@ -410,10 +410,15 @@ func (s *Session) publishSnapshot(tick uint32) {
 					// (Ballistic/VLaunch/etc.) and is presentation-relevant per [03 §5.4] C6 [06 §6.2].
 					pv.Family = int32(combat.CreationFamilyForWeapon(w))
 					pv.SmokeTrail = w.SmokeTrail
-					// [03 §5.4] leaves the lifetime-scaled GAF input as a caller
-					// parameter (commonly WeaponTimer or Duration); no projectile
-					// record field identifies which authored value is selected. Keep
-					// Lifetime explicitly unknown rather than guessing [I9].
+					// The lifetime-scaled render type's divisor is named: render
+					// type 5 draws frame
+					// `N - ((expiry - currentTick) * N) / weapontimer`, and a zero
+					// `weapontimer` is retail's own divide by zero there
+					// [06 R-WFX-01 §4]. [03 §5.4] left the input as "commonly
+					// WeaponTimer or Duration"; it is WeaponTimer, so the view
+					// carries the compiled field (already `weapontimer × 30`
+					// truncated at catalog compile time, per I8).
+					pv.Lifetime = w.WeaponTimer
 				}
 			}
 			published.Projectiles = append(published.Projectiles, pv)

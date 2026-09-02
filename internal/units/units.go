@@ -231,6 +231,9 @@ type Unit struct {
 	MaxHealth int32
 	// LastDamageSide/Cause retain the provenance used by repair-patrol
 	// admission. Cause 5 is the unit-reclaim bite [04 R-ORD-02 §4].
+	// LastDamageSide is the attacker-side SNAPSHOT the damage intake stores
+	// beside the attacker pointer, and unit spawn seeds it to the neutral side
+	// [06 R-WPN-04 §2]. See NeutralAttackerSide.
 	LastDamageSide  uint8
 	LastDamageCause uint8
 	Alive           bool // slot valid; cleared by the phase-2 finalizer [04 §2.4] C2
@@ -980,6 +983,18 @@ func (w *World) defIDClaimed(id uint16) bool {
 // was completing [03 R-RAST-01 §7, correction of 2026-08-30].
 const CreatedMoverMode uint8 = 1
 
+// NeutralAttackerSide is the value unit spawn writes into the attacker-side
+// snapshot: retail seeds the field to the neutral side 10 alongside a null
+// attacker pointer [06 R-WPN-04 §2]. It matters for the `Under Attack` notice,
+// which fires when the stored snapshot differs from the victim's owner byte —
+// the seed is what makes the FIRST hit on a fresh unit always announce, for
+// every owner byte 0..9. A zero seed silenced that notice for player 0.
+//
+// It is the same neutral side a shooter-less projectile record carries; the
+// combat package names its own copy for the projectile side byte and cannot be
+// imported here, since combat depends on this package.
+const NeutralAttackerSide uint8 = 10
+
 // Create allocates an ALREADY-BUILT unit record through the canonical
 // per-player allocator: lowest-free slot in the owning player's slice with
 // slot 0 null, no generation tags, immediate reuse [01 §6.1] C1
@@ -1084,6 +1099,9 @@ func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed,
 		MaxHealth:    int32(def.MaxDamage),
 		Health:       health,
 		PlacementIdx: -1,
+		// The attacker-side snapshot is seeded to the neutral side at spawn
+		// [06 R-WPN-04 §2].
+		LastDamageSide: NeutralAttackerSide,
 	}
 	installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions into Slots [P0-I04]
 	u.InitEconomyState()   // [P1-I04] on/off, cloak, activation from definition
@@ -1207,6 +1225,11 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 		MaxHealth:    int32(def.MaxDamage),
 		Health:       int32(def.MaxDamage),
 		PlacementIdx: -1,
+		// Same spawn seed as the ordinary allocator [06 R-WPN-04 §2]. The
+		// restore adapter that follows this call does not carry an
+		// attacker-side snapshot, so whatever a caller writes afterwards
+		// stands.
+		LastDamageSide: NeutralAttackerSide,
 	}
 	installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions [P0-I04]
 	u.InitEconomyState()   // [P1-I04]

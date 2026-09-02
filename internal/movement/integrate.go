@@ -2438,37 +2438,67 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		s.syncMoverStamp(u)
 		return res
 	}
-	// Keep orders queue as authority: only follow route if primary order is Move_Ground-class [task]
+	// The queue selects the STEERING TARGET; it does not gate the mover tick.
+	// The sweep runs the mover tick and then the post-move correction for every
+	// live unit that has a mover, gated on the owner's control byte and never on
+	// an order record [04 R-MOV-03 §1] step 9. The control-byte gate belongs to
+	// the session's phase-2 sweep, which owns the player and unit iteration;
+	// this function is only the per-unit body it calls. The sweep now applies
+	// that gate: the player gate admits control bytes 1, 2 and 3, and the inner
+	// block that holds the mover tick admits 1 and 2 only.
+	// A unit with no order, or one whose
+	// head is neither a movement record nor carries a goal, therefore still
+	// reaches the mover: it is exactly the follower's no-waypoint case, which
+	// brakes without turning and never touches the heading [04 R-MOV-01 §3], its
+	// commit takes the stationary early return or the same-cell fast path
+	// [04 R-COLL-01 §1], and the post-move correction still owns its Y
+	// [04 R-MOV-01 §5]. Before this, an orderless mover returned here and kept
+	// whatever Y and occupancy it was spawned or released with.
+	orderless := false
 	q := orders.QueueForUnit(u)
-	if q == nil || q.LenPrimary() == 0 {
-		// Also try alternate accessor for session-bound queues
-		if q == nil || (q.LenPrimary() == 0 && q.Head() == nil) {
-			d := s.distToGoal(u)
-			s.emitMovementCallbacks(u, 0) // no order => tier 0 [04 §5.2][GAP T15] C18 ensure StopMoving if was moving
-			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
-		}
+	if q == nil || (q.LenPrimary() == 0 && q.Head() == nil) {
+		orderless = true
 	}
 	var head *orders.Node
-	if q.LenPrimary() > 0 {
-		head = q.Primary()[0]
-	} else {
-		head = q.Head()
+	if !orderless {
+		if q.LenPrimary() > 0 {
+			head = q.Primary()[0]
+		} else {
+			head = q.Head()
+		}
+		if head == nil {
+			orderless = true
+		}
 	}
-	if head == nil {
+	if head != nil {
+		name := orders.DescriptorFor(head.ID).Name
+		if name != "Move_Ground" && name != "VTOL_Move" && name != "QMove" && name != "VTOL_MobileBuild" && name != "MobileBuild" && name != "VTOL_Patrol" && name != "Patrol" && name != "Park" {
+			if head.GoalX == 0 && head.GoalZ == 0 && head.GoalY == 0 {
+				// A goal-less non-movement head steers nothing, so the follower
+				// has no payload. The mover tick below still runs.
+				orderless = true
+				head = nil
+			}
+		}
+	}
+	// A building has no mover, so the sweep's mover tick and post-move
+	// correction do not run for it [04 R-MOV-03 §1] step 9. Neither does a unit
+	// movement never admitted, which has no mover record to tick.
+	steer := s.Steers[handle]
+	coll := s.Collisions[handle]
+	if steer == nil || coll == nil || coll.Building {
 		d := s.distToGoal(u)
 		s.emitMovementCallbacks(u, 0)
 		return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
 	}
-	name := orders.DescriptorFor(head.ID).Name
-	if name != "Move_Ground" && name != "VTOL_Move" && name != "QMove" && name != "VTOL_MobileBuild" && name != "MobileBuild" && name != "VTOL_Patrol" && name != "Patrol" && name != "Park" {
-		if head.GoalX == 0 && head.GoalZ == 0 && head.GoalY == 0 {
-			d := s.distToGoal(u)
-			s.emitMovementCallbacks(u, 0)
-			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
-		}
+	// With no order there is no installed route: the follower's service has no
+	// payload to revalidate, no points to prune and nothing to arm
+	// [04 R-MOV-03 §1] "The follower's per-tick service".
+	var route *Route
+	if !orderless {
+		route = s.Routes[handle]
+		s.serviceGroundFollower(u, head, route, tick)
 	}
-	route := s.Routes[handle]
-	s.serviceGroundFollower(u, head, route, tick)
 	isAircraft := u.Def != nil && u.Def.CanFly
 	hadRoute := route != nil && route.Active && ((isAircraft && route.Count > 0) || (!isAircraft && route.Count > 1))
 	if hadRoute && (u.Def == nil || !u.Def.CanFly) && route.NeedsStaticReplan(s.staticObstacleRevision()) {
@@ -2487,7 +2517,13 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	var directGoal bool
 	var brakingOnly bool
 	var directX, directZ numeric.Fixed
-	if !hadRoute {
+	if orderless {
+		// No payload, so no arrival test and no goal distance to consult: the
+		// no-waypoint follower zeroes its turn residual and asks the speed
+		// update for `-BrakeRate` [04 R-MOV-01 §3]. Everything after this point
+		// is the mover tick retail runs whether or not a record exists.
+		brakingOnly = true
+	} else if !hadRoute {
 		// [R-P0-01] still test arrival even without an active route: handle is
 		// bound at order activation, and the inclusive cell-domain predicate may
 		// already be satisfied before a route publishes (e.g., start within threshold).
@@ -2579,13 +2615,8 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	if u.Def != nil && u.Def.CanFly {
 		return s.stepAir(u, tick)
 	} else {
-		steer := s.Steers[handle]
-		coll := s.Collisions[handle]
-		if steer == nil || coll == nil {
-			d := s.distToGoal(u)
-			s.emitMovementCallbacks(u, 0)
-			return StepResult{Handle: handle, DistToGoal: d, HasRoute: true, EmptyRoute: false, Moved: false, Arrived: s.finalGoalReached(u, hadRoute)}
-		}
+		// `steer` and `coll` were resolved at the mover gate above; a unit
+		// without both never reaches here.
 		steer.X = int32(u.X.Raw())
 		steer.Z = int32(u.Z.Raw())
 		steer.HeightWord = int16(u.Y.Raw() >> 16)
@@ -2653,7 +2684,28 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 			}
 			return true
 		}
-		fastPath, isBlocked := coll.CommitOne(s.Grid, coll.Mode, perCell, nil) // [04 §8.2] C23 C24: sync clear-then-stamp before next slot
+		// The stationary early return of [04 R-COLL-01 §1]: when the proposal
+		// equals the current position on all three axes AND the proposed mode
+		// equals the committed mode mirror, the commit step returns with nothing
+		// written — no transform-dirty bit, no validator, no stamp, and the
+		// blocked flag untouched. A unit at rest never revalidates. The vertical
+		// axis is always equal here because the ground speed update writes
+		// vertical velocity as a literal zero [04 R-MOV-01 §4]. Without this,
+		// every parked mover took the same-cell fast path, which DOES set dirty,
+		// and so ran the post-move correction every tick — the very thing
+		// `canhover` alone is supposed to force [04 R-MOV-01 §5].
+		stationary := coll.VX == 0 && coll.VZ == 0 && coll.Mode&0x3 == coll.CachedMode&0x3
+		fastPath, isBlocked := true, false
+		if !stationary {
+			// On any non-stationary proposal the last-proposal tick is written
+			// FIRST, before the cell test and before the validator, so it records
+			// the last tick on which the unit TRIED to change position or mode —
+			// blocked ticks included [04 R-COLL-01 §1]. It is the age term the
+			// hover bob of [04 R-MOV-01 §5] reads; with no writer at all every
+			// hovercraft's bob faded to zero once the tick passed 60.
+			coll.LastProposalTick = tick
+			fastPath, isBlocked = coll.CommitOne(s.Grid, coll.Mode, perCell, nil) // [04 §8.2] C23 C24: sync clear-then-stamp before next slot
+		}
 		blocked = isBlocked
 		// Occupancy was committed (clear/commit/stamp, [04 §8.2] C22): record
 		// the unit's occupancy-commit tick so the request revision pass of

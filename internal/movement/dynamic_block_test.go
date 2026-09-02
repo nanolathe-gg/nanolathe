@@ -19,6 +19,9 @@ func TestStepUnitBlockedCommitKeepsOrderAndRequest(t *testing.T) {
 		UnitName: "dynamic-block-test", FootprintX: 1, FootprintZ: 1,
 		MaxVelocity: 2 * int32(worldUnitsPerCell), Acceleration: 2 * int32(worldUnitsPerCell),
 		BrakeRate: 2 * int32(worldUnitsPerCell), TurnRate: 65535,
+		// A mover, not a building: the sweep runs the mover tick only for a unit
+		// that has one [04 R-MOV-03 §1] step 9.
+		BMCode: true,
 	}
 	// The mover accelerates to two cells on its first tick. The final-commit
 	// validator checks the proposed footprint, not every intermediate cell, so

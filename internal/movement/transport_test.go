@@ -123,12 +123,13 @@ func transportHeadPhase(q *orders.Queue) int {
 //     every tick;
 //   - notification event 12 is published exactly once [04 §10.2];
 //   - the unload validates the site and releases with request mode 1, and the
-//     release writes NO position: the cargo holds the hang point it had before
-//     the release tick, not the drop point's footprint centre, and is not yet
-//     in the ground plane [04 R-AIR-01 §10] item 2;
-//   - the cargo's OWN next mover tick commits at that actual X/Z, stamps the
-//     ground word there, and lets [04 R-MOV-01 §5]'s `upright`-without-
-//     `canhover` branch write `terrainHeight(XZ) << 16`;
+//     release writes NO position: the cargo holds the X and Z of the hang point
+//     it had before the release tick, not the drop point's footprint centre
+//     [04 R-AIR-01 §10] item 2;
+//   - the cargo's OWN mover tick — which the sweep runs for it in the same
+//     visit pass, with NO order of its own [04 R-MOV-03 §1] step 9 — commits at
+//     that actual X/Z, stamps the ground word there, and lets [04 R-MOV-01 §5]'s
+//     `upright`-without-`canhover` branch write `terrainHeight(XZ) << 16`;
 //   - notification event 13 is published exactly once;
 //   - neither executor draws from the simulation stream: §10.2's two phase
 //     tables name no random value anywhere (I4).
@@ -193,6 +194,8 @@ func TestAtlasLoadsCarriesAndUnloadsAPeewee(t *testing.T) {
 	// The hang point the cargo holds going INTO the tick that releases it. The
 	// carried branch slaves the cargo every tick while it is aboard, so this is
 	// what "the cargo keeps its hang position" has to mean at the release.
+	// Only X and Z survive the release tick: the cargo's own mover tick runs
+	// later in the same sweep and [04 R-MOV-01 §5] owns its Y.
 	var hangX, hangZ, hangY numeric.Fixed
 	for ; tick <= 2400 && cargo.Attachment.Carrier != 0; tick++ {
 		hangX, hangY, hangZ = cargo.X, cargo.Y, cargo.Z
@@ -205,7 +208,7 @@ func TestAtlasLoadsCarriesAndUnloadsAPeewee(t *testing.T) {
 	}
 	// The release writes NO position [04 R-AIR-01 §10] item 2: the detach's
 	// apply step writes linkage and the mover mode only.
-	if cargo.X != hangX || cargo.Z != hangZ || cargo.Y != hangY {
+	if cargo.X != hangX || cargo.Z != hangZ {
 		t.Fatalf("the release moved the cargo from its hang point %d,%d,%d to %d,%d,%d; the detach writes no X, Y or Z [04 R-AIR-01 §10]",
 			hangX.Raw()>>16, hangY.Raw()>>16, hangZ.Raw()>>16, cargo.X.Raw()>>16, cargo.Y.Raw()>>16, cargo.Z.Raw()>>16)
 	}
@@ -224,29 +227,24 @@ func TestAtlasLoadsCarriesAndUnloadsAPeewee(t *testing.T) {
 	if coll == nil {
 		t.Fatal("released cargo has no collision record")
 	}
-	// Not yet in the ground plane: the ground words are cleared and restamped
-	// by the cargo's own next commit, not by the release [04 R-AIR-01 §10].
-	if _, present := sys.Grid.OccupantAtPlane(PlaneGround, coll.CachedAnchor); present {
-		t.Fatal("the release stamped the ground word itself; the cargo's next mover tick owns that [04 R-AIR-01 §10]")
-	}
-	// The cargo's OWN commit is what settles the rest: it runs at the cargo's
-	// actual X/Z — which is why the mover record still carries the hang point
-	// and not the validated anchor's centre — and [04 R-MOV-01 §5] writes Y.
+	// The cargo's OWN commit is what settles the rest, with NO order of its own:
+	// the sweep runs the mover tick for every live unit that has a mover
+	// [04 R-MOV-03 §1] step 9, and the cargo's slot follows the carrier's in the
+	// same sweep, so the release tick already carries it. The commit runs at the
+	// cargo's actual X/Z — which is why the mover record holds the hang point and
+	// not the validated anchor's centre — and [04 R-MOV-01 §5] writes Y. Before
+	// WU-19-29 this needed a `Move_Ground` order pushed onto the cargo to reach
+	// the ground branch at all.
 	if coll.X != int32(cargo.X.Raw()) || coll.Z != int32(cargo.Z.Raw()) {
 		t.Fatalf("mover record at %d,%d, unit at %d,%d: the commit must run at the cargo's actual position [04 R-AIR-01 §10]",
 			coll.X>>16, coll.Z>>16, cargo.X.Raw()>>16, cargo.Z.Raw()>>16)
 	}
-	cq := orders.QueueForUnit(cargo)
-	cq.Pump(cargo, tick) // the `BeCarried` the attach armed retires: its carrier link is null
-	// The move order is the T25 in `TryUnload`: this build's mover tick returns
-	// before the ground branch for a unit with no order, so an orderless cargo
-	// never reaches the commit retail runs unconditionally. The order only gets
-	// the tick to run; every value asserted below is the commit's.
-	move := orders.Lookup("Move_Ground")
-	cq.Push(move, orders.Node{Owner: cargo.Handle, GoalX: dropX, GoalY: cargo.Y, GoalZ: dropZ + world.CellToWorld(2), Deadline: -1})
-	cq.Pump(cargo, tick)
-	runMovementTick(sys, tick, w)
-	tick++
+	// The `BeCarried` the attach armed retires here: its carrier link is null.
+	orders.QueueForUnit(cargo).Pump(cargo, tick)
+	if cq := orders.QueueOfUnit(cargo); cq != nil && cq.Head() != nil {
+		t.Fatalf("the released cargo holds order %q; this assertion is about an ORDERLESS mover [04 R-MOV-03 §1]",
+			orders.DescriptorFor(cq.Head().ID).Name)
+	}
 	if want := sys.Terrain.HeightAt(cargo.X, cargo.Z); cargo.Y != want {
 		t.Fatalf("released cargo Y=%d after its first commit, want the `upright` branch's terrain height %d [04 R-MOV-01 §5]",
 			cargo.Y.Raw()>>16, want.Raw()>>16)

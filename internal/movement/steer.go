@@ -5,24 +5,32 @@
 // type grows velocity/heading/speed fields. Retail offsets are noted where
 // established so the unification is mechanical.
 //
-// Mapping to retail [04 §8.1][04 §5.1][02 "Unit record"] (I13: offsets are identity, not layout):
+// Mapping to retail [04 §8.1][04 §5.1][02 "Unit record"]. Per I13 a field
+// shared by two clean-room contracts resolves to one Go field through its
+// logical name and citations, never through the executable's record layout:
 //
-//	X,Z                  world position 16.16 at unit +? (X/Z pair, Fixed) [04 §8.1]
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-//	Heading              current heading uint16 0..65535 per circle at +? [04 §5.1][04 §8.1] C20
-//	PendingHeading       pending heading uint16, updated before integration [04 §8.1] C20
+//	X,Z                  world position, 16.16 (X/Z pair, Fixed) [04 §8.1]
+//	Heading              current heading, uint16 0..65535 per circle [04 §5.1][04 §8.1] C20
+//	PendingHeading       pending heading, updated before integration [04 §8.1] C20
 //	Dirty                dirty movement flag, set before integration [04 §8.1] C20
 //	Speed                scalar speed word, fixed 16.16, capped by pitch table [04 §8.1] C21
 //	MaxVelocity          definition MaxVelocity fixed 16.16 [02 "Unit record"] [04 §8.1] C21
 //	TurnRate             definition TurnRate integer [02 "Unit record"] [04 §8.1] C20 clamp
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-//	SeaLevel             sea-level byte at +? (TNT header 0x24) [fmt tnt][04 §8.1] C21 — value 0..255
-//	DefFlags             definition flags word [04 §8.1] C21 bit 0x1000 canhover, 0x80000 floater, mask 0x81000
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+//	HeightWord           the unit's signed integer height — the signed high
+//	                     word of its 16.16 Y [04 §8.1][04 R-MOV-01 §4] C21
+//	SeaLevel             the map's sea-level byte [fmt tnt][04 §8.1] C21 — value 0..255
+//	DefFlags             definition flags word [04 §8.1][04 R-MOV-01 §8a] C21;
+//	                     bit 0x1000 canhover, 0x80000 floater, mask 0x81000
+//	Pitch                the flight lean accumulator's derived pitch word;
+//	                     unused by ground steering [04 R-AIR-01 §2] C21
+//	Bank                 the flight lean accumulator's derived bank word;
+//	                     unused by ground steering [04 R-AIR-01 §2]
+//	PitchScale/BankScale definition lean-scale factors, flight only
+//	                     [04 R-AIR-01 §2][02 "Unit record"]
+//	Acceleration/BrakeRate definition acceleration/braking rates, fixed 16.16
+//	                     [02 "Unit record"][04 R-MOV-01 §1][04 R-MOV-01 §4]
+//	ResidualX/Y/Z        the flight lean accumulator's three components,
+//	                     flight only [04 R-AIR-01 §2]
 package movement
 
 import (
@@ -56,12 +64,12 @@ type SteerState struct {
 	MaxVelocity int32 // definition MaxVelocity fixed 16.16 [02 "Unit record"] [04 §8.1] C21
 	TurnRate    int32 // definition TurnRate integer [02 "Unit record"] [04 §8.1] C20
 
-	HeightWord int16  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	HeightWord int16  // signed height high word (Y>>16) [04 §8.1][04 R-MOV-01 §4] C21
 	SeaLevel   uint8  // sea-level byte [04 §8.1] C21 0..255
 	DefFlags   uint32 // definition flags word [04 §8.1] C21; gate 0x81000
 
-	Acceleration int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	BrakeRate    int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Acceleration int32 // definition Acceleration, fixed 16.16 [02 "Unit record"][04 R-MOV-01 §1][04 R-MOV-01 §4] M3
+	BrakeRate    int32 // definition BrakeRate, fixed 16.16 [02 "Unit record"][04 R-MOV-01 §1][04 R-MOV-01 §4] M3
 }
 
 // PitchIndex maps a signed height delta to the clamped table index [04 §8.1] C21.
@@ -179,23 +187,24 @@ func (s *SteerState) UpdateHeading(desired uint16) { // [04 §8.1] C20
 }
 
 // UpdateSpeedWithBraking advances speed toward cap using Acceleration/BrakeRate
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// and the braking-distance test of the accel/brake decision [04 R-MOV-01 §4] M3.
 // cap is the pitch-capped speed from SpeedCapForPitch [04 R-MOV-01 §4].
 // hasWaypoint is true while waypoints remain (route.Active or directGoal) [04 §7.3] C14.
 // distToGoal is the Euclidean distance to the final goal in 16.16 units (Fixed.Raw) [03 §2.1][04 §7.3] C15.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// blocked optionally clamps cap to MaxVelocity/2, the blocked-mover half-speed
+// clamp [04 R-MOV-01 §7] C24.
 // No float64, trunc toward zero [I2][I3], deterministic [I1].
-func (s *SteerState) UpdateSpeedWithBraking(cap int32, hasWaypoint bool, distToGoal int32, blocked bool) { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (s *SteerState) UpdateSpeedWithBraking(cap int32, hasWaypoint bool, distToGoal int32, blocked bool) { // [04 R-MOV-01 §4] M3
 	if s == nil {
 		return
 	}
 	if blocked {
-		half := s.MaxVelocity / 2 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		half := s.MaxVelocity / 2 // trunc toward zero [I3]; the blocked-mover half-speed clamp [04 R-MOV-01 §7]
 		if cap > half {
 			cap = half
 		}
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// No waypoint or braking state => apply -BrakeRate [04 R-MOV-01 §4] M3
 	if !hasWaypoint {
 		if s.BrakeRate == 0 {
 			s.Speed = 0
@@ -213,10 +222,11 @@ func (s *SteerState) UpdateSpeedWithBraking(cap int32, hasWaypoint bool, distToG
 		}
 		return
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Stopping-distance estimate speed*speed/(brake*2), the stopping-distance
+	// term of the accel/brake decision [04 R-MOV-01 §4] M3.
 	// Integer trunc toward zero; guard divide-by-zero [I11].
 	if s.BrakeRate != 0 {
-		stoppingDist := int64(s.Speed) * int64(s.Speed) / (int64(s.BrakeRate) * 2) // [M3] speed*speed/(brake*2) trunc
+		stoppingDist := int64(s.Speed) * int64(s.Speed) / (int64(s.BrakeRate) * 2) // [04 R-MOV-01 §4] speed*speed/(brake*2) trunc
 		// distToGoal is 16.16 fixed raw; stoppingDist is also 16.16 (since speed and brake are 16.16, speed^2/brake yields 16.16)
 		if int64(distToGoal) <= stoppingDist {
 			s.Speed -= s.BrakeRate
@@ -229,7 +239,7 @@ func (s *SteerState) UpdateSpeedWithBraking(cap int32, hasWaypoint bool, distToG
 			return
 		}
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Accelerate toward cap [04 R-MOV-01 §4] M3
 	if s.Speed < cap {
 		if s.Acceleration == 0 {
 			// Fallback for tests with zero accel: snap to cap (preserves legacy TestNoReverse)
@@ -241,7 +251,7 @@ func (s *SteerState) UpdateSpeedWithBraking(cap int32, hasWaypoint bool, distToG
 			}
 		}
 	} else if s.Speed > cap {
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// Immediate clamp for pitch/water cap reduction [04 R-MOV-01 §4]: if cap < speed => speed=cap
 		s.Speed = cap
 	}
 	if s.Speed < 0 {

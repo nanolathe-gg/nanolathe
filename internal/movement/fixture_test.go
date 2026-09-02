@@ -30,6 +30,12 @@ func setScratchMovement(def *content.UnitDef, p Profile) *content.UnitDef {
 	if def == nil {
 		return nil
 	}
+	// A definition that carries a movement record is a mobile unit: retail
+	// allocates it a mover, and the sweep runs the mover tick and post-move
+	// correction for it every tick [04 R-MOV-03 §1] step 9. Compiled content
+	// authors `bmcode` for exactly these definitions; the fixtures omitted it,
+	// which made every scratch mover a building-class record.
+	def.BMCode = true
 	def.FootprintX = int32(p.FootPrintX)
 	def.FootprintZ = int32(p.FootPrintZ)
 	def.MaxWaterDepth = p.MaxWaterDepth

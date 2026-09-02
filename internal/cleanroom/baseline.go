@@ -6,7 +6,7 @@ package cleanroom
 // line that still has to be rewritten as clean-room prose, with its
 // address-level trail moved to /tmp/ta-decompile/notes/.
 //
-// Total at baseline: 494 occurrences across 63 files.
+// Total at baseline: 259 occurrences across 58 files.
 //
 // A file absent from this map must have zero occurrences. Counts may only
 // go down, and going down requires updating this file in the same change.
@@ -19,7 +19,6 @@ var Baseline = map[string]int{
 	"internal/audio/positional.go":                  1,
 	"internal/cob/ports.go":                         7,
 	"internal/cob/ports_test.go":                    3,
-	"internal/cob/vm.go":                            98,
 	"internal/combat/aim.go":                        1,
 	"internal/combat/damage.go":                     7,
 	"internal/combat/death.go":                      2,
@@ -28,7 +27,6 @@ var Baseline = map[string]int{
 	"internal/combat/motion.go":                     6,
 	"internal/combat/motion_test.go":                1,
 	"internal/combat/pool.go":                       20,
-	"internal/combat/slots.go":                      44,
 	"internal/combat/stockpile.go":                  13,
 	"internal/combat/target.go":                     9,
 	"internal/construction/capture.go":              22,
@@ -52,7 +50,6 @@ var Baseline = map[string]int{
 	"internal/movement/integrate.go":                9,
 	"internal/movement/locomotion_fidelity_test.go": 2,
 	"internal/movement/profile.go":                  9,
-	"internal/movement/steer.go":                    31,
 	"internal/movement/transport.go":                1,
 	"internal/orders/pump_test.go":                  2,
 	"internal/orders/resolve.go":                    1,
@@ -70,7 +67,6 @@ var Baseline = map[string]int{
 	"internal/world/picking.go":                     1,
 	"internal/world/placement.go":                   2,
 	"internal/world/placement_test.go":              2,
-	"internal/world/plot.go":                        57,
 	"internal/world/terrain.go":                     5,
 	"internal/world/terrain_test.go":                2,
 }

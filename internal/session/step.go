@@ -206,6 +206,55 @@ func (s *Session) finalizePhase2Death(h pool.Handle, tick uint32) {
 	}
 }
 
+// sweepPlayerGate is "The player gate" of [04 R-MOV-03 §1], read on the row
+// that owns the unit being visited. The sweep visits player slots 0..9 in
+// order and processes a slot only when its record EXISTS, its control byte is
+// 1, 2 or 3, and it is not eliminated. Inside a visit a second, narrower test
+// admits one block — retail's water damage, self-repair, the two order pumps,
+// the mover tick and the post-move correction — for an owner of control byte
+// 1 or 2 only; it is re-evaluated per unit from the OWNER record, which is why
+// it is a function of the unit's owner byte rather than of the slice being
+// swept.
+//
+// visit is the outer gate, work the inner one. The control byte is the player
+// row's, never the unit's own owner byte — that byte is the slot number
+// [06 R-DMG-01 §8]. In single player every occupied row is 1 or 2, so both
+// gates pass for every live unit; the byte is still read rather than assumed,
+// which is exactly what [06 R-DMG-01 §8] requires of an implementation.
+//
+// A row past the ten records, or one that does not exist, is not swept at all.
+// The elimination test has no writer in this build yet — nothing sets the
+// economy record's Eliminated flag during a battle — so it is satisfied for
+// every row today; it is stated here because the gate is the section's, not
+// the current composition's.
+//
+// A session with no economy service at all has no player table to read, which
+// is not a state retail can be in: the battle block allocates the table before
+// any unit exists. That is an unwired composition rather than a control byte,
+// so it opens both gates instead of silently emptying the sweep.
+func (s *Session) sweepPlayerGate(owner uint8) (visit, work bool) {
+	if s == nil {
+		return false, false
+	}
+	if s.Econ == nil {
+		return true, true
+	}
+	if int(owner) >= len(s.Econ.Players) {
+		return false, false
+	}
+	p := &s.Econ.Players[owner]
+	if !p.Exists || p.Eliminated {
+		return false, false
+	}
+	switch p.ControllerState {
+	case combat.ControlByteHuman, combat.ControlByteComputer:
+		return true, true
+	case combat.ControlByteRemote:
+		return true, false
+	}
+	return false, false
+}
+
 func (s *Session) stepUnitPhase(tick uint32) {
 	// Begin movement's per-tick occupancy transaction for the phase-2 unit sweep.
 	if s.Movement != nil {
@@ -221,10 +270,25 @@ func (s *Session) stepUnitPhase(tick uint32) {
 		s.Units.VisitActiveSlots(func(v units.SlotVisit) {
 			h := v.Handle
 			u := v.Unit
+			// The player gate of [04 R-MOV-03 §1], read per unit from the
+			// owner record. A slot the sweep does not admit is not visited at
+			// all — not even for its counter, its pre-update or its death
+			// mark, all of which sit inside the visit the gate refuses.
+			var owner uint8
+			if u != nil {
+				owner = u.Owner
+			}
+			visit, work := s.sweepPlayerGate(owner)
+			if !visit {
+				return
+			}
 			// unit pre-update (StepPreUpdate) [04 "unit sweep"]
 			s.Units.StepPreUpdate(h, tick)
-			// weapon slot/service step per unit [06 §3][06 §4] — stable weapon index once-compiled [ON-04]
-			if s.Combat != nil && s.Catalog != nil && u != nil && u.Alive {
+			// weapon slot/service step per unit [06 §3][06 §4] — stable weapon index once-compiled [ON-04].
+			// Step 3 of [04 R-MOV-03 §1] runs "for an owner of controller 1 or
+			// 2 only"; the COB drain of step 4 is unconditional, so the else
+			// arm below still owns it for a remote-peer owner.
+			if work && s.Combat != nil && s.Catalog != nil && u != nil && u.Alive {
 				wsum := s.Combat.StepWeaponsForUnit(u, tick, s.Units, s.Vis, s.World, s.Econ, s.Catalog, s.SimRNG(), s.CrtRNG())
 				// Exactly-one synchronous COB drain per unit visit [04 §4.2][04 §4.6][GAP T15 C17].
 				// Combat drains only inside the Aim handshake; when it did not, this visit owns
@@ -258,7 +322,10 @@ func (s *Session) stepUnitPhase(tick uint32) {
 			// empty queue built for it. The binding has to be in place before
 			// the pump runs: the refill reads the owner's controller state
 			// through it.
-			if ordersPump != nil {
+			// The two order pumps are inside the control-byte 1-or-2 block of
+			// [04 R-MOV-03 §1] step 9, together with the mover tick and the
+			// post-move correction below.
+			if work && ordersPump != nil {
 				if orders.QueueOfUnit(u) == nil && u != nil && u.Def != nil && u.Def.DefaultMissionType != "" {
 					orders.QueueForUnit(u)
 				}
@@ -272,7 +339,9 @@ func (s *Session) stepUnitPhase(tick uint32) {
 			// be consumed by movement for the successor order.  The scheduler has
 			// already run for this tick; the replacement is therefore serviced on
 			// its next normal scheduler turn, without a second scheduler call.
-			if s.Movement != nil {
+			// It reconciles what the pump above just did with the mover below,
+			// so it belongs to the same gated block.
+			if work && s.Movement != nil {
 				qActive := orders.QueueOfUnit(u)
 				var active *orders.Node
 				if qActive != nil {
@@ -379,7 +448,9 @@ func (s *Session) stepUnitPhase(tick uint32) {
 			// only called its lazy queue accessor and returned an empty result, so
 			// skipping that call preserves construction cadence while avoiding an
 			// observable empty allocation for units with no construction order.
-			if s.Build != nil && orders.QueueOfUnit(u) != nil {
+			// Construction work is this build's owner of the order pump's
+			// construction records, so it is gated with the pump that feeds it.
+			if work && s.Build != nil && orders.QueueOfUnit(u) != nil {
 				ctx := construction.TickContext{Tick: tick, World: s.Units, Economy: s.Econ, Terrain: s.World, Catalog: s.Catalog}
 				wres := s.Build.StepUnit(ctx, h)
 				if wres.Completed {
@@ -390,8 +461,10 @@ func (s *Session) stepUnitPhase(tick uint32) {
 					}
 				}
 			}
-			// movement step per unit (Between BeginTick/EndTick, StepUnit with route ownership) [04 §8.1][04 §8.2]
-			if s.Movement != nil {
+			// movement step per unit (Between BeginTick/EndTick, StepUnit with route ownership) [04 §8.1][04 §8.2].
+			// The mover tick and the post-move correction close the control-byte
+			// 1-or-2 block of [04 R-MOV-03 §1] step 9.
+			if work && s.Movement != nil {
 				mres := s.Movement.StepUnit(h, tick)
 				_ = mres
 				// [R-P0-01] Move_Ground-family completion arrives through the orders pump

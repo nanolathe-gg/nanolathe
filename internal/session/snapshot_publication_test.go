@@ -514,7 +514,9 @@ func TestSnapshotContainsProjectileRenderState(t *testing.T) {
 	if got.Yaw != uint16(p.Yaw) || got.Pitch != uint16(p.Pitch) || got.CreationTick != p.CreationTick || got.ExpiryTick != p.ExpiryTick || got.MuzzlePiece != int32(p.MuzzlePiece) {
 		t.Fatalf("orientation/timing = %+v", got)
 	}
-	if got.Family != int32(combat.CreationBallistic) || got.RenderType != w.RenderType || got.Model != w.Model || got.Graphic != w.Model || !got.SmokeTrail || got.Lifetime != 0 {
+	// Lifetime carried a zero "explicitly unknown" marker until [06 R-WFX-01 §4]
+	// named the lifetime-scaled render type's divisor: it is `weapontimer`.
+	if got.Family != int32(combat.CreationBallistic) || got.RenderType != w.RenderType || got.Model != w.Model || got.Graphic != w.Model || !got.SmokeTrail || got.Lifetime != w.WeaponTimer {
 		t.Fatalf("authored render metadata = %+v", got)
 	}
 	if got.Selector != -1 {
