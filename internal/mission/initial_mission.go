@@ -5,11 +5,25 @@ import (
 	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
+
+// attachPair records one `i name` verb's immediate internal attach request in
+// the order the verb was seen during pass two's per-unit script interpretation
+// [04 §3.6] "i name": cargoHandle is the acting unit (it boards itself),
+// carrierHandle is the named carrier already resolved at the verb site. No
+// import cycle exists between internal/mission and internal/movement
+// (`go list -deps` confirms neither imports the other), so the pairs are
+// applied through the shared cargo representation's own helper rather than
+// duplicating its field writes.
+type attachPair struct {
+	cargoHandle   pool.Handle
+	carrierHandle pool.Handle
+}
 
 // RunInitialMissionsWithCatalog interprets InitialMission strings once after
 // all mission units exist, for mission type 1 and BetweenMissions restores
@@ -84,8 +98,13 @@ func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Cata
 			}
 		}
 	}
-	// Per-unit attach storage for i-verb immediate attach (not a queued order) [04 §3.6].
-	attachMap := make(map[int]int) // placementIdx -> target placementIdx
+	// Immediate internal attach requests posted by `i name` verbs, collected in
+	// verb-encounter (== placement) order and applied after pass two's per-unit
+	// script loops finish [04 §3.6]; [R-TRIG-01 §9] "no delayed queue, cargo
+	// loop, or separate attachment pass exists beyond the immediate attach
+	// verb" — this is that one mechanism, not a second one. A slice keeps the
+	// application order deterministic without ranging a map (I1).
+	attachPairs := make([]attachPair, 0)
 
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	for idx, placement := range m.Units {
@@ -110,7 +129,7 @@ func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Cata
 			createdSparse: createdSparse,
 			identMap:      identMap,
 			unitNameMap:   unitNameMap,
-			attachMap:     attachMap,
+			attachPairs:   &attachPairs,
 			mission:       m,
 			catalog:       cat,
 			placementIdx:  idx,
@@ -139,7 +158,22 @@ func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Cata
 				}
 			}
 		}
-		_ = attachMap
+	}
+	// Apply every immediate attach request in the order the `i name` verbs
+	// were seen, through the shared cargo representation [04 §3.6]; mode 0 is
+	// the request mode "on every ordinary attach" [R-AIR-01 §9], piece −1 is
+	// the root fallback when no piece is named [04 §5.3][04 §10.2]. Retail
+	// posts this message immediately at the verb site, but since pass two
+	// runs entirely before tick 1 (creation, movement and visibility
+	// publication all wait on it [08 "Mission-unit creation..."]), applying
+	// the pairs here — after every placement's script has run, in the order
+	// pass two visited them — is observationally identical: no order queued
+	// by any script in this pass depends on an attach's side effects, and the
+	// carrier's cargo-list head-link order [R-COB-03 §5] still matches verb
+	// order because each pair is recorded exactly once, at its own verb's
+	// placement.
+	for _, pair := range attachPairs {
+		movement.AttachCargoMode(w, pair.carrierHandle, pair.cargoHandle, -1, 0)
 	}
 }
 
@@ -150,7 +184,7 @@ type interpCtx struct {
 	createdSparse []*units.Unit // sparse P0-04/P0-06 created[placementIdx] [P0-04][P0-06]
 	identMap      map[string]int
 	unitNameMap   map[string]int
-	attachMap     map[int]int
+	attachPairs   *[]attachPair // shared accumulator; see attachPair
 	mission       *Mission
 	catalog       *content.Catalog // production existence/building lookups [04 §3.6]
 	queued        int
@@ -671,14 +705,16 @@ func handleI(token string, ctx *interpCtx) {
 	if target == nil {
 		return
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	if ctx.attachMap != nil {
-		curIdx := ctx.placementIdx
-		if curIdx >= 0 {
-			ctx.attachMap[curIdx] = idx
-		}
+	// Immediate internal attach message, not a queued order [04 §3.6] "i name";
+	// [08 "Argument parsing..."] "the immediate attach verb posts an internal
+	// attach without queuing". Record the request now; applied after pass
+	// two's per-unit script loops finish (see RunInitialMissionsWithCatalog).
+	if ctx.attachPairs != nil && ctx.placementIdx >= 0 {
+		*ctx.attachPairs = append(*ctx.attachPairs, attachPair{
+			cargoHandle:   ctx.unit.Handle, // the acting unit boards itself [04 §3.6]
+			carrierHandle: target.Handle,   // the named carrier, already resolved
+		})
 	}
-	_ = target
 }
 
 func handleO(token string, ctx *interpCtx) {

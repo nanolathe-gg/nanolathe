@@ -306,12 +306,14 @@ func TestInitialMissionVerbs(t *testing.T) {
 		}
 		_ = uB
 	}
-	// i
+	// i: board/attach self into the named carrier via the immediate internal
+	// attach message, not a queued order [04 §3.6] "i name".
 	{
 		w1 := newMissionFixtureWorld(5, nil)
 		hA, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		hB, _ := w1.Create(testDef("ARMCK"), 0, 0, 0, 0)
 		uA := w1.Unit(hA)
+		uB := w1.Unit(hB)
 		uA.Flags |= 1 << 5
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{
 			{UnitName: "ARMCOM", Ident: "alpha", InitialMission: "i beta"},
@@ -328,7 +330,36 @@ func TestInitialMissionVerbs(t *testing.T) {
 		} else {
 			t.Fatalf("i with no queued order should not clear bit5")
 		}
-		_ = hB
+		// The attach itself must have happened through the shared cargo
+		// representation [R-AIR-01 §9]: carrier link set on the cargo, piece
+		// -1 (no piece named) [04 §5.3][04 §10.2], mode 0 (the request mode
+		// "on every ordinary attach" [R-AIR-01 §9]) written directly into the
+		// mover-mode mirror, and present at the carrier's cargo-list head
+		// [R-COB-03 §5].
+		if uA.Attachment.Carrier != hB {
+			t.Fatalf("i should attach cargo to the named carrier: got carrier %v want %v", uA.Attachment.Carrier, hB)
+		}
+		if uA.Attachment.AttachPiece != -1 {
+			t.Fatalf("i with no piece named should attach at piece -1, got %d", uA.Attachment.AttachPiece)
+		}
+		if uA.Move.Mode != 0 {
+			t.Fatalf("i should write request mode 0 into the mover-mode mirror, got %d", uA.Move.Mode)
+		}
+		if len(uB.Attachment.Cargo) != 1 || uB.Attachment.Cargo[0] != hA {
+			t.Fatalf("i should link the cargo into the carrier's cargo list, got %v", uB.Attachment.Cargo)
+		}
+		// unresolved carrier name attaches nothing [04 §3.6]/[08 "Argument
+		// parsing..."]: the same "unresolved names queue nothing" rule as
+		// guard applies here — the verb table gives no separate case for `i`.
+		w2 := newMissionFixtureWorld(5, nil)
+		hC, _ := w2.Create(testDef("ARMCOM"), 0, 0, 0, 0)
+		uC := w2.Unit(hC)
+		uC.Flags |= 1 << 5
+		m2 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", Ident: "gamma", InitialMission: "i nonexistent"}}}
+		RunInitialMissionsWithCatalog(m2, w2, testInitialCatalog)
+		if uC.Attachment.Carrier != 0 {
+			t.Fatalf("i with an unresolved carrier name should attach nothing, got carrier %v", uC.Attachment.Carrier)
+		}
 	}
 	// o
 	{
@@ -916,5 +947,46 @@ func TestInitialBuildCarriesResolvableProductIdentity(t *testing.T) {
 		t.Fatalf("a ARMFAB queued nothing: %v", primaryNodes(u2))
 	} else if want := content.CanonicalKey("ARMFAB"); a.BuildDefKey != want {
 		t.Fatalf("attack-by-type product identity: got BuildDefKey %q want %q", a.BuildDefKey, want)
+	}
+}
+
+// TestInitialMissionAttachOrderMatchesVerbOrder locks two contracts for the
+// `i name` immediate attach verb [04 §3.6]: two units attaching into the same
+// carrier end up linked in verb (== placement) order, not map iteration order
+// (I1), because the shared cargo representation links each new attach at the
+// carrier's cargo-list HEAD, not appended [R-COB-03 §5] — so the
+// second-attached unit is Cargo[0] and the first-attached is Cargo[1]. Pass
+// two visits placements 1 then 2 in ascending order [08 "Mission-unit
+// creation..."], so this also proves application order follows the order the
+// verbs were seen, per the dispatch note in RunInitialMissionsWithCatalog.
+//
+// No RNG stream reaches this path: RunInitialMissionsWithCatalog takes no rng
+// parameter, and neither dispatchToken/handleI nor movement.AttachCargoMode
+// import internal/sim/rng, so I4 (deterministic, accounted draws only) holds
+// structurally — there is nothing here that could draw.
+func TestInitialMissionAttachOrderMatchesVerbOrder(t *testing.T) {
+	w := newMissionFixtureWorld(5, nil)
+	hCarrier, _ := w.Create(testDef("ARMCOM"), 0, 0, 0, 0)
+	hOne, _ := w.Create(testDef("ARMCK"), 0, 0, 0, 0)
+	hTwo, _ := w.Create(testDef("ARMCK"), 0, 0, 0, 0)
+	uCarrier := w.Unit(hCarrier)
+
+	m := &Mission{Type: TypeCampaign, Units: []UnitPlacement{
+		{UnitName: "ARMCOM", Ident: "carrier", InitialMission: ""},
+		{UnitName: "ARMCK", Ident: "one", InitialMission: "i carrier"},
+		{UnitName: "ARMCK", Ident: "two", InitialMission: "i carrier"},
+	}}
+	RunInitialMissionsWithCatalog(m, w, testInitialCatalog)
+
+	if got := uCarrier.Attachment.Cargo; len(got) != 2 || got[0] != hTwo || got[1] != hOne {
+		t.Fatalf("cargo list order should be verb order with the latest attach at the head: got %v want [%v %v]", got, hTwo, hOne)
+	}
+	uOne := w.Unit(hOne)
+	uTwo := w.Unit(hTwo)
+	if uOne.Attachment.Carrier != hCarrier || uTwo.Attachment.Carrier != hCarrier {
+		t.Fatalf("both units should carry the carrier link: one=%v two=%v want %v", uOne.Attachment.Carrier, uTwo.Attachment.Carrier, hCarrier)
+	}
+	if uOne.Attachment.AttachPiece != -1 || uTwo.Attachment.AttachPiece != -1 {
+		t.Fatalf("piece should be -1 for both (no piece named): one=%d two=%d", uOne.Attachment.AttachPiece, uTwo.Attachment.AttachPiece)
 	}
 }

@@ -740,10 +740,16 @@ run's release-point leg computes the release lead as
 `gravity` word and, **if it is zero, returns the cancel-all code (7)**, which
 empties the bomber's whole order queue. There is no fallback gravity.
 
-**Observation:** none yet — this entry records the retail behavior as the
-bound Nanolathe must not "improve". A map whose `gravity` key is absent or
-`0` makes bombers un-orderable to attack in retail; a reimplementation that
-substitutes a default gravity here would invent behavior.
+**Observation (2026-09-01, asset census):** 275 stock maps enumerated, none
+authors or defaults to gravity 0; the bound is unreachable on stock content.
+Every map's `[GlobalHeader]` authors the `gravity` key explicitly (none
+omitted, none negative); the minimum authored value seen is `8` (word
+`582`), the maximum `445` (word `32421`), and 192 of 275 author `112` (word
+`8155`), matching the census already on file in `research/formats/ota.md`.
+A map whose `gravity` key is absent or `0` would still make bombers
+un-orderable to attack in retail per the spec above; a reimplementation that
+substitutes a default gravity here would invent behavior — but no stock map
+authors one.
 
 **Decision:** clone retail — cancel-all on zero gravity. If any retail map
 in `~/TotalAnnihilation` carries `gravity = 0`, a probe under `probes/`
@@ -752,8 +758,11 @@ this entry is promoted from "sanctioned bound" to "observed". Manual retail
 observation is the decider; do not automate the executable.
 
 **Contract changed:** none in Nanolathe today; guards the air-order executor
-against a plausible-looking default. Status (2026-08-29): open — candidate
-awaiting a `gravity = 0` map census (RWU-02-4 owns the map-key census).
+against a plausible-looking default. Status (2026-09-01): closed-unreachable-on-stock
+— the RWU-19-8 asset census found no `gravity = 0` (or omitted-key, or
+negative) stock map, so retail's cancel-all bound cannot be observed on
+shipped content; the Decision above still stands as the clone-retail
+contract for any future or modded map that does author `gravity = 0`.
 
 ## SC24 — Retail never compiles loose `units\*.FBI` or parses loose `weapons\*.tdf`
 
