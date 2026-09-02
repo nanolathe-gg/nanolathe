@@ -738,6 +738,27 @@ func (s *Service) spawnFeatureAt(cx, cz int, def *content.FeatureDef) *Instance 
 		s.Terrain.BumpStaticObstacleRevision()
 	}
 	s.Terrain.Plot[idx].SetFlagByte(0)
+	// The stamp is one of the three writers of the anchor's instance-attached
+	// bit, and it is the arm that fires for a 3D definition: "set by the stamp
+	// for 3D definitions and by ignition and the die/reclaim transitions for
+	// sprite definitions" [05 R-FEAT-01 §15]. A sprite definition therefore
+	// leaves the anchor clear here and acquires the bit only when an animation
+	// instance actually attaches (Ignite and startFeatureAnimation), which is
+	// what makes the payout guard's conjunction mean "a sprite feature that is
+	// burning or already playing its death or reclaim animation" rather than
+	// "any stamped feature". A 3D wreck carries the bit from birth and its
+	// definition bit is clear, so it stays reclaimable throughout.
+	//
+	// "3D definition" is read strictly — an authored `object` and no
+	// `filename` — so that no definition can both take the bit here and answer
+	// the sprite test below. It is also what keeps the write invisible to this
+	// package's other readers of the same bit: the retail save writer selects
+	// its 3D family from `object` before it ever consults the flag byte, and the
+	// fire-spread scans reject a cell that already owns an instance, which every
+	// stamped anchor does.
+	if is3DDef(def) {
+		s.Terrain.Plot[idx].SetOccupied(true)
+	}
 	// Create instance.
 	inst := &Instance{
 		Def:        def,
@@ -1031,17 +1052,31 @@ func FeatureAt(t *world.Terrain, x, z numeric.Fixed) (def *content.FeatureDef, c
 // A definition that is not reclaimable, or is indestructible, pays nothing and
 // is left standing, which is the executor's silent abandon arm.
 //
-// TODO(T25): [05 R-FEAT-01 §15] adds one more refusal — a SPRITE
-// (filename-bearing) definition whose anchor cell carries the instance-attached
-// bit, i.e. one that is burning or already playing a death or reclaim
-// animation. This build never writes that bit: spawnFeatureAt clears the
-// anchor's flag byte and ignition does not set it, so the refusal cannot be
-// tested from the grid and is not applied. Placeholder: the transition proceeds,
-// which means a burning tree can be reclaimed through this entry; Service.Reclaim,
-// which can see the live instance, still refuses one. Decider: give the anchor's
-// flag byte the instance-attached bit at the three sites §15 names (the stamp
-// for 3D definitions; ignition and the die/reclaim transitions for sprite ones),
-// then test it here.
+// isSpriteDef reports the definition half of the payout guard of
+// [05 R-FEAT-01 §15]: flag bit 0, "sprite (filename-based) definition". The
+// authored key is `filename`, the sprite source used when a definition names no
+// model [02 "Feature record"] — `tree1` is `filename trees`, while `armaap_dead`
+// has none because it is a 3D wreck [05 R-WORK-01 §5-A].
+func isSpriteDef(def *content.FeatureDef) bool {
+	return def != nil && def.Filename != ""
+}
+
+// is3DDef is the complement the stamp writes the anchor's instance-attached bit
+// for [05 R-FEAT-01 §15]: an authored 3DO model and no sprite source. The two
+// predicates are deliberately not each other's negation — a definition naming
+// neither is neither, and takes the bit from no site.
+func is3DDef(def *content.FeatureDef) bool {
+	return def != nil && def.Object != "" && def.Filename == ""
+}
+
+// The third refusal is the payout guard of [05 R-FEAT-01 §15]: the helper
+// refuses outright when the anchor cell's instance-attached bit AND the
+// definition's sprite bit are both set. The conjunction means "a sprite feature
+// that currently has a live animation instance" — one that is burning, or
+// already playing its death or reclaim animation — which is what "burning
+// blocks reclaim" describes. It never applies to a 3D wreck: the stamp sets a
+// 3D definition's instance bit always, but its definition bit is clear, so a
+// sinking wreck stays reclaimable throughout.
 func ReclaimTransition(t *world.Terrain, cx, cz int) (metal, energy float32, ok bool) {
 	if t == nil {
 		return 0, 0, false
@@ -1056,6 +1091,9 @@ func ReclaimTransition(t *world.Terrain, cx, cz int) (metal, energy float32, ok 
 	}
 	if !def.Reclaimable || def.Indestructible {
 		return 0, 0, false
+	}
+	if isSpriteDef(def) && cell.Occupied() {
+		return 0, 0, false // the payout guard's two bits [05 R-FEAT-01 §15]
 	}
 	// I2 allowlist: the pools cross into the economy ledger as float32
 	// contributions [05 "Feature reclaim"][05 R-ECO-01 §2].

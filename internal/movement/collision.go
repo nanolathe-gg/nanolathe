@@ -67,7 +67,9 @@ package movement
 import (
 	"sort"
 
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -136,6 +138,141 @@ type OccupancyGrid struct {
 	// same call, so the map and the words are one store [04 R-COLL-01 §4].
 	// Fixtures that never bind terrain leave it nil and keep the maps alone.
 	plot *world.Terrain
+
+	// overlap and ownerState are the overlap protocol's two bindings
+	// [04 R-COLL-01 §4]. The grid arbitrates a contested cell from the
+	// occupant's owner player state and records the outcome on both units'
+	// flag words, neither of which it carries itself. With no binding the
+	// occupant keeps every contested cell, which is the branch retail takes
+	// for every owner that is not in the displacing state.
+	overlap    OverlapUnits
+	ownerState func(owner uint8) uint8
+	// inOverlapScan guards the clear's overlap scan against re-entry. A
+	// restamp only stamps, so it cannot start a second clear; the flag keeps
+	// a future writer from turning the scan quadratic by accident.
+	inOverlapScan bool
+}
+
+// eliminatedPlayerState is the owner player-row state byte whose units yield a
+// contested cell to whoever stamps over it [04 R-COLL-01 §4]. The label
+// (the eliminated/watch population, whose units the per-unit sweep visits but
+// never pumps or moves) is a Supported inference [04 R-MOV-03 §1]; the value
+// and the arithmetic are Established.
+const eliminatedPlayerState uint8 = 3
+
+// OverlapUnits is the occupancy layer's window onto the facts the overlap
+// protocol of [04 R-COLL-01 §4] needs and the grid does not carry: which unit
+// an occupant identity names, its flag word's host/intruder bits, the
+// rectangle it would stamp, and the deterministic live-unit traversal the
+// clear's overlap scan walks. *System implements it; fixtures may leave it
+// unbound.
+//
+// Identities are pool slots, the same numbers the grid files in its planes.
+type OverlapUnits interface {
+	// OverlapOwner returns the owner byte of the live unit at a pool slot.
+	OverlapOwner(id int) (uint8, bool)
+	// OverlapFlags reads the unit's host and intruder bits.
+	OverlapFlags(id int) (host, intruder bool)
+	// SetOverlapFlags writes both bits to the given values.
+	SetOverlapFlags(id int, host, intruder bool)
+	// OverlapRect returns the cell rectangle the unit occupies at its cached
+	// pair — the rectangle the clear scans and the restamp re-stamps.
+	OverlapRect(id int) (anchor Cell, fx, fz int16, ok bool)
+	// VisitOverlapCandidates visits live unit identities in the sweep's
+	// deterministic order (player slot, then pool slot ascending) [I1].
+	VisitOverlapCandidates(fn func(id int))
+	// RestampFootprint re-runs the stamp loop for one unit at its cached pair
+	// through the grid, so the overlap protocol arbitrates every cell again.
+	// The building class stamps only the cells its yard map still selects and
+	// releases the self-held cells it no longer selects [04 R-COLL-01 §4].
+	RestampFootprint(id int)
+}
+
+// AttachOverlap binds the overlap protocol's unit window and the owner
+// player-state reader [04 R-COLL-01 §4]. The session composes both; a grid
+// with neither keeps its pre-protocol behavior (the occupant keeps the cell).
+func (g *OccupancyGrid) AttachOverlap(u OverlapUnits, ownerState func(owner uint8) uint8) {
+	if g == nil {
+		return
+	}
+	g.overlap = u
+	g.ownerState = ownerState
+}
+
+// AttachOverlapBinding installs this System as its grid's overlap window and
+// binds the owner player-state reader the session owns [04 R-COLL-01 §4].
+// The state byte is the player row's, never the unit's own owner byte, which
+// is the slot number [06 R-DMG-01 §8].
+func (s *System) AttachOverlapBinding(ownerState func(owner uint8) uint8) {
+	if s == nil || s.Grid == nil {
+		return
+	}
+	s.Grid.AttachOverlap(s, ownerState)
+}
+
+// displaceable reports the overlap protocol's one branch condition: the
+// occupant's owner is active and in player state 3 [04 R-COLL-01 §4].
+func (g *OccupancyGrid) displaceable(occupant int) bool {
+	if g == nil || g.overlap == nil || g.ownerState == nil || occupant <= 0 {
+		return false
+	}
+	owner, ok := g.overlap.OverlapOwner(occupant)
+	if !ok {
+		return false
+	}
+	return g.ownerState(owner) == eliminatedPlayerState
+}
+
+// raiseOverlap ORs the named bits into a unit's flag word. Retail raises one
+// bit per side per contested cell and never clears one here; the clear and the
+// restamp are the only routines that lower them [04 R-COLL-01 §4].
+func (g *OccupancyGrid) raiseOverlap(id int, host, intruder bool) {
+	if g == nil || g.overlap == nil || id <= 0 {
+		return
+	}
+	h, i := g.overlap.OverlapFlags(id)
+	nh, ni := h || host, i || intruder
+	if nh == h && ni == i {
+		return
+	}
+	g.overlap.SetOverlapFlags(id, nh, ni)
+}
+
+// ArbitrateOverlap applies the overlap protocol to one cell and reports
+// whether self takes it [04 R-COLL-01 §4]:
+//
+//	occupant := unit at the cell's word
+//	if occupant's owner is active and in player state 3:
+//	        occupant.flags |= intruder;  self.flags |= host;  cell.word := self
+//	else:
+//	        occupant.flags |= host;      self.flags |= intruder;  (cell keeps occupant)
+//
+// A free cell, or one this identity already holds, is taken with no bits
+// raised. Stamping a held cell never fails the stamp; it only decides which of
+// the two identities the cell names. The protocol is identical for the ground
+// and air planes and for the building class, which is why the building stamp
+// in internal/construction arbitrates its plot word through this same call.
+func (g *OccupancyGrid) ArbitrateOverlap(occupant, self int) bool {
+	if self <= 0 {
+		return false
+	}
+	if occupant <= 0 || occupant == self {
+		return true
+	}
+	if g == nil {
+		// No grid is no window on the two units, so the cell keeps its
+		// occupant — the branch retail takes for every owner that is not in
+		// the displacing state.
+		return false
+	}
+	if g.displaceable(occupant) {
+		g.raiseOverlap(occupant, false, true)
+		g.raiseOverlap(self, true, false)
+		return true
+	}
+	g.raiseOverlap(occupant, true, false)
+	g.raiseOverlap(self, false, true)
+	return false
 }
 
 // Plane selects one of the plot cell's two occupancy words [03 §2.2].
@@ -373,17 +510,17 @@ func (g *OccupancyGrid) Stamp(anchor Cell, fx, fz int16, id int) bool {
 //
 // Order is the section's: the bounds test of [04 R-COLL-01 §2] steps 1–4 on
 // the pair first — an out-of-map rectangle writes **no cell** — then the
-// per-cell overlap protocol. A free cell takes the identity; a cell that
-// already holds a different identity keeps its occupant and the stamp does not
-// fail. Retail also records the host/intruder bits on the two units' flag
-// words and lets a stamp displace an occupant whose owner is in player state 3.
+// per-cell overlap protocol of ArbitrateOverlap above, one cell at a time as
+// it is visited: a free cell takes the identity; a contested cell whose
+// occupant's owner is in the displacing player state yields to this identity
+// and both flag words record it; any other contested cell keeps its occupant,
+// records the bits the other way round, and does **not** fail the stamp. A
+// rectangle can therefore end half displaced when its occupants differ, which
+// is the order the section names [04 R-COLL-01 §4].
 //
-// TODO(T25): the host/intruder flag bits (26/27), the state-3 displacement and
-// the sector-bucket overlap scan of [04 R-COLL-01 §4] need unit flag words and
-// player state inside the occupancy layer, which it does not have. Placeholder:
-// the occupant keeps the cell in every overlap, which is the branch retail
-// takes for every owner that is not in state 3. Same gap, same placeholder as
-// construction's building stamp.
+// The boolean result is unchanged: it is "every cell of the rectangle now
+// holds id", which the callers use as "the stamp took the whole footprint",
+// not as a success flag for the protocol.
 //
 // On a mutation the revision bumps [04 §7.4] C18. Deterministic: the caller
 // iterates slots ascending and the scan is row-major [I1][04 §8.2] C25.
@@ -407,17 +544,29 @@ func (g *OccupancyGrid) StampPlane(plane Plane, anchor Cell, fx, fz int16, id in
 	for dz := int32(0); dz < int32(fz); dz++ {
 		for dx := int32(0); dx < int32(fx); dx++ {
 			c := Cell{X: anchor.X + dx, Z: anchor.Z + dz}
-			if occ, ok := cells[c]; ok {
-				if occ != id {
-					held = false // the cell keeps its occupant [04 R-COLL-01 §4]
+			displaced := false
+			if occ, ok := cells[c]; ok && occ != id {
+				// One contested cell, arbitrated as it is visited
+				// [04 R-COLL-01 §4].
+				if !g.ArbitrateOverlap(occ, id) {
+					held = false // the cell keeps its occupant
 					continue
 				}
-			} else {
+				displaced = true
+				cells[c] = id
+				changed = true
+			} else if !ok {
 				cells[c] = id
 				changed = true
 			}
 			if wordFits {
-				if cur, ok := g.plotWord(plane, c); ok && (cur == 0 || cur == word) {
+				// A displaced cell's word is rewritten unconditionally — the
+				// protocol's `cell.word := self`. Otherwise the word is only
+				// taken when it is free or already ours, which leaves
+				// construction's pre-creation placement reservation (a word
+				// written for a product that has no unit yet, so no identity
+				// the protocol could arbitrate) standing.
+				if cur, ok := g.plotWord(plane, c); ok && (displaced || cur == 0 || cur == word) {
 					g.setPlotWord(plane, c, word)
 				}
 			}
@@ -488,7 +637,137 @@ func (g *OccupancyGrid) ClearPlane(plane Plane, anchor Cell, fx, fz int16, id in
 	if changed {
 		g.rev++ // [04 §7.4] C18
 	}
+	// "Then flags bit 27 is cleared, and if bit 26 was set both 26 and 27 are
+	// cleared and the overlap scan runs" — the section's clear order, after
+	// the cell loop [04 R-COLL-01 §4].
+	g.releaseOverlap(id, anchor, fx, fz)
 	return changed
+}
+
+// releaseOverlap is the clear's flags step and, when this identity was a host,
+// the overlap scan [04 R-COLL-01 §4]. Clear releases cells, so an intruder
+// that was refused one of them may now claim it: every live unit whose own
+// rectangle intersects this one is passed to the restamp, which acts only on
+// the units whose intruder bit is raised.
+//
+// Clear() calls this once per plane; the second call finds bit 26 already
+// clear and only re-clears bit 27, so the scan runs once per clear.
+func (g *OccupancyGrid) releaseOverlap(id int, anchor Cell, fx, fz int16) {
+	if g == nil || g.overlap == nil || id <= 0 {
+		return
+	}
+	host, intruder := g.overlap.OverlapFlags(id)
+	if !host && !intruder {
+		return
+	}
+	if !host {
+		g.overlap.SetOverlapFlags(id, false, false) // bit 27 cleared
+		return
+	}
+	g.overlap.SetOverlapFlags(id, false, false) // bit 26 was set: both cleared
+	g.overlapScan(id, anchor, fx, fz)
+}
+
+// overlapScan is the clear's sector-bucket scan [04 R-COLL-01 §4]: "every live
+// unit (and every unit on a live unit's cargo list) filed in a sector bucket
+// touching the rectangle whose own rectangle intersects it is passed to the
+// restamp". The rectangle is the clearing unit's own at its cached pair; the
+// rectangle the clear was called with is the fallback for an identity the
+// binding does not know.
+//
+// A carried unit is on the cargo list retail also walks; its mover mode is 0,
+// which stamps and clears nothing, so passing it to the restamp writes no cell
+// either way [04 R-COLL-01 §4].
+//
+// TODO(question): retail visits the candidates in sector-bucket order, and a
+// bucket's own order is its insertion order, which is untraced. This walks the
+// sweep's deterministic live-unit order instead (player slot, then pool slot
+// ascending) [I1]. The two differ only when two intruders contend for the same
+// released cell — the first restamped takes it. What would settle it is a
+// trace of the end of the bucket list the stamp links a unit onto.
+func (g *OccupancyGrid) overlapScan(clearing int, anchor Cell, fx, fz int16) {
+	if g == nil || g.overlap == nil || g.inOverlapScan {
+		return
+	}
+	if a, rx, rz, ok := g.overlap.OverlapRect(clearing); ok {
+		anchor, fx, fz = a, rx, rz
+	}
+	if fx <= 0 {
+		fx = 1
+	}
+	if fz <= 0 {
+		fz = 1
+	}
+	g.inOverlapScan = true
+	defer func() { g.inOverlapScan = false }()
+	g.overlap.VisitOverlapCandidates(func(id int) {
+		if id == clearing || id <= 0 {
+			return
+		}
+		a, cfx, cfz, ok := g.overlap.OverlapRect(id)
+		if !ok || !rectsIntersect(anchor, fx, fz, a, cfx, cfz) {
+			return
+		}
+		g.Restamp(id)
+	})
+}
+
+// Restamp is the section's restamp [04 R-COLL-01 §4]: gated on flags bit 27,
+// it clears the bit and re-runs the stamp loop at the cached pair with the
+// overlap protocol. Its callers are the overlap scan above (an intruder
+// re-claims cells its host just released), the yard-open port write, and the
+// save loader's post-load pass — the two writers that raise bit 27 to request
+// one.
+func (g *OccupancyGrid) Restamp(id int) {
+	if g == nil || g.overlap == nil || id <= 0 {
+		return
+	}
+	host, intruder := g.overlap.OverlapFlags(id)
+	if !intruder {
+		return
+	}
+	g.overlap.SetOverlapFlags(id, host, false)
+	g.overlap.RestampFootprint(id)
+}
+
+// rectsIntersect reports whether two cell rectangles share a cell. Both are
+// half-open in each axis, as every footprint rectangle in this file is.
+func rectsIntersect(a Cell, afx, afz int16, b Cell, bfx, bfz int16) bool {
+	if afx <= 0 {
+		afx = 1
+	}
+	if afz <= 0 {
+		afz = 1
+	}
+	if bfx <= 0 {
+		bfx = 1
+	}
+	if bfz <= 0 {
+		bfz = 1
+	}
+	return a.X < b.X+int32(bfx) && b.X < a.X+int32(afx) &&
+		a.Z < b.Z+int32(bfz) && b.Z < a.Z+int32(afz)
+}
+
+// ReleaseCellIfSelf clears one cell of one plane when it holds id, in both the
+// plane's map and the plot word. It is the restamp's building-class release —
+// "a cell the yard map no longer selects that holds the self identity is
+// released to 0" — and deliberately does not run the clear's flags step, which
+// belongs to a whole-unit clear [04 R-COLL-01 §4].
+func (g *OccupancyGrid) ReleaseCellIfSelf(plane Plane, c Cell, id int) {
+	if g == nil || id <= 0 {
+		return
+	}
+	cells := g.planeCells(plane)
+	if occ, ok := cells[c]; ok && occ == id {
+		delete(cells, c)
+		g.rev++ // [04 §7.4] C18
+	}
+	if word, wordFits := occupancyWord(id); wordFits {
+		if cur, ok := g.plotWord(plane, c); ok && cur == word {
+			g.setPlotWord(plane, c, 0)
+		}
+	}
 }
 
 // Block is a revision-bumping stamp for dynamic blockers [04 §7.4] C18.
@@ -918,4 +1197,146 @@ func CommitSweep(states []*CollisionState, grid *OccupancyGrid, perCellFactory f
 		// proposedMode is current mode unless caller injects variation; use s.Mode
 		s.CommitOne(grid, s.Mode, perCell, aggregate)
 	}
+}
+
+// --- the overlap protocol's unit window [04 R-COLL-01 §4] ---
+//
+// The grid arbitrates a contested cell from the occupant's owner player state
+// and records the outcome on both units' flag words; neither fact lives in the
+// grid. These six methods are the System's implementation of OverlapUnits, and
+// they are the only place internal/movement reads or writes bits 26 and 27.
+
+// OverlapOwner returns the owner byte of the live unit at a pool slot.
+func (s *System) OverlapOwner(id int) (uint8, bool) {
+	u := s.overlapUnit(id)
+	if u == nil {
+		return 0, false
+	}
+	return u.Owner, true
+}
+
+// OverlapFlags reads the unit's host and intruder bits [04 R-COLL-01 §4].
+func (s *System) OverlapFlags(id int) (bool, bool) {
+	u := s.overlapUnit(id)
+	if u == nil {
+		return false, false
+	}
+	return u.Flags&units.OverlapHostStatus != 0, u.Flags&units.OverlapIntruderStatus != 0
+}
+
+// SetOverlapFlags writes both bits to the given values [04 R-COLL-01 §4].
+func (s *System) SetOverlapFlags(id int, host, intruder bool) {
+	u := s.overlapUnit(id)
+	if u == nil {
+		return
+	}
+	u.Flags &^= units.OverlapHostStatus | units.OverlapIntruderStatus
+	if host {
+		u.Flags |= units.OverlapHostStatus
+	}
+	if intruder {
+		u.Flags |= units.OverlapIntruderStatus
+	}
+}
+
+// OverlapRect returns the cell rectangle the unit occupies at its cached pair.
+// For the building class that is the whole extent; which of its cells are
+// actually held is the yard map's business, and the restamp applies it.
+func (s *System) OverlapRect(id int) (Cell, int16, int16, bool) {
+	if s == nil {
+		return Cell{}, 0, 0, false
+	}
+	coll := s.Collisions[pool.Handle(id)]
+	if coll == nil {
+		return Cell{}, 0, 0, false
+	}
+	fx, fz := coll.FootPrintX, coll.FootPrintZ
+	if fx <= 0 {
+		fx = 1
+	}
+	if fz <= 0 {
+		fz = 1
+	}
+	return coll.CachedAnchor, fx, fz, true
+}
+
+// VisitOverlapCandidates visits live unit identities in the sweep's order —
+// players 0..9 ascending, then pool slot ascending [I1][01 §6.2]. Retail walks
+// the sector buckets touching the rectangle instead; the divergence and what
+// would settle it are recorded at OccupancyGrid.overlapScan.
+func (s *System) VisitOverlapCandidates(fn func(id int)) {
+	if s == nil || s.world == nil || fn == nil {
+		return
+	}
+	s.world.VisitActiveSlots(func(v units.SlotVisit) {
+		fn(int(v.Handle))
+	})
+}
+
+// RestampFootprint re-runs the stamp loop for one unit at its cached pair
+// through the grid, so the overlap protocol arbitrates every cell again
+// [04 R-COLL-01 §4]. The building class stamps only the cells its yard map
+// still selects and releases the self-held cells it no longer selects; a mover
+// stamps the plane of its committed mode, and modes 0 and 3 stamp nothing.
+func (s *System) RestampFootprint(id int) {
+	if s == nil || s.Grid == nil {
+		return
+	}
+	h := pool.Handle(id)
+	coll := s.Collisions[h]
+	if coll == nil {
+		return
+	}
+	fx, fz := coll.FootPrintX, coll.FootPrintZ
+	if fx <= 0 {
+		fx = 1
+	}
+	if fz <= 0 {
+		fz = 1
+	}
+	if coll.Building {
+		if len(coll.Yard) != int(fx)*int(fz) {
+			return
+		}
+		for dz := int32(0); dz < int32(fz); dz++ {
+			for dx := int32(0); dx < int32(fx); dx++ {
+				c := Cell{X: coll.CachedAnchor.X + dx, Z: coll.CachedAnchor.Z + dz}
+				if coll.Yard[int(dz)*int(fx)+int(dx)].Selects(coll.YardOpen) {
+					s.Grid.StampPlane(PlaneGround, c, 1, 1, coll.ID)
+					continue
+				}
+				s.Grid.ReleaseCellIfSelf(PlaneGround, c, coll.ID)
+			}
+		}
+		coll.StampedAnchor = coll.CachedAnchor
+		coll.StampedPlane = PlaneGround
+		coll.HasStamp = s.Grid.RectOnMap(coll.CachedAnchor, fx, fz)
+		return
+	}
+	plane, stamps := planeForMode(coll.CachedMode)
+	if !stamps {
+		return
+	}
+	s.Grid.StampPlane(plane, coll.CachedAnchor, fx, fz, coll.ID)
+	// The restamp is at the cached pair, which is where every writer stamps
+	// [04 R-COLL-01 §4], so that pair is now where this identity's occupancy
+	// is and the next clear must subtract exactly it.
+	coll.StampedAnchor = coll.CachedAnchor
+	coll.StampedPlane = plane
+	coll.HasStamp = s.Grid.RectOnMap(coll.CachedAnchor, fx, fz)
+}
+
+// overlapUnit resolves an occupancy identity to its live unit. An identity the
+// unit world does not hold — a construction placement reservation for a
+// product that has no unit yet — has no flag word to write, which is exactly
+// what a false second result from OverlapOwner reports.
+func (s *System) overlapUnit(id int) *units.Unit {
+	if s == nil || id <= 0 {
+		return nil
+	}
+	u := s.unitFor(pool.Handle(id))
+	if u == nil || !u.Alive {
+		return nil
+	}
+	return u
 }

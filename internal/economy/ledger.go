@@ -63,6 +63,16 @@ type Player struct {
 	Logo            uint8
 	Watcher         bool
 	RejectionReason uint8
+	// ResultAuxiliary is the player record's 32-bit auxiliary word, and it
+	// exists only to be read as zero. Retail reads it at ten sites — the score
+	// helper's row gate, the in-battle score panel, the elimination and
+	// participant filters, the per-player economy gate, the multiplayer
+	// alliance vote — every one a bare zero test, and STORES it nowhere outside
+	// the record's bulk initialisation, so in every single-player session it is
+	// constantly zero [08 R-CAMP-01 §7][07 R-HUD-04 §1]. Nothing in Nanolathe
+	// writes it either: that is the same behavior, not an omission. The field
+	// is kept rather than folded into a literal because it is the field both
+	// contracts name; no save box reads or writes it.
 	ResultAuxiliary uint32
 	PassProduced    [2]float32
 	PassConsumed    [2]float32

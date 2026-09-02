@@ -98,6 +98,25 @@ const (
 	ArmedStatus         uint32 = 0x80000000
 )
 
+// OverlapHostStatus and OverlapIntruderStatus are the occupancy overlap
+// protocol's two bookkeeping bits, at bits 26 and 27 of this same runtime
+// status word — the word whose bit 29 is BuildingClassStatus above
+// [04 R-COLL-01 §4]. *Host* means another unit overlaps a cell this unit
+// holds; *intruder* means this unit overlaps a cell it does not hold.
+//
+// Their reader census is exactly three routines, all inside the occupancy
+// layer: the clear (bit 27 cleared; bit 26 set → both cleared and the overlap
+// scan run), the restamp (gated on bit 27), and the two writers that raise
+// bit 27 to request a restamp — the yard-open port write and the save
+// loader's post-load pass. No aim, damage, order, path, visibility or
+// presentation code reads either bit [04 R-COLL-01 §4 "reader census of the
+// overlap bits"], so they are declared here only because the flag word lives
+// here; internal/movement owns every read and write.
+const (
+	OverlapHostStatus     uint32 = 0x04000000
+	OverlapIntruderStatus uint32 = 0x08000000
+)
+
 const classifierSelectableClear uint32 = 0x00008000
 
 // The two standing-order fields live in the status word as two-bit pairs: the
@@ -358,6 +377,25 @@ type Unit struct {
 	// COB Create; it is deliberately absent from authoritative snapshots and
 	// save records [04 §4.7 port 18].
 	yardTransaction YardOpenTransaction
+
+	// MoveTier is the movement-rate classifier's CACHED category — the two bits
+	// the classifier writes as its final act on every run, which retail keeps in
+	// bits 2–3 of the movement-mode word [04 §5.2][04 R-MOV-01 §6]. It is 0 when
+	// the mover's blocked flag is set, when the unit is attached to a carrier, or
+	// when the scalar speed word and the 16-bit turn residual are both zero;
+	// otherwise it is 1..3 by the signed inclusive `MoveRate1`/`MoveRate2`
+	// comparison. Only the movement integrator writes it; a unit that never runs
+	// the integrator (every structure) keeps the seed value 0.
+	//
+	// It is deliberately a cache and not a live predicate. The blocked flag it
+	// folds in is rewritten only by a cross-cell or mode-changing proposal's
+	// verdict and is stale by construction between verdicts [04 R-COLL-01 §5], so
+	// a unit whose last cross-cell proposal was rejected reads tier 0 while it
+	// keeps moving inside its cell. The weapon drift gate reads this field rather
+	// than recomputing the terms, which is why such a unit aims under the tight
+	// gate until its next verdict [06 R-WPN-03 §2][04 §5.2 "the mover inhibit bit
+	// is the blocked flag"].
+	MoveTier uint8
 }
 
 // MakeSelectable applies retail's make-selectable order: clear the transient status bit

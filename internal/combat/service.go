@@ -870,28 +870,31 @@ func muzzleWorldPosResolved(u *units.Unit, piece int32) (Vec3, bool) {
 	return Vec3{}, false
 }
 
-// unitStationary reports the shooter's movement tier being category 0, which
-// is the predicate the zero-tolerance drift gate selects on
-// [06 R-WPN-03 §2] [04 §5.2]. Category 0 covers a zero scalar speed, a
-// mover-inhibited unit and a unit attached to a carrier, so a transported unit
-// aims under the tight gate. There is no class or category-mask test here: the
-// tight gate applies to a stationary unit of any kind and the loose gate to any
-// unit whose tier is 1, 2 or 3.
+// unitStationary reports the shooter's movement tier being category 0, which is
+// the predicate the zero-tolerance drift gate selects on [06 R-WPN-03 §2]
+// [04 §5.2]. There is no class or category-mask test here: the tight gate
+// applies to a stationary unit of any kind and the loose gate to any unit whose
+// tier is 1, 2 or 3.
 //
-// The movement integrator classifies with the scalar speed word as its only
-// nonzero magnitude, so the both-zero override reduces to a zero speed.
-// TODO(question): the mover-inhibit bit is not tracked anywhere in this build
-// (the movement integrator passes it as false too), so an inhibited but
-// nonzero-speed unit takes the loose gate here where retail takes the tight
-// one [04 §5.2].
+// It reads the tier the movement integrator CACHED, not the four terms live.
+// The gate's "is it moving" question is answered by the two tier bits the
+// classifier writes as its final act, and the classifier's own blocked term is
+// the mover's persisted blocked flag, rewritten only at a cross-cell or
+// mode-changing proposal's verdict [04 R-COLL-01 §5][04 §5.2 "the mover inhibit
+// bit is the blocked flag"]. So a unit whose last cross-cell proposal was
+// rejected reads tier 0 — and therefore aims under the tight gate — until its
+// next verdict, whatever its speed word says in the meantime.
+//
+// Corrected 2026-09-02 (WU-19-58). This used to recompute the terms here as
+// `carrier != 0 || Move.Speed == 0`, with the blocked term missing entirely
+// because the integrator passed it as a literal false. That was wrong twice: a
+// blocked mover took the loose gate where retail takes the tight one, and a
+// stale verdict could not reach the gate at all.
 func unitStationary(u *units.Unit) bool {
 	if u == nil {
 		return true
 	}
-	if u.Attachment.Carrier != 0 {
-		return true
-	}
-	return u.Move.Speed == 0
+	return u.MoveTier == 0
 }
 
 func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terrain *world.Terrain, simRNG *rng.Simulation, svc *Service, w *units.World) bool {

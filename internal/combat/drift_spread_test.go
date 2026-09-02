@@ -290,6 +290,11 @@ func TestFixedForwardGateUsesTheUnitHeading(t *testing.T) {
 // at the call site, not only in DriftGates: the same off-axis target that a
 // stationary shooter refuses is admitted once the shooter's movement tier
 // leaves category 0 [06 R-WPN-03 §2] [04 §5.2].
+//
+// The selector is the CACHED tier the movement integrator writes, not the speed
+// word — so this drives MoveTier directly [04 §5.2 "the mover inhibit bit is the
+// blocked flag"]. TestAimGateReadsCachedTier below locks that the speed word on
+// its own moves nothing here.
 func TestFixedForwardGateWidensWhileMoving(t *testing.T) {
 	w, terrain, shooter, target := newTestWorldAndUnits(t)
 	weapon := &content.WeaponDef{ID: 5, Range: 1000 * 65536, LineOfSight: true}
@@ -311,19 +316,56 @@ func TestFixedForwardGateWidensWhileMoving(t *testing.T) {
 	var svc Service
 	r := rng.NewSimulation(5)
 	shooter.Move.Speed = 0
+	shooter.MoveTier = 0
 	if sum := svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, cat, &r, nil); sum.Fired != 0 {
 		t.Fatalf("a stationary shooter must refuse an error of 1000, fired %d", sum.Fired)
 	}
 	shooter.Move.Speed = numeric.FixedFromInt(1)
+	shooter.MoveTier = 1
 	slot.Reload = 0
 	if sum := svc.StepWeaponsForUnit(shooter, 2, w, nil, terrain, nil, cat, &r, nil); sum.Fired != 1 {
 		t.Fatalf("a moving shooter must admit an error of 1000, fired %d", sum.Fired)
 	}
-	// A unit attached to a carrier is category 0 and aims under the tight gate
-	// even while its carrier moves it [06 R-WPN-03 §2].
-	shooter.Attachment.Carrier = target.Handle
+	// A unit attached to a carrier classifies as category 0 and aims under the
+	// tight gate even while its carrier moves it [06 R-WPN-03 §2]; the carrier
+	// term reaches the gate through the classifier's cache, so the integrator's
+	// next run on a carried unit writes tier 0 (movement's
+	// TestMoveTierCacheTerms covers the classification itself).
+	shooter.MoveTier = 0
 	slot.Reload = 0
 	if sum := svc.StepWeaponsForUnit(shooter, 3, w, nil, terrain, nil, cat, &r, nil); sum.Fired != 0 {
 		t.Fatalf("a carried shooter aims under the tight gate, fired %d", sum.Fired)
+	}
+}
+
+// TestAimGateReadsCachedTier locks that the drift gate's stationary/moving
+// selector is the tier the movement integrator cached and nothing else
+// [06 R-WPN-03 §2][04 §5.2 "the mover inhibit bit is the blocked flag"]. A unit
+// rejected on its last cross-cell proposal keeps a tier-0 cache while its speed
+// word stays nonzero, and it must aim under the TIGHT gate for as long as that
+// cache stands — the stale-by-construction blocked flag of [04 R-COLL-01 §5]
+// reaching the gate.
+func TestAimGateReadsCachedTier(t *testing.T) {
+	_, _, shooter, _ := newTestWorldAndUnits(t)
+	shooter.Move.Speed = numeric.FixedFromInt(3)
+	shooter.MoveTier = 0
+	if !unitStationary(shooter) {
+		t.Fatal("a nonzero speed word must not override a cached tier of 0 [04 §5.2]")
+	}
+	// And the converse: a zero speed word does not make a cached nonzero tier
+	// stationary. The cache is the only input.
+	shooter.Move.Speed = 0
+	shooter.MoveTier = 2
+	if unitStationary(shooter) {
+		t.Fatal("a zero speed word must not override a cached tier of 2 [04 §5.2]")
+	}
+	// The carrier field is likewise not re-read here: it is one of the
+	// classifier's terms, folded into the cache upstream.
+	shooter.Attachment.Carrier = 7
+	if unitStationary(shooter) {
+		t.Fatal("the gate must read the cache, not re-test the carrier field [06 R-WPN-03 §2]")
+	}
+	if !unitStationary(nil) {
+		t.Fatal("a nil shooter is stationary")
 	}
 }

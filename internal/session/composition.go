@@ -715,6 +715,18 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 			Resurrect: func(builder *units.Unit, n *orders.Node, _ uint32) bool {
 				return s.resurrectStep(builder, n, worldQueries.LookupFeature)
 			},
+			// Interrupt mask 2's producer. The record-removal cleanup delivers
+			// the cancel-current notification to the operation handler when the
+			// removed record's dynamic gate still holds bit 1; for the three
+			// construction rows that handler is the factory production machine,
+			// which this package does not hold
+			// [04 R-ORDER-02 §2][05 "Build request and factory queue behavior"].
+			CancelNotice: func(owner *units.Unit, n *orders.Node, tick uint32) bool {
+				if s.Build == nil {
+					return false
+				}
+				return s.Build.DeliverCancelNotice(owner, n, tick)
+			},
 		},
 		Weapons: &orders.WeaponAdapter{
 			Ready: func() bool { return s.Combat != nil },
@@ -1115,6 +1127,24 @@ func createAndBindServices(s *Session) error {
 	}
 	// Bind movement classes explicitly [02 "Movement class record"]
 	s.Movement.SetClasses(s.Catalog.Movement)
+	// The occupancy overlap protocol arbitrates a contested cell from the
+	// OCCUPANT'S OWNER player-row state byte and records the outcome on both
+	// units' flag words [04 R-COLL-01 §4]. The grid carries neither fact, so
+	// the composer hands it the same player table the damage funnel and the
+	// sweep gate read — the row's ControllerState, never the unit's own owner
+	// byte, which is the slot number [06 R-DMG-01 §8]. An unoccupied row, or
+	// an index past the ten records, reads as ControlByteAbsent, which is not
+	// the displacing state, so its units are never displaced.
+	s.Movement.AttachOverlapBinding(func(owner uint8) uint8 {
+		if s.Econ == nil || int(owner) >= len(s.Econ.Players) {
+			return combat.ControlByteAbsent
+		}
+		p := &s.Econ.Players[owner]
+		if !p.Exists {
+			return combat.ControlByteAbsent
+		}
+		return p.ControllerState
+	})
 	// Path work is shared across the existing session players and uses the
 	// session unit-limit word as its pressure divisor [04 R-PATH-01 §6].
 	s.Movement.ConfigurePath(s.activePlayerCount(), sessionPathUnitLimit(s))
@@ -1210,6 +1240,17 @@ func createAndBindServices(s *Session) error {
 			priorDeathExtra(h, cause, u)
 		}
 		if s.Build != nil {
+			// Interrupt mask 8's producer, and the construction-side arm of the
+			// target-removed walk: "when a unit is destroyed, the removal path
+			// walks every reference registered on that unit and calls the method
+			// with 0x8, then unlinks the reference" [04 R-ORD-01 §6]. The one
+			// reference construction registers is the factory record's product
+			// binding, so a product destroyed mid-build wakes its factory with
+			// the construction-stopped interrupt
+			// [05 "Build request and factory queue behavior"]. It runs before
+			// the placement release below only because the release does not read
+			// the link; neither ordering is contractual.
+			s.Build.NotifyProductRemoved(h)
 			s.Build.ReleasePlacement(h)
 		}
 	}

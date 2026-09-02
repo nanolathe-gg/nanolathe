@@ -789,22 +789,34 @@ func (s *Service) stampBuilding(product pool.Handle, record placementRecord, ope
 			}
 			y := yard[int((z-record.rect.MinZ())*record.rect.Width()+(x-record.rect.MinX()))]
 			if y.Selects(open) {
-				if cell.OccupantA() == 0 || cell.OccupantA() == id {
+				// The building class takes the same per-cell overlap protocol
+				// as every mover stamp [04 R-COLL-01 §4]: the grid arbitrates
+				// the cell as it is visited, raises the host/intruder bits on
+				// both units, and writes the plot word itself when a terrain
+				// is bound to it. When it is not (a grid-less or plot-less
+				// fixture), the same arbitration decides the word here; the
+				// verdict is deterministic, so asking twice cannot disagree
+				// and the bit raises are idempotent.
+				grid.Stamp(movement.Cell{X: x, Z: z}, 1, 1, gridID)
+				if cell.OccupantA() != id && grid.ArbitrateOverlap(int(cell.OccupantA()), gridID) {
 					cell.SetOccupantA(id)
 				}
-				// Stamp refuses a cell another identity holds, which is the
-				// plot's foreign-word test in the other layer [04 R-COLL-01 §4].
-				grid.Stamp(movement.Cell{X: x, Z: z}, 1, 1, gridID)
 			}
 			if y&0x01 != 0 {
 				cell.SetStructureYard(true)
 			}
 		}
 	}
-	// TODO(question): complete [04 R-COLL-01 §4] overlap arbitration when unit
-	// flag bits 26/27, player state 3, sector buckets, cargo scans, and
-	// class-layer reclassification have shared APIs. The narrow plot
-	// implementation intentionally leaves a foreign word unchanged.
+	// The overlap protocol itself — host/intruder bits, the displacement of an
+	// occupant whose owner is in the eliminated player state, and the clear's
+	// overlap scan and restamp — now runs inside the occupancy layer for this
+	// stamp exactly as it does for a mover [04 R-COLL-01 §4].
+	//
+	// TODO(question): what this write pair still does not do is the rest of
+	// the section's stamp and clear order for the building class — the derived
+	// min/max height recompute over the grown rectangle and the reclassifica-
+	// tion of the rectangle in every active class layer. Both need shared APIs
+	// this service does not own.
 }
 
 // RegisterBuildingPlacement records and stamps a building at the exact
@@ -1665,6 +1677,12 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 	node.GoalX = world.CellToWorld(cell.X)
 	node.GoalZ = world.CellToWorld(cell.Z)
 	// Link product handle into node payload Target for later states [05 C18].
+	// This write is also the record's TARGET REFERENCE registration: the factory
+	// record binds its product at the `Starting construction` visit, which is
+	// what makes the unit-removal walk deliver the target-removed notice — mask
+	// 8, construction stopped — to this factory when the product under
+	// construction is destroyed [04 R-ORD-01 §6]
+	// [05 "Build request and factory queue behavior"].
 	productHandle := product.Handle
 	node.Target = productHandle
 
@@ -2011,6 +2029,17 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 	if s != nil && s.OnRefresh != nil {
 		s.OnRefresh(factory)
 	}
+
+	// Release the record's target reference and its dynamic gate before the
+	// removal. The reference release is the "releases the reference at
+	// completion or cancel" half of the target-removed binding
+	// [05 "Build request and factory queue behavior"], and dropping gate bit 1
+	// is what stops the removal below from re-delivering the cancel notice of
+	// [04 R-ORDER-02 §2] into this same body: the guard is "the dynamic gate
+	// still holds bit 1 AT REMOVAL", and by then this record is no longer
+	// waiting on it.
+	node.Target = 0
+	node.DynamicGate = 0
 
 	// Drop node WITHOUT decrementing remaining count [05 C21].
 	// Remove head from primary queue without touching Param2.
@@ -2525,6 +2554,9 @@ func (s *Service) successEpilogueMobile(builder *units.Unit, node *orders.Node, 
 	// Preserve original Goal site for test assertion that structure appears at clicked location [P0-I05].
 	// The product's world position is at cell origin, which corresponds to site snapped with half-extent.
 	// Node.Goal remains the clicked site; we do not overwrite it with cell origin.
+	// The same target-reference registration as the factory epilogue: the record
+	// binds its product here and the removal walk delivers mask 8 through it
+	// [04 R-ORD-01 §6][05 "Build request and factory queue behavior"].
 	productHandle := product.Handle
 	node.Target = productHandle
 	s.logMessage("Starting construction")
@@ -2573,6 +2605,13 @@ func (s *Service) handleState3(factory *units.Unit, node *orders.Node, tick uint
 	}
 	if product == nil {
 		// Node that has lost its product falls through to result 7 — losing product cancels ALL factory orders [05].
+		//
+		// A product DESTROYED mid-build no longer reaches here: the removal walk
+		// delivers the target-removed notice (mask 8) and unlinks the reference,
+		// and the pump tests that interrupt before the state machine, so the
+		// established construction-stopped body runs instead — one count
+		// decrement and a surviving node [04 R-ORD-01 §6][05 C22]. What is left
+		// for this arm is a record that reaches state 3 with no reference at all.
 		q := s.queueForUnit(factory)
 		if q != nil {
 			newQ := orders.NewQueueWith(nil, nil)
@@ -2681,9 +2720,119 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 	}
 }
 
-// TODO(T25): the producers of interrupt masks 2 and 8 are still unknown — no
-// writer appears within the searched boundaries [P0-14][P0-15]. Both interrupt
-// bodies are established; the UI/network command layer that sets the bits is not.
+// ---------------------------------------------------------------------------
+// The two interrupt producers [05 "Build request and factory queue behavior"]
+// ---------------------------------------------------------------------------
+//
+// Neither mask is raised by a UI or network command layer, which is where the
+// superseded reading looked for them. Both are order-record NOTICES:
+//
+//   - mask 2, cancel-current, is the cleanup notice of [04 R-ORDER-02 §2]. It
+//     is never raised into the pending word at all: the record-removal paths
+//     invoke the operation handler with the mask when the record's DYNAMIC gate
+//     still holds bit 1 at removal. That is why BuildingBuild's static mask
+//     carries no bit 1 and the state machine arms it dynamically while a
+//     product is attached (states 3 and 4's `WakeBit1`). DeliverCancelNotice
+//     below is this handler's receiver.
+//
+//   - mask 8, construction stopped, is the target-removed notice of
+//     [04 R-ORD-01 §6]. The record binds its product as its target reference at
+//     creation (`node.Target = productHandle` in the two success epilogues) and
+//     releases it at completion or cancel, so the unit-removal walk delivers
+//     0x8 to the factory and unlinks the reference exactly when the product
+//     under construction is destroyed. Nothing else raises bit 3 into the
+//     pending word ([04 R-ORD-01 §0], [04 §3.3]). NotifyProductRemoved below is
+//     that walk's construction-side arm.
+//
+// Both are Established.
+
+// NotifyProductRemoved delivers the target-removed notice for a unit that has
+// just been destroyed: when the removed unit is the product some factory record
+// still holds as its target reference, the owning builder's pending word takes
+// bit 3 — `InterruptStop` — and the reference is unlinked, in that order
+// [04 R-ORD-01 §6]. The next pump visit tests the interrupt before the state
+// machine and runs the established construction-stopped body: the verbatim
+// "Construction stopped", one count decrement, an interface refresh, and the
+// node surviving at state 0 [05 C22].
+//
+// The reference this reads is `builderLinks`, the product→builder registration
+// [05 C18] made in the same epilogue that writes `node.Target`. Its lifetime is
+// the reference's lifetime: completion, cancel-current and the never-existed
+// unwind all delete the entry before the product's death can reach here, which
+// is the "releases the reference at completion or cancel" half of the contract
+// and is what keeps those three paths silent.
+//
+// It reports whether a notice was delivered.
+func (s *Service) NotifyProductRemoved(product pool.Handle) bool {
+	if s == nil || product == 0 || s.builderLinks == nil {
+		return false
+	}
+	builderHandle, ok := s.builderLinks[product]
+	if !ok || builderHandle == 0 || s.World == nil {
+		return false
+	}
+	builder := s.World.Unit(builderHandle)
+	if builder == nil {
+		return false
+	}
+	node := s.recordTargeting(builder, product)
+	if node == nil {
+		return false
+	}
+	builder.Pending |= InterruptStop // the notice's event code IS a pending bit [04 R-ORD-01 §6]
+	node.Target = 0                  // "then unlinks the reference"
+	return true
+}
+
+// recordTargeting returns the builder's construction record that currently
+// holds handle as its target reference, or nil. Both segments are walked in
+// order (I1); only construction records can carry a product reference, so a
+// same-handle attack or guard record in the queue is not a false positive.
+func (s *Service) recordTargeting(builder *units.Unit, handle pool.Handle) *orders.Node {
+	q := s.queueForUnit(builder)
+	if q == nil {
+		return nil
+	}
+	for _, segment := range [][]*orders.Node{q.Primary(), q.Secondary()} {
+		for _, n := range segment {
+			if n == nil || n.Target != handle {
+				continue
+			}
+			if !isBuildOrderID(n.ID) {
+				continue
+			}
+			return n
+		}
+	}
+	return nil
+}
+
+// DeliverCancelNotice is the construction handler's receiver for the cleanup
+// cancel notification of [04 R-ORDER-02 §2]: "when the record's dynamic gate
+// mask — the same field the pump consumes — still holds bit 1 (value 2) at
+// removal, invoke the operation handler with that cancel-notification mask".
+// The guard is the caller's (orders' cleanup runs it for every removal path);
+// this is the body, which is the same cancel-current body the interrupt test
+// reaches — refund `trunc((1 - remaining) * metalBuildCost)` and the cause-9
+// kill [05 C21].
+//
+// Re-entry is the one thing the receiver has to get right. Cancel-current's own
+// epilogue removes the head node, which re-enters cleanup; the body therefore
+// releases the record's gate and its product reference BEFORE that removal, so
+// the second pass sees a record no longer waiting on bit 1 and returns.
+func (s *Service) DeliverCancelNotice(owner *units.Unit, node *orders.Node, tick uint32) bool {
+	if s == nil || owner == nil || node == nil {
+		return false
+	}
+	if node.DynamicGate&InterruptCancel == 0 {
+		return false // the cancel-notification guard [04 R-ORDER-02 §2]
+	}
+	if !isBuildOrderID(node.ID) {
+		return false
+	}
+	s.handleCancelCurrent(owner, node, tick)
+	return true
+}
 
 // Pump implements the factory production handler entry per [05] with interrupt priority [PLAN_08].
 // Primary-only factory queue (68-desc census) — bit 0x40000 only on BuildWeapon/SelfDestruct [P0-14].

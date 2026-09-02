@@ -320,6 +320,17 @@ type WorkAdapter struct {
 	ReclaimUnit    func(*units.Unit, *Node, uint32) bool
 	Resurrect      func(*units.Unit, *Node, uint32) bool
 	Refresh        func(*units.Unit)
+	// CancelNotice is the receiver for the cleanup cancel notification of
+	// [R-ORDER-02 §2] on behalf of the records this package does not hold a
+	// handler for. cleanupNode's guard — the record's dynamic gate still holding
+	// bit 1 at removal — is unchanged; the notification simply has somewhere to
+	// go for the three construction rows, which are handler-less because another
+	// package runs them from its own state machine (drivenDescriptors). It is
+	// how interrupt mask 2 reaches the factory's cancel-current body
+	// [05 "Build request and factory queue behavior"][05 C21]. It reports
+	// whether it accepted the notice; the return is advisory, since the record
+	// is already being freed.
+	CancelNotice func(owner *units.Unit, n *Node, tick uint32) bool
 }
 
 // WeaponAdapter is the order-facing combat slot port. Slot operations remain
@@ -869,9 +880,16 @@ func (q *Queue) cleanupNode(n *Node) {
 		return
 	}
 	u := q.ownerUnit(n)
-	if n.DynamicGate&2 != 0 { // cancel-notification guard: dynamic gate bit 1 (value 2) [R-ORDER-02 §2]
-		if h := DescriptorFor(n.ID).Handler; u != nil && h != nil {
+	if n.DynamicGate&2 != 0 && u != nil { // cancel-notification guard: dynamic gate bit 1 (value 2) [R-ORDER-02 §2]
+		if h := DescriptorFor(n.ID).Handler; h != nil {
 			_ = h(u, n, 2, q.lastPumpTick)
+		} else if q.binding != nil && q.binding.Work != nil && q.binding.Work.CancelNotice != nil {
+			// A record another package's state machine runs has no descriptor
+			// handler here, so the notification goes to that package's receiver
+			// instead. Retail draws no distinction: it invokes the operation
+			// handler compiled into the descriptor, and for the three
+			// construction rows that handler IS the factory production machine.
+			_ = q.binding.Work.CancelNotice(u, n, q.lastPumpTick)
 		}
 	}
 	emitStopBuilding(u, n)

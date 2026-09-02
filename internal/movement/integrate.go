@@ -2259,23 +2259,37 @@ func (s *System) emitMovementCallbacks(u *units.Unit, speed int32) {
 	if s == nil || u == nil {
 		return
 	}
-	vm := u.GetScript()
-	if vm == nil {
-		return
-	}
 	if s.prevMoveTier == nil {
 		s.prevMoveTier = make(map[pool.Handle]int)
 	}
 	if s.prevSFXBand == nil {
 		s.prevSFXBand = make(map[pool.Handle]int)
 	}
-	// Inhibit bit (mover mode word bit 2) and attached (carrier dword) — inhibit not yet tracked, assume false for now [04 §5.2][GAP T15] C18.
-	inhibit := false
+	// The tier-0 override's first term is the mover's PERSISTED blocked flag.
+	// [04 §5.2]'s "mover inhibit bit (bit 2 of the mover's state byte)" and
+	// [04 R-COLL-01 §5]'s blocked flag are one and the same bit — the state byte
+	// carries the mover mode in bits 0–1 and the blocked flag in bit 2, and there
+	// is no separate inhibit latch. So the classifier reads the flag the commit's
+	// validation gate last wrote, which happens only on a cross-cell or
+	// mode-changing proposal: between verdicts the flag is stale by construction
+	// and a unit that was rejected still classifies as tier 0 while it moves
+	// inside its own cell [04 R-COLL-01 §5][04 R-MOV-01 §6].
+	blocked := false
+	// The adjacent word tested with the scalar speed is the signed 16-bit turn
+	// residual, not a second speed component [04 §5.2][04 R-MOV-01 §6]. The
+	// ground steering step does not yet drive a turn residual word, so this reads
+	// zero except after a save restore; the flight branch keeps its residual on
+	// the flight state and never mirrors it here.
+	turnResidual := int32(0)
+	if coll := s.Collisions[u.Handle]; coll != nil {
+		blocked = coll.Blocked
+		turnResidual = int32(coll.TurnResidual)
+	}
 	attached := u.Attachment.Carrier != 0
-	// Magnitude is speed scalar (ground) or 3-D flight speed; ground uses scalar Speed [04 §5.2] C18.
-	// We pass speed for magA and 0 for magZ so both-zero gate is Speed==0 [04 §5.2][GAP T15] C18.
+	// Magnitude is the mover's scalar speed word; ground uses scalar Speed and the
+	// flight branch passes its own [04 §5.2][04 R-MOV-01 §6] C18.
 	magA := speed
-	magZ := int32(0)
+	magZ := turnResidual
 	rate1 := int32(0)
 	rate2 := int32(0)
 	if u.Def != nil {
@@ -2291,7 +2305,17 @@ func (s *System) emitMovementCallbacks(u *units.Unit, speed int32) {
 			rate2 = rate1
 		}
 	}
-	cat := cob.MoveRateCategory(inhibit, attached, magA, magZ, rate1, rate2) // [04 §5.2][GAP T15] C18
+	cat := cob.MoveRateCategory(blocked, attached, magA, magZ, rate1, rate2) // [04 §5.2][04 R-MOV-01 §6] C18
+	// The cache update is the classifier's final write [04 §5.2], and it is
+	// engine state rather than a script start: it happens whether or not this
+	// unit carries a script, and it is what the weapon drift gate reads
+	// [06 R-WPN-03 §2]. Writing it unconditionally (an unchanged category still
+	// rewrites the same two bits) keeps the gate reading the last verdict.
+	u.MoveTier = uint8(cat)
+	vm := u.GetScript()
+	if vm == nil {
+		return
+	}
 	prev := s.prevMoveTier[u.Handle]
 	if prev != cat {
 		kinds := cob.MoveRateTransition(prev, cat) // [GAP T15] C18
@@ -2748,13 +2772,12 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		u.Move.Speed = numeric.Fixed(coll.Speed)
 		// Emit StartMoving/StopMoving/MoveRateN and setSFXoccupy per [04 §5.2][GAP T15] C17 C18 via immediate barrier [GAP T15] C18.
 		// Must run after speed commit so tier reflects current capped speed [04 §5.2][GAP T15] C18.
-		callbackSpeed := coll.Speed
-		if coll.Blocked {
-			// A blocked mover is movement tier zero even though collision retains
-			// a capped scalar speed for its next proposal [04 R-COLL-01 §5].
-			callbackSpeed = 0
-		}
-		s.emitMovementCallbacks(u, callbackSpeed)
+		// The scalar speed is passed as committed. A blocked mover retains a
+		// capped scalar speed for its next proposal [04 R-COLL-01 §5]; it reaches
+		// tier 0 through the classifier's blocked term, which now reads the
+		// persisted flag directly, so this site no longer substitutes a zero speed
+		// to force the same category.
+		s.emitMovementCallbacks(u, coll.Speed)
 		// This follows the complete mover tick, including its callbacks, and is
 		// the only ordinary ground pose writer [04 R-MOV-01 §5a].
 		applyGroundPostMove(s.Terrain, u, groundDirty, coll.Mode, newHoverBob(u, coll.Speed, s.tick, coll.LastProposalTick))

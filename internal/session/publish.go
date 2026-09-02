@@ -740,13 +740,19 @@ func publishPlayerRows(s *Session, published *frame.Frame) {
 			// not established; a static trace of the lobby record's writers would
 			// settle it.
 			Watcher: p.Watcher || p.IsObserver,
-			// TODO(question): the auxiliary word is Unknown in both sections that
-			// read it ([07 R-HUD-04 §1], [08 R-CAMP-01 §7] name it only as "the
-			// word doc 08 leaves unnamed") and nothing in the session writes
-			// economy.Player.ResultAuxiliary, so it publishes zero. With it zero
-			// the filter's second term is always satisfied, so a slot keeps its
-			// row after losing its last unit. Decider: a static trace of that
-			// word's writers.
+			// Established: the auxiliary word has no writer. The static trace this
+			// site named as its decider has been run — the word is read at ten
+			// sites (this panel, the score helper's row gate, the elimination and
+			// participant filters, the per-player economy gate, the multiplayer
+			// alliance vote), every one a bare zero test, and it is STORED nowhere
+			// outside the player record's bulk initialisation, so it is zero from
+			// the session block's allocation onward and a reimplementation
+			// publishes zero [08 R-CAMP-01 §7][07 R-HUD-04 §1]. With it zero the
+			// panel's second term is always satisfied, so a slot keeps its row
+			// after losing its last unit. economy.Player.ResultAuxiliary is
+			// therefore a published constant zero; it is retained rather than
+			// deleted because it is the field both readers name — see its
+			// declaration.
 			Auxiliary: p.ResultAuxiliary,
 			// TODO(question): the rank byte's battle-entry initialisation is a
 			// Supported inference in [07 R-HUD-04 §1], whose named decider
