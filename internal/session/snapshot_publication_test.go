@@ -312,10 +312,16 @@ func TestRadarSelectedRangeStatusGatePreservesSlotOrder(t *testing.T) {
 	}
 }
 
-func TestRadarGameplayVisibilityUsesStealthAndInitCloak(t *testing.T) {
+// TestRadarGameplayVisibilityUsesStealthAndTheInstanceCloakBit locks the two
+// distinct sensor inputs. `stealth` is the definition flag, read straight
+// through [03 R-VIS-01 §5]. Hidden is the INSTANCE cloaked bit, which only a
+// paid settlement pass sets [05 R-ECO-01 §9] — `init_cloaked` alone must NOT
+// hide the unit, because it seeds the cloak REQUEST and nothing more
+// [03 R-VIS-01 §6] (WU-19-92).
+func TestRadarGameplayVisibilityUsesStealthAndTheInstanceCloakBit(t *testing.T) {
 	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "stealth"}, MaxDamage: 1, Stealth: true, InitCloaked: true}
 	w := newSessionFixtureWorld(4, nil)
-	_, err := w.Create(def, 1, numeric.Fixed(10<<16), 0, numeric.Fixed(10<<16))
+	h, err := w.Create(def, 1, numeric.Fixed(10<<16), 0, numeric.Fixed(10<<16))
 	if err != nil {
 		t.Fatalf("create unit: %v", err)
 	}
@@ -325,8 +331,18 @@ func TestRadarGameplayVisibilityUsesStealthAndInitCloak(t *testing.T) {
 	s := &Session{Units: w, Vis: vis, Econ: econ}
 	s.stepSensorPhase(1)
 	inputs := vis.SensorInputs()
-	if len(inputs) != 1 || !inputs[0].Stealth || !inputs[0].Hidden {
-		t.Fatalf("gameplay cloak state = %+v, want stealth and hidden", inputs)
+	if len(inputs) != 1 || !inputs[0].Stealth {
+		t.Fatalf("gameplay stealth state = %+v, want stealth", inputs)
+	}
+	if inputs[0].Hidden {
+		t.Fatal("init_cloaked alone hid the unit; only a paid settlement pass sets the instance bit [05 R-ECO-01 §9]")
+	}
+	// The settlement's transition, on a pass the owner paid for.
+	w.Unit(h).Hidden = true
+	s.stepSensorPhase(2)
+	inputs = vis.SensorInputs()
+	if len(inputs) != 1 || !inputs[0].Hidden {
+		t.Fatalf("gameplay cloak state = %+v, want hidden after a paid pass", inputs)
 	}
 }
 

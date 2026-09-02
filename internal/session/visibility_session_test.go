@@ -121,7 +121,7 @@ func TestSessionVisibility(t *testing.T) {
 		t.Fatalf("enemy after moving inside LOS should be visible")
 	}
 	// Cloaked enemy should be rejected even inside LOS.
-	u1.IsCloaked = true
+	u1.Hidden = true
 	// Need to ensure sensor status does not have decloak.
 	s.visStatus[int(u1.Handle)] = 0
 	if s.IsUnitVisible(0, u1) {
@@ -138,7 +138,7 @@ func TestSessionVisibility(t *testing.T) {
 	// sight [03 R-VIS-01 §5]. This block used to assert the opposite — that a
 	// stealth unit "should be rejected even inside LOS" — which made every
 	// stealth unit invisible to the eye as well as to the dish.
-	u1.IsCloaked = false
+	u1.Hidden = false
 	u1.Def.Stealth = true
 	s.visStatus[int(u1.Handle)] = 0
 	if !s.IsUnitVisible(0, u1) {
@@ -146,7 +146,7 @@ func TestSessionVisibility(t *testing.T) {
 	}
 	u1.Def.Stealth = false
 	// Underwater enemy without exempt should be rejected.
-	u1.IsCloaked = false
+	u1.Hidden = false
 	s.visStatus[int(u1.Handle)] = 0
 	terrain.SeaLevel = 20
 	u1.Y = numeric.Fixed(10 * 65536) // below sea 20

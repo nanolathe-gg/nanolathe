@@ -289,11 +289,13 @@ type Session struct {
 	phaseTraceEnabled bool
 	phaseDrawTrace    []PhaseDrawDelta
 
-	// Visibility sensor state [03 §3.4] P0-11: per-unit status bits (0x100 seen, 0x300 friendly, 0x1000 decloak)
-	// and decloak deadlines tick+90. Radar callback results are retained by
-	// visibility.Service and published through Frame.Radar.
-	visStatus  map[int]uint32
-	visDecloak map[int]uint32
+	// Visibility sensor state [03 §3.4] P0-11: per-unit status bits (0x100
+	// seen, 0x300 friendly, 0x1000 decloak). The proximity breach's `tick + 90`
+	// is NOT here: it goes into units.Unit.RevealDeadline, the one shared
+	// reveal/cloak-suppression word [03 R-VIS-01 §6] (WU-19-92). Radar callback
+	// results are retained by visibility.Service and published through
+	// Frame.Radar.
+	visStatus map[int]uint32
 
 	// DebugDisplayMode is the world composer's debug display mode byte
 	// [03 §3.12]. Its writers are now traced and there are exactly three: the
@@ -731,7 +733,11 @@ func (s *Session) IsUnitVisible(viewer int, target *units.Unit) bool {
 	//
 	// The selection/presentation bits in Unit.Flags are unrelated and must not
 	// stand in for cloak state either [03 §3.2].
-	hidden := target.IsCloaked
+	//
+	// Unit.Hidden IS that instance bit; Unit.IsCloaked is the request, and a
+	// unit whose owner could not pay this pass requests cloak while being fully
+	// visible and targetable (WU-19-92).
+	hidden := target.Hidden
 	// Underwater exemption is stored as FriendlyMask 0x200 via sensor phase; we include it if present.
 	t := visibility.Target{
 		Owner:  visibility.PlayerID(target.Owner),

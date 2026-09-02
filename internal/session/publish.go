@@ -194,7 +194,10 @@ func (s *Session) publishSnapshot(tick uint32) {
 				MoverMode: publishedMoverMode(u),
 				// Step 2 of the visibility gate [03 §3.2], published as its two
 				// inputs so presentation never has to guess at cloak state.
-				Cloaked:    u.IsCloaked,
+				// The published bit is the INSTANCE cloaked bit, not the
+				// request: a unit whose owner could not pay this pass is drawn
+				// [05 R-ECO-01 §9] (WU-19-92).
+				Cloaked:    u.Hidden,
 				Decloaking: s.visStatus != nil && s.visStatus[int(u.Handle)]&visibility.DecloakBit != 0,
 				// The carrier link the unit painter's per-unit present needs:
 				// a carried child is drawn with its carrier, not only as its
@@ -559,7 +562,8 @@ func (s *Session) publishSnapshot(tick uint32) {
 			// [03 R-VIS-01 §5]. Stealth still travels beside it, as its own
 			// field, for the minimap blink gate of [03 §3.9] — the two are
 			// distinct inputs and must not be folded.
-			hidden := u.IsCloaked
+			// The INSTANCE cloaked bit, never the request (WU-19-92).
+			hidden := u.Hidden
 			stealth := false
 			if u.Def != nil {
 				stealth = u.Def.Stealth
@@ -924,6 +928,11 @@ func publishSelectionAggregate(s *Session, handles []pool.Handle, page *frame.Co
 		// state is the unit's cloak-requested bit.  Unlike the on/off fold this
 		// one takes the disagreement value for any second cloak-capable unit,
 		// agreeing or not.
+		//
+		// This is the one cloak reader that stays on the REQUEST after the two
+		// bits were split (WU-19-92): the gadget shows what the player asked
+		// for and is what `Cloak_On` / `Cloak_Off` toggle, not whether the unit
+		// happens to be paid up and hidden this pass [04 R-ORD-01 §2].
 		if u.Def.CloakCost > 0 {
 			if page.CloakState == 3 {
 				v := uint8(0)

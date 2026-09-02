@@ -106,7 +106,9 @@ func RetailUnitImage(u *Unit, orderCount uint32, stableID RetailStableID, scratc
 	if u.Armored {
 		state |= 2
 	}
-	if u.IsCloaked {
+	// Operational byte bit 2 is the INSTANCE cloaked bit; the cloak REQUEST
+	// rides in the status word below [05 R-ECO-01 §8][05 R-ECO-01 §9].
+	if u.Hidden {
 		state |= 4
 	}
 	if u.BuildingState {
@@ -129,7 +131,15 @@ func RetailUnitImage(u *Unit, orderCount uint32, stableID RetailStableID, scratc
 	// Bits 17..19 are writer stack residue rather than unit state. Requiring
 	// them from the caller keeps this projection byte-exact without inventing a
 	// clearing rule [08 R-SAVE-02 §6].
-	packed := stance | (u.Flags&0x0fff)<<4 | (u.Flags&0x2000)<<3 | (u.Flags&0x03ffc000)<<6 | scratch.PackedStatusBits17To19
+	// The cloak-REQUESTED bit is status-word bit 11, and the runtime authority
+	// for it is the bool, so project it back over the flag word's copy before
+	// packing [05 R-ECO-01 §9]. A unit restored and re-saved untouched packs
+	// exactly what it loaded.
+	statusFlags := u.Flags &^ CloakRequestedStatus
+	if u.IsCloaked {
+		statusFlags |= CloakRequestedStatus
+	}
+	packed := stance | (statusFlags&0x0fff)<<4 | (statusFlags&0x2000)<<3 | (statusFlags&0x03ffc000)<<6 | scratch.PackedStatusBits17To19
 	binary.LittleEndian.PutUint32(data[0xb4:], packed)
 	return data, nil
 }

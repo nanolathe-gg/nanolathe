@@ -205,7 +205,7 @@ func TestRS08_CandidateFacts(t *testing.T) {
 	// and sonar detection and never line of sight [03 R-VIS-01 §5], and a
 	// stealth unit standing in the open is a perfectly good target.
 	cloakedEnemy := w.Unit(enemyH)
-	cloakedEnemy.IsCloaked = true
+	cloakedEnemy.Hidden = true
 	// Make ally underwater (Y <= sea)
 	underwaterAlly := w.Unit(allyH)
 	_ = underwaterAlly

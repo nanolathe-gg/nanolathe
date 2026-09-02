@@ -1048,6 +1048,67 @@ func onRectBorder(rect path.Rect, x, z int32) bool {
 	return x == rect.Min.X || x == rect.Max.X || z == rect.Min.Z || z == rect.Max.Z
 }
 
+// raiseArrival is the whole of the follower's arrival step: "on arrival raise
+// pending `0x20` on the owning record, ask the payload whether it is
+// persistent, and if not release it through the follower's owner"
+// [04 R-MOV-03 §2 "The follower's per-tick service"].
+//
+// The persistence answer is not a question a ground follower has to ask: the
+// *does this route persist after arrival* query "returns 0 for all three
+// A\*-facing classes, so arrival always detaches the route", and the `0x20` is
+// ORed in "before detaching" [04 R-PATH-01 §8]. The three A\*-facing classes
+// are the point, annulus and rectangle goals — the classes whose
+// is-a-search-goal flag reads 1 [04 R-MOV-03 §2] — which is every goal a
+// ground follower can hold. The two air classes carry their own persistence
+// rule and their own producer, which runs this same arrival/persistence/release
+// step for the flight block [04 R-AIR-01 §1] step 6, so an aircraft is left
+// alone here: "aircraft never enter this scheduler" [04 R-PATH-01 §8].
+func (s *System) raiseArrival(u *units.Unit, ah *arrivalHandle) {
+	if ah == nil || ah.order == nil {
+		return
+	}
+	ah.order.Satisfied |= arrivalSatisfiedBit // [R-P0-01][04 R-PATH-01 §8] `0x20` before the detach
+	s.detachOnArrival(u, ah)
+}
+
+// detachOnArrival is the detach half of the step above.
+//
+// The release is the release form of the record-level install/release helper:
+// cancel the in-flight search, OR `0x80` into the pending word of the record
+// that owns the object in the controller's slot, clear has-waypoint and
+// wants-repath, and drop the slot [04 R-ORD-01 §1][04 R-ORD-01 §9]. That
+// ordering — arrival's `0x20` first, the release's `0x80` second — is the same
+// one the air producer already runs [04 R-AIR-01 §1] step 6, and no handler
+// reads `0x80` ahead of `0x20`: `Move_Ground` phase 1 and `Attack_Kamikaze`
+// phase 1 test `0x20` first, and the patrol and work rows test the whole
+// `0xE0` gate [04 R-ORD-01 §3][04 R-ORD-01 §4][04 R-ORD-01 §5].
+//
+// A row whose handler installs no payload object in this build still detaches
+// its route. §8's rule is about arrival, not about which record happens to own
+// the object; leaving an active route standing behind an arrival would keep the
+// mover consuming waypoints through a goal it has already reached.
+//
+// The handle goes with the payload. The follower asks the arrival question only
+// "with a payload installed" [04 R-MOV-03 §2]; with the slot null there is
+// nothing left to ask until an installer binds a new object, and
+// bindArrivalHandle builds a fresh handle at the next activation or replan.
+func (s *System) detachOnArrival(u *units.Unit, ah *arrivalHandle) {
+	if s == nil || u == nil || ah == nil || ah.order == nil {
+		return
+	}
+	if u.Def != nil && u.Def.CanFly {
+		return // the flight block owns its own arrival, persistence and release
+	}
+	if !s.ReleaseGoalPayload(ah.order) {
+		s.CancelPathRequest(u.Handle)
+		if route := s.Routes[u.Handle]; route != nil {
+			route.Active = false
+			route.WantsRepath = false
+		}
+	}
+	delete(s.arrivalHandles, u.Handle)
+}
+
 func (s *System) finalGoalReached(u *units.Unit, hadRoute bool) bool {
 	if u == nil {
 		return false
@@ -1082,7 +1143,7 @@ func (s *System) finalGoalReached(u *units.Unit, hadRoute bool) bool {
 	// beside their target, never on its own anchor cell [04 R-PATH-01 §9].
 	if ah.payload != nil {
 		if ah.payload.StartSatisfied(path.Cell{X: tileX, Z: tileZ}) {
-			ah.order.Satisfied |= arrivalSatisfiedBit // [R-P0-01] OR 0x20
+			s.raiseArrival(u, ah) // [R-P0-01] OR 0x20, then detach [04 R-PATH-01 §8]
 			return hadRoute
 		}
 		return false
@@ -1091,7 +1152,7 @@ func (s *System) finalGoalReached(u *units.Unit, hadRoute bool) bool {
 	// proximity to one cell [04 §7.2][04 R-FAC-02 §4].
 	if ah.border != nil {
 		if onRectBorder(*ah.border, tileX, tileZ) {
-			ah.order.Satisfied |= arrivalSatisfiedBit // [R-P0-01] OR 0x20
+			s.raiseArrival(u, ah) // [R-P0-01] OR 0x20, then detach [04 R-PATH-01 §8]
 			return hadRoute
 		}
 		return false
@@ -1100,7 +1161,8 @@ func (s *System) finalGoalReached(u *units.Unit, hadRoute bool) bool {
 	dz := int64(tileZ) - int64(ah.goalZ)
 	// Signed 32-bit squares, pure planar inclusive compare [R-P0-01] setle.
 	if dx*dx+dz*dz <= int64(ah.threshSq) {
-		ah.order.Satisfied |= arrivalSatisfiedBit // [R-P0-01] the arrival-bit setter's OR of 0x20
+		// The arrival-bit setter's OR of 0x20, then the detach [04 R-PATH-01 §8].
+		s.raiseArrival(u, ah) // [R-P0-01]
 		// Also reflect hadRoute gating for diagnostic Arrived flag: only report
 		// Arrived when we had a route at entry, preserving prior contract that
 		// EmptyRoute paths do not count as arrived [R-P0-01][task].

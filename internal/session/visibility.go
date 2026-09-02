@@ -98,9 +98,6 @@ func unpublishOne(s *Session, u *units.Unit) {
 	if s.visStatus != nil {
 		delete(s.visStatus, int(u.Handle))
 	}
-	if s.visDecloak != nil {
-		delete(s.visDecloak, int(u.Handle))
-	}
 	if s.visStamps != nil {
 		delete(s.visStamps, int(u.Handle))
 	}
@@ -177,9 +174,6 @@ func (s *Session) stepSensorPhase(tick uint32) {
 	if s.visStatus == nil {
 		s.visStatus = make(map[int]uint32)
 	}
-	if s.visDecloak == nil {
-		s.visDecloak = make(map[int]uint32)
-	}
 	// SensorTick owns the active-player gate and drops its prior callback
 	// snapshot when that gate skips [R-VIS-01 §4] — so this pass calls it
 	// unconditionally.
@@ -197,11 +191,15 @@ func (s *Session) stepSensorPhase(tick uint32) {
 		}
 		h := int(u.Handle)
 		stVal := s.visStatus[h]
-		dlVal := s.visDecloak[h]
 		sp := new(uint32)
 		*sp = stVal
-		dp := new(uint32)
-		*dp = dlVal
+		// The proximity breach's `tick + 90` goes into THE shared
+		// reveal/cloak-suppression word, the one the work handlers and the
+		// projectile fill also write and the cloak debit gate alone reads
+		// [03 R-VIS-01 §6 "Writer census of the shared deadline"]. It used to
+		// land in a session-side map that nothing read, so the breach's
+		// durable half never reached the gate (WU-19-92).
+		dp := &u.RevealDeadline
 		holders = append(holders, holder{statusPtr: sp, deadPtr: dp, handle: h})
 		// Hidden is the INSTANCE cloak bit — the seen probe's only gate besides
 		// the seen bit itself [R-VIS-01 §4] pass 5, [R-VIS-01 §6]. It used to
@@ -215,7 +213,9 @@ func (s *Session) stepSensorPhase(tick uint32) {
 		// outright but never line of sight [R-VIS-01 §5]. The two must not be
 		// folded together, and neither is reconstructed from presentation bits
 		// in Unit.Flags.
-		hidden := u.IsCloaked
+		// Unit.Hidden is that instance bit; Unit.IsCloaked is the cloak
+		// REQUEST, which this pass must not read (WU-19-92).
+		hidden := u.Hidden
 		stealth := false
 		var rd, sd, rj, sj, mc, modelTop int32
 		onOffable := false
@@ -291,6 +291,5 @@ func (s *Session) stepSensorPhase(tick uint32) {
 	s.Vis.SensorTick(tick, active, allied, sensorUnits)
 	for _, h := range holders {
 		s.visStatus[h.handle] = *h.statusPtr
-		s.visDecloak[h.handle] = *h.deadPtr
 	}
 }

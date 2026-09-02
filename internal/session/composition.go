@@ -1187,14 +1187,26 @@ func createAndBindServices(s *Session) error {
 	}
 	// The cloak gate, all three terms [05 R-ECO-01 §9][03 R-VIS-01 §6].
 	//
-	// Term 1 is the cloak-REQUESTED status bit, set by the `Cloak_On` order
-	// handler and cleared by `Cloak_Off`, each behind the definition's cloak
-	// capability; in this build that bit is the unit's cloak request, whose one
-	// writer is SetCloaked (I13). It is NOT seeded from `init_cloaked`, whose
-	// consumer is the initial-posture path instead.
+	// This gate is the REQUEST side. It decides whether the unit is charged
+	// this pass; whether the unit ends the pass hidden is the settlement's
+	// transition on units.Unit.Hidden, which nothing here reads
+	// [05 R-ECO-01 §9].
 	//
-	// Term 2 is a status bit with no writer anywhere in the image — inert,
-	// always satisfied — so nothing is asked of it here.
+	// Term 1 is the cloak-REQUESTED status bit, units.Unit.IsCloaked (I13):
+	// seeded from the definition's `init_cloaked` by the constructor, set by
+	// the `Cloak_On` order handler and cleared by `Cloak_Off` behind the
+	// definition's cloak capability, and rebuilt by save restore. Those are
+	// retail's three writers and there is no fourth; the earlier text here
+	// denied the `init_cloaked` seed and sent it to an "initial-posture path"
+	// that does not exist — both corrected in place (RWU-19-26).
+	//
+	// Term 2 is the decloak-forced status bit, bit 12, which the sensor
+	// phase's proximity breach sets and the top of the next first pass clears
+	// [03 R-VIS-01 §4 pass 4][03 R-VIS-01 §6]. This build keeps that sensor
+	// status word beside the unit rather than in it, so the term is read from
+	// there. It cannot be observed apart from term 3 — the breach writes the
+	// `tick + 90` deadline on the same visit — which is why [05 R-ECO-01 §9]
+	// records the same bit as inert with its meaning Unknown.
 	//
 	// Term 3 is the per-unit deadline: `currentTick >= unit.RevealDeadline`,
 	// inclusive [03 R-VIS-01 §6]. That field is shared with the sensor phase's
@@ -1205,6 +1217,9 @@ func createAndBindServices(s *Session) error {
 	// cloaked unit's behavior.
 	s.Econ.CloakDue = func(u *units.Unit) bool {
 		if u == nil || !u.IsCloaked {
+			return false
+		}
+		if s.visStatus[int(u.Handle)]&visibility.DecloakBit != 0 {
 			return false
 		}
 		tick := uint32(0)
@@ -1270,9 +1285,6 @@ func createAndBindServices(s *Session) error {
 	// to the authoritative session [03 §3.4][I6].
 	if s.visStatus == nil {
 		s.visStatus = make(map[int]uint32)
-	}
-	if s.visDecloak == nil {
-		s.visDecloak = make(map[int]uint32)
 	}
 	// Canonical visibility predicate for combat [03 §3.2] C8 P0-11 — single gameplay gate.
 	// Per-session isolated: was package-global combat.VisibilityHook, now Service.Visibility [RS-P0-018][INVARIANTS I1][I6].

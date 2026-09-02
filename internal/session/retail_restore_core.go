@@ -263,7 +263,6 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 		s.Vis.RebuildAll(nil)
 		s.visStamps = make(map[int]visStamp)
 		s.visStatus = make(map[int]uint32)
-		s.visDecloak = make(map[int]uint32)
 		publishVisibilityForAll(s)
 	}
 	return nil

@@ -71,10 +71,17 @@ func RetailUnitBase(u *Unit, data []byte) error {
 	u.Busy = packed&2 != 0
 	u.YardOpen = packed&4 != 0
 	u.BuggerOff = packed&8 != 0
+	// The cloak-REQUESTED bit is restored from the persisted STATUS word, bit
+	// 11 [05 R-ECO-01 §9] — the same masked field the constructor seeds from
+	// `init_cloaked` — while the operational byte below carries the INSTANCE
+	// cloaked bit. Two bits, two sources; the bool is the runtime authority and
+	// the flag word keeps its restored copy so the save writer round-trips.
+	u.IsCloaked = flags&CloakRequestedStatus != 0
 	state := binary.LittleEndian.Uint16(data[0xB2:])
 	u.Activated = state&1 != 0
 	u.Armored = state&2 != 0
-	u.IsCloaked = state&4 != 0
+	// Operational byte bit 2: the INSTANCE cloaked bit [05 R-ECO-01 §8].
+	u.Hidden = state&4 != 0
 	u.BuildingState = state&8 != 0
 	for i := 0; i < NumSlots; i++ {
 		off := 0x41 + i*0x18

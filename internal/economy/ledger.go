@@ -143,10 +143,14 @@ type Service struct {
 	// skips the debit entirely, which is what a session with no cloaking units
 	// would observe anyway.
 	CloakCost func(*units.Unit) float32
-	// CloakDue is the narrow seam for the runtime cloak gate. The full traced
-	// predicate is a conjunction of three terms — the cloak-REQUESTED status
-	// bit is set, a second status bit is clear, and the unit's per-unit cloak
-	// payment deadline is due [05 "Cloak debit"][R-ECO-01 §9] — and economy
+	// CloakDue is the narrow seam for the runtime cloak gate. It reports the
+	// REQUEST side only; whether the unit ends the pass hidden is decided by
+	// ApplyCloakDebits and written to units.Unit.Hidden, never read back here.
+	//
+	// The full traced predicate is a conjunction of three terms — the
+	// cloak-REQUESTED status bit is set, a second status bit is clear, and the
+	// unit's per-unit cloak payment deadline is due
+	// [05 "Cloak debit"][R-ECO-01 §9] — and economy
 	// owns none of the three producers, so it asks rather than infers. A cloak
 	// request is never inferred from authored cost alone: `cloakcost > 0` is
 	// the capability that lets the order handlers write the bit, not the bit.
@@ -158,11 +162,17 @@ type Service struct {
 	// save-game restore rebuilds it from the persisted status word. The
 	// build-completion transition writes nothing cloak-related — that claim
 	// traced to `isfeature`'s completion arm, a different bit entirely
-	// [05 R-ECO-01 §9][03 R-VIS-01 §6]. Term 2 is inert — a bounded negative
-	// scan found no writer for that bit and the spawn initialiser preserves
-	// rather than sets it, so the term is always satisfied and a provider has
-	// nothing to report for it. Term 3 is written by ten handler sites as the
-	// global tick plus 150, 300 or 900, so an idle cloaked unit pays from the
+	// [05 R-ECO-01 §9][03 R-VIS-01 §6]. Term 2 is the decloak-forced status
+	// bit: [R-ECO-01 §9] records it as inert with its meaning Unknown (a
+	// bounded-negative scan of the economy path found no writer), while
+	// [03 R-VIS-01 §6] names it bit 12 and gives the sensor phase's proximity
+	// breach as its writer and the top of the next first pass as its clear.
+	// The two readings are unobservable apart, because the one writer that
+	// sets it also writes term 3's deadline to `tick + 90` on the same visit
+	// [03 R-VIS-01 §4 pass 4]; the provider supplies doc 03's reading, since
+	// that is the one with a named writer. Term 3 is written by the ten
+	// handler sites, the breach and the projectile fill as the global tick
+	// plus 90, 150, 300, 600 or 900, so an idle cloaked unit pays from the
 	// first pass.
 	//
 	// Term 3's deadline is the ONE shared reveal/cloak-suppression field the
@@ -446,11 +456,37 @@ func DebitCloak(p *Player, cost float32) bool {
 // stock before later slots are tested. CloakDue is required because economy
 // does not own the runtime status/deadline producers.
 //
-// The outcome drives transitions through the shared transition helper
-// [05 "Cloak debit"][05 "Activation and stall transitions"]: onSuccess /
-// onFailure receive the unit after each debit decision so the caller can
-// toggle the operational/building bit exactly where retail's transition call
-// sits. economy cannot import cob, so the helper arrives as a seam.
+// The outcome drives the transition service of [R-ECO-01 §8], which is the
+// only writer of the unit's operational byte in the economy path and reaches
+// it here with bit 2 — the INSTANCE cloaked bit, units.Unit.Hidden, the bit
+// visibility and targeting read [05 R-ECO-01 §9][03 R-VIS-01 §6]. This is NOT
+// the request bit CloakDue tests: the request says what the player asked for,
+// and only a pass the owner actually paid for hides the unit.
+//
+// Three outcomes, one per pass and per unit, in slot order:
+//
+//   - gate due and the integerized cost is affordable — debit live stock,
+//     record the request, and SET bit 2 [R-ECO-01 §9];
+//   - gate due and unaffordable — no partial payment, CLEAR bit 2, so a
+//     stalled owner's cloaked units show again on that pass ([05 "Cloak
+//     debit"] step 6);
+//   - gate not due at all — CLEAR bit 2. Supported inference, not a traced
+//     arm: TODO(question): whether the settlement clears the instance bit
+//     on a not-due pass, or leaves it and the reveal happens elsewhere —
+//     decider: a trace of the debit block's exit paths. §9's sketch shows only the two arms
+//     inside the gate, but the not-due arm is fixed by the consequence
+//     [04 R-ORD-01 §5] states for the reveal stamp: a working builder "that
+//     has cloak requested stays visible for five, ten or thirty seconds after
+//     its last stroke". It can only stay visible if a pass whose deadline term
+//     fails clears the bit, and the same arm is what makes `Cloak_Off` — which
+//     clears the request bit and nothing else [04 R-ORD-01 §2] — decloak the
+//     unit on its next pass.
+//
+// The transition write itself is unconditional and only its (unimplemented)
+// cue notifications are edge-gated, so an already-clear bit costs nothing.
+//
+// onSuccess / onFailure remain the caller's own seam for anything beyond bit 2
+// and are unrelated to it; economy cannot import cob, so they arrive as seams.
 func ApplyCloakDebits(s *Service, w *units.World, player int, getCost func(*units.Unit) float32, onSuccess, onFailure func(*units.Unit)) {
 	if s == nil || w == nil || getCost == nil {
 		return
@@ -461,15 +497,18 @@ func ApplyCloakDebits(s *Service, w *units.World, player int, getCost func(*unit
 	p := &s.Players[player]
 	ForEachUnitOrdered(w, player, func(u *units.Unit) {
 		if s.CloakDue == nil || !s.CloakDue(u) {
+			u.SetCloakedInstance(false)
 			return
 		}
 		cost := getCost(u)
 		s.ensureUnitBuckets(u.Handle)
 		if debitCloakToBucket(p, &s.unitBuckets[u.Handle].Buckets[Energy], cost) {
+			u.SetCloakedInstance(true)
 			if onSuccess != nil {
 				onSuccess(u)
 			}
 		} else {
+			u.SetCloakedInstance(false)
 			if onFailure != nil {
 				onFailure(u)
 			}

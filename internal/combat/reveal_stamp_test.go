@@ -80,10 +80,10 @@ func TestShooterlessShotStampsNothing(t *testing.T) {
 //   - `init_cloaked` is consumed exactly once, by the unit constructor, which
 //     seeds the cloak-REQUESTED bit from it; the instance bit is written only
 //     by the settlement's transition service, on a pass the owner actually
-//     paid for [05 R-ECO-01 §9]. This build folds request and instance onto
-//     Unit.IsCloaked, so the case below is written the way the settlement
-//     leaves it when the owner cannot pay: the definition flag set, the
-//     instance bit clear.
+//     paid for [05 R-ECO-01 §9]. The two bits are separate fields
+//     (WU-19-92) — Unit.IsCloaked requests, Unit.Hidden hides — so the case
+//     below is written the way the settlement leaves it when the owner cannot
+//     pay: the definition flag set, the instance bit clear.
 //   - `stealth` never touches line of sight at all: it is the contact
 //     callback's third reject, suppressing radar and sonar detection outright
 //     [03 R-VIS-01 §5].
@@ -107,7 +107,7 @@ func TestCombatCloakPredicateReadsInstanceBitOnly(t *testing.T) {
 				Handle: 1,
 				Def:    &content.UnitDef{InitCloaked: tc.initCloaked, Stealth: tc.stealth},
 			}
-			u.IsCloaked = tc.instance
+			u.Hidden = tc.instance
 			if got := isCloakedUnit(u); got != tc.want {
 				t.Fatalf("isCloakedUnit=%v want %v [06 §3.1][03 R-VIS-01 §6]", got, tc.want)
 			}

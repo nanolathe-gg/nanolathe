@@ -119,6 +119,18 @@ const (
 
 const classifierSelectableClear uint32 = 0x00008000
 
+// CloakRequestedStatus is bit 11 of the runtime unit-status word: the
+// cloak-REQUESTED bit, which the constructor seeds from `init_cloaked` in the
+// same masked store that copies the two standing-order fields below, and which
+// the `Cloak_On` / `Cloak_Off` handlers set and clear behind the definition's
+// derived `cloakcost > 0` capability [05 R-ECO-01 §9][03 R-VIS-01 §6]
+// [04 R-ORD-01 §2].
+//
+// Per I13 the logical field is Unit.IsCloaked, which is the authority at
+// runtime; this mask exists because the save projection persists the request
+// inside the status word, and the save writer projects the bool back into it.
+const CloakRequestedStatus uint32 = 0x00000800
+
 // The two standing-order fields live in the status word as two-bit pairs: the
 // move stance at bits 18-19, the fire stance at bits 20-21 [04 R-STANCE-01 §2].
 // They are seeded here at creation from one packed definition byte the FBI
@@ -455,9 +467,34 @@ type Unit struct {
 	// this rate rather than `extractsmetal` [05 R-PROD-01 §1].
 	SpotMetal float32
 	// Economy state bound to the one ledger per [05] — activation/on-off, cloak, storage, extraction, wind/tidal, makers [P1-I04].
-	Activated bool  // operational/activated bit for on/offable units [05 "Unit instance economy state"] [P1-I04]; true when the unit is turned on; for non-OnOffable units always true when complete
-	IsCloaked bool  // whether cloak upkeep is due this pass [05 "Cloak debit"] [P1-I04]
-	Kills     int32 // kill count for capture timer [P0-15]
+	Activated bool // operational/activated bit for on/offable units [05 "Unit instance economy state"] [P1-I04]; true when the unit is turned on; for non-OnOffable units always true when complete
+	// IsCloaked is the cloak-REQUESTED status bit — bit 11 of the runtime unit
+	// status word, `CloakRequestedStatus` below [05 R-ECO-01 §9]
+	// [03 R-VIS-01 §6]. It records what the player (or `init_cloaked`) asked
+	// for, NOT whether the unit is hidden. Its three writers are exactly
+	// retail's: the constructor's `init_cloaked` seed (InitEconomyState), the
+	// `Cloak_On`/`Cloak_Off` handlers behind the definition's `cloakcost > 0`
+	// capability (SetCloaked), and the save-game restore. Its one reader is the
+	// settlement's cloak debit gate [05 "Cloak debit"].
+	//
+	// Nothing about visibility or targeting may read this field: a unit whose
+	// owner cannot pay the upkeep still requests cloak and is still visible and
+	// targetable. The bit those readers want is Hidden.
+	IsCloaked bool
+	// Hidden is the INSTANCE cloaked bit — bit 2 (mask 4) of the unit's
+	// one-byte operational word, sibling of Activated (bit 0), Armored (bit 1)
+	// and BuildingState (bit 3) [05 R-ECO-01 §8]. It is what §3.2's visibility
+	// predicate step 2, the sensor phase's pass 5 seen probe, and weapon
+	// targeting read [03 §3.2][03 R-VIS-01 §4 pass 5][03 R-VIS-01 §6].
+	//
+	// Its ONE writer in the economy path is the settlement's transition service
+	// reaching this bit from the cloak debit: set on a pass the owner paid for,
+	// cleared on a pass it could not pay and on a pass the gate was not due at
+	// all [05 R-ECO-01 §9][05 "Cloak debit"]. So a freshly placed
+	// `init_cloaked` unit is visible until its first paid settlement pass, and
+	// a cloaked unit whose owner stalls shows again on the next pass.
+	Hidden bool
+	Kills  int32 // kill count for capture timer [P0-15]
 	// Paralyze state per [06 §10] paralyzer status effects [P0-I04].
 	ParalyzeExpire uint32 // absolute tick when stun ends; 0 means not paralyzed [06 §10]
 	// Stunned is a candidate mark, not a mechanism. The stun is binary — fully
@@ -657,7 +694,11 @@ func (u *Unit) SetYardOpenTransaction(transaction YardOpenTransaction) {
 	}
 }
 
-// SetCloaked sets cloak state for upkeep debit [05 "Cloak debit"] [P1-I04].
+// SetCloaked writes the cloak-REQUESTED status bit — what the player asked
+// for, the debit gate's first term. It is the one writer the `Cloak_On` /
+// `Cloak_Off` handlers use [04 R-ORD-01 §2][05 R-ECO-01 §9]. It does not hide
+// the unit: only a paid settlement pass does that, through
+// SetCloakedInstance.
 func (u *Unit) SetCloaked(on bool) {
 	if u == nil {
 		return
@@ -665,8 +706,28 @@ func (u *Unit) SetCloaked(on bool) {
 	u.IsCloaked = on
 }
 
+// SetCloakedInstance writes the INSTANCE cloaked bit, bit 2 of the operational
+// byte, and is the transition service's arrival point for the cloak debit's
+// decision [05 R-ECO-01 §8][05 R-ECO-01 §9]. The write happens unconditionally
+// and only the notifications are edge-gated, so the change test lives here.
+//
+// §8's bit-2 edges also raise status cue slots 14 (newly set) and 15 (newly
+// cleared), with no caption text and no COB callback. This build has no sink
+// for engine cue codes — the same gap SetActivationEdge records for codes 3
+// and 4 — so the edge is silent here; nothing simulation-visible depends on
+// the cue.
+func (u *Unit) SetCloakedInstance(on bool) {
+	if u == nil || u.Hidden == on {
+		return
+	}
+	u.Hidden = on
+}
+
 // CloakCost returns the per-pass cloak cost, choosing stationary vs moving
-// variant when the unit is cloaked [05 "Cloak debit"] [P1-I04].
+// variant. It reads the cloak REQUEST, because retail selects and integerizes
+// the cost inside the gated block and the gate's first term is the request bit
+// [05 R-ECO-01 §9]; a unit that is merely hidden from a previous pass without
+// a live request never reaches the selection.
 func (u *Unit) CloakCost() float32 {
 	if u == nil || u.Def == nil || !u.IsCloaked {
 		return 0
@@ -696,13 +757,13 @@ func (u *Unit) CloakCost() float32 {
 // [04 R-SPEC-01 §12], and the only writers of the request bit besides this one
 // are the `Cloak_On` / `Cloak_Off` handlers and the save-game restore.
 //
-// Seam (pre-existing, deliberately not split here): retail carries two distinct
-// bits — the cloak-REQUESTED status bit this seeds, which is the debit gate's
-// first term [05 R-ECO-01 §9], and the INSTANCE cloaked bit that the
-// settlement's transition service sets only on a pass the owner actually paid
-// for, which is what the visibility predicate reads [03 R-VIS-01 §6][03 §3.2].
-// This build folds both onto Unit.IsCloaked, so a requested-but-unpaid cloak
-// reads as hidden here where retail would still show the unit.
+// The two bits are separate fields (WU-19-92). This seeds only the
+// cloak-REQUESTED bit, Unit.IsCloaked, which is the debit gate's first term
+// [05 R-ECO-01 §9]. The INSTANCE cloaked bit, Unit.Hidden, is left clear: the
+// settlement's transition service is its only writer and sets it only on a
+// pass the owner actually paid for, so an `init_cloaked` unit is VISIBLE from
+// placement until its first paid pass, and visible again on any pass its owner
+// cannot pay [03 R-VIS-01 §6][03 §3.2].
 //
 // EVERY unit is created INACTIVE, with no definition key consulted. Neither
 // `onoffable` nor `activatewhenbuilt` is a creation-time copy of the bit:

@@ -228,12 +228,16 @@ func clearAutonomousSlotTargets(u *units.Unit) {
 // either way [04 R-ORD-01 §2].
 //
 // The row writes state-word bit 11, the cloak-wanted bit of [03 "cloakActive =
-// status bit 11"]; the same logical field in this build is the unit's cloak
-// request, whose one writer is SetCloaked and whose reader is the cloak upkeep
-// debit [05 "Cloak debit"] (I13: one logical field, one Go field).
+// status bit 11"]; the same logical field in this build is units.Unit.IsCloaked,
+// whose one runtime writer is SetCloaked and whose one reader is the cloak
+// upkeep debit's gate [05 "Cloak debit"] (I13: one logical field, one Go field).
 //
 // There is no callback and no caption: the *Cloaked* / *Visible* captions come
-// from the edge machine's bit 2, which this handler does not touch.
+// from the edge machine's bit 2, which this handler does not touch — and
+// neither does it hide or show the unit. `Cloak_Off` clears the request and
+// nothing else; the unit stays hidden until its owner's next settlement pass
+// finds the gate no longer due and clears the INSTANCE bit, units.Unit.Hidden
+// [05 R-ECO-01 §9] (WU-19-92).
 func cloakOnHandler(u *units.Unit, _ *Node, _ uint32, _ uint32) Code {
 	setCloakIfCapable(u, true)
 	return Code(5) // *complete* [04 R-ORD-01 §2]

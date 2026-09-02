@@ -89,14 +89,14 @@ func isHostile(shooter *units.Unit, cand *units.Unit, econ *economy.Service) boo
 //     cloak predicate at all, and reading it here made every stealth unit
 //     permanently unshootable.
 //
-// This build folds retail's request and instance bits onto Unit.IsCloaked (the
-// named seam at units.InitEconomyState), so a requested-but-unpaid cloak still
-// reads as hidden; that seam is unchanged here.
+// The two bits are separate fields (WU-19-92): Unit.Hidden is the instance bit
+// this reads, Unit.IsCloaked is the request, and a unit whose owner could not
+// pay the upkeep is targetable while still requesting cloak.
 func isCloakedUnit(u *units.Unit) bool {
 	if u == nil {
 		return false
 	}
-	return u.IsCloaked
+	return u.Hidden
 }
 
 func isUnderwaterUnit(u *units.Unit, seaLevel numeric.Fixed) bool {

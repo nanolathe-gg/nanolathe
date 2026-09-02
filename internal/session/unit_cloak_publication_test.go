@@ -24,7 +24,7 @@ func TestUnitViewPublishesTheTwoCloakInputs(t *testing.T) {
 		t.Fatalf("create foreign unit: %v", err)
 	}
 	u := unitsPool.Unit(h)
-	u.IsCloaked = true
+	u.Hidden = true
 	// The start-building edge is on the same word and must not read as cloak.
 	u.Flags |= 1 << 2
 
