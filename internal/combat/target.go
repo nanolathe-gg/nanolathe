@@ -17,22 +17,25 @@ import (
 )
 
 // TargetKind distinguishes how a slot's target is encoded [06 §3.2] P0-10 (I13).
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Retail stores unit vs ground via a sentinel value in the weapon slot
+// record's target field [06 §1.2] P0-10.
 // Low-level setters do not validate alliance, category, sensor, range or ballistic feasibility [06 §3.2] P0-10.
 type TargetKind uint8
 
 const (
 	TargetNone  TargetKind = iota // no target
-	TargetUnit                    // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	TargetPoint                   // world position ground point x/z words <<16, sentinel != -0x8000 [06 §1.2] P0-10
+	TargetUnit                    // unit target (pool handle), identified by the slot record's sentinel value [06 §1.2] P0-10
+	TargetPoint                   // world position ground point x/z words <<16, sentinel absent [06 §1.2] P0-10
 )
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// SentinelUnit is the retail sentinel for the unit latch in the weapon slot
+// record's target field [06 §1.2] P0-10.
 const SentinelUnit int16 = -0x8000 // 0x8000
 
 // Target is the per-slot encoded target state [06 §1.2] [06 §3.2] P0-10 (I13).
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// The weapon slot record's target field pairs a signed 16-bit unit index
+// (0=null) with a signed 16-bit sentinel [06 §1.2] P0-10.
+// Ground point: x/z words <<16 plus Y resolved through the terrain height query [06 §1.2] P0-10.
 type Target struct {
 	Kind TargetKind    // [06 §3.2] P0-10 (I13)
 	Unit pool.Handle   // valid when Kind==TargetUnit; 0 null sentinel, no generation token [06 §5.1] (I13) [01 §6.1]

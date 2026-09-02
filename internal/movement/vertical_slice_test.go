@@ -503,7 +503,7 @@ func TestVerticalSlice_TransportLoadMoveUnload(t *testing.T) {
 	// Death/capture interactions: kill carrier should cascade 30000 damage to cargo? But cargo already detached, so no.
 	// Test death cascade by attaching again and killing carrier.
 	AttachCargo(w, th, ch, 1)
-	sys.HandleDeath(w, th, 0x30, 0) // severity 0x30 triggers type 3 [04 §10.2]
+	sys.HandleDeath(w, th, 0) // carrier kind nibble 0 → the default cargo cascade, cause 6 [06 §12.1]
 	if w.Unit(ch).Health != 0 {
 		// cargo should have taken 30000 and died (health 100 -30000 => 0)
 		if w.Unit(ch).Health > 0 {

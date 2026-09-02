@@ -123,7 +123,7 @@ func InitCommon(p *Projectile, now uint32, muzzle, target Vec3, targetUnit pool.
 
 // VelocityFromAngles recomputes velocity components from scalar speed, yaw, pitch
 // using the retail circular domain trig helpers per [06 §6.4] [04 §5.1] [06 §6.7].
-// Each helper has form (tableValue * magnitude + 0x1000) >>13 with 512-entry
+// Each helper has form (tableValue * magnitude + 4096) >>13 with 512-entry
 // round(8192*sin) table; products round to nearest [04 §5.1].
 // TODO(question): ballistic pitch helper quantizes in 64-unit steps vs generic 128-step table; drift TBD [06 §6.4].
 func VelocityFromAngles(yaw, pitch numeric.Angle, speed numeric.Fixed) Vec3 {
@@ -199,7 +199,7 @@ func OrdinaryExpiry(now uint32, w *content.WeaponDef) uint32 {
 
 // BallisticBurnBlowExpiry computes burn-blow deadline per [06 §6.4]:
 // wideDistance = trunc(hypot(targetX-muzzleX, targetZ-muzzleZ))
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// H = fixedCos(pitch, weaponVelocity) = (cosTable*vel+4096)>>13
 // T = signedDivide(wideDistance, H) trunc toward zero [01 §8]
 // expiry = now + T wrapping modulo 2^32.
 // Malformed: H==0 raises divide; H<0 truncates toward zero mod 2^32; INT_MIN/-1 raises [GAP T5] I11.
@@ -264,7 +264,7 @@ func InitBallistic(p *Projectile, w *content.WeaponDef, now uint32, muzzle, targ
 	p.Pitch = solvedPitch
 	speed := numeric.Fixed(int64(w.WeaponVelocity))
 	p.Speed = speed
-	p.Velocity = VelocityFromAngles(yaw, solvedPitch, speed) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	p.Velocity = VelocityFromAngles(yaw, solvedPitch, speed) // [06 §6.4] helper with (table*mag+4096)>>13
 	if w.BurnBlow {
 		p.ExpiryTick = BallisticBurnBlowExpiry(now, muzzle, target, solvedPitch, w.WeaponVelocity) // [06 §6.4]
 	} else {
@@ -504,11 +504,11 @@ func SmokeAdditiveDeadline(currentDeadline uint32, delay int32) uint32 {
 // Each segment draws rand()*11/0x8000-5 per axis (3 axes per segment per pass,
 // 2 passes) via CRT *214013+2531011 [P1-08 §5]. This does not affect lockstep.
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// StateBits helpers for the projectile record's state byte [P1-08 §2.8]
 const (
-	StateDead      = 0x02 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	StateBeamLatch = 0x01 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	StateTwoPhase  = 0x30 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	StateDead      = 0x02 // state byte &2 dead [P1-08 §2.8][P1-07]
+	StateBeamLatch = 0x01 // state byte &1 beam latch [P1-08 §2.8]
+	StateTwoPhase  = 0x30 // state byte &0x30 two-phase state (bits 0x10|0x20) [P1-08 §2.8]
 )
 
 // steerToward implements [06 §6.7] guidance: pure pursuit of the pursuit

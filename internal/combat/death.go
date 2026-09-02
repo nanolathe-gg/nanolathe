@@ -25,7 +25,9 @@ const (
 
 // DeathSeverity computes death severity per [06 §12.1] C22 and [04 §5.1].
 // clamp((floor((-health)*100 / maxDamage) + prior) /2, 1,100) truncating divide by two.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// prior is the prior-severity-sample byte: health percentage retained from
+// the previous 30-tick sampling boundary, not the immediate pre-lethal
+// percentage [06 §12.1][04 §5.1].
 // Reuses cob.KilledSeverity (C15 of phase 6) [04 §5.1].
 func DeathSeverity(health, maxHealth int32, priorSample uint8) int32 {
 	return cob.KilledSeverity(health, maxHealth, priorSample) // [06 §12.1] C22 [04 §5.1]
@@ -95,7 +97,7 @@ func ResolveCorpse(unitDef *content.UnitDef, features map[string]*content.Featur
 type DeathContext struct {
 	Health            int32
 	MaxHealth         int32
-	PriorSample       uint8   // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	PriorSample       uint8   // prior-severity-sample byte, previous 30-tick window percent [04 §5.1]
 	Cause             Cause   // death packet kind [06 §12.1]
 	RemainingFraction float32 // remaining-build-fraction/landed indicator; 0.0 when normal/grounded, nonzero while airborne or under construction [06 §12.1]
 	UnitDef           *content.UnitDef

@@ -31,7 +31,8 @@ type Vec3 struct {
 // sole allocation/dead/count authority (I5); this array holds the per-record
 // simulation state and the compaction marker link.
 // Field list transcribed from [06 §5.1] and [06 §6.1]; the single established
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// retail field this reproduces by name — the old-index marker — is kept as
+// identity via its OldMarker field below [06 §5.2], [GAP T21].
 type Projectile struct {
 	// Weapon definition [06 §5.1] "weapon definition"; [06 §6.1] "weapon definition and owner side".
 	WeaponID int32
@@ -83,22 +84,22 @@ type Projectile struct {
 	CacheCellX int32
 	CacheCellZ int32
 
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Scratch height cache [P1-08 §2.5]: written at projectile point
 	// collision after linked test as average of two cell height bytes; no reader
 	// found in bounded 1326 TU (NEGATIVE-BOUNDED) — preserve write for parity
 	// but no gameplay effect [P1-08 §2.5].
-	Scratch5E int16 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Scratch5E int16 // scratch height cache, write-only [P1-08 §2.5]
 
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// State byte [P1-08 §2.8]: bit1 0x02 dead, bit0 0x01 beamLatch,
 	// bits 0x30 (0x10|0x20) two-phase state [P1-08 §2.8] [06 §6.6]. Go bool fields
 	// mirror bits; raw byte kept for exact replay.
-	State69 uint8 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	State69 uint8 // raw state bits: &2 dead, &1 beamLatch, &0x30 two-phase [P1-08 §2.8]
 
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Old-index marker written before any copy [06 §5.2], [GAP T21].
 	// Compaction writes each original record's old pool index into this field
 	// before copying survivors downward; the second repair pass searches live
 	// records for this marker to rewrite moved follower links [06 §5.2].
-	OldMarker int16 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	OldMarker int16 // old-index marker [06 §5.2]
 }
 
 // EventKind identifies authoritative combat-to-event records.
@@ -304,25 +305,26 @@ func (s *Service) ForEachAliveInEntrySpan(fn func(h pool.Handle, p *Projectile))
 }
 
 // ForEachInEntrySpanIncludingDead iterates ALL projectiles in the captured
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// vs families even for records whose dead bit was set before their turn
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// span without dead filtering [P1-07][P1-08 §2.2] — retail's burst-dispatch
+// loop captures the count at entry and walks the pool array ascending by
+// record, dispatching burst vs families even for records whose dead bit was
+// set before their turn (dead-before-update via the captured entry count)
+// [P1-08 §2.2]. The loop does NOT test the state byte's dead bit at top; only
+// later smoke/water tails gate on dead [P1-08 §2.2].
 func (s *Service) ForEachInEntrySpanIncludingDead(fn func(h pool.Handle, p *Projectile, isDead bool)) {
 	if s == nil || fn == nil {
 		return
 	}
-	entry := s.Slots.Count() // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	entry := s.Slots.Count() // capture once at entry [P1-08 §2.2]
 	for i := 0; i < entry; i++ {
 		h := pool.Handle(i + 1)
-		isDead := s.Slots.IsDead(h)  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		isDead := s.Slots.IsDead(h)  // state byte &2 dead bit [P1-08 §2.8]
 		fn(h, &s.Records[i], isDead) // no dead filter [P1-07][P1-08 §2.2]
 	}
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// ProjectileLinkAt is the projectile-to-projectile link [P1-08 §2.3].
+// It is repaired via the old-index marker table [P1-07][P1-08 §2.3][06 §5.2].
 func (s *Service) ProjectileLinkAt(h pool.Handle) pool.Handle {
 	if s == nil || h == 0 {
 		return 0
@@ -331,7 +333,7 @@ func (s *Service) ProjectileLinkAt(h pool.Handle) pool.Handle {
 	if idx < 0 || idx >= len(s.Records) || idx >= s.Slots.Count() {
 		return 0
 	}
-	return s.Records[idx].TargetProjectile // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	return s.Records[idx].TargetProjectile // [P1-08 §2.3]
 }
 
 // Compact performs the stable tail compaction described in [06 §5.2] and
@@ -339,7 +341,7 @@ func (s *Service) ProjectileLinkAt(h pool.Handle) pool.Handle {
 // rebuild order (WU-09-2 subtlest contract).
 //
 // Steps per [06 §5.2]:
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+//   - writes each original record's old pool index into the old-index marker field before any copy;
 //   - scans current global count including clones appended after entry capture [01 §6.2];
 //   - finds first dead hole, copies later survivors downward preserving relative order, publishes reduced count after scan;
 //   - updates follow-camera pointer when the followed survivor moves (delegated to Slots.Compact);
@@ -362,7 +364,7 @@ func (s *Service) Compact(follow *pool.Handle) {
 		s.Slots.Compact(follow)
 		return
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// [06 §5.2] Before any copy, writes each original record's old pool index into the old-index marker field.
 	for i := 0; i < oldCount; i++ {
 		s.Records[i].OldMarker = int16(i)
 	}
@@ -460,7 +462,7 @@ func (s *Service) Compact(follow *pool.Handle) {
 	// record still carrying the target's old-index marker exists after compaction.
 	// "If the linked target was removed, no repair write happens and the copied
 	//  source retains the old raw pointer" [06 §5.2]. Search is over current live
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	//  span (newCount) for old-index marker equality.
 	for _, e := range repairs {
 		// e.srcNew is in [0,newCount). The source record at that slot currently
 		// carries oldLink value; we will conditionally rewrite.

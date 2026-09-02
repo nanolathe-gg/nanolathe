@@ -1676,10 +1676,17 @@ func (s *Session) bindDamageReaction() {
 // container [R-STRIP-01 §1 strip 5]. Pass 3a emits ONE smoke particle per
 // gated visit — the every-third-tick cadence is the phase-6 gate's, not the
 // container's — so the container is built with the family's one-puff shape:
-// the constructor spawns the only puff and the closed window retires it. The
-// puff's authored variant and life are still open ([03 §5.5], and the site in
-// burn.go carries the TODO(question)); nothing here invents them, it takes the
-// family's default init.
+// the constructor spawns the only puff and the closed window retires it.
+//
+// The parameters are no longer open. [05 R-FEAT-01 §16] gives this site's init
+// row as `(frameCap 0, spawnInterval 1, frameHold 0, lifetime 0, selector 0)`
+// — the same row the trail puff, the timer-expiry puff and the impact
+// `endsmoke` take, which is SmokePuffTrail below: `smoke 1`, every frame of
+// the entry, the family's default hold of 7, and the lifetime of 0 that makes
+// the container a one-shot. appendStripSmokePuffer spawns that single puff at
+// the producer, so its last-frame draw is the emission's THIRD CRT draw,
+// taken after the call site's two jitter draws and in the same phase
+// [05 R-FEAT-01 §16][03 R-STRIP-01 §2][01 §7.5].
 //
 // Two feature seams are deliberately left nil, because filling them needs
 // files outside this unit:

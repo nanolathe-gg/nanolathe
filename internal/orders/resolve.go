@@ -190,6 +190,36 @@ func isCarriable(carrier, candidate *units.Unit) bool {
 	return b.TransportAdmission(carrier, candidate)
 }
 
+// signExtendedHealth is a unit's health the way the repair admission reads it:
+// the 16-bit health field sign-extended to 32 bits [04 R-ORD-02 §7]. Our own
+// health word is wider, so the narrowing is explicit — it is what makes a
+// death-latched target's negative health stay negative under nano-reach's
+// signed inequality and become a very large value under code 2's unsigned
+// compare.
+//
+// `health16` in vtolwork.go is the same field ZERO-extended, which is what that
+// section's other quotation of the compare says; the two agree for every
+// authored `maxdamage` (both put a negative health far above it), so the two
+// admissions are left where their owners put them.
+func signExtendedHealth(u *units.Unit) int32 {
+	return int32(int16(u.Health))
+}
+
+// repairAdmitsCode2 is code 2's arm of the repair admission: nano-reach AND a
+// second, stricter compare that codes 1 and 8 do not make — the same
+// sign-extended health, taken as UNSIGNED, is below `maxdamage` taken as
+// unsigned [04 R-ORD-02 §7]. That excludes the two targets nano-reach's plain
+// inequality admits: an over-full one, and a death-latched one whose health has
+// already gone to zero or below. So a move-click on a latched friendly is a
+// move, while a code-8 request on the same unit is a repair order that the next
+// slot visit finds dead.
+func repairAdmitsCode2(actor, target *units.Unit) bool {
+	if !nanoReach(actor, target) {
+		return false
+	}
+	return uint32(signExtendedHealth(target)) < uint32(target.Def.MaxDamage)
+}
+
 // nanoReach is the repair admission of [04 R-ORD-01 §7], which
 // [04 R-ORD-02 §1] names *nano-reach* and shares between command codes 1, 2
 // and 8. Its terms, in the order that section gives them:
@@ -219,15 +249,21 @@ func nanoReach(actor, target *units.Unit) bool {
 	if !actor.Def.CanReclamate {
 		return false
 	}
-	// TODO(question): [04 R-ORD-02 §1] code 1 step 3 adds, in parentheses,
-	// "no health test — a full-health friendly resolves to a repair", while
-	// the nano-reach admission it requires, [04 R-ORD-01 §7], carries this
-	// health term. The two sentences cannot both be literal. The traced
-	// admission is implemented; the parenthetical is read as "no test beyond
-	// nano-reach's own", the way code 2's arm adds a second, stricter one.
-	// What would settle it: a trace of code 1's friendly arm showing whether
-	// it calls the shared admission or an inlined copy without the health term.
-	if target.Health == target.Def.MaxDamage {
+	// The health term stands, and it belongs to this admission alone. Codes 1,
+	// 2 and 8 call this one function — not an inlined copy — and only code 2
+	// adds a test of its own on top of it [04 R-ORD-02 §7]. §1's old
+	// parentheticals ("no health test — a full-health friendly resolves to a
+	// repair") meant "no health test beyond nano-reach's own" and are reworded
+	// there; a full-health friendly fails HERE and the click falls through to
+	// the later arms.
+	//
+	// The compare is an INEQUALITY between the target's 16-bit health field,
+	// sign-extended to 32 bits, and the definition's 32-bit `maxdamage` word.
+	// An over-full target and a death-latched one (health zero or negative
+	// between the lethal packet and its own slot visit, [06 R-DMG-01 §3]
+	// steps 1–2) therefore both pass here; code 2 is where they are excluded
+	// again [04 R-ORD-02 §7].
+	if signExtendedHealth(target) == target.Def.MaxDamage {
 		return false
 	}
 	if target.Move.Mode == 2 { // airborne [04 R-MOV-01 §8]
@@ -412,11 +448,13 @@ func resolveName(code int, actor *units.Unit, target *units.Unit, pos *ResolvePo
 		return "Follow_Ground"
 	case 8:
 		// "Nano-reach must pass (else reject); target unfinished →
-		// `HelpBuild` or air twin, else `RepairUnit` or air twin — no health
-		// test here either" [04 R-ORD-02 §1]. "No health test here" means no
-		// test beyond the one nano-reach already carries (health differs from
-		// `maxdamage`), which is why a full-health finished friendly rejects at
-		// the gate rather than resolving a repair with nothing to repair.
+		// `HelpBuild` or air twin, else `RepairUnit` or air twin — again no
+		// health test beyond nano-reach's own" [04 R-ORD-02 §1], confirmed by
+		// trace in [04 R-ORD-02 §7]: code 8 calls the shared admission and adds
+		// nothing, which is why a full-health finished friendly rejects at the
+		// gate rather than resolving a repair with nothing to repair, and why a
+		// death-latched one — which code 2's stricter compare excludes — is
+		// accepted here into a repair order the next slot visit finds dead.
 		//
 		// The gate used to be `isBuilder`, the authored `builder` key, which
 		// admitted a factory (builder, no nanolathe reach) and rejected a
@@ -539,6 +577,10 @@ func resolveContextual(actor *units.Unit, target *units.Unit, pos *ResolvePos) s
 	// arm used to be gated on `isDamaged(target) || isUnfinished(target)` with
 	// no admission at all, so any unit at all — a tank with no nanolathe —
 	// resolved a repair on a scratched friendly and then stood there.
+	//
+	// Nano-reach alone, as traced: this variant's step 3 adds no health test of
+	// its own, so a full-health friendly falls out of the arm into the landing,
+	// pickup, follow and move tests below [04 R-ORD-02 §7].
 	if target != nil && !isHostile(actor, target) && nanoReach(actor, target) {
 		if isUnfinished(target) {
 			if actor.Def != nil && actor.Def.CanFly {
@@ -613,16 +655,24 @@ func resolveMove(actor *units.Unit, target *units.Unit) string {
 			return "ReclaimUnit"
 		}
 		// "friendly and nano-reach passes and the target is unfinished →
-		// `HelpBuild` or air twin" [04 R-ORD-02 §1] code 2. The same section's
-		// next arm — friendly, nano-reach, and health below `maxdamage` →
-		// `RepairUnit` — is not built here: PLAN 19 §2.4's row is code 8's gate
-		// and the shared helper, and adding a resolution code 2 does not have
-		// today is a separate change with its own before/after.
+		// `HelpBuild` or air twin; friendly and nano-reach passes and the
+		// target's 16-bit health is below its `maxdamage` (unsigned) →
+		// `RepairUnit` or air twin" [04 R-ORD-02 §1] code 2, in that order.
+		//
+		// The repair arm's second compare is code 2's alone — codes 1 and 8 add
+		// nothing to nano-reach [04 R-ORD-02 §7] — and it is what makes a
+		// move-click on a death-latched friendly stay a move.
 		if !isHostile(actor, target) && nanoReach(actor, target) && isUnfinished(target) {
 			if actor.Def != nil && actor.Def.CanFly {
 				return "VTOL_HelpBuild"
 			}
 			return "HelpBuild"
+		}
+		if !isHostile(actor, target) && repairAdmitsCode2(actor, target) {
+			if actor.Def != nil && actor.Def.CanFly {
+				return "VTOL_RepairUnit"
+			}
+			return "RepairUnit"
 		}
 		// "I am `canfly`, friendly, target `isairbase` → `VTOL_Landing`"
 		// [04 R-ORD-02 §1] code 2. A ground unit ordered onto a pad is not

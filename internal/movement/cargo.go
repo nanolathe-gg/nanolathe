@@ -14,6 +14,7 @@
 package movement
 
 import (
+	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -331,13 +332,62 @@ func (s *System) SyncCarriedMotion(w *units.World) {
 	}
 }
 
-// HandleDeathOrCapture detaches cargo/captures per [04 §10.2] carrier death and capture transfer.
+// cargoCascadeCause is the cause the carrier-death cascade stamps on each
+// cargo unit. [04 R-FAC-02 §3]'s carrier-finalisation row: a factory that dies
+// or is freed "kills every unit on its cargo list with 30000 damage (cause 3
+// when the death record's kind nibble is 3, else cause 6)". [06 §12.1] states
+// the same rule from the owning side and names both ends of it: the cargo
+// cascade "applies its 30000 damage per cargo ... the cause passed is 3 when
+// the carrier's own cause nibble is 3 and 6 otherwise", and its producer list
+// gives cause 3 as the self-destruct countdown "propagated to cargo, where a
+// carrier dying with cause 3 gives every cargo unit cause 3 and any other
+// carrier cause cascades its cargo as cause 6" and cause 6 as the "default
+// cargo cascade" the central death handler emits itself.
 //
-//   - Dying cargo first detaches from its carrier.
-//   - If dying unit is a carrier, for each cargo head it applies 30000 damage through normal funnel with type 3 when (deathSeverity & 0xF0)==0x30 otherwise type 6, credits carrier's recorded killer, and detaches after each application.
-//   - Capture similarly detaches and reattaches? Retail detaches on capture? Requirement lists death/capture interactions; capture should detach cargo and possibly transfer.
-//   - For this helper we implement death cascade with 30000 damage type 3/6 [04 §10.2][06 §9.1].
-func (s *System) HandleDeath(w *units.World, dyingHandle pool.Handle, deathSeverity uint8, killerHandle pool.Handle) {
+// The carrier's own cause nibble is the damage-kind byte recorded at damage
+// time: [06 §12.1]'s death packet gives byte 10 as `(cause << 4) | variant`
+// whose "HIGH nibble is the death cause, taken from the last damage-kind byte
+// recorded at damage time". In this build that recorded byte is
+// units.Unit.LastDamageCause — unshifted, the same field internal/combat
+// stamps at damage intake, internal/orders compares against 5 for the reclaim
+// bite, and internal/session reads back as combat.Cause for death statistics.
+// It is NOT the packet's packed byte and NOT the severity byte 9; see
+// HandleDeath's note on the argument this helper replaced.
+func cargoCascadeCause(carrier *units.Unit) combat.Cause {
+	if carrier != nil && combat.Cause(carrier.LastDamageCause) == combat.CauseSelfDestruct {
+		return combat.CauseSelfDestruct // 3 [06 §12.1][04 R-FAC-02 §3]
+	}
+	return combat.CauseCargo // 6 [06 §12.1][04 R-FAC-02 §3]
+}
+
+// HandleDeath runs the carrier/cargo half of unit finalisation [04 §10.2].
+//
+//   - A dying unit that is itself cargo detaches from its carrier first — the
+//     central handler "detaches the victim from its carrier when it has one"
+//     before it runs the cargo cascade [06 §12.1], and [04 R-FAC-02 §3] says
+//     the same for a dying carried product.
+//   - A dying carrier then walks its cargo list, applying 30000 damage per
+//     cargo with the cause of cargoCascadeCause, crediting the CARRIER's
+//     killer, and detaching after each application.
+//
+// The cause is read off the dying carrier, not passed in. The parameter this
+// replaced was named `deathSeverity` and its two call sites passed `0x30`,
+// which is neither the severity (packet byte 9, a signed percentage) nor the
+// kind nibble (the high half of packet byte 10) — it was the packed byte
+// shape, matched with `(deathSeverity & 0xF0) == 0x30`. The kind nibble lives
+// on the unit as LastDamageCause, written by the damage intake at damage time
+// [06 §12.1], which is the value retail's own cascade reads, so this reads it
+// there and the ambiguous byte is gone.
+//
+// TODO(T25): nothing in production calls this — the movement tests are its only
+// callers. Retail runs the cascade inside the central death handler, between
+// the victim's own carrier detach and the replay-mode `Killed` dispatch
+// [06 §12.1]; this build's equivalent boundary is the unit finalizer's death
+// hook, which internal/session installs and which owns no movement System.
+// Placeholder behavior: a dying carrier's cargo is left attached and undamaged
+// until that hook calls this. Wiring it is a session change, not a movement
+// one.
+func (s *System) HandleDeath(w *units.World, dyingHandle pool.Handle, killerHandle pool.Handle) {
 	if s == nil || w == nil {
 		return
 	}
@@ -351,6 +401,19 @@ func (s *System) HandleDeath(w *units.World, dyingHandle pool.Handle, deathSever
 	}
 	// If dying is carrier, cascade to cargo
 	if len(dying.Attachment.Cargo) > 0 {
+		cascadeCause := cargoCascadeCause(dying)
+		// The cascade's packets carry the CARRIER's killer as their attacker,
+		// not the carrier [06 §12.1]: "cargo killed by carrier death credits
+		// the carrier's killer ... the cascade applies its 30000 damage per
+		// cargo with the attacker argument set to the carrier's killer". The
+		// attacker-side snapshot beside it follows the ordinary intake of
+		// [06 §9.1] step 4, which the cascade uses ("through the ordinary
+		// builder"): the attacker unit's own owner byte, or the neutral side
+		// 10 when the packet has no attacker at all [06 R-WPN-04 §2].
+		attackerSide := units.NeutralAttackerSide
+		if killer := w.Unit(killerHandle); killer != nil {
+			attackerSide = killer.Owner
+		}
 		// Copy list for deterministic iteration (slot asc already)
 		cargos := append([]pool.Handle(nil), dying.Attachment.Cargo...)
 		// Sort for determinism [I1] player asc not needed but slot asc
@@ -361,28 +424,36 @@ func (s *System) HandleDeath(w *units.World, dyingHandle pool.Handle, deathSever
 			if cargo == nil {
 				continue
 			}
-			// Apply 30000 damage through normal funnel with type 3 when (deathSeverity &0xF0)==0x30 otherwise type 6 [04 §10.2]
-			// Type 3/6 are damage type codes [06 §9.1]. We apply via w.ApplyDamage which currently does not track type but we use direct health reduction + mark dying.
-			// Determine type for citation but not used in current ApplyDamage signature.
-			_ = deathSeverity
 			dmg := int32(30000)
 			// Apply through funnel: for now subtract health and mark.
 			// In combat, would go through death funnel with armor/veterancy [06 §9.1]; keep direct.
 			if cargo.Health > 0 {
+				// The packet's provenance pair, written where the ordinary
+				// intake writes it — on the application, before the health arm
+				// [06 §9.1] step 4. The kind byte is what the death handler's
+				// cause-gated credit switch reads back [06 §12.1]: cause 6
+				// shares cause 1's full path, cause 3 takes the partial
+				// loss-only path.
+				cargo.LastDamageCause = uint8(cascadeCause)
+				cargo.LastDamageSide = attackerSide
 				cargo.Health -= dmg
 				if cargo.Health <= 0 {
 					cargo.Health = 0
-					// The cascade's packets carry the CARRIER's killer as their
-					// attacker, not the carrier [06 §12.1]: "cargo killed by
-					// carrier death credits the carrier's killer ... the cascade
-					// applies its 30000 damage per cargo with the attacker
-					// argument set to the carrier's killer". That attacker is
-					// then what the death handler's row writes into each
-					// cargo's recorded-attacker link [04 R-UNIT-06 §5], and it
-					// is what the kill credit reads. A carrier that dies with
-					// no killer behind it — a packetless finalisation — passes
-					// the null through, which is the same row's "may be null".
-					w.DestroyBy(cargoHandle, units.DeathKilled, killerHandle) // will trigger recursive detach
+					// The recorded-attacker link takes the same attacker
+					// [04 R-UNIT-06 §5], and it is what the kill credit reads.
+					// A carrier that dies with no killer behind it — a
+					// packetless finalisation — passes the null through, which
+					// is the same row's "may be null".
+					//
+					// The coarse death-cause enum carries the 3-versus-6
+					// distinction into the finalizer: internal/session maps
+					// DeathSelfDestruct back to combat.CauseSelfDestruct and
+					// everything else to the full-credit path.
+					deathCause := units.DeathKilled
+					if cascadeCause == combat.CauseSelfDestruct {
+						deathCause = units.DeathSelfDestruct
+					}
+					w.DestroyBy(cargoHandle, deathCause, killerHandle) // will trigger recursive detach
 				}
 			}
 			DetachCargo(w, cargoHandle)

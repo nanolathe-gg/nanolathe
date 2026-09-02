@@ -128,7 +128,7 @@ func TestProjectileOffsetWrap(t *testing.T) {
 	}
 	// yaw 0 -> 0x8000 (32768)
 	st := make([]model.PieceState, 1)
-	FoldProjectileAngles(st, 0, 0, 0) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	FoldProjectileAngles(st, 0, 0, 0) // [03 §5.2] yaw 0 pitch 0 each offset by 32768
 	if st[0].RotY != 0x8000 || st[0].RotX != 0x8000 {
 		t.Fatalf("yaw0 pitch0: got Y=%d X=%d want 32768", st[0].RotY, st[0].RotX)
 	}

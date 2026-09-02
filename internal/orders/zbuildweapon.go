@@ -20,9 +20,41 @@ package orders
 
 import (
 	"github.com/nanolathe/nanolathe/internal/combat"
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
+
+// noWeaponRecord is weapon record 0, the `[noweapon]` sentinel every empty
+// weapon slot points at [06 R-DMG-01 §5]: reload time 0, both per-shot costs 0,
+// no `stockpile` flag. Nothing about it is authored — it is the zero record —
+// so it is built here rather than looked up.
+var noWeaponRecord content.WeaponDef
+
+// StockpileSlotAcceptsBuildWeapon is the ENQUEUE guard for a BUILDWEAPON node
+// [06 R-WPN-05 §2]. The handler itself has no such test, and on a slot holding
+// weapon record 0 the queue runs away: every round completes free in a single
+// visit, and if the node outlives the visit — a count large enough to reach the
+// 199 gate — the build page's percentage `progress·100 / reloadtime` divides by
+// zero with no guard, so hovering the unit faults.
+//
+// Refusing to enqueue such a node is the one behavior that is both safe and
+// indistinguishable from retail on every shipped case: stock content puts a
+// `MAKENUKE`/`MAKEANTI` button only on units whose named slot holds a
+// `stockpile` weapon, so no shipped click can produce a node this refuses.
+//
+// The three producers — the HUD order alias, the mission `Bw` verb and the
+// network decoders (§11.1) — are expected to gate on this before pushing.
+func StockpileSlotAcceptsBuildWeapon(u *units.Unit, slotIdx int) bool {
+	if u == nil || slotIdx < 0 || slotIdx >= units.NumSlots {
+		return false
+	}
+	s := u.SlotAt(slotIdx)
+	if s == nil || s.Weapon == nil {
+		return false // weapon record 0: the unarmed slot
+	}
+	return s.Weapon.Stockpile
+}
 
 // BuildWeaponHandler is the secondary-queue handler for BUILDWEAPON per [06 §11]
 // C29 and [04 §3.1] 0x40000. It advances the linked stockpile slot via
@@ -42,40 +74,39 @@ func buildWeaponHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 	if u == nil || n == nil {
 		return Code(5)
 	}
-	// Resolve slotIdx and weapon.
+	// The node's slot index is used VERBATIM to select the weapon slot; the
+	// handler tests neither that the slot's weapon carries `stockpile` nor that
+	// it is a real weapon [06 R-WPN-05 §2]. The slot search this used to do —
+	// "no stockpile weapon at Param1, so find the first slot that has one" —
+	// and its 30-tick wait were both invented; they moved a node onto a slot
+	// the producer never named. Enqueue is where a bad node is refused; see
+	// StockpileSlotAcceptsBuildWeapon.
 	slotIdx := int(n.Param1)
 	var slot *units.Slot
 	if slotIdx >= 0 && slotIdx < units.NumSlots {
-		s := u.SlotAt(slotIdx)
-		if s != nil && s.Weapon != nil && s.Weapon.Stockpile {
-			slot = s
-		}
+		slot = u.SlotAt(slotIdx)
 	}
 	if slot == nil {
-		// Fallback: first stockpile weapon slot [06 §11.1] (stockpile queue
-		// keeps distinct signed count and byte remainder per weapon slot; when
-		// Param1 is zero-initialized the first stockpile slot is the intended
-		// target – battle.go and bw initial-mission path leave Param1 zero).
-		for i := 0; i < units.NumSlots; i++ {
-			s := u.SlotAt(i)
-			if s != nil && s.Weapon != nil && s.Weapon.Stockpile {
-				slot = s
-				slotIdx = i
-				n.Param1 = uint32(i)
-				break
-			}
-		}
-	}
-	if slot == nil {
-		// No stockpile weapon on this unit: keep node pending (do not unlink)
-		// so dummy test queues with non-stockpile units are not spuriously
-		// removed by the stockpile handler. Real stray nodes will simply wait
-		// [05] and be cleaned via cancel.
+		// Retail's own answer here is a build-type of three or greater indexing
+		// past the unit record with no bounds check [06 §11.1] — undefined
+		// memory, not a behavior to clone. The bounded stand-in is the handler's
+		// own blocked cadence: hold with a deadline, which is what every other
+		// hold in this body does, so the record neither spins the pump nor
+		// corrupts a slot. Our enqueue guard refuses such a node in the first
+		// place, so this is reachable only from a malformed save.
 		n.DynamicGate = 1
-		n.Deadline = int32(tick + 30)
+		n.Deadline = int32(tick + combat.StockpileRetryBlocked)
 		return Code(2)
 	}
+	// An unarmed slot points at weapon record 0, the `[noweapon]` sentinel:
+	// reload 0, both per-shot costs 0, never a null [06 R-WPN-05 §2]
+	// [06 R-DMG-01 §5]. Our slots carry a nil weapon pointer for that, so the
+	// sentinel is supplied here rather than special-cased downstream — its
+	// rounds then complete free in one visit, which is what retail does.
 	weapon := slot.Weapon
+	if weapon == nil {
+		weapon = &noWeaponRecord
+	}
 	// Count and progress from node.
 	count := int32(n.Param2)
 	progress := int32(n.Param3)
@@ -118,7 +149,8 @@ func buildWeaponHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 		return wasAccepted
 	}
 	nextTick, _, completedRounds := combat.TickStockpile(ce, cs, tick, admit)
-	// Copy back slot ammo (TickStockpile wraps 255->0) and node fields.
+	// Copy the byte back. It neither underflows nor passes 200 through the
+	// engine's own paths [06 R-WPN-05 §2], so there is nothing to clamp here.
 	slot.Ammo = cs.Ammo
 	n.Param2 = uint32(ce.Count)
 	n.Param3 = uint32(ce.Progress)
@@ -129,6 +161,9 @@ func buildWeaponHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 	}
 	// Otherwise keep node alive with custom retry deadline (5/10/300) per
 	// [06 §11.1]. TickStockpile returns tick+retry; store it as absolute tick.
+	// EVERY hold arms a deadline first: a hold returned with a clear gate would
+	// leave the pump re-dispatching this head for the rest of the visit
+	// [06 R-WPN-05 §2], which is why the fall-through below arms one too.
 	if nextTick != 0 {
 		n.Deadline = int32(nextTick)
 		n.DynamicGate = 1
@@ -172,19 +207,12 @@ func StockpileCounts(u *units.Unit) ([units.NumSlots]int32, [units.NumSlots]int3
 		if DescriptorFor(n.ID).Name != "BuildWeapon" {
 			continue
 		}
+		// The node's slot index is the node's own, verbatim, exactly as the
+		// handler reads it [06 R-WPN-05 §2]. The search that used to stand here
+		// mirrored the handler's invented fallback and reported a count under a
+		// slot the producer never named; an out-of-range index belongs to no
+		// slot and is shown under none.
 		idx := int(n.Param1)
-		// Fallback: when Param1 is zero but weapon is at different slot, the
-		// handler's fallback would have mapped it; for UI we sum under the
-		// resolved slot when Param1 is in range and that slot is stockpile.
-		if idx < 0 || idx >= units.NumSlots {
-			// Find first stockpile slot for unmapped node.
-			for j := 0; j < units.NumSlots; j++ {
-				if s := u.SlotAt(j); s != nil && s.Weapon != nil && s.Weapon.Stockpile {
-					idx = j
-					break
-				}
-			}
-		}
 		if idx >= 0 && idx < units.NumSlots {
 			queued[idx] += int32(n.Param2)
 		}

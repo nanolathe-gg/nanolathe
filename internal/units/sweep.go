@@ -150,10 +150,11 @@ func (w *World) NeedsDeathFinalization(handle pool.Handle) bool {
 // FinalizeDeath performs slot-end death handling and ledger cleanup finalization
 // for the given handle [01 §4.4][04 "unit sweep"]. It fires OnDeath exactly
 // once and frees the pool slot exactly once; a second call is a no-op [01
-// §4.4]. The tick argument is the current global tick for hook context. It
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// counters. Zero RNG draws. Dead unit cannot be stepped afterwards because the
-// slot is freed and pool.Alive is false, so StepPreUpdate becomes a no-op.
+// §4.4]. The tick argument is the current global tick for hook context. Free
+// retains the stored slot index stale [P0-16 §3.4] and decrements per-player
+// live counters. Zero RNG draws. Dead unit cannot be stepped afterwards
+// because the slot is freed and pool.Alive is false, so StepPreUpdate becomes
+// a no-op.
 func (w *World) FinalizeDeath(handle pool.Handle, tick uint32) DeathResult {
 	_ = tick // retained for hook context / future tick-dependent corpse logic
 	if w == nil || w.pool == nil || handle == 0 {
@@ -194,7 +195,8 @@ func (w *World) FinalizeDeath(handle pool.Handle, tick uint32) DeathResult {
 		u.deathExtraHookFired = true
 		hookFired = true
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Final pool free: clears the alive mask and classifier/status flags but
+	// retains the stored slot index [P0-16 §3.4].
 	player := int(u.Owner)
 	u.Flags &^= ClassifierEligibleStatus
 	u.Alive = false

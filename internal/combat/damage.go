@@ -173,16 +173,16 @@ const (
 	KindNoReaction uint8 = 11 // subtracts health but skips reaction/callbacks [06 §9.1]
 )
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Bit7 (0x80) signed byte <0 doubles damage; bit8 (0x100) halves.
+// Global damage gates are bits 7 and 8 of the global options word
+// [P1-07 §2.5][06 §9.2]. Bit7 (0x80) doubles damage; bit8 (0x100) halves it.
 // Order is *2 then /2, so both set nets to *1 [P1-07 §2.5] [06 §9.2] step4.
 const (
-	GlobalDoubleMask = 0x80  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	GlobalHalfMask   = 0x100 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	GlobalDoubleMask = 0x80  // global options word bit7 [P1-07 §2.5]
+	GlobalHalfMask   = 0x100 // global options word bit8 [P1-07 §2.5]
 )
 
 // ApplyGlobalGates applies the double/half gates in retail order *2 then /2
-// from the raw 0x37f2f word [P1-07 §2.5] [06 §9.2] step4.
+// from the global options word [P1-07 §2.5] [06 §9.2] step4.
 func ApplyGlobalGates(amount int32, rawFlags int) int32 {
 	if rawFlags&GlobalDoubleMask != 0 {
 		amount *= 2 // [P1-07 §2.5] signed <0 branch
@@ -194,7 +194,7 @@ func ApplyGlobalGates(amount int32, rawFlags int) int32 {
 }
 
 // IsDamagePacketKind reports whether kind is one of the four damage packet
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// kinds the damage-intake handler accepts [P1-07 §2.6] [06 §9.1].
 func IsDamagePacketKind(k uint8) bool {
 	return k == KindOrdinary || k == KindParalyzer || k == KindHeal || k == KindNoReaction // [P1-07 §2.6]
 }
@@ -329,13 +329,13 @@ func ComputeScaledAmount(baseDamage int32, falloff float32, attackerKills int32,
 	amount = int32((int64(amount) * int64(100+6*tierA)) / 100) // truncate integer percentage [01 §8] [06 §9.2] step 3
 
 	// Step 4: apply recovered global double/half gates [06 §9.2] step 4.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// for half, in order *2 then /2 so both set nets *1 [P1-07 §2.5][06 §9.2].
+	// Bits are the global options word's bit7 (0x80) for double and bit8
+	// (0x100) for half, in order *2 then /2 so both set nets *1 [P1-07 §2.5][06 §9.2].
 	if globalDouble {
-		amount = amount * 2 // [06 §9.2] global double [P1-07 §2.5] 0x37f2f bit7
+		amount = amount * 2 // [06 §9.2] global double [P1-07 §2.5] options word bit7
 	}
 	if globalHalf {
-		amount = amount / 2 // truncate toward zero [01 §8] [06 §9.2] global half [P1-07 §2.5] 0x37f2f bit8
+		amount = amount / 2 // truncate toward zero [01 §8] [06 §9.2] global half [P1-07 §2.5] options word bit8
 	}
 
 	if isHealing {
@@ -381,25 +381,28 @@ func ComputePacket(weapon *content.WeaponDef, targetUnitName string, falloff flo
 // directly by slot arithmetic with no liveness probe for attacker, and victim
 // acceptance requires alive+clear dead latch so reused slot accepts stale packet
 // [06 §5.1] C18. Attacker receives NO validation [06 §9.1] C18.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// (alive&~0x4000) [P1-07 §2.6] [06 §9.1]. Kinds 1/2/0xA/0xB are the damage kinds
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// The unit status word carries the alive bit (0x10000000) and the dead latch
+// (0x4000); acceptance requires alive set and the dead latch clear
+// [P1-07 §2.6] [06 §9.1]. Kinds 1/2/0xA/0xB are the damage kinds the
+// damage-intake handler accepts; death causes 3..11 use a separate cause
+// dispatch [P1-07 §2.6].
 func ValidatePacketTarget(victim pool.Handle, isAlive func(pool.Handle) bool, isDeadLatch func(pool.Handle) bool) bool {
 	if victim == 0 {
 		return false // 0=null [06 §9.1] C18
 	}
 	if isAlive != nil && !isAlive(victim) {
-		return false // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		return false // unit status word alive bit (0x10000000) required [06 §9.1] [P1-07 §2.6]
 	}
 	if isDeadLatch != nil && isDeadLatch(victim) {
-		return false // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		return false // unit status word dead latch (0x4000) must be clear [06 §9.1] [P1-07 §2.6]
 	}
 	return true
 }
 
 // ValidatePacketKind reports whether kind is admissible for the damage intake
-// per [P1-07 §2.6] — damage kinds 1/2/0xA/0xB are the packet handlers at
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// per [P1-07 §2.6] — damage kinds 1/2/0xA/0xB are the four kinds the
+// damage-intake handler accepts; death causes 3..11 are cause producer codes,
+// not damage kinds.
 // This separates the two enums that share the packet byte position [06 §12.1].
 func ValidatePacketKind(kind uint8) bool {
 	return IsDamagePacketKind(kind) // [P1-07 §2.6] 1,2,10,11

@@ -115,37 +115,31 @@ func (s *Service) burnTick(tick uint32) {
 			// taking integer parts with 16-bit truncation. burnSmokeJitter
 			// below is exactly those two addends.
 			//
-			// WHICH AXES the two addends move (Supported inference). The
-			// smoke-puff family's sub-record carries a raw 16.16 position
-			// triple whose per-tick update is `x += windX·8`, `z += windZ·8`,
-			// `y += authoredGravity·16` [03 §5.5 "Smoke-puff family"] — so the
-			// family's own `y` is world HEIGHT and its `x` is world X, and
-			// pass 3a's `x` and `y` are those two words. The factor of two on
-			// the y term corroborates it: the projection shears height by half
-			// a row (`screenY = worldZ − worldY/2`, [03 §2.5]), so one sprite
-			// row is two world height units, while x is one-to-one and carries
-			// no factor. The puff's Z therefore stays at the footprint centre.
-			// A trace of the producer site would settle it outright.
+			// WHICH AXES the two addends move: world X and world HEIGHT, with
+			// Z passed through at the footprint centre [05 R-FEAT-01 §16]. The
+			// reading recorded here as a Supported inference — the smoke-puff
+			// family's own position triple updates `x += windX·8`,
+			// `z += windZ·8`, `y += authoredGravity·16` [03 §5.5 "Smoke-puff
+			// family"], and the factor of two on the y term is the half-row
+			// projection shear (`screenY = worldZ − worldY/2`, [03 §2.5]) — is
+			// confirmed by trace and is now Established.
 			//
-			// TODO(question): the strip-5 burning-feature puff's own
-			// parameters — the smoke variant and the particle life passed to
-			// the container's constructor — are still an open item on doc 03's
-			// own list ("The strip-5 burning-feature smoke producer's puff
-			// parameters (variant, life)", [03 §5.5][R-STRIP-01 §1]). The same
-			// trace would settle a second question this site cannot: whether
-			// the container's constructor draw lands here, making the emission
-			// cost three CRT draws, or whether the producer appends into a
-			// container that already exists, making it the two that
-			// [01 §7.5 "6 features | CRT | 2 per fire-effect emission"] counts.
-			// The census row names the position jitter specifically and cites
-			// §12 (reproduction) rather than §10, so it is read here as
-			// scoping itself to the jitter, and the family's constructor draw
-			// [R-STRIP-01 §2] is left where the family puts it. Decider:
-			// a static trace of the phase-6 producer site.
+			// THE THIRD DRAW. An emission costs THREE CRT draws, all in this
+			// phase: the horizontal jitter, the vertical jitter, then the
+			// puff's last-frame draw inside the producer, because the smoke
+			// family's init calls its spawn virtual [05 R-FEAT-01 §16]
+			// [03 R-STRIP-01 §2]. [01 §7.5]'s phase-6 row read 2 and is
+			// corrected to 3. The producer this site reaches builds a one-shot
+			// `smoke 1` container — the trail/`endsmoke` init row, lifetime 0 —
+			// so its constructor spawns the single puff and the closed window
+			// retires it; every third tick of a burn adds one puff in one fresh
+			// container.
 			//
-			// The two draws are taken unconditionally — before any seam is
-			// consulted — so a session with no producer bound advances the CRT
-			// stream exactly as one with a producer does.
+			// The two jitter draws are taken here unconditionally, before the
+			// seam is consulted, in the order the site takes them. The third is
+			// the producer's own and is taken only when a producer is bound;
+			// the session always binds one (bindFeatureStripProducers), and a
+			// service with no producer is a fixture, not a battle.
 			var drawX, drawY int32
 			if crt := s.crt(); crt != nil {
 				drawX = crt.Rand()

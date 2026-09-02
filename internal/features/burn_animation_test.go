@@ -90,15 +90,26 @@ func burningFeatureService(t *testing.T, crt *rng.CRT, sim *rng.Simulation, cell
 	return svc
 }
 
-// TestBurnSmokeDrawsTwoCRTPerBurningInstanceEveryThirdTick locks the draw
-// budget of [05 R-FEAT-01 §10] pass 3a and its census row [01 §7.5] ("6
-// features | CRT | 2 per fire-effect emission"): exactly two CRT draws per
-// burning instance on a tick whose index is a multiple of three, none on any
-// other tick, and none on the simulation stream.
-func TestBurnSmokeDrawsTwoCRTPerBurningInstanceEveryThirdTick(t *testing.T) {
+// containerDraw stands for the producer the session binds: the strip-5
+// smoke-puff container's constructor spawns its single puff at the producer,
+// and that spawn takes one CRT draw — the puff's last frame
+// [05 R-FEAT-01 §16][03 R-STRIP-01 §2]. The features package owns no strip
+// table, so the third draw of an emission is modelled here by the seam.
+func containerDraw(crt *rng.CRT) func([3]numeric.Fixed) {
+	return func([3]numeric.Fixed) { crt.Rand() }
+}
+
+// TestBurnSmokeDrawsThreeCRTPerBurningInstanceEveryThirdTick locks the draw
+// budget of [05 R-FEAT-01 §16]: exactly three CRT draws per burning instance on
+// a tick whose index is a multiple of three — the X jitter, the Y jitter, and
+// the container's last-frame draw inside the producer — none on any other tick,
+// and none on the simulation stream. [01 §7.5]'s phase-6 row counted the call
+// site's two only and is corrected to three by that section.
+func TestBurnSmokeDrawsThreeCRTPerBurningInstanceEveryThirdTick(t *testing.T) {
 	crt := rng.CRTFromState(0x1234567)
 	sim := rng.SimulationFromState(99)
 	svc := burningFeatureService(t, &crt, &sim, [2]int{1, 1}, [2]int{5, 3})
+	svc.BurnSmoke = containerDraw(&crt)
 
 	for tick := uint32(0); tick < 7; tick++ {
 		beforeCRT := crt.Draws()
@@ -107,10 +118,10 @@ func TestBurnSmokeDrawsTwoCRTPerBurningInstanceEveryThirdTick(t *testing.T) {
 		gotCRT := crt.Draws() - beforeCRT
 		wantCRT := uint64(0)
 		if tick%3 == 0 {
-			wantCRT = 4 // two burning instances, two draws each
+			wantCRT = 6 // two burning instances, three draws each
 		}
 		if gotCRT != wantCRT {
-			t.Fatalf("tick %d consumed %d CRT draws, want %d [05 R-FEAT-01 §10 pass 3a]", tick, gotCRT, wantCRT)
+			t.Fatalf("tick %d consumed %d CRT draws, want %d [05 R-FEAT-01 §16]", tick, gotCRT, wantCRT)
 		}
 		if got := sim.Draws() - beforeSim; got != 0 {
 			t.Fatalf("tick %d consumed %d simulation draws for smoke; the jitter is CRT-only [05 R-FEAT-01 §10 pass 3a]", tick, got)
@@ -118,22 +129,47 @@ func TestBurnSmokeDrawsTwoCRTPerBurningInstanceEveryThirdTick(t *testing.T) {
 	}
 }
 
+// TestBurnSmokeSiteTakesItsTwoJitterDrawsWithNoProducer is the other half of
+// the same budget: the two jitter draws belong to the call site and are taken
+// before the seam is consulted, so a service with no producer bound still
+// advances the stream by two. A battle always has a producer — the composer
+// binds one — so this is the fixture case, not a second retail behavior.
+func TestBurnSmokeSiteTakesItsTwoJitterDrawsWithNoProducer(t *testing.T) {
+	crt := rng.CRTFromState(0x1234567)
+	sim := rng.SimulationFromState(99)
+	svc := burningFeatureService(t, &crt, &sim, [2]int{1, 1})
+	before := crt.Draws()
+	svc.TickLifecycle(0)
+	if got := crt.Draws() - before; got != 2 {
+		t.Fatalf("unbound producer consumed %d CRT draws, want the site's own 2 [05 R-FEAT-01 §10 pass 3a]", got)
+	}
+}
+
 // TestBurnSmokeDrawsAreConsecutiveOnTheCRTStream locks the ORDER as well as
-// the count: the pair the site consumes is the next two values of the CRT
-// stream, taken back to back, so a reference stream advanced twice lands on
-// the same state [01 §7.2].
+// the count: the three values are the next three of the CRT stream, taken back
+// to back and in the order X jitter, Y jitter, container last frame, so a
+// reference stream advanced three times lands on the same state
+// [05 R-FEAT-01 §16][01 §7.2].
 func TestBurnSmokeDrawsAreConsecutiveOnTheCRTStream(t *testing.T) {
 	const seed = 0x2468ace
 	crt := rng.CRTFromState(seed)
 	sim := rng.SimulationFromState(7)
 	svc := burningFeatureService(t, &crt, &sim, [2]int{2, 2})
+	// Record which value the producer sees, to pin it as the THIRD draw rather
+	// than one taken before the jitter pair.
+	var atProducer uint32
+	svc.BurnSmoke = func([3]numeric.Fixed) { atProducer = uint32(crt.Rand()) }
 	svc.TickLifecycle(0)
 
 	ref := rng.CRTFromState(seed)
 	ref.Rand()
 	ref.Rand()
+	wantThird := uint32(ref.Rand())
+	if atProducer != wantThird {
+		t.Fatalf("the producer drew %#x, want the stream's third value %#x [05 R-FEAT-01 §16]", atProducer, wantThird)
+	}
 	if crt.State != ref.State {
-		t.Fatalf("CRT state %#x after the smoke pair, want %#x — the two draws must be consecutive [05 R-FEAT-01 §10 pass 3a]", crt.State, ref.State)
+		t.Fatalf("CRT state %#x after the emission, want %#x — the three draws must be consecutive [05 R-FEAT-01 §16]", crt.State, ref.State)
 	}
 }
 
@@ -446,10 +482,11 @@ func TestBurnSmokeJitterMovesWorldXAndHeightInference(t *testing.T) {
 	}
 }
 
-// TestBurnSmokeDrawsTwoCRTWithTheGeometrySeamBound repeats the draw budget with
-// both seams bound: binding a producer must not change what the site takes
-// from the CRT stream, because the draws happen before any seam is consulted.
-func TestBurnSmokeDrawsTwoCRTWithTheGeometrySeamBound(t *testing.T) {
+// TestBurnSmokeDrawsThreeCRTWithTheGeometrySeamBound repeats the draw budget
+// with both seams bound: the geometry seam must not change what the emission
+// takes from the CRT stream, because the jitter draws happen before any seam is
+// consulted and the third is the producer's own [05 R-FEAT-01 §16].
+func TestBurnSmokeDrawsThreeCRTWithTheGeometrySeamBound(t *testing.T) {
 	crt := rng.CRTFromState(0x1234567)
 	sim := rng.SimulationFromState(99)
 	svc := burningFeatureService(t, &crt, &sim, [2]int{1, 1}, [2]int{5, 3})
@@ -457,16 +494,19 @@ func TestBurnSmokeDrawsTwoCRTWithTheGeometrySeamBound(t *testing.T) {
 		return 16, 24, 3, 9
 	}
 	puffs := 0
-	svc.BurnSmoke = func([3]numeric.Fixed) { puffs++ }
+	svc.BurnSmoke = func([3]numeric.Fixed) {
+		puffs++
+		crt.Rand() // the container's last-frame draw [03 R-STRIP-01 §2]
+	}
 	for tick := uint32(0); tick < 7; tick++ {
 		before := crt.Draws()
 		svc.TickLifecycle(tick)
 		want := uint64(0)
 		if tick%3 == 0 {
-			want = 4 // two burning instances, two draws each
+			want = 6 // two burning instances, three draws each
 		}
 		if got := crt.Draws() - before; got != want {
-			t.Fatalf("tick %d consumed %d CRT draws with the seams bound, want %d", tick, got, want)
+			t.Fatalf("tick %d consumed %d CRT draws with the seams bound, want %d [05 R-FEAT-01 §16]", tick, got, want)
 		}
 	}
 	if puffs != 6 { // three gated ticks (0, 3, 6) x two instances
@@ -546,9 +586,9 @@ func TestDeathAnimationRetiresAfterTheAuthoredVisitTotal(t *testing.T) {
 
 // TestBurnSmokeWithAuthoredGeometryKeepsTheDrawBudget runs the jitter against a
 // sequence whose geometry CHANGES as the burn cursor advances — the resolver's
-// job — and locks that the CRT budget is unaffected: two draws per burning
+// job — and locks that the CRT budget is unaffected: three draws per burning
 // instance on every third tick and none on any other [05 R-FEAT-01 §10 pass
-// 3a][01 §7.5].
+// 3a][05 R-FEAT-01 §16].
 func TestBurnSmokeWithAuthoredGeometryKeepsTheDrawBudget(t *testing.T) {
 	seq := authoredSequence{
 		delays: []int32{3, 0, 2},
@@ -562,7 +602,10 @@ func TestBurnSmokeWithAuthoredGeometryKeepsTheDrawBudget(t *testing.T) {
 		return f.W, f.H, f.XOff, f.YOff
 	}
 	var puffs [][3]numeric.Fixed
-	svc.BurnSmoke = func(pos [3]numeric.Fixed) { puffs = append(puffs, pos) }
+	svc.BurnSmoke = func(pos [3]numeric.Fixed) {
+		puffs = append(puffs, pos)
+		crt.Rand() // the container's last-frame draw [03 R-STRIP-01 §2]
+	}
 
 	ref := rng.CRTFromState(0xabcdef)
 	baseX := numeric.FixedFromInt(2*16 + 8)
@@ -574,15 +617,16 @@ func TestBurnSmokeWithAuthoredGeometryKeepsTheDrawBudget(t *testing.T) {
 		svc.TickLifecycle(tick)
 		want := uint64(0)
 		if tick%3 == 0 {
-			want = 2
+			want = 3
 		}
 		if got := crt.Draws() - before; got != want {
-			t.Fatalf("tick %d consumed %d CRT draws with real geometry, want %d [01 §7.5]", tick, got, want)
+			t.Fatalf("tick %d consumed %d CRT draws with real geometry, want %d [05 R-FEAT-01 §16]", tick, got, want)
 		}
 		if want == 0 {
 			continue
 		}
 		dx, dy := burnSmokeJitter(seq.at(visit), ref.Rand(), ref.Rand())
+		ref.Rand() // the producer's draw keeps the reference stream aligned
 		last := puffs[len(puffs)-1]
 		wantPos := [3]numeric.Fixed{baseX.Add(numeric.FixedFromInt(int64(dx))), baseY.Add(numeric.FixedFromInt(int64(dy))), baseZ}
 		if last != wantPos {

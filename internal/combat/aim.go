@@ -142,8 +142,8 @@ func BallisticSolve(dx, dy, dz numeric.Fixed, vel, grav numeric.Fixed, minBarrel
 
 	// [06 §6.4] discriminant construction transcribed verbatim from [GAP T5] / orchestration-research-combat-effects §2.1:
 	// disc = ( y*y*g2 + (v*v - g*y*(-2.0))*v*v ) * h2*h2 - h2*h2*g2*s
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// the negative makes the term additive: v*v + 2*g*y.
+	// The -2.0 is a literal in the discriminant expression; subtracting the
+	// negative makes the term additive: v*v + 2*g*y.
 	disc := (y*y*g2+(v2-g*y*(-2.0))*v2)*h2*h2 - h2*h2*g2*s
 
 	// [06 §6.4] discriminant is tested against exactly 0.0 with no positive epsilon guard.

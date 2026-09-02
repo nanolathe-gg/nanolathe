@@ -884,7 +884,7 @@ func TestMoveGroundArrivalPumpTransition(t *testing.T) {
 	}
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Queue modifiers replace/append/shift/auto mapping to the primary/secondary queue segment [P0-08].
 func TestQueueModifiers_SegmentMapping(t *testing.T) {
 	moveID := Lookup("Move_Ground")
 	buildID := Lookup("BuildWeapon")

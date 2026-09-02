@@ -100,11 +100,10 @@ func TestAttackNoMoveBindsThenReleasesOnTargetLoss(t *testing.T) {
 		t.Fatalf("slot 0 target = %+v, want the record's target bound as a unit [04 R-ORD-01 §1]", got)
 	}
 
-	// One of the engage/disengage bits arrives: phase 2 inhibits all three
-	// slots and re-arms. Which bits reach phase 2 matters — the pre-check eats
-	// `0x8` and `0x10000` before the phase switch ever runs, so phase 2 is
-	// "reached when any of those bits arrive" only for the `0x800`/`0x1000`
-	// pair [04 R-ORD-01 §3].
+	// The engage bit arrives: phase 2 inhibits all three slots and re-arms.
+	// Which bit reaches phase 2 matters — the pre-check eats `0x8`, `0x10000`
+	// AND `0x800` before the phase switch ever runs, so `0x1000` is the only
+	// one of the gate's four that phase 2 ever sees [04 R-ORD-01 §3].
 	n.Satisfied |= 0x1000
 	q.Pump(u, 41)
 

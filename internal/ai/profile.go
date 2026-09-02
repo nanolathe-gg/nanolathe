@@ -82,13 +82,35 @@ const controlByteComputer uint8 = 2
 // the profile text once and applies it to every slot that has a manager. The one
 // per-slot distinction is the control byte: `limit` applies only to slots whose
 // control byte is 2, so p.Limit is the control-byte-2 table and the read site
-// gates it — see LimitForControl.
+// gates it — see LimitForControl. `weight` has no such gate: it writes every
+// slot that has a manager, the human's included [08 R-AI-01 §18].
 //
 // `ai_limit` is intentionally not read: the limit pass re-reads `ai_weight`, a
 // retail defect that leaves `ai_limit` with no reader at all [08 R-AI-01 §12].
+//
+// This entry applies the per-definition passes for ONE computer player. The
+// scoring seam that calls it (selection.go) sees a player row, not the lobby,
+// so it cannot count the control-byte-2 slots; a caller that can — a session
+// composing the battle — should call ApplyUnitDefinitionsForPlayers with the
+// real count, because the pass pair runs once per computer player
+// [08 R-AI-01 §18] and the multiplication is visible with more than one.
 func (p *Profile) ApplyUnitDefinitions(catalog *content.Catalog) {
+	p.ApplyUnitDefinitionsForPlayers(catalog, 1)
+}
+
+// ApplyUnitDefinitionsForPlayers is ApplyUnitDefinitions with the number of
+// slots whose control byte is 2. The pass PAIR runs once per computer player
+// and every run writes every manager [08 R-AI-01 §18]: with k of them a
+// category-naming fragment — which locks nothing — multiplies its members'
+// weights 2·k times, while an exact-naming fragment applies once and is then
+// refused by the per-type lock it set. A count below 1 is treated as 1; these
+// tables are only ever read where a computer player exists.
+func (p *Profile) ApplyUnitDefinitionsForPlayers(catalog *content.Catalog, computerPlayers int) {
 	if p == nil || catalog == nil || p.appliedCatalog == catalog {
 		return
+	}
+	if computerPlayers < 1 {
+		computerPlayers = 1
 	}
 	p.appliedCatalog = catalog
 	state := &profileApply{
@@ -106,15 +128,19 @@ func (p *Profile) ApplyUnitDefinitions(catalog *content.Catalog) {
 		// empty tables [08 R-AI-01 §12].
 		state.weights = make(map[string]int32, len(state.keys))
 		state.limits = make(map[string]int32, len(state.keys))
-		state.run(p.directives, false, applyWeights|applyLimits)
+		state.run(p.directives, false)
 	} else {
 		// A hand-built fixture profile has no directive stream; its authored
 		// tables stand and only the per-definition passes run over them.
 		state.weights = cloneWeightTable(p.Weight)
 		state.limits = cloneWeightTable(p.Limit)
 	}
-	state.perDefinitionPass(applyWeights)
-	state.perDefinitionPass(applyLimits)
+	// The profile TEXT is parsed once and applied once; the two per-definition
+	// passes are the part that runs per computer player [08 R-AI-01 §18].
+	for i := 0; i < computerPlayers; i++ {
+		state.perDefinitionPass(passWeightLock)
+		state.perDefinitionPass(passLimitLock)
+	}
 	p.Weight = state.weights
 	p.Limit = state.limits
 }
@@ -136,13 +162,16 @@ func cloneWeightTable(src map[string]int32) map[string]int32 {
 	return out
 }
 
-// The two directive kinds a replay is allowed to execute. The profile file's
-// own stream executes both; each per-definition pass executes only its own,
-// because [08 R-AI-01 §12] names them "the weight pass" and "the limit pass"
-// and gates them on different lock vectors.
+// The two per-definition passes, named by the lock vector each consults when it
+// decides whether to SKIP a definition [08 R-AI-01 §18]. That vector is their
+// only difference: both hand the whole `ai_weight` fragment to the shared
+// dispatcher with all three keywords admitted, so a fragment's `weight` runs in
+// both and a fragment's `limit` runs in both. Nothing filters a keyword by pass.
+type perDefinitionLock int
+
 const (
-	applyWeights = 1 << iota
-	applyLimits
+	passWeightLock perDefinitionLock = iota
+	passLimitLock
 )
 
 // profileApply is the per-catalog state of the profile grammar: the two
@@ -214,25 +243,28 @@ func (a *profileApply) match(name string) ([]string, bool) {
 	return out, false
 }
 
-// run replays a directive stream under the plan gate. gate is the gate's
-// initial state: closed for a profile file, pre-set open for a per-definition
-// `ai_weight` fragment so a fragment that omits `plan` still applies
-// [08 R-AI-01 §12].
-func (a *profileApply) run(directives []content.AIDirective, gate bool, allow int) {
+// run replays a directive stream under the plan gate and returns the gate's
+// state at the end of the stream. gate is its state on entry: closed for a
+// profile file, and for a per-definition fragment whatever the PASS left it at
+// — the pass opens it once at its start and never resets it per definition
+// [08 R-AI-01 §18], so a fragment whose `plan` closes the gate closes it for
+// every later definition of that pass.
+func (a *profileApply) run(directives []content.AIDirective, gate bool) bool {
 	for _, directive := range directives {
 		switch directive.Keyword {
 		case content.AIDirectivePlan:
 			gate = planGateOpen(directive.Args, a.difficulty)
 		case content.AIDirectiveWeight:
-			if gate && allow&applyWeights != 0 {
+			if gate {
 				a.applyWeight(directive.Args)
 			}
 		case content.AIDirectiveLimit:
-			if gate && allow&applyLimits != 0 {
+			if gate {
 				a.applyLimit(directive.Args)
 			}
 		}
 	}
+	return gate
 }
 
 // applyWeight multiplies the running per-type weight of every unlocked type in
@@ -304,39 +336,45 @@ func (a *profileApply) applyLimit(args []string) {
 	}
 }
 
-// perDefinitionPass walks the definition catalog in ascending type order and,
-// for every definition carrying the authored `downloadable` flag whose
-// corresponding lock is clear — the weight lock in the first pass, the limit
-// lock in the second — replays that definition's authored `ai_weight` text as a
-// fragment of the same grammar with the plan gate pre-set open
-// [08 R-AI-01 §12]. Both passes read `ai_weight`; `ai_limit` is parsed by the
-// definition loader and read by nothing, which is the retail defect that
-// section names.
+// perDefinitionPass is one of the two passes of [08 R-AI-01 §18], exactly:
 //
-// TODO(question): does each pass execute only its own directive kind, or does
-// it run the shared handler over the whole fragment — which would apply a
-// fragment's `weight` multiply twice, once per pass? [08 R-AI-01 §12] names the
-// passes "the weight pass" and "the limit pass" and gives them different lock
-// gates, which is why only the pass's own kind is executed here. Decider: a
-// static trace of the second pass's directive dispatch, recorded in
-// [08 R-AI-01 §12]. Stock content authors seven `ai_weight` fields, all of them
-// a single `weight` directive, so the two readings differ on stock content.
-func (a *profileApply) perDefinitionPass(allow int) {
+//  1. open the plan gate once, at the start of the pass — not once per
+//     definition;
+//  2. walk the definitions in ascending type order, skipping any that lacks
+//     the authored `downloadable` flag, any whose lock in THIS pass's vector is
+//     set, and any whose `ai_weight` text is empty;
+//  3. hand the whole fragment to the same line-splitting dispatcher a line of
+//     the profile file goes through, with all three keywords admitted.
+//
+// The gate is not reset between definitions: a fragment whose `plan` closes it
+// — a difficulty that does not match, or an argument-less `plan` — leaves it
+// closed for every later definition of the same pass, which makes catalog order
+// load-bearing.
+//
+// The pass gate decides whether a fragment RUNS; the handlers decide whether it
+// has an EFFECT. So a definition whose fragment locked its own weight in the
+// first pass is parsed again in the second and its `weight` is refused there by
+// applyWeight's lock.
+//
+// Both passes read `ai_weight`; `ai_limit` is parsed by the definition loader
+// and read by nothing, which is the retail defect [08 R-AI-01 §12] names.
+func (a *profileApply) perDefinitionPass(lock perDefinitionLock) {
+	gate := true // opened once, at the start of the pass [08 R-AI-01 §18]
 	for _, ck := range a.keys {
 		def := a.catalog.Units[ck]
 		if def == nil || !def.Downloadable {
 			continue
 		}
-		if allow&applyWeights != 0 && a.weightLock[ck] {
+		if lock == passWeightLock && a.weightLock[ck] {
 			continue
 		}
-		if allow&applyLimits != 0 && a.limitLock[ck] {
+		if lock == passLimitLock && a.limitLock[ck] {
 			continue
 		}
 		if strings.TrimSpace(def.AIWeight) == "" {
 			continue
 		}
-		a.run(content.ParseAIDirectives([]byte(def.AIWeight)), true, allow)
+		gate = a.run(content.ParseAIDirectives([]byte(def.AIWeight)), gate)
 	}
 }
 

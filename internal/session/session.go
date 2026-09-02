@@ -1109,6 +1109,22 @@ func (s *Session) RegisterAll() {
 				// into its own blast and destroyed by it whenever the explode
 				// weapon's default damage reached the corpse definition's capacity
 				// [05 R-FEAT-01 §8], so an exploding unit left no wreck at all.
+				//
+				// And the order is the WHOLE of it [06 R-DMG-01 §10]: the two
+				// calls are adjacent in the handler with no teardown, queue
+				// drain or feature-phase work between them; the blast resolves
+				// fully first — a null direct unit forces the area path, whose
+				// feature phase damages and kills features inline — and only
+				// then is the wreck stamped. The area path carries NO exclusion
+				// keyed on the dying unit, its footprint or the corpse cell (the
+				// shooter exclusion is for units, and the shooter is null here),
+				// so a tree or an older wreck standing where this one lands
+				// takes the weapon's full default damage and can die for it. Do
+				// not add a corpse-cell exemption: it would spare bystanding
+				// features that retail destroys. The wreck survives its own
+				// unit's blast by order alone, which is what this sequence is.
+				// The TODO(question) that asked whether anything else spared it
+				// is answered: nothing does.
 				// Corpse depth comes from the Killed-variant low nibble [04 §5.1][06 §12.1] C23, replacing the constant switch.
 				if res.DoCorpse && u.Def.Corpse != "" {
 					depth := res.Variant & 0x0F // low nibble [06 §12.1] C23

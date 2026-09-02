@@ -37,6 +37,9 @@ const (
 	pendTargetRemoved uint32 = 0x8
 	pendTargetCloaked uint32 = 0x10000
 	pendTargetGone    uint32 = pendTargetRemoved | pendTargetCloaked
+	// The attack family's disengage bit, the one `Attack_Chase` and `Suppress`
+	// complete on in their first pre-check [04 R-ORD-01 §3].
+	pendDisengage uint32 = 0x800
 )
 
 // slotAll is the weapon-slot helpers' `k = 3` sentinel: "take `k = 3` to mean
@@ -380,43 +383,35 @@ func leashBroken(u *units.Unit, n *Node) bool {
 
 // attackNoMoveHandler is the stationary attack.
 //
-//	Pre-check: target null, or satisfied ∩ 0x10008 (target lost, or target
-//	cloaked — §6) → complete. Phase 0: caption clear; advance. Phase 1: release
-//	slot 0, bind slot 0 to the target, gate = 0x11808; advance. Phase 2 (reached
-//	when any of those bits arrive): inhibit all slots; re-arm (9). Other:
-//	cancel-all.
+//	Pre-check: target null, or satisfied ∩ 0x10808 (target lost, target
+//	cloaked — §6 — or the attack family's 0x800) → complete. Phase 0: caption
+//	clear; advance. Phase 1: release slot 0, bind slot 0 to the target, gate =
+//	0x11808; advance. Phase 2 (reached only when 0x1000 arrives — the other
+//	three gate bits complete in the pre-check first): inhibit all slots; re-arm
+//	(9). Other: cancel-all.
 //
 // The unit never moves; the weapon layer fires from the bound slot. The gate
 // `0x11808` is the cloak bit `0x10000`, the engage/disengage pair `0x1000` and
 // `0x800`, and the target-removed bit `0x8` [04 R-ORD-01 §0]; the record sits
 // on it until one of them arrives, which is the row's wait and not a stall.
+//
+// The pre-check mask is `0x10808`, not the `0x10008` this used to test
+// (corrected 2026-09-02, [04 R-ORD-01 §3]): `0x800` completes the order here
+// exactly as it does in `Attack_Chase`'s first pre-check, so of the four bits
+// the gate waits on, only `0x1000` ever reaches phase 2.
 func attackNoMoveHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code {
-	if n.Target == 0 || satisfied&pendTargetGone != 0 {
+	if n.Target == 0 || satisfied&(pendTargetGone|pendDisengage) != 0 {
 		return Code(5) // *complete* [04 R-ORD-01 §3]
 	}
 	switch n.Phase {
 	case 0:
-		// TODO(question): does phase 0 return all three slots to autonomy
-		// before phase 1 takes slot 0? [04 R-UNIT-06 §5]'s "who takes and who
-		// returns" paragraph says it does — "`Attack_NoMove` phase 0 returns
-		// all three, takes slot 0, then binds the target" — while the handler's
-		// own per-phase row [04 R-ORD-01 §3] enumerates phase 0 as caption
-		// clear and advance, nothing else, and carries the only inhibit-all in
-		// phase 2. The two cannot both be right, and phase 2's inhibit-all may
-		// be the very call §5 describes under the wrong phase number: §5 gives
-		// no phase at all for `Attack_Chase`'s own take, so its phase numbering
-		// is the looser of the two accounts.
-		//
-		// Left unimplemented deliberately. Adding an inhibit-all here against
-		// §3's row would be inventing a slot verb, and it would not be inert:
-		// inhibiting returns a slot an earlier order had taken, resets that
-		// slot's target and posts `TargetCleared` [04 R-ORD-01 §7], so it can
-		// change what a re-tasked attacker shoots.
-		//
-		// Decider: whether the handler holds one inhibit-all-slots call or two,
-		// and which phase arm each sits in. One call means §3 has the phase
-		// right and §5 is paraphrasing; two means §3's row is missing a step.
-		// Owner: [04 R-ORD-01 §3], as WU-19-43 flagged.
+		// Phase 0 is the caption clear alone. The handler holds exactly ONE
+		// inhibit-all-slots call and it is phase 2's, so nothing returns the
+		// three slots to autonomy here [04 R-ORD-01 §3] — traced, and
+		// [04 R-UNIT-06 §5]'s "phase 0 returns all three" is corrected there.
+		// Adding one would not be inert: inhibiting returns a slot an earlier
+		// order had taken, resets that slot's target and posts `TargetCleared`
+		// [04 R-ORD-01 §7].
 		captionClear(u)
 		return Code(1) // *advance* [04 R-ORD-01 §3]
 	case 1:

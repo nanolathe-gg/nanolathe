@@ -159,7 +159,7 @@ func TestMinimapBuildRadarPictureLetterboxAndGuard(t *testing.T) {
 	// Due to supersampling with the established out-of-range tile-index guard,
 	// first pixel should be 0x11 [03 §3.7].
 	if pic.Bits[0] != 0x11 {
-		t.Fatalf("guard idx>=TileCount→0 failed, got %02x want 0x11 [03 §3.7] [analysis omitted]:3C", pic.Bits[0])
+		t.Fatalf("guard idx>=TileCount→0 failed, got %02x want 0x11 [03 §3.7]", pic.Bits[0])
 	}
 	// Authored TNT dimensions are independent of the lens dimensions; the ALP
 	// path accepts arbitrary source sizes, including the observed tall variant
@@ -379,7 +379,7 @@ func TestMinimapRebuildFinalLayerOrderAndBlink(t *testing.T) {
 	}
 	// Ensure wipe: mapped bits 1 should be present where no blip/circle
 	if v, _ := final3.At(0, 0); v != 1 {
-		t.Fatalf("wipe from MAPPED via copy [03 §3.9] [analysis omitted]: at 0,0 got %d want 1", v)
+		t.Fatalf("wipe from MAPPED via copy [03 §3.9] at 0,0 got %d want 1", v)
 	}
 }
 

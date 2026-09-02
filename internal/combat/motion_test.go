@@ -464,7 +464,7 @@ func TestOrdinaryExpiryComputation(t *testing.T) {
 	// Use large now.
 	w5 := &content.WeaponDef{Range: 100, WeaponVelocity: 65536, WeaponTimer: 0}
 	expiry = OrdinaryExpiry(0xFFFFFFF0, w5)
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// 0xFFFFFFF0+100 wraps to 0x00000054 (4294967280+100=4294967380 mod 2^32 =84)
 	if expiry != 84 {
 		t.Fatalf("wrap expiry got %d want 84", expiry)
 	}

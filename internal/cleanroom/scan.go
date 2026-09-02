@@ -44,6 +44,8 @@ var saveImageCodecs = map[string]bool{
 	"internal/cob/retail_restore.go":        true,
 	"internal/cob/retail_restore_test.go":   true,
 	"internal/cob/retail_save.go":           true,
+	"internal/save/bank_test.go":            true,
+	"internal/save/retail_corpus_test.go":   true,
 	"internal/save/writer_test.go":          true,
 	"internal/units/retail_restore.go":      true,
 	"internal/units/retail_restore_test.go": true,

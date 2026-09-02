@@ -144,8 +144,9 @@ func (t *Terrain) FeatureDefAt(feature uint16) (*content.FeatureDef, bool) {
 // already seeded from the legacy attribute record's byte 6 during plot
 // expansion, which is the only varying per-cell source — the earlier
 // "per-cell varying metal file" question is closed [02 "Terrain file"].
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Extractor yield Σ(byte+1)*extractsMetal sampled once into the unit's stored
+// extraction rate, never resampled [P1-10][P1-15]; feature metal is reclaim
+// reward only [P1-15].
 //
 // The value is per-schema in the OTA, and schema selection is a battle-setup
 // decision [08], so it cannot happen inside Load. Battle setup must call this
@@ -255,7 +256,8 @@ func interpStep(a, b int32, f int32) int32 {
 
 // CoarseHeightAt returns the coarse height at cell (cx,cz) as (Min+Max)/2 [03 §2.3] C8.
 // This is a separate query from HeightAt and must not be substituted for it.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Min/Max are the derived floor bytes: hmax at plot cell offset 5 and hmin at
+// offset 6 [03 §2.3] [GAP T14].
 // Out-of-bounds cells return 0.
 func (t *Terrain) CoarseHeightAt(cx, cz int32) numeric.Fixed {
 	if t == nil || t.Plot == nil || t.CellW <= 0 || t.CellH <= 0 {

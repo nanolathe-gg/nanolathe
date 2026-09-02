@@ -87,9 +87,9 @@ func FeatureCacheSuppressed(cache *[2]int32, cellX, cellZ int32) bool {
 // asc which equals player 0..9 then pool 0x118 asc [P0-12][P1-07 §2.1] (I1).
 
 // LiquidForcedRetire reports whether the opaque liquid mode forces dead|2
-// regardless of noexplode [P1-07 §2.4] [06 §8.1][06 §13.2]. The mode is
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// unit — it retires and overrides the noexplode gate [P1-07 §4][06 §13.2].
+// regardless of noexplode [P1-07 §2.4] [06 §8.1][06 §13.2]. The mode is a
+// nonzero opaque-liquid flag combined with a water-classified cell and no
+// direct unit — it retires and overrides the noexplode gate [P1-07 §4][06 §13.2].
 func LiquidForcedRetire(opaqueMode bool, isWaterCell bool, hasDirectUnit bool) bool {
 	return opaqueMode && isWaterCell && !hasDirectUnit // [P1-07 §2.4]
 }

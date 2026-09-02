@@ -188,7 +188,7 @@ func MeteorRadiusAndAngle(crt *rng.CRT, radius int32) (effRadius int32, angle ui
 
 // MeteorLateralOffset computes the sine-table entry spread per [06 §6.5] [04 §5.1].
 // Helpers hold round(8192*sin) per 512-word turn; the helper returns
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// round(magnitude*sin) via (table*mag+4096)>>13.
 // Offsets are bounded by the radius value.
 func MeteorLateralOffset(crt *rng.CRT, radius int32) (offX, offZ numeric.Fixed) {
 	effRadius, angle := MeteorRadiusAndAngle(crt, radius)

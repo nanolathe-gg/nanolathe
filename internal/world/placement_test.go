@@ -246,8 +246,8 @@ func TestIndestructibleBlocksBitSix(t *testing.T) {
 }
 
 // TestOccupancyRespectsSelf locks bits 1-2: "reject any nonzero occupant other
-// than the passed self identity" [04 §6.2]. Occupants live in the layer-A/B
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// than the passed self identity" [04 §6.2]. Occupants live in the plot
+// record's layer-A/B occupancy shorts.
 func TestOccupancyRespectsSelf(t *testing.T) {
 	yard := []YardCell{0x06, 0x06, 0x06, 0x06} // bits 1-2 only
 	ter := placementFixture(t, nil)

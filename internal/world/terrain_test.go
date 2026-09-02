@@ -36,8 +36,9 @@ func flat(cellW, cellH int32, height uint8) []formats.TNTAttribute {
 }
 
 // TestFloorPairIsDerived is the core of R6: CoarseHeightAt averages the derived
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// both bytes zero, so the query returned 0 for every cell of every map.
+// floor pair (hmax at plot cell offset 5, hmin at offset 6) [02 "Terrain file"],
+// [03 §2.3]. Load used to leave both bytes zero, so the query returned 0 for
+// every cell of every map.
 func TestFloorPairIsDerived(t *testing.T) {
 	attrs := flat(4, 4, 10)
 	attrs[1*4+1].Height = 30 // one peak, at cell (1,1)

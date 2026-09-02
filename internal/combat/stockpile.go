@@ -61,7 +61,13 @@ type StockpileEntry struct {
 const StockpileNodeSize = 0x56 // [P1-09 §2.1]
 
 // StockpileSlotByteCap is the >199 block threshold [P1-09 §2.2] [06 §11.1].
-// Slot byte 0..255 wraps 255→0 on inc [P1-09 §2.3]; >199 blocks with 300 wait.
+//
+// The byte can neither underflow nor pass 200 through the engine's own paths
+// [06 R-WPN-05 §2]: phase 0 refuses to start a round above 199, so the +1 of
+// phase 2 tops out at 200, and the launch decrement sits behind a nonzero test.
+// A value of 200..255 can arrive only from a save, and it then blocks every new
+// round forever — the phase-0 hold, re-armed every 300 ticks — without ever
+// wrapping. There is no wrap to model.
 const StockpileSlotByteCap = 199 // [P1-09 §2.2]
 
 // BuildTime returns the compiled reload-time used as stockpile build time [06 §11.1].
@@ -115,8 +121,14 @@ var QueueProducers = []string{
 // (not refunded) — cancellation just unlinks the node [P1-09 §5].
 func StockpileCostDelta(oldProg, newProg int32, cost float64, buildTime int32) float32 {
 	if buildTime <= 0 {
-		// TODO(question): [06 §11.1] build time <=0 (zero authored reload) with cost>0: divide behavior untraced; return full cost as placeholder until probe.
-		return float32(cost)
+		// A build time of zero is the unarmed slot's weapon record 0, the
+		// `[noweapon]` sentinel every empty slot points at [06 R-DMG-01 §5].
+		// Phase 1 forms `next = min(progress + 5, 0) = 0`, so BOTH quotients
+		// are `0·cost/0` — an invalid operation whose truncation is the same
+		// indefinite integer on either side — and the delta is exactly 0
+		// [06 R-WPN-05 §2]. Returning the full cost, as this used to, charged
+		// for a round retail completes free.
+		return 0
 	}
 	oldTrunc := int32(float64(oldProg) * cost / float64(buildTime)) // trunc toward zero [01 §8]
 	newTrunc := int32(float64(newProg) * cost / float64(buildTime))
@@ -158,57 +170,17 @@ func TickStockpile(entry *StockpileEntry, slot *Slot, tick uint32, admit func(en
 	}
 	w := entry.Weapon
 	buildTime := StockpileBuildTime(w) // [06 §11.1]
-	if buildTime <= 0 {
-		// TODO(question): [06 §11.1] zero buildTime malformed: spec notes assets whose build time <=5 can multi-complete; zero would divide by zero in cost delta.
-		// Placeholder: treat one step as one completion without progress, if admission succeeds.
-		if !CanStartStockpileRound(slot.Ammo) {
-			return tick + StockpileRetryBlocked, false, 0 // [06 §11.1] blocked >199
-		}
-		eCost := float32(w.EnergyPerShot)
-		mCost := float32(w.MetalPerShot)
-		// No proportional split; admit whole costs.
-		accepted := true
-		if admit != nil {
-			accepted = admit(eCost, mCost)
-		}
-		if !accepted {
-			return tick + StockpileRetryRejected, false, 0 // [06 §11.1] rejected 10
-		}
-		// Completion
-		slot.Ammo++       // [06 §11.1] byte-sized completed rounds increment, wraps 255→0 as u8 mod 256 [P1-09 §2.3]
-		slot.Ammo &= 0xFF // wrap [P1-09 §2.3]
-		entry.Count--     // signed queue count decrement [06 §11.1]
-		entry.Progress = 0
-		refreshed = true // selected-unit interface refresh [06 §11.1]
-		completedRounds = 1
-		if entry.Count > 0 && buildTime <= 5 {
-			// Continue loop for multi-completion in one visit while admission open [06 §11.1]
-			// For zero buildTime, multi-completion mirrors <=5 case: keep consuming while queued.
-			// Avoid infinite loop when admit always true: limit iterations to remaining count.
-			for entry.Count > 0 && CanStartStockpileRound(slot.Ammo) {
-				if admit != nil && !admit(eCost, mCost) {
-					return tick + StockpileRetryRejected, true, completedRounds
-				}
-				slot.Ammo++
-				slot.Ammo &= 0xFF
-				entry.Count--
-				completedRounds++
-				// For zero buildTime, each iteration is one round; still need to break after one? Spec says <=5 can multi-complete, zero qualifies.
-				// Continue while queued and admit open.
-				if entry.Count == 0 {
-					break
-				}
-			}
-		}
-		if entry.Count > 0 {
-			if !CanStartStockpileRound(slot.Ammo) {
-				return tick + StockpileRetryBlocked, true, completedRounds
-			}
-			return tick + StockpileRetryAccepted, true, completedRounds
-		}
-		return 0, true, completedRounds
-	}
-	// Normal path with buildTime >0
+	// A build time of zero is NOT a special case. The handler tests neither
+	// that the slot's weapon carries `stockpile` nor that it is a real weapon,
+	// and an unarmed slot points at weapon record 0 — reload 0, both per-shot
+	// costs 0 [06 R-WPN-05 §2][06 R-DMG-01 §5]. The ordinary path below carries
+	// it: `next = min(progress + 5, 0)` is 0, both deltas are 0
+	// (StockpileCostDelta), the admission accepts a zero request unless the
+	// unit's buckets already carry debt, `0 < 0` is false so the round
+	// completes, and the pump's re-dispatch of the head — the multi-completion
+	// loop here — empties the whole queue in this one visit, free, until the
+	// count reaches 0 or the byte passes 199. The special branch that used to
+	// stand here charged the weapon's whole per-shot cost per round instead.
 	completedRounds = 0
 	refreshed = false
 	// If slot blocked at entry, wait 300 [06 §11.1] [P1-09 §2.2]
@@ -260,8 +232,10 @@ func TickStockpile(entry *StockpileEntry, slot *Slot, tick uint32, admit func(en
 			return tick + StockpileRetryAccepted, false, 0 // [06 §11.1]
 		}
 		// Completion: increment slot byte with wrap 255→0 [P1-09 §2.3], decrement signed queue count, request refresh [06 §11.1]
-		slot.Ammo++ // byte-sized remainder increment [06 §11.1] wraps [P1-09 §2.3]
-		slot.Ammo &= 0xFF
+		// Phase 2's increment: no cap and no wrap test [06 R-WPN-05 §2]. The
+		// >199 gate at the top of this loop is what bounds it, so the byte
+		// tops out at 200 and the old mask was dead.
+		slot.Ammo++
 		entry.Count--      // signed queue count decrement [06 §11.1]
 		entry.Progress = 0 // new round progress resets
 		completedRounds++
@@ -323,11 +297,11 @@ func TryStockpileLaunch(svc *Service, slot *Slot, slotIdx int, tgt Target, tick 
 	if !ok {
 		return 0, false // no ammo, reload, firing-state, or resource mutation on pool-full [06 §11.1] C29
 	}
-	// Success: decrement slot byte [06 §11.1] and request interface refresh (diagnostic flag)
-	slot.Ammo-- // [06 §11.1]
-	if slot.Ammo < 0 {
-		slot.Ammo = 0 // TODO(question): byte underflow for malformed preexisting values [06 §11.1] unknown
-	}
+	// Success: decrement slot byte [06 §11.1] and request interface refresh
+	// (diagnostic flag). The decrement happens AFTER the nonzero test above, so
+	// it cannot underflow and needs no clamp [06 R-WPN-05 §2] — the clamp that
+	// used to stand here was guarding against a state the fire gate excludes.
+	slot.Ammo--
 	idx := int(h) - 1
 	p := &svc.Records[idx]
 	p.WeaponID = slot.Weapon.ID
