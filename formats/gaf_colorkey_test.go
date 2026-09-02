@@ -2,11 +2,12 @@ package formats
 
 import "testing"
 
-// TestRawFrameColorKey locks the raw-path transparency rule: retail's blitter
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// 9 is that key in every retail frame, so the mask families (anims/fog.gaf,
-// fogtiles.gaf, vismasks.gaf) decode to shape, not to solid rectangles.
+// TestRawFrameColorKey locks the raw-path transparency rule: the raw-frame
+// blitter skips source pixels equal to the frame's ColorKey (header byte +8),
+// while the generic frame draw passes the frame through unmodified [fmt gaf].
+// Index 9 is that key in every retail frame, so the mask families
+// (anims/fog.gaf, fogtiles.gaf, vismasks.gaf) decode to shape, not to solid
+// rectangles.
 // RLE frames carry their own skip runs and must ignore the key.
 func TestRawFrameColorKey(t *testing.T) {
 	// One entry, one 2x2 raw frame: 0, 9, 9, 0 with key 9.

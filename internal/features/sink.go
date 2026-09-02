@@ -20,7 +20,8 @@ func (s *Service) sinkTick() {
 		// Per-tick descent integrates position by velocity triple [05 ...].
 		inst.Y = inst.Y.Add(inst.Vy)
 		// Floor derived from plot min/max pair average [05 "Feature sinking and water interaction"].
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// The derived floor pair (PlotCell MinHeight/MaxHeight) averages to
+		// the sampled floor height [02 "Terrain file"].
 		// We use CoarseHeightAt which returns (Min+Max)/2 *65536 [03 §2.3].
 		floor := s.Terrain.CoarseHeightAt(int32(inst.CX), int32(inst.CZ))
 		sea := s.Terrain.SeaLevelWorld()

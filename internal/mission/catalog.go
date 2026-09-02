@@ -186,7 +186,8 @@ func discoverMissions(doc *formats.Document) []Stub {
 		}
 		// missionname via language-prefixed string accessor, defaulting to
 		// built-in fallback is retail's verbatim error string
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// ("Error -- Unnamed Mission") when a block has neither key
+		// [08 R-CAMP-01 §1].
 		rawName, _ := sec.LanguageString("", "missionname", "Error -- Unnamed Mission")
 		rawName = strings.TrimSpace(rawName)
 		if rawName == "" {

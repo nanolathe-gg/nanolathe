@@ -40,10 +40,10 @@ func TestClassVectorUsesRuntimeDefinitionFields(t *testing.T) {
 	def := o6Def("builder")
 	def.BuildCostMetal = 0
 	def.BuildCostEnergy = 0
-	def.CanAttack = true // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	def.Builder = true   // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	def.CanFly = true    // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	def.MakesMetal = 1   // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	def.CanAttack = true // class-vector input [08 R-P0-05 §5]
+	def.Builder = true   // class-vector input [08 R-P0-05 §5]
+	def.CanFly = true    // class-vector input [08 R-P0-05 §5]
+	def.MakesMetal = 1   // class-vector input [08 R-P0-05 §5]
 	def.RadarDistance = 1
 	def.SonarDistance = 1
 	def.MaxSlope = 0
@@ -129,7 +129,7 @@ func TestClassVectorOldProxiesCannotAffectChoice(t *testing.T) {
 	s.InitClassVectors()
 	s.recomputeClassVectors()
 	if s.InitVectors["a"] != s.InitVectors["b"] {
-		t.Fatalf("opaque [layout omitted] proxy leaked into init vectors: a=%d b=%d", s.InitVectors["a"], s.InitVectors["b"])
+		t.Fatalf("the unnamed category flag [08 R-P0-05 §5] leaked into init vectors: a=%d b=%d", s.InitVectors["a"], s.InitVectors["b"])
 	}
 	if s.ClassVectors["a"] != s.ClassVectors["b"] || s.SingleVectors["a"] != s.SingleVectors["b"] {
 		t.Fatalf("old proxy fields changed class choice: a=%+v/%d b=%+v/%d", s.ClassVectors["a"], s.SingleVectors["a"], s.ClassVectors["b"], s.SingleVectors["b"])

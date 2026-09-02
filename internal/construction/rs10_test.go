@@ -449,7 +449,9 @@ func TestRS10_CancelRefundAndLinks(t *testing.T) {
 	prod3.Def = prodDef
 	svc3 := NewService(nil, cat, w3, &economy.Service{})
 	svc3.SetBuilderLink(prod3.Handle, factory3.Handle)
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Simulate death via world destroy (links leak: the death finalizer's
+	// bounded census shows no queue walk [05 "Factory product heading",
+	// "Established fact — link lifetime and completion order"])
 	w3.Destroy(prod3.Handle, 0)
 	if _, ok := svc3.BuilderLink(hp3); !ok {
 		t.Fatalf("builder link should leak on death/capture (no walk)")

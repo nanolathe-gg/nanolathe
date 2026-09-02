@@ -132,12 +132,21 @@ func TestAIVehiclePocketProbe(t *testing.T) {
 }
 
 // TestAIVehicleRetailSlopeProbe re-measures the four numbers [04 R-SLOPE-01 §4]
-// took off the reference install for TANKSH2 on `ashap plateau`, so the
-// per-cell classifier of WU-19-46 can be checked against them: the passable
-// anchor total (retail 53901), the flood from the computer player's start cell
-// (53, 231) (retail 53370), whether that flood reaches the human start at
-// (219, 19) (retail yes), and the tiers of the three rim anchors the finding
-// lists (all three passable, per-cell slopes 9/8/9/9, 12/12/6/4, 13/6/10/5).
+// records for TANKSH2 on `ashap plateau`, so the per-cell classifier of
+// WU-19-46 can be checked against them: the passable anchor total, the flood
+// from the computer player's start cell (53, 231), whether that flood reaches
+// the human start at (219, 19) (yes), and the tiers of the three rim anchors
+// the finding lists (all three passable, per-cell slopes 9/8/9/9, 12/12/6/4,
+// 13/6/10/5).
+//
+// The two counts are labelled below for what they are. §4's 53901 and 53370
+// are this loader's own count over retail's map data, taken while the loader
+// still carried the pre-correction south strip of the void sweep; with that
+// sweep implemented as [03 R-TERR-01 §2] states it (WU-19-48) the same census
+// reads 53808 and 53279, the south void band having moved up one row. Which
+// the retail executable's own layer would hold is the Unknown filed under
+// [04 R-SLOPE-01 §3] item 2's correction — neither figure has been read out of
+// retail.
 //
 // It asserts nothing: it prints, so a divergence is read rather than pinned.
 func TestAIVehicleRetailSlopeProbe(t *testing.T) {
@@ -167,9 +176,9 @@ func TestAIVehicleRetailSlopeProbe(t *testing.T) {
 		}
 	}
 	reach, found := floodFrom(tanksh2, sess, startX, startZ, humanX, humanZ)
-	fmt.Fprintf(out, "cells=%dx%d passableAnchors=%d (retail 53901)\n", w.CellW, w.CellH, total)
+	fmt.Fprintf(out, "cells=%dx%d passableAnchors=%d (53808 corrected strips, 53901 as [04 R-SLOPE-01 §4] records it)\n", w.CellW, w.CellH, total)
 	fmt.Fprintf(out, "computerStart=(%d,%d) humanStart=(%d,%d)\n", startX, startZ, humanX, humanZ)
-	fmt.Fprintf(out, "floodFromComputerStart=%d (retail 53370) reachesHumanStart=%v (retail true)\n", reach, found)
+	fmt.Fprintf(out, "floodFromComputerStart=%d (53279 corrected strips, 53370 as recorded) reachesHumanStart=%v (want true)\n", reach, found)
 	for _, a := range [3][2]int32{{48, 213}, {34, 208}, {20, 221}} {
 		fx, fz := int32(tanksh2.FootPrintX), int32(tanksh2.FootPrintZ)
 		slopes := make([]int32, 0, fx*fz)

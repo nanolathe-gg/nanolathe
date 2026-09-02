@@ -625,6 +625,23 @@ func ApplyNormalDamage(v *VictimState, kind DamageKind, amount int32, dirByte ui
 		if v.MovementCat == 1 || v.MovementCat == 2 {
 			// Lethal against movement-category-1/2 victim sets death latch and
 			// returns with NO callbacks [04 §5.1] C26.
+			//
+			// This latch is NOT the unit death path, and must not be taken for
+			// it. `units.World.DestroyBy` / `units.MarkDeath` write the three
+			// death fields — the latch, the cause, and the recorded-attacker
+			// link of [04 R-UNIT-06 §5] — and none of them is reachable here:
+			// `VictimState` is this package's own arithmetic-only victim shape
+			// with no handle and no world behind it, and `internal/units`
+			// imports `internal/cob` (units/cob_binding.go), so the reverse
+			// edge that would let this call the death entry does not exist and
+			// cannot be added.
+			//
+			// There is also nothing to pass. [04 §5.1] C26 states this arm as
+			// "sets the death latch and returns with NO callbacks" and gives
+			// neither an attacker nor a death cause, and `ApplyNormalDamage`
+			// takes no shooter argument — so there is not even a null to
+			// thread. The production funnel that owns both is `internal/combat`,
+			// whose kill site passes the packet's shooter to `DestroyBy`.
 			v.Dying = true
 			v.Health = newHealthModular // preserve modular health [06 §9.1]
 			res.HealthAfter = v.Health

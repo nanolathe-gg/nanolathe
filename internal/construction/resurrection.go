@@ -11,28 +11,41 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// delay = trunc(buildTime*0.3 / floor(workTime/30)) — sole 0.3 use in binary, '_' truncation, 1 RNG jitter.
-const resurrectionCoeff = 0.3 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Resurrection delay uses the sole 0.3 constant in the executable: a stored
+// double belonging to this state alone, not a general construction-speed,
+// repair, reclaim, or capture multiplier
+// [05 "Resurrection", "Established fact — delay"][05 R-WORK-01 §7].
+// delay = trunc(buildTime*0.3 / floor(workTime/30)) — plus underscore
+// truncation of the corpse name and one placement-jitter RNG draw.
+const resurrectionCoeff = 0.3 // [05 R-WORK-01 §7 "Established — the delay"]
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// ResurrectionDelay computes delay ticks [05 R-WORK-01 §7 "Established — the
+// delay"] (resurrection's wait phase).
 //
 //	delay = trunc(buildTime*0.3 / floor(workTime/30))
 //
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// If floor(workTime/30)==0, FDIV by zero → inf → __ftol overflow 0x80000000 [P0-15]; we return large sentinel.
+// trunc toward zero [I3].
+//
+// TODO(question): retail's sub-thirty workertime edge computes delay=0 (the
+// floating divide by zero produces +Inf, whose out-of-range integer
+// conversion yields a zero low word — the only word the caller consumes)
+// [05 R-WORK-01 §7 "Established — the sub-thirty workertime edge"]. This
+// implementation instead returns the int32 minimum as a sentinel; needs
+// reconciling with that established fact.
 func ResurrectionDelay(buildTime int32, workerTime int32) int32 {
 	worker := workerTime / 30 // floor, trunc toward zero for positive [I3]
 	if worker == 0 {
-		// FDIV by zero → inf → __ftol overflow 0x80000000 wedge [P0-15]
-		return -2147483648 // 0x80000000
+		// Sentinel pending reconciliation with the established zero-delay
+		// edge case — see the TODO(question) above.
+		return -2147483648 // int32 minimum
 	}
 	f := float64(buildTime) * resurrectionCoeff / float64(worker)
-	return int32(math.Trunc(f)) // __ftol trunc toward zero [01 §8] I3
+	return int32(math.Trunc(f)) // trunc toward zero [01 §8] I3
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// FeatureNameToDefName implements the corpse-name-to-unit-name truncation:
+// copy the feature name, truncate it at the first underscore, then look the
+// result up in the unit catalog [05 R-WORK-01 §7 phase 3].
 func FeatureNameToDefName(featureName string) string {
 	if idx := strings.IndexByte(featureName, '_'); idx >= 0 {
 		return featureName[:idx]
@@ -53,10 +66,12 @@ func ResurrectionJitter(sim *rng.Simulation, spreadByte uint8) int {
 	return int(sim.Uint32n(uint32(spreadByte))) // 0..spread-1
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Per-def limit -1 sentinel unlimited; pool fail returns same 300-tick retry with "Unable...".
+// Resurrect performs resurrection allocation [05 R-WORK-01 §7 phase 5
+// "create"]. Steps: allocate the new unit at the feature's position, remove
+// the feature BEFORE the new unit is marked alive, set its remaining
+// fraction to 0 and health to 1, no ledger cost, delay via ResurrectionDelay.
+// Per-def limit -1 sentinel unlimited; pool fail returns the same 300-tick
+// retry with "Unable to create any more units".
 func (s *Service) Resurrect(builder *units.Unit, featureCell *world.PlotCell, def *content.UnitDef, posX, posY, posZ numeric.Fixed, sim *rng.Simulation) (*units.Unit, error) {
 	if s == nil || s.World == nil || builder == nil || def == nil {
 		return nil, nil
@@ -64,7 +79,8 @@ func (s *Service) Resurrect(builder *units.Unit, featureCell *world.PlotCell, de
 	if !CheckPerDefLimit(s.World, builder.Owner, def) {
 		return nil, ErrLimit
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Capture the jitter spread from the feature catalog BEFORE the feature
+	// removal below clears the plot cell [05 R-WORK-01 §7 phase 1].
 	var spread uint8
 	if featureCell != nil && s.Terrain != nil && s.Terrain.FeatureDefs != nil {
 		idx := featureCell.Feature()
@@ -171,7 +187,7 @@ func (s *Service) Resurrect(builder *units.Unit, featureCell *world.PlotCell, de
 	if prod == nil {
 		return nil, ErrLimit
 	}
-	prod.Remaining = 0 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	prod.Health = 1    // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	prod.Remaining = 0 // finished [05 R-WORK-01 §7 "Established — the transplant"]
+	prod.Health = 1    // one hit point, not max [05 R-WORK-01 §7 "Established — the transplant"]
 	return prod, nil
 }

@@ -42,9 +42,13 @@ func ReverseStep(old float32, worker int32, buildTime int32, maxDamage int32, me
 	return nv, refund, healthDelta
 }
 
-// ReverseRefund applies metal-only refund to builder's bucket via direct path [P0-15].
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Discount ties to victim owner state2, not builder, with same inverted pairing as cancel-current but victim-owned [P0-15].
+// ReverseRefund applies metal-only refund to builder's bucket via direct path
+// [05 "Resurrection", "Established fact — reverse and deconstruction"].
+// No energy refund — the reverse arm credits only metal, directly, with no
+// admission and no energy credit.
+// Discount ties to the TARGET's owner state2, not the builder's, with the
+// same inverted 0.5/0.7 pairing as cancel-current but victim-owned
+// [05 "Resurrection", "Established fact — reverse and deconstruction"].
 func ReverseRefund(builderBucket *float32, refund float32, isSpecial bool, modeSelector int) {
 	if builderBucket == nil || refund <= 0 {
 		return

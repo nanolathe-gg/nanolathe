@@ -122,9 +122,15 @@ func aiE2ESkirmishAt(t *testing.T, mapName string, seed uint32, difficulty int) 
 // all under the authored 15, against 3×3 aggregates of 17, 16 and 18.
 //
 // With the per-cell rule the flood from the computer start cell (53, 231)
-// reaches 53370 of the map's 53901 TANKSH2-passable anchors and includes the
-// human start at (219, 19) — retail's own numbers, to the cell
-// [04 R-SLOPE-01 §4]. Both difficulties then finish inside the bound.
+// reaches 53279 of the map's 53808 TANKSH2-passable anchors and includes the
+// human start at (219, 19). [04 R-SLOPE-01 §4] records 53370 of 53901 for the
+// same census; both pairs are this loader's own count over retail's map data,
+// and the recorded pair was taken while the loader still carried the
+// pre-correction south strip — WU-19-48 implemented the sweep as
+// [03 R-TERR-01 §2] states it, which moves the south void band up one row and
+// costs 93 anchors. Which of the two the retail executable's own layer would
+// hold is the Unknown filed under [04 R-SLOPE-01 §3] item 2's correction.
+// Both difficulties finish inside the bound either way.
 // TestAIVehicleRetailSlopeProbe in ai_terrain_pocket_probe_test.go re-measures
 // all four numbers on demand.
 func TestComputerPlayerEliminatesIdleHumanRetail(t *testing.T) {

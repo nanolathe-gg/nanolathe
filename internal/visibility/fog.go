@@ -266,7 +266,7 @@ func floorDivFog(a, b int32) int32 {
 	return q
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// MarkUnexplored implements C14: plot flag byte (PlotCell byte 0x0C) bit 0x04 set/clear [03 §3.3].
 // This helper operates on world.PlotCell flag byte; caller supplies flag pointer.
 // Height >=10 immediate mark is enforced by caller scanning feature height.
 func MarkUnexplored(flag *uint8, height int32) {

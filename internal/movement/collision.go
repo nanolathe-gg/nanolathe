@@ -41,8 +41,9 @@
 //	success Clear+Stamp before next slot → vacated reusable same tick, head-on both block,
 //	pipeline one cell per tick.
 //	NEGATIVE-BOUNDED [P0-12]: no pushing/slide/yield/priority — absence is contract, do NOT implement.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-//	write, no mass read, no blockedTicks counter, no repath call. Repath is via path scheduler elsewhere.
+//	The bounded set of eight collision- and movement-adjacent routines examined
+//	has no second-unit write, no mass read, no blockedTicks counter, no repath
+//	call. Repath is via path scheduler elsewhere.
 //
 // TODO(question): yard bit semantic labels 0x20/0x40 etc and factory BMCode 0x22F mode gate name remain [P0-12].
 //
@@ -54,7 +55,7 @@
 //	Heading              heading uint16 0..65535 per circle at +? [04 §5.1][04 §8.2] C24
 //	MaxVelocity          definition MaxVelocity Fixed 16.16 [02 "Unit record"] [04 §8.2] C24 via compile_movement
 //	FootPrintX/Z         footprint dimensions int16 at moveinfo +? [02 "Movement class record"][04 §6.2][04 §8.2] C25
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+//	Mode                 low 2 bits of the mover mode word, mirrored into the unit's own mode field [04 §9.1] C23 C24
 //	CachedAnchor         committed cached anchor cell pair at mover+? [04 §8.2] C23 same-cell fast path
 //	CachedMode           committed mode at mover+? [04 §8.2] C23
 //	OldAnchor            old footprint anchor at mover+? [04 §8.2] C24 clamp reference (centre ±0x7FFFF)
@@ -569,7 +570,7 @@ type CollisionState struct {
 	ID int // pool slot asc [01 §6.2] I1 I5
 
 	X, Z int32 // position 16.16 [04 §8.2] C22 C23 C24 — world X/Z
-	Y    int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Y    int32 // Y 16.16; the signed high word is height [04 §8.1][04 R-MOV-01 §4] C21 — kept for commit
 
 	VX, VY, VZ int32 // velocity 16.16 [04 §8.2] C24 — horizontal components recomputed at blocked
 	Speed      int32 // scalar speed word 16.16 [04 §8.2] C24 — capped at MaxVelocity/2

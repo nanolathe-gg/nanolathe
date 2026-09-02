@@ -359,9 +359,10 @@ func TestSilentFifteen(t *testing.T) {
 		terrain.Plot[i].SetOccupied(false)
 	}
 	// Mark cell (4,4) as mobile-occupied by a FOREIGN unit at the factory
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// the feature-instance bit, and reject any occupant other than the passed
-	// self identity (the producing factory here has handle 1) [04 §6.2].
+	// exit spot: yard bits 1-2 read the layer-A mobile occupancy short
+	// (OccupantA), not the feature-instance bit, and reject any occupant
+	// other than the passed self identity (the producing factory here has
+	// handle 1) [04 §6.2].
 	idx := 4*10 + 4
 	terrain.Plot[idx].SetOccupantA(9)
 

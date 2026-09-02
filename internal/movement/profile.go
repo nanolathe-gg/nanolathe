@@ -172,9 +172,9 @@ func (p Profile) depthAt(t *world.Terrain, cx, cz int32) int32 {
 		return 0
 	}
 	// Canonical water test is height byte vs sea-level byte [fmt tnt].
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// [02 "Terrain file"][03 §2.3] C8. Depth uses the single-sample height
+	// The height byte lives on PlotCell (Height()) [02 "Terrain file"][fmt tnt];
+	// the derived Min/Max pair (MinHeight()/MaxHeight()) is averaged by
+	// CoarseHeightAt [02 "Terrain file"][03 §2.3] C8. Depth uses the single-sample height
 	// per [04 §6.1] water legality folded into profile thresholds by comparing
 	// terrain against sea level [04 §6.1].
 	h := int32(cell.Height()) // [fmt tnt] +0 height
@@ -199,9 +199,10 @@ func (p Profile) isWater(t *world.Terrain, cx, cz int32) bool {
 // isFeatureBlocked reports whether the cell's feature reference makes it
 // impassable [04 §6.2][fmt tnt][GAP T14].
 //
-// Attribute map bytes +1..+2 carry the feature reference: 0xFFFF none,
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// the feature table [fmt tnt]; plot expands this to the 13-byte cell with the
+// The attribute map's feature-reference field carries: 0xFFFF none,
+// 0xFFFE fringe (anchor stored as a signed DX/DZ delta pair), 0xFFFD void
+// hole, otherwise index into the feature table [fmt tnt]; plot expands this
+// to the 13-byte cell with the
 // same sentinel band [02 "Terrain file"][GAP T14]. Out-of-range indices and
 // unbound names behave as occupied for yard bit 5 [04 §6.2]; void sentinels
 // behave as occupied. Fringe cells resolve through the anchor offsets
@@ -222,8 +223,8 @@ func isFeatureBlocked(t *world.Terrain, cx, cz int32) bool {
 		return true
 	}
 	if cell.IsFringe() { // 0xFFFE [GAP T14]
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// [02 "Terrain file"][docs/SPEC_CONFLICTS SC6].
+		// Resolve through the anchor's signed int8 DX/DZ deltas
+		// (AnchorDXSigned/AnchorDZSigned) [02 "Terrain file"][docs/SPEC_CONFLICTS SC6].
 		if _, ok := world.ResolveFeature(t.Plot, int(t.CellW), int(t.CellH), int(cx), int(cz)); !ok {
 			return true // orphaned fringe — unresolvable is blocking [04 §6.2]
 		}
@@ -266,8 +267,8 @@ func isFeatureBlocked(t *world.Terrain, cx, cz int32) bool {
 
 // slopeAt returns the local slope at cell (cx,cz) in height units (0-255)
 // [04 §6.1][02 "Movement class record"][P1-03 §2.3-2.5].
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// 2×2 neighbourhood at +5 (hmax) and +6 (hmin) per Plot13+0xD stride
+// Retail sampling is via the derived min/max recompute over an inclusive
+// 2×2 neighbourhood — PlotCell's MaxHeight()/MinHeight() pair
 // [P1-03 §2.3][fmt tnt], handling edges via x+1<W and y<Height-1 guards,
 // then footprint aggregation bMin=min(hmin) bMax=max(hmax) bPeak=max(hmax)
 // where yard mask includes respective bits, slope=bMax-bMin unsigned byte
@@ -332,7 +333,7 @@ func (p Profile) slopeAt(t *world.Terrain, cx, cz int32) uint8 {
 // openta-go retailLegalCell), or exceeds the slope hard limit (MaxSlope over
 // land, MaxWaterSlope over water [P1-03 §2.4][research/formats/tdf.md]).
 // Water-depth/slope interaction is SeaLevel <= bMin selects land slope else
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// water slope per the placement validator [P1-03 §2.4]; per-footprint slope is
 // bMax-bMin unsigned byte diff, equality passes (< not <=) [P1-03 §2.5].
 //
 // Returns ClassSteep when slope exceeds the soft BadSlope/BadWaterSlope but not

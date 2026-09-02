@@ -7,7 +7,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-func TestMinimapHUDHitTestInclusive(t *testing.T) { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func TestMinimapHUDHitTestInclusive(t *testing.T) { // retail's minimap hit test is Rect-inclusive [07 §10][03 §3.11]
 	h := NewMinimapHUD(Anchors{}, Rect{X1: 0, Y1: 0, X2: 126, Y2: 126})
 	if !h.HitTest(0, 0) {
 		t.Fatalf("HitTest top-left inclusive want true")
@@ -50,7 +50,7 @@ func TestMinimapHUDRequiresAuthoredRect(t *testing.T) {
 	}
 }
 
-func TestMinimapHUDWorldToMinimapRoundTrip(t *testing.T) { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func TestMinimapHUDWorldToMinimapRoundTrip(t *testing.T) { // world<->minimap conversion truncates within allowX/Y, as in camera tests [07 §10]
 	cases := []struct {
 		mapW, mapH   int32
 		playW, playH int32
@@ -211,7 +211,7 @@ func TestMinimapHUDDirtyBlink(t *testing.T) {
 	}
 }
 
-func TestPlaySizeForMinimap(t *testing.T) { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func TestPlaySizeForMinimap(t *testing.T) { // Wpix-32, Hpix-128 [03 §3.4]
 	ter := &world.Terrain{CellW: 64, CellH: 64}
 	ter.PlayRight = 64*16 - 32
 	ter.PlayBottom = 64*16 - 128

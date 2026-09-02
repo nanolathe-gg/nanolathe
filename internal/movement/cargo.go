@@ -365,7 +365,6 @@ func (s *System) HandleDeath(w *units.World, dyingHandle pool.Handle, deathSever
 			// Type 3/6 are damage type codes [06 §9.1]. We apply via w.ApplyDamage which currently does not track type but we use direct health reduction + mark dying.
 			// Determine type for citation but not used in current ApplyDamage signature.
 			_ = deathSeverity
-			_ = killerHandle
 			dmg := int32(30000)
 			// Apply through funnel: for now subtract health and mark.
 			// In combat, would go through death funnel with armor/veterancy [06 §9.1]; keep direct.
@@ -373,7 +372,17 @@ func (s *System) HandleDeath(w *units.World, dyingHandle pool.Handle, deathSever
 				cargo.Health -= dmg
 				if cargo.Health <= 0 {
 					cargo.Health = 0
-					w.Destroy(cargoHandle, units.DeathKilled) // will trigger recursive detach
+					// The cascade's packets carry the CARRIER's killer as their
+					// attacker, not the carrier [06 §12.1]: "cargo killed by
+					// carrier death credits the carrier's killer ... the cascade
+					// applies its 30000 damage per cargo with the attacker
+					// argument set to the carrier's killer". That attacker is
+					// then what the death handler's row writes into each
+					// cargo's recorded-attacker link [04 R-UNIT-06 §5], and it
+					// is what the kill credit reads. A carrier that dies with
+					// no killer behind it — a packetless finalisation — passes
+					// the null through, which is the same row's "may be null".
+					w.DestroyBy(cargoHandle, units.DeathKilled, killerHandle) // will trigger recursive detach
 				}
 			}
 			DetachCargo(w, cargoHandle)

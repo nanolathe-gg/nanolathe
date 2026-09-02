@@ -10,23 +10,24 @@ import (
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Base 150 +0.015*energyCost +0.2142857142857*metalCost, clamp 0..1800, truncated via __ftol.
+// Capture timer constants [05 R-WORK-01 §6].
+// Base 150 +0.015*energyCost +0.2142857142857*metalCost, clamp 0..1800,
+// truncated toward zero.
 const (
 	captureBaseTicks    = 150
 	captureEnergyCoeff  = 0.015
 	captureMetalCoeff   = 0.21428571428571427 // 3/14
 	captureClampMax     = 1800
-	captureProgressStep = 2 // +2 per 2-tick visit [P0-15]
+	captureProgressStep = 2 // +2 per 2-tick visit [05 R-WORK-01 §6]
 )
 
-// CaptureTimer computes capture timer per [P0-15] §4.
+// CaptureTimer computes capture timer per [05 R-WORK-01 §6].
 //
 //	base = clamp(trunc(150 +0.015*energyCost +0.2142857*metalCost),0,1800)
 //	healthScaled = ((health + maxDamage) * base) / (2*maxDamage)
 //	timer = ((kills/5 +10)*healthScaled*10)/100
 //
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Kills is the target's kill count (runtime experience field), health int16, maxDamage u32.
 func CaptureTimer(energyCost, metalCost float32, health int32, maxDamage int32, kills int32) int {
 	if maxDamage <= 0 {
 		maxDamage = 1
@@ -49,15 +50,15 @@ func CaptureTimer(energyCost, metalCost float32, health int32, maxDamage int32, 
 	return timer
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// CaptureState holds per-capture node progress [05 R-WORK-01 §6].
 // Progress accumulates +2 per visit with 2-tick deadline until >= timer.
 type CaptureState struct {
 	Timer    int   // computed timer threshold
-	Progress int   // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Progress int   // progress accumulator
 	Deadline int32 // wake tick
 }
 
-// AdvanceCaptureProgress increments progress by 2 [P0-15] §3.1 state4.
+// AdvanceCaptureProgress increments progress by 2 [05 R-WORK-01 §6].
 func AdvanceCaptureProgress(cs *CaptureState) {
 	if cs != nil {
 		cs.Progress += captureProgressStep
@@ -115,7 +116,8 @@ func CaptureEligible(builder *units.Unit, victim *units.Unit) bool {
 	return victim.Remaining == 0
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TransferOwnership performs the central narrow ownership transfer
+// [05 "Capture", "Established fact — ownership transfer"].
 // Copies health/remaining/cargo conditionally but NOT alliances/orders/XP.
 // perDefLimit returns effective limit and whether limited.
 func perDefLimit(def *content.UnitDef) (int32, bool) {
@@ -171,38 +173,54 @@ func (s *Service) TransferOwnership(victim *units.Unit, newOwner uint8) (*units.
 	if repl == nil {
 		return nil, false
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// Alliances/orders/groups/XP NOT copied (leaked on death) [P0-15].
+	// Narrow table copy: health, remaining fraction, veteran experience and
+	// visual fields are copied; cargo is copied conditionally, weapon slots
+	// etc. [05 "Capture", "Established fact — ownership transfer"].
+	// Alliances/orders/groups/XP are NOT copied (queues leak on capture, same
+	// as on death) [05 "Factory product heading"].
 	repl.Health = victim.Health
 	repl.Remaining = victim.Remaining
 	repl.MaxHealth = victim.MaxHealth
 	repl.Kills = victim.Kills
-	// cargo conditionally: if victim had cargo (TODO(question) which bytes) copy. For now copy SpotMetal if victim had cargo flag?
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// cargo conditionally: if victim had cargo (TODO(question) which cargo
+	// predicate retail tests) copy. For now copy SpotMetal if victim had cargo flag?
+	// The retail cargo predicate is unresolved (see TODO(question) above); we
+	// copy SpotMetal as a placeholder proxy.
 	repl.SpotMetal = victim.SpotMetal
 	// Do NOT copy alliances/orders/XP — leave repl Orders nil, Alliances not stored on unit.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Kill old victim via cause 4 (capture/owner replacement), 30000 damage [06 §12.1].
+	// First-lethal gate: only mark the old victim dying if it is not already
+	// dying, so a second captor's node cannot re-trigger the kill — multiple
+	// captors race independently and the first to reach lethal progress wins
+	// the transfer [05 "Capture", "Established fact — ownership transfer"].
 	if !victim.Dying {
-		s.World.Destroy(victim.Handle, units.DeathKilled) // cause 4 mapped to Killed for test; retail cause 4 distinct but death mark same 0x4000
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		s.World.Destroy(victim.Handle, units.DeathKilled) // cause 4 mapped to Killed for test; retail cause 4 is distinct but reaches the same dying latch
+		// Retail's ownership transfer kills the old victim with a 30000-damage
+		// cause-4 packet, then syncs; here we mark Dying directly.
 	}
 	// New unit's building flag etc already via Create; remaining already copied.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Note: victim's queues leak on capture, same as on death [05 "Factory
+	// product heading", "Established fact — link lifetime and completion
+	// order"] — do not walk victim Orders.
 	return repl, true
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// CaptureTickRate is 2 ticks per progress step: the progress phase
+// reschedules itself 2 ticks later on every qualifying visit [05 R-WORK-01 §6].
 const CaptureTickRate = 2
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// We use Dying flag as proxy for 0x4000 [P0-15].
+// IsCaptureComplete tests the first-lethal gate: has the victim already been
+// marked dying? Retail latches this on the ownership-transfer kill so a
+// second captor's node cannot re-trigger it; we use the Dying flag as that
+// latch [05 "Capture", "Established fact — ownership transfer"].
 func IsCaptureComplete(victim *units.Unit) bool {
 	return victim != nil && victim.Dying
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Copies feature name and truncates at first '_' (0x5F) → 0.
+// FeatureNameTruncForResurrection implements the corpse-name-to-unit-name
+// truncation [05 "Resurrection", "Established fact — no ledger cost, only
+// delay and name handling"]. Copies feature name and truncates at the first
+// underscore.
 func FeatureNameTruncForResurrection(featureName string) string {
 	if idx := strings.IndexByte(featureName, '_'); idx >= 0 {
 		return featureName[:idx]
@@ -210,10 +228,11 @@ func FeatureNameTruncForResurrection(featureName string) string {
 	return featureName
 }
 
-// UnitLimitUnlimited is sentinel -1 means no limit [P0-15][P0-16].
+// UnitLimitUnlimited is the sentinel -1 the definition parser writes for no
+// limit [05 R-SHARE-01 §9].
 const UnitLimitUnlimited int32 = -1
 
-// CheckPerDefLimit reports whether creating another unit of def for owner would exceed limit [P0-15][P0-16].
+// CheckPerDefLimit reports whether creating another unit of def for owner would exceed limit [05 R-SHARE-01 §9].
 func CheckPerDefLimit(w *units.World, owner uint8, def *content.UnitDef) bool {
 	if def == nil {
 		return true
@@ -233,8 +252,11 @@ func CheckPerDefLimit(w *units.World, owner uint8, def *content.UnitDef) bool {
 	return int32(cnt) < lim
 }
 
-// Capture uses no decay/no cost [P0-15]: timer above, progress +2 per 2 ticks, first lethal via 0x4000 gate.
-// Multiple captors independent nodes, first lethal via gate reads 0x4000 kills [P0-15] — handled by TransferOwnership Dying check.
+// Capture uses no decay/no cost [05 R-WORK-01 §6]: timer above, progress +2
+// per 2 ticks, first-lethal gate above.
+// Multiple captors run independent nodes; the first to reach lethal progress
+// wins the transfer [05 "Capture", "Established fact — ownership transfer"]
+// — handled by TransferOwnership's Dying check.
 
 // Ensure pool handle type imported for future use.
 var _ = pool.Handle(0)

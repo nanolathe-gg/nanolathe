@@ -317,7 +317,8 @@ func TestEmitSFXVMIntegration(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestMoveRateTiers(t *testing.T) {
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Definition thresholds per I13 mapping: rate1 is definition MoveRate1,
+	// rate2 is definition MoveRate2 [04 §5.2].
 	rate1, rate2 := int32(100), int32(200)
 	// Category 0 when inhibit or attached or both magnitudes zero [GAP T15] C18
 	if got := MoveRateCategory(true, false, 50, 50, rate1, rate2); got != 0 {
@@ -333,7 +334,7 @@ func TestMoveRateTiers(t *testing.T) {
 	if got := MoveRateCategory(false, false, 50, 0, rate1, rate2); got != 1 {
 		t.Fatalf("one mag nonzero should not be cat0 got %d", got)
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Tier 1 up to MoveRate1 inclusive [04 §5.2] signed inclusive
 	if got := MoveRateCategory(false, false, 100, 100, rate1, rate2); got != 1 {
 		t.Fatalf("mag==rate1 should be cat1 got %d", got)
 	}

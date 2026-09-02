@@ -6490,16 +6490,32 @@ where it was made:
 ```
 x += windX · 8          ; windX/windZ are the published wind words [R-WIND-01]
 z += windZ · 8
-y += authoredGravity · 16   ; the map's `gravity` key, before any per-tick conversion
+y += authoredGravity · S    ; the map's `gravity` key, before any per-tick conversion;
+                            ; S = 4 for the strips-5/9 smoke puffer, 16 for the strip-4 vent steam
 ```
 
 All three are added to the raw fixed-point words, not to whole world units, so
 a wind word of forty moves a puff by `320/65536` of a world unit per tick and
-the gravity word of a stock map lifts it by `112·16/65536`. A puff drifts a
+the gravity word of a stock map lifts a strips-5/9 puff by `112·4/65536` and a
+vent steam puff by `112·16/65536`. A puff drifts a
 world unit or two over its whole life and rises slowly; it does not travel.
 The vertical term's scale global is the same authored gravity word the
 projectile conversion divides by 900 (`[03 §2.2]` C4), read here unconverted.
 **Established (direct-static, 2026-08-31.)**
+
+**Correction, 2026-09-02 (RWU-19-17) — the Y scale is per class.** The block
+above previously read `y += authoredGravity · 16` (commented "the map's
+`gravity` key, before any per-tick conversion") for the whole family, and the
+sentence under it
+"the gravity word of a stock map lifts it by `112·16/65536`". That was the
+geothermal vent's update read as if strips 4, 5 and 9 shared one class; they
+do not ([R-FX-01 §3 addendum §B], and [06 R-WFX-01 §5]'s 2026-09-01
+correction, which this block contradicted). Re-read side by side for this
+correction, the two per-tick updates are identical instruction for instruction
+except the shift applied to the gravity word: two (× 4) in the strips-5/9
+smoke puffer that every weapon, burning-feature and `emit-sfx` producer uses,
+four (× 16) in the strip-4 vent-steam class. Both wind terms shift by three
+(× 8) in both classes. **Established** (direct static, both update routines).
 
 The animation clock counts the hold down; on zero it advances the frame and
 redraws the next hold as half to full of the authored value, one CRT draw per

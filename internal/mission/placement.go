@@ -15,15 +15,15 @@ import (
 // <<16), Angle is heading 0..65535 via degrees conversion, flags pack into one
 // byte with only the high bit consumed. [GAP T14] [08 "Mission placement record"] [02 "Map files"]
 type UnitPlacement struct {
-	UnitName       string // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	Ident          string // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	InitialMission string // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	UnitName       string // Unitname, pointer into tail heap in retail [GAP T14] [02 "Map files"]
+	Ident          string // Ident, pointer into tail heap in retail [GAP T14]
+	InitialMission string // InitialMission, pointer into tail heap in retail [02 "Map files"]
 
-	X int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	Z int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	Y int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	X int32 // X fixed 16.16, authored XPos <<16 [GAP T14] [02 "Map files"]
+	Z int32 // Z fixed 16.16, authored ZPos <<16 [GAP T14]
+	Y int32 // Y fixed 16.16, authored YPos <<16 [GAP T14]
 
-	Angle uint16 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Angle uint16 // heading 0..65535, trunc(degrees*65536/360) [GAP T14] [fmt ota]
 
 	Player            int32 // Player, default 0, negatives clamped to 0 [02 "Map files"]
 	HealthPercentage  int32 // HealthPercentage default 100 [02 "Map files"]
@@ -56,10 +56,10 @@ func IsImmuneFromFlags(flags byte) bool { return flags&0x80 != 0 }
 // fields per I13. Kind 1 is StartPos; ID is parsed from the numeric suffix of
 // specialwhat; X/Z are shorts. [GAP T14] [02 "Map files"]
 type Special struct {
-	Kind int32  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	ID   int32  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	X    int16  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	Z    int16  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Kind int32  // kind field, 1=StartPos [GAP T14]
+	ID   int32  // id parsed from numeric suffix of specialwhat [GAP T14] [02 "Map files"]
+	X    int16  // XPos short [GAP T14]
+	Z    int16  // ZPos short [GAP T14]
 	Name string // specialwhat original string, e.g. "StartPos1" [fmt ota]
 }
 
@@ -67,9 +67,9 @@ type Special struct {
 // into named fields per I13. Featurename is a 128-byte buffer; X/Z default to
 // -1 and are cleared when negative before stamping. [GAP T14] [02 "Map files"] [08 "Mission placement record"]
 type FeaturePlacement struct {
-	Name string // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	X    int32  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	Z    int32  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Name string // Featurename, 128-byte buffer [GAP T14] [02 "Map files"]
+	X    int32  // XPos integer default -1, cleared when negative [GAP T14] [02 "Map files"]
+	Z    int32  // ZPos integer default -1, cleared when negative
 	RawX int32  // authored X before clearing, for round-trip testing
 	RawZ int32  // authored Z before clearing
 }
@@ -373,12 +373,13 @@ func DegreesToHeading(deg float64) uint16 {
 // but differing for negative/>360 per [P0-06 §4][P0-04 §4].
 // Input is integer degrees as authored in TDF Angle key.
 func HeadingFromDegrees(deg int32) uint16 {
-	// Retail sequence [P0-04 §4][P0-06 §4]:
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// high = temp64 >> 0x28 (40)
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// result = (short)(high - corr)  then uint16
+	// Retail's fixed-point magic-multiply heading conversion
+	// [P0-04 §4][P0-06 §4][08 "Mission placement record"]:
+	// scaled  = deg*0x10000 (32-bit wrap)
+	// wide    = (int64)scaled * 0xB60B60B7
+	// high    = wide >> 0x28 (40)
+	// corr    = (short)(char)((scaled/0x1680000)+(scaled>>31)) >>0x0F
+	// result  = (short)(high - corr)  then uint16
 	// 0x1680000 = 360*65536
 	tmp := int64(int32(int64(deg) * 0x10000))
 	magic := int64(0xB60B60B7)

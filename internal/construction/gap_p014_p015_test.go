@@ -105,7 +105,9 @@ func TestFeatureBeforeAlive(t *testing.T) {
 	if prod == nil || prod.Remaining != 0 || prod.Health != 1 {
 		t.Fatalf("resurrect product remaining %v health %d want 0/1", prod.Remaining, prod.Health)
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// The feature must be removed BEFORE the new unit is made alive
+	// [05 "Resurrection", "Established fact — no ledger cost, only delay and
+	// name handling"].
 	if got := terrain.Plot[5*10+5].Feature(); got != world.PlotFeatureNone {
 		t.Fatalf("feature not cleared before alive: Plot[5,5].Feature=0x%04x want 0xFFFF", got)
 	}

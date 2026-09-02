@@ -20,12 +20,13 @@ func TestLocomotionPitchSustainsCapOnGentleSlope(t *testing.T) {
 }
 
 // TestLocomotionAccelBrakeRamp proves M3: speed ramps +accel/tick toward cap
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// and brakes via the stopping-distance term of the accel/brake decision to
+// settle inside tolerance without oscillation [04 R-MOV-01 §4] M3.
 func TestLocomotionAccelBrakeRamp(t *testing.T) {
 	const maxV = 78643
 	const accel = 9830  // ARMCOM 0.15*65536
 	const brake = 19660 // 0.30*65536
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Accel ramp: speed advances +accel per tick while waypoints remain [04 R-MOV-01 §4] M3
 	s := &SteerState{
 		MaxVelocity:  maxV,
 		Acceleration: accel,

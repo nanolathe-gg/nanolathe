@@ -104,8 +104,10 @@ const (
 // It quantizes the position to a visibility cell, rejects off-map positions,
 // then checks the mode-selected grid [03 §3.1].
 //
-// cellX, cellY are already quantized to 32-pixel visibility tiles (pos>>20 with
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// cellX, cellY are already quantized to 32-pixel visibility tiles (pos>>20,
+// a signed floor-like shift with a sign correction for negative world
+// coordinates rather than a toward-zero truncation [03 §2.1]). w,h are grid
+// dims from Service.W/H.
 //
 // wordMask is []uint16 length w*h, ten usable bits per cell [03 §3.1].
 // byteGrids is [10][]uint8 per-player explored counts, each length w*h.

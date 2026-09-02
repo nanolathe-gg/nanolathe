@@ -95,7 +95,7 @@ func TestOVRResidualInert(t *testing.T) {
 	}
 	// Ensure constants match strings.
 	if OVRString != "OVR" || CompatabilityString != "Compatability" || TAUnitOverrideString != "TA Unit Override" {
-		t.Fatalf("OVR constants mismatch [P1-12] [analysis omitted]/AC/C0")
+		t.Fatalf("OVR constants mismatch [P1-12]")
 	}
 }
 

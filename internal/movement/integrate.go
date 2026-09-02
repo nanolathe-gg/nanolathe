@@ -995,8 +995,9 @@ func (s *System) distToGoal(u *units.Unit) numeric.Fixed {
 }
 
 // finalGoalReached implements the recovered Move_Ground arrival predicate [R-P0-01].
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// cell in the cell domain, planar only, inclusive: dx*dx+dz*dz <= threshold².
+// It compares the mover's cached occupancy tile (CollisionState.CachedAnchor)
+// against the goal handle's cell in the cell domain, planar only, inclusive:
+// dx*dx+dz*dz <= threshold².
 // On success it ORs 0x20 into node.satisfied through the arrival-bit setter
 // [R-P0-01]. No y, heading,
 // speed or blocked term participates. Route pruning (<=25 whole units) is separate [R-P0-01].
@@ -1026,7 +1027,7 @@ func (s *System) finalGoalReached(u *units.Unit, hadRoute bool) bool {
 	if q := orders.QueueForUnit(u); q == nil || q.Head() != ah.order {
 		return false
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Cached tile from occupancy commit (CollisionState.CachedAnchor) [R-P0-01][04 §8.2].
 	var tileX, tileZ int32
 	if coll, ok := s.Collisions[u.Handle]; ok && coll != nil {
 		tileX = coll.CachedAnchor.X
@@ -2268,7 +2269,7 @@ func (s *System) emitMovementCallbacks(u *units.Unit, speed int32) {
 	if s.prevSFXBand == nil {
 		s.prevSFXBand = make(map[pool.Handle]int)
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Inhibit bit (mover mode word bit 2) and attached (carrier dword) — inhibit not yet tracked, assume false for now [04 §5.2][GAP T15] C18.
 	inhibit := false
 	attached := u.Attachment.Carrier != 0
 	// Magnitude is speed scalar (ground) or 3-D flight speed; ground uses scalar Speed [04 §5.2] C18.

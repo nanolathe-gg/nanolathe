@@ -98,7 +98,7 @@ func TestSparseVsDenseDivergence(t *testing.T) {
 			// Use capacity 2 with controlled failure: allocate 0, allocate 1 fails via unknown type, allocate 2 succeeds.
 		}
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Use unknown type for middle to simulate type existence failure [P0-04].
 	w3 := newMissionFixtureWorld(10, cat)
 	placements3 := []UnitPlacement{
 		{UnitName: "armcom", Ident: "alpha", InitialMission: "g gamma"},

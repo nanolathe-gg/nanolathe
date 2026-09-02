@@ -4753,7 +4753,8 @@ means 7.
 
 | Producer | Args after the point | Effect |
 |---|---|---|
-| trail puff (§7.3), timer-expiry puff (§7.3), `endsmoke` at impact (§13.2), COB `emit-sfx` 0x102 (`[04 §4.4]`) | `(0, 1, 0, 0, 0)` | one particle at spawn, all 12 frames of `smoke 1`, hold 7; the emitter's lifetime is 0 so its spawn window closes immediately and it dies when the particle expires |
+| trail puff (§7.3), timer-expiry puff (§7.3), `endsmoke` at impact (§13.2), COB `emit-sfx` `0x101` white smoke (`[04 §4.4]`) | `(0, 1, 0, 0, 0)` | one particle at spawn, all 12 frames of `smoke 1`, hold 7; the emitter's lifetime is 0 so its spawn window closes immediately and it dies when the particle expires |
+| COB `emit-sfx` `0x102` black smoke (`[04 §4.4]`) | `(0, 1, 0, 0, 1)` | the same one-shot shape with selector 1: one particle at spawn, every frame of `smoke 2`, hold 7 (corrected 2026-09-02, below) |
 | `startsmoke` (§4.1, muzzle point) | `(3, 1, 30, 0, 0)` | one particle, frames 0..3 of `smoke 1`, hold 30 — a slow four-frame puff |
 | land dust of every above-sea explosion (§2) | `(0, 7, 0, 15, 0)` | one particle at spawn and one every 7 ticks while `nextSpawn ≤ now + 15`: three particles, all frames, hold 7 |
 
@@ -4802,6 +4803,21 @@ exactly the row this section's table already assumed. The init clamps the bound
 entry's frame count less one by `frameCap` when that is nonzero, stores the
 selector, and picks `smoke 1` or `smoke 2` from it. There are no producer-side
 field writes; every producer in the table passes all six as literals.
+
+**Correction, 2026-09-02 (RWU-19-17) — which `emit-sfx` smoke arm uses which
+row.** The first table row previously listed "COB `emit-sfx` 0x102 (`[04
+§4.4]`)" among the producers of `(0, 1, 0, 0, 0)` on `smoke 1`, and the table
+had no row at all for the other smoke point type. That was wrong. The effect
+opcode's dispatcher ([04 §4.4]) has two smoke arms and each calls its own
+producer: `0x101` (white smoke) calls the producer the trail, timer-expiry and
+`endsmoke` puffs share, whose six init literals are `(point, frameCap 0,
+interval 1, hold 0 → 7, lifetime 0, selector 0)` → `smoke 1`; `0x102` (black
+smoke) calls a second producer whose literals differ from the first in the
+selector alone — `(0, 1, 0, 0, 1)` → `smoke 2`. Both arms push strip 9. Doc
+03's strip census ([03 §5.5], strip-9 row) already carried the right pairing;
+this table was the stale copy. **Established** (direct static: the dispatcher's
+two compare arms, the two producers' pushed literals, and the strip index each
+arm pushes).
 
 ### Closed — the presentation RNG census [R-WFX-01 §6] (2026-08-29)
 
