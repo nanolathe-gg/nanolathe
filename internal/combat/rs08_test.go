@@ -198,10 +198,14 @@ func TestRS08_CandidateFacts(t *testing.T) {
 	allyH, _ := w.Create(defAlly, 1, numeric.FixedFromInt(int64(15)), numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(15)))
 	enemyH, _ := w.Create(defEnemy, 2, numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(20)))
 	enemy2H, _ := w.Create(defEnemy2, 2, numeric.FixedFromInt(int64(25)), numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(25)))
-	// Authored stealth is part of the gameplay cloak predicate, just like
-	// runtime cloak and initial cloak [03 §3.2].
+	// The acquisition predicate's cloak reject reads the INSTANCE cloaked bit
+	// [06 §3.1] step 2, [03 R-VIS-01 §6]. This used to set the definition's
+	// `stealth` flag instead, on the reading that authored stealth was "part
+	// of the gameplay cloak predicate"; it is not — stealth suppresses radar
+	// and sonar detection and never line of sight [03 R-VIS-01 §5], and a
+	// stealth unit standing in the open is a perfectly good target.
 	cloakedEnemy := w.Unit(enemyH)
-	cloakedEnemy.Def.Stealth = true
+	cloakedEnemy.IsCloaked = true
 	// Make ally underwater (Y <= sea)
 	underwaterAlly := w.Unit(allyH)
 	_ = underwaterAlly

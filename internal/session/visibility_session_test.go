@@ -132,12 +132,17 @@ func TestSessionVisibility(t *testing.T) {
 	if !s.IsUnitVisible(0, u1) {
 		t.Fatalf("decloaked enemy should be visible")
 	}
-	// Authored stealth is a gameplay visibility predicate input, just like the
-	// runtime cloak state; it is not inferred from presentation flags.
+	// Authored stealth is NOT an input to this predicate. It is the contact
+	// callback's third reject: it suppresses radar and sonar detection
+	// outright, with no distance or elevation term, and never touches line of
+	// sight [03 R-VIS-01 §5]. This block used to assert the opposite — that a
+	// stealth unit "should be rejected even inside LOS" — which made every
+	// stealth unit invisible to the eye as well as to the dish.
+	u1.IsCloaked = false
 	u1.Def.Stealth = true
 	s.visStatus[int(u1.Handle)] = 0
-	if s.IsUnitVisible(0, u1) {
-		t.Fatalf("stealth enemy should be rejected even inside LOS")
+	if !s.IsUnitVisible(0, u1) {
+		t.Fatalf("stealth enemy inside LOS should be visible: stealth suppresses radar and sonar, never line of sight [03 R-VIS-01 §5]")
 	}
 	u1.Def.Stealth = false
 	// Underwater enemy without exempt should be rejected.

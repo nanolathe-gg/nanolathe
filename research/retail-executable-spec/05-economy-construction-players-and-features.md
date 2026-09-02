@@ -3758,6 +3758,23 @@ attached:
    remaining count**.
 
 With no product attached the same epilogue runs and the node still drops.
+
+**Correction (2026-09-02, RWU-19-27) — step 4's packet names the factory as
+attacker.** Step 4 above gave the packet only as "the ordinary kill packet —
+kind-9 damage of exactly 30000", and an implementation took the attacker from
+the reverse arm's self form. The packet cancel-current sends is
+`damage(attacker = the factory, victim = the product, 30000, kind 9, flag 0)`:
+the factory is the attacker, not the product. The self form
+`selfKill(target, target, 30000, kind 9)` belongs to the shared work helper's
+reverse arm alone ([R-WORK-01 §1]); same kind and amount, not the same packet.
+Nothing on the credit side turns on it — cause 9 has no credit branch
+([06 §12.1]) — but the recorded-attacker link and the death row hold the
+factory's identity for a cancelled product. The order inside the arm is
+exactly steps 1, 3, 4, 5: refund; completion transition with the factory as
+builder (so a product with `activatewhenbuilt` receives its `Activate` edge
+in step 3 and dies in step 4 of the same call); kill packet; then the
+activation and building bits lowered in one edge call, the interface refresh,
+and result 5. **Established.**
 The producers of interrupt masks 2 and 8 are the record-removal cleanup notice
 and the product's destruction respectively — see the correction under
 "interrupt producers" above (2026-09-02).
@@ -3878,7 +3895,9 @@ x87; the narrowing points are where the code stores to memory, and they matter.
 ```
 step(builder, target, worker):                       // worker is float32
   if (target.remaining == 0.0f) return notCommitted  // exact float compare
-  if (worker >= 0.0f) setWorkedThisTickFlag(target)  // set before the zero test
+  if (worker >= 0.0f) target.pendingWord |= 0x8000    // GetBuilt's wake, set
+                                                     // before the zero test
+                                                     // [04 R-ORD-01 §11]
   if (worker == 0.0f) return notCommitted
 
   def       = target.definition
@@ -3950,7 +3969,11 @@ an infinity; the retail conversion helper's out-of-range result has a zero low
 word, and the callers here consume only that low word [01 §7], so the derived
 integers become `0` rather than a large magnitude. `buildtime < 0` inverts the
 sign of the step, driving the fraction the wrong way through the same clamp.
-Neither case faults.
+Neither case faults. **Correction (2026-09-02):** the "zero low word" sentence
+describes the resurrection delay's conversion ([R-WORK-01 §7]), not the step:
+in the step the infinity never reaches an integer conversion — the clamp
+absorbs it. [R-WORK-01 §11] gives the zero-`buildtime` and
+zero-`buildcostenergy` arms exactly.
 
 **Established — the build-order caption census.** The order-state machinery is
 doc 04 §3's property; the captions are listed here because they are the
@@ -4023,6 +4046,50 @@ floors health at zero with no `maxdamage` cap ([R-WORK-01 §1]), so the frame
 reaches zero health one or more visits *before* the fraction reaches one, and
 sits there at zero health, alive, until the clamp fires.
 
+#### R-WORK-01 §11 — Malformed build numbers through the step and the decay wrapper, exactly [R-WORK-01] (2026-09-02)
+
+**Established.** Three malformed definitions reach the shared step; each is
+settled by the x87 compares and the clamp listed in [R-WORK-01 §1], and none
+faults. (RWU-19-27, static.)
+
+*Zero `buildtime`, forward arm.* `worker / (float)0` is `+∞`; `old − ∞` is
+`−∞`; the clamp's first test (`new80 <= 0.0`) stores `0.0f`. `delta32 = old`,
+so the demands are the **whole** remaining cost — `buildcostenergy × old` and
+`buildcostmetal × old` — in one admission, and the health gain is
+`trunc(maxdamage × old)`. If admission accepts, the stored `0.0` fires the
+completion transition on the same call: a zero-`buildtime` product completes
+on its first admitted step, paying everything at once. A guard that returns a
+new fraction of `0` for `buildtime = 0` is retail-exact. For a **negative**
+`buildtime` retail instead inverts the step: the fraction rises, the clamp
+stores `1.0f`, the demands go negative, and the unsigned health cap of §1
+pins health at `maxdamage` — a frame that never completes. That case is
+malformed, unshipped, and not reproduced by a `<= 0` guard.
+
+*Zero `buildcostenergy`, decay wrapper.* `GetBuilt`'s phase-2 quantum is
+`−((float)(buildtime × 11) / buildcostenergy)`: a 32-bit signed product
+converted to float, divided by the single-precision cost, negated, and passed
+as `float32`. Cost `0` with a positive `buildtime` gives `−∞`. The step's
+entry compares read `−∞` as negative and as non-zero, so the reverse arm
+runs: `new80 = old + ∞` clamps to `1.0f`; `delta32 = old − 1`; the refund is
+`buildcostmetal × (1 − old)` — every unit of metal already sunk, credited at
+once through the 0.5/0.7 selector ladder; health floors at zero; the stored
+fraction is `1.0`; and the arm's last line kills the frame with the self-form
+kind-9 packet (no corpse, no explosion). A zero-energy-cost nanoframe is
+therefore removed on its **first** decay visit, in full refund, rather than
+decaying.
+
+*Both zero.* `0 × 11 / 0.0` is a NaN quantum. Both entry compares are
+unordered: the first reads it as negative, so the `0x8000` wake of
+[04 R-ORD-01 §11] is **not** raised, and the second reads it as equal to
+zero, so the step returns *not committed* having written nothing. Such a
+frame never decays and is never killed by the wrapper; a real builder's
+positive quantum still divides by the zero `buildtime` as in the first arm,
+so the frame completes on the first admitted step of any builder.
+
+For an implementation: the decay quantum must be formed in `float32` exactly
+as the wrapper forms it, so that `−∞` and NaN reach the step's own compares;
+a `buildcostenergy > 0` guard around the decay is not retail.
+
 #### R-WORK-01 §2 — Build-distance range test and approach radii [R-WORK-01] (2026-08-29)
 
 **Established.** The range test shared by mobile construction, repair and the
@@ -4072,6 +4139,41 @@ is reproduced here as the instructions compute it, because it is an approach
 radius rather than an authoritative gate. **Unknown:** whether this is a retail
 defect or an intended asymmetry — decider: manual retail observation of an
 assist approach with a footprint that is much longer in Z than in X.
+
+#### R-WORK-01 §12 — Where the reach test runs, the compare's sign, and what the nano reach is not [R-WORK-01] (2026-09-02)
+
+**Established.** [R-WORK-01 §2] gives the expression; three things about its
+use were still read as open at the implementation (RWU-19-27, static).
+
+1. *The compare is signed.* `distWorld − builderPad + targetPad` is a signed
+   32-bit value compared `<=` against the zero-extended 16-bit `builddistance`
+   with a signed compare: a builder standing inside the target's
+   half-diagonal (a negative left side) passes.
+2. *Where it runs.* For a mobile builder the test is consulted **only on the
+   arrival-failure wake** of the approach phase (satisfied bit `0x40`, the
+   "cannot get there" signal of [04 R-ORD-01 §0]). The handler then measures
+   from its own position to the record's goal — the site centre snapped to
+   the product footprint in phase 0, `(foot + 2·cell) · 2^19` per axis — with
+   the builder instance's footprint pair and the **product definition's**
+   footprint pair as the two pads, and abandons with `I can't reach the
+   construction site` when the test fails. A successful arrival at the
+   rectangle goal (bit `0x20`) skips the test entirely: standing on the
+   footprint's border ([04 §7.2]) is the reach. The work phase has no range
+   test at all — a builder that has started work keeps working at any
+   distance until the product completes or its record is removed. Repair's
+   approach phase re-issues its goal on failure instead of abandoning
+   ([04 R-ORD-01 §5]); the factory-product path has no reach test, the
+   product being carried ([04 R-FAC-02 §1]).
+3. *What it is not.* The reach involves no nano piece (`QueryNanoPiece` is
+   presentation-side, after admitted work — [R-P0-06 §2]), no piece height,
+   no Y term, and no model radius: the `(Xextent + Zextent)/3` radius belongs
+   to unit reclaim's squared form only. The only footprint terms are the two
+   half-diagonals, `trunc(8 · hypot(footX, footZ))` each, subtracted from the
+   centre-to-centre distance in whole world units.
+
+This retires a reach of `builddistance` in 16.16 compared against the nearest
+point of the site's footprint rectangle: retail's test is centre-to-centre
+with both half-diagonals subtracted, and it is only the fallback above.
 
 ### Stockpile production
 
@@ -4962,6 +5064,9 @@ player-level permissions are not. The decremented experience factor for the
 next capture is derived from the target's kill count divided by five using
 integer truncation. Multiple captors operate independently; each has its own
 node and timer, and the first to reach lethal progress wins the transfer.
+**Correction (2026-09-02, [R-WORK-01 §11]):** the kill count is **not**
+copied — "veteran experience" is not carried — and the conditional copy is the
+per-slot stockpiled-round byte; the exact list is in that section.
 
 **Closed residuals — counts, limits, and failure messages.** Capture carries
 no resource cost (bounded: no admission call in the handler). The ownership
@@ -5102,6 +5207,57 @@ death-latched capture target before the executor runs; the transfer path's
 own validation of old and new ownership ([05 "Capture"], "ownership
 transfer") is the only later refusal established here. *Decider:* static
 trace of the capture order's target admission in the order builder.
+
+#### R-WORK-01 §11 — Capture's order-side admission, and the transfer's exact copy list [R-WORK-01] (2026-09-02)
+
+**The order-side admission — Established.** [R-WORK-01 §10]'s Unknown asked
+whether the order builder excludes a same-owner or death-latched target
+before the executor's five-predicate ladder runs. The command resolver's code
+13 ([04 R-ORD-02 §1]) is the whole order-side test: the actor's `cancapture`,
+a target, and **the target's owner record differing from the actor's** — a
+same-owner target never becomes a `Capture` order. Before any code's switch
+the resolver rejects a target lacking the alive bit, but it does **not** read
+the death latch (bit 14 of the state word, [04 §5.1]), and the issue helper
+that queues the resolved order reads neither. A target killed this tick —
+latch set, alive bit still set until the next sweep's finalizer — therefore
+passes the resolver, passes phase 0's ladder (which tests none of owner, latch
+or health), and is refused only by the transfer path: its entry gate is
+`owner ≠ new owner`, alive bit set, **death latch clear**, and a refusal there
+is silent (the executor still raises cue slot 16 with no text, §6). So the
+same-owner exclusion belongs at command resolution, the latch exclusion at the
+transfer, and the executor's ladder stays at five.
+
+**The transfer's copy list — Established, correcting the "ownership
+transfer" paragraph above.** That paragraph says the replacement receives
+"health, remaining fraction, veteran experience, and visual piece and facing
+fields". The local branch (new owner's control byte 1 or 2, [R-SHARE-01 §1])
+creates the replacement through the ordinary creator as a **finished** unit
+with the old unit's definition, position and movement-mode bits and the new
+owner's side; clears state bits 18–21 (both standing-order pairs, so the
+replacement starts with neither stance rather than the definition defaults
+the creator had just written); then copies, in order: the 16-bit health, the
+remaining fraction, the orientation triple (bank, heading, pitch), and — for
+each of the three weapon slots, **only when the replacement's slot control
+byte has its enabled bit** — the slot's **stockpiled-round byte** (the
+completed-ammunition byte of "Stockpile production" above). That gated
+per-slot byte is the whole of the "cargo copied conditionally": stockpiled
+rounds follow the unit, slot by slot, wherever the new record has that slot
+enabled. **Nothing else is copied. The kill count is not** — the replacement
+is a fresh record with zero kills, so "veteran experience" is not carried and
+the next capture's kills factor restarts from zero; the transported-cargo
+list, alliances, orders and groups are not carried either. The old unit is
+then killed with a cause-4 packet and a null attacker ([06 §12.1]), and the
+replacement's operational edge bits (activated, cloaked, …) are replayed from
+the old unit's operational byte — the bits it had are set, the bits it lacked
+cleared — through the state-edge setter, so an activated or cloaked unit
+stays so across the transfer. The other branch (old owner control 1 or 2,
+**new owner control 3 — a remote peer** by [R-SHARE-01 §1], not a computer
+player as [04 R-ORD-02 §1]'s "human-to-computer" gloss reads it) creates
+nothing locally: it writes the 150-tick post-capture countdown, clears the
+selected bit, emits the transfer packet (the same fields, the three stockpile
+bytes gated on slot 0's enabled bit alone) and kills the old unit with the
+same cause-4 packet; the replacement is the peer's. That branch is
+multiplayer transport and out of Nanolathe's scope.
 
 ## Resurrection
 

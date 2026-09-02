@@ -712,20 +712,26 @@ func (s *Session) IsUnitVisible(viewer int, target *units.Unit) bool {
 	if s.visStatus != nil {
 		status = s.visStatus[tid]
 	}
+	// The predicate's cloak input is the INSTANCE cloaked bit and nothing else.
+	//
+	// `init_cloaked` used to be ORed in here; it is consumed exactly once, by
+	// the constructor, which seeds the cloak-REQUESTED bit from it, and the
+	// instance bit read here is set only by the settlement's transition
+	// service on a pass the owner actually paid for [03 R-VIS-01 §6]
+	// [05 R-ECO-01 §9] (RWU-19-26). Reading the definition flag kept a mine
+	// hidden even when its owner could not pay.
+	//
+	// The definition's `stealth` flag used to be ORed in here as well, and
+	// that was the same mistake in the other direction: `stealth` is the
+	// contact callback's third reject, suppressing radar and sonar detection
+	// outright with no distance or elevation term, and it never touches line
+	// of sight [03 R-VIS-01 §5]. Folding it into this predicate made every
+	// stealth unit invisible to the eye as well as to the dish. Its reader is
+	// the sensor pass (internal/visibility/sensors.go), which still has it.
+	//
+	// The selection/presentation bits in Unit.Flags are unrelated and must not
+	// stand in for cloak state either [03 §3.2].
 	hidden := target.IsCloaked
-	if target.Def != nil {
-		// The predicate's cloak input is the INSTANCE cloaked bit and nothing
-		// else. `init_cloaked` used to be ORed in here; it is consumed exactly
-		// once, by the constructor, which seeds the cloak-REQUESTED bit from it,
-		// and the instance bit read here is set only by the settlement's
-		// transition service on a pass the owner actually paid for
-		// [03 R-VIS-01 §6][05 R-ECO-01 §9] (RWU-19-26). Reading the definition
-		// flag kept a mine hidden even when its owner could not pay.
-		//
-		// The selection/presentation bits in Unit.Flags are unrelated and must
-		// not stand in for cloak state either [03 §3.2].
-		hidden = hidden || target.Def.Stealth
-	}
 	// Underwater exemption is stored as FriendlyMask 0x200 via sensor phase; we include it if present.
 	t := visibility.Target{
 		Owner:  visibility.PlayerID(target.Owner),

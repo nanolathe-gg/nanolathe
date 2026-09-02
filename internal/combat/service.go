@@ -72,17 +72,31 @@ func isHostile(shooter *units.Unit, cand *units.Unit, econ *economy.Service) boo
 	return true
 }
 
+// isCloakedUnit supplies Candidate.Cloaked, which is step 2 of the
+// direct-visibility predicate the primary-list rebuild applies — "the
+// candidate's cloak bit is set — reject" [06 §3.1]. That bit is the INSTANCE
+// cloaked bit and nothing else [03 R-VIS-01 §6]: the definition flags used to
+// be ORed in here, and both were wrong.
+//
+//   - `init_cloaked` has exactly one consumer, the unit constructor, which
+//     seeds the cloak-REQUESTED status bit from it; the instance bit read here
+//     is written only by the settlement's transition service, on a pass the
+//     owner actually paid for [05 R-ECO-01 §9]. Reading the definition flag
+//     made an unpaid mine untargetable.
+//   - `stealth` is the contact callback's third reject: it suppresses radar
+//     and sonar detection outright, with no distance or elevation term, and
+//     never touches line of sight [03 R-VIS-01 §5]. It has no business in a
+//     cloak predicate at all, and reading it here made every stealth unit
+//     permanently unshootable.
+//
+// This build folds retail's request and instance bits onto Unit.IsCloaked (the
+// named seam at units.InitEconomyState), so a requested-but-unpaid cloak still
+// reads as hidden; that seam is unchanged here.
 func isCloakedUnit(u *units.Unit) bool {
 	if u == nil {
 		return false
 	}
-	if u.IsCloaked {
-		return true
-	}
-	if u.Def != nil && (u.Def.InitCloaked || u.Def.Stealth) {
-		return true
-	}
-	return false
+	return u.IsCloaked
 }
 
 func isUnderwaterUnit(u *units.Unit, seaLevel numeric.Fixed) bool {
@@ -1161,6 +1175,11 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 	fireEvents := &combatFireEvents{svc: svc, tick: tick, shooter: u.Handle, pos: origin}
 	ports := FirePorts{
 		ShooterSide: uint8(u.Owner),
+		// The shooter itself, so the fill can run its real-shooter branch in
+		// place: the reference beside the side byte and the `tick + 600`
+		// reveal stamp, both ahead of the start sound [06 §4.1]. This is the
+		// only site that binds a real shooter to a fresh projectile record.
+		Shooter:     u,
 		Origin:      origin,
 		MuzzlePiece: muzzlePieceFn,
 		MuzzleWorld: muzzleWorld,
@@ -1187,7 +1206,7 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 		Aim:          slot.Aim,
 		Target:       tgt,
 	}
-	h, ok := TryFire(svc, &cSlot, idx, tgt, tick, ports)
+	_, ok = TryFire(svc, &cSlot, idx, tgt, tick, ports)
 	// The spread's mutation of the slot's stored angles is retained whether or
 	// not the allocation succeeded [06 §4.4].
 	slot.DesiredYaw = cSlot.DesiredYaw
@@ -1196,13 +1215,12 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 		slot.MuzzlePiece = cSlot.MuzzlePiece
 		slot.Aim = cSlot.Aim
 		slot.Flags = cSlot.Flags
-		if h != 0 {
-			recIdx := int(h) - 1
-			if recIdx >= 0 && recIdx < len(svc.Records) {
-				svc.Records[recIdx].Shooter = u.Handle
-				svc.Records[recIdx].ShooterSide = uint8(u.Owner)
-			}
-		}
+		// The shooter reference and side byte are no longer re-bound here.
+		// [06 §4.1] writes both inside the common initializer, before the
+		// start sound and the Fire/RockUnit callbacks; TryFire now does that
+		// from FirePorts.Shooter, and stamps the reveal deadline in the same
+		// branch. Repeating the writes after the spawner returned was harmless
+		// but put them on the wrong side of the fixed callback order.
 		return true
 	}
 	slot.MuzzlePiece = cSlot.MuzzlePiece

@@ -5,6 +5,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 // FireSpy records the fixed callback order for testing [06 §4.1] C2.
@@ -57,6 +58,20 @@ type FirePorts struct {
 	// damage credit and hostility resolve against a real owner [06 §6.1].
 	// Shooterless paths (meteors) use NeutralSide (10) instead [06 §6.5].
 	ShooterSide uint8
+
+	// Shooter is the firing unit itself, and it is what makes the fill's
+	// real-shooter branch reachable from here. [06 §4.1] has the common
+	// initializer, for a real shooter, write the shooter's side byte AND its
+	// reference and then stamp the shooter's "fired recently" deadline — all
+	// before it hands the start-sound identity to the audio layer, which is
+	// the first of the fixed callbacks. Neither the family initializers nor
+	// TryFire knew the unit, so the reference was bound by the caller after
+	// the whole spawner had returned (after the start sound and the
+	// Fire/RockUnit callbacks) and the deadline was never stamped at all.
+	//
+	// nil is the shooterless path (the meteor creator, [06 §6.5]): no
+	// reference, no stamp.
+	Shooter *units.Unit
 
 	// InterceptorRescan is the fire-time interceptor rescan a vertical-launch
 	// executor retains even on a pool-full failure [06 §4.4] C5. nil skips it.
@@ -281,6 +296,25 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 	// through InitCommon, so they are set before dispatch [06 §6.1].
 	p.ShooterSide = ports.ShooterSide
 	p.MuzzlePiece = int16(muzzPiece)
+
+	// The rest of the fill's real-shooter branch [06 §4.1]: the shooter's
+	// reference beside its side byte, and then the "fired recently" deadline
+	// stamped at current tick + 600. The stamp is written OUTRIGHT — the
+	// deadline is one shared word with twelve gameplay writers and retail
+	// takes no maximum, so a longer reveal already in progress is shortened by
+	// a later shot just as a sensor breach's `tick + 90` shortens it
+	// [03 R-VIS-01 §6 "Writer census of the shared deadline"]. Its one
+	// gameplay reader is the cloak debit gate's `currentTick >= deadline`
+	// term [05 R-ECO-01 §9], so a cloaked unit that fires stops paying — and
+	// stays visible — for the next 600 ticks.
+	//
+	// Site: here rather than at the caller's post-return binding, because the
+	// section places both writes inside the common initializer, ahead of the
+	// start sound and the Fire/RockUnit callbacks below. It draws no RNG (I4).
+	if ports.Shooter != nil {
+		p.Shooter = ports.Shooter.Handle
+		ports.Shooter.RevealDeadline = tick + 600
+	}
 
 	// Family dispatch [06 §6.2] C15: this is what gives the record its
 	// position, yaw, pitch, scalar speed, velocity and family expiry.

@@ -2173,7 +2173,17 @@ StartBuilding edge. StartBuilding is an edge callback — the argument-less
 deferred form fires only when the cached building bit rises — and is distinct
 from the slot-form StartBuilding used by construction-command dispatch, which
 carries the producer heading as one unsigned 16-bit argument (section 5.3)
-[R-P0-09][R-P0-10].
+[R-P0-09][R-P0-10]. **Correction (2026-09-02, RWU-19-27):** "carries the
+producer heading" is stale. The argument-carrying form is the order-record
+emission helper of the nine mobile work handlers, and its one argument is the
+relative bearing from the builder to its work target ([R-CB-01 §3]
+corrections 1 and 2); no variant carries a producer's own heading. The
+factory uses only the edge form: it raises the building-bit edge in state 2,
+lowers it in state 4 and in cancel-current (together with the activation
+bit), never calls the emission helper, and its production record never
+carries the StopBuilding-pending flag — so the removal-time `StopBuilding`
+emission of [R-ORDER-02 §2] never fires for a factory record, and the
+factory's `StopBuilding` is the falling edge alone. **Established.**
 
 Allocation refusal (per-definition limit or pool exhaustion) occurs before the
 product exists: it prints the established "Unable to create any more units"
@@ -3672,6 +3682,10 @@ a static trace of the shared work helper's callers for a wake into the
 product's `GetBuilt` record.
 ```
 
+**Closed (2026-09-02):** the producer is the work step's byte store into the
+unit's pending word, raised before admission, and the window is 30 ticks,
+not 11 — [R-ORD-01 §11].
+
 ### Closed — two gate-bit producers, located [R-ORD-01 §6] (2026-08-29)
 
 [R-UNIT-06 §1] and [R-ORD-01 §0] left the producers of pending bits `0x8`,
@@ -4093,6 +4107,73 @@ otherwise the primary loop would never terminate. `BeCarried`'s phase 1 is
 the canonical example: deadline 10, code 2, every visit
 ([R-FAC-02 §4]'s correction).
 
+### Closed — `GetBuilt`'s wake bit `0x8000` is raised by the shared work step, as a byte store into the unit's pending word [R-ORD-01 §11] (2026-09-02)
+
+Static trace (RWU-19-27) of the shared construction step's entry, the
+primary pump's satisfied-set computation, and the `GetBuilt` phase bodies,
+closing the `TODO(question)` left at the end of [R-ORD-01 §5].
+
+**Established — the producer.** The unit's 16-bit pending word — the word the
+primary pump ORs with the record's own pending bits before masking by the
+gate ([R-ORD-01 §10]) — is written by more producers than the word-width
+stores the earlier census counted. Its high byte is also written on its own,
+as a byte, by four producers: the shared construction step sets bit 15
+(`0x8000`); the slot pipeline's could-not-fire path sets bit 12 (already
+recorded as "bit 12 of the unit's order-event word", [06 R-WPN-05 §6]); and
+the area-damage shooter-feedback helper sets bits 13 and 14 ([06 §9.4]). The
+step's store is the missing producer: on every call whose quantum is not
+negative (an x87 compare — an unordered quantum reads as negative), before
+the zero-quantum test and before the two-resource admission, it ORs `0x8000`
+into the **target's** pending word. It therefore fires for an admitted step,
+for a step the admission refuses, and for a zero quantum (`workertime` below
+30) alike; it does not fire on the reverse (negative-quantum) arm.
+
+**Established — consumption.** `GetBuilt` leaves its gate at `0x8001` after
+every arm: the deadline setter arms bit 0 and the handler ORs in `0x8000`. On
+the product's next pump visit the satisfied set is
+`(record pending | unit pending) & gate`; with bit 15 raised it is non-zero,
+so the record dispatches at once, before its deadline, and the pump clears
+the consumed bit from both words. The phase-2 body then takes its `0x8000`
+arm — deadline 30, hold, no decay — and its deadline-expiry arm (satisfied
+bit 0 alone: deadline 11 plus the negative work step) is reached only when a
+whole deadline passes with no forward step on the product. Phases 0 and 1 do
+not test the satisfied set, so a raised bit merely advances them early: under
+continuous work the record reaches phase 2 on its third worked visit and
+re-arms 30 ticks on every worked visit after that.
+
+The per-unit visit pumps every live unit whose owner is human- or
+computer-controlled, with no completion gate, so an unfinished product is
+pumped while it is being built; a bit raised in the builder's visit is
+consumed in the product's visit of the same tick when the product's slot
+sorts later, otherwise in the next tick's. For a carried factory product the
+head is `BeCarried`, whose gate is bit 0 only, so bit 15 is never consumed
+until release ([R-FAC-02 §4]); the factory case is unaffected.
+
+**The contract, restated for the implementer.** A nanoframe decays only after
+30 consecutive ticks in which no builder's forward work step touched it (11
+after a decay visit), and *any* forward step counts — one refused for
+resources and one with a zero quantum included. A builder stalled on metal
+therefore keeps its site from decaying by standing at it, and so does a
+builder whose `workertime` is under 30.
+
+**Correction — three earlier statements.** [R-ORD-01 §5]'s 2026-08-30 closure
+said "the missing `0x8000` producer is the shared work step itself", which is
+right, but continued "the **window** reproduced is the decay period: an
+admitted step pushes the product's next decay visit to `tick + 11`" and "a
+denied work step (the two-resource admission of doc 05) admits nothing and
+therefore defers nothing — a builder stalled on metal watches its own site
+decay". Both are wrong: the re-arm is 30 ticks, and the bit is raised before
+admission. That section's `TODO(question)` on "the producer and phase-2
+reading of `GetBuilt`'s wake bit `0x8000`" is closed here, and its earlier
+detail (a), "phase 2's wake bit `0x8000` has **no located producer** in the
+bounded set", is superseded. [R-FAC-02 §4]'s "the only writers of that unit
+word in the whole export OR in bit 2 (the COB set-port paths of §4.7);
+nothing ever raises bit 0 or `0x8000` there" and "`GetBuilt` is woken **only
+by its own deadline**" counted word-width stores only: the byte-width store
+above is a fourth writer, and `GetBuilt` is woken by it. Doc 05's
+[R-WORK-01 §1] listing named the store `setWorkedThisTickFlag(target)`; it is
+this bit, and the listing is corrected there.
+
 ### Closed — command resolution, exactly [R-ORD-02 §1] (2026-08-29)
 
 §3.4's table names the outcomes of the command resolver; this block gives
@@ -4432,7 +4513,10 @@ phase: cancel-all.
 * **The guard-candidate visitor** (`VTOL_SeekGuard` phase 1) admits `u`
   when `u`'s owner's diplomacy byte toward my side is nonzero, `u` is not
   `canfly`, and `u` is not the seeker. The list is in enumeration order; the
-  seeker takes the first entry, so no draw is made.
+  seeker takes the first entry, so no draw is made. *Polarity closed
+  (2026-09-02, [R-AIR-01 §14]):* the byte is the candidate owner's row A
+  indexed by the seeker's slot, and nonzero means allied — the seeker guards
+  friends.
 * **The tail append** used by the patrol-chain setup and by `VTOL_Follow`'s
   hand-off to `VTOL_SeekGuard`: walk the segment the record's rear-segment
   flag selects to its last link and append; the record's owner is set and
@@ -4798,8 +4882,12 @@ new state byte as a 4-byte network event ([R-UNIT-06 §2]). The sites:
    remaining fraction, sets state-word bit 13, and for a controlled owner:
    if state bit 29 is clear and the product has a carrier link, detaches it;
    if bit 29 is set, refreshes the builder GUI. **Then `activatewhenbuilt` →
-   raise bit 0**; then, when the product is the locally selected unit, the
-   order panel is refreshed; then `isfeature` as above; then the ownership
+   raise bit 0**; then, when the **builder** is the locally selected unit,
+   the builder's order panel is refreshed (correction 2026-09-02, RWU-19-27:
+   this read "when the product is the locally selected unit"; the compare is
+   against the builder's identity word and the panel refreshed is the
+   builder's — for a factory, its build page; [R-FAC-02 §3]'s "queue-count
+   label refresh" is the same step); then `isfeature` as above; then the ownership
    notification for a controlled owner; finally a shared interface flag is
    set when either unit carries state bit 4. `Activate` therefore precedes
    the product's first order pump, and a factory product with
@@ -8852,6 +8940,44 @@ anchor cell and footprint size; enumerate and test arrival on that border with
 the mover's committed anchor cell; make no other change to the class or to
 the rows.
 
+### Closed — the mobile-build approach has no candidate generator: the rectangle goal is the whole mechanism [R-PATH-01 §13] (2026-09-02)
+
+**What was open.** §7.4 carried, without anchor, "Build-site generation
+enumerates perimeter candidates around a footprint, filters by range and
+placement validation, sorts a bounded list of candidates, and passes a
+selected point goal into path search", and [R-PATH-01 §12] closed only the
+rectangle's geometry, leaving "the perimeter-candidate ranking of the
+build-site generator" open. Nanolathe's approach code enumerates square rings
+outward from the grown rectangle, filters each candidate by build distance,
+sorts by planar distance from the builder and walks to the best point.
+
+**Established (bounded negative).** The `MobileBuild` handler's approach
+phase ([R-ORD-01 §5]) does exactly this and nothing more: read the product
+definition's footprint pair; snap the record's X and Z to that footprint's
+centre (anchor cell from the recorded position with the `0x80000` half-cell
+form of [R-ORD-01 §1], then `(foot + 2·cell)·0x80000`); zero the leash word;
+install the **rectangle goal** of [R-PATH-01 §12] with the product's anchor
+cell and footprint as its origin and size; set the gate word to `0xE0`;
+advance. There is no candidate enumeration, no range filter, no sort, no
+bounded list and no point goal. The candidates are the grown rectangle's
+border cells, enumerated by the search in the order [R-MOV-03 §9] gives; the
+"selection" is the search's own — the border cell it closes first by path
+cost, with the enumeration order as the tie among equal keys — and the
+builder halts when its committed anchor lies on the border ([R-PATH-01 §12]).
+The VTOL twin uses a point marker instead ([R-ORD-02 §2]: the reverse snap
+and a `builddistance` arrival radius) and the factory handler never walks.
+The bound is the handler body, its goal installer and the rectangle class's
+methods; no other routine on the mobile-build path reads a candidate list.
+
+**The range test on this path** is not a per-candidate filter but the
+handler's own arrival check, already stated in [05 R-WORK-01 §2]: planar,
+from the **builder's origin** to the **site centre**, less
+`trunc(8·hypot(footprint))` for each end, inclusive against `builddistance`.
+It is measured neither to the footprint's nearest edge nor from the nano
+piece. For an implementation: enumerate the offset-1 rectangle only, let the
+path search choose, and replace any edge-clamped reach test with §2's
+centre-minus-pads form.
+
 ### 7.3 Scheduler budget, publication, and route storage
 
 **Established fact:** Path work is budgeted. A global scheduler counter replenishes every 150 ticks. Per-player quanta use six-times, three-times, and one-times weighting based on scheduler state. Each active request is limited to 100 heap pops per scheduler call. [R-PATH-01 §6] states the exact counters, the admission walk, and what each charge buys.
@@ -9201,6 +9327,13 @@ clamps compare RAW authored radii while its arrival predicate uses
 must be reproduced as-is, not "fixed" [P0-13 A19].
 
 **Established fact:** Build-site generation enumerates perimeter candidates around a footprint, filters by range and placement validation, sorts a bounded list of candidates, and passes a selected point goal into path search.
+
+**Correction (2026-09-02, [R-PATH-01 §13]).** The sentence above carries no
+anchor and describes no mechanism on the mobile-build approach path: the
+handler installs the rectangle goal of [R-PATH-01 §12] directly and the
+search's border enumeration is the only "candidate" set — there is no
+perimeter generator, no range filter, no sort and no bounded list. Read
+[R-PATH-01 §13] in its place.
 
 **Mobile-build walk target [R-P0-19]:** Nanolathe drives the mobile-build
 walk with a rectangle-perimeter goal around the product footprint expanded
@@ -11826,7 +11959,10 @@ position on the coarse bit alone, including one another unit occupies, where we
 walk the cells and may refuse. The divergence is bounded — a refusal only makes
 the caller keep searching, and the ground-landing machine already has its
 repeated-failure fallback — but it is a divergence. What would settle it is the
-writer and layout of that half-resolution map.
+writer and layout of that half-resolution map. **Corrected (2026-09-02,
+[R-AIR-01 §14]):** the grid is the mapping word grid of [03 R-LAYER §1] and
+the bit is the owner's slot bit; Nanolathe has it, and the early accept can be
+applied.
 
 ### Closed — standby, the idle circle, and the seek states [R-AIR-01 §7] (2026-08-29)
 
@@ -12439,6 +12575,105 @@ list head on every visit; the record's target reference (bound in phase 0)
 is never consulted by it. `internal/movement/transport.go`'s marker is
 closed by deleting the guard.
 
+### Closed — the follow goal's piece, the coarse landing accept, the scratch words, the guard visitor's polarity, and the dogfight's steer flag [R-AIR-01 §14] (2026-09-02)
+
+RWU-19-28 traced the five `TODO(question)` markers the air-order executor
+still carried. Each item names the question, the answer and its confidence.
+
+**§14.1 — What §4's "target's attach-piece world position" is. Established.**
+The follow branch of the goal update asks the piece world-position locator of
+[R-REV-02] for the marker's stored **attach piece index** on the target and
+takes the target's origin plus that piece's model-space position (the chain
+of piece offsets with the unit's own bank, heading and pitch applied at the
+root and Z negated, as [R-REV-02] states). The locator answers a **zero
+offset** when the index is negative, at or beyond the model's piece count, or
+the target has no model. The **follow-unit** constructor (flags `0x01` /
+`0x07`) stores index **−1**, so a plain follow marker's goal is exactly the
+target's origin triple — no piece arithmetic at all. Only the
+**follow-unit-piece** constructor (flags `0x05`, the transport pickup of §9)
+stores a real index: the attach piece the transport query returned. For
+`VTOL_Follow`, `AirStrike`'s bound-target marker and every other follow-unit
+user, "the target's position" is therefore the whole contract; the exit-piece
+transform matters to pickup alone. The radial offset of flag `0x02` is added
+after, as §4 says.
+
+**§14.2 — Correction: the coarse early accept of [R-AIR-01 §6a] reads the
+mapping word grid, not a class-blocking map.** §6a says the test "reads one
+16-bit word from a **half-resolution** blocking map … and tests `1 <<
+unitMovementClassShift` against it. When that bit is clear the test returns
+landable immediately", and its "Missing and unknown" paragraph asks for "the
+writer and layout of that half-resolution map". Both halves were misread. The
+grid is the **mapping word grid** of [03 R-LAYER §1] — one 16-bit word per
+2×2-cell tile, bits 0–9 one per player slot, the very grid the path search's
+passability test reads ([R-PATH-01 §2]) — and the shift is the unit's **owner
+slot byte**, the byte [R-ORD-02 §1]'s own-unit test compares with the local
+slot. The index arithmetic §6a gives (`(cellX >> 1) + (fx >> 2)` on both
+axes, stride `mapWidthCells >> 1`) stands. The rule is therefore: **if the
+tile under the footprint's anchor-plus-quarter-footprint point is not mapped
+for the aircraft's owner, the position is landable without any further
+test**; only a mapped tile is walked cell by cell. (Established, direct.)
+Consequences: with the mapping/history mode disabled the grid is all-ones
+([03 R-LAYER §1] write site 2) and the early accept never fires; with it
+enabled an aircraft sent over ground its owner has never seen lands blind —
+onto a feature, a yard or another unit — and the per-cell rules apply only
+where its owner has once had sight. Nanolathe already carries this grid for
+the path search, so §6a's "Missing and unknown" paragraph is closed: apply
+the owner's mapping bit before the walk.
+
+**§14.3 — Which scratch words the air legs use (§8's "a record scratch
+word"). Established.** The order record carries two general scratch words,
+`p1` and `p2` in [R-ORD-02 §3]'s vocabulary (`p1` is the word `VTOL_Follow`
+phase 0 draws its orbit bearing into, `p2` the word taking its low bit). The
+census over the four combat executors and `VTOL_Evade`:
+
+* `VTOL_Evade` draws `random below 2` into **`p1`** and re-reads `p1` in
+  phase 1; `p2` is untouched.
+* `AirToGroundHover` phase 2 zeroes **both**; phase 3 uses **`p2` as the
+  miss counter** (incremented on a refused engagement, reset to 0 when it
+  exceeds 1) and **`p1` as the side flag** (0 → subtract the quarter turn and
+  write 1; 1 → add it and write 0).
+* `AirToAir` uses **`p1` as the scratch counter** of §8 (`+= 0x2D` on a
+  non-positive dot, zeroed on a positive one, the `< 0x5A` test, zeroed again
+  on the straight-ahead and give-up arms); `p2` is untouched.
+* `VTOL_SeekGuard` and `VTOL_Follow`: `p1` bearing, `p2` low bit, as
+  [R-ORD-02 §3] states.
+
+**§14.4 — The guard-candidate visitor's diplomacy clause. Established.** The
+byte the visitor loads is the candidate owner's **row A** ([05 R-SHARE-01 §1]:
+that owner's own alliance declaration) indexed by the **seeker's owner's
+slot** — the same shape [R-ORD-01 §3]'s combat-join correction (2026-09-01)
+established for the ground guard, read from the candidate's side. Row A is
+nonzero for a declared ally and for the owner itself (its self entry is
+seeded to one) and zero for everyone else, and the visitor admits `u` when the
+byte is **nonzero**. A seeking guard therefore attaches itself to units whose
+owner has declared alliance toward the seeker's side — its own side's units
+and its allies' — and never to an enemy; [R-ORD-02 §4]'s sentence was right
+and its polarity is now stated. The other two clauses (not `canfly`, not the
+seeker) are as written there.
+
+**§14.5 — `AirToAir`: the steer flag is never set, and the arm §8 omits.**
+*Established (bounded negative over the reconciled export) for the flag.* The
+velocity marker's "steer to a commanded heading" flag has exactly one setter
+in the image — a method that stores a heading and raises the flag — and **no
+caller**: no executor leg, no constructor (the constructor zeroes the flag
+word), and no stream path (the serializer emits the commanded heading only
+when the flag is set, which it never is, so a restored marker cannot carry
+it). The straight-ahead leg does call a routine immediately after building
+its marker, but that routine is **empty** — a compiled-out setter. Both
+dogfight legs therefore leave the flag clear, and the flag-gated branches §8
+describes — the velocity rotation in the goal update and the exact-heading
+requirement in the arrival test — are dead in play: the goal advances by its
+velocity unrotated, and arrival is the 48-world-unit test alone. Nanolathe
+leaving the flag clear on both legs is the retail state.
+
+*Established for the arm.* With the arrival bits clear, the counter below
+`0x5A` and the range to the target **at or below** `0xA0` world units, the leg
+installs **no** new payload — whatever is bound stays bound — sets the
+deadline to `tick + 45`, ORs `0x100E8` into the gate and returns *hold*: the
+lead-intercept arm's own tail, minus the marker. The give-up arm of
+[R-ORD-02 §5] is reached from exactly two states: arrival bits set with a
+non-positive dot, or arrival bits clear with the counter at or above `0x5A`.
+
 ### 10.3 Patrol and air construction orbit
 
 **Established fact:** Air construction orbit is an exact geometric recurrence,
@@ -12924,6 +13159,26 @@ builds a follow-unit marker with the reserved no-piece index and horizontal
 arrival radius 160 is [R-AIR-01 §6]'s phase 2; the flight block's input fetch
 (command position, command velocity, command heading) is [R-AIR-01 §1]'s; the
 observer node's unlink-on-destroy is [R-MOV-03 §7]'s.
+
+### Correction — the sweep's third player gate is the ally-group byte, not an elimination state [R-MOV-03 §10] (2026-09-02)
+
+[R-MOV-03 §1] says a slot is processed only when "its record exists, its
+controller byte is 1, 2 or 3, and its state byte is not the eliminated value
+10". The third clause named the wrong byte and invented a state.
+**Established, direct:** the byte the sweep loads is the row's **ally-group
+byte** — the byte the row constructor seeds with `10` ([05 "Player slot"],
+the eleventh-row finding), the byte the alliance rows are indexed
+by ([05 R-SHARE-01 §1]) — and the test is `!= 10`. The first clause is the
+row's leading occupancy word being nonzero. No per-player elimination state
+exists in the gate: a row whose player has lost every unit is still swept
+(and trivially owns nothing to visit), and the `10` test can only exclude a
+row that was never seated. For an implementation the gate is: occupancy word
+nonzero, control byte in {1, 2, 3}, ally-group byte not 10. Since every seated
+row 0–9 carries its own slot number in that byte (*Supported inference* from
+[R-ORD-02 §1]'s own-unit test, which compares a unit's owner byte with the
+local slot; decider: the seat-setup writer), the third clause is inert in any
+battle — which is why [05 R-SHARE-01 §3]'s parallel gate reads it as "the
+slot's own index is not 10".
 
 ## 11. Evidence basis and correction boundaries
 

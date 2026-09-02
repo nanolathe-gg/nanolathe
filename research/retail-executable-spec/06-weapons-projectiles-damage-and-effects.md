@@ -4007,6 +4007,76 @@ through the coverage and claim state, never through a dead-bit test.
 can store a small pool index as a raw pointer, and side effects of other
 interceptor-adjacent failure modes remain open.
 
+### Closed — the coverage compare's width, the projectile blast metric, the signature byte, and where `firestarter` is read [R-WPN-05 §10] (2026-09-02)
+
+RWU-19-27 re-read the interceptor scan, the interceptor-flagged explosion
+sweep, the weapon loader and the feature-damage helper for the placeholders
+an implementation had left in the interceptor code.
+
+**Established — the coverage compare is 32-bit unsigned, and a negative
+coverage inverts it.** `coverage` is a 32-bit integer in the weapon record.
+The scan forms `C << 16` and `C << 17` in 32-bit arithmetic and tests, per
+axis,
+
+```
+(uint32)((interceptorUnit.axis − candidate.storedTarget.axis) + (C << 16))
+    <= (uint32)(C << 17)
+```
+
+on the 16.16 values, X first and then Z, never Y; the subtraction is the
+interceptor **unit's** position (not its weapon piece) minus the candidate's
+stored aim point. There is no separate rule for malformed values — the
+formula in `uint32` is the whole contract. A negative coverage `−k` accepts
+exactly the complement of the open square of half-side `k`: a candidate aimed
+farther than `k` world units on both axes, or at exactly `k`, is accepted and
+one inside is rejected. A coverage at or above 32,768 wraps `C << 17` and
+accepts whatever set the formula then gives. An implementation computes the
+expression verbatim in unsigned 32-bit arithmetic and carries no "negative
+means none" guard. Neither pass tests the dead bit (§11.2). The scan is
+ordinary single-process code; the "index-versus-pointer anomaly" listed as
+Unknown belongs to the multiplayer reconstruction path, which Nanolathe does
+not implement — it stays Unknown and out of scope.
+
+**Established — the projectile sweep's metric is the sum of three truncated
+squares.** §9.3's "same sum-of-truncated-squares three-axis metric" means,
+exactly: with `d.axis = exploder.current.axis − victim.current.axis` as raw
+16.16 differences,
+
+```
+((dx·dx) >> 32) + ((dy·dy) >> 32) + ((dz·dz) >> 32)  <  area × area
+```
+
+each square a 64-bit signed product arithmetically shifted right by 32
+(whole world units squared, truncated per axis), summed and compared as
+signed 32-bit integers against the square of the **unhalved** 16-bit
+`areaofeffect`. The Y term is the two projectile records' current heights in
+the same 16.16 domain as X and Z — no terrain sample and no separate scale;
+the "victim height" is simply the victim record's current Y. Squaring the
+whole 16.16 delta and then truncating is not the same as truncating the delta
+and squaring it: a delta of 1.9 world units contributes 3, not 1.
+
+**Established — the signature byte is the weapon record's slot index.** Each
+accepted victim goes through the ordinary impact selector with no direct unit
+target, and then two 14-byte events of kind 14 are emitted to the shooter's
+owner's endpoint — one carrying the victim's stored target triple and its
+weapon byte, one carrying the exploder's own — where the weapon byte is the
+byte the weapon loader stamps into every record with that record's own slot
+index (0..255). Because an authored `ID` selects the record slot
+([02 "Weapon record"]), the byte **is** the low byte of the authored `ID` for
+every record an `ID` selects; `uint8(weaponID & 0xFF)` is exact. The events
+are the multiplayer replication of the removal: in a single-process game the
+local impact-selector call is the whole effect and the signature has no
+consumer.
+
+**Established — `firestarter` is read once, in the feature-damage helper, as
+a byte.** The nonzero test sits inside the feature-damage accumulator that
+the area-damage feature phase (§9.3) calls for each accepted feature — the
+listing of §13.1 — and nowhere in the stockpile, interceptor or projectile
+paths. The weapon loader stores the authored integer's **low byte**
+([02 "Weapon record"] lists it as 8-bit), so an authored `firestarter` of 256
+ignites nothing; the test is on that byte. An implementation keeps the test
+beside its feature-damage accumulator, not beside its interceptor code.
+
 ### 11.3 No-radar presentation
 
 **Established fact:** The weapon `noradar` flag is presentation-only in the
@@ -4631,6 +4701,41 @@ paralyzer-weapon target selection. A weapon-phase early return keyed on the
 flag is redundant with the slot state and harmless only while nothing else
 can hand a stunned unit a target — which the blocked runner and the cleared
 autonomy bits guarantee — so it must not be relied on as the mechanism.
+
+### Closed — cause 7 has exactly two producers, both gated on the definition's `isfeature` bit alone [R-DMG-01 §12] (2026-09-02)
+
+§12.1 lists cause 7 as "written by a DIRECT store of the damage-kind byte plus
+the death latch, NOT through the packet builder, from (a) the
+spawn-with-parameter branch and (b) the conversion handler gated on the
+definition's is-feature bit". RWU-19-28 asked whether any other producer
+writes cause 7 and what gates each. **Established (bounded census over the
+reconciled export):** exactly two sites store the kind byte `7`, and no
+caller of the damage-packet builder passes kind 7, so the packet path never
+produces it locally — a kind 7 arriving by network or restored from a save is
+the kill service copying the packet's kind ([R-DMG-01 §3]). The two sites and
+their gates:
+
+1. **The unit creator, when asked for a finished unit.** The creator's
+   finished flag — the argument that seeds the remaining fraction to `0.0`
+   instead of `1.0` — selects a post-construction block that runs the
+   `activatewhenbuilt` activation and then, when the definition carries
+   `isfeature` (capability word A bit 24), stores kind 7 and raises the death
+   latch. A nanoframe creation (flag clear) skips the block entirely. The
+   capture replacement of [05 R-WORK-01 §11] is one traced finished creation;
+   any other caller creating a complete `isfeature` unit takes the same
+   branch, and the unit converts on its next sweep.
+2. **The build-completion service** ([05 R-WORK-01 §1]'s completion
+   transition, also reached from the factory handler and the network
+   build-complete path): after the `activatewhenbuilt` activation and the
+   local-selection refresh, the same `isfeature` test stores kind 7 and
+   raises the latch.
+
+No other gate exists — not health, not the corpse flag, not whether a corpse
+feature resolves; the conversion itself (severity 0, variant 1, no `Killed`
+query) is §12.1's. For Nanolathe: an `isfeature` completion and a finished
+`isfeature` creation are the only cause-7 writers, the death resolution reads
+the stored kind byte, and there is no "an ordinary kill of an `isfeature`
+unit becomes cause 7" rule.
 
 ### Closed — `hitdensity` does not exist, and what is doc 05's [R-DMG-01 §6] (2026-08-29)
 

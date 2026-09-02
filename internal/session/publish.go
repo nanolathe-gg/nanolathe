@@ -550,14 +550,19 @@ func (s *Session) publishSnapshot(tick uint32) {
 			if s.visStatus != nil {
 				status = s.visStatus[int(u.Handle)]
 			}
+			// The contact's cloak input is the INSTANCE cloaked bit and
+			// nothing else. `init_cloaked` is consumed once, by the
+			// constructor, and no longer feeds this predicate
+			// [03 R-VIS-01 §6][05 R-ECO-01 §9] (RWU-19-26); the definition's
+			// `stealth` flag no longer feeds it either, because stealth
+			// suppresses radar and sonar detection and never line of sight
+			// [03 R-VIS-01 §5]. Stealth still travels beside it, as its own
+			// field, for the minimap blink gate of [03 §3.9] — the two are
+			// distinct inputs and must not be folded.
 			hidden := u.IsCloaked
 			stealth := false
 			if u.Def != nil {
 				stealth = u.Def.Stealth
-				// The cloak input is the INSTANCE cloaked bit; `init_cloaked`
-				// is consumed once, by the constructor, and no longer feeds
-				// this predicate [03 R-VIS-01 §6][05 R-ECO-01 §9] (RWU-19-26).
-				hidden = hidden || u.Def.Stealth
 				onOffable = u.Def.OnOffable
 			}
 			if si := radarSensorInput(sensorInputs, uint16(u.Handle), sensorIndex); si != nil {
