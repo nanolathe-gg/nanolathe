@@ -133,6 +133,9 @@ type EffectRecord struct {
 	NanolatheTargetBoxKnown bool
 	NanolatheTargetMin      [3]numeric.Fixed
 	NanolatheTargetMax      [3]numeric.Fixed
+	// NanolatheBoxAtSource: the box above is the SOURCE end of the segment and
+	// the target point is the destination [05 R-WORK-01 §8].
+	NanolatheBoxAtSource bool
 }
 
 // AppendView admits one immutable event view into the canonical fixed pool.
@@ -164,6 +167,7 @@ func (p *FixedEffectPool) AppendView(v frame.EffectView) bool {
 		HasModel: v.HasModel, NanolatheGeometryKnown: v.NanolatheGeometryKnown,
 		NanolatheTargetBoxKnown: v.NanolatheTargetBoxKnown,
 		NanolatheTargetMin:      v.NanolatheTargetMin, NanolatheTargetMax: v.NanolatheTargetMax,
+		NanolatheBoxAtSource: v.NanolatheBoxAtSource,
 	}
 	if r.AnimA.Active {
 		r.AnimA.Countdown = r.AnimA.frameDuration(r.AnimA.Idx)
@@ -216,6 +220,7 @@ func (p *FixedEffectPool) SnapshotViewsInto(out []frame.EffectView) []frame.Effe
 			NanolatheGeometryKnown:  r.NanolatheGeometryKnown,
 			NanolatheTargetBoxKnown: r.NanolatheTargetBoxKnown,
 			NanolatheTargetMin:      r.NanolatheTargetMin, NanolatheTargetMax: r.NanolatheTargetMax,
+			NanolatheBoxAtSource: r.NanolatheBoxAtSource,
 		}
 	}
 	return out

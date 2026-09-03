@@ -76,18 +76,27 @@ func narrow(lo, hi numeric.Fixed) (origin, extent numeric.Fixed) {
 	return origin, lo + span*nanoFar/nanoDenom - origin
 }
 
-// Add appends a record for one accepted work step. The source is the nano
-// piece world position; min/max are the target's world bounding box. Records
-// spawn on their creation tick and the tick after it [05 "R-P0-06 §5
-// addendum"].
+// Add appends a record for one accepted work step in the ordinary direction:
+// the source is the nano piece world position, expanded into a degenerate box,
+// and min/max are the target's world bounding box. Records spawn on their
+// creation tick and the tick after it [05 "R-P0-06 §5 addendum"].
 func (f *NanoField) Add(src, min, max [3]numeric.Fixed, tick uint32) {
+	f.AddBoxes(src, src, min, max, tick)
+}
+
+// AddBoxes is the general form. Retail submits one six-word box and one point
+// expanded into a degenerate box, and the two work directions differ only in
+// which end each lands on [05 R-WORK-01 §8]: build, repair and resurrection
+// put the box at the destination, while unit reclaim, capture and feature
+// reclaim put it at the source and converge on the builder's nano piece.
+func (f *NanoField) AddBoxes(srcMin, srcMax, dstMin, dstMax [3]numeric.Fixed, tick uint32) {
 	if f == nil {
 		return
 	}
 	var r NanoRecord
 	for a := 0; a < 3; a++ {
-		r.SrcOrigin[a], r.SrcExtent[a] = narrow(src[a], src[a])
-		r.DstOrigin[a], r.DstExtent[a] = narrow(min[a], max[a])
+		r.SrcOrigin[a], r.SrcExtent[a] = narrow(srcMin[a], srcMax[a])
+		r.DstOrigin[a], r.DstExtent[a] = narrow(dstMin[a], dstMax[a])
 	}
 	// The geometry initializer sets the record's final spawn tick one tick
 	// past creation, so a record spawns on two ticks.

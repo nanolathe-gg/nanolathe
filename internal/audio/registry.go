@@ -187,7 +187,7 @@ func (r *Registry) Load(id AliasID) (*Sample, error) {
 	}
 	paths := canonicalAliasPaths(a.Name)
 	if a.Path != "" {
-		paths = append([]string{a.Path}, paths...)
+		paths = append(authoredSoundPaths(a.Path), paths...)
 	}
 	return r.cache.loadCandidates(a.Name, paths)
 }
@@ -206,13 +206,34 @@ func canonicalAliasPaths(name string) []string {
 	return paths
 }
 
+// authoredSoundPaths is the candidate list for an alias's authored `sound`
+// value. Registration probes that value "through the VFS and the WAV decode
+// path with the `sounds/` prefix and the canonical candidate tries"
+// [03 §8.3 "Alias registration"], and stock `allsound.tdf` authors bare stems
+// (`sound=butmain1`) whose files live under `sounds/`.
+//
+// Correction (WU-19-131): this returned only the unprefixed forms, so every
+// alias registered from `allsound.tdf` probed a path no install carries, kept
+// the failed path, and stayed silent for the session — which muted every
+// interface cue (button clicks, `oktobuild`, `addbuild`, the panel detents) and
+// every feature/weapon sound that resolves through an authored alias rather
+// than through the alias NAME. The prefixed forms come first because that is
+// the order the registrar tries them in; a value that already carries the
+// prefix is not prefixed twice.
 func authoredSoundPaths(path string) []string {
 	clean := strings.ReplaceAll(strings.TrimSpace(path), "\\", "/")
 	if clean == "" {
 		return nil
 	}
 	hasWav := strings.HasSuffix(strings.ToLower(clean), ".wav")
-	paths := []string{clean}
+	var paths []string
+	if !strings.HasPrefix(strings.ToLower(clean), "sounds/") {
+		paths = append(paths, "sounds/"+clean)
+		if !hasWav {
+			paths = append(paths, "sounds/"+clean+".wav")
+		}
+	}
+	paths = append(paths, clean)
 	if !hasWav {
 		paths = append(paths, clean+".wav")
 	}

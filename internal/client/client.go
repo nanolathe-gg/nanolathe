@@ -584,6 +584,22 @@ func (c *Client) featureFrameFor(f frame.FeatureView, shadow bool) *formats.GAFF
 	if shadow {
 		seq = f.SeqNameShad
 	}
+	// A cell with a live event record blits that record's cursor frames — the
+	// burn, death or reclaim animation the instance is running — instead of the
+	// definition's rest cursor [03 R-RAST-01 §6][05 R-FEAT-01 §10] pass 3. The
+	// visit index comes from the committed frame, so the painted frame follows
+	// the simulation's cursor rather than a presentation-side timer, and the
+	// record's last visit is the one that retires it (I6).
+	if f.EventSeqName != "" && filename != "" {
+		eventSeq := f.EventSeqName
+		if shadow {
+			eventSeq = f.EventSeqNameShad
+		}
+		if eventSeq == "" {
+			return nil // the definition names no shadow twin for this sequence
+		}
+		return c.featureEventFrame(filename, eventSeq, f.EventSeqVisit)
+	}
 	if filename == "" || seq == "" {
 		return nil
 	}

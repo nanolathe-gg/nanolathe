@@ -41,3 +41,36 @@ func TestRegistryUsesAuthoredPathAndRetainsFailedIdentity(t *testing.T) {
 		t.Fatal("missing registered path should remain silent/error on load")
 	}
 }
+
+// TestAuthoredSoundPathsCarryTheSoundsPrefix locks the alias registrar's probe
+// candidates [03 §8.3 "Alias registration"]: the authored `sound` value is
+// probed "with the `sounds/` prefix and the canonical candidate tries". Stock
+// `allsound.tdf` authors bare stems, so dropping the prefix silences every
+// alias-registered cue.
+func TestAuthoredSoundPathsCarryTheSoundsPrefix(t *testing.T) {
+	got := authoredSoundPaths("butmain1")
+	if len(got) == 0 || got[0] != "sounds/butmain1" {
+		t.Fatalf("authoredSoundPaths(butmain1) = %v, want the sounds/-prefixed form first", got)
+	}
+	if !containsPath(got, "sounds/butmain1.wav") {
+		t.Fatalf("authoredSoundPaths(butmain1) = %v, want the prefixed .wav candidate", got)
+	}
+	if !containsPath(got, "butmain1") {
+		t.Fatalf("authoredSoundPaths(butmain1) = %v, want the unprefixed candidate retained", got)
+	}
+	// An authored value that already carries the prefix is not prefixed twice.
+	for _, p := range authoredSoundPaths("sounds/explode.wav") {
+		if p == "sounds/sounds/explode.wav" {
+			t.Fatalf("authoredSoundPaths doubled the prefix: %v", authoredSoundPaths("sounds/explode.wav"))
+		}
+	}
+}
+
+func containsPath(paths []string, want string) bool {
+	for _, p := range paths {
+		if p == want {
+			return true
+		}
+	}
+	return false
+}

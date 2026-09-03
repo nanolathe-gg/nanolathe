@@ -136,6 +136,10 @@ type gameShell struct {
 	// briefing effects are never sent to a second frontend-only service
 	// [03 R-AUD-02 §1][I6].
 	audioOwner *audio.Service
+	// frontendAliasesBound records that the authored alias table has been
+	// registered on audioOwner so the front end's own interface cues resolve
+	// [02 "Sound aliases"][07 R-FE-01 §2].
+	frontendAliasesBound bool
 
 	// campaignProgress is copied from the frozen result session when Start
 	// selects a successor or retry. The next battle receives the same bank

@@ -200,6 +200,7 @@ func (s *EffectService) admit(now uint32, e Event) {
 		NanolatheGeometryKnown:  e.NanolatheGeometryKnown,
 		NanolatheTargetBoxKnown: e.NanolatheTargetBoxKnown,
 		NanolatheTargetMin:      e.NanolatheTargetMin, NanolatheTargetMax: e.NanolatheTargetMax,
+		NanolatheBoxAtSource: e.NanolatheBoxAtSource,
 	}
 	if e.ExpiryTick != 0 {
 		view.ExpiryTick = e.ExpiryTick

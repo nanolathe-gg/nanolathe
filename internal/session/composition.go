@@ -1033,6 +1033,16 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 				if name == "Capture" || name == "ReclaimUnit" || name == "VTOL_ReclaimUnit" {
 					x, y, z = target.X, target.Y, target.Z
 					targetX, targetY, targetZ = source.X(), source.Y(), source.Z()
+					// These three are the reversed direction too — target box
+					// into the builder's nano piece [05 R-WORK-01 §8] — but
+					// their box is the TARGET UNIT's six model extents, which
+					// this producer does not publish at all: the client
+					// resolves it from the model and then, having no
+					// NanolatheBoxAtSource flag here, reads it as the
+					// destination. The result is the same collapse the feature
+					// rows had. Fixing it is the unit-reclaim row's work, not
+					// the feature-reclaim path's, and needs the six extents
+					// published rather than re-derived.
 				}
 				e := frame.Event{
 					Tick: tick, Source: builder.Handle, Target: target.Handle,
@@ -1076,6 +1086,9 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 					return false
 				}
 				maxY := minY.Add(numeric.Fixed(int64(feature.Height) * 65536))
+				boxMin := [3]numeric.Fixed{minX, minY, minZ}
+				boxMax := [3]numeric.Fixed{maxX, maxY, maxZ}
+				nanoPiece := [3]numeric.Fixed{source.X(), source.Y(), source.Z()}
 				e := frame.Event{
 					Tick: tick, Source: builder.Handle, Target: 0,
 					X: minX, Y: minY, Z: minZ,
@@ -1084,13 +1097,24 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 					Producer: frame.ProducerBeam, PaletteRow: 6,
 					NanolatheActiveUntil:    tick + 300,
 					NanolatheTargetBoxKnown: true,
-					NanolatheTargetMin:      [3]numeric.Fixed{minX, minY, minZ},
-					NanolatheTargetMax:      [3]numeric.Fixed{maxX, maxY, maxZ},
+					NanolatheTargetMin:      boxMin,
+					NanolatheTargetMax:      boxMax,
 				}
 				name := orders.DescriptorFor(n.ID).Name
 				if name == "Reclaim" && n.Param1 > 15 || name == "VTOL_Reclaim" && n.Param1 > 30 {
+					// Feature reclaim sprays FROM the feature box INTO the
+					// builder's nano piece [05 R-WORK-01 §8]: the box is the
+					// source end and the nano piece is the degenerate one. The
+					// published point pair already reads that way (the event's
+					// own position is the box corner and its target is the nano
+					// piece); the flag is what tells the presentation which end
+					// carries the extent. Without it the box was read as the
+					// destination in both directions, so every particle of a
+					// tree reclaim was born and died inside the tree's own cell
+					// and no spray ever reached the commander.
 					e.Mode = uint8(frame.NanolatheBuild)
 					e.NanolatheGeometryKnown = true
+					e.NanolatheBoxAtSource = true
 					segments := frame.BuildNanolatheSegments(e, tick)
 					if len(segments) != 2 {
 						return false
@@ -1099,23 +1123,23 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 						return false
 					}
 					for range segments {
-						s.appendStripNanoEmitterBox(
-							[3]numeric.Fixed{source.X(), source.Y(), source.Z()},
-							[3]numeric.Fixed{minX, minY, minZ},
-							[3]numeric.Fixed{maxX, maxY, maxZ})
+						s.appendStripNanoEmitterFromBox(boxMin, boxMax, nanoPiece)
 					}
 					return true
 				}
 				if name == "Resurrect" {
+					// The resurrection wait sprays the ordinary way round —
+					// builder nano piece into the feature box [05 R-WORK-01 §8]
+					// — so the emitting end is the nano piece and the box is the
+					// destination.
 					e.Mode = uint8(frame.NanolatheReclaim)
 					e.NanolatheGeometryKnown = true
+					e.X, e.Y, e.Z = nanoPiece[0], nanoPiece[1], nanoPiece[2]
+					e.TargetX, e.TargetY, e.TargetZ = minX, minY, minZ
 					if !s.publication.events.EmitNanolathe(e) {
 						return false
 					}
-					s.appendStripNanoEmitterBox(
-						[3]numeric.Fixed{source.X(), source.Y(), source.Z()},
-						[3]numeric.Fixed{minX, minY, minZ},
-						[3]numeric.Fixed{maxX, maxY, maxZ})
+					s.appendStripNanoEmitterBox(nanoPiece, boxMin, boxMax)
 					return true
 				}
 				return s.publication.events.EmitNanolathe(e)

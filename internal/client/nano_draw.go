@@ -41,8 +41,20 @@ func (c *Client) tickNanolathe(cur *frame.Frame) {
 		if !e.NanolatheGeometryKnown {
 			continue
 		}
-		min, max := c.nanoTargetBox(cur, e)
-		c.nano.Add([3]numeric.Fixed{e.X, e.Y, e.Z}, min, max, cur.Tick)
+		box0, box1 := c.nanoTargetBox(cur, e)
+		if e.NanolatheBoxAtSource && e.NanolatheTargetBoxKnown {
+			// The reversed direction [05 R-WORK-01 §8]: the six-word box is the
+			// SOURCE end and the published target point is the destination, so
+			// the particles leave the whole footprint of the thing being
+			// reclaimed and converge on the builder's nano piece. Reading the
+			// box as the destination in both directions collapsed a feature
+			// reclaim's spray into the tree's own cell, where every particle
+			// lived one tick and nothing reached the builder.
+			dst := [3]numeric.Fixed{e.TargetX, e.TargetY, e.TargetZ}
+			c.nano.AddBoxes(box0, box1, dst, dst, cur.Tick)
+			continue
+		}
+		c.nano.Add([3]numeric.Fixed{e.X, e.Y, e.Z}, box0, box1, cur.Tick)
 	}
 	// DET-01: nanolathe spray is presentation-only; use a presentation-only
 	// RNG seeded from the committed tick so render cadence does not affect sim.

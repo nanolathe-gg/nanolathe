@@ -237,22 +237,33 @@ type FeatureView struct {
 	// Owner is the plot's placer selector. Map-authored features use the
 	// non-player selector 10; corpse/runtime features carry their owner's
 	// player slot [03 §3.3][03 §3.9].
-	Owner              uint8
-	OwnerKnown         bool
-	CX, CZ             int32
-	X, Y, Z            numeric.Fixed
-	DefName            string
-	Model              string
-	Health             int32
-	MaxHealth          int32
-	Status             uint32
-	IsBurning          bool
-	IsSinking          bool
-	BurnTicks          int32
-	FootX, FootZ       int8
-	Filename           string
-	SeqName            string
-	SeqNameShad        string
+	Owner        uint8
+	OwnerKnown   bool
+	CX, CZ       int32
+	X, Y, Z      numeric.Fixed
+	DefName      string
+	Model        string
+	Health       int32
+	MaxHealth    int32
+	Status       uint32
+	IsBurning    bool
+	IsSinking    bool
+	BurnTicks    int32
+	FootX, FootZ int8
+	Filename     string
+	SeqName      string
+	SeqNameShad  string
+	// EventSeqName and EventSeqNameShad are the sequence the instance's OWN
+	// cursor is running — the burn, death or reclaim animation — and its
+	// shadow twin. They are empty for every feature at rest. A cell with a
+	// live instance blits the instance's cursor frames; a cell with none blits
+	// the definition's rest cursor `seqname`/`seqnameshad`
+	// [03 R-RAST-01 §6][05 R-FEAT-01 §10].
+	EventSeqName     string
+	EventSeqNameShad string
+	// EventSeqVisit is that cursor's visit count: frame i of the entry holds
+	// for max(delay, 1) visits [05 R-FEAT-01 §10].
+	EventSeqVisit      int32
 	Animating          bool
 	AnimationStartTick uint32
 	AnimTrans          bool
@@ -339,6 +350,11 @@ type EffectView struct {
 	NanolatheTargetBoxKnown bool
 	NanolatheTargetMin      [3]numeric.Fixed
 	NanolatheTargetMax      [3]numeric.Fixed
+	// NanolatheBoxAtSource: the box above sits at the SOURCE end of the
+	// segment and the published target point is the destination — the
+	// reversed direction of unit reclaim, capture and feature reclaim
+	// [05 R-WORK-01 §8].
+	NanolatheBoxAtSource bool
 }
 
 // RoutePoint is one fixed-point point in an order's committed route.
@@ -681,10 +697,14 @@ type EventView struct {
 	NanolatheTargetBoxKnown bool
 	NanolatheTargetMin      [3]numeric.Fixed
 	NanolatheTargetMax      [3]numeric.Fixed
-	Sound                   string
-	AudioPositional         bool
-	AudioWater              bool
-	AudioAudible            bool
+	// NanolatheBoxAtSource: the box above sits at the SOURCE end of the
+	// segment and the published target point is the destination
+	// [05 R-WORK-01 §8].
+	NanolatheBoxAtSource bool
+	Sound                string
+	AudioPositional      bool
+	AudioWater           bool
+	AudioAudible         bool
 	// Status events are semantic unit-caption requests. They are consumed by
 	// the presentation edge, never by authoritative simulation [03 §8.3][07
 	// R-HUD-03 §14].

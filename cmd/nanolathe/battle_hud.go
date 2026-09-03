@@ -2294,6 +2294,12 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 				if rightClick {
 					return true
 				}
+				// TODO(question): which cue the `ORDERS` and `BUILD` gadgets play.
+				// `allsound.tdf` authors `ORDERSBUTTON` and `BUILDBUTTON` aliases,
+				// but no section names their producer, and [07 §9] ties
+				// `nextbuildmenu` to the page-switch routine rather than to these
+				// two stage buttons. Settling it needs the fired callback's cue
+				// argument for the two gadgets; silence rather than a guess.
 				_ = b.DispatchBuildPage(0)
 				return true
 			case "BUILD":
@@ -2314,14 +2320,14 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 			if rightClick {
 				return true
 			}
-			_ = b.DispatchBuildPage(nextPage)
+			_ = b.dispatchBuildPageCued(nextPage)
 			return true
 		}
 		if strings.Contains(upperName, "PREVPAGE") || strings.Contains(upperName, "PREV") && strings.Contains(upperName, "PAGE") || strings.Contains(upperName, "PAGEUP") {
 			if rightClick {
 				return true
 			}
-			_ = b.DispatchBuildPage(prevPage)
+			_ = b.dispatchBuildPageCued(prevPage)
 			return true
 		}
 		if strings.Contains(upperName, "NEXT") || strings.Contains(upperText, "NEXT") {
@@ -2333,7 +2339,7 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 			// a builder that has any authored page has a count of at least 2, so
 			// the test only ever refuses a builder with no build page at all.
 			if f.CommandPage.PageCount > 1 {
-				_ = b.DispatchBuildPage(nextPage)
+				_ = b.dispatchBuildPageCued(nextPage)
 				return true
 			}
 		}
@@ -2342,7 +2348,7 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 				return true
 			}
 			if f.CommandPage.PageCount > 1 {
-				_ = b.DispatchBuildPage(prevPage)
+				_ = b.dispatchBuildPageCued(prevPage)
 				return true
 			}
 		}
@@ -2383,15 +2389,23 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 				// Retail branches on the product's BMcode, not on the builder
 				// [07 §9]. Product BMcode determines queue versus placement.
 				if !hud.ProductArmsPlacement(prodDef) {
-					if err := h.dispatchFactoryBuild(b, prodKey, factoryBuildDelta(b.battleState().Input.ShiftHeld, rightClick)); err != nil {
+					delta := factoryBuildDelta(b.battleState().Input.ShiftHeld, rightClick)
+					if err := h.dispatchFactoryBuild(b, prodKey, delta); err != nil {
 						h.dispatchErr = err
+					} else {
+						// The counted-add routine's own cue [07 R-P0-11 §1].
+						b.playUICue(nil, countedBuildCue(delta))
 					}
 					return true
 				}
 				if rightClick {
 					return true
 				}
+				// The build-button handler "arms the MOBILEBUILD latch (`0xE`),
+				// stores the id in a pending-build word and plays the `addbuild`
+				// cue — the click arms it, not the ghost show" [07 §9].
 				b.armPlacement(prodDef)
+				b.playUICue(nil, cueAddBuild)
 				return true
 			}
 		}
@@ -2405,6 +2419,11 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 				return true
 			}
 			b.toggleOnOffSelected(b.battleState().Input.ShiftHeld)
+			// "the on/off and cloak arms of the same handler play the
+			// already-documented `specialorders`" [07 §9]. The cue belongs to the
+			// side-panel gadget arm, not to the on/off command itself, so the
+			// hotkey path that shares toggleOnOffSelected does not raise it.
+			b.playUICue(nil, cueSpecialOrders)
 			return true
 		}
 		// The two stance gadgets are resolved by the same longest-suffix table

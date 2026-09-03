@@ -90,13 +90,22 @@ type Event struct {
 	NanolatheTargetBoxKnown bool
 	NanolatheTargetMin      [3]numeric.Fixed
 	NanolatheTargetMax      [3]numeric.Fixed
-	Sound                   string
-	AudioPositional         bool
-	AudioWater              bool
-	AudioAudible            bool
-	StatusKind              uint8
-	StatusText              string
-	StatusClass             uint8
+	// NanolatheBoxAtSource says which END of the segment the six-word box
+	// above belongs to. One submission routine serves both directions and
+	// differs only in which argument it expands into a degenerate box and
+	// which it takes as the six-word box [05 R-WORK-01 §8]: build, repair and
+	// resurrection spray from the builder's nano piece INTO the box, while
+	// unit reclaim, capture and feature reclaim spray FROM the box into the
+	// builder's nano piece. Set means the latter, and the segment's
+	// destination is then the published target point.
+	NanolatheBoxAtSource bool
+	Sound                string
+	AudioPositional      bool
+	AudioWater           bool
+	AudioAudible         bool
+	StatusKind           uint8
+	StatusText           string
+	StatusClass          uint8
 }
 
 // Limits are presentation-only admission bounds. They do not limit the
@@ -324,7 +333,8 @@ func (c *EventBuffer) SnapshotEventsInto(dst []EventView) []EventView {
 			NanolatheActiveUntil:    e.NanolatheActiveUntil,
 			NanolatheTargetBoxKnown: e.NanolatheTargetBoxKnown,
 			NanolatheTargetMin:      e.NanolatheTargetMin, NanolatheTargetMax: e.NanolatheTargetMax,
-			Sound: e.Sound, AudioPositional: e.AudioPositional, AudioWater: e.AudioWater, AudioAudible: e.AudioAudible,
+			NanolatheBoxAtSource: e.NanolatheBoxAtSource,
+			Sound:                e.Sound, AudioPositional: e.AudioPositional, AudioWater: e.AudioWater, AudioAudible: e.AudioAudible,
 			StatusKind: e.StatusKind, StatusText: e.StatusText, StatusClass: e.StatusClass,
 		}
 	}

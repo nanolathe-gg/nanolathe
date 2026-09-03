@@ -2301,6 +2301,11 @@ func (g *gameShell) activateGadget(name string) {
 	if g.activateSaveLoadGadget(name) {
 		return
 	}
+	// The cue runs before the transition, in the screen handler that consumes
+	// the fired result [07 R-FE-01 §2][07 R-WGT-01 §3]. It is read off the
+	// screen the click landed on, so it must be taken before Navigate moves the
+	// mode.
+	g.playMenuCue(frontendCue(g.frontend.Mode, key))
 	if target, ok := g.frontend.Navigate(name); ok {
 		g.openMenu(target)
 		return

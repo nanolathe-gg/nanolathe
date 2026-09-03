@@ -4,7 +4,11 @@ import (
 	"github.com/nanolathe/nanolathe/internal/audio"
 	"github.com/nanolathe/nanolathe/internal/audiobackend"
 	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe/nanolathe/internal/ui"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -51,4 +55,216 @@ func detachBattleAudio(cl *client.Client, sess *session.Session) {
 	if be, ok := audio.GlobalOutput().(*audiobackend.Backend); ok {
 		be.Close()
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Interface cues.
+//
+// [07 R-WGT-01 §3] is a bounded negative: no widget handler and no painter
+// plays a sound. The alias names below are what the per-screen *fired*
+// callbacks hand to the interface cue player when they act on a result, so a
+// reimplementation plays the cue in the screen handler that consumes the
+// result — which is where every helper here is called from. The aliases are
+// ordinary authored sound aliases [02 "Sound aliases"], resolved through the
+// same registry as every other alias, not a separate UI audio path.
+
+// frontendCue is the single-player transition table's cue column
+// [07 R-FE-01 §2]. It returns the alias the fired callback plays before the
+// transition, or "" for a gadget the table lists without one.
+//
+// The table's case is reproduced as authored even though alias lookup is
+// case-insensitive [02 "Sound aliases"], so the cue column stays diffable
+// against the section.
+func frontendCue(mode shellMode, key string) string {
+	switch mode {
+	case ui.ModeMain:
+		switch key {
+		case "single":
+			return "BigButton"
+		case "intro", "credits":
+			return "smlButton"
+		}
+		// `MULTI` and `EXIT` are listed with no cue [07 R-FE-01 §2].
+	case ui.ModeSingle:
+		switch key {
+		case "newcamp":
+			return "BigButton"
+		case "anymsn":
+			return "bigButton"
+		case "skirmish":
+			return "skirmish"
+		case "options":
+			return "options"
+		case "prevmenu":
+			return "Previous"
+		case "loadgame":
+			// The table records "cue" for `LoadGame` without naming the alias.
+			// TODO(question): which alias `SINGLE`/`LoadGame` plays — the row of
+			// [07 R-FE-01 §2] names a cue but not its name; settling it needs
+			// the front-end callback's cue argument.
+			return ""
+		}
+	case ui.ModeMission:
+		switch key {
+		case "start":
+			return "bigButton"
+		case "prevmenu":
+			return "Previous"
+		case "difficulty":
+			return "SmlButton"
+		case "side0":
+			return "SideSelect"
+		case "side1":
+			return "SideSelect2"
+		}
+	case ui.ModeMap:
+		if key == "prevmenu" {
+			return "Previous"
+		}
+		// `SELMAP`'s `LOAD`/`MAPNAMES` row carries no cue [07 R-FE-01 §2].
+	case ui.ModeSkirmish:
+		if key == "start" {
+			// `SKIRMISH` `Start` runs "cue `BigButton`" first of all
+			// [07 R-FE-01 §5]; the transition table's row omits it.
+			return "BigButton"
+		}
+		// `SKIRMISH`'s `PrevMenu` and `SelectMap` rows carry no cue
+		// [07 R-FE-01 §2].
+	}
+	return ""
+}
+
+// ensureFrontendAudio returns the shell's one semantic audio owner, creating it
+// on first use and registering the authored alias table it resolves interface
+// cue names through. The battle adopts this same owner, so a cue played in the
+// front end and one played in battle share one registry and one sample cache
+// [03 R-AUD-02 §1][I6].
+func (g *gameShell) ensureFrontendAudio() *audio.Service {
+	if g == nil || g.cs == nil || g.cs.fs == nil {
+		return nil
+	}
+	if g.audioOwner == nil {
+		g.audioOwner = audio.NewService(g.cs.fs)
+	}
+	if !g.frontendAliasesBound && g.audioOwner.Registry != nil {
+		// Interface cue names are mode-0 alias registrations, so they resolve
+		// only once `allsound.tdf`'s sections are registered; without them
+		// `BigButton` would probe `sounds/BigButton.wav`, which no install has
+		// [02 "Sound aliases"][R-AUD-01 §1]. Registration order is the authored
+		// section order, which is what the ordered compile returns.
+		if _, ordered, err := content.CompileSoundAliasesOrdered(g.cs.fs); err == nil {
+			for _, alias := range ordered {
+				if alias != nil {
+					g.audioOwner.Registry.RegisterPath(alias.Alias, alias.Sound)
+				}
+			}
+		}
+		g.frontendAliasesBound = true
+	}
+	return g.audioOwner
+}
+
+// playMenuCue plays one front-end interface cue. A missing alias or a missing
+// sample stays silent, as it does in retail [03 §8.2].
+func (g *gameShell) playMenuCue(alias string) {
+	if alias == "" {
+		return
+	}
+	if svc := g.ensureFrontendAudio(); svc != nil {
+		_ = svc.PlayUICue(alias)
+	}
+}
+
+// orderButtonCue is the cue the GUI order-button dispatcher plays on each armed
+// write [07 §9 "The GUI order-button dispatcher"]: `immediateorders` for the
+// ATTACK/BLAST/FOLLOW/PATROL/MOVE families and `specialorders` for the
+// REPAIR/RECLAIM/CAPTURE families. The classification is on the parsed latch
+// value, which is the value the dispatcher writes.
+func orderButtonCue(latch input.Latch) string {
+	switch latch {
+	case input.LatchMove, input.LatchAttack, input.LatchBlast, input.LatchFollow, input.LatchPatrol:
+		return cueImmediateOrders
+	case input.LatchRepair, input.LatchReclaim, input.LatchCapture:
+		return cueSpecialOrders
+	}
+	// TODO(question): which cue the STOP, LOAD/PICKUP and UNLOAD arms play.
+	// [07 §9] names only the two families above, and `STOP` reaches the
+	// dispatcher through the generic immediate table rather than one of them;
+	// settling it needs the dispatcher's per-arm cue argument. Silence here
+	// rather than a guessed family.
+	return ""
+}
+
+// Interface cue aliases named by the sections that own each producer. They are
+// authored alias names [02 "Sound aliases"], never file paths.
+const (
+	cueImmediateOrders = "immediateorders"     // [07 §9] order-button arm
+	cueSpecialOrders   = "specialorders"       // [07 §9] order-button arm, on/off and cloak arms
+	cueNextBuildMenu   = "nextbuildmenu"       // [07 §9] page switch, [07 R-CAM-01 §2] `,`/`.`
+	cueAddBuild        = "addbuild"            // [07 §9], [07 R-P0-11 §1]
+	cueSubBuild        = "subbuild"            // [07 R-P0-11 §1]
+	cueSelectMultiple  = "SelectMultipleUnits" // [07 §9] selection refresh
+)
+
+// playSelectionCue is the selection refresh's cue [07 §9]: "one selected unit
+// takes the single-unit presentation path and multiple units take the
+// multiple-unit path; any change … plays `SelectMultipleUnits` or the single
+// select cue." The single select cue is the unit's own category voice, slot 1
+// of the static table [03 §8.3], so it goes through the eight-slot queue with
+// that slot's priority and cooldown; the multiple-unit cue is a flat interface
+// alias. A change that leaves nothing selected reaches neither path.
+//
+// This runs on the presentation side, at the click that produced the selection
+// command, and touches no simulation state [I6].
+func playSelectionCue(sess *session.Session, handles []pool.Handle) {
+	if sess == nil || sess.Audio == nil {
+		return
+	}
+	live := make([]pool.Handle, 0, len(handles))
+	for _, h := range handles {
+		if h != 0 {
+			live = append(live, h)
+		}
+	}
+	switch len(live) {
+	case 0:
+		return
+	case 1:
+		sess.EmitSelect(live[0])
+	default:
+		_ = sess.Audio.PlayUICue(cueSelectMultiple)
+	}
+}
+
+// dispatchBuildPageCued is the page-switch routine's cue seam. "Switching sets
+// battle-interface dirty bit `0x10` and plays the `nextbuildmenu` cue"
+// [07 §9 "Page encoding is closed"], and the routine validates the
+// selected-builder identity and the page-count guard first — so a refused
+// switch is silent, which is why the cue keys on DispatchBuildPage succeeding.
+func (b *battleSession) dispatchBuildPageCued(page int) error {
+	err := b.DispatchBuildPage(page)
+	if err == nil {
+		b.playUICue(nil, cueNextBuildMenu)
+	}
+	return err
+}
+
+// countedBuildCue is the cue the counted factory-queue producer plays for one
+// signed click count [07 R-P0-11 §1]: `addbuild` for an add and `subbuild` for
+// a subtract.
+//
+// TODO(question): whether a negative count is silent. [07 R-P0-11 §1] reads
+// "plays the `addbuild`/`subbuild` cue (local player; positive counts only)",
+// which names two aliases and then qualifies them with a clause that would
+// leave `subbuild` with no producer at all; the sign split below is the reading
+// that gives both aliases one. Settling it needs the counted routine's own cue
+// gate.
+func countedBuildCue(delta int) string {
+	switch {
+	case delta > 0:
+		return cueAddBuild
+	case delta < 0:
+		return cueSubBuild
+	}
+	return ""
 }

@@ -396,6 +396,45 @@ func (s *Service) fireBurnEvent(inst *Instance, idx int) {
 	}
 }
 
+// EventSequence reports the animation sequence a live EVENT record is running
+// on this instance, and how many feature-phase visits that record's cursor has
+// taken.
+//
+// It exists because the presentation boundary has to tell the two feature draw
+// cases apart. [03 R-RAST-01 §6] gives them: a cell with a live instance blits
+// the INSTANCE's shadow cursor frame and then its normal cursor frame, while a
+// cell with none blits `seqnameshad`/`seqname` — the definition's rest cursor.
+// This build attaches an Instance to every stamped anchor, so "live instance"
+// in the retail sense is the animation-record flag, and the sequence is chosen
+// by the record's own selector: burn, death or reclaim [05 R-FEAT-01 §10]
+// pass 3.
+//
+// A resting feature, a 3D definition and a record whose definition authors no
+// sequence for its selector all report false, which leaves the rest cursor in
+// charge — the same outcome those cells had before event records existed.
+func (i *Instance) EventSequence() (name, shadow string, visit int32, ok bool) {
+	if i == nil || i.Def == nil || !(i.IsBurning || i.IsAnimating) {
+		return "", "", 0, false
+	}
+	switch i.AnimationSelector {
+	case featureAnimSelectorBurn:
+		name, shadow = i.Def.SeqNameBurn, i.Def.SeqNameBurnShad
+	case featureAnimSelectorDie:
+		name, shadow = i.Def.SeqNameDie, i.Def.SeqNameDieShad
+	case featureAnimSelectorReclaim:
+		name, shadow = i.Def.SeqNameReclamate, i.Def.SeqNameReclamateShad
+	default:
+		return "", "", 0, false
+	}
+	if name == "" {
+		return "", "", 0, false
+	}
+	// BurnTicks is the cursor's visit count for every one of the three
+	// sequences: retail advances all of them with one routine, and this build
+	// counts their visits in the same word [05 R-FEAT-01 §10] pass 3.
+	return name, shadow, i.BurnTicks, true
+}
+
 // hasEventRecordAt reports whether the anchor carries an EVENT animation
 // record — burning, dying or reclaiming. That is what retail means by "the cell
 // has an instance" [05 R-FEAT-01 §8][05 R-FEAT-01 §9]: a sprite feature at rest

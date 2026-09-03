@@ -1017,6 +1017,7 @@ func (b *battleSession) minimapClickOrder(cl *client.Client, mx, my int32, addit
 					kind = session.HumanSelectionToggle
 				}
 				_ = b.enqueueHumanCommand(session.HumanCommand{Kind: kind, Selection: session.HumanSelectionCommand{Handles: []pool.Handle{h}}})
+				playSelectionCue(b.sess, []pool.Handle{h}) // [07 §9]
 				return
 			}
 		}
@@ -1294,13 +1295,15 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	if kbd.KeyDown(input.KeyNext) || kbd.KeyDown(input.KeyLeft) && kbd.HasShift() {
 		b.prevBuildPage()
 	}
+	// `.` and `,` are the next/previous build page of [07 R-CAM-01 §2]. The
+	// `nextbuildmenu` cue that row names belongs to the page-switch routine
+	// itself [07 §9 "Page encoding is closed"], so it is raised inside the page
+	// helpers below and not a second time here.
 	if !ctrlHeld && kbd.KeyDown(input.KeyPeriod) {
 		b.nextBuildPage()
-		b.playUICue(cl, "nextbuildmenu") // [07 R-CAM-01 §2]
 	}
 	if !ctrlHeld && kbd.KeyDown(input.KeyComma) {
 		b.prevBuildPage()
-		b.playUICue(cl, "nextbuildmenu") // [07 R-CAM-01 §2]
 	}
 	// The follow camera. `t` tracks the next selected unit after the current
 	// tracked object in slot order and `T` (Shift held) the previous, wrapping
@@ -1555,6 +1558,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 					} else {
 						_ = b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanSelectionReplace, Selection: session.HumanSelectionCommand{Handles: []pool.Handle{bh}}})
 					}
+					playSelectionCue(b.sess, []pool.Handle{bh}) // [07 §9]
 				} else {
 					if b.hasSelection() {
 						// Left-click contextual order when a selection exists and the click is not on own unit [04 §3.4][07 §9].
@@ -1581,6 +1585,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 				kind = session.HumanSelectionToggle
 			}
 			_ = b.enqueueHumanCommand(session.HumanCommand{Kind: kind, Selection: session.HumanSelectionCommand{Handles: handles}})
+			playSelectionCue(b.sess, handles) // [07 §9]
 		}
 	}
 	// No right-button order path: right-click is deselect/cancel only, handled at the top [07 §9][04 §3.4].
@@ -1664,7 +1669,7 @@ func (b *battleSession) switchBuildPage(digit int) {
 		return
 	}
 	target := hud.ClampPage(hud.DigitToPage(digit), int(frame.CommandPage.PageCount))
-	_ = b.DispatchBuildPage(target)
+	_ = b.dispatchBuildPageCued(target)
 }
 
 // nextBuildPage advances one page data-driven with guard [R-P0-03][07 §9] C10.
@@ -1674,7 +1679,7 @@ func (b *battleSession) nextBuildPage() {
 		return
 	}
 	target := hud.ClampPage(int(frame.CommandPage.Page)+1, int(frame.CommandPage.PageCount))
-	_ = b.DispatchBuildPage(target)
+	_ = b.dispatchBuildPageCued(target)
 }
 
 // prevBuildPage goes back one page data-driven with guard [R-P0-03][07 §9] C10.
@@ -1684,7 +1689,7 @@ func (b *battleSession) prevBuildPage() {
 		return
 	}
 	target := hud.ClampPage(int(frame.CommandPage.Page)-1, int(frame.CommandPage.PageCount))
-	_ = b.DispatchBuildPage(target)
+	_ = b.dispatchBuildPageCued(target)
 }
 
 // handleHudOrderButton binds named order buttons to the session command path
@@ -1700,6 +1705,10 @@ func (b *battleSession) handleHudOrderButton(name string) {
 	}
 	if latch.IsValid() {
 		b.battleState().Input.Latch = latch
+		// "Each armed write … plays the `immediateorders` cue … or the
+		// `specialorders` cue" [07 §9]; the cue follows the armed write, not the
+		// hit test, so a button whose parse yields no valid latch is silent.
+		b.playUICue(nil, orderButtonCue(latch))
 	}
 }
 

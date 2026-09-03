@@ -455,6 +455,18 @@ func (s *Session) publishSnapshot(tick uint32) {
 			if fv.Model == "" {
 				fv.Model = inst.Def.Filename
 			}
+			// A cell carrying a live EVENT record draws that record's own
+			// cursor, not the definition's rest cursor [03 R-RAST-01 §6]
+			// [05 R-FEAT-01 §10] pass 3. Publishing only the rest sequence left
+			// a reclaimed tree standing on its idle frame for the whole
+			// animation and then popping straight to its successor: the
+			// reclaim sequence the definition names was resolved by the
+			// simulation, which timed the record from it, and then never drawn.
+			if name, shadow, visit, ok := inst.EventSequence(); ok {
+				fv.EventSeqName = name
+				fv.EventSeqNameShad = shadow
+				fv.EventSeqVisit = visit
+			}
 			published.Features = append(published.Features, fv)
 		}
 	}

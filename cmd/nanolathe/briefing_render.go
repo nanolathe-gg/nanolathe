@@ -255,6 +255,16 @@ func (g *gameShell) dispatchBriefing(action BriefingAction) {
 	if g == nil || g.briefing == nil {
 		return
 	}
+	// `MSNBRIEF`'s cue column [07 R-FE-01 §2]: `PrevMenu` plays `Previous` and
+	// `TextRegion`/`MOREBAR` plays `More`; the `Start` and `SHUTUP` rows carry
+	// no cue. It runs in the screen handler that consumes the fired result
+	// [07 R-WGT-01 §3].
+	switch action {
+	case BriefingActionPrev:
+		g.playMenuCue("Previous")
+	case BriefingActionMore:
+		g.playMenuCue("More")
+	}
 	event, err := g.briefing.Dispatch(action)
 	if err != nil {
 		reportRetailMessageError(g.showRetailMessage(err.Error()))

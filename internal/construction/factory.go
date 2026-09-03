@@ -622,6 +622,31 @@ func (s *Service) notifyStatus(text string) {
 	s.StatusText(text)
 }
 
+// Status kinds the build rows this service owns emit [04 R-ORD-01 §1]'s table.
+const (
+	statusCant     uint8 = 7 // `cant` — every construction rejection
+	statusComplete uint8 = 8 // `unitcomplete`
+	statusBuild    uint8 = 9 // `build`
+)
+
+// raiseStatus is the shared status emitter of [04 R-ORD-01 §1], reached from
+// the `BuildingBuild` and `MobileBuild` handler bodies. Those two rows live in
+// this package rather than in internal/orders [04 R-ORD-01 §5], so their status
+// sites raise from here through the order queue's presentation adapter — the
+// same seam orders.NotifyStatus gives every other handler.
+//
+// It is presentation: the emitter's own gate (local player, live unit) is
+// applied by the adapter, the request is staged as a committed-frame event, and
+// nothing here reads or writes simulation state or either RNG stream
+// [03 §8.3][I4][I6]. logMessage beside these calls stays what it is — a
+// construction-lifecycle diagnostic, not the player-facing status line.
+func (s *Service) raiseStatus(u *units.Unit, kind uint8, text string) {
+	if s == nil || u == nil {
+		return
+	}
+	orders.NotifyStatus(u, kind, text)
+}
+
 // LastKill returns the most recent kind-9 termination packet [05 C21].
 func (s *Service) LastKill() KillInfo { return s.lastKill }
 
@@ -1878,8 +1903,11 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 	productHandle := product.Handle
 	node.Target = productHandle
 
-	// Message "Starting construction" verbatim [05 C18].
+	// Message "Starting construction" verbatim [05 C18]. `BuildingBuild` phase 2
+	// emits it as status kind 9 (`build`) on the builder once the nanoframe was
+	// created [04 R-ORD-01 §5][05 "the build-order caption census"].
 	s.logMessage("Starting construction")
+	s.raiseStatus(factory, statusBuild, "Starting construction")
 
 	// Register builder link on product [05 C18].
 	// The local builder link is retained for the product's GetBuilt lookup;
@@ -2461,6 +2489,9 @@ func setQueueSecondary(q *orders.Queue, sec []*orders.Node) {
 
 func (s *Service) handleStop(factory *units.Unit, node *orders.Node, tick uint32) {
 	s.logMessage("Construction stopped") // verbatim [05 C22]
+	// `BuildingBuild`'s satisfied bit 3 arm: "status 7 `Construction stopped`,
+	// p2 -= 1, refresh, restart" [04 R-ORD-01 §5].
+	s.raiseStatus(factory, statusCant, "Construction stopped")
 	// Decrement node count ONCE [05 C22].
 	if node.Param2 > 0 {
 		node.Param2--
@@ -2743,6 +2774,9 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 		// Allocator refusal prints verbatim "Unable to create any more units", retries in exactly 300 ticks (not randomized), stays state2 [05 C18].
 		s.logMessage(fmt.Sprintf("construction: allocation refused (%v)", err))
 		s.logMessage(ErrLimitMessage)
+		// "not created → status 7 `Unable to create any more units`, deadline
+		// 300, hold" [04 R-ORD-01 §5][05 "the build-order caption census"].
+		s.raiseStatus(factory, statusCant, ErrLimitMessage)
 		node.DynamicGate = WakeBit2 // F6b: the allocator refusal wakes on bit 2 [05 "Factory production lifecycle"]
 		node.Deadline = int32(tick + 300)
 		// Stay in state2.
@@ -2860,6 +2894,11 @@ func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tic
 		// area was blocked" and abandons the order (code 8, remove).
 		text, code := orders.MobileBuildBlockedVisit(node, tick)
 		s.notifyStatus(text)
+		// The same two captions are status kind 7 on the builder
+		// [04 R-ORD-01 §5][05 "the build-order caption census"]. The visit helper
+		// already applies §5's correction that only the first blocked attempt and
+		// the over-limit one produce text, so an empty text is a silent attempt.
+		s.raiseStatus(builder, statusCant, text)
 		if code != 2 {
 			// Abandon goes through the queue's canonical removal so cleanup
 			// (StopBuilding counterpart included) runs [04 §3.3][R-ORDER-02 §2].
@@ -2879,6 +2918,8 @@ func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tic
 	product, err := s.allocateNanoframe(builder, def, mobilePlacement.Rect(), mobilePlacement.ModelPosition())
 	if err != nil {
 		s.logMessage(ErrLimitMessage)
+		s.raiseStatus(builder, statusCant, ErrLimitMessage) // [04 R-ORD-01 §5]
+
 		node.DynamicGate = WakeBit2
 		node.Deadline = int32(tick + 300)
 		return
@@ -2900,7 +2941,10 @@ func (s *Service) successEpilogueMobile(builder *units.Unit, node *orders.Node, 
 	// [04 R-ORD-01 §6][05 "Build request and factory queue behavior"].
 	productHandle := product.Handle
 	node.Target = productHandle
+	// `MobileBuild` phase 1's created arm: "status 9 with `Starting
+	// construction`" [04 R-ORD-01 §5].
 	s.logMessage("Starting construction")
+	s.raiseStatus(builder, statusBuild, "Starting construction")
 	s.SetBuilderLink(productHandle, builder.Handle)
 	if s.getBuiltLinks == nil {
 		s.getBuiltLinks = make(map[pool.Handle]pool.Handle)
@@ -2967,37 +3011,48 @@ func (s *Service) handleState3(factory *units.Unit, node *orders.Node, tick uint
 		node.Deadline = int32(tick + 1)
 		return
 	}
-	if !s.applyWorkStep(factory, product, tick) {
-		// Denied work leaves the remaining fraction untouched and retries on the
-		// next tick [05 "Two-resource admission"].
-		node.DynamicGate = WakeBit1 | WakeBit3
-		node.Deadline = int32(tick + 1)
-		return
+	committed := s.applyWorkStep(factory, product, tick)
+	if committed {
+		// Query and emit only after the two-resource admission and authoritative
+		// state update have committed [R-P0-06]. Rejected work reaches no query.
+		s.emitAcceptedNano(tick, factory, product)
+		// "Beside the spray" the reveal stamp is written by ten handler sites, and
+		// `MobileBuild`'s work phase is one of them at `tick + 300`; `BuildingBuild`
+		// is named explicitly as one that never writes it, even though this same
+		// loop is its phase-3 work visit too [04 R-ORD-01 §5 "The reveal stamp"].
+		// The write is an outright store to the one shared reveal/cloak deadline
+		// field, never a maximum [03 R-VIS-01 §6], and its only reader is the
+		// cloak debit gate [05 R-ECO-01 §9].
+		if isMobileBuild(node.ID) {
+			factory.RevealDeadline = tick + 300
+		}
 	}
-	// Query and emit only after the two-resource admission and authoritative
-	// state update have committed [R-P0-06]. Rejected work reaches no query.
-	s.emitAcceptedNano(tick, factory, product)
-	// "Beside the spray" the reveal stamp is written by ten handler sites, and
-	// `MobileBuild`'s work phase is one of them at `tick + 300`; `BuildingBuild`
-	// is named explicitly as one that never writes it, even though this same
-	// loop is its phase-3 work visit too [04 R-ORD-01 §5 "The reveal stamp"].
-	// The write is an outright store to the one shared reveal/cloak deadline
-	// field, never a maximum [03 R-VIS-01 §6], and its only reader is the
-	// cloak debit gate [05 R-ECO-01 §9].
-	if isMobileBuild(node.ID) {
-		factory.RevealDeadline = tick + 300
-	}
+	// The stored fraction's zero test, not this step's committed return, is what
+	// governs the completion transition: [05 R-WORK-01 §1] places it "on both
+	// arms and also on the admission-refused path", after every exit of the
+	// shared step. State 4 then repeats the transition idempotently
+	// [04 §4.7][R-FAC-01R].
+	//
+	// Corrected (WU-19-132). The zero test used to sit behind an early return on
+	// a non-committed step, and §1's FIRST line makes a step on an already-zero
+	// fraction return not-committed. So when an ASSISTING builder's step stored
+	// the zero — a commander guarding its own factory, the ordinary opening —
+	// this node never saw the zero: it retried in state 3 for the rest of the
+	// battle, the factory's building edge never fell, no successor product was
+	// ever allocated, and the finished product never reached the session's
+	// completion hook. That hook is what gives a new unit its mover state, so
+	// the product stood inside the factory footprint holding no occupancy,
+	// unable to walk out and unable to answer a Move order
+	// [05 "Factory production lifecycle"][04 R-FAC-02 §3].
 	if product.Remaining == 0 {
-		// The shared work helper owns the first completion transition. It runs
-		// synchronously when the admitted increment stores zero, before the
-		// factory's building edge falls in state 4. State 4 deliberately repeats
-		// this transition idempotently [04 §4.7][R-FAC-01R].
 		s.applyCompletionPosture(product)
 		node.Phase = uint8(State4)
 		s.handleState4(factory, node, tick)
 		return
 	}
-	// Otherwise retry one tick later with wake bits 1 and 3 [05].
+	// Denied work leaves the remaining fraction untouched, and an accepted step
+	// that did not finish the product retries the same way: one tick later with
+	// wake bits 1 and 3 [05 "Two-resource admission"][05].
 	node.DynamicGate = WakeBit1 | WakeBit3
 	node.Deadline = int32(tick + 1)
 }
@@ -3015,7 +3070,16 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 	// [04 R-FAC-02 §3].
 	// Trigger BuildUnitType only on local 30-tick deadline [P0-14].
 	// Interrupt masks 2/8 bodies known, producers TODO(T25) [P0-14].
-	// Engine prints no text, lowers start-building edge, runs completion transition [05].
+	// Phase 4's first act is the completion status, ahead of the falling
+	// StartBuilding edge and the completion transition: `BuildingBuild` emits
+	// status 8 with no text, so the slot's default caption `Nanolathe Complete`
+	// stands, and `MobileBuild` emits status 8 with `Building complete`
+	// [04 R-ORD-01 §5][03 §8.3]. This is the factory's "unit ready" voice.
+	if isMobileBuild(node.ID) {
+		s.raiseStatus(factory, statusComplete, "Building complete")
+	} else {
+		s.raiseStatus(factory, statusComplete, "")
+	}
 	s.stopBuilding(factory)
 	if product != nil {
 		// The second transition must not create a duplicate Activate callback.

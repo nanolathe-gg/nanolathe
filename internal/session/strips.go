@@ -1012,6 +1012,21 @@ func (s *Session) appendStripNanoEmitter(srcPoint, dstPoint [3]numeric.Fixed) {
 // reclaim/resurrection spray. Unit/build callers use the degenerate wrapper
 // above until their model-box adapter supplies extents [05 R-WORK-01 §8].
 func (s *Session) appendStripNanoEmitterBox(srcPoint, dstMin, dstMax [3]numeric.Fixed) {
+	s.appendStripNanoEmitterBoxes(srcPoint, srcPoint, dstMin, dstMax)
+}
+
+// appendStripNanoEmitterFromBox is the reversed direction of [05 R-WORK-01 §8]:
+// the six-word box is the SOURCE end and the builder's nano piece is the
+// degenerate destination. Feature reclaim, unit reclaim and capture spray this
+// way round; build, repair and resurrection use the wrapper above.
+func (s *Session) appendStripNanoEmitterFromBox(srcMin, srcMax, dstPoint [3]numeric.Fixed) {
+	s.appendStripNanoEmitterBoxes(srcMin, srcMax, dstPoint, dstPoint)
+}
+
+// appendStripNanoEmitterBoxes is the general form both wrappers share. The CRT
+// cost is identical either way — six draws per particle, five particles at
+// construction — so which end carries the extent never moves the stream [I4].
+func (s *Session) appendStripNanoEmitterBoxes(srcMin, srcMax, dstMin, dstMax [3]numeric.Fixed) {
 	if s == nil || s.strips == nil {
 		return
 	}
@@ -1028,7 +1043,7 @@ func (s *Session) appendStripNanoEmitterBox(srcPoint, dstMin, dstMax [3]numeric.
 	if s.Clock != nil {
 		tick = s.Clock.GlobalTick
 	}
-	srcOrigin, srcExtent := narrowBox(srcPoint, srcPoint)
+	srcOrigin, srcExtent := narrowBox(srcMin, srcMax)
 	dstOrigin, dstExtent := narrowBox(dstMin, dstMax)
 	o := stripObject{
 		family:        stripFamilyNano,

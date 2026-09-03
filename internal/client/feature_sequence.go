@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/content"
 )
 
@@ -30,6 +31,10 @@ type featureSequenceFrame struct {
 	w, h       int32
 	xoff, yoff int32
 	delay      int32
+	// art is the decoded frame the feature pass blits when this cursor is the
+	// one in charge — a cell with a live event record draws the instance's own
+	// cursor frames [03 R-RAST-01 §6].
+	art *formats.GAFFrame
 }
 
 // featureSequenceInfo is a compiled entry. A nil entry in the cache is a
@@ -70,6 +75,34 @@ func (c *Client) FeatureSequence(filename, sequence string, visit int32) (w, h, 
 		}
 	}
 	return f.w, f.h, f.xoff, f.yoff, info.visits, true
+}
+
+// featureEventFrame is the drawn half of the same cache: the frame an event
+// cursor sits on after `visit` visits, or nil when the sequence does not
+// resolve. It walks the identical max(delay, 1) cadence FeatureSequence
+// reports geometry for, so the frame the simulation timed the record from and
+// the frame the client paints are always the same one [05 R-FEAT-01 §10].
+//
+// Nothing is invented for a miss: an unresolved sequence paints no pixels, as
+// every other unresolved feature entry does [I9].
+func (c *Client) featureEventFrame(filename, sequence string, visit int32) *formats.GAFFrame {
+	info := c.featureSequenceInfo(filename, sequence)
+	if info == nil || len(info.frames) == 0 {
+		return nil
+	}
+	if visit < 0 {
+		visit = 0
+	}
+	elapsed := int32(0)
+	for i := range info.frames {
+		elapsed += holdVisits(info.frames[i].delay)
+		if visit < elapsed {
+			return info.frames[i].art
+		}
+	}
+	// Past the end the cursor sits on the last frame, which is where it is on
+	// the visit that finishes the record.
+	return info.frames[len(info.frames)-1].art
 }
 
 // WarmFeatureSequences compiles every feature definition's four sequences
@@ -140,6 +173,7 @@ func (c *Client) compileFeatureSequence(filename, sequence string) *featureSeque
 			xoff:  int32(ref.Frame.XOffset),
 			yoff:  int32(ref.Frame.YOffset),
 			delay: int32(ref.Value),
+			art:   ref.Frame,
 		})
 		info.visits += hold
 	}
