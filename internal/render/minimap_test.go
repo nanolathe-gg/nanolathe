@@ -565,3 +565,110 @@ func TestMinimapPhaseGatesRegularAndDashedPresentation(t *testing.T) {
 		t.Fatal("dashed ring parity did not change with committed phase")
 	}
 }
+
+// TestMinimapBakedUsedRectCropsPaddingOnNonSquareMap is a play-test
+// regression fixture (WU-19-133): a tall, thin map's baked TNT minimap uses
+// only the left part of the stored bitmap's width, with the rest padded
+// [fmt tnt "Minimap"]. This fixture is authored, not retail bytes: a 20x10
+// stored bitmap standing in for the shipped 252x252/252x256 canvases, with
+// real terrain in columns 0..7 and a solid fill colour (100, matching the
+// TNT format's own verified 0x64 pad byte) in columns 8..19.
+//
+// Before the fix, BuildRadarPicture resampled the whole 20-wide stored
+// bitmap into the destination regardless of how much of it was real, so a
+// destination column past 8/20 of the way across read the fill colour
+// instead of terrain — the reported "blue stripe" on a tall map's minimap.
+// The fix (bakedMinimapUsedRect) crops to the used sub-rectangle first, so
+// every destination column must land on real terrain.
+func TestMinimapBakedUsedRectCropsPaddingOnNonSquareMap(t *testing.T) {
+	const (
+		bakedW, bakedH = 20, 10
+		usedW          = 8 // playW*bakedW/playH = 40*20/100 = 8, truncating
+		fill           = byte(100)
+	)
+	baked := make([]byte, bakedW*bakedH)
+	for y := 0; y < bakedH; y++ {
+		for x := 0; x < bakedW; x++ {
+			if x < usedW {
+				baked[y*bakedW+x] = byte(10 + x) // real terrain content, 10..17
+			} else {
+				baked[y*bakedW+x] = fill // padding outside the used sub-rectangle
+			}
+		}
+	}
+
+	playW, playH := int32(40), int32(100) // a tall, thin map: playW < playH
+	layout := camera.LayoutMinimap(playW, playH)
+	if layout.W <= 0 || layout.H <= 0 {
+		t.Fatalf("layout got %+v", layout)
+	}
+
+	tables := identityALP() // out = p00, i.e. nearest sample at (sx,sy) truncated
+	pic := BuildRadarPicture(nil, playW, playH, layout, baked, bakedW, bakedH, &tables)
+	if pic == nil {
+		t.Fatalf("baked picture rejected")
+	}
+
+	// The rightmost destination column must still land on real terrain, not
+	// the fill colour: every dst x in [0,W) must map into the used
+	// sub-rectangle's columns [0,usedW), never into the padding beyond it.
+	lastCol := pic.W - 1
+	if got := pic.Bits[lastCol]; got == fill {
+		t.Fatalf("rightmost minimap column read the TNT pad colour (%d) instead of terrain — used-rect crop not applied", fill)
+	}
+	if got, want := pic.Bits[lastCol], byte(10+usedW-1); got != want {
+		t.Fatalf("rightmost minimap column = %d, want %d (last real terrain column, nearest-sampled)", got, want)
+	}
+
+	// No pixel anywhere in the picture may be the pad colour: the crop must
+	// remove every fill byte from the resize's source before it runs.
+	for i, v := range pic.Bits {
+		if v == fill {
+			t.Fatalf("picture pixel %d is the TNT pad colour %d; padding leaked into the resample", i, fill)
+		}
+	}
+}
+
+// TestMinimapBakedUsedRectWideMapPadsBottomRows mirrors the crop for a wide
+// map, whose real image occupies the top rows with the bottom padded
+// [fmt tnt "Minimap"], the mirror image of the tall-map case above.
+func TestMinimapBakedUsedRectWideMapPadsBottomRows(t *testing.T) {
+	const (
+		bakedW, bakedH = 10, 20
+		usedH          = 8 // playH*bakedH/playW = 40*20/100 = 8, truncating
+		fill           = byte(100)
+	)
+	baked := make([]byte, bakedW*bakedH)
+	for y := 0; y < bakedH; y++ {
+		for x := 0; x < bakedW; x++ {
+			if y < usedH {
+				baked[y*bakedW+x] = byte(10 + y)
+			} else {
+				baked[y*bakedW+x] = fill
+			}
+		}
+	}
+
+	playW, playH := int32(100), int32(40) // a wide map: playH < playW
+	layout := camera.LayoutMinimap(playW, playH)
+	if layout.W <= 0 || layout.H <= 0 {
+		t.Fatalf("layout got %+v", layout)
+	}
+
+	tables := identityALP()
+	pic := BuildRadarPicture(nil, playW, playH, layout, baked, bakedW, bakedH, &tables)
+	if pic == nil {
+		t.Fatalf("baked picture rejected")
+	}
+
+	lastRow := pic.H - 1
+	idx := lastRow * pic.W
+	if got := pic.Bits[idx]; got == fill {
+		t.Fatalf("bottom minimap row read the TNT pad colour (%d) instead of terrain — used-rect crop not applied", fill)
+	}
+	for i, v := range pic.Bits {
+		if v == fill {
+			t.Fatalf("picture pixel %d is the TNT pad colour %d; padding leaked into the resample", i, fill)
+		}
+	}
+}

@@ -97,6 +97,27 @@ type Node struct {
 	RetailSubtypeUnitB   pool.Handle
 	RetailSubtypeWords16 []uint16
 	RetailSubtypeWords32 []uint32
+	// CaptionPending is the ONE-SHOT caption-pending flag of [04 §3.2] — one
+	// of the two runtime bits the record's static-mask copy carries that no
+	// static descriptor mask sets. The shared caption clear tests it, clears
+	// it, and only then emits status kind 5 (`ok`) [04 R-ORD-01 §1]. Without
+	// it a record that re-arms forever re-emits the acknowledgement voice on
+	// every phase-0 re-entry, which [R-PATH-01 §14]'s composition (item 4)
+	// states the steady state must NOT do: "silent and unbounded ... no
+	// motion, no engine cue".
+	//
+	// It is a field rather than a bit of StaticGate/Flags because retail's bit
+	// value is not established and the retail save word is `StaticGate |
+	// Flags`, so inventing a position there could collide with a real static
+	// bit and corrupt a restored record.
+	//
+	// TODO(question): [04 §3.2] and [04 R-ORD-01 §1] name the flag's tester
+	// and its clearer but not its WRITER — nothing in the corpus says which
+	// site arms it. This build arms it at record insertion (newNode), which
+	// reproduces the observable contract: one acknowledgement per issued
+	// order, silence on every later visit to the same record. Tracing the
+	// arming site would settle whether some issuers leave it clear.
+	CaptionPending bool
 }
 
 // Queue holds the two segments [04 §3.2] C5.
@@ -737,7 +758,7 @@ func moveGroundHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code 
 		return 7 // reject while attached [R-P0-01]
 	}
 	if n.Phase == 0 {
-		captionClear(u) // [04 R-ORD-01 §4] "caption clear" [04 R-ORD-01 §1]
+		captionClear(u, n) // [04 R-ORD-01 §4] "caption clear" [04 R-ORD-01 §1]
 		// "point goal at the record's goal with radius `(int16)payloadType + 4`"
 		// [04 R-ORD-01 §4].
 		installPointGoal(u, n, n.GoalX, n.GoalY, n.GoalZ, moveGroundGoalRadius(n))
@@ -908,6 +929,10 @@ func newNode(id ID, n Node) *Node {
 	if nn.Deadline == 0 {
 		nn.Deadline = -1
 	}
+	// Arm the one-shot caption-pending flag [04 §3.2]. Insertion is where the
+	// static-mask copy is taken, so it is where the runtime bits the copy
+	// carries are armed; see the TODO(question) on Node.CaptionPending.
+	nn.CaptionPending = true
 	node := &Node{}
 	*node = nn
 	return node

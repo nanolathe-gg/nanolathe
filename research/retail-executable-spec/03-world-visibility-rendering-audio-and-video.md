@@ -4387,6 +4387,22 @@ There is no nearest-neighbor path. This includes the authored 252×252 and
 **Established** for the ratio/truncation and ALP order; the source bytes and
 dimensions remain authored by the TNT format [fmt tnt].
 
+**Correction (2026-09-03, WU-19-133, `[fmt tnt "How the used sub-rectangle is
+sized"]`).** The "source dimensions" that feed this resize are not always the
+baked minimap's stored `width x height`: on a non-square map, only a top-left
+sub-rectangle of the stored bitmap is real terrain, and the rest of its short
+axis is the format's `0x64` fill (`[fmt tnt]`). A reader that hands the full
+stored dimensions to the generic resize above — as this build did until this
+correction — stretches that fill into the visible picture, which on a
+markedly non-square map reads as the terrain being shifted toward one corner
+with a solid band of the fill color occupying the rest. The used
+sub-rectangle's size is computed from the map's `PlayRight`/`PlayBottom` by
+the same long-side fit `camera.LayoutMinimap` uses for the on-screen radar
+rectangle, substituting the stored bitmap dimension for that function's
+126-pixel canvas constant; the formula and its verification against five
+shipped maps are in `[fmt tnt]`. Only the cropped sub-rectangle enters the
+resize described above.
+
 **Aspect and letterbox.** The play area is window width minus 32 by window
 height minus 128, derived from the mode maxima, not from the raw window
 dimensions. RadarW/RadarH are 1..126:

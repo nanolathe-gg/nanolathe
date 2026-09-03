@@ -168,6 +168,37 @@ campaign map) stores 252×**256**. Don't hard-code the dimensions — read
 them. The minimap is a pre-scaled snapshot of the terrain, not regenerated
 by the engine.
 
+**How the used sub-rectangle is sized (Established, 2026-09-03, WU-19-133).**
+The stored `width x height` from the header above is the *allocated* bitmap,
+not necessarily the real image's extent: on a non-square map only a top-left
+sub-rectangle holds terrain, and the rest of the short axis is the `0x64`
+fill. The boundary is exact — every row/column is either entirely fill or
+entirely real, never a blended edge — and its size is the same long-side fit
+`camera.LayoutMinimap` already uses for the on-screen radar rectangle, with
+the *stored* bitmap dimension standing in for that function's 126-pixel
+canvas constant and `PlayRight`/`PlayBottom` (`Width*16-32`, `Height*16-128`,
+not the raw pixel dimensions) as the map shape:
+
+```
+if PlayRight < PlayBottom:  usedW = PlayRight*storedW/PlayBottom (trunc);  usedH = storedH
+else:                       usedW = storedW;  usedH = PlayBottom*storedH/PlayRight (trunc)
+```
+
+Verified byte-for-byte against five shipped maps of three different aspect
+ratios (`The Pass` wide, `Great Divide` tall, and `The Bayou`/`Crystal
+Cracked`/`Polar Range`, all 640×640 cells — square in cells but not in
+`PlayRight`/`PlayBottom`, since `-32` and `-128` differ): in every case the
+formula's predicted last used row/column lands on exactly the same pixel
+where the file's `0x64` fill begins. A reader that resamples the full stored
+bitmap without first cropping to this sub-rectangle stretches the real image
+and pulls the fill color into the visible output — on a markedly non-square
+map this reads as the image being shifted toward one corner with a solid
+band of the fill color filling the rest, which is what a play-test report
+described as a "blue stripe" on a tall map (`0x64` maps to a blue palette
+entry in the stock install). See `[03 §3.7]` for how the cropped
+sub-rectangle then re-enters the same generic ALP resize used for every
+other picture-build path.
+
 ## How the engine loads it
 
 The load pipeline is `[02 R-MAP-01 §6–§8]`; the per-cell semantics are

@@ -137,13 +137,18 @@ func TestBuildValidationNoInvention(t *testing.T) {
 	}
 }
 
+// TestQueueCountLabelSumsPrimaryAndSecondary locks the corrected retail shape
+// [07 R-P0-11 §2]: one running total across both lists, formatted "+%d". A
+// prior reading formatted the lists as two separate numbers ("2 +3"); that is
+// not a retail shape — the bit-0x04 branch every build-product button
+// authors calls a single count query over both lists and prints one sum.
 func TestQueueCountLabelSumsPrimaryAndSecondary(t *testing.T) {
 	queues := []frame.OrderQueueView{{
 		Primary:   []frame.OrderView{{BuildProduct: "ArmFlash", BuildCount: 2}},
 		Secondary: []frame.OrderView{{BuildProduct: "armflash", BuildCount: 3}},
 	}}
-	if got := QueueCountLabel(queues, "armflash"); got != "2 +3" {
-		t.Fatalf("queue label=%q want %q", got, "2 +3")
+	if got := QueueCountLabel(queues, "armflash"); got != "+5" {
+		t.Fatalf("queue label=%q want %q", got, "+5")
 	}
 	if got := QueueCountLabel(queues, "armflea"); got != "" {
 		t.Fatalf("missing product label=%q want empty", got)

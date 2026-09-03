@@ -163,7 +163,7 @@ func groundPickupHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 			workStatus(u, statusCant, groundTransportLargeMessage)
 			return 8
 		}
-		workStatus(u, statusOK, "Loading unit")
+		captionClearText(u, n, "Loading unit") // the caption clear, with a state text [04 R-ORD-01 §1]
 		return 1
 	case 1, 3:
 		return groundTransportShortMove(u, n)
@@ -235,7 +235,7 @@ func groundUnloadHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 		// The list is LIFO, so the head is the most recently attached cargo
 		// [04 R-UNIT-06 §3].
 		n.Target = u.Attachment.Cargo[0]
-		workStatus(u, statusOK, "Unloading")
+		captionClearText(u, n, "Unloading") // the caption clear, with a state text [04 R-ORD-01 §1]
 		if bridge := callbackBridgeFor(u); bridge != nil {
 			// Cell 0 = the cargo's identity, cell 1 = the packed drop point;
 			// the position cell is physically present even though the arity

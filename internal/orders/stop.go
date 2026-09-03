@@ -21,8 +21,8 @@ import "github.com/nanolathe/nanolathe/internal/units"
 // record carries a true creation-tick snapshot [04 §3.2] because the tick is
 // the handler's fourth argument (WU-18-7 retired the by-name
 // `stopHandlerAtTick` special case the pump used to reach this body with).
-func stopHandler(u *units.Unit, _ *Node, _ uint32, tick uint32) Code {
-	captionClear(u)
+func stopHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
+	captionClear(u, n)
 	clearWeaponTargetsUnconditional(u)
 	if u != nil && u.Def != nil && u.Def.CanFly && u.Move.Mode&0x3 == 2 {
 		spawnLandIfCan(u, tick)

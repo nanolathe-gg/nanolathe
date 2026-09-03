@@ -1896,14 +1896,48 @@ func (s *System) hasControllerGoal(h pool.Handle) bool {
 }
 
 // serviceGroundFollower runs the route follower's movement-tick service before
-// steering. It consumes at most one reached waypoint, arms a repath when the
-// previous commit was blocked or no waypoint remains, and submits at most once
-// per 60 ticks without discarding a still-usable route [04 R-MOV-01 §3]
-// [04 R-MOV-01 §7]. The scheduler runs earlier in the tick, so a request
-// admitted here becomes eligible at the next scheduler boundary.
-func (s *System) serviceGroundFollower(u *units.Unit, head *orders.Node, route *Route, tick uint32) {
-	if s == nil || u == nil || head == nil || route == nil || (u.Def != nil && u.Def.CanFly) {
-		return
+// steering. It asks the payload the arrival question, consumes at most one
+// reached waypoint, arms a repath when the previous commit was blocked or no
+// waypoint remains, and submits at most once per 60 ticks without discarding a
+// still-usable route [04 R-MOV-01 §3][04 R-MOV-01 §7]. The scheduler runs
+// earlier in the tick, so a request admitted here becomes eligible at the next
+// scheduler boundary.
+//
+// Corrected 2026-09-03 (WU-19-129). Steps (2) and (3) of
+// [04 R-MOV-03 §2 "The follower's per-tick service"] stood here without step
+// (1) — "with a payload installed, ask it whether the unit has arrived; on
+// arrival raise pending `0x20` on the owning record, ask the payload whether it
+// is persistent, and if not release it". That ask lived only at the END of the
+// mover tick, after steering and the position commit, so a payload installed at
+// a point the mover had ALREADY satisfied was steered at for one whole tick
+// before the arrival that should have preceded the steering detached it. Retail
+// asks once per service and asks it first: [04 R-MOV-01 §3] places the whole
+// service "once per mover tick, before steering", and with the route detached
+// the steering gate then sees no waypoint, brakes without turning, and never
+// leaves tier 0.
+//
+// What the missing step cost in play: the ground guard's follow maintenance
+// reinstalls its point goal every 30 ticks whether or not the guard has arrived
+// [04 R-ORD-01 §8 point 4], so a settled guard was handed a fresh two-point
+// synthetic straight line ([04 R-PATH-01 §8] step 5.3) once a second, walked it
+// for exactly one tick and stopped — one StartMoving/MoveRateN/StopMoving
+// triple per second, forever, with a world unit or two of drift to show for it.
+// It is the same lurch allowSyntheticFor describes for blocked egress, reached
+// from the other side: there the goal could not be occupied, here it already
+// was.
+//
+// The ask reports whether it fired so the caller can return it without asking a
+// second time — retail's service asks once.
+func (s *System) serviceGroundFollower(u *units.Unit, head *orders.Node, route *Route, tick uint32) bool {
+	if s == nil || u == nil || head == nil || (u.Def != nil && u.Def.CanFly) {
+		return false
+	}
+	// Step (1). Its condition is "with a payload installed" — the arrival
+	// handle finalGoalReached asks through — not the presence of a published
+	// route, so it precedes the route-nil exit below.
+	arrived := s.finalGoalReached(u, false)
+	if route == nil {
+		return arrived
 	}
 	if route.Active && route.Count > 1 {
 		route.Prune(Point{X: int32(int64(u.X) >> 16), Z: int32(int64(u.Z) >> 16)})
@@ -1936,18 +1970,19 @@ func (s *System) serviceGroundFollower(u *units.Unit, head *orders.Node, route *
 	// admission boundary. Session only invokes this once in the unit sweep;
 	// it never submits a second copy [04 R-MOV-01 §7][04 R-PATH-01 §6].
 	if !route.WantsRepath || route.LastRequestTick+60 > tick || s.HasPathRequest(u.Handle) {
-		return
+		return arrived
 	}
 	binding := s.activeOrders[u.Handle]
 	if binding == nil || binding.order != head {
-		return
+		return arrived
 	}
 	start, goal, _, ok := s.pathCellsForOrder(u, head)
 	if !ok {
-		return
+		return arrived
 	}
 	s.submitMoveForOrder(u, head, start, goal, binding.token)
 	route.LastRequestTick = tick
+	return arrived
 }
 
 // clearPathState is the single lifecycle reset for follower-owned path state.
@@ -2794,9 +2829,13 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	// payload to revalidate, no points to prune and nothing to arm
 	// [04 R-MOV-03 §1] "The follower's per-tick service".
 	var route *Route
+	// serviceArrived is step (1) of the per-tick service, answered before
+	// steering [04 R-MOV-03 §2][04 R-MOV-01 §3]. It is the tick's only arrival
+	// ask; the sites below report it rather than asking again.
+	serviceArrived := false
 	if !orderless {
 		route = s.Routes[handle]
-		s.serviceGroundFollower(u, head, route, tick)
+		serviceArrived = s.serviceGroundFollower(u, head, route, tick)
 	}
 	isAircraft := u.Def != nil && u.Def.CanFly
 	hadRoute := route != nil && route.Active && ((isAircraft && route.Count > 0) || (!isAircraft && route.Count > 1))
@@ -2823,10 +2862,10 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		// is the mover tick retail runs whether or not a record exists.
 		brakingOnly = true
 	} else if !hadRoute {
-		// [R-P0-01] still test arrival even without an active route: handle is
-		// bound at order activation, and the inclusive cell-domain predicate may
-		// already be satisfied before a route publishes (e.g., start within threshold).
-		_ = s.finalGoalReached(u, hadRoute)
+		// Arrival without an active route is already answered: the per-tick
+		// service above asks it whether or not a route has published, which is
+		// what [R-P0-01]'s "the predicate may already be satisfied before a
+		// route publishes" needs and what [04 R-MOV-03 §2] step (1) states.
 		d := s.distToGoal(u)
 		d2, hasGoal := s.distSqToGoal(u)
 		if hasGoal && d2 <= localSteeringThresholdSquared {
@@ -2889,9 +2928,8 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	}
 	if !brakingOnly && dx == 0 && dz == 0 {
 		d := s.distToGoal(u)
-		arrived := s.finalGoalReached(u, hadRoute)
 		s.emitMovementCallbacks(u, 0) // no delta => tier 0 [04 §5.2][GAP T15] C18
-		return StepResult{Handle: handle, DistToGoal: d, HasRoute: true, EmptyRoute: false, Moved: false, Arrived: arrived}
+		return StepResult{Handle: handle, DistToGoal: d, HasRoute: true, EmptyRoute: false, Moved: false, Arrived: serviceArrived}
 	}
 	desired := u.Move.Heading
 	if !brakingOnly {
@@ -3079,7 +3117,11 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	}
 	// Arrival via goal tolerance, not merely route active [task]
 	d2 := s.distToGoal(u)
-	arrived := s.finalGoalReached(u, hadRoute)
+	// The arrival ask is the per-tick service's, made before steering
+	// [04 R-MOV-03 §2][04 R-MOV-01 §3]; retail asks once per service, so this
+	// tail reports that answer rather than putting the question a second time
+	// after the commit.
+	arrived := serviceArrived
 	// Published routes consumed without duplicate submission: StepUnit does not
 	// call SubmitMove; the scheduler's HasRequest gate in session path-submit
 	// remains authority [04 §7.3] C11 C12.

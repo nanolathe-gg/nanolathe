@@ -15,6 +15,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 // TargetKind distinguishes how a slot's target is encoded [06 §3.2] P0-10 (I13).
@@ -42,6 +43,35 @@ type Target struct {
 	Unit pool.Handle   // valid when Kind==TargetUnit; 0 null sentinel, no generation token [06 §5.1] (I13) [01 §6.1]
 	X, Z numeric.Fixed // valid when Kind==TargetPoint or for fallback point when unit target lost [06 §3.2] P0-10 (I13)
 	Y    numeric.Fixed // height when point-target via terrain query [06 §3.2] P0-10
+}
+
+// PointTargetHeight is the height half of the per-slot target-point resolver
+// [06 R-WPN-04 §1]. For a point target the resolver promotes the slot's two
+// stored words to 16.16 for X and Z and answers
+//
+//	Y = max(bilinearTerrainHeight(X, Z), seaLevelByte) << 16
+//
+// — the four-corner bilinear query of [03 §2.3], floored at the map's sea-level
+// byte so a ground point below the water plane is aimed at the SURFACE rather
+// than at the sea bed. No lead is ever applied to a point target.
+//
+// The bilinear query answers the raw −1 sentinel on the map's last row and
+// column [03 §2.3]; the sentinel loses the maximum to sea level for free, which
+// is how the cursor's own ground query treats it [07 §8].
+//
+// The height used to be left at zero for every point target, which put the aim
+// point at the map's zero plane instead of on the ground the order named: the
+// solved pitch dived tens of world units below the click, and the shot-time
+// range gate measured to that same wrong point.
+func PointTargetHeight(terrain *world.Terrain, x, z numeric.Fixed) numeric.Fixed {
+	if terrain == nil {
+		return 0
+	}
+	h := int32(terrain.HeightAt(x, z) >> 16) // whole world units; −1 is the sentinel
+	if sea := int32(terrain.SeaLevel); h < sea {
+		h = sea
+	}
+	return numeric.Fixed(int64(h) << 16)
 }
 
 // IsUnitTarget reports whether the target names a unit slot [06 §3.2] P0-10.

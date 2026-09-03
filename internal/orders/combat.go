@@ -242,7 +242,34 @@ func engagementDistance(u *units.Unit, slot uint32) int32 {
 // captionClear is [04 R-ORD-01 §1]'s "caption clear": the one-shot helper that
 // clears the record's runtime caption-pending bit and emits status kind 5
 // (`ok`) with no text.
-func captionClear(u *units.Unit) { workStatus(u, statusOK, "") }
+func captionClear(u *units.Unit, n *Node) { captionClearText(u, n, "") }
+
+// captionClearText is the same helper called "with a state text" — the form
+// `RepairUnit` ("Repairing"), `Capture` ("Capturing"), the air work preamble
+// and the two transport rows use [04 R-ORD-01 §1].
+//
+// ONE-SHOT is the whole point of the helper, and it was missing: it emits only
+// for a record whose caption-pending flag is still set, and clears the flag
+// first [04 §3.2]. A `Move_Ground` that cannot occupy its goal cell re-arms
+// every 30..59 ticks for the life of the record, re-entering phase 0 each time
+// ([04 R-PATH-01 §14] item 4); with an unconditional emit here every one of
+// those re-entries raised the `ok` acknowledgement voice, so a settled group of
+// movers chattered forever. §14 states the steady state instead: "silent and
+// unbounded ... no motion, no engine cue". `Patrol`, which re-runs its caption
+// clause once per lap, had the same defect.
+func captionClearText(u *units.Unit, n *Node, text string) {
+	if n == nil || !n.CaptionPending {
+		return
+	}
+	n.CaptionPending = false
+	workStatus(u, statusOK, text)
+}
+
+// NotifyCaptionClear is the exported form of the one-shot caption clear, for
+// the air transport legs whose executors live in internal/movement
+// [04 R-ORD-01 §1][04 §10.2]. It is the same helper: kind 5 once per record,
+// never again.
+func NotifyCaptionClear(u *units.Unit, n *Node, text string) { captionClearText(u, n, text) }
 
 // installPointGoal is the point form of [04 R-ORD-01 §1]'s goal installers:
 // "a **point** goal at a position with an arrival radius ... skip the install
@@ -433,7 +460,7 @@ func attackNoMoveHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Cod
 		// Adding one would not be inert: inhibiting returns a slot an earlier
 		// order had taken, resets that slot's target and posts `TargetCleared`
 		// [04 R-ORD-01 §7].
-		captionClear(u)
+		captionClear(u, n)
 		return Code(1) // *advance* [04 R-ORD-01 §3]
 	case 1:
 		releaseSlot(u, 0)
@@ -484,7 +511,7 @@ func attackKamikazeHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32
 		if u != nil && u.Attachment.Carrier != 0 {
 			return Code(7) // carried → *cancel-all* [04 R-ORD-01 §3]
 		}
-		captionClear(u)
+		captionClear(u, n)
 		radius := int32(16)
 		if u != nil && u.Def != nil && u.Def.KamikazeDistance > radius {
 			radius = u.Def.KamikazeDistance // max(16, kamikazedistance)
@@ -664,7 +691,7 @@ func suppressHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code {
 		if u != nil && u.Def != nil && u.Def.CanFly {
 			return Code(8) // *abandon* [04 R-ORD-01 §3]
 		}
-		captionClear(u)
+		captionClear(u, n)
 		n.Param2 = uint32(engagementDistance(u, n.Param1))
 		return Code(1) // *advance* [04 R-ORD-01 §3]
 	case 1:

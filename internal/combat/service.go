@@ -405,7 +405,7 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 				continue
 			}
 		} else {
-			tgtPos = Vec3{X: slot.Target.X, Y: 0, Z: slot.Target.Z}
+			tgtPos = Vec3{X: slot.Target.X, Y: PointTargetHeight(terrain, slot.Target.X, slot.Target.Z), Z: slot.Target.Z}
 		}
 		// Weapon piece selection is a synchronous Q path. AimFrom* uses -1 and
 		// falls back to Query* with seed 0; SweetSpot is a separate Q query and
@@ -1579,7 +1579,11 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 	case units.TargetUnit:
 		tgt = Target{Kind: TargetUnit, Unit: slot.Target.Unit}
 	case units.TargetGround:
-		tgt = Target{Kind: TargetPoint, X: slot.Target.X, Z: slot.Target.Z}
+		// The creator needs the same point the aim solve used, height
+		// included: without a Y the ordinary creator solves its pitch against
+		// sea level and the ballistic creator's arc lands short of, or through,
+		// the ground the order named [06 R-WPN-04 §1].
+		tgt = Target{Kind: TargetPoint, X: slot.Target.X, Y: PointTargetHeight(terrain, slot.Target.X, slot.Target.Z), Z: slot.Target.Z}
 	default:
 		tgt = Target{Kind: TargetNone}
 	}

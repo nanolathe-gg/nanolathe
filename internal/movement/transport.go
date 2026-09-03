@@ -150,7 +150,7 @@ func (s *System) legVTOLPickup(u *units.Unit, n *orders.Node, satisfied uint32, 
 			orders.NotifyStatus(u, transportStatusCant, HeavyTransportMessage)
 			return 8 // *abandon* [04 §10.2]
 		}
-		orders.NotifyStatus(u, transportStatusCaption, "Loading")
+		orders.NotifyCaptionClear(u, n, "Loading") // the one-shot caption clear [04 R-ORD-01 §1]
 		// The row's remaining clauses — detach the carrier from its own parent
 		// when carried, raise `Activate`, force mover mode 2 from mode 1, and
 		// the `cruisealt/2` point marker with no arrival radius and gate
@@ -168,7 +168,7 @@ func (s *System) legVTOLPickup(u *units.Unit, n *orders.Node, satisfied uint32, 
 		n.DynamicGate = transportGateApproach
 		return 1
 	case 2:
-		orders.NotifyStatus(u, transportStatusCaption, "Preparing for transport")
+		orders.NotifyCaptionClear(u, n, "Preparing for transport") // the one-shot caption clear [04 R-ORD-01 §1]
 		// The query runs on the CARRIER's script — every transport callback
 		// does, and the cargo's script receives nothing on these paths
 		// [04 R-UNIT-06 §3]. Cell 0 is seeded −1 by the bridge's
@@ -386,7 +386,7 @@ func (s *System) legVTOLUnload(u *units.Unit, n *orders.Node, satisfied uint32, 
 		if !s.airMoverReady(u) {
 			return 7 // *cancel-all* [04 §10.2]
 		}
-		orders.NotifyStatus(u, transportStatusCaption, "Unloading")
+		orders.NotifyCaptionClear(u, n, "Unloading") // the one-shot caption clear [04 R-ORD-01 §1]
 		n.Param1 = uint32(cargoHandle)
 		// Phase 0 copies ALL THREE goal values into the point marker; the
 		// marker's altitude setter then recomputes the goal Y from the terrain

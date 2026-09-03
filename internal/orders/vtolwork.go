@@ -127,8 +127,8 @@ func airWorkPreamble(u *units.Unit, n *Node, stateText string) Code {
 	if !hasMover(u) || u.Def == nil || !u.Def.CanFly {
 		return 7 // cancel-all
 	}
-	workStatus(u, statusOK, stateText) // caption clear, with the row's state text
-	releaseSlot(u, slotAll)            // k = 3 is slots 0, 1, 2 in order [04 R-ORD-01 §1]
+	captionClearText(u, n, stateText) // caption clear, with the row's state text
+	releaseSlot(u, slotAll)           // k = 3 is slots 0, 1, 2 in order [04 R-ORD-01 §1]
 	dropFromCarrier(u)
 	u.SetActivationEdge(true) // edge bit 0 [04 R-UNIT-06 §2]
 	if moverMode(u) == 1 {

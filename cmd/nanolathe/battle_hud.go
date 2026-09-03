@@ -512,9 +512,10 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 
 // buildBattleRadar installs the production radar picture from the same map
 // asset that populated the session terrain. TNT's MiniMapPresent bit gates the
-// authored bytes; their recorded dimensions pass through the generic ALP
-// source/destination path, including the observed 252×252 and 252×256 maps
-// [fmt tnt][03 §3.7].
+// authored bytes; render.BuildRadarPicture crops the stored bitmap's top-left
+// used sub-rectangle (discarding the fill that pads its short axis on a
+// non-square map, observed on 252×252 and 252×256 maps alike) before the
+// bytes pass through the generic ALP source/destination path [fmt tnt][03 §3.7].
 func buildBattleRadar(fs vfs.FSOps, cat *content.Catalog, mapName string, terrain *world.Terrain, pal *palette.Tables) *render.RadarSurface {
 	if terrain == nil || pal == nil {
 		return nil
@@ -1838,7 +1839,19 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, offse
 				// gadgets; it is always 0 — "the word is 0 whenever nothing
 				// is flashing" — so both branches resolve to map entry 0
 				// here regardless of `stages`.
-				c.UITextWidth(h.guiFont, text, int(r.X)+3, int(r.Y)+(int(r.H)-int(h.guiFont.Height))/2, int(r.W), h.guiColor(0))
+				//
+				// Pen placement is the button painter's pen arithmetic
+				// [03 R-FONT-01 §6], not a fixed left-inset/vertical-centre
+				// guess: build-product buttons author attribute 0x20 (the
+				// build-attribute variant — the same asset census over the
+				// reference install's guis/*.gui files that backs
+				// [07 R-P0-11 §2]'s refinement also finds `attribs = 32` on
+				// all 480 of them), which keeps the centred horizontal pen but
+				// anchors the caption near the button's bottom edge instead of
+				// centering it vertically.
+				tw := client.MeasureText(h.guiFont, text)
+				px, py := queueCountLabelPen(gad, r, tw, int(h.guiFont.Height))
+				c.UITextWidth(h.guiFont, text, px, py, int(r.W), h.guiColor(0))
 			}
 		}
 	}
@@ -1850,12 +1863,12 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, offse
 // primary and secondary order lists for that product. A zero total clears the
 // label; there is no clamp and no display cap.
 //
-// It is deliberately not hud.QueueCountLabel, which sums the two lists into two
-// separate numbers and formats them as "%d", "+%d" or "%d +%d". Retail's
-// counter is one sum over both lists and the product-button format is always
-// "+%d"; the two-number form is not a retail shape. internal/hud is not this
-// unit's to change, so the correct label is written here and the divergence is
-// reported upstream.
+// It is a local copy of hud.QueueCountLabel rather than a call to it: the two
+// now agree (WU-19-135 corrected hud.QueueCountLabel's stale "two separate
+// numbers" reading to this same one-sum "+%d" shape), but hud.QueueCountLabel
+// takes a []frame.OrderQueueView slice rather than the committed frame this
+// composer already holds, and internal/hud is not this unit's package to
+// re-plumb a caller into.
 func productQueueCountLabel(f *frame.Frame, product string) string {
 	key := content.CanonicalKey(product)
 	if f == nil || key == "" || f.CommandPage.Builder == 0 {
@@ -1887,6 +1900,50 @@ func productQueueCountLabel(f *frame.Frame, product string) string {
 		return ""
 	}
 	return fmt.Sprintf("+%d", total)
+}
+
+// queueCountLabelPen is the retail button painter's pen arithmetic
+// [03 R-FONT-01 §6] for a button caption, applied to the queue-count text
+// written into a build-product toy's own text slot [07 R-P0-11 §2]. `s` is 1
+// when the gadget's `stages` field is non-zero. The vertical pen is
+// `gy + trunc((h-1-metric)/2) + s` for the left/right/centre attributes, but
+// the build-attribute variant (attribute bit 0x20) keeps the centred
+// horizontal pen and instead anchors near the bottom edge:
+// `bottom - 4 - metric + s`. `metric` is the line metric of the active font
+// family — the capital-I frame height plus two for a GAF font, or (as here,
+// an FNT family) the FNT header height field.
+//
+// Build-product buttons author attribute 0x20 and no left/right/centre bit
+// (asset census over the reference install's guis/*.gui files, the same
+// census that backs [07 R-P0-11 §2]'s refinement: all 480 author
+// `attribs = 32` alongside `commonattribs = 4`), so the count lands at the
+// bottom-centre of the button, not the vertically-centred left inset a
+// left-aligned button would use.
+func queueCountLabelPen(gad gui.Gadget, r gui.Rect, textWidth, metric int) (x, y int) {
+	s := 0
+	if gad.Stages != 0 {
+		s = 1
+	}
+	gx, gy, w, h := int(r.X), int(r.Y), int(r.W), int(r.H)
+	right := gx + w - 1
+	bottom := gy + h - 1
+	centredX := gx + (right-textWidth-gx)/2 + s + 1
+	switch {
+	case gad.Attribs&1 != 0: // left
+		return gx + 3 + s, gy + (h-1-metric)/2 + s
+	case gad.Attribs&4 != 0: // right
+		x := right - 3 - textWidth
+		if x < gx {
+			x = gx
+		}
+		return x, gy + (h-1-metric)/2 + s
+	case gad.Attribs&2 != 0: // centre
+		return centredX, gy + (h-1-metric)/2 + s
+	case gad.Attribs&0x20 != 0: // build-attribute variant
+		return centredX, bottom - 4 - metric + s
+	default:
+		return gx + 3 + s, gy + (h-1-metric)/2 + s
+	}
 }
 
 // commandPageIsPaged reports the selected builder's page-shown bit (status bit

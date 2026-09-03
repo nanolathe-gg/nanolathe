@@ -79,6 +79,54 @@ func TestProductQueueCountLabel(t *testing.T) {
 	}
 }
 
+// TestQueueCountLabelPenBuildVariant locks the button painter's pen
+// arithmetic [03 R-FONT-01 §6] for the build-attribute variant (attribute bit
+// 0x20) that every build-product button authors: the horizontal pen stays the
+// centred formula, but the vertical pen anchors 4 pixels above the button's
+// bottom edge rather than vertically centering, and `stages != 0` shifts both
+// axes by one pixel.
+func TestQueueCountLabelPenBuildVariant(t *testing.T) {
+	// gx=10, gy=20, w=40, h=30 -> right=49, bottom=49. metric=11, tw=8.
+	gad := gui.Gadget{Attribs: 0x20}
+	r := gui.Rect{X: 10, Y: 20, W: 40, H: 30}
+	x, y := queueCountLabelPen(gad, r, 8, 11)
+	wantX := 10 + (49-8-10)/2 + 0 + 1 // centred formula, s=0
+	wantY := 49 - 4 - 11 + 0          // bottom - 4 - metric + s
+	if x != wantX || y != wantY {
+		t.Fatalf("build-variant pen = (%d,%d), want (%d,%d)", x, y, wantX, wantY)
+	}
+	// Vertically this must land near the bottom of the button, not the
+	// vertically-centred slot a plain left/centre button would use.
+	if centredY := r.Y + (r.H-1-11)/2; y == int(centredY) {
+		t.Fatalf("build-variant pen y = %d landed on the vertically-centred slot %d; retail anchors near the bottom edge", y, centredY)
+	}
+
+	gad.Stages = 1
+	x2, y2 := queueCountLabelPen(gad, r, 8, 11)
+	if x2 != wantX+1 || y2 != wantY+1 {
+		t.Fatalf("staged build-variant pen = (%d,%d), want (%d,%d)", x2, y2, wantX+1, wantY+1)
+	}
+}
+
+// TestQueueCountLabelPenLeftRightCentre locks the three named attributes the
+// build-attribute variant is tested alongside, so a regression that folds the
+// switch differently is caught here too [03 R-FONT-01 §6].
+func TestQueueCountLabelPenLeftRightCentre(t *testing.T) {
+	r := gui.Rect{X: 10, Y: 20, W: 40, H: 30}
+	wantY := r.Y + (r.H-1-11)/2
+
+	if x, y := queueCountLabelPen(gui.Gadget{Attribs: 1}, r, 8, 11); x != int(r.X)+3 || y != int(wantY) {
+		t.Fatalf("left pen = (%d,%d), want (%d,%d)", x, y, int(r.X)+3, wantY)
+	}
+	if x, y := queueCountLabelPen(gui.Gadget{Attribs: 4}, r, 8, 11); x != int(r.X+r.W-1)-3-8 || y != int(wantY) {
+		t.Fatalf("right pen = (%d,%d), want (%d,%d)", x, y, int(r.X+r.W-1)-3-8, wantY)
+	}
+	wantCentreX := int(r.X) + (int(r.X+r.W-1)-8-int(r.X))/2 + 1
+	if x, y := queueCountLabelPen(gui.Gadget{Attribs: 2}, r, 8, 11); x != wantCentreX || y != int(wantY) {
+		t.Fatalf("centre pen = (%d,%d), want (%d,%d)", x, y, wantCentreX, wantY)
+	}
+}
+
 func generatedPageFixture(name string) *gui.Window {
 	gadgets := make([]gui.Gadget, 10)
 	for i := range gadgets {

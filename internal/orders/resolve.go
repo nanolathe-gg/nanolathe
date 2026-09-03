@@ -924,6 +924,23 @@ func resolveAttack(actor *units.Unit, target *units.Unit) string {
 	return resolveAttackAt(actor, target, nil)
 }
 
+// slotZeroIsAntiAir is code 3's *w0* term: "*w0* be my weapon slot 0's weapon
+// definition" [04 R-ORD-02 §1], read for its `toairweapon` flag. The runtime
+// slot is what the resolver reads, not the definition's authored `weapon1`, so
+// a slot whose weapon link never resolved has no flag to offer.
+//
+// Only the not-hostile arm's reject uses it. The hostile arm's own target-class
+// rejects (the airborne/`toairweapon` pair, the submerged `waterweapon` tests
+// and the hovercraft clauses of [04 R-ORD-02 §1]) have no implementation in
+// this build; that gap predates this unit and is not narrowed here.
+func slotZeroIsAntiAir(u *units.Unit) bool {
+	if u == nil {
+		return false
+	}
+	s := u.SlotAt(0)
+	return s != nil && s.Weapon != nil && s.Weapon.ToAirWeapon
+}
+
 // resolveAttackAt includes the established position-only code-3 arm. A ground
 // unit with an armed runtime record resolves to Suppress; an aircraft resolves
 // to the dropped-weapon run or the ordinary air-to-ground run. This belongs in
@@ -934,7 +951,25 @@ func resolveAttackAt(actor *units.Unit, target *units.Unit, pos *ResolvePos) str
 		return ""
 	}
 	if target == nil {
-		if pos != nil && actor.Flags&units.ArmedStatus != 0 {
+		// The not-hostile arm of code 3, whose condition [04 R-ORD-02 §1] gives
+		// as "friendly OR NO TARGET": "*w0* has `toairweapon` → reject; I am not
+		// `canfly` → `Suppress`; else *W1* has `dropped` → `AirStrike`, else
+		// `AirToGround`."
+		//
+		// Corrected (WU-19-130): this arm was additionally gated on a non-nil
+		// position, which is nowhere in the traced condition. The gate made
+		// `AttackSpecial` — whose whole body resolves code 3 against the
+		// record's target WITH NO POSITION [04 R-ORD-01 §2] — reject whenever
+		// the D-gun was aimed at bare ground, so the record re-identified as
+		// descriptor 0 and completed silently [04 R-ORD-01 §12]: a manual D-gun
+		// on the ground did nothing at all. It also left `Suppress` phase 1's
+		// `p1 = 2` arm — release all slots, bind slot 2 to the goal
+		// [04 R-ORD-01 §3] — unreachable, since `AttackSpecial` is the only
+		// writer of that parameter.
+		if actor.Flags&units.ArmedStatus != 0 {
+			if slotZeroIsAntiAir(actor) {
+				return ""
+			}
 			if actor.Def != nil && !actor.Def.CanFly {
 				return "Suppress"
 			}
@@ -1185,7 +1220,7 @@ func attackChaseHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 		if !hasLiveMover(u) || u == nil || (u.Def != nil && u.Def.CanFly) || u.Flags&units.ArmedStatus == 0 {
 			return Code(7) // *cancel-all*
 		}
-		captionClear(u)
+		captionClear(u, n)
 		n.GoalX, n.GoalY, n.GoalZ = u.X, u.Y, u.Z
 		n.Param2 = 0
 		if n.Param1 == 0 {

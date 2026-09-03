@@ -606,7 +606,7 @@ func repairUnitHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Co
 		if !hasMover(u) || u.Def == nil || !u.Def.Builder || target.Remaining != 0 {
 			return 7 // cancel-all
 		}
-		workStatus(u, statusOK, "Repairing") // the caption clear, with a state text
+		captionClearText(u, n, "Repairing") // the caption clear, with a state text
 		return 1
 	case 1:
 		if satisfied&gateNoRoute != 0 {
@@ -915,7 +915,7 @@ func captureHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 			workStatus(u, statusCant, "That unit is a cloud of vapor and cannot be captured")
 			return 8 // abandon
 		}
-		workStatus(u, statusOK, "Capturing") // caption clear with a state text
+		captionClearText(u, n, "Capturing") // caption clear with a state text
 		n.Param2 = uint32(captureBudget(target.Def.BuildCostEnergy, target.Def.BuildCostMetal, target.Health, target.Def.MaxDamage, target.Kills))
 		releaseSlot(u, slotAll) // "release all slots": k = 3 is slots 0, 1, 2 in order [04 R-ORD-01 §1]
 		if !installWorkGoal(u, n, target.X, target.Y, target.Z) {

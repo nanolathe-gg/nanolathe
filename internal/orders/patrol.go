@@ -340,8 +340,8 @@ func vtolMoveHandler(u *units.Unit, n *Node, _ uint32, _ uint32) Code {
 		}
 		return 1 // advance
 	case 1:
-		workStatus(u, statusOK, "") // the caption clear, no text
-		inhibitSlot(u, slotAll)     // k = 3 is slots 0, 1, 2 in order [04 R-ORD-01 §1]
+		captionClear(u, n)      // the caption clear, no text
+		inhibitSlot(u, slotAll) // k = 3 is slots 0, 1, 2 in order [04 R-ORD-01 §1]
 		n.DynamicGate = gateMoveOutcomes
 		return 1 // advance
 	case 2:

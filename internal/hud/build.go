@@ -228,35 +228,43 @@ func ProductsForPage(all []string, page, perPage int) []string {
 	return all[start:end]
 }
 
-// QueueCountLabel returns the retail product-button count text. Primary and
-// secondary lists are summed independently for the matching product; the
-// secondary count is the queued "+N" half [R-P0-11].
+// QueueCountLabel returns the retail product-button count text: **one**
+// running total summed over both the primary and secondary order lists for
+// the matching product, formatted "+%d" [07 R-P0-11 §2]. A zero total clears
+// the label; there is no clamp and no display cap.
+//
+// Correction (WU-19-135): this previously formatted the two lists as
+// separate numbers — "%d" alone, "+%d" alone, or "%d +%d" together — on the
+// theory that the secondary list was a distinct "+N" queued half. The
+// refinement folded into [07 R-P0-11 §2] settles this from the executable:
+// the bit-0x04 branch every build-product button authors resolves the toy's
+// name to a product id and calls a **single** count query that walks the
+// builder's primary list and then its secondary list into one running total,
+// which is what gets formatted "+%d". A queue of five in the primary list and
+// two in the secondary shows "+7", never "5 +2" — the two-number form is not
+// a retail shape. `cmd/nanolathe/battle_hud.go`'s `productQueueCountLabel`
+// already implements this corrected shape for the live battle HUD; this
+// export now agrees with it instead of diverging.
 func QueueCountLabel(queues []frame.OrderQueueView, product string) string {
 	key := content.CanonicalKey(product)
 	if key == "" {
 		return ""
 	}
-	var primary, secondary uint32
+	var total uint32
 	for _, q := range queues {
 		for _, o := range q.Primary {
 			if content.CanonicalKey(o.BuildProduct) == key {
-				primary += o.BuildCount
+				total += o.BuildCount
 			}
 		}
 		for _, o := range q.Secondary {
 			if content.CanonicalKey(o.BuildProduct) == key {
-				secondary += o.BuildCount
+				total += o.BuildCount
 			}
 		}
 	}
-	if primary == 0 && secondary == 0 {
+	if total == 0 {
 		return ""
 	}
-	if primary == 0 {
-		return fmt.Sprintf("+%d", secondary)
-	}
-	if secondary == 0 {
-		return fmt.Sprintf("%d", primary)
-	}
-	return fmt.Sprintf("%d +%d", primary, secondary)
+	return fmt.Sprintf("+%d", total)
 }

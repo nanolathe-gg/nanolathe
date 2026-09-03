@@ -13925,6 +13925,16 @@ replacement bullet is needed because the ground path has no vertical term.
   trace. Marked `TODO(question)` at both sites; store the bytes opaque.
 - Reader for the acknowledgement-group byte · §3.1 · static trace. Marked
   `TODO(question)`.
+- Writer of the record's one-shot **caption-pending** bit · §3.2,
+  [R-ORD-01 §1] · static trace over the writers of the record's static-mask
+  copy. §3.2 names the bit and §1 names its tester/clearer (the shared caption
+  clear, which emits status kind 5 `ok` only when the bit is set), but no site
+  is identified that ARMS it. Marked `TODO(question)`; Nanolathe arms it at
+  record insertion, which reproduces the observable contract — one
+  acknowledgement per issued order, and silence on every re-arm of the same
+  record, as [R-PATH-01 §14] item 4 requires of the settled steady state
+  ("silent and unbounded ... no motion, no engine cue"). A trace would settle
+  whether some issuers leave it clear.
 - ~~Upstream producers of production-node wake mask 8 (Construction stopped)
   · §3.3, [R-FAC-01B] · static trace. Marked `TODO(T25)`; the handler
   semantics are closed and the producer must not be invented.~~ **Closed

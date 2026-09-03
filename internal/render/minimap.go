@@ -60,7 +60,10 @@ func minimapFloorDiv(a, b int64) int64 {
 // BuildRadarPicture builds PICTURE from terrain or baked bytes [03 §3.7][03 §3.4][07 §10].
 // playW = Wpix-32, playH = Hpix-128; RadarW/H are letterboxed via camera.LayoutMinimap.
 // baked == nil or len==0 uses 2× supersampled tile sampling and ALP 2×2→1 blending [03 §3.7][fmt tnt][fmt pal].
-// When baked != nil, it is rescaled through the established picture path [03 §3.7].
+// When baked != nil, its top-left used sub-rectangle (see
+// bakedMinimapUsedRect [fmt tnt "Minimap"]) is rescaled through the
+// established picture path [03 §3.7]; the padded remainder of the stored
+// bitmap never enters the resize.
 // The ALP table is mandatory: there is no nearest-neighbor compatibility path.
 // The letterbox bars are not this function's to fill. No radar surface covers
 // them: PICTURE, MAPPED and FINAL are all allocated at exactly the fitted
@@ -85,7 +88,8 @@ func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, b
 		if bakedW <= 0 || bakedH <= 0 || bakedW > len(baked)/bakedH {
 			return nil
 		}
-		resizeALP(bits, w, h, baked, bakedW, bakedH, tables)
+		srcW, srcH, src := bakedMinimapUsedRect(baked, bakedW, bakedH, playW, playH)
+		resizeALP(bits, w, h, src, srcW, srcH, tables)
 		return &RadarSurface{W: w, H: h, Pitch: pitch, Bits: bits}
 	}
 
@@ -163,6 +167,65 @@ func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, b
 	resizeALP(bits, w, h, temp, tw, th, tables)
 
 	return &RadarSurface{W: w, H: h, Pitch: pitch, Bits: bits}
+}
+
+// bakedMinimapUsedRect isolates the real terrain image inside a baked TNT
+// minimap, discarding the fill that pads the short axis [fmt tnt "Minimap"].
+//
+// The stored bitmap is `bakedW x bakedH` (252x252 in nearly every retail map,
+// 252x256 on at least one), but on a non-square map only a top-left
+// sub-rectangle holds real pixels: the long play-area axis fills its full
+// stored dimension and the short axis is scaled down by the same ratio, the
+// rest of that axis being fill. This mirrors camera.LayoutMinimap's own
+// long-side fit, with the baked bitmap's own stored dimension standing in for
+// the 126-pixel canvas constant, so no dimension is hard-coded — only the
+// bytes actually read from the file drive it [fmt tnt].
+//
+// Established (2026-09-03) against five shipped maps spanning wide, tall and
+// near-square play areas: a wide map's baked image uses its full stored
+// width with the bottom rows padded, a tall map's baked image uses its full
+// stored height with the right columns padded, and in every case the short
+// axis's used length equals `playShort*bakedLong/playLong` truncated — the
+// exact figure measured in each file's byte-for-byte fill boundary. See
+// [fmt tnt "Minimap"].
+//
+// When playW or playH is unavailable (<=0) the whole stored bitmap is
+// returned unchanged rather than guessed at.
+func bakedMinimapUsedRect(baked []byte, bakedW, bakedH int, playW, playH int32) (usedW, usedH int, pixels []byte) {
+	if playW <= 0 || playH <= 0 {
+		return bakedW, bakedH, baked
+	}
+	usedW, usedH = bakedW, bakedH
+	if playW < playH {
+		usedW = int(int64(playW) * int64(bakedW) / int64(playH)) // TRUNC IDIV, short axis
+		if usedW < 1 {
+			usedW = 1
+		}
+		if usedW > bakedW {
+			usedW = bakedW
+		}
+	} else if playH < playW {
+		usedH = int(int64(playH) * int64(bakedH) / int64(playW)) // TRUNC IDIV, short axis
+		if usedH < 1 {
+			usedH = 1
+		}
+		if usedH > bakedH {
+			usedH = bakedH
+		}
+	}
+	if usedW == bakedW && usedH == bakedH {
+		return bakedW, bakedH, baked
+	}
+	// The used sub-rectangle sits at the top-left, but its rows are not
+	// contiguous in the stored buffer unless usedW == bakedW (the stored row
+	// stride is always bakedW), so a narrower crop must be copied row by row
+	// into a tightly packed buffer before the generic resizer can treat it as
+	// a plain srcW x srcH image.
+	cropped := make([]byte, usedW*usedH)
+	for y := 0; y < usedH; y++ {
+		copy(cropped[y*usedW:(y+1)*usedW], baked[y*bakedW:y*bakedW+usedW])
+	}
+	return usedW, usedH, cropped
 }
 
 // resizeALP applies the established arbitrary-source/destination ALP path.
