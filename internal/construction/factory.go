@@ -206,12 +206,20 @@ type Service struct {
 	// product"), it has to survive save/load through one owner, and two worlds
 	// in one process must not share it.
 	builderLinks map[pool.Handle]pool.Handle // product -> builder [05 C18]
-	// TODO(question): if an in-battle restore boundary is introduced, persist
-	// placements together with the production node phase/count/target, unit
-	// activation/building edges, COB sleep/wait threads, and piece interpolation
-	// so an authored factory close resumes on the identical callback and tick.
-	// The current codebase has no in-battle codec [I13]; do not invent a
-	// factory-only format.
+	// SETTLED (WU-19-166), retiring a `TODO(question)` that read "if an
+	// in-battle restore boundary is introduced, persist placements together
+	// with the production node phase/count/target ...". Placements must NOT be
+	// persisted: retail's load is "reconstruction, not pointer restoration",
+	// and its step 10 rebuilds "derived occupancy, registrations, lists, and
+	// presentation caches" after the units and their queues have been recreated
+	// in stable slots (steps 7–9) [08 "Load process"]. A placement record is
+	// exactly derived occupancy — the footprint rectangle a live unit's
+	// position and definition already determine — so a restore rebuilds this
+	// map by re-registering each live building, the same way a goal payload is
+	// re-installed rather than saved (Service.installApproachGoal). What a save
+	// does carry for this service is the order record itself (phase, count,
+	// target), which internal/orders owns. There is no alternate Nanolathe save
+	// codec [I13]; do not invent a factory-only format.
 	placements    map[pool.Handle]placementRecord // product -> occupancy footprint and immutable definition
 	productIndex  map[uint32]string               // product id -> catalog key, built once
 	getBuiltLinks map[pool.Handle]pool.Handle     // product -> builder until GetBuilt consumes it [R-P0-09]
@@ -605,11 +613,32 @@ func (s *Service) rejectPermanent(factory *units.Unit, node *orders.Node, tick u
 	s.lastPermanent = diagnostic
 	s.hasPermanent = true
 	s.admissions = append(s.admissions, diagnostic)
-	// Malformed nodes are outside the established state-2 path: queue
-	// admission rejects them before they can reach this handler. Retain only a
-	// diagnostic if an internal fixture bypasses that boundary; do not invent a
-	// cancellation or retry transition [04 §6.4]. TODO(question): establish the
-	// retail response if a malformed node bypasses queue preflight.
+	// Retain a diagnostic and nothing else: do not invent a cancellation or
+	// retry transition [04 §6.4].
+	//
+	// REWRITTEN (WU-19-166). The marker here read "Malformed nodes are outside
+	// the established state-2 path: queue admission rejects them before they
+	// can reach this handler", and asked for the retail response when a
+	// malformed node bypasses queue preflight. The premise was false in both
+	// halves. Nothing is bypassing a boundary: this function's callers are
+	// ordinary content-integrity failures that a real catalog can produce — no
+	// definition for the node's product, a definition whose placement profile
+	// does not resolve, a non-positive or unbuildable footprint, and a factory
+	// whose current model resolves no exit piece. And retail has no
+	// corresponding arm to copy, because it has no corresponding step: the
+	// record carries a product definition INDEX ([04 R-ORD-01 §5], "p1 =
+	// product definition index") and the `MobileBuild` and `BuildingBuild`
+	// bodies index the definition table with it. The only handler-level refusals
+	// those rows describe are the placement-illegal retry (deadline 15, or the
+	// blocked-area budget of [R-ORDER-02 §1]) and the allocation refusal
+	// (`Unable to create any more units`, deadline 300) — neither is this case.
+	//
+	// TODO(question): whether the build handlers bounds-check that index before
+	// they load the definition, and what they do when the load yields nothing.
+	// Decider: a static read of the index-to-definition load in the two build
+	// handler bodies of [04 R-ORD-01 §5]. Until then the diagnostic-only
+	// retention stands, and this must not grow a status caption or a queue
+	// transition invented to fill the gap.
 }
 
 // notifyStatus surfaces a verbatim order-handler notification through the
@@ -673,7 +702,9 @@ func (s *Service) ClearBuilderLink(product pool.Handle) {
 
 // PlacementForProduct returns the typed occupancy rectangle retained when a
 // nanoframe was allocated. It is session state, not a reinterpretation of
-// persisted unit/save fields; save persistence remains TODO(question).
+// persisted unit/save fields, and it is not saved: derived occupancy is
+// rebuilt after a restore, never restored [08 "Load process" step 10] — see
+// the placements field.
 func (s *Service) PlacementForProduct(product pool.Handle) (world.FootprintRect, bool) {
 	if s == nil || s.placements == nil {
 		return world.FootprintRect{}, false
@@ -878,11 +909,30 @@ func (s *Service) stampBuilding(product pool.Handle, record placementRecord, ope
 	// overlap scan and restamp — now runs inside the occupancy layer for this
 	// stamp exactly as it does for a mover [04 R-COLL-01 §4].
 	//
-	// TODO(question): what this write pair still does not do is the rest of
-	// the section's stamp and clear order for the building class — the derived
-	// min/max height recompute over the grown rectangle and the reclassifica-
-	// tion of the rectangle in every active class layer. Both need shared APIs
-	// this service does not own.
+	// REWRITTEN (WU-19-166): the two tails this write pair still does not run
+	// are Established, not open, so the marker that stood here as a
+	// `TODO(question)` was asking a settled question. [04 R-COLL-01 §4] gives
+	// both, on the stamp side — "for the building class the derived-height
+	// recompute over the grown rectangle and a reclassification of the
+	// rectangle in every active class layer follow" — and on the clear side,
+	// where the recompute runs "over the rectangle grown by one cell on every
+	// side (the loader's derivation, [03 §1])". What is missing is not the
+	// contract but two seams in packages this unit does not own:
+	//
+	//   * internal/world: the loader's derived min/max floor heights are read
+	//     through PlotCell.MinHeight/MaxHeight and written by nothing after the
+	//     map loads, so there is no rectangle recompute to call. In THIS build
+	//     that tail is a no-op either way — no runtime path mutates the height
+	//     map — so its absence is unobservable until one does.
+	//   * internal/movement: the class-layer reclassification exists
+	//     (noteFootprintClear runs it for a mover's clear) but is unexported,
+	//     and a building stamp reaching it needs an exported entry taking the
+	//     stamped rectangle. Its absence IS observable: cells a building's yard
+	//     newly claims or releases keep whatever a class layer baked in until
+	//     something else reclassifies them [04 R-PATH-01 §14].
+	//
+	// Report the seams upstream rather than writing a second, private copy of
+	// either walk here.
 }
 
 // RegisterBuildingPlacement records and stamps a building at the exact
@@ -931,11 +981,30 @@ func (s *Service) YardOpenTransaction(u *units.Unit, requested bool) bool {
 		// no record here is a mobile (`bmcode`) unit, for which construction
 		// keeps no yard geometry.
 		//
-		// TODO(question): a mobile unit's port-18 write. Retail evaluates the
-		// same admission over the mover's cached pair and, on a pass, sets the
-		// yard bit and restamps; whether the mover restamp honours the yard bit
-		// is untraced. Decider: the mover stamp's class selection against the
-		// yard bit [04 R-COLL-01 §4]. Fail closed meanwhile.
+		// REWRITTEN (WU-19-166): half of the marker that stood here was already
+		// answered. It read "whether the mover restamp honours the yard bit is
+		// untraced. Decider: the mover stamp's class selection against the yard
+		// bit [04 R-COLL-01 §4]." That very section answers it: the stamp's
+		// class is chosen by the unit's structure-class bit — "the ground word
+		// is written by ground movers (mode 1) and by building-class units
+		// (flags bit 29, set at creation from `bmcode == 0`)" — and only the
+		// building class "selects cells by yard byte". A mover stamps its whole
+		// footprint on the ground plane whatever its yard bit says, so a
+		// mobile's restamp cannot differ, and the occupancy this service keeps
+		// is identical on both arms of the question.
+		//
+		// TODO(question): what remains is the admission's own verdict, one step
+		// earlier. The predicate walks the cells the requested state SELECTS,
+		// which it reads from the compiled yard map — and the yard map is
+		// allocated only for the structure class ([fmt fbi] `BMcode`: the
+		// engine "reads it back for yard-map allocation"; all 152 stock mobile
+		// definitions author no `YardMap`). Whether the predicate then admits
+		// vacuously, refuses, or reads through a null map is not traced.
+		// Decider: a static read of the yard-map pointer in the yard-occupancy
+		// admission predicate of [04 §4.7 port 18], for a unit whose structure-
+		// class bit is clear. The verdict is observable only through the level a
+		// script polls back after `set YARD_OPEN`, since the stamp is the same
+		// either way. Fail closed meanwhile — that is a choice, not a trace.
 		return false
 	}
 	yard, err := buildingYard(record.def, record.rect)
@@ -3091,7 +3160,23 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 	// detached the mobile product and performs no position write
 	// [04 R-FAC-02 §3].
 	// Trigger BuildUnitType only on local 30-tick deadline [P0-14].
-	// Interrupt masks 2/8 bodies known, producers TODO(T25) [P0-14].
+	//
+	// SETTLED (WU-19-166): "Interrupt masks 2/8 bodies known, producers
+	// TODO(T25) [P0-14]" stood here. Both producers have since been located and
+	// both are wired in this package. Mask 2 (cancel-current) is delivered by
+	// the removal paths themselves: "node cleanup invokes the handler with mask
+	// 2 whenever the removed record's state-mask byte still has bit 1 set, so
+	// the producers of the cancel notification are exactly the removal paths
+	// (counted cancel, non-queued purge, pump removals, death/capture
+	// teardown)" [04 §3.3][R-ORDER-02 §2]. Mask 8 is *target removed*: a
+	// record's target smart-reference raises `0x8` into the record's pending
+	// word when the referenced unit is destroyed, and the reference is then
+	// unlinked [04 R-ORD-01 §6] — which is Service.NotifyProductRemoved, the
+	// path TestTargetRemovedNoticeReachesTheFactoryInterrupt locks. [04 §3.3]'s
+	// older paragraph, which read the construction-stopped wake as having no
+	// located producer because no instruction ORs the bit directly, now carries
+	// that supersession in place: the raise goes through the reference method,
+	// and for a factory record the target reference IS the product.
 	// Phase 4's first act is the completion status, ahead of the falling
 	// StartBuilding edge and the completion transition: `BuildingBuild` emits
 	// status 8 with no text, so the slot's default caption `Nanolathe Complete`

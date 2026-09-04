@@ -69,10 +69,11 @@ func TestProjectRetailSessionAssemblesRuntimeUnitInReversePoolOrder(t *testing.T
 	econ.UnitBuckets(h)
 	s := &Session{Clock: &clock.State{GlobalTick: 9}, Units: w, Econ: econ}
 	p, err := ProjectRetailSession(s, RetailSaveInputs{
-		Summary:           save.Summary{Gametype: 1},
-		Mapping:           []byte{0xaa},
-		StableIDs:         map[pool.Handle]uint16{h: 0x73},
-		UnitWriterScratch: map[pool.Handle]units.RetailUnitWriterScratch{h: {}},
+		Summary:             save.Summary{Gametype: 1},
+		Mapping:             []byte{0xaa},
+		StableIDs:           map[pool.Handle]uint16{h: 0x73},
+		UnitWriterScratch:   map[pool.Handle]units.RetailUnitWriterScratch{h: {}},
+		ScriptWriterScratch: map[pool.Handle]cob.RetailScriptWriterScratch{h: {}},
 	})
 	if err != nil {
 		t.Fatalf("runtime projection: %v", err)
@@ -88,7 +89,40 @@ func TestProjectRetailSessionAssemblesRuntimeUnitInReversePoolOrder(t *testing.T
 	}
 }
 
-func TestProjectRetailSessionPieceBearingScriptFailsAtomically(t *testing.T) {
+// TestProjectRetailSessionPieceBearingScriptProjects is the WU-19-161 defect:
+// every real COB names pieces, so a projection that refused a piece-bearing
+// program refused every real unit and the in-battle Save produced an error box
+// instead of a bank. The piece tail is now written from the VM plus the
+// caller's residue scratch [08 R-SAVE-02 §9].
+func TestProjectRetailSessionPieceBearingScriptProjects(t *testing.T) {
+	def := &content.UnitDef{UnitName: "pieceful", MaxDamage: 100, Script: &cob.Program{Code: []uint32{0x10065000}, Pieces: []string{"base", "turret"}, Scripts: map[string]int{}}}
+	w := units.NewSliced(1, nil)
+	h, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create piece-bearing unit: %v", err)
+	}
+	econ := &economy.Service{}
+	econ.UnitBuckets(h)
+	p, err := ProjectRetailSession(&Session{Clock: &clock.State{}, Units: w, Econ: econ}, RetailSaveInputs{
+		Summary:             save.Summary{Gametype: 1},
+		Mapping:             []byte{1},
+		StableIDs:           map[pool.Handle]uint16{h: 9},
+		UnitWriterScratch:   map[pool.Handle]units.RetailUnitWriterScratch{h: {}},
+		ScriptWriterScratch: map[pool.Handle]cob.RetailScriptWriterScratch{h: {PieceDword24: 1, PieceDword25: 1}},
+	})
+	if err != nil {
+		t.Fatalf("piece-bearing projection: %v", err)
+	}
+	want := save.ScriptSnapshotSize + 2*cob.ScriptPieceSize
+	if len(p.Units.Scripts) != 1 || len(p.Units.Scripts[0].Data) != want {
+		t.Fatalf("script projection = %d bytes, want %d", len(p.Units.Scripts[0].Data), want)
+	}
+}
+
+// TestProjectRetailSessionMissingScriptScratchFails keeps the seam explicit:
+// the residue pair is a caller policy with a visible consequence, so an
+// omitted entry fails rather than silently taking the zero pair.
+func TestProjectRetailSessionMissingScriptScratchFails(t *testing.T) {
 	def := &content.UnitDef{UnitName: "pieceful", MaxDamage: 100, Script: &cob.Program{Code: []uint32{0x10065000}, Pieces: []string{"base"}, Scripts: map[string]int{}}}
 	w := units.NewSliced(1, nil)
 	h, err := w.Create(def, 0, 0, 0, 0)
@@ -104,10 +138,10 @@ func TestProjectRetailSessionPieceBearingScriptFailsAtomically(t *testing.T) {
 		UnitWriterScratch: map[pool.Handle]units.RetailUnitWriterScratch{h: {}},
 	})
 	if err == nil {
-		t.Fatal("piece-bearing script unexpectedly projected")
+		t.Fatal("projection accepted a unit with no script writer scratch")
 	}
-	if got := err.Error(); !containsAny(got, "piece record writer scratch", "piece") {
-		t.Fatalf("error = %q, want explicit piece scratch blocker", got)
+	if got := err.Error(); !containsAny(got, "script piece scratch") {
+		t.Fatalf("error = %q, want the explicit script scratch blocker", got)
 	}
 }
 

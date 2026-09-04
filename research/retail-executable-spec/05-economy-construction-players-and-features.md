@@ -4297,6 +4297,23 @@ in = ((dx*dx) >> 32) + ((dz*dz) >> 32) <= r*r      // each square truncated
                                                     // separately, 64-bit multiply
 ```
 
+**Established — what `reclaimReach` is (2026-09-04, WU-19-166).** The name
+above is this document's; the field is the definition's **radius word**, and
+two other sections already identify it. `[04 R-ORD-01 §5]`'s `ReclaimUnit` row
+writes the same test as "`dx² + dz² ≤ (builddistance + targetModelRadius)²` in
+whole units, with the target's model radius the whole part of the definition's
+`(Xextent + Zextent)/3` word", and `[02 R-CAT-01 §7]` derives that word at
+catalog-compile time: the bounding record's X and Z bounds are
+footprint-derived `±(Footprint << 20)/2`, so the two extents are
+`FootprintX << 20` and `FootprintZ << 20` in 16.16, and the unit-record
+compiler stores `(extentX + extentZ)/3` by integer division. The reach term is
+the **high half** of that word — ten world units for a one-cell target,
+twenty-one for a two-cell one. No model geometry enters it (only the Y bound
+is measured from the model), and `[R-WORK-01 §12]` point 3 confirms the radius
+belongs to unit reclaim's squared form and to nothing else. An implementation
+that drops the term is short by the target's own radius on every reclaim,
+which is what Nanolathe's `reclaimInRange` did until WU-19-166.
+
 **Established, recorded as instructions — the assist approach radius.** The
 assist state asks the mover to close to
 `builddistance + half` where

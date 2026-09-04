@@ -20,6 +20,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -74,6 +75,10 @@ type database struct {
 	// p, and neighbours lists those k per parent for random draws.
 	allowed    [paletteSize][paletteSize]bool
 	neighbours sampler
+	// sole[p] is the only admitted key for parent p when there is exactly
+	// one (no relaxation stand-ins), so random draws skip the alias table;
+	// -1 otherwise.
+	sole [paletteSize]int16
 }
 
 // sampler draws from grouped candidate lists with per-entry weights in O(1)
@@ -180,15 +185,39 @@ func makeSampler[T int | int32](entries []int32, offsets []T, counts []T, weight
 	return result
 }
 
-// record packs everything a candidate test needs into one contiguous 18-byte
-// unit: the quantized PCA features and the ALP parent index (or -1 when the
-// position is excluded), so one random memory access decides a candidate
-// instead of three.
+// record packs everything a candidate test needs into one 16-byte unit so
+// one random memory access decides a candidate: the quantized PCA features,
+// the ALP parent index (or -1 when the position is excluded) and the four
+// authored pixel indices of the block. The block's RGB sum is derived from a
+// palette table in L1 rather than stored. Features are int8: the first PCA
+// coordinate (mean brightness, up to +-2048) is stored in units of 16, the
+// others (rarely beyond +-500) in units of 4, and the distance weights the
+// dimensions back so costs stay in the int16 units the other terms were
+// calibrated against.
 type record struct {
-	feat [8]int16
-	key  int16
-	sum  [3]int16 // RGB sums of the block's four pixels, 0..1020 per channel
+	feat  [featureDims]int8
+	key   int16
+	block [4]byte
+	_     uint16
 }
+
+// quantizeFeatures maps PCA coordinates to the record's int8 units.
+func quantizeFeatures(sums *[featureDims]float32) [featureDims]int8 {
+	var out [featureDims]int8
+	for dimension := range featureDims {
+		scale := float32(featureScaleRest)
+		if dimension == 0 {
+			scale = featureScaleFirst
+		}
+		out[dimension] = int8(clamp(int(math.Round(float64(sums[dimension]/scale))), -127, 127))
+	}
+	return out
+}
+
+const (
+	featureScaleFirst = 16
+	featureScaleRest  = 4
+)
 
 // tileAtlas lays every unique 32x32 tile, surrounded by the halo of its
 // first placement, on a grid. Both the example database and the queries are
@@ -206,7 +235,7 @@ type tileAtlas struct {
 
 type tileQueries struct {
 	parents         []byte
-	features        [][8]int16
+	features        [][featureDims]int8
 	firstPlacements []int
 	tileMap         []int
 	mapWidth        int
@@ -228,9 +257,13 @@ func main() {
 	iterations := flag.Int("iterations", 8, "PatchMatch refinement passes")
 	samples := flag.Int("samples", 100_000, "PCA patch samples")
 	workers := flag.Int("workers", runtime.NumCPU(), "parallel CPU workers")
-	tone := flag.Int("tone", 4, "weight of the tone term: squared RGB-sum distance between a block and 4x its parent colour, 0 disables")
+	tone := flag.Int("tone", 12, "weight of the tone term: squared RGB-sum distance between a block and 4x its parent colour, 0 disables")
 	spread := flag.Int("spread", 16, "eighths of the mean tone error of already-chosen 3x3 neighbours that a candidate must offset")
 	deadzone := flag.Int("deadzone", 8, "per-channel RGB-sum tone error tolerated at no cost, so the tone term removes bias without favouring uniform blocks")
+	seam := flag.Int("seam", 0, "weight of the seam term: squared RGB distance between a candidate block's edge pixels and the adjacent pixels of already-chosen neighbour blocks, beyond the dead zone; 0 disables")
+	seamZone := flag.Int("seamzone", -1, "squared RGB distance between adjacent output pixels tolerated at no cost; -1 uses the authored map's own mean adjacent-pixel distance")
+	coherence := flag.Int("coherence", 64, "weight of the coherence term: squared RGB distance between the authored full-resolution pixels around a candidate block (two rows above, two columns left, and their mirror on backward passes) and the output pixels already synthesized there; 0 disables")
+	settle := flag.Int("settle", 2, "skip the random-window and global draws for a pixel whose match survived this many consecutive passes unchanged (propagation still runs); 0 disables")
 	relax := flag.Bool("relax", true, "also accept blocks that reduce to a palette entry one ALP step from the parent (their blend snaps to one of the two); false keeps the ALP cycle exact")
 	profilePath := flag.String("cpuprofile", "", "write a CPU profile to this file")
 	preview := flag.Bool("preview", false, "also write source and processed tile-atlas PNG previews")
@@ -256,7 +289,8 @@ func main() {
 		}
 		defer pprof.StopCPUProfile()
 	}
-	options := searchOptions{tone: int32(*tone), spread: int32(*spread), deadzone: int32(*deadzone), relax: *relax}
+	options := searchOptions{tone: int32(*tone), spread: int32(*spread), deadzone: int32(*deadzone), relax: *relax,
+		seam: int32(*seam), seamZone: int32(*seamZone), coherence: int32(*coherence), settle: *settle}
 	if err := run(*dataPath, *outPrefix, *iterations, *samples, *workers, options,
 		*preview || *fullPreview, *fullPreview); err != nil {
 		fmt.Fprintln(os.Stderr, "patchmatchgo:", err)
@@ -268,6 +302,9 @@ func main() {
 type searchOptions struct {
 	tone, spread, deadzone int32
 	relax                  bool
+	seam, seamZone         int32
+	coherence              int32
+	settle                 int
 }
 
 func run(dataPath, outPrefix string, iterations, samples, workers int, options searchOptions,
@@ -285,7 +322,7 @@ func run(dataPath, outPrefix string, iterations, samples, workers int, options s
 	basis := makePCABasis(db, atlas, data.palette, samples, workers)
 	projected := makeContributions(basis, data.palette)
 	pcaDone := time.Now()
-	records := databaseRecords(db, data.palette, projected, workers)
+	records := databaseRecords(db, projected, workers)
 	supplemented := supplementMissingParents(&db, &records, data, projected, workers)
 	buildHashBuckets(&db, records, workers)
 	weights := exampleWeights(db, atlas)
@@ -293,8 +330,11 @@ func run(dataPath, outPrefix string, iterations, samples, workers int, options s
 	db.bucketSampler = makeSampler(db.hashPositions, db.hashOffsets, db.hashCounts, weights)
 	relaxParents(&db, records, data.alp, data.palette, options.relax)
 	queries := makeTileQueries(data, atlas, projected, workers)
+	if options.seamZone < 0 {
+		options.seamZone = authoredAdjacentDistance(data)
+	}
 	featuresDone := time.Now()
-	matches, costs, unmatched := patchMatch(queries, db, records, data.palette, iterations, options, workers)
+	matches, costs, unmatched := patchMatch(queries, db, records, data.palette, atlas, iterations, options, workers)
 	matched := time.Now()
 	cycle := cycleConsistency(queries.parents, matches, records)
 	tiles := assembleTiles(queries.parents, matches, db)
@@ -310,6 +350,9 @@ func run(dataPath, outPrefix string, iterations, samples, workers int, options s
 	finished := time.Now()
 
 	meanCost, _ := costSummary(costs)
+	var usage syscall.Rusage
+	_ = syscall.Getrusage(syscall.RUSAGE_SELF, &usage)
+	cpu := time.Duration(usage.Utime.Nano() + usage.Stime.Nano())
 	var memory runtime.MemStats
 	runtime.ReadMemStats(&memory)
 	fmt.Printf("map=%s size=%dx%d unique-tiles=%d placements=%d workers=%d\n",
@@ -320,6 +363,8 @@ func run(dataPath, outPrefix string, iterations, samples, workers int, options s
 		pcaDone.Sub(built).Round(time.Millisecond), featuresDone.Sub(pcaDone).Round(time.Millisecond),
 		matched.Sub(featuresDone).Round(time.Millisecond), assembled.Sub(matched).Round(time.Millisecond),
 		finished.Sub(assembled).Round(time.Millisecond), finished.Sub(started).Round(time.Millisecond))
+	fmt.Printf("cpu=%s (user+sys over the whole run; wall times above depend on machine load)\n", cpu.Round(time.Millisecond))
+	fmt.Printf("seam=%d seamzone=%d\n", options.seam, options.seamZone)
 	fmt.Printf("database-pixels=%d supplemented=%d query-pixels=%d iterations=%d unmatched=%d mean-cost=%.2f cycle=%.4f heap-in-use=%0.1fMiB\n",
 		len(db.low), supplemented, len(queries.parents), iterations, unmatched, meanCost, cycle,
 		float64(memory.HeapInuse)/1048576)
@@ -607,12 +652,7 @@ func supplementMissingParents(db *database, records *[]record, data dataset, con
 					patchPosition++
 				}
 			}
-			var entry record
-			for dimension := range 8 {
-				entry.feat[dimension] = quantize(sums[dimension])
-			}
-			entry.key = int16(parent)
-			entry.sum = blockSum(block, data.palette)
+			entry := record{feat: quantizeFeatures(&sums), key: int16(parent), block: block}
 			*records = append(*records, entry)
 			db.low = append(db.low, parent)
 			db.valid = append(db.valid, 1)
@@ -775,43 +815,45 @@ func makeContributions(basis []float32, palette []byte) []float32 {
 	return result
 }
 
-// quantize rounds a PCA coordinate to the nearest integer. The basis is
-// orthonormal over 75 byte-valued components, so every coordinate lies within
-// +-2209 and the rounding error is at most half a unit per dimension.
-func quantize(value float32) int16 {
-	return int16(math.Round(float64(value)))
-}
-
 const (
 	invalidKey = int16(-1)
 	infCost    = int32(math.MaxInt32)
 	hashBins   = 16
-	hashShift  = 8 // 256-wide bins over the +-2048 core of the coordinate range
-	hashSpace  = paletteSize * hashBins * hashBins
+	hashCells  = hashBins * hashBins * hashBins
+	hashSpace  = paletteSize * hashCells
 )
 
-func hashBucket(parent byte, feat *[8]int16) int {
-	return int(parent)*hashBins*hashBins + hashBin(feat)
+func hashBucket(parent byte, feat *[featureDims]int8) int {
+	return int(parent)*hashCells + hashBin(feat)
 }
 
-// hashBin is the parent-independent part of hashBucket.
-func hashBin(feat *[8]int16) int {
-	bin0 := clamp((int(feat[0])+2048)>>hashShift, 0, hashBins-1)
-	bin1 := clamp((int(feat[1])+2048)>>hashShift, 0, hashBins-1)
-	return bin0*hashBins + bin1
+// hashBin is the parent-independent part of hashBucket: 16 bins over each of
+// the first three quantized PCA coordinates (the int8 range, so 256 native
+// units on the first coordinate and 64 on the other two).
+func hashBin(feat *[featureDims]int8) int {
+	bin0 := (int(feat[0]) + 128) >> 4
+	bin1 := (int(feat[1]) + 128) >> 4
+	bin2 := (int(feat[2]) + 128) >> 4
+	return (bin0*hashBins+bin1)*hashBins + bin2
 }
 
-func blockSum(block [4]byte, palette []byte) [3]int16 {
-	var sum [3]int16
-	for _, index := range block {
+// blockSum is the RGB sum of a block's four pixels, 0..1020 per channel.
+func blockSum(block *[4]byte, sums *[paletteSize][3]int32) [3]int32 {
+	a, b, c, d := &sums[block[0]], &sums[block[1]], &sums[block[2]], &sums[block[3]]
+	return [3]int32{a[0] + b[0] + c[0] + d[0], a[1] + b[1] + c[1] + d[1], a[2] + b[2] + c[2] + d[2]}
+}
+
+func paletteSums(palette []byte) [paletteSize][3]int32 {
+	var sums [paletteSize][3]int32
+	for index := range paletteSize {
 		for channel := range 3 {
-			sum[channel] += int16(palette[int(index)*3+channel])
+			sums[index][channel] = int32(palette[index*3+channel])
 		}
 	}
-	return sum
+	return sums
 }
 
-func databaseRecords(db database, palette []byte, contributions []float32, workers int) []record {
+func databaseRecords(db database, contributions []float32, workers int) []record {
 	dimensions := featureDims
 	result := make([]record, len(db.low))
 	parallel(len(db.low), workers, func(begin, end int) {
@@ -835,14 +877,12 @@ func databaseRecords(db database, palette []byte, contributions []float32, worke
 				}
 			}
 			entry := &result[position]
-			for dimension := range 8 {
-				entry.feat[dimension] = quantize(sums[dimension])
-			}
+			entry.feat = quantizeFeatures(&sums)
 			entry.key = int16(db.low[position])
 			if db.valid[position] == 0 {
 				entry.key = invalidKey
 			}
-			entry.sum = blockSum([4]byte{db.blocks[0][position], db.blocks[1][position], db.blocks[2][position], db.blocks[3][position]}, palette)
+			entry.block = [4]byte{db.blocks[0][position], db.blocks[1][position], db.blocks[2][position], db.blocks[3][position]}
 		}
 	})
 	return result
@@ -890,7 +930,7 @@ func makeTileQueries(data dataset, atlas tileAtlas, contributions []float32, wor
 	mapWidth, mapHeight := atlas.mapWidth, atlas.mapHeight
 	first, tileMap := atlas.firstPlacements, atlas.tileMap
 	parents := make([]byte, len(first)*sourceTileSize*sourceTileSize)
-	features := make([][8]int16, len(parents))
+	features := make([][featureDims]int8, len(parents))
 	parallel(len(first), workers, func(begin, end int) {
 		var sums [8]float32
 		for identifier := begin; identifier < end; identifier++ {
@@ -915,9 +955,7 @@ func makeTileQueries(data dataset, atlas tileAtlas, contributions []float32, wor
 							patchPosition++
 						}
 					}
-					for dimension := range 8 {
-						features[query][dimension] = quantize(sums[dimension])
-					}
+					features[query] = quantizeFeatures(&sums)
 				}
 			}
 		}
@@ -940,16 +978,53 @@ func makeTileQueries(data dataset, atlas tileAtlas, contributions []float32, wor
 // block may be brighter than the parent, options.spread makes each candidate
 // also offset a fraction of the mean error of its already-chosen 3x3
 // neighbours, letting neighbouring pixels compensate for one another.
-func patchMatch(queries tileQueries, db database, records []record, palette []byte, iterations int,
+func patchMatch(queries tileQueries, db database, records []record, palette []byte, atlas tileAtlas, iterations int,
 	options searchOptions, workers int) ([]int32, []int32, int) {
 	toneWeight, spread, deadzone := options.tone, options.spread, options.deadzone
+	sums := paletteSums(palette)
 	var targets [paletteSize][3]int32
 	for index := range paletteSize {
 		for channel := range 3 {
 			targets[index][channel] = 4 * int32(palette[index*3+channel])
 		}
 	}
+	seamWeight, seamZone, coherenceWeight := options.seam, options.seamZone, options.coherence
+	settle := options.settle
+	var pairDistance []int32
+	if seamWeight > 0 || coherenceWeight > 0 {
+		pairDistance = make([]int32, paletteSize*paletteSize)
+		for a := range paletteSize {
+			for b := range paletteSize {
+				var total int32
+				for channel := range 3 {
+					d := int32(palette[a*3+channel]) - int32(palette[b*3+channel])
+					total += d * d
+				}
+				pairDistance[a*paletteSize+b] = total
+			}
+		}
+	}
 	const tilePixels = sourceTileSize * sourceTileSize
+	// synthWidth is the tile's output width plus a two-pixel border of
+	// "unknown" (0xff sentinel) so the coherence term can read a causal
+	// neighbourhood without bounds checks.
+	const synthWidth = outputTileSize + 4
+	// Coherence neighbourhood: two rows above the block (six pixels each) and
+	// two columns left (two pixels each) on forward passes; the mirror image
+	// (below and right) on backward passes. Precomputed as flat index deltas
+	// into the synthesized tile and into the atlas.
+	var coherenceOffsets = [16][2]int{{-1, -2}, {-1, -1}, {-1, 0}, {-1, 1}, {-1, 2}, {-1, 3}, {-2, -2}, {-2, -1}, {-2, 0}, {-2, 1}, {-2, 2}, {-2, 3}, {0, -1}, {1, -1}, {0, -2}, {1, -2}}
+	var synthDeltas, atlasDeltas [2][16]int
+	for direction := range 2 {
+		for index, offset := range coherenceOffsets {
+			dy, dx := offset[0], offset[1]
+			if direction == 1 {
+				dy, dx = 1-dy, 1-dx
+			}
+			synthDeltas[direction][index] = dy*synthWidth + dx
+			atlasDeltas[direction][index] = dy*atlas.width + dx
+		}
+	}
 	n := len(queries.parents)
 	tileCount := n / tilePixels
 	matches := make([]int32, n)
@@ -959,6 +1034,10 @@ func patchMatch(queries tileQueries, db database, records []record, palette []by
 		var candidates [8]int32
 		var buckets [tilePixels]int32
 		var chosen [tilePixels][3]int32 // RGB-sum error of each pixel's current block
+		var chosenBlock [tilePixels][4]byte
+		var synthesized [synthWidth * synthWidth]byte
+		var unchanged [tilePixels]uint8 // consecutive passes the match survived
+		atlasPositions := 4 * db.phaseHeight * db.width
 		var featCosts [tilePixels]int32
 		for tile := begin; tile < end; tile++ {
 			base := tile * tilePixels
@@ -974,12 +1053,15 @@ func patchMatch(queries tileQueries, db database, records []record, palette []by
 			// query's parent, from the feature-hash bucket when asked and the
 			// bucket is populated, and -1 when no position exists.
 			globalDraw := func(pixel int, bucketed bool) int32 {
-				parent := db.neighbours.draw(int(parents[pixel]), next())
+				parent := int32(db.sole[parents[pixel]])
 				if parent < 0 {
-					return -1
+					parent = db.neighbours.draw(int(parents[pixel]), next())
+					if parent < 0 {
+						return -1
+					}
 				}
 				if bucketed {
-					bucket := int(parent)*hashBins*hashBins + int(buckets[pixel])
+					bucket := int(parent)*hashCells + int(buckets[pixel])
 					if candidate := db.bucketSampler.draw(bucket, next()); candidate >= 0 {
 						return candidate
 					}
@@ -1026,56 +1108,166 @@ func patchMatch(queries tileQueries, db database, records []record, palette []by
 				}
 				return total
 			}
+			// seamCost charges a candidate block for every edge pixel pair
+			// with an already-chosen neighbour block whose squared RGB
+			// distance exceeds the dead zone: the output should not be
+			// speckled beyond what the authored map's adjacent pixels are.
+			pair := func(a, b byte) int32 {
+				d := pairDistance[int(a)*paletteSize+int(b)] - seamZone
+				if d < 0 {
+					return 0
+				}
+				return d
+			}
+			seamCost := func(pixel int, block *[4]byte) int32 {
+				if seamWeight == 0 {
+					return 0
+				}
+				y, x := pixel/sourceTileSize, pixel%sourceTileSize
+				var total int32
+				if x > 0 && tileMatches[pixel-1] >= 0 {
+					left := &chosenBlock[pixel-1]
+					total += pair(block[0], left[1]) + pair(block[2], left[3])
+				}
+				if x < sourceTileSize-1 && tileMatches[pixel+1] >= 0 {
+					right := &chosenBlock[pixel+1]
+					total += pair(block[1], right[0]) + pair(block[3], right[2])
+				}
+				if y > 0 && tileMatches[pixel-sourceTileSize] >= 0 {
+					top := &chosenBlock[pixel-sourceTileSize]
+					total += pair(block[0], top[2]) + pair(block[1], top[3])
+				}
+				if y < sourceTileSize-1 && tileMatches[pixel+sourceTileSize] >= 0 {
+					bottom := &chosenBlock[pixel+sourceTileSize]
+					total += pair(block[2], bottom[0]) + pair(block[3], bottom[1])
+				}
+				return seamWeight * total / 8
+			}
+			direction := 0
+			// coherenceCost compares the authored pixels around the candidate
+			// block (in the atlas, at full resolution) with the output pixels
+			// already synthesized around the query block. Only atlas examples
+			// have an authored surround; supplements are exempt. Valid atlas
+			// positions keep a four-pixel margin inside their cell, so the
+			// neighbourhood never leaves the atlas. The term rewards copying
+			// contiguous authored structure.
+			coherenceCost := func(pixel int, candidate int32) int32 {
+				if coherenceWeight == 0 || int(candidate) >= atlasPositions {
+					return 0
+				}
+				y, x := int(candidate)/db.width, int(candidate)%db.width
+				phase := y / db.phaseHeight
+				sourceBase := (phase/2+2*(y%db.phaseHeight))*atlas.width + phase%2 + 2*x
+				outBase := (2*(pixel/sourceTileSize)+2)*synthWidth + 2*(pixel%sourceTileSize) + 2
+				synthDelta, atlasDelta := &synthDeltas[direction], &atlasDeltas[direction]
+				var total int32
+				for index := range 16 {
+					out := synthesized[outBase+synthDelta[index]]
+					if out == 0xff {
+						continue
+					}
+					total += pairDistance[int(atlas.pix[sourceBase+atlasDelta[index]])*paletteSize+int(out)]
+				}
+				return coherenceWeight * total / 16
+			}
 			toneCost := func(err [3]int32, offset [3]int32) int32 {
 				d0 := softenAbs(err[0]+offset[0], deadzone)
 				d1 := softenAbs(err[1]+offset[1], deadzone)
 				d2 := softenAbs(err[2]+offset[2], deadzone)
 				return toneWeight * (d0*d0 + d1*d1 + d2*d2)
 			}
-			consider := func(pixel int, count int) {
+			// visit evaluates the propagation candidates already in
+			// candidates[:count], then (unless the pixel is settled) the
+			// random-window and global draws, against the pixel's current
+			// match, and commits the best. Neighbour state does not change
+			// during a visit, so the neighbour tone error and the current
+			// match's full cost are evaluated once.
+			visit := func(pixel int, count int, draws bool) {
 				parent := parents[pixel]
 				feat := &features[pixel]
 				target := &targets[parent]
 				offset := neighbourError(pixel)
 				bestFeat, best := featCosts[pixel], tileMatches[pixel]
 				bestErr := chosen[pixel]
+				bestBlock := chosenBlock[pixel]
 				bestCost := bestFeat
-				if bestFeat != infCost && toneWeight > 0 {
-					bestCost += toneCost(bestErr, offset)
+				if bestFeat != infCost {
+					if toneWeight > 0 {
+						bestCost += toneCost(bestErr, offset)
+					}
+					bestCost += seamCost(pixel, &bestBlock) + coherenceCost(pixel, best)
 				}
-				for _, candidate := range candidates[:count] {
+				try := func(candidate int32) {
 					if candidate < 0 {
-						continue
+						return
 					}
 					entry := &records[candidate]
 					if entry.key < 0 || !db.allowed[parent][entry.key] {
-						continue
+						return
 					}
 					feat := featureCost(feat, &entry.feat)
 					cost := feat
-					err := [3]int32{int32(entry.sum[0]) - target[0], int32(entry.sum[1]) - target[1], int32(entry.sum[2]) - target[2]}
+					if cost >= bestCost {
+						return
+					}
+					sum := blockSum(&entry.block, &sums)
+					err := [3]int32{sum[0] - target[0], sum[1] - target[1], sum[2] - target[2]}
 					if toneWeight > 0 {
 						cost += toneCost(err, offset)
 					}
+					cost += seamCost(pixel, &entry.block) + coherenceCost(pixel, candidate)
 					if cost < bestCost {
-						bestCost, bestFeat, best, bestErr = cost, feat, candidate, err
+						bestCost, bestFeat, best, bestErr, bestBlock = cost, feat, candidate, err, entry.block
 					}
 				}
-				featCosts[pixel], tileMatches[pixel], chosen[pixel] = bestFeat, best, bestErr
+				for _, candidate := range candidates[:count] {
+					try(candidate)
+				}
+				if draws {
+					for _, radius := range [...]int{8, 4, 2, 1} {
+						random := next()
+						span := uint64(2*radius + 1)
+						dy := int(random%span) - radius
+						dx := int((random>>32)%span) - radius
+						try(shifted(best, dy, dx))
+					}
+					try(globalDraw(pixel, true))
+					try(globalDraw(pixel, false))
+				}
+				if best == tileMatches[pixel] {
+					if unchanged[pixel] < 255 {
+						unchanged[pixel]++
+					}
+					return
+				}
+				unchanged[pixel] = 0
+				featCosts[pixel], tileMatches[pixel], chosen[pixel], chosenBlock[pixel] = bestFeat, best, bestErr, bestBlock
+				if coherenceWeight > 0 && best >= 0 {
+					outY, outX := 2*(pixel/sourceTileSize)+2, 2*(pixel%sourceTileSize)+2
+					synthesized[outY*synthWidth+outX] = bestBlock[0]
+					synthesized[outY*synthWidth+outX+1] = bestBlock[1]
+					synthesized[(outY+1)*synthWidth+outX] = bestBlock[2]
+					synthesized[(outY+1)*synthWidth+outX+1] = bestBlock[3]
+				}
 			}
 
 			for pixel := range tilePixels {
 				buckets[pixel] = int32(hashBin(&features[pixel]))
 			}
+			for index := range synthesized {
+				synthesized[index] = 0xff
+			}
+			clear(unchanged[:])
 			for pixel := range tilePixels {
-				featCosts[pixel], tileMatches[pixel], chosen[pixel] = infCost, -1, [3]int32{}
+				featCosts[pixel], tileMatches[pixel], chosen[pixel], chosenBlock[pixel] = infCost, -1, [3]int32{}, [4]byte{}
 				for slot := range 4 {
 					candidates[slot] = globalDraw(pixel, slot%2 == 0)
 				}
-				consider(pixel, 4)
+				visit(pixel, 4, false)
 			}
 			for iteration := range iterations {
 				forward := iteration%2 == 0
+				direction = iteration % 2
 				for scan := range tilePixels {
 					pixel := scan
 					step := 1
@@ -1093,20 +1285,8 @@ func patchMatch(queries tileQueries, db database, records []record, palette []by
 						candidates[count] = shifted(tileMatches[pixel-step*sourceTileSize], step, 0)
 						count++
 					}
-					consider(pixel, count)
-					match := tileMatches[pixel]
-					count = 0
-					for _, radius := range [...]int{8, 4, 2, 1} {
-						random := next()
-						span := uint64(2*radius + 1)
-						dy := int(random%span) - radius
-						dx := int((random>>32)%span) - radius
-						candidates[count] = shifted(match, dy, dx)
-						count++
-					}
-					candidates[count] = globalDraw(pixel, true)
-					candidates[count+1] = globalDraw(pixel, false)
-					consider(pixel, count+2)
+					draws := settle == 0 || int(unchanged[pixel]) < settle
+					visit(pixel, count, draws)
 				}
 			}
 			copy(costs[base:base+tilePixels], featCosts[:])
@@ -1135,11 +1315,13 @@ func relaxParents(db *database, records []record, alp, palette []byte, relax boo
 	var offsets, counts [paletteSize]int32
 	var weights [paletteSize]uint32
 	var meanSum [paletteSize][3]float64
+	sums := paletteSums(palette)
 	for key := range paletteSize {
 		weights[key] = uint32(db.counts[key])
 		for _, position := range db.positions[db.offsets[key] : db.offsets[key]+db.counts[key]] {
+			sum := blockSum(&records[position].block, &sums)
 			for channel := range 3 {
-				meanSum[key][channel] += float64(records[position].sum[channel])
+				meanSum[key][channel] += float64(sum[channel])
 			}
 		}
 		for channel := range 3 {
@@ -1171,6 +1353,12 @@ func relaxParents(db *database, records []record, alp, palette []byte, relax boo
 		}
 	}
 	db.neighbours = makeSampler(entries, offsets[:], counts[:], weights[:])
+	for parent := range paletteSize {
+		db.sole[parent] = -1
+		if counts[parent] == 1 {
+			db.sole[parent] = int16(entries[offsets[parent]])
+		}
+	}
 }
 
 // cycleConsistency is the fraction of matched pixels whose block reduces to
@@ -1203,7 +1391,9 @@ func softenAbs(value, deadzone int32) int32 {
 	return value - deadzone
 }
 
-func featureCost(a, b *[8]int16) int32 {
+// featureCost is the squared PCA distance in native units, undoing the
+// record's per-dimension quantization scales.
+func featureCost(a, b *[featureDims]int8) int32 {
 	d0 := int32(a[0]) - int32(b[0])
 	d1 := int32(a[1]) - int32(b[1])
 	d2 := int32(a[2]) - int32(b[2])
@@ -1212,7 +1402,8 @@ func featureCost(a, b *[8]int16) int32 {
 	d5 := int32(a[5]) - int32(b[5])
 	d6 := int32(a[6]) - int32(b[6])
 	d7 := int32(a[7]) - int32(b[7])
-	return d0*d0 + d1*d1 + d2*d2 + d3*d3 + d4*d4 + d5*d5 + d6*d6 + d7*d7
+	return featureScaleFirst*featureScaleFirst*d0*d0 +
+		featureScaleRest*featureScaleRest*(d1*d1+d2*d2+d3*d3+d4*d4+d5*d5+d6*d6+d7*d7)
 }
 
 func costSummary(costs []int32) (float64, int) {
@@ -1369,4 +1560,25 @@ func splitmix64(value uint64) uint64 {
 
 func clamp(value, low, high int) int {
 	return min(max(value, low), high)
+}
+
+// authoredAdjacentDistance is the mean squared RGB distance between
+// horizontally adjacent pixels of the authored map, the natural dead zone for
+// the seam term: pairs at least this different are what the map already
+// contains.
+func authoredAdjacentDistance(data dataset) int32 {
+	width, height := data.metadata.Width, data.metadata.Height
+	var total, count int64
+	for y := 0; y < height; y += 4 {
+		row := data.high[y*width : (y+1)*width]
+		for x := 0; x+1 < width; x++ {
+			a, b := int(row[x])*3, int(row[x+1])*3
+			for channel := range 3 {
+				d := int64(data.palette[a+channel]) - int64(data.palette[b+channel])
+				total += d * d
+			}
+			count++
+		}
+	}
+	return int32(total / max(count, 1))
 }

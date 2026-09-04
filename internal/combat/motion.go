@@ -91,32 +91,119 @@ func MotionFamilyForWeapon(w *content.WeaponDef) MotionFamily {
 	return MotionNone // [06 §6.2] 6. otherwise no ordinary motion
 }
 
-// InitCommon performs the common initializer work per [06 §5.1] [06 §6.1]:
-// copies muzzle point into both current/head point and second point, copies
-// optional aim point into stored target point, clears beam latch and two-phase
-// state, seeds smoke deadline, clears target links, records shooter side/piece.
-// Family velocity/expiry are not set here [06 §6.1].
-func InitCommon(p *Projectile, now uint32, muzzle, target Vec3, targetUnit pool.Handle, shooterSide uint8, muzzlePiece int16, w *content.WeaponDef) {
+// Per-field reservation audit (WU-19-164), the precondition for dropping the
+// zero-fill in Service.Reserve. A reserved record keeps the previous
+// occupant's value in every field the reservation does not clear and no
+// creator writes [06 §4.1], [06 §6.1], so each field below is either written
+// on every creation path, or is deliberately retained because retail retains
+// it, or carries its own marker.
+//
+//	WeaponID          written — "store the definition" [06 §4.1]; a null
+//	                  definition stores null, so the nil-weapon arm clears it.
+//	Pos, StartPos     written — muzzle point into BOTH points [06 §4.1].
+//	TargetPos         CONDITIONAL — copied "only when it is non-null, leaving
+//	                  the previous occupant's stored target point in place
+//	                  otherwise" [06 §4.1]. Ballistic, dropped and meteor pass
+//	                  null [06 §6.1], [06 §6.5]; ordinary and vertical do not.
+//	TargetUnit        cleared by the reservation [06 §4.1] and again here
+//	                  "before family-specific assignment" [06 §5.1].
+//	TargetProjectile  written — "clear the projectile link" [06 §4.1]; the
+//	                  vertical creator then stores the interceptor's matched
+//	                  link [06 §6.6].
+//	Velocity          written by every creator: ordinary [06 §6.3], ballistic
+//	                  [06 §6.4], vertical (three zero components, [06 §6.6]),
+//	                  dropped [06 §6.4], meteor (packet velocity, [06 §6.5]).
+//	Speed             written by ordinary [06 §6.3], vertical [06 §6.6] and
+//	                  dropped (zero, [06 §6.4]); the meteor creator writes no
+//	                  scalar speed [06 §6.5] and the meteor tick reads none.
+//	Yaw, Pitch        ordinary [06 §6.3], ballistic [06 §6.4] and vertical
+//	                  [06 §6.6] write both. Dropped writes yaw and "no pitch"
+//	                  [06 §6.4]; meteor "initializes no angles" [06 §6.5] and
+//	                  its tick ADDS to the retained words on purpose.
+//	Shooter           written — the initializer writes the shooter reference,
+//	                  or a null one on the null-shooter branch [06 §4.1].
+//	ShooterSide       written — the shooter's side byte, or neutral 10
+//	                  [06 §4.1], [06 §6.5].
+//	MuzzlePiece       written — "resolve and store the firing piece" [06 §4.1].
+//	CreationTick      written [06 §4.1]; it doubles as the burst deadline
+//	                  [06 §6.1], so BurstDeadline is written with it.
+//	BurstRemaining    written — "clear the burst-remaining count" [06 §4.1];
+//	                  the ordinary and vertical creators then copy the authored
+//	                  count [06 §6.3], [06 §6.6]. It is read before any write
+//	                  would otherwise reach it — the motion dispatch admits
+//	                  only a record whose remaining burst count is zero
+//	                  [06 §6.2] — so clearing it here is load-bearing.
+//	ExpiryTick        ordinary [06 §6.3], ballistic [06 §6.4] and vertical
+//	                  [06 §6.6] write it; dropped "writes no expiry" [06 §6.4]
+//	                  and meteor "initializes no expiry" [06 §6.5], and neither
+//	                  family's tick performs an expiry test.
+//	SmokeDeadline     written — "seed the smoke deadline to the current tick"
+//	                  [06 §4.1] (plus the authored delay, [06 §7.3]).
+//	BeamLatch         written — "clear the beam latch" [06 §4.1].
+//	TwoPhase          written — "clear the two-phase state bits" [06 §4.1].
+//	Dead              cleared by the reservation [06 §4.1]; Slots is the
+//	                  authority (I5).
+//	PropellerYaw      RETAINED on purpose: no creator and no initializer writes
+//	                  it, and the meteor tick's roll accumulator "starts at
+//	                  whatever the reused pool slot last held" [06 §6.5].
+//	                  Presentation only [06 §6.1].
+//	MeteorPitch       RETAINED on purpose, same sentence [06 §6.5].
+//	CacheCellX/Z      see the TODO(question) at the clear below.
+//	Scratch5E         write-only scratch with no simulation reader [06 §5.1];
+//	                  retention is unobservable.
+//	OldMarker         compaction writes it for every record in the span before
+//	                  any copy and reads it only within that same pass
+//	                  [06 §5.2]; retention is unobservable.
+//
+// Two record fields [06 §6.1] enumerates have no Go field to retain: the
+// stored planar muzzle-to-aim distance "written by the ordinary creator only"
+// (fire.go derives the burst clone's expiry without it), and the renderer's
+// roll word, which AdvanceMeteor parks in PropellerYaw. Neither is a retention
+// hazard while it is absent, and both belong to their own units.
+//
+// InitCommon performs that common initializer work per [06 §4.1], [06 §5.1],
+// [06 §6.1]. aim is the OPTIONAL aim point: a nil pointer is retail's null aim
+// argument and leaves the stored target point alone. Family velocity, angles,
+// scalar speed and expiry are not set here [06 §4.1].
+func InitCommon(p *Projectile, now uint32, muzzle Vec3, aim *Vec3, targetUnit pool.Handle, shooter pool.Handle, shooterSide uint8, muzzlePiece int16, w *content.WeaponDef) {
 	if p == nil {
 		return
 	}
-	p.Pos = muzzle       // [06 §6.1] copies muzzle point into current/head point
-	p.StartPos = muzzle  // [06 §6.1] and second tail/waypoint/start point
-	p.TargetPos = target // [06 §6.1] optional aim point copied into stored target point
+	p.Pos = muzzle      // [06 §4.1] copies muzzle point into current/head point
+	p.StartPos = muzzle // [06 §4.1] and second tail/waypoint/start point
+	if aim != nil {
+		// [06 §4.1] the aim point reaches the stored target point ONLY when it
+		// is non-null; otherwise the previous occupant's point stays [06 §6.1].
+		p.TargetPos = *aim
+	}
 	p.TargetUnit = targetUnit
-	p.TargetProjectile = 0 // [06 §6.1] clears projectile-to-projectile link
-	p.CreationTick = now   // [06 §5.1] creation tick
-	p.BeamLatch = false    // [06 §6.1] clears beam latch and two-phase state
-	p.TwoPhase = false
+	p.TargetProjectile = 0 // [06 §4.1] clears projectile-to-projectile link
+	p.BurstRemaining = 0   // [06 §4.1] clears the burst-remaining count
+	p.CreationTick = now   // [06 §4.1] creation tick
+	p.BurstDeadline = now  // [06 §6.1] the creation tick doubles as the burst deadline
+	p.BeamLatch = false    // [06 §4.1] clears beam latch
+	p.TwoPhase = false     // [06 §4.1] clears the two-phase state bits
 	p.Dead = false
 	if w != nil {
-		p.SmokeDeadline = now + uint32(w.SmokeDelay) // [06 §5.1] seeds smoke deadline [02 "Weapon record"] smokedelay*30
-		p.WeaponID = w.ID
+		p.SmokeDeadline = now + uint32(w.SmokeDelay) // [06 §4.1] seeds smoke deadline [02 "Weapon record"] smokedelay*30
+		p.WeaponID = w.ID                            // [06 §4.1] store the definition
 	} else {
 		p.SmokeDeadline = now
+		p.WeaponID = 0 // [06 §4.1] a null definition is stored as null, not retained
 	}
+	p.Shooter = shooter // [06 §4.1] the shooter reference, or a null one
 	p.ShooterSide = shooterSide
 	p.MuzzlePiece = muzzlePiece
+	// TODO(question): does retail clear the collision cache's quantized cell
+	// pair at reservation or at common initialization? [06 §4.1] and [06 §5.1]
+	// enumerate neither, yet [06 §5.1] has the pair "read only by the same test
+	// on a later tick to suppress a repeated contact with the same feature
+	// cell" — a read that reaches a fresh record before any write. Retaining it
+	// would let a new projectile skip its first feature contact when the
+	// previous occupant's last selected cell matches. Placeholder: clear it,
+	// the only arm that cannot suppress a contact that retail delivers. Settled
+	// by tracing the reservation's writes, or by a manual retail observation of
+	// two successive shots into the same tree cell.
 	p.CacheCellX = 0
 	p.CacheCellZ = 0
 }
@@ -252,11 +339,15 @@ func BallisticBurnBlowExpiry(now uint32, muzzle, target Vec3, pitch numeric.Angl
 }
 
 // InitOrdinary initializes an ordinary/direct projectile per [06 §6.3].
+// It passes a NON-null aim point: the ordinary creator is not one of the three
+// null-aim creators [06 §6.1], and the stored target point is the guidance and
+// target-loss fallback source for the self-propelled family it also creates
+// [06 §6.8].
 func InitOrdinary(p *Projectile, w *content.WeaponDef, now uint32, muzzle, target Vec3, targetUnit pool.Handle) {
 	if p == nil || w == nil {
 		return
 	}
-	InitCommon(p, now, muzzle, target, targetUnit, p.ShooterSide, p.MuzzlePiece, w)
+	InitCommon(p, now, muzzle, &target, targetUnit, p.Shooter, p.ShooterSide, p.MuzzlePiece, w)
 	// [06 §6.3] derives yaw and pitch from muzzle to target
 	dx := target.X.Sub(muzzle.X)
 	dy := target.Y.Sub(muzzle.Y)
@@ -328,7 +419,12 @@ func InitBallistic(p *Projectile, w *content.WeaponDef, now uint32, muzzle, targ
 	if p == nil || w == nil {
 		return
 	}
-	InitCommon(p, now, muzzle, target, targetUnit, p.ShooterSide, p.MuzzlePiece, w)
+	// NULL aim point [06 §6.1]: the ballistic creator is one of the three that
+	// pass one, so the record keeps the previous occupant's stored target
+	// point. Nothing on the ballistic motion path reads it — the burn-blow
+	// deadline below takes the aim point as an argument [06 §6.4] — so the
+	// retained value is carried, not consumed.
+	InitCommon(p, now, muzzle, nil, targetUnit, p.Shooter, p.ShooterSide, p.MuzzlePiece, w)
 	p.Yaw = yaw
 	p.Pitch = solvedPitch
 	speed := numeric.Fixed(int64(w.WeaponVelocity))
@@ -348,7 +444,10 @@ func InitVertical(p *Projectile, w *content.WeaponDef, now uint32, muzzle, targe
 	if p == nil || w == nil {
 		return
 	}
-	InitCommon(p, now, muzzle, target, targetUnit, p.ShooterSide, p.MuzzlePiece, w)
+	// Non-null aim point: the vertical creator is not one of the three null-aim
+	// creators [06 §6.1], and its two-phase guidance reads the stored target
+	// point [06 §6.6], [06 §6.8].
+	InitCommon(p, now, muzzle, &target, targetUnit, p.Shooter, p.ShooterSide, p.MuzzlePiece, w)
 	p.Yaw = 0                      // [06 §6.6] zero yaw
 	p.Pitch = numeric.Angle(16384) // [06 §6.6] quarter-turn upward pitch (90deg)
 	p.Velocity = Vec3{}            // [06 §6.6] zero velocity components
@@ -371,13 +470,30 @@ func InitDropped(p *Projectile, w *content.WeaponDef, now uint32, muzzle, target
 	if p == nil || w == nil {
 		return
 	}
-	InitCommon(p, now, muzzle, target, targetUnit, p.ShooterSide, p.MuzzlePiece, w)
-	// Dropped has no expiry test per [06 §6.4] [06 §7.3]
-	p.ExpiryTick = 0
-	// Velocity: treat as falling with gravity; start with zero or weaponVelocity if authored?
-	// [06 §6.4] not detailed; use zero for now; motion adds wind/gravity each tick.
+	// NULL aim point [06 §6.1]: the dropped creator is one of the three that
+	// pass one, so the record keeps the previous occupant's stored target
+	// point. Dropped motion reads no target point [06 §6.4].
+	InitCommon(p, now, muzzle, nil, targetUnit, p.Shooter, p.ShooterSide, p.MuzzlePiece, w)
+	// [06 §6.4] the dropped executor "writes no expiry, no burst count and no
+	// pitch": the expiry word therefore keeps the previous occupant's value,
+	// and dropped motion is "the same integrate block with no expiry test", so
+	// nothing on the family's own path reads it. The `ExpiryTick = 0` that
+	// stood here was a write retail does not make.
+	p.Speed = 0 // [06 §6.4] sets scalar speed to zero
+	// TODO(T25): the dropped creator's launch velocity and yaw need the
+	// DROPPING UNIT's heading and its definition's maximum velocity —
+	// `yaw = unitHeading`, `velocityX = -sin(unitHeading, unitMaxVelocity)`,
+	// `velocityZ = -cos(unitHeading, unitMaxVelocity)`, vertical velocity zero
+	// [06 §6.4] — and neither operand reaches this signature or the dispatcher
+	// that calls it (fire.go's FirePorts carries the shooter handle, not a unit
+	// record). Placeholder: zero velocity and zero yaw — the arm that cannot
+	// fling a bomb along a stale heading. Both are WRITTEN rather than
+	// retained, so the placeholder stays visible instead of turning into a
+	// silent read of the previous occupant.
 	p.Velocity = Vec3{}
-	p.Speed = 0
+	p.Yaw = 0
+	// Pitch is deliberately NOT written: [06 §6.4] says the dropped executor
+	// writes none, so it keeps the previous occupant's word [06 §6.1].
 }
 
 // InitMeteor initializes a meteor projectile per [06 §6.5].
@@ -385,14 +501,18 @@ func InitMeteor(p *Projectile, w *content.WeaponDef, now uint32, pos, vel Vec3) 
 	if p == nil {
 		return
 	}
-	// [06 §6.5] meteor creation copies explicit velocity and bypasses ordinary aim solver; no-shooter owner path
-	InitCommon(p, now, pos, pos, 0, 0, 0, w)
-	p.Pos = pos
-	p.StartPos = pos
+	// [06 §6.5] meteor creation copies an explicit velocity and bypasses the
+	// aim solver: the common initializer runs with a NULL aim point and a NULL
+	// shooter, so the record keeps the previous occupant's stored target point
+	// and takes the neutral side byte 10 [06 §4.1], [06 §6.5].
+	InitCommon(p, now, pos, nil, 0, 0, NeutralSide, 0, w)
 	p.Velocity = vel // [06 §6.5] copies explicit velocity
-	// [06 §6.5] does not initialize ordinary expiry
-	p.ExpiryTick = 0
-	p.Speed = 0
+	// [06 §6.5] "initializes no expiry, no angles, and no scalar speed": the
+	// expiry word, the scalar speed and both orientation words keep the
+	// previous occupant's values. The meteor tick applies no expiry test, and
+	// it ADDS its two orientation steps to the retained roll and pitch words,
+	// which is why they must not be cleared here. The `ExpiryTick = 0` and
+	// `Speed = 0` writes that stood here were writes retail does not make.
 }
 
 // InitProjectile dispatches creation and initializes p per [06 §6.2] C15.

@@ -28,23 +28,29 @@ type WeaponDef struct {
 	// count produced by the *30 (or *1/30) multiply is truncated a second
 	// time to the field's storage width before it reaches the record — an
 	// authored negative value does not survive as a large-magnitude 32-bit
-	// negative [01 "Definition parsers"], [02 "Weapon record"]. Six of the
-	// nine have an established width AND signedness and are wrapped below;
-	// three (BurstRate, Duration, SmokeDelay) have an established 16-bit
-	// width but no established signedness and are left untruncated with a
-	// TODO(question) at the compile site rather than guessed.
+	// negative [01 "Definition parsers"], [02 "Weapon record"]. The wrap
+	// itself is Established for all nine — "a 16-bit store then wraps the
+	// truncated value modulo 65,536" [06 §7.3] — and only the *extension*
+	// each reader applies to the stored word separates the signed from the
+	// unsigned form. Six of the nine name their reader's extension and are
+	// wrapped below; three (BurstRate, Duration, SmokeDelay) do not, and are
+	// left as the plain *30 truncation with a TODO(question) at the compile
+	// site rather than guessed. Measured: over the 77-file, 198-section stock
+	// weapon family every one of the nine compiles to a tick count inside
+	// 0..32767, where all three forms agree, so no stock weapon can tell them
+	// apart (WU-19-167 census).
 	WeaponVelocity     int32   // weaponvelocity *65536/30 truncated [02 "Weapon record"]
 	StartVelocity      int32   // startvelocity *65536/30 truncated [02 "Weapon record"]
 	WeaponAcceleration int32   // weaponacceleration *65536/900 truncated [02 "Weapon record"]
 	ReloadTime         int32   // reloadtime *30 truncated ticks, wrapped to a signed 16-bit store [06 §4.2]
 	WeaponTimer        int32   // weapontimer *30 truncated, wrapped to an unsigned 16-bit store [06 §7.3]
-	BurstRate          int32   // burstrate *30 truncated [02 "Weapon record"]; 16-bit width established, signedness is not — TODO(question)
-	Duration           int32   // duration *30 truncated [02 "Weapon record"]; 16-bit width established, signedness is not — TODO(question)
+	BurstRate          int32   // burstrate *30 truncated [02 "Weapon record"]; 16-bit store established [06 §7.3], reader extension is not — TODO(question)
+	Duration           int32   // duration *30 truncated [02 "Weapon record"]; 16-bit store established [06 §7.3], reader extension is not — TODO(question)
 	RandomDecay        int32   // randomdecay *30 truncated, wrapped to an unsigned 16-bit store [06 §4.3]
-	SmokeDelay         int32   // smokedelay *30 truncated [02 "Weapon record"]; 16-bit width established, signedness is not — TODO(question)
+	SmokeDelay         int32   // smokedelay *30 truncated [02 "Weapon record"]; 16-bit store established [06 §7.3], reader extension is not — TODO(question)
 	FlightTime         int32   // flighttime *30 truncated, wrapped to an unsigned 16-bit store [06 §6.6]
 	HoldTime           int32   // holdtime *30 truncated, wrapped to a signed 16-bit store [07 "in-flight camera move"]
-	ShakeDuration      int32   // shakeduration *30 truncated [02 §5.6]; established as a 32-bit store, no further truncation
+	ShakeDuration      int32   // shakeduration *30 truncated; established as a 32-bit store, no further truncation [02 R-KEYS-01 §2]
 	TurnRate           int32   // turnrate *1/30 truncated per tick, wrapped to an unsigned 16-bit store [06 §6.7]
 	MinBarrelAngle     float64 // minbarrelangle *pi/180 radians default -11.25 [02 "Weapon record"]
 
@@ -199,32 +205,43 @@ func compileWeaponSection(section *formats.Section, sectionName string, prov Pro
 	//
 	// Nine of these keys are additionally 16-bit stores in retail
 	// [01 "Definition parsers"], so the *30-truncated tick count is wrapped a
-	// second time to the field's storage width, matching the width AND
-	// signedness the research establishes per key. Six keys have both
-	// established and are wrapped here with `int32(int16(...))` (signed,
-	// sign-extended back) or `int32(uint16(...))` (unsigned, zero-extended
-	// back). The remaining three (burstrate, duration, smokedelay) have an
-	// established 16-bit width but no established signedness — retail's own
-	// research explicitly lists the beam `duration` deadline arithmetic as an
-	// open static-trace item [06 §6.4 "Missing and unknown"], and no site
-	// found for burstrate or smokedelay states which way their addition
-	// extends — so they are left as a plain *30 truncation with no second
-	// wrap; truncating on a guessed sign is exactly the invented-constant
-	// failure mode this codebase forbids.
+	// second time to the field's storage width: "a 16-bit store then wraps
+	// the truncated value modulo 65,536" is Established for the family as a
+	// whole [06 §7.3]. What is established per key is the *extension* the
+	// reader applies to that stored word, and six keys name theirs — wrapped
+	// here with `int32(int16(...))` (sign-extended back) or
+	// `int32(uint16(...))` (zero-extended back).
+	//
+	// The remaining three (burstrate, duration, smokedelay) name no reader
+	// extension anywhere in research/retail-executable-spec, so they are left
+	// as a plain *30 truncation with no second wrap; choosing a sign here
+	// would be the invented-constant failure mode this codebase forbids. The
+	// three arms disagree only outside 0..32767, and a census of the stock
+	// weapon family (77 files, 198 sections) finds every one of the nine keys
+	// inside that range in every section, so nothing shipped distinguishes
+	// them (WU-19-167).
 	reloadTime := int32(int16(int32(section.FloatValue("reloadtime", 0) * 30.0)))    // signed 16-bit store [06 §4.2]
 	weaponTimer := int32(uint16(int32(section.FloatValue("weapontimer", 0) * 30.0))) // unsigned 16-bit store [06 §7.3]
-	// TODO(question): burstrate's 16-bit store signedness is not established in research/retail-executable-spec —
-	// [06 §4.3]/[06 §7.3] cast the burst deadline SUM to unsigned but never burstrate alone before that addition.
+	// TODO(question): burstrate's 16-bit store is Established [06 §7.3]; the extension its readers
+	// apply to that word is not. [06 §4.3] casts the burst deadline SUM to unsigned
+	// (`(uint32)(creationTick + burstrate) <= currentTick`) and tests the interval against four
+	// ("strictly greater than four"), but neither states how the stored word widens before either
+	// use. Decider: the burst scheduler's two burstrate loads, written up in [06 §4.3].
 	burstRate := int32(section.FloatValue("burstrate", 0) * 30.0)
-	// TODO(question): duration's (beamweapon) 16-bit store signedness is not established — [06 §6.4] lists
-	// "malformed beam duration and deadline arithmetic" as an open static-trace item in its own "Missing and unknown" list.
+	// TODO(question): duration's (beamweapon) 16-bit store is Established [06 §7.3]; the extension its
+	// one reader applies is not. That reader is the beam latch of [06 §6.10],
+	// `creationTick + duration < currentTick`, whose comparison strictness is Established while the
+	// addend's widening is not. Decider: the latch's duration load, written up in [06 §6.10].
 	duration := int32(section.FloatValue("duration", 0) * 30.0)
 	randomDecay := int32(uint16(int32(section.FloatValue("randomdecay", 0) * 30.0))) // unsigned 16-bit store [06 §4.3] ("an unsigned 16-bit shift")
-	// TODO(question): smokedelay's 16-bit store signedness is not established in research/retail-executable-spec.
+	// TODO(question): smokedelay's 16-bit store is Established [06 §7.3]; the extension its one reader
+	// applies is not. That reader is the additive trail-smoke deadline of [06 §7.3]
+	// (`smokeDeadline += smokedelay`), which the section states additively but without the widening.
+	// Decider: the trail-smoke deadline's smokedelay load, written up in [06 §7.3].
 	smokeDelay := int32(section.FloatValue("smokedelay", 0) * 30.0)
 	flightTime := int32(uint16(int32(section.FloatValue("flighttime", 0) * 30.0))) // unsigned 16-bit store [06 §6.6] ("(uint16)flighttime")
 	holdTime := int32(int16(int32(section.FloatValue("holdtime", 0) * 30.0)))      // signed 16-bit store [07 "in-flight camera move"] ("the count is signed")
-	shakeDuration := int32(section.FloatValue("shakeduration", 0) * 30.0)          // established 32-bit store [02 §5.6], no further truncation
+	shakeDuration := int32(section.FloatValue("shakeduration", 0) * 30.0)          // established 32-bit store [02 R-KEYS-01 §2], no further truncation
 	// turnrate *1/30 truncated per tick, wrapped to an unsigned 16-bit store [06 §6.7] ("zero-extended from its 16-bit store")
 	turnRate := int32(uint16(int32(section.FloatValue("turnrate", 0) * (1.0 / 30.0))))
 	// minbarrelangle *pi/180 radians default -11.25 — composed exactly as

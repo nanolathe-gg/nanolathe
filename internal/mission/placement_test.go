@@ -1,6 +1,7 @@
 package mission
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -74,7 +75,7 @@ func TestUnitPlacementRoundTrip(t *testing.T) {
 	if u.Y != 85<<16 {
 		t.Fatalf("Y fixed: got %d want %d", u.Y, 85<<16)
 	}
-	// Angle 90 degrees -> 16384 [GAP T14] TODO(question)
+	// Angle 90 degrees -> 16384 [08 "Mission placement record"]
 	if u.Angle != 16384 {
 		t.Fatalf("Angle: got %d want 16384", u.Angle)
 	}
@@ -404,22 +405,65 @@ func TestUseOnlyUnitsRouting(t *testing.T) {
 	}
 }
 
-func TestDegreesToHeading(t *testing.T) {
-	// Angle conversion via trunc(degrees*65536/360) TODO(question) [GAP T14]
-	// Verify known values
-	if got := DegreesToHeading(0); got != 0 {
-		t.Fatalf("0 deg: got %d", got)
+func TestHeadingFromDegrees(t *testing.T) {
+	// The placement heading is one signed division: trunc((int32)(deg << 16) / 360)
+	// narrowed to 16 bits [08 "Mission placement record"].
+	for _, tc := range []struct {
+		deg  int32
+		want uint16
+	}{
+		{0, 0},
+		{45, 8192},
+		{90, 16384},
+		{180, 32768},
+		{359, 65353},
+		{360, 0},
+	} {
+		if got := HeadingFromDegrees(tc.deg); got != tc.want {
+			t.Fatalf("%d deg: got %d want %d", tc.deg, got, tc.want)
+		}
 	}
-	if got := DegreesToHeading(90); got != 16384 {
-		t.Fatalf("90 deg: got %d want 16384", got)
+}
+
+// TestHeadingFromDegreesEquivalenceDomain locks the two halves of the
+// equivalence statement that were carrying a wrong claim before WU-19-167:
+// negative degrees truncate toward zero with NO one-unit bias, and the wrap
+// boundary is 32768, not 65536 [08 "Mission placement record"].
+//
+// The bias is the regression this guards: dropping the sign-bit add turns the
+// quotient into a floor, which is off by one for every negative angle whose
+// division is inexact, and the sweep below reaches those.
+func TestHeadingFromDegreesEquivalenceDomain(t *testing.T) {
+	floatForm := func(deg int32) uint16 {
+		v := int64(math.Trunc(float64(deg)*65536.0/360.0)) % 65536
+		if v < 0 {
+			v += 65536
+		}
+		return uint16(v)
 	}
-	if got := DegreesToHeading(180); got != 32768 {
-		t.Fatalf("180 deg: got %d", got)
+	inexact := 0
+	for deg := int32(-32768); deg <= 32767; deg++ {
+		got, want := HeadingFromDegrees(deg), floatForm(deg)
+		if got != want {
+			t.Fatalf("inside the exact domain: %d deg gave %d, want %d", deg, got, want)
+		}
+		if deg < 0 && int64(deg)*65536%360 != 0 {
+			inexact++
+		}
 	}
-	if got := DegreesToHeading(360); got != 0 {
-		t.Fatalf("360 deg wraps to 0, got %d", got)
+	if inexact == 0 {
+		t.Fatal("sweep never reached a negative angle whose division is inexact; it cannot see a floor-vs-truncate bug")
 	}
-	if got := DegreesToHeading(45); got != 8192 {
-		t.Fatalf("45 deg: got %d", got)
+	// 32768 shifts into the sign bit, so it reads back as a large negative
+	// angle rather than as 32768 modulo the circle. 65535 is the value the
+	// retracted text claimed still agreed with the floating formula.
+	for _, deg := range []int32{32768, 65535, -32769} {
+		if HeadingFromDegrees(deg) == floatForm(deg) {
+			t.Fatalf("%d deg is past the 32-bit shift boundary and must diverge from the unbounded formula", deg)
+		}
+	}
+	// An authored 65535 wraps to the same word as -1.
+	if HeadingFromDegrees(65535) != HeadingFromDegrees(-1) {
+		t.Fatal("65535 deg must land on the same heading word as -1 deg")
 	}
 }

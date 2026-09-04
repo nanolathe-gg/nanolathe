@@ -227,7 +227,11 @@ parsed-only fields remain unread.
 resource resolver into the campaign `camps\useonly` area — path-building
 evidence that it feeds the campaign restricted-units mechanism.
 
-Facing angle for each placement record is converted from authored degrees to a 16-bit circle by a fixed-point magic multiply. The retail sequence multiplies the scaled degrees by a fixed magic constant and corrects with a division by 360 scaled to 65536, all with truncation toward zero. The equivalence domain is now settled: for non-negative degrees below the 32-bit wrap it is bitwise identical to truncate toward zero of degrees times 65536 divided by 360; for negative degrees the result is that truncation **plus one** unit (about 0.0055 degrees of bias); degrees in the 360..65535 range wrap correctly and stay identical to the floating formula modulo the circle; only |degrees| at or beyond 65536 (where the degrees-times-65536 intermediate wraps 32-bit) diverge from the floating formula. The earlier "differs for greater-than-360 values" phrasing is retracted (it wraps correctly), and "equivalent for the whole integer range" is retracted (negative degrees carry the one-unit bias). [P0-06] [lane 08 angle equivalence]
+Facing angle for each placement record is converted from authored degrees to a 16-bit circle by one signed division. **Established (2026-09-04, WU-19-167, by trace of the placement-record parser).** `Angle` is read by the **integer** accessor with default 0 — the same accessor and calling shape as the `XPos`/`YPos`/`ZPos` reads that bracket it and the `Player` read that follows it — so a fractional authored value never reaches the conversion as a fraction. The value is then shifted left 16 **in a 32-bit register** and divided by 360 through the compiler's magic-multiply idiom: multiply by the reciprocal magic, add the multiplicand back into the high half (the correction a magic at or above 2^31 requires), arithmetic-shift the high half right 8, then **add the quotient's own sign bit**, which is what makes the quotient truncate toward zero rather than floor. The low 16 bits of that quotient are stored as the heading word.
+
+So the stored word is `trunc((int32)(degrees << 16) / 360)` narrowed to 16 bits, for **every** input. The only wrap in the whole sequence is that 32-bit shift, so for `-32768 <= degrees <= 32767` the shift is exact and the result is bitwise identical to truncate-toward-zero of degrees times 65536 divided by 360, reduced modulo the circle — negative degrees included. Divergence from the unbounded floating formula begins at `degrees >= 32768` and at `degrees <= -32769`.
+
+**Correction.** The previous text said "for negative degrees the result is that truncation **plus one** unit (about 0.0055 degrees of bias)" and "degrees in the 360..65535 range wrap correctly ... only |degrees| at or beyond 65536 (where the degrees-times-65536 intermediate wraps 32-bit) diverge". Both halves are wrong. There is no negative bias: the sign-bit add the earlier reading counted as an extra unit is the idiom's truncate-toward-zero step, and without it the quotient would floor — so a negative angle lands on the truncation, not one unit past it. And the wrap boundary is 32768, not 65536, because the shift is a signed 32-bit shift of the authored degrees: 32768 degrees already shifts into the sign bit, which is why an authored 65535 reads back as if it were -1 rather than as 65535 modulo the circle. The retraction the previous text made of "differs for greater-than-360 values" stands, but only over 360..32767. [P0-06] [lane 08 angle equivalence]
 
 The initial-mission string is interpreted once at battle start, on the loading worker after all units exist, for fresh mission-type-1 starts and for BetweenMissions-continuation loads (the save-blob gate runs the same fresh spawner when the BetweenMissions flag is present), and before any creation script, movement, or visibility publication for that tick. No other consumer of the stored script strings is located in the bounded search. [P0-06] [lane 08 BetweenMissions polarity]
 
@@ -1946,8 +1950,11 @@ that unreachable.
 
 **Established — the unit record parser** reads, per `[unitN]` block, in this
 order: `Unitname`, `Ident`, `InitialMission` (strings, interned), `XPos`,
-`YPos`, `ZPos` (integers, each `<< 16`), `Angle` (degrees, the magic
-multiply of "Mission placement record"), `Player` (integer; 0 becomes 1),
+`YPos`, `ZPos` (integers, each `<< 16`), `Angle` (**integer accessor,
+default 0**, then the magic multiply of "Mission placement record" —
+sharpened 2026-09-04, WU-19-167: §9 did not previously say which accessor
+reads it, and a float reading would admit fractional degrees the conversion
+never sees), `Player` (integer; 0 becomes 1),
 `HealthPercentage` (default 100), `BuildPriority` (integer), `CreationCountdown`
 (integer), `MissionCriticalUnit`, `AiIgnore`, `AiPriorityTarget` (each
 `& 1`, packed into flag bits 4–6), `InitialGroup` (**integer** read, low

@@ -130,6 +130,13 @@ func TestFeatureBeforeAlive(t *testing.T) {
 // exercised through sharedStep by the decay-wrapper tests in
 // getbuilt_decay_gate_test.go; ReverseStep/ApplyReverse/ReverseCause9, the
 // parallel expression this test used to drive, are retired (WU-19-101).
+//
+// The two scaled expectations were NEGATIVE until WU-19-166 — they locked a
+// debit where retail pays a reduced credit. [05 R-ECO-01 §11] settles the sign
+// for all fourteen sites of the family, this one named among them: the stored
+// constants are negative and the site SUBTRACTS the product, so the scaled arm
+// adds half (selector 0) or seven tenths (selector 1) of the refund. The test
+// is what kept the inverted arithmetic in place, so it is corrected with it.
 func TestReverseRefundSelectorLadder(t *testing.T) {
 	bucket := float32(0)
 	ReverseRefund(&bucket, 40, false, 0)
@@ -138,13 +145,13 @@ func TestReverseRefundSelectorLadder(t *testing.T) {
 	}
 	bucket2 := float32(0)
 	ReverseRefund(&bucket2, 100, true, 0)
-	if bucket2 != -50 {
-		t.Fatalf("selector 0 credits half: got %v want -50", bucket2)
+	if bucket2 != 50 {
+		t.Fatalf("selector 0 credits half: got %v want 50", bucket2)
 	}
 	bucket3 := float32(0)
 	ReverseRefund(&bucket3, 100, true, 1)
-	if bucket3 != -70 {
-		t.Fatalf("selector 1 credits seven tenths: got %v want -70", bucket3)
+	if bucket3 != 70 {
+		t.Fatalf("selector 1 credits seven tenths: got %v want 70", bucket3)
 	}
 	bucket4 := float32(0)
 	ReverseRefund(&bucket4, 100, true, 2)

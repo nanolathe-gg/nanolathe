@@ -670,9 +670,9 @@ func (u *Unit) setActivationEdge(on bool, vm *cob.VM) {
 		return
 	}
 	u.Activated = on
-	// Retired (WU-19-99): this carried a TODO(question) saying the notification
-	// codes were dropped because "this build has nowhere to put them" and that
-	// the consumer was unknown. [03 R-AUD-01 §7] names the consumer: the codes
+	// Retired (WU-19-99): this carried an open-question marker saying the
+	// notification codes were dropped because "this build has nowhere to put
+	// them" and that the consumer was unknown. [03 R-AUD-01 §7] names the consumer: the codes
 	// ARE the §8.3 status-cue slot indices, and every producer reaches one raise
 	// helper. Codes 3/4 are slots 3 `activate` and 4 `deactivate`, whose static
 	// default caption is empty.
@@ -1718,7 +1718,7 @@ func installWeapons(u *Unit, def *content.UnitDef) {
 // narrowing does (I3). Keeping it integral avoids a float64 term in
 // authoritative state (I2).
 //
-// Settled (WU-19-138), closing the TODO(question) that stood here. All three
+// Settled (WU-19-138), closing the open-question marker that stood here. All three
 // retail unit creators run the same three-call sequence — the common
 // position/state initializer that draws and writes the spawn heading, then the
 // script/model instantiation that also starts `Create`, then the slot

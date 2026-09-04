@@ -165,15 +165,17 @@ func rectsOverlap(aMinX, aMinZ, aMaxX, aMaxZ, bMinX, bMinZ, bMaxX, bMaxZ int32) 
 	return aMinX < bMaxX && bMinX < aMaxX && aMinZ < bMaxZ && bMinZ < aMaxZ
 }
 
-// builderFootprintAnchor returns the cell the builder's footprint anchors at
-// when its centre stands at the world point (x,z), using the same snap the
-// occupancy commit uses [04 §8.2] and the same quantity the rectangle goal's
-// arrival test reads [04 R-PATH-01 §12].
-func (s *Service) builderFootprintAnchor(builder *units.Unit, x, z numeric.Fixed) (cellX, cellZ int32, ok bool) {
-	if s == nil || builder == nil || builder.Def == nil {
+// unitFootprintAnchor returns the cell a unit's footprint anchors at when its
+// centre stands at the world point (x,z), using the same snap the occupancy
+// commit uses [04 §8.2] and the same quantity the rectangle goal's arrival test
+// reads [04 R-PATH-01 §12]. It is asked of the builder by mustClearSite and of
+// the TARGET by unit reclaim's approach, which installs its rectangle goal on
+// the target's own footprint [04 R-ORD-01 §5].
+func (s *Service) unitFootprintAnchor(u *units.Unit, x, z numeric.Fixed) (cellX, cellZ int32, ok bool) {
+	if s == nil || u == nil || u.Def == nil {
 		return 0, 0, false
 	}
-	bx, bz := world.FootprintForUnit(s.Catalog, builder.Def)
+	bx, bz := world.FootprintForUnit(s.Catalog, u.Def)
 	extent, err := world.NewFootprintExtent(bx, bz)
 	if err != nil {
 		return 0, 0, false
@@ -211,10 +213,23 @@ func (s *Service) builderFootprintAnchor(builder *units.Unit, x, z numeric.Fixed
 // than impossible.
 //
 // TODO(question): moving this consultation onto the `0x40` wake alone, so an
-// arrival at the rectangle border retires the approach without a distance
-// test, needs the approach phase's satisfied-word plumbing that
-// internal/session owns [05 R-WORK-01 §12]. Wiring that is a separate unit;
-// nothing here should invent a second reach rule in the meantime.
+// arrival at the rectangle border retires the approach without a distance test
+// [05 R-WORK-01 §12] point 2, needs a wake this handler can read. It cannot
+// read the record's own satisfied word: the pump computes the satisfied set as
+// `(record.satisfied | unit.pending) & record.gate` and then CLEARS the
+// delivered bits from the record [04 §3.3], so by the time internal/session
+// drives StepUnit the `0x40` is already consumed — construction sees a word
+// that is zero on exactly the visit the bit was meant for. (Re-checked
+// WU-19-166: the previous text here blamed "the approach phase's satisfied-word
+// plumbing that internal/session owns", which named the wrong half. Session
+// already acts on the bit — its activation boundary calls
+// orders.MobileBuildUnreachableVisit(active.Satisfied, …) and runs the row's
+// abandon arm; what is absent is a delivery of the same wake INTO this
+// handler.) The seam is therefore in internal/orders or internal/session:
+// either the pump dispatches construction's states from the satisfied set the
+// way it dispatches a handler row, or the wake is latched on the record for the
+// StepUnit visit that follows. Both are separate units; nothing here should
+// invent a second reach rule in the meantime.
 //
 // Standing on the site is a separate question answered by mustClearSite below.
 // Folding it in here made the state-2 handler ("a true result means return now,
@@ -278,7 +293,7 @@ func (s *Service) mustClearSite(builder *units.Unit, node *orders.Node) bool {
 		return false
 	}
 	bx, bz := world.FootprintForUnit(s.Catalog, builder.Def)
-	cellX, cellZ, ok := s.builderFootprintAnchor(builder, builder.X, builder.Z)
+	cellX, cellZ, ok := s.unitFootprintAnchor(builder, builder.X, builder.Z)
 	if !ok {
 		return false
 	}

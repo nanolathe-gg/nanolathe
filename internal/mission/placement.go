@@ -3,7 +3,6 @@ package mission
 import (
 	"encoding/binary"
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 
@@ -25,7 +24,7 @@ type UnitPlacement struct {
 	Z int32 // Z fixed 16.16, authored ZPos <<16 [GAP T14]
 	Y int32 // Y fixed 16.16, authored YPos <<16 [GAP T14]
 
-	Angle uint16 // heading 0..65535, trunc(degrees*65536/360) [GAP T14] [fmt ota]
+	Angle uint16 // heading 0..65535, trunc((int32)(degrees<<16)/360) [08 "Mission placement record"] [fmt ota]
 
 	Player            int32 // Player, default 0, negatives clamped to 0 [02 "Map files"]
 	HealthPercentage  int32 // HealthPercentage default 100 [02 "Map files"]
@@ -159,11 +158,25 @@ func DecodeUseOnlyUnits(global *formats.Section) string {
 // An empty path is "no restriction file authored" and reports absent without
 // touching the VFS.
 //
-// TODO(question): what retail's TDF reader does with a *malformed* useonly
-// file is untraced — its lenient parser would yield no sections, which would
-// clear every definition and leave an empty catalog. Rather than guess that,
-// this returns the parse error so the caller fails loudly; tracing the
-// reader's error path on resource slot 6 would settle it.
+// A *malformed* file is not an empty allow-list. The marker that stood here
+// said retail's "lenient parser would yield no sections, which would clear
+// every definition and leave an empty catalog", and called the reader's error
+// path untraced. Both halves were wrong: retail's TDF reader is not lenient,
+// and the path is closed. Every one of its five syntax diagnostics is handed
+// to the fatal channel — a system-modal box, then exit(1) — with no error
+// return and no partially-built tree [02 R-MALF-01 §4][fmt tdf]. The only
+// recoverable failure is a missing or zero-length file, which yields no tree.
+//
+// So the empty-catalog outcome the marker feared cannot be reached through a
+// syntax error: retail never gets as far as clearing the available bits. It is
+// reachable only through a file that parses cleanly and names nothing, and
+// there it is genuinely what retail does — the loader clears the bit on every
+// definition when the file *exists* and re-sets it only for the sections the
+// file names [08 R-ENTRY-01 §2 step 4]. Returning the parse error is the
+// faithful shape of the fatal arm (a loader cannot exit the process for the
+// caller), and a clean parse with no sections is reported as present-with-no-
+// names so the caller reproduces the clear-everything arm instead of silently
+// ignoring the file.
 func LoadUseOnlyNames(fs vfs.FSOps, path string) ([]string, bool, error) {
 	path = strings.TrimSpace(path)
 	if path == "" || fs == nil {
@@ -235,40 +248,17 @@ func decodeUnitSection(sec *formats.Section) UnitPlacement {
 	u.Z = z << 16
 	u.Y = y << 16
 
-	// Angle degrees conversion via retail fixed-point magic multiply
-	// 0xB60B60B7>>40..., bitwise identical to trunc(deg*65536/360) for stock
-	// but differs for negative/>360. [P0-06 §4][P0-04 §4][08 "Mission placement record"]
-	if raw, ok := sec.FirstValue("Angle"); ok {
-		trimmed := strings.TrimSpace(raw)
-		if trimmed != "" {
-			if f, err := strconv.ParseFloat(trimmed, 64); err == nil {
-				// Try integer path for bitwise identical retail result.
-				if isIntegerString(trimmed) {
-					if deg, err2 := strconv.ParseInt(trimmed, 10, 32); err2 == nil {
-						u.Angle = HeadingFromDegrees(int32(deg))
-					} else {
-						// Fallback to float trunc for out-of-range integer strings.
-						heading := f * 65536.0 / 360.0
-						t := math.Trunc(heading)
-						v := int64(t) % 65536
-						if v < 0 {
-							v += 65536
-						}
-						u.Angle = uint16(v)
-					}
-				} else {
-					// Fractional degrees: float trunc toward zero per __ftol [I3].
-					heading := f * 65536.0 / 360.0
-					t := math.Trunc(heading)
-					v := int64(t) % 65536
-					if v < 0 {
-						v += 65536
-					}
-					u.Angle = uint16(v)
-				}
-			}
-		}
-	}
+	// Angle: the INTEGER accessor with default 0, then the one signed division
+	// of HeadingFromDegrees [08 "Mission placement record"][08 R-TRIG-01 §9].
+	//
+	// This read used to branch: an integral-looking string took the retail
+	// conversion, anything else took a second, float-truncating copy of the
+	// formula. Retail has no such branch — the key is read by the same integer
+	// accessor as XPos/YPos/ZPos and Player, so a fractional authored value is
+	// consumed by the accessor and never reaches the conversion as a fraction.
+	// The float copy also disagreed with the retail conversion outside
+	// -32768..32767, which is the only place the two can differ at all.
+	u.Angle = HeadingFromDegrees(sec.IntValue("Angle", 0))
 
 	// Player defaults 0, negatives clamped to 0 [02 "Map files"]
 	p := sec.IntValue("Player", 0)
@@ -411,63 +401,35 @@ func decodeFeatureSection(sec *formats.Section) FeaturePlacement {
 	return f
 }
 
-// DegreesToHeading converts authored degrees to retail heading 0..65535 via
-// trunc(degrees*65536/360). Bitwise identical to retail magic for stock angles
-// but differs for negative/>360 via the magic path. [P0-06 §4][P0-04 §4]
-func DegreesToHeading(deg float64) uint16 {
-	h := deg * 65536.0 / 360.0
-	t := math.Trunc(h) // truncate toward zero [I3] __ftol
-	v := int64(t) % 65536
-	if v < 0 {
-		v += 65536
-	}
-	return uint16(v)
-}
-
-// HeadingFromDegrees is the retail fixed-point magic multiply
-// 0xB60B60B7>>40..., bitwise identical to trunc(deg*65536/360) for stock
-// but differing for negative/>360 per [P0-06 §4][P0-04 §4].
-// Input is integer degrees as authored in TDF Angle key.
+// HeadingFromDegrees converts an authored `Angle` degree count to the heading
+// word retail stores on the placement record [08 "Mission placement record"].
+//
+// Established, and it is one signed division: the authored degrees are shifted
+// left 16 in a 32-bit register and divided by 360, with the quotient truncating
+// toward zero. Retail spells the divide as its compiler's magic-multiply idiom
+// (multiply by the reciprocal, add the multiplicand back into the high half,
+// arithmetic-shift right 8, then add the quotient's sign bit); this reproduces
+// the idiom step for step so the wrap behaviour of every stage matches, rather
+// than substituting a plain divide whose intermediate does not wrap the same
+// way.
+//
+// Equivalence domain, also Established: the only wrap is that 32-bit shift, so
+// for -32768..32767 the result is bitwise identical to truncate-toward-zero of
+// degrees × 65536 / 360 reduced modulo the circle — negative degrees included,
+// with no bias. Divergence from the unbounded formula starts at 32768 and at
+// -32769, where the shift runs into the sign bit. Stock content authors no
+// angle outside 0..359 in any of the reference install's 57,485 mission unit
+// blocks (WU-19-167 census), so the whole divergence domain is unreachable.
 func HeadingFromDegrees(deg int32) uint16 {
-	// Retail's fixed-point magic-multiply heading conversion
-	// [P0-04 §4][P0-06 §4][08 "Mission placement record"]:
-	// scaled  = deg*0x10000 (32-bit wrap)
-	// wide    = (int64)scaled * 0xB60B60B7
-	// high    = wide >> 0x28 (40)
-	// corr    = (short)(char)((scaled/0x1680000)+(scaled>>31)) >>0x0F
-	// result  = (short)(high - corr)  then uint16
-	// 0x1680000 = 360*65536
-	tmp := int64(int32(int64(deg) * 0x10000))
-	magic := int64(0xB60B60B7)
-	hi := (tmp * magic) >> 40 // >>0x28 arithmetic
-	// correction with 32-bit IDIV trunc toward zero
-	div := int32(tmp) / 0x1680000
-	sign := int32(tmp) >> 31
-	sum := div + sign
-	charVal := int8(sum)
-	shortVal := int16(charVal)
-	corr := int64(shortVal >> 15) // >>0x0F arithmetic
-	res := int16(hi - corr)
-	return uint16(res)
-}
-
-func isIntegerString(s string) bool {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return false
+	scaled := int32(int64(deg) * 65536) // 32-bit shift, wrap included
+	// The magic and its shift are the compiler's reciprocal for 360 with the
+	// multiplicand added back, which is what the high-half add below is.
+	const recip = int64(0xB60B60B7)
+	quotient := (int64(scaled) * recip) >> 40
+	if scaled < 0 {
+		quotient++ // the sign-bit add: truncate toward zero, not floor
 	}
-	if s[0] == '+' || s[0] == '-' {
-		s = s[1:]
-	}
-	if s == "" {
-		return false
-	}
-	for _, ch := range s {
-		if ch < '0' || ch > '9' {
-			return false
-		}
-	}
-	return true
+	return uint16(int16(quotient))
 }
 
 // FixedFromPixels converts authored pixel coordinates to 16.16 fixed by

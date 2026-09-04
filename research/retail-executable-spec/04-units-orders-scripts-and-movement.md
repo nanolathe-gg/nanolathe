@@ -772,7 +772,17 @@ capture teardown). No instruction anywhere ORs bit 2 or bit 8 into a record's
 satisfied word or the unit's capability word (bounded census of every writer
 of both words over the whole instruction listing), so the Construction-stopped
 WAKE-BIT producer remains `TODO(T25)` and must not be invented
-[R-P0-09][R-P0-10] (full semantics in section 3.8); the flag-byte dispatcher
+[R-P0-09][R-P0-10] (full semantics in section 3.8) — **superseded for bit 8,
+Established (2026-08-29, [R-ORD-01 §6]; noted here 2026-09-04, WU-19-166): the
+producer is the record's own target smart-reference.** The census above looked for a direct
+OR of the word and found none because there is none: the reference header's
+first method is what raises the bit, and the unit-removal path calls it with
+`0x8` on every reference registered on the destroyed unit, then unlinks the
+reference. For a construction record, whose target reference is its product,
+"the product under construction was destroyed" and "the Construction-stopped
+wake" are the same event, so this paragraph's `TODO(T25)` is closed — the same
+correction [R-ORD-01 §6] already applied to the guard's `0x8`/`0x10` pair. The
+flag-byte dispatcher
 the audit once named as the interrupt site operates on the unit's
 activation/building flag byte, not on order wake bits. The bounded census for
 the small class parameter above (3901 boundaries) similarly

@@ -490,7 +490,8 @@ func DebitCloak(p *Player, cost float32) bool {
 //     block, success and failure alike, ends at the same transition call with
 //     bit 2 as the mask, and no exit leaves the bit alone [05 R-ECO-01 §9
 //     "every exit"]. This was recorded here as a Supported inference with a
-//     TODO(question) asking whether a not-due pass clears the bit or leaves it;
+//     open-question marker asking whether a not-due pass clears the bit or
+//     leaves it;
 //     the decider it named — a trace of the debit block's exit paths — has been
 //     met, and the inference is confirmed. The consequences the earlier note
 //     reasoned to are the traced ones: a working builder that has cloak

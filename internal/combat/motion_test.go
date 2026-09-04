@@ -607,9 +607,13 @@ func TestInitProjectileDispatchSetsExpiry(t *testing.T) {
 		t.Fatalf("vertical velocity should be zero")
 	}
 
-	// meteor
+	// meteor. [06 §6.5]: the creator "initializes no expiry", so the expiry
+	// word keeps whatever the reused slot held — here the vertical creator's.
+	// The assertion that used to stand here demanded a zero, which is a write
+	// retail does not make (WU-19-164).
 	wMet := &content.WeaponDef{ID: 4, Meteor: true}
 	vel := Vec3{X: fix(1000), Y: fix(-983040), Z: fix(0)}
+	retainedExpiry := p.ExpiryTick
 	fam = InitProjectile(&p, wMet, now, muzzle, target, 0, 0, 0, &vel, 0, 0)
 	if fam != CreationMeteor {
 		t.Fatalf("meteor fam")
@@ -617,18 +621,20 @@ func TestInitProjectileDispatchSetsExpiry(t *testing.T) {
 	if p.Velocity.X.Raw() != 1000 || p.Velocity.Y.Raw() != -983040 {
 		t.Fatalf("meteor velocity copy failed")
 	}
-	if p.ExpiryTick != 0 {
-		t.Fatalf("meteor expiry should be 0")
+	if p.ExpiryTick != retainedExpiry {
+		t.Fatalf("meteor expiry got %d, want the retained %d [06 §6.5]", p.ExpiryTick, retainedExpiry)
 	}
 
-	// dropped
+	// dropped. [06 §6.4]: the executor "writes no expiry, no burst count and
+	// no pitch", so the expiry word is retained here too.
 	wDrop := &content.WeaponDef{ID: 5, Dropped: true}
+	retainedExpiry = p.ExpiryTick
 	fam = InitProjectile(&p, wDrop, now, muzzle, target, 0, 0, 0, nil, 0, 0)
 	if fam != CreationDropped {
 		t.Fatalf("dropped fam")
 	}
-	if p.ExpiryTick != 0 {
-		t.Fatalf("dropped expiry should be 0 (no expiry)")
+	if p.ExpiryTick != retainedExpiry {
+		t.Fatalf("dropped expiry got %d, want the retained %d [06 §6.4]", p.ExpiryTick, retainedExpiry)
 	}
 }
 

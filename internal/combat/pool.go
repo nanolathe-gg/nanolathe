@@ -229,31 +229,32 @@ func (s *Service) Reserve() (pool.Handle, bool) {
 	}
 	idx := int(h) - 1
 	if idx >= 0 && idx < len(s.Records) {
-		// TODO(T25): retail's reservation clears TWO fields, not the record.
-		// The marker that stood here said the "exact allocator zero-fill byte
-		// count for the 107-byte projectile record" was untraced. There is no
-		// zero-fill to count: [06 §4.1] enumerates the reservation as "test the
-		// live count against the hard cap of 300; take the record at that index;
-		// increment the count; clear the record's dead bit; clear its retained
-		// unit target", and [06 §5.1] gives the same two clears. Everything else
-		// a new record needs is written by the common initializer and the family
-		// creator; a field neither writes keeps the PREVIOUS OCCUPANT's value.
+		// The reservation clears exactly TWO fields, not the record. [06 §4.1]
+		// enumerates it as "test the live count against the hard cap of 300;
+		// take the record at that index; increment the count; clear the
+		// record's dead bit; clear its retained unit target", and [06 §5.1]
+		// gives the same two clears. Everything else a new record needs is
+		// written by the common initializer and the family creator; a field
+		// neither writes keeps the PREVIOUS OCCUPANT's value, and [06 §4.1]
+		// says so outright — the initializer "does not clear the whole reused
+		// record".
 		//
-		// That is load-bearing in exactly one place research names: the common
-		// initializer copies the aim point into the stored target point "only
-		// when it is non-null, leaving the previous occupant's stored target
-		// point in place otherwise" [06 §4.1]. Zeroing here erases the value
-		// retail keeps, so a null-aim creation reads a zero target point where
-		// retail reads the last record's.
+		// The retention is load-bearing where the aim point is null: the
+		// common initializer copies the aim point into the stored target point
+		// "only when it is non-null, leaving the previous occupant's stored
+		// target point in place otherwise" [06 §4.1], and the ballistic,
+		// dropped and meteor creators all pass a null aim point [06 §6.1],
+		// [06 §6.5]. A zero-fill here erased the value retail keeps.
 		//
-		// Not closed here because it is not this file's to close: dropping the
-		// zero-fill is only safe once `InitCommon` makes that target-point copy
-		// conditional AND every family creator is confirmed to write each field
-		// it reads. Both live in internal/combat/motion.go, outside this unit's
-		// ownership. Placeholder: keep the full zero-fill, which is the
-		// conservative arm — it can only make a new record read cleaner than
-		// retail's, never dirtier.
-		s.Records[idx] = Projectile{}
+		// The zero-fill that used to stand here (WU-19-154's conservative
+		// placeholder, kept because InitCommon copied the aim point
+		// unconditionally) is retired by WU-19-164: InitCommon is now
+		// conditional and every family creator has been audited to write each
+		// field it reads — see the audit block above InitCommon in motion.go.
+		// The dead bit is authoritative in Slots (I5), which Slots.Reserve
+		// already cleared; the shadow copy is kept in step here.
+		s.Records[idx].Dead = false   // [06 §4.1] clear the record's dead bit
+		s.Records[idx].TargetUnit = 0 // [06 §4.1] clear its retained unit target
 	}
 	return h, true
 }
@@ -262,18 +263,19 @@ func (s *Service) Reserve() (pool.Handle, bool) {
 // no solution. Retail did not reserve for that admission failure [06 §3.3],
 // so the count must not leak. The vel0 #DE path keeps the leak per P0-10
 // [06 §6.4] I11 and never calls this.
+//
+// The rollback is a COUNT rollback only. It used to zero the record as well,
+// which was the same defect Reserve carried: retail never reached the creator
+// on this path, so the slot still holds the previous occupant's fields, and
+// the next reservation of the slot is entitled to read them [06 §4.1],
+// [06 §6.1]. The two fields Reserve cleared stay cleared, which costs nothing:
+// the record is outside the active span until it is reserved again, and that
+// reservation clears the same two fields.
 func (s *Service) CancelReserve(h pool.Handle) bool {
 	if s == nil {
 		return false
 	}
-	ok := s.Slots.CancelReserve(h)
-	if ok {
-		idx := int(h) - 1
-		if idx >= 0 && idx < len(s.Records) {
-			s.Records[idx] = Projectile{}
-		}
-	}
-	return ok
+	return s.Slots.CancelReserve(h)
 }
 
 // MarkDead sets the dead flag for h without changing the active-span count
@@ -486,11 +488,16 @@ func (s *Service) Compact(follow *pool.Handle) {
 			}
 			dest++
 		}
-		// Clear tail records beyond newCount (stale bytes past new active count) [06 §5.2].
-		for i := newCount; i < oldCount; i++ {
-			s.Records[i] = Projectile{}
-		}
-		// Dead shadows already cleared via copy; tail is zero.
+		// The records past the new active count are deliberately left alone.
+		// [06 §5.2] describes an unrepaired link as one that "can address a
+		// different live record shifted into the old address or STALE BYTES
+		// past the new active count" — a phrase that only has a referent if
+		// the slide leaves those bytes standing. The loop that used to zero
+		// them here was an invented write, and it also emptied every slot
+		// before it could be reused: a reservation clears exactly the dead bit
+		// and the retained unit target and keeps the rest of the previous
+		// occupant's record [06 §4.1], so clearing the tail here made that
+		// retention unreachable (WU-19-164).
 	}
 
 	// Second repair pass [06 §5.2]: rewrite moved source's link ONLY when a live

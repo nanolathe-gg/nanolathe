@@ -156,7 +156,8 @@ func compileFeatureSection(section *formats.Section, featureName string, prov Pr
 
 	// Retired (WU-19-143): this used to probe `resurrectspread` then
 	// `jitterspread` as a guess ladder for "the retail FBI/TDF key spelling
-	// for the feature resurrection spread byte" (TODO(T25)). Both guesses
+	// for the feature resurrection spread byte" (an accepted-blocked marker).
+	// Both guesses
 	// are dead: the feature parser's exhaustive key census reads no such key
 	// at all [05 R-FEAT-01 §1], and a full census of every stock feature
 	// section (177 files, 1645 sections) confirms neither spelling nor any

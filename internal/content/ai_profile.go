@@ -94,9 +94,11 @@ func ParseAIDirectives(data []byte) []AIDirective {
 }
 
 // ParseAIWeightFactor reads a `weight` directive's second argument. The
-// established default when the argument is absent is 0.0 [08 R-AI-01 §12];
-// this reports ok=false for text that is not a float at all, leaving the
-// caller's tolerant "ignore the line" behavior in place.
+// established default is 0.0 [08 R-AI-01 §12], and it covers an absent
+// argument and text that is not a float at all alike, so the returned value is
+// usable whatever the flag says. The flag reports only whether the text
+// converted; nothing in the grammar conditions the directive on it, so a caller
+// that uses the flag as an admission test is diverging from the grammar.
 func ParseAIWeightFactor(value string) (float64, bool) {
 	return parseAIWeightFactor(value)
 }
@@ -125,8 +127,9 @@ type AIWeightPlan struct {
 // grammar; weight multiplication is deferred to the active profile boundary
 // so the authored factor remains intact at the established float32 narrowing
 // point [08 "Computer-controlled players"] [08 "Established AI-facing data and rooted planner"].
-// A malformed or unknown line is ignored, matching ParseAIProfile's tolerant
-// plain-text reader.
+// An unknown keyword is ignored. A malformed argument still drops the
+// directive here; see the TODO(T25) in the loop for why that diverges from the
+// profile reader and what has to move for it to stop.
 func ParseAIWeight(data []byte) *AIWeightPlan {
 	plan := &AIWeightPlan{
 		Limits: make(map[string]int32),
@@ -141,6 +144,19 @@ func ParseAIWeight(data []byte) *AIWeightPlan {
 			continue
 		}
 		parts := strings.Fields(line)
+		// TODO(T25): this fragment reader still drops a directive whose
+		// argument is absent or unconvertible, where ParseAIProfile now applies
+		// the established default (0.0 for `weight`, 0 for `limit`). Retail has
+		// one dispatcher for both — the per-definition fragment is dispatched
+		// "exactly as a line of ai\default.txt is dispatched", with every
+		// keyword admitted and no argument-conversion gate [08 R-AI-01 §18], so
+		// the two must agree. The wiring is the four lines below (require only
+		// the name, then read parts[2] with a "" fallback); the blocker is
+		// TestParseAIWeightMalformedLinesIgnored in ai_weight_test.go, which
+		// locks the drop arm and is outside this unit's file ownership.
+		// Unauthored either way: of the reference install's 278 FBI files only
+		// 7 author ai_weight, carrying 7 directive lines, all well formed
+		// (WU-19-167 census).
 		if len(parts) < 3 {
 			continue
 		}
@@ -372,23 +388,33 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 			if len(currentPlans) == 0 {
 				continue // gate: weight lines before plan do not apply [PLAN 11 C4]
 			}
-			if len(parts) < 3 {
-				continue
+			if len(parts) < 2 {
+				continue // no name argument: nothing for the matcher to expand
 			}
 			typeName := parts[1]
-			factorStr := parts[2]
-			// [08 R-AI-01 §12] establishes that the second argument is a
-			// float defaulting to 0.0, but not which conversion reads it.
-			// TODO(question): does the profile parser convert the weight
-			// factor through the CRT decimal converter, whose handling of
-			// trailing junk and hex forms differs from strconv.ParseFloat?
-			// Decider: a static trace of the `weight` directive's conversion
-			// call, recorded in [08 R-AI-01 §12]. Stock profiles author plain
-			// decimals, so both agree on stock content.
-			factor, ok := parseAIWeightFactor(factorStr)
-			if !ok {
-				continue
+			// The factor is "a float, defaulting to 0.0" [08 R-AI-01 §12], and
+			// the directive applies with that default — nothing in the grammar
+			// conditions the write on the argument converting. This used to
+			// skip the directive when the factor was absent or unconvertible,
+			// which is the one arm research rules out: retail would have
+			// written clamp(trunc(current * 0.0)) = 0, not left the weight
+			// alone. `limit` below is the same shape with an integer default
+			// of 0, and already reads that way.
+			//
+			// TODO(question): which conversion reads the factor is still open.
+			// [08 R-AI-01 §12] gives the type and the default but names no
+			// routine, and the CRT decimal converter differs from
+			// strconv.ParseFloat on trailing junk and on hex forms. Decider:
+			// the `weight` handler's conversion call, to be recorded in
+			// [08 R-AI-01 §12]. It is unauthored either way — the reference
+			// install's ten AI profiles carry 947 `weight` directives and every
+			// factor is a plain decimal (WU-19-167 census) — so the arms differ
+			// only on third-party profiles.
+			factorStr := ""
+			if len(parts) >= 3 {
+				factorStr = parts[2]
 			}
+			factor, _ := parseAIWeightFactor(factorStr)
 			ck := CanonicalKey(typeName)
 			for _, name := range currentPlans {
 				pl := profile.Plans[name]
@@ -414,13 +440,21 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 			if len(currentPlans) == 0 {
 				continue // gate [PLAN 11 C4]
 			}
-			if len(parts) < 3 {
-				continue
+			if len(parts) < 2 {
+				continue // no name argument: nothing for the matcher to expand
 			}
 			typeName := parts[1]
-			valueStr := parts[2]
-			// Limit uses integer accessor style: decimal integer, trailing junk ignored [02 §4].
-			// Use ParseTDFInteger for retail faithfulness.
+			// "an integer defaulting to 0" [08 R-AI-01 §12], and the directive
+			// applies with that default, exactly as `weight` does above. Stock
+			// content reaches this: `ai/krogoth.txt` authors both a unit name
+			// containing a space and a letter O in place of a zero, and retail's
+			// integer accessor converts neither.
+			valueStr := ""
+			if len(parts) >= 3 {
+				valueStr = parts[2]
+			}
+			// Integer accessor style: leading decimal digits, trailing junk
+			// ignored, non-numeric text is 0 [02 §4][fmt tdf].
 			val := formats.ParseTDFInteger(valueStr)
 			ck := CanonicalKey(typeName)
 			for _, name := range currentPlans {

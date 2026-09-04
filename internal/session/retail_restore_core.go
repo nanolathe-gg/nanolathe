@@ -170,7 +170,14 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 		}
 		// A mover box is read only inside the established HasMover branch;
 		// detached boxes for a no-mover unit are ignored [08 R-SAVE-02 §6, §8].
-		if s.Movement != nil {
+		//
+		// A unit still under construction is skipped entirely. In this build a
+		// nanoframe holds its cells through the construction service's placement
+		// record — re-registered by the session's COB binder when the forced slot
+		// is allocated — and never receives a movement collision record until it
+		// completes. Calling EnsureUnit here would hand a restored frame mover
+		// state that the same frame does not have in a live session.
+		if s.Movement != nil && owner.Remaining == 0 {
 			s.Movement.EnsureUnit(owner)
 			if owner.HasMover {
 				var mover *save.RawBox
@@ -222,7 +229,18 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 		}
 	}
 	// Occupancy registration is a derived pass after all per-unit live words;
-	// every cell mutation still goes through movement's ordinary stamp path.
+	// every cell mutation still goes through movement's ordinary stamp path
+	// [08 R-SAVE-02 §11].
+	//
+	// Retail re-stamps every unit here because retail has one occupancy owner.
+	// This build has two: a completed unit's committed anchor belongs to the
+	// movement collision record, while a unit still under construction holds
+	// its cells through the construction service's placement reservation and
+	// has no collision record at all. Its saved cell pair is therefore not a
+	// mover anchor and must not be pushed through the mover re-stamp. Its
+	// footprint is already held: the forced-slot allocation runs the session's
+	// COB binder, which registers a building placement for every non-`bmcode`
+	// unit, and the restored rectangle matches the saved session's exactly.
 	if s.Movement != nil {
 		for _, rec := range image.Units.Records {
 			if rec.Compat {
@@ -230,6 +248,9 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 			}
 			h := stage.StableUnit[rec.StableID]
 			u := s.Units.Unit(h)
+			if u.Remaining != 0 {
+				continue
+			}
 			if err := s.Movement.RestoreOccupancy(h, u.CachedOccupancyX, u.CachedOccupancyZ); err != nil {
 				return fmt.Errorf("session: retail restore: unit %d occupancy: %w", rec.StableID, err)
 			}
@@ -240,6 +261,26 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 		s.Features.ResetForRestore()
 		if err := restoreRetailFeatures(s.Features, s.Catalog, image.Features); err != nil {
 			return err
+		}
+	}
+	// The AI group index is the one base-record word with a side effect beyond
+	// a field copy: the reader moves the unit out of whatever group it holds
+	// and into the saved one [08 R-SAVE-02 §6]. That is two writes — the unit's
+	// own stored group value and the owner's group vector — and the base-record
+	// pass only stages the saved index. Apply the stored value here, before the
+	// managers rebuild their vectors from it, so a restored unit reports the
+	// group it was saved in rather than the ungrouped record.
+	for _, rec := range image.Units.Records {
+		if rec.Compat {
+			continue
+		}
+		u := s.Units.Unit(stage.StableUnit[rec.StableID])
+		if u == nil {
+			continue
+		}
+		u.Group = 0
+		if u.RestoredAIGroup >= 1 && u.RestoredAIGroup <= 9 {
+			u.Group = uint8(u.RestoredAIGroup)
 		}
 	}
 	for _, mgr := range s.AI {

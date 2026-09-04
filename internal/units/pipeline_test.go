@@ -55,10 +55,29 @@ func (w *World) tickUnit(u *Unit, tick uint32) {
 		return
 	}
 	// 1. per-unit pre-update/status work [04 §2.4][04 §4.2].
-	// TODO(question): established pre-update/status contents not closed for this
-	// slice; placeholder preserves placement and does not invent progress. The
-	// dedicated post-research T23/T25 items keep gaps explicit — do not invent
-	// Remaining ticks, health regen, or activation toggles here.
+	//
+	// The marker that stood here said the pre-update's contents were "not
+	// closed for this slice". They are closed, exhaustively and in order:
+	// [04 R-MOV-03 §1] lists ten numbered acts per unit visit, of which the
+	// pre-update slice is 2 (the general unit update, carrying the
+	// wind-generator notifier of [05 R-PROD-01 §3]), 5 (the minimap blink byte
+	// decremented as a SIGNED byte while nonzero, [06 R-WPN-04 §2]), 6 (the
+	// post-capture countdown decremented by one), 7 (selection maintenance: a
+	// unit carrying the selected bit loses it when it stops being ready) and 8
+	// (the tick%30 health-percentage roll). Nothing about Remaining ticks,
+	// health regen or activation toggles appears in the list, so the old
+	// marker's caution was aimed at the right hazard for the wrong reason.
+	//
+	// TODO(T25): unitPreUpdate (pipeline.go) implements step 8 alone. Step 6
+	// needs no field — the counter is armed only by a capture whose new owner
+	// is a remote controller, so single-player holds it at zero
+	// [08 R-TRIG-01 §3]. Steps 5 and 7 need state this package does not carry:
+	// a per-unit blink byte (its producer exists as combat's damage-flash
+	// event, which today stops at the publication boundary with no field to
+	// write) and the selected bit, which lives in the HUD rather than on the
+	// unit record. Step 2's notifier is bound in internal/ai. Wiring any of
+	// them means adding the field here and the decrement in pipeline.go, which
+	// is outside this unit's file ownership.
 	w.unitPreUpdate(u, tick)
 
 	// 2. water damage and unit-level timed work [04 §9.2].
@@ -78,19 +97,28 @@ func (w *World) tickUnit(u *Unit, tick uint32) {
 	w.slotEndDeathHandling(u, tick)
 }
 
-// unitWaterDamage handles water damage when established [04 §9.2].
-// TODO(T25): wire mission waterdoesdamage/waterdamage and player class checks when
-// terrain/mission state is available in this package. Do not invent damage here.
+// unitWaterDamage is a placeholder for the sweep's step-9 water damage
+// [04 §9.2][04 R-MOV-03 §1 step 9], and it stays a placeholder.
+//
+// The marker that stood here asked for the mission waterdoesdamage/waterdamage
+// keys and the player class check to be wired "when terrain/mission state is
+// available in this package". That will never happen and does not need to:
+// terrain and the damage funnel sit above internal/units in the import graph,
+// and the applicator is already written on the correct side of that line as
+// combat.TickWaterDamage (its cadence gate, canhover exemption, height test,
+// veterancy scaling and kind-0xB packet are all implemented and tested).
+//
+// TODO(T25): the real gap is one level up — combat.TickWaterDamage has no
+// caller. [04 R-MOV-03 §1] places it inside the controller-1-or-2 block of the
+// per-unit visit, before the healtime self-repair and the order pumps, and the
+// session's phase-2 sweep runs that block without it. Wiring is a call site in
+// internal/session plus the two mission words on the session record, both
+// outside this unit's file ownership.
 func (w *World) unitWaterDamage(u *Unit, tick uint32) {
 	_ = u
 	_ = tick
-	// Established condition [04 §9.2]: globalTick%30==0, owner class 1/2,
-	// mission.waterdoesdamage !=0 && waterdamage !=0, depth at unit position
-	// at or below the water line and !canhover.
-	// When wired, route through standard damage funnel kind 0xB with no
-	// HitByWeapon/TakeDamage callbacks and with veterancy-scaled reduction
-	// [06 §9.1][04 §5.1] C26, then let death handling latch.
-	// Stub: no damage, no RNG.
+	// Deliberately no damage and no RNG: a stub that drew would desynchronise
+	// the shared simulation stream against the wired applicator.
 }
 
 // weaponSlotUpdate updates the three weapon slots in numeric order [06 §1.2] C1.
@@ -118,11 +146,16 @@ func (w *World) weaponSlotUpdate(u *Unit, tick uint32) {
 		// commanded [04 §5.1]. Aim dispatch would start here on demand: a
 		// ballistic-solver sentinel suppresses Aim [06 §3.3] P0-10, otherwise
 		// issue and block firing while Aim Ready is false [GAP T15] C16.
-		// TODO(T25): wire combat.Slots target resolve + Aim dispatch when Vis
-		// and definition mover gates are bound; keep the placeholder that
-		// preserves outstanding Aim blocking (IssueBit && !Ready blocks
-		// CanFire). Intentionally no spawner, resources, or projectile
-		// allocation; movement callbacks are not emitted here [GAP T15].
+		// The target resolve and Aim dispatch this marker used to ask for are
+		// wired, in the production sweep rather than here: the session's
+		// phase-2 visit calls combat.Service.StepWeaponsForUnit with the
+		// world, visibility, terrain, economy, catalog and both RNG streams
+		// bound, and that is the authoritative path [04 R-MOV-03 §1 step 3].
+		// This helper cannot reach it — internal/combat imports internal/units,
+		// so the arrow cannot be reversed — and it is not meant to: it exists
+		// to hold the traversal SHAPE for package-local tests, not to be a
+		// second weapon step. Intentionally no target resolve, no spawner, no
+		// resources, no projectile allocation and no movement callbacks.
 		_ = pool.Handle(idx) // keep import used for future target mapping
 	}
 }

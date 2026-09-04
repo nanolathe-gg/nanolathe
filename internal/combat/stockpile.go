@@ -281,9 +281,28 @@ func TickStockpile(entry *StockpileEntry, slot *Slot, tick uint32, admit func(en
 // Only successful spawn decrements ammunition [06 §11.1].
 //
 // This helper mirrors fire.TryFire's stockpile branch but is explicit for C29 lifecycle tests:
-// it validates ammo >0, attempts svc.Reserve, on success decrements slot.Ammo, sets projectile fields minimally,
-// and returns handle. On failure (empty ammo or pool full) it performs no ammo/reload/resource mutation
-// matching the ordinary slot pipeline's failure path [06 §11.1] [06 §4.1] C4.
+// it validates ammo >0, attempts svc.Reserve, on success decrements slot.Ammo, runs the
+// creation dispatch, and returns the handle. On failure (empty ammo or pool full) it performs
+// no ammo/reload/resource mutation matching the ordinary slot pipeline's failure path
+// [06 §11.1] [06 §4.1] C4.
+//
+// The record goes through the ordinary creation dispatch of [06 §6.2], not a
+// hand-written subset of it. `stockpile` is not a creation family: the closed
+// arm of [06 §11.1] ([06 R-WPN-05 §2]) has the slot pipeline's fire gate for a
+// stockpile weapon read "slot byte nonzero" IN PLACE OF the per-shot cost test
+// and otherwise run the same executor, so the creator is whichever one the
+// weapon's own flags select. Checked against the reference install (I14): all
+// eight stockpile-flagged weapons in the retail corpus author `vlaunch` and
+// none authors `ballistic`, so the dispatch reaches the vertical-launch creator
+// of [06 §6.6] for every shipped launcher.
+//
+// This used to write six fields by hand and leave the rest of the record to a
+// zero-fill in Service.Reserve. That zero-fill is gone — a reservation clears
+// only the dead bit and the retained unit target [06 §4.1] — so a partial fill
+// here would have read the previous occupant's velocity, angles, expiry,
+// shooter and, worst, its burst-remaining count, which the motion dispatch
+// admits only at zero [06 §6.2]: a stale count would have left the nuke sitting
+// at its silo (WU-19-164).
 func TryStockpileLaunch(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32) (pool.Handle, bool) {
 	if svc == nil || slot == nil || slot.Weapon == nil {
 		return 0, false
@@ -293,6 +312,13 @@ func TryStockpileLaunch(svc *Service, slot *Slot, slotIdx int, tgt Target, tick 
 	}
 	if slot.Ammo <= 0 {
 		return 0, false // empty remainder prevents allocation [06 §11.1]
+	}
+	// A weapon matching none of the six creation predicates makes no projectile
+	// [06 §6.2] C15. Deciding before the reservation keeps the pool untouched,
+	// as the ordinary fire path does, and it is what keeps an uninitialized
+	// record out of the pool now that reservation no longer clears one.
+	if CreationFamilyForWeapon(slot.Weapon) == CreationNone {
+		return 0, false
 	}
 	// Pool-full check before allocation would fail; retain no ammo change [06 §11.1] [06 §4.1] C4.
 	// Attempt reserve at tail [06 §5.1]
@@ -307,17 +333,50 @@ func TryStockpileLaunch(svc *Service, slot *Slot, slotIdx int, tgt Target, tick 
 	slot.Ammo--
 	idx := int(h) - 1
 	p := &svc.Records[idx]
-	p.WeaponID = slot.Weapon.ID
-	p.CreationTick = tick
+
+	// Ownership and muzzle identity are read back by the family initializer
+	// through InitCommon, so they are set before dispatch [06 §4.1], [06 §6.1].
 	p.MuzzlePiece = int16(slot.MuzzlePiece) // preserve muzzle identity [06 §4.1] C3
-	// Minimal common initialization: copy muzzle point? Use zero Vec3 placeholder.
-	p.Pos = Vec3{}
-	p.StartPos = Vec3{}
-	if tgt.Kind == TargetPoint {
-		p.TargetPos = Vec3{X: tgt.X, Y: tgt.Y, Z: tgt.Z}
-	} else if tgt.Kind == TargetUnit {
-		p.TargetUnit = tgt.Unit
+	// TODO(T25): the launching unit does not reach this signature, so neither
+	// its handle nor its side byte is available; [06 §4.1] has the common
+	// initializer write both. Placeholder: the initializer's own null-shooter
+	// branch, which is "the neutral side byte 10 and a null shooter reference"
+	// [06 §4.1] — a launch credited to nobody rather than to side 0, which is a
+	// real side. Settled by threading the firing unit through this helper the
+	// way FirePorts threads it through TryFire.
+	p.Shooter = 0
+	p.ShooterSide = NeutralSide
+
+	// TODO(T25): the muzzle query of [06 §4.1] is not wired into this helper,
+	// so the creator receives the world origin as its muzzle point and the
+	// record's head, tail and (for a vertical launch) trajectory all start
+	// there. Placeholder: the zero point this function has always used.
+	var muzzle Vec3
+	// The aim point is the ordered ground point. A unit target has no resolved
+	// position here — TryFire refuses to spawn without its TargetWorld resolver
+	// [06 §3.3] — so the creator gets the zero point and the retained unit
+	// target does the work.
+	// TODO(T25): thread a target-position resolver so a unit-targeted stockpile
+	// launch gets a real aim point instead of the origin.
+	var aim Vec3
+	var targetUnit pool.Handle
+	switch tgt.Kind {
+	case TargetPoint:
+		aim = Vec3{X: tgt.X, Y: tgt.Y, Z: tgt.Z}
+	case TargetUnit:
+		targetUnit = tgt.Unit
 	}
+	// Creation dispatch [06 §6.2] C15. The yaw and pitch arguments are read by
+	// the ballistic creator alone, which copies the slot's solved angles
+	// [06 §6.4]; the vertical creator every shipped launcher reaches writes its
+	// own [06 §6.6].
+	// TODO(T25): the map's per-tick gravity global does not reach this
+	// signature, so the ballistic creator's launch pre-decrement would use zero
+	// [06 §6.4]. Unreachable for the shipped corpus — no stockpile weapon
+	// authors `ballistic` (I14, checked against the reference install) — and
+	// settled by threading gravity in beside the slot's distance word.
+	InitProjectile(p, slot.Weapon, tick, muzzle, aim, targetUnit, 0, 0, nil, slot.DistanceWord, 0)
+
 	// Stockpile launch does not write reload [06 §4.2] C7 performed by caller
 	_ = slotIdx
 	return h, true
@@ -459,10 +518,28 @@ func FindInterceptorTarget(svc *Service, interceptorPos Vec3, interceptorSide ui
 // time is the authoritative reservation, and that store is what later scans test
 // when rejecting candidates already claimed [06 §11.2].
 //
-// On success, it reserves a new interceptor projectile, writes the reservation
-// link to the candidate, copies muzzle/current positions minimally, and returns
-// the new handle and candidate handle. If no candidate found, it performs no
+// On success, it reserves a new interceptor projectile, runs the creation
+// dispatch, writes the reservation link to the candidate, and returns the new
+// handle and candidate handle. If no candidate found, it performs no
 // ammunition/reload/resource mutation per [06 §11.2] C29 (pending shot, no mutation).
+//
+// The record goes through the ordinary creation dispatch of [06 §6.2] rather
+// than a hand-written subset. Which creator that is, is Established for this
+// site by [06 §6.6]: the vertical-launch creator is the one that "retains the
+// unit target and, when the interceptor rescan supplied one, the
+// matched-projectile link", so the interceptor's own missile is a vertical
+// launch. The reference install agrees (I14): all four interceptor-flagged
+// weapons in the retail corpus author `vlaunch` and none authors `ballistic`.
+// The link itself is written after the dispatch, because the common
+// initializer clears it first [06 §4.1].
+//
+// This used to write seven fields by hand and leave the rest of the record to
+// a zero-fill in Service.Reserve, which is gone (WU-19-164): a reservation
+// clears only the dead bit and the retained unit target [06 §4.1]. A partial
+// fill here would have inherited the previous occupant's velocity, angles,
+// expiry, shooter and burst-remaining count — and a stale burst count keeps a
+// record out of the motion dispatch entirely [06 §6.2], so the anti-nuke would
+// never leave the launcher.
 func AcquireInterceptorTargetForSpawn(svc *Service, interceptorPos Vec3, interceptorSide uint8, coverage int32, interceptorWeapon *content.WeaponDef, slot *Slot, muzzlePos Vec3, tick uint32, weapons map[int32]*content.WeaponDef) (newHandle pool.Handle, candidate pool.Handle, ok bool) {
 	if svc == nil || interceptorWeapon == nil || slot == nil {
 		return 0, 0, false
@@ -472,6 +549,12 @@ func AcquireInterceptorTargetForSpawn(svc *Service, interceptorPos Vec3, interce
 	}
 	if slot.Ammo <= 0 {
 		return 0, 0, false // requires nonzero slot ammunition [06 §11.2]
+	}
+	// A weapon matching none of the six creation predicates makes no projectile
+	// [06 §6.2] C15, and deciding before the reservation keeps the pool
+	// untouched — the same order the ordinary fire path uses.
+	if CreationFamilyForWeapon(interceptorWeapon) == CreationNone {
+		return 0, 0, false
 	}
 	// Rescan immediately before firing [06 §11.2]
 	candHandle, candCurPos, found := FindInterceptorTarget(svc, interceptorPos, interceptorSide, coverage, weapons)
@@ -487,13 +570,35 @@ func AcquireInterceptorTargetForSpawn(svc *Service, interceptorPos Vec3, interce
 	}
 	idx := int(h) - 1
 	p := &svc.Records[idx]
-	p.WeaponID = interceptorWeapon.ID
-	p.CreationTick = tick
-	p.Pos = muzzlePos
-	p.StartPos = muzzlePos
-	p.TargetPos = candCurPos // stored? Actually slot stores candidate current position [06 §11.2]; interceptor's navigation later uses link, not this point.
+
+	// Ownership is read back by the family initializer through InitCommon, so
+	// it is set before dispatch [06 §4.1], [06 §6.1]. The side byte is the
+	// caller's — the interceptor scan's own owner-side operand [06 §11.2].
+	// TODO(T25): the firing unit's handle does not reach this signature, and
+	// [06 §4.1] has the initializer write the shooter reference beside the side
+	// byte. Placeholder: a null reference, so an interceptor kill is credited
+	// to nobody rather than to the previous occupant's shooter. Settled by
+	// threading the unit through the way FirePorts threads it through TryFire.
+	p.Shooter = 0
 	p.ShooterSide = interceptorSide
-	p.TargetProjectile = candHandle // authoritative reservation link [06 §11.2]
+
+	// The aim point is the candidate's CURRENT position — the same value the
+	// acquisition packs into the interceptor unit's fixed target words, which
+	// [06 §11.2] distinguishes from the scan metric (the candidate's stored aim
+	// point). Guidance then tracks the link rather than this point [06 §11.2].
+	aim := candCurPos
+	// Creation dispatch [06 §6.2] C15; the yaw/pitch arguments are the
+	// ballistic creator's alone [06 §6.4].
+	// TODO(T25): the map's per-tick gravity global does not reach this
+	// signature, so a ballistic interceptor's launch pre-decrement would use
+	// zero [06 §6.4]. Unreachable for the shipped corpus (I14) and settled by
+	// threading gravity in beside the slot's distance word.
+	InitProjectile(p, interceptorWeapon, tick, muzzlePos, aim, 0, 0, 0, nil, slot.DistanceWord, 0)
+
+	// The matched-projectile link is stored by the creator AFTER the common
+	// initializer clears it [06 §6.6], [06 §4.1]; it is the authoritative
+	// reservation later scans test [06 §11.2].
+	p.TargetProjectile = candHandle
 	// Stockpile interceptor weapons may also be stockpile-flagged; interceptor launch still decrements ammo and skips reload per stockpile path [06 §11.1]?
 	// If interceptor is stockpile, decrement ammo only on successful spawn per [06 §11.1] C29
 	if interceptorWeapon.Stockpile {

@@ -106,50 +106,10 @@ func (s *Service) Resurrect(builder *units.Unit, featureCell *world.PlotCell, de
 	}
 	// Feature removal runs BEFORE the new unit's alive word is written: the
 	// resurrection state's fifth step calls the feature-removal helper first
-	// [P0-15]. The helper clears the terrain plot's filler and anchor words.
-	// The caller supplies a featureCell pointer into Terrain.Plot; we clear that
-	// cell and, when the terrain dimensions are known, any fringe cells that
-	// anchor to it.
-	// TODO(T25): the multi-cell footprint sweep is not fully located beyond the
-	// single anchor plus its fringe; the removal helper's own footprint handling
-	// remains open. Decider: static trace of that helper's cell walk.
+	// [P0-15]. The caller supplies a pointer into Terrain.Plot; removeFeature
+	// below is that helper.
 	if featureCell != nil {
-		// Single-cell clear: feature → none, anchor → 0, filler cleared.
-		featureCell.SetFeature(world.PlotFeatureNone)
-		featureCell.SetAnchorWord(0)
-		// If terrain is available, also clear fringe members that resolve to this anchor.
-		if s.Terrain != nil && s.Terrain.Plot != nil && s.Terrain.CellW > 0 && s.Terrain.CellH > 0 {
-			// Locate anchor index by pointer equality when featureCell is inside Terrain.Plot.
-			anchorIdx := -1
-			for i := range s.Terrain.Plot {
-				if &s.Terrain.Plot[i] == featureCell {
-					anchorIdx = i
-					break
-				}
-			}
-			if anchorIdx >= 0 {
-				ax := int32(anchorIdx) % s.Terrain.CellW
-				az := int32(anchorIdx) / s.Terrain.CellW
-				for cz := int32(0); cz < s.Terrain.CellH; cz++ {
-					for cx := int32(0); cx < s.Terrain.CellW; cx++ {
-						idx := int(cz*s.Terrain.CellW + cx)
-						if idx == anchorIdx {
-							continue
-						}
-						cell := &s.Terrain.Plot[idx]
-						if cell.Feature() != world.PlotFeatureFringe {
-							continue
-						}
-						dx := int32(cell.AnchorDXSigned())
-						dz := int32(cell.AnchorDZSigned())
-						if cx+dx == ax && cz+dz == az {
-							cell.SetFeature(world.PlotFeatureNone)
-							cell.SetAnchorWord(0)
-						}
-					}
-				}
-			}
-		}
+		s.removeFeature(featureCell)
 	}
 	if s.Allocator != nil {
 		prod, err := s.Allocator(builder.Owner, def, posX, posY, posZ)
@@ -171,4 +131,90 @@ func (s *Service) Resurrect(builder *units.Unit, featureCell *world.PlotCell, de
 	prod.Remaining = 0 // finished [05 R-WORK-01 §7 "Established — the transplant"]
 	prod.Health = 1    // one hit point, not max [05 R-WORK-01 §7 "Established — the transplant"]
 	return prod, nil
+}
+
+// removeFeature is the feature-removal helper the resurrection create step
+// calls [05 R-WORK-01 §7 phase 5], restricted to the plot writes this package
+// can reach. Its cell walk is [05 R-FEAT-01 §4]'s teardown, which
+// internal/world implements for its own callers:
+//
+//  1. a fringe cell walks back to its anchor through the two stored signed
+//     offset bytes;
+//  2. the anchor's word becomes empty and its live-instance bit clears;
+//  3. every cell of the DEFINITION'S FOOTPRINT RECTANGLE from that anchor that
+//     currently holds fringe is cleared the same way; cells holding anything
+//     else are left alone.
+//
+// SETTLED (WU-19-166), retiring a `TODO(T25)` that read "the multi-cell
+// footprint sweep is not fully located beyond the single anchor plus its
+// fringe; the removal helper's own footprint handling remains open. Decider:
+// static trace of that helper's cell walk." The walk was already traced and
+// closed as [05 R-FEAT-01 §4], under the name *teardown* rather than *removal
+// helper*, and internal/world's plot-side copy of it cites that section. What
+// stood here instead was a sweep of the WHOLE PLOT for any fringe cell whose
+// signed offsets happened to resolve to this anchor — quadratic in map area
+// per resurrection, and not the traced set: retail visits the footprint
+// rectangle and nothing outside it. It also left the flag byte's live-instance
+// bit set on every cleared cell, so the resurrected corpse's cells still read
+// as feature-occupied afterwards.
+//
+// The anchor index is still located by pointer identity: the caller hands this
+// service a cell pointer rather than a cell pair, and widening that signature
+// would change internal/session's call site, which this unit does not own.
+func (s *Service) removeFeature(cell *world.PlotCell) {
+	clearCell := func(c *world.PlotCell) {
+		c.SetFeature(world.PlotFeatureNone)
+		c.SetAnchorWord(0)
+		c.SetOccupied(false) // the live-instance bit of [05 R-FEAT-01 §4] step 4
+	}
+	if s == nil || s.Terrain == nil || s.Terrain.Plot == nil || s.Terrain.CellW <= 0 || s.Terrain.CellH <= 0 {
+		clearCell(cell) // no plot geometry bound: this cell is all the helper can reach
+		return
+	}
+	idx := -1
+	for i := range s.Terrain.Plot {
+		if &s.Terrain.Plot[i] == cell {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		clearCell(cell) // a cell outside this terrain's plot
+		return
+	}
+	ax, az := int32(idx)%s.Terrain.CellW, int32(idx)/s.Terrain.CellW
+	anchor := cell
+	if anchor.Feature() == world.PlotFeatureFringe { // step 1
+		ax += int32(anchor.AnchorDXSigned())
+		az += int32(anchor.AnchorDZSigned())
+		anchor = s.Terrain.PlotAt(ax, az)
+		if anchor == nil {
+			clearCell(cell) // a stale fringe whose anchor is off the map
+			return
+		}
+	}
+	// The footprint is read before the anchor's word is cleared, because the
+	// word is what resolves the definition.
+	footX, footZ := int32(1), int32(1)
+	if def, ok := s.Terrain.FeatureDefAt(anchor.Feature()); ok && def != nil {
+		if def.FootprintX > 0 {
+			footX = def.FootprintX
+		}
+		if def.FootprintZ > 0 {
+			footZ = def.FootprintZ
+		}
+	}
+	clearCell(anchor) // step 2
+	for dz := int32(0); dz < footZ; dz++ {
+		for dx := int32(0); dx < footX; dx++ {
+			if dx == 0 && dz == 0 {
+				continue
+			}
+			fringe := s.Terrain.PlotAt(ax+dx, az+dz)
+			if fringe == nil || fringe.Feature() != world.PlotFeatureFringe {
+				continue // step 3: anything but fringe is left alone
+			}
+			clearCell(fringe)
+		}
+	}
 }

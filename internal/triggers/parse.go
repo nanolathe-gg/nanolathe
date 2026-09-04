@@ -170,9 +170,25 @@ func scanIntAt(fields []string, i int) int32 {
 			return v
 		}
 	}
-	// TODO(question): A failed or missing retail %i conversion may leave a
-	// preceding stack value in the record; settle this with a static trace of
-	// the fixed trigger builder's argument stack writers [08 R-TRIG-01 §2].
+	// A failed or missing conversion still builds the record, and 0 is what it
+	// carries here.
+	//
+	// The marker that stood here asked for a static trace of the builder's
+	// argument stack writers. That trace is done, and the section this function
+	// already cites states its outcome: "The conversion count is never tested:
+	// a missing integer leaves whatever the stack frame held (zero-valued or
+	// stale) and the record is still built" [08 R-TRIG-01 §2]. The half that
+	// governs behaviour — the record is built anyway, so a malformed argument
+	// never silences the trigger — is what the caller implements: it returns
+	// the record rather than rejecting it.
+	//
+	// The other half is retail's own stack residue, a property of the
+	// executable's frame layout rather than of any authored data, so there is
+	// nothing to reproduce clean-room and no constant that could stand in for
+	// it. It is also unauthored: across the reference install's 275 OTA files
+	// the five scan-family condition keys are authored 71 times and every one
+	// converts (WU-19-167 census), so no stock mission can tell retail's
+	// residue from this zero.
 	return 0
 }
 

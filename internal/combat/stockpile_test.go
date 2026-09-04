@@ -22,6 +22,16 @@ func weaponForStockpile(id int32, reload int32, area int32, coverage int32, stoc
 		EnergyPerShot: energy,
 		MetalPerShot:  metal,
 		Firestarter:   firestarter,
+		// `stockpile` and `interceptor` are not creation families: the creator
+		// is whichever one the weapon's own flags select [06 §6.2], and a
+		// weapon matching none of the six predicates makes no projectile at
+		// all. Every stockpile-flagged and every interceptor-flagged weapon in
+		// the retail corpus authors `vlaunch` (I14, checked against the
+		// reference install), which is also the creator [06 §6.6] names as the
+		// one that stores the interceptor rescan's matched-projectile link, so
+		// these fixtures author it too. Without it they described a launcher
+		// that cannot exist in the corpus and that retail would refuse to fire.
+		VLaunch: stockpile || interceptor,
 	}
 }
 

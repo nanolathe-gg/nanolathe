@@ -1,10 +1,11 @@
 package construction
 
 import (
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/orders"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 const (
@@ -54,22 +55,55 @@ func UnitReclaimPulse(builder, target *units.Unit) int32 {
 	return pulse
 }
 
-// reclaimInRange applies the established build-distance gate. The retail
-// validator adds a target footprint-radius term to BuildDistance; the exact
-// Go-side footprint extent mapping is not yet closed, so this intentionally
-// uses the proven point-goal radius and records the residual rather than
-// inventing a geometry conversion [GAP T25][04 §7.2].
+// reclaimTargetRadius is the per-target-definition reach term unit reclaim adds
+// to the builder's `builddistance` [05 R-WORK-01 §2][04 R-ORD-01 §5]: "the
+// target's model radius the whole part of the definition's
+// `(Xextent + Zextent)/3` word".
+//
+// The word is the unit-record compiler's, not a model measurement
+// [02 R-CAT-01 §7]: the bounding record's X and Z bounds are footprint-derived
+// `±(Footprint << 20)/2`, so the two extents are `FootprintX << 20` and
+// `FootprintZ << 20` in 16.16, their sum is divided by three as an integer, and
+// the reach term is the high half of that word — the radius in whole world
+// units. Only unit reclaim uses it; the build, repair and assist reach of
+// [05 R-WORK-01 §12] point 3 has no model radius at all.
+func reclaimTargetRadius(def *content.UnitDef) int32 {
+	if def == nil {
+		return 0
+	}
+	min, max := def.BoundingExtents()
+	// Formed at the definition compiler's own 32-bit width [02 R-CAT-01 §7].
+	word := (max[0] - min[0] + max[2] - min[2]) / 3
+	return int32(int16(word >> 16))
+}
+
+// reclaimInRange is the `ReclaimUnit` work visit's reach test, exactly
+// [05 R-WORK-01 §2][04 R-ORD-01 §5]:
+//
+//	r  = (uint16)builder.definition.builddistance + (int16)targetRadius
+//	in = ((dx*dx) >> 32) + ((dz*dz) >> 32) <= r*r
+//
+// It is a squared form in whole world units, with each square truncated
+// separately out of its own 64-bit product — not the planar
+// centre-minus-half-diagonals form the build, repair and assist rows share.
+//
+// CORRECTION (WU-19-166). This compared `builddistance` in 16.16 against the
+// squared 16.16 separation with no target term at all, under a note claiming
+// "the retail validator adds a target footprint-radius term ... the exact
+// Go-side footprint extent mapping is not yet closed [GAP T25]". It is closed,
+// and was before that note was written: [05 R-WORK-01 §2] gives the expression
+// above, [04 R-ORD-01 §5] names the radius word, and [02 R-CAT-01 §7] derives
+// it from the footprint. Dropping the term left every reclaim reach short by
+// the target's own radius — ten world units for a one-cell target, twenty-one
+// for a two-cell one.
 func reclaimInRange(builder, target *units.Unit) bool {
-	if builder == nil || target == nil || builder.Def == nil {
+	if builder == nil || target == nil || builder.Def == nil || target.Def == nil {
 		return false
 	}
-	radius := numeric.FixedFromInt(int64(builder.Def.BuildDistance))
-	dx := int64(builder.X - target.X)
-	dz := int64(builder.Z - target.Z)
-	if radius < 0 {
-		radius = -radius
-	}
-	return dx*dx+dz*dz <= int64(radius)*int64(radius)
+	dx := int64(builder.X) - int64(target.X)
+	dz := int64(builder.Z) - int64(target.Z)
+	r := int64(uint16(builder.Def.BuildDistance)) + int64(reclaimTargetRadius(target.Def))
+	return (dx*dx)>>32+(dz*dz)>>32 <= r*r
 }
 
 // reclaimTargetEligible is the eligibility predicate the executor consults at
@@ -120,11 +154,51 @@ func isReclaimUnitNode(n *orders.Node) bool {
 	return name == "ReclaimUnit" || name == "VTOL_ReclaimUnit"
 }
 
+// installReclaimApproachGoal is the `ReclaimUnit` row's own approach mechanism
+// [04 R-ORD-01 §5]: "not yet arrived (`0x20` absent) → rectangle goal on the
+// TARGET footprint". It is the same [04 R-PATH-01 §12] goal the mobile-build
+// approach installs and the feature `Reclaim` row installs on a feature
+// footprint — internal/movement's constructor grows the argument rectangle by
+// the MOVER's own footprint, so the enumerated border is the ring of anchor
+// cells at which the reclaimer stands flush against the target and the target's
+// own occupied cells are interior, never enumerated [04 R-PATH-01 §12].
+//
+// Installation is once per record, exactly as the build approach's is: handing
+// the controller a goal evicts whatever it held [04 R-ORD-01 §9], so
+// HasGroundGoal is the "this record already owns the payload" test.
+//
+// An aircraft installs nothing here. The five VTOL work twins build an air
+// marker in their own phase 0 and never take a ground goal [04 R-ORD-01 §7],
+// which is the same reason needsApproach exempts a flying builder.
+func (s *Service) installReclaimApproachGoal(builder *units.Unit, node *orders.Node, target *units.Unit) bool {
+	if s == nil || s.Movement == nil || builder == nil || node == nil || target == nil {
+		return false
+	}
+	if builder.Def == nil || target.Def == nil || builder.Def.CanFly {
+		return false
+	}
+	if s.Movement.HasGroundGoal(builder.Handle, node) {
+		return true
+	}
+	cellX, cellZ, ok := s.unitFootprintAnchor(target, target.X, target.Z)
+	if !ok {
+		return false
+	}
+	footX, footZ := world.FootprintForUnit(s.Catalog, target.Def)
+	return s.Movement.InstallRectangleGoal(orders.RectangleGoalRequest{
+		Owner: builder.Handle,
+		Node:  node,
+		CellX: cellX,
+		CellZ: cellZ,
+		Width: footX,
+		Depth: footZ,
+	})
+}
+
 // stepUnitReclaim advances one ReclaimUnit state-machine visit. It is called
 // by Service.StepUnit, after order dispatch and before movement. Out-of-range
-// work remains pending so the movement/order integration can approach the
-// target when that boundary is wired; no progress, health, cadence, or refund
-// is changed while out of range [05 "Unit reclaim"].
+// work changes no progress, health, cadence or refund; it installs the row's
+// approach goal and stays pending [05 "Unit reclaim"][04 R-ORD-01 §5].
 func (s *Service) stepUnitReclaim(builder *units.Unit, node *orders.Node, tick uint32) WorkResult {
 	res := WorkResult{Builder: builder.Handle, Owner: builder.Owner, State: State(node.Phase), Product: node.Target}
 	if !reclaimTargetEligible(builder, s.World.Unit(node.Target)) {
@@ -140,10 +214,20 @@ func (s *Service) stepUnitReclaim(builder *units.Unit, node *orders.Node, tick u
 	target := s.World.Unit(node.Target)
 	if !reclaimInRange(builder, target) {
 		node.MoveState = orders.MoveEnRoute
-		// TODO(question): the session movement bridge must submit the target
-		// point-goal with reclaim's BuildDistance radius. This narrow service
-		// leaves the order pending rather than synthesizing a second movement
-		// node or applying an unproven approach transform.
+		// SETTLED (WU-19-166), replacing a `TODO(question)` that read "the
+		// session movement bridge must submit the target point-goal with
+		// reclaim's BuildDistance radius. This narrow service leaves the order
+		// pending rather than synthesizing a second movement node". Both halves
+		// were wrong. The goal is not a point goal with a `builddistance`
+		// radius: [04 R-ORD-01 §5]'s `ReclaimUnit` row installs the RECTANGLE
+		// goal on the target's footprint, the same class the build and feature-
+		// reclaim rows install. And nothing has to be synthesized in
+		// internal/session: its activation boundary already activates the mover
+		// for ANY record that owns the mover's installed ground goal, which is
+		// what installing the payload here makes this record. Until it was
+		// installed, a reclaimer ordered onto a unit further away than its
+		// `builddistance` stood still and re-polled forever.
+		s.installReclaimApproachGoal(builder, node, target)
 		return res
 	}
 	node.MoveState = orders.MoveArrived

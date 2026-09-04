@@ -168,6 +168,63 @@ go run ./tools/mapupscale/patchmatchgo -data /tmp/great-divide-mapupscale \
   -out tools/mapupscale/output/great-divide-patchmatch-go -full-preview
 ```
 
-Flags: `-iterations` (8), `-tone` (4), `-spread` (16), `-deadzone` (8),
-`-relax` (true), `-samples` (100000), `-workers` (CPU count), `-preview`,
-`-full-preview`, `-cpuprofile`.
+Flags: `-iterations` (8), `-tone` (12), `-spread` (16), `-deadzone` (8),
+`-relax` (true), `-coherence` (64), `-seam` (0), `-seamzone` (-1 = authored
+mean), `-settle` (2), `-samples` (100000), `-workers` (CPU count),
+`-preview`, `-full-preview`, `-cpuprofile`.
+
+## Coherence, seam and settle (2026-09-04)
+
+Measured against the authored maps at native scale ("isolated" is the share
+of pixels whose RGB distance to the mean of their eight neighbours exceeds
+40; both rows compare directly), the original output had 30% more lone
+specks than the authored art on the two smooth maps and, in a one-octave-down
+test (reduce the map through the blend, upscale that, compare with the
+authored map at the same scale), mushier fleck texture and smeared streaks.
+Neither the tone term nor relaxation is the cause: `-tone 0` raises isolated
+to 0.337 and `-relax=false` only lowers it to 0.264 on Great Divide.
+
+Three terms were added; the defaults below are the shipped ones.
+
+- **`-coherence W` (default 64)** — the Image Analogies synthesis term: the
+  authored full-resolution pixels around a candidate block (two rows above
+  and two columns left in the atlas, mirrored on backward passes) are
+  compared with the output already synthesized around the query. It rewards
+  copying contiguous authored structure, which restores the fleck texture
+  and sharpens ridges and crater rims. It overrides the tone term a little,
+  so `-tone` moved from 4 to 12. Supplement records have no authored
+  surround and are exempt.
+- **`-seam W` (default 0)** — charges edge pixel pairs between a candidate
+  block and its chosen neighbours beyond `-seamzone` (default: the map's
+  own mean adjacent-pixel distance). It removes boundary speckle but one
+  weight does not fit all maps (16 matches Great Divide and over-smooths
+  Moon Quartet), so it stays off unless calibrated per map.
+- **`-settle N` (default 2)** — a pixel whose match survived N passes
+  unchanged skips its random-window and global draws; propagation still
+  runs. Costs 0.2–2.7% of match quality for ~30% of the CPU.
+
+Records shrank from 28 to 16 bytes (int8 features: the first PCA coordinate
+in units of 16, the rest in units of 4, weighted back in the distance) and
+the feature-hash buckets gained a third coordinate, which is what lowered the
+match cost; the coherence neighbourhood is table-driven and each pixel visit
+evaluates its neighbour state once.
+
+| Map | authored isolated / luma | before: cost, isolated, luma, CPU | now: cost, isolated, luma, CPU |
+|---|---|---|---|
+| Great Divide | 0.200 / 75.3 | 18978, 0.267, 76.1, 24.8 s | 16657, 0.271, 76.0, 17.9 s |
+| Moon Quartet | 0.156 / 123.4 | 19488, 0.185, 124.3, 45.5 s | 16052, 0.177, 124.3, 38.6 s |
+| Painted Desert | 0.637 / 148.0 | 26318, 0.622, 149.5, 66 s | 22526, 0.605, 149.5, 54.2 s |
+
+"Before" is the previous code with `-coherence 64 -tone 12`; cost is the
+mean feature distance of the final matches (lower is a better search), CPU
+is user+sys over the whole run (the summary prints it as `cpu=`; wall times
+on a loaded machine vary by 2x between identical runs). The remaining luma
+drift is +0.7 / +0.9 / +1.5.
+
+The one-octave-down test stays pessimistic for structure: a one-pixel line
+at 1x is lost by the nearest-entry blend at half size, so nothing recovers
+it there; at the real 1x to 2x step the line exists and only its edges are
+synthesized. Iteration convergence on Great Divide before these changes
+(mean cost 17.2k, 15.8k, 14.3k, 12.7k, 11.8k at 1, 2, 4, 8, 12 passes)
+showed the search was not converged at 8; better candidates turned out to be
+worth more than more passes.

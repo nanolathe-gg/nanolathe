@@ -269,7 +269,7 @@ type UnitDef struct {
 	// only when the name is empty or the family carries no record 0. The
 	// sentinel is inactive by its zero slot number: consumers test ID == 0,
 	// also when a name resolves to record 0 directly.
-	Weapon1Def        *WeaponDef // resolved weapon1; nil when empty/unresolved without a record 0
+	Weapon1Def        *WeaponDef // resolved weapon1; nil when the key is empty (see LinkUnitWeapons TODO(T25)) or the family has no record 0
 	Weapon2Def        *WeaponDef // resolved weapon2
 	Weapon3Def        *WeaponDef // resolved weapon3
 	ExplodeAsDef      *WeaponDef // resolved explodeas
@@ -871,13 +871,35 @@ func CompileUnitsSorted(fs vfs.FSOps) ([]*UnitDef, error) {
 // content.IsWeaponInactive, also when a name resolves to record 0 directly
 // [02 §5 R-CONTENT-02].
 //
-// An empty name stays unresolved (nil).
-// TODO(question): does the FBI compiler run the record scan at all for an
-// absent or empty weapon key? [02 §5 R-CONTENT-02] establishes the miss policy
-// but not the entry test; if the scan does run, an empty name would first match
-// whichever record still holds an empty catalog name. Decider: a static trace
-// of the compiler's per-slot weapon resolution entry, recorded in
-// [02 §5 R-CONTENT-02].
+// An empty name stays unresolved (nil), and that is a divergence.
+//
+// TODO(T25): fill the slot for an absent or empty key too. The marker that
+// stood here asked whether the FBI compiler runs the record scan at all for an
+// empty key, and worried that if it did, an empty name would match whichever
+// record still holds an empty catalog name — the table's initializer empties
+// every record's name bytes [02 §5 R-CONTENT-02], so unauthored IDs really do
+// sit there with blank names. It is answered, and in the document that owns
+// the death-weapon side rather than the catalog side: the lookup "returns
+// not-found both for a name that matches nothing and for an **empty** name —
+// and replaces not-found with a reference to weapon record 0", so the five
+// links "are therefore never null for any definition that went through the
+// loader" [06 R-DMG-01 §5]. Established. The scan runs, an empty name cannot
+// collide with a blank record, and the result is the record-0 sentinel.
+//
+// Not wired, because the change needs three sites and two of them are outside
+// this unit's file ownership: dropping the `!= ""` guards below; the same
+// guard in Catalog.rewireWeaponLink (catalog.go), which would otherwise strip
+// the links back off on every Clone; and skirmish_preflight.go, whose
+// `u.Weapon1Def != nil` gate would then demand QueryPrimary/AimFromPrimary/
+// AimPrimary/FirePrimary of every unarmed unit in the game and fail entry.
+//
+// No simulation behaviour rides on it today: IsWeaponInactive already answers
+// true for both nil and record 0, and every simulation consumer gates on that
+// predicate, so nil and the sentinel are observationally equal outside
+// preflight. Doing it anyway is worth it for the death path's honesty —
+// [06 R-DMG-01 §5] spells out what retail actually performs for a death whose
+// explodeas is absent, and "no explosion" is the stock outcome rather than the
+// rule.
 func LinkUnitWeapons(units map[string]*UnitDef, weapons map[string]*WeaponDef) {
 	if units == nil || weapons == nil {
 		return
