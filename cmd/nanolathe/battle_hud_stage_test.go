@@ -312,8 +312,10 @@ func TestCommandWindowNameSwitchesOnThePageShownBit(t *testing.T) {
 // A BUILD click sets the page-shown bit, and the page it brings back is the one
 // the builder's page field still holds: selecting page 0 clears bit 22 and
 // leaves bits 23-25 alone [07 §9], so the field is the builder's memory of
-// where it was. Page 1 stands in for a builder that has never left the orders
-// page — see the TODO(question) at buildButtonPage.
+// where it was. Page 1 is not a stand-in for a missing producer: unit creation
+// seeds the field with page 1 and the paged bit set whenever the definition's
+// page-count byte is at least 2 [07 R-HUD-04 §4 "First build page"], so the
+// clamp below only ever fires for a single-page or malformed record.
 func TestBuildButtonPageRestoresTheRememberedPage(t *testing.T) {
 	build := func(flags uint32, count uint16) *frame.Frame {
 		return &frame.Frame{

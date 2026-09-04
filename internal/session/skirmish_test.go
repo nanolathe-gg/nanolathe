@@ -242,13 +242,18 @@ func TestSkirmishWindSinglePath(t *testing.T) {
 	// deadline, identically via skirmish and mission. The skirmish slot
 	// shuffle draws from the SESSION CRT, never from rng.Global [DET-01], so
 	// the process-global stream must not move at all.
-	otaText := "[GlobalHeader]\n{\nminwindspeed=15;\nmaxwindspeed=35;\n[Schema 0]\n{\nType=Network 1;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\nXPos=0;\nZPos=0;\n}\n}\n}\n[Schema 0]\n{\nType=Easy;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\n}\n}\n}\n}\n"
+	// The Network 1 schema authors one StartPos per lobby slot. It carried only
+	// StartPos1 until WU-19-178, when a `StartPos` miss became fatal on the
+	// kind-2 path as [08 R-ENTRY-01 §5] step 4 states: with two players and one
+	// authored start position, retail refuses the battle rather than placing
+	// slot 1 at a random point, so this two-player fixture authors two.
+	otaText := "[GlobalHeader]\n{\nminwindspeed=15;\nmaxwindspeed=35;\n[Schema 0]\n{\nType=Network 1;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\nXPos=0;\nZPos=0;\n}\n[special1]\n{\nspecialwhat=StartPos2;\nXPos=16;\nZPos=16;\n}\n}\n}\n[Schema 0]\n{\nType=Easy;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\n}\n}\n}\n}\n"
 	// Use separate FS instances to avoid catalog contamination
 	fsMission := fsFromMapSkirmish(t, map[string]string{"maps/wind.ota": otaText})
 	fsSkirmish := fsFromMapSkirmish(t, map[string]string{"maps/wind.ota": otaText})
 	cat := &content.Catalog{
 		Maps: map[string]*content.MapHeader{
-			"wind": {Name: "wind", LogicalTNT: "maps/wind.tnt", Schemas: []content.MapSchema{{Type: "Network 1", StartPosCount: 1}}},
+			"wind": {Name: "wind", LogicalTNT: "maps/wind.tnt", Schemas: []content.MapSchema{{Type: "Network 1", StartPosCount: 2}}},
 		},
 		Units: map[string]*content.UnitDef{"armcom": {UnitName: "armcom", MaxDamage: 100}},
 	}

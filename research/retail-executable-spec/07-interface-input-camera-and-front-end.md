@@ -269,7 +269,7 @@ the named sound cue played through the interface sound path.
 | `0xD7` | Ctrl+F10 | Developer mode only: start/stop the movie capture series ([R-CAM-01 §8]). |
 | `0xE2` | F1 | Shift not held: open `UNITINFOx.GUI` for the hovered unit (or the build button's product when a build button is hovered) — the unit-info panel of §6. Shift held: arm the **Unit State Probe** diagnostic overlay on the hovered unit. |
 | `0xE4` | F3 | Clear the "visited" bit on all thirty message-ring records, then glide the camera to the first message whose source unit is alive and not yet visited (marking it visited); if none, clear the visited bits and retry once ([R-CAM-01 §12]). |
-| `0xE5` | F4 | Toggle interface-flags bit `0x80`. Its two readers are presentation: the HUD side-panel slide treats the bit as "Space held" (the panel stays extended while it is set), and the kill announcement path arms two 30-frame counters (killer's player index, victim's side) on each kill only while the bit is set. **Unknown:** the user-facing name and the counters' visible effect · static trace of the composer / manual retail observation. |
+| `0xE5` | F4 | Toggle interface-flags bit `0x80`. Its two readers are presentation: the HUD side-panel slide treats the bit as "Space held" (the panel stays extended while it is set), and the kill announcement path arms two 30-frame counters (killer's player index, victim's side) on each kill only while the bit is set. The counters' visible effect is closed in [R-CAM-01 §14] (the killer's `Kills` and the victim's `Losses` number flash bright and fade to row 0 over half a second on the pinned panel). **Unknown:** the user-facing name alone — no string in the image names the bit, and nothing observable turns on it. **Correction (2026-09-04, WU-19-174):** this row read "**Unknown:** the user-facing name and the counters' visible effect"; the second half was closed by [R-CAM-01 §14] on 2026-09-02 and the row was not updated. |
 | `0xEC` | F11 | Developer mode only: toggle film mode ([R-CAM-01 §9]). |
 | `0xED` | F12 | Clear the message ring (producer and display indices both reset to zero). |
 | `0xF8` | Pause | Toggle the local pause bit and emit packet `0x19` with sub-kind `0` and the new bit ([01 §4.3]). |
@@ -313,6 +313,20 @@ or `%+d`, with ` (%+d)` appended while the adapted current speed differs
 from the target) is a separate formatter in the composer. The speed state
 and its adaptation are [01 §4.3]; this closure supplies the clamp bounds and
 the announcement, which that section left unstated.
+
+**Established (2026-09-04, WU-19-174) — what the strip's two `%+d` print.**
+Both arguments are the **offset from normal**, formed the same way the
+announcement forms its own: the 16-bit speed word is widened without sign
+extension and 10 is subtracted, and the 32-bit difference is the `%+d`
+argument. So `Game Speed: +3` at target 13 and `Game Speed: -2` at target 8,
+never `+13`/`+8`. The two words are read separately — the `Normal`-versus-
+`%+d` branch tests the **target** word against 10, and the suffix tests the
+**adapted current** word against the target and, when they differ, appends
+` (%+d)` of the current word minus 10 to the string the branch already
+produced. The suffix is therefore appended after the `Normal` branch joins,
+so `Game Speed: Normal (+2)` is a reachable string while the adaptation is
+above a target of 10. This settles the reading the composer's paragraph in §6
+left open; nothing above is corrected by it.
 
 ### Closed — `SwitchAlt` [R-CAM-01 §4] (2026-08-29)
 
@@ -707,6 +721,18 @@ association is a post-change synchronisation, not a redirection.
 - The meaning of the window key-navigation flag's *clear* state in the
   front end — which screens deliberately leave Tab/Enter/Escape to their
   own key callback rather than the matrix · per-screen static trace.
+- **The identity of the matrix gate's second word** (2026-09-04, WU-19-174).
+  [R-WGT-01 §1] step 3 and [R-WGT-01 §2] call it the interface object's
+  key-navigation flag. It is a single dword on the interface object with a
+  set-to-1 helper and a clear-to-0 helper, about fourteen screens calling the
+  first and seven the second — and the same word matches the description
+  [R-WGT-02 §2] gives the **fired-result** word (set to 1 by the window open
+  routine, cleared by a screen callback that wants to stay open). The two
+  readings have never been separated, and no finding above depends on which
+  is right: the matrix's *first* gate — a non-zero window token-mode word —
+  is on its own enough to keep the matrix out of every battle window
+  (traced independently, WU-19-174). Decider: a static trace naming the
+  readers of that dword outside the GUI pass · low priority.
 
 
 ### Closed — the gadget service pass: order, capture, hover help, and who closes the window [R-WGT-01 §1] (2026-08-29)
@@ -776,6 +802,19 @@ key-navigation flag is set (screens that want keyboard navigation set the
 flag; battle windows leave it clear, so in battle none of this applies and
 tokens reach the hotkey dispatcher after the gadget loop). A consumed token
 is replaced by zero for the gadget loop.
+
+**Confirmed (2026-09-04, WU-19-174) — the token-mode arm alone settles
+battle.** The two gate words are tested together, and the token-mode word is
+the one whose value for a battle window is not in doubt: only the front-end
+shell and the in-battle options root set it ([R-WGT-02 §2]), and the
+in-battle window openers — `UNITINFOx.GUI`'s among them — set nothing. With
+it zero the pass takes the peek branch of [R-WGT-01 §1] step 3 (token left in
+the queue, `0xE2..0xEB` zeroed for that pass only) and skips the matrix
+outright. So for a battle child window: no token is consumed, every battle
+hotkey still runs after the GUI pass, and `escdefault`/`crdefault` never fire
+from Escape or Enter — the authored defaults are reachable only by clicking
+the gadget they name. (The second gate word's identity is contested; see the
+Unknown item in §3. It does not change this conclusion.)
 
 | Token | Rule |
 |---|---|
@@ -7743,6 +7782,34 @@ campaign battle uses when the campaign names none is the local player's side
 record, written from the registry `side` word before the campaign was chosen;
 carrying that word into battle entry is plumbing, not an open question.
 
+### Closed — the `ORDERS` and `BUILD` stage buttons' cues [R-HUD-04 §5] (2026-09-04)
+
+Static trace (WU-19-174), in the command-window click handler that also owns
+the factory product click of [R-P0-11 §1].
+
+**Established.** The handler tests the clicked gadget's name against four
+literals, in this order, before it reaches the product path: `PREV`, `NEXT`,
+`ORDERS`, `BUILD`. Each test is a **substring** search, not a whole-name
+compare, which is what admits the side-prefixed stock names (`ARMORDERS`,
+`CORBUILD`). Each of the four raises one deferred bit and returns; only the
+two stage buttons also **play a named cue**, through the ordinary interface
+cue helper (the same helper `addbuild`, `Panel` and `Options` use, with the
+local-player argument):
+
+| Gadget name | Deferred bit | Cue |
+|---|---|---|
+| `ORDERS` | the bit whose consumer clears the unit's page-shown bit | `ordersbutton` |
+| `BUILD` | the bit whose consumer sets it | `buildbutton` |
+
+The cue is played on the click, before the deferred bit's consumer runs, and
+neither button plays `nextbuildmenu` — the `PREV` and `NEXT` rows above are
+silent at the click, and `nextbuildmenu` is played by the page-switch routine
+their deferred bits reach (§9, [R-P0-11]).
+
+This closes the open item that read "which cue the `ORDERS` and `BUILD`
+gadgets play": the aliases were known to exist in `allsound.tdf`, but no
+section named their producer.
+
 ## R-WGT-02 — the bitmap cache, window-record words, gadget appenders and small gadget contracts (2026-08-29)
 
 Closed by RWU-07-6. Trail: `/tmp/ta-decompile/notes/gui/rwu-07-6.md`.
@@ -7927,10 +7994,13 @@ section rather than deleted.
   static trace.
 - The complete right-button cursor column under `Interface Type 1` · §8
   [R-CAM-01 §5] · static trace of the cursor resolver's second case family.
-- The user-facing name of the F4 toggle and the visible effect of the two
-  30-frame counters it arms; the `+MakePoster` argument grammar · §2
-  [R-CAM-01 §2, §6] · static trace / manual retail observation (developer
-  tooling, low priority). (The `+BigBrother` companion word's reader is
+- The user-facing name of the F4 toggle; the `+MakePoster` argument grammar ·
+  §2 [R-CAM-01 §2, §6] · static trace / manual retail observation (developer
+  tooling, low priority). **Correction (2026-09-04, WU-19-174):** this item
+  also listed "the visible effect of the two 30-frame counters it arms",
+  which [R-CAM-01 §14] closed on 2026-09-02 (kill/loss number flash, fading
+  to row 0 over half a second). Only the name is open, and no implementation
+  decision turns on it. (The `+BigBrother` companion word's reader is
   closed in [R-CAM-01 §12].)
 - How the multiplayer receive path applies the lobby `Cheat Codes` bit before
   re-dispatching a received `+` line · §5 [R-CAM-01 §6] · out of scope.

@@ -656,27 +656,11 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		cl.Cursors().SetIndex(render.CursorNormal)
 		return
 	}
-	// The keyboard-ownership seam for a battle child window [07 §3]. The host
-	// frame dispatches the active GUI first and "only afterwards runs the
-	// battle hotkey dispatcher", so while the unit-information screen is up it
-	// owns the queued keyboard tokens and no battle hotkey — Tab, F2, Escape,
-	// F1 or any other — sees them. It runs after the options-modal block above
-	// because a modal opened later sits higher on the GUI stack.
-	//
-	// A consumed token is replaced by zero for everything downstream
-	// [07 R-WGT-01 §2], so the rest of the frame runs against a keyboard with
-	// no edges. The held-key state is deliberately preserved: Shift and Ctrl
-	// are live asynchronous queries made at draw and dispatch time, not entries
-	// in the token queue [07 R-CAM-01 §2][R-P0-11 §3]. The mouse is untouched,
-	// so the DONE button and the world outside the window still take clicks.
-	if in != nil && b.unitInfoConsumeKeys(in.Kbd) {
-		quiet := input.KeyboardState{}
-		if in.Kbd != nil {
-			quiet = *in.Kbd
-			quiet.ResetEdges()
-		}
-		in = &input.State{Mouse: in.Mouse, Kbd: &quiet}
-	}
+	// There is deliberately no keyboard-ownership seam for the unit-information
+	// screen here. A battle window leaves its token-mode word zero, so the GUI
+	// pass *peeks* the token instead of popping it and every battle hotkey runs
+	// underneath the open window [07 R-WGT-01 §1 step 3][07 R-WGT-01 §2]; see
+	// the correction note in unitinfo.go, which this block used to contradict.
 	if keyDown(input.KeyTab) || (keyDown(input.KeyF2) && !shiftHeld) {
 		b.openBattleMenu()
 		cl.Cursors().SetIndex(render.CursorNormal)
@@ -687,7 +671,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	// the options window — that is F2's and Tab's row [07 R-CAM-01 §2].
 	if keyDown(input.KeyEscape) {
 		if b.battleState().Input.Latch == input.LatchNormal && b.battleState().Input.BuildDef == "" {
-			_ = b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
+			_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
 		}
 		b.disarmPlacement()
 		b.battleState().Input.Latch = input.LatchNormal
@@ -1021,7 +1005,7 @@ func (b *battleSession) minimapClickOrder(cl *client.Client, mx, my int32, addit
 				if additive {
 					kind = session.HumanSelectionToggle
 				}
-				_ = b.enqueueHumanCommand(session.HumanCommand{Kind: kind, Selection: session.HumanSelectionCommand{Handles: []pool.Handle{h}}})
+				_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: kind, Selection: session.HumanSelectionCommand{Handles: []pool.Handle{h}}})
 				playSelectionCue(b.sess, []pool.Handle{h}) // [07 §9]
 				return
 			}
@@ -1352,10 +1336,10 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 		// crediting slot's kill flash and the victim slot's loss flash to 30
 		// **only** while it is set — with F4 off the arrays are never armed and
 		// a Space-held panel shows steady numbers. Both readers are wired; the
-		// bit is not a term of the rail slide.
-		//
-		// TODO(question): the bit's user-facing name. No string in the image
-		// names it [07 R-CAM-01 §14]; nothing observable turns on the name.
+		// bit is not a term of the rail slide. The bit's user-facing name is
+		// recorded Unknown in [07 §2] — no string in the image names it — and
+		// it is a naming curiosity, not an open behavioral question: both
+		// readers are closed and nothing here or downstream reads a name.
 		b.panelHoldFlag = !b.panelHoldFlag
 	}
 	if !ctrlHeld && kbd.KeyDown(input.KeyF12) {
@@ -1366,7 +1350,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	// edge ahead of this dispatcher, so both copies apply the one arm.
 	if kbd.KeyDown(input.KeyEscape) {
 		if b.battleState().Input.Latch == input.LatchNormal && b.battleState().Input.BuildDef == "" {
-			_ = b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
+			_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
 		}
 		b.disarmPlacement()
 		b.battleState().Input.Latch = input.LatchNormal
@@ -1396,7 +1380,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 		}
 		if b.hasSelection() {
 			// Deselect is a typed command; UI never mutates live flags [I6].
-			_ = b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
+			_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
 			return
 		}
 		return
@@ -1559,9 +1543,9 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 				hitOwn := hit && bh != 0 && b.ownSelectableUnit(f, bu)
 				if hitOwn {
 					if additive {
-						_ = b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanSelectionToggle, Selection: session.HumanSelectionCommand{Handles: []pool.Handle{bh}}})
+						_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionToggle, Selection: session.HumanSelectionCommand{Handles: []pool.Handle{bh}}})
 					} else {
-						_ = b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanSelectionReplace, Selection: session.HumanSelectionCommand{Handles: []pool.Handle{bh}}})
+						_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionReplace, Selection: session.HumanSelectionCommand{Handles: []pool.Handle{bh}}})
 					}
 					playSelectionCue(b.sess, []pool.Handle{bh}) // [07 §9]
 				} else {
@@ -1571,7 +1555,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 					} else {
 						// No selection and click not on own unit: clear if not additive, else preserve [07 §9] C6.
 						if !additive {
-							_ = b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
+							_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
 						}
 					}
 				}
@@ -1589,7 +1573,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 			if additive {
 				kind = session.HumanSelectionToggle
 			}
-			_ = b.enqueueHumanCommand(session.HumanCommand{Kind: kind, Selection: session.HumanSelectionCommand{Handles: handles}})
+			_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: kind, Selection: session.HumanSelectionCommand{Handles: handles}})
 			playSelectionCue(b.sess, handles) // [07 §9]
 		}
 	}
@@ -2049,6 +2033,28 @@ func (b *battleSession) disarmPlacement() {
 	b.battleState().ClearPlacement()
 }
 
+// enqueueSelectionCommand is every selection-changing human command this shell
+// issues, and the one place the command-panel page close hangs off.
+//
+// Retail calls that close from **every** selection change: it zeroes the
+// current-page word and then, while a window is open, closes the top window
+// through the top-object close and repeats until the command window is on top
+// [07 R-HUD-04 §3][07 §3]. The unit-information screen is opened later than the
+// command window and therefore sits above it, so a selection change closes it.
+// That chain — and not a key matrix — is why Escape closes the screen: Escape
+// with an idle latch deselects everything [07 R-CAM-01 §2], and the deselect
+// runs the close.
+//
+// The close's deferral gate ([07 R-HUD-04 §3] step 1, which defers while a
+// menu or one of a named set of interface bits is up and re-runs the close
+// when they clear) reads battle-interface flag bits this shell does not
+// publish, so the close here is unconditional. With no menu open the two
+// agree.
+func (b *battleSession) enqueueSelectionCommand(c session.HumanCommand) error {
+	closeUnitInfo()
+	return b.enqueueHumanCommand(c)
+}
+
 // playUICue plays a non-positional interface sound by its authored alias
 // [07 §9][03 §8.3]. Retail's placement path plays `oktobuild` on a placed site
 // and `notoktobuild` on a refused one; both are ordinary sound aliases, not a
@@ -2474,6 +2480,14 @@ func (b *battleSession) updateCursor(cl *client.Client) {
 // It uses the same drawn-chrome layout as the click path, so the shape and
 // click destination cannot disagree [C-3][07 §6][07 §8].
 func (b *battleSession) overWorld(x, y int32) bool {
+	// "When an active modal covers the pointer, world picking and camera edge
+	// behavior are gated out" [07 §3]. The unit-information screen is the one
+	// battle child window this shell draws over the view, and without this test
+	// F1 pressed with the pointer over the open screen would resolve a unit
+	// behind it and rebuild the screen [07 R-HUD-03 §8].
+	if unitInfoCovers(x, y) {
+		return false
+	}
 	if b.hud != nil {
 		return b.hud.overWorld(x, y)
 	}
@@ -2973,7 +2987,7 @@ func (b *battleSession) commitSelection(handles []pool.Handle, additive bool) {
 			handles = merged
 		}
 	}
-	_ = b.enqueueHumanCommand(session.HumanCommand{
+	_ = b.enqueueSelectionCommand(session.HumanCommand{
 		Kind:      session.HumanSelectionReplace,
 		Selection: session.HumanSelectionCommand{Handles: handles},
 	})
@@ -3295,11 +3309,6 @@ func (b *battleSession) glideToMessageSource() {
 	ox, oz := b.cam.BattleViewCenterOrigin(radarMapPixel(v.X), radarMapPixel(v.Z))
 	b.cam.GlideTo(ox, oz)
 }
-
-// openUnitInfo is F1. Retail opens `UNITINFOx.GUI` for the hovered unit, or
-// for a hovered build button's product [07 R-CAM-01 §2][07 R-HUD-03 §8].
-// cmd/nanolathe/unitinfo.go owns the screen and its close.
-func (b *battleSession) openUnitInfo() { b.toggleUnitInfo() }
 
 // stepFollowCamera is the follow half of phase 10 [01 §4.4][07 R-CAM-01 §12]:
 // a live tracked object recomputes the desired origin every pass and the

@@ -93,60 +93,49 @@ func pressed(keys ...input.Key) *input.KeyboardState {
 	return k
 }
 
-// TestUnitInfoOwnsTheKeyboardWhileOpen locks the keyboard-ownership seam
-// [07 §3][07 R-WGT-01 §2]: while the child window is up it consumes the queued
-// tokens, Escape fires `escdefault` and Enter fires `crdefault` (both `DONE`),
-// and every other token — F1 included — is swallowed rather than reaching the
-// battle hotkey dispatcher.
-func TestUnitInfoOwnsTheKeyboardWhileOpen(t *testing.T) {
+// TestUnitInfoOwnsNoKeyboardAndClosesOnSelection locks the corrected seam
+// [07 §3][07 R-WGT-01 §1 step 3][07 R-WGT-01 §2][07 R-HUD-04 §3].
+//
+// A battle window's token-mode word is zero, so the GUI pass peeks the token
+// instead of popping it: every battle hotkey still runs underneath the open
+// screen, and the key matrix — the rows that would fire `escdefault` and
+// `crdefault` — never runs at all. Nothing keyboard-shaped closes the screen
+// directly. What does close it is the command-panel page close that every
+// selection change runs, which pops each window above the command window; that
+// is the chain Escape reaches, by deselecting first.
+//
+// This replaces TestUnitInfoOwnsTheKeyboardWhileOpen, which asserted the
+// inverse (the window swallowing every token, Escape and Enter firing `DONE`).
+func TestUnitInfoOwnsNoKeyboardAndClosesOnSelection(t *testing.T) {
 	resetUnitInfoState(t)
 	b := &battleSession{sess: &session.Session{LocalOwner: 0}, cat: unitInfoTestCatalog(),
 		hud: &retailBattleHUD{fs: vfs.New()}, fs: vfs.New()}
 
-	// Closed: the window owns nothing and the dispatcher keeps its tokens.
-	if b.unitInfoConsumeKeys(pressed(input.KeyEscape)) {
-		t.Fatal("a closed screen consumed a token [07 §3]")
+	// There is no consume-keys seam left to call: the only way the screen can
+	// take a token would be a method on the session, and none exists. The
+	// observable half of that is F1 — the one token that reaches the dispatcher
+	// while the screen is up — no longer closing it.
+	unitInfoUI = &unitInfoScreen{window: unitInfoSeamWindow()}
+	b.openUnitInfo()
+	if !unitInfoOpen() {
+		t.Error("F1 closed the unit information screen; it only ever opens [07 R-HUD-03 §8]")
 	}
 
-	for _, tc := range []struct {
-		name  string
-		key   input.Key
-		close bool
-	}{
-		{"escape fires escdefault", input.KeyEscape, true},
-		{"enter fires crdefault", input.KeyEnter, true},
-		{"F1 is swallowed, not a second close", input.KeyF1, false},
-		{"tab is swallowed", input.KeyTab, false},
-	} {
-		unitInfoUI = &unitInfoScreen{window: unitInfoSeamWindow()}
-		if !b.unitInfoConsumeKeys(pressed(tc.key)) {
-			t.Errorf("%s: the open window did not own the token [07 §3]", tc.name)
-		}
-		if closed := !unitInfoOpen(); closed != tc.close {
-			t.Errorf("%s: closed = %v, want %v [07 R-WGT-01 §2]", tc.name, closed, tc.close)
-		}
+	// A selection change runs the page close, which pops the screen.
+	unitInfoUI = &unitInfoScreen{window: unitInfoSeamWindow()}
+	_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
+	if unitInfoOpen() {
+		t.Error("a selection change left the screen open [07 R-HUD-04 §3]")
 	}
 
-	// A window naming no escdefault does not close on Escape: the matrix fires
-	// the named gadget "when it exists and is active" [07 R-WGT-01 §2].
-	w := unitInfoSeamWindow()
-	w.Header.EscDefault = ""
-	unitInfoUI = &unitInfoScreen{window: w}
-	if !b.unitInfoConsumeKeys(pressed(input.KeyEscape)) || !unitInfoOpen() {
-		t.Error("Escape closed a window with no escdefault [07 R-WGT-01 §2]")
+	// The pointer over the open screen is a modal covering the pointer, so world
+	// picking is gated out and F1 there resolves no subject [07 §3].
+	unitInfoUI = &unitInfoScreen{window: unitInfoSeamWindow()}
+	r := unitInfoUI.window.Rect
+	if b.overWorld(r.X+r.W/2, r.Y+r.H/2) {
+		t.Error("the open screen did not gate world picking out [07 §3]")
 	}
-	// A greyed default button does not fire either.
-	w = unitInfoSeamWindow()
-	w.Gadgets[1].GrayedOut = 1
-	unitInfoUI = &unitInfoScreen{window: w}
-	if !b.unitInfoConsumeKeys(pressed(input.KeyEnter)) || !unitInfoOpen() {
-		t.Error("Enter fired a greyed crdefault button [07 R-WGT-01 §2]")
-	}
-	// An inactive default gadget does not fire.
-	w = unitInfoSeamWindow()
-	w.Gadgets[1].Active = 0
-	unitInfoUI = &unitInfoScreen{window: w}
-	if !b.unitInfoConsumeKeys(pressed(input.KeyEscape)) || !unitInfoOpen() {
-		t.Error("Escape fired an inactive escdefault gadget [07 R-WGT-01 §2]")
+	if !b.overWorld(r.X+r.W+40, r.Y) {
+		t.Error("a point outside the screen was gated as if covered [07 §3]")
 	}
 }

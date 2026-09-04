@@ -83,11 +83,13 @@ func queueIconEntry(fs vfs.FSOps, cursorIndex uint8) *formats.GAFEntry {
 // queueIconFrame is the icon helper's frame selector: `tick/(tpf*2) % nFrames`
 // [R-P0-11 §3].
 //
-// TODO(question): §3 gives the divisor as `tpf*2` without naming where `tpf`
-// comes from for this helper.  The dash-chain helper beside it is established
-// to read "the first frame reference's duration field" rather than per-frame
-// durations, and this site follows that sibling.  A static trace of the icon
-// helper's own duration read would settle it [R-P0-11 §3].
+// `tpf` is a GAF frame reference's duration field: whole simulation ticks per
+// frame, and the sibling dash-chain helper is established to take it from the
+// entry's **first** frame reference rather than per frame [R-P0-11 §3].  Which
+// of the two readings this helper uses cannot change what it computes: the
+// duration is "constant across all frames of an entry" in every retail GAF
+// [fmt gaf], so the first frame's value *is* the entry's value.  The clamp
+// below only guards an authored 0, which would otherwise divide by zero.
 func queueIconFrame(entry *formats.GAFEntry, tick uint32) (int32, bool) {
 	if entry == nil || len(entry.Frames) == 0 {
 		return 0, false

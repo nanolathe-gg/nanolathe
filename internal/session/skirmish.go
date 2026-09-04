@@ -2,7 +2,6 @@ package session
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/ai"
@@ -18,14 +17,24 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
-// Start-position jitter geometry, in whole map cells [08 "Placement and battle
-// entry"][P0-04]: the random span is the map dimension less startJitterMargin,
-// and the drawn value is inset by startJitterInset (half the margin) so the
-// spawn is never within that many cells of an edge.
-const (
-	startJitterMargin int32 = 160
-	startJitterInset  int32 = 80
-)
+// errStartPositionMissing is the skirmish stamp helper's fatal diagnostic,
+// reproduced verbatim: `Error: Could not find start position number %i on the
+// map!`. The number retail formats is the STORED number — zero-based, one less
+// than the authored `StartPos<n>` label — so slot 0 taking `StartPos1` reports
+// number 0 [08 R-ENTRY-01 §5] step 4.
+//
+// On the kind-2 (skirmish) path a `StartPos` miss ends the process: retail
+// raises this through the modal-fatal helper (message box, then exit code 1),
+// the same channel the spawner's `Player number %d invalid for unit %s` uses
+// [08 "Unit creation and InitialMission timing"][08 R-TRIG-01 §9]. This build
+// carries retail's verbatim fatal text as a battle-entry error, exactly like
+// the six mission-file diagnostics of internal/mission; the shell shows it in
+// the retail message window and returns to the screen the start was launched
+// from, which is this build's shape for a fatal that retail answers with a
+// modal and an exit.
+func errStartPositionMissing(stored int) error {
+	return fmt.Errorf("Error: Could not find start position number %d on the map!", stored)
+}
 
 // C8 defaults per [02 §3], [GAP T14] and [08 "Skirmish configuration"].
 const (
@@ -895,27 +904,23 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 	if s.Units == nil {
 		return fmt.Errorf("session: missing Units for skirmish battle entry [01 §6.1]")
 	}
-	// Collect StartPos specials deterministically [P0-04]. No sorting beyond
-	// TDF enumeration order; we keep original order (already as decoded) and
-	// also build ID lookup. Retail stores ID = suffix-1, but our decode stores
-	// suffix (1-based) – we handle both via ID-1 vs ID.
+	// Collect the StartPos specials in AUTHORED order. The lookup of
+	// [08 R-ENTRY-01 §5] step 3 "scans the specials array in authored order for
+	// the first record of type start position whose stored number equals p_i",
+	// so a map that authored two records with the same number resolves to the
+	// earlier one. This slice used to be sorted by (ID, X, Z) "for stable
+	// tests", which silently re-ranked such a pair by coordinate; the decode
+	// order is already deterministic (TDF enumeration order, [I1]) and is the
+	// order retail scans, so the sort is removed rather than made stabler.
+	// Retail stores the number as the authored suffix minus one; this build's
+	// decode keeps the 1-based suffix in Special.ID, so the two differ by one
+	// throughout and the conversion happens at the single call site below.
 	var starts []mission.Special
 	for _, sp := range m.Specials {
 		if sp.Kind == 1 {
 			starts = append(starts, sp)
 		}
 	}
-	// Deterministic order for ID lookup: sort by ID ascending as TDF enumeration
-	// is already ID order, but sort ensures stable for tests [I1].
-	sort.Slice(starts, func(i, j int) bool {
-		if starts[i].ID != starts[j].ID {
-			return starts[i].ID < starts[j].ID
-		}
-		if starts[i].X != starts[j].X {
-			return starts[i].X < starts[j].X
-		}
-		return starts[i].Z < starts[j].Z
-	})
 	nPlayersLocal := cfg.NumPlayers
 	if nPlayersLocal < 0 {
 		nPlayersLocal = 0
@@ -957,9 +962,11 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 		eligible = append(eligible, i)
 	}
 	n := len(eligible)
-	// CRT vs sim streams [P0-04] I4 DET-01: from session, not global.
+	// The shuffle is the only stream this function touches directly, and it is
+	// the CRT one [P0-04] I4 DET-01: from session, not global. The simulation
+	// stream is not read here at all — the stamp takes no simulation draw
+	// [08 R-ENTRY-01 §5] — so nothing binds it; the allocator reaches its own.
 	crt := s.CrtRNG()
-	sim := s.SimRNG()
 	// Build the permutation of eligible slots.
 	local28 := make([]int, n)
 	copy(local28, eligible)
@@ -996,10 +1003,10 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 			permMap[logical] = local28[idx]
 		}
 	}
-	// Helper to find Special by ID (suffix). Our Special.ID is the 1-based
-	// numeric suffix of "StartPos %i" [GAP T14]; the lookup is exact — a slot
-	// whose assigned index has no matching StartPos keeps its random jitter
-	// [08 "Randomization for skirmish starts"].
+	// Helper to find a StartPos special by its authored 1-based suffix, which
+	// is what this build's decode stores in Special.ID [GAP T14]. The scan is
+	// first-match in authored order and the comparison is exact
+	// [08 R-ENTRY-01 §5] step 3.
 	findSpecial := func(id int) *mission.Special {
 		for i := range starts {
 			if int(starts[i].ID) == id {
@@ -1031,44 +1038,45 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 		if commanderErr != nil {
 			return commanderErr
 		}
-		// Sim jitter with degenerate no-advance [P0-04]. The two literals are
-		// map-cell counts, not record offsets: the draw spans the map minus a
-		// 160-cell margin and is then inset by 80 cells, so a start position
-		// lands at least 80 cells inside each edge.
-		var jx, jz numeric.Fixed
-		// Map dimensions are measured in cells. Non-positive bounds consume no
-		// random value, as required by the random helper contract.
-		var mapW, mapH int32
-		if s.World != nil {
-			mapW = s.World.CellW
-			mapH = s.World.CellH
+		// The stamp helper places the commander AT the slot's start position and
+		// draws nothing [08 R-ENTRY-01 §5] "Kind 2 (skirmish), no save file":
+		// steps 1–4 copy side and colour, set the storage bonus, resolve the
+		// `StartPos`, and a miss is fatal. "No simulation draw is made by the
+		// stamp or the grant themselves" — the only draws in this loop are the
+		// allocator's two, taken inside s.Units.Create below [04 §2.3b].
+		//
+		// **Correction (WU-19-178).** This site drew two simulation values per
+		// eligible slot — an X/Z "jitter" — and kept the jittered value as a
+		// fallback when the map had no matching `StartPos`, with a comment
+		// asserting the bounds were map-cell counts. Both halves were wrong.
+		// The jitter belongs to the kind-3 (multiplayer) path alone, where its
+		// bounds are the TNT extents × 16, i.e. WORLD units, not cells
+		// [08 R-ENTRY-01 §5] "Kind 3", correction 2 of [08 R-ENTRY-01 §10]; the
+		// "in cells" reading came from the superseded "Randomization for
+		// skirmish starts" paragraph, which that correction retracts. This
+		// engine never builds a kind-3 session, so the jitter has no reachable
+		// caller and is deleted rather than carried with the wrong unit; the
+		// draws it was taking on every skirmish were phantom traffic that
+		// displaced every later draw in the battle.
+		perm, has := permMap[playerIdx]
+		if !has {
+			// permMap is built from `eligible`, which applies the same
+			// three-clause gate this loop does, so every slot reaching here has
+			// an assigned position. A miss is an internal inconsistency, not a
+			// retail path, and gets this build's diagnostic shape rather than
+			// retail's verbatim one.
+			return fmt.Errorf("nanolathe: skirmish placement has no assigned start position: slot %d, eligible slots %v, expected one assignment per eligible slot [08 R-ENTRY-01 §5]", playerIdx, eligible)
 		}
-		boundW := mapW - startJitterMargin
-		boundH := mapH - startJitterMargin
-		var rndW, rndH int32
-		if boundW > 0 && sim != nil {
-			rndW = int32(sim.Uint32n(uint32(boundW)))
-		} else {
-			rndW = 0 // JLE ret0 no advance [P0-04]
+		// `perm` is the stored, zero-based position number; the authored label
+		// is one greater, so slot i under identity placement takes StartPos<i+1>
+		// [08 R-ENTRY-01 §5] step 3.
+		sp := findSpecial(perm + 1)
+		if sp == nil {
+			return errStartPositionMissing(perm)
 		}
-		if boundH > 0 && sim != nil {
-			rndH = int32(sim.Uint32n(uint32(boundH)))
-		} else {
-			rndH = 0
-		}
-		jx = numeric.Fixed((rndW + startJitterInset) * 65536)
-		jz = numeric.Fixed((rndH + startJitterInset) * 65536)
-		x, z := jx, jz
+		x := numeric.Fixed(int32(sp.X) * 65536)
+		z := numeric.Fixed(int32(sp.Z) * 65536)
 		y := numeric.Fixed(0)
-		// Try StartPos overwrite if mapping exists [P0-04]
-		if perm, has := permMap[playerIdx]; has {
-			// startPos number is perm+1 (since perm is slot index 0..9 => StartPos perm+1)
-			sp := findSpecial(perm + 1)
-			if sp != nil {
-				x = numeric.Fixed(int32(sp.X) * 65536)
-				z = numeric.Fixed(int32(sp.Z) * 65536)
-			}
-		}
 		if s.World != nil {
 			y = s.World.HeightAt(x, z)
 			if y == -1 {

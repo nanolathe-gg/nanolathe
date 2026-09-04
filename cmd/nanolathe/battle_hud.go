@@ -638,13 +638,27 @@ func campaignBattleSide(fs vfs.FSOps, m *mission.Mission, cat *content.Catalog) 
 	if err != nil {
 		return nil, err
 	}
-	// TODO(question): `campaignside=ALL` (and a campaign file with no
-	// `campaignside` key, which the enumerator skips outright) names no side.
-	// Retail still has one, because the local player's side record was written
-	// from the registry `side` word before the campaign was ever chosen
-	// [07 R-FE-01 §4]; nothing here carries that word into a battle. Plumbing
-	// the shell's side word through battle entry settles it. Until then this is
-	// a diagnostic, not a default: no stock campaign authors ALL.
+	// TODO(question): this is not an open retail question — it is a missing
+	// seam, recorded here because closing it changes a signature this file's
+	// unit does not own. [07 R-HUD-04 §4] closes the behavior: "`campaignside =
+	// ALL` needs no retail contract beyond [R-FE-01 §4]: the side a campaign
+	// battle uses when the campaign names none is the local player's side
+	// record, written from the registry `side` word before the campaign was
+	// chosen; carrying that word into battle entry is plumbing, not an open
+	// question." [08 R-CAMP-01 §1] says the same from the other end —
+	// `campaignside` *filters* which campaigns the panel offers and never
+	// assigns a side, so a named side is the local side only because the
+	// campaign was offered to that side alone.
+	//
+	// What is missing: the shell's own side word — frontend.go's `missionSide`,
+	// written by the new-game panel's Side0/Side1 gadgets and already read from
+	// battle code as `b.shell.missionSide` (postbattle.go does exactly that for
+	// the between-missions summary) — never reaches this resolver. battleSide
+	// and loadRetailBattleHUD take (fs, sess, cat) and neither
+	// internal/mission.Mission nor internal/session carries the word, so both
+	// signatures have to grow one argument, which touches the HUD test files
+	// that call loadRetailBattleHUD. Until then this branch is a diagnostic,
+	// not a default: no stock campaign authors ALL.
 	if name == "" || name == "ALL" {
 		return nil, hudAssetError(fs, logical,
 			fmt.Sprintf("campaign HEADER campaignside naming a compiled side, got %q [08 \"Enumeration of campaigns\"]", name),
@@ -1669,12 +1683,11 @@ func (h *retailBattleHUD) drawSlideStrip(c *client.Client, b *battleSession, cur
 // target word 10, otherwise `%+d`, with ` (%+d)` appended while the adapted
 // current speed differs from the target [07 §6].
 //
-// TODO(question): what `%+d` prints is not spelled out — the offset from
-// normal, or the raw speed word. The offset is taken here because it is the
-// only reading under which the value-10 case degenerates to the word `Normal`
-// rather than to `+10`, and because the announcement's established formatter
-// prints the same offset [07 R-CAM-01 §3]. A capture of the strip at a
-// non-normal speed settles it.
+// Both `%+d` arguments are the **offset from normal**, not the raw speed word:
+// each speed word is widened from 16 bits without sign extension and 10 is
+// subtracted before it is formatted [07 R-CAM-01 §3]. The suffix test is a
+// plain inequality of the two words and runs
+// after the `Normal` branch has joined, so `Normal (+2)` is reachable.
 func slideStripSpeedText(strip frame.StripReadout) string {
 	target := strip.RequestedSpeed
 	text := fmt.Sprintf("%+d", target-slideStripNormalSpeed)
@@ -2069,6 +2082,15 @@ var commandButtonNames = [...]string{
 	"LOAD", "UNLOAD", "BLAST",
 }
 
+// ordersButtonCue and buildButtonCue are the two stage buttons' own cues,
+// named by the click handler itself rather than by the page-switch routine
+// [07 R-HUD-04 §5]. They are `allsound.tdf` aliases like every other interface
+// cue; a mount that does not author one leaves the click silent.
+const (
+	ordersButtonCue = "ordersbutton"
+	buildButtonCue  = "buildbutton"
+)
+
 // commandButtonName returns the table row a gadget belongs to, or "" when it is
 // not a command button. The longest matching suffix wins, which is what keeps
 // ARMUNLOAD out of the LOAD row and ARMMOVEORD out of the MOVE row.
@@ -2353,18 +2375,18 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 				if rightClick {
 					return true
 				}
-				// TODO(question): which cue the `ORDERS` and `BUILD` gadgets play.
-				// `allsound.tdf` authors `ORDERSBUTTON` and `BUILDBUTTON` aliases,
-				// but no section names their producer, and [07 §9] ties
-				// `nextbuildmenu` to the page-switch routine rather than to these
-				// two stage buttons. Settling it needs the fired callback's cue
-				// argument for the two gadgets; silence rather than a guess.
+				// The gadget's own cue, played by the click handler before the
+				// stage bit is consumed [07 R-HUD-04 §5]. It is not the page
+				// cycle's `nextbuildmenu` — that belongs to `,`/`.` and to
+				// NEXT/PREV [07 §9].
+				b.playUICue(nil, ordersButtonCue)
 				_ = b.DispatchBuildPage(0)
 				return true
 			case "BUILD":
 				if rightClick {
 					return true
 				}
+				b.playUICue(nil, buildButtonCue) // [07 R-HUD-04 §5]
 				_ = b.DispatchBuildPage(buildButtonPage(f))
 				return true
 			}
