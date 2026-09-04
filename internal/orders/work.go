@@ -402,26 +402,28 @@ func deadlineRestart(n *Node, tick uint32, ticks int32) Code {
 // The consumer side of that is already correct: internal/orders/pump.go merges
 // `u.Pending`, so arming `gateBuildStance` is all this helper needs to do.
 //
-// TODO(T25): the PRODUCER is not wired in this build, and the two files that
-// must carry it are outside this unit's ownership: the engine-write opcode arm
-// in internal/cob/vm.go (case 0x10082000), which must raise the marker on every
-// execution regardless of the identifier, and the unit-side hop that turns it
-// into `u.Pending |= 0x4` in internal/units (the VM has no unit pointer; the
-// port closures in internal/units/cob_binding.go do). Until that lands, the
-// stand-in below stays: arm the shared deadline setter for one tick alongside
-// the row's own gate so the stance byte is re-polled on the next visit. The
-// record keeps its place at the head and its phase, exactly as *hold* requires,
-// and the extra bit becomes inert — and must be deleted — the moment the
-// producer exists. Do NOT wire the raise to port 5 alone: retail's marker is
-// raised by every port, and the transport `BUSY` wait on the same gate bit
-// ([R-AIR-01 §9] as corrected) is woken by port 6.
-func inBuildStanceWait(u *units.Unit, n *Node, extra uint32, tick uint32) Code {
+// The producer is now wired (WU-19-148), and the stand-in this comment used to
+// describe is GONE. It armed the shared deadline setter for one tick alongside
+// the row's own gate so a parked record was re-polled on the next visit; that
+// was a timer retail does not have, and it made every build-stance wait advance
+// on a one-tick clock instead of on script activity. The two producer sites are
+// the engine-write opcode arm in internal/cob/vm.go (case 0x10082000), which
+// raises the marker on every execution regardless of the identifier, and
+// units.Unit.raiseScriptTouched in internal/units/cob_binding.go, bound to the
+// VM because the VM holds no unit pointer.
+//
+// Do NOT re-introduce a deadline here, and do NOT narrow the raise to port 5:
+// retail's marker is raised by every arm of the dispatch, and the transport
+// `BUSY` wait sits on this same gate bit and is woken by port 6
+// ([R-AIR-01 §9] as corrected). The `tick` parameter is deliberately unused —
+// it survives only because five call sites pass it, and its disuse is the
+// contract: this wait sets no deadline.
+func inBuildStanceWait(u *units.Unit, n *Node, extra uint32, _ uint32) Code {
 	if u != nil && u.InBuildStance {
 		return 1
 	}
 	if n != nil {
 		n.DynamicGate = extra | gateBuildStance
-		deadlineHold(n, tick, 1)
 	}
 	return 2
 }

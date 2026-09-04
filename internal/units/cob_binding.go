@@ -38,6 +38,37 @@ func BindCOBWithPortsAndVisibilityForUnit(fs vfs.FSOps, u *Unit, mdl *model.Mode
 	return bindCOBWithPortsAndVisibility(fs, u.Def, mdl, sim, sink, visible, u)
 }
 
+// PendingScriptTouched is the SCRIPT-TOUCHED MARKER: bit 2 of the unit's
+// order-event word (Unit.Pending), which is order gate bit 0x4
+// [04 R-COB-06]. Its only producer is the COB engine-write opcode, which
+// raises it on every execution — from all six write arms and from the
+// fall-through an identifier with no write arm (or no valid identifier at all)
+// takes. It carries no value: it says that this unit's script executed an
+// engine write, and nothing about which port or what value.
+//
+// Its consumers are the two order helpers that park with no deadline — the
+// `INBUILDSTANCE` wait of the work orders and the ground transport's `BUSY`
+// wait [04 R-AIR-01 §9] — and a record parked on the bit is re-polled by
+// exactly one thing: this unit's script writing an engine port. Because the
+// bit is per-unit and value-free, a write to ANY port re-polls both waits, and
+// the helper's own re-test of the level byte is what decides advance or hold.
+//
+// The bit is raised on the UNIT, not on a record, and the pump clears from the
+// word only the bits the visited record's gate names, so a write made while
+// nothing is waiting persists and satisfies the next record that arms the gate
+// on that record's first visit [04 R-COB-06].
+const PendingScriptTouched uint32 = 0x4
+
+// raiseScriptTouched is the unit-side hop the VM calls for the marker: the VM
+// holds no unit pointer, so the raise reaches the order-event word through a
+// closure over this unit [04 R-COB-06].
+func (u *Unit) raiseScriptTouched() {
+	if u == nil {
+		return
+	}
+	u.Pending |= PendingScriptTouched
+}
+
 func unitPortHandlers(vm *cob.VM, u *Unit) map[cob.Port]func([]int32) int32 {
 	if u == nil {
 		return nil
@@ -114,6 +145,13 @@ func bindUnitPortHandlers(vm *cob.VM, u *Unit) {
 	}
 	for port, fn := range unitPortHandlers(vm, u) {
 		vm.BindPort(port, fn)
+	}
+	// The marker is not a port handler and must not be attached to one: retail
+	// raises it from every arm of the engine-write dispatch, including the
+	// fall-through no port handler can observe [04 R-COB-06]. It gets its own
+	// binding on the VM for exactly that reason.
+	if u != nil {
+		vm.BindScriptTouched(u.raiseScriptTouched)
 	}
 }
 
@@ -221,12 +259,26 @@ func bindCOBWithPortsAndVisibility(fs vfs.FSOps, def *content.UnitDef, mdl *mode
 		// Keep the generic and instance-aware binding paths identical. The helper
 		// installs all six researched engine-write arms before Create.
 		req.PortFuncs = unitPortHandlers(nil, u)
+		// The script-touched marker is not one of those arms — retail raises it
+		// from the dispatch itself, fall-through included — so it rides the
+		// same pre-Create hand-off the render-piece table uses. Create is an
+		// ordinary script and may write an engine port, and the marker it
+		// raises persists on the unit until a record arms gate bit 0x4
+		// [04 R-COB-06].
+		cob.SetPendingScriptTouched(u.raiseScriptTouched)
 	}
 	binding, err := cob.BindStrict(fs, req)
 	if err != nil {
 		// Clear pending on failure.
 		cob.SetPendingRenderHandlers(nil, nil)
+		cob.SetPendingScriptTouched(nil)
 		return nil, err
+	}
+	// The bind consumed the hand-off at VM construction. Re-assert it on the
+	// live VM so a caller that reaches here through a path with no pending
+	// consumption still owns a bound marker [04 R-COB-06].
+	if u != nil && binding != nil && binding.VM != nil {
+		binding.VM.BindScriptTouched(u.raiseScriptTouched)
 	}
 	// SetMaxReloadTime is issued after Create as a distinct deferred callback;
 	// its argument is the maximum of all three linked weapon reload fields

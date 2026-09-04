@@ -30,9 +30,12 @@ import (
 // order-event word, which is order gate bit 0x4, and the order pump's
 // satisfied-set merge is its only consumer [04 R-COB-06]. The INBUILDSTANCE
 // wait and the transport BUSY wait park on that bit with no deadline, so a
-// script's engine write is the only thing that re-polls them. Wiring that
-// producer belongs at the engine-write opcode in vm.go and the unit-side word
-// in internal/units; see the note on inBuildStanceWait in internal/orders.
+// script's engine write is the only thing that re-polls them. That producer IS
+// wired (WU-19-148): the engine-write arm in vm.go raises it unconditionally —
+// before the port dispatch, so the fall-through raises it too — and
+// internal/units turns the raise into the unit's pending bit. This sentence
+// previously said the wiring "belongs" at those two sites, which read as open
+// work after it had been done.
 type PortInfo struct {
 	ID        Port
 	Name      string

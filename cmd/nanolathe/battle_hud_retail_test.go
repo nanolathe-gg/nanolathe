@@ -136,17 +136,31 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 	if cur == nil {
 		t.Fatal("selected commander snapshot disappeared")
 	}
-	// The command window is the page-shown bit's, not the selection's: with the
-	// bit clear the switch opens the side's "%sGEN.GUI" orders window, and only
-	// a page N >= 1 composes "%s%d.GUI" from the builder's own internal name
-	// [07 R-HUD-03 §6].
-	w, _ := b.hud.windowFor(b, cur)
+	// The command window is the page-shown bit's, not the selection's — and a
+	// builder that has never been paged is already on its first build page:
+	// unit creation seeds page field 1 with the paged bit set for every
+	// definition whose page-count byte is at least 2, and no click ever writes
+	// the field [07 R-HUD-04 §4 "First build page"]. So a freshly selected
+	// commander opens "%s%d.GUI" composed from its own internal name, and the
+	// side's "%sGEN.GUI" orders window is what page 0 — the paged bit clear —
+	// opens, one ORDERS click away [07 R-HUD-03 §6].
+	//
+	// This assertion wanted the orders window until 2026-09-04. That was the
+	// behavior of the three days before the creation seed gained a producer
+	// (RWU-19-42), not the contract: [07 R-HUD-03 §6] "The state a builder is
+	// first selected in" establishes the first build page from manual retail
+	// observation, and [07 R-HUD-04 §4] names unit creation as its writer.
+	wantWindow := strings.ToLower(commanderName) + "1.gui"
 	ordersWindow := strings.ToLower(b.hud.side.NamePrefix) + "gen.gui"
-	if w == nil || !strings.HasSuffix(strings.ToLower(w.Name), ordersWindow) {
+	w, _ := b.hud.windowFor(b, cur)
+	if w == nil || !strings.HasSuffix(strings.ToLower(w.Name), wantWindow) {
 		if w == nil {
-			t.Fatalf("commander orders window is nil; want %s", ordersWindow)
+			t.Fatalf("freshly selected commander window is nil; want suffix %q", wantWindow)
 		}
-		t.Fatalf("commander orders window = %q; want suffix %q", w.Name, ordersWindow)
+		t.Fatalf("freshly selected commander window = %q; want suffix %q", w.Name, wantWindow)
+	}
+	if cur.CommandPage.Page != 1 || !commandPageIsPaged(cur) {
+		t.Fatalf("freshly selected commander is on page %d (paged=%v), want build page 1 [07 R-HUD-04 §4]", cur.CommandPage.Page, commandPageIsPaged(cur))
 	}
 	// BUILD sets the page-shown bit and ORDERS clears it: the two halves of the
 	// pair select the state each one stages from [07 R-HUD-03 §6]. Both plates
@@ -176,32 +190,28 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 		}
 		t.Fatalf("window %q authors no %s gadget", window.Name, suffix)
 	}
-	wantWindow := strings.ToLower(commanderName) + "1.gui"
-	clickCommandButton("BUILD")
+	// ORDERS goes to page 0 and opens the side's general window; BUILD brings
+	// the same page back, because page 0 leaves the page field alone and so the
+	// builder remembers where it was [07 R-HUD-03 §6][07 R-HUD-04 §4].
+	clickCommandButton("ORDERS")
 	cur = sess.Snapshot.Current()
 	if cur == nil {
-		t.Fatal("paged commander snapshot disappeared")
+		t.Fatal("orders-state commander snapshot disappeared")
 	}
-	if cur.CommandPage.Page != 1 || !commandPageIsPaged(cur) {
-		t.Fatalf("BUILD left the commander on page %d (paged=%v), want build page 1", cur.CommandPage.Page, commandPageIsPaged(cur))
+	if cur.CommandPage.Page != 0 || commandPageIsPaged(cur) || len(cur.CommandPage.ProductKeys) != 0 {
+		t.Fatalf("ORDERS left page %d (paged=%v) with products %v, want the orders page", cur.CommandPage.Page, commandPageIsPaged(cur), cur.CommandPage.ProductKeys)
 	}
 	w, _ = b.hud.windowFor(b, cur)
-	if w == nil || !strings.HasSuffix(strings.ToLower(w.Name), wantWindow) {
+	if w == nil || !strings.HasSuffix(strings.ToLower(w.Name), ordersWindow) {
 		if w == nil {
-			t.Fatalf("commander window is nil; want %s", wantWindow)
+			t.Fatalf("commander orders window is nil; want suffix %q", ordersWindow)
 		}
-		t.Fatalf("commander window = %q; want suffix %q", w.Name, wantWindow)
-	}
-	// ORDERS goes back to page 0, and BUILD brings that same page back: page 0
-	// leaves the page field alone, so the builder remembers where it was.
-	clickCommandButton("ORDERS")
-	if cur = sess.Snapshot.Current(); cur.CommandPage.Page != 0 || commandPageIsPaged(cur) || len(cur.CommandPage.ProductKeys) != 0 {
-		t.Fatalf("ORDERS left page %d (paged=%v) with products %v, want the orders page", cur.CommandPage.Page, commandPageIsPaged(cur), cur.CommandPage.ProductKeys)
+		t.Fatalf("commander orders window = %q; want suffix %q", w.Name, ordersWindow)
 	}
 	clickCommandButton("BUILD")
 	cur = sess.Snapshot.Current()
-	if cur.CommandPage.Page != 1 {
-		t.Fatalf("BUILD returned to page %d, want the remembered page 1", cur.CommandPage.Page)
+	if cur.CommandPage.Page != 1 || !commandPageIsPaged(cur) {
+		t.Fatalf("BUILD returned to page %d (paged=%v), want the remembered page 1", cur.CommandPage.Page, commandPageIsPaged(cur))
 	}
 	w, _ = b.hud.windowFor(b, cur)
 	if w == nil || !strings.HasSuffix(strings.ToLower(w.Name), wantWindow) {

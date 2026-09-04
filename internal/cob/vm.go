@@ -98,6 +98,21 @@ type VM struct {
 	cargoContains   func(id int32) bool // membership in this unit's own cargo list
 	carrierIdentity func() int32        // this unit's carrier identifier, 0 when not carried
 
+	// scriptTouched raises the owning unit's SCRIPT-TOUCHED MARKER: bit 2 of
+	// the unit's 16-bit order-event word, which is order gate bit 0x4
+	// [04 R-COB-06]. Every arm of the engine-write opcode dispatch — all six
+	// write arms AND the fall-through an identifier with no write arm takes,
+	// including an identifier outside 1..20 — ORs that bit in addition to its
+	// own effect. The marker carries no value; it means only "this unit's
+	// script executed an engine write", and it is the sole producer of the bit
+	// the INBUILDSTANCE and transport BUSY waits park on with no deadline.
+	//
+	// The VM owns no unit pointer, so the raise is a closure installed by
+	// internal/units. A VM with no owning unit (fixtures, the generic
+	// asset-binding seam) leaves it nil and the marker has nowhere to go,
+	// which is all an ownerless VM can do.
+	scriptTouched func()
+
 	lastStarted     int      // last thread allocated by Start/StartByName, -1 if none [06 §3.3] ON-04 Aim dispatch
 	lastQueryThread int      // last thread allocated by CallQuery, -1 if none [04 §4.2]
 	lastReturnValue [8]int32 // last explicit return value per thread [04 §5.3] ON-04
@@ -135,6 +150,18 @@ func SetPendingRenderHandlers(get func() []uint8, set func(piece int, mask uint8
 	pendingRenderHandlers.get = get
 	pendingRenderHandlers.set = set
 }
+
+// pendingScriptTouched is the same one-shot hand-off for the script-touched
+// marker raise [04 R-COB-06]. The strict binder runs the D+wake Create
+// callback inside the bind, before its caller ever sees the VM, and Create is
+// an ordinary script that may write engine ports — so the marker raise has to
+// be installed at construction, not afterwards.
+var pendingScriptTouched func()
+
+// SetPendingScriptTouched installs a one-shot script-touched marker raise for
+// the next VM bind [04 R-COB-06]. Pass nil to clear a hand-off whose bind
+// failed before it was consumed.
+func SetPendingScriptTouched(raise func()) { pendingScriptTouched = raise }
 
 // pieceAnim holds the per-piece per-axis interpolation lanes [04 §4.6].
 type pieceAnim struct {
@@ -307,6 +334,14 @@ func (v *VM) SetProgram(prog *Program) {
 		pendingRenderHandlers.get = nil
 		pendingRenderHandlers.set = nil
 	}
+	// Same hand-off for the script-touched marker: Create runs inside the
+	// strict bind and may write an engine port, so the raise must already be
+	// installed [04 R-COB-06]. A re-bind with no pending hand-off keeps the
+	// binding it has — the owning unit does not change when its program does.
+	if pendingScriptTouched != nil {
+		v.scriptTouched = pendingScriptTouched
+		pendingScriptTouched = nil
+	}
 	// Construction clears only the status words; every other thread field
 	// keeps its prior content [R-COB-01 §1].
 	for i := range v.Threads {
@@ -355,6 +390,32 @@ func (v *VM) BindPort(p Port, fn func(args []int32) int32) {
 		v.portFuncs = make(map[Port]func(args []int32) int32)
 	}
 	v.portFuncs[p] = fn
+}
+
+// BindScriptTouched attaches the owning unit's script-touched marker raise
+// [04 R-COB-06]. The engine-write opcode calls it on EVERY execution — before
+// the port's own effect, and regardless of whether the popped identifier has a
+// write arm or is even inside 1..20 — because that is what retail's dispatch
+// does: all six write arms and the fall-through share the one OR of bit 2 into
+// the unit's order-event word. Binding it to a single port instead (port 5,
+// say) would be a narrower rule than retail's and would deadlock the transport
+// BUSY handshake, whose wake comes from port 6 [04 R-AIR-01 §9].
+//
+// Passing nil detaches the raise.
+func (v *VM) BindScriptTouched(raise func()) {
+	if v == nil {
+		return
+	}
+	v.scriptTouched = raise
+}
+
+// raiseScriptTouched fires the marker for one engine write [04 R-COB-06].
+// An ownerless VM has no word to write and the raise is dropped.
+func (v *VM) raiseScriptTouched() {
+	if v == nil || v.scriptTouched == nil {
+		return
+	}
+	v.scriptTouched()
 }
 
 // BindTransportQueries attaches the owning unit's cargo linkage to the two
@@ -2059,6 +2120,17 @@ func (v *VM) runThread(idx int) {
 			// INBUILDSTANCE to 1` became a port-1 write of value 5 [R-P0-10].
 			val, _ := t.stackPop()
 			id, _ := t.stackPop()
+			// The SCRIPT-TOUCHED MARKER, raised here and not inside any port
+			// arm [04 R-COB-06]. Retail's dispatch ORs bit 2 of the owning
+			// unit's order-event word — order gate bit 0x4 — from all six
+			// write arms AND from the fall-through an identifier with no write
+			// arm takes, which is also where the range check sends an
+			// identifier outside 1..20. So the raise is unconditional and
+			// precedes the dispatch: every execution of this opcode raises it,
+			// valid identifier or not. The bit carries no value; it says only
+			// that this unit's script executed an engine write, and the order
+			// pump merging `u.Pending` is its one consumer [04 §3.3].
+			v.raiseScriptTouched()
 			// If id has no write arm only sets script-touched marker [04 §4.4]; we treat as no-op beyond hook.
 			if fn, ok := v.portFuncs[Port(id)]; ok && fn != nil {
 				_ = fn([]int32{id, val})
