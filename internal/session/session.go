@@ -1237,10 +1237,16 @@ func (s *Session) RegisterAll() {
 						_ = s.Features.PlaceCorpse(u.X, u.Z, corpseDef, u.Def.IsFeature)
 					}
 				}
-			} else if u != nil && u.Def != nil && u.Def.Corpse != "" && s.World != nil {
-				// Fallback when no authoritative resolution (nil def etc) — keep deterministic no-op; TODO(question) on missing def path
-				_ = h
 			}
+			// There is no "missing definition" arm to write. The block above is
+			// entered whenever the unit and its definition exist and the session
+			// has a world, so the only way past it with a corpse to place is a
+			// session with no feature service — an unwired composition, not a
+			// state retail can be in: battle entry allocates the feature tables
+			// during the world rebuild, before any unit exists
+			// [08 R-ENTRY-01 §3]. The open-question marker and the empty else-branch
+			// that stood here described a def-less path the branch condition
+			// already excludes, and did nothing.
 		}
 		s.Units.OnCreate = func(h pool.Handle, u *units.Unit) {
 			// The status-cue seam, installed at the one creation funnel so a

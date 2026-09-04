@@ -430,28 +430,34 @@ func TestRetailOptionsSliderPointerCaptureAndDrag(t *testing.T) {
 	}
 }
 
-// The options root's cue column is its own rows of the transition table
-// [07 R-FE-01 §2]: the four page buttons and `PREV` play `Options`, `CANCEL`
-// plays `Previous`. `SINGLE`'s own `Options` button keeps its `options` cue
-// from frontendCue, because the root is not open yet when it fires.
+// The options family's cue column: `CANCEL` alone plays `Previous`, and every
+// other recognised control — the four page buttons, `PREV`, and the pages' own
+// `RESTORE`, `UNDO` and stage buttons — plays `Options` [07 R-FE-01 §2]
+// [07 R-FE-01 §6]. `SINGLE`'s own `Options` button keeps its `options` cue from
+// frontendCue, because the root is not open yet when it fires.
 func TestRetailOptionsCueColumn(t *testing.T) {
 	for key, want := range map[string]string{
-		"sound":   "Options",
-		"music":   "Options",
-		"speeds":  "Options",
-		"visuals": "Options",
-		"prev":    "Options",
-		"cancel":  "Previous",
+		"sound":    "Options",
+		"music":    "Options",
+		"speeds":   "Options",
+		"visuals":  "Options",
+		"prev":     "Options",
+		"restore":  "Options",
+		"undo":     "Options",
+		"anti":     "Options",
+		"shading":  "Options",
+		"bshadows": "Options",
+		"cancel":   "Previous",
 	} {
 		if got := retailOptionsCue(key); got != want {
-			t.Errorf("retailOptionsCue(%q) = %q, want %q [07 R-FE-01 §2]", key, got, want)
+			t.Errorf("retailOptionsCue(%q) = %q, want %q [07 R-FE-01 §2][07 R-FE-01 §6]", key, got, want)
 		}
 	}
-	// `RESTORE` and `UNDO` are listed by neither the table nor §6, so they stay
-	// silent behind the TODO(question) rather than borrowing a neighbour's cue.
-	for _, key := range []string{"restore", "undo", "anti", "shading", "bshadows", "vidsldr"} {
+	// A slider is driven by its own value callback, which plays no cue, so a
+	// drag or an arrow step must stay silent [07 R-FE-01 §6].
+	for _, key := range []string{"vidsldr", "gamma"} {
 		if got := retailOptionsCue(key); got != "" {
-			t.Errorf("retailOptionsCue(%q) = %q, want silence while the row is unestablished", key, got)
+			t.Errorf("retailOptionsCue(%q) = %q, want silence: a slider's value callback plays nothing", key, got)
 		}
 	}
 	// The button that opens the root is `SINGLE`'s, not the root's, and the

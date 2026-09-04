@@ -158,11 +158,16 @@ func (s *Session) EnqueueHumanCommand(c HumanCommand) error {
 	s.humanMu.Lock()
 	defer s.humanMu.Unlock()
 	// The retail input pass consumes the command at the next authoritative
-	// boundary. No researched latency/network offset exists for local commands,
-	// so the smallest truthful contract is the next session tick.
-	// TODO(question): verify whether a networked input frame can target a later
-	// frame; settle this from the future-frame receive probe before adding an
-	// offset here.
+	// boundary, and no offset belongs here. Established [08 "Soft pacing — no
+	// per-tick input barrier"]: "no fixed input-delay constant exists", bounded
+	// over the packet registry, the custom send/receive chain and both
+	// schedulers. The only future window in the image is on the RECEIVE side and
+	// is applied locally: the receiver tags each decoded record with its own
+	// simulation tick at parse time and withholds entries tagged 1..30 ticks
+	// ahead [08 "Receive buffering"] — the sender never names a target frame, and
+	// that 31-tick window "is not proof of a universal 30-tick input delay". So
+	// the next session tick is the contract, not a placeholder for one. The
+	// receive path itself is multiplayer-only and out of scope [08 R-OOS-01 §3].
 	s.nextHumanSequence++
 	if s.nextHumanSequence == 0 {
 		// Sequence wrap is outside the established single-player lifetime. Keep

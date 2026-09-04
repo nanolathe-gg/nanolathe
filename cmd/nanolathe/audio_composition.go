@@ -98,11 +98,10 @@ func frontendCue(mode shellMode, key string) string {
 		case "prevmenu":
 			return "Previous"
 		case "loadgame":
-			// The table records "cue" for `LoadGame` without naming the alias.
-			// TODO(question): which alias `SINGLE`/`LoadGame` plays — the row of
-			// [07 R-FE-01 §2] names a cue but not its name; settling it needs
-			// the front-end callback's cue argument.
-			return ""
+			// `LoadGame` shares `NewCamp`'s alias: the `SINGLE` callback's
+			// third arm plays `BigButton` before opening the load dialog
+			// [07 R-FE-01 §2].
+			return "BigButton"
 		}
 	case ui.ModeMission:
 		switch key {
@@ -175,23 +174,29 @@ func (g *gameShell) playMenuCue(alias string) {
 	}
 }
 
-// orderButtonCue is the cue the GUI order-button dispatcher plays on each armed
-// write [07 §9 "The GUI order-button dispatcher"]: `immediateorders` for the
-// ATTACK/BLAST/FOLLOW/PATROL/MOVE families and `specialorders` for the
-// REPAIR/RECLAIM/CAPTURE families. The classification is on the parsed latch
-// value, which is the value the dispatcher writes.
+// orderButtonCue is the cue the GUI order-button dispatcher plays for the arm
+// that matched the button name [07 §9 "The GUI order-button dispatcher"]. The
+// per-arm column is Established: MOVE, STOP, ATTACK, BLAST, DEFEND, PATROL and
+// LOAD play `immediateorders`; REPAIR, RECLAIM, CAPTURE and UNLOAD play
+// `specialorders`. UNLOAD sits with the special family even though its latch
+// neighbours LOAD, so the split is not the latch's numeric order.
+//
+// The cue belongs to the arm, not to the value written: an arm whose runtime
+// gate is zero writes the idle latch and still plays its own family's cue. The
+// key here is the parsed latch because the caller always parses with a nonzero
+// gate, which makes the arm and the latch one-to-one — except for STOP, whose
+// arm also writes the idle latch. The STOP cue is therefore the caller's to
+// play; see `handleHudOrderButton`.
 func orderButtonCue(latch input.Latch) string {
 	switch latch {
-	case input.LatchMove, input.LatchAttack, input.LatchBlast, input.LatchFollow, input.LatchPatrol:
+	case input.LatchMove, input.LatchAttack, input.LatchBlast, input.LatchFollow,
+		input.LatchPatrol, input.LatchPickup:
 		return cueImmediateOrders
-	case input.LatchRepair, input.LatchReclaim, input.LatchCapture:
+	case input.LatchRepair, input.LatchReclaim, input.LatchCapture, input.LatchUnload:
 		return cueSpecialOrders
 	}
-	// TODO(question): which cue the STOP, LOAD/PICKUP and UNLOAD arms play.
-	// [07 §9] names only the two families above, and `STOP` reaches the
-	// dispatcher through the generic immediate table rather than one of them;
-	// settling it needs the dispatcher's per-arm cue argument. Silence here
-	// rather than a guessed family.
+	// The idle latch is not an arm: it is what a zero gate (and STOP) writes,
+	// and the arm that produced it is no longer recoverable from the value.
 	return ""
 }
 
@@ -204,6 +209,11 @@ const (
 	cueAddBuild        = "addbuild"            // [07 §9], [07 R-P0-11 §1]
 	cueSubBuild        = "subbuild"            // [07 R-P0-11 §1]
 	cueSelectMultiple  = "SelectMultipleUnits" // [07 §9] selection refresh
+
+	// The save/load dialog's own rows [08 R-SAVE-02 §1].
+	cueSaveLoadCommit = "smlbutton"   // the commit arm of either direction
+	cueDeleteSaveSlot = "SmallButton" // `DELETE`; a different alias from the above
+	cuePreviousScreen = "Previous"    // `CANCEL`, as everywhere else
 )
 
 // playSelectionCue is the selection refresh's cue [07 §9]: "one selected unit
@@ -250,21 +260,14 @@ func (b *battleSession) dispatchBuildPageCued(page int) error {
 }
 
 // countedBuildCue is the cue the counted factory-queue producer plays for one
-// signed click count [07 R-P0-11 §1]: `addbuild` for an add and `subbuild` for
-// a subtract.
-//
-// TODO(question): whether a negative count is silent. [07 R-P0-11 §1] reads
-// "plays the `addbuild`/`subbuild` cue (local player; positive counts only)",
-// which names two aliases and then qualifies them with a clause that would
-// leave `subbuild` with no producer at all; the sign split below is the reading
-// that gives both aliases one. Settling it needs the counted routine's own cue
-// gate.
+// signed click count [07 R-P0-11 §1]. The split is a single signed test on the
+// count: one or more plays `addbuild` and anything else plays `subbuild`. There
+// is no silent arm — the routine's local-player gate is the only thing that
+// can suppress the cue, and a click count is always ±1 or ±5, so the zero case
+// below is retail's branch and not a state the interface can reach.
 func countedBuildCue(delta int) string {
-	switch {
-	case delta > 0:
+	if delta > 0 {
 		return cueAddBuild
-	case delta < 0:
-		return cueSubBuild
 	}
-	return ""
+	return cueSubBuild
 }

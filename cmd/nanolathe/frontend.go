@@ -429,10 +429,15 @@ func loadRetailPanelStrict(cs *contentSet, guiName, pcxName, gafName, expected s
 	}
 	p := &retailPanelAssets{}
 	if w, err := gui.Load(cs.fs, guiName); err != nil {
-		// Missing/malformed GUI outcome is not established by the retail caller.
-		// TODO(question): settle the retail process-level outcome for this
-		// missing/malformed GUI with an executable trace. Preserve an explicit
-		// unavailable panel, never a partial one.
+		// Deliberate divergence, and the divergence is the point. Retail's
+		// shared window opener does not test its own result: when the file
+		// cannot be opened it skips the whole allocate-and-parse block and
+		// still runs its tail, which copies the window's name through a window
+		// pointer it never assigned. That pointer is zero, so a front-end
+		// screen whose `.GUI` is missing faults the process — no diagnostic,
+		// no fallback, and in particular no empty layout
+		// [07 §5 "Frontend asset failure boundaries"]. Nanolathe reports
+		// instead: an explicit unavailable panel, never a partial one.
 		p.unavailable = retailFrontendAssetError(cs, "retail frontend GUI unavailable", guiName, expected, err)
 		return p, p.unavailable
 	} else {

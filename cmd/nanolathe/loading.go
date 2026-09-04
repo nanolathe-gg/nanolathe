@@ -73,10 +73,20 @@ var retailLoadBars = [retailLoadStages]struct {
 // stands in for 3D data, and weapons and features stand in for explosions.
 // Textures carries the interface data the client presents. Re-attribute this
 // when the renderer grows real texture and animation load steps.
-// TODO(question): what percentage does each retail loader step report? The six
-// progress bytes record the stage boundaries but not the within-stage
-// percentages. Decider: a static trace of each loader's progress write, or a
-// timed retail observation of the loading bar.
+//
+// Retail's own six curves are Established and are not reproducible here,
+// because they are each loader's own division [07 "The loading screen"]: the
+// texture bar walks the texture directory writing `index * 100 / (count - 1)`;
+// the terrain bar reads the map file in ten equal chunks and steps 9, 18, …, 90,
+// reaching 100 only when world setup finishes; the unit bar writes
+// `index * 100 / unitCount` and then 100; the animation bar writes
+// `index * 100 / entryCount` and **never writes 100**, so that one label's
+// completion flash never fires; the 3D-data bar divides one past the live page
+// index by the live count, so its last in-loop write overshoots 100 before the
+// final 100 lands; and the explosion bar is three flat milestones — 20, 50,
+// 100 — one per precomputed explosion table. The weighted attribution below is
+// ours; only the six labels, their geometry and the completion flash are
+// retail's.
 var retailLoadStageOf = map[string]int{
 	content.FamilySides:        0,
 	content.FamilySounds:       0,

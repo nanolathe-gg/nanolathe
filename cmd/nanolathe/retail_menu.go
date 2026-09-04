@@ -2722,16 +2722,13 @@ const (
 	retailOptionsGUI      = "guis/startopt.gui"
 	retailOptionsBackdrop = "bitmaps/options4x.pcx"
 	retailVisualsGUI      = "guis/visuals.gui"
-	// The per-page background. [07 R-FE-01 §6] names `options4x` for the root
-	// and does not describe a per-page swap, but the install ships one
-	// full-screen background per page — `OptSound4x`, `Optmusic4x`,
-	// `OptInterface4x`, `OptVisual4x` — and `OptVisual4x`'s middle column of
-	// plates lines up pixel for pixel with `VISUALS.GUI`'s authored gadget
-	// rectangles, which the bare `Options4x` leaves as empty wall.
-	// Supported inference (asset census).
-	// TODO(question): which routine selects the page background, and is it the
-	// page opener or the root's repaint? Decider: a static trace of the
-	// merge-flag window opener's bitmap argument.
+	// The per-page background. Established: the page opener itself hands it to
+	// the shared bitmap cache in the statement after the merge-flag window
+	// open, so it is the page's step and not an argument of the opener and not
+	// the root's repaint. Each of the four pages names its own — `optsound4x`,
+	// `optmusic4x`, `optinterface4x`, `optvisual4x` — and the in-battle
+	// variants of the same pages hand none, keeping the battle behind them
+	// [07 R-FE-01 §6].
 	retailVisualsBackdrop = "bitmaps/optvisual4x.pcx"
 )
 
@@ -2786,10 +2783,10 @@ type retailDisplayMode struct{ W, H int }
 // windowed surface, so the windowed arm is the applicable one and this is it
 // verbatim.
 //
-// TODO(question): nothing here stands in for the DirectDraw arm. This build
-// has no 8-bit display driver to enumerate, so there is no mode list to read;
-// if a full-screen indexed presentation ever lands, its enumeration replaces
-// the fixed list above rather than adding to it.
+// Nothing here stands in for the DirectDraw arm, and nothing needs to: this
+// build has no 8-bit display driver to enumerate, so there is no mode list to
+// read. If a full-screen indexed presentation ever lands, its enumeration
+// replaces the fixed list above rather than adding to it.
 //
 // The options page then sorts the table ascending by width and then height and
 // drops every mode below 640x480 [07 R-FE-01 §6]. The GDI list is already in
@@ -3014,12 +3011,14 @@ func (g *gameShell) retailOptionsActive() bool {
 // six interface sliders and stage buttons — have no owner in this build, and a
 // page of controls that move but change nothing reads as a defect rather than
 // as an honest gap.
-// TODO(question): how does the merge place a page whose own window record
-// carries a non-zero origin (`SOUND.GUI` is authored at (49,182))? The
-// appended gadget rectangles are window-local, and whether the opener adds the
-// page's own origin or the root's is not established. Decider: a static trace
-// of the merge-flag arm of the window opener. `VISUALS.GUI` is authored at
-// (0,0), so the question does not arise for the page built here.
+// The merge bakes the page's own window origin into every appended rectangle
+// [07 R-FE-01 §6]: when the open window authors no gadget named `PANEL` — and
+// `STARTOPT.GUI` authors none — the opener adds the page header's x and y to
+// each of the page's controls before appending them, and the root's own origin
+// is then added at draw time as it is for any gadget. `SOUNDS.GUI` is authored
+// at (0,1) and moves its whole page down a pixel; the other three pages are at
+// (0,0). The `PANEL` arm centres the page inside that gadget instead and is
+// unreachable from this root.
 func (g *gameShell) openRetailOptionsPage(page string) {
 	if !g.retailOptionsActive() || optionsAssets == nil || optionsAssets.window == nil {
 		return
@@ -3050,8 +3049,13 @@ func (g *gameShell) openRetailOptionsPage(page string) {
 		kept = append(kept, gad)
 	}
 	// The page header (index 0) is the page's own window record, not a control.
+	// Its origin is folded into every control the page contributes, because the
+	// merged list belongs to the root window from here on and only the root's
+	// origin is applied when the panel is drawn [07 R-FE-01 §6].
 	for _, gad := range pageWindow.Gadgets[1:] {
 		gad.SourceName = retailOptionsPageSource + gad.SourceName
+		gad.Rect.X += pageWindow.OriginX
+		gad.Rect.Y += pageWindow.OriginY
 		kept = append(kept, gad)
 	}
 	root.Gadgets = kept
@@ -3093,14 +3097,10 @@ func (g *gameShell) refreshRetailOptionsPage() {
 		state := &retailSliderState{travel: travel, knobSize: knobSize, arrowW: arrowW}
 		switch menuKey(gad.Name) {
 		case "vidsldr":
-			// `VIDSLDR` indexes the display-mode table, so its maximum is the
-			// last index rather than a stored constant [07 R-FE-01 §6].
-			// TODO(question): the doc gives every other slider's maximum
-			// explicitly and leaves `VIDSLDR`'s implicit in "indexes the
-			// display-mode table". The count minus one is the only maximum
-			// that reaches every row without over-running the table; it is a
-			// supported inference until the value callback's operand is
-			// traced.
+			// `VIDSLDR` indexes the display-mode table, and the page opener
+			// writes its maximum straight from that table's count minus one
+			// rather than from a stored constant — Established, unlike
+			// `GAMMA`'s literal 20 beside it [07 R-FE-01 §6].
 			state.max = len(optionsState.modes) - 1
 			state.knob = retailSliderKnob(retailDisplayModeIndex(optionsState.modes, g.display.Width, g.display.Height), travel, state.max)
 		case "gamma":
@@ -3161,23 +3161,23 @@ func (g *gameShell) setRetailShadowBits(on bool) {
 // activateRetailOptionsGadget resolves a control on the options root or its
 // merged page. It is consulted before the screen underneath, because the
 // options root is a child window over that screen [07 R-FE-01 §2].
-// retailOptionsCue is the `STARTOPT` / `PREFS` rows of the transition table's
-// cue column [07 R-FE-01 §2]: the four page buttons and `PREV` ("OK", reached
-// by Escape and Enter too) play `Options`, and `CANCEL` plays `Previous`.
+// retailOptionsCue is the cue column of the whole options family — the root's
+// `STARTOPT` / `PREFS` rows [07 R-FE-01 §2] and the merged pages' own controls
+// [07 R-FE-01 §6]. `CANCEL` alone plays `Previous`; every other control the
+// four page callbacks recognise, `RESTORE` and `UNDO` included, plays
+// `Options`. The pages' sliders are the one exception and are absent here on
+// purpose: a slider is driven by its value callback, which plays nothing, so a
+// drag or an arrow step is silent.
 //
 // It is a table of its own rather than an arm of frontendCue because that
 // function keys on the shell mode, and the options root has no mode: it is a
 // child window over whichever screen opened it, which stays the current mode
 // while it is up. The cue still runs where every other one does — in the screen
 // handler that consumes the fired result [07 R-WGT-01 §3].
-//
-// TODO(question): which cue, if any, `RESTORE` and `UNDO` play. The transition
-// table lists neither, and [07 R-FE-01 §6] describes what they write without
-// naming a cue; settling it needs the two callbacks' cue arguments. Silence
-// here rather than borrowing `Options` from the rows above.
 func retailOptionsCue(key string) string {
 	switch key {
-	case "sound", "music", "speeds", "visuals", "prev":
+	case "sound", "music", "speeds", "visuals", "prev",
+		"restore", "undo", "anti", "shading", "bshadows":
 		return "Options"
 	case "cancel":
 		return "Previous"

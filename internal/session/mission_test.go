@@ -220,10 +220,67 @@ func TestSyntheticCampaignRetainsCompositionIdentity(t *testing.T) {
 		s.Mission.Difficulty != 0 {
 		t.Fatalf("campaign identity = path %q name %q useonly %q difficulty %d", s.Mission.CampaignPath, s.Mission.CampaignMissionName, s.Mission.UseOnlyPath, s.Mission.Difficulty)
 	}
-	// TODO(question): assert this same campaign mission-name provenance through
-	// restore/continuation once a session constructor for that seam exists in
-	// the repository; the save player-table/mission-identity decoder and its
-	// constructor are the deciders. Do not reconstruct it from the OTA title.
+}
+
+// TestRetailStageMissionProvenanceFromSavedName locks the restore half of the
+// same provenance. The battle-restoration route resolves the mission from the
+// save's own `Summary` identity — `Campaign` names the campaign file and
+// `Mission` is matched against the campaign's authored mission-stub NAMES, and
+// only the matched stub's index is loaded [08 "Summary"][08 R-SAVE-02 §11].
+// Nothing reads the OTA title: the two missions here share one `.ota`, so a
+// title-derived identity could not tell them apart, and a name the campaign
+// does not author is an error rather than a silent slot 0.
+func TestRetailStageMissionProvenanceFromSavedName(t *testing.T) {
+	fs := fsFromMap(t, map[string]string{
+		"camps/TestCampaign.tdf": `
+[HEADER]
+{
+}
+[MISSION0]
+{
+    missionname=First;
+    missionfile=Valid.ota;
+}
+[MISSION1]
+{
+    missionname=Second;
+    missionfile=Valid.ota;
+}
+`,
+		"maps/Valid.ota": `
+[GlobalHeader]
+{
+    [Schema 0]
+    {
+        Type=Easy;
+        [units] { }
+        [specials] { }
+        [features] { }
+    }
+}
+`,
+	})
+	m, err := loadRetailStageMission(fs, save.Summary{
+		Gametype: GametypeCampaign,
+		Campaign: "camps/TestCampaign.tdf",
+		Mission:  "Second",
+	})
+	if err != nil {
+		t.Fatalf("loadRetailStageMission: %v", err)
+	}
+	if m.CampaignMissionName != "Second" || m.CampaignIndex != 1 {
+		t.Fatalf("restored identity = name %q index %d, want \"Second\" 1", m.CampaignMissionName, m.CampaignIndex)
+	}
+	if !strings.EqualFold(m.CampaignPath, "camps/TestCampaign.tdf") {
+		t.Fatalf("restored campaign path %q", m.CampaignPath)
+	}
+	if _, err := loadRetailStageMission(fs, save.Summary{
+		Gametype: GametypeCampaign,
+		Campaign: "camps/TestCampaign.tdf",
+		Mission:  "Third",
+	}); err == nil {
+		t.Fatal("a mission name the campaign does not author must not resolve")
+	}
 }
 
 // TestCampaignPlayerTableSidesFromAuthoredCampaignSide locks the campaign

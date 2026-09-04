@@ -190,11 +190,11 @@ func retailSummaryPanelFields(summary save.Summary, selected bool, sideNames []s
 	} else {
 		fields["SIDE"] = "???"
 	}
-	// An out-of-range Difficulty indexes past the three-entry table; the result
-	// is Unknown in retail, so nothing is rendered rather than a guessed label.
-	// TODO(question): what the `DIFF` field shows for a Difficulty outside
-	// 0..2 — decider: trace of the data adjacent to the three-entry table
-	// [08 R-SAVE-02 §3].
+	// Retail has no fourth row and no bounds check: the three labels are three
+	// consecutive stack slots the summary writer fills immediately before
+	// indexing them with the raw `Difficulty` value, so a value outside 0..2
+	// formats whatever the adjacent stack holds. There is nothing to reproduce
+	// — rendering no label is the deliberate divergence [08 R-SAVE-02 §3].
 	switch summary.Difficulty {
 	case 0:
 		fields["DIFF"] = "Easy"
@@ -216,6 +216,13 @@ func retailSummaryTime(t int32) string {
 // activateSaveLoadGadget applies one authored control of the dialog. It
 // reports whether the dialog consumed the name, so the shell's own screen
 // dispatch does not also see it.
+//
+// The dialog's cue column, from the two direction callbacks [08 R-SAVE-02 §1]:
+// `CANCEL` plays `Previous`, `DELETE` plays `SmallButton`, and the commit arm
+// of either direction plays the small-button alias — the save callback spells
+// it `smlbutton` and the load callback `SMLBUTTON`, which resolve to the same
+// authored alias because lookup is case-insensitive [02 "Sound aliases"]. The
+// two hidden direction toggles have no arm and so no cue.
 func (g *gameShell) activateSaveLoadGadget(name string) bool {
 	if !g.saveLoadPanelActive() {
 		return false
@@ -224,9 +231,11 @@ func (g *gameShell) activateSaveLoadGadget(name string) bool {
 	case saveLoadCommit:
 		g.commitSaveLoadScreen()
 	case saveLoadDelete:
+		g.playMenuCue(cueDeleteSaveSlot)
 		saveLoadUI.deleteSelected()
 		g.refreshSaveLoadPanel()
 	case saveLoadCancel:
+		g.playMenuCue(cuePreviousScreen)
 		g.closeSaveLoadScreen()
 	case saveLoadToSave:
 		saveLoadUI.SetMode(saveScreenMode)
@@ -281,6 +290,9 @@ func (g *gameShell) commitSaveLoadLoad() {
 	if !ok {
 		return
 	}
+	// The load arm's cue follows its disc gates, which this build has no
+	// backend for, and precedes the restore [08 R-SAVE-02 §1].
+	g.playMenuCue(cueSaveLoadCommit)
 	// The dialog is closed before the route runs: a continuation replaces the
 	// frontend surface and a battle restore replaces the client stage, so the
 	// dialog must not remain on the stack underneath either.
@@ -294,12 +306,18 @@ func (g *gameShell) commitSaveLoadLoad() {
 // between-missions continuation from the results panel, a live-battle bank
 // from inside a battle [08 R-CAMP-01 §8] [08 "Summary"].
 //
-// TODO(question): whether the save action closes the dialog after writing is
-// not stated — the handler's only established effects are the write itself and
-// the silent truncate-overwrite of a selected slot [08 R-SAVE-02 §1].
-// Placeholder: the dialog stays open and the list is rebuilt, so the new slot
-// is visible without a second trip through the screen.
+// The save action leaves the dialog exactly as it found it: retail's handler
+// plays its cue, writes the file when the name box is non-empty, and returns.
+// It does not close the window and — unlike `DELETE`, which re-enumerates and
+// rewrites the summary panel beside it — it does not rebuild the slot list, so
+// the slot just written is not in the list until the dialog is reopened. The
+// asymmetry with `DELETE` is what makes it deliberate rather than an omission
+// [08 R-SAVE-02 §1].
 func (g *gameShell) commitSaveLoadWrite() {
+	// The cue precedes the empty-name test, so a click on the action button
+	// with a blank name box is audible and does nothing else
+	// [08 R-SAVE-02 §1].
+	g.playMenuCue(cueSaveLoadCommit)
 	name := saveLoadUI.Name()
 	path := saveLoadUI.CommitPath()
 	if path == "" {
@@ -319,10 +337,7 @@ func (g *gameShell) commitSaveLoadWrite() {
 	}
 	if err != nil {
 		reportRetailMessageError(g.showRetailMessage(err.Error()))
-		return
 	}
-	saveLoadUI.Refresh()
-	g.refreshSaveLoadPanel()
 }
 
 // retailSaveGameID is the `Game ID` string: the C-library wall-clock time at

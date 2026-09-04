@@ -64,10 +64,13 @@ func retailSaveDir(root string) string {
 // `Summary`, or no `Description` is dropped from both lists, so it can be
 // neither loaded nor deleted through the interface [08 R-SAVE-02 §1].
 //
-// TODO(question): which of the file's timestamps the enumerator's 32-bit word
-// derives from is Unknown — the decider is a static trace of the enumerator's
-// find-data conversion [08 R-SAVE-02 §1]. Modification time is used here
-// because it is the only one every host filesystem reports.
+// The sort word is the **last-modification** time: the enumerator copies the
+// third of the four leading fields the content layer's find record carries, and
+// that record is the C run-time's find-data block, whose three time fields are
+// creation, last access and last write in that order, each a `time_t` in
+// seconds [08 R-SAVE-02 §1]. `ModTime().Unix()` below is the same quantity. An
+// entry served from an archive rather than from a loose file reads back zero
+// there; the save directory is loose-only, so that case does not arise.
 func enumerateRetailSaves(dir string) []saveGameEntry {
 	items, err := os.ReadDir(dir)
 	if err != nil {

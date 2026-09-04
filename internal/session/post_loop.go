@@ -1,19 +1,31 @@
 package session
 
-// PostLoopHooks are the seams for the three outer executor structures. The
-// retail image establishes their order but leaves the deadline-ring owner and
-// pending-record payload outside this package's current model [01 §4.4][01
-// §6.2]. Nil hooks are explicit no-ops for the single-thread runtime.
+// PostLoopHooks are the seams for the three outer executor structures, whose
+// order is Established [01 §4.4][01 R-PLAT-02 §7]. Nil hooks are explicit
+// no-ops for the single-thread runtime.
 type PostLoopHooks struct {
 	Barrier           func(index int, lastTick uint32)
 	SlideDeadlineRing func(lastTick uint32)
 	CompactPending    func(lastTick uint32)
 }
 
-// TODO(question): which subsystem owns deadline records and pending-expiry
-// callbacks, and what remaining payload do those records carry? Keep
-// production ownership behind these hooks; only the established minimal
-// deadline/callback behavior is represented here.
+// TODO(question): the record owner of the 30-entry post-loop deadline ring.
+// The reading that it is the network receive-frame window is *Supported
+// inference* — it sits beside the receive queue — and doc 01 carries it as an
+// open item whose decider is a static trace of the ring's producers [01 §4.4]
+// [01 "Missing and unknown", clock/network/determinism]. Nothing in a
+// single-player session produces a record for it, so the slide is inert
+// either way; SlideDeadlineRing stays a seam rather than a guess.
+//
+// **Correction.** This marker used to ask the same question about the
+// *pending-expiry* list as well, and the PostLoopHooks comment above claimed
+// its payload was outside this package's model. Both halves were wrong.
+// [01 R-PLAT-02 §5] establishes that list completely: it is the temporary-
+// sight ("eyeball") observer list, 20 records of 36 bytes allocated at battle
+// entry, produced by the central unit-death handler in EVERY session kind,
+// with the throttled LOS refresh as its expiry callback and an in-place
+// compaction after the pass — and this package already models it, as the
+// eyeballs field below.
 
 type postLoopState struct {
 	hooks            PostLoopHooks

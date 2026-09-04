@@ -281,6 +281,72 @@ func (s *Session) sweepPlayerGate(owner uint8) (visit, work bool) {
 	return false, false
 }
 
+// stepWaterDamage is the first act of step 9 of the per-unit visit
+// [04 R-MOV-03 §1] — the mission water-damage packet of [04 §9.2].
+//
+// The caller owns the block's control-byte 1-or-2 gate (`work`, which reads the
+// OWNER row's byte, [06 R-DMG-01 §8]). Every other gate is here, in the order
+// the research states them:
+//
+//   - the step's own `tick mod 30 == 0` cadence — the same number as step 8's
+//     health-percentage roll but a separate test;
+//   - both mission words nonzero. Ten of the 275 stock OTAs author
+//     `waterdoesdamage=1`; most of the rest author a `waterdamage` amount with
+//     the flag at zero, which is inert;
+//   - the unit's signed 16-bit height word at or below the map's sea-level
+//     byte, and the `canhover` exemption. `floater` and `amphibious` are NOT
+//     immunity at this call site [04 §9.2]. Both live in
+//     combat.IsWaterDamageEligible.
+//
+// The amount is the shared funnel's, so it is combat's: falloff 1.0 (the stored
+// blast distance is zero, so no AOE falloff), the victim's armored posture bit,
+// its definition damage modifier, and the defender veterancy reduction — a
+// veteran drowns SLOWER [04 §9.2][06 §9.2]. The packet is kind 0xB, which emits
+// neither `HitByWeapon` nor `TakeDamage`, so no COB callback runs here; a lethal
+// result sets the ordinary death-pending state that step 10 finalizes at the end
+// of this same visit.
+//
+// This composes the per-unit act from combat's exported predicates rather than
+// calling combat.TickWaterDamage, which states the same contract as its own
+// whole-world sweep over players 0..9. Retail applies water damage inside the
+// visit, between the unit's script drain and its order pumps — running a sweep
+// per visit would be both quadratic and in the wrong order.
+//
+// TODO(T25): the `healtime` self-repair of [R-SPEC-01 §4], which retail runs
+// immediately after this on ticks where `tick & 7 == 0` while health is below
+// `maxdamage`, has no implementation anywhere in this build; the definition's
+// `healtime` is compiled and unread. It belongs at this call site, right below.
+func (s *Session) stepWaterDamage(u *units.Unit, tick uint32) {
+	if s == nil || u == nil || s.World == nil {
+		return
+	}
+	if !combat.IsWaterDamageTick(tick) { // [04 §9.2] cadence
+		return
+	}
+	// Both mission words must be nonzero [04 §9.2]; they reach the session on
+	// the terrain record beside the sea-level byte they are tested against.
+	if s.World.WaterDoesDamage == 0 || s.World.WaterDamage == 0 {
+		return
+	}
+	if !combat.IsWaterDamageEligible(u, s.World) { // canhover exemption and height <= sea level [04 §9.2]
+		return
+	}
+	damageMod := int32(65536) // 1.0 [02 "Unit record"] default
+	if u.Def != nil {
+		damageMod = u.Def.DamageModifier
+	}
+	amount := combat.ComputeWaterDamageScaledAmount(s.World.WaterDamage, u.Kills, combat.UnitArmored(u), damageMod)
+	u.LastDamageCause = uint8(combat.CauseWaterDamage) // [06 §12.1] cause 11
+	u.Health = combat.ApplyDamage(u.Health, amount)    // [06 §9.1] 16-bit modular subtraction
+	if u.Health <= 0 && s.Units != nil {
+		// The owner's control byte is 1 or 2 by the caller's gate, which is
+		// also gate 2 of [06 §9.1] step 6, so the latch is admitted. Water has
+		// no attacker: the recorded-attacker link is written null by the plain
+		// Destroy arm [04 R-UNIT-06 §5].
+		s.Units.Destroy(u.Handle, units.DeathKilled) // [04 §2.4] marks Dying; step 10 finalizes it
+	}
+}
+
 func (s *Session) stepUnitPhase(tick uint32) {
 	// Begin movement's per-tick occupancy transaction for the phase-2 unit sweep.
 	if s.Movement != nil {
@@ -329,6 +395,19 @@ func (s *Session) stepUnitPhase(tick uint32) {
 				if vm := u.GetScript(); vm != nil {
 					vm.Drain(1)
 				}
+			}
+			// Step 9 of [04 R-MOV-03 §1] opens with the water-damage packet
+			// of [04 §9.2], BEFORE the two order pumps and the mover tick
+			// that close the same block — so a unit that drowns this tick
+			// takes the damage on the position its own mover left it at last
+			// tick, and its death mark is read by step 10 below.
+			//
+			// `work` is already the block's control-byte 1-or-2 gate
+			// ([06 R-DMG-01 §8]); the step's other gates — the tick%30
+			// cadence, the mission's two words, the height test and the
+			// `canhover` exemption — live in stepWaterDamage.
+			if work {
+				s.stepWaterDamage(u, tick)
 			}
 			// order resolve/pump per unit (PumpUnit) [04 §3.3]. Producers bind
 			// queues when they create them, while existing queues are bound
@@ -605,11 +684,18 @@ func (s *Session) stepSharingPhase(tick uint32) {
 // Gameplay unit retirement is intentionally absent: phase-2 slot visitation
 // owns that decision [01 §4.4].
 func (s *Session) stepResultPhase(tick uint32) {
-	// TODO(question): the fast no-human countdown site is multiplayer-only in
-	// retail, but this single-player Session has no established multiplayer
-	// mission-type mapping. Keep it out of all current mission types until the
-	// session dispatcher and its authoritative gate are identified [08
-	// "Evaluation"].
+	// The "no human left playing" countdown step is Established as
+	// kind-3-only, and needs no mission-type mapping to exclude: both
+	// live-player counters are called exclusively from the multiplayer branch
+	// of the end-condition block — "Kinds 1 and 2 never call either counter, so
+	// a single-player engine needs neither" [08 R-SESS-01 §1]. Campaign and
+	// skirmish are the only kinds this engine runs, so the site is absent by
+	// contract rather than deferred.
+	//
+	// The gate below is the commander-death rule word, reached through the
+	// mission type: a campaign battle's OTA load writes commander death = 0
+	// [08 R-SKIR-01 §4], and rule 0 "skips the sweep entirely"
+	// [08 R-SKIR-01 §3], so only a skirmish can have a pending sweep to run.
 	if s.Mission != nil && s.Mission.Type == mission.TypeSkirmish && s.Skirmish.NumPlayers > 0 {
 		s.processPendingCommanderDeaths(tick)
 	}

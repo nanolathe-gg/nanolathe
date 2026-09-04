@@ -16,11 +16,12 @@ import (
 	"github.com/nanolathe/nanolathe/internal/ui"
 )
 
-// TestOrderButtonCueFamilies locks the GUI order-button dispatcher's cue split
-// [07 §9]: the ATTACK/BLAST/FOLLOW/PATROL/MOVE families play `immediateorders`
-// and the REPAIR/RECLAIM/CAPTURE families play `specialorders`. The names go
-// through the same parser the dispatcher uses, so a change to either the parse
-// chain or the split is caught here.
+// TestOrderButtonCueFamilies locks the GUI order-button dispatcher's per-arm
+// cue column [07 §9]. The split does not follow the latch numbering: UNLOAD
+// (latch 5) is a `specialorders` arm while LOAD (latch 6) beside it is an
+// `immediateorders` arm, so a reimplementation that groups by value rather than
+// by button name fails here. The names go through the same parser the
+// dispatcher uses, so a change to either the parse chain or the split is caught.
 func TestOrderButtonCueFamilies(t *testing.T) {
 	cases := []struct {
 		button string
@@ -31,9 +32,11 @@ func TestOrderButtonCueFamilies(t *testing.T) {
 		{"ARMBLAST", cueImmediateOrders},
 		{"ARMDEFEND", cueImmediateOrders}, // DEFEND is the FOLLOW/GUARD family
 		{"ARMPATROL", cueImmediateOrders},
+		{"ARMLOAD", cueImmediateOrders},
 		{"ARMREPAIR", cueSpecialOrders},
 		{"ARMRECLAIM", cueSpecialOrders},
 		{"ARMCAPTURE", cueSpecialOrders},
+		{"ARMUNLOAD", cueSpecialOrders},
 	}
 	for _, c := range cases {
 		latch := hud.ParseButtonLatch(c.button, 1)
@@ -41,36 +44,34 @@ func TestOrderButtonCueFamilies(t *testing.T) {
 			t.Errorf("orderButtonCue(%s -> latch %v) = %q, want %q [07 §9]", c.button, latch, got, c.want)
 		}
 	}
-	// STOP, LOAD/PICKUP and UNLOAD are the three arms [07 §9] does not assign to
-	// either family; they stay silent behind the TODO(question) rather than
-	// taking a guessed cue.
-	for _, button := range []string{"ARMSTOP", "ARMLOAD", "ARMUNLOAD"} {
-		latch := hud.ParseButtonLatch(button, 1)
-		if got := orderButtonCue(latch); got != "" {
-			t.Errorf("orderButtonCue(%s) = %q, want silence while the family is unestablished", button, got)
-		}
-	}
-	// A gadget whose gate is zero parses to the idle latch and arms nothing.
+	// The idle latch is the one value the arm cannot be recovered from: STOP
+	// writes it and so does any button whose runtime gate is zero. Its cue is
+	// the caller's, so this helper stays silent.
 	if got := orderButtonCue(input.LatchNormal); got != "" {
 		t.Errorf("orderButtonCue(idle) = %q, want silence", got)
 	}
 }
 
-// TestCountedBuildCueSign locks the counted factory-queue producer's two
-// aliases [07 R-P0-11 §1]: a positive click count adds, a negative one
-// subtracts, and a zero count is not a click at all.
+// TestCountedBuildCueSign locks the counted factory-queue producer's single
+// signed test [07 R-P0-11 §1]: one or more is `addbuild`, anything else is
+// `subbuild`. The boundary is the point of the test — a `>= 0` reading would
+// make a right-click add.
 func TestCountedBuildCueSign(t *testing.T) {
-	if got := countedBuildCue(1); got != cueAddBuild {
-		t.Errorf("countedBuildCue(+1) = %q, want %q", got, cueAddBuild)
-	}
-	if got := countedBuildCue(5); got != cueAddBuild {
-		t.Errorf("countedBuildCue(+5) = %q, want %q", got, cueAddBuild)
-	}
-	if got := countedBuildCue(-1); got != cueSubBuild {
-		t.Errorf("countedBuildCue(-1) = %q, want %q", got, cueSubBuild)
-	}
-	if got := countedBuildCue(0); got != "" {
-		t.Errorf("countedBuildCue(0) = %q, want silence", got)
+	for _, c := range []struct {
+		delta int
+		want  string
+	}{
+		{1, cueAddBuild},
+		{5, cueAddBuild},
+		{-1, cueSubBuild},
+		{-5, cueSubBuild},
+		// Not reachable from a click (the count is always ±1 or ±5), but it is
+		// the arm retail's signed test takes.
+		{0, cueSubBuild},
+	} {
+		if got := countedBuildCue(c.delta); got != c.want {
+			t.Errorf("countedBuildCue(%d) = %q, want %q [07 R-P0-11 §1]", c.delta, got, c.want)
+		}
 	}
 }
 
@@ -91,6 +92,7 @@ func TestFrontendCueTable(t *testing.T) {
 		{ui.ModeSingle, "newcamp", "BigButton"},
 		{ui.ModeSingle, "anymsn", "bigButton"},
 		{ui.ModeSingle, "skirmish", "skirmish"},
+		{ui.ModeSingle, "loadgame", "BigButton"},
 		{ui.ModeSingle, "options", "options"},
 		{ui.ModeSingle, "prevmenu", "Previous"},
 		{ui.ModeMission, "start", "bigButton"},

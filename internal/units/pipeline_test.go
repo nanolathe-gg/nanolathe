@@ -108,12 +108,12 @@ func (w *World) tickUnit(u *Unit, tick uint32) {
 // combat.TickWaterDamage (its cadence gate, canhover exemption, height test,
 // veterancy scaling and kind-0xB packet are all implemented and tested).
 //
-// TODO(T25): the real gap is one level up — combat.TickWaterDamage has no
-// caller. [04 R-MOV-03 §1] places it inside the controller-1-or-2 block of the
-// per-unit visit, before the healtime self-repair and the order pumps, and the
-// session's phase-2 sweep runs that block without it. Wiring is a call site in
-// internal/session plus the two mission words on the session record, both
-// outside this unit's file ownership.
+// Closed (WU-19-175): the gap this marker named — no caller — is wired. The
+// session's phase-2 visit now runs the step at its researched place, inside the
+// controller-1-or-2 block before the order pumps (Session.stepWaterDamage), and
+// the two mission words reach it on the terrain record beside the sea-level byte
+// they are compared against (world.Terrain.WaterDoesDamage/WaterDamage). This
+// placeholder stays a placeholder for the reason above it.
 func (w *World) unitWaterDamage(u *Unit, tick uint32) {
 	_ = u
 	_ = tick

@@ -1800,12 +1800,17 @@ func sessionUnitLimit(s *Session) int32 {
 	// session composed without one (a fixture) reads the missing-value
 	// default through the same clamp.
 	//
-	// TODO(question): a restored save writes its Summary `maxunits` into the
-	// configured limit, but the pool for the battle being loaded was already
-	// sized from the pre-restore value, so the restored word only reaches the
-	// *next* battle [08 R-ENTRY-01 §6]. Where retail keeps that carried-over
-	// word between battles — and therefore what a second load in one process
-	// should read here — is untraced, so this engine drops it.
+	// TODO(T25): where the carried-over word lives IS traced — the marker that
+	// stood here said it was not. [08 R-ENTRY-01 §6] names the destination
+	// exactly: the battle-restoration dispatcher's first step is
+	// `Summary.maxunits` → the **lobby unit-limit copy**, which is the same
+	// start-up word `[Preferences] UnitLimit` seeds and battle entry clamps
+	// 20..500 [08 R-SKIR-01 §6]. The pool for the battle being loaded was
+	// already sized from that copy as it stood *before* the restore, so the
+	// restored value only reaches the next battle — and a second load in one
+	// process must therefore read it here. This engine still drops it because
+	// the write belongs at the restore site (`SkirmishConfig.UnitLimit`, set
+	// while staging a retail battle), in files this unit does not own.
 	if s == nil {
 		return int32(ClampUnitLimit(0))
 	}

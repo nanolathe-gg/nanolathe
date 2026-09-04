@@ -197,21 +197,27 @@ func (s *Session) respawnLocalCommander() bool {
 		if u := s.Units.Unit(h); u != nil {
 			if s.Econ != nil {
 				p := &s.Econ.Players[owner]
-				bonusMetal, bonusEnergy := 0, 0
-				if s.Mission == nil || s.Mission.Type != mission.TypeSkirmish {
-					bonusMetal = s.Skirmish.Players[owner].Metal * 100
-					bonusEnergy = s.Skirmish.Players[owner].Energy * 100
-					// TODO(question): locate the per-unit stored energy/metal
-					// fields and difficulty-scaled writer in the retail respawn
-					// path; the deciding trace is the kind-2 post-allocation
-					// resource write [08 R-SKIR-01 §3]. The in-scope skirmish
-					// products are zero, so no unsupported state is created here.
-				}
-				// The storage setter consumes the lobby shorts independently of
-				// the per-unit resource products; skirmish reaches rule 2 with
-				// zero products and therefore retains only the 200 floor
-				// [08 R-SKIR-01 §3][05 "Storage capacity"].
-				p.InstallStorageBonus(bonusMetal, bonusEnergy)
+				// The respawn's resource write is established in full
+				// [08 R-SKIR-01 §3] "Defeat detection": the storage-bonus
+				// setter is applied with the **multiplayer lobby record's**
+				// metal and energy shorts × 100, and the same two products
+				// are added to the new unit's stored metal/energy (× 0.5 at
+				// difficulty 0 and × 0.7 at difficulty 1 when the owner is
+				// a computer). Those shorts are written only by the multiplayer
+				// lobby, which no single-player session has, so both products
+				// are zero on every path this engine can reach: the setter's own
+				// 200 floor [08 R-SKIR-01 §5] is the whole effect, and there
+				// is no per-unit addition left to make.
+				//
+				// **Correction.** This used to multiply the *skirmish setup
+				// row's* starting metal and energy by 100 whenever the mission
+				// was absent or not a skirmish. That row is not the lobby short
+				// — it is the [200, 10000] starting-resource ladder that
+				// battle entry installs unscaled [08 R-SKIR-01 §5] — and
+				// the gate was inverted besides: skirmish is precisely the mode
+				// retail names as reaching rule 2 with zero products. The branch
+				// installed a capacity two orders of magnitude too large.
+				p.InstallStorageBonus(0, 0)
 				economy.RebuildCapacity(s.Econ, s.Units)
 			}
 			if s.Movement != nil {

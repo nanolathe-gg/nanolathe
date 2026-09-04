@@ -1603,6 +1603,21 @@ spans both streams and is fully recovered:
   entry routine draws exactly twice; it arms no interval deadline. Established
   (the cadence of the per-update routine — once per briefing-screen update
   call — is what a screen redraw is; its frame rate is not traced).
+  **Addendum (2026-09-04, WU-19-171) — the remainder is signed, and a
+  malformed range is not clamped.** Both the entry draw and the per-update
+  drift use a signed 32-bit divide, not an unsigned one: the span
+  `max − min + 1` is formed as a signed subtract and the draw is sign-extended
+  before the divide, so the remainder takes the sign of the draw and is never
+  negative. Nothing in either routine tests the bounds for sanity. A mission
+  authoring `maxwindspeed` **below** `minwindspeed` therefore gives a negative
+  span, and the entry value lands at or **above** `minWind` — it is the
+  per-update clamp that then pulls the display down, because its low clamp runs
+  first and its high clamp second, so the second wins and the speed sticks at
+  `maxWind` from the first countdown expiry onward. The one exception is
+  `maxwindspeed == minwindspeed − 1`, where the span is exactly zero and the
+  divide faults the process. A reimplementation must not substitute an unsigned
+  modulo (it would give a completely different value for a malformed range) and
+  must decide its own policy for the zero span.
 - In simulation, the wind change falls due when the global tick passes the
   wind deadline (a strict comparison); the next deadline advances by
   `((CRT draw * 10) / 0x8000 + 5) * 30` ticks — five through fourteen seconds

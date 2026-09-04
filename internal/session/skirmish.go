@@ -43,7 +43,13 @@ const (
 	SkirmishDefaultLineOfSight    = 1  // LOS enabled [08 "Skirmish configuration"]
 	SkirmishDefaultLOSType        = 1  // terrain elevations affect LOS [08 "Skirmish configuration"]
 	SkirmishNickCap               = 17 // [02 §3] 17-byte buffers
-	skirmishNickPayload           = 16 // usable chars (17 includes NUL) [02 §3]
+	// neutralSideIndex is the side ordinal that names no playable side. Every
+	// per-slot participation gate in the retail image tests it: start-position
+	// eligibility [08 R-ENTRY-01 §5], the two live-player counters
+	// [08 R-SESS-01 §1], and the post-battle score-board row condition
+	// [08 R-CAMP-01 §7].
+	neutralSideIndex    = 10
+	skirmishNickPayload = 16 // usable chars (17 includes NUL) [02 §3]
 )
 
 // The per-player unit limit a skirmish carries into battle entry. Retail reads
@@ -917,10 +923,21 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 	if nPlayersLocal > 10 {
 		nPlayersLocal = 10
 	}
-	// Build the eligible-slot list per [P0-04]: occupied, participating control
-	// state, and a non-newline placement terminator.
-	// For skirmish, slot existence = idx < NumPlayers, ctrl 1/2/3 = ControllerState 1/2/3.
-	// We use s.Econ.Players existence + controller mapping.
+	// The eligible-slot gate is Established and has three clauses, not a
+	// terminator byte: "record live, controller 1/2/3, side ≠ 10"
+	// [08 R-ENTRY-01 §5] "Kind 2 (skirmish), no save file". Slot existence is
+	// s.Econ.Players[i].Exists; the controller mapping is ControllerState 1/2/3.
+	//
+	// **Correction.** Both this list and the commander loop below carried a
+	// open-question marker saying "the placement terminator is not represented in
+	// Session". There is no placement terminator. The third clause is the
+	// slot's SIDE index tested against the neutral value 10 — the same 10 that
+	// [08 R-SESS-01 §1]'s two live-player counters and [08 R-CAMP-01 §7]'s
+	// score-board row condition test, and the same sentinel the movement
+	// sweep's own third clause carries [04 R-MOV-03 §10]. Reading `10` as a
+	// newline terminator is a byte-value coincidence. The clause is inert in
+	// this engine — a skirmish row's Side is a side ordinal and is never
+	// seated at 10 — and is written out here so the gate is the traced one.
 	var eligible []int
 	for i := 0; i < nPlayersLocal && i < 10; i++ {
 		if i >= len(s.Econ.Players) {
@@ -930,10 +947,11 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 		if !pl.Exists {
 			continue
 		}
-		// TODO(question): the placement terminator is not represented in Session;
-		// eligibility is therefore checked through controller state here.
 		cs := pl.ControllerState
 		if cs != 1 && cs != 2 && cs != 3 {
+			continue
+		}
+		if cfg.Players[i].Side == neutralSideIndex {
 			continue
 		}
 		eligible = append(eligible, i)
@@ -999,9 +1017,12 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 			continue
 		}
 		ctrl := s.Econ.Players[playerIdx].ControllerState
-		// TODO(question): the placement terminator is not represented in Session;
-		// eligibility is therefore checked through controller state here.
+		// The same three-clause gate as the eligible list above
+		// [08 R-ENTRY-01 §5].
 		if ctrl != 1 && ctrl != 2 && ctrl != 3 {
+			continue
+		}
+		if cfg.Players[playerIdx].Side == neutralSideIndex {
 			continue
 		}
 		// Side/commander lookup

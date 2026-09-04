@@ -66,9 +66,21 @@ type Terrain struct {
 	// below, it selects which of a weapon's two authored explosion-art pairs
 	// fills its single water-or-lava holder [06 R-WFX-01 §1].
 	LavaWorld bool
-	WindMin   int32         // [03 §2.2] C3/C4
-	WindMax   int32         // [03 §2.2] C3/C4
-	Tidal     numeric.Fixed // [03 §2.2] C4
+	// WaterDoesDamage and WaterDamage are the mission's two acid-water words
+	// [fmt ota]. They are the pair the per-unit sweep's water-damage step reads
+	// [04 R-MOV-03 §1] step 9: damage is applied only when BOTH are nonzero,
+	// and the amount applied is WaterDamage [04 §9.2].
+	//
+	// They live beside SeaLevel because they are its co-operands and because
+	// retail reads them, like the sea-level byte, from one set of globals
+	// loaded once with the map. The mission OTA and the map OTA are the same
+	// file on every entry path this build has — a terrain key is that OTA's own
+	// basename — so a campaign mission and a skirmish reach the same two words.
+	WaterDoesDamage int32
+	WaterDamage     int32
+	WindMin         int32         // [03 §2.2] C3/C4
+	WindMax         int32         // [03 §2.2] C3/C4
+	Tidal           numeric.Fixed // [03 §2.2] C4
 
 	// Playable insets derived at void-fixup time [P0-17]: PlayRight = Wpix-32, PlayBottom = Hpix-128.
 	PlayRight  int32 // Wpix-32 in map pixels, Wpix=CellW*16 [P0-17]
@@ -622,6 +634,14 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
 		// for canonical maps only.
 		windMin, windMax, gravity, authoredGravity = canonicalWindAndGravity(mh)
 	}
+	// The acid-water pair is OTA-only on both terrain versions: a legacy TNT
+	// header carries wind and gravity but no water words, so the mission's own
+	// globals are the only source [fmt ota][04 §9.2].
+	var waterDoesDamage, waterDamage int32
+	if mh != nil {
+		waterDoesDamage = mh.WaterDoesDamage
+		waterDamage = mh.WaterDamage
+	}
 	// Plot expansion goes through the one path in plot.go [03 §2.2], [GAP T14].
 	plot := ExpandPlot(tnt.Attributes, int(cellW), int(cellH))
 
@@ -649,6 +669,12 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
 		Gravity:         gravity,
 		AuthoredGravity: authoredGravity,
 		LavaWorld:       mh != nil && mh.LavaWorld != 0,
+		// The two acid-water words come from the same compiled globals, with
+		// the parser's own integer default 0 for an omitted key [fmt ota].
+		// A map the catalog does not carry supplies neither, which is the
+		// authored-zero case: no water damage [04 §9.2].
+		WaterDoesDamage: waterDoesDamage,
+		WaterDamage:     waterDamage,
 		WindMin:         windMin,
 		WindMax:         windMax,
 		Tidal:           tidal,

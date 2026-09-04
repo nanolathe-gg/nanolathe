@@ -157,12 +157,6 @@ func NewCampaignBriefingController(m *mission.Mission, localSide int, crt briefi
 		b.planet, b.planetIdx = ResolveBriefingPlanet("", localSide)
 	}
 	b.narrationOn = b.narrationPath != ""
-	if b.maxWind < b.minWind {
-		// TODO(question): retail's malformed maxwindspeed < minwindspeed modulo
-		// behavior is not settled. The placeholder clamps max to min, preserving
-		// a one-value display range until a probe closes it.
-		b.maxWind = b.minWind
-	}
 	b.entryWind()
 	return b
 }
@@ -194,10 +188,25 @@ func (b *campaignBriefingController) entryWind() {
 	if b == nil || b.crt == nil {
 		return
 	}
-	span := uint32(b.maxWind-b.minWind) + 1
-	// span is at least one after the malformed-range guard above, so this is
-	// the raw CRT modulo used by the briefing screen [01 §7.3].
-	b.windSpeed = b.minWind + int32(uint32(b.crt.Rand())%span)
+	// The entry draw is a *signed* remainder over the authored span
+	// [01 §7.3] — a truncating divide, so the remainder carries the sign of
+	// the CRT draw and is therefore never negative. Go's `%` on int32 is the
+	// same operation, which is why the span is not made unsigned here: an
+	// authored `maxwindspeed` below `minwindspeed` gives a negative span, and
+	// retail then displays a speed at or above `minWind`, not below it. The
+	// per-update clamp of changeWind is what pulls the display down to
+	// `maxWind` on the first countdown expiry, because its high clamp runs
+	// after its low clamp.
+	span := b.maxWind - b.minWind + 1
+	if span == 0 {
+		// `maxwindspeed == minwindspeed - 1` divides by zero and faults the
+		// retail process. Nanolathe substitutes the low bound rather than
+		// reproducing the fault; nothing in stock content reaches it.
+		b.windSpeed = b.minWind
+		b.countdown = int32(b.crt.Rand() & 0x3f)
+		return
+	}
+	b.windSpeed = b.minWind + b.crt.Rand()%span
 	b.countdown = int32(b.crt.Rand() & 0x3f)
 }
 

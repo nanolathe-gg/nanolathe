@@ -52,11 +52,17 @@ func (s *Session) TeamForOwner(owner int) int { return s.teamForOwner(owner) }
 // AllyGroup 5 is the unassigned sentinel [08 "Skirmish configuration"]
 // [GAP T14]; when it appears we treat each owner as its own hostile team
 // (100+owner) so that default skirmishes are FFA. Explicit non-sentinel
-// groups share a team. TODO(question): the retail trace names the local
-// player's first alliance row, which the end predicates now read directly
-// (victorySweep), but it does not establish how a non-local aggregate is
-// reduced to the one team name a result row prints; retain this narrow
-// unresolved corner rather than generalizing it [08 R-TRIG-01 §6].
+// groups share a team.
+//
+// This grouping is Nanolathe presentation only [I6], and the marker that used
+// to stand here — asking how retail reduces a non-local aggregate to the one
+// team name a result row prints — asked about something that does not exist.
+// [08 R-CAMP-01 §7] establishes the post-battle board exactly: ten rows of 58
+// bytes, one per player SLOT in slot order, each a 30-byte name copy and seven
+// 32-bit integers (kills, losses, energy/metal produced, energy/metal wasted,
+// score). There is no team column and no aggregation step to match. The end
+// predicates read the local player's first alliance row directly (victorySweep,
+// [08 R-TRIG-01 §6]); nothing downstream of them names a team.
 func (s *Session) teamForOwner(owner int) int {
 	if owner < 0 || owner >= 10 {
 		return owner
@@ -411,7 +417,9 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 		s.result = s.pendingResultView()
 		return false
 	}
-	if rule == CommanderDeathDeathmatch && !s.deathmatchExhausted {
+	// The rule word alone selects the terminal due's arm [08 R-SKIR-01 §3]
+	// "Defeat detection"; no exhaustion or attempt state qualifies it.
+	if rule == CommanderDeathDeathmatch {
 		s.deathmatchActive = false
 		s.settleDeathmatchRespawn()
 		return false
@@ -471,12 +479,22 @@ func (s *Session) settleDeathmatchRespawn() {
 		s.clearPendingResult()
 		return
 	}
-	// TODO(question): the retail post-9999 exhaustion transition is not traced;
-	// the deciding probe is the rule-2 defeat branch after its candidate loop.
-	// Keep the bounded-search result deterministic while that branch remains
-	// unresolved: the local owner stays eliminated, the pending result is
-	// dropped, and the next due re-arms the shared countdown so the normal
-	// defeat latch may settle [08 R-SKIR-01 §3].
+	// There is no post-exhaustion transition to find. The terminal due's arm is
+	// selected by the RULE WORD alone — "the rule word selects: 2 → respawn
+	// (...); any other value → ... in skirmish (kind 2) it writes the end latch
+	// directly" [08 R-SKIR-01 §3] "Defeat detection" — so a rule-2 session can
+	// never reach the latch write, whether the bounded search created a
+	// commander or not. Retail's create call sits inside the accepted-candidate
+	// branch; when 9999 candidates are all rejected the block simply ends with
+	// the countdown still below zero, and the next true due re-arms it to 4 and
+	// tries again 150 ticks later [08 R-TRIG-01 §6] "Countdown and latch".
+	//
+	// **Correction.** The marker that stood here said the transition was
+	// untraced, and the code it defended latched a *defeat* on the second
+	// terminal due by gating the rule-2 arm on this flag. That is invented
+	// state: it ends a deathmatch that retail keeps running. The flag is now
+	// diagnostic only — DeathmatchStatus reports that the last search exhausted
+	// — and decides nothing.
 	s.deathmatchExhausted = true
 	s.clearPendingResult()
 }

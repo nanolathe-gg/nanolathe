@@ -1709,13 +1709,28 @@ and never presented.
 The single-player screen openers use one common `.GUI` window-open path and do
 not test the returned window before installing callbacks or reading its gadget
 list. A missing GUI file therefore does not select a second authored GUI, and
-a parser rejection does not enter a caller-level recovery branch. The exact
-process-level symptom of either case is not established; in particular, this
-is not evidence that the screen proceeds with an empty layout. **Unknown** for
-the final missing/malformed-`.GUI` outcome; the absence of a caller check is
-**Established**. [07 §4] (Refined in [R-FE-01 §12]: the `MSGBOX`, `YESORNO`
-and HUD build-page openers do check the result; every front-end screen opener
-does not.)
+a parser rejection does not enter a caller-level recovery branch. **Established
+— the absence of a caller check.** [07 §4] (Refined in [R-FE-01 §12]: the
+`MSGBOX`, `YESORNO` and HUD build-page openers do check the result; every
+front-end screen opener does not.)
+
+**Closed (2026-09-04, WU-19-171) — the process-level outcome, which stood here
+as Unknown.** The window opener does not test its own result either. Its first
+act after building the search path is to ask the content layer for the file;
+when that reports nothing, it jumps over the **entire** allocate-and-parse
+block — the only block that assigns its window pointer — and lands on the
+shared tail. That pointer was zeroed in the prologue and is still zero, and the
+tail copies the window's name through it at offset 2. The store is to linear
+address 2: the process takes an access violation. There is no diagnostic, no
+fallback layout, and in particular **no empty screen** — the earlier caution
+against reading the missing caller check as "the screen proceeds with an empty
+layout" was right, and the reason is that the screen does not proceed at all.
+The malformed case differs in shape: the parse is attempted, and when it is
+rejected the opener frees the record it has just allocated and then runs the
+same tail through the freed block — a use-after-free rather than a null store,
+so its symptom is not fixed. **Established for the missing file; Established
+that no recovery branch exists for either.** A reimplementation cannot clone
+this; report the failure and refuse the screen instead.
 
 The single-player PCX backgrounds in this table — `frontendx`, `singlebg`,
 the `newcampaign4`/`newcampaign4x` choice, `dselectmap2`, and `skirmsetup4x` —
@@ -2039,7 +2054,8 @@ The repainted composition, in the order it is drawn:
   authored one per row rather than stepped: `0x87`, `0xb1`, `0xda`, `0x106`,
   `0x130`, `0x15b`. Each row's percentage is a byte, `0..100`, stored in six
   consecutive per-row percentage bytes, written by six separate loaders inside
-  the load thread.
+  the load thread. The loading transition zeroes all six on entry, as two
+  dword stores over the first and the fourth byte.
 * Each row's bar is a solid rectangle through the bar-fill routine, spanning
   `(0xcd, y)` to `(0xcd + percent*7/2, y+20)` inclusive, so a finished bar is
   351 pixels wide. The common `LIGHTBAR` entry's frame 0 is then stamped over
@@ -2062,6 +2078,22 @@ The repainted composition, in the order it is drawn:
   remapper uses for a non-negative level, so the label is lifted through
   `PALETTE.LHT` and fades back over
   fifteen repaints — three seconds at the screen's own cadence.
+
+**Established (2026-09-04, WU-19-171) — what each of the six loaders writes.**
+Each bar is its own loader's own division; there is no shared progress helper,
+and two of the six misbehave in ways a faithful screen would show.
+
+| Bar | What the loader writes |
+|---|---|
+| `Textures` | Walking the texture directory listing, `index × 100 / (count − 1)` per entry, where `index` advances on every entry (including the `logos.gaf` entry the loader skips) and `count` is the listing's file count. After the walk, `100`. |
+| `Terrain` | The map file is read in ten chunks of `size / 10` bytes and the byte is written `9, 18, 27, … 90`, one per chunk; the remainder read after the ten writes nothing. `100` is written later, by the world-setup routine, once its sort and eyeball allocations are done. |
+| `Units` | `index × 100 / unitCount` per unit record, from index 1, then `100` at the end of the pass. |
+| `Animation` | `index × 100 / entryCount` per entry — and **nothing else**. No writer anywhere sets this byte to 100, so the bar stops one entry short of full and its completion flash never fires. |
+| `3D Data` | A fixed 32-slot page table: a counter starts at 100 and is raised by 100 *before* each live slot's write, so for `n` live slots the writes are `200 / n, 300 / n, … , (n + 1) × 100 / n` — the last **exceeds 100** and the bar overruns its grille by `100 / n` percent for one repaint. `100` is written after the loop. |
+| `Explosions` | Three flat milestones with no proportional term: `20` after the first precomputed explosion table, `50` after the second, `100` after the third. |
+
+A seventh consumer sums all six and divides by six; that aggregate is not
+drawn by this screen.
 
 `LIGHTBAR` frame 0 carries authored offsets of `(19, -27)`, and the GUI frame
 blitter subtracts a frame's offsets from the pen it is given, so the
@@ -2224,7 +2256,7 @@ table before the transition.
 | `SINGLE` | `NewCamp` (N) | disc check 0 else MSGBOX (Disc 2); mount pass; cue `BigButton`; requested 10 | `NEWGAME` (play-any layout) |
 | `SINGLE` | `AnyMsn` | disc check 0; mount pass; cue `bigButton`; requested 0xe | `NEWGAME` (play-any layout) |
 | `SINGLE` | `Skirmish` (S) | disc check 1 else MSGBOX (Disc 1); mount pass; cue `skirmish`; requested 0xb | `SKIRMISH` |
-| `SINGLE` | `LoadGame` (L) | cue; opens the load dialog over `SINGLE` | `LOADGAME` (load mode) |
+| `SINGLE` | `LoadGame` (L) | cue `BigButton` (named 2026-09-04, WU-19-171 — it shares `NewCamp`'s alias); opens the load dialog over `SINGLE` | `LOADGAME` (load mode) |
 | `SINGLE` | `Options` (O) | cue `options`; opens the options root as a child window over `SINGLE` (phase 7 unchanged; `PREV`/`CANCEL` pop it) | `STARTOPT` |
 | `SINGLE` | `PrevMenu` (P) | cue `Previous`; requested 3 | `MAINMENU` |
 | `NEWGAME` | `Start` (S), or a click in `Missions`, or in `Campaign` (campaign layout) | cue `bigButton`; disc check 0 else MSGBOX; mount pass; select the campaign (§4); load the mission; failure leaves the screen; success: side records fixed (player 0 → 0, player 1 → 1), preferences saved, requested 0xf (campaign layout) / 0x10 (play-any) | `MSNBRIEF` |
@@ -2252,10 +2284,10 @@ table before the transition.
 | `RESTART` | `CANCEL` (Esc/Enter) / `Difficulty` | — | battle |
 | `HELP` | `Page` | page loaded (§7) | — |
 | `HELP` / `BRIEFING` / `GAMEOPTIONS` / `MSGBOX` / `CDCHECK` | `OK` | default close | caller |
-| `LOADGAME` (save) | `LOAD` ("OK"/Enter), `GAMES`, `GAMENAME` | writes `SAVEGAME\<name>.SAV` when the name box is non-empty (§8) | — |
-| `LOADGAME` (save) | `DELETE` | deletes the selected `.SAV`, re-enumerates | — |
-| `LOADGAME` (load) | `LOAD` / `GAMES` | validates and applies the save (§8); battle-start bit | loading screen → battle, or `MSNBRIEF` for a between-missions save |
-| `LOADGAME` | `CANCEL` | — | caller |
+| `LOADGAME` (save) | `LOAD` ("OK"/Enter), `GAMES`, `GAMENAME` | cue `smlbutton`; writes `SAVEGAME\<name>.SAV` when the name box is non-empty (§8) | — |
+| `LOADGAME` (save) | `DELETE` | cue `SmallButton` (a different alias from `SMLBUTTON`); deletes the selected `.SAV`, re-enumerates, rewrites the summary panel | — |
+| `LOADGAME` (load) | `LOAD` / `GAMES` | disc check by the save's game type else MSGBOX; cue `SMLBUTTON`; validates and applies the save (§8); battle-start bit | loading screen → battle, or `MSNBRIEF` for a between-missions save |
+| `LOADGAME` | `CANCEL` | cue `Previous`; the four enumeration allocations are freed | caller |
 | `ENDMSN` | `Start` (S) / `Missions` | disc check 0 else MSGBOX; mount pass; load the chosen mission; phase 0xd | `MSNBRIEF` |
 | `ENDMSN` | `MainMenu` (M) | phase 2, host mode 1 | `MAINMENU` |
 | `ENDMSN` | `LoadGame` / `SaveGame` | dialogs over `ENDMSN` | `LOADGAME` |
@@ -2414,23 +2446,65 @@ ascending by width then height, modes below 640×480 dropped) and writes
 the stand-alone form of the same slider; its opener branch has no live
 caller (every call site passes the merged-page flag), so it is never shown.
 
-**Supported inference (asset census, 2026-09-03) — the page background.**
-The paragraph above names `options4x` as the options root's background and
-describes no per-page swap, but the install ships one full-screen background
-per page beside it — `OptSound4x`, `Optmusic4x`, `OptInterface4x`,
-`OptVisual4x` — and each carries the plates the merged page's controls sit
-on: `OptVisual4x`'s middle column lines up pixel for pixel with
-`VISUALS.GUI`'s authored gadget rectangles (gamma at y 80–115, screen size
-at 143–197, the three two-stage buttons at 224–401), which the bare
-`Options4x` leaves as empty wall. The in-battle set is the `Igopt…x` family.
-So the merge-flag open evidently selects the page's own background as well
-as appending its gadgets. **Unknown:** which routine picks it — the page
-opener's bitmap argument, or a repaint of the root. Decider: a static trace
-of the merge-flag arm of the window opener. A second question the merge
-leaves open: how a page whose own window record carries a non-zero origin is
-placed, `SOUND.GUI` being authored at (49, 182) while `VISUALS.GUI` is at
-(0, 0); the appended gadget rectangles are window-local and whether the
-opener adds the page's origin or the root's is not established.
+**Established (2026-09-04, WU-19-171) — the page background, the page names,
+and where the merge puts a page's gadgets.** This supersedes the asset-census
+inference that stood here. That text was right about *what* is drawn —
+`OptSound4x`, `Optmusic4x`, `OptInterface4x`, `OptVisual4x`, one full-screen
+plate set per page, the in-battle `Igopt…x` family beside them, and
+`OptVisual4x`'s middle column lining up with `VISUALS.GUI`'s authored
+rectangles — and left two questions open. Both are now closed, and one of
+them was framed around the wrong file.
+
+*The background.* The page opener picks it, not the window opener and not a
+repaint of the root: each of the four page routines calls the merge-flag
+window open and then, in the very next statement, hands its own bitmap to
+the shared bitmap cache. It is a separate call, so there is no "bitmap
+argument" of the opener to look for. The in-battle arm of the same four
+routines opens the `…RT.GUI` variant and hands **no** bitmap at all, leaving
+the battle visible behind the page.
+
+*The page files.* The root's `SOUND` button opens `SOUNDS`, not `SOUND.GUI`.
+`SOUND.GUI` (7 gadgets, 517×268, authored at (49, 182)) is a different file
+this family never opens, so the earlier text's worked example of a non-zero
+page origin was about a file that is not a page. The four merged pages are
+`SOUNDS` (authored at (0, 1)), `MUSIC` (0, 0), `SPEEDS.GUI` (0, 0) and
+`VISUALS.GUI` (0, 0); the in-battle variants are `SOUNDSRT.GUI`,
+`MUSICRT.GUI`, `SPEEDSRT.GUI`, `VISUALRT.GUI`.
+
+*The placement.* The merge arm parses the page into the slot one past the
+open window's last gadget, then searches the open window's gadgets — from
+index 1, comparing the full 16-byte name field — for one named `PANEL`.
+With **no** `PANEL` it adds the *page's own* window-header x and y to every
+one of the page's gadget rectangles, as 16-bit adds. With a `PANEL` it
+zeroes that gadget's own active byte, raises the centring flag in the open
+flags, and offsets each page gadget by `(panel.w − page.w) / 2 + panel.x`
+and `(panel.h − page.h) / 2 + panel.y` — a signed C divide, truncating
+toward zero rather than an arithmetic shift, so an odd difference biases
+toward the origin on both signs. It then adds the page's gadget count to the
+open window's and copies the page's gadgets down over the page-header slot,
+discarding that header. `STARTOPT` authors no `PANEL` (its gadgets are
+`SOUND`, `SPEEDS`, `VISUALS`, `PREV`, `CANCEL`, `MUSIC`, `RESTORE`, `UNDO`),
+so the front-end family always takes the origin-add arm, and `SOUNDS`'s
+(0, 1) shifts that whole page down one pixel. The in-battle arm is the one
+that reaches the `PANEL` branch, since it synthesises the gadget.
+
+**Established (2026-09-04, WU-19-171) — the options family's cue column.**
+Every control the four page callbacks and the root callback recognise plays
+`Options`, and `CANCEL` alone plays `Previous`. That includes `RESTORE` and
+`UNDO`, which the transition table of [R-FE-01 §2] does not list: both arms
+on every page converge on a shared tail that repaints and plays `Options`.
+It also includes the two-stage and list buttons (`ANTI`, `SHADING`,
+`BSHADOWS`, `MODE`, `TEST`, `LEFTCLICK`, `UNITCHAT`, `TRACKMODE`,
+`TRACKTYPE`, `NOTRAK`, `CDPLAY`, `CDNEXT`, `CDPREV`, `CDSTOP`) and the
+video-mode button. The sliders are the exception and are silent: a knob move
+runs the slider's own value callback, and neither the `VIDSLDR` nor the
+`GAMMA` callback plays anything.
+
+**Established (2026-09-04, WU-19-171) — `VIDSLDR`'s maximum.** It is the
+mode table's count minus one, written into the slider record by the page
+opener out of the table it has just built — not a stored constant like
+`GAMMA`'s literal 20 beside it. The slider's change callback and a pointer
+to the table it indexes are installed in the same breath.
 
 **Established fact — `SPEEDS` / `SPEEDSRT`.** `GAME` (max 21) → game
 speed, applied at once through the speed setter of [R-CAM-01 §3];
@@ -5455,12 +5529,49 @@ value minus one):
 | `0xE` | MOBILEBUILD |
 
 The GUI order-button dispatcher arms the latch by parsing the button name in
-a fixed chain — STOP into the generic immediate table, then ATTACK, BLAST,
+a fixed chain, writing the parsed value only when the button's runtime gate
+value is nonzero, else writing `1`. Every matched arm clears latch-flag bit
+`0x08` and plays one of two cues.
+
+**Corrected and completed (2026-09-04, WU-19-171) — the chain and the cue
+column.** The chain used to be given here as "STOP … then ATTACK, BLAST,
 DEFEND, REPAIR, PATROL, RECLAIM, CAPTURE, UNLOAD, LOAD/PICKUP alias, and
-default MOVE — writing the parsed value only when the button's runtime gate
-value is nonzero, else writing `1`. Each armed write clears latch-flag bit
-`0x08` and plays the `immediateorders` cue (ATTACK/BLAST/FOLLOW/PATROL/MOVE
-families) or the `specialorders` cue (REPAIR/RECLAIM/CAPTURE families).
+default MOVE", and the cue as two families with three arms unassigned. Three
+things in that were wrong. **MOVE is the first test, not a default**; there
+is **no default at all** — a name matching none of the eleven returns "not
+handled", writing no latch and playing no cue, so the button falls through to
+whatever the panel handler tries next; and there is **no `PICKUP` compare**,
+only `LOAD`. Each test is a substring search (case-sensitive) over the
+gadget's 16-byte name, so `UNLOAD` must precede `LOAD` — and does. The chain
+in order, with the value written when the gate is nonzero and the cue:
+
+| # | Name tested | Latch (gate ≠ 0) | Cue |
+|---:|---|---:|---|
+| 1 | `MOVE` | `2` | `immediateorders` |
+| 2 | `STOP` | `1` | `immediateorders` |
+| 3 | `ATTACK` | `3` | `immediateorders` |
+| 4 | `BLAST` | `4` | `immediateorders` |
+| 5 | `DEFEND` | `7` | `immediateorders` |
+| 6 | `REPAIR` | `8` | `specialorders` |
+| 7 | `PATROL` | `9` | `immediateorders` |
+| 8 | `RECLAIM` | `0xC` | `specialorders` |
+| 9 | `CAPTURE` | `0xD` | `specialorders` |
+| 10 | `UNLOAD` | `5` | `specialorders` |
+| 11 | `LOAD` | `6` | `immediateorders` |
+| — | anything else | — | none; not handled |
+
+Two consequences worth stating because they are easy to get wrong. The cue
+belongs to the **arm**, not to the value: a button whose gate is zero writes
+`1` instead of its own value and still plays its arm's cue, so the split
+cannot be reimplemented as a function of the latch byte alone. And the split
+does not follow the numbering — `UNLOAD` (5) is special while `LOAD` (6)
+beside it is immediate. `STOP` is the one arm that ignores the gate: it
+always writes `1`, builds its own order descriptor from the name and
+transmits it immediately, then plays `immediateorders`. On stock content both
+aliases resolve to the same sample (`immediateorders` and `specialorders` are
+both authored as `button5` in `allsound.tdf`), so the distinction is
+inaudible in the shipped install and audible only under replaced sound data.
+
 Latch-flag bit `0x40` selects immediate-versus-special helptext, bit `0x20`
 marks placement-valid pending, and bit `0x08` additionally gates placement
 drawing; the dispatcher clears bit `0x08` while the Escape cancel path clears
@@ -5500,6 +5611,29 @@ gadget instead of writing its status word. Stock gadget names are
 button artwork, not `text=` fields. The unit-side fields, their two-bit masks,
 the acceptance flags, and the simulation consumers are
 [04 §3.4a][R-STANCE-01 §1][R-STANCE-01 §2].
+
+**Established (2026-09-04, WU-19-171) — the battle-panel handler's own chain,
+and where the two dispatchers above sit inside it.** One callback receives
+every click on the command window and tests the gadget's name against a
+substring chain of its own before it reaches either producer described above:
+
+1. `PREV` — raises a bit of one interface byte; **no cue**.
+2. `NEXT` — raises a different interface bit; **no cue**.
+3. `ORDERS` — raises a third bit and plays the **`ordersbutton`** cue.
+4. `BUILD` — raises a fourth bit and plays the **`buildbutton`** cue.
+5. A build-product gadget whose name resolves to a definition id whose
+   `BMcode` byte is zero: arms MOBILEBUILD and plays `addbuild`
+   (the branch already described under "Build placement is closed").
+6. The stance / on-off / cloak handler above.
+7. The order-button dispatcher above.
+8. If neither of those consumed the click and the selected unit's flag bit 4
+   is set, the counted factory-queue producer ([R-P0-11 §1]) with the signed
+   count from the button identity and the live Shift query.
+
+So the stance handler is consulted **before** the order-button dispatcher,
+which is why `MOVEORD` and `FIREORD` never reach the latter's `MOVE` test
+even though their names contain it. `ordersbutton` and `buildbutton` are
+ordinary authored aliases; on stock content both resolve to `butnmbl1`.
 
 Build pages are driven by `CANBUILD`, `BUILDER.GUI`, per-builder GUI files,
 and side/build GAF assets. A builder’s available products are patched into
@@ -5690,8 +5824,8 @@ Shift+right-click. The "immediate queue path" phrasing of the build-placement
 paragraph above is superseded by this: the path is a counted producer that
 never purges — the Shift axis scales the count, not the queue mode.
 
-The counted-add routine plays the `addbuild`/`subbuild` cue (local player;
-positive counts only), routes the stockpile buttons `MAKENUKE`/`MAKEANTI` to the
+The counted-add routine plays the `addbuild`/`subbuild` cue (see the
+correction below), routes the stockpile buttons `MAKENUKE`/`MAKEANTI` to the
 `BUILDWEAPON` order descriptor and everything else to the
 `MOBILEBUILD`/`BUILDINGBUILD` descriptors from the product definition, then
 coalesces the signed count into the queue:
@@ -5713,6 +5847,17 @@ coalesces the signed count into the queue:
 Counted nodes keep their descriptor flags, including the counted-production
 flag the button counter filters on; the world-order shift-chain flag does not
 participate on this path.
+
+**Corrected (2026-09-04, WU-19-171) — the cue's gate.** The parenthetical
+above read "(local player; positive counts only)", which left `subbuild`
+with no producer at all. The routine's first statement is the local-player
+test — the selected builder's owning-player byte against the local-player
+byte — and inside it a **single signed test on the count**: one or more plays
+`addbuild`, anything else plays `subbuild`. There is no third arm and no
+silent case; the cue runs before the descriptor routing and before the queue
+coalesce, so a click that ends up changing nothing is still audible. Zero is
+not reachable from a click (the count is always ±1 or ±5) but it is on the
+`subbuild` side of the test.
 
 ##### Queue-count display (R-P0-11 §2)
 
@@ -7825,11 +7970,11 @@ section rather than deleted.
   `screenchat` filter polarity is closed in [R-HUD-03 §14]; the single-player
   transition graph, movie machine, campaign continuation, error dialogs and
   registry write census are closed in [R-FE-01].)
-- Process-level outcome of a missing or parser-rejected required `.GUI` file,
-  and of malformed HATTFONT or malformed GAF payloads whose decoders return
-  null; the front-end screen openers do not check the open result (the
-  `MSGBOX`/`YESORNO`/build-page openers do, [R-FE-01 §12]) · §5 · static
-  trace.
+- Process-level outcome of malformed HATTFONT or malformed GAF payloads whose
+  decoders return null · §5 · static trace. (The missing/parser-rejected
+  `.GUI` outcome is closed in §5 "Frontend asset failure boundaries",
+  2026-09-04: the opener stores through a null window pointer and the process
+  faults.)
 - Battle HUD optional-asset fallback beyond the closed `intgaf` panel entries,
   side fonts, authored GUI page, page GAF, support GAF, and common-button
   resolution · §6 · static trace.

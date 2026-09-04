@@ -888,7 +888,9 @@ The common-tail mission loader validates a global header block and required keys
 
 Schema choice precedes placement record instantiation so all peers agree on the same schema. Campaign mode tries difficulty literals in a difficulty-dependent permutation: difficulty zero tries Easy, Medium, Hard; one tries Medium, Easy, Hard; two tries Hard, Medium, Easy; any other difficulty value fails. Skirmish and multiplayer modes try Network 1 through Network 4 in order, counting per-schema start-position specials by scanning for the StartPos prefix. A candidate is accepted when its start-position count equals the counted player count, or the counted player count is zero (the candidate still needs at least one StartPos), or — while no exact match has been found — this candidate's count is the largest seen so far; the last accepted schema name is copied out and fed to the placement builder (after an exact match only later equal-count candidates overwrite it; in the fallback only a strictly larger count does). The counting of lobby players uses non-zero slot occupancy for skirmish and a distinct closed-value sentinel for the multiplayer path, both dense when the lobby is densely packed but counted as last occupied index plus one. [P0-04]
 
-Start-position eligibility is established as three conjuncts: the ten fixed player slots are scanned in order, a slot participates only when its base value is non-zero, its control value is one, two, or three, and its terminator byte is not the newline sentinel. Special records that fail the StartPos prefix test are ignored for this purpose. [P0-04]
+Start-position eligibility is established as three conjuncts: the ten fixed player slots are scanned in order, a slot participates only when its base value is non-zero, its control value is one, two, or three, and its **side index is not the neutral value 10**. Special records that fail the StartPos prefix test are ignored for this purpose. [P0-04]
+
+*Correction (2026-09-04, WU-19-173) — the third conjunct is the side index, not a "terminator byte".* This paragraph previously named the third clause "its terminator byte is not the newline sentinel". There is no terminator byte in the gate; the byte is the slot's side index and the sentinel is the decimal value `10`, which happens to be the code point of a newline — a value coincidence, not a string terminator. The reading is settled from three independent sites in this document that all test the same word: [R-ENTRY-01 §5] states the kind-2 stamp gate as "record live, controller 1/2/3, **side ≠ 10**"; [R-SESS-01 §1]'s two live-player counters "both first require the slot's record to exist ... and the slot's side index to differ from `10`"; and [R-CAMP-01 §7]'s score-board row condition requires that "its side is not the neutral 10". Doc 04 carries the parallel sentinel for the movement sweep's own third clause, where the byte is the ally-group byte rather than the side index and the same `10` marks a row that was never seated ([04 R-MOV-03 §10]). The "terminator" wording had propagated into implementation comments as an open question about state the session was supposed to be missing; nothing is missing. Established.
 
 ### Randomization for skirmish starts — Established [P0-04]
 
@@ -5625,9 +5627,7 @@ existence rule). Directory entries `.` and `..` are excluded; nothing else
 is filtered by attribute. The enumerator records one 32-bit time word per
 entry and the list is then **bubble-sorted ascending on that word**, so the
 oldest file is first and the newest last (when no time keys are supplied the
-same sorter orders by string compare). Which of the file's timestamps the
-32-bit word derives from is **Unknown** — decider: static trace of the
-enumerator's find-data conversion. Each file's `Summary` account is then
+same sorter orders by string compare). Each file's `Summary` account is then
 opened (filtered open, nothing else read) and its `Description` string is
 taken; a file with no readable bank, no `Summary`, or no `Description` is
 **dropped from both the name list and the display list** (the name list is
@@ -5645,6 +5645,34 @@ prompt. `DELETE` removes `SAVEGAME\<selected file name>` through the
 file-delete call, ignores the result, rebuilds the list and refreshes the
 panel; there is no confirmation. `CANCEL` returns to the previous screen and
 frees the name, description, side-name and radar buffers.
+
+**Closed (2026-09-04, WU-19-171) — which timestamp the sort word is.** It is
+the file's **last-modification** time, as a `time_t` in seconds. The
+enumerator copies the fourth dword of the record the content layer's
+directory walk fills; that record is the C run-time's find-data block, whose
+leading fields are the attribute word and then three times in the order
+creation, last access, last write. The same walk serves entries out of the
+archives, and its archive branch writes zero into all three time fields and
+puts the entry size where a loose entry's size would be — so an archived
+entry sorts as time zero. The save directory is loose-only, so that case does
+not arise for this list; it does mean the word is not usable as a timestamp
+for archive-backed listings elsewhere.
+
+**Closed (2026-09-04, WU-19-171) — what the save action does *not* do, and
+the dialog's cue column.** The save handler's whole body is: an in-battle-only
+clear of one GUI-context list head, the `smlbutton` cue, and — when the
+`GAMENAME` text is non-empty — the path build and the write. It does **not**
+close the window and does **not** re-enumerate the list, so the slot just
+written is absent from `GAMES` until the dialog is reopened. That is
+deliberate rather than an omission: `DELETE`, three arms earlier in the same
+callback, does re-enumerate and does refresh the summary panel. The cues, from
+the two direction callbacks: `CANCEL` plays `Previous` in both; `DELETE` plays
+`SmallButton` (a distinct authored alias — `butscro2` — not a case variant of
+`SMLBUTTON`); the save direction's commit arm plays `smlbutton` **before** the
+empty-name test, so an action click with a blank name box is audible and does
+nothing else; the load direction's commit arm plays `SMLBUTTON` after its disc
+gates pass and before the restore. The two route buttons are hidden in both
+directions and have no arm, hence no cue.
 
 ### Closed — the Load Game screen and every load diagnostic, verbatim [R-SAVE-02 §2] (2026-08-29)
 
@@ -5711,9 +5739,20 @@ and `MISSION` is the `Map` string. `TIME` formats the `Game Time` integer
 `(t / 1800) mod 60`, seconds `(t / 30) mod 60` — signed divisions truncating
 toward zero. `SIDE` is the side-name table entry indexed by `Side`, or `???`
 when the table is absent. `DIFF` is `Easy`, `Medium`, `Hard` indexed by
-`Difficulty`; an out-of-range value indexes past the three-entry table
-(**Unknown** result — decider: trace of the adjacent data). Every panel
-field defaults to the empty string when no entry is selected. [Established]
+`Difficulty`. Every panel field defaults to the empty string when no entry is
+selected. [Established]
+
+**Closed (2026-09-04, WU-19-171) — the out-of-range `Difficulty`, which stood
+here as Unknown.** There is no fourth row and no clamp. The three labels are
+not a table in the image at all: the panel writer stores the three string
+pointers into three consecutive **stack** slots immediately before reading the
+`Summary` integer, then indexes those slots with the raw value and formats the
+result through `%s`. A `Difficulty` outside `0..2` therefore formats whatever
+the neighbouring stack holds — its own scratch buffer for `3`, and further
+frame content beyond — so there is no defined text to reproduce, and a value
+large enough sends a non-pointer through the formatter. A reimplementation
+should render nothing for an out-of-range value rather than invent a fourth
+label.
 
 ### Closed — in-game options: when the buttons are greyed [R-SAVE-02 §4] (2026-08-29)
 
@@ -7701,14 +7740,9 @@ a single-player implementation.
   itself is stack leftover, not derived from game state, so it is Unknown **by
   construction**: no further trace can settle it, and a reimplementation must
   choose a policy rather than reproduce a value.
-- Which file timestamp the save-list enumerator's 32-bit sort key derives
-  from · [R-SAVE-02 §1] · static trace of the enumerator's find-data
-  conversion.
 - The `GAMENAME` edit gadget's admitted character set and length, and the
   code page of the file name · [R-SAVE-02 §1], doc 07 · static trace of the
   GUI edit-control key filter.
-- The result of an out-of-range `Difficulty` in the summary panel ·
-  [R-SAVE-02 §3] · static trace of the adjacent data.
 - Which descriptor-class virtual the unit loader invokes on the restored
   head order's sub-object after both queue segments are rebuilt (it is
   called only when the head record carries a sub-object) · [R-SAVE-02 §11],
