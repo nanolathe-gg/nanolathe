@@ -46,9 +46,9 @@ func FeatureShadowEnabled(options uint32) bool {
 // under the subject supplies the half-height shear, and the whole shadow sits
 // five pixels right of the body [03 §5.3][03 R-REN-03D §3].
 //
-// This previously omitted the five-pixel offset and carried "the residual water
-// flag and exact aircraft-height behavior remain TODO(question)". Both are
-// answered and the marker is retired.
+// This previously omitted the five-pixel offset and carried an open-question
+// marker, "the residual water flag and exact aircraft-height behavior remain
+// unresolved". Both are answered and the marker is retired.
 //
 // There is no water flag. What the marker was reaching for is the mobile
 // silhouette branch's waterline erase, which is computed, not authored: with

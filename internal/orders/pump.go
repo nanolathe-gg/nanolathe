@@ -98,25 +98,42 @@ type Node struct {
 	RetailSubtypeWords16 []uint16
 	RetailSubtypeWords32 []uint32
 	// CaptionPending is the ONE-SHOT caption-pending flag of [04 §3.2] — one
-	// of the two runtime bits the record's static-mask copy carries that no
-	// static descriptor mask sets. The shared caption clear tests it, clears
-	// it, and only then emits status kind 5 (`ok`) [04 R-ORD-01 §1]. Without
-	// it a record that re-arms forever re-emits the acknowledgement voice on
-	// every phase-0 re-entry, which [R-PATH-01 §14]'s composition (item 4)
-	// states the steady state must NOT do: "silent and unbounded ... no
-	// motion, no engine cue".
+	// of the runtime bits the record's static-mask copy carries that no static
+	// descriptor mask sets. The shared caption clear tests it, clears it, and
+	// only then emits status kind 5 (`ok`) [04 R-ORD-01 §1]. Without it a
+	// record that re-arms forever re-emits the acknowledgement voice on every
+	// phase-0 re-entry, which [R-PATH-01 §14]'s composition (item 4) states the
+	// steady state must NOT do: "silent and unbounded ... no motion, no engine
+	// cue".
 	//
-	// It is a field rather than a bit of StaticGate/Flags because retail's bit
-	// value is not established and the retail save word is `StaticGate |
-	// Flags`, so inventing a position there could collide with a real static
-	// bit and corrupt a restored record.
+	// Its writer is now Established (WU-19-159, [04 R-ORD-01 §13]) and it is
+	// NOT the record constructor: the constructor leaves the static-mask copy
+	// at the descriptor's own mask. The bit is armed by the ONE producer-side
+	// insertion helper — this package's Push — and only there. The handler head
+	// insert (PushHead), the patrol-chain tail append and the pump's own idle
+	// refill all leave it clear, so a spawned or auto record never speaks.
 	//
-	// TODO(question): [04 §3.2] and [04 R-ORD-01 §1] name the flag's tester
-	// and its clearer but not its WRITER — nothing in the corpus says which
-	// site arms it. This build arms it at record insertion (newNode), which
-	// reproduces the observable contract: one acknowledgement per issued
-	// order, silence on every later visit to the same record. Tracing the
-	// arming site would settle whether some issuers leave it clear.
+	// Retail's producer insertion arms the bit before it chooses a segment, so
+	// a rear-segment record issued that way is armed too. PushSecondary does
+	// not arm it, because in this build that one method serves both the
+	// producer insertion and the handler spawn, and only the former should.
+	// The distinction is inert: the two rear-segment descriptors are
+	// `BuildWeapon` and `SelfDestruct` [04 R-ORDER-02 §1], and neither calls
+	// the caption clear in [04 R-ORD-01 §2]'s contracts.
+	//
+	// It is a field rather than a bit of StaticGate/Flags because the retail
+	// save word is `StaticGate | Flags` and the traced bit position collides
+	// with nothing this build allocates there; keeping it separate is what
+	// stops a restored record from inheriting an invented static bit.
+	//
+	// TODO(T25): the arming is conditional in retail — the insertion helper
+	// takes a queued/non-queued argument and arms the bit only on the
+	// NON-QUEUED (Replace) issue, so a Shift-queued order is inserted silent.
+	// This package's Push carries no such argument: a non-queued issuer signals
+	// itself by calling PurgeUnprotected first, which is caller-side state Push
+	// cannot see. Wiring it needs Push to take the modifier the caller already
+	// knows (Replace vs Append) — a signature change whose callers are in
+	// internal/session, internal/hud and internal/ai, outside this unit.
 	CaptionPending bool
 }
 
@@ -601,9 +618,14 @@ func BindQueueBinding(u *units.Unit, b *QueueBinding) *Queue {
 // Memory safety belongs at admission, not in the running queue.
 // Corpus: TestCorpusQueueCaps_Retail (internal/orders/corpus_caps_test.go)
 // measures maxPrimary 105+ uncapped and maxSecondary 1.
-// TODO(T23): exact allocator zero-fill byte count for order nodes (retail
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// used a different memset length but observable effect is zeroed.
+// Retired (WU-19-159). A T23 marker stood here asking for "the exact allocator
+// zero-fill byte count for order nodes", on the premise that retail might have
+// memset some prefix of the 86-byte record [04 §3.2] and left the rest holding
+// heap residue. There is no such count and no such residue: the allocation is a
+// plain untyped 86-byte request and the record constructor then writes EVERY
+// field of the record — no memset participates. The two fields that are not
+// simply zeroed are the deadline, which starts at the -1 sentinel, and the
+// static-mask copy, which starts as the descriptor's own mask [04 R-ORD-01 §13].
 const OOMGuardQueue = 10000
 
 func (q *Queue) LenPrimary() int {
@@ -1003,10 +1025,10 @@ func newNode(id ID, n Node) *Node {
 	if nn.Deadline == 0 {
 		nn.Deadline = -1
 	}
-	// Arm the one-shot caption-pending flag [04 §3.2]. Insertion is where the
-	// static-mask copy is taken, so it is where the runtime bits the copy
-	// carries are armed; see the TODO(question) on Node.CaptionPending.
-	nn.CaptionPending = true
+	// The caption-pending flag is deliberately NOT armed here. The record
+	// constructor writes the static-mask copy from the descriptor's own mask and
+	// arms no runtime bit at all [04 R-ORD-01 §13]; the arming belongs to the
+	// producer-side insertion helper, which is Push / PushSecondary below.
 	node := &Node{}
 	*node = nn
 	return node
@@ -1195,6 +1217,23 @@ func (q *Queue) DropLeadingAutoOps() {
 	}
 }
 
+// Push is the producer-side insertion — the one helper the HUD, the AI, COB,
+// the mission spawner, rally inheritance and factory completion all enter
+// through [04 §3.3]. It arms the record's caption-pending flag, drops leading
+// auto/default records, and inserts immediately after the active marker.
+//
+// TODO(T25): retail's producer insertion has a second branch this build does
+// not model. A record whose descriptor's STATIC mask carries bit 5 (0x20) or
+// the rear-segment bit 18 does not take the insert-after-marker path at all: it
+// HEAD-inserts into the segment bit 18 selects, inherits the displaced head's
+// auto-op flag, and never touches the active marker [04 R-ORD-01 §13]. Bit 5 is
+// carried by `Paralyze`, `BeCarried`, `GetBuilt`, `SelfRepair`, `WaitForAttack`,
+// `Guard_NoMove`, the cloak pair, the activation pair and the two standing-order
+// descriptors — so in retail a paralyzer hit lands at the FRONT of the queue,
+// which is what makes [04 R-ORD-01 §2]'s "later paralyzer hits add to p1 of the
+// waiting head record" reachable. Routing them here changes the order of a
+// fresh factory product's `BeCarried`/`GetBuilt` pair, so it belongs to a unit
+// that owns internal/construction's expectations, not to this one.
 func (q *Queue) Push(id ID, n Node) {
 	if q == nil {
 		return
@@ -1217,24 +1256,27 @@ func (q *Queue) Push(id ID, n Node) {
 		q.DropLeadingAutoOps()
 	}
 	node := newNode(id, n) // [04 §3.3][05 "Queue insertion"] C9
+	// Arm the one-shot caption-pending flag. The producer-side insertion helper
+	// is its only writer [04 R-ORD-01 §13]; see the TODO(T25) on
+	// Node.CaptionPending for the half that still needs the caller's queue
+	// modifier.
+	node.CaptionPending = true
+	// The inserted record takes the active marker unconditionally, and the
+	// record that held it loses it [04 R-ORD-01 §13]. That is what makes
+	// repeated interface adds queue FIFO behind the running order; when nothing
+	// held the marker the record still lands at the TAIL, and still takes the
+	// marker, so the following add queues behind it rather than at the head.
 	act := findActive(q)
 	if act >= 0 {
 		pos := act + 1
 		q.primary = append(q.primary, nil)
 		copy(q.primary[pos+1:], q.primary[pos:])
 		q.primary[pos] = node
-		// The marker moves to the inserted node, so repeated interface adds
-		// queue FIFO directly behind the running order [04 §3.3][05 "Queue
-		// insertion"]; the decompile confirms the mark relocates
-		// (notes/construction/04_factory_lifecycle.md).
 		q.primary[act].Flags &^= FlagActive
-		node.Flags |= FlagActive
 	} else {
 		q.primary = append(q.primary, node)
-		if len(q.primary) == 1 {
-			node.Flags |= FlagActive
-		}
 	}
+	node.Flags |= FlagActive
 }
 
 // PushHead is the handler-side head insert [04 R-ORD-01 §1]: a record a
@@ -1256,12 +1298,14 @@ func (q *Queue) Push(id ID, n Node) {
 // the descriptor's static mask; since WU-18-0 corrected newNode both insertion
 // paths produce a record with an empty gate unless the caller asks for one.
 //
-// TODO(question): the active marker's behavior at a head insert is not
-// established — [04 R-ORD-01 §1] describes the link and the auto-flag
-// inheritance and says nothing about the insertion-point marker. The marker is
-// left on the displaced record here, so a later interface Append still queues
-// behind the order that spawned this one rather than between the two. A trace
-// of the head-insert helper's writes to the marker word would settle it.
+// Settled by trace (WU-19-159). The head-insert helper writes the link, the
+// owner and the inherited auto-op flag and **nothing else** — it never reads or
+// writes the active-marker word [04 R-ORD-01 §13]. So the marker stays exactly
+// where it was, including "nowhere": a spawn into an empty segment leaves the
+// segment unmarked, and the next producer insertion then appends at the tail.
+// The ensureSingleActive call that used to close this function contradicted
+// that — it handed the marker to the new head whenever no record held one,
+// which is a marker retail does not create.
 func (q *Queue) PushHead(id ID, n Node) *Node {
 	if q == nil {
 		return nil
@@ -1277,7 +1321,6 @@ func (q *Queue) PushHead(id ID, n Node) *Node {
 		node.Flags |= q.primary[0].Flags & FlagAutoOp // inherit the displaced head's auto flag [04 R-ORD-01 §1]
 	}
 	q.primary = append([]*Node{node}, q.primary...)
-	q.ensureSingleActive() // an empty segment's new head takes the marker [04 §3.3]
 	return node
 }
 

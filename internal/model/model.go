@@ -229,14 +229,27 @@ type xformNode struct {
 // to a unit's world position must therefore negate the Z component; the model
 // path does this in its projection, and the selection quad does it explicitly.
 //
-// TODO(question): [03 §2.4] says a muzzle flare reuses "the pristine post-load
-// vectors without a second negation" and appears at world `unit + offset`, which
-// contradicts the projection's Z negation above — under that reading a nose
-// muzzle sits behind the unit. [03 §2.4] flags the heading-zero nose mapping as
-// a supported inference with a probe (`ta_probe_xz`) still pending, so the sim
-// consumers of ComposePiece (weapon muzzles, cargo attach, factory build plate)
-// still add the offset unnegated and are a half circle out at every heading.
-// Settling the probe settles them; do not flip those signs on this note alone.
+// TODO(question): which sense of Z the sim-side consumers of a composed piece
+// offset owe. [03 §2.4] says a muzzle flare reuses "the pristine post-load
+// vectors without a second negation" and appears at world `unit + offset`,
+// against the projection's `hi16(-vz)` above; the disagreement is a MIRROR in Z
+// alone, not a rotation — X composes with the same sign on both paths — and it
+// is worth twice the piece's authored depth offset, tens of world units on a
+// long-barrelled model. Three sibling consumers, three states: the factory
+// build plate is settled by the stock yard maps [05 "Factory production
+// lifecycle"], the nano source point is a Supported inference for the negated
+// form derived from the two projections it must agree with [03 §5.5 "The nano
+// source point's coordinate space"], and the weapon muzzle is explicitly
+// Unknown at the submission site [06 §4.1 "Unknown — the sense of 'added to the
+// unit's world position'"]. The decider named by all three is the `ta_probe_xz`
+// fixture of [03 §2.4] (child translation signs at headings 0/90/180/270),
+// which [03 §2.4] also still needs for the heading-zero nose mapping — that
+// mapping is a Supported inference, not Established.
+//
+// Until it runs, the sim consumers here (weapon muzzle, cargo attach) add the
+// offset unnegated, which is the arm [03 §2.4]'s own worked example states. Do
+// not flip those signs on this note alone, and do not flip them one consumer at
+// a time: the three either share the mirror or none of them does.
 // Each piece rotates about its own origin FIRST then translates [03 §2.4] C21.
 // Applying the transform replays the chain with float trig round-to-nearest
 // per [03 §2.4] (I2 allowlist: model draw trig), not fixed-point tables [03 §2.4] C25.

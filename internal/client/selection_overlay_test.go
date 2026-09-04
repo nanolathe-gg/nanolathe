@@ -100,14 +100,28 @@ func TestSelectionDragDegenerateInnerWritesNoInnerFrame(t *testing.T) {
 	}
 }
 
-func TestSelectionDragUnknownPanelModeDoesNotInventClip(t *testing.T) {
+// The rail's state does not gate the overlay. The viewport subrect this clip
+// comes from has one writer, which hard-codes left 128 and top 32 and never
+// consults the rail [03 §4.1]; both readings of the clip in [R-SEL-02A] draw
+// the rectangle and disagree only about its left edge. This test previously
+// asserted the opposite — that a drag with VisiblePanel clear emitted nothing —
+// which locked a third arm neither reading offers and made a drag started while
+// the rail was mid-slide invisible for the whole gesture (WU-19-160).
+func TestSelectionDragDrawsWithThePanelAwayFromItsVisibleDetent(t *testing.T) {
 	c := &Client{width: 200, height: 100, indexed: make([]uint8, 200*100), pal: &palette.Tables{}}
+	c.pal.Logical[15] = 4
 	for i := range c.indexed {
 		c.indexed[i] = 77
 	}
 	c.SetSelectionDrag(SelectionDrag{Active: true, StartX: 140, StartY: 40, EndX: 144, EndY: 44})
 	c.drawSelectionStage()
-	if got := c.indexed[40*c.width+140]; got != 77 {
-		t.Fatalf("unknown panel mode emitted pixel %d; clip behavior must remain unresolved", got)
+	if got := c.indexed[40*c.width+140]; got != 4 {
+		t.Fatalf("drag with the panel off its detent emitted pixel %d, want outer entry 15 -> physical 4", got)
+	}
+	// The clip is unchanged too: a pixel left of column 128 stays untouched.
+	c.SetSelectionDrag(SelectionDrag{Active: true, StartX: 120, StartY: 40, EndX: 124, EndY: 44})
+	c.drawSelectionStage()
+	if got := c.indexed[40*c.width+120]; got != 77 {
+		t.Fatalf("drag left of the viewport clip wrote pixel %d, want the clip to reject it", got)
 	}
 }

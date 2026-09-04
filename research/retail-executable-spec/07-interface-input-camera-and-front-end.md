@@ -4746,11 +4746,24 @@ mode/panel capture records the descriptor at the selection draw. Neither
 earlier tuple may be used as a universal canonical value.
 
 **Established palette/remap.** The rectangular outline's outer color is
-logical map entry 4 in ordinary box-selection mode, entry 6 for the armed
-build/wake variant, and entry 15 outside that mode; its inner frame is entry
-0. Each is looked up once through the logical-to-physical palette map before
-the solid indexed writer. The outline is neither fog-remapped nor blended;
-raw GAF image bytes and this semantic map path must not be conflated.
+logical map entry **15** for an ordinary drag-selection rectangle; the 6/4 pair
+replaces it only while the armed latch is MOBILEBUILD — entry 6 when the
+site-valid bit is set, entry 4 when it is clear. Its inner frame is entry 0.
+Each is looked up once through the logical-to-physical palette map before the
+solid indexed writer. The outline is neither fog-remapped nor blended; raw GAF
+image bytes and this semantic map path must not be conflated.
+
+**Correction (2026-09-04, WU-19-160).** The paragraph above read "outer color
+is logical map entry 4 in ordinary box-selection mode, entry 6 for the armed
+build/wake variant, and entry 15 outside that mode". That is the inverted
+reading [03 R-SEL-02A] corrected on 2026-08-31 and this copy was never brought
+into line, leaving two sections of the spec disagreeing about which entry the
+ordinary case takes. It is observable which way round it goes: logical 4
+resolves to a dark red, so a build following the old text paints every
+selection drag red instead of white. The conditioning term is the armed latch,
+never the existence of a drag. Which bit picks 6 over 4 is now closed too — it
+is the pointer-flags site-valid bit, [R-CAM-01 §14] step 1, not the latch-flags
+helptext bit.
 
 **Unknown.** The static evidence does not show a per-selected-unit plate
 pass, an extra primary-selection wireframe/chrome rule, or an authored plate
@@ -5451,7 +5464,12 @@ families) or the `specialorders` cue (REPAIR/RECLAIM/CAPTURE families).
 Latch-flag bit `0x40` selects immediate-versus-special helptext, bit `0x20`
 marks placement-valid pending, and bit `0x08` additionally gates placement
 drawing; the dispatcher clears bit `0x08` while the Escape cancel path clears
-bit `0x20`. The latch writers are now census-complete: the order-button
+bit `0x20`. **This word is not the one the drag rectangle's colour reads
+(2026-09-04, WU-19-160).** The "special latch flag" of §6 and [R-SEL-02A] is
+bit 6 of the **pointer-flags** byte — the site-valid bit of [R-CAM-01 §14]
+step 1 — and the two bytes were conflated because both bits are written `0x40`.
+Nothing in the build-button handler touches this helptext word, which is why a
+census of it found no writer for a question that was never about it. The latch writers are now census-complete: the order-button
 dispatcher arms `1..9`, `0xC`, `0xD`; the battle-HUD build-button handler arms
 `0xE` (MOBILEBUILD) when the product's `BMcode` byte is zero, storing the
 product id in the pending-build word and playing `addbuild` — the click arms
@@ -7001,8 +7019,25 @@ the scan finds nothing it clears bit `0x10` on every record and scans once
 more. §2's row read the two writes as the same bit; they are not, so "not
 yet visited" is a real test and the retry runs once every live-source
 message has been visited. Bit `0x20` marks the record most recently jumped
-to; its reader is not traced here (**Unknown** — a composer highlight is the
-natural candidate; decider: the readers of that bit).
+to.
+
+**Established — the jumped-to line is the highlighted line (2026-09-04,
+WU-19-160).** The previous sentence ended "its reader is not traced here
+(**Unknown** — a composer highlight is the natural candidate; decider: the
+readers of that bit)". The candidate was right and the bit now has its reader:
+the **message column painter** of [R-HUD-03 §14.4], and the bit decides the
+line's colour. Walking the visible records in drawing order, the painter tests
+bit `0x20` on each admitted record and installs the FNT display context's pair
+as (colour-map entry **10**, skip colour 254) when the bit is set and
+(colour-map entry **15**, skip colour 254) when it is clear, immediately before
+that line's text call — so exactly one line at a time, the one F3 last jumped
+to, is drawn in the highlight entry and every other line in the ordinary
+battle-text entry. It installs the pair per line rather than once for the
+column, so the highlight cannot leak onto the following line. The same walk
+carries the `screenchat` class filter and the speaker-sentinel test that
+decides the line's `x` (138 for sentinel 10, otherwise a logo-width offset), so
+one routine owns colour, filter and pen together. Nothing else in the recovered
+image reads the bit.
 
 **Established — F4 pins the score panel open and arms the kill/loss
 flash.** Interface-flags bit `0x80` has exactly two readers: the score
@@ -7825,15 +7860,21 @@ section rather than deleted.
 - Remaining command-specific cursor validity rules · §8 · static trace.
 - Manual unit and point target encoding, command-fire replacement, and the
   manual-versus-autonomous latch callers · §9, doc 06 §3.2 · static trace.
-- What writes latch-flag bit `0x40` while the MOBILEBUILD latch is armed. The
-  bit's own role — immediate-versus-special helptext — and its writers in the
-  order-button dispatcher's arming chain are established in §9, but that chain
-  never arms MOBILEBUILD; the battle-HUD build-button handler does, and it is
-  not recorded as touching the flags word. The bit is not cosmetic there: it
-  picks the drag/wake rectangle's outer colour-map entry, 6 when set and 4 when
-  clear (§6 "Frame composition passes"). · §6, §9 [R-P0-11 §1] · static trace
-  of the build-button handler's writes to the latch-flags word. Marked
-  `TODO(question)`.
+- ~~What writes latch-flag bit `0x40` while the MOBILEBUILD latch is armed~~ ·
+  **closed 2026-09-04 (WU-19-160)**, by [R-CAM-01 §14] step 1, which had
+  already answered it from the other end. The question was framed on the wrong
+  byte, which is why the census in §9's chain came back empty: the bit that
+  picks the drag rectangle's outer entry is **bit 6 of the pointer-flags byte**
+  — the *site-valid* bit — and not bit `0x40` of the latch-flags word, whose
+  role really is immediate-versus-special helptext. The site-valid bit has
+  exactly one writer, the in-view placement preview that the frame handler runs
+  only while the pointer is over the view and the latch is MOBILEBUILD, and the
+  world rebuild clears it; [R-CAM-01 §14] step 1 states the identification in
+  as many words ("This bit is also the 'special latch flag' that picks the
+  drag-box colour in §9"). So the armed drag box is entry 6 exactly when the
+  build click would be accepted and entry 4 when it would play `notoktobuild`,
+  and the drag box, the placement cursor and the click all read one word.
+  **Established.**
 
 ### Camera, minimap, and session UI
 

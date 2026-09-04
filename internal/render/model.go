@@ -112,9 +112,9 @@ func FoldProjectileAngles(st []model.PieceState, root int, yaw, pitch uint16) { 
 // FoldPropellerSpin folds a model projectile's spinning propeller angle into
 // the piece's ROLL slot [03 §5.2][06 R-WFX-01 §4].
 //
-// This previously read `st[piece].RotY += spin` under
-// "TODO(question): propeller variant slot (Y vs Z) and whether it carries the
-// -32768 offset not fully established". The slot was wrong. A model projectile
+// This previously read `st[piece].RotY += spin` under an open-question marker,
+// "propeller variant slot (Y vs Z) and whether it carries the -32768 offset not
+// fully established". The slot was wrong. A model projectile
 // is drawn from a three-word angle block whose words are, in order, roll, yaw
 // and pitch, applied about Z, Y and X respectively — the same bank→Z,
 // heading→Y, pitch→X assignment the unit root fold uses. `FoldProjectileAngles`

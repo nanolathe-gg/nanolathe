@@ -1613,6 +1613,17 @@ func canRepairGuard(actor *units.Unit) bool {
 func wardIsDamaged(ward *units.Unit) bool {
 	return ward != nil && ward.Health < ward.MaxHealth
 }
+
+// staticGoalObserver is bit 10 of a descriptor's static gate mask — "this
+// record was issued with a goal position", the twin of react.go's
+// staticTargetObserver. The record constructor clears it when no goal was
+// supplied [04 §3.1]; this build cannot apply that clear (see newNode), so the
+// bit reads as the descriptor's authored value. Its one reader here is the
+// guard's leg-4 copy arm, where every admissible descriptor but `MobileBuild`
+// has it clear anyway and `MobileBuild` takes the other arm — so the gap
+// [04 R-ORD-01 §13] records does not reach this site.
+const staticGoalObserver uint32 = 0x400
+
 func wardHasBuildOrder(ward *units.Unit) bool {
 	if ward == nil {
 		return false
@@ -1748,35 +1759,46 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	// latch hid how often this leg fires; with the latch gone they are load
 	// bearing — without the exclusion a guard whose ward is building the guard
 	// enqueues help-build against itself, once per resume.
+	//
+	// The two arms are settled by trace (WU-19-159, [04 R-ORD-01 §13]) and both
+	// are issued now. The ward's front record decides which:
+	//
+	//	arm A — its descriptor is `MobileBuild` or `BuildingBuild`, the two names
+	//	        the handler resolves by literal at this site. It spawns
+	//	        `HelpBuild`, resolved by NAME with no canfly fork, and falls
+	//	        through to leg 5 when the front record has no target yet.
+	//	arm B — otherwise, and only when the front record has something to copy:
+	//	        a bound target (static bit 9 set and the target non-null) or a
+	//	        goal position (static bit 10). It spawns a COPY of the ward's
+	//	        descriptor. Neither term is "queued", which is what §1's
+	//	        "payload-carrying queued order" had been read as.
+	//
+	// Both arms construct the spawned record with the ward's front record's
+	// target AND goal triple, release the guard record's payload first, clear
+	// the dynamic gate and return the wait code.
 	if wardHasBuildOrder(ward) && canRepairGuard(u) && canRepairGuard(ward) {
-		var tgt pool.Handle
-		var goalX, goalY, goalZ numeric.Fixed
+		var head *Node
 		if wq := QueueForUnit(ward); wq != nil && len(wq.primary) > 0 {
-			head := wq.primary[0]
-			tgt = head.Target
-			goalX, goalY, goalZ = head.GoalX, head.GoalY, head.GoalZ
+			head = wq.primary[0]
 		}
-		if tgt != u.Handle {
-			// TODO(question): §1 splits this leg's issue in two — help-build
-			// "when the front order's descriptor is the guard-resolved
-			// mobile-build or factory-build descriptor", and a COPY of the ward's
-			// record (same descriptor, same target, same goal) "when it is
-			// instead a payload-carrying queued order". Which of this build's
-			// descriptor names stand in each class, and what marks a record as
-			// payload-carrying, are not stated; the help-build arm alone is
-			// issued, which is what the leg did before. What would settle it: the
-			// descriptor identities the guard's leg-4 comparison loads, and the
-			// record field its second arm tests.
-			helpID := Lookup("HelpBuild")
-			if u.Def != nil && u.Def.CanFly {
-				if vtol := Lookup("VTOL_HelpBuild"); vtol != 0 {
-					helpID = vtol
+		if head != nil && head.ID != 0 && head.Target != u.Handle {
+			spawnID := ID(0)
+			switch {
+			case head.ID == Lookup("MobileBuild") || head.ID == Lookup("BuildingBuild"):
+				// The canfly fork is deliberately absent: the handler resolves
+				// the literal name `HelpBuild`, so a VTOL guard joins with the
+				// ground descriptor too [04 R-ORD-01 §13].
+				if head.Target != 0 {
+					spawnID = Lookup("HelpBuild")
 				}
+			case head.StaticGate&staticTargetObserver != 0 && head.Target != 0,
+				head.StaticGate&staticGoalObserver != 0:
+				spawnID = head.ID // a copy: same descriptor, same target, same goal
 			}
-			if helpID != 0 {
+			if spawnID != 0 {
 				q := QueueForUnit(u)
 				releaseGoalPayload(u, n)
-				q.PushHead(helpID, Node{Owner: u.Handle, Target: tgt, GoalX: goalX, GoalY: goalY, GoalZ: goalZ})
+				q.PushHead(spawnID, Node{Owner: u.Handle, Target: head.Target, GoalX: head.GoalX, GoalY: head.GoalY, GoalZ: head.GoalZ})
 				n.DynamicGate = 0
 				return Code(3) // *wait* [04 §3.3]
 			}

@@ -198,11 +198,25 @@ func nanoTravelTicks(src, dst [3]numeric.Fixed) int32 {
 // model-top helper does but keeping all six extents rather than the top alone
 // [03 §5.5][fmt 3do].
 //
-// TODO(question): the retail unit definition stores this box as two triples
-// alongside the model top; the loader's exact accumulator for the five
-// extents other than the top is not traced. Only the nanolathe spray's target
-// box reads it, and the box is narrowed to its middle three elevenths before
-// use, so a small difference moves particle landing points slightly.
+// It is **not** the box a nanolathe segment carries, and it never was. This
+// previously carried an open-question marker: "the retail unit definition
+// stores this box as two triples alongside the model top; the loader's exact
+// accumulator for the five extents other than the top is not traced." There is no such
+// accumulator to trace: the catalog compiler zeroes the minimum-Y word
+// immediately before the model-top walk and writes it from geometry nowhere,
+// and the other four extents are the FOOTPRINT, not the silhouette — X and Z
+// are `±(footprint << 20) / 2` and the Y span is `[0, model-top walk]`
+// [02 R-CAT-01 §7]. A unit target's six-word box is built from that record at
+// the submission site [05 R-WORK-01 §8], and every producer in that section's
+// census — build, repair, assist, resurrection, unit reclaim, capture, feature
+// reclaim and the VTOL twins — has a unit or a feature target and so publishes
+// its own box. Retail has no producer that submits a segment with no target
+// box, and therefore no producer that reaches a walk like this one.
+//
+// The function survives only as the client's fallback for a segment this build
+// emits with no unit target (the COB-script path), where a silhouette is the
+// wrong shape but the alternative is a bare point. See the note at
+// `client.nanoTargetBox`.
 func ModelBounds(m *model.Model) (min, max [3]numeric.Fixed) {
 	if m == nil || len(m.Pieces) == 0 {
 		return

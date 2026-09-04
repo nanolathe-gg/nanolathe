@@ -65,6 +65,13 @@ func (s *Simulation) step() uint32 {
 // the bound. Bounds below two return zero WITHOUT advancing the stream — a
 // stream that advances here desynchronizes every later consumer (I4).
 //
+// The bound test is a SIGNED 32-bit compare in retail [01 §7.1]: a bound whose
+// top bit is set reads as negative and is caught by "below two" exactly like 0
+// or 1, returning 0 with no draw. A caller that narrows a wider quantity (a
+// distance-squared term, for instance) to this 32-bit bound can legitimately
+// produce such a value, so this must not be an unsigned compare against the
+// literal 2.
+//
 // There is deliberately no chunk-concatenation path here. That helper belongs
 // to the CRT stream, which yields only 15 bits per draw [01 §7.2]; Park–Miller
 // already yields 31 bits, so every bound up to the modulus is covered by a
@@ -72,7 +79,7 @@ func (s *Simulation) step() uint32 {
 // [01 §7.3] and [05 "Wind generation"] — cost two draws instead of one and
 // return a different value.
 func (s *Simulation) Uint32n(bound uint32) uint32 {
-	if bound < 2 {
+	if int32(bound) < 2 {
 		return 0
 	}
 	return s.step() % bound

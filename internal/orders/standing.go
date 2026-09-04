@@ -199,12 +199,15 @@ func standingFireOrderHandler(u *units.Unit, n *Node, _ uint32, _ uint32) Code {
 // target word to its empty sentinel; the decoded form of that pair in this
 // build is the empty target kind [06 §1.2].
 //
-// TODO(T25): the row also has each cleared slot's `StartBuilding` emission
-// killed. The StopBuilding-pending flag this build carries is per order RECORD,
-// not per weapon slot ([R-ORDER-02 §2] gives it exactly one writer, the
-// StartBuilding emitter, which stamps the issuing record), so there is no
-// per-slot emission to kill. Placeholder: the target clear and the notification
-// run; the emission step is a no-op.
+// Retired (WU-19-159). [04 R-STANCE-01 §2] describes this walk as also killing
+// "the slot's `StartBuilding` emission", and the marker that stood here treated
+// that as a step it could not implement. There is nothing to implement:
+// [04 §5.3]'s producer census already established that the four
+// weapon-target-clearing routines "call the `StartBuilding` name lookup while
+// clearing targets but discard the result and are not producers". The lookup
+// resolves a script function name and throws the answer away — no emission is
+// started and none is stopped. §2's phrase is corrected in place; the reversal
+// is recorded in [04 R-ORD-01 §13].
 func clearAutonomousSlotTargets(u *units.Unit) {
 	if u == nil {
 		return
@@ -305,14 +308,21 @@ const paralyzeMaxCredit int32 = 1800
 // the stun is lowered and the record completes. Later paralyzer hits add to p1
 // of the waiting head record (doc 06 owns the packet arithmetic).
 //
-// TODO(T25): the row raises and lowers edge bit 4 of the unit's engine-state
-// byte. This build models that byte only for bit 0 (activation, the one edge
-// setter of [04 R-UNIT-06 §2]) and splits the stun into two named fields
-// instead — a boolean and the absolute tick it ends at [06 §10] — with no edge
-// machine behind them and therefore no edge callbacks or notifications.
-// Placeholder: write both named fields, the expiry from this record's own
-// deadline, because that is the same fact and the combat layer's paralyzer
-// packets and the weapon and movement gates already read the pair together.
+// Retired (WU-19-159). The row raises and lowers edge bit 4 of the unit's
+// engine-state byte, and the marker that stood here called the two named fields
+// this build keeps instead — a boolean and the absolute tick the stun ends at
+// [06 §10] — a placeholder for edge machinery it was missing. They are not a
+// placeholder: bit 4 carries no edge effect of its own. [04 R-UNIT-06 §2]
+// enumerates the machine's edge effects exhaustively and assigns every one of
+// them to bit 0 (the `Activate`/`Deactivate` starts plus notifications 3 and 4),
+// bit 2 (yard-open: notifications 14 and 15 and the waiter walk) or bit 3
+// (`StartBuilding`/`StopBuilding`); "the remaining bits of the byte are written
+// through the same machine by their producers and are otherwise opaque". A
+// bit-4 edge therefore starts no script and emits no notification. The machine's
+// two unconditional effects are the battle interface's dirty mark for a selected
+// local unit, which is presentation, and the computer-player network event that
+// a single-player build has no receiver for. So the pair written below is every
+// simulation-visible consequence the edge has.
 func paralyzeHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
 	if u == nil || n == nil {
 		return Code(5)
@@ -620,17 +630,17 @@ func standbyHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
 // stance to be nonzero, after which it spawns `SelfDestruct` with p1 = 1
 // (immediate) at the head of that order's segment and completes.
 //
-// TODO(question): the row gives the bit-29 test as something phase 0 does "also",
-// which would leave `Standby`'s "no mover reference -> cancel-all" in place as
-// well — and the two cannot both hold, because a unit carrying bit 29 is
-// building-class and a building-class unit never owns a mover [04 R-FAC-02 §5].
-// Checked against the reference install (I14): all five stock mines, ARMMINE1
-// through ARMMINE5, are `bmcode 0` and name `Standby_Mine` as their
-// `defaultmissiontype`, so keeping both tests would cancel every stock mine's
-// queue on its first visit and no mine could ever detonate. This handler
-// therefore runs the bit-29 test IN PLACE OF the mover test. A trace of
-// `Standby_Mine`'s own phase 0 — whether it re-runs the mover test at all —
-// would settle it.
+// Settled by trace (WU-19-159), and the code below was already right. The
+// marker that stood here read [04 R-ORD-01 §3]'s "phase 0 **also** requires
+// state-word bit 29" as leaving `Standby`'s "no mover reference -> cancel-all"
+// in place beside it, which cannot hold: bit 29 is set at creation from
+// `bmcode == 0` and a `bmcode 0` definition is exactly the one the mover
+// allocator skips [04 §2.4][04 R-COLL-01 §1], so a mine would cancel its own
+// queue on the first visit and no stock mine could ever detonate. The two
+// handlers are separate bodies, and `Standby_Mine`'s phase 0 opens with the
+// bit-29 test and contains **no mover test at all** — it replaces the mover
+// test rather than adding to it. §3's "also" is corrected in place; the
+// finding is [04 R-ORD-01 §13].
 func standbyMineHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
 	if u == nil || n == nil {
 		return Code(7)

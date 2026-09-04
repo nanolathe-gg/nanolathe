@@ -301,8 +301,8 @@ type queueDescriptor struct {
 // identification; [04 §3.1] now records it in place, and
 // `orders.Descriptor.Class` cites the same section.
 //
-// This replaces a five-row table whose default carried its own
-// `TODO(question)` about the "runtime descriptor mask writer": there is no
+// This replaces a five-row table whose default carried its own open-question
+// marker about the "runtime descriptor mask writer": there is no
 // separate writer, the runtime table is built from these static records.
 //
 // The five bits dispatch marker (1), dash (2), circle (4), icon (8) and range

@@ -135,6 +135,17 @@ type System struct {
 	// until the session supplies explicit limits [04 R-PATH-01 §6].
 	PathPlayers   int
 	PathUnitLimit int32
+
+	// ProductFootprint resolves a MobileBuild product's footprint pair (the
+	// same quantity construction.Service.siteAnchorCell/siteCentre compute for
+	// the ground twin from its own catalog handle) given the stable catalog
+	// index the order record carries in Param1 [04 R-ORD-02 §2]
+	// [04 R-PATH-01 §13]. internal/movement holds no catalog handle of its
+	// own, so the air build approach asks this session-bound resolver rather
+	// than duplicating the catalog lookup. A nil resolver leaves callers on
+	// whatever behavior they had before this seam existed — no invented
+	// fallback.
+	ProductFootprint func(catalogIndex uint32) (fx, fz int32, ok bool)
 }
 
 // pathProvider is the movement-owned candidate surface. Submit/Cancel only

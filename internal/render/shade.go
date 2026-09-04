@@ -17,9 +17,24 @@
 
 package render
 
-// Shading is the presentation-level model-shading display option. Retail's
-// restore-defaults path enables it [R-RND-02A].
-// TODO(question): where retail loads the Shading display option from at startup; the Options restore-defaults path is the only traced writer.
+// Shading is the presentation-level model-shading display option: with it set,
+// a unit whose class bit says structure (`BMcode=0`) draws through the shaded
+// piece renderer; every other unit, and every unit at all with the option
+// clear, draws unshaded [R-RND-02A].
+//
+// Where the option comes from is settled, not open. This previously carried an
+// open-question marker, "where retail loads the Shading display option from at
+// startup; the Options restore-defaults path is the only traced writer". The
+// restore-defaults path is neither the only writer nor the first one:
+// `Shading` is a named 32-bit value under the game's registry key, read by the
+// startup settings loader, which installs the default — the bit **set** — and
+// writes it straight back when the value is absent [02 §3][02 "registry
+// preference (Total Annihilation key)"]. The `VISUALS` page's `SHADING` button
+// is bit 5 of the display option word and is the runtime writer
+// [07 R-FE-01 §6]. This build keeps the same value and default in
+// internal/settings (`DefaultShading`); `client.SetShadowOptions` carries the
+// player's choice here, so this global and the client's own bit are one
+// setting with one writer.
 var Shading = true
 
 // SHDRowCount is the number of SHD rows [03 §4.3] (fmt pal).

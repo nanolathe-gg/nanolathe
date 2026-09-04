@@ -556,11 +556,16 @@ left open:
   reclaim. The third is also the `MobileBuild` blocked-area retry counter and
   the pursuit leash of the repair family, which enforces it with exactly the
   chase attack's arithmetic.
-* The **static-mask copy** carries two runtime bits that no static descriptor
-  mask sets: a one-shot **caption-pending** flag that the shared caption clear
-  tests and clears, and the **StopBuilding-pending** flag of [R-ORDER-02 §2].
-  The auto/default-operation flag is inherited on insertion, and the
-  rear-segment flag selects the segment.
+* The **static-mask copy** carries runtime bits that no static descriptor mask
+  sets: a one-shot **caption-pending** flag that the shared caption clear tests
+  and clears, and the **StopBuilding-pending** flag of [R-ORDER-02 §2]. The
+  auto/default-operation flag is inherited on insertion, and the rear-segment
+  flag selects the segment. **Corrected and completed (2026-09-04,
+  [R-ORD-01 §13]):** "two runtime bits" undercounts. The full set, with the
+  writer of each, is the table in §13; it also settles the caption-pending
+  flag's writer (the producer insertion, and only on a non-queued issue) and
+  the active marker's, and records that the record constructor writes every
+  field of the 86-byte record with no memset.
 * The **satisfied/pending word** is a field distinct from the dynamic gate mask:
   the gate says which bits the record is *waiting for*; the pending word
   accumulates which have *arrived*. Every goal installer wipes the five
@@ -1376,6 +1381,12 @@ is set, clears that slot's stored target: the target id is zeroed, the second
 target word is set to `0x8000`, the slot's `StartBuilding` emission is killed,
 and `TargetCleared` is raised with the slot index [04 §5.4]. The autonomous
 bit itself is **not** cleared. The move handler has no such effect.
+**Correction (2026-09-04, [R-ORD-01 §13]):** "the slot's `StartBuilding`
+emission is killed" describes a step that does nothing. §5.3's producer census
+already established that "four weapon-target routines call the `StartBuilding`
+name lookup while clearing targets but discard the result and are not
+producers", and this walk is one of the four: it resolves a script function
+name and throws the answer away. No emission is started and none is stopped.
 
 **Unknown — the fire handler's parameter test is on the unmasked value.** The
 test compares the whole 32-bit parameter against `0` and `1`, while the
@@ -1613,6 +1624,14 @@ which the same pump cascade re-enters immediately.
    front order's target with the front order's goal position; when it is
    instead a payload-carrying queued order, enqueue a **copy** of that order —
    same descriptor, same target, same goal. Otherwise fall through.
+   **Closed and corrected on two points (2026-09-04, [R-ORD-01 §13]):** the
+   first arm's spawn is resolved from the literal name `HelpBuild` with **no
+   canfly fork** — an air guard joins with the ground descriptor — and it falls
+   through to leg 5 when the front record's target is null; and the second
+   arm's condition is not about the queue modifier at all, it is "the front
+   record has a bound target (static bit 9 set and target non-null) **or** a
+   goal position (static bit 10)". §13 has both arms in full, plus a
+   divergence in leg 3's spawn that this section does not state.
 5. **Follow maintenance.** Install a ground point goal at the ward's position
    plus the stored anchor offset; arm the record's own dynamic gate with the
    re-arm bits (`0x18`, values `0x08` and `0x10`); set the deadline to
@@ -3510,6 +3529,10 @@ deadline `30 + RNG(30)`, hold. Other: cancel-all.
 29 (else cancel-all); phase 1 requires the scanned target's committed mover
 mode to be **grounded** (`1`) and my own fire stance nonzero, and then spawns
 `SelfDestruct` with p1 = 1 (immediate) at the head and completes.
+**Correction (2026-09-04, [R-ORD-01 §13]):** "also" is wrong and made the row
+self-contradictory. `Standby_Mine` is its own handler body and its phase 0
+contains **no mover test**; the bit-29 test stands in place of `Standby`'s
+mover test, not beside it.
 
 **`Follow_Ground`** is [R-UNIT-06 §1] as corrected by [R-STANCE-01 §3]; the
 trace here agrees with every gate, the follow-radius arithmetic (both terms
@@ -4442,6 +4465,157 @@ it with a signed divide, and installs the annulus with outer
 **builder's own**. `[05 R-WORK-01 §2]` ("taken from the target's
 definition") was right; §5's "from my own footprint" is withdrawn. The
 asymmetric radicand stands exactly as §2 records it.
+
+### Closed — the record constructor, the four runtime bits of the static-mask copy, and who writes each [R-ORD-01 §13] (2026-09-04)
+
+All **Established** (direct static trace of the record constructor, the four
+insertion helpers, the caption-clear helper, the two `Standby` bodies and the
+ground guard's body; WU-19-159).
+
+**The constructor initialises the whole record and arms no runtime bit.** The
+86-byte record of §3.2 is allocated by an untyped size request — there is no
+`memset` and no zero-fill length anywhere on the path — and the constructor
+then writes **every** field: the descriptor byte, the phase byte (0), the
+dynamic gate (0), the deadline (the `-1` sentinel), the owning-unit pointer
+(**0** — insertion supplies it), the target smart-reference, the self link, the
+goal triple (from the caller's triple, or zeros when the caller supplies none),
+the anchor pair (0), the three parameters, the static-mask copy, the
+creation-tick snapshot, the next link (0), the pending word (0) and the goal
+payload (0). The static-mask copy starts as the **descriptor's own static
+mask**, with bit 9 cleared when no target was supplied and bit 10 cleared when
+no goal triple was supplied, and with **no runtime bit set**. This retires the
+`TODO(T23)` that asked for retail's zero-fill byte count: there is none to
+match.
+
+**The static-mask copy carries four runtime bits, not two.** §3.2's bullet
+listed a caption-pending flag and the StopBuilding-pending flag, plus the
+auto/default-operation flag and the rear-segment flag as separate ideas. The
+copy is one word and the runtime bits in it are:
+
+| Bit | Written by | Meaning |
+|---:|---|---|
+| 0 | the producer insertion, unconditionally | this record entered through the producer path |
+| 12 | the producer insertion's after-marker branch | the **active marker** (§3.1) |
+| 13 | the producer insertion, **only when the issue is non-queued** | **caption-pending** |
+| 14 | the internal-auto creator (set), the head inserts (inherited) | auto/default-operation |
+| 16 | every removal path except the primary front head | the tombstone bit of [R-ORDER-02 §2] |
+| 21 | the order-overlay presentation helper | the cached target position |
+| 22 | the `StartBuilding` emitter | StopBuilding-pending [R-ORDER-02 §2] |
+
+**Closes the Missing-list item "writer of the record's one-shot
+caption-pending bit".** The bit is tested and cleared by the caption-clear
+helper of §1, which emits status kind 5 (`ok`) on the record's owning unit only
+when the bit was set. Its one writer is the **producer-side insertion helper**
+— the single helper the HUD, the AI, COB, the mission spawner, rally
+inheritance and factory completion all enter through (§3.3's Replace/Append) —
+and it arms the bit in the same statement that unconditionally sets bit 0,
+**guarded by the helper's queued/non-queued argument**: a non-queued (Replace)
+issue arms it, a queued (Append / Shift-queue) issue does not. So retail speaks
+the acknowledgement once for a plain order and stays silent for a Shift-queued
+one. Nothing else in the code sections writes the bit. In particular the
+handler head insert, the insert-before-a-record helper used by the patrol-chain
+append, and the pump's own internal-auto creator all leave it clear, which is
+why a spawned order and an idle refill are silent.
+
+**The active marker's writers, and the head insert's silence about it.** Three
+insertion shapes exist and they divide as follows.
+
+1. **Producer insertion** (§3.3's Replace / Append). After the purge and the
+   leading-auto drop it sets bit 0, conditionally sets bit 13, and then
+   branches on the new record's static mask: with **bit 5 and bit 18 both
+   clear** it takes the after-marker path — it sets bit 12 on the new record,
+   walks the front segment for the record already carrying bit 12, **clears
+   that record's bit 12** and links the new record immediately after it, and
+   appends at the tail when no record carries it. The new record therefore
+   takes the marker in every case, including the tail append and the empty
+   list. With **bit 5 or bit 18 set** it takes the other path instead: a
+   **head insert** into the segment bit 18 selects, inheriting the displaced
+   head's bit 14, with **no write to bit 12 at all**. Bit 5 is carried
+   statically by `Paralyze`, `BeCarried`, `GetBuilt`, `SelfRepair`,
+   `WaitForAttack`, `Guard_NoMove`, `Cloak_On`/`Cloak_Off`,
+   `Activate`/`Deactivate` and the two standing-order descriptors (§3.1), so a
+   paralyzer hit lands at the **front** of the queue — which is what makes
+   [R-ORD-01 §2]'s "later paralyzer hits add to p1 of the waiting head record"
+   reachable at all. This closes §3.1's "bit 5" entry in the unnamed-static-bit
+   census: bit 5 selects the head-insert branch of the producer insertion.
+2. **Handler head insert** (§1's spawn). It writes the link, the owner and the
+   inherited bit 14 and **nothing else** — it never reads or writes bit 12. The
+   marker stays exactly where it was, including "nowhere": a spawn into an
+   empty segment leaves the segment unmarked, and the next producer insertion
+   then appends at the tail. This closes the `TODO(question)` that asked what a
+   head insert does to the insertion point.
+3. **Internal-auto creation** (§3.3's empty-list default op). Construct, set
+   bit 14, head insert. No bit 0, no bit 12, no bit 13.
+
+A fourth after-marker variant exists in the image with **no callers and no
+code-pointer reference**; it is dead.
+
+**Correction to [R-ORD-01 §3]'s `Standby_Mine` row — the bit-29 test replaces
+the mover test, it does not join it.** That row reads "As `Standby` except:
+phase 0 **also** requires state-word bit 29". `Standby` and `Standby_Mine` are
+separate handler bodies; `Standby`'s phase 0 opens with the null test on the
+unit's mover reference, and `Standby_Mine`'s phase 0 opens with the bit-29 test
+and contains **no mover test at all**. The word "also" made the row
+self-contradictory: bit 29 is set at creation from `bmcode == 0` and a
+`bmcode 0` definition is exactly the one the mover allocator skips
+([R-COLL-01 §1], §2.4), so a build running both tests would cancel every stock
+mine's queue on its first visit and no mine could ever detonate. Everything
+else in the row stands: inhibit all, gate `|= 0x10000`, deadline 1, advance;
+phase 1 scans, requires the target's low two state bits to read 1 and the
+mine's own fire field non-zero, and spawns `SelfDestruct` with p1 = 1 through
+the handler head insert.
+
+**Correction to [R-STANCE-01 §2] — no `StartBuilding` emission is killed.**
+That section's fire-handler slot walk ends "the slot's `StartBuilding`
+emission is killed". Nothing is killed and nothing is emitted: §5.3's producer
+census already established that "four weapon-target routines call the
+`StartBuilding` name lookup while clearing targets but discard the result and
+are not producers", and this walk is one of the four. The step resolves a
+script function name and throws the answer away. The rest of §2's walk stands:
+the target id is zeroed, the second target word is set to its empty sentinel,
+`TargetCleared` is raised with the slot index, and the autonomous bit itself is
+not cleared.
+
+**Closes [R-UNIT-06 §1] leg 4's two arms, and corrects one term.** The leg's
+entry gate is exactly as §1 gives it: the ward's front record exists with a
+non-zero descriptor, both definitions carry the builder bit, the front record's
+static-mask copy carries `0x100000`, and the front record's target is not the
+guard. What follows is:
+
+- **Arm A** — the front record's descriptor equals the descriptor the handler
+  resolves from the literal name `MobileBuild`, or the one it resolves from
+  `BuildingBuild`. The spawned descriptor is resolved from the literal name
+  **`HelpBuild`**, with **no canfly fork** — §1's "resolved through the canfly
+  fork, so VTOL guards get the VTOL variant" is **withdrawn**; the handler
+  performs one name lookup and an air guard joins with the ground descriptor.
+  When the front record's target is null this arm falls through to leg 5
+  instead of spawning.
+- **Arm B** — otherwise, and only when the front record has something to copy:
+  its static-mask copy carries bit 9 **and** its target is non-null, **or** its
+  static-mask copy carries bit 10. The spawned descriptor is the front
+  record's own — a copy. §1 described this arm's condition as "a
+  payload-carrying **queued** order"; the traced test reads the record's
+  target and goal presence bits and has nothing to do with the queue modifier.
+  When neither term holds the leg falls through to leg 5.
+- Both arms then do the same three things: release the guard record's goal
+  payload, construct the spawned record with the **front record's target and
+  its goal triple** and zero parameters, head-insert it, clear the guard
+  record's dynamic gate and return the wait code.
+
+**One divergence found beside the legs, recorded here because §1 does not say
+it.** Leg 3's code-8 spawn is constructed with **no goal triple** — the
+constructor receives a null goal pointer, so the spawned record's goal is zero
+and its static-mask bit 10 is cleared. A reimplementation that passes the
+ward's position there gives the record a goal retail does not.
+
+**The simulation draw helper takes one 32-bit bound.** §1's "every draw below
+is the simulation RNG taken as `state mod n`" is exact about the argument
+width: the helper's single parameter is a 32-bit word tested with a **signed**
+compare, as [01 §7.1] records. A caller that forms a 64-bit quantity — the
+`AttackUType` scan's `d²/2` is the only one — loses the high half at the call,
+and a low half at or above 2^31 draws nothing and leaves the state untouched.
+Both effects need a separation past 92681 world units, beyond the diagonal of
+any map the reference install ships.
 
 ### Closed — command resolution, exactly [R-ORD-02 §1] (2026-08-29)
 
@@ -14247,18 +14421,18 @@ replacement bullet is needed because the ground path has no vertical term.
   gate-mask bits (statically: 1, 3–6, 8, 11, 16, 17, 19, 24; bit 2 is
   [R-MOV-03 §6], bit 7 is [06 R-WPN-04 §2]) · §3.1 [R-DOC04-C] · static
   trace. Marked `TODO(question)` at both sites; store the bytes opaque.
-- Reader for the acknowledgement-group byte · §3.1 · static trace. Marked
-  `TODO(question)`.
-- Writer of the record's one-shot **caption-pending** bit · §3.2,
+- ~~Reader for the acknowledgement-group byte · §3.1 · static trace.~~
+  **Closed (2026-09-02):** it is the order-queue overlay's icon byte — the
+  bit-8 helper indexes the cursor handle array with it and animates the frame
+  ([07 R-P0-11 §3]); §3.1 records the same answer in place. The marker it
+  named was retired with it.
+- ~~Writer of the record's one-shot **caption-pending** bit · §3.2,
   [R-ORD-01 §1] · static trace over the writers of the record's static-mask
-  copy. §3.2 names the bit and §1 names its tester/clearer (the shared caption
-  clear, which emits status kind 5 `ok` only when the bit is set), but no site
-  is identified that ARMS it. Marked `TODO(question)`; Nanolathe arms it at
-  record insertion, which reproduces the observable contract — one
-  acknowledgement per issued order, and silence on every re-arm of the same
-  record, as [R-PATH-01 §14] item 4 requires of the settled steady state
-  ("silent and unbounded ... no motion, no engine cue"). A trace would settle
-  whether some issuers leave it clear.
+  copy.~~ **Closed (2026-09-04, WU-19-159, [R-ORD-01 §13]):** the record
+  constructor arms no runtime bit; the one writer is the producer-side
+  insertion helper, which arms the bit only on a **non-queued** issue. A
+  Shift-queued order is inserted silent. The same finding names the writers of
+  the active marker and of static bit 0.
 - ~~Upstream producers of production-node wake mask 8 (Construction stopped)
   · §3.3, [R-FAC-01B] · static trace. Marked `TODO(T25)`; the handler
   semantics are closed and the producer must not be invented.~~ **Closed

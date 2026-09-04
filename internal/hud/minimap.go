@@ -6,7 +6,8 @@ import (
 )
 
 // MinimapHUD holds retail minimap HUD state that is presentation-only (I6).
-// It owns the HUD rect (derived from side anchors or fallback) and the dirty/blink word.
+// It owns the HUD rect (the compiled-in radar canvas, MinimapCanvasRect below)
+// and the dirty/blink word.
 // Rect is inclusive [07 §10][03 §3.6]. DirtyBlink carries blink phase plus
 // FINAL and MAPPED dirty bits; BlinkCountdown drives the eight-frame blink
 // cadence [03 §3.6].
@@ -16,21 +17,35 @@ type MinimapHUD struct {
 	BlinkCountdown int16  // countdown 7..0 [03 §3.6]
 }
 
-// NewMinimapHUD creates a HUD minimap state. The minimap rail anchor is not
-// one of the 30 SIDEDATA anchors, so callers must supply an authored rect from
-// the UI surface. An empty fallback remains empty until that route is traced;
-// no synthetic canvas-sized rectangle is installed [07 §6][07 §10].
-func NewMinimapHUD(anchors Anchors, fallback Rect) *MinimapHUD {
+// MinimapCanvasRect is the radar rectangle in surface coordinates: the fitted
+// radar inside the fixed 126-pixel canvas at the surface's top-left corner,
+// inclusive, `(padX, padY)..(padX + RadarW − 1, padY + RadarH − 1)`. It is what
+// FINAL is blitted into and what the hit test accepts [03 §3.7][03 R-MM-01 §1].
+func MinimapCanvasRect(m camera.Minimap) Rect {
+	return Rect{X1: m.PadX, Y1: m.PadY, X2: m.Right(), Y2: m.Bottom()}
+}
+
+// NewMinimapHUD creates a HUD minimap state from a rectangle the caller has
+// already resolved — in production, the canvas rectangle above.
+//
+// The minimap's rectangle is not authored anywhere, and that is the answer
+// rather than a gap. This previously carried an open-question marker: "where is
+// the minimap's rectangle authored? An asset census of the 30 side anchors
+// finds no minimap record [07 §6], so either it is authored on a different
+// surface or retail places it from a compiled-in rectangle." The second arm is the right
+// one, and the census found nothing because there is nothing to find: the radar
+// canvas is **fixed in compiled-in coordinates** — a 126-pixel square at the
+// surface's top-left corner, with the map's aspect deciding only the letterbox
+// pad inside it. It is one of the elements that does not move when the display
+// mode changes, unlike everything anchored to `W` or `H` [07 R-HUD-05].
+// `camera.LayoutMinimap` is the whole of the arithmetic [03 §3.7].
+//
+// The anchors argument stays deliberately unread: no SIDEDATA anchor names this
+// rectangle, and matching one loosely would invent a placement.
+func NewMinimapHUD(anchors Anchors, rect Rect) *MinimapHUD {
 	_ = anchors
-	// TODO(question): where is the minimap's rectangle authored? An asset
-	// census of the 30 side anchors finds no minimap record [07 §6], so either
-	// it is authored on a different surface or retail places it from a
-	// compiled-in rectangle. Decider: a static trace of the minimap draw's
-	// rectangle source. The caller's fallback rectangle stands meanwhile, and
-	// the anchors argument is deliberately unread rather than matched loosely.
-	r := fallback
 	return &MinimapHUD{
-		Rect:           r,
+		Rect:           rect,
 		DirtyBlink:     0,
 		BlinkCountdown: 7, // 7..0 drives blink ^=1 every 8 host frames [03 §3.6]
 	}

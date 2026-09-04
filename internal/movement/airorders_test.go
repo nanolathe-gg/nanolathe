@@ -586,3 +586,82 @@ func TestVTOLLandingParksOnThePad(t *testing.T) {
 		t.Fatalf("the scan offered piece %d (ok=%v), want the next candidate 1 [04 R-AIR-01 §6]", piece, ok)
 	}
 }
+
+// TestVTOLMobileBuildSnapsToProductFootprint locks the product-footprint
+// resolver seam: `VTOL_MobileBuild` phase 1, with no target yet assigned,
+// snaps its cached goal onto the PRODUCT's footprint centre — anchor cell from
+// the recorded position, then the reverse `(foot + 2·cell)·2^19` centre
+// [04 R-ORD-02 §2][04 R-PATH-01 §13] — using the resolver's footprint pair
+// rather than the record's raw goal. An asymmetric footprint (width != depth)
+// guards against the two axes being swapped.
+func TestVTOLMobileBuildSnapsToProductFootprint(t *testing.T) {
+	sys, _, u := airFixture(t)
+	u.Def.BuildDistance = 40
+	u.Def.Builder = true
+
+	// An off-grid goal so the snap actually moves it, and an asymmetric
+	// footprint (4 x 8 cells) so a swapped axis produces a different result.
+	goalX, goalZ := world.CellToWorld(21)+1<<18, world.CellToWorld(9)+1<<18
+	const footX, footZ = int32(4), int32(8)
+	extent, err := world.NewFootprintExtent(footX, footZ)
+	if err != nil {
+		t.Fatalf("footprint extent: %v", err)
+	}
+	anchor, err := world.SnapFootprintAnchor(goalX, goalZ, extent)
+	if err != nil {
+		t.Fatalf("snap anchor: %v", err)
+	}
+	centre, err := world.CenterForFootprint(anchor, extent)
+	if err != nil {
+		t.Fatalf("centre: %v", err)
+	}
+
+	head := pushAirOrder(t, u, "VTOL_MobileBuild", goalX, goalZ)
+	head.Param1 = 7 // the stable catalog index the resolver receives
+
+	var gotIndex uint32
+	sys.ProductFootprint = func(catalogIndex uint32) (fx, fz int32, ok bool) {
+		gotIndex = catalogIndex
+		return footX, footZ, true
+	}
+
+	st := sys.airStateFor(u, head)
+	st.phase = 1
+	sys.execVTOLAirBuild(u, head, st)
+
+	if gotIndex != head.Param1 {
+		t.Fatalf("resolver received catalog index %d, want the record's Param1 %d", gotIndex, head.Param1)
+	}
+	m := installedMarker(t, sys, u)
+	if m.goal.X != centre.X() || m.goal.Z != centre.Z() {
+		t.Fatalf("installed goal (%d,%d), want the product footprint centre (%d,%d) [04 R-ORD-02 §2][04 R-PATH-01 §13]",
+			m.goal.X, m.goal.Z, centre.X(), centre.Z())
+	}
+}
+
+// TestVTOLMobileBuildKeepsGoalWhenResolverUnbound locks the no-invented-
+// fallback contract: with ProductFootprint left nil (the seam unbound), phase
+// 1 installs the record's own stored goal exactly as it did before this seam
+// existed, rather than guessing a footprint.
+func TestVTOLMobileBuildKeepsGoalWhenResolverUnbound(t *testing.T) {
+	sys, _, u := airFixture(t)
+	u.Def.BuildDistance = 40
+	u.Def.Builder = true
+
+	goalX, goalZ := world.CellToWorld(21), world.CellToWorld(9)
+	head := pushAirOrder(t, u, "VTOL_MobileBuild", goalX, goalZ)
+	head.Param1 = 7
+
+	if sys.ProductFootprint != nil {
+		t.Fatal("fixture unexpectedly bound a resolver")
+	}
+	st := sys.airStateFor(u, head)
+	st.phase = 1
+	sys.execVTOLAirBuild(u, head, st)
+
+	m := installedMarker(t, sys, u)
+	if m.goal.X != goalX || m.goal.Z != goalZ {
+		t.Fatalf("installed goal (%d,%d) with no resolver bound, want the record's stored goal (%d,%d) — no invented fallback",
+			m.goal.X, m.goal.Z, goalX, goalZ)
+	}
+}

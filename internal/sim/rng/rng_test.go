@@ -32,6 +32,37 @@ func TestBoundBelowTwoDoesNotAdvance(t *testing.T) {
 	}
 }
 
+// TestSimulationTopBitBoundDoesNotAdvance locks the signed-compare contract of
+// [01 §7.1]: the bound test is a SIGNED 32-bit compare, so a bound whose top
+// bit is set reads as negative and is caught by "below two" exactly like 0 or
+// 1 — it returns 0 without a draw. An unsigned compare against the literal 2
+// would instead let such a bound through to the modulo and advance the
+// stream, desynchronizing every later consumer (I4). Bounds at and above 2
+// still draw exactly once, including one just past the sign boundary.
+func TestSimulationTopBitBoundDoesNotAdvance(t *testing.T) {
+	for _, bound := range []uint32{0x80000000, 0x80000001, 0xFFFFFFFF, 0xFFFFFFFE} {
+		stream := NewSimulation(12345)
+		before := stream.State
+		if got := stream.Uint32n(bound); got != 0 {
+			t.Fatalf("Uint32n(%#x) = %d, want 0", bound, got)
+		}
+		if stream.State != before || stream.Draws() != 0 {
+			t.Fatalf("Uint32n(%#x) advanced the stream: state %#x -> %#x, draws %d", bound, before, stream.State, stream.Draws())
+		}
+	}
+
+	for _, bound := range []uint32{2, 3, 0x7FFFFFFF} {
+		stream := NewSimulation(12345)
+		got := stream.Uint32n(bound)
+		if stream.Draws() != 1 {
+			t.Fatalf("Uint32n(%#x) consumed %d draws, want 1", bound, stream.Draws())
+		}
+		if want := stream.State % bound; got != want {
+			t.Fatalf("Uint32n(%#x) = %d, want %d (state %% bound)", bound, got, want)
+		}
+	}
+}
+
 // TestSimulationWideBoundIsOneDraw locks the R1 contract: the simulation
 // helper has no chunk-concatenation path. [01 §7.1] describes one Lehmer
 // update and a modulo for every bound; the chunk loop belongs to the CRT

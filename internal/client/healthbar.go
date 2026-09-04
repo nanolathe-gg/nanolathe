@@ -159,13 +159,16 @@ func (c *Client) drawGroupDigit(sx, y int32, group uint8) {
 	if c.fnt == nil {
 		return
 	}
-	// TODO(question): the section says the digit is drawn "in the default
-	// colour" and [03 §7.1] records the foreground colour as software-renderer
-	// state, but no section names the entry that state holds when the composer
-	// reaches the label walk. Placeholder: dcb[15], the entry every other
-	// established HUD text drawer uses as its foreground [07 R-HUD-03 §4]
-	// [07 R-HUD-03 §14]. Reading the text-context foreground field at the label
-	// call site would settle it [03 R-FX-01 §6].
+	// The "default colour" of [03 R-FX-01 §6] is colour-map entry 15, and it
+	// belongs to the composer rather than to this call. This previously carried an
+	// open-question marker — "no section names the entry that state holds when
+	// the composer reaches the label walk. Placeholder: dcb[15]" — and the
+	// placeholder was right, so it is now the contract rather than a guess. The digit's own text call installs no
+	// foreground — it passes the string and the pen and nothing else — while
+	// the frame composer selects the local player's side font and installs
+	// (foreground = entry 15, background = the skip colour) once, immediately
+	// before the strip walks and so before this walk, and none of the strip
+	// drawers between installs another [03 R-FX-01 §6A][03 R-FONT-01 §6].
 	drawText(c.indexed, c.width, c.height, c.fnt, string([]byte{'0' + group}),
 		int(sx), int(y), 0, c.paletteIndex(15), nil)
 }

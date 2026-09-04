@@ -12,7 +12,7 @@ import (
 // the roll word — with no half-circle offset [03 §5.2][06 R-WFX-01 §4]. The
 // slot is the part that is easy to regress silently: feeding Y instead of Z
 // still spins something, just the wrong axis, and the site carried exactly that
-// mistake behind a TODO(question) until this test was written.
+// mistake behind an open-question marker until this test was written.
 func TestPropellerSpinUsesRollSlotWithoutOffset(t *testing.T) {
 	st := make([]model.PieceState, 2)
 	FoldPropellerSpin(st, 1, 4096)

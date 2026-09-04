@@ -1496,6 +1496,24 @@ func createAndBindServices(s *Session) error {
 	}
 	// Bind movement classes explicitly [02 "Movement class record"]
 	s.Movement.SetClasses(s.Catalog.Movement)
+	// The air build approach's product-footprint resolver
+	// [04 R-ORD-02 §2][04 R-PATH-01 §13]: internal/movement holds no catalog
+	// handle of its own, so it asks this session-bound closure for the
+	// MobileBuild product's footprint pair from the stable catalog index the
+	// order record carries in Param1 — the same catalog lookup
+	// construction.Service.siteAnchorCell/siteCentre already perform for the
+	// ground twin.
+	s.Movement.ProductFootprint = func(catalogIndex uint32) (fx, fz int32, ok bool) {
+		if s.Catalog == nil {
+			return 0, 0, false
+		}
+		def, ok := s.Catalog.UnitDefByIndex(catalogIndex)
+		if !ok || def == nil {
+			return 0, 0, false
+		}
+		fx, fz = world.FootprintForUnit(s.Catalog, def)
+		return fx, fz, true
+	}
 	// The occupancy overlap protocol arbitrates a contested cell from the
 	// OCCUPANT'S OWNER player-row state byte and records the outcome on both
 	// units' flag words [04 R-COLL-01 §4]. The grid carries neither fact, so

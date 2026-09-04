@@ -1910,8 +1910,14 @@ drag-selection rectangle's outer colour-map entries chosen by that same latch
 bit **while the armed latch is MOBILEBUILD** (outer entry 6 when the bit is
 set, 4 when clear, else entry 15; inner entry 0)". The inverted reading was
 observable: logical 4 resolves to a dark red, so a build following this
-paragraph painted every selection drag red. What writes latch-flag bit `0x40`
-while MOBILEBUILD is armed remains **Unknown** ([07 "Missing and unknown"]).
+paragraph painted every selection drag red. What writes the bit that picks 6 over 4 is closed (2026-09-04, WU-19-160):
+it is **bit 6 of the pointer-flags byte**, the site-valid bit of
+[07 R-CAM-01 §14] step 1, whose one writer is the in-view placement preview and
+whose clearer is the world rebuild — not bit `0x40` of the latch-flags word,
+which carries immediate-versus-special helptext. This paragraph and doc 07's
+Unknown list both named the latch-flags word, which is why a census of that
+word's writers found nothing: the question was asked of the wrong byte, both
+bits being written `0x40`. **Established.**
 
 Fog is composed after the world strips, units, projectiles, and effects, and
 before this selection overlay. Thus world pixels are subject to the fog/LOS
@@ -4430,18 +4436,30 @@ its descriptor header — there are no heap bytes beyond the radar rect that
 could leak into the letterbox bars. The blend overwrites every destination
 byte, and the surface allocator never memsets the pixel region. The bars are
 therefore HUD canvas outside the radar rect, not picture heap.
-**Superseded (2026-09-04, WU-19-158).** This paragraph previously read
-"**Supported inference.** The bar pixels read 0 (black), consistent with the
-panel clear and the dark fog-fill index; a canvas-capture probe settles it.
-`TODO(question):` bar fill color." The `[R-MM-01 §3]` finding below, traced
-independently afterwards, is stricter and owns the question: the presenter
-paints **no fill** in the bars at all, so what shows there is whatever the
-composed frame already holds, and which pixels those are is **Unknown** with
-that section's decider. The "0 black" wording invited a clone to paint a black
-fill, which retail does not do. A retail battle capture inspected for this unit
-was inconclusive: its minimap canvas read index-0 black across all 126 columns,
-but the map was almost wholly unexplored, so the fog fill and any bars are
-indistinguishable in it.
+**Established (2026-09-04, WU-19-160) — the bars are the rail's own art.**
+This previously read "**Supported inference.** The bar pixels read 0 (black),
+consistent with the panel clear and the dark fog-fill index; a canvas-capture
+probe settles it. `TODO(question):` bar fill color." The colour it predicted is
+right on stock content and the mechanism it predicted is wrong, which matters
+because the mechanism is what modded art changes. Nothing fills the bars,
+before or after the FINAL blit. What occupies those pixels is what the battle
+presenter's **first paint** left there: it clears the whole surface to palette
+index 0 once and stamps `PANELSIDE` at `(0, 0)`, and that stamp is the only one
+in the image — the per-frame composer repaints the two horizontal strips and
+dirty GUI windows and never the rail's columns ([R-HUD-05] "the first paint",
+"what the per-frame composer repaints, and where it stops"). The stock
+`PANELSIDE` raster is opaque at every pixel of its authored 129×480, the radar
+area included, so the index-0 clear is never what shows through. Measured on the
+reference install: over the 126×126 the radar canvas covers, `ARMINT.GAF` and
+`CORINT.GAF` `PANELSIDE` each carry 15,876 opaque pixels and not one transparent
+or index-0 pixel, so index 0 cannot appear in the bars at all. The art there is
+the dithered near-black panel texture ([fmt gaf "Unknowns and caveats"]), which
+is where the old inference's colour came from.
+
+*Reconciled at merge (2026-09-04): WU-19-158, working concurrently, had marked
+the same paragraph superseded by [R-MM-01 §3] with the pixels left Unknown and
+an inconclusive retail capture (a near-wholly unexplored map, fog and bars
+indistinguishable). The measurement above answers that Unknown.*
 
 Surface descriptors hold width, height, and a pointer to the w×h pixel block;
 the pixel pitch is (w+3) & ~3 (DWORD-aligned), while allocation is w×h rather
@@ -4453,9 +4471,11 @@ final surfaces are all allocated at exactly the fitted `RadarW × RadarH`,
 the radar rectangle words are `(padX, padY)–(padX + RadarW − 1,
 padY + RadarH − 1)`, and the presenter blits FINAL at `(padX, padY)` into
 the composer's frame and paints no fill. What shows in the bars is whatever
-the frame holds there; which pixels those are (the side-panel shell's own
-art versus a cleared frame) is **Unknown** — decider: the bar-fill probe of
-RWU-19-9, one retail session on a non-square map. The generated picture's
+the frame holds there, and that is the **side-panel shell's own art**
+(2026-09-04, WU-19-160): the closure is at the end of §3.7 above, and it needed
+no probe — [R-HUD-05]'s first-paint and per-frame-repaint census answers it
+from the composer's side. The earlier "**Unknown** — decider: the bar-fill
+probe of RWU-19-9, one retail session on a non-square map" is retired. The generated picture's
 loop never leaves the tile map: `worldX = PlayRight · x / (2·RadarW)` with
 `x < 2·RadarW` lies in `[0, PlayRight)`, likewise Z, so there is no
 out-of-domain sample to define; the tile-index guard above is the only one.
@@ -4922,7 +4942,8 @@ the *selected* unit's rings.
 **Established — the bars and the domain.** See the closure at the end of
 §3.7: the three radar surfaces are `RadarW × RadarH`, the presenter paints
 no bar fill, and the generated-picture loop samples only inside the play
-area. Bar content: **Unknown** (probe).
+area. Bar content: the rail's own `PANELSIDE` art, **Established** 2026-09-04
+(the closure is at the end of §3.7).
 
 ## 4. Indexed renderer, palettes, and asset layers
 
@@ -7483,6 +7504,38 @@ pixels and leaves a one-pixel border each side; a unit at 1 of 3000 still
 shows a one-pixel fill; the comparisons are signed and strict. `dcb[n]` is
 entry `n` of the active logical-to-physical table, the same entries [07 §6]
 names for the thresholds. Death (`hp ≤ 0`) hides the bar the same frame.
+
+#### R-FX-01 §6A — the group digit's "default colour" is entry 15 (2026-09-04, WU-19-160)
+
+**The question this closes.** §6 above says the group digit is drawn "in the
+default colour", and [R-FONT-01 §6] establishes that the FNT drawer takes the
+display context's foreground/background bytes and that *each painter installs
+them itself* — so "the default colour" names a piece of renderer state, and no
+section said which entry that state holds when the composer reaches the label
+walk. It is **colour-map entry 15**.
+
+**Established (direct-static).** The digit's own text call passes the string
+and the pen and installs nothing. The install belongs to the frame composer,
+one screenful earlier in the same pass: after the top strip's own repaint block
+and before the first strip walk, the composer selects the **local player's side
+font** and calls the pair setter once with (foreground = `dcb[15]`, background =
+the skip colour read back from the context), and neither the bar-and-digit walk
+nor any of the strip drawers it runs between that install and the walk calls
+the setter again. So the digit inherits entry 15, the same entry [R-HUD-03 §4]
+names for the battle text the composer draws on either side of it. The health
+bar itself is unaffected — its four fills carry their own `dcb` entries as
+arguments (§6) and never consult the text context.
+
+Confidence: **Established** for the install, its position in the pass and the
+digit call's lack of one; **bounded negative** for the absence of a second
+install, over the strip drawers the composer invokes directly between them.
+
+**Why this is worth stating.** The alternative readings were both plausible and
+both wrong: that the digit takes whatever the *previous frame's* last painter
+left (it does not — this composer installs its own foreground every frame), and
+that it takes the resource counters' entries (it does not — those are installed
+inside the strip-repaint block, which runs before this install and only on
+frames where the resource snapshot changed).
 
 ### Closed — `NoShake`, the named scratch surfaces, and the residuals [R-FX-01 §7] (2026-08-29)
 

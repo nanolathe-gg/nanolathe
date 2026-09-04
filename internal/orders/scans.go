@@ -90,13 +90,17 @@ func scanAttackUType(u *units.Unit, definition uint32) *units.Unit {
 		// bound-below-2 rule, so a candidate on top of the scanner draws
 		// nothing [04 R-ORD-01 §1].
 		//
-		// TODO(question): the section gives d²'s width (64-bit squares) but not
-		// the width the draw's bound is passed at, and the simulation draw
-		// helper takes 32 bits. The narrowing below is only reachable for
-		// `d²/2` above 2^32, i.e. a separation past 92681 world units — beyond
-		// the diagonal of any map the reference install ships — so no stock
-		// scenario distinguishes the two. A trace of the bound's argument width
-		// at this site would settle it.
+		// The bound's width is settled and the narrowing below is retail's:
+		// the simulation draw helper takes ONE 32-bit word and tests it with a
+		// SIGNED compare — "a bound below 2, which includes every bound whose
+		// top bit is set, returns zero without advancing the state"
+		// [01 §7.1]. So a 64-bit `d²/2` loses its high half at the call, and a
+		// low half that lands at or above 2^31 draws nothing at all. Both
+		// effects need a separation past 92681 world units, beyond the
+		// diagonal of any map the reference install ships, so no stock
+		// scenario reaches either. (Upstream: `rng.Simulation.Uint32n` tests
+		// `bound < 2` unsigned, so it would draw on the top-bit-set bound
+		// retail rejects; the fix belongs to internal/sim/rng, not here.)
 		d2 := wholePlanarDistanceSquared(u, candidate)
 		bound := uint32(d2 / 2)
 		score := d2 - int64(drawBelow(u, bound))

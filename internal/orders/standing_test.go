@@ -329,8 +329,10 @@ func TestWaitScanVariantDrainsItsBudgetAndCompletes(t *testing.T) {
 // mover reference — a building-class definition never owns one, because the
 // allocator constructs a mover only for `bmcode 1` [04 R-FAC-02 §5] — while
 // `Standby_Mine` admits exactly the opposite unit: one carrying status-word bit
-// 29. Every stock mine in the reference install is `bmcode 0` (I14), which is
-// what forced that reading; see the TODO(question) at standbyMineHandler.
+// 29, and runs NO mover test of its own [04 R-ORD-01 §13]. The two admissions
+// are mutually exclusive by construction — bit 29 is set at creation from
+// `bmcode == 0` — so a build that ran both would cancel every stock mine's
+// queue on its first visit and no mine could ever detonate.
 func TestStandbyNeedsAMoverAndStandbyMineTheBuildingClassBit(t *testing.T) {
 	q, u := standingFixture(&content.UnitDef{BMCode: false})
 	q.Push(Lookup("Standby"), Node{Owner: u.Handle})

@@ -69,11 +69,26 @@ func minimapFloorDiv(a, b int64) int64 {
 // them: PICTURE, MAPPED and FINAL are all allocated at exactly the fitted
 // RadarW x RadarH, and the presenter blits FINAL at (padX, padY) and paints no
 // fill [03 R-MM-01 §3]. What shows in the bars is whatever the composer frame
-// already holds there.
+// already holds there, and that is now settled: it is the side rail's own art.
 //
-// TODO(question): which pixels those are — the side-panel shell's own art
-// versus a cleared frame — is Unknown. Decider: the bar-fill probe of
-// RWU-19-9, one retail session on a non-square map [03 R-MM-01 §3].
+// This previously carried an open-question marker, "which pixels those are —
+// the side-panel shell's own art versus a cleared frame — is Unknown". Two
+// established statements close it from opposite ends. The battle presenter
+// fills the whole surface with palette index 0 once, stamps `PANELSIDE` at
+// (0, 0), and never stamps it again; the per-frame composer repaints only the
+// two horizontal strips and dirty GUI windows, so nothing touches the rail's
+// columns under the radar canvas for the rest of the battle [07 R-HUD-05]. And
+// the stock `PANELSIDE` raster is opaque at every pixel of its authored
+// 129×480, radar area included, so the clear underneath is never what shows:
+// over the 126×126 the canvas covers, ARMINT and CORINT each carry 15,876
+// opaque pixels and not one transparent or index-0 pixel [fmt gaf]. The bars
+// are therefore the panel art — the dithered near-black panel texture, which is
+// why "cleared to 0" was a plausible reading, but the mechanism is the art and
+// modded art would show through.
+//
+// Retail's own repaint pre-pass copies FINAL over that art each frame within
+// the fitted rectangle only, which is why the bars persist rather than being
+// overwritten [03 R-MM-01 §1].
 func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, baked []byte, bakedW, bakedH int, tables *palette.Tables) *RadarSurface {
 	if m.W <= 0 || m.H <= 0 || tables == nil {
 		return nil

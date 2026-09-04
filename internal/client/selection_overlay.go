@@ -22,18 +22,24 @@ type SelectionDrag struct {
 	// SpecialLatchFlag mirrors latch-flag bit 0x40, which picks outer entry 6
 	// over entry 4 while MOBILEBUILD is armed [07 §6].
 	//
-	// TODO(question): what writes latch-flag bit 0x40 while the MOBILEBUILD
-	// latch is armed is unknown. The bit's documented role is selecting
-	// immediate-versus-special helptext and its only established writers are
-	// the order-button dispatcher's arming chain, which never arms MOBILEBUILD
-	// — the battle-HUD build-button handler does, and it is not recorded as
-	// touching the flags word [07 §9]. Tracing the build-button handler's
-	// writes to the latch-flags word would settle it; until then Nanolathe
-	// leaves the bit clear and the armed drag takes entry 4.
+	// The bit has a writer, and one only: it is the pointer-flags byte's
+	// **site-valid bit**, written by the in-view placement preview — which the
+	// frame handler runs only while the pointer is over the view and the latch
+	// is MOBILEBUILD — and cleared by the world rebuild
+	// [07 R-CAM-01 §14 step 1]. That section says so in as many words: "This
+	// bit is also the 'special latch flag' that picks the drag-box colour in
+	// §9." So the armed drag box is green-lit exactly when the build click
+	// would be accepted, and the caller passes the same placement verdict the
+	// cursor and the click read. This previously carried an open-question marker,
+	// "what writes latch-flag bit 0x40 while the MOBILEBUILD latch is armed is
+	// unknown", which was wrong twice over — it hunted the helptext role of the
+	// bit, and it looked in the order-button dispatcher's arming chain, which
+	// is not where the write lives.
 	SpecialLatchFlag bool
 
-	// VisiblePanel is true for the captured visible-panel battle surface. The
-	// hidden/panel-mode descriptor is not established and is never inferred.
+	// VisiblePanel says the rail is at its visible detent. It no longer gates
+	// whether the rectangle is drawn — see drawSelectionDrag — and is retained
+	// so a caller can still report the panel state.
 	VisiblePanel bool
 }
 
@@ -45,16 +51,28 @@ func (c *Client) SetSelectionDrag(d SelectionDrag) {
 	}
 }
 
-// visiblePanelSelectionClip is the captured visible-panel runtime surface
-// descriptor. Coordinates are logical framebuffer/shell coordinates; the
-// projection's +128/+32 origin is a separate record [R-SEL-02A].
-func (c *Client) visiblePanelSelectionClip() Rect {
+// selectionClip is the runtime surface descriptor's inclusive clip rectangle,
+// which is what the selection solid-frame writer consumes. Coordinates are
+// logical framebuffer/shell coordinates; the projection's +128/+32 origin is a
+// separate record and must not be substituted for these [R-SEL-02A].
+//
+// It is the same rectangle whatever the rail is doing. The viewport subrect has
+// exactly one writer — the builder that hard-codes left 128 and top 32 and
+// derives `W−1` and `H−33` — and a census for a second, hidden-panel writer
+// came back empty [03 §4.1]. So a slid or parked rail does not move the clip,
+// and the overlay is drawn in every panel state.
+//
+// TODO(T23): §4.1 still lists a hidden-panel *expansion* of the subrect to
+// `(0, 0, W−1, H−1)` as a prediction with no writer behind it, and doc 07's
+// [R-SEL-02A] separately records a `(0, 32, W−1, H−33)` description of the same
+// record from a transition/input path. Both would only move the clip's LEFT
+// edge, and the placeholder here is the one with a traced writer. A retail
+// capture of the descriptor at the selection draw with the rail retracted
+// settles it; nothing else will.
+func (c *Client) selectionClip() Rect {
 	if c == nil {
 		return Rect{MinX: 1, MinY: 1, MaxX: 0, MaxY: 0}
 	}
-	// TODO(T23): hidden/panel-mode selection clipping is not established; the
-	// chosen placeholder is to suppress that overlay until a mode-specific
-	// retail capture settles the seam.
 	return Rect{MinX: 128, MinY: 32, MaxX: int32(c.width) - 1, MaxY: int32(c.height) - 33}
 }
 
@@ -63,11 +81,15 @@ func (c *Client) drawSelectionDrag() {
 		return
 	}
 	d := c.selectionDrag
-	if !d.VisiblePanel {
-		// TODO(T23): hidden/panel-mode selection clipping remains unknown; the
-		// chosen placeholder is to suppress the overlay pending a mode capture.
-		return
-	}
+	// The rail's state does not suppress the rectangle. This used to return
+	// early unless the panel was at its visible detent, under an accepted-blocked
+	// marker reading "hidden/panel-mode selection clipping remains unknown; the
+	// chosen placeholder is to suppress the overlay pending a mode capture" — a
+	// third arm neither candidate reading offers. Both descriptions of the clip
+	// rectangle in [R-SEL-02A] draw the overlay and disagree only about its
+	// left edge, and the composer's own clip has one writer that never consults
+	// the rail [03 §4.1]. Suppressing it made a drag started while the rail was
+	// mid-slide invisible for the whole gesture.
 	r := NormalizeRect(d.StartX, d.StartY, d.EndX, d.EndY)
 	// The ordinary drag-selection rectangle is white: outer logical entry 15,
 	// inner entry 0 [07 R-P0-11 §1 "The drawing."]. The 6/4 pair belongs to the
@@ -87,7 +109,7 @@ func (c *Client) drawSelectionDrag() {
 	// itself performs no palette lookup or per-pixel remap [R-SEL-02A].
 	outer := c.paletteIndex(logicalOuter)
 	inner := c.paletteIndex(0)
-	clip := c.visiblePanelSelectionClip()
+	clip := c.selectionClip()
 	drawIndexedFrameInclusive(c.indexed, c.width, c.height, r, outer, clip)
 	inset := Rect{MinX: r.MinX + 1, MinY: r.MinY + 1, MaxX: r.MaxX - 1, MaxY: r.MaxY - 1}
 	if inset.MinX <= inset.MaxX && inset.MinY <= inset.MaxY {

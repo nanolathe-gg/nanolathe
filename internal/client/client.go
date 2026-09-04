@@ -260,10 +260,23 @@ func New(opts Options) (*Client, error) {
 		messages:          *frame.NewMessageRing(),
 		screenChat:        1,
 	}
-	// TODO(question): the composition root does not yet expose persisted
-	// textlines/textscroll/screenchat/unitchattext settings. Keep the documented
-	// shipped presentation defaults here and expose explicit setters until that
-	// owner is traced [07 R-HUD-03 §14].
+	// The four values seeded above and by NewMessageRing are retail's own
+	// missing-value defaults: `textlines` 10, `textscroll` 10, `screenchat` 1,
+	// `unitchattext` 5 [02 §3][02 "registry preference (Total Annihilation
+	// key)"]. Their owner is not open — it is the startup settings loader,
+	// which reads each value under the game's registry key and, when one is
+	// absent, installs exactly these and writes them back; the `SPEEDS` page's
+	// `MAXLINES`, `TXTSCROL` and `UNITCHAT` controls and the `ScreenChat`
+	// command are the runtime writers [07 §5][07 R-FE-01 §11].
+	//
+	// TODO(T25): this build's settings store (internal/settings) does not carry
+	// the four values yet, so nothing calls ConfigureMessageLines or
+	// SetScreenChat with a persisted choice and the defaults above stand for
+	// the whole session. Blocked on files this unit does not own: add the four
+	// to settings.Settings with these defaults, and have the shell's
+	// applySettings call the two setters that already exist here. Behavior is
+	// correct for a fresh profile either way, which is why it is accepted
+	// rather than guessed at.
 	c.in = *newInputState()
 	// Fallback display palette: grayscale. This keeps the framebuffer path
 	// valid before SetPalette installs PALETTE.PAL [03 §4.3].
@@ -471,8 +484,16 @@ func (c *Client) AntiAlias() bool { return c.antiAlias }
 
 // SetShadowOptions selects the master shadow, vehicle-shadow and shading bits
 // [03 §5.3][R-REN-03D §1].
+//
+// The shading bit also reaches the model composer, which is the option's real
+// consumer: retail runs the shaded piece renderer only for a unit whose class
+// bit says structure (`BMcode=0`) **and** with the `Shading` display option on
+// [03 R-RND-02A]. Until this assignment the renderer's copy of the bit had no
+// writer outside its own tests, so turning `SHADING` off on the `VISUALS` page
+// left every structure shaded.
 func (c *Client) SetShadowOptions(master, vehicle, shading bool) {
 	c.shadows, c.vehicleShadows, c.shading = master, vehicle, shading
+	presentationrender.Shading = shading
 }
 
 // ShadowOptions returns the three bits the model shadow gate reads.

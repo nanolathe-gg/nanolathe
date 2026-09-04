@@ -111,9 +111,22 @@ type Event struct {
 // Limits are presentation-only admission bounds. They do not limit the
 // authoritative effect/projectile pools or the authored queue. Zero values use
 // the corresponding snapshot safety bound.
+//
+// MaxEffectEvents is a Nanolathe bound with no retail counterpart, and it
+// previously said the opposite behind an open-question marker: "exact retail
+// family cap remains unresolved [F-P0-034]". There is no retail cap to resolve here,
+// because retail has no per-tick event window at all — it spawns into the
+// pools directly, and the pool bounds those spawns. Both pool caps are
+// established: the fixed effect pool holds up to 300 fixed-size records and an
+// append at or above the cap allocates nothing (no eviction, the newcomer is
+// simply lost) [03 "Fixed effect pool"], and strip objects evict oldest-first
+// past 400, giving a steady bound of 401 [03 §1][I5]. Those numbers belong to
+// whatever owns the pools, never to this window: bounding one tick's
+// submissions by 300 would drop spawns retail accepts, since a record admitted
+// this tick may be one that retires this tick.
 type Limits struct {
 	MaxEvents       int
-	MaxEffectEvents int // TODO(question): exact retail family cap remains unresolved [F-P0-034]
+	MaxEffectEvents int
 }
 
 // EventBuffer admits typed value events in producer order. It has no callback,
@@ -139,8 +152,9 @@ func NewEventBuffer(limits Limits) *EventBuffer {
 		limits.MaxEvents = defaultEventCapacity
 	}
 	if limits.MaxEffectEvents <= 0 {
-		// This is an event-admission bound, not the fixed active-effect pool
-		// bound. The exact retail family allocation is unresolved.
+		// An event-admission bound, not a pool bound: it defaults to the whole
+		// window so this buffer never drops a submission the pools would have
+		// taken. See the Limits doc for why 300 and 400 do not belong here.
 		limits.MaxEffectEvents = limits.MaxEvents
 	}
 	return &EventBuffer{limits: limits, nextID: 1, nextSequence: 1}

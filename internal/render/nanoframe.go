@@ -20,9 +20,9 @@ const (
 // as the model's own depth key [03 §5.2][03 R-REN-03A §2]. The base exists so
 // that geometry below the model origin still keys non-negative.
 //
-// This constant previously carried "TODO(question): retail selects 125 instead
-// of 50 on one unit-definition flag bit whose authored name is not identified;
-// every stock draw path observed takes the 50 branch". Both halves of that are
+// This constant previously carried an open-question marker — "retail selects
+// 125 instead of 50 on one unit-definition flag bit whose authored name is not
+// identified; every stock draw path observed takes the 50 branch". Both halves are
 // now answered and the marker is retired. The bit is the FBI `Digger` key; its
 // contribution is a further +75, which is where 125 came from (125 = 50 + 75),
 // and after the waterline pass the finished image is erased wherever the key is

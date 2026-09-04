@@ -344,5 +344,18 @@ func CursorHotspot(f *formats.GAFFrame, x, y int) (int, int) {
 	return x - int(f.XOffset), y - int(f.YOffset)
 }
 
-// TODO(question): cursor subframe lifetime and animation speed for families not
-// shown to use the authored countdown cursor remain unknown [03 §4.4].
+// There is one cursor driver and one subframe lifetime, so there is no second
+// family to describe. This file previously ended with an open-question marker,
+// "cursor subframe lifetime and animation speed for families not shown to use
+// the authored countdown cursor remain unknown"; the premise is false. Every
+// interface cursor sequence is stepped by the same wall-clock delta path — a
+// 30-unit-per-second scaled delta fed to the multi-frame countdown stepper
+// above — and a subframe's lifetime is that frame's own authored 32-bit
+// duration expressed in those scaled units, exactly as this cursor's Bind and
+// StepDelta already implement it [03 §4.4]. Model-texture players are the only
+// sequences on a different driver (the per-tick phase-7 walker), and they are
+// not cursors [03 §4.4 "CRD-005 closure"]. The twenty-two cursor slots are one
+// homogeneous family of GAF entries [07 §8], and re-selecting the shape already
+// shown does not restart its animation, because the index writer diffs before
+// it swaps [07 §8] — that swap rule, not a second lifetime rule, is what makes
+// two cursor families look like they animate differently.

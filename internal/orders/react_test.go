@@ -124,8 +124,9 @@ func TestRetaliationOrderSpawnsTheResolvedAttackRecord(t *testing.T) {
 	}
 
 	// A victim that already has a front order takes the per-slot offer instead;
-	// only the "no current order" arm is admitted here (see RetaliationOrder's
-	// TODO(question) on the interruptible bit).
+	// only the "no current order" arm is admitted here. The other arm needs the
+	// front descriptor's standby interruptible bit, bit 17 of the static mask
+	// [04 §3.1][04 R-STANCE-01 §3] — see RetaliationOrder's own contract.
 	if RetaliationOrder(victim, attacker) {
 		t.Fatal("a victim with a front order must not receive a second retaliation record")
 	}

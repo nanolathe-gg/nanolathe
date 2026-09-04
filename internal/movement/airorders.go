@@ -800,28 +800,29 @@ func (s *System) execVTOLAirBuild(u *units.Unit, head *orders.Node, st *airOrder
 		// The record's own goal, not the movement goal handle: a ground builder's
 		// bound goal is a build-site perimeter candidate chosen for a walker,
 		// and the air leg's marker is the site itself.
-		//
-		// TODO(T25): `VTOL_MobileBuild` phase 1 snaps that goal onto the
-		// PRODUCT's footprint — anchor cell from the recorded position, then
-		// the reverse `(foot + 2·cell)·2^19` centre — before building the
-		// marker [04 R-ORD-02 §2][04 R-PATH-01 §13]; `VTOL_HelpBuild` phase 1
-		// takes the target's own position [04 R-ORD-01 §7], which the arm below
-		// already does. snapToOwnFootprint is that arithmetic and takes the
-		// footprint pair as an argument; what is missing is the PRODUCT's pair.
-		// The record carries both the canonical key and the catalog index, so
-		// the record is not the blocker: internal/movement holds no catalog
-		// handle and units.World exports none, while the ground twin's
-		// construction.Service already computes exactly this quantity
-		// (siteAnchorCell/siteCentre) from the catalog it does hold. Closing it
-		// needs a seam this unit does not own — a product-footprint resolver on
-		// System, bound in session composition. Placeholder: the record's
-		// stored goal, the site anchor the order layer centred, which differs
-		// from the snapped centre by at most half a cell per axis against an
-		// arrival radius of `builddistance`.
 		goalX, goalY, goalZ := head.GoalX, head.GoalY, head.GoalZ
 		if t := s.unitFor(head.Target); t != nil && t.Alive {
+			// `VTOL_HelpBuild` phase 1 takes the target's own position
+			// [04 R-ORD-01 §7].
 			goalX, goalY, goalZ = t.X, t.Y, t.Z
+		} else if s.ProductFootprint != nil {
+			// `VTOL_MobileBuild` phase 1 snaps that goal onto the PRODUCT's
+			// footprint — anchor cell from the recorded position, then the
+			// reverse `(foot + 2·cell)·2^19` centre [04 R-ORD-02 §2]
+			// [04 R-PATH-01 §13]. snapToOwnFootprint is that arithmetic;
+			// ProductFootprint supplies the missing PRODUCT pair from the
+			// stable catalog index the record carries in Param1, the same
+			// quantity construction.Service's siteAnchorCell/siteCentre
+			// compute for the ground twin from the catalog it holds.
+			if fx, fz, ok := s.ProductFootprint(head.Param1); ok {
+				goalX, goalZ = snapToOwnFootprint(goalX, goalZ, fx, fz)
+			}
+			// An unresolved index leaves the record's stored goal as
+			// installed — no invented fallback.
 		}
+		// A nil resolver (unbound seam) leaves every case above on the
+		// record's stored goal, exactly as before this seam existed — no
+		// invented fallback.
 		m := s.newPointMarker(u, Vec3{X: goalX, Y: goalY, Z: goalZ})
 		m.setArrivalRadius(airBuildDistance(u))
 		s.installAirGoal(u, head, m)

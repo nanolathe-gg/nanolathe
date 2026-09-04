@@ -26,10 +26,31 @@ type MessageLine struct {
 	// two writes as one bit made the "not yet visited" test and the retry arm
 	// unreachable.
 	//
-	// TODO(question): what reads bit 0x20 is not traced. A composer highlight
-	// of the message line just jumped to is the natural candidate; the decider
-	// is the readers of that bit [07 R-CAM-01 §14].
+	// Its reader is the message column painter, and it decides that line's
+	// colour: the marked record draws in colour-map entry 10, every other line
+	// in entry 15. This previously carried an open-question marker, "what reads
+	// bit 0x20 is not traced. A composer highlight of the message line just
+	// jumped to is the natural candidate" — the candidate was right, and it is now traced
+	// [07 R-CAM-01 §14 "the jumped-to line is the highlighted line"].
 	Jumped bool
+}
+
+// Logical colour-map entries the message column paints its lines in: the
+// record F3 most recently jumped to is highlighted, every other line is the
+// ordinary battle-text entry. The painter installs the pair (foreground, skip
+// colour 254) once per line before drawing it
+// [07 R-CAM-01 §14 "the jumped-to line is the highlighted line"][03 R-FONT-01 §4].
+const (
+	MessageLineLogicalColor       byte = 15
+	MessageLineJumpedLogicalColor byte = 10
+)
+
+// LogicalColor is the colour-map entry this line draws in.
+func (l MessageLine) LogicalColor() byte {
+	if l.Jumped {
+		return MessageLineJumpedLogicalColor
+	}
+	return MessageLineLogicalColor
 }
 
 // MessageRing is the fixed 30-entry output ring shared by unit captions and
