@@ -288,11 +288,34 @@ func TestLoadBadVersion(t *testing.T) {
 	}
 }
 
-func TestLoadBadAlwaysZero(t *testing.T) {
+// TestLoadTrailingRecordCount locks what header word 0x14 actually is: the
+// record count for the trailing 8-byte record table at word 0x28, not a
+// reserved word [02 "Compiled script archive (COB)"] [fmt cob "Header"].
+// Retail relocates those records and accepts any count, so a non-zero count
+// whose table lies inside the file must LOAD; only a table that runs off the
+// end is refused, and that refusal is the I11 bounds-check exception.
+//
+// This test replaces TestLoadBadAlwaysZero, which asserted the opposite
+// (retired 2026-09-04, WU-19-155: the loader was rejecting a shape retail
+// reads, under a name the field does not have).
+func TestLoadTrailingRecordCount(t *testing.T) {
 	data := makeCOB([]uint32{0x10065000}, []string{"Create"}, []uint32{0}, []string{"base"})
-	binary.LittleEndian.PutUint32(data[0x14:], 1)
-	if _, err := Load(data); err == nil || !strings.Contains(err.Error(), "reserved") {
-		t.Fatalf("want reserved word error, got %v", err)
+	// One 8-byte record living inside the file: point the table at the code
+	// array, which is 44 bytes in and long enough for the bounds test.
+	withRecords := append([]byte(nil), data...)
+	withRecords = append(withRecords, make([]byte, 8)...)
+	binary.LittleEndian.PutUint32(withRecords[0x14:], 1)
+	binary.LittleEndian.PutUint32(withRecords[0x28:], uint32(len(data)))
+	if _, err := Load(withRecords); err != nil {
+		t.Fatalf("a trailing record table inside the file must load, got %v", err)
+	}
+
+	// The same count with the table hanging off the end is refused.
+	offEnd := append([]byte(nil), data...)
+	binary.LittleEndian.PutUint32(offEnd[0x14:], 1)
+	binary.LittleEndian.PutUint32(offEnd[0x28:], uint32(len(data)-4))
+	if _, err := Load(offEnd); err == nil || !strings.Contains(err.Error(), "trailing record table") {
+		t.Fatalf("want trailing record bounds error, got %v", err)
 	}
 }
 

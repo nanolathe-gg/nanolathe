@@ -172,14 +172,28 @@ func TestAcosDomainEdges(t *testing.T) {
 	}
 }
 
-// TestZeroVelocity verifies zero weaponvelocity yields no solution via solver alone, but creator faults after reserve [06 §6.4] P0-10.
-// Reserve before solve to reproduce #DE leak per P0-10 [06 §6.4]
+// A zero `weaponvelocity` gives the solver no solution, and reaching the
+// ballistic creator with one faults AFTER the reservation has already
+// incremented the live count — a count that is never rolled back.
+//
+// That ordering is Established, not an open policy choice: "When
+// `weaponvelocity` is zero and the ballistic creator is reached, the pool record
+// has already been reserved and the live count already incremented before the
+// unsigned distance-over-velocity division raises the processor divide
+// exception, and the count is not rolled back" [06 §3.3][06 §6.4]. The leak is
+// the contract; a creator that validated first would silently hold a capacity a
+// retail session has lost.
+//
+// Correction (WU-19-154): this was carried as a TODO(T25) restating the same
+// behavior as if the malformed-state error policy still owed an answer here. It
+// does not — the fault's position relative to the reservation is traced. What
+// belongs to the error policy is only how *this* engine surfaces the processor
+// exception, and it surfaces it as a panic, asserted below.
 func TestZeroVelocity(t *testing.T) {
 	minBarrel := deg(-11.25)
 	if _, ok := BallisticSolve(fixRaw(6553600), fixRaw(0), fixRaw(0), fixRaw(0), fixRaw(8155), minBarrel); ok {
 		t.Fatalf("zero velocity should be no solution via solver")
 	}
-	// TODO(T25): vel0 ballistic via TryFire reserves before divide and faults with count leak per P0-10 [06 §6.4]; solver alone is retained for pool-full validation but creator faults
 	var svc Service
 	w := &content.WeaponDef{ID: 999, Ballistic: true, WeaponVelocity: 0, WeaponTimer: 30}
 	slot := &Slot{Weapon: w}

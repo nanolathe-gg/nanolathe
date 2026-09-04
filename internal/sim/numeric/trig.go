@@ -64,16 +64,25 @@ func Cos(a Angle) int32 {
 	return sineTable[((uint32(a)+cosPreAdd)>>7)&511]
 }
 
-// MulRound multiplies two scaled trig values and rounds to nearest before
-// truncation [04 §5.1]. The scale is 1<<13 (8192), so rounding to nearest is
-// implemented here as add-half-then-arithmetic-shift: (a*b + 4096) >> 13,
-// with an int64 intermediate against overflow.
+// MulRound is THE simulation trig component: it multiplies a table entry by an
+// unscaled magnitude, adds half the 8192 scale, and shifts the sum down 13 bits
+// arithmetically — `(a*b + 0x1000) >> 13`, with an int64 intermediate against
+// overflow. The shift FLOORS, so a negative product rounds toward negative
+// infinity after the half is added and a tie rounds up; it is not symmetric
+// round-to-nearest and it never truncates toward zero.
 //
-// TODO(question): [04 §5.1] states "products round to nearest before
-// truncation" without naming the machine sequence; the add-half form is the
-// standard fixed-point reading and is what ships here. When phase 6 wires the
-// first real consumers (RockUnit/HitByWeapon arguments, flight brake shaping),
-// confirm the negative-tie behavior matches before building on it.
+// The machine sequence is named, not inferred (marker retired 2026-09-04,
+// WU-19-155; it previously said [04 §5.1] states the rounding "without naming
+// the machine sequence" and asked for the negative-tie behavior to be confirmed
+// before real consumers were built on it). [04 R-MOV-01 §4] writes it out:
+// `component(angle, magnitude) = (table[((angle + 0x20) >> 7) & 0x1ff] *
+// magnitude + 0x1000) >> 13`, "as a 64-bit product with an arithmetic shift".
+// [04 §5.3] sharpens the same pair of shared component routines from the
+// callback side — signed 16-bit entry times signed 32-bit magnitude at full
+// 64-bit width, `0x1000` added to the sum, low word of an arithmetic right
+// shift by 13, no divide and no float-to-integer conversion in either body.
+// internal/cob.trigScalar is the same sequence at the RockUnit/HitByWeapon
+// call sites and is locked by TestTrigScalarFloorsAfterAddingHalf.
 func MulRound(a, b int32) int32 {
 	return int32((int64(a)*int64(b) + 4096) >> 13)
 }

@@ -253,21 +253,38 @@ func (s *Slot) CompleteAim(returnValue int32) bool {
 	return got
 }
 
-// aimRequirement reports the per-family readiness rule [06 §3.3]: turret
-// families need the Aim issue latch AND a nonzero result; vertical-launch
-// needs only the result; LOS/self-propelled and dropped need neither.
-// TODO(question): guidance/tracks/cruise composability beyond turret/vlaunch
-// gating remains open per [06 §3.3] missing/unknown.
+// aimRequirement reports the per-executor readiness rule [06 §3.3]: turret
+// needs the Aim issue latch AND a nonzero result; vertical-launch needs only
+// the result; line-of-sight/self-propelled and dropped need neither.
+//
+// The ladder below is complete, and there is nothing to compose it with. Which
+// executor a weapon uses "is decided once, at catalog compile time, by the first
+// matching flag in this order: `turret`; else `vlaunch`; else `lineofsight` or
+// `selfprop`; else `dropped`; else none" [06 §3.3], and §3.3 then enumerates the
+// readiness rule for each of those four executors and for none. `guidance`,
+// `tracks` and `cruise` are not executor selectors at all — they are motion-
+// phase flags, read by the family dispatch and guidance of [06 §6.2] and
+// [06 §6.6], which §3.3 says explicitly "is not the same as" this ordering and
+// must be reproduced independently. So a weapon's guidance flags cannot change
+// what its aim gate demands, at any combination.
+//
+// Correction (WU-19-154): a TODO(question) here said "guidance/tracks/cruise
+// composability beyond turret/vlaunch gating remains open per [06 §3.3]
+// missing/unknown". §3.3's missing list carries no such item, and the
+// composability it asked about does not exist — the two ladders never meet.
 func aimRequirement(w *content.WeaponDef) (needLatch, needResult bool) {
 	if w == nil {
 		return false, false
 	}
 	if w.Turret {
-		return true, true // [06 §3.3] P0-10 turret needs latch+nonzero+drift
+		return true, true // [06 §3.3] turret: latch + nonzero result, then the drift gate
 	}
 	if w.VLaunch {
-		return false, true // [06 §3.3] P0-10 vertical needs result only
+		return false, true // [06 §3.3] vertical-launch: the result only, latch not tested
 	}
+	// Line-of-sight/self-propelled and dropped "gate on neither field"
+	// [06 §3.3]. The fifth rung — a weapon matching no executor flag, which
+	// "can never fire" — is not a readiness question and is not decided here.
 	return false, false
 }
 

@@ -35,7 +35,9 @@ func TestFloorIsNotTruncation(t *testing.T) {
 // TestMulFloors locks the R12 decision. A fixed-by-fixed multiply shifts the
 // full-width product down arithmetically, so it floors. Using Go's `/` here
 // would truncate toward zero and disagree on every negative product carrying a
-// fraction. See Mul's TODO(question) for why this is inference.
+// fraction. Established, not inference: [04 §7.2] forms the A* heuristic scale
+// as "a full signed 64-bit multiplication ... arithmetically shifted", and
+// [04 R-MOV-01 §3] writes the same shape per axis.
 func TestMulFloors(t *testing.T) {
 	half := Fixed(FractionOne / 2)
 	if got := half.Mul(FixedFromInt(3)); got != Fixed(FractionOne+FractionOne/2) {

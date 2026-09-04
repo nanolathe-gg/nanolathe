@@ -571,11 +571,17 @@ Three consequences follow, and all three differ from the previous reading:
   revisited on the same fixed period as a player owning many — the opposite of
   what a live-count dividend would give.
 
-Nanolathe currently implements the superseded reading (`internal/combat`'s
-autonomous scan cursor divides the live unit count and walks a compacted vector
-of live units); the divergence is carried as a `TODO(T25)` at that constant,
-because correcting it needs the per-player pool capacity and a free-record-
-inclusive walk exposed from `internal/units`.
+The note that stood here — that Nanolathe carried the superseded reading behind
+a `TODO(T25)` "because correcting it needs the per-player pool capacity and a
+free-record-inclusive walk exposed from `internal/units`" — was wrong about the
+blocker, and the divergence is closed (2026-09-04, WU-19-154). Both accessors
+already existed: the pool has been sized from the per-player unit limit rather
+than the definition count since the pool-sizing work behind `[05 R-SHARE-01 §7]`,
+so the slice-width accessor *is* the limit under a name that predates that
+change, the slice base is exposed per player, and a unit already carries its
+record index. The cursor is now a window over record indices on the fixed
+slice, so a free record inside the window spends budget by simply resolving to
+no unit.
 
 **Established fact:** Within a visited unit the three slots are processed in
 numeric order, and a slot is skipped unless its armed/has-target flag and its
@@ -1314,10 +1320,37 @@ heading`), by the fixed-forward drift compare against the heading
    belongs at the point where the record's yaw is published to
    presentation.
 
-**Unknown.** Whether the self-destruct and water-damage callers of the packet
-builder pass a direction word at all, or zero (the projectile caller above is
-the only one traced). *Decider:* the fifth argument at each of the builder's
-other call sites.
+##### Every non-projectile caller passes a zero direction word, and only kind 1 ever reads it — Established (2026-09-04, WU-19-154)
+
+**Closes the Unknown that stood here**, which asked "whether the self-destruct
+and water-damage callers of the packet builder pass a direction word at all, or
+zero", with the fifth argument at the builder's other call sites as its decider.
+Both halves are now traced.
+
+The packet builder takes **five** arguments — attacker, victim, amount, kind,
+direction word — and keeps the direction word's **high byte** as packet byte 7,
+exactly as the projectile caller's entry above describes. Of the builder's
+eleven call sites, exactly **one** — the projectile damage caller — computes a
+direction word; it is the one that solves the victim-relative bearing afresh.
+Every other site pushes the **immediate constant zero**, across every kind that
+reaches the builder: both fixed-30000 kind-3 sites (the self-destruct pair, whose
+attacker and victim arguments are the same unit), the two kind-4 sites, the two
+kind-5 sites, the kind-9 sites, the kind-10 site, the kind-11 site, and a further
+30000-damage site that selects between two kinds at runtime. So the answer to the
+Unknown is: they pass a direction word, and it is zero.
+
+**The consequence is larger than the question, and it corrects Nanolathe rather
+than the spec.** The direction byte is read at exactly one place in the damage
+funnel: inside the `kind == 1` branch that emits `HitByWeapon` and `TakeDamage`.
+§9.1 step 7 already states this — "**kind 1 only** emits ... Kind 11 subtracts
+health but emits neither callback" — and the funnel body confirms it is a single
+equality test against 1 guarding both starts, with no second arm for any other
+kind. A **self-destruct therefore emits neither `HitByWeapon` nor `TakeDamage`**:
+the packet is kind 3, health is subtracted, the death latch is set or health is
+clamped, and the funnel returns. Nanolathe's self-destruct path emitted both
+callbacks with a zero direction byte, and the marker at that site was defending
+the emission while asking only what byte to pass; the emission itself is what
+was wrong.
 
 ### Closed — the accuracy spread reaches only ballistic trajectories; the ordinary creator re-solves from the aim point [R-WPN-05 §5] (2026-09-02)
 

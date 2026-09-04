@@ -47,14 +47,18 @@ func (v Fixed) Neg() Fixed            { return -v }
 // Mul multiplies two 16.16 values. The product is formed at full width and
 // shifted down arithmetically, so it FLOORS rather than truncating toward zero.
 //
-// TODO(question): research does not state the rounding of a fixed-by-fixed
-// multiply directly. The shift is the mechanism it does describe — [03 §2.1]
-// has the coordinate hierarchy using "signed, floor-like shifts", and [01 §8]
-// scopes truncation to the __ftol path, which is float-to-integer and not this.
-// An x86 fixed multiply is imul into edx:eax followed by a shift of the 64-bit
-// product, which floors; Go's `/ FractionOne` would truncate toward zero and
-// disagree on every negative product with a fraction. If a probe ever shows
-// otherwise, this is the one line to change.
+// This is Established, not inference (corrected 2026-09-04, WU-19-155; the text
+// here previously carried a TODO(question) saying "research does not state the
+// rounding of a fixed-by-fixed multiply directly". It does — under the phrase
+// "64-bit product, arithmetic shift" rather than under the word "rounding").
+// The A* heuristic scaling is the flattest statement: "hScaled = (h · scale) >>
+// 16, with the product formed as a full signed 64-bit multiplication and
+// arithmetically shifted" [04 §7.2]. The pure-pursuit carrot writes the same
+// form per axis — "(ux * t) >> 16 // 64-bit product, arithmetic shift"
+// [04 R-MOV-01 §3] — and the ground mover's exact-half speed cap
+// [04 R-MOV-01 §4] and the flight velocity decay [04 §10.1] are two more.
+// Go's `/ FractionOne` would truncate toward zero and disagree on every
+// negative product carrying a fraction.
 func (v Fixed) Mul(other Fixed) Fixed {
 	return Fixed((int64(v) * int64(other)) >> FractionBits)
 }

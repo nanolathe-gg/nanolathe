@@ -655,8 +655,9 @@ func TestGroundHeightReshapesOffMapSentinel(t *testing.T) {
 
 // TestGroundHeightNilHeightFnReadsZero documents the no-terrain fallback: a
 // nil heightFn (only reachable from a bare VM fixture with nothing bound,
-// never from a production session) reads 0, not an invented sentinel. See
-// the TODO(question) on VM.readPortDefault.
+// never from a production session) reads 0, not an invented sentinel. See the
+// note on VM.readPortDefault in vm.go for why this arm has no retail behavior
+// to be wrong about.
 func TestGroundHeightNilHeightFnReadsZero(t *testing.T) {
 	if got := GroundHeight(PackXZ(numeric.FixedFromInt(1), numeric.FixedFromInt(1)), nil); got != 0 {
 		t.Fatalf("GroundHeight nil heightFn = %v want 0", got)

@@ -5,7 +5,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -748,15 +747,13 @@ func (s *Service) ApplySelfDestructDamage(w *units.World, target pool.Handle, ti
 	victim.LastDamageSide = victim.Owner
 	victim.LastDamageCause = uint8(CauseSelfDestruct)
 	victim.Health = ApplyDamage(victim.Health, amount)
-	packet := &Projectile{Shooter: target}
 	if victim.Health <= 0 {
 		// The death packet here is the self-damage packet: cause 3 applies
 		// 30000 "to the unit itself ... through the standard damage funnel"
-		// [04 R-SPEC-01 §1][04 R-ORD-01 §2], so its attacker is the victim,
-		// which is the same identity `packet` above already carries. The death
-		// handler's row writes that attacker into the recorded-attacker link
-		// [04 R-UNIT-06 §5], which therefore ends as the unit's own handle and
-		// not as whoever shot it earlier.
+		// [04 R-SPEC-01 §1][04 R-ORD-01 §2], so its attacker is the victim.
+		// The death handler's row writes that attacker into the
+		// recorded-attacker link [04 R-UNIT-06 §5], which therefore ends as the
+		// unit's own handle and not as whoever shot it earlier.
 		w.DestroyBy(target, units.DeathSelfDestruct, target)
 		if s.deathNotified == nil {
 			s.deathNotified = make(map[pool.Handle]*units.Unit)
@@ -767,16 +764,19 @@ func (s *Service) ApplySelfDestructDamage(w *units.World, target pool.Handle, ti
 		}
 		return true
 	}
-	if bridge := s.callbackBridgeForUnit(victim); bridge != nil {
-		// TODO(question): the direction word the self-destruct caller hands
-		// the packet builder is untraced — only the projectile caller's
-		// (a fresh victim-relative bearing, [06 §9.1], hitDirectionByte) is
-		// Established [06 R-WPN-05 §11]. `packet` here is a synthetic record
-		// with a zero yaw, so this is a direction byte of zero; settle it at
-		// the builder's self-destruct call site before relying on it.
-		bridge.HitByWeapon(uint8(packet.Yaw.Raw() >> 8))
-		bridge.TakeDamage(cob.HealthPercent(victim.Health, victim.MaxHealth))
-	}
+	// No script callbacks. The funnel starts `HitByWeapon` and `TakeDamage` from
+	// a single equality test against damage kind 1, and self-destruct is kind 3
+	// [06 §9.1 step 7][06 R-WPN-05 §11 "Every non-projectile caller passes a
+	// zero direction word"]. A survivor of its own self-destruct — only
+	// reachable where veterancy scaling leaves the 30000 short of the unit's
+	// health — therefore sees its health drop with its script never told.
+	//
+	// The TODO(question) that stood here asked which direction byte to hand
+	// `HitByWeapon` on this path. The trace that answered it (every
+	// non-projectile call site pushes an immediate zero) also showed the call
+	// itself does not happen: retail reads the direction byte only inside the
+	// kind-1 branch. The marker was defending the emission while asking about
+	// its argument.
 	return true
 }
 

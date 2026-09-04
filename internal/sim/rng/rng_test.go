@@ -100,28 +100,45 @@ func TestCRTBoundOneStillDraws(t *testing.T) {
 	}
 }
 
-// TestCRTWideBoundConcatenates locks the chunk-concatenation helper of
-// [01 §7.2], followed literally: mask and result both start at 0x7FFF, so a
-// bound of 0x10000 consumes exactly ONE draw and the sample's top bits come
-// from that constant (see the TODO(question) on CRT.Uint32n for why this
-// reading was chosen over seeding result from a fresh draw).
+// TestCRTWideBoundConcatenates locks the widening sampler of [01 §7.2] as
+// corrected on 2026-09-04: the result is ONE fresh fifteen-bit draw, and the
+// widening loop ORs the constant 0x7FFF into the result exactly as it does into
+// the mask. The draw count is the part that is easy to regress silently — a
+// second draw here shifts every later CRT consumer by one — so it is asserted
+// at three bounds spanning zero, one and two widening iterations.
 func TestCRTWideBoundConcatenates(t *testing.T) {
+	// Seed 1: the first CRT draw is 41 [01 §7.2].
+	const firstDraw = uint32(41)
+
 	stream := NewCRT(1)
 	got := stream.Uint32n(0x10000)
 	if stream.Draws() != 1 {
 		t.Fatalf("Uint32n(0x10000) consumed %d draws, want 1", stream.Draws())
 	}
-	// Seed 1: first draw is 41 [01 §7.2]. Literal loop:
-	// result = (0x7FFF << 15 | 41) % 0x10000.
-	const firstDraw = uint32(41)
-	if want := ((uint32(0x7FFF) << 15) | firstDraw) % 0x10000; got != want {
+	if want := ((firstDraw << 15) | 0x7FFF) % 0x10000; got != want {
 		t.Fatalf("Uint32n(0x10000) = %d, want %d", got, want)
 	}
-	// A wider bound needs a second iteration and a second draw.
+
+	// A wider bound needs a second widening iteration and still exactly one
+	// draw: the loop's second operand is the constant, never the stream.
 	stream = NewCRT(1)
-	_ = stream.Uint32n(0x40000000)
-	if stream.Draws() != 2 {
-		t.Fatalf("Uint32n(0x40000000) consumed %d draws, want 2", stream.Draws())
+	got = stream.Uint32n(0x40000000)
+	if stream.Draws() != 1 {
+		t.Fatalf("Uint32n(0x40000000) consumed %d draws, want 1", stream.Draws())
+	}
+	stage1 := (firstDraw << 15) | 0x7FFF
+	if want := ((stage1 << 15) | 0x7FFF) % 0x40000000; got != want {
+		t.Fatalf("Uint32n(0x40000000) = %d, want %d", got, want)
+	}
+
+	// The constant OR is visible in the sample itself: with a bound whose own
+	// low fifteen bits are zero, the remainder keeps them, so every widened
+	// sample ends in fifteen set bits whatever the stream said.
+	for _, seed := range []uint32{1, 12345, 0xDEADBEEF} {
+		stream = NewCRT(seed)
+		if v := stream.Uint32n(0x40000000); v&0x7FFF != 0x7FFF {
+			t.Fatalf("widened sample %#x (seed %d) has low bits %#x, want 0x7fff [01 §7.2]", v, seed, v&0x7FFF)
+		}
 	}
 }
 

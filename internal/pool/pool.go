@@ -107,10 +107,21 @@ func UsableCapacityForDefs(maxDefs int) int {
 // carry no generation tag; stale handles alias the new occupant [P0-16]
 // [06 §5.1]. Forced-slot verification (save reconstruction) is constrained
 // to the owning player's slice [P0-16 §3.3].
-// [P2-03] Allocator failure: nil return, zero-fill new record, zero RNG draws.
-// Retail zero-fill byte count remains TODO(question) — Nanolathe zeroes logical
-// fields (alive/defID cleared, slotIndex retained) and treats the remainder as
-// zeroed to avoid stale leak; divergence noted at the allocators.
+// [P2-03] Allocator failure: nil return, zero RNG draws.
+//
+// There is no retail zero-fill byte count to match, and the question of one was
+// the wrong question (marker retired 2026-09-04, WU-19-155). [01 §6] is
+// explicit and corrected: the allocation helpers "do not zero or pattern-fill
+// by default" — no fill happens at all unless the `-memset` diagnostic switch is
+// present — and callers initialize the blocks they receive. So a reused record's
+// residue is decided entirely by which fields the unit constructor writes, and
+// that is `internal/units`' contract, not this pool's: doc 04 names those writes
+// one at a time (creation zeroes the first state byte and the low nibble of the
+// next; the constructor zeroes the pending word; and so on). This pool stores
+// only the three words it owns — alive, defID and slotIndex — and its behavior
+// already matches: Free clears alive and defID and deliberately RETAINS the
+// stale slotIndex [P0-16 §3.4], which is residue reproduced rather than
+// scrubbed. There is no "remainder" here to have a policy about.
 type Units struct {
 	alive     []bool   // index 0 is sentinel, never allocated; len = totalRecords
 	defID     []uint16 // occupancy identity per slot, 0 = free [P0-16 §2.1]

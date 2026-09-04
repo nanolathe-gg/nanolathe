@@ -16,9 +16,24 @@ func (p *presentationCRT) Rand() uint32 {
 }
 
 // Music uses WinMM MCI strings for cdaudio open/close/stop/status/play/pause
-// [03 §8.4]. Failure behavior on missing CD and history persistence across
-// saves remain TODO(T23). This file is presentation-only, uses a
-// presentation-only CRT stream, and never touches the simulation RNG [I4].
+// [03 §8.4]. This file is presentation-only, uses a presentation-only CRT
+// stream, and never touches the simulation RNG [I4].
+//
+// TODO(T23): two retail behaviors here are platform residuals, not unknowns —
+// Nanolathe has neither an MCI `cdaudio` device nor a Windows registry to put
+// them in. Both are Established and written up, so a port that acquires a CD
+// backend implements them from research rather than re-tracing them (marker
+// corrected 2026-09-04, WU-19-155; it previously said both were still open,
+// which [03 §8.4] and [03 R-AUD-01 §4] had already closed):
+//   - the missing-CD failure chain — a failed open retries once with an
+//     enumerated window handle and then disables CD playback; a time-format
+//     failure stops and closes the device and disables playback; a failed
+//     track-count query leaves the count at zero and the tick idles [03 §8.4];
+//   - history persistence — the per-disc category list is a 20-entry ring keyed
+//     by the drive's volume serial, held in the registry binary value CDLISTS
+//     (20 × 136 bytes), read at session init and rewritten on disc eject and at
+//     shutdown. It is registry state, not save-game state: no save box carries
+//     it [03 R-AUD-01 §4].
 
 // PlayMode enumerates the five retail playback modes observed in
 // the five-mode playback switch.

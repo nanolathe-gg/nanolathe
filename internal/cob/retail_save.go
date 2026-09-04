@@ -13,11 +13,33 @@ func RetailScriptImage(v *VM) ([]byte, error) {
 	if v == nil || v.prog == nil {
 		return nil, fmt.Errorf("cob: retail save: nil VM or program")
 	}
-	// TODO(question): two of the three per-piece flag getter results are lost
-	// to writer stack residue before the 0x6C record is emitted. The VM does not
-	// retain those scratch words, so emitting a value would invent retail bytes.
-	// A byte-level writer trace or a captured save at this call site must supply
-	// the residue policy before piece-bearing Script images can be written.
+	// TODO(question): what VALUE dwords 24 and 25 of each 0x6C piece record
+	// hold. The mechanism is now Established [08 R-SAVE-02 §9] (sharpened
+	// 2026-09-04, WU-19-155; the marker here previously said two getter results
+	// were "lost to writer stack residue" without saying which, and claimed the
+	// VM had lost scratch words it never held).
+	//
+	// The writer fills one 27-dword stack buffer per piece and calls the three
+	// piece-level getters FIRST. The first two land in the SAME frame slot —
+	// dword 23 — so the second overwrites the first, and the axis loop then
+	// overwrites dword 23 a third time with axis 2's get-angle result. Only the
+	// third getter reaches the file, in dword 26. Dwords 24 and 25 are never
+	// written by the writer at all: they are uninitialized frame residue, the
+	// same two words for every piece of one call, and the reader installs them
+	// through the show/hide and cache setters on load. So the two lost getters
+	// are the show/hide and cache ones and the shade getter is the survivor —
+	// which closes doc 08's "which getter was lost is not [Established]"
+	// residual and leaves only the residue's value.
+	//
+	// That value is not a function of game state; it is whatever the previous
+	// call left on retail's stack, so there is nothing to clone and nothing to
+	// derive. What Nanolathe writes there is a save-format policy decision, not
+	// a research one, and it needs a seam this package does not own — the
+	// pattern already used for exactly this problem one record over is
+	// units.RetailUnitWriterScratch, supplied by the caller through
+	// session.RetailSaveInputs. Until that seam exists a piece-bearing program
+	// refuses rather than inventing bytes, which means every real unit refuses,
+	// since every real COB names pieces.
 	if len(v.prog.Pieces) != 0 {
 		return nil, fmt.Errorf("cob: retail save: piece record writer scratch is not represented")
 	}

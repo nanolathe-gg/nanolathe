@@ -5908,9 +5908,27 @@ results inside dwords 24..26 (the other two land in a stack slot the axis
 loop overwrites), which is the origin of the standing "two slots leak old
 stack values" sentence: dwords 24 and 25 carry stack residue and the reader
 installs that residue through the show/hide and cache setters. [Established
-layout and sizes; the exact frame position of the two lost getter results is
-Supported inference from the decompilation — decider: byte-level trace of
-the writer's three indirect calls.] With this, the "script persistence
+layout and sizes.]
+
+**Closed (2026-09-04, WU-19-155) — which getter is lost, and how.** The
+byte-level trace this paragraph asked for was done, and the frame arithmetic is
+exact. The writer builds one 27-dword stack buffer per piece and calls the three
+piece-level getters **before** the axis loop. The first two calls store into the
+**same** frame slot — dword 23 — so the second overwrites the first; the axis
+loop then writes dwords `0+a, 3+a, 6+a, 9+a, 12+a, 15+a, 18+a, 21+a` for
+`a = 0..2`, i.e. dwords 0..23, so its final get-angle write clobbers dword 23 a
+third time. Only the **third** getter is stored somewhere the loop does not
+reach: dword 26. Dwords 24 and 25 are never written by the writer at all — they
+are uninitialized frame residue, and because the buffer is reused across the
+piece loop without being cleared, every piece of one call carries the *same* two
+residue words. Pairing this with the reader's mapping (24 → show/hide, 25 →
+cache, 26 → shade) settles the identity: **the two lost getters are the
+show/hide and cache ones; the shade getter is the survivor.** The residue's
+*value* stays **Unknown** and is not knowable from the image — it is whatever
+the preceding call left in that stack region, not a function of game state — so
+a reimplementation has no retail value to reproduce there and must treat those
+two dwords as a local policy choice rather than a contract. [Established
+mechanism; residue value Unknown by construction.] With this, the "script persistence
 remains only partially closed" item under R-SAVE-UNIT-01 is closed: the box
 persists every thread word, every static and every per-axis animation word,
 and nothing else (callbacks are the receiver word inside each thread record;
@@ -7560,10 +7578,13 @@ a single-player implementation.
   "Save-file organization" [R-SAVE-02 §6] [R-SAVE-02 §7] [R-SAVE-02 §10] ·
   static trace (field-isolation of each reader). Everything else in the unit,
   mover, script, order, feature and player records is named.
-- The exact frame slot of the script writer's two lost piece-level getter
-  results (which of dwords 24/25 is residue is Established; which getter was
-  lost is not) · [R-SAVE-02 §9] · byte-level trace of the writer's three
-  indirect calls.
+- The *value* of the script writer's two residue dwords (24 and 25 of each
+  piece record). Which getter is lost is now Established — the show/hide and
+  cache getters both store into dword 23 and are overwritten, leaving only the
+  shade getter in dword 26 ([R-SAVE-02 §9], closed 2026-09-04). The residue
+  itself is stack leftover, not derived from game state, so it is Unknown **by
+  construction**: no further trace can settle it, and a reimplementation must
+  choose a policy rather than reproduce a value.
 - Which file timestamp the save-list enumerator's 32-bit sort key derives
   from · [R-SAVE-02 §1] · static trace of the enumerator's find-data
   conversion.

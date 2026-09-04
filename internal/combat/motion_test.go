@@ -671,27 +671,46 @@ func TestAdvanceDispatch(t *testing.T) {
 	}
 }
 
-// Ensure malformed cases reproduced not defended: zero duration beam, zero timer ballistic already tested.
-// Negative burst not in motion scope; ensure we don't panic on negative timers.
-func TestMalformedNegativeTimerPlaceholder(t *testing.T) {
+// The ballistic expiry gate is UNSIGNED, and there is no signed timer anywhere
+// in the projectile path: `weapontimer` reaches the record through a 16-bit
+// unsigned store and `currentTick < expiry` compares unsigned, "so a 'negative
+// timer' is a wrapped large positive one" [06 §6.6][06 §7.3]. A record whose
+// deadline is far in the unsigned future therefore stays alive and retires on
+// the tick the deadline is reached, which is the whole of the behavior — there
+// is no separate malformed arm to defend.
+//
+// Correction (WU-19-154): the TODO(question) that stood here said the wrapping
+// was "not fully closed" and called the unsigned reading a placeholder. It is
+// the Established one, under §6.6's own wording rather than the marker's
+// vocabulary. What is NOT settled by this test is where the wrap happens — see
+// the TODO(T25) below.
+func TestNegativeTimerIsAWrappedLargePositiveOne(t *testing.T) {
 	w := &content.WeaponDef{Ballistic: true, WeaponTimer: -5, BurnBlow: false}
-	p := Projectile{Pos: Vec3{X: fix(0)}, Velocity: Vec3{X: fix(0)}, ExpiryTick: 0} // expiry 0 + uint32(-5) wraps to large
-	// Init would wrap: now+uint32(-5) = now-5 wraps; our expiry helper uses uint32 conversion so wraps modulo 2^32.
-	// Advance at tick 0 with expiry wraps to 0xFFFFFFFB should not immediately retire if we interpret as uint32 comparison wrapping?
-	// Since tick 0 < 0xFFFFFFFB unsigned? Actually 0 < 4294967291 true, so alive. That's correct wrapping behavior per [06 §6.4].
-	// TODO(question): negative timer malformed wrapping not fully closed; placeholder treats as unsigned wrap.
+	p := Projectile{Pos: Vec3{X: fix(0)}, Velocity: Vec3{X: fix(0)}, ExpiryTick: 0}
 	expiry := nowPlusTimer(0, w.WeaponTimer)
 	p.ExpiryTick = expiry
 	res := AdvanceBallistic(&p, w, 0, Vec3{}, fix(0))
 	if res != AdvanceAlive {
-		t.Fatalf("negative timer wrap should be alive at tick 0")
+		t.Fatalf("a deadline far in the unsigned future must leave the record alive [06 §6.6]")
 	}
-	// at tick == expiry should retire
 	res = AdvanceBallistic(&p, w, expiry, Vec3{}, fix(0))
 	if res != AdvanceRetire {
-		t.Fatalf("negative timer at expiry should retire")
+		t.Fatalf("the record must retire on the tick the unsigned deadline is reached [06 §6.6]")
 	}
 }
+
+// TODO(T25): the width of the wrap is wrong in this build, and correcting it
+// needs a file this unit does not own. [06 §6.6] makes `weapontimer` a **16-bit
+// unsigned** store, so an authored negative value reaches the record as at most
+// 65,535 ticks; the weapon-definition compiler keeps the float-to-integer
+// conversion in a 32-bit field with no 16-bit truncation
+// (`internal/content/compile_weapon.go`, the `weapontimer` row of the durations
+// block — `[01 "Definition parsers"]` lists this whole row of keys as 16-bit),
+// so `now + uint32(w.WeaponTimer)` here wraps modulo 2^32 instead: a deadline
+// roughly 65,000 times further out. Unreachable on stock content, which authors
+// no negative or out-of-range duration; reachable by a mod. Settling it is a
+// one-line truncation in the compiler plus whatever the same row owes the other
+// eight duration keys, which belongs to whoever owns internal/content.
 
 func nowPlusTimer(now uint32, timer int32) uint32 { return now + uint32(timer) }
 

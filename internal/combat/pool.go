@@ -229,7 +229,31 @@ func (s *Service) Reserve() (pool.Handle, bool) {
 	}
 	idx := int(h) - 1
 	if idx >= 0 && idx < len(s.Records) {
-		s.Records[idx] = Projectile{} // TODO(T23): exact allocator zero-fill byte count for 107-byte projectile record not traced [01 §6.1][GAP T13]; Go zero-initializes the struct
+		// TODO(T25): retail's reservation clears TWO fields, not the record.
+		// The marker that stood here said the "exact allocator zero-fill byte
+		// count for the 107-byte projectile record" was untraced. There is no
+		// zero-fill to count: [06 §4.1] enumerates the reservation as "test the
+		// live count against the hard cap of 300; take the record at that index;
+		// increment the count; clear the record's dead bit; clear its retained
+		// unit target", and [06 §5.1] gives the same two clears. Everything else
+		// a new record needs is written by the common initializer and the family
+		// creator; a field neither writes keeps the PREVIOUS OCCUPANT's value.
+		//
+		// That is load-bearing in exactly one place research names: the common
+		// initializer copies the aim point into the stored target point "only
+		// when it is non-null, leaving the previous occupant's stored target
+		// point in place otherwise" [06 §4.1]. Zeroing here erases the value
+		// retail keeps, so a null-aim creation reads a zero target point where
+		// retail reads the last record's.
+		//
+		// Not closed here because it is not this file's to close: dropping the
+		// zero-fill is only safe once `InitCommon` makes that target-point copy
+		// conditional AND every family creator is confirmed to write each field
+		// it reads. Both live in internal/combat/motion.go, outside this unit's
+		// ownership. Placeholder: keep the full zero-fill, which is the
+		// conservative arm — it can only make a new record read cleaner than
+		// retail's, never dirtier.
+		s.Records[idx] = Projectile{}
 	}
 	return h, true
 }

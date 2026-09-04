@@ -82,15 +82,22 @@ func TestAutonomousScanRequiresTheArmedStatusBit(t *testing.T) {
 func TestAutonomousScanArmedBitSenseIsSet(t *testing.T) {
 	w, _, shooter, _ := newTestWorldAndUnits(t)
 	svc := &Service{}
-	if !svc.autonomousScanVisitsUnit(shooter, 1, w) {
+	// All three probes run on the same tick, so the round-robin window is held
+	// fixed and the armed bit is the only thing that moves. The window is a
+	// range of RECORD indices over a fixed per-player slice [06 §3.2], so a
+	// probe that stepped the tick would also step the cursor off this record and
+	// read the cursor's advance as the armed bit's effect (WU-19-154; the
+	// previous version of this test stepped ticks 1, 2, 3).
+	const probeTick = uint32(1)
+	if !svc.autonomousScanVisitsUnit(shooter, probeTick, w) {
 		t.Fatalf("the armed fixture must be visited [06 §3.2]")
 	}
 	shooter.Flags &^= units.ArmedStatus
-	if svc.autonomousScanVisitsUnit(shooter, 2, w) {
+	if svc.autonomousScanVisitsUnit(shooter, probeTick, w) {
 		t.Fatalf("a cleared armed bit must end the visit [06 §3.2]")
 	}
 	shooter.Flags |= units.ArmedStatus
-	if !svc.autonomousScanVisitsUnit(shooter, 3, w) {
+	if !svc.autonomousScanVisitsUnit(shooter, probeTick, w) {
 		t.Fatalf("restoring the armed bit must restore the visit [06 §3.2]")
 	}
 }

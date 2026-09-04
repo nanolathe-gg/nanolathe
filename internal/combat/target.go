@@ -760,41 +760,32 @@ func RebuildAirBaseList(list []*units.Unit, allyGroup uint8, declares func(from,
 // Nothing is scored or sorted; entries are pushed in list order, and the
 // caller's single RNG draw over the count is what picks one.
 //
-// TODO(T25): the freed-slot half of retail's aliasing window is not
-// reproduced, and closing it is blocked on an accessor this package does not
-// own. What the trace settled ([06 §3.2 "The budget word is the per-player
-// unit limit"], and the scan body of [04 R-AIR-01 §11]): the third list holds
-// RAW RECORD ADDRESSES into the fixed unit-record array, and the scan loads the
-// definition pointer, the activation byte and the two position words straight
-// off the stored address with no identity or liveness check. Every player's
-// slice of that array is bounded once at session entry and never resized, so a
-// stale entry always addresses a real record — it is never unmapped — and what
-// it reads is whichever unit occupies that record now. The death path frees the
-// record at slot-end of the tick the latch set, "the free that makes the slot
-// immediately reusable" [04 §5.4], so a pad's address can be re-occupied on any
-// of the up-to-29 ticks left in the rebuild window.
+// Retail's aliasing window is reproduced on BOTH halves, and both markers that
+// used to stand here are retired.
 //
-// `lookup` is the world's ordinary accessor, so this build already reproduces
-// the REUSED half of the window: a handle whose slot has been reallocated
-// resolves to the new occupant, per I5's no-generation-tags rule, and the three
-// flags are re-tested against that occupant exactly as retail re-tests them
-// against the record. The half it does NOT reproduce is the freed-but-not-yet-
-// reused record, where retail reads back whatever the free left in place while
-// `lookup` returns nil and this filter drops the entry. That is a narrowing,
-// and it is observable when it happens: it changes the candidate count the
-// caller draws over, so a damaged aircraft can pick a different pad or none.
-// Closing it needs a raw slot accessor on internal/units that returns the
-// record regardless of the pool's alive flag; internal/units is owned
-// elsewhere, so it is reported upstream rather than added here.
+// The third list holds raw record addresses into the fixed unit-record array,
+// and the scan loads the definition pointer, the activation byte and the two
+// position words straight off the stored address with no identity or liveness
+// check. Every player's slice of that array is bounded once at session entry
+// and never resized, so a stale entry always addresses a real record — it is
+// never unmapped — and what it reads is whatever occupies that record now. The
+// death path frees the record at slot-end of the tick the latch set [04 §5.4],
+// so a pad's address can be re-occupied on any of the up-to-29 ticks left in
+// the rebuild window.
 //
-// TODO(question): what a freed record reads back as is still unknown, and it
-// decides whether the missing half offers the dead pad or drops it anyway. No
-// store to the record's definition-index word was found outside world teardown,
-// so the free does not obviously clear the fields this filter reads; but the
-// free itself was not traced. Decider: the death teardown's record release —
-// whether it clears the definition pointer, the definition-index word or the
-// activation byte, or leaves the record intact until the next allocation
-// overwrites it.
+// Reused half: `lookup` is the world's ordinary accessor, so a handle whose
+// slot has been reallocated resolves to the new occupant, per I5's
+// no-generation-tags rule, and the flags are re-tested against that occupant
+// exactly as retail re-tests them against the record.
+//
+// Freed-but-not-reused half: retail's record release overwrites the record's
+// definition pointer with the reserved `None` definition, which carries neither
+// `builder` nor `isairbase`, so the first admission test rejects the entry
+// before the stale activation byte or the stale position words are reached
+// [04 R-AIR-01 §11 "The record release, and what a freed pad reads back as"].
+// `lookup` returning nil drops the same entry. Same outcome by a different
+// mechanism, so the earlier reading — that this was a narrowing needing a raw
+// slot accessor from internal/units — is withdrawn: nothing is owed upstream.
 func ScanAirBaseList(x, z numeric.Fixed, list []pool.Handle, lookup func(pool.Handle) *units.Unit) []pool.Handle {
 	if lookup == nil {
 		return nil

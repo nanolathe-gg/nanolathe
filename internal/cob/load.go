@@ -59,34 +59,34 @@ func Load(data []byte) (*Program, error) {
 	sourceChecksum := ContentChecksum(data)
 	readU32 := func(off int) uint32 { return binary.LittleEndian.Uint32(data[off:]) }
 
-	version := readU32(0x00)                  // VersionSignature [fmt cob]
-	numScripts := readU32(0x04)               // NumberOfScripts [fmt cob]
-	numPieces := readU32(0x08)                // NumberOfPieces [fmt cob]
-	codeLen := readU32(0x0C)                  // CodeLength [fmt cob] "Length of the code section in u32 words"
-	numStatics := readU32(0x10)               // NumberOfStatics [fmt cob] — carried as Program.Statics, zero-initialized by engine [fmt cob] [04 §4.2]
-	always0 := readU32(0x14)                  // Always_0 [fmt cob] "Zero in all observed files"
-	offScriptCodeIndexArray := readU32(0x18)  // OffsetToScriptCodeIndexArray [fmt cob]
-	offScriptNameOffsetArray := readU32(0x1C) // OffsetToScriptNameOffsetArray [fmt cob]
-	offPieceNameOffsetArray := readU32(0x20)  // OffsetToPieceNameOffsetArray [fmt cob]
-	offScriptCode := readU32(0x24)            // OffsetToScriptCode [fmt cob]
-	// OffsetToFirstScriptName equals ScriptNameOffsetArray[0] in every observed
-	// file — effectively the start of the string pool — and has no separate
-	// runtime purpose [fmt cob "Header"]. Read for the header round-trip only.
-	offFirstScriptName := readU32(0x28)
+	version := readU32(0x00)    // VersionSignature [fmt cob]
+	numScripts := readU32(0x04) // NumberOfScripts [fmt cob]
+	numPieces := readU32(0x08)  // NumberOfPieces [fmt cob]
+	codeLen := readU32(0x0C)    // CodeLength [fmt cob] "Length of the code section in u32 words"
+	numStatics := readU32(0x10) // NumberOfStatics [fmt cob] — carried as Program.Statics, zero-initialized by engine [fmt cob] [04 §4.2]
+	// Word 0x14 is the record count for the trailing 8-byte record table whose
+	// pointer is word 0x28 — it is NOT a reserved word, and 0x28 is NOT a
+	// separate "first script name" offset. The retail loader relocates five
+	// table pointers and, for this count, biases the second dword of each
+	// 8-byte record [02 "Compiled script archive (COB)"], [02 R-MALF-01 §8],
+	// [fmt cob "Header"]. Both are zero/coincidental in the whole retail corpus
+	// — the count is 0 in all 835 shipped scripts, which leaves the pointer
+	// indistinguishable from the start of the string pool — which is how the
+	// two words acquired their old names.
+	numTrailingRecords := readU32(0x14)
+	offScriptCodeIndexArray := readU32(0x18)  // script entry-point table [fmt cob]
+	offScriptNameOffsetArray := readU32(0x1C) // script name table [fmt cob]
+	offPieceNameOffsetArray := readU32(0x20)  // piece name table [fmt cob]
+	offScriptCode := readU32(0x24)            // code array [fmt cob]
+	offTrailingRecords := readU32(0x28)       // trailing record table [fmt cob]
 
 	if version != 4 {
 		// [fmt cob] "4 for TA. (Kingdoms uses other versions; not covered here.)"
 		// TAK header is 52 bytes / 13 words when VersionSignature == 6 [fmt cob] "TAK-only opcodes".
+		// Divergence (I11), noted: retail never reads the version word at all
+		// [02 R-MALF-01 §8]. We reject a non-4 file rather than walking a TAK
+		// layout as if it were a TA one.
 		return nil, fmt.Errorf("cob: unsupported version %d want 4", version)
-	}
-	// The reserved header word is zero in every observed file [fmt cob
-	// "Header"], but what retail does with a non-zero one is untraced.
-	// TODO(question): does retail test the reserved header word at all, or
-	// ignore it? Decider: a static trace of the COB loader's header validation.
-	// Rejecting is a bounds check that refuses data retail may well accept —
-	// the INVARIANTS I11 exception — and is kept deliberately.
-	if always0 != 0 {
-		return nil, fmt.Errorf("cob: reserved header word at 0x14 non-zero %d", always0)
 	}
 
 	// Guard against overflow of count*4.
@@ -149,11 +149,25 @@ func Load(data []byte) (*Program, error) {
 			return nil, fmt.Errorf("cob: code offset %#x beyond file size %#x", offScriptCode, fileLen)
 		}
 	}
-	if offFirstScriptName != 0 && offFirstScriptName > fileLen {
-		return nil, fmt.Errorf("cob: first script name offset %#x beyond file size %#x", offFirstScriptName, fileLen)
+	// The trailing record table: bounds only. Retail relocates its records but
+	// nothing in the recovered image reads one, and the count is zero in every
+	// shipped script, so Nanolathe carries no representation of them
+	// [02 "Compiled script archive (COB)"]. A non-zero count is accepted (retail
+	// accepts it); the records are simply not parsed. What an 8-byte record
+	// means is an Unknown recorded in [fmt cob], not a code marker, because no
+	// retail data reaches it.
+	if offTrailingRecords != 0 && offTrailingRecords > fileLen {
+		return nil, fmt.Errorf("cob: trailing record table offset %#x beyond file size %#x", offTrailingRecords, fileLen)
 	}
-	// OffFirstScriptName purpose-unknown [fmt cob] — bounds-only check stands per orchestrator; do NOT enforce equality with ScriptNameOffsetArray[0].
-	// If scripts exist, the string pool should be after tables; we validate offsets point within file later.
+	if numTrailingRecords != 0 {
+		if numTrailingRecords > 1<<28 {
+			return nil, fmt.Errorf("cob: implausibly large trailing record count %d", numTrailingRecords)
+		}
+		need := numTrailingRecords * 8
+		if offTrailingRecords+need < offTrailingRecords || offTrailingRecords+need > fileLen {
+			return nil, fmt.Errorf("cob: trailing record table [%#x + %#x] exceeds file size %#x", offTrailingRecords, need, fileLen)
+		}
+	}
 
 	// Relocation applied per [04 §4.1] [02 "Compiled script archive (COB)"]: every offset in
 	// the file is absolute from file start and would be biased by the load base in retail.

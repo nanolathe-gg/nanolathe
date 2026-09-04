@@ -112,40 +112,38 @@ func (c *CRT) Rand() int32 {
 // its draw and returns zero. Skipping that draw shifts every later CRT
 // consumer by one.
 //
-// Bounds above 32,767 use the chunk-concatenation loop of [01 §7.2], followed
-// literally: mask and result both start at 0x7FFF; while the mask is below
-// the needed bound, shift both left by 15 bits, OR the mask with 0x7FFF again,
-// and OR another fresh draw into the result; the final result modulo the
-// bound is the sample. One draw is consumed per iteration.
+// The widening sampler of [01 §7.2] is followed exactly: the mask starts at
+// 0x7FFF and the result starts as ONE fresh fifteen-bit draw; while the mask is
+// below the bound, both the mask and the result shift left fifteen bits and both
+// take 0x7FFF in their low bits; the sample is the unsigned remainder of the
+// result modulo the bound.
 //
-// TODO(question): the merged pre-review code instead seeded result from a
-// fresh draw (one extra draw per call, different value). The research text's
-// "starting with mask and result both 0x7FFF" is explicit about result's
-// initialization, so this implementation follows the letter; if
-// disassembly evidence ever shows an initial draw, change exactly this loop
-// and its vectors. No stock content draws a CRT bound above 32767 today
-// (briefing wind span+1 tops out at 2000), so nothing observable hinges on
-// it until a consumer appears [06 §6.5].
+// Exactly ONE draw is consumed per call at every bound. The widening loop ORs
+// the same constant into the result that it ORs into the mask — it never takes
+// a second draw — so above 32,767 the sample's low fifteen bits are all ones
+// and only its top bits carry entropy. That is retail, and it is the behavior
+// being cloned (I11), not a transcription slip: the sampler is inlined at both
+// of its sites in the same shape, and both are shuffles whose bound is a
+// growing prefix length. Correction landed 2026-09-04 (WU-19-155); the earlier
+// text here and in [01 §7.2] had the result starting at the constant 0x7FFF
+// and a fresh draw ORed in per iteration, which is one to two draws per call
+// and a different value.
 //
-// Divergence (I11): a bound of zero would fault on retail's modulo. We consume
-// the draw — retail evaluates rand() before the divide — and return zero
-// rather than panicking.
+// Divergence (I11): a bound of zero would fault on retail's unsigned divide. We
+// consume the draw — retail draws before the divide — and return zero rather
+// than panicking.
 func (c *CRT) Uint32n(bound uint32) uint32 {
-	if bound <= 0x7FFF {
-		v := uint32(c.Rand())
-		if bound == 0 {
-			return 0
-		}
-		return v % bound
-	}
-	result := uint32(0x7FFF)
+	result := uint32(c.Rand()) & 0x7FFF
 	mask := uint32(0x7FFF)
 	for mask < bound {
-		result = (result << 15) | uint32(c.Rand())
-		mask = (mask << 15) | 0x7FFF
 		if mask == 0xFFFFFFFF {
 			break
 		}
+		mask = (mask << 15) | 0x7FFF
+		result = (result << 15) | 0x7FFF
+	}
+	if bound == 0 {
+		return 0
 	}
 	return result % bound
 }

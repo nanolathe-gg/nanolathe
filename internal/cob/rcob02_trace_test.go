@@ -354,10 +354,11 @@ func TestSameTickTraceFixture(t *testing.T) {
 	// Step 1 — unit update queues deferred SetDirection then SetSpeed.
 	b.SetDirection(0x1234)
 	b.SetSpeed(321)
-	// Step 2 — weapon update. The fixture stands in for the unlocated engine
-	// interrupt producer (TODO(T25)) by killing the queued SetDirection
-	// thread: its slot is freed and immediately reused, so the step-3 drain
-	// order diverges from queue order.
+	// Step 2 — weapon update. The fixture reaches a mid-tick thread death the
+	// short way, by killing the queued SetDirection thread directly; retail
+	// gets there through the signal opcode's mask scan or an abnormal
+	// termination [04 §4.3], [04 §5.3]. Either way the slot is freed and
+	// immediately reused, so the step-3 drain order diverges from queue order.
 	vm.killThread(1)
 	b.TargetCleared(1) // reuses slot 1
 	if b.VM.LastStartedThread() != 1 {

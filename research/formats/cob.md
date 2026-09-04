@@ -39,12 +39,12 @@ byte offsets.
 | 0x08 | NumberOfPieces | Count of piece names |
 | 0x0C | CodeLength | Length of the code section **in u32 words** (historically labelled "Unknown_0" — it is the code word count) |
 | 0x10 | NumberOfStatics | Count of static-variable slots the program declares (historically "Unknown_1"). There is no static-data section in the file. Runtime initialization is owned by [R-COB-04 §7]. |
-| 0x14 | Always_0 | Zero in all observed files (historically "Unknown_2") |
+| 0x14 | TrailingRecordCount | Number of records in the trailing 8-byte record table at `0x28`. Zero in all 835 shipped scripts, which is how the field acquired its earlier names "Always_0" / "Unknown_2" — **corrected 2026-09-04 (WU-19-155)**, see "The trailing record table" below |
 | 0x18 | OffsetToScriptCodeIndexArray | → u32[NumberOfScripts]: per-script entry point, as a word index into the code section |
 | 0x1C | OffsetToScriptNameOffsetArray | → u32[NumberOfScripts]: file offsets of NUL-terminated script names |
 | 0x20 | OffsetToPieceNameOffsetArray | → u32[NumberOfPieces]: file offsets of NUL-terminated piece names |
 | 0x24 | OffsetToScriptCode | → code section (u32 words) |
-| 0x28 | OffsetToFirstScriptName | Offset of the first script name string (historically "Unknown_3"; equals `ScriptNameOffsetArray[0]` in all observed files — effectively the start of the string pool) |
+| 0x28 | OffsetToTrailingRecords | → `TrailingRecordCount` records of 8 bytes. With a count of zero in every shipped file the pointer lands on `ScriptNameOffsetArray[0]`, i.e. the start of the string pool, which is how it acquired its earlier names "OffsetToFirstScriptName" / "Unknown_3" — **corrected 2026-09-04 (WU-19-155)**, see below |
 
 Real example — `scripts/CORTRUCK.COB` from `totala1.hpi` (this is the same
 unit the original format note documented; the retail file matches it
@@ -56,6 +56,31 @@ byte-for-byte):
 version=4, 3 scripts, 1 piece, 165 code words, 0 statics, code @ 0x2C,
 index array @ 0x2C0 = `[0, 83, 86]`, script names @ 0x2CC =
 `SmokeUnit, Create, Killed`, piece names @ 0x2D8 = `base`.
+
+### The trailing record table
+
+**Established (2026-09-04, WU-19-155; corrects the two header names above).**
+Header words `0x14` and `0x28` are a *count/pointer pair* for a fifth table, not
+a reserved word and a redundant string-pool offset. The loader reads the file
+whole, stamps it with the content checksum, and then relocates exactly five
+table pointers — script entry points (pointer only; the entries are word
+indexes into the code array and are *not* relocated), script names (pointer plus
+every entry), piece names (pointer plus every entry), the code array (pointer
+only) and this trailing table (pointer, plus **the second dword of each of its
+`0x14` records**, each record being 8 bytes). Document 02's "Compiled script
+archive (COB)" and `[02 R-MALF-01 §8]` describe the same five-table relocation
+from the loader side; this entry is what fixes the two words to the two slots.
+
+Because the count is zero in all 835 shipped scripts, the pointer coincides with
+`ScriptNameOffsetArray[0]` and the count with a plausible "always zero" — which
+is why both community names read as confirmed for twenty years. Neither is.
+
+**Unknown.** What an 8-byte record *means*. Its second dword is a file offset
+(it is relocated); the first is not. No retail script carries one, and nothing
+in the recovered image reads a record back after relocation, so no retail
+behavior depends on the answer. Decider: a modded or Kingdoms-era COB that
+authors a non-zero count, or a reader of the relocated table elsewhere in the
+image. Nanolathe validates the table's bounds and does not parse the records.
 
 ### Names and indexes
 
@@ -411,8 +436,9 @@ or Scriptor vocabulary does not make them fixed retail callbacks.
 A full decode of every COB in the retail archives (835 scripts across
 `totala1.hpi`, `rev31.gp3`, `CCDATA.CCX`, `btdata.ccx`) confirms:
 
-- Version signature is always 4; the reserved header word is always 0;
-  the instruction table above decodes **every** retail script with no
+- Version signature is always 4; the trailing-record count at `0x14` is always
+  0 (see "The trailing record table" — the word is a count, not a reserved
+  word); the instruction table above decodes **every** retail script with no
   unknown opcodes and no misaligned instruction stream.
 - Static-variable counts are small (0–7 covers nearly everything).
 - Nine opcodes never occur in retail bytecode: `dont-shadow`

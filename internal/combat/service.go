@@ -793,20 +793,10 @@ const stanceFireAtWill uint32 = 2
 // autonomousScanDivisor is the divisor of the scan's per-call unit budget
 // [06 §3.2]: it visits `word / 30 + 1` array entries per player per tick.
 //
-// TODO(T25): the dividend is wrong here, and correcting it is blocked on an
-// accessor this package does not own. [06 §3.2 "The budget word is the
-// per-player unit limit"] establishes that the sixteen-bit word the scan
-// divides is the session's PER-PLAYER UNIT LIMIT — a setup constant, stock
-// default 200 — and not a live unit count, and that the cursor walks that
-// player's whole fixed record slice, free slots included, rather than a
-// compacted vector of its live units. The budget is therefore constant for the
-// session and every slot is revisited on a fixed period near thirty ticks.
-// Placeholder: keep the live-count dividend and the compacted-vector cursor
-// below, which agree with the corrected model whenever a player's live count is
-// near the limit and drift wider as it falls. Settling it needs the per-player
-// pool capacity and a free-slot-inclusive walk from internal/units, which this
-// unit does not own; the numbers only ever change the phase and period of an
-// acquisition, never whether one is legal.
+// The word is the session's PER-PLAYER UNIT LIMIT — a setup constant, not a
+// counter — so the budget is constant for the whole session
+// [06 §3.2 "The budget word is the per-player unit limit"]. With the stock
+// campaign default of 200 that is `200/30 + 1 = 7` records per player per tick.
 const autonomousScanDivisor = 30
 
 // combatPlayerSlots is the session's ten player slots [05 "Player slot"]. The
@@ -815,79 +805,87 @@ const combatPlayerSlots = 10
 
 // autonomousScanCursor is the persistent per-player cursor of [06 §3.2]: the
 // scan "advanc[es] a persistent cursor through the owning player's unit vector
-// and wrap[s] to its beginning at the end". Retail runs one pass per player per
-// tick from the player's manager; this build reaches each unit through the
-// session's single unit sweep instead, so the cursor is reconstructed from the
-// order units arrive in: a unit's position in its owner's pass is its index in
-// that vector, and the pass admits the `span` consecutive indices starting at
-// the player's cursor.
+// and wrap[s] to its beginning at the end". That vector is the player's whole
+// FIXED RECORD SLICE of the unit array — `perPlayerLimit` consecutive records,
+// bounded once at session entry and never resized, free records included — and
+// not a compacted list of its live units
+// [06 §3.2 "The budget word is the per-player unit limit"][05 R-SHARE-01 §7].
 //
-// The vector's length is only known once a pass has walked it, so `count` is
-// the length the PREVIOUS pass measured — which is also the length retail's
-// cursor was last wrapped against. Before a player's first measured pass the
-// length is unknown and every unit is admitted; the pass that measures it
-// installs the window from the next tick.
+// The window is therefore a range of record INDICES, known before the pass
+// starts rather than measured by it: this tick admits the `span` consecutive
+// indices starting at the player's cursor, wrapping at the end of the slice,
+// and the cursor advances by `span` every tick. A live unit is visited exactly
+// when its own record index falls in that window, so a free record inside the
+// window still spends budget by simply not being anybody — which is retail's
+// "nonzero definition index" clause read from the other side. A player owning
+// few units spends most of its budget on empty records and its units are
+// revisited on the same fixed `ceil(perPlayerLimit / span)` period as a player
+// owning many.
+//
+// Correction (WU-19-154): the previous model divided the GLOBAL LIVE COUNT and
+// reconstructed the cursor from the order units arrived in the session's single
+// unit sweep, measuring the "vector length" as the number of live units the
+// previous pass saw. Both halves were the superseded reading of [06 §3.2],
+// which its own correction paragraph names; the marker that carried them said
+// closing it needed accessors internal/units does not expose, and that was
+// false — `World.MaxDefs` is the per-player slice width (the name predates
+// WU-19-118 sizing the pool from the unit limit and misdescribes it),
+// `World.SliceForPlayer` gives the slice base, and `Unit.Handle` is the record
+// index.
 type autonomousScanCursor struct {
 	tick   uint32
 	primed bool
-	span   int // this tick's budget, `word/30 + 1` (see the TODO(T25) above)
+	span   int // this tick's budget, `perPlayerLimit/30 + 1`
+	limit  int // the per-player record slice length; 0 for an unsliced fixture pool
 	cursor [combatPlayerSlots]int
-	seen   [combatPlayerSlots]int
-	count  [combatPlayerSlots]int
 }
 
 // beginTick rolls every player's cursor forward onto a new tick, wrapping it
-// against the vector length the pass that just finished measured [06 §3.2].
-func (c *autonomousScanCursor) beginTick(tick uint32, globalLive int) {
+// against the fixed slice length [06 §3.2]. perPlayerLimit is the session's
+// per-player unit limit, which is also the slice length.
+func (c *autonomousScanCursor) beginTick(tick uint32, perPlayerLimit int) {
 	if c.primed && c.tick == tick {
 		return
 	}
+	if perPlayerLimit < 0 {
+		perPlayerLimit = 0
+	}
 	if c.primed {
 		for p := range c.cursor {
-			c.count[p] = c.seen[p]
-			if c.count[p] > 0 {
-				c.cursor[p] = (c.cursor[p] + c.span) % c.count[p]
+			if c.limit > 0 {
+				c.cursor[p] = (c.cursor[p] + c.span) % c.limit
 			} else {
 				c.cursor[p] = 0
 			}
 		}
 	}
-	for p := range c.seen {
-		c.seen[p] = 0
-	}
-	if globalLive < 0 {
-		globalLive = 0
-	}
+	c.limit = perPlayerLimit
 	// `word / 30 + 1` [06 §3.2] — the dividend is truncated to sixteen bits
-	// before the divide, which is retail's storage width for it [08 "Counters"].
-	// Which word it is stands corrected at autonomousScanDivisor's TODO(T25):
-	// retail divides the per-player unit LIMIT, not this live count.
-	c.span = int(uint16(globalLive))/autonomousScanDivisor + 1
+	// before the divide, which is retail's storage width for the limit
+	// [05 R-SHARE-01 §7].
+	c.span = int(uint16(perPlayerLimit))/autonomousScanDivisor + 1
 	c.tick = tick
 	c.primed = true
 }
 
-// visits consumes one entry of the owner's vector and reports whether this
-// tick's window covers it [06 §3.2]. It is called once for every unit the
-// weapon phase steps, whether or not that unit passes the scan's other
-// preconditions, because retail's cursor advances over vector entries and only
-// then tests the entry it landed on.
-func (c *autonomousScanCursor) visits(owner uint8) bool {
+// visits reports whether this tick's window covers the record the unit occupies
+// [06 §3.2]. record is the unit's index within its owner's fixed slice; a
+// negative index means the pool is not sliced (a fixture world), where there is
+// no record array to walk and every unit is admitted.
+func (c *autonomousScanCursor) visits(owner uint8, record int) bool {
 	p := int(owner)
 	if p < 0 || p >= combatPlayerSlots {
 		return false
 	}
-	i := c.seen[p]
-	c.seen[p]++
-	count := c.count[p]
-	if count <= 0 || c.span >= count {
-		// Length not yet measured, or the budget covers the whole vector: every
-		// entry is visited, which is what a small player owns anyway.
+	count := c.limit
+	if count <= 0 || record < 0 || c.span >= count {
+		// Unsliced fixture pool, or a budget that covers the whole slice: every
+		// record is visited every tick.
 		return true
 	}
-	rel := i - c.cursor[p]
+	rel := record - c.cursor[p]
 	if rel < 0 {
-		rel += count // the window wraps to the beginning of the vector
+		rel += count // the window wraps to the beginning of the slice
 	}
 	return rel < c.span
 }
@@ -898,14 +896,22 @@ func (c *autonomousScanCursor) visits(owner uint8) bool {
 // two-bit stance field equal to the fire-at-will value — read in that order off
 // the one runtime status word.
 //
-// The cursor is consumed first and unconditionally, because the budget is spent
-// on vector entries rather than on units that pass.
+// The cursor window is tested first, because the budget is spent on record
+// slots rather than on units that pass.
 func (s *Service) autonomousScanVisitsUnit(u *units.Unit, tick uint32, w *units.World) bool {
 	if s == nil || u == nil {
 		return false
 	}
-	s.scanCursor.beginTick(tick, w.Used())
-	if !s.scanCursor.visits(u.Owner) {
+	// The slice width is the session's per-player unit limit [05 R-SHARE-01 §7];
+	// MaxDefs is its accessor under a name that predates WU-19-118 sizing the
+	// pool from the limit rather than from the catalog. record is the unit's
+	// index inside its owner's slice, and stays -1 for an unsliced fixture pool.
+	record := -1
+	if start, _, ok := w.SliceForPlayer(int(u.Owner)); ok {
+		record = int(u.Handle) - start
+	}
+	s.scanCursor.beginTick(tick, w.MaxDefs())
+	if !s.scanCursor.visits(u.Owner, record) {
 		return false
 	}
 	if u.Def == nil {

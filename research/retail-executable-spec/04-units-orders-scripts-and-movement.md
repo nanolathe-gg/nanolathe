@@ -5508,6 +5508,21 @@ while transitively waking anything blocked on it within the same scan.
 - **`start-script` with no free thread slot, or a bad script id, does not pop
   its arguments.** The issuing thread simply continues past the instruction
   with the arguments still on its stack. There is no callback and no fault.
+- **What makes a script id "bad" — Established (2026-09-04, WU-19-155).** Both
+  `start-script` and `call-script` route through one shared thread starter, and
+  its whole admission test is the **signed range check `0 ≤ id < script
+  count`**, the count being the compiled program's own header word (document 02,
+  "Compiled script archive (COB)"). On success the starter scans the eight slots
+  in ascending order for the first whose status word is zero and writes that
+  slot: status *running*, program counter taken from the **script entry-point
+  table indexed by the id**, waited-on-callee slot `-1`, sleep timer 0, signal
+  mask 1, and the VM's active-thread count incremented; with no free slot it
+  returns the same failure as an out-of-range id. There is **no membership test
+  on entry-point values** anywhere in the starter — an implementation that
+  validates a program counter against the set of entry offsets is checking
+  something retail does not check. The caller then overwrites the new thread's
+  mask word with its own, which is the mask inheritance of [R-P0-10]; the
+  starter's own write of 1 survives only for engine-side starts.
 - **`call-script` with no free slot likewise retains its arguments**, records a
   wait slot of -1, and blocks anyway. Nothing ever scans for slot -1, so the
   caller sleeps until a matching signal kills it. This is a real
@@ -13284,6 +13299,40 @@ gathered by a sector-bucket visitor like the guard and repair candidates is
 withdrawn — no visitor runs, no bucket is walked, and allied players' pads
 are included only insofar as the registry of the owner's ally-group index
 files them as friendly.
+
+#### The record release, and what a freed pad reads back as — Established (2026-09-04, WU-19-154)
+
+§5.4's "the free that makes the slot immediately reusable" is not a zero-fill,
+and that settles what the scan above sees when it re-tests a stale entry whose
+record has been freed but not yet re-occupied.
+
+**Established.** The death handler's record release performs exactly these
+writes on the unit record and nothing else: it **zeroes the definition-identity
+halfword** (the "0 means free" occupancy mark of `[R-UNIT-06 §6]`); it clears
+the live bit of the runtime status word together with two neighbouring bits; it
+**overwrites the record's definition pointer with entry 0 of the unit-definition
+table** — the reserved `None` sentinel of `[02 "Unit record"]`, the same record
+the halfword's zero names; it releases and nulls the record's script-VM pointer
+and one further owned pointer; and it decrements the owning player's live-unit
+count. Everything else in the record — the position words, the activation byte,
+the flags the classifier set, the order state — keeps the dead unit's values
+until the next allocation into that slot writes over them.
+
+**Consequence for the scan.** The scan reads the definition pointer straight off
+the stored record address with no identity or liveness check, so a freed pad
+hands it the `None` definition. That definition carries neither `builder` nor
+`isairbase`, so admission test (1) rejects the entry — whatever the stale
+activation byte and stale position words still say, and without the scan ever
+reaching them. The freed-but-not-reused half of the aliasing window therefore
+**drops the entry**, exactly as the reused half drops one whose new occupant
+fails the same two flags. Only a slot re-occupied by another air base survives
+the filter.
+
+This closes in the negative the question of whether that half of the window
+could offer a dead pad, and it means an implementation whose lookup returns
+nothing for a freed slot — as Nanolathe's does — reproduces the outcome exactly,
+by a different mechanism: retail rejects on the sentinel definition's flags
+where Nanolathe rejects on the absent record. No raw slot accessor is owed.
 
 ### Closed — the admission predicate re-read: no owner test anywhere on the load path, and gate 7's word [R-AIR-01 §12] (2026-09-02)
 

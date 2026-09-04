@@ -327,9 +327,11 @@ func TestBlockedQueryLifecycle(t *testing.T) {
 	if r := bridge.Deferred("Sleeper", nil, func(cr CallbackReturn) { received = append(received, cr) }); !r.Started {
 		t.Fatal("sleeper start failed")
 	}
-	// Engine-side kill without a drain (fixture stand-in for the interrupt
-	// producer whose writers are unlocated, TODO(T25)): the pending receiver
-	// for slot 0 is now stale — signal/abnormal termination never invokes it
+	// Engine-side kill without a drain. The direct kill stands in for the two
+	// located producers of a thread termination that skips the receiver — the
+	// signal opcode's mask scan and the invalid-opcode abnormal termination
+	// [04 §4.3], [04 §5.3] — because both need a running interpreter to reach.
+	// The pending receiver for slot 0 is now stale: neither producer invokes it
 	// [04 §5.3], and collectReturns has not run to clear it.
 	vm.killThread(0)
 	if len(received) != 0 {

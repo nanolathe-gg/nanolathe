@@ -429,22 +429,20 @@ func (q *Queue) resolve(e Entry, now uint32, audible, showText bool) {
 	}
 	var alias string
 	var caption string
-	// Variant selection is presentation-random even for a silent resolve [03
-	// §8.3].
+	// Variant selection is presentation-random even for a silent resolve, and
+	// the draw is UNCONDITIONAL: it happens on every resolve, before any gate
+	// and before the variant count is looked at, so the stream advances with
+	// queue pops rather than with audible successes [03 §8.3]. A zero count
+	// simply produces no pick. Corrected 2026-09-04 (WU-19-155); this code
+	// previously skipped the draw for an empty row behind a TODO(question)
+	// calling the point unknown, which it was not — and the empty row is the
+	// common case, since the reference install authors no `load` or `unload`
+	// variant in any of its 120 categories.
 	//
-	// TODO(question): whether a row whose variant count is zero still consumes
-	// a CRT draw is unknown. [03 §8.3] says the draw "happens on every resolve
-	// — including silent ones — before any gate", which reads as
-	// unconditional, and also that "Count zero produces no pick", which
-	// describes only the result. A static trace of the resolve body's draw
-	// site against its count test would settle it; the reference install
-	// authors no `load` or `unload` variant in any of its 120 categories, so
-	// the empty row is reached often. Skipping the draw is the reading in
-	// force here. It cannot reach the simulation: the queue draws a private
+	// It cannot reach the simulation either way: the queue draws a private
 	// presentation copy of the stream [01 §7.2][I4].
-	draw := uint32(0)
+	draw := q.drawCRT()
 	if len(variants) > 0 {
-		draw = q.drawCRT()
 		idx := int(draw) * len(variants) / variantRange
 		if idx >= len(variants) {
 			idx = len(variants) - 1

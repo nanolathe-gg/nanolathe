@@ -1546,12 +1546,37 @@ the image, including the sound-variant picker, the elimination-message picker,
 the victory-timer arm, the effect strips, the lightning renderer and the
 startup explosion frames — is §7.6 [R-DET-01 §5].
 
-Sampling bounds above 32,767 use a chunk-concatenation loop before the final
-modulo: starting with mask and result both `0x7FFF`, while the mask is below
-the needed bound, shift both left by 15 bits, OR the mask with `0x7FFF` again,
-and OR another fresh `rand() & 0x7FFF` draw into the result; the final result
-modulo the needed bound is the sample. This identical inlined helper appears
-wherever a CRT draw needs a wider range.
+**The widening sampler — Established (2026-09-04, WU-19-155).** Every CRT
+sample whose bound may exceed 32,767 goes through one inlined sampler:
+
+1. set the mask to `0x7FFF` and take **exactly one** draw, `rand() & 0x7FFF`,
+   as the result;
+2. while the mask is below the bound — and while the mask is not already all
+   ones, which is a guard tested before each pass — shift the mask left 15 bits
+   and OR `0x7FFF` into it, and shift the **result** left 15 bits and OR
+   `0x7FFF` into it as well;
+3. return the result modulo the bound, through an **unsigned** divide.
+
+The widening loop ORs the same constant into the result that it ORs into the
+mask; it never takes a second draw. So **one draw is consumed per call at every
+bound**, and above 32,767 the sample's low fifteen bits are always all ones —
+only its top bits vary with the stream. A bound of 1 still consumes its draw
+and yields 0; a bound of 0 reaches the divide and faults.
+
+**Correction (2026-09-04, WU-19-155).** The preceding paragraph previously read:
+"starting with mask and result both `0x7FFF`, while the mask is below the needed
+bound, shift both left by 15 bits, OR the mask with `0x7FFF` again, and OR
+another fresh `rand() & 0x7FFF` draw into the result". Two halves were wrong.
+The result does not start at the constant — it starts as a fresh fifteen-bit
+draw, which is why bounds at or below 32,767 sample the stream at all rather
+than returning `0x7FFF % bound`. And the loop's second operand is the **same
+constant** as the mask's, not a draw, so the draw count is one per call and not
+one per iteration. The old reading would consume an extra draw for every wide
+sample and shift every later CRT consumer. Both of the sampler's two inline
+sites carry the identical shape (both are Fisher–Yates shuffles whose bound is
+the growing prefix length, so the widening loop is not reached on any stock
+array); the reading is confirmed at instruction level, not from decompiler
+output alone.
 
 ### 7.3 Sampling, wind draws, and save implications
 

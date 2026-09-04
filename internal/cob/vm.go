@@ -638,17 +638,23 @@ func (v *VM) Start(script int, args []int32) bool {
 		return false // bad script id [04 §4.3] C14
 	}
 	if !v.isValidEntry(script) {
-		// Only script entry points are valid here; the table of 57 does not
-		// otherwise restrict script ids, but engine starters reject unknown
-		// names/ids [04 §4.3] "start-script with no free slot, or a bad script
-		// id, does not pop its arguments" — we return false.
-		// TODO(question): is the interpreter's valid-entry set the script
-		// entry offsets it resolved by name, or the raw `ScriptCodeIndexArray`
-		// [fmt cob] indexed by slot? [04 §4.3] settles the adapters — "invalid
-		// identity (name lookup -1 or slot out of range) and a full eight-slot
-		// pool are the same allocation failure" — but not this opcode's own
-		// admission. Decider: a static trace of the start-script opcode's
-		// bounds test against the array it indexes.
+		// Retail's shared thread starter admits a script id by ONE test: the
+		// signed range `0 <= id < scriptCount`, the count being the compiled
+		// program's own header word, and takes the new thread's PC from the
+		// script entry-point table at that index [04 §4.3]. There is no
+		// membership test on entry offsets anywhere.
+		//
+		// The two readings the retired marker here posed — "the entry offsets
+		// resolved by name" versus "the raw ScriptCodeIndexArray indexed by
+		// slot" — name the SAME set of word indices in this build: Load fills
+		// Scripts[name] and ScriptsByID[i] from the one entry-point array, so a
+		// name resolution can only ever produce an id-table entry. The marker's
+		// premise was therefore vacuous (retired 2026-09-04, WU-19-155).
+		//
+		// This entry point takes a code word index rather than an id, so the
+		// scan below is a fixture guard, not the retail admission: a production
+		// start reaches it through a name resolution or through the interpreter
+		// opcode, and both already index the table [04 §4.3] C14.
 		return false
 	}
 	idx, ok := v.allocThread()

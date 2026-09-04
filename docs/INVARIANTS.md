@@ -81,11 +81,11 @@ formed at full width and shifted down, which is an arithmetic shift, so
 within the exception: it is an `idiv`, not a shift, so `Fixed.Div` truncates
 toward zero. The asymmetry is the hardware's, not a choice.
 
-Research does not state the multiply's rounding directly — `[01 §8]` scopes
-truncation to the float-to-integer `__ftol` path and `[03 §2.1]` describes the
-coordinate hierarchy's "signed, floor-like shifts". The inference is recorded at
-`numeric.Fixed.Mul` as a `TODO(question)`; it is one line to change if a probe
-disproves it.
+The multiply's rounding is Established, not inferred: `[04 §7.2]` forms the
+A* heuristic scale as a full signed 64-bit product arithmetically shifted, and
+`[04 R-MOV-01 §3]`, `[04 R-MOV-01 §4]` and `[04 §10.1]` write the same shape.
+The `TODO(question)` that once stood at `numeric.Fixed.Mul` was retired by
+WU-19-155 (2026-09-04).
 
 | Operation | Rule | Helper |
 |---|---|---|

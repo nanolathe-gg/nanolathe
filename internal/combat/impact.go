@@ -282,27 +282,25 @@ func DistanceToBox(impact Vec3, u UnitForArea) int32 {
 	if cx == 0 && cy == 0 && cz == 0 {
 		return 0 // impact on or inside the box has distance zero [06 §9.3]
 	}
-	// float64 for the square root is on the I2 allowlist alongside the ballistic
-	// discriminant; the components convert out of 16.16 first so the result is
-	// already in world units, and the narrowing truncates toward zero [01 §8] I3.
-	// Distances here are non-negative, so truncation and flooring agree.
-	fx := float64(cx) / 65536.0
-	fy := float64(cy) / 65536.0
-	fz := float64(cz) / 65536.0
-	di := int32(math.Sqrt(fx*fx + fy*fy + fz*fz))
-	// TODO(question): [06 §9.3] says the value is "reduced to" a signed 16-bit
-	// world-distance, which on retail is a truncating narrowing and therefore
-	// WRAPS past 32,767 — a far-enough victim would read as near. This
-	// saturates instead, which is the safe reading and the wrong one if the
-	// wrap is ever observable. No shipped weapon has a radius anywhere near
-	// that, so the two readings cannot be distinguished by stock content.
-	if di > 32767 {
-		di = 32767
-	}
-	if di < -32768 {
-		di = -32768
-	}
-	return di
+	// `d = (int16)( trunc(sqrt(dx*dx + dy*dy + dz*dz)) >> 16 )` [06 §9.3]: the
+	// square root runs on the raw 16.16 deltas and the shift converts the
+	// truncated result to whole world units, so the shift is the only place the
+	// fraction is dropped. float64 for the square root is on the I2 allowlist
+	// alongside the ballistic discriminant; the narrowing truncates toward zero
+	// [01 §8] I3, and the deltas are non-negative here so truncation, flooring
+	// and the arithmetic shift all agree.
+	fx, fy, fz := float64(cx), float64(cy), float64(cz)
+	whole := int64(math.Sqrt(fx*fx+fy*fy+fz*fz)) >> 16
+	// The reduction to sixteen bits is a truncating narrowing and therefore
+	// WRAPS: [06 §9.3] states that "a distance at or above 32,768 world units
+	// wraps negative and passes the acceptance test", which is the whole reason
+	// the acceptance test's strictness is worth recording. This site used to
+	// SATURATE behind a TODO(question) that called the wrap the untraced arm;
+	// it is the Established one, and saturating turns a far victim that retail
+	// accepts into one that is rejected. Stock content cannot reach it — no
+	// shipped weapon has a radius anywhere near 32,767 — but a blast at that
+	// separation is decided the wrong way round without this.
+	return int32(int16(uint16(whole)))
 }
 
 // Deduplication memories per [06 §9.3] C26.
